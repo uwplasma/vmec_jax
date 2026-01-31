@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vmec-jax"
+version = "0.0.1"
+description = "Work-in-progress JAX port of VMEC2000 (fixed-boundary first)."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "vmec_jax contributors"}]
+license = {text = "MIT"}
+
+dependencies = [
+  "numpy>=1.23"
+]
+
+[project.optional-dependencies]
+jax = ["jax>=0.4.0", "jaxlib>=0.4.0"]
+netcdf = ["netCDF4>=1.6.0"]
+dev = ["pytest>=7.0", "ruff>=0.1", "mypy>=1.6"]
+
+[tool.setuptools]
+packages = ["vmec_jax"]

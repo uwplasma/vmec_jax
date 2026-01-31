@@ -1,2 +1,62 @@
-# vmec_jax
-JAX Version of VMEC2000
+# vmec-jax (validated through step 4)
+
+This is an incremental JAX port of **VMEC2000** (fixed-boundary first). The
+equilibrium solve (force-balance / energy minimization) is **not implemented
+yet**, but the repo is validated through:
+
+- Step-0: INDATA parsing + boundary eval
+- Step-1: initial guess + full coords kernel (+ autodiff demo)
+- Step-2: radial FD + metric/Jacobian (`sqrtg`) + rough volume sanity checks
+- Step-3: input profiles (pressure/iota/current) + volume profile from `sqrtg`
+- Step-4: B-field components + magnetic energy (`wb`) regression vs VMEC2000 `wout`
+
+## Install
+
+```bash
+pip install -e .
+# add JAX
+pip install -e .[jax]
+# (optional) for wout_*.nc IO / baseline comparisons
+pip install -e .[netcdf]
+```
+
+## Quick start
+
+Run the validated example chain on the bundled low-res case:
+
+```bash
+python examples/00_parse_and_boundary.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out boundary_step0.npz --verbose
+python examples/02_init_guess_and_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out coords_step1.npz --verbose
+python examples/04_geom_metrics.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out geom_step2.npz --verbose
+python examples/05_profiles_and_volume.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out profiles_step3.npz --verbose
+python examples/06_field_and_energy.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --verbose
+```
+
+Optional: autodiff demo through the full coords kernel:
+
+```bash
+python examples/03_grad_full_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --verbose --topk 12
+```
+
+## Step-3 outputs
+
+The step-3 script writes a `.npz` with:
+- `pressure(s)` (Pa)
+- `iota(s)` and/or `current(s)` (depending on the input)
+- `dV/ds` and `V(s)` computed from `sqrtg` (per field period; multiply by `NFP` for the full torus)
+
+## Coordinate conventions (matches VMEC internal)
+
+- `theta` is poloidal angle in `[0, 2π)`.
+- `zeta` is the *field-period* toroidal angle in `[0, 2π)`, i.e. VMEC typically represents one field period.
+- The Fourier phase is `m*theta - n*zeta`.
+- Derivatives w.r.t the *physical* toroidal angle `phi_phys` pick up `NFP`:
+  `∂/∂phi_phys = NFP * ∂/∂zeta`.
+
+## Next step
+
+Implement the fixed-boundary *functional/residual* and a laptop-friendly nonlinear solve:
+1) magnetic field representation in VMEC coordinates
+2) energy or force-balance objective (end-to-end differentiable)
+3) a robust solver loop (Anderson / L-BFGS) + later VMEC-inspired preconditioning
+4) implicit differentiation (custom VJP) for cheap outer gradients
