@@ -13,7 +13,7 @@ Guiding constraints:
 We began from a raw Fortran **VMEC2000** distribution, and created a new Python package skeleton `vmec_jax` intended to eventually mirror VMEC functionality but using JAX for speed + autodiff.
 
 ## 2) Current state (what already works)
-This repo version corresponds to **Step-4** of the port plan.
+This repo version corresponds to **Step-5** of the port plan.
 
 ### Step-0: INDATA parsing + boundary evaluation
 - Robust **INDATA parser** for VMEC-like input files.
@@ -79,6 +79,18 @@ Script:
 Validation:
 - `pytest -q` includes a regression check of `wb` and B-field consistency against the bundled VMEC2000 `wout_*.nc`.
 
+### Step-5: Lambda-only solver (R/Z fixed)
+- Implements a first fixed-boundary optimization loop that updates only the `lambda` coefficients
+  (in VMEC's scaled convention), holding R/Z fixed.
+- Uses gradient descent + backtracking line search on the magnetic energy `wb`.
+
+Script:
+- `examples/07_solve_lambda.py`
+
+Validation:
+- `pytest -q` includes a regression check that starting from `lambda=0` moves `wb` toward the bundled
+  VMEC2000 `wout_*.nc` equilibrium.
+
 ## 3) Key JAX gotchas we hit & fixed
 1) **`jit` cannot accept arbitrary Python objects**:
    - `HelicalBasis` and later `VMECState` were passed into jitted functions.
@@ -117,19 +129,13 @@ python tools/inspect_npz.py geom_step2.npz
 - Writing a full `wout_*.nc` parity output.
 
 ## 6) Near-term plan (next milestones)
-### Step-4: Magnetic field representation + energy functional
-- Build B-field in VMEC coordinates:
-  - start from VMEC representation (covariant/contravariant components).
-- Implement **energy functional** (or force-error functional) that is differentiable.
-
-### Step-5: Solver (fixed-boundary)
-- Start with a robust laptop solver:
-  - Anderson acceleration or L-BFGS on energy functional.
-- Then add VMEC-style preconditioning:
+### Step-6: Full fixed-boundary solver (R/Z + lambda)
+- Extend the solver loop to update R/Z as well (keep fixed-boundary for now).
+- Add VMEC-style preconditioning:
   - mode-space diagonal / block-diagonal,
-  - later radial block-tridiagonal preconditioner.
+  - later radial block-tridiagonal.
 
-### Step-6: Implicit differentiation
+### Step-7: Implicit differentiation
 - Replace backprop through iterations with implicit diff (custom VJP):
   - solve linear system for adjoint.
   - reuse preconditioner/Krylov.

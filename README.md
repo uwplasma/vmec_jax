@@ -1,14 +1,15 @@
-# vmec-jax (validated through step 4)
+# vmec-jax (validated through step 5)
 
 This is an incremental JAX port of **VMEC2000** (fixed-boundary first). The
 equilibrium solve (force-balance / energy minimization) is **not implemented
-yet**, but the repo is validated through:
+yet** (R/Z solve + pressure/forces), but the repo is validated through:
 
 - Step-0: INDATA parsing + boundary eval
 - Step-1: initial guess + full coords kernel (+ autodiff demo)
 - Step-2: radial FD + metric/Jacobian (`sqrtg`) + rough volume sanity checks
 - Step-3: input profiles (pressure/iota/current) + volume profile from `sqrtg`
 - Step-4: B-field components + magnetic energy (`wb`) regression vs VMEC2000 `wout`
+- Step-5: lambda-only solver (R/Z fixed) regression toward VMEC2000 `wout`
 
 ## Install
 
@@ -30,6 +31,7 @@ python examples/02_init_guess_and_coords.py examples/input.LandremanSenguptaPlun
 python examples/04_geom_metrics.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out geom_step2.npz --verbose
 python examples/05_profiles_and_volume.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out profiles_step3.npz --verbose
 python examples/06_field_and_energy.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --verbose
+python examples/07_solve_lambda.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --verbose
 ```
 
 Optional: autodiff demo through the full coords kernel:
@@ -55,8 +57,6 @@ The step-3 script writes a `.npz` with:
 
 ## Next step
 
-Implement the fixed-boundary *functional/residual* and a laptop-friendly nonlinear solve:
-1) magnetic field representation in VMEC coordinates
-2) energy or force-balance objective (end-to-end differentiable)
-3) a robust solver loop (Anderson / L-BFGS) + later VMEC-inspired preconditioning
-4) implicit differentiation (custom VJP) for cheap outer gradients
+Implement a full fixed-boundary equilibrium solve (update R/Z + lambda) with VMEC-style
+preconditioning, and then add implicit differentiation (custom VJP) for cheap outer
+gradients.
