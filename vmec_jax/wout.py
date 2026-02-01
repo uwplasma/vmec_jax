@@ -16,6 +16,9 @@ from .modes import vmec_mode_table
 from .state import StateLayout, VMECState
 
 
+MU0 = 4e-7 * np.pi  # N/A^2
+
+
 @dataclass(frozen=True)
 class WoutData:
     path: Path
@@ -57,6 +60,13 @@ class WoutData:
 
     wb: float
     volume_p: float
+
+    # pressure / energy scalars (VMEC internal units)
+    gamma: float
+    wp: float
+    vp: np.ndarray  # (ns,) volume derivative on half mesh, normalized by (2π)^2
+    pres: np.ndarray  # (ns,) pressure on half mesh in mu0*Pa (B^2 units)
+    presf: np.ndarray  # (ns,) pressure on full mesh in mu0*Pa (B^2 units)
 
 
 def _bool_from_nc(x: Any) -> bool:
@@ -108,6 +118,16 @@ def read_wout(path: str | Path) -> WoutData:
 
         wb = float(ds.variables["wb"][:])
         volume_p = float(ds.variables["volume_p"][:])
+        gamma = float(ds.variables.get("gamma", 0.0)[:]) if "gamma" in ds.variables else 0.0
+        wp = float(ds.variables.get("wp", 0.0)[:]) if "wp" in ds.variables else 0.0
+        vp = np.asarray(ds.variables.get("vp", np.zeros((ns,), dtype=float))[:])
+
+        # `wout` stores pres/presf divided by mu0. Convert back to VMEC internal
+        # units (mu0*Pa) so it matches the energy functional.
+        pres_pa = np.asarray(ds.variables.get("pres", np.zeros((ns,), dtype=float))[:])
+        presf_pa = np.asarray(ds.variables.get("presf", np.zeros((ns,), dtype=float))[:])
+        pres = MU0 * pres_pa
+        presf = MU0 * presf_pa
 
     return WoutData(
         path=path,
@@ -138,6 +158,11 @@ def read_wout(path: str | Path) -> WoutData:
         bsupvmns=bsupvmns,
         wb=wb,
         volume_p=volume_p,
+        gamma=gamma,
+        wp=wp,
+        vp=vp,
+        pres=pres,
+        presf=presf,
     )
 
 

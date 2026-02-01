@@ -1,18 +1,21 @@
 """Helical Fourier basis utilities.
 
-VMEC represents surfaces using Fourier series in the helical phase
+VMEC represents surfaces using Fourier series in the helical phase::
 
-    phase = m*theta - n*zeta,
+    phase = m*theta - n*zeta
 
-where `zeta` is the *field-period* toroidal angle (one field period spans 0..2pi).
+where ``zeta`` is the *field-period* toroidal angle (one field period spans
+``[0, 2π)``).
 
 This module provides:
-- basis matrices (cos/sin of phase) for a set of (m,n) modes
-- evaluation of a scalar field from (cos, sin) Fourier coefficients
-- evaluation of angular derivatives, including the physical toroidal derivative that
-  includes the NFP scaling used in VMEC.
 
-All functions are backend-agnostic: they use jax.numpy if available, otherwise numpy.
+- basis matrices (cos/sin of phase) for a set of (m,n) modes,
+- evaluation of a scalar field from (cos, sin) Fourier coefficients,
+- evaluation of angular derivatives, including the physical-toroidal derivative
+  that includes the NFP scaling used in VMEC.
+
+All functions are backend-agnostic: they use ``jax.numpy`` if available,
+otherwise NumPy.
 """
 
 from __future__ import annotations

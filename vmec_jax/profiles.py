@@ -19,6 +19,8 @@ import numpy as np
 from ._compat import jnp
 from .namelist import InData
 
+MU0 = 4e-7 * np.pi  # N/A^2
+
 
 def _as_float_list(x: Any) -> list[float]:
     if x is None:
@@ -153,7 +155,12 @@ def eval_profiles(cfg: ProfileInputs | InData, s_grid) -> Dict[str, Any]:
     Notes
     -----
     - For now we implement only the common ``power_series`` profile type.
-    - Pressure is returned in **Pa** (VMEC stores pressure internally in mu0*Pa).
+    - In VMEC, the input pressure coefficients ``AM`` and ``PRES_SCALE`` are in
+      Pascals, but VMEC's internal pressure variable is in ``mu0 * Pa`` (i.e.
+      the same units as ``B^2``). For solver/energy parity, we return:
+
+      - ``pressure`` in ``mu0 * Pa`` (VMEC internal units),
+      - ``pressure_pa`` in ``Pa`` (physical units).
     """
     if isinstance(cfg, InData):
         cfg = profiles_from_indata(cfg)
@@ -166,13 +173,14 @@ def eval_profiles(cfg: ProfileInputs | InData, s_grid) -> Dict[str, Any]:
     # --- Pressure (pmass) ---
     if cfg.pmass_type != "power_series":
         raise NotImplementedError(f"pmass_type={cfg.pmass_type!r} not implemented (only 'power_series')")
-    # VMEC pmass() returns mu0 * pres_scale * poly(x). We return Pa.
+    # VMEC pmass() returns mu0 * pres_scale * poly(x).
     p_pa = cfg.pres_scale * _power_series(cfg.am, x)
     if cfg.spres_ped < 1.0:
         x_ped = jnp.minimum(jnp.abs(jnp.asarray(cfg.spres_ped) * cfg.bloat), 1.0)
         p_ped = cfg.pres_scale * _power_series(cfg.am, x_ped)
         p_pa = jnp.where(s > cfg.spres_ped, p_ped, p_pa)
-    out["pressure"] = p_pa
+    out["pressure_pa"] = p_pa
+    out["pressure"] = (MU0 * p_pa).astype(p_pa.dtype)
 
     # --- Iota / q (piota) ---
     if cfg.ai is not None and int(jnp.size(cfg.ai)) > 0:

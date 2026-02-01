@@ -153,3 +153,22 @@ def test_step4_wb_against_wout_reference(case_name: str, input_rel: str, wout_re
 
     assert np.isfinite(wb_calc)
     assert np.isclose(wb_calc, float(wout.wb), rtol=5e-4, atol=0.0)
+
+
+@pytest.mark.parametrize("case_name,input_rel,wout_rel", _CASES)
+def test_wp_from_wout_vp_pres_matches_wout_wp(case_name: str, input_rel: str, wout_rel: str):
+    pytest.importorskip("netCDF4")
+
+    root = Path(__file__).resolve().parents[1]
+    wout_path = root / wout_rel
+    assert wout_path.exists()
+
+    wout = read_wout(wout_path)
+    if wout.ns < 2:
+        return
+    hs = 1.0 / float(wout.ns - 1)
+
+    wp_calc = hs * float(np.sum(np.asarray(wout.vp)[1:] * np.asarray(wout.pres)[1:]))
+    assert np.isfinite(wp_calc)
+    assert np.isfinite(wout.wp)
+    assert np.isclose(wp_calc, float(wout.wp), rtol=1e-12, atol=0.0)

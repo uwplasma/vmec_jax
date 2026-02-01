@@ -13,7 +13,7 @@ start validating the geometric pieces against VMEC2000 and to support a
 future force/residual kernel.
 
 Notes on angles
---------------
+---------------
 We follow the conventions already used in :mod:`vmec_jax.fourier`:
 
 * ``zeta`` spans a single field period, i.e. zeta ∈ [0, 2π)

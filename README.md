@@ -1,8 +1,9 @@
 # vmec-jax (validated through step 7)
 
 This is an incremental JAX port of **VMEC2000** (fixed-boundary first). The
-equilibrium solve (force-balance / energy minimization) is **not implemented
-yet** (R/Z solve + pressure/forces), but the repo is validated through:
+repo includes early fixed-boundary energy-minimization solvers, but it is **not
+yet VMEC-quality** (full force-balance residual parity + VMEC preconditioners).
+The repo is validated through:
 
 - Step-0: INDATA parsing + boundary eval
 - Step-1: initial guess + full coords kernel (+ autodiff demo)
@@ -71,7 +72,7 @@ python examples/03_grad_full_coords.py examples/input.LandremanSenguptaPlunk_sec
 ## Step-3 outputs
 
 The step-3 script writes a `.npz` with:
-- `pressure(s)` (Pa)
+- `pressure_pa(s)` (Pa) and `pressure(s)` (VMEC internal units, `mu0*Pa`)
 - `iota(s)` and/or `current(s)` (depending on the input)
 - `dV/ds` and `V(s)` computed from `sqrtg` (per field period; multiply by `NFP` for the full torus)
 

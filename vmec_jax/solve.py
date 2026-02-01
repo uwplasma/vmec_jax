@@ -464,12 +464,15 @@ def solve_fixed_boundary_gd(
     """Minimize a VMEC-style energy objective over (R,Z,lambda) coefficients.
 
     This is the first "full" fixed-boundary solver step:
-      - R/Z are evolved on interior surfaces only; the outer surface is held fixed.
-      - Lambda gauge mode (0,0) is fixed to 0.
+    - R/Z are evolved on interior surfaces only; the outer surface is held fixed.
+    - Lambda gauge mode (0,0) is fixed to 0.
 
-    The objective is:
-        W = wb + wp/(gamma-1)
-    where `wb` is VMEC's normalized magnetic energy and `wp = ∫ p dV /(2π)^2`.
+    The objective is::
+
+        W = wb + wp/(gamma - 1)
+
+    where ``wb`` is VMEC's normalized magnetic energy and
+    ``wp = ∫ p dV /(2π)^2``.
     A soft penalty enforces a consistent Jacobian sign away from the axis.
     """
     if not has_jax():
@@ -668,12 +671,15 @@ def solve_fixed_boundary_lbfgs(
 ) -> SolveFixedBoundaryResult:
     """Fixed-boundary solve using L-BFGS (no external deps).
 
-    This solver minimizes:
-        W = wb + wp/(gamma-1)
+    This solver minimizes::
+
+        W = wb + wp/(gamma - 1)
+
     with:
-      - fixed R/Z edge coefficients (prescribed boundary),
-      - simple axis regularity,
-      - lambda gauge (0,0)=0.
+
+    - fixed R/Z edge coefficients (prescribed boundary),
+    - simple axis regularity,
+    - lambda gauge (0,0)=0.
     """
     if not has_jax():
         raise ImportError("solve_fixed_boundary_lbfgs requires JAX (jax + jaxlib)")

@@ -8,7 +8,7 @@ import pytest
 from vmec_jax.geom import eval_geom
 from vmec_jax.integrals import cumtrapz_s, dvds_from_sqrtg
 from vmec_jax.namelist import InData
-from vmec_jax.profiles import eval_profiles
+from vmec_jax.profiles import MU0, eval_profiles
 
 
 def test_power_series_profiles_against_manual():
@@ -41,7 +41,8 @@ def test_power_series_profiles_against_manual():
     iota = 0.4 + 0.2 * x
     current = x + x**2
 
-    np.testing.assert_allclose(np.asarray(prof["pressure"]), p, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(np.asarray(prof["pressure_pa"]), p, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(np.asarray(prof["pressure"]), MU0 * p, rtol=0, atol=1e-12)
     np.testing.assert_allclose(np.asarray(prof["iota"]), iota, rtol=0, atol=1e-12)
     np.testing.assert_allclose(np.asarray(prof["current"]), current, rtol=0, atol=1e-12)
 

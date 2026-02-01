@@ -110,6 +110,8 @@ def main() -> None:
     print(f"wout: {wout.path.name}")
     print(f"signgs={wout.signgs}  lamscale={lamscale:.6g}")
     print(f"wb_ref (wout) = {wout.wb:.8e}")
+    if np.isfinite(wout.wp) and np.isfinite(wout.gamma):
+        print(f"wp_ref (wout) = {wout.wp:.8e}   gamma={wout.gamma:.6g}")
 
     print_summary(summarize_array("bsupu_ref", bsupu_ref[mask]), indent="")
     print_summary(summarize_array("bsupv_ref", bsupv_ref[mask]), indent="")
@@ -139,4 +141,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

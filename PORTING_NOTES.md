@@ -34,6 +34,13 @@ This repo snapshot is validated through:
    - later radial block-tridiagonal,
    - include pressure/force residual diagnostics (not just energy).
 
+Notes on conventions:
+- VMEC input pressure coefficients are in Pa, but VMEC’s internal pressure used in the energy
+  functional is in `mu0*Pa` (B² units). `vmec_jax.profiles.eval_profiles` returns both:
+  `pressure_pa` (Pa) and `pressure` (`mu0*Pa`) for parity.
+- VMEC `wout` files store some fields on the radial half mesh; regression tests against `wout`
+  should use VMEC-style half-mesh radial integration where appropriate (e.g. volume/`wp`).
+
 3. **Verification harness**:
    - extend `.npz` stage dumps to include field and force quantities
    - compare norms and key 1D profiles against VMEC2000 `wout_*.nc`

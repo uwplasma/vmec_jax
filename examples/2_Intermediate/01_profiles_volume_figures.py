@@ -70,7 +70,8 @@ def main() -> None:
     g = eval_geom(st0, static)
 
     prof = eval_profiles(indata, static.s)
-    pressure = np.asarray(prof["pressure"])
+    pressure = np.asarray(prof["pressure"])  # VMEC internal units (mu0*Pa)
+    pressure_pa = np.asarray(prof["pressure_pa"])
     iota = np.asarray(prof.get("iota")) if "iota" in prof else None
     current = np.asarray(prof.get("current")) if "current" in prof else None
 
@@ -82,6 +83,7 @@ def main() -> None:
         outdir / "profiles_step3.npz",
         s=np.asarray(static.s),
         pressure=pressure,
+        pressure_pa=pressure_pa,
         iota=iota if iota is not None else np.asarray([]),
         current=current if current is not None else np.asarray([]),
         dvds=dvds,
@@ -96,7 +98,7 @@ def main() -> None:
 
     # Figure 1: pressure
     fig, ax = plt.subplots(figsize=(6.0, 4.0))
-    ax.plot(s, pressure, lw=2.2)
+    ax.plot(s, pressure_pa, lw=2.2)
     ax.set_xlabel("s")
     ax.set_ylabel("pressure [Pa]")
     ax.set_title("Input pressure profile")
@@ -136,4 +138,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

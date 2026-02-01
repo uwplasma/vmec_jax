@@ -60,6 +60,8 @@ Validation:
 
 ### Step-3: Profiles + volume profile (from sqrtg)
 - Implements VMEC-style **power-series** profiles (pressure, iota, current) from `&INDATA`.
+- Pressure convention matches VMEC: inputs `AM`/`PRES_SCALE` are in Pa, while the solver/energy
+  uses `pressure = mu0 * pressure_pa` (B² units).
 - Computes `dV/ds` and `V(s)` from `sqrtg` by integrating over angles and cumulative trapezoid in `s`.
 
 Script:
@@ -180,6 +182,11 @@ Local build:
 pip install -e .[docs]
 python -m sphinx -b html docs docs/_build/html
 ```
+
+Notes:
+- Docs sources are reStructuredText (`.rst`), so local builds do not require MyST/Markdown support.
+- `docs/conf.py` falls back to the built-in `alabaster` theme if `furo` is not installed.
+- Intersphinx is enabled only on ReadTheDocs (`READTHEDOCS=True`) to keep offline builds working.
 
 ## 9) Example structure (curated)
 In addition to the stepwise scripts in `examples/`, curated examples live in:

@@ -53,7 +53,8 @@ def main() -> None:
     g = eval_geom(st0, static)
 
     prof = eval_profiles(indata, static.s)
-    pressure = np.asarray(prof["pressure"])
+    pressure = np.asarray(prof["pressure"])  # VMEC internal units (mu0*Pa)
+    pressure_pa = np.asarray(prof["pressure_pa"])
     iota = np.asarray(prof.get("iota")) if "iota" in prof else None
     current = np.asarray(prof.get("current")) if "current" in prof else None
 
@@ -63,7 +64,7 @@ def main() -> None:
     print("\n==== vmec_jax step-3 profiles + volume ====")
     print(f"ns={cfg.ns} ntheta={cfg.ntheta} nzeta={cfg.nzeta} nfp={cfg.nfp}")
 
-    print_summary(summarize_array("pressure(s) [Pa]", pressure), indent="")
+    print_summary(summarize_array("pressure(s) [Pa]", pressure_pa), indent="")
     if iota is not None:
         print_summary(summarize_array("iota(s)", iota), indent="")
     if current is not None:
@@ -89,6 +90,7 @@ def main() -> None:
         zeta=np.asarray(static.grid.zeta),
         nfp=np.asarray(cfg.nfp),
         pressure=pressure,
+        pressure_pa=pressure_pa,
         dvds=dvds,
         V=V,
         ncurr=np.asarray(prof.get("ncurr", -1)),
@@ -107,4 +109,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
