@@ -74,6 +74,31 @@ _BOOL_TRUE = {"T", ".T.", ".TRUE.", "TRUE"}
 _BOOL_FALSE = {"F", ".F.", ".FALSE.", "FALSE"}
 
 
+_REPEAT_RE = re.compile(r"^(?P<count>\d+)\*(?P<value>.+)$")
+
+
+def _expand_fortran_repeats(tokens: List[str]) -> List[str]:
+    """Expand Fortran repeat-count syntax like `11*0.0` into explicit tokens.
+
+    VMEC inputs often use this compact form for arrays (e.g. `AI = 11*0.0, 0.8`).
+    We support only the common scalar case: `N*<scalar>`.
+    """
+    out: List[str] = []
+    for tok in tokens:
+        m = _REPEAT_RE.match(tok.strip())
+        if not m:
+            out.append(tok)
+            continue
+        n = int(m.group("count"))
+        v = m.group("value").strip()
+        # If parsing fails or count is weird, fall back to keeping the token.
+        if n <= 0 or not v:
+            out.append(tok)
+            continue
+        out.extend([v] * n)
+    return out
+
+
 def _parse_scalar(tok: str) -> Scalar:
     tok = tok.strip()
     # strings
@@ -178,7 +203,7 @@ def read_indata(path: str | Path) -> InData:
         chunk = cleaned[val_start:val_end].strip()
         # remove trailing commas
         chunk = re.sub(r",\s*$", "", chunk)
-        toks = _tokenize_value_chunk(chunk)
+        toks = _expand_fortran_repeats(_tokenize_value_chunk(chunk))
         parsed = [_parse_scalar(t) for t in toks]
         value: Value
         if len(parsed) == 0:
