@@ -1,4 +1,4 @@
-# VMEC2000 → vmec_jax: porting notes (through step 5)
+# VMEC2000 → vmec_jax: porting notes (through step 6)
 
 This repo snapshot is validated through:
 - Step-0: INDATA parsing + boundary evaluation
@@ -7,6 +7,7 @@ This repo snapshot is validated through:
 - Step-3: 1D profiles + volume integrals from `sqrtg`
 - Step-4: contravariant B + magnetic energy (`wb`) vs `wout`
 - Step-5: lambda-only solve (R/Z fixed) vs `wout`
+- Step-6: basic fixed-boundary solve (R/Z/lambda) with monotone energy decrease
 
 ## Kernel mapping (Fortran → Python/JAX)
 
@@ -23,12 +24,14 @@ This repo snapshot is validated through:
 | (diagnostics) `wb` | magnetic energy integral | `vmec_jax/energy.py` |
 | `read_wout_mod.f90` | read `wout_*.nc` (subset) | `vmec_jax/wout.py` |
 | (inner solve) | optimize lambda at fixed R/Z | `vmec_jax/solve.py` |
+| (outer solve) | optimize R/Z/lambda (fixed boundary) | `vmec_jax/solve.py` |
 
 ## What to do next (step-4/5)
 
-1. **Full fixed-boundary solve**: extend the current lambda-only solve to update R/Z as well.
-   - start with a laptop-friendly outer loop (L-BFGS / Anderson / quasi-Newton)
-   - then add VMEC-inspired mode-space + radial preconditioning
+1. **VMEC-quality fixed-boundary solve**: add VMEC-style preconditioning and converge to force-balance parity.
+   - mode-space diagonal / block-diagonal,
+   - later radial block-tridiagonal,
+   - include pressure/force residual diagnostics (not just energy).
 
 3. **Verification harness**:
    - extend `.npz` stage dumps to include field and force quantities

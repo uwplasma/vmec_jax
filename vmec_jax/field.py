@@ -73,7 +73,12 @@ def lamscale_from_phips(phips, s):
 def _safe_divide(num, denom, *, eps: float = 1e-14):
     denom = jnp.asarray(denom)
     num = jnp.asarray(num)
-    return jnp.where(jnp.abs(denom) > eps, num / denom, jnp.zeros_like(num))
+    mask = jnp.abs(denom) > eps
+    # Avoid 0/0 and NaNs in gradients near the magnetic axis by never dividing by
+    # a small denominator. (Using `where(num/denom, 0)` can still produce NaN
+    # gradients due to 0*NaN propagation in downstream reductions.)
+    denom_safe = jnp.where(mask, denom, jnp.ones_like(denom))
+    return mask.astype(num.dtype) * (num / denom_safe)
 
 
 def bsup_from_sqrtg_lambda(
@@ -153,4 +158,3 @@ def b2_from_bsup(geom, bsupu, bsupv):
     bsupu = jnp.asarray(bsupu)
     bsupv = jnp.asarray(bsupv)
     return geom.g_tt * bsupu**2 + 2.0 * geom.g_tp * bsupu * bsupv + geom.g_pp * bsupv**2
-

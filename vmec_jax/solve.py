@@ -15,12 +15,12 @@ implementation uses gradient descent with a simple backtracking line search.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
 from ._compat import has_jax, jax, jnp, jit
-from .field import TWOPI, bsup_from_sqrtg_lambda
+from .field import TWOPI, b2_from_bsup, bsup_from_geom, bsup_from_sqrtg_lambda
 from .fourier import eval_fourier_dtheta, eval_fourier_dzeta_phys
 from .geom import eval_geom
 from .state import VMECState
@@ -31,6 +31,18 @@ class SolveLambdaResult:
     state: VMECState
     n_iter: int
     wb_history: np.ndarray
+    grad_rms_history: np.ndarray
+    step_history: np.ndarray
+    diagnostics: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SolveFixedBoundaryResult:
+    state: VMECState
+    n_iter: int
+    w_history: np.ndarray
+    wb_history: np.ndarray
+    wp_history: np.ndarray
     grad_rms_history: np.ndarray
     step_history: np.ndarray
     diagnostics: Dict[str, Any]
@@ -60,6 +72,140 @@ def _enforce_lambda_gauge(Lcos, Lsin, *, idx00: Optional[int]):
     Lcos[:, idx00] = 0.0
     Lsin[:, idx00] = 0.0
     return Lcos, Lsin
+
+
+def _axis_m0_mask(static, *, dtype):
+    m = jnp.asarray(static.modes.m)
+    return (m == 0).astype(dtype)
+
+
+def _enforce_fixed_boundary_and_axis(
+    state: VMECState,
+    static,
+    *,
+    edge_Rcos,
+    edge_Rsin,
+    edge_Zcos,
+    edge_Zsin,
+    enforce_axis: bool = True,
+    enforce_edge: bool = True,
+    enforce_lambda_axis: bool = True,
+    idx00: Optional[int],
+) -> VMECState:
+    """Apply minimal VMEC regularity + fixed-boundary constraints.
+
+    - Fix R/Z at the outer surface (s=1) to preserve the prescribed boundary.
+    - Enforce axis regularity by zeroing all m>0 Fourier coefficients at s=0.
+    - Enforce lambda gauge (m,n)=(0,0) = 0 everywhere.
+    """
+    Rcos = jnp.asarray(state.Rcos)
+    Rsin = jnp.asarray(state.Rsin)
+    Zcos = jnp.asarray(state.Zcos)
+    Zsin = jnp.asarray(state.Zsin)
+    Lcos = jnp.asarray(state.Lcos)
+    Lsin = jnp.asarray(state.Lsin)
+
+    if enforce_edge:
+        Rcos = Rcos.at[-1, :].set(jnp.asarray(edge_Rcos))
+        Rsin = Rsin.at[-1, :].set(jnp.asarray(edge_Rsin))
+        Zcos = Zcos.at[-1, :].set(jnp.asarray(edge_Zcos))
+        Zsin = Zsin.at[-1, :].set(jnp.asarray(edge_Zsin))
+
+    if enforce_axis:
+        mask_m0 = _axis_m0_mask(static, dtype=Rcos.dtype)
+        Rcos = Rcos.at[0, :].set(Rcos[0, :] * mask_m0)
+        Rsin = Rsin.at[0, :].set(Rsin[0, :] * mask_m0)
+        Zcos = Zcos.at[0, :].set(Zcos[0, :] * mask_m0)
+        Zsin = Zsin.at[0, :].set(Zsin[0, :] * mask_m0)
+
+    if enforce_lambda_axis:
+        Lcos = Lcos.at[0, :].set(0.0)
+        Lsin = Lsin.at[0, :].set(0.0)
+
+    Lcos, Lsin = _enforce_lambda_gauge(Lcos, Lsin, idx00=idx00)
+
+    return VMECState(
+        layout=state.layout,
+        Rcos=Rcos,
+        Rsin=Rsin,
+        Zcos=Zcos,
+        Zsin=Zsin,
+        Lcos=Lcos,
+        Lsin=Lsin,
+    )
+
+
+def _grad_rms_state(grad: VMECState) -> float:
+    g = np.asarray(grad.Rcos) ** 2
+    g = g + np.asarray(grad.Rsin) ** 2
+    g = g + np.asarray(grad.Zcos) ** 2
+    g = g + np.asarray(grad.Zsin) ** 2
+    g = g + np.asarray(grad.Lcos) ** 2
+    g = g + np.asarray(grad.Lsin) ** 2
+    return float(np.sqrt(np.mean(g)))
+
+
+def _update_state_gd(state: VMECState, grad: VMECState, *, step: float, scale_rz: float, scale_l: float) -> VMECState:
+    step = jnp.asarray(step, dtype=jnp.asarray(state.Rcos).dtype)
+    scale_rz = jnp.asarray(scale_rz, dtype=step.dtype)
+    scale_l = jnp.asarray(scale_l, dtype=step.dtype)
+    return VMECState(
+        layout=state.layout,
+        Rcos=jnp.asarray(state.Rcos) - step * scale_rz * jnp.asarray(grad.Rcos),
+        Rsin=jnp.asarray(state.Rsin) - step * scale_rz * jnp.asarray(grad.Rsin),
+        Zcos=jnp.asarray(state.Zcos) - step * scale_rz * jnp.asarray(grad.Zcos),
+        Zsin=jnp.asarray(state.Zsin) - step * scale_rz * jnp.asarray(grad.Zsin),
+        Lcos=jnp.asarray(state.Lcos) - step * scale_l * jnp.asarray(grad.Lcos),
+        Lsin=jnp.asarray(state.Lsin) - step * scale_l * jnp.asarray(grad.Lsin),
+    )
+
+
+def _mask_grad_for_constraints(
+    grad: VMECState,
+    static,
+    *,
+    idx00: Optional[int],
+) -> VMECState:
+    """Project gradients onto the feasible set implied by our constraints."""
+    gRcos = jnp.asarray(grad.Rcos)
+    gRsin = jnp.asarray(grad.Rsin)
+    gZcos = jnp.asarray(grad.Zcos)
+    gZsin = jnp.asarray(grad.Zsin)
+    gLcos = jnp.asarray(grad.Lcos)
+    gLsin = jnp.asarray(grad.Lsin)
+
+    # Fixed-boundary: don't update the edge surface for R/Z.
+    gRcos = gRcos.at[-1, :].set(0.0)
+    gRsin = gRsin.at[-1, :].set(0.0)
+    gZcos = gZcos.at[-1, :].set(0.0)
+    gZsin = gZsin.at[-1, :].set(0.0)
+
+    # Axis regularity: don't update m>0 coefficients at s=0 for R/Z.
+    m = jnp.asarray(static.modes.m)
+    mask_m0 = (m == 0).astype(gRcos.dtype)
+    gRcos = gRcos.at[0, :].set(gRcos[0, :] * mask_m0)
+    gRsin = gRsin.at[0, :].set(gRsin[0, :] * mask_m0)
+    gZcos = gZcos.at[0, :].set(gZcos[0, :] * mask_m0)
+    gZsin = gZsin.at[0, :].set(gZsin[0, :] * mask_m0)
+
+    # Lambda: axis row is fixed to 0 in our constraint helper.
+    gLcos = gLcos.at[0, :].set(0.0)
+    gLsin = gLsin.at[0, :].set(0.0)
+
+    # Lambda gauge: (m,n)=(0,0) stays 0 everywhere.
+    if idx00 is not None:
+        gLcos = gLcos.at[:, idx00].set(0.0)
+        gLsin = gLsin.at[:, idx00].set(0.0)
+
+    return VMECState(
+        layout=grad.layout,
+        Rcos=gRcos,
+        Rsin=gRsin,
+        Zcos=gZcos,
+        Zsin=gZsin,
+        Lcos=gLcos,
+        Lsin=gLsin,
+    )
 
 
 def solve_lambda_gd(
@@ -213,6 +359,204 @@ def solve_lambda_gd(
         state=st,
         n_iter=len(wb_history) - 1,
         wb_history=np.asarray(wb_history, dtype=float),
+        grad_rms_history=np.asarray(grad_rms_history, dtype=float),
+        step_history=np.asarray(step_history, dtype=float),
+        diagnostics=diag,
+    )
+
+
+def solve_fixed_boundary_gd(
+    state0: VMECState,
+    static,
+    *,
+    phipf,
+    chipf,
+    signgs: int,
+    lamscale,
+    pressure: Any | None = None,
+    gamma: float = 0.0,
+    jacobian_penalty: float = 1e3,
+    max_iter: int = 25,
+    step_size: float = 5e-3,
+    scale_rz: float = 1.0,
+    scale_l: float = 1.0,
+    grad_tol: float = 1e-10,
+    max_backtracks: int = 12,
+    bt_factor: float = 0.5,
+    verbose: bool = False,
+) -> SolveFixedBoundaryResult:
+    """Minimize a VMEC-style energy objective over (R,Z,lambda) coefficients.
+
+    This is the first "full" fixed-boundary solver step:
+      - R/Z are evolved on interior surfaces only; the outer surface is held fixed.
+      - Lambda gauge mode (0,0) is fixed to 0.
+
+    The objective is:
+        W = wb + wp/(gamma-1)
+    where `wb` is VMEC's normalized magnetic energy and `wp = ∫ p dV /(2π)^2`.
+    A soft penalty enforces a consistent Jacobian sign away from the axis.
+    """
+    if not has_jax():
+        raise ImportError("solve_fixed_boundary_gd requires JAX (jax + jaxlib)")
+
+    max_iter = int(max_iter)
+    if max_iter < 1:
+        raise ValueError("max_iter must be >= 1")
+    if max_backtracks < 0:
+        raise ValueError("max_backtracks must be >= 0")
+    if not (0.0 < bt_factor < 1.0):
+        raise ValueError("bt_factor must be in (0, 1)")
+
+    gamma = float(gamma)
+    if abs(gamma - 1.0) < 1e-14:
+        raise ValueError("gamma=1 makes wp/(gamma-1) singular")
+
+    idx00 = _mode00_index(static.modes)
+
+    phipf = jnp.asarray(phipf)
+    chipf = jnp.asarray(chipf)
+    lamscale = jnp.asarray(lamscale)
+    signgs = int(signgs)
+    nfp = int(static.cfg.nfp)
+
+    s = jnp.asarray(static.s)
+    theta = jnp.asarray(static.grid.theta)
+    zeta = jnp.asarray(static.grid.zeta)
+    if s.shape[0] < 2:
+        ds = jnp.asarray(1.0, dtype=s.dtype)
+    else:
+        ds = s[1] - s[0]
+    dtheta = theta[1] - theta[0]
+    dzeta = zeta[1] - zeta[0]
+    weight = ds * dtheta * dzeta
+
+    if pressure is None:
+        pressure = jnp.zeros_like(s)
+    pressure = jnp.asarray(pressure)
+    if pressure.shape != s.shape:
+        raise ValueError(f"pressure must have shape {s.shape}, got {pressure.shape}")
+
+    edge_Rcos = jnp.asarray(state0.Rcos)[-1, :]
+    edge_Rsin = jnp.asarray(state0.Rsin)[-1, :]
+    edge_Zcos = jnp.asarray(state0.Zcos)[-1, :]
+    edge_Zsin = jnp.asarray(state0.Zsin)[-1, :]
+
+    def _wb_wp_from_geom(g) -> Tuple[Any, Any]:
+        bsupu, bsupv = bsup_from_geom(g, phipf=phipf, chipf=chipf, nfp=nfp, signgs=signgs, lamscale=lamscale)
+        B2 = b2_from_bsup(g, bsupu, bsupv)
+        jac = signgs * g.sqrtg
+        wb = (jnp.sum(0.5 * B2 * jac) * weight) / (TWOPI * TWOPI)
+        wp = (jnp.sum(pressure[:, None, None] * jac) * weight) / (TWOPI * TWOPI)
+        return wb, wp
+
+    def _w_total_from_wb_wp(wb, wp) -> Any:
+        return wb + wp / (gamma - 1.0)
+
+    def _objective(state: VMECState) -> Any:
+        # Softly enforce a consistent Jacobian sign away from the axis (s=0).
+        g = eval_geom(state, static)
+        wb, wp = _wb_wp_from_geom(g)
+        w = _w_total_from_wb_wp(wb, wp)
+        jac = signgs * g.sqrtg
+        jac = jac.at[0, :, :].set(0.0)
+        neg = jnp.minimum(jac, 0.0)
+        penalty = float(jacobian_penalty) * jnp.mean(neg * neg)
+        return w + penalty
+
+    def _w_terms(state: VMECState) -> Tuple[Any, Any, Any]:
+        g = eval_geom(state, static)
+        wb, wp = _wb_wp_from_geom(g)
+        return wb, wp, _w_total_from_wb_wp(wb, wp)
+
+    obj_and_grad = jit(jax.value_and_grad(_objective))
+    w_terms = jit(_w_terms)
+
+    # Start from a constraint-satisfying state.
+    state = _enforce_fixed_boundary_and_axis(
+        state0,
+        static,
+        edge_Rcos=edge_Rcos,
+        edge_Rsin=edge_Rsin,
+        edge_Zcos=edge_Zcos,
+        edge_Zsin=edge_Zsin,
+        idx00=idx00,
+    )
+
+    wb0, wp0, w0 = w_terms(state)
+    wb0 = float(np.asarray(wb0))
+    wp0 = float(np.asarray(wp0))
+    w0 = float(np.asarray(w0))
+
+    w_history = [w0]
+    wb_history = [wb0]
+    wp_history = [wp0]
+    grad_rms_history = []
+    step_history = []
+
+    obj0, grad0 = obj_and_grad(state)
+
+    for it in range(max_iter):
+        grad0m = _mask_grad_for_constraints(grad0, static, idx00=idx00)
+        grad_rms = _grad_rms_state(grad0m)
+        grad_rms_history.append(grad_rms)
+
+        if verbose:
+            print(f"[solve_fixed_boundary_gd] iter={it:03d} w={w_history[-1]:.8e} grad_rms={grad_rms:.3e}")
+
+        if grad_rms < grad_tol:
+            break
+
+        step = float(step_size)
+        accepted = False
+
+        for bt in range(max_backtracks + 1):
+            if bt > 0:
+                step *= bt_factor
+            trial = _update_state_gd(state, grad0m, step=step, scale_rz=scale_rz, scale_l=scale_l)
+            trial = _enforce_fixed_boundary_and_axis(
+                trial,
+                static,
+                edge_Rcos=edge_Rcos,
+                edge_Rsin=edge_Rsin,
+                edge_Zcos=edge_Zcos,
+                edge_Zsin=edge_Zsin,
+                idx00=idx00,
+            )
+            _wb_t, _wp_t, w_t = w_terms(trial)
+            w_t = float(np.asarray(w_t))
+            if np.isfinite(w_t) and w_t < w_history[-1]:
+                state = trial
+                accepted = True
+                break
+
+        step_history.append(step)
+
+        if not accepted:
+            if verbose:
+                print("[solve_fixed_boundary_gd] line search failed to improve objective; stopping")
+            break
+
+        wb_t, wp_t, w_t = w_terms(state)
+        w_history.append(float(np.asarray(w_t)))
+        wb_history.append(float(np.asarray(wb_t)))
+        wp_history.append(float(np.asarray(wp_t)))
+
+        obj0, grad0 = obj_and_grad(state)
+
+    diag: Dict[str, Any] = {
+        "idx00": idx00,
+        "signgs": signgs,
+        "gamma": gamma,
+        "jacobian_penalty": float(jacobian_penalty),
+        "scale_rz": float(scale_rz),
+        "scale_l": float(scale_l),
+    }
+    return SolveFixedBoundaryResult(
+        state=state,
+        n_iter=len(w_history) - 1,
+        w_history=np.asarray(w_history, dtype=float),
+        wb_history=np.asarray(wb_history, dtype=float),
+        wp_history=np.asarray(wp_history, dtype=float),
         grad_rms_history=np.asarray(grad_rms_history, dtype=float),
         step_history=np.asarray(step_history, dtype=float),
         diagnostics=diag,

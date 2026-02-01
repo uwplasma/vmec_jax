@@ -13,7 +13,7 @@ Guiding constraints:
 We began from a raw Fortran **VMEC2000** distribution, and created a new Python package skeleton `vmec_jax` intended to eventually mirror VMEC functionality but using JAX for speed + autodiff.
 
 ## 2) Current state (what already works)
-This repo version corresponds to **Step-5** of the port plan.
+This repo version corresponds to **Step-6** of the port plan.
 
 ### Step-0: INDATA parsing + boundary evaluation
 - Robust **INDATA parser** for VMEC-like input files.
@@ -91,6 +91,19 @@ Validation:
 - `pytest -q` includes a regression check that starting from `lambda=0` moves `wb` toward the bundled
   VMEC2000 `wout_*.nc` equilibrium.
 
+### Step-6: Basic fixed-boundary solver (R/Z + lambda)
+- Adds a first end-to-end optimization loop over **all** Fourier coefficients:
+  - holds the *edge* R/Z coefficients fixed (prescribed boundary),
+  - enforces simple axis regularity (m>0 coefficients are 0 at s=0),
+  - uses gradient descent + backtracking line search to monotonically decrease a VMEC-style energy objective.
+
+Script:
+- `examples/08_solve_fixed_boundary.py`
+
+Validation:
+- `pytest -q` includes a regression check that the solver decreases the energy while preserving the boundary
+  coefficients exactly.
+
 ## 3) Key JAX gotchas we hit & fixed
 1) **`jit` cannot accept arbitrary Python objects**:
    - `HelicalBasis` and later `VMECState` were passed into jitted functions.
@@ -129,13 +142,13 @@ python tools/inspect_npz.py geom_step2.npz
 - Writing a full `wout_*.nc` parity output.
 
 ## 6) Near-term plan (next milestones)
-### Step-6: Full fixed-boundary solver (R/Z + lambda)
-- Extend the solver loop to update R/Z as well (keep fixed-boundary for now).
+### Step-7: VMEC-quality fixed-boundary solve
 - Add VMEC-style preconditioning:
   - mode-space diagonal / block-diagonal,
-  - later radial block-tridiagonal.
+  - later radial block-tridiagonal,
+- Add force residual parity diagnostics (not just energy), and converge to VMEC-like equilibria.
 
-### Step-7: Implicit differentiation
+### Step-8: Implicit differentiation
 - Replace backprop through iterations with implicit diff (custom VJP):
   - solve linear system for adjoint.
   - reuse preconditioner/Krylov.

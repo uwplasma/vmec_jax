@@ -31,7 +31,7 @@ from .profiles import ProfileInputs, profiles_from_indata, eval_profiles
 from .integrals import dvds_from_sqrtg, cumtrapz_s, volume_from_sqrtg
 from .field import bsup_from_geom, bsup_from_sqrtg_lambda, b2_from_bsup
 from .energy import magnetic_wb_from_state
-from .solve import SolveLambdaResult, solve_lambda_gd
+from .solve import SolveFixedBoundaryResult, SolveLambdaResult, solve_fixed_boundary_gd, solve_lambda_gd
 
 __all__ = [
     "read_indata",
@@ -72,4 +72,6 @@ __all__ = [
     "magnetic_wb_from_state",
     "SolveLambdaResult",
     "solve_lambda_gd",
+    "SolveFixedBoundaryResult",
+    "solve_fixed_boundary_gd",
 ]
