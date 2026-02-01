@@ -19,6 +19,14 @@ Run the test suite::
 
   pytest -q
 
+ParaView export (VTK)
+---------------------
+
+Export a surface ``B`` field (including ``Bx``, ``By``, ``Bz``, and ``|B|``) and a
+field-line trace for ParaView (requires ``netCDF4``)::
+
+  python examples/3_Advanced/02_vtk_field_and_fieldlines.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --hi-res --outdir vtk_out
+
 A minimal API sketch
 --------------------
 
@@ -40,4 +48,3 @@ Typical usage::
   static = build_static(cfg)
   state0 = init_state_from_boundary(indata, static)
   geom = eval_geom(state0, static)
-

@@ -19,6 +19,7 @@ Submodules
    diagnostics
    energy
    field
+   fieldlines
    fourier
    geom
    grids
@@ -31,4 +32,5 @@ Submodules
    solve
    state
    static
+   visualization
    wout

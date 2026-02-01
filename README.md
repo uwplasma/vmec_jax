@@ -61,12 +61,20 @@ In addition to the stepwise scripts in `examples/`, there are curated example se
 
 - `examples/1_Simple/`: quick demos + figures (e.g. boundary plots)
 - `examples/2_Intermediate/`: multi-kernel workflows + figures
-- `examples/3_Advanced/`: solver experiments + convergence plots
+- `examples/3_Advanced/`: solver experiments + convergence plots + ParaView VTK export
 
 Optional: autodiff demo through the full coords kernel:
 
 ```bash
 python examples/03_grad_full_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --verbose --topk 12
+```
+
+## ParaView visualization (VTK export)
+
+Export a surface `B` field and a field-line trace for ParaView (requires the bundled `wout_*.nc` reference, so `netCDF4` must be installed):
+
+```bash
+python examples/3_Advanced/02_vtk_field_and_fieldlines.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --hi-res --outdir vtk_out
 ```
 
 ## Step-3 outputs
