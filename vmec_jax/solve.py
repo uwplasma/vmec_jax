@@ -23,7 +23,7 @@ from ._compat import has_jax, jax, jnp, jit
 from .field import TWOPI, b2_from_bsup, bsup_from_geom, bsup_from_sqrtg_lambda
 from .fourier import eval_fourier_dtheta, eval_fourier_dzeta_phys
 from .geom import eval_geom
-from .state import VMECState
+from .state import VMECState, pack_state, unpack_state
 
 
 @dataclass(frozen=True)
@@ -298,8 +298,9 @@ def solve_lambda_gd(
         E_total = jnp.sum(0.5 * B2 * jac) * weight
         return E_total / (TWOPI * TWOPI)
 
-    wb_and_grad = jit(jax.value_and_grad(_wb_from_L, argnums=(0, 1)))
-    wb_only = jit(_wb_from_L)
+    # Avoid `jit(value_and_grad(...))` to reduce compile latency in interactive use.
+    wb_and_grad = jax.value_and_grad(_wb_from_L, argnums=(0, 1))
+    wb_only = _wb_from_L
 
     Lcos = jnp.asarray(state0.Lcos)
     Lsin = jnp.asarray(state0.Lsin)
@@ -468,8 +469,11 @@ def solve_fixed_boundary_gd(
         wb, wp = _wb_wp_from_geom(g)
         return wb, wp, _w_total_from_wb_wp(wb, wp)
 
-    obj_and_grad = jit(jax.value_and_grad(_objective))
-    w_terms = jit(_w_terms)
+    # Important: do NOT `jit(value_and_grad(...))` here.
+    # On CPU this can introduce very large compile latency for moderately-sized grids.
+    # We rely on the already-jitted inner geometry kernel instead.
+    obj_and_grad = jax.value_and_grad(_objective)
+    w_terms = _w_terms
 
     # Start from a constraint-satisfying state.
     state = _enforce_fixed_boundary_and_axis(
@@ -550,6 +554,271 @@ def solve_fixed_boundary_gd(
         "jacobian_penalty": float(jacobian_penalty),
         "scale_rz": float(scale_rz),
         "scale_l": float(scale_l),
+    }
+    return SolveFixedBoundaryResult(
+        state=state,
+        n_iter=len(w_history) - 1,
+        w_history=np.asarray(w_history, dtype=float),
+        wb_history=np.asarray(wb_history, dtype=float),
+        wp_history=np.asarray(wp_history, dtype=float),
+        grad_rms_history=np.asarray(grad_rms_history, dtype=float),
+        step_history=np.asarray(step_history, dtype=float),
+        diagnostics=diag,
+    )
+
+
+def solve_fixed_boundary_lbfgs(
+    state0: VMECState,
+    static,
+    *,
+    phipf,
+    chipf,
+    signgs: int,
+    lamscale,
+    pressure: Any | None = None,
+    gamma: float = 0.0,
+    history_size: int = 10,
+    max_iter: int = 40,
+    step_size: float = 1.0,
+    grad_tol: float = 1e-10,
+    max_backtracks: int = 12,
+    bt_factor: float = 0.5,
+    verbose: bool = False,
+) -> SolveFixedBoundaryResult:
+    """Fixed-boundary solve using L-BFGS (no external deps).
+
+    This solver minimizes:
+        W = wb + wp/(gamma-1)
+    with:
+      - fixed R/Z edge coefficients (prescribed boundary),
+      - simple axis regularity,
+      - lambda gauge (0,0)=0.
+    """
+    if not has_jax():
+        raise ImportError("solve_fixed_boundary_lbfgs requires JAX (jax + jaxlib)")
+
+    history_size = int(history_size)
+    if history_size < 1:
+        raise ValueError("history_size must be >= 1")
+    max_iter = int(max_iter)
+    if max_iter < 1:
+        raise ValueError("max_iter must be >= 1")
+    if max_backtracks < 0:
+        raise ValueError("max_backtracks must be >= 0")
+    if not (0.0 < bt_factor < 1.0):
+        raise ValueError("bt_factor must be in (0, 1)")
+
+    gamma = float(gamma)
+    if abs(gamma - 1.0) < 1e-14:
+        raise ValueError("gamma=1 makes wp/(gamma-1) singular")
+
+    idx00 = _mode00_index(static.modes)
+
+    phipf = jnp.asarray(phipf)
+    chipf = jnp.asarray(chipf)
+    lamscale = jnp.asarray(lamscale)
+    signgs = int(signgs)
+    nfp = int(static.cfg.nfp)
+
+    s = jnp.asarray(static.s)
+    theta = jnp.asarray(static.grid.theta)
+    zeta = jnp.asarray(static.grid.zeta)
+    if s.shape[0] < 2:
+        ds = jnp.asarray(1.0, dtype=s.dtype)
+    else:
+        ds = s[1] - s[0]
+    dtheta = theta[1] - theta[0]
+    dzeta = zeta[1] - zeta[0]
+    weight = ds * dtheta * dzeta
+
+    if pressure is None:
+        pressure = jnp.zeros_like(s)
+    pressure = jnp.asarray(pressure)
+    if pressure.shape != s.shape:
+        raise ValueError(f"pressure must have shape {s.shape}, got {pressure.shape}")
+
+    edge_Rcos = jnp.asarray(state0.Rcos)[-1, :]
+    edge_Rsin = jnp.asarray(state0.Rsin)[-1, :]
+    edge_Zcos = jnp.asarray(state0.Zcos)[-1, :]
+    edge_Zsin = jnp.asarray(state0.Zsin)[-1, :]
+
+    def _wb_wp_from_geom(g) -> Tuple[Any, Any]:
+        bsupu, bsupv = bsup_from_geom(g, phipf=phipf, chipf=chipf, nfp=nfp, signgs=signgs, lamscale=lamscale)
+        B2 = b2_from_bsup(g, bsupu, bsupv)
+        jac = signgs * g.sqrtg
+        wb = (jnp.sum(0.5 * B2 * jac) * weight) / (TWOPI * TWOPI)
+        wp = (jnp.sum(pressure[:, None, None] * jac) * weight) / (TWOPI * TWOPI)
+        return wb, wp
+
+    def _w_total_from_wb_wp(wb, wp) -> Any:
+        return wb + wp / (gamma - 1.0)
+
+    def _w_only(state: VMECState) -> Any:
+        g = eval_geom(state, static)
+        wb, wp = _wb_wp_from_geom(g)
+        return _w_total_from_wb_wp(wb, wp)
+
+    def _w_terms_and_jacmin(state: VMECState) -> Tuple[Any, Any, Any, Any]:
+        g = eval_geom(state, static)
+        wb, wp = _wb_wp_from_geom(g)
+        w = _w_total_from_wb_wp(wb, wp)
+        jac = signgs * g.sqrtg
+        if jac.shape[0] <= 1:
+            jac_min = jnp.min(jac)
+        else:
+            jac_min = jnp.min(jac[1:, :, :])
+        return wb, wp, w, jac_min
+
+    # Avoid `jit(value_and_grad(...))` to keep compile latency manageable.
+    w_and_grad = jax.value_and_grad(_w_only)
+    w_terms = _w_terms_and_jacmin
+
+    def _lbfgs_direction(g_flat, s_hist, y_hist):
+        if not s_hist:
+            return -g_flat
+        q = g_flat
+        alpha = []
+        rho = []
+        for s_i, y_i in zip(reversed(s_hist), reversed(y_hist)):
+            ys = jnp.dot(y_i, s_i)
+            rho_i = jnp.where(ys != 0, 1.0 / ys, 0.0)
+            a_i = rho_i * jnp.dot(s_i, q)
+            q = q - a_i * y_i
+            alpha.append(a_i)
+            rho.append(rho_i)
+
+        # Initial inverse-Hessian scaling (common L-BFGS choice)
+        s0 = s_hist[-1]
+        y0 = y_hist[-1]
+        ys0 = jnp.dot(y0, s0)
+        yy0 = jnp.dot(y0, y0)
+        gamma0 = jnp.where(yy0 != 0, ys0 / yy0, 1.0)
+        r = gamma0 * q
+
+        for s_i, y_i, a_i, rho_i in zip(s_hist, y_hist, reversed(alpha), reversed(rho)):
+            beta = rho_i * jnp.dot(y_i, r)
+            r = r + s_i * (a_i - beta)
+
+        return -r
+
+    # Start from a constraint-satisfying state.
+    state = _enforce_fixed_boundary_and_axis(
+        state0,
+        static,
+        edge_Rcos=edge_Rcos,
+        edge_Rsin=edge_Rsin,
+        edge_Zcos=edge_Zcos,
+        edge_Zsin=edge_Zsin,
+        idx00=idx00,
+    )
+
+    wb0, wp0, w0, jacmin0 = w_terms(state)
+    w0 = float(np.asarray(w0))
+    wb0 = float(np.asarray(wb0))
+    wp0 = float(np.asarray(wp0))
+    jacmin0 = float(np.asarray(jacmin0))
+    if not np.isfinite(w0) or jacmin0 <= 0.0:
+        raise ValueError("Initial state has invalid Jacobian sign or non-finite energy")
+
+    w_history = [w0]
+    wb_history = [wb0]
+    wp_history = [wp0]
+    grad_rms_history = []
+    step_history = []
+
+    w_val, grad = w_and_grad(state)
+    grad = _mask_grad_for_constraints(grad, static, idx00=idx00)
+
+    x = pack_state(state)
+    g_flat = pack_state(grad)
+
+    s_hist: list[Any] = []
+    y_hist: list[Any] = []
+
+    step0 = float(step_size)
+
+    for it in range(max_iter):
+        grad_rms = _grad_rms_state(grad)
+        grad_rms_history.append(grad_rms)
+
+        if verbose:
+            print(f"[solve_fixed_boundary_lbfgs] iter={it:03d} w={w_history[-1]:.8e} grad_rms={grad_rms:.3e}")
+
+        if grad_rms < grad_tol:
+            break
+
+        p_flat = _lbfgs_direction(g_flat, s_hist, y_hist)
+        # Ensure descent direction; otherwise fall back to steepest descent.
+        gtp = float(np.asarray(jnp.dot(g_flat, p_flat)))
+        if not np.isfinite(gtp) or gtp >= 0.0:
+            p_flat = -g_flat
+
+        accepted = False
+        step = step0
+
+        x_old = x
+        g_old = g_flat
+
+        for bt in range(max_backtracks + 1):
+            if bt > 0:
+                step *= bt_factor
+            x_try = x_old + jnp.asarray(step, dtype=x_old.dtype) * p_flat
+            st_try = unpack_state(x_try, state.layout)
+            st_try = _enforce_fixed_boundary_and_axis(
+                st_try,
+                static,
+                edge_Rcos=edge_Rcos,
+                edge_Rsin=edge_Rsin,
+                edge_Zcos=edge_Zcos,
+                edge_Zsin=edge_Zsin,
+                idx00=idx00,
+            )
+
+            wb_t, wp_t, w_t, jacmin_t = w_terms(st_try)
+            w_tf = float(np.asarray(w_t))
+            jacmin_tf = float(np.asarray(jacmin_t))
+            if np.isfinite(w_tf) and jacmin_tf > 0.0 and w_tf < w_history[-1]:
+                state = st_try
+                x = pack_state(state)
+                accepted = True
+                break
+
+        step_history.append(step)
+
+        if not accepted:
+            if verbose:
+                print("[solve_fixed_boundary_lbfgs] line search failed; stopping")
+            break
+
+        # New value/grad at accepted state.
+        wb_t, wp_t, w_t, _jacmin_t = w_terms(state)
+        w_history.append(float(np.asarray(w_t)))
+        wb_history.append(float(np.asarray(wb_t)))
+        wp_history.append(float(np.asarray(wp_t)))
+
+        w_val, grad_new = w_and_grad(state)
+        grad_new = _mask_grad_for_constraints(grad_new, static, idx00=idx00)
+        g_flat_new = pack_state(grad_new)
+
+        s_k = x - x_old
+        y_k = g_flat_new - g_old
+        ys = float(np.asarray(jnp.dot(y_k, s_k)))
+        if np.isfinite(ys) and ys > 1e-14:
+            s_hist.append(s_k)
+            y_hist.append(y_k)
+            if len(s_hist) > history_size:
+                s_hist.pop(0)
+                y_hist.pop(0)
+
+        grad = grad_new
+        g_flat = g_flat_new
+        step0 = float(step)
+
+    diag: Dict[str, Any] = {
+        "idx00": idx00,
+        "signgs": signgs,
+        "gamma": gamma,
+        "history_size": int(history_size),
     }
     return SolveFixedBoundaryResult(
         state=state,

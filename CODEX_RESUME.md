@@ -13,7 +13,7 @@ Guiding constraints:
 We began from a raw Fortran **VMEC2000** distribution, and created a new Python package skeleton `vmec_jax` intended to eventually mirror VMEC functionality but using JAX for speed + autodiff.
 
 ## 2) Current state (what already works)
-This repo version corresponds to **Step-6** of the port plan.
+This repo version corresponds to **Step-7** of the port plan.
 
 ### Step-0: INDATA parsing + boundary evaluation
 - Robust **INDATA parser** for VMEC-like input files.
@@ -104,6 +104,16 @@ Validation:
 - `pytest -q` includes a regression check that the solver decreases the energy while preserving the boundary
   coefficients exactly.
 
+### Step-7: Fixed-boundary solver option: L-BFGS
+- Adds an L-BFGS variant of the fixed-boundary solver (no external deps), useful for experimentation.
+- Both Step-6 and Step-7 solvers preserve the fixed boundary (edge coefficients) and enforce simple axis regularity.
+
+Script:
+- `examples/09_solve_fixed_boundary_lbfgs.py`
+
+Validation:
+- `pytest -q` includes a regression check that L-BFGS decreases the energy while preserving boundary constraints.
+
 ## 3) Key JAX gotchas we hit & fixed
 1) **`jit` cannot accept arbitrary Python objects**:
    - `HelicalBasis` and later `VMECState` were passed into jitted functions.
@@ -142,13 +152,13 @@ python tools/inspect_npz.py geom_step2.npz
 - Writing a full `wout_*.nc` parity output.
 
 ## 6) Near-term plan (next milestones)
-### Step-7: VMEC-quality fixed-boundary solve
+### Step-8: VMEC-quality fixed-boundary solve
 - Add VMEC-style preconditioning:
   - mode-space diagonal / block-diagonal,
   - later radial block-tridiagonal,
 - Add force residual parity diagnostics (not just energy), and converge to VMEC-like equilibria.
 
-### Step-8: Implicit differentiation
+### Step-9: Implicit differentiation
 - Replace backprop through iterations with implicit diff (custom VJP):
   - solve linear system for adjoint.
   - reuse preconditioner/Krylov.

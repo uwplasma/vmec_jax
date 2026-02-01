@@ -1,4 +1,4 @@
-# vmec-jax (validated through step 6)
+# vmec-jax (validated through step 7)
 
 This is an incremental JAX port of **VMEC2000** (fixed-boundary first). The
 equilibrium solve (force-balance / energy minimization) is **not implemented
@@ -11,6 +11,7 @@ yet** (R/Z solve + pressure/forces), but the repo is validated through:
 - Step-4: B-field components + magnetic energy (`wb`) regression vs VMEC2000 `wout`
 - Step-5: lambda-only solver (R/Z fixed) regression toward VMEC2000 `wout`
 - Step-6: basic fixed-boundary solver (R/Z/lambda) with monotone energy decrease
+- Step-7: fixed-boundary solver option: L-BFGS (no external deps)
 
 ## Install
 
@@ -34,6 +35,7 @@ python examples/05_profiles_and_volume.py examples/input.LandremanSenguptaPlunk_
 python examples/06_field_and_energy.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --verbose
 python examples/07_solve_lambda.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --verbose
 python examples/08_solve_fixed_boundary.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --verbose
+python examples/09_solve_fixed_boundary_lbfgs.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --verbose
 ```
 
 Optional: autodiff demo through the full coords kernel:

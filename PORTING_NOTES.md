@@ -1,4 +1,4 @@
-# VMEC2000 → vmec_jax: porting notes (through step 6)
+# VMEC2000 → vmec_jax: porting notes (through step 7)
 
 This repo snapshot is validated through:
 - Step-0: INDATA parsing + boundary evaluation
@@ -8,6 +8,7 @@ This repo snapshot is validated through:
 - Step-4: contravariant B + magnetic energy (`wb`) vs `wout`
 - Step-5: lambda-only solve (R/Z fixed) vs `wout`
 - Step-6: basic fixed-boundary solve (R/Z/lambda) with monotone energy decrease
+- Step-7: fixed-boundary solve option: L-BFGS (no external deps)
 
 ## Kernel mapping (Fortran → Python/JAX)
 
