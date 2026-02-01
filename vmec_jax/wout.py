@@ -100,11 +100,11 @@ def read_wout(path: str | Path) -> WoutData:
         phips = np.asarray(ds.variables["phips"][:])
 
         gmnc = np.asarray(ds.variables["gmnc"][:])
-        gmns = np.asarray(ds.variables["gmns"][:])
+        gmns = np.asarray(ds.variables.get("gmns", np.zeros_like(gmnc))[:])
         bsupumnc = np.asarray(ds.variables["bsupumnc"][:])
-        bsupumns = np.asarray(ds.variables["bsupumns"][:])
+        bsupumns = np.asarray(ds.variables.get("bsupumns", np.zeros_like(bsupumnc))[:])
         bsupvmnc = np.asarray(ds.variables["bsupvmnc"][:])
-        bsupvmns = np.asarray(ds.variables["bsupvmns"][:])
+        bsupvmns = np.asarray(ds.variables.get("bsupvmns", np.zeros_like(bsupvmnc))[:])
 
         wb = float(ds.variables["wb"][:])
         volume_p = float(ds.variables["volume_p"][:])
@@ -165,4 +165,3 @@ def state_from_wout(wout: WoutData) -> VMECState:
         Lcos=wout.lmnc,
         Lsin=wout.lmns,
     )
-

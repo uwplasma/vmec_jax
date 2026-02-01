@@ -5,10 +5,18 @@ kernel and validates it against VMEC2000 outputs (typically via `wout_*.nc`).
 
 ## Bundled regression case
 
-The repo includes a small, low-resolution stellarator equilibrium used in examples and tests:
+The repo includes several small, low-resolution reference cases used in examples and tests:
 
-- input: `examples/input.LandremanSenguptaPlunk_section5p3_low_res`
-- reference output: `examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc`
+- 3D stellarator (vacuum):
+  - input: `examples/input.LandremanSenguptaPlunk_section5p3_low_res`
+  - reference output: `examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc`
+
+- Tokamak sanity cases (vacuum):
+  - `examples/input.circular_tokamak` + `examples/wout_circular_tokamak_reference.nc`
+  - `examples/input.up_down_asymmetric_tokamak` + `examples/wout_up_down_asymmetric_tokamak_reference.nc`
+
+- Finite-beta case:
+  - `examples/input.li383_low_res` + `examples/wout_li383_low_res_reference.nc`
 
 This case is meant to be:
 
@@ -61,4 +69,3 @@ To keep progress moving:
 - we validate “stable” intermediate quantities first (e.g. `wout` Nyquist `sqrtg`),
 - use RMS comparisons in real space when grids differ,
 - tighten tolerances only once upstream kernels match VMEC more closely.
-
