@@ -62,6 +62,8 @@ def main() -> None:
     p.add_argument("--step-size", type=float, default=5e-3)
     p.add_argument("--history-size", type=int, default=10, help="L-BFGS history (if solver=lbfgs)")
     p.add_argument("--jit-grad", action="store_true", help="JIT objective+grad inside the solver")
+    p.add_argument("--preconditioner", choices=["none", "mode_diag"], default="none")
+    p.add_argument("--precond-exponent", type=float, default=1.0)
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
 
@@ -98,6 +100,8 @@ def main() -> None:
             step_size=float(args.step_size),
             jacobian_penalty=1e3,
             jit_grad=bool(args.jit_grad),
+            preconditioner=str(args.preconditioner),
+            precond_exponent=float(args.precond_exponent),
             verbose=bool(args.verbose),
         )
     else:
@@ -114,6 +118,8 @@ def main() -> None:
             step_size=float(args.step_size),
             history_size=int(args.history_size),
             jit_grad=bool(args.jit_grad),
+            preconditioner=str(args.preconditioner),
+            precond_exponent=float(args.precond_exponent),
             verbose=bool(args.verbose),
         )
 
@@ -170,4 +176,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

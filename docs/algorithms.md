@@ -116,6 +116,11 @@ Two optimizers are currently provided:
 1. Gradient descent + backtracking (`solve_fixed_boundary_gd`)
 2. L-BFGS + backtracking (`solve_fixed_boundary_lbfgs`)
 
+Both solvers support a lightweight Fourier-mode diagonal preconditioner:
+
+- `preconditioner="mode_diag"`: scales each (m,n) update by roughly
+  \\((1 + m^2 + (n\,NFP)^2)^{-p}\\) (configurable exponent `p`).
+
 These are **not** yet VMEC-quality. In VMEC2000, the “right” approach is to:
 
 - evaluate force residuals (not just energy),
@@ -140,4 +145,3 @@ The main missing pieces for parity are:
 
 4. **Implicit differentiation**:
    - replace backprop through iterations with a custom VJP based on the implicit function theorem.
-

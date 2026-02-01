@@ -9,3 +9,6 @@ These scripts are intended for advanced use:
 
 Most scripts in this folder will likely require optional dependencies.
 
+Notes:
+- Use `--jit-grad` only once you’re iterating repeatedly with fixed shapes (it increases compile latency).
+- For early solver experiments, try `--preconditioner mode_diag`.

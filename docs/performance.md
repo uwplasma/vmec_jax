@@ -19,6 +19,12 @@ On CPU, compilation can dominate runtime for moderate problem sizes. `vmec-jax` 
 
 Solver functions accept `jit_grad=True` to trade longer compile time for faster iterations.
 
+## Preconditioning
+
+VMEC2000 relies heavily on preconditioning. `vmec-jax` currently includes a very lightweight
+mode-diagonal preconditioner (`preconditioner="mode_diag"`) to stabilize early solver experiments.
+VMEC’s radial block-tridiagonal preconditioner is a future milestone.
+
 ## Static precomputation
 
 Use `VMECStatic` to avoid rebuilding:
@@ -48,4 +54,3 @@ Planned upgrades:
 
 - factored/FFT-based angular transforms
 - chunked evaluation in `θ`/`ζ` to reduce peak memory
-

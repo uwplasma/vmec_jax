@@ -208,6 +208,54 @@ def _mask_grad_for_constraints(
     )
 
 
+def _apply_preconditioner(
+    grad: VMECState,
+    static,
+    *,
+    kind: str,
+    exponent: float = 1.0,
+) -> VMECState:
+    """Apply a simple diagonal preconditioner in (m,n) Fourier space.
+
+    Parameters
+    ----------
+    kind:
+        - ``"none"``: no preconditioning
+        - ``"mode_diag"``: scale each (m,n) mode by ~(m^2 + (n*NFP)^2)^(-exponent)
+    """
+    kind = str(kind).strip().lower()
+    if kind == "none":
+        return grad
+    if kind != "mode_diag":
+        raise ValueError(f"Unknown preconditioner kind={kind!r}")
+
+    exponent = float(exponent)
+    if exponent <= 0.0:
+        raise ValueError("preconditioner exponent must be > 0")
+
+    m = jnp.asarray(static.modes.m)
+    n = jnp.asarray(static.modes.n)
+    nfp = float(static.cfg.nfp)
+    k2 = m.astype(jnp.float64) ** 2 + (n.astype(jnp.float64) * nfp) ** 2
+    # (1 + k2)^(-exponent) avoids singularity at (m,n)=(0,0).
+    w = (1.0 + k2) ** (-exponent)
+    w = w.astype(jnp.asarray(grad.Rcos).dtype)
+
+    def _scale(a):
+        a = jnp.asarray(a)
+        return a * w[None, :]
+
+    return VMECState(
+        layout=grad.layout,
+        Rcos=_scale(grad.Rcos),
+        Rsin=_scale(grad.Rsin),
+        Zcos=_scale(grad.Zcos),
+        Zsin=_scale(grad.Zsin),
+        Lcos=_scale(grad.Lcos),
+        Lsin=_scale(grad.Lsin),
+    )
+
+
 def solve_lambda_gd(
     state0: VMECState,
     static,
@@ -223,6 +271,8 @@ def solve_lambda_gd(
     max_backtracks: int = 12,
     bt_factor: float = 0.5,
     jit_grad: bool = False,
+    preconditioner: str = "none",
+    precond_exponent: float = 1.0,
     verbose: bool = False,
 ) -> SolveLambdaResult:
     """Solve for VMEC lambda (scaled coefficients) with fixed R/Z.
@@ -256,6 +306,12 @@ def solve_lambda_gd(
         raise ValueError("bt_factor must be in (0, 1)")
 
     idx00 = _mode00_index(static.modes)
+    preconditioner = str(preconditioner).strip().lower()
+    if preconditioner not in ("none", "mode_diag"):
+        raise ValueError(f"Unknown preconditioner kind={preconditioner!r}")
+    precond_exponent = float(precond_exponent)
+    if preconditioner != "none" and precond_exponent <= 0.0:
+        raise ValueError("precond_exponent must be > 0 when using a preconditioner")
 
     # Metric depends only on R/Z, so compute it once.
     g0 = eval_geom(state0, static)
@@ -315,7 +371,20 @@ def solve_lambda_gd(
     step_history = []
 
     for it in range(max_iter):
-        grad_rms = float(np.sqrt(np.mean(np.asarray(gcos) ** 2 + np.asarray(gsin) ** 2)))
+        # Optional mode-diagonal preconditioning for the lambda subproblem.
+        if preconditioner == "mode_diag":
+            m = jnp.asarray(static.modes.m)
+            n = jnp.asarray(static.modes.n)
+            k2 = m.astype(jnp.float64) ** 2 + (n.astype(jnp.float64) * float(static.cfg.nfp)) ** 2
+            w = (1.0 + k2) ** (-precond_exponent)
+            w = w.astype(jnp.asarray(Lcos).dtype)
+            gcos_p = gcos * w[None, :]
+            gsin_p = gsin * w[None, :]
+        else:
+            gcos_p = gcos
+            gsin_p = gsin
+
+        grad_rms = float(np.sqrt(np.mean(np.asarray(gcos_p) ** 2 + np.asarray(gsin_p) ** 2)))
         grad_rms_history.append(grad_rms)
 
         if verbose:
@@ -330,8 +399,8 @@ def solve_lambda_gd(
         for bt in range(max_backtracks + 1):
             if bt > 0:
                 step *= bt_factor
-            Lcos_t = Lcos - step * gcos
-            Lsin_t = Lsin - step * gsin
+            Lcos_t = Lcos - step * gcos_p
+            Lsin_t = Lsin - step * gsin_p
             Lcos_t, Lsin_t = _enforce_lambda_gauge(Lcos_t, Lsin_t, idx00=idx00)
             wb_t = wb_only(Lcos_t, Lsin_t)
             if float(np.asarray(wb_t)) < wb_history[-1]:
@@ -388,6 +457,8 @@ def solve_fixed_boundary_gd(
     max_backtracks: int = 12,
     bt_factor: float = 0.5,
     jit_grad: bool = False,
+    preconditioner: str = "none",
+    precond_exponent: float = 1.0,
     verbose: bool = False,
 ) -> SolveFixedBoundaryResult:
     """Minimize a VMEC-style energy objective over (R,Z,lambda) coefficients.
@@ -505,6 +576,7 @@ def solve_fixed_boundary_gd(
 
     for it in range(max_iter):
         grad0m = _mask_grad_for_constraints(grad0, static, idx00=idx00)
+        grad0m = _apply_preconditioner(grad0m, static, kind=preconditioner, exponent=precond_exponent)
         grad_rms = _grad_rms_state(grad0m)
         grad_rms_history.append(grad_rms)
 
@@ -558,6 +630,8 @@ def solve_fixed_boundary_gd(
         "jacobian_penalty": float(jacobian_penalty),
         "scale_rz": float(scale_rz),
         "scale_l": float(scale_l),
+        "preconditioner": str(preconditioner),
+        "precond_exponent": float(precond_exponent),
     }
     return SolveFixedBoundaryResult(
         state=state,
@@ -588,6 +662,8 @@ def solve_fixed_boundary_lbfgs(
     max_backtracks: int = 12,
     bt_factor: float = 0.5,
     jit_grad: bool = False,
+    preconditioner: str = "none",
+    precond_exponent: float = 1.0,
     verbose: bool = False,
 ) -> SolveFixedBoundaryResult:
     """Fixed-boundary solve using L-BFGS (no external deps).
@@ -735,6 +811,7 @@ def solve_fixed_boundary_lbfgs(
 
     w_val, grad = w_and_grad(state)
     grad = _mask_grad_for_constraints(grad, static, idx00=idx00)
+    grad = _apply_preconditioner(grad, static, kind=preconditioner, exponent=precond_exponent)
 
     x = pack_state(state)
     g_flat = pack_state(grad)
@@ -805,6 +882,7 @@ def solve_fixed_boundary_lbfgs(
 
         w_val, grad_new = w_and_grad(state)
         grad_new = _mask_grad_for_constraints(grad_new, static, idx00=idx00)
+        grad_new = _apply_preconditioner(grad_new, static, kind=preconditioner, exponent=precond_exponent)
         g_flat_new = pack_state(grad_new)
 
         s_k = x - x_old
@@ -826,6 +904,8 @@ def solve_fixed_boundary_lbfgs(
         "signgs": signgs,
         "gamma": gamma,
         "history_size": int(history_size),
+        "preconditioner": str(preconditioner),
+        "precond_exponent": float(precond_exponent),
     }
     return SolveFixedBoundaryResult(
         state=state,
