@@ -38,6 +38,8 @@ python examples/08_solve_fixed_boundary.py examples/input.LandremanSenguptaPlunk
 python examples/09_solve_fixed_boundary_lbfgs.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --verbose
 ```
 
+Solver note: the optimization routines default to `jit_grad=False` to reduce compilation latency; set `jit_grad=True` for faster per-iteration runtime once shapes are stable.
+
 Optional: autodiff demo through the full coords kernel:
 
 ```bash

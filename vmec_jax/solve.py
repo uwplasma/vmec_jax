@@ -222,6 +222,7 @@ def solve_lambda_gd(
     grad_tol: float = 1e-10,
     max_backtracks: int = 12,
     bt_factor: float = 0.5,
+    jit_grad: bool = False,
     verbose: bool = False,
 ) -> SolveLambdaResult:
     """Solve for VMEC lambda (scaled coefficients) with fixed R/Z.
@@ -298,9 +299,11 @@ def solve_lambda_gd(
         E_total = jnp.sum(0.5 * B2 * jac) * weight
         return E_total / (TWOPI * TWOPI)
 
-    # Avoid `jit(value_and_grad(...))` to reduce compile latency in interactive use.
     wb_and_grad = jax.value_and_grad(_wb_from_L, argnums=(0, 1))
     wb_only = _wb_from_L
+    if jit_grad:
+        wb_and_grad = jit(wb_and_grad)
+        wb_only = jit(wb_only)
 
     Lcos = jnp.asarray(state0.Lcos)
     Lsin = jnp.asarray(state0.Lsin)
@@ -384,6 +387,7 @@ def solve_fixed_boundary_gd(
     grad_tol: float = 1e-10,
     max_backtracks: int = 12,
     bt_factor: float = 0.5,
+    jit_grad: bool = False,
     verbose: bool = False,
 ) -> SolveFixedBoundaryResult:
     """Minimize a VMEC-style energy objective over (R,Z,lambda) coefficients.
@@ -469,11 +473,11 @@ def solve_fixed_boundary_gd(
         wb, wp = _wb_wp_from_geom(g)
         return wb, wp, _w_total_from_wb_wp(wb, wp)
 
-    # Important: do NOT `jit(value_and_grad(...))` here.
-    # On CPU this can introduce very large compile latency for moderately-sized grids.
-    # We rely on the already-jitted inner geometry kernel instead.
     obj_and_grad = jax.value_and_grad(_objective)
     w_terms = _w_terms
+    if jit_grad:
+        obj_and_grad = jit(obj_and_grad)
+        w_terms = jit(w_terms)
 
     # Start from a constraint-satisfying state.
     state = _enforce_fixed_boundary_and_axis(
@@ -583,6 +587,7 @@ def solve_fixed_boundary_lbfgs(
     grad_tol: float = 1e-10,
     max_backtracks: int = 12,
     bt_factor: float = 0.5,
+    jit_grad: bool = False,
     verbose: bool = False,
 ) -> SolveFixedBoundaryResult:
     """Fixed-boundary solve using L-BFGS (no external deps).
@@ -669,9 +674,11 @@ def solve_fixed_boundary_lbfgs(
             jac_min = jnp.min(jac[1:, :, :])
         return wb, wp, w, jac_min
 
-    # Avoid `jit(value_and_grad(...))` to keep compile latency manageable.
     w_and_grad = jax.value_and_grad(_w_only)
     w_terms = _w_terms_and_jacmin
+    if jit_grad:
+        w_and_grad = jit(w_and_grad)
+        w_terms = jit(w_terms)
 
     def _lbfgs_direction(g_flat, s_hist, y_hist):
         if not s_hist:
