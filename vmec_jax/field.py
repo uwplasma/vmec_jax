@@ -158,3 +158,52 @@ def b2_from_bsup(geom, bsupu, bsupv):
     bsupu = jnp.asarray(bsupu)
     bsupv = jnp.asarray(bsupv)
     return geom.g_tt * bsupu**2 + 2.0 * geom.g_tp * bsupu * bsupv + geom.g_pp * bsupv**2
+
+
+def b_cartesian_from_bsup(geom, bsupu, bsupv, *, zeta, nfp: int):
+    """Compute Cartesian B=(Bx,By,Bz) from contravariant components.
+
+    Parameters
+    ----------
+    geom:
+        Geometry object from :func:`vmec_jax.geom.eval_geom`.
+    bsupu, bsupv:
+        Contravariant components returned by :func:`bsup_from_geom` (same shape as geom.sqrtg).
+    zeta:
+        1D toroidal grid used in geom (shape (nzeta,)).
+    nfp:
+        Number of field periods. Used to convert ``zeta`` to the physical toroidal angle
+        ``phi_phys = zeta / nfp``.
+
+    Returns
+    -------
+    B:
+        Array of shape ``(ns, ntheta, nzeta, 3)`` containing (Bx,By,Bz).
+
+    Notes
+    -----
+    In curvilinear coordinates, a vector can be written using covariant basis vectors:
+
+        B = B^theta * e_theta + B^phi * e_phi
+
+    where ``e_theta = ∂r/∂theta`` and ``e_phi = ∂r/∂phi_phys`` in Cartesian space.
+    """
+    bsupu = jnp.asarray(bsupu)
+    bsupv = jnp.asarray(bsupv)
+    zeta = jnp.asarray(zeta)
+    nfp = int(nfp)
+    if nfp <= 0:
+        raise ValueError(f"nfp must be positive, got {nfp}")
+
+    phi = zeta / nfp
+    cosphi = jnp.cos(phi)[None, None, :]
+    sinphi = jnp.sin(phi)[None, None, :]
+
+    # Covariant basis vectors in Cartesian coordinates (same construction as geom.py).
+    e_t = jnp.stack([geom.Rt * cosphi, geom.Rt * sinphi, geom.Zt], axis=-1)
+    e_p = jnp.stack(
+        [geom.Rp * cosphi - geom.R * sinphi, geom.Rp * sinphi + geom.R * cosphi, geom.Zp],
+        axis=-1,
+    )
+
+    return bsupu[..., None] * e_t + bsupv[..., None] * e_p
