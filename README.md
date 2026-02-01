@@ -21,6 +21,10 @@ pip install -e .
 pip install -e .[jax]
 # (optional) for wout_*.nc IO / baseline comparisons
 pip install -e .[netcdf]
+# (optional) plotting (publication-ready figures in examples)
+pip install -e .[plots]
+# (optional) build docs locally
+pip install -e .[docs]
 ```
 
 ## Quick start
@@ -39,6 +43,24 @@ python examples/09_solve_fixed_boundary_lbfgs.py examples/input.LandremanSengupt
 ```
 
 Solver note: the optimization routines default to `jit_grad=False` to reduce compilation latency; set `jit_grad=True` for faster per-iteration runtime once shapes are stable.
+
+## Documentation
+
+Sphinx docs live in `docs/` and are configured for ReadTheDocs via `.readthedocs.yaml`.
+
+Build locally:
+
+```bash
+python -m sphinx -b html docs docs/_build/html
+```
+
+## Examples (structured)
+
+In addition to the stepwise scripts in `examples/`, there are curated example sets:
+
+- `examples/1_Simple/`: quick demos + figures (e.g. boundary plots)
+- `examples/2_Intermediate/`: multi-kernel workflows + figures
+- `examples/3_Advanced/`: solver experiments + convergence plots
 
 Optional: autodiff demo through the full coords kernel:
 

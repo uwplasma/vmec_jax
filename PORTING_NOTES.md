@@ -44,3 +44,11 @@ This repo snapshot is validated through:
 - Use `lax.scan` over radius and chunked evaluation over angles to control memory.
 - Implement VMEC's **radial preconditioner** first (cheap and strong), then consider
   quasi-Newton (L-BFGS) on top.
+
+## Documentation and examples
+
+- Sphinx docs live in `docs/` and are configured for ReadTheDocs via `.readthedocs.yaml`.
+- Curated examples (including figure generation) live in:
+  - `examples/1_Simple/`
+  - `examples/2_Intermediate/`
+  - `examples/3_Advanced/`

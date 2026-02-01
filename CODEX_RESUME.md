@@ -170,3 +170,20 @@ python tools/inspect_npz.py geom_step2.npz
   - fused kernels, careful JIT boundaries,
   - optional GPU support.
 - Integrate with SIMSOPT/DESC-style optimization pipelines.
+
+## 8) Documentation
+Sphinx documentation lives in `docs/` and is configured for ReadTheDocs via `.readthedocs.yaml`.
+
+Local build:
+
+```bash
+pip install -e .[docs]
+python -m sphinx -b html docs docs/_build/html
+```
+
+## 9) Example structure (curated)
+In addition to the stepwise scripts in `examples/`, curated examples live in:
+
+- `examples/1_Simple/`
+- `examples/2_Intermediate/`
+- `examples/3_Advanced/`
