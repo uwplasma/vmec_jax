@@ -68,6 +68,12 @@ class WoutData:
     pres: np.ndarray  # (ns,) pressure on half mesh in mu0*Pa (B^2 units)
     presf: np.ndarray  # (ns,) pressure on full mesh in mu0*Pa (B^2 units)
 
+    # force residual diagnostics (VMEC scalars)
+    fsqr: float  # radial force residual
+    fsqz: float  # vertical force residual
+    fsql: float  # lambda/constraint residual
+    fsqt: np.ndarray  # force trace vs iteration (if present)
+
 
 def _bool_from_nc(x: Any) -> bool:
     # VMEC stores *_logical__ as 0/1 integers in netcdf.
@@ -129,6 +135,12 @@ def read_wout(path: str | Path) -> WoutData:
         pres = MU0 * pres_pa
         presf = MU0 * presf_pa
 
+        # Force residual scalars (present in most VMEC wout files).
+        fsqr = float(ds.variables.get("fsqr", 0.0)[:]) if "fsqr" in ds.variables else 0.0
+        fsqz = float(ds.variables.get("fsqz", 0.0)[:]) if "fsqz" in ds.variables else 0.0
+        fsql = float(ds.variables.get("fsql", 0.0)[:]) if "fsql" in ds.variables else 0.0
+        fsqt = np.asarray(ds.variables.get("fsqt", np.zeros((0,), dtype=float))[:])
+
     return WoutData(
         path=path,
         ns=ns,
@@ -163,6 +175,10 @@ def read_wout(path: str | Path) -> WoutData:
         vp=vp,
         pres=pres,
         presf=presf,
+        fsqr=fsqr,
+        fsqz=fsqz,
+        fsql=fsql,
+        fsqt=fsqt,
     )
 
 

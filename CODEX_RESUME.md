@@ -160,6 +160,10 @@ python tools/inspect_npz.py geom_step2.npz
   - later radial block-tridiagonal,
 - Add force residual parity diagnostics (not just energy), and converge to VMEC-like equilibria.
 
+Current incremental progress toward Step-8:
+- Added a lightweight, JAX-friendly radial tri-diagonal smoother preconditioner (`preconditioner="radial_tridi"` or `"mode_diag+radial_tridi"`).
+- Added a regression that the VMEC2000 `wout` reference equilibrium is *nearly stationary* for our total-energy objective (gradient RMS is small), and now parse `fsqr/fsqz/fsql` from `wout_*.nc` for context.
+
 ### Step-9: Implicit differentiation
 - Replace backprop through iterations with implicit diff (custom VJP):
   - solve linear system for adjoint.

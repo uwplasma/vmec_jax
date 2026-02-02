@@ -34,6 +34,10 @@ This repo snapshot is validated through:
    - later radial block-tridiagonal,
    - include pressure/force residual diagnostics (not just energy).
 
+Notes:
+- `vmec_jax.solve` now supports a lightweight radial tri-diagonal smoother preconditioner (`radial_tridi`) that can be combined with the existing mode-diagonal scaling (`mode_diag+radial_tridi`).
+- `vmec_jax.wout.read_wout` parses VMEC force residual scalars (`fsqr/fsqz/fsql`) when present, for solver diagnostics and future parity work.
+
 Notes on conventions:
 - VMEC input pressure coefficients are in Pa, but VMEC’s internal pressure used in the energy
   functional is in `mu0*Pa` (B² units). `vmec_jax.profiles.eval_profiles` returns both:

@@ -62,8 +62,9 @@ def main() -> None:
     p.add_argument("--step-size", type=float, default=5e-3)
     p.add_argument("--history-size", type=int, default=10, help="L-BFGS history (if solver=lbfgs)")
     p.add_argument("--jit-grad", action="store_true", help="JIT objective+grad inside the solver")
-    p.add_argument("--preconditioner", choices=["none", "mode_diag"], default="none")
+    p.add_argument("--preconditioner", choices=["none", "mode_diag", "radial_tridi", "mode_diag+radial_tridi"], default="none")
     p.add_argument("--precond-exponent", type=float, default=1.0)
+    p.add_argument("--precond-radial-alpha", type=float, default=0.5, help="radial_tridi strength (ignored unless used)")
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
 
@@ -102,6 +103,7 @@ def main() -> None:
             jit_grad=bool(args.jit_grad),
             preconditioner=str(args.preconditioner),
             precond_exponent=float(args.precond_exponent),
+            precond_radial_alpha=float(args.precond_radial_alpha),
             verbose=bool(args.verbose),
         )
     else:
@@ -120,6 +122,7 @@ def main() -> None:
             jit_grad=bool(args.jit_grad),
             preconditioner=str(args.preconditioner),
             precond_exponent=float(args.precond_exponent),
+            precond_radial_alpha=float(args.precond_radial_alpha),
             verbose=bool(args.verbose),
         )
 
