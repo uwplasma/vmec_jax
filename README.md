@@ -22,6 +22,7 @@ Force/residue parity (`fsqr/fsqz/fsql`) is under active development (see `CODEX_
   - full `(R,Z,λ)` energy minimization,
   - L-BFGS variant (no external optimizer dependency).
 - Parity tooling vs VMEC2000 `wout_*.nc` (Nyquist fields, scalar integrals, diagnostics figures).
+- Step-10 parity (baseline): VMEC-style `forces` + `tomnsps` + `getfsq` scalars (`fsqr/fsqz/fsql`) match the bundled circular tokamak `wout` to a few percent (see `examples/3_Advanced/10_vmec_forces_rz_kernel_report.py` and `tests/test_step10_residue_getfsq_parity.py`).
 - Advanced: implicit differentiation demos (custom VJP) for solver-aware gradients.
 
 Not yet implemented (planned):
@@ -128,4 +129,3 @@ See `docs/references.rst` and the original VMEC literature for algorithmic conte
 ## Roadmap / step log
 
 The detailed step-by-step porting log and current parity status live in `CODEX_RESUME.md` and `PORTING_NOTES.md`.
-

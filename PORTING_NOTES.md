@@ -54,6 +54,8 @@ Step-10 (parity diagnostics) notes:
 - Half-mesh metric + B ingredients needed by VMEC's force kernels are implemented in `vmec_jax.vmec_bcovar` (ports core `bcovar` algebra used before `forces`).
 - An initial direct port of VMEC's `forces` (R/Z) kernel lives in `vmec_jax.vmec_forces`. This is intentionally a parity/debug kernel and is not yet full `residue.f90` / `getfsq.f` parity.
 - Important VMEC convention: after `bcovar` runs, VMEC overwrites `guu/guv/gvv` with the **B-product tensors** `(B^i B^j)*sqrt(g)` (used by `forces.f`). The Step-10 JAX force kernel therefore must use `bc.gij_b_uu/gij_b_uv/gij_b_vv` for these terms, not the metric elements `g_uu/g_uv/g_vv`.
+- Important VMEC axis convention (vmec_params.f): internal odd-m fields use `jmin1` rules:
+  only the `m=1` contribution is extrapolated to the axis; odd `m>=3` contributions are zero on axis. Implementing this is essential for `fsqr/fsqz/fsql` parity near the magnetic axis.
 
 Notes on conventions:
 - VMEC input pressure coefficients are in Pa, but VMEC’s internal pressure used in the energy

@@ -8,7 +8,7 @@ diagnostics.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -98,7 +98,13 @@ def split_rzl_even_odd_m(state, basis, modes_m: np.ndarray) -> ParityRZL:
     )
 
 
-def internal_odd_from_physical(phys_odd, s, *, eps: float = 1e-14):
+def internal_odd_from_physical(
+    phys_odd,
+    s,
+    *,
+    axis: Literal["copy_js2", "zero"] = "copy_js2",
+    eps: float = 1e-14,
+):
     """Convert physical odd-m contribution to VMEC internal odd field.
 
     VMEC represents:
@@ -114,11 +120,40 @@ def internal_odd_from_physical(phys_odd, s, *, eps: float = 1e-14):
     mask = (sh > eps).astype(jnp.asarray(phys_odd).dtype)
     out = jnp.asarray(phys_odd) * mask / jnp.where(sh > eps, sh, 1.0)
 
-    # VMEC's `totzsps` performs an origin extrapolation for m=1 modes, effectively
-    # defining the internal odd field on the axis by copying from js=2. For our
-    # real-space odd field (which can include multiple odd-m contributions), the
-    # corresponding stable convention is:
-    #   odd_internal(js=1) := odd_internal(js=2)
     if out.shape[0] >= 2:
-        out = out.at[0].set(out[1])
+        if axis == "copy_js2":
+            # VMEC's `totzsps` performs an origin extrapolation for the *m=1*
+            # modes (jmin1(1)=1), defining the internal odd field at js=1 by
+            # copying from js=2. For modes with m>=2, VMEC enforces jmin1(m>=2)=2,
+            # i.e. the internal field is zero on axis. When callers provide a
+            # mixed odd-m real-space sum, this distinction must be handled by
+            # splitting modes before calling this helper.
+            out = out.at[0].set(out[1])
+        elif axis == "zero":
+            out = out.at[0].set(jnp.zeros_like(out[0]))
+        else:  # pragma: no cover
+            raise ValueError(f"Unknown axis rule: {axis!r}")
     return out
+
+
+def internal_odd_from_physical_vmec_m1(
+    *,
+    odd_m1_phys,
+    odd_mge2_phys,
+    s,
+    eps: float = 1e-14,
+):
+    """VMEC-consistent internal odd field from split odd-m contributions.
+
+    VMEC axis rules (vmec_params.f):
+      - jmin1(m=1) = 1  => extrapolate to axis (copy from js=2)
+      - jmin1(m>=2)= 2  => internal odd is zero on axis
+
+    Callers must provide the physical odd-m real-space contributions split into:
+      - the m=1 subset (any n),
+      - the m>=3 subset (odd-m, any n).
+    """
+    s = jnp.asarray(s)
+    odd_m1_int = internal_odd_from_physical(odd_m1_phys, s, axis="copy_js2", eps=eps)
+    odd_rest_int = internal_odd_from_physical(odd_mge2_phys, s, axis="zero", eps=eps)
+    return odd_m1_int + odd_rest_int

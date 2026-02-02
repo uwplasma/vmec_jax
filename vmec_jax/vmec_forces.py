@@ -22,13 +22,13 @@ import numpy as np
 
 from ._compat import jnp
 from .fourier import project_to_modes
-from .fourier import build_helical_basis, eval_fourier
+from .fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta, eval_fourier_dzeta_phys
 from .grids import AngleGrid
 from .modes import ModeTable
 from .vmec_bcovar import vmec_bcovar_half_mesh_from_wout
 from .vmec_constraints import alias_gcon, tcon_from_bcovar_precondn_diag, tcon_from_indata_heuristic
 from .vmec_tomnsp import VmecTrigTables, tomnsps_rzl, vmec_angle_grid, vmec_trig_tables
-from .vmec_parity import internal_odd_from_physical, split_rzl_even_odd_m
+from .vmec_parity import internal_odd_from_physical_vmec_m1, split_rzl_even_odd_m
 
 
 @dataclass(frozen=True)
@@ -143,12 +143,26 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None) -> VmecRZForce
 
     # Real-space parity fields for R/Z and angular derivatives.
     parity = split_rzl_even_odd_m(state, static.basis, static.modes.m)
-    R1 = internal_odd_from_physical(parity.R_odd, s)
-    Z1 = internal_odd_from_physical(parity.Z_odd, s)
-    Ru1 = internal_odd_from_physical(parity.Rt_odd, s)
-    Zu1 = internal_odd_from_physical(parity.Zt_odd, s)
-    Rv1 = internal_odd_from_physical(parity.Rp_odd, s)
-    Zv1 = internal_odd_from_physical(parity.Zp_odd, s)
+
+    # VMEC axis convention (vmec_params.f: jmin1):
+    # - m=1 odd-m internal fields are extrapolated to the axis (copy js=2),
+    # - odd-m with m>=3 are zero on the axis.
+    m_modes = np.asarray(static.modes.m, dtype=int)
+    dtype = jnp.asarray(state.Rcos).dtype
+    mask_m1 = jnp.asarray(m_modes == 1, dtype=dtype)
+    mask_odd_rest = jnp.asarray((m_modes % 2 == 1) & (m_modes != 1), dtype=dtype)
+
+    def _odd_internal_vmec(*, coeff_cos, coeff_sin, eval_fn):
+        phys_m1 = eval_fn(coeff_cos * mask_m1, coeff_sin * mask_m1, static.basis)
+        phys_rest = eval_fn(coeff_cos * mask_odd_rest, coeff_sin * mask_odd_rest, static.basis)
+        return internal_odd_from_physical_vmec_m1(odd_m1_phys=phys_m1, odd_mge2_phys=phys_rest, s=s)
+
+    R1 = _odd_internal_vmec(coeff_cos=state.Rcos, coeff_sin=state.Rsin, eval_fn=eval_fourier)
+    Z1 = _odd_internal_vmec(coeff_cos=state.Zcos, coeff_sin=state.Zsin, eval_fn=eval_fourier)
+    Ru1 = _odd_internal_vmec(coeff_cos=state.Rcos, coeff_sin=state.Rsin, eval_fn=eval_fourier_dtheta)
+    Zu1 = _odd_internal_vmec(coeff_cos=state.Zcos, coeff_sin=state.Zsin, eval_fn=eval_fourier_dtheta)
+    Rv1 = _odd_internal_vmec(coeff_cos=state.Rcos, coeff_sin=state.Rsin, eval_fn=eval_fourier_dzeta_phys)
+    Zv1 = _odd_internal_vmec(coeff_cos=state.Zcos, coeff_sin=state.Zsin, eval_fn=eval_fourier_dzeta_phys)
 
     pr1_0, pr1_1 = jnp.asarray(parity.R_even), jnp.asarray(R1)
     pz1_0, pz1_1 = jnp.asarray(parity.Z_even), jnp.asarray(Z1)
@@ -281,15 +295,18 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None) -> VmecRZForce
         m_k = jnp.asarray(static.modes.m, dtype=jnp.asarray(state.Rcos).dtype)
         xmpq1 = m_k * (m_k - 1.0)  # (K,)
         mask_even = jnp.asarray((np.asarray(static.modes.m) % 2) == 0).astype(jnp.asarray(state.Rcos).dtype)
-        mask_odd = (1.0 - mask_even).astype(mask_even.dtype)
 
         rcon_even = eval_fourier(state.Rcos * xmpq1 * mask_even, state.Rsin * xmpq1 * mask_even, static.basis)
-        rcon_odd_phys = eval_fourier(state.Rcos * xmpq1 * mask_odd, state.Rsin * xmpq1 * mask_odd, static.basis)
         zcon_even = eval_fourier(state.Zcos * xmpq1 * mask_even, state.Zsin * xmpq1 * mask_even, static.basis)
-        zcon_odd_phys = eval_fourier(state.Zcos * xmpq1 * mask_odd, state.Zsin * xmpq1 * mask_odd, static.basis)
 
-        rcon_odd_int = internal_odd_from_physical(rcon_odd_phys, s)
-        zcon_odd_int = internal_odd_from_physical(zcon_odd_phys, s)
+        # Apply VMEC axis rules: only the m=1 piece is extrapolated to the axis.
+        rcon_odd_m1 = eval_fourier(state.Rcos * xmpq1 * mask_m1, state.Rsin * xmpq1 * mask_m1, static.basis)
+        rcon_odd_rest = eval_fourier(state.Rcos * xmpq1 * mask_odd_rest, state.Rsin * xmpq1 * mask_odd_rest, static.basis)
+        zcon_odd_m1 = eval_fourier(state.Zcos * xmpq1 * mask_m1, state.Zsin * xmpq1 * mask_m1, static.basis)
+        zcon_odd_rest = eval_fourier(state.Zcos * xmpq1 * mask_odd_rest, state.Zsin * xmpq1 * mask_odd_rest, static.basis)
+
+        rcon_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=rcon_odd_m1, odd_mge2_phys=rcon_odd_rest, s=s)
+        zcon_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=zcon_odd_m1, odd_mge2_phys=zcon_odd_rest, s=s)
 
         psqrts = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
         rcon_phys = jnp.asarray(rcon_even) + psqrts * jnp.asarray(rcon_odd_int)
@@ -391,12 +408,23 @@ def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout, indata=Non
 
     # Geometry parity arrays.
     parity = split_rzl_even_odd_m(state, static.basis, static.modes.m)
-    R1 = internal_odd_from_physical(parity.R_odd, s)
-    Z1 = internal_odd_from_physical(parity.Z_odd, s)
-    Ru1 = internal_odd_from_physical(parity.Rt_odd, s)
-    Zu1 = internal_odd_from_physical(parity.Zt_odd, s)
-    Rv1 = internal_odd_from_physical(parity.Rp_odd, s)
-    Zv1 = internal_odd_from_physical(parity.Zp_odd, s)
+
+    m_modes = np.asarray(static.modes.m, dtype=int)
+    dtype = jnp.asarray(state.Rcos).dtype
+    mask_m1 = jnp.asarray(m_modes == 1, dtype=dtype)
+    mask_odd_rest = jnp.asarray((m_modes % 2 == 1) & (m_modes != 1), dtype=dtype)
+
+    def _odd_internal_vmec(*, coeff_cos, coeff_sin, eval_fn):
+        phys_m1 = eval_fn(coeff_cos * mask_m1, coeff_sin * mask_m1, static.basis)
+        phys_rest = eval_fn(coeff_cos * mask_odd_rest, coeff_sin * mask_odd_rest, static.basis)
+        return internal_odd_from_physical_vmec_m1(odd_m1_phys=phys_m1, odd_mge2_phys=phys_rest, s=s)
+
+    R1 = _odd_internal_vmec(coeff_cos=state.Rcos, coeff_sin=state.Rsin, eval_fn=eval_fourier)
+    Z1 = _odd_internal_vmec(coeff_cos=state.Zcos, coeff_sin=state.Zsin, eval_fn=eval_fourier)
+    Ru1 = _odd_internal_vmec(coeff_cos=state.Rcos, coeff_sin=state.Rsin, eval_fn=eval_fourier_dtheta)
+    Zu1 = _odd_internal_vmec(coeff_cos=state.Zcos, coeff_sin=state.Zsin, eval_fn=eval_fourier_dtheta)
+    Rv1 = _odd_internal_vmec(coeff_cos=state.Rcos, coeff_sin=state.Rsin, eval_fn=eval_fourier_dzeta_phys)
+    Zv1 = _odd_internal_vmec(coeff_cos=state.Zcos, coeff_sin=state.Zsin, eval_fn=eval_fourier_dzeta_phys)
 
     pr1_0, pr1_1 = jnp.asarray(parity.R_even), jnp.asarray(R1)
     pz1_0, pz1_1 = jnp.asarray(parity.Z_even), jnp.asarray(Z1)

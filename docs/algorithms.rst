@@ -118,6 +118,17 @@ computed from *Fourier-space* force arrays produced by a specific sequence of
 real-space kernels and transforms. Reproducing these conventions is necessary
 for true output parity with VMEC2000.
 
+Near-axis conventions matter. VMEC enforces mode-dependent axis rules via the
+``jmin1``/``jmin2`` tables (see ``vmec_params.f``). In particular, odd-m internal
+fields satisfy:
+
+- for ``m=1``: extrapolate the internal odd field to the axis (copy ``js=2``),
+- for ``m>=2``: internal odd fields are zero on the axis.
+
+In this repo we apply this rule by splitting the odd-m contribution into an
+``m=1`` part and an ``m>=3`` part before converting from physical
+``sqrt(s)*odd_internal`` to ``odd_internal``.
+
 Force kernel combination (tomnsps)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

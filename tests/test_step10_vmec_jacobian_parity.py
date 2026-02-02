@@ -7,13 +7,13 @@ import numpy as np
 import pytest
 
 from vmec_jax.config import load_config
-from vmec_jax.fourier import build_helical_basis, eval_fourier
+from vmec_jax.fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta
 from vmec_jax.grids import AngleGrid
 from vmec_jax.integrals import dvds_from_sqrtg_zeta
 from vmec_jax.modes import ModeTable
 from vmec_jax.static import build_static
 from vmec_jax.vmec_jacobian import jacobian_half_mesh_from_parity
-from vmec_jax.vmec_parity import internal_odd_from_physical, split_rzl_even_odd_m
+from vmec_jax.vmec_parity import internal_odd_from_physical_vmec_m1, split_rzl_even_odd_m
 from vmec_jax.wout import read_wout, state_from_wout
 
 
@@ -77,10 +77,25 @@ def test_step10_vmec_halfmesh_jacobian_matches_wout_gmnc(case_name: str, input_r
     # Use our standard helical basis for evaluating even/odd-m pieces.
     parity = split_rzl_even_odd_m(st, static.basis, static.modes.m)
 
-    R_odd_int = internal_odd_from_physical(parity.R_odd, static.s)
-    Z_odd_int = internal_odd_from_physical(parity.Z_odd, static.s)
-    Ru_odd_int = internal_odd_from_physical(parity.Rt_odd, static.s)
-    Zu_odd_int = internal_odd_from_physical(parity.Zt_odd, static.s)
+    # VMEC axis rule (vmec_params.f): only m=1 is extrapolated to axis; odd m>=3 are zero on axis.
+    m_modes = np.asarray(static.modes.m, dtype=int)
+    mask_m1 = (m_modes == 1).astype(float)
+    mask_odd_rest = (((m_modes % 2) == 1) & (m_modes != 1)).astype(float)
+
+    R_odd_m1 = eval_fourier(st.Rcos * mask_m1, st.Rsin * mask_m1, static.basis)
+    R_odd_rest = eval_fourier(st.Rcos * mask_odd_rest, st.Rsin * mask_odd_rest, static.basis)
+    Z_odd_m1 = eval_fourier(st.Zcos * mask_m1, st.Zsin * mask_m1, static.basis)
+    Z_odd_rest = eval_fourier(st.Zcos * mask_odd_rest, st.Zsin * mask_odd_rest, static.basis)
+
+    Ru_odd_m1 = eval_fourier_dtheta(st.Rcos * mask_m1, st.Rsin * mask_m1, static.basis)
+    Ru_odd_rest = eval_fourier_dtheta(st.Rcos * mask_odd_rest, st.Rsin * mask_odd_rest, static.basis)
+    Zu_odd_m1 = eval_fourier_dtheta(st.Zcos * mask_m1, st.Zsin * mask_m1, static.basis)
+    Zu_odd_rest = eval_fourier_dtheta(st.Zcos * mask_odd_rest, st.Zsin * mask_odd_rest, static.basis)
+
+    R_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=R_odd_m1, odd_mge2_phys=R_odd_rest, s=static.s)
+    Z_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=Z_odd_m1, odd_mge2_phys=Z_odd_rest, s=static.s)
+    Ru_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=Ru_odd_m1, odd_mge2_phys=Ru_odd_rest, s=static.s)
+    Zu_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=Zu_odd_m1, odd_mge2_phys=Zu_odd_rest, s=static.s)
 
     jh = jacobian_half_mesh_from_parity(
         pr1_even=parity.R_even,

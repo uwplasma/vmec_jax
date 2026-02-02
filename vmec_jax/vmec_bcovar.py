@@ -26,7 +26,8 @@ from ._compat import jnp
 from .field import TWOPI
 from .field import bsup_from_sqrtg_lambda, lamscale_from_phips
 from .vmec_jacobian import VmecHalfMeshJacobian, jacobian_half_mesh_from_parity
-from .vmec_parity import internal_odd_from_physical, split_rzl_even_odd_m
+from .fourier import eval_fourier, eval_fourier_dtheta, eval_fourier_dzeta_phys
+from .vmec_parity import internal_odd_from_physical_vmec_m1, split_rzl_even_odd_m
 
 
 @dataclass(frozen=True)
@@ -144,15 +145,28 @@ def vmec_bcovar_half_mesh_from_wout(
     # contribution to VMEC's internal odd field by dividing by sqrt(s).
     parity = split_rzl_even_odd_m(state, static.basis, static.modes.m)
 
-    R1 = internal_odd_from_physical(parity.R_odd, s)
-    Z1 = internal_odd_from_physical(parity.Z_odd, s)
-    Ru1 = internal_odd_from_physical(parity.Rt_odd, s)
-    Zu1 = internal_odd_from_physical(parity.Zt_odd, s)
-    Rv1 = internal_odd_from_physical(parity.Rp_odd, s)
-    Zv1 = internal_odd_from_physical(parity.Zp_odd, s)
+    # VMEC axis convention (vmec_params.f: jmin1):
+    # - m=1 odd-m internal fields are extrapolated to the axis (copy js=2),
+    # - odd-m with m>=3 are zero on the axis.
+    m_modes = np.asarray(static.modes.m, dtype=int)
+    dtype = jnp.asarray(state.Rcos).dtype
+    mask_m1 = jnp.asarray(m_modes == 1, dtype=dtype)
+    mask_odd_rest = jnp.asarray((m_modes % 2 == 1) & (m_modes != 1), dtype=dtype)
 
-    Lu1 = internal_odd_from_physical(parity.Lt_odd, s)
-    Lv1 = internal_odd_from_physical(parity.Lp_odd, s)
+    def _odd_internal_vmec(*, coeff_cos, coeff_sin, eval_fn):
+        phys_m1 = eval_fn(coeff_cos * mask_m1, coeff_sin * mask_m1, static.basis)
+        phys_rest = eval_fn(coeff_cos * mask_odd_rest, coeff_sin * mask_odd_rest, static.basis)
+        return internal_odd_from_physical_vmec_m1(odd_m1_phys=phys_m1, odd_mge2_phys=phys_rest, s=s)
+
+    R1 = _odd_internal_vmec(coeff_cos=state.Rcos, coeff_sin=state.Rsin, eval_fn=eval_fourier)
+    Z1 = _odd_internal_vmec(coeff_cos=state.Zcos, coeff_sin=state.Zsin, eval_fn=eval_fourier)
+    Ru1 = _odd_internal_vmec(coeff_cos=state.Rcos, coeff_sin=state.Rsin, eval_fn=eval_fourier_dtheta)
+    Zu1 = _odd_internal_vmec(coeff_cos=state.Zcos, coeff_sin=state.Zsin, eval_fn=eval_fourier_dtheta)
+    Rv1 = _odd_internal_vmec(coeff_cos=state.Rcos, coeff_sin=state.Rsin, eval_fn=eval_fourier_dzeta_phys)
+    Zv1 = _odd_internal_vmec(coeff_cos=state.Zcos, coeff_sin=state.Zsin, eval_fn=eval_fourier_dzeta_phys)
+
+    Lu1 = _odd_internal_vmec(coeff_cos=state.Lcos, coeff_sin=state.Lsin, eval_fn=eval_fourier_dtheta)
+    Lv1 = _odd_internal_vmec(coeff_cos=state.Lcos, coeff_sin=state.Lsin, eval_fn=eval_fourier_dzeta_phys)
 
     # Half-mesh Jacobian quantities from VMEC's discrete formula.
     jac = jacobian_half_mesh_from_parity(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Step-10 parity regression: VMEC-style forces/tomnsps/getfsq.
+
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,7 +19,6 @@ from vmec_jax.vmec_tomnsp import TomnspsRZL, vmec_angle_grid, vmec_trig_tables
 from vmec_jax.wout import read_wout, state_from_wout
 
 
-@pytest.mark.xfail(reason="Step-10 parity WIP: full VMEC residue/getfsq matching not yet achieved.")
 def test_step10_getfsq_parity_circular_tokamak():
     pytest.importorskip("netCDF4")
 
@@ -56,6 +57,8 @@ def test_step10_getfsq_parity_circular_tokamak():
     assert np.isfinite(scal.fsqr)
     assert np.isfinite(scal.fsqz)
     assert np.isfinite(scal.fsql)
-    assert abs(scal.fsqr - wout.fsqr) / max(abs(wout.fsqr), 1e-300) < 0.2
-    assert abs(scal.fsqz - wout.fsqz) / max(abs(wout.fsqz), 1e-300) < 0.2
-    assert abs(scal.fsql - wout.fsql) / max(abs(wout.fsql), 1e-300) < 0.2
+    # Remaining difference is dominated by minor endpoint/roundoff details and
+    # should be at the few-percent level or better for this baseline case.
+    assert abs(scal.fsqr - wout.fsqr) / max(abs(wout.fsqr), 1e-300) < 0.02
+    assert abs(scal.fsqz - wout.fsqz) / max(abs(wout.fsqz), 1e-300) < 0.02
+    assert abs(scal.fsql - wout.fsql) / max(abs(wout.fsql), 1e-300) < 0.02
