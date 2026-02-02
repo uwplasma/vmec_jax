@@ -23,6 +23,7 @@ from typing import Any
 import numpy as np
 
 from ._compat import jnp
+from .field import TWOPI
 from .field import bsup_from_sqrtg_lambda, lamscale_from_phips
 from .vmec_jacobian import VmecHalfMeshJacobian, jacobian_half_mesh_from_parity
 from .vmec_parity import internal_odd_from_physical, split_rzl_even_odd_m
@@ -219,46 +220,66 @@ def vmec_bcovar_half_mesh_from_wout(
     # ---------------------------------------------------------------------
     # Lambda force kernels (bcovar.f "lambda full mesh forces" block)
     # ---------------------------------------------------------------------
-    # Build full-mesh numerator fields LU = phipf + lamscale*lam_u and LU_odd.
-    # Here we use the parity split on the full mesh, then follow VMEC's
-    # half-mesh averaging structure as closely as possible.
-    lu0_full = (lamscale * parity.Lt_even) + jnp.asarray(wout.phipf)[:, None, None]
-    lu1_full = lamscale * Lu1
+    # This reproduces the structure in `bcovar.f`:
+    #   - compute an intermediate bsubv_e on the full radial mesh from LU and metrics
+    #   - average (bsubuh,bsubvh) from the half mesh onto the full mesh
+    #   - blend bsubv_e with averaged bsubvh using bdamp(s) for near-axis stability
+    #
+    # Inputs:
+    # - LU (full mesh, parity-split): LU = phipf + lamscale*dλ/du
+    # - lvv (half mesh): lvv = (g_vv / (signgs*sqrtg*2π))
+    # - bsubu/bsubv (half mesh): covariant B components
 
-    # phipog = 1/gsqrt on half mesh. (VMEC stores sign separately.)
-    phipog = jnp.where(jac.sqrtg != 0, 1.0 / jac.sqrtg, 0.0)
-    lvv = phipog * gvv
+    # Full-mesh LU parity pieces (odd is VMEC-internal 1/sqrt(s) representation).
+    lu0 = (lamscale * parity.Lt_even) + jnp.asarray(wout.phipf)[:, None, None]
+    lu1 = lamscale * Lu1
 
-    # bsubu_h/bsubv_h are half-mesh covariant B components.
-    bsubuh = bsubu
-    bsubvh = bsubv
+    # overg = 1/(signgs*sqrtg*2π). Note: jac.sqrtg can be signed; signgs makes denom positive.
+    denom = int(wout.signgs) * jac.sqrtg * jnp.asarray(TWOPI, dtype=jac.sqrtg.dtype)
+    overg = jnp.where(denom != 0, 1.0 / denom, 0.0)
 
-    # Average bsubu_h onto full radial mesh (simple half-to-full average).
-    bsubu_full = jnp.zeros_like(bsubuh)
+    # lvv on half mesh: phipog * gvv.
+    lvv = overg * gvv
+
+    # pshalf on half mesh.
+    pshalf = _pshalf_from_s(s)[:, None, None]
+
+    # Intermediate full-mesh bsubv_e (before blending), following bcovar.f.
+    bsubv_e = jnp.zeros_like(bsubv)
     if ns >= 2:
-        bsubu_full = bsubu_full.at[:-1].set(0.5 * (bsubuh[:-1] + bsubuh[1:]))
-        bsubu_full = bsubu_full.at[-1].set(0.5 * bsubuh[-1])
+        bsubv_e = bsubv_e.at[:-1].set(0.5 * (lvv[:-1] + lvv[1:]) * lu0[:-1])
+        bsubv_e = bsubv_e.at[-1].set(0.5 * lvv[-1] * lu0[-1])
 
-    # Construct bsubv_e on the full mesh following VMEC's formulas (without the
-    # optional blending via `bdamp`, which is solver-state dependent).
-    bsubv_full = jnp.zeros_like(bsubvh)
+    lvv_sh = lvv * pshalf
+    bsubu_tmp = guv * bsupu  # bcovar: pguv*bsupu (sigma_an=1 isotropic)
     if ns >= 2:
-        bsubv_full = bsubv_full.at[:-1].set(0.5 * (lvv[:-1] + lvv[1:]) * lu0_full[:-1])
-        bsubv_full = bsubv_full.at[-1].set(0.5 * lvv[-1] * lu0_full[-1])
-
-    lvv_sh = lvv * _pshalf_from_s(s)[:, None, None]
-    bsubu_e_tmp = guv * bsupu
-    if ns >= 2:
-        bsubv_full = bsubv_full.at[:-1].add(
-            0.5 * ((lvv_sh[:-1] + lvv_sh[1:]) * lu1_full[:-1] + bsubu_e_tmp[:-1] + bsubu_e_tmp[1:])
+        bsubv_e = bsubv_e.at[:-1].add(
+            0.5 * ((lvv_sh[:-1] + lvv_sh[1:]) * lu1[:-1] + bsubu_tmp[:-1] + bsubu_tmp[1:])
         )
-        bsubv_full = bsubv_full.at[-1].add(0.5 * (lvv_sh[-1] * lu1_full[-1] + bsubu_e_tmp[-1]))
+        bsubv_e = bsubv_e.at[-1].add(0.5 * (lvv_sh[-1] * lu1[-1] + bsubu_tmp[-1]))
 
-    # Scale and split into even/odd pieces in the same way VMEC exposes to forces:
-    # `bsubu_o = psqrts * bsubu_e`, similarly for v.
+    # Average lambda forces onto full radial mesh (bsubu_e from bsubu half mesh).
+    bsubu_e = jnp.zeros_like(bsubu)
+    if ns >= 2:
+        bsubu_e = bsubu_e.at[:-1].set(0.5 * (bsubu[:-1] + bsubu[1:]))
+        bsubu_e = bsubu_e.at[-1].set(0.5 * bsubu[-1])
+
+    # Blend bsubv_e with half-mesh bsubv average using bdamp(s) (VMEC: bdamp=2*pdamp*(1-s)).
+    pdamp = 0.05
+    bdamp = (2.0 * pdamp * (1.0 - s)).astype(jnp.asarray(bsubv_e).dtype)[:, None, None]
+    if ns >= 2:
+        bsubv_avg = jnp.zeros_like(bsubv_e)
+        bsubv_avg = bsubv_avg.at[:-1].set(0.5 * (bsubv[:-1] + bsubv[1:]))
+        bsubv_avg = bsubv_avg.at[-1].set(0.5 * bsubv[-1])
+        bsubv_e = bdamp * bsubv_e + (1.0 - bdamp) * bsubv_avg
+    else:
+        bsubv_e = bdamp * bsubv_e + (1.0 - bdamp) * bsubv_e
+
+    # Final scaling for tomnsps: bsubu_e/bsubv_e get multiplied by -lamscale.
+    # VMEC also exposes odd-m pieces as sqrts*bsub*_e.
     psqrts = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
-    clmn_even = -lamscale * bsubu_full
-    blmn_even = -lamscale * bsubv_full
+    clmn_even = -lamscale * bsubu_e
+    blmn_even = -lamscale * bsubv_e
     clmn_odd = psqrts * clmn_even
     blmn_odd = psqrts * blmn_even
 

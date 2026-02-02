@@ -271,7 +271,7 @@ def vmec_forces_rz_from_wout(*, state, static, wout) -> VmecRZForceKernels:
 
 
 def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout) -> VmecRZForceKernels:
-    """Compute VMEC R/Z force kernels using `wout`'s stored (sqrtg, bsup, |B|).
+    """Compute VMEC R/Z force kernels using `wout`'s stored (sqrtg, bsup, ``|B|``).
 
     This is a parity/debug variant that reduces the number of derived quantities
     computed by vmec_jax, making it easier to validate the *forces* algebra in

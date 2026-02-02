@@ -31,6 +31,7 @@ The tests in ``tests/`` cover:
 - boundary evaluation and agreement with the ``s=1`` state surface,
 - metric/Jacobian positivity and shape checks,
 - stepwise regressions vs ``wout`` (Nyquist ``sqrt(g)``, ``bsup*``, scalar integrals).
+- Step-10 parity scaffolding for VMEC-style ``forces``/``tomnsps``/``getfsq`` (currently marked ``xfail`` while parity is still being completed).
 
 Running tests::
 
@@ -38,4 +39,3 @@ Running tests::
 
 If you do not have ``netCDF4`` installed, tests that require ``wout`` I/O will be
 skipped.
-

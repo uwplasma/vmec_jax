@@ -133,9 +133,9 @@ Roundtrip a reference ``wout_*.nc`` file through vmec_jax's minimal writer (requ
 python examples/3_Advanced/06_wout_roundtrip.py --wout examples/wout_circular_tokamak_reference.nc --out wout_roundtrip.nc
 ```
 
-## Step-10 (WIP): VMEC `forces` kernel (R/Z)
+## Step-10 (WIP): VMEC `forces` + `tomnsps` + `getfsq` parity
 
-Run the initial port of VMEC2000’s real-space `forces` (R/Z) kernel and dump diagnostics (requires `netCDF4`):
+Run the initial port of VMEC2000’s real-space `forces` kernel, including VMEC-style `tomnsps` transforms and VMEC-like scalar normalization (`fnorm/fnormL`, `getfsq`) (requires `netCDF4`):
 
 ```bash
 python examples/3_Advanced/10_vmec_forces_rz_kernel_report.py

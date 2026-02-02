@@ -35,4 +35,10 @@ Submodules
    state
    static
    visualization
+   vmec_bcovar
+   vmec_forces
+   vmec_jacobian
+   vmec_parity
+   vmec_residue
+   vmec_tomnsp
    wout

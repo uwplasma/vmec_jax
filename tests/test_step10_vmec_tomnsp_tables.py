@@ -34,3 +34,14 @@ def test_vmec_trig_tables_include_nfp_in_derivative_tables():
     assert np.allclose(np.asarray(t.cosnvn)[:, n], (n * 3) * np.asarray(t.cosnv)[:, n])
     assert np.allclose(np.asarray(t.sinnvn)[:, n], -(n * 3) * np.asarray(t.sinnv)[:, n])
 
+
+def test_vmec_trig_tables_cosmui3_matches_fixaray_behavior():
+    # lasym=False: ntheta3==ntheta2, so cosmui3 is the same as cosmui (endpoint half-weights).
+    t = vmec_trig_tables(ntheta=10, nzeta=7, nfp=3, mmax=6, nmax=4, lasym=False)
+    assert t.ntheta2 == t.ntheta3
+    assert np.allclose(np.asarray(t.cosmui3), np.asarray(t.cosmui))
+
+    # lasym=True: ntheta3==ntheta1, and cosmui3 remains un-halved (full-interval integration).
+    ta = vmec_trig_tables(ntheta=10, nzeta=7, nfp=3, mmax=6, nmax=4, lasym=True)
+    assert ta.ntheta3 == ta.ntheta1
+    assert np.allclose(np.asarray(ta.cosmui3[0, :]), np.asarray(ta.cosmu[0, :]) * ta.dnorm)

@@ -57,6 +57,8 @@ class VmecTrigTables:
     sinmui: Any
     cosmumi: Any
     sinmumi: Any
+    cosmui3: Any
+    cosmumi3: Any
 
     # Zeta tables. Shapes (nzeta, nmax+1).
     cosnv: Any
@@ -128,8 +130,11 @@ def vmec_trig_tables(
     cosmum = cosmu * m[None, :]
     sinmum = -sinmu * m[None, :]
 
-    cosmui = dnorm * cosmu
-    sinmui = dnorm * sinmu
+    cosmui_base = dnorm * cosmu
+    sinmui_base = dnorm * sinmu
+    cosmui = cosmui_base.copy()
+    sinmui = sinmui_base.copy()
+    cosmui3 = cosmui_base.copy()
 
     # Endpoint half-weights in theta for i==1 or i==ntheta2.
     # Note: in VMEC, `ntheta2` is the u=pi index even when `lasym=True`.
@@ -138,9 +143,14 @@ def vmec_trig_tables(
         sinmui[0, :] *= 0.5
         cosmui[ntheta2 - 1, :] *= 0.5
         sinmui[ntheta2 - 1, :] *= 0.5
+        if ntheta2 == ntheta3:
+            # When `ntheta3==ntheta2` (lasym=False), VMEC reuses the half-interval
+            # integration weights for full-interval integrations too.
+            cosmui3 = cosmui.copy()
 
     cosmumi = cosmui * m[None, :]
     sinmumi = -sinmui * m[None, :]
+    cosmumi3 = cosmui3 * m[None, :]
 
     # Zeta tables use argj = 2π*(j-1)/nzeta, for j=1..nzeta.
     j = np.arange(nzeta, dtype=float)
@@ -170,6 +180,8 @@ def vmec_trig_tables(
         sinmui=jnp.asarray(sinmui, dtype=dtype),
         cosmumi=jnp.asarray(cosmumi, dtype=dtype),
         sinmumi=jnp.asarray(sinmumi, dtype=dtype),
+        cosmui3=jnp.asarray(cosmui3, dtype=dtype),
+        cosmumi3=jnp.asarray(cosmumi3, dtype=dtype),
         cosnv=jnp.asarray(cosnv, dtype=dtype),
         sinnv=jnp.asarray(sinnv, dtype=dtype),
         cosnvn=jnp.asarray(cosnvn, dtype=dtype),
@@ -242,6 +254,10 @@ def tomnsps_rzl(
     blmn_odd=None,
     clmn_even=None,
     clmn_odd=None,
+    arcon_even=None,
+    arcon_odd=None,
+    azcon_even=None,
+    azcon_odd=None,
     mpol: int,
     ntor: int,
     nfp: int,
@@ -296,6 +312,15 @@ def tomnsps_rzl(
     czmn_even = jnp.asarray(czmn_even)[:, :nt2, :]
     czmn_odd = jnp.asarray(czmn_odd)[:, :nt2, :]
 
+    if arcon_even is None:
+        arcon_even = jnp.zeros_like(armn_even)
+    if arcon_odd is None:
+        arcon_odd = jnp.zeros_like(armn_odd)
+    if azcon_even is None:
+        azcon_even = jnp.zeros_like(armn_even)
+    if azcon_odd is None:
+        azcon_odd = jnp.zeros_like(armn_odd)
+
     if blmn_even is None:
         blmn_even = jnp.zeros_like(armn_even)
     if blmn_odd is None:
@@ -308,6 +333,10 @@ def tomnsps_rzl(
     blmn_odd = jnp.asarray(blmn_odd)[:, :nt2, :]
     clmn_even = jnp.asarray(clmn_even)[:, :nt2, :]
     clmn_odd = jnp.asarray(clmn_odd)[:, :nt2, :]
+    arcon_even = jnp.asarray(arcon_even)[:, :nt2, :]
+    arcon_odd = jnp.asarray(arcon_odd)[:, :nt2, :]
+    azcon_even = jnp.asarray(azcon_even)[:, :nt2, :]
+    azcon_odd = jnp.asarray(azcon_odd)[:, :nt2, :]
 
     # Tables for m=0..mpol-1 and n=0..ntor.
     m = np.arange(mpol, dtype=int)
@@ -321,26 +350,63 @@ def tomnsps_rzl(
     cosnvn = trig.cosnvn[:, : (ntor + 1)]
     sinnvn = trig.sinnvn[:, : (ntor + 1)]
 
+    # VMEC constraint operator multiplier: xmpq(m,1)=m*(m-1).
+    xmpq1 = (jnp.asarray(m, dtype=jnp.asarray(armn_even).dtype) * (jnp.asarray(m, dtype=jnp.asarray(armn_even).dtype) - 1.0))[
+        None, :, None
+    ]  # (1, mpol, 1)
+
     # Theta integration: compute work arrays for even-parity and odd-parity pieces.
     # Each is (ns, mpol, nzeta).
     # work1 indices follow tomnsp_mod.f numbering but we compute only needed combos.
     # R:
-    w1_e = jnp.einsum("sik,im->smk", armn_even, cosmui) + jnp.einsum("sik,im->smk", brmn_even, sinmumi)
-    w1_o = jnp.einsum("sik,im->smk", armn_odd, cosmui) + jnp.einsum("sik,im->smk", brmn_odd, sinmumi)
+    w1_e = (
+        jnp.einsum("sik,im->smk", armn_even, cosmui)
+        + jnp.einsum("sik,im->smk", brmn_even, sinmumi)
+        + xmpq1 * jnp.einsum("sik,im->smk", arcon_even, cosmui)
+    )
+    w1_o = (
+        jnp.einsum("sik,im->smk", armn_odd, cosmui)
+        + jnp.einsum("sik,im->smk", brmn_odd, sinmumi)
+        + xmpq1 * jnp.einsum("sik,im->smk", arcon_odd, cosmui)
+    )
     w2_e = -jnp.einsum("sik,im->smk", crmn_even, cosmui)
     w2_o = -jnp.einsum("sik,im->smk", crmn_odd, cosmui)
-    w3_e = jnp.einsum("sik,im->smk", armn_even, sinmui) + jnp.einsum("sik,im->smk", brmn_even, cosmumi)
-    w3_o = jnp.einsum("sik,im->smk", armn_odd, sinmui) + jnp.einsum("sik,im->smk", brmn_odd, cosmumi)
+    w3_e = (
+        jnp.einsum("sik,im->smk", armn_even, sinmui)
+        + jnp.einsum("sik,im->smk", brmn_even, cosmumi)
+        + xmpq1 * jnp.einsum("sik,im->smk", arcon_even, sinmui)
+    )
+    w3_o = (
+        jnp.einsum("sik,im->smk", armn_odd, sinmui)
+        + jnp.einsum("sik,im->smk", brmn_odd, cosmumi)
+        + xmpq1 * jnp.einsum("sik,im->smk", arcon_odd, sinmui)
+    )
     w4_e = -jnp.einsum("sik,im->smk", crmn_even, sinmui)
     w4_o = -jnp.einsum("sik,im->smk", crmn_odd, sinmui)
 
     # Z:
-    w7_e = jnp.einsum("sik,im->smk", azmn_even, sinmui) + jnp.einsum("sik,im->smk", bzmn_even, cosmumi)
-    w7_o = jnp.einsum("sik,im->smk", azmn_odd, sinmui) + jnp.einsum("sik,im->smk", bzmn_odd, cosmumi)
+    w7_e = (
+        jnp.einsum("sik,im->smk", azmn_even, sinmui)
+        + jnp.einsum("sik,im->smk", bzmn_even, cosmumi)
+        + xmpq1 * jnp.einsum("sik,im->smk", azcon_even, sinmui)
+    )
+    w7_o = (
+        jnp.einsum("sik,im->smk", azmn_odd, sinmui)
+        + jnp.einsum("sik,im->smk", bzmn_odd, cosmumi)
+        + xmpq1 * jnp.einsum("sik,im->smk", azcon_odd, sinmui)
+    )
     w8_e = -jnp.einsum("sik,im->smk", czmn_even, sinmui)
     w8_o = -jnp.einsum("sik,im->smk", czmn_odd, sinmui)
-    w5_e = jnp.einsum("sik,im->smk", azmn_even, cosmui) + jnp.einsum("sik,im->smk", bzmn_even, sinmumi)
-    w5_o = jnp.einsum("sik,im->smk", azmn_odd, cosmui) + jnp.einsum("sik,im->smk", bzmn_odd, sinmumi)
+    w5_e = (
+        jnp.einsum("sik,im->smk", azmn_even, cosmui)
+        + jnp.einsum("sik,im->smk", bzmn_even, sinmumi)
+        + xmpq1 * jnp.einsum("sik,im->smk", azcon_even, cosmui)
+    )
+    w5_o = (
+        jnp.einsum("sik,im->smk", azmn_odd, cosmui)
+        + jnp.einsum("sik,im->smk", bzmn_odd, sinmumi)
+        + xmpq1 * jnp.einsum("sik,im->smk", azcon_odd, cosmui)
+    )
     w6_e = -jnp.einsum("sik,im->smk", czmn_even, cosmui)
     w6_o = -jnp.einsum("sik,im->smk", czmn_odd, cosmui)
 
@@ -387,5 +453,30 @@ def tomnsps_rzl(
         frss = None
         fzcs = None
         flcs = None
+
+    # Apply VMEC's radial evolution masks (jmin2/jlam + fixed-boundary edge).
+    # For parity work we use the default vmec_params values:
+    #   jmin2(m=0)=1, jmin2(m>=1)=2; jlam(m)=2.
+    js_fortran = jnp.arange(ns, dtype=jnp.int32) + 1  # 1..ns
+    m_fortran = jnp.arange(mpol, dtype=jnp.int32)  # 0..mpol-1
+    jmin2 = jnp.where(m_fortran == 0, 1, 2)[None, :]  # (1, mpol)
+    jlam = jnp.full((1, mpol), 2, dtype=jmin2.dtype)
+
+    # Fixed-boundary convention: R/Z not evolved on the boundary surface (js=ns).
+    jsmax_rz = int(ns - 1)
+    mask_rz = (js_fortran[:, None] >= jmin2) & (js_fortran[:, None] <= jsmax_rz)
+    mask_l = js_fortran[:, None] >= jlam
+
+    mask_rz = mask_rz.astype(jnp.asarray(frcc).dtype)[:, :, None]
+    mask_l = mask_l.astype(jnp.asarray(flsc).dtype)[:, :, None]
+    frcc = frcc * mask_rz
+    fzsc = fzsc * mask_rz
+    if frss is not None:
+        frss = frss * mask_rz
+    if fzcs is not None:
+        fzcs = fzcs * mask_rz
+    flsc = flsc * mask_l
+    if flcs is not None:
+        flcs = flcs * mask_l
 
     return TomnspsRZL(frcc=frcc, frss=frss, fzsc=fzsc, fzcs=fzcs, flsc=flsc, flcs=flcs)

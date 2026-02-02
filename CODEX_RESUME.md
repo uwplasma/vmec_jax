@@ -186,6 +186,7 @@ Current incremental progress toward Step-10:
 - Added a half-mesh bcovar ingredient kernel (`vmec_jax.vmec_bcovar`) and a smoke regression (`tests/test_step10_vmec_bcovar_smoke.py`).
 - Added an initial port of the VMEC `forces` (R/Z) kernel in array form (`vmec_jax.vmec_forces`) plus a smoke test and a diagnostics example (`examples/3_Advanced/10_vmec_forces_rz_kernel_report.py`). This is the starting point for full `residue/getfsq` parity.
 - Added VMEC `fixaray` + `tomnsps` trig/normalization tables (`vmec_jax.vmec_tomnsp`) and a differentiability demo that backprops through a `tomnsps`-based scalar (`examples/2_Intermediate/07_grad_vmec_tomnsps_residual.py`).
+- Added a VMEC-like scalar normalization + residual computation scaffold (`vmec_jax.vmec_residue`) and wired it into the Step-10 parity xfail regression (`tests/test_step10_residue_getfsq_parity_xfail.py`).
 
 ## 7) Longer-term roadmap
 - Match VMEC2000 feature set (non-stellarator-symmetric, free-boundary, etc.).
