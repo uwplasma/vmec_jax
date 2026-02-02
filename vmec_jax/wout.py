@@ -441,7 +441,15 @@ def state_from_wout(wout: WoutData) -> VMECState:
                         lam_full[js - 1, mask] = (2.0 * lam_wout[js - 1, mask] - sp_f[js - 1] * lam_full[js - 2, mask]) / denom
 
         # Undo the old-style `phipf` division and `lamscale` multiply done in `wrout.f`.
-        lam_full[1:, :] = lam_full[1:, :] * phipf[1:, None]
+        #
+        # Important: VMEC's `wrout.f` writes (schematically)
+        #   lmns_wout(:,js) = (lmns1(:,js)/phipf(js)) * lamscale
+        # for **all** radial indices `js=1..ns` before interpolating onto the
+        # half mesh and finally setting `lmns(:,1)=0`. To recover internal full
+        # mesh lambda coefficients consistent with the fields stored in `wout`
+        # (notably `bsupu`), we must therefore multiply back by `phipf(js)` on
+        # *every* surface, including the axis surface.
+        lam_full = lam_full * phipf[:, None]
         if lamscale != 0.0:
             lam_full = lam_full / float(lamscale)
         return lam_full

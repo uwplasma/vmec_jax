@@ -759,37 +759,141 @@ def vmec_residual_internal_from_kernels(
     clmn_even = getattr(k.bc, "clmn_even", z)
     clmn_odd = getattr(k.bc, "clmn_odd", z)
 
-    out_sym = tomnsps_rzl(
-        armn_even=k.armn_e,
-        armn_odd=k.armn_o,
-        brmn_even=k.brmn_e,
-        brmn_odd=k.brmn_o,
-        crmn_even=k.crmn_e,
-        crmn_odd=k.crmn_o,
-        azmn_even=k.azmn_e,
-        azmn_odd=k.azmn_o,
-        bzmn_even=k.bzmn_e,
-        bzmn_odd=k.bzmn_o,
-        czmn_even=k.czmn_e,
-        czmn_odd=k.czmn_o,
-        blmn_even=blmn_even,
-        blmn_odd=blmn_odd,
-        clmn_even=clmn_even,
-        clmn_odd=clmn_odd,
-        arcon_even=k.arcon_e,
-        arcon_odd=k.arcon_o,
-        azcon_even=k.azcon_e,
-        azcon_odd=k.azcon_o,
-        mpol=int(wout.mpol),
-        ntor=int(wout.ntor),
-        nfp=int(wout.nfp),
-        lasym=bool(wout.lasym),
-        trig=trig,
-    )
+    lasym = bool(wout.lasym)
 
-    out_asym = None
-    if bool(wout.lasym):
+    def _symforce_split_one(
+        a,
+        *,
+        trig: VmecTrigTables,
+        kind: str,
+    ):
+        """Split a field into VMEC symmetric/antisymmetric parts for lasym transforms.
+
+        VMEC's `tomnsps`/`tomnspa` always integrate on the restricted interval
+        u∈[0,π] (i=1..ntheta2). For `lasym=True`, VMEC first decomposes each
+        kernel into a "symmetric" piece (paired with cos(mu±nv)) and an
+        "antisymmetric" piece (paired with sin(mu±nv)) using `symforce.f`.
+
+        The mapping is not uniform across kernels (some have reversed dominant
+        symmetry); see `VMEC2000/Sources/General/symforce.f`.
+        """
+        a = jnp.asarray(a)
+        ns, ntheta3, nzeta = a.shape
+        nt2 = int(trig.ntheta2)
+        nt1 = int(trig.ntheta1)
+        if int(trig.ntheta3) != int(ntheta3):
+            raise ValueError("symforce: theta size mismatch")
+        if nt2 <= 0 or nt2 > ntheta3:
+            raise ValueError("symforce: invalid ntheta2")
+
+        # Reflection map (0-based) for i=1..ntheta2:
+        #   ir = ntheta1 + 2 - i, with i==1 -> ir=1   (Fortran, 1-based)
+        i0 = jnp.arange(nt2, dtype=jnp.int32)
+        ir0 = jnp.where(i0 == 0, 0, nt1 - i0)
+        kk = (nzeta - jnp.arange(nzeta, dtype=jnp.int32)) % nzeta
+
+        a_half = a[:, :nt2, :]
+        a_ref = a[:, ir0, :][:, :, kk]
+
+        if kind in ("ars", "bzs", "bls", "rcs", "czs", "cls"):
+            a_sym_half = 0.5 * (a_half + a_ref)
+            a_asym_half = 0.5 * (a_half - a_ref)
+        elif kind in ("brs", "azs", "zcs", "crs"):
+            # Reversed dominant symmetry (see `symforce.f`).
+            a_sym_half = 0.5 * (a_half - a_ref)
+            a_asym_half = 0.5 * (a_half + a_ref)
+        else:  # pragma: no cover
+            raise ValueError(f"symforce: unknown kind {kind!r}")
+
+        pad = jnp.zeros((ns, ntheta3 - nt2, nzeta), dtype=a.dtype)
+        return (
+            jnp.concatenate([a_sym_half, pad], axis=1),
+            jnp.concatenate([a_asym_half, pad], axis=1),
+        )
+
+    if lasym:
+        # Decompose each kernel before calling tomnsps/tomnspa.
+        armn_e_s, armn_e_a = _symforce_split_one(k.armn_e, trig=trig, kind="ars")
+        armn_o_s, armn_o_a = _symforce_split_one(k.armn_o, trig=trig, kind="ars")
+        brmn_e_s, brmn_e_a = _symforce_split_one(k.brmn_e, trig=trig, kind="brs")
+        brmn_o_s, brmn_o_a = _symforce_split_one(k.brmn_o, trig=trig, kind="brs")
+        crmn_e_s, crmn_e_a = _symforce_split_one(k.crmn_e, trig=trig, kind="crs")
+        crmn_o_s, crmn_o_a = _symforce_split_one(k.crmn_o, trig=trig, kind="crs")
+
+        azmn_e_s, azmn_e_a = _symforce_split_one(k.azmn_e, trig=trig, kind="azs")
+        azmn_o_s, azmn_o_a = _symforce_split_one(k.azmn_o, trig=trig, kind="azs")
+        bzmn_e_s, bzmn_e_a = _symforce_split_one(k.bzmn_e, trig=trig, kind="bzs")
+        bzmn_o_s, bzmn_o_a = _symforce_split_one(k.bzmn_o, trig=trig, kind="bzs")
+        czmn_e_s, czmn_e_a = _symforce_split_one(k.czmn_e, trig=trig, kind="czs")
+        czmn_o_s, czmn_o_a = _symforce_split_one(k.czmn_o, trig=trig, kind="czs")
+
+        blmn_e_s, blmn_e_a = _symforce_split_one(blmn_even, trig=trig, kind="bls")
+        blmn_o_s, blmn_o_a = _symforce_split_one(blmn_odd, trig=trig, kind="bls")
+        clmn_e_s, clmn_e_a = _symforce_split_one(clmn_even, trig=trig, kind="cls")
+        clmn_o_s, clmn_o_a = _symforce_split_one(clmn_odd, trig=trig, kind="cls")
+
+        arcon_e_s, arcon_e_a = _symforce_split_one(k.arcon_e, trig=trig, kind="rcs")
+        arcon_o_s, arcon_o_a = _symforce_split_one(k.arcon_o, trig=trig, kind="rcs")
+        azcon_e_s, azcon_e_a = _symforce_split_one(k.azcon_e, trig=trig, kind="zcs")
+        azcon_o_s, azcon_o_a = _symforce_split_one(k.azcon_o, trig=trig, kind="zcs")
+
+        out_sym = tomnsps_rzl(
+            armn_even=armn_e_s,
+            armn_odd=armn_o_s,
+            brmn_even=brmn_e_s,
+            brmn_odd=brmn_o_s,
+            crmn_even=crmn_e_s,
+            crmn_odd=crmn_o_s,
+            azmn_even=azmn_e_s,
+            azmn_odd=azmn_o_s,
+            bzmn_even=bzmn_e_s,
+            bzmn_odd=bzmn_o_s,
+            czmn_even=czmn_e_s,
+            czmn_odd=czmn_o_s,
+            blmn_even=blmn_e_s,
+            blmn_odd=blmn_o_s,
+            clmn_even=clmn_e_s,
+            clmn_odd=clmn_o_s,
+            arcon_even=arcon_e_s,
+            arcon_odd=arcon_o_s,
+            azcon_even=azcon_e_s,
+            azcon_odd=azcon_o_s,
+            mpol=int(wout.mpol),
+            ntor=int(wout.ntor),
+            nfp=int(wout.nfp),
+            lasym=True,
+            trig=trig,
+        )
+
         out_asym = tomnspa_rzl(
+            armn_even=armn_e_a,
+            armn_odd=armn_o_a,
+            brmn_even=brmn_e_a,
+            brmn_odd=brmn_o_a,
+            crmn_even=crmn_e_a,
+            crmn_odd=crmn_o_a,
+            azmn_even=azmn_e_a,
+            azmn_odd=azmn_o_a,
+            bzmn_even=bzmn_e_a,
+            bzmn_odd=bzmn_o_a,
+            czmn_even=czmn_e_a,
+            czmn_odd=czmn_o_a,
+            blmn_even=blmn_e_a,
+            blmn_odd=blmn_o_a,
+            clmn_even=clmn_e_a,
+            clmn_odd=clmn_o_a,
+            arcon_even=arcon_e_a,
+            arcon_odd=arcon_o_a,
+            azcon_even=azcon_e_a,
+            azcon_odd=azcon_o_a,
+            mpol=int(wout.mpol),
+            ntor=int(wout.ntor),
+            nfp=int(wout.nfp),
+            lasym=True,
+            trig=trig,
+        )
+    else:
+        out_sym = tomnsps_rzl(
             armn_even=k.armn_e,
             armn_odd=k.armn_o,
             brmn_even=k.brmn_e,
@@ -813,9 +917,10 @@ def vmec_residual_internal_from_kernels(
             mpol=int(wout.mpol),
             ntor=int(wout.ntor),
             nfp=int(wout.nfp),
-            lasym=bool(wout.lasym),
+            lasym=False,
             trig=trig,
         )
+        out_asym = None
 
     return VmecInternalResidualRZL(
         frcc=out_sym.frcc,
