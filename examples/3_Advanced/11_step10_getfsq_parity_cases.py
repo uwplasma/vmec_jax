@@ -64,7 +64,20 @@ def main():
         st = state_from_wout(wout)
         k = vmec_forces_rz_from_wout(state=st, static=static, wout=wout, indata=indata)
         rzl = vmec_residual_internal_from_kernels(k, cfg_ntheta=int(cfg_hi.ntheta), cfg_nzeta=int(cfg_hi.nzeta), wout=wout, trig=trig)
-        frzl = TomnspsRZL(frcc=rzl.frcc, frss=rzl.frss, fzsc=rzl.fzsc, fzcs=rzl.fzcs, flsc=rzl.flsc, flcs=rzl.flcs)
+        frzl = TomnspsRZL(
+            frcc=rzl.frcc,
+            frss=rzl.frss,
+            fzsc=rzl.fzsc,
+            fzcs=rzl.fzcs,
+            flsc=rzl.flsc,
+            flcs=rzl.flcs,
+            frsc=rzl.frsc,
+            frcs=rzl.frcs,
+            fzcc=rzl.fzcc,
+            fzss=rzl.fzss,
+            flcc=rzl.flcc,
+            flss=rzl.flss,
+        )
         norms = vmec_force_norms_from_bcovar(bc=k.bc, trig=trig, wout=wout, s=static.s)
         scal = vmec_fsq_from_tomnsps(frzl=frzl, norms=norms)
 
@@ -88,4 +101,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

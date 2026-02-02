@@ -27,7 +27,7 @@ from .grids import AngleGrid
 from .modes import ModeTable
 from .vmec_bcovar import vmec_bcovar_half_mesh_from_wout
 from .vmec_constraints import alias_gcon, tcon_from_bcovar_precondn_diag, tcon_from_indata_heuristic
-from .vmec_tomnsp import VmecTrigTables, tomnsps_rzl, vmec_angle_grid, vmec_trig_tables
+from .vmec_tomnsp import VmecTrigTables, tomnsps_rzl, tomnspa_rzl, vmec_angle_grid, vmec_trig_tables
 from .vmec_parity import internal_odd_from_physical_vmec_m1, split_rzl_even_odd_m
 
 
@@ -715,7 +715,7 @@ def rz_residual_coeffs_from_kernels(k: VmecRZForceKernels, *, static) -> VmecRZR
 
 @dataclass(frozen=True)
 class VmecInternalResidualRZL:
-    """Internal VMEC-style residual arrays produced by `tomnsps`."""
+    """Internal VMEC-style residual arrays produced by `tomnsps` (+ `tomnspa` when `lasym=True`)."""
 
     frcc: Any
     frss: Any | None
@@ -723,6 +723,14 @@ class VmecInternalResidualRZL:
     fzcs: Any | None
     flsc: Any
     flcs: Any | None
+
+    # Asymmetric components from `tomnspa` (lasym=True only).
+    frsc: Any | None = None
+    frcs: Any | None = None
+    fzcc: Any | None = None
+    fzss: Any | None = None
+    flcc: Any | None = None
+    flss: Any | None = None
 
 
 def vmec_residual_internal_from_kernels(
@@ -751,7 +759,7 @@ def vmec_residual_internal_from_kernels(
     clmn_even = getattr(k.bc, "clmn_even", z)
     clmn_odd = getattr(k.bc, "clmn_odd", z)
 
-    out = tomnsps_rzl(
+    out_sym = tomnsps_rzl(
         armn_even=k.armn_e,
         armn_odd=k.armn_o,
         brmn_even=k.brmn_e,
@@ -778,13 +786,50 @@ def vmec_residual_internal_from_kernels(
         lasym=bool(wout.lasym),
         trig=trig,
     )
+
+    out_asym = None
+    if bool(wout.lasym):
+        out_asym = tomnspa_rzl(
+            armn_even=k.armn_e,
+            armn_odd=k.armn_o,
+            brmn_even=k.brmn_e,
+            brmn_odd=k.brmn_o,
+            crmn_even=k.crmn_e,
+            crmn_odd=k.crmn_o,
+            azmn_even=k.azmn_e,
+            azmn_odd=k.azmn_o,
+            bzmn_even=k.bzmn_e,
+            bzmn_odd=k.bzmn_o,
+            czmn_even=k.czmn_e,
+            czmn_odd=k.czmn_o,
+            blmn_even=blmn_even,
+            blmn_odd=blmn_odd,
+            clmn_even=clmn_even,
+            clmn_odd=clmn_odd,
+            arcon_even=k.arcon_e,
+            arcon_odd=k.arcon_o,
+            azcon_even=k.azcon_e,
+            azcon_odd=k.azcon_o,
+            mpol=int(wout.mpol),
+            ntor=int(wout.ntor),
+            nfp=int(wout.nfp),
+            lasym=bool(wout.lasym),
+            trig=trig,
+        )
+
     return VmecInternalResidualRZL(
-        frcc=out.frcc,
-        frss=out.frss,
-        fzsc=out.fzsc,
-        fzcs=out.fzcs,
-        flsc=out.flsc,
-        flcs=out.flcs,
+        frcc=out_sym.frcc,
+        frss=out_sym.frss,
+        fzsc=out_sym.fzsc,
+        fzcs=out_sym.fzcs,
+        flsc=out_sym.flsc,
+        flcs=out_sym.flcs,
+        frsc=None if out_asym is None else out_asym.frsc,
+        frcs=None if out_asym is None else out_asym.frcs,
+        fzcc=None if out_asym is None else out_asym.fzcc,
+        fzss=None if out_asym is None else out_asym.fzss,
+        flcc=None if out_asym is None else out_asym.flcc,
+        flss=None if out_asym is None else out_asym.flss,
     )
 
 

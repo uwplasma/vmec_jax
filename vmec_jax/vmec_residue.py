@@ -97,7 +97,12 @@ def vmec_force_norms_from_bcovar(*, bc, trig: VmecTrigTables, wout, s) -> VmecFo
 
 
 def vmec_fsq_from_tomnsps(*, frzl: TomnspsRZL, norms: VmecForceNorms) -> VmecFsqScalars:
-    """Compute (fsqr,fsqz,fsql) from VMEC-style tomnsps outputs."""
+    """Compute (fsqr,fsqz,fsql) from VMEC-style tomnsps outputs.
+
+    When `lasym=True`, VMEC also computes and includes the asymmetric blocks
+    produced by `tomnspa`. In this repo those blocks (if present) are carried on
+    the same dataclass as optional fields.
+    """
     gcr2 = jnp.sum(jnp.asarray(frzl.frcc) ** 2)
     gcz2 = jnp.sum(jnp.asarray(frzl.fzsc) ** 2)
     gcl2 = jnp.sum(jnp.asarray(frzl.flsc) ** 2)
@@ -107,6 +112,20 @@ def vmec_fsq_from_tomnsps(*, frzl: TomnspsRZL, norms: VmecForceNorms) -> VmecFsq
         gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzcs) ** 2)
     if frzl.flcs is not None:
         gcl2 = gcl2 + jnp.sum(jnp.asarray(frzl.flcs) ** 2)
+
+    if getattr(frzl, "frsc", None) is not None:
+        gcr2 = gcr2 + jnp.sum(jnp.asarray(frzl.frsc) ** 2)
+    if getattr(frzl, "fzcc", None) is not None:
+        gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzcc) ** 2)
+    if getattr(frzl, "flcc", None) is not None:
+        gcl2 = gcl2 + jnp.sum(jnp.asarray(frzl.flcc) ** 2)
+
+    if getattr(frzl, "frcs", None) is not None:
+        gcr2 = gcr2 + jnp.sum(jnp.asarray(frzl.frcs) ** 2)
+    if getattr(frzl, "fzss", None) is not None:
+        gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzss) ** 2)
+    if getattr(frzl, "flss", None) is not None:
+        gcl2 = gcl2 + jnp.sum(jnp.asarray(frzl.flss) ** 2)
 
     fsqr = norms.r1 * norms.fnorm * float(gcr2)
     fsqz = norms.r1 * norms.fnorm * float(gcz2)
