@@ -141,6 +141,14 @@ Run the initial port of VMEC2000’s real-space `forces` (R/Z) kernel and dump d
 python examples/3_Advanced/10_vmec_forces_rz_kernel_report.py
 ```
 
+## JAX differentiability demo: gradients through VMEC-style `tomnsps`
+
+Differentiate a `tomnsps`-based residual scalar w.r.t. a Fourier coefficient (requires `netCDF4` + JAX):
+
+```bash
+python examples/2_Intermediate/07_grad_vmec_tomnsps_residual.py
+```
+
 ## Step-3 outputs
 
 The step-3 script writes a `.npz` with:

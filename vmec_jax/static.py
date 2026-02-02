@@ -35,10 +35,19 @@ class VMECStatic:
     s: any  # (ns,) radial coordinate in [0,1]
 
 
-def build_static(cfg: VMECConfig) -> VMECStatic:
-    """Build the VMECStatic container from a parsed config."""
+def build_static(cfg: VMECConfig, *, grid: AngleGrid | None = None) -> VMECStatic:
+    """Build the VMECStatic container from a parsed config.
+
+    Parameters
+    ----------
+    grid:
+        Optional override for the angular grid. This is used by Step-10 parity
+        kernels that must match VMEC's internal `ntheta1/2/3` conventions rather
+        than the default `[0,2π)` endpoint-free grid.
+    """
     modes = vmec_mode_table(cfg.mpol, cfg.ntor)
-    grid = make_angle_grid(cfg.ntheta, cfg.nzeta, cfg.nfp, endpoint=False)
+    if grid is None:
+        grid = make_angle_grid(cfg.ntheta, cfg.nzeta, cfg.nfp, endpoint=False)
     basis = build_helical_basis(modes, grid)
     # Radial coordinate s = (i)/(ns-1). VMEC uses "s" = normalized toroidal flux.
     # For step-1 we only need a monotone [0,1] grid.

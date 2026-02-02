@@ -45,6 +45,14 @@ class VmecHalfMeshBcovar:
     bsubu: Any  # (ns, ntheta, nzeta)
     bsubv: Any  # (ns, ntheta, nzeta)
 
+    # VMEC lambda force kernels (Fourier-space transform inputs) on full mesh.
+    # These correspond to `bsubu_e/bsubv_e` in `bcovar.f` after the `-lamscale`
+    # scaling, and are used as `(CLMN, BLMN)` in `tomnsps`.
+    clmn_even: Any  # (ns, ntheta, nzeta)
+    clmn_odd: Any  # (ns, ntheta, nzeta)
+    blmn_even: Any  # (ns, ntheta, nzeta)
+    blmn_odd: Any  # (ns, ntheta, nzeta)
+
     # bsq = |B|^2/2 + p on half mesh (VMEC convention).
     bsq: Any  # (ns, ntheta, nzeta)
 
@@ -129,6 +137,7 @@ def vmec_bcovar_half_mesh_from_wout(
         If omitted, uses ``wout.pres``.
     """
     s = jnp.asarray(static.s)
+    ns = int(s.shape[0])
 
     # Split real-space fields into even/odd-m subsets, then convert odd physical
     # contribution to VMEC's internal odd field by dividing by sqrt(s).
@@ -207,6 +216,52 @@ def vmec_bcovar_half_mesh_from_wout(
     lu_e = bsq * jac.r12
     lv_e = bsq * jac.tau
 
+    # ---------------------------------------------------------------------
+    # Lambda force kernels (bcovar.f "lambda full mesh forces" block)
+    # ---------------------------------------------------------------------
+    # Build full-mesh numerator fields LU = phipf + lamscale*lam_u and LU_odd.
+    # Here we use the parity split on the full mesh, then follow VMEC's
+    # half-mesh averaging structure as closely as possible.
+    lu0_full = (lamscale * parity.Lt_even) + jnp.asarray(wout.phipf)[:, None, None]
+    lu1_full = lamscale * Lu1
+
+    # phipog = 1/gsqrt on half mesh. (VMEC stores sign separately.)
+    phipog = jnp.where(jac.sqrtg != 0, 1.0 / jac.sqrtg, 0.0)
+    lvv = phipog * gvv
+
+    # bsubu_h/bsubv_h are half-mesh covariant B components.
+    bsubuh = bsubu
+    bsubvh = bsubv
+
+    # Average bsubu_h onto full radial mesh (simple half-to-full average).
+    bsubu_full = jnp.zeros_like(bsubuh)
+    if ns >= 2:
+        bsubu_full = bsubu_full.at[:-1].set(0.5 * (bsubuh[:-1] + bsubuh[1:]))
+        bsubu_full = bsubu_full.at[-1].set(0.5 * bsubuh[-1])
+
+    # Construct bsubv_e on the full mesh following VMEC's formulas (without the
+    # optional blending via `bdamp`, which is solver-state dependent).
+    bsubv_full = jnp.zeros_like(bsubvh)
+    if ns >= 2:
+        bsubv_full = bsubv_full.at[:-1].set(0.5 * (lvv[:-1] + lvv[1:]) * lu0_full[:-1])
+        bsubv_full = bsubv_full.at[-1].set(0.5 * lvv[-1] * lu0_full[-1])
+
+    lvv_sh = lvv * _pshalf_from_s(s)[:, None, None]
+    bsubu_e_tmp = guv * bsupu
+    if ns >= 2:
+        bsubv_full = bsubv_full.at[:-1].add(
+            0.5 * ((lvv_sh[:-1] + lvv_sh[1:]) * lu1_full[:-1] + bsubu_e_tmp[:-1] + bsubu_e_tmp[1:])
+        )
+        bsubv_full = bsubv_full.at[-1].add(0.5 * (lvv_sh[-1] * lu1_full[-1] + bsubu_e_tmp[-1]))
+
+    # Scale and split into even/odd pieces in the same way VMEC exposes to forces:
+    # `bsubu_o = psqrts * bsubu_e`, similarly for v.
+    psqrts = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
+    clmn_even = -lamscale * bsubu_full
+    blmn_even = -lamscale * bsubv_full
+    clmn_odd = psqrts * clmn_even
+    blmn_odd = psqrts * blmn_even
+
     return VmecHalfMeshBcovar(
         jac=jac,
         guu=guu,
@@ -225,5 +280,8 @@ def vmec_bcovar_half_mesh_from_wout(
         lam_u=lam_u,
         lam_v=lam_v,
         lamscale=lamscale,
+        clmn_even=clmn_even,
+        clmn_odd=clmn_odd,
+        blmn_even=blmn_even,
+        blmn_odd=blmn_odd,
     )
-

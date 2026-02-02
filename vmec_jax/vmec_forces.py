@@ -26,6 +26,7 @@ from .fourier import build_helical_basis, eval_fourier
 from .grids import AngleGrid
 from .modes import ModeTable
 from .vmec_bcovar import vmec_bcovar_half_mesh_from_wout
+from .vmec_tomnsp import VmecTrigTables, tomnsps_rzl, vmec_angle_grid, vmec_trig_tables
 from .vmec_parity import internal_odd_from_physical, split_rzl_even_odd_m
 
 
@@ -518,6 +519,77 @@ def rz_residual_coeffs_from_kernels(k: VmecRZForceKernels, *, static) -> VmecRZR
     gcz_sin = aZ_s - dBdu_Z_s + dCdv_Z_s
 
     return VmecRZResidualCoeffs(gcr_cos=gcr_cos, gcr_sin=gcr_sin, gcz_cos=gcz_cos, gcz_sin=gcz_sin)
+
+
+@dataclass(frozen=True)
+class VmecInternalResidualRZL:
+    """Internal VMEC-style residual arrays produced by `tomnsps`."""
+
+    frcc: Any
+    frss: Any | None
+    fzsc: Any
+    fzcs: Any | None
+    flsc: Any
+    flcs: Any | None
+
+
+def vmec_residual_internal_from_kernels(
+    k: VmecRZForceKernels,
+    *,
+    cfg_ntheta: int,
+    cfg_nzeta: int,
+    wout,
+    trig: VmecTrigTables | None = None,
+) -> VmecInternalResidualRZL:
+    """Compute internal residual coefficient arrays using VMEC's `tomnsps` conventions."""
+    if trig is None:
+        trig = vmec_trig_tables(
+            ntheta=int(cfg_ntheta),
+            nzeta=int(cfg_nzeta),
+            nfp=int(wout.nfp),
+            mmax=int(wout.mpol) - 1,
+            nmax=int(wout.ntor),
+            lasym=bool(wout.lasym),
+        )
+
+    # Lambda kernels are optional for early parity work.
+    z = jnp.zeros_like(k.armn_e)
+    blmn_even = getattr(k.bc, "blmn_even", z)
+    blmn_odd = getattr(k.bc, "blmn_odd", z)
+    clmn_even = getattr(k.bc, "clmn_even", z)
+    clmn_odd = getattr(k.bc, "clmn_odd", z)
+
+    out = tomnsps_rzl(
+        armn_even=k.armn_e,
+        armn_odd=k.armn_o,
+        brmn_even=k.brmn_e,
+        brmn_odd=k.brmn_o,
+        crmn_even=k.crmn_e,
+        crmn_odd=k.crmn_o,
+        azmn_even=k.azmn_e,
+        azmn_odd=k.azmn_o,
+        bzmn_even=k.bzmn_e,
+        bzmn_odd=k.bzmn_o,
+        czmn_even=k.czmn_e,
+        czmn_odd=k.czmn_o,
+        blmn_even=blmn_even,
+        blmn_odd=blmn_odd,
+        clmn_even=clmn_even,
+        clmn_odd=clmn_odd,
+        mpol=int(wout.mpol),
+        ntor=int(wout.ntor),
+        nfp=int(wout.nfp),
+        lasym=bool(wout.lasym),
+        trig=trig,
+    )
+    return VmecInternalResidualRZL(
+        frcc=out.frcc,
+        frss=out.frss,
+        fzsc=out.fzsc,
+        fzcs=out.fzcs,
+        flsc=out.flsc,
+        flcs=out.flcs,
+    )
 
 
 @dataclass(frozen=True)
