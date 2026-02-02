@@ -26,6 +26,7 @@ from .fourier import build_helical_basis, eval_fourier
 from .grids import AngleGrid
 from .modes import ModeTable
 from .vmec_bcovar import vmec_bcovar_half_mesh_from_wout
+from .vmec_constraints import alias_gcon, tcon_from_indata_heuristic
 from .vmec_tomnsp import VmecTrigTables, tomnsps_rzl, vmec_angle_grid, vmec_trig_tables
 from .vmec_parity import internal_odd_from_physical, split_rzl_even_odd_m
 
@@ -52,6 +53,13 @@ class VmecRZForceKernels:
 
     # Carry bcovar outputs for downstream scalings.
     bc: Any
+
+    # Constraint force kernels (passed to `tomnsps` as ARCON/AZCON).
+    arcon_e: Any  # (ns, ntheta, nzeta)
+    arcon_o: Any  # (ns, ntheta, nzeta)
+    azcon_e: Any  # (ns, ntheta, nzeta)
+    azcon_o: Any  # (ns, ntheta, nzeta)
+    gcon: Any  # (ns, ntheta, nzeta)
 
 
 def _pshalf_from_s(s: Any) -> Any:
@@ -125,7 +133,7 @@ def _avg_forward_half(a):
     return out
 
 
-def vmec_forces_rz_from_wout(*, state, static, wout) -> VmecRZForceKernels:
+def vmec_forces_rz_from_wout(*, state, static, wout, indata=None) -> VmecRZForceKernels:
     """Compute VMEC R/Z force kernels (armn/brmn/...) from a `wout` equilibrium."""
     s = jnp.asarray(static.s)
     ohs = jnp.asarray(1.0 / (s[1] - s[0])) if s.shape[0] >= 2 else jnp.asarray(0.0)
@@ -253,6 +261,77 @@ def vmec_forces_rz_from_wout(*, state, static, wout) -> VmecRZForceKernels:
         czmn_e = z
         czmn_o = z
 
+    # ---------------------------------------------------------------------
+    # Constraint force pipeline: compute gcon from ztemp via alias and apply
+    # the constraint force kernels to B-terms (forces.f "CONSTRAINT FORCE").
+    # ---------------------------------------------------------------------
+    z = jnp.zeros_like(armn_e)
+    arcon_e = z
+    arcon_o = z
+    azcon_e = z
+    azcon_o = z
+    gcon = z
+    if indata is not None:
+        # xmpq(m,1)=m*(m-1) acting on Fourier coefficients, split by m-parity.
+        m_k = jnp.asarray(static.modes.m, dtype=jnp.asarray(state.Rcos).dtype)
+        xmpq1 = m_k * (m_k - 1.0)  # (K,)
+        mask_even = jnp.asarray((np.asarray(static.modes.m) % 2) == 0).astype(jnp.asarray(state.Rcos).dtype)
+        mask_odd = (1.0 - mask_even).astype(mask_even.dtype)
+
+        rcon_even = eval_fourier(state.Rcos * xmpq1 * mask_even, state.Rsin * xmpq1 * mask_even, static.basis)
+        rcon_odd_phys = eval_fourier(state.Rcos * xmpq1 * mask_odd, state.Rsin * xmpq1 * mask_odd, static.basis)
+        zcon_even = eval_fourier(state.Zcos * xmpq1 * mask_even, state.Zsin * xmpq1 * mask_even, static.basis)
+        zcon_odd_phys = eval_fourier(state.Zcos * xmpq1 * mask_odd, state.Zsin * xmpq1 * mask_odd, static.basis)
+
+        rcon_odd_int = internal_odd_from_physical(rcon_odd_phys, s)
+        zcon_odd_int = internal_odd_from_physical(zcon_odd_phys, s)
+
+        psqrts = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
+        rcon_phys = jnp.asarray(rcon_even) + psqrts * jnp.asarray(rcon_odd_int)
+        zcon_phys = jnp.asarray(zcon_even) + psqrts * jnp.asarray(zcon_odd_int)
+
+        # Fixed-boundary scaling for rcon0/zcon0 (funct3d.f): boundary constraint value times s.
+        rcon0 = (s[:, None, None] * jnp.asarray(rcon_phys[-1])[None, :, :]).astype(jnp.asarray(rcon_phys).dtype)
+        zcon0 = (s[:, None, None] * jnp.asarray(zcon_phys[-1])[None, :, :]).astype(jnp.asarray(zcon_phys).dtype)
+
+        # Physical ru0/zu0 for ztemp formation.
+        ru0 = jnp.asarray(pru_0) + psqrts * jnp.asarray(pru_1)
+        zu0 = jnp.asarray(pzu_0) + psqrts * jnp.asarray(pzu_1)
+
+        ztemp = (rcon_phys - rcon0) * ru0 + (zcon_phys - zcon0) * zu0
+
+        trig = vmec_trig_tables(
+            ntheta=int(static.cfg.ntheta),
+            nzeta=int(static.cfg.nzeta),
+            nfp=int(wout.nfp),
+            mmax=int(wout.mpol) - 1,
+            nmax=int(wout.ntor),
+            lasym=bool(wout.lasym),
+            dtype=jnp.asarray(ztemp).dtype,
+        )
+        tcon = tcon_from_indata_heuristic(indata=indata, s=np.asarray(s), trig=trig, lasym=bool(wout.lasym))
+        gcon = alias_gcon(
+            ztemp=ztemp,
+            trig=trig,
+            ntor=int(wout.ntor),
+            mpol=int(wout.mpol),
+            signgs=int(wout.signgs),
+            tcon=tcon,
+            lasym=bool(wout.lasym),
+        )
+
+        rcon_force = (rcon_phys - rcon0) * gcon
+        zcon_force = (zcon_phys - zcon0) * gcon
+        brmn_e = brmn_e + rcon_force
+        bzmn_e = bzmn_e + zcon_force
+        brmn_o = brmn_o + rcon_force * psqrts
+        bzmn_o = bzmn_o + zcon_force * psqrts
+
+        arcon_e = ru0 * gcon
+        azcon_e = zu0 * gcon
+        arcon_o = arcon_e * psqrts
+        azcon_o = azcon_e * psqrts
+
     return VmecRZForceKernels(
         armn_e=armn_e,
         armn_o=armn_o,
@@ -267,10 +346,15 @@ def vmec_forces_rz_from_wout(*, state, static, wout) -> VmecRZForceKernels:
         czmn_e=czmn_e,
         czmn_o=czmn_o,
         bc=bc,
+        arcon_e=arcon_e,
+        arcon_o=arcon_o,
+        azcon_e=azcon_e,
+        azcon_o=azcon_o,
+        gcon=gcon,
     )
 
 
-def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout) -> VmecRZForceKernels:
+def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout, indata=None) -> VmecRZForceKernels:
     """Compute VMEC R/Z force kernels using `wout`'s stored (sqrtg, bsup, ``|B|``).
 
     This is a parity/debug variant that reduces the number of derived quantities
@@ -432,6 +516,7 @@ def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout) -> VmecRZF
     bc_obj.gij_b_uv = guv
     bc_obj.gij_b_vv = gvv
 
+    z = jnp.zeros_like(armn_e)
     return VmecRZForceKernels(
         armn_e=armn_e,
         armn_o=armn_o,
@@ -446,6 +531,11 @@ def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout) -> VmecRZF
         czmn_e=czmn_e,
         czmn_o=czmn_o,
         bc=bc_obj,
+        arcon_e=z,
+        arcon_o=z,
+        azcon_e=z,
+        azcon_o=z,
+        gcon=z,
     )
 
 
@@ -576,6 +666,10 @@ def vmec_residual_internal_from_kernels(
         blmn_odd=blmn_odd,
         clmn_even=clmn_even,
         clmn_odd=clmn_odd,
+        arcon_even=k.arcon_e,
+        arcon_odd=k.arcon_o,
+        azcon_even=k.azcon_e,
+        azcon_odd=k.azcon_o,
         mpol=int(wout.mpol),
         ntor=int(wout.ntor),
         nfp=int(wout.nfp),

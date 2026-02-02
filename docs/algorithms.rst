@@ -110,6 +110,89 @@ We compute contravariant field components ``(bsupu, bsupv)`` using:
 We validate against ``wout`` Nyquist Fourier coefficients for ``sqrtg`` and
 ``bsup*`` and integrate to obtain ``wb``.
 
+Step-10 parity building blocks: forces, transforms, and constraints
+------------------------------------------------------------------
+
+VMEC's reported force residual scalars (``fsqr``, ``fsqz``, ``fsql``) are
+computed from *Fourier-space* force arrays produced by a specific sequence of
+real-space kernels and transforms. Reproducing these conventions is necessary
+for true output parity with VMEC2000.
+
+Force kernel combination (tomnsps)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+VMEC forms real-space "kernel" arrays and combines them into Fourier-space force
+arrays via ``tomnsps``. Conceptually, the residuals have the form:
+
+.. math::
+
+   F_R &= A_R - \partial_u B_R + \partial_v C_R, \\
+   F_Z &= A_Z - \partial_u B_Z + \partial_v C_Z, \\
+   F_\lambda &=      - \partial_u B_\lambda + \partial_v C_\lambda,
+
+where :math:`u=\theta` and :math:`v=\phi_{\mathrm{phys}}`.
+
+In VMEC2000 this is not done with a plain FFT. Instead the code uses:
+
+- symmetry-aware theta sizes ``ntheta1/2/3``,
+- endpoint-weighted quadrature tables (``cosmui/sinmui``),
+- mode normalization scalings (``mscale/nscale``),
+- derivative tables that include the field-period scaling (:math:`n\,\mathrm{NFP}`).
+
+In ``vmec-jax`` these conventions are implemented in:
+
+- ``vmec_jax.vmec_tomnsp`` (``fixaray``-style trig/weight tables + a vectorized ``tomnsps`` core)
+
+Constraint pipeline (alias / gcon)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+VMEC includes a constraint force that is assembled via an ``alias`` operator.
+In the fixed-boundary pathway (see VMEC2000 ``funct3d.f`` and ``alias.f``),
+VMEC forms a scalar field:
+
+.. math::
+
+   z_{\mathrm{temp}}(s,\theta,\zeta)
+   =
+   \bigl(r_{\mathrm{con}} - r_{\mathrm{con},0}\bigr)\,r_{\theta,0}
+   +
+   \bigl(z_{\mathrm{con}} - z_{\mathrm{con},0}\bigr)\,z_{\theta,0},
+
+then computes :math:`g_{\mathrm{con}}` by applying a de-aliased spectral operator
+that (schematically) resembles:
+
+.. math::
+
+   g_{\mathrm{con}} \;\approx\; \mathcal{A}^{-1}\!\left[z_{\mathrm{temp}}\right],
+
+with an ``m``-dependent multiplier
+
+.. math::
+
+   \mathrm{xmpq}(m,1) = m(m-1),
+
+and a constraint filter coefficient (VMEC ``faccon``):
+
+.. math::
+
+   \mathrm{faccon}(m)
+   =
+   -\frac{1}{4}\,\frac{\mathrm{signgs}}{\mathrm{xmpq}(m+1,1)^2},
+   \qquad m=1,\dots,(\mathrm{mpol}-2).
+
+VMEC's actual discrete operator uses the precomputed trig tables and an
+additional surface-dependent scaling ``tcon(js)`` computed in VMEC's ``bcovar``.
+
+In ``vmec-jax`` we port the discrete ``alias`` operator in:
+
+- ``vmec_jax.vmec_constraints`` (``alias_gcon``).
+
+At present, ``tcon(js)`` is provided by a heuristic that matches VMEC's scaling
+structure (``tcon0`` dependence and the :math:`(32\,hs)^2` factor), but does not
+yet reproduce VMEC's full ``bcovar``-derived computation. Once VMEC's
+preconditioner-related quantities are ported, this heuristic will be replaced
+by a parity-accurate implementation.
+
 Step-5 lambda solve (inner solve)
 ---------------------------------
 

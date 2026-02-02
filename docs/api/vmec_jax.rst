@@ -35,6 +35,7 @@ Submodules
    state
    static
    visualization
+   vmec_constraints
    vmec_bcovar
    vmec_forces
    vmec_jacobian

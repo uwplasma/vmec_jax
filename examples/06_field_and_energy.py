@@ -1,23 +1,14 @@
-"""Step-4: magnetic field components and magnetic energy.
+"""Compatibility wrapper for the categorized examples.
 
-This script adds the first physics quantities beyond geometry:
-  - contravariant B components (bsupu, bsupv) in VMEC coordinates
-  - magnetic energy `wb` (VMEC-reported normalization)
-
-If a `wout_*.nc` is provided (and netCDF4 is installed), we compare against
-VMEC2000's stored Fourier coefficients for `sqrtg` and `bsup*`.
+The canonical version of this example lives in `examples/2_Intermediate/`.
 """
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
+import runpy
 
-import numpy as np
-
-# Allow running from within examples/ without installing.
-REPO_ROOT = Path(__file__).resolve().parents[1]
+runpy.run_path(str(Path(__file__).with_name("2_Intermediate") / "06_field_and_energy.py"), run_name="__main__")
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

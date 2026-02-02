@@ -1,24 +1,14 @@
-"""Step-3: evaluate input profiles and compute a volume profile from sqrt(g).
+"""Compatibility wrapper for the categorized examples.
 
-This script extends the step-2 geometry kernel with:
-  - VMEC-style 1D profiles from &INDATA (pressure, iota/current)
-  - volume integrals from the Jacobian sqrt(g)
-
-Outputs a compact `.npz` file with profiles and volume diagnostics.
+The canonical version of this example lives in `examples/2_Intermediate/`.
 """
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
+import runpy
 
-import numpy as np
-
-# Allow running from within examples/ without installing.
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+runpy.run_path(str(Path(__file__).with_name("2_Intermediate") / "05_profiles_and_volume.py"), run_name="__main__")
 
 from vmec_jax._compat import enable_x64, has_jax
 from vmec_jax.boundary import boundary_from_indata

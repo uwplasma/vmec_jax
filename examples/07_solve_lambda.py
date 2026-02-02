@@ -1,23 +1,14 @@
-"""Step-5: solve the lambda field with fixed R/Z.
+"""Compatibility wrapper for the categorized examples.
 
-This script demonstrates a first fixed-boundary "inner solve": optimize VMEC's
-lambda coefficients (stored in scaled form) to reduce the magnetic energy `wb`,
-while holding the surface geometry (R,Z) fixed.
-
-For validation, we start from a VMEC2000 `wout_*.nc` equilibrium, zero out lambda,
-and attempt to recover the reference `wb` using the same flux profiles.
+The canonical version of this example lives in `examples/3_Advanced/`.
 """
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
+import runpy
 
-import numpy as np
-
-# Allow running from within examples/ without installing.
-REPO_ROOT = Path(__file__).resolve().parents[1]
+runpy.run_path(str(Path(__file__).with_name("3_Advanced") / "07_solve_lambda.py"), run_name="__main__")
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -191,4 +182,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

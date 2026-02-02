@@ -1,24 +1,14 @@
-"""Step-2: compute metric and Jacobian on the full (s,theta,zeta) grid.
+"""Compatibility wrapper for the categorized examples.
 
-This script validates that we can compute geometric derivatives, the covariant
-metric tensor, and the Jacobian sqrt(g) in a single jitted kernel.
-
-The main output is a .npz file containing diagnostics that we'll later compare
-against VMEC2000's intermediate quantities.
+The canonical version of this example lives in `examples/2_Intermediate/`.
 """
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
+import runpy
 
-import numpy as np
-
-# Allow running from within examples/ without installing.
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+runpy.run_path(str(Path(__file__).with_name("2_Intermediate") / "04_geom_metrics.py"), run_name="__main__")
 
 from vmec_jax._compat import has_jax, enable_x64
 from vmec_jax.config import load_config

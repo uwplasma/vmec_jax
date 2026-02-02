@@ -1,24 +1,14 @@
-"""Step-1 autodiff demo over the full (s,theta,zeta) geometry kernel.
+"""Compatibility wrapper for the categorized examples.
 
-This is a slightly more "end-to-end" gradient than examples/01_grad_demo.py:
-we differentiate a scalar objective that depends on *all* radial surfaces.
-
-Usage
------
-    python 03_grad_full_coords.py <input_file>
+The canonical version of this example lives in `examples/2_Intermediate/`.
 """
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
+import runpy
 
-
-# Allow running from within examples/ without installing.
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+runpy.run_path(str(Path(__file__).with_name("2_Intermediate") / "03_grad_full_coords.py"), run_name="__main__")
 
 
 def main():

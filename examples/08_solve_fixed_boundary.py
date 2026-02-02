@@ -1,23 +1,14 @@
-"""Step-6: fixed-boundary solve (R/Z/lambda) via energy minimization.
+"""Compatibility wrapper for the categorized examples.
 
-This is an early, laptop-friendly solver loop intended to validate:
-  - differentiable objective evaluation (wb + thermal term),
-  - basic fixed-boundary constraints (edge coefficients fixed),
-  - monotone decrease via backtracking line search.
-
-It is *not* yet a production VMEC-quality solver (no VMEC preconditioner, no force
-residual parity, no implicit differentiation).
+The canonical version of this example lives in `examples/3_Advanced/`.
 """
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
+import runpy
 
-import numpy as np
-
-# Allow running from within examples/ without installing.
+runpy.run_path(str(Path(__file__).with_name("3_Advanced") / "08_solve_fixed_boundary.py"), run_name="__main__")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -97,4 +88,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

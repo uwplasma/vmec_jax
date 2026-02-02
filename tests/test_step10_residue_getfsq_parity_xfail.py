@@ -27,7 +27,7 @@ def test_step10_getfsq_parity_circular_tokamak():
     assert input_path.exists()
     assert wout_path.exists()
 
-    cfg, _indata = load_config(str(input_path))
+    cfg, indata = load_config(str(input_path))
     wout = read_wout(wout_path)
     cfg_hi = replace(cfg, ntheta=max(int(cfg.ntheta), 128), nzeta=max(int(cfg.nzeta), 128))
     grid = vmec_angle_grid(ntheta=int(cfg_hi.ntheta), nzeta=int(cfg_hi.nzeta), nfp=int(wout.nfp), lasym=bool(wout.lasym))
@@ -43,7 +43,7 @@ def test_step10_getfsq_parity_circular_tokamak():
         lasym=bool(wout.lasym),
     )
 
-    k = vmec_forces_rz_from_wout(state=st, static=static, wout=wout)
+    k = vmec_forces_rz_from_wout(state=st, static=static, wout=wout, indata=indata)
     rzl = vmec_residual_internal_from_kernels(k, cfg_ntheta=int(cfg_hi.ntheta), cfg_nzeta=int(cfg_hi.nzeta), wout=wout, trig=trig)
     frzl = TomnspsRZL(frcc=rzl.frcc, frss=rzl.frss, fzsc=rzl.fzsc, fzcs=rzl.fzcs, flsc=rzl.flsc, flcs=rzl.flcs)
 

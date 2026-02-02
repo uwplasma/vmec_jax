@@ -1,23 +1,14 @@
-"""Step-7: fixed-boundary solve using L-BFGS (no external deps).
+"""Compatibility wrapper for the categorized examples.
 
-This script is a convenience wrapper around :func:`vmec_jax.solve.solve_fixed_boundary_lbfgs`.
-It is useful for experimenting with faster convergence than plain gradient descent.
+The canonical version of this example lives in `examples/3_Advanced/`.
 """
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
+import runpy
 
-import numpy as np
-
-# Allow running from within examples/ without installing.
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from vmec_jax._compat import enable_x64, has_jax
+runpy.run_path(str(Path(__file__).with_name("3_Advanced") / "09_solve_fixed_boundary_lbfgs.py"), run_name="__main__")
 from vmec_jax.boundary import boundary_from_indata
 from vmec_jax.config import load_config
 from vmec_jax.energy import flux_profiles_from_indata
@@ -92,4 +83,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

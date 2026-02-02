@@ -30,7 +30,7 @@ def main():
     input_path = root / "examples/input.circular_tokamak"
     wout_path = root / "examples/wout_circular_tokamak_reference.nc"
 
-    cfg, _indata = load_config(str(input_path))
+    cfg, indata = load_config(str(input_path))
     wout = read_wout(wout_path)
 
     # Use a moderate grid; increase if you want finer diagnostics.
@@ -49,7 +49,7 @@ def main():
         lasym=bool(wout.lasym),
     )
 
-    k = vmec_forces_rz_from_wout(state=st, static=static, wout=wout)
+    k = vmec_forces_rz_from_wout(state=st, static=static, wout=wout, indata=indata)
     rzl = vmec_residual_internal_from_kernels(k, cfg_ntheta=int(cfg_hi.ntheta), cfg_nzeta=int(cfg_hi.nzeta), wout=wout, trig=trig)
     frzl = TomnspsRZL(frcc=rzl.frcc, frss=rzl.frss, fzsc=rzl.fzsc, fzcs=rzl.fzcs, flsc=rzl.flsc, flcs=rzl.flcs)
     norms = vmec_force_norms_from_bcovar(bc=k.bc, trig=trig, wout=wout, s=static.s)
