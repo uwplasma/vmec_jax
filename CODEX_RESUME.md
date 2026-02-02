@@ -180,6 +180,7 @@ Current incremental progress toward Step-9:
 Current incremental progress toward Step-10:
 - Added parity checks for covariant field components (`bsubu`, `bsubv`) reconstructed from the metric and `wout` contravariant fields, compared against `wout`'s stored `bsub*` on Nyquist modes.
 - Added a figure-generating example script for visual parity inspection (relative error maps on a selected flux surface).
+- Added a first force-like residual diagnostic based on objective gradients (`vmec_jax.residuals.force_residuals_from_state`) and a report example that prints these alongside VMEC2000 `wout` scalars (`fsqr/fsqz/fsql`).
 
 ## 7) Longer-term roadmap
 - Match VMEC2000 feature set (non-stellarator-symmetric, free-boundary, etc.).

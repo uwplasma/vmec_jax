@@ -48,6 +48,7 @@ Step-9 (implicit differentiation) notes:
 Step-10 (parity diagnostics) notes:
 - `vmec_jax.field.bsub_from_bsup` computes covariant components (bsubu, bsubv) from the metric and contravariant field.
 - `vmec_jax.wout.read_wout` now reads `bsubumn*`/`bsubvmn*` (Nyquist) from `wout_*.nc` for parity tests and examples.
+- `vmec_jax.residuals.force_residuals_from_state` provides a first force-like residual proxy from the total-objective gradient. This is not yet VMEC `residue/getfsq` parity, but supports regression tests and solver diagnostics while the real-space force kernels are ported.
 
 Notes on conventions:
 - VMEC input pressure coefficients are in Pa, but VMEC’s internal pressure used in the energy

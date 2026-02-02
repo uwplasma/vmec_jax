@@ -44,6 +44,7 @@ from .solve import (
     solve_fixed_boundary_lbfgs,
     solve_lambda_gd,
 )
+from .residuals import ForceResiduals, force_residuals_from_state
 
 __all__ = [
     "read_indata",
@@ -91,4 +92,6 @@ __all__ = [
     "SolveFixedBoundaryResult",
     "solve_fixed_boundary_gd",
     "solve_fixed_boundary_lbfgs",
+    "ForceResiduals",
+    "force_residuals_from_state",
 ]

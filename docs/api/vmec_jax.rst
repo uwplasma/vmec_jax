@@ -30,6 +30,7 @@ Submodules
    namelist
    profiles
    radial
+   residuals
    solve
    state
    static
