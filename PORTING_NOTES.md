@@ -42,6 +42,8 @@ Step-9 (implicit differentiation) notes:
 - `vmec_jax.implicit.solve_lambda_state_implicit` adds a custom-VJP wrapper for the **lambda-only** sub-solve.
   The backward pass solves a damped linear system using CG and Hessian-vector products computed via `jax.jvp`.
   This is the first building block for implicit differentiation through full fixed-boundary equilibria.
+- `vmec_jax.implicit.solve_fixed_boundary_state_implicit` extends the same approach to the full fixed-boundary
+  optimization over (R, Z, lambda), exposing implicit gradients w.r.t. 1D profiles/fluxes.
 
 Notes on conventions:
 - VMEC input pressure coefficients are in Pa, but VMEC’s internal pressure used in the energy

@@ -34,6 +34,10 @@ Differentiate through the lambda-only equilibrium sub-solve (no backprop through
 
   python examples/2_Intermediate/02_implicit_lambda_gradients.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --outdir figures_implicit_lambda
 
+Advanced: implicit differentiation through fixed-boundary equilibrium::
+
+  python examples/3_Advanced/03_implicit_fixed_boundary_sensitivity.py examples/input.circular_tokamak --outdir figures_implicit_fixed_boundary
+
 A minimal API sketch
 --------------------
 

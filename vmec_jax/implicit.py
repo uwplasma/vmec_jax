@@ -24,16 +24,25 @@ from typing import Any, Callable, Tuple
 import numpy as np
 
 from ._compat import has_jax, jax, jnp
-from .field import TWOPI, bsup_from_sqrtg_lambda
+from .field import TWOPI, b2_from_bsup, bsup_from_geom, bsup_from_sqrtg_lambda
 from .fourier import eval_fourier_dtheta, eval_fourier_dzeta_phys
 from .geom import eval_geom
-from .solve import _enforce_lambda_gauge, _mode00_index, solve_lambda_gd
-from .state import VMECState
+from .solve import _enforce_lambda_gauge, _mask_grad_for_constraints, _mode00_index, solve_fixed_boundary_gd, solve_fixed_boundary_lbfgs, solve_lambda_gd
+from .state import VMECState, pack_state, unpack_state
 
 
 @dataclass(frozen=True)
 class ImplicitLambdaOptions:
     """Controls for the implicit backward pass."""
+
+    cg_max_iter: int = 80
+    cg_tol: float = 1e-10
+    damping: float = 1e-6
+
+
+@dataclass(frozen=True)
+class ImplicitFixedBoundaryOptions:
+    """Controls for the implicit backward pass (fixed-boundary solve)."""
 
     cg_max_iter: int = 80
     cg_tol: float = 1e-10
@@ -244,3 +253,177 @@ def solve_lambda_state_implicit(
     _solve_cust.defvjp(fwd, bwd)
 
     return _solve_cust(jnp.asarray(phipf), jnp.asarray(chipf), jnp.asarray(lamscale))
+
+
+def solve_fixed_boundary_state_implicit(
+    state0: VMECState,
+    static,
+    *,
+    phipf,
+    chipf,
+    signgs: int,
+    lamscale,
+    pressure,
+    gamma: float = 0.0,
+    jacobian_penalty: float = 1e3,
+    solver: str = "lbfgs",
+    max_iter: int = 25,
+    step_size: float = 5e-3,
+    history_size: int = 10,
+    grad_tol: float = 1e-10,
+    max_backtracks: int = 12,
+    bt_factor: float = 0.5,
+    preconditioner: str = "none",
+    precond_exponent: float = 1.0,
+    precond_radial_alpha: float = 0.0,
+    implicit: ImplicitFixedBoundaryOptions | None = None,
+) -> VMECState:
+    """Fixed-boundary solve with a custom VJP using implicit differentiation.
+
+    This is a step-9 building block: it returns an equilibrium state while
+    exposing *implicit* gradients w.r.t. the 1D profiles/fluxes.
+
+    Differentiable inputs (by design)
+    ---------------------------------
+    - ``phipf(s)``, ``chipf(s)``, ``pressure(s)``, and ``lamscale``.
+
+    Notes
+    -----
+    - ``state0`` and ``static`` are treated as constants for differentiation.
+    - The backward pass solves a damped linear system involving the Hessian of
+      the total objective w.r.t. the (masked) Fourier coefficients using CG and
+      Hessian-vector products computed via ``jax.jvp``.
+    """
+    if not has_jax():
+        raise ImportError("solve_fixed_boundary_state_implicit requires JAX (jax + jaxlib)")
+
+    implicit = implicit or ImplicitFixedBoundaryOptions()
+
+    solver = str(solver).strip().lower()
+    if solver not in ("gd", "lbfgs"):
+        raise ValueError(f"solver must be 'gd' or 'lbfgs', got {solver!r}")
+
+    state0_c = _stop_gradient_tree(state0)
+    idx00 = _mode00_index(static.modes)
+
+    signgs_i = int(signgs)
+    nfp = int(static.cfg.nfp)
+    gamma = float(gamma)
+    jacobian_penalty = float(jacobian_penalty)
+
+    s = jnp.asarray(static.s)
+    theta = jnp.asarray(static.grid.theta)
+    zeta = jnp.asarray(static.grid.zeta)
+    if s.shape[0] < 2:
+        ds = jnp.asarray(1.0, dtype=s.dtype)
+    else:
+        ds = s[1] - s[0]
+    dtheta = theta[1] - theta[0]
+    dzeta = zeta[1] - zeta[0]
+    weight = ds * dtheta * dzeta
+
+    def _objective(state: VMECState, phipf, chipf, pressure, lamscale):
+        g = eval_geom(state, static)
+        bsupu, bsupv = bsup_from_geom(g, phipf=phipf, chipf=chipf, nfp=nfp, signgs=signgs_i, lamscale=lamscale)
+        B2 = b2_from_bsup(g, bsupu, bsupv)
+        jac = signgs_i * g.sqrtg
+        wb = (jnp.sum(0.5 * B2 * jac) * weight) / (TWOPI * TWOPI)
+        wp = (jnp.sum(pressure[:, None, None] * jac) * weight) / (TWOPI * TWOPI)
+        w = wb + wp / (gamma - 1.0)
+        # Softly enforce a consistent Jacobian sign away from the axis.
+        jac2 = jac.at[0, :, :].set(0.0)
+        neg = jnp.minimum(jac2, 0.0)
+        penalty = jacobian_penalty * jnp.mean(neg * neg)
+        return w + penalty
+
+    def _grad_flat(state: VMECState, phipf, chipf, pressure, lamscale):
+        g = jax.grad(_objective)(state, phipf, chipf, pressure, lamscale)
+        g = _mask_grad_for_constraints(g, static, idx00=idx00)
+        return pack_state(g)
+
+    def _solve(phipf, chipf, pressure, lamscale):
+        if solver == "gd":
+            res = solve_fixed_boundary_gd(
+                state0_c,
+                static,
+                phipf=phipf,
+                chipf=chipf,
+                signgs=signgs_i,
+                lamscale=lamscale,
+                pressure=pressure,
+                gamma=gamma,
+                jacobian_penalty=jacobian_penalty,
+                max_iter=int(max_iter),
+                step_size=float(step_size),
+                grad_tol=float(grad_tol),
+                max_backtracks=int(max_backtracks),
+                bt_factor=float(bt_factor),
+                preconditioner=str(preconditioner),
+                precond_exponent=float(precond_exponent),
+                precond_radial_alpha=float(precond_radial_alpha),
+            )
+        else:
+            res = solve_fixed_boundary_lbfgs(
+                state0_c,
+                static,
+                phipf=phipf,
+                chipf=chipf,
+                signgs=signgs_i,
+                lamscale=lamscale,
+                pressure=pressure,
+                gamma=gamma,
+                history_size=int(history_size),
+                max_iter=int(max_iter),
+                step_size=float(step_size),
+                grad_tol=float(grad_tol),
+                max_backtracks=int(max_backtracks),
+                bt_factor=float(bt_factor),
+                preconditioner=str(preconditioner),
+                precond_exponent=float(precond_exponent),
+                precond_radial_alpha=float(precond_radial_alpha),
+            )
+        return res.state
+
+    @jax.custom_vjp
+    def _solve_cust(phipf, chipf, pressure, lamscale):
+        return _solve(phipf, chipf, pressure, lamscale)
+
+    def fwd(phipf, chipf, pressure, lamscale):
+        st = _solve(phipf, chipf, pressure, lamscale)
+        return st, (
+            _stop_gradient_tree(st),
+            jnp.asarray(phipf),
+            jnp.asarray(chipf),
+            jnp.asarray(pressure),
+            jnp.asarray(lamscale),
+        )
+
+    def bwd(residual, ct_state):
+        st_star, phipf_star, chipf_star, pressure_star, lamscale_star = residual
+        layout = st_star.layout
+
+        ct_state = _mask_grad_for_constraints(ct_state, static, idx00=idx00)
+        b = pack_state(ct_state)
+
+        def Hvp(u_flat):
+            u_state = unpack_state(u_flat, layout)
+            u_state = _mask_grad_for_constraints(u_state, static, idx00=idx00)
+            _, hvp = jax.jvp(
+                lambda st: _grad_flat(st, phipf_star, chipf_star, pressure_star, lamscale_star),
+                (st_star,),
+                (u_state,),
+            )
+            return hvp + jnp.asarray(float(implicit.damping), dtype=hvp.dtype) * u_flat
+
+        v = _cg_solve(Hvp, b, tol=float(implicit.cg_tol), max_iter=int(implicit.cg_max_iter))
+
+        def F_params(phipf, chipf, pressure, lamscale):
+            return _grad_flat(st_star, phipf, chipf, pressure, lamscale)
+
+        (_out, vjp_fun) = jax.vjp(F_params, phipf_star, chipf_star, pressure_star, lamscale_star)
+        dphipf, dchipf, dpressure, dlamscale = vjp_fun(v)
+        return (-dphipf, -dchipf, -dpressure, -dlamscale)
+
+    _solve_cust.defvjp(fwd, bwd)
+
+    return _solve_cust(jnp.asarray(phipf), jnp.asarray(chipf), jnp.asarray(pressure), jnp.asarray(lamscale))

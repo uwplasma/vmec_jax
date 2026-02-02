@@ -31,7 +31,12 @@ from .profiles import ProfileInputs, profiles_from_indata, eval_profiles
 from .integrals import dvds_from_sqrtg, cumtrapz_s, volume_from_sqrtg
 from .field import bsup_from_geom, bsup_from_sqrtg_lambda, b2_from_bsup
 from .energy import magnetic_wb_from_state
-from .implicit import ImplicitLambdaOptions, solve_lambda_state_implicit
+from .implicit import (
+    ImplicitFixedBoundaryOptions,
+    ImplicitLambdaOptions,
+    solve_fixed_boundary_state_implicit,
+    solve_lambda_state_implicit,
+)
 from .solve import (
     SolveFixedBoundaryResult,
     SolveLambdaResult,
@@ -78,7 +83,9 @@ __all__ = [
     "b2_from_bsup",
     "magnetic_wb_from_state",
     "ImplicitLambdaOptions",
+    "ImplicitFixedBoundaryOptions",
     "solve_lambda_state_implicit",
+    "solve_fixed_boundary_state_implicit",
     "SolveLambdaResult",
     "solve_lambda_gd",
     "SolveFixedBoundaryResult",

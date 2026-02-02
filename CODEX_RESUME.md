@@ -173,6 +173,8 @@ Current incremental progress toward Step-9:
 - Added `vmec_jax.implicit.solve_lambda_state_implicit`, a custom-VJP lambda-only solve that uses
   conjugate gradients + Hessian-vector products (via `jax.jvp`) in the backward pass.
 - Added a regression test comparing the implicit gradient to a finite-difference gradient for a simple outer objective.
+- Extended implicit differentiation to the full fixed-boundary solve via `vmec_jax.implicit.solve_fixed_boundary_state_implicit`
+  (custom VJP with CG/HVP in the backward pass), plus a regression test against finite differences.
 
 ## 7) Longer-term roadmap
 - Match VMEC2000 feature set (non-stellarator-symmetric, free-boundary, etc.).

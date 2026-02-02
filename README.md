@@ -85,6 +85,14 @@ Differentiate an outer objective through the lambda-only solve (no backprop thro
 python examples/2_Intermediate/02_implicit_lambda_gradients.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --outdir figures_implicit_lambda
 ```
 
+## Step-9: implicit differentiation (fixed-boundary)
+
+Implicitly differentiate a *geometric* quantity through the full fixed-boundary equilibrium solve (advanced; requires `matplotlib`):
+
+```bash
+python examples/3_Advanced/03_implicit_fixed_boundary_sensitivity.py examples/input.circular_tokamak --outdir figures_implicit_fixed_boundary
+```
+
 ## Step-3 outputs
 
 The step-3 script writes a `.npz` with:
