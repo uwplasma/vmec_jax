@@ -182,6 +182,9 @@ Current incremental progress toward Step-10:
 - Added parity checks for covariant field components (`bsubu`, `bsubv`) reconstructed from the metric and `wout` contravariant fields, compared against `wout`'s stored `bsub*` on Nyquist modes.
 - Added a figure-generating example script for visual parity inspection (relative error maps on a selected flux surface).
 - Added a first force-like residual diagnostic based on objective gradients (`vmec_jax.residuals.force_residuals_from_state`) and a report example that prints these alongside VMEC2000 `wout` scalars (`fsqr/fsqz/fsql`).
+- Added VMEC-style half-mesh Jacobian parity kernels (`vmec_jax.vmec_jacobian`, `vmec_jax.vmec_parity`) and a regression vs `wout` Nyquist `gmnc/gmns` (`tests/test_step10_vmec_jacobian_parity.py`).
+- Added a half-mesh bcovar ingredient kernel (`vmec_jax.vmec_bcovar`) and a smoke regression (`tests/test_step10_vmec_bcovar_smoke.py`).
+- Added an initial port of the VMEC `forces` (R/Z) kernel in array form (`vmec_jax.vmec_forces`) plus a smoke test and a diagnostics example (`examples/3_Advanced/10_vmec_forces_rz_kernel_report.py`). This is the starting point for full `residue/getfsq` parity.
 
 ## 7) Longer-term roadmap
 - Match VMEC2000 feature set (non-stellarator-symmetric, free-boundary, etc.).

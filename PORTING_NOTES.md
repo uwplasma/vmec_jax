@@ -50,6 +50,9 @@ Step-10 (parity diagnostics) notes:
 - `vmec_jax.field.bsub_from_bsup` computes covariant components (bsubu, bsubv) from the metric and contravariant field.
 - `vmec_jax.wout.read_wout` now reads `bsubumn*`/`bsubvmn*` (Nyquist) from `wout_*.nc` for parity tests and examples.
 - `vmec_jax.residuals.force_residuals_from_state` provides a first force-like residual proxy from the total-objective gradient. This is not yet VMEC `residue/getfsq` parity, but supports regression tests and solver diagnostics while the real-space force kernels are ported.
+- VMEC-style half-mesh staggering for the Jacobian is implemented in `vmec_jax.vmec_jacobian` (ports `jacobian.f`), with helper parity kernels in `vmec_jax.vmec_parity`.
+- Half-mesh metric + B ingredients needed by VMEC's force kernels are implemented in `vmec_jax.vmec_bcovar` (ports core `bcovar` algebra used before `forces`).
+- An initial direct port of VMEC's `forces` (R/Z) kernel lives in `vmec_jax.vmec_forces`. This is intentionally a parity/debug kernel and is not yet full `residue.f90` / `getfsq.f` parity.
 
 Notes on conventions:
 - VMEC input pressure coefficients are in Pa, but VMEC’s internal pressure used in the energy
