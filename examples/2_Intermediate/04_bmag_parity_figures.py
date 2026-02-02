@@ -130,8 +130,8 @@ def main() -> None:
     fig, ax = plt.subplots(figsize=(6.0, 4.0))
     im = ax.imshow(e.T, origin="lower", aspect="auto", cmap="RdBu_r")
     ax.set_title(r"rel. error $|B|$")
-    ax.set_xlabel(r"$\\theta$ index")
-    ax.set_ylabel(r"$\\zeta$ index")
+    ax.set_xlabel(r"$\theta$ index")
+    ax.set_ylabel(r"$\zeta$ index")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
     fig.savefig(outdir / "bmag_parity_error.png")
@@ -144,4 +144,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

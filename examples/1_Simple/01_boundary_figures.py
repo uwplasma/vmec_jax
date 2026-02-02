@@ -92,7 +92,7 @@ def main() -> None:
     idx = np.linspace(0, zeta.size - 1, nslices, dtype=int)
     fig, ax = plt.subplots(figsize=(6.0, 4.6))
     for j in idx:
-        ax.plot(R[:, j], Z[:, j], lw=1.5, label=rf"$\\zeta={zeta[j]:.2f}$")
+        ax.plot(R[:, j], Z[:, j], lw=1.5, label=rf"$\zeta={zeta[j]:.2f}$")
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("R")
     ax.set_ylabel("Z")
@@ -159,4 +159,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

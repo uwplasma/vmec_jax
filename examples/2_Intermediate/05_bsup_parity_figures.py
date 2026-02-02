@@ -159,14 +159,14 @@ def main() -> None:
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.0), constrained_layout=True)
     im0 = axes[0].imshow(eu.T, origin="lower", aspect="auto", cmap="RdBu_r")
     axes[0].set_title(r"rel. error $bsupu$")
-    axes[0].set_xlabel(r"$\\theta$ index")
-    axes[0].set_ylabel(r"$\\zeta$ index")
+    axes[0].set_xlabel(r"$\theta$ index")
+    axes[0].set_ylabel(r"$\zeta$ index")
     fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
 
     im1 = axes[1].imshow(ev.T, origin="lower", aspect="auto", cmap="RdBu_r")
     axes[1].set_title(r"rel. error $bsupv$")
-    axes[1].set_xlabel(r"$\\theta$ index")
-    axes[1].set_ylabel(r"$\\zeta$ index")
+    axes[1].set_xlabel(r"$\theta$ index")
+    axes[1].set_ylabel(r"$\zeta$ index")
     fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
 
     fig.suptitle(f"bsup parity on surface s_index={s_index} ({Path(args.wout).name})")
@@ -180,4 +180,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

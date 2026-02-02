@@ -134,13 +134,14 @@ def bsup_from_geom(geom, *, phipf, chipf, nfp: int, signgs: int, lamscale, eps: 
     Notes
     -----
     The geometry kernel provides lambda derivatives w.r.t the physical toroidal
-    angle ``phi_phys`` (full-torus angle). VMEC's bsupu formula uses ``lam_v``
-    with respect to the internal field-period coordinate ``zeta``, so:
+    angle ``phi_phys``.
 
-        lam_v = d(lambda)/dzeta = (1/NFP) * d(lambda)/dphi_phys
+    VMEC's internal trig derivative tables already include the NFP factor (see
+    ``fixaray.f``: ``cosnvn/sinnvn`` scale by ``n*nfp``), so the stored
+    derivatives correspond to ``d/dphi_phys``.
     """
     lam_u = geom.L_theta
-    lam_v = geom.L_phi / int(nfp)
+    lam_v = geom.L_phi
     return bsup_from_sqrtg_lambda(
         sqrtg=geom.sqrtg,
         lam_u=lam_u,
