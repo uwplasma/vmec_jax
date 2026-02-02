@@ -93,6 +93,14 @@ Implicitly differentiate a *geometric* quantity through the full fixed-boundary 
 python examples/3_Advanced/03_implicit_fixed_boundary_sensitivity.py examples/input.circular_tokamak --outdir figures_implicit_fixed_boundary
 ```
 
+## Step-10: VMEC2000 parity diagnostics (contravariant B)
+
+Compare contravariant B components (``bsupu``, ``bsupv``) reconstructed by vmec_jax against the `wout` contravariant fields (writes figures; requires `netCDF4` + `matplotlib`):
+
+```bash
+python examples/2_Intermediate/05_bsup_parity_figures.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --outdir figures_bsup_parity
+```
+
 ## Step-10: VMEC2000 parity diagnostics (covariant B)
 
 Compare covariant B components (``bsubu``, ``bsubv``) reconstructed from the metric and `wout` contravariant fields against the `wout` covariant fields (writes figures; requires `netCDF4` + `matplotlib`):

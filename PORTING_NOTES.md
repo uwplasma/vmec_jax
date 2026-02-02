@@ -46,6 +46,7 @@ Step-9 (implicit differentiation) notes:
   optimization over (R, Z, lambda), exposing implicit gradients w.r.t. 1D profiles/fluxes.
 
 Step-10 (parity diagnostics) notes:
+- `vmec_jax.field.bsup_from_geom` can reconstruct contravariant components (bsupu, bsupv) from the metric/Jacobian, flux functions, and lambda derivatives; see `tests/test_step10_bsup_parity.py` and `examples/2_Intermediate/05_bsup_parity_figures.py`.
 - `vmec_jax.field.bsub_from_bsup` computes covariant components (bsubu, bsubv) from the metric and contravariant field.
 - `vmec_jax.wout.read_wout` now reads `bsubumn*`/`bsubvmn*` (Nyquist) from `wout_*.nc` for parity tests and examples.
 - `vmec_jax.residuals.force_residuals_from_state` provides a first force-like residual proxy from the total-objective gradient. This is not yet VMEC `residue/getfsq` parity, but supports regression tests and solver diagnostics while the real-space force kernels are ported.
