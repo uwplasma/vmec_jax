@@ -34,6 +34,13 @@ Differentiate through the lambda-only equilibrium sub-solve (no backprop through
 
   python examples/2_Intermediate/02_implicit_lambda_gradients.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --outdir figures_implicit_lambda
 
+VMEC2000 parity diagnostics (Step-10)
+-------------------------------------
+
+Compare covariant B components (``bsubu``, ``bsubv``) reconstructed from the metric and ``wout`` contravariant fields against the ``wout`` covariant fields (writes figures; requires ``netCDF4`` + ``matplotlib``)::
+
+  python examples/2_Intermediate/03_bsub_parity_figures.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --outdir figures_bsub_parity
+
 Advanced: implicit differentiation through fixed-boundary equilibrium::
 
   python examples/3_Advanced/03_implicit_fixed_boundary_sensitivity.py examples/input.circular_tokamak --outdir figures_implicit_fixed_boundary

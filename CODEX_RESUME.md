@@ -176,6 +176,11 @@ Current incremental progress toward Step-9:
 - Extended implicit differentiation to the full fixed-boundary solve via `vmec_jax.implicit.solve_fixed_boundary_state_implicit`
   (custom VJP with CG/HVP in the backward pass), plus a regression test against finite differences.
 
+## 10) Step-10: VMEC2000 parity diagnostics (forces/field components)
+Current incremental progress toward Step-10:
+- Added parity checks for covariant field components (`bsubu`, `bsubv`) reconstructed from the metric and `wout` contravariant fields, compared against `wout`'s stored `bsub*` on Nyquist modes.
+- Added a figure-generating example script for visual parity inspection (relative error maps on a selected flux surface).
+
 ## 7) Longer-term roadmap
 - Match VMEC2000 feature set (non-stellarator-symmetric, free-boundary, etc.).
 - Performance upgrades:

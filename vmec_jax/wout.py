@@ -58,6 +58,12 @@ class WoutData:
     bsupvmnc: np.ndarray
     bsupvmns: np.ndarray
 
+    # nyquist Fourier coefficients for covariant field components (for parity checks)
+    bsubumnc: np.ndarray
+    bsubumns: np.ndarray
+    bsubvmnc: np.ndarray
+    bsubvmns: np.ndarray
+
     wb: float
     volume_p: float
 
@@ -122,6 +128,11 @@ def read_wout(path: str | Path) -> WoutData:
         bsupvmnc = np.asarray(ds.variables["bsupvmnc"][:])
         bsupvmns = np.asarray(ds.variables.get("bsupvmns", np.zeros_like(bsupvmnc))[:])
 
+        bsubumnc = np.asarray(ds.variables.get("bsubumnc", np.zeros_like(bsupumnc))[:])
+        bsubumns = np.asarray(ds.variables.get("bsubumns", np.zeros_like(bsupumnc))[:])
+        bsubvmnc = np.asarray(ds.variables.get("bsubvmnc", np.zeros_like(bsupvmnc))[:])
+        bsubvmns = np.asarray(ds.variables.get("bsubvmns", np.zeros_like(bsupvmnc))[:])
+
         wb = float(ds.variables["wb"][:])
         volume_p = float(ds.variables["volume_p"][:])
         gamma = float(ds.variables.get("gamma", 0.0)[:]) if "gamma" in ds.variables else 0.0
@@ -168,6 +179,10 @@ def read_wout(path: str | Path) -> WoutData:
         bsupumns=bsupumns,
         bsupvmnc=bsupvmnc,
         bsupvmns=bsupvmns,
+        bsubumnc=bsubumnc,
+        bsubumns=bsubumns,
+        bsubvmnc=bsubvmnc,
+        bsubvmns=bsubvmns,
         wb=wb,
         volume_p=volume_p,
         gamma=gamma,

@@ -160,6 +160,26 @@ def b2_from_bsup(geom, bsupu, bsupv):
     return geom.g_tt * bsupu**2 + 2.0 * geom.g_tp * bsupu * bsupv + geom.g_pp * bsupv**2
 
 
+def bsub_from_bsup(geom, bsupu, bsupv):
+    """Compute covariant components (B_u, B_v) from contravariant (B^u, B^v).
+
+    Notes
+    -----
+    With ``B^s=0`` in VMEC's representation, the angular covariant components are:
+
+        B_u = g_uu B^u + g_uv B^v
+        B_v = g_uv B^u + g_vv B^v
+
+    In this codebase, u corresponds to ``theta`` and v corresponds to the physical
+    toroidal angle ``phi_phys`` used in :mod:`vmec_jax.geom`.
+    """
+    bsupu = jnp.asarray(bsupu)
+    bsupv = jnp.asarray(bsupv)
+    bsubu = geom.g_tt * bsupu + geom.g_tp * bsupv
+    bsubv = geom.g_tp * bsupu + geom.g_pp * bsupv
+    return bsubu, bsubv
+
+
 def b_cartesian_from_bsup(geom, bsupu, bsupv, *, zeta, nfp: int):
     """Compute Cartesian B=(Bx,By,Bz) from contravariant components.
 

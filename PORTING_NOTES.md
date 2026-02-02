@@ -45,6 +45,10 @@ Step-9 (implicit differentiation) notes:
 - `vmec_jax.implicit.solve_fixed_boundary_state_implicit` extends the same approach to the full fixed-boundary
   optimization over (R, Z, lambda), exposing implicit gradients w.r.t. 1D profiles/fluxes.
 
+Step-10 (parity diagnostics) notes:
+- `vmec_jax.field.bsub_from_bsup` computes covariant components (bsubu, bsubv) from the metric and contravariant field.
+- `vmec_jax.wout.read_wout` now reads `bsubumn*`/`bsubvmn*` (Nyquist) from `wout_*.nc` for parity tests and examples.
+
 Notes on conventions:
 - VMEC input pressure coefficients are in Pa, but VMEC’s internal pressure used in the energy
   functional is in `mu0*Pa` (B² units). `vmec_jax.profiles.eval_profiles` returns both:
