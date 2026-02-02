@@ -23,6 +23,7 @@ Submodules
    fourier
    geom
    grids
+   implicit
    init_guess
    integrals
    modes

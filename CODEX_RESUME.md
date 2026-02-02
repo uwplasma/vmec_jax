@@ -169,6 +169,11 @@ Current incremental progress toward Step-8:
   - solve linear system for adjoint.
   - reuse preconditioner/Krylov.
 
+Current incremental progress toward Step-9:
+- Added `vmec_jax.implicit.solve_lambda_state_implicit`, a custom-VJP lambda-only solve that uses
+  conjugate gradients + Hessian-vector products (via `jax.jvp`) in the backward pass.
+- Added a regression test comparing the implicit gradient to a finite-difference gradient for a simple outer objective.
+
 ## 7) Longer-term roadmap
 - Match VMEC2000 feature set (non-stellarator-symmetric, free-boundary, etc.).
 - Performance upgrades:

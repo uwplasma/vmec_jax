@@ -38,6 +38,11 @@ Notes:
 - `vmec_jax.solve` now supports a lightweight radial tri-diagonal smoother preconditioner (`radial_tridi`) that can be combined with the existing mode-diagonal scaling (`mode_diag+radial_tridi`).
 - `vmec_jax.wout.read_wout` parses VMEC force residual scalars (`fsqr/fsqz/fsql`) when present, for solver diagnostics and future parity work.
 
+Step-9 (implicit differentiation) notes:
+- `vmec_jax.implicit.solve_lambda_state_implicit` adds a custom-VJP wrapper for the **lambda-only** sub-solve.
+  The backward pass solves a damped linear system using CG and Hessian-vector products computed via `jax.jvp`.
+  This is the first building block for implicit differentiation through full fixed-boundary equilibria.
+
 Notes on conventions:
 - VMEC input pressure coefficients are in Pa, but VMEC’s internal pressure used in the energy
   functional is in `mu0*Pa` (B² units). `vmec_jax.profiles.eval_profiles` returns both:

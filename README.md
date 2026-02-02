@@ -77,6 +77,14 @@ Export a surface `B` field and a field-line trace for ParaView (requires the bun
 python examples/3_Advanced/02_vtk_field_and_fieldlines.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --hi-res --outdir vtk_out
 ```
 
+## Step-9: implicit differentiation (lambda-only)
+
+Differentiate an outer objective through the lambda-only solve (no backprop through iterations), producing a publication-ready figure:
+
+```bash
+python examples/2_Intermediate/02_implicit_lambda_gradients.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --outdir figures_implicit_lambda
+```
+
 ## Step-3 outputs
 
 The step-3 script writes a `.npz` with:

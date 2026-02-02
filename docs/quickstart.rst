@@ -27,6 +27,13 @@ field-line trace for ParaView (requires ``netCDF4``)::
 
   python examples/3_Advanced/02_vtk_field_and_fieldlines.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --hi-res --outdir vtk_out
 
+Implicit differentiation (Step-9)
+---------------------------------
+
+Differentiate through the lambda-only equilibrium sub-solve (no backprop through iterations) and write a publication-ready figure::
+
+  python examples/2_Intermediate/02_implicit_lambda_gradients.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --outdir figures_implicit_lambda
+
 A minimal API sketch
 --------------------
 
