@@ -193,12 +193,21 @@ def vmec_bcovar_half_mesh_from_wout(
     # in terms of lambda uses lam_v directly:
     #   bsupu = overg * (chipf - lamscale * lam_v)
     lamscale = lamscale_from_phips(wout.phips, s)
+    # VMEC's full-mesh `chip` enters B^u via `add_fluxes` (chips = iotas*phips).
+    # In `wout`, the readily-available full-mesh proxy with matching scaling is
+    # `iotas*phipf` (since `phipf` carries a `2π*signgs` factor relative to `phips`).
+    # Prefer that when available; otherwise fall back to the stored `chipf` half-mesh
+    # array for coarse parity work.
+    chipf_eff = getattr(wout, "chipf", None)
+    if hasattr(wout, "iotas") and hasattr(wout, "phipf"):
+        chipf_eff = jnp.asarray(wout.iotas) * jnp.asarray(wout.phipf)
+
     bsupu, bsupv = bsup_from_sqrtg_lambda(
         sqrtg=jac.sqrtg,
         lam_u=lam_u,
         lam_v=lam_v,
         phipf=wout.phipf,
-        chipf=wout.chipf,
+        chipf=chipf_eff,
         signgs=int(wout.signgs),
         lamscale=lamscale,
     )

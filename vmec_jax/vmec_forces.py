@@ -26,7 +26,7 @@ from .fourier import build_helical_basis, eval_fourier
 from .grids import AngleGrid
 from .modes import ModeTable
 from .vmec_bcovar import vmec_bcovar_half_mesh_from_wout
-from .vmec_constraints import alias_gcon, tcon_from_indata_heuristic
+from .vmec_constraints import alias_gcon, tcon_from_bcovar_precondn_diag, tcon_from_indata_heuristic
 from .vmec_tomnsp import VmecTrigTables, tomnsps_rzl, vmec_angle_grid, vmec_trig_tables
 from .vmec_parity import internal_odd_from_physical, split_rzl_even_odd_m
 
@@ -162,6 +162,11 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None) -> VmecRZForce
     psqrts = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
 
     # Inputs `forces.f` expects after `bcovar` (half mesh).
+    #
+    # Important: by the time `forces.f` runs, VMEC has overwritten `guu/guv/gvv`
+    # with the B-product tensors:
+    #   GIJ = (B^i B^j) * sqrt(g)   for i,j ∈ {u,v}
+    # (see `bcovar.f` "STORE LU * LV COMBINATIONS USED IN FORCES").
     lu_e = _with_axis_zero(bc.lu_e)
     lv_e = _with_axis_zero(bc.lv_e)
     guu = _with_axis_zero(bc.gij_b_uu)
@@ -309,7 +314,26 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None) -> VmecRZForce
             lasym=bool(wout.lasym),
             dtype=jnp.asarray(ztemp).dtype,
         )
-        tcon = tcon_from_indata_heuristic(indata=indata, s=np.asarray(s), trig=trig, lasym=bool(wout.lasym))
+        # VMEC computes the constraint strength `tcon(js)` in `bcovar.f` using
+        # diagonal preconditioner pieces and flux-surface norms. Use our reduced
+        # port when possible; fall back to a conservative heuristic otherwise.
+        try:
+            tcon = tcon_from_bcovar_precondn_diag(
+                indata=indata,
+                trig=trig,
+                s=np.asarray(s),
+                signgs=int(wout.signgs),
+                lasym=bool(wout.lasym),
+                bsq=bc.bsq,
+                r12=bc.jac.r12,
+                sqrtg=bc.jac.sqrtg,
+                ru12=bc.jac.ru12,
+                zu12=bc.jac.zu12,
+                ru0=ru0,
+                zu0=zu0,
+            )
+        except Exception:
+            tcon = tcon_from_indata_heuristic(indata=indata, s=np.asarray(s), trig=trig, lasym=bool(wout.lasym))
         gcon = alias_gcon(
             ztemp=ztemp,
             trig=trig,
@@ -404,6 +428,8 @@ def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout, indata=Non
     sqrtg = jnp.asarray(eval_fourier(wout.gmnc, wout.gmns, basis_nyq))
     bsupu = jnp.asarray(eval_fourier(wout.bsupumnc, wout.bsupumns, basis_nyq))
     bsupv = jnp.asarray(eval_fourier(wout.bsupvmnc, wout.bsupvmns, basis_nyq))
+    bsubu = jnp.asarray(eval_fourier(wout.bsubumnc, wout.bsubumns, basis_nyq))
+    bsubv = jnp.asarray(eval_fourier(wout.bsubvmnc, wout.bsubvmns, basis_nyq))
     bmag = jnp.asarray(eval_fourier(wout.bmnc, wout.bmns, basis_nyq))
 
     # bsq = |B|^2/2 + p (half mesh).
@@ -417,6 +443,40 @@ def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout, indata=Non
     lu_e = _with_axis_zero(bsq * r12)
     lv_e = _with_axis_zero(bsq * tau)
 
+    # Metric elements on the half mesh (bcovar.f convention). We keep these for
+    # scaling diagnostics, but the *forces* kernel below uses GIJ (B-products).
+    def _half_mesh_from_even_odd(even, odd_int, *, s):
+        even = jnp.asarray(even)
+        odd_int = jnp.asarray(odd_int)
+        s = jnp.asarray(s)
+        ns_ = int(s.shape[0])
+        if ns_ < 2:
+            return even
+        psh = _pshalf_from_s(s)[:, None, None]
+        out = jnp.zeros_like(even)
+        out = out.at[1:].set(0.5 * (even[1:] + even[:-1] + psh[1:] * (odd_int[1:] + odd_int[:-1])))
+        out = out.at[0].set(out[1])
+        return out
+
+    ss0 = s[:, None, None]
+    guu_e = pru_0 * pru_0 + pzu_0 * pzu_0 + ss0 * (pru_1 * pru_1 + pzu_1 * pzu_1)
+    guu_o = 2.0 * (pru_0 * pru_1 + pzu_0 * pzu_1)
+    guv_e = prv_0 * pru_0 + pzv_0 * pzu_0 + ss0 * (prv_1 * pru_1 + pzv_1 * pzu_1)
+    guv_o = prv_0 * pru_1 + prv_1 * pru_0 + pzv_0 * pzu_1 + pzv_1 * pzu_0
+    gvv_e = prv_0 * prv_0 + pzv_0 * pzv_0 + ss0 * (prv_1 * prv_1 + pzv_1 * pzv_1)
+    gvv_o = 2.0 * (prv_0 * prv_1 + pzv_0 * pzv_1)
+
+    # Add R^2 term to gvv in cylindrical coordinates.
+    r2_e = pr1_0 * pr1_0 + ss0 * (pr1_1 * pr1_1)
+    r2_o = 2.0 * (pr1_0 * pr1_1)
+
+    guu_metric = _with_axis_zero(_half_mesh_from_even_odd(guu_e, guu_o, s=s))
+    guv_metric = _with_axis_zero(_half_mesh_from_even_odd(guv_e, guv_o, s=s))
+    gvv_metric = _with_axis_zero(
+        _half_mesh_from_even_odd(gvv_e, gvv_o, s=s) + _half_mesh_from_even_odd(r2_e, r2_o, s=s)
+    )
+
+    # GIJ = (B^i B^j)*sqrt(g) used in forces.f.
     guu = _with_axis_zero((bsupu * bsupu) * sqrtg)
     guv = _with_axis_zero((bsupu * bsupv) * sqrtg)
     gvv = _with_axis_zero((bsupv * bsupv) * sqrtg)
@@ -511,10 +571,24 @@ def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout, indata=Non
         pass
 
     bc_obj = _BC()
-    bc_obj.jac = jac
-    bc_obj.gij_b_uu = guu
-    bc_obj.gij_b_uv = guv
-    bc_obj.gij_b_vv = gvv
+    from .field import lamscale_from_phips
+    from .vmec_jacobian import VmecHalfMeshJacobian
+
+    bc_obj.jac = VmecHalfMeshJacobian(
+        r12=jac.r12,
+        rs=jac.rs,
+        zs=jac.zs,
+        ru12=jac.ru12,
+        zu12=jac.zu12,
+        tau=tau,
+        sqrtg=sqrtg,
+    )
+    bc_obj.guu = guu_metric
+    bc_obj.guv = guv_metric
+    bc_obj.gvv = gvv_metric
+    bc_obj.bsubu = bsubu
+    bc_obj.bsubv = bsubv
+    bc_obj.lamscale = lamscale_from_phips(wout.phips, s)
 
     z = jnp.zeros_like(armn_e)
     return VmecRZForceKernels(

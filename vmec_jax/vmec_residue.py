@@ -70,19 +70,19 @@ def vmec_force_norms_from_bcovar(*, bc, trig: VmecTrigTables, wout, s) -> VmecFo
     wp = float(wout.wp)
     r2 = max(wb, wp) / volume if volume != 0.0 else float("inf")
 
-    guu = jnp.asarray(bc.gij_b_uu)
-    r12 = jnp.asarray(bc.jac.r12)
-    guu_r12sq = guu * (r12 * r12)
-
     # Angular integration weights (`wint`) as used throughout VMEC real-space routines.
+    guu = jnp.asarray(bc.guu)
     wint = vmec_wint_from_trig(trig, nzeta=int(guu.shape[2]))
     wint3 = wint[None, :, :]
 
-    # Exclude axis surface (js=1 in Fortran -> index 0 here); weights on axis are also zero in VMEC.
-    # VMEC uses `signgs` to make volume-like integrals positive. Our `sqrtg`
-    # (and therefore `gij_b_uu`) can carry the orientation sign.
-    signgs = int(getattr(wout, "signgs", 1))
-    denom_f = float(jnp.sum(((signgs * guu_r12sq[1:]) * wint3).astype(jnp.float64)))
+    # R/Z force norm: use the half-mesh metric element guu and R12 from the Jacobian.
+    # (VMEC `bcovar.f` multiplies `guu` by `r12**2` just before forming `fnorm`.)
+    r12 = jnp.asarray(bc.jac.r12)
+    guu_r12sq = (guu * (r12 * r12)).astype(jnp.float64)
+
+    # Exclude axis surface (js=1 in Fortran -> index 0 here). In VMEC, `wint` on
+    # the axis is also zero, but we exclude explicitly for robustness.
+    denom_f = float(jnp.sum((guu_r12sq[1:] * wint3).astype(jnp.float64)))
     fnorm = 1.0 / (denom_f * (r2 * r2)) if denom_f != 0.0 else float("inf")
 
     bsubu = jnp.asarray(bc.bsubu)

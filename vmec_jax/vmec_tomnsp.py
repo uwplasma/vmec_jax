@@ -110,13 +110,17 @@ def vmec_trig_tables(
     else:
         dnorm = 1.0 / (nzeta * (ntheta2 - 1))
 
+    # VMEC uses `osqrt2 = 1/sqrt(2)` and sets:
+    #   mscale(1:) = mscale(0)/osqrt2  => sqrt(2) for m>=1 (with mscale(0)=1)
+    # Likewise for `nscale`. This ensures the trig tables implement the
+    # orthonormal-like scaling VMEC assumes in `fixaray.f`.
     osqrt2 = 1.0 / np.sqrt(2.0)
     mscale = np.ones((mmax + 1,), dtype=float)
     nscale = np.ones((nmax + 1,), dtype=float)
     if mmax >= 1:
-        mscale[1:] = mscale[0] * osqrt2
+        mscale[1:] = mscale[0] / osqrt2
     if nmax >= 1:
-        nscale[1:] = nscale[0] * osqrt2
+        nscale[1:] = nscale[0] / osqrt2
     r0scale = float(mscale[0] * nscale[0])
 
     # Theta tables use argi = 2π*(i-1)/ntheta1, for i=1..ntheta3.

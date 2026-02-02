@@ -49,6 +49,8 @@ class WoutData:
     phipf: np.ndarray
     chipf: np.ndarray
     phips: np.ndarray
+    iotaf: np.ndarray  # (ns,) iota on half mesh (VMEC convention)
+    iotas: np.ndarray  # (ns,) iota on full mesh (VMEC convention)
 
     # nyquist Fourier coefficients for derived fields
     gmnc: np.ndarray
@@ -124,6 +126,8 @@ def read_wout(path: str | Path) -> WoutData:
         phipf = np.asarray(ds.variables["phipf"][:])
         chipf = np.asarray(ds.variables["chipf"][:])
         phips = np.asarray(ds.variables["phips"][:])
+        iotaf = np.asarray(ds.variables.get("iotaf", np.zeros_like(phips))[:])
+        iotas = np.asarray(ds.variables.get("iotas", np.zeros_like(phips))[:])
 
         gmnc = np.asarray(ds.variables["gmnc"][:])
         gmns = np.asarray(ds.variables.get("gmns", np.zeros_like(gmnc))[:])
@@ -180,6 +184,8 @@ def read_wout(path: str | Path) -> WoutData:
         phipf=phipf,
         chipf=chipf,
         phips=phips,
+        iotaf=iotaf,
+        iotas=iotas,
         gmnc=gmnc,
         gmns=gmns,
         bsupumnc=bsupumnc,
@@ -287,6 +293,8 @@ def write_wout(path: str | Path, wout: WoutData, *, overwrite: bool = False) -> 
         _var_f("phipf", ("ns",), np.asarray(wout.phipf))
         _var_f("chipf", ("ns",), np.asarray(wout.chipf))
         _var_f("phips", ("ns",), np.asarray(wout.phips))
+        _var_f("iotaf", ("ns",), np.asarray(wout.iotaf))
+        _var_f("iotas", ("ns",), np.asarray(wout.iotas))
 
         # Nyquist Fourier fields.
         _var_f("gmnc", ("ns", "mnmax_nyq"), np.asarray(wout.gmnc))
@@ -325,15 +333,128 @@ def assert_main_modes_match_wout(*, wout: WoutData) -> None:
 
 
 def state_from_wout(wout: WoutData) -> VMECState:
-    """Build a :class:`~vmec_jax.state.VMECState` from `wout` Fourier coefficients."""
+    """Build a :class:`~vmec_jax.state.VMECState` from `wout` Fourier coefficients.
+
+    Notes
+    -----
+    VMEC's ``wout`` files do **not** store the internal lambda coefficients in the
+    same units VMEC uses in ``bcovar`` / ``totzsps``.
+
+    In ``wrout.f`` VMEC writes (schematically, for each radial surface ``js``)::
+
+        lmns_wout(:,js) = (lmns_internal(:,js) / phipf(js)) * lamscale
+
+    to preserve an older output convention.
+
+    For parity-style kernels that re-use VMEC's ``bcovar`` formulas, we therefore
+    invert this scaling when constructing the state:
+
+        lmns_internal = lmns_wout * phipf / lamscale
+    """
     assert_main_modes_match_wout(wout=wout)
     layout = StateLayout(ns=wout.ns, K=int(wout.xm.size), lasym=bool(wout.lasym))
+
+    # Reconstruct VMEC's internal lambda coefficients from the `wout` convention.
+    # See `VMEC2000/Sources/Input_Output/wrout.f` (comment: "IF B^v ~ phip + lamu,
+    # MUST DIVIDE BY phipf(js) below to maintain old-style format").
+    from .field import lamscale_from_phips
+
+    ns = int(wout.ns)
+    if ns < 2:
+        s = np.asarray([0.0], dtype=float)
+    else:
+        s = np.linspace(0.0, 1.0, ns, dtype=float)
+    lamscale = float(np.asarray(lamscale_from_phips(wout.phips, s)))
+    if lamscale == 0.0:
+        lam_scale = np.zeros((ns,), dtype=float)
+    else:
+        lam_scale = np.asarray(wout.phipf, dtype=float) / lamscale  # (ns,)
+
+    # VMEC writes lambda in a backward-compatible *half-mesh* convention (wrout.f),
+    # which is not the internal full-mesh representation used by `totzsps`/`bcovar`.
+    # We reproduce VMEC's own recovery logic from `load_xc_from_wout.f`:
+    #   - undo the half-mesh interpolation (recurrence in `js`)
+    #   - multiply by `phipf(js)` (undo old-style division)
+    #   - divide by `lamscale` (undo old-style multiply)
+    #
+    # This yields lambda coefficients that are consistent with VMEC's internal
+    # `bcovar` formulas when used with our `lamscale` scaling.
+    def _lambda_full_from_wout(*, lam_wout: np.ndarray, m_modes: np.ndarray, phipf: np.ndarray, lamscale: float) -> np.ndarray:
+        lam_wout = np.asarray(lam_wout, dtype=float)
+        if lam_wout.ndim != 2 or lam_wout.shape[0] != ns:
+            raise ValueError("Expected lam_wout with shape (ns, K)")
+        m_modes = np.asarray(m_modes, dtype=int)
+        if m_modes.ndim != 1 or m_modes.shape[0] != lam_wout.shape[1]:
+            raise ValueError("Expected m_modes with shape (K,)")
+        phipf = np.asarray(phipf, dtype=float)
+        if phipf.shape != (ns,):
+            raise ValueError("Expected phipf with shape (ns,)")
+        if ns < 2:
+            return lam_wout.copy()
+
+        hs = float(s[1] - s[0])
+        # Fortran-style 1-based arrays for sm/sp (profil1d.f).
+        sqrts_f = np.zeros((ns + 1,), dtype=float)
+        shalf_f = np.zeros((ns + 1,), dtype=float)
+        for i in range(1, ns + 1):
+            sqrts_f[i] = np.sqrt(max(hs * float(i - 1), 0.0))
+            shalf_f[i] = np.sqrt(hs * abs(float(i) - 1.5))
+        sqrts_f[ns] = 1.0  # avoid roundoff at boundary
+
+        sm_f = np.zeros((ns + 1,), dtype=float)
+        sp_f = np.zeros((ns + 1,), dtype=float)  # sp(0) exists in VMEC but is always 0
+        for i in range(2, ns + 1):
+            sm_f[i] = shalf_f[i] / sqrts_f[i] if sqrts_f[i] != 0.0 else 0.0
+            if i < ns:
+                sp_f[i] = shalf_f[i + 1] / sqrts_f[i] if sqrts_f[i] != 0.0 else 0.0
+            else:
+                sp_f[i] = 1.0 / sqrts_f[i] if sqrts_f[i] != 0.0 else 0.0
+        sm_f[1] = 0.0
+        sp_f[0] = 0.0
+        sp_f[1] = sm_f[2] if ns >= 2 else 0.0
+
+        lam_full = np.zeros_like(lam_wout)
+        # Axis initialization (load_xc_from_wout.f).
+        m = m_modes
+        is_m0 = m == 0
+        is_m1 = m == 1
+        lam_full[0, is_m0] = lam_wout[1, is_m0]
+        denom_m1 = sm_f[2] + sp_f[1]
+        if denom_m1 != 0.0:
+            lam_full[0, is_m1] = 2.0 * lam_wout[1, is_m1] / denom_m1
+        lam_full[0, ~(is_m0 | is_m1)] = 0.0
+
+        # Undo the half-mesh interpolation.
+        for mval in range(0, int(np.max(m_modes)) + 1):
+            mask = m_modes == mval
+            if not np.any(mask):
+                continue
+            if (mval % 2) == 0:
+                for js in range(2, ns + 1):
+                    lam_full[js - 1, mask] = 2.0 * lam_wout[js - 1, mask] - lam_full[js - 2, mask]
+            else:
+                for js in range(2, ns + 1):
+                    denom = sm_f[js]
+                    if denom == 0.0:
+                        lam_full[js - 1, mask] = 0.0
+                    else:
+                        lam_full[js - 1, mask] = (2.0 * lam_wout[js - 1, mask] - sp_f[js - 1] * lam_full[js - 2, mask]) / denom
+
+        # Undo the old-style `phipf` division and `lamscale` multiply done in `wrout.f`.
+        lam_full[1:, :] = lam_full[1:, :] * phipf[1:, None]
+        if lamscale != 0.0:
+            lam_full = lam_full / float(lamscale)
+        return lam_full
+
+    lmns_full = _lambda_full_from_wout(lam_wout=np.asarray(wout.lmns), m_modes=np.asarray(wout.xm), phipf=np.asarray(wout.phipf), lamscale=lamscale)
+    lmnc_full = _lambda_full_from_wout(lam_wout=np.asarray(wout.lmnc), m_modes=np.asarray(wout.xm), phipf=np.asarray(wout.phipf), lamscale=lamscale)
+
     return VMECState(
         layout=layout,
         Rcos=wout.rmnc,
         Rsin=wout.rmns,
         Zcos=wout.zmnc,
         Zsin=wout.zmns,
-        Lcos=wout.lmnc,
-        Lsin=wout.lmns,
+        Lcos=lmnc_full,
+        Lsin=lmns_full,
     )

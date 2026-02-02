@@ -112,4 +112,13 @@ def internal_odd_from_physical(phys_odd, s, *, eps: float = 1e-14):
     s = jnp.asarray(s)
     sh = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
     mask = (sh > eps).astype(jnp.asarray(phys_odd).dtype)
-    return jnp.asarray(phys_odd) * mask / jnp.where(sh > eps, sh, 1.0)
+    out = jnp.asarray(phys_odd) * mask / jnp.where(sh > eps, sh, 1.0)
+
+    # VMEC's `totzsps` performs an origin extrapolation for m=1 modes, effectively
+    # defining the internal odd field on the axis by copying from js=2. For our
+    # real-space odd field (which can include multiple odd-m contributions), the
+    # corresponding stable convention is:
+    #   odd_internal(js=1) := odd_internal(js=2)
+    if out.shape[0] >= 2:
+        out = out.at[0].set(out[1])
+    return out

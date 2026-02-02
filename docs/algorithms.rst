@@ -111,7 +111,7 @@ We validate against ``wout`` Nyquist Fourier coefficients for ``sqrtg`` and
 ``bsup*`` and integrate to obtain ``wb``.
 
 Step-10 parity building blocks: forces, transforms, and constraints
-------------------------------------------------------------------
+------------------------------------------------------------------------
 
 VMEC's reported force residual scalars (``fsqr``, ``fsqz``, ``fsql``) are
 computed from *Fourier-space* force arrays produced by a specific sequence of
