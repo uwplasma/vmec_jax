@@ -64,6 +64,10 @@ class WoutData:
     bsubvmnc: np.ndarray
     bsubvmns: np.ndarray
 
+    # nyquist Fourier coefficients for |B|
+    bmnc: np.ndarray
+    bmns: np.ndarray
+
     wb: float
     volume_p: float
 
@@ -133,6 +137,9 @@ def read_wout(path: str | Path) -> WoutData:
         bsubvmnc = np.asarray(ds.variables.get("bsubvmnc", np.zeros_like(bsupvmnc))[:])
         bsubvmns = np.asarray(ds.variables.get("bsubvmns", np.zeros_like(bsupvmnc))[:])
 
+        bmnc = np.asarray(ds.variables.get("bmnc", np.zeros_like(gmnc))[:])
+        bmns = np.asarray(ds.variables.get("bmns", np.zeros_like(gmnc))[:])
+
         wb = float(ds.variables["wb"][:])
         volume_p = float(ds.variables["volume_p"][:])
         gamma = float(ds.variables.get("gamma", 0.0)[:]) if "gamma" in ds.variables else 0.0
@@ -183,6 +190,8 @@ def read_wout(path: str | Path) -> WoutData:
         bsubumns=bsubumns,
         bsubvmnc=bsubvmnc,
         bsubvmns=bsubvmns,
+        bmnc=bmnc,
+        bmns=bmns,
         wb=wb,
         volume_p=volume_p,
         gamma=gamma,

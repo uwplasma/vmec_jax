@@ -109,6 +109,14 @@ Print vmec_jax force-like residual scalars (derived from objective gradients) al
 python examples/3_Advanced/05_force_residual_report.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --hi-res
 ```
 
+## Step-10: VMEC2000 parity diagnostics (|B|)
+
+Compare `wout` |B| Fourier coefficients (`bmnc/bmns`) against |B| reconstructed from `wout` Nyquist `bsup*` and the metric (writes figures; requires `netCDF4` + `matplotlib`):
+
+```bash
+python examples/2_Intermediate/04_bmag_parity_figures.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --outdir figures_bmag_parity
+```
+
 ## Step-3 outputs
 
 The step-3 script writes a `.npz` with:

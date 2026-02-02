@@ -41,6 +41,10 @@ Compare covariant B components (``bsubu``, ``bsubv``) reconstructed from the met
 
   python examples/2_Intermediate/03_bsub_parity_figures.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --outdir figures_bsub_parity
 
+Compare ``|B|`` parity (bmnc/bmns) against reconstructed ``|B|`` (writes figures; requires ``netCDF4`` + ``matplotlib``)::
+
+  python examples/2_Intermediate/04_bmag_parity_figures.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --outdir figures_bmag_parity
+
 Force-like residual report (Step-10 target; advanced)::
 
   python examples/3_Advanced/05_force_residual_report.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --hi-res
