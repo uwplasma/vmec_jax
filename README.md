@@ -125,6 +125,14 @@ Compare `wout` |B| Fourier coefficients (`bmnc/bmns`) against |B| reconstructed 
 python examples/2_Intermediate/04_bmag_parity_figures.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --outdir figures_bmag_parity
 ```
 
+## Step-10: VMEC2000 output parity (wout writer)
+
+Roundtrip a reference ``wout_*.nc`` file through vmec_jax's minimal writer (requires `netCDF4`):
+
+```bash
+python examples/3_Advanced/06_wout_roundtrip.py --wout examples/wout_circular_tokamak_reference.nc --out wout_roundtrip.nc
+```
+
 ## Step-3 outputs
 
 The step-3 script writes a `.npz` with:

@@ -49,6 +49,10 @@ Compare ``|B|`` parity (bmnc/bmns) against reconstructed ``|B|`` (writes figures
 
   python examples/2_Intermediate/04_bmag_parity_figures.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --outdir figures_bmag_parity
 
+Roundtrip a reference ``wout_*.nc`` file through vmec_jax's minimal writer (requires ``netCDF4``)::
+
+  python examples/3_Advanced/06_wout_roundtrip.py --wout examples/wout_circular_tokamak_reference.nc --out wout_roundtrip.nc
+
 Force-like residual report (Step-10 target; advanced)::
 
   python examples/3_Advanced/05_force_residual_report.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --hi-res

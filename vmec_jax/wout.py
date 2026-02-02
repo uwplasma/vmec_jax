@@ -206,6 +206,113 @@ def read_wout(path: str | Path) -> WoutData:
     )
 
 
+def write_wout(path: str | Path, wout: WoutData, *, overwrite: bool = False) -> None:
+    """Write a minimal VMEC-style ``wout_*.nc`` file.
+
+    This is intended for:
+    - round-tripping reference ``wout`` files (read -> write -> read),
+    - emitting VMEC-compatible output containers from vmec_jax as parity work progresses.
+
+    Notes
+    -----
+    - Only the subset of variables represented in :class:`WoutData` is written.
+    - ``pres`` and ``presf`` are written in **Pa** (VMEC convention: netCDF stores
+      pressure divided by ``mu0``). Internally :class:`WoutData` stores pressure in
+      VMEC internal units (``mu0*Pa``).
+    """
+    path = Path(path)
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"{path} exists (pass overwrite=True to overwrite)")
+
+    try:
+        import netCDF4  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise ImportError("netCDF4 is required to write wout files (pip install -e .[netcdf])") from e
+
+    # Dimensions.
+    ns = int(wout.ns)
+    mnmax = int(np.asarray(wout.xm).size)
+    mnmax_nyq = int(np.asarray(wout.xm_nyq).size)
+    nstore = int(np.asarray(wout.fsqt).size)
+
+    # Convert pressures back to VMEC netcdf convention (Pa).
+    pres_pa = np.asarray(wout.pres) / MU0
+    presf_pa = np.asarray(wout.presf) / MU0
+
+    with netCDF4.Dataset(path, mode="w", format="NETCDF4") as ds:
+        ds.createDimension("ns", ns)
+        ds.createDimension("mnmax", mnmax)
+        ds.createDimension("mnmax_nyq", mnmax_nyq)
+        ds.createDimension("nstore_seq", nstore)
+
+        def _var_i(name: str, dims: tuple[str, ...], data: np.ndarray) -> None:
+            v = ds.createVariable(name, "i4", dims)
+            v[:] = np.asarray(data, dtype=np.int32)
+
+        def _var_f(name: str, dims: tuple[str, ...], data: np.ndarray) -> None:
+            v = ds.createVariable(name, "f8", dims)
+            v[:] = np.asarray(data, dtype=np.float64)
+
+        # Scalars.
+        _var_i("ns", (), np.asarray(ns))
+        _var_i("mpol", (), np.asarray(int(wout.mpol)))
+        _var_i("ntor", (), np.asarray(int(wout.ntor)))
+        _var_i("nfp", (), np.asarray(int(wout.nfp)))
+        _var_i("signgs", (), np.asarray(int(wout.signgs)))
+        _var_i("lasym__logical__", (), np.asarray(int(bool(wout.lasym))))
+
+        _var_f("wb", (), np.asarray(float(wout.wb)))
+        _var_f("volume_p", (), np.asarray(float(wout.volume_p)))
+        _var_f("gamma", (), np.asarray(float(wout.gamma)))
+        _var_f("wp", (), np.asarray(float(wout.wp)))
+        _var_f("fsqr", (), np.asarray(float(wout.fsqr)))
+        _var_f("fsqz", (), np.asarray(float(wout.fsqz)))
+        _var_f("fsql", (), np.asarray(float(wout.fsql)))
+
+        # Mode tables.
+        _var_i("xm", ("mnmax",), np.asarray(wout.xm))
+        _var_i("xn", ("mnmax",), np.asarray(wout.xn))
+        _var_i("xm_nyq", ("mnmax_nyq",), np.asarray(wout.xm_nyq))
+        _var_i("xn_nyq", ("mnmax_nyq",), np.asarray(wout.xn_nyq))
+
+        # Geometry coefficients (full mesh).
+        _var_f("rmnc", ("ns", "mnmax"), np.asarray(wout.rmnc))
+        _var_f("rmns", ("ns", "mnmax"), np.asarray(wout.rmns))
+        _var_f("zmnc", ("ns", "mnmax"), np.asarray(wout.zmnc))
+        _var_f("zmns", ("ns", "mnmax"), np.asarray(wout.zmns))
+        _var_f("lmnc", ("ns", "mnmax"), np.asarray(wout.lmnc))
+        _var_f("lmns", ("ns", "mnmax"), np.asarray(wout.lmns))
+
+        # Flux functions / profiles.
+        _var_f("phipf", ("ns",), np.asarray(wout.phipf))
+        _var_f("chipf", ("ns",), np.asarray(wout.chipf))
+        _var_f("phips", ("ns",), np.asarray(wout.phips))
+
+        # Nyquist Fourier fields.
+        _var_f("gmnc", ("ns", "mnmax_nyq"), np.asarray(wout.gmnc))
+        _var_f("gmns", ("ns", "mnmax_nyq"), np.asarray(wout.gmns))
+        _var_f("bsupumnc", ("ns", "mnmax_nyq"), np.asarray(wout.bsupumnc))
+        _var_f("bsupumns", ("ns", "mnmax_nyq"), np.asarray(wout.bsupumns))
+        _var_f("bsupvmnc", ("ns", "mnmax_nyq"), np.asarray(wout.bsupvmnc))
+        _var_f("bsupvmns", ("ns", "mnmax_nyq"), np.asarray(wout.bsupvmns))
+
+        _var_f("bsubumnc", ("ns", "mnmax_nyq"), np.asarray(wout.bsubumnc))
+        _var_f("bsubumns", ("ns", "mnmax_nyq"), np.asarray(wout.bsubumns))
+        _var_f("bsubvmnc", ("ns", "mnmax_nyq"), np.asarray(wout.bsubvmnc))
+        _var_f("bsubvmns", ("ns", "mnmax_nyq"), np.asarray(wout.bsubvmns))
+
+        _var_f("bmnc", ("ns", "mnmax_nyq"), np.asarray(wout.bmnc))
+        _var_f("bmns", ("ns", "mnmax_nyq"), np.asarray(wout.bmns))
+
+        # 1D radial fields.
+        _var_f("vp", ("ns",), np.asarray(wout.vp))
+        _var_f("pres", ("ns",), np.asarray(pres_pa))
+        _var_f("presf", ("ns",), np.asarray(presf_pa))
+
+        # Iteration trace (optional).
+        _var_f("fsqt", ("nstore_seq",), np.asarray(wout.fsqt))
+
+
 def assert_main_modes_match_wout(*, wout: WoutData) -> None:
     """Ensure vmec_jax mode ordering matches the `wout` file (important for parity)."""
     modes = vmec_mode_table(wout.mpol, wout.ntor)
