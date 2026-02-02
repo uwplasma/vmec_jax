@@ -41,6 +41,80 @@ class VmecFsqScalars:
     fsql: float
 
 
+def _constrain_m1_pair(*, gcr: Any, gcz: Any, lconm1: bool) -> tuple[Any, Any]:
+    """VMEC's `constrain_m1` transform for the m=1 polar constraint.
+
+    In `VMEC2000/Sources/General/residue.f90:constrain_m1_par`, VMEC optionally
+    applies a polar constraint by rotating the (R,Z) force pair into
+    (gcr+gcz, gcr-gcz)/sqrt(2) and then setting the second component to zero
+    once close to convergence.
+
+    For Step-10 parity work we apply the rotation when `lconm1=True` and always
+    zero the constrained component (this matches the converged-equilibrium
+    regime used for regression against bundled `wout_*.nc` files).
+    """
+    gcr = jnp.asarray(gcr)
+    gcz = jnp.asarray(gcz)
+    if bool(lconm1):
+        osqrt2 = jnp.asarray(1.0 / np.sqrt(2.0), dtype=gcr.dtype)
+        tmp = gcr
+        gcr = osqrt2 * (gcr + gcz)
+        gcz = osqrt2 * (tmp - gcz)
+    gcz = jnp.zeros_like(gcz)
+    return gcr, gcz
+
+
+def vmec_apply_m1_constraints(
+    *,
+    frzl: TomnspsRZL,
+    lconm1: bool = True,
+) -> TomnspsRZL:
+    """Apply VMEC's converged-iteration m=1 polar constraints to Fourier forces.
+
+    VMEC calls `constrain_m1_par` on two block pairs prior to computing `fsqr/fsqz`:
+
+    - 3D symmetric constraint: (R_ss, Z_cs)  -> enforce Z_cs(m=1) ≈ 0
+    - asymmetric constraint:   (R_sc, Z_cc)  -> enforce Z_cc(m=1) ≈ 0
+
+    See `VMEC2000/Sources/General/residue.f90`.
+    """
+    mpol = int(jnp.asarray(frzl.frcc).shape[1])
+    if mpol <= 1:
+        return frzl
+
+    frss = frzl.frss
+    fzcs = frzl.fzcs
+    frsc = getattr(frzl, "frsc", None)
+    fzcc = getattr(frzl, "fzcc", None)
+
+    # 3D: constrain (rss,zcs) at m=1.
+    if frss is not None and fzcs is not None:
+        gcr, gcz = _constrain_m1_pair(gcr=frss[:, 1, :], gcz=fzcs[:, 1, :], lconm1=lconm1)
+        frss = jnp.asarray(frss).at[:, 1, :].set(gcr)
+        fzcs = jnp.asarray(fzcs).at[:, 1, :].set(gcz)
+
+    # lasym: constrain (rsc,zcc) at m=1.
+    if frsc is not None and fzcc is not None:
+        gcr, gcz = _constrain_m1_pair(gcr=frsc[:, 1, :], gcz=fzcc[:, 1, :], lconm1=lconm1)
+        frsc = jnp.asarray(frsc).at[:, 1, :].set(gcr)
+        fzcc = jnp.asarray(fzcc).at[:, 1, :].set(gcz)
+
+    return TomnspsRZL(
+        frcc=frzl.frcc,
+        frss=frss,
+        fzsc=frzl.fzsc,
+        fzcs=fzcs,
+        flsc=frzl.flsc,
+        flcs=frzl.flcs,
+        frsc=frsc,
+        frcs=getattr(frzl, "frcs", None),
+        fzcc=fzcc,
+        fzss=getattr(frzl, "fzss", None),
+        flcc=getattr(frzl, "flcc", None),
+        flss=getattr(frzl, "flss", None),
+    )
+
+
 def vmec_wint_from_trig(trig: VmecTrigTables, *, nzeta: int) -> jnp.ndarray:
     """Return VMEC's `wint` angular integration weights as a (ntheta3,nzeta) array."""
     w_theta = jnp.asarray(trig.cosmui3[:, 0]) / jnp.asarray(trig.mscale[0])
@@ -96,13 +170,22 @@ def vmec_force_norms_from_bcovar(*, bc, trig: VmecTrigTables, wout, s) -> VmecFo
     return VmecForceNorms(fnorm=float(fnorm), fnormL=float(fnormL), r1=float(r1))
 
 
-def vmec_fsq_from_tomnsps(*, frzl: TomnspsRZL, norms: VmecForceNorms) -> VmecFsqScalars:
+def vmec_fsq_from_tomnsps(
+    *,
+    frzl: TomnspsRZL,
+    norms: VmecForceNorms,
+    lconm1: bool = True,
+    apply_m1_constraints: bool = True,
+) -> VmecFsqScalars:
     """Compute (fsqr,fsqz,fsql) from VMEC-style tomnsps outputs.
 
     When `lasym=True`, VMEC also computes and includes the asymmetric blocks
     produced by `tomnspa`. In this repo those blocks (if present) are carried on
     the same dataclass as optional fields.
     """
+    if bool(apply_m1_constraints):
+        frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(lconm1))
+
     gcr2 = jnp.sum(jnp.asarray(frzl.frcc) ** 2)
     gcz2 = jnp.sum(jnp.asarray(frzl.fzsc) ** 2)
     gcl2 = jnp.sum(jnp.asarray(frzl.flsc) ** 2)

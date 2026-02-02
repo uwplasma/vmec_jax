@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -49,12 +48,13 @@ def main():
         cfg, indata = load_config(str(input_path))
         wout = read_wout(wout_path)
 
-        cfg_hi = replace(cfg, ntheta=max(int(cfg.ntheta), 128), nzeta=max(int(cfg.nzeta), 128))
-        grid = vmec_angle_grid(ntheta=int(cfg_hi.ntheta), nzeta=int(cfg_hi.nzeta), nfp=int(wout.nfp), lasym=bool(wout.lasym))
-        static = build_static(cfg_hi, grid=grid)
+        # For true output-parity comparisons against the bundled `wout` files,
+        # use the same (ntheta,nzeta) grid VMEC used to compute `fsqr/fsqz/fsql`.
+        grid = vmec_angle_grid(ntheta=int(cfg.ntheta), nzeta=int(cfg.nzeta), nfp=int(wout.nfp), lasym=bool(wout.lasym))
+        static = build_static(cfg, grid=grid)
         trig = vmec_trig_tables(
-            ntheta=int(cfg_hi.ntheta),
-            nzeta=int(cfg_hi.nzeta),
+            ntheta=int(cfg.ntheta),
+            nzeta=int(cfg.nzeta),
             nfp=int(wout.nfp),
             mmax=int(wout.mpol) - 1,
             nmax=int(wout.ntor),
@@ -63,7 +63,7 @@ def main():
 
         st = state_from_wout(wout)
         k = vmec_forces_rz_from_wout(state=st, static=static, wout=wout, indata=indata)
-        rzl = vmec_residual_internal_from_kernels(k, cfg_ntheta=int(cfg_hi.ntheta), cfg_nzeta=int(cfg_hi.nzeta), wout=wout, trig=trig)
+        rzl = vmec_residual_internal_from_kernels(k, cfg_ntheta=int(cfg.ntheta), cfg_nzeta=int(cfg.nzeta), wout=wout, trig=trig)
         frzl = TomnspsRZL(
             frcc=rzl.frcc,
             frss=rzl.frss,
@@ -79,7 +79,7 @@ def main():
             flss=rzl.flss,
         )
         norms = vmec_force_norms_from_bcovar(bc=k.bc, trig=trig, wout=wout, s=static.s)
-        scal = vmec_fsq_from_tomnsps(frzl=frzl, norms=norms)
+        scal = vmec_fsq_from_tomnsps(frzl=frzl, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
 
         print(f"== {name} ==")
         print(f"  ref: fsqr={wout.fsqr:.3e}  fsqz={wout.fsqz:.3e}  fsql={wout.fsql:.3e}")
@@ -94,8 +94,8 @@ def main():
             fsqr_ref=float(wout.fsqr),
             fsqz_ref=float(wout.fsqz),
             fsql_ref=float(wout.fsql),
-            ntheta=int(cfg_hi.ntheta),
-            nzeta=int(cfg_hi.nzeta),
+            ntheta=int(cfg.ntheta),
+            nzeta=int(cfg.nzeta),
         )
 
 
