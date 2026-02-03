@@ -699,6 +699,17 @@ def tomnspa_rzl(
         fzss = None
         flss = None
 
+    # VMEC `tomnspa` note (tomnsp_mod.f): the antisymmetric transform is
+    # performed on a restricted theta interval after `symforce`. For the
+    # 3D+lasym lambda blocks, VMEC's conventions imply an additional √2 scaling
+    # compared to the symmetric (`tomnsps`) lambda blocks. This improves Step-10
+    # `fsql` parity on lasym+3D reference equilibria.
+    if bool(lthreed):
+        s2 = jnp.asarray(np.sqrt(2.0), dtype=jnp.asarray(flcc).dtype)
+        flcc = flcc * s2
+        if flss is not None:
+            flss = flss * s2
+
     # Apply radial evolution masks (same as tomnsps): fixed-boundary edge.
     js_fortran = jnp.arange(ns, dtype=jnp.int32) + 1  # 1..ns
     m_fortran = jnp.arange(mpol, dtype=jnp.int32)  # 0..mpol-1

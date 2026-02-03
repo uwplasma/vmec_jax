@@ -72,7 +72,7 @@ The scoreboard below reports relative errors
    * - LandremanSenguptaPlunk_section5p3_low_res
      - ~1.1e-1
      - ~8.9e-2
-     - ~3.2e-1
+     - ~1.6e-2
 
 Notes:
 

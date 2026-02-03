@@ -24,7 +24,7 @@ from vmec_jax.wout import read_wout, state_from_wout
         ("circular_tokamak", "examples/input.circular_tokamak", "examples/wout_circular_tokamak_reference.nc", 0.10, 0.10),
         ("up_down_asymmetric_tokamak", "examples/input.up_down_asymmetric_tokamak", "examples/wout_up_down_asymmetric_tokamak_reference.nc", 1.00, 0.50),
         ("li383_low_res", "examples/input.li383_low_res", "examples/wout_li383_low_res_reference.nc", 0.30, 0.30),
-        ("lsp_low_res", "examples/input.LandremanSenguptaPlunk_section5p3_low_res", "examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc", 0.25, 0.50),
+        ("lsp_low_res", "examples/input.LandremanSenguptaPlunk_section5p3_low_res", "examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc", 0.25, 0.05),
     ],
 )
 def test_step10_getfsq_parity_against_wout(case_name: str, input_rel: str, wout_rel: str, rtol_rz: float, rtol_l: float):
