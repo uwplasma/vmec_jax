@@ -132,9 +132,9 @@ def equif_from_bcovar(*, bc, trig: VmecTrigTables, wout, s: Any) -> jnp.ndarray:
     pres_fwd = jnp.concatenate([pres[1:], pres[-1:]], axis=0)
     presgrad = (pres_fwd - pres) * ohs
 
-    # IMPORTANT: `wout_*.nc` stores `phipf/chipf` with an extra `2π*signgs` factor
-    # (see `wrout.f`: `twopi*signgs*phipf`, `twopi*signgs*chipf`). Internally
-    # (e.g. `fbal.f`) VMEC uses the unscaled arrays. Undo that scaling here.
+    # VMEC's `wout_*.nc` stores `phipf/chipf` multiplied by `2π*signgs`.
+    # Internally (e.g. `fbal.f`) VMEC uses the unscaled arrays, so undo the
+    # factor here.
     phipf_wout = jnp.asarray(getattr(wout, "phipf", np.zeros((ns,), dtype=float)), dtype=jnp.float64)
     chipf_wout = jnp.asarray(getattr(wout, "chipf", np.zeros((ns,), dtype=float)), dtype=jnp.float64)
     sgn = float(getattr(wout, "signgs", 1))

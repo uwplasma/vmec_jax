@@ -171,4 +171,3 @@ def test_vmec2000_step10_scalars_match_vmec_jax_for_circular_tokamak(tmp_path: P
     assert abs(scal.fsqr - float(wout.fsqr)) / denom_r < 0.10
     assert abs(scal.fsqz - float(wout.fsqz)) / denom_z < 0.10
     assert abs(scal.fsql - float(wout.fsql)) / denom_l < 0.10
-
