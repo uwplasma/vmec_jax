@@ -79,6 +79,9 @@ Notes:
 - The remaining mismatches are primarily on 3D cases (``li383_low_res`` and
   ``LandremanSenguptaPlunk_section5p3_low_res``), reflecting that Step-10
   conventions are still being ported and tightened.
+- For debugging/attribution during the parity push, ``vmec_jax.vmec_residue``
+  provides ``vmec_fsq_sums_from_tomnsps`` (per-block sum-of-squares) and a
+  small internal-consistency regression in ``tests/test_step10_getfsq_block_sums.py``.
 - These numbers are expected to change as parity improves; the authoritative
   regression is ``tests/test_step10_residue_getfsq_parity.py``.
 

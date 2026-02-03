@@ -41,6 +41,18 @@ class VmecFsqScalars:
     fsql: float
 
 
+@dataclass(frozen=True)
+class VmecFsqSums:
+    """Unnormalized sum-of-squares pieces used by `getfsq`-style scalars."""
+
+    gcr2: float
+    gcz2: float
+    gcl2: float
+    gcr2_blocks: dict[str, float]
+    gcz2_blocks: dict[str, float]
+    gcl2_blocks: dict[str, float]
+
+
 def _constrain_m1_pair(*, gcr: Any, gcz: Any, lconm1: bool) -> tuple[Any, Any]:
     """VMEC's `constrain_m1` transform for the m=1 polar constraint.
 
@@ -154,8 +166,8 @@ def vmec_force_norms_from_bcovar(*, bc, trig: VmecTrigTables, wout, s) -> VmecFo
     r12 = jnp.asarray(bc.jac.r12)
     guu_r12sq = (guu * (r12 * r12)).astype(jnp.float64)
 
-    # Exclude axis surface (js=1 in Fortran -> index 0 here). In VMEC, `wint` on
-    # the axis is also zero, but we exclude explicitly for robustness.
+    # Exclude axis surface (js=1 in Fortran -> index 0 here). In VMEC's parallel
+    # path, the `fnorm` surface sum starts at js=2.
     denom_f = float(jnp.sum((guu_r12sq[1:] * wint3).astype(jnp.float64)))
     fnorm = 1.0 / (denom_f * (r2 * r2)) if denom_f != 0.0 else float("inf")
 
@@ -214,3 +226,55 @@ def vmec_fsq_from_tomnsps(
     fsqz = norms.r1 * norms.fnorm * float(gcz2)
     fsql = norms.fnormL * float(gcl2)
     return VmecFsqScalars(fsqr=float(fsqr), fsqz=float(fsqz), fsql=float(fsql))
+
+
+def vmec_fsq_sums_from_tomnsps(
+    *,
+    frzl: TomnspsRZL,
+    lconm1: bool = True,
+    apply_m1_constraints: bool = True,
+) -> VmecFsqSums:
+    """Return the sum-of-squares components used in `vmec_fsq_from_tomnsps`.
+
+    This is a diagnostic helper to attribute `fsqr/fsqz/fsql` differences to
+    particular tomnsps/tomnspa blocks during the parity push.
+    """
+    if bool(apply_m1_constraints):
+        frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(lconm1))
+
+    gcr2_blocks: dict[str, float] = {}
+    gcz2_blocks: dict[str, float] = {}
+    gcl2_blocks: dict[str, float] = {}
+
+    def _add_block(d: dict[str, float], name: str, a: Any | None):
+        if a is None:
+            return
+        d[name] = float(jnp.sum(jnp.asarray(a) ** 2))
+
+    # Symmetric blocks (tomnsps).
+    _add_block(gcr2_blocks, "frcc", frzl.frcc)
+    _add_block(gcr2_blocks, "frss", frzl.frss)
+    _add_block(gcz2_blocks, "fzsc", frzl.fzsc)
+    _add_block(gcz2_blocks, "fzcs", frzl.fzcs)
+    _add_block(gcl2_blocks, "flsc", frzl.flsc)
+    _add_block(gcl2_blocks, "flcs", frzl.flcs)
+
+    # Asymmetric blocks (tomnspa, lasym=True).
+    _add_block(gcr2_blocks, "frsc", getattr(frzl, "frsc", None))
+    _add_block(gcr2_blocks, "frcs", getattr(frzl, "frcs", None))
+    _add_block(gcz2_blocks, "fzcc", getattr(frzl, "fzcc", None))
+    _add_block(gcz2_blocks, "fzss", getattr(frzl, "fzss", None))
+    _add_block(gcl2_blocks, "flcc", getattr(frzl, "flcc", None))
+    _add_block(gcl2_blocks, "flss", getattr(frzl, "flss", None))
+
+    gcr2 = float(sum(gcr2_blocks.values()))
+    gcz2 = float(sum(gcz2_blocks.values()))
+    gcl2 = float(sum(gcl2_blocks.values()))
+    return VmecFsqSums(
+        gcr2=gcr2,
+        gcz2=gcz2,
+        gcl2=gcl2,
+        gcr2_blocks=gcr2_blocks,
+        gcz2_blocks=gcz2_blocks,
+        gcl2_blocks=gcl2_blocks,
+    )

@@ -24,7 +24,7 @@ import numpy as np
 
 from ._compat import jnp
 from .field import TWOPI
-from .field import bsup_from_sqrtg_lambda, lamscale_from_phips
+from .field import lamscale_from_phips
 from .field import chips_from_chipf
 from .vmec_jacobian import VmecHalfMeshJacobian, jacobian_half_mesh_from_parity
 from .fourier import eval_fourier, eval_fourier_dtheta, eval_fourier_dzeta_phys
@@ -204,30 +204,65 @@ def vmec_bcovar_half_mesh_from_wout(
     lam_u = _half_mesh_from_even_odd(parity.Lt_even, Lu1, s=s)
     lam_v = _half_mesh_from_even_odd(parity.Lp_even, Lv1, s=s)
 
-    # VMEC uses -lam_v internally (see totzsps), but the public formula for B^u
-    # in terms of lambda uses lam_v directly:
-    #   bsupu = overg * (chipf - lamscale * lam_v)
+    # ---------------------------------------------------------------------
+    # Contravariant B components (bsupu, bsupv) on the half mesh.
+    # ---------------------------------------------------------------------
+    # VMEC does not form bsupu/bsupv from pointwise (sqrtg, lam_u, lam_v) alone.
+    # Instead, it:
+    #   1) builds full-mesh LU = d(lambda)/du and LV = -d(lambda)/dv (even/odd-m),
+    #   2) scales LU/LV by lamscale and adds phipf to LU_even,
+    #   3) averages (LU,LV) from full -> half radial mesh using pshalf,
+    #   4) adds the full-mesh flux function chips(js) via `add_fluxes`.
+    #
+    # See `VMEC2000/Sources/General/bcovar.f` and `add_fluxes.f90`.
     lamscale = lamscale_from_phips(wout.phips, s)
-    # VMEC adds the **full-mesh** flux function `chip(js)=chips(js)` to bsupu in
-    # `add_fluxes`, while `wout` stores the derived array `chipf(js)`. For parity
-    # work we reconstruct `chips` from `chipf` using VMEC's own averaging map.
+
+    # VMEC adds the **full-mesh** flux function `chips(js)` to bsupu in
+    # `add_fluxes`, while `wout` commonly stores the half-mesh array `chipf`.
     chipf_out = getattr(wout, "chipf", None)
     if chipf_out is not None:
-        chip_eff = chips_from_chipf(chipf_out)
+        chips_eff = chips_from_chipf(chipf_out)
     else:
-        # Fallback: approximate chips from full-mesh iota and phipf when chipf
-        # is not available (rare for modern VMEC netcdf outputs).
-        chip_eff = jnp.asarray(getattr(wout, "iotaf", getattr(wout, "iotas", 0.0))) * jnp.asarray(wout.phipf)
+        chips_eff = jnp.asarray(getattr(wout, "iotaf", getattr(wout, "iotas", 0.0))) * jnp.asarray(wout.phipf)
 
-    bsupu, bsupv = bsup_from_sqrtg_lambda(
-        sqrtg=jac.sqrtg,
-        lam_u=lam_u,
-        lam_v=lam_v,
-        phipf=wout.phipf,
-        chipf=chip_eff,
-        signgs=int(wout.signgs),
-        lamscale=lamscale,
-    )
+    # Keep the existing vmec_jax normalization for overg to preserve the tested
+    # energy/volume scaling used elsewhere in the parity suite.
+    denom = int(wout.signgs) * jac.sqrtg * jnp.asarray(TWOPI, dtype=jac.sqrtg.dtype)
+    overg = jnp.where(denom != 0, 1.0 / denom, 0.0)
+
+    # Full-mesh LU = d(lambda)/du and LV = -d(lambda)/dv in VMEC conventions.
+    lu0_full = jnp.asarray(parity.Lt_even)
+    lu1_full = jnp.asarray(Lu1)
+    lv0_full = -jnp.asarray(parity.Lp_even)
+    lv1_full = -jnp.asarray(Lv1)
+
+    # Scale by lamscale and add phipf to LU_even.
+    lu0_full = (lamscale * lu0_full) + jnp.asarray(wout.phipf)[:, None, None]
+    lu1_full = lamscale * lu1_full
+    lv0_full = lamscale * lv0_full
+    lv1_full = lamscale * lv1_full
+
+    pshalf = _pshalf_from_s(s)[:, None, None]
+
+    # Radial full->half average (Fortran: for l=2..ns).
+    bsupu = jnp.zeros_like(jac.sqrtg)
+    bsupv = jnp.zeros_like(jac.sqrtg)
+    if ns >= 2:
+        avg_lu0 = lu0_full[1:] + lu0_full[:-1]
+        avg_lu1 = lu1_full[1:] + lu1_full[:-1]
+        avg_lv0 = lv0_full[1:] + lv0_full[:-1]
+        avg_lv1 = lv1_full[1:] + lv1_full[:-1]
+
+        bsupv = bsupv.at[1:].set(0.5 * overg[1:] * (avg_lu0 + pshalf[1:] * avg_lu1))
+        bsupu = bsupu.at[1:].set(0.5 * overg[1:] * (avg_lv0 + pshalf[1:] * avg_lv1))
+
+    # `add_fluxes`: bsupu += chips*overg (chips is a 1D full-mesh flux function).
+    bsupu = bsupu + jnp.asarray(chips_eff)[:, None, None] * overg
+
+    # VMEC enforces axis bsup*=0 explicitly.
+    if ns >= 1:
+        bsupu = bsupu.at[0].set(jnp.zeros_like(bsupu[0]))
+        bsupv = bsupv.at[0].set(jnp.zeros_like(bsupv[0]))
 
     bsubu = guu * bsupu + guv * bsupv
     bsubv = guv * bsupu + gvv * bsupv
@@ -260,15 +295,8 @@ def vmec_bcovar_half_mesh_from_wout(
     lu0 = (lamscale * parity.Lt_even) + jnp.asarray(wout.phipf)[:, None, None]
     lu1 = lamscale * Lu1
 
-    # overg = 1/(signgs*sqrtg*2π). Note: jac.sqrtg can be signed; signgs makes denom positive.
-    denom = int(wout.signgs) * jac.sqrtg * jnp.asarray(TWOPI, dtype=jac.sqrtg.dtype)
-    overg = jnp.where(denom != 0, 1.0 / denom, 0.0)
-
-    # lvv on half mesh: phipog * gvv.
+    # lvv on half mesh: phipog * gvv (bcovar.f uses phipog==overg-like array).
     lvv = overg * gvv
-
-    # pshalf on half mesh.
-    pshalf = _pshalf_from_s(s)[:, None, None]
 
     # Intermediate full-mesh bsubv_e (before blending), following bcovar.f.
     bsubv_e = jnp.zeros_like(bsubv)

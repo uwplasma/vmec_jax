@@ -75,6 +75,7 @@ Concrete milestones (correctness-first):
 
 - Tighten Step-10 scalar parity on 3D cases:
   - isolate which residual blocks dominate the remaining `fsqr/fsqz/fsql` gaps (per-case decomposition by `(m,n)` and by kernel source: `A/B/C` vs constraint terms),
+  - use `vmec_jax.vmec_residue.vmec_fsq_sums_from_tomnsps` (and `tests/test_step10_getfsq_block_sums.py`) to attribute scalar changes to individual tomnsps/tomnspa blocks before/after each plumbing tweak,
   - match VMEC’s constraint-force pipeline end-to-end (especially `tcon(js)` from `bcovar/precondn` and the `alias → gcon` operator), since this is a major lever for 3D near-axis behavior.
 - Finish the missing VMEC2000 “plumbing” that affects Step-10 scalars:
   - remaining `bcovar` details that influence `forces` (e.g. exact half/full mesh handling for quantities consumed by `forces.f`),
