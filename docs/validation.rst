@@ -33,6 +33,7 @@ The tests in ``tests/`` cover:
 - stepwise regressions vs ``wout`` (Nyquist ``sqrt(g)``, ``bsup*``, scalar integrals).
 - Step-10 parity scaffolding for VMEC-style ``forces``/``tomnsps``/``getfsq``.
 - VMEC convention checks used by Step-10 kernels (e.g. ``chipf -> chips`` inversion and ``equif`` normalization parity).
+- an early end-to-end regression that a Gauss-Newton residual solver decreases a VMEC-style residual objective on ``input.circular_tokamak`` (this is *not* yet a full VMEC2000 equilibrium-parity solve).
 
 Running tests::
 

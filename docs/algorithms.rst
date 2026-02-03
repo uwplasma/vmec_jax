@@ -218,6 +218,54 @@ This is a useful subproblem and is part of VMEC’s nonlinear solve.
 
 This is implemented in ``solve_lambda_gd``.
 
+Experimental VMEC-residual solvers (not yet VMEC2000-parity)
+------------------------------------------------------------
+
+For end-to-end work we also provide *experimental* solvers that minimize a
+VMEC-style residual objective built from the Step-10 parity kernels:
+
+.. math::
+
+   W_{\mathrm{res}}(\mathbf{x})
+   =
+   w_{\mathrm{rz}}\left(\lVert F_R \rVert^2 + \lVert F_Z \rVert^2\right)
+   +
+   w_{\lambda}\lVert F_\lambda \rVert^2,
+
+where :math:`\mathbf{x}` stacks the Fourier coefficients for
+:math:`(R,Z,\lambda)`.
+
+Two variants exist:
+
+1. ``solve_fixed_boundary_lbfgs_vmec_residual`` minimizes :math:`W_{\mathrm{res}}`
+   using a simple L-BFGS loop with backtracking line search.
+2. ``solve_fixed_boundary_gn_vmec_residual`` treats :math:`W_{\mathrm{res}}` as a
+   least-squares problem and applies a Gauss-Newton step:
+
+   .. math::
+
+      (J^\top J + \mu I)\,\Delta\mathbf{x} = -J^\top \mathbf{r},
+
+   where :math:`\mathbf{r}` is the stacked residual vector and :math:`J` its Jacobian.
+   We apply conjugate gradients to the normal equations using JAX ``jvp/vjp`` to
+   form matrix-vector products without materializing :math:`J`.
+
+Current limitations (important)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+These solvers are primarily intended as a *development harness* for parity work.
+They are **not** yet guaranteed to converge to the VMEC2000 equilibrium from an
+arbitrary initial guess, because:
+
+- the Step-10 force kernels were originally ported for *output parity on a converged equilibrium*,
+  and are still being hardened for use as a general-purpose nonlinear solver objective;
+- VMEC's full nonlinear iteration includes additional iteration-dependent logic,
+  preconditioner-dependent scalings (``fnorm``/``fnormL``), and axis/constraint details
+  that are not fully reproduced yet.
+
+In other words: decreasing :math:`W_{\mathrm{res}}` is a useful milestone and a
+regression target, but it is not yet equivalent to "match VMEC2000 coefficients".
+
 Step-6/7 fixed-boundary solve (early stage)
 -------------------------------------------
 

@@ -49,6 +49,19 @@ class SolveFixedBoundaryResult:
     diagnostics: Dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SolveVmecResidualResult:
+    state: VMECState
+    n_iter: int
+    w_history: np.ndarray
+    fsqr2_history: np.ndarray
+    fsqz2_history: np.ndarray
+    fsql2_history: np.ndarray
+    grad_rms_history: np.ndarray
+    step_history: np.ndarray
+    diagnostics: Dict[str, Any]
+
+
 def _mode00_index(modes) -> Optional[int]:
     m = np.asarray(modes.m)
     n = np.asarray(modes.n)
@@ -166,6 +179,7 @@ def _mask_grad_for_constraints(
     static,
     *,
     idx00: Optional[int],
+    mask_lambda_axis: bool = True,
 ) -> VMECState:
     """Project gradients onto the feasible set implied by our constraints."""
     gRcos = jnp.asarray(grad.Rcos)
@@ -189,9 +203,10 @@ def _mask_grad_for_constraints(
     gZcos = gZcos.at[0, :].set(gZcos[0, :] * mask_m0)
     gZsin = gZsin.at[0, :].set(gZsin[0, :] * mask_m0)
 
-    # Lambda: axis row is fixed to 0 in our constraint helper.
-    gLcos = gLcos.at[0, :].set(0.0)
-    gLsin = gLsin.at[0, :].set(0.0)
+    # Lambda: optionally fix the axis row (older step-5 behavior).
+    if bool(mask_lambda_axis):
+        gLcos = gLcos.at[0, :].set(0.0)
+        gLsin = gLsin.at[0, :].set(0.0)
 
     # Lambda gauge: (m,n)=(0,0) stays 0 everywhere.
     if idx00 is not None:
@@ -655,6 +670,7 @@ def solve_fixed_boundary_gd(
         edge_Rsin=edge_Rsin,
         edge_Zcos=edge_Zcos,
         edge_Zsin=edge_Zsin,
+        enforce_lambda_axis=False,
         idx00=idx00,
     )
 
@@ -901,6 +917,7 @@ def solve_fixed_boundary_lbfgs(
         edge_Rsin=edge_Rsin,
         edge_Zcos=edge_Zcos,
         edge_Zsin=edge_Zsin,
+        enforce_lambda_axis=False,
         idx00=idx00,
     )
 
@@ -919,7 +936,7 @@ def solve_fixed_boundary_lbfgs(
     step_history = []
 
     w_val, grad = w_and_grad(state)
-    grad = _mask_grad_for_constraints(grad, static, idx00=idx00)
+    grad = _mask_grad_for_constraints(grad, static, idx00=idx00, mask_lambda_axis=False)
     grad = _apply_preconditioner(
         grad,
         static,
@@ -970,6 +987,7 @@ def solve_fixed_boundary_lbfgs(
                 edge_Rsin=edge_Rsin,
                 edge_Zcos=edge_Zcos,
                 edge_Zsin=edge_Zsin,
+                enforce_lambda_axis=False,
                 idx00=idx00,
             )
 
@@ -1035,6 +1053,734 @@ def solve_fixed_boundary_lbfgs(
         w_history=np.asarray(w_history, dtype=float),
         wb_history=np.asarray(wb_history, dtype=float),
         wp_history=np.asarray(wp_history, dtype=float),
+        grad_rms_history=np.asarray(grad_rms_history, dtype=float),
+        step_history=np.asarray(step_history, dtype=float),
+        diagnostics=diag,
+    )
+
+
+@dataclass(frozen=True)
+class _WoutLikeVmecForces:
+    """Minimal `wout`-like container for VMEC force/residual kernels."""
+
+    nfp: int
+    mpol: int
+    ntor: int
+    lasym: bool
+    signgs: int
+
+    phipf: Any  # (ns,)
+    phips: Any  # (ns,)
+    chipf: Any  # (ns,)  (VMEC `wout` half-mesh averaged convention)
+    pres: Any  # (ns,)  (half mesh, VMEC internal units mu0*Pa)
+
+
+def solve_fixed_boundary_lbfgs_vmec_residual(
+    state0: VMECState,
+    static,
+    *,
+    indata,
+    signgs: int,
+    w_rz: float = 1.0,
+    w_l: float = 1.0,
+    objective_scale: float | None = None,
+    apply_m1_constraints: bool = True,
+    history_size: int = 10,
+    max_iter: int = 40,
+    step_size: float = 1.0,
+    scale_rz: float = 1.0,
+    scale_l: float = 1.0,
+    grad_tol: float = 1e-10,
+    max_backtracks: int = 12,
+    bt_factor: float = 0.5,
+    jit_grad: bool = False,
+    preconditioner: str = "none",
+    precond_exponent: float = 1.0,
+    precond_radial_alpha: float = 0.0,
+    verbose: bool = False,
+) -> SolveVmecResidualResult:
+    """Fixed-boundary solve by minimizing a VMEC-style force-residual objective.
+
+    The objective is computed using the Step-10 parity pipeline:
+      `bcovar` -> `forces` -> `tomnsps` -> sum-of-squares of Fourier residual blocks.
+
+    Notes
+    -----
+    - For parity, build `static` with `vmec_angle_grid(...)` (see `vmec_jax.vmec_tomnsp`).
+    - This solver does not include VMEC's iteration-dependent switching logic
+      (e.g. `lforbal` triggering); it provides a differentiable objective suitable
+      for regression and initial end-to-end parity.
+    """
+    if not has_jax():
+        raise ImportError("solve_fixed_boundary_lbfgs_vmec_residual requires JAX (jax + jaxlib)")
+
+    w_rz = float(w_rz)
+    w_l = float(w_l)
+    if w_rz < 0.0 or w_l < 0.0:
+        raise ValueError("w_rz and w_l must be nonnegative")
+    if objective_scale is not None and float(objective_scale) <= 0.0:
+        raise ValueError("objective_scale must be positive when provided")
+    scale_rz = float(scale_rz)
+    scale_l = float(scale_l)
+    if scale_rz <= 0.0 or scale_l <= 0.0:
+        raise ValueError("scale_rz and scale_l must be positive")
+
+    history_size = int(history_size)
+    if history_size < 1:
+        raise ValueError("history_size must be >= 1")
+    max_iter = int(max_iter)
+    if max_iter < 1:
+        raise ValueError("max_iter must be >= 1")
+    if max_backtracks < 0:
+        raise ValueError("max_backtracks must be >= 0")
+    if not (0.0 < bt_factor < 1.0):
+        raise ValueError("bt_factor must be in (0, 1)")
+
+    idx00 = _mode00_index(static.modes)
+    signgs = int(signgs)
+
+    from .energy import flux_profiles_from_indata
+    from .field import half_mesh_avg_from_full_mesh
+    from .profiles import eval_profiles
+    from .vmec_forces import vmec_forces_rz_from_wout, vmec_residual_internal_from_kernels
+    from .vmec_residue import vmec_apply_m1_constraints
+    from .vmec_tomnsp import vmec_trig_tables
+
+    s = jnp.asarray(static.s)
+
+    flux = flux_profiles_from_indata(indata, s, signgs=signgs)
+    chipf_wout = half_mesh_avg_from_full_mesh(jnp.asarray(flux.chipf))
+
+    phips = jnp.asarray(flux.phips)
+    if phips.shape[0] >= 1:
+        phips = phips.at[0].set(0.0)
+
+    prof = eval_profiles(indata, s)
+    pres = jnp.asarray(prof.get("pressure", jnp.zeros_like(s)))
+
+    wout_like = _WoutLikeVmecForces(
+        nfp=int(static.cfg.nfp),
+        mpol=int(static.cfg.mpol),
+        ntor=int(static.cfg.ntor),
+        lasym=bool(static.cfg.lasym),
+        signgs=signgs,
+        phipf=jnp.asarray(flux.phipf),
+        phips=phips,
+        chipf=chipf_wout,
+        pres=pres,
+    )
+
+    trig = vmec_trig_tables(
+        ntheta=int(static.cfg.ntheta),
+        nzeta=int(static.cfg.nzeta),
+        nfp=int(wout_like.nfp),
+        mmax=int(wout_like.mpol) - 1,
+        nmax=int(wout_like.ntor),
+        lasym=bool(wout_like.lasym),
+        dtype=jnp.asarray(state0.Rcos).dtype,
+    )
+
+    objective_scale_f = float(objective_scale) if objective_scale is not None else None
+
+    def _fsq2_terms_and_jacmin(state: VMECState):
+        k = vmec_forces_rz_from_wout(state=state, static=static, wout=wout_like, indata=None)
+        rzl = vmec_residual_internal_from_kernels(
+            k,
+            cfg_ntheta=int(static.cfg.ntheta),
+            cfg_nzeta=int(static.cfg.nzeta),
+            wout=wout_like,
+            trig=trig,
+            apply_lforbal=False,
+        )
+        frzl = rzl
+        if bool(apply_m1_constraints):
+            frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(getattr(static.cfg, "lconm1", True)))
+
+        fsqr2 = jnp.sum(jnp.asarray(frzl.frcc) ** 2)
+        fsqz2 = jnp.sum(jnp.asarray(frzl.fzsc) ** 2)
+        fsql2 = jnp.sum(jnp.asarray(frzl.flsc) ** 2)
+        if frzl.frss is not None:
+            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frss) ** 2)
+        if frzl.fzcs is not None:
+            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcs) ** 2)
+        if frzl.flcs is not None:
+            fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcs) ** 2)
+
+        if getattr(frzl, "frsc", None) is not None:
+            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frsc) ** 2)
+        if getattr(frzl, "fzcc", None) is not None:
+            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcc) ** 2)
+        if getattr(frzl, "flcc", None) is not None:
+            fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcc) ** 2)
+
+        if getattr(frzl, "frcs", None) is not None:
+            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frcs) ** 2)
+        if getattr(frzl, "fzss", None) is not None:
+            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzss) ** 2)
+        if getattr(frzl, "flss", None) is not None:
+            fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flss) ** 2)
+
+        w = (w_rz * (fsqr2 + fsqz2)) + (w_l * fsql2)
+        if objective_scale_f is not None:
+            w = jnp.asarray(objective_scale_f, dtype=jnp.asarray(w).dtype) * w
+
+        jac = signgs * jnp.asarray(k.bc.jac.sqrtg)
+        jac_min = jnp.min(jac) if jac.shape[0] <= 1 else jnp.min(jac[1:, :, :])
+        return fsqr2, fsqz2, fsql2, w, jac_min
+
+    def _w_only(state: VMECState):
+        return _fsq2_terms_and_jacmin(state)[3]
+
+    w_and_grad = jax.value_and_grad(_w_only)
+    w_terms = _fsq2_terms_and_jacmin
+    if jit_grad:
+        w_and_grad = jit(w_and_grad)
+        w_terms = jit(w_terms)
+
+    edge_Rcos = jnp.asarray(state0.Rcos)[-1, :]
+    edge_Rsin = jnp.asarray(state0.Rsin)[-1, :]
+    edge_Zcos = jnp.asarray(state0.Zcos)[-1, :]
+    edge_Zsin = jnp.asarray(state0.Zsin)[-1, :]
+
+    state = _enforce_fixed_boundary_and_axis(
+        state0,
+        static,
+        edge_Rcos=edge_Rcos,
+        edge_Rsin=edge_Rsin,
+        edge_Zcos=edge_Zcos,
+        edge_Zsin=edge_Zsin,
+        idx00=idx00,
+    )
+
+    fsqr2_0, fsqz2_0, fsql2_0, w0, jacmin0 = w_terms(state)
+    w0 = float(np.asarray(w0))
+    jacmin0 = float(np.asarray(jacmin0))
+    if not np.isfinite(w0) or jacmin0 <= 0.0:
+        raise ValueError("Initial state has invalid Jacobian sign or non-finite residual objective")
+
+    if objective_scale_f is None:
+        # Auto-scale the objective to be O(1) on the initial iterate.
+        objective_scale_f = 1.0 / max(abs(w0), 1.0)
+        # Rebuild the objective closures with the now-fixed scale.
+        def _fsq2_terms_and_jacmin(state: VMECState):  # type: ignore[no-redef]
+            k = vmec_forces_rz_from_wout(state=state, static=static, wout=wout_like, indata=None)
+            rzl = vmec_residual_internal_from_kernels(
+                k,
+                cfg_ntheta=int(static.cfg.ntheta),
+                cfg_nzeta=int(static.cfg.nzeta),
+                wout=wout_like,
+                trig=trig,
+                apply_lforbal=False,
+            )
+            frzl = rzl
+            if bool(apply_m1_constraints):
+                frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(getattr(static.cfg, "lconm1", True)))
+
+            fsqr2 = jnp.sum(jnp.asarray(frzl.frcc) ** 2)
+            fsqz2 = jnp.sum(jnp.asarray(frzl.fzsc) ** 2)
+            fsql2 = jnp.sum(jnp.asarray(frzl.flsc) ** 2)
+            if frzl.frss is not None:
+                fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frss) ** 2)
+            if frzl.fzcs is not None:
+                fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcs) ** 2)
+            if frzl.flcs is not None:
+                fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcs) ** 2)
+
+            if getattr(frzl, "frsc", None) is not None:
+                fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frsc) ** 2)
+            if getattr(frzl, "fzcc", None) is not None:
+                fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcc) ** 2)
+            if getattr(frzl, "flcc", None) is not None:
+                fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcc) ** 2)
+
+            if getattr(frzl, "frcs", None) is not None:
+                fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frcs) ** 2)
+            if getattr(frzl, "fzss", None) is not None:
+                fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzss) ** 2)
+            if getattr(frzl, "flss", None) is not None:
+                fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flss) ** 2)
+
+            w = (w_rz * (fsqr2 + fsqz2)) + (w_l * fsql2)
+            w = jnp.asarray(objective_scale_f, dtype=jnp.asarray(w).dtype) * w
+
+            jac = signgs * jnp.asarray(k.bc.jac.sqrtg)
+            jac_min = jnp.min(jac) if jac.shape[0] <= 1 else jnp.min(jac[1:, :, :])
+            return fsqr2, fsqz2, fsql2, w, jac_min
+
+        def _w_only(state: VMECState):  # type: ignore[no-redef]
+            return _fsq2_terms_and_jacmin(state)[3]
+
+        w_and_grad = jax.value_and_grad(_w_only)
+        w_terms = _fsq2_terms_and_jacmin
+        if jit_grad:
+            w_and_grad = jit(w_and_grad)
+            w_terms = jit(w_terms)
+
+        fsqr2_0, fsqz2_0, fsql2_0, w0, jacmin0 = w_terms(state)
+        w0 = float(np.asarray(w0))
+
+    w_history = [w0]
+    fsqr2_history = [float(np.asarray(fsqr2_0))]
+    fsqz2_history = [float(np.asarray(fsqz2_0))]
+    fsql2_history = [float(np.asarray(fsql2_0))]
+    grad_rms_history = []
+    step_history = []
+
+    w_val, grad = w_and_grad(state)
+    grad = _mask_grad_for_constraints(grad, static, idx00=idx00, mask_lambda_axis=False)
+    grad = _apply_preconditioner(
+        grad,
+        static,
+        kind=preconditioner,
+        exponent=precond_exponent,
+        radial_alpha=precond_radial_alpha,
+    )
+    sr = jnp.asarray(scale_rz, dtype=jnp.asarray(grad.Rcos).dtype)
+    sl = jnp.asarray(scale_l, dtype=jnp.asarray(grad.Lcos).dtype)
+    grad = VMECState(
+        layout=grad.layout,
+        Rcos=jnp.asarray(grad.Rcos) * sr,
+        Rsin=jnp.asarray(grad.Rsin) * sr,
+        Zcos=jnp.asarray(grad.Zcos) * sr,
+        Zsin=jnp.asarray(grad.Zsin) * sr,
+        Lcos=jnp.asarray(grad.Lcos) * sl,
+        Lsin=jnp.asarray(grad.Lsin) * sl,
+    )
+
+    x = pack_state(state)
+    g_flat = pack_state(grad)
+
+    s_hist: list[Any] = []
+    y_hist: list[Any] = []
+
+    step0 = float(step_size)
+
+    def _lbfgs_direction(g_flat, s_hist, y_hist):
+        if not s_hist:
+            return -g_flat
+        q = g_flat
+        alpha = []
+        rho = []
+        for s_i, y_i in zip(reversed(s_hist), reversed(y_hist)):
+            ys = jnp.dot(y_i, s_i)
+            rho_i = jnp.where(ys != 0, 1.0 / ys, 0.0)
+            a_i = rho_i * jnp.dot(s_i, q)
+            q = q - a_i * y_i
+            alpha.append(a_i)
+            rho.append(rho_i)
+
+        s0 = s_hist[-1]
+        y0 = y_hist[-1]
+        ys0 = jnp.dot(y0, s0)
+        yy0 = jnp.dot(y0, y0)
+        gamma0 = jnp.where(yy0 != 0, ys0 / yy0, 1.0)
+        r = gamma0 * q
+
+        for s_i, y_i, a_i, rho_i in zip(s_hist, y_hist, reversed(alpha), reversed(rho)):
+            beta = rho_i * jnp.dot(y_i, r)
+            r = r + s_i * (a_i - beta)
+
+        return -r
+
+    for it in range(max_iter):
+        grad_rms = _grad_rms_state(grad)
+        grad_rms_history.append(grad_rms)
+
+        if verbose:
+            print(f"[solve_fixed_boundary_lbfgs_vmec_residual] iter={it:03d} w={w_history[-1]:.8e} grad_rms={grad_rms:.3e}")
+
+        if grad_rms < grad_tol:
+            break
+
+        p_flat = _lbfgs_direction(g_flat, s_hist, y_hist)
+        gtp = float(np.asarray(jnp.dot(g_flat, p_flat)))
+        if not np.isfinite(gtp) or gtp >= 0.0:
+            p_flat = -g_flat
+
+        accepted = False
+        step = step0
+
+        x_old = x
+        g_old = g_flat
+
+        for bt in range(max_backtracks + 1):
+            if bt > 0:
+                step *= bt_factor
+            x_try = x_old + jnp.asarray(step, dtype=x_old.dtype) * p_flat
+            st_try = unpack_state(x_try, state.layout)
+            st_try = _enforce_fixed_boundary_and_axis(
+                st_try,
+                static,
+                edge_Rcos=edge_Rcos,
+                edge_Rsin=edge_Rsin,
+                edge_Zcos=edge_Zcos,
+                edge_Zsin=edge_Zsin,
+                idx00=idx00,
+            )
+
+            fsqr2_t, fsqz2_t, fsql2_t, w_t, jacmin_t = w_terms(st_try)
+            w_tf = float(np.asarray(w_t))
+            jacmin_tf = float(np.asarray(jacmin_t))
+            if np.isfinite(w_tf) and jacmin_tf > 0.0 and w_tf < w_history[-1]:
+                state = st_try
+                x = pack_state(state)
+                accepted = True
+                fsqr2_accept = float(np.asarray(fsqr2_t))
+                fsqz2_accept = float(np.asarray(fsqz2_t))
+                fsql2_accept = float(np.asarray(fsql2_t))
+                break
+
+        step_history.append(step)
+
+        if not accepted:
+            if verbose:
+                print("[solve_fixed_boundary_lbfgs_vmec_residual] line search failed; stopping")
+            break
+
+        w_history.append(float(np.asarray(w_t)))
+        fsqr2_history.append(fsqr2_accept)
+        fsqz2_history.append(fsqz2_accept)
+        fsql2_history.append(fsql2_accept)
+
+        w_val, grad_new = w_and_grad(state)
+        grad_new = _mask_grad_for_constraints(grad_new, static, idx00=idx00, mask_lambda_axis=False)
+        grad_new = _apply_preconditioner(
+            grad_new,
+            static,
+            kind=preconditioner,
+            exponent=precond_exponent,
+            radial_alpha=precond_radial_alpha,
+        )
+        g_flat_new = pack_state(grad_new)
+
+        s_k = x - x_old
+        y_k = g_flat_new - g_old
+        ys = float(np.asarray(jnp.dot(y_k, s_k)))
+        if np.isfinite(ys) and ys > 1e-14:
+            s_hist.append(s_k)
+            y_hist.append(y_k)
+            if len(s_hist) > history_size:
+                s_hist.pop(0)
+                y_hist.pop(0)
+
+        grad = grad_new
+        g_flat = g_flat_new
+        step0 = float(step)
+
+    diag: Dict[str, Any] = {
+        "idx00": idx00,
+        "signgs": signgs,
+        "w_rz": float(w_rz),
+        "w_l": float(w_l),
+        "objective_scale": float(objective_scale_f),
+        "scale_rz": float(scale_rz),
+        "scale_l": float(scale_l),
+        "apply_m1_constraints": bool(apply_m1_constraints),
+        "history_size": int(history_size),
+        "preconditioner": str(preconditioner),
+        "precond_exponent": float(precond_exponent),
+        "precond_radial_alpha": float(precond_radial_alpha),
+    }
+    return SolveVmecResidualResult(
+        state=state,
+        n_iter=len(w_history) - 1,
+        w_history=np.asarray(w_history, dtype=float),
+        fsqr2_history=np.asarray(fsqr2_history, dtype=float),
+        fsqz2_history=np.asarray(fsqz2_history, dtype=float),
+        fsql2_history=np.asarray(fsql2_history, dtype=float),
+        grad_rms_history=np.asarray(grad_rms_history, dtype=float),
+        step_history=np.asarray(step_history, dtype=float),
+        diagnostics=diag,
+    )
+
+
+def solve_fixed_boundary_gn_vmec_residual(
+    state0: VMECState,
+    static,
+    *,
+    indata,
+    signgs: int,
+    w_rz: float = 1.0,
+    w_l: float = 1.0,
+    include_constraint_force: bool = True,
+    apply_m1_constraints: bool = True,
+    objective_scale: float | None = None,
+    damping: float = 1e-3,
+    max_iter: int = 20,
+    cg_tol: float = 1e-6,
+    cg_maxiter: int = 80,
+    step_size: float = 1.0,
+    max_backtracks: int = 12,
+    bt_factor: float = 0.5,
+    jit_kernels: bool = True,
+    verbose: bool = False,
+) -> SolveVmecResidualResult:
+    """Fixed-boundary solve using a Gauss-Newton (normal-equations) step on VMEC residuals.
+
+    This treats the VMEC residual blocks returned by `tomnsps` as a least-squares
+    problem and solves (approximately) for a step `dx` using conjugate gradients:
+
+        (Jᵀ J + damping * I) dx = -Jᵀ r
+
+    where `r(state)` is the stacked residual vector and `J` is its Jacobian.
+    """
+    if not has_jax():
+        raise ImportError("solve_fixed_boundary_gn_vmec_residual requires JAX (jax + jaxlib)")
+    if damping < 0.0:
+        raise ValueError("damping must be nonnegative")
+    w_rz = float(w_rz)
+    w_l = float(w_l)
+    if w_rz < 0.0 or w_l < 0.0:
+        raise ValueError("w_rz and w_l must be nonnegative")
+    if max_iter < 1:
+        raise ValueError("max_iter must be >= 1")
+    if cg_maxiter < 1:
+        raise ValueError("cg_maxiter must be >= 1")
+    if not (0.0 < bt_factor < 1.0):
+        raise ValueError("bt_factor must be in (0, 1)")
+    if objective_scale is not None and float(objective_scale) <= 0.0:
+        raise ValueError("objective_scale must be positive when provided")
+    if bool(include_constraint_force) and bool(jit_kernels):
+        raise ValueError("include_constraint_force=True is not compatible with jit_kernels=True (constraint path uses Python/Numpy)")
+
+    signgs = int(signgs)
+    idx00 = _mode00_index(static.modes)
+
+    from .energy import flux_profiles_from_indata
+    from .field import half_mesh_avg_from_full_mesh
+    from .profiles import eval_profiles
+    from .vmec_forces import vmec_forces_rz_from_wout, vmec_residual_internal_from_kernels
+    from .vmec_residue import vmec_apply_m1_constraints
+    from .vmec_tomnsp import vmec_trig_tables
+
+    try:
+        from jax.scipy.sparse.linalg import cg  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise ImportError("solve_fixed_boundary_gn_vmec_residual requires jax.scipy.sparse.linalg.cg") from e
+
+    s = jnp.asarray(static.s)
+    flux = flux_profiles_from_indata(indata, s, signgs=signgs)
+    chipf_wout = half_mesh_avg_from_full_mesh(jnp.asarray(flux.chipf))
+
+    phips = jnp.asarray(flux.phips)
+    if phips.shape[0] >= 1:
+        phips = phips.at[0].set(0.0)
+
+    prof = eval_profiles(indata, s)
+    pres = jnp.asarray(prof.get("pressure", jnp.zeros_like(s)))
+
+    wout_like = _WoutLikeVmecForces(
+        nfp=int(static.cfg.nfp),
+        mpol=int(static.cfg.mpol),
+        ntor=int(static.cfg.ntor),
+        lasym=bool(static.cfg.lasym),
+        signgs=signgs,
+        phipf=jnp.asarray(flux.phipf),
+        phips=phips,
+        chipf=chipf_wout,
+        pres=pres,
+    )
+
+    trig = vmec_trig_tables(
+        ntheta=int(static.cfg.ntheta),
+        nzeta=int(static.cfg.nzeta),
+        nfp=int(wout_like.nfp),
+        mmax=int(wout_like.mpol) - 1,
+        nmax=int(wout_like.ntor),
+        lasym=bool(wout_like.lasym),
+        dtype=jnp.asarray(state0.Rcos).dtype,
+    )
+
+    edge_Rcos = jnp.asarray(state0.Rcos)[-1, :]
+    edge_Rsin = jnp.asarray(state0.Rsin)[-1, :]
+    edge_Zcos = jnp.asarray(state0.Zcos)[-1, :]
+    edge_Zsin = jnp.asarray(state0.Zsin)[-1, :]
+
+    def _project_step(d: VMECState) -> VMECState:
+        return _mask_grad_for_constraints(d, static, idx00=idx00, mask_lambda_axis=False)
+
+    def _enforce_state(st: VMECState) -> VMECState:
+        return _enforce_fixed_boundary_and_axis(
+            st,
+            static,
+            edge_Rcos=edge_Rcos,
+            edge_Rsin=edge_Rsin,
+            edge_Zcos=edge_Zcos,
+            edge_Zsin=edge_Zsin,
+            enforce_lambda_axis=False,
+            idx00=idx00,
+        )
+
+    def _residual_blocks(state: VMECState):
+        k = vmec_forces_rz_from_wout(state=state, static=static, wout=wout_like, indata=indata if bool(include_constraint_force) else None)
+        rzl = vmec_residual_internal_from_kernels(
+            k,
+            cfg_ntheta=int(static.cfg.ntheta),
+            cfg_nzeta=int(static.cfg.nzeta),
+            wout=wout_like,
+            trig=trig,
+            apply_lforbal=False,
+        )
+        if bool(apply_m1_constraints):
+            rzl = vmec_apply_m1_constraints(frzl=rzl, lconm1=bool(getattr(static.cfg, "lconm1", True)))
+
+        fsqr2 = jnp.sum(jnp.asarray(rzl.frcc) ** 2)
+        fsqz2 = jnp.sum(jnp.asarray(rzl.fzsc) ** 2)
+        fsql2 = jnp.sum(jnp.asarray(rzl.flsc) ** 2)
+        if rzl.frss is not None:
+            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(rzl.frss) ** 2)
+        if rzl.fzcs is not None:
+            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(rzl.fzcs) ** 2)
+        if rzl.flcs is not None:
+            fsql2 = fsql2 + jnp.sum(jnp.asarray(rzl.flcs) ** 2)
+
+        if getattr(rzl, "frsc", None) is not None:
+            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(rzl.frsc) ** 2)
+        if getattr(rzl, "fzcc", None) is not None:
+            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(rzl.fzcc) ** 2)
+        if getattr(rzl, "flcc", None) is not None:
+            fsql2 = fsql2 + jnp.sum(jnp.asarray(rzl.flcc) ** 2)
+
+        if getattr(rzl, "frcs", None) is not None:
+            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(rzl.frcs) ** 2)
+        if getattr(rzl, "fzss", None) is not None:
+            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(rzl.fzss) ** 2)
+        if getattr(rzl, "flss", None) is not None:
+            fsql2 = fsql2 + jnp.sum(jnp.asarray(rzl.flss) ** 2)
+        return rzl, fsqr2, fsqz2, fsql2
+
+    def _residual_vec(state: VMECState) -> Any:
+        rzl, *_ = _residual_blocks(state)
+        srz = jnp.asarray(np.sqrt(w_rz), dtype=jnp.asarray(rzl.frcc).dtype)
+        sl = jnp.asarray(np.sqrt(w_l), dtype=jnp.asarray(rzl.frcc).dtype)
+
+        parts = [srz * rzl.frcc, srz * rzl.fzsc, sl * rzl.flsc]
+        if rzl.frss is not None:
+            parts.append(srz * rzl.frss)
+        if rzl.fzcs is not None:
+            parts.append(srz * rzl.fzcs)
+        if rzl.flcs is not None:
+            parts.append(sl * rzl.flcs)
+        for name in ["frsc", "fzcc", "flcc", "frcs", "fzss", "flss"]:
+            a = getattr(rzl, name, None)
+            if a is not None:
+                if name.startswith("fl"):
+                    parts.append(sl * a)
+                else:
+                    parts.append(srz * a)
+        return jnp.concatenate([jnp.ravel(jnp.asarray(p)) for p in parts], axis=0)
+
+    def _obj_terms(state: VMECState):
+        rzl, fsqr2, fsqz2, fsql2 = _residual_blocks(state)
+        w = (w_rz * (fsqr2 + fsqz2)) + (w_l * fsql2)
+        return fsqr2, fsqz2, fsql2, w
+
+    if bool(jit_kernels):
+        _residual_vec_jit = jit(_residual_vec)
+        _obj_terms_jit = jit(_obj_terms)
+    else:
+        _residual_vec_jit = _residual_vec
+        _obj_terms_jit = _obj_terms
+
+    state = _enforce_state(state0)
+    fsqr2_0, fsqz2_0, fsql2_0, w0 = _obj_terms_jit(state)
+    w0_f = float(np.asarray(w0))
+    if not np.isfinite(w0_f):
+        raise ValueError("Initial state has non-finite residual objective")
+
+    scale_f = float(objective_scale) if objective_scale is not None else (1.0 / max(abs(w0_f), 1.0))
+
+    w_history = [float(scale_f * w0_f)]
+    fsqr2_history = [float(np.asarray(fsqr2_0))]
+    fsqz2_history = [float(np.asarray(fsqz2_0))]
+    fsql2_history = [float(np.asarray(fsql2_0))]
+    grad_rms_history = []
+    step_history = []
+
+    for it in range(int(max_iter)):
+        r, pullback = jax.vjp(_residual_vec_jit, state)
+        # Gradient of 0.5*||r||^2 is J^T r.
+        g_state = pullback(r)[0]
+        g_state = _project_step(g_state)
+        grad_rms_history.append(_grad_rms_state(g_state))
+
+        b_flat = -pack_state(g_state)
+
+        def _matvec(v_flat):
+            v_state = unpack_state(v_flat, state.layout)
+            v_state = _project_step(v_state)
+            jv = jax.jvp(_residual_vec_jit, (state,), (v_state,))[1]
+            jt_jv = pullback(jv)[0]
+            jt_jv = _project_step(jt_jv)
+            if damping != 0.0:
+                jt_jv = VMECState(
+                    layout=jt_jv.layout,
+                    Rcos=jt_jv.Rcos + float(damping) * v_state.Rcos,
+                    Rsin=jt_jv.Rsin + float(damping) * v_state.Rsin,
+                    Zcos=jt_jv.Zcos + float(damping) * v_state.Zcos,
+                    Zsin=jt_jv.Zsin + float(damping) * v_state.Zsin,
+                    Lcos=jt_jv.Lcos + float(damping) * v_state.Lcos,
+                    Lsin=jt_jv.Lsin + float(damping) * v_state.Lsin,
+                )
+            return pack_state(jt_jv)
+
+        dx_flat, _info = cg(_matvec, b_flat, tol=float(cg_tol), maxiter=int(cg_maxiter))
+        dx_state = unpack_state(dx_flat, state.layout)
+        dx_state = _project_step(dx_state)
+
+        accepted = False
+        step = float(step_size)
+        w_curr = w_history[-1]
+        for bt in range(int(max_backtracks) + 1):
+            if bt > 0:
+                step *= float(bt_factor)
+            st_try = VMECState(
+                layout=state.layout,
+                Rcos=jnp.asarray(state.Rcos) + jnp.asarray(step, dtype=jnp.asarray(state.Rcos).dtype) * jnp.asarray(dx_state.Rcos),
+                Rsin=jnp.asarray(state.Rsin) + jnp.asarray(step, dtype=jnp.asarray(state.Rsin).dtype) * jnp.asarray(dx_state.Rsin),
+                Zcos=jnp.asarray(state.Zcos) + jnp.asarray(step, dtype=jnp.asarray(state.Zcos).dtype) * jnp.asarray(dx_state.Zcos),
+                Zsin=jnp.asarray(state.Zsin) + jnp.asarray(step, dtype=jnp.asarray(state.Zsin).dtype) * jnp.asarray(dx_state.Zsin),
+                Lcos=jnp.asarray(state.Lcos) + jnp.asarray(step, dtype=jnp.asarray(state.Lcos).dtype) * jnp.asarray(dx_state.Lcos),
+                Lsin=jnp.asarray(state.Lsin) + jnp.asarray(step, dtype=jnp.asarray(state.Lsin).dtype) * jnp.asarray(dx_state.Lsin),
+            )
+            st_try = _enforce_state(st_try)
+            fsqr2_t, fsqz2_t, fsql2_t, w_t = _obj_terms_jit(st_try)
+            w_tf = float(np.asarray(w_t))
+            w_scaled = float(scale_f * w_tf)
+            if np.isfinite(w_scaled) and w_scaled < w_curr:
+                state = st_try
+                accepted = True
+                w_history.append(w_scaled)
+                fsqr2_history.append(float(np.asarray(fsqr2_t)))
+                fsqz2_history.append(float(np.asarray(fsqz2_t)))
+                fsql2_history.append(float(np.asarray(fsql2_t)))
+                break
+
+        step_history.append(step)
+        if verbose:
+            print(f"[solve_fixed_boundary_gn_vmec_residual] iter={it:03d} w={w_history[-1]:.8e} step={step:.3e} accepted={accepted}")
+
+        if not accepted:
+            break
+
+    diag = {
+        "idx00": idx00,
+        "signgs": signgs,
+        "w_rz": float(w_rz),
+        "w_l": float(w_l),
+        "objective_scale": float(scale_f),
+        "apply_m1_constraints": bool(apply_m1_constraints),
+        "damping": float(damping),
+        "cg_tol": float(cg_tol),
+        "cg_maxiter": int(cg_maxiter),
+    }
+    return SolveVmecResidualResult(
+        state=state,
+        n_iter=len(w_history) - 1,
+        w_history=np.asarray(w_history, dtype=float),
+        fsqr2_history=np.asarray(fsqr2_history, dtype=float),
+        fsqz2_history=np.asarray(fsqz2_history, dtype=float),
+        fsql2_history=np.asarray(fsql2_history, dtype=float),
         grad_rms_history=np.asarray(grad_rms_history, dtype=float),
         step_history=np.asarray(step_history, dtype=float),
         diagnostics=diag,
