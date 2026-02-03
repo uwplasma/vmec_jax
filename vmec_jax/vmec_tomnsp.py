@@ -144,9 +144,7 @@ def vmec_trig_tables(
     # Note: in VMEC, `ntheta2` is the u=pi index even when `lasym=True`.
     if ntheta2 >= 1 and ntheta2 <= ntheta3:
         cosmui[0, :] *= 0.5
-        sinmui[0, :] *= 0.5
         cosmui[ntheta2 - 1, :] *= 0.5
-        sinmui[ntheta2 - 1, :] *= 0.5
         if ntheta2 == ntheta3:
             # When `ntheta3==ntheta2` (lasym=False), VMEC reuses the half-interval
             # integration weights for full-interval integrations too.
