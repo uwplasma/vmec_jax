@@ -25,6 +25,7 @@ import numpy as np
 from ._compat import jnp
 from .field import TWOPI
 from .field import bsup_from_sqrtg_lambda, lamscale_from_phips
+from .field import chips_from_chipf
 from .vmec_jacobian import VmecHalfMeshJacobian, jacobian_half_mesh_from_parity
 from .fourier import eval_fourier, eval_fourier_dtheta, eval_fourier_dzeta_phys
 from .vmec_parity import internal_odd_from_physical_vmec_m1, split_rzl_even_odd_m
@@ -207,21 +208,23 @@ def vmec_bcovar_half_mesh_from_wout(
     # in terms of lambda uses lam_v directly:
     #   bsupu = overg * (chipf - lamscale * lam_v)
     lamscale = lamscale_from_phips(wout.phips, s)
-    # VMEC's full-mesh `chip` enters B^u via `add_fluxes` (chips = iotas*phips).
-    # In `wout`, the readily-available full-mesh proxy with matching scaling is
-    # `iotas*phipf` (since `phipf` carries a `2π*signgs` factor relative to `phips`).
-    # Prefer that when available; otherwise fall back to the stored `chipf` half-mesh
-    # array for coarse parity work.
-    chipf_eff = getattr(wout, "chipf", None)
-    if hasattr(wout, "iotas") and hasattr(wout, "phipf"):
-        chipf_eff = jnp.asarray(wout.iotas) * jnp.asarray(wout.phipf)
+    # VMEC adds the **full-mesh** flux function `chip(js)=chips(js)` to bsupu in
+    # `add_fluxes`, while `wout` stores the derived array `chipf(js)`. For parity
+    # work we reconstruct `chips` from `chipf` using VMEC's own averaging map.
+    chipf_out = getattr(wout, "chipf", None)
+    if chipf_out is not None:
+        chip_eff = chips_from_chipf(chipf_out)
+    else:
+        # Fallback: approximate chips from full-mesh iota and phipf when chipf
+        # is not available (rare for modern VMEC netcdf outputs).
+        chip_eff = jnp.asarray(getattr(wout, "iotaf", getattr(wout, "iotas", 0.0))) * jnp.asarray(wout.phipf)
 
     bsupu, bsupv = bsup_from_sqrtg_lambda(
         sqrtg=jac.sqrtg,
         lam_u=lam_u,
         lam_v=lam_v,
         phipf=wout.phipf,
-        chipf=chipf_eff,
+        chipf=chip_eff,
         signgs=int(wout.signgs),
         lamscale=lamscale,
     )
@@ -298,11 +301,18 @@ def vmec_bcovar_half_mesh_from_wout(
     else:
         bsubv_e = bdamp * bsubv_e + (1.0 - bdamp) * bsubv_e
 
-    # Final scaling for tomnsps: bsubu_e/bsubv_e get multiplied by -lamscale.
-    # VMEC also exposes odd-m pieces as sqrts*bsub*_e.
+    # Final scaling for tomnsps:
+    # VMEC applies the "-lamscale" factor only for js>=2 (1-based). The axis (js=1)
+    # is excluded so the lambda-force kernels do not introduce spurious constant
+    # contributions from the copied/extrapolated half-mesh axis values.
+    #
+    # VMEC also exposes odd-m pieces as sqrt(s)*bsub*_e.
     psqrts = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
-    clmn_even = -lamscale * bsubu_e
-    blmn_even = -lamscale * bsubv_e
+    clmn_even = jnp.zeros_like(bsubu_e)
+    blmn_even = jnp.zeros_like(bsubv_e)
+    if ns >= 2:
+        clmn_even = clmn_even.at[1:].set(-lamscale * bsubu_e[1:])
+        blmn_even = blmn_even.at[1:].set(-lamscale * bsubv_e[1:])
     clmn_odd = psqrts * clmn_even
     blmn_odd = psqrts * blmn_even
 

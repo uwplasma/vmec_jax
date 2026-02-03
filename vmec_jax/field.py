@@ -31,7 +31,7 @@ from typing import Any
 
 import numpy as np
 
-from ._compat import jnp
+from ._compat import jax, jnp
 
 
 TWOPI = 2.0 * np.pi
@@ -126,6 +126,64 @@ def bsup_from_sqrtg_lambda(
     bsupu = _safe_divide(num_u, denom, eps=eps)
     bsupv = _safe_divide(num_v, denom, eps=eps)
     return bsupu, bsupv
+
+
+def chips_from_chipf(chipf):
+    """Reconstruct VMEC's `chips(js)` (full-mesh poloidal flux function) from `chipf(js)`.
+
+    VMEC outputs `chipf` in `wout_*.nc`, but the core `bcovar/add_fluxes` pipeline
+    adds the **full-mesh** flux function `chip(js)=chips(js)` to `B^u` in real space.
+
+    Internally (see `VMEC2000/Sources/General/add_fluxes.f90`, `lrfp=F` case),
+    VMEC forms `chipf` from `chips` via a simple radial averaging scheme:
+
+      chipf(1)     = 1.5*chips(2) - 0.5*chips(3)
+      chipf(2:ns-1)= 0.5*(chips(2:ns-1) + chips(3:ns))
+      chipf(ns)    = 1.5*chips(ns) - 0.5*chips(ns-1)
+
+    This helper inverts that mapping deterministically (for ns>=3) using the
+    forward recurrence implied by the interior relation and the axis closure:
+
+      chips(2) = 0.5*(chipf(1) + chipf(2))
+      chips(js+1) = 2*chipf(js) - chips(js)   for js=2..ns-1
+
+    Notes
+    -----
+    - The returned `chips` has the same shape as `chipf` (ns,). `chips(1)` is
+      set to 0 (VMEC does not use it near-axis).
+    - This is intended for output-parity work using `wout` files; it does not
+      attempt to handle the `lrfp=True` harmonic-mean variant.
+    """
+    chipf = jnp.asarray(chipf)
+    if chipf.ndim != 1:
+        raise ValueError(f"chipf must be 1D (ns,), got shape {chipf.shape}")
+    ns = int(chipf.shape[0])
+    if ns == 0:
+        return chipf
+    if ns == 1:
+        return jnp.zeros_like(chipf)
+    if ns == 2:
+        chips = jnp.zeros_like(chipf)
+        # With only two surfaces, VMEC's special-case handling effectively pins
+        # chips(2) from the available value(s); use chipf(2) when present.
+        chips = chips.at[1].set(chipf[1])
+        return chips
+
+    # ns >= 3
+    if jax is None:  # pragma: no cover
+        raise ImportError("chips_from_chipf requires JAX (jax + jaxlib)")
+
+    chips = jnp.zeros_like(chipf)
+    chips2 = 0.5 * (chipf[0] + chipf[1])
+    chips = chips.at[1].set(chips2)
+
+    def _body(js0, chips_acc):
+        # Forward recurrence (1-based): chips(js+1) = 2*chipf(js) - chips(js) for js=2..ns-1.
+        return chips_acc.at[js0 + 1].set(2.0 * chipf[js0] - chips_acc[js0])
+
+    # 0-based js0=1..ns-2 corresponds to Fortran js=2..ns-1.
+    chips = jax.lax.fori_loop(1, ns - 1, _body, chips)
+    return chips
 
 
 def bsup_from_geom(geom, *, phipf, chipf, nfp: int, signgs: int, lamscale, eps: float = 1e-14):

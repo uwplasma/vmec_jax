@@ -27,7 +27,7 @@ from .grids import AngleGrid
 from .modes import ModeTable
 from .vmec_bcovar import vmec_bcovar_half_mesh_from_wout
 from .vmec_constraints import alias_gcon, tcon_from_bcovar_precondn_diag, tcon_from_indata_heuristic
-from .vmec_tomnsp import VmecTrigTables, tomnsps_rzl, tomnspa_rzl, vmec_angle_grid, vmec_trig_tables
+from .vmec_tomnsp import TomnspsRZL, VmecTrigTables, tomnsps_rzl, tomnspa_rzl, vmec_angle_grid, vmec_trig_tables
 from .vmec_parity import internal_odd_from_physical_vmec_m1, split_rzl_even_odd_m
 
 
@@ -60,6 +60,19 @@ class VmecRZForceKernels:
     azcon_e: Any  # (ns, ntheta, nzeta)
     azcon_o: Any  # (ns, ntheta, nzeta)
     gcon: Any  # (ns, ntheta, nzeta)
+
+    # Geometry parity fields (VMEC internal decomposition):
+    #   X(s,θ,ζ) = X_even(s,θ,ζ) + sqrt(s) * X_odd_internal(s,θ,ζ)
+    #
+    # These are used to reproduce additional VMEC conventions (e.g. `lforbal`).
+    pr1_even: Any  # (ns, ntheta, nzeta)
+    pr1_odd: Any  # (ns, ntheta, nzeta)
+    pz1_even: Any  # (ns, ntheta, nzeta)
+    pz1_odd: Any  # (ns, ntheta, nzeta)
+    pru_even: Any  # (ns, ntheta, nzeta)
+    pru_odd: Any  # (ns, ntheta, nzeta)
+    pzu_even: Any  # (ns, ntheta, nzeta)
+    pzu_odd: Any  # (ns, ntheta, nzeta)
 
 
 def _pshalf_from_s(s: Any) -> Any:
@@ -392,6 +405,14 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None) -> VmecRZForce
         azcon_e=azcon_e,
         azcon_o=azcon_o,
         gcon=gcon,
+        pr1_even=pr1_0,
+        pr1_odd=pr1_1,
+        pz1_even=pz1_0,
+        pz1_odd=pz1_1,
+        pru_even=pru_0,
+        pru_odd=pru_1,
+        pzu_even=pzu_0,
+        pzu_odd=pzu_1,
     )
 
 
@@ -638,6 +659,14 @@ def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout, indata=Non
         azcon_e=z,
         azcon_o=z,
         gcon=z,
+        pr1_even=pr1_0,
+        pr1_odd=pr1_1,
+        pz1_even=pz1_0,
+        pz1_odd=pz1_1,
+        pru_even=pru_0,
+        pru_odd=pru_1,
+        pzu_even=pzu_0,
+        pzu_odd=pzu_1,
     )
 
 
@@ -740,6 +769,7 @@ def vmec_residual_internal_from_kernels(
     cfg_nzeta: int,
     wout,
     trig: VmecTrigTables | None = None,
+    apply_lforbal: bool = False,
 ) -> VmecInternalResidualRZL:
     """Compute internal residual coefficient arrays using VMEC's `tomnsps` conventions."""
     if trig is None:
@@ -921,6 +951,36 @@ def vmec_residual_internal_from_kernels(
             trig=trig,
         )
         out_asym = None
+
+    # VMEC `lforbal` modifies the (m=1,n=0) symmetric forces to satisfy the
+    # flux-surface-averaged force balance exactly. This primarily affects
+    # the Step-10 scalars `fsqr/fsqz`. See `VMEC2000/Sources/General/tomnsp_mod.f`.
+    if bool(apply_lforbal):
+        from .vmec_lforbal import apply_lforbal_to_tomnsps, lforbal_factors_from_state
+
+        ns = int(jnp.asarray(out_sym.frcc).shape[0])
+        s_grid = jnp.linspace(0.0, 1.0, ns, dtype=jnp.asarray(out_sym.frcc).dtype)
+        factors = lforbal_factors_from_state(
+            bc=k.bc,
+            trig=trig,
+            wout=wout,
+            s=s_grid,
+            pru_even=k.pru_even,
+            pru_odd=k.pru_odd,
+            pzu_even=k.pzu_even,
+            pzu_odd=k.pzu_odd,
+            pr1_odd=k.pr1_odd,
+            pz1_odd=k.pz1_odd,
+        )
+        frcc2, fzsc2 = apply_lforbal_to_tomnsps(frcc=out_sym.frcc, fzsc=out_sym.fzsc, factors=factors, trig=trig)
+        out_sym = TomnspsRZL(
+            frcc=frcc2,
+            frss=out_sym.frss,
+            fzsc=fzsc2,
+            fzcs=out_sym.fzcs,
+            flsc=out_sym.flsc,
+            flcs=out_sym.flcs,
+        )
 
     return VmecInternalResidualRZL(
         frcc=out_sym.frcc,

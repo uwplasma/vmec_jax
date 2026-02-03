@@ -31,7 +31,8 @@ The tests in ``tests/`` cover:
 - boundary evaluation and agreement with the ``s=1`` state surface,
 - metric/Jacobian positivity and shape checks,
 - stepwise regressions vs ``wout`` (Nyquist ``sqrt(g)``, ``bsup*``, scalar integrals).
-- Step-10 parity scaffolding for VMEC-style ``forces``/``tomnsps``/``getfsq`` (currently marked ``xfail`` while parity is still being completed).
+- Step-10 parity scaffolding for VMEC-style ``forces``/``tomnsps``/``getfsq``.
+- VMEC convention checks used by Step-10 kernels (e.g. ``chipf -> chips`` inversion and ``equif`` normalization parity).
 
 Running tests::
 
@@ -39,3 +40,20 @@ Running tests::
 
 If you do not have ``netCDF4`` installed, tests that require ``wout`` I/O will be
 skipped.
+
+Optional: validating against a local VMEC2000 build
+---------------------------------------------------
+
+In this workspace layout (``VMEC2000`` checked out next to ``vmec_jax_git``), the
+test suite includes a small smoke test that calls the VMEC2000 Python API to run
+a low-resolution case and compares the produced ``wout_*.nc`` to the bundled
+reference.
+
+This test is skipped automatically if:
+
+- the ``VMEC2000`` folder is not present,
+- or the VMEC2000 Python extension has not been built under
+  ``VMEC2000/_skbuild/*/cmake-install/python``.
+
+It requires ``mpi4py`` (VMEC2000's wrapper expects MPI to be initialized even in
+single-process mode).

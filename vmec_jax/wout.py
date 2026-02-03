@@ -85,6 +85,7 @@ class WoutData:
     fsqz: float  # vertical force residual
     fsql: float  # lambda/constraint residual
     fsqt: np.ndarray  # force trace vs iteration (if present)
+    equif: np.ndarray  # (ns,) flux-surface-averaged force balance (if present)
 
 
 def _bool_from_nc(x: Any) -> bool:
@@ -162,6 +163,7 @@ def read_wout(path: str | Path) -> WoutData:
         fsqz = float(ds.variables.get("fsqz", 0.0)[:]) if "fsqz" in ds.variables else 0.0
         fsql = float(ds.variables.get("fsql", 0.0)[:]) if "fsql" in ds.variables else 0.0
         fsqt = np.asarray(ds.variables.get("fsqt", np.zeros((0,), dtype=float))[:])
+        equif = np.asarray(ds.variables.get("equif", np.zeros((ns,), dtype=float))[:])
 
     return WoutData(
         path=path,
@@ -209,6 +211,7 @@ def read_wout(path: str | Path) -> WoutData:
         fsqz=fsqz,
         fsql=fsql,
         fsqt=fsqt,
+        equif=equif,
     )
 
 
@@ -316,6 +319,7 @@ def write_wout(path: str | Path, wout: WoutData, *, overwrite: bool = False) -> 
         _var_f("vp", ("ns",), np.asarray(wout.vp))
         _var_f("pres", ("ns",), np.asarray(pres_pa))
         _var_f("presf", ("ns",), np.asarray(presf_pa))
+        _var_f("equif", ("ns",), np.asarray(getattr(wout, "equif", np.zeros((ns,), dtype=float))))
 
         # Iteration trace (optional).
         _var_f("fsqt", ("nstore_seq",), np.asarray(wout.fsqt))
