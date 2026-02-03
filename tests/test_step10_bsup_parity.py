@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from vmec_jax.config import load_config
-from vmec_jax.field import bsup_from_geom, lamscale_from_phips
+from vmec_jax.field import bsup_from_geom, chips_from_chipf, lamscale_from_phips
 from vmec_jax.fourier import build_helical_basis, eval_fourier
 from vmec_jax.geom import eval_geom
 from vmec_jax.grids import AngleGrid
@@ -105,10 +105,11 @@ def test_step10_bsup_from_geom_matches_wout_on_outer_surfaces(case_name: str, in
     # exact axis expansions used by VMEC. For now, measure parity only over the
     # outer quarter of the plasma.
     lamscale = lamscale_from_phips(wout.phips, static.s)
+    chips = chips_from_chipf(wout.chipf)
     bsupu_calc, bsupv_calc = bsup_from_geom(
         g,
         phipf=wout.phipf,
-        chipf=wout.chipf,
+        chipf=chips,
         nfp=wout.nfp,
         signgs=wout.signgs,
         lamscale=lamscale,
@@ -129,4 +130,3 @@ def test_step10_bsup_from_geom_matches_wout_on_outer_surfaces(case_name: str, in
     # are refined. Outer surfaces already show good parity for most cases.
     assert err_u < 0.4
     assert err_v < 0.3
-

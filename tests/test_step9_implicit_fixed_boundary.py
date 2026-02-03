@@ -12,6 +12,7 @@ def test_step9_implicit_fixed_boundary_grad_matches_finite_difference():
 
     from vmec_jax._compat import enable_x64, jax, jnp
     from vmec_jax.config import load_config
+    from vmec_jax.field import chips_from_chipf
     from vmec_jax.field import lamscale_from_phips
     from vmec_jax.geom import eval_geom
     from vmec_jax.implicit import ImplicitFixedBoundaryOptions, solve_fixed_boundary_state_implicit
@@ -34,7 +35,7 @@ def test_step9_implicit_fixed_boundary_grad_matches_finite_difference():
     signgs = int(wout.signgs)
 
     phipf0 = jnp.asarray(wout.phipf)
-    chipf0 = jnp.asarray(wout.chipf)
+    chipf0 = jnp.asarray(chips_from_chipf(wout.chipf))
     pressure0 = jnp.asarray(wout.presf)
     lamscale0 = lamscale_from_phips(jnp.asarray(wout.phips), jnp.asarray(static.s))
 

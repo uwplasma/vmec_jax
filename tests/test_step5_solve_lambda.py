@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vmec_jax.field import bsup_from_sqrtg_lambda, lamscale_from_phips
+from vmec_jax.field import bsup_from_sqrtg_lambda, chips_from_chipf, lamscale_from_phips
 from vmec_jax.fourier import build_helical_basis, eval_fourier
 from vmec_jax.geom import eval_geom
 from vmec_jax.grids import AngleGrid
@@ -31,6 +31,7 @@ def test_step5_solve_lambda_decreases_wb_toward_wout(load_case_lsp_low_res):
 
     # VMEC's lambda in wout is scaled; recover lamscale from phips.
     lamscale = float(np.asarray(lamscale_from_phips(wout.phips, static.s)))
+    chips = np.asarray(chips_from_chipf(wout.chipf))
 
     # Build an initial state with identical geometry but lambda=0.
     st0 = st_ref.__class__(
@@ -47,7 +48,7 @@ def test_step5_solve_lambda_decreases_wb_toward_wout(load_case_lsp_low_res):
         st0,
         static,
         phipf=wout.phipf,
-        chipf=wout.chipf,
+        chipf=chips,
         signgs=wout.signgs,
         lamscale=lamscale,
         sqrtg=sqrtg_ref,
@@ -69,7 +70,7 @@ def test_step5_solve_lambda_decreases_wb_toward_wout(load_case_lsp_low_res):
         lam_u=lam_u,
         lam_v=lam_v,
         phipf=wout.phipf,
-        chipf=wout.chipf,
+        chipf=chips,
         signgs=wout.signgs,
         lamscale=lamscale,
     )
@@ -92,4 +93,3 @@ def test_step5_solve_lambda_decreases_wb_toward_wout(load_case_lsp_low_res):
     err0 = abs(float(res.wb_history[0]) - wb_ref)
     err1 = abs(float(res.wb_history[-1]) - wb_ref)
     assert err1 < err0
-

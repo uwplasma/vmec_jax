@@ -23,6 +23,7 @@ from ._compat import has_jax, jax, jnp
 from .energy import FluxProfiles
 from .field import TWOPI, b2_from_bsup, bsub_from_bsup, bsup_from_geom
 from .geom import eval_geom
+from .grids import angle_steps
 from .solve import _mask_grad_for_constraints, _mode00_index
 from .state import VMECState
 
@@ -78,8 +79,9 @@ def _objective_total(
     theta = jnp.asarray(static.grid.theta)
     zeta = jnp.asarray(static.grid.zeta)
     ds = jnp.asarray(1.0, dtype=s.dtype) if s.shape[0] < 2 else (s[1] - s[0])
-    dtheta = theta[1] - theta[0]
-    dzeta = zeta[1] - zeta[0]
+    dtheta_f, dzeta_f = angle_steps(ntheta=int(theta.shape[0]), nzeta=int(zeta.shape[0]))
+    dtheta = jnp.asarray(dtheta_f, dtype=s.dtype)
+    dzeta = jnp.asarray(dzeta_f, dtype=s.dtype)
     weight = ds * dtheta * dzeta
 
     jac = int(flux.signgs) * g.sqrtg
@@ -192,4 +194,3 @@ def force_residuals_from_state(
         grad_rms_l=float(grad_rms_l),
         diagnostics=diag,
     )
-

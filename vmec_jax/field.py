@@ -128,6 +128,89 @@ def bsup_from_sqrtg_lambda(
     return bsupu, bsupv
 
 
+def full_mesh_from_half_mesh_avg(half):
+    """Invert VMEC's 1D half-mesh averaging map.
+
+    VMEC frequently stores *half-mesh* radial arrays in `wout_*.nc` that are
+    derived from a *full-mesh* array `x_full(js)` via:
+
+      x_half(1)     = 1.5*x_full(2) - 0.5*x_full(3)
+      x_half(2:ns-1)= 0.5*(x_full(2:ns-1) + x_full(3:ns))
+      x_half(ns)    = 1.5*x_full(ns) - 0.5*x_full(ns-1)
+
+    This helper reconstructs `x_full` from `x_half` (for ns>=3) using the
+    forward recurrence implied by the interior relation and the axis closure:
+
+      x_full(2) = 0.5*(x_half(1) + x_half(2))
+      x_full(js+1) = 2*x_half(js) - x_full(js)   for js=2..ns-1
+
+    Notes
+    -----
+    - The returned `x_full` has the same shape as `x_half` (ns,). `x_full(1)` is
+      set to 0 (VMEC does not use it near-axis for these derived arrays).
+    - Requires JAX because we use `lax.fori_loop` for JIT-friendly recurrence.
+    """
+    half = jnp.asarray(half)
+    if half.ndim != 1:
+        raise ValueError(f"half must be 1D (ns,), got shape {half.shape}")
+    ns = int(half.shape[0])
+    if ns == 0:
+        return half
+    if ns == 1:
+        return jnp.zeros_like(half)
+    if ns == 2:
+        full = jnp.zeros_like(half)
+        full = full.at[1].set(half[1])
+        return full
+
+    if jax is None:  # pragma: no cover
+        raise ImportError("full_mesh_from_half_mesh_avg requires JAX (jax + jaxlib)")
+
+    full = jnp.zeros_like(half)
+    full2 = 0.5 * (half[0] + half[1])
+    full = full.at[1].set(full2)
+
+    def _body(js0, full_acc):
+        return full_acc.at[js0 + 1].set(2.0 * half[js0] - full_acc[js0])
+
+    full = jax.lax.fori_loop(1, ns - 1, _body, full)
+    return full
+
+
+def half_mesh_avg_from_full_mesh(full):
+    """VMEC half-mesh averaging map used for several radial 1D arrays.
+
+    Given a full-mesh array `x_full(js)` (js=1..ns in Fortran), VMEC constructs
+    a half-mesh array `x_half(js)` (same length) via (see `add_fluxes.f90`,
+    `eqfor.f`):
+
+      x_half(1)     = 1.5*x_full(2) - 0.5*x_full(3)
+      x_half(2:ns-1)= 0.5*(x_full(2:ns-1) + x_full(3:ns))
+      x_half(ns)    = 1.5*x_full(ns) - 0.5*x_full(ns-1)
+
+    This is the forward map inverted by :func:`full_mesh_from_half_mesh_avg`.
+    """
+    full = jnp.asarray(full)
+    if full.ndim != 1:
+        raise ValueError(f"full must be 1D (ns,), got shape {full.shape}")
+    ns = int(full.shape[0])
+    if ns == 0:
+        return full
+    if ns == 1:
+        return jnp.zeros_like(full)
+    if ns == 2:
+        out = jnp.zeros_like(full)
+        out = out.at[0].set(full[1])
+        out = out.at[1].set(full[1])
+        return out
+
+    out = jnp.zeros_like(full)
+    out = out.at[0].set(1.5 * full[1] - 0.5 * full[2])
+    out = out.at[1:-1].set(0.5 * (full[1:-1] + full[2:]))
+    out = out.at[-1].set(1.5 * full[-1] - 0.5 * full[-2])
+    return out
+
+
 def chips_from_chipf(chipf):
     """Reconstruct VMEC's `chips(js)` (full-mesh poloidal flux function) from `chipf(js)`.
 
@@ -154,36 +237,7 @@ def chips_from_chipf(chipf):
     - This is intended for output-parity work using `wout` files; it does not
       attempt to handle the `lrfp=True` harmonic-mean variant.
     """
-    chipf = jnp.asarray(chipf)
-    if chipf.ndim != 1:
-        raise ValueError(f"chipf must be 1D (ns,), got shape {chipf.shape}")
-    ns = int(chipf.shape[0])
-    if ns == 0:
-        return chipf
-    if ns == 1:
-        return jnp.zeros_like(chipf)
-    if ns == 2:
-        chips = jnp.zeros_like(chipf)
-        # With only two surfaces, VMEC's special-case handling effectively pins
-        # chips(2) from the available value(s); use chipf(2) when present.
-        chips = chips.at[1].set(chipf[1])
-        return chips
-
-    # ns >= 3
-    if jax is None:  # pragma: no cover
-        raise ImportError("chips_from_chipf requires JAX (jax + jaxlib)")
-
-    chips = jnp.zeros_like(chipf)
-    chips2 = 0.5 * (chipf[0] + chipf[1])
-    chips = chips.at[1].set(chips2)
-
-    def _body(js0, chips_acc):
-        # Forward recurrence (1-based): chips(js+1) = 2*chipf(js) - chips(js) for js=2..ns-1.
-        return chips_acc.at[js0 + 1].set(2.0 * chipf[js0] - chips_acc[js0])
-
-    # 0-based js0=1..ns-2 corresponds to Fortran js=2..ns-1.
-    chips = jax.lax.fori_loop(1, ns - 1, _body, chips)
-    return chips
+    return full_mesh_from_half_mesh_avg(chipf)
 
 
 def bsup_from_geom(geom, *, phipf, chipf, nfp: int, signgs: int, lamscale, eps: float = 1e-14):

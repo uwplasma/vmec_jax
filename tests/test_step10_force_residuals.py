@@ -11,7 +11,7 @@ def test_step10_force_residuals_are_smaller_for_wout_equilibrium(load_case_lsp_l
     from vmec_jax._compat import enable_x64
     from vmec_jax.energy import flux_profiles_from_indata
     from vmec_jax.energy import FluxProfiles
-    from vmec_jax.field import lamscale_from_phips, signgs_from_sqrtg
+    from vmec_jax.field import chips_from_chipf, lamscale_from_phips, signgs_from_sqrtg
     from vmec_jax.geom import eval_geom
     from vmec_jax.profiles import eval_profiles
     from vmec_jax.residuals import force_residuals_from_state
@@ -35,7 +35,7 @@ def test_step10_force_residuals_are_smaller_for_wout_equilibrium(load_case_lsp_l
     # Use wout profiles/scalars for a consistent equilibrium objective.
     flux_w = FluxProfiles(
         phipf=np.asarray(wout.phipf),
-        chipf=np.asarray(wout.chipf),
+        chipf=np.asarray(chips_from_chipf(wout.chipf)),
         phips=np.asarray(wout.phips),
         signgs=int(wout.signgs),
         lamscale=lamscale_from_phips(np.asarray(wout.phips), np.asarray(static.s)),

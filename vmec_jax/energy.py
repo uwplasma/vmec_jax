@@ -18,8 +18,9 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from ._compat import jnp
-from .field import TWOPI, b2_from_bsup, bsup_from_geom, lamscale_from_phips
+from .field import TWOPI, b2_from_bsup, bsup_from_geom, full_mesh_from_half_mesh_avg, lamscale_from_phips
 from .geom import eval_geom
+from .grids import angle_steps
 from .namelist import InData
 from .profiles import eval_profiles
 
@@ -95,8 +96,15 @@ def flux_profiles_from_indata(indata: InData, s, *, signgs: int) -> FluxProfiles
     phipf = phiedge * torflux_deriv * jnp.ones((ns,), dtype=s.dtype)
 
     prof = eval_profiles(indata, s)
-    iota = prof.get("iota", jnp.zeros_like(s))
-    chipf = iota * phipf
+    # VMEC evaluates the input iota profile on the *radial half mesh* (iotaf).
+    # The full-mesh iota profile (iotas) used in `add_fluxes` is then obtained
+    # by inverting VMEC's standard half-mesh averaging map.
+    iotaf = prof.get("iota", jnp.zeros_like(s))
+    iotas = full_mesh_from_half_mesh_avg(iotaf)
+    # VMEC adds the full-mesh `chips(js)=iotas(js)*phips(js)` to bsupu via
+    # `add_fluxes`. In our `bsup_from_*` formulas this enters as the physical
+    # quantity (2π*signgs)*chips = iotas*phipf.
+    chipf = iotas * phipf
 
     phips = (signgs * phipf) / TWOPI
     lamscale = lamscale_from_phips(phips, s)
@@ -117,11 +125,10 @@ def integrate_volume_density(density, sqrtg, s, theta, zeta, *, nfp: int, signgs
         ds = jnp.asarray(1.0, dtype=s.dtype)
     else:
         ds = s[1] - s[0]
-    if theta.shape[0] < 2 or zeta.shape[0] < 2:
-        raise ValueError("theta and zeta must have at least 2 points")
-    dtheta = theta[1] - theta[0]
-    dzeta = zeta[1] - zeta[0]
-    dphi = dzeta / nfp
+    dtheta_f, dzeta_f = angle_steps(ntheta=int(theta.shape[0]), nzeta=int(zeta.shape[0]))
+    dtheta = jnp.asarray(dtheta_f, dtype=s.dtype)
+    dzeta = jnp.asarray(dzeta_f, dtype=s.dtype)
+    dphi = dzeta / int(nfp)
 
     jac = signgs * sqrtg
     per_period = jnp.sum(density * jac) * ds * dtheta * dphi

@@ -27,6 +27,7 @@ from ._compat import has_jax, jax, jnp
 from .field import TWOPI, b2_from_bsup, bsup_from_geom, bsup_from_sqrtg_lambda
 from .fourier import eval_fourier_dtheta, eval_fourier_dzeta_phys
 from .geom import eval_geom
+from .grids import angle_steps
 from .solve import _enforce_lambda_gauge, _mask_grad_for_constraints, _mode00_index, solve_fixed_boundary_gd, solve_fixed_boundary_lbfgs, solve_lambda_gd
 from .state import VMECState, pack_state, unpack_state
 
@@ -154,8 +155,9 @@ def solve_lambda_state_implicit(
         ds = jnp.asarray(1.0, dtype=s.dtype)
     else:
         ds = s[1] - s[0]
-    dtheta = theta[1] - theta[0]
-    dzeta = zeta[1] - zeta[0]
+    dtheta_f, dzeta_f = angle_steps(ntheta=int(theta.shape[0]), nzeta=int(zeta.shape[0]))
+    dtheta = jnp.asarray(dtheta_f, dtype=s.dtype)
+    dzeta = jnp.asarray(dzeta_f, dtype=s.dtype)
     weight = ds * dtheta * dzeta
 
     signgs_i = int(signgs)
@@ -318,8 +320,9 @@ def solve_fixed_boundary_state_implicit(
         ds = jnp.asarray(1.0, dtype=s.dtype)
     else:
         ds = s[1] - s[0]
-    dtheta = theta[1] - theta[0]
-    dzeta = zeta[1] - zeta[0]
+    dtheta_f, dzeta_f = angle_steps(ntheta=int(theta.shape[0]), nzeta=int(zeta.shape[0]))
+    dtheta = jnp.asarray(dtheta_f, dtype=s.dtype)
+    dzeta = jnp.asarray(dzeta_f, dtype=s.dtype)
     weight = ds * dtheta * dzeta
 
     def _objective(state: VMECState, phipf, chipf, pressure, lamscale):

@@ -10,8 +10,9 @@ def test_step8_wout_state_is_nearly_stationary_for_total_energy():
 
     from vmec_jax._compat import enable_x64
     from vmec_jax.config import load_config
-    from vmec_jax.field import TWOPI, b2_from_bsup, bsup_from_geom, lamscale_from_phips
+    from vmec_jax.field import TWOPI, b2_from_bsup, bsup_from_geom, chips_from_chipf, lamscale_from_phips
     from vmec_jax.geom import eval_geom
+    from vmec_jax.grids import angle_steps
     from vmec_jax.solve import _mask_grad_for_constraints, _mode00_index
     from vmec_jax.static import build_static
     from vmec_jax.wout import read_wout, state_from_wout
@@ -36,12 +37,13 @@ def test_step8_wout_state_is_nearly_stationary_for_total_energy():
         ds = jnp.asarray(1.0, dtype=s.dtype)
     else:
         ds = s[1] - s[0]
-    dtheta = theta[1] - theta[0]
-    dzeta = zeta[1] - zeta[0]
+    dtheta_f, dzeta_f = angle_steps(ntheta=int(theta.shape[0]), nzeta=int(zeta.shape[0]))
+    dtheta = jnp.asarray(dtheta_f, dtype=s.dtype)
+    dzeta = jnp.asarray(dzeta_f, dtype=s.dtype)
     weight = ds * dtheta * dzeta
 
     phipf = jnp.asarray(wout.phipf)
-    chipf = jnp.asarray(wout.chipf)
+    chipf = jnp.asarray(chips_from_chipf(wout.chipf))
     signgs = int(wout.signgs)
     pressure = jnp.asarray(wout.presf)
     lamscale = lamscale_from_phips(jnp.asarray(wout.phips), s)
@@ -82,4 +84,3 @@ def test_step8_wout_state_is_nearly_stationary_for_total_energy():
     nn = int(sum(a.size for a in g_arrs))
     grad_rms = float(np.sqrt(ss / nn))
     assert grad_rms < 1e-3
-

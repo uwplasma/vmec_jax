@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vmec_jax.field import bsup_from_sqrtg_lambda, lamscale_from_phips
+from vmec_jax.field import bsup_from_sqrtg_lambda, chips_from_chipf, lamscale_from_phips
 from vmec_jax.fourier import build_helical_basis, eval_fourier
 from vmec_jax.geom import eval_geom
 from vmec_jax.grids import AngleGrid
@@ -39,6 +39,7 @@ def test_step4_bsup_and_wb_against_wout_reference(load_case_lsp_low_res):
 
     # VMEC's lambda in wout is scaled; recover lamscale from phips.
     lamscale = float(np.asarray(lamscale_from_phips(wout.phips, static.s)))
+    chips = np.asarray(chips_from_chipf(wout.chipf))
 
     # Lambda derivatives on our grid (scaled lambda); bsupu uses d/dzeta, so divide by NFP.
     lam_u = np.asarray(g.L_theta)
@@ -49,7 +50,7 @@ def test_step4_bsup_and_wb_against_wout_reference(load_case_lsp_low_res):
         lam_u=lam_u,
         lam_v=lam_v,
         phipf=wout.phipf,
-        chipf=wout.chipf,
+        chipf=chips,
         signgs=wout.signgs,
         lamscale=lamscale,
     )
@@ -85,4 +86,3 @@ def test_step4_bsup_and_wb_against_wout_reference(load_case_lsp_low_res):
 
     assert np.isfinite(wb_calc)
     assert np.isclose(wb_calc, wout.wb, rtol=2e-3, atol=0.0)
-
