@@ -198,11 +198,12 @@ In ``vmec-jax`` we port the discrete ``alias`` operator in:
 
 - ``vmec_jax.vmec_constraints`` (``alias_gcon``).
 
-At present, ``tcon(js)`` is provided by a heuristic that matches VMEC's scaling
-structure (``tcon0`` dependence and the :math:`(32\,hs)^2` factor), but does not
-yet reproduce VMEC's full ``bcovar``-derived computation. Once VMEC's
-preconditioner-related quantities are ported, this heuristic will be replaced
-by a parity-accurate implementation.
+At present, ``tcon(js)`` is computed from a JAX port of the diagonal
+``precondn`` contribution used by VMEC's ``bcovar.f`` for the constraint scaling,
+with a conservative heuristic fallback that matches VMEC's scaling structure
+(``tcon0`` dependence and the :math:`(32\,hs)^2` factor). This is sufficient to
+exercise the full ``alias`` / constraint-force pathway under ``jit``; it is not
+yet expected to be perfect parity with VMEC's full preconditioner machinery.
 
 Step-5 lambda solve (inner solve)
 ---------------------------------
@@ -249,6 +250,9 @@ Two variants exist:
    where :math:`\mathbf{r}` is the stacked residual vector and :math:`J` its Jacobian.
    We apply conjugate gradients to the normal equations using JAX ``jvp/vjp`` to
    form matrix-vector products without materializing :math:`J`.
+
+Both residual solvers can optionally include VMEC's constraint force
+(``include_constraint_force=True``), using the scalar input parameter ``TCON0``.
 
 Current limitations (important)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

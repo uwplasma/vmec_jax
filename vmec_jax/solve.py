@@ -1540,8 +1540,10 @@ def solve_fixed_boundary_gn_vmec_residual(
         raise ValueError("bt_factor must be in (0, 1)")
     if objective_scale is not None and float(objective_scale) <= 0.0:
         raise ValueError("objective_scale must be positive when provided")
-    if bool(include_constraint_force) and bool(jit_kernels):
-        raise ValueError("include_constraint_force=True is not compatible with jit_kernels=True (constraint path uses Python/Numpy)")
+
+    constraint_tcon0: float | None = None
+    if bool(include_constraint_force):
+        constraint_tcon0 = float(indata.get_float("TCON0", 0.0))
 
     signgs = int(signgs)
     idx00 = _mode00_index(static.modes)
@@ -1612,7 +1614,13 @@ def solve_fixed_boundary_gn_vmec_residual(
         )
 
     def _residual_blocks(state: VMECState):
-        k = vmec_forces_rz_from_wout(state=state, static=static, wout=wout_like, indata=indata if bool(include_constraint_force) else None)
+        k = vmec_forces_rz_from_wout(
+            state=state,
+            static=static,
+            wout=wout_like,
+            indata=None,
+            constraint_tcon0=constraint_tcon0,
+        )
         rzl = vmec_residual_internal_from_kernels(
             k,
             cfg_ntheta=int(static.cfg.ntheta),

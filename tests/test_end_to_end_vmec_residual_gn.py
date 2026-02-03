@@ -40,7 +40,7 @@ def test_end_to_end_gn_vmec_residual_decreases_for_circular_tokamak():
         static,
         indata=indata,
         signgs=int(wout.signgs),
-        include_constraint_force=False,
+        include_constraint_force=True,
         max_iter=2,
         damping=1e-2,
         cg_tol=1e-6,

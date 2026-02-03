@@ -26,7 +26,7 @@ from .fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta, eva
 from .grids import AngleGrid
 from .modes import ModeTable
 from .vmec_bcovar import vmec_bcovar_half_mesh_from_wout
-from .vmec_constraints import alias_gcon, tcon_from_bcovar_precondn_diag, tcon_from_indata_heuristic
+from .vmec_constraints import alias_gcon, tcon_from_bcovar_precondn_diag, tcon_from_tcon0_heuristic
 from .vmec_tomnsp import TomnspsRZL, VmecTrigTables, tomnsps_rzl, tomnspa_rzl, vmec_angle_grid, vmec_trig_tables
 from .vmec_parity import internal_odd_from_physical_vmec_m1, split_rzl_even_odd_m
 
@@ -146,7 +146,7 @@ def _avg_forward_half(a):
     return out
 
 
-def vmec_forces_rz_from_wout(*, state, static, wout, indata=None) -> VmecRZForceKernels:
+def vmec_forces_rz_from_wout(*, state, static, wout, indata=None, constraint_tcon0: float | None = None) -> VmecRZForceKernels:
     """Compute VMEC R/Z force kernels (armn/brmn/...) from a `wout` equilibrium."""
     s = jnp.asarray(static.s)
     ohs = jnp.asarray(1.0 / (s[1] - s[0])) if s.shape[0] >= 2 else jnp.asarray(0.0)
@@ -304,6 +304,8 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None) -> VmecRZForce
     azcon_o = z
     gcon = z
     if indata is not None:
+        constraint_tcon0 = float(indata.get_float("TCON0", 0.0))
+    if constraint_tcon0 is not None:
         # xmpq(m,1)=m*(m-1) acting on Fourier coefficients, split by m-parity.
         m_k = jnp.asarray(static.modes.m, dtype=jnp.asarray(state.Rcos).dtype)
         xmpq1 = m_k * (m_k - 1.0)  # (K,)
@@ -347,23 +349,30 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None) -> VmecRZForce
         # VMEC computes the constraint strength `tcon(js)` in `bcovar.f` using
         # diagonal preconditioner pieces and flux-surface norms. Use our reduced
         # port when possible; fall back to a conservative heuristic otherwise.
-        try:
-            tcon = tcon_from_bcovar_precondn_diag(
-                indata=indata,
-                trig=trig,
-                s=np.asarray(s),
-                signgs=int(wout.signgs),
-                lasym=bool(wout.lasym),
-                bsq=bc.bsq,
-                r12=bc.jac.r12,
-                sqrtg=bc.jac.sqrtg,
-                ru12=bc.jac.ru12,
-                zu12=bc.jac.zu12,
-                ru0=ru0,
-                zu0=zu0,
-            )
-        except Exception:
-            tcon = tcon_from_indata_heuristic(indata=indata, s=np.asarray(s), trig=trig, lasym=bool(wout.lasym))
+        tcon = tcon_from_bcovar_precondn_diag(
+            tcon0=float(constraint_tcon0),
+            trig=trig,
+            s=s,
+            signgs=int(wout.signgs),
+            lasym=bool(wout.lasym),
+            bsq=bc.bsq,
+            r12=bc.jac.r12,
+            sqrtg=bc.jac.sqrtg,
+            ru12=bc.jac.ru12,
+            zu12=bc.jac.zu12,
+            ru0=ru0,
+            zu0=zu0,
+        )
+        # Fallback to a conservative constant profile if the precondn-derived
+        # computation is ill-conditioned (e.g. degenerate ru0/zu0 norms).
+        finite = jnp.all(jnp.isfinite(tcon))
+        tcon_heur = tcon_from_tcon0_heuristic(
+            tcon0=float(constraint_tcon0),
+            s=s,
+            trig=trig,
+            lasym=bool(wout.lasym),
+        )
+        tcon = jnp.where(finite, tcon, tcon_heur)
         gcon = alias_gcon(
             ztemp=ztemp,
             trig=trig,
