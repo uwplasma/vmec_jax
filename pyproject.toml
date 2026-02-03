@@ -27,3 +27,8 @@ dev = ["pytest>=7.0", "ruff>=0.1", "mypy>=1.6"]
 
 [tool.setuptools]
 packages = ["vmec_jax"]
+
+[tool.pytest.ini_options]
+markers = [
+  "vmec2000: integration tests requiring a local VMEC2000 build (+ mpi4py/netCDF4)",
+]

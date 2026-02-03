@@ -24,14 +24,15 @@ def _try_import_jax() -> Tuple[Any, Any, Callable[[Callable[..., Any]], Callable
         # Enable x64 by default for VMEC parity unless the user opted out.
         os.environ.setdefault("JAX_ENABLE_X64", "1")
         import jax
-        import jax.numpy as jnp
 
-        # Also set via config (works even if env var was ignored because JAX was
-        # already imported elsewhere, as long as it happens before first use).
+        # Also set via config. This must happen before importing `jax.numpy`
+        # to reliably affect dtype defaults.
         try:
             jax.config.update("jax_enable_x64", os.environ.get("JAX_ENABLE_X64", "0") == "1")
         except Exception:
             pass
+
+        import jax.numpy as jnp
 
         return jax, jnp, jax.jit
     except Exception:

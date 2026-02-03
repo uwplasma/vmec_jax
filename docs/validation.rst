@@ -96,6 +96,10 @@ test suite includes a small smoke test that calls the VMEC2000 Python API to run
 a low-resolution case and compares the produced ``wout_*.nc`` to the bundled
 reference.
 
+There is also an optional integration parity test that runs VMEC2000, reads the
+generated ``wout_*.nc``, and checks that ``vmec-jax`` reproduces the Step-10 scalar
+residuals (``fsqr/fsqz/fsql``) on the same case.
+
 This test is skipped automatically if:
 
 - the ``VMEC2000`` folder is not present,
@@ -104,3 +108,7 @@ This test is skipped automatically if:
 
 It requires ``mpi4py`` (VMEC2000's wrapper expects MPI to be initialized even in
 single-process mode).
+
+To run the integration tests locally::
+
+  VMEC2000_INTEGRATION=1 pytest -q -m vmec2000
