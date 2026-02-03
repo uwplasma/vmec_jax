@@ -5,7 +5,7 @@ containing the same subset of fields it can read via :func:`vmec_jax.wout.read_w
 
 Usage
 -----
-  python examples/3_Advanced/06_wout_roundtrip.py --wout examples/wout_circular_tokamak_reference.nc --out wout_roundtrip.nc
+  python examples/validation/wout_roundtrip.py --wout examples/data/wout_circular_tokamak_reference.nc --out wout_roundtrip.nc
 
 Requires:
 - netCDF4
@@ -39,4 +39,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

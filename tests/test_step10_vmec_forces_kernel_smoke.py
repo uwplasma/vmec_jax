@@ -17,8 +17,8 @@ def test_step10_vmec_forces_kernel_smoke_axisymmetric():
     pytest.importorskip("netCDF4")
 
     root = Path(__file__).resolve().parents[1]
-    input_path = root / "examples/input.circular_tokamak"
-    wout_path = root / "examples/wout_circular_tokamak_reference.nc"
+    input_path = root / "examples/data/input.circular_tokamak"
+    wout_path = root / "examples/data/wout_circular_tokamak_reference.nc"
     assert input_path.exists()
     assert wout_path.exists()
 
@@ -42,4 +42,3 @@ def test_step10_vmec_forces_kernel_smoke_axisymmetric():
     coeffs = rz_residual_coeffs_from_kernels(k, static=static)
     assert np.all(np.isfinite(np.asarray(coeffs.gcr_cos)))
     assert np.all(np.isfinite(np.asarray(coeffs.gcz_cos)))
-

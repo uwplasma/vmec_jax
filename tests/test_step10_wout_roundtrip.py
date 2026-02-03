@@ -9,10 +9,10 @@ from vmec_jax.wout import read_wout, write_wout
 
 
 _CASES = [
-    "examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc",
-    "examples/wout_circular_tokamak_reference.nc",
-    "examples/wout_up_down_asymmetric_tokamak_reference.nc",
-    "examples/wout_li383_low_res_reference.nc",
+    "examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc",
+    "examples/data/wout_circular_tokamak_reference.nc",
+    "examples/data/wout_up_down_asymmetric_tokamak_reference.nc",
+    "examples/data/wout_li383_low_res_reference.nc",
 ]
 
 
@@ -79,4 +79,3 @@ def test_step10_wout_roundtrip_read_write_read(tmp_path: Path, wout_rel: str):
 
     for name in ["wb", "volume_p", "gamma", "wp", "fsqr", "fsqz", "fsql"]:
         assert float(getattr(w0, name)) == float(getattr(w1, name))
-

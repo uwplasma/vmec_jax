@@ -27,8 +27,8 @@ from vmec_jax.wout import read_wout, state_from_wout
 def main():
     enable_x64()
     root = Path(__file__).resolve().parents[2]
-    input_path = root / "examples/input.circular_tokamak"
-    wout_path = root / "examples/wout_circular_tokamak_reference.nc"
+    input_path = root / "examples/data/input.circular_tokamak"
+    wout_path = root / "examples/data/wout_circular_tokamak_reference.nc"
 
     cfg, indata = load_config(str(input_path))
     wout = read_wout(wout_path)

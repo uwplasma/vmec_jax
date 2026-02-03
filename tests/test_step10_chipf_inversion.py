@@ -13,10 +13,10 @@ from vmec_jax.wout import read_wout
 @pytest.mark.parametrize(
     "wout_rel",
     [
-        "examples/wout_circular_tokamak_reference.nc",
-        "examples/wout_up_down_asymmetric_tokamak_reference.nc",
-        "examples/wout_li383_low_res_reference.nc",
-        "examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc",
+        "examples/data/wout_circular_tokamak_reference.nc",
+        "examples/data/wout_up_down_asymmetric_tokamak_reference.nc",
+        "examples/data/wout_li383_low_res_reference.nc",
+        "examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc",
     ],
 )
 def test_step10_chips_from_chipf_matches_iotas_phips_when_ncurr0(wout_rel: str):
@@ -38,4 +38,3 @@ def test_step10_chips_from_chipf_matches_iotas_phips_when_ncurr0(wout_rel: str):
     chips = np.asarray(chips_from_chipf(wout.chipf))
     chips_expected = (2.0 * np.pi * float(wout.signgs)) * (np.asarray(wout.iotas) * np.asarray(wout.phips))
     np.testing.assert_allclose(chips, chips_expected, rtol=0.0, atol=1e-10)
-

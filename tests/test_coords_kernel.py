@@ -9,7 +9,7 @@ from vmec_jax.fourier import eval_fourier
 
 
 def test_boundary_matches_state_surface():
-    cfg, indata = load_config("examples/input.LandremanSenguptaPlunk_section5p3_low_res")
+    cfg, indata = load_config("examples/data/input.LandremanSenguptaPlunk_section5p3_low_res")
     static = build_static(cfg)
     bdy = boundary_from_indata(indata, static.modes)
     state0 = initial_guess_from_boundary(static, bdy, indata)

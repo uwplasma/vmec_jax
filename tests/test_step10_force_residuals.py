@@ -30,7 +30,7 @@ def test_step10_force_residuals_are_smaller_for_wout_equilibrium(load_case_lsp_l
     r0 = force_residuals_from_state(st0, static, flux=flux0, pressure=pressure0, gamma=gamma0)
     assert np.isfinite(r0.fsq_like)
 
-    wout = read_wout("examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc")
+    wout = read_wout("examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc")
     st_w = state_from_wout(wout)
     # Use wout profiles/scalars for a consistent equilibrium objective.
     flux_w = FluxProfiles(

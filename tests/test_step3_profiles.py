@@ -58,7 +58,7 @@ def test_volume_total_matches_vmec2000_wout_reference(load_case_lsp_low_res):
 
     V_total = float(np.asarray(V[-1])) * float(cfg.nfp)  # full torus
 
-    wout = Path(__file__).resolve().parents[1] / "examples" / "wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc"
+    wout = Path(__file__).resolve().parents[1] / "examples" / "data" / "wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc"
     with netCDF4.Dataset(wout) as ds:
         V_ref = float(ds.variables["volume_p"][:])
 

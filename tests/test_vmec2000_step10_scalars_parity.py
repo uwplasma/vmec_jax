@@ -111,7 +111,7 @@ def test_vmec2000_step10_scalars_match_vmec_jax_for_circular_tokamak(tmp_path: P
     import vmec  # type: ignore  # noqa: PLC0415
 
     repo_root = Path(__file__).resolve().parents[1]
-    input_path = repo_root / "examples/input.circular_tokamak"
+    input_path = repo_root / "examples/data/input.circular_tokamak"
     assert input_path.exists()
 
     out_wout_path = _run_vmec2000_case(

@@ -22,8 +22,8 @@ def test_step9_implicit_fixed_boundary_grad_matches_finite_difference():
 
     enable_x64(True)
 
-    cfg, _indata = load_config("examples/input.circular_tokamak")
-    wout = read_wout("examples/wout_circular_tokamak_reference.nc")
+    cfg, _indata = load_config("examples/data/input.circular_tokamak")
+    wout = read_wout("examples/data/wout_circular_tokamak_reference.nc")
 
     # Use a slightly higher angular resolution for smoother volume sensitivity.
     ntheta = max(int(cfg.ntheta), 32)

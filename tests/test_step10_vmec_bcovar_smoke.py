@@ -29,8 +29,8 @@ def test_step10_vmec_bcovar_halfmesh_smoke_circular_tokamak():
     pytest.importorskip("netCDF4")
 
     root = Path(__file__).resolve().parents[1]
-    input_path = root / "examples/input.circular_tokamak"
-    wout_path = root / "examples/wout_circular_tokamak_reference.nc"
+    input_path = root / "examples/data/input.circular_tokamak"
+    wout_path = root / "examples/data/wout_circular_tokamak_reference.nc"
     assert input_path.exists()
     assert wout_path.exists()
 
@@ -73,4 +73,3 @@ def test_step10_vmec_bcovar_halfmesh_smoke_circular_tokamak():
         assert err_bsup_v < 0.6
         assert err_bsub_u < 0.3
         assert err_bsub_v < 0.3
-

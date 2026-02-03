@@ -16,8 +16,8 @@ from vmec_jax.wout import read_wout, state_from_wout
 @pytest.mark.parametrize(
     "input_rel,wout_rel",
     [
-        ("examples/input.circular_tokamak", "examples/wout_circular_tokamak_reference.nc"),
-        ("examples/input.li383_low_res", "examples/wout_li383_low_res_reference.nc"),
+        ("examples/data/input.circular_tokamak", "examples/data/wout_circular_tokamak_reference.nc"),
+        ("examples/data/input.li383_low_res", "examples/data/wout_li383_low_res_reference.nc"),
     ],
 )
 def test_step10_equif_matches_eqfor_normalization(input_rel: str, wout_rel: str):

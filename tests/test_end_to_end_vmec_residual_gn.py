@@ -19,8 +19,8 @@ def test_end_to_end_gn_vmec_residual_decreases_for_circular_tokamak():
 
     enable_x64(True)
 
-    cfg, indata = load_config("examples/input.circular_tokamak")
-    wout = read_wout("examples/wout_circular_tokamak_reference.nc")
+    cfg, indata = load_config("examples/data/input.circular_tokamak")
+    wout = read_wout("examples/data/wout_circular_tokamak_reference.nc")
 
     static = build_static(
         cfg,

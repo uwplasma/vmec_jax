@@ -20,9 +20,9 @@ def test_step8_wout_state_is_nearly_stationary_for_total_energy():
 
     enable_x64(True)
 
-    cfg, _indata = load_config("examples/input.LandremanSenguptaPlunk_section5p3_low_res")
+    cfg, _indata = load_config("examples/data/input.LandremanSenguptaPlunk_section5p3_low_res")
     static = build_static(cfg)
-    wout = read_wout("examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc")
+    wout = read_wout("examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc")
     st = state_from_wout(wout)
 
     # Sanity: VMEC's own reported force residuals are tiny for the reference equilibrium.

@@ -27,8 +27,8 @@ def main():
     import jax.numpy as jnp
 
     root = REPO_ROOT
-    input_path = root / "examples/input.circular_tokamak"
-    wout_path = root / "examples/wout_circular_tokamak_reference.nc"
+    input_path = root / "examples/data/input.circular_tokamak"
+    wout_path = root / "examples/data/wout_circular_tokamak_reference.nc"
 
     cfg, _indata = load_config(str(input_path))
     wout = read_wout(wout_path)

@@ -19,7 +19,7 @@ def test_step5_solve_lambda_decreases_wb_toward_wout(load_case_lsp_low_res):
 
     cfg, _indata, static, _bdy, _st0 = load_case_lsp_low_res
 
-    wout_path = Path(__file__).resolve().parents[1] / "examples" / "wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc"
+    wout_path = Path(__file__).resolve().parents[1] / "examples" / "data" / "wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc"
     wout = read_wout(wout_path)
     st_ref = state_from_wout(wout)
 

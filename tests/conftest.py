@@ -28,7 +28,7 @@ def load_case_lsp_low_res():
     if has_jax():
         enable_x64(True)
 
-    inpath = _ROOT / "examples" / "input.LandremanSenguptaPlunk_section5p3_low_res"
+    inpath = _ROOT / "examples" / "data" / "input.LandremanSenguptaPlunk_section5p3_low_res"
     cfg, indata = load_config(str(inpath))
     static = build_static(cfg)
     bdy = boundary_from_indata(indata, static.modes)
