@@ -12,15 +12,15 @@ The repo includes several small, low-resolution reference cases used in examples
 and tests:
 
 - 3D stellarator (vacuum):
-  - input: ``examples/input.LandremanSenguptaPlunk_section5p3_low_res``
-  - reference output: ``examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc``
+  - input: ``examples/data/input.LandremanSenguptaPlunk_section5p3_low_res``
+  - reference output: ``examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc``
 
 - Tokamak sanity cases (vacuum):
-  - ``examples/input.circular_tokamak`` + ``examples/wout_circular_tokamak_reference.nc``
-  - ``examples/input.up_down_asymmetric_tokamak`` + ``examples/wout_up_down_asymmetric_tokamak_reference.nc``
+  - ``examples/data/input.circular_tokamak`` + ``examples/data/wout_circular_tokamak_reference.nc``
+  - ``examples/data/input.up_down_asymmetric_tokamak`` + ``examples/data/wout_up_down_asymmetric_tokamak_reference.nc``
 
 - Finite-beta case:
-  - ``examples/input.li383_low_res`` + ``examples/wout_li383_low_res_reference.nc``
+  - ``examples/data/input.li383_low_res`` + ``examples/data/wout_li383_low_res_reference.nc``
 
 What is validated today
 -----------------------
@@ -76,10 +76,63 @@ The scoreboard below reports relative errors
 
 Notes:
 
-- The largest current mismatch is ``fsql`` on the 3D ``LandremanSenguptaPlunk`` case;
-  this is treated as the main “scoreboard” item for further Step-10 parity work.
+- The remaining mismatches are primarily on 3D cases (``li383_low_res`` and
+  ``LandremanSenguptaPlunk_section5p3_low_res``), reflecting that Step-10
+  conventions are still being ported and tightened.
 - These numbers are expected to change as parity improves; the authoritative
   regression is ``tests/test_step10_residue_getfsq_parity.py``.
+
+Feature parity matrix (selected)
+--------------------------------
+
+The table below summarizes parity at a feature level. “OK” indicates coverage
+by the test suite (typically via bundled ``wout`` regressions); “Partial”
+indicates known gaps or loose tolerances.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 14 14 14 28
+
+   * - Area
+     - Axisym (ntor=0)
+     - 3D (lasym=F)
+     - 3D (lasym=T)
+     - Notes
+   * - Boundary + geometry kernels
+     - OK
+     - OK
+     - OK
+     - ``sqrt(g)`` + Nyquist fields validated vs ``wout``
+   * - B-field parity (``bsup*``, ``bsub*``, ``|B|``)
+     - OK
+     - OK
+     - OK
+     - parity figures under ``examples/validation/``
+   * - ``wout`` I/O (read + minimal write)
+     - OK
+     - OK
+     - OK
+     - ``tests/test_step10_wout_roundtrip.py``
+   * - Step-10 scalar residuals (``fsqr/fsqz/fsql``)
+     - Partial
+     - Partial
+     - Partial
+     - tracked by ``tests/test_step10_residue_getfsq_parity.py``
+   * - Fixed-boundary solvers
+     - Partial
+     - Partial
+     - Partial
+     - monotone energy decrease; VMEC-quality convergence is WIP
+   * - Implicit differentiation demos
+     - OK
+     - OK
+     - OK
+     - examples under ``examples/gradients/``
+   * - Free-boundary equilibrium
+     - Planned
+     - Planned
+     - Planned
+     - not implemented
 
 Running tests::
 

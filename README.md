@@ -4,6 +4,10 @@ Laptop-friendly, end-to-end differentiable (JAX) rewrite of **VMEC2000** (fixed-
 
 ![VMEC Step-10 parity pipeline](docs/_static/step10_pipeline.svg)
 
+![LCFS cross-sections (one field period)](docs/_static/figures/lcfs_cross_sections.png)
+
+![|B| parity error vs VMEC2000 wout](docs/_static/figures/bmag_parity_error.png)
+
 `vmec-jax` aims to:
 - reproduce VMEC2000 equilibria for the same inputs (output parity via `wout_*.nc` regressions),
 - expose a clean, composable Python/JAX API (grad/JIT/vmap-ready),
@@ -24,7 +28,7 @@ Force/residue parity (`fsqr/fsqz/fsql`) is under active development (see `CODEX_
   - full `(R,Z,λ)` energy minimization,
   - L-BFGS variant (no external optimizer dependency).
 - Parity tooling vs VMEC2000 `wout_*.nc` (Nyquist fields, scalar integrals, diagnostics figures).
-- Step-10 parity (baseline): VMEC-style `forces` + `tomnsps` + `getfsq` scalars (`fsqr/fsqz/fsql`) match the bundled circular tokamak `wout` to a few percent (see `examples/3_Advanced/10_vmec_forces_rz_kernel_report.py` and `tests/test_step10_residue_getfsq_parity.py`).
+- Step-10 parity (baseline): VMEC-style `forces` + `tomnsps` + `getfsq` scalars (`fsqr/fsqz/fsql`) match the bundled circular tokamak `wout` to a few percent (see `examples/validation/vmec_forces_rz_kernel_report.py` and `tests/test_step10_residue_getfsq_parity.py`).
 - Advanced: implicit differentiation demos (custom VJP) for solver-aware gradients.
 
 ## Current parity status (Step-10 scalar residuals)
@@ -40,31 +44,59 @@ Not yet implemented (planned):
 - Free-boundary VMEC.
 - MPI/parallelization.
 
+## Parity matrix (high level)
+
+Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose tolerances), `Planned`.
+
+| Area | Axisym (ntor=0) | 3D (lasym=F) | 3D (lasym=T) | Notes |
+| --- | --- | --- | --- | --- |
+| INDATA parsing + boundary | OK | OK | OK | `tests/` + `examples/tutorial/00_*` |
+| Geometry (metrics + sqrtg) | OK | OK | OK | Nyquist `gmnc/gmns` parity tests |
+| B field (`bsup*`, `bsub*`, `|B|`) | OK | OK | OK | parity figures under `examples/validation/` |
+| Energy scalars (`wb`, `wp`, volume) | OK | OK | OK | regression tests vs bundled `wout` |
+| `wout` I/O (read + minimal write) | OK | OK | OK | `tests/test_step10_wout_roundtrip.py` |
+| Step-10 `forces → tomnsps → getfsq` | Partial | Partial | Partial | scalar parity tracked in `docs/validation.rst` |
+| Step-10 `tomnspa` (lasym) blocks | n/a | n/a | Partial | `fsql` is the most sensitive |
+| Fixed-boundary solvers | Partial | Partial | Partial | monotone energy decrease; not VMEC-quality yet |
+| Implicit differentiation | OK | OK | OK | example coverage; solver parity still WIP |
+| Free-boundary VMEC | Planned | Planned | Planned | not implemented |
+
 ## Installation
 
-Create an environment with Python ≥ 3.10, then install editable:
+Create an environment with Python ≥ 3.10.
+
+Regular users (non-editable install):
 
 ```bash
-pip install -e .
+git clone https://github.com/uwplasma/vmec_jax.git
+cd vmec_jax
+python -m pip install -U pip
+python -m pip install .
+```
+
+Developers (editable install):
+
+```bash
+python -m pip install -e .
 ```
 
 Recommended extras:
 
 ```bash
 # JAX runtime (CPU)
-pip install -e .[jax]
+python -m pip install ".[jax]"
 
 # Read VMEC2000 `wout_*.nc` reference files
-pip install -e .[netcdf]
+python -m pip install ".[netcdf]"
 
 # Publication-ready figures in examples
-pip install -e .[plots]
+python -m pip install ".[plots]"
 
 # Build docs locally
-pip install -e .[docs]
+python -m pip install ".[docs]"
 
 # Dev tools
-pip install -e .[dev]
+python -m pip install -e ".[dev]"
 ```
 
 VMEC is typically run in float64. Enable x64 for JAX:
@@ -75,29 +107,32 @@ export JAX_ENABLE_X64=1
 
 ## Quickstart
 
-Run a small validated workflow (inputs are bundled under `examples/`):
+Run a small validated workflow (inputs + reference `wout` files are bundled under `examples/data/`):
 
 ```bash
-python examples/1_Simple/00_parse_and_boundary.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out boundary.npz --verbose
-python examples/1_Simple/02_init_guess_and_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out coords_step1.npz --verbose
-python examples/2_Intermediate/04_geom_metrics.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out geom_step2.npz --verbose
-python examples/2_Intermediate/05_profiles_and_volume.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out profiles_step3.npz --verbose
-python examples/2_Intermediate/06_field_and_energy.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --verbose
+python examples/tutorial/00_parse_and_boundary.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out boundary.npz --verbose
+python examples/tutorial/02_init_guess_and_coords.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out coords_step1.npz --verbose
+python examples/tutorial/04_geom_metrics.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out geom_step2.npz --verbose
+python examples/tutorial/05_profiles_and_volume.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out profiles_step3.npz --verbose
+python examples/tutorial/06_field_and_energy.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --verbose
 ```
 
-Note: top-level scripts `examples/00_...py` etc exist as compatibility wrappers and forward to the categorized folders.
+Note: top-level scripts `examples/00_...py` etc exist as compatibility wrappers and forward to `examples/tutorial/`.
 
 ## Examples
 
 Examples are organized into:
-- `examples/1_Simple/`: short demos and quick plots.
-- `examples/2_Intermediate/`: multi-kernel workflows + parity/diagnostics figures.
-- `examples/3_Advanced/`: solver experiments, ParaView export (VTK), sensitivity studies.
+- `examples/tutorial/`: step-by-step scripts (00–09).
+- `examples/validation/`: parity checks vs bundled `wout_*.nc` + reports.
+- `examples/visualization/`: plotting + VTK export.
+- `examples/gradients/`: autodiff + implicit differentiation demos.
+- `examples/solvers/`: solver experiments / convergence scripts.
+- `examples/data/`: bundled regression inputs + reference `wout` files.
 
 ParaView export (VTK surface fields + field lines):
 
 ```bash
-python examples/3_Advanced/02_vtk_field_and_fieldlines.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --hi-res --outdir vtk_out
+python examples/visualization/vtk_field_and_fieldlines.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --hi-res --outdir vtk_out
 ```
 
 ## Documentation

@@ -12,16 +12,17 @@ Recommended:
 
 - ``netCDF4`` to read VMEC2000 ``wout_*.nc`` files for validation
 
-Install from source (editable)
-------------------------------
+Install from source
+-------------------
 
-From the repo root::
+From the repo root (non-editable install)::
 
-  pip install -e .
+  python -m pip install -U pip
+  python -m pip install .
 
 Enable JAX::
 
-  pip install -e .[jax]
+  python -m pip install ".[jax]"
 
 VMEC relies heavily on float64. JAX defaults to float32 unless x64 is enabled.
 We recommend setting::
@@ -30,16 +31,19 @@ We recommend setting::
 
 Enable netCDF support::
 
-  pip install -e .[netcdf]
+  python -m pip install ".[netcdf]"
+
+Editable install (recommended for development)::
+
+  python -m pip install -e .
 
 Build docs locally
 ------------------
 
 Install doc dependencies::
 
-  pip install -e .[docs]
+  python -m pip install ".[docs]"
 
 Then build docs::
 
   python -m sphinx -b html docs docs/_build/html
-

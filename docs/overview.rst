@@ -32,6 +32,30 @@ workflows.
 
    The Step-10 parity pipeline used for regressions against VMEC2000 (fixed-boundary).
 
+.. figure:: _static/figures/lcfs_cross_sections.png
+   :alt: VMEC LCFS cross-sections
+   :align: center
+   :width: 90%
+
+   Example output: last-closed flux surface (LCFS) cross-sections at several
+   toroidal slices within one field period.
+
+.. figure:: _static/figures/bmag_parity_error.png
+   :alt: |B| parity error figure
+   :align: center
+   :width: 90%
+
+   Example output: relative error in reconstructed ``|B|`` compared to the
+   bundled VMEC2000 ``wout`` reference (a typical Step-10 parity diagnostic).
+
+.. figure:: _static/figures/energy_convergence.png
+   :alt: Fixed-boundary solver convergence
+   :align: center
+   :width: 75%
+
+   Example output: fixed-boundary solver energy convergence on a small case
+   (illustrative; solver parity vs VMEC2000 is still in progress).
+
 Scope (current)
 ---------------
 
