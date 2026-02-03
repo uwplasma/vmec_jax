@@ -37,7 +37,15 @@ Force/residue parity (`fsqr/fsqz/fsql`) is under active development (see `CODEX_
 (`fsqr`, `fsqz`, `fsql`) computed from the ported `bcovar → forces → tomnsps → getfsq`
 pipeline against bundled VMEC2000 reference `wout_*.nc` outputs.
 
-The current relative errors (as of the latest CI run) are summarized in `docs/validation.rst`.
+The current relative errors are tracked in `docs/validation.rst`. Snapshot (relative error
+`|f̂-f|/max(|f|,ε)`):
+
+| Case | fsqr | fsqz | fsql |
+| --- | ---: | ---: | ---: |
+| circular_tokamak | ~4.9e-2 | ~4.6e-2 | ~4.8e-3 |
+| up_down_asymmetric_tokamak | ~4.1e-2 | ~1.3e-2 | ~3.2e-2 |
+| li383_low_res | ~1.6e-1 | ~1.2e-1 | ~1.1e-1 |
+| LandremanSenguptaPlunk_section5p3_low_res | ~1.1e-1 | ~8.9e-2 | ~1.6e-2 |
 
 Not yet implemented (planned):
 - Full VMEC-quality fixed-boundary convergence (VMEC-style preconditioners + force/residue parity).
@@ -53,13 +61,47 @@ Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose to
 | INDATA parsing + boundary | OK | OK | OK | `tests/` + `examples/tutorial/00_*` |
 | Geometry (metrics + sqrtg) | OK | OK | OK | Nyquist `gmnc/gmns` parity tests |
 | B field (`bsup*`, `bsub*`, `|B|`) | OK | OK | OK | parity figures under `examples/validation/` |
-| Energy scalars (`wb`, `wp`, volume) | OK | OK | OK | regression tests vs bundled `wout` |
+| Energy scalars (`wb`, `wp`, volume) | OK | OK | OK | `tests/test_step10_energy_integrals_parity.py` + `wout.vp` checks |
 | `wout` I/O (read + minimal write) | OK | OK | OK | `tests/test_step10_wout_roundtrip.py` |
 | Step-10 `forces → tomnsps → getfsq` | Partial | Partial | Partial | scalar parity tracked in `docs/validation.rst` |
 | Step-10 `tomnspa` (lasym) blocks | n/a | n/a | Partial | `fsql` is the most sensitive |
 | Fixed-boundary solvers | Partial | Partial | Partial | monotone energy decrease; not VMEC-quality yet |
 | Implicit differentiation | OK | OK | OK | example coverage; solver parity still WIP |
 | Free-boundary VMEC | Planned | Planned | Planned | not implemented |
+
+## Next steps toward full VMEC2000 parity
+
+Concrete milestones (correctness-first):
+
+- Tighten Step-10 scalar parity on 3D cases:
+  - isolate which residual blocks dominate the remaining `fsqr/fsqz/fsql` gaps (per-case decomposition by `(m,n)` and by kernel source: `A/B/C` vs constraint terms),
+  - match VMEC’s constraint-force pipeline end-to-end (especially `tcon(js)` from `bcovar/precondn` and the `alias → gcon` operator), since this is a major lever for 3D near-axis behavior.
+- Finish the missing VMEC2000 “plumbing” that affects Step-10 scalars:
+  - remaining `bcovar` details that influence `forces` (e.g. exact half/full mesh handling for quantities consumed by `forces.f`),
+  - confirm axis rules (`jmin1/jmin2/jlam`) and `LCONM1` constraint behavior match `residue.f90` in the converged regime.
+- Move from “parity kernels” to a VMEC-quality fixed-boundary solver:
+  - port the 1D (and later 2D) preconditioners and use them in a Newton / quasi-Newton / preconditioned descent loop that converges comparably to VMEC2000 on the bundled cases,
+  - ensure solver stopping criteria and reported diagnostics match VMEC (including how `fsq*` are computed during the iteration history).
+
+## Performance roadmap (JAX-first)
+
+The current code is intentionally explicit and validation-driven. For performance, the biggest wins will come from swapping dense mode-sums for FFT-based spectral transforms and carefully structuring JAX compilation:
+
+- Replace “basis-matrix” Fourier evaluation/projection with FFT pipelines:
+  - use `jax.numpy.fft` (or `jax.scipy.fft`) in `θ` and `ζ` to implement VMEC-like transforms (`totzsp*`, `tomnsp*`, `alias`) without materializing `(K, ntheta, nzeta)` bases,
+  - keep the VMEC normalization (`mscale/nscale`, endpoint half-weights, `ntheta2/ntheta3` conventions) by applying small post-FFT scaling/packing steps.
+- Fuse and batch the radial work:
+  - use `jax.lax.scan` over `s` for recurrences and half-mesh operations to reduce memory pressure and compile time,
+  - keep array layouts stable (`(ns, ntheta, nzeta)` contiguous) and avoid Python-side loops inside hot paths.
+- Make compilation predictable:
+  - enforce static shapes for `(ns, ntheta, nzeta, mpol, ntor)` in the core kernels,
+  - use `jax.jit` with `static_argnames` (and small dataclass “static” bundles) to avoid recompiles.
+- Solver-level algorithms that map well to JAX:
+  - preconditioned nonlinear least-squares (Gauss–Newton / Levenberg–Marquardt) with matrix-free JVP/VJP and iterative linear solves (CG) for inner steps,
+  - quasi-Newton (L-BFGS) as a fallback; optionally wire `jaxopt`/`optax` for robust line-searches and schedules while keeping end-to-end differentiability.
+- GPU/TPU readiness:
+  - avoid host callbacks in hot loops; keep diagnostics optional/off by default,
+  - favor XLA-friendly primitives (`lax` control flow, `vmap`, FFTs) and keep `float64` supported (VMEC parity needs it; GPU `x64` can be slower but remains valuable for validation).
 
 ## Installation
 
