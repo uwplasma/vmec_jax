@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev,jax,netcdf,docs]"
+
+      - name: Compile (Python)
+        run: |
+          python -m compileall -q vmec_jax
+
+      - name: Run tests
+        env:
+          JAX_ENABLE_X64: "1"
+        run: |
+          pytest -q
+
+  build:
+    name: Build (wheel/sdist + docs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build + docs deps
+        run: |
+          python -m pip install -U pip
+          python -m pip install build
+          python -m pip install -e ".[docs]"
+
+      - name: Build wheel and sdist
+        run: |
+          python -m build
+
+      - name: Build docs (warnings as errors)
+        run: |
+          python -m sphinx -W -b html docs docs/_build/html
+

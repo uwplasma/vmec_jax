@@ -26,6 +26,12 @@ The goal is to enable fast prototyping of equilibrium solvers, robust
 integration into optimization loops, and differentiable “physics-in-the-loop”
 workflows.
 
+.. figure:: _static/step10_pipeline.svg
+   :alt: VMEC Step-10 parity pipeline diagram
+   :align: center
+
+   The Step-10 parity pipeline used for regressions against VMEC2000 (fixed-boundary).
+
 Scope (current)
 ---------------
 

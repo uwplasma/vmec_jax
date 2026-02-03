@@ -2,6 +2,8 @@
 
 Laptop-friendly, end-to-end differentiable (JAX) rewrite of **VMEC2000** (fixed-boundary first).
 
+![VMEC Step-10 parity pipeline](docs/_static/step10_pipeline.svg)
+
 `vmec-jax` aims to:
 - reproduce VMEC2000 equilibria for the same inputs (output parity via `wout_*.nc` regressions),
 - expose a clean, composable Python/JAX API (grad/JIT/vmap-ready),
@@ -24,6 +26,14 @@ Force/residue parity (`fsqr/fsqz/fsql`) is under active development (see `CODEX_
 - Parity tooling vs VMEC2000 `wout_*.nc` (Nyquist fields, scalar integrals, diagnostics figures).
 - Step-10 parity (baseline): VMEC-style `forces` + `tomnsps` + `getfsq` scalars (`fsqr/fsqz/fsql`) match the bundled circular tokamak `wout` to a few percent (see `examples/3_Advanced/10_vmec_forces_rz_kernel_report.py` and `tests/test_step10_residue_getfsq_parity.py`).
 - Advanced: implicit differentiation demos (custom VJP) for solver-aware gradients.
+
+## Current parity status (Step-10 scalar residuals)
+
+`vmec-jax` includes a Step-10 parity regression that compares VMEC-style scalar residuals
+(`fsqr`, `fsqz`, `fsql`) computed from the ported `bcovar → forces → tomnsps → getfsq`
+pipeline against bundled VMEC2000 reference `wout_*.nc` outputs.
+
+The current relative errors (as of the latest CI run) are summarized in `docs/validation.rst`.
 
 Not yet implemented (planned):
 - Full VMEC-quality fixed-boundary convergence (VMEC-style preconditioners + force/residue parity).

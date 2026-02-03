@@ -35,6 +35,52 @@ The tests in ``tests/`` cover:
 - VMEC convention checks used by Step-10 kernels (e.g. ``chipf -> chips`` inversion and ``equif`` normalization parity).
 - an early end-to-end regression that a Gauss-Newton residual solver decreases a VMEC-style residual objective on ``input.circular_tokamak`` (this is *not* yet a full VMEC2000 equilibrium-parity solve).
 
+Step-10 parity status (fsqr/fsqz/fsql)
+--------------------------------------------------
+
+The current Step-10 parity regression compares the scalar residuals computed by
+``vmec-jax`` against those stored in bundled VMEC2000 ``wout_*.nc`` reference
+files, using the same internal VMEC angle grid conventions:
+
+.. math::
+
+   \texttt{bcovar} \rightarrow \texttt{forces} \rightarrow \texttt{tomnsps} \rightarrow \texttt{getfsq}.
+
+The scoreboard below reports relative errors
+:math:`|\hat f - f|/\max(|f|,\epsilon)` for each scalar:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 18 18 18
+
+   * - Case
+     - fsqr rel. err
+     - fsqz rel. err
+     - fsql rel. err
+   * - circular_tokamak
+     - ~4.9e-2
+     - ~4.6e-2
+     - ~4.8e-3
+   * - up_down_asymmetric_tokamak
+     - ~4.1e-2
+     - ~1.3e-2
+     - ~3.2e-2
+   * - li383_low_res
+     - ~1.6e-1
+     - ~1.2e-1
+     - ~1.1e-1
+   * - LandremanSenguptaPlunk_section5p3_low_res
+     - ~1.1e-1
+     - ~8.9e-2
+     - ~3.2e-1
+
+Notes:
+
+- The largest current mismatch is ``fsql`` on the 3D ``LandremanSenguptaPlunk`` case;
+  this is treated as the main “scoreboard” item for further Step-10 parity work.
+- These numbers are expected to change as parity improves; the authoritative
+  regression is ``tests/test_step10_residue_getfsq_parity.py``.
+
 Running tests::
 
   pytest -q

@@ -198,6 +198,12 @@ In ``vmec-jax`` we port the discrete ``alias`` operator in:
 
 - ``vmec_jax.vmec_constraints`` (``alias_gcon``).
 
+.. figure:: _static/constraint_pipeline.svg
+   :alt: Constraint force pathway diagram
+   :align: center
+
+   Schematic of VMEC's ``alias``/``gcon`` constraint-force pathway as implemented in ``vmec-jax``.
+
 At present, ``tcon(js)`` is computed from a JAX port of the diagonal
 ``precondn`` contribution used by VMEC's ``bcovar.f`` for the constraint scaling,
 with a conservative heuristic fallback that matches VMEC's scaling structure

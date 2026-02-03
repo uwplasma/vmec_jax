@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="250" viewBox="0 0 980 250">
+  <defs>
+    <style>
+      .box { fill: #ffffff; stroke: #1f2937; stroke-width: 2; }
+      .hdr { fill: #eef2ff; stroke: #1f2937; stroke-width: 2; }
+      .t1  { font: 600 14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #111827; }
+      .t2  { font: 400 13px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #111827; }
+      .mono{ font: 600 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; fill: #111827; }
+      .arrow { stroke: #111827; stroke-width: 2.5; fill: none; marker-end: url(#m); }
+      .note { font: 400 12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; fill: #374151; }
+    </style>
+    <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#111827"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="28" class="t1">Constraint force (alias / gcon) pathway</text>
+  <text x="20" y="50" class="note">VMEC assembles a near-axis regularization force via a de-aliased operator on a scalar field ztemp.</text>
+
+  <rect x="20" y="78" width="250" height="140" rx="10" class="box"/>
+  <rect x="20" y="78" width="250" height="32" rx="10" class="hdr"/>
+  <text x="34" y="100" class="t1">funct3d</text>
+  <text x="34" y="132" class="t2">Form ztemp from constraint shapes:</text>
+  <text x="34" y="156" class="mono">ztemp = (rcon-rcon0)*ru0 + (zcon-zcon0)*zu0</text>
+  <text x="34" y="186" class="t2">rcon0,zcon0 are edge-scaled (×s)</text>
+
+  <rect x="310" y="78" width="300" height="140" rx="10" class="box"/>
+  <rect x="310" y="78" width="300" height="32" rx="10" class="hdr"/>
+  <text x="324" y="100" class="t1">alias (gcon)</text>
+  <text x="324" y="132" class="t2">Apply a de-aliased spectral operator</text>
+  <text x="324" y="156" class="t2">with VMEC trig/weights + faccon(m)</text>
+  <text x="324" y="180" class="t2">and a radial scaling profile tcon(js)</text>
+  <text x="324" y="204" class="mono">gcon ≈ A^{-1}[ztemp]</text>
+
+  <rect x="650" y="78" width="310" height="140" rx="10" class="box"/>
+  <rect x="650" y="78" width="310" height="32" rx="10" class="hdr"/>
+  <text x="664" y="100" class="t1">forces / tomnsps</text>
+  <text x="664" y="132" class="t2">Use gcon to add constraint kernels:</text>
+  <text x="664" y="156" class="mono">B_R += (rcon-rcon0)*gcon</text>
+  <text x="664" y="176" class="mono">B_Z += (zcon-zcon0)*gcon</text>
+  <text x="664" y="200" class="t2">and pass ARCON/AZCON into tomnsps.</text>
+
+  <path d="M 270 148 L 310 148" class="arrow"/>
+  <path d="M 610 148 L 650 148" class="arrow"/>
+
+  <text x="20" y="238" class="note">In vmec-jax this pathway is implemented in vmec_jax/vmec_constraints.py and vmec_jax/vmec_forces.py.</text>
+</svg>
+
