@@ -42,6 +42,8 @@ class VmecTrigTables:
 
     # Integration weight normalization used by VMEC in fixaray (dnorm).
     dnorm: float
+    # Surface-integration normalization (dnorm3 in fixaray).
+    dnorm3: float
 
     # Mode normalization scalings.
     mscale: Any  # (mmax+1,)
@@ -104,11 +106,13 @@ def vmec_trig_tables(
     if mmax < 0 or nmax < 0:
         raise ValueError("mmax/nmax must be nonnegative")
 
-    # dnorm normalization in fixaray.
+    # dnorm normalization in fixaray (always on reduced interval [0, pi]).
+    dnorm = 1.0 / (nzeta * (ntheta2 - 1))
+    # dnorm3 normalization for surface averages.
     if lasym:
-        dnorm = 1.0 / (nzeta * ntheta3)
+        dnorm3 = 1.0 / (nzeta * ntheta1)
     else:
-        dnorm = 1.0 / (nzeta * (ntheta2 - 1))
+        dnorm3 = dnorm
 
     # VMEC uses `osqrt2 = 1/sqrt(2)` and sets:
     #   mscale(1:) = mscale(0)/osqrt2  => sqrt(2) for m>=1 (with mscale(0)=1)
@@ -138,14 +142,14 @@ def vmec_trig_tables(
     sinmui_base = dnorm * sinmu
     cosmui = cosmui_base.copy()
     sinmui = sinmui_base.copy()
-    cosmui3 = cosmui_base.copy()
+    cosmui3 = (dnorm3 * cosmu).copy()
 
     # Endpoint half-weights in theta for i==1 or i==ntheta2.
     # Note: in VMEC, `ntheta2` is the u=pi index even when `lasym=True`.
     if ntheta2 >= 1 and ntheta2 <= ntheta3:
         cosmui[0, :] *= 0.5
         cosmui[ntheta2 - 1, :] *= 0.5
-        if ntheta2 == ntheta3:
+        if not lasym and ntheta2 == ntheta3:
             # When `ntheta3==ntheta2` (lasym=False), VMEC reuses the half-interval
             # integration weights for full-interval integrations too.
             cosmui3 = cosmui.copy()
@@ -171,6 +175,7 @@ def vmec_trig_tables(
         ntheta2=ntheta2,
         ntheta3=ntheta3,
         dnorm=float(dnorm),
+        dnorm3=float(dnorm3),
         mscale=jnp.asarray(mscale, dtype=dtype),
         nscale=jnp.asarray(nscale, dtype=dtype),
         r0scale=float(r0scale),

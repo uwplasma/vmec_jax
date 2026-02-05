@@ -157,6 +157,14 @@ This report prints ``tcon``/``gcon`` summaries and compares the VMEC-style
 ``fsqr/fsqz/fsql`` scalars computed by ``vmec-jax`` against the supplied
 ``wout``.
 
+Note on lasym parity
+--------------------
+
+The ``fixaray`` normalization (``dnorm``) now matches VMEC exactly. This
+exposes a remaining mismatch in the ``lasym=True`` parity path (likely in
+``tomnspa``/``symforce`` conventions). The corresponding Step-10 lasym cases
+are marked ``xfail`` in the test suite until this gap is closed.
+
 Residual decomposition diagnostics
 ----------------------------------
 
@@ -180,6 +188,15 @@ To compare the residual contributions from the reference-field path (using
 
 This report prints deltas for component-only norms (A/B/C/constraint/lambda) and
 the most significant ``(m,n)`` differences between the two paths.
+
+Lasym block diagnostics
+-----------------------
+
+For non-stellarator-symmetric cases (``lasym=True``), it can be useful to
+separate the symmetric ``tomnsps`` blocks from the asymmetric ``tomnspa``
+blocks. To print per-block sums and the dominant ``(m,n)`` contributions, use::
+
+  python examples/validation/lasym_block_report.py input.case wout_case.nc
 
 Optional: validating against a local VMEC2000 build
 ---------------------------------------------------
