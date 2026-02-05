@@ -201,6 +201,7 @@ Current incremental progress toward Step-10:
 - Added a reference-vs-full field comparison report (`examples/validation/residual_compare_fields_report.py`) to isolate differences between the `wout`-driven parity path and the fully derived `vmec-jax` field path.
 - Added a `lasym` block report (`examples/validation/lasym_block_report.py`) to separate `tomnsps` vs `tomnspa` contributions and highlight dominant asymmetric modes in 3D parity work.
 - Aligned `fixaray` normalization (`dnorm`) with VMEC (reduced-interval normalization independent of `lasym`), added `dnorm3`, and marked lasym Step-10 parity cases as `xfail` while `tomnspa`/`symforce` mismatches are resolved.
+- Added a lasym mode trace report (`examples/validation/lasym_mode_trace_report.py`) to isolate A/B/C/constraint contributions for a specific `(m,n)` mode.
 
 ## 11) Updated priorities (post-VMEC++ numerics review)
 1) **Lock down VMEC numerics** (DFT basis, weights, mode ordering, half-mesh conventions) before any FFT acceleration.

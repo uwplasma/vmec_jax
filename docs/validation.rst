@@ -198,6 +198,14 @@ blocks. To print per-block sums and the dominant ``(m,n)`` contributions, use::
 
   python examples/validation/lasym_block_report.py input.case wout_case.nc
 
+Lasym mode trace
+----------------
+
+To trace a specific ``(m,n)`` mode through the asymmetric blocks and attribute
+its magnitude to the A/B/C/constraint kernel components, use::
+
+  python examples/validation/lasym_mode_trace_report.py input.case wout_case.nc --m 3 --n 4
+
 Optional: validating against a local VMEC2000 build
 ---------------------------------------------------
 

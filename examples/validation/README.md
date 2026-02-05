@@ -8,6 +8,7 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `residual_decomposition_report.py`: component-wise residual norms and top `(m,n)` contributors.
 - `residual_compare_fields_report.py`: compare full-field vs reference-field residual contributions.
 - `lasym_block_report.py`: symmetric vs asymmetric (`tomnsps`/`tomnspa`) block contributions.
+- `lasym_mode_trace_report.py`: trace a specific `(m,n)` mode through asymmetric blocks.
 - `force_residual_report.py`: end-to-end force residual report on a chosen case.
 - `wout_roundtrip.py`: write+read a minimal `wout_*.nc` and compare.
 - `bsub_parity_figures.py`, `bmag_parity_figures.py`, `bsup_parity_figures.py`: parity figures vs `wout`.
