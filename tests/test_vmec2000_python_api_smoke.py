@@ -91,7 +91,10 @@ def test_vmec2000_python_api_produces_reference_wout_for_circular_tokamak(tmp_pa
     except FileNotFoundError:
         pytest.skip("VMEC2000 python extension not built (missing _skbuild/*/cmake-install/python)")
 
-    import vmec  # type: ignore  # noqa: PLC0415
+    try:
+        import vmec  # type: ignore  # noqa: PLC0415
+    except ImportError as e:
+        pytest.skip(f"VMEC2000 python extension import failed: {e!r}")
 
     repo_root = Path(__file__).resolve().parents[1]
     input_path = repo_root / "examples/data/input.circular_tokamak"

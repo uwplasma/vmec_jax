@@ -169,6 +169,18 @@ gaps, use::
 The report prints component-only norms (note: they do not sum because
 cross-terms are omitted), plus the top ``(m,n)`` contributors for ``gcr/gcz/gcl``.
 
+Reference vs full-field comparison
+----------------------------------
+
+To compare the residual contributions from the reference-field path (using
+``wout``-stored ``bsup*``/``bsub*``/``|B|``) against the fully derived
+``vmec-jax`` field path, use::
+
+  python examples/validation/residual_compare_fields_report.py input.case wout_case.nc
+
+This report prints deltas for component-only norms (A/B/C/constraint/lambda) and
+the most significant ``(m,n)`` differences between the two paths.
+
 Optional: validating against a local VMEC2000 build
 ---------------------------------------------------
 

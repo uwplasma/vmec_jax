@@ -198,6 +198,7 @@ Current incremental progress toward Step-10:
 - Fixed the remaining dominant near-axis mismatch by implementing VMEC's mode-dependent axis rule for internal odd-m fields (jmin1): only the `m=1` contribution is extrapolated to the axis; odd `m>=3` contributions are zero on axis. With this fix, `tests/test_step10_residue_getfsq_parity.py` is now a passing regression (tight parity for the circular tokamak baseline).
 - Wired the **constraint-force pipeline** into the R/Z force kernels and the reference-field parity path, using `alias → gcon` with `tcon` from the VMEC preconditioner. For reference fields, the lambda-force kernels now use `wout` `bsub*` averaged to the full mesh to keep `fsql` parity stable (li383 low-res within ~10% relative error).
 - Added a residual decomposition report (`examples/validation/residual_decomposition_report.py`) that breaks `fsqr/fsqz/fsql` into component-only norms (A/B/C/constraint) and top `(m,n)` contributors to guide parity debugging.
+- Added a reference-vs-full field comparison report (`examples/validation/residual_compare_fields_report.py`) to isolate differences between the `wout`-driven parity path and the fully derived `vmec-jax` field path.
 
 ## 11) Updated priorities (post-VMEC++ numerics review)
 1) **Lock down VMEC numerics** (DFT basis, weights, mode ordering, half-mesh conventions) before any FFT acceleration.

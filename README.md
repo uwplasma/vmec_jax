@@ -36,7 +36,8 @@ VMEC-quality fixed-boundary convergence are still in progress (see `CODEX_RESUME
   - lambda-only solve,
   - full `(R,Z,λ)` energy minimization,
   - L-BFGS variant (no external optimizer dependency).
-- Parity tooling vs VMEC2000 `wout_*.nc` (Nyquist fields, scalar integrals, diagnostics figures).
+- Parity tooling vs VMEC2000 `wout_*.nc` (Nyquist fields, scalar integrals, diagnostics figures,
+  plus residual decomposition and full-vs-reference field comparisons).
 - Step-10 parity (baseline): VMEC-style `forces` + `tomnsps` + `getfsq` scalars
   match the bundled circular tokamak `wout` to a few percent (see
   `examples/validation/vmec_forces_rz_kernel_report.py` and
@@ -91,7 +92,7 @@ Concrete milestones (correctness-first):
   - keep VMEC-style **DFT with precomputed trig/weight tables** as the canonical transform for parity,
   - verify mode ordering, `mscale/nscale`, and half/full mesh conventions used by `tomnsps`/`alias`.
 - Tighten Step-10 scalar parity on 3D cases:
-  - isolate which residual blocks dominate the remaining `fsqr/fsqz/fsql` gaps (per-case decomposition by `(m,n)` and by kernel source: `A/B/C` vs constraint terms),
+  - isolate which residual blocks dominate the remaining `fsqr/fsqz/fsql` gaps (per-case decomposition by `(m,n)` and by kernel source: `A/B/C` vs constraint terms; see `examples/validation/residual_decomposition_report.py` and `examples/validation/residual_compare_fields_report.py`),
   - use `vmec_jax.vmec_residue.vmec_fsq_sums_from_tomnsps` (and `tests/test_step10_getfsq_block_sums.py`) to attribute scalar changes to individual tomnsps/tomnspa blocks before/after each plumbing tweak,
   - match VMEC’s constraint-force pipeline end-to-end (especially `tcon(js)` from `bcovar/precondn` and the `alias → gcon` operator), since this is a major lever for 3D near-axis behavior.
 - Finish the missing VMEC2000 “plumbing” that affects Step-10 scalars:
