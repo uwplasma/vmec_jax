@@ -73,6 +73,12 @@ def main():
     print("== vmec_jax (VMEC-style tomnsps + getfsq; parity WIP) ==")
     print(f"fsqr={scal.fsqr:.3e}  fsqz={scal.fsqz:.3e}  fsql={scal.fsql:.3e}")
 
+    if k.tcon is not None:
+        tcon = np.asarray(k.tcon)
+        print(f"tcon: min={tcon.min():.3e} max={tcon.max():.3e} mean={tcon.mean():.3e}")
+    gcon = np.asarray(k.gcon)
+    print_summary(summarize_array("gcon", gcon))
+
     fr = np.asarray(frzl.frcc)
     fz = np.asarray(frzl.fzsc)
     fl = np.asarray(frzl.flsc)
@@ -99,6 +105,8 @@ def main():
         fsqr_ref=float(wout.fsqr),
         fsqz_ref=float(wout.fsqz),
         fsql_ref=float(wout.fsql),
+        gcon=np.asarray(k.gcon),
+        tcon=np.asarray(k.tcon) if k.tcon is not None else np.zeros((0,)),
     )
     print(f"Wrote {out / 'step10_forces_rz_kernel_report.npz'}")
 

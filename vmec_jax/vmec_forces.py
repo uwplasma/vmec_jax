@@ -9,8 +9,9 @@ for the **R/Z** equations, operating on:
 Scope
 -----
 This is a parity/debug kernel used to validate the algebra and staggering.
-It is *not* yet the full VMEC solver pipeline (no constraints, no vacuum/free
-boundary, no 2D preconditioner, and no full lambda residue parity).
+It is *not* yet the full VMEC solver pipeline (no vacuum/free boundary, no 2D
+preconditioner, and no full lambda residue parity), but it *does* include the
+VMEC constraint-force pipeline (`tcon` + `alias`) for fixed-boundary parity.
 """
 
 from __future__ import annotations
@@ -74,6 +75,23 @@ class VmecRZForceKernels:
     pzu_even: Any  # (ns, ntheta, nzeta)
     pzu_odd: Any  # (ns, ntheta, nzeta)
 
+    # Optional diagnostic (set by constraint pipeline).
+    tcon: Any | None = None  # (ns,)
+
+
+@dataclass(frozen=True)
+class VmecConstraintKernels:
+    """Constraint-force kernels produced by the `alias` pipeline."""
+
+    rcon_force: Any  # (ns, ntheta, nzeta)
+    zcon_force: Any  # (ns, ntheta, nzeta)
+    arcon_e: Any  # (ns, ntheta, nzeta)
+    arcon_o: Any  # (ns, ntheta, nzeta)
+    azcon_e: Any  # (ns, ntheta, nzeta)
+    azcon_o: Any  # (ns, ntheta, nzeta)
+    gcon: Any  # (ns, ntheta, nzeta)
+    tcon: Any  # (ns,)
+
 
 def _pshalf_from_s(s: Any) -> Any:
     s = jnp.asarray(s)
@@ -122,6 +140,142 @@ def _diff_forward_half(a, b):
     out = out.at[:-1].set(a[1:] - a[:-1] + 0.5 * (b[:-1] + b[1:]))
     out = out.at[-1].set(-a[-1] + 0.5 * b[-1])
     return out
+
+
+def _constraint_kernels_from_state(
+    *,
+    state,
+    static,
+    wout,
+    bc,
+    pru_0,
+    pru_1,
+    pzu_0,
+    pzu_1,
+    constraint_tcon0: float | None,
+    trig: VmecTrigTables | None = None,
+) -> VmecConstraintKernels:
+    """Compute VMEC constraint-force kernels from state/parity fields.
+
+    This follows the fixed-boundary pipeline in `funct3d` -> `alias` -> `forces`.
+    """
+    s = jnp.asarray(static.s)
+    ns = int(s.shape[0])
+    dtype = jnp.asarray(state.Rcos).dtype
+
+    if constraint_tcon0 is None or float(constraint_tcon0) == 0.0:
+        z = jnp.zeros_like(pru_0)
+        tcon = jnp.zeros((ns,), dtype=dtype)
+        return VmecConstraintKernels(
+            rcon_force=z,
+            zcon_force=z,
+            arcon_e=z,
+            arcon_o=z,
+            azcon_e=z,
+            azcon_o=z,
+            gcon=z,
+            tcon=tcon,
+        )
+
+    # xmpq(m,1) = m*(m-1).
+    m_modes = np.asarray(static.modes.m, dtype=int)
+    m_k = jnp.asarray(static.modes.m, dtype=dtype)
+    xmpq1 = m_k * (m_k - 1.0)
+
+    mask_even = jnp.asarray((m_modes % 2) == 0, dtype=dtype)
+    mask_m1 = jnp.asarray(m_modes == 1, dtype=dtype)
+    mask_odd_rest = jnp.asarray((m_modes % 2 == 1) & (m_modes != 1), dtype=dtype)
+
+    rcon_even = eval_fourier(state.Rcos * xmpq1 * mask_even, state.Rsin * xmpq1 * mask_even, static.basis)
+    zcon_even = eval_fourier(state.Zcos * xmpq1 * mask_even, state.Zsin * xmpq1 * mask_even, static.basis)
+
+    rcon_odd_m1 = eval_fourier(state.Rcos * xmpq1 * mask_m1, state.Rsin * xmpq1 * mask_m1, static.basis)
+    rcon_odd_rest = eval_fourier(state.Rcos * xmpq1 * mask_odd_rest, state.Rsin * xmpq1 * mask_odd_rest, static.basis)
+    zcon_odd_m1 = eval_fourier(state.Zcos * xmpq1 * mask_m1, state.Zsin * xmpq1 * mask_m1, static.basis)
+    zcon_odd_rest = eval_fourier(state.Zcos * xmpq1 * mask_odd_rest, state.Zsin * xmpq1 * mask_odd_rest, static.basis)
+
+    rcon_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=rcon_odd_m1, odd_mge2_phys=rcon_odd_rest, s=s)
+    zcon_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=zcon_odd_m1, odd_mge2_phys=zcon_odd_rest, s=s)
+
+    psqrts = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
+    rcon_phys = jnp.asarray(rcon_even) + psqrts * jnp.asarray(rcon_odd_int)
+    zcon_phys = jnp.asarray(zcon_even) + psqrts * jnp.asarray(zcon_odd_int)
+
+    # Fixed-boundary scaling for rcon0/zcon0 (funct3d.f).
+    rcon0 = (s[:, None, None] * jnp.asarray(rcon_phys[-1])[None, :, :]).astype(jnp.asarray(rcon_phys).dtype)
+    zcon0 = (s[:, None, None] * jnp.asarray(zcon_phys[-1])[None, :, :]).astype(jnp.asarray(zcon_phys).dtype)
+
+    # Physical ru0/zu0 for ztemp formation.
+    ru0 = jnp.asarray(pru_0) + psqrts * jnp.asarray(pru_1)
+    zu0 = jnp.asarray(pzu_0) + psqrts * jnp.asarray(pzu_1)
+
+    ztemp = (rcon_phys - rcon0) * ru0 + (zcon_phys - zcon0) * zu0
+
+    if trig is None:
+        trig = vmec_trig_tables(
+            ntheta=int(static.cfg.ntheta),
+            nzeta=int(static.cfg.nzeta),
+            nfp=int(wout.nfp),
+            mmax=int(wout.mpol) - 1,
+            nmax=int(wout.ntor),
+            lasym=bool(wout.lasym),
+            dtype=jnp.asarray(ztemp).dtype,
+        )
+
+    # VMEC computes the constraint strength `tcon(js)` in `bcovar.f` using
+    # diagonal preconditioner pieces and flux-surface norms.
+    tcon = tcon_from_bcovar_precondn_diag(
+        tcon0=float(constraint_tcon0),
+        trig=trig,
+        s=s,
+        signgs=int(wout.signgs),
+        lasym=bool(wout.lasym),
+        bsq=bc.bsq,
+        r12=bc.jac.r12,
+        sqrtg=bc.jac.sqrtg,
+        ru12=bc.jac.ru12,
+        zu12=bc.jac.zu12,
+        ru0=ru0,
+        zu0=zu0,
+    )
+    # Fallback to a conservative constant profile if ill-conditioned.
+    finite = jnp.all(jnp.isfinite(tcon))
+    tcon_heur = tcon_from_tcon0_heuristic(
+        tcon0=float(constraint_tcon0),
+        s=s,
+        trig=trig,
+        lasym=bool(wout.lasym),
+    )
+    tcon = jnp.where(finite, tcon, tcon_heur)
+
+    gcon = alias_gcon(
+        ztemp=ztemp,
+        trig=trig,
+        ntor=int(wout.ntor),
+        mpol=int(wout.mpol),
+        signgs=int(wout.signgs),
+        tcon=tcon,
+        lasym=bool(wout.lasym),
+    )
+
+    rcon_force = (rcon_phys - rcon0) * gcon
+    zcon_force = (zcon_phys - zcon0) * gcon
+
+    arcon_e = ru0 * gcon
+    azcon_e = zu0 * gcon
+    arcon_o = arcon_e * psqrts
+    azcon_o = azcon_e * psqrts
+
+    return VmecConstraintKernels(
+        rcon_force=rcon_force,
+        zcon_force=zcon_force,
+        arcon_e=arcon_e,
+        arcon_o=arcon_o,
+        azcon_e=azcon_e,
+        azcon_o=azcon_o,
+        gcon=gcon,
+        tcon=tcon,
+    )
 
 
 def _diff_forward_half_noavg(a):
@@ -297,103 +451,30 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None, constraint_tco
     # Constraint force pipeline: compute gcon from ztemp via alias and apply
     # the constraint force kernels to B-terms (forces.f "CONSTRAINT FORCE").
     # ---------------------------------------------------------------------
-    z = jnp.zeros_like(armn_e)
-    arcon_e = z
-    arcon_o = z
-    azcon_e = z
-    azcon_o = z
-    gcon = z
     if indata is not None:
         constraint_tcon0 = float(indata.get_float("TCON0", 0.0))
-    if constraint_tcon0 is not None:
-        # xmpq(m,1)=m*(m-1) acting on Fourier coefficients, split by m-parity.
-        m_k = jnp.asarray(static.modes.m, dtype=jnp.asarray(state.Rcos).dtype)
-        xmpq1 = m_k * (m_k - 1.0)  # (K,)
-        mask_even = jnp.asarray((np.asarray(static.modes.m) % 2) == 0).astype(jnp.asarray(state.Rcos).dtype)
+    con = _constraint_kernels_from_state(
+        state=state,
+        static=static,
+        wout=wout,
+        bc=bc,
+        pru_0=pru_0,
+        pru_1=pru_1,
+        pzu_0=pzu_0,
+        pzu_1=pzu_1,
+        constraint_tcon0=constraint_tcon0,
+    )
 
-        rcon_even = eval_fourier(state.Rcos * xmpq1 * mask_even, state.Rsin * xmpq1 * mask_even, static.basis)
-        zcon_even = eval_fourier(state.Zcos * xmpq1 * mask_even, state.Zsin * xmpq1 * mask_even, static.basis)
+    brmn_e = brmn_e + con.rcon_force
+    bzmn_e = bzmn_e + con.zcon_force
+    brmn_o = brmn_o + con.rcon_force * psqrts
+    bzmn_o = bzmn_o + con.zcon_force * psqrts
 
-        # Apply VMEC axis rules: only the m=1 piece is extrapolated to the axis.
-        rcon_odd_m1 = eval_fourier(state.Rcos * xmpq1 * mask_m1, state.Rsin * xmpq1 * mask_m1, static.basis)
-        rcon_odd_rest = eval_fourier(state.Rcos * xmpq1 * mask_odd_rest, state.Rsin * xmpq1 * mask_odd_rest, static.basis)
-        zcon_odd_m1 = eval_fourier(state.Zcos * xmpq1 * mask_m1, state.Zsin * xmpq1 * mask_m1, static.basis)
-        zcon_odd_rest = eval_fourier(state.Zcos * xmpq1 * mask_odd_rest, state.Zsin * xmpq1 * mask_odd_rest, static.basis)
-
-        rcon_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=rcon_odd_m1, odd_mge2_phys=rcon_odd_rest, s=s)
-        zcon_odd_int = internal_odd_from_physical_vmec_m1(odd_m1_phys=zcon_odd_m1, odd_mge2_phys=zcon_odd_rest, s=s)
-
-        psqrts = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
-        rcon_phys = jnp.asarray(rcon_even) + psqrts * jnp.asarray(rcon_odd_int)
-        zcon_phys = jnp.asarray(zcon_even) + psqrts * jnp.asarray(zcon_odd_int)
-
-        # Fixed-boundary scaling for rcon0/zcon0 (funct3d.f): boundary constraint value times s.
-        rcon0 = (s[:, None, None] * jnp.asarray(rcon_phys[-1])[None, :, :]).astype(jnp.asarray(rcon_phys).dtype)
-        zcon0 = (s[:, None, None] * jnp.asarray(zcon_phys[-1])[None, :, :]).astype(jnp.asarray(zcon_phys).dtype)
-
-        # Physical ru0/zu0 for ztemp formation.
-        ru0 = jnp.asarray(pru_0) + psqrts * jnp.asarray(pru_1)
-        zu0 = jnp.asarray(pzu_0) + psqrts * jnp.asarray(pzu_1)
-
-        ztemp = (rcon_phys - rcon0) * ru0 + (zcon_phys - zcon0) * zu0
-
-        trig = vmec_trig_tables(
-            ntheta=int(static.cfg.ntheta),
-            nzeta=int(static.cfg.nzeta),
-            nfp=int(wout.nfp),
-            mmax=int(wout.mpol) - 1,
-            nmax=int(wout.ntor),
-            lasym=bool(wout.lasym),
-            dtype=jnp.asarray(ztemp).dtype,
-        )
-        # VMEC computes the constraint strength `tcon(js)` in `bcovar.f` using
-        # diagonal preconditioner pieces and flux-surface norms. Use our reduced
-        # port when possible; fall back to a conservative heuristic otherwise.
-        tcon = tcon_from_bcovar_precondn_diag(
-            tcon0=float(constraint_tcon0),
-            trig=trig,
-            s=s,
-            signgs=int(wout.signgs),
-            lasym=bool(wout.lasym),
-            bsq=bc.bsq,
-            r12=bc.jac.r12,
-            sqrtg=bc.jac.sqrtg,
-            ru12=bc.jac.ru12,
-            zu12=bc.jac.zu12,
-            ru0=ru0,
-            zu0=zu0,
-        )
-        # Fallback to a conservative constant profile if the precondn-derived
-        # computation is ill-conditioned (e.g. degenerate ru0/zu0 norms).
-        finite = jnp.all(jnp.isfinite(tcon))
-        tcon_heur = tcon_from_tcon0_heuristic(
-            tcon0=float(constraint_tcon0),
-            s=s,
-            trig=trig,
-            lasym=bool(wout.lasym),
-        )
-        tcon = jnp.where(finite, tcon, tcon_heur)
-        gcon = alias_gcon(
-            ztemp=ztemp,
-            trig=trig,
-            ntor=int(wout.ntor),
-            mpol=int(wout.mpol),
-            signgs=int(wout.signgs),
-            tcon=tcon,
-            lasym=bool(wout.lasym),
-        )
-
-        rcon_force = (rcon_phys - rcon0) * gcon
-        zcon_force = (zcon_phys - zcon0) * gcon
-        brmn_e = brmn_e + rcon_force
-        bzmn_e = bzmn_e + zcon_force
-        brmn_o = brmn_o + rcon_force * psqrts
-        bzmn_o = bzmn_o + zcon_force * psqrts
-
-        arcon_e = ru0 * gcon
-        azcon_e = zu0 * gcon
-        arcon_o = arcon_e * psqrts
-        azcon_o = azcon_e * psqrts
+    arcon_e = con.arcon_e
+    arcon_o = con.arcon_o
+    azcon_e = con.azcon_e
+    azcon_o = con.azcon_o
+    gcon = con.gcon
 
     return VmecRZForceKernels(
         armn_e=armn_e,
@@ -414,6 +495,7 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None, constraint_tco
         azcon_e=azcon_e,
         azcon_o=azcon_o,
         gcon=gcon,
+        tcon=con.tcon,
         pr1_even=pr1_0,
         pr1_odd=pr1_1,
         pz1_even=pz1_0,
@@ -425,12 +507,20 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None, constraint_tco
     )
 
 
-def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout, indata=None) -> VmecRZForceKernels:
+def vmec_forces_rz_from_wout_reference_fields(
+    *,
+    state,
+    static,
+    wout,
+    indata=None,
+    constraint_tcon0: float | None = None,
+) -> VmecRZForceKernels:
     """Compute VMEC R/Z force kernels using `wout`'s stored (sqrtg, bsup, ``|B|``).
 
     This is a parity/debug variant that reduces the number of derived quantities
     computed by vmec_jax, making it easier to validate the *forces* algebra in
-    isolation.
+    isolation. If `constraint_tcon0` (or `indata.TCON0`) is provided, the VMEC
+    constraint-force pipeline is also applied.
     """
     s = jnp.asarray(static.s)
     ohs = jnp.asarray(1.0 / (s[1] - s[0])) if s.shape[0] >= 2 else jnp.asarray(0.0)
@@ -647,8 +737,27 @@ def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout, indata=Non
     bc_obj.bsubu = bsubu
     bc_obj.bsubv = bsubv
     bc_obj.lamscale = lamscale_from_phips(wout.phips, s)
+    bc_obj.bsq = bsq
 
-    z = jnp.zeros_like(armn_e)
+    if indata is not None:
+        constraint_tcon0 = float(indata.get_float("TCON0", 0.0))
+    con = _constraint_kernels_from_state(
+        state=state,
+        static=static,
+        wout=wout,
+        bc=bc_obj,
+        pru_0=pru_0,
+        pru_1=pru_1,
+        pzu_0=pzu_0,
+        pzu_1=pzu_1,
+        constraint_tcon0=constraint_tcon0,
+    )
+
+    brmn_e = brmn_e + con.rcon_force
+    bzmn_e = bzmn_e + con.zcon_force
+    brmn_o = brmn_o + con.rcon_force * psqrts
+    bzmn_o = bzmn_o + con.zcon_force * psqrts
+
     return VmecRZForceKernels(
         armn_e=armn_e,
         armn_o=armn_o,
@@ -663,11 +772,12 @@ def vmec_forces_rz_from_wout_reference_fields(*, state, static, wout, indata=Non
         czmn_e=czmn_e,
         czmn_o=czmn_o,
         bc=bc_obj,
-        arcon_e=z,
-        arcon_o=z,
-        azcon_e=z,
-        azcon_o=z,
-        gcon=z,
+        arcon_e=con.arcon_e,
+        arcon_o=con.arcon_o,
+        azcon_e=con.azcon_e,
+        azcon_o=con.azcon_o,
+        gcon=con.gcon,
+        tcon=con.tcon,
         pr1_even=pr1_0,
         pr1_odd=pr1_1,
         pz1_even=pz1_0,

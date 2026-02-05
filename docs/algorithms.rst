@@ -200,6 +200,11 @@ In ``vmec-jax`` we port the discrete ``alias`` operator in:
 
 - ``vmec_jax.vmec_constraints`` (``alias_gcon``).
 
+For fixed-boundary parity, ``vmec-jax`` computes the constraint multiplier
+``tcon(js)`` using the diagonal pieces of the VMEC preconditioner (matching the
+``bcovar.f`` formula), with a conservative heuristic fallback when the
+flux-surface norms are ill-conditioned.
+
 Radial preconditioner and time-stepper (VMEC-quality solve)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
