@@ -145,6 +145,18 @@ Running tests::
 If you do not have ``netCDF4`` installed, tests that require ``wout`` I/O will be
 skipped.
 
+Constraint pipeline diagnostics
+--------------------------------
+
+To inspect the fixed-boundary constraint force pipeline against an external
+VMEC2000/VMEC++ ``wout_*.nc`` file, use::
+
+  python examples/validation/constraint_pipeline_report.py input.case wout_case.nc
+
+This report prints ``tcon``/``gcon`` summaries and compares the VMEC-style
+``fsqr/fsqz/fsql`` scalars computed by ``vmec-jax`` against the supplied
+``wout``.
+
 Optional: validating against a local VMEC2000 build
 ---------------------------------------------------
 
