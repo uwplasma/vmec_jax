@@ -8,14 +8,21 @@ Laptop-friendly, end-to-end differentiable (JAX) rewrite of **VMEC2000** (fixed-
 
 ![|B| parity error vs VMEC2000 wout](docs/_static/figures/bmag_parity_error.png)
 
+Figures (top to bottom):
+- **Step-10 parity pipeline**: the VMEC-style path we regress against (`bcovar → forces → tomnsps → getfsq`).
+- **LCFS cross-sections**: last-closed flux surface slices across one field period.
+- **|B| parity error**: pointwise relative error vs a bundled VMEC2000 `wout`.
+
 `vmec-jax` aims to:
 - reproduce VMEC2000 equilibria for the same inputs (output parity via `wout_*.nc` regressions),
 - expose a clean, composable Python/JAX API (grad/JIT/vmap-ready),
 - make sensitivity analysis and optimization workflows first-class (autodiff + implicit differentiation),
 - remain hackable and readable as a research codebase.
 
-Project status: this repo contains validated geometry/field/energy kernels and early fixed-boundary solvers.
-Force/residue parity (`fsqr/fsqz/fsql`) is under active development (see `CODEX_RESUME.md`).
+Project status: validated geometry/field/energy kernels, a working fixed-boundary pipeline,
+and an increasingly complete VMEC-style force/residual path. Constraint-force plumbing
+(`tcon`/`alias`) is now wired into the parity kernels; **lambda residual parity** and
+VMEC-quality fixed-boundary convergence are still in progress (see `CODEX_RESUME.md`).
 
 ## Key capabilities
 
@@ -23,12 +30,17 @@ Force/residue parity (`fsqr/fsqz/fsql`) is under active development (see `CODEX_
 - Differentiable geometry kernel on `(s,θ,ζ)` grids: metrics + Jacobian.
 - VMEC-style profiles (pressure / iota / current) and volume integrals.
 - Contravariant/covariant magnetic field components and VMEC-normalized magnetic energy `wb`.
+- VMEC-style DFT trig/weight tables (`fixaray`) and `tomnsps` transforms for parity work.
+- Constraint-force pipeline (`tcon` + `alias`) integrated into force kernels.
 - Fixed-boundary solvers:
   - lambda-only solve,
   - full `(R,Z,λ)` energy minimization,
   - L-BFGS variant (no external optimizer dependency).
 - Parity tooling vs VMEC2000 `wout_*.nc` (Nyquist fields, scalar integrals, diagnostics figures).
-- Step-10 parity (baseline): VMEC-style `forces` + `tomnsps` + `getfsq` scalars (`fsqr/fsqz/fsql`) match the bundled circular tokamak `wout` to a few percent (see `examples/validation/vmec_forces_rz_kernel_report.py` and `tests/test_step10_residue_getfsq_parity.py`).
+- Step-10 parity (baseline): VMEC-style `forces` + `tomnsps` + `getfsq` scalars
+  match the bundled circular tokamak `wout` to a few percent (see
+  `examples/validation/vmec_forces_rz_kernel_report.py` and
+  `tests/test_step10_residue_getfsq_parity.py`).
 - Advanced: implicit differentiation demos (custom VJP) for solver-aware gradients.
 
 ## Current parity status (Step-10 scalar residuals)
@@ -37,15 +49,16 @@ Force/residue parity (`fsqr/fsqz/fsql`) is under active development (see `CODEX_
 (`fsqr`, `fsqz`, `fsql`) computed from the ported `bcovar → forces → tomnsps → getfsq`
 pipeline against bundled VMEC2000 reference `wout_*.nc` outputs.
 
-The current relative errors are tracked in `docs/validation.rst`. Snapshot (relative error
+The current relative errors are tracked in `docs/validation.rst`. Snapshot from
+`examples/validation/step10_getfsq_parity_cases.py` (relative error
 `|f̂-f|/max(|f|,ε)`):
 
 | Case | fsqr | fsqz | fsql |
 | --- | ---: | ---: | ---: |
-| circular_tokamak | ~4.9e-2 | ~4.6e-2 | ~4.8e-3 |
-| up_down_asymmetric_tokamak | ~4.1e-2 | ~1.3e-2 | ~3.2e-2 |
-| li383_low_res | ~1.6e-1 | ~1.2e-1 | ~1.1e-1 |
-| LandremanSenguptaPlunk_section5p3_low_res | ~1.1e-1 | ~8.9e-2 | ~1.6e-2 |
+| circular_tokamak | 4.9e-2 | 4.6e-2 | 4.8e-3 |
+| up_down_asymmetric_tokamak | 4.1e-2 | 1.3e-2 | 3.2e-2 |
+| li383_low_res | 1.6e-1 | 1.2e-1 | 1.1e-1 |
+| LandremanSenguptaPlunk_section5p3_low_res | 1.1e-1 | 8.9e-2 | 1.6e-2 |
 
 Not yet implemented (planned):
 - Full VMEC-quality fixed-boundary convergence (VMEC-style preconditioners + force/residue parity).
@@ -63,6 +76,7 @@ Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose to
 | B field (`bsup*`, `bsub*`, `|B|`) | OK | OK | OK | parity figures under `examples/validation/` |
 | Energy scalars (`wb`, `wp`, volume) | OK | OK | OK | `tests/test_step10_energy_integrals_parity.py` + `wout.vp` checks |
 | `wout` I/O (read + minimal write) | OK | OK | OK | `tests/test_step10_wout_roundtrip.py` |
+| Constraint pipeline (`tcon/alias/gcon`) | Partial | Partial | Partial | parity kernels + diagnostics wired |
 | Step-10 `forces → tomnsps → getfsq` | Partial | Partial | Partial | scalar parity tracked in `docs/validation.rst` |
 | Step-10 `tomnspa` (lasym) blocks | n/a | n/a | Partial | `fsql` is the most sensitive |
 | Fixed-boundary solvers | Partial | Partial | Partial | monotone energy decrease; not VMEC-quality yet |
@@ -83,6 +97,9 @@ Concrete milestones (correctness-first):
 - Finish the missing VMEC2000 “plumbing” that affects Step-10 scalars:
   - remaining `bcovar` details that influence `forces` (e.g. exact half/full mesh handling for quantities consumed by `forces.f`),
   - confirm axis rules (`jmin1/jmin2/jlam`) and `LCONM1` constraint behavior match `residue.f90` in the converged regime.
+- Complete lambda residual parity:
+  - finish the VMEC hybrid lambda force path,
+  - tighten `fl*` block parity (including `tomnspa` for `lasym=True`).
 - Move from “parity kernels” to a VMEC-quality fixed-boundary solver:
   - port the 1D (and later 2D) preconditioners and use them in a Newton / quasi-Newton / preconditioned descent loop that converges comparably to VMEC2000 on the bundled cases,
   - ensure solver stopping criteria and reported diagnostics match VMEC (including how `fsq*` are computed during the iteration history).
@@ -163,7 +180,7 @@ python examples/tutorial/05_profiles_and_volume.py examples/data/input.Landreman
 python examples/tutorial/06_field_and_energy.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --verbose
 ```
 
-Note: top-level scripts `examples/00_...py` etc exist as compatibility wrappers and forward to `examples/tutorial/`.
+Compatibility wrappers live under `examples/compat/` and forward to `examples/tutorial/`.
 
 ## Examples
 

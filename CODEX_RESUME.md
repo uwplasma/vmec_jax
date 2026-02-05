@@ -29,7 +29,7 @@ This repo version corresponds to **Step-7** of the port plan.
 - Computes angular derivatives `∂/∂θ` and `∂/∂φ_phys`.
 
 Script:
-- `examples/00_parse_and_boundary.py`
+- `examples/tutorial/00_parse_and_boundary.py`
 
 Validation:
 - Prints min/max/mean of R,Z and derivatives; saves `boundary.npz`.
@@ -44,8 +44,8 @@ Validation:
 - Demonstrates autodiff through geometry (grad demo).
 
 Scripts:
-- `examples/02_init_guess_and_coords.py`
-- `examples/03_grad_full_coords.py`
+- `examples/tutorial/02_init_guess_and_coords.py`
+- `examples/tutorial/03_grad_full_coords.py`
 
 Validation:
 - **Boundary consistency** at s=1 (matches Step-0 boundary eval to ~1e-16).
@@ -59,7 +59,7 @@ Validation:
 - Prints diagnostics and rough volume integral.
 
 Script:
-- `examples/04_geom_metrics.py`
+- `examples/tutorial/04_geom_metrics.py`
 
 Validation:
 - `sqrtg` and `g_θθ` are zero only on the axis surface `s=0` (expected coordinate singularity).
@@ -72,7 +72,7 @@ Validation:
 - Computes `dV/ds` and `V(s)` from `sqrtg` by integrating over angles and cumulative trapezoid in `s`.
 
 Script:
-- `examples/05_profiles_and_volume.py`
+- `examples/tutorial/05_profiles_and_volume.py`
 
 Validation:
 - Produces a finite, positive volume; prints both **per field period** and **full torus** volumes.
@@ -83,7 +83,7 @@ Validation:
 - Computes VMEC-normalized magnetic energy `wb`.
 
 Script:
-- `examples/06_field_and_energy.py`
+- `examples/tutorial/06_field_and_energy.py`
 
 Validation:
 - `pytest -q` includes a regression check of `wb` and B-field consistency against the bundled VMEC2000 `wout_*.nc`.
@@ -94,7 +94,7 @@ Validation:
 - Uses gradient descent + backtracking line search on the magnetic energy `wb`.
 
 Script:
-- `examples/07_solve_lambda.py`
+- `examples/tutorial/07_solve_lambda.py`
 
 Validation:
 - `pytest -q` includes a regression check that starting from `lambda=0` moves `wb` toward the bundled
@@ -107,7 +107,7 @@ Validation:
   - uses gradient descent + backtracking line search to monotonically decrease a VMEC-style energy objective.
 
 Script:
-- `examples/08_solve_fixed_boundary.py`
+- `examples/tutorial/08_solve_fixed_boundary.py`
 
 Validation:
 - `pytest -q` includes a regression check that the solver decreases the energy while preserving the boundary
@@ -118,7 +118,7 @@ Validation:
 - Both Step-6 and Step-7 solvers preserve the fixed boundary (edge coefficients) and enforce simple axis regularity.
 
 Script:
-- `examples/09_solve_fixed_boundary_lbfgs.py`
+- `examples/tutorial/09_solve_fixed_boundary_lbfgs.py`
 
 Validation:
 - `pytest -q` includes a regression check that L-BFGS decreases the energy while preserving boundary constraints.
@@ -147,10 +147,10 @@ Validation:
 From repo root:
 
 ```bash
-python examples/00_parse_and_boundary.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out boundary.npz --verbose
-python examples/02_init_guess_and_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out coords_step1.npz --verbose --dump_coeffs
-python examples/03_grad_full_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --verbose --topk 12
-python examples/04_geom_metrics.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out geom_step2.npz --verbose --dump_full
+python examples/tutorial/00_parse_and_boundary.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out boundary.npz --verbose
+python examples/tutorial/02_init_guess_and_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out coords_step1.npz --verbose --dump_coeffs
+python examples/tutorial/03_grad_full_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --verbose --topk 12
+python examples/tutorial/04_geom_metrics.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out geom_step2.npz --verbose --dump_full
 python tools/inspect_npz.py geom_step2.npz
 ```
 

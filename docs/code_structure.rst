@@ -12,5 +12,6 @@ Top-level package layout (selected):
 - ``vmec_jax/solve.py``: early solver prototypes (fixed-boundary)
 - ``vmec_jax/wout.py``: minimal ``wout_*.nc`` reader for regression
 
-The ``examples/`` folder contains both stepwise scripts and curated figure /
-parity examples. See ``examples/README.md`` for the current folder layout.
+The ``examples/`` folder contains stepwise scripts and curated figure / parity
+examples, organized by topic. Legacy wrappers live under ``examples/compat``.
+See ``examples/README.md`` for the current layout.

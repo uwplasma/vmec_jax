@@ -7,7 +7,7 @@ Run the validated example chain
 All examples can be run directly from the repo root without installing.
 The canonical scripts live under purpose-based folders (``tutorial/``,
 ``validation/``, ``visualization/``, ``gradients/``, ``solvers/``); thin
-compatibility wrappers also exist at the top level of ``examples/``::
+compatibility wrappers live under ``examples/compat/``::
 
   python examples/tutorial/00_parse_and_boundary.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out boundary_step0.npz --verbose
   python examples/tutorial/02_init_guess_and_coords.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out coords_step1.npz --verbose
