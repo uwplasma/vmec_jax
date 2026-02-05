@@ -157,6 +157,18 @@ This report prints ``tcon``/``gcon`` summaries and compares the VMEC-style
 ``fsqr/fsqz/fsql`` scalars computed by ``vmec-jax`` against the supplied
 ``wout``.
 
+Residual decomposition diagnostics
+----------------------------------
+
+To break the VMEC-style residuals into component-only norms (``A``/``B``/``C``
+vs constraint terms) and see which ``(m,n)`` modes dominate the current parity
+gaps, use::
+
+  python examples/validation/residual_decomposition_report.py input.case wout_case.nc
+
+The report prints component-only norms (note: they do not sum because
+cross-terms are omitted), plus the top ``(m,n)`` contributors for ``gcr/gcz/gcl``.
+
 Optional: validating against a local VMEC2000 build
 ---------------------------------------------------
 
