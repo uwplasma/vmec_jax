@@ -49,7 +49,9 @@ This is implemented with ``einsum`` for both NumPy and JAX.
 
 Future work:
 
-- FFT-based transforms to reduce memory and runtime for larger mode counts.
+- VMEC-style DFTs with precomputed trig/weight tables (canonical for parity).
+- FFT-based transforms **only after parity** (must reproduce VMEC scaling,
+  endpoint weights, and ``ntheta1/2/3`` conventions exactly).
 
 Step-1/2 geometry pipeline
 --------------------------
@@ -197,6 +199,23 @@ additional surface-dependent scaling ``tcon(js)`` computed in VMEC's ``bcovar``.
 In ``vmec-jax`` we port the discrete ``alias`` operator in:
 
 - ``vmec_jax.vmec_constraints`` (``alias_gcon``).
+
+Radial preconditioner and time-stepper (VMEC-quality solve)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+VMEC’s robust fixed-boundary convergence relies on:
+
+- a **radial preconditioner** for the R/Z forces,
+- a corresponding **lambda preconditioner** (BETAS-style),
+- a special **m=1 preconditioner** for polar constraints,
+- a **Garabedian-style preconditioned descent / time-stepper** with adaptive
+  damping.
+
+These pieces are described in VMEC2000/VMEC++ sources (``precondn``,
+``bcovar``, and the time-step loop), and are required for VMEC-quality
+fixed-boundary convergence on 3D cases. In ``vmec-jax`` we implement these
+pieces in a JAX-friendly way (``lax.scan`` over ``s`` and matrix-free
+linear solves) and expose them in the fixed-boundary solver path.
 
 .. figure:: _static/constraint_pipeline.svg
    :alt: Constraint force pathway diagram

@@ -8,6 +8,13 @@ Guiding constraints:
 - **Fixed-boundary first** (no free-boundary, no MPI/parallelization initially).
 - **End-to-end differentiable**: avoid non-differentiable control flow; later use **implicit differentiation** to avoid backprop through iterations.
 - **Stepwise validated port**: each step adds a small kernel + diagnostics + regression test.
+- **Source-of-truth priority**: prefer **STELLOPT/VMEC2000** (more up-to-date) and **VMEC++ numerics** for algorithmic details.
+
+## 0b) Key decisions from VMEC++ numerics + STELLOPT/VMEC2000
+- **Fourier transforms**: VMEC-style **DFT with precomputed trig/weight tables** is canonical. FFTs are a later optimization only if we reproduce VMEC scaling/weights exactly.
+- **Constraint pipeline**: Step-10 parity hinges on the **constraint force multiplier (`tcon`)**, **de-alias/bandpass filtering (`alias`)**, and the **`faccon`/`xmpq` scalings** used in `tomnsps`.
+- **Solver**: VMEC’s convergence relies on **radial preconditioners (R/Z + lambda, plus m=1 special)** and the **Garabedian-style preconditioned descent / time-stepper**. These are required for VMEC-quality fixed-boundary convergence.
+- **Differentiability**: the solver should be made differentiable via **implicit differentiation (custom VJP)** instead of backprop through many iterations.
 
 ## 1) Where we started
 We began from a raw Fortran **VMEC2000** distribution, and created a new Python package skeleton `vmec_jax` intended to eventually mirror VMEC functionality but using JAX for speed + autodiff.
@@ -189,6 +196,13 @@ Current incremental progress toward Step-10:
 - Added a VMEC-like scalar normalization + residual computation scaffold (`vmec_jax.vmec_residue`) and wired it into the Step-10 parity regression (`tests/test_step10_residue_getfsq_parity.py`).
 - Fixed a major Step-10 force-kernel convention mismatch: in VMEC `bcovar` overwrites `guu/guv/gvv` with **B-product tensors** `GIJ = (B^i B^j)*sqrt(g)` (used by `forces.f`), which is *not* the metric. After switching the JAX force kernel to use `bc.gij_b_uu/gij_b_uv/gij_b_vv`, the parity diagnostic improved by ~9 orders of magnitude (see `examples/3_Advanced/10_vmec_forces_rz_kernel_report.py` and `tests/test_step10_residue_getfsq_parity.py`).
 - Fixed the remaining dominant near-axis mismatch by implementing VMEC's mode-dependent axis rule for internal odd-m fields (jmin1): only the `m=1` contribution is extrapolated to the axis; odd `m>=3` contributions are zero on axis. With this fix, `tests/test_step10_residue_getfsq_parity.py` is now a passing regression (tight parity for the circular tokamak baseline).
+
+## 11) Updated priorities (post-VMEC++ numerics review)
+1) **Lock down VMEC numerics** (DFT basis, weights, mode ordering, half-mesh conventions) before any FFT acceleration.
+2) **Port the constraint-force pipeline** fully (`tcon`, `alias` bandpass, `faccon` scalings, m=1 constraint timing).
+3) **Implement full radial preconditioners** (R/Z + lambda + m=1) and update cadence (every ~25 iterations as in VMEC++).
+4) **Implement VMEC time-stepper** (Garabedian-style preconditioned descent with adaptive damping).
+5) **Only then** tune performance (FFT, fused kernels, `lax.scan`, static shapes) and expand parity/benchmark coverage.
 
 ## 7) Longer-term roadmap
 - Match VMEC2000 feature set (non-stellarator-symmetric, free-boundary, etc.).

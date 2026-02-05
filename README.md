@@ -73,6 +73,9 @@ Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose to
 
 Concrete milestones (correctness-first):
 
+- Lock down VMEC numerics from the up-to-date sources (STELLOPT/VMEC2000 + VMEC++):
+  - keep VMEC-style **DFT with precomputed trig/weight tables** as the canonical transform for parity,
+  - verify mode ordering, `mscale/nscale`, and half/full mesh conventions used by `tomnsps`/`alias`.
 - Tighten Step-10 scalar parity on 3D cases:
   - isolate which residual blocks dominate the remaining `fsqr/fsqz/fsql` gaps (per-case decomposition by `(m,n)` and by kernel source: `A/B/C` vs constraint terms),
   - use `vmec_jax.vmec_residue.vmec_fsq_sums_from_tomnsps` (and `tests/test_step10_getfsq_block_sums.py`) to attribute scalar changes to individual tomnsps/tomnspa blocks before/after each plumbing tweak,
@@ -88,9 +91,9 @@ Concrete milestones (correctness-first):
 
 The current code is intentionally explicit and validation-driven. For performance, the biggest wins will come from swapping dense mode-sums for FFT-based spectral transforms and carefully structuring JAX compilation:
 
-- Replace “basis-matrix” Fourier evaluation/projection with FFT pipelines:
-  - use `jax.numpy.fft` (or `jax.scipy.fft`) in `θ` and `ζ` to implement VMEC-like transforms (`totzsp*`, `tomnsp*`, `alias`) without materializing `(K, ntheta, nzeta)` bases,
-  - keep the VMEC normalization (`mscale/nscale`, endpoint half-weights, `ntheta2/ntheta3` conventions) by applying small post-FFT scaling/packing steps.
+- Replace “basis-matrix” Fourier evaluation/projection only **after parity**:
+  - VMEC++ uses DFTs with precomputed tables because of grid/weight conventions; FFTs are a later optimization and must reproduce the same scaling (`mscale/nscale`, endpoint weights, `ntheta1/2/3`) exactly.
+  - candidate path: factorized DFTs (theta/phi separable) first, then FFT with explicit normalization.
 - Fuse and batch the radial work:
   - use `jax.lax.scan` over `s` for recurrences and half-mesh operations to reduce memory pressure and compile time,
   - keep array layouts stable (`(ns, ntheta, nzeta)` contiguous) and avoid Python-side loops inside hot paths.

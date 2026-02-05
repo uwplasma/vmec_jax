@@ -168,3 +168,10 @@ single-process mode).
 To run the integration tests locally::
 
   VMEC2000_INTEGRATION=1 pytest -q -m vmec2000
+
+Note
+----
+The VMEC2000 sources under **STELLOPT/VMEC2000** are more up-to-date than the
+minimal ``vmec2000`` folder. When in doubt about numerics, use the STELLOPT copy
+as the primary reference and treat the minimal VMEC2000 checkout as a
+lightweight regression baseline.

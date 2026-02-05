@@ -50,7 +50,8 @@ The current Fourier implementation stores ``(K, ntheta, nzeta)`` basis tensors
 for cos/sin phases. This is acceptable for low-resolution validation cases, but
 will become heavy for larger ``mpol/ntor``.
 
-Planned upgrades:
+Planned upgrades (post-parity):
 
-- factored/FFT-based angular transforms,
+- factorized DFTs (theta/phi separable) using precomputed trig/weight tables,
+- FFT-based angular transforms only if they reproduce VMEC scaling and weights,
 - chunked evaluation in ``theta``/``zeta`` to reduce peak memory.
