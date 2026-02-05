@@ -73,7 +73,7 @@ Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose to
 | --- | --- | --- | --- | --- |
 | INDATA parsing + boundary | OK | OK | OK | `tests/` + `examples/tutorial/00_*` |
 | Geometry (metrics + sqrtg) | OK | OK | OK | Nyquist `gmnc/gmns` parity tests |
-| B field (`bsup*`, `bsub*`, `\`|B|\``) | OK | OK | OK | Nyquist parity; figures under `examples/validation/` |
+| B field (`bsup*`, `bsub*`, abs(B)) | OK | OK | OK | Nyquist parity; figures under `examples/validation/` |
 | Energy scalars (`wb`, `wp`, volume) | OK | OK | OK | `tests/test_step10_energy_integrals_parity.py` + `wout.vp` checks |
 | `wout` I/O (read + minimal write) | OK | OK | OK | `tests/test_step10_wout_roundtrip.py` |
 | Constraint pipeline (`tcon/alias/gcon`) | Partial | Partial | Partial | parity kernels + diagnostics wired |
