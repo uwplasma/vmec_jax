@@ -68,6 +68,10 @@ def tcon_from_tcon0_heuristic(*, tcon0: float, s, trig: VmecTrigTables, lasym: b
     VMEC's actual computation depends on preconditioner quantities (`ard/azd`)
     and flux-surface norms of `ru0/zu0`. Until those kernels are ported, we use
     a conservative, VMEC-shaped scaling with a constant radial factor.
+
+    Note: VMEC's `bcovar.f` previously halved `tcon` for `lasym`, but the
+    current STELLOPT/VMEC2000 source leaves that line commented out. We mirror
+    the *current* behavior and do not apply a lasym-specific halving here.
     """
     s = jnp.asarray(s)
     ns = int(s.shape[0])
@@ -91,8 +95,6 @@ def tcon_from_tcon0_heuristic(*, tcon0: float, s, trig: VmecTrigTables, lasym: b
     tcon = tcon.at[0].set(0.0)
     if ns >= 3:
         tcon = tcon.at[-1].set(0.5 * tcon[-2])
-    if lasym:
-        tcon *= 0.5
     return tcon.astype(jnp.asarray(trig.cosmu).dtype)
 
 
@@ -132,6 +134,8 @@ def tcon_from_bcovar_precondn_diag(
         ax(js,1) = sum(ptau * (xu12*ohs)^2)
         axd(js,1) = ax(js,1) + ax(js+1,1)
       with ptau = pfactor * r12^2 * bsq * wint / gsqrt.
+    - VMEC's lasym-specific `tcon` halving is commented out in current
+      STELLOPT/VMEC2000 sources, so we do not apply it here.
     """
     s = jnp.asarray(s)
     ns = int(s.shape[0])
@@ -196,8 +200,6 @@ def tcon_from_bcovar_precondn_diag(
         tcon = jnp.where(mask.astype(core.dtype), core, tcon)
         # tcon(ns) = 0.5*tcon(ns-1)
         tcon = tcon.at[-1].set(0.5 * tcon[-2])
-    if lasym:
-        tcon = 0.5 * tcon
     return tcon
 
 

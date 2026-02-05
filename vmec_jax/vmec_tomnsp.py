@@ -128,12 +128,26 @@ def vmec_trig_tables(
     r0scale = float(mscale[0] * nscale[0])
 
     # Theta tables use argi = 2π*(i-1)/ntheta1, for i=1..ntheta3.
-    i = np.arange(ntheta3, dtype=float)
-    theta = (2.0 * np.pi) * i / float(ntheta1)  # (ntheta3,)
+    # Follow fixaray.f exactly, including the explicit symmetry enforcement
+    # for i > ntheta2 and the special handling of the pi endpoint.
     m = np.arange(mmax + 1, dtype=float)  # (mmax+1,)
-    arg = theta[:, None] * m[None, :]  # (ntheta3, mmax+1)
-    cosmu = np.cos(arg) * mscale[None, :]
-    sinmu = np.sin(arg) * mscale[None, :]
+    cosmu = np.zeros((ntheta3, mmax + 1), dtype=float)
+    sinmu = np.zeros_like(cosmu)
+    for i in range(ntheta3):
+        if i == (ntheta2 - 1):
+            # Special case theta = pi (i == ntheta2 in Fortran).
+            signs = np.where((m.astype(int) % 2) == 0, 1.0, -1.0)
+            cosmu[i, :] = signs * mscale
+            sinmu[i, :] = 0.0
+        elif i >= ntheta2:
+            # Force symmetry for indices over ntheta2.
+            ir = 2 * ntheta2 - i - 2
+            cosmu[i, :] = cosmu[ir, :]
+            sinmu[i, :] = -sinmu[ir, :]
+        else:
+            arg = (2.0 * np.pi) * float(i) / float(ntheta1)
+            cosmu[i, :] = np.cos(arg * m) * mscale
+            sinmu[i, :] = np.sin(arg * m) * mscale
 
     cosmum = cosmu * m[None, :]
     sinmum = -sinmu * m[None, :]
