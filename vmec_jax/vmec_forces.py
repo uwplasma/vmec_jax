@@ -24,6 +24,7 @@ import numpy as np
 from ._compat import jnp
 from .fourier import project_to_modes
 from .fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta, eval_fourier_dzeta_phys
+from .field import lamscale_from_phips
 from .grids import AngleGrid
 from .modes import ModeTable
 from .vmec_bcovar import vmec_bcovar_half_mesh_from_wout
@@ -318,6 +319,7 @@ def vmec_forces_rz_from_wout(*, state, static, wout, indata=None, constraint_tco
     dtype = jnp.asarray(state.Rcos).dtype
     mask_m1 = jnp.asarray(m_modes == 1, dtype=dtype)
     mask_odd_rest = jnp.asarray((m_modes % 2 == 1) & (m_modes != 1), dtype=dtype)
+    mask_even = jnp.asarray((m_modes % 2) == 0, dtype=dtype)
 
     def _odd_internal_vmec(*, coeff_cos, coeff_sin, eval_fn):
         phys_m1 = eval_fn(coeff_cos * mask_m1, coeff_sin * mask_m1, static.basis)
@@ -533,6 +535,7 @@ def vmec_forces_rz_from_wout_reference_fields(
     dtype = jnp.asarray(state.Rcos).dtype
     mask_m1 = jnp.asarray(m_modes == 1, dtype=dtype)
     mask_odd_rest = jnp.asarray((m_modes % 2 == 1) & (m_modes != 1), dtype=dtype)
+    mask_even = jnp.asarray((m_modes % 2) == 0, dtype=dtype)
 
     def _odd_internal_vmec(*, coeff_cos, coeff_sin, eval_fn):
         phys_m1 = eval_fn(coeff_cos * mask_m1, coeff_sin * mask_m1, static.basis)
@@ -714,12 +717,37 @@ def vmec_forces_rz_from_wout_reference_fields(
         czmn_e = z
         czmn_o = z
 
+    # Build lambda-force kernels (blmn/clmn) using the VMEC formulas but with
+    # reference-field inputs.
+    lamscale = lamscale_from_phips(wout.phips, s)
+
+    # For reference-field parity we form the lambda-force kernels from the
+    # stored wout bsubu/bsubv fields by averaging to the full mesh. This avoids
+    # re-deriving bsubv_e from lambda derivatives, which can amplify small
+    # discrepancies in the reference path.
+    ns = int(s.shape[0])
+    bsubu_e = jnp.zeros_like(bsubu)
+    bsubv_e = jnp.zeros_like(bsubv)
+    if ns >= 2:
+        bsubu_e = bsubu_e.at[:-1].set(0.5 * (bsubu[:-1] + bsubu[1:]))
+        bsubu_e = bsubu_e.at[-1].set(0.5 * bsubu[-1])
+        bsubv_e = bsubv_e.at[:-1].set(0.5 * (bsubv[:-1] + bsubv[1:]))
+        bsubv_e = bsubv_e.at[-1].set(0.5 * bsubv[-1])
+
+    # Scale for tomnsps (skip axis surface).
+    clmn_even = jnp.zeros_like(bsubu_e)
+    blmn_even = jnp.zeros_like(bsubv_e)
+    if ns >= 2:
+        clmn_even = clmn_even.at[1:].set(-lamscale * bsubu_e[1:])
+        blmn_even = blmn_even.at[1:].set(-lamscale * bsubv_e[1:])
+    clmn_odd = psqrts * clmn_even
+    blmn_odd = psqrts * blmn_even
+
     # `bc` object is used only for downstream scaling helpers; provide the pieces we need.
     class _BC:
         pass
 
     bc_obj = _BC()
-    from .field import lamscale_from_phips
     from .vmec_jacobian import VmecHalfMeshJacobian
 
     bc_obj.jac = VmecHalfMeshJacobian(
@@ -736,8 +764,12 @@ def vmec_forces_rz_from_wout_reference_fields(
     bc_obj.gvv = gvv_metric
     bc_obj.bsubu = bsubu
     bc_obj.bsubv = bsubv
-    bc_obj.lamscale = lamscale_from_phips(wout.phips, s)
+    bc_obj.lamscale = lamscale
     bc_obj.bsq = bsq
+    bc_obj.clmn_even = clmn_even
+    bc_obj.clmn_odd = clmn_odd
+    bc_obj.blmn_even = blmn_even
+    bc_obj.blmn_odd = blmn_odd
 
     if indata is not None:
         constraint_tcon0 = float(indata.get_float("TCON0", 0.0))
