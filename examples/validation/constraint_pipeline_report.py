@@ -101,6 +101,14 @@ def main():
     print("== vmec_jax (VMEC-style tomnsps + getfsq) ==")
     print(f"fsqr={scal.fsqr:.3e}  fsqz={scal.fsqz:.3e}  fsql={scal.fsql:.3e}")
 
+    abs_err_r = abs(scal.fsqr - wout.fsqr)
+    abs_err_z = abs(scal.fsqz - wout.fsqz)
+    abs_err_l = abs(scal.fsql - wout.fsql)
+    print("== absolute errors ==")
+    print(f"fsqr abs.err={abs_err_r:.3e}")
+    print(f"fsqz abs.err={abs_err_z:.3e}")
+    print(f"fsql abs.err={abs_err_l:.3e}")
+
     denom_r = max(abs(wout.fsqr), 1e-20)
     denom_z = max(abs(wout.fsqz), 1e-20)
     denom_l = max(abs(wout.fsql), 1e-20)
@@ -128,6 +136,9 @@ def main():
         fsqr_ref=float(wout.fsqr),
         fsqz_ref=float(wout.fsqz),
         fsql_ref=float(wout.fsql),
+        fsqr_abs_err=float(abs_err_r),
+        fsqz_abs_err=float(abs_err_z),
+        fsql_abs_err=float(abs_err_l),
         gcon=np.asarray(k.gcon),
         tcon=np.asarray(k.tcon) if k.tcon is not None else np.zeros((0,)),
     )
