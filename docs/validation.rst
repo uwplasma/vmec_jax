@@ -163,12 +163,12 @@ Known gaps and workplan
 -----------------------
 
 Known gap (symmetric, 3D): ``bsub*`` parity for some ``nfp>1`` cases (notably
-``li383_low_res`` and ``n3are``) is still at O(1–8%) RMS even when ``bsup*`` parity
+``li383_low_res`` and ``n3are``) is still at O(1-8%) RMS even when ``bsup*`` parity
 is tight. This suggests a mismatch in **real-space synthesis + half-mesh metric**
 conventions rather than the contravariant field construction itself.
 
 Immediate plan:
-1. Implement VMEC-style ``totzsp`` synthesis (``fixaray`` trig/weight tables + reduced θ grid) for R/Z/L and derivatives.
+1. Implement VMEC-style ``totzsp`` synthesis (``fixaray`` trig/weight tables + reduced theta grid) for R/Z/L and derivatives.
 2. Rebuild half-mesh metric elements from those fields and recompute ``bsub*``.
 3. Tighten ``tests/test_step10_bsub_parity.py`` tolerances and update parity figures.
 

@@ -25,8 +25,8 @@ This repo version corresponds to **Step-7** of the port plan.
 ### Step-0: INDATA parsing + boundary evaluation
 - Robust **INDATA parser** for VMEC-like input files.
 - Builds a **helical Fourier basis** (m,n) and evaluates boundary surfaces:
-  - `R(θ,ζ)`, `Z(θ,ζ)` on a uniform `(ntheta,nzeta)` grid (one field period).
-- Computes angular derivatives `∂/∂θ` and `∂/∂φ_phys`.
+  - `R(theta,ζ)`, `Z(theta,ζ)` on a uniform `(ntheta,nzeta)` grid (one field period).
+- Computes angular derivatives `∂/∂theta` and `∂/∂φ_phys`.
 
 Script:
 - `examples/tutorial/00_parse_and_boundary.py`
@@ -39,8 +39,8 @@ Validation:
   - for m>0 harmonics use `s**m` scaling (regular on axis),
   - for m=0 keep constant in s (initial conservative behavior),
   - λ initialized to 0.
-- Evaluates full coordinates on `(s,θ,ζ)` grid:
-  - `R(s,θ,ζ)`, `Z(s,θ,ζ)`, `λ(s,θ,ζ)` and `R_θ, R_φ, ...`.
+- Evaluates full coordinates on `(s,theta,ζ)` grid:
+  - `R(s,theta,ζ)`, `Z(s,theta,ζ)`, `λ(s,theta,ζ)` and `R_theta, R_φ, ...`.
 - Demonstrates autodiff through geometry (grad demo).
 
 Scripts:
@@ -54,15 +54,15 @@ Validation:
 ### Step-2: Radial derivatives + metric tensor + Jacobian
 - Adds finite-difference radial derivative operator on the s grid.
 - Builds covariant basis vectors and computes:
-  - covariant metric elements `g_ss, g_sθ, g_sφ, g_θθ, g_θφ, g_φφ`,
-  - Jacobian `sqrtg = e_s · (e_θ × e_φ)`.
+  - covariant metric elements `g_ss, g_stheta, g_sφ, g_thetatheta, g_thetaφ, g_φφ`,
+  - Jacobian `sqrtg = e_s dot (e_theta × e_φ)`.
 - Prints diagnostics and rough volume integral.
 
 Script:
 - `examples/tutorial/04_geom_metrics.py`
 
 Validation:
-- `sqrtg` and `g_θθ` are zero only on the axis surface `s=0` (expected coordinate singularity).
+- `sqrtg` and `g_thetatheta` are zero only on the axis surface `s=0` (expected coordinate singularity).
 - For `s>=1`, `sqrtg>0` and metrics are positive where expected.
 
 ### Step-3: Profiles + volume profile (from sqrtg)
@@ -198,7 +198,7 @@ Current incremental progress toward Step-10:
 - Fixed a major Step-10 force-kernel convention mismatch: in VMEC `bcovar` overwrites `guu/guv/gvv` with **B-product tensors** `GIJ = (B^i B^j)*sqrt(g)` (used by `forces.f`), which is *not* the metric. After switching the JAX force kernel to use `bc.gij_b_uu/gij_b_uv/gij_b_vv`, the parity diagnostic improved by ~9 orders of magnitude (see `examples/3_Advanced/10_vmec_forces_rz_kernel_report.py` and `tests/test_step10_residue_getfsq_parity.py`).
 - Fixed the remaining dominant near-axis mismatch by implementing VMEC's mode-dependent axis rule for internal odd-m fields (jmin1): only the `m=1` contribution is extrapolated to the axis; odd `m>=3` contributions are zero on axis. With this fix, `tests/test_step10_residue_getfsq_parity.py` is now a passing regression (tight parity for the circular tokamak baseline).
 - Wired the **constraint-force pipeline** into the R/Z force kernels and the reference-field parity path, using `alias → gcon` with `tcon` from the VMEC preconditioner. For reference fields, the lambda-force kernels now use `wout` `bsub*` averaged to the full mesh to keep `fsql` parity stable (li383 low-res within ~10% relative error).
-- Remaining Step-10 gap: for some 3D stellarator-symmetric cases with `nfp>1` (e.g. `li383_low_res`, `n3are`), `bsup*` matches tightly but `bsub*` still shows O(1–8%) RMS differences, likely tied to VMEC’s real-space synthesis / half-mesh metric conventions.
+- Remaining Step-10 gap: for some 3D stellarator-symmetric cases with `nfp>1` (e.g. `li383_low_res`, `n3are`), `bsup*` matches tightly but `bsub*` still shows O(1-8%) RMS differences, likely tied to VMEC’s real-space synthesis / half-mesh metric conventions.
 - Matched the current STELLOPT/VMEC2000 convention by **removing the lasym-specific `tcon` halving** (the line is commented out in `bcovar.f`), so `tcon` is now applied uniformly for `lasym=True` and `False`.
 - Shifted parity validation to **symmetric cases only** (circular tokamak + li383); lasym regression inputs remain bundled but are excluded from automated tests for now.
 - Added a residual decomposition report (`examples/validation/residual_decomposition_report.py`) that breaks `fsqr/fsqz/fsql` into component-only norms (A/B/C/constraint) and top `(m,n)` contributors to guide parity debugging.

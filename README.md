@@ -28,7 +28,7 @@ progress (see `CODEX_RESUME.md`).
 ## Key capabilities
 
 - VMEC-style INDATA parsing and boundary evaluation.
-- Differentiable geometry kernel on `(s,θ,ζ)` grids: metrics + Jacobian.
+- Differentiable geometry kernel on `(s,theta,ζ)` grids: metrics + Jacobian.
 - VMEC-style profiles (pressure / iota / current) and volume integrals.
 - Contravariant/covariant magnetic field components and VMEC-normalized magnetic energy `wb`.
 - VMEC-style DFT trig/weight tables (`fixaray`) and `tomnsps` transforms for parity work.
@@ -105,7 +105,7 @@ Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose to
 | --- | --- | --- | --- |
 | INDATA parsing + boundary | OK | OK | `tests/` + `examples/tutorial/00_*` |
 | Geometry (metrics + sqrtg) | OK | OK | Nyquist `gmnc/gmns` parity tests |
-| B field (`bsup*`, `bsub*`, abs(B)) | OK | Partial | `bsup*` and `|B|` parity are tight; `bsub*` shows ~1–8% RMS gaps for some nfp>1 cases |
+| B field (`bsup*`, `bsub*`, abs(B)) | OK | Partial | `bsup*` and `|B|` parity are tight; `bsub*` shows ~1-8% RMS gaps for some nfp>1 cases |
 | Energy scalars (`wb`, `wp`, volume) | OK | OK | `tests/test_step10_energy_integrals_parity.py` + `wout.vp` checks |
 | `wout` I/O (read + minimal write) | OK | OK | `tests/test_step10_wout_roundtrip.py` |
 | Constraint pipeline (`tcon/alias/gcon`) | Partial | Partial | parity kernels + diagnostics wired |
@@ -126,9 +126,9 @@ Concrete milestones (correctness-first):
   - add more bundled `input.*`/`wout_*.nc` pairs (from simsopt test files) and keep `tests/test_step10_residue_getfsq_parity.py` tight,
   - keep using the decomposition scripts (`examples/validation/residual_decomposition_report.py`, `.../residual_compare_fields_report.py`) to attribute any new-case gaps to specific blocks/modes.
 - Close the remaining B-field parity gap for 3D (stellarator-symmetric) cases:
-  - `bsup*` matches tightly on the VMEC internal grid, but `bsub*` differs by O(1–8%) in some nfp>1 cases (e.g. `li383_low_res`, `n3are`),
+  - `bsup*` matches tightly on the VMEC internal grid, but `bsub*` differs by O(1-8%) in some nfp>1 cases (e.g. `li383_low_res`, `n3are`),
   - the likely root cause is a mismatch in VMEC’s *real-space synthesis/metric* conventions vs the current basis evaluation (parity + half-mesh rules),
-  - plan: implement VMEC-style `totzsp` synthesis (using `fixaray` trig tables and reduced θ grid) for R/Z/L and derivatives used by `bcovar`.
+  - plan: implement VMEC-style `totzsp` synthesis (using `fixaray` trig tables and reduced theta grid) for R/Z/L and derivatives used by `bcovar`.
 - Finish the remaining VMEC2000 “plumbing” that affects Step-10 scalars:
   - reconcile any `bcovar` half/full mesh details that influence `forces` (beyond the dynamic norms path),
   - confirm axis rules (`jmin1/jmin2/jlam`) and `LCONM1` constraint behavior match `residue.f90` in the converged regime.
@@ -145,11 +145,11 @@ Current state:
 - Step-10 scalar residual parity is tight on all bundled symmetric cases.
 - `bsup*` parity is tight on the VMEC internal grid, and `|B|` parity is tight.
 - The remaining **known gap** is `bsub*` parity for some 3D symmetric cases with `nfp>1`
-  (e.g. `li383_low_res`, `n3are`), where RMS differences are O(1–8%).
+  (e.g. `li383_low_res`, `n3are`), where RMS differences are O(1-8%).
 
 Likely root cause:
 - Our real-space synthesis for R/Z/L and the resulting half-mesh metric does not yet
-  reproduce VMEC’s *internal* `totzsp` conventions (reduced θ grid, endpoint weights,
+  reproduce VMEC’s *internal* `totzsp` conventions (reduced theta grid, endpoint weights,
   `mscale/nscale`, and parity rules). This affects `guu/guv/gvv`, which directly feed `bsub*`.
 
 Workplan (immediate):
@@ -172,7 +172,7 @@ The current code is intentionally explicit and validation-driven. For performanc
   - enforce static shapes for `(ns, ntheta, nzeta, mpol, ntor)` in the core kernels,
   - use `jax.jit` with `static_argnames` (and small dataclass “static” bundles) to avoid recompiles.
 - Solver-level algorithms that map well to JAX:
-  - preconditioned nonlinear least-squares (Gauss–Newton / Levenberg–Marquardt) with matrix-free JVP/VJP and iterative linear solves (CG) for inner steps,
+  - preconditioned nonlinear least-squares (Gauss-Newton / Levenberg-Marquardt) with matrix-free JVP/VJP and iterative linear solves (CG) for inner steps,
   - quasi-Newton (L-BFGS) as a fallback; optionally wire `jaxopt`/`optax` for robust line-searches and schedules while keeping end-to-end differentiability.
 - GPU/TPU readiness:
   - avoid host callbacks in hot loops; keep diagnostics optional/off by default,
@@ -239,7 +239,7 @@ Compatibility wrappers live under `examples/compat/` and forward to `examples/tu
 ## Examples
 
 Examples are organized into:
-- `examples/tutorial/`: step-by-step scripts (00–09).
+- `examples/tutorial/`: step-by-step scripts (00-09).
 - `examples/validation/`: parity checks vs bundled `wout_*.nc` + reports.
 - `examples/visualization/`: plotting + VTK export.
 - `examples/gradients/`: autodiff + implicit differentiation demos.
