@@ -29,6 +29,8 @@ from .fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta
 from .namelist import InData
 from .state import StateLayout, VMECState
 from .static import VMECStatic
+from .vmec_realspace import vmec_realspace_synthesis, vmec_realspace_synthesis_dtheta
+from .vmec_tomnsp import vmec_trig_tables
 
 
 def _read_axis_coeffs(indata: InData) -> dict[str, float | list[float]]:
@@ -159,6 +161,29 @@ def _apply_m1_constraint(static: VMECStatic, boundary: BoundaryCoeffs) -> Bounda
     return BoundaryCoeffs(R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin)
 
 
+def _undo_m1_constraint_for_recompute(static: VMECStatic, boundary: BoundaryCoeffs) -> BoundaryCoeffs:
+    """Undo VMEC's m=1 constraint for the boundary (used in axis recompute)."""
+    if not bool(getattr(static.cfg, "lconm1", True)):
+        return boundary
+    if int(static.cfg.ntor) == 0:
+        return boundary
+
+    R_cos = np.asarray(boundary.R_cos).copy()
+    R_sin = np.asarray(boundary.R_sin).copy()
+    Z_cos = np.asarray(boundary.Z_cos).copy()
+    Z_sin = np.asarray(boundary.Z_sin).copy()
+
+    for k, m in enumerate(static.modes.m):
+        if int(m) != 1:
+            continue
+        rbs = R_sin[k]
+        zbc = Z_cos[k]
+        R_sin[k] = rbs + zbc
+        Z_cos[k] = rbs - zbc
+
+    return BoundaryCoeffs(R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin)
+
+
 def _recompute_axis_from_boundary(
     static: VMECStatic,
     boundary: BoundaryCoeffs,
@@ -170,13 +195,38 @@ def _recompute_axis_from_boundary(
 ) -> tuple[np.ndarray, np.ndarray]:
     """VMEC++-style axis recompute to maximize min Jacobian in each toroidal plane."""
     cfg = static.cfg
-    grid = static.grid
-    basis = build_helical_basis(static.modes, grid)
+    boundary_recompute = _undo_m1_constraint_for_recompute(static, boundary)
 
-    R_lcfs = np.asarray(eval_fourier(boundary.R_cos, boundary.R_sin, basis))
-    Z_lcfs = np.asarray(eval_fourier(boundary.Z_cos, boundary.Z_sin, basis))
-    dR_dtheta_lcfs = np.asarray(eval_fourier_dtheta(boundary.R_cos, boundary.R_sin, basis))
-    dZ_dtheta_lcfs = np.asarray(eval_fourier_dtheta(boundary.Z_cos, boundary.Z_sin, basis))
+    trig = vmec_trig_tables(
+        ntheta=cfg.ntheta,
+        nzeta=cfg.nzeta,
+        nfp=cfg.nfp,
+        mmax=cfg.mpol - 1,
+        nmax=cfg.ntor,
+        lasym=cfg.lasym,
+    )
+
+    coeff_cos = np.asarray(boundary_recompute.R_cos)[None, :]
+    coeff_sin = np.asarray(boundary_recompute.R_sin)[None, :]
+    R_lcfs = np.asarray(
+        vmec_realspace_synthesis(coeff_cos=coeff_cos, coeff_sin=coeff_sin, modes=static.modes, trig=trig)
+    )[0]
+    coeff_cos = np.asarray(boundary_recompute.Z_cos)[None, :]
+    coeff_sin = np.asarray(boundary_recompute.Z_sin)[None, :]
+    Z_lcfs = np.asarray(
+        vmec_realspace_synthesis(coeff_cos=coeff_cos, coeff_sin=coeff_sin, modes=static.modes, trig=trig)
+    )[0]
+
+    coeff_cos = np.asarray(boundary_recompute.R_cos)[None, :]
+    coeff_sin = np.asarray(boundary_recompute.R_sin)[None, :]
+    dR_dtheta_lcfs = np.asarray(
+        vmec_realspace_synthesis_dtheta(coeff_cos=coeff_cos, coeff_sin=coeff_sin, modes=static.modes, trig=trig)
+    )[0]
+    coeff_cos = np.asarray(boundary_recompute.Z_cos)[None, :]
+    coeff_sin = np.asarray(boundary_recompute.Z_sin)[None, :]
+    dZ_dtheta_lcfs = np.asarray(
+        vmec_realspace_synthesis_dtheta(coeff_cos=coeff_cos, coeff_sin=coeff_sin, modes=static.modes, trig=trig)
+    )[0]
 
     ns = int(cfg.ns)
     ns12 = (ns + 1) // 2 - 1
@@ -203,21 +253,47 @@ def _recompute_axis_from_boundary(
         Rcos_mid[k] = (1.0 - s_mid) * raxis_cc[n] + s_mid * Rcos_mid[k]
         Zsin_mid[k] = (1.0 - s_mid) * (-zaxis_cs[n]) + s_mid * Zsin_mid[k]
 
-    R_half = np.asarray(eval_fourier(Rcos_mid, Rsin_mid, basis))
-    Z_half = np.asarray(eval_fourier(Zcos_mid, Zsin_mid, basis))
-    dR_dtheta_half = np.asarray(eval_fourier_dtheta(Rcos_mid, Rsin_mid, basis))
-    dZ_dtheta_half = np.asarray(eval_fourier_dtheta(Zcos_mid, Zsin_mid, basis))
+    R_half = np.asarray(
+        vmec_realspace_synthesis(
+            coeff_cos=Rcos_mid[None, :],
+            coeff_sin=Rsin_mid[None, :],
+            modes=static.modes,
+            trig=trig,
+        )
+    )[0]
+    Z_half = np.asarray(
+        vmec_realspace_synthesis(
+            coeff_cos=Zcos_mid[None, :],
+            coeff_sin=Zsin_mid[None, :],
+            modes=static.modes,
+            trig=trig,
+        )
+    )[0]
+    dR_dtheta_half = np.asarray(
+        vmec_realspace_synthesis_dtheta(
+            coeff_cos=Rcos_mid[None, :],
+            coeff_sin=Rsin_mid[None, :],
+            modes=static.modes,
+            trig=trig,
+        )
+    )[0]
+    dZ_dtheta_half = np.asarray(
+        vmec_realspace_synthesis_dtheta(
+            coeff_cos=Zcos_mid[None, :],
+            coeff_sin=Zsin_mid[None, :],
+            modes=static.modes,
+            trig=trig,
+        )
+    )[0]
 
     dR_dtheta_half = 0.5 * (dR_dtheta_lcfs + dR_dtheta_half)
     dZ_dtheta_half = 0.5 * (dZ_dtheta_lcfs + dZ_dtheta_half)
 
-    zeta = np.asarray(grid.zeta)
-    n = np.arange(cfg.ntor + 1)
-    cos_nz = np.cos(np.outer(n, zeta))
-    sin_nz = np.sin(np.outer(n, zeta))
-
-    r_axis = (raxis_cc[:, None] * cos_nz).sum(axis=0)
-    z_axis = -(zaxis_cs[:, None] * sin_nz).sum(axis=0)
+    cosnv = np.asarray(trig.cosnv)  # (nzeta, nmax+1)
+    sinnv = np.asarray(trig.sinnv)
+    nscale = np.asarray(trig.nscale)
+    r_axis = (raxis_cc[None, :] * cosnv / nscale[None, :]).sum(axis=1)
+    z_axis = -(zaxis_cs[None, :] * sinnv / nscale[None, :]).sum(axis=1)
 
     new_r_axis = np.zeros_like(r_axis)
     new_z_axis = np.zeros_like(z_axis)
@@ -268,8 +344,8 @@ def _recompute_axis_from_boundary(
             new_z_axis[k_rev] = -new_z_axis[k]
 
     delta_v = 2.0 / float(nzeta)
-    new_raxis_c = delta_v * (cos_nz @ new_r_axis)
-    new_zaxis_s = -delta_v * (sin_nz @ new_z_axis)
+    new_raxis_c = delta_v * (cosnv.T @ new_r_axis) / nscale
+    new_zaxis_s = -delta_v * (sinnv.T @ new_z_axis) / nscale
     new_raxis_c[0] *= 0.5
 
     return new_raxis_c, new_zaxis_s

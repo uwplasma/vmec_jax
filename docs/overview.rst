@@ -85,6 +85,12 @@ and boundary for ``m=0`` R coefficients when axis inputs are provided. This
 matches the VMEC2000/VMEC++ convention and improves stability of early
 iterations in fixed-boundary solves.
 
+When axis inputs are not provided, vmec_jax now performs a VMEC++-style
+axis recomputation: it searches each toroidal plane for the axis position
+that maximizes the minimum Jacobian proxy, using VMEC's reduced theta grid
+and normalization tables. This provides a much more robust initial axis
+guess and reduces geometric pathologies in early iterations.
+
 Design principles
 -----------------
 

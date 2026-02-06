@@ -40,6 +40,9 @@ Validation:
   - for m=0 R coefficients: linear blend between axis and boundary when axis inputs are provided,
   - other m=0 components scale with `s` for regularity at the axis,
   - λ initialized to 0.
+- If axis inputs are missing, vmec_jax now **recomputes the axis** using a VMEC++-style
+  grid search that maximizes the minimum Jacobian proxy on each toroidal plane,
+  using VMEC's reduced theta grid + normalization tables.
 - Evaluates full coordinates on `(s,theta,ζ)` grid:
   - `R(s,theta,ζ)`, `Z(s,theta,ζ)`, `λ(s,theta,ζ)` and `R_theta, R_φ, ...`.
 - Demonstrates autodiff through geometry (grad demo).
