@@ -112,7 +112,7 @@ def main() -> None:
     p.add_argument("--input", type=str, default=str(REPO_ROOT / "examples/data/input.n3are_R7.75B5.7_lowres"))
     p.add_argument("--outdir", type=str, default=str(REPO_ROOT / "docs/_static/figures"))
     p.add_argument("--max-iter", type=int, default=20)
-    p.add_argument("--step-size", type=float, default=1e-5)
+    p.add_argument("--step-size", type=float, default=None)
     p.add_argument("--solver", type=str, default="gd", help="gd, lbfgs, vmec_lbfgs, or vmec_gn")
     p.add_argument("--solve", action="store_true", help="Run the vmec_jax fixed-boundary solver (slower).")
     p.add_argument("--no-solve", action="store_true", help="Use the initial guess only (fast).")
@@ -127,11 +127,18 @@ def main() -> None:
     # vmec_jax current output
     use_initial_guess = not bool(args.solve) or bool(args.no_solve)
 
+    step_size = args.step_size
+    if step_size is None:
+        if str(args.solver).lower() == "vmecpp_iter":
+            step_size = 1e-10
+        else:
+            step_size = 1e-5
+
     run = run_fixed_boundary(
         Path(args.input),
         solver=str(args.solver),
         max_iter=int(args.max_iter),
-        step_size=float(args.step_size),
+        step_size=step_size,
         use_initial_guess=use_initial_guess,
     )
     state = run.state

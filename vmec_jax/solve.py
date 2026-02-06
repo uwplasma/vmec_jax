@@ -2102,16 +2102,37 @@ def solve_fixed_boundary_vmecpp_iter(
         fsql = norms.fnormL * gcl2
         return frzl, fsqr, fsqz, fsql
 
-    def _tomnsps_to_modes(a):
-        a = jnp.asarray(a)
-        if a.ndim != 3:
-            raise ValueError(f"expected (ns, mpol, nrange), got {a.shape}")
+    def _tomnsps_to_helical(frcc, frss, fsc, fcs):
+        frcc = jnp.asarray(frcc)
+        if frcc.ndim != 3:
+            raise ValueError(f"expected (ns, mpol, nrange), got {frcc.shape}")
         m = jnp.asarray(static.modes.m)
         n = jnp.asarray(static.modes.n)
-        mask = n >= 0
-        n_idx = jnp.where(mask, n, 0)
-        vals = a[:, m, n_idx]
-        return vals * mask[None, :].astype(vals.dtype)
+        nabs = jnp.abs(n)
+
+        frss = jnp.asarray(frss) if frss is not None else jnp.zeros_like(frcc)
+        fsc = jnp.asarray(fsc)
+        fcs = jnp.asarray(fcs) if fcs is not None else jnp.zeros_like(fsc)
+
+        fcc = frcc[:, m, nabs]
+        fss = frss[:, m, nabs]
+        fsc_m = fsc[:, m, nabs]
+        fcs_m = fcs[:, m, nabs]
+
+        n_pos = n > 0
+        n_neg = n < 0
+
+        cos_pos = 0.5 * (fcc + fss)
+        cos_neg = 0.5 * (fcc - fss)
+        cos_zero = fcc
+        cos_val = jnp.where(n_pos[None, :], cos_pos, jnp.where(n_neg[None, :], cos_neg, cos_zero))
+
+        sin_pos = 0.5 * (fsc_m - fcs_m)
+        sin_neg = 0.5 * (fsc_m + fcs_m)
+        sin_zero = fsc_m
+        sin_val = jnp.where(n_pos[None, :], sin_pos, jnp.where(n_neg[None, :], sin_neg, sin_zero))
+
+        return cos_val, sin_val
 
     state = _enforce_fixed_boundary_and_axis(
         state0,
@@ -2189,13 +2210,13 @@ def solve_fixed_boundary_vmecpp_iter(
         )
 
         # Convert internal product basis -> combined basis (symmetric runs).
-        frc_comb = frcc + (frss if frss is not None else 0.0)
-        fz_comb = fzsc - (fzcs if fzcs is not None else 0.0)
-        fl_comb = flsc - (flcs if flcs is not None else 0.0)
+        zeros_r = jnp.zeros_like(frcc)
+        zeros_z = jnp.zeros_like(fzsc)
+        zeros_l = jnp.zeros_like(flsc)
 
-        frc_modes = _tomnsps_to_modes(frc_comb)
-        fz_modes = _tomnsps_to_modes(fz_comb)
-        fl_modes = _tomnsps_to_modes(fl_comb)
+        frc_modes, _ = _tomnsps_to_helical(frcc, frss, zeros_z, None)
+        _, fz_modes = _tomnsps_to_helical(zeros_r, None, fzsc, fzcs)
+        _, fl_modes = _tomnsps_to_helical(zeros_r, None, flsc, flcs)
 
         # VMEC++-style damping for the fixed-point update.
         gcr2_p, gcz2_p, gcl2_p = vmec_gcx2_from_tomnsps(

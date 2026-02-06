@@ -111,12 +111,15 @@ def save_npz(path: str | Path, **arrays) -> Path:
     return path
 
 
+_STEP_SIZE_SENTINEL = object()
+
+
 def run_fixed_boundary(
     input_path: str | Path,
     *,
     solver: str = "gd",
     max_iter: int = 20,
-    step_size: float = 5e-3,
+    step_size: float | object = _STEP_SIZE_SENTINEL,
     history_size: int = 10,
     use_initial_guess: bool = False,
     vmec_project: bool = True,
@@ -139,7 +142,8 @@ def run_fixed_boundary(
         If True (default), print VMEC-style iteration progress and a summary.
     """
     cfg, indata = load_config(str(input_path))
-    if grid is None and str(solver).lower() in ("vmec_lbfgs", "vmec_gn", "vmecpp_iter"):
+    solver_lower = str(solver).lower()
+    if grid is None and solver_lower in ("vmec_lbfgs", "vmec_gn", "vmecpp_iter"):
         from .vmec_tomnsp import vmec_angle_grid
 
         grid = vmec_angle_grid(
@@ -160,13 +164,21 @@ def run_fixed_boundary(
     pressure = prof.get("pressure", np.zeros_like(np.asarray(static.s)))
     gamma = indata.get_float("GAMMA", 0.0)
 
+    if step_size is _STEP_SIZE_SENTINEL or step_size is None:
+        if solver_lower == "vmecpp_iter":
+            step_size_val = float(indata.get_float("DELT", 5e-3))
+        else:
+            step_size_val = 5e-3
+    else:
+        step_size_val = float(step_size)
+
     if verbose:
         mode = "initial guess" if use_initial_guess else f"{solver} solve"
         print(f"[vmec_jax] fixed-boundary run ({mode})")
         print(f"[vmec_jax] input={input_path}")
         print(f"[vmec_jax] ns={cfg.ns} mpol={cfg.mpol} ntor={cfg.ntor} nfp={cfg.nfp}")
         if not use_initial_guess:
-            print(f"[vmec_jax] max_iter={max_iter} step_size={step_size} history_size={history_size}")
+            print(f"[vmec_jax] max_iter={max_iter} step_size={step_size_val} history_size={history_size}")
 
     if use_initial_guess:
         return FixedBoundaryRun(
@@ -180,7 +192,7 @@ def run_fixed_boundary(
             signgs=signgs,
         )
 
-    solver = solver.lower()
+    solver = solver_lower
     if solver == "gd":
         res = solve_fixed_boundary_gd(
             st0,
@@ -192,7 +204,7 @@ def run_fixed_boundary(
             pressure=pressure,
             gamma=gamma,
             max_iter=int(max_iter),
-            step_size=float(step_size),
+            step_size=float(step_size_val),
             jacobian_penalty=1e3,
             jit_grad=True,
             verbose=bool(verbose),
@@ -208,7 +220,7 @@ def run_fixed_boundary(
             pressure=pressure,
             gamma=gamma,
             max_iter=int(max_iter),
-            step_size=float(step_size),
+            step_size=float(step_size_val),
             history_size=int(history_size),
             jit_grad=True,
             verbose=bool(verbose),
@@ -223,7 +235,7 @@ def run_fixed_boundary(
             signgs=signgs,
             history_size=int(history_size),
             max_iter=int(max_iter),
-            step_size=float(step_size),
+            step_size=float(step_size_val),
             jit_grad=True,
             preconditioner="mode_diag+radial_tridi",
             precond_exponent=1.0,
@@ -239,7 +251,7 @@ def run_fixed_boundary(
             indata=indata,
             signgs=signgs,
             max_iter=int(max_iter),
-            step_size=float(step_size),
+            step_size=float(step_size_val),
             jit_kernels=True,
             verbose=bool(verbose),
         )
@@ -252,7 +264,7 @@ def run_fixed_boundary(
             indata=indata,
             signgs=signgs,
             max_iter=int(max_iter),
-            step_size=float(step_size),
+            step_size=float(step_size_val),
             include_constraint_force=True,
             apply_m1_constraints=True,
             precond_radial_alpha=0.5,
