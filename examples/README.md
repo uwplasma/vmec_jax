@@ -11,10 +11,17 @@ and easy to discover; this also avoids ambiguous top-level entrypoints.
 - `gradients/`: autodiff + implicit differentiation demos (requires JAX).
 - `validation/`: parity checks vs bundled `wout_*.nc` (and reporting utilities).
 - `visualization/`: figure generation + VTK export scripts.
-  - includes `n3are_vmec2000_vs_vmecjax.py` for side-by-side VMEC2000 vs vmec_jax plots.
+  - keeps plotting-focused scripts; VMEC parity/validation runners live under `validation/`.
 - `data/`: bundled `input.*` and `wout_*_reference.nc` files used in CI tests.
 - `compat/`: thin wrappers that forward to the tutorial scripts (for legacy paths).
 - `outputs/`: default location where some scripts write `.npz` artifacts.
+
+### n3are parity runner
+
+- Main parity comparison entrypoint:
+  - `validation/n3are_vmec_vs_vmecjax.py`
+- Backward-compatible wrapper:
+  - `visualization/n3are_vmec2000_vs_vmecjax.py`
 
 ## Quick run
 

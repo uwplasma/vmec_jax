@@ -26,7 +26,7 @@ import numpy as np
 from ._compat import jnp
 from .field import TWOPI
 from .field import lamscale_from_phips
-from .field import chips_from_chipf
+from .field import chips_from_wout_chipf
 from .vmec_jacobian import VmecHalfMeshJacobian, jacobian_half_mesh_from_parity
 from .fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta, eval_fourier_dzeta_phys
 from .grids import AngleGrid
@@ -323,7 +323,15 @@ def vmec_bcovar_half_mesh_from_wout(
     # `add_fluxes`, while `wout` commonly stores the half-mesh array `chipf`.
     chipf_out = getattr(wout, "chipf", None)
     if chipf_out is not None:
-        chips_eff = chips_from_chipf(chipf_out)
+        chips_eff = chips_from_wout_chipf(
+            chipf=chipf_out,
+            phipf=getattr(wout, "phipf"),
+            iotaf=getattr(wout, "iotaf", None),
+            iotas=getattr(wout, "iotas", None),
+            # Solver-internal wout-like objects may omit iotaf/iotas and provide
+            # half-mesh chipf; keep VMEC2000-compatible behavior in that case.
+            assume_half_if_unknown=True,
+        )
     else:
         chips_eff = jnp.asarray(getattr(wout, "iotaf", getattr(wout, "iotas", 0.0))) * jnp.asarray(wout.phipf)
 

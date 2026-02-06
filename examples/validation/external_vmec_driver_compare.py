@@ -31,7 +31,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from vmec_jax.config import load_config
-from vmec_jax.field import bsub_from_bsup, bsup_from_geom, chips_from_chipf, lamscale_from_phips
+from vmec_jax.field import bsub_from_bsup, bsup_from_geom, chips_from_wout_chipf, lamscale_from_phips
 from vmec_jax.fourier import build_helical_basis, eval_fourier
 from vmec_jax.geom import eval_geom
 from vmec_jax.grids import AngleGrid
@@ -104,7 +104,13 @@ def _bfield_parity(input_path: Path, wout_path: Path) -> dict[str, float]:
 
     # bsup parity (computed from geometry + lambda)
     lamscale = lamscale_from_phips(wout.phips, static.s)
-    chips = chips_from_chipf(wout.chipf)
+    chips = chips_from_wout_chipf(
+        chipf=wout.chipf,
+        phipf=wout.phipf,
+        iotaf=getattr(wout, "iotaf", None),
+        iotas=getattr(wout, "iotas", None),
+        assume_half_if_unknown=True,
+    )
     bsupu_calc, bsupv_calc = bsup_from_geom(
         g,
         phipf=wout.phipf,

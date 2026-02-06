@@ -240,6 +240,44 @@ def chips_from_chipf(chipf):
     return full_mesh_from_half_mesh_avg(chipf)
 
 
+def chips_from_wout_chipf(
+    *,
+    chipf,
+    phipf,
+    iotaf=None,
+    iotas=None,
+    assume_half_if_unknown: bool = True,
+):
+    """Resolve full-mesh ``chips`` from a ``wout``-style ``chipf`` array.
+
+    VMEC2000 and VMEC++ may expose different mesh conventions for ``chipf``:
+    - VMEC2000 reference files commonly store half-mesh ``chipf ~= iotaf*phipf``.
+    - VMEC++ files expose full-mesh ``chipf ~= iotas*phipf``.
+
+    This helper auto-detects the convention when both ``iotaf`` and ``iotas`` are
+    available, and returns a full-mesh ``chips`` suitable for `add_fluxes` logic.
+    """
+    chipf = jnp.asarray(chipf)
+    phipf = jnp.asarray(phipf)
+
+    if iotaf is not None and iotas is not None:
+        iotaf = jnp.asarray(iotaf)
+        iotas = jnp.asarray(iotas)
+        eps = jnp.asarray(1e-20, dtype=chipf.dtype)
+        den = jnp.maximum(jnp.sqrt(jnp.mean(chipf * chipf)), eps)
+
+        rel_half = jnp.sqrt(jnp.mean((chipf - iotaf * phipf) ** 2)) / den
+        rel_full = jnp.sqrt(jnp.mean((chipf - iotas * phipf) ** 2)) / den
+        # Prefer full-mesh interpretation only when clearly better.
+        use_full = rel_full < (0.5 * rel_half)
+        chips_half = chips_from_chipf(chipf)
+        return jnp.where(use_full, chipf, chips_half)
+
+    if assume_half_if_unknown:
+        return chips_from_chipf(chipf)
+    return chipf
+
+
 def bsup_from_geom(geom, *, phipf, chipf, nfp: int, signgs: int, lamscale, eps: float = 1e-14):
     """Compute (bsupu, bsupv) from a :class:`~vmec_jax.geom.Geom`.
 

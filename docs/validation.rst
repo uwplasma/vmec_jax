@@ -225,6 +225,7 @@ Immediate plan:
 1. VMEC-style ``totzsp`` synthesis (``fixaray`` trig/weight tables + reduced theta grid) for R/Z/L and derivatives is now wired into ``bcovar`` (``use_vmec_synthesis=True``).
 2. Recompute ``bsub*`` parity on 3D cases using the VMEC synthesis path and update parity figures.
 3. Tighten ``tests/test_step10_bsub_parity.py`` tolerances once the RMS error drops.
+4. Continue VMEC++ stage parity with ``examples/validation/vmecpp_stage_parity_pipeline.py`` and ``examples/validation/vmecpp_getfsq_decomposition.py`` to localize the first solver-stage mismatch before changing update rules.
 
 Running tests::
 
@@ -244,6 +245,18 @@ VMEC2000/VMEC++ ``wout_*.nc`` file, use::
 This report prints ``tcon``/``gcon`` summaries and compares the VMEC-style
 ``fsqr/fsqz/fsql`` scalars computed by ``vmec-jax`` against the supplied
 ``wout``.
+
+VMEC++ stage diagnostics
+------------------------
+
+For stage-by-stage parity against a fresh VMEC++ run, use::
+
+  python examples/validation/vmecpp_stage_parity_pipeline.py --input examples/data/input.n3are_R7.75B5.7_lowres
+
+For focused residual-scalar convention checks (`getfsq`) on the VMEC++ final
+state, use::
+
+  python examples/validation/vmecpp_getfsq_decomposition.py --input examples/data/input.n3are_R7.75B5.7_lowres
 
 Residual decomposition diagnostics
 ----------------------------------
