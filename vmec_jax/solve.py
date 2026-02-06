@@ -1909,6 +1909,8 @@ def solve_fixed_boundary_vmecpp_iter(
     apply_m1_constraints: bool = True,
     precond_radial_alpha: float = 0.5,
     precond_lambda_alpha: float = 0.5,
+    mode_diag_exponent: float = 1.0,
+    auto_flip_force: bool = True,
     verbose: bool = True,
 ) -> SolveVmecResidualResult:
     """VMEC++-style fixed-point update loop using preconditioned force residuals."""
@@ -1927,6 +1929,7 @@ def solve_fixed_boundary_vmecpp_iter(
 
     from .energy import flux_profiles_from_indata
     from .field import half_mesh_avg_from_full_mesh
+    from .energy import magnetic_wb_from_state
     from .profiles import eval_profiles
     from .vmec_forces import vmec_forces_rz_from_wout, vmec_residual_internal_from_kernels
     from .vmec_residue import (
@@ -2134,6 +2137,13 @@ def solve_fixed_boundary_vmecpp_iter(
 
         return cos_val, sin_val
 
+    def _mode_diag_weights():
+        m = jnp.asarray(static.modes.m, dtype=jnp.float64)
+        n = jnp.asarray(static.modes.n, dtype=jnp.float64) * float(static.cfg.nfp)
+        k2 = m * m + n * n
+        w = (1.0 + k2) ** (-float(mode_diag_exponent))
+        return w.astype(jnp.asarray(state.Rcos).dtype)
+
     state = _enforce_fixed_boundary_and_axis(
         state0,
         static,
@@ -2162,6 +2172,7 @@ def solve_fixed_boundary_vmecpp_iter(
     vR = jnp.zeros_like(state.Rcos)
     vZ = jnp.zeros_like(state.Zsin)
     vL = jnp.zeros_like(state.Lsin)
+    flip_sign = 1.0
 
     for it in range(max_iter):
         zero_m1 = jnp.asarray(1.0 if (it < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
@@ -2218,6 +2229,29 @@ def solve_fixed_boundary_vmecpp_iter(
         _, fz_modes = _tomnsps_to_helical(zeros_r, None, fzsc, fzcs)
         _, fl_modes = _tomnsps_to_helical(zeros_r, None, flsc, flcs)
 
+        # Mode-diagonal preconditioning (VMEC++ uses a richer preconditioner).
+        w_mode = _mode_diag_weights()
+        frc_modes = frc_modes * w_mode[None, :]
+        fz_modes = fz_modes * w_mode[None, :]
+        fl_modes = fl_modes * w_mode[None, :]
+
+        if auto_flip_force and it == 0:
+            e0 = float(np.asarray(magnetic_wb_from_state(state, static, indata=indata, signgs=signgs)).ravel()[0])
+            test_state = VMECState(
+                layout=state.layout,
+                Rcos=jnp.asarray(state.Rcos) + (-step_size) * jnp.asarray(frc_modes),
+                Rsin=state.Rsin,
+                Zcos=state.Zcos,
+                Zsin=jnp.asarray(state.Zsin) + (-step_size) * jnp.asarray(fz_modes),
+                Lcos=state.Lcos,
+                Lsin=jnp.asarray(state.Lsin) + (-step_size) * jnp.asarray(fl_modes),
+            )
+            e1 = float(np.asarray(magnetic_wb_from_state(test_state, static, indata=indata, signgs=signgs)).ravel()[0])
+            if not np.isfinite(e1) or (e1 > e0):
+                flip_sign = -1.0
+                if verbose:
+                    print("[solve_fixed_boundary_vmecpp_iter] flipping force sign (energy increase)")
+
         # VMEC++-style damping for the fixed-point update.
         gcr2_p, gcz2_p, gcl2_p = vmec_gcx2_from_tomnsps(
             frzl=frzl_pre,
@@ -2247,9 +2281,9 @@ def solve_fixed_boundary_vmecpp_iter(
         b1 = 1.0 - dtau
         fac = 1.0 / (1.0 + dtau)
 
-        vR = fac * (b1 * vR + time_step * jnp.asarray(frc_modes))
-        vZ = fac * (b1 * vZ + time_step * jnp.asarray(fz_modes))
-        vL = fac * (b1 * vL + time_step * jnp.asarray(fl_modes))
+        vR = fac * (b1 * vR + time_step * (flip_sign * jnp.asarray(frc_modes)))
+        vZ = fac * (b1 * vZ + time_step * (flip_sign * jnp.asarray(fz_modes)))
+        vL = fac * (b1 * vL + time_step * (flip_sign * jnp.asarray(fl_modes)))
 
         state = VMECState(
             layout=state.layout,
