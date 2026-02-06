@@ -1083,6 +1083,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
     signgs: int,
     w_rz: float = 1.0,
     w_l: float = 1.0,
+    include_constraint_force: bool = True,
     objective_scale: float | None = None,
     apply_m1_constraints: bool = True,
     history_size: int = 10,
@@ -1184,8 +1185,18 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
 
     objective_scale_f = float(objective_scale) if objective_scale is not None else None
 
+    constraint_tcon0: float | None = None
+    if bool(include_constraint_force):
+        constraint_tcon0 = float(indata.get_float("TCON0", 0.0))
+
     def _fsq2_terms_and_jacmin(state: VMECState):
-        k = vmec_forces_rz_from_wout(state=state, static=static, wout=wout_like, indata=None)
+        k = vmec_forces_rz_from_wout(
+            state=state,
+            static=static,
+            wout=wout_like,
+            indata=None,
+            constraint_tcon0=constraint_tcon0,
+        )
         rzl = vmec_residual_internal_from_kernels(
             k,
             cfg_ntheta=int(static.cfg.ntheta),
@@ -1246,7 +1257,13 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
         objective_scale_f = 1.0 / max(abs(w0), 1.0)
         # Rebuild the objective closures with the now-fixed scale.
         def _fsq2_terms_and_jacmin(state: VMECState):  # type: ignore[no-redef]
-            k = vmec_forces_rz_from_wout(state=state, static=static, wout=wout_like, indata=None)
+            k = vmec_forces_rz_from_wout(
+                state=state,
+                static=static,
+                wout=wout_like,
+                indata=None,
+                constraint_tcon0=constraint_tcon0,
+            )
             rzl = vmec_residual_internal_from_kernels(
                 k,
                 cfg_ntheta=int(static.cfg.ntheta),
@@ -1437,6 +1454,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
         "w_rz": float(w_rz),
         "w_l": float(w_l),
         "objective_scale": float(objective_scale_f),
+        "include_constraint_force": bool(include_constraint_force),
         "scale_rz": float(scale_rz),
         "scale_l": float(scale_l),
         "apply_m1_constraints": bool(apply_m1_constraints),

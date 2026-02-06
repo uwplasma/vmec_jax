@@ -128,7 +128,8 @@ def run_fixed_boundary(
     Parameters
     ----------
     solver:
-        ``"gd"`` (gradient descent) or ``"lbfgs"``.
+        ``"gd"`` (gradient descent), ``"lbfgs"``, ``"vmec_lbfgs"``,
+        or ``"vmec_gn"`` (VMEC residual objective).
     use_initial_guess:
         If True, skip the solve and return the initialized state.
     vmec_project:
@@ -203,8 +204,40 @@ def run_fixed_boundary(
             jit_grad=True,
             verbose=bool(verbose),
         )
+    elif solver == "vmec_lbfgs":
+        from .solve import solve_fixed_boundary_lbfgs_vmec_residual
+
+        res = solve_fixed_boundary_lbfgs_vmec_residual(
+            st0,
+            static,
+            indata=indata,
+            signgs=signgs,
+            history_size=int(history_size),
+            max_iter=int(max_iter),
+            step_size=float(step_size),
+            jit_grad=True,
+            preconditioner="mode_diag+radial_tridi",
+            precond_exponent=1.0,
+            precond_radial_alpha=0.2,
+            verbose=bool(verbose),
+        )
+    elif solver == "vmec_gn":
+        from .solve import solve_fixed_boundary_gn_vmec_residual
+
+        res = solve_fixed_boundary_gn_vmec_residual(
+            st0,
+            static,
+            indata=indata,
+            signgs=signgs,
+            max_iter=int(max_iter),
+            step_size=float(step_size),
+            jit_kernels=True,
+            verbose=bool(verbose),
+        )
     else:
-        raise ValueError(f"Unknown solver: {solver!r} (expected 'gd' or 'lbfgs')")
+        raise ValueError(
+            f"Unknown solver: {solver!r} (expected 'gd', 'lbfgs', 'vmec_lbfgs', or 'vmec_gn')"
+        )
 
     if verbose:
         n_iter = int(getattr(res, "n_iter", -1))
