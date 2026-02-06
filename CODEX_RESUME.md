@@ -205,6 +205,12 @@ Current incremental progress toward Step-10:
 - Added a `lasym` block report (`examples/validation/lasym_block_report.py`) to separate `tomnsps` vs `tomnspa` contributions and highlight dominant asymmetric modes in 3D parity work.
 - Aligned `fixaray` normalization (`dnorm`) with VMEC (reduced-interval normalization independent of `lasym`), added `dnorm3`, and marked lasym Step-10 parity cases as `xfail` while `tomnspa`/`symforce` mismatches are resolved.
 - Added a lasym mode trace report (`examples/validation/lasym_mode_trace_report.py`) to isolate A/B/C/constraint contributions for a specific `(m,n)` mode.
+- Matched VMEC's `scalxc` convention: after `tomnsps`, VMEC scales the Fourier-space forces by `scalxc`
+  (constructed in `profil3d.f`) before calling `residue/getfsq` (see `funct3d.f`). Applying this scaling
+  in `vmec_jax.vmec_residue` removed the remaining Step-10 scalar mismatch on symmetric cases.
+- Expanded Step-10 scalar parity coverage beyond the initial two cases by bundling additional
+  **stellarator-symmetric** `input.*` / `wout_*.nc` pairs (see `examples/data/`) and validating them in
+  `tests/test_step10_residue_getfsq_parity.py`.
 
 ## 11) Updated priorities (post-VMEC++ numerics review)
 1) **Lock down VMEC numerics** (DFT basis, weights, mode ordering, half-mesh conventions) before any FFT acceleration.

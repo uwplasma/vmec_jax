@@ -14,8 +14,17 @@ and tests:
 - Axisymmetric tokamak sanity case (vacuum):
   - ``examples/data/input.circular_tokamak`` + ``examples/data/wout_circular_tokamak_reference.nc``
 
+- Additional axisymmetric fixed-boundary cases:
+  - ``examples/data/input.circular_tokamak_aspect_100`` + ``examples/data/wout_circular_tokamak_aspect_100_reference.nc``
+  - ``examples/data/input.purely_toroidal_field`` + ``examples/data/wout_purely_toroidal_field_reference.nc``
+  - ``examples/data/input.ITERModel`` + ``examples/data/wout_ITERModel_reference.nc``
+
 - 3D stellarator-symmetric finite-beta case:
   - ``examples/data/input.li383_low_res`` + ``examples/data/wout_li383_low_res_reference.nc``
+
+- Additional 3D stellarator-symmetric fixed-boundary cases:
+  - ``examples/data/input.LandremanSengupta2019_section5.4_B2_A80`` + ``examples/data/wout_LandremanSengupta2019_section5.4_B2_A80_reference.nc``
+  - ``examples/data/input.n3are_R7.75B5.7_lowres`` + ``examples/data/wout_n3are_R7.75B5.7_lowres.nc``
 
 - Deferred (``lasym=True``) cases bundled for later parity work:
   - ``examples/data/input.LandremanSenguptaPlunk_section5p3_low_res`` + ``examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc``
@@ -65,6 +74,26 @@ The scoreboard below reports relative errors
      - ~1.3e-3
      - ~4.4e-3
      - ~1.4e-5
+   * - circular_tokamak_aspect_100
+     - ~8.4e-7
+     - ~6.6e-7
+     - ~2.3e-7
+   * - purely_toroidal_field
+     - ~1.3e-4
+     - ~2.6e-4
+     - ~1.9e-7
+   * - ITERModel
+     - ~3.5e-5
+     - ~1.7e-5
+     - ~2.5e-6
+   * - LandremanSengupta2019_section5.4_B2_A80
+     - ~1.1e-6
+     - ~2.5e-6
+     - ~9.0e-9
+   * - n3are_R7.75B5.7_lowres
+     - ~6.4e-6
+     - ~2.7e-5
+     - ~9.1e-10
 
 Notes:
 

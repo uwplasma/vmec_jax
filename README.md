@@ -56,8 +56,13 @@ The current relative errors are tracked in `docs/validation.rst`. Snapshot from
 
 | Case | fsqr | fsqz | fsql |
 | --- | ---: | ---: | ---: |
-| circular_tokamak | 5.6e-5 | 7.1e-5 | 1.0e-6 |
+| circular_tokamak | 5.1e-5 | 6.7e-5 | 2.8e-7 |
 | li383_low_res | 1.3e-3 | 4.4e-3 | 1.4e-5 |
+| circular_tokamak_aspect_100 | 8.4e-7 | 6.6e-7 | 2.3e-7 |
+| purely_toroidal_field | 1.3e-4 | 2.6e-4 | 1.9e-7 |
+| ITERModel | 3.5e-5 | 1.7e-5 | 2.5e-6 |
+| LandremanSengupta2019_section5.4_B2_A80 | 1.1e-6 | 2.5e-6 | 9.0e-9 |
+| n3are_R7.75B5.7_lowres | 6.4e-6 | 2.7e-5 | 9.1e-10 |
 
 Note: `lasym=True` (non-stellarator-symmetric) parity is deferred for now; the
 bundled lasym cases are excluded from automated validation until the
