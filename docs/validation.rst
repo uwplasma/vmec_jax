@@ -104,6 +104,11 @@ Notes:
 - ``lasym=True`` parity (non-stellarator-symmetric) is deferred for now; the
   bundled lasym cases are excluded from automated validation until the
   ``tomnspa`` conventions are reconciled.
+- For 3D stellarator-symmetric cases with ``nfp>1`` (notably ``li383_low_res`` and
+  ``n3are``), ``bsup*`` parity is tight on the VMEC internal grid, while
+  ``bsub*`` shows O(1–8%) RMS gaps. This points to a remaining mismatch in the
+  VMEC real-space synthesis / half-mesh metric conventions rather than the
+  contravariant field construction itself.
 - For debugging/attribution during the parity push, ``vmec_jax.vmec_residue``
   provides ``vmec_fsq_sums_from_tomnsps`` (per-block sum-of-squares) and a
   small internal-consistency regression in ``tests/test_step10_getfsq_block_sums.py``.
@@ -131,8 +136,8 @@ indicates known gaps or loose tolerances.
      - ``sqrt(g)`` + Nyquist fields validated vs ``wout``; energy integrals ``wb/wp`` match (see ``tests/test_step10_energy_integrals_parity.py``)
    * - B-field parity (``bsup*``, ``bsub*``, ``|B|``)
      - OK
-     - OK
-     - parity figures under ``examples/validation/``
+     - Partial
+     - ``bsup*`` and ``|B|`` tight; ``bsub*`` still shows O(1–8%) RMS gaps for some nfp>1 cases
    * - ``wout`` I/O (read + minimal write)
      - OK
      - OK
@@ -153,6 +158,19 @@ indicates known gaps or loose tolerances.
      - Planned
      - Planned
      - not implemented
+
+Known gaps and workplan
+-----------------------
+
+Known gap (symmetric, 3D): ``bsub*`` parity for some ``nfp>1`` cases (notably
+``li383_low_res`` and ``n3are``) is still at O(1–8%) RMS even when ``bsup*`` parity
+is tight. This suggests a mismatch in **real-space synthesis + half-mesh metric**
+conventions rather than the contravariant field construction itself.
+
+Immediate plan:
+1. Implement VMEC-style ``totzsp`` synthesis (``fixaray`` trig/weight tables + reduced θ grid) for R/Z/L and derivatives.
+2. Rebuild half-mesh metric elements from those fields and recompute ``bsub*``.
+3. Tighten ``tests/test_step10_bsub_parity.py`` tolerances and update parity figures.
 
 Running tests::
 
