@@ -35,7 +35,8 @@ def main() -> None:
     p.add_argument("--max-iter", type=int, default=25)
     p.add_argument("--step-size", type=float, default=0.1)
     p.add_argument("--history-size", type=int, default=10)
-    p.add_argument("--verbose", action="store_true")
+    p.add_argument("--verbose", action="store_true", default=True, help="Enable verbose solver output (default)")
+    p.add_argument("--quiet", action="store_false", dest="verbose", help="Disable verbose output")
     args = p.parse_args()
 
     if has_jax():

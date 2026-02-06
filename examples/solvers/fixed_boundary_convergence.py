@@ -65,7 +65,8 @@ def main() -> None:
     p.add_argument("--preconditioner", choices=["none", "mode_diag", "radial_tridi", "mode_diag+radial_tridi"], default="none")
     p.add_argument("--precond-exponent", type=float, default=1.0)
     p.add_argument("--precond-radial-alpha", type=float, default=0.5, help="radial_tridi strength (ignored unless used)")
-    p.add_argument("--verbose", action="store_true")
+    p.add_argument("--verbose", action="store_true", default=True, help="Enable verbose solver output (default)")
+    p.add_argument("--quiet", action="store_false", dest="verbose", help="Disable verbose output")
     args = p.parse_args()
 
     if has_jax():

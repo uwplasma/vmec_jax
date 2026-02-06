@@ -119,6 +119,7 @@ def run_fixed_boundary(
     step_size: float = 5e-3,
     history_size: int = 10,
     use_initial_guess: bool = False,
+    verbose: bool = True,
     grid=None,
 ):
     """Run a fixed-boundary vmec_jax solve with minimal boilerplate.
@@ -129,6 +130,8 @@ def run_fixed_boundary(
         ``"gd"`` (gradient descent) or ``"lbfgs"``.
     use_initial_guess:
         If True, skip the solve and return the initialized state.
+    verbose:
+        If True (default), print VMEC-style iteration progress and a summary.
     """
     cfg, indata = load_config(str(input_path))
     static = build_static(cfg, grid=grid)
@@ -142,6 +145,14 @@ def run_fixed_boundary(
     prof = eval_profiles(indata, static.s)
     pressure = prof.get("pressure", np.zeros_like(np.asarray(static.s)))
     gamma = indata.get_float("GAMMA", 0.0)
+
+    if verbose:
+        mode = "initial guess" if use_initial_guess else f"{solver} solve"
+        print(f"[vmec_jax] fixed-boundary run ({mode})")
+        print(f"[vmec_jax] input={input_path}")
+        print(f"[vmec_jax] ns={cfg.ns} mpol={cfg.mpol} ntor={cfg.ntor} nfp={cfg.nfp}")
+        if not use_initial_guess:
+            print(f"[vmec_jax] max_iter={max_iter} step_size={step_size} history_size={history_size}")
 
     if use_initial_guess:
         return FixedBoundaryRun(
@@ -170,7 +181,7 @@ def run_fixed_boundary(
             step_size=float(step_size),
             jacobian_penalty=1e3,
             jit_grad=True,
-            verbose=False,
+            verbose=bool(verbose),
         )
     elif solver == "lbfgs":
         res = solve_fixed_boundary_lbfgs(
@@ -186,10 +197,16 @@ def run_fixed_boundary(
             step_size=float(step_size),
             history_size=int(history_size),
             jit_grad=True,
-            verbose=False,
+            verbose=bool(verbose),
         )
     else:
         raise ValueError(f"Unknown solver: {solver!r} (expected 'gd' or 'lbfgs')")
+
+    if verbose:
+        n_iter = int(getattr(res, "n_iter", -1))
+        w_final = float(res.w_history[-1]) if getattr(res, "w_history", None) is not None else float("nan")
+        grad_final = float(res.grad_rms_history[-1]) if getattr(res, "grad_rms_history", None) is not None else float("nan")
+        print(f"[vmec_jax] finished: n_iter={n_iter} w={w_final:.8e} grad_rms={grad_final:.3e}")
 
     return FixedBoundaryRun(
         cfg=cfg,

@@ -379,7 +379,7 @@ def solve_lambda_gd(
     preconditioner: str = "none",
     precond_exponent: float = 1.0,
     precond_radial_alpha: float = 0.0,
-    verbose: bool = False,
+    verbose: bool = True,
 ) -> SolveLambdaResult:
     """Solve for VMEC lambda (scaled coefficients) with fixed R/Z.
 
@@ -567,7 +567,7 @@ def solve_fixed_boundary_gd(
     preconditioner: str = "none",
     precond_exponent: float = 1.0,
     precond_radial_alpha: float = 0.0,
-    verbose: bool = False,
+    verbose: bool = True,
 ) -> SolveFixedBoundaryResult:
     """Minimize a VMEC-style energy objective over (R,Z,lambda) coefficients.
 
@@ -785,7 +785,7 @@ def solve_fixed_boundary_lbfgs(
     preconditioner: str = "none",
     precond_exponent: float = 1.0,
     precond_radial_alpha: float = 0.0,
-    verbose: bool = False,
+    verbose: bool = True,
 ) -> SolveFixedBoundaryResult:
     """Fixed-boundary solve using L-BFGS (no external deps).
 
@@ -1097,7 +1097,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
     preconditioner: str = "none",
     precond_exponent: float = 1.0,
     precond_radial_alpha: float = 0.0,
-    verbose: bool = False,
+    verbose: bool = True,
 ) -> SolveVmecResidualResult:
     """Fixed-boundary solve by minimizing a VMEC-style force-residual objective.
 
@@ -1477,7 +1477,7 @@ def solve_fixed_boundary_gn_vmec_residual(
     max_backtracks: int = 12,
     bt_factor: float = 0.5,
     jit_kernels: bool = True,
-    verbose: bool = False,
+    verbose: bool = True,
 ) -> SolveVmecResidualResult:
     """Fixed-boundary solve using a Gauss-Newton (normal-equations) step on VMEC residuals.
 

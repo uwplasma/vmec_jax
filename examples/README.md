@@ -18,9 +18,10 @@ and easy to discover; this also avoids ambiguous top-level entrypoints.
 
 ## Quick run
 
-Most scripts accept an input path:
+Most scripts accept an input path. Solver-style scripts are **verbose by default**
+(to mimic VMEC2000 terminal output); use `--quiet` to suppress iteration logs:
 
 ```bash
 python examples/tutorial/00_parse_and_boundary.py examples/data/input.li383_low_res --out boundary.npz --verbose
-python examples/tutorial/08_solve_fixed_boundary.py examples/data/input.circular_tokamak --verbose
+python examples/tutorial/08_solve_fixed_boundary.py examples/data/input.circular_tokamak
 ```

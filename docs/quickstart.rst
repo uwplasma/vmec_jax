@@ -15,8 +15,8 @@ compatibility wrappers live under ``examples/compat/``::
   python examples/tutorial/05_profiles_and_volume.py examples/data/input.li383_low_res --out profiles_step3.npz --verbose
   python examples/tutorial/06_field_and_energy.py examples/data/input.li383_low_res --wout examples/data/wout_li383_low_res_reference.nc --verbose
   python examples/tutorial/07_solve_lambda.py examples/data/input.li383_low_res --wout examples/data/wout_li383_low_res_reference.nc --verbose
-  python examples/tutorial/08_solve_fixed_boundary.py examples/data/input.li383_low_res --verbose
-  python examples/tutorial/09_solve_fixed_boundary_lbfgs.py examples/data/input.li383_low_res --verbose
+  python examples/tutorial/08_solve_fixed_boundary.py examples/data/input.li383_low_res
+  python examples/tutorial/09_solve_fixed_boundary_lbfgs.py examples/data/input.li383_low_res
   python examples/visualization/n3are_vmec2000_vs_vmecjax.py --no-solve
 
 Run the test suite::
@@ -108,7 +108,7 @@ repeating boilerplate::
   R, Z = surface_rz_from_wout(ex.wout, theta=theta, zeta=zeta, s_index=ex.wout.ns - 1)
   save_npz(\"n3are_lcfs.npz\", theta=theta, zeta=zeta, R=R, Z=Z)
 
-  run = run_fixed_boundary(\"examples/data/input.circular_tokamak\", max_iter=5, use_initial_guess=True)
+  run = run_fixed_boundary(\"examples/data/input.circular_tokamak\", max_iter=5, use_initial_guess=True, verbose=True)
   phi = zeta_grid(64)
   Rj, Zj = surface_rz_from_state_physical(
       run.state, run.static.modes, theta=theta, phi=phi, s_index=run.static.cfg.ns - 1, nfp=run.static.cfg.nfp
