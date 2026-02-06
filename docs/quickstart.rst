@@ -85,3 +85,21 @@ Typical usage::
   static = build_static(cfg)
   state0 = init_state_from_boundary(indata, static)
   geom = eval_geom(state0, static)
+
+High-level driver helpers
+-------------------------
+
+For quick scripts, `vmec-jax` exposes a small high-level driver API that avoids
+repeating boilerplate::
+
+  from vmec_jax.driver import load_example, save_npz
+  from vmec_jax.plotting import surface_rz_from_wout, closed_theta_grid, zeta_grid
+
+  ex = load_example(\"n3are_R7.75B5.7_lowres\", with_wout=True)
+  theta = closed_theta_grid(200)
+  zeta = zeta_grid(128)
+  R, Z = surface_rz_from_wout(ex.wout, theta=theta, zeta=zeta, s_index=ex.wout.ns - 1)
+  save_npz(\"n3are_lcfs.npz\", theta=theta, zeta=zeta, R=R, Z=Z)
+
+Advanced users can still drop down to the lower-level building blocks
+(``load_config``, ``build_static``, ``eval_geom``, etc.) as needed.

@@ -55,6 +55,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("input", type=str, help="VMEC input file (INDATA)")
     p.add_argument("--outdir", type=str, default="figures_step3", help="Output directory for .npz and figures")
+    p.add_argument("--save", action="store_true", help="Save figures instead of showing them.")
     args = p.parse_args()
 
     if has_jax():
@@ -103,9 +104,12 @@ def main() -> None:
     ax.set_ylabel("pressure [Pa]")
     ax.set_title("Input pressure profile")
     fig.tight_layout()
-    fig.savefig(outdir / "pressure_profile.png")
-    fig.savefig(outdir / "pressure_profile.pdf")
-    plt.close(fig)
+    if args.save:
+        fig.savefig(outdir / "pressure_profile.png")
+        fig.savefig(outdir / "pressure_profile.pdf")
+        plt.close(fig)
+    else:
+        fig.show()
 
     # Figure 2: iota / current (if present)
     fig, ax = plt.subplots(figsize=(6.0, 4.0))
@@ -117,9 +121,12 @@ def main() -> None:
     ax.set_title("Rotational transform / current profile")
     ax.legend()
     fig.tight_layout()
-    fig.savefig(outdir / "iota_or_current.png")
-    fig.savefig(outdir / "iota_or_current.pdf")
-    plt.close(fig)
+    if args.save:
+        fig.savefig(outdir / "iota_or_current.png")
+        fig.savefig(outdir / "iota_or_current.pdf")
+        plt.close(fig)
+    else:
+        fig.show()
 
     # Figure 3: volume profile
     fig, ax = plt.subplots(2, 1, figsize=(6.2, 6.0), sharex=True)

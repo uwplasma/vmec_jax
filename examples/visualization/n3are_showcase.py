@@ -17,29 +17,23 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import cm  # noqa: E402
 
+from vmec_jax.driver import load_example
 from vmec_jax.plotting import (
     axis_rz_from_wout,
     bmag_from_wout,
     closed_theta_grid,
+    fix_matplotlib_3d,
     profiles_from_wout,
     select_zeta_slices,
     surface_rz_from_wout,
     surface_stack,
     zeta_grid,
 )
-from vmec_jax.wout import read_wout
 
 
 CASES = {
-    "n3are": ("examples/data/input.n3are_R7.75B5.7_lowres", "examples/data/wout_n3are_R7.75B5.7_lowres.nc"),
+    "n3are": "n3are_R7.75B5.7_lowres",
 }
-
-
-def _case_paths(case: str):
-    if case not in CASES:
-        raise ValueError(f"Unknown case {case!r}. Choices: {', '.join(CASES)}")
-    input_rel, wout_rel = CASES[case]
-    return REPO_ROOT / input_rel, REPO_ROOT / wout_rel
 
 
 def _plot_profiles(wout, outdir: Path, *, tag: str):
@@ -62,9 +56,7 @@ def _plot_profiles(wout, outdir: Path, *, tag: str):
 
     fig.tight_layout()
     path = outdir / f"{tag}_profiles.png"
-    fig.savefig(path, dpi=220)
-    plt.close(fig)
-    return path
+    return fig, path
 
 
 def _plot_cross_sections(wout, outdir: Path, *, tag: str):
@@ -86,9 +78,7 @@ def _plot_cross_sections(wout, outdir: Path, *, tag: str):
     ax.legend(frameon=False, fontsize=9)
     fig.tight_layout()
     path = outdir / f"{tag}_cross_sections.png"
-    fig.savefig(path, dpi=260)
-    plt.close(fig)
-    return path
+    return fig, path
 
 
 def _plot_bmag_surface(wout, outdir: Path, *, tag: str):
@@ -105,9 +95,7 @@ def _plot_bmag_surface(wout, outdir: Path, *, tag: str):
     ax.set_title("|B| on LCFS")
     fig.tight_layout()
     path = outdir / f"{tag}_bmag_surface.png"
-    fig.savefig(path, dpi=220)
-    plt.close(fig)
-    return path
+    return fig, path
 
 
 def _plot_3d_surface(wout, outdir: Path, *, tag: str):
@@ -130,41 +118,50 @@ def _plot_3d_surface(wout, outdir: Path, *, tag: str):
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
     ax.set_title("LCFS 3D surface colored by |B|")
-    ax.set_box_aspect([1, 1, 1])
+    fix_matplotlib_3d(ax)
     fig.tight_layout()
     path = outdir / f"{tag}_3d_bmag.png"
-    fig.savefig(path, dpi=200)
-    plt.close(fig)
-    return path
+    return fig, path
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", choices=CASES.keys(), default="n3are")
+    parser.add_argument("--save", action="store_true", help="Save figures instead of showing them.")
     parser.add_argument(
         "--output-dir",
         type=str,
         default=str(REPO_ROOT / "docs/_static/figures"),
-        help="Directory for saved figures",
+        help="Directory for saved figures (when --save is set).",
     )
     args = parser.parse_args()
 
-    _, wout_path = _case_paths(args.case)
-    wout = read_wout(wout_path)
+    case_name = CASES[args.case]
+    ex = load_example(case_name, root=REPO_ROOT, with_wout=True)
+    if ex.wout is None:
+        raise SystemExit("wout file not found for the selected case.")
+    wout = ex.wout
 
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     tag = args.case
-    paths = [
+    figs = [
         _plot_profiles(wout, outdir, tag=tag),
         _plot_cross_sections(wout, outdir, tag=tag),
         _plot_bmag_surface(wout, outdir, tag=tag),
         _plot_3d_surface(wout, outdir, tag=tag),
     ]
 
-    for p in paths:
-        print(f"Wrote {p}")
+    if args.save:
+        for fig, path in figs:
+            fig.savefig(path, dpi=220)
+            plt.close(fig)
+            print(f"Wrote {path}")
+    else:
+        for fig, _ in figs:
+            fig.show()
+        plt.show()
 
 
 if __name__ == "__main__":

@@ -55,6 +55,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("input", type=str, help="VMEC input file (INDATA)")
     p.add_argument("--outdir", type=str, default="figures_step0", help="Output directory for .npz and figures")
+    p.add_argument("--save", action="store_true", help="Save figures instead of showing them.")
     p.add_argument("--nslices", type=int, default=4, help="Number of zeta slices to plot")
     args = p.parse_args()
 
@@ -99,9 +100,12 @@ def main() -> None:
     ax.set_title("VMEC LCFS cross-sections (field period)")
     ax.legend(ncol=2)
     fig.tight_layout()
-    fig.savefig(outdir / "boundary_cross_sections.png")
-    fig.savefig(outdir / "boundary_cross_sections.pdf")
-    plt.close(fig)
+    if args.save:
+        fig.savefig(outdir / "boundary_cross_sections.png")
+        fig.savefig(outdir / "boundary_cross_sections.pdf")
+        plt.close(fig)
+    else:
+        fig.show()
 
     # --- Figure 2: R(θ) and Z(θ) at zeta=0
     j0 = 0
@@ -113,9 +117,12 @@ def main() -> None:
     ax[1].set_xlabel("θ")
     fig.suptitle("LCFS at ζ=0")
     fig.tight_layout()
-    fig.savefig(outdir / "boundary_RZ_vs_theta.png")
-    fig.savefig(outdir / "boundary_RZ_vs_theta.pdf")
-    plt.close(fig)
+    if args.save:
+        fig.savefig(outdir / "boundary_RZ_vs_theta.png")
+        fig.savefig(outdir / "boundary_RZ_vs_theta.pdf")
+        plt.close(fig)
+    else:
+        fig.show()
 
     # --- Figure 3: simple 3D surface (downsampled)
     try:
@@ -152,9 +159,12 @@ def main() -> None:
     ax3.set_zlabel("z")
     ax3.set_title("LCFS surface (one field period)")
     fig.tight_layout()
-    fig.savefig(outdir / "boundary_surface_3d.png")
-    fig.savefig(outdir / "boundary_surface_3d.pdf")
-    plt.close(fig)
+    if args.save:
+        fig.savefig(outdir / "boundary_surface_3d.png")
+        fig.savefig(outdir / "boundary_surface_3d.pdf")
+        plt.close(fig)
+    else:
+        fig.show()
 
 
 if __name__ == "__main__":

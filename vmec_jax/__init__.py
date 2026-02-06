@@ -27,6 +27,7 @@ from .plotting import (
     axis_rz_from_wout,
     bmag_from_wout,
     closed_theta_grid,
+    fix_matplotlib_3d,
     profiles_from_wout,
     select_zeta_slices,
     surface_data_from_wout,
@@ -34,6 +35,7 @@ from .plotting import (
     surface_stack,
     zeta_grid,
 )
+from .driver import ExampleData, example_paths, load_example, load_input, load_wout, save_npz
 from .state import VMECState, pack_state, unpack_state
 from .static import VMECStatic, build_static
 from .init_guess import initial_guess_from_boundary
@@ -79,12 +81,19 @@ __all__ = [
     "axis_rz_from_wout",
     "bmag_from_wout",
     "closed_theta_grid",
+    "fix_matplotlib_3d",
     "profiles_from_wout",
     "select_zeta_slices",
     "surface_data_from_wout",
     "surface_rz_from_wout",
     "surface_stack",
     "zeta_grid",
+    "ExampleData",
+    "example_paths",
+    "load_example",
+    "load_input",
+    "load_wout",
+    "save_npz",
     "VMECState",
     "pack_state",
     "unpack_state",
