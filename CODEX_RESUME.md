@@ -43,6 +43,9 @@ Validation:
 - If axis inputs are missing, vmec_jax now **recomputes the axis** using a VMEC++-style
   grid search that maximizes the minimum Jacobian proxy on each toroidal plane,
   using VMEC's reduced theta grid + normalization tables.
+- Added a VMEC real-space diagnostic pipeline: `vmec_realspace_geom_from_state`
+  and `vmec_half_mesh_jacobian_from_state` mirror VMEC's odd-m representation and
+  half-mesh Jacobian formulas for debugging initial conditions.
 - Evaluates full coordinates on `(s,theta,ζ)` grid:
   - `R(s,theta,ζ)`, `Z(s,theta,ζ)`, `λ(s,theta,ζ)` and `R_theta, R_φ, ...`.
 - Demonstrates autodiff through geometry (grad demo).

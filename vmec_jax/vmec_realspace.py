@@ -200,3 +200,34 @@ def vmec_realspace_synthesis_dzeta_phys(
     dcos_phase, dsin_phase = _vmec_phase_tables_dzeta(m=m, n=n, trig=trig)
     f = jnp.einsum("sk,kij->sij", coeff_cos, dcos_phase) + jnp.einsum("sk,kij->sij", coeff_sin, dsin_phase)
     return f
+
+
+def vmec_realspace_geom_from_state(
+    *,
+    state,
+    modes: ModeTable,
+    trig: VmecTrigTables,
+) -> dict[str, Any]:
+    """Compute VMEC real-space geometry fields on the internal grid."""
+    R = vmec_realspace_synthesis(coeff_cos=state.Rcos, coeff_sin=state.Rsin, modes=modes, trig=trig)
+    Z = vmec_realspace_synthesis(coeff_cos=state.Zcos, coeff_sin=state.Zsin, modes=modes, trig=trig)
+    Ru = vmec_realspace_synthesis_dtheta(coeff_cos=state.Rcos, coeff_sin=state.Rsin, modes=modes, trig=trig)
+    Zu = vmec_realspace_synthesis_dtheta(coeff_cos=state.Zcos, coeff_sin=state.Zsin, modes=modes, trig=trig)
+    Rv = vmec_realspace_synthesis_dzeta_phys(coeff_cos=state.Rcos, coeff_sin=state.Rsin, modes=modes, trig=trig)
+    Zv = vmec_realspace_synthesis_dzeta_phys(coeff_cos=state.Zcos, coeff_sin=state.Zsin, modes=modes, trig=trig)
+    if hasattr(state, "Lcos") and hasattr(state, "Lsin"):
+        Lu = vmec_realspace_synthesis_dtheta(coeff_cos=state.Lcos, coeff_sin=state.Lsin, modes=modes, trig=trig)
+        Lv = vmec_realspace_synthesis_dzeta_phys(coeff_cos=state.Lcos, coeff_sin=state.Lsin, modes=modes, trig=trig)
+    else:
+        Lu = None
+        Lv = None
+    return {
+        "R": R,
+        "Z": Z,
+        "Ru": Ru,
+        "Zu": Zu,
+        "Rv": Rv,
+        "Zv": Zv,
+        "Lu": Lu,
+        "Lv": Lv,
+    }

@@ -30,6 +30,7 @@ from .plotting import (
     bmag_from_wout,
     bmag_from_wout_physical,
     bmag_from_state_physical,
+    bmag_from_state_vmec_realspace,
     closed_theta_grid,
     fix_matplotlib_3d,
     profiles_from_wout,
@@ -55,6 +56,8 @@ from .integrals import dvds_from_sqrtg, cumtrapz_s, volume_from_sqrtg
 from .field import bsup_from_geom, bsup_from_sqrtg_lambda, b2_from_bsup
 from .energy import magnetic_wb_from_state
 from .diagnostics import Summary, print_jacobian_stats, print_summary, summarize_array, summarize_many
+from .vmec_jacobian import vmec_half_mesh_jacobian_from_state
+from .vmec_realspace import vmec_realspace_geom_from_state
 from .implicit import (
     ImplicitFixedBoundaryOptions,
     ImplicitLambdaOptions,
@@ -95,6 +98,7 @@ __all__ = [
     "bmag_from_wout",
     "bmag_from_wout_physical",
     "bmag_from_state_physical",
+    "bmag_from_state_vmec_realspace",
     "closed_theta_grid",
     "fix_matplotlib_3d",
     "profiles_from_wout",
@@ -141,6 +145,8 @@ __all__ = [
     "print_summary",
     "summarize_array",
     "summarize_many",
+    "vmec_half_mesh_jacobian_from_state",
+    "vmec_realspace_geom_from_state",
     "ImplicitLambdaOptions",
     "ImplicitFixedBoundaryOptions",
     "solve_lambda_state_implicit",

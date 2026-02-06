@@ -91,6 +91,10 @@ that maximizes the minimum Jacobian proxy, using VMEC's reduced theta grid
 and normalization tables. This provides a much more robust initial axis
 guess and reduces geometric pathologies in early iterations.
 
+For diagnostics, vmec_jax also exposes a VMEC-style real-space pipeline
+(`vmec_realspace_geom_from_state` + `vmec_half_mesh_jacobian_from_state`)
+that mirrors VMEC's odd-m representation and half-mesh Jacobian formulas.
+
 Design principles
 -----------------
 

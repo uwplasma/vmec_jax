@@ -18,6 +18,9 @@ from .geom import _eval_geom_jit
 from .grids import AngleGrid
 from .modes import ModeTable
 from .field import b2_from_bsup, bsup_from_geom, bsup_from_sqrtg_lambda, lamscale_from_phips
+from .vmec_jacobian import vmec_half_mesh_jacobian_from_state
+from .vmec_realspace import vmec_realspace_geom_from_state
+from .vmec_tomnsp import vmec_trig_tables
 from .energy import flux_profiles_from_indata
 from .field import signgs_from_sqrtg
 
@@ -238,6 +241,82 @@ def bmag_from_state_physical(
         )
     B2 = b2_from_bsup(geom, bsupu, bsupv)
     B = np.sqrt(np.maximum(np.asarray(B2), 0.0))
+    return B[s_index]
+
+
+def bmag_from_state_vmec_realspace(
+    state,
+    static,
+    indata=None,
+    *,
+    s_index: int,
+    signgs: int | None = None,
+    phipf: np.ndarray | None = None,
+    chipf: np.ndarray | None = None,
+    lamscale: float | None = None,
+) -> np.ndarray:
+    """Compute |B| using VMEC real-space synthesis + half-mesh Jacobian."""
+    nfp = int(static.cfg.nfp)
+    trig = vmec_trig_tables(
+        ntheta=static.cfg.ntheta,
+        nzeta=static.cfg.nzeta,
+        nfp=nfp,
+        mmax=static.cfg.mpol - 1,
+        nmax=static.cfg.ntor,
+        lasym=static.cfg.lasym,
+    )
+    geom = vmec_realspace_geom_from_state(state=state, modes=static.modes, trig=trig)
+    if signgs is None:
+        signgs = 1
+
+    if phipf is None or chipf is None:
+        if indata is None:
+            raise ValueError("indata must be provided when phipf/chipf are not supplied")
+        flux = flux_profiles_from_indata(indata, static.s, signgs=signgs)
+        phipf_use = flux.phipf
+        chipf_use = flux.chipf
+        lamscale_use = flux.lamscale
+    else:
+        phipf_use = np.asarray(phipf)
+        chipf_use = np.asarray(chipf)
+        if lamscale is None:
+            phips = (signgs * np.asarray(phipf_use)) / (2.0 * np.pi)
+            lamscale_use = float(np.asarray(lamscale_from_phips(phips, static.s)))
+        else:
+            lamscale_use = float(lamscale)
+
+    jac = vmec_half_mesh_jacobian_from_state(
+        state=state,
+        modes=static.modes,
+        trig=trig,
+        s=np.asarray(static.s),
+    )
+    sqrtg = np.asarray(jac.sqrtg)
+    lam_u = np.asarray(geom["Lu"]) if geom["Lu"] is not None else np.zeros_like(sqrtg)
+    lam_v = np.asarray(geom["Lv"]) if geom["Lv"] is not None else np.zeros_like(sqrtg)
+
+    bsupu, bsupv = bsup_from_sqrtg_lambda(
+        sqrtg=sqrtg,
+        lam_u=lam_u,
+        lam_v=lam_v,
+        phipf=phipf_use,
+        chipf=chipf_use,
+        signgs=signgs,
+        lamscale=lamscale_use,
+    )
+
+    Ru = np.asarray(geom["Ru"])
+    Zu = np.asarray(geom["Zu"])
+    Rv = np.asarray(geom["Rv"])
+    Zv = np.asarray(geom["Zv"])
+    R = np.asarray(geom["R"])
+
+    g_tt = Ru * Ru + Zu * Zu
+    g_tp = Ru * Rv + Zu * Zv
+    g_pp = Rv * Rv + Zv * Zv + R * R
+
+    B2 = g_tt * bsupu**2 + 2.0 * g_tp * bsupu * bsupv + g_pp * bsupv**2
+    B = np.sqrt(np.maximum(B2, 0.0))
     return B[s_index]
 
 

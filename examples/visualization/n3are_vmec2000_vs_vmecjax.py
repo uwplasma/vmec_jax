@@ -33,6 +33,7 @@ from vmec_jax.plotting import (
     axis_rz_from_state_physical,
     axis_rz_from_wout_physical,
     bmag_from_state_physical,
+    bmag_from_state_vmec_realspace,
     bmag_from_wout_physical,
     closed_theta_grid,
     fix_matplotlib_3d,
@@ -188,6 +189,20 @@ def main() -> None:
         lamscale=float(np.asarray(run.flux.lamscale)),
         sqrtg_floor=sqrtg_floor,
     )
+    if use_initial_guess:
+        B_jax_vmec = bmag_from_state_vmec_realspace(
+            state,
+            static,
+            indata,
+            s_index=int(static.cfg.ns) - 1,
+            signgs=int(wout.signgs),
+            phipf=np.asarray(wout.phipf),
+            chipf=np.asarray(wout.chipf),
+            lamscale=float(np.asarray(run.flux.lamscale)),
+        )
+        print(
+            f"[vmec_jax] B range (vmec_jax VMEC-grid) min={B_jax_vmec.min():.3e} max={B_jax_vmec.max():.3e}"
+        )
 
     print(f"[vmec_jax] B range (VMEC2000) min={B_vmec.min():.3e} max={B_vmec.max():.3e}")
     print(f"[vmec_jax] B range (vmec_jax) min={B_jax.min():.3e} max={B_jax.max():.3e}")

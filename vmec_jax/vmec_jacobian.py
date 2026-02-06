@@ -28,6 +28,8 @@ from typing import Any
 import numpy as np
 
 from ._compat import jnp
+from .vmec_realspace import vmec_realspace_synthesis, vmec_realspace_synthesis_dtheta
+from .vmec_tomnsp import VmecTrigTables
 
 
 @dataclass(frozen=True)
@@ -206,3 +208,54 @@ def jacobian_half_mesh_from_parity(
     sqrtg = jnp.where(psqrts == 0, 0.0, sqrtg)
     return VmecHalfMeshJacobian(r12=r12, rs=rs, zs=zs, ru12=ru12, zu12=zu12, tau=tau, sqrtg=sqrtg)
 
+
+def vmec_half_mesh_jacobian_from_state(
+    *,
+    state,
+    modes,
+    trig: VmecTrigTables,
+    s,
+) -> VmecHalfMeshJacobian:
+    """Compute VMEC half-mesh Jacobian directly from Fourier coefficients."""
+    m = jnp.asarray(modes.m)
+    mask_even = (m % 2) == 0
+    mask_odd = jnp.logical_not(mask_even)
+
+    Rcos = jnp.asarray(state.Rcos)
+    Rsin = jnp.asarray(state.Rsin)
+    Zcos = jnp.asarray(state.Zcos)
+    Zsin = jnp.asarray(state.Zsin)
+
+    Rcos_even = jnp.where(mask_even[None, :], Rcos, 0.0)
+    Rsin_even = jnp.where(mask_even[None, :], Rsin, 0.0)
+    Rcos_odd = jnp.where(mask_odd[None, :], Rcos, 0.0)
+    Rsin_odd = jnp.where(mask_odd[None, :], Rsin, 0.0)
+
+    Zcos_even = jnp.where(mask_even[None, :], Zcos, 0.0)
+    Zsin_even = jnp.where(mask_even[None, :], Zsin, 0.0)
+    Zcos_odd = jnp.where(mask_odd[None, :], Zcos, 0.0)
+    Zsin_odd = jnp.where(mask_odd[None, :], Zsin, 0.0)
+
+    pr1_even = vmec_realspace_synthesis(coeff_cos=Rcos_even, coeff_sin=Rsin_even, modes=modes, trig=trig)
+    pr1_odd = vmec_realspace_synthesis(coeff_cos=Rcos_odd, coeff_sin=Rsin_odd, modes=modes, trig=trig)
+
+    pz1_even = vmec_realspace_synthesis(coeff_cos=Zcos_even, coeff_sin=Zsin_even, modes=modes, trig=trig)
+    pz1_odd = vmec_realspace_synthesis(coeff_cos=Zcos_odd, coeff_sin=Zsin_odd, modes=modes, trig=trig)
+
+    pru_even = vmec_realspace_synthesis_dtheta(coeff_cos=Rcos_even, coeff_sin=Rsin_even, modes=modes, trig=trig)
+    pru_odd = vmec_realspace_synthesis_dtheta(coeff_cos=Rcos_odd, coeff_sin=Rsin_odd, modes=modes, trig=trig)
+
+    pzu_even = vmec_realspace_synthesis_dtheta(coeff_cos=Zcos_even, coeff_sin=Zsin_even, modes=modes, trig=trig)
+    pzu_odd = vmec_realspace_synthesis_dtheta(coeff_cos=Zcos_odd, coeff_sin=Zsin_odd, modes=modes, trig=trig)
+
+    return jacobian_half_mesh_from_parity(
+        pr1_even=pr1_even,
+        pr1_odd=pr1_odd,
+        pz1_even=pz1_even,
+        pz1_odd=pz1_odd,
+        pru_even=pru_even,
+        pru_odd=pru_odd,
+        pzu_even=pzu_even,
+        pzu_odd=pzu_odd,
+        s=s,
+    )
