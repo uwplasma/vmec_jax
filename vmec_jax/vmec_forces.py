@@ -921,6 +921,7 @@ def vmec_residual_internal_from_kernels(
     wout,
     trig: VmecTrigTables | None = None,
     apply_lforbal: bool = False,
+    include_edge: bool = False,
 ) -> VmecInternalResidualRZL:
     """Compute internal residual coefficient arrays using VMEC's `tomnsps` conventions."""
     if trig is None:
@@ -1044,6 +1045,7 @@ def vmec_residual_internal_from_kernels(
             nfp=int(wout.nfp),
             lasym=True,
             trig=trig,
+            include_edge=bool(include_edge),
         )
 
         out_asym = tomnspa_rzl(
@@ -1100,6 +1102,7 @@ def vmec_residual_internal_from_kernels(
             nfp=int(wout.nfp),
             lasym=False,
             trig=trig,
+            include_edge=bool(include_edge),
         )
         out_asym = None
 

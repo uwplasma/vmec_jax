@@ -166,15 +166,15 @@ def vmec_force_norms_from_bcovar(*, bc, trig: VmecTrigTables, wout, s) -> VmecFo
     r12 = jnp.asarray(bc.jac.r12)
     guu_r12sq = (guu * (r12 * r12)).astype(jnp.float64)
 
-    # Exclude axis surface (js=1 in Fortran -> index 0 here). In VMEC's parallel
-    # path, the `fnorm` surface sum starts at js=2.
-    denom_f = float(jnp.sum((guu_r12sq[1:] * wint3).astype(jnp.float64)))
+    # VMEC's `bcovar` uses all surfaces (js=1..ns) in the `fnorm` sum.
+    # Keep the axis included here to match the serial path in `bcovar.f`.
+    denom_f = float(jnp.sum((guu_r12sq * wint3).astype(jnp.float64)))
     fnorm = 1.0 / (denom_f * (r2 * r2)) if denom_f != 0.0 else float("inf")
 
     bsubu = jnp.asarray(bc.bsubu)
     bsubv = jnp.asarray(bc.bsubv)
     lamscale = float(np.asarray(bc.lamscale))
-    denom_L = float(jnp.sum(((bsubu[1:] * bsubu[1:]) + (bsubv[1:] * bsubv[1:])) * wint3))
+    denom_L = float(jnp.sum(((bsubu * bsubu) + (bsubv * bsubv)) * wint3))
     fnormL = 1.0 / (denom_L * (lamscale * lamscale)) if denom_L != 0.0 else float("inf")
 
     r0scale = float(trig.r0scale)

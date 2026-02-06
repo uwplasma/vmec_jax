@@ -296,6 +296,7 @@ def tomnsps_rzl(
     nfp: int,
     lasym: bool,
     trig: VmecTrigTables,
+    include_edge: bool = False,
 ) -> TomnspsRZL:
     """VMEC real-space -> Fourier-space force transform (core of `tomnsps`).
 
@@ -315,6 +316,13 @@ def tomnsps_rzl(
     -----
     This mirrors the structure of `tomnsp_mod.f:tomnsps_par` but returns only
     the primary R/Z/L blocks needed for residual norms and parity work.
+
+    Parameters
+    ----------
+    include_edge:
+        If True, keep the boundary surface (js=ns) in the fixed-boundary masks.
+        This is useful for diagnostics that emulate the `jedge=1` branch in
+        `getfsq`, but should be left False for standard VMEC fixed-boundary norms.
     """
     # Shapes.
     armn_even = jnp.asarray(armn_even)
@@ -496,7 +504,8 @@ def tomnsps_rzl(
     jlam = jnp.full((1, mpol), 2, dtype=jmin2.dtype)
 
     # Fixed-boundary convention: R/Z not evolved on the boundary surface (js=ns).
-    jsmax_rz = int(ns - 1)
+    # `include_edge=True` reproduces the `jedge=1` branch in `getfsq` diagnostics.
+    jsmax_rz = int(ns if include_edge else (ns - 1))
     mask_rz = (js_fortran[:, None] >= jmin2) & (js_fortran[:, None] <= jsmax_rz)
     mask_l = js_fortran[:, None] >= jlam
 
