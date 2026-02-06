@@ -266,6 +266,11 @@ VMEC-style residual objective built from the Step-10 parity kernels:
 where :math:`\mathbf{x}` stacks the Fourier coefficients for
 :math:`(R,Z,\lambda)`.
 
+In ``vmec-jax``, the residual blocks are post-processed to match VMEC’s
+``residue/getfsq`` conventions (notably the post-``tomnsps`` ``scalxc`` scaling,
+optional converged-iteration ``m=1`` constraints, and the exclusion of the edge
+surface from the R/Z sums).
+
 Two variants exist:
 
 1. ``solve_fixed_boundary_lbfgs_vmec_residual`` minimizes :math:`W_{\mathrm{res}}`
