@@ -19,7 +19,7 @@ pipeline (initial guess by default; use `--solve` to run a short solve).
 | VMEC2000 | vmec_jax |
 | --- | --- |
 | ![n3are VMEC2000 vs vmec_jax cross-sections](docs/_static/figures/n3are_compare_cross_sections.png) | ![n3are VMEC2000 vs vmec_jax 3D](docs/_static/figures/n3are_compare_3d.png) |
-| ![n3are VMEC2000 vs vmec_jax |B|](docs/_static/figures/n3are_compare_bmag_surface.png) | ![n3are VMEC2000 vs vmec_jax profiles](docs/_static/figures/n3are_compare_profiles.png) |
+| ![n3are VMEC2000 vs vmec_jax abs(B)](docs/_static/figures/n3are_compare_bmag_surface.png) | ![n3are VMEC2000 vs vmec_jax profiles](docs/_static/figures/n3are_compare_profiles.png) |
 
 Figure guide:
 - **LCFS cross-sections**: last-closed flux surface slices across one field period.
