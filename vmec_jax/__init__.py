@@ -22,6 +22,18 @@ from .fourier import (
     eval_fourier_dtheta,
     eval_fourier_dzeta_phys,
 )
+from .plotting import (
+    SurfaceData,
+    axis_rz_from_wout,
+    bmag_from_wout,
+    closed_theta_grid,
+    profiles_from_wout,
+    select_zeta_slices,
+    surface_data_from_wout,
+    surface_rz_from_wout,
+    surface_stack,
+    zeta_grid,
+)
 from .state import VMECState, pack_state, unpack_state
 from .static import VMECStatic, build_static
 from .init_guess import initial_guess_from_boundary
@@ -63,6 +75,16 @@ __all__ = [
     "eval_fourier",
     "eval_fourier_dtheta",
     "eval_fourier_dzeta_phys",
+    "SurfaceData",
+    "axis_rz_from_wout",
+    "bmag_from_wout",
+    "closed_theta_grid",
+    "profiles_from_wout",
+    "select_zeta_slices",
+    "surface_data_from_wout",
+    "surface_rz_from_wout",
+    "surface_stack",
+    "zeta_grid",
     "VMECState",
     "pack_state",
     "unpack_state",

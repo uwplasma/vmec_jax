@@ -2,19 +2,22 @@
 
 Laptop-friendly, end-to-end differentiable (JAX) rewrite of **VMEC2000** (fixed-boundary first).
 
-![VMEC Step-10 parity pipeline](docs/_static/step10_pipeline.svg)
+![n3are LCFS cross-sections](docs/_static/figures/n3are_cross_sections.png)
 
-![LCFS cross-sections (one field period)](docs/_static/figures/lcfs_cross_sections.png)
+![n3are LCFS 3D surface colored by |B|](docs/_static/figures/n3are_3d_bmag.png)
 
-![|B| parity error vs VMEC2000 wout](docs/_static/figures/bmag_parity_error.png)
+![n3are iota + pressure profiles](docs/_static/figures/n3are_profiles.png)
 
-![bsub parity before/after VMEC synthesis](docs/_static/figures/bsub_parity_before_after.png)
+![n3are |B| on LCFS](docs/_static/figures/n3are_bmag_surface.png)
 
-Figures (top to bottom):
-- **Step-10 parity pipeline**: the VMEC-style path we regress against (`bcovar → forces → tomnsps → getfsq`).
+Figures (top to bottom, n3are example):
 - **LCFS cross-sections**: last-closed flux surface slices across one field period.
-- **|B| parity error**: pointwise relative error vs a bundled VMEC2000 `wout`.
-- **bsub parity before/after**: 3D cases (`li383`, `n3are`) comparing `eval_fourier` vs VMEC real-space synthesis.
+- **3D LCFS**: surface colored by |B|.
+- **Profiles**: iota and pressure vs normalized flux.
+- **|B| on LCFS**: field strength on the boundary surface.
+
+Parity figures (Step-10 pipeline, |B| parity, bsub parity) are documented in
+`docs/validation.rst`.
 
 `vmec-jax` aims to:
 - reproduce VMEC2000 equilibria for the same inputs (output parity via `wout_*.nc` regressions),

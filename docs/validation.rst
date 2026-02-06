@@ -132,6 +132,35 @@ Notes:
 Feature parity matrix (selected)
 --------------------------------
 
+Parity figures
+--------------
+
+The following figures live in ``docs/_static/`` and are referenced here (not in
+the README) so parity diagnostics remain co-located with validation notes.
+
+.. figure:: _static/step10_pipeline.svg
+   :width: 90%
+   :alt: VMEC Step-10 parity pipeline
+
+   The VMEC-style parity pipeline used in regression tests:
+   ``bcovar → forces → tomnsps → getfsq``.
+
+.. figure:: _static/figures/bmag_parity_error.png
+   :width: 80%
+   :alt: B magnitude parity error
+
+   Pointwise relative error in B magnitude versus bundled VMEC2000 ``wout`` references
+   on the Nyquist grid.
+
+.. figure:: _static/figures/bsub_parity_before_after.png
+   :width: 80%
+   :alt: bsub parity before/after VMEC synthesis
+
+   bsub parity before/after switching to VMEC real-space synthesis for 3D
+   symmetric cases (``li383`` and ``n3are``). The parity gap persists, implying
+   the remaining mismatch is in half-mesh metric conventions rather than the
+   synthesis path.
+
 The table below summarizes parity at a feature level. “OK” indicates coverage
 by the test suite (typically via bundled ``wout`` regressions); “Partial”
 indicates known gaps or loose tolerances.
