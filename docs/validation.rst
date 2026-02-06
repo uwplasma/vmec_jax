@@ -191,6 +191,23 @@ To run the integration tests locally::
 
   VMEC2000_INTEGRATION=1 pytest -q -m vmec2000
 
+Optional: validating against VMEC++
+----------------------------------
+
+If you have VMEC++ installed (``vmecpp`` Python package) you can run an
+integration smoke test that produces a ``wout_*.nc`` file and compares it to
+the bundled VMEC2000 reference data::
+
+  VMECPP_INTEGRATION=1 pytest -q -m vmecpp
+
+For ad-hoc comparisons (including vmec_jax B-field parity metrics), use::
+
+  python examples/validation/external_vmec_driver_compare.py --backend vmecpp --case circular_tokamak
+
+The same script can drive a local VMEC2000 Python build if available::
+
+  python examples/validation/external_vmec_driver_compare.py --backend vmec2000 --case circular_tokamak
+
 Note
 ----
 The VMEC2000 sources under **STELLOPT/VMEC2000** are more up-to-date than the

@@ -31,4 +31,5 @@ packages = ["vmec_jax"]
 [tool.pytest.ini_options]
 markers = [
   "vmec2000: integration tests requiring a local VMEC2000 build (+ mpi4py/netCDF4)",
+  "vmecpp: integration tests requiring a local VMEC++ install (+ netCDF4)",
 ]

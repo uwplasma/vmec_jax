@@ -68,6 +68,25 @@ Notes on conventions:
    - extend `.npz` stage dumps to include field and force quantities
    - compare norms and key 1D profiles against VMEC2000 `wout_*.nc`
 
+## VMEC++ numerics notes (Schilling 2025)
+Key formulas in **The Numerics of VMEC++** (Sec. 5) that matter for Step-10 parity:
+
+- **Half-grid metric interpolation with parity**: even/odd-`m` contributions are interpolated
+  separately with explicit `√s` factors (Eq. 5.118–5.120). This matches VMEC’s current
+  implementation (attempting the “direct” interpolation in Eq. 5.113 degrades convergence).
+- **Contravariant B on half-grid**: derived from `λ_θ`/`λ_ζ` with even/odd separation and
+  `√s` normalization (Eq. 5.135–5.136).
+- **Covariant B from metric**: `B_θ = g_θθ B^θ + g_θζ B^ζ`, `B_ζ = g_θζ B^θ + g_ζζ B^ζ`
+  (Eq. 5.142–5.143), with axisymmetric simplifications when `g_θζ=0`.
+- **Lambda-force handling**:
+  - odd-`m` λ-forces scale as `√s` times even-`m` forces (Eq. 5.176–5.179),
+  - full-grid `B_ζ` uses a **hybrid blend** of `B_ζ` from half-grid interpolation and a
+    `g_θζ B^θ + g_ζζ B^ζ` reconstruction (Eq. 5.181–5.185),
+  - blend factor `ε_blend = 2*pdamp*(1-s)` (Eq. 5.182).
+- **Force decomposition**: VMEC organizes `F_R/F_Z` into `A - ∂_θ B + ∂_ζ C` components,
+  with `P = R*(|B|^2/(2 μ0) + p)` (Eq. 5.159–5.173). These formulas govern the `forces.f`
+  port and are the target for the remaining Step-10 parity work.
+
 ## Performance tactics to keep it laptop-fast
 
 - Keep all static tables (`m,n`, trig basis) as **constants** captured by a `jit`ted function.
