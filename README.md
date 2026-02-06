@@ -8,10 +8,13 @@ Laptop-friendly, end-to-end differentiable (JAX) rewrite of **VMEC2000** (fixed-
 
 ![|B| parity error vs VMEC2000 wout](docs/_static/figures/bmag_parity_error.png)
 
+![bsub parity before/after VMEC synthesis](docs/_static/figures/bsub_parity_before_after.png)
+
 Figures (top to bottom):
 - **Step-10 parity pipeline**: the VMEC-style path we regress against (`bcovar → forces → tomnsps → getfsq`).
 - **LCFS cross-sections**: last-closed flux surface slices across one field period.
 - **|B| parity error**: pointwise relative error vs a bundled VMEC2000 `wout`.
+- **bsub parity before/after**: 3D cases (`li383`, `n3are`) comparing `eval_fourier` vs VMEC real-space synthesis.
 
 `vmec-jax` aims to:
 - reproduce VMEC2000 equilibria for the same inputs (output parity via `wout_*.nc` regressions),

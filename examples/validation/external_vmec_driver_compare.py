@@ -5,7 +5,8 @@ It can:
 - run VMEC2000 (python wrapper) or VMEC++ (vmecpp) for a chosen input,
 - save the resulting wout file,
 - compare key wout fields to the bundled VMEC2000 reference,
-- optionally compute b-field parity metrics using vmec_jax kernels.
+- optionally compute b-field parity metrics using vmec_jax kernels,
+- optionally compare real-space metric pieces (eval_fourier vs VMEC synthesis).
 
 Requires (depending on backend):
 - vmec2000: vmec python extension + mpi4py + netCDF4
@@ -36,6 +37,8 @@ from vmec_jax.geom import eval_geom
 from vmec_jax.grids import AngleGrid
 from vmec_jax.modes import ModeTable
 from vmec_jax.static import build_static
+from vmec_jax.vmec_bcovar import vmec_bcovar_half_mesh_from_wout
+from vmec_jax.vmec_tomnsp import vmec_angle_grid
 from vmec_jax.wout import read_wout, state_from_wout
 
 
@@ -148,6 +151,38 @@ def _bfield_parity(input_path: Path, wout_path: Path) -> dict[str, float]:
     }
 
 
+def _metric_parity_vmec_grid(input_path: Path, wout_path: Path) -> dict[str, float]:
+    """Compare bcovar metric pieces on VMEC internal grid to wout sqrt(g)."""
+    cfg, _indata = load_config(str(input_path))
+    wout = read_wout(wout_path)
+    grid = vmec_angle_grid(ntheta=int(cfg.ntheta), nzeta=int(cfg.nzeta), nfp=int(wout.nfp), lasym=bool(wout.lasym))
+    static = build_static(cfg, grid=grid)
+    st = state_from_wout(wout)
+
+    bc_eval = vmec_bcovar_half_mesh_from_wout(state=st, static=static, wout=wout, use_wout_bsup=False, use_vmec_synthesis=False)
+    bc_vmec = vmec_bcovar_half_mesh_from_wout(state=st, static=static, wout=wout, use_wout_bsup=False, use_vmec_synthesis=True)
+
+    modes_nyq = ModeTable(m=wout.xm_nyq, n=(wout.xn_nyq // wout.nfp))
+    basis_nyq = build_helical_basis(modes_nyq, AngleGrid(theta=static.grid.theta, zeta=static.grid.zeta, nfp=wout.nfp))
+    sqrtg_ref = np.asarray(eval_fourier(wout.gmnc, wout.gmns, basis_nyq))
+
+    sl = slice(1, None)
+    sqrtg_eval_err = _rel_rms(np.asarray(bc_eval.jac.sqrtg)[sl], sqrtg_ref[sl])
+    sqrtg_vmec_err = _rel_rms(np.asarray(bc_vmec.jac.sqrtg)[sl], sqrtg_ref[sl])
+
+    guu_delta = _rel_rms(np.asarray(bc_eval.guu)[sl], np.asarray(bc_vmec.guu)[sl])
+    guv_delta = _rel_rms(np.asarray(bc_eval.guv)[sl], np.asarray(bc_vmec.guv)[sl])
+    gvv_delta = _rel_rms(np.asarray(bc_eval.gvv)[sl], np.asarray(bc_vmec.gvv)[sl])
+
+    return {
+        "sqrtg_eval_rel_rms": float(sqrtg_eval_err),
+        "sqrtg_vmec_rel_rms": float(sqrtg_vmec_err),
+        "metric_eval_vs_vmec_guu": float(guu_delta),
+        "metric_eval_vs_vmec_guv": float(guv_delta),
+        "metric_eval_vs_vmec_gvv": float(gvv_delta),
+    }
+
+
 def _run_vmec2000(input_path: Path, tmp_dir: Path) -> Path:
     try:
         import vmec  # type: ignore
@@ -245,6 +280,11 @@ def _parse_args():
     p.add_argument("--verbose", action="store_true", help="Enable VMEC++ verbose output")
     p.add_argument("--no-bfield-parity", action="store_true", help="Skip vmec_jax b-field parity checks")
     p.add_argument(
+        "--metrics",
+        action="store_true",
+        help="Compare real-space metric pieces (eval_fourier vs VMEC synthesis) on the VMEC grid.",
+    )
+    p.add_argument(
         "--output-dir",
         type=str,
         default=str(REPO_ROOT / "examples/outputs"),
@@ -286,6 +326,8 @@ def main() -> None:
 
         if not args.no_bfield_parity:
             summary["bfield_parity"] = _bfield_parity(input_path, wout_path)
+        if args.metrics:
+            summary["metric_parity"] = _metric_parity_vmec_grid(input_path, wout_path)
 
         out_json = outdir / f"external_{args.backend}_{input_path.name.replace('input.', '')}.json"
         out_json.write_text(json.dumps(summary, indent=2))
