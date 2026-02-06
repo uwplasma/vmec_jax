@@ -16,7 +16,7 @@ from vmec_jax._compat import enable_x64
 from vmec_jax.config import load_config
 from vmec_jax.diagnostics import print_summary, summarize_array
 from vmec_jax.static import build_static
-from vmec_jax.vmec_residue import vmec_force_norms_from_bcovar, vmec_fsq_from_tomnsps
+from vmec_jax.vmec_residue import vmec_force_norms_from_bcovar_dynamic, vmec_fsq_from_tomnsps_dynamic
 from vmec_jax.vmec_forces import (
     vmec_forces_rz_from_wout_reference_fields,
     vmec_forces_rz_from_wout,
@@ -93,17 +93,20 @@ def main():
         flss=rzl.flss,
     )
 
-    norms = vmec_force_norms_from_bcovar(bc=k.bc, trig=trig, wout=wout, s=static.s)
-    scal = vmec_fsq_from_tomnsps(frzl=frzl, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
+    norms = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
+    scal = vmec_fsq_from_tomnsps_dynamic(frzl=frzl, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
+    fsqr = float(scal.fsqr)
+    fsqz = float(scal.fsqz)
+    fsql = float(scal.fsql)
 
     print("== VMEC2000 wout scalars ==")
     print(f"fsqr={wout.fsqr:.3e}  fsqz={wout.fsqz:.3e}  fsql={wout.fsql:.3e}")
     print("== vmec_jax (VMEC-style tomnsps + getfsq) ==")
-    print(f"fsqr={scal.fsqr:.3e}  fsqz={scal.fsqz:.3e}  fsql={scal.fsql:.3e}")
+    print(f"fsqr={fsqr:.3e}  fsqz={fsqz:.3e}  fsql={fsql:.3e}")
 
-    abs_err_r = abs(scal.fsqr - wout.fsqr)
-    abs_err_z = abs(scal.fsqz - wout.fsqz)
-    abs_err_l = abs(scal.fsql - wout.fsql)
+    abs_err_r = abs(fsqr - wout.fsqr)
+    abs_err_z = abs(fsqz - wout.fsqz)
+    abs_err_l = abs(fsql - wout.fsql)
     print("== absolute errors ==")
     print(f"fsqr abs.err={abs_err_r:.3e}")
     print(f"fsqz abs.err={abs_err_z:.3e}")
@@ -113,9 +116,9 @@ def main():
     denom_z = max(abs(wout.fsqz), 1e-20)
     denom_l = max(abs(wout.fsql), 1e-20)
     print("== relative errors ==")
-    print(f"fsqr rel.err={abs(scal.fsqr - wout.fsqr)/denom_r:.3e}")
-    print(f"fsqz rel.err={abs(scal.fsqz - wout.fsqz)/denom_z:.3e}")
-    print(f"fsql rel.err={abs(scal.fsql - wout.fsql)/denom_l:.3e}")
+    print(f"fsqr rel.err={abs(fsqr - wout.fsqr)/denom_r:.3e}")
+    print(f"fsqz rel.err={abs(fsqz - wout.fsqz)/denom_z:.3e}")
+    print(f"fsql rel.err={abs(fsql - wout.fsql)/denom_l:.3e}")
 
     if k.tcon is not None:
         tcon = np.asarray(k.tcon)
@@ -130,9 +133,9 @@ def main():
     np.savez(
         outpath,
         s=np.asarray(static.s),
-        fsqr=float(scal.fsqr),
-        fsqz=float(scal.fsqz),
-        fsql=float(scal.fsql),
+        fsqr=float(fsqr),
+        fsqz=float(fsqz),
+        fsql=float(fsql),
         fsqr_ref=float(wout.fsqr),
         fsqz_ref=float(wout.fsqz),
         fsql_ref=float(wout.fsql),

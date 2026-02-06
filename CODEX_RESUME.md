@@ -208,6 +208,10 @@ Current incremental progress toward Step-10:
 - Matched VMEC's `scalxc` convention: after `tomnsps`, VMEC scales the Fourier-space forces by `scalxc`
   (constructed in `profil3d.f`) before calling `residue/getfsq` (see `funct3d.f`). Applying this scaling
   in `vmec_jax.vmec_residue` removed the remaining Step-10 scalar mismatch on symmetric cases.
+- Added **JAX-traceable** VMEC force-normalization scalars (`vp`, `wb`, `wp`, `fnorm`, `fnormL`) computed
+  directly from bcovar fields (`vmec_force_norms_from_bcovar_dynamic`) plus a dynamic `getfsq` wrapper
+  (`vmec_fsq_from_tomnsps_dynamic`). The Step-10 scalar parity regression now uses this dynamic path,
+  removing the dependency on `wout.vp/wb/wp` for scalar residual computation.
 - Expanded Step-10 scalar parity coverage beyond the initial two cases by bundling additional
   **stellarator-symmetric** `input.*` / `wout_*.nc` pairs (see `examples/data/`) and validating them in
   `tests/test_step10_residue_getfsq_parity.py`.

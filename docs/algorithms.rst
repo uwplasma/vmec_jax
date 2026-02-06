@@ -271,6 +271,11 @@ In ``vmec-jax``, the residual blocks are post-processed to match VMEC’s
 optional converged-iteration ``m=1`` constraints, and the exclusion of the edge
 surface from the R/Z sums).
 
+For VMEC-style scalar residual diagnostics (``fsqr/fsqz/fsql``), the required
+normalization scalars (``vp/wb/wp`` and ``fnorm/fnormL``) can be computed
+directly from the bcovar fields via ``vmec_force_norms_from_bcovar_dynamic`` and
+combined with tomnsps outputs using ``vmec_fsq_from_tomnsps_dynamic``.
+
 Two variants exist:
 
 1. ``solve_fixed_boundary_lbfgs_vmec_residual`` minimizes :math:`W_{\mathrm{res}}`
@@ -299,8 +304,10 @@ arbitrary initial guess, because:
 - the Step-10 force kernels were originally ported for *output parity on a converged equilibrium*,
   and are still being hardened for use as a general-purpose nonlinear solver objective;
 - VMEC's full nonlinear iteration includes additional iteration-dependent logic,
-  preconditioner-dependent scalings (``fnorm``/``fnormL``), and axis/constraint details
-  that are not fully reproduced yet.
+  preconditioners, and axis/constraint details that are not fully reproduced yet.
+  (VMEC-style normalization scalars ``vp/wb/wp`` and ``fnorm/fnormL`` are now
+  available for diagnostics, but the solvers do not yet mirror VMEC’s full
+  preconditioned time-stepping loop.)
 
 In other words: decreasing :math:`W_{\mathrm{res}}` is a useful milestone and a
 regression target, but it is not yet equivalent to "match VMEC2000 coefficients".

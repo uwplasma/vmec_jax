@@ -9,7 +9,10 @@ import pytest
 
 from vmec_jax.config import load_config
 from vmec_jax.static import build_static
-from vmec_jax.vmec_residue import vmec_force_norms_from_bcovar, vmec_fsq_from_tomnsps
+from vmec_jax.vmec_residue import (
+    vmec_force_norms_from_bcovar_dynamic,
+    vmec_fsq_from_tomnsps_dynamic,
+)
 from vmec_jax.vmec_forces import (
     vmec_forces_rz_from_wout,
     vmec_residual_internal_from_kernels,
@@ -77,15 +80,18 @@ def test_step10_getfsq_parity_against_wout(case_name: str, input_rel: str, wout_
         flss=rzl.flss,
     )
 
-    norms = vmec_force_norms_from_bcovar(bc=k.bc, trig=trig, wout=wout, s=static.s)
-    scal = vmec_fsq_from_tomnsps(frzl=frzl, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
+    norms = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
+    scal = vmec_fsq_from_tomnsps_dynamic(frzl=frzl, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
 
     # Target parity condition: these should agree once the remaining VMEC
     # conventions converge. Note that VMEC's reported scalars are computed
     # *after* scaling the Fourier forces by `scalxc` (profil3d/funct3d).
-    assert np.isfinite(scal.fsqr)
-    assert np.isfinite(scal.fsqz)
-    assert np.isfinite(scal.fsql)
+    fsqr = float(scal.fsqr)
+    fsqz = float(scal.fsqz)
+    fsql = float(scal.fsql)
+    assert np.isfinite(fsqr)
+    assert np.isfinite(fsqz)
+    assert np.isfinite(fsql)
 
     # Target parity condition: scalar residuals should agree with VMEC2000's
     # `residue/getfsq` outputs on the same (ntheta,nzeta) grid. We keep
@@ -94,9 +100,9 @@ def test_step10_getfsq_parity_against_wout(case_name: str, input_rel: str, wout_
     denom_r = max(abs(wout.fsqr), 1e-20)
     denom_z = max(abs(wout.fsqz), 1e-20)
     denom_l = max(abs(wout.fsql), 1e-20)
-    rel_fsqr = abs(scal.fsqr - wout.fsqr) / denom_r
-    rel_fsqz = abs(scal.fsqz - wout.fsqz) / denom_z
-    rel_fsql = abs(scal.fsql - wout.fsql) / denom_l
+    rel_fsqr = abs(fsqr - wout.fsqr) / denom_r
+    rel_fsqz = abs(fsqz - wout.fsqz) / denom_z
+    rel_fsql = abs(fsql - wout.fsql) / denom_l
 
     assert rel_fsqr < float(rtol_rz)
     assert rel_fsqz < float(rtol_rz)

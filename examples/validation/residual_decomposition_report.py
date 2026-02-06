@@ -24,8 +24,8 @@ from vmec_jax.vmec_forces import (
 )
 from vmec_jax.vmec_residue import (
     vmec_apply_m1_constraints,
-    vmec_force_norms_from_bcovar,
-    vmec_fsq_from_tomnsps,
+    vmec_force_norms_from_bcovar_dynamic,
+    vmec_fsq_from_tomnsps_dynamic,
     vmec_fsq_sums_from_tomnsps,
 )
 from vmec_jax.vmec_tomnsp import TomnspsRZL, vmec_angle_grid, vmec_trig_tables
@@ -258,21 +258,27 @@ def main():
     frzl_total = _frzl_from_kernels(k, cfg=cfg, wout=wout, trig=trig)
     sums_total = vmec_fsq_sums_from_tomnsps(frzl=frzl_total, lconm1=bool(getattr(cfg, "lconm1", True)))
 
-    norms = vmec_force_norms_from_bcovar(bc=k.bc, trig=trig, wout=wout, s=static.s)
-    scal_total = vmec_fsq_from_tomnsps(frzl=frzl_total, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
+    norms_dyn = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
+    scal_total = vmec_fsq_from_tomnsps_dynamic(frzl=frzl_total, norms=norms_dyn, lconm1=bool(getattr(cfg, "lconm1", True)))
+    fsqr_total = float(scal_total.fsqr)
+    fsqz_total = float(scal_total.fsqz)
+    fsql_total = float(scal_total.fsql)
+    r1 = float(norms_dyn.r1)
+    fnorm = float(norms_dyn.fnorm)
+    fnormL = float(norms_dyn.fnormL)
 
     print("== VMEC2000 wout scalars ==")
     print(f"fsqr={wout.fsqr:.3e}  fsqz={wout.fsqz:.3e}  fsql={wout.fsql:.3e}")
     print("== vmec_jax (VMEC-style tomnsps + getfsq) ==")
-    print(f"fsqr={scal_total.fsqr:.3e}  fsqz={scal_total.fsqz:.3e}  fsql={scal_total.fsql:.3e}")
+    print(f"fsqr={fsqr_total:.3e}  fsqz={fsqz_total:.3e}  fsql={fsql_total:.3e}")
     print("== sum-of-squares blocks (total) ==")
     print(f"gcr2={sums_total.gcr2:.3e}  gcz2={sums_total.gcz2:.3e}  gcl2={sums_total.gcl2:.3e}")
 
     def _component_sums(label: str, kc):
         frzl = _frzl_from_kernels(kc, cfg=cfg, wout=wout, trig=trig)
         sums = vmec_fsq_sums_from_tomnsps(frzl=frzl, lconm1=bool(getattr(cfg, "lconm1", True)))
-        fsqr = norms.r1 * norms.fnorm * sums.gcr2
-        fsqz = norms.r1 * norms.fnorm * sums.gcz2
+        fsqr = r1 * fnorm * sums.gcr2
+        fsqz = r1 * fnorm * sums.gcz2
         print(f"{label:12s} fsqr={fsqr:.3e}  fsqz={fsqz:.3e}  gcr2={sums.gcr2:.3e}  gcz2={sums.gcz2:.3e}")
         return sums
 
@@ -305,7 +311,7 @@ def main():
     )
     frzl_L = _frzl_from_kernels(k_L, cfg=cfg, wout=wout, trig=trig)
     sums_L = vmec_fsq_sums_from_tomnsps(frzl=frzl_L, lconm1=bool(getattr(cfg, "lconm1", True)))
-    fsql_L = norms.fnormL * sums_L.gcl2
+    fsql_L = fnormL * sums_L.gcl2
     print(f"{'lambda':12s} fsql={fsql_L:.3e}  gcl2={sums_L.gcl2:.3e}")
 
     frzl_modes = vmec_apply_m1_constraints(frzl=frzl_total, lconm1=bool(getattr(cfg, "lconm1", True)))
@@ -327,9 +333,9 @@ def main():
     np.savez(
         outpath,
         s=np.asarray(static.s),
-        fsqr=float(scal_total.fsqr),
-        fsqz=float(scal_total.fsqz),
-        fsql=float(scal_total.fsql),
+        fsqr=float(fsqr_total),
+        fsqz=float(fsqz_total),
+        fsql=float(fsql_total),
         fsqr_ref=float(wout.fsqr),
         fsqz_ref=float(wout.fsqz),
         fsql_ref=float(wout.fsql),

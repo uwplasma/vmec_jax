@@ -35,10 +35,38 @@ class VmecForceNorms:
 
 
 @dataclass(frozen=True)
+class VmecForceNormsDynamic:
+    """VMEC normalization constants computed directly from bcovar fields (JAX-traceable).
+
+    This is the state-based counterpart of :class:`VmecForceNorms`, which relies on
+    `wout` scalars (`vp`, `wb`, `wp`). VMEC uses these quantities to normalize the
+    reported scalar residuals (`fsqr/fsqz/fsql`) in `residue/getfsq`.
+    """
+
+    fnorm: Any
+    fnormL: Any
+    r1: Any  # 1/(2*r0scale)^2
+    r2: Any
+    volume: Any
+    wb: Any
+    wp: Any
+    vp: Any  # (ns,)
+
+
+@dataclass(frozen=True)
 class VmecFsqScalars:
     fsqr: float
     fsqz: float
     fsql: float
+
+
+@dataclass(frozen=True)
+class VmecFsqScalarsDynamic:
+    """JAX-traceable scalar residuals (fsqr, fsqz, fsql)."""
+
+    fsqr: Any
+    fsqz: Any
+    fsql: Any
 
 
 @dataclass(frozen=True)
@@ -204,6 +232,97 @@ def vmec_force_norms_from_bcovar(*, bc, trig: VmecTrigTables, wout, s) -> VmecFo
     return VmecForceNorms(fnorm=float(fnorm), fnormL=float(fnormL), r1=float(r1))
 
 
+def vmec_force_norms_from_bcovar_dynamic(
+    *,
+    bc,
+    trig: VmecTrigTables,
+    s: Any,
+    signgs: int,
+) -> VmecForceNormsDynamic:
+    """Compute (fnorm, fnormL) using VMEC's bcovar normalization formulas *without* `wout`.
+
+    This routine reconstructs the normalization scalars directly from bcovar's
+    real-space fields, mirroring how the corresponding `wout` scalars are built:
+
+    - ``vp(js) = ⟨ signgs*sqrtg ⟩`` (surface integral with VMEC weights)
+    - ``volume = hs * sum(vp(2:ns))``
+    - ``wb = hs * sum( ⟨ signgs*sqrtg * (|B|^2/2) ⟩(2:ns) )``
+    - ``wp = hs * sum( vp(js) * pres(js) , js=2..ns )``
+
+    and then:
+
+    - ``r2 = max(wb, wp) / volume``
+    - ``fnorm  = 1 / (sum(guu*r12^2*wint) * r2^2)``
+    - ``fnormL = 1 / (sum((bsubu^2+bsubv^2)*wint) * lamscale^2)``
+
+    Returns JAX scalars/arrays suitable for use inside jitted solver objectives.
+    """
+    signgs = int(signgs)
+    s = jnp.asarray(s)
+    ns = int(s.shape[0])
+    if ns < 2:
+        z = jnp.asarray(float("nan"))
+        return VmecForceNormsDynamic(fnorm=z, fnormL=z, r1=z, r2=z, volume=z, wb=z, wp=z, vp=jnp.zeros((ns,)))
+
+    hs = jnp.asarray(s[1] - s[0], dtype=jnp.asarray(s).dtype)
+
+    sqrtg = jnp.asarray(bc.jac.sqrtg)
+    if sqrtg.ndim != 3:
+        raise ValueError(f"bc.jac.sqrtg must be (ns,ntheta3,nzeta), got shape {sqrtg.shape}")
+    nzeta = int(sqrtg.shape[2])
+
+    w_ang = vmec_wint_from_trig(trig, nzeta=nzeta)  # (ntheta3,nzeta)
+
+    # VMEC's `pwint` has pwint(js=1)=0 (axis masked). Implement that here via a
+    # radial mask to keep this routine JIT-friendly.
+    mask_js = (jnp.arange(ns, dtype=jnp.int32) > 0).astype(sqrtg.dtype)[:, None, None]
+
+    # Volume derivative per surface (normalized by (2π)^2, VMEC convention).
+    jac = jnp.asarray(float(signgs), dtype=sqrtg.dtype) * sqrtg
+    jac = jac * mask_js
+    vp = jnp.sum(w_ang[None, :, :] * jac, axis=(1, 2))
+    volume = hs * jnp.sum(vp[1:])  # vp(2:ns)
+
+    # Magnetic energy scalar wb (same normalization as wout.wb).
+    bsupu = jnp.asarray(bc.bsupu)
+    bsupv = jnp.asarray(bc.bsupv)
+    bsubu = jnp.asarray(bc.bsubu)
+    bsubv = jnp.asarray(bc.bsubv)
+    b2 = (bsupu * bsubu) + (bsupv * bsubv)
+    wblocal = jnp.sum(w_ang[None, :, :] * jac * (0.5 * b2), axis=(1, 2))
+    wb = hs * jnp.sum(wblocal[1:])  # js=2..ns
+
+    # Pressure scalar wp. Pressure is flux-surface function, but bcovar stores
+    # bsq = |B|^2/2 + pres on the half mesh, so we can reconstruct pres robustly.
+    bsq = jnp.asarray(bc.bsq)
+    pres = bsq - (0.5 * b2)
+    pres_1d = pres[:, 0, 0]
+    wp = hs * jnp.sum(vp[1:] * pres_1d[1:])
+
+    r2 = jnp.where(volume != 0.0, jnp.maximum(wb, wp) / volume, jnp.asarray(float("inf"), dtype=wb.dtype))
+
+    # Force norms.
+    r12 = jnp.asarray(bc.jac.r12)
+    guu = jnp.asarray(bc.guu).astype(jnp.float64)
+    guu_r12sq = (guu * (r12 * r12)).astype(jnp.float64)
+
+    pwint = (w_ang[None, :, :] * mask_js).astype(jnp.float64)
+    denom_f = jnp.sum(guu_r12sq * pwint)
+    fnorm = jnp.where(denom_f != 0.0, 1.0 / (denom_f * (r2 * r2)), jnp.asarray(float("inf"), dtype=denom_f.dtype))
+
+    denom_L = jnp.sum((((bsubu * bsubu) + (bsubv * bsubv)) * pwint).astype(jnp.float64))
+    lamscale = jnp.asarray(bc.lamscale, dtype=denom_L.dtype)
+    fnormL = jnp.where(
+        denom_L != 0.0,
+        1.0 / (denom_L * (lamscale * lamscale)),
+        jnp.asarray(float("inf"), dtype=denom_L.dtype),
+    )
+
+    r0scale = jnp.asarray(float(trig.r0scale), dtype=denom_f.dtype)
+    r1 = 1.0 / (2.0 * r0scale) ** 2
+    return VmecForceNormsDynamic(fnorm=fnorm, fnormL=fnormL, r1=r1, r2=r2, volume=volume, wb=wb, wp=wp, vp=vp)
+
+
 def vmec_scalxc_from_s(*, s: Any, mpol: int) -> jnp.ndarray:
     """Reproduce VMEC's `scalxc(js,m)` factors used to scale forces before `residue`.
 
@@ -357,6 +476,31 @@ def vmec_fsq_from_tomnsps(
     fsqz = norms.r1 * norms.fnorm * float(gcz2)
     fsql = norms.fnormL * float(gcl2)
     return VmecFsqScalars(fsqr=float(fsqr), fsqz=float(fsqz), fsql=float(fsql))
+
+
+def vmec_fsq_from_tomnsps_dynamic(
+    *,
+    frzl: TomnspsRZL,
+    norms: VmecForceNormsDynamic,
+    lconm1: bool = True,
+    apply_m1_constraints: bool = True,
+    include_edge: bool = False,
+    apply_scalxc: bool = True,
+    s: Any | None = None,
+) -> VmecFsqScalarsDynamic:
+    """Compute (fsqr,fsqz,fsql) as JAX scalars from VMEC-style tomnsps outputs."""
+    gcr2, gcz2, gcl2 = vmec_gcx2_from_tomnsps(
+        frzl=frzl,
+        lconm1=bool(lconm1),
+        apply_m1_constraints=bool(apply_m1_constraints),
+        include_edge=bool(include_edge),
+        apply_scalxc=bool(apply_scalxc),
+        s=s,
+    )
+    fsqr = jnp.asarray(norms.r1) * jnp.asarray(norms.fnorm) * gcr2
+    fsqz = jnp.asarray(norms.r1) * jnp.asarray(norms.fnorm) * gcz2
+    fsql = jnp.asarray(norms.fnormL) * gcl2
+    return VmecFsqScalarsDynamic(fsqr=fsqr, fsqz=fsqz, fsql=fsql)
 
 
 def vmec_fsq_sums_from_tomnsps(

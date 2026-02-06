@@ -15,7 +15,7 @@ from vmec_jax._compat import enable_x64
 from vmec_jax.config import load_config
 from vmec_jax.diagnostics import print_summary, summarize_array
 from vmec_jax.static import build_static
-from vmec_jax.vmec_residue import vmec_force_norms_from_bcovar, vmec_fsq_from_tomnsps
+from vmec_jax.vmec_residue import vmec_force_norms_from_bcovar_dynamic, vmec_fsq_from_tomnsps_dynamic
 from vmec_jax.vmec_forces import (
     vmec_forces_rz_from_wout,
     vmec_residual_internal_from_kernels,
@@ -65,13 +65,16 @@ def main():
         flcc=rzl.flcc,
         flss=rzl.flss,
     )
-    norms = vmec_force_norms_from_bcovar(bc=k.bc, trig=trig, wout=wout, s=static.s)
-    scal = vmec_fsq_from_tomnsps(frzl=frzl, norms=norms)
+    norms = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
+    scal = vmec_fsq_from_tomnsps_dynamic(frzl=frzl, norms=norms)
+    fsqr = float(scal.fsqr)
+    fsqz = float(scal.fsqz)
+    fsql = float(scal.fsql)
 
     print("== VMEC2000 reference scalars ==")
     print(f"fsqr={wout.fsqr:.3e}  fsqz={wout.fsqz:.3e}  fsql={wout.fsql:.3e}")
     print("== vmec_jax (VMEC-style tomnsps + getfsq; parity WIP) ==")
-    print(f"fsqr={scal.fsqr:.3e}  fsqz={scal.fsqz:.3e}  fsql={scal.fsql:.3e}")
+    print(f"fsqr={fsqr:.3e}  fsqz={fsqz:.3e}  fsql={fsql:.3e}")
 
     if k.tcon is not None:
         tcon = np.asarray(k.tcon)
@@ -99,9 +102,9 @@ def main():
         flcs=np.asarray(frzl.flcs) if frzl.flcs is not None else np.zeros((0,)),
         fnorm=float(norms.fnorm),
         fnormL=float(norms.fnormL),
-        fsqr=float(scal.fsqr),
-        fsqz=float(scal.fsqz),
-        fsql=float(scal.fsql),
+        fsqr=float(fsqr),
+        fsqz=float(fsqz),
+        fsql=float(fsql),
         fsqr_ref=float(wout.fsqr),
         fsqz_ref=float(wout.fsqz),
         fsql_ref=float(wout.fsql),

@@ -24,8 +24,8 @@ from vmec_jax.vmec_forces import (
 )
 from vmec_jax.vmec_residue import (
     vmec_apply_m1_constraints,
-    vmec_force_norms_from_bcovar,
-    vmec_fsq_from_tomnsps,
+    vmec_force_norms_from_bcovar_dynamic,
+    vmec_fsq_from_tomnsps_dynamic,
     vmec_fsq_sums_from_tomnsps,
 )
 from vmec_jax.vmec_tomnsp import TomnspsRZL, vmec_angle_grid, vmec_trig_tables
@@ -300,18 +300,24 @@ def main():
     kA_ref, kB_ref, kC_ref, kcon_ref, kL_ref = _build_component_kernels(k_ref, con=con_ref, s=static.s)
     kA_full, kB_full, kC_full, kcon_full, kL_full = _build_component_kernels(k_full, con=con_full, s=static.s)
 
-    norms = vmec_force_norms_from_bcovar(bc=k_ref.bc, trig=trig, wout=wout, s=static.s)
+    norms = vmec_force_norms_from_bcovar_dynamic(bc=k_ref.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
     frzl_ref = _frzl_from_kernels(k_ref, cfg=cfg, wout=wout, trig=trig)
     frzl_full = _frzl_from_kernels(k_full, cfg=cfg, wout=wout, trig=trig)
 
-    scal_ref = vmec_fsq_from_tomnsps(frzl=frzl_ref, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
-    scal_full = vmec_fsq_from_tomnsps(frzl=frzl_full, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
+    scal_ref = vmec_fsq_from_tomnsps_dynamic(frzl=frzl_ref, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
+    scal_full = vmec_fsq_from_tomnsps_dynamic(frzl=frzl_full, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
+    fsqr_ref = float(scal_ref.fsqr)
+    fsqz_ref = float(scal_ref.fsqz)
+    fsql_ref = float(scal_ref.fsql)
+    fsqr_full = float(scal_full.fsqr)
+    fsqz_full = float(scal_full.fsqz)
+    fsql_full = float(scal_full.fsql)
 
     print("== VMEC2000 wout scalars ==")
     print(f"fsqr={wout.fsqr:.3e}  fsqz={wout.fsqz:.3e}  fsql={wout.fsql:.3e}")
     print("== vmec_jax scalars ==")
-    print(f"reference  fsqr={scal_ref.fsqr:.3e}  fsqz={scal_ref.fsqz:.3e}  fsql={scal_ref.fsql:.3e}")
-    print(f"full       fsqr={scal_full.fsqr:.3e}  fsqz={scal_full.fsqz:.3e}  fsql={scal_full.fsql:.3e}")
+    print(f"reference  fsqr={fsqr_ref:.3e}  fsqz={fsqz_ref:.3e}  fsql={fsql_ref:.3e}")
+    print(f"full       fsqr={fsqr_full:.3e}  fsqz={fsqz_full:.3e}  fsql={fsql_full:.3e}")
 
     sums_ref = vmec_fsq_sums_from_tomnsps(frzl=frzl_ref, lconm1=bool(getattr(cfg, "lconm1", True)))
     sums_full = vmec_fsq_sums_from_tomnsps(frzl=frzl_full, lconm1=bool(getattr(cfg, "lconm1", True)))
@@ -360,12 +366,12 @@ def main():
     np.savez(
         outpath,
         s=np.asarray(static.s),
-        fsqr_ref=float(scal_ref.fsqr),
-        fsqz_ref=float(scal_ref.fsqz),
-        fsql_ref=float(scal_ref.fsql),
-        fsqr_full=float(scal_full.fsqr),
-        fsqz_full=float(scal_full.fsqz),
-        fsql_full=float(scal_full.fsql),
+        fsqr_ref=float(fsqr_ref),
+        fsqz_ref=float(fsqz_ref),
+        fsql_ref=float(fsql_ref),
+        fsqr_full=float(fsqr_full),
+        fsqz_full=float(fsqz_full),
+        fsql_full=float(fsql_full),
         gcr2_ref=float(sums_ref.gcr2),
         gcz2_ref=float(sums_ref.gcz2),
         gcl2_ref=float(sums_ref.gcl2),

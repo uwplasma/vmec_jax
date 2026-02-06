@@ -41,7 +41,8 @@ VMEC-quality fixed-boundary convergence are still in progress (see `CODEX_RESUME
 - Step-10 parity (baseline): VMEC-style `forces` + `tomnsps` + `getfsq` scalars
   match the bundled symmetric `wout` references tightly (see
   `examples/validation/vmec_forces_rz_kernel_report.py` and
-  `tests/test_step10_residue_getfsq_parity.py`).
+  `tests/test_step10_residue_getfsq_parity.py`). Force norms (`vp/wb/wp`, `fnorm/fnormL`)
+  are computed dynamically from bcovar fields (no reliance on `wout` scalars).
 - Advanced: implicit differentiation demos (custom VJP) for solver-aware gradients.
 
 ## Current parity status (Step-10 scalar residuals)
