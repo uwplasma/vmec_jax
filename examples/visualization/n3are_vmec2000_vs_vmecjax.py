@@ -43,6 +43,7 @@ from vmec_jax.plotting import (
     zeta_grid_field_period,
 )
 from vmec_jax.driver import run_fixed_boundary
+from vmec_jax.geom import eval_geom
 from vmec_jax.wout import read_wout
 
 
@@ -163,6 +164,14 @@ def main() -> None:
     theta_b = closed_theta_grid(30)
     phi_b = np.linspace(0.0, 2.0 * np.pi, num=65, endpoint=True)
     B_vmec = bmag_from_wout_physical(wout, theta=theta_b, phi=phi_b, s_index=int(wout.ns) - 1)
+    sqrtg_floor = None
+    if use_initial_guess:
+        geom_init = eval_geom(state, static)
+        abs_sg = np.abs(np.asarray(geom_init.sqrtg))
+        floor = max(1e-3, 0.5 * float(np.median(abs_sg)))
+        sqrtg_floor = floor
+        print(f"[vmec_jax] initial guess sqrtg_floor={floor:.3e}")
+
     B_jax = bmag_from_state_physical(
         state,
         static,
@@ -174,7 +183,11 @@ def main() -> None:
         phipf=np.asarray(wout.phipf),
         chipf=np.asarray(wout.chipf),
         lamscale=float(np.asarray(run.flux.lamscale)),
+        sqrtg_floor=sqrtg_floor,
     )
+
+    print(f"[vmec_jax] B range (VMEC2000) min={B_vmec.min():.3e} max={B_vmec.max():.3e}")
+    print(f"[vmec_jax] B range (vmec_jax) min={B_jax.min():.3e} max={B_jax.max():.3e}")
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     cf0 = _plot_bmag_surface(axes[0], B=B_vmec, theta=theta_b, phi=phi_b, title="VMEC2000")

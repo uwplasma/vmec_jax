@@ -17,7 +17,7 @@ from .fourier import build_helical_basis, eval_fourier
 from .geom import _eval_geom_jit
 from .grids import AngleGrid
 from .modes import ModeTable
-from .field import b2_from_bsup, bsup_from_geom, lamscale_from_phips
+from .field import b2_from_bsup, bsup_from_geom, bsup_from_sqrtg_lambda, lamscale_from_phips
 from .energy import flux_profiles_from_indata
 from .field import signgs_from_sqrtg
 
@@ -179,6 +179,8 @@ def bmag_from_state_physical(
     phipf: np.ndarray | None = None,
     chipf: np.ndarray | None = None,
     lamscale: float | None = None,
+    sqrtg_floor: float | None = None,
+    eps: float = 1e-14,
 ) -> np.ndarray:
     """Compute B magnitude on a surface using physical toroidal angle phi.
 
@@ -211,14 +213,29 @@ def bmag_from_state_physical(
         else:
             lamscale_use = float(lamscale)
 
-    bsupu, bsupv = bsup_from_geom(
-        geom,
-        phipf=phipf_use,
-        chipf=chipf_use,
-        nfp=nfp,
-        signgs=signgs,
-        lamscale=lamscale_use,
-    )
+    if sqrtg_floor is None:
+        bsupu, bsupv = bsup_from_geom(
+            geom,
+            phipf=phipf_use,
+            chipf=chipf_use,
+            nfp=nfp,
+            signgs=signgs,
+            lamscale=lamscale_use,
+            eps=eps,
+        )
+    else:
+        sqrtg = np.asarray(geom.sqrtg)
+        sqrtg_use = np.sign(sqrtg) * np.maximum(np.abs(sqrtg), float(sqrtg_floor))
+        bsupu, bsupv = bsup_from_sqrtg_lambda(
+            sqrtg=sqrtg_use,
+            lam_u=geom.L_theta,
+            lam_v=geom.L_phi,
+            phipf=phipf_use,
+            chipf=chipf_use,
+            signgs=signgs,
+            lamscale=lamscale_use,
+            eps=eps,
+        )
     B2 = b2_from_bsup(geom, bsupu, bsupv)
     B = np.sqrt(np.maximum(np.asarray(B2), 0.0))
     return B[s_index]

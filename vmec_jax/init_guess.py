@@ -25,6 +25,7 @@ import numpy as np
 
 from ._compat import jnp, has_jax
 from .boundary import BoundaryCoeffs
+from .fourier import build_helical_basis, eval_fourier
 from .namelist import InData
 from .state import StateLayout, VMECState
 from .static import VMECStatic
@@ -62,6 +63,77 @@ def _axis_array(values: float | list[float] | None, ntor: int, *, dtype):
     else:
         arr = arr[: ntor + 1]
     return jnp.asarray(arr, dtype=dtype)
+
+
+def _guess_axis_from_boundary(static: VMECStatic, boundary: BoundaryCoeffs):
+    """Guess magnetic axis from boundary geometry.
+
+    We use a simple VMEC-like heuristic: in each toroidal plane, set the axis
+    to the midpoint of the (R,Z) bounding box of the LCFS cross-section, then
+    Fourier-fit the resulting axis curve in zeta.
+    """
+    grid = static.grid
+    basis = build_helical_basis(static.modes, grid)
+    Rb = np.asarray(eval_fourier(jnp.asarray(boundary.R_cos), jnp.asarray(boundary.R_sin), basis))
+    Zb = np.asarray(eval_fourier(jnp.asarray(boundary.Z_cos), jnp.asarray(boundary.Z_sin), basis))
+
+    R_axis = 0.5 * (Rb.min(axis=0) + Rb.max(axis=0))
+    Z_axis = 0.5 * (Zb.min(axis=0) + Zb.max(axis=0))
+
+    zeta = np.asarray(grid.zeta)
+    n = np.arange(static.cfg.ntor + 1)
+    cos_nz = np.cos(np.outer(n, zeta))
+    sin_nz = np.sin(np.outer(n, zeta))
+
+    delta = 2.0 / float(zeta.size)
+    raxis_c = delta * (cos_nz @ R_axis)
+    raxis_c[0] *= 0.5
+    zaxis_s = delta * (sin_nz @ Z_axis)
+    return jnp.asarray(raxis_c), jnp.asarray(zaxis_s)
+
+
+def _boundary_cross_section_areas(static: VMECStatic, boundary: BoundaryCoeffs) -> np.ndarray:
+    basis = build_helical_basis(static.modes, static.grid)
+    Rb = np.asarray(eval_fourier(jnp.asarray(boundary.R_cos), jnp.asarray(boundary.R_sin), basis))
+    Zb = np.asarray(eval_fourier(jnp.asarray(boundary.Z_cos), jnp.asarray(boundary.Z_sin), basis))
+    areas = []
+    for k in range(Rb.shape[1]):
+        R = Rb[:, k]
+        Z = Zb[:, k]
+        # signed polygon area, periodic closure
+        area = 0.5 * np.sum(R * np.roll(Z, -1) - np.roll(R, -1) * Z)
+        areas.append(area)
+    return np.asarray(areas)
+
+
+def _flip_boundary_theta(static: VMECStatic, boundary: BoundaryCoeffs) -> BoundaryCoeffs:
+    """Flip theta -> -theta for boundary coefficients (m>0), matching VMEC."""
+    m = np.asarray(static.modes.m)
+    n = np.asarray(static.modes.n)
+    key_to_k = {(int(mm), int(nn)): k for k, (mm, nn) in enumerate(zip(m, n))}
+
+    R_cos = np.asarray(boundary.R_cos).copy()
+    R_sin = np.asarray(boundary.R_sin).copy()
+    Z_cos = np.asarray(boundary.Z_cos).copy()
+    Z_sin = np.asarray(boundary.Z_sin).copy()
+
+    R_cos_new = R_cos.copy()
+    R_sin_new = R_sin.copy()
+    Z_cos_new = Z_cos.copy()
+    Z_sin_new = Z_sin.copy()
+
+    for k, (mm, nn) in enumerate(zip(m, n)):
+        if int(mm) == 0:
+            continue
+        k2 = key_to_k.get((int(mm), int(-nn)))
+        if k2 is None:
+            continue
+        R_cos_new[k] = R_cos[k2]
+        R_sin_new[k] = -R_sin[k2]
+        Z_cos_new[k] = Z_cos[k2]
+        Z_sin_new[k] = -Z_sin[k2]
+
+    return BoundaryCoeffs(R_cos=R_cos_new, R_sin=R_sin_new, Z_cos=Z_cos_new, Z_sin=Z_sin_new)
 
 
 def initial_guess_from_boundary(
@@ -109,11 +181,16 @@ def initial_guess_from_boundary(
 
             dtype = _np.float64
 
+    boundary_use = boundary
+    areas = _boundary_cross_section_areas(static, boundary_use)
+    if np.median(areas) < 0.0:
+        boundary_use = _flip_boundary_theta(static, boundary_use)
+
     # Base: broadcast boundary vectors to (ns,K)
-    Rcos_b = jnp.asarray(boundary.R_cos, dtype=dtype)[None, :]
-    Rsin_b = jnp.asarray(boundary.R_sin, dtype=dtype)[None, :]
-    Zcos_b = jnp.asarray(boundary.Z_cos, dtype=dtype)[None, :]
-    Zsin_b = jnp.asarray(boundary.Z_sin, dtype=dtype)[None, :]
+    Rcos_b = jnp.asarray(boundary_use.R_cos, dtype=dtype)[None, :]
+    Rsin_b = jnp.asarray(boundary_use.R_sin, dtype=dtype)[None, :]
+    Zcos_b = jnp.asarray(boundary_use.Z_cos, dtype=dtype)[None, :]
+    Zsin_b = jnp.asarray(boundary_use.Z_sin, dtype=dtype)[None, :]
 
     # Regularity scaling: use rho**m with rho = sqrt(s) for m>0 (VMEC/VMEC++).
     # For m=0, keep Rcos constant unless we blend with axis; other components
@@ -140,6 +217,12 @@ def initial_guess_from_boundary(
         if zaxis_cs is not None and np.any(np.asarray(zaxis_cs) != 0.0):
             have_axis = True
 
+        if not have_axis:
+            raxis_cc, zaxis_cs = _guess_axis_from_boundary(static, boundary_use)
+            raxis_cc = raxis_cc.astype(dtype)
+            zaxis_cs = zaxis_cs.astype(dtype)
+            have_axis = True
+
         if have_axis:
             if raxis_cc is None:
                 raxis_cc = jnp.zeros((cfg.ntor + 1,), dtype=dtype)
@@ -155,11 +238,16 @@ def initial_guess_from_boundary(
                 k = int(k_candidates[0])
                 blend = s
                 new_R = (1.0 - blend) * raxis_cc[n] + blend * Rcos_b[0, k]
+                # Z uses sin(-n zeta) for m=0, so Zsin coefficients are -zaxis_cs.
+                new_Z = (1.0 - blend) * (-zaxis_cs[n]) + blend * Zsin_b[0, k]
                 if has_jax():
                     Rcos = Rcos.at[:, k].set(new_R)
+                    Zsin = Zsin.at[:, k].set(new_Z)
                 else:
                     Rcos = jnp.array(Rcos)
+                    Zsin = jnp.array(Zsin)
                     Rcos[:, k] = new_R
+                    Zsin[:, k] = new_Z
 
     Lcos = jnp.zeros((cfg.ns, K), dtype=dtype)
     Lsin = jnp.zeros((cfg.ns, K), dtype=dtype)
