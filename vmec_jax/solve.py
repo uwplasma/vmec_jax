@@ -373,7 +373,7 @@ def solve_lambda_gd(
     max_iter: int = 50,
     step_size: float = 0.05,
     grad_tol: float = 1e-10,
-    max_backtracks: int = 12,
+    max_backtracks: int = 16,
     bt_factor: float = 0.5,
     jit_grad: bool = False,
     preconditioner: str = "none",
@@ -561,7 +561,7 @@ def solve_fixed_boundary_gd(
     scale_rz: float = 1.0,
     scale_l: float = 1.0,
     grad_tol: float = 1e-10,
-    max_backtracks: int = 12,
+    max_backtracks: int = 16,
     bt_factor: float = 0.5,
     jit_grad: bool = False,
     preconditioner: str = "none",
@@ -678,17 +678,18 @@ def solve_fixed_boundary_gd(
     wb0 = float(np.asarray(wb0))
     wp0 = float(np.asarray(wp0))
     w0 = float(np.asarray(w0))
-
-    w_history = [w0]
     wb_history = [wb0]
     wp_history = [wp0]
     grad_rms_history = []
     step_history = []
 
     obj0, grad0 = obj_and_grad(state)
+    obj0 = float(np.asarray(obj0))
+    w_history = [obj0]
 
     for it in range(max_iter):
         grad0m = _mask_grad_for_constraints(grad0, static, idx00=idx00)
+        grad_raw = grad0m
         grad0m = _apply_preconditioner(
             grad0m,
             static,
@@ -708,25 +709,32 @@ def solve_fixed_boundary_gd(
         step = float(step_size)
         accepted = False
 
-        for bt in range(max_backtracks + 1):
-            if bt > 0:
-                step *= bt_factor
-            trial = _update_state_gd(state, grad0m, step=step, scale_rz=scale_rz, scale_l=scale_l)
-            trial = _enforce_fixed_boundary_and_axis(
-                trial,
-                static,
-                edge_Rcos=edge_Rcos,
-                edge_Rsin=edge_Rsin,
-                edge_Zcos=edge_Zcos,
-                edge_Zsin=edge_Zsin,
-                idx00=idx00,
-            )
-            _wb_t, _wp_t, w_t = w_terms(trial)
-            w_t = float(np.asarray(w_t))
-            if np.isfinite(w_t) and w_t < w_history[-1]:
-                state = trial
-                accepted = True
-                break
+        def _try_line_search(grad_step):
+            step_local = float(step_size)
+            for bt in range(max_backtracks + 1):
+                if bt > 0:
+                    step_local *= bt_factor
+                trial = _update_state_gd(state, grad_step, step=step_local, scale_rz=scale_rz, scale_l=scale_l)
+                trial = _enforce_fixed_boundary_and_axis(
+                    trial,
+                    static,
+                    edge_Rcos=edge_Rcos,
+                    edge_Rsin=edge_Rsin,
+                    edge_Zcos=edge_Zcos,
+                    edge_Zsin=edge_Zsin,
+                    idx00=idx00,
+                )
+                obj_t = _objective(trial)
+                obj_t = float(np.asarray(obj_t))
+                if np.isfinite(obj_t) and obj_t < w_history[-1]:
+                    return True, trial, obj_t, step_local
+            return False, None, None, step_local
+
+        accepted, trial, obj_t, step = _try_line_search(grad0m)
+        if not accepted and preconditioner != "none":
+            accepted, trial, obj_t, step = _try_line_search(grad_raw)
+            if accepted and verbose:
+                print("[solve_fixed_boundary_gd] fallback to unpreconditioned gradient")
 
         step_history.append(step)
 
@@ -735,8 +743,11 @@ def solve_fixed_boundary_gd(
                 print("[solve_fixed_boundary_gd] line search failed to improve objective; stopping")
             break
 
-        wb_t, wp_t, w_t = w_terms(state)
-        w_history.append(float(np.asarray(w_t)))
+        state = trial
+        obj0 = obj_t
+
+        wb_t, wp_t, _w_t = w_terms(state)
+        w_history.append(obj0)
         wb_history.append(float(np.asarray(wb_t)))
         wp_history.append(float(np.asarray(wp_t)))
 
@@ -1196,6 +1207,8 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
             wout=wout_like,
             indata=None,
             constraint_tcon0=constraint_tcon0,
+            use_vmec_synthesis=True,
+            trig=trig,
         )
         rzl = vmec_residual_internal_from_kernels(
             k,
@@ -1249,8 +1262,10 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
     fsqr2_0, fsqz2_0, fsql2_0, w0, jacmin0 = w_terms(state)
     w0 = float(np.asarray(w0))
     jacmin0 = float(np.asarray(jacmin0))
-    if not np.isfinite(w0) or jacmin0 <= 0.0:
-        raise ValueError("Initial state has invalid Jacobian sign or non-finite residual objective")
+    if not np.isfinite(w0):
+        raise ValueError("Initial state has non-finite residual objective")
+    if jacmin0 <= 0.0 and verbose:
+        print("[solve_fixed_boundary_lbfgs_vmec_residual] warning: initial Jacobian has non-positive entries")
 
     if objective_scale_f is None:
         # Auto-scale the objective to be O(1) on the initial iterate.
@@ -1263,6 +1278,8 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
                 wout=wout_like,
                 indata=None,
                 constraint_tcon0=constraint_tcon0,
+                use_vmec_synthesis=True,
+                trig=trig,
             )
             rzl = vmec_residual_internal_from_kernels(
                 k,
@@ -1380,6 +1397,12 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
 
         accepted = False
         step = step0
+        best_w = np.inf
+        best_state = None
+        best_step = None
+        best_fsqr2 = None
+        best_fsqz2 = None
+        best_fsql2 = None
 
         x_old = x
         g_old = g_flat
@@ -1402,6 +1425,13 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
             fsqr2_t, fsqz2_t, fsql2_t, w_t, jacmin_t = w_terms(st_try)
             w_tf = float(np.asarray(w_t))
             jacmin_tf = float(np.asarray(jacmin_t))
+            if np.isfinite(w_tf) and w_tf < best_w:
+                best_w = w_tf
+                best_state = st_try
+                best_step = step
+                best_fsqr2 = float(np.asarray(fsqr2_t))
+                best_fsqz2 = float(np.asarray(fsqz2_t))
+                best_fsql2 = float(np.asarray(fsql2_t))
             if np.isfinite(w_tf) and jacmin_tf > 0.0 and w_tf < w_history[-1]:
                 state = st_try
                 x = pack_state(state)
@@ -1414,9 +1444,23 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
         step_history.append(step)
 
         if not accepted:
-            if verbose:
-                print("[solve_fixed_boundary_lbfgs_vmec_residual] line search failed; stopping")
-            break
+            if best_state is not None and np.isfinite(best_w):
+                if verbose:
+                    print(
+                        "[solve_fixed_boundary_lbfgs_vmec_residual] line search failed; "
+                        "accepting best finite step"
+                    )
+                state = best_state
+                x = pack_state(state)
+                w_t = best_w
+                fsqr2_accept = best_fsqr2 if best_fsqr2 is not None else float(np.asarray(fsqr2_t))
+                fsqz2_accept = best_fsqz2 if best_fsqz2 is not None else float(np.asarray(fsqz2_t))
+                fsql2_accept = best_fsql2 if best_fsql2 is not None else float(np.asarray(fsql2_t))
+                step_history[-1] = best_step
+            else:
+                if verbose:
+                    print("[solve_fixed_boundary_lbfgs_vmec_residual] line search failed; stopping")
+                break
 
         w_history.append(float(np.asarray(w_t)))
         fsqr2_history.append(fsqr2_accept)
@@ -1614,6 +1658,8 @@ def solve_fixed_boundary_gn_vmec_residual(
             wout=wout_like,
             indata=None,
             constraint_tcon0=constraint_tcon0,
+            use_vmec_synthesis=True,
+            trig=trig,
         )
         rzl = vmec_residual_internal_from_kernels(
             k,

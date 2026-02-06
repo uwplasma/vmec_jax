@@ -139,6 +139,15 @@ def run_fixed_boundary(
         If True (default), print VMEC-style iteration progress and a summary.
     """
     cfg, indata = load_config(str(input_path))
+    if grid is None and str(solver).lower() in ("vmec_lbfgs", "vmec_gn"):
+        from .vmec_tomnsp import vmec_angle_grid
+
+        grid = vmec_angle_grid(
+            ntheta=int(cfg.ntheta),
+            nzeta=int(cfg.nzeta),
+            nfp=int(cfg.nfp),
+            lasym=bool(cfg.lasym),
+        )
     static = build_static(cfg, grid=grid)
     bdy = boundary_from_indata(indata, static.modes)
     st0 = initial_guess_from_boundary(static, bdy, indata, vmec_project=vmec_project)

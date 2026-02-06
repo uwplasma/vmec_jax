@@ -254,6 +254,7 @@ def bmag_from_state_vmec_realspace(
     phipf: np.ndarray | None = None,
     chipf: np.ndarray | None = None,
     lamscale: float | None = None,
+    sqrtg_floor: float | None = None,
 ) -> np.ndarray:
     """Compute |B| using VMEC real-space synthesis + half-mesh Jacobian."""
     nfp = int(static.cfg.nfp)
@@ -292,6 +293,8 @@ def bmag_from_state_vmec_realspace(
         s=np.asarray(static.s),
     )
     sqrtg = np.asarray(jac.sqrtg)
+    if sqrtg_floor is not None:
+        sqrtg = np.sign(sqrtg) * np.maximum(np.abs(sqrtg), float(sqrtg_floor))
     lam_u = np.asarray(geom["Lu"]) if geom["Lu"] is not None else np.zeros_like(sqrtg)
     lam_v = np.asarray(geom["Lv"]) if geom["Lv"] is not None else np.zeros_like(sqrtg)
 

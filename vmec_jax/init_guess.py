@@ -188,6 +188,39 @@ def _undo_m1_constraint_for_recompute(static: VMECStatic, boundary: BoundaryCoef
     return BoundaryCoeffs(R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin)
 
 
+def _blend_axis_m0(
+    *,
+    static: VMECStatic,
+    s,
+    Rcos,
+    Zsin,
+    Rcos_b,
+    Zsin_b,
+    raxis_cc,
+    zaxis_cs,
+):
+    """Blend m=0 modes between axis and boundary (VMEC convention)."""
+    m0_mask = static.modes.m == 0
+    for n in range(static.cfg.ntor + 1):
+        k_candidates = jnp.where(m0_mask & (static.modes.n == n))[0]
+        if k_candidates.size == 0:
+            continue
+        k = int(k_candidates[0])
+        blend = s
+        new_R = (1.0 - blend) * raxis_cc[n] + blend * Rcos_b[0, k]
+        # Z uses sin(-n zeta) for m=0, so Zsin coefficients are -zaxis_cs.
+        new_Z = (1.0 - blend) * (-zaxis_cs[n]) + blend * Zsin_b[0, k]
+        if has_jax():
+            Rcos = Rcos.at[:, k].set(new_R)
+            Zsin = Zsin.at[:, k].set(new_Z)
+        else:
+            Rcos = jnp.array(Rcos)
+            Zsin = jnp.array(Zsin)
+            Rcos[:, k] = new_R
+            Zsin[:, k] = new_Z
+    return Rcos, Zsin
+
+
 def _recompute_axis_from_boundary(
     static: VMECStatic,
     boundary: BoundaryCoeffs,
@@ -476,6 +509,7 @@ def initial_guess_from_boundary(
             have_axis = True
         if zaxis_cs is not None and np.any(np.asarray(zaxis_cs) != 0.0):
             have_axis = True
+        axis_from_indata = bool(have_axis)
 
         if not have_axis:
             raxis_cc, zaxis_cs = _guess_axis_from_boundary(static, boundary_use)
@@ -496,25 +530,40 @@ def initial_guess_from_boundary(
             if zaxis_cs is None:
                 zaxis_cs = jnp.zeros((cfg.ntor + 1,), dtype=dtype)
 
-            # Blend only m=0 modes; we support all n>=0 entries in the mode table.
-            m0_mask = static.modes.m == 0
-            for n in range(cfg.ntor + 1):
-                k_candidates = jnp.where(m0_mask & (static.modes.n == n))[0]
-                if k_candidates.size == 0:
-                    continue
-                k = int(k_candidates[0])
-                blend = s
-                new_R = (1.0 - blend) * raxis_cc[n] + blend * Rcos_b[0, k]
-                # Z uses sin(-n zeta) for m=0, so Zsin coefficients are -zaxis_cs.
-                new_Z = (1.0 - blend) * (-zaxis_cs[n]) + blend * Zsin_b[0, k]
-                if has_jax():
-                    Rcos = Rcos.at[:, k].set(new_R)
-                    Zsin = Zsin.at[:, k].set(new_Z)
-                else:
-                    Rcos = jnp.array(Rcos)
-                    Zsin = jnp.array(Zsin)
-                    Rcos[:, k] = new_R
-                    Zsin[:, k] = new_Z
+            Rcos, Zsin = _blend_axis_m0(
+                static=static,
+                s=s,
+                Rcos=Rcos,
+                Zsin=Zsin,
+                Rcos_b=Rcos_b,
+                Zsin_b=Zsin_b,
+                raxis_cc=raxis_cc,
+                zaxis_cs=zaxis_cs,
+            )
+
+            # If the user explicitly requests it, re-run the VMEC++ axis recompute
+            # even when axis coefficients are supplied in the input.
+            if axis_from_indata and bool(indata.get_bool("LRECOMPUTE", False)):
+                signgs_guess = 1 if np.median(areas) >= 0.0 else -1
+                new_raxis_cc, new_zaxis_cs = _recompute_axis_from_boundary(
+                    static,
+                    boundary_use,
+                    raxis_cc=np.asarray(raxis_cc),
+                    zaxis_cs=np.asarray(zaxis_cs),
+                    signgs=signgs_guess,
+                )
+                raxis_cc = jnp.asarray(new_raxis_cc, dtype=dtype)
+                zaxis_cs = jnp.asarray(new_zaxis_cs, dtype=dtype)
+                Rcos, Zsin = _blend_axis_m0(
+                    static=static,
+                    s=s,
+                    Rcos=Rcos,
+                    Zsin=Zsin,
+                    Rcos_b=Rcos_b,
+                    Zsin_b=Zsin_b,
+                    raxis_cc=raxis_cc,
+                    zaxis_cs=zaxis_cs,
+                )
 
     if vmec_project:
         if cfg.lasym:

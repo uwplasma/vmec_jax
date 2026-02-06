@@ -113,6 +113,7 @@ def main() -> None:
     p.add_argument("--outdir", type=str, default=str(REPO_ROOT / "docs/_static/figures"))
     p.add_argument("--max-iter", type=int, default=20)
     p.add_argument("--step-size", type=float, default=1e-5)
+    p.add_argument("--solver", type=str, default="gd", help="gd, lbfgs, vmec_lbfgs, or vmec_gn")
     p.add_argument("--solve", action="store_true", help="Run the vmec_jax fixed-boundary solver (slower).")
     p.add_argument("--no-solve", action="store_true", help="Use the initial guess only (fast).")
     args = p.parse_args()
@@ -128,7 +129,7 @@ def main() -> None:
 
     run = run_fixed_boundary(
         Path(args.input),
-        solver="gd",
+        solver=str(args.solver),
         max_iter=int(args.max_iter),
         step_size=float(args.step_size),
         use_initial_guess=use_initial_guess,
@@ -198,6 +199,7 @@ def main() -> None:
         phipf=np.asarray(wout.phipf),
         chipf=np.asarray(wout.chipf),
         lamscale=float(np.asarray(run.flux.lamscale)),
+        sqrtg_floor=sqrtg_floor,
     )
     print(
         f"[vmec_jax] B range (vmec_jax VMEC-grid) min={B_jax_vmec.min():.3e} max={B_jax_vmec.max():.3e}"

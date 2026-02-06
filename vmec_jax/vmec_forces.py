@@ -309,6 +309,8 @@ def vmec_forces_rz_from_wout(
     indata=None,
     constraint_tcon0: float | None = None,
     use_wout_bsup: bool = False,
+    use_vmec_synthesis: bool = False,
+    trig: VmecTrigTables | None = None,
 ) -> VmecRZForceKernels:
     """Compute VMEC R/Z force kernels (armn/brmn/...) from a `wout` equilibrium.
 
@@ -323,7 +325,14 @@ def vmec_forces_rz_from_wout(
     ohs = jnp.asarray(1.0 / (s[1] - s[0])) if s.shape[0] >= 2 else jnp.asarray(0.0)
     dshalfds = jnp.asarray(0.25, dtype=s.dtype)
 
-    bc = vmec_bcovar_half_mesh_from_wout(state=state, static=static, wout=wout, use_wout_bsup=use_wout_bsup)
+    bc = vmec_bcovar_half_mesh_from_wout(
+        state=state,
+        static=static,
+        wout=wout,
+        use_wout_bsup=use_wout_bsup,
+        use_vmec_synthesis=use_vmec_synthesis,
+        trig=trig,
+    )
 
     # Real-space parity fields for R/Z and angular derivatives.
     parity = split_rzl_even_odd_m(state, static.basis, static.modes.m)
@@ -481,6 +490,7 @@ def vmec_forces_rz_from_wout(
         pzu_0=pzu_0,
         pzu_1=pzu_1,
         constraint_tcon0=constraint_tcon0,
+        trig=trig,
     )
 
     brmn_e = brmn_e + con.rcon_force
