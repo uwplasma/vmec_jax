@@ -3,12 +3,12 @@ from __future__ import annotations
 import numpy as np
 
 
-def test_b_cartesian_matches_metric_b2(load_case_lsp_low_res):
+def test_b_cartesian_matches_metric_b2(load_case_li383_low_res):
     from vmec_jax.energy import flux_profiles_from_indata
     from vmec_jax.field import b2_from_bsup, b_cartesian_from_bsup, bsup_from_geom, signgs_from_sqrtg
     from vmec_jax.geom import eval_geom
 
-    cfg, indata, static, _bdy, st0 = load_case_lsp_low_res
+    cfg, indata, static, _bdy, st0 = load_case_li383_low_res
 
     g = eval_geom(st0, static)
     signgs = signgs_from_sqrtg(np.asarray(g.sqrtg))

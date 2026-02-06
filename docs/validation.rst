@@ -11,16 +11,15 @@ Bundled regression cases
 The repo includes several small, low-resolution reference cases used in examples
 and tests:
 
-- 3D stellarator (vacuum):
-  - input: ``examples/data/input.LandremanSenguptaPlunk_section5p3_low_res``
-  - reference output: ``examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc``
-
-- Tokamak sanity cases (vacuum):
+- Axisymmetric tokamak sanity case (vacuum):
   - ``examples/data/input.circular_tokamak`` + ``examples/data/wout_circular_tokamak_reference.nc``
-  - ``examples/data/input.up_down_asymmetric_tokamak`` + ``examples/data/wout_up_down_asymmetric_tokamak_reference.nc``
 
-- Finite-beta case:
+- 3D stellarator-symmetric finite-beta case:
   - ``examples/data/input.li383_low_res`` + ``examples/data/wout_li383_low_res_reference.nc``
+
+- Deferred (``lasym=True``) cases bundled for later parity work:
+  - ``examples/data/input.LandremanSenguptaPlunk_section5p3_low_res`` + ``examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc``
+  - ``examples/data/input.up_down_asymmetric_tokamak`` + ``examples/data/wout_up_down_asymmetric_tokamak_reference.nc``
 
 What is validated today
 -----------------------
@@ -62,24 +61,18 @@ The scoreboard below reports relative errors
      - ~4.9e-2
      - ~4.6e-2
      - ~4.8e-3
-   * - up_down_asymmetric_tokamak
-     - ~4.1e-2
-     - ~1.3e-2
-     - ~3.2e-2
    * - li383_low_res
      - ~1.6e-1
      - ~1.2e-1
      - ~1.1e-1
-   * - LandremanSenguptaPlunk_section5p3_low_res
-     - ~1.1e-1
-     - ~8.9e-2
-     - ~1.6e-2
 
 Notes:
 
-- The remaining mismatches are primarily on 3D cases (``li383_low_res`` and
-  ``LandremanSenguptaPlunk_section5p3_low_res``), reflecting that Step-10
-  conventions are still being ported and tightened.
+- The remaining mismatches are primarily on the 3D case (``li383_low_res``),
+  reflecting that Step-10 conventions are still being ported and tightened.
+- ``lasym=True`` parity (non-stellarator-symmetric) is deferred for now; the
+  bundled lasym cases are excluded from automated validation until the
+  ``tomnspa`` conventions are reconciled.
 - For debugging/attribution during the parity push, ``vmec_jax.vmec_residue``
   provides ``vmec_fsq_sums_from_tomnsps`` (per-block sum-of-squares) and a
   small internal-consistency regression in ``tests/test_step10_getfsq_block_sums.py``.
@@ -95,45 +88,37 @@ indicates known gaps or loose tolerances.
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 14 14 14 28
+   :widths: 30 18 18 28
 
    * - Area
      - Axisym (ntor=0)
      - 3D (lasym=F)
-     - 3D (lasym=T)
      - Notes
    * - Boundary + geometry kernels
-     - OK
      - OK
      - OK
      - ``sqrt(g)`` + Nyquist fields validated vs ``wout``; energy integrals ``wb/wp`` match (see ``tests/test_step10_energy_integrals_parity.py``)
    * - B-field parity (``bsup*``, ``bsub*``, ``|B|``)
      - OK
      - OK
-     - OK
      - parity figures under ``examples/validation/``
    * - ``wout`` I/O (read + minimal write)
-     - OK
      - OK
      - OK
      - ``tests/test_step10_wout_roundtrip.py``
    * - Step-10 scalar residuals (``fsqr/fsqz/fsql``)
      - Partial
      - Partial
-     - Partial
      - tracked by ``tests/test_step10_residue_getfsq_parity.py``
    * - Fixed-boundary solvers
-     - Partial
      - Partial
      - Partial
      - monotone energy decrease; VMEC-quality convergence is WIP
    * - Implicit differentiation demos
      - OK
      - OK
-     - OK
      - examples under ``examples/gradients/``
    * - Free-boundary equilibrium
-     - Planned
      - Planned
      - Planned
      - not implemented
@@ -156,14 +141,6 @@ VMEC2000/VMEC++ ``wout_*.nc`` file, use::
 This report prints ``tcon``/``gcon`` summaries and compares the VMEC-style
 ``fsqr/fsqz/fsql`` scalars computed by ``vmec-jax`` against the supplied
 ``wout``.
-
-Note on lasym parity
---------------------
-
-The ``fixaray`` normalization (``dnorm``) now matches VMEC exactly. This
-exposes a remaining mismatch in the ``lasym=True`` parity path (likely in
-``tomnspa``/``symforce`` conventions). The corresponding Step-10 lasym cases
-are marked ``xfail`` in the test suite until this gap is closed.
 
 Residual decomposition diagnostics
 ----------------------------------
@@ -188,23 +165,6 @@ To compare the residual contributions from the reference-field path (using
 
 This report prints deltas for component-only norms (A/B/C/constraint/lambda) and
 the most significant ``(m,n)`` differences between the two paths.
-
-Lasym block diagnostics
------------------------
-
-For non-stellarator-symmetric cases (``lasym=True``), it can be useful to
-separate the symmetric ``tomnsps`` blocks from the asymmetric ``tomnspa``
-blocks. To print per-block sums and the dominant ``(m,n)`` contributions, use::
-
-  python examples/validation/lasym_block_report.py input.case wout_case.nc
-
-Lasym mode trace
-----------------
-
-To trace a specific ``(m,n)`` mode through the asymmetric blocks and attribute
-its magnitude to the A/B/C/constraint kernel components, use::
-
-  python examples/validation/lasym_mode_trace_report.py input.case wout_case.nc --m 3 --n 4
 
 Optional: validating against a local VMEC2000 build
 ---------------------------------------------------

@@ -14,12 +14,12 @@ from vmec_jax.solve import solve_lambda_gd
 from vmec_jax.wout import read_wout, state_from_wout
 
 
-def test_step5_solve_lambda_decreases_wb_toward_wout(load_case_lsp_low_res):
+def test_step5_solve_lambda_decreases_wb_toward_wout(load_case_li383_low_res):
     pytest.importorskip("netCDF4")
 
-    cfg, _indata, static, _bdy, _st0 = load_case_lsp_low_res
+    cfg, _indata, static, _bdy, _st0 = load_case_li383_low_res
 
-    wout_path = Path(__file__).resolve().parents[1] / "examples" / "data" / "wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc"
+    wout_path = Path(__file__).resolve().parents[1] / "examples" / "data" / "wout_li383_low_res_reference.nc"
     wout = read_wout(wout_path)
     st_ref = state_from_wout(wout)
 

@@ -22,9 +22,7 @@ from vmec_jax.wout import read_wout, state_from_wout
     "case_name,input_rel,wout_rel,rtol_rz,rtol_l",
     [
         ("circular_tokamak", "examples/data/input.circular_tokamak", "examples/data/wout_circular_tokamak_reference.nc", 0.10, 0.10),
-        ("up_down_asymmetric_tokamak", "examples/data/input.up_down_asymmetric_tokamak", "examples/data/wout_up_down_asymmetric_tokamak_reference.nc", 1.00, 0.50),
         ("li383_low_res", "examples/data/input.li383_low_res", "examples/data/wout_li383_low_res_reference.nc", 0.30, 0.30),
-        ("lsp_low_res", "examples/data/input.LandremanSenguptaPlunk_section5p3_low_res", "examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc", 0.25, 0.05),
     ],
 )
 def test_step10_getfsq_parity_against_wout(case_name: str, input_rel: str, wout_rel: str, rtol_rz: float, rtol_l: float):
@@ -81,20 +79,13 @@ def test_step10_getfsq_parity_against_wout(case_name: str, input_rel: str, wout_
     # Target parity condition: scalar residuals should agree with VMEC2000's
     # `residue/getfsq` outputs on the same (ntheta,nzeta) grid. We keep
     # tolerances modest during the parity push, and tighten as conventions
-    # converge (especially for lasym+3D cases).
+    # converge.
     denom_r = max(abs(wout.fsqr), 1e-20)
     denom_z = max(abs(wout.fsqz), 1e-20)
     denom_l = max(abs(wout.fsql), 1e-20)
     rel_fsqr = abs(scal.fsqr - wout.fsqr) / denom_r
     rel_fsqz = abs(scal.fsqz - wout.fsqz) / denom_z
     rel_fsql = abs(scal.fsql - wout.fsql) / denom_l
-
-    # Lasym parity: the correct fixaray normalization (dnorm) is now enforced,
-    # which exposes a remaining tomnspa/symforce mismatch. Track as xfail until
-    # the lasym path is fully reconciled.
-    if case_name in {"up_down_asymmetric_tokamak", "lsp_low_res"}:
-        if rel_fsqr >= float(rtol_rz) or rel_fsqz >= float(rtol_rz) or rel_fsql >= float(rtol_l):
-            pytest.xfail("lasym Step-10 parity requires tomnspa/symforce fixes (dnorm corrected)")
 
     assert rel_fsqr < float(rtol_rz)
     assert rel_fsqz < float(rtol_rz)

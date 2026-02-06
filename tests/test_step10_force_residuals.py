@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 
-def test_step10_force_residuals_are_smaller_for_wout_equilibrium(load_case_lsp_low_res):
+def test_step10_force_residuals_are_smaller_for_wout_equilibrium(load_case_li383_low_res):
     pytest.importorskip("jax")
     pytest.importorskip("netCDF4")
 
@@ -19,7 +19,7 @@ def test_step10_force_residuals_are_smaller_for_wout_equilibrium(load_case_lsp_l
 
     enable_x64(True)
 
-    cfg, indata, static, _bdy, st0 = load_case_lsp_low_res
+    cfg, indata, static, _bdy, st0 = load_case_li383_low_res
     g0 = eval_geom(st0, static)
     signgs0 = signgs_from_sqrtg(np.asarray(g0.sqrtg), axis_index=1)
     flux0 = flux_profiles_from_indata(indata, static.s, signgs=signgs0)
@@ -30,7 +30,7 @@ def test_step10_force_residuals_are_smaller_for_wout_equilibrium(load_case_lsp_l
     r0 = force_residuals_from_state(st0, static, flux=flux0, pressure=pressure0, gamma=gamma0)
     assert np.isfinite(r0.fsq_like)
 
-    wout = read_wout("examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc")
+    wout = read_wout("examples/data/wout_li383_low_res_reference.nc")
     st_w = state_from_wout(wout)
     # Use wout profiles/scalars for a consistent equilibrium objective.
     flux_w = FluxProfiles(

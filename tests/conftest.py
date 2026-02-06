@@ -17,8 +17,8 @@ if str(_ROOT) not in sys.path:
 
 
 @pytest.fixture(scope="session")
-def load_case_lsp_low_res():
-    """Load the bundled Landreman/Sengupta/Plunk low-res input used in examples."""
+def load_case_li383_low_res():
+    """Load the bundled li383 low-res symmetric (lasym=False) input used in examples."""
     from vmec_jax._compat import has_jax, enable_x64
     from vmec_jax.config import load_config
     from vmec_jax.static import build_static
@@ -28,7 +28,27 @@ def load_case_lsp_low_res():
     if has_jax():
         enable_x64(True)
 
-    inpath = _ROOT / "examples" / "data" / "input.LandremanSenguptaPlunk_section5p3_low_res"
+    inpath = _ROOT / "examples" / "data" / "input.li383_low_res"
+    cfg, indata = load_config(str(inpath))
+    static = build_static(cfg)
+    bdy = boundary_from_indata(indata, static.modes)
+    st0 = initial_guess_from_boundary(static, bdy, indata)
+    return cfg, indata, static, bdy, st0
+
+
+@pytest.fixture(scope="session")
+def load_case_circular_tokamak():
+    """Load the bundled circular tokamak (axisymmetric, lasym=False) input used in examples."""
+    from vmec_jax._compat import has_jax, enable_x64
+    from vmec_jax.config import load_config
+    from vmec_jax.static import build_static
+    from vmec_jax.boundary import boundary_from_indata
+    from vmec_jax.init_guess import initial_guess_from_boundary
+
+    if has_jax():
+        enable_x64(True)
+
+    inpath = _ROOT / "examples" / "data" / "input.circular_tokamak"
     cfg, indata = load_config(str(inpath))
     static = build_static(cfg)
     bdy = boundary_from_indata(indata, static.modes)

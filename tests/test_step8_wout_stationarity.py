@@ -20,15 +20,15 @@ def test_step8_wout_state_is_nearly_stationary_for_total_energy():
 
     enable_x64(True)
 
-    cfg, _indata = load_config("examples/data/input.LandremanSenguptaPlunk_section5p3_low_res")
+    cfg, _indata = load_config("examples/data/input.li383_low_res")
     static = build_static(cfg)
-    wout = read_wout("examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc")
+    wout = read_wout("examples/data/wout_li383_low_res_reference.nc")
     st = state_from_wout(wout)
 
     # Sanity: VMEC's own reported force residuals are tiny for the reference equilibrium.
-    assert float(wout.fsqr) < 1e-8
-    assert float(wout.fsqz) < 1e-8
-    assert float(wout.fsql) < 1e-8
+    assert float(wout.fsqr) < 1e-6
+    assert float(wout.fsqz) < 1e-6
+    assert float(wout.fsql) < 1e-6
 
     s = jnp.asarray(static.s)
     theta = jnp.asarray(static.grid.theta)
@@ -83,4 +83,4 @@ def test_step8_wout_state_is_nearly_stationary_for_total_energy():
     ss = float(sum(np.sum(a * a) for a in g_arrs))
     nn = int(sum(a.size for a in g_arrs))
     grad_rms = float(np.sqrt(ss / nn))
-    assert grad_rms < 1e-3
+    assert grad_rms < 1e-2

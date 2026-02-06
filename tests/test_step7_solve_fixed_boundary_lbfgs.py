@@ -10,10 +10,10 @@ from vmec_jax.profiles import eval_profiles
 from vmec_jax.solve import solve_fixed_boundary_lbfgs
 
 
-def test_step7_fixed_boundary_lbfgs_decreases_energy(load_case_lsp_low_res):
+def test_step7_fixed_boundary_lbfgs_decreases_energy(load_case_circular_tokamak):
     pytest.importorskip("jax")
 
-    _cfg, indata, static, _bdy, st0 = load_case_lsp_low_res
+    _cfg, indata, static, _bdy, st0 = load_case_circular_tokamak
 
     g0 = eval_geom(st0, static)
     signgs = signgs_from_sqrtg(np.asarray(g0.sqrtg), axis_index=1)
@@ -54,4 +54,3 @@ def test_step7_fixed_boundary_lbfgs_decreases_energy(load_case_lsp_low_res):
     for name in ("Rcos", "Rsin", "Zcos", "Zsin"):
         a = np.asarray(getattr(res.state, name))[0, mask]
         assert np.max(np.abs(a)) < 1e-14
-

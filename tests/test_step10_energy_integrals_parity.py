@@ -25,11 +25,6 @@ def _rel_err(a: float, b: float) -> float:
     [
         ("circular_tokamak", "examples/data/input.circular_tokamak", "examples/data/wout_circular_tokamak_reference.nc"),
         ("li383_low_res", "examples/data/input.li383_low_res", "examples/data/wout_li383_low_res_reference.nc"),
-        (
-            "lsp_low_res",
-            "examples/data/input.LandremanSenguptaPlunk_section5p3_low_res",
-            "examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc",
-        ),
     ],
 )
 def test_step10_wb_wp_integrals_match_wout(case_name: str, input_rel: str, wout_rel: str):
@@ -80,4 +75,3 @@ def test_step10_wb_wp_integrals_match_wout(case_name: str, input_rel: str, wout_
     assert np.isfinite(wp_calc)
     assert _rel_err(wb_calc, float(wout.wb)) < 5e-13
     assert _rel_err(wp_calc, float(wout.wp)) < 5e-13
-

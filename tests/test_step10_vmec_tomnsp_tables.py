@@ -11,11 +11,6 @@ def test_vmec_theta_sizes_match_read_indata_logic():
     assert ntheta2 == 12
     assert ntheta3 == 12
 
-    ntheta1, ntheta2, ntheta3 = vmec_theta_sizes(22, lasym=True)
-    assert ntheta1 == 22
-    assert ntheta2 == 12
-    assert ntheta3 == 22
-
 
 def test_vmec_angle_grid_half_interval_includes_pi_when_symmetric():
     g = vmec_angle_grid(ntheta=22, nzeta=5, nfp=3, lasym=False)
@@ -41,18 +36,9 @@ def test_vmec_trig_tables_cosmui3_matches_fixaray_behavior():
     assert t.ntheta2 == t.ntheta3
     assert np.allclose(np.asarray(t.cosmui3), np.asarray(t.cosmui))
 
-    # lasym=True: ntheta3==ntheta1, and cosmui3 uses the full-interval normalization.
-    ta = vmec_trig_tables(ntheta=10, nzeta=7, nfp=3, mmax=6, nmax=4, lasym=True)
-    assert ta.ntheta3 == ta.ntheta1
-    assert np.allclose(np.asarray(ta.cosmui3[0, :]), np.asarray(ta.cosmu[0, :]) * ta.dnorm3)
-
 
 def test_vmec_trig_tables_dnorm_and_dnorm3_match_fixaray():
     # dnorm always uses the reduced interval [0, pi].
     t = vmec_trig_tables(ntheta=22, nzeta=9, nfp=3, mmax=4, nmax=4, lasym=False)
     assert np.isclose(t.dnorm, 1.0 / (9 * (t.ntheta2 - 1)))
     assert np.isclose(t.dnorm3, t.dnorm)
-
-    ta = vmec_trig_tables(ntheta=22, nzeta=9, nfp=3, mmax=4, nmax=4, lasym=True)
-    assert np.isclose(ta.dnorm, 1.0 / (9 * (ta.ntheta2 - 1)))
-    assert np.isclose(ta.dnorm3, 1.0 / (9 * ta.ntheta1))

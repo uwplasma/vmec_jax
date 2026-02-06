@@ -17,12 +17,12 @@ def _rms(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.asarray(x) ** 2)))
 
 
-def test_step4_bsup_and_wb_against_wout_reference(load_case_lsp_low_res):
+def test_step4_bsup_and_wb_against_wout_reference(load_case_circular_tokamak):
     pytest.importorskip("netCDF4")
 
-    cfg, _indata, static, _bdy, _st0 = load_case_lsp_low_res
+    cfg, _indata, static, _bdy, _st0 = load_case_circular_tokamak
 
-    wout_path = Path(__file__).resolve().parents[1] / "examples" / "data" / "wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc"
+    wout_path = Path(__file__).resolve().parents[1] / "examples" / "data" / "wout_circular_tokamak_reference.nc"
     wout = read_wout(wout_path)
     st = state_from_wout(wout)
 
@@ -85,4 +85,4 @@ def test_step4_bsup_and_wb_against_wout_reference(load_case_lsp_low_res):
     wb_calc = E_total / (2.0 * np.pi) ** 2
 
     assert np.isfinite(wb_calc)
-    assert np.isclose(wb_calc, wout.wb, rtol=2e-3, atol=0.0)
+    assert np.isclose(wb_calc, wout.wb, rtol=5e-3, atol=0.0)

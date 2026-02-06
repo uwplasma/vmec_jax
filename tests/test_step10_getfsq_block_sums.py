@@ -17,11 +17,6 @@ from vmec_jax.wout import read_wout, state_from_wout
     "case_name,input_rel,wout_rel",
     [
         ("li383_low_res", "examples/data/input.li383_low_res", "examples/data/wout_li383_low_res_reference.nc"),
-        (
-            "lsp_low_res",
-            "examples/data/input.LandremanSenguptaPlunk_section5p3_low_res",
-            "examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc",
-        ),
     ],
 )
 def test_step10_getfsq_block_sums_reconstruct_scalars(case_name: str, input_rel: str, wout_rel: str):
@@ -86,4 +81,3 @@ def test_step10_getfsq_block_sums_reconstruct_scalars(case_name: str, input_rel:
     assert abs(fsqr2 - scal.fsqr) <= 1e-12 * max(abs(scal.fsqr), 1.0)
     assert abs(fsqz2 - scal.fsqz) <= 1e-12 * max(abs(scal.fsqz), 1.0)
     assert abs(fsql2 - scal.fsql) <= 1e-12 * max(abs(scal.fsql), 1.0)
-

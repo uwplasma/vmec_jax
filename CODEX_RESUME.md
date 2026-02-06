@@ -147,10 +147,10 @@ Validation:
 From repo root:
 
 ```bash
-python examples/tutorial/00_parse_and_boundary.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out boundary.npz --verbose
-python examples/tutorial/02_init_guess_and_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out coords_step1.npz --verbose --dump_coeffs
-python examples/tutorial/03_grad_full_coords.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --verbose --topk 12
-python examples/tutorial/04_geom_metrics.py examples/input.LandremanSenguptaPlunk_section5p3_low_res --out geom_step2.npz --verbose --dump_full
+python examples/tutorial/00_parse_and_boundary.py examples/data/input.li383_low_res --out boundary.npz --verbose
+python examples/tutorial/02_init_guess_and_coords.py examples/data/input.li383_low_res --out coords_step1.npz --verbose --dump_coeffs
+python examples/tutorial/03_grad_full_coords.py examples/data/input.li383_low_res --verbose --topk 12
+python examples/tutorial/04_geom_metrics.py examples/data/input.li383_low_res --out geom_step2.npz --verbose --dump_full
 python tools/inspect_npz.py geom_step2.npz
 ```
 
@@ -159,6 +159,7 @@ python tools/inspect_npz.py geom_step2.npz
 - Parallelization (MPI/OpenMP).
 - Full VMEC solver loop (Richardson / steepest descent) and preconditioners.
 - Writing a full `wout_*.nc` parity output.
+- Lasym (non-stellarator-symmetric) parity cases; deferred until tomnspa conventions are reconciled.
 
 ## 6) Near-term plan (next milestones)
 ### Step-8: VMEC-quality fixed-boundary solve
@@ -198,6 +199,7 @@ Current incremental progress toward Step-10:
 - Fixed the remaining dominant near-axis mismatch by implementing VMEC's mode-dependent axis rule for internal odd-m fields (jmin1): only the `m=1` contribution is extrapolated to the axis; odd `m>=3` contributions are zero on axis. With this fix, `tests/test_step10_residue_getfsq_parity.py` is now a passing regression (tight parity for the circular tokamak baseline).
 - Wired the **constraint-force pipeline** into the R/Z force kernels and the reference-field parity path, using `alias → gcon` with `tcon` from the VMEC preconditioner. For reference fields, the lambda-force kernels now use `wout` `bsub*` averaged to the full mesh to keep `fsql` parity stable (li383 low-res within ~10% relative error).
 - Matched the current STELLOPT/VMEC2000 convention by **removing the lasym-specific `tcon` halving** (the line is commented out in `bcovar.f`), so `tcon` is now applied uniformly for `lasym=True` and `False`.
+- Shifted parity validation to **symmetric cases only** (circular tokamak + li383); lasym regression inputs remain bundled but are excluded from automated tests for now.
 - Added a residual decomposition report (`examples/validation/residual_decomposition_report.py`) that breaks `fsqr/fsqz/fsql` into component-only norms (A/B/C/constraint) and top `(m,n)` contributors to guide parity debugging.
 - Added a reference-vs-full field comparison report (`examples/validation/residual_compare_fields_report.py`) to isolate differences between the `wout`-driven parity path and the fully derived `vmec-jax` field path.
 - Added a `lasym` block report (`examples/validation/lasym_block_report.py`) to separate `tomnsps` vs `tomnspa` contributions and highlight dominant asymmetric modes in 3D parity work.

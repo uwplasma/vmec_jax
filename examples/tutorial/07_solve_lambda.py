@@ -78,7 +78,7 @@ def main() -> None:
     except Exception as e:
         raise SystemExit("netCDF4 is required for this example (pip install -e .[netcdf])") from e
 
-    wout_path = Path(args.wout) if args.wout else (REPO_ROOT / "examples" / "wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc")
+    wout_path = Path(args.wout) if args.wout else (REPO_ROOT / "examples" / "data" / "wout_li383_low_res_reference.nc")
     wout = read_wout(wout_path)
 
     # Build static using the input file for angle-grid sizing (should match the wout case).

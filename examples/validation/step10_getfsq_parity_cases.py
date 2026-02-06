@@ -25,8 +25,6 @@ def _rel(a: float, b: float) -> float:
 
 CASES = [
     ("circular_tokamak", "examples/data/input.circular_tokamak", "examples/data/wout_circular_tokamak_reference.nc"),
-    ("lsp_low_res", "examples/data/input.LandremanSenguptaPlunk_section5p3_low_res", "examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc"),
-    ("up_down_asymmetric_tokamak", "examples/data/input.up_down_asymmetric_tokamak", "examples/data/wout_up_down_asymmetric_tokamak_reference.nc"),
     ("li383_low_res", "examples/data/input.li383_low_res", "examples/data/wout_li383_low_res_reference.nc"),
 ]
 

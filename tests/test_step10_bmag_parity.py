@@ -17,19 +17,9 @@ from vmec_jax.wout import read_wout, state_from_wout
 
 _CASES = [
     (
-        "lsp_low_res",
-        "examples/data/input.LandremanSenguptaPlunk_section5p3_low_res",
-        "examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc",
-    ),
-    (
         "circular_tokamak",
         "examples/data/input.circular_tokamak",
         "examples/data/wout_circular_tokamak_reference.nc",
-    ),
-    (
-        "up_down_asymmetric_tokamak",
-        "examples/data/input.up_down_asymmetric_tokamak",
-        "examples/data/wout_up_down_asymmetric_tokamak_reference.nc",
     ),
     (
         "li383_low_res",

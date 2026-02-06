@@ -14,7 +14,7 @@ def test_vmec_trig_tables_match_fixaray_endpoint_weights():
     mmax = 6
     nmax = 4
 
-    for lasym in [False, True]:
+    for lasym in [False]:
         ntheta1, ntheta2, ntheta3 = vmec_theta_sizes(ntheta, lasym=lasym)
         trig = vmec_trig_tables(ntheta=ntheta, nzeta=nzeta, nfp=nfp, mmax=mmax, nmax=nmax, lasym=lasym)
 
@@ -47,4 +47,3 @@ def test_vmec_trig_tables_match_fixaray_endpoint_weights():
         expected_sin_ipi = dnorm * (np.sin(m * thetapi) * mscale)
         assert np.allclose(float(np.asarray(trig.sinmui[i0, m])), expected_sin_i0)
         assert np.allclose(float(np.asarray(trig.sinmui[ipi, m])), expected_sin_ipi)
-

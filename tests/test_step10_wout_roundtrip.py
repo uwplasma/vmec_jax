@@ -9,9 +9,7 @@ from vmec_jax.wout import read_wout, write_wout
 
 
 _CASES = [
-    "examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc",
     "examples/data/wout_circular_tokamak_reference.nc",
-    "examples/data/wout_up_down_asymmetric_tokamak_reference.nc",
     "examples/data/wout_li383_low_res_reference.nc",
 ]
 

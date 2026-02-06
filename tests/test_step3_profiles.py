@@ -47,10 +47,10 @@ def test_power_series_profiles_against_manual():
     np.testing.assert_allclose(np.asarray(prof["current"]), current, rtol=0, atol=1e-12)
 
 
-def test_volume_total_matches_vmec2000_wout_reference(load_case_lsp_low_res):
+def test_volume_total_matches_vmec2000_wout_reference(load_case_circular_tokamak):
     netCDF4 = pytest.importorskip("netCDF4")
 
-    cfg, _indata, static, _bdy, st0 = load_case_lsp_low_res
+    cfg, _indata, static, _bdy, st0 = load_case_circular_tokamak
 
     g = eval_geom(st0, static)
     dvds = dvds_from_sqrtg(g.sqrtg, static.grid.theta, static.grid.zeta, cfg.nfp)
@@ -58,7 +58,7 @@ def test_volume_total_matches_vmec2000_wout_reference(load_case_lsp_low_res):
 
     V_total = float(np.asarray(V[-1])) * float(cfg.nfp)  # full torus
 
-    wout = Path(__file__).resolve().parents[1] / "examples" / "data" / "wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc"
+    wout = Path(__file__).resolve().parents[1] / "examples" / "data" / "wout_circular_tokamak_reference.nc"
     with netCDF4.Dataset(wout) as ds:
         V_ref = float(ds.variables["volume_p"][:])
 

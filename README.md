@@ -57,14 +57,12 @@ The current relative errors are tracked in `docs/validation.rst`. Snapshot from
 | Case | fsqr | fsqz | fsql |
 | --- | ---: | ---: | ---: |
 | circular_tokamak | 4.9e-2 | 4.6e-2 | 4.8e-3 |
-| up_down_asymmetric_tokamak | 7.9e+3 | 4.2e+3 | 2.9e+0 |
 | li383_low_res | 1.6e-1 | 1.2e-1 | 1.1e-1 |
-| LandremanSenguptaPlunk_section5p3_low_res | 1.1e+3 | 5.8e+2 | 3.1e+0 |
 
-Note: after aligning the `fixaray` normalization (`dnorm`) with VMEC, the
-`lasym=True` Step-10 parity cases are temporarily marked `xfail` while the
-remaining `tomnspa`/`symforce` conventions are reconciled. See
-`docs/validation.rst` for the latest status.
+Note: `lasym=True` (non-stellarator-symmetric) parity is deferred for now; the
+bundled lasym cases are excluded from automated validation until the
+`tomnspa` conventions are reconciled. See `docs/validation.rst` for the
+latest status.
 
 Not yet implemented (planned):
 - Full VMEC-quality fixed-boundary convergence (VMEC-style preconditioners + force/residue parity).
@@ -75,19 +73,18 @@ Not yet implemented (planned):
 
 Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose tolerances), `Planned`.
 
-| Area | Axisym (ntor=0) | 3D (lasym=F) | 3D (lasym=T) | Notes |
-| --- | --- | --- | --- | --- |
-| INDATA parsing + boundary | OK | OK | OK | `tests/` + `examples/tutorial/00_*` |
-| Geometry (metrics + sqrtg) | OK | OK | OK | Nyquist `gmnc/gmns` parity tests |
-| B field (`bsup*`, `bsub*`, abs(B)) | OK | OK | OK | Nyquist parity; figures under `examples/validation/` |
-| Energy scalars (`wb`, `wp`, volume) | OK | OK | OK | `tests/test_step10_energy_integrals_parity.py` + `wout.vp` checks |
-| `wout` I/O (read + minimal write) | OK | OK | OK | `tests/test_step10_wout_roundtrip.py` |
-| Constraint pipeline (`tcon/alias/gcon`) | Partial | Partial | Partial | parity kernels + diagnostics wired |
-| Step-10 `forces → tomnsps → getfsq` | Partial | Partial | Partial | scalar parity tracked in `docs/validation.rst` |
-| Step-10 `tomnspa` (lasym) blocks | n/a | n/a | Partial | `fsql` is the most sensitive |
-| Fixed-boundary solvers | Partial | Partial | Partial | monotone energy decrease; not VMEC-quality yet |
-| Implicit differentiation | OK | OK | OK | example coverage; solver parity still WIP |
-| Free-boundary VMEC | Planned | Planned | Planned | not implemented |
+| Area | Axisym (ntor=0) | 3D (lasym=F) | Notes |
+| --- | --- | --- | --- |
+| INDATA parsing + boundary | OK | OK | `tests/` + `examples/tutorial/00_*` |
+| Geometry (metrics + sqrtg) | OK | OK | Nyquist `gmnc/gmns` parity tests |
+| B field (`bsup*`, `bsub*`, abs(B)) | OK | OK | Nyquist parity; figures under `examples/validation/` |
+| Energy scalars (`wb`, `wp`, volume) | OK | OK | `tests/test_step10_energy_integrals_parity.py` + `wout.vp` checks |
+| `wout` I/O (read + minimal write) | OK | OK | `tests/test_step10_wout_roundtrip.py` |
+| Constraint pipeline (`tcon/alias/gcon`) | Partial | Partial | parity kernels + diagnostics wired |
+| Step-10 `forces → tomnsps → getfsq` | Partial | Partial | scalar parity tracked in `docs/validation.rst` |
+| Fixed-boundary solvers | Partial | Partial | monotone energy decrease; not VMEC-quality yet |
+| Implicit differentiation | OK | OK | example coverage; solver parity still WIP |
+| Free-boundary VMEC | Planned | Planned | not implemented |
 
 ## Next steps toward full VMEC2000 parity
 
@@ -98,14 +95,14 @@ Concrete milestones (correctness-first):
   - verify mode ordering, `mscale/nscale`, and half/full mesh conventions used by `tomnsps`/`alias`.
 - Tighten Step-10 scalar parity on 3D cases:
   - isolate which residual blocks dominate the remaining `fsqr/fsqz/fsql` gaps (per-case decomposition by `(m,n)` and by kernel source: `A/B/C` vs constraint terms; see `examples/validation/residual_decomposition_report.py` and `examples/validation/residual_compare_fields_report.py`),
-  - use `vmec_jax.vmec_residue.vmec_fsq_sums_from_tomnsps` (and `tests/test_step10_getfsq_block_sums.py`) to attribute scalar changes to individual tomnsps/tomnspa blocks before/after each plumbing tweak,
+  - use `vmec_jax.vmec_residue.vmec_fsq_sums_from_tomnsps` (and `tests/test_step10_getfsq_block_sums.py`) to attribute scalar changes to individual tomnsps blocks before/after each plumbing tweak (tomnspa deferred),
   - match VMEC’s constraint-force pipeline end-to-end (especially `tcon(js)` from `bcovar/precondn` and the `alias → gcon` operator), since this is a major lever for 3D near-axis behavior.
 - Finish the missing VMEC2000 “plumbing” that affects Step-10 scalars:
   - remaining `bcovar` details that influence `forces` (e.g. exact half/full mesh handling for quantities consumed by `forces.f`),
   - confirm axis rules (`jmin1/jmin2/jlam`) and `LCONM1` constraint behavior match `residue.f90` in the converged regime.
 - Complete lambda residual parity:
   - finish the VMEC hybrid lambda force path,
-  - tighten `fl*` block parity (including `tomnspa` for `lasym=True`).
+  - tighten `fl*` block parity on symmetric cases (lasym deferred).
 - Move from “parity kernels” to a VMEC-quality fixed-boundary solver:
   - port the 1D (and later 2D) preconditioners and use them in a Newton / quasi-Newton / preconditioned descent loop that converges comparably to VMEC2000 on the bundled cases,
   - ensure solver stopping criteria and reported diagnostics match VMEC (including how `fsq*` are computed during the iteration history).
@@ -179,11 +176,11 @@ export JAX_ENABLE_X64=1
 Run a small validated workflow (inputs + reference `wout` files are bundled under `examples/data/`):
 
 ```bash
-python examples/tutorial/00_parse_and_boundary.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out boundary.npz --verbose
-python examples/tutorial/02_init_guess_and_coords.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out coords_step1.npz --verbose
-python examples/tutorial/04_geom_metrics.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out geom_step2.npz --verbose
-python examples/tutorial/05_profiles_and_volume.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --out profiles_step3.npz --verbose
-python examples/tutorial/06_field_and_energy.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --wout examples/data/wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc --verbose
+python examples/tutorial/00_parse_and_boundary.py examples/data/input.li383_low_res --out boundary.npz --verbose
+python examples/tutorial/02_init_guess_and_coords.py examples/data/input.li383_low_res --out coords_step1.npz --verbose
+python examples/tutorial/04_geom_metrics.py examples/data/input.li383_low_res --out geom_step2.npz --verbose
+python examples/tutorial/05_profiles_and_volume.py examples/data/input.li383_low_res --out profiles_step3.npz --verbose
+python examples/tutorial/06_field_and_energy.py examples/data/input.li383_low_res --wout examples/data/wout_li383_low_res_reference.nc --verbose
 ```
 
 Compatibility wrappers live under `examples/compat/` and forward to `examples/tutorial/`.
@@ -201,7 +198,7 @@ Examples are organized into:
 ParaView export (VTK surface fields + field lines):
 
 ```bash
-python examples/visualization/vtk_field_and_fieldlines.py examples/data/input.LandremanSenguptaPlunk_section5p3_low_res --hi-res --outdir vtk_out
+python examples/visualization/vtk_field_and_fieldlines.py examples/data/input.li383_low_res --hi-res --outdir vtk_out
 ```
 
 ## Documentation
