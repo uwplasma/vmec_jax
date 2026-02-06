@@ -14,6 +14,8 @@ from vmec_jax.grids import AngleGrid
 from vmec_jax.modes import ModeTable
 from vmec_jax.static import build_static
 from vmec_jax.wout import read_wout, state_from_wout
+from vmec_jax.vmec_bcovar import vmec_bcovar_half_mesh_from_wout
+from vmec_jax.vmec_tomnsp import vmec_angle_grid
 
 
 _CASES = [
@@ -46,6 +48,19 @@ _CASES = [
         "LandremanSengupta2019_section5.4_B2_A80",
         "examples/data/input.LandremanSengupta2019_section5.4_B2_A80",
         "examples/data/wout_LandremanSengupta2019_section5.4_B2_A80_reference.nc",
+    ),
+    (
+        "n3are_R7.75B5.7_lowres",
+        "examples/data/input.n3are_R7.75B5.7_lowres",
+        "examples/data/wout_n3are_R7.75B5.7_lowres.nc",
+    ),
+]
+
+_BCOVAR_CASES = [
+    (
+        "li383_low_res",
+        "examples/data/input.li383_low_res",
+        "examples/data/wout_li383_low_res_reference.nc",
     ),
     (
         "n3are_R7.75B5.7_lowres",
@@ -126,6 +141,38 @@ def test_step10_bsubu_bsubv_from_metric_matches_wout(case_name: str, input_rel: 
     err_v = _rel_rms(bsubv_calc[1:], bsubv_ref[1:])
 
     # These parity checks depend on half-mesh conventions and low-res geometry.
-    # Keep tolerances loose for now; tighten as half-mesh handling is improved.
-    assert err_v < 1.5e-2
-    assert err_u < 9e-2
+    # Tolerances should tighten as VMEC real-space synthesis is wired in.
+    assert err_v < 1.2e-2
+    assert err_u < 8e-2
+
+
+@pytest.mark.parametrize("case_name,input_rel,wout_rel", _BCOVAR_CASES)
+def test_step10_bcovar_bsub_matches_wout_vmec_synthesis(case_name: str, input_rel: str, wout_rel: str):
+    pytest.importorskip("netCDF4")
+
+    root = Path(__file__).resolve().parents[1]
+    input_path = root / input_rel
+    wout_path = root / wout_rel
+    assert input_path.exists()
+    assert wout_path.exists()
+
+    cfg, _indata = load_config(str(input_path))
+    wout = read_wout(wout_path)
+
+    grid = vmec_angle_grid(ntheta=int(cfg.ntheta), nzeta=int(cfg.nzeta), nfp=int(wout.nfp), lasym=bool(wout.lasym))
+    static = build_static(cfg, grid=grid)
+    st = state_from_wout(wout)
+
+    bc = vmec_bcovar_half_mesh_from_wout(state=st, static=static, wout=wout, use_wout_bsup=False, use_vmec_synthesis=True)
+
+    modes_nyq = ModeTable(m=wout.xm_nyq, n=(wout.xn_nyq // wout.nfp))
+    basis_nyq = build_helical_basis(modes_nyq, AngleGrid(theta=static.grid.theta, zeta=static.grid.zeta, nfp=wout.nfp))
+    bsubu_ref = np.asarray(eval_fourier(wout.bsubumnc, wout.bsubumns, basis_nyq))
+    bsubv_ref = np.asarray(eval_fourier(wout.bsubvmnc, wout.bsubvmns, basis_nyq))
+
+    sl = slice(1, None)
+    err_u = _rel_rms(np.asarray(bc.bsubu)[sl], bsubu_ref[sl])
+    err_v = _rel_rms(np.asarray(bc.bsubv)[sl], bsubv_ref[sl])
+
+    assert err_u < 8e-2
+    assert err_v < 1.2e-2

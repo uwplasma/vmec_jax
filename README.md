@@ -101,6 +101,8 @@ metrics. See `docs/validation.rst` for details and troubleshooting notes.
 ## Parity matrix (high level)
 
 Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose tolerances), `Planned`.
+Scope note: parity tracking below is for **stellarator-symmetric / up-down symmetric** configurations
+(`lasym=False`). Asymmetric equilibria (`lasym=True`) are planned but not implemented yet.
 
 | Area | Axisym (ntor=0) | 3D (lasym=F) | Notes |
 | --- | --- | --- | --- |
@@ -114,6 +116,8 @@ Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose to
 | Fixed-boundary solvers | Partial | Partial | monotone energy decrease; not VMEC-quality yet |
 | Implicit differentiation | OK | OK | example coverage; solver parity still WIP |
 | Free-boundary VMEC | Planned | Planned | not implemented |
+| Up-down / stellarator asymmetry (`lasym=True`) | Planned | Planned | deferred |
+| Parallelization (multi-device) | Planned | Planned | not implemented |
 
 ## Next steps toward full VMEC2000 parity
 

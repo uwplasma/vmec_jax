@@ -121,6 +121,9 @@ Feature parity matrix (selected)
 The table below summarizes parity at a feature level. “OK” indicates coverage
 by the test suite (typically via bundled ``wout`` regressions); “Partial”
 indicates known gaps or loose tolerances.
+Scope note: validation currently targets **stellarator-symmetric / up-down
+symmetric** cases (``lasym=False``). Asymmetric equilibria (``lasym=True``) and
+free-boundary / parallel workflows are planned but not implemented yet.
 
 .. list-table::
    :header-rows: 1
@@ -155,6 +158,14 @@ indicates known gaps or loose tolerances.
      - OK
      - examples under ``examples/gradients/``
    * - Free-boundary equilibrium
+     - Planned
+     - Planned
+     - not implemented
+   * - Up-down / stellarator asymmetry (``lasym=True``)
+     - Planned
+     - Planned
+     - deferred
+   * - Parallelization (multi-device)
      - Planned
      - Planned
      - not implemented
