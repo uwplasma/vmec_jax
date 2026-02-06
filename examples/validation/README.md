@@ -13,5 +13,6 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `wout_roundtrip.py`: write+read a minimal `wout_*.nc` and compare.
 - `bsub_parity_figures.py`, `bmag_parity_figures.py`, `bsup_parity_figures.py`: parity figures vs `wout`.
 - `external_vmec_driver_compare.py`: run VMEC2000 or VMEC++ (if installed) and compare the resulting `wout` to bundled references; optionally computes vmec_jax B-field parity metrics.
+- `n3are_vmecpp_stage_diagnostics.py`: stage-by-stage diagnostics for the `vmecpp_iter` path on n3are (geometry, tomnsps block norms, force scalars, VMEC-grid `|B|`) for initial guess vs post-solver state.
 
 Most scripts write `.npz` artifacts into `examples/outputs/`.

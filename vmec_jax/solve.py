@@ -1938,6 +1938,7 @@ def solve_fixed_boundary_vmecpp_iter(
         vmec_force_norms_from_bcovar_dynamic,
         vmec_gcx2_from_tomnsps,
         vmec_rz_norm_from_state,
+        vmec_wint_from_trig,
         vmec_zero_m1_zforce,
     )
     from .vmec_tomnsp import TomnspsRZL, vmec_trig_tables
@@ -2053,6 +2054,29 @@ def solve_fixed_boundary_vmecpp_iter(
             out = out.reshape(orig_shape)
         return out
 
+    def _metric_surface_precond_from_bcovar(bc):
+        """Approximate VMEC++ radial preconditioner scaling from bcovar metrics."""
+        guu = jnp.asarray(bc.guu)
+        r12 = jnp.asarray(bc.jac.r12)
+        bsubu = jnp.asarray(bc.bsubu)
+        bsubv = jnp.asarray(bc.bsubv)
+        nzeta = int(guu.shape[2])
+        w_ang = vmec_wint_from_trig(trig, nzeta=nzeta).astype(guu.dtype)
+        w3 = w_ang[None, :, :]
+
+        # R/Z preconditioner proxy: VMEC force-norm denominator integrand.
+        rz_denom = jnp.sum((guu * (r12 * r12)) * w3, axis=(1, 2))
+        rz_scale = jnp.where(rz_denom > 0.0, 1.0 / jnp.sqrt(rz_denom), 1.0)
+
+        # Lambda preconditioner proxy: VMEC lambda norm denominator integrand.
+        l_denom = jnp.sum(((bsubu * bsubu) + (bsubv * bsubv)) * w3, axis=(1, 2))
+        l_scale = jnp.where(l_denom > 0.0, 1.0 / jnp.sqrt(l_denom), 1.0)
+
+        # Keep updates bounded and avoid axis/boundary blowups.
+        rz_scale = jnp.clip(rz_scale, 1e-4, 1e2)
+        l_scale = jnp.clip(l_scale, 1e-4, 1e2)
+        return rz_scale, l_scale
+
     def _compute_forces(state: VMECState, *, include_edge: bool, zero_m1: Any):
         k = vmec_forces_rz_from_wout(
             state=state,
@@ -2103,7 +2127,8 @@ def solve_fixed_boundary_vmecpp_iter(
         fsqr = norms.r1 * norms.fnorm * gcr2
         fsqz = norms.r1 * norms.fnorm * gcz2
         fsql = norms.fnormL * gcl2
-        return frzl, fsqr, fsqz, fsql
+        rz_scale, l_scale = _metric_surface_precond_from_bcovar(k.bc)
+        return frzl, fsqr, fsqz, fsql, rz_scale, l_scale
 
     def _tomnsps_to_helical(frcc, frss, fsc, fcs):
         frcc = jnp.asarray(frcc)
@@ -2179,7 +2204,7 @@ def solve_fixed_boundary_vmecpp_iter(
                               dtype=jnp.asarray(state.Rcos).dtype)
         include_edge = (it < 50) and ((it == 0) or ((len(fsqr2_history) > 0) and (fsqr2_history[-1] + fsqz2_history[-1] < 1e-6)))
 
-        frzl, fsqr, fsqz, fsql = _compute_forces(state, include_edge=include_edge, zero_m1=zero_m1)
+        frzl, fsqr, fsqz, fsql, rz_scale, l_scale = _compute_forces(state, include_edge=include_edge, zero_m1=zero_m1)
         fsqr_f = float(np.asarray(fsqr))
         fsqz_f = float(np.asarray(fsqz))
         fsql_f = float(np.asarray(fsql))
@@ -2198,12 +2223,12 @@ def solve_fixed_boundary_vmecpp_iter(
             break
 
         # Precondition forces (radial smoother).
-        frcc = _apply_radial_tridi(frzl.frcc, precond_radial_alpha)
-        frss = _apply_radial_tridi(frzl.frss, precond_radial_alpha) if frzl.frss is not None else None
-        fzsc = _apply_radial_tridi(frzl.fzsc, precond_radial_alpha)
-        fzcs = _apply_radial_tridi(frzl.fzcs, precond_radial_alpha) if frzl.fzcs is not None else None
-        flsc = _apply_radial_tridi(frzl.flsc, precond_lambda_alpha)
-        flcs = _apply_radial_tridi(frzl.flcs, precond_lambda_alpha) if frzl.flcs is not None else None
+        frcc = _apply_radial_tridi(frzl.frcc * rz_scale[:, None, None], precond_radial_alpha)
+        frss = _apply_radial_tridi(frzl.frss * rz_scale[:, None, None], precond_radial_alpha) if frzl.frss is not None else None
+        fzsc = _apply_radial_tridi(frzl.fzsc * rz_scale[:, None, None], precond_radial_alpha)
+        fzcs = _apply_radial_tridi(frzl.fzcs * rz_scale[:, None, None], precond_radial_alpha) if frzl.fzcs is not None else None
+        flsc = _apply_radial_tridi(frzl.flsc * l_scale[:, None, None], precond_lambda_alpha)
+        flcs = _apply_radial_tridi(frzl.flcs * l_scale[:, None, None], precond_lambda_alpha) if frzl.flcs is not None else None
 
         frzl_pre = TomnspsRZL(
             frcc=frcc,
