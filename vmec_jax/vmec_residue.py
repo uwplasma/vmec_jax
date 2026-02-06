@@ -155,6 +155,62 @@ def vmec_apply_m1_constraints(
     )
 
 
+def vmec_zero_m1_zforce(
+    *,
+    frzl: TomnspsRZL,
+    enabled: bool = True,
+) -> TomnspsRZL:
+    """Zero the m=1 Z-force coefficients (VMEC++ early-iteration safeguard)."""
+    enabled = jnp.asarray(enabled)
+    mask = enabled.astype(jnp.asarray(frzl.fzsc).dtype)
+    mpol = int(jnp.asarray(frzl.fzsc).shape[1])
+    if mpol <= 1:
+        return frzl
+
+    fzsc = frzl.fzsc
+    fzcs = frzl.fzcs
+    fzcc = getattr(frzl, "fzcc", None)
+
+    fzsc = jnp.asarray(fzsc)
+    fzsc_new = fzsc[:, 1, :] * (1.0 - mask)
+    if hasattr(fzsc, "at"):
+        fzsc = fzsc.at[:, 1, :].set(fzsc_new)
+    else:  # numpy fallback
+        fzsc = fzsc.copy()
+        fzsc[:, 1, :] = np.asarray(fzsc_new)
+    if fzcs is not None:
+        fzcs = jnp.asarray(fzcs)
+        fzcs_new = fzcs[:, 1, :] * (1.0 - mask)
+        if hasattr(fzcs, "at"):
+            fzcs = fzcs.at[:, 1, :].set(fzcs_new)
+        else:
+            fzcs = fzcs.copy()
+            fzcs[:, 1, :] = np.asarray(fzcs_new)
+    if fzcc is not None:
+        fzcc = jnp.asarray(fzcc)
+        fzcc_new = fzcc[:, 1, :] * (1.0 - mask)
+        if hasattr(fzcc, "at"):
+            fzcc = fzcc.at[:, 1, :].set(fzcc_new)
+        else:
+            fzcc = fzcc.copy()
+            fzcc[:, 1, :] = np.asarray(fzcc_new)
+
+    return TomnspsRZL(
+        frcc=frzl.frcc,
+        frss=frzl.frss,
+        fzsc=fzsc,
+        fzcs=fzcs,
+        flsc=frzl.flsc,
+        flcs=frzl.flcs,
+        frsc=getattr(frzl, "frsc", None),
+        frcs=getattr(frzl, "frcs", None),
+        fzcc=fzcc,
+        fzss=getattr(frzl, "fzss", None),
+        flcc=getattr(frzl, "flcc", None),
+        flss=getattr(frzl, "flss", None),
+    )
+
+
 def vmec_wint_from_trig(trig: VmecTrigTables, *, nzeta: int) -> jnp.ndarray:
     """Return VMEC's angular integration weights as a (ntheta3,nzeta) array.
 

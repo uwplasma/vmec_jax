@@ -1157,7 +1157,11 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
     from .field import half_mesh_avg_from_full_mesh
     from .profiles import eval_profiles
     from .vmec_forces import vmec_forces_rz_from_wout, vmec_residual_internal_from_kernels
-    from .vmec_residue import vmec_force_norms_from_bcovar_dynamic, vmec_gcx2_from_tomnsps
+    from .vmec_residue import (
+        vmec_force_norms_from_bcovar_dynamic,
+        vmec_gcx2_from_tomnsps,
+        vmec_zero_m1_zforce,
+    )
     from .vmec_tomnsp import vmec_trig_tables
 
     s = jnp.asarray(static.s)
@@ -1200,7 +1204,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
     if bool(include_constraint_force):
         constraint_tcon0 = float(indata.get_float("TCON0", 0.0))
 
-    def _fsq2_terms_and_jacmin(state: VMECState):
+    def _fsq2_terms_and_jacmin(state: VMECState, zero_m1_zforce: Any):
         k = vmec_forces_rz_from_wout(
             state=state,
             static=static,
@@ -1218,6 +1222,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
             trig=trig,
             apply_lforbal=False,
         )
+        rzl = vmec_zero_m1_zforce(frzl=rzl, enabled=zero_m1_zforce)
         gcr2, gcz2, gcl2 = vmec_gcx2_from_tomnsps(
             frzl=rzl,
             lconm1=bool(getattr(static.cfg, "lconm1", True)),
@@ -1239,8 +1244,8 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
         jac_min = jnp.min(jac) if jac.shape[0] <= 1 else jnp.min(jac[1:, :, :])
         return fsqr2, fsqz2, fsql2, w, jac_min
 
-    def _w_only(state: VMECState):
-        return _fsq2_terms_and_jacmin(state)[3]
+    def _w_only(state: VMECState, zero_m1_zforce: Any):
+        return _fsq2_terms_and_jacmin(state, zero_m1_zforce)[3]
 
     w_and_grad = jax.value_and_grad(_w_only)
     w_terms = _fsq2_terms_and_jacmin
@@ -1263,7 +1268,8 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
         idx00=idx00,
     )
 
-    fsqr2_0, fsqz2_0, fsql2_0, w0, jacmin0 = w_terms(state)
+    zero_m1 = jnp.asarray(1.0, dtype=jnp.asarray(state0.Rcos).dtype)
+    fsqr2_0, fsqz2_0, fsql2_0, w0, jacmin0 = w_terms(state, zero_m1)
     w0 = float(np.asarray(w0))
     jacmin0 = float(np.asarray(jacmin0))
     if not np.isfinite(w0):
@@ -1275,7 +1281,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
         # Auto-scale the objective to be O(1) on the initial iterate.
         objective_scale_f = 1.0 / max(abs(w0), 1.0)
         # Rebuild the objective closures with the now-fixed scale.
-        def _fsq2_terms_and_jacmin(state: VMECState):  # type: ignore[no-redef]
+        def _fsq2_terms_and_jacmin(state: VMECState, zero_m1_zforce: Any):  # type: ignore[no-redef]
             k = vmec_forces_rz_from_wout(
                 state=state,
                 static=static,
@@ -1293,6 +1299,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
                 trig=trig,
                 apply_lforbal=False,
             )
+            rzl = vmec_zero_m1_zforce(frzl=rzl, enabled=zero_m1_zforce)
             gcr2, gcz2, gcl2 = vmec_gcx2_from_tomnsps(
                 frzl=rzl,
                 lconm1=bool(getattr(static.cfg, "lconm1", True)),
@@ -1313,8 +1320,8 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
             jac_min = jnp.min(jac) if jac.shape[0] <= 1 else jnp.min(jac[1:, :, :])
             return fsqr2, fsqz2, fsql2, w, jac_min
 
-        def _w_only(state: VMECState):  # type: ignore[no-redef]
-            return _fsq2_terms_and_jacmin(state)[3]
+        def _w_only(state: VMECState, zero_m1_zforce: Any):  # type: ignore[no-redef]
+            return _fsq2_terms_and_jacmin(state, zero_m1_zforce)[3]
 
         w_and_grad = jax.value_and_grad(_w_only)
         w_terms = _fsq2_terms_and_jacmin
@@ -1322,7 +1329,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
             w_and_grad = jit(w_and_grad)
             w_terms = jit(w_terms)
 
-        fsqr2_0, fsqz2_0, fsql2_0, w0, jacmin0 = w_terms(state)
+        fsqr2_0, fsqz2_0, fsql2_0, w0, jacmin0 = w_terms(state, zero_m1)
         w0 = float(np.asarray(w0))
 
     w_history = [w0]
@@ -1332,7 +1339,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
     grad_rms_history = []
     step_history = []
 
-    w_val, grad = w_and_grad(state)
+    w_val, grad = w_and_grad(state, zero_m1)
     grad = _mask_grad_for_constraints(grad, static, idx00=idx00, mask_lambda_axis=False)
     grad = _apply_preconditioner(
         grad,
@@ -1415,6 +1422,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
         x_old = x
         g_old = g_flat
 
+        zero_m1 = jnp.asarray(1.0 if (it < 2) or (fsqz2_history[-1] < 1e-6) else 0.0, dtype=jnp.asarray(state.Rcos).dtype)
         for bt in range(max_backtracks + 1):
             if bt > 0:
                 step *= bt_factor
@@ -1430,7 +1438,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
                 idx00=idx00,
             )
 
-            fsqr2_t, fsqz2_t, fsql2_t, w_t, jacmin_t = w_terms(st_try)
+            fsqr2_t, fsqz2_t, fsql2_t, w_t, jacmin_t = w_terms(st_try, zero_m1)
             w_tf = float(np.asarray(w_t))
             jacmin_tf = float(np.asarray(jacmin_t))
             if np.isfinite(w_tf) and w_tf < best_w:
@@ -1475,7 +1483,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
         fsqz2_history.append(fsqz2_accept)
         fsql2_history.append(fsql2_accept)
 
-        w_val, grad_new = w_and_grad(state)
+        w_val, grad_new = w_and_grad(state, zero_m1)
         grad_new = _mask_grad_for_constraints(grad_new, static, idx00=idx00, mask_lambda_axis=False)
         grad_new = _apply_preconditioner(
             grad_new,
@@ -1594,6 +1602,7 @@ def solve_fixed_boundary_gn_vmec_residual(
         vmec_apply_m1_constraints,
         vmec_apply_scalxc_to_tomnsps,
         vmec_force_norms_from_bcovar_dynamic,
+        vmec_zero_m1_zforce,
     )
     from .vmec_tomnsp import TomnspsRZL, vmec_trig_tables
 
@@ -1663,7 +1672,7 @@ def solve_fixed_boundary_gn_vmec_residual(
             return a
         return a.at[-1].set(jnp.zeros_like(a[-1]))
 
-    def _residual_blocks(state: VMECState):
+    def _residual_blocks(state: VMECState, zero_m1_zforce: Any):
         k = vmec_forces_rz_from_wout(
             state=state,
             static=static,
@@ -1684,6 +1693,7 @@ def solve_fixed_boundary_gn_vmec_residual(
         frzl = rzl
         if bool(apply_m1_constraints):
             frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(getattr(static.cfg, "lconm1", True)))
+        frzl = vmec_zero_m1_zforce(frzl=frzl, enabled=zero_m1_zforce)
 
         # VMEC convention: after tomnsps, scale Fourier-space forces by `scalxc`
         # before forming sums-of-squares/scalars (funct3d.f).
@@ -1736,8 +1746,8 @@ def solve_fixed_boundary_gn_vmec_residual(
         fsql2 = norms.fnormL * gcl2
         return frzl, fsqr2, fsqz2, fsql2, norms
 
-    def _residual_vec(state: VMECState) -> Any:
-        frzl, *_vals = _residual_blocks(state)
+    def _residual_vec(state: VMECState, zero_m1_zforce: Any) -> Any:
+        frzl, *_vals = _residual_blocks(state, zero_m1_zforce)
         norms = _vals[-1]
         scale_rz = jnp.sqrt(jnp.asarray(w_rz)) * jnp.sqrt(norms.r1 * norms.fnorm)
         scale_l = jnp.sqrt(jnp.asarray(w_l)) * jnp.sqrt(norms.fnormL)
@@ -1760,8 +1770,8 @@ def solve_fixed_boundary_gn_vmec_residual(
                     parts.append(scale_rz * a)
         return jnp.concatenate([jnp.ravel(jnp.asarray(p)) for p in parts], axis=0)
 
-    def _obj_terms(state: VMECState):
-        _frzl, fsqr2, fsqz2, fsql2, _norms = _residual_blocks(state)
+    def _obj_terms(state: VMECState, zero_m1_zforce: Any):
+        _frzl, fsqr2, fsqz2, fsql2, _norms = _residual_blocks(state, zero_m1_zforce)
         w = (w_rz * (fsqr2 + fsqz2)) + (w_l * fsql2)
         return fsqr2, fsqz2, fsql2, w
 
@@ -1773,7 +1783,8 @@ def solve_fixed_boundary_gn_vmec_residual(
         _obj_terms_jit = _obj_terms
 
     state = _enforce_state(state0)
-    fsqr2_0, fsqz2_0, fsql2_0, w0 = _obj_terms_jit(state)
+    zero_m1 = jnp.asarray(1.0, dtype=jnp.asarray(state0.Rcos).dtype)
+    fsqr2_0, fsqz2_0, fsql2_0, w0 = _obj_terms_jit(state, zero_m1)
     w0_f = float(np.asarray(w0))
     if not np.isfinite(w0_f):
         raise ValueError("Initial state has non-finite residual objective")
@@ -1788,7 +1799,8 @@ def solve_fixed_boundary_gn_vmec_residual(
     step_history = []
 
     for it in range(int(max_iter)):
-        r, pullback = jax.vjp(_residual_vec_jit, state)
+        zero_m1 = jnp.asarray(1.0 if (it < 2) or (fsqz2_history[-1] < 1e-6) else 0.0, dtype=jnp.asarray(state.Rcos).dtype)
+        r, pullback = jax.vjp(_residual_vec_jit, state, zero_m1)
         # Gradient of 0.5*||r||^2 is J^T r.
         g_state = pullback(r)[0]
         g_state = _project_step(g_state)
@@ -1799,7 +1811,8 @@ def solve_fixed_boundary_gn_vmec_residual(
         def _matvec(v_flat):
             v_state = unpack_state(v_flat, state.layout)
             v_state = _project_step(v_state)
-            jv = jax.jvp(_residual_vec_jit, (state,), (v_state,))[1]
+            zero_tangent = jnp.zeros_like(zero_m1)
+            jv = jax.jvp(_residual_vec_jit, (state, zero_m1), (v_state, zero_tangent))[1]
             jt_jv = pullback(jv)[0]
             jt_jv = _project_step(jt_jv)
             if damping != 0.0:
@@ -1834,7 +1847,7 @@ def solve_fixed_boundary_gn_vmec_residual(
                 Lsin=jnp.asarray(state.Lsin) + jnp.asarray(step, dtype=jnp.asarray(state.Lsin).dtype) * jnp.asarray(dx_state.Lsin),
             )
             st_try = _enforce_state(st_try)
-            fsqr2_t, fsqz2_t, fsql2_t, w_t = _obj_terms_jit(st_try)
+            fsqr2_t, fsqz2_t, fsql2_t, w_t = _obj_terms_jit(st_try, zero_m1)
             w_tf = float(np.asarray(w_t))
             w_scaled = float(scale_f * w_tf)
             if np.isfinite(w_scaled) and w_scaled < w_curr:

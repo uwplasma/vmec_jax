@@ -256,7 +256,7 @@ def bmag_from_state_vmec_realspace(
     lamscale: float | None = None,
     sqrtg_floor: float | None = None,
 ) -> np.ndarray:
-    """Compute |B| using VMEC real-space synthesis + half-mesh Jacobian."""
+    """Compute the magnetic field magnitude using VMEC real-space synthesis."""
     nfp = int(static.cfg.nfp)
     trig = vmec_trig_tables(
         ntheta=static.cfg.ntheta,
