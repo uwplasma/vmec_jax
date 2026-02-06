@@ -1910,7 +1910,8 @@ def solve_fixed_boundary_vmecpp_iter(
     precond_radial_alpha: float = 0.5,
     precond_lambda_alpha: float = 0.5,
     mode_diag_exponent: float = 1.0,
-    auto_flip_force: bool = True,
+    auto_flip_force: bool = False,
+    vmecpp_strict_update: bool = True,
     verbose: bool = True,
 ) -> SolveVmecResidualResult:
     """VMEC++-style fixed-point update loop using preconditioned force residuals."""
@@ -2154,6 +2155,9 @@ def solve_fixed_boundary_vmecpp_iter(
         cos_neg = 0.5 * (fcc - fss)
         cos_zero = fcc
         cos_val = jnp.where(n_pos[None, :], cos_pos, jnp.where(n_neg[None, :], cos_neg, cos_zero))
+        # VMEC's signed helical table omits negative-n entries for m=0. In that
+        # case the product-basis cosine coefficient maps directly (no 1/2 split).
+        cos_val = jnp.where((m == 0)[None, :], fcc, cos_val)
 
         sin_pos = 0.5 * (fsc_m - fcs_m)
         sin_neg = 0.5 * (fsc_m + fcs_m)
@@ -2306,29 +2310,23 @@ def solve_fixed_boundary_vmecpp_iter(
         b1 = 1.0 - dtau
         fac = 1.0 / (1.0 + dtau)
 
-        accepted = False
-        step_factor = 1.0
-        vR_best, vZ_best, vL_best = vR, vZ, vL
-        state_best = state
-        w_curr = fsqr_f + fsqz_f + fsql_f
+        if bool(vmecpp_strict_update):
+            dt_try = time_step
+            vR = fac * (b1 * vR + dt_try * (flip_sign * jnp.asarray(frc_modes)))
+            vZ = fac * (b1 * vZ + dt_try * (flip_sign * jnp.asarray(fz_modes)))
+            vL = fac * (b1 * vL + dt_try * (flip_sign * jnp.asarray(fl_modes)))
 
-        for _bt in range(6):
-            dt_try = time_step * step_factor
-            vR_try = fac * (b1 * vR + dt_try * (flip_sign * jnp.asarray(frc_modes)))
-            vZ_try = fac * (b1 * vZ + dt_try * (flip_sign * jnp.asarray(fz_modes)))
-            vL_try = fac * (b1 * vL + dt_try * (flip_sign * jnp.asarray(fl_modes)))
-
-            state_try = VMECState(
+            state = VMECState(
                 layout=state.layout,
-                Rcos=jnp.asarray(state.Rcos) + vR_try,
+                Rcos=jnp.asarray(state.Rcos) + dt_try * vR,
                 Rsin=state.Rsin,
                 Zcos=state.Zcos,
-                Zsin=jnp.asarray(state.Zsin) + vZ_try,
+                Zsin=jnp.asarray(state.Zsin) + dt_try * vZ,
                 Lcos=state.Lcos,
-                Lsin=jnp.asarray(state.Lsin) + vL_try,
+                Lsin=jnp.asarray(state.Lsin) + dt_try * vL,
             )
-            state_try = _enforce_fixed_boundary_and_axis(
-                state_try,
+            state = _enforce_fixed_boundary_and_axis(
+                state,
                 static,
                 edge_Rcos=edge_Rcos,
                 edge_Rsin=edge_Rsin,
@@ -2337,27 +2335,60 @@ def solve_fixed_boundary_vmecpp_iter(
                 enforce_lambda_axis=False,
                 idx00=idx00,
             )
-            _, fsqr_t, fsqz_t, fsql_t, _, _ = _compute_forces(
-                state_try,
-                include_edge=include_edge,
-                zero_m1=zero_m1,
-            )
-            w_try = float(np.asarray(fsqr_t + fsqz_t + fsql_t))
-            if np.isfinite(w_try) and (w_try <= 1.05 * w_curr):
-                accepted = True
-                state_best = state_try
-                vR_best, vZ_best, vL_best = vR_try, vZ_try, vL_try
-                break
-            step_factor *= 0.5
+            step_history.append(step_size)
+        else:
+            accepted = False
+            step_factor = 1.0
+            vR_best, vZ_best, vL_best = vR, vZ, vL
+            state_best = state
+            w_curr = fsqr_f + fsqz_f + fsql_f
 
-        state = state_best
-        vR, vZ, vL = vR_best, vZ_best, vL_best
-        if not accepted:
-            # No acceptable update was found; damp velocity to avoid runaway.
-            vR = 0.5 * vR
-            vZ = 0.5 * vZ
-            vL = 0.5 * vL
-        step_history.append(step_size * step_factor)
+            for _bt in range(6):
+                dt_try = time_step * step_factor
+                vR_try = fac * (b1 * vR + dt_try * (flip_sign * jnp.asarray(frc_modes)))
+                vZ_try = fac * (b1 * vZ + dt_try * (flip_sign * jnp.asarray(fz_modes)))
+                vL_try = fac * (b1 * vL + dt_try * (flip_sign * jnp.asarray(fl_modes)))
+
+                state_try = VMECState(
+                    layout=state.layout,
+                    Rcos=jnp.asarray(state.Rcos) + dt_try * vR_try,
+                    Rsin=state.Rsin,
+                    Zcos=state.Zcos,
+                    Zsin=jnp.asarray(state.Zsin) + dt_try * vZ_try,
+                    Lcos=state.Lcos,
+                    Lsin=jnp.asarray(state.Lsin) + dt_try * vL_try,
+                )
+                state_try = _enforce_fixed_boundary_and_axis(
+                    state_try,
+                    static,
+                    edge_Rcos=edge_Rcos,
+                    edge_Rsin=edge_Rsin,
+                    edge_Zcos=edge_Zcos,
+                    edge_Zsin=edge_Zsin,
+                    enforce_lambda_axis=False,
+                    idx00=idx00,
+                )
+                _, fsqr_t, fsqz_t, fsql_t, _, _ = _compute_forces(
+                    state_try,
+                    include_edge=include_edge,
+                    zero_m1=zero_m1,
+                )
+                w_try = float(np.asarray(fsqr_t + fsqz_t + fsql_t))
+                if np.isfinite(w_try) and (w_try <= 1.05 * w_curr):
+                    accepted = True
+                    state_best = state_try
+                    vR_best, vZ_best, vL_best = vR_try, vZ_try, vL_try
+                    break
+                step_factor *= 0.5
+
+            state = state_best
+            vR, vZ, vL = vR_best, vZ_best, vL_best
+            if not accepted:
+                # No acceptable update was found; damp velocity to avoid runaway.
+                vR = 0.5 * vR
+                vZ = 0.5 * vZ
+                vL = 0.5 * vL
+            step_history.append(step_size * step_factor)
         grad_rms_history.append(0.0)
 
     diag: Dict[str, Any] = {
@@ -2365,6 +2396,7 @@ def solve_fixed_boundary_vmecpp_iter(
         "step_size": float(step_size),
         "precond_radial_alpha": float(precond_radial_alpha),
         "precond_lambda_alpha": float(precond_lambda_alpha),
+        "vmecpp_strict_update": bool(vmecpp_strict_update),
     }
     return SolveVmecResidualResult(
         state=state,
