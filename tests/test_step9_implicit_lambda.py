@@ -6,6 +6,9 @@ import pytest
 
 def test_step9_implicit_lambda_grad_matches_finite_difference(load_case_circular_tokamak):
     pytest.importorskip("jax")
+    from conftest import require_slow
+
+    require_slow()
 
     from vmec_jax._compat import enable_x64
     from vmec_jax.energy import flux_profiles_from_indata

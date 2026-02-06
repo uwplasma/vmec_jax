@@ -7,6 +7,9 @@ import pytest
 def test_step9_implicit_fixed_boundary_grad_matches_finite_difference():
     pytest.importorskip("jax")
     pytest.importorskip("netCDF4")
+    from conftest import require_slow
+
+    require_slow()
 
     from dataclasses import replace
 

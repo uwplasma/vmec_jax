@@ -1888,3 +1888,250 @@ def solve_fixed_boundary_gn_vmec_residual(
         step_history=np.asarray(step_history, dtype=float),
         diagnostics=diag,
     )
+
+
+def solve_fixed_boundary_vmecpp_iter(
+    state0: VMECState,
+    static,
+    *,
+    indata,
+    signgs: int,
+    max_iter: int = 50,
+    step_size: float = 1.0,
+    include_constraint_force: bool = True,
+    apply_m1_constraints: bool = True,
+    precond_radial_alpha: float = 0.5,
+    precond_lambda_alpha: float = 0.5,
+    verbose: bool = True,
+) -> SolveVmecResidualResult:
+    """VMEC++-style fixed-point update loop using preconditioned force residuals."""
+    if not has_jax():
+        raise ImportError("solve_fixed_boundary_vmecpp_iter requires JAX (jax + jaxlib)")
+
+    max_iter = int(max_iter)
+    if max_iter < 1:
+        raise ValueError("max_iter must be >= 1")
+    step_size = float(step_size)
+    if step_size <= 0.0:
+        raise ValueError("step_size must be positive")
+
+    signgs = int(signgs)
+    idx00 = _mode00_index(static.modes)
+
+    from .energy import flux_profiles_from_indata
+    from .field import half_mesh_avg_from_full_mesh
+    from .profiles import eval_profiles
+    from .vmec_forces import vmec_forces_rz_from_wout, vmec_residual_internal_from_kernels
+    from .vmec_residue import (
+        vmec_apply_m1_constraints,
+        vmec_apply_scalxc_to_tomnsps,
+        vmec_force_norms_from_bcovar_dynamic,
+        vmec_gcx2_from_tomnsps,
+        vmec_zero_m1_zforce,
+    )
+    from .vmec_tomnsp import TomnspsRZL, vmec_trig_tables
+
+    s = jnp.asarray(static.s)
+    flux = flux_profiles_from_indata(indata, s, signgs=signgs)
+    chipf_wout = half_mesh_avg_from_full_mesh(jnp.asarray(flux.chipf))
+
+    phips = jnp.asarray(flux.phips)
+    if phips.shape[0] >= 1:
+        phips = phips.at[0].set(0.0)
+
+    prof = eval_profiles(indata, s)
+    pres = jnp.asarray(prof.get("pressure", jnp.zeros_like(s)))
+
+    wout_like = _WoutLikeVmecForces(
+        nfp=int(static.cfg.nfp),
+        mpol=int(static.cfg.mpol),
+        ntor=int(static.cfg.ntor),
+        lasym=bool(static.cfg.lasym),
+        signgs=signgs,
+        phipf=jnp.asarray(flux.phipf),
+        phips=phips,
+        chipf=chipf_wout,
+        pres=pres,
+    )
+
+    trig = vmec_trig_tables(
+        ntheta=int(static.cfg.ntheta),
+        nzeta=int(static.cfg.nzeta),
+        nfp=int(wout_like.nfp),
+        mmax=int(wout_like.mpol) - 1,
+        nmax=int(wout_like.ntor),
+        lasym=bool(wout_like.lasym),
+        dtype=jnp.asarray(state0.Rcos).dtype,
+    )
+
+    edge_Rcos = jnp.asarray(state0.Rcos)[-1, :]
+    edge_Rsin = jnp.asarray(state0.Rsin)[-1, :]
+    edge_Zcos = jnp.asarray(state0.Zcos)[-1, :]
+    edge_Zsin = jnp.asarray(state0.Zsin)[-1, :]
+
+    constraint_tcon0: float | None = None
+    if bool(include_constraint_force):
+        constraint_tcon0 = float(indata.get_float("TCON0", 0.0))
+
+    def _zero_edge_rz(a):
+        a = None if a is None else jnp.asarray(a)
+        if a is None:
+            return None
+        if a.shape[0] < 2:
+            return a
+        return a.at[-1].set(jnp.zeros_like(a[-1]))
+
+    def _apply_radial_tridi(a, alpha: float):
+        if alpha <= 0.0:
+            return a
+        return _tridi_smooth_dirichlet(jnp.asarray(a), alpha=alpha)
+
+    def _compute_forces(state: VMECState, *, include_edge: bool, zero_m1: Any):
+        k = vmec_forces_rz_from_wout(
+            state=state,
+            static=static,
+            wout=wout_like,
+            indata=None,
+            constraint_tcon0=constraint_tcon0,
+            use_vmec_synthesis=True,
+            trig=trig,
+        )
+        frzl = vmec_residual_internal_from_kernels(
+            k,
+            cfg_ntheta=int(static.cfg.ntheta),
+            cfg_nzeta=int(static.cfg.nzeta),
+            wout=wout_like,
+            trig=trig,
+            apply_lforbal=False,
+        )
+        if bool(apply_m1_constraints):
+            frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(getattr(static.cfg, "lconm1", True)))
+        frzl = vmec_zero_m1_zforce(frzl=frzl, enabled=zero_m1)
+        frzl = vmec_apply_scalxc_to_tomnsps(frzl=frzl, s=s)
+
+        frzl = TomnspsRZL(
+            frcc=_zero_edge_rz(frzl.frcc),
+            frss=_zero_edge_rz(frzl.frss),
+            fzsc=_zero_edge_rz(frzl.fzsc),
+            fzcs=_zero_edge_rz(frzl.fzcs),
+            flsc=frzl.flsc,
+            flcs=frzl.flcs,
+            frsc=_zero_edge_rz(getattr(frzl, "frsc", None)),
+            frcs=_zero_edge_rz(getattr(frzl, "frcs", None)),
+            fzcc=_zero_edge_rz(getattr(frzl, "fzcc", None)),
+            fzss=_zero_edge_rz(getattr(frzl, "fzss", None)),
+            flcc=getattr(frzl, "flcc", None),
+            flss=getattr(frzl, "flss", None),
+        )
+
+        gcr2, gcz2, gcl2 = vmec_gcx2_from_tomnsps(
+            frzl=frzl,
+            lconm1=bool(getattr(static.cfg, "lconm1", True)),
+            apply_m1_constraints=False,
+            include_edge=bool(include_edge),
+            apply_scalxc=False,
+            s=s,
+        )
+        norms = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=s, signgs=signgs)
+        fsqr = norms.r1 * norms.fnorm * gcr2
+        fsqz = norms.r1 * norms.fnorm * gcz2
+        fsql = norms.fnormL * gcl2
+        return frzl, fsqr, fsqz, fsql
+
+    state = _enforce_fixed_boundary_and_axis(
+        state0,
+        static,
+        edge_Rcos=edge_Rcos,
+        edge_Rsin=edge_Rsin,
+        edge_Zcos=edge_Zcos,
+        edge_Zsin=edge_Zsin,
+        enforce_lambda_axis=False,
+        idx00=idx00,
+    )
+
+    ftol = float(indata.get_float("FTOL", 1e-10))
+
+    w_history = []
+    fsqr2_history = []
+    fsqz2_history = []
+    fsql2_history = []
+    grad_rms_history = []
+    step_history = []
+
+    for it in range(max_iter):
+        zero_m1 = jnp.asarray(1.0 if (it < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
+                              dtype=jnp.asarray(state.Rcos).dtype)
+        include_edge = (it < 50) and ((it == 0) or ((len(fsqr2_history) > 0) and (fsqr2_history[-1] + fsqz2_history[-1] < 1e-6)))
+
+        frzl, fsqr, fsqz, fsql = _compute_forces(state, include_edge=include_edge, zero_m1=zero_m1)
+        fsqr_f = float(np.asarray(fsqr))
+        fsqz_f = float(np.asarray(fsqz))
+        fsql_f = float(np.asarray(fsql))
+
+        w_history.append(fsqr_f + fsqz_f + fsql_f)
+        fsqr2_history.append(fsqr_f)
+        fsqz2_history.append(fsqz_f)
+        fsql2_history.append(fsql_f)
+
+        if verbose:
+            print(
+                f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} fsqr={fsqr_f:.3e} fsqz={fsqz_f:.3e} fsql={fsql_f:.3e}"
+            )
+
+        if (fsqr_f + fsqz_f + fsql_f) < ftol:
+            break
+
+        # Precondition forces (radial smoother).
+        frcc = _apply_radial_tridi(frzl.frcc, precond_radial_alpha)
+        frss = _apply_radial_tridi(frzl.frss, precond_radial_alpha) if frzl.frss is not None else None
+        fzsc = _apply_radial_tridi(frzl.fzsc, precond_radial_alpha)
+        fzcs = _apply_radial_tridi(frzl.fzcs, precond_radial_alpha) if frzl.fzcs is not None else None
+        flsc = _apply_radial_tridi(frzl.flsc, precond_lambda_alpha)
+        flcs = _apply_radial_tridi(frzl.flcs, precond_lambda_alpha) if frzl.flcs is not None else None
+
+        # Convert internal product basis -> combined basis (symmetric runs).
+        frc_comb = frcc + (frss if frss is not None else 0.0)
+        fz_comb = fzsc - (fzcs if fzcs is not None else 0.0)
+        fl_comb = flsc - (flcs if flcs is not None else 0.0)
+
+        # Update only the symmetric coefficient blocks.
+        state = VMECState(
+            layout=state.layout,
+            Rcos=jnp.asarray(state.Rcos) + (-step_size) * jnp.asarray(frc_comb),
+            Rsin=state.Rsin,
+            Zcos=state.Zcos,
+            Zsin=jnp.asarray(state.Zsin) + (-step_size) * jnp.asarray(fz_comb),
+            Lcos=state.Lcos,
+            Lsin=jnp.asarray(state.Lsin) + (-step_size) * jnp.asarray(fl_comb),
+        )
+
+        state = _enforce_fixed_boundary_and_axis(
+            state,
+            static,
+            edge_Rcos=edge_Rcos,
+            edge_Rsin=edge_Rsin,
+            edge_Zcos=edge_Zcos,
+            edge_Zsin=edge_Zsin,
+            enforce_lambda_axis=False,
+            idx00=idx00,
+        )
+        step_history.append(step_size)
+        grad_rms_history.append(0.0)
+
+    diag: Dict[str, Any] = {
+        "ftol": ftol,
+        "step_size": float(step_size),
+        "precond_radial_alpha": float(precond_radial_alpha),
+        "precond_lambda_alpha": float(precond_lambda_alpha),
+    }
+    return SolveVmecResidualResult(
+        state=state,
+        n_iter=len(w_history) - 1,
+        w_history=np.asarray(w_history, dtype=float),
+        fsqr2_history=np.asarray(fsqr2_history, dtype=float),
+        fsqz2_history=np.asarray(fsqz2_history, dtype=float),
+        fsql2_history=np.asarray(fsql2_history, dtype=float),
+        grad_rms_history=np.asarray(grad_rms_history, dtype=float),
+        step_history=np.asarray(step_history, dtype=float),
+        diagnostics=diag,
+    )

@@ -7,6 +7,9 @@ import pytest
 def test_end_to_end_gn_vmec_residual_decreases_for_circular_tokamak():
     pytest.importorskip("jax")
     pytest.importorskip("netCDF4")
+    from conftest import require_slow
+
+    require_slow()
 
     from vmec_jax._compat import enable_x64
     from vmec_jax.boundary import boundary_from_indata

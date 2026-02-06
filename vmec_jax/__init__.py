@@ -69,6 +69,9 @@ from .solve import (
     SolveLambdaResult,
     solve_fixed_boundary_gd,
     solve_fixed_boundary_lbfgs,
+    solve_fixed_boundary_lbfgs_vmec_residual,
+    solve_fixed_boundary_gn_vmec_residual,
+    solve_fixed_boundary_vmecpp_iter,
     solve_lambda_gd,
 )
 from .residuals import ForceResiduals, force_residuals_from_state
@@ -157,6 +160,9 @@ __all__ = [
     "SolveFixedBoundaryResult",
     "solve_fixed_boundary_gd",
     "solve_fixed_boundary_lbfgs",
+    "solve_fixed_boundary_lbfgs_vmec_residual",
+    "solve_fixed_boundary_gn_vmec_residual",
+    "solve_fixed_boundary_vmecpp_iter",
     "ForceResiduals",
     "force_residuals_from_state",
 ]

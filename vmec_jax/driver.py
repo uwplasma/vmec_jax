@@ -129,7 +129,7 @@ def run_fixed_boundary(
     ----------
     solver:
         ``"gd"`` (gradient descent), ``"lbfgs"``, ``"vmec_lbfgs"``,
-        or ``"vmec_gn"`` (VMEC residual objective).
+        ``"vmec_gn"`` (VMEC residual objective), or ``"vmecpp_iter"``.
     use_initial_guess:
         If True, skip the solve and return the initialized state.
     vmec_project:
@@ -139,7 +139,7 @@ def run_fixed_boundary(
         If True (default), print VMEC-style iteration progress and a summary.
     """
     cfg, indata = load_config(str(input_path))
-    if grid is None and str(solver).lower() in ("vmec_lbfgs", "vmec_gn"):
+    if grid is None and str(solver).lower() in ("vmec_lbfgs", "vmec_gn", "vmecpp_iter"):
         from .vmec_tomnsp import vmec_angle_grid
 
         grid = vmec_angle_grid(
@@ -243,9 +243,25 @@ def run_fixed_boundary(
             jit_kernels=True,
             verbose=bool(verbose),
         )
+    elif solver == "vmecpp_iter":
+        from .solve import solve_fixed_boundary_vmecpp_iter
+
+        res = solve_fixed_boundary_vmecpp_iter(
+            st0,
+            static,
+            indata=indata,
+            signgs=signgs,
+            max_iter=int(max_iter),
+            step_size=float(step_size),
+            include_constraint_force=True,
+            apply_m1_constraints=True,
+            precond_radial_alpha=0.5,
+            precond_lambda_alpha=0.5,
+            verbose=bool(verbose),
+        )
     else:
         raise ValueError(
-            f"Unknown solver: {solver!r} (expected 'gd', 'lbfgs', 'vmec_lbfgs', or 'vmec_gn')"
+            f"Unknown solver: {solver!r} (expected 'gd', 'lbfgs', 'vmec_lbfgs', 'vmec_gn', or 'vmecpp_iter')"
         )
 
     if verbose:

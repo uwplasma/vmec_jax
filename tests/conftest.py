@@ -9,11 +9,18 @@ import sys
 from pathlib import Path
 
 import pytest
+import os
 
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+
+def require_slow() -> None:
+    """Skip tests marked as slow unless RUN_SLOW=1 is set."""
+    if os.environ.get("RUN_SLOW", "") != "1":
+        pytest.skip("Set RUN_SLOW=1 to run slow gradient/implicit tests")
 
 
 @pytest.fixture(scope="session")
