@@ -30,7 +30,7 @@ The tests in ``tests/`` cover:
 - boundary evaluation and agreement with the ``s=1`` state surface,
 - metric/Jacobian positivity and shape checks,
 - stepwise regressions vs ``wout`` (Nyquist ``sqrt(g)``, ``bsup*``, energy integrals ``wb/wp``).
-- Step-10 parity scaffolding for VMEC-style ``forces``/``tomnsps``/``getfsq``.
+- Step-10 scalar residual parity for VMEC-style ``forces``/``tomnsps``/``getfsq``.
 - VMEC convention checks used by Step-10 kernels (e.g. ``chipf -> chips`` inversion and ``equif`` normalization parity).
 - Constraint-force pipeline pieces (``tcon`` scaling + ``alias`` bandpass operator).
 - an early end-to-end regression that a Gauss-Newton residual solver decreases a VMEC-style residual objective on ``input.circular_tokamak`` (this is *not* yet a full VMEC2000 equilibrium-parity solve).
@@ -58,18 +58,20 @@ The scoreboard below reports relative errors
      - fsqz rel. err
      - fsql rel. err
    * - circular_tokamak
-     - ~4.9e-2
-     - ~4.6e-2
-     - ~4.8e-3
+     - ~5.6e-5
+     - ~7.1e-5
+     - ~1.0e-6
    * - li383_low_res
-     - ~1.6e-1
-     - ~1.2e-1
-     - ~1.1e-1
+     - ~1.3e-3
+     - ~4.4e-3
+     - ~1.4e-5
 
 Notes:
 
-- The remaining mismatches are primarily on the 3D case (``li383_low_res``),
-  reflecting that Step-10 conventions are still being ported and tightened.
+- A key VMEC convention is that after ``tomnsps``, VMEC scales the Fourier-space
+  forces by ``scalxc`` (constructed in ``profil3d.f``) before calling
+  ``residue/getfsq`` (see ``funct3d.f``). ``vmec-jax`` now applies this scaling
+  by default when computing ``fsqr/fsqz/fsql``.
 - ``lasym=True`` parity (non-stellarator-symmetric) is deferred for now; the
   bundled lasym cases are excluded from automated validation until the
   ``tomnspa`` conventions are reconciled.
@@ -107,9 +109,9 @@ indicates known gaps or loose tolerances.
      - OK
      - ``tests/test_step10_wout_roundtrip.py``
    * - Step-10 scalar residuals (``fsqr/fsqz/fsql``)
-     - Partial
-     - Partial
-     - tracked by ``tests/test_step10_residue_getfsq_parity.py``
+     - OK
+     - OK
+     - tracked by ``tests/test_step10_residue_getfsq_parity.py`` (bundled symmetric cases)
    * - Fixed-boundary solvers
      - Partial
      - Partial
@@ -192,7 +194,7 @@ To run the integration tests locally::
   VMEC2000_INTEGRATION=1 pytest -q -m vmec2000
 
 Optional: validating against VMEC++
-----------------------------------
+-----------------------------------
 
 If you have VMEC++ installed (``vmecpp`` Python package) you can run an
 integration smoke test that produces a ``wout_*.nc`` file and compares it to

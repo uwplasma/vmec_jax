@@ -39,7 +39,7 @@ VMEC-quality fixed-boundary convergence are still in progress (see `CODEX_RESUME
 - Parity tooling vs VMEC2000 `wout_*.nc` (Nyquist fields, scalar integrals, diagnostics figures,
   plus residual decomposition and full-vs-reference field comparisons).
 - Step-10 parity (baseline): VMEC-style `forces` + `tomnsps` + `getfsq` scalars
-  match the bundled circular tokamak `wout` to a few percent (see
+  match the bundled symmetric `wout` references tightly (see
   `examples/validation/vmec_forces_rz_kernel_report.py` and
   `tests/test_step10_residue_getfsq_parity.py`).
 - Advanced: implicit differentiation demos (custom VJP) for solver-aware gradients.
@@ -56,8 +56,8 @@ The current relative errors are tracked in `docs/validation.rst`. Snapshot from
 
 | Case | fsqr | fsqz | fsql |
 | --- | ---: | ---: | ---: |
-| circular_tokamak | 4.9e-2 | 4.6e-2 | 4.8e-3 |
-| li383_low_res | 1.6e-1 | 1.2e-1 | 1.1e-1 |
+| circular_tokamak | 5.6e-5 | 7.1e-5 | 1.0e-6 |
+| li383_low_res | 1.3e-3 | 4.4e-3 | 1.4e-5 |
 
 Note: `lasym=True` (non-stellarator-symmetric) parity is deferred for now; the
 bundled lasym cases are excluded from automated validation until the
@@ -102,7 +102,7 @@ Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose to
 | Energy scalars (`wb`, `wp`, volume) | OK | OK | `tests/test_step10_energy_integrals_parity.py` + `wout.vp` checks |
 | `wout` I/O (read + minimal write) | OK | OK | `tests/test_step10_wout_roundtrip.py` |
 | Constraint pipeline (`tcon/alias/gcon`) | Partial | Partial | parity kernels + diagnostics wired |
-| Step-10 `forces → tomnsps → getfsq` | Partial | Partial | scalar parity tracked in `docs/validation.rst` |
+| Step-10 `forces → tomnsps → getfsq` | OK | OK | scalar parity on bundled symmetric cases; includes VMEC `scalxc` post-tomnsps scaling |
 | Fixed-boundary solvers | Partial | Partial | monotone energy decrease; not VMEC-quality yet |
 | Implicit differentiation | OK | OK | example coverage; solver parity still WIP |
 | Free-boundary VMEC | Planned | Planned | not implemented |
@@ -114,10 +114,10 @@ Concrete milestones (correctness-first):
 - Lock down VMEC numerics from the up-to-date sources (STELLOPT/VMEC2000 + VMEC++):
   - keep VMEC-style **DFT with precomputed trig/weight tables** as the canonical transform for parity,
   - verify mode ordering, `mscale/nscale`, and half/full mesh conventions used by `tomnsps`/`alias`.
-- Tighten Step-10 scalar parity on 3D cases:
-  - isolate which residual blocks dominate the remaining `fsqr/fsqz/fsql` gaps (per-case decomposition by `(m,n)` and by kernel source: `A/B/C` vs constraint terms; see `examples/validation/residual_decomposition_report.py` and `examples/validation/residual_compare_fields_report.py`),
-  - use `vmec_jax.vmec_residue.vmec_fsq_sums_from_tomnsps` (and `tests/test_step10_getfsq_block_sums.py`) to attribute scalar changes to individual tomnsps blocks before/after each plumbing tweak (tomnspa deferred),
-  - match VMEC’s constraint-force pipeline end-to-end (especially `tcon(js)` from `bcovar/precondn` and the `alias → gcon` operator), since this is a major lever for 3D near-axis behavior.
+- Expand Step-10 scalar parity coverage (more symmetric cases; tighter tolerances):
+  - the current parity kernel matches VMEC’s `residue/getfsq` conventions, including the `scalxc` force scaling applied after `tomnsps` in `funct3d.f`,
+  - add more bundled `input.*`/`wout_*.nc` pairs (from simsopt test files) and keep `tests/test_step10_residue_getfsq_parity.py` tight,
+  - keep using the decomposition scripts (`examples/validation/residual_decomposition_report.py`, `.../residual_compare_fields_report.py`) to attribute any new-case gaps to specific blocks/modes.
 - Finish the missing VMEC2000 “plumbing” that affects Step-10 scalars:
   - remaining `bcovar` details that influence `forces` (e.g. exact half/full mesh handling for quantities consumed by `forces.f`),
   - confirm axis rules (`jmin1/jmin2/jlam`) and `LCONM1` constraint behavior match `residue.f90` in the converged regime.

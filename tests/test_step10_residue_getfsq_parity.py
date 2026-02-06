@@ -21,8 +21,8 @@ from vmec_jax.wout import read_wout, state_from_wout
 @pytest.mark.parametrize(
     "case_name,input_rel,wout_rel,rtol_rz,rtol_l",
     [
-        ("circular_tokamak", "examples/data/input.circular_tokamak", "examples/data/wout_circular_tokamak_reference.nc", 0.10, 0.10),
-        ("li383_low_res", "examples/data/input.li383_low_res", "examples/data/wout_li383_low_res_reference.nc", 0.30, 0.30),
+        ("circular_tokamak", "examples/data/input.circular_tokamak", "examples/data/wout_circular_tokamak_reference.nc", 1e-3, 1e-4),
+        ("li383_low_res", "examples/data/input.li383_low_res", "examples/data/wout_li383_low_res_reference.nc", 1e-2, 1e-4),
     ],
 )
 def test_step10_getfsq_parity_against_wout(case_name: str, input_rel: str, wout_rel: str, rtol_rz: float, rtol_l: float):
@@ -70,8 +70,8 @@ def test_step10_getfsq_parity_against_wout(case_name: str, input_rel: str, wout_
     scal = vmec_fsq_from_tomnsps(frzl=frzl, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
 
     # Target parity condition: these should agree once the remaining VMEC
-    # conventions (lambda forces, endpoint-weighted grids, axis regularization,
-    # and tomnsps normalization) are ported.
+    # conventions converge. Note that VMEC's reported scalars are computed
+    # *after* scaling the Fourier forces by `scalxc` (profil3d/funct3d).
     assert np.isfinite(scal.fsqr)
     assert np.isfinite(scal.fsqz)
     assert np.isfinite(scal.fsql)
