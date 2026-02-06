@@ -17,6 +17,7 @@ compatibility wrappers live under ``examples/compat/``::
   python examples/tutorial/07_solve_lambda.py examples/data/input.li383_low_res --wout examples/data/wout_li383_low_res_reference.nc --verbose
   python examples/tutorial/08_solve_fixed_boundary.py examples/data/input.li383_low_res --verbose
   python examples/tutorial/09_solve_fixed_boundary_lbfgs.py examples/data/input.li383_low_res --verbose
+  python examples/visualization/n3are_vmec2000_vs_vmecjax.py --no-solve
 
 Run the test suite::
 
@@ -78,12 +79,13 @@ Typical usage::
 
   from vmec_jax.config import load_config
   from vmec_jax.static import build_static
-  from vmec_jax.init_guess import init_state_from_boundary
+  from vmec_jax.boundary import boundary_from_indata
+  from vmec_jax.init_guess import initial_guess_from_boundary
   from vmec_jax.geom import eval_geom
 
   cfg, indata = load_config(\"examples/data/input.li383_low_res\")
   static = build_static(cfg)
-  state0 = init_state_from_boundary(indata, static)
+  state0 = initial_guess_from_boundary(static, boundary_from_indata(indata, static.modes), indata)
   geom = eval_geom(state0, static)
 
 High-level driver helpers
@@ -92,14 +94,26 @@ High-level driver helpers
 For quick scripts, `vmec-jax` exposes a small high-level driver API that avoids
 repeating boilerplate::
 
-  from vmec_jax.driver import load_example, save_npz
-  from vmec_jax.plotting import surface_rz_from_wout, closed_theta_grid, zeta_grid
+  from vmec_jax.driver import load_example, run_fixed_boundary, save_npz
+  from vmec_jax.plotting import (
+      surface_rz_from_state_physical,
+      surface_rz_from_wout,
+      closed_theta_grid,
+      zeta_grid,
+  )
 
   ex = load_example(\"n3are_R7.75B5.7_lowres\", with_wout=True)
   theta = closed_theta_grid(200)
   zeta = zeta_grid(128)
   R, Z = surface_rz_from_wout(ex.wout, theta=theta, zeta=zeta, s_index=ex.wout.ns - 1)
   save_npz(\"n3are_lcfs.npz\", theta=theta, zeta=zeta, R=R, Z=Z)
+
+  run = run_fixed_boundary(\"examples/data/input.circular_tokamak\", max_iter=5, use_initial_guess=True)
+  phi = zeta_grid(64)
+  Rj, Zj = surface_rz_from_state_physical(
+      run.state, run.static.modes, theta=theta, phi=phi, s_index=run.static.cfg.ns - 1, nfp=run.static.cfg.nfp
+  )
+  save_npz(\"jax_lcfs.npz\", phi=phi, R=Rj, Z=Zj)
 
 Advanced users can still drop down to the lower-level building blocks
 (``load_config``, ``build_static``, ``eval_geom``, etc.) as needed.

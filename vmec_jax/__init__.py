@@ -12,7 +12,7 @@ The full equilibrium solver will be built incrementally in later steps.
 
 from .namelist import read_indata, InData
 from .config import VMECConfig, load_config
-from .modes import ModeTable, vmec_mode_table, default_grid_sizes
+from .modes import ModeTable, vmec_mode_table, nyquist_mode_table, default_grid_sizes
 from .grids import AngleGrid, make_angle_grid
 from .boundary import BoundaryCoeffs, boundary_from_indata
 from .fourier import (
@@ -25,17 +25,26 @@ from .fourier import (
 from .plotting import (
     SurfaceData,
     axis_rz_from_wout,
+    axis_rz_from_wout_physical,
+    axis_rz_from_state_physical,
     bmag_from_wout,
+    bmag_from_wout_physical,
+    bmag_from_state_physical,
     closed_theta_grid,
     fix_matplotlib_3d,
     profiles_from_wout,
     select_zeta_slices,
     surface_data_from_wout,
     surface_rz_from_wout,
+    surface_rz_from_wout_physical,
+    surface_rz_from_state,
+    surface_rz_from_state_physical,
     surface_stack,
+    vmecplot2_cross_section_indices,
     zeta_grid,
+    zeta_grid_field_period,
 )
-from .driver import ExampleData, example_paths, load_example, load_input, load_wout, save_npz
+from .driver import ExampleData, FixedBoundaryRun, example_paths, load_example, load_input, load_wout, run_fixed_boundary, save_npz
 from .state import VMECState, pack_state, unpack_state
 from .static import VMECStatic, build_static
 from .init_guess import initial_guess_from_boundary
@@ -67,6 +76,7 @@ __all__ = [
     "load_config",
     "ModeTable",
     "vmec_mode_table",
+    "nyquist_mode_table",
     "default_grid_sizes",
     "AngleGrid",
     "make_angle_grid",
@@ -79,20 +89,31 @@ __all__ = [
     "eval_fourier_dzeta_phys",
     "SurfaceData",
     "axis_rz_from_wout",
+    "axis_rz_from_wout_physical",
+    "axis_rz_from_state_physical",
     "bmag_from_wout",
+    "bmag_from_wout_physical",
+    "bmag_from_state_physical",
     "closed_theta_grid",
     "fix_matplotlib_3d",
     "profiles_from_wout",
     "select_zeta_slices",
     "surface_data_from_wout",
     "surface_rz_from_wout",
+    "surface_rz_from_wout_physical",
+    "surface_rz_from_state",
+    "surface_rz_from_state_physical",
     "surface_stack",
+    "vmecplot2_cross_section_indices",
     "zeta_grid",
+    "zeta_grid_field_period",
     "ExampleData",
+    "FixedBoundaryRun",
     "example_paths",
     "load_example",
     "load_input",
     "load_wout",
+    "run_fixed_boundary",
     "save_npz",
     "VMECState",
     "pack_state",

@@ -40,6 +40,10 @@ workflows.
    Example output: last-closed flux surface (LCFS) cross-sections at several
    toroidal slices within one field period.
 
+Side-by-side VMEC2000 vs vmec_jax comparisons for the n3are case are generated
+by ``examples/visualization/n3are_vmec2000_vs_vmecjax.py`` (see README for a
+quick preview).
+
 .. figure:: _static/figures/bmag_parity_error.png
    :alt: |B| parity error figure
    :align: center

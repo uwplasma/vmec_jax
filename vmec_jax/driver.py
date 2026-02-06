@@ -11,7 +11,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
+from .boundary import boundary_from_indata
 from .config import VMECConfig, load_config
+from .energy import flux_profiles_from_indata
+from .field import signgs_from_sqrtg
+from .geom import eval_geom
+from .init_guess import initial_guess_from_boundary
+from .profiles import eval_profiles
+from .solve import solve_fixed_boundary_gd, solve_fixed_boundary_lbfgs
 from .static import VMECStatic, build_static
 from .wout import WoutData, read_wout, state_from_wout
 
@@ -25,6 +34,20 @@ class ExampleData:
     static: VMECStatic
     wout: Optional[WoutData]
     state: Optional[any]
+
+
+@dataclass(frozen=True)
+class FixedBoundaryRun:
+    """Container returned by ``run_fixed_boundary``."""
+
+    cfg: VMECConfig
+    indata: any
+    static: VMECStatic
+    state: any
+    result: any | None
+    flux: any
+    profiles: dict
+    signgs: int
 
 
 def example_paths(case: str, *, root: str | Path | None = None) -> tuple[Path, Optional[Path]]:
@@ -86,3 +109,95 @@ def save_npz(path: str | Path, **arrays) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(path, **arrays)
     return path
+
+
+def run_fixed_boundary(
+    input_path: str | Path,
+    *,
+    solver: str = "gd",
+    max_iter: int = 20,
+    step_size: float = 5e-3,
+    history_size: int = 10,
+    use_initial_guess: bool = False,
+    grid=None,
+):
+    """Run a fixed-boundary vmec_jax solve with minimal boilerplate.
+
+    Parameters
+    ----------
+    solver:
+        ``"gd"`` (gradient descent) or ``"lbfgs"``.
+    use_initial_guess:
+        If True, skip the solve and return the initialized state.
+    """
+    cfg, indata = load_config(str(input_path))
+    static = build_static(cfg, grid=grid)
+    bdy = boundary_from_indata(indata, static.modes)
+    st0 = initial_guess_from_boundary(static, bdy, indata)
+
+    g0 = eval_geom(st0, static)
+    signgs = signgs_from_sqrtg(np.asarray(g0.sqrtg), axis_index=1)
+
+    flux = flux_profiles_from_indata(indata, static.s, signgs=signgs)
+    prof = eval_profiles(indata, static.s)
+    pressure = prof.get("pressure", np.zeros_like(np.asarray(static.s)))
+    gamma = indata.get_float("GAMMA", 0.0)
+
+    if use_initial_guess:
+        return FixedBoundaryRun(
+            cfg=cfg,
+            indata=indata,
+            static=static,
+            state=st0,
+            result=None,
+            flux=flux,
+            profiles=prof,
+            signgs=signgs,
+        )
+
+    solver = solver.lower()
+    if solver == "gd":
+        res = solve_fixed_boundary_gd(
+            st0,
+            static,
+            phipf=flux.phipf,
+            chipf=flux.chipf,
+            signgs=signgs,
+            lamscale=flux.lamscale,
+            pressure=pressure,
+            gamma=gamma,
+            max_iter=int(max_iter),
+            step_size=float(step_size),
+            jacobian_penalty=1e3,
+            jit_grad=True,
+            verbose=False,
+        )
+    elif solver == "lbfgs":
+        res = solve_fixed_boundary_lbfgs(
+            st0,
+            static,
+            phipf=flux.phipf,
+            chipf=flux.chipf,
+            signgs=signgs,
+            lamscale=flux.lamscale,
+            pressure=pressure,
+            gamma=gamma,
+            max_iter=int(max_iter),
+            step_size=float(step_size),
+            history_size=int(history_size),
+            jit_grad=True,
+            verbose=False,
+        )
+    else:
+        raise ValueError(f"Unknown solver: {solver!r} (expected 'gd' or 'lbfgs')")
+
+    return FixedBoundaryRun(
+        cfg=cfg,
+        indata=indata,
+        static=static,
+        state=res.state,
+        result=res,
+        flux=flux,
+        profiles=prof,
+        signgs=signgs,
+    )

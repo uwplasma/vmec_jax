@@ -14,8 +14,12 @@ from typing import Iterable
 import numpy as np
 
 from .fourier import build_helical_basis, eval_fourier
+from .geom import _eval_geom_jit
 from .grids import AngleGrid
 from .modes import ModeTable
+from .field import b2_from_bsup, bsup_from_geom, lamscale_from_phips
+from .energy import flux_profiles_from_indata
+from .field import signgs_from_sqrtg
 
 
 @dataclass(frozen=True)
@@ -47,18 +51,22 @@ def fix_matplotlib_3d(ax):
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
 
-def _mode_table_from_wout(wout, *, nyq: bool) -> ModeTable:
+def _mode_table_from_wout(wout, *, nyq: bool, physical: bool = False) -> ModeTable:
     if nyq:
         m = np.asarray(wout.xm_nyq, dtype=int)
-        n = np.asarray(wout.xn_nyq, dtype=int) // int(wout.nfp)
+        n_raw = np.asarray(wout.xn_nyq, dtype=int)
     else:
         m = np.asarray(wout.xm, dtype=int)
-        n = np.asarray(wout.xn, dtype=int) // int(wout.nfp)
+        n_raw = np.asarray(wout.xn, dtype=int)
+    if physical:
+        n = n_raw
+    else:
+        n = n_raw // int(wout.nfp)
     return ModeTable(m=m, n=n)
 
 
-def _basis_from_wout(wout, theta: np.ndarray, zeta: np.ndarray, *, nyq: bool) -> AngleGrid:
-    modes = _mode_table_from_wout(wout, nyq=nyq)
+def _basis_from_wout(wout, theta: np.ndarray, zeta: np.ndarray, *, nyq: bool, physical: bool = False) -> AngleGrid:
+    modes = _mode_table_from_wout(wout, nyq=nyq, physical=physical)
     grid = AngleGrid(theta=theta, zeta=zeta, nfp=int(wout.nfp))
     basis = build_helical_basis(modes, grid)
     return basis
@@ -73,7 +81,7 @@ def surface_rz_from_wout(
     nyq: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return R,Z on a surface from wout Fourier coefficients."""
-    basis = _basis_from_wout(wout, theta, zeta, nyq=nyq)
+    basis = _basis_from_wout(wout, theta, zeta, nyq=nyq, physical=False)
     rmnc = np.asarray(wout.rmnc)
     rmns = np.asarray(getattr(wout, "rmns", np.zeros_like(rmnc)))
     zmns = np.asarray(wout.zmns)
@@ -84,6 +92,138 @@ def surface_rz_from_wout(
     return R, Z
 
 
+def surface_rz_from_wout_physical(
+    wout,
+    *,
+    theta: np.ndarray,
+    phi: np.ndarray,
+    s_index: int,
+    nyq: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return R,Z on a surface using physical toroidal angle phi.
+
+    This matches vmecPlot2's convention: phase = m*theta - xn*phi, where
+    `xn` already includes the nfp factor.
+    """
+    basis = _basis_from_wout(wout, theta, phi, nyq=nyq, physical=True)
+    rmnc = np.asarray(wout.rmnc)
+    rmns = np.asarray(getattr(wout, "rmns", np.zeros_like(rmnc)))
+    zmns = np.asarray(wout.zmns)
+    zmnc = np.asarray(getattr(wout, "zmnc", np.zeros_like(zmns)))
+
+    R = np.asarray(eval_fourier(rmnc[s_index], rmns[s_index], basis))
+    Z = np.asarray(eval_fourier(zmnc[s_index], zmns[s_index], basis))
+    return R, Z
+
+
+def surface_rz_from_state(
+    state,
+    modes: ModeTable,
+    *,
+    theta: np.ndarray,
+    zeta: np.ndarray,
+    s_index: int,
+    nfp: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return R,Z on a surface from a VMECState on a field-period grid."""
+    grid = AngleGrid(theta=theta, zeta=zeta, nfp=int(nfp))
+    basis = build_helical_basis(modes, grid)
+    R = np.asarray(eval_fourier(state.Rcos[s_index], state.Rsin[s_index], basis))
+    Z = np.asarray(eval_fourier(state.Zcos[s_index], state.Zsin[s_index], basis))
+    return R, Z
+
+
+def surface_rz_from_state_physical(
+    state,
+    modes: ModeTable,
+    *,
+    theta: np.ndarray,
+    phi: np.ndarray,
+    s_index: int,
+    nfp: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return R,Z on a surface using physical toroidal angle phi."""
+    zeta = np.asarray(phi) * float(nfp)
+    return surface_rz_from_state(state, modes, theta=theta, zeta=zeta, s_index=s_index, nfp=nfp)
+
+
+def axis_rz_from_state_physical(
+    state,
+    modes: ModeTable,
+    *,
+    phi: np.ndarray,
+    nfp: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Axis curve from state using physical toroidal angle phi."""
+    theta0 = np.zeros((1,), dtype=float)
+    R, Z = surface_rz_from_state_physical(
+        state,
+        modes,
+        theta=theta0,
+        phi=phi,
+        s_index=0,
+        nfp=nfp,
+    )
+    return R[0], Z[0]
+
+
+def bmag_from_state_physical(
+    state,
+    static,
+    indata=None,
+    *,
+    theta: np.ndarray,
+    phi: np.ndarray,
+    s_index: int,
+    signgs: int | None = None,
+    phipf: np.ndarray | None = None,
+    chipf: np.ndarray | None = None,
+    lamscale: float | None = None,
+) -> np.ndarray:
+    """Compute B magnitude on a surface using physical toroidal angle phi.
+
+    Notes
+    -----
+    - If ``phipf/chipf`` are provided, they override ``indata``-derived profiles.
+    - If ``indata`` is None and no flux profiles are provided, this raises.
+    """
+    nfp = int(static.cfg.nfp)
+    zeta = np.asarray(phi) * float(nfp)
+    grid = AngleGrid(theta=np.asarray(theta), zeta=zeta, nfp=nfp)
+    basis = build_helical_basis(static.modes, grid)
+    geom = _eval_geom_jit(state, basis, static.s, grid.zeta)
+    if signgs is None:
+        signgs = signgs_from_sqrtg(geom.sqrtg)
+
+    if phipf is None or chipf is None:
+        if indata is None:
+            raise ValueError("indata must be provided when phipf/chipf are not supplied")
+        flux = flux_profiles_from_indata(indata, static.s, signgs=signgs)
+        phipf_use = flux.phipf
+        chipf_use = flux.chipf
+        lamscale_use = flux.lamscale
+    else:
+        phipf_use = np.asarray(phipf)
+        chipf_use = np.asarray(chipf)
+        if lamscale is None:
+            phips = (signgs * np.asarray(phipf_use)) / (2.0 * np.pi)
+            lamscale_use = float(np.asarray(lamscale_from_phips(phips, static.s)))
+        else:
+            lamscale_use = float(lamscale)
+
+    bsupu, bsupv = bsup_from_geom(
+        geom,
+        phipf=phipf_use,
+        chipf=chipf_use,
+        nfp=nfp,
+        signgs=signgs,
+        lamscale=lamscale_use,
+    )
+    B2 = b2_from_bsup(geom, bsupu, bsupv)
+    B = np.sqrt(np.maximum(np.asarray(B2), 0.0))
+    return B[s_index]
+
+
 def bmag_from_wout(
     wout,
     *,
@@ -92,7 +232,22 @@ def bmag_from_wout(
     s_index: int,
 ) -> np.ndarray:
     """Return B magnitude on a surface from wout Nyquist Fourier coefficients."""
-    basis = _basis_from_wout(wout, theta, zeta, nyq=True)
+    basis = _basis_from_wout(wout, theta, zeta, nyq=True, physical=False)
+    bmnc = np.asarray(wout.bmnc)
+    bmns = np.asarray(getattr(wout, "bmns", np.zeros_like(bmnc)))
+    B = np.asarray(eval_fourier(bmnc[s_index], bmns[s_index], basis))
+    return B
+
+
+def bmag_from_wout_physical(
+    wout,
+    *,
+    theta: np.ndarray,
+    phi: np.ndarray,
+    s_index: int,
+) -> np.ndarray:
+    """Return B magnitude on a surface using physical toroidal angle phi."""
+    basis = _basis_from_wout(wout, theta, phi, nyq=True, physical=True)
     bmnc = np.asarray(wout.bmnc)
     bmns = np.asarray(getattr(wout, "bmns", np.zeros_like(bmnc)))
     B = np.asarray(eval_fourier(bmnc[s_index], bmns[s_index], basis))
@@ -109,6 +264,25 @@ def axis_rz_from_wout(wout, *, zeta: np.ndarray) -> tuple[np.ndarray, np.ndarray
 
     n = np.arange(len(wout.raxis_cc), dtype=float)
     angle = (-n[:, None] * float(wout.nfp)) * zeta[None, :]
+    raxis_cc = np.asarray(wout.raxis_cc, dtype=float)[:, None]
+    raxis_cs = np.asarray(getattr(wout, "raxis_cs", np.zeros_like(wout.raxis_cc)), dtype=float)[:, None]
+    zaxis_cs = np.asarray(wout.zaxis_cs, dtype=float)[:, None]
+    zaxis_cc = np.asarray(getattr(wout, "zaxis_cc", np.zeros_like(wout.zaxis_cs)), dtype=float)[:, None]
+
+    R = np.sum(raxis_cc * np.cos(angle) + raxis_cs * np.sin(angle), axis=0)
+    Z = np.sum(zaxis_cs * np.sin(angle) + zaxis_cc * np.cos(angle), axis=0)
+    return R, Z
+
+
+def axis_rz_from_wout_physical(wout, *, phi: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Axis curve using physical toroidal angle phi (vmecPlot2 convention)."""
+    if not hasattr(wout, "raxis_cc") or not hasattr(wout, "zaxis_cs"):
+        r0 = float(np.asarray(wout.rmnc)[0, 0]) if np.asarray(wout.rmnc).size else 0.0
+        return np.full_like(phi, r0, dtype=float), np.zeros_like(phi, dtype=float)
+
+    phi = np.asarray(phi)
+    n = np.arange(len(wout.raxis_cc), dtype=float)
+    angle = (-n[:, None] * float(wout.nfp)) * phi[None, :]
     raxis_cc = np.asarray(wout.raxis_cc, dtype=float)[:, None]
     raxis_cs = np.asarray(getattr(wout, "raxis_cs", np.zeros_like(wout.raxis_cc)), dtype=float)[:, None]
     zaxis_cs = np.asarray(wout.zaxis_cs, dtype=float)[:, None]
@@ -160,9 +334,22 @@ def closed_theta_grid(ntheta: int) -> np.ndarray:
     return np.linspace(0.0, 2.0 * np.pi, int(ntheta), endpoint=True)
 
 
-def zeta_grid(nzeta: int) -> np.ndarray:
+def zeta_grid(nzeta: int, *, endpoint: bool = False) -> np.ndarray:
     """Uniform zeta grid over one field period."""
-    return np.linspace(0.0, 2.0 * np.pi, int(nzeta), endpoint=False)
+    return np.linspace(0.0, 2.0 * np.pi, int(nzeta), endpoint=bool(endpoint))
+
+
+def zeta_grid_field_period(nzeta: int, *, nfp: int) -> np.ndarray:
+    """Uniform zeta grid over one field period (0..2π/nfp)."""
+    nfp = max(1, int(nfp))
+    return np.linspace(0.0, 2.0 * np.pi / float(nfp), int(nzeta), endpoint=False)
+
+
+def vmecplot2_cross_section_indices(nzeta: int) -> np.ndarray:
+    """Indices used by vmecPlot2 for cross sections (0,2,4,6)."""
+    if nzeta < 7:
+        raise ValueError("vmecPlot2 cross sections expect nzeta>=8")
+    return np.asarray([0, 2, 4, 6], dtype=int)
 
 
 def select_zeta_slices(zeta: np.ndarray, *, n: int) -> np.ndarray:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from vmec_jax.driver import example_paths, load_example, save_npz
+from vmec_jax.driver import example_paths, load_example, run_fixed_boundary, save_npz
 
 
 def test_example_paths_and_load_example():
@@ -23,3 +23,12 @@ def test_example_paths_and_load_example():
 def test_save_npz(tmp_path):
     path = save_npz(tmp_path / "demo.npz", a=[1, 2, 3], b=[4, 5, 6])
     assert path.exists()
+
+
+def test_run_fixed_boundary_initial_guess():
+    root = Path(__file__).resolve().parents[1]
+    input_path = root / "examples/data/input.circular_tokamak"
+    run = run_fixed_boundary(input_path, max_iter=1, use_initial_guess=True)
+    assert run.cfg.ns > 0
+    assert run.state is not None
+    assert run.result is None

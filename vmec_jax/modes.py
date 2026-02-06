@@ -46,6 +46,33 @@ def vmec_mode_table(mpol: int, ntor: int) -> ModeTable:
     return ModeTable(m=np.asarray(ms, dtype=int), n=np.asarray(ns, dtype=int))
 
 
+def nyquist_mode_table(mpol: int, ntor: int) -> ModeTable:
+    """Create a VMEC-style Nyquist mode table.
+
+    VMEC's Nyquist grids extend the Fourier bandwidth by a small padding. Empirically
+    (and consistent with `fixaray` defaults), the Nyquist mode limits are:
+
+    - mmax_nyq = mpol + 3
+    - nmax_nyq = ntor + 2  (but 0 when ntor==0)
+
+    This matches the bundled VMEC2000 `wout_*.nc` files used for parity checks.
+    """
+    mpol = int(abs(mpol))
+    ntor = int(abs(ntor))
+
+    mmax = mpol + 3
+    nmax = 0 if ntor == 0 else ntor + 2
+
+    ms = []
+    ns = []
+    for m in range(0, mmax + 1):
+        nmin = 0 if m == 0 else -nmax
+        for n in range(nmin, nmax + 1):
+            ms.append(m)
+            ns.append(n)
+    return ModeTable(m=np.asarray(ms, dtype=int), n=np.asarray(ns, dtype=int))
+
+
 def default_grid_sizes(mpol: int, ntor: int, ntheta: int = 0, nzeta: int = 0) -> Tuple[int, int]:
     """Match VMEC defaults in initialize_vmec_arrays.f."""
     mpol = int(abs(mpol))
