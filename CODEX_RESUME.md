@@ -36,8 +36,9 @@ Validation:
 
 ### Step-1: Interior initial guess + full coords kernel + gradients
 - Constructs an axis-regular initial guess for interior Fourier coefficients:
-  - for m>0 harmonics use `s**m` scaling (regular on axis),
-  - for m=0 keep constant in s (initial conservative behavior),
+  - for m>0 harmonics use `rho**m` with `rho = sqrt(s)` (VMEC/VMEC++ convention),
+  - for m=0 R coefficients: linear blend between axis and boundary when axis inputs are provided,
+  - other m=0 components scale with `s` for regularity at the axis,
   - λ initialized to 0.
 - Evaluates full coordinates on `(s,theta,ζ)` grid:
   - `R(s,theta,ζ)`, `Z(s,theta,ζ)`, `λ(s,theta,ζ)` and `R_theta, R_φ, ...`.

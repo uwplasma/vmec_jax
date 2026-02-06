@@ -6,10 +6,10 @@ surfaces from the boundary (and/or axis) Fourier coefficients.
 For step-1 we implement a *regularity-aware* but intentionally simple guess that
 is good enough to exercise the full (s,theta,zeta) geometry kernel:
 
-- For m>0 harmonics, scale boundary coefficients like s**m to enforce regularity
-  at the magnetic axis.
-- For m=0 harmonics, keep the boundary coefficients constant in s unless the
-  user provides an explicit axis specification.
+- For m>0 harmonics, scale boundary coefficients like rho**m with rho = sqrt(s)
+  to enforce regularity at the magnetic axis (matches VMEC/VMEC++).
+- For m=0 harmonics, scale with s and, if axis coefficients are provided,
+  linearly blend between the axis and the boundary.
 - lambda coefficients are initialized to zero.
 
 This guess is not intended to match VMEC's exact internal initial guess yet.
@@ -20,6 +20,8 @@ keeping the geometry/transform kernels unchanged.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+import numpy as np
 
 from ._compat import jnp, has_jax
 from .boundary import BoundaryCoeffs
@@ -46,6 +48,20 @@ def _read_axis_coeffs(indata: InData) -> dict[str, float | list[float]]:
             continue
         out[key] = v
     return out
+
+
+def _axis_array(values: float | list[float] | None, ntor: int, *, dtype):
+    if values is None:
+        return None
+    if isinstance(values, list):
+        arr = [float(v) for v in values]
+    else:
+        arr = [float(values)]
+    if len(arr) < ntor + 1:
+        arr = arr + [0.0] * (ntor + 1 - len(arr))
+    else:
+        arr = arr[: ntor + 1]
+    return jnp.asarray(arr, dtype=dtype)
 
 
 def initial_guess_from_boundary(
@@ -99,48 +115,51 @@ def initial_guess_from_boundary(
     Zcos_b = jnp.asarray(boundary.Z_cos, dtype=dtype)[None, :]
     Zsin_b = jnp.asarray(boundary.Z_sin, dtype=dtype)[None, :]
 
-    # Regularity scaling for m>0: coefficient(s,k) = s**m * boundary(k).
-    # For m=0 we keep constant unless we have explicit axis arrays.
-    scale = jnp.where(m[None, :] > 0, s[:, None] ** m[None, :], 1.0)
-    Rcos = scale * Rcos_b
-    Rsin = scale * Rsin_b
-    Zcos = scale * Zcos_b
-    Zsin = scale * Zsin_b
+    # Regularity scaling: use rho**m with rho = sqrt(s) for m>0 (VMEC/VMEC++).
+    # For m=0, keep Rcos constant unless we blend with axis; other components
+    # use s to ensure regularity at the axis.
+    rho = jnp.sqrt(s)
+    scale_r = jnp.where(m[None, :] > 0, rho[:, None] ** m[None, :], 1.0)
+    scale_other = jnp.where(m[None, :] > 0, rho[:, None] ** m[None, :], s[:, None])
+    Rcos = scale_r * Rcos_b
+    Rsin = scale_other * Rsin_b
+    Zcos = scale_other * Zcos_b
+    Zsin = scale_other * Zsin_b
 
-    # If user supplied a non-trivial axis spec, override m=0 coefficients at s=0
-    # (and blend linearly in s for m=0 only).
+    # If user supplied a non-trivial axis spec, blend m=0 coefficients between
+    # axis and boundary (linear in s), matching VMEC/VMEC++ conventions.
     if indata is not None:
         ax = _read_axis_coeffs(indata)
-        # We only interpret the n=0 component for step-1 (m=0,n=0 mode).
-        # This is enough to support the common "axis major radius" use case.
-        # Full toroidal series will come later.
-        raxis_cc = ax.get("RAXIS_CC", 0.0)
-        zaxis_cs = ax.get("ZAXIS_CS", 0.0)
+        raxis_cc = _axis_array(ax.get("RAXIS_CC", None), cfg.ntor, dtype=dtype)
+        zaxis_cs = _axis_array(ax.get("ZAXIS_CS", None), cfg.ntor, dtype=dtype)
 
-        def _as0(v):
-            if isinstance(v, list):
-                return float(v[0]) if v else 0.0
-            return float(v)
+        # If axis arrays are all zero or missing, fall back to boundary-based axis.
+        have_axis = False
+        if raxis_cc is not None and np.any(np.asarray(raxis_cc) != 0.0):
+            have_axis = True
+        if zaxis_cs is not None and np.any(np.asarray(zaxis_cs) != 0.0):
+            have_axis = True
 
-        r0 = _as0(raxis_cc)
-        z0 = _as0(zaxis_cs)
-        # Detect if they intentionally left them at 0 to request boundary-based guess.
-        if abs(r0) > 0.0 or abs(z0) > 0.0:
-            # Find k for (m,n)=(0,0). Our mode table always includes this.
-            k00 = int(jnp.where((static.modes.m == 0) & (static.modes.n == 0))[0][0])
-            # Blend only for m=0 modes (we only set k00 for now).
-            blend = s[:, None]
-            new_R = (1.0 - blend[:, 0]) * r0 + blend[:, 0] * Rcos[:, k00]
-            new_Z = (1.0 - blend[:, 0]) * z0 + blend[:, 0] * Zsin[:, k00]
-            if has_jax():
-                Rcos = Rcos.at[:, k00].set(new_R)
-                Zsin = Zsin.at[:, k00].set(new_Z)
-            else:
-                # numpy fallback (non-differentiable): copy & assign
-                Rcos = jnp.array(Rcos)
-                Zsin = jnp.array(Zsin)
-                Rcos[:, k00] = new_R
-                Zsin[:, k00] = new_Z
+        if have_axis:
+            if raxis_cc is None:
+                raxis_cc = jnp.zeros((cfg.ntor + 1,), dtype=dtype)
+            if zaxis_cs is None:
+                zaxis_cs = jnp.zeros((cfg.ntor + 1,), dtype=dtype)
+
+            # Blend only m=0 modes; we support all n>=0 entries in the mode table.
+            m0_mask = static.modes.m == 0
+            for n in range(cfg.ntor + 1):
+                k_candidates = jnp.where(m0_mask & (static.modes.n == n))[0]
+                if k_candidates.size == 0:
+                    continue
+                k = int(k_candidates[0])
+                blend = s
+                new_R = (1.0 - blend) * raxis_cc[n] + blend * Rcos_b[0, k]
+                if has_jax():
+                    Rcos = Rcos.at[:, k].set(new_R)
+                else:
+                    Rcos = jnp.array(Rcos)
+                    Rcos[:, k] = new_R
 
     Lcos = jnp.zeros((cfg.ns, K), dtype=dtype)
     Lsin = jnp.zeros((cfg.ns, K), dtype=dtype)

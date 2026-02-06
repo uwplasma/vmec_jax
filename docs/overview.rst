@@ -76,6 +76,15 @@ The solver is *not yet VMEC-quality* (i.e. not a drop-in replacement for
 VMEC2000): we still need VMEC’s full force-balance residual and its
 preconditioners for robust fast convergence.
 
+Initial guess
+-------------
+
+vmec_jax initializes the Fourier coefficients with VMEC-style regularity:
+``rho = sqrt(s)`` scaling for ``m>0`` modes and a linear blend between axis
+and boundary for ``m=0`` R coefficients when axis inputs are provided. This
+matches the VMEC2000/VMEC++ convention and improves stability of early
+iterations in fixed-boundary solves.
+
 Design principles
 -----------------
 
