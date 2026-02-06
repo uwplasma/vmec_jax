@@ -105,6 +105,13 @@ def summarize_many(names_and_arrays: Iterable[Tuple[str, Any]], *, indent: str =
         print_summary(summarize_array(name, arr), indent=indent)
 
 
+def print_jacobian_stats(sqrtg: Any, *, indent: str = "") -> None:
+    """Print useful statistics for the Jacobian sqrt(g)."""
+    a = _as_array(sqrtg)
+    print_summary(summarize_array("sqrtg", a), indent=indent)
+    print_summary(summarize_array("|sqrtg|", np.abs(a)), indent=indent)
+
+
 def slice_excluding_axis(a: Any, axis_dim: int = 0) -> np.ndarray:
     """Return a[1:] along the chosen axis (used to avoid s=0 degeneracy)."""
     x = _as_array(a)

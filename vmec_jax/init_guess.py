@@ -25,7 +25,7 @@ import numpy as np
 
 from ._compat import jnp, has_jax
 from .boundary import BoundaryCoeffs
-from .fourier import build_helical_basis, eval_fourier
+from .fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta
 from .namelist import InData
 from .state import StateLayout, VMECState
 from .static import VMECStatic
@@ -136,6 +136,145 @@ def _flip_boundary_theta(static: VMECStatic, boundary: BoundaryCoeffs) -> Bounda
     return BoundaryCoeffs(R_cos=R_cos_new, R_sin=R_sin_new, Z_cos=Z_cos_new, Z_sin=Z_sin_new)
 
 
+def _apply_m1_constraint(static: VMECStatic, boundary: BoundaryCoeffs) -> BoundaryCoeffs:
+    """Apply VMEC m=1 constraint to boundary coefficients (symmetric runs)."""
+    if not bool(getattr(static.cfg, "lconm1", True)):
+        return boundary
+    if int(static.cfg.ntor) == 0:
+        return boundary
+
+    R_cos = np.asarray(boundary.R_cos).copy()
+    R_sin = np.asarray(boundary.R_sin).copy()
+    Z_cos = np.asarray(boundary.Z_cos).copy()
+    Z_sin = np.asarray(boundary.Z_sin).copy()
+
+    for k, m in enumerate(static.modes.m):
+        if int(m) != 1:
+            continue
+        rbs = R_sin[k]
+        zbc = Z_cos[k]
+        R_sin[k] = 0.5 * (rbs + zbc)
+        Z_cos[k] = 0.5 * (rbs - zbc)
+
+    return BoundaryCoeffs(R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin)
+
+
+def _recompute_axis_from_boundary(
+    static: VMECStatic,
+    boundary: BoundaryCoeffs,
+    *,
+    raxis_cc: np.ndarray,
+    zaxis_cs: np.ndarray,
+    signgs: int,
+    n_grid: int = 61,
+) -> tuple[np.ndarray, np.ndarray]:
+    """VMEC++-style axis recompute to maximize min Jacobian in each toroidal plane."""
+    cfg = static.cfg
+    grid = static.grid
+    basis = build_helical_basis(static.modes, grid)
+
+    R_lcfs = np.asarray(eval_fourier(boundary.R_cos, boundary.R_sin, basis))
+    Z_lcfs = np.asarray(eval_fourier(boundary.Z_cos, boundary.Z_sin, basis))
+    dR_dtheta_lcfs = np.asarray(eval_fourier_dtheta(boundary.R_cos, boundary.R_sin, basis))
+    dZ_dtheta_lcfs = np.asarray(eval_fourier_dtheta(boundary.Z_cos, boundary.Z_sin, basis))
+
+    ns = int(cfg.ns)
+    ns12 = (ns + 1) // 2 - 1
+    s_mid = ns12 / (ns - 1.0)
+    delta_s = (ns - 1 - ns12) / (ns - 1.0)
+    sqrt_s_mid = np.sqrt(s_mid)
+
+    m = np.asarray(static.modes.m)
+    scale_r = np.where(m > 0, sqrt_s_mid**m, 1.0)
+    scale_other = np.where(m > 0, sqrt_s_mid**m, s_mid)
+
+    Rcos_mid = scale_r * np.asarray(boundary.R_cos)
+    Rsin_mid = scale_other * np.asarray(boundary.R_sin)
+    Zcos_mid = scale_other * np.asarray(boundary.Z_cos)
+    Zsin_mid = scale_other * np.asarray(boundary.Z_sin)
+
+    # Blend m=0 using axis guess
+    m0_mask = static.modes.m == 0
+    for n in range(cfg.ntor + 1):
+        k_candidates = np.where(m0_mask & (static.modes.n == n))[0]
+        if k_candidates.size == 0:
+            continue
+        k = int(k_candidates[0])
+        Rcos_mid[k] = (1.0 - s_mid) * raxis_cc[n] + s_mid * Rcos_mid[k]
+        Zsin_mid[k] = (1.0 - s_mid) * (-zaxis_cs[n]) + s_mid * Zsin_mid[k]
+
+    R_half = np.asarray(eval_fourier(Rcos_mid, Rsin_mid, basis))
+    Z_half = np.asarray(eval_fourier(Zcos_mid, Zsin_mid, basis))
+    dR_dtheta_half = np.asarray(eval_fourier_dtheta(Rcos_mid, Rsin_mid, basis))
+    dZ_dtheta_half = np.asarray(eval_fourier_dtheta(Zcos_mid, Zsin_mid, basis))
+
+    dR_dtheta_half = 0.5 * (dR_dtheta_lcfs + dR_dtheta_half)
+    dZ_dtheta_half = 0.5 * (dZ_dtheta_lcfs + dZ_dtheta_half)
+
+    zeta = np.asarray(grid.zeta)
+    n = np.arange(cfg.ntor + 1)
+    cos_nz = np.cos(np.outer(n, zeta))
+    sin_nz = np.sin(np.outer(n, zeta))
+
+    r_axis = (raxis_cc[:, None] * cos_nz).sum(axis=0)
+    z_axis = -(zaxis_cs[:, None] * sin_nz).sum(axis=0)
+
+    new_r_axis = np.zeros_like(r_axis)
+    new_z_axis = np.zeros_like(z_axis)
+
+    ntheta, nzeta = R_lcfs.shape
+    for k in range(nzeta // 2 + 1):
+        rmin, rmax = float(R_lcfs[:, k].min()), float(R_lcfs[:, k].max())
+        zmin, zmax = float(Z_lcfs[:, k].min()), float(Z_lcfs[:, k].max())
+
+        dr = (rmax - rmin) / (n_grid - 1)
+        dz = (zmax - zmin) / (n_grid - 1)
+
+        r_guess = 0.5 * (rmax + rmin)
+        z_guess = 0.5 * (zmax + zmin)
+
+        dR_ds_half = (R_lcfs[:, k] - R_half[:, k]) / delta_s + r_axis[k]
+        dZ_ds_half = (Z_lcfs[:, k] - Z_half[:, k]) / delta_s + z_axis[k]
+
+        tau0 = dR_dtheta_half[:, k] * dZ_ds_half - dZ_dtheta_half[:, k] * dR_ds_half
+
+        min_tau_best = -np.inf
+
+        for iz in range(n_grid):
+            z_grid = zmin + iz * dz
+            if not cfg.lasym and (k == 0 or k == nzeta // 2):
+                z_grid = 0.0
+                if iz > 0:
+                    break
+            for ir in range(n_grid):
+                r_grid = rmin + ir * dr
+                tau = signgs * (tau0 - dR_dtheta_half[:, k] * z_grid + dZ_dtheta_half[:, k] * r_grid)
+                min_tau = float(np.min(tau))
+                if min_tau > min_tau_best:
+                    min_tau_best = min_tau
+                    r_guess = r_grid
+                    z_guess = z_grid
+                elif min_tau == min_tau_best and not cfg.lasym:
+                    if abs(z_guess) > abs(z_grid):
+                        z_guess = z_grid
+
+        new_r_axis[k] = r_guess
+        new_z_axis[k] = z_guess
+
+    if not cfg.lasym:
+        for k in range(1, nzeta // 2):
+            k_rev = (nzeta - k) % nzeta
+            new_r_axis[k_rev] = new_r_axis[k]
+            new_z_axis[k_rev] = -new_z_axis[k]
+
+    delta_v = 2.0 / float(nzeta)
+    new_raxis_c = delta_v * (cos_nz @ new_r_axis)
+    new_zaxis_s = -delta_v * (sin_nz @ new_z_axis)
+    new_raxis_c[0] *= 0.5
+
+    return new_raxis_c, new_zaxis_s
+
+
 def initial_guess_from_boundary(
     static: VMECStatic,
     boundary: BoundaryCoeffs,
@@ -185,6 +324,7 @@ def initial_guess_from_boundary(
     areas = _boundary_cross_section_areas(static, boundary_use)
     if np.median(areas) < 0.0:
         boundary_use = _flip_boundary_theta(static, boundary_use)
+    boundary_use = _apply_m1_constraint(static, boundary_use)
 
     # Base: broadcast boundary vectors to (ns,K)
     Rcos_b = jnp.asarray(boundary_use.R_cos, dtype=dtype)[None, :]
@@ -219,6 +359,13 @@ def initial_guess_from_boundary(
 
         if not have_axis:
             raxis_cc, zaxis_cs = _guess_axis_from_boundary(static, boundary_use)
+            raxis_cc, zaxis_cs = _recompute_axis_from_boundary(
+                static,
+                boundary_use,
+                raxis_cc=np.asarray(raxis_cc),
+                zaxis_cs=np.asarray(zaxis_cs),
+                signgs=1 if np.median(areas) >= 0.0 else -1,
+            )
             raxis_cc = raxis_cc.astype(dtype)
             zaxis_cs = zaxis_cs.astype(dtype)
             have_axis = True

@@ -44,6 +44,7 @@ from vmec_jax.plotting import (
 )
 from vmec_jax.driver import run_fixed_boundary
 from vmec_jax.geom import eval_geom
+from vmec_jax.diagnostics import print_jacobian_stats
 from vmec_jax.wout import read_wout
 
 
@@ -170,6 +171,8 @@ def main() -> None:
         abs_sg = np.abs(np.asarray(geom_init.sqrtg))
         floor = max(1e-3, 0.5 * float(np.median(abs_sg)))
         sqrtg_floor = floor
+        print("[vmec_jax] initial guess Jacobian stats:")
+        print_jacobian_stats(geom_init.sqrtg, indent="  ")
         print(f"[vmec_jax] initial guess sqrtg_floor={floor:.3e}")
 
     B_jax = bmag_from_state_physical(

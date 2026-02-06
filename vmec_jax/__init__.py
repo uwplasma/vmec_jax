@@ -54,6 +54,7 @@ from .profiles import ProfileInputs, profiles_from_indata, eval_profiles
 from .integrals import dvds_from_sqrtg, cumtrapz_s, volume_from_sqrtg
 from .field import bsup_from_geom, bsup_from_sqrtg_lambda, b2_from_bsup
 from .energy import magnetic_wb_from_state
+from .diagnostics import Summary, print_jacobian_stats, print_summary, summarize_array, summarize_many
 from .implicit import (
     ImplicitFixedBoundaryOptions,
     ImplicitLambdaOptions,
@@ -135,6 +136,11 @@ __all__ = [
     "bsup_from_sqrtg_lambda",
     "b2_from_bsup",
     "magnetic_wb_from_state",
+    "Summary",
+    "print_jacobian_stats",
+    "print_summary",
+    "summarize_array",
+    "summarize_many",
     "ImplicitLambdaOptions",
     "ImplicitFixedBoundaryOptions",
     "solve_lambda_state_implicit",
