@@ -2306,31 +2306,58 @@ def solve_fixed_boundary_vmecpp_iter(
         b1 = 1.0 - dtau
         fac = 1.0 / (1.0 + dtau)
 
-        vR = fac * (b1 * vR + time_step * (flip_sign * jnp.asarray(frc_modes)))
-        vZ = fac * (b1 * vZ + time_step * (flip_sign * jnp.asarray(fz_modes)))
-        vL = fac * (b1 * vL + time_step * (flip_sign * jnp.asarray(fl_modes)))
+        accepted = False
+        step_factor = 1.0
+        vR_best, vZ_best, vL_best = vR, vZ, vL
+        state_best = state
+        w_curr = fsqr_f + fsqz_f + fsql_f
 
-        state = VMECState(
-            layout=state.layout,
-            Rcos=jnp.asarray(state.Rcos) + vR,
-            Rsin=state.Rsin,
-            Zcos=state.Zcos,
-            Zsin=jnp.asarray(state.Zsin) + vZ,
-            Lcos=state.Lcos,
-            Lsin=jnp.asarray(state.Lsin) + vL,
-        )
+        for _bt in range(6):
+            dt_try = time_step * step_factor
+            vR_try = fac * (b1 * vR + dt_try * (flip_sign * jnp.asarray(frc_modes)))
+            vZ_try = fac * (b1 * vZ + dt_try * (flip_sign * jnp.asarray(fz_modes)))
+            vL_try = fac * (b1 * vL + dt_try * (flip_sign * jnp.asarray(fl_modes)))
 
-        state = _enforce_fixed_boundary_and_axis(
-            state,
-            static,
-            edge_Rcos=edge_Rcos,
-            edge_Rsin=edge_Rsin,
-            edge_Zcos=edge_Zcos,
-            edge_Zsin=edge_Zsin,
-            enforce_lambda_axis=False,
-            idx00=idx00,
-        )
-        step_history.append(step_size)
+            state_try = VMECState(
+                layout=state.layout,
+                Rcos=jnp.asarray(state.Rcos) + vR_try,
+                Rsin=state.Rsin,
+                Zcos=state.Zcos,
+                Zsin=jnp.asarray(state.Zsin) + vZ_try,
+                Lcos=state.Lcos,
+                Lsin=jnp.asarray(state.Lsin) + vL_try,
+            )
+            state_try = _enforce_fixed_boundary_and_axis(
+                state_try,
+                static,
+                edge_Rcos=edge_Rcos,
+                edge_Rsin=edge_Rsin,
+                edge_Zcos=edge_Zcos,
+                edge_Zsin=edge_Zsin,
+                enforce_lambda_axis=False,
+                idx00=idx00,
+            )
+            _, fsqr_t, fsqz_t, fsql_t, _, _ = _compute_forces(
+                state_try,
+                include_edge=include_edge,
+                zero_m1=zero_m1,
+            )
+            w_try = float(np.asarray(fsqr_t + fsqz_t + fsql_t))
+            if np.isfinite(w_try) and (w_try <= 1.05 * w_curr):
+                accepted = True
+                state_best = state_try
+                vR_best, vZ_best, vL_best = vR_try, vZ_try, vL_try
+                break
+            step_factor *= 0.5
+
+        state = state_best
+        vR, vZ, vL = vR_best, vZ_best, vL_best
+        if not accepted:
+            # No acceptable update was found; damp velocity to avoid runaway.
+            vR = 0.5 * vR
+            vZ = 0.5 * vZ
+            vL = 0.5 * vL
+        step_history.append(step_size * step_factor)
         grad_rms_history.append(0.0)
 
     diag: Dict[str, Any] = {

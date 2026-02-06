@@ -49,11 +49,23 @@ def _read_axis_coeffs(indata: InData) -> dict[str, float | list[float]]:
     Each may be a scalar or a list. We return the raw values.
     """
     out: dict[str, float | list[float]] = {}
+
+    # Preferred explicit VMEC names.
     for key in ("RAXIS_CC", "RAXIS_CS", "ZAXIS_CC", "ZAXIS_CS"):
         v = indata.get(key, None)
-        if v is None:
-            continue
-        out[key] = v
+        if v is not None:
+            out[key] = v
+
+    # Compatibility with legacy/short input names used by many cases,
+    # where RAXIS maps to RAXIS_CC and ZAXIS maps to ZAXIS_CS.
+    if "RAXIS_CC" not in out:
+        v = indata.get("RAXIS", None)
+        if v is not None:
+            out["RAXIS_CC"] = v
+    if "ZAXIS_CS" not in out:
+        v = indata.get("ZAXIS", None)
+        if v is not None:
+            out["ZAXIS_CS"] = v
     return out
 
 
@@ -228,7 +240,7 @@ def _recompute_axis_from_boundary(
     raxis_cc: np.ndarray,
     zaxis_cs: np.ndarray,
     signgs: int,
-    n_grid: int = 61,
+    n_grid: int = 101,
 ) -> tuple[np.ndarray, np.ndarray]:
     """VMEC++-style axis recompute to maximize min Jacobian in each toroidal plane."""
     cfg = static.cfg
@@ -348,10 +360,14 @@ def _recompute_axis_from_boundary(
     dZ_dtheta_half[:ntheta3, :] = dZ_dtheta_half_red
 
     if not cfg.lasym:
+        # VMEC++ mirror: only interior points are reflected.
+        # C++ equivalent:
+        #   for l in [1, nThetaReduced-2]:
+        #     l_reversed = (nThetaEven - l) % nThetaEven
         for iv in range(cfg.nzeta):
             ivminus = (cfg.nzeta - iv) % cfg.nzeta
-            for iu in range(ntheta2, ntheta1):
-                iu_r = ntheta1 - iu
+            for iu_r in range(1, ntheta2 - 1):
+                iu = (ntheta1 - iu_r) % ntheta1
                 R_lcfs[iu, iv] = R_lcfs_red[iu_r, ivminus]
                 Z_lcfs[iu, iv] = -Z_lcfs_red[iu_r, ivminus]
                 R_half[iu, iv] = R_half_red[iu_r, ivminus]
@@ -386,7 +402,9 @@ def _recompute_axis_from_boundary(
 
         tau0 = dR_dtheta_half[:, k] * dZ_ds_half - dZ_dtheta_half[:, k] * dR_ds_half
 
-        min_tau_best = -np.inf
+        # VMEC++ initializes this to 0.0, so axis updates are only accepted
+        # when they improve the minimum signed Jacobian above zero.
+        min_tau_best = 0.0
 
         for iz in range(n_grid):
             z_grid = zmin + iz * dz
@@ -513,13 +531,18 @@ def initial_guess_from_boundary(
 
         if not have_axis:
             raxis_cc, zaxis_cs = _guess_axis_from_boundary(static, boundary_use)
-            raxis_cc, zaxis_cs = _recompute_axis_from_boundary(
-                static,
-                boundary_use,
-                raxis_cc=np.asarray(raxis_cc),
-                zaxis_cs=np.asarray(zaxis_cs),
-                signgs=1 if np.median(areas) >= 0.0 else -1,
-            )
+            signgs_guess = 1 if np.median(areas) >= 0.0 else -1
+            raxis_np = np.asarray(raxis_cc)
+            zaxis_np = np.asarray(zaxis_cs)
+            for _ in range(3):
+                raxis_np, zaxis_np = _recompute_axis_from_boundary(
+                    static,
+                    boundary_use,
+                    raxis_cc=raxis_np,
+                    zaxis_cs=zaxis_np,
+                    signgs=signgs_guess,
+                )
+            raxis_cc, zaxis_cs = raxis_np, zaxis_np
             raxis_cc = raxis_cc.astype(dtype)
             zaxis_cs = zaxis_cs.astype(dtype)
             have_axis = True
@@ -541,17 +564,26 @@ def initial_guess_from_boundary(
                 zaxis_cs=zaxis_cs,
             )
 
-            # If the user explicitly requests it, re-run the VMEC++ axis recompute
-            # even when axis coefficients are supplied in the input.
-            if axis_from_indata and bool(indata.get_bool("LRECOMPUTE", False)):
+            # If axis coefficients are supplied via legacy shorthand keys
+            # (RAXIS/ZAXIS), default to recompute unless explicitly disabled.
+            # This mirrors VMEC++ behavior more robustly on stellarator cases.
+            legacy_axis_names = (indata.get("RAXIS", None) is not None) or (indata.get("ZAXIS", None) is not None)
+            lrecompute_default = bool(legacy_axis_names)
+
+            # If the user explicitly requests it, or if legacy axis naming is
+            # used and LRECOMPUTE is unspecified, re-run axis recompute.
+            if axis_from_indata and bool(indata.get_bool("LRECOMPUTE", lrecompute_default)):
                 signgs_guess = 1 if np.median(areas) >= 0.0 else -1
-                new_raxis_cc, new_zaxis_cs = _recompute_axis_from_boundary(
-                    static,
-                    boundary_use,
-                    raxis_cc=np.asarray(raxis_cc),
-                    zaxis_cs=np.asarray(zaxis_cs),
-                    signgs=signgs_guess,
-                )
+                new_raxis_cc = np.asarray(raxis_cc)
+                new_zaxis_cs = np.asarray(zaxis_cs)
+                for _ in range(3):
+                    new_raxis_cc, new_zaxis_cs = _recompute_axis_from_boundary(
+                        static,
+                        boundary_use,
+                        raxis_cc=new_raxis_cc,
+                        zaxis_cs=new_zaxis_cs,
+                        signgs=signgs_guess,
+                    )
                 raxis_cc = jnp.asarray(new_raxis_cc, dtype=dtype)
                 zaxis_cs = jnp.asarray(new_zaxis_cs, dtype=dtype)
                 Rcos, Zsin = _blend_axis_m0(
