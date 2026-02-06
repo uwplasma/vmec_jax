@@ -60,7 +60,7 @@ def main():
         )
 
         st = state_from_wout(wout)
-        k = vmec_forces_rz_from_wout(state=st, static=static, wout=wout, indata=indata)
+        k = vmec_forces_rz_from_wout(state=st, static=static, wout=wout, indata=indata, use_wout_bsup=True)
         rzl = vmec_residual_internal_from_kernels(k, cfg_ntheta=int(cfg.ntheta), cfg_nzeta=int(cfg.nzeta), wout=wout, trig=trig)
         frzl = TomnspsRZL(
             frcc=rzl.frcc,

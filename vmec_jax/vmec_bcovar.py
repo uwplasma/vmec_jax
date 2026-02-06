@@ -27,7 +27,9 @@ from .field import TWOPI
 from .field import lamscale_from_phips
 from .field import chips_from_chipf
 from .vmec_jacobian import VmecHalfMeshJacobian, jacobian_half_mesh_from_parity
-from .fourier import eval_fourier, eval_fourier_dtheta, eval_fourier_dzeta_phys
+from .fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta, eval_fourier_dzeta_phys
+from .grids import AngleGrid
+from .modes import ModeTable
 from .vmec_parity import internal_odd_from_physical_vmec_m1, split_rzl_even_odd_m
 
 
@@ -124,6 +126,7 @@ def vmec_bcovar_half_mesh_from_wout(
     static,
     wout,
     pres: Any | None = None,
+    use_wout_bsup: bool = False,
 ) -> VmecHalfMeshBcovar:
     """Compute VMEC-style half-mesh metric and B components for parity tests.
 
@@ -259,6 +262,14 @@ def vmec_bcovar_half_mesh_from_wout(
     # `add_fluxes`: bsupu += chips*overg (chips is a 1D full-mesh flux function).
     bsupu = bsupu + jnp.asarray(chips_eff)[:, None, None] * overg
 
+    if bool(use_wout_bsup):
+        # Replace with wout-stored Nyquist bsup (reference parity path).
+        modes_nyq = ModeTable(m=wout.xm_nyq, n=(wout.xn_nyq // wout.nfp))
+        grid = AngleGrid(theta=static.grid.theta, zeta=static.grid.zeta, nfp=wout.nfp)
+        basis_nyq = build_helical_basis(modes_nyq, grid)
+        bsupu = jnp.asarray(eval_fourier(wout.bsupumnc, wout.bsupumns, basis_nyq))
+        bsupv = jnp.asarray(eval_fourier(wout.bsupvmnc, wout.bsupvmns, basis_nyq))
+
     # VMEC enforces axis bsup*=0 explicitly.
     if ns >= 1:
         bsupu = bsupu.at[0].set(jnp.zeros_like(bsupu[0]))
@@ -295,7 +306,8 @@ def vmec_bcovar_half_mesh_from_wout(
     lu0 = (lamscale * parity.Lt_even) + jnp.asarray(wout.phipf)[:, None, None]
     lu1 = lamscale * Lu1
 
-    # lvv on half mesh: phipog * gvv (bcovar.f uses phipog==overg-like array).
+    # lvv on half mesh: phipog * gvv (bcovar.f uses phipog == 1/sqrtg).
+    # For parity with `wout`-scaled fluxes we reuse `overg` here.
     lvv = overg * gvv
 
     # Intermediate full-mesh bsubv_e (before blending), following bcovar.f.

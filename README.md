@@ -69,6 +69,27 @@ Not yet implemented (planned):
 - Free-boundary VMEC.
 - MPI/parallelization.
 
+## External baselines (VMEC2000 + VMEC++)
+
+Two external baselines are supported for cross-checks when installed locally:
+
+- **VMEC2000 (Fortran)** via its Python extension (`vmec`) and MPI driver.
+- **VMEC++** via the `vmecpp` Python API.
+
+Use the helper script:
+
+```bash
+# VMEC2000 (requires vmec python extension + mpi4py + netCDF4 + system libnetcdf)
+python examples/validation/external_vmec_driver_compare.py --backend vmec2000 --case circular_tokamak
+
+# VMEC++ (requires vmecpp + netCDF4)
+python examples/validation/external_vmec_driver_compare.py --backend vmecpp --case circular_tokamak
+```
+
+The script runs the external code, writes a `wout_*.nc`, compares key fields to
+the bundled references, and can optionally compute vmec_jax B-field parity
+metrics. See `docs/validation.rst` for details and troubleshooting notes.
+
 ## Parity matrix (high level)
 
 Status key: `OK` (covered by tests), `Partial` (matches in some cases / loose tolerances), `Planned`.

@@ -301,13 +301,29 @@ def _avg_forward_half(a):
     return out
 
 
-def vmec_forces_rz_from_wout(*, state, static, wout, indata=None, constraint_tcon0: float | None = None) -> VmecRZForceKernels:
-    """Compute VMEC R/Z force kernels (armn/brmn/...) from a `wout` equilibrium."""
+def vmec_forces_rz_from_wout(
+    *,
+    state,
+    static,
+    wout,
+    indata=None,
+    constraint_tcon0: float | None = None,
+    use_wout_bsup: bool = False,
+) -> VmecRZForceKernels:
+    """Compute VMEC R/Z force kernels (armn/brmn/...) from a `wout` equilibrium.
+
+    Parameters
+    ----------
+    use_wout_bsup:
+        If True, use the Nyquist `bsup*` fields stored in the `wout` file when
+        forming the B-product tensors inside `bcovar`. This isolates the forces
+        algebra from small differences in the derived contravariant field.
+    """
     s = jnp.asarray(static.s)
     ohs = jnp.asarray(1.0 / (s[1] - s[0])) if s.shape[0] >= 2 else jnp.asarray(0.0)
     dshalfds = jnp.asarray(0.25, dtype=s.dtype)
 
-    bc = vmec_bcovar_half_mesh_from_wout(state=state, static=static, wout=wout)
+    bc = vmec_bcovar_half_mesh_from_wout(state=state, static=static, wout=wout, use_wout_bsup=use_wout_bsup)
 
     # Real-space parity fields for R/Z and angular derivatives.
     parity = split_rzl_even_odd_m(state, static.basis, static.modes.m)

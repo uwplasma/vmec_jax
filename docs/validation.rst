@@ -208,6 +208,15 @@ The same script can drive a local VMEC2000 Python build if available::
 
   python examples/validation/external_vmec_driver_compare.py --backend vmec2000 --case circular_tokamak
 
+Notes:
+
+- VMEC2000’s Python extension depends on the system ``libnetcdf`` shared
+  library (in addition to ``netCDF4``/``mpi4py``). If ``import vmec`` fails with
+  a missing ``libnetcdf`` error, install the OS-level NetCDF package.
+- VMEC++ uses OpenMP internally; if you see crashes or oversubscription issues,
+  try setting ``OMP_NUM_THREADS=1`` and pass ``--max-threads 1`` to the helper
+  script.
+
 Note
 ----
 The VMEC2000 sources under **STELLOPT/VMEC2000** are more up-to-date than the

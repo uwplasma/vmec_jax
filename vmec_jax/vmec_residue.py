@@ -188,6 +188,7 @@ def vmec_fsq_from_tomnsps(
     norms: VmecForceNorms,
     lconm1: bool = True,
     apply_m1_constraints: bool = True,
+    include_edge: bool = False,
 ) -> VmecFsqScalars:
     """Compute (fsqr,fsqz,fsql) from VMEC-style tomnsps outputs.
 
@@ -198,27 +199,33 @@ def vmec_fsq_from_tomnsps(
     if bool(apply_m1_constraints):
         frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(lconm1))
 
-    gcr2 = jnp.sum(jnp.asarray(frzl.frcc) ** 2)
-    gcz2 = jnp.sum(jnp.asarray(frzl.fzsc) ** 2)
+    ns = int(jnp.asarray(frzl.frcc).shape[0])
+    if ns <= 1:
+        jsmax = ns
+    else:
+        jsmax = ns if bool(include_edge) else (ns - 1)
+
+    gcr2 = jnp.sum(jnp.asarray(frzl.frcc)[:jsmax] ** 2)
+    gcz2 = jnp.sum(jnp.asarray(frzl.fzsc)[:jsmax] ** 2)
     gcl2 = jnp.sum(jnp.asarray(frzl.flsc) ** 2)
     if frzl.frss is not None:
-        gcr2 = gcr2 + jnp.sum(jnp.asarray(frzl.frss) ** 2)
+        gcr2 = gcr2 + jnp.sum(jnp.asarray(frzl.frss)[:jsmax] ** 2)
     if frzl.fzcs is not None:
-        gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzcs) ** 2)
+        gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzcs)[:jsmax] ** 2)
     if frzl.flcs is not None:
         gcl2 = gcl2 + jnp.sum(jnp.asarray(frzl.flcs) ** 2)
 
     if getattr(frzl, "frsc", None) is not None:
-        gcr2 = gcr2 + jnp.sum(jnp.asarray(frzl.frsc) ** 2)
+        gcr2 = gcr2 + jnp.sum(jnp.asarray(frzl.frsc)[:jsmax] ** 2)
     if getattr(frzl, "fzcc", None) is not None:
-        gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzcc) ** 2)
+        gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzcc)[:jsmax] ** 2)
     if getattr(frzl, "flcc", None) is not None:
         gcl2 = gcl2 + jnp.sum(jnp.asarray(frzl.flcc) ** 2)
 
     if getattr(frzl, "frcs", None) is not None:
-        gcr2 = gcr2 + jnp.sum(jnp.asarray(frzl.frcs) ** 2)
+        gcr2 = gcr2 + jnp.sum(jnp.asarray(frzl.frcs)[:jsmax] ** 2)
     if getattr(frzl, "fzss", None) is not None:
-        gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzss) ** 2)
+        gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzss)[:jsmax] ** 2)
     if getattr(frzl, "flss", None) is not None:
         gcl2 = gcl2 + jnp.sum(jnp.asarray(frzl.flss) ** 2)
 
@@ -233,6 +240,7 @@ def vmec_fsq_sums_from_tomnsps(
     frzl: TomnspsRZL,
     lconm1: bool = True,
     apply_m1_constraints: bool = True,
+    include_edge: bool = False,
 ) -> VmecFsqSums:
     """Return the sum-of-squares components used in `vmec_fsq_from_tomnsps`.
 
@@ -242,30 +250,39 @@ def vmec_fsq_sums_from_tomnsps(
     if bool(apply_m1_constraints):
         frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(lconm1))
 
+    ns = int(jnp.asarray(frzl.frcc).shape[0])
+    if ns <= 1:
+        jsmax = ns
+    else:
+        jsmax = ns if bool(include_edge) else (ns - 1)
+
     gcr2_blocks: dict[str, float] = {}
     gcz2_blocks: dict[str, float] = {}
     gcl2_blocks: dict[str, float] = {}
 
-    def _add_block(d: dict[str, float], name: str, a: Any | None):
+    def _add_block(d: dict[str, float], name: str, a: Any | None, *, slice_js: bool):
         if a is None:
             return
-        d[name] = float(jnp.sum(jnp.asarray(a) ** 2))
+        arr = jnp.asarray(a)
+        if slice_js:
+            arr = arr[:jsmax]
+        d[name] = float(jnp.sum(arr ** 2))
 
     # Symmetric blocks (tomnsps).
-    _add_block(gcr2_blocks, "frcc", frzl.frcc)
-    _add_block(gcr2_blocks, "frss", frzl.frss)
-    _add_block(gcz2_blocks, "fzsc", frzl.fzsc)
-    _add_block(gcz2_blocks, "fzcs", frzl.fzcs)
-    _add_block(gcl2_blocks, "flsc", frzl.flsc)
-    _add_block(gcl2_blocks, "flcs", frzl.flcs)
+    _add_block(gcr2_blocks, "frcc", frzl.frcc, slice_js=True)
+    _add_block(gcr2_blocks, "frss", frzl.frss, slice_js=True)
+    _add_block(gcz2_blocks, "fzsc", frzl.fzsc, slice_js=True)
+    _add_block(gcz2_blocks, "fzcs", frzl.fzcs, slice_js=True)
+    _add_block(gcl2_blocks, "flsc", frzl.flsc, slice_js=False)
+    _add_block(gcl2_blocks, "flcs", frzl.flcs, slice_js=False)
 
     # Asymmetric blocks (tomnspa, lasym=True).
-    _add_block(gcr2_blocks, "frsc", getattr(frzl, "frsc", None))
-    _add_block(gcr2_blocks, "frcs", getattr(frzl, "frcs", None))
-    _add_block(gcz2_blocks, "fzcc", getattr(frzl, "fzcc", None))
-    _add_block(gcz2_blocks, "fzss", getattr(frzl, "fzss", None))
-    _add_block(gcl2_blocks, "flcc", getattr(frzl, "flcc", None))
-    _add_block(gcl2_blocks, "flss", getattr(frzl, "flss", None))
+    _add_block(gcr2_blocks, "frsc", getattr(frzl, "frsc", None), slice_js=True)
+    _add_block(gcr2_blocks, "frcs", getattr(frzl, "frcs", None), slice_js=True)
+    _add_block(gcz2_blocks, "fzcc", getattr(frzl, "fzcc", None), slice_js=True)
+    _add_block(gcz2_blocks, "fzss", getattr(frzl, "fzss", None), slice_js=True)
+    _add_block(gcl2_blocks, "flcc", getattr(frzl, "flcc", None), slice_js=False)
+    _add_block(gcl2_blocks, "flss", getattr(frzl, "flss", None), slice_js=False)
 
     gcr2 = float(sum(gcr2_blocks.values()))
     gcz2 = float(sum(gcz2_blocks.values()))

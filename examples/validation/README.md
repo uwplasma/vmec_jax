@@ -2,7 +2,7 @@
 
 Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference data.
 
-- `step10_getfsq_parity_cases.py`: Step-10 scalar parity report (`fsqr/fsqz/fsql`) for bundled cases.
+- `step10_getfsq_parity_cases.py`: Step-10 scalar parity report (`fsqr/fsqz/fsql`) for bundled cases (uses `wout` Nyquist `bsup*` to isolate force-kernel parity).
 - `vmec_forces_rz_kernel_report.py`: diagnostic report for the VMEC-style R/Z force kernels.
 - `constraint_pipeline_report.py`: constraint-force pipeline diagnostics (`tcon`, `gcon`) for a given `wout`.
 - `residual_decomposition_report.py`: component-wise residual norms and top `(m,n)` contributors.
