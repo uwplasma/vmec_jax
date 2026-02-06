@@ -70,7 +70,7 @@ def main():
         static = build_static(cfg, grid=grid)
         st = state_from_wout(wout)
 
-        bc = vmec_bcovar_half_mesh_from_wout(state=st, static=static, wout=wout, use_wout_bsup=False)
+        bc = vmec_bcovar_half_mesh_from_wout(state=st, static=static, wout=wout, use_wout_bsup=False, use_vmec_synthesis=True)
 
         # Geometry on the half mesh for metric comparison.
         st_half = replace(

@@ -168,9 +168,9 @@ is tight. This suggests a mismatch in **real-space synthesis + half-mesh metric*
 conventions rather than the contravariant field construction itself.
 
 Immediate plan:
-1. Implement VMEC-style ``totzsp`` synthesis (``fixaray`` trig/weight tables + reduced theta grid) for R/Z/L and derivatives.
-2. Rebuild half-mesh metric elements from those fields and recompute ``bsub*``.
-3. Tighten ``tests/test_step10_bsub_parity.py`` tolerances and update parity figures.
+1. VMEC-style ``totzsp`` synthesis (``fixaray`` trig/weight tables + reduced theta grid) for R/Z/L and derivatives is now wired into ``bcovar`` (``use_vmec_synthesis=True``).
+2. Recompute ``bsub*`` parity on 3D cases using the VMEC synthesis path and update parity figures.
+3. Tighten ``tests/test_step10_bsub_parity.py`` tolerances once the RMS error drops.
 
 Running tests::
 

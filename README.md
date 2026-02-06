@@ -32,6 +32,7 @@ progress (see `CODEX_RESUME.md`).
 - VMEC-style profiles (pressure / iota / current) and volume integrals.
 - Contravariant/covariant magnetic field components and VMEC-normalized magnetic energy `wb`.
 - VMEC-style DFT trig/weight tables (`fixaray`) and `tomnsps` transforms for parity work.
+- VMEC-style real-space synthesis in `bcovar` (enable via `use_vmec_synthesis=True`).
 - Constraint-force pipeline (`tcon` + `alias`) integrated into force kernels.
 - Fixed-boundary solvers:
   - lambda-only solve,
