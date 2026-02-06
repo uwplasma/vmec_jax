@@ -9,29 +9,12 @@ import pytest
 from vmec_jax.config import load_config
 from vmec_jax.static import build_static
 from vmec_jax.vmec_forces import vmec_forces_rz_from_wout, vmec_residual_internal_from_kernels
-from vmec_jax.vmec_residue import vmec_force_norms_from_bcovar, vmec_fsq_from_tomnsps
+from vmec_jax.vmec_residue import (
+    vmec_force_norms_from_bcovar_dynamic,
+    vmec_fsq_from_tomnsps_dynamic,
+)
 from vmec_jax.vmec_tomnsp import TomnspsRZL, vmec_angle_grid, vmec_trig_tables
 from vmec_jax.wout import read_wout, state_from_wout
-
-
-def _vmec2000_root() -> Path | None:
-    # Expected layout in this monorepo-style workspace:
-    #   <workspace>/vmec_jax_git
-    #   <workspace>/VMEC2000
-    root = Path(__file__).resolve().parents[2]
-    cand = root / "VMEC2000"
-    return cand if cand.exists() else None
-
-
-def _add_vmec2000_python_to_syspath(vmec2000_root: Path) -> None:
-    # Prefer the scikit-build install tree if present.
-    matches = sorted(vmec2000_root.glob("_skbuild/*/cmake-install/python"))
-    if not matches:
-        raise FileNotFoundError("VMEC2000 python install tree not found under _skbuild/*/cmake-install/python")
-
-    import sys
-
-    sys.path.insert(0, str(matches[0]))
 
 
 def _run_vmec2000_case(*, vmec, input_path: Path, tmp_path: Path, fcomm: int, barrier) -> Path:
@@ -99,16 +82,10 @@ def test_vmec2000_step10_scalars_match_vmec_jax_for_circular_tokamak(tmp_path: P
     except Exception as e:
         pytest.skip(f"mpi4py MPI backend not available: {e!r}")
 
-    vmec2000_root = _vmec2000_root()
-    if vmec2000_root is None:
-        pytest.skip("VMEC2000 checkout not found next to vmec_jax_git")
-
     try:
-        _add_vmec2000_python_to_syspath(vmec2000_root)
-    except FileNotFoundError:
-        pytest.skip("VMEC2000 python extension not built (missing _skbuild/*/cmake-install/python)")
-
-    import vmec  # type: ignore  # noqa: PLC0415
+        import vmec  # type: ignore  # noqa: PLC0415
+    except Exception as e:
+        pytest.skip(f"vmec python extension not available: {e!r}")
 
     repo_root = Path(__file__).resolve().parents[1]
     input_path = repo_root / "examples/data/input.circular_tokamak"
@@ -156,18 +133,21 @@ def test_vmec2000_step10_scalars_match_vmec_jax_for_circular_tokamak(tmp_path: P
         flss=rzl.flss,
     )
 
-    norms = vmec_force_norms_from_bcovar(bc=k.bc, trig=trig, wout=wout, s=static.s)
-    scal = vmec_fsq_from_tomnsps(frzl=frzl, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
+    norms = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
+    scal = vmec_fsq_from_tomnsps_dynamic(frzl=frzl, norms=norms, lconm1=bool(getattr(cfg, "lconm1", True)))
 
-    assert np.isfinite(scal.fsqr)
-    assert np.isfinite(scal.fsqz)
-    assert np.isfinite(scal.fsql)
+    fsqr = float(scal.fsqr)
+    fsqz = float(scal.fsqz)
+    fsql = float(scal.fsql)
+    assert np.isfinite(fsqr)
+    assert np.isfinite(fsqz)
+    assert np.isfinite(fsql)
 
     denom_r = max(abs(float(wout.fsqr)), 1e-20)
     denom_z = max(abs(float(wout.fsqz)), 1e-20)
     denom_l = max(abs(float(wout.fsql)), 1e-20)
 
     # Keep tolerances modest during parity push; tighten as residual conventions converge.
-    assert abs(scal.fsqr - float(wout.fsqr)) / denom_r < 0.10
-    assert abs(scal.fsqz - float(wout.fsqz)) / denom_z < 0.10
-    assert abs(scal.fsql - float(wout.fsql)) / denom_l < 0.10
+    assert abs(fsqr - float(wout.fsqr)) / denom_r < 0.10
+    assert abs(fsqz - float(wout.fsqz)) / denom_z < 0.10
+    assert abs(fsql - float(wout.fsql)) / denom_l < 0.10

@@ -200,23 +200,15 @@ the most significant ``(m,n)`` differences between the two paths.
 Optional: validating against a local VMEC2000 build
 ---------------------------------------------------
 
-In this workspace layout (``VMEC2000`` checked out next to ``vmec_jax_git``), the
-test suite includes a small smoke test that calls the VMEC2000 Python API to run
-a low-resolution case and compares the produced ``wout_*.nc`` to the bundled
-reference.
+If you have **VMEC2000** available via its Python extension (``import vmec``),
+the test suite includes an optional integration parity test that:
 
-There is also an optional integration parity test that runs VMEC2000, reads the
-generated ``wout_*.nc``, and checks that ``vmec-jax`` reproduces the Step-10 scalar
-residuals (``fsqr/fsqz/fsql``) on the same case.
+- runs VMEC2000 to produce a ``wout_*.nc`` file for a small bundled case, then
+- checks that ``vmec-jax`` reproduces VMEC’s Step-10 scalar residuals
+  (``fsqr/fsqz/fsql``) on the same case.
 
-This test is skipped automatically if:
-
-- the ``VMEC2000`` folder is not present,
-- or the VMEC2000 Python extension has not been built under
-  ``VMEC2000/_skbuild/*/cmake-install/python``.
-
-It requires ``mpi4py`` (VMEC2000's wrapper expects MPI to be initialized even in
-single-process mode).
+This test is skipped by default and is also skipped automatically if ``vmec``,
+``mpi4py``, or ``netCDF4`` are not available.
 
 To run the integration tests locally::
 
