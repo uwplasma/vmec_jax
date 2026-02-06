@@ -211,6 +211,25 @@ def vmec_zero_m1_zforce(
     )
 
 
+def vmec_rz_norm_from_state(*, state, static) -> Any:
+    """Compute VMEC++-style rzNorm from Fourier coefficients (n>=0 storage).
+
+    VMEC++ defines fNorm1 as 1 / rzNorm, where rzNorm is the sum of squares of
+    R/Z Fourier coefficients stored with n>=0. This helper mirrors that storage
+    convention by masking out n<0 modes from vmec_jax's signed mode table.
+    """
+    m = jnp.asarray(static.modes.m)
+    n = jnp.asarray(static.modes.n)
+    mask = (n >= 0).astype(jnp.asarray(state.Rcos).dtype)
+
+    def _mask(a):
+        a = jnp.asarray(a)
+        return a * mask[None, :]
+
+    rz_norm = jnp.sum(_mask(state.Rcos) ** 2 + _mask(state.Rsin) ** 2 + _mask(state.Zcos) ** 2 + _mask(state.Zsin) ** 2)
+    return rz_norm
+
+
 def vmec_wint_from_trig(trig: VmecTrigTables, *, nzeta: int) -> jnp.ndarray:
     """Return VMEC's angular integration weights as a (ntheta3,nzeta) array.
 

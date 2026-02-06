@@ -292,9 +292,16 @@ def _apply_preconditioner(
         the endpoints while still coupling interior surfaces.
         """
         rhs = jnp.asarray(rhs)
-        if rhs.ndim != 2:
-            raise ValueError(f"expected (ns,K), got {rhs.shape}")
-        ns = int(rhs.shape[0])
+        if rhs.ndim == 2:
+            rhs2 = rhs
+            orig_shape = None
+        elif rhs.ndim == 3:
+            ns = int(rhs.shape[0])
+            rhs2 = rhs.reshape(ns, -1)
+            orig_shape = rhs.shape
+        else:
+            raise ValueError(f"expected (ns,K) or (ns,M,N), got {rhs.shape}")
+        ns = int(rhs2.shape[0])
         if ns < 3:
             return rhs
         alpha = jnp.asarray(alpha, dtype=rhs.dtype)
@@ -302,9 +309,9 @@ def _apply_preconditioner(
         b = 1.0 + 2.0 * alpha
         c = -alpha
 
-        x0 = rhs[0]
-        xN = rhs[-1]
-        d = rhs[1:-1]
+        x0 = rhs2[0]
+        xN = rhs2[-1]
+        d = rhs2[1:-1]
         d = d.at[0].add(alpha * x0)
         d = d.at[-1].add(alpha * xN)
 
@@ -1113,17 +1120,17 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
 ) -> SolveVmecResidualResult:
     """Fixed-boundary solve by minimizing a VMEC-style force-residual objective.
 
-    The objective is computed using the Step-10 parity pipeline:
-      `bcovar` -> `forces` -> `tomnsps` -> sum-of-squares of Fourier residual blocks,
-    using VMEC's `getfsq` conventions (notably: post-`tomnsps` `scalxc` scaling,
+    The objective follows the Step-10 parity pipeline:
+    ``bcovar -> forces -> tomnsps -> sum-of-squares of Fourier residual blocks``,
+    using VMEC's ``getfsq`` conventions (post-``tomnsps`` ``scalxc`` scaling,
     optional converged-iteration m=1 constraints, and R/Z edge exclusion).
 
-    Notes
-    -----
-    - For parity, build `static` with `vmec_angle_grid(...)` (see `vmec_jax.vmec_tomnsp`).
-    - This solver does not include VMEC's iteration-dependent switching logic
-      (e.g. `lforbal` triggering); it provides a differentiable objective suitable
-      for regression and initial end-to-end parity.
+    For parity, build ``static`` with ``vmec_angle_grid(...)`` (see
+    ``vmec_jax.vmec_tomnsp``). This solver does not include VMEC's
+    iteration-dependent switching logic (e.g. ``lforbal`` triggering); it
+    provides a differentiable objective suitable for regression and initial
+    end-to-end parity.
+
     """
     if not has_jax():
         raise ImportError("solve_fixed_boundary_lbfgs_vmec_residual requires JAX (jax + jaxlib)")
@@ -1927,6 +1934,7 @@ def solve_fixed_boundary_vmecpp_iter(
         vmec_apply_scalxc_to_tomnsps,
         vmec_force_norms_from_bcovar_dynamic,
         vmec_gcx2_from_tomnsps,
+        vmec_rz_norm_from_state,
         vmec_zero_m1_zforce,
     )
     from .vmec_tomnsp import TomnspsRZL, vmec_trig_tables
@@ -1984,7 +1992,63 @@ def solve_fixed_boundary_vmecpp_iter(
     def _apply_radial_tridi(a, alpha: float):
         if alpha <= 0.0:
             return a
-        return _tridi_smooth_dirichlet(jnp.asarray(a), alpha=alpha)
+        return _tridi_smooth_dirichlet_vmecpp(jnp.asarray(a), alpha=alpha)
+
+    def _tridi_smooth_dirichlet_vmecpp(rhs, *, alpha: float):
+        """Dirichlet tridiagonal smoother along s for VMEC++ fixed-point updates."""
+        rhs = jnp.asarray(rhs)
+        if rhs.ndim == 2:
+            rhs2 = rhs
+            orig_shape = None
+        elif rhs.ndim == 3:
+            ns = int(rhs.shape[0])
+            rhs2 = rhs.reshape(ns, -1)
+            orig_shape = rhs.shape
+        else:
+            raise ValueError(f"expected (ns,K) or (ns,M,N), got {rhs.shape}")
+        ns = int(rhs2.shape[0])
+        if ns < 3:
+            return rhs
+        alpha = jnp.asarray(alpha, dtype=rhs2.dtype)
+        a = -alpha
+        b = 1.0 + 2.0 * alpha
+        c = -alpha
+
+        x0 = rhs2[0]
+        xN = rhs2[-1]
+        d = rhs2[1:-1]
+        d = d.at[0].add(alpha * x0)
+        d = d.at[-1].add(alpha * xN)
+
+        n = int(d.shape[0])
+        if n == 1:
+            x_int = d / b
+        else:
+            cp0 = c / b
+            dp0 = d[0] / b
+
+            def fwd(carry, di):
+                cp_prev, dp_prev = carry
+                denom = b - a * cp_prev
+                cp = c / denom
+                dp = (di - a * dp_prev) / denom
+                return (cp, dp), (cp, dp)
+
+            (cp_last, dp_last), (cp, dp) = jax.lax.scan(fwd, (cp0, dp0), d[1:])
+
+            def bwd(carry, cp_dp):
+                x_next = carry
+                cp_i, dp_i = cp_dp
+                x_i = dp_i - cp_i * x_next
+                return x_i, x_i
+
+            _, x_rev = jax.lax.scan(bwd, dp_last, (cp, dp), reverse=True)
+            x_int = jnp.concatenate([x_rev, dp_last[None, :]], axis=0)
+
+        out = jnp.concatenate([x0[None, :], x_int, xN[None, :]], axis=0)
+        if orig_shape is not None:
+            out = out.reshape(orig_shape)
+        return out
 
     def _compute_forces(state: VMECState, *, include_edge: bool, zero_m1: Any):
         k = vmec_forces_rz_from_wout(
@@ -2038,6 +2102,17 @@ def solve_fixed_boundary_vmecpp_iter(
         fsql = norms.fnormL * gcl2
         return frzl, fsqr, fsqz, fsql
 
+    def _tomnsps_to_modes(a):
+        a = jnp.asarray(a)
+        if a.ndim != 3:
+            raise ValueError(f"expected (ns, mpol, nrange), got {a.shape}")
+        m = jnp.asarray(static.modes.m)
+        n = jnp.asarray(static.modes.n)
+        mask = n >= 0
+        n_idx = jnp.where(mask, n, 0)
+        vals = a[:, m, n_idx]
+        return vals * mask[None, :].astype(vals.dtype)
+
     state = _enforce_fixed_boundary_and_axis(
         state0,
         static,
@@ -2057,6 +2132,15 @@ def solve_fixed_boundary_vmecpp_iter(
     fsql2_history = []
     grad_rms_history = []
     step_history = []
+
+    # VMEC++-style time-stepping (conjugate-gradient-like) state.
+    time_step = float(step_size)
+    k_ndamp = 10
+    inv_tau = [0.15 / time_step] * k_ndamp
+    fsq_prev = 1.0
+    vR = jnp.zeros_like(state.Rcos)
+    vZ = jnp.zeros_like(state.Zsin)
+    vL = jnp.zeros_like(state.Lsin)
 
     for it in range(max_iter):
         zero_m1 = jnp.asarray(1.0 if (it < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
@@ -2089,20 +2173,71 @@ def solve_fixed_boundary_vmecpp_iter(
         flsc = _apply_radial_tridi(frzl.flsc, precond_lambda_alpha)
         flcs = _apply_radial_tridi(frzl.flcs, precond_lambda_alpha) if frzl.flcs is not None else None
 
+        frzl_pre = TomnspsRZL(
+            frcc=frcc,
+            frss=frss,
+            fzsc=fzsc,
+            fzcs=fzcs,
+            flsc=flsc,
+            flcs=flcs,
+            frsc=getattr(frzl, "frsc", None),
+            frcs=getattr(frzl, "frcs", None),
+            fzcc=getattr(frzl, "fzcc", None),
+            fzss=getattr(frzl, "fzss", None),
+            flcc=getattr(frzl, "flcc", None),
+            flss=getattr(frzl, "flss", None),
+        )
+
         # Convert internal product basis -> combined basis (symmetric runs).
         frc_comb = frcc + (frss if frss is not None else 0.0)
         fz_comb = fzsc - (fzcs if fzcs is not None else 0.0)
         fl_comb = flsc - (flcs if flcs is not None else 0.0)
 
-        # Update only the symmetric coefficient blocks.
+        frc_modes = _tomnsps_to_modes(frc_comb)
+        fz_modes = _tomnsps_to_modes(fz_comb)
+        fl_modes = _tomnsps_to_modes(fl_comb)
+
+        # VMEC++-style damping for the fixed-point update.
+        gcr2_p, gcz2_p, gcl2_p = vmec_gcx2_from_tomnsps(
+            frzl=frzl_pre,
+            lconm1=bool(getattr(static.cfg, "lconm1", True)),
+            apply_m1_constraints=False,
+            include_edge=True,
+            apply_scalxc=False,
+            s=s,
+        )
+        rz_norm = vmec_rz_norm_from_state(state=state, static=static)
+        f_norm1 = jnp.where(rz_norm != 0.0, 1.0 / rz_norm, jnp.asarray(float("inf"), dtype=rz_norm.dtype))
+        delta_s = jnp.asarray(s[1] - s[0], dtype=rz_norm.dtype)
+        fsqr1 = gcr2_p * f_norm1
+        fsqz1 = gcz2_p * f_norm1
+        fsql1 = gcl2_p * delta_s
+        fsq1 = float(np.asarray(fsqr1 + fsqz1 + fsql1))
+
+        if it == 0:
+            inv_tau = [0.15 / time_step] * k_ndamp
+        else:
+            invtau_num = 0.0 if fsq1 == 0.0 else min(abs(np.log(fsq1 / fsq_prev)), 0.15)
+            inv_tau = inv_tau[1:] + [invtau_num / time_step]
+        fsq_prev = fsq1
+
+        otav = float(np.sum(inv_tau)) / float(k_ndamp)
+        dtau = time_step * otav / 2.0
+        b1 = 1.0 - dtau
+        fac = 1.0 / (1.0 + dtau)
+
+        vR = fac * (b1 * vR + time_step * jnp.asarray(frc_modes))
+        vZ = fac * (b1 * vZ + time_step * jnp.asarray(fz_modes))
+        vL = fac * (b1 * vL + time_step * jnp.asarray(fl_modes))
+
         state = VMECState(
             layout=state.layout,
-            Rcos=jnp.asarray(state.Rcos) + (-step_size) * jnp.asarray(frc_comb),
+            Rcos=jnp.asarray(state.Rcos) + vR,
             Rsin=state.Rsin,
             Zcos=state.Zcos,
-            Zsin=jnp.asarray(state.Zsin) + (-step_size) * jnp.asarray(fz_comb),
+            Zsin=jnp.asarray(state.Zsin) + vZ,
             Lcos=state.Lcos,
-            Lsin=jnp.asarray(state.Lsin) + (-step_size) * jnp.asarray(fl_comb),
+            Lsin=jnp.asarray(state.Lsin) + vL,
         )
 
         state = _enforce_fixed_boundary_and_axis(
