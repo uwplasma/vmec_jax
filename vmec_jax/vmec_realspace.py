@@ -144,6 +144,104 @@ def vmec_realspace_synthesis(
     return f
 
 
+def vmec_realspace_analysis(
+    *,
+    f: Any,
+    modes: ModeTable,
+    trig: VmecTrigTables,
+    parity: str = "both",
+) -> tuple[Any, Any]:
+    """Project a VMEC real-space field back to Fourier coefficients.
+
+    This is the VMEC-grid counterpart to :func:`vmec_realspace_synthesis`.
+    It uses the same `fixaray`-style integration weights (via `dnorm` and
+    the theta endpoint half-weights) so that a synth->analyze round-trip
+    is numerically stable for *stellarator-symmetric* fields on the VMEC
+    internal grid (lasym=False).
+
+    Parameters
+    ----------
+    f:
+        Real-space field on the VMEC internal grid, shape ``(ns, ntheta3, nzeta)``.
+    modes:
+        Mode table with arrays ``m`` and ``n`` (n is *not* multiplied by nfp).
+    trig:
+        VMEC trig tables from ``vmec_trig_tables``.
+
+    parity:
+        Which parity block to keep on a symmetric grid:
+        - ``"cos"``: return cos coefficients and zero the sin block
+        - ``"sin"``: return sin coefficients and zero the cos block
+        - ``"both"``: return both (note: cross-talk can occur on reduced grids)
+
+    Returns
+    -------
+    (coeff_cos, coeff_sin):
+        Fourier coefficients in the **wout/physical** convention, shape (ns, K).
+    """
+    f = jnp.asarray(f)
+    m = jnp.asarray(modes.m).astype(jnp.int32)
+    n = jnp.asarray(modes.n).astype(jnp.int32)
+
+    if f.ndim != 3:
+        raise ValueError(f"Expected f with shape (ns,ntheta,nzeta), got {f.shape}")
+    if int(trig.ntheta3) != int(trig.ntheta2):
+        raise NotImplementedError("vmec_realspace_analysis currently supports lasym=False only")
+    if int(f.shape[1]) < int(trig.ntheta2):
+        raise ValueError("Input theta grid is smaller than VMEC ntheta2")
+    if int(f.shape[2]) != int(trig.cosnv.shape[0]):
+        raise ValueError("Input zeta grid does not match trig tables")
+
+    # VMEC integrates over the reduced theta grid [0,pi] (ntheta2 points)
+    # with endpoint half-weights. `dnorm` already includes the 1/nzeta factor.
+    nt2 = int(trig.ntheta2)
+    f = f[:, :nt2, :]
+
+    dnorm = float(trig.dnorm)
+    w = jnp.full((nt2,), dnorm, dtype=f.dtype)
+    if hasattr(w, "at"):
+        w = w.at[0].set(0.5 * dnorm)
+        w = w.at[nt2 - 1].set(0.5 * dnorm)
+    else:  # numpy fallback
+        w = w.copy()
+        w[0] = 0.5 * dnorm
+        w[nt2 - 1] = 0.5 * dnorm
+    f_w = f * w[None, :, None]
+
+    cos_phase, sin_phase = _vmec_phase_tables(m=m, n=n, trig=trig)
+    cos_phase = cos_phase[:, :nt2, :]
+    sin_phase = sin_phase[:, :nt2, :]
+
+    # Convert to *unscaled* helical basis functions: cos(mθ - nζ), sin(mθ - nζ).
+    mscale = jnp.asarray(trig.mscale)
+    nscale = jnp.asarray(trig.nscale)
+    scale = (mscale[m] * nscale[jnp.abs(n)]).astype(f.dtype)
+    cos_unscaled = cos_phase / scale[:, None, None]
+    sin_unscaled = sin_phase / scale[:, None, None]
+
+    inner_cos = jnp.einsum("sij,kij->sk", f_w, cos_unscaled)
+    inner_sin = jnp.einsum("sij,kij->sk", f_w, sin_unscaled)
+
+    # Norms of the unscaled basis on the reduced VMEC grid:
+    # - (m,n) = (0,0) has norm 1
+    # - all other modes have norm 1/2
+    norm = jnp.where((m == 0) & (n == 0), 1.0, 0.5).astype(f.dtype)
+    coeff_cos = inner_cos / norm[None, :]
+    coeff_sin = inner_sin / norm[None, :]
+    # sin(mθ - nζ) is identically zero for m=n=0; enforce that explicitly.
+    coeff_sin = jnp.where((m == 0) & (n == 0), 0.0, coeff_sin)
+
+    parity = str(parity).lower()
+    if parity == "cos":
+        coeff_sin = jnp.zeros_like(coeff_sin)
+    elif parity == "sin":
+        coeff_cos = jnp.zeros_like(coeff_cos)
+    elif parity != "both":
+        raise ValueError("parity must be one of {'cos','sin','both'}")
+
+    return coeff_cos, coeff_sin
+
+
 def vmec_realspace_synthesis_dtheta(
     *,
     coeff_cos: Any,

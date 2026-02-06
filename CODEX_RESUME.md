@@ -46,6 +46,9 @@ Validation:
 - Added a VMEC real-space diagnostic pipeline: `vmec_realspace_geom_from_state`
   and `vmec_half_mesh_jacobian_from_state` mirror VMEC's odd-m representation and
   half-mesh Jacobian formulas for debugging initial conditions.
+- The initial guess can optionally be **re-projected through VMEC's internal
+  real-space grid** (via `vmec_realspace_analysis`) to align with VMEC's
+  reduced-grid conventions; `run_fixed_boundary` now enables this by default.
 - Evaluates full coordinates on `(s,theta,ζ)` grid:
   - `R(s,theta,ζ)`, `Z(s,theta,ζ)`, `λ(s,theta,ζ)` and `R_theta, R_φ, ...`.
 - Demonstrates autodiff through geometry (grad demo).

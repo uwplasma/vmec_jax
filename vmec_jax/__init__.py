@@ -57,7 +57,7 @@ from .field import bsup_from_geom, bsup_from_sqrtg_lambda, b2_from_bsup
 from .energy import magnetic_wb_from_state
 from .diagnostics import Summary, print_jacobian_stats, print_summary, summarize_array, summarize_many
 from .vmec_jacobian import vmec_half_mesh_jacobian_from_state
-from .vmec_realspace import vmec_realspace_geom_from_state
+from .vmec_realspace import vmec_realspace_analysis, vmec_realspace_geom_from_state
 from .implicit import (
     ImplicitFixedBoundaryOptions,
     ImplicitLambdaOptions,
@@ -146,6 +146,7 @@ __all__ = [
     "summarize_array",
     "summarize_many",
     "vmec_half_mesh_jacobian_from_state",
+    "vmec_realspace_analysis",
     "vmec_realspace_geom_from_state",
     "ImplicitLambdaOptions",
     "ImplicitFixedBoundaryOptions",

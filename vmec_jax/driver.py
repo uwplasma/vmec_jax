@@ -119,6 +119,7 @@ def run_fixed_boundary(
     step_size: float = 5e-3,
     history_size: int = 10,
     use_initial_guess: bool = False,
+    vmec_project: bool = True,
     verbose: bool = True,
     grid=None,
 ):
@@ -130,13 +131,16 @@ def run_fixed_boundary(
         ``"gd"`` (gradient descent) or ``"lbfgs"``.
     use_initial_guess:
         If True, skip the solve and return the initialized state.
+    vmec_project:
+        If True (default), re-project the initial guess through the VMEC
+        internal grid/weights before returning or solving.
     verbose:
         If True (default), print VMEC-style iteration progress and a summary.
     """
     cfg, indata = load_config(str(input_path))
     static = build_static(cfg, grid=grid)
     bdy = boundary_from_indata(indata, static.modes)
-    st0 = initial_guess_from_boundary(static, bdy, indata)
+    st0 = initial_guess_from_boundary(static, bdy, indata, vmec_project=vmec_project)
 
     g0 = eval_geom(st0, static)
     signgs = signgs_from_sqrtg(np.asarray(g0.sqrtg), axis_index=1)

@@ -29,7 +29,11 @@ from .fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta
 from .namelist import InData
 from .state import StateLayout, VMECState
 from .static import VMECStatic
-from .vmec_realspace import vmec_realspace_synthesis, vmec_realspace_synthesis_dtheta
+from .vmec_realspace import (
+    vmec_realspace_analysis,
+    vmec_realspace_synthesis,
+    vmec_realspace_synthesis_dtheta,
+)
 from .vmec_tomnsp import vmec_trig_tables
 
 
@@ -392,6 +396,7 @@ def initial_guess_from_boundary(
     indata: InData | None = None,
     *,
     dtype=None,
+    vmec_project: bool = False,
 ) -> VMECState:
     """Build a VMECState initial guess from boundary coefficients.
 
@@ -407,6 +412,10 @@ def initial_guess_from_boundary(
         coefficients.
     dtype:
         Optional dtype for the returned arrays.
+    vmec_project:
+        If True, re-project the initial guess through VMEC's internal real-space
+        grid (via ``vmec_realspace_synthesis`` + ``vmec_realspace_analysis``).
+        This matches the VMEC grid/weighting used in parity diagnostics.
     """
     cfg = static.cfg
     K = static.modes.K
@@ -506,6 +515,29 @@ def initial_guess_from_boundary(
                     Zsin = jnp.array(Zsin)
                     Rcos[:, k] = new_R
                     Zsin[:, k] = new_Z
+
+    if vmec_project:
+        if cfg.lasym:
+            # Defer asymmetric support for the VMEC-grid projection.
+            vmec_project = False
+        else:
+            trig = vmec_trig_tables(
+                ntheta=cfg.ntheta,
+                nzeta=cfg.nzeta,
+                nfp=cfg.nfp,
+                mmax=cfg.mpol - 1,
+                nmax=cfg.ntor,
+                lasym=cfg.lasym,
+                dtype=dtype,
+            )
+            R_real = vmec_realspace_synthesis(coeff_cos=Rcos, coeff_sin=Rsin, modes=static.modes, trig=trig)
+            Z_real = vmec_realspace_synthesis(coeff_cos=Zcos, coeff_sin=Zsin, modes=static.modes, trig=trig)
+            Rcos, Rsin = vmec_realspace_analysis(f=R_real, modes=static.modes, trig=trig, parity="cos")
+            Zcos, Zsin = vmec_realspace_analysis(f=Z_real, modes=static.modes, trig=trig, parity="sin")
+            Rcos = Rcos.astype(dtype)
+            Rsin = Rsin.astype(dtype)
+            Zcos = Zcos.astype(dtype)
+            Zsin = Zsin.astype(dtype)
 
     Lcos = jnp.zeros((cfg.ns, K), dtype=dtype)
     Lsin = jnp.zeros((cfg.ns, K), dtype=dtype)
