@@ -205,26 +205,27 @@ def _recompute_axis_from_boundary(
         nmax=cfg.ntor,
         lasym=cfg.lasym,
     )
+    ntheta1, ntheta2, ntheta3 = int(trig.ntheta1), int(trig.ntheta2), int(trig.ntheta3)
 
     coeff_cos = np.asarray(boundary_recompute.R_cos)[None, :]
     coeff_sin = np.asarray(boundary_recompute.R_sin)[None, :]
-    R_lcfs = np.asarray(
+    R_lcfs_red = np.asarray(
         vmec_realspace_synthesis(coeff_cos=coeff_cos, coeff_sin=coeff_sin, modes=static.modes, trig=trig)
     )[0]
     coeff_cos = np.asarray(boundary_recompute.Z_cos)[None, :]
     coeff_sin = np.asarray(boundary_recompute.Z_sin)[None, :]
-    Z_lcfs = np.asarray(
+    Z_lcfs_red = np.asarray(
         vmec_realspace_synthesis(coeff_cos=coeff_cos, coeff_sin=coeff_sin, modes=static.modes, trig=trig)
     )[0]
 
     coeff_cos = np.asarray(boundary_recompute.R_cos)[None, :]
     coeff_sin = np.asarray(boundary_recompute.R_sin)[None, :]
-    dR_dtheta_lcfs = np.asarray(
+    dR_dtheta_lcfs_red = np.asarray(
         vmec_realspace_synthesis_dtheta(coeff_cos=coeff_cos, coeff_sin=coeff_sin, modes=static.modes, trig=trig)
     )[0]
     coeff_cos = np.asarray(boundary_recompute.Z_cos)[None, :]
     coeff_sin = np.asarray(boundary_recompute.Z_sin)[None, :]
-    dZ_dtheta_lcfs = np.asarray(
+    dZ_dtheta_lcfs_red = np.asarray(
         vmec_realspace_synthesis_dtheta(coeff_cos=coeff_cos, coeff_sin=coeff_sin, modes=static.modes, trig=trig)
     )[0]
 
@@ -253,7 +254,7 @@ def _recompute_axis_from_boundary(
         Rcos_mid[k] = (1.0 - s_mid) * raxis_cc[n] + s_mid * Rcos_mid[k]
         Zsin_mid[k] = (1.0 - s_mid) * (-zaxis_cs[n]) + s_mid * Zsin_mid[k]
 
-    R_half = np.asarray(
+    R_half_red = np.asarray(
         vmec_realspace_synthesis(
             coeff_cos=Rcos_mid[None, :],
             coeff_sin=Rsin_mid[None, :],
@@ -261,7 +262,7 @@ def _recompute_axis_from_boundary(
             trig=trig,
         )
     )[0]
-    Z_half = np.asarray(
+    Z_half_red = np.asarray(
         vmec_realspace_synthesis(
             coeff_cos=Zcos_mid[None, :],
             coeff_sin=Zsin_mid[None, :],
@@ -269,7 +270,7 @@ def _recompute_axis_from_boundary(
             trig=trig,
         )
     )[0]
-    dR_dtheta_half = np.asarray(
+    dR_dtheta_half_red = np.asarray(
         vmec_realspace_synthesis_dtheta(
             coeff_cos=Rcos_mid[None, :],
             coeff_sin=Rsin_mid[None, :],
@@ -277,7 +278,7 @@ def _recompute_axis_from_boundary(
             trig=trig,
         )
     )[0]
-    dZ_dtheta_half = np.asarray(
+    dZ_dtheta_half_red = np.asarray(
         vmec_realspace_synthesis_dtheta(
             coeff_cos=Zcos_mid[None, :],
             coeff_sin=Zsin_mid[None, :],
@@ -286,8 +287,42 @@ def _recompute_axis_from_boundary(
         )
     )[0]
 
-    dR_dtheta_half = 0.5 * (dR_dtheta_lcfs + dR_dtheta_half)
-    dZ_dtheta_half = 0.5 * (dZ_dtheta_lcfs + dZ_dtheta_half)
+    dR_dtheta_half_red = 0.5 * (dR_dtheta_lcfs_red + dR_dtheta_half_red)
+    dZ_dtheta_half_red = 0.5 * (dZ_dtheta_lcfs_red + dZ_dtheta_half_red)
+
+    # Expand to full theta grid (ntheta1) for symmetric cases.
+    R_lcfs = np.zeros((ntheta1, cfg.nzeta))
+    Z_lcfs = np.zeros((ntheta1, cfg.nzeta))
+    R_half = np.zeros((ntheta1, cfg.nzeta))
+    Z_half = np.zeros((ntheta1, cfg.nzeta))
+    dR_dtheta_lcfs = np.zeros((ntheta1, cfg.nzeta))
+    dZ_dtheta_lcfs = np.zeros((ntheta1, cfg.nzeta))
+    dR_dtheta_half = np.zeros((ntheta1, cfg.nzeta))
+    dZ_dtheta_half = np.zeros((ntheta1, cfg.nzeta))
+
+    # Fill reduced theta portion [0,pi].
+    R_lcfs[:ntheta3, :] = R_lcfs_red
+    Z_lcfs[:ntheta3, :] = Z_lcfs_red
+    R_half[:ntheta3, :] = R_half_red
+    Z_half[:ntheta3, :] = Z_half_red
+    dR_dtheta_lcfs[:ntheta3, :] = dR_dtheta_lcfs_red
+    dZ_dtheta_lcfs[:ntheta3, :] = dZ_dtheta_lcfs_red
+    dR_dtheta_half[:ntheta3, :] = dR_dtheta_half_red
+    dZ_dtheta_half[:ntheta3, :] = dZ_dtheta_half_red
+
+    if not cfg.lasym:
+        for iv in range(cfg.nzeta):
+            ivminus = (cfg.nzeta - iv) % cfg.nzeta
+            for iu in range(ntheta2, ntheta1):
+                iu_r = ntheta1 - iu
+                R_lcfs[iu, iv] = R_lcfs_red[iu_r, ivminus]
+                Z_lcfs[iu, iv] = -Z_lcfs_red[iu_r, ivminus]
+                R_half[iu, iv] = R_half_red[iu_r, ivminus]
+                Z_half[iu, iv] = -Z_half_red[iu_r, ivminus]
+                dR_dtheta_lcfs[iu, iv] = -dR_dtheta_lcfs_red[iu_r, ivminus]
+                dZ_dtheta_lcfs[iu, iv] = dZ_dtheta_lcfs_red[iu_r, ivminus]
+                dR_dtheta_half[iu, iv] = -dR_dtheta_half_red[iu_r, ivminus]
+                dZ_dtheta_half[iu, iv] = dZ_dtheta_half_red[iu_r, ivminus]
 
     cosnv = np.asarray(trig.cosnv)  # (nzeta, nmax+1)
     sinnv = np.asarray(trig.sinnv)
