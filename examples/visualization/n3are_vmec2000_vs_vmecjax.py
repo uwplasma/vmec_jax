@@ -108,8 +108,8 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--input", type=str, default=str(REPO_ROOT / "examples/data/input.n3are_R7.75B5.7_lowres"))
     p.add_argument("--outdir", type=str, default=str(REPO_ROOT / "docs/_static/figures"))
-    p.add_argument("--max-iter", type=int, default=8)
-    p.add_argument("--step-size", type=float, default=5e-3)
+    p.add_argument("--max-iter", type=int, default=20)
+    p.add_argument("--step-size", type=float, default=1e-5)
     p.add_argument("--solve", action="store_true", help="Run the vmec_jax fixed-boundary solver (slower).")
     p.add_argument("--no-solve", action="store_true", help="Use the initial guess only (fast).")
     args = p.parse_args()
@@ -121,9 +121,7 @@ def main() -> None:
     wout = _load_vmec2000_wout()
 
     # vmec_jax current output
-    use_initial_guess = True
-    if args.solve and not args.no_solve:
-        use_initial_guess = False
+    use_initial_guess = not bool(args.solve) or bool(args.no_solve)
 
     run = run_fixed_boundary(
         Path(args.input),
@@ -152,7 +150,7 @@ def main() -> None:
     )
     Raxis_jax, Zaxis_jax = axis_rz_from_state_physical(state, modes, phi=phi_slices, nfp=int(static.cfg.nfp))
 
-    jax_title = "vmec_jax (initial guess)" if use_initial_guess else "vmec_jax (current)"
+    jax_title = "vmec_jax (initial guess)" if use_initial_guess else "vmec_jax (solver)"
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 5.5))
     _plot_cross_sections(axes[0], R=R_vmec, Z=Z_vmec, Raxis=Raxis_vmec, Zaxis=Zaxis_vmec, title="VMEC2000")

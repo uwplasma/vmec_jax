@@ -12,9 +12,9 @@ For quick scripts, see the high-level driver helpers in `vmec_jax.driver` and
 `vmec_jax.plotting` (also summarized in `docs/quickstart.rst`).
 
 Below are **n3are** comparison plots generated with
-`examples/visualization/n3are_vmec2000_vs_vmecjax.py --no-solve` (VMEC2000 on the
+`examples/visualization/n3are_vmec2000_vs_vmecjax.py --solve` (VMEC2000 on the
 left, vmec_jax on the right). The vmec_jax side uses the current fixed‑boundary
-pipeline (initial guess by default; use `--solve` to run a short solve).
+pipeline with a small step size so the figures reflect the *current solver output*.
 
 | VMEC2000 | vmec_jax |
 | --- | --- |
