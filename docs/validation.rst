@@ -116,6 +116,13 @@ Notes:
   show that the eval_fourier and VMEC synthesis metric pieces agree to ~1e-16,
   so the remaining gap is likely tied to covariant field normalization rather
   than the raw metric construction.
+  The breakdown script ``examples/validation/bsub_parity_breakdown.py`` confirms:
+
+  - ``bsup*`` parity is tight (O(1e-13)) for the 3D cases.
+  - ``bsub*`` parity errors are unchanged whether we use eval_fourier or VMEC synthesis.
+  - ``bsub*`` errors match the metric-only reconstruction
+    (``bsub = g_uu B^u + g_uv B^v``),
+    pointing to a remaining half-mesh metric / parity convention mismatch.
 - For debugging/attribution during the parity push, ``vmec_jax.vmec_residue``
   provides ``vmec_fsq_sums_from_tomnsps`` (per-block sum-of-squares) and a
   small internal-consistency regression in ``tests/test_step10_getfsq_block_sums.py``.

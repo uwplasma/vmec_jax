@@ -136,7 +136,9 @@ Concrete milestones (correctness-first):
 - Close the remaining B-field parity gap for 3D (stellarator-symmetric) cases:
   - `bsup*` matches tightly on the VMEC internal grid, but `bsub*` differs by O(1-8%) in some nfp>1 cases (e.g. `li383_low_res`, `n3are`),
   - the likely root cause is a mismatch in VMEC’s *real-space synthesis/metric* conventions vs the current basis evaluation (parity + half-mesh rules),
-  - plan: implement VMEC-style `totzsp` synthesis (using `fixaray` trig tables and reduced theta grid) for R/Z/L and derivatives used by `bcovar`.
+  - plan: validate half-mesh metric conventions using the breakdown script
+    (`examples/validation/bsub_parity_breakdown.py`) and reconcile the remaining
+    parity mismatch in the `bcovar` metric construction.
 - Finish the remaining VMEC2000 “plumbing” that affects Step-10 scalars:
   - reconcile any `bcovar` half/full mesh details that influence `forces` (beyond the dynamic norms path),
   - confirm axis rules (`jmin1/jmin2/jlam`) and `LCONM1` constraint behavior match `residue.f90` in the converged regime.
