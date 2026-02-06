@@ -1102,7 +1102,9 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
     """Fixed-boundary solve by minimizing a VMEC-style force-residual objective.
 
     The objective is computed using the Step-10 parity pipeline:
-      `bcovar` -> `forces` -> `tomnsps` -> sum-of-squares of Fourier residual blocks.
+      `bcovar` -> `forces` -> `tomnsps` -> sum-of-squares of Fourier residual blocks,
+    using VMEC's `getfsq` conventions (notably: post-`tomnsps` `scalxc` scaling,
+    optional converged-iteration m=1 constraints, and R/Z edge exclusion).
 
     Notes
     -----
@@ -1143,7 +1145,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
     from .field import half_mesh_avg_from_full_mesh
     from .profiles import eval_profiles
     from .vmec_forces import vmec_forces_rz_from_wout, vmec_residual_internal_from_kernels
-    from .vmec_residue import vmec_apply_m1_constraints
+    from .vmec_residue import vmec_gcx2_from_tomnsps
     from .vmec_tomnsp import vmec_trig_tables
 
     s = jnp.asarray(static.s)
@@ -1192,33 +1194,14 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
             trig=trig,
             apply_lforbal=False,
         )
-        frzl = rzl
-        if bool(apply_m1_constraints):
-            frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(getattr(static.cfg, "lconm1", True)))
-
-        fsqr2 = jnp.sum(jnp.asarray(frzl.frcc) ** 2)
-        fsqz2 = jnp.sum(jnp.asarray(frzl.fzsc) ** 2)
-        fsql2 = jnp.sum(jnp.asarray(frzl.flsc) ** 2)
-        if frzl.frss is not None:
-            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frss) ** 2)
-        if frzl.fzcs is not None:
-            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcs) ** 2)
-        if frzl.flcs is not None:
-            fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcs) ** 2)
-
-        if getattr(frzl, "frsc", None) is not None:
-            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frsc) ** 2)
-        if getattr(frzl, "fzcc", None) is not None:
-            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcc) ** 2)
-        if getattr(frzl, "flcc", None) is not None:
-            fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcc) ** 2)
-
-        if getattr(frzl, "frcs", None) is not None:
-            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frcs) ** 2)
-        if getattr(frzl, "fzss", None) is not None:
-            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzss) ** 2)
-        if getattr(frzl, "flss", None) is not None:
-            fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flss) ** 2)
+        fsqr2, fsqz2, fsql2 = vmec_gcx2_from_tomnsps(
+            frzl=rzl,
+            lconm1=bool(getattr(static.cfg, "lconm1", True)),
+            apply_m1_constraints=bool(apply_m1_constraints),
+            include_edge=False,
+            apply_scalxc=True,
+            s=s,
+        )
 
         w = (w_rz * (fsqr2 + fsqz2)) + (w_l * fsql2)
         if objective_scale_f is not None:
@@ -1272,33 +1255,14 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
                 trig=trig,
                 apply_lforbal=False,
             )
-            frzl = rzl
-            if bool(apply_m1_constraints):
-                frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(getattr(static.cfg, "lconm1", True)))
-
-            fsqr2 = jnp.sum(jnp.asarray(frzl.frcc) ** 2)
-            fsqz2 = jnp.sum(jnp.asarray(frzl.fzsc) ** 2)
-            fsql2 = jnp.sum(jnp.asarray(frzl.flsc) ** 2)
-            if frzl.frss is not None:
-                fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frss) ** 2)
-            if frzl.fzcs is not None:
-                fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcs) ** 2)
-            if frzl.flcs is not None:
-                fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcs) ** 2)
-
-            if getattr(frzl, "frsc", None) is not None:
-                fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frsc) ** 2)
-            if getattr(frzl, "fzcc", None) is not None:
-                fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcc) ** 2)
-            if getattr(frzl, "flcc", None) is not None:
-                fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcc) ** 2)
-
-            if getattr(frzl, "frcs", None) is not None:
-                fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frcs) ** 2)
-            if getattr(frzl, "fzss", None) is not None:
-                fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzss) ** 2)
-            if getattr(frzl, "flss", None) is not None:
-                fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flss) ** 2)
+            fsqr2, fsqz2, fsql2 = vmec_gcx2_from_tomnsps(
+                frzl=rzl,
+                lconm1=bool(getattr(static.cfg, "lconm1", True)),
+                apply_m1_constraints=bool(apply_m1_constraints),
+                include_edge=False,
+                apply_scalxc=True,
+                s=s,
+            )
 
             w = (w_rz * (fsqr2 + fsqz2)) + (w_l * fsql2)
             w = jnp.asarray(objective_scale_f, dtype=jnp.asarray(w).dtype) * w
@@ -1523,6 +1487,10 @@ def solve_fixed_boundary_gn_vmec_residual(
         (Jᵀ J + damping * I) dx = -Jᵀ r
 
     where `r(state)` is the stacked residual vector and `J` is its Jacobian.
+
+    The residual vector uses the same conventions as `vmec_jax.vmec_residue`
+    (post-`tomnsps` `scalxc` scaling, optional m=1 constraints, and R/Z edge
+    exclusion) so the objective is consistent with Step-10 scalar definitions.
     """
     if not has_jax():
         raise ImportError("solve_fixed_boundary_gn_vmec_residual requires JAX (jax + jaxlib)")
@@ -1552,8 +1520,8 @@ def solve_fixed_boundary_gn_vmec_residual(
     from .field import half_mesh_avg_from_full_mesh
     from .profiles import eval_profiles
     from .vmec_forces import vmec_forces_rz_from_wout, vmec_residual_internal_from_kernels
-    from .vmec_residue import vmec_apply_m1_constraints
-    from .vmec_tomnsp import vmec_trig_tables
+    from .vmec_residue import vmec_apply_m1_constraints, vmec_apply_scalxc_to_tomnsps
+    from .vmec_tomnsp import TomnspsRZL, vmec_trig_tables
 
     try:
         from jax.scipy.sparse.linalg import cg  # type: ignore
@@ -1613,6 +1581,14 @@ def solve_fixed_boundary_gn_vmec_residual(
             idx00=idx00,
         )
 
+    def _zero_edge_rz(a):
+        a = None if a is None else jnp.asarray(a)
+        if a is None:
+            return None
+        if a.shape[0] < 2:
+            return a
+        return a.at[-1].set(jnp.zeros_like(a[-1]))
+
     def _residual_blocks(state: VMECState):
         k = vmec_forces_rz_from_wout(
             state=state,
@@ -1629,48 +1605,70 @@ def solve_fixed_boundary_gn_vmec_residual(
             trig=trig,
             apply_lforbal=False,
         )
+        frzl = rzl
         if bool(apply_m1_constraints):
-            rzl = vmec_apply_m1_constraints(frzl=rzl, lconm1=bool(getattr(static.cfg, "lconm1", True)))
+            frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(getattr(static.cfg, "lconm1", True)))
 
-        fsqr2 = jnp.sum(jnp.asarray(rzl.frcc) ** 2)
-        fsqz2 = jnp.sum(jnp.asarray(rzl.fzsc) ** 2)
-        fsql2 = jnp.sum(jnp.asarray(rzl.flsc) ** 2)
-        if rzl.frss is not None:
-            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(rzl.frss) ** 2)
-        if rzl.fzcs is not None:
-            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(rzl.fzcs) ** 2)
-        if rzl.flcs is not None:
-            fsql2 = fsql2 + jnp.sum(jnp.asarray(rzl.flcs) ** 2)
+        # VMEC convention: after tomnsps, scale Fourier-space forces by `scalxc`
+        # before forming sums-of-squares/scalars (funct3d.f).
+        frzl = vmec_apply_scalxc_to_tomnsps(frzl=frzl, s=s)
 
-        if getattr(rzl, "frsc", None) is not None:
-            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(rzl.frsc) ** 2)
-        if getattr(rzl, "fzcc", None) is not None:
-            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(rzl.fzcc) ** 2)
-        if getattr(rzl, "flcc", None) is not None:
-            fsql2 = fsql2 + jnp.sum(jnp.asarray(rzl.flcc) ** 2)
+        # VMEC convention: R/Z sums exclude the edge surface; enforce that by
+        # zeroing R/Z blocks at js=ns (lambda blocks are left untouched).
+        frzl = TomnspsRZL(
+            frcc=_zero_edge_rz(frzl.frcc),
+            frss=_zero_edge_rz(frzl.frss),
+            fzsc=_zero_edge_rz(frzl.fzsc),
+            fzcs=_zero_edge_rz(frzl.fzcs),
+            flsc=frzl.flsc,
+            flcs=frzl.flcs,
+            frsc=_zero_edge_rz(getattr(frzl, "frsc", None)),
+            frcs=_zero_edge_rz(getattr(frzl, "frcs", None)),
+            fzcc=_zero_edge_rz(getattr(frzl, "fzcc", None)),
+            fzss=_zero_edge_rz(getattr(frzl, "fzss", None)),
+            flcc=getattr(frzl, "flcc", None),
+            flss=getattr(frzl, "flss", None),
+        )
 
-        if getattr(rzl, "frcs", None) is not None:
-            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(rzl.frcs) ** 2)
-        if getattr(rzl, "fzss", None) is not None:
-            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(rzl.fzss) ** 2)
-        if getattr(rzl, "flss", None) is not None:
-            fsql2 = fsql2 + jnp.sum(jnp.asarray(rzl.flss) ** 2)
-        return rzl, fsqr2, fsqz2, fsql2
+        fsqr2 = jnp.sum(jnp.asarray(frzl.frcc) ** 2)
+        fsqz2 = jnp.sum(jnp.asarray(frzl.fzsc) ** 2)
+        fsql2 = jnp.sum(jnp.asarray(frzl.flsc) ** 2)
+        if frzl.frss is not None:
+            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frss) ** 2)
+        if frzl.fzcs is not None:
+            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcs) ** 2)
+        if frzl.flcs is not None:
+            fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcs) ** 2)
+
+        if getattr(frzl, "frsc", None) is not None:
+            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frsc) ** 2)
+        if getattr(frzl, "fzcc", None) is not None:
+            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzcc) ** 2)
+        if getattr(frzl, "flcc", None) is not None:
+            fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flcc) ** 2)
+
+        if getattr(frzl, "frcs", None) is not None:
+            fsqr2 = fsqr2 + jnp.sum(jnp.asarray(frzl.frcs) ** 2)
+        if getattr(frzl, "fzss", None) is not None:
+            fsqz2 = fsqz2 + jnp.sum(jnp.asarray(frzl.fzss) ** 2)
+        if getattr(frzl, "flss", None) is not None:
+            fsql2 = fsql2 + jnp.sum(jnp.asarray(frzl.flss) ** 2)
+        return frzl, fsqr2, fsqz2, fsql2
 
     def _residual_vec(state: VMECState) -> Any:
-        rzl, *_ = _residual_blocks(state)
-        srz = jnp.asarray(np.sqrt(w_rz), dtype=jnp.asarray(rzl.frcc).dtype)
-        sl = jnp.asarray(np.sqrt(w_l), dtype=jnp.asarray(rzl.frcc).dtype)
+        frzl, *_ = _residual_blocks(state)
+        srz = jnp.asarray(np.sqrt(w_rz), dtype=jnp.asarray(frzl.frcc).dtype)
+        sl = jnp.asarray(np.sqrt(w_l), dtype=jnp.asarray(frzl.frcc).dtype)
 
-        parts = [srz * rzl.frcc, srz * rzl.fzsc, sl * rzl.flsc]
-        if rzl.frss is not None:
-            parts.append(srz * rzl.frss)
-        if rzl.fzcs is not None:
-            parts.append(srz * rzl.fzcs)
-        if rzl.flcs is not None:
-            parts.append(sl * rzl.flcs)
+        parts = [srz * frzl.frcc, srz * frzl.fzsc, sl * frzl.flsc]
+        if frzl.frss is not None:
+            parts.append(srz * frzl.frss)
+        if frzl.fzcs is not None:
+            parts.append(srz * frzl.fzcs)
+        if frzl.flcs is not None:
+            parts.append(sl * frzl.flcs)
         for name in ["frsc", "fzcc", "flcc", "frcs", "fzss", "flss"]:
-            a = getattr(rzl, name, None)
+            a = getattr(frzl, name, None)
             if a is not None:
                 if name.startswith("fl"):
                     parts.append(sl * a)
@@ -1679,7 +1677,7 @@ def solve_fixed_boundary_gn_vmec_residual(
         return jnp.concatenate([jnp.ravel(jnp.asarray(p)) for p in parts], axis=0)
 
     def _obj_terms(state: VMECState):
-        rzl, fsqr2, fsqz2, fsql2 = _residual_blocks(state)
+        _frzl, fsqr2, fsqz2, fsql2 = _residual_blocks(state)
         w = (w_rz * (fsqr2 + fsqz2)) + (w_l * fsql2)
         return fsqr2, fsqz2, fsql2, w
 

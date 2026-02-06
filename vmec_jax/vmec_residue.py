@@ -270,21 +270,20 @@ def vmec_apply_scalxc_to_tomnsps(*, frzl: TomnspsRZL, s: Any) -> TomnspsRZL:
     )
 
 
-def vmec_fsq_from_tomnsps(
+def vmec_gcx2_from_tomnsps(
     *,
     frzl: TomnspsRZL,
-    norms: VmecForceNorms,
     lconm1: bool = True,
     apply_m1_constraints: bool = True,
     include_edge: bool = False,
     apply_scalxc: bool = True,
     s: Any | None = None,
-) -> VmecFsqScalars:
-    """Compute (fsqr,fsqz,fsql) from VMEC-style tomnsps outputs.
+) -> tuple[Any, Any, Any]:
+    """Return VMEC-style (gcr2, gcz2, gcl2) sum-of-squares as JAX scalars.
 
-    When `lasym=True`, VMEC also computes and includes the asymmetric blocks
-    produced by `tomnspa`. In this repo those blocks (if present) are carried on
-    the same dataclass as optional fields.
+    This is the JAX-traceable core used by both diagnostics and solver objectives.
+    Unlike :func:`vmec_fsq_sums_from_tomnsps`, it does not build per-block Python
+    dictionaries and does not cast to Python floats.
     """
     if bool(apply_m1_constraints):
         frzl = vmec_apply_m1_constraints(frzl=frzl, lconm1=bool(lconm1))
@@ -325,6 +324,34 @@ def vmec_fsq_from_tomnsps(
         gcz2 = gcz2 + jnp.sum(jnp.asarray(frzl.fzss)[:jsmax] ** 2)
     if getattr(frzl, "flss", None) is not None:
         gcl2 = gcl2 + jnp.sum(jnp.asarray(frzl.flss) ** 2)
+
+    return gcr2, gcz2, gcl2
+
+
+def vmec_fsq_from_tomnsps(
+    *,
+    frzl: TomnspsRZL,
+    norms: VmecForceNorms,
+    lconm1: bool = True,
+    apply_m1_constraints: bool = True,
+    include_edge: bool = False,
+    apply_scalxc: bool = True,
+    s: Any | None = None,
+) -> VmecFsqScalars:
+    """Compute (fsqr,fsqz,fsql) from VMEC-style tomnsps outputs.
+
+    When `lasym=True`, VMEC also computes and includes the asymmetric blocks
+    produced by `tomnspa`. In this repo those blocks (if present) are carried on
+    the same dataclass as optional fields.
+    """
+    gcr2, gcz2, gcl2 = vmec_gcx2_from_tomnsps(
+        frzl=frzl,
+        lconm1=bool(lconm1),
+        apply_m1_constraints=bool(apply_m1_constraints),
+        include_edge=bool(include_edge),
+        apply_scalxc=bool(apply_scalxc),
+        s=s,
+    )
 
     fsqr = norms.r1 * norms.fnorm * float(gcr2)
     fsqz = norms.r1 * norms.fnorm * float(gcz2)
