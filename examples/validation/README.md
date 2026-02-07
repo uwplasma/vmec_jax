@@ -25,7 +25,7 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `n3are_vmec_vs_vmecjax.py`: side-by-side VMEC2000 vs vmec_jax plots with optional `--solve` execution (moved from `visualization/`).
   - For the current parity stage, `--no-solve` is the recommended visualization baseline; the fixed-boundary update loop is still being tightened.
   - With `--solve --solver vmecpp_iter`, iteration traces now include `fsqr/fsqz/fsql`, preconditioned `fsqr1/fsqz1/fsql1`, `dt_eff/update_rms`, and `step_status` (`momentum` / `restart_bad_progress` / `restart_bad_jacobian`) for update-loop diagnostics.
-- `vmecpp_reference_trace_suite.py`: multi-case trace harness for fixed-boundary parity work. Exports per-iteration vmec_jax histories (`fsq*`, `fsq1*`, `delt`, restart reasons/status) and optionally captures VMEC++ run summaries when `--with-vmecpp` is enabled.
+- `vmecpp_reference_trace_suite.py`: multi-case trace harness for fixed-boundary parity work. Exports per-iteration vmec_jax histories (`fsq*`, `fsq1*`, `res0/fsq_prev`, `iter1`, `bad_growth_streak`, `include_edge`, `zero_m1`, `dt_eff`, `update_rms`, restart reasons/status) and optionally captures VMEC++ run summaries when `--with-vmecpp` is enabled.
 - `vmecpp_trace_first_mismatch.py`: given a trace-suite JSON file, reports the first per-iteration mismatch (`fsqr/fsqz/fsql`) and first restart-reason mismatch between vmec_jax and VMEC++ traces.
 
 Notes:

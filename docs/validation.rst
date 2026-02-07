@@ -370,8 +370,10 @@ Current fixed-boundary solve status (n3are)
   restart ping-pong on 3D cases.
 - For deterministic parity debugging across multiple inputs, use
   ``examples/validation/vmecpp_reference_trace_suite.py`` to export
-  per-iteration traces (``fsq*``, ``fsq1*``, timestep, restart status) in a
-  single JSON report; optional VMEC++ summaries can be included with
+  per-iteration traces (``fsq*``, ``fsq1*``, ``res0/fsq_prev``, ``iter1``,
+  ``bad_growth_streak``, ``include_edge``, ``zero_m1``, timestep, restart
+  status, ``dt_eff/update_rms``) in a single JSON report; optional VMEC++
+  summaries can be included with
   ``--with-vmecpp``.
 - Use ``examples/validation/vmecpp_trace_first_mismatch.py`` on that JSON to
   automatically identify the first diverging iteration/metric (and restart

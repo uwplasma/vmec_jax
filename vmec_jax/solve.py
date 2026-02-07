@@ -2240,9 +2240,19 @@ def solve_fixed_boundary_vmecpp_iter(
     fsqr1_history = []
     fsqz1_history = []
     fsql1_history = []
+    fsq1_history = []
     step_status_history: list[str] = []
     restart_reason_history: list[str] = []
+    pre_restart_reason_history: list[str] = []
     time_step_history: list[float] = []
+    res0_history: list[float] = []
+    fsq_prev_history: list[float] = []
+    bad_growth_streak_history: list[int] = []
+    iter1_history: list[int] = []
+    include_edge_history: list[int] = []
+    zero_m1_history: list[int] = []
+    dt_eff_history: list[float] = []
+    update_rms_history: list[float] = []
     grad_rms_history = []
     step_history = []
 
@@ -2316,6 +2326,8 @@ def solve_fixed_boundary_vmecpp_iter(
         zero_m1 = jnp.asarray(1.0 if (it < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
                               dtype=jnp.asarray(state.Rcos).dtype)
         include_edge = bool(it < 50) and _edge_force_trigger(it, w_history, fsqr2_history, fsqz2_history)
+        include_edge_history.append(int(bool(include_edge)))
+        zero_m1_history.append(int(float(np.asarray(zero_m1)) > 0.5))
 
         frzl, fsqr, fsqz, fsql, rz_scale, l_scale = _compute_forces(state, include_edge=include_edge, zero_m1=zero_m1)
         fsqr_f = float(np.asarray(fsqr))
@@ -2411,6 +2423,7 @@ def solve_fixed_boundary_vmecpp_iter(
         fsqz1_f = float(np.asarray(fsqz1))
         fsql1_f = float(np.asarray(fsql1))
         fsq1 = fsqr1_f + fsqz1_f + fsql1_f
+        fsq1_history.append(fsq1)
         fsqr1_history.append(fsqr1_f)
         fsqz1_history.append(fsqz1_f)
         fsql1_history.append(fsql1_f)
@@ -2475,9 +2488,16 @@ def solve_fixed_boundary_vmecpp_iter(
             iter1 = iter2
             bad_growth_streak = 0
             step_history.append(0.0)
+            dt_eff_history.append(0.0)
+            update_rms_history.append(0.0)
             step_status_history.append(step_status)
             restart_reason_history.append(pre_restart_reason)
+            pre_restart_reason_history.append(pre_restart_reason)
             time_step_history.append(float(time_step))
+            res0_history.append(float(res0))
+            fsq_prev_history.append(float(fsq_prev))
+            bad_growth_streak_history.append(int(bad_growth_streak))
+            iter1_history.append(int(iter1))
             grad_rms_history.append(float(np.sqrt(max(fsqr_f + fsqz_f + fsql_f, 0.0))))
             if verbose:
                 print(
@@ -2820,6 +2840,8 @@ def solve_fixed_boundary_vmecpp_iter(
                 step_status = "rejected"
             step_history.append(dt_eff)
             restart_reason = "none"
+        dt_eff_history.append(float(dt_eff))
+        update_rms_history.append(float(update_rms))
         if verbose:
             print(
                 f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} "
@@ -2829,7 +2851,12 @@ def solve_fixed_boundary_vmecpp_iter(
             )
         step_status_history.append(step_status)
         restart_reason_history.append(restart_reason)
+        pre_restart_reason_history.append(pre_restart_reason)
         time_step_history.append(float(time_step))
+        res0_history.append(float(res0))
+        fsq_prev_history.append(float(fsq_prev))
+        bad_growth_streak_history.append(int(bad_growth_streak))
+        iter1_history.append(int(iter1))
         grad_rms_history.append(float(np.sqrt(max(fsqr_f + fsqz_f + fsql_f, 0.0))))
 
     diag: Dict[str, Any] = {
@@ -2848,7 +2875,17 @@ def solve_fixed_boundary_vmecpp_iter(
         "res0": float(res0),
         "step_status_history": np.asarray(step_status_history, dtype=object),
         "restart_reason_history": np.asarray(restart_reason_history, dtype=object),
+        "pre_restart_reason_history": np.asarray(pre_restart_reason_history, dtype=object),
         "time_step_history": np.asarray(time_step_history, dtype=float),
+        "res0_history": np.asarray(res0_history, dtype=float),
+        "fsq_prev_history": np.asarray(fsq_prev_history, dtype=float),
+        "bad_growth_streak_history": np.asarray(bad_growth_streak_history, dtype=int),
+        "iter1_history": np.asarray(iter1_history, dtype=int),
+        "include_edge_history": np.asarray(include_edge_history, dtype=int),
+        "zero_m1_history": np.asarray(zero_m1_history, dtype=int),
+        "dt_eff_history": np.asarray(dt_eff_history, dtype=float),
+        "update_rms_history": np.asarray(update_rms_history, dtype=float),
+        "fsq1_history": np.asarray(fsq1_history, dtype=float),
         "fsqr1_history": np.asarray(fsqr1_history, dtype=float),
         "fsqz1_history": np.asarray(fsqz1_history, dtype=float),
         "fsql1_history": np.asarray(fsql1_history, dtype=float),
