@@ -254,6 +254,11 @@ For stage-by-stage parity against a fresh VMEC++ run, use::
 
   python examples/validation/vmecpp_stage_parity_pipeline.py --input examples/data/input.n3are_R7.75B5.7_lowres
 
+The stage gate uses a looser ``bsub`` threshold (``4e-2``) than ``bsup`` so
+that current runs can progress to the next actionable mismatch (``getfsq`` /
+update-loop conventions) instead of repeatedly stopping on the known
+few-``1e-2`` ``bsubu`` gap.
+
 For focused residual-scalar convention checks (`getfsq`) on the VMEC++ final
 state, use::
 

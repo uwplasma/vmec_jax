@@ -15,6 +15,7 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `external_vmec_driver_compare.py`: run VMEC2000 or VMEC++ (if installed) and compare the resulting `wout` to bundled references; optionally computes vmec_jax B-field parity metrics.
 - `n3are_vmecpp_stage_diagnostics.py`: stage-by-stage diagnostics for the `vmecpp_iter` path on n3are (geometry, tomnsps block norms, force scalars, VMEC-grid `|B|`) for initial guess vs post-solver state.
 - `vmecpp_stage_parity_pipeline.py`: VMEC++-run, stage-by-stage parity report that identifies the first failing block (`geometry -> bsup -> bsub -> getfsq`).
+- `vmecpp_stage_parity_pipeline.py` currently uses a looser `bsub` stage threshold (`4e-2`) so diagnostics continue into `getfsq`/solver-update mismatches instead of stopping on the known few-`1e-2` `bsubu` gap.
 - `vmecpp_stage_parity_pipeline.py` now uses direct Nyquist Fourier evaluation for `use_wout_bsup` reference fields, avoiding a small VMEC-synthesis mismatch in output `bsup*`.
 - `vmecpp_getfsq_decomposition.py`: sweeps `getfsq` conventions (`include_edge`, `scalxc`, `m=1`) on a VMEC++ final state to isolate residual-scalar convention mismatches.
 - `vmecpp_bsub_metric_probe.py`: decomposes `bsub` parity on a VMEC++ final state and attributes the remaining gap to metric pathways (`guu/guv/gvv`) and `bsup` terms.
