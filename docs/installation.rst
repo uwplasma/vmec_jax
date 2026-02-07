@@ -46,4 +46,4 @@ Install doc dependencies::
 
 Then build docs::
 
-  python -m sphinx -b html docs docs/_build/html
+  LANG=C LC_ALL=C python -m sphinx -b html docs docs/_build/html

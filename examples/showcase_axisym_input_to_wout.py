@@ -11,15 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from vmec_jax.driver import run_fixed_boundary, write_wout_from_fixed_boundary_run
-from vmec_jax.plotting import (
-    bmag_from_state_physical,
-    closed_theta_grid,
-    fix_matplotlib_3d,
-    profiles_from_wout,
-    surface_rz_from_wout_physical,
-)
-from vmec_jax.wout import read_wout, state_from_wout
+import vmec_jax.api as vj
 
 
 def main() -> None:
@@ -89,11 +81,11 @@ def main() -> None:
         )
         if args.step_size is not None:
             run_kws["step_size"] = float(args.step_size)
-        run = run_fixed_boundary(input_path, **run_kws)
+        run = vj.run_fixed_boundary(input_path, **run_kws)
         wout_new_path = case_out / f"wout_{case}_vmec_jax.nc"
-        wout_new = write_wout_from_fixed_boundary_run(wout_new_path, run, include_fsq=True)
+        wout_new = vj.write_wout_from_fixed_boundary_run(wout_new_path, run, include_fsq=True)
 
-        wout_ref = read_wout(wout_ref_path)
+        wout_ref = vj.read_wout(wout_ref_path)
         print(f"[axisym_showcase] wrote:      {wout_new_path}")
         print(f"[axisym_showcase] reference:  {wout_ref_path}")
 
@@ -107,8 +99,8 @@ def main() -> None:
         err_zmns = _rel_rms(np.asarray(wout_new.zmns), np.asarray(wout_ref.zmns))
         print(f"[axisym_showcase] geom rms:   rmnc_rel_rms={err_rmnc:.3e}  zmns_rel_rms={err_zmns:.3e}")
 
-        pref = profiles_from_wout(wout_ref)
-        pnew = profiles_from_wout(wout_new)
+        pref = vj.profiles_from_wout(wout_ref)
+        pnew = vj.profiles_from_wout(wout_new)
         err_iota = _rel_rms(pnew['iotaf'], pref['iotaf'])
         err_pres = _rel_rms(pnew['pres'], pref['pres'])
         print(f"[axisym_showcase] prof rms:   iotaf_rel_rms={err_iota:.3e}  pres_rel_rms={err_pres:.3e}")
@@ -117,7 +109,7 @@ def main() -> None:
             continue
 
         # Plot grids (vmecPlot2-like).
-        theta = closed_theta_grid(256)
+        theta = vj.closed_theta_grid(256)
         phi = np.linspace(0.0, 2.0 * np.pi, 256, endpoint=False)
         ns = int(wout_ref.ns)
         s_idx_list = [0, max(1, ns // 4), max(1, ns // 2), max(1, (3 * ns) // 4), ns - 1]
@@ -125,15 +117,15 @@ def main() -> None:
         # Evaluate |B| from state (avoid relying on Nyquist `bmnc` in minimal wouts).
         indata = run.indata
         static = run.static
-        st_ref = state_from_wout(wout_ref)
-        st_new = state_from_wout(wout_new)
+        st_ref = vj.state_from_wout(wout_ref)
+        st_new = vj.state_from_wout(wout_new)
 
         # 1) Nested surfaces cross-section (phi=0).
         fig, ax = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
         for s_idx in s_idx_list:
-            R0, Z0 = surface_rz_from_wout_physical(wout_ref, theta=theta, phi=np.asarray([0.0]), s_index=int(s_idx), nyq=False)
+            R0, Z0 = vj.surface_rz_from_wout_physical(wout_ref, theta=theta, phi=np.asarray([0.0]), s_index=int(s_idx), nyq=False)
             ax[0].plot(R0[:, 0], Z0[:, 0], lw=1.0)
-            R1, Z1 = surface_rz_from_wout_physical(wout_new, theta=theta, phi=np.asarray([0.0]), s_index=int(s_idx), nyq=False)
+            R1, Z1 = vj.surface_rz_from_wout_physical(wout_new, theta=theta, phi=np.asarray([0.0]), s_index=int(s_idx), nyq=False)
             ax[1].plot(R1[:, 0], Z1[:, 0], lw=1.0)
         ax[0].set_title("VMEC2000 (reference)")
         ax[1].set_title("vmec_jax (new wout)")
@@ -149,9 +141,9 @@ def main() -> None:
         phi_slices = np.asarray([0.0, 0.5 * np.pi, 1.0 * np.pi, 1.5 * np.pi])
         fig, ax = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
         for ph in phi_slices:
-            R0, Z0 = surface_rz_from_wout_physical(wout_ref, theta=theta, phi=np.asarray([ph]), s_index=ns - 1, nyq=False)
+            R0, Z0 = vj.surface_rz_from_wout_physical(wout_ref, theta=theta, phi=np.asarray([ph]), s_index=ns - 1, nyq=False)
             ax[0].plot(R0[:, 0], Z0[:, 0], lw=1.0, label=f"phi={ph:.2f}")
-            R1, Z1 = surface_rz_from_wout_physical(wout_new, theta=theta, phi=np.asarray([ph]), s_index=ns - 1, nyq=False)
+            R1, Z1 = vj.surface_rz_from_wout_physical(wout_new, theta=theta, phi=np.asarray([ph]), s_index=ns - 1, nyq=False)
             ax[1].plot(R1[:, 0], Z1[:, 0], lw=1.0, label=f"phi={ph:.2f}")
         ax[0].set_title("VMEC2000 (reference)")
         ax[1].set_title("vmec_jax (new wout)")
@@ -165,8 +157,8 @@ def main() -> None:
         plt.close(fig)
 
         # 3) |B| on the LCFS (theta, phi) computed from state (no Nyquist dependency).
-        B_ref = bmag_from_state_physical(st_ref, static, indata=indata, theta=theta, phi=phi, s_index=ns - 1)
-        B_new = bmag_from_state_physical(st_new, static, indata=indata, theta=theta, phi=phi, s_index=ns - 1)
+        B_ref = vj.bmag_from_state_physical(st_ref, static, indata=indata, theta=theta, phi=phi, s_index=ns - 1)
+        B_new = vj.bmag_from_state_physical(st_new, static, indata=indata, theta=theta, phi=phi, s_index=ns - 1)
         fig, ax = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
         vmin = float(np.min([np.min(B_ref), np.min(B_new)]))
         vmax = float(np.max([np.max(B_ref), np.max(B_new)]))
@@ -183,10 +175,10 @@ def main() -> None:
         plt.close(fig)
 
         # 4) 3D LCFS surface colored by |B| (state-derived).
-        th3 = closed_theta_grid(120)
+        th3 = vj.closed_theta_grid(120)
         ph3 = np.linspace(0.0, 2.0 * np.pi, 120, endpoint=False)
-        Rlcfs, Zlcfs = surface_rz_from_wout_physical(wout_new, theta=th3, phi=ph3, s_index=ns - 1, nyq=False)
-        Blcfs = bmag_from_state_physical(st_new, static, indata=indata, theta=th3, phi=ph3, s_index=ns - 1)
+        Rlcfs, Zlcfs = vj.surface_rz_from_wout_physical(wout_new, theta=th3, phi=ph3, s_index=ns - 1, nyq=False)
+        Blcfs = vj.bmag_from_state_physical(st_new, static, indata=indata, theta=th3, phi=ph3, s_index=ns - 1)
         X = Rlcfs * np.cos(ph3[None, :])
         Y = Rlcfs * np.sin(ph3[None, :])
         fig = plt.figure(figsize=(6, 5), constrained_layout=True)
@@ -196,7 +188,7 @@ def main() -> None:
         ax3.set_xlabel("X")
         ax3.set_ylabel("Y")
         ax3.set_zlabel("Z")
-        fix_matplotlib_3d(ax3)
+        vj.fix_matplotlib_3d(ax3)
         fig.savefig(case_out / "lcfs_3d_bmag.png", dpi=180)
         plt.close(fig)
 

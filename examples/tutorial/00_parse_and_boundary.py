@@ -17,17 +17,12 @@ from pathlib import Path
 
 import numpy as np
 
-# Allow running from the examples/ directory without installing the package.
+# Allow running from the repo root without installing.
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from vmec_jax.config import load_config
-from vmec_jax._compat import has_jax, enable_x64
-from vmec_jax.modes import vmec_mode_table
-from vmec_jax.grids import make_angle_grid
-from vmec_jax.boundary import boundary_from_indata
-from vmec_jax.fourier import build_helical_basis, eval_fourier, eval_fourier_dtheta, eval_fourier_dzeta_phys
+import vmec_jax as vj
 
 
 def main():
@@ -41,23 +36,20 @@ def main():
     if not inp.exists():
         ap.error(f"Input file not found: {args.input}")
 
-    cfg, indata = load_config(str(inp))
-    # VMEC is typically run in float64. If JAX is installed, enable it.
-    if has_jax():
-        enable_x64(True)
-    modes = vmec_mode_table(cfg.mpol, cfg.ntor)
-    grid = make_angle_grid(cfg.ntheta, cfg.nzeta, cfg.nfp)
+    cfg, indata = vj.load_config(str(inp))
+    modes = vj.vmec_mode_table(cfg.mpol, cfg.ntor)
+    grid = vj.make_angle_grid(cfg.ntheta, cfg.nzeta, cfg.nfp)
 
-    bdy = boundary_from_indata(indata, modes)
-    basis = build_helical_basis(modes, grid)
+    bdy = vj.boundary_from_indata(indata, modes)
+    basis = vj.build_helical_basis(modes, grid)
 
-    R = np.asarray(eval_fourier(bdy.R_cos, bdy.R_sin, basis))
-    Z = np.asarray(eval_fourier(bdy.Z_cos, bdy.Z_sin, basis))
+    R = np.asarray(vj.eval_fourier(bdy.R_cos, bdy.R_sin, basis))
+    Z = np.asarray(vj.eval_fourier(bdy.Z_cos, bdy.Z_sin, basis))
 
-    dR_dtheta = np.asarray(eval_fourier_dtheta(bdy.R_cos, bdy.R_sin, basis))
-    dZ_dtheta = np.asarray(eval_fourier_dtheta(bdy.Z_cos, bdy.Z_sin, basis))
-    dR_dphi = np.asarray(eval_fourier_dzeta_phys(bdy.R_cos, bdy.R_sin, basis))
-    dZ_dphi = np.asarray(eval_fourier_dzeta_phys(bdy.Z_cos, bdy.Z_sin, basis))
+    dR_dtheta = np.asarray(vj.eval_fourier_dtheta(bdy.R_cos, bdy.R_sin, basis))
+    dZ_dtheta = np.asarray(vj.eval_fourier_dtheta(bdy.Z_cos, bdy.Z_sin, basis))
+    dR_dphi = np.asarray(vj.eval_fourier_dzeta_phys(bdy.R_cos, bdy.R_sin, basis))
+    dZ_dphi = np.asarray(vj.eval_fourier_dzeta_phys(bdy.Z_cos, bdy.Z_sin, basis))
 
     # quick scalar sanity metrics
     print("==== vmec_jax step-0 boundary eval ====")

@@ -17,12 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from vmec_jax.driver import load_example
-from vmec_jax.plotting import (
-    bmag_from_state_physical,
-    fix_matplotlib_3d,
-    surface_rz_from_wout_physical,
-)
+import vmec_jax.api as vj
 
 
 def _ensure_outdir(path: Path) -> Path:
@@ -45,7 +40,7 @@ def main():
     args = ap.parse_args()
 
     outdir = _ensure_outdir(Path(args.outdir))
-    ex = load_example(args.case, with_wout=True)
+    ex = vj.load_example(args.case, with_wout=True)
     if ex.wout is None or ex.state is None:
         raise RuntimeError(f"Missing bundled wout for case={args.case}")
 
@@ -66,12 +61,12 @@ def main():
     s_indices = np.linspace(0, s_index_lcfs, nsurf).round().astype(int)
     nested = []
     for si in s_indices:
-        R, Z = surface_rz_from_wout_physical(wout, theta=theta, phi=phi0, s_index=int(si), nyq=False)
+        R, Z = vj.surface_rz_from_wout_physical(wout, theta=theta, phi=phi0, s_index=int(si), nyq=False)
         nested.append((R[:, 0], Z[:, 0], int(si)))
 
     # |B| on the LCFS surface.
     # Use vmec_jax field evaluation from the wout-derived state.
-    B = bmag_from_state_physical(
+    B = vj.bmag_from_state_physical(
         state,
         static,
         indata=indata,
@@ -83,7 +78,7 @@ def main():
     # LCFS surface for 3D plot: evaluate R,Z on a (theta,phi) grid.
     # We use wout Fourier series for geometry so this matches VMECPlot2.
     TH, PH = np.meshgrid(theta, phi, indexing="ij")
-    R3, Z3 = surface_rz_from_wout_physical(
+    R3, Z3 = vj.surface_rz_from_wout_physical(
         wout,
         theta=theta,
         phi=phi,
@@ -147,7 +142,7 @@ def main():
     ax1.set_xlabel("X")
     ax1.set_ylabel("Y")
     ax1.set_zlabel("Z")
-    fix_matplotlib_3d(ax1)
+    vj.fix_matplotlib_3d(ax1)
 
     # |B| map
     ax2 = fig.add_subplot(gs[1, 0])

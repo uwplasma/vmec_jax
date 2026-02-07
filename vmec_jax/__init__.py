@@ -10,6 +10,7 @@ Step-0 contains:
 The full equilibrium solver will be built incrementally in later steps.
 """
 
+from . import api
 from .namelist import read_indata, InData
 from .config import VMECConfig, load_config
 from .modes import ModeTable, vmec_mode_table, nyquist_mode_table, default_grid_sizes
@@ -88,6 +89,7 @@ from .solve import (
 from .residuals import ForceResiduals, force_residuals_from_state
 
 __all__ = [
+    "api",
     "read_indata",
     "InData",
     "VMECConfig",

@@ -13,6 +13,7 @@ Submodules
    :toctree: generated
    :recursive:
 
+   api
    boundary
    config
    coords

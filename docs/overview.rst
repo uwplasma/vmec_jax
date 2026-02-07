@@ -40,9 +40,10 @@ workflows.
    Example output: last-closed flux surface (LCFS) cross-sections at several
    toroidal slices within one field period.
 
-Side-by-side VMEC2000 vs vmec_jax comparisons for the n3are case are generated
-by ``examples/visualization/n3are_vmec2000_vs_vmecjax.py`` (see README for a
-quick preview).
+The recommended end-to-end entrypoint is the axisymmetric showcase script:
+``examples/showcase_axisym_input_to_wout.py``. It runs bundled inputs, writes
+new ``wout_*.nc`` files, produces VMEC-style plots, and prints a small parity
+summary against the bundled VMEC2000 reference ``wout`` files.
 
 .. figure:: _static/figures/bmag_parity_error.png
    :alt: |B| parity error figure
