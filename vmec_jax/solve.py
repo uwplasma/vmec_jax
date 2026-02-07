@@ -1952,6 +1952,7 @@ def solve_fixed_boundary_vmecpp_iter(
         vmec_wint_from_trig,
         vmec_zero_m1_zforce,
     )
+    from .vmec_jacobian import vmec_half_mesh_jacobian_from_state
     from .vmec_tomnsp import TomnspsRZL, vmec_trig_tables
 
     s = jnp.asarray(static.s)
@@ -2257,6 +2258,9 @@ def solve_fixed_boundary_vmecpp_iter(
     w_try_history: list[float] = []
     w_try_ratio_history: list[float] = []
     restart_path_history: list[str] = []
+    min_tau_history: list[float] = []
+    max_tau_history: list[float] = []
+    bad_jacobian_history: list[int] = []
     grad_rms_history = []
     step_history = []
 
@@ -2332,8 +2336,11 @@ def solve_fixed_boundary_vmecpp_iter(
 
     for it in range(max_iter):
         iter2 = it + 1
-        zero_m1 = jnp.asarray(1.0 if (it < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
-                              dtype=jnp.asarray(state.Rcos).dtype)
+        iter_since_restart = iter2 - iter1
+        zero_m1 = jnp.asarray(
+            1.0 if (iter_since_restart < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
+            dtype=jnp.asarray(state.Rcos).dtype,
+        )
         include_edge = bool(it < 50) and _edge_force_trigger(it, w_history, fsqr2_history, fsqz2_history)
         include_edge_history.append(int(bool(include_edge)))
         zero_m1_history.append(int(float(np.asarray(zero_m1)) > 0.5))
@@ -2438,10 +2445,12 @@ def solve_fixed_boundary_vmecpp_iter(
         fsql1_history.append(fsql1_f)
 
         # VMEC++ time-step control trackers.
+        fsq = fsqr_f + fsqz_f + fsql_f
+        fsq_res = fsq if bool(vmecpp_reference_mode) else fsq1
         if (iter2 == iter1) or (res0 < 0.0):
-            res0 = fsq1
+            res0 = fsq_res
         res0_old = res0
-        res0 = min(res0, fsq1)
+        res0 = min(res0, fsq_res)
 
         # VMEC++ stores a "good" checkpoint once residual has improved for many
         # iterations since the last restart marker.
@@ -2449,40 +2458,56 @@ def solve_fixed_boundary_vmecpp_iter(
             state_checkpoint = state
 
         # VMEC++ restart triggers (bad progress / bad Jacobian proxy).
+        bad_jacobian = False
+        if bool(vmecpp_reference_mode):
+            jac = vmec_half_mesh_jacobian_from_state(state=state, modes=static.modes, trig=trig, s=s)
+            tau = np.asarray(jac.tau)
+            if tau.size:
+                min_tau = float(np.min(tau))
+                max_tau = float(np.max(tau))
+                bad_jacobian = (iter2 > 1) and (int(zero_m1) == 0) and ((min_tau * max_tau) < 0.0)
+                min_tau_history.append(min_tau)
+                max_tau_history.append(max_tau)
+                bad_jacobian_history.append(int(bad_jacobian))
+            else:
+                min_tau_history.append(float("nan"))
+                max_tau_history.append(float("nan"))
+                bad_jacobian_history.append(0)
+        else:
+            min_tau_history.append(float("nan"))
+            max_tau_history.append(float("nan"))
+            bad_jacobian_history.append(0)
         pre_restart_reason = "none"
-        if fsq1 > 100.0 * max(res0, 1e-30):
+        if fsq_res > 100.0 * max(res0, 1e-30):
             bad_growth_streak += 1
         else:
             bad_growth_streak = 0
-        early_bad_jacobian = False
+
         huge_initial_forces = False
         if bool(vmecpp_reference_mode):
-            # In VMEC++ traces, early post-restart growth is often handled
-            # immediately by a bad-jacobian restart. Keep this path scoped to
-            # reference mode so the default stable iterator is unchanged.
-            early_bad_jacobian = (
-                (iter2 <= (iter1 + 2))
-                and (fsq1 > 2.0 * max(fsq_prev, 1e-30))
-                and (fsq1 > 1.2 * max(res0, 1e-30))
-            )
-            # VMEC++ can trigger BAD_JACOBIAN / huge-initial-forces on the
-            # very first active iterate. Mirror that in reference mode only.
-            huge_initial_forces = (
-                (iter2 <= (iter1 + 1))
-                and (fsq1 > 1.0e6)
-                and (fsq1 >= 0.99 * max(res0, 1e-30))
-                and (int(huge_force_restart_count) < int(huge_force_restart_budget))
-            )
-
-        if huge_initial_forces or early_bad_jacobian or ((iter2 > (iter1 + 8)) and (bad_growth_streak >= 2)):
-            pre_restart_reason = "bad_jacobian"
-        elif (
-            (iter2 - iter1) > (k_preconditioner_update_interval // 2)
-            and (iter2 > 2 * k_preconditioner_update_interval)
-            and (fsq1 > 5.0 * max(res0, 1e-30))
-            and (fsq1 > 0.95 * max(fsq_prev, 1e-30))
-        ):
-            pre_restart_reason = "bad_progress"
+            # VMEC++ behavior (vmec.cc):
+            # - BAD_JACOBIAN if fsq > 100 * res0 and iter2 > iter1
+            # - BAD_PROGRESS if iter2 progression is large and fsqr+fsqz > 1e-2
+            if bad_jacobian:
+                pre_restart_reason = "bad_jacobian"
+            elif (iter2 > iter1) and (fsq > 100.0 * max(res0, 1e-30)):
+                pre_restart_reason = "bad_jacobian"
+            elif (
+                (iter2 - iter1) > (k_preconditioner_update_interval // 2)
+                and (iter2 > 2 * k_preconditioner_update_interval)
+                and ((fsqr_f + fsqz_f) > 1.0e-2)
+            ):
+                pre_restart_reason = "bad_progress"
+        else:
+            if (iter2 > (iter1 + 8)) and (bad_growth_streak >= 2):
+                pre_restart_reason = "bad_jacobian"
+            elif (
+                (iter2 - iter1) > (k_preconditioner_update_interval // 2)
+                and (iter2 > 2 * k_preconditioner_update_interval)
+                and (fsq1 > 5.0 * max(res0, 1e-30))
+                and (fsq1 > 0.95 * max(fsq_prev, 1e-30))
+            ):
+                pre_restart_reason = "bad_progress"
 
         if use_vmecpp_restart_triggers and pre_restart_reason != "none":
             state = state_checkpoint
@@ -2941,6 +2966,9 @@ def solve_fixed_boundary_vmecpp_iter(
         "w_try_history": np.asarray(w_try_history, dtype=float),
         "w_try_ratio_history": np.asarray(w_try_ratio_history, dtype=float),
         "restart_path_history": np.asarray(restart_path_history, dtype=object),
+        "min_tau_history": np.asarray(min_tau_history, dtype=float),
+        "max_tau_history": np.asarray(max_tau_history, dtype=float),
+        "bad_jacobian_history": np.asarray(bad_jacobian_history, dtype=int),
         "fsq1_history": np.asarray(fsq1_history, dtype=float),
         "fsqr1_history": np.asarray(fsqr1_history, dtype=float),
         "fsqz1_history": np.asarray(fsqz1_history, dtype=float),

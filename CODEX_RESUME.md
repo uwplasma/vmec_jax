@@ -183,6 +183,8 @@ Current incremental progress toward Step-8:
 - Added a regression that the VMEC2000 `wout` reference equilibrium is *nearly stationary* for our total-energy objective (gradient RMS is small), and now parse `fsqr/fsqz/fsql` from `wout_*.nc` for context.
 - Added a VMEC++ trace suite and restart-tuning reports (see `examples/validation/vmecpp_reference_trace_suite.py`
   and `examples/validation/vmecpp_restart_tuning_report.py`) to isolate solver update-loop mismatches.
+- Added VMEC++-style bad-Jacobian diagnostics (`min_tau/max_tau` from the half-mesh Jacobian) to the trace suite and
+  adjusted the `zero_m1` staging to reset after restarts for stepwise parity debugging.
 
 ### Step-9: Implicit differentiation
 - Replace backprop through iterations with implicit diff (custom VJP):
