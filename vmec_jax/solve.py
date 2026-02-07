@@ -2248,9 +2248,14 @@ def solve_fixed_boundary_vmecpp_iter(
     vLsc = jnp.zeros_like(vRcc)
     vLcs = jnp.zeros_like(vRcc)
     flip_sign = 1.0
-    max_coeff_delta_rms = 1e-3
-    max_update_rms = 5e-2
+    max_coeff_delta_rms = 1e-5
+    max_update_rms = 5e-3
     ijacob = 0
+    bad_resets = 0
+    iter1 = 1
+    res0 = -1.0
+    k_preconditioner_update_interval = 25
+    state_checkpoint = state
 
     def _edge_force_trigger(it: int, w_hist: list[float], fsqr_hist: list[float], fsqz_hist: list[float]) -> bool:
         """Heuristic for VMEC++-style edge-force inclusion.
@@ -2294,6 +2299,7 @@ def solve_fixed_boundary_vmecpp_iter(
         return max(dt_eff, 1e-12)
 
     for it in range(max_iter):
+        iter2 = it + 1
         zero_m1 = jnp.asarray(1.0 if (it < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
                               dtype=jnp.asarray(state.Rcos).dtype)
         include_edge = bool(it < 50) and _edge_force_trigger(it, w_history, fsqr2_history, fsqz2_history)
@@ -2396,7 +2402,62 @@ def solve_fixed_boundary_vmecpp_iter(
         fsqz1_history.append(fsqz1_f)
         fsql1_history.append(fsql1_f)
 
-        if it == 0:
+        # VMEC++ time-step control trackers.
+        if (iter2 == iter1) or (res0 < 0.0):
+            res0 = fsq1
+        res0 = min(res0, fsq1)
+
+        # VMEC++ stores a "good" checkpoint once residual has improved for many
+        # iterations since the last restart marker.
+        if (iter2 - iter1) > 10:
+            state_checkpoint = state
+
+        # VMEC++ restart triggers (bad progress / bad Jacobian proxy).
+        pre_restart_reason = "none"
+        if (iter2 > (iter1 + 3)) and (fsq1 > 100.0 * max(res0, 1e-30)):
+            pre_restart_reason = "bad_jacobian"
+        elif (
+            (iter2 - iter1) > (k_preconditioner_update_interval // 2)
+            and (iter2 > 2 * k_preconditioner_update_interval)
+            and ((fsqr_f + fsqz_f) > 1.0e-2)
+        ):
+            pre_restart_reason = "bad_progress"
+
+        if pre_restart_reason != "none":
+            state = state_checkpoint
+            vRcc = jnp.zeros_like(vRcc)
+            vRss = jnp.zeros_like(vRss)
+            vZsc = jnp.zeros_like(vZsc)
+            vZcs = jnp.zeros_like(vZcs)
+            vLsc = jnp.zeros_like(vLsc)
+            vLcs = jnp.zeros_like(vLcs)
+            if pre_restart_reason == "bad_jacobian":
+                time_step = max(0.9 * time_step, 1e-12)
+                ijacob += 1
+                step_status = "restart_bad_jacobian"
+            else:
+                time_step = max(time_step / 1.03, 1e-12)
+                step_status = "restart_bad_progress"
+            if ijacob in (25, 50):
+                scale = 0.98 if ijacob < 50 else 0.96
+                time_step = max(scale * float(step_size), 1e-12)
+            bad_resets += 1
+            iter1 = iter2
+            step_history.append(0.0)
+            step_status_history.append(step_status)
+            restart_reason_history.append(pre_restart_reason)
+            time_step_history.append(float(time_step))
+            grad_rms_history.append(float(np.sqrt(max(fsqr_f + fsqz_f + fsql_f, 0.0))))
+            if verbose:
+                print(
+                    f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} "
+                    f"dt_eff=0.000e+00 update_rms=0.000e+00 "
+                    f"fsqr1={fsqr1_f:.3e} fsqz1={fsqz1_f:.3e} fsql1={fsql1_f:.3e} "
+                    f"step_status={step_status}"
+                )
+            continue
+
+        if iter2 == iter1:
             inv_tau = [0.15 / time_step] * k_ndamp
         else:
             invtau_num = 0.0 if fsq1 == 0.0 else min(abs(np.log(fsq1 / fsq_prev)), 0.15)
@@ -2524,6 +2585,8 @@ def solve_fixed_boundary_vmecpp_iter(
                 if ijacob in (25, 50):
                     scale = 0.98 if ijacob < 50 else 0.96
                     time_step = max(scale * float(step_size), 1e-12)
+                bad_resets += 1
+                iter1 = iter2
                 update_rms = 0.0
             step_history.append(float(dt_eff))
         else:
@@ -2638,6 +2701,9 @@ def solve_fixed_boundary_vmecpp_iter(
         "vmecpp_strict_update": bool(vmecpp_strict_update),
         "max_update_rms": float(max_update_rms),
         "ijacob": int(ijacob),
+        "bad_resets": int(bad_resets),
+        "iter1_final": int(iter1),
+        "res0": float(res0),
         "step_status_history": np.asarray(step_status_history, dtype=object),
         "restart_reason_history": np.asarray(restart_reason_history, dtype=object),
         "time_step_history": np.asarray(time_step_history, dtype=float),

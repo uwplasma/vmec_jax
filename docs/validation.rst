@@ -357,6 +357,13 @@ Current fixed-boundary solve status (n3are)
   on catastrophic growth it rolls back to the previous state, zeroes update
   velocity, and reduces the effective time step (``/1.03`` for bad progress,
   ``*0.9`` for non-finite updates).
+- ``vmecpp_iter`` now also applies VMEC++-style progress triggers based on
+  preconditioned residual history (``res0``/``iter1`` tracking), and records
+  restart diagnostics (restart reason, effective time-step history, reset
+  counters) for stage-by-stage analysis.
+- Per-iteration displacement caps were tightened (force-based ``dt`` bound and
+  update RMS clip) to reduce unstable excursions while preserving momentum
+  updates.
 - Update logs include ``step_status`` (``momentum`` /
   ``restart_bad_progress`` / ``restart_bad_jacobian``) to show exactly where
   the restart path was triggered.
