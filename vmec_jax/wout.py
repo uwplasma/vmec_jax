@@ -13,6 +13,7 @@ from typing import Any, Dict
 import numpy as np
 
 from .modes import vmec_mode_table
+from .modes import nyquist_mode_table
 from .state import StateLayout, VMECState
 
 
@@ -248,10 +249,11 @@ def write_wout(path: str | Path, wout: WoutData, *, overwrite: bool = False) -> 
     pres_pa = np.asarray(wout.pres) / MU0
     presf_pa = np.asarray(wout.presf) / MU0
 
+    # Use VMEC-like dimension names for better interoperability with external tools.
     with netCDF4.Dataset(path, mode="w", format="NETCDF4") as ds:
-        ds.createDimension("ns", ns)
-        ds.createDimension("mnmax", mnmax)
-        ds.createDimension("mnmax_nyq", mnmax_nyq)
+        ds.createDimension("radius", ns)
+        ds.createDimension("mn_mode", mnmax)
+        ds.createDimension("mn_mode_nyq", mnmax_nyq)
         ds.createDimension("nstore_seq", nstore)
 
         def _var_i(name: str, dims: tuple[str, ...], data: np.ndarray) -> None:
@@ -279,47 +281,47 @@ def write_wout(path: str | Path, wout: WoutData, *, overwrite: bool = False) -> 
         _var_f("fsql", (), np.asarray(float(wout.fsql)))
 
         # Mode tables.
-        _var_i("xm", ("mnmax",), np.asarray(wout.xm))
-        _var_i("xn", ("mnmax",), np.asarray(wout.xn))
-        _var_i("xm_nyq", ("mnmax_nyq",), np.asarray(wout.xm_nyq))
-        _var_i("xn_nyq", ("mnmax_nyq",), np.asarray(wout.xn_nyq))
+        _var_i("xm", ("mn_mode",), np.asarray(wout.xm))
+        _var_i("xn", ("mn_mode",), np.asarray(wout.xn))
+        _var_i("xm_nyq", ("mn_mode_nyq",), np.asarray(wout.xm_nyq))
+        _var_i("xn_nyq", ("mn_mode_nyq",), np.asarray(wout.xn_nyq))
 
         # Geometry coefficients (full mesh).
-        _var_f("rmnc", ("ns", "mnmax"), np.asarray(wout.rmnc))
-        _var_f("rmns", ("ns", "mnmax"), np.asarray(wout.rmns))
-        _var_f("zmnc", ("ns", "mnmax"), np.asarray(wout.zmnc))
-        _var_f("zmns", ("ns", "mnmax"), np.asarray(wout.zmns))
-        _var_f("lmnc", ("ns", "mnmax"), np.asarray(wout.lmnc))
-        _var_f("lmns", ("ns", "mnmax"), np.asarray(wout.lmns))
+        _var_f("rmnc", ("radius", "mn_mode"), np.asarray(wout.rmnc))
+        _var_f("rmns", ("radius", "mn_mode"), np.asarray(wout.rmns))
+        _var_f("zmnc", ("radius", "mn_mode"), np.asarray(wout.zmnc))
+        _var_f("zmns", ("radius", "mn_mode"), np.asarray(wout.zmns))
+        _var_f("lmnc", ("radius", "mn_mode"), np.asarray(wout.lmnc))
+        _var_f("lmns", ("radius", "mn_mode"), np.asarray(wout.lmns))
 
         # Flux functions / profiles.
-        _var_f("phipf", ("ns",), np.asarray(wout.phipf))
-        _var_f("chipf", ("ns",), np.asarray(wout.chipf))
-        _var_f("phips", ("ns",), np.asarray(wout.phips))
-        _var_f("iotaf", ("ns",), np.asarray(wout.iotaf))
-        _var_f("iotas", ("ns",), np.asarray(wout.iotas))
+        _var_f("phipf", ("radius",), np.asarray(wout.phipf))
+        _var_f("chipf", ("radius",), np.asarray(wout.chipf))
+        _var_f("phips", ("radius",), np.asarray(wout.phips))
+        _var_f("iotaf", ("radius",), np.asarray(wout.iotaf))
+        _var_f("iotas", ("radius",), np.asarray(wout.iotas))
 
         # Nyquist Fourier fields.
-        _var_f("gmnc", ("ns", "mnmax_nyq"), np.asarray(wout.gmnc))
-        _var_f("gmns", ("ns", "mnmax_nyq"), np.asarray(wout.gmns))
-        _var_f("bsupumnc", ("ns", "mnmax_nyq"), np.asarray(wout.bsupumnc))
-        _var_f("bsupumns", ("ns", "mnmax_nyq"), np.asarray(wout.bsupumns))
-        _var_f("bsupvmnc", ("ns", "mnmax_nyq"), np.asarray(wout.bsupvmnc))
-        _var_f("bsupvmns", ("ns", "mnmax_nyq"), np.asarray(wout.bsupvmns))
+        _var_f("gmnc", ("radius", "mn_mode_nyq"), np.asarray(wout.gmnc))
+        _var_f("gmns", ("radius", "mn_mode_nyq"), np.asarray(wout.gmns))
+        _var_f("bsupumnc", ("radius", "mn_mode_nyq"), np.asarray(wout.bsupumnc))
+        _var_f("bsupumns", ("radius", "mn_mode_nyq"), np.asarray(wout.bsupumns))
+        _var_f("bsupvmnc", ("radius", "mn_mode_nyq"), np.asarray(wout.bsupvmnc))
+        _var_f("bsupvmns", ("radius", "mn_mode_nyq"), np.asarray(wout.bsupvmns))
 
-        _var_f("bsubumnc", ("ns", "mnmax_nyq"), np.asarray(wout.bsubumnc))
-        _var_f("bsubumns", ("ns", "mnmax_nyq"), np.asarray(wout.bsubumns))
-        _var_f("bsubvmnc", ("ns", "mnmax_nyq"), np.asarray(wout.bsubvmnc))
-        _var_f("bsubvmns", ("ns", "mnmax_nyq"), np.asarray(wout.bsubvmns))
+        _var_f("bsubumnc", ("radius", "mn_mode_nyq"), np.asarray(wout.bsubumnc))
+        _var_f("bsubumns", ("radius", "mn_mode_nyq"), np.asarray(wout.bsubumns))
+        _var_f("bsubvmnc", ("radius", "mn_mode_nyq"), np.asarray(wout.bsubvmnc))
+        _var_f("bsubvmns", ("radius", "mn_mode_nyq"), np.asarray(wout.bsubvmns))
 
-        _var_f("bmnc", ("ns", "mnmax_nyq"), np.asarray(wout.bmnc))
-        _var_f("bmns", ("ns", "mnmax_nyq"), np.asarray(wout.bmns))
+        _var_f("bmnc", ("radius", "mn_mode_nyq"), np.asarray(wout.bmnc))
+        _var_f("bmns", ("radius", "mn_mode_nyq"), np.asarray(wout.bmns))
 
         # 1D radial fields.
-        _var_f("vp", ("ns",), np.asarray(wout.vp))
-        _var_f("pres", ("ns",), np.asarray(pres_pa))
-        _var_f("presf", ("ns",), np.asarray(presf_pa))
-        _var_f("equif", ("ns",), np.asarray(getattr(wout, "equif", np.zeros((ns,), dtype=float))))
+        _var_f("vp", ("radius",), np.asarray(wout.vp))
+        _var_f("pres", ("radius",), np.asarray(pres_pa))
+        _var_f("presf", ("radius",), np.asarray(presf_pa))
+        _var_f("equif", ("radius",), np.asarray(getattr(wout, "equif", np.zeros((ns,), dtype=float))))
 
         # Iteration trace (optional).
         _var_f("fsqt", ("nstore_seq",), np.asarray(wout.fsqt))
@@ -334,6 +336,123 @@ def assert_main_modes_match_wout(*, wout: WoutData) -> None:
         raise ValueError("wout xm ordering does not match vmec_jax vmec_mode_table")
     if not np.array_equal(modes.n, (wout.xn // wout.nfp).astype(int)):
         raise ValueError("wout xn ordering does not match vmec_jax (expected xn = n*nfp)")
+
+
+def wout_minimal_from_fixed_boundary(
+    *,
+    path: str | Path,
+    state: VMECState,
+    static,
+    indata,
+    signgs: int,
+    fsqr: float,
+    fsqz: float,
+    fsql: float,
+) -> WoutData:
+    """Build a minimal :class:`WoutData` from an input-only fixed-boundary run.
+
+    This helper is intended for producing VMEC-compatible output files from
+    vmec_jax *without* reading any existing `wout_*.nc` as an input.
+
+    Scope:
+    - Writes the main Fourier coefficients (R/Z/lambda) using `vmec_mode_table`.
+    - Writes flux functions and profiles derived from `indata` (same path used by the solver).
+    - Sets Nyquist-derived fields (gmnc/bsup*/bsub*/bmnc) to zeros for now.
+      These can be filled in later once the full VMEC nyquist output path is
+      fully ported end-to-end.
+    """
+    from .energy import flux_profiles_from_indata
+    from .profiles import eval_profiles
+    from .field import half_mesh_avg_from_full_mesh, full_mesh_from_half_mesh_avg
+
+    cfg = static.cfg
+    ns = int(cfg.ns)
+    mpol = int(cfg.mpol)
+    ntor = int(cfg.ntor)
+    nfp = int(cfg.nfp)
+    lasym = bool(cfg.lasym)
+
+    main_modes = vmec_mode_table(mpol, ntor)
+    if int(main_modes.K) != int(state.layout.K):
+        raise ValueError("state mode count does not match vmec_mode_table(mpol,ntor)")
+
+    nyq_modes = nyquist_mode_table(mpol, ntor)
+
+    # Flux and profiles on VMEC half mesh.
+    s = np.asarray(static.s)
+    flux = flux_profiles_from_indata(indata, s, signgs=int(signgs))
+    chipf_wout = np.asarray(half_mesh_avg_from_full_mesh(np.asarray(flux.chipf)))
+
+    if ns < 2:
+        s_half = s
+    else:
+        s_half = np.concatenate([s[:1], 0.5 * (s[1:] + s[:-1])], axis=0)
+    prof = eval_profiles(indata, s_half)
+    pres = np.asarray(prof.get("pressure", np.zeros((ns,), dtype=float)))
+    presf = np.asarray(full_mesh_from_half_mesh_avg(pres))
+    iotaf = np.asarray(prof.get("iota", np.zeros((ns,), dtype=float)))
+    iotas = np.asarray(full_mesh_from_half_mesh_avg(iotaf))
+
+    # Geometry coefficients on the full mesh.
+    rmnc = np.asarray(state.Rcos, dtype=float)
+    rmns = np.asarray(state.Rsin, dtype=float)
+    zmnc = np.asarray(state.Zcos, dtype=float)
+    zmns = np.asarray(state.Zsin, dtype=float)
+    lmnc = np.asarray(state.Lcos, dtype=float)
+    lmns = np.asarray(state.Lsin, dtype=float)
+
+    mnmax_nyq = int(nyq_modes.K)
+    z2 = np.zeros((ns, mnmax_nyq), dtype=float)
+    z1 = np.zeros((ns,), dtype=float)
+
+    return WoutData(
+        path=Path(path),
+        ns=ns,
+        mpol=mpol,
+        ntor=ntor,
+        nfp=nfp,
+        lasym=lasym,
+        signgs=int(signgs),
+        xm=np.asarray(main_modes.m, dtype=int),
+        xn=np.asarray(main_modes.n * nfp, dtype=int),
+        xm_nyq=np.asarray(nyq_modes.m, dtype=int),
+        xn_nyq=np.asarray(nyq_modes.n * nfp, dtype=int),
+        rmnc=rmnc,
+        rmns=rmns,
+        zmnc=zmnc,
+        zmns=zmns,
+        lmnc=lmnc,
+        lmns=lmns,
+        phipf=np.asarray(flux.phipf, dtype=float),
+        chipf=np.asarray(chipf_wout, dtype=float),
+        phips=np.asarray(flux.phips, dtype=float),
+        iotaf=np.asarray(iotaf, dtype=float),
+        iotas=np.asarray(iotas, dtype=float),
+        gmnc=z2,
+        gmns=z2.copy(),
+        bsupumnc=z2.copy(),
+        bsupumns=z2.copy(),
+        bsupvmnc=z2.copy(),
+        bsupvmns=z2.copy(),
+        bsubumnc=z2.copy(),
+        bsubumns=z2.copy(),
+        bsubvmnc=z2.copy(),
+        bsubvmns=z2.copy(),
+        bmnc=z2.copy(),
+        bmns=z2.copy(),
+        wb=0.0,
+        volume_p=0.0,
+        gamma=float(getattr(indata, "get_float", lambda *_: 0.0)("GAMMA", 0.0)),
+        wp=0.0,
+        vp=z1,
+        pres=np.asarray(pres, dtype=float),
+        presf=np.asarray(presf, dtype=float),
+        fsqr=float(fsqr),
+        fsqz=float(fsqz),
+        fsql=float(fsql),
+        fsqt=np.zeros((0,), dtype=float),
+        equif=z1.copy(),
+    )
 
 
 def state_from_wout(wout: WoutData) -> VMECState:

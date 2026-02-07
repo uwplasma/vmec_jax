@@ -1,0 +1,43 @@
+&INDATA
+  MGRID_FILE = 'NONE                                                        '
+  LOPTIM =  F
+  LSPECTRUM_DUMP =  F
+  DELT =  0.9
+  TCON0 =  2.
+  NFP =  1
+  MPOL =  12
+  NTOR =  0
+  NITER = 2000
+
+  NS_ARRAY    =     13     25     51
+  FTOL_ARRAY  =  1e-20  1e-20  1e-20
+  NITER_ARRAY =   1000   1500   2000
+
+  NSTEP =  200
+  NVACSKIP =  3
+  GAMMA =   0.00000000E+00
+  PHIEDGE =   67.86
+  CURTOR =  1.0
+  SPRES_PED =   1.0000E+00
+  NCURR =  0
+
+  ! Pressure profile (Pa): PRES_SCALE * poly(s)
+  PRES_SCALE =  1.0e4
+  AM =  1.0  -1.0
+
+  ! Iota profile: AI[0] + AI[1] * s + ...
+  AI =  1.05  -0.35
+
+  AC = 0.0
+  RAXIS =   6.0
+  ZAXIS =   0.0
+
+  ! Axisymmetric shaped boundary (n=0).
+  ! R(theta) = R0 + a1 cos(theta) + a2 cos(2theta) + a3 cos(3theta)
+  ! Z(theta) =      b1 sin(theta) + b2 sin(2theta)
+  RBC(0,0) =  6.0     ZBS(0,0) =   0.0
+  RBC(0,1) =  2.1     ZBS(0,1) =   2.6
+  RBC(0,2) =  0.35    ZBS(0,2) =  -0.25
+  RBC(0,3) =  0.08    ZBS(0,3) =   0.00
+/
+

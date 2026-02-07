@@ -1555,6 +1555,12 @@ def solve_fixed_boundary_gn_vmec_residual(
     apply_m1_constraints: bool = True,
     objective_scale: float | None = None,
     damping: float = 1e-3,
+    damping_increase: float = 10.0,
+    damping_decrease: float = 0.5,
+    max_damping: float = 1e6,
+    max_retries: int = 6,
+    zero_m1_iters: int = 50,
+    zero_m1_fsqz_thresh: float = 1e-6,
     max_iter: int = 20,
     cg_tol: float = 1e-6,
     cg_maxiter: int = 80,
@@ -1581,6 +1587,24 @@ def solve_fixed_boundary_gn_vmec_residual(
         raise ImportError("solve_fixed_boundary_gn_vmec_residual requires JAX (jax + jaxlib)")
     if damping < 0.0:
         raise ValueError("damping must be nonnegative")
+    damping_increase = float(damping_increase)
+    damping_decrease = float(damping_decrease)
+    max_damping = float(max_damping)
+    max_retries = int(max_retries)
+    if damping_increase <= 1.0:
+        raise ValueError("damping_increase must be > 1")
+    if not (0.0 < damping_decrease <= 1.0):
+        raise ValueError("damping_decrease must be in (0, 1]")
+    if max_damping <= 0.0:
+        raise ValueError("max_damping must be positive")
+    if max_retries < 0:
+        raise ValueError("max_retries must be >= 0")
+    zero_m1_iters = int(zero_m1_iters)
+    zero_m1_fsqz_thresh = float(zero_m1_fsqz_thresh)
+    if zero_m1_iters < 0:
+        raise ValueError("zero_m1_iters must be >= 0")
+    if zero_m1_fsqz_thresh < 0.0:
+        raise ValueError("zero_m1_fsqz_thresh must be >= 0")
     w_rz = float(w_rz)
     w_l = float(w_l)
     if w_rz < 0.0 or w_l < 0.0:
@@ -1805,8 +1829,12 @@ def solve_fixed_boundary_gn_vmec_residual(
     grad_rms_history = []
     step_history = []
 
+    damping_it = float(damping)
     for it in range(int(max_iter)):
-        zero_m1 = jnp.asarray(1.0 if (it < 2) or (fsqz2_history[-1] < 1e-6) else 0.0, dtype=jnp.asarray(state.Rcos).dtype)
+        zero_m1 = jnp.asarray(
+            1.0 if (it < zero_m1_iters) or (fsqz2_history[-1] < zero_m1_fsqz_thresh) else 0.0,
+            dtype=jnp.asarray(state.Rcos).dtype,
+        )
         r, pullback = jax.vjp(_residual_vec_jit, state, zero_m1)
         # Gradient of 0.5*||r||^2 is J^T r.
         g_state = pullback(r)[0]
@@ -1815,60 +1843,110 @@ def solve_fixed_boundary_gn_vmec_residual(
 
         b_flat = -pack_state(g_state)
 
-        def _matvec(v_flat):
-            v_state = unpack_state(v_flat, state.layout)
-            v_state = _project_step(v_state)
-            zero_tangent = jnp.zeros_like(zero_m1)
-            jv = jax.jvp(_residual_vec_jit, (state, zero_m1), (v_state, zero_tangent))[1]
-            jt_jv = pullback(jv)[0]
-            jt_jv = _project_step(jt_jv)
-            if damping != 0.0:
-                jt_jv = VMECState(
-                    layout=jt_jv.layout,
-                    Rcos=jt_jv.Rcos + float(damping) * v_state.Rcos,
-                    Rsin=jt_jv.Rsin + float(damping) * v_state.Rsin,
-                    Zcos=jt_jv.Zcos + float(damping) * v_state.Zcos,
-                    Zsin=jt_jv.Zsin + float(damping) * v_state.Zsin,
-                    Lcos=jt_jv.Lcos + float(damping) * v_state.Lcos,
-                    Lsin=jt_jv.Lsin + float(damping) * v_state.Lsin,
-                )
-            return pack_state(jt_jv)
-
-        dx_flat, _info = cg(_matvec, b_flat, tol=float(cg_tol), maxiter=int(cg_maxiter))
-        dx_state = unpack_state(dx_flat, state.layout)
-        dx_state = _project_step(dx_state)
-
         accepted = False
         step = float(step_size)
         w_curr = w_history[-1]
-        for bt in range(int(max_backtracks) + 1):
-            if bt > 0:
-                step *= float(bt_factor)
-            st_try = VMECState(
-                layout=state.layout,
-                Rcos=jnp.asarray(state.Rcos) + jnp.asarray(step, dtype=jnp.asarray(state.Rcos).dtype) * jnp.asarray(dx_state.Rcos),
-                Rsin=jnp.asarray(state.Rsin) + jnp.asarray(step, dtype=jnp.asarray(state.Rsin).dtype) * jnp.asarray(dx_state.Rsin),
-                Zcos=jnp.asarray(state.Zcos) + jnp.asarray(step, dtype=jnp.asarray(state.Zcos).dtype) * jnp.asarray(dx_state.Zcos),
-                Zsin=jnp.asarray(state.Zsin) + jnp.asarray(step, dtype=jnp.asarray(state.Zsin).dtype) * jnp.asarray(dx_state.Zsin),
-                Lcos=jnp.asarray(state.Lcos) + jnp.asarray(step, dtype=jnp.asarray(state.Lcos).dtype) * jnp.asarray(dx_state.Lcos),
-                Lsin=jnp.asarray(state.Lsin) + jnp.asarray(step, dtype=jnp.asarray(state.Lsin).dtype) * jnp.asarray(dx_state.Lsin),
-            )
-            st_try = _enforce_state(st_try)
-            fsqr2_t, fsqz2_t, fsql2_t, w_t = _obj_terms_jit(st_try, zero_m1)
-            w_tf = float(np.asarray(w_t))
-            w_scaled = float(scale_f * w_tf)
-            if np.isfinite(w_scaled) and w_scaled < w_curr:
-                state = st_try
-                accepted = True
-                w_history.append(w_scaled)
-                fsqr2_history.append(float(np.asarray(fsqr2_t)))
-                fsqz2_history.append(float(np.asarray(fsqz2_t)))
-                fsql2_history.append(float(np.asarray(fsql2_t)))
+        retry = 0
+        while True:
+            dmp = float(damping_it)
+
+            def _matvec(v_flat):
+                v_state = unpack_state(v_flat, state.layout)
+                v_state = _project_step(v_state)
+                zero_tangent = jnp.zeros_like(zero_m1)
+                jv = jax.jvp(_residual_vec_jit, (state, zero_m1), (v_state, zero_tangent))[1]
+                jt_jv = pullback(jv)[0]
+                jt_jv = _project_step(jt_jv)
+                if dmp != 0.0:
+                    jt_jv = VMECState(
+                        layout=jt_jv.layout,
+                        Rcos=jt_jv.Rcos + dmp * v_state.Rcos,
+                        Rsin=jt_jv.Rsin + dmp * v_state.Rsin,
+                        Zcos=jt_jv.Zcos + dmp * v_state.Zcos,
+                        Zsin=jt_jv.Zsin + dmp * v_state.Zsin,
+                        Lcos=jt_jv.Lcos + dmp * v_state.Lcos,
+                        Lsin=jt_jv.Lsin + dmp * v_state.Lsin,
+                    )
+                return pack_state(jt_jv)
+
+            dx_flat, _info = cg(_matvec, b_flat, tol=float(cg_tol), maxiter=int(cg_maxiter))
+            dx_state = unpack_state(dx_flat, state.layout)
+            dx_state = _project_step(dx_state)
+
+            step = float(step_size)
+            for bt in range(int(max_backtracks) + 1):
+                if bt > 0:
+                    step *= float(bt_factor)
+                st_try = VMECState(
+                    layout=state.layout,
+                    Rcos=jnp.asarray(state.Rcos) + jnp.asarray(step, dtype=jnp.asarray(state.Rcos).dtype) * jnp.asarray(dx_state.Rcos),
+                    Rsin=jnp.asarray(state.Rsin) + jnp.asarray(step, dtype=jnp.asarray(state.Rsin).dtype) * jnp.asarray(dx_state.Rsin),
+                    Zcos=jnp.asarray(state.Zcos) + jnp.asarray(step, dtype=jnp.asarray(state.Zcos).dtype) * jnp.asarray(dx_state.Zcos),
+                    Zsin=jnp.asarray(state.Zsin) + jnp.asarray(step, dtype=jnp.asarray(state.Zsin).dtype) * jnp.asarray(dx_state.Zsin),
+                    Lcos=jnp.asarray(state.Lcos) + jnp.asarray(step, dtype=jnp.asarray(state.Lcos).dtype) * jnp.asarray(dx_state.Lcos),
+                    Lsin=jnp.asarray(state.Lsin) + jnp.asarray(step, dtype=jnp.asarray(state.Lsin).dtype) * jnp.asarray(dx_state.Lsin),
+                )
+                st_try = _enforce_state(st_try)
+                fsqr2_t, fsqz2_t, fsql2_t, w_t = _obj_terms_jit(st_try, zero_m1)
+                w_tf = float(np.asarray(w_t))
+                w_scaled = float(scale_f * w_tf)
+                if np.isfinite(w_scaled) and w_scaled < w_curr:
+                    state = st_try
+                    accepted = True
+                    w_history.append(w_scaled)
+                    fsqr2_history.append(float(np.asarray(fsqr2_t)))
+                    fsqz2_history.append(float(np.asarray(fsqz2_t)))
+                    fsql2_history.append(float(np.asarray(fsql2_t)))
+                    break
+
+            if accepted:
+                # Levenberg-Marquardt style: relax damping after success.
+                damping_it = max(damping_it * damping_decrease, 0.0)
                 break
+
+            if retry >= max_retries or damping_it >= max_damping:
+                break
+            # Increase damping and try again from the same state.
+            damping_it = min(max_damping, damping_it * damping_increase)
+            retry += 1
+
+        if not accepted:
+            # Robust fallback: take a small steepest-descent step on 0.5*||r||^2
+            # using the already-computed gradient g_state = J^T r.
+            dx_state = unpack_state(b_flat, state.layout)  # b_flat = -grad_flat
+            dx_state = _project_step(dx_state)
+            step = float(step_size)
+            for bt in range(int(max_backtracks) + 1):
+                if bt > 0:
+                    step *= float(bt_factor)
+                st_try = VMECState(
+                    layout=state.layout,
+                    Rcos=jnp.asarray(state.Rcos) + jnp.asarray(step, dtype=jnp.asarray(state.Rcos).dtype) * jnp.asarray(dx_state.Rcos),
+                    Rsin=jnp.asarray(state.Rsin) + jnp.asarray(step, dtype=jnp.asarray(state.Rsin).dtype) * jnp.asarray(dx_state.Rsin),
+                    Zcos=jnp.asarray(state.Zcos) + jnp.asarray(step, dtype=jnp.asarray(state.Zcos).dtype) * jnp.asarray(dx_state.Zcos),
+                    Zsin=jnp.asarray(state.Zsin) + jnp.asarray(step, dtype=jnp.asarray(state.Zsin).dtype) * jnp.asarray(dx_state.Zsin),
+                    Lcos=jnp.asarray(state.Lcos) + jnp.asarray(step, dtype=jnp.asarray(state.Lcos).dtype) * jnp.asarray(dx_state.Lcos),
+                    Lsin=jnp.asarray(state.Lsin) + jnp.asarray(step, dtype=jnp.asarray(state.Lsin).dtype) * jnp.asarray(dx_state.Lsin),
+                )
+                st_try = _enforce_state(st_try)
+                fsqr2_t, fsqz2_t, fsql2_t, w_t = _obj_terms_jit(st_try, zero_m1)
+                w_tf = float(np.asarray(w_t))
+                w_scaled = float(scale_f * w_tf)
+                if np.isfinite(w_scaled) and w_scaled < w_curr:
+                    state = st_try
+                    accepted = True
+                    w_history.append(w_scaled)
+                    fsqr2_history.append(float(np.asarray(fsqr2_t)))
+                    fsqz2_history.append(float(np.asarray(fsqz2_t)))
+                    fsql2_history.append(float(np.asarray(fsql2_t)))
+                    break
 
         step_history.append(step)
         if verbose:
-            print(f"[solve_fixed_boundary_gn_vmec_residual] iter={it:03d} w={w_history[-1]:.8e} step={step:.3e} accepted={accepted}")
+            print(
+                f"[solve_fixed_boundary_gn_vmec_residual] iter={it:03d} w={w_history[-1]:.8e} "
+                f"step={step:.3e} accepted={accepted} damping={damping_it:.3e} retries={retry}"
+            )
 
         if not accepted:
             break
@@ -1910,7 +1988,7 @@ def solve_fixed_boundary_vmecpp_iter(
     precond_radial_alpha: float = 0.5,
     precond_lambda_alpha: float = 0.5,
     mode_diag_exponent: float = 1.0,
-    auto_flip_force: bool = False,
+    auto_flip_force: bool = True,
     vmecpp_strict_update: bool = True,
     vmecpp_reference_mode: bool = False,
     use_vmecpp_restart_triggers: bool | None = None,

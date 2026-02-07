@@ -95,11 +95,16 @@ def flux_profiles_from_indata(indata: InData, s, *, signgs: int) -> FluxProfiles
     torflux_deriv = _poly_no_const_deriv(aphi_arr, s) / norm
     phipf = phiedge * torflux_deriv * jnp.ones((ns,), dtype=s.dtype)
 
-    prof = eval_profiles(indata, s)
-    # VMEC evaluates the input iota profile on the *radial half mesh* (iotaf).
-    # The full-mesh iota profile (iotas) used in `add_fluxes` is then obtained
-    # by inverting VMEC's standard half-mesh averaging map.
-    iotaf = prof.get("iota", jnp.zeros_like(s))
+    # VMEC evaluates input flux profiles on the *radial half mesh* (iotaf/pres),
+    # with a length-`ns` convention in which the first entry corresponds to the
+    # magnetic axis and the rest are midpoints between full-mesh surfaces.
+    if ns < 2:
+        s_half = s
+    else:
+        s_half = jnp.concatenate([s[:1], 0.5 * (s[1:] + s[:-1])], axis=0)
+
+    prof = eval_profiles(indata, s_half)
+    iotaf = prof.get("iota", jnp.zeros_like(s_half))
     iotas = full_mesh_from_half_mesh_avg(iotaf)
     # VMEC adds the full-mesh `chips(js)=iotas(js)*phips(js)` to bsupu via
     # `add_fluxes`. In our `bsup_from_*` formulas this enters as the physical

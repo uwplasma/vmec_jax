@@ -167,7 +167,13 @@ def run_fixed_boundary(
     signgs = signgs_from_sqrtg(np.asarray(g0.sqrtg), axis_index=1)
 
     flux = flux_profiles_from_indata(indata, static.s, signgs=signgs)
-    prof = eval_profiles(indata, static.s)
+    # VMEC evaluates pressure/iota/current profiles on the radial half mesh.
+    if int(cfg.ns) < 2:
+        s_half = np.asarray(static.s)
+    else:
+        s_full = np.asarray(static.s)
+        s_half = np.concatenate([s_full[:1], 0.5 * (s_full[1:] + s_full[:-1])], axis=0)
+    prof = eval_profiles(indata, s_half)
     pressure = prof.get("pressure", np.zeros_like(np.asarray(static.s)))
     gamma = indata.get_float("GAMMA", 0.0)
 

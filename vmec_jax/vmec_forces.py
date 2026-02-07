@@ -327,10 +327,66 @@ def vmec_forces_rz_from_wout(
     ohs = jnp.asarray(1.0 / (s[1] - s[0])) if s.shape[0] >= 2 else jnp.asarray(0.0)
     dshalfds = jnp.asarray(0.25, dtype=s.dtype)
 
+    # For input-only workflows (solvers / diagnostics), allow computing the
+    # needed 1D flux functions and pressure directly from &INDATA instead of
+    # requiring a full VMEC2000 `wout` file.
+    wout_eff = wout
+    pres_half = None
+    need_indata_fill = (
+        (indata is not None)
+        and (
+            (not hasattr(wout, "phipf"))
+            or (not hasattr(wout, "phips"))
+            or (not hasattr(wout, "chipf"))
+            or (not hasattr(wout, "pres"))
+        )
+    )
+    if need_indata_fill:
+        from .energy import flux_profiles_from_indata
+        from .field import half_mesh_avg_from_full_mesh
+        from .profiles import eval_profiles
+
+        signgs = int(getattr(wout, "signgs", 1))
+        flux = flux_profiles_from_indata(indata, s, signgs=signgs)
+
+        # VMEC stores `chipf` on the radial half mesh in wout files.
+        chipf_half = half_mesh_avg_from_full_mesh(flux.chipf)
+
+        # Pressure profile is defined on the VMEC half mesh.
+        if int(s.shape[0]) < 2:
+            s_half = s
+        else:
+            s_half = jnp.concatenate([s[:1], 0.5 * (s[1:] + s[:-1])], axis=0)
+        prof = eval_profiles(indata, s_half)
+        pres_half = prof.get("pressure", None)
+
+        class _WoutProxy:
+            __slots__ = ("_base", "_overrides")
+
+            def __init__(self, base, overrides):
+                self._base = base
+                self._overrides = overrides
+
+            def __getattr__(self, name):
+                if name in self._overrides:
+                    return self._overrides[name]
+                return getattr(self._base, name)
+
+        wout_eff = _WoutProxy(
+            wout,
+            {
+                "phipf": flux.phipf,
+                "phips": flux.phips,
+                "chipf": chipf_half,
+                "signgs": int(signgs),
+            },
+        )
+
     bc = vmec_bcovar_half_mesh_from_wout(
         state=state,
         static=static,
-        wout=wout,
+        wout=wout_eff,
+        pres=pres_half,
         use_wout_bsup=use_wout_bsup,
         use_wout_bsub_for_lambda=use_wout_bsup,
         use_wout_bmag_for_bsq=use_wout_bsup,
