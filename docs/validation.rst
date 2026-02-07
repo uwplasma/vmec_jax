@@ -55,45 +55,13 @@ files, using the same internal VMEC angle grid conventions:
 
    \texttt{bcovar} \rightarrow \texttt{forces} \rightarrow \texttt{tomnsps} \rightarrow \texttt{getfsq}.
 
-The scoreboard below reports relative errors
-:math:`|\hat f - f|/\max(|f|,\epsilon)` for each scalar:
+Run the parity report script to reproduce the current numbers:
 
-.. list-table::
-   :header-rows: 1
-   :widths: 28 18 18 18
+- ``python examples/validation/step10_getfsq_parity_cases.py --solve-metric`` (fast axisymmetric set)
+- ``python examples/validation/step10_getfsq_parity_cases.py --solve-metric --all`` (adds a small 3D subset)
 
-   * - Case
-     - fsqr rel. err
-     - fsqz rel. err
-     - fsql rel. err
-   * - circular_tokamak
-     - ~5.6e-5
-     - ~7.1e-5
-     - ~1.0e-6
-   * - li383_low_res
-     - ~1.3e-3
-     - ~4.4e-3
-     - ~1.4e-5
-   * - circular_tokamak_aspect_100
-     - ~8.4e-7
-     - ~6.6e-7
-     - ~2.3e-7
-   * - purely_toroidal_field
-     - ~1.3e-4
-     - ~2.6e-4
-     - ~1.9e-7
-   * - ITERModel
-     - ~3.5e-5
-     - ~1.7e-5
-     - ~2.5e-6
-   * - LandremanSengupta2019_section5.4_B2_A80
-     - ~1.1e-6
-     - ~2.5e-6
-     - ~9.0e-9
-   * - n3are_R7.75B5.7_lowres
-     - ~6.4e-6
-     - ~2.7e-5
-     - ~9.1e-10
+As of 2026-02-07, the axisymmetric tokamak cases in that script match bundled
+VMEC2000 ``wout`` scalars to ~1e-8 relative error for ``fsqr/fsqz/fsql``.
 
 Notes:
 
@@ -128,6 +96,11 @@ Notes:
   small internal-consistency regression in ``tests/test_step10_getfsq_block_sums.py``.
 - These numbers are expected to change as parity improves; the authoritative
   regression is ``tests/test_step10_residue_getfsq_parity.py``.
+
+For a stage-by-stage (axisymmetric) breakdown that helps pinpoint the first
+block that diverges, use:
+
+- ``python examples/validation/axisym_stage_parity.py --case circular_tokamak``
 
 Feature parity matrix (selected)
 --------------------------------

@@ -2,6 +2,7 @@
 
 Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference data.
 
+- `axisym_stage_parity.py`: axisymmetric stage-by-stage parity harness (`sqrt(g) -> bsup -> bsub -> getfsq`) against bundled VMEC2000 `wout` states.
 - `step10_getfsq_parity_cases.py`: Step-10 scalar parity report (`fsqr/fsqz/fsql`) for bundled cases (uses `wout` Nyquist `bsup*` to isolate force-kernel parity).
 - `vmec_forces_rz_kernel_report.py`: diagnostic report for the VMEC-style R/Z force kernels.
 - `constraint_pipeline_report.py`: constraint-force pipeline diagnostics (`tcon`, `gcon`) for a given `wout`.

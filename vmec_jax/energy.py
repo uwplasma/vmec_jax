@@ -95,23 +95,31 @@ def flux_profiles_from_indata(indata: InData, s, *, signgs: int) -> FluxProfiles
     torflux_deriv = _poly_no_const_deriv(aphi_arr, s) / norm
     phipf = phiedge * torflux_deriv * jnp.ones((ns,), dtype=s.dtype)
 
-    # VMEC evaluates input flux profiles on the *radial half mesh* (iotaf/pres),
-    # with a length-`ns` convention in which the first entry corresponds to the
-    # magnetic axis and the rest are midpoints between full-mesh surfaces.
+    # VMEC evaluates input profiles on a length-`ns` radial grid. For profiles
+    # like iota, VMEC's internally used "full-mesh" iotas array corresponds to
+    # midpoint-like locations:
+    #   s_half = [s(1), 0.5*(s(2)+s(1)), ..., 0.5*(s(ns)+s(ns-1))]
+    # and VMEC then derives the exported half-mesh `iotaf` via a radial
+    # averaging map. In this repo we want the *full-mesh* `chips` used by
+    # `add_fluxes`, so we treat the evaluated iota on `s_half` as iotas.
     if ns < 2:
         s_half = s
     else:
         s_half = jnp.concatenate([s[:1], 0.5 * (s[1:] + s[:-1])], axis=0)
 
     prof = eval_profiles(indata, s_half)
-    iotaf = prof.get("iota", jnp.zeros_like(s_half))
-    iotas = full_mesh_from_half_mesh_avg(iotaf)
-    # VMEC adds the full-mesh `chips(js)=iotas(js)*phips(js)` to bsupu via
+    iotas = prof.get("iota", jnp.zeros_like(s_half))
+    # VMEC convention: iotas(1) is unused and stored as 0 in wout.
+    if int(jnp.size(iotas)) > 0:
+        iotas = iotas.at[0].set(jnp.zeros_like(iotas[0]))
+    # VMEC adds the full-mesh `chips(js)=iotas(js)*phipf(js)` to bsupu via
     # `add_fluxes`. In our `bsup_from_*` formulas this enters as the physical
     # quantity (2π*signgs)*chips = iotas*phipf.
     chipf = iotas * phipf
 
     phips = (signgs * phipf) / TWOPI
+    if int(jnp.size(phips)) > 0:
+        phips = phips.at[0].set(jnp.zeros_like(phips[0]))
     lamscale = lamscale_from_phips(phips, s)
     return FluxProfiles(phipf=phipf, chipf=chipf, phips=phips, signgs=int(signgs), lamscale=lamscale)
 
