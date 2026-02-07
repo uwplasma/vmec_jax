@@ -23,7 +23,18 @@ def _fsq_from_state_vs_wout(state, static, wout, *, indata):
         nmax=int(wout.ntor),
         lasym=bool(wout.lasym),
     )
-    k = vmec_forces_rz_from_wout(state=state, static=static, wout=wout, indata=indata, use_wout_bsup=True)
+    # Important: do NOT mix a non-reference geometry state with bsup/bsub stored
+    # in a reference wout. Using `use_wout_bsup=True` only makes sense when the
+    # input `state` is itself derived from the same `wout` (state_from_wout).
+    k = vmec_forces_rz_from_wout(
+        state=state,
+        static=static,
+        wout=wout,
+        indata=indata,
+        use_wout_bsup=False,
+        use_vmec_synthesis=True,
+        trig=trig,
+    )
     rzl = vmec_residual_internal_from_kernels(
         k, cfg_ntheta=int(static.cfg.ntheta), cfg_nzeta=int(static.cfg.nzeta), wout=wout, trig=trig
     )
