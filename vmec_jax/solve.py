@@ -2432,7 +2432,18 @@ def solve_fixed_boundary_vmecpp_iter(
             bad_growth_streak += 1
         else:
             bad_growth_streak = 0
-        if (iter2 > (iter1 + 8)) and (bad_growth_streak >= 2):
+        early_bad_jacobian = False
+        if bool(vmecpp_reference_mode):
+            # In VMEC++ traces, early post-restart growth is often handled
+            # immediately by a bad-jacobian restart. Keep this path scoped to
+            # reference mode so the default stable iterator is unchanged.
+            early_bad_jacobian = (
+                (iter2 <= (iter1 + 2))
+                and (fsq1 > 2.0 * max(fsq_prev, 1e-30))
+                and (fsq1 > 1.2 * max(res0, 1e-30))
+            )
+
+        if early_bad_jacobian or ((iter2 > (iter1 + 8)) and (bad_growth_streak >= 2)):
             pre_restart_reason = "bad_jacobian"
         elif (
             (iter2 - iter1) > (k_preconditioner_update_interval // 2)
