@@ -2270,6 +2270,9 @@ def solve_fixed_boundary_vmecpp_iter(
     flip_sign = 1.0
     max_coeff_delta_rms = 1e-5
     max_update_rms = 5e-3
+    if bool(vmecpp_reference_mode):
+        max_coeff_delta_rms = 5e-6
+        max_update_rms = 1e-3
     ijacob = 0
     bad_resets = 0
     iter1 = 1
@@ -2279,6 +2282,8 @@ def solve_fixed_boundary_vmecpp_iter(
     bad_growth_streak = 0
     restart_badjac_factor = 0.5
     restart_badprog_factor = 1.15
+    huge_force_restart_count = 0
+    huge_force_restart_budget = 2
 
     def _edge_force_trigger(it: int, w_hist: list[float], fsqr_hist: list[float], fsqz_hist: list[float]) -> bool:
         """Heuristic for VMEC++-style edge-force inclusion.
@@ -2320,15 +2325,6 @@ def solve_fixed_boundary_vmecpp_iter(
         dt_lim = np.sqrt(max_coeff_delta_rms / max(rms_f, 1e-30))
         dt_eff = min(float(dt_nominal), float(dt_lim))
         return max(dt_eff, 1e-12)
-
-    def _recent_restart_streak() -> int:
-        n = 0
-        for sst in reversed(step_status_history):
-            if str(sst).startswith("restart_"):
-                n += 1
-            else:
-                break
-        return int(n)
 
     for it in range(max_iter):
         iter2 = it + 1
@@ -2471,7 +2467,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 (iter2 <= (iter1 + 1))
                 and (fsq1 > 1.0e6)
                 and (fsq1 >= 0.99 * max(res0, 1e-30))
-                and (_recent_restart_streak() < 2)
+                and (int(huge_force_restart_count) < int(huge_force_restart_budget))
             )
 
         if huge_initial_forces or early_bad_jacobian or ((iter2 > (iter1 + 8)) and (bad_growth_streak >= 2)):
@@ -2499,6 +2495,10 @@ def solve_fixed_boundary_vmecpp_iter(
             else:
                 time_step = max(time_step / restart_badprog_factor, 1e-12)
                 step_status = "restart_bad_progress"
+            if bool(huge_initial_forces) and (pre_restart_reason == "bad_jacobian"):
+                huge_force_restart_count += 1
+            else:
+                huge_force_restart_count = 0
             if ijacob in (25, 50):
                 scale = 0.98 if ijacob < 50 else 0.96
                 time_step = max(scale * float(step_size), 1e-12)
@@ -2641,6 +2641,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 state = state_try
                 step_status = "momentum"
                 restart_reason = "none"
+                huge_force_restart_count = 0
             else:
                 if use_direct_fallback:
                     # Try a small direct-force step (no momentum memory) before
@@ -2701,6 +2702,7 @@ def solve_fixed_boundary_vmecpp_iter(
                         vLcs = jnp.zeros_like(vLcs)
                         step_status = "fallback_direct"
                         restart_reason = "none"
+                        huge_force_restart_count = 0
                         update_rms = float(
                             np.asarray(
                                 jnp.sqrt(
