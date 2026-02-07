@@ -2321,6 +2321,15 @@ def solve_fixed_boundary_vmecpp_iter(
         dt_eff = min(float(dt_nominal), float(dt_lim))
         return max(dt_eff, 1e-12)
 
+    def _recent_restart_streak() -> int:
+        n = 0
+        for sst in reversed(step_status_history):
+            if str(sst).startswith("restart_"):
+                n += 1
+            else:
+                break
+        return int(n)
+
     for it in range(max_iter):
         iter2 = it + 1
         zero_m1 = jnp.asarray(1.0 if (it < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
@@ -2462,6 +2471,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 (iter2 <= (iter1 + 1))
                 and (fsq1 > 1.0e6)
                 and (fsq1 >= 0.99 * max(res0, 1e-30))
+                and (_recent_restart_streak() < 2)
             )
 
         if huge_initial_forces or early_bad_jacobian or ((iter2 > (iter1 + 8)) and (bad_growth_streak >= 2)):
@@ -2543,12 +2553,21 @@ def solve_fixed_boundary_vmecpp_iter(
                 flcs=flcs_u,
             )
 
-            vRcc = fac * (b1 * vRcc + dt_eff * (flip_sign * jnp.asarray(frcc_u)))
-            vRss = fac * (b1 * vRss + dt_eff * (flip_sign * jnp.asarray(frss_u)))
-            vZsc = fac * (b1 * vZsc + dt_eff * (flip_sign * jnp.asarray(fzsc_u)))
-            vZcs = fac * (b1 * vZcs + dt_eff * (flip_sign * jnp.asarray(fzcs_u)))
-            vLsc = fac * (b1 * vLsc + dt_eff * (flip_sign * jnp.asarray(flsc_u)))
-            vLcs = fac * (b1 * vLcs + dt_eff * (flip_sign * jnp.asarray(flcs_u)))
+            # VMEC++-style momentum form in reference mode: force enters the
+            # velocity update without an extra dt factor, and coordinates are
+            # updated with one dt factor below (x <- x + dt * v).
+            if bool(vmecpp_reference_mode):
+                force_scale = 1.0
+            else:
+                # Keep legacy stable path unchanged outside reference mode.
+                force_scale = float(dt_eff)
+
+            vRcc = fac * (b1 * vRcc + force_scale * (flip_sign * jnp.asarray(frcc_u)))
+            vRss = fac * (b1 * vRss + force_scale * (flip_sign * jnp.asarray(frss_u)))
+            vZsc = fac * (b1 * vZsc + force_scale * (flip_sign * jnp.asarray(fzsc_u)))
+            vZcs = fac * (b1 * vZcs + force_scale * (flip_sign * jnp.asarray(fzcs_u)))
+            vLsc = fac * (b1 * vLsc + force_scale * (flip_sign * jnp.asarray(flsc_u)))
+            vLcs = fac * (b1 * vLcs + force_scale * (flip_sign * jnp.asarray(flcs_u)))
 
             update_rms = float(
                 np.asarray(
