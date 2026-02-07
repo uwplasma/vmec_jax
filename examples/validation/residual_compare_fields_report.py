@@ -24,6 +24,7 @@ from vmec_jax.vmec_forces import (
 )
 from vmec_jax.vmec_residue import (
     vmec_apply_m1_constraints,
+    vmec_force_norms_from_bcovar,
     vmec_force_norms_from_bcovar_dynamic,
     vmec_fsq_from_tomnsps_dynamic,
     vmec_fsq_sums_from_tomnsps,
@@ -300,7 +301,12 @@ def main():
     kA_ref, kB_ref, kC_ref, kcon_ref, kL_ref = _build_component_kernels(k_ref, con=con_ref, s=static.s)
     kA_full, kB_full, kC_full, kcon_full, kL_full = _build_component_kernels(k_full, con=con_full, s=static.s)
 
-    norms = vmec_force_norms_from_bcovar_dynamic(bc=k_ref.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
+    # Reference-field kernels expose a minimal bc object (no bsup*/bsq), so use
+    # the wout-based normalization path in that branch.
+    if hasattr(k_ref.bc, "bsupu") and hasattr(k_ref.bc, "bsupv") and hasattr(k_ref.bc, "bsq"):
+        norms = vmec_force_norms_from_bcovar_dynamic(bc=k_ref.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
+    else:
+        norms = vmec_force_norms_from_bcovar(bc=k_ref.bc, trig=trig, wout=wout, s=static.s)
     frzl_ref = _frzl_from_kernels(k_ref, cfg=cfg, wout=wout, trig=trig)
     frzl_full = _frzl_from_kernels(k_full, cfg=cfg, wout=wout, trig=trig)
 

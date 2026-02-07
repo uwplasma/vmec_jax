@@ -130,6 +130,8 @@ def vmec_bcovar_half_mesh_from_wout(
     wout,
     pres: Any | None = None,
     use_wout_bsup: bool = False,
+    use_wout_bsub_for_lambda: bool = False,
+    use_wout_bmag_for_bsq: bool = False,
     use_vmec_synthesis: bool = False,
     trig: VmecTrigTables | None = None,
 ) -> VmecHalfMeshBcovar:
@@ -149,6 +151,15 @@ def vmec_bcovar_half_mesh_from_wout(
     use_vmec_synthesis:
         If True, evaluate the R/Z/L real-space parity pieces and their derivatives
         using VMEC's ``fixaray`` trig tables (ntheta2/ntheta3 grids).
+    use_wout_bsub_for_lambda:
+        If True, build the lambda-force full-mesh kernels (``blmn/clmn``) from
+        ``wout``-stored ``bsub*`` fields averaged to the full radial mesh. This
+        is a reference-parity mode that avoids re-deriving ``bsubv_e`` from
+        lambda derivatives.
+    use_wout_bmag_for_bsq:
+        If True, use ``wout`` Nyquist ``|B|`` to form ``bsq = |B|^2/2 + p`` in
+        this parity path, instead of deriving ``|B|^2`` from
+        ``bsup/bsub`` products.
     trig:
         Optional precomputed VMEC trig tables. If omitted and
         ``use_vmec_synthesis=True``, they are built internally.
@@ -369,6 +380,7 @@ def vmec_bcovar_half_mesh_from_wout(
     # `add_fluxes`: bsupu += chips*overg (chips is a 1D full-mesh flux function).
     bsupu = bsupu + jnp.asarray(chips_eff)[:, None, None] * overg
 
+    basis_nyq = None
     if bool(use_wout_bsup):
         # Replace with wout-stored Nyquist bsup (reference parity path).
         modes_nyq = ModeTable(m=wout.xm_nyq, n=(wout.xn_nyq // wout.nfp))
@@ -391,7 +403,24 @@ def vmec_bcovar_half_mesh_from_wout(
     bsubu = guu * bsupu + guv * bsupv
     bsubv = guv * bsupu + gvv * bsupv
 
+    # Optional reference parity path for lambda-force kernels.
+    bsubu_lambda = bsubu
+    bsubv_lambda = bsubv
+    if bool(use_wout_bsub_for_lambda):
+        modes_nyq = ModeTable(m=wout.xm_nyq, n=(wout.xn_nyq // wout.nfp))
+        grid = AngleGrid(theta=static.grid.theta, zeta=static.grid.zeta, nfp=wout.nfp)
+        basis_nyq = build_helical_basis(modes_nyq, grid)
+        bsubu_lambda = jnp.asarray(eval_fourier(wout.bsubumnc, wout.bsubumns, basis_nyq))
+        bsubv_lambda = jnp.asarray(eval_fourier(wout.bsubvmnc, wout.bsubvmns, basis_nyq))
+
     b2 = bsupu * bsubu + bsupv * bsubv
+    if bool(use_wout_bmag_for_bsq):
+        if basis_nyq is None:
+            modes_nyq = ModeTable(m=wout.xm_nyq, n=(wout.xn_nyq // wout.nfp))
+            grid = AngleGrid(theta=static.grid.theta, zeta=static.grid.zeta, nfp=wout.nfp)
+            basis_nyq = build_helical_basis(modes_nyq, grid)
+        bmag_ref = jnp.asarray(eval_fourier(wout.bmnc, wout.bmns, basis_nyq))
+        b2 = bmag_ref * bmag_ref
     pres_h = jnp.asarray(wout.pres if pres is None else pres)[:, None, None]
     bsq = 0.5 * b2 + pres_h
 
@@ -423,36 +452,46 @@ def vmec_bcovar_half_mesh_from_wout(
     # For parity with `wout`-scaled fluxes we reuse `overg` here.
     lvv = overg * gvv
 
-    # Intermediate full-mesh bsubv_e (before blending), following bcovar.f.
-    bsubv_e = jnp.zeros_like(bsubv)
-    if ns >= 2:
-        bsubv_e = bsubv_e.at[:-1].set(0.5 * (lvv[:-1] + lvv[1:]) * lu0[:-1])
-        bsubv_e = bsubv_e.at[-1].set(0.5 * lvv[-1] * lu0[-1])
-
-    lvv_sh = lvv * pshalf
-    bsubu_tmp = guv * bsupu  # bcovar: pguv*bsupu (sigma_an=1 isotropic)
-    if ns >= 2:
-        bsubv_e = bsubv_e.at[:-1].add(
-            0.5 * ((lvv_sh[:-1] + lvv_sh[1:]) * lu1[:-1] + bsubu_tmp[:-1] + bsubu_tmp[1:])
-        )
-        bsubv_e = bsubv_e.at[-1].add(0.5 * (lvv_sh[-1] * lu1[-1] + bsubu_tmp[-1]))
-
-    # Average lambda forces onto full radial mesh (bsubu_e from bsubu half mesh).
-    bsubu_e = jnp.zeros_like(bsubu)
-    if ns >= 2:
-        bsubu_e = bsubu_e.at[:-1].set(0.5 * (bsubu[:-1] + bsubu[1:]))
-        bsubu_e = bsubu_e.at[-1].set(0.5 * bsubu[-1])
-
-    # Blend bsubv_e with half-mesh bsubv average using bdamp(s) (VMEC: bdamp=2*pdamp*(1-s)).
-    pdamp = 0.05
-    bdamp = (2.0 * pdamp * (1.0 - s)).astype(jnp.asarray(bsubv_e).dtype)[:, None, None]
-    if ns >= 2:
-        bsubv_avg = jnp.zeros_like(bsubv_e)
-        bsubv_avg = bsubv_avg.at[:-1].set(0.5 * (bsubv[:-1] + bsubv[1:]))
-        bsubv_avg = bsubv_avg.at[-1].set(0.5 * bsubv[-1])
-        bsubv_e = bdamp * bsubv_e + (1.0 - bdamp) * bsubv_avg
+    if bool(use_wout_bsub_for_lambda):
+        # Reference parity mode: use averaged wout bsub* directly.
+        bsubu_e = jnp.zeros_like(bsubu_lambda)
+        bsubv_e = jnp.zeros_like(bsubv_lambda)
+        if ns >= 2:
+            bsubu_e = bsubu_e.at[:-1].set(0.5 * (bsubu_lambda[:-1] + bsubu_lambda[1:]))
+            bsubu_e = bsubu_e.at[-1].set(0.5 * bsubu_lambda[-1])
+            bsubv_e = bsubv_e.at[:-1].set(0.5 * (bsubv_lambda[:-1] + bsubv_lambda[1:]))
+            bsubv_e = bsubv_e.at[-1].set(0.5 * bsubv_lambda[-1])
     else:
-        bsubv_e = bdamp * bsubv_e + (1.0 - bdamp) * bsubv_e
+        # Intermediate full-mesh bsubv_e (before blending), following bcovar.f.
+        bsubv_e = jnp.zeros_like(bsubv)
+        if ns >= 2:
+            bsubv_e = bsubv_e.at[:-1].set(0.5 * (lvv[:-1] + lvv[1:]) * lu0[:-1])
+            bsubv_e = bsubv_e.at[-1].set(0.5 * lvv[-1] * lu0[-1])
+
+        lvv_sh = lvv * pshalf
+        bsubu_tmp = guv * bsupu  # bcovar: pguv*bsupu (sigma_an=1 isotropic)
+        if ns >= 2:
+            bsubv_e = bsubv_e.at[:-1].add(
+                0.5 * ((lvv_sh[:-1] + lvv_sh[1:]) * lu1[:-1] + bsubu_tmp[:-1] + bsubu_tmp[1:])
+            )
+            bsubv_e = bsubv_e.at[-1].add(0.5 * (lvv_sh[-1] * lu1[-1] + bsubu_tmp[-1]))
+
+        # Average lambda forces onto full radial mesh (bsubu_e from bsubu half mesh).
+        bsubu_e = jnp.zeros_like(bsubu)
+        if ns >= 2:
+            bsubu_e = bsubu_e.at[:-1].set(0.5 * (bsubu[:-1] + bsubu[1:]))
+            bsubu_e = bsubu_e.at[-1].set(0.5 * bsubu[-1])
+
+        # Blend bsubv_e with half-mesh bsubv average using bdamp(s) (VMEC: bdamp=2*pdamp*(1-s)).
+        pdamp = 0.05
+        bdamp = (2.0 * pdamp * (1.0 - s)).astype(jnp.asarray(bsubv_e).dtype)[:, None, None]
+        if ns >= 2:
+            bsubv_avg = jnp.zeros_like(bsubv_e)
+            bsubv_avg = bsubv_avg.at[:-1].set(0.5 * (bsubv[:-1] + bsubv[1:]))
+            bsubv_avg = bsubv_avg.at[-1].set(0.5 * bsubv[-1])
+            bsubv_e = bdamp * bsubv_e + (1.0 - bdamp) * bsubv_avg
+        else:
+            bsubv_e = bdamp * bsubv_e + (1.0 - bdamp) * bsubv_e
 
     # Final scaling for tomnsps:
     # VMEC applies the "-lamscale" factor only for js>=2 (1-based). The axis (js=1)

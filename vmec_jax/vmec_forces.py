@@ -319,7 +319,9 @@ def vmec_forces_rz_from_wout(
     use_wout_bsup:
         If True, use the Nyquist `bsup*` fields stored in the `wout` file when
         forming the B-product tensors inside `bcovar`. This isolates the forces
-        algebra from small differences in the derived contravariant field.
+        algebra from small differences in the derived contravariant field. In
+        this parity mode, lambda-force kernels (`blmn/clmn`) are also formed
+        from averaged `wout` `bsub*` fields.
     """
     s = jnp.asarray(static.s)
     ohs = jnp.asarray(1.0 / (s[1] - s[0])) if s.shape[0] >= 2 else jnp.asarray(0.0)
@@ -330,6 +332,8 @@ def vmec_forces_rz_from_wout(
         static=static,
         wout=wout,
         use_wout_bsup=use_wout_bsup,
+        use_wout_bsub_for_lambda=use_wout_bsup,
+        use_wout_bmag_for_bsq=use_wout_bsup,
         use_vmec_synthesis=use_vmec_synthesis,
         trig=trig,
     )

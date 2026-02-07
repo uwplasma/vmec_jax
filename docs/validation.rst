@@ -254,6 +254,9 @@ For stage-by-stage parity against a fresh VMEC++ run, use::
 
   python examples/validation/vmecpp_stage_parity_pipeline.py --input examples/data/input.n3are_R7.75B5.7_lowres
 
+Use ``--hi-res`` only for exploratory diagnostics; by default this script uses
+the input-grid angular resolution for VMEC-consistent ``getfsq`` checks.
+
 The stage gate uses a looser ``bsub`` threshold (``4e-2``) than ``bsup`` so
 that current runs can progress to the next actionable mismatch (``getfsq`` /
 update-loop conventions) instead of repeatedly stopping on the known
@@ -301,6 +304,8 @@ Current finding (n3are):
   known few-``1e-2`` level for ``bsubu``,
 - VMEC++ ``jxbout`` vs ``wout``-Fourier differs at the ``1e-1`` level for
   ``bsup*``/``bsub*`` on this case.
+- with the current full-field path, the first failing stage is now explicitly
+  ``getfsq`` (after passing geometry/bsup/bsub gates).
 
 So the first practical parity target remains the VMEC2000/``wout`` path used by
 existing tests; ``jxbout`` is kept as an internal cross-check rather than a

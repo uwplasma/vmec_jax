@@ -196,6 +196,7 @@ def _parse_args():
     p.add_argument("--input", type=Path, default=root / "examples/data/input.n3are_R7.75B5.7_lowres")
     p.add_argument("--max-iter", type=int, default=20)
     p.add_argument("--step-size", type=float, default=1e-10)
+    p.add_argument("--hi-res", action="store_true", help="Use 4*mpol/ntor+16 angular grid for diagnostics (default: use input grid).")
     p.add_argument("--out", type=Path, default=root / "examples/outputs/vmecpp_stage_parity_pipeline_n3are.json")
     return p.parse_args()
 
@@ -208,14 +209,14 @@ def main() -> None:
     except Exception as exc:  # pragma: no cover
         raise SystemExit(f"vmecpp import failed: {exc}")
 
-    cfg, _indata = load_config(str(args.input))
+    cfg_base, _indata = load_config(str(args.input))
 
     out_vmecpp = vmecpp.run(vmecpp.VmecInput.from_file(args.input), verbose=False)
     with tempfile.TemporaryDirectory() as td:
         wpath = Path(td) / f"wout_{args.input.name.replace('input.', '')}_vmecpp.nc"
         out_vmecpp.wout.save(str(wpath))
         wout_ref = read_wout(wpath)
-    cfg = _hi_res_cfg(cfg, mpol=wout_ref.mpol, ntor=wout_ref.ntor)
+    cfg = _hi_res_cfg(cfg_base, mpol=wout_ref.mpol, ntor=wout_ref.ntor) if bool(args.hi_res) else cfg_base
     grid = vmec_angle_grid(ntheta=int(cfg.ntheta), nzeta=int(cfg.nzeta), nfp=int(cfg.nfp), lasym=bool(cfg.lasym))
     static = build_static(cfg, grid=grid)
 

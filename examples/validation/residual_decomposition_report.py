@@ -24,6 +24,7 @@ from vmec_jax.vmec_forces import (
 )
 from vmec_jax.vmec_residue import (
     vmec_apply_m1_constraints,
+    vmec_force_norms_from_bcovar,
     vmec_force_norms_from_bcovar_dynamic,
     vmec_fsq_from_tomnsps_dynamic,
     vmec_fsq_sums_from_tomnsps,
@@ -258,14 +259,25 @@ def main():
     frzl_total = _frzl_from_kernels(k, cfg=cfg, wout=wout, trig=trig)
     sums_total = vmec_fsq_sums_from_tomnsps(frzl=frzl_total, lconm1=bool(getattr(cfg, "lconm1", True)))
 
-    norms_dyn = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
-    scal_total = vmec_fsq_from_tomnsps_dynamic(frzl=frzl_total, norms=norms_dyn, lconm1=bool(getattr(cfg, "lconm1", True)))
-    fsqr_total = float(scal_total.fsqr)
-    fsqz_total = float(scal_total.fsqz)
-    fsql_total = float(scal_total.fsql)
-    r1 = float(norms_dyn.r1)
-    fnorm = float(norms_dyn.fnorm)
-    fnormL = float(norms_dyn.fnormL)
+    # Reference-field kernels use a minimal bc structure (no bsup*/bsq), so use
+    # the wout-based normalization path in that mode.
+    if hasattr(k.bc, "bsupu") and hasattr(k.bc, "bsupv") and hasattr(k.bc, "bsq"):
+        norms_dyn = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=static.s, signgs=int(wout.signgs))
+        scal_total = vmec_fsq_from_tomnsps_dynamic(frzl=frzl_total, norms=norms_dyn, lconm1=bool(getattr(cfg, "lconm1", True)))
+        fsqr_total = float(scal_total.fsqr)
+        fsqz_total = float(scal_total.fsqz)
+        fsql_total = float(scal_total.fsql)
+        r1 = float(norms_dyn.r1)
+        fnorm = float(norms_dyn.fnorm)
+        fnormL = float(norms_dyn.fnormL)
+    else:
+        norms = vmec_force_norms_from_bcovar(bc=k.bc, trig=trig, wout=wout, s=static.s)
+        r1 = float(norms.r1)
+        fnorm = float(norms.fnorm)
+        fnormL = float(norms.fnormL)
+        fsqr_total = r1 * fnorm * float(sums_total.gcr2)
+        fsqz_total = r1 * fnorm * float(sums_total.gcz2)
+        fsql_total = fnormL * float(sums_total.gcl2)
 
     print("== VMEC2000 wout scalars ==")
     print(f"fsqr={wout.fsqr:.3e}  fsqz={wout.fsqz:.3e}  fsql={wout.fsql:.3e}")
