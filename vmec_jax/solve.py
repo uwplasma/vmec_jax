@@ -2202,6 +2202,7 @@ def solve_fixed_boundary_vmecpp_iter(
     vZ = jnp.zeros_like(state.Zsin)
     vL = jnp.zeros_like(state.Lsin)
     flip_sign = 1.0
+    max_coeff_delta_rms = 1e-3
 
     def _edge_force_trigger(it: int, w_hist: list[float], fsqr_hist: list[float], fsqz_hist: list[float]) -> bool:
         """Heuristic for VMEC++-style edge-force inclusion.
@@ -2212,17 +2213,34 @@ def solve_fixed_boundary_vmecpp_iter(
         """
         if it == 0:
             return True
-        if it < 4:
+        # Keep edge terms active through the initial transient.
+        if it < 8:
             return True
-        if len(w_hist) >= 2:
-            prev2 = max(float(w_hist[-2]), 1e-30)
-            ratio = float(w_hist[-1]) / prev2
-            if ratio < 0.6:
+        if len(w_hist) >= 3:
+            w0 = max(float(w_hist[-3]), 1e-30)
+            w1 = max(float(w_hist[-2]), 1e-30)
+            w2 = max(float(w_hist[-1]), 1e-30)
+            # Re-enable only for sustained fast drops to avoid on/off chatter.
+            if (w1 / w0 < 0.7) and (w2 / w1 < 0.7):
                 return True
         if len(fsqr_hist) > 0:
             if float(fsqr_hist[-1]) + float(fsqz_hist[-1]) < 1e-6:
                 return True
         return False
+
+    def _safe_dt_from_force(*, dt_nominal: float, frc_modes, fz_modes, fl_modes) -> float:
+        """Limit dt so coefficient updates stay bounded during early iterations."""
+        fr = jnp.asarray(frc_modes)
+        fz = jnp.asarray(fz_modes)
+        fl = jnp.asarray(fl_modes)
+        rms = jnp.sqrt(jnp.mean(fr * fr + fz * fz + fl * fl))
+        rms_f = float(np.asarray(rms))
+        if not np.isfinite(rms_f) or rms_f <= 0.0:
+            return max(float(dt_nominal), 1e-12)
+        # With this integrator, first-step coefficient update is O(dt^2 * force).
+        dt_lim = np.sqrt(max_coeff_delta_rms / max(rms_f, 1e-30))
+        dt_eff = min(float(dt_nominal), float(dt_lim))
+        return max(dt_eff, 1e-12)
 
     for it in range(max_iter):
         zero_m1 = jnp.asarray(1.0 if (it < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
@@ -2332,7 +2350,12 @@ def solve_fixed_boundary_vmecpp_iter(
         fac = 1.0 / (1.0 + dtau)
 
         if bool(vmecpp_strict_update):
-            dt_try = time_step
+            dt_try = _safe_dt_from_force(
+                dt_nominal=time_step,
+                frc_modes=frc_modes,
+                fz_modes=fz_modes,
+                fl_modes=fl_modes,
+            )
             vR = fac * (b1 * vR + dt_try * (flip_sign * jnp.asarray(frc_modes)))
             vZ = fac * (b1 * vZ + dt_try * (flip_sign * jnp.asarray(fz_modes)))
             vL = fac * (b1 * vL + dt_try * (flip_sign * jnp.asarray(fl_modes)))
@@ -2356,7 +2379,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 enforce_lambda_axis=False,
                 idx00=idx00,
             )
-            step_history.append(step_size)
+            step_history.append(dt_try)
         else:
             accepted = False
             step_factor = 1.0
@@ -2410,7 +2433,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 vZ = 0.5 * vZ
                 vL = 0.5 * vL
             step_history.append(step_size * step_factor)
-        grad_rms_history.append(0.0)
+        grad_rms_history.append(float(np.sqrt(max(fsqr_f + fsqz_f + fsql_f, 0.0))))
 
     diag: Dict[str, Any] = {
         "ftol": ftol,

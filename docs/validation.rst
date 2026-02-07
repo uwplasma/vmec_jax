@@ -337,6 +337,18 @@ To compare the residual contributions from the reference-field path (using
 This report prints deltas for component-only norms (A/B/C/constraint/lambda) and
 the most significant ``(m,n)`` differences between the two paths.
 
+Current fixed-boundary solve status (n3are)
+-------------------------------------------
+
+- Visualization parity for the initial guess path is now stable, including the
+  3D ``|B|`` rendering (same Jacobian-floor stabilization as the 2D ``|B|``
+  surface plot).
+- ``vmecpp_iter`` now uses a bounded per-iteration time step derived from force
+  RMS to avoid immediate overflow/NaN updates.
+- Solver-update parity is still in progress: short runs can reduce residuals by
+  orders of magnitude but remain non-monotone and far from VMEC2000/VMEC++ final
+  fixed-boundary solutions on n3are.
+
 Optional: validating against a local VMEC2000 build
 ---------------------------------------------------
 

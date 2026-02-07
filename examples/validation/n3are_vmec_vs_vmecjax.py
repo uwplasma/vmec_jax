@@ -87,6 +87,8 @@ def _plot_3d_surface(ax, *, R, Z, B, phi, title: str):
     # Robust color normalization avoids a mostly-flat blue surface when a few
     # points have very large |B| due to near-singular initial Jacobians.
     bvals = np.asarray(B, dtype=float)
+    if not np.any(np.isfinite(bvals)):
+        bvals = np.zeros_like(bvals)
     vmin = float(np.quantile(bvals, 0.01))
     vmax = float(np.quantile(bvals, 0.99))
     if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
@@ -145,7 +147,7 @@ def main() -> None:
     step_size = args.step_size
     if step_size is None:
         if str(args.solver).lower() == "vmecpp_iter":
-            step_size = 1e-10
+            step_size = 1.0
         else:
             step_size = 1e-5
 
