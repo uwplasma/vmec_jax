@@ -350,6 +350,9 @@ Current fixed-boundary solve status (n3are)
 - Iteration logs now include ``dt_eff`` and ``update_rms`` in addition to
   ``fsqr/fsqz/fsql`` and preconditioned ``fsqr1/fsqz1/fsql1`` to help locate
   the first unstable update step.
+- Strict ``vmecpp_iter`` updates now reject catastrophic growth steps; logs
+  include ``step_status`` (``momentum`` / ``fallback`` / ``rejected``) so the
+  first failing update decision can be identified iteration-by-iteration.
 - Solver-update parity is still in progress: short runs can reduce residuals by
   orders of magnitude but remain non-monotone and far from VMEC2000/VMEC++ final
   fixed-boundary solutions on n3are.
