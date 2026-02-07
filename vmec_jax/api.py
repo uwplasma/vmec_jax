@@ -31,6 +31,15 @@ from .plotting import (
     zeta_grid_field_period,
 )
 from .wout import read_wout, state_from_wout
+from .workflows import (
+    axisym_showcase,
+    export_vtk_surface_and_fieldline,
+    step10_getfsq_parity_cases,
+    write_axisym_overview,
+    write_bmag_parity_figures,
+    write_bsub_parity_figures,
+    write_bsup_parity_figures,
+)
 
 __all__ = [
     # Driver / solve
@@ -53,4 +62,12 @@ __all__ = [
     # Low-friction wout access for plotting
     "read_wout",
     "state_from_wout",
+    # Workflows (used by examples)
+    "axisym_showcase",
+    "write_axisym_overview",
+    "write_bsup_parity_figures",
+    "write_bsub_parity_figures",
+    "write_bmag_parity_figures",
+    "export_vtk_surface_and_fieldline",
+    "step10_getfsq_parity_cases",
 ]
