@@ -1120,7 +1120,7 @@ def solve_fixed_boundary_lbfgs_vmec_residual(
 ) -> SolveVmecResidualResult:
     """Fixed-boundary solve by minimizing a VMEC-style force-residual objective.
 
-    The objective follows the Step-10 parity pipeline:
+    The objective follows the Step-10 parity pipeline
     ``bcovar -> forces -> tomnsps -> sum-of-squares of Fourier residual blocks``,
     using VMEC's ``getfsq`` conventions (post-``tomnsps`` ``scalxc`` scaling,
     optional converged-iteration m=1 constraints, and R/Z edge exclusion).
@@ -2230,6 +2230,7 @@ def solve_fixed_boundary_vmecpp_iter(
     fsqr1_history = []
     fsqz1_history = []
     fsql1_history = []
+    step_status_history: list[str] = []
     grad_rms_history = []
     step_history = []
 
@@ -2308,6 +2309,14 @@ def solve_fixed_boundary_vmecpp_iter(
             print(
                 f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} fsqr={fsqr_f:.3e} fsqz={fsqz_f:.3e} fsql={fsql_f:.3e} include_edge={include_edge}"
             )
+        # VMEC++ terminates on invariant residuals (fsqr/fsqz/fsql), not fsq1.
+        if (fsqr_f <= ftol) and (fsqz_f <= ftol) and (fsql_f <= ftol):
+            if verbose:
+                print(
+                    f"[solve_fixed_boundary_vmecpp_iter] converged: "
+                    f"fsqr={fsqr_f:.3e} fsqz={fsqz_f:.3e} fsql={fsql_f:.3e} <= ftol={ftol:.3e}"
+                )
+            break
 
         # Precondition forces (radial smoother).
         frcc = _apply_radial_tridi(frzl.frcc * rz_scale[:, None, None], precond_radial_alpha)
@@ -2397,8 +2406,10 @@ def solve_fixed_boundary_vmecpp_iter(
         fac = 1.0 / (1.0 + dtau)
 
         if bool(vmecpp_strict_update):
+            # VMEC++ update semantics: one preconditioned momentum update per
+            # iteration in (m, n>=0) storage, no line-search accept/reject.
             w_curr = fsqr_f + fsqz_f + fsql_f
-            dt_try0 = _safe_dt_from_force(
+            dt_eff = _safe_dt_from_force(
                 dt_nominal=time_step,
                 frcc=frcc_u,
                 frss=frss_u,
@@ -2407,170 +2418,96 @@ def solve_fixed_boundary_vmecpp_iter(
                 flsc=flsc_u,
                 flcs=flcs_u,
             )
-            accepted = False
-            step_status = "rejected"
-            dt_eff = float(dt_try0)
-            update_rms = 0.0
-            state_best = state
-            vRcc_best, vRss_best = vRcc, vRss
-            vZsc_best, vZcs_best = vZsc, vZcs
-            vLsc_best, vLcs_best = vLsc, vLcs
-            for bt in range(6):
-                dt_try = float(dt_try0) * (0.5 ** bt)
-                vRcc_try = fac * (b1 * vRcc + dt_try * (flip_sign * jnp.asarray(frcc_u)))
-                vRss_try = fac * (b1 * vRss + dt_try * (flip_sign * jnp.asarray(frss_u)))
-                vZsc_try = fac * (b1 * vZsc + dt_try * (flip_sign * jnp.asarray(fzsc_u)))
-                vZcs_try = fac * (b1 * vZcs + dt_try * (flip_sign * jnp.asarray(fzcs_u)))
-                vLsc_try = fac * (b1 * vLsc + dt_try * (flip_sign * jnp.asarray(flsc_u)))
-                vLcs_try = fac * (b1 * vLcs + dt_try * (flip_sign * jnp.asarray(flcs_u)))
 
-                update_rms_try = float(
+            vRcc = fac * (b1 * vRcc + dt_eff * (flip_sign * jnp.asarray(frcc_u)))
+            vRss = fac * (b1 * vRss + dt_eff * (flip_sign * jnp.asarray(frss_u)))
+            vZsc = fac * (b1 * vZsc + dt_eff * (flip_sign * jnp.asarray(fzsc_u)))
+            vZcs = fac * (b1 * vZcs + dt_eff * (flip_sign * jnp.asarray(fzcs_u)))
+            vLsc = fac * (b1 * vLsc + dt_eff * (flip_sign * jnp.asarray(flsc_u)))
+            vLcs = fac * (b1 * vLcs + dt_eff * (flip_sign * jnp.asarray(flcs_u)))
+
+            update_rms = float(
+                np.asarray(
+                    jnp.sqrt(
+                        jnp.mean(
+                            (dt_eff * vRcc) ** 2
+                            + (dt_eff * vRss) ** 2
+                            + (dt_eff * vZsc) ** 2
+                            + (dt_eff * vZcs) ** 2
+                            + (dt_eff * vLsc) ** 2
+                            + (dt_eff * vLcs) ** 2
+                        )
+                    )
+                )
+            )
+            if np.isfinite(update_rms) and (update_rms > max_update_rms):
+                scl = max_update_rms / max(update_rms, 1e-30)
+                vRcc = vRcc * scl
+                vRss = vRss * scl
+                vZsc = vZsc * scl
+                vZcs = vZcs * scl
+                vLsc = vLsc * scl
+                vLcs = vLcs * scl
+                update_rms = float(
                     np.asarray(
                         jnp.sqrt(
                             jnp.mean(
-                                (dt_try * vRcc_try) ** 2
-                                + (dt_try * vRss_try) ** 2
-                                + (dt_try * vZsc_try) ** 2
-                                + (dt_try * vZcs_try) ** 2
-                                + (dt_try * vLsc_try) ** 2
-                                + (dt_try * vLcs_try) ** 2
+                                (dt_eff * vRcc) ** 2
+                                + (dt_eff * vRss) ** 2
+                                + (dt_eff * vZsc) ** 2
+                                + (dt_eff * vZcs) ** 2
+                                + (dt_eff * vLsc) ** 2
+                                + (dt_eff * vLcs) ** 2
                             )
                         )
                     )
                 )
-                if np.isfinite(update_rms_try) and (update_rms_try > max_update_rms):
-                    scl = max_update_rms / max(update_rms_try, 1e-30)
-                    vRcc_try = vRcc_try * scl
-                    vRss_try = vRss_try * scl
-                    vZsc_try = vZsc_try * scl
-                    vZcs_try = vZcs_try * scl
-                    vLsc_try = vLsc_try * scl
-                    vLcs_try = vLcs_try * scl
-                    update_rms_try = float(
-                        np.asarray(
-                            jnp.sqrt(
-                                jnp.mean(
-                                    (dt_try * vRcc_try) ** 2
-                                    + (dt_try * vRss_try) ** 2
-                                    + (dt_try * vZsc_try) ** 2
-                                    + (dt_try * vZcs_try) ** 2
-                                    + (dt_try * vLsc_try) ** 2
-                                    + (dt_try * vLcs_try) ** 2
-                                )
-                            )
-                        )
-                    )
 
-                dR_try = dt_try * _mn_cos_to_signed(vRcc_try, vRss_try)
-                dZ_try = dt_try * _mn_sin_to_signed(vZsc_try, vZcs_try)
-                dL_try = dt_try * _mn_sin_to_signed(vLsc_try, vLcs_try)
-                state_try = VMECState(
-                    layout=state.layout,
-                    Rcos=jnp.asarray(state.Rcos) + dR_try,
-                    Rsin=state.Rsin,
-                    Zcos=state.Zcos,
-                    Zsin=jnp.asarray(state.Zsin) + dZ_try,
-                    Lcos=state.Lcos,
-                    Lsin=jnp.asarray(state.Lsin) + dL_try,
-                )
-                state_try = _enforce_fixed_boundary_and_axis(
-                    state_try,
-                    static,
-                    edge_Rcos=edge_Rcos,
-                    edge_Rsin=edge_Rsin,
-                    edge_Zcos=edge_Zcos,
-                    edge_Zsin=edge_Zsin,
-                    enforce_lambda_axis=False,
-                    idx00=idx00,
-                )
-                _, fsqr_t, fsqz_t, fsql_t, _, _ = _compute_forces(
-                    state_try,
-                    include_edge=include_edge,
-                    zero_m1=zero_m1,
-                )
-                w_try = float(np.asarray(fsqr_t + fsqz_t + fsql_t))
-                # Strict path: reject catastrophic growth and retry with smaller dt.
-                if np.isfinite(w_try) and (w_try <= 1.2 * w_curr):
-                    accepted = True
-                    step_status = "momentum"
-                    dt_eff = float(dt_try)
-                    update_rms = float(update_rms_try)
-                    state_best = state_try
-                    vRcc_best, vRss_best = vRcc_try, vRss_try
-                    vZsc_best, vZcs_best = vZsc_try, vZcs_try
-                    vLsc_best, vLcs_best = vLsc_try, vLcs_try
-                    break
-            state = state_best
-            vRcc, vRss = vRcc_best, vRss_best
-            vZsc, vZcs = vZsc_best, vZcs_best
-            vLsc, vLcs = vLsc_best, vLcs_best
-            if not accepted:
-                # Fallback: try a small direct-force step (no momentum) to
-                # avoid complete stagnation when all momentum proposals fail.
-                dt_direct = float(dt_try0 * (0.5 ** 6))
-                dR_dir = dt_direct * _mn_cos_to_signed(flip_sign * frcc_u, flip_sign * frss_u)
-                dZ_dir = dt_direct * _mn_sin_to_signed(flip_sign * fzsc_u, flip_sign * fzcs_u)
-                dL_dir = dt_direct * _mn_sin_to_signed(flip_sign * flsc_u, flip_sign * flcs_u)
-                state_dir = VMECState(
-                    layout=state.layout,
-                    Rcos=jnp.asarray(state.Rcos) + dR_dir,
-                    Rsin=state.Rsin,
-                    Zcos=state.Zcos,
-                    Zsin=jnp.asarray(state.Zsin) + dZ_dir,
-                    Lcos=state.Lcos,
-                    Lsin=jnp.asarray(state.Lsin) + dL_dir,
-                )
-                state_dir = _enforce_fixed_boundary_and_axis(
-                    state_dir,
-                    static,
-                    edge_Rcos=edge_Rcos,
-                    edge_Rsin=edge_Rsin,
-                    edge_Zcos=edge_Zcos,
-                    edge_Zsin=edge_Zsin,
-                    enforce_lambda_axis=False,
-                    idx00=idx00,
-                )
-                _, fsqr_d, fsqz_d, fsql_d, _, _ = _compute_forces(
-                    state_dir,
-                    include_edge=include_edge,
-                    zero_m1=zero_m1,
-                )
-                w_dir = float(np.asarray(fsqr_d + fsqz_d + fsql_d))
-                if np.isfinite(w_dir) and (w_dir <= 1.2 * w_curr):
-                    state = state_dir
-                    vRcc = jnp.zeros_like(vRcc)
-                    vRss = jnp.zeros_like(vRss)
-                    vZsc = jnp.zeros_like(vZsc)
-                    vZcs = jnp.zeros_like(vZcs)
-                    vLsc = jnp.zeros_like(vLsc)
-                    vLcs = jnp.zeros_like(vLcs)
-                    dt_eff = float(dt_direct)
-                    step_status = "fallback"
-                    update_rms = float(
-                        np.asarray(
-                            jnp.sqrt(
-                                jnp.mean(
-                                    (dt_direct * frcc_u) ** 2
-                                    + (dt_direct * frss_u) ** 2
-                                    + (dt_direct * fzsc_u) ** 2
-                                    + (dt_direct * fzcs_u) ** 2
-                                    + (dt_direct * flsc_u) ** 2
-                                    + (dt_direct * flcs_u) ** 2
-                                )
-                            )
-                        )
-                    )
-                else:
-                    vRcc = 0.5 * vRcc
-                    vRss = 0.5 * vRss
-                    vZsc = 0.5 * vZsc
-                    vZcs = 0.5 * vZcs
-                    vLsc = 0.5 * vLsc
-                    vLcs = 0.5 * vLcs
-                    dt_eff = float(dt_direct)
-                    step_status = "rejected"
-                    update_rms = 0.0
-            step_history.append(dt_eff)
+            dR = dt_eff * _mn_cos_to_signed(vRcc, vRss)
+            dZ = dt_eff * _mn_sin_to_signed(vZsc, vZcs)
+            dL = dt_eff * _mn_sin_to_signed(vLsc, vLcs)
+            state_try = VMECState(
+                layout=state.layout,
+                Rcos=jnp.asarray(state.Rcos) + dR,
+                Rsin=state.Rsin,
+                Zcos=state.Zcos,
+                Zsin=jnp.asarray(state.Zsin) + dZ,
+                Lcos=state.Lcos,
+                Lsin=jnp.asarray(state.Lsin) + dL,
+            )
+            state_try = _enforce_fixed_boundary_and_axis(
+                state_try,
+                static,
+                edge_Rcos=edge_Rcos,
+                edge_Rsin=edge_Rsin,
+                edge_Zcos=edge_Zcos,
+                edge_Zsin=edge_Zsin,
+                enforce_lambda_axis=False,
+                idx00=idx00,
+            )
+            _, fsqr_t, fsqz_t, fsql_t, _, _ = _compute_forces(
+                state_try,
+                include_edge=include_edge,
+                zero_m1=zero_m1,
+            )
+            w_try = float(np.asarray(fsqr_t + fsqz_t + fsql_t))
+
+            # Catastrophic guard only; VMEC++ handles difficult steps through
+            # restart/timestep control, not per-step rejection.
+            if np.isfinite(w_try) and (w_try <= 1.0e3 * max(w_curr, 1e-30)):
+                state = state_try
+                step_status = "momentum"
+            else:
+                vRcc = 0.5 * vRcc
+                vRss = 0.5 * vRss
+                vZsc = 0.5 * vZsc
+                vZcs = 0.5 * vZcs
+                vLsc = 0.5 * vLsc
+                vLcs = 0.5 * vLcs
+                time_step = max(0.5 * time_step, 1e-12)
+                step_status = "restart_damped"
+                update_rms = 0.0
+            step_history.append(float(dt_eff))
         else:
             accepted = False
             step_status = "rejected"
@@ -2669,9 +2606,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 f"fsqr1={fsqr1_f:.3e} fsqz1={fsqz1_f:.3e} fsql1={fsql1_f:.3e} "
                 f"step_status={step_status}"
             )
-        # VMEC++ convergence metric uses preconditioned residuals.
-        if fsq1 < ftol:
-            break
+        step_status_history.append(step_status)
         grad_rms_history.append(float(np.sqrt(max(fsqr_f + fsqz_f + fsql_f, 0.0))))
 
     diag: Dict[str, Any] = {
@@ -2681,6 +2616,7 @@ def solve_fixed_boundary_vmecpp_iter(
         "precond_lambda_alpha": float(precond_lambda_alpha),
         "vmecpp_strict_update": bool(vmecpp_strict_update),
         "max_update_rms": float(max_update_rms),
+        "step_status_history": np.asarray(step_status_history, dtype=object),
         "fsqr1_history": np.asarray(fsqr1_history, dtype=float),
         "fsqz1_history": np.asarray(fsqz1_history, dtype=float),
         "fsql1_history": np.asarray(fsql1_history, dtype=float),
