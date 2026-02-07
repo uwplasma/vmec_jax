@@ -361,6 +361,10 @@ Current fixed-boundary solve status (n3are)
   preconditioned residual history (``res0``/``iter1`` tracking), and records
   restart diagnostics (restart reason, effective time-step history, reset
   counters) for stage-by-stage analysis.
+- VMEC++ pre-step restart triggers and direct-force fallback are currently
+  exposed as optional parity controls (`use_vmecpp_restart_triggers`,
+  `use_direct_fallback`) while tuning is in progress; the default solver path
+  keeps these off for stability.
 - Per-iteration displacement caps were tightened (force-based ``dt`` bound and
   update RMS clip) to reduce unstable excursions while preserving momentum
   updates.

@@ -1912,6 +1912,8 @@ def solve_fixed_boundary_vmecpp_iter(
     mode_diag_exponent: float = 1.0,
     auto_flip_force: bool = False,
     vmecpp_strict_update: bool = True,
+    use_vmecpp_restart_triggers: bool = False,
+    use_direct_fallback: bool = False,
     verbose: bool = True,
 ) -> SolveVmecResidualResult:
     """VMEC++-style fixed-point update loop using preconditioned force residuals."""
@@ -2256,6 +2258,9 @@ def solve_fixed_boundary_vmecpp_iter(
     res0 = -1.0
     k_preconditioner_update_interval = 25
     state_checkpoint = state
+    bad_growth_streak = 0
+    restart_badjac_factor = 0.5
+    restart_badprog_factor = 1.15
 
     def _edge_force_trigger(it: int, w_hist: list[float], fsqr_hist: list[float], fsqz_hist: list[float]) -> bool:
         """Heuristic for VMEC++-style edge-force inclusion.
@@ -2405,16 +2410,21 @@ def solve_fixed_boundary_vmecpp_iter(
         # VMEC++ time-step control trackers.
         if (iter2 == iter1) or (res0 < 0.0):
             res0 = fsq1
+        res0_old = res0
         res0 = min(res0, fsq1)
 
         # VMEC++ stores a "good" checkpoint once residual has improved for many
         # iterations since the last restart marker.
-        if (iter2 - iter1) > 10:
+        if (fsq1 <= res0_old) and ((iter2 - iter1) > 10):
             state_checkpoint = state
 
         # VMEC++ restart triggers (bad progress / bad Jacobian proxy).
         pre_restart_reason = "none"
-        if (iter2 > (iter1 + 3)) and (fsq1 > 100.0 * max(res0, 1e-30)):
+        if fsq1 > 100.0 * max(res0, 1e-30):
+            bad_growth_streak += 1
+        else:
+            bad_growth_streak = 0
+        if (iter2 > (iter1 + 5)) and (bad_growth_streak >= 2):
             pre_restart_reason = "bad_jacobian"
         elif (
             (iter2 - iter1) > (k_preconditioner_update_interval // 2)
@@ -2423,7 +2433,7 @@ def solve_fixed_boundary_vmecpp_iter(
         ):
             pre_restart_reason = "bad_progress"
 
-        if pre_restart_reason != "none":
+        if bool(use_vmecpp_restart_triggers) and pre_restart_reason != "none":
             state = state_checkpoint
             vRcc = jnp.zeros_like(vRcc)
             vRss = jnp.zeros_like(vRss)
@@ -2432,17 +2442,18 @@ def solve_fixed_boundary_vmecpp_iter(
             vLsc = jnp.zeros_like(vLsc)
             vLcs = jnp.zeros_like(vLcs)
             if pre_restart_reason == "bad_jacobian":
-                time_step = max(0.9 * time_step, 1e-12)
+                time_step = max(restart_badjac_factor * time_step, 1e-12)
                 ijacob += 1
                 step_status = "restart_bad_jacobian"
             else:
-                time_step = max(time_step / 1.03, 1e-12)
+                time_step = max(time_step / restart_badprog_factor, 1e-12)
                 step_status = "restart_bad_progress"
             if ijacob in (25, 50):
                 scale = 0.98 if ijacob < 50 else 0.96
                 time_step = max(scale * float(step_size), 1e-12)
             bad_resets += 1
             iter1 = iter2
+            bad_growth_streak = 0
             step_history.append(0.0)
             step_status_history.append(step_status)
             restart_reason_history.append(pre_restart_reason)
@@ -2564,30 +2575,138 @@ def solve_fixed_boundary_vmecpp_iter(
                 step_status = "momentum"
                 restart_reason = "none"
             else:
-                # VMEC++ RestartIteration-style rollback + zero velocity.
-                state = state_backup
-                vRcc = jnp.zeros_like(vRcc)
-                vRss = jnp.zeros_like(vRss)
-                vZsc = jnp.zeros_like(vZsc)
-                vZcs = jnp.zeros_like(vZcs)
-                vLsc = jnp.zeros_like(vLsc)
-                vLcs = jnp.zeros_like(vLcs)
-                if not np.isfinite(w_try):
-                    time_step = max(0.9 * time_step, 1e-12)
-                    ijacob += 1
-                    restart_reason = "bad_jacobian"
-                    step_status = "restart_bad_jacobian"
+                if bool(use_direct_fallback):
+                    # Try a small direct-force step (no momentum memory) before
+                    # a full restart. This is an experimental parity path.
+                    dt_direct = max(0.1 * dt_eff, 1e-12)
+                    force_rms = float(
+                        np.asarray(
+                            jnp.sqrt(
+                                jnp.mean(
+                                    frcc_u * frcc_u
+                                    + frss_u * frss_u
+                                    + fzsc_u * fzsc_u
+                                    + fzcs_u * fzcs_u
+                                    + flsc_u * flsc_u
+                                    + flcs_u * flcs_u
+                                )
+                            )
+                        )
+                    )
+                    if np.isfinite(force_rms) and force_rms > 0.0:
+                        dt_cap = max_update_rms / max(force_rms, 1e-30)
+                        dt_direct = max(min(dt_direct, float(dt_cap)), 1e-12)
+                    dR_dir = dt_direct * _mn_cos_to_signed(flip_sign * frcc_u, flip_sign * frss_u)
+                    dZ_dir = dt_direct * _mn_sin_to_signed(flip_sign * fzsc_u, flip_sign * fzcs_u)
+                    dL_dir = dt_direct * _mn_sin_to_signed(flip_sign * flsc_u, flip_sign * flcs_u)
+                    state_dir = VMECState(
+                        layout=state.layout,
+                        Rcos=jnp.asarray(state.Rcos) + dR_dir,
+                        Rsin=state.Rsin,
+                        Zcos=state.Zcos,
+                        Zsin=jnp.asarray(state.Zsin) + dZ_dir,
+                        Lcos=state.Lcos,
+                        Lsin=jnp.asarray(state.Lsin) + dL_dir,
+                    )
+                    state_dir = _enforce_fixed_boundary_and_axis(
+                        state_dir,
+                        static,
+                        edge_Rcos=edge_Rcos,
+                        edge_Rsin=edge_Rsin,
+                        edge_Zcos=edge_Zcos,
+                        edge_Zsin=edge_Zsin,
+                        enforce_lambda_axis=False,
+                        idx00=idx00,
+                    )
+                    _, fsqr_d, fsqz_d, fsql_d, _, _ = _compute_forces(
+                        state_dir,
+                        include_edge=include_edge,
+                        zero_m1=zero_m1,
+                    )
+                    w_dir = float(np.asarray(fsqr_d + fsqz_d + fsql_d))
+                    if np.isfinite(w_dir) and (w_dir <= 1.5 * max(w_curr, 1e-30)):
+                        state = state_dir
+                        vRcc = jnp.zeros_like(vRcc)
+                        vRss = jnp.zeros_like(vRss)
+                        vZsc = jnp.zeros_like(vZsc)
+                        vZcs = jnp.zeros_like(vZcs)
+                        vLsc = jnp.zeros_like(vLsc)
+                        vLcs = jnp.zeros_like(vLcs)
+                        step_status = "fallback_direct"
+                        restart_reason = "none"
+                        update_rms = float(
+                            np.asarray(
+                                jnp.sqrt(
+                                    jnp.mean(
+                                        (dt_direct * frcc_u) ** 2
+                                        + (dt_direct * frss_u) ** 2
+                                        + (dt_direct * fzsc_u) ** 2
+                                        + (dt_direct * fzcs_u) ** 2
+                                        + (dt_direct * flsc_u) ** 2
+                                        + (dt_direct * flcs_u) ** 2
+                                    )
+                                )
+                            )
+                        )
+                    else:
+                        # VMEC++ RestartIteration-style rollback + zero velocity.
+                        state = state_backup
+                        vRcc = jnp.zeros_like(vRcc)
+                        vRss = jnp.zeros_like(vRss)
+                        vZsc = jnp.zeros_like(vZsc)
+                        vZcs = jnp.zeros_like(vZcs)
+                        vLsc = jnp.zeros_like(vLsc)
+                        vLcs = jnp.zeros_like(vLcs)
+                        # Tighten displacement caps when restarting from
+                        # catastrophic growth; otherwise dt_eff can remain
+                        # stuck at the same limit.
+                        max_coeff_delta_rms = max(0.5 * max_coeff_delta_rms, 1e-12)
+                        max_update_rms = max(0.8 * max_update_rms, 1e-6)
+                        if not np.isfinite(w_try):
+                            time_step = max(restart_badjac_factor * time_step, 1e-12)
+                            ijacob += 1
+                            restart_reason = "bad_jacobian"
+                            step_status = "restart_bad_jacobian"
+                        else:
+                            time_step = max(time_step / restart_badprog_factor, 1e-12)
+                            restart_reason = "bad_progress"
+                            step_status = "restart_bad_progress"
+                        # VMEC++ adjusts delt0r at reset milestones.
+                        if ijacob in (25, 50):
+                            scale = 0.98 if ijacob < 50 else 0.96
+                            time_step = max(scale * float(step_size), 1e-12)
+                        bad_resets += 1
+                        iter1 = iter2
+                        update_rms = 0.0
                 else:
-                    time_step = max(time_step / 1.03, 1e-12)
-                    restart_reason = "bad_progress"
-                    step_status = "restart_bad_progress"
-                # VMEC++ adjusts delt0r at reset milestones.
-                if ijacob in (25, 50):
-                    scale = 0.98 if ijacob < 50 else 0.96
-                    time_step = max(scale * float(step_size), 1e-12)
-                bad_resets += 1
-                iter1 = iter2
-                update_rms = 0.0
+                    # VMEC++ RestartIteration-style rollback + zero velocity.
+                    state = state_backup
+                    vRcc = jnp.zeros_like(vRcc)
+                    vRss = jnp.zeros_like(vRss)
+                    vZsc = jnp.zeros_like(vZsc)
+                    vZcs = jnp.zeros_like(vZcs)
+                    vLsc = jnp.zeros_like(vLsc)
+                    vLcs = jnp.zeros_like(vLcs)
+                    # Tighten displacement caps when restarting from catastrophic
+                    # growth; otherwise dt_eff can remain stuck at the same limit.
+                    max_coeff_delta_rms = max(0.5 * max_coeff_delta_rms, 1e-12)
+                    max_update_rms = max(0.8 * max_update_rms, 1e-6)
+                    if not np.isfinite(w_try):
+                        time_step = max(restart_badjac_factor * time_step, 1e-12)
+                        ijacob += 1
+                        restart_reason = "bad_jacobian"
+                        step_status = "restart_bad_jacobian"
+                    else:
+                        time_step = max(time_step / restart_badprog_factor, 1e-12)
+                        restart_reason = "bad_progress"
+                        step_status = "restart_bad_progress"
+                    # VMEC++ adjusts delt0r at reset milestones.
+                    if ijacob in (25, 50):
+                        scale = 0.98 if ijacob < 50 else 0.96
+                        time_step = max(scale * float(step_size), 1e-12)
+                    bad_resets += 1
+                    iter1 = iter2
+                    update_rms = 0.0
             step_history.append(float(dt_eff))
         else:
             accepted = False

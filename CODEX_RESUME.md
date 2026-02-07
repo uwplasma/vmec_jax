@@ -223,6 +223,10 @@ Current incremental progress toward Step-10:
 - Added a VMEC++-style restart path in `solve_fixed_boundary_vmecpp_iter`: on catastrophic iteration growth the solver now rolls back to the previous state, zeros velocity, and applies `delt` reduction (`/1.03` for bad progress, `*0.9` for non-finite updates), with restart histories exposed in diagnostics.
 - Added VMEC++-style restart trigger bookkeeping (`res0`, `iter1`, reset counters) in `solve_fixed_boundary_vmecpp_iter` and exposed per-iteration restart diagnostics (`restart_reason_history`, `time_step_history`, `ijacob`, `bad_resets`).
 - Tightened per-iteration displacement caps (`max_coeff_delta_rms`, `max_update_rms`) to reduce update-loop blowups on n3are while continuing stage-by-stage parity tracing.
+- Added optional experimental controls in `solve_fixed_boundary_vmecpp_iter`:
+  - `use_vmecpp_restart_triggers` (default `False`) to enable VMEC++-style pre-step restart triggers.
+  - `use_direct_fallback` (default `False`) to allow a capped direct-force fallback step before restart.
+  Default behavior remains the stable strict-update path while these parity controls are tuned.
 - Updated `solve_fixed_boundary_vmecpp_iter` to apply updates in VMEC++-style `(m, n>=0)` storage (`frcc/frss/fzsc/fzcs/flsc/flcs`) and only then map deltas back to vmec_jax signed-helical state coefficients. This removes the direct signed-helical force-update path from the iterator.
 - Added per-iteration diagnostic dumps in VMEC++-iter logs for `dt_eff` and `update_rms` alongside `fsqr/fsqz/fsql` and preconditioned `fsqr1/fsqz1/fsql1`, so the first update-step mismatch can be localized directly from runtime traces.
 - VMEC++-iter now checks convergence against the preconditioned VMEC++-style residual metric (`fsqr1+fsqz1+fsql1 < FTOL`) and stores `fsqr1/fsqz1/fsql1` histories in solver diagnostics.
