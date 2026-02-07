@@ -373,6 +373,9 @@ Current fixed-boundary solve status (n3are)
   per-iteration traces (``fsq*``, ``fsq1*``, timestep, restart status) in a
   single JSON report; optional VMEC++ summaries can be included with
   ``--with-vmecpp``.
+- Use ``examples/validation/vmecpp_trace_first_mismatch.py`` on that JSON to
+  automatically identify the first diverging iteration/metric (and restart
+  reason mismatch) for each case.
 - Per-iteration displacement caps were tightened (force-based ``dt`` bound and
   update RMS clip) to reduce unstable excursions while preserving momentum
   updates.
