@@ -378,6 +378,9 @@ Current fixed-boundary solve status (n3are)
 - Use ``examples/validation/vmecpp_trace_first_mismatch.py`` on that JSON to
   automatically identify the first diverging iteration/metric (and restart
   reason mismatch) for each case.
+- Use ``examples/validation/vmecpp_trace_decision_compare.py`` to compare
+  vmec_jax trigger-policy decisions against VMEC++ restart reasons and get the
+  first policy-level mismatch with local iteration context.
 - Per-iteration displacement caps were tightened (force-based ``dt`` bound and
   update RMS clip) to reduce unstable excursions while preserving momentum
   updates.
