@@ -11,6 +11,7 @@ Exception:
 ## Layout and intent
 
 - `tutorial/`: minimal low-level kernel demos (start here only if you want to learn internals).
+- `gradients/`: small autodiff examples (requires JAX).
 - `validation/`: parity checks vs bundled `wout_*.nc`.
 - `visualization/`: VMEC-style figure generation + VTK export.
 - `data/`: bundled `input.*` and `wout_*_reference.nc` files used in CI tests.

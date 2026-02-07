@@ -26,6 +26,15 @@ field-line trace for ParaView (requires ``netCDF4``)::
 
   python examples/visualization/vtk_field_and_fieldlines.py examples/data/input.li383_low_res --hi-res --outdir vtk_out
 
+Gradients (autodiff)
+--------------------
+
+Differentiate a simple scalar objective (mean ``|B|`` on the LCFS) w.r.t. a few
+boundary Fourier coefficients (``RBC``, ``ZBS``) by backpropagating through a
+small fixed-boundary solve (requires JAX)::
+
+  python examples/gradients/grad_bmag_wrt_boundary.py --case circular_tokamak --max-iter 2
+
 Stepwise kernel demo (optional)
 -------------------------------
 
