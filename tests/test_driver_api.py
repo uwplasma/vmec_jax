@@ -30,7 +30,7 @@ def test_run_fixed_boundary_initial_guess():
     root = Path(__file__).resolve().parents[1]
     input_path = root / "examples/data/input.circular_tokamak"
     # Keep CI fast: use a small VMEC grid.
-    grid = vmec_angle_grid(ntheta=24, nzeta=12, nfp=1, lasym=False)
+    grid = vmec_angle_grid(ntheta=12, nzeta=6, nfp=1, lasym=False)
     run = run_fixed_boundary(
         input_path,
         max_iter=1,

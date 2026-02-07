@@ -4,6 +4,10 @@ This folder contains runnable scripts and bundled reference data used by the
 test suite. We keep **all scripts inside subfolders** so each topic is isolated
 and easy to discover; this also avoids ambiguous top-level entrypoints.
 
+Exception:
+- `showcase_axisym_input_to_wout.py` is intentionally top-level so users have a
+  single minimal "input -> wout + plots + parity" script to start from.
+
 ## Layout and intent
 
 - `tutorial/`: step-by-step scripts (00–09) that introduce the main kernels.

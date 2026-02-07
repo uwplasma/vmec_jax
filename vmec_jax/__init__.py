@@ -45,7 +45,18 @@ from .plotting import (
     zeta_grid,
     zeta_grid_field_period,
 )
-from .driver import ExampleData, FixedBoundaryRun, example_paths, load_example, load_input, load_wout, run_fixed_boundary, save_npz
+from .driver import (
+    ExampleData,
+    FixedBoundaryRun,
+    example_paths,
+    load_example,
+    load_input,
+    load_wout,
+    run_fixed_boundary,
+    save_npz,
+    step10_fsq_from_state,
+    write_wout_from_fixed_boundary_run,
+)
 from .state import VMECState, pack_state, unpack_state
 from .static import VMECStatic, build_static
 from .init_guess import initial_guess_from_boundary
@@ -123,6 +134,8 @@ __all__ = [
     "load_wout",
     "run_fixed_boundary",
     "save_npz",
+    "step10_fsq_from_state",
+    "write_wout_from_fixed_boundary_run",
     "VMECState",
     "pack_state",
     "unpack_state",

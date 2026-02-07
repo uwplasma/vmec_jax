@@ -50,6 +50,121 @@ class FixedBoundaryRun:
     signgs: int
 
 
+def step10_fsq_from_state(
+    *,
+    state,
+    static,
+    indata,
+    signgs: int,
+    use_vmec_synthesis: bool = True,
+):
+    """Compute VMEC-style invariant residual scalars (fsqr/fsqz/fsql) from a state.
+
+    This uses the Step-10 pipeline:
+      bcovar -> forces -> tomnsps -> getfsq
+
+    and is intentionally input-only: flux profiles and pressure are derived from
+    `indata` rather than a reference `wout`.
+    """
+    from .vmec_forces import vmec_forces_rz_from_wout, vmec_residual_internal_from_kernels
+    from .vmec_residue import vmec_force_norms_from_bcovar_dynamic, vmec_fsq_from_tomnsps_dynamic
+    from .vmec_tomnsp import TomnspsRZL, vmec_trig_tables
+
+    class _WoutLike:
+        __slots__ = ("nfp", "mpol", "ntor", "lasym", "signgs")
+
+        def __init__(self, *, nfp: int, mpol: int, ntor: int, lasym: bool, signgs: int):
+            self.nfp = int(nfp)
+            self.mpol = int(mpol)
+            self.ntor = int(ntor)
+            self.lasym = bool(lasym)
+            self.signgs = int(signgs)
+
+    wout_like = _WoutLike(
+        nfp=int(static.cfg.nfp),
+        mpol=int(static.cfg.mpol),
+        ntor=int(static.cfg.ntor),
+        lasym=bool(static.cfg.lasym),
+        signgs=int(signgs),
+    )
+
+    trig = vmec_trig_tables(
+        ntheta=int(static.cfg.ntheta),
+        nzeta=int(static.cfg.nzeta),
+        nfp=int(wout_like.nfp),
+        mmax=int(wout_like.mpol) - 1,
+        nmax=int(wout_like.ntor),
+        lasym=bool(wout_like.lasym),
+    )
+
+    k = vmec_forces_rz_from_wout(
+        state=state,
+        static=static,
+        wout=wout_like,
+        indata=indata,
+        use_wout_bsup=False,
+        use_vmec_synthesis=bool(use_vmec_synthesis),
+        trig=trig,
+    )
+    rzl = vmec_residual_internal_from_kernels(
+        k,
+        cfg_ntheta=int(static.cfg.ntheta),
+        cfg_nzeta=int(static.cfg.nzeta),
+        wout=wout_like,
+        trig=trig,
+    )
+    frzl = TomnspsRZL(
+        frcc=rzl.frcc,
+        frss=rzl.frss,
+        fzsc=rzl.fzsc,
+        fzcs=rzl.fzcs,
+        flsc=rzl.flsc,
+        flcs=rzl.flcs,
+        frsc=rzl.frsc,
+        frcs=rzl.frcs,
+        fzcc=rzl.fzcc,
+        fzss=rzl.fzss,
+        flcc=rzl.flcc,
+        flss=rzl.flss,
+    )
+    norms = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=static.s, signgs=int(signgs))
+    scal = vmec_fsq_from_tomnsps_dynamic(frzl=frzl, norms=norms, lconm1=bool(getattr(static.cfg, "lconm1", True)))
+    return float(scal.fsqr), float(scal.fsqz), float(scal.fsql)
+
+
+def write_wout_from_fixed_boundary_run(
+    path: str | Path,
+    run: FixedBoundaryRun,
+    *,
+    include_fsq: bool = True,
+):
+    """Write a minimal VMEC-style `wout_*.nc` from a fixed-boundary run."""
+    from .wout import write_wout, wout_minimal_from_fixed_boundary
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if include_fsq:
+        fsqr, fsqz, fsql = step10_fsq_from_state(
+            state=run.state, static=run.static, indata=run.indata, signgs=int(run.signgs), use_vmec_synthesis=True
+        )
+    else:
+        fsqr = fsqz = fsql = 0.0
+
+    wout = wout_minimal_from_fixed_boundary(
+        path=path,
+        state=run.state,
+        static=run.static,
+        indata=run.indata,
+        signgs=int(run.signgs),
+        fsqr=float(fsqr),
+        fsqz=float(fsqz),
+        fsql=float(fsql),
+    )
+    write_wout(path, wout, overwrite=True)
+    return wout
+
+
 def example_paths(case: str, *, root: str | Path | None = None) -> tuple[Path, Optional[Path]]:
     """Return (input_path, wout_path) for a bundled example case."""
     root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
