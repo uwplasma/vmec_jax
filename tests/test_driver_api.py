@@ -28,7 +28,14 @@ def test_save_npz(tmp_path):
 def test_run_fixed_boundary_initial_guess():
     root = Path(__file__).resolve().parents[1]
     input_path = root / "examples/data/input.circular_tokamak"
-    run = run_fixed_boundary(input_path, max_iter=1, use_initial_guess=True)
+    run = run_fixed_boundary(
+        input_path,
+        max_iter=1,
+        use_initial_guess=True,
+        vmecpp_reference_mode=True,
+        vmecpp_use_restart_triggers=True,
+        vmecpp_use_direct_fallback=False,
+    )
     assert run.cfg.ns > 0
     assert run.state is not None
     assert run.result is None

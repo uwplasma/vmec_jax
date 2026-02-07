@@ -365,6 +365,11 @@ Current fixed-boundary solve status (n3are)
   exposed as optional parity controls (`use_vmecpp_restart_triggers`,
   `use_direct_fallback`) while tuning is in progress; the default solver path
   keeps these off for stability.
+- For deterministic parity debugging across multiple inputs, use
+  ``examples/validation/vmecpp_reference_trace_suite.py`` to export
+  per-iteration traces (``fsq*``, ``fsq1*``, timestep, restart status) in a
+  single JSON report; optional VMEC++ summaries can be included with
+  ``--with-vmecpp``.
 - Per-iteration displacement caps were tightened (force-based ``dt`` bound and
   update RMS clip) to reduce unstable excursions while preserving momentum
   updates.

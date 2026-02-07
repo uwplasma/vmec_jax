@@ -123,6 +123,9 @@ def run_fixed_boundary(
     history_size: int = 10,
     use_initial_guess: bool = False,
     vmec_project: bool = True,
+    vmecpp_reference_mode: bool = False,
+    vmecpp_use_restart_triggers: bool | None = None,
+    vmecpp_use_direct_fallback: bool | None = None,
     verbose: bool = True,
     grid=None,
 ):
@@ -269,6 +272,9 @@ def run_fixed_boundary(
             apply_m1_constraints=True,
             precond_radial_alpha=0.5,
             precond_lambda_alpha=0.5,
+            vmecpp_reference_mode=bool(vmecpp_reference_mode),
+            use_vmecpp_restart_triggers=vmecpp_use_restart_triggers,
+            use_direct_fallback=vmecpp_use_direct_fallback,
             verbose=bool(verbose),
         )
     else:

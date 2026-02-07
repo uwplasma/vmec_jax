@@ -25,6 +25,7 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `n3are_vmec_vs_vmecjax.py`: side-by-side VMEC2000 vs vmec_jax plots with optional `--solve` execution (moved from `visualization/`).
   - For the current parity stage, `--no-solve` is the recommended visualization baseline; the fixed-boundary update loop is still being tightened.
   - With `--solve --solver vmecpp_iter`, iteration traces now include `fsqr/fsqz/fsql`, preconditioned `fsqr1/fsqz1/fsql1`, `dt_eff/update_rms`, and `step_status` (`momentum` / `restart_bad_progress` / `restart_bad_jacobian`) for update-loop diagnostics.
+- `vmecpp_reference_trace_suite.py`: multi-case trace harness for fixed-boundary parity work. Exports per-iteration vmec_jax histories (`fsq*`, `fsq1*`, `delt`, restart reasons/status) and optionally captures VMEC++ run summaries when `--with-vmecpp` is enabled.
 
 Notes:
 - `residual_decomposition_report.py` and `residual_compare_fields_report.py` now support reference-field kernels that expose a minimal `bc` object by falling back to the `wout`-based force normalization path.

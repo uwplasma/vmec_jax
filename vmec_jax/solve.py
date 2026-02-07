@@ -1912,8 +1912,9 @@ def solve_fixed_boundary_vmecpp_iter(
     mode_diag_exponent: float = 1.0,
     auto_flip_force: bool = False,
     vmecpp_strict_update: bool = True,
-    use_vmecpp_restart_triggers: bool = False,
-    use_direct_fallback: bool = False,
+    vmecpp_reference_mode: bool = False,
+    use_vmecpp_restart_triggers: bool | None = None,
+    use_direct_fallback: bool | None = None,
     verbose: bool = True,
 ) -> SolveVmecResidualResult:
     """VMEC++-style fixed-point update loop using preconditioned force residuals."""
@@ -1929,6 +1930,13 @@ def solve_fixed_boundary_vmecpp_iter(
 
     signgs = int(signgs)
     idx00 = _mode00_index(static.modes)
+    vmecpp_reference_mode = bool(vmecpp_reference_mode)
+    if use_vmecpp_restart_triggers is None:
+        use_vmecpp_restart_triggers = vmecpp_reference_mode
+    if use_direct_fallback is None:
+        use_direct_fallback = False
+    use_vmecpp_restart_triggers = bool(use_vmecpp_restart_triggers)
+    use_direct_fallback = bool(use_direct_fallback)
 
     from .energy import flux_profiles_from_indata
     from .field import half_mesh_avg_from_full_mesh
@@ -2433,7 +2441,7 @@ def solve_fixed_boundary_vmecpp_iter(
         ):
             pre_restart_reason = "bad_progress"
 
-        if bool(use_vmecpp_restart_triggers) and pre_restart_reason != "none":
+        if use_vmecpp_restart_triggers and pre_restart_reason != "none":
             state = state_checkpoint
             vRcc = jnp.zeros_like(vRcc)
             vRss = jnp.zeros_like(vRss)
@@ -2575,7 +2583,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 step_status = "momentum"
                 restart_reason = "none"
             else:
-                if bool(use_direct_fallback):
+                if use_direct_fallback:
                     # Try a small direct-force step (no momentum memory) before
                     # a full restart. This is an experimental parity path.
                     dt_direct = max(0.1 * dt_eff, 1e-12)
@@ -2818,6 +2826,9 @@ def solve_fixed_boundary_vmecpp_iter(
         "precond_radial_alpha": float(precond_radial_alpha),
         "precond_lambda_alpha": float(precond_lambda_alpha),
         "vmecpp_strict_update": bool(vmecpp_strict_update),
+        "vmecpp_reference_mode": bool(vmecpp_reference_mode),
+        "use_vmecpp_restart_triggers": bool(use_vmecpp_restart_triggers),
+        "use_direct_fallback": bool(use_direct_fallback),
         "max_update_rms": float(max_update_rms),
         "ijacob": int(ijacob),
         "bad_resets": int(bad_resets),
