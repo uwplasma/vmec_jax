@@ -2203,10 +2203,31 @@ def solve_fixed_boundary_vmecpp_iter(
     vL = jnp.zeros_like(state.Lsin)
     flip_sign = 1.0
 
+    def _edge_force_trigger(it: int, w_hist: list[float], fsqr_hist: list[float], fsqz_hist: list[float]) -> bool:
+        """Heuristic for VMEC++-style edge-force inclusion.
+
+        VMEC++ includes edge-force contributions early, and can keep them on when
+        the residual drops rapidly between iterations. This helps avoid getting
+        trapped in an over-aggressive interior-only update path.
+        """
+        if it == 0:
+            return True
+        if it < 4:
+            return True
+        if len(w_hist) >= 2:
+            prev2 = max(float(w_hist[-2]), 1e-30)
+            ratio = float(w_hist[-1]) / prev2
+            if ratio < 0.6:
+                return True
+        if len(fsqr_hist) > 0:
+            if float(fsqr_hist[-1]) + float(fsqz_hist[-1]) < 1e-6:
+                return True
+        return False
+
     for it in range(max_iter):
         zero_m1 = jnp.asarray(1.0 if (it < 2) or (len(fsqz2_history) and fsqz2_history[-1] < 1e-6) else 0.0,
                               dtype=jnp.asarray(state.Rcos).dtype)
-        include_edge = (it < 50) and ((it == 0) or ((len(fsqr2_history) > 0) and (fsqr2_history[-1] + fsqz2_history[-1] < 1e-6)))
+        include_edge = bool(it < 50) and _edge_force_trigger(it, w_history, fsqr2_history, fsqz2_history)
 
         frzl, fsqr, fsqz, fsql, rz_scale, l_scale = _compute_forces(state, include_edge=include_edge, zero_m1=zero_m1)
         fsqr_f = float(np.asarray(fsqr))
@@ -2220,7 +2241,7 @@ def solve_fixed_boundary_vmecpp_iter(
 
         if verbose:
             print(
-                f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} fsqr={fsqr_f:.3e} fsqz={fsqz_f:.3e} fsql={fsql_f:.3e}"
+                f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} fsqr={fsqr_f:.3e} fsqz={fsqz_f:.3e} fsql={fsql_f:.3e} include_edge={include_edge}"
             )
 
         if (fsqr_f + fsqz_f + fsql_f) < ftol:

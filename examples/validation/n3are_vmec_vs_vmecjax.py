@@ -27,6 +27,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import cm  # noqa: E402
+from matplotlib import colors as mcolors  # noqa: E402
 
 from vmec_jax.modes import vmec_mode_table
 from vmec_jax.plotting import (
@@ -82,8 +83,17 @@ def _plot_3d_surface(ax, *, R, Z, B, phi, title: str):
     phi2d, theta2d = np.meshgrid(phi, np.linspace(0, 2 * np.pi, num=R.shape[0]))
     X = R * np.cos(phi2d)
     Y = R * np.sin(phi2d)
-    B_rescaled = (B - B.min()) / (B.max() - B.min() + 1e-12)
-    colors = cm.jet(B_rescaled)
+    _ = theta2d
+    # Robust color normalization avoids a mostly-flat blue surface when a few
+    # points have very large |B| due to near-singular initial Jacobians.
+    bvals = np.asarray(B, dtype=float)
+    vmin = float(np.quantile(bvals, 0.01))
+    vmax = float(np.quantile(bvals, 0.99))
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+        vmin = float(np.nanmin(bvals))
+        vmax = float(np.nanmax(bvals))
+    norm = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+    colors = cm.viridis(norm(bvals))
     ax.plot_surface(X, Y, Z, facecolors=colors, rstride=1, cstride=1, linewidth=0, antialiased=False)
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
@@ -126,6 +136,11 @@ def main() -> None:
 
     # vmec_jax current output
     use_initial_guess = not bool(args.solve) or bool(args.no_solve)
+    if not use_initial_guess:
+        print(
+            "[vmec_jax] note: fixed-boundary solver update-loop parity is still in progress; "
+            "use --no-solve for the most stable visualization baseline."
+        )
 
     step_size = args.step_size
     if step_size is None:
@@ -283,7 +298,9 @@ def main() -> None:
         phipf=np.asarray(wout.phipf),
         chipf=np.asarray(wout.chipf),
         lamscale=float(np.asarray(run.flux.lamscale)),
+        sqrtg_floor=sqrtg_floor,
     )
+    print(f"[vmec_jax] B range (vmec_jax 3D plot) min={B_jax_3d.min():.3e} max={B_jax_3d.max():.3e}")
 
     fig = plt.figure(figsize=(12, 6))
     ax0 = fig.add_subplot(1, 2, 1, projection="3d")

@@ -23,6 +23,7 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `vmecpp_bsub_metric_probe.py`: decomposes `bsub` parity on a VMEC++ final state and attributes the remaining gap to metric pathways (`guu/guv/gvv`) and `bsup` terms.
 - `vmecpp_jxbout_compare.py`: compares vmec_jax `bcovar` fields against VMEC++ `jxbout` internal arrays using VMEC internal-grid ordering (`ns, nzeta, ntheta_eff`), and reports `wout`-evaluation baselines to separate kernel mismatch from output-format mismatch.
 - `n3are_vmec_vs_vmecjax.py`: side-by-side VMEC2000 vs vmec_jax plots with optional `--solve` execution (moved from `visualization/`).
+  - For the current parity stage, `--no-solve` is the recommended visualization baseline; the fixed-boundary update loop is still being tightened.
 
 Notes:
 - `residual_decomposition_report.py` and `residual_compare_fields_report.py` now support reference-field kernels that expose a minimal `bc` object by falling back to the `wout`-based force normalization path.
