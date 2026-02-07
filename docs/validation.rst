@@ -279,6 +279,28 @@ Current finding (n3are):
   reference ``bsup*`` (instead of VMEC synthesis tables) tightens the
   self-consistency ``getfsq`` residuals by ~2 orders of magnitude.
 
+To compare VMEC++ internal ``jxbout`` arrays directly against vmec_jax
+``bcovar`` fields (with explicit VMEC internal-grid reshaping), run::
+
+  python examples/validation/vmecpp_jxbout_compare.py --input examples/data/input.n3are_R7.75B5.7_lowres
+
+This report includes three views:
+
+- ``field_stats``: vmec_jax vs VMEC++ ``jxbout``,
+- ``wout_eval_vs_jxbout``: pure ``wout``-Fourier evaluation vs ``jxbout``,
+- ``vmec_jax_vs_wout_eval``: vmec_jax vs ``wout``-Fourier evaluation.
+
+Current finding (n3are):
+
+- vmec_jax vs ``wout``-Fourier remains tight for ``sqrtg``/``bsup*`` and at the
+  known few-``1e-2`` level for ``bsubu``,
+- VMEC++ ``jxbout`` vs ``wout``-Fourier differs at the ``1e-1`` level for
+  ``bsup*``/``bsub*`` on this case.
+
+So the first practical parity target remains the VMEC2000/``wout`` path used by
+existing tests; ``jxbout`` is kept as an internal cross-check rather than a
+strict stage gate.
+
 Residual decomposition diagnostics
 ----------------------------------
 

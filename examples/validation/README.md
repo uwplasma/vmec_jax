@@ -18,6 +18,7 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `vmecpp_stage_parity_pipeline.py` now uses direct Nyquist Fourier evaluation for `use_wout_bsup` reference fields, avoiding a small VMEC-synthesis mismatch in output `bsup*`.
 - `vmecpp_getfsq_decomposition.py`: sweeps `getfsq` conventions (`include_edge`, `scalxc`, `m=1`) on a VMEC++ final state to isolate residual-scalar convention mismatches.
 - `vmecpp_bsub_metric_probe.py`: decomposes `bsub` parity on a VMEC++ final state and attributes the remaining gap to metric pathways (`guu/guv/gvv`) and `bsup` terms.
+- `vmecpp_jxbout_compare.py`: compares vmec_jax `bcovar` fields against VMEC++ `jxbout` internal arrays using VMEC internal-grid ordering (`ns, nzeta, ntheta_eff`), and reports `wout`-evaluation baselines to separate kernel mismatch from output-format mismatch.
 - `n3are_vmec_vs_vmecjax.py`: side-by-side VMEC2000 vs vmec_jax plots with optional `--solve` execution (moved from `visualization/`).
 
 Most scripts write `.npz` artifacts into `examples/outputs/`.
