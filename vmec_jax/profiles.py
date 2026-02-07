@@ -54,7 +54,10 @@ def _lower(s: Any, default: str) -> str:
         return default
     if isinstance(s, list):
         s = s[0] if s else default
-    return str(s).strip().lower()
+    s = str(s).strip().lower()
+    if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
+        s = s[1:-1].strip().lower()
+    return s
 
 
 def _power_series(coeffs, x):

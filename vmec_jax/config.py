@@ -23,6 +23,7 @@ class VMECConfig:
     ns: int
     nfp: int
     lasym: bool
+    lthreed: bool
     lconm1: bool
     ntheta: int
     nzeta: int
@@ -41,11 +42,23 @@ def config_from_indata(indata: InData) -> VMECConfig:
         ns = indata.get_int("NS", 31)  # fallback (some inputs use NS instead)
     nfp = indata.get_int("NFP", 1)
     lasym = indata.get_bool("LASYM", False)
+    # VMEC convention: lthreed is derived from toroidal modes (ntor>0).
+    lthreed = bool(ntor > 0)
     lconm1 = indata.get_bool("LCONM1", True)
     ntheta_in = indata.get_int("NTHETA", 0)
     nzeta_in = indata.get_int("NZETA", 0)
     ntheta, nzeta = default_grid_sizes(mpol=mpol, ntor=ntor, ntheta=ntheta_in, nzeta=nzeta_in)
-    return VMECConfig(mpol=mpol, ntor=ntor, ns=ns, nfp=nfp, lasym=lasym, lconm1=lconm1, ntheta=ntheta, nzeta=nzeta)
+    return VMECConfig(
+        mpol=mpol,
+        ntor=ntor,
+        ns=ns,
+        nfp=nfp,
+        lasym=lasym,
+        lthreed=lthreed,
+        lconm1=lconm1,
+        ntheta=ntheta,
+        nzeta=nzeta,
+    )
 
 
 def load_config(path: str | Path) -> tuple[VMECConfig, InData]:

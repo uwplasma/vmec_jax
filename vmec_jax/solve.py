@@ -2288,8 +2288,11 @@ def solve_fixed_boundary_vmecpp_iter(
     k_preconditioner_update_interval = 25
     state_checkpoint = state
     bad_growth_streak = 0
-    restart_badjac_factor = 0.5
-    restart_badprog_factor = 1.15
+    # VMEC++ RestartIteration factors (vmec.cc):
+    # - BAD_JACOBIAN: delt0r *= 0.9
+    # - BAD_PROGRESS: delt0r /= 1.03
+    restart_badjac_factor = 0.9
+    restart_badprog_factor = 1.03
     huge_force_restart_count = 0
     huge_force_restart_budget = 2
 
@@ -2459,7 +2462,7 @@ def solve_fixed_boundary_vmecpp_iter(
 
         # VMEC++ restart triggers (bad progress / bad Jacobian proxy).
         bad_jacobian = False
-        if bool(vmecpp_reference_mode):
+        if bool(vmecpp_reference_mode) and bool(getattr(static.cfg, "lthreed", True)):
             jac = vmec_half_mesh_jacobian_from_state(state=state, modes=static.modes, trig=trig, s=s)
             tau = np.asarray(jac.tau)
             if tau.size:
@@ -2586,14 +2589,10 @@ def solve_fixed_boundary_vmecpp_iter(
                 flcs=flcs_u,
             )
 
-            # VMEC++-style momentum form in reference mode: force enters the
-            # velocity update without an extra dt factor, and coordinates are
-            # updated with one dt factor below (x <- x + dt * v).
-            if bool(vmecpp_reference_mode):
-                force_scale = 1.0
-            else:
-                # Keep legacy stable path unchanged outside reference mode.
-                force_scale = float(dt_eff)
+            # VMEC++ semantics: v <- fac*(b1*v + dt*F), x <- x + dt*v.
+            # Do not drop the dt factor in the force term; otherwise updates
+            # scale like O(dt) instead of O(dt^2) and can immediately blow up.
+            force_scale = float(dt_eff)
 
             vRcc = fac * (b1 * vRcc + force_scale * (flip_sign * jnp.asarray(frcc_u)))
             vRss = fac * (b1 * vRss + force_scale * (flip_sign * jnp.asarray(frss_u)))
