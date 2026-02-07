@@ -365,6 +365,9 @@ Current fixed-boundary solve status (n3are)
   exposed as optional parity controls (`use_vmecpp_restart_triggers`,
   `use_direct_fallback`) while tuning is in progress; the default solver path
   keeps these off for stability.
+- Current trigger tuning uses relative progression (`fsq1` vs `res0` and
+  `fsq_prev`) rather than a pure absolute force threshold to avoid excessive
+  restart ping-pong on 3D cases.
 - For deterministic parity debugging across multiple inputs, use
   ``examples/validation/vmecpp_reference_trace_suite.py`` to export
   per-iteration traces (``fsq*``, ``fsq1*``, timestep, restart status) in a

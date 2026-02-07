@@ -2432,12 +2432,13 @@ def solve_fixed_boundary_vmecpp_iter(
             bad_growth_streak += 1
         else:
             bad_growth_streak = 0
-        if (iter2 > (iter1 + 5)) and (bad_growth_streak >= 2):
+        if (iter2 > (iter1 + 8)) and (bad_growth_streak >= 2):
             pre_restart_reason = "bad_jacobian"
         elif (
             (iter2 - iter1) > (k_preconditioner_update_interval // 2)
             and (iter2 > 2 * k_preconditioner_update_interval)
-            and ((fsqr_f + fsqz_f) > 1.0e-2)
+            and (fsq1 > 5.0 * max(res0, 1e-30))
+            and (fsq1 > 0.95 * max(fsq_prev, 1e-30))
         ):
             pre_restart_reason = "bad_progress"
 

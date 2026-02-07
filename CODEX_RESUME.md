@@ -229,6 +229,7 @@ Current incremental progress toward Step-10:
   Default behavior remains the stable strict-update path while these parity controls are tuned.
 - Added `vmecpp_reference_mode` in `solve_fixed_boundary_vmecpp_iter` and in `driver.run_fixed_boundary(...)` to centralize parity-mode defaults without changing the default stable solver path.
 - Added `examples/validation/vmecpp_reference_trace_suite.py`, a deterministic multi-case trace harness that exports per-iteration update-loop histories and optional VMEC++ summaries for first-mismatch localization.
+- Tuned VMEC++ restart-trigger heuristics in reference mode to use relative trend checks (`fsq1/res0` and `fsq1/fsq_prev`) and longer warmup before `bad_jacobian` triggers; this reduced restart frequency and improved final residuals on `n3are` and `li383` in the trace suite.
 - Updated `solve_fixed_boundary_vmecpp_iter` to apply updates in VMEC++-style `(m, n>=0)` storage (`frcc/frss/fzsc/fzcs/flsc/flcs`) and only then map deltas back to vmec_jax signed-helical state coefficients. This removes the direct signed-helical force-update path from the iterator.
 - Added per-iteration diagnostic dumps in VMEC++-iter logs for `dt_eff` and `update_rms` alongside `fsqr/fsqz/fsql` and preconditioned `fsqr1/fsqz1/fsql1`, so the first update-step mismatch can be localized directly from runtime traces.
 - VMEC++-iter now checks convergence against the preconditioned VMEC++-style residual metric (`fsqr1+fsqz1+fsql1 < FTOL`) and stores `fsqr1/fsqz1/fsql1` histories in solver diagnostics.

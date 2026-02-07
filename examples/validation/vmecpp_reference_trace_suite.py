@@ -23,7 +23,22 @@ def _arr(x):
     if x is None:
         return None
     a = np.asarray(x)
-    return a.tolist()
+    out = []
+    for v in a.tolist():
+        if isinstance(v, (float, int, str, bool)) or v is None:
+            out.append(v)
+            continue
+        # Handle enum-like objects from vmecpp bindings.
+        if hasattr(v, "name"):
+            out.append(str(getattr(v, "name")))
+            continue
+        if hasattr(v, "value"):
+            vv = getattr(v, "value")
+            if isinstance(vv, (float, int, str, bool)) or vv is None:
+                out.append(vv)
+                continue
+        out.append(str(v))
+    return out
 
 
 def _wout_scalar_summary(wout):
