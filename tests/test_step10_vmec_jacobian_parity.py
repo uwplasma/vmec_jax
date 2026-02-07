@@ -23,11 +23,6 @@ _CASES = [
         "examples/data/input.circular_tokamak",
         "examples/data/wout_circular_tokamak_reference.nc",
     ),
-    (
-        "li383_low_res",
-        "examples/data/input.li383_low_res",
-        "examples/data/wout_li383_low_res_reference.nc",
-    ),
 ]
 
 

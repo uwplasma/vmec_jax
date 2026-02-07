@@ -16,7 +16,7 @@ def _k_index(modes, m, n):
 
 
 def test_initial_guess_scaling_and_axis_blend():
-    cfg = VMECConfig(mpol=3, ntor=2, ns=5, nfp=1, lasym=False, lconm1=True, ntheta=8, nzeta=6)
+    cfg = VMECConfig(mpol=3, ntor=2, ns=5, nfp=1, lasym=False, lconm1=True, lthreed=True, ntheta=8, nzeta=6)
     static = build_static(cfg)
     K = static.modes.K
 

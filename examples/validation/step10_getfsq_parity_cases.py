@@ -25,6 +25,7 @@ def _rel(a: float, b: float) -> float:
 
 
 CASES = [
+    ("shaped_tokamak_pressure", "examples/data/input.shaped_tokamak_pressure", "examples/data/wout_shaped_tokamak_pressure_reference.nc"),
     ("circular_tokamak", "examples/data/input.circular_tokamak", "examples/data/wout_circular_tokamak_reference.nc"),
     ("li383_low_res", "examples/data/input.li383_low_res", "examples/data/wout_li383_low_res_reference.nc"),
     ("circular_tokamak_aspect_100", "examples/data/input.circular_tokamak_aspect_100", "examples/data/wout_circular_tokamak_aspect_100_reference.nc"),
@@ -70,14 +71,21 @@ def main():
     outdir.mkdir(exist_ok=True)
 
     solve_metric = "--solve-metric" in sys.argv
+    include_all = "--all" in sys.argv
+    # For `--solve-metric`, default to a tiny axisymmetric subset so the script
+    # stays interactive (avoids multi-minute JAX recompiles across many shapes).
+    solve_default_cases = {"shaped_tokamak_pressure", "circular_tokamak"}
+    cases = CASES
+    if solve_metric and not include_all:
+        cases = [c for c in CASES if c[0] in solve_default_cases]
     # Default settings: aggressive (better convergence), but bounded.
     gn_damping = 1.0e-6
     gn_cg_tol = 1.0e-10
     gn_cg_maxiter = 200
-    max_iter_axisym = 80
-    max_iter_3d = 20
+    max_iter_axisym = 30
+    max_iter_3d = 10
 
-    for name, input_rel, wout_rel in CASES:
+    for name, input_rel, wout_rel in cases:
         input_path = REPO_ROOT / input_rel
         wout_path = REPO_ROOT / wout_rel
         cfg, indata = load_config(str(input_path))

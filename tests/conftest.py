@@ -16,6 +16,15 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# Keep the test suite fast: avoid JAX compilation in unit tests.
+# Tests cover correctness on small arrays; compilation dominates runtime.
+try:  # pragma: no cover
+    import jax
+
+    jax.config.update("jax_disable_jit", True)
+except Exception:  # pragma: no cover
+    pass
+
 
 def require_slow() -> None:
     """Skip tests marked as slow unless RUN_SLOW=1 is set."""

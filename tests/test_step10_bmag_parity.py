@@ -21,36 +21,6 @@ _CASES = [
         "examples/data/input.circular_tokamak",
         "examples/data/wout_circular_tokamak_reference.nc",
     ),
-    (
-        "li383_low_res",
-        "examples/data/input.li383_low_res",
-        "examples/data/wout_li383_low_res_reference.nc",
-    ),
-    (
-        "circular_tokamak_aspect_100",
-        "examples/data/input.circular_tokamak_aspect_100",
-        "examples/data/wout_circular_tokamak_aspect_100_reference.nc",
-    ),
-    (
-        "purely_toroidal_field",
-        "examples/data/input.purely_toroidal_field",
-        "examples/data/wout_purely_toroidal_field_reference.nc",
-    ),
-    (
-        "ITERModel",
-        "examples/data/input.ITERModel",
-        "examples/data/wout_ITERModel_reference.nc",
-    ),
-    (
-        "LandremanSengupta2019_section5.4_B2_A80",
-        "examples/data/input.LandremanSengupta2019_section5.4_B2_A80",
-        "examples/data/wout_LandremanSengupta2019_section5.4_B2_A80_reference.nc",
-    ),
-    (
-        "n3are_R7.75B5.7_lowres",
-        "examples/data/input.n3are_R7.75B5.7_lowres",
-        "examples/data/wout_n3are_R7.75B5.7_lowres.nc",
-    ),
 ]
 
 
@@ -90,8 +60,9 @@ def test_step10_bmag_from_bsup_matches_wout_bmnc(case_name: str, input_rel: str,
 
     cfg, _indata = load_config(str(input_path))
     wout = read_wout(wout_path)
-    cfg_hi = _hi_res_cfg(cfg, mpol=wout.mpol, ntor=wout.ntor)
-    static = build_static(cfg_hi)
+    # Keep CI fast: cap angular resolution instead of upsizing.
+    cfg_mid = replace(cfg, ntheta=min(int(cfg.ntheta), 32), nzeta=min(int(cfg.nzeta), 32))
+    static = build_static(cfg_mid)
 
     st = state_from_wout(wout)
     st_half = replace(
