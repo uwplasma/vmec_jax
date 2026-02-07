@@ -353,8 +353,13 @@ Current fixed-boundary solve status (n3are)
 - ``vmecpp_iter`` convergence now follows VMEC++ semantics: termination checks
   the invariant residual blocks (``fsqr/fsqz/fsql <= FTOL``), while
   preconditioned ``fsqr1/fsqz1/fsql1`` are used for damping diagnostics.
-- Update logs include ``step_status`` (``momentum`` / ``restart_damped``) to
-  show where the catastrophic guard triggered restart-like velocity damping.
+- ``vmecpp_iter`` strict-update mode now applies VMEC++-style restart behavior:
+  on catastrophic growth it rolls back to the previous state, zeroes update
+  velocity, and reduces the effective time step (``/1.03`` for bad progress,
+  ``*0.9`` for non-finite updates).
+- Update logs include ``step_status`` (``momentum`` /
+  ``restart_bad_progress`` / ``restart_bad_jacobian``) to show exactly where
+  the restart path was triggered.
 - Solver-update parity is still in progress: short runs can reduce residuals by
   orders of magnitude but remain non-monotone and far from VMEC2000/VMEC++ final
   fixed-boundary solutions on n3are.

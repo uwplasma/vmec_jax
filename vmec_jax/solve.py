@@ -2231,6 +2231,8 @@ def solve_fixed_boundary_vmecpp_iter(
     fsqz1_history = []
     fsql1_history = []
     step_status_history: list[str] = []
+    restart_reason_history: list[str] = []
+    time_step_history: list[float] = []
     grad_rms_history = []
     step_history = []
 
@@ -2248,6 +2250,7 @@ def solve_fixed_boundary_vmecpp_iter(
     flip_sign = 1.0
     max_coeff_delta_rms = 1e-3
     max_update_rms = 5e-2
+    ijacob = 0
 
     def _edge_force_trigger(it: int, w_hist: list[float], fsqr_hist: list[float], fsqz_hist: list[float]) -> bool:
         """Heuristic for VMEC++-style edge-force inclusion.
@@ -2409,6 +2412,7 @@ def solve_fixed_boundary_vmecpp_iter(
             # VMEC++ update semantics: one preconditioned momentum update per
             # iteration in (m, n>=0) storage, no line-search accept/reject.
             w_curr = fsqr_f + fsqz_f + fsql_f
+            state_backup = state
             dt_eff = _safe_dt_from_force(
                 dt_nominal=time_step,
                 frcc=frcc_u,
@@ -2497,15 +2501,29 @@ def solve_fixed_boundary_vmecpp_iter(
             if np.isfinite(w_try) and (w_try <= 1.0e3 * max(w_curr, 1e-30)):
                 state = state_try
                 step_status = "momentum"
+                restart_reason = "none"
             else:
-                vRcc = 0.5 * vRcc
-                vRss = 0.5 * vRss
-                vZsc = 0.5 * vZsc
-                vZcs = 0.5 * vZcs
-                vLsc = 0.5 * vLsc
-                vLcs = 0.5 * vLcs
-                time_step = max(0.5 * time_step, 1e-12)
-                step_status = "restart_damped"
+                # VMEC++ RestartIteration-style rollback + zero velocity.
+                state = state_backup
+                vRcc = jnp.zeros_like(vRcc)
+                vRss = jnp.zeros_like(vRss)
+                vZsc = jnp.zeros_like(vZsc)
+                vZcs = jnp.zeros_like(vZcs)
+                vLsc = jnp.zeros_like(vLsc)
+                vLcs = jnp.zeros_like(vLcs)
+                if not np.isfinite(w_try):
+                    time_step = max(0.9 * time_step, 1e-12)
+                    ijacob += 1
+                    restart_reason = "bad_jacobian"
+                    step_status = "restart_bad_jacobian"
+                else:
+                    time_step = max(time_step / 1.03, 1e-12)
+                    restart_reason = "bad_progress"
+                    step_status = "restart_bad_progress"
+                # VMEC++ adjusts delt0r at reset milestones.
+                if ijacob in (25, 50):
+                    scale = 0.98 if ijacob < 50 else 0.96
+                    time_step = max(scale * float(step_size), 1e-12)
                 update_rms = 0.0
             step_history.append(float(dt_eff))
         else:
@@ -2599,6 +2617,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 update_rms = 0.0
                 step_status = "rejected"
             step_history.append(dt_eff)
+            restart_reason = "none"
         if verbose:
             print(
                 f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} "
@@ -2607,6 +2626,8 @@ def solve_fixed_boundary_vmecpp_iter(
                 f"step_status={step_status}"
             )
         step_status_history.append(step_status)
+        restart_reason_history.append(restart_reason)
+        time_step_history.append(float(time_step))
         grad_rms_history.append(float(np.sqrt(max(fsqr_f + fsqz_f + fsql_f, 0.0))))
 
     diag: Dict[str, Any] = {
@@ -2616,7 +2637,10 @@ def solve_fixed_boundary_vmecpp_iter(
         "precond_lambda_alpha": float(precond_lambda_alpha),
         "vmecpp_strict_update": bool(vmecpp_strict_update),
         "max_update_rms": float(max_update_rms),
+        "ijacob": int(ijacob),
         "step_status_history": np.asarray(step_status_history, dtype=object),
+        "restart_reason_history": np.asarray(restart_reason_history, dtype=object),
+        "time_step_history": np.asarray(time_step_history, dtype=float),
         "fsqr1_history": np.asarray(fsqr1_history, dtype=float),
         "fsqz1_history": np.asarray(fsqz1_history, dtype=float),
         "fsql1_history": np.asarray(fsql1_history, dtype=float),
