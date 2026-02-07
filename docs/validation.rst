@@ -275,6 +275,9 @@ Current finding (n3are):
 - ``bsup*`` parity is tight (few ``1e-3`` or better),
 - ``bsubu`` remains the first failing block (few ``1e-2``),
 - the dominant inferred mismatch is in the ``g_uu`` pathway (not ``g_vv``).
+- with ``use_wout_bsup=True``, using direct Nyquist Fourier evaluation for
+  reference ``bsup*`` (instead of VMEC synthesis tables) tightens the
+  self-consistency ``getfsq`` residuals by ~2 orders of magnitude.
 
 Residual decomposition diagnostics
 ----------------------------------

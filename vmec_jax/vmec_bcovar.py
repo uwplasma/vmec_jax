@@ -372,26 +372,16 @@ def vmec_bcovar_half_mesh_from_wout(
     if bool(use_wout_bsup):
         # Replace with wout-stored Nyquist bsup (reference parity path).
         modes_nyq = ModeTable(m=wout.xm_nyq, n=(wout.xn_nyq // wout.nfp))
-        if use_vmec_synthesis:
-            if trig is None:
-                mmax = int(np.max(modes_nyq.m))
-                nmax = int(np.max(np.abs(modes_nyq.n)))
-                trig = vmec_trig_tables(
-                    ntheta=int(static.cfg.ntheta),
-                    nzeta=int(static.cfg.nzeta),
-                    nfp=int(wout.nfp),
-                    mmax=mmax,
-                    nmax=nmax,
-                    lasym=bool(wout.lasym),
-                    dtype=jnp.asarray(state.Rcos).dtype,
-                )
-            bsupu = jnp.asarray(vmec_realspace_synthesis(coeff_cos=wout.bsupumnc, coeff_sin=wout.bsupumns, modes=modes_nyq, trig=trig))
-            bsupv = jnp.asarray(vmec_realspace_synthesis(coeff_cos=wout.bsupvmnc, coeff_sin=wout.bsupvmns, modes=modes_nyq, trig=trig))
-        else:
-            grid = AngleGrid(theta=static.grid.theta, zeta=static.grid.zeta, nfp=wout.nfp)
-            basis_nyq = build_helical_basis(modes_nyq, grid)
-            bsupu = jnp.asarray(eval_fourier(wout.bsupumnc, wout.bsupumns, basis_nyq))
-            bsupv = jnp.asarray(eval_fourier(wout.bsupvmnc, wout.bsupvmns, basis_nyq))
+        # Nyquist `wout` field coefficients (`bsup*`, `bsub*`, `bm*`) follow the
+        # output transform conventions from `wrout` and are most consistent with
+        # direct Fourier evaluation on the active angular grid.
+        #
+        # Using VMEC synthesis tables for these reference fields introduces a
+        # small but systematic mismatch in the parity path for nfp>1 cases.
+        grid = AngleGrid(theta=static.grid.theta, zeta=static.grid.zeta, nfp=wout.nfp)
+        basis_nyq = build_helical_basis(modes_nyq, grid)
+        bsupu = jnp.asarray(eval_fourier(wout.bsupumnc, wout.bsupumns, basis_nyq))
+        bsupv = jnp.asarray(eval_fourier(wout.bsupvmnc, wout.bsupvmns, basis_nyq))
 
     # VMEC enforces axis bsup*=0 explicitly.
     if ns >= 1:

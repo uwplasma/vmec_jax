@@ -13,6 +13,7 @@ from vmec_jax.integrals import dvds_from_sqrtg_zeta
 from vmec_jax.modes import ModeTable
 from vmec_jax.static import build_static
 from vmec_jax.vmec_bcovar import vmec_bcovar_half_mesh_from_wout
+from vmec_jax.vmec_tomnsp import vmec_angle_grid
 from vmec_jax.wout import read_wout, state_from_wout
 
 
@@ -73,3 +74,41 @@ def test_step10_vmec_bcovar_halfmesh_smoke_circular_tokamak():
         assert err_bsup_v < 0.6
         assert err_bsub_u < 0.3
         assert err_bsub_v < 0.3
+
+
+def test_step10_use_wout_bsup_matches_reference_fourier_on_vmec_grid():
+    """`use_wout_bsup` path should reproduce the direct Nyquist Fourier reference."""
+    pytest.importorskip("netCDF4")
+
+    root = Path(__file__).resolve().parents[1]
+    input_path = root / "examples/data/input.n3are_R7.75B5.7_lowres"
+    wout_path = root / "examples/data/wout_n3are_R7.75B5.7_lowres.nc"
+    assert input_path.exists()
+    assert wout_path.exists()
+
+    cfg, _ = load_config(str(input_path))
+    wout = read_wout(wout_path)
+    grid = vmec_angle_grid(ntheta=int(cfg.ntheta), nzeta=int(cfg.nzeta), nfp=int(wout.nfp), lasym=bool(wout.lasym))
+    static = build_static(cfg, grid=grid)
+    st = state_from_wout(wout)
+
+    bc = vmec_bcovar_half_mesh_from_wout(
+        state=st,
+        static=static,
+        wout=wout,
+        use_wout_bsup=True,
+        use_vmec_synthesis=True,
+    )
+
+    modes_nyq = ModeTable(m=wout.xm_nyq, n=(wout.xn_nyq // wout.nfp))
+    basis_nyq = build_helical_basis(
+        modes_nyq, AngleGrid(theta=np.asarray(static.grid.theta), zeta=np.asarray(static.grid.zeta), nfp=wout.nfp)
+    )
+    bsupu_ref = np.asarray(eval_fourier(wout.bsupumnc, wout.bsupumns, basis_nyq))
+    bsupv_ref = np.asarray(eval_fourier(wout.bsupvmnc, wout.bsupvmns, basis_nyq))
+
+    sl = slice(1, None)
+    err_u = _rel_rms(np.asarray(bc.bsupu)[sl], bsupu_ref[sl])
+    err_v = _rel_rms(np.asarray(bc.bsupv)[sl], bsupv_ref[sl])
+    assert err_u < 1e-12
+    assert err_v < 1e-12
