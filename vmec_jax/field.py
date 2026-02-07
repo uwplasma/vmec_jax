@@ -268,8 +268,13 @@ def chips_from_wout_chipf(
 
         rel_half = jnp.sqrt(jnp.mean((chipf - iotaf * phipf) ** 2)) / den
         rel_full = jnp.sqrt(jnp.mean((chipf - iotas * phipf) ** 2)) / den
-        # Prefer full-mesh interpretation only when clearly better.
-        use_full = rel_full < (0.5 * rel_half)
+        # Prefer the interpretation with the smaller mismatch.
+        #
+        # A previous heuristic required the full-mesh interpretation to be
+        # "much better" (2x margin). That proved too conservative for some
+        # VMEC++ outputs where full-mesh `chipf` is only moderately closer to
+        # `iotas*phipf` than to `iotaf*phipf`.
+        use_full = rel_full < rel_half
         chips_half = chips_from_chipf(chipf)
         return jnp.where(use_full, chipf, chips_half)
 

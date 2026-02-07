@@ -226,6 +226,7 @@ Immediate plan:
 2. Recompute ``bsub*`` parity on 3D cases using the VMEC synthesis path and update parity figures.
 3. Tighten ``tests/test_step10_bsub_parity.py`` tolerances once the RMS error drops.
 4. Continue VMEC++ stage parity with ``examples/validation/vmecpp_stage_parity_pipeline.py`` and ``examples/validation/vmecpp_getfsq_decomposition.py`` to localize the first solver-stage mismatch before changing update rules.
+5. Use ``examples/validation/vmecpp_bsub_metric_probe.py`` to decompose the remaining ``bsub*`` gap and identify whether the mismatch is dominated by ``g_uu``, ``g_uv`` or ``g_vv`` pathways.
 
 Running tests::
 
@@ -257,6 +258,23 @@ For focused residual-scalar convention checks (`getfsq`) on the VMEC++ final
 state, use::
 
   python examples/validation/vmecpp_getfsq_decomposition.py --input examples/data/input.n3are_R7.75B5.7_lowres
+
+To isolate the current ``bsub`` mismatch on the VMEC++ final state and quantify
+which metric pathway dominates it, use::
+
+  python examples/validation/vmecpp_bsub_metric_probe.py --input examples/data/input.n3are_R7.75B5.7_lowres
+
+The script writes a JSON report with:
+
+- outer-surface relative RMS for ``bsup*`` and ``bsub*``,
+- decomposition terms for ``bsubu``/``bsubv``,
+- implied metric deltas (holding the cross-term fixed) to attribute residuals.
+
+Current finding (n3are):
+
+- ``bsup*`` parity is tight (few ``1e-3`` or better),
+- ``bsubu`` remains the first failing block (few ``1e-2``),
+- the dominant inferred mismatch is in the ``g_uu`` pathway (not ``g_vv``).
 
 Residual decomposition diagnostics
 ----------------------------------

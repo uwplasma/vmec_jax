@@ -51,3 +51,25 @@ def test_chips_from_wout_chipf_detects_full_mesh_vmecpp_style():
         )
     )
     assert np.allclose(chips, chipf_full, rtol=0, atol=1e-12)
+
+
+def test_chips_from_wout_chipf_prefers_full_when_slightly_better():
+    # Full-mesh should be selected whenever it is the closer interpretation,
+    # even if the margin over half-mesh is modest.
+    ns = 16
+    s = np.linspace(0.0, 1.0, ns)
+    phipf = 1.2 + 0.05 * s
+    iotas = 0.28 + 0.15 * s
+    iotaf = iotas + 0.03 * (1.0 - s)  # similar, but systematically offset
+    chipf = (iotas * phipf) + 0.002 * np.sin(2.0 * np.pi * s)
+
+    chips = np.asarray(
+        chips_from_wout_chipf(
+            chipf=chipf,
+            phipf=phipf,
+            iotaf=iotaf,
+            iotas=iotas,
+            assume_half_if_unknown=True,
+        )
+    )
+    assert _rel_rms(chips, chipf) < _rel_rms(chips, full_mesh_from_half_mesh_avg(chipf))
