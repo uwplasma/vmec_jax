@@ -143,7 +143,7 @@ def main() -> None:
     ax.set_xlabel("chipf scale factor (≈ iota scale)")
     ax.set_ylabel("total volume")
     ax.set_title("Implicit differentiation through fixed-boundary equilibrium")
-    ax.text(0.02, 0.98, f\"dV/dα @ 1 = {g_at_1:.3e}\", transform=ax.transAxes, va=\"top\", ha=\"left\")
+    ax.text(0.02, 0.98, f"dV/dα @ 1 = {g_at_1:.3e}", transform=ax.transAxes, va="top", ha="left")
     fig.tight_layout()
     fig.savefig(outdir / "volume_vs_iota_scale.png")
     fig.savefig(outdir / "volume_vs_iota_scale.pdf")
@@ -155,4 +155,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

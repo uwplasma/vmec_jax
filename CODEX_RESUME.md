@@ -214,6 +214,7 @@ Current incremental progress toward Step-10:
 - Added `examples/validation/vmecpp_jxbout_compare.py` with explicit VMEC internal-grid reshaping (`ns, nzeta, ntheta_eff`) and baseline splits (`vmec_jax vs jxbout`, `wout eval vs jxbout`, `vmec_jax vs wout eval`). Current n3are finding: vmec_jax remains tightly aligned with `wout` evaluation, while `wout` vs `jxbout` differs at ~`1e-1` for several field blocks, so stage-gating parity should continue using the `wout` path.
 - Updated `examples/validation/vmecpp_stage_parity_pipeline.py` stage gate to use `bsub` tolerance `4e-2` (while keeping tighter geometry/bsup tolerances), so diagnostics move on to the higher-ROI `getfsq` and solver-update mismatches.
 - Updated `examples/validation/vmecpp_stage_parity_pipeline.py` to use the input-grid angular resolution by default for `getfsq` parity (with optional `--hi-res`), and removed the non-actionable `bmag` gate so the first failing stage is now explicitly `getfsq`.
+- Fixed `examples/validation/vmecpp_stage_parity_pipeline.py` self-consistency path to pass VMEC input constraints (`indata/TCON0`) into `vmec_forces_rz_from_wout`; on n3are this moves the VMEC++ self-consistency gate from failing `getfsq` to `stage=none` (geometry/`bsup`/`bsub`/`getfsq` all pass within tolerance).
 - Updated the `use_wout_bsup=True` reference path in `vmec_bcovar` to evaluate Nyquist `bsup*` directly via `eval_fourier` on the active grid. This removes a systematic VMEC-synthesis mismatch for output Nyquist fields and improves VMEC++ self-consistency `getfsq` levels by about two orders of magnitude.
 - Added reference parity toggles in `vmec_bcovar` for lambda kernels (`use_wout_bsub_for_lambda`) and `bsq` (`use_wout_bmag_for_bsq`), and wired `vmec_forces_rz_from_wout` to enable them when `use_wout_bsup=True`.
 - Fixed `examples/validation/residual_decomposition_report.py` and `examples/validation/residual_compare_fields_report.py` to handle reference-field kernels with minimal `bc` objects by falling back to `vmec_force_norms_from_bcovar`.
@@ -231,6 +232,7 @@ Current incremental progress toward Step-10:
   directly from bcovar fields (`vmec_force_norms_from_bcovar_dynamic`) plus a dynamic `getfsq` wrapper
   (`vmec_fsq_from_tomnsps_dynamic`). The Step-10 scalar parity regression now uses this dynamic path,
   removing the dependency on `wout.vp/wb/wp` for scalar residual computation.
+- Fixed syntax regressions in `examples/gradients/implicit_fixed_boundary_sensitivity.py` and `examples/gradients/implicit_lambda_gradients.py` (`f\"...\"` -> `f"..."`) and re-ran a full `examples/*.py` smoke sweep (`51/51` passing with help/no-solve/quick-run invocations).
 - Expanded Step-10 scalar parity coverage beyond the initial two cases by bundling additional
   **stellarator-symmetric** `input.*` / `wout_*.nc` pairs (see `examples/data/`) and validating them in
   `tests/test_step10_residue_getfsq_parity.py`.

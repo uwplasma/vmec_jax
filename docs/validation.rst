@@ -258,9 +258,8 @@ Use ``--hi-res`` only for exploratory diagnostics; by default this script uses
 the input-grid angular resolution for VMEC-consistent ``getfsq`` checks.
 
 The stage gate uses a looser ``bsub`` threshold (``4e-2``) than ``bsup`` so
-that current runs can progress to the next actionable mismatch (``getfsq`` /
-update-loop conventions) instead of repeatedly stopping on the known
-few-``1e-2`` ``bsubu`` gap.
+that diagnostics do not repeatedly stop on the known few-``1e-2`` ``bsubu``
+gap while we tighten solver-update parity.
 
 For focused residual-scalar convention checks (`getfsq`) on the VMEC++ final
 state, use::
@@ -304,8 +303,11 @@ Current finding (n3are):
   known few-``1e-2`` level for ``bsubu``,
 - VMEC++ ``jxbout`` vs ``wout``-Fourier differs at the ``1e-1`` level for
   ``bsup*``/``bsub*`` on this case.
-- with the current full-field path, the first failing stage is now explicitly
-  ``getfsq`` (after passing geometry/bsup/bsub gates).
+- with the current fixed-boundary constraint path enabled (``indata/TCON0``
+  passed through ``vmec_forces_rz_from_wout``), the VMEC++ self-consistency
+  stage now passes geometry/``bsup``/``bsub``/``getfsq`` gates on n3are.
+- the next mismatch is in the iterative update path (initial and short
+  ``vmecpp_iter`` runs remain far from the VMEC++ final state).
 
 So the first practical parity target remains the VMEC2000/``wout`` path used by
 existing tests; ``jxbout`` is kept as an internal cross-check rather than a

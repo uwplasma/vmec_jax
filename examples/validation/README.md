@@ -18,6 +18,7 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `vmecpp_stage_parity_pipeline.py` currently uses a looser `bsub` stage threshold (`4e-2`) so diagnostics continue into `getfsq`/solver-update mismatches instead of stopping on the known few-`1e-2` `bsubu` gap.
 - `vmecpp_stage_parity_pipeline.py` now defaults to the input-grid angular resolution for `getfsq` parity; pass `--hi-res` only for exploratory field diagnostics.
 - `vmecpp_stage_parity_pipeline.py` now uses direct Nyquist Fourier evaluation for `use_wout_bsup` reference fields, avoiding a small VMEC-synthesis mismatch in output `bsup*`.
+- `vmecpp_stage_parity_pipeline.py` now passes VMEC input constraints (`indata/TCON0`) into the self-consistency force path; on n3are this clears the `getfsq` stage gate (`first_failing_stage=none`) and leaves solver-update parity as the next mismatch.
 - `vmecpp_getfsq_decomposition.py`: sweeps `getfsq` conventions (`include_edge`, `scalxc`, `m=1`) on a VMEC++ final state to isolate residual-scalar convention mismatches.
 - `vmecpp_bsub_metric_probe.py`: decomposes `bsub` parity on a VMEC++ final state and attributes the remaining gap to metric pathways (`guu/guv/gvv`) and `bsup` terms.
 - `vmecpp_jxbout_compare.py`: compares vmec_jax `bcovar` fields against VMEC++ `jxbout` internal arrays using VMEC internal-grid ordering (`ns, nzeta, ntheta_eff`), and reports `wout`-evaluation baselines to separate kernel mismatch from output-format mismatch.

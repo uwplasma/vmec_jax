@@ -125,7 +125,7 @@ def main() -> None:
     ax.set_xlabel("flux scale factor")
     ax.set_ylabel(r"$\\|\\lambda\\|_{\\mathrm{rms}}$")
     ax.set_title("Implicit differentiation through lambda-only solve")
-    ax.text(0.02, 0.98, f\"grad@1 = {g:.3e}\", transform=ax.transAxes, va=\"top\", ha=\"left\")
+    ax.text(0.02, 0.98, f"grad@1 = {g:.3e}", transform=ax.transAxes, va="top", ha="left")
     fig.tight_layout()
     fig.savefig(outdir / "lambda_norm_vs_scale.png")
     fig.savefig(outdir / "lambda_norm_vs_scale.pdf")
@@ -137,4 +137,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

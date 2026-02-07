@@ -104,7 +104,7 @@ def _state_field_errors(*, state, static, wout, ref_fields):
     }
 
 
-def _reference_self_consistency(*, state_ref, static, wout):
+def _reference_self_consistency(*, state_ref, static, wout, indata):
     ref_fields = _reference_fields(wout, static)
     err = _state_field_errors(state=state_ref, static=static, wout=wout, ref_fields=ref_fields)
 
@@ -120,7 +120,7 @@ def _reference_self_consistency(*, state_ref, static, wout):
         state=state_ref,
         static=static,
         wout=wout,
-        indata=None,
+        indata=indata,
         use_wout_bsup=True,
         use_vmec_synthesis=True,
         trig=trig,
@@ -209,7 +209,7 @@ def main() -> None:
     except Exception as exc:  # pragma: no cover
         raise SystemExit(f"vmecpp import failed: {exc}")
 
-    cfg_base, _indata = load_config(str(args.input))
+    cfg_base, indata = load_config(str(args.input))
 
     out_vmecpp = vmecpp.run(vmecpp.VmecInput.from_file(args.input), verbose=False)
     with tempfile.TemporaryDirectory() as td:
@@ -222,7 +222,7 @@ def main() -> None:
 
     state_ref = state_from_wout(wout_ref)
     ref_fields = _reference_fields(wout_ref, static)
-    self_consistency = _reference_self_consistency(state_ref=state_ref, static=static, wout=wout_ref)
+    self_consistency = _reference_self_consistency(state_ref=state_ref, static=static, wout=wout_ref, indata=indata)
 
     run0 = run_fixed_boundary(args.input, solver="vmecpp_iter", use_initial_guess=True, verbose=False)
     run1 = run_fixed_boundary(
