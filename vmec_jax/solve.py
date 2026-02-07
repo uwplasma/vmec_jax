@@ -2253,6 +2253,10 @@ def solve_fixed_boundary_vmecpp_iter(
     zero_m1_history: list[int] = []
     dt_eff_history: list[float] = []
     update_rms_history: list[float] = []
+    w_curr_history: list[float] = []
+    w_try_history: list[float] = []
+    w_try_ratio_history: list[float] = []
+    restart_path_history: list[str] = []
     grad_rms_history = []
     step_history = []
 
@@ -2508,6 +2512,10 @@ def solve_fixed_boundary_vmecpp_iter(
             step_history.append(0.0)
             dt_eff_history.append(0.0)
             update_rms_history.append(0.0)
+            w_curr_history.append(float(fsqr_f + fsqz_f + fsql_f))
+            w_try_history.append(float("nan"))
+            w_try_ratio_history.append(float("nan"))
+            restart_path_history.append("pre_restart_trigger")
             step_status_history.append(step_status)
             restart_reason_history.append(pre_restart_reason)
             pre_restart_reason_history.append(pre_restart_reason)
@@ -2634,6 +2642,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 zero_m1=zero_m1,
             )
             w_try = float(np.asarray(fsqr_t + fsqz_t + fsql_t))
+            w_try_ratio = w_try / max(w_curr, 1e-30) if np.isfinite(w_try) else float("inf")
 
             # Catastrophic guard only; VMEC++ handles difficult steps through
             # restart/timestep control, not per-step rejection.
@@ -2642,6 +2651,7 @@ def solve_fixed_boundary_vmecpp_iter(
                 step_status = "momentum"
                 restart_reason = "none"
                 huge_force_restart_count = 0
+                restart_path = "momentum_accept"
             else:
                 if use_direct_fallback:
                     # Try a small direct-force step (no momentum memory) before
@@ -2703,6 +2713,7 @@ def solve_fixed_boundary_vmecpp_iter(
                         step_status = "fallback_direct"
                         restart_reason = "none"
                         huge_force_restart_count = 0
+                        restart_path = "fallback_direct"
                         update_rms = float(
                             np.asarray(
                                 jnp.sqrt(
@@ -2736,10 +2747,12 @@ def solve_fixed_boundary_vmecpp_iter(
                             ijacob += 1
                             restart_reason = "bad_jacobian"
                             step_status = "restart_bad_jacobian"
+                            restart_path = "catastrophic_nonfinite"
                         else:
                             time_step = max(time_step / restart_badprog_factor, 1e-12)
                             restart_reason = "bad_progress"
                             step_status = "restart_bad_progress"
+                            restart_path = "catastrophic_growth"
                         # VMEC++ adjusts delt0r at reset milestones.
                         if ijacob in (25, 50):
                             scale = 0.98 if ijacob < 50 else 0.96
@@ -2765,10 +2778,12 @@ def solve_fixed_boundary_vmecpp_iter(
                         ijacob += 1
                         restart_reason = "bad_jacobian"
                         step_status = "restart_bad_jacobian"
+                        restart_path = "catastrophic_nonfinite"
                     else:
                         time_step = max(time_step / restart_badprog_factor, 1e-12)
                         restart_reason = "bad_progress"
                         step_status = "restart_bad_progress"
+                        restart_path = "catastrophic_growth"
                     # VMEC++ adjusts delt0r at reset milestones.
                     if ijacob in (25, 50):
                         scale = 0.98 if ijacob < 50 else 0.96
@@ -2777,6 +2792,10 @@ def solve_fixed_boundary_vmecpp_iter(
                     iter1 = iter2
                     update_rms = 0.0
             step_history.append(float(dt_eff))
+            w_curr_history.append(float(w_curr))
+            w_try_history.append(float(w_try))
+            w_try_ratio_history.append(float(w_try_ratio))
+            restart_path_history.append(str(restart_path))
         else:
             accepted = False
             step_status = "rejected"
@@ -2869,6 +2888,10 @@ def solve_fixed_boundary_vmecpp_iter(
                 step_status = "rejected"
             step_history.append(dt_eff)
             restart_reason = "none"
+            w_curr_history.append(float(w_curr))
+            w_try_history.append(float("nan"))
+            w_try_ratio_history.append(float("nan"))
+            restart_path_history.append("non_strict")
         dt_eff_history.append(float(dt_eff))
         update_rms_history.append(float(update_rms))
         if verbose:
@@ -2914,6 +2937,10 @@ def solve_fixed_boundary_vmecpp_iter(
         "zero_m1_history": np.asarray(zero_m1_history, dtype=int),
         "dt_eff_history": np.asarray(dt_eff_history, dtype=float),
         "update_rms_history": np.asarray(update_rms_history, dtype=float),
+        "w_curr_history": np.asarray(w_curr_history, dtype=float),
+        "w_try_history": np.asarray(w_try_history, dtype=float),
+        "w_try_ratio_history": np.asarray(w_try_ratio_history, dtype=float),
+        "restart_path_history": np.asarray(restart_path_history, dtype=object),
         "fsq1_history": np.asarray(fsq1_history, dtype=float),
         "fsqr1_history": np.asarray(fsqr1_history, dtype=float),
         "fsqz1_history": np.asarray(fsqz1_history, dtype=float),

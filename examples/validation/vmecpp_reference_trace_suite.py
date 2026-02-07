@@ -119,6 +119,10 @@ def _run_case(input_path: Path, *, max_iter: int, step_size: float, reference_mo
             "zero_m1": _arr(diag.get("zero_m1_history")),
             "dt_eff": _arr(diag.get("dt_eff_history")),
             "update_rms": _arr(diag.get("update_rms_history")),
+            "w_curr": _arr(diag.get("w_curr_history")),
+            "w_try": _arr(diag.get("w_try_history")),
+            "w_try_ratio": _arr(diag.get("w_try_ratio_history")),
+            "restart_path": _arr(diag.get("restart_path_history")),
         },
         "diag": {
             "ftol": float(diag.get("ftol", np.nan)),
