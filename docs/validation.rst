@@ -381,6 +381,8 @@ Current fixed-boundary solve status (n3are)
 - Use ``examples/validation/vmecpp_trace_decision_compare.py`` to compare
   vmec_jax trigger-policy decisions against VMEC++ restart reasons and get the
   first policy-level mismatch with local iteration context.
+  Both scripts decode VMEC++ restart reasons from event format
+  (``[iter, reason]``) into a dense per-iteration series before comparison.
 - Per-iteration displacement caps were tightened (force-based ``dt`` bound and
   update RMS clip) to reduce unstable excursions while preserving momentum
   updates.

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 
 
@@ -45,6 +46,43 @@ def _first_finite_at_or_after(a, i0: int):
         if math.isfinite(v):
             return i, v
     return None, float("nan")
+
+
+def _parse_restart_event(v):
+    if isinstance(v, (list, tuple)) and len(v) >= 2:
+        try:
+            idx = int(v[0])
+            return idx, _norm_restart_reason(v[1])
+        except Exception:
+            return None
+    s = str(v)
+    m = re.search(r"\[\s*(\d+)\s*,", s)
+    if m is None:
+        return None
+    try:
+        idx = int(m.group(1))
+    except Exception:
+        return None
+    return idx, _norm_restart_reason(s)
+
+
+def _vmecpp_restart_series(vmecpp: dict, n_target: int):
+    raw = vmecpp.get("restart_reasons") or []
+    raw = list(raw)
+    if n_target <= 0:
+        n_target = len(raw)
+    events = []
+    for v in raw:
+        ev = _parse_restart_event(v)
+        if ev is not None:
+            events.append(ev)
+    if events:
+        out = ["none"] * n_target
+        for idx, reason in events:
+            if 0 <= int(idx) < n_target:
+                out[int(idx)] = str(reason)
+        return out
+    return [_norm_restart_reason(v) for v in raw[:n_target]]
 
 
 def _first_scalar_mismatch(a, b, *, rtol: float, atol: float, start_iter: int, normalize_first: bool):
@@ -128,7 +166,7 @@ def _analyze_case(case: dict, *, rtol: float, atol: float, start_iter: int, norm
         first_metric = min(checks, key=lambda x: int(x[1]["iter"]))
 
     rr_j = [_norm_restart_reason(v) for v in (hz.get("restart_reason") or [])]
-    rr_v = [_norm_restart_reason(v) for v in (vmecpp.get("restart_reasons") or [])]
+    rr_v = _vmecpp_restart_series(vmecpp, n_target=len(rr_j))
     rr_mismatch = None
     for i in range(min(len(rr_j), len(rr_v))):
         if i < int(start_iter):
