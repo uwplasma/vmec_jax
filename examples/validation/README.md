@@ -29,6 +29,7 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `vmecpp_trace_first_mismatch.py`: given a trace-suite JSON file, reports the first per-iteration mismatch (`fsqr/fsqz/fsql`) and first restart-reason mismatch between vmec_jax and VMEC++ traces.
 - `vmecpp_trace_decision_compare.py`: compares vmec_jax decision-trace trigger outcomes against VMEC++ restart reasons and reports the first policy mismatch with full local context (`fsq1/res0/fsq_prev`, growth streak, `iter1`, `include_edge`, `zero_m1`, `dt_eff`, `update_rms`).
   - Both trace comparators decode VMEC++ restart reasons from event form (`[iter, reason]`) into a dense per-iteration timeline before mismatch checks.
+- `vmecpp_restart_tuning_report.py`: summarizes restart-policy mismatch kinds over all iterations and prints the first detailed mismatch rows including `restart_path` and `w_try_ratio` so trigger tuning can target the correct branch.
 
 Notes:
 - `residual_decomposition_report.py` and `residual_compare_fields_report.py` now support reference-field kernels that expose a minimal `bc` object by falling back to the `wout`-based force normalization path.

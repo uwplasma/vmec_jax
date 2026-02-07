@@ -384,6 +384,10 @@ Current fixed-boundary solve status (n3are)
   first policy-level mismatch with local iteration context.
   Both scripts decode VMEC++ restart reasons from event format
   (``[iter, reason]``) into a dense per-iteration series before comparison.
+- Use ``examples/validation/vmecpp_restart_tuning_report.py`` to summarize
+  restart-policy mismatch kinds over all iterations and inspect the first
+  mismatch rows (including ``restart_path`` and ``w_try_ratio``) so tuning can
+  target the correct branch.
 - Per-iteration displacement caps were tightened (force-based ``dt`` bound and
   update RMS clip) to reduce unstable excursions while preserving momentum
   updates.
