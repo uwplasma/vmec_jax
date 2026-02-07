@@ -348,7 +348,8 @@ Current fixed-boundary solve status (n3are)
 - ``vmecpp_iter`` now applies force updates in VMEC++-style ``(m,n>=0)``
   storage before mapping into vmec_jax's signed-helical state layout.
 - Iteration logs now include ``dt_eff`` and ``update_rms`` in addition to
-  ``fsqr/fsqz/fsql`` to help locate the first unstable update step.
+  ``fsqr/fsqz/fsql`` and preconditioned ``fsqr1/fsqz1/fsql1`` to help locate
+  the first unstable update step.
 - Solver-update parity is still in progress: short runs can reduce residuals by
   orders of magnitude but remain non-monotone and far from VMEC2000/VMEC++ final
   fixed-boundary solutions on n3are.

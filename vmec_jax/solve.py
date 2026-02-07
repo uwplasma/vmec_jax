@@ -2227,6 +2227,9 @@ def solve_fixed_boundary_vmecpp_iter(
     fsqr2_history = []
     fsqz2_history = []
     fsql2_history = []
+    fsqr1_history = []
+    fsqz1_history = []
+    fsql1_history = []
     grad_rms_history = []
     step_history = []
 
@@ -2243,6 +2246,7 @@ def solve_fixed_boundary_vmecpp_iter(
     vLcs = jnp.zeros_like(vRcc)
     flip_sign = 1.0
     max_coeff_delta_rms = 1e-3
+    max_update_rms = 5e-2
 
     def _edge_force_trigger(it: int, w_hist: list[float], fsqr_hist: list[float], fsqz_hist: list[float]) -> bool:
         """Heuristic for VMEC++-style edge-force inclusion.
@@ -2304,9 +2308,6 @@ def solve_fixed_boundary_vmecpp_iter(
             print(
                 f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} fsqr={fsqr_f:.3e} fsqz={fsqz_f:.3e} fsql={fsql_f:.3e} include_edge={include_edge}"
             )
-
-        if (fsqr_f + fsqz_f + fsql_f) < ftol:
-            break
 
         # Precondition forces (radial smoother).
         frcc = _apply_radial_tridi(frzl.frcc * rz_scale[:, None, None], precond_radial_alpha)
@@ -2375,7 +2376,13 @@ def solve_fixed_boundary_vmecpp_iter(
         fsqr1 = gcr2_p * f_norm1
         fsqz1 = gcz2_p * f_norm1
         fsql1 = gcl2_p * delta_s
-        fsq1 = float(np.asarray(fsqr1 + fsqz1 + fsql1))
+        fsqr1_f = float(np.asarray(fsqr1))
+        fsqz1_f = float(np.asarray(fsqz1))
+        fsql1_f = float(np.asarray(fsql1))
+        fsq1 = fsqr1_f + fsqz1_f + fsql1_f
+        fsqr1_history.append(fsqr1_f)
+        fsqz1_history.append(fsqz1_f)
+        fsql1_history.append(fsql1_f)
 
         if it == 0:
             inv_tau = [0.15 / time_step] * k_ndamp
@@ -2423,6 +2430,31 @@ def solve_fixed_boundary_vmecpp_iter(
                     )
                 )
             )
+            if np.isfinite(update_rms) and (update_rms > max_update_rms):
+                scl = max_update_rms / max(update_rms, 1e-30)
+                vRcc = vRcc * scl
+                vRss = vRss * scl
+                vZsc = vZsc * scl
+                vZcs = vZcs * scl
+                vLsc = vLsc * scl
+                vLcs = vLcs * scl
+                dR = dt_try * _mn_cos_to_signed(vRcc, vRss)
+                dZ = dt_try * _mn_sin_to_signed(vZsc, vZcs)
+                dL = dt_try * _mn_sin_to_signed(vLsc, vLcs)
+                update_rms = float(
+                    np.asarray(
+                        jnp.sqrt(
+                            jnp.mean(
+                                (dt_try * vRcc) ** 2
+                                + (dt_try * vRss) ** 2
+                                + (dt_try * vZsc) ** 2
+                                + (dt_try * vZcs) ** 2
+                                + (dt_try * vLsc) ** 2
+                                + (dt_try * vLcs) ** 2
+                            )
+                        )
+                    )
+                )
 
             state = VMECState(
                 layout=state.layout,
@@ -2536,8 +2568,12 @@ def solve_fixed_boundary_vmecpp_iter(
         if verbose:
             print(
                 f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} "
-                f"dt_eff={dt_eff:.3e} update_rms={update_rms:.3e}"
+                f"dt_eff={dt_eff:.3e} update_rms={update_rms:.3e} "
+                f"fsqr1={fsqr1_f:.3e} fsqz1={fsqz1_f:.3e} fsql1={fsql1_f:.3e}"
             )
+        # VMEC++ convergence metric uses preconditioned residuals.
+        if fsq1 < ftol:
+            break
         grad_rms_history.append(float(np.sqrt(max(fsqr_f + fsqz_f + fsql_f, 0.0))))
 
     diag: Dict[str, Any] = {
@@ -2546,6 +2582,10 @@ def solve_fixed_boundary_vmecpp_iter(
         "precond_radial_alpha": float(precond_radial_alpha),
         "precond_lambda_alpha": float(precond_lambda_alpha),
         "vmecpp_strict_update": bool(vmecpp_strict_update),
+        "max_update_rms": float(max_update_rms),
+        "fsqr1_history": np.asarray(fsqr1_history, dtype=float),
+        "fsqz1_history": np.asarray(fsqz1_history, dtype=float),
+        "fsql1_history": np.asarray(fsql1_history, dtype=float),
     }
     return SolveVmecResidualResult(
         state=state,

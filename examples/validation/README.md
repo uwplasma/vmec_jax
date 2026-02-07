@@ -24,7 +24,7 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 - `vmecpp_jxbout_compare.py`: compares vmec_jax `bcovar` fields against VMEC++ `jxbout` internal arrays using VMEC internal-grid ordering (`ns, nzeta, ntheta_eff`), and reports `wout`-evaluation baselines to separate kernel mismatch from output-format mismatch.
 - `n3are_vmec_vs_vmecjax.py`: side-by-side VMEC2000 vs vmec_jax plots with optional `--solve` execution (moved from `visualization/`).
   - For the current parity stage, `--no-solve` is the recommended visualization baseline; the fixed-boundary update loop is still being tightened.
-  - With `--solve --solver vmecpp_iter`, iteration traces now include `fsqr/fsqz/fsql` plus `dt_eff/update_rms` for update-loop diagnostics.
+  - With `--solve --solver vmecpp_iter`, iteration traces now include `fsqr/fsqz/fsql`, preconditioned `fsqr1/fsqz1/fsql1`, and `dt_eff/update_rms` for update-loop diagnostics.
 
 Notes:
 - `residual_decomposition_report.py` and `residual_compare_fields_report.py` now support reference-field kernels that expose a minimal `bc` object by falling back to the `wout`-based force normalization path.
