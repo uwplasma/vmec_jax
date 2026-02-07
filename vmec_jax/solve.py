@@ -2131,47 +2131,84 @@ def solve_fixed_boundary_vmecpp_iter(
         rz_scale, l_scale = _metric_surface_precond_from_bcovar(k.bc)
         return frzl, fsqr, fsqz, fsql, rz_scale, l_scale
 
-    def _tomnsps_to_helical(frcc, frss, fsc, fcs):
-        frcc = jnp.asarray(frcc)
-        if frcc.ndim != 3:
-            raise ValueError(f"expected (ns, mpol, nrange), got {frcc.shape}")
-        m = jnp.asarray(static.modes.m)
-        n = jnp.asarray(static.modes.n)
-        nabs = jnp.abs(n)
+    mpol = int(static.cfg.mpol)
+    ntor = int(static.cfg.ntor)
+    nrange = ntor + 1
+    nfp = float(static.cfg.nfp)
+    ncoeff = int(jnp.asarray(state0.Rcos).shape[1])
 
-        frss = jnp.asarray(frss) if frss is not None else jnp.zeros_like(frcc)
-        fsc = jnp.asarray(fsc)
-        fcs = jnp.asarray(fcs) if fcs is not None else jnp.zeros_like(fsc)
+    idx_pos = -np.ones((mpol, nrange), dtype=np.int32)
+    idx_neg = -np.ones((mpol, nrange), dtype=np.int32)
+    for k, (m_k, n_k) in enumerate(zip(np.asarray(static.modes.m), np.asarray(static.modes.n))):
+        m_i = int(m_k)
+        n_i = int(n_k)
+        if n_i >= 0:
+            idx_pos[m_i, n_i] = int(k)
+        else:
+            idx_neg[m_i, -n_i] = int(k)
 
-        fcc = frcc[:, m, nabs]
-        fss = frss[:, m, nabs]
-        fsc_m = fsc[:, m, nabs]
-        fcs_m = fcs[:, m, nabs]
+    m_idx_list = []
+    n_idx_list = []
+    kp_idx_list = []
+    kn_idx_list = []
+    for m_i in range(mpol):
+        for n_i in range(nrange):
+            kp = int(idx_pos[m_i, n_i])
+            if kp < 0:
+                continue
+            m_idx_list.append(m_i)
+            n_idx_list.append(n_i)
+            kp_idx_list.append(kp)
+            kn_idx_list.append(int(idx_neg[m_i, n_i]))
 
-        n_pos = n > 0
-        n_neg = n < 0
+    m_idx = jnp.asarray(np.asarray(m_idx_list, dtype=np.int32))
+    n_idx = jnp.asarray(np.asarray(n_idx_list, dtype=np.int32))
+    kp_idx = jnp.asarray(np.asarray(kp_idx_list, dtype=np.int32))
+    kn_idx_np = np.asarray(kn_idx_list, dtype=np.int32)
+    kn_idx = jnp.asarray(kn_idx_np)
+    has_kn_np = kn_idx_np >= 0
+    has_kn = jnp.asarray(has_kn_np)
+    has_kn_any = bool(np.any(has_kn_np))
 
-        cos_pos = 0.5 * (fcc + fss)
-        cos_neg = 0.5 * (fcc - fss)
-        cos_zero = fcc
-        cos_val = jnp.where(n_pos[None, :], cos_pos, jnp.where(n_neg[None, :], cos_neg, cos_zero))
-        # VMEC's signed helical table omits negative-n entries for m=0. In that
-        # case the product-basis cosine coefficient maps directly (no 1/2 split).
-        cos_val = jnp.where((m == 0)[None, :], fcc, cos_val)
+    def _mn_cos_to_signed(cc, ss):
+        cc = jnp.asarray(cc)
+        ss = jnp.asarray(ss) if ss is not None else jnp.zeros_like(cc)
+        if cc.ndim != 3:
+            raise ValueError(f"expected (ns, mpol, nrange), got {cc.shape}")
+        cc_mn = cc[:, m_idx, n_idx]
+        ss_mn = ss[:, m_idx, n_idx]
+        is_axis_m = (m_idx == 0)[None, :]
+        is_n0 = (n_idx == 0)[None, :]
+        pos = jnp.where(is_axis_m | is_n0, cc_mn, 0.5 * (cc_mn + ss_mn))
+        out = jnp.zeros((cc.shape[0], ncoeff), dtype=cc.dtype)
+        out = out.at[:, kp_idx].set(pos)
+        if has_kn_any:
+            neg = 0.5 * (cc_mn + (-ss_mn))
+            out = out.at[:, kn_idx[has_kn]].set(neg[:, has_kn])
+        return out
 
-        sin_pos = 0.5 * (fsc_m - fcs_m)
-        sin_neg = 0.5 * (fsc_m + fcs_m)
-        sin_zero = fsc_m
-        sin_val = jnp.where(n_pos[None, :], sin_pos, jnp.where(n_neg[None, :], sin_neg, sin_zero))
+    def _mn_sin_to_signed(sc, cs):
+        sc = jnp.asarray(sc)
+        cs = jnp.asarray(cs) if cs is not None else jnp.zeros_like(sc)
+        if sc.ndim != 3:
+            raise ValueError(f"expected (ns, mpol, nrange), got {sc.shape}")
+        sc_mn = sc[:, m_idx, n_idx]
+        cs_mn = cs[:, m_idx, n_idx]
+        is_n0 = (n_idx == 0)[None, :]
+        pos = jnp.where(is_n0, sc_mn, 0.5 * (sc_mn - cs_mn))
+        out = jnp.zeros((sc.shape[0], ncoeff), dtype=sc.dtype)
+        out = out.at[:, kp_idx].set(pos)
+        if has_kn_any:
+            neg = 0.5 * (sc_mn + cs_mn)
+            out = out.at[:, kn_idx[has_kn]].set(neg[:, has_kn])
+        return out
 
-        return cos_val, sin_val
-
-    def _mode_diag_weights():
-        m = jnp.asarray(static.modes.m, dtype=jnp.float64)
-        n = jnp.asarray(static.modes.n, dtype=jnp.float64) * float(static.cfg.nfp)
-        k2 = m * m + n * n
+    def _mode_diag_weights_mn(dtype):
+        m = jnp.arange(mpol, dtype=jnp.float64)
+        n = jnp.arange(nrange, dtype=jnp.float64) * nfp
+        k2 = (m[:, None] * m[:, None]) + (n[None, :] * n[None, :])
         w = (1.0 + k2) ** (-float(mode_diag_exponent))
-        return w.astype(jnp.asarray(state.Rcos).dtype)
+        return w.astype(dtype)
 
     state = _enforce_fixed_boundary_and_axis(
         state0,
@@ -2198,9 +2235,12 @@ def solve_fixed_boundary_vmecpp_iter(
     k_ndamp = 10
     inv_tau = [0.15 / time_step] * k_ndamp
     fsq_prev = 1.0
-    vR = jnp.zeros_like(state.Rcos)
-    vZ = jnp.zeros_like(state.Zsin)
-    vL = jnp.zeros_like(state.Lsin)
+    vRcc = jnp.zeros((int(state.Rcos.shape[0]), mpol, nrange), dtype=jnp.asarray(state.Rcos).dtype)
+    vRss = jnp.zeros_like(vRcc)
+    vZsc = jnp.zeros_like(vRcc)
+    vZcs = jnp.zeros_like(vRcc)
+    vLsc = jnp.zeros_like(vRcc)
+    vLcs = jnp.zeros_like(vRcc)
     flip_sign = 1.0
     max_coeff_delta_rms = 1e-3
 
@@ -2228,12 +2268,15 @@ def solve_fixed_boundary_vmecpp_iter(
                 return True
         return False
 
-    def _safe_dt_from_force(*, dt_nominal: float, frc_modes, fz_modes, fl_modes) -> float:
+    def _safe_dt_from_force(*, dt_nominal: float, frcc, frss, fzsc, fzcs, flsc, flcs) -> float:
         """Limit dt so coefficient updates stay bounded during early iterations."""
-        fr = jnp.asarray(frc_modes)
-        fz = jnp.asarray(fz_modes)
-        fl = jnp.asarray(fl_modes)
-        rms = jnp.sqrt(jnp.mean(fr * fr + fz * fz + fl * fl))
+        frcc = jnp.asarray(frcc)
+        frss = jnp.asarray(frss) if frss is not None else jnp.zeros_like(frcc)
+        fzsc = jnp.asarray(fzsc)
+        fzcs = jnp.asarray(fzcs) if fzcs is not None else jnp.zeros_like(fzsc)
+        flsc = jnp.asarray(flsc)
+        flcs = jnp.asarray(flcs) if flcs is not None else jnp.zeros_like(flsc)
+        rms = jnp.sqrt(jnp.mean(frcc * frcc + frss * frss + fzsc * fzsc + fzcs * fzcs + flsc * flsc + flcs * flcs))
         rms_f = float(np.asarray(rms))
         if not np.isfinite(rms_f) or rms_f <= 0.0:
             return max(float(dt_nominal), 1e-12)
@@ -2288,31 +2331,28 @@ def solve_fixed_boundary_vmecpp_iter(
             flss=getattr(frzl, "flss", None),
         )
 
-        # Convert internal product basis -> combined basis (symmetric runs).
-        zeros_r = jnp.zeros_like(frcc)
-        zeros_z = jnp.zeros_like(fzsc)
-        zeros_l = jnp.zeros_like(flsc)
-
-        frc_modes, _ = _tomnsps_to_helical(frcc, frss, zeros_z, None)
-        _, fz_modes = _tomnsps_to_helical(zeros_r, None, fzsc, fzcs)
-        _, fl_modes = _tomnsps_to_helical(zeros_r, None, flsc, flcs)
-
-        # Mode-diagonal preconditioning (VMEC++ uses a richer preconditioner).
-        w_mode = _mode_diag_weights()
-        frc_modes = frc_modes * w_mode[None, :]
-        fz_modes = fz_modes * w_mode[None, :]
-        fl_modes = fl_modes * w_mode[None, :]
+        # Mode-diagonal preconditioning in VMEC++ (m, n>=0) storage.
+        w_mode_mn = _mode_diag_weights_mn(jnp.asarray(frcc).dtype)
+        frcc_u = frcc * w_mode_mn[None, :, :]
+        frss_u = (frss if frss is not None else jnp.zeros_like(frcc_u)) * w_mode_mn[None, :, :]
+        fzsc_u = fzsc * w_mode_mn[None, :, :]
+        fzcs_u = (fzcs if fzcs is not None else jnp.zeros_like(fzsc_u)) * w_mode_mn[None, :, :]
+        flsc_u = flsc * w_mode_mn[None, :, :]
+        flcs_u = (flcs if flcs is not None else jnp.zeros_like(flsc_u)) * w_mode_mn[None, :, :]
 
         if auto_flip_force and it == 0:
             e0 = float(np.asarray(magnetic_wb_from_state(state, static, indata=indata, signgs=signgs)).ravel()[0])
+            dR_test = _mn_cos_to_signed(frcc_u, frss_u)
+            dZ_test = _mn_sin_to_signed(fzsc_u, fzcs_u)
+            dL_test = _mn_sin_to_signed(flsc_u, flcs_u)
             test_state = VMECState(
                 layout=state.layout,
-                Rcos=jnp.asarray(state.Rcos) + (-step_size) * jnp.asarray(frc_modes),
+                Rcos=jnp.asarray(state.Rcos) + (-step_size) * dR_test,
                 Rsin=state.Rsin,
                 Zcos=state.Zcos,
-                Zsin=jnp.asarray(state.Zsin) + (-step_size) * jnp.asarray(fz_modes),
+                Zsin=jnp.asarray(state.Zsin) + (-step_size) * dZ_test,
                 Lcos=state.Lcos,
-                Lsin=jnp.asarray(state.Lsin) + (-step_size) * jnp.asarray(fl_modes),
+                Lsin=jnp.asarray(state.Lsin) + (-step_size) * dL_test,
             )
             e1 = float(np.asarray(magnetic_wb_from_state(test_state, static, indata=indata, signgs=signgs)).ravel()[0])
             if not np.isfinite(e1) or (e1 > e0):
@@ -2352,22 +2392,46 @@ def solve_fixed_boundary_vmecpp_iter(
         if bool(vmecpp_strict_update):
             dt_try = _safe_dt_from_force(
                 dt_nominal=time_step,
-                frc_modes=frc_modes,
-                fz_modes=fz_modes,
-                fl_modes=fl_modes,
+                frcc=frcc_u,
+                frss=frss_u,
+                fzsc=fzsc_u,
+                fzcs=fzcs_u,
+                flsc=flsc_u,
+                flcs=flcs_u,
             )
-            vR = fac * (b1 * vR + dt_try * (flip_sign * jnp.asarray(frc_modes)))
-            vZ = fac * (b1 * vZ + dt_try * (flip_sign * jnp.asarray(fz_modes)))
-            vL = fac * (b1 * vL + dt_try * (flip_sign * jnp.asarray(fl_modes)))
+            vRcc = fac * (b1 * vRcc + dt_try * (flip_sign * jnp.asarray(frcc_u)))
+            vRss = fac * (b1 * vRss + dt_try * (flip_sign * jnp.asarray(frss_u)))
+            vZsc = fac * (b1 * vZsc + dt_try * (flip_sign * jnp.asarray(fzsc_u)))
+            vZcs = fac * (b1 * vZcs + dt_try * (flip_sign * jnp.asarray(fzcs_u)))
+            vLsc = fac * (b1 * vLsc + dt_try * (flip_sign * jnp.asarray(flsc_u)))
+            vLcs = fac * (b1 * vLcs + dt_try * (flip_sign * jnp.asarray(flcs_u)))
+
+            dR = dt_try * _mn_cos_to_signed(vRcc, vRss)
+            dZ = dt_try * _mn_sin_to_signed(vZsc, vZcs)
+            dL = dt_try * _mn_sin_to_signed(vLsc, vLcs)
+            update_rms = float(
+                np.asarray(
+                    jnp.sqrt(
+                        jnp.mean(
+                            (dt_try * vRcc) ** 2
+                            + (dt_try * vRss) ** 2
+                            + (dt_try * vZsc) ** 2
+                            + (dt_try * vZcs) ** 2
+                            + (dt_try * vLsc) ** 2
+                            + (dt_try * vLcs) ** 2
+                        )
+                    )
+                )
+            )
 
             state = VMECState(
                 layout=state.layout,
-                Rcos=jnp.asarray(state.Rcos) + dt_try * vR,
+                Rcos=jnp.asarray(state.Rcos) + dR,
                 Rsin=state.Rsin,
                 Zcos=state.Zcos,
-                Zsin=jnp.asarray(state.Zsin) + dt_try * vZ,
+                Zsin=jnp.asarray(state.Zsin) + dZ,
                 Lcos=state.Lcos,
-                Lsin=jnp.asarray(state.Lsin) + dt_try * vL,
+                Lsin=jnp.asarray(state.Lsin) + dL,
             )
             state = _enforce_fixed_boundary_and_axis(
                 state,
@@ -2380,27 +2444,39 @@ def solve_fixed_boundary_vmecpp_iter(
                 idx00=idx00,
             )
             step_history.append(dt_try)
+            dt_eff = float(dt_try)
         else:
             accepted = False
             step_factor = 1.0
-            vR_best, vZ_best, vL_best = vR, vZ, vL
+            vRcc_best, vRss_best = vRcc, vRss
+            vZsc_best, vZcs_best = vZsc, vZcs
+            vLsc_best, vLcs_best = vLsc, vLcs
             state_best = state
+            dt_eff = float(time_step)
+            update_rms = 0.0
             w_curr = fsqr_f + fsqz_f + fsql_f
 
             for _bt in range(6):
                 dt_try = time_step * step_factor
-                vR_try = fac * (b1 * vR + dt_try * (flip_sign * jnp.asarray(frc_modes)))
-                vZ_try = fac * (b1 * vZ + dt_try * (flip_sign * jnp.asarray(fz_modes)))
-                vL_try = fac * (b1 * vL + dt_try * (flip_sign * jnp.asarray(fl_modes)))
+                vRcc_try = fac * (b1 * vRcc + dt_try * (flip_sign * jnp.asarray(frcc_u)))
+                vRss_try = fac * (b1 * vRss + dt_try * (flip_sign * jnp.asarray(frss_u)))
+                vZsc_try = fac * (b1 * vZsc + dt_try * (flip_sign * jnp.asarray(fzsc_u)))
+                vZcs_try = fac * (b1 * vZcs + dt_try * (flip_sign * jnp.asarray(fzcs_u)))
+                vLsc_try = fac * (b1 * vLsc + dt_try * (flip_sign * jnp.asarray(flsc_u)))
+                vLcs_try = fac * (b1 * vLcs + dt_try * (flip_sign * jnp.asarray(flcs_u)))
+
+                dR_try = dt_try * _mn_cos_to_signed(vRcc_try, vRss_try)
+                dZ_try = dt_try * _mn_sin_to_signed(vZsc_try, vZcs_try)
+                dL_try = dt_try * _mn_sin_to_signed(vLsc_try, vLcs_try)
 
                 state_try = VMECState(
                     layout=state.layout,
-                    Rcos=jnp.asarray(state.Rcos) + dt_try * vR_try,
+                    Rcos=jnp.asarray(state.Rcos) + dR_try,
                     Rsin=state.Rsin,
                     Zcos=state.Zcos,
-                    Zsin=jnp.asarray(state.Zsin) + dt_try * vZ_try,
+                    Zsin=jnp.asarray(state.Zsin) + dZ_try,
                     Lcos=state.Lcos,
-                    Lsin=jnp.asarray(state.Lsin) + dt_try * vL_try,
+                    Lsin=jnp.asarray(state.Lsin) + dL_try,
                 )
                 state_try = _enforce_fixed_boundary_and_axis(
                     state_try,
@@ -2421,18 +2497,47 @@ def solve_fixed_boundary_vmecpp_iter(
                 if np.isfinite(w_try) and (w_try <= 1.05 * w_curr):
                     accepted = True
                     state_best = state_try
-                    vR_best, vZ_best, vL_best = vR_try, vZ_try, vL_try
+                    vRcc_best, vRss_best = vRcc_try, vRss_try
+                    vZsc_best, vZcs_best = vZsc_try, vZcs_try
+                    vLsc_best, vLcs_best = vLsc_try, vLcs_try
+                    dt_eff = float(dt_try)
+                    update_rms = float(
+                        np.asarray(
+                            jnp.sqrt(
+                                jnp.mean(
+                                    (dt_try * vRcc_try) ** 2
+                                    + (dt_try * vRss_try) ** 2
+                                    + (dt_try * vZsc_try) ** 2
+                                    + (dt_try * vZcs_try) ** 2
+                                    + (dt_try * vLsc_try) ** 2
+                                    + (dt_try * vLcs_try) ** 2
+                                )
+                            )
+                        )
+                    )
                     break
                 step_factor *= 0.5
 
             state = state_best
-            vR, vZ, vL = vR_best, vZ_best, vL_best
+            vRcc, vRss = vRcc_best, vRss_best
+            vZsc, vZcs = vZsc_best, vZcs_best
+            vLsc, vLcs = vLsc_best, vLcs_best
             if not accepted:
                 # No acceptable update was found; damp velocity to avoid runaway.
-                vR = 0.5 * vR
-                vZ = 0.5 * vZ
-                vL = 0.5 * vL
-            step_history.append(step_size * step_factor)
+                vRcc = 0.5 * vRcc
+                vRss = 0.5 * vRss
+                vZsc = 0.5 * vZsc
+                vZcs = 0.5 * vZcs
+                vLsc = 0.5 * vLsc
+                vLcs = 0.5 * vLcs
+                dt_eff = float(step_size * step_factor)
+                update_rms = 0.0
+            step_history.append(dt_eff)
+        if verbose:
+            print(
+                f"[solve_fixed_boundary_vmecpp_iter] iter={it:03d} "
+                f"dt_eff={dt_eff:.3e} update_rms={update_rms:.3e}"
+            )
         grad_rms_history.append(float(np.sqrt(max(fsqr_f + fsqz_f + fsql_f, 0.0))))
 
     diag: Dict[str, Any] = {
