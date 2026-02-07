@@ -78,6 +78,9 @@ def _parse_args():
     p.add_argument("--solver", type=str, default="vmec_gn")
     p.add_argument("--max-iter", type=int, default=25)
     p.add_argument("--step-size", type=float, default=1.0)
+    p.add_argument("--gn-damping", type=float, default=1e-3)
+    p.add_argument("--gn-cg-tol", type=float, default=1e-6)
+    p.add_argument("--gn-cg-maxiter", type=int, default=80)
     p.add_argument("--solve", action="store_true")
     p.add_argument("--no-solve", action="store_true")
     p.add_argument("--no-vmecpp", action="store_true")
@@ -107,6 +110,9 @@ def main() -> None:
             solver=str(args.solver),
             max_iter=int(args.max_iter),
             step_size=float(args.step_size),
+            gn_damping=float(args.gn_damping),
+            gn_cg_tol=float(args.gn_cg_tol),
+            gn_cg_maxiter=int(args.gn_cg_maxiter),
             vmecpp_reference_mode=True,
             vmecpp_use_restart_triggers=True,
             vmecpp_use_direct_fallback=False,

@@ -1,7 +1,7 @@
-"""Generate overview plots for the bundled circular tokamak case.
+"""Generate overview plots for a bundled axisymmetric tokamak-like case.
 
 This script renders VMEC-style plots from the bundled VMEC2000 reference wout:
-- LCFS cross-sections over one field period (physical toroidal angle phi)
+- Nested flux surfaces in a poloidal cross-section (phi=0)
 - 3D LCFS surface colored by |B|
 - |B| on the LCFS (theta,phi) map
 - iota and pressure profiles
@@ -40,6 +40,7 @@ def main():
     )
     ap.add_argument("--ntheta", type=int, default=256)
     ap.add_argument("--nphi", type=int, default=256)
+    ap.add_argument("--nsurf", type=int, default=9, help="Number of surfaces in the nested cross-section panel.")
     ap.add_argument("--dpi", type=int, default=180)
     args = ap.parse_args()
 
@@ -59,13 +60,14 @@ def main():
 
     s_index_lcfs = int(wout.ns) - 1
 
-    # LCFS cross-sections at a few phi slices.
-    phi_slices = [0.0, 0.5 * np.pi, np.pi, 1.5 * np.pi]
-    cross_sections = []
-    for ph in phi_slices:
-        ph_arr = np.asarray([ph], dtype=float)
-        R, Z = surface_rz_from_wout_physical(wout, theta=theta, phi=ph_arr, s_index=s_index_lcfs, nyq=False)
-        cross_sections.append((R[:, 0], Z[:, 0]))
+    # Nested flux surfaces in a poloidal cross-section (phi=0).
+    phi0 = np.asarray([0.0], dtype=float)
+    nsurf = max(int(args.nsurf), 2)
+    s_indices = np.linspace(0, s_index_lcfs, nsurf).round().astype(int)
+    nested = []
+    for si in s_indices:
+        R, Z = surface_rz_from_wout_physical(wout, theta=theta, phi=phi0, s_index=int(si), nyq=False)
+        nested.append((R[:, 0], Z[:, 0], int(si)))
 
     # |B| on the LCFS surface.
     # Use vmec_jax field evaluation from the wout-derived state.
@@ -108,15 +110,15 @@ def main():
     fig = plt.figure(figsize=(11.5, 8.5), constrained_layout=True)
     gs = fig.add_gridspec(2, 2)
 
-    # Cross-sections
+    # Nested cross-sections
     ax0 = fig.add_subplot(gs[0, 0])
-    for (R, Z), ph in zip(cross_sections, phi_slices):
-        ax0.plot(R, Z, lw=2, label=f"phi={ph:.2f}")
-    ax0.set_title("LCFS cross-sections (one field period)")
+    for R, Z, si in nested:
+        ax0.plot(R, Z, lw=1.5, alpha=0.85)
+    ax0.set_title("Nested flux surfaces (phi=0)")
     ax0.set_xlabel("R")
     ax0.set_ylabel("Z")
     ax0.set_aspect("equal", adjustable="box")
-    ax0.legend(loc="best", frameon=True)
+    ax0.grid(True, alpha=0.25)
 
     # 3D surface colored by |B|
     ax1 = fig.add_subplot(gs[0, 1], projection="3d")

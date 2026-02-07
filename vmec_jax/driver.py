@@ -121,6 +121,10 @@ def run_fixed_boundary(
     max_iter: int = 20,
     step_size: float | object = _STEP_SIZE_SENTINEL,
     history_size: int = 10,
+    # vmec_gn tuning (Gauss-Newton on VMEC residual vector)
+    gn_damping: float = 1e-3,
+    gn_cg_tol: float = 1e-6,
+    gn_cg_maxiter: int = 80,
     use_initial_guess: bool = False,
     vmec_project: bool = True,
     vmecpp_reference_mode: bool = False,
@@ -255,6 +259,9 @@ def run_fixed_boundary(
             signgs=signgs,
             max_iter=int(max_iter),
             step_size=float(step_size_val),
+            damping=float(gn_damping),
+            cg_tol=float(gn_cg_tol),
+            cg_maxiter=int(gn_cg_maxiter),
             jit_kernels=True,
             verbose=bool(verbose),
         )
