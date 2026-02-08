@@ -169,6 +169,11 @@ def main() -> int:
             c = float(diag_cpp[key])
             rel = abs(j - c) / max(abs(c), 1e-30)
             print(f"  {key}: jax={j:.6e} vmecpp={c:.6e} rel={rel:.3e}")
+    if "rz_norm" in diag_jax and "f_norm1" in diag_cpp:
+        j = float(diag_jax["rz_norm"])
+        c = 1.0 / float(diag_cpp["f_norm1"]) if float(diag_cpp["f_norm1"]) != 0.0 else float("inf")
+        rel = abs(j - c) / max(abs(c), 1e-30)
+        print(f"  rz_norm_from_f_norm1: jax={j:.6e} vmecpp={c:.6e} rel={rel:.3e}")
 
     for name in ("frcc", "fzsc", "flsc"):
         j = np.asarray(diag_jax[f"{name}_u"])

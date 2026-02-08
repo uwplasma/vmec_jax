@@ -259,7 +259,10 @@ def vmec_rz_norm_from_state(
                 else:
                     neg = jnp.zeros_like(pos)
                 rcc = rcc.at[:, m_i, n_i].set(pos + neg)
-                rss = rss.at[:, m_i, n_i].set(pos - neg)
+                rss_val = pos - neg
+                if n_i == 0:
+                    rss_val = jnp.zeros_like(pos)
+                rss = rss.at[:, m_i, n_i].set(rss_val)
         return rcc, rss
 
     def _signed_sin_to_mn(a):
@@ -278,7 +281,10 @@ def vmec_rz_norm_from_state(
                 else:
                     neg = jnp.zeros_like(pos)
                 sc = sc.at[:, m_i, n_i].set(pos + neg)
-                cs = cs.at[:, m_i, n_i].set(neg - pos)
+                cs_val = neg - pos
+                if n_i == 0:
+                    cs_val = jnp.zeros_like(pos)
+                cs = cs.at[:, m_i, n_i].set(cs_val)
         return sc, cs
 
     rcc, rss = _signed_cos_to_mn(state.Rcos)
