@@ -2206,226 +2206,36 @@ def solve_fixed_boundary_vmecpp_iter(
         return sm, sp
 
     def _vmecpp_lambda_preconditioner(bc):
-        guu = np.asarray(bc.guu, dtype=float)
-        guv = np.asarray(bc.guv, dtype=float)
-        gvv = np.asarray(bc.gvv, dtype=float)
-        sqrtg = np.asarray(bc.jac.sqrtg, dtype=float)
-        sqrtg_safe = np.where(sqrtg != 0.0, sqrtg, 1.0)
-        ns = guu.shape[0]
-        ntheta = guu.shape[1]
-        nzeta = guu.shape[2]
-        w_ang = np.asarray(vmec_wint_from_trig(trig, nzeta=nzeta), dtype=float)
-        b_lambda = np.zeros((ns,), dtype=float)
-        d_lambda = np.zeros((ns,), dtype=float)
-        c_lambda = np.zeros((ns,), dtype=float)
-        # half-grid accumulation
-        for jh in range(0, ns - 1):
-            guu_h = guu[jh]
-            guv_h = guv[jh]
-            gvv_h = gvv[jh]
-            sqrtg_h = sqrtg[jh]
-            b_lambda[jh + 1] = np.sum((guu_h / sqrtg_safe[jh]) * w_ang)
-            c_lambda[jh + 1] = np.sum((gvv_h / sqrtg_safe[jh]) * w_ang)
-            if bool(cfg.lthreed):
-                d_lambda[jh + 1] = np.sum((guv_h / sqrtg_safe[jh]) * w_ang)
-        # axis extrapolation
-        b_lambda[0] = b_lambda[1]
-        c_lambda[0] = c_lambda[1]
-        d_lambda[0] = d_lambda[1]
-        # average to full grid
-        b_full = np.zeros((ns,), dtype=float)
-        c_full = np.zeros((ns,), dtype=float)
-        d_full = np.zeros((ns,), dtype=float)
-        for jf in range(1, ns):
-            b_full[jf] = 0.5 * (b_lambda[jf] + b_lambda[jf + 1] if jf + 1 < b_lambda.size else b_lambda[jf])
-            c_full[jf] = 0.5 * (c_lambda[jf] + c_lambda[jf + 1] if jf + 1 < c_lambda.size else c_lambda[jf])
-            d_full[jf] = 0.5 * (d_lambda[jf] + d_lambda[jf + 1] if jf + 1 < d_lambda.size else d_lambda[jf])
-        # assemble lambda preconditioner
-        ns_f = ns
-        mpol = int(cfg.mpol)
-        nrange = int(cfg.ntor) + 1
-        lam_prec = np.zeros((ns_f, mpol, nrange), dtype=float)
-        p_factor = 2.0 / (4.0 * float(bc.lamscale) * float(bc.lamscale))
-        sqrt_sf = np.sqrt(np.maximum(np.asarray(s, dtype=float), 0.0))
-        sqrt_sf[-1] = 1.0
-        for jf in range(1, ns_f):
-            for n in range(nrange):
-                tnn = (n * cfg.nfp) ** 2
-                for m in range(mpol):
-                    if m == 0 and n == 0:
-                        continue
-                    tmm = m * m
-                    pwr = min(tmm / (16.0 * 16.0), 8.0)
-                    tmn = 2.0 * m * n * cfg.nfp
-                    faclam = (
-                        tnn * b_full[jf]
-                        + tmn * np.copysign(d_full[jf], b_full[jf])
-                        + tmm * c_full[jf]
-                    )
-                    if faclam == 0.0:
-                        faclam = -1.0e-10
-                    lam_prec[jf, m, n] = p_factor / faclam * (sqrt_sf[jf] ** pwr)
-        return lam_prec
+        from .vmecpp_preconditioner import vmecpp_lambda_preconditioner
+
+        return vmecpp_lambda_preconditioner(
+            bc=bc,
+            trig=trig,
+            s=np.asarray(s, dtype=float),
+            cfg=cfg,
+            damping_factor=1.0,
+        )
 
     def _vmecpp_rz_preconditioner(frzl_in: TomnspsRZL, bc, k):
-        if bool(cfg.lthreed) or bool(cfg.lasym):
-            return frzl_in
-        s_arr = np.asarray(s, dtype=float)
-        ns = int(s_arr.shape[0])
-        ntheta = int(bc.guu.shape[1])
-        nzeta = int(bc.guu.shape[2])
-        w_ang = np.asarray(vmec_wint_from_trig(trig, nzeta=nzeta), dtype=float)
-        r12 = np.asarray(bc.jac.r12, dtype=float)
-        tau = np.asarray(bc.jac.tau, dtype=float)
-        tau_safe = np.where(tau != 0.0, tau, 1.0)
-        total_pressure = np.asarray(bc.bsq, dtype=float)
-        bsupv = np.asarray(bc.bsupv, dtype=float)
-        pshalf = _pshalf_from_s(s_arr)
-        sm, sp = _sm_sp_from_s(s_arr)
-        delta_s = float(s_arr[1] - s_arr[0]) if ns >= 2 else 1.0
-        pfactor = -4.0
+        from .vmecpp_preconditioner import vmecpp_rz_preconditioner
 
-        def compute_precond_matrix(xs, xu12, xu_e, xu_o, x1_o):
-            ax = np.zeros((ns - 1, 4), dtype=float)
-            bx = np.zeros((ns - 1, 3), dtype=float)
-            cx = np.zeros((ns - 1,), dtype=float)
-            for jh in range(ns - 1):
-                for kl in range(ntheta * nzeta):
-                    l = kl % ntheta
-                    idx_t = (kl // ntheta)
-                    i_half = (jh, l, idx_t)
-                    p_tau = (
-                        pfactor
-                        * r12[i_half]
-                        * total_pressure[i_half]
-                        / tau_safe[i_half]
-                        * w_ang[l, idx_t]
-                    )
-                    t1a = xu12[i_half] / delta_s
-                    t2a = 0.25 * (xu_e[jh + 1, l, idx_t] / pshalf[jh] + xu_o[jh + 1, l, idx_t]) / pshalf[jh]
-                    t3a = 0.25 * (xu_e[jh, l, idx_t] / pshalf[jh] + xu_o[jh, l, idx_t]) / pshalf[jh]
-                    ax[jh, 0] += p_tau * t1a * t1a
-                    ax[jh, 1] += p_tau * (t1a + t2a) * (-t1a + t3a)
-                    ax[jh, 2] += p_tau * (t1a + t2a) * (t1a + t2a)
-                    ax[jh, 3] += p_tau * (-t1a + t3a) * (-t1a + t3a)
-                    t1b = 0.5 * (xs[i_half] + 0.5 / pshalf[jh] * x1_o[jh + 1, l, idx_t])
-                    t2b = 0.5 * (xs[i_half] + 0.5 / pshalf[jh] * x1_o[jh, l, idx_t])
-                    bx[jh, 0] += p_tau * t1b * t2b
-                    bx[jh, 1] += p_tau * t1b * t1b
-                    bx[jh, 2] += p_tau * t2b * t2b
-                    cx[jh] += 0.25 * pfactor * (bsupv[i_half] ** 2) * np.asarray(bc.jac.sqrtg)[i_half] * w_ang[l, idx_t]
-            axm = np.zeros((ns - 1, 2), dtype=float)
-            bxm = np.zeros((ns - 1, 2), dtype=float)
-            axm[:, 0] = -ax[:, 0]
-            axm[:, 1] = ax[:, 1] * sm[: ns - 1] * sp[: ns - 1]
-            bxm[:, 0] = bx[:, 0]
-            bxm[:, 1] = bx[:, 0] * sm[: ns - 1] * sp[: ns - 1]
-            axd = np.zeros((ns, 2), dtype=float)
-            bxd = np.zeros((ns, 2), dtype=float)
-            cxd = np.zeros((ns,), dtype=float)
-            for jf in range(ns):
-                jhi = jf - 1
-                jho = jf
-                axd[jf, 0] = (ax[jhi, 0] if jf > 0 else 0.0) + (ax[jho, 0] if jf < ns - 1 else 0.0)
-                axd[jf, 1] = (ax[jhi, 2] * sm[jhi] * sm[jhi] if jf > 0 else 0.0) + (
-                    ax[jho, 3] * sp[jho] * sp[jho] if jf < ns - 1 else 0.0
-                )
-                bxd[jf, 0] = (bx[jhi, 1] if jf > 0 else 0.0) + (bx[jho, 2] if jf < ns - 1 else 0.0)
-                bxd[jf, 1] = (bx[jhi, 1] * sm[jhi] * sm[jhi] if jf > 0 else 0.0) + (
-                    bx[jho, 2] * sp[jho] * sp[jho] if jf < ns - 1 else 0.0
-                )
-                cxd[jf] = (cx[jhi] if jf > 0 else 0.0) + (cx[jho] if jf < ns - 1 else 0.0)
-            return axm, axd, bxm, bxd, cxd
-
-        arm, ard, brm, brd, cxd = compute_precond_matrix(
-            np.asarray(bc.jac.zs, dtype=float),
-            np.asarray(bc.jac.zu12, dtype=float),
-            np.asarray(k.pzu_even, dtype=float),
-            np.asarray(k.pzu_odd, dtype=float),
-            np.asarray(k.pz1_odd, dtype=float),
+        return vmecpp_rz_preconditioner(
+            frzl_in=frzl_in,
+            bc=bc,
+            k=k,
+            trig=trig,
+            s=np.asarray(s, dtype=float),
+            cfg=cfg,
         )
-        azm, azd, bzm, bzd, _ = compute_precond_matrix(
-            np.asarray(bc.jac.rs, dtype=float),
-            np.asarray(bc.jac.ru12, dtype=float),
-            np.asarray(k.pru_even, dtype=float),
-            np.asarray(k.pru_odd, dtype=float),
-            np.asarray(k.pr1_odd, dtype=float),
-        )
+        from .vmecpp_preconditioner import vmecpp_rz_preconditioner
 
-        mpol = int(cfg.mpol)
-        nrange = int(cfg.ntor) + 1
-        ar = np.zeros((ns, mpol, nrange), dtype=float)
-        br = np.zeros_like(ar)
-        dr = np.zeros_like(ar)
-        az = np.zeros_like(ar)
-        bz = np.zeros_like(ar)
-        dz = np.zeros_like(ar)
-        for m in range(mpol):
-            m_par = m % 2
-            for n in range(nrange):
-                for jf in range(ns):
-                    if jf >= (1 if m > 0 else 0):
-                        if jf < ns - 1:
-                            ar[jf, m, n] = -(arm[jf, m_par] + brm[jf, m_par] * m * m)
-                            az[jf, m, n] = -(azm[jf, m_par] + bzm[jf, m_par] * m * m)
-                        dr[jf, m, n] = -(
-                            ard[jf, m_par] + brd[jf, m_par] * m * m + cxd[jf] * (n * cfg.nfp) ** 2
-                        )
-                        dz[jf, m, n] = -(
-                            azd[jf, m_par] + bzd[jf, m_par] * m * m + cxd[jf] * (n * cfg.nfp) ** 2
-                        )
-                        if jf > 0:
-                            br[jf, m, n] = -(
-                                arm[jf - 1, m_par] + brm[jf - 1, m_par] * m * m
-                            )
-                            bz[jf, m, n] = -(
-                                azm[jf - 1, m_par] + bzm[jf - 1, m_par] * m * m
-                            )
-                        if jf == 1 and m == 1:
-                            dr[jf, m, n] += br[jf, m, n]
-                            dz[jf, m, n] += bz[jf, m, n]
-        def solve_tridiagonal(a, b, c, rhs, jmin):
-            out = rhs.copy()
-            n = rhs.shape[0]
-            if jmin >= n:
-                return out
-            a = a.astype(float).copy()
-            b = b.astype(float).copy()
-            c = c.astype(float).copy()
-            d = rhs.astype(float).copy()
-            # forward sweep
-            for i in range(jmin + 1, n):
-                denom = b[i - 1] if b[i - 1] != 0.0 else 1.0e-12
-                w = a[i] / denom
-                b[i] = b[i] - w * c[i - 1]
-                d[i] = d[i] - w * d[i - 1]
-            out[n - 1] = d[n - 1] / b[n - 1]
-            for i in range(n - 2, jmin - 1, -1):
-                denom = b[i] if b[i] != 0.0 else 1.0e-12
-                out[i] = (d[i] - c[i] * out[i + 1]) / denom
-            return out
-
-        frcc_u = np.array(frzl_in.frcc, dtype=float, copy=True)
-        fzsc_u = np.array(frzl_in.fzsc, dtype=float, copy=True)
-        for m in range(mpol):
-            jmin = 1 if m > 0 else 0
-            for n in range(nrange):
-                frcc_u[:, m, n] = solve_tridiagonal(ar[:, m, n], dr[:, m, n], br[:, m, n], frcc_u[:, m, n], jmin)
-                fzsc_u[:, m, n] = solve_tridiagonal(az[:, m, n], dz[:, m, n], bz[:, m, n], fzsc_u[:, m, n], jmin)
-
-        return TomnspsRZL(
-            frcc=frcc_u,
-            frss=frzl_in.frss,
-            fzsc=fzsc_u,
-            fzcs=frzl_in.fzcs,
-            flsc=frzl_in.flsc,
-            flcs=frzl_in.flcs,
-            frsc=getattr(frzl_in, "frsc", None),
-            frcs=getattr(frzl_in, "frcs", None),
-            fzcc=getattr(frzl_in, "fzcc", None),
-            fzss=getattr(frzl_in, "fzss", None),
-            flcc=getattr(frzl_in, "flcc", None),
-            flss=getattr(frzl_in, "flss", None),
+        return vmecpp_rz_preconditioner(
+            frzl_in=frzl_in,
+            bc=bc,
+            k=k,
+            trig=trig,
+            s=np.asarray(s, dtype=float),
+            cfg=cfg,
         )
 
     def _compute_forces(state: VMECState, *, include_edge: bool, zero_m1: Any):
@@ -3589,59 +3399,15 @@ def vmecpp_first_step_diagnostics(
         return sm, sp
 
     def _vmecpp_lambda_preconditioner(bc):
-        guu = np.asarray(bc.guu, dtype=float)
-        guv = np.asarray(bc.guv, dtype=float)
-        gvv = np.asarray(bc.gvv, dtype=float)
-        sqrtg = np.asarray(bc.jac.sqrtg, dtype=float)
-        sqrtg_safe = np.where(sqrtg != 0.0, sqrtg, 1.0)
-        ns = guu.shape[0]
-        nzeta = guu.shape[2]
-        w_ang = np.asarray(vmec_wint_from_trig(trig, nzeta=nzeta), dtype=float)
-        b_lambda = np.zeros((ns,), dtype=float)
-        d_lambda = np.zeros((ns,), dtype=float)
-        c_lambda = np.zeros((ns,), dtype=float)
-        for jh in range(0, ns - 1):
-            guu_h = guu[jh]
-            guv_h = guv[jh]
-            gvv_h = gvv[jh]
-            b_lambda[jh + 1] = np.sum((guu_h / sqrtg_safe[jh]) * w_ang)
-            c_lambda[jh + 1] = np.sum((gvv_h / sqrtg_safe[jh]) * w_ang)
-            if bool(cfg.lthreed):
-                d_lambda[jh + 1] = np.sum((guv_h / sqrtg_safe[jh]) * w_ang)
-        b_lambda[0] = b_lambda[1]
-        c_lambda[0] = c_lambda[1]
-        d_lambda[0] = d_lambda[1]
-        b_full = np.zeros((ns,), dtype=float)
-        c_full = np.zeros((ns,), dtype=float)
-        d_full = np.zeros((ns,), dtype=float)
-        for jf in range(1, ns):
-            b_full[jf] = 0.5 * (b_lambda[jf] + (b_lambda[jf + 1] if jf + 1 < b_lambda.size else b_lambda[jf]))
-            c_full[jf] = 0.5 * (c_lambda[jf] + (c_lambda[jf + 1] if jf + 1 < c_lambda.size else c_lambda[jf]))
-            d_full[jf] = 0.5 * (d_lambda[jf] + (d_lambda[jf + 1] if jf + 1 < d_lambda.size else d_lambda[jf]))
-        mpol = int(cfg.mpol)
-        nrange = int(cfg.ntor) + 1
-        lam_prec = np.zeros((ns, mpol, nrange), dtype=float)
-        p_factor = 2.0 / (4.0 * float(bc.lamscale) * float(bc.lamscale))
-        sqrt_sf = np.sqrt(np.maximum(np.asarray(s, dtype=float), 0.0))
-        sqrt_sf[-1] = 1.0
-        for jf in range(1, ns):
-            for n in range(nrange):
-                tnn = (n * cfg.nfp) ** 2
-                for m in range(mpol):
-                    if m == 0 and n == 0:
-                        continue
-                    tmm = m * m
-                    pwr = min(tmm / (16.0 * 16.0), 8.0)
-                    tmn = 2.0 * m * n * cfg.nfp
-                    faclam = (
-                        tnn * b_full[jf]
-                        + tmn * np.copysign(d_full[jf], b_full[jf])
-                        + tmm * c_full[jf]
-                    )
-                    if faclam == 0.0:
-                        faclam = -1.0e-10
-                    lam_prec[jf, m, n] = p_factor / faclam * (sqrt_sf[jf] ** pwr)
-        return lam_prec
+        from .vmecpp_preconditioner import vmecpp_lambda_preconditioner
+
+        return vmecpp_lambda_preconditioner(
+            bc=bc,
+            trig=trig,
+            s=np.asarray(s, dtype=float),
+            cfg=cfg,
+            damping_factor=1.0,
+        )
 
     def _vmecpp_rz_preconditioner(frzl_in: TomnspsRZL, bc, k):
         if bool(cfg.lthreed) or bool(cfg.lasym):
@@ -3944,9 +3710,10 @@ def vmecpp_first_step_diagnostics(
         static=static,
         s=s,
         apply_scalxc=True,
-        ns_min=1,
+        ns_min=0,
         ns_max=int(jnp.asarray(s).shape[0]),
     )
+    norms = vmec_force_norms_from_bcovar_dynamic(bc=k.bc, trig=trig, s=s, signgs=signgs)
     f_norm1 = jnp.where(rz_norm != 0.0, 1.0 / rz_norm, jnp.asarray(float("inf"), dtype=rz_norm.dtype))
     delta_s = jnp.asarray(s[1] - s[0], dtype=rz_norm.dtype)
     fsqr1 = gcr2_p * f_norm1
@@ -3989,6 +3756,8 @@ def vmecpp_first_step_diagnostics(
         "gcl2_raw": float(np.asarray(gcl2_raw)),
         "rz_norm": float(np.asarray(rz_norm)),
         "f_norm1": float(np.asarray(f_norm1)),
+        "f_norm_rz": float(np.asarray(norms.fnorm)),
+        "f_norm_l": float(np.asarray(norms.fnormL)),
         "scalxc": np.asarray(vmec_scalxc_from_s(s=s, mpol=int(cfg.mpol))),
         "time_step": float(time_step),
         "dtau": float(dtau),

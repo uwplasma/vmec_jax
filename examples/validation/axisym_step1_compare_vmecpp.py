@@ -146,7 +146,17 @@ def main() -> int:
     )
 
     print(f"[axisym_step1_compare] case={args.case} input={input_path}")
-    for key in ("fsqr", "fsqz", "fsql", "fsqr1", "fsqz1", "fsql1", "f_norm1"):
+    for key in (
+        "fsqr",
+        "fsqz",
+        "fsql",
+        "fsqr1",
+        "fsqz1",
+        "fsql1",
+        "f_norm1",
+        "f_norm_rz",
+        "f_norm_l",
+    ):
         j = float(diag_jax[key])
         c = float(diag_cpp[key])
         rel = abs(j - c) / max(abs(c), 1e-30)

@@ -38,5 +38,6 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 Notes:
 - `residual_decomposition_report.py` and `residual_compare_fields_report.py` now support reference-field kernels that expose a minimal `bc` object by falling back to the `wout`-based force normalization path.
 - Preconditioned residuals (`fsq*1`) are still mismatched. The VMEC++ preconditioner draft is gated behind `--vmecpp-precond` and used only for debugging until the R/Z tridiagonal assembly and lambda preconditioner match VMEC++ output.
+- `f_norm_rz` and `f_norm_l` now match VMEC++ for axisymmetric first-step diagnostics; `f_norm1` still differs, indicating a remaining mismatch in the `rzNorm` basis/normalization.
 
 Most scripts write `.npz` artifacts into `examples/outputs/`.
