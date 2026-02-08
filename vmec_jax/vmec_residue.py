@@ -211,22 +211,111 @@ def vmec_zero_m1_zforce(
     )
 
 
-def vmec_rz_norm_from_state(*, state, static) -> Any:
+def vmec_rz_norm_from_state(
+    *,
+    state,
+    static,
+    s: Any | None = None,
+    apply_scalxc: bool = True,
+) -> Any:
     """Compute VMEC++-style rzNorm from Fourier coefficients (n>=0 storage).
 
     VMEC++ defines fNorm1 as 1 / rzNorm, where rzNorm is the sum of squares of
     R/Z Fourier coefficients stored with n>=0. This helper mirrors that storage
     convention by masking out n<0 modes from vmec_jax's signed mode table.
     """
+    mpol = int(static.cfg.mpol)
+    ntor = int(static.cfg.ntor)
+    nrange = ntor + 1
+    ncoeff = int(jnp.asarray(state.Rcos).shape[1])
+
     m = jnp.asarray(static.modes.m)
     n = jnp.asarray(static.modes.n)
-    mask = (n >= 0).astype(jnp.asarray(state.Rcos).dtype)
+    idx_pos = -jnp.ones((mpol, nrange), dtype=jnp.int32)
+    idx_neg = -jnp.ones((mpol, nrange), dtype=jnp.int32)
+    for k in range(ncoeff):
+        m_k = int(m[k])
+        n_k = int(n[k])
+        if n_k >= 0:
+            idx_pos = idx_pos.at[m_k, n_k].set(k)
+        else:
+            idx_neg = idx_neg.at[m_k, -n_k].set(k)
 
-    def _mask(a):
+    def _signed_cos_to_mn(a):
         a = jnp.asarray(a)
-        return a * mask[None, :]
+        rcc = jnp.zeros((a.shape[0], mpol, nrange), dtype=a.dtype)
+        rss = jnp.zeros_like(rcc)
+        for m_i in range(mpol):
+            for n_i in range(nrange):
+                kp = int(idx_pos[m_i, n_i])
+                if kp < 0:
+                    continue
+                pos = a[:, kp]
+                kn = int(idx_neg[m_i, n_i])
+                if kn >= 0:
+                    neg = a[:, kn]
+                else:
+                    neg = jnp.zeros_like(pos)
+                rcc = rcc.at[:, m_i, n_i].set(pos + neg)
+                rss = rss.at[:, m_i, n_i].set(pos - neg)
+        return rcc, rss
 
-    rz_norm = jnp.sum(_mask(state.Rcos) ** 2 + _mask(state.Rsin) ** 2 + _mask(state.Zcos) ** 2 + _mask(state.Zsin) ** 2)
+    def _signed_sin_to_mn(a):
+        a = jnp.asarray(a)
+        sc = jnp.zeros((a.shape[0], mpol, nrange), dtype=a.dtype)
+        cs = jnp.zeros_like(sc)
+        for m_i in range(mpol):
+            for n_i in range(nrange):
+                kp = int(idx_pos[m_i, n_i])
+                if kp < 0:
+                    continue
+                pos = a[:, kp]
+                kn = int(idx_neg[m_i, n_i])
+                if kn >= 0:
+                    neg = a[:, kn]
+                else:
+                    neg = jnp.zeros_like(pos)
+                sc = sc.at[:, m_i, n_i].set(pos + neg)
+                cs = cs.at[:, m_i, n_i].set(neg - pos)
+        return sc, cs
+
+    rcc, rss = _signed_cos_to_mn(state.Rcos)
+    zsc, zcs = _signed_sin_to_mn(state.Zsin)
+
+    if bool(apply_scalxc):
+        if s is None:
+            s = jnp.asarray(static.s)
+        scalxc = vmec_scalxc_from_s(s=s, mpol=mpol).astype(rcc.dtype)[:, :, None]
+        rcc = rcc * scalxc
+        rss = rss * scalxc
+        zsc = zsc * scalxc
+        zcs = zcs * scalxc
+
+    rz_norm = jnp.sum(zsc * zsc)
+    m_idx = jnp.arange(mpol)[None, :, None]
+    n_idx = jnp.arange(nrange)[None, None, :]
+    include_rcc = (m_idx > 0) | (n_idx > 0)
+    rz_norm = rz_norm + jnp.sum(jnp.where(include_rcc, rcc * rcc, 0.0))
+
+    if bool(getattr(static.cfg, "lthreed", True)):
+        rz_norm = rz_norm + jnp.sum(rss * rss) + jnp.sum(zcs * zcs)
+
+    if bool(getattr(static.cfg, "lasym", False)):
+        rsc, rcs = _signed_sin_to_mn(state.Rsin)
+        zcc, zss = _signed_cos_to_mn(state.Zcos)
+        if bool(apply_scalxc):
+            if s is None:
+                s = jnp.asarray(static.s)
+            scalxc = vmec_scalxc_from_s(s=s, mpol=mpol).astype(rcc.dtype)[:, :, None]
+            rsc = rsc * scalxc
+            rcs = rcs * scalxc
+            zcc = zcc * scalxc
+            zss = zss * scalxc
+        rz_norm = rz_norm + jnp.sum(rsc * rsc)
+        rz_norm = rz_norm + jnp.sum(jnp.where(include_rcc, zcc * zcc, 0.0))
+        if bool(getattr(static.cfg, "lthreed", True)):
+            rz_norm = rz_norm + jnp.sum(rcs * rcs) + jnp.sum(zss * zss)
+
     return rz_norm
 
 

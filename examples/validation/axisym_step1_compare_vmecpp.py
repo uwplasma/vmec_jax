@@ -134,6 +134,14 @@ def main() -> int:
         rel = abs(j - c) / max(abs(c), 1e-30)
         print(f"  {key}: jax={j:.6e} vmecpp={c:.6e} rel={rel:.3e}")
 
+    extra_keys = ("gcr2_raw", "gcz2_raw", "gcl2_raw", "rz_norm")
+    for key in extra_keys:
+        if key in diag_cpp and key in diag_jax:
+            j = float(diag_jax[key])
+            c = float(diag_cpp[key])
+            rel = abs(j - c) / max(abs(c), 1e-30)
+            print(f"  {key}: jax={j:.6e} vmecpp={c:.6e} rel={rel:.3e}")
+
     for name in ("frcc", "fzsc", "flsc"):
         j = np.asarray(diag_jax[f"{name}_u"])
         c = np.asarray(diag_cpp[name])
