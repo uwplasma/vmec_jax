@@ -101,6 +101,15 @@ For a stage-by-stage (axisymmetric) breakdown that helps pinpoint the first
 block that diverges, use:
 
 - ``python examples/validation/axisym_stage_parity.py --case circular_tokamak``
+- ``python examples/validation/axisym_step1_compare_vmecpp.py --case circular_tokamak``
+
+Axisymmetric VMEC++ step-1 notes:
+
+- The VMEC++-style R/Z preconditioner matrices now match at ~1e-14 RMS on the
+  axisymmetric cases after aligning half-grid indexing in ``vmecpp_preconditioner``.
+- The VMEC++ pybind outputs for ``w_int`` and ``sqrt_sh`` appear constant
+  (likely a reporting issue). The internal preconditioner behavior matches when
+  we use the standard VMEC reduced-theta weights from ``vmecpp_wint_from_config``.
 
 Feature parity matrix (selected)
 --------------------------------
