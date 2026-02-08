@@ -84,45 +84,49 @@ def vmecpp_lambda_preconditioner(
     trig,
     s: np.ndarray,
     cfg,
-    damping_factor: float = 1.0,
+    damping_factor: float = 2.0,
 ) -> np.ndarray:
     """Compute VMEC++ lambda preconditioner (n>=0 storage)."""
     guu = np.asarray(bc.guu, dtype=float)
     guv = np.asarray(bc.guv, dtype=float)
     gvv = np.asarray(bc.gvv, dtype=float)
     gsqrt = np.asarray(bc.jac.sqrtg, dtype=float)
-    ns = int(guu.shape[0])
+    ns_full = int(guu.shape[0])
+    if ns_full < 2:
+        return np.zeros((ns_full, int(cfg.mpol), int(cfg.ntor) + 1), dtype=float)
+    guu_h = guu[1:]
+    guv_h = guv[1:]
+    gvv_h = gvv[1:]
+    gsqrt_h = gsqrt[1:]
+    ns_half = int(guu_h.shape[0])
     ntheta = int(guu.shape[1])
     nzeta = int(guu.shape[2])
     w_int = vmecpp_wint_from_config(cfg=cfg)
 
     # half-grid accumulation (shifted by +1)
-    b_lambda = np.zeros((ns + 1,), dtype=float)
-    d_lambda = np.zeros((ns + 1,), dtype=float)
-    c_lambda = np.zeros((ns + 1,), dtype=float)
-    gsqrt_safe = np.where(gsqrt != 0.0, gsqrt, 1.0)
-    for jh in range(ns - 1):
+    b_lambda = np.zeros((ns_full + 1,), dtype=float)
+    d_lambda = np.zeros((ns_full + 1,), dtype=float)
+    c_lambda = np.zeros((ns_full + 1,), dtype=float)
+    gsqrt_safe = np.where(gsqrt_h != 0.0, gsqrt_h, 1.0)
+    for jh in range(ns_half):
         for kl in range(ntheta * nzeta):
             l = kl % ntheta
             k = kl // ntheta
-            b_lambda[jh + 1] += guu[jh, l, k] / gsqrt_safe[jh, l, k] * w_int[l]
-            c_lambda[jh + 1] += gvv[jh, l, k] / gsqrt_safe[jh, l, k] * w_int[l]
+            b_lambda[jh + 1] += guu_h[jh, l, k] / gsqrt_safe[jh, l, k] * w_int[l]
+            c_lambda[jh + 1] += gvv_h[jh, l, k] / gsqrt_safe[jh, l, k] * w_int[l]
             if bool(cfg.lthreed):
-                d_lambda[jh + 1] += guv[jh, l, k] / gsqrt_safe[jh, l, k] * w_int[l]
+                d_lambda[jh + 1] += guv_h[jh, l, k] / gsqrt_safe[jh, l, k] * w_int[l]
 
     # constant extrapolation toward axis
     b_lambda[0] = b_lambda[1]
     d_lambda[0] = d_lambda[1]
     c_lambda[0] = c_lambda[1]
-    b_lambda[ns] = b_lambda[ns - 1]
-    d_lambda[ns] = d_lambda[ns - 1]
-    c_lambda[ns] = c_lambda[ns - 1]
 
     # average onto full grid
-    b_full = np.zeros((ns,), dtype=float)
-    d_full = np.zeros((ns,), dtype=float)
-    c_full = np.zeros((ns,), dtype=float)
-    for jf in range(1, ns):
+    b_full = np.zeros((ns_full,), dtype=float)
+    d_full = np.zeros((ns_full,), dtype=float)
+    c_full = np.zeros((ns_full,), dtype=float)
+    for jf in range(1, ns_full):
         b_full[jf] = 0.5 * (b_lambda[jf + 1] + b_lambda[jf])
         d_full[jf] = 0.5 * (d_lambda[jf + 1] + d_lambda[jf])
         c_full[jf] = 0.5 * (c_lambda[jf + 1] + c_lambda[jf])
@@ -134,8 +138,8 @@ def vmecpp_lambda_preconditioner(
     if sqrt_sf.size > 0:
         sqrt_sf[-1] = 1.0
 
-    lam_prec = np.zeros((ns, mpol, nrange), dtype=float)
-    for jf in range(1, ns):
+    lam_prec = np.zeros((ns_full, mpol, nrange), dtype=float)
+    for jf in range(1, ns_full):
         for n in range(nrange):
             tnn = (n * cfg.nfp) ** 2
             for m in range(mpol):
