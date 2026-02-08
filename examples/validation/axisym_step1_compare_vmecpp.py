@@ -15,6 +15,7 @@ import numpy as np
 import vmec_jax as vj
 from vmec_jax.diagnostics import summarize_many
 from vmec_jax.solve import vmecpp_first_step_diagnostics
+from vmec_jax import vmec_residue
 
 
 def _rel_rms(a: np.ndarray, b: np.ndarray) -> float:
@@ -40,6 +41,18 @@ def _top_mode_rows(a: np.ndarray, *, k: int = 6):
         n = int(ii % nrange)
         rows.append((m, n, float(a[m, n])))
     return rows
+
+
+def _maybe_print_array_diff(name: str, a: np.ndarray, b: np.ndarray):
+    if a.size == 0 or b.size == 0:
+        print(f"  {name}: skip empty jax={a.shape} vmecpp={b.shape}")
+        return
+    if a.shape != b.shape:
+        print(f"  {name}: shape mismatch jax={a.shape} vmecpp={b.shape}")
+        min_ns = min(a.shape[0], b.shape[0])
+        a = a[:min_ns]
+        b = b[:min_ns]
+    print(f"  {name}: rel_rms={_rel_rms(a, b):.3e}")
 
 
 def _is_indata(path: Path) -> bool:
@@ -144,6 +157,9 @@ def main() -> int:
     diag_cpp = vmecpp.cpp._vmecpp.first_step_diagnostics(
         vmec_indata, max_threads=1, verbose=False
     )
+    geom_cpp = vmecpp.cpp._vmecpp.first_step_geometry(
+        vmec_indata, max_threads=1, verbose=False
+    )
 
     print(f"[axisym_step1_compare] case={args.case} input={input_path}")
     for key in (
@@ -178,12 +194,7 @@ def main() -> int:
     for name in ("frcc", "fzsc", "flsc"):
         j = np.asarray(diag_jax[f"{name}_u"])
         c = np.asarray(diag_cpp[name])
-        if j.shape != c.shape:
-            print(f"  {name}: shape mismatch jax={j.shape} vmecpp={c.shape}")
-            min_ns = min(j.shape[0], c.shape[0])
-            j = j[:min_ns]
-            c = c[:min_ns]
-        print(f"  {name}: rel_rms={_rel_rms(j, c):.3e}")
+        _maybe_print_array_diff(name, j, c)
 
     for name, key in (
         ("frcc_u", "frcc_mode_rms"),
@@ -209,6 +220,39 @@ def main() -> int:
         ],
         indent="  ",
     )
+
+    rcc, rss, zsc, zcs = vmec_residue.vmec_rz_decompose_signed(
+        run.state,
+        run.static,
+        apply_scalxc=False,
+    )
+    rcc = np.asarray(rcc)
+    rss = np.asarray(rss)
+    zsc = np.asarray(zsc)
+    zcs = np.asarray(zcs)
+
+    print("  decomposed geometry (raw)")
+    _maybe_print_array_diff("rcc", rcc, np.asarray(geom_cpp["rcc"]))
+    _maybe_print_array_diff("rss", rss, np.asarray(geom_cpp["rss"]))
+    _maybe_print_array_diff("zsc", zsc, np.asarray(geom_cpp["zsc"]))
+    _maybe_print_array_diff("zcs", zcs, np.asarray(geom_cpp["zcs"]))
+
+    s = np.linspace(0.0, 1.0, rcc.shape[0], dtype=rcc.dtype)
+    scalxc = np.asarray(vmec_residue.vmec_scalxc_from_s(s=s, mpol=rcc.shape[1]))[:, :, None]
+    print("  decomposed geometry (scaled)")
+    _maybe_print_array_diff("rcc", rcc * scalxc, np.asarray(geom_cpp["rcc"]))
+    _maybe_print_array_diff("rss", rss * scalxc, np.asarray(geom_cpp["rss"]))
+    _maybe_print_array_diff("zsc", zsc * scalxc, np.asarray(geom_cpp["zsc"]))
+    _maybe_print_array_diff("zcs", zcs * scalxc, np.asarray(geom_cpp["zcs"]))
+
+    rz_full = float(vmec_residue.vmec_rz_norm_from_state(state=run.state, static=run.static, apply_scalxc=True, ns_min=0))
+    rz_noaxis = float(vmec_residue.vmec_rz_norm_from_state(state=run.state, static=run.static, apply_scalxc=True, ns_min=1))
+    rz_raw = float(vmec_residue.vmec_rz_norm_from_state(state=run.state, static=run.static, apply_scalxc=False, ns_min=0))
+    rz_raw_noaxis = float(vmec_residue.vmec_rz_norm_from_state(state=run.state, static=run.static, apply_scalxc=False, ns_min=1))
+    print(f"  rz_norm (scaled, ns>=0)={rz_full:.6e}")
+    print(f"  rz_norm (scaled, ns>=1)={rz_noaxis:.6e}")
+    print(f"  rz_norm (raw, ns>=0)={rz_raw:.6e}")
+    print(f"  rz_norm (raw, ns>=1)={rz_raw_noaxis:.6e}")
     return 0
 
 

@@ -333,6 +333,93 @@ def vmec_rz_norm_from_state(
     return rz_norm
 
 
+def vmec_rz_decompose_signed(
+    state: VmecState,
+    static: VmecStatic,
+    *,
+    apply_scalxc: bool = False,
+    s: jnp.ndarray | None = None,
+):
+    """Return (rcc, rss, zsc, zcs) in signed (m,n>=0) storage.
+
+    This mirrors the mapping used inside `vmec_rz_norm_from_state`.
+    """
+    mpol = int(static.cfg.mpol)
+    ntor = int(static.cfg.ntor)
+    nrange = ntor + 1
+    ncoeff = int(jnp.asarray(state.Rcos).shape[1])
+
+    m = jnp.asarray(static.modes.m)
+    n = jnp.asarray(static.modes.n)
+    idx_pos = -jnp.ones((mpol, nrange), dtype=jnp.int32)
+    idx_neg = -jnp.ones((mpol, nrange), dtype=jnp.int32)
+    for k in range(ncoeff):
+        m_k = int(m[k])
+        n_k = int(n[k])
+        if n_k >= 0:
+            idx_pos = idx_pos.at[m_k, n_k].set(k)
+        else:
+            idx_neg = idx_neg.at[m_k, -n_k].set(k)
+
+    def _signed_cos_to_mn(a):
+        a = jnp.asarray(a)
+        rcc = jnp.zeros((a.shape[0], mpol, nrange), dtype=a.dtype)
+        rss = jnp.zeros_like(rcc)
+        for m_i in range(mpol):
+            for n_i in range(nrange):
+                kp = int(idx_pos[m_i, n_i])
+                if kp < 0:
+                    continue
+                pos = a[:, kp]
+                kn = int(idx_neg[m_i, n_i])
+                if kn >= 0:
+                    neg = a[:, kn]
+                else:
+                    neg = jnp.zeros_like(pos)
+                rcc = rcc.at[:, m_i, n_i].set(pos + neg)
+                rss_val = pos - neg
+                if n_i == 0:
+                    rss_val = jnp.zeros_like(pos)
+                rss = rss.at[:, m_i, n_i].set(rss_val)
+        return rcc, rss
+
+    def _signed_sin_to_mn(a):
+        a = jnp.asarray(a)
+        sc = jnp.zeros((a.shape[0], mpol, nrange), dtype=a.dtype)
+        cs = jnp.zeros_like(sc)
+        for m_i in range(mpol):
+            for n_i in range(nrange):
+                kp = int(idx_pos[m_i, n_i])
+                if kp < 0:
+                    continue
+                pos = a[:, kp]
+                kn = int(idx_neg[m_i, n_i])
+                if kn >= 0:
+                    neg = a[:, kn]
+                else:
+                    neg = jnp.zeros_like(pos)
+                sc = sc.at[:, m_i, n_i].set(pos + neg)
+                cs_val = neg - pos
+                if n_i == 0:
+                    cs_val = jnp.zeros_like(pos)
+                cs = cs.at[:, m_i, n_i].set(cs_val)
+        return sc, cs
+
+    rcc, rss = _signed_cos_to_mn(state.Rcos)
+    zsc, zcs = _signed_sin_to_mn(state.Zsin)
+
+    if bool(apply_scalxc):
+        if s is None:
+            s = jnp.asarray(static.s)
+        scalxc = vmec_scalxc_from_s(s=s, mpol=mpol).astype(rcc.dtype)[:, :, None]
+        rcc = rcc * scalxc
+        rss = rss * scalxc
+        zsc = zsc * scalxc
+        zcs = zcs * scalxc
+
+    return rcc, rss, zsc, zcs
+
+
 def vmec_wint_from_trig(trig: VmecTrigTables, *, nzeta: int) -> jnp.ndarray:
     """Return VMEC's angular integration weights as a (ntheta3,nzeta) array.
 
