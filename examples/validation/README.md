@@ -3,6 +3,9 @@
 Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference data.
 
 - `axisym_stage_parity.py`: axisymmetric stage-by-stage parity harness (`sqrt(g) -> bsup -> bsub -> getfsq`) against bundled VMEC2000 `wout` states.
+- `axisym_step1_diagnostics.py`: VMEC++-style first-step diagnostics on axisymmetric initial guesses (forces, preconditioned residuals, time-step scalings, and first-step updates).
+- `axisym_step1_diagnostics.py --vmecpp-precond`: optional draft port of the VMEC++ preconditioner path (axisym only); use for development diagnostics, not yet parity-accurate.
+- `axisym_step1_compare_vmecpp.py`: compare vmec_jax vs VMEC++ first-step diagnostics (requires vmecpp Python bindings).
 - `step10_getfsq_parity_cases.py`: Step-10 scalar parity report (`fsqr/fsqz/fsql`) for bundled cases (uses `wout` Nyquist `bsup*` to isolate force-kernel parity).
 - `vmec_forces_rz_kernel_report.py`: diagnostic report for the VMEC-style R/Z force kernels.
 - `constraint_pipeline_report.py`: constraint-force pipeline diagnostics (`tcon`, `gcon`) for a given `wout`.
@@ -34,5 +37,6 @@ Scripts that compare `vmec_jax` kernels against bundled `wout_*.nc` reference da
 
 Notes:
 - `residual_decomposition_report.py` and `residual_compare_fields_report.py` now support reference-field kernels that expose a minimal `bc` object by falling back to the `wout`-based force normalization path.
+- Preconditioned residuals (`fsq*1`) are still mismatched. The VMEC++ preconditioner draft is gated behind `--vmecpp-precond` and used only for debugging until the R/Z tridiagonal assembly and lambda preconditioner match VMEC++ output.
 
 Most scripts write `.npz` artifacts into `examples/outputs/`.

@@ -107,6 +107,7 @@ def main() -> int:
         ],
     )
     parser.add_argument("--step-size", type=float, default=None)
+    parser.add_argument("--vmecpp-precond", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -135,6 +136,7 @@ def main() -> int:
         step_size=args.step_size,
         include_edge=True,
         zero_m1=True,
+        use_vmecpp_precond=bool(args.vmecpp_precond),
     )
 
     vmec_input_path = _ensure_vmecpp_input(input_path, vmec_jax_root)

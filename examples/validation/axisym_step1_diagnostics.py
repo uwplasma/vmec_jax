@@ -46,6 +46,7 @@ def main() -> int:
         ],
     )
     parser.add_argument("--step-size", type=float, default=None)
+    parser.add_argument("--vmecpp-precond", action="store_true")
     args = parser.parse_args()
 
     data_dir = Path(__file__).resolve().parents[1] / "data"
@@ -66,6 +67,7 @@ def main() -> int:
         step_size=args.step_size,
         include_edge=True,
         zero_m1=True,
+        use_vmecpp_precond=bool(args.vmecpp_precond),
     )
 
     print(f"[axisym_step1] case={args.case} input={input_path}")

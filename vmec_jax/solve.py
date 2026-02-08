@@ -2211,12 +2211,6 @@ def solve_fixed_boundary_vmecpp_iter(
         gvv = np.asarray(bc.gvv, dtype=float)
         sqrtg = np.asarray(bc.jac.sqrtg, dtype=float)
         sqrtg_safe = np.where(sqrtg != 0.0, sqrtg, 1.0)
-        sqrtg_safe = np.where(sqrtg != 0.0, sqrtg, 1.0)
-        sqrtg_safe = np.where(sqrtg != 0.0, sqrtg, 1.0)
-        sqrtg_safe = np.where(sqrtg != 0.0, sqrtg, 1.0)
-        sqrtg_safe = np.where(sqrtg != 0.0, sqrtg, 1.0)
-        sqrtg_safe = np.where(sqrtg != 0.0, sqrtg, 1.0)
-        sqrtg_safe = np.where(sqrtg != 0.0, sqrtg, 1.0)
         ns = guu.shape[0]
         ntheta = guu.shape[1]
         nzeta = guu.shape[2]
@@ -2284,10 +2278,6 @@ def solve_fixed_boundary_vmecpp_iter(
         r12 = np.asarray(bc.jac.r12, dtype=float)
         tau = np.asarray(bc.jac.tau, dtype=float)
         tau_safe = np.where(tau != 0.0, tau, 1.0)
-        tau_safe = np.where(tau != 0.0, tau, 1.0)
-        tau_safe = np.where(tau != 0.0, tau, 1.0)
-        tau_safe = np.where(tau != 0.0, tau, 1.0)
-        tau_safe = np.where(tau != 0.0, tau, 1.0)
         total_pressure = np.asarray(bc.bsq, dtype=float)
         bsupv = np.asarray(bc.bsupv, dtype=float)
         pshalf = _pshalf_from_s(s_arr)
@@ -2308,7 +2298,7 @@ def solve_fixed_boundary_vmecpp_iter(
                         pfactor
                         * r12[i_half]
                         * total_pressure[i_half]
-                        / tau[i_half]
+                        / tau_safe[i_half]
                         * w_ang[l, idx_t]
                     )
                     t1a = xu12[i_half] / delta_s
@@ -3415,6 +3405,7 @@ def vmecpp_first_step_diagnostics(
     mode_diag_exponent: float = 1.0,
     include_edge: bool = True,
     zero_m1: bool = True,
+    use_vmecpp_precond: bool = False,
 ) -> Dict[str, Any]:
     """Return a VMEC++-style first-step diagnostic bundle.
 
@@ -3879,7 +3870,7 @@ def vmecpp_first_step_diagnostics(
     k, frzl, fsqr, fsqz, fsql, rz_scale, l_scale, g_raw = _compute_forces(state0)
     gcr2_raw, gcz2_raw, gcl2_raw = g_raw
 
-    if (not bool(cfg.lthreed)) and (not bool(cfg.lasym)):
+    if bool(use_vmecpp_precond) and (not bool(cfg.lthreed)) and (not bool(cfg.lasym)):
         lam_prec = _vmecpp_lambda_preconditioner(k.bc)
         frzl_pre = _vmecpp_rz_preconditioner(frzl, k.bc, k)
         frcc = jnp.asarray(frzl_pre.frcc)
@@ -3888,6 +3879,13 @@ def vmecpp_first_step_diagnostics(
         fzcs = frzl_pre.fzcs
         flsc = jnp.asarray(frzl_pre.flsc) * jnp.asarray(lam_prec)
         flcs = frzl_pre.flcs
+        if not (jnp.all(jnp.isfinite(frcc)) and jnp.all(jnp.isfinite(fzsc)) and jnp.all(jnp.isfinite(flsc))):
+            frcc = jnp.asarray(frzl.frcc)
+            frss = frzl.frss
+            fzsc = jnp.asarray(frzl.fzsc)
+            fzcs = frzl.fzcs
+            flsc = jnp.asarray(frzl.flsc)
+            flcs = frzl.flcs
     else:
         frcc = _apply_radial_tridi(frzl.frcc * rz_scale[:, None, None], precond_radial_alpha)
         frss = _apply_radial_tridi(frzl.frss * rz_scale[:, None, None], precond_radial_alpha) if frzl.frss is not None else None
