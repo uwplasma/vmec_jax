@@ -7,7 +7,7 @@ power users to drop down to lower-level APIs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -247,6 +247,7 @@ def run_fixed_boundary(
     vmecpp_use_direct_fallback: bool | None = None,
     verbose: bool = True,
     grid=None,
+    ns_override: int | None = None,
 ):
     """Run a fixed-boundary vmec_jax solve with minimal boilerplate.
 
@@ -257,6 +258,8 @@ def run_fixed_boundary(
         ``"vmec_gn"`` (VMEC residual objective), or ``"vmecpp_iter"``.
     use_initial_guess:
         If True, skip the solve and return the initialized state.
+    ns_override:
+        If provided, overrides the radial resolution (ns) used to build the state.
     vmec_project:
         If True (default), re-project the initial guess through the VMEC
         internal grid/weights before returning or solving.
@@ -264,6 +267,8 @@ def run_fixed_boundary(
         If True (default), print VMEC-style iteration progress and a summary.
     """
     cfg, indata = load_config(str(input_path))
+    if ns_override is not None:
+        cfg = replace(cfg, ns=int(ns_override))
     solver_lower = str(solver).lower()
     if grid is None and solver_lower in ("vmec_lbfgs", "vmec_gn", "vmecpp_iter"):
         from .vmec_tomnsp import vmec_angle_grid
