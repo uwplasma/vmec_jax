@@ -26,6 +26,22 @@ def _rel_rms(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.sqrt(np.mean((a - b) ** 2)) / denom)
 
 
+def _top_mode_rows(a: np.ndarray, *, k: int = 6):
+    if a.ndim != 2:
+        return []
+    flat = a.reshape(-1)
+    if flat.size == 0:
+        return []
+    idx = np.argsort(flat)[-k:][::-1]
+    mpol, nrange = a.shape
+    rows = []
+    for ii in idx:
+        m = int(ii // nrange)
+        n = int(ii % nrange)
+        rows.append((m, n, float(a[m, n])))
+    return rows
+
+
 def _is_indata(path: Path) -> bool:
     with path.open() as f:
         for line in f:
@@ -151,6 +167,19 @@ def main() -> int:
             j = j[:min_ns]
             c = c[:min_ns]
         print(f"  {name}: rel_rms={_rel_rms(j, c):.3e}")
+
+    for name, key in (
+        ("frcc_u", "frcc_mode_rms"),
+        ("fzsc_u", "fzsc_mode_rms"),
+        ("flsc_u", "flsc_mode_rms"),
+    ):
+        if key not in diag_jax:
+            continue
+        rows = _top_mode_rows(np.asarray(diag_jax[key]))
+        if rows:
+            print(f"  top {name} modes (m,n,rms)")
+            for m, n, val in rows:
+                print(f"    m={m:2d} n={n:2d} rms={val:.6e}")
 
     summarize_many(
         [

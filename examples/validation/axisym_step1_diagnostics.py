@@ -104,6 +104,9 @@ def main() -> int:
 
     top_r = _top_modes(diag["dRcc"])
     top_z = _top_modes(diag["dZsc"])
+    top_fr = _top_modes(diag["frcc_u"])
+    top_fz = _top_modes(diag["fzsc_u"])
+    top_fl = _top_modes(diag["flsc_u"])
     if top_r:
         print("[axisym_step1] top dRcc (m,n,rms)")
         for m, n, val in top_r:
@@ -111,6 +114,18 @@ def main() -> int:
     if top_z:
         print("[axisym_step1] top dZsc (m,n,rms)")
         for m, n, val in top_z:
+            print(f"  m={m:2d} n={n:2d} rms={val:.6e}")
+    if top_fr:
+        print("[axisym_step1] top frcc_u (m,n,rms)")
+        for m, n, val in top_fr:
+            print(f"  m={m:2d} n={n:2d} rms={val:.6e}")
+    if top_fz:
+        print("[axisym_step1] top fzsc_u (m,n,rms)")
+        for m, n, val in top_fz:
+            print(f"  m={m:2d} n={n:2d} rms={val:.6e}")
+    if top_fl:
+        print("[axisym_step1] top flsc_u (m,n,rms)")
+        for m, n, val in top_fl:
             print(f"  m={m:2d} n={n:2d} rms={val:.6e}")
     return 0
 

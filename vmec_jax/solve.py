@@ -3404,6 +3404,14 @@ def vmecpp_first_step_diagnostics(
     flsc_u = flsc * w_mode_mn[None, :, :]
     flcs_u = (flcs if flcs is not None else jnp.zeros_like(flsc_u)) * w_mode_mn[None, :, :]
 
+    def _mode_rms(a):
+        a = jnp.asarray(a)
+        return jnp.sqrt(jnp.mean(a * a, axis=0))
+
+    frcc_mode = _mode_rms(frcc_u)
+    fzsc_mode = _mode_rms(fzsc_u)
+    flsc_mode = _mode_rms(flsc_u)
+
     gcr2_p, gcz2_p, gcl2_p = vmec_gcx2_from_tomnsps(
         frzl=frzl_pre,
         lconm1=bool(getattr(static.cfg, "lconm1", True)),
@@ -3412,7 +3420,14 @@ def vmecpp_first_step_diagnostics(
         apply_scalxc=False,
         s=s,
     )
-    rz_norm = vmec_rz_norm_from_state(state=state0, static=static, s=s, apply_scalxc=True)
+    rz_norm = vmec_rz_norm_from_state(
+        state=state0,
+        static=static,
+        s=s,
+        apply_scalxc=True,
+        ns_min=1,
+        ns_max=int(jnp.asarray(s).shape[0]),
+    )
     f_norm1 = jnp.where(rz_norm != 0.0, 1.0 / rz_norm, jnp.asarray(float("inf"), dtype=rz_norm.dtype))
     delta_s = jnp.asarray(s[1] - s[0], dtype=rz_norm.dtype)
     fsqr1 = gcr2_p * f_norm1
@@ -3470,6 +3485,9 @@ def vmecpp_first_step_diagnostics(
         "fzcs_u": np.asarray(fzcs_u),
         "flsc_u": np.asarray(flsc_u),
         "flcs_u": np.asarray(flcs_u),
+        "frcc_mode_rms": np.asarray(frcc_mode),
+        "fzsc_mode_rms": np.asarray(fzsc_mode),
+        "flsc_mode_rms": np.asarray(flsc_mode),
         "dRcc": np.asarray(dRcc),
         "dRss": np.asarray(dRss),
         "dZsc": np.asarray(dZsc),

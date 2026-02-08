@@ -217,6 +217,8 @@ def vmec_rz_norm_from_state(
     static,
     s: Any | None = None,
     apply_scalxc: bool = True,
+    ns_min: int | None = None,
+    ns_max: int | None = None,
 ) -> Any:
     """Compute VMEC++-style rzNorm from Fourier coefficients (n>=0 storage).
 
@@ -291,14 +293,20 @@ def vmec_rz_norm_from_state(
         zsc = zsc * scalxc
         zcs = zcs * scalxc
 
-    rz_norm = jnp.sum(zsc * zsc)
+    if ns_min is None:
+        ns_min = 0
+    if ns_max is None:
+        ns_max = int(jnp.asarray(zsc).shape[0])
+    sl = slice(int(ns_min), int(ns_max))
+
+    rz_norm = jnp.sum(zsc[sl] * zsc[sl])
     m_idx = jnp.arange(mpol)[None, :, None]
     n_idx = jnp.arange(nrange)[None, None, :]
     include_rcc = (m_idx > 0) | (n_idx > 0)
-    rz_norm = rz_norm + jnp.sum(jnp.where(include_rcc, rcc * rcc, 0.0))
+    rz_norm = rz_norm + jnp.sum(jnp.where(include_rcc, rcc[sl] * rcc[sl], 0.0))
 
     if bool(getattr(static.cfg, "lthreed", True)):
-        rz_norm = rz_norm + jnp.sum(rss * rss) + jnp.sum(zcs * zcs)
+        rz_norm = rz_norm + jnp.sum(rss[sl] * rss[sl]) + jnp.sum(zcs[sl] * zcs[sl])
 
     if bool(getattr(static.cfg, "lasym", False)):
         rsc, rcs = _signed_sin_to_mn(state.Rsin)
@@ -311,10 +319,10 @@ def vmec_rz_norm_from_state(
             rcs = rcs * scalxc
             zcc = zcc * scalxc
             zss = zss * scalxc
-        rz_norm = rz_norm + jnp.sum(rsc * rsc)
-        rz_norm = rz_norm + jnp.sum(jnp.where(include_rcc, zcc * zcc, 0.0))
+        rz_norm = rz_norm + jnp.sum(rsc[sl] * rsc[sl])
+        rz_norm = rz_norm + jnp.sum(jnp.where(include_rcc, zcc[sl] * zcc[sl], 0.0))
         if bool(getattr(static.cfg, "lthreed", True)):
-            rz_norm = rz_norm + jnp.sum(rcs * rcs) + jnp.sum(zss * zss)
+            rz_norm = rz_norm + jnp.sum(rcs[sl] * rcs[sl]) + jnp.sum(zss[sl] * zss[sl])
 
     return rz_norm
 
