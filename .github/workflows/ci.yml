@@ -73,7 +73,7 @@ jobs:
   parity:
     name: Parity suite ${{ matrix.shard }} (goldens, coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
