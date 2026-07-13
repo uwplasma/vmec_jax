@@ -81,9 +81,10 @@ For ``LFREEB = T`` decks:
   ``mgrid_mode``);
 - a **missing** mgrid file falls back to a fixed-boundary solve with a
   warning (VMEC2000 behavior, dropped by VMEC++);
-- ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) evaluates the
-  external field directly from an ESSOS-style coils file via
-  :class:`vmec_jax.core.coils.CoilSet` Biot-Savart.
+- ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
+  field from an ESSOS coils file (``essos.coils.Coils``): the coils are tabulated
+  into an in-memory mgrid (``Coils.to_mgrid``) and read back as an
+  :class:`vmec_jax.core.mgrid.MgridField` (requires ESSOS).
 
 Known divergences of the current free-boundary lane: it is single-grid (only
 the final ``NS_ARRAY`` stage runs; multi-stage decks print a note), and the

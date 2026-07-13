@@ -68,13 +68,12 @@ jobs:
             tests/test_preconditioner.py \
             tests/test_setup.py \
             tests/test_mgrid.py \
-            tests/test_coils.py \
             --durations=25
 
   parity:
     name: Parity suite ${{ matrix.shard }} (goldens, coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

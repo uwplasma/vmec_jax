@@ -38,7 +38,6 @@ jax.config.update("jax_enable_x64", True)
 
 from virtual_casing_jax import VmecSurfaceFieldData  # noqa: E402
 
-from vmec_jax.core import coils as C  # noqa: E402
 from vmec_jax.core import freeboundary_diff as FBD  # noqa: E402
 from vmec_jax.core.mgrid import MgridField, read_mgrid  # noqa: E402
 from vmec_jax.core.wout import read_wout  # noqa: E402
@@ -56,15 +55,34 @@ MGRID = REPO / "examples" / "data" / "mgrid_cth_like.nc"
 # ---------------------------------------------------------------------------
 
 
-def _circular_coilset(ncoils=3, order=1, R0=0.75, a=0.35, nfp=5):
+def _circular_coil_dofs(ncoils=3, order=1, R0=0.75, a=0.35, nfp=5):
+    """Circular coil Fourier dofs (the ESSOS ``Curves`` Fourier convention)."""
     dofs = np.zeros((ncoils, 3, 2 * order + 1))
     for i in range(ncoils):
         p0 = (i + 0.5) * (2 * np.pi / nfp) / (2 * ncoils)
         dofs[i, 0, 0], dofs[i, 0, 2] = R0 * np.cos(p0), a * np.cos(p0)
         dofs[i, 1, 0], dofs[i, 1, 2] = R0 * np.sin(p0), a * np.sin(p0)
         dofs[i, 2, 1] = a
-    return C.CoilSet(base_curve_dofs=jnp.asarray(dofs), base_currents=jnp.full(ncoils, 1.0e5),
-                     n_segments=64, nfp=nfp, stellsym=True)
+    return jnp.asarray(dofs), jnp.full(ncoils, 1.0e5)
+
+
+def _essos_coil_field(dofs, currents, *, nfp=5, n_segments=64, stellsym=True):
+    """A generic ``xyz(...,3) -> B(...,3)`` callable from ESSOS coils.
+
+    vmec_jax carries no coil code; the differentiable free-boundary residual
+    consumes coils through the plain-callable interface, differentiating in the
+    ESSOS coils' Fourier dofs (rebuilt inside the closure so ``jax.grad`` threads
+    through ``essos.coils.Coils`` -> ``essos.fields.BiotSavart``).
+    """
+    from essos.coils import Coils, Curves
+    from essos.fields import BiotSavart
+
+    bs = BiotSavart(Coils(Curves(dofs, n_segments, nfp, stellsym), currents))
+
+    def field(pts):
+        return jax.vmap(bs.B)(pts.reshape(-1, 3)).reshape(pts.shape)
+
+    return field
 
 
 def _synthetic_surface(nphi=12, ntheta=12, nfp=3, R0=1.0, a=0.3, B0=1.0):
@@ -120,11 +138,11 @@ def test_synthetic_surface_gradient_fd_validates():
     assert prob.Bn_plasma.shape == (12, 12)
     assert bool(jnp.all(jnp.isfinite(prob.Bn_plasma)))
 
-    cs = _circular_coilset(nfp=3, R0=1.0, a=0.5)
-    d0 = cs.base_curve_dofs
+    pytest.importorskip("essos")
+    d0, currents = _circular_coil_dofs(nfp=3, R0=1.0, a=0.5)
 
     def J(dofs):
-        return prob.bnormal_objective(cs.with_arrays(base_curve_dofs=dofs))
+        return prob.bnormal_objective(_essos_coil_field(dofs, currents, nfp=3))
 
     g = jax.grad(J)(d0)
     assert bool(jnp.all(jnp.isfinite(g)))
@@ -157,12 +175,14 @@ def test_cth_gradient_fd_validates():
         rel = np.abs(g_ad - g_fd) / (np.abs(g_fd) + 1e-30)
         assert np.all(rel < 1e-4), f"extcur grad rel err {rel} (AD {g_ad}, FD {g_fd})"
 
-    # (b) coil Fourier dofs via Biot-Savart — directional derivative.
-    cs = _circular_coilset(nfp=int(wout.nfp))
-    d0 = cs.base_curve_dofs
+    # (b) coil Fourier dofs via Biot-Savart (ESSOS coils, callable interface) —
+    # directional derivative.
+    pytest.importorskip("essos")
+    d0, currents = _circular_coil_dofs(nfp=int(wout.nfp))
+    nfp = int(wout.nfp)
 
     def J_dofs(dofs):
-        return prob.bnormal_objective(cs.with_arrays(base_curve_dofs=dofs))
+        return prob.bnormal_objective(_essos_coil_field(dofs, currents, nfp=nfp))
 
     g = jax.grad(J_dofs)(d0)
     v = jnp.asarray(np.random.default_rng(1).standard_normal(d0.shape))
@@ -171,5 +191,5 @@ def test_cth_gradient_fd_validates():
     assert abs(dir_ad - dir_fd) <= 1e-5 * abs(dir_fd) + 1e-9, f"coil-dof AD {dir_ad:.6e} vs FD {dir_fd:.6e}"
 
     # (c) pressure-balance residual is finite and differentiable too.
-    jp = jax.grad(lambda d: prob.pressure_balance_objective(cs.with_arrays(base_curve_dofs=d)))(d0)
+    jp = jax.grad(lambda d: prob.pressure_balance_objective(_essos_coil_field(d, currents, nfp=nfp)))(d0)
     assert bool(jnp.all(jnp.isfinite(jp)))

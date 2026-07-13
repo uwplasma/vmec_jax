@@ -324,9 +324,10 @@ with the VMEC2000 cadence (``funct3d.f``):
 
 The external field comes either from an ``mgrid`` file
 (:mod:`vmec_jax.core.mgrid`, trilinear interpolation weighted by ``EXTCUR``)
-or directly from a Biot-Savart coil set (:mod:`vmec_jax.core.coils`, ESSOS
-layout) — the latter is interpolation-free and differentiable through the
-coil parameters.
+or from any ``xyz -> B`` callable — e.g. an ESSOS ``essos.coils.Coils``
+Biot-Savart field (``lambda pts: coils.B(pts)``), interpolation-free and
+differentiable through the coil parameters. vmec_jax itself carries no coil
+code; coils live in ESSOS.
 
 Differentiable free boundary (virtual casing)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -358,8 +359,8 @@ the integral). The key structural fact: for a *fixed* trial boundary,
 coil degrees of freedom, so it is precomputed once and frozen. The residual
 assembled by
 :class:`~vmec_jax.core.freeboundary_diff.FreeBoundaryDiffProblem` is then a
-smooth JAX function of the external-field dofs alone (``CoilSet`` Fourier
-coefficients/currents via
+smooth JAX function of the external-field dofs alone (coil Fourier
+coefficients/currents of a callable ESSOS coil field via
 :func:`~vmec_jax.core.freeboundary_diff.external_B_cartesian`, or
 ``extcur``), and its ``value_and_grad_bnormal`` helper returns gradients
 validated against finite differences — no NESTOR adjoint is required.

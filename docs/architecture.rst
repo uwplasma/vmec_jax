@@ -77,11 +77,10 @@ Module map
      - differentiable free-boundary residual via virtual casing
      - (no VMEC2000 equivalent)
    * - :mod:`~vmec_jax.core.mgrid`
-     - mgrid netCDF read/write, differentiable interpolated field
+     - mgrid netCDF read/write, differentiable interpolated field; external
+       coils live in ESSOS (``essos.coils.Coils``), consumed as an mgrid or
+       ``xyz -> B`` callable
      - MAKEGRID file format, ``mgrid_mod.f90``
-   * - :mod:`~vmec_jax.core.coils`
-     - ESSOS-style Fourier coil sets, pure-JAX Biot-Savart external field
-     - (no VMEC2000 equivalent; replaces mgrid generation)
    * - :mod:`~vmec_jax.core.implicit`
      - implicit differentiation of the equilibrium (``custom_vjp`` + adjoint
        GMRES)

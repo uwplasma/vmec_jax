@@ -25,16 +25,17 @@ The virtual-casing math is reused verbatim from ``uwplasma/virtual_casing_jax``
 singular-quadrature integral ``VirtualCasingJAX.compute_internal_B``).  This
 module only (a) adapts a converged/trial ``vmec_jax`` boundary + total field into
 the package's :class:`VmecSurfaceFieldData` and (b) wires the resulting plasma
-field to :class:`~vmec_jax.core.coils.CoilSet` / :class:`~vmec_jax.core.mgrid.MgridField`
-external fields to form the differentiable residual.
+field to an :class:`~vmec_jax.core.mgrid.MgridField` or a plain ``xyz->B``
+callable (e.g. an ESSOS ``essos.coils.Coils`` Biot-Savart field) to form the
+differentiable residual.
 
 Key structural fact that makes this cheap and well-posed: for a **fixed trial
 boundary** the plasma's own field on that boundary does not depend on the coil
 dofs, so it is precomputed **once** via the accurate on-surface virtual-casing
 integral and frozen as a constant.  The residual is then a smooth JAX function of
-the external-field dofs alone — a ``CoilSet``'s Fourier dofs / currents or an
-``MgridField``'s ``extcur`` — and FD-validates to ~1e-9 (see
-``tests/test_freeboundary_diff.py``).
+the external-field dofs alone — an ``MgridField``'s ``extcur``, or the dofs of a
+callable coil field (e.g. an ESSOS ``Coils``' Fourier dofs / currents) — and
+FD-validates to ~1e-9 (see ``tests/test_freeboundary_diff.py``).
 
 The full single-stage piece — letting the boundary *shape* dofs vary, so the
 plasma field itself depends on them through a re-solve — is now supported:
@@ -59,7 +60,6 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from .coils import CoilSet, biot_savart
 from .mgrid import MgridField
 
 try:  # optional dependency (uwplasma/virtual_casing_jax)
@@ -507,21 +507,15 @@ def external_B_cartesian(
 
     Dispatches on the external-field type, staying differentiable in its dofs:
 
-    - :class:`~vmec_jax.core.coils.CoilSet`  -> Biot-Savart (diff. in Fourier dofs
-      and currents),
     - :class:`~vmec_jax.core.mgrid.MgridField` -> trilinear mgrid (diff. in
       ``extcur``),
-    - a plain callable ``xyz(..., 3) -> B(..., 3)``.
+    - a plain callable ``xyz(..., 3) -> B(..., 3)`` (e.g. an ESSOS ``Coils``
+      Biot-Savart field, ``lambda pts: coils.B(pts)``; diff. in its own dofs).
 
     Returns ``(3, nphi, ntheta)``.
     """
 
     x, y, z = gamma[0], gamma[1], gamma[2]
-
-    if isinstance(external_field, CoilSet):
-        pts = jnp.stack([x, y, z], axis=-1)           # (nphi, ntheta, 3)
-        B = biot_savart(external_field, pts)          # (nphi, ntheta, 3)
-        return jnp.moveaxis(B, -1, 0)                 # (3, nphi, ntheta)
 
     if isinstance(external_field, MgridField):
         r = jnp.sqrt(x * x + y * y)
@@ -538,7 +532,7 @@ def external_B_cartesian(
         return jnp.moveaxis(B, -1, 0) if B.shape[-1] == 3 else B
 
     raise TypeError(
-        f"external_field must be a CoilSet, MgridField or callable, got {type(external_field).__name__}"
+        f"external_field must be an MgridField or callable, got {type(external_field).__name__}"
     )
 
 
@@ -723,8 +717,8 @@ def value_and_grad_bnormal(
 ) -> tuple[jax.Array, Any]:
     """``(J, dJ/d external_field)`` of the normal-field objective via ``jax.value_and_grad``.
 
-    ``external_field`` is a pytree (``CoilSet`` / ``MgridField``); the gradient has
-    the same structure (Fourier dofs + currents, or ``extcur``).
+    ``external_field`` is a pytree (an ``MgridField``, or a callable closing over
+    coil dofs); the gradient has the same structure (``extcur``, or the coil dofs).
     """
 
     def fun(ef: Any) -> jax.Array:

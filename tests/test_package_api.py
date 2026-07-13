@@ -17,9 +17,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import jax.numpy as jnp
+
 import vmec_jax
 from vmec_jax.core import cli
 from vmec_jax.core.errors import VmecInputError
+from vmec_jax.core.mgrid import MgridField
 
 
 # ---------------------------------------------------------------------------
@@ -113,30 +116,35 @@ def _coils_payload():
     }
 
 
-def test_load_coilset_json_and_npz(tmp_path):
+def test_coils_mgrid_field_json_and_npz(tmp_path):
+    # vmec_jax is coil-agnostic: --coils loads ESSOS coils and tabulates them
+    # into an in-memory mgrid, returning a plain MgridField.
+    pytest.importorskip("essos")
     payload = _coils_payload()
 
     jpath = tmp_path / "coils.json"
     jpath.write_text(json.dumps(payload))
-    coils_j = cli._load_coilset(jpath)
-    assert coils_j.n_segments == 32
-    assert coils_j.nfp == 4
-    assert coils_j.stellsym is True
+    field_j = cli._coils_mgrid_field(jpath, nr=12, nphi=6, nz=12)
+    assert isinstance(field_j, MgridField)
 
     npath = tmp_path / "coils.npz"
     np.savez(npath, **{k: np.asarray(v) for k, v in payload.items()})
-    coils_n = cli._load_coilset(npath)
-    np.testing.assert_allclose(np.asarray(coils_n.base_curve_dofs),
-                               np.asarray(coils_j.base_curve_dofs))
-    np.testing.assert_allclose(np.asarray(coils_n.base_currents), [1.0e5, 2.0e5])
-    assert float(coils_n.current_scale) == 2.0
+    field_n = cli._coils_mgrid_field(npath, nr=12, nphi=6, nz=12)
+    assert isinstance(field_n, MgridField)
+
+    # A usable field: finite Biot-Savart at an interior cylindrical point.
+    r = 0.5 * (float(field_n.rmin) + float(field_n.rmax))
+    z = 0.5 * (float(field_n.zmin) + float(field_n.zmax))
+    br, bp, bz = field_n.b_cyl(jnp.asarray(r), jnp.asarray(0.0), jnp.asarray(z))
+    assert all(bool(np.isfinite(np.asarray(c))) for c in (br, bp, bz))
 
 
-def test_load_coilset_rejects_malformed_file(tmp_path):
+def test_coils_mgrid_field_rejects_malformed_file(tmp_path):
+    pytest.importorskip("essos")
     bad = tmp_path / "coils.json"
     bad.write_text(json.dumps({"not_dofs": []}))
     with pytest.raises(VmecInputError):
-        cli._load_coilset(bad)
+        cli._coils_mgrid_field(bad)
 
 
 # ---------------------------------------------------------------------------

@@ -1,23 +1,23 @@
 #!/usr/bin/env python
-"""Free-boundary pressure scan directly from ESSOS coils -- no mgrid file.
+"""Free-boundary pressure scan from ESSOS coils via an in-memory mgrid.
 
-vmec_jax can take the external field of a free-boundary solve straight from a
-coil set: ``CoilSet.b_cyl`` evaluates a JAX Biot-Savart at exactly the points
-NESTOR asks for, every vacuum iteration.  No field grid, no interpolation
-error, no intermediate file -- and the coils stay differentiable end-to-end.
-(The classic two-step route still works: tabulate the coil field once with
-``vmec_jax.core.coils.to_mgrid_data`` + ``vmec_jax.core.mgrid.write_mgrid``
-and pass ``mgrid_path=...`` instead of ``external_field=...``.)
+vmec_jax is coil-agnostic: coils live in ESSOS (``essos.coils.Coils``), and the
+free-boundary solver consumes only a magnetic-field grid.  Here we take the
+Landreman & Paul (2021) precise-QA coil set as optimized in ESSOS
+(github.com/uwplasma/ESSOS, bundled as a 3 KB JSON), tabulate its Biot-Savart
+field once onto a cylindrical grid bracketing the plasma
+(``essos.coils.Coils.to_mgrid``), and read it straight back into a
+:class:`vmec_jax.core.mgrid.MgridField` -- no standalone mgrid file left on disk,
+no ESSOS import inside the solve.  That ``MgridField`` supplies the external
+field for every NESTOR vacuum iteration.
 
-The coils are the Landreman & Paul (2021) precise-QA set as optimized in
-ESSOS (github.com/uwplasma/ESSOS), bundled here as a 3 KB JSON.  Holding
-their currents fixed, we ramp a parabolic pressure ``p(s) = PRES_SCALE(1-s)``
-and *calibrate* PRES_SCALE at each step so the converged equilibrium's actual
-volume-average beta (wout ``betatotal``) lands on 0, 1, 2, 3 % -- a nominal
-pressure is not enough, because at fixed coil currents the plasma dilates and
-shifts as beta rises, feeding back on <B^2>.  Each pressure step warm-starts
-from the previous accepted boundary (how experiments ramp, and much more
-robust than re-solving from the vacuum guess).
+Holding the coil currents fixed, we ramp a parabolic pressure
+``p(s) = PRES_SCALE(1-s)`` and *calibrate* PRES_SCALE at each step so the
+converged equilibrium's actual volume-average beta (wout ``betatotal``) lands on
+0, 1, 2, 3 % -- a nominal pressure is not enough, because at fixed coil currents
+the plasma dilates and shifts as beta rises, feeding back on <B^2>.  Each
+pressure step warm-starts from the previous accepted boundary (how experiments
+ramp, and much more robust than re-solving from the vacuum guess).
 
 Physics: nfp=2 precise-QA plasma held by 16 modular coils; watch the
 Shafranov shift (axis moves outboard) and the LCFS response as beta rises.
@@ -27,6 +27,7 @@ calibration attempt); the CI budget solves a single beta point coarsely.
 
 import dataclasses
 import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -51,10 +52,20 @@ if CI:  # smoke budget: one finite-beta point on a coarse grid
 # --------------------------- coils -> external field ------------------------
 from essos.coils import Coils_from_json  # noqa: E402 (optional heavy import)
 
-coils = vj.CoilSet.from_essos(Coils_from_json(str(COILS_JSON)), chunk_size=256)
-mean_current = float(np.mean(np.abs(np.asarray(coils.base_currents)))) * coils.current_scale
-print(f"ESSOS coils: {coils.n_coils} filaments after nfp={coils.nfp}/stellsym "
+coils = Coils_from_json(str(COILS_JSON))
+currents = np.asarray(coils.currents)  # symmetry-expanded physical currents [A]
+mean_current = float(np.mean(np.abs(currents)))
+print(f"ESSOS coils: {currents.shape[0]} filaments after nfp={coils.nfp}/stellsym "
       f"expansion, I ~ {mean_current:,.0f} A")
+
+# Tabulate the coil field once onto a cylindrical grid bracketing the plasma
+# (R in [0.45, 1.55], Z in [-0.6, 0.6]) and read it straight back as an
+# MgridField -- the external field vmec_jax's free-boundary solver consumes.
+with tempfile.TemporaryDirectory() as _tmp:
+    _mgrid_path = Path(_tmp) / "essos_LP_QA_mgrid.nc"
+    coils.to_mgrid(str(_mgrid_path), nr=96, nphi=32, nz=96,
+                   rmin=0.45, rmax=1.55, zmin=-0.6, zmax=0.6)
+    coil_field = vj.MgridField.from_mgrid_data(vj.read_mgrid(_mgrid_path))
 
 # --------------------------- plasma deck ------------------------------------
 # The fixed-boundary LP-QA deck only seeds the initial guess; truncate it to
@@ -93,7 +104,7 @@ for target in TARGET_BETAS:
     ps = target / SLOPE
     for attempt in range(3):  # solve, read actual beta, rescale (~linear)
         inp_i = dataclasses.replace(current, pres_scale=ps)
-        res = vj.solve_free_boundary(inp_i, external_field=coils,
+        res = vj.solve_free_boundary(inp_i, external_field=coil_field,
                                      error_on_no_convergence=False)
         wout = vj.wout_from_state(
             inp=inp_i, state=res.state, fsqr=float(res.fsqr), fsqz=float(res.fsqz),
@@ -141,7 +152,7 @@ if not CI:
             ylabel="axis Shafranov shift at $\\phi=0$ [cm]", title="Shafranov shift")
     ax2.grid(alpha=0.25, lw=0.5)
     ax2.legend(*ax.get_legend_handles_labels(), loc="upper left", fontsize=9, frameon=False)
-    fig.suptitle("Free-boundary LP-QA from ESSOS coils (direct JAX Biot-Savart, no mgrid)")
+    fig.suptitle("Free-boundary LP-QA from ESSOS coils (tabulated to an in-memory mgrid)")
     fig.tight_layout()
     fig_path = OUT_DIR / "essos_beta_scan.png"
     fig.savefig(fig_path)

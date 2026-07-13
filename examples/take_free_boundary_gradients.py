@@ -14,7 +14,8 @@ the residual becomes a plain JAX function of the external-field dofs — so
 Steps:
   1. read a converged free-boundary wout (the cth-like nfp=5 case),
   2. build the virtual-casing free-boundary problem (precomputes B_plasma),
-  3. gradient of <(B.n)^2> w.r.t. ``extcur`` (mgrid) and coil Fourier dofs (CoilSet),
+  3. gradient of <(B.n)^2> w.r.t. ``extcur`` (mgrid) and coil Fourier dofs (ESSOS
+     coils, consumed through the plain ``xyz->B`` callable interface),
   4. finite-difference check of both.
 
 Requires the optional dependency ``virtual_casing_jax`` (``pip install -e
@@ -30,7 +31,6 @@ import jax
 jax.config.update("jax_enable_x64", True)  # virtual casing wants float64
 import jax.numpy as jnp  # noqa: E402
 
-from vmec_jax.core import coils as C  # noqa: E402
 from vmec_jax.core import freeboundary_diff as FBD  # noqa: E402
 from vmec_jax.core.mgrid import MgridField, read_mgrid  # noqa: E402
 from vmec_jax.core.wout import read_wout  # noqa: E402
@@ -78,13 +78,14 @@ def main() -> None:
     else:
         print(f"\n[extcur]  skipped (missing {MGRID.name}; run tools/fetch_assets.py)")
 
-    # 3b. gradient w.r.t. coil Fourier dofs (a simple in-code circular coil set)
-    cs = _circular_coilset(nfp=int(wout.nfp))
+    # 3b. gradient w.r.t. coil Fourier dofs (a simple in-code circular ESSOS coil
+    # set, consumed through the generic xyz->B callable interface).
+    nfp = int(wout.nfp)
+    d0, currents = _circular_coil_dofs(nfp=nfp)
 
     def J_dofs(dofs):
-        return prob.bnormal_objective(cs.with_arrays(base_curve_dofs=dofs))
+        return prob.bnormal_objective(_essos_coil_field(dofs, currents, nfp=nfp))
 
-    d0 = cs.base_curve_dofs
     g = jax.grad(J_dofs)(d0)
     v = jnp.asarray(np.random.default_rng(0).standard_normal(d0.shape))
     h = 1e-6
@@ -96,15 +97,34 @@ def main() -> None:
     print("\nGradients FD-validate: the free-boundary residual is differentiable in the coil/extcur dofs.")
 
 
-def _circular_coilset(ncoils: int = 3, order: int = 1, R0: float = 0.75, a: float = 0.35, nfp: int = 5) -> "C.CoilSet":
+def _circular_coil_dofs(ncoils: int = 3, order: int = 1, R0: float = 0.75, a: float = 0.35, nfp: int = 5):
+    """Circular coil Fourier dofs + currents (the ESSOS ``Curves`` convention)."""
     dofs = np.zeros((ncoils, 3, 2 * order + 1))
     for i in range(ncoils):
         p0 = (i + 0.5) * (2 * np.pi / nfp) / (2 * ncoils)  # first half period (stellsym expands the rest)
         dofs[i, 0, 0], dofs[i, 0, 2] = R0 * np.cos(p0), a * np.cos(p0)
         dofs[i, 1, 0], dofs[i, 1, 2] = R0 * np.sin(p0), a * np.sin(p0)
         dofs[i, 2, 1] = a
-    return C.CoilSet(base_curve_dofs=jnp.asarray(dofs), base_currents=jnp.full(ncoils, 1.0e5),
-                     n_segments=80, nfp=nfp, stellsym=True)
+    return jnp.asarray(dofs), jnp.full(ncoils, 1.0e5)
+
+
+def _essos_coil_field(dofs, currents, *, nfp: int, n_segments: int = 80, stellsym: bool = True):
+    """A generic ``xyz(...,3) -> B(...,3)`` callable from ESSOS coils.
+
+    vmec_jax keeps no coil code; the differentiable free-boundary residual takes
+    coils through this plain-callable interface.  Rebuilding the ESSOS ``Coils``
+    inside the closure lets ``jax.grad`` thread through
+    ``essos.coils.Coils`` -> ``essos.fields.BiotSavart`` to the coil Fourier dofs.
+    """
+    from essos.coils import Coils, Curves
+    from essos.fields import BiotSavart
+
+    bs = BiotSavart(Coils(Curves(dofs, n_segments, nfp, stellsym), currents))
+
+    def field(pts):
+        return jax.vmap(bs.B)(pts.reshape(-1, 3)).reshape(pts.shape)
+
+    return field
 
 
 def _table(names, ad, fd) -> None:

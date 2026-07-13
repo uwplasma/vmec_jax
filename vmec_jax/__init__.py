@@ -11,7 +11,8 @@ Public API (lazily imported; ``import vmec_jax as vj``):
 - :func:`~vmec_jax.core.plotting.plot_wout` / :func:`~vmec_jax.core.plotting.plot_boozmn`
 - :func:`~vmec_jax.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
 - :func:`~vmec_jax.core.mgrid.read_mgrid` / :func:`~vmec_jax.core.mgrid.write_mgrid`
-  / :class:`~vmec_jax.core.mgrid.MgridField` / :class:`~vmec_jax.core.coils.CoilSet`
+  / :class:`~vmec_jax.core.mgrid.MgridField` (external field is an mgrid or any
+  ``xyz->B`` callable; coils live in ESSOS, ``essos.coils.Coils``)
 - ``vmec_jax.optimize`` — objectives + least-squares driver (module)
 - ``vmec_jax.implicit`` — implicit differentiation of the equilibrium (module)
 - ``vmec_jax.errors`` — typed zero-crash exceptions (also exported directly)
@@ -92,7 +93,6 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "plot_boozmn": (".core.plotting", "plot_boozmn"),
     "run_booz_xform": (".core.boozer", "run_booz_xform"),
     # external fields
-    "CoilSet": (".core.coils", "CoilSet"),
     "MgridData": (".core.mgrid", "MgridData"),
     "MgridField": (".core.mgrid", "MgridField"),
     "read_mgrid": (".core.mgrid", "read_mgrid"),

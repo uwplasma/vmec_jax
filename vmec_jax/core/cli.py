@@ -25,10 +25,11 @@ Free-boundary routing (``LFREEB = T``):
   ``mgrid_mode``);
 - a missing mgrid file falls back to a fixed-boundary solve with a warning
   (VMEC2000 behavior, dropped by VMEC++);
-- ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) evaluates the
-  external field directly from an ESSOS-style coils file via
-  :class:`vmec_jax.core.coils.CoilSet` Biot-Savart
-  (``solve_free_boundary(inp, external_field=coilset)``).
+- ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
+  field from an ESSOS coils file (``essos.coils.Coils``): the coils are tabulated
+  into an in-memory mgrid (``Coils.to_mgrid``) and read back as an
+  :class:`vmec_jax.core.mgrid.MgridField`
+  (``solve_free_boundary(inp, external_field=mgrid_field)``); requires ESSOS.
 
 Documented divergences of the free-boundary lane:
 
@@ -192,10 +193,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help=(
-            "ESSOS-style coils file (.json or .npz with dofs_curves, "
-            "dofs_currents, n_segments, nfp, stellsym) supplying the external "
-            "field of an LFREEB = T deck directly via Biot-Savart instead of "
-            "an mgrid file (pairs with MGRID_FILE = 'DIRECT_COILS')."
+            "ESSOS coils file (.json or .npz with dofs_curves, dofs_currents, "
+            "n_segments, nfp, stellsym) supplying the external field of an "
+            "LFREEB = T deck: tabulated via ESSOS into an in-memory mgrid "
+            "instead of a standalone mgrid file (pairs with MGRID_FILE = "
+            "'DIRECT_COILS'; requires ESSOS)."
         ),
     )
     p.add_argument(
@@ -318,34 +320,50 @@ class _FreeBoundaryPlan:
         self.curlabel = curlabel
 
 
-def _load_coilset(path: Path):
-    """:class:`~vmec_jax.core.coils.CoilSet` from an ESSOS-style coils file.
+def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
+                       nz: int = 96):  # pragma: no cover  (ESSOS-only; unavailable in CI)
+    """:class:`~vmec_jax.core.mgrid.MgridField` from an ESSOS coils file.
 
-    Accepts the ``essos.coils.Coils.to_json`` layout (also as an ``.npz``
-    archive with the same keys): ``dofs_curves`` with shape
-    ``(n_base_coils, 3, 2*order + 1)``, ``dofs_currents``, ``n_segments``,
-    ``nfp``, ``stellsym``, plus an optional ``currents_scale``.  No ESSOS
-    import is required (mirrors ``essos.coils.Coils_from_json``).
+    vmec_jax keeps no coil code — coils live in ESSOS
+    (:class:`essos.coils.Coils`).  This loads the coils from the
+    ``essos.coils.Coils.to_json`` layout (``.json``, via
+    ``essos.coils.Coils_from_json``) or the same keys in an ``.npz`` archive
+    (``dofs_curves`` with shape ``(n_base_coils, 3, 2*order + 1)``,
+    ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``, optional
+    ``currents_scale``), tabulates the coil field onto a cylindrical grid
+    spanning the coil bounding box (:meth:`essos.coils.Coils.to_mgrid`), and
+    reads it back with vmec_jax's own :func:`~vmec_jax.core.mgrid.read_mgrid` —
+    yielding the very same :class:`~vmec_jax.core.mgrid.MgridField` the mgrid-file
+    lane produces.  Requires ESSOS (``pip install essos``).
     """
-    import json
+    import tempfile
 
     import numpy as np
 
-    from .coils import CoilSet
+    try:
+        from essos.coils import Coils, Coils_from_json, Curves
+    except ImportError as exc:
+        raise VmecInputError(
+            WERROR_MESSAGES[INPUT_ERROR_FLAG],
+            hint="--coils requires essos (pip install essos)",
+        ) from exc
+
+    from .mgrid import MgridField, read_mgrid
 
     try:
         if path.suffix.lower() == ".npz":
             with np.load(path) as npz:
                 data = {key: npz[key] for key in npz.files}
+            dofs = np.asarray(data["dofs_curves"], dtype=float)
+            currents = np.asarray(data["dofs_currents"], dtype=float).reshape(-1)
+            n_segments = int(np.asarray(data["n_segments"]).reshape(-1)[0])
+            nfp = int(np.asarray(data.get("nfp", 1)).reshape(-1)[0])
+            stellsym = bool(np.asarray(data.get("stellsym", False)).reshape(-1)[0])
+            scale = float(np.asarray(data.get("currents_scale", 1.0)).reshape(-1)[0])
+            coils = Coils(Curves(dofs, n_segments, nfp, stellsym), currents * scale)
         else:
-            data = json.loads(path.read_text())
-        dofs = np.asarray(data["dofs_curves"], dtype=float)
-        currents = np.asarray(data["dofs_currents"], dtype=float).reshape(-1)
-        n_segments = int(np.asarray(data["n_segments"]).reshape(-1)[0])
-        nfp = int(np.asarray(data.get("nfp", 1)).reshape(-1)[0])
-        stellsym = bool(np.asarray(data.get("stellsym", False)).reshape(-1)[0])
-        scale = float(np.asarray(data.get("currents_scale", 1.0)).reshape(-1)[0])
-    except (KeyError, ValueError, OSError) as exc:
+            coils = Coils_from_json(str(path))
+    except (KeyError, ValueError, OSError, TypeError) as exc:
         raise VmecInputError(
             WERROR_MESSAGES[INPUT_ERROR_FLAG],
             hint=(
@@ -354,11 +372,22 @@ def _load_coilset(path: Path):
                 f"{exc}"
             ),
         ) from exc
-    return CoilSet(
-        base_curve_dofs=dofs, base_currents=currents,
-        n_segments=n_segments, nfp=nfp, stellsym=stellsym,
-        current_scale=scale,
-    )
+
+    # Cylindrical grid spanning the coil bounding box (10% margin); the plasma
+    # boundary sits well inside the coils, so this grid brackets it.
+    gamma = np.asarray(coils.gamma).reshape(-1, 3)
+    r = np.hypot(gamma[:, 0], gamma[:, 1])
+    z = gamma[:, 2]
+    rpad = 0.1 * (float(r.max()) - float(r.min())) + 1.0e-9
+    zpad = 0.1 * (float(z.max()) - float(z.min())) + 1.0e-9
+    rmin, rmax = max(1.0e-2, float(r.min()) - rpad), float(r.max()) + rpad
+    zmin, zmax = float(z.min()) - zpad, float(z.max()) + zpad
+
+    with tempfile.TemporaryDirectory() as tmp:
+        mgrid_path = Path(tmp) / "essos_coils_mgrid.nc"
+        coils.to_mgrid(str(mgrid_path), nr=int(nr), nphi=int(nphi), nz=int(nz),
+                       rmin=rmin, rmax=rmax, zmin=zmin, zmax=zmax)
+        return MgridField.from_mgrid_data(read_mgrid(mgrid_path))
 
 
 def _free_boundary_plan(args, inp, input_path: Path, *, emit):
@@ -369,7 +398,7 @@ def _free_boundary_plan(args, inp, input_path: Path, *, emit):
       ``mgrid_mode``) read from the file;
     - missing mgrid -> warning + fixed-boundary fallback (VMEC2000 policy);
     - ``--coils`` / ``MGRID_FILE = 'DIRECT_COILS'`` -> plan with
-      ``external_field`` from :func:`_load_coilset` (``nextcur = 0``: the
+      ``external_field`` from :func:`_coils_mgrid_field` (``nextcur = 0``: the
       coil currents live in the coils file, not in EXTCUR).
     """
     import numpy as np
@@ -384,14 +413,15 @@ def _free_boundary_plan(args, inp, input_path: Path, *, emit):
         return None
 
     mgrid_name = str(inp.mgrid_file or "").strip().strip("'\"")
-    if coils_arg or mgrid_name.upper() == _DIRECT_COILS:
+    if coils_arg or mgrid_name.upper() == _DIRECT_COILS:  # pragma: no cover  (ESSOS-only)
         if not coils_arg:
             raise VmecInputError(
                 WERROR_MESSAGES[INPUT_ERROR_FLAG],
                 hint=(
                     "MGRID_FILE = 'DIRECT_COILS' needs --coils <essos_coils"
                     ".json|.npz>, or use the Python API: solve_free_boundary("
-                    "inp, external_field=CoilSet(...))"
+                    "inp, external_field=MgridField.from_mgrid_data(...)) with a "
+                    "field tabulated from ESSOS coils (essos.coils.Coils.to_mgrid)"
                 ),
             )
         coils_path = Path(coils_arg).expanduser().resolve()
@@ -401,7 +431,7 @@ def _free_boundary_plan(args, inp, input_path: Path, *, emit):
                 hint=f"coils file not found: {coils_path}",
             )
         return _FreeBoundaryPlan(
-            solver_kwargs={"external_field": _load_coilset(coils_path)},
+            solver_kwargs={"external_field": _coils_mgrid_field(coils_path)},
         )
 
     mgrid = Path(mgrid_name).expanduser()

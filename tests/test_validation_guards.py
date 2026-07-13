@@ -17,7 +17,6 @@ import pytest
 import jax.numpy as jnp
 
 from vmec_jax.core import boozer, optimize as opt
-from vmec_jax.core.coils import CoilSet
 from vmec_jax.core.fourier import Resolution
 from vmec_jax.core.input import _read_indata_text, _parse_scalar
 
@@ -53,47 +52,6 @@ def test_parse_scalar_fortran_conventions():
     assert _parse_scalar("42") == 42
     assert _parse_scalar("1.5D-3") == pytest.approx(1.5e-3)
     assert _parse_scalar("'text'") == "'text'" or isinstance(_parse_scalar("'text'"), str)
-
-
-# ---------------------------------------------------------------------------
-# coils.CoilSet.from_essos validation + field-evaluation aliases
-# ---------------------------------------------------------------------------
-
-
-def _fake_essos(dofs_shape=(2, 3, 5), n_currents=2):
-    rng = np.random.default_rng(1)
-    return SimpleNamespace(
-        dofs_curves=rng.normal(size=dofs_shape),
-        dofs_currents=np.full(n_currents, 1.0e5),
-        n_segments=16, nfp=2, stellsym=True, currents_scale=1.0,
-    )
-
-
-def test_from_essos_validates_shapes():
-    with pytest.raises(ValueError, match="dofs_curves"):
-        CoilSet.from_essos(_fake_essos(dofs_shape=(2, 3, 4)))  # even dof count
-    with pytest.raises(ValueError, match="dofs_curves"):
-        CoilSet.from_essos(_fake_essos(dofs_shape=(2, 2, 5)))  # not xyz
-    with pytest.raises(ValueError, match="dofs_currents length"):
-        CoilSet.from_essos(_fake_essos(n_currents=3))
-    bad = _fake_essos()
-    bad.dofs_currents = np.ones((2, 1))
-    with pytest.raises(ValueError, match="dofs_currents"):
-        CoilSet.from_essos(bad)
-    with pytest.raises(ValueError, match="chunk_size"):
-        CoilSet.from_essos(_fake_essos(), chunk_size=0)
-
-
-def test_coilset_properties_and_field_aliases():
-    coils = CoilSet.from_essos(_fake_essos())
-    assert coils.order == 2
-    b = np.asarray(coils.b_xyz(np.asarray([[10.0, 0.0, 0.0]])))
-    assert b.shape == (1, 3)
-    assert np.all(np.isfinite(b))
-    br, bp, bz = coils.b_cyl(jnp.asarray([10.0]), jnp.asarray([0.0]), jnp.asarray([0.0]))
-    # cylindrical components at phi=0 are a rotation of the Cartesian field
-    assert float(br[0]) == pytest.approx(float(b[0, 0]), abs=1e-12)
-    assert float(bz[0]) == pytest.approx(float(b[0, 2]), abs=1e-12)
 
 
 # ---------------------------------------------------------------------------

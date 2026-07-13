@@ -272,8 +272,8 @@ VMEC++ example layouts).**
 initial→progress→final, teaches one feature) and is CI-smoke-tested (reduced budget) + doubles as the
 docs tutorial (R14.3). Target set:
   - `run_fixed_boundary.py` (exists), `run_from_json.py` (VMEC++ JSON in/out + convert),
-  - `free_boundary_mgrid.py` (mgrid path), `free_boundary_essos_coils.py` (direct Biot-Savart, no
-    mgrid; needs ESSOS), `free_boundary_beta_scan.py` (β=0..5% hot-restarted; the README β-scan),
+  - `free_boundary_mgrid.py` (mgrid path), `free_boundary_essos_coils.py` (ESSOS coils tabulated to
+    an in-memory mgrid; needs ESSOS), `free_boundary_beta_scan.py` (β=0..5% hot-restarted; the README β-scan),
   - `profiles_power_and_spline.py` (power_series vs cubic/akima; pressure/iota/current; ncurr=0 vs 1),
   - `finite_beta_scan.py` (pressure ramp; beta, Mercier, Shafranov shift),
   - `take_gradients.py` (implicit d(aspect|iota|QS)/d(boundary|profile) vs FD; jacrev usage),
@@ -637,8 +637,8 @@ R9 release and the VMEX rename R21).** Ten items (+k added 2026-07-12):
            arXiv:2211.09829), reusing the in-tree Boozer transform — fixes the documented "QI not
            precise" weakness. Touches optimize.py — AFTER R25.3 merges.
        h3. **Single-stage plasma–coil optimization with exact gradients**, using ESSOS from
-           github.com/uwplasma/ESSOS for the coil side (differentiable Biot-Savart already in-tree via
-           CoilSet.from_essos) + virtual casing + implicit diff composed end-to-end.
+           github.com/uwplasma/ESSOS for the coil side (differentiable Biot-Savart from ESSOS coils,
+           consumed as an mgrid or xyz->B callable) + virtual casing + implicit diff composed end-to-end.
        h4. **Turbulence proxies from spectrax-gk (github.com/uwplasma/spectrax-gk)** — its available
            LINEAR, NONLINEAR and QUASILINEAR proxies wired as optimization objectives on vmec_jax
            geometry.
@@ -1082,7 +1082,8 @@ vmec_jax/
   vacuum.py         # NESTOR: Green's function, analyt/scalpot, potvac solve              (NESTOR_vacuum/)
   freeboundary.py   # free-boundary iteration, ivac/nvacskip cadence, MagneticField protocol
   mgrid.py          # mgrid netCDF read/write, interpolated MagneticField
-  coils.py          # ESSOS bridge: coils -> direct Biot-Savart field, write_mgrid from coils
+  # (no in-tree coils module — coils live in ESSOS (essos.coils.Coils); the
+  #  external field is consumed as an mgrid or a generic xyz->B callable)
   implicit.py       # custom_vjp implicit differentiation of the equilibrium (Phase 4)
   wout.py           # wout writer/reader — full Appendix-A variable set incl. jxbforce, mercier, bss
   printing.py       # VMEC2000-format iteration lines, stage banners, threed1 summary     (printout.f)
