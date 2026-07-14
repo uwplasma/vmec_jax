@@ -142,6 +142,20 @@ external field.
 .. literalinclude:: ../examples/free_boundary_beta_scan.py
    :language: python
 
+Directly from ESSOS coils (no mgrid file)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+vmec-jax is coil-agnostic: the free-boundary solver consumes only a magnetic
+field, so coils can come from ESSOS (``essos.coils.Coils``) instead of a
+tabulated mgrid file.  This takes the Landreman–Paul precise-QA modular coil
+set, tabulates its Biot–Savart field once into an in-memory
+:class:`~vmec_jax.core.mgrid.MgridField`, and runs a free-boundary beta scan
+against it — calibrating ``PRES_SCALE`` per step so the converged wout
+``betatotal`` lands on 0/1/2/3 %.
+
+.. literalinclude:: ../examples/free_boundary_essos_coils.py
+   :language: python
+
 
 Optimization
 ------------
@@ -188,3 +202,21 @@ reproducible.
 
 These are the heaviest examples (hundreds to thousands of solves) and are
 exercised in the nightly CI run.
+
+Self-consistent bootstrap current
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A different loop: instead of reshaping the boundary, regenerate the *current
+profile* until it is consistent with the bootstrap current the plasma itself
+drives.  ``QA_bootstrap_selfconsistent.py`` (and its sibling
+``QH_bootstrap_selfconsistent.py``)
+reproduces the quasi-axisymmetric configuration of Landreman–Buller–Drevlak
+(arXiv:2205.02914): it erases the deck's current profile and lets the
+fixed-boundary Picard loop
+:func:`~vmec_jax.core.bootstrap.self_consistent_bootstrap` rebuild it from the
+Redl formula, converging to the paper's mismatch ``f_boot = 2e-6`` in a
+handful of hot-restarted iterations.  The physics of the Redl closure is on
+:doc:`confinement`.
+
+.. literalinclude:: ../examples/optimization/QA_bootstrap_selfconsistent.py
+   :language: python

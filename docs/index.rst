@@ -89,6 +89,7 @@ Documentation
       theory
       equations
       algorithms
+      confinement
       architecture
 
    .. toctree::

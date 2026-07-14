@@ -158,7 +158,13 @@ fixed-boundary degrees of freedom — boundary Fourier coefficients,
 ``phiedge``, and profile parameters (``pres_scale``) — on a 2D (solovev)
 and a 3D (li383) case, with agreement at the 1e-6 relative level (2D) and
 at the finite-difference noise floor (3D)
-(``tests/test_implicit_grad.py``).
+(``tests/test_implicit_grad.py``).  For *solver-sensitive* metrics (iota,
+mirror ratio, magnetic well, the QI residual) a naive re-solving finite
+difference is **not** a valid reference — it perturbs the solver's discrete
+convergence path, not just the fixed point — and the frozen-path FD
+(:func:`~vmec_jax.core.implicit.frozen_path_directional_fd`) must be used
+instead; see *Gradient checking: solver-sensitive metrics and the frozen
+path* in :doc:`algorithms`.
 
 Implicit gradients are not merely faster than finite differences here —
 on the flagship campaigns they are *necessary*: the exact-axisymmetric seed
@@ -265,6 +271,13 @@ values).  ``examples/single_stage_simultaneous_opt.py`` runs the full loop:
 from the bundled CTH-like free-boundary equilibrium it reshapes the boundary to
 move the edge rotational transform while re-tuning the coils to keep
 ``<(B.n)^2>`` small — one exact gradient over both dof families.
+``examples/single_stage_essos_coils_opt.py`` is the coil-agnostic variant of
+the same loop, driving the coil half straight from an ESSOS
+``essos.coils.Coils`` Biot–Savart callable (no mgrid file), and
+``examples/single_stage_free_boundary_opt.py`` is the coil-only half in
+isolation — perturb the confining coil currents of the bundled CTH-like case
+and recover them by minimizing ``<(B.n)^2>`` with the exact virtual-casing
+gradient (finite-difference-validated to ~1e-9).
 
 Worked results
 --------------

@@ -7,7 +7,10 @@ objective in ``vmec_jax`` is an ordinary function (or a small class) of a
 registration step.  This page catalogs the built-in objectives by physics
 area, shows a minimal usage snippet for each, and ends with the one table
 that matters in practice: which objectives support exact implicit gradients
-(``jac="implicit"``) and which need finite differences (``jac=None``).
+(``jac="implicit"``) and which need finite differences (``jac=None``).  The
+first-principles derivations of the metrics themselves — Boozer coordinates,
+the quasisymmetry two-term residual, the constructed-QI target, Mercier and
+the magnetic well — are on :doc:`confinement`.
 
 .. contents:: On this page
    :local:
@@ -138,6 +141,16 @@ single-call campaign — seed 4.5e-1 to 1.8e-2 (25x) in 17.3 minutes — is in
 :doc:`optimization`.  The earlier Goodman-style *wout-lane* residual
 (:func:`~vmec_jax.core.optimize.quasi_isodynamic_residual`, host NumPy,
 ``jac=None``) remains available for diagnostics and cross-checks.
+
+.. note::
+
+   The traceable ``QIResidual`` is tuned for *gradient flow*, not for
+   *labeling*: driven hard it reports an optimistic absolute value.  When
+   quoting how QI a finished configuration is, use the fully-resolved
+   wout/Boozer residual
+   :func:`~vmec_jax.core.optimize.quasi_isodynamic_residual_from_wout` —
+   optimize with the traceable form, report with the wout form.  See
+   :ref:`confinement-qi-fidelity`.
 
 Bootstrap current (Redl)
 ------------------------

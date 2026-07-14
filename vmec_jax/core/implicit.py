@@ -128,6 +128,7 @@ __all__ = [
     "implicit_state_pullback_multi_rhs", "run",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
     "iota_axis", "iota_edge", "residual_fn", "adjoint_matvec",
+    "frozen_path_directional_fd",
 ]
 
 Array = Any
