@@ -176,10 +176,13 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
 ### Free boundary straight from coils
 
 The "free boundary directly from coils" row is a workflow, not a checkbox:
-pass a `CoilSet` as `external_field=` and the NESTOR vacuum solve evaluates a
-JAX Biot-Savart at exactly the boundary points it needs, every iteration — no
-mgrid file, no grid-interpolation error, and the coil degrees of freedom stay
-differentiable end-to-end.
+tabulate an [ESSOS](https://github.com/uwplasma/ESSOS) coil set onto the solver
+grid in memory (`essos.coils.Coils.to_mgrid`) and pass it as `external_field=` —
+no MAKEGRID file to manage, no on-disk round-trip. For gradients the
+differentiable free boundary evaluates a JAX Biot-Savart at exactly the boundary
+points it needs, every iteration (a plain `xyz→B` callable), so the coil degrees
+of freedom stay differentiable end-to-end. vmec_jax keeps no coil code of its
+own; coils live in ESSOS.
 
 ![Free-boundary Landreman-Paul QA pressure scan directly from ESSOS coils](docs/_static/figures/readme_essos_beta_scan.png)
 
@@ -194,6 +197,28 @@ point so the **actual** volume-average beta of the converged wout
 axis Shafranov-shifts 14 cm outboard at the φ = 0 section (right panel) while
 the coils never move. Reproduce with
 `python examples/free_boundary_essos_coils.py`.*
+
+### Single-stage plasma + coil optimization
+
+The plasma boundary and the coils can be optimized **simultaneously**, driven by
+one exact gradient. A single `jax.value_and_grad` threads the implicit-adjoint
+derivative of the fixed-boundary equilibrium (boundary → converged VMEC state →
+physics targets) *and* the virtual-casing + Biot-Savart derivative of the coil
+field (coil currents → `B·n` on the *moving* boundary) through one backward
+pass — no finite differences, no nested inner/outer loop.
+
+![Single-stage plasma+coil optimization, vacuum and finite beta](docs/_static/figures/readme_single_stage.png)
+
+*The Landreman–Paul QA plasma boundary and the currents of its 16 ESSOS modular
+coils are co-optimized against one functional `J = w·⟨(B_ext·n)²⟩ +
+(ι_edge − ι*)²` — coil↔plasma consistency plus an edge-rotational-transform
+target — for a **vacuum** and a **finite-β** (⟨β⟩ = 1.4 %) case. One L-BFGS-B
+descent over the joint (boundary Fourier modes + coil currents) vector cuts J
+**6.6×** (vacuum) and **2.4×** (finite β): the boundary reshapes (blue vs grey
+dashed) and the coil currents retune together, with the joint gradient
+finite-difference validated. Coils come from ESSOS — vmec_jax stays
+coil-agnostic. Reproduce with
+`python examples/single_stage_essos_coils_opt.py`.*
 
 ## Code size
 

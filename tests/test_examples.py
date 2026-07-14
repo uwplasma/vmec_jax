@@ -267,3 +267,19 @@ def test_single_stage_free_boundary_opt(tmp_path):
     out = _run_example(EXAMPLES / "single_stage_free_boundary_opt.py", tmp_path, timeout=900)
     m = re.search(r"recovered to ([0-9.]+)% of the confining", out)
     assert m is not None and float(m.group(1)) < 5.0, f"coil recovery: {out[-400:]}"
+
+
+@pytest.mark.full  # nightly: true single-stage boundary+coil co-optimization, 2 cases
+def test_single_stage_essos_coils_opt(tmp_path):
+    # coil-agnostic single-stage: needs both the ESSOS coils and virtual_casing_jax
+    pytest.importorskip("essos")
+    pytest.importorskip("virtual_casing_jax")
+    out = _run_example(EXAMPLES / "single_stage_essos_coils_opt.py", tmp_path, timeout=1800)
+    # one machine-parseable "J <initial> -> <final>" line per case; each must drop
+    rows = re.findall(r"\[single_stage\] (\S+): J ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    assert len(rows) == 2, f"expected two single-stage cases, got {rows}\n{out[-800:]}"
+    for name, j0, jf in rows:
+        assert float(jf) < float(j0), f"{name}: single-stage J did not decrease ({j0} -> {jf})"
+    outdir = tmp_path / "output_single_stage_essos_coils_opt"
+    for name, _j0, _jf in rows:
+        assert (outdir / f"wout_{name}_final.nc").exists()

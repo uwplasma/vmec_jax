@@ -26,10 +26,16 @@ Produces (into ``docs/_static/figures/``):
 - ``readme_equilibrium_showcase.png`` — flux surfaces, 3-D boundary geometry
   coloured by ``|B|``, and ``|B|`` in Boozer coordinates on the LCFS (jet),
   for the bundled quick-start case (solves it in-process).
+- ``readme_single_stage.png``         — single-stage plasma + coil optimization
+  (vacuum and finite-beta columns): boundary initial-vs-final, and the final
+  LCFS coloured by ``|B|`` inside the ESSOS coil filaments.  Runs
+  ``examples/single_stage_essos_coils_opt.py`` once at full budget (~5-8
+  min/case, NOT a CI budget) and caches its outputs under
+  ``benchmarks/output_single_stage_essos_coils_opt/``.
 
 Usage:
     python benchmarks/make_readme_figures.py
-        [--only runtime,convergence,optimization,qi,precond,showcase]
+        [--only runtime,convergence,optimization,qi,precond,showcase,single_stage]
         [--outdir docs/_static/figures]
 
 Figures are written uncompressed; compress before committing:
@@ -40,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -877,11 +884,165 @@ def make_showcase_figure(out: Path) -> None:
     print("wrote", out)
 
 
+# --------------------------------------------------------------------------
+# 7. Single-stage plasma + coil optimization.  Runs the coil-agnostic example
+#    (examples/single_stage_essos_coils_opt.py) once at full budget to produce
+#    the saved initial/final wout + the fixed ESSOS coil geometry, then draws
+#    two columns (vacuum, finite beta): boundary initial-vs-final, and the final
+#    LCFS coloured by |B| inside the ESSOS coil filaments.
+# --------------------------------------------------------------------------
+
+SINGLE_STAGE_EXAMPLE = REPO / "examples" / "single_stage_essos_coils_opt.py"
+SINGLE_STAGE_OUT = REPO / "benchmarks" / "output_single_stage_essos_coils_opt"
+SINGLE_STAGE_CASES = [
+    ("A_vacuum", "QA  ·  vacuum"),
+    ("B_finite_beta", "QA  ·  finite $\\beta$"),
+]
+
+
+def _ensure_single_stage_outputs() -> dict:
+    """Return the example's summary, running it once (full budget) if absent.
+
+    The single-stage optimization is ~5-8 min/case, so its converged outputs are
+    cached under ``benchmarks/output_single_stage_essos_coils_opt/``; delete that
+    directory to re-optimize.  Returns ``{case_name: summary_row}``.
+    """
+    import subprocess
+    import sys
+
+    summ = SINGLE_STAGE_OUT / "summary.json"
+    need = [summ, SINGLE_STAGE_OUT / "coils_gamma.npy"]
+    for name, _ in SINGLE_STAGE_CASES:
+        need += [SINGLE_STAGE_OUT / f"wout_{name}_initial.nc",
+                 SINGLE_STAGE_OUT / f"wout_{name}_final.nc"]
+    if not all(p.exists() for p in need):
+        print("  optimizing single-stage cases (~5-8 min each, not a CI budget)...",
+              flush=True)
+        env = dict(os.environ)
+        env.pop("VMEC_JAX_EXAMPLES_CI", None)   # full budget, not the smoke run
+        proc = subprocess.run([sys.executable, str(SINGLE_STAGE_EXAMPLE)],
+                              cwd=str(REPO / "benchmarks"), env=env,
+                              capture_output=True, text=True, timeout=3600)
+        if proc.returncode != 0:
+            raise RuntimeError("single-stage example failed:\n"
+                               f"{proc.stdout[-3000:]}\n{proc.stderr[-2000:]}")
+    return {r["name"]: r for r in json.loads(summ.read_text())}
+
+
+def _plot_coils_and_lcfs(fig, ax3d, wout, gamma, nfp):
+    """Final LCFS coloured by |B| inside the fixed ESSOS coil filaments.
+
+    Same |B| surface recipe as :func:`_plot_3d_modB`, but the view is scaled to
+    the (larger) coil bounding box and the ESSOS filaments (``coils.gamma``, one
+    closed loop per coil) are overlaid.  Returns the (min, max) of |B|.
+    """
+    from matplotlib import cm
+    from matplotlib.colors import Normalize
+
+    from vmec_jax.core.plotting import surface_modB, surface_rz
+
+    ns = int(wout.ns)
+    thg = np.linspace(0, 2 * np.pi, 64)
+    phg = np.linspace(0, 2 * np.pi, min(240, 70 * nfp))
+    Rg, Zg = surface_rz(wout, s_index=ns - 1, theta=thg, phi=phg)
+    Bg = surface_modB(wout, s_index=ns - 1, theta=thg, phi=phg)
+    phi2d = np.meshgrid(phg, thg)[0]
+    Xg, Yg = Rg * np.cos(phi2d), Rg * np.sin(phi2d)
+    Bn = (Bg - Bg.min()) / (Bg.max() - Bg.min() + 1e-30)
+    ax3d.plot_surface(Xg, Yg, Zg, facecolors=cm.jet(Bn), rstride=1, cstride=1,
+                      antialiased=False, linewidth=0.0, shade=False)
+    for k in range(gamma.shape[0]):  # ESSOS filaments, closed loops (copper)
+        g = np.vstack([gamma[k], gamma[k, :1]])
+        ax3d.plot(g[:, 0], g[:, 1], g[:, 2], color="#b06a34", lw=1.0, alpha=0.9)
+    scale = 1.03 * float(max(np.abs(gamma[:, :, 0]).max(), np.abs(gamma[:, :, 1]).max()))
+    zmax = 1.05 * float(np.abs(gamma[:, :, 2]).max())
+    try:
+        ax3d.set_box_aspect((1, 1, zmax / scale), zoom=1.5)
+    except TypeError:  # older matplotlib without the zoom kwarg
+        ax3d.set_box_aspect((1, 1, zmax / scale))
+    ax3d.auto_scale_xyz([-scale, scale], [-scale, scale], [-zmax, zmax])
+    ax3d.view_init(elev=32, azim=-60)
+    ax3d.set_axis_off()
+    sm = cm.ScalarMappable(cmap="jet",
+                           norm=Normalize(float(Bg.min()), float(Bg.max())))
+    sm.set_array([])
+    cb = fig.colorbar(sm, ax=ax3d, pad=0.0, fraction=0.04, shrink=0.6)
+    cb.ax.tick_params(labelsize=6, colors=MUTED)
+    cb.outline.set_visible(False)
+    return float(Bg.min()), float(Bg.max())
+
+
+def make_single_stage_figure(out: Path) -> None:
+    import vmec_jax as vj
+    from vmec_jax.core.plotting import surface_rz
+
+    summary = _ensure_single_stage_outputs()
+    gamma = np.load(SINGLE_STAGE_OUT / "coils_gamma.npy")
+
+    ncol = len(SINGLE_STAGE_CASES)
+    fig = plt.figure(figsize=(3.1 * ncol, 7.3), dpi=150)
+    gs = fig.add_gridspec(2, ncol, height_ratios=[1.0, 1.35], hspace=0.34,
+                          wspace=0.30)
+    theta = np.linspace(0, 2 * np.pi, 241)
+
+    for col, (name, title) in enumerate(SINGLE_STAGE_CASES):
+        r = summary[name]
+        w_init = vj.read_wout(SINGLE_STAGE_OUT / f"wout_{name}_initial.nc")
+        w_final = vj.read_wout(SINGLE_STAGE_OUT / f"wout_{name}_final.nc")
+        nfp = int(w_final.nfp)
+        phi_arr = np.array([0.0, np.pi / nfp])  # phi = 0 and half field period
+
+        # -- row 0: boundary cross-sections, initial (grey) vs final (blue) ----
+        axb = fig.add_subplot(gs[0, col])
+        Ri, Zi = surface_rz(w_init, s_index=-1, theta=theta, phi=phi_arr)
+        Rf, Zf = surface_rz(w_final, s_index=-1, theta=theta, phi=phi_arr)
+        for k in range(phi_arr.size):
+            axb.plot(Ri[:, k], Zi[:, k], color=MUTED, lw=1.0, ls=(0, (4, 3)),
+                     alpha=0.85, label="initial" if k == 0 else None)
+        for k in range(phi_arr.size):
+            axb.plot(Rf[:, k], Zf[:, k], color=BLUE, lw=1.7,
+                     alpha=1.0 if k == 0 else 0.55,
+                     label=("final, $\\phi=0$" if k == 0 else "final, half period"))
+        axb.set_aspect("equal", adjustable="datalim")
+        axb.set_title(title, loc="left", fontsize=10.5, color=INK, pad=3)
+        axb.tick_params(labelsize=7)
+        for s in ("top", "right"):
+            axb.spines[s].set_visible(False)
+        if col == 0:
+            axb.set_ylabel("Z (m)", fontsize=8.5)
+        axb.set_xlabel("R (m)", fontsize=8.5)
+        axb.legend(loc="upper right", fontsize=6.5, handlelength=1.4,
+                   labelspacing=0.25, borderaxespad=0.1)
+        axb.annotate(f"J: {r['J0']:.2e} $\\to$ {r['Jf']:.2e}  ({r['ratio']:.1f}x)",
+                     xy=(0.5, -0.22), xycoords="axes fraction", ha="center",
+                     va="top", fontsize=8.5, color=GREEN_TEXT, fontweight="bold")
+        axb.annotate(f"$\\langle\\beta\\rangle$ = {r['beta']:.2f}%",
+                     xy=(0.98, 1.02), xycoords="axes fraction", ha="right",
+                     va="bottom", fontsize=8, color=MUTED)
+
+        # -- row 1: final LCFS coloured by |B| inside the ESSOS coils ----------
+        ax3d = fig.add_subplot(gs[1, col], projection="3d")
+        b_lo, b_hi = _plot_coils_and_lcfs(fig, ax3d, w_final, gamma, nfp)
+        print(f"  {name}: J {r['J0']:.3e} -> {r['Jf']:.3e} ({r['ratio']:.1f}x)  "
+              f"beta={r['beta']:.2f}%  |B|=[{b_lo:.2f},{b_hi:.2f}]T", flush=True)
+
+    fig.suptitle("Single-stage plasma + coil optimization", x=0.5, ha="center",
+                 fontsize=12.5, color=INK, y=0.995)
+    fig.text(0.5, 0.945, "top: boundary initial (grey) vs final (blue)   ·   "
+             "bottom: final LCFS |B| inside the ESSOS coil filaments",
+             ha="center", fontsize=8, color=MUTED)
+    fig.tight_layout(rect=(0, 0, 1, 0.925))
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    _compress_png(out)
+    print("wrote", out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--only",
-        default="runtime,convergence,optimization,qi,precond,showcase")
+        default="runtime,convergence,optimization,qi,precond,showcase,single_stage")
     ap.add_argument("--outdir", default=str(REPO / "docs" / "_static" / "figures"))
     args = ap.parse_args()
     outdir = Path(args.outdir)
@@ -900,6 +1061,8 @@ def main() -> None:
         make_precond_figure(outdir / "readme_precond.png")
     if "showcase" in which:
         make_showcase_figure(outdir / "readme_equilibrium_showcase.png")
+    if "single_stage" in which:
+        make_single_stage_figure(outdir / "readme_single_stage.png")
 
 
 if __name__ == "__main__":
