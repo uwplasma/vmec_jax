@@ -284,7 +284,7 @@ harmonics released at once; `examples/optimization/*_ess.py`; the staged
 |-------|-----|----------|------|----------|----------|------|--------|
 | QA | 2 | QS (1, 0)  | 2.04e-01 | **7.2e-06** | 5 | **14.5 min** | precise; aspect 6.00, iota 0.42 (ladder: 3.7e-07 in 25.5 min) |
 | QH | 4 | QS (1, −1) | 6.91e-01 | **5.83e-05** | 5 | 25.5 min (ladder) | precise; aspect 8.00, iota −1.22 |
-| QP | 2 | QS (0, 1)  | 4.46e-01 | 4.5e-02 | 5 | ~3.4 h (ladder) | hardest QS class — plateaus near 5e-2 |
+| QP | 2 | QS (0, 1)  | 4.46e-01 | 3.3e-02 | 5 | ~3.4 h (ladder + refinement) | hardest QS class — see caption |
 | QI | 1 | omnigenity | 4.52e-01 | **1.81e-02** | 6 | **17.3 min** | 25× via the traceable Goodman constructed-QI residual |
 
 ![QA/QH/QP optimization: seed vs optimized boundary, 3-D |B| geometry, and Boozer |B| on the LCFS](docs/_static/figures/readme_optimization.png)
@@ -295,8 +295,10 @@ is shaped into a quasi-symmetric stellarator (blue) by the least-squares driver
 coloured by `|B|`, and the bottom row is `|B|` in Boozer coordinates on the LCFS
 (jet line contours), whose contour geometry reads off the symmetry family —
 horizontal for QA, diagonal for QH, vertical for QP. `QS` is the quasisymmetry
-residual on the plotted equilibrium: (**1.1e-6** and **5.8e-5** — note QH's near-straight diagonal contours), while
-quasi-poloidal QP is the hardest class and plateaus near 5e-2 even at max_mode 5. Reproduce with
+residual measured on the plotted equilibrium: QA **1.1e-6**, QH **5.8e-5**
+(note QH's near-straight diagonal contours), QP **3.3e-2**. Quasi-poloidal QP
+is the hardest class: the ladder plateaus near 5e-2, and an extended
+warm-start refinement of the shipped deck reaches 3.3e-2. Reproduce with
 `python benchmarks/make_readme_figures.py --only optimization` from the decks
 in `benchmarks/opt_decks/`.*
 

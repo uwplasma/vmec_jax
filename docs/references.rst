@@ -68,3 +68,49 @@ Background and canonical references for VMEC and related equilibrium methods:
 18. M. Blondel et al., “Efficient and Modular Implicit Differentiation,”
     NeurIPS 2022 (jaxopt) — the implicit-function-theorem ``custom_vjp``
     formulation used for equilibrium gradients.
+
+Confinement objectives and optimization:
+
+19. M. Landreman and E. Paul, “Magnetic fields with precise quasisymmetry for
+    plasma confinement,” *Physical Review Letters* 128, 035001 (2022),
+    arXiv:2108.03711 — the two-term quasisymmetry ratio residual and the
+    precise-QA/QH configurations (:doc:`confinement`).
+
+20. A. Goodman et al., “Constructing precisely quasi-isodynamic magnetic
+    fields,” *Journal of Plasma Physics* 89(5), 905890504 (2023),
+    arXiv:2211.09829 — the constructed-QI target implemented by
+    :class:`~vmec_jax.core.omnigenity.QIResidual`.
+
+21. J. R. Cary and S. G. Shasharina, “Omnigenity and quasihelicity in helical
+    plasma confinement systems,” *Physics of Plasmas* 4, 3323 (1997) — the
+    bounce-integral formulation of omnigenity.
+
+22. D. Dudt et al., “Magnetic fields with general omnigenity,” *Journal of
+    Plasma Physics* 90(1), 905900120 (2024), arXiv:2305.08026 — omnigenity
+    optimization in a differentiable (DESC) framework.
+
+23. A. Redl et al., “A new set of analytical formulae for the computation of
+    the bootstrap current and the neoclassical conductivity in stellarators,”
+    *Physics of Plasmas* 28, 022502 (2021) — the Redl bootstrap closure.
+
+24. M. Landreman, S. Buller, and M. Drevlak, “Optimization of quasi-symmetric
+    stellarators with self-consistent bootstrap current and energetic particle
+    confinement,” *Physics of Plasmas* 29, 082501 (2022), arXiv:2205.02914 —
+    the self-consistent bootstrap iteration reproduced in
+    ``examples/optimization/*_bootstrap_selfconsistent.py``.
+
+25. R. Jorge, A. Goodman, M. Landreman, J. Rodrigues, and F. Wechsung,
+    “Single-stage stellarator optimization: combining coils with fixed
+    boundary equilibria,” *Plasma Physics and Controlled Fusion* 65, 074003
+    (2023), arXiv:2302.10622 — the combined plasma–coil objective
+    ``J = J_plasma + w_coils J_coils`` and the two-stage vs single-stage
+    comparison protocol used by the single-stage examples.
+
+26. R. Jorge, A. Giuliani, and J. Loizu, “Simplified and flexible coils for
+    stellarators using single-stage optimization,” arXiv:2406.07830 (2024) —
+    cold-start single-stage optimization with staged Fourier-mode release.
+
+27. F. Wechsung et al., “Precise stellarator quasi-symmetry can be achieved
+    with electromagnetic coils,” *PNAS* 119(13), e2202084119 (2022) — coil
+    regularization set (length, curvature, coil–coil distance) and the
+    normalized ``max |B·n|/|B|`` reporting convention.

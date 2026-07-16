@@ -259,3 +259,4 @@ benchmarks/output_*/
 
 .claude
 examples_single_grid/
+disabled/

@@ -286,7 +286,9 @@ From a near-circular torus seed, ``jac="implicit"`` with ESS reaches
 precise quasisymmetry and strong quasi-isodynamicity (measured on an office
 CPU): QA (nfp 2) QS **7.2e-6** in one 14.5-minute call (the staged ladder
 reaches 3.7e-7 in 25.5 min), QH (nfp 4) QS **5.83e-5**, QP (nfp 2) QS
-9.4e-2 (honestly the hardest class — basin-limited), and QI (nfp 1)
+9.4e-2 in the single-call budget (honestly the hardest class — basin-limited;
+the shipped deck reaches **3.3e-2** after an extended ladder plus warm-start
+refinement), and QI (nfp 1)
 omnigenity residual **1.81e-2**, 25x below the seed, in one 17.3-minute
 call.  The complete scripts are in ``examples/optimization/``
 (``QA``/``QH``/``QP``/``QI``, each with an ``_ess`` single-call variant

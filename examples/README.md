@@ -29,6 +29,12 @@ All runnable examples live under this single `examples/` tree.
     diagnostic through the virtual-casing vacuum field.
   - `single_stage_free_boundary_opt.py` — optimize coil currents to confine a
     target plasma by minimizing <(B.n)^2> with the exact virtual-casing gradient.
+  - `single_stage_simultaneous_opt.py` — TRUE single-stage: one exact gradient
+    over BOTH plasma-boundary Fourier modes and coil-group currents (implicit
+    adjoint + virtual casing threaded through one `jax.value_and_grad`).
+  - `single_stage_essos_coils_opt.py` — single-stage with ESSOS coils (vacuum
+    and finite-beta cases); vmec_jax stays coil-agnostic, coils enter as a
+    differentiable `xyz -> B` callable. Source of `readme_single_stage.png`.
 - `optimization/`: precise QA/QH/QP/QI from a circular torus — one file each,
   plus `QA_optimization_ess.py` / `QI_optimization_ess.py`: the SINGLE-call
   variants — all large-max_mode harmonics at once, Exponential Spectral
