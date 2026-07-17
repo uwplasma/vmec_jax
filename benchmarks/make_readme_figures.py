@@ -149,55 +149,79 @@ def make_runtime_figure(out: Path) -> None:
                          gpu=gr))
     rows.sort(key=lambda r: r["v2k"])
 
-    fig, ax = plt.subplots(figsize=(8.6, 0.42 * len(rows) + 1.7), dpi=160)
+    ns_set = {r["ns"] for r in rows}
+    same_ns = len(ns_set) == 1
+
+    fig, ax = plt.subplots(figsize=(9.6, 0.50 * len(rows) + 2.1), dpi=160)
+    fig.subplots_adjust(left=0.255, right=0.865, top=0.845, bottom=0.105)
     ys = range(len(rows))
     for y, r in zip(ys, rows):
+        if y % 2 == 0:
+            ax.axhspan(y - 0.5, y + 0.5, color="#f4f3ef", zorder=0)
         xs = [v for v in (r["v2k"], r["cold"], r["warm"], r["vpp"], r["gpu"]) if v]
-        ax.hlines(y, min(xs), max(xs), color=GRID, lw=1.0, zorder=1)
+        ax.hlines(y, min(xs), max(xs), color=BASELINE, lw=2.2, zorder=1,
+                  capstyle="round")
 
-    mk = dict(s=52, zorder=3, linewidths=1.4, edgecolors=SURFACE)
-    ax.scatter([r["v2k"] for r in rows], list(ys), color=INK2,
-               label="VMEC2000 (Fortran)", **mk)
-    ax.scatter([r["warm"] for r in rows], list(ys), color=BLUE,
-               label="vmec_jax warm (in-process)", **mk)
+    # hero (warm, blue) drawn last so it stays on top where points coincide
+    mk = dict(s=120, zorder=3, linewidths=1.8, edgecolors="white")
+    ax.scatter([r["cold"] for r in rows], list(ys), color=BLUE_LIGHT,
+               label="vmec_jax cold (fresh CLI process)", **mk)
     vpp_pts = [(r["vpp"], y) for y, r in zip(ys, rows) if r["vpp"]]
     ax.scatter([p[0] for p in vpp_pts], [p[1] for p in vpp_pts],
                color=YELLOW, label="VMEC++", **mk)
     gpu_pts = [(r["gpu"], y) for y, r in zip(ys, rows) if r["gpu"]]
     if gpu_pts:
         ax.scatter([p[0] for p in gpu_pts], [p[1] for p in gpu_pts],
-                   color=VIOLET, marker="D", s=40, zorder=3, linewidths=1.4,
-                   edgecolors=SURFACE, label="vmec_jax warm (GPU)")
-    ax.scatter([r["cold"] for r in rows], list(ys), color=BLUE_LIGHT,
-               label="vmec_jax cold (fresh CLI process)", **mk)
+                   color=VIOLET, marker="D", s=95, zorder=3, linewidths=1.8,
+                   edgecolors="white", label="vmec_jax warm (GPU)")
+    ax.scatter([r["v2k"] for r in rows], list(ys), color=INK2,
+               label="VMEC2000 (Fortran)", **mk)
+    ax.scatter([r["warm"] for r in rows], list(ys), color=BLUE, zorder=4,
+               s=120, linewidths=1.8, edgecolors="white",
+               label="vmec_jax warm (in-process)")
 
     xmax = max(max(v for v in (r["v2k"], r["cold"], r["vpp"] or 0, r["gpu"] or 0))
                for r in rows)
+    tr = ax.get_yaxis_transform()  # x in axes fraction, y in data
     for y, r in zip(ys, rows):
         sp = r["v2k"] / r["warm"]
-        ax.annotate(f"{sp:,.0f}x" if sp >= 3 else f"{sp:.1f}x",
-                    xy=(xmax * 2.6, y), va="center", ha="left",
-                    fontsize=8.5, color=INK2, annotation_clip=False)
-    ax.annotate("warm speedup\nvs VMEC2000", xy=(xmax * 2.45, len(rows) + 0.55),
-                va="bottom", ha="left", fontsize=8, color=MUTED,
-                annotation_clip=False)
+        ax.text(1.045, y, f"{sp:,.0f}×" if sp >= 3 else f"{sp:.1f}×",
+                transform=tr, va="center", ha="center", fontsize=11,
+                color=BLUE, fontweight="bold", clip_on=False)
+    ax.text(1.045, 1.015, "warm speedup\nvs VMEC2000", transform=ax.transAxes,
+            va="bottom", ha="center", fontsize=9, color=MUTED,
+            linespacing=1.35)
 
     ax.set_xscale("log")
     ax.set_yticks(list(ys))
-    ax.set_yticklabels([f"{r['label']}  ·  ns={r['ns']}" for r in rows])
-    ax.set_xlabel("wall-clock time (s, log scale)")
-    ax.set_xlim(right=xmax * 2.4)
+    if same_ns:
+        ax.set_yticklabels([r["label"] for r in rows], fontsize=10.5)
+    else:
+        ax.set_yticklabels([f"{r['label']}  ·  ns={r['ns']}" for r in rows],
+                           fontsize=10.5)
+    ax.set_xlabel("wall-clock time (s, log scale)  —  left is faster",
+                  fontsize=11)
+    ax.tick_params(axis="x", labelsize=10)
+    ax.set_xlim(right=xmax * 1.7)
+    ax.set_ylim(-0.5, len(rows) - 0.5)
     ax.xaxis.grid(True)
     ax.set_axisbelow(True)
     for s in ("top", "right", "left"):
         ax.spines[s].set_visible(False)
     ax.tick_params(axis="y", length=0)
-    ax.set_title("Full equilibrium solve: wall-clock time", loc="left",
-                 pad=52, fontsize=13, color=INK)
-    ax.legend(loc="lower left", bbox_to_anchor=(-0.02, 1.01), ncols=2,
-              fontsize=8.5, columnspacing=1.4, handletextpad=0.25,
-              borderaxespad=0.0, labelspacing=0.35)
-    fig.tight_layout()
+    title = "Full equilibrium solve: wall-clock time"
+    if same_ns:
+        title += f"  (all cases ns={next(iter(ns_set))})"
+    ax.set_title(title, loc="left", pad=54, fontsize=14, color=INK)
+    handles, labels = ax.get_legend_handles_labels()
+    order = ["VMEC2000 (Fortran)", "VMEC++",
+             "vmec_jax warm (in-process)", "vmec_jax cold (fresh CLI process)",
+             "vmec_jax warm (GPU)"]
+    pairs = sorted(zip(handles, labels), key=lambda hl: order.index(hl[1]))
+    ax.legend([p[0] for p in pairs], [p[1] for p in pairs],
+              loc="lower left", bbox_to_anchor=(-0.02, 1.005), ncols=2,
+              fontsize=10, columnspacing=1.6, handletextpad=0.15,
+              borderaxespad=0.0, labelspacing=0.45)
     fig.savefig(out, dpi=160)
     plt.close(fig)
     print("wrote", out)
@@ -509,7 +533,7 @@ def _plot_boundary_slices(axb, R, Z, *, color, seed=None):
     # labels align across a row of wildly different boundary scales — while
     # preserving true, undistorted equal-aspect cross-sections.
     axb.set_aspect("equal", adjustable="datalim")
-    axb.tick_params(labelsize=7)
+    axb.tick_params(labelsize=8)
     for s in ("top", "right"):
         axb.spines[s].set_visible(False)
 
@@ -547,7 +571,7 @@ def _plot_3d_modB(fig, ax3d, wout, nfp):
                            norm=Normalize(float(Bg.min()), float(Bg.max())))
     sm.set_array([])
     cb = fig.colorbar(sm, ax=ax3d, pad=0.0, fraction=0.045, shrink=0.62)
-    cb.ax.tick_params(labelsize=6, colors=MUTED)
+    cb.ax.tick_params(labelsize=7.5, colors=MUTED)
     cb.outline.set_visible(False)
     return float(Bg.min()), float(Bg.max())
 
@@ -570,10 +594,10 @@ def _plot_boozer_modB(fig, axm, wout, nfp, tag):
     pc = axm.contour(pb * nfp / (2 * np.pi), tb / (2 * np.pi), B,
                      levels=22, cmap="jet", linewidths=0.8)
     cb = fig.colorbar(pc, ax=axm, pad=0.02, fraction=0.05)
-    cb.ax.tick_params(labelsize=6.5, colors=MUTED)
+    cb.ax.tick_params(labelsize=7.5, colors=MUTED)
     cb.outline.set_visible(False)
-    axm.set_xlabel("$\\phi_B$ (field periods)", fontsize=8.5)
-    axm.tick_params(labelsize=7)
+    axm.set_xlabel("$\\phi_B$ (field periods)", fontsize=9)
+    axm.tick_params(labelsize=8)
     return float(B.min()), float(B.max())
 
 
@@ -963,7 +987,7 @@ def _plot_coils_and_lcfs(fig, ax3d, wout, gamma, nfp):
                            norm=Normalize(float(Bg.min()), float(Bg.max())))
     sm.set_array([])
     cb = fig.colorbar(sm, ax=ax3d, pad=0.0, fraction=0.04, shrink=0.6)
-    cb.ax.tick_params(labelsize=6, colors=MUTED)
+    cb.ax.tick_params(labelsize=7.5, colors=MUTED)
     cb.outline.set_visible(False)
     return float(Bg.min()), float(Bg.max())
 
@@ -992,9 +1016,14 @@ def make_single_stage_figure(out: Path) -> None:
 
     seed_inp = vj.VmecInput.from_file(str(SINGLE_STAGE_SEED))
     ncol = len(cases)
-    fig = plt.figure(figsize=(3.4 * ncol, 9.4), dpi=150)
-    gs = fig.add_gridspec(3, ncol, height_ratios=[1.0, 0.92, 0.92],
-                          hspace=0.24, wspace=0.28)
+    fig = plt.figure(figsize=(3.4 * ncol, 8.4), dpi=150)
+    # nested gridspecs: the 3-D axes hold their (flat) content in a middle
+    # band, so the two 3-D rows overlap slightly (negative hspace) to avoid a
+    # dead vertical gap between them
+    outer = fig.add_gridspec(2, 1, height_ratios=[1.0, 1.62], hspace=0.34,
+                             left=0.09, right=0.97, top=0.86, bottom=0.005)
+    gs_top = outer[0].subgridspec(1, ncol, wspace=0.28)
+    gs_bot = outer[1].subgridspec(2, ncol, wspace=0.28, hspace=-0.30)
     theta = np.linspace(0, 2 * np.pi, 241)
 
     for col, (name, title, cdir) in enumerate(cases):
@@ -1008,7 +1037,7 @@ def make_single_stage_figure(out: Path) -> None:
         # -- row 0: seed vs two-stage vs single-stage boundary -----------------
         # All three on one axes: the shared (auto-scaled, equal-aspect) limits
         # keep the crude cold-start seed AND both finals visible together.
-        axb = fig.add_subplot(gs[0, col])
+        axb = fig.add_subplot(gs_top[0, col])
         Rs, Zs = _input_boundary_rz(seed_inp, theta, phi_arr)
         Rt, Zt = surface_rz(w_two, s_index=-1, theta=theta, phi=phi_arr)
         Rf, Zf = surface_rz(w_sin, s_index=-1, theta=theta, phi=phi_arr)
@@ -1024,15 +1053,15 @@ def make_single_stage_figure(out: Path) -> None:
                      alpha=1.0 if k == 0 else 0.55,
                      label="single-stage" if k == 0 else None)
         axb.set_aspect("equal", adjustable="datalim")
-        axb.set_title(title, loc="left", fontsize=10.5, color=INK, pad=3)
-        axb.tick_params(labelsize=7)
+        axb.set_title(title, loc="left", fontsize=11.5, color=INK, pad=4)
+        axb.tick_params(labelsize=8)
         for s in ("top", "right"):
             axb.spines[s].set_visible(False)
         if col == 0:
-            axb.set_ylabel("Z (m)", fontsize=8.5)
-        axb.set_xlabel("R (m)", fontsize=8.5)
-        axb.legend(loc="upper right", fontsize=6.5, handlelength=1.4,
-                   labelspacing=0.25, borderaxespad=0.1)
+            axb.set_ylabel("Z (m)", fontsize=9.5)
+        axb.set_xlabel("R (m)", fontsize=9.5)
+        axb.legend(loc="upper right", fontsize=8, handlelength=1.4,
+                   labelspacing=0.3, borderaxespad=0.1)
         pol = comp.get("single_stage_polish")
         bn_line = ("$\\langle|B\\cdot n|\\rangle/\\langle B\\rangle$: "
                    f"{ts['avg_Bn_over_B']:.1e}"
@@ -1043,8 +1072,8 @@ def make_single_stage_figure(out: Path) -> None:
                    + f" (cold {ss['qs_total']:.1e})")
         axb.annotate(
             bn_line + "\n" + qs_line,
-            xy=(0.5, -0.24), xycoords="axes fraction", ha="center", va="top",
-            fontsize=7, color=GREEN_TEXT, fontweight="bold")
+            xy=(0.5, -0.26), xycoords="axes fraction", ha="center", va="top",
+            fontsize=8, color=GREEN_TEXT, fontweight="bold", linespacing=1.45)
         if name == "beta":
             # The case's calibrated seed <beta> (the finals' betatotal shifts
             # with each approach's plasma volume at the fixed pres_scale).
@@ -1056,32 +1085,31 @@ def make_single_stage_figure(out: Path) -> None:
                                                   float(w_sin.betatotal)]))
             axb.annotate(f"$\\langle\\beta\\rangle \\approx$ {beta_pct:.1f}%",
                          xy=(0.98, 1.02), xycoords="axes fraction", ha="right",
-                         va="bottom", fontsize=8, color=MUTED)
+                         va="bottom", fontsize=9, color=MUTED)
 
         # -- rows 1-2: each approach's final LCFS |B| inside its final coils ---
         for row, (wout, npz, lab, c) in enumerate(
                 [(w_two, "coils_stage2.npz", "two-stage", YELLOW),
                  (w_sin, "coils_single.npz", "single-stage", BLUE)], start=1):
             gamma = _coil_gamma_from_npz(cdir / npz)
-            ax3d = fig.add_subplot(gs[row, col], projection="3d")
+            ax3d = fig.add_subplot(gs_bot[row - 1, col], projection="3d")
             ax3d.patch.set_alpha(0.0)  # keep row-0's metric annotation visible
             b_lo, b_hi = _plot_coils_and_lcfs(fig, ax3d, wout, gamma, nfp)
-            ax3d.text2D(0.03, 0.10, lab, transform=ax3d.transAxes, ha="left",
-                        va="bottom", fontsize=9, color=c, fontweight="bold")
+            ax3d.text2D(0.05, 0.16, lab, transform=ax3d.transAxes, ha="left",
+                        va="bottom", fontsize=11, color=c, fontweight="bold")
             print(f"  {name}/{lab}: <|B.n|>/<B>={comp[lab.replace('-', '_')]['avg_Bn_over_B']:.3e}  "
                   f"QS={comp[lab.replace('-', '_')]['qs_total']:.3e}  "
                   f"|B|=[{b_lo:.2f},{b_hi:.2f}]T", flush=True)
 
     fig.suptitle("Cold-start single-stage vs two-stage plasma + coil "
-                 "optimization", x=0.5, ha="center", fontsize=12.5, color=INK,
-                 y=0.995)
-    fig.text(0.5, 0.966, "top: seed (grey, dashed) vs two-stage (orange) vs "
+                 "optimization", x=0.5, ha="center", fontsize=13.5, color=INK,
+                 y=0.993)
+    fig.text(0.5, 0.945, "top: seed (grey, dashed) vs two-stage (orange) vs "
              "single-stage (blue) boundary at $\\phi=0$ and a half field period",
-             ha="center", fontsize=8, color=MUTED)
-    fig.text(0.5, 0.951, "middle / bottom: each approach's final LCFS "
+             ha="center", fontsize=9.5, color=MUTED)
+    fig.text(0.5, 0.921, "middle / bottom: each approach's final LCFS "
              "coloured by |B| inside its own final coils",
-             ha="center", fontsize=8, color=MUTED)
-    fig.tight_layout(rect=(0, 0, 1, 0.936))
+             ha="center", fontsize=9.5, color=MUTED)
     fig.savefig(out, dpi=150)
     plt.close(fig)
     _compress_png(out)
@@ -1116,8 +1144,8 @@ def make_objectives_figure(out: Path) -> None:
             return
         rows.append((label, lane, json.loads(path.read_text())))
 
-    fig, ax = plt.subplots(figsize=(9.8, 0.98 * len(rows) + 1.7), dpi=150)
-    fig.subplots_adjust(left=0.235, right=0.665, top=0.80, bottom=0.06)
+    fig, ax = plt.subplots(figsize=(10.8, 0.92 * len(rows) + 1.55), dpi=150)
+    fig.subplots_adjust(left=0.225, right=0.645, top=0.815, bottom=0.035)
     ys = np.arange(len(rows))[::-1].astype(float)
     tr = ax.get_yaxis_transform()  # x in axes fraction, y in data
 
@@ -1131,51 +1159,61 @@ def make_objectives_figure(out: Path) -> None:
         pos = lambda v: (v - lo + pad) / (span + 2.0 * pad)  # noqa: E731
         xs, xf, xt = (pos(v) for v in vals)
 
-        ax.plot([xt], [y], marker="|", ms=15, mew=1.4, color=BASELINE, zorder=1)
+        ax.plot([xt], [y], marker="|", ms=22, mew=2.4, color=BASELINE, zorder=1)
         ax.annotate("target " + fmt.format(m["target"]), xy=(xt, y),
-                    xytext=(0, -13), textcoords="offset points", ha="center",
-                    fontsize=7, color=MUTED)
-        ax.annotate("", xy=(xf, y), xytext=(xs, y),
-                    arrowprops=dict(arrowstyle="-|>", color=BLUE, lw=1.7,
-                                    shrinkA=5, shrinkB=2), zorder=2)
-        ax.plot([xs], [y], "o", ms=7, color=BASELINE, mec=SURFACE, zorder=3)
-        ax.plot([xf], [y], "o", ms=8, color=BLUE, mec=SURFACE, zorder=3)
-        # nearly-unmoved metrics: split the value labels left/right of the
-        # dots so they never overprint each other
-        near = abs(xf - xs) < 0.12
+                    xytext=(0, -19), textcoords="offset points", ha="center",
+                    fontsize=8.5, color=MUTED)
+        # nearly-unmoved metrics: no arrow (an arrowhead between two nearly
+        # coincident dots reads as clutter); split the value labels left/right
+        near = abs(xf - xs) < 0.11
+        if not near:
+            ax.annotate("", xy=(xf, y), xytext=(xs, y),
+                        arrowprops=dict(arrowstyle="-|>", color=BLUE, lw=3.2,
+                                        mutation_scale=26, shrinkA=9,
+                                        shrinkB=4), zorder=2)
+        # on nearly-unmoved rows the two dots coincide: draw the (smaller)
+        # grey seed on top of the blue final so both stay visible
+        ax.plot([xs], [y], "o", ms=12, color=BASELINE, mec="white", mew=1.8,
+                zorder=5 if near else 3)
+        ax.plot([xf], [y], "o", ms=14, color=BLUE, mec="white", mew=1.8,
+                zorder=4)
+        seed_left = xs <= xf  # label each dot on its own side of the pair
         ax.annotate(fmt.format(seed["metric"]), xy=(xs, y),
-                    xytext=(-7 if near else 0, 9), textcoords="offset points",
-                    ha="right" if near else "center", fontsize=8, color=INK2)
+                    xytext=((-10 if seed_left else 10) if near else 0, 13),
+                    textcoords="offset points",
+                    ha=("right" if seed_left else "left") if near else "center",
+                    fontsize=10, color=INK2)
         ax.annotate(fmt.format(final["metric"]), xy=(xf, y),
-                    xytext=(7 if near else 0, 9), textcoords="offset points",
-                    ha="left" if near else "center", fontsize=8.5,
-                    color=BLUE, fontweight="bold")
+                    xytext=((10 if seed_left else -10) if near else 0, 13),
+                    textcoords="offset points",
+                    ha=("left" if seed_left else "right") if near else "center",
+                    fontsize=11, color=BLUE, fontweight="bold")
         arrow = " $\\rightarrow$ "  # mathtext: the plain glyph is missing in
         # the mixed math/text layout of the second drift line
         drift = (f"QS {seed['qs_total']:.0e}{arrow}{final['qs_total']:.0e}\n"
-                 f"A {seed['aspect']:.2f}{arrow}{final['aspect']:.2f}   "
+                 f"A {seed['aspect']:.2f}{arrow}{final['aspect']:.2f}    "
                  f"$\\iota$ {seed['mean_iota']:.3f}{arrow}{final['mean_iota']:.3f}")
-        ax.text(1.05, y, drift, transform=tr, fontsize=7.5, color=INK2,
-                va="center", ha="left", linespacing=1.5)
+        ax.text(1.06, y, drift, transform=tr, fontsize=9, color=INK2,
+                va="center", ha="left", linespacing=1.6)
 
     ax.set_yticks(ys)
-    ax.set_yticklabels([f"{label}\n" for label, _lane, _m in rows], fontsize=9.5)
+    ax.set_yticklabels([f"{label}\n" for label, _lane, _m in rows], fontsize=11)
     for y, (_label, lane, m) in zip(ys, rows):
-        ax.text(-0.02, y - 0.18, f"{lane} · {m['label']}", transform=tr,
-                fontsize=7, color=MUTED, va="center", ha="right")
-    ax.set_ylim(-0.75, len(rows) - 0.25)
+        ax.text(-0.02, y - 0.20, f"{lane} · {m['label']}", transform=tr,
+                fontsize=8.5, color=MUTED, va="center", ha="right")
+    ax.set_ylim(-0.58, len(rows) - 0.3)
     ax.set_xlim(0.0, 1.0)
     ax.set_xticks([])
     for s in ("top", "right", "left", "bottom"):
         ax.spines[s].set_visible(False)
     ax.tick_params(axis="y", length=0)
     ax.set_title("Beyond quasisymmetry: one new objective per campaign, QS held",
-                 loc="left", pad=44, fontsize=12.5, color=INK)
-    ax.text(0.0, 1.035, "precise-QA seed (grey) $\\rightarrow$ after one short "
+                 loc="left", pad=46, fontsize=14, color=INK)
+    ax.text(0.0, 1.045, "precise-QA seed (grey) $\\rightarrow$ after one short "
             "campaign (blue); the held metrics on the right",
-            transform=ax.transAxes, fontsize=8.5, color=INK2, va="bottom")
-    ax.text(1.05, len(rows) - 0.32, "held-metric drift", transform=tr,
-            fontsize=7.5, color=MUTED, va="bottom", ha="left")
+            transform=ax.transAxes, fontsize=10, color=INK2, va="bottom")
+    ax.text(1.06, len(rows) - 0.36, "held-metric drift", transform=tr,
+            fontsize=9, color=MUTED, va="bottom", ha="left")
     fig.savefig(out, dpi=150)
     _compress_png(out)
     plt.close(fig)

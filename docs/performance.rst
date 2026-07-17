@@ -115,7 +115,7 @@ Reading the table:
   (NuhrenbergZille at ns=201), where even the cold run, compile included,
   beats VMEC2000. The persistent compilation cache removes most of the
   compile cost on subsequent processes.
-- **VMEC++** is genuinely faster on some converged large decks (free
+- **VMEC++** is faster on some converged large decks (free
   boundary, LandremanPaul QA) but *failed* rows aborted during the first
   iterations; ``vmec_jax`` converges on the full suite (zero-crash policy).
   ``n/a`` marks a configuration VMEC++ does not support (``lasym`` free

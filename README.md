@@ -174,14 +174,14 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
 
 ### Free boundary straight from coils
 
-The "free boundary directly from coils" row is a workflow, not a checkbox:
-tabulate an [ESSOS](https://github.com/uwplasma/ESSOS) coil set onto the solver
-grid in memory (`essos.coils.Coils.to_mgrid`) and pass it as `external_field=` —
-no MAKEGRID file to manage, no on-disk round-trip. For gradients the
-differentiable free boundary evaluates a JAX Biot-Savart at exactly the boundary
-points it needs, every iteration (a plain `xyz→B` callable), so the coil degrees
-of freedom stay differentiable end-to-end. vmec_jax keeps no coil code of its
-own; coils live in ESSOS.
+Free-boundary solves can run directly from a coil set: tabulate an
+[ESSOS](https://github.com/uwplasma/ESSOS) coil set onto the solver grid in
+memory (`essos.coils.Coils.to_mgrid`) and pass it as `external_field=`,
+with no MAKEGRID file involved. For gradients, the differentiable free
+boundary evaluates a JAX Biot-Savart (a plain `xyz→B` callable) at the
+boundary points of each iteration, keeping the coil degrees of freedom
+differentiable end-to-end. All coil geometry lives in ESSOS; vmec_jax has no
+coil code of its own.
 
 ![Free-boundary Landreman-Paul QA pressure scan directly from ESSOS coils](docs/_static/figures/readme_essos_beta_scan.png)
 
@@ -199,31 +199,28 @@ the coils never move. Reproduce with
 
 ### Single-stage plasma + coil optimization
 
-Starting **cold** — a circular torus and four circular coils, no warm start —
-the plasma boundary Fourier modes, the coil curve degrees of freedom, *and* the
-coil currents are co-optimized by **one exact gradient**: a single
-`jax.value_and_grad` threads the implicit-adjoint derivative of the
-fixed-boundary equilibrium, the differentiable virtual casing, and Biot–Savart
-off the ESSOS coil filaments through one backward pass. It is benchmarked
-against the classical **two-stage** baseline from the *same* seeds: stage 1
-optimizes the boundary alone for quasi-axisymmetry, stage 2 then fits the coils
-to that frozen boundary. Both approaches get identical coil budgets (same
-length and curvature limits, same number of coils), and both are scored on the
-**coil-realized equilibrium** — a re-solve of each final boundary, with `B·n`
-evaluated from each approach's actual final coils. The finite-β column runs the
-same joint optimization with a pressure profile — a capability with essentially
-no published general-purpose counterpart.
+vmec-jax can optimize the plasma boundary and the coils together, with one
+exact gradient. A single `jax.value_and_grad` differentiates through the
+fixed-boundary equilibrium (implicit adjoint), the virtual-casing surface
+field, and the Biot–Savart law of the ESSOS coil filaments, covering boundary
+Fourier modes, coil shapes, and coil currents at once. The benchmark below
+compares this against the classical two-stage approach — stage 1 shapes the
+boundary for quasi-axisymmetry, stage 2 fits coils to that frozen boundary —
+from the same seeds (a circular torus and four circular coils), with identical
+coil budgets, scored on the equilibrium each final coil set actually produces.
+The finite-β case runs the same joint optimization with a pressure profile;
+no published code demonstrates this in general form.
 
-The headline use is the literature's canonical one (arXiv:2302.10622 runs
-single-stage as a "stage 3"): **polish the two-stage result** — warm-start the
-joint objective from the stage-1 boundary + stage-2 coils and let both
-co-adapt. In ~10–30 minutes of polish the normal-field error drops **33 %
-(vacuum) / 17 % (finite β)** below the two-stage result at held quasisymmetry
-and on-target iota — the coil↔plasma inconsistency that frozen-boundary
-stage 2 cannot fix. The cold-start column shows what the same joint descent
-does from the crude seeds alone in 50 iterations: it drives ⟨|B·n|⟩ hard
-(coils well inside every budget) but cannot match a dedicated stage-1 on
-quasisymmetry — which is exactly why polish is the recommended pattern.
+The most effective use is to polish the two-stage result, the "stage 3" of
+[arXiv:2302.10622](https://arxiv.org/abs/2302.10622): warm-start the joint
+objective from the stage-1 boundary and stage-2 coils and let both adapt.
+In 10–30 minutes this lowers the normal-field error by 33% (vacuum) and 17%
+(finite β) below the two-stage result, with quasisymmetry and iota unchanged —
+stage 2 cannot make this correction because it holds the boundary frozen.
+A pure cold start (third column) shows the same joint descent from the crude
+seeds: after 50 iterations it reaches low B·n with compact coils, but its
+quasisymmetry is far from what a dedicated stage 1 delivers, which is why the
+polish pattern is recommended.
 
 ![Cold-start single-stage vs two-stage plasma+coil optimization, vacuum and finite beta](docs/_static/figures/readme_single_stage.png)
 
@@ -357,36 +354,38 @@ and `|B|` in Boozer coordinates on the LCFS (jet, bottom). The label is the QI
 not the ~1e-5 reachable for quasisymmetry. Reproduce with
 `python benchmarks/make_readme_figures.py --only qi`.*
 
-Implicit gradients are *essential*, not merely faster: for the helical (QH)
-target the exact-axisymmetric seed is a saddle where finite differences stall,
-and for QP the implicit path reaches a far better basin than FD. Three
-measured accelerations make the minutes-scale campaigns above possible: the
-residual Jacobian is solved through a **block-tridiagonal factorization** of
-the force linearization (33× over per-dof GMRES), each trial equilibrium is
-seeded with a **first-order perturbation prediction** from that same
-factorization (3.7× fewer solver iterations), and a converged-state memo means
-the Jacobian never re-solves the point the residual just converged. The
-implicit path is **CPU-pinned by default** (it is kernel-launch-bound; GPUs
-lose at every production size measured), while forward solves at high radial
-resolution are GPU-competitive — the device policy picks per stage.
+These campaigns need implicit gradients. Finite differences stall at the
+axisymmetric seed of the QH target (a saddle point) and land in a worse basin
+for QP. Three measured optimizations keep each campaign in the minutes range:
+
+- the residual Jacobian uses a block-tridiagonal factorization of the force
+  linearization (33× faster than per-dof GMRES);
+- each trial equilibrium starts from a first-order perturbation prediction
+  (3.7× fewer solver iterations);
+- a converged-state memo avoids re-solving the point the residual just
+  converged.
+
+The implicit path runs on CPU by default, where it is fastest at production
+sizes; high-resolution forward solves can use the GPU. The device policy
+chooses per stage.
 
 ### Beyond quasisymmetry: any objective, same gradients
 
-The equilibrium is a differentiable building block, not a QS machine: pick any
-physics objective and the same exact gradients drive it. Starting from the
+Any physics objective can drive the same machinery. Starting from the
 precise-QA deck above (QS ~1e-6, aspect 6.00, mean iota 0.42), five short
-independent campaigns each push **one** new objective while **holding
-quasisymmetry** (the QA residual stays in every objective at a stiff weight):
-raise the coil-simplicity proxy `min L∇B` (traceable `l_grad_b_state`,
-soft-min optimized / hard-min reported), deepen the vacuum magnetic well,
-raise mean iota to 0.55 at held aspect, lower aspect to 4.8 at held iota, and
-push the finite-beta Mercier criterion `DMerc` toward stability under a
-calibrated ~1.25% parabolic pressure. `L∇B`/well/iota/aspect run through the
-**implicit adjoint** (`jac="implicit"`); `DMerc` is a wout-engine objective
-(host-NumPy Mercier tables) with no traceable lane yet, so that one campaign
-runs honest **finite differences** at `max_mode 2` — the cost gap is part of
-the story. (A sixth objective of the same kind — the self-consistent Redl
-bootstrap mismatch — has its own section below.)
+campaigns each optimize one new objective while keeping the QA residual in the
+objective at a stiff weight:
+
+- raise the coil-simplicity proxy min L∇B (`l_grad_b_state`);
+- deepen the vacuum magnetic well;
+- raise mean iota to 0.55 at fixed aspect;
+- lower the aspect ratio to 4.8 at fixed iota;
+- push the Mercier criterion `DMerc` toward stability at ⟨β⟩ ≈ 1.25%.
+
+The first four use the implicit adjoint (`jac="implicit"`). `DMerc` has no
+traceable lane yet (it is computed from host-side Mercier tables), so that
+campaign uses finite differences at `max_mode` 2. The self-consistent Redl
+bootstrap objective has its own section below.
 
 ![Objectives showcase: five one-objective campaigns off the precise-QA seed](docs/_static/figures/readme_objectives.png)
 
@@ -398,12 +397,12 @@ bootstrap mismatch — has its own section below.)
 | `aspect_down` | aspect 6.00 → 4.8 at iota 0.42 (implicit adjoint) | **6.00 → 4.84** | 9.8e-07 → 4.2e-06 |
 | `dmerc` | interior DMerc → positive at ⟨β⟩ ≈ 1.25% (finite differences) | −16.6 → −16.5 (stiff — see note) | 6.6e-05 → 6.6e-05 |
 
-The two flat rows are honest physics, not failures: at held QS, aspect, and
-iota the precise-QA shape is already near-optimal in L∇B (the trade space is
-stiff), and the interior Mercier hill at finite β needs profile/current freedom
-that boundary-mode-2 finite differences cannot buy — both move only marginally
-and say so. The three decisive rows each take **2–3 minutes** on a workstation
-CPU.
+The `well`, `iota_up`, and `aspect_down` campaigns each take 2–3 minutes on a
+workstation CPU. The other two barely move, for physical reasons: with QS,
+aspect, and iota all held, the precise-QA shape is already close to its best
+attainable L∇B, and improving interior Mercier stability at fixed pressure
+requires profile or current degrees of freedom that boundary shaping alone
+does not provide.
 
 *Reproduce with `python examples/optimization/objectives_showcase.py` (an
 `--only lgradb,dmerc` flag runs subsets), then
@@ -435,9 +434,9 @@ paper's Zenodo dataset).*
 
 [DESC](https://desc-docs.readthedocs.io/) is the other JAX-native,
 differentiable, GPU-capable stellarator-equilibrium code. The key difference:
-DESC minimises the MHD force in a global Zernike–Fourier basis — *its own*
-equilibrium — while vmec-jax reproduces VMEC exactly. They are complementary;
-the honest trade-off, side by side:
+DESC minimises the MHD force in a global Zernike–Fourier basis — its own
+equilibrium — while vmec-jax reproduces VMEC exactly. The two are
+complementary:
 
 | Where **vmec-jax** wins | Where **DESC** wins |
 |---|---|
