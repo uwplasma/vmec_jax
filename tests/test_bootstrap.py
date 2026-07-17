@@ -1,4 +1,4 @@
-"""Validation gates for :mod:`vmec_jax.core.bootstrap` (R26.g steps 1-4).
+"""Validation gates for :mod:`vmex.core.bootstrap` (R26.g steps 1-4).
 
 Spec: ``notes_r26g_redl_spec.md`` sections 7-8 — the CI-sized subset:
 
@@ -43,9 +43,9 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 
-from vmec_jax.core import bootstrap as bs
-from vmec_jax.core import optimize as opt
-from vmec_jax.core.input import VmecInput
+from vmex.core import bootstrap as bs
+from vmex.core import optimize as opt
+from vmex.core.input import VmecInput
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")
 
@@ -449,7 +449,7 @@ def test_zenodo_identity_matches_wout_jdotb(config):
     interior on the three optimized finite-beta Zenodo wouts (observed
     <= 5e-4) — both the dI/ds and the mu0*I*dp/ds term live at beta > 0."""
     path, _, _, _ = OPTIMA[config]
-    from vmec_jax.core.wout import read_wout
+    from vmex.core.wout import read_wout
     wout = read_wout(path)
     surfaces = np.linspace(0.1, 0.9, 17)
     jv = np.asarray(bs.vmec_j_dot_B_from_wout(wout, surfaces))

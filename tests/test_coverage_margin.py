@@ -12,10 +12,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vmec_jax.core import optimize as opt
-from vmec_jax.core.errors import MgridNotFoundError
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core.mgrid import MgridData, read_mgrid
+from vmex.core import optimize as opt
+from vmex.core.errors import MgridNotFoundError
+from vmex.core.input import VmecInput
+from vmex.core.mgrid import MgridData, read_mgrid
 
 DATA = Path(__file__).resolve().parent.parent / "examples" / "data"
 

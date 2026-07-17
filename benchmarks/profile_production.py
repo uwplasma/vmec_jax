@@ -42,7 +42,7 @@ import numpy as np  # noqa: E402
 
 import jax  # noqa: E402
 
-import vmec_jax as vj  # noqa: E402
+import vmex as vj  # noqa: E402
 
 
 def _peak_rss_gb() -> float:
@@ -103,7 +103,7 @@ def profile_free_boundary():
 
 
 def profile_implicit_grad():
-    from vmec_jax.core import implicit as im
+    from vmex.core import implicit as im
     inp = vj.VmecInput.from_file(DATA / "input.solovev")
     p0 = im.params_from_input(inp)
 
@@ -118,7 +118,7 @@ def profile_implicit_grad():
 
 
 def profile_opt_step():
-    from vmec_jax import optimize as opt
+    from vmex import optimize as opt
     inp = vj.VmecInput.from_file(DATA / "input.minimal_seed_nfp2")
     qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10), 1, 0)
     terms = [(qs, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0)]

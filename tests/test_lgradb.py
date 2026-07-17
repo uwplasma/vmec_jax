@@ -1,20 +1,20 @@
 """Traceable ``L_grad_B`` objective (plan_pre_vmex Item E, part 1).
 
-Validation gates for :func:`vmec_jax.core.optimize.l_grad_b_state`, the
+Validation gates for :func:`vmex.core.optimize.l_grad_b_state`, the
 implicit-adjoint-compatible ``(state, runtime)`` lane of the wout-engine
-:func:`~vmec_jax.core.optimize.l_grad_b`:
+:func:`~vmex.core.optimize.l_grad_b`:
 
 a. **Value parity** — the traceable hard-min lane vs the wout lane on three
    decks (solovev 2D, li383_low_res 3D ncurr=1, LandremanPaul2021_QA_lowres
    3D QA), same sampling surfaces.  Both lanes share the pointwise math
-   (:func:`vmec_jax.core.statephysics._lgradb_grid`); the traceable lane
+   (:func:`vmex.core.statephysics._lgradb_grid`); the traceable lane
    rebuilds the wout coefficient tables (``rmnc/zmns`` renormalization, the
    ``wrout.f`` Nyquist analysis of ``B^u/B^v``) in jnp, so they agree to
    float round-off — measured 0 to 4.4e-16 relative on all three decks
    (2026-07-17, x64 CPU); asserted at rtol 1e-12 (headroom for BLAS/einsum
    reassociation), far inside the 1e-6 plan gate.
 b. **Gradient** — ``jax.grad`` of the smooth (soft-min) objective through
-   the implicit solve vs :func:`vmec_jax.core.implicit.frozen_path_directional_fd`
+   the implicit solve vs :func:`vmex.core.implicit.frozen_path_directional_fd`
    on solovev, one boundary dof: measured rel 1.7e-6, gate 1e-4.
 c. A ``jac="implicit"`` least-squares smoke including the new term.
 
@@ -42,14 +42,14 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp  # noqa: E402
 
-from vmec_jax.core.input import VmecInput  # noqa: E402
-from vmec_jax.core import implicit as im  # noqa: E402
-from vmec_jax.core import optimize as opt  # noqa: E402
+from vmex.core.input import VmecInput  # noqa: E402
+from vmex.core import implicit as im  # noqa: E402
+from vmex.core import optimize as opt  # noqa: E402
 
 pytestmark = [pytest.mark.usefixtures("_module_jit_enabled")]  # full solves: jitted
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
-CACHE_DIR = Path("/tmp/vmec_jax_test_cache_lgradb")
+CACHE_DIR = Path("/tmp/vmex_test_cache_lgradb")
 
 _STATE_FIELDS = ("R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin")
 
@@ -63,7 +63,7 @@ SOFTMIN_K = 50.0             # [1/m]; soft-min bias <= log(24*24)/k ~ 0.127 m
 
 def _cached_eq(deck: str) -> opt.Equilibrium:
     """Converged (or budget-exhausted) equilibrium of a bundled deck, cached."""
-    from vmec_jax.core.solver import (
+    from vmex.core.solver import (
         SpectralState,
         prepare_runtime,
         resolution_from_input,

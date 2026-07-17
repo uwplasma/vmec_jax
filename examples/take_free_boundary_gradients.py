@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Differentiable free boundary via virtual casing (plan.md R15.3 + R19).
+"""Differentiable free boundary via virtual casing (R15.3 + R19).
 
 Takes gradients of a *free-boundary* residual with respect to external-field dofs
 (coil currents / coil shape / ``extcur``) — the differentiable complement to the
@@ -31,14 +31,14 @@ import jax
 jax.config.update("jax_enable_x64", True)  # virtual casing wants float64
 import jax.numpy as jnp  # noqa: E402
 
-from vmec_jax.core import freeboundary_diff as FBD  # noqa: E402
-from vmec_jax.core.mgrid import MgridField, read_mgrid  # noqa: E402
-from vmec_jax.core.wout import read_wout  # noqa: E402
+from vmex.core import freeboundary_diff as FBD  # noqa: E402
+from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
+from vmex.core.wout import read_wout  # noqa: E402
 
 DATA = Path(__file__).resolve().parent / "data"
 WOUT = DATA / "single_grid" / "wout_cth_like_free_bdy.nc"
 MGRID = DATA / "mgrid_cth_like.nc"
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 NPHI = NTHETA = 20 if CI else 32
 
 
@@ -111,7 +111,7 @@ def _circular_coil_dofs(ncoils: int = 3, order: int = 1, R0: float = 0.75, a: fl
 def _essos_coil_field(dofs, currents, *, nfp: int, n_segments: int = 80, stellsym: bool = True):
     """A generic ``xyz(...,3) -> B(...,3)`` callable from ESSOS coils.
 
-    vmec_jax keeps no coil code; the differentiable free-boundary residual takes
+    vmex keeps no coil code; the differentiable free-boundary residual takes
     coils through this plain-callable interface.  Rebuilding the ESSOS ``Coils``
     inside the closure lets ``jax.grad`` thread through
     ``essos.coils.Coils`` -> ``essos.fields.BiotSavart`` to the coil Fourier dofs.

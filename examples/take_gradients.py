@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """Implicit differentiation: exact equilibrium gradients, checked against FD.
 
-Unlike the Fortran original, vmec-jax differentiates a *converged* equilibrium.
+Unlike the Fortran original, vmex differentiates a *converged* equilibrium.
 ``vj.implicit.run`` solves the fixed point and exposes the standard wout scalars
 (``aspect``, ``wb`` magnetic energy, ``volume``, ``iota_edge``, ...) as JAX
 values, so ``jax.grad`` / ``jax.jacrev`` return derivatives with respect to the
 boundary Fourier coefficients and profile parameters.
 
 The gradient is computed by the *implicit function theorem*: one adjoint linear
-solve on the converged state (see ``vmec_jax.core.implicit``), not by unrolling
+solve on the converged state (see ``vmex.core.implicit``), not by unrolling
 the iteration.  That means it is O(1) in memory (independent of iteration count)
 and exact to solver tolerance -- no finite-difference step to tune, no vanishing
 gradient at the axisymmetric saddle.  This script proves it by comparing the
@@ -27,7 +27,7 @@ import numpy as np
 
 import jax
 
-import vmec_jax as vj
+import vmex as vj
 
 im = vj.implicit  # the differentiable fixed-point solver + wout-scalar diagnostics
 
@@ -35,7 +35,7 @@ im = vj.implicit  # the differentiable fixed-point solver + wout-scalar diagnost
 INPUT_FILE = Path(__file__).resolve().parent / "data" / "input.solovev"
 FTOL = 1e-12            # tight forward tolerance: the adjoint is exact at the fixed point
 MAX_ITERS = 5000
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 
 inp = vj.VmecInput.from_file(INPUT_FILE)
 ntor = int(inp.ntor)

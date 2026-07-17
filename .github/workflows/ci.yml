@@ -23,14 +23,14 @@ permissions:
 # Sharded CI (plan.md Phase-2 review item 1): five parallel test jobs, each
 # well under the 10-minute wall-time budget, plus a fast lint gate (ruff +
 # mypy) and a coverage gate that combines the parity + gradient shards and
-# enforces >= 95% on vmec_jax.
+# enforces >= 95% on vmex.
 jobs:
   lint:
     # Fast fail-first gate (plan Item I.3): ruff + mypy over the whole tree,
     # separate from the test matrix so a lint regression fails in ~1 min
     # without blocking (or being masked by) the solver shards.  mypy runs on
     # py3.12 with the full [dev] install so its view of the numpy/jax stubs
-    # matches a local `mypy vmec_jax` (pyproject [tool.mypy] is the config).
+    # matches a local `mypy vmex` (pyproject [tool.mypy] is the config).
     name: Lint (ruff + mypy)
     runs-on: ubuntu-latest
     timeout-minutes: 9
@@ -49,10 +49,10 @@ jobs:
           python -m pip install ".[dev]"
 
       - name: ruff
-        run: ruff check vmec_jax tests examples benchmarks tools
+        run: ruff check vmex tests examples benchmarks tools
 
       - name: mypy
-        run: mypy vmec_jax
+        run: mypy vmex
 
   fast:
     name: Fast unit tests (py${{ matrix.python-version }})
@@ -126,7 +126,7 @@ jobs:
       - name: Cache golden fixtures
         uses: actions/cache@v4
         with:
-          path: ~/.cache/vmec_jax
+          path: ~/.cache/vmex
           key: golden-v1
 
       - name: Prefetch golden fixtures (once, before xdist workers fork)
@@ -175,18 +175,18 @@ jobs:
           B_FILES="tests/test_golden_digests.py"
           D_FILES="tests/test_optimize.py"
           if [ "${{ matrix.shard }}" = "a" ]; then
-            pytest -q -n 4 --dist loadscope $A_FILES --durations=15 --cov=vmec_jax --cov-report=term
+            pytest -q -n 4 --dist loadscope $A_FILES --durations=15 --cov=vmex --cov-report=term
           elif [ "${{ matrix.shard }}" = "b" ]; then
-            pytest -q -n 4 --dist load $B_FILES --durations=15 --cov=vmec_jax --cov-report=term
+            pytest -q -n 4 --dist load $B_FILES --durations=15 --cov=vmex --cov-report=term
           elif [ "${{ matrix.shard }}" = "d" ]; then
-            pytest -q -n 4 --dist load $D_FILES --durations=15 --cov=vmec_jax --cov-report=term
+            pytest -q -n 4 --dist load $D_FILES --durations=15 --cov=vmex --cov-report=term
           else
             IGNORES=$(for f in $A_FILES $B_FILES $D_FILES; do echo "--ignore=$f"; done)
             pytest -q -n 4 --dist loadscope tests \
               --ignore=tests/test_implicit_grad.py \
               --ignore=tests/test_examples.py \
               $IGNORES \
-              --durations=15 --cov=vmec_jax --cov-report=term
+              --durations=15 --cov=vmex --cov-report=term
           fi
 
       - name: Stash coverage data
@@ -221,7 +221,7 @@ jobs:
       - name: Cache finite-difference reference solves
         uses: actions/cache@v4
         with:
-          path: /tmp/vmec_jax_implicit_fd_cache.pkl
+          path: /tmp/vmex_implicit_fd_cache.pkl
           # entries are keyed by (case, dof, step, ftol, ns) inside the pickle,
           # so hash the test file: changed FD parameters invalidate the cache.
           key: implicit-fd-v1-${{ hashFiles('tests/test_implicit_grad.py') }}
@@ -232,7 +232,7 @@ jobs:
         run: |
           pytest -q tests/test_implicit_grad.py \
             --durations=0 \
-            --cov=vmec_jax --cov-report=term
+            --cov=vmex --cov-report=term
 
       - name: Stash coverage data
         run: mv .coverage coverage.gradient
@@ -269,7 +269,7 @@ jobs:
         run: |
           pytest -q tests/test_examples.py \
             --durations=10 \
-            --cov=vmec_jax --cov-report=term
+            --cov=vmex --cov-report=term
 
       - name: Stash coverage data
         run: mv .coverage coverage.examples
@@ -333,13 +333,13 @@ jobs:
         run: |
           vmec --help
           vmec --version
-          rm -rf /tmp/vmec_jax_cli_smoke
-          mkdir -p /tmp/vmec_jax_cli_smoke
+          rm -rf /tmp/vmex_cli_smoke
+          mkdir -p /tmp/vmex_cli_smoke
           cd /tmp
           vmec "$GITHUB_WORKSPACE/examples/data/input.solovev" \
             --quiet \
-            --outdir /tmp/vmec_jax_cli_smoke
-          test -f /tmp/vmec_jax_cli_smoke/wout_solovev.nc
+            --outdir /tmp/vmex_cli_smoke
+          test -f /tmp/vmex_cli_smoke/wout_solovev.nc
 
   build:
     name: Build (wheel/sdist + docs)
@@ -394,7 +394,7 @@ jobs:
       - name: Cache golden fixtures
         uses: actions/cache@v4
         with:
-          path: ~/.cache/vmec_jax
+          path: ~/.cache/vmex
           key: golden-v1
 
       # The free-boundary example smokes run the examples as subprocesses,

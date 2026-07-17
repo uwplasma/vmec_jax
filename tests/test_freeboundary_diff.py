@@ -1,6 +1,6 @@
 """Differentiable free boundary via virtual casing (plan.md R15.3 + R19).
 
-Validates :mod:`vmec_jax.core.freeboundary_diff` — the DIFFERENTIABLE
+Validates :mod:`vmex.core.freeboundary_diff` — the DIFFERENTIABLE
 free-boundary path that complements the NESTOR forward solve (R15.1/R15.2, which
 these tests never touch).  The free-boundary condition ``B_out . n = 0`` is
 written as a smooth objective with ``B_out = B_coil + B_plasma`` and the plasma's
@@ -38,9 +38,9 @@ jax.config.update("jax_enable_x64", True)
 
 from virtual_casing_jax import VmecSurfaceFieldData  # noqa: E402
 
-from vmec_jax.core import freeboundary_diff as FBD  # noqa: E402
-from vmec_jax.core.mgrid import MgridField, read_mgrid  # noqa: E402
-from vmec_jax.core.wout import read_wout  # noqa: E402
+from vmex.core import freeboundary_diff as FBD  # noqa: E402
+from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
+from vmex.core.wout import read_wout  # noqa: E402
 
 # jit-enable the whole module: virtual casing is far too slow interpreted.
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")
@@ -69,7 +69,7 @@ def _circular_coil_dofs(ncoils=3, order=1, R0=0.75, a=0.35, nfp=5):
 def _essos_coil_field(dofs, currents, *, nfp=5, n_segments=64, stellsym=True):
     """A generic ``xyz(...,3) -> B(...,3)`` callable from ESSOS coils.
 
-    vmec_jax carries no coil code; the differentiable free-boundary residual
+    vmex carries no coil code; the differentiable free-boundary residual
     consumes coils through the plain-callable interface, differentiating in the
     ESSOS coils' Fourier dofs (rebuilt inside the closure so ``jax.grad`` threads
     through ``essos.coils.Coils`` -> ``essos.fields.BiotSavart``).

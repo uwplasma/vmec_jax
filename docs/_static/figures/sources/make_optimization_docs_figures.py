@@ -10,7 +10,7 @@ Outputs (both < 100 KB, light-theme PNGs matching the README figures):
 - ``docs/_static/figures/gradient_stack_speedup.png`` — measured
   before/after of the R25 gradient stack (block-tridiagonal Jacobian,
   perturbation warm start, single-call ESS campaign), numbers from the
-  plan.md R25/R26k measurements quoted in docs/optimization.rst.
+  R25/R26k measurements quoted in docs/optimization.rst.
 
 Run from the repo root::
 
@@ -27,7 +27,7 @@ import numpy as np
 
 OUT = Path(__file__).resolve().parents[1]
 
-BLUE = "#2a78d6"       # categorical slot 1 (after / vmec_jax)
+BLUE = "#2a78d6"       # categorical slot 1 (after / vmex)
 BLUE_LIGHT = "#9ec5f4"  # same hue, light step (before)
 AQUA = "#1baf7a"        # categorical slot 2
 INK = "#0b0b0b"

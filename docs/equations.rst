@@ -2,7 +2,7 @@ Equations and derivations
 =========================
 
 This page states the **explicit equations** solved (or approximated) by
-``vmec_jax`` and connects them to the VMEC2000 formulation. The goal is to make
+``vmex`` and connects them to the VMEC2000 formulation. The goal is to make
 the physics, the coordinate conventions, and the force-balance residuals fully
 transparent so that parity checks can be done equation-by-equation.
 
@@ -55,7 +55,7 @@ terms, include the field-period multiplier :math:`n\,\mathrm{NFP}`:
    \mathrm{cosnvn}_{k,n} = (n\,\mathrm{NFP})\,\mathrm{cosnv}_{k,n}, \qquad
    \mathrm{sinnvn}_{k,n} = -(n\,\mathrm{NFP})\,\mathrm{sinnv}_{k,n}.
 
-``vmec_jax`` uses these tables in ``tomnsps`` so that the Fourier-space force
+``vmex`` uses these tables in ``tomnsps`` so that the Fourier-space force
 arrays exactly match VMEC2000. See References [4-6] for the original VMEC2000
 tables and the VMEC++ DFT/basis discussion.
 
@@ -87,7 +87,7 @@ The zeta projection then yields the Fourier coefficients
 Derivative terms in VMEC use the scaled tables
 :math:`\mathrm{cosnvn}_{k,n}=(n\,\mathrm{NFP})\,\mathrm{cosnv}_{k,n}` and
 :math:`\mathrm{sinnvn}_{k,n}=-(n\,\mathrm{NFP})\,\mathrm{sinnv}_{k,n}`. In
-``vmec_jax`` we therefore compute the same base transforms and apply the
+``vmex`` we therefore compute the same base transforms and apply the
 analytic factor :math:`n\,\mathrm{NFP}` after the zeta contraction for the
 derivative blocks. This reduces the number of dot-product contractions while
 preserving VMEC2000 parity exactly.
@@ -115,7 +115,7 @@ with Maxwell's equations (in magnetostatic form):
    \mathbf{J} = \frac{1}{\mu_0}\nabla \times \mathbf{B}.
 
 The pressure is a **flux function**: :math:`p = p(s)` and is specified by the
-VMEC input profiles. VMEC (and ``vmec_jax``) use pressure in units of
+VMEC input profiles. VMEC (and ``vmex``) use pressure in units of
 :math:`\mu_0\,\mathrm{Pa}` so that :math:`p` has the same units as :math:`B^2`.
 
 Energy principle (VMEC formulation)
@@ -166,11 +166,11 @@ surface — the *spectral force residuals*
 
 and the equilibrium is the root :math:`F = 0`. Practically, the residuals
 are evaluated by synthesizing the geometry on the angular grid
-(:func:`~vmec_jax.core.transforms.fourier_to_real`), forming the real-space
-force kernels (:func:`~vmec_jax.core.forces.mhd_force_kernels`), and
+(:func:`~vmex.core.transforms.fourier_to_real`), forming the real-space
+force kernels (:func:`~vmex.core.forces.mhd_force_kernels`), and
 projecting back onto the Fourier basis with the weighted DFT
-(:func:`~vmec_jax.core.transforms.tomnsps`); the full pipeline is
-:func:`~vmec_jax.core.forces.spectral_mhd_forces`.
+(:func:`~vmex.core.transforms.tomnsps`); the full pipeline is
+:func:`~vmex.core.forces.spectral_mhd_forces`.
 
 The iteration is a preconditioned steepest descent on :math:`W` — a damped
 second-order Richardson ("momentum") scheme
@@ -180,7 +180,7 @@ second-order Richardson ("momentum") scheme
    \ddot{\mathbf{x}} + \frac{1}{\tau}\dot{\mathbf{x}} = P^{-1} F(\mathbf{x}),
 
 with :math:`\mathbf{x}` the stacked moments and :math:`P` the preconditioner
-(:mod:`vmec_jax.core.step`; discretization in :doc:`algorithms`). Because
+(:mod:`vmex.core.step`; discretization in :doc:`algorithms`). Because
 :math:`F = -\nabla_{\mathbf{x}} W`, every accepted step decreases :math:`W`
 monotonically (up to the momentum transient) and the descent stops only at a
 stationary point of the energy.
@@ -246,7 +246,7 @@ boundary coefficients in a constrained internal basis:
    Z^{c}_{1n,\mathrm{int}} = \frac{1}{2}\left(R^{s}_{1n,\mathrm{phys}} - Z^{c}_{1n,\mathrm{phys}}\right).
 
 This transformation is applied in VMEC2000 ``readin`` and inverted when
-converting to physical coefficients for diagnostics. ``vmec_jax`` uses the same
+converting to physical coefficients for diagnostics. ``vmex`` uses the same
 internal basis so that boundary handling and multigrid interpolation match
 VMEC2000.
 
@@ -294,7 +294,7 @@ Here:
 - ``signgs`` is VMEC's sign convention such that ``signgs*sqrtg`` is positive
   away from the magnetic axis,
 - ``lamscale`` is the VMEC scaling applied to :math:`\lambda` derivatives
-  (stored in ``wout`` and used by ``vmec_jax`` for parity).
+  (stored in ``wout`` and used by ``vmex`` for parity).
 
 The **covariant** components are defined by:
 
@@ -320,7 +320,7 @@ mesh, with the even/odd-m decomposition
    g_{uv} = R_u R_v + Z_u Z_v, \qquad
    g_{vv} = R_v^2 + Z_v^2 + R^2
 
-(:func:`~vmec_jax.core.fields.metric_elements`; the :math:`R^2` term is the
+(:func:`~vmex.core.fields.metric_elements`; the :math:`R^2` term is the
 cylindrical toroidal metric at unit
 :math:`d\phi_{\mathrm{phys}}/d\zeta`). Lowering the index and contracting,
 
@@ -334,19 +334,19 @@ cylindrical toroidal metric at unit
    |B|^2 = B^u B_u + B^v B_v.
 
 The chain — angular derivatives of :math:`(R, Z, \lambda)` from
-:func:`~vmec_jax.core.geometry.real_space_geometry`, half-mesh
-:math:`\sqrt{g}` from :func:`~vmec_jax.core.geometry.half_mesh_jacobian`,
+:func:`~vmex.core.geometry.real_space_geometry`, half-mesh
+:math:`\sqrt{g}` from :func:`~vmex.core.geometry.half_mesh_jacobian`,
 metric elements, then :math:`B^u, B^v \to B_u, B_v \to |B|^2` — is assembled
-in :func:`~vmec_jax.core.fields.magnetic_fields`, which returns the
+in :func:`~vmex.core.fields.magnetic_fields`, which returns the
 contravariant/covariant components together with the total pressure
 :math:`\mathrm{bsq} = |B|^2/2 + p` and the differential volume
 :math:`vp = \mathrm{signgs}\,\langle\sqrt{g}\rangle`. The ``lamscale``
 normalization of the :math:`\lambda` derivatives is
-:func:`~vmec_jax.core.fields.lambda_scale`
+:func:`~vmex.core.fields.lambda_scale`
 (``lamscale`` :math:`= \sqrt{h_s \sum_{js} \mathrm{phips}^2}`, ``profil1d.f``),
 and the energy scalars ``wb/wp`` with the force normalizations
 ``fnorm/fnorm1/fnormL`` follow in
-:func:`~vmec_jax.core.fields.energies_and_force_norms`.
+:func:`~vmex.core.fields.energies_and_force_norms`.
 
 ``bcovar`` + ``add_fluxes`` (poloidal flux correction)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -368,7 +368,7 @@ VMEC then applies the correction
 
    B^u \leftarrow B^u + \chi'(s)\,\frac{1}{\sqrt{g}}.
 
-VMEC stores the *half-mesh* averaged ``chipf`` in ``wout``; ``vmec_jax``
+VMEC stores the *half-mesh* averaged ``chipf`` in ``wout``; ``vmex``
 follows VMEC’s averaging rules to convert between ``chipf`` and ``chips``.
 
 Current density
@@ -389,7 +389,7 @@ these in the force kernels. The parallel and perpendicular currents satisfy:
    \mathbf{J} = \mathbf{J}_{\parallel} + \mathbf{J}_{\perp}, \qquad
    \nabla p = \mathbf{J}_{\perp} \times \mathbf{B}.
 
-For optimization diagnostics, ``vmec_jax`` also exposes the JXBFORCE
+For optimization diagnostics, ``vmex`` also exposes the JXBFORCE
 real-space current channels as
 
 .. math::
@@ -405,7 +405,7 @@ grid.  ``vj.BVector`` returns the corresponding Cartesian magnetic-field vector
 Redl Bootstrap-Current Mismatch
 -------------------------------
 
-For finite-beta stage-one studies, ``vmec_jax`` exposes a differentiable Redl
+For finite-beta stage-one studies, ``vmex`` exposes a differentiable Redl
 bootstrap-current residual.  The residual follows the normalized SIMSOPT form
 
 .. math::
@@ -455,7 +455,7 @@ in the standard integral
               {\left\langle\sqrt{1-\lambda B}\right\rangle}.
 
 This differs from SIMSOPT's post-processing routine, which refines angular
-extrema with splines.  The vmec_jax form is intentionally fixed-shape and
+extrema with splines.  The vmex form is intentionally fixed-shape and
 differentiable for use inside exact-Jacobian optimization.
 
 Force balance in VMEC (residual form)
@@ -499,11 +499,11 @@ poloidal-metric couplings; and the :math:`C` kernels (``crmn/czmn``) the
 toroidal-metric couplings. Odd-m planes carry the internal :math:`\sqrt{s}`
 representation and its chain-rule terms (the discrete
 :math:`d\sqrt{s}/ds` factor ``dshalfds = 0.25``). Implemented in
-:func:`~vmec_jax.core.forces.mhd_force_kernels` (R/Z blocks) and
-:func:`~vmec_jax.core.forces.lambda_force_kernels` (the covariant
+:func:`~vmex.core.forces.mhd_force_kernels` (R/Z blocks) and
+:func:`~vmex.core.forces.lambda_force_kernels` (the covariant
 :math:`B_u, B_v` lambda-force block of ``bcovar.f``); the full real-space
-pipeline is :func:`~vmec_jax.core.forces.mhd_forces` and the projection to
-spectral residuals is :func:`~vmec_jax.core.forces.spectral_mhd_forces`.
+pipeline is :func:`~vmex.core.forces.mhd_forces` and the projection to
+spectral residuals is :func:`~vmex.core.forces.spectral_mhd_forces`.
 
 Spectral condensation (``alias.f``, ``tcon``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -522,13 +522,13 @@ kernel is
 built from the m-profiled geometry channels ``rcon/zcon`` and their frozen
 references ``rcon0/zcon0``. It is band-limited to
 :math:`m \in [1, \mathrm{mpol}-2]` with the ``faccon(m)`` weights
-(:func:`~vmec_jax.core.forces.faccon`,
-:func:`~vmec_jax.core.forces.alias_constraint_force`), converted back to a
+(:func:`~vmex.core.forces.faccon`,
+:func:`~vmex.core.forces.alias_constraint_force`), converted back to a
 real-space force contribution
-(:func:`~vmec_jax.core.forces.constraint_force`), and scaled per surface by
+(:func:`~vmex.core.forces.constraint_force`), and scaled per surface by
 the strength profile :math:`\mathrm{tcon}(s)` computed from the ratio of the
 preconditioner diagonals to the angular force norms
-(:func:`~vmec_jax.core.fields.constraint_scaling`; the ``tcon`` formula is
+(:func:`~vmex.core.fields.constraint_scaling`; the ``tcon`` formula is
 given in :doc:`algorithms`). The constraint vanishes at convergence — it
 never shifts the equilibrium, only the angle representation.
 
@@ -545,7 +545,7 @@ These are combined into scalar norms that appear in the VMEC screen output:
 
 where ``fnorm``, ``fnormL``, and ``r1`` are the VMEC normalization factors
 computed from ``bcovar`` (half-mesh metrics + ``bsup``/``bsub``).
-``vmec_jax`` reproduces these scalars from the same internal quantities to
+``vmex`` reproduces these scalars from the same internal quantities to
 match VMEC2000's per-iteration printout.
 
 Time-step control (Garabedian update)
@@ -579,7 +579,7 @@ where :math:`F` is the preconditioned residual vector (``gc``).
 VMEC’s ``TimeStepControl`` tracks the minimum of the preconditioned residual
 (``res0``) and the physical residual (``res1``). If either grows by a factor of
 ``1e4`` after 10 steps, VMEC restores the last good state and reduces
-``DELT`` by a factor of 1.03. ``vmec_jax`` mirrors this logic to reproduce the
+``DELT`` by a factor of 1.03. ``vmex`` mirrors this logic to reproduce the
 VMEC2000 iteration trace.
 
 Multigrid interpolation (``interp.f``)
@@ -598,7 +598,7 @@ After linear interpolation on a uniform radial grid, coefficients are unscaled:
 
    x_{\mathrm{new}} = \frac{x_{\mathrm{scaled,new}}}{\mathrm{scalxc}_{\mathrm{new}}}.
 
-``vmec_jax`` implements this exact pipeline so that stage-to-stage coefficient
+``vmex`` implements this exact pipeline so that stage-to-stage coefficient
 transfer matches VMEC2000.
 
 Pressure and beta
@@ -617,7 +617,7 @@ The total volume-averaged beta is computed by VMEC as:
 
    \beta_{\mathrm{total}} = \frac{W_P}{W_B}.
 
-``vmec_jax`` follows the same normalization when emitting ``wout`` files.
+``vmex`` follows the same normalization when emitting ``wout`` files.
 
 Geometric embedding and Jacobian
 --------------------------------
@@ -664,37 +664,37 @@ form,
    \tau \equiv (R_u Z_s - R_s Z_u) + \text{(odd-m corrections in } \sqrt{s}\text{)}.
 
 If :math:`\tau` changes sign away from the axis, VMEC flags a bad Jacobian and
-restarts the iteration with a refined axis guess. ``vmec_jax`` reproduces the
+restarts the iteration with a refined axis guess. ``vmex`` reproduces the
 same parity split, half-mesh averaging, and sign check so that Jacobian-reset
 behavior matches VMEC2000.
 
-Implementation mapping (``vmec_jax``)
+Implementation mapping (``vmex``)
 -------------------------------------
 
-Key :mod:`vmec_jax.core` modules that directly implement the equations above
+Key :mod:`vmex.core` modules that directly implement the equations above
 (the full map is in :doc:`architecture`):
 
-- :mod:`vmec_jax.core.fourier` — mode tables, ``mscale/nscale``, trig/weight
+- :mod:`vmex.core.fourier` — mode tables, ``mscale/nscale``, trig/weight
   tables (``fixaray.f``).
-- :mod:`vmec_jax.core.transforms` — ``totzsps/tomnsps``-family transforms as
+- :mod:`vmex.core.transforms` — ``totzsps/tomnsps``-family transforms as
   batched matmuls.
-- :mod:`vmec_jax.core.geometry` — geometry, metric, Jacobian and the
+- :mod:`vmex.core.geometry` — geometry, metric, Jacobian and the
   :math:`\tau` sign check (``jacobian.f``).
-- :mod:`vmec_jax.core.fields` — contravariant/covariant field components,
+- :mod:`vmex.core.fields` — contravariant/covariant field components,
   energies, ``tcon`` (``bcovar.f``).
-- :mod:`vmec_jax.core.forces` — real-space force kernels (``A,B,C`` blocks)
+- :mod:`vmex.core.forces` — real-space force kernels (``A,B,C`` blocks)
   and the spectral-condensation constraint force (``forces.f``, ``alias.f``).
-- :mod:`vmec_jax.core.residuals` — scalar residuals ``fsqr/fsqz/fsql`` and the
+- :mod:`vmex.core.residuals` — scalar residuals ``fsqr/fsqz/fsql`` and the
   m=1 constraint (``residue.f90``).
-- :mod:`vmec_jax.core.preconditioner` — 1D radial preconditioner
+- :mod:`vmex.core.preconditioner` — 1D radial preconditioner
   (``precondn.f``, ``scalfor.f``, ``lamcal.f90``).
-- :mod:`vmec_jax.core.preconditioner_2d` — 2D block preconditioner / Newton
+- :mod:`vmex.core.preconditioner_2d` — 2D block preconditioner / Newton
   step (``Hessian/precon2d.f``).
-- :mod:`vmec_jax.core.step` — Richardson update and restart control
+- :mod:`vmex.core.step` — Richardson update and restart control
   (``evolve.f``, ``restart.f``).
-- :mod:`vmec_jax.core.solver` — the fixed-boundary iteration loop
+- :mod:`vmex.core.solver` — the fixed-boundary iteration loop
   (``funct3d.f``, ``eqsolve.f``).
-- :mod:`vmec_jax.core.implicit` — implicit differentiation of the converged
+- :mod:`vmex.core.implicit` — implicit differentiation of the converged
   equilibrium (no VMEC2000 counterpart).
 
 References (local)

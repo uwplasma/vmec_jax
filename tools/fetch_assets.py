@@ -19,17 +19,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 REFERENCE_TAG = "assets-20260316-nc"
-REFERENCE_ASSET_NAME = "vmec_jax_assets_20260316_nc_only.tar.gz"
+REFERENCE_ASSET_NAME = "vmex_assets_20260316_nc_only.tar.gz"
 REFERENCE_URL = (
-    "https://github.com/uwplasma/vmec_jax/releases/download/"
+    "https://github.com/uwplasma/vmex/releases/download/"
     f"{REFERENCE_TAG}/{REFERENCE_ASSET_NAME}"
 )
 REFERENCE_SHA256 = "3344fc2401fffed240ee57ae741ec521594c592627c76dae203503f485e4c0d8"
 
 WOUT_FIXTURES_TAG = "assets-20260526-wout-fixtures"
-WOUT_FIXTURES_ASSET_NAME = "vmec_jax_wout_fixtures_20260526.tar.gz"
+WOUT_FIXTURES_ASSET_NAME = "vmex_wout_fixtures_20260526.tar.gz"
 WOUT_FIXTURES_URL = (
-    "https://github.com/uwplasma/vmec_jax/releases/download/"
+    "https://github.com/uwplasma/vmex/releases/download/"
     f"{WOUT_FIXTURES_TAG}/{WOUT_FIXTURES_ASSET_NAME}"
 )
 WOUT_FIXTURES_SHA256 = "e9fd844a4ebed043576eec8ac2b17f7ff3e2a0e0a1b5adfc89742139101e00f9"

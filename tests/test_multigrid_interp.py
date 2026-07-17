@@ -1,4 +1,4 @@
-"""Property tests for ``vmec_jax.core.multigrid`` state interpolation.
+"""Property tests for ``vmex.core.multigrid`` state interpolation.
 
 ``interpolate_state`` is the interp.f port (A/B-proven against the legacy
 parity port before that tree was deleted).  On a realistic coarse state —
@@ -23,17 +23,17 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 import pytest
 
-from vmec_jax.core import solver
-from vmec_jax.core.fourier import mode_table
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core.multigrid import interpolate_coefficients, interpolate_state
-from vmec_jax.core.solver import SpectralState
+from vmex.core import solver
+from vmex.core.fourier import mode_table
+from vmex.core.input import VmecInput
+from vmex.core.multigrid import interpolate_coefficients, interpolate_state
+from vmex.core.solver import SpectralState
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solves: run jitted
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 INPUT_FILE = DATA_DIR / "input.cth_like_fixed_bdy"
-CACHE = Path("/tmp/vmec_jax_multigrid_cth_ns15_state.pkl")
+CACHE = Path("/tmp/vmex_multigrid_cth_ns15_state.pkl")
 
 FIELDS = ("R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin")
 NS_COARSE = 15

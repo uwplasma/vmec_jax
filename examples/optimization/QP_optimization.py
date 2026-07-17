@@ -40,8 +40,8 @@ from pathlib import Path
 import numpy as np
 import jax.numpy as jnp
 
-import vmec_jax as vj
-from vmec_jax import optimize as opt
+import vmex as vj
+from vmex import optimize as opt
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parents[1] / "data" / "input.minimal_seed_nfp2"
@@ -55,7 +55,7 @@ MAX_MODE_SCHEDULE = (1, 2, 3)              # stages > 3 stall — see docstring
 MAX_NFEV = 2000                            # trial budget per stage
 FTOL = 1e-6                                # per-stage convergence tolerance
 JAC = "implicit"
-if os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1":  # smoke-test budget
+if os.environ.get("VMEX_EXAMPLES_CI") == "1":  # smoke-test budget
     MAX_MODE_SCHEDULE, MAX_NFEV, FTOL = (1,), 4, 1e-4
 
 # --------------------------- seed equilibrium -------------------------------

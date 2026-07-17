@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """True single-stage plasma-boundary + ESSOS-coil optimization (coil-agnostic path).
 
-vmec-jax is coil-agnostic: the coils live in ESSOS (:class:`essos.coils.Coils`)
+vmex is coil-agnostic: the coils live in ESSOS (:class:`essos.coils.Coils`)
 and the differentiable free-boundary machinery consumes any ``xyz -> B`` field
-callable -- no coil code inside vmec-jax at all.  This example runs the *full*
+callable -- no coil code inside vmex at all.  This example runs the *full*
 single-stage stellarator problem: it co-optimizes the plasma boundary Fourier
 coefficients AND the ESSOS coil-group currents *simultaneously*, driven by ONE
 exact gradient that threads through
@@ -28,7 +28,7 @@ Objective (a genuine single-stage functional)::
 
 Making the virtual-casing plasma field differentiable in the *boundary* (not just
 the coils) needs its adaptive quadrature/patch precision frozen to static values
-first -- :func:`~vmec_jax.core.freeboundary_diff.plan_vc_precision` selects it
+first -- :func:`~vmex.core.freeboundary_diff.plan_vc_precision` selects it
 once from the starting boundary; see that module and ``virtual_casing_jax``'s
 ``PrecisionPlan``.
 
@@ -43,7 +43,7 @@ wout, the boundary, and the fixed ESSOS coil geometry are written to
 can draw initial-vs-final without re-optimizing.
 
 Requires the optional ``essos`` and ``virtual_casing_jax`` dependencies.  Honors
-``VMEC_JAX_EXAMPLES_CI=1`` (tiny grid, one descent step) for the smoke test.
+``VMEX_EXAMPLES_CI=1`` (tiny grid, one descent step) for the smoke test.
 """
 
 from __future__ import annotations
@@ -62,9 +62,9 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)  # exact gradients need float64
 
-import vmec_jax as vj
-from vmec_jax.core import freeboundary_diff as FBD
-from vmec_jax.core import implicit as im
+import vmex as vj
+from vmex.core import freeboundary_diff as FBD
+from vmex.core import implicit as im
 
 # --------------------------- parameters ------------------------------------
 DATA = Path(__file__).resolve().parent / "data"
@@ -80,7 +80,7 @@ DETUNE = np.array([1.15, 1.0, 1.0, 1.0])  # +15% on base-coil group 0 at the sta
 BOUNDARY_MODES = [(1, 0), (2, 0)]         # (m, n) shaping dofs the optimizer moves
 CASES = [("A_vacuum", 0.0), ("B_finite_beta", 1000.0)]  # (name, pres_scale)
 
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if CI:  # smoke budget: coarse grid, coarse ns, a couple of descent steps
     NS, NPHI, NTHETA, MAXITER = 12, 8, 8, 2
     SOLVE = dict(ftol=1e-9, max_iterations=4000)

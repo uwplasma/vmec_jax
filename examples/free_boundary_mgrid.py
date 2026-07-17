@@ -20,14 +20,14 @@ import dataclasses
 import os
 from pathlib import Path
 
-import vmec_jax as vj
+import vmex as vj
 
 # --------------------------- parameters ------------------------------------
 DATA = Path(__file__).resolve().parent / "data"
 INPUT_FILE = DATA / "input.cth_like_free_bdy"
 MGRID_FILE = DATA / "mgrid_cth_like.nc"       # tabulated vacuum field from the coils
 OUT_DIR = Path("output_free_boundary_mgrid")
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 
 inp = vj.VmecInput.from_file(INPUT_FILE)
 if CI:  # loosen the tolerance slightly for a faster smoke (still fully converges)

@@ -33,8 +33,8 @@ from pathlib import Path
 
 import numpy as np
 
-import vmec_jax as vj
-from vmec_jax import optimize as opt
+import vmex as vj
+from vmex import optimize as opt
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parents[1] / "data" / "input.minimal_seed_nfp2"
@@ -48,7 +48,7 @@ MAX_MODE_SCHEDULE = (1, 2, 3, 4, 5)       # boundary-harmonic continuation
 MAX_NFEV = 2000                           # trial-boundary budget per stage
 FTOL = 1e-6                               # per-stage convergence tolerance
 JAC = "implicit"                          # adjoint gradients; None = finite diff
-if os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1":  # smoke-test budget
+if os.environ.get("VMEX_EXAMPLES_CI") == "1":  # smoke-test budget
     MAX_MODE_SCHEDULE, MAX_NFEV, FTOL = (1,), 4, 1e-4
 
 # --------------------------- seed equilibrium ------------------------------
@@ -93,7 +93,7 @@ objective_terms = [
     # (traceable -> works with JAC="implicit" or JAC=None) and quasilinear
     # heat-flux proxy (eigenvector-weighted -> JAC=None only) on a core flux
     # tube:
-    #   from vmec_jax.core import turbulence as turb
+    #   from vmex.core import turbulence as turb
     # (turb.turbulent_growth_rate, 0.0, 1.0),
     # (turb.quasilinear_flux_proxy, 0.0, 0.1),
 ]

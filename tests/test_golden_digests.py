@@ -2,7 +2,7 @@
 
 ``tests/golden_digests.json`` holds a few-KB set of reference scalars extracted
 from the VMEC2000 golden runs (``tools/make_golden_digests.py``).  Here we solve
-each case with vmec_jax and check the wout scalars against those digests — the
+each case with vmex and check the wout scalars against those digests — the
 physics accuracy (energies, aspect, beta, iota/pressure, converged boundary
 shape) matched to VMEC2000, self-contained in the repo.  The full
 variable-by-variable comparison against the stored ``wout`` bundle lives in
@@ -19,7 +19,7 @@ import pytest
 
 pytest.importorskip("netCDF4")
 
-import vmec_jax as vj  # noqa: E402
+import vmex as vj  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 DATA = REPO / "examples" / "data"
@@ -73,7 +73,7 @@ def _check(case: str) -> None:
         rtol = RTOL.get(key, DEFAULT_RTOL)
         if not np.isclose(got[key], refval, rtol=rtol, atol=ATOL):
             rel = abs(got[key] / refval - 1.0) if refval else abs(got[key])
-            problems.append(f"{key}: vmec_jax {got[key]:.6e} vs VMEC2000 "
+            problems.append(f"{key}: vmex {got[key]:.6e} vs VMEC2000 "
                             f"{refval:.6e} (rel {rel:.2e} > {rtol:.0e})")
     assert not problems, f"{case} scalar parity:\n  " + "\n  ".join(problems)
 

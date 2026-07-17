@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """All the built-in diagnostics: solve -> every ``plot_wout`` figure -> Boozer.
 
-vmec-jax ships its plotting and its Boozer transform in the box, so a single
+vmex ships its plotting and its Boozer transform in the box, so a single
 converged equilibrium gives you the whole diagnostic set with no external
 tooling.  This script walks the two calls that matter:
 
@@ -23,14 +23,14 @@ import dataclasses
 import os
 from pathlib import Path
 
-import vmec_jax as vj
+import vmex as vj
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parent / "data" / "input.li383_low_res"
 OUT_DIR = Path("output_plot_and_boozer")
 WHICH = ("summary", "surfaces", "modB", "profiles", "3d")  # all plot_wout kinds
 RUN_BOOZER = True                                          # optional dep
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"         # smoke-test mode
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"         # smoke-test mode
 
 # --------------------------- solve a small equilibrium ---------------------
 inp = vj.VmecInput.from_file(INPUT_FILE)

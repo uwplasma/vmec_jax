@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`vmec_jax.core.printing` (printout.f format port).
+"""Unit tests for :mod:`vmex.core.printing` (printout.f format port).
 
 The screen/threed1 iteration lines and headers are asserted byte-for-byte
 for representative values in every variant (symmetric/lasym, fixed/free
@@ -8,7 +8,7 @@ boundary), plus the stage/vacuum banners and the termination summary
 
 from __future__ import annotations
 
-from vmec_jax.core import errors, printing
+from vmex.core import errors, printing
 
 
 def test_stage_banner_format():

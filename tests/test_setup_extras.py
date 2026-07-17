@@ -1,4 +1,4 @@
-"""Targeted unit tests for :mod:`vmec_jax.core.setup` corner branches.
+"""Targeted unit tests for :mod:`vmex.core.setup` corner branches.
 
 Covers the ``APHI`` toroidal-flux polynomial map (identity short-circuit
 and a genuine polynomial, checked against the exact antiderivative), the
@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from vmec_jax.core import setup as su
+from vmex.core import setup as su
 
 
 def test_torflux_identity_short_circuit():

@@ -1,9 +1,9 @@
-"""End-to-end fixed-boundary solve tests: ``vmec_jax.core.solver`` vs VMEC2000.
+"""End-to-end fixed-boundary solve tests: ``vmex.core.solver`` vs VMEC2000.
 
 Golden references (VMEC2000, PARVMEC 9.0 single-rank runs, FTOL = 1e-14):
 
-- ``~/vmec_jax_notes/golden/solovev/``            (2D, ncurr=0, ns=11, 215 iters)
-- ``~/vmec_jax_notes/golden/cth_like_fixed_bdy/`` (nfp=5 ntor=0, ncurr=1,
+- ``~/vmex_notes/golden/solovev/``            (2D, ncurr=0, ns=11, 215 iters)
+- ``~/vmex_notes/golden/cth_like_fixed_bdy/`` (nfp=5 ntor=0, ncurr=1,
   two_power mass/current, ns=15, 434 iters)
 
 Checked here:
@@ -27,8 +27,8 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 import pytest
 
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core import solver
+from vmex.core.input import VmecInput
+from vmex.core import solver
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 from conftest import resolve_golden_dir

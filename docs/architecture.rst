@@ -1,7 +1,7 @@
 Architecture
 ============
 
-The production implementation lives in :mod:`vmec_jax.core`: one concern per
+The production implementation lives in :mod:`vmex.core`: one concern per
 module, each with a header docstring naming its VMEC2000 counterpart file(s)
 and the equations it implements. Everything is pure-JAX and shared between
 the CLI, the differentiable API, plotting, and the wout writer — there is a
@@ -17,116 +17,116 @@ Module map
    * - Module
      - Role
      - VMEC2000 counterpart
-   * - :mod:`~vmec_jax.core.input`
+   * - :mod:`~vmex.core.input`
      - ``VmecInput``: INDATA + VMEC++-style JSON parsing, round-trip writers
      - ``readin.f``, ``vmec_input.f``
-   * - :mod:`~vmec_jax.core.profiles`
+   * - :mod:`~vmex.core.profiles`
      - pressure / iota / current parameterizations (power series, splines,
        two-power, pedestal, ...)
      - ``profile_functions.f``, ``profil1d.f``
-   * - :mod:`~vmec_jax.core.fourier`
+   * - :mod:`~vmex.core.fourier`
      - ``(m,n)`` bookkeeping, parity tables, ``mscale/nscale``, trig tables,
        m=1 constraint maps
      - ``fixaray.f``
-   * - :mod:`~vmec_jax.core.transforms`
+   * - :mod:`~vmex.core.transforms`
      - spectral <-> real-space transforms as batched matmuls
      - ``totzsps.f``/``tomnsps.f`` (``totzsp.f90``/``tomnsp.f90``)
-   * - :mod:`~vmec_jax.core.geometry`
+   * - :mod:`~vmex.core.geometry`
      - real-space :math:`R, Z, \lambda`, half-mesh Jacobian ``tau``/``sqrt(g)``,
        metrics ``guu, guv, gvv``
      - ``jacobian.f``
-   * - :mod:`~vmec_jax.core.fields`
+   * - :mod:`~vmex.core.fields`
      - :math:`B^u, B^v, |B|`, covariant B, pressure, energies ``wb/wp``,
        ``tcon``
      - ``bcovar.f``, ``add_fluxes.f90``
-   * - :mod:`~vmec_jax.core.forces`
+   * - :mod:`~vmex.core.forces`
      - MHD force kernels + spectral-condensation constraint force
      - ``forces.f``, ``alias.f``
-   * - :mod:`~vmec_jax.core.residuals`
+   * - :mod:`~vmex.core.residuals`
      - ``fsqr/fsqz/fsql``, m=1 constraint, ``fedge``
      - ``residue.f90``, ``getfsq.f``
-   * - :mod:`~vmec_jax.core.preconditioner`
+   * - :mod:`~vmex.core.preconditioner`
      - 1D radial preconditioner, vectorized tridiagonal (Thomas) solve
      - ``precondn.f``, ``scalfor.f``, ``lamcal.f90``, ``tridslv``
-   * - :mod:`~vmec_jax.core.preconditioner_2d`
+   * - :mod:`~vmex.core.preconditioner_2d`
      - 2D block preconditioner: matrix-free Newton step (``jax.jvp``
        Hessian-vector products + SOLVAX GMRES)
      - ``Hessian/precon2d.f`` (jog-free)
-   * - :mod:`~vmec_jax.core.step`
+   * - :mod:`~vmex.core.step`
      - damped 2nd-order Richardson step, ``dtau`` damping (``ndamp=10``),
        ``irst`` back-off
      - ``evolve.f``, ``restart.f``
-   * - :mod:`~vmec_jax.core.setup`
+   * - :mod:`~vmex.core.setup`
      - radial grids, 1D profile arrays, boundary processing, initial guess
      - ``profil1d.f``, ``profil3d.f``, ``readin.f``
-   * - :mod:`~vmec_jax.core.solver`
+   * - :mod:`~vmex.core.solver`
      - single-grid solve loop: ``lax.while_loop`` core + host-blocked CLI lane
      - ``funct3d.f``, ``eqsolve.f``
-   * - :mod:`~vmec_jax.core.multigrid`
+   * - :mod:`~vmex.core.multigrid`
      - ``NS_ARRAY`` ladder, coarse-to-fine interpolation, hot restart
      - ``runvmec.f``, ``interp.f``
-   * - :mod:`~vmec_jax.core.vacuum`
+   * - :mod:`~vmex.core.vacuum`
      - NESTOR: Green's function, ``analyt``/``scalpot``, ``potvac`` solve
      - ``NESTOR_vacuum/`` (``precal``, ``surface``, ``bextern``, ``analyt``,
        ``greenf``, ``fourp``, ``scalpot``, ``solver``, ``bsqvac``)
-   * - :mod:`~vmec_jax.core.freeboundary`
+   * - :mod:`~vmex.core.freeboundary`
      - free-boundary iteration, ``ivac``/``nvacskip`` cadence, external-field
        protocol
      - ``funct3d.f`` (free-boundary block)
-   * - :mod:`~vmec_jax.core.freeboundary_diff`
+   * - :mod:`~vmex.core.freeboundary_diff`
      - differentiable free-boundary residual via virtual casing
      - (no VMEC2000 equivalent)
-   * - :mod:`~vmec_jax.core.mgrid`
+   * - :mod:`~vmex.core.mgrid`
      - mgrid netCDF read/write, differentiable interpolated field; external
        coils live in ESSOS (``essos.coils.Coils``), consumed as an mgrid or
        ``xyz -> B`` callable
      - MAKEGRID file format, ``mgrid_mod.f90``
-   * - :mod:`~vmec_jax.core.implicit`
+   * - :mod:`~vmex.core.implicit`
      - implicit differentiation of the equilibrium (``custom_vjp`` + adjoint
        GMRES)
      - (no VMEC2000 equivalent)
-   * - :mod:`~vmec_jax.core.optimize`
+   * - :mod:`~vmex.core.optimize`
      - objectives (quasisymmetry ratio residual, QI residual, aspect, iota,
        mirror, well, DMerc, ...) + least-squares driver
      - (no VMEC2000 equivalent)
-   * - :mod:`~vmec_jax.core.omnigenity`
+   * - :mod:`~vmex.core.omnigenity`
      - traceable Boozer ``|B|`` spectrum + Goodman constructed-QI residual
      - (no VMEC2000 equivalent)
-   * - :mod:`~vmec_jax.core.bootstrap`
+   * - :mod:`~vmex.core.bootstrap`
      - differentiable Redl bootstrap ``<J.B>``, mismatch objective,
        self-consistency Picard loop
      - (no VMEC2000 equivalent; BOOTSJ-adjacent scope)
-   * - :mod:`~vmec_jax.core.stability`
+   * - :mod:`~vmex.core.stability`
      - infinite-n ideal-ballooning eigenvalue objective (COBRA-style)
      - (no VMEC2000 equivalent; COBRA companion code)
-   * - :mod:`~vmec_jax.core.turbulence`
+   * - :mod:`~vmex.core.turbulence`
      - GK flux-tube geometry adapter + SPECTRAX-GK turbulence proxies
      - (no VMEC2000 equivalent)
-   * - :mod:`~vmec_jax.core.nyquist`
+   * - :mod:`~vmex.core.nyquist`
      - Nyquist-resolution Fourier tables, ``bsubs``, jxbforce, Mercier
      - ``wrout.f``, ``bss.f``, ``jxbforce.f``, ``mercier.f``
-   * - :mod:`~vmec_jax.core.postprocess`
+   * - :mod:`~vmex.core.postprocess`
      - derived wout quantities (beta, currents, ``specw``, ``equif``, ...)
      - ``eqfor.f``, ``bcovar.f`` outputs
-   * - :mod:`~vmec_jax.core.wout`
+   * - :mod:`~vmex.core.wout`
      - complete ``wout_*.nc`` schema, writer and reader
      - ``wrout.f``
-   * - :mod:`~vmec_jax.core.printing`
+   * - :mod:`~vmex.core.printing`
      - VMEC2000-format iteration lines, stage banners, termination summary
      - ``printout.f``, ``initialize_radial.f``, ``runvmec.f``
-   * - :mod:`~vmec_jax.core.plotting`
-     - ``vmec --plot`` figures for wout and boozmn files
+   * - :mod:`~vmex.core.plotting`
+     - ``vmex --plot`` figures for wout and boozmn files
      - (no VMEC2000 equivalent)
-   * - :mod:`~vmec_jax.core.boozer`
+   * - :mod:`~vmex.core.boozer`
      - Boozer transform driver (thin wrapper over ``booz_xform_jax``)
      - booz_xform
-   * - :mod:`~vmec_jax.core.device`
+   * - :mod:`~vmex.core.device`
      - measured CPU/GPU placement policy for the solve lanes
      - (no VMEC2000 equivalent)
-   * - :mod:`~vmec_jax.core.errors`
+   * - :mod:`~vmex.core.errors`
      - typed zero-crash exceptions + the VMEC2000 ``werror`` message table
      - ``runvmec.f`` error flags
-   * - :mod:`~vmec_jax.core.cli`
+   * - :mod:`~vmex.core.cli`
      - the ``vmec`` entry point
      - ``vmec.f``/``runvmec.f`` driver
 
@@ -134,7 +134,7 @@ State and purity
 ----------------
 
 The solver state is a frozen pytree
-(:class:`~vmec_jax.core.solver.SpectralState`): spectral coefficients of
+(:class:`~vmex.core.solver.SpectralState`): spectral coefficients of
 :math:`R, Z, \lambda` (plus the asymmetric partners when ``lasym``), the
 Richardson velocity, time step, damping history, iteration counters, and the
 restart flag. All solver functions are pure ``state -> state`` maps, which is
@@ -159,7 +159,7 @@ per-block state agreement to machine precision.
 Device policy (CPU/GPU)
 -----------------------
 
-:mod:`vmec_jax.core.device` implements a *measured* CPU/GPU placement policy
+:mod:`vmex.core.device` implements a *measured* CPU/GPU placement policy
 for the solve lanes (calibrated against ``benchmarks/gpu_baseline.json``).
 The cost driver of one iteration is the ``totzsps/tomnsps`` batched-matmul
 work, proxied by
@@ -168,24 +168,24 @@ work, proxied by
 
    w = \mathrm{ns} \times \mathrm{mnmax} \times \mathrm{nznt}
 
-(:func:`~vmec_jax.core.device.iteration_work`). Per-iteration throughput
+(:func:`~vmex.core.device.iteration_work`). Per-iteration throughput
 favours the GPU at every tested size, but the GPU pays fixed per-solve
 overheads (dispatch/transfer floor plus compile or cache load), so small
 decks finish faster on the CPU. The measured crossover is
-:data:`~vmec_jax.core.device.GPU_MIN_ITERATION_WORK` (``100_000``):
-:func:`~vmec_jax.core.device.recommended_device` returns ``"cpu"`` below it
+:data:`~vmex.core.device.GPU_MIN_ITERATION_WORK` (``100_000``):
+:func:`~vmex.core.device.recommended_device` returns ``"cpu"`` below it
 and ``"gpu"`` at or above it, per multigrid stage.
 
-:func:`~vmec_jax.core.device.resolve_device` turns this into a concrete
+:func:`~vmex.core.device.resolve_device` turns this into a concrete
 placement with strict precedence rules: an explicit ``device=`` argument to
 ``solve``/``solve_multigrid`` always wins; a user pin via ``JAX_PLATFORMS``
 or ``JAX_PLATFORM_NAME`` makes the automatic policy stand down entirely; and
 the recommendation is applied only when the recommended platform is actually
-available. :func:`~vmec_jax.core.device.device_context` wraps a stage in the
+available. :func:`~vmex.core.device.device_context` wraps a stage in the
 corresponding ``jax.default_device``.
 
 The optimization path is different:
-:func:`~vmec_jax.core.device.resolve_implicit_device` **always pins the
+:func:`~vmex.core.device.resolve_implicit_device` **always pins the
 implicit-gradient work to the CPU** by default. The ``jac="implicit"``
 Jacobian builds a per-dof vmapped forward-implicit-differentiation graph —
 dozens of preconditioned GMRES solves with inner control flow — whose XLA

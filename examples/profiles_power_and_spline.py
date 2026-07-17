@@ -24,12 +24,12 @@ from pathlib import Path
 
 import numpy as np
 
-import vmec_jax as vj
+import vmex as vj
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parent / "data" / "input.shaped_tokamak_pressure"
 KNOTS = np.array([0.0, 0.25, 0.50, 0.75, 1.0])       # spline sample locations in s
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"   # smoke-test mode
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"   # smoke-test mode
 
 
 def _polyval(coeffs, s):

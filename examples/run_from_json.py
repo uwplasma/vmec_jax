@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """VMEC++-style JSON input: convert an &INDATA deck, round-trip, solve.
 
-vmec-jax reads *both* the classic Fortran ``&INDATA`` namelist and the JSON
+vmex reads *both* the classic Fortran ``&INDATA`` namelist and the JSON
 schema used by VMEC++ (``vmecpp.VmecInput``), and can write the JSON form.  So
 it is a drop-in for either ecosystem: ``vmec input.json`` and
 ``vmec input.circular_tokamak`` both work, and this script shows the conversion
@@ -17,12 +17,12 @@ import dataclasses
 import os
 from pathlib import Path
 
-import vmec_jax as vj
+import vmex as vj
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parent / "data" / "input.circular_tokamak"
 OUT_DIR = Path("output_run_from_json")
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 
 
 def _solve(inp):

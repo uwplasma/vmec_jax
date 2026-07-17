@@ -10,7 +10,7 @@ coarse-to-fine ordering through the trust region — each dof's radius scales as
 shorter leashes and no continuation loop is needed.
 
 The objective combines the traceable Goodman constructed-QI omnigenity
-residual (:class:`vmec_jax.core.omnigenity.QIResidual`, implicit-adjoint
+residual (:class:`vmex.core.omnigenity.QIResidual`, implicit-adjoint
 differentiable) with a weak quasi-poloidal term that plays the basin-guiding
 role of the staged version's QP stage, plus the same aspect / iota-floor /
 mirror practical targets.
@@ -33,9 +33,9 @@ import numpy as np
 
 import jax.numpy as jnp
 
-import vmec_jax as vj
-from vmec_jax import optimize as opt
-from vmec_jax.core.omnigenity import QIResidual
+import vmex as vj
+from vmex import optimize as opt
+from vmex.core.omnigenity import QIResidual
 
 # --------------------------- parameters ------------------------------------
 NFP = 1
@@ -51,7 +51,7 @@ MAX_MODE = 6                               # ALL harmonics at once — no ladder
 ESS_ALPHA = 0.7
 MAX_NFEV = 4000
 FTOL = 1e-8
-if os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1":  # smoke-test budget
+if os.environ.get("VMEX_EXAMPLES_CI") == "1":  # smoke-test budget
     MAX_MODE, MAX_NFEV, FTOL = 2, 4, 1e-4
     SURFACES = np.linspace(0.25, 0.75, 3)
 

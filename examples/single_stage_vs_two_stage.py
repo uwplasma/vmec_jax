@@ -45,7 +45,7 @@ All outputs land in ``output_single_stage_vs_two_stage/{vacuum,beta}/``; the
 phases are resumable (each loads its inputs from the previous phase's files),
 so long runs can be split across sessions/machines.  Requires the optional
 ``essos`` and ``virtual_casing_jax`` dependencies.  Honors
-``VMEC_JAX_EXAMPLES_CI=1`` (tiny grids and budgets) for the smoke test.
+``VMEX_EXAMPLES_CI=1`` (tiny grids and budgets) for the smoke test.
 """
 
 from __future__ import annotations
@@ -65,10 +65,10 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)  # exact gradients need float64
 
-import vmec_jax as vj
-from vmec_jax.core import freeboundary_diff as FBD
-from vmec_jax.core import implicit as im
-from vmec_jax.core import optimize as opt
+import vmex as vj
+from vmex.core import freeboundary_diff as FBD
+from vmex.core import implicit as im
+from vmex.core import optimize as opt
 
 # --------------------------- parameters ------------------------------------
 DATA = Path(__file__).resolve().parent / "data"
@@ -93,7 +93,7 @@ W_LEN, W_CURV = 1.0e-1, 1.0e-3              # coil regularization weights
 W_QS, W_ASP, W_IOTA = 1.0, 1.0e-2, 1.0
 BETA_TARGET_PCT = 1.5                       # --case beta: target <beta> [%]
 
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if CI:  # smoke budget: coarse everything, a handful of iterations
     NS, NPHI, NTHETA = 12, 8, 8
     MODE_LADDER, MAX_NFEV = (1,), 10
@@ -450,7 +450,7 @@ def phase_single(case: str, out: Path, args, *, warm: bool = False) -> None:
     # NOTE: jax.jit around this value_and_grad fails today with a
     # TracerArrayConversionError inside the FBD/im.run stack (host-side
     # conversions that pass under bare grad) -- jit-closing that path is
-    # plan_pre_vmex Item F; the adjoint_tol relaxation above is the
+    # Item F; the adjoint_tol relaxation above is the
     # dominant per-eval win meanwhile.
     vg = jax.value_and_grad(objective, has_aux=True)
     hist: list[float] = []

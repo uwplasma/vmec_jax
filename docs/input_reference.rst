@@ -1,8 +1,8 @@
 Input file reference
 ====================
 
-``vmec-jax`` accepts two input formats, auto-detected by
-:meth:`vmec_jax.core.input.VmecInput.from_file`:
+``vmex`` accepts two input formats, auto-detected by
+:meth:`vmex.core.input.VmecInput.from_file`:
 
 - the classic VMEC2000 ``&INDATA`` Fortran namelist (``input.<case>``), and
 - VMEC++-style JSON (``.json`` suffix or leading ``{``) with identical key
@@ -11,7 +11,7 @@ Input file reference
 Both round-trip: ``VmecInput.to_json`` writes a VMEC++-schema JSON deck that
 parses back to the same input. All VMEC2000 defaults and ``readin.f``
 normalizations are applied on construction (see the
-:mod:`vmec_jax.core.input` docstring for the exact rules).
+:mod:`vmex.core.input` docstring for the exact rules).
 
 INDATA variables
 ----------------
@@ -93,7 +93,7 @@ Pressure profile
      - ``power_series``
      - one of ``power_series``, ``two_power``, ``gauss_trunc``,
        ``cubic_spline``, ``akima_spline``, ``line_segment``, ``pedestal``,
-       ... (see :mod:`vmec_jax.core.profiles`)
+       ... (see :mod:`vmex.core.profiles`)
    * - ``AM``
      - zeros
      - profile coefficients (dense, indices 0..20)
@@ -182,7 +182,7 @@ Free boundary
    * - ``MGRID_FILE``
      - ``'NONE'``
      - MAKEGRID vacuum-field file, or ``'DIRECT_COILS'`` for direct
-       Biot-Savart coil fields (with ``vmec --coils``)
+       Biot-Savart coil fields (with ``vmex --coils``)
    * - ``EXTCUR``
      - —
      - external coil-group currents [A]

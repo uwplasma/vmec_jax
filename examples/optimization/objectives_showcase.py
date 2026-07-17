@@ -13,10 +13,10 @@ before/after:
 ``lgradb``
     RAISE the coil-simplicity proxy ``min L_grad_B`` (Kappel/Landreman
     magnetic-gradient scale length) to ~1.3x its seed value via the traceable
-    :func:`vmec_jax.optimize.l_grad_b_state` — smooth soft-min for the
+    :func:`vmex.optimize.l_grad_b_state` — smooth soft-min for the
     optimizer, hard min for reporting.  Implicit-adjoint lane.
 ``well``
-    Deepen the vacuum magnetic well: :func:`~vmec_jax.optimize.magnetic_well`
+    Deepen the vacuum magnetic well: :func:`~vmex.optimize.magnetic_well`
     is ``(V'(0) - V'(1))/V'(0)`` with POSITIVE = favorable (simsopt
     ``vacuum_well``); the seed sits on a slight hill (-0.037), the target is
     a true well modestly beyond it.  Implicit-adjoint lane.
@@ -28,7 +28,7 @@ before/after:
     Finite-beta Mercier stability: add a parabolic pressure profile
     (``pres_scale`` calibrated once to ``<beta> ~ 1.25%``, the
     ``single_stage_vs_two_stage.py`` recipe) and push the interior
-    :func:`~vmec_jax.optimize.d_merc` profile toward POSITIVE (= Mercier
+    :func:`~vmex.optimize.d_merc` profile toward POSITIVE (= Mercier
     stable) through a hinge penalty on its negative part.  ``d_merc`` is a
     wout-engine objective (host-NumPy Mercier tables) with NO traceable lane,
     so this one campaign runs honest finite differences (``jac=None``) at
@@ -39,7 +39,7 @@ Each campaign: measure the seed metrics -> optimize (short budget, ESS
 trust-region scaling) -> re-solve the final deck -> print a before/after row
 -> save the deck (``to_indata``) + ``metrics.json`` into
 ``output_objectives_showcase/<name>/``.  ``--only lgradb,dmerc`` runs a
-subset.  ``VMEC_JAX_EXAMPLES_CI=1`` shrinks every campaign to a smoke budget
+subset.  ``VMEX_EXAMPLES_CI=1`` shrinks every campaign to a smoke budget
 (ns=12, max_nfev=5) so CI covers both gradient lanes.
 
 The self-consistent bootstrap objective (Redl) is NOT rerun here — that
@@ -64,8 +64,8 @@ from pathlib import Path
 
 import numpy as np
 
-import vmec_jax as vj
-from vmec_jax import optimize as opt
+import vmex as vj
+from vmex import optimize as opt
 
 # --------------------------- parameters ------------------------------------
 DECK = (Path(__file__).resolve().parents[2] / "benchmarks" / "opt_decks"
@@ -92,7 +92,7 @@ BETA_TARGET_PCT = 1.25   # dmerc campaign <beta> [%] (parabolic pressure)
 DMERC_S_MIN = 0.25       # hinge on DMerc over s >= 0.25 (skips near-axis noise)
 W_DMERC = 0.05
 
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if CI:
     # Smoke budget: every campaign (both gradient lanes) at tiny cost.  The
     # precise-QA deck converges below 1e-12 at ns=12 in BOTH vacuum and the
@@ -284,7 +284,7 @@ def run_campaign(name: str) -> dict:
           f"max_nfev {spec['max_nfev']}, use_ess=True")
     if name == "dmerc":
         print("note: d_merc is a wout-engine objective (host-NumPy Mercier "
-              "tables, vmec_jax.core.nyquist) with NO traceable lane — this "
+              "tables, vmex.core.nyquist) with NO traceable lane — this "
               "campaign pays one full equilibrium re-solve PER DOF per "
               "Jacobian, which is exactly why it runs at max_mode "
               f"{spec['max_mode']}.  Honest cost is part of the story.")

@@ -1,129 +1,45 @@
-"""vmec_jax: a JAX implementation of VMEC2000 for fixed and free-boundary equilibria.
+"""Compatibility shim: ``vmec_jax`` was renamed to :mod:`vmex`.
 
-Public API (lazily imported; ``import vmec_jax as vj``):
-
-- :class:`~vmec_jax.core.input.VmecInput` — INDATA / VMEC++-JSON input pytree
-- :func:`~vmec_jax.core.solver.solve` — single-grid fixed-boundary solve
-- :func:`~vmec_jax.core.multigrid.solve_multigrid` — NS_ARRAY ladder (runvmec.f)
-- :func:`~vmec_jax.core.freeboundary.solve_free_boundary` — NESTOR free boundary
-- :func:`~vmec_jax.core.wout.read_wout` / :func:`~vmec_jax.core.wout.write_wout`
-  / :func:`~vmec_jax.core.wout.wout_from_state` / :class:`~vmec_jax.core.wout.WoutData`
-- :func:`~vmec_jax.core.plotting.plot_wout` / :func:`~vmec_jax.core.plotting.plot_boozmn`
-- :func:`~vmec_jax.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
-- :func:`~vmec_jax.core.mgrid.read_mgrid` / :func:`~vmec_jax.core.mgrid.write_mgrid`
-  / :class:`~vmec_jax.core.mgrid.MgridField` (external field is an mgrid or any
-  ``xyz->B`` callable; coils live in ESSOS, ``essos.coils.Coils``)
-- ``vmec_jax.optimize`` — objectives + least-squares driver (module)
-- ``vmec_jax.implicit`` — implicit differentiation of the equilibrium (module)
-- ``vmec_jax.errors`` — typed zero-crash exceptions (also exported directly)
-
-The ``vmec`` console entry point lives in :mod:`vmec_jax.core.cli`.
+Importing ``vmec_jax`` re-exports everything from :mod:`vmex` and emits a
+``DeprecationWarning``.  Submodule access (``vmec_jax.core.solver`` etc.) is
+forwarded by aliasing the already-imported ``vmex`` submodules into
+``sys.modules`` under the old names.  This shim is a one-release courtesy;
+update imports to ``vmex``.
 """
+from __future__ import annotations
 
-from importlib import import_module as _import_module
-from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
-from importlib.metadata import version as _package_version
-import os as _os
-from pathlib import Path as _Path
+import importlib
+import sys
+import warnings
 
-from ._compat import _default_compilation_cache_dir as _default_jax_cache_dir
+warnings.warn(
+    "the 'vmec_jax' package has been renamed to 'vmex'; import 'vmex' instead "
+    "(this compatibility shim will be removed in a future release)",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
+import vmex as _vmex
 
-def _source_tree_version() -> str | None:
-    pyproject = _Path(__file__).resolve().parents[1] / "pyproject.toml"
-    if not pyproject.exists():
-        return None
-    in_project = False
-    for raw_line in pyproject.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if line == "[project]":
-            in_project = True
-            continue
-        if in_project and line.startswith("["):
-            return None
-        if in_project and line.startswith("version"):
-            return line.split("=", 1)[1].strip().strip('"')
-    return None
+# Re-export the public API.
+from vmex import *  # noqa: F401,F403
+__version__ = _vmex.__version__
+if hasattr(_vmex, "__all__"):
+    __all__ = list(_vmex.__all__)
 
-
-try:
-    __version__ = _source_tree_version() or _package_version("vmec-jax")
-except _PackageNotFoundError:  # pragma: no cover - source tree without installed metadata.
-    __version__ = "0+unknown"
-
-# Suppress noisy C++ warnings from XLA/PjRt backend (e.g. repeated
-# "Assume version compatibility. PjRt-IFRT does not track XLA executable
-# versions." on persistent-cache hits). Must be set before *any* ``import
-# jax`` in the process. Uses setdefault so the user can still override via the
-# environment.
-_os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-_os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
-_os.environ.setdefault("GLOG_minloglevel", "2")
-
-# Enable the JAX persistent XLA compilation cache in a machine-scoped
-# directory when requested by the backend/env policy in _compat. Accelerator
-# runs use the cache by default; CPU runs are opt-in to avoid XLA:CPU AOT
-# feature-mismatch warnings on shared or changing runtime environments.
-# ``core.solver._harden_compilation_cache`` re-applies this policy on every
-# solve path in case this module never ran (namespace-package shadowing).
-import jax as _jax
-
-_jax_cache_dir = _default_jax_cache_dir()
-if _jax_cache_dir is not None:
-    _os.makedirs(_jax_cache_dir, exist_ok=True)
-    _jax.config.update("jax_enable_compilation_cache", True)
-    _jax.config.update("jax_compilation_cache_dir", _jax_cache_dir)
-
-# Lazy public exports: name -> (module, attribute).  ``attribute=None``
-# exports the module itself.
-_LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
-    # input
-    "VmecInput": (".core.input", "VmecInput"),
-    # solvers
-    "solve": (".core.solver", "solve"),
-    "solve_multigrid": (".core.multigrid", "solve_multigrid"),
-    "solve_free_boundary": (".core.freeboundary", "solve_free_boundary"),
-    # wout IO
-    "WoutData": (".core.wout", "WoutData"),
-    "read_wout": (".core.wout", "read_wout"),
-    "write_wout": (".core.wout", "write_wout"),
-    "wout_from_state": (".core.wout", "wout_from_state"),
-    # plotting + Boozer
-    "plot_wout": (".core.plotting", "plot_wout"),
-    "plot_boozmn": (".core.plotting", "plot_boozmn"),
-    "run_booz_xform": (".core.boozer", "run_booz_xform"),
-    # external fields
-    "MgridData": (".core.mgrid", "MgridData"),
-    "MgridField": (".core.mgrid", "MgridField"),
-    "read_mgrid": (".core.mgrid", "read_mgrid"),
-    "write_mgrid": (".core.mgrid", "write_mgrid"),
-    # errors
-    "VmecError": (".core.errors", "VmecError"),
-    "VmecInputError": (".core.errors", "VmecInputError"),
-    "VmecJacobianError": (".core.errors", "VmecJacobianError"),
-    "VmecConvergenceError": (".core.errors", "VmecConvergenceError"),
-    "MgridNotFoundError": (".core.errors", "MgridNotFoundError"),
-    # modules
-    "core": (".core", None),
-    "errors": (".core.errors", None),
-    "optimize": (".core.optimize", None),
-    "implicit": (".core.implicit", None),
-    "doctor": (".doctor", None),
-}
-
-__all__ = ["__version__", *sorted(_LAZY_ATTRS)]
+# Forward submodule access: alias every imported vmex submodule under the old
+# top-level name so `import vmec_jax.core.X` and `from vmec_jax.core import X`
+# resolve to the identical vmex module object.
+for _name, _mod in list(sys.modules.items()):
+    if _name == "vmex" or _name.startswith("vmex."):
+        sys.modules["vmec_jax" + _name[len("vmex"):]] = _mod
 
 
 def __getattr__(name: str):
-    entry = _LAZY_ATTRS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module_name, attribute = entry
-    module = _import_module(module_name, __name__)
-    value = module if attribute is None else getattr(module, attribute)
-    globals()[name] = value
-    return value
-
-
-def __dir__():
-    return sorted(set(globals()) | set(_LAZY_ATTRS))
+    """Lazily import and forward any vmex submodule not yet loaded."""
+    try:
+        mod = importlib.import_module(f"vmex.{name}")
+    except ModuleNotFoundError as exc:  # pragma: no cover - mirror vmex
+        raise AttributeError(name) from exc
+    sys.modules[f"vmec_jax.{name}"] = mod
+    return mod

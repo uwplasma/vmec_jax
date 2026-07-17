@@ -27,8 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
-import vmec_jax as vj
-from vmec_jax import optimize as opt
+import vmex as vj
+from vmex import optimize as opt
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parents[1] / "data" / "input.minimal_seed_nfp2"
@@ -43,7 +43,7 @@ ESS_ALPHA = 0.7                           # trust-region decay per harmonic orde
 MAX_NFEV = 4000                           # single-stage budget (~2 ladder stages)
 FTOL = 1e-8
 JAC = "implicit"
-if os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1":  # smoke-test budget
+if os.environ.get("VMEX_EXAMPLES_CI") == "1":  # smoke-test budget
     MAX_MODE, MAX_NFEV, FTOL = 2, 4, 1e-4
 
 # --------------------------- seed equilibrium ------------------------------

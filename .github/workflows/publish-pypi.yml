@@ -64,7 +64,7 @@ jobs:
     needs: build
     environment:
       name: pypi
-      url: https://pypi.org/p/vmec-jax
+      url: https://pypi.org/p/vmex
     permissions:
       id-token: write
     steps:

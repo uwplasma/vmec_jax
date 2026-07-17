@@ -43,7 +43,7 @@ Compile counting uses ``jax_log_compiles`` (the "Compiling <name>" records
 from ``jax._src.interpreters.pxla``) via a logging handler, inside
 subprocesses so every measurement starts from a cold process (rules out
 in-process cache pollution between tests).  Converged states are cached as
-pickles under ``/tmp/vmec_jax_ladder_cache`` to keep reruns fast.
+pickles under ``/tmp/vmex_ladder_cache`` to keep reruns fast.
 """
 
 from __future__ import annotations
@@ -62,13 +62,13 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 
-from vmec_jax.core import multigrid, solver
-from vmec_jax.core.input import VmecInput
+from vmex.core import multigrid, solver
+from vmex.core.input import VmecInput
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solves: run jitted
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
-CACHE_DIR = Path("/tmp/vmec_jax_ladder_cache")
+CACHE_DIR = Path("/tmp/vmex_ladder_cache")
 
 #: xvmec2000 ladder results (see module docstring for provenance).
 VMEC2000_LADDER_WB = {
@@ -126,8 +126,8 @@ _logger = logging.getLogger("jax")
 _logger.addHandler(_CompileCounter())
 _logger.setLevel(logging.WARNING)
 
-from vmec_jax.core import multigrid, solver
-from vmec_jax.core.input import VmecInput
+from vmex.core import multigrid, solver
+from vmex.core.input import VmecInput
 
 def measure(fn):
     c0, l0, t0 = _compiles[0], _lane_compiles[0], time.perf_counter()

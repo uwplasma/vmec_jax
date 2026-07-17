@@ -1,6 +1,6 @@
 """Free-boundary tests: NESTOR operator properties + end-to-end golden run.
 
-``vmec_jax.core.vacuum`` is a cleaned port of the parity-proven JAX NESTOR
+``vmex.core.vacuum`` is a cleaned port of the parity-proven JAX NESTOR
 operator (A/B-proven against the legacy operator to ~5e-12 max-normalized
 before that tree was deleted).  The operator lane here checks the scalpot.f
 skip branch against the full solve and the first-call vacuum diagnostics
@@ -37,12 +37,12 @@ import pytest
 jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402
 
-from vmec_jax.core import freeboundary as FB  # noqa: E402
-from vmec_jax.core import vacuum as V  # noqa: E402
-from vmec_jax.core.errors import MgridNotFoundError  # noqa: E402
-from vmec_jax.core.input import VmecInput  # noqa: E402
-from vmec_jax.core.mgrid import MgridField, read_mgrid  # noqa: E402
-from vmec_jax.core.solver import (  # noqa: E402
+from vmex.core import freeboundary as FB  # noqa: E402
+from vmex.core import vacuum as V  # noqa: E402
+from vmex.core.errors import MgridNotFoundError  # noqa: E402
+from vmex.core.input import VmecInput  # noqa: E402
+from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
+from vmex.core.solver import (  # noqa: E402
     _initial_state, prepare_runtime, resolution_from_input,
 )
 
@@ -401,7 +401,7 @@ def test_cli_missing_mgrid_fallback_warns(tmp_path):
     """CLI policy: missing mgrid -> fixed-boundary fallback warning (VMEC2000)."""
     import types
 
-    from vmec_jax.core.cli import _free_boundary_plan
+    from vmex.core.cli import _free_boundary_plan
 
     deck = tmp_path / "input.cth_like_free_bdy_lasym_small"
     deck.write_text(DECK.read_text())  # mgrid deliberately NOT copied

@@ -2,14 +2,14 @@
 """Quasi-isodynamic (QI) optimization from a circular torus, nfp=1.
 
 Two-stage campaign, one terms-list swap — the "QP first, then QI" route,
-now with exact implicit gradients in *both* stages (plan.md R26h.h2):
+now with exact implicit gradients in *both* stages (R26h.h2):
 
 1. **QP basin** (implicit gradients): drive the quasisymmetry ratio residual
    with helicity (m, n) = (0, 1) plus aspect / iota-floor / mirror targets.
    This forms poloidally closed ``|B|`` contours — the topological
    prerequisite of omnigenity — from the crude circular seed.
 2. **QI refinement** (implicit gradients): swap the QP term for the
-   *traceable* omnigenity residual (:class:`vmec_jax.core.omnigenity.
+   *traceable* omnigenity residual (:class:`vmex.core.omnigenity.
    QIResidual` — Goodman constructed-QI-target distance on a fully
    differentiable in-state Boozer ``|B|`` transform: bounce-distance
    uniformity, extremum-contour closure, single-well monotonicity;
@@ -50,9 +50,9 @@ from pathlib import Path
 import numpy as np
 import jax.numpy as jnp
 
-import vmec_jax as vj
-from vmec_jax import optimize as opt
-from vmec_jax.core.omnigenity import QIResidual
+import vmex as vj
+from vmex import optimize as opt
+from vmex.core.omnigenity import QIResidual
 
 # --------------------------- parameters ------------------------------------
 NFP = 1
@@ -69,7 +69,7 @@ QP_SCHEDULE = MAX_MODE_SCHEDULE[:3]        # stage 1: QP basin (implicit)
 QI_SCHEDULE = MAX_MODE_SCHEDULE[2:]        # stage 2: QI refinement (implicit)
 QP_NFEV, QI_NFEV = 2000, 1000              # trial budgets per stage
 FTOL = 1e-6                                # per-stage convergence tolerance
-if os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1":  # smoke-test budget
+if os.environ.get("VMEX_EXAMPLES_CI") == "1":  # smoke-test budget
     QP_SCHEDULE, QI_SCHEDULE, QP_NFEV, QI_NFEV = (1,), (1,), 6, 3
     FTOL = 1e-4
 

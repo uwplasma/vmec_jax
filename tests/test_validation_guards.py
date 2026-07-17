@@ -16,9 +16,9 @@ import pytest
 
 import jax.numpy as jnp
 
-from vmec_jax.core import boozer, optimize as opt
-from vmec_jax.core.fourier import Resolution
-from vmec_jax.core.input import _read_indata_text, _parse_scalar
+from vmex.core import boozer, optimize as opt
+from vmex.core.fourier import Resolution
+from vmex.core.input import _read_indata_text, _parse_scalar
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 
 
 def test_least_squares_rejects_unknown_jac():
-    from vmec_jax.core.input import VmecInput
+    from vmex.core.input import VmecInput
 
     inp = VmecInput.from_file(str(DATA_DIR / "input.solovev"))
     with pytest.raises(ValueError, match="jac must be None or 'implicit'"):
@@ -92,7 +92,7 @@ def test_least_squares_rejects_unknown_jac():
 
 
 def test_least_squares_implicit_rejects_lasym_decks():
-    from vmec_jax.core.input import VmecInput
+    from vmex.core.input import VmecInput
 
     inp = VmecInput.from_file(str(DATA_DIR / "input.up_down_asymmetric_tokamak"))
     assert bool(inp.lasym)

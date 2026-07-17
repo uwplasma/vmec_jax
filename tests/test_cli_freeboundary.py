@@ -1,4 +1,4 @@
-"""CLI free-boundary routing tests (``vmec_jax.core.cli`` -> ``core.freeboundary``).
+"""CLI free-boundary routing tests (``vmex.core.cli`` -> ``core.freeboundary``).
 
 Covered:
 
@@ -32,10 +32,10 @@ jax = pytest.importorskip("jax")
 
 jax.config.update("jax_enable_x64", True)
 
-from vmec_jax.core import cli
-from vmec_jax.core.errors import INPUT_ERROR_FLAG, MORE_ITER_FLAG
-from vmec_jax.core.mgrid import read_mgrid
-from vmec_jax.core.wout import read_wout
+from vmex.core import cli
+from vmex.core.errors import INPUT_ERROR_FLAG, MORE_ITER_FLAG
+from vmex.core.mgrid import read_mgrid
+from vmex.core.wout import read_wout
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 DECK = DATA_DIR / "input.cth_like_free_bdy_lasym_small"

@@ -2,11 +2,11 @@
 """Single-stage free-boundary optimization: fit coil currents to confine a plasma.
 
 The *two-stage* stellarator workflow finds a good plasma boundary first, then
-searches for coils that reproduce it.  vmec-jax can do the coil half in one
+searches for coils that reproduce it.  vmex can do the coil half in one
 gradient-based shot, because the free-boundary condition ``B_out . n = 0`` on the
 target plasma boundary is a smooth, exactly-differentiable objective of the coil
 degrees of freedom (the plasma's own field is removed by the **virtual-casing
-principle**; see :mod:`vmec_jax.core.freeboundary_diff`).  ``jax.grad`` of that
+principle**; see :mod:`vmex.core.freeboundary_diff`).  ``jax.grad`` of that
 objective is exact and finite-difference-validated to ~1e-9, so a standard
 least-squares driver drives it directly — no finite-difference coil scan.
 
@@ -31,9 +31,9 @@ import jax
 import jax.numpy as jnp
 import scipy.optimize
 
-from vmec_jax.core import freeboundary_diff as FBD
-from vmec_jax.core.mgrid import MgridField, read_mgrid
-from vmec_jax.core.wout import read_wout
+from vmex.core import freeboundary_diff as FBD
+from vmex.core.mgrid import MgridField, read_mgrid
+from vmex.core.wout import read_wout
 
 # --------------------------- parameters ------------------------------------
 DATA = Path(__file__).resolve().parent / "data"
@@ -41,7 +41,7 @@ WOUT = DATA / "single_grid" / "wout_cth_like_free_bdy.nc"
 MGRID = DATA / "mgrid_cth_like.nc"
 EXTCUR0 = np.array([4700.0, 1000.0])   # the confining coil-group currents
 PERTURB = np.array([0.80, 1.35])       # start 20% / +35% off — B.n is then large
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 NPHI = NTHETA = 20 if CI else 32
 
 

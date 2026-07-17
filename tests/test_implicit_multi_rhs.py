@@ -15,8 +15,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from vmec_jax.core import implicit as im
-from vmec_jax.core.input import VmecInput
+from vmex.core import implicit as im
+from vmex.core.input import VmecInput
 
 DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
 

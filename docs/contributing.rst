@@ -5,11 +5,11 @@ Migration status
 ----------------
 
 The repository recently completed a clean-room rewrite: the production
-implementation is :mod:`vmec_jax.core` (~30 focused modules, one concern per
+implementation is :mod:`vmex.core` (~30 focused modules, one concern per
 file — see :doc:`architecture`), and the ``vmec`` CLI runs on it end to end.
 The remaining top-level legacy modules are being removed in an ongoing
 deletion sweep; new code, tests, and documentation should target
-``vmec_jax.core`` only. Every core module was validated by A/B equivalence
+``vmex.core`` only. Every core module was validated by A/B equivalence
 tests against the parity-proven legacy implementation
 (``tests/``) and end to end against VMEC2000 golden runs.
 
@@ -17,7 +17,7 @@ Workflow
 --------
 
 1. Add or extend a kernel with a focused API in the matching
-   :mod:`vmec_jax.core` module; the module header docstring names the
+   :mod:`vmex.core` module; the module header docstring names the
    VMEC2000 counterpart file it ports — keep that cross-reference current.
 2. Add a regression test under ``tests/`` (fast, offline where possible);
    parity-sensitive changes need a check against the golden VMEC2000

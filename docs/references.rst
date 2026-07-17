@@ -79,7 +79,7 @@ Confinement objectives and optimization:
 20. A. Goodman et al., “Constructing precisely quasi-isodynamic magnetic
     fields,” *Journal of Plasma Physics* 89(5), 905890504 (2023),
     arXiv:2211.09829 — the constructed-QI target implemented by
-    :class:`~vmec_jax.core.omnigenity.QIResidual`.
+    :class:`~vmex.core.omnigenity.QIResidual`.
 
 21. J. R. Cary and S. G. Shasharina, “Omnigenity and quasihelicity in helical
     plasma confinement systems,” *Physics of Plasmas* 4, 3323 (1997) — the

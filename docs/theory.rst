@@ -1,7 +1,7 @@
 Theory and conventions
 ======================
 
-This page summarizes conventions used in ``vmec-jax``. The goal is
+This page summarizes conventions used in ``vmex``. The goal is
 *compatibility* with VMEC2000 (``wout_*.nc``) and with standard VMEC literature.
 
 Coordinates and angles
@@ -48,10 +48,10 @@ VMEC represents a surface in cylindrical coordinates using Fourier series:
       Z_{mn}^c(s)\cos(m\theta-n\zeta) + Z_{mn}^s(s)\sin(m\theta-n\zeta)
    \Bigr).
 
-``vmec-jax`` stores these coefficients in the
-:class:`~vmec_jax.core.solver.SpectralState` pytree as arrays shaped
+``vmex`` stores these coefficients in the
+:class:`~vmex.core.solver.SpectralState` pytree as arrays shaped
 ``(ns, K)`` where ``K`` is the number of ``(m,n)`` modes in the main VMEC
-ordering (see :mod:`vmec_jax.core.fourier` for the mode bookkeeping).
+ordering (see :mod:`vmex.core.fourier` for the mode bookkeeping).
 
 Parities and stellarator symmetry (``lasym``)
 ---------------------------------------------
@@ -77,23 +77,23 @@ A *stellarator-symmetric* equilibrium is invariant under
      - :math:`\sin(m\theta-n\zeta)` (``lmns``)
      - :math:`\cos` (``lmnc``)
 
-:class:`~vmec_jax.core.solver.SpectralState` always carries all six blocks
+:class:`~vmex.core.solver.SpectralState` always carries all six blocks
 (``R_cos, R_sin, Z_cos, Z_sin, L_cos, L_sin``); in symmetric runs the
 antisymmetric partners are structurally zero and do not evolve. The synthesis
-:func:`~vmec_jax.core.transforms.fourier_to_real` (VMEC ``totzsps`` +
+:func:`~vmex.core.transforms.fourier_to_real` (VMEC ``totzsps`` +
 ``totzspa``) handles both parities in one signed-:math:`(m,n)` cos/sin
 packing.
 
 Stellarator symmetry also halves the angular grid: the stored poloidal extent
 is :math:`\theta \in [0,\pi]` (``ntheta2``) for symmetric runs and the full
 :math:`[0, 2\pi)` (``ntheta1``) when ``lasym`` — the ``ntheta3`` property of
-:class:`~vmec_jax.core.fourier.Resolution`. For ``lasym`` runs, the force
+:class:`~vmex.core.fourier.Resolution`. For ``lasym`` runs, the force
 kernels are first split into symmetric/antisymmetric parts on the reduced
-interval (VMEC ``symforce.f``, :func:`~vmec_jax.core.transforms.symforce_split`,
-applied by :func:`~vmec_jax.core.forces.symmetrize_forces`) and each part is
+interval (VMEC ``symforce.f``, :func:`~vmex.core.transforms.symforce_split`,
+applied by :func:`~vmex.core.forces.symmetrize_forces`) and each part is
 projected with the matching analysis transform
-(:func:`~vmec_jax.core.transforms.tomnsps` /
-:func:`~vmec_jax.core.transforms.tomnspa`).
+(:func:`~vmex.core.transforms.tomnsps` /
+:func:`~vmex.core.transforms.tomnspa`).
 
 Regularity and internal storage
 -------------------------------
@@ -113,7 +113,7 @@ the :math:`m=1` boundary modes:
    \qquad
    Z^{c}_{1n,\mathrm{int}} = \frac{1}{2}\left(R^{s}_{1n,\mathrm{phys}} - Z^{c}_{1n,\mathrm{phys}}\right).
 
-``vmec-jax`` uses the same internal storage so that its boundary mapping,
+``vmex`` uses the same internal storage so that its boundary mapping,
 multigrid interpolation, and parity diagnostics match VMEC2000.
 
 The lambda field
@@ -136,7 +136,7 @@ are **scaled** by a run-dependent scalar ``lamscale``. VMEC multiplies
 :math:`\partial\lambda/\partial\theta` and :math:`\partial\lambda/\partial\zeta`
 by ``lamscale`` before using them in the contravariant field formulas.
 
-``vmec-jax`` follows this convention so we can validate against ``wout`` values.
+``vmex`` follows this convention so we can validate against ``wout`` values.
 
 Geometry, metric, and Jacobian
 ------------------------------
@@ -222,13 +222,13 @@ and the field magnitude follows without ever forming Cartesian components:
 
 The computation chain per iteration is:
 
-1. :func:`~vmec_jax.core.geometry.real_space_geometry` — synthesize
+1. :func:`~vmex.core.geometry.real_space_geometry` — synthesize
    :math:`R, Z, \lambda` and their angular derivatives (even/odd-m planes);
-2. :func:`~vmec_jax.core.geometry.half_mesh_jacobian` — half-mesh
+2. :func:`~vmex.core.geometry.half_mesh_jacobian` — half-mesh
    :math:`\sqrt{g}` and the :math:`\tau` sign proxy;
-3. :func:`~vmec_jax.core.fields.metric_elements` — half-mesh
+3. :func:`~vmex.core.fields.metric_elements` — half-mesh
    ``guu, guv, gvv``;
-4. :func:`~vmec_jax.core.fields.magnetic_fields` — ``bsupu/bsupv`` from the
+4. :func:`~vmex.core.fields.magnetic_fields` — ``bsupu/bsupv`` from the
    flux profiles and :math:`\lambda` derivatives, then ``bsubu/bsubv`` and
    the total pressure :math:`|B|^2/2 + p` (VMEC ``bsq``).
 
@@ -244,4 +244,4 @@ in ``wout`` files. In VMEC normalization:
    \mathrm{wp} = \frac{1}{(2\pi)^2}\int p\,dV.
 
 Important: VMEC treats internal pressure in units of :math:`\mu_0\,\mathrm{Pa}`
-(i.e. :math:`B^2` units). ``vmec-jax`` follows this convention for parity.
+(i.e. :math:`B^2` units). ``vmex`` follows this convention for parity.

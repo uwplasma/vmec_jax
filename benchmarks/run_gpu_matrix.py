@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPU-vs-GPU benchmark matrix for vmec_jax (plan.md §7.8).
+"""CPU-vs-GPU benchmark matrix for vmex (§7.8).
 
 Runs, one cell at a time (the machine may be shared):
 
@@ -11,7 +11,7 @@ recording cold wall (first in-process solve, includes compile), warm wall
 (cold - warm), per-iteration step time (warm / iterations), and peak device
 memory (``jax.local_devices()[0].memory_stats()`` on cuda).
 
-Plus two microbenchmarks of ``vmec_jax.core.preconditioner.tridiagonal_solve``
+Plus two microbenchmarks of ``vmex.core.preconditioner.tridiagonal_solve``
 (hypotheses c/d of §7.8.3): CPU-vs-GPU across (ns, ncols) at fp64, and
 fp32-vs-fp64 on GPU.
 
@@ -101,15 +101,15 @@ def worker_solve(deck: str, lane: str) -> dict:
 
     def one_solve():
         if lane == "legacy":
-            import vmec_jax as vj
+            import vmex as vj
             t0 = time.perf_counter()
             res = vj.run_fixed_boundary(deck, verbose=False)
             wall = time.perf_counter() - t0
             return wall, _extract_iterations(res), True
         elif lane == "core_jit":
-            from vmec_jax.core.input import VmecInput
-            from vmec_jax.core import solver
-            from vmec_jax.core.errors import VmecConvergenceError
+            from vmex.core.input import VmecInput
+            from vmex.core import solver
+            from vmex.core.errors import VmecConvergenceError
             inp = VmecInput.from_file(deck)
             t0 = time.perf_counter()
             try:
@@ -151,15 +151,15 @@ def worker_stepscan(deck150: str, deck450: str, lane: str) -> dict:
 
     def one(deck):
         if lane == "legacy":
-            import vmec_jax as vj
+            import vmex as vj
             t0 = time.perf_counter()
             try:
                 vj.run_fixed_boundary(deck, verbose=False)
             except Exception:
                 pass
             return time.perf_counter() - t0
-        from vmec_jax.core.input import VmecInput
-        from vmec_jax.core import solver
+        from vmex.core.input import VmecInput
+        from vmex.core import solver
         inp = VmecInput.from_file(deck)
         t0 = time.perf_counter()
         try:
@@ -184,7 +184,7 @@ def worker_tridiag(dtype: str) -> dict:
     import numpy as np
     import jax
     import jax.numpy as jnp
-    from vmec_jax.core.preconditioner import tridiagonal_solve
+    from vmex.core.preconditioner import tridiagonal_solve
 
     dt = jnp.float32 if dtype == "f32" else jnp.float64
     solve = jax.jit(tridiagonal_solve)

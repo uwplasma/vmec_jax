@@ -1,4 +1,4 @@
-"""Tests for ``vmec_jax.core.{forces,residuals}`` (forces.f / residue.f90).
+"""Tests for ``vmex.core.{forces,residuals}`` (forces.f / residue.f90).
 
 Stage-by-stage parity of the force/residual chain with the legacy
 parity-proven kernels (real-space kernels, spectral projections, m=1
@@ -25,9 +25,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from vmec_jax.core import residuals as newr
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core.solver import (
+from vmex.core import residuals as newr
+from vmex.core.input import VmecInput
+from vmex.core.solver import (
     _initial_state,
     evaluate_forces,
     prepare_runtime,

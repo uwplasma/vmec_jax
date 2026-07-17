@@ -1,6 +1,6 @@
-"""Input parsing and writer round-trip tests for ``vmec_jax.core.input``.
+"""Input parsing and writer round-trip tests for ``vmex.core.input``.
 
-For every bundled input deck, :class:`vmec_jax.core.input.VmecInput` is
+For every bundled input deck, :class:`vmex.core.input.VmecInput` is
 round-tripped through both writers (JSON and INDATA) and must reproduce every
 field exactly.  A VMEC++ JSON example (``data/solovev.json``, copied verbatim
 from the vmecpp repository) validates JSON-schema compatibility.  (Field-level
@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vmec_jax.core.input import VmecInput
+from vmex.core.input import VmecInput
 
 REPO = Path(__file__).resolve().parents[1]
 DATA = REPO / "examples" / "data"

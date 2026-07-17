@@ -1,4 +1,4 @@
-"""Implicit-differentiation gradient tests (``vmec_jax.core.implicit``, plan.md §6).
+"""Implicit-differentiation gradient tests (``vmex.core.implicit``, plan.md §6).
 
 Validated here (no golden fixtures needed — everything is self-referential
 against central finite differences through the full host solver):
@@ -59,12 +59,12 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 
-from vmec_jax.core import implicit as im
-from vmec_jax.core import solver
-from vmec_jax.core.input import VmecInput
+from vmex.core import implicit as im
+from vmex.core import solver
+from vmex.core.input import VmecInput
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
-FD_CACHE = Path(tempfile.gettempdir()) / "vmec_jax_implicit_fd_cache.pkl"
+FD_CACHE = Path(tempfile.gettempdir()) / "vmex_implicit_fd_cache.pkl"
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -406,7 +406,7 @@ def test_typed_error_through_pure_callback():
     original typed exception is stashed by the host callback and re-raised at
     the ``pure_callback`` call site with ``from None``.
     """
-    from vmec_jax.core.errors import VmecConvergenceError
+    from vmex.core.errors import VmecConvergenceError
 
     inp = VmecInput.from_file(str(DATA_DIR / "input.solovev"))
     with pytest.raises(VmecConvergenceError) as excinfo:

@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`vmec_jax.core.device` — the CPU/GPU placement policy.
+"""Unit tests for :mod:`vmex.core.device` — the CPU/GPU placement policy.
 
 Pure host-side logic (no solves), so this is fast.  On a CPU-only runner the
 GPU branches resolve to ``None`` (nothing to place); the tests assert the
@@ -12,8 +12,8 @@ import contextlib
 import jax
 import pytest
 
-from vmec_jax.core import device as dev
-from vmec_jax.core.fourier import Resolution
+from vmex.core import device as dev
+from vmex.core.fourier import Resolution
 
 
 def _res(ns: int, mpol: int, ntor: int, nfp: int = 1) -> Resolution:

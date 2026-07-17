@@ -15,7 +15,7 @@ iterations to f_boot = 7.5e-06, I_p = -1.211 MA vs the published
 CURTOR = -1.208 MA (0.3%), <J.B> vs the published profile 0.93% RMS.  (The
 paper's QH SFINCS points are a PDF-only figure in the archive, so the SFINCS
 overlay is shown for QA only.)  Needs the Zenodo dataset on disk (default path
-as in tests/test_bootstrap.py; override with VMEC_JAX_ZENODO_2205_02914); the
+as in tests/test_bootstrap.py; override with VMEX_ZENODO_2205_02914); the
 sibling ``QA_bootstrap_selfconsistent.py`` and this script assemble the
 combined two-panel ``readme_bootstrap.png`` once both have run.
 """
@@ -26,12 +26,12 @@ from pathlib import Path
 
 import numpy as np
 
-import vmec_jax as vj
-from vmec_jax.core import bootstrap as bs
+import vmex as vj
+from vmex.core import bootstrap as bs
 
 # --------------------------- parameters ------------------------------------
 ZENODO = Path(os.environ.get(
-    "VMEC_JAX_ZENODO_2205_02914",
+    "VMEX_ZENODO_2205_02914",
     "/Users/rogerio/local/"
     "20220708-01-zenodo_for_QS_optimization_with_self_consistent_bootstrap_current"))
 CONFIG_DIR = ZENODO / "configurations" / "QH_aspect6.5_beta2.5"
@@ -45,7 +45,7 @@ NS_ARRAY = [13, 25, 51]         # radial ladder (published deck ran to ns=201)
 MAX_MODE = None                 # boundary truncation; None = deck resolution
 N_ITER, TOL = 10, 1e-3          # Picard budget / I'(s) convergence tolerance
 OUT_DIR = Path(f"output_{TAG}_bootstrap_selfconsistent")
-if os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1":   # smoke-test budget
+if os.environ.get("VMEX_EXAMPLES_CI") == "1":   # smoke-test budget
     NS_ARRAY, MAX_MODE, N_ITER = [13, 25], 6, 2
 
 # The paper's SFINCS (drift-kinetic) benchmark for this configuration, verbatim
@@ -56,7 +56,7 @@ JDOTB_SFINCS = np.full(S_EVAL.shape, np.nan)  # QH SFINCS points are a PDF-only 
 # --------------------------- published deck, current erased -----------------
 if not DECK.is_file():
     raise SystemExit(f"Zenodo dataset not found at {ZENODO}\n"
-                     "set VMEC_JAX_ZENODO_2205_02914 to its root directory")
+                     "set VMEX_ZENODO_2205_02914 to its root directory")
 inp_pub = vj.VmecInput.from_file(DECK)      # boundary + pressure + spline current
 
 def truncate_boundary(inp, max_mode):

@@ -3,9 +3,9 @@
 Lanes
 -----
 - **Geometry adapter parity** (spectraxgk-free): the flux-tube arrays of
-  :func:`vmec_jax.core.turbulence.gk_fieldline_geometry` reproduce, at
+  :func:`vmex.core.turbulence.gk_fieldline_geometry` reproduce, at
   machine precision, the field-line geometry that
-  :mod:`vmec_jax.core.stability` assembles from the same converged state
+  :mod:`vmex.core.stability` assembles from the same converged state
   (identical simsopt ``vmec_fieldlines`` conventions), plus internal
   consistency: the Cauchy-Schwarz metric inequality
   ``gds21^2 <= gds2 * gds22``, the mirror-term identity
@@ -23,12 +23,12 @@ Lanes
   objective-vector entries reproduced exactly.
 - **Differentiability** (needs spectraxgk): SPECTRAX-GK is JAX-traceable —
   both ``jax.grad`` (reverse) and ``jax.jacfwd`` (forward — the mode
-  vmec_jax's implicit Jacobian lane uses) of the growth rate w.r.t. a
+  vmex's implicit Jacobian lane uses) of the growth rate w.r.t. a
   pressure-profile rescale match central finite differences, the gradient
   w.r.t. the converged state (the piece ``jac="implicit"`` composes with)
   is finite and nonzero, and the wrappers satisfy the two-positional
   ``(state, runtime)`` objective-term contract of
-  :func:`vmec_jax.core.optimize.least_squares`.  The eigenvector-weighted
+  :func:`vmex.core.optimize.least_squares`.  The eigenvector-weighted
   quasilinear/nonlinear proxies are value-level (``jac=None``): JAX
   declines non-symmetric eigenvector derivatives, and the gate documents
   that limitation explicitly.
@@ -51,10 +51,10 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp  # noqa: E402
 
-from vmec_jax.core import optimize as opt  # noqa: E402
-from vmec_jax.core import stability as stab  # noqa: E402
-from vmec_jax.core import turbulence as turb  # noqa: E402
-from vmec_jax.core.input import VmecInput  # noqa: E402
+from vmex.core import optimize as opt  # noqa: E402
+from vmex.core import stability as stab  # noqa: E402
+from vmex.core import turbulence as turb  # noqa: E402
+from vmex.core.input import VmecInput  # noqa: E402
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solves: run jitted
 
@@ -128,7 +128,7 @@ def test_geometry_matches_stability_conventions(shaped_eq):
                                    rtol=1e-12, atol=1e-14, err_msg=name)
     np.testing.assert_allclose(np.asarray(mapping["gradpar"]), np.asarray(gradpar_ref),
                                rtol=1e-12, atol=1e-14)
-    assert mapping["vmec_jax"]["surface_index"] == j
+    assert mapping["vmex"]["surface_index"] == j
     assert float(mapping["s_hat"]) == pytest.approx(float(-2.0 * s_j * diota / iota))
 
 
@@ -170,7 +170,7 @@ def test_equal_arc_gradpar_constant_and_values_consistent(shaped_eq):
     gp = np.asarray(arc["gradpar"])
     assert np.max(gp) - np.min(gp) == 0.0                 # exactly constant
     # and equal to the flux-tube average of the uniform-angle profile
-    prof = np.asarray(uniform["vmec_jax"]["gradpar_profile"])
+    prof = np.asarray(uniform["vmex"]["gradpar_profile"])
     # tokamak: the profile is periodic over one poloidal turn, so close the
     # trapezoid with the theta = -pi sample repeated at +pi.
     harmonic = 2.0 * np.pi / np.trapezoid(
@@ -179,7 +179,7 @@ def test_equal_arc_gradpar_constant_and_values_consistent(shaped_eq):
     assert gp[0] == pytest.approx(harmonic, rel=2e-3)
     # geometry values are exact evaluations at the mapped PEST angles: bmag
     # from the two lanes must agree up to the comparison interpolation error.
-    x_arc = np.asarray(arc["vmec_jax"]["theta_pest"]) - LINE["alpha"]
+    x_arc = np.asarray(arc["vmex"]["theta_pest"]) - LINE["alpha"]
     bmag_interp = np.interp(x_arc, np.asarray(uniform["theta"]),
                             np.asarray(uniform["bmag"]))
     assert np.max(np.abs(np.asarray(arc["bmag"]) - bmag_interp)) < 5e-4
@@ -203,7 +203,7 @@ def test_contract_passes_spectraxgk_validation(shaped_eq):
     geom = turb.flux_tube_geometry(shaped_eq.state, shaped_eq.runtime,
                                    validate=True, ntheta=32, **LINE)
     assert type(geom).__name__ == "FluxTubeGeometryData"
-    assert geom.source_model == "vmec_jax:core.turbulence"
+    assert geom.source_model == "vmex:core.turbulence"
     assert float(geom.gradpar_value) > 0.0
     assert int(np.asarray(geom.theta).shape[0]) == 32
 

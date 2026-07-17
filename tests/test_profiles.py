@@ -1,4 +1,4 @@
-"""Analytic unit tests for :mod:`vmec_jax.core.profiles`.
+"""Analytic unit tests for :mod:`vmex.core.profiles`.
 
 Every supported profile *kind* (parameterized and tabulated, including the
 ``_i``/``_ip`` current variants) is checked against a closed-form reference:
@@ -27,7 +27,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from vmec_jax.core import profiles
+from vmex.core import profiles
 
 S = np.linspace(0.0, 1.0, 17)
 

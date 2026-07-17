@@ -16,10 +16,10 @@ up_down_asymmetric_tokamak  lasym, ncurr=0        single grid ns=17
 ==========================  ====================  ==========================
 
 Multi-stage decks run the full ``NS_ARRAY`` ladder via
-:func:`vmec_jax.core.multigrid.solve_multigrid` (the golden stdout's final
+:func:`vmex.core.multigrid.solve_multigrid` (the golden stdout's final
 iteration count is per-stage and warm-started, so a cold single-grid run of
 the final ``ns`` is not comparable); single-stage decks call
-:func:`vmec_jax.core.solver.solve` directly.
+:func:`vmex.core.solver.solve` directly.
 
 Golden caveats measured from the fixtures (see the ``CASES`` table):
 
@@ -40,7 +40,7 @@ Golden caveats measured from the fixtures (see the ``CASES`` table):
   <= 7.3e-7 on every checked surface, iotaf to machine precision, wb to
   1.3e-11, in 3118 vs 3197 iterations).  The historic ~3% lasym fixed-point
   drift was the inherited ``fixaray.f`` dnorm defect fixed in
-  ``vmec_jax/core/fourier.py`` (lasym force projections and the alias.f
+  ``vmex/core/fourier.py`` (lasym force projections and the alias.f
   constraint force were scaled by 1/2).
 
 Per case this module asserts:
@@ -75,9 +75,9 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 import pytest
 
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core import solver
-from vmec_jax.core.multigrid import solve_multigrid
+from vmex.core.input import VmecInput
+from vmex.core import solver
+from vmex.core.multigrid import solve_multigrid
 
 from conftest import resolve_golden_dir
 
@@ -142,7 +142,7 @@ def _git_describe() -> str:
         return "nogit"
 
 
-_CACHE_DIR = Path("/tmp") / "vmec_jax_parity_breadth"
+_CACHE_DIR = Path("/tmp") / "vmex_parity_breadth"
 _GIT_TAG = _git_describe()
 
 _RESULT_FIELDS = (

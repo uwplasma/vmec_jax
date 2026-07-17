@@ -17,13 +17,13 @@ import dataclasses
 import os
 from pathlib import Path
 
-import vmec_jax as vj
+import vmex as vj
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parent / "data" / "input.li383_low_res"
 OUT_DIR = Path("output_fixed_boundary_run")
 RUN_BOOZER = True          # Boozer spectrum via booz_xform_jax (optional dep)
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"  # smoke-test mode
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"  # smoke-test mode
 
 # --------------------------- read the input --------------------------------
 inp = vj.VmecInput.from_file(INPUT_FILE)

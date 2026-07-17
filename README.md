@@ -1,13 +1,12 @@
-# vmec-jax
+# VMEX
 
-[![PyPI version](https://img.shields.io/pypi/v/vmec-jax.svg)](https://pypi.org/project/vmec-jax/)
-[![Conda Version](https://img.shields.io/conda/vn/conda-forge/vmec-jax.svg)](https://github.com/conda-forge/vmec-jax-feedstock)
-[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://github.com/uwplasma/vmec_jax/blob/main/pyproject.toml)
-[![License](https://img.shields.io/github/license/uwplasma/vmec_jax)](https://github.com/uwplasma/vmec_jax/blob/main/LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/uwplasma/vmec_jax/ci.yml?branch=main&label=ci)](https://github.com/uwplasma/vmec_jax/actions/workflows/ci.yml)
-[![Docs](https://img.shields.io/readthedocs/vmec-jax/latest?label=docs)](https://vmec-jax.readthedocs.io/en/latest/)
+[![PyPI version](https://img.shields.io/pypi/v/vmex.svg)](https://pypi.org/project/vmex/)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://github.com/uwplasma/VMEX/blob/main/pyproject.toml)
+[![License](https://img.shields.io/github/license/uwplasma/vmex)](https://github.com/uwplasma/VMEX/blob/main/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/uwplasma/vmex/ci.yml?branch=main&label=ci)](https://github.com/uwplasma/VMEX/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/readthedocs/vmex/latest?label=docs)](https://vmex.readthedocs.io/en/latest/)
 
-**vmec-jax** is a clean-room, JAX-native reimplementation of the
+**VMEX** is a clean-room, JAX-native reimplementation of the
 [VMEC2000](https://princetonuniversity.github.io/STELLOPT/VMEC) ideal-MHD
 equilibrium code for stellarators and tokamaks. It reproduces VMEC2000
 iteration-for-iteration on benchmark decks — and, unlike the Fortran
@@ -30,64 +29,62 @@ original, it is differentiable and runs on GPUs.
 - **Drop-in.** Reads VMEC2000 `input.*` namelists and VMEC++-style JSON,
   prints VMEC2000-format iteration output, and writes `wout_*.nc` files
   that load unchanged in simsopt and booz_xform.
-- **Batteries included.** Plotting (`vmec --plot`), Boozer transform
-  (`vmec --booz`), spline profiles, multigrid, hot restart, free boundary
+- **Batteries included.** Plotting (`vmex --plot`), Boozer transform
+  (`vmex --booz`), spline profiles, multigrid, hot restart, free boundary
   from mgrid files *or* directly from coils,
   typed zero-crash errors — with the shared linear/adjoint solver layer
   factored out into [SOLVAX](https://pypi.org/project/solvax/).
 
 ![Flux surfaces, 3-D geometry, and Boozer |B| of the bundled quick-start QH case](docs/_static/figures/readme_equilibrium_showcase.png)
 
-*The bundled quick-start case (`vmec --test`): flux-surface cross sections,
+*The bundled quick-start case (`vmex --test`): flux-surface cross sections,
 the 3-D plasma boundary coloured by `|B|`, and `|B|` in **Boozer coordinates**
 on the last closed flux surface (the near-straight diagonal contours are the
 signature of quasi-helical symmetry) for a four-field-period stellarator —
-all from the built-in `vmec_jax.core.plotting` / `core.boozer` helpers.*
+all from the built-in `vmex.core.plotting` / `core.boozer` helpers.*
 
 ## Install
 
-Install with **one** of the following — PyPI is recommended:
+Install from PyPI:
 
 ```bash
-pip install vmec-jax                        # PyPI (recommended)
-# ...or, if you prefer conda:
-conda install -c conda-forge vmec-jax       # conda-forge
+pip install vmex
 ```
 
 Development install from source:
 
 ```bash
-git clone https://github.com/uwplasma/vmec_jax
-cd vmec_jax && pip install -e .
+git clone https://github.com/uwplasma/VMEX
+cd vmex && pip install -e .
 ```
 
 ## Quickstart
 
 ```bash
-vmec --doctor     # check the installation and JAX backend
-vmec --test       # solve the bundled QH case, write wout + plots
-vmec input.X      # run any VMEC2000 input deck (or VMEC++-style JSON)
+vmex --doctor     # check the installation and JAX backend
+vmex --test       # solve the bundled QH case, write wout + plots
+vmex input.X      # run any VMEC2000 input deck (or VMEC++-style JSON)
 ```
 
-`vmec input.X` writes `wout_X.nc` next to the input (`--outdir` to
+`vmex input.X` writes `wout_X.nc` next to the input (`--outdir` to
 redirect). To try it on a real deck:
 
 ```bash
-curl -L -O https://raw.githubusercontent.com/uwplasma/vmec_jax/main/examples/data/input.nfp4_QH_warm_start
-vmec input.nfp4_QH_warm_start
+curl -L -O https://raw.githubusercontent.com/uwplasma/vmex/main/examples/data/input.nfp4_QH_warm_start
+vmex input.nfp4_QH_warm_start
 ```
 
 Post-process any wout file, including ones written by VMEC2000:
 
 ```bash
-vmec --plot wout_nfp4_QH_warm_start.nc     # surfaces, |B|, profiles, 3D
-vmec --booz wout_nfp4_QH_warm_start.nc     # Boozer transform -> boozmn_*.nc
-vmec --plot boozmn_nfp4_QH_warm_start.nc   # Boozer |B| contours + spectrum
+vmex --plot wout_nfp4_QH_warm_start.nc     # surfaces, |B|, profiles, 3D
+vmex --booz wout_nfp4_QH_warm_start.nc     # Boozer transform -> boozmn_*.nc
+vmex --plot boozmn_nfp4_QH_warm_start.nc   # Boozer |B| contours + spectrum
 ```
 
 ## Parity with VMEC2000
 
-vmec-jax is validated end-to-end against golden VMEC2000 (PARVMEC 9.0) runs:
+VMEX is validated end-to-end against golden VMEC2000 (PARVMEC 9.0) runs:
 benchmark decks converge in **exactly** the golden iteration count — including
 DSHAPE's mid-run jacobian reset — and reproduce the plasma energy `wb` to
 1 part in 10¹⁵. Across the full benchmark suite (14 rows, all at `ns ≥ 201`),
@@ -95,15 +92,15 @@ the iteration count matches VMEC2000 exactly on 12 rows; on the free-boundary
 CTH-like row it converges in a ~9% iteration tail, and on Nuhrenberg–Zille QHS
 it converges in *fewer* iterations (1681 vs 2829). Per-variable wout agreement
 and the full test gates live in the
-[documentation](https://vmec-jax.readthedocs.io/en/latest/).
+[documentation](https://vmex.readthedocs.io/en/latest/).
 
-![Force residual vs iteration for vmec_jax, VMEC2000, and VMEC++](docs/_static/figures/readme_convergence.png)
+![Force residual vs iteration for vmex, VMEC2000, and VMEC++](docs/_static/figures/readme_convergence.png)
 
 *Parity is per-iteration, not just end-to-end: the total force residual
 (`fsqr + fsqz + fsql`) of the quick-start QH case at ns=51, per iteration.
-The vmec_jax trajectory lies exactly on top of VMEC2000's (both converge in
+The vmex trajectory lies exactly on top of VMEC2000's (both converge in
 502 iterations); VMEC++ follows a near-identical path (501 iterations).
-Traces: vmec_jax `SolveResult.fsq_history`, VMEC2000 `NSTEP=1` stdout,
+Traces: vmex `SolveResult.fsq_history`, VMEC2000 `NSTEP=1` stdout,
 VMEC++ wout `fsqt`.*
 
 ### Optional 2D preconditioner: fewer iterations on stiff cases
@@ -153,7 +150,7 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
 
 ## Features
 
-| | vmec-jax | VMEC2000 | VMEC++ |
+| | VMEX | VMEC2000 | VMEC++ |
 |---|:---:|:---:|:---:|
 | Fixed-boundary equilibria | ✅ | ✅ | ✅ |
 | Free boundary from an mgrid file | ✅ | ✅ | ✅ |
@@ -180,7 +177,7 @@ memory (`essos.coils.Coils.to_mgrid`) and pass it as `external_field=`,
 with no MAKEGRID file involved. For gradients, the differentiable free
 boundary evaluates a JAX Biot-Savart (a plain `xyz→B` callable) at the
 boundary points of each iteration, keeping the coil degrees of freedom
-differentiable end-to-end. All coil geometry lives in ESSOS; vmec_jax has no
+differentiable end-to-end. All coil geometry lives in ESSOS; vmex has no
 coil code of its own.
 
 ![Free-boundary Landreman-Paul QA pressure scan directly from ESSOS coils](docs/_static/figures/readme_essos_beta_scan.png)
@@ -199,7 +196,7 @@ the coils never move. Reproduce with
 
 ### Single-stage plasma + coil optimization
 
-vmec-jax can optimize the plasma boundary and the coils together, with one
+VMEX can optimize the plasma boundary and the coils together, with one
 exact gradient. A single `jax.value_and_grad` differentiates through the
 fixed-boundary equilibrium (implicit adjoint), the virtual-casing surface
 field, and the Biot–Savart law of the ESSOS coil filaments, covering boundary
@@ -258,30 +255,30 @@ resumable, so long runs can be split across sessions.
 
 ## Code size
 
-vmec-jax delivers that superset of capabilities in little more than **half the
+VMEX delivers that superset of capabilities in little more than **half the
 code**, and is the most densely documented of the three. Solver source only (tests,
 language bindings, and vendored third-party excluded), counted with
 [`pygount`](https://pypi.org/project/pygount/) 3.2:
 
 | code base | language | files | code (SLOC) | comments / docstrings | doc-to-code |
 |---|---|---:|---:|---:|---:|
-| **vmec-jax** | Python | 41 | **13,326** | 6,744 | **0.51** |
+| **VMEX** | Python | 41 | **13,326** | 6,744 | **0.51** |
 | VMEC2000 (PARVMEC) | Fortran | 115 | 24,190 | 8,425 | 0.35 |
 | VMEC++ | C++ / Python | 117 | 22,824 | 7,646 | 0.34 |
 
-vmec-jax is little more than half the SLOC of VMEC2000 and VMEC++, while
+VMEX is little more than half the SLOC of VMEC2000 and VMEC++, while
 *adding* differentiability, GPU execution, direct-coil free boundary, and a
 built-in Boozer transform — and it carries the highest comment/docstring
 density of the three (reproduce with
-`pygount --format=summary vmec_jax`).
+`pygount --format=summary vmex`).
 
 ## Python API
 
 ```python
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core import optimize as opt
-from vmec_jax.core.wout import write_wout
-from vmec_jax.core.plotting import plot_wout
+from vmex.core.input import VmecInput
+from vmex.core import optimize as opt
+from vmex.core.wout import write_wout
+from vmex.core.plotting import plot_wout
 
 inp = VmecInput.from_file("input.nfp4_QH_warm_start")
 eq = opt.solve_equilibrium(inp)        # full NS_ARRAY ladder, VMEC2000 numerics
@@ -297,16 +294,16 @@ you only need the converged state (the CLI's engine); `implicit.run` for
 gradients (`jax.grad`-able `ImplicitSolution`); `solver.solve` as the
 low-level single-grid building block.
 
-Optimization building blocks live in `vmec_jax.core.optimize`
+Optimization building blocks live in `vmex.core.optimize`
 (quasisymmetry and omnigenity residuals; aspect ratio, iota, mirror ratio,
 magnetic well, ballooning-stability targets; a least-squares driver over
 boundary Fourier coefficients) with implicit-differentiation gradients from
-`vmec_jax.core.implicit` (`jac="implicit"`). The recommended pattern is **one
+`vmex.core.implicit` (`jac="implicit"`). The recommended pattern is **one
 `least_squares` call** — no `max_mode` continuation loop — with **Exponential
 Spectral Scaling** ordering the harmonics through the trust region:
 
 ```python
-from vmec_jax import optimize as opt
+from vmex import optimize as opt
 
 qs = opt.QuasisymmetryRatioResidual(surfaces, helicity_m=1, helicity_n=0)
 result = opt.least_squares(
@@ -410,7 +407,7 @@ does not provide.
 
 ### Self-consistent bootstrap current
 
-vmec-jax implements the **Redl** analytic bootstrap-current formula
+VMEX implements the **Redl** analytic bootstrap-current formula
 ([Redl et al. 2021](https://doi.org/10.1063/5.0012664)) as a differentiable
 objective, and a fixed-boundary self-consistency loop that regenerates the
 toroidal current from the plasma geometry and kinetic profiles. Below,
@@ -430,22 +427,22 @@ the published `CURTOR`. Reproduce with
 `python examples/optimization/{QA,QH}_bootstrap_selfconsistent.py` (needs the
 paper's Zenodo dataset).*
 
-## vmec-jax vs DESC
+## VMEX vs DESC
 
 [DESC](https://desc-docs.readthedocs.io/) is the other JAX-native,
 differentiable, GPU-capable stellarator-equilibrium code. The key difference:
 DESC minimises the MHD force in a global Zernike–Fourier basis — its own
-equilibrium — while vmec-jax reproduces VMEC exactly. The two are
+equilibrium — while VMEX reproduces VMEC exactly. The two are
 complementary:
 
-| Where **vmec-jax** wins | Where **DESC** wins |
+| Where **VMEX** wins | Where **DESC** wins |
 |---|---|
 | **Is VMEC**: iteration-for-iteration VMEC2000 parity, standard `wout_*.nc`, VMEC-format prints | **Low-resolution accuracy**: global Zernike basis converges in fewer radial points |
 | **Drop-in**: reads VMEC2000 `input.*` and VMEC++ JSON unchanged | **Objective library**: large, mature set of built-in optimization targets |
 | **Full namelist**: non-symmetric surfaces (`LASYM = T`), NESTOR *and* virtual-casing free boundary | **Optimizers**: more built-in stochastic / constrained optimizers |
 | **O(1)-memory adjoint**: peak memory flat in the number of design variables | Adjoint gradients (both codes are differentiable) |
 
-Reach for **vmec-jax** to drop a differentiable code that *is* VMEC into an
+Reach for **VMEX** to drop a differentiable code that *is* VMEC into an
 existing VMEC workflow (simsopt, `booz_xform`, near-axis tooling). Reach for
 **DESC** for its spectral accuracy at low radial resolution or its mature
 objective library.
@@ -453,12 +450,12 @@ objective library.
 ## CLI reference
 
 ```text
-vmec input.X             solve (INDATA or VMEC++ JSON), write wout_X.nc
-vmec --plot wout_*.nc    diagnostic plots from a WOUT file
-vmec --booz wout_*.nc    run booz_xform_jax, write boozmn_*.nc
-vmec --plot boozmn_*.nc  Boozer contour/spectrum plots
-vmec --test              run and plot the bundled quick-start case
-vmec --doctor            installation and JAX backend diagnostics
+vmex input.X             solve (INDATA or VMEC++ JSON), write wout_X.nc
+vmex --plot wout_*.nc    diagnostic plots from a WOUT file
+vmex --booz wout_*.nc    run booz_xform_jax, write boozmn_*.nc
+vmex --plot boozmn_*.nc  Boozer contour/spectrum plots
+vmex --test              run and plot the bundled quick-start case
+vmex --doctor            installation and JAX backend diagnostics
 
 options:
   --outdir PATH          directory for wout/boozmn/figure output
@@ -482,10 +479,10 @@ is faster (`JAX_PLATFORMS=cpu|cuda` pins it explicitly).
 Full documentation — installation, quickstart, theory and numerics with
 equation-to-source cross-references, API reference, and
 performance/validation notes — at
-[vmec-jax.readthedocs.io](https://vmec-jax.readthedocs.io/en/latest/).
+[vmex.readthedocs.io](https://vmex.readthedocs.io/en/latest/).
 
 ## License
 
-MIT. If you use vmec-jax in published work, please cite this repository and
+MIT. If you use VMEX in published work, please cite this repository and
 the original VMEC papers (Hirshman & Whitson, *Phys. Fluids* 1983;
 Hirshman, van Rij & Merkel, *Comput. Phys. Commun.* 1986).

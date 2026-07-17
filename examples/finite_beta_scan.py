@@ -23,13 +23,13 @@ from pathlib import Path
 
 import numpy as np
 
-import vmec_jax as vj
+import vmex as vj
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parent / "data" / "input.shaped_tokamak_pressure"
 PRES_MULTIPLIERS = [0.0, 5.0, 10.0, 15.0, 20.0]   # scales the base PRES_SCALE (-> ~1.5% beta)
 NS = 25
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if CI:
     NS = 15
     PRES_MULTIPLIERS = [0.0, 10.0, 20.0]

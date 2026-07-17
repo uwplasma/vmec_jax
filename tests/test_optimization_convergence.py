@@ -1,6 +1,6 @@
 """R1 convergence protection: from a circular-torus seed, the QS optimization
 building blocks reach a real, non-trivial residual reduction (not just the
-``VMEC_JAX_EXAMPLES_CI`` smoke budget of ``test_examples.py``).
+``VMEX_EXAMPLES_CI`` smoke budget of ``test_examples.py``).
 
 These are ``full``-marked (nightly only, ``RUN_FULL=1``): each runs *real*
 implicit-gradient continuation (``jac="implicit"`` + ESS, the exact path the
@@ -30,8 +30,8 @@ import pytest
 
 pytest.importorskip("jax")
 
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core import optimize as opt
+from vmex.core.input import VmecInput
+from vmex.core import optimize as opt
 
 DATA = __import__("pathlib").Path(__file__).resolve().parents[1] / "examples" / "data"
 

@@ -45,10 +45,14 @@ def pytest_collection_modifyitems(config, items):
 # ---------------------------------------------------------------------------
 # Golden VMEC2000 parity fixtures (stdout, threed1, wout, timings for the
 # benchmark decks).  Resolution order:
-#   1. VMEC_JAX_GOLDEN_DIR environment variable (explicit override),
-#   2. ~/vmec_jax_notes/golden (local development snapshot),
-#   3. ~/.cache/vmec_jax/golden-v1 (downloaded once from the golden-v1 release).
+#   1. VMEX_GOLDEN_DIR environment variable (explicit override),
+#   2. ~/vmex_notes/golden (local development snapshot),
+#   3. ~/.cache/vmex/golden-v1 (downloaded once from the golden-v1 release).
 # ---------------------------------------------------------------------------
+# Keep the owner/repo as ``vmec_jax`` (the pre-rename name): the release asset
+# lives there, and after the repo is renamed to VMEX GitHub redirects the old
+# path to the new one, so this URL resolves both before and after the rename.
+# Pointing it at ``VMEX`` directly 404s until the rename lands.
 GOLDEN_URL = "https://github.com/uwplasma/vmec_jax/releases/download/golden-v1/vmec-jax-golden-v1.tar.gz"
 GOLDEN_SHA256 = "85b1de372066d1dd0c57b1a9ffb569ccc1276bb67dec81e7bf15a5a943ca05d7"
 
@@ -70,15 +74,15 @@ def _download_golden(cache_root: Path) -> Path:
 
 
 def resolve_golden_dir() -> Path | None:
-    env = os.environ.get("VMEC_JAX_GOLDEN_DIR")
+    env = os.environ.get("VMEX_GOLDEN_DIR")
     if env:
         p = Path(env).expanduser()
         return p if p.is_dir() else None
-    local = Path.home() / "vmec_jax_notes" / "golden"
+    local = Path.home() / "vmex_notes" / "golden"
     if local.is_dir():
         return local
     try:
-        return _download_golden(Path.home() / ".cache" / "vmec_jax" / "golden-v1")
+        return _download_golden(Path.home() / ".cache" / "vmex" / "golden-v1")
     except Exception:
         return None
 

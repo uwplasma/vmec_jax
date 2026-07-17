@@ -11,12 +11,12 @@ Usage
 
 .. code-block:: text
 
-   vmec input.X                — solve (INDATA or VMEC++ JSON), write wout_X.nc
-   vmec --plot wout_*.nc       — diagnostic plots from a WOUT file
-   vmec --booz wout_*.nc       — run booz_xform_jax, write boozmn_*.nc
-   vmec --plot boozmn_*.nc     — Boozer contour/spectrum plots
-   vmec --doctor               — installation and JAX backend diagnostics
-   vmec --test                 — run and plot the bundled quick-start case
+   vmex input.X                — solve (INDATA or VMEC++ JSON), write wout_X.nc
+   vmex --plot wout_*.nc       — diagnostic plots from a WOUT file
+   vmex --booz wout_*.nc       — run booz_xform_jax, write boozmn_*.nc
+   vmex --plot boozmn_*.nc     — Boozer contour/spectrum plots
+   vmex --doctor               — installation and JAX backend diagnostics
+   vmex --test                 — run and plot the bundled quick-start case
 
 The positional argument is a VMEC input file (``input.*`` namelist or a
 VMEC++-style ``.json`` deck), or a ``wout_*.nc``/``boozmn_*.nc`` file for
@@ -65,7 +65,7 @@ Options
      - Print installation, Python, package, and JAX backend diagnostics.
    * - ``--test``
      - Run the bundled ``input.nfp4_QH_warm_start`` quick-start case: solve,
-       write the wout file, and plot it (into ``./vmec_jax_test/`` or
+       write the wout file, and plot it (into ``./vmex_test/`` or
        ``--outdir``).
    * - ``--version``
      - Print the package version.
@@ -84,7 +84,7 @@ For ``LFREEB = T`` decks:
 - ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
   field from an ESSOS coils file (``essos.coils.Coils``): the coils are tabulated
   into an in-memory mgrid (``Coils.to_mgrid``) and read back as an
-  :class:`vmec_jax.core.mgrid.MgridField` (requires ESSOS).
+  :class:`vmex.core.mgrid.MgridField` (requires ESSOS).
 
 Known divergences of the current free-boundary lane: it is single-grid (only
 the final ``NS_ARRAY`` stage runs; multi-stage decks print a note), and the
@@ -96,7 +96,7 @@ free-boundary run still writes the wout (VMEC2000 behavior) and exits with
 Exit codes (zero-crash policy)
 ------------------------------
 
-Every failure maps to a typed :class:`vmec_jax.core.errors.VmecError`; the
+Every failure maps to a typed :class:`vmex.core.errors.VmecError`; the
 CLI prints the VMEC2000 ``werror`` message plus a one-line hint and exits
 with the matching ``ier_flag`` code (0 on success, 2 for "MORE ITERATIONS
 REQUIRED", etc.). There are no raw tracebacks in normal operation.

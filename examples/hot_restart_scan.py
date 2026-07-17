@@ -4,7 +4,7 @@
 A parameter scan solves a sequence of nearby equilibria.  Starting each one from
 the previous converged state (a *hot restart*) means the solver begins a hair
 from the answer and converges in a handful of iterations instead of hundreds.
-Because vmec-jax caches one compiled executable per solver *structure*, every
+Because vmex caches one compiled executable per solver *structure*, every
 scan point at fixed resolution reuses it -- zero recompilation.
 
 This script solves a base case cold, then scans the edge toroidal flux
@@ -23,13 +23,13 @@ from pathlib import Path
 
 import numpy as np
 
-import vmec_jax as vj
+import vmex as vj
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parent / "data" / "input.circular_tokamak"
 NS = 25                                   # single radial grid (fixed structure)
 SCAN = np.linspace(0.95, 1.05, 5)         # phiedge multipliers around the base
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if CI:
     NS = 15
 

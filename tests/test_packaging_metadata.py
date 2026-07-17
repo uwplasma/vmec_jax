@@ -13,23 +13,24 @@ else:  # pragma: no cover - Python 3.10 fallback
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_setuptools_discovery_only_packages_vmec_jax_namespace() -> None:
+def test_setuptools_discovery_only_packages_vmex_namespace() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
     package_find = data["tool"]["setuptools"]["packages"]["find"]
 
     assert package_find["where"] == ["."]
-    assert package_find["include"] == ["vmec_jax*"]
+    # "vmex*" is the package; "vmec_jax" is the one-release deprecation shim.
+    assert package_find["include"] == ["vmex*", "vmec_jax"]
     for pattern in ("tests*", "docs*", "examples*", "tools*", "validation*", "results*", "build*", "dist*"):
         assert pattern in package_find["exclude"]
 
 
 def test_package_exposes_installed_version() -> None:
-    import vmec_jax
+    import vmex
 
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    assert vmec_jax.__version__ == data["project"]["version"]
-    if not Path(vmec_jax.__file__).resolve().is_relative_to(ROOT):
-        assert vmec_jax.__version__ == package_version("vmec-jax")
+    assert vmex.__version__ == data["project"]["version"]
+    if not Path(vmex.__file__).resolve().is_relative_to(ROOT):
+        assert vmex.__version__ == package_version("vmex")
 
 
 def test_project_metadata_has_public_package_links() -> None:
@@ -38,20 +39,19 @@ def test_project_metadata_has_public_package_links() -> None:
 
     assert "stellarator" in project["keywords"]
     assert "Topic :: Scientific/Engineering :: Physics" in project["classifiers"]
-    assert project["urls"]["Documentation"] == "https://vmec-jax.readthedocs.io/en/latest/"
-    assert project["urls"]["Repository"] == "https://github.com/uwplasma/vmec_jax"
-    assert project["urls"]["Changelog"] == "https://github.com/uwplasma/vmec_jax/releases"
+    assert project["urls"]["Documentation"] == "https://vmex.readthedocs.io/en/latest/"
+    assert project["urls"]["Repository"] == "https://github.com/uwplasma/VMEX"
+    assert project["urls"]["Changelog"] == "https://github.com/uwplasma/VMEX/releases"
 
 
 def test_project_exposes_vmec_console_aliases() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
     scripts = data["project"]["scripts"]
 
-    # New-core CLI (plan.md §2.3): `vmec` + the `vmec-jax` alias only; the
-    # legacy `vmec_jax`/`xvmec_jax` aliases were removed with the core switch.
-    assert scripts["vmec"] == "vmec_jax.core.cli:main"
-    assert scripts["vmec-jax"] == "vmec_jax.core.cli:main"
-    assert set(scripts) == {"vmec", "vmec-jax"}
+    # VMEX CLI: primary `vmex` + the legacy `vmec` alias.
+    assert scripts["vmex"] == "vmex.core.cli:main"
+    assert scripts["vmec"] == "vmex.core.cli:main"
+    assert set(scripts) == {"vmex", "vmec"}
 
 
 def test_plain_install_includes_plotting_and_qi_dependencies() -> None:

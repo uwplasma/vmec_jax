@@ -1,4 +1,4 @@
-"""Tests for ``vmec_jax.core.{geometry,fields}`` (jacobian.f / bcovar.f).
+"""Tests for ``vmex.core.{geometry,fields}`` (jacobian.f / bcovar.f).
 
 Field-by-field parity of the geometry/field chain with the legacy
 parity-proven kernels (jacobian, metrics, B fields, energies/norms, surface
@@ -25,20 +25,20 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 import pytest
 
-from vmec_jax.core.fields import (
+from vmex.core.fields import (
     constraint_scaling,
     energies_and_force_norms,
     magnetic_fields,
     metric_elements,
     surface_currents,
 )
-from vmec_jax.core.geometry import (
+from vmex.core.geometry import (
     apply_lambda_axis_closure,
     half_mesh_jacobian,
     real_space_geometry,
 )
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core.solver import (
+from vmex.core.input import VmecInput
+from vmex.core.solver import (
     _geometry,
     _initial_state,
     prepare_runtime,

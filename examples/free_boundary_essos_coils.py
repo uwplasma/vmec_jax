@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 """Free-boundary pressure scan from ESSOS coils via an in-memory mgrid.
 
-vmec_jax is coil-agnostic: coils live in ESSOS (``essos.coils.Coils``), and the
+vmex is coil-agnostic: coils live in ESSOS (``essos.coils.Coils``), and the
 free-boundary solver consumes only a magnetic-field grid.  Here we take the
 Landreman & Paul (2021) precise-QA coil set as optimized in ESSOS
 (github.com/uwplasma/ESSOS, bundled as a 3 KB JSON), tabulate its Biot-Savart
 field once onto a cylindrical grid bracketing the plasma
 (``essos.coils.Coils.to_mgrid``), and read it straight back into a
-:class:`vmec_jax.core.mgrid.MgridField` -- no standalone mgrid file left on disk,
+:class:`vmex.core.mgrid.MgridField` -- no standalone mgrid file left on disk,
 no ESSOS import inside the solve.  That ``MgridField`` supplies the external
 field for every NESTOR vacuum iteration.
 
@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-import vmec_jax as vj
+import vmex as vj
 
 # --------------------------- parameters ------------------------------------
 DATA = Path(__file__).resolve().parent / "data"
@@ -45,7 +45,7 @@ SLOPE = 1.45e-3                       # first-guess beta[%] per unit PRES_SCALE
 NS, MPOL, NTOR = 51, 5, 5
 NITER, FTOL = 20000, 1e-10
 PHIEDGE = -0.025                      # toroidal flux matching the coil field [Wb]
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if CI:  # smoke budget: one finite-beta point on a coarse grid
     TARGET_BETAS, NS, NITER, FTOL = [1.0], 16, 4000, 1e-8
 
@@ -60,7 +60,7 @@ print(f"ESSOS coils: {currents.shape[0]} filaments after nfp={coils.nfp}/stellsy
 
 # Tabulate the coil field once onto a cylindrical grid bracketing the plasma
 # (R in [0.45, 1.55], Z in [-0.6, 0.6]) and read it straight back as an
-# MgridField -- the external field vmec_jax's free-boundary solver consumes.
+# MgridField -- the external field vmex's free-boundary solver consumes.
 with tempfile.TemporaryDirectory() as _tmp:
     _mgrid_path = Path(_tmp) / "essos_LP_QA_mgrid.nc"
     coils.to_mgrid(str(_mgrid_path), nr=96, nphi=32, nz=96,
@@ -132,7 +132,7 @@ if not CI:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from vmec_jax.core.plotting import surface_rz
+    from vmex.core.plotting import surface_rz
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     fig, (ax, ax2) = plt.subplots(1, 2, figsize=(8.4, 4.8), dpi=110, width_ratios=[1.1, 1.0])

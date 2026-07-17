@@ -19,7 +19,7 @@ just produced) is differentiated too.
 
 Making the virtual-casing plasma field differentiable in the *boundary* (not just
 the coils) needs its adaptive quadrature/patch precision frozen to static values
-first -- :func:`~vmec_jax.core.freeboundary_diff.plan_vc_precision` selects it
+first -- :func:`~vmex.core.freeboundary_diff.plan_vc_precision` selects it
 once from the starting boundary; see that module and ``virtual_casing_jax``'s
 ``PrecisionPlan``.
 
@@ -47,16 +47,16 @@ import scipy.optimize
 import jax
 import jax.numpy as jnp
 
-import vmec_jax as vj
-from vmec_jax.core import freeboundary_diff as FBD
-from vmec_jax.core import implicit as im
-from vmec_jax.core.mgrid import MgridField, read_mgrid
+import vmex as vj
+from vmex.core import freeboundary_diff as FBD
+from vmex.core import implicit as im
+from vmex.core.mgrid import MgridField, read_mgrid
 
 DATA = Path(__file__).resolve().parent / "data"
 INPUT = DATA / "input.cth_like_free_bdy"
 MGRID = DATA / "mgrid_cth_like.nc"
 EXTCUR0 = np.array([4700.0, 1000.0])          # confining coil-group currents
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 NPHI = NTHETA = 16 if CI else 24
 SOLVE = dict(ftol=1e-10, max_iterations=2000)
 W_BN, W_IOTA = 1.0, 1.0

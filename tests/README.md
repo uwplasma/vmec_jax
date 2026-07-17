@@ -1,6 +1,6 @@
 # Test Suite Map
 
-The suite tests the `vmec_jax.core` package (the only code in the repo):
+The suite tests the `vmex.core` package (the only code in the repo):
 
 - `tests/`: one file per core concern — input parsing/round-trip,
   Fourier transforms, setup, geometry/fields, forces/residuals,
@@ -9,7 +9,7 @@ The suite tests the `vmec_jax.core` package (the only code in the repo):
   gradients, optimize, plotting/Boozer, CLI, asset fetcher, and packaging
   metadata.
 - `tests/conftest.py` resolves the VMEC2000 golden parity fixtures
-  (`VMEC_JAX_GOLDEN_DIR` env var, `~/vmec_jax_notes/golden`, or a one-time
+  (`VMEX_GOLDEN_DIR` env var, `~/vmex_notes/golden`, or a one-time
   sha256-verified download of the `golden-v1` GitHub release).
 
 Markers: `full` tests are skipped unless `RUN_FULL=1` is set.  The root

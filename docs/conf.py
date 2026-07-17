@@ -16,8 +16,8 @@ if str(_ROOT) not in sys.path:
 
 # -- Project information --------------------------------------------------------
 
-project = "vmec-jax"
-author = "vmec_jax contributors"
+project = "VMEX"
+author = "vmex contributors"
 copyright = f"{date.today().year}, {author}"  # noqa: A001
 with (_ROOT / "pyproject.toml").open("rb") as _f:
     release = tomllib.load(_f)["project"]["version"]
@@ -64,13 +64,13 @@ autosummary_imported_members = False
 autosectionlabel_prefix_document = True
 # Only label top-level page sections: section headings inside module
 # docstrings (rendered by autodoc) would otherwise collide ("VMEC2000
-# counterparts" appears in most vmec_jax.core module docstrings).
+# counterparts" appears in most vmex.core module docstrings).
 autosectionlabel_maxdepth = 2
 todo_include_todos = False
 
 # Mock heavy runtime dependencies only when they are genuinely unavailable
 # (e.g. a docs-only CI environment). With the real packages installed,
-# autodoc imports vmec_jax.core modules directly.
+# autodoc imports vmex.core modules directly.
 autodoc_mock_imports = []
 for _mod in ("jax", "jaxlib", "netCDF4", "matplotlib", "scipy"):
     try:

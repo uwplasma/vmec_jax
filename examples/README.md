@@ -33,7 +33,7 @@ All runnable examples live under this single `examples/` tree.
     over BOTH plasma-boundary Fourier modes and coil-group currents (implicit
     adjoint + virtual casing threaded through one `jax.value_and_grad`).
   - `single_stage_essos_coils_opt.py` — single-stage with ESSOS coils (vacuum
-    and finite-beta cases); vmec_jax stays coil-agnostic, coils enter as a
+    and finite-beta cases); vmex stays coil-agnostic, coils enter as a
     differentiable `xyz -> B` callable. Source of `readme_single_stage.png`.
 - `optimization/`: precise QA/QH/QP/QI from a circular torus — one file each,
   plus `QA_optimization_ess.py` / `QI_optimization_ess.py`: the SINGLE-call
@@ -43,7 +43,7 @@ All runnable examples live under this single `examples/` tree.
   self-consistent Redl bootstrap current reproducing arXiv:2205.02914,
   simsopt-style (`(function, target, weight)` terms + one least-squares call
   per `max_mode` continuation stage, implicit adjoint gradients).  All read
-  `VMEC_JAX_EXAMPLES_CI=1` to shrink budgets for the CI smoke tests
+  `VMEX_EXAMPLES_CI=1` to shrink budgets for the CI smoke tests
   (`tests/test_examples.py`).
 - `data/`: bundled input decks and small checked-in fixtures.
 - `data/single_grid/`: fixed-boundary single-grid benchmark inputs and optional

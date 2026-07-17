@@ -1,12 +1,12 @@
 wout file reference
 ===================
 
-:mod:`vmec_jax.core.wout` implements the complete variable set written by
+:mod:`vmex.core.wout` implements the complete variable set written by
 VMEC2000's ``wrout.f``, with the exact netCDF names, dimensions, dtypes and
 unit conventions of the reference implementation, so the files load unchanged
 in simsopt, booz_xform, and other VMEC-ecosystem tools. Use
-:func:`vmec_jax.core.wout.read_wout` / :func:`~vmec_jax.core.wout.write_wout`
-for IO and :func:`~vmec_jax.core.wout.wout_from_state` to build the dataset
+:func:`vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
+for IO and :func:`~vmex.core.wout.wout_from_state` to build the dataset
 from a converged solver state.
 
 Unit conventions (applied on write, as in ``wrout.f``):

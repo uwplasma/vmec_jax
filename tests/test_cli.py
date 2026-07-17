@@ -1,9 +1,9 @@
-"""End-to-end tests for the new-core ``vmec`` CLI (``vmec_jax.core.cli``).
+"""End-to-end tests for the new-core ``vmec`` CLI (``vmex.core.cli``).
 
 Covered here (plan.md Phase 2 STATUS item 4 — first vertical slice):
 
 1. ``vmec input.solovev`` writes a wout readable by
-   :func:`vmec_jax.core.wout.read_wout` with correct ``ns``/``mnmax`` and
+   :func:`vmex.core.wout.read_wout` with correct ``ns``/``mnmax`` and
    ``wb`` at golden VMEC2000 parity (1e-8);
 2. stdout structure matches the golden ``xvmec2000`` capture: banners,
    NS-stage banner, iteration header, and the first/last iteration rows are
@@ -31,10 +31,10 @@ jax = pytest.importorskip("jax")
 
 jax.config.update("jax_enable_x64", True)
 
-from vmec_jax.core import cli
-from vmec_jax.core.errors import INPUT_ERROR_FLAG, MORE_ITER_FLAG, WERROR_MESSAGES
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core.wout import read_wout
+from vmex.core import cli
+from vmex.core.errors import INPUT_ERROR_FLAG, MORE_ITER_FLAG, WERROR_MESSAGES
+from vmex.core.input import VmecInput
+from vmex.core.wout import read_wout
 
 from conftest import resolve_golden_dir
 

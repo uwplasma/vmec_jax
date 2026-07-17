@@ -12,7 +12,7 @@ evaluation), but the exact implicit gradient (internal-grid, plus the tiny
 asymmetry of the host solve) escapes it and the QS term pulls the boundary
 into a helically symmetric shape.
 
-This script also demonstrates building a :class:`vmec_jax.VmecInput` from
+This script also demonstrates building a :class:`vmex.VmecInput` from
 scratch instead of reading a file: the circular-torus seed (R0 = 1 m,
 a = 1/8 m, ~1 T) is assembled directly from its Fourier coefficients.
 
@@ -35,7 +35,7 @@ arXiv:2311.16386, so this is comfortably precise).  The deep stages are
 tractable on CPU because the per-dof implicit Jacobian is launch-bound
 (one preconditioned GMRES per boundary dof): a max_mode-2 (24-dof)
 Jacobian evaluates in ~101 s on CPU versus > 37 min hung in a single
-kernel-launch-bound GMRES on the GPU before the CPU pin (plan.md R1).
+kernel-launch-bound GMRES on the GPU before the CPU pin (R1).
 The whole 1->5 campaign is a multi-hour CPU run.
 """
 
@@ -44,8 +44,8 @@ from pathlib import Path
 
 import numpy as np
 
-import vmec_jax as vj
-from vmec_jax import optimize as opt
+import vmex as vj
+from vmex import optimize as opt
 
 # --------------------------- parameters ------------------------------------
 NFP = 4
@@ -60,7 +60,7 @@ MAX_MODE_SCHEDULE = (1, 2, 3, 4, 5)
 MAX_NFEV = 2000                            # trial budget per stage
 FTOL = 1e-6                                # per-stage convergence tolerance
 JAC = "implicit"
-if os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1":  # smoke-test budget
+if os.environ.get("VMEX_EXAMPLES_CI") == "1":  # smoke-test budget
     MAX_MODE_SCHEDULE, MAX_NFEV, FTOL = (1,), 4, 1e-4
 
 # --------------------------- seed input, built from scratch -----------------

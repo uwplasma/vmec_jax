@@ -1,6 +1,6 @@
-"""Package-surface tests: lazy exports, ``python -m vmec_jax``, CLI helpers.
+"""Package-surface tests: lazy exports, ``python -m vmex``, CLI helpers.
 
-Covers the ``vmec_jax/__init__.py`` lazy-attribute machinery (every
+Covers the ``vmex/__init__.py`` lazy-attribute machinery (every
 documented public name resolves; unknown names raise), the source-tree
 version resolution, the ``__main__`` module entry point, and the small
 pure CLI helpers (``case_from_input``, ``--booz-surfaces`` parsing, and
@@ -19,27 +19,27 @@ import pytest
 
 import jax.numpy as jnp
 
-import vmec_jax
-from vmec_jax.core import cli
-from vmec_jax.core.errors import VmecInputError
-from vmec_jax.core.mgrid import MgridField
+import vmex
+from vmex.core import cli
+from vmex.core.errors import VmecInputError
+from vmex.core.mgrid import MgridField
 
 
 # ---------------------------------------------------------------------------
-# vmec_jax/__init__.py
+# vmex/__init__.py
 # ---------------------------------------------------------------------------
 
 
 def test_version_matches_pyproject():
-    src = vmec_jax._source_tree_version()
+    src = vmex._source_tree_version()
     assert src is not None
-    assert vmec_jax.__version__ == src
+    assert vmex.__version__ == src
 
 
 def test_source_tree_version_parses_pyproject():
-    # anchored to the PACKAGE (vmec_jax/__init__.py), not this test file:
-    # parents[1] of vmec_jax/__init__.py is the repo root.
-    pyproject = Path(vmec_jax.__file__).resolve().parents[1] / "pyproject.toml"
+    # anchored to the PACKAGE (vmex/__init__.py), not this test file:
+    # parents[1] of vmex/__init__.py is the repo root.
+    pyproject = Path(vmex.__file__).resolve().parents[1] / "pyproject.toml"
     expected = None
     in_project = False
     for line in pyproject.read_text().splitlines():
@@ -49,38 +49,38 @@ def test_source_tree_version_parses_pyproject():
         elif in_project and line.startswith("version"):
             expected = line.split("=", 1)[1].strip().strip('"')
             break
-    assert vmec_jax._source_tree_version() == expected
+    assert vmex._source_tree_version() == expected
 
 
 def test_every_lazy_export_resolves():
-    for name in vmec_jax._LAZY_ATTRS:
-        value = getattr(vmec_jax, name)
+    for name in vmex._LAZY_ATTRS:
+        value = getattr(vmex, name)
         assert value is not None, name
     # a second access hits the cached globals() entry
-    assert getattr(vmec_jax, "VmecInput") is vmec_jax.VmecInput
+    assert getattr(vmex, "VmecInput") is vmex.VmecInput
 
 
 def test_unknown_attribute_raises_and_dir_lists_exports():
     with pytest.raises(AttributeError):
-        vmec_jax.no_such_symbol  # noqa: B018
-    listing = dir(vmec_jax)
+        vmex.no_such_symbol  # noqa: B018
+    listing = dir(vmex)
     for name in ("VmecInput", "solve", "solve_multigrid", "read_wout", "optimize"):
         assert name in listing
-    assert set(vmec_jax.__all__) >= set(vmec_jax._LAZY_ATTRS)
+    assert set(vmex.__all__) >= set(vmex._LAZY_ATTRS)
 
 
 def test_python_dash_m_entrypoint_exposes_cli_main():
-    import vmec_jax.__main__ as main_mod
+    import vmex.__main__ as main_mod
 
     assert main_mod.main is cli.main
 
 
-@pytest.mark.parametrize("argv", [["-m", "vmec_jax", "--version"]])
+@pytest.mark.parametrize("argv", [["-m", "vmex", "--version"]])
 def test_python_dash_m_version(argv):
     proc = subprocess.run([sys.executable, *argv], capture_output=True, text=True,
                           timeout=120)
     assert proc.returncode == 0
-    assert vmec_jax.__version__ in proc.stdout
+    assert vmex.__version__ in proc.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ def _coils_payload():
 
 
 def test_coils_mgrid_field_json_and_npz(tmp_path):
-    # vmec_jax is coil-agnostic: --coils loads ESSOS coils and tabulates them
+    # vmex is coil-agnostic: --coils loads ESSOS coils and tabulates them
     # into an in-memory mgrid, returning a plain MgridField.
     pytest.importorskip("essos")
     payload = _coils_payload()
@@ -154,7 +154,7 @@ def test_coils_mgrid_field_rejects_malformed_file(tmp_path):
 
 def test_cli_doctor_flag(capsys):
     assert cli.main(["--doctor"]) == 0
-    assert "vmec_jax installation doctor" in capsys.readouterr().out
+    assert "vmex installation doctor" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("argv", [

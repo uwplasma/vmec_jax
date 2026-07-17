@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`vmec_jax.core.step` (evolve.f / restart.f port).
+"""Unit tests for :mod:`vmex.core.step` (evolve.f / restart.f port).
 
 The parity-critical constants and update rules are asserted directly
 against the closed-form definitions recorded in the module docstring:
@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from vmec_jax.core import step
+from vmex.core import step
 
 
 def test_parity_constants():

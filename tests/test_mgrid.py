@@ -1,4 +1,4 @@
-"""Tests for ``vmec_jax.core.mgrid`` (netCDF IO + interpolated field).
+"""Tests for ``vmex.core.mgrid`` (netCDF IO + interpolated field).
 
 Covers (plan.md §8):
 
@@ -19,8 +19,8 @@ import pytest
 jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402
 
-from vmec_jax.core.errors import MgridNotFoundError  # noqa: E402
-from vmec_jax.core.mgrid import MgridData, MgridField, read_mgrid, write_mgrid  # noqa: E402
+from vmex.core.errors import MgridNotFoundError  # noqa: E402
+from vmex.core.mgrid import MgridData, MgridField, read_mgrid, write_mgrid  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 MGRID_PATH = REPO / "examples" / "data" / "mgrid_cth_like_lasym_small.nc"

@@ -1,4 +1,4 @@
-"""Property tests for ``vmec_jax.core.{fourier,transforms}``.
+"""Property tests for ``vmex.core.{fourier,transforms}``.
 
 Covers the transform algebra that the (deleted) legacy A/B suite proved
 during the port:
@@ -18,8 +18,8 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 import pytest
 
-from vmec_jax.core.fourier import Resolution, mode_table, trig_tables
-from vmec_jax.core.transforms import (
+from vmex.core.fourier import Resolution, mode_table, trig_tables
+from vmex.core.transforms import (
     fourier_to_real,
     real_to_fourier,
     symforce_split,

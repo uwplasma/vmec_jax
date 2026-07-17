@@ -19,14 +19,14 @@ import dataclasses
 import os
 from pathlib import Path
 
-import vmec_jax as vj
+import vmex as vj
 
 # --------------------------- parameters ------------------------------------
 DATA = Path(__file__).resolve().parent / "data"
 INPUT_FILE = DATA / "input.cth_like_free_bdy"
 MGRID_FILE = DATA / "mgrid_cth_like.nc"
 PRES_SCALES = [0.0, 2000.0, 4000.0, 6000.0]   # Pa scale of the parabolic pressure
-CI = os.environ.get("VMEC_JAX_EXAMPLES_CI") == "1"
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if CI:
     PRES_SCALES = [0.0, 3000.0, 6000.0]
 

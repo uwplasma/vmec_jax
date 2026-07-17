@@ -3,11 +3,11 @@
 
 Produces (into ``docs/_static/figures/``):
 
-- ``readme_runtime_compare.png``      — VMEC2000 vs vmec_jax (cold/warm CPU,
+- ``readme_runtime_compare.png``      — VMEC2000 vs vmex (cold/warm CPU,
   GPU where comparable) vs VMEC++, from ``benchmarks/baseline.json`` and
   ``benchmarks/gpu_baseline.json``.  Run ``benchmarks/run_baseline.py`` first.
 - ``readme_convergence.png``          — force residual vs iteration for one
-  representative case (nfp4_QH_warm_start at ns=51) in vmec_jax, VMEC2000
+  representative case (nfp4_QH_warm_start at ns=51) in vmex, VMEC2000
   (NSTEP=1 stdout trace), and VMEC++ (wout ``fsqt``).  Traces are cached in
   ``benchmarks/convergence_nfp4_ns51.json``; delete it to re-run the codes.
 - ``readme_optimization.png``         — quasisymmetry (QA/QH/QP) seed vs
@@ -76,8 +76,8 @@ INK2 = "#52514e"
 MUTED = "#898781"
 GRID = "#e1e0d9"
 BASELINE = "#c3c2b7"
-BLUE = "#2a78d6"        # vmec_jax warm (the hero series)
-BLUE_LIGHT = "#86b6ef"  # vmec_jax cold (same hue, lighter step)
+BLUE = "#2a78d6"        # vmex warm (the hero series)
+BLUE_LIGHT = "#86b6ef"  # vmex cold (same hue, lighter step)
 YELLOW = "#eda100"      # VMEC++
 VIOLET = "#4a3aa7"      # GPU
 RED = "#e34948"
@@ -132,8 +132,8 @@ def make_runtime_figure(out: Path) -> None:
     rows = []
     for key, r in base.items():
         case, grid = key[:-1].split("[")
-        v2k, cold = r.get("vmec2000", {}), r.get("vmec_jax_cold", {})
-        warm, vpp = r.get("vmec_jax_warm", {}), r.get("vmecpp", {})
+        v2k, cold = r.get("vmec2000", {}), r.get("vmex_cold", {})
+        warm, vpp = r.get("vmex_warm", {}), r.get("vmecpp", {})
         if not (v2k.get("ok") and warm.get("ok")):
             continue
         label = CASE_LABELS.get(case, case)
@@ -165,7 +165,7 @@ def make_runtime_figure(out: Path) -> None:
     # hero (warm, blue) drawn last so it stays on top where points coincide
     mk = dict(s=120, zorder=3, linewidths=1.8, edgecolors="white")
     ax.scatter([r["cold"] for r in rows], list(ys), color=BLUE_LIGHT,
-               label="vmec_jax cold (fresh CLI process)", **mk)
+               label="vmex cold (fresh CLI process)", **mk)
     vpp_pts = [(r["vpp"], y) for y, r in zip(ys, rows) if r["vpp"]]
     ax.scatter([p[0] for p in vpp_pts], [p[1] for p in vpp_pts],
                color=YELLOW, label="VMEC++", **mk)
@@ -173,12 +173,12 @@ def make_runtime_figure(out: Path) -> None:
     if gpu_pts:
         ax.scatter([p[0] for p in gpu_pts], [p[1] for p in gpu_pts],
                    color=VIOLET, marker="D", s=95, zorder=3, linewidths=1.8,
-                   edgecolors="white", label="vmec_jax warm (GPU)")
+                   edgecolors="white", label="vmex warm (GPU)")
     ax.scatter([r["v2k"] for r in rows], list(ys), color=INK2,
                label="VMEC2000 (Fortran)", **mk)
     ax.scatter([r["warm"] for r in rows], list(ys), color=BLUE, zorder=4,
                s=120, linewidths=1.8, edgecolors="white",
-               label="vmec_jax warm (in-process)")
+               label="vmex warm (in-process)")
 
     xmax = max(max(v for v in (r["v2k"], r["cold"], r["vpp"] or 0, r["gpu"] or 0))
                for r in rows)
@@ -215,8 +215,8 @@ def make_runtime_figure(out: Path) -> None:
     ax.set_title(title, loc="left", pad=54, fontsize=14, color=INK)
     handles, labels = ax.get_legend_handles_labels()
     order = ["VMEC2000 (Fortran)", "VMEC++",
-             "vmec_jax warm (in-process)", "vmec_jax cold (fresh CLI process)",
-             "vmec_jax warm (GPU)"]
+             "vmex warm (in-process)", "vmex cold (fresh CLI process)",
+             "vmex warm (GPU)"]
     pairs = sorted(zip(handles, labels), key=lambda hl: order.index(hl[1]))
     ax.legend([p[0] for p in pairs], [p[1] for p in pairs],
               loc="lower left", bbox_to_anchor=(-0.02, 1.005), ncols=2,
@@ -259,9 +259,9 @@ def collect_parity() -> dict:
     sys.path.insert(0, str(REPO / "tests"))
     from conftest import resolve_golden_dir
 
-    from vmec_jax.core.input import VmecInput
-    from vmec_jax.core import solver
-    from vmec_jax.core.multigrid import solve_multigrid
+    from vmex.core.input import VmecInput
+    from vmex.core import solver
+    from vmex.core.multigrid import solve_multigrid
 
     golden = resolve_golden_dir()
     if golden is None:
@@ -293,7 +293,7 @@ def make_parity_figure(out: Path) -> None:
     ax.text(cols[0], 1.0, "case", fontsize=9.5, color=MUTED, va="center")
     ax.text(cols[1], 1.0, "VMEC2000\niterations", fontsize=9.5, color=MUTED,
             va="center", ha="center", linespacing=1.2)
-    ax.text(cols[2], 1.0, "vmec_jax\niterations", fontsize=9.5, color=MUTED,
+    ax.text(cols[2], 1.0, "vmex\niterations", fontsize=9.5, color=MUTED,
             va="center", ha="center", linespacing=1.2)
     ax.text(cols[3], 1.0, "match", fontsize=9.5, color=MUTED,
             va="center", ha="center")
@@ -362,7 +362,7 @@ print(json.dumps({"niter": int(out.wout.niter),
 def collect_convergence() -> dict:
     """Per-iteration total force residual (fsqr+fsqz+fsql) from all codes.
 
-    - vmec_jax: ``SolveResult.fsq_history`` (recorded every iteration).
+    - vmex: ``SolveResult.fsq_history`` (recorded every iteration).
     - VMEC2000: stdout iteration table with NSTEP=1 (one row per iteration).
     - VMEC++: ``wout.fsqt`` (stored per iteration).
     Cached in CONV_CACHE; delete the file to re-run all three codes.
@@ -378,14 +378,14 @@ def collect_convergence() -> dict:
     sys.path.insert(0, str(REPO / "benchmarks"))
     from run_baseline import XVMEC2000, VMECPP_PY, make_ramped_deck
 
-    from vmec_jax.core.input import VmecInput
-    from vmec_jax.core import solver
+    from vmex.core.input import VmecInput
+    from vmex.core import solver
 
     with tempfile.TemporaryDirectory() as td:
         deck = Path(td) / f"input.{CONV_CASE}"
         make_ramped_deck(DATA / f"input.{CONV_CASE}", deck, min_ns=CONV_NS)
 
-        # vmec_jax: in-process solve, per-iteration history from SolveResult.
+        # vmex: in-process solve, per-iteration history from SolveResult.
         res = solver.solve(VmecInput.from_file(str(deck)))
         hist = np.asarray(res.fsq_history)
         jax_fsq = hist[:, :3].sum(axis=1).tolist()
@@ -409,14 +409,14 @@ def collect_convergence() -> dict:
 
     data = {"case": CONV_CASE, "ns": CONV_NS,
             "ftol": 1e-13,  # deck FTOL_ARRAY final stage
-            "vmec_jax": jax_fsq, "vmec2000": v2k_fsq, "vmecpp": vpp["fsqt"]}
+            "vmex": jax_fsq, "vmec2000": v2k_fsq, "vmecpp": vpp["fsqt"]}
     CONV_CACHE.write_text(json.dumps(data))
     return data
 
 
 def make_convergence_figure(out: Path) -> None:
     d = collect_convergence()
-    jax_t, v2k_t, vpp_t = d["vmec_jax"], d["vmec2000"], d["vmecpp"]
+    jax_t, v2k_t, vpp_t = d["vmex"], d["vmec2000"], d["vmecpp"]
 
     fig, ax = plt.subplots(figsize=(8.6, 3.7), dpi=160)
     # Widest underneath, hero (blue) on top: the three traces coincide.
@@ -426,14 +426,14 @@ def make_convergence_figure(out: Path) -> None:
     ax.semilogy(range(1, len(vpp_t) + 1), vpp_t, color=YELLOW, lw=2.2,
                 alpha=0.9, label=f"VMEC++, {len(vpp_t)} iterations")
     ax.semilogy(range(1, len(jax_t) + 1), jax_t, color=BLUE, lw=1.1,
-                label=f"vmec_jax, {len(jax_t)} iterations")
+                label=f"vmex, {len(jax_t)} iterations")
 
     ax.axhline(3 * d["ftol"], color=BASELINE, lw=0.9, ls=(0, (5, 4)))
     ax.annotate("converged: fsqr, fsqz, fsql all < FTOL = 1e-13",
                 xy=(len(jax_t) * 0.02, 3 * d["ftol"] * 1.6), ha="left",
                 va="bottom", fontsize=8, color=MUTED)
     mid = len(jax_t) // 2
-    ax.annotate("vmec_jax tracks VMEC2000\niteration-for-iteration\n"
+    ax.annotate("vmex tracks VMEC2000\niteration-for-iteration\n"
                 "(curves overlap)",
                 xy=(mid, jax_t[mid]), xytext=(mid * 0.62, jax_t[mid] * 3e3),
                 fontsize=8.5, color=INK2, ha="center",
@@ -546,7 +546,7 @@ def _plot_3d_modB(fig, ax3d, wout, nfp):
     from matplotlib import cm
     from matplotlib.colors import Normalize
 
-    from vmec_jax.core.plotting import surface_modB, surface_rz
+    from vmex.core.plotting import surface_modB, surface_rz
 
     ns = int(wout.ns)
     thg = np.linspace(0, 2 * np.pi, 64)
@@ -583,9 +583,9 @@ def _plot_boozer_modB(fig, axm, wout, nfp, tag):
     """
     import tempfile
 
-    import vmec_jax as vj
-    from vmec_jax.core.boozer import run_booz_xform
-    from vmec_jax.core.plotting import boozer_modB_on_surface
+    import vmex as vj
+    from vmex.core.boozer import run_booz_xform
+    from vmex.core.plotting import boozer_modB_on_surface
 
     with tempfile.TemporaryDirectory() as td:
         wp = vj.write_wout(Path(td) / f"wout_{tag}.nc", wout)
@@ -620,8 +620,8 @@ def _compress_png(path: Path, max_kib: int = 400) -> None:
 
 
 def make_optimization_figure(out: Path) -> None:
-    import vmec_jax as vj
-    from vmec_jax import optimize as opt
+    import vmex as vj
+    from vmex import optimize as opt
 
     present = [c for c in OPT_CLASSES if (OPT_DECKS / f"input.{c[0]}_optimized").exists()]
     if not present:
@@ -695,8 +695,8 @@ def make_optimization_figure(out: Path) -> None:
 def make_qi_figure(out: Path) -> None:
     """Quasi-isodynamic (QI) equilibria at nfp 1/2/3/4: boundary, 3-D |B|, and
     Boozer |B| on the LCFS, each column labelled with the QI residual."""
-    import vmec_jax as vj
-    from vmec_jax import optimize as opt
+    import vmex as vj
+    from vmex import optimize as opt
 
     ncol = len(QI_CASES)
     fig = plt.figure(figsize=(2.6 * ncol, 7.6), dpi=150)
@@ -766,7 +766,7 @@ def make_qi_figure(out: Path) -> None:
 # 5. 2D preconditioner: iteration reduction on stiff cases (R10.2)
 # --------------------------------------------------------------------------
 
-# Measured 2026-07-10 (plan.md R10.2, commit 2980d812): matrix-free 2D block
+# Measured 2026-07-10 (R10.2, commit 2980d812): matrix-free 2D block
 # preconditioner vs the default 1D radial preconditioner, iterations to the
 # same FTOL on stiff decks.  Default 1D path stays byte-identical.
 PRECOND_ROWS = [
@@ -819,12 +819,12 @@ def make_precond_figure(out: Path) -> None:
 def make_showcase_figure(out: Path) -> None:
     import tempfile
 
-    import vmec_jax as vj
-    from vmec_jax.core.input import VmecInput
-    from vmec_jax.core.multigrid import solve_multigrid
-    from vmec_jax.core.wout import wout_from_state
-    from vmec_jax.core.boozer import run_booz_xform
-    from vmec_jax.core.plotting import (surface_rz, surface_modB, axis_rz,
+    import vmex as vj
+    from vmex.core.input import VmecInput
+    from vmex.core.multigrid import solve_multigrid
+    from vmex.core.wout import wout_from_state
+    from vmex.core.boozer import run_booz_xform
+    from vmex.core.plotting import (surface_rz, surface_modB, axis_rz,
                                         boozer_modB_on_surface)
     from matplotlib import cm
     from matplotlib.colors import Normalize
@@ -959,7 +959,7 @@ def _plot_coils_and_lcfs(fig, ax3d, wout, gamma, nfp):
     from matplotlib import cm
     from matplotlib.colors import Normalize
 
-    from vmec_jax.core.plotting import surface_modB, surface_rz
+    from vmex.core.plotting import surface_modB, surface_rz
 
     ns = int(wout.ns)
     thg = np.linspace(0, 2 * np.pi, 64)
@@ -993,8 +993,8 @@ def _plot_coils_and_lcfs(fig, ax3d, wout, gamma, nfp):
 
 
 def make_single_stage_figure(out: Path) -> None:
-    import vmec_jax as vj
-    from vmec_jax.core.plotting import surface_rz
+    import vmex as vj
+    from vmex.core.plotting import surface_rz
 
     cases = []
     for name, title in SINGLE_STAGE_CASES:

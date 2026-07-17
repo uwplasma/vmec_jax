@@ -26,8 +26,8 @@ comparison is fairest.
 
    * - case
      - VMEC2000
-     - vmec_jax cold
-     - vmec_jax warm
+     - vmex cold
+     - vmex warm
      - VMEC++
    * - solovev
      - 1.41
@@ -100,7 +100,7 @@ comparison is fairest.
      - **196**
      - n/a
 
-Bold marks vmec_jax beating VMEC2000. These are wall-clock seconds on a
+Bold marks vmex beating VMEC2000. These are wall-clock seconds on a
 shared Apple-Silicon CPU (``benchmarks/baseline.json``), so the
 warm/Fortran *ratio* is the comparable quantity, not the absolute numbers.
 
@@ -117,7 +117,7 @@ Reading the table:
   compile cost on subsequent processes.
 - **VMEC++** is faster on some converged large decks (free
   boundary, LandremanPaul QA) but *failed* rows aborted during the first
-  iterations; ``vmec_jax`` converges on the full suite (zero-crash policy).
+  iterations; ``vmex`` converges on the full suite (zero-crash policy).
   ``n/a`` marks a configuration VMEC++ does not support (``lasym`` free
   boundary).
 
@@ -153,7 +153,7 @@ The headline: **a fast desktop CPU beats the A4000 GPU on every production
 workflow, even at ns = 201.** Forward solves are close (the GPU is
 iteration-competitive at this size — free-boundary NESTOR runs 13.9 ms/iter
 on the GPU), but the gradient pipeline is launch-bound on an accelerator,
-which is why :func:`vmec_jax.core.device.resolve_implicit_device` pins
+which is why :func:`vmex.core.device.resolve_implicit_device` pins
 implicit-gradient work to the CPU by default (an earlier placement leak
 here cost 2x on GPU boxes — fixed, and the pin is now automatic). The
 GPU's wins come against slower server cores and larger-than-production
@@ -185,7 +185,7 @@ the *same number of iterations* as VMEC2000 on the benchmark decks:
 
    * - case
      - VMEC2000 iters
-     - vmec_jax iters
+     - vmex iters
      - notes
    * - solovev
      - 215
@@ -230,14 +230,14 @@ Parity holds not just at the converged endpoint but along the whole
 trajectory.  The trace below runs the quick-start QH case
 (``nfp4_QH_warm_start``, single grid at ``ns=51``) through all three codes
 and plots the total force residual ``fsqr + fsqz + fsql`` per iteration:
-the vmec_jax curve lies exactly on top of VMEC2000's (both converge in 502
+the vmex curve lies exactly on top of VMEC2000's (both converge in 502
 iterations), and VMEC++ follows a near-identical path (501 iterations).
-The vmec_jax trace comes from ``SolveResult.fsq_history``, the VMEC2000
+The vmex trace comes from ``SolveResult.fsq_history``, the VMEC2000
 trace from its stdout iteration table run with ``NSTEP = 1``, and the
 VMEC++ trace from the ``fsqt`` array of its wout payload.
 
 .. figure:: _static/figures/readme_convergence.png
-   :alt: force residual vs iteration for vmec_jax, VMEC2000, and VMEC++
+   :alt: force residual vs iteration for vmex, VMEC2000, and VMEC++
    :align: center
    :width: 95%
 
@@ -260,7 +260,7 @@ rel+abs tolerances.
 The default 1D radial preconditioner is what reproduces VMEC2000
 iteration-for-iteration. For *stiff* decks — very high aspect ratio or strong
 finite-β coupling — an opt-in 2D block preconditioner
-(:mod:`vmec_jax.core.preconditioner_2d`) replaces the radial-only approximation
+(:mod:`vmex.core.preconditioner_2d`) replaces the radial-only approximation
 with a matrix-free Newton step: a Jacobian-vector-product Hessian applied
 through GMRES (SOLVAX's ``block_thomas_truncated`` / Krylov layer). It cuts the
 iteration count 2.5–11x on the stiff cases below, and is a strict add-on — the
@@ -319,8 +319,8 @@ solves. Two knobs bound the optimization-time footprint:
   boundary degrees of freedom.
 - Factoring the residual and field pipelines into reusable compiled
   sub-computations cut the implicit-gradient compile ~20% in memory and ~21% in
-  wall time, bit-identically (plan.md R16).
-- The converged-state memo (plan.md R25.1) removed a redundant equilibrium
+  wall time, bit-identically (R16).
+- The converged-state memo (R25.1) removed a redundant equilibrium
   solve per accepted optimizer iterate and cut the profiled ``opt_step``
   peak RSS from 6.0 to 3.5 GB.
 
@@ -345,7 +345,7 @@ Measured behavior (``benchmarks/gpu_baseline.json``):
 Device policy
 ~~~~~~~~~~~~~
 
-:mod:`vmec_jax.core.device` encodes this as a default placement rule using
+:mod:`vmex.core.device` encodes this as a default placement rule using
 the per-iteration work proxy ``ns * mnmax * nznt`` (the cost driver of the
 batched-matmul transforms): below ``GPU_MIN_ITERATION_WORK = 100_000`` the
 solve stays on the CPU, above it the GPU is used. The policy is a *default*
@@ -358,25 +358,25 @@ only:
 
 .. code-block:: bash
 
-   JAX_PLATFORMS=cpu  vmec input.solovev      # force CPU
-   JAX_PLATFORMS=cuda vmec input.big_case     # force GPU
+   JAX_PLATFORMS=cpu  vmex input.solovev      # force CPU
+   JAX_PLATFORMS=cuda vmex input.big_case     # force GPU
 
 Persistent compilation cache
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``vmec-jax`` enables JAX's persistent XLA compilation cache on accelerators,
+``vmex`` enables JAX's persistent XLA compilation cache on accelerators,
 so the multi-second compile cost is paid once per machine, not once per
 process.
 
 .. warning::
 
    **cwd-shadowing pitfall.** Running ``python`` with a working directory
-   that contains a ``vmec_jax`` source checkout can shadow the installed
-   package as a namespace package: ``vmec_jax/__init__.py`` never runs, the
+   that contains a ``vmex`` source checkout can shadow the installed
+   package as a namespace package: ``vmex/__init__.py`` never runs, the
    persistent compilation cache is never enabled, and every solve pays the
    full XLA recompile (measured ~7 s vs ~1.7 s warm on CUDA for solovev).
    If GPU runs are mysteriously slow, check that
-   ``python -c "import vmec_jax; print(vmec_jax.__file__)"`` points where
+   ``python -c "import vmex; print(vmex.__file__)"`` points where
    you expect.
 
 Float64 is required (enforced at solver import). On GPUs this means fp64

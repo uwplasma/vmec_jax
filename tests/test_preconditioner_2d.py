@@ -1,4 +1,4 @@
-"""Tests for ``vmec_jax.core.preconditioner_2d`` (2D block preconditioner).
+"""Tests for ``vmex.core.preconditioner_2d`` (2D block preconditioner).
 
 Fast unit tests exercise the matrix-free block operator directly:
 
@@ -29,12 +29,12 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
-from vmec_jax.core.fourier import Resolution
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core.preconditioner_2d import (
+from vmex.core.fourier import Resolution
+from vmex.core.input import VmecInput
+from vmex.core.preconditioner_2d import (
     Prec2DConfig, flat_operator, newton_direction,
 )
-from vmec_jax.core.solver import (
+from vmex.core.solver import (
     SpectralState, _initial_state, _preconditioned_force_signed,
     evaluate_forces, prepare_runtime, resolution_from_input, solve,
 )

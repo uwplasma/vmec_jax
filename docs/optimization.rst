@@ -1,7 +1,7 @@
 Optimization and differentiability
 ==================================
 
-``vmec_jax`` turns VMEC into a differentiable building block: converged
+``vmex`` turns VMEC into a differentiable building block: converged
 equilibria expose exact gradients with respect to boundary shape, profile,
 and coil parameters, and a simsopt-style least-squares driver uses them to
 run whole stellarator-design campaigns in minutes on a CPU.  This page
@@ -17,17 +17,17 @@ runnable script in ``examples/optimization/`` (see :doc:`tutorials`).
 The least-squares driver
 ------------------------
 
-:func:`~vmec_jax.core.optimize.least_squares` is a thin
+:func:`~vmex.core.optimize.least_squares` is a thin
 ``scipy.optimize.least_squares`` driver over the boundary Fourier degrees
-of freedom (:func:`~vmec_jax.core.optimize.pack_boundary` /
-:func:`~vmec_jax.core.optimize.unpack_boundary`; ``RBC(0,0)`` stays fixed),
+of freedom (:func:`~vmex.core.optimize.pack_boundary` /
+:func:`~vmex.core.optimize.unpack_boundary`; ``RBC(0,0)`` stays fixed),
 taking simsopt-style ``(callable, target, weight)`` terms:
 
 .. code-block:: python
 
    import numpy as np
-   import vmec_jax as vj
-   from vmec_jax import optimize as opt
+   import vmex as vj
+   from vmex import optimize as opt
 
    inp = vj.VmecInput.from_file("input.minimal_seed_nfp2")
    qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10),
@@ -129,7 +129,7 @@ comparable precision — QA at QS 3.7e-7 in 25.5 min — but takes ~1.8x
 longer for the same precision class.  Both patterns ship as side-by-side
 example scripts so the two patterns can be compared directly.
 
-Gradients (:mod:`vmec_jax.core.implicit`)
+Gradients (:mod:`vmex.core.implicit`)
 -----------------------------------------
 
 Derivatives through the equilibrium use **implicit differentiation** of the
@@ -144,8 +144,8 @@ of :doc:`algorithms` for the formulation and cost analysis.
 .. code-block:: python
 
    import jax
-   from vmec_jax.core import implicit
-   from vmec_jax.core.input import VmecInput
+   from vmex.core import implicit
+   from vmex.core.input import VmecInput
 
    inp = VmecInput.from_file("input.solovev")
    p0 = implicit.params_from_input(inp)
@@ -153,10 +153,10 @@ of :doc:`algorithms` for the formulation and cost analysis.
    sol = implicit.run(inp, p0)                        # ImplicitSolution pytree
    grad = jax.grad(lambda p: implicit.run(inp, p).wb)(p0)   # adjoint gradient
 
-:func:`~vmec_jax.core.implicit.run` is the differentiable member of the
+:func:`~vmex.core.implicit.run` is the differentiable member of the
 entry-point family (see *Choosing an entry point* in :doc:`quickstart`; the
 non-differentiable Python default is
-:func:`~vmec_jax.core.optimize.solve_equilibrium`).  Besides the scalar
+:func:`~vmex.core.optimize.solve_equilibrium`).  Besides the scalar
 outputs, the returned solution carries the internally built evaluation
 context as ``sol.runtime`` (a non-pytree convenience attribute), so custom
 objectives can evaluate further ``(state, runtime)`` targets —
@@ -172,7 +172,7 @@ at the finite-difference noise floor (3D)
 mirror ratio, magnetic well, the QI residual) a naive re-solving finite
 difference is **not** a valid reference — it perturbs the solver's discrete
 convergence path, not just the fixed point — and the frozen-path FD
-(:func:`~vmec_jax.core.implicit.frozen_path_directional_fd`) must be used
+(:func:`~vmex.core.implicit.frozen_path_directional_fd`) must be used
 instead; see *Gradient checking: solver-sensitive metrics and the frozen
 path* in :doc:`algorithms`.
 
@@ -242,7 +242,7 @@ Free-boundary gradients (virtual casing)
 ----------------------------------------
 
 **Free boundary** is differentiable through a different route
-(:mod:`vmec_jax.core.freeboundary_diff`): rather than differentiating the
+(:mod:`vmex.core.freeboundary_diff`): rather than differentiating the
 NESTOR vacuum solve, the plasma-boundary contribution to the vacuum field
 is computed by **virtual casing**, which is a smooth function of the coil /
 ``extcur`` parameters and the plasma surface.  Coil-parameter derivatives
@@ -256,7 +256,7 @@ True single-stage (plasma boundary **and** coils at once)
 ---------------------------------------------------------
 
 The virtual-casing residual is differentiable not only in the coils but also
-in the *plasma boundary*: :func:`~vmec_jax.core.freeboundary_diff.surface_field_data_from_state`
+in the *plasma boundary*: :func:`~vmex.core.freeboundary_diff.surface_field_data_from_state`
 rebuilds the virtual-casing surface field traceably straight from a live
 equilibrium state (bit-exact against the wout path), so a single
 ``jax.value_and_grad`` of a combined objective
@@ -274,7 +274,7 @@ boundary dofs to the FD floor of the re-solved equilibrium).
 
 Making virtual casing differentiable in the boundary needs its adaptive
 quadrature/patch precision frozen to static values:
-:func:`~vmec_jax.core.freeboundary_diff.plan_vc_precision` selects it once from
+:func:`~vmex.core.freeboundary_diff.plan_vc_precision` selects it once from
 the starting (concrete) boundary and returns a ``PrecisionPlan`` to pass back
 via ``precision=`` (the auto-selection otherwise concretizes traced surface
 values).  ``examples/single_stage_simultaneous_opt.py`` runs the full loop:

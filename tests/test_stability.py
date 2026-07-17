@@ -27,9 +27,9 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 
-from vmec_jax.core import optimize as opt
-from vmec_jax.core import stability as stab
-from vmec_jax.core.input import VmecInput
+from vmex.core import optimize as opt
+from vmex.core import stability as stab
+from vmex.core.input import VmecInput
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solves: run jitted
 

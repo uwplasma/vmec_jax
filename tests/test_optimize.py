@@ -1,4 +1,4 @@
-"""Regression and smoke tests for ``vmec_jax.core.optimize``.
+"""Regression and smoke tests for ``vmex.core.optimize``.
 
 Coverage:
 
@@ -6,7 +6,7 @@ Coverage:
   (solovev QA-sanity, nfp4_QH helicity sign): QH is
   ``(helicity_m, helicity_n) = (1, -1)`` with ``helicity_n`` in units of nfp
   (``nn = helicity_n * nfp``).  (Bit-level parity with the legacy
-  ``vmec_jax.quasisymmetry`` port was proven by the A/B suite that retired
+  ``vmex.quasisymmetry`` port was proven by the A/B suite that retired
   with the legacy tree.)
 - Scalar targets (aspect, volume, mean/edge iota, mirror ratio, magnetic
   well, DMerc, LgradB) vs the wout engine of the same state at 1e-8 and vs
@@ -33,9 +33,9 @@ jax = pytest.importorskip("jax")
 pytest.importorskip("netCDF4")
 jax.config.update("jax_enable_x64", True)
 
-from vmec_jax.core.input import VmecInput  # noqa: E402
-from vmec_jax.core.wout import read_wout  # noqa: E402
-from vmec_jax.core import optimize as opt  # noqa: E402
+from vmex.core.input import VmecInput  # noqa: E402
+from vmex.core.wout import read_wout  # noqa: E402
+from vmex.core import optimize as opt  # noqa: E402
 
 from conftest import resolve_golden_dir  # noqa: E402
 
@@ -46,7 +46,7 @@ pytestmark = [
     pytest.mark.usefixtures("_module_jit_enabled"),  # full solves: run jitted
 ]
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
-CACHE_DIR = Path("/tmp/vmec_jax_test_cache_optimize")
+CACHE_DIR = Path("/tmp/vmex_test_cache_optimize")
 
 SURFACES = [0.25, 0.5, 0.75, 1.0]
 
@@ -68,7 +68,7 @@ _STATE_FIELDS = ("R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin")
 @pytest.fixture(scope="module")
 def solovev_eq() -> opt.Equilibrium:
     """Converged solovev equilibrium (core multigrid solver), /tmp-cached."""
-    from vmec_jax.core.solver import SpectralState, prepare_runtime, resolution_from_input
+    from vmex.core.solver import SpectralState, prepare_runtime, resolution_from_input
 
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     cache = CACHE_DIR / "solovev_state.npz"
@@ -364,7 +364,7 @@ def test_least_squares_implicit_smoke(solovev_eq):
 
     Same aspect-only objective as the finite-difference smoke above, but the
     Jacobian comes from the Phase-6 implicit-gradient path
-    (``vmec_jax.core.implicit``): one hot-restarted forward solve per trial
+    (``vmex.core.implicit``): one hot-restarted forward solve per trial
     boundary plus one linearized-KKT solve for all dofs — gradient cost
     ~O(1 equilibrium solve) independent of the dof count.
     """

@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Profile the vmec-jax production hot paths (plan.md R24).
+"""Profile the vmex production hot paths (R24).
 
 Reports, for each case, a cold-vs-warm wall-time split (cold = XLA compile +
 run, warm = run only) and peak RSS, for the two paths that dominate real use:
 
-  1. fixed-boundary multigrid solve   (``vmec_jax.solve_multigrid``)
+  1. fixed-boundary multigrid solve   (``vmex.solve_multigrid``)
   2. differentiable ``value_and_grad`` of ``wb`` (implicit forward + adjoint)
 
 plus a cProfile of a warm solve to confirm Python-level orchestration overhead
@@ -17,7 +17,7 @@ the CPU numbers in the docs and for a GPU box::
     JAX_PLATFORMS=cuda JAX_ENABLE_X64=1 python tools/profile_hotpaths.py --cases solovev
 
 On CPU the dominant latency is compile time, which the persistent compilation
-cache (on by default; see ``vmec_jax._compat``) amortises across processes; the
+cache (on by default; see ``vmex._compat``) amortises across processes; the
 warm numbers are the per-call steady state inside one process / an opt loop.
 """
 from __future__ import annotations
@@ -34,8 +34,8 @@ import time
 import jax
 import numpy as np
 
-import vmec_jax as vj
-from vmec_jax.core import implicit as im
+import vmex as vj
+from vmex.core import implicit as im
 
 DATA = os.path.join(os.path.dirname(__file__), os.pardir, "examples", "data")
 # ru_maxrss is bytes on macOS, KiB on Linux.
@@ -104,7 +104,7 @@ def profile_python_overhead(case: str) -> None:
         print(header[0])
     shown = 0
     for ln in lines:
-        if "vmec_jax/" in ln and shown < 14:
+        if "vmex/" in ln and shown < 14:
             print(ln)
             shown += 1
 

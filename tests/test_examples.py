@@ -1,6 +1,6 @@
 """Smoke tests for the plan.md §10 examples at reduced budgets.
 
-Each example script reads ``VMEC_JAX_EXAMPLES_CI=1`` (parameters-at-top
+Each example script reads ``VMEX_EXAMPLES_CI=1`` (parameters-at-top
 hook) and shrinks its continuation schedule / trial budget; the tests run
 the scripts as subprocesses in a temp cwd and assert that
 
@@ -39,7 +39,7 @@ _COST_RE = re.compile(r"\[least_squares\] cost = ([0-9.eE+-]+)")
 
 def _run_example(script: Path, cwd: Path, timeout: int = 2400,
                  args: tuple[str, ...] = ()) -> str:
-    env = dict(os.environ, VMEC_JAX_EXAMPLES_CI="1")
+    env = dict(os.environ, VMEX_EXAMPLES_CI="1")
     env.pop("JAX_DISABLE_JIT", None)
     proc = subprocess.run(
         [sys.executable, str(script), *args], cwd=cwd, env=env,
@@ -235,8 +235,8 @@ def test_extra_terms_work_uncommented():
     """The commented-out example terms run as objectives when uncommented."""
     import jax
 
-    from vmec_jax.core.input import VmecInput
-    from vmec_jax.core import optimize as opt
+    from vmex.core.input import VmecInput
+    from vmex.core import optimize as opt
 
     was_disabled = bool(jax.config.jax_disable_jit)
     jax.config.update("jax_disable_jit", False)  # conftest disables jit globally
@@ -269,7 +269,7 @@ def test_extra_terms_work_uncommented():
 # Zenodo dataset, which is a large local-only archive (not in CI) — skip when
 # absent.  Nightly-gated: each runs a multi-iteration Picard loop of solves.
 _ZENODO_2205 = Path(os.environ.get(
-    "VMEC_JAX_ZENODO_2205_02914",
+    "VMEX_ZENODO_2205_02914",
     str(Path.home() / "local" /
         "20220708-01-zenodo_for_QS_optimization_with_self_consistent_bootstrap_current")))
 

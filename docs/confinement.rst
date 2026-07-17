@@ -5,9 +5,9 @@ The pages :doc:`equations` and :doc:`algorithms` derive the *solver* physics —
 the energy functional whose stationary point is an equilibrium, and the
 numerics that find it. This page derives the **target functionals** that a
 stellarator-design campaign puts in front of that equilibrium: the confinement
-and stability metrics of :mod:`vmec_jax.core.omnigenity`,
-:mod:`vmec_jax.core.optimize`, :mod:`vmec_jax.core.nyquist`,
-:mod:`vmec_jax.core.stability` and :mod:`vmec_jax.core.bootstrap`. It is the
+and stability metrics of :mod:`vmex.core.omnigenity`,
+:mod:`vmex.core.optimize`, :mod:`vmex.core.nyquist`,
+:mod:`vmex.core.stability` and :mod:`vmex.core.bootstrap`. It is the
 first-principles companion to :doc:`objectives`, which catalogs the same
 quantities as ready-to-use optimizer terms.
 
@@ -48,7 +48,7 @@ surface functions
 
 where :math:`2\pi I(s)` is the toroidal current inside :math:`s`, :math:`2\pi
 G(s)` the poloidal current outside it (VMEC's ``buco`` and ``bvco``,
-:func:`~vmec_jax.core.fields.surface_currents`), and :math:`\psi=\Phi/2\pi` is
+:func:`~vmex.core.fields.surface_currents`), and :math:`\psi=\Phi/2\pi` is
 the toroidal flux per radian. Because :math:`I` and :math:`G` are flux
 functions, the magnetic differential equation for the coordinate shift is
 linear and can be solved surface by surface.
@@ -74,8 +74,8 @@ part :math:`w` of the Boozer generating potential, fixed by
    \frac{\partial w}{\partial\zeta}  = B_\zeta,
 
 with :math:`B_\theta,B_\zeta` the covariant components on the surface
-(:func:`~vmec_jax.core.fields.magnetic_fields`). In
-:func:`~vmec_jax.core.omnigenity.boozer_bmnc_state` this is inverted
+(:func:`~vmex.core.fields.magnetic_fields`). In
+:func:`~vmex.core.omnigenity.boozer_bmnc_state` this is inverted
 spectrally: after an FFT, the non-axisymmetric (:math:`m\ne 0`) harmonics of
 :math:`w` come from :math:`B_\theta` and the axisymmetric (:math:`m=0`)
 harmonics from :math:`B_\zeta`, matching the mode split of the Fortran
@@ -100,10 +100,10 @@ the angle bracket being the surface average over the original
 mode numbers ``xm_b``, ``xn_b``) consumed by every metric below.
 
 Two implementations share these equations. The host driver
-:func:`vmec_jax.core.boozer.run_booz_xform` calls ``booz_xform_jax`` on a
+:func:`vmex.core.boozer.run_booz_xform` calls ``booz_xform_jax`` on a
 ``wout_*.nc`` file and writes a standard ``boozmn_*.nc`` (used by ``vmec
---booz`` and by :func:`~vmec_jax.core.optimize.quasi_isodynamic_residual_from_wout`).
-The traceable :func:`~vmec_jax.core.omnigenity.boozer_bmnc_state` evaluates the
+--booz`` and by :func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout`).
+The traceable :func:`~vmex.core.omnigenity.boozer_bmnc_state` evaluates the
 *same* transform in pure ``jax.numpy`` directly from the solver's internal
 half-mesh field tables, so the Boozer spectrum — and any metric built on it —
 carries exact implicit gradients. The two agree to :math:`\sim10^{-6}` on the
@@ -128,7 +128,7 @@ field, need only be symmetric: this is enough for the guiding-center Lagrangian
 to acquire an ignorable angle, hence a conserved canonical momentum and confined
 collisionless orbits — the same confinement a true axisymmetric tokamak enjoys,
 but in a compact 3D device. The helicity fixes the family
-(:class:`~vmec_jax.core.optimize.QuasisymmetryRatioResidual`, ``helicity_n`` in
+(:class:`~vmex.core.optimize.QuasisymmetryRatioResidual`, ``helicity_n`` in
 units of ``nfp``):
 
 .. list-table::
@@ -151,7 +151,7 @@ units of ``nfp``):
 The two-term residual
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Rather than Fourier-filter the Boozer spectrum, ``vmec_jax`` uses the
+Rather than Fourier-filter the Boozer spectrum, ``vmex`` uses the
 Landreman–Paul *two-term* local residual, which is an exact pointwise
 diagnostic of the same condition and needs no mode truncation. On each
 requested surface, sampled on a uniform :math:`(\theta,\phi)` grid,
@@ -172,7 +172,7 @@ symmetry-breaking harmonic left to penalize. The flux-surface sum
 simsopt's ``QuasisymmetryRatioResidual`` A/B bit-for-bit. Kept in
 Gauss–Newton (per-point) form, it feeds the least-squares driver as an exact
 residual vector rather than a pre-summed scalar. The metric is evaluated from
-the parity-proven wout tables (:mod:`vmec_jax.core.nyquist`) and also exposes a
+the parity-proven wout tables (:mod:`vmex.core.nyquist`) and also exposes a
 traceable ``residuals_state`` lane, so the *same* term optimizes under both
 ``jac=None`` and ``jac="implicit"`` (see :doc:`objectives`).
 
@@ -203,7 +203,7 @@ The constructed-QI target
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Because :math:`\mathcal J_\parallel` uniformity is awkward to differentiate,
-:class:`~vmec_jax.core.omnigenity.QIResidual` implements the equivalent
+:class:`~vmex.core.omnigenity.QIResidual` implements the equivalent
 level-set conditions of the *constructed-QI-target* method of Goodman *et al.*
 (2023). On each surface, :math:`|B|` is sampled along Boozer field lines
 :math:`\theta_B=\alpha+\iota\phi_B` over one field period, and three families of
@@ -235,13 +235,13 @@ optimization runs with the exact implicit adjoint, exactly like the QS residual.
 Metric fidelity: report the wout-based residual
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The traceable :class:`~vmec_jax.core.omnigenity.QIResidual` is built for
+The traceable :class:`~vmex.core.omnigenity.QIResidual` is built for
 *gradient flow*, not for *labeling* a configuration. Its level-space envelopes
 and finite sampling make it an excellent descent direction but an **optimistic
 absolute scale**: driven hard, it can report values well below what an
 independent Boozer analysis confirms. When quoting "how QI is this
 equilibrium?", use the wout/Boozer-based
-:func:`~vmec_jax.core.optimize.quasi_isodynamic_residual_from_wout` (host
+:func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout` (host
 ``booz_xform_jax``, finite-difference-only) — the same construction evaluated on
 the fully resolved Boozer spectrum of the written ``wout``. The recommended
 workflow is therefore: **optimize** with the traceable residual under
@@ -267,7 +267,7 @@ Mercier-**stable** where
                      + D_{\mathrm{curr}} + D_{\mathrm{geod}} > 0 ,
 
 a decomposition into four flux-surface integrals with distinct physical origin.
-:func:`~vmec_jax.core.nyquist.mercier_and_jxb` ports VMEC2000 ``mercier.f`` term
+:func:`~vmex.core.nyquist.mercier_and_jxb` ports VMEC2000 ``mercier.f`` term
 for term (with :math:`{}' \equiv d/d\psi`, :math:`p` the pressure,
 :math:`\iota` the transform, :math:`V'` the differential volume, and
 :math:`I_\varphi` the enclosed toroidal current):
@@ -298,8 +298,8 @@ with the pressure decreasing outward (:math:`p'<0`), a magnetic well
 geodesic term is a manifestly non-positive Schwarz-inequality remainder. Because
 the individual pieces involve radial derivatives of surface averages, the two
 surfaces nearest the axis and the edge carry the usual numerical noise; a
-practical objective penalizes ``min(DMerc[2:-1], 0)``. ``vmec_jax`` exposes the
-profile as :func:`~vmec_jax.core.optimize.d_merc`, evaluated through the
+practical objective penalizes ``min(DMerc[2:-1], 0)``. ``vmex`` exposes the
+profile as :func:`~vmex.core.optimize.d_merc`, evaluated through the
 parity-proven wout engine (host NumPy, hence ``jac=None``); it is validated
 against VMEC2000 golden ``wout`` files.
 
@@ -308,7 +308,7 @@ Magnetic well
 
 The dominant stabilizing ingredient of :math:`D_{\mathrm{well}}` — the sign of
 :math:`V''(s)` — is also useful on its own as a cheap, fully traceable proxy.
-:func:`~vmec_jax.core.optimize.magnetic_well` returns the finite-difference
+:func:`~vmex.core.optimize.magnetic_well` returns the finite-difference
 vacuum-well measure
 
 .. math::
@@ -329,7 +329,7 @@ Ideal ballooning
 
 Interchange stability bounds only the :math:`n\to\infty`, radially-localized
 limit. The complementary *ballooning* limit — high toroidal mode number,
-extended along the field line — is provided by :mod:`vmec_jax.core.stability`
+extended along the field line — is provided by :mod:`vmex.core.stability`
 as a fully differentiable eigenvalue objective (a JAX port of the COBRA
 solve in the Gaur *et al.* formulation). It solves the self-adjoint
 field-line ODE eigenproblem
@@ -342,10 +342,10 @@ field-line ODE eigenproblem
 along the straight-field-line angle :math:`\eta`, where :math:`g` is the
 line-bending term, :math:`c` the pressure/curvature drive, and :math:`f>0` the
 inertia; :math:`\lambda = (\gamma a_N/v_A)^2 > 0` flags instability.
-:func:`~vmec_jax.core.stability.ballooning_growth_rate` reduces the batched
+:func:`~vmex.core.stability.ballooning_growth_rate` reduces the batched
 eigenvalues to a smooth ``softmax`` scalar built to be driven negative as a
 stable-by-construction constraint. The full coefficient definitions are in the
-:mod:`~vmec_jax.core.stability` module docstring and the usage recipe in
+:mod:`~vmex.core.stability` module docstring and the usage recipe in
 :doc:`objectives`.
 
 
@@ -354,7 +354,7 @@ Bootstrap current (Redl)
 
 The self-consistent parallel current a stellarator generates from its own
 pressure gradient — the bootstrap current — sets the achievable :math:`\beta`
-and, in a QI device, must be kept small. :mod:`vmec_jax.core.bootstrap`
+and, in a QI device, must be kept small. :mod:`vmex.core.bootstrap`
 provides a differentiable evaluation and a self-consistency loop (reproducing
 Landreman–Buller–Drevlak, arXiv:2205.02914).
 
@@ -367,9 +367,9 @@ compared. The **equilibrium** value follows from the exact MHD identity
    \frac{\langle B^2\rangle\,I'(s) + \mu_0\,I(s)\,p'(s)}{2\pi\,\psi_a},
    \qquad I(s) = \mathrm{signgs}\,\frac{2\pi}{\mu_0}\,\mathrm{buco}(s),
 
-(:func:`~vmec_jax.core.bootstrap.vmec_j_dot_B`). The **kinetic** value is the
+(:func:`~vmex.core.bootstrap.vmec_j_dot_B`). The **kinetic** value is the
 Redl *et al.* (2021) analytic closure
-(:func:`~vmec_jax.core.bootstrap.j_dot_B_redl`), a fit in the effective trapped
+(:func:`~vmex.core.bootstrap.j_dot_B_redl`), a fit in the effective trapped
 fraction :math:`f_t` and the Sauter collisionalities, with the quasisymmetry
 isomorphism :math:`\iota\to\iota-\mathrm{nfp}\,\mathrm{helicity\_n}` applied as
 in simsopt. The trapped fraction itself uses the singularity-removing
@@ -383,7 +383,7 @@ substitution :math:`y=\sqrt{1-\lambda B_{\max}}` in
 
 evaluated with fixed-order Gauss–Legendre quadrature so the whole chain stays
 differentiable. Their normalized mismatch is the residual
-:class:`~vmec_jax.core.bootstrap.RedlBootstrapMismatch` (the exact formula and
+:class:`~vmex.core.bootstrap.RedlBootstrapMismatch` (the exact formula and
 the finite-beta profile conventions are in :doc:`equations`); driving it to
 zero, optionally with ``current_dofs`` freed, yields a current profile
 consistent with the plasma the equilibrium describes.

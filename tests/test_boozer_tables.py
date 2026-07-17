@@ -1,4 +1,4 @@
-"""A/B tests for :mod:`vmec_jax.core.boozer_tables` vs the host wout engine.
+"""A/B tests for :mod:`vmex.core.boozer_tables` vs the host wout engine.
 
 ``boozer_input_tables`` promises (see its docstring) wout-convention
 single-surface tables computed entirely in JAX: ``bmnc`` matching the host
@@ -20,10 +20,10 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 
-from vmec_jax.core import solver
-from vmec_jax.core.boozer_tables import boozer_input_tables
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core.wout import wout_from_state
+from vmex.core import solver
+from vmex.core.boozer_tables import boozer_input_tables
+from vmex.core.input import VmecInput
+from vmex.core.wout import wout_from_state
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solve: run jitted
 

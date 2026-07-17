@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`vmec_jax.doctor` (the ``vmec --doctor`` engine).
+"""Unit tests for :mod:`vmex.doctor` (the ``vmec --doctor`` engine).
 
 The report must reflect the running interpreter truthfully: package
 versions come from importlib metadata, the JAX backend/devices are live,
@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import sys
 
-from vmec_jax import doctor
+from vmex import doctor
 
 
 def test_version_at_least():
@@ -42,7 +42,7 @@ def test_format_report_healthy_and_warning_paths():
     report = doctor.collect_report()
     healthy = dataclasses.replace(report, warnings=(), conda_prefix=None)
     text = doctor.format_report(healthy)
-    assert "vmec_jax installation doctor" in text
+    assert "vmex installation doctor" in text
     assert "Status: no obvious installation problems detected." in text
     assert "JAX backend:" in text
     for name in doctor._CORE_PACKAGES:
@@ -106,4 +106,4 @@ def test_old_packaging_and_user_site_warnings(monkeypatch):
 def test_main_prints_report_and_returns_zero(capsys):
     assert doctor.main() == 0
     out = capsys.readouterr().out
-    assert "vmec_jax installation doctor" in out
+    assert "vmex installation doctor" in out

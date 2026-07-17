@@ -34,7 +34,7 @@ three-step workflow every new user needs.
 All diagnostics and the Boozer transform
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-vmec-jax ships its plotting and its Boozer transform in the box.  This produces
+vmex ships its plotting and its Boozer transform in the box.  This produces
 every ``plot_wout`` figure (flux-surface summary, cross-sections, ``|B|``,
 profiles, 3D render) and the straight-field-line Boozer ``|B|`` spectrum on the last closed
 flux surface — the view used to judge quasisymmetry.
@@ -45,7 +45,7 @@ flux surface — the view used to judge quasisymmetry.
 VMEC++ JSON input
 ~~~~~~~~~~~~~~~~~
 
-vmec-jax reads both the classic ``&INDATA`` namelist and the VMEC++ JSON schema,
+vmex reads both the classic ``&INDATA`` namelist and the VMEC++ JSON schema,
 and can write the JSON form — a drop-in for either ecosystem.  This converts a
 deck, reads it back, and confirms the two representations describe one
 equilibrium.
@@ -85,7 +85,7 @@ Performance: hot restart
 
 Seed each point of a parameter scan from the previous converged state.  Warm
 restarts converge in about one iteration instead of hundreds, and because
-vmec-jax caches one compiled executable per solver structure, the whole scan
+vmex caches one compiled executable per solver structure, the whole scan
 recompiles nothing.
 
 .. literalinclude:: ../examples/hot_restart_scan.py
@@ -145,11 +145,11 @@ external field.
 Directly from ESSOS coils (no mgrid file)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-vmec-jax is coil-agnostic: the free-boundary solver consumes only a magnetic
+vmex is coil-agnostic: the free-boundary solver consumes only a magnetic
 field, so coils can come from ESSOS (``essos.coils.Coils``) instead of a
 tabulated mgrid file.  This takes the Landreman–Paul precise-QA modular coil
 set, tabulates its Biot–Savart field once into an in-memory
-:class:`~vmec_jax.core.mgrid.MgridField`, and runs a free-boundary beta scan
+:class:`~vmex.core.mgrid.MgridField`, and runs a free-boundary beta scan
 against it — calibrating ``PRES_SCALE`` per step so the converged wout
 ``betatotal`` lands on 0/1/2/3 %.
 
@@ -182,7 +182,7 @@ boundary harmonics released at once and Exponential Spectral Scaling
    :language: python
 
 ``QI_optimization_ess.py`` is the quasi-isodynamic analogue: the traceable
-Goodman constructed-QI residual (:class:`~vmec_jax.core.omnigenity.QIResidual`)
+Goodman constructed-QI residual (:class:`~vmex.core.omnigenity.QIResidual`)
 plus practical targets, one call at ``max_mode = 6`` (25x residual
 reduction in 17.3 minutes).
 
@@ -213,7 +213,7 @@ drives.  ``QA_bootstrap_selfconsistent.py`` (and its sibling
 reproduces the quasi-axisymmetric configuration of Landreman–Buller–Drevlak
 (arXiv:2205.02914): it erases the deck's current profile and lets the
 fixed-boundary Picard loop
-:func:`~vmec_jax.core.bootstrap.self_consistent_bootstrap` rebuild it from the
+:func:`~vmex.core.bootstrap.self_consistent_bootstrap` rebuild it from the
 Redl formula, converging to the paper's mismatch ``f_boot = 2e-6`` in a
 handful of hot-restarted iterations.  The physics of the Redl closure is on
 :doc:`confinement`.

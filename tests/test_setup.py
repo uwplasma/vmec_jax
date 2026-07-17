@@ -1,4 +1,4 @@
-"""Tests for ``vmec_jax.core.setup`` (profil1d.f / readin.f / profil3d.f).
+"""Tests for ``vmex.core.setup`` (profil1d.f / readin.f / profil3d.f).
 
 Field-by-field parity with the legacy setup chain (flux profiles, boundary
 processing incl. theta flip and the lconm1 m=1 conversion, initial guess,
@@ -22,19 +22,19 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from vmec_jax.core.fourier import mode_table, trig_tables
-from vmec_jax.core.geometry import (
+from vmex.core.fourier import mode_table, trig_tables
+from vmex.core.geometry import (
     half_mesh_jacobian,
     real_space_geometry,
     sqrt_s_half_mesh,
 )
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core.setup import (
+from vmex.core.input import VmecInput
+from vmex.core.setup import (
     geometry_state,
     interior_guess,
     run_setup,
 )
-from vmec_jax.core.solver import resolution_from_input
+from vmex.core.solver import resolution_from_input
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 

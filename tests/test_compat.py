@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`vmec_jax._compat` (JAX environment + cache policy).
+"""Unit tests for :mod:`vmex._compat` (JAX environment + cache policy).
 
 Covers the machine-scoped compilation-cache policy (env-var precedence table
 in ``_default_compilation_cache_dir``), the cache wiring against a recording
@@ -15,7 +15,7 @@ import types
 
 import pytest
 
-from vmec_jax import _compat
+from vmex import _compat
 
 
 # ---------------------------------------------------------------------------
@@ -23,8 +23,8 @@ from vmec_jax import _compat
 # ---------------------------------------------------------------------------
 
 _CACHE_VARS = (
-    "JAX_COMPILATION_CACHE_DIR", "VMEC_JAX_COMPILATION_CACHE_DIR",
-    "VMEC_JAX_COMPILATION_CACHE", "JAX_PLATFORM_NAME", "JAX_PLATFORMS",
+    "JAX_COMPILATION_CACHE_DIR", "VMEX_COMPILATION_CACHE_DIR",
+    "VMEX_COMPILATION_CACHE", "JAX_PLATFORM_NAME", "JAX_PLATFORMS",
 )
 
 
@@ -40,7 +40,7 @@ def test_cache_dir_env_precedence(clean_cache_env):
     # default on every backend now (R26c cold-start fix): CPU gets a
     # machine-scoped cache under ~/.cache with no env var required.
     path = _compat._default_compilation_cache_dir()
-    assert path is not None and "vmec_jax" in path and "jax_cache" in path
+    assert path is not None and "vmex" in path and "jax_cache" in path
 
     # explicit JAX var wins verbatim; 'disabled' turns it off
     mp.setenv("JAX_COMPILATION_CACHE_DIR", "/tmp/jaxcache")
@@ -50,19 +50,19 @@ def test_cache_dir_env_precedence(clean_cache_env):
     mp.delenv("JAX_COMPILATION_CACHE_DIR")
 
     # vmec-specific dir override
-    mp.setenv("VMEC_JAX_COMPILATION_CACHE_DIR", "/tmp/vmeccache")
+    mp.setenv("VMEX_COMPILATION_CACHE_DIR", "/tmp/vmeccache")
     assert _compat._default_compilation_cache_dir() == "/tmp/vmeccache"
-    mp.setenv("VMEC_JAX_COMPILATION_CACHE_DIR", "no")
+    mp.setenv("VMEX_COMPILATION_CACHE_DIR", "no")
     assert _compat._default_compilation_cache_dir() is None
-    mp.delenv("VMEC_JAX_COMPILATION_CACHE_DIR")
+    mp.delenv("VMEX_COMPILATION_CACHE_DIR")
 
     # forced on CPU -> machine-scoped default under ~/.cache
-    mp.setenv("VMEC_JAX_COMPILATION_CACHE", "1")
+    mp.setenv("VMEX_COMPILATION_CACHE", "1")
     path = _compat._default_compilation_cache_dir()
-    assert path is not None and "vmec_jax" in path and "jax_cache" in path
-    mp.setenv("VMEC_JAX_COMPILATION_CACHE", "off")
+    assert path is not None and "vmex" in path and "jax_cache" in path
+    mp.setenv("VMEX_COMPILATION_CACHE", "off")
     assert _compat._default_compilation_cache_dir() is None
-    mp.delenv("VMEC_JAX_COMPILATION_CACHE")
+    mp.delenv("VMEX_COMPILATION_CACHE")
 
     # accelerator request enables the default cache
     mp.setenv("JAX_PLATFORMS", "cuda,cpu")
@@ -94,11 +94,11 @@ def test_configure_compilation_cache_wiring(monkeypatch):
     monkeypatch.delenv("JAX_PLATFORM_NAME", raising=False)
     monkeypatch.delenv("JAX_PLATFORMS", raising=False)
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-    monkeypatch.setenv("VMEC_JAX_CACHE_MIN_COMPILE_TIME_SECS", "2.5")
-    monkeypatch.setenv("VMEC_JAX_CACHE_MIN_ENTRY_SIZE_BYTES", "1024")
-    monkeypatch.setenv("VMEC_JAX_COMPILATION_CACHE_MAX_SIZE", "100000")
-    monkeypatch.setenv("VMEC_JAX_EXPLAIN_CACHE_MISSES", "1")
-    monkeypatch.setenv("VMEC_JAX_PERSISTENT_CACHE_XLA_CACHES", "all")
+    monkeypatch.setenv("VMEX_CACHE_MIN_COMPILE_TIME_SECS", "2.5")
+    monkeypatch.setenv("VMEX_CACHE_MIN_ENTRY_SIZE_BYTES", "1024")
+    monkeypatch.setenv("VMEX_COMPILATION_CACHE_MAX_SIZE", "100000")
+    monkeypatch.setenv("VMEX_EXPLAIN_CACHE_MISSES", "1")
+    monkeypatch.setenv("VMEX_PERSISTENT_CACHE_XLA_CACHES", "all")
 
     _compat._configure_compilation_cache(fake, "/tmp/cachedir")
     ups = fake.config.updates
@@ -121,7 +121,7 @@ def test_configure_compilation_cache_wiring(monkeypatch):
 
 
 def test_configure_compilation_cache_gpu_autotune_default(monkeypatch):
-    monkeypatch.delenv("VMEC_JAX_PERSISTENT_CACHE_XLA_CACHES", raising=False)
+    monkeypatch.delenv("VMEX_PERSISTENT_CACHE_XLA_CACHES", raising=False)
     monkeypatch.delenv("JAX_PLATFORM_NAME", raising=False)
     monkeypatch.setenv("JAX_PLATFORMS", "cuda")
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)

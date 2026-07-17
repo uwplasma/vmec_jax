@@ -1,4 +1,4 @@
-"""Tests for ``vmec_jax.core.preconditioner``: ``precondn`` / ``lamcal`` /
+"""Tests for ``vmex.core.preconditioner``: ``precondn`` / ``lamcal`` /
 ``scalfor_matrices`` / ``scalfor`` / ``tridiagonal_solve``.
 
 The full A/B against the legacy scalfor.f/precondn.f/lamcal.f90 port
@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from vmec_jax.core import preconditioner as newp
+from vmex.core import preconditioner as newp
 
 RTOL = 1e-12
 ATOL = 1e-13

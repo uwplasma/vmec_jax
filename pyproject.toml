@@ -3,12 +3,12 @@ requires = ["setuptools", "wheel", "packaging"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vmec-jax"
+name = "vmex"
 version = "0.1.0"
 description = "JAX implementation of VMEC2000 with differentiable fixed-boundary and branch-local free-boundary research paths."
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{name = "vmec_jax contributors"}]
+authors = [{name = "vmex contributors"}]
 license = "MIT"
 keywords = ["vmec", "stellarator", "mhd", "jax", "optimization"]
 classifiers = [
@@ -35,23 +35,23 @@ dependencies = [
 ]
 
 [project.scripts]
-vmec = "vmec_jax.core.cli:main"
-vmec-jax = "vmec_jax.core.cli:main"
+vmex = "vmex.core.cli:main"
+vmec = "vmex.core.cli:main"  # alias
 
 [project.urls]
-Homepage = "https://github.com/uwplasma/vmec_jax"
-Documentation = "https://vmec-jax.readthedocs.io/en/latest/"
-Repository = "https://github.com/uwplasma/vmec_jax"
-Issues = "https://github.com/uwplasma/vmec_jax/issues"
-Changelog = "https://github.com/uwplasma/vmec_jax/releases"
+Homepage = "https://github.com/uwplasma/VMEX"
+Documentation = "https://vmex.readthedocs.io/en/latest/"
+Repository = "https://github.com/uwplasma/VMEX"
+Issues = "https://github.com/uwplasma/VMEX/issues"
+Changelog = "https://github.com/uwplasma/VMEX/releases"
 
 [project.optional-dependencies]
 # Differentiable free boundary via virtual casing (plan.md R15.3 + R19).
 # ``virtual_casing_jax`` is a uwplasma package (https://github.com/uwplasma/
-# virtual_casing_jax); it is NOT yet on PyPI, so ``pip install vmec-jax[freeb]``
-# will not resolve it from an index — install it editable alongside vmec_jax:
+# virtual_casing_jax); it is NOT yet on PyPI, so ``pip install vmex[freeb]``
+# will not resolve it from an index — install it editable alongside vmex:
 #   pip install -e /path/to/virtual_casing_jax
-# The ``vmec_jax.core.freeboundary_diff`` module and its tests are gated behind an
+# The ``vmex.core.freeboundary_diff`` module and its tests are gated behind an
 # ``importorskip`` so CI stays green when the dependency is absent.
 freeb = [
   "virtual_casing_jax",
@@ -75,11 +75,11 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["vmec_jax*"]
+include = ["vmex*", "vmec_jax"]
 exclude = ["tests*", "docs*", "examples*", "tools*", "validation*", "results*", "build*", "dist*"]
 
 [tool.setuptools.package-data]
-vmec_jax = ["resources/input.nfp4_QH_warm_start"]
+vmex = ["resources/input.nfp4_QH_warm_start"]
 
 [tool.pytest.ini_options]
 markers = [
@@ -87,7 +87,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-# freeboundary_diff.py is optional (vmec-jax[freeb]) and requires
+# freeboundary_diff.py is optional (vmex[freeb]) and requires
 # virtual_casing_jax, a uwplasma package not on PyPI; its FD-validated
 # gradient tests are importorskip-gated and skip in the core CI, so the module
 # is excluded from the core >=95% coverage gate.  It IS exercised when the

@@ -1,4 +1,4 @@
-"""Tests for ``vmec_jax.core.plotting`` and ``vmec_jax.core.boozer``.
+"""Tests for ``vmex.core.plotting`` and ``vmex.core.boozer``.
 
 Uses the golden VMEC2000 ``wout`` fixtures (see ``conftest.resolve_golden_dir``):
 
@@ -23,8 +23,8 @@ import pytest
 netCDF4 = pytest.importorskip("netCDF4")
 pytest.importorskip("matplotlib")
 
-from vmec_jax.core.boozer import run_booz_xform  # noqa: E402
-from vmec_jax.core.plotting import plot_boozmn, plot_wout  # noqa: E402
+from vmex.core.boozer import run_booz_xform  # noqa: E402
+from vmex.core.plotting import plot_boozmn, plot_wout  # noqa: E402
 
 from conftest import resolve_golden_dir
 
@@ -70,7 +70,7 @@ def test_plot_wout_golden(case: str, tmp_path: Path) -> None:
 
 def test_plot_wout_accepts_woutdata_and_subset(tmp_path: Path) -> None:
     """plot_wout takes an in-memory WoutData and honors ``which`` subsets."""
-    from vmec_jax.core.wout import read_wout
+    from vmex.core.wout import read_wout
 
     data = read_wout(str(_golden_wout("solovev")))
     paths = plot_wout(data, tmp_path, which=("profiles", "modB"), name="solovev_mem")

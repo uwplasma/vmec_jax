@@ -1,14 +1,14 @@
 """Validation gates for the traceable omnigenity/QI objective (R26h.h2).
 
 - **Transform parity**: the traceable Boozer ``|B|`` spectrum
-  (:func:`vmec_jax.core.omnigenity.boozer_bmnc_state`) matches the host
-  booz_xform_jax route (:func:`vmec_jax.core.optimize.boozer_modes_from_wout`)
+  (:func:`vmex.core.omnigenity.boozer_bmnc_state`) matches the host
+  booz_xform_jax route (:func:`vmex.core.optimize.boozer_modes_from_wout`)
   mode-by-mode on a converged 3D deck.
 - **Physics**: the residual is exactly zero on an analytic QI (pure-QP)
   ``|B|`` and large on a QA-like ``|B|``; on solved decks the bundled QI
   configuration (``input.nfp1_QI``) scores far below a circular tokamak.
 - **Consistency**: the deck ordering agrees with the wout-engine QI total
-  (:func:`vmec_jax.core.optimize.quasi_isodynamic_residual_from_wout`).
+  (:func:`vmex.core.optimize.quasi_isodynamic_residual_from_wout`).
 - **Differentiability**: ``jax.grad`` w.r.t. the state is finite and nonzero,
   and the residual composes through ``least_squares(..., jac="implicit")``.
 """
@@ -24,9 +24,9 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 
-from vmec_jax.core import omnigenity as omn
-from vmec_jax.core import optimize as opt
-from vmec_jax.core.input import VmecInput
+from vmex.core import omnigenity as omn
+from vmex.core import optimize as opt
+from vmex.core.input import VmecInput
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solves: run jitted
 

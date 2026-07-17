@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Baseline benchmark harness: VMEC2000 vs vmec_jax vs VMEC++.
+"""Baseline benchmark harness: VMEC2000 vs vmex vs VMEC++.
 
 Runs a fixed suite of input decks (from ``examples/data``) through each
 available solver and records wall time, peak RSS, iteration counts, and
@@ -13,9 +13,9 @@ Usage:
 
 Solvers exercised per case:
 - ``vmec2000``       — /Users/rogerio/local/STELLOPT/VMEC2000/Release/xvmec2000
-- ``vmec_jax_cold``  — fresh ``vmec`` CLI subprocess (includes JAX/XLA setup)
-- ``vmec_jax_warm``  — second in-process core solve (structural executable
-  cache hot; same ``vmec_jax.core`` route as the CLI)
+- ``vmex_cold``  — fresh ``vmec`` CLI subprocess (includes JAX/XLA setup)
+- ``vmex_warm``  — second in-process core solve (structural executable
+  cache hot; same ``vmex.core`` route as the CLI)
 - ``vmecpp``         — VMEC++ python API, where the case converges cleanly
 
 Every benchmark row runs at ``ns >= RAMP_NS`` (201): decks whose finest
@@ -212,17 +212,17 @@ def run_vmecjax_cold(deck: Path, aux: list[str], timeout: int) -> dict:
 WARM_SNIPPET = r"""
 import json, sys, time, resource
 import numpy as np
-import vmec_jax  # sets the persistent XLA compilation cache dir
-from vmec_jax.core.input import VmecInput
-from vmec_jax.core.multigrid import solve_multigrid
+import vmex  # sets the persistent XLA compilation cache dir
+from vmex.core.input import VmecInput
+from vmex.core.multigrid import solve_multigrid
 
 def run(path):
     # Same route as the ``vmec`` CLI (core/cli.py): fixed-boundary decks run
     # the full NS_ARRAY ladder; free-boundary decks run the final stage.
     inp = VmecInput.from_file(path)
     if bool(getattr(inp, "lfreeb", False)):
-        from vmec_jax.core.freeboundary import solve_free_boundary
-        from vmec_jax.core.solver import resolution_from_input
+        from vmex.core.freeboundary import solve_free_boundary
+        from vmex.core.solver import resolution_from_input
 
         ns = int(np.atleast_1d(np.asarray(inp.ns_array))[-1])
         return solve_free_boundary(
@@ -320,12 +320,12 @@ def main() -> None:
             row: dict[str, dict] = {"ns": read_deck_ns(deck)}
             print(f"=== {key} (ns={row['ns']}) ===", flush=True)
             for solver, fn in [("vmec2000", run_vmec2000),
-                               ("vmec_jax_cold", run_vmecjax_cold),
-                               ("vmec_jax_warm", run_vmecjax_warm),
+                               ("vmex_cold", run_vmecjax_cold),
+                               ("vmex_warm", run_vmecjax_warm),
                                ("vmecpp", run_vmecpp)]:
                 if solver in skip:
                     continue
-                if solver in ("vmec_jax_warm", "vmecpp") and name.endswith("free_bdy_lasym_small"):
+                if solver in ("vmex_warm", "vmecpp") and name.endswith("free_bdy_lasym_small"):
                     if solver == "vmecpp":
                         row[solver] = {"ok": False, "error": "lasym unsupported"}
                         continue

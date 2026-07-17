@@ -35,10 +35,10 @@ import pytest
 jax = pytest.importorskip("jax")
 jax.config.update("jax_enable_x64", True)
 
-from vmec_jax.core import implicit as im  # noqa: E402
-from vmec_jax.core import optimize as opt  # noqa: E402
-from vmec_jax.core.errors import VmecJacobianError  # noqa: E402
-from vmec_jax.core.input import VmecInput  # noqa: E402
+from vmex.core import implicit as im  # noqa: E402
+from vmex.core import optimize as opt  # noqa: E402
+from vmex.core.errors import VmecJacobianError  # noqa: E402
+from vmex.core.input import VmecInput  # noqa: E402
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solves: jitted
 

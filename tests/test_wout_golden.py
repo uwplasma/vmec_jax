@@ -1,12 +1,12 @@
-"""Golden-file validation of the complete ``vmec_jax.core.wout`` writer.
+"""Golden-file validation of the complete ``vmex.core.wout`` writer.
 
 For each reference deck, converge the equilibrium with the core multigrid
-solver (:func:`vmec_jax.core.multigrid.solve_multigrid`) at the deck's own
+solver (:func:`vmex.core.multigrid.solve_multigrid`) at the deck's own
 settings, build the full VMEC2000-compatible dataset with
-:func:`vmec_jax.core.wout.wout_from_state`, write it with
+:func:`vmex.core.wout.wout_from_state`, write it with
 :func:`write_wout`, and compare EVERY variable that also exists in the
 golden VMEC2000 ``wout_*.nc`` (fresh VMEC2000 runs stored in
-``~/vmec_jax_notes/golden``).  This drives the same pure-core pipeline as
+``~/vmex_notes/golden``).  This drives the same pure-core pipeline as
 the ``vmec`` CLI (no legacy modules anywhere in the loop).
 
 Comparison policy per variable class:
@@ -21,7 +21,7 @@ Comparison policy per variable class:
   where stricter than plan.md Appendix A;
 - scalars VMEC2000 zeroes when it hits NITER without converging (the late
   ``eqfor.f`` block) are skipped when the *golden* run did not converge
-  (vmec_jax always writes the computed values - zero-crash policy).
+  (vmex always writes the computed values - zero-crash policy).
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ jax = pytest.importorskip("jax")
 
 jax.config.update("jax_enable_x64", True)
 
-from vmec_jax.core.wout import (  # noqa: E402
+from vmex.core.wout import (  # noqa: E402
     WoutData,
     read_wout,
     wout_from_state,
@@ -146,7 +146,7 @@ _FLOAT_TOL: dict[str, tuple[float, float, int, bool]] = {
 #    current-driven decks) still carry ~1% drift.
 # (lasym runs used to be in this set wholesale: the legacy lasym solve
 # inherited the fixaray.f dnorm defect and converged ~5% away from VMEC2000.
-# With the dnorm fix in vmec_jax/kernels/tomnsp.py / vmec_jax/core/fourier.py
+# With the dnorm fix in vmex/kernels/tomnsp.py / vmex/core/fourier.py
 # the up_down deck matches the golden at the tight bounds on the solved
 # harmonics and scalars, so lasym no longer triggers drift tolerances by
 # itself — only the writer-recomputed diagnostic channels below stay
@@ -241,9 +241,9 @@ def case(request, tmp_path_factory):
     if name not in _RUN_CACHE:
         # conftest disables JIT for unit tests; full solves need it.
         jax.config.update("jax_disable_jit", False)
-        os.environ.setdefault("VMEC_JAX_TOMNSPS_FFT", "0")
-        from vmec_jax.core.input import VmecInput
-        from vmec_jax.core.multigrid import solve_multigrid
+        os.environ.setdefault("VMEX_TOMNSPS_FFT", "0")
+        from vmex.core.input import VmecInput
+        from vmex.core.multigrid import solve_multigrid
 
         inp = VmecInput.from_file(deck)
         # raise_on_max_iterations=False: the up_down deck exhausts NITER
@@ -307,7 +307,7 @@ def test_golden_values(case):
         lasym = bool(int(_get(gd, "lasym__logical__")))
         ftolv = float(_get(gd, "ftolv"))
         # lasym alone no longer triggers full drift tolerances: the
-        # fixaray.f dnorm fix (vmec_jax/kernels/tomnsp.py) closed the lasym
+        # fixaray.f dnorm fix (vmex/kernels/tomnsp.py) closed the lasym
         # solver parity gap.  Only _LASYM_DIAG_DRIFT / _DRIFT_FINITE_ONLY
         # channels stay relaxed for lasym goldens.
         drift = ftolv > 1e-9

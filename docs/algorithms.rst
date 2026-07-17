@@ -1,7 +1,7 @@
 Algorithms
 ==========
 
-This page documents the numerical algorithms of the ``vmec_jax`` solver and
+This page documents the numerical algorithms of the ``vmex`` solver and
 how they map onto their VMEC2000 counterparts. The module-by-module map is in
 :doc:`architecture`; the underlying equations are derived in
 :doc:`equations`.
@@ -25,7 +25,7 @@ full-mesh. Odd-m coefficients are stored internally with the axis-regular
 :math:`\sqrt{s}` factor removed (``scalxc``), and R/Z and :math:`\lambda`
 evolution starts from the m-dependent ``jmin2``/``jlam`` radial indices
 (``vmec_params.f``). These conventions are implemented in
-:mod:`vmec_jax.core.geometry` and :mod:`vmec_jax.core.setup`.
+:mod:`vmex.core.geometry` and :mod:`vmex.core.setup`.
 
 Angular grids and Fourier transforms
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -44,15 +44,15 @@ precomputed trig tables (``fixaray.f``):
 
 and analogously for the sine tables. Derivative terms use ``cosnvn/sinnvn``,
 which already include the field-period scaling :math:`n\,\mathrm{NFP}`. The
-tables are built in :mod:`vmec_jax.core.fourier` and the transforms
+tables are built in :mod:`vmex.core.fourier` and the transforms
 (``totzsps/totzspa`` synthesis, ``tomnsps/tomnspa`` analysis) are batched
-``dot_general`` matmuls in :mod:`vmec_jax.core.transforms` — GEMM-friendly
+``dot_general`` matmuls in :mod:`vmex.core.transforms` — GEMM-friendly
 and XLA-fusable while matching VMEC2000 normalization exactly.
 
 Geometry pipeline
 ~~~~~~~~~~~~~~~~~
 
-Per iteration (:mod:`vmec_jax.core.geometry`, VMEC2000 ``jacobian.f``):
+Per iteration (:mod:`vmex.core.geometry`, VMEC2000 ``jacobian.f``):
 
 1. synthesize :math:`(R,Z,\lambda)` and their angular derivatives on the
    ``(s,\theta,\zeta)`` grid from the spectral state;
@@ -85,25 +85,25 @@ where :math:`\mathbf{r}` is the spectral force residual and the damping
    \mathrm{otau} \leftarrow \min\!\left(\left|\log\frac{\mathrm{fsq}_k}{\mathrm{fsq}_{k-1}}\right| / \Delta t,\; \frac{0.15}{\Delta t}\right)
 
 is averaged over the last ``ndamp = 10`` steps (``evolve.f``). This is
-implemented in :mod:`vmec_jax.core.step`:
-:func:`~vmec_jax.core.step.damping_coefficients` advances the ``ndamp``
+implemented in :mod:`vmex.core.step`:
+:func:`~vmex.core.step.damping_coefficients` advances the ``ndamp``
 window and returns the ``(b1, fac)`` pair,
-:func:`~vmec_jax.core.step.momentum_update` applies the velocity/position
+:func:`~vmex.core.step.momentum_update` applies the velocity/position
 update, and the traced controller scalars (``delt``, damping history,
 best-residual trackers, ``iter1``, ``ijacob``) live in
-:class:`~vmec_jax.core.step.StepControl`.
+:class:`~vmex.core.step.StepControl`.
 
 Convergence is declared when the *physical* residuals satisfy
 ``fsqr, fsqz, fsql <= ftolv`` simultaneously; the residual norms and the m=1
-constraint rotation follow ``residue.f90`` (:mod:`vmec_jax.core.residuals`).
+constraint rotation follow ``residue.f90`` (:mod:`vmex.core.residuals`).
 
 Restart control (``restart.f``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The loop keeps a checkpoint of the best state and applies VMEC2000's exact
-back-off rules (:func:`~vmec_jax.core.step.restart_decision` classifies the
+back-off rules (:func:`~vmex.core.step.restart_decision` classifies the
 step as ``STEP_OK``/``RESTART_JACOBIAN``/``RESTART_GROWTH``;
-:func:`~vmec_jax.core.step.apply_restart` restores the checkpoint, zeroes
+:func:`~vmex.core.step.apply_restart` restores the checkpoint, zeroes
 the velocity and rescales ``delt``):
 
 - **bad Jacobian** (``irst = 2``): restore the checkpoint, zero the velocity,
@@ -127,7 +127,7 @@ replaced by the solution of a radial tridiagonal system
    d_x(s) = -\bigl(a_{xd} + b_{xd}\,m^2 + c_x\,(n\,\mathrm{NFP})^2\bigr),
 
 whose coefficients are flux-surface integrals over the half mesh
-(``precondn.f``, :func:`~vmec_jax.core.preconditioner.precondn`) of
+(``precondn.f``, :func:`~vmex.core.preconditioner.precondn`) of
 :math:`p_\tau = -4\,r_{12}^2\,\mathrm{bsq}\,w/\sqrt{g}`-type quantities: the
 poloidal-derivative couplings give :math:`a_x`, the radial-derivative
 couplings :math:`b_x`, and
@@ -137,13 +137,13 @@ carries the internal :math:`\sqrt{s}` scalings). Assembly of the per-mode
 system with the :math:`m^2` and :math:`(n\,\mathrm{NFP})^2` weights, the
 ``edge_pedestal = 0.05`` and ZC(0,0)(ns) ``fac = 0.25`` stabilizations of
 ``scalfor.f``, and the ``jmin`` axis-row rules is
-:func:`~vmec_jax.core.preconditioner.scalfor_matrices`; the application is
-:func:`~vmec_jax.core.preconditioner.scalfor`. The solve is a Thomas
+:func:`~vmex.core.preconditioner.scalfor_matrices`; the application is
+:func:`~vmex.core.preconditioner.scalfor`. The solve is a Thomas
 algorithm vectorized over all spectral columns simultaneously
-(:func:`vmec_jax.core.preconditioner.tridiagonal_solve`, a thin arg-order
+(:func:`vmex.core.preconditioner.tridiagonal_solve`, a thin arg-order
 adapter over ``solvax.tridiagonal_solve`` — the shared SOLVAX linear-solver
 package). :math:`\lambda` uses the diagonal ``faclam`` factors from
-``lamcal.f90`` (:func:`~vmec_jax.core.preconditioner.lamcal`):
+``lamcal.f90`` (:func:`~vmex.core.preconditioner.lamcal`):
 
 .. math::
 
@@ -186,17 +186,17 @@ preconditioner only conditions the linear solve (near equilibrium
 
 VMEC2000 (``Sources/Hessian/precon2d.f``) builds :math:`J` explicitly by
 finite-difference "jogs" of every spectral column and LU-factors it with
-BCYCLIC. In :mod:`vmec_jax.core.preconditioner_2d` the force map is
+BCYCLIC. In :mod:`vmex.core.preconditioner_2d` the force map is
 traceable, so :math:`J v` is an **exact Hessian-vector product** from one
-``jax.jvp`` (:func:`~vmec_jax.core.preconditioner_2d.flat_operator`) — no
+``jax.jvp`` (:func:`~vmex.core.preconditioner_2d.flat_operator`) — no
 jogs, no assembled blocks — and the system is solved with matrix-free
 restarted GMRES from SOLVAX (``solvax.gmres``) in
-:func:`~vmec_jax.core.preconditioner_2d.newton_direction`. A loose GMRES
+:func:`~vmex.core.preconditioner_2d.newton_direction`. A loose GMRES
 tolerance yields an inexact Newton step; peak memory stays at one force
 graph. Activation mirrors ``evolve.f``
-(:class:`~vmec_jax.core.preconditioner_2d.Prec2DConfig`): finest grid only,
+(:class:`~vmex.core.preconditioner_2d.Prec2DConfig`): finest grid only,
 ``iter2 >= 10``, and ``fsqr + fsqz + fsql < prec2d_threshold``; the wiring in
-:mod:`vmec_jax.core.solver` swaps the Newton direction for the 1D force
+:mod:`vmex.core.solver` swaps the Newton direction for the 1D force
 direction under a ``lax.cond``, leaving the default 1D-only path untouched.
 
 Spectral condensation (``alias.f``)
@@ -219,14 +219,14 @@ spectrally filtered to :math:`m \in [1, \mathrm{mpol}-2]` with the
    \mathrm{tcon}_0\text{-scaled}\cdot(32\,h_s)^2,
    \qquad \mathrm{tcon}(ns) = \tfrac{1}{2}\,\mathrm{tcon}(ns-1)
 
-(``bcovar.f``). Implemented in :mod:`vmec_jax.core.forces` (constraint force)
-and :mod:`vmec_jax.core.fields` (``tcon``).
+(``bcovar.f``). Implemented in :mod:`vmex.core.forces` (constraint force)
+and :mod:`vmex.core.fields` (``tcon``).
 
 Two execution lanes, one physics
 --------------------------------
 
-:mod:`vmec_jax.core.solver` exposes the same jitted iteration through two
-lanes (selected by ``vmec --mode cli|jit``):
+:mod:`vmex.core.solver` exposes the same jitted iteration through two
+lanes (selected by ``vmex --mode cli|jit``):
 
 - **CLI lane** (default): a Python ``while`` loop around a jitted
   *N-iteration block* kernel, with residuals checked on the host between
@@ -238,31 +238,31 @@ lanes (selected by ``vmec --mode cli|jit``):
 
 A regression test asserts per-block state agreement between the lanes to
 machine precision. Which device (CPU or GPU) a lane runs on is decided by
-the measured placement policy of :mod:`vmec_jax.core.device` — see
+the measured placement policy of :mod:`vmex.core.device` — see
 :ref:`architecture:Device policy (CPU/GPU)`.
 
 Multigrid and hot restart (``runvmec.f``, ``interp.f``)
 -------------------------------------------------------
 
-:func:`vmec_jax.core.multigrid.solve_multigrid` runs the ``NS_ARRAY``
+:func:`vmex.core.multigrid.solve_multigrid` runs the ``NS_ARRAY``
 ladder: each stage solves at its ``ns`` with its own
 ``FTOL_ARRAY``/``NITER_ARRAY`` entry, and the converged coefficients are
 interpolated in :math:`\sqrt{s}`-internal form to the next finer grid
 (``interp.f``): scale by ``scalxc``, extrapolate odd-m modes to the axis on
 the scaled array, interpolate linearly in :math:`s`, unscale, and zero the
-odd-m axis row (:func:`~vmec_jax.core.multigrid.interpolate_coefficients` /
-:func:`~vmec_jax.core.multigrid.interpolate_state`; the equations are in
+odd-m axis row (:func:`~vmex.core.multigrid.interpolate_coefficients` /
+:func:`~vmex.core.multigrid.interpolate_state`; the equations are in
 :doc:`equations`). Mode and radial arrays are padded to the maximum
 resolution so all stages share one compiled executable — the ladder pays a
 single JIT compile. The same interpolation seam provides hot restart
-(:func:`vmec_jax.core.solver.hot_restart_state`): a previous solution (e.g.
+(:func:`vmex.core.solver.hot_restart_state`): a previous solution (e.g.
 the previous point of a parameter scan) can seed the solve directly, at the
 same or a different radial resolution.
 
 Free boundary (NESTOR)
 ----------------------
 
-For ``LFREEB = T`` decks, :mod:`vmec_jax.core.vacuum` implements Merkel's
+For ``LFREEB = T`` decks, :mod:`vmex.core.vacuum` implements Merkel's
 Green's-function method (NESTOR, J. Comp. Phys. 66, 83 (1986)). In the
 vacuum region the field is curl-free, so it is written as
 
@@ -300,13 +300,13 @@ The :math:`|\mathbf{x}-\mathbf{x}'| \to 0` singularity of :math:`G` is split
 off and integrated analytically (``analyt.f``, the ``cmns`` coefficient
 tables); the regular remainder is tabulated on the angular grid (``greenf`` /
 ``fourp``). Implementation: geometry-independent tables in
-:func:`~vmec_jax.core.vacuum.vacuum_basis`, the jitted full/incremental
-solves in :func:`~vmec_jax.core.vacuum.make_vacuum_solver`, and the surface
+:func:`~vmex.core.vacuum.vacuum_basis`, the jitted full/incremental
+solves in :func:`~vmex.core.vacuum.make_vacuum_solver`, and the surface
 field :math:`B_u = \mathrm{bexu} + \partial_u\Phi` (etc.) with
 :math:`\mathrm{bsqvac} = |B_{\mathrm{vac}}|^2/2` in
-:func:`~vmec_jax.core.vacuum.vacuum_channels`.
+:func:`~vmex.core.vacuum.vacuum_channels`.
 
-:func:`vmec_jax.core.freeboundary.solve_free_boundary` drives the coupling
+:func:`vmex.core.freeboundary.solve_free_boundary` drives the coupling
 with the VMEC2000 cadence (``funct3d.f``):
 
 - the vacuum solve activates once :math:`\mathrm{fsqr}+\mathrm{fsqz} \le 10^{-3}`;
@@ -323,10 +323,10 @@ with the VMEC2000 cadence (``funct3d.f``):
   surfaces ``rcon0, zcon0`` ramp by 0.9 per iteration.
 
 The external field comes either from an ``mgrid`` file
-(:mod:`vmec_jax.core.mgrid`, trilinear interpolation weighted by ``EXTCUR``)
+(:mod:`vmex.core.mgrid`, trilinear interpolation weighted by ``EXTCUR``)
 or from any ``xyz -> B`` callable — e.g. an ESSOS ``essos.coils.Coils``
 Biot-Savart field (``lambda pts: coils.B(pts)``), interpolation-free and
-differentiable through the coil parameters. vmec_jax itself carries no coil
+differentiable through the coil parameters. vmex itself carries no coil
 code; coils live in ESSOS.
 
 Differentiable free boundary (virtual casing)
@@ -334,7 +334,7 @@ Differentiable free boundary (virtual casing)
 
 The NESTOR iteration above is a host-driven fixed point and is not
 differentiated. For coil/current optimization,
-:mod:`vmec_jax.core.freeboundary_diff` instead expresses the free-boundary
+:mod:`vmex.core.freeboundary_diff` instead expresses the free-boundary
 condition as a smooth objective on a given boundary. At the plasma-vacuum
 interface the total exterior field
 :math:`\mathbf{B}_{\mathrm{out}} = \mathbf{B}_{\mathrm{coil}} +
@@ -351,17 +351,17 @@ equals that of the surface current
 :math:`\mathbf{K} = \mathbf{n}\times\mathbf{B}/\mu_0` on
 :math:`\partial\Omega`, evaluated with an accurate on-surface singular
 quadrature (reused from ``virtual_casing_jax``;
-:func:`~vmec_jax.core.freeboundary_diff.surface_field_data_from_wout`
+:func:`~vmex.core.freeboundary_diff.surface_field_data_from_wout`
 adapts a converged boundary + field, and
-:func:`~vmec_jax.core.freeboundary_diff.plasma_field_on_boundary` evaluates
+:func:`~vmex.core.freeboundary_diff.plasma_field_on_boundary` evaluates
 the integral). The key structural fact: for a *fixed* trial boundary,
 :math:`\mathbf{B}_{\mathrm{plasma}}` on that boundary does not depend on the
 coil degrees of freedom, so it is precomputed once and frozen. The residual
 assembled by
-:class:`~vmec_jax.core.freeboundary_diff.FreeBoundaryDiffProblem` is then a
+:class:`~vmex.core.freeboundary_diff.FreeBoundaryDiffProblem` is then a
 smooth JAX function of the external-field dofs alone (coil Fourier
 coefficients/currents of a callable ESSOS coil field via
-:func:`~vmec_jax.core.freeboundary_diff.external_B_cartesian`, or
+:func:`~vmex.core.freeboundary_diff.external_B_cartesian`, or
 ``extcur``), and its ``value_and_grad_bnormal`` helper returns gradients
 validated against finite differences — no NESTOR adjoint is required.
 
@@ -369,10 +369,10 @@ Implicit differentiation
 ------------------------
 
 Gradients of equilibrium properties are computed by implicit differentiation
-of the converged fixed point (:mod:`vmec_jax.core.implicit`). The equilibrium
+of the converged fixed point (:mod:`vmex.core.implicit`). The equilibrium
 is the root of the force residual :math:`F(x, p) = 0` with :math:`x` the
 spectral state and :math:`p` the parameters
-(:class:`~vmec_jax.core.implicit.ImplicitParams`: boundary coefficients,
+(:class:`~vmex.core.implicit.ImplicitParams`: boundary coefficients,
 profiles, ``phiedge``, ``pres_scale``, ``curtor``). By the implicit function
 theorem, if :math:`\partial F/\partial x` is invertible at the root, the
 solution map :math:`p \mapsto x^\star(p)` is differentiable with
@@ -394,7 +394,7 @@ form needs **one** linear solve regardless of the number of parameters:
    \frac{d\mathcal{J}}{dp}
    = -\lambda^{\!\top}\,\frac{\partial F}{\partial p}.
 
-:func:`~vmec_jax.core.implicit.solve_implicit` wraps this in
+:func:`~vmex.core.implicit.solve_implicit` wraps this in
 ``jax.custom_vjp``:
 
 - **forward**: runs the fast CLI-lane host solver (``jax.pure_callback`` —
@@ -402,14 +402,14 @@ form needs **one** linear solve regardless of the number of parameters:
   to autodiff; only the fixed point defines the derivative) and returns the
   converged :math:`x^\star`;
 - **backward**: solves the adjoint system matrix-free with restarted SOLVAX
-  GMRES (:func:`~vmec_jax.core.implicit.adjoint_matvec`): one ``jax.vjp``
+  GMRES (:func:`~vmex.core.implicit.adjoint_matvec`): one ``jax.vjp``
   linearization of the residual function
-  (:func:`~vmec_jax.core.implicit.residual_fn`) is reused as the transposed
+  (:func:`~vmex.core.implicit.residual_fn`) is reused as the transposed
   operator, and one more VJP contracts :math:`\lambda` against
   :math:`\partial F/\partial p`.
 
 The residual is chosen as the **self-consistently 1D-preconditioned force**
-``gc`` of a single fresh :func:`~vmec_jax.core.solver.evaluate_forces` pass:
+``gc`` of a single fresh :func:`~vmex.core.solver.evaluate_forces` pass:
 :math:`F = M(x,p)\,f(x,p)` with :math:`f` the raw spectral force and
 :math:`M` the invertible 1D-preconditioner map. At the root
 :math:`dF = M\,df + dM\,f = M\,df` up to :math:`O(\mathrm{ftol})`, so the
@@ -466,7 +466,7 @@ The naive FD is therefore **not a valid reference** for solver-sensitive
 metrics — the disagreement is a property of the finite-difference probe, not
 an error in the adjoint. The correct check reuses the *same* frozen residual
 the adjoint differentiates:
-:func:`~vmec_jax.core.implicit.frozen_path_directional_fd` takes a directional
+:func:`~vmex.core.implicit.frozen_path_directional_fd` takes a directional
 step :math:`p\pm h`, Newton-solves the frozen :math:`F` to its perturbed root
 (rather than re-running the full adaptive solver from scratch), and finite-
 differences that. It reproduces the adjoint to solver accuracy for ``iota``,

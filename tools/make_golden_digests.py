@@ -4,7 +4,7 @@
 Writes ``tests/golden_digests.json`` — a tiny (few-KB) file of reference
 scalars (energies, aspect, beta, iota/pressure endpoints, and low-order
 geometry checksums) taken from the stored VMEC2000 golden runs.  This lets
-``tests/test_golden_digests.py`` check vmec_jax against VMEC2000 to physical
+``tests/test_golden_digests.py`` check vmex against VMEC2000 to physical
 accuracy **without** the multi-MB golden ``wout`` bundle on disk — the scalars
 are the accuracy that matters and they live in the repo.
 
@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tests"))
 from conftest import resolve_golden_dir  # noqa: E402
 
-# case -> the examples/data input deck vmec_jax solves to reproduce it.
+# case -> the examples/data input deck vmex solves to reproduce it.
 CASES = {
     "solovev": "input.solovev",
     "DSHAPE": "input.DSHAPE",
@@ -38,7 +38,7 @@ CASES = {
     "nfp4_QH_finite_beta": "input.nfp4_QH_finite_beta",
 }
 
-# scalar wout variables to digest (present in both VMEC2000 and vmec_jax wout).
+# scalar wout variables to digest (present in both VMEC2000 and vmex wout).
 SCALARS = ("wb", "wp", "aspect", "volume_p", "betatotal", "b0",
            "betapol", "betator", "rmax_surf", "rmin_surf")
 
@@ -67,7 +67,7 @@ def digest_wout(path: Path) -> dict:
 def main() -> int:
     gd = resolve_golden_dir()
     if gd is None:
-        print("golden dir unavailable; set VMEC_JAX_GOLDEN_DIR")
+        print("golden dir unavailable; set VMEX_GOLDEN_DIR")
         return 1
     digests = {}
     for case in CASES:

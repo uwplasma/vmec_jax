@@ -29,11 +29,11 @@ pytest.importorskip("virtual_casing_jax")
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 
-import vmec_jax as vj  # noqa: E402
-from vmec_jax.core import freeboundary_diff as FBD  # noqa: E402
-from vmec_jax.core import implicit as im  # noqa: E402
-from vmec_jax.core.mgrid import MgridField, read_mgrid  # noqa: E402
-from vmec_jax.core.wout import wout_from_state  # noqa: E402
+import vmex as vj  # noqa: E402
+from vmex.core import freeboundary_diff as FBD  # noqa: E402
+from vmex.core import implicit as im  # noqa: E402
+from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
+from vmex.core.wout import wout_from_state  # noqa: E402
 
 DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
 INPUT = DATA / "input.cth_like_free_bdy"
