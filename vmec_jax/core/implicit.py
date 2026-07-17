@@ -67,6 +67,25 @@ reference for these metrics; :func:`frozen_path_directional_fd` provides the
 correct one (Newton-solve the frozen ``F`` at ``p ± h``), and it reproduces the
 adjoint to solver accuracy — see ``tests/test_implicit_grad.py``.
 
+Zero-crash typed errors through the callback
+--------------------------------------------
+The forward solve runs behind ``jax.pure_callback``, which converts any host
+exception into an opaque ``jax.errors.JaxRuntimeError`` whose message embeds
+the whole host traceback (measured ~3.7 KB) and *loses* the typed exception
+(``__cause__`` is ``None``) — breaking the :mod:`vmec_jax.core.errors`
+zero-crash taxonomy.  The relay: ``_host_solve_and_mask`` catches any
+:class:`~vmec_jax.core.errors.VmecError`, stashes it in the module-level
+``_HOST_ERROR`` slot (host callbacks are serialized per solve, so a single
+slot suffices) and re-raises a SHORT sentinel ``RuntimeError``; the
+``pure_callback`` call sites (``_callback_solve``) catch the runtime error,
+pop the slot and re-raise the ORIGINAL typed exception with ``from None`` to
+suppress the callback noise.  ``im.run`` / :func:`solve_implicit` therefore
+fail with a short :class:`~vmec_jax.core.errors.VmecConvergenceError` /
+:class:`~vmec_jax.core.errors.VmecJacobianError`.  Under ``jax.jit`` the
+error instead surfaces at the jit boundary (where the
+``optimize.least_squares`` zero-crash penalty lanes catch it); the sentinel
+keeps even that message short.
+
 Parameter map
 -------------
 ``runtime_from_params`` rebuilds every p-dependent
@@ -97,6 +116,7 @@ from jax.flatten_util import ravel_pytree
 from solvax import gcrot as _solvax_gcrot
 from solvax import gmres as _solvax_gmres
 
+from .errors import VmecError
 from .fields import magnetic_fields, metric_elements
 from .fourier import Resolution
 from .geometry import half_mesh_jacobian
@@ -663,13 +683,16 @@ def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
 # ---------------------------------------------------------------------------
 
 
-_HOT_CACHE = weakref.WeakKeyDictionary()  # cfg -> last converged SpectralState
+# cfg -> last converged SpectralState
+_HOT_CACHE: weakref.WeakKeyDictionary[ImplicitConfig, SpectralState] = \
+    weakref.WeakKeyDictionary()
 
 # cfg -> (params-bytes key, SolveResult): one-entry memo of the LAST solve.
 # scipy trust-region drivers evaluate jac(x) at exactly the x that fun(x)
 # just converged (DESC's ``_update_equilibrium``/``f_where_x`` pattern), so
 # this removes one full equilibrium solve per accepted iterate (plan R25.1).
-_LAST_SOLVE = weakref.WeakKeyDictionary()
+_LAST_SOLVE: weakref.WeakKeyDictionary[ImplicitConfig, tuple[bytes, SolveResult]] = \
+    weakref.WeakKeyDictionary()
 
 # cfg -> one-shot SpectralState seed for the NEXT host solve (plan R25.4):
 # the optimizer's trial evaluation deposits the DESC-style first-order
@@ -678,13 +701,22 @@ _LAST_SOLVE = weakref.WeakKeyDictionary()
 # (pops) it.  A missing/failed seed falls back silently to the plain
 # ``_HOT_CACHE`` hot restart — only the initial guess changes, never the
 # fixed point.
-_PERTURB_SEED = weakref.WeakKeyDictionary()
+_PERTURB_SEED: weakref.WeakKeyDictionary[ImplicitConfig, SpectralState] = \
+    weakref.WeakKeyDictionary()
 
 # cfg -> {"solves": int, "iterations": int}: cumulative host forward-solve
 # effort of a config (memo hits excluded) — the instrumentation behind the
 # R25.4 warm-start benchmarks (``optimize.least_squares`` attaches it to the
 # scipy result as ``solve_stats``).
-_SOLVE_STATS = weakref.WeakKeyDictionary()
+_SOLVE_STATS: weakref.WeakKeyDictionary[ImplicitConfig, dict[str, int]] = \
+    weakref.WeakKeyDictionary()
+
+# Single-slot relay for typed host exceptions (module docstring, "Zero-crash
+# typed errors through the callback"): ``_host_solve_and_mask`` deposits the
+# :class:`VmecError` it caught right before raising the short sentinel, and
+# ``_callback_solve`` pops and re-raises it.  Host callbacks are serialized
+# per solve, so one slot cannot race.
+_HOST_ERROR: list[VmecError] = []
 
 
 def _params_key(params: ImplicitParams) -> bytes:
@@ -737,12 +769,25 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
     return result
 
 
-_MASK_CACHE = weakref.WeakKeyDictionary()  # cfg -> host dof mask (structural)
+# cfg -> host dof mask (structural)
+_MASK_CACHE: weakref.WeakKeyDictionary[ImplicitConfig, SpectralState] = \
+    weakref.WeakKeyDictionary()
 
 
 def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
+    _HOST_ERROR.clear()  # fresh callback: drop any stale relayed error
     params = jax.tree.map(jnp.asarray, params_np)
-    result = _host_solve(cfg, params)
+    try:
+        result = _host_solve(cfg, params)
+    except VmecError as exc:
+        # Relay the typed exception (module docstring, "Zero-crash typed
+        # errors through the callback"): stash it and raise a SHORT sentinel
+        # — pure_callback would otherwise bury it in a multi-KB traceback
+        # dump with the typed class lost.
+        _HOST_ERROR.append(exc)
+        raise RuntimeError(
+            f"host equilibrium solve failed with {type(exc).__name__} "
+            "(re-raised typed at the pure_callback call site)") from None
     as_np = lambda t: jax.tree.map(  # noqa: E731
         lambda a: np.asarray(a, dtype=np.float64), t)
     # The dof mask captures *structural* zero patterns (resolution, symmetry,
@@ -754,6 +799,29 @@ def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
         mask = as_np(_dof_mask(result.state, rt, cfg))
         _MASK_CACHE[cfg] = mask
     return as_np(result.state), mask
+
+
+def _callback_solve(params: ImplicitParams, cfg: ImplicitConfig):
+    """``pure_callback`` host solve returning ``(state, dof_mask)``.
+
+    Shared by :func:`solve_implicit`, ``_solve_implicit_fwd`` and
+    :func:`solve_implicit_with_aux`.  Re-raises the ORIGINAL typed
+    :class:`VmecError` deposited in ``_HOST_ERROR`` by
+    ``_host_solve_and_mask`` (``from None`` suppresses the noisy
+    ``JaxRuntimeError`` context) so eager callers see the short typed
+    exception.  Under ``jax.jit`` this try/except is trace-time only and the
+    (short, sentinel-carrying) runtime error surfaces at the jit boundary
+    instead — see the module docstring.
+    """
+    try:
+        return jax.pure_callback(
+            functools.partial(_host_solve_and_mask, cfg),
+            (_state_struct(cfg), _state_struct(cfg)), params,
+        )
+    except Exception:
+        if _HOST_ERROR:
+            raise _HOST_ERROR.pop() from None
+        raise
 
 
 def _state_struct(cfg: ImplicitConfig) -> SpectralState:
@@ -773,28 +841,18 @@ def solve_implicit(params: ImplicitParams, cfg: ImplicitConfig) -> SpectralState
     (:func:`mhd_energy`, :func:`aspect_ratio`, ...) to build objectives, or
     use :func:`run`.
     """
-    state, _ = jax.pure_callback(
-        functools.partial(_host_solve_and_mask, cfg),
-        (_state_struct(cfg), _state_struct(cfg)), params,
-    )
+    state, _ = _callback_solve(params, cfg)
     return state
 
 
 def _solve_implicit_fwd(params, cfg):
-    state, mask = jax.pure_callback(
-        functools.partial(_host_solve_and_mask, cfg),
-        (_state_struct(cfg), _state_struct(cfg)), params,
-    )
+    state, mask = _callback_solve(params, cfg)
     return state, (params, state, mask)
 
 
 def solve_implicit_with_aux(params: ImplicitParams, cfg: ImplicitConfig):
     """Return ``(state, dof_mask)`` using the same callback as solve_implicit."""
-    state, mask = jax.pure_callback(
-        functools.partial(_host_solve_and_mask, cfg),
-        (_state_struct(cfg), _state_struct(cfg)), params,
-    )
-    return state, mask
+    return _callback_solve(params, cfg)
 
 
 def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None):

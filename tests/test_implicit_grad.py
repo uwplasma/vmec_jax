@@ -27,7 +27,13 @@ against central finite differences through the full host solver):
    the implicit adjoint equals the *frozen-path* central FD
    (``frozen_path_directional_fd``) to solver accuracy on the m=1 modes,
    where a *naive* full re-solve FD sign-flips (adjoint -0.773 vs naive
-   +0.045) — the adjoint is the correct frozen-logic gradient.
+   +0.045) — the adjoint is the correct frozen-logic gradient;
+8. typed errors through the callback (plan Item I.1): an unconvergeable
+   ``im.run`` raises the SHORT typed ``VmecConvergenceError`` (the
+   ``_HOST_ERROR`` relay), not a multi-KB ``JaxRuntimeError``;
+9. the multigrid lane directly (plan Item I.4): ``im.run(multigrid=True)``
+   through a genuine ns 5 -> 11 ladder, ``d(wb)/d(RBC(0,1))`` vs the
+   frozen-path FD.
 
 FD steps (documented choices): central differences with the *same* ftol and
 iteration policy on both sides, converged outputs cached on disk (``/tmp``)
@@ -382,3 +388,80 @@ def test_iota_edge_gradient_vs_frozen_path_fd():
         assert rel <= 3e-4, (
             f"RBC(n={n - ntor},1): adjoint {ad:.5e} vs frozen-path FD {fd:.5e} "
             f"(rel {rel:.2e}) — the implicit gradient must match the frozen path")
+
+
+# ---------------------------------------------------------------------------
+# 8. typed errors through pure_callback (zero-crash policy, plan Item I.1)
+# ---------------------------------------------------------------------------
+
+
+def test_typed_error_through_pure_callback():
+    """A failing host solve raises the SHORT typed exception, not callback noise.
+
+    Before the ``_HOST_ERROR`` relay (see the implicit module docstring,
+    "Zero-crash typed errors through the callback") an unconvergeable
+    ``im.run`` surfaced as a raw ``jax.errors.JaxRuntimeError`` with a
+    ~3.7 KB message embedding the whole host traceback and the typed
+    :class:`VmecConvergenceError` lost (``__cause__`` was ``None``).  Now the
+    original typed exception is stashed by the host callback and re-raised at
+    the ``pure_callback`` call site with ``from None``.
+    """
+    from vmec_jax.core.errors import VmecConvergenceError
+
+    inp = VmecInput.from_file(str(DATA_DIR / "input.solovev"))
+    with pytest.raises(VmecConvergenceError) as excinfo:
+        im.run(inp, ftol=1e-14, max_iterations=3)
+    exc = excinfo.value
+    assert len(str(exc)) < 200, f"typed message must stay short: {len(str(exc))} chars"
+    assert "MORE ITERATIONS REQUIRED" in str(exc)
+    assert exc.__cause__ is None and exc.__suppress_context__  # noise killed
+    assert exc.ftol == 1e-14  # diagnostics preserved
+
+    # the custom-vjp forward rule call site relays the typed exception too
+    p0 = im.params_from_input(inp)
+    with pytest.raises(VmecConvergenceError):
+        jax.grad(lambda p: im.run(inp, p, ftol=1e-14, max_iterations=3).wb)(p0)
+
+
+# ---------------------------------------------------------------------------
+# 9. multigrid implicit gradient vs frozen-path FD (plan Item I.4)
+# ---------------------------------------------------------------------------
+
+
+def test_multigrid_gradient_vs_frozen_path_fd():
+    """``im.run(multigrid=True)`` gradients FD-validated directly.
+
+    ``cfg.multigrid=True`` routes the host solve through ``solve_multigrid``
+    (the lane ``optimize._least_squares_implicit`` hardcodes); only the final
+    fixed point defines the derivative, so the adjoint through a genuine
+    two-stage ladder (ns 5 -> 11 on solovev) must match the frozen-path
+    central FD of ``wb`` along ``RBC(0,1)``.
+    """
+    inp0 = VmecInput.from_file(str(DATA_DIR / "input.solovev"))
+    inp = dataclasses.replace(
+        inp0,
+        ns_array=np.array([5, 11]),
+        ftol_array=np.array([1e-10, 1e-14]),
+        niter_array=np.array([1000, 2000]),
+    )
+    cfg = im.make_config(inp, multigrid=True, ftol=1e-14)
+    assert cfg.multigrid and int(cfg.resolution.ns) == 11
+    p0 = im.params_from_input(inp)
+    ntor = int(inp.ntor)
+
+    grad = jax.grad(
+        lambda p: im.run(inp, p, multigrid=True, ftol=1e-14).wb)(p0)
+    ad = float(np.asarray(grad.rbc)[ntor, 1])
+
+    zero = jax.tree.map(jnp.zeros_like, p0)
+    tangent = dataclasses.replace(zero, rbc=zero.rbc.at[ntor, 1].set(1.0))
+    fd, info = im.frozen_path_directional_fd(p0, cfg, lambda s, rt:
+                                             im.mhd_energy(s, rt)[0],
+                                             tangent, h=3e-5)
+    res = max(info["newton_res"])
+    rel = abs(ad / fd - 1.0)
+    print(f"\n[solovev multigrid ns=5->11] d(wb)/d(RBC(0,1)) h=3e-5: "
+          f"AD={ad:+.10e}  frozen-FD={fd:+.10e}  rel={rel:.2e} "
+          f"(Newton res {res:.0e})")
+    assert res < 1e-8, f"frozen solve not converged (res {res:.1e})"
+    assert rel <= 1e-6

@@ -233,10 +233,16 @@ warm 2.13 s (2.78 ms/iter); **warm implicit gradient of ONE scalar = 32.4 s eage
 / 22.5 s under `jax.jit` (~10-15 forward solves)**; host-callback overhead
 negligible (cached forward 0.02 s). The adjoint GMRES (`adjoint_tol=1e-11`,
 maxiter 300) dominates. Priorities, in measured-value order:
-1. **Adjoint budget**: instrument GMRES iteration counts; sweep `adjoint_tol`
-   1e-11→1e-7 vs gradient accuracy (1e-11 is likely overtight for optimization);
-   adjoint warm-starting across trust-region iterations (GCROT recycle exists —
-   measure, default it if it wins).
+1. **Adjoint budget — tolerance ruled out (measured 2026-07-17)**: sweeping
+   `adjoint_tol` 1e-13→1e-6 leaves the warm gradient wall time FLAT (solovev
+   ~4 s, li383 ~7 s at every tolerance) while accuracy degrades as expected —
+   the preconditioned GMRES hits near-machine residual within its first
+   Arnoldi cycles, so the cost is the FIXED matvec work (each matvec = one
+   residual linearization), not the convergence criterion. Remaining levers,
+   in order: (a) cheaper matvecs (jit/donate the residual linearization),
+   (b) fewer matvecs via cross-eval warm-starting/recycling (GCROT recycle —
+   measure, default it if it wins), (c) the shipped multi-RHS batching for
+   multi-objective campaigns.
 2. **NESTOR loop batching** (freeboundary.py:917-973): per-iteration host
    dispatch with several device→host syncs + per-iteration runtime rebuilds; run
    the `nvacskip` iterations between vacuum updates as one jitted block and move
@@ -265,22 +271,27 @@ in README + docs. Literature notes (§5) may add relevant prior art.
 Two deep audits (source code + roadmap gaps) produced these, ranked. Each is
 small-to-medium and independently PR-able; batch 1-4 as one "robustness" PR.
 
-1. **Typed errors through `pure_callback`** (HIGH): a failing host solve inside
-   `im.run`/`solve_implicit` surfaces as a raw 3.7-KB `JaxRuntimeError` with the
-   typed `VmecConvergenceError`/`VmecJacobianError` lost (measured; this is the
-   double-traceback noise the single-stage runs hit). Stash the typed exception
-   in `_host_solve` (implicit.py:695) and re-raise from the three
-   `pure_callback` call sites (implicit.py:766-797). Add a test.
-2. **Test the `least_squares` zero-crash penalty paths** (HIGH): both lanes'
-   except-bodies (optimize.py:1386-1398, 1897-1932, 1962-1967) have zero
-   coverage — one mid-campaign self-intersecting trial test covers all four.
-3. **mypy debt + lint gate** (MED): 5 `var-annotated` in implicit.py
-   (666/672/681/687/740) + 1 `dict-item` (optimize.py:970); fix (~15 min),
-   delete the pyproject override block (its comment is stale), and add a
-   ruff+mypy CI job so it cannot rot again (CI currently has no lint gate).
-4. **FD-validate the multigrid implicit gradient directly** (MED):
-   `im.run(multigrid=True)` vs `frozen_path_directional_fd` — only exercised
-   indirectly today via `_least_squares_implicit`'s hardcoded multigrid.
+1. [x] **Typed errors through `pure_callback`** (HIGH) — **DONE 2026-07-17**
+   (robustness PR): a failing host solve inside `im.run`/`solve_implicit`
+   surfaced as a raw 3.7-KB `JaxRuntimeError` with the typed
+   `VmecConvergenceError`/`VmecJacobianError` lost. Now `_host_solve_and_mask`
+   stashes the typed exception in the `_HOST_ERROR` slot and the shared
+   `_callback_solve` call site re-raises it (`from None`); tested in
+   `test_implicit_grad.py::test_typed_error_through_pure_callback` (message
+   3681 -> 24 chars).
+2. [x] **Test the `least_squares` zero-crash penalty paths** (HIGH) — **DONE
+   2026-07-17**: `tests/test_optimize_penalty.py` covers all four
+   except-bodies (FD-lane fun, implicit-lane fun, jac last-valid fallback,
+   final diagnostic cold re-solve) with deterministic poisoned-solve
+   campaigns on solovev.
+3. [x] **mypy debt + lint gate** (MED) — **DONE 2026-07-17**: the 5
+   `var-annotated` caches in implicit.py and the `dict-item` in optimize.py
+   annotated, the pyproject override block deleted, and a fail-fast
+   `lint` CI job (ruff + `mypy vmec_jax` on py3.12) added.
+4. [x] **FD-validate the multigrid implicit gradient directly** (MED) —
+   **DONE 2026-07-17**: `test_multigrid_gradient_vs_frozen_path_fd`
+   (`im.run(multigrid=True)` through a genuine ns 5 -> 11 solovev ladder vs
+   `frozen_path_directional_fd`, rel <= 1e-6).
 5. **"Choosing an entry point" docs** (MED): `solver.solve` vs `solve_multigrid`
    vs `opt.solve_equilibrium` vs `im.run` — no when-to-use-which anywhere;
    quickstart teaches the manual `wout_from_state` plumbing while
@@ -304,7 +315,8 @@ small-to-medium and independently PR-able; batch 1-4 as one "robustness" PR.
 10. **PR #22 (mirror geometry) decision**: no longer draft — MERGEABLE,
     +15,052/−1,622 across 44 files (a whole `vmec_jax.mirror` package). Merging
     blows the plan.md §14 size budgets; deferring leaves a large branch rotting.
-    Needs an explicit user decision before VMEX.
+    DECIDED 2026-07-17: deferred — PR #22 is actively developed by its author
+    and will be revisited as the last item before the VMEX rename.
 11. **plan.md §14 DoD reconciliation**: size budgets already exceeded (40 files
     / 23.4k lines vs ≤35/15k; 4 files > 1000 lines; tests 9.1k vs ≤6k lines;
     fresh clone > 10 MB). Either amend the DoD numbers deliberately or schedule

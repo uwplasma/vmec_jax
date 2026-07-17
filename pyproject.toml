@@ -120,10 +120,3 @@ ignore_missing_imports = true
 # blanket to the 8 the core actually needs; name-defined, valid-type,
 # call-arg, misc, type-arg, no-any-return and override are enabled again.
 disable_error_code = ["operator", "union-attr", "assignment", "arg-type", "index", "return-value", "list-item", "attr-defined"]
-
-[[tool.mypy.overrides]]
-# TODO(optimize/implicit agent): one narrow error each —
-#   core/implicit.py:629 [var-annotated] (_MASK_CACHE needs an annotation)
-#   core/optimize.py:977 [dict-item] (heterogeneous dict literal)
-module = ["vmec_jax.core.optimize", "vmec_jax.core.implicit"]
-disable_error_code = ["var-annotated", "dict-item"]

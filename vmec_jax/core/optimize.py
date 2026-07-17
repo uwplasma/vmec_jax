@@ -932,7 +932,7 @@ def boozer_modes_from_wout(
     mboz: int = 18,
     nboz: int = 18,
     jit: bool = False,
-) -> dict[str, np.ndarray]:
+) -> dict[str, Any]:
     """Boozer ``|B|`` spectrum of selected surfaces via ``booz_xform_jax``.
 
     ``wout`` is a :class:`~vmec_jax.core.wout.WoutData` (or any wout-like

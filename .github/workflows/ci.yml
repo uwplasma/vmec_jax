@@ -20,10 +20,40 @@ env:
 permissions:
   contents: read
 
-# Sharded CI (plan.md Phase-2 review item 1): five parallel jobs, each well
-# under the 10-minute wall-time budget, plus a coverage gate that combines
-# the parity + gradient shards and enforces >= 95% on vmec_jax.
+# Sharded CI (plan.md Phase-2 review item 1): five parallel test jobs, each
+# well under the 10-minute wall-time budget, plus a fast lint gate (ruff +
+# mypy) and a coverage gate that combines the parity + gradient shards and
+# enforces >= 95% on vmec_jax.
 jobs:
+  lint:
+    # Fast fail-first gate (plan Item I.3): ruff + mypy over the whole tree,
+    # separate from the test matrix so a lint regression fails in ~1 min
+    # without blocking (or being masked by) the solver shards.  mypy runs on
+    # py3.12 with the full [dev] install so its view of the numpy/jax stubs
+    # matches a local `mypy vmec_jax` (pyproject [tool.mypy] is the config).
+    name: Lint (ruff + mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install ".[dev]"
+
+      - name: ruff
+        run: ruff check vmec_jax tests examples benchmarks tools
+
+      - name: mypy
+        run: mypy vmec_jax
+
   fast:
     name: Fast unit tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
