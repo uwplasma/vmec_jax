@@ -51,8 +51,10 @@ terms exposing a ``residuals_state`` method
 residual vector, matching the finite-difference stacked-residual cost and
 Gauss-Newton geometry (internal-grid sampling instead of the wout grid).
 Wout-engine terms (:func:`d_merc`, :func:`l_grad_b`, the Boozer-based QI
-residual) run on host NumPy and are finite-difference-only.  The implicit
-parameter map does not implement the lasym ``readin.f`` delta rotation, so
+residual) run on host NumPy and are finite-difference-only —
+:func:`l_grad_b_state` is the traceable ``(state, rt)`` lane of the same
+``L_grad_B`` convention for ``jac="implicit"``.  The implicit parameter map
+does not implement the lasym ``readin.f`` delta rotation, so
 ``jac="implicit"`` requires ``lasym = False``.
 
 Measured cost (2026-07-10, RTX A4000, nfp2 circular seed, QS + aspect +
@@ -102,6 +104,8 @@ from .statephysics import (
     _interp_half_grid,
     _iotas_half,
     _iotas_half_from_fields,
+    _lgradb_grid,
+    _lgradb_state_tables,
     _mode_matrix,
 )
 from .wout import WoutData, wout_from_state
@@ -118,6 +122,7 @@ __all__ = [
     "magnetic_well",
     "d_merc",
     "l_grad_b",
+    "l_grad_b_state",
     "quasi_isodynamic_residual",
     "boozer_modes_from_wout",
     "quasi_isodynamic_residual_from_wout",
@@ -600,104 +605,71 @@ def l_grad_b(eq, *, s_index: int = -1, ntheta: int = 24, nphi: int = 24) -> Arra
     basis vectors and their derivatives spectrally from ``rmnc/zmns``, and
     radial derivatives from the native half/full-mesh finite differences
     (one-sided at the edge) — so values agree with the legacy diagnostic at
-    discretization level, not bitwise.
+    discretization level, not bitwise (the pointwise math lives in
+    :func:`vmec_jax.core.statephysics._lgradb_grid`, shared with the
+    traceable :func:`l_grad_b_state`).
 
     Returns the (hard) minimum over a uniform ``(theta, phi)`` grid on the
     selected surface (``s_index`` indexes the ``ns``-long half-mesh arrays;
     default edge).  Larger is better; a practical least-squares term is
     ``max(1/L - 1/threshold, 0)``.  Symmetric configurations only (lasym
     sine partners are ignored).  Accepts an :class:`Equilibrium` or wout-like.
+    This lane consumes host-NumPy wout tables (finite-difference-only); use
+    :func:`l_grad_b_state` for ``jac="implicit"``.
     """
     wout = eq.wout if isinstance(eq, Equilibrium) else eq
-    ns = int(wout.ns)
-    j = max(1, min(s_index % ns, ns - 1))
-    hs = 1.0 / (ns - 1)
-    xm = jnp.asarray(np.asarray(wout.xm, dtype=float))
-    xn = jnp.asarray(np.asarray(wout.xn, dtype=float))
-    xmn = jnp.asarray(np.asarray(wout.xm_nyq, dtype=float))
-    xnn = jnp.asarray(np.asarray(wout.xn_nyq, dtype=float))
-    rmnc = jnp.asarray(np.asarray(wout.rmnc, dtype=float))
-    zmns = jnp.asarray(np.asarray(wout.zmns, dtype=float))
-    bsupu_t = jnp.asarray(np.asarray(wout.bsupumnc, dtype=float))
-    bsupv_t = jnp.asarray(np.asarray(wout.bsupvmnc, dtype=float))
+    grid = _lgradb_grid(
+        xm=jnp.asarray(np.asarray(wout.xm, dtype=float)),
+        xn=jnp.asarray(np.asarray(wout.xn, dtype=float)),
+        xm_nyq=jnp.asarray(np.asarray(wout.xm_nyq, dtype=float)),
+        xn_nyq=jnp.asarray(np.asarray(wout.xn_nyq, dtype=float)),
+        rmnc=jnp.asarray(np.asarray(wout.rmnc, dtype=float)),
+        zmns=jnp.asarray(np.asarray(wout.zmns, dtype=float)),
+        bsupumnc=jnp.asarray(np.asarray(wout.bsupumnc, dtype=float)),
+        bsupvmnc=jnp.asarray(np.asarray(wout.bsupvmnc, dtype=float)),
+        ns=int(wout.ns), nfp=int(wout.nfp),
+        s_index=s_index, ntheta=ntheta, nphi=nphi,
+    )
+    return jnp.min(grid)
 
-    theta = jnp.linspace(0.0, 2.0 * jnp.pi, int(ntheta), endpoint=False)
-    phi = jnp.linspace(0.0, 2.0 * jnp.pi / int(wout.nfp), int(nphi), endpoint=False)
 
-    def tables(m, n):
-        ang = (theta[:, None, None] * m[None, None, :]
-               - phi[None, :, None] * n[None, None, :])
-        return jnp.cos(ang), jnp.sin(ang)
+def l_grad_b_state(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    s_index: int = -1,
+    ntheta: int = 24,
+    nphi: int = 24,
+    softmin_k: float | None = None,
+) -> Array:
+    """Traceable ``min L_grad_B`` of a core state (implicit-adjoint ready).
 
-    cosang, sinang = tables(xm, xn)
+    The ``(state, runtime)`` lane of :func:`l_grad_b` (plan_pre_vmex Item E):
+    identical convention — ``L_grad_B = |B| sqrt(2/(grad B : grad B))``
+    minimized over the same uniform ``(theta, phi)`` grid of one half-mesh
+    surface — with the wout coefficient tables rebuilt traceably from the
+    state (:func:`~vmec_jax.core.statephysics._lgradb_state_tables`: physical
+    ``rmnc/zmns`` from the spectral state, the ``wrout.f`` Nyquist analysis
+    of ``B^u/B^v`` as jnp einsums) and the same half/full-mesh radial
+    finite-difference stencils, so the default hard minimum matches the
+    wout lane to float round-off.  Fully jnp: usable directly as a
+    two-positional objective term under ``jac="implicit"``.
 
-    def series(coeff, parity, second: bool = True):
-        """Value + angular derivatives of a cos/sin(m theta - n phi) series."""
-        base, alt = (cosang, sinang) if parity == "cos" else (sinang, cosang)
-        s1 = -1.0 if parity == "cos" else 1.0
-        val = jnp.einsum("m,tpm->tp", coeff, base)
-        d_t = s1 * jnp.einsum("m,tpm,m->tp", coeff, alt, xm)
-        d_p = -s1 * jnp.einsum("m,tpm,m->tp", coeff, alt, xn)
-        if not second:
-            return val, d_t, d_p, None, None, None
-        d_tt = -jnp.einsum("m,tpm,m->tp", coeff, base, xm * xm)
-        d_tp = jnp.einsum("m,tpm,m->tp", coeff, base, xm * xn)
-        d_pp = -jnp.einsum("m,tpm,m->tp", coeff, base, xn * xn)
-        return val, d_t, d_p, d_tt, d_tp, d_pp
-
-    # Full-mesh R/Z -> half-mesh values + radial derivatives (exact on half mesh).
-    R, Ru, Rv, Ruu, Ruv, Rvv = series(0.5 * (rmnc[j - 1] + rmnc[j]), "cos")
-    Z, Zu, Zv, Zuu, Zuv, Zvv = series(0.5 * (zmns[j - 1] + zmns[j]), "sin")
-    Rs, Rsu, Rsv, _, _, _ = series((rmnc[j] - rmnc[j - 1]) / hs, "cos", second=False)
-    Zs, Zsu, Zsv, _, _, _ = series((zmns[j] - zmns[j - 1]) / hs, "sin", second=False)
-
-    cphi, sphi = jnp.cos(phi)[None, :], jnp.sin(phi)[None, :]
-
-    def cart(vR, vP, vZ):
-        """Cylindrical (R, phi, Z) components -> Cartesian (x, y, z)."""
-        return jnp.stack([vR * cphi - vP * sphi, vR * sphi + vP * cphi, vZ], axis=-1)
-
-    zero = jnp.zeros_like(R)
-    e_s, e_u, e_v = cart(Rs, zero, Zs), cart(Ru, zero, Zu), cart(Rv, R, Zv)
-    # d(e_u)/du, d(e_u)/dv=d(e_v)/du, d(e_v)/dv, d(e_u)/ds, d(e_v)/ds
-    deu_u = cart(Ruu, zero, Zuu)
-    deu_v = cart(Ruv, Ru, Zuv)
-    dev_v = cart(Rvv - R, 2.0 * Rv, Zvv)
-    deu_s = cart(Rsu, zero, Zsu)
-    dev_s = cart(Rsv, Rs, Zsv)
-
-    # Half-mesh contravariant field (Nyquist modes) + radial derivative.
-    cosn, sinn = tables(xmn, xnn)
-
-    def nyq(coeff):
-        return (jnp.einsum("m,tpm->tp", coeff, cosn),
-                -jnp.einsum("m,tpm,m->tp", coeff, sinn, xmn),
-                jnp.einsum("m,tpm,m->tp", coeff, sinn, xnn))
-
-    bu, bu_t, bu_p = nyq(bsupu_t[j])
-    bv, bv_t, bv_p = nyq(bsupv_t[j])
-    lo, hi = (j - 1, j + 1) if 1 < j < ns - 1 else ((j, j + 1) if j == 1 else (j - 1, j))
-    span = hs * (hi - lo)
-    bu_s, _, _ = nyq((bsupu_t[hi] - bsupu_t[lo]) / span)
-    bv_s, _, _ = nyq((bsupv_t[hi] - bsupv_t[lo]) / span)
-
-    B = bu[..., None] * e_u + bv[..., None] * e_v
-    dB = jnp.stack([
-        bu_s[..., None] * e_u + bv_s[..., None] * e_v
-        + bu[..., None] * deu_s + bv[..., None] * dev_s,
-        bu_t[..., None] * e_u + bv_t[..., None] * e_v
-        + bu[..., None] * deu_u + bv[..., None] * deu_v,
-        bu_p[..., None] * e_u + bv_p[..., None] * e_v
-        + bu[..., None] * deu_v + bv[..., None] * dev_v,
-    ], axis=-2)                                        # (t, p, coord, cart)
-
-    basis = jnp.stack([e_s, e_u, e_v], axis=-2)
-    g = jnp.einsum("...ic,...jc->...ij", basis, basis)
-    ginv = jnp.linalg.inv(g)
-    grad_sq = jnp.einsum("...ic,...ij,...jc->...", dB, ginv, dB)
-    tiny = jnp.asarray(jnp.finfo(grad_sq.dtype).tiny, dtype=grad_sq.dtype)
-    bmag = jnp.sqrt(jnp.maximum(jnp.sum(B * B, axis=-1), tiny))
-    return jnp.min(bmag * jnp.sqrt(2.0 / jnp.maximum(grad_sq, tiny)))
+    ``softmin_k`` selects the reduction: ``None`` (default) is the hard
+    ``min`` — exact, and differentiable almost everywhere (the subgradient
+    follows the argmin point), but its gradient jumps when the minimizing
+    gridpoint switches.  A float ``k`` [1/m] returns the smooth soft minimum
+    ``-logsumexp(-k * L) / k``, a lower bound on the hard minimum within
+    ``log(ntheta * nphi) / k`` (about ``6.4 / k`` m at the default 24x24
+    grid; ``k = 50`` biases a ~1 m scale length by < 0.13 m).  Optimize with
+    the smooth form, report the hard minimum.
+    """
+    tables = _lgradb_state_tables(state, rt)
+    grid = _lgradb_grid(s_index=s_index, ntheta=ntheta, nphi=nphi, **tables)
+    if softmin_k is None:
+        return jnp.min(grid)
+    k = jnp.asarray(float(softmin_k), dtype=grid.dtype)
+    return -jax.scipy.special.logsumexp(-k * grid) / k
 
 
 # ===========================================================================
@@ -1225,7 +1197,8 @@ def least_squares(
     one full equilibrium solve per dof.  Requirements (see the module
     docstring): every term traceable in ``(state, runtime)`` (vector terms
     expose ``residuals_state``; wout-engine terms like :func:`d_merc` /
-    :func:`l_grad_b` / the Boozer QI residual need ``jac=None``) and
+    :func:`l_grad_b` / the Boozer QI residual need ``jac=None`` — for
+    ``L_grad_B`` use the traceable :func:`l_grad_b_state` instead) and
     ``lasym = False`` (the implicit parameter map does not implement the
     lasym ``readin.f`` boundary rotation).
     ``jac_chunk_size`` (R17.1 memory knob, ``jac="implicit"`` only) chunks the
@@ -1437,7 +1410,8 @@ def _traceable_term(fun: Callable) -> Callable:
         f"objective term {fun!r} is not implicit-differentiable: jac='implicit' "
         "needs traceable (state, runtime) callables or a residuals_state method. "
         "Wout-engine terms (d_merc, l_grad_b, the Boozer QI residual) run on "
-        "host NumPy — use jac=None (finite differences) for those.")
+        "host NumPy — use jac=None (finite differences) for those, or the "
+        "traceable l_grad_b_state for L_grad_B.")
 
 
 def _least_squares_implicit(

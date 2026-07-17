@@ -41,7 +41,9 @@ optimizer picks it up automatically, so the *same* term list works in both
 gradient modes).  Terms that evaluate wout tables on host NumPy
 (:func:`~vmec_jax.core.optimize.d_merc`,
 :func:`~vmec_jax.core.optimize.l_grad_b`, the wout-lane QI residual, the
-eigenvector-weighted turbulence proxies) work with ``jac=None`` only.
+eigenvector-weighted turbulence proxies) work with ``jac=None`` only —
+for ``L_grad_B`` the traceable lane
+:func:`~vmec_jax.core.optimize.l_grad_b_state` covers ``jac="implicit"``.
 
 .. code-block:: python
 
@@ -110,6 +112,25 @@ Two host-side diagnostics complete the set — they run on the wout engine
 ``jac=None``: :func:`~vmec_jax.core.optimize.d_merc` (Mercier interchange
 criterion) and :func:`~vmec_jax.core.optimize.l_grad_b` (the ``L_grad_B``
 coil-complexity proxy).
+
+``L_grad_B`` additionally has a fully traceable ``(state, runtime)`` lane,
+:func:`~vmec_jax.core.optimize.l_grad_b_state` — same convention
+(``L_grad_B = |B| sqrt(2 / ||grad B||_F^2)``, same sampling grid and radial
+stencils, wout-lane parity to float round-off), rebuilt from the state-field
+chain in pure JAX, so it works under ``jac="implicit"``.  The default hard
+minimum over the surface grid is exact but has a jumping gradient when the
+minimizing gridpoint switches; passing ``softmin_k=k`` selects the smooth
+soft minimum ``-logsumexp(-k L)/k`` (a lower bound within
+``log(ntheta*nphi)/k``) — optimize with the smooth form, report the hard
+minimum (gradient validated against the frozen-path FD to 1.7e-6):
+
+.. code-block:: python
+
+   import functools
+   lgradb = functools.partial(opt.l_grad_b_state, softmin_k=50.0)
+   result = opt.least_squares(
+       [(qs, 0.0, 1.0), (lgradb, 0.35, 1.0)],
+       inp, max_mode=3, jac="implicit")
 
 Omnigenity and quasi-isodynamicity
 ----------------------------------
@@ -294,11 +315,16 @@ Which objectives differentiate how
      - yes
      - yes
      - eigenvalue-only reduction carries JVP + VJP
+   * - :func:`~vmec_jax.core.optimize.l_grad_b_state`
+     - yes
+     - yes
+     - traceable ``L_grad_B`` lane (soft-min via ``softmin_k``)
    * - :func:`~vmec_jax.core.optimize.d_merc`,
        :func:`~vmec_jax.core.optimize.l_grad_b`
      - yes
      - no
-     - host-NumPy wout engine
+     - host-NumPy wout engine (``l_grad_b``: use
+       :func:`~vmec_jax.core.optimize.l_grad_b_state` instead)
    * - :func:`~vmec_jax.core.optimize.quasi_isodynamic_residual` (wout lane)
      - yes
      - no

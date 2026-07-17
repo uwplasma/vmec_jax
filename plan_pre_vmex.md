@@ -218,10 +218,16 @@ consistent bootstrap (Redl) at finite β, DMerc > 0 (Mercier), magnetic well
 NumPy)**: `l_grad_b` (optimize.py:590) and `d_merc` (optimize.py:575 →
 nyquist.mercier_and_jxb) — `jac="implicit"` explicitly rejects them
 (optimize.py:1439). Options per objective: (a) run those terms under `jac=None`
-FD at honest cost, (b) build traceable versions (L∇B from the state-field chain
-is plausible; a traceable Mercier via nyquist-in-JAX is a big lift), or
+FD at honest cost, (b) build traceable versions — **(b) for L∇B DONE
+2026-07-17**: `l_grad_b_state` (optimize.py; physics in
+`statephysics._lgradb_grid`/`_lgradb_state_tables`) rebuilds the wout tables
+traceably (wrout.f Nyquist analysis in jnp), wout-lane parity to float
+round-off on solovev/li383/LandremanPaul-QA, soft-min via `softmin_k`,
+gradient vs frozen-path FD 1.7e-6 (tests/test_lgradb.py) — (a traceable
+Mercier via nyquist-in-JAX remains a big lift), or
 (c) scope the row to the traceable set + bootstrap. Decide when starting;
-(a) for DMerc + (b) for L∇B is the likely sweet spot. After Items A–C.
+(a) for DMerc + the traceable `l_grad_b_state` for L∇B is the likely sweet
+spot. After Items A–C.
 
 ## 7. Item F — Speed deep-dive (#36) — kickoff measurements done 2026-07-16
 
