@@ -51,7 +51,19 @@ Infrastructure facts: office box = `ssh office` (pop-os, 36 cores, venv
 Commits authored by rogeriojorge only, **never** a Claude co-author trailer. Open PR #22
 (mirror geometry) is a separate pre-existing workstream — leave it alone.
 
-## 2. Item A — Cold-start single-stage vs two-stage comparison (top priority)
+## 2. Item A — Cold-start single-stage vs two-stage comparison — **DONE (PR #31)**
+
+**Outcome (2026-07-17, measured):** three-way README comparison shipped —
+two-stage | +single-stage polish | cold single-stage, vacuum and finite β.
+Polish (the arXiv:2302.10622 "stage 3" pattern) cuts ⟨|B·n|⟩/⟨B⟩ 33 % (vacuum)
+/ 17 % (β≈1.5 %) below two-stage at held QS and on-target iota in 10–30 min;
+the cold column is the honest 50-iteration record + the dramatic figure.
+Engineering lessons recorded in the example/commits: rotating-ellipse seed
+kick (a same-sign kick has iota≈0 and the pressure-loaded seed limit-cycles on
+any single grid — β uses the multigrid ladder), scipy L-BFGS-B ftol is tested
+against max(|f|,1), adjoint_tol 1e-8 suffices, and jit over the joint
+objective is blocked by host conversions in the FBD/im.run stack (→ Item I.6).
+Original design notes kept below for reference.
 
 **Why:** the PR #28 showcase warm-starts from LP-QA, so the initial→final change is
 invisible and the comparison proves little. User directive (2026-07-16): redo it as a
@@ -194,28 +206,53 @@ Key facts that shape the roadmap:
   win is `vmap`-batched equilibria/optimizations (weight sweeps, multi-start), not
   intra-solve scaling.
 
-## 6. Item E — Objectives README row (#37)
+## 6. Item E — Objectives README row (#37) — premise corrected 2026-07-16
 
-New README row/section: from a QA-ish seed optimize combinations of L∇B (or L_gradB
-proxy), self-consistent bootstrap (Redl) at finite β, DMerc > 0 (Mercier stability),
-magnetic well (vacuum), higher iota at fixed aspect, lower aspect at fixed iota. All
-objectives already exist traceably (`optimize.py`, `postprocess.py`); this is
-composition + runs (office box) + figure + README row. After Items A–C.
+New README row/section: from a QA-ish seed optimize combinations of L∇B, self-
+consistent bootstrap (Redl) at finite β, DMerc > 0 (Mercier), magnetic well
+(vacuum), higher iota at fixed aspect, lower aspect at fixed iota.
 
-## 7. Item F — Speed deep-dive (#36)
+**Corrected premise (audit):** NOT all objectives are traceable. Traceable
+(implicit-adjoint-ready): `magnetic_well` (optimize.py:559), Redl bootstrap
+(`RedlBootstrapMismatch`), iota/aspect targets. **FD-only (wout-engine, host
+NumPy)**: `l_grad_b` (optimize.py:590) and `d_merc` (optimize.py:575 →
+nyquist.mercier_and_jxb) — `jac="implicit"` explicitly rejects them
+(optimize.py:1439). Options per objective: (a) run those terms under `jac=None`
+FD at honest cost, (b) build traceable versions (L∇B from the state-field chain
+is plausible; a traceable Mercier via nyquist-in-JAX is a big lift), or
+(c) scope the row to the traceable set + bootstrap. Decide when starting;
+(a) for DMerc + (b) for L∇B is the likely sweet spot. After Items A–C.
+
+## 7. Item F — Speed deep-dive (#36) — kickoff measurements done 2026-07-16
 
 Done so far: XLA compile flags (~12% compile win), residual-jit inside adjoint, 2D
-preconditioner assessment (opt-in), R25 gradient stack (15.7× vs FD Jacobian). Remaining,
-in order of expected value: (1) profile + speed the NESTOR/free-boundary path (the README
-itself flags it as not speed-tuned); (2) warm-started/recycled adjoint solves across
-least-squares iterations (GCROT recycle exists — measure and default it if it wins);
-(3) compile-time reduction for the implicit-gradient graph (donate/remat audit);
-(4) re-run `benchmarks/run_baseline.py` + refresh the performance figure/claims.
+preconditioner assessment (opt-in), R25 gradient stack (15.7× vs FD Jacobian).
+
+**Measured baseline (audit, M-series CPU, minimal_seed ns=31):** forward solve
+warm 2.13 s (2.78 ms/iter); **warm implicit gradient of ONE scalar = 32.4 s eager
+/ 22.5 s under `jax.jit` (~10-15 forward solves)**; host-callback overhead
+negligible (cached forward 0.02 s). The adjoint GMRES (`adjoint_tol=1e-11`,
+maxiter 300) dominates. Priorities, in measured-value order:
+1. **Adjoint budget**: instrument GMRES iteration counts; sweep `adjoint_tol`
+   1e-11→1e-7 vs gradient accuracy (1e-11 is likely overtight for optimization);
+   adjoint warm-starting across trust-region iterations (GCROT recycle exists —
+   measure, default it if it wins).
+2. **NESTOR loop batching** (freeboundary.py:917-973): per-iteration host
+   dispatch with several device→host syncs + per-iteration runtime rebuilds; run
+   the `nvacskip` iterations between vacuum updates as one jitted block and move
+   the 0.9 constraint damping into the traced carry (the vacuum step itself is
+   already fused).
+3. **Document `jax.jit(jax.grad(...))`** — measured 30% on the implicit gradient;
+   docs/examples currently don't say it.
+4. Re-run `benchmarks/run_baseline.py` + refresh the performance figure/claims;
+   commit a `profile.json` artifact so "last measured" exists in-tree.
 
 ## 8. Item G — Parallelization (#41)
 
-Target: multi-CPU strong scaling (local measurement) + multi-GPU for solve and
-optimization. Concrete first steps: (1) shard the per-dof implicit-Jacobian columns of
+**Reality check (audit): fully greenfield.** No pmap/shard_map/sharding anywhere
+in `vmec_jax/`; the only vmap is internal to ballooning; `core/device.py` is a
+single-device selection policy. Target: multi-CPU strong scaling (local
+measurement) + multi-GPU for solve and optimization. Concrete first steps: (1) shard the per-dof implicit-Jacobian columns of
 `least_squares(jac="implicit")` across devices (`jax.pmap`/`shard_map` over the dof axis —
 embarrassingly parallel); (2) batch multi-case optimization (vmap over decks) on one GPU;
 (3) strong-scaling study of a single solve (the radial dimension is the natural axis;
@@ -223,12 +260,68 @@ honest assessment — the per-iteration FFTs are small, so intra-solve scaling m
 poor and the honest story is parallelism *across* gradient columns / cases); (4) document
 in README + docs. Literature notes (§5) may add relevant prior art.
 
-## 9. Item H — VMEX rename (R21) — **GATED**
+## 9. Item I — Code health backlog (2026-07-16 full audit; measured findings)
+
+Two deep audits (source code + roadmap gaps) produced these, ranked. Each is
+small-to-medium and independently PR-able; batch 1-4 as one "robustness" PR.
+
+1. **Typed errors through `pure_callback`** (HIGH): a failing host solve inside
+   `im.run`/`solve_implicit` surfaces as a raw 3.7-KB `JaxRuntimeError` with the
+   typed `VmecConvergenceError`/`VmecJacobianError` lost (measured; this is the
+   double-traceback noise the single-stage runs hit). Stash the typed exception
+   in `_host_solve` (implicit.py:695) and re-raise from the three
+   `pure_callback` call sites (implicit.py:766-797). Add a test.
+2. **Test the `least_squares` zero-crash penalty paths** (HIGH): both lanes'
+   except-bodies (optimize.py:1386-1398, 1897-1932, 1962-1967) have zero
+   coverage — one mid-campaign self-intersecting trial test covers all four.
+3. **mypy debt + lint gate** (MED): 5 `var-annotated` in implicit.py
+   (666/672/681/687/740) + 1 `dict-item` (optimize.py:970); fix (~15 min),
+   delete the pyproject override block (its comment is stale), and add a
+   ruff+mypy CI job so it cannot rot again (CI currently has no lint gate).
+4. **FD-validate the multigrid implicit gradient directly** (MED):
+   `im.run(multigrid=True)` vs `frozen_path_directional_fd` — only exercised
+   indirectly today via `_least_squares_implicit`'s hardcoded multigrid.
+5. **"Choosing an entry point" docs** (MED): `solver.solve` vs `solve_multigrid`
+   vs `opt.solve_equilibrium` vs `im.run` — no when-to-use-which anywhere;
+   quickstart teaches the manual `wout_from_state` plumbing while
+   `solve_equilibrium` appears in no doc page.
+6. **`ImplicitSolution.runtime`** (MED): callers rebuild
+   `runtime_from_params(make_config(...))` per objective eval (e.g. the
+   single-stage example) duplicating work `im.run` already did; also jit the
+   example objectives (measured 30% win from `jit(grad)`).
+7. **Consolidate duplicate physics helpers** (MED): `optimize.aspect_ratio`
+   (wint quadrature) vs `implicit.aspect_ratio` (shoelace), `volume` vs
+   `plasma_volume`, `edge_iota` vs `iota_edge` — same scalars, different math,
+   will drift; one family in `statephysics.py`, re-exported.
+8. **Dead-code prune** (LOW): `_compat.py` numpy-mode block (~250 lines; only 2
+   cache helpers are used), `fourier.angle_grids`, `nyquist.
+   nyquist_mode_table_from_grid` (exported, zero call sites); test-or-gate the
+   untested `recycle=True` Jacobian lane (optimize.py:1806-1829).
+9. **Near-axis seeding** (decide): the README/docs claimed pyQSC/pyQIC seeding
+   with ZERO implementing code — claim struck 2026-07-16. Either implement it
+   properly (near-axis surface → VmecInput; ESSOS has near-axis fields to
+   bridge from) as a small feature PR, or leave it struck.
+10. **PR #22 (mirror geometry) decision**: no longer draft — MERGEABLE,
+    +15,052/−1,622 across 44 files (a whole `vmec_jax.mirror` package). Merging
+    blows the plan.md §14 size budgets; deferring leaves a large branch rotting.
+    Needs an explicit user decision before VMEX.
+11. **plan.md §14 DoD reconciliation**: size budgets already exceeded (40 files
+    / 23.4k lines vs ≤35/15k; 4 files > 1000 lines; tests 9.1k vs ≤6k lines;
+    fresh clone > 10 MB). Either amend the DoD numbers deliberately or schedule
+    the trimming — do not let the rename ship with a false checklist.
+12. **Release practice** (LOW): no CHANGELOG; add one + release-notes practice
+    at the next version bump (publish workflow itself is ready — bump pyproject
+    + tag + GitHub Release works). Declare an `essos` optional-extra comment in
+    pyproject (mirroring the `freeb` one). Triage the three root `notes_*.md`
+    (fold Redl spec into docs; archive the rest). Prune the stale
+    `en/vectorized_reverse_ad_rule` branch (its content is merged as PR #24).
+
+## 10. Item H — VMEX rename (R21) — **GATED**
 
 Absolute last, only on explicit user go-ahead. Atomic cutover per `plan.md` §13/R21:
 rename package + repo + PyPI + docs + README + CI badges in one PR, tag fresh release.
 
-## 10. Standing rules (do not violate)
+## 11. Standing rules (do not violate)
 
 1. Commits authored by **rogeriojorge** only; never add a Claude co-author trailer.
 2. Report QI with `quasi_isodynamic_residual_from_wout`; QS with
@@ -242,8 +335,15 @@ rename package + repo + PyPI + docs + README + CI badges in one PR, tag fresh re
 6. Keep CI green: parity shard c is the fragile one (borderline 15 min); coverage gate
    needs all four parity shards to complete.
 
-## 11. Suggested order
+## 12. Suggested order
 
-A (cold-start comparison — probe ➞ office runs ➞ PR) → B (deck fold, can overlap A's
-office runs) → C (polish, folds into A/B PRs) → E (objectives row) → F (speed) →
-G (parallelization) → H (VMEX, gated).
+A (cold-start comparison — runs in flight, harvest → figure → PR) →
+I.1-4 as one robustness PR (typed errors, penalty-path tests, mypy+lint gate,
+multigrid-grad FD test) → F (speed: adjoint budget first — measured 22.5-32.4 s
+per gradient vs 2.1 s solve) → E (objectives row, corrected premise) →
+I.5-8 (docs/API/consolidation/prune) → G (parallelization, greenfield) →
+I.9-12 + hygiene (near-axis decide, PR #22 decision, DoD reconciliation,
+CHANGELOG/notes/branches) → H (VMEX, gated).
+
+Item B is DONE (QP folded, QI rejected); Item C is DONE except the QH wall-time
+provenance (re-measure or drop during Item A's README edit).

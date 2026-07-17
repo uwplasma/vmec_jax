@@ -26,12 +26,13 @@ Produces (into ``docs/_static/figures/``):
 - ``readme_equilibrium_showcase.png`` — flux surfaces, 3-D boundary geometry
   coloured by ``|B|``, and ``|B|`` in Boozer coordinates on the LCFS (jet),
   for the bundled quick-start case (solves it in-process).
-- ``readme_single_stage.png``         — single-stage plasma + coil optimization
-  (vacuum and finite-beta columns): boundary initial-vs-final, and the final
-  LCFS coloured by ``|B|`` inside the ESSOS coil filaments.  Runs
-  ``examples/single_stage_essos_coils_opt.py`` once at full budget (~5-8
-  min/case, NOT a CI budget) and caches its outputs under
-  ``benchmarks/output_single_stage_essos_coils_opt/``.
+- ``readme_single_stage.png``         — cold-start single-stage vs two-stage
+  plasma + coil optimization (vacuum and finite-beta columns): seed vs final
+  boundaries with the headline ``B·n``/QS metrics of both approaches, and each
+  approach's final LCFS coloured by ``|B|`` inside its own final coils.  Reads
+  the outputs of ``examples/single_stage_vs_two_stage.py`` from
+  ``output_single_stage_vs_two_stage/{vacuum,beta}/``; that experiment is
+  multi-hour at full budget, so it is NEVER auto-run here — run it first.
 
 Usage:
     python benchmarks/make_readme_figures.py
@@ -46,7 +47,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 import numpy as np
@@ -885,48 +885,37 @@ def make_showcase_figure(out: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# 7. Single-stage plasma + coil optimization.  Runs the coil-agnostic example
-#    (examples/single_stage_essos_coils_opt.py) once at full budget to produce
-#    the saved initial/final wout + the fixed ESSOS coil geometry, then draws
-#    two columns (vacuum, finite beta): boundary initial-vs-final, and the final
-#    LCFS coloured by |B| inside the ESSOS coil filaments.
+# 7. Cold-start single-stage vs two-stage plasma + coil optimization.  Reads
+#    the outputs of examples/single_stage_vs_two_stage.py from
+#    output_single_stage_vs_two_stage/{vacuum,beta}/: wout_stage1.nc /
+#    wout_single.nc (the two final boundaries), coils_stage2.npz /
+#    coils_single.npz (final coil curve dofs + currents, reconstructed via
+#    ESSOS), and comparison.json (the honest evaluate-phase metrics).  The
+#    experiment is multi-hour at full budget, so it is NEVER auto-run here.
 # --------------------------------------------------------------------------
 
-SINGLE_STAGE_EXAMPLE = REPO / "examples" / "single_stage_essos_coils_opt.py"
-SINGLE_STAGE_OUT = REPO / "benchmarks" / "output_single_stage_essos_coils_opt"
+SINGLE_STAGE_OUT = REPO / "output_single_stage_vs_two_stage"
+SINGLE_STAGE_SEED = DATA / "input.minimal_seed_nfp2"
 SINGLE_STAGE_CASES = [
-    ("A_vacuum", "QA  ·  vacuum"),
-    ("B_finite_beta", "QA  ·  finite $\\beta$"),
+    ("vacuum", "QA  ·  vacuum"),
+    ("beta", "QA  ·  finite $\\beta$"),
 ]
 
 
-def _ensure_single_stage_outputs() -> dict:
-    """Return the example's summary, running it once (full budget) if absent.
+def _coil_gamma_from_npz(npz_path: Path) -> np.ndarray:
+    """Full coil-filament set (n_coils, n_segments, 3) from saved curve dofs.
 
-    The single-stage optimization is ~5-8 min/case, so its converged outputs are
-    cached under ``benchmarks/output_single_stage_essos_coils_opt/``; delete that
-    directory to re-optimize.  Returns ``{case_name: summary_row}``.
+    ``examples/single_stage_vs_two_stage.py`` saves only the base-coil curve
+    dofs + currents (keys ``cdofs``, ``currents``, ``nfp``, ``n_segments``);
+    ESSOS rebuilds the nfp / stellarator-symmetry copies.
     """
-    import subprocess
-    import sys
+    import jax.numpy as jnp
+    from essos.coils import Coils, Curves
 
-    summ = SINGLE_STAGE_OUT / "summary.json"
-    need = [summ, SINGLE_STAGE_OUT / "coils_gamma.npy"]
-    for name, _ in SINGLE_STAGE_CASES:
-        need += [SINGLE_STAGE_OUT / f"wout_{name}_initial.nc",
-                 SINGLE_STAGE_OUT / f"wout_{name}_final.nc"]
-    if not all(p.exists() for p in need):
-        print("  optimizing single-stage cases (~5-8 min each, not a CI budget)...",
-              flush=True)
-        env = dict(os.environ)
-        env.pop("VMEC_JAX_EXAMPLES_CI", None)   # full budget, not the smoke run
-        proc = subprocess.run([sys.executable, str(SINGLE_STAGE_EXAMPLE)],
-                              cwd=str(REPO / "benchmarks"), env=env,
-                              capture_output=True, text=True, timeout=3600)
-        if proc.returncode != 0:
-            raise RuntimeError("single-stage example failed:\n"
-                               f"{proc.stdout[-3000:]}\n{proc.stderr[-2000:]}")
-    return {r["name"]: r for r in json.loads(summ.read_text())}
+    d = np.load(npz_path)
+    curves = Curves(jnp.asarray(d["cdofs"]), int(d["n_segments"]),
+                    int(d["nfp"]), True)
+    return np.asarray(Coils(curves, jnp.asarray(d["currents"])).gamma)
 
 
 def _plot_coils_and_lcfs(fig, ax3d, wout, gamma, nfp):
@@ -976,33 +965,57 @@ def make_single_stage_figure(out: Path) -> None:
     import vmec_jax as vj
     from vmec_jax.core.plotting import surface_rz
 
-    summary = _ensure_single_stage_outputs()
-    gamma = np.load(SINGLE_STAGE_OUT / "coils_gamma.npy")
+    cases = []
+    for name, title in SINGLE_STAGE_CASES:
+        cdir = SINGLE_STAGE_OUT / name
+        need = [cdir / "comparison.json", cdir / "wout_stage1.nc",
+                cdir / "wout_single.nc", cdir / "coils_stage2.npz",
+                cdir / "coils_single.npz"]
+        missing = [p for p in need if not p.exists()]
+        if missing:
+            print(f"  {name}: missing {missing[0].relative_to(REPO)} -- run "
+                  f"'python examples/single_stage_vs_two_stage.py --case {name} "
+                  "--phase all' first (multi-hour at full budget); skipping "
+                  "this column", flush=True)
+            continue
+        cases.append((name, title, cdir))
+    if not cases:
+        print("  no single-stage outputs -- figure skipped")
+        return
 
-    ncol = len(SINGLE_STAGE_CASES)
-    fig = plt.figure(figsize=(3.1 * ncol, 7.3), dpi=150)
-    gs = fig.add_gridspec(2, ncol, height_ratios=[1.0, 1.35], hspace=0.34,
-                          wspace=0.30)
+    seed_inp = vj.VmecInput.from_file(str(SINGLE_STAGE_SEED))
+    ncol = len(cases)
+    fig = plt.figure(figsize=(3.4 * ncol, 9.4), dpi=150)
+    gs = fig.add_gridspec(3, ncol, height_ratios=[1.0, 0.92, 0.92],
+                          hspace=0.24, wspace=0.28)
     theta = np.linspace(0, 2 * np.pi, 241)
 
-    for col, (name, title) in enumerate(SINGLE_STAGE_CASES):
-        r = summary[name]
-        w_init = vj.read_wout(SINGLE_STAGE_OUT / f"wout_{name}_initial.nc")
-        w_final = vj.read_wout(SINGLE_STAGE_OUT / f"wout_{name}_final.nc")
-        nfp = int(w_final.nfp)
+    for col, (name, title, cdir) in enumerate(cases):
+        comp = json.loads((cdir / "comparison.json").read_text())
+        ts, ss = comp["two_stage"], comp["single_stage"]
+        w_two = vj.read_wout(cdir / "wout_stage1.nc")     # two-stage boundary
+        w_sin = vj.read_wout(cdir / "wout_single.nc")     # single-stage boundary
+        nfp = int(w_sin.nfp)
         phi_arr = np.array([0.0, np.pi / nfp])  # phi = 0 and half field period
 
-        # -- row 0: boundary cross-sections, initial (grey) vs final (blue) ----
+        # -- row 0: seed vs two-stage vs single-stage boundary -----------------
+        # All three on one axes: the shared (auto-scaled, equal-aspect) limits
+        # keep the crude cold-start seed AND both finals visible together.
         axb = fig.add_subplot(gs[0, col])
-        Ri, Zi = surface_rz(w_init, s_index=-1, theta=theta, phi=phi_arr)
-        Rf, Zf = surface_rz(w_final, s_index=-1, theta=theta, phi=phi_arr)
+        Rs, Zs = _input_boundary_rz(seed_inp, theta, phi_arr)
+        Rt, Zt = surface_rz(w_two, s_index=-1, theta=theta, phi=phi_arr)
+        Rf, Zf = surface_rz(w_sin, s_index=-1, theta=theta, phi=phi_arr)
         for k in range(phi_arr.size):
-            axb.plot(Ri[:, k], Zi[:, k], color=MUTED, lw=1.0, ls=(0, (4, 3)),
-                     alpha=0.85, label="initial" if k == 0 else None)
+            axb.plot(Rs[:, k], Zs[:, k], color=MUTED, lw=1.0, ls=(0, (4, 3)),
+                     alpha=0.85, label="seed" if k == 0 else None)
         for k in range(phi_arr.size):
-            axb.plot(Rf[:, k], Zf[:, k], color=BLUE, lw=1.7,
+            axb.plot(Rt[:, k], Zt[:, k], color=YELLOW, lw=1.6,
                      alpha=1.0 if k == 0 else 0.55,
-                     label=("final, $\\phi=0$" if k == 0 else "final, half period"))
+                     label="two-stage" if k == 0 else None)
+        for k in range(phi_arr.size):
+            axb.plot(Rf[:, k], Zf[:, k], color=BLUE, lw=1.6,
+                     alpha=1.0 if k == 0 else 0.55,
+                     label="single-stage" if k == 0 else None)
         axb.set_aspect("equal", adjustable="datalim")
         axb.set_title(title, loc="left", fontsize=10.5, color=INK, pad=3)
         axb.tick_params(labelsize=7)
@@ -1013,25 +1026,55 @@ def make_single_stage_figure(out: Path) -> None:
         axb.set_xlabel("R (m)", fontsize=8.5)
         axb.legend(loc="upper right", fontsize=6.5, handlelength=1.4,
                    labelspacing=0.25, borderaxespad=0.1)
-        axb.annotate(f"J: {r['J0']:.2e} $\\to$ {r['Jf']:.2e}  ({r['ratio']:.1f}x)",
-                     xy=(0.5, -0.22), xycoords="axes fraction", ha="center",
-                     va="top", fontsize=8.5, color=GREEN_TEXT, fontweight="bold")
-        axb.annotate(f"$\\langle\\beta\\rangle$ = {r['beta']:.2f}%",
-                     xy=(0.98, 1.02), xycoords="axes fraction", ha="right",
-                     va="bottom", fontsize=8, color=MUTED)
+        pol = comp.get("single_stage_polish")
+        bn_line = ("$\\langle|B\\cdot n|\\rangle/\\langle B\\rangle$: "
+                   f"{ts['avg_Bn_over_B']:.1e}"
+                   + (f" $\\to$ +polish {pol['avg_Bn_over_B']:.1e}" if pol else "")
+                   + f" (cold {ss['avg_Bn_over_B']:.1e})")
+        qs_line = (f"QS: {ts['qs_total']:.1e}"
+                   + (f" $\\to$ {pol['qs_total']:.1e}" if pol else "")
+                   + f" (cold {ss['qs_total']:.1e})")
+        axb.annotate(
+            bn_line + "\n" + qs_line,
+            xy=(0.5, -0.24), xycoords="axes fraction", ha="center", va="top",
+            fontsize=7, color=GREEN_TEXT, fontweight="bold")
+        if name == "beta":
+            # The case's calibrated seed <beta> (the finals' betatotal shifts
+            # with each approach's plasma volume at the fixed pres_scale).
+            seed_meta = cdir / "seed.json"
+            if seed_meta.exists():
+                beta_pct = float(json.loads(seed_meta.read_text())["beta_pct"])
+            else:
+                beta_pct = 100.0 * float(np.mean([float(w_two.betatotal),
+                                                  float(w_sin.betatotal)]))
+            axb.annotate(f"$\\langle\\beta\\rangle \\approx$ {beta_pct:.1f}%",
+                         xy=(0.98, 1.02), xycoords="axes fraction", ha="right",
+                         va="bottom", fontsize=8, color=MUTED)
 
-        # -- row 1: final LCFS coloured by |B| inside the ESSOS coils ----------
-        ax3d = fig.add_subplot(gs[1, col], projection="3d")
-        b_lo, b_hi = _plot_coils_and_lcfs(fig, ax3d, w_final, gamma, nfp)
-        print(f"  {name}: J {r['J0']:.3e} -> {r['Jf']:.3e} ({r['ratio']:.1f}x)  "
-              f"beta={r['beta']:.2f}%  |B|=[{b_lo:.2f},{b_hi:.2f}]T", flush=True)
+        # -- rows 1-2: each approach's final LCFS |B| inside its final coils ---
+        for row, (wout, npz, lab, c) in enumerate(
+                [(w_two, "coils_stage2.npz", "two-stage", YELLOW),
+                 (w_sin, "coils_single.npz", "single-stage", BLUE)], start=1):
+            gamma = _coil_gamma_from_npz(cdir / npz)
+            ax3d = fig.add_subplot(gs[row, col], projection="3d")
+            ax3d.patch.set_alpha(0.0)  # keep row-0's metric annotation visible
+            b_lo, b_hi = _plot_coils_and_lcfs(fig, ax3d, wout, gamma, nfp)
+            ax3d.text2D(0.03, 0.10, lab, transform=ax3d.transAxes, ha="left",
+                        va="bottom", fontsize=9, color=c, fontweight="bold")
+            print(f"  {name}/{lab}: <|B.n|>/<B>={comp[lab.replace('-', '_')]['avg_Bn_over_B']:.3e}  "
+                  f"QS={comp[lab.replace('-', '_')]['qs_total']:.3e}  "
+                  f"|B|=[{b_lo:.2f},{b_hi:.2f}]T", flush=True)
 
-    fig.suptitle("Single-stage plasma + coil optimization", x=0.5, ha="center",
-                 fontsize=12.5, color=INK, y=0.995)
-    fig.text(0.5, 0.945, "top: boundary initial (grey) vs final (blue)   ·   "
-             "bottom: final LCFS |B| inside the ESSOS coil filaments",
+    fig.suptitle("Cold-start single-stage vs two-stage plasma + coil "
+                 "optimization", x=0.5, ha="center", fontsize=12.5, color=INK,
+                 y=0.995)
+    fig.text(0.5, 0.966, "top: seed (grey, dashed) vs two-stage (orange) vs "
+             "single-stage (blue) boundary at $\\phi=0$ and a half field period",
              ha="center", fontsize=8, color=MUTED)
-    fig.tight_layout(rect=(0, 0, 1, 0.925))
+    fig.text(0.5, 0.951, "middle / bottom: each approach's final LCFS "
+             "coloured by |B| inside its own final coils",
+             ha="center", fontsize=8, color=MUTED)
+    fig.tight_layout(rect=(0, 0, 1, 0.936))
     fig.savefig(out, dpi=150)
     plt.close(fig)
     _compress_png(out)

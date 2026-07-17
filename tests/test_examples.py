@@ -37,11 +37,12 @@ DATA_DIR = EXAMPLES / "data"
 _COST_RE = re.compile(r"\[least_squares\] cost = ([0-9.eE+-]+)")
 
 
-def _run_example(script: Path, cwd: Path, timeout: int = 2400) -> str:
+def _run_example(script: Path, cwd: Path, timeout: int = 2400,
+                 args: tuple[str, ...] = ()) -> str:
     env = dict(os.environ, VMEC_JAX_EXAMPLES_CI="1")
     env.pop("JAX_DISABLE_JIT", None)
     proc = subprocess.run(
-        [sys.executable, str(script)], cwd=cwd, env=env,
+        [sys.executable, str(script), *args], cwd=cwd, env=env,
         capture_output=True, text=True, timeout=timeout,
     )
     assert proc.returncode == 0, (
@@ -267,6 +268,26 @@ def test_single_stage_free_boundary_opt(tmp_path):
     out = _run_example(EXAMPLES / "single_stage_free_boundary_opt.py", tmp_path, timeout=900)
     m = re.search(r"recovered to ([0-9.]+)% of the confining", out)
     assert m is not None and float(m.group(1)) < 5.0, f"coil recovery: {out[-400:]}"
+
+
+@pytest.mark.full  # nightly: cold-start single-stage vs two-stage, all 4 phases
+def test_single_stage_vs_two_stage(tmp_path):
+    # cold-start comparison benchmark: needs ESSOS coils + virtual_casing_jax
+    pytest.importorskip("essos")
+    pytest.importorskip("virtual_casing_jax")
+    import json
+
+    out = _run_example(EXAMPLES / "single_stage_vs_two_stage.py", tmp_path,
+                       timeout=2400, args=("--case", "vacuum", "--phase", "all"))
+    assert "COMPARISON (vacuum)" in out, f"missing comparison table:\n{out[-800:]}"
+    cmp_path = (tmp_path / "output_single_stage_vs_two_stage" / "vacuum"
+                / "comparison.json")
+    assert cmp_path.exists(), "comparison.json not written"
+    results = json.loads(cmp_path.read_text())
+    assert set(results) == {"two_stage", "single_stage"}
+    for label, metrics in results.items():
+        assert np.isfinite(metrics["qs_total"]), f"{label}: non-finite QS"
+        assert np.isfinite(metrics["avg_Bn_over_B"]), f"{label}: non-finite B.n"
 
 
 @pytest.mark.full  # nightly: true single-stage boundary+coil co-optimization, 2 cases

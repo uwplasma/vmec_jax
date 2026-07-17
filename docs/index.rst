@@ -38,7 +38,7 @@ Why vmec-jax?
 - **Batteries included.** Built-in plotting (``vmec --plot``), Boozer
   transform (``vmec --booz`` via ``booz_xform_jax``), spline profiles,
   multigrid with hot restart, free boundary from mgrid files *or* directly
-  from coils, near-axis (pyQSC/pyQIC) optimization seeding, and typed
+  from coils, and typed
   zero-crash error handling. The shared linear/adjoint solver layer is
   factored out into `SOLVAX <https://pypi.org/project/solvax/>`_.
 
