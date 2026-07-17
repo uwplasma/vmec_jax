@@ -22,8 +22,13 @@ fixed-boundary iteration of :mod:`vmec_jax.core.solver`:
   baselines are damped by 0.9 per active iteration (``funct3d.f``).
 
 The iteration itself runs the *same* traced body as the fixed-boundary
-lanes, one jitted iteration per host step so the vacuum field, cadence
-counters, and screen printing can interleave exactly like ``eqsolve.f``.
+lanes.  Scheduling (plan item F.2): the pre-activation fixed-boundary
+iterations run as one jitted ``lax.while_loop`` (:func:`_preactivation_lane`)
+and the whole post-turn-on steady state — vacuum cadence, constraint damping,
+``bsqvac_edge`` refresh and the eqsolve iteration — as another
+(:func:`_make_vacuum_lane`); only the single turn-on pass is host-stepped,
+because it applies the one-time soft restart and prints the banners.  The
+per-iteration numerics are identical to the per-pass host driver.
 
 Known divergence from VMEC2000 (documented): at turn-on VMEC computes the
 turn-on iteration's forces from the pre-restart geometry while evolving the
@@ -43,6 +48,7 @@ import numpy as np
 
 import jax
 import jax.numpy as jnp
+from jax import lax
 
 from . import profiles as _profiles
 from .errors import MORE_ITER_FLAG, SUCCESSFUL_TERM_FLAG
@@ -60,6 +66,7 @@ from .solver import (
     _finalize, _geometry, _initial_carry, _initial_state, _make_body,
     _result_from_carry, _zero_cache, prepare_runtime, resolution_from_input,
 )
+from .transforms import register_pytree_dataclass as _register
 from .vacuum import (
     VacuumBasis, VacuumBoundary, make_vacuum_solver, vacuum_basis,
     vacuum_channels,
@@ -711,13 +718,15 @@ def _assert_static_filament_topology(basis: VacuumBasis, axis_r0, axis_z0) -> No
 #: greenf/analyt/solve kernels (~5 s on CPU) every solve.  Keyed on the
 #: hashable ``(resolution, signgs, mf, nf)``; the boundary/profile/mgrid values
 #: enter the jitted program as traced arguments, so one executable serves every
-#: solve at a given resolution.
-_VACUUM_EXECUTABLE_CACHE: dict[tuple[Any, int, int, int], tuple[VacuumBasis, FusedVacuum]] = {}
+#: solve at a given resolution.  The third element is the jitted steady-state
+#: free-boundary loop (:func:`_make_vacuum_lane`) built over the same fused
+#: vacuum closures.
+_VACUUM_EXECUTABLE_CACHE: dict[tuple[Any, int, int, int], tuple[VacuumBasis, FusedVacuum, Any]] = {}
 
 
 def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
-                        modes: ModeTable, axis_r0, axis_z0) -> tuple[VacuumBasis, FusedVacuum]:
-    """Return the cached ``(basis, fused vacuum)`` for one resolution/signgs.
+                        modes: ModeTable, axis_r0, axis_z0) -> tuple[VacuumBasis, FusedVacuum, Any]:
+    """Return the cached ``(basis, fused vacuum, steady lane)`` for one resolution/signgs.
 
     ``wint``/``modes``/``axis_r0``/``axis_z0`` are resolution-determined build
     inputs (not part of the key); they are consumed only on a cache miss.
@@ -736,8 +745,9 @@ def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
         basis, modes=modes, signgs=int(signgs), solver_vac=solver_vac,
         axis_r0=axis_r0, axis_z0=axis_z0,
     )
-    _VACUUM_EXECUTABLE_CACHE[key] = (basis, fused)
-    return basis, fused
+    lane = _make_vacuum_lane(fused)
+    _VACUUM_EXECUTABLE_CACHE[key] = (basis, fused, lane)
+    return basis, fused, lane
 
 
 def _vacuum_step(
@@ -813,6 +823,153 @@ def _presf_ns_scale(inp: VmecInput, ns: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Batched iteration lanes (plan item F.2: NESTOR loop batching)
+# ---------------------------------------------------------------------------
+#
+# The host driver used to dispatch ONE jitted iteration per Python pass, with
+# several device->host syncs (`bool(carry.done)`, `int(carry.iteration)`,
+# `float(carry.fsqr)`, ...) and per-pass `replace(rt, rcon0=0.9*rcon0, ...)`
+# runtime rebuilds.  The two lanes below move that scaffolding on-device
+# without touching the per-iteration numerics (same ops, same order):
+#
+# - :func:`_preactivation_lane` runs every fixed-boundary iteration BEFORE
+#   vacuum activation as one ``lax.while_loop`` (the free-boundary analogue of
+#   ``solver._while_lane``), exiting exactly when the host driver would have
+#   entered the funct3d.f IVAC0 block (``iter2 > 1`` and
+#   ``fsqr + fsqz <= 1e-3``) so the turn-on pass still runs host-side.
+# - :func:`_make_vacuum_lane` runs the whole POST-turn-on steady state as one
+#   ``lax.while_loop`` whose body replays the host pass verbatim in traced
+#   form: ivac increment, 0.9 rcon0/zcon0 damping, the ivacskip/nvacskip
+#   cadence, the full/skip fused NESTOR update (``lax.cond``), the
+#   ``bsqvac_edge`` runtime update, then the shared ``_make_body`` iteration.
+#   ``delbsq_traj`` records the per-iteration DEL-BSQ diagnostic so verbose
+#   screen lines print the same value the per-pass driver printed.
+#
+# Only the single turn-on pass (first vacuum call, ``In VACUUM`` block, soft
+# restart, ``VACUUM PRESSURE TURNED ON`` banner) stays host-stepped: it
+# mutates the carry/runtime once, between the two lanes.
+
+
+@jax.jit
+def _preactivation_lane(carry, rt: SolverRuntime):
+    """Fixed-boundary iterations up to vacuum activation, as one jitted loop.
+
+    Iterates the shared traced body while the run is live and the funct3d.f
+    activation condition (``iter2 > 1 and fsqr + fsqz <= 1e-3``) has not yet
+    fired; the returned carry is exactly the carry the per-pass host driver
+    held when it first entered the IVAC0 block (or finished the run).
+    """
+    body = _make_body(rt)
+
+    def cond(c):
+        activate = (c.iteration > 1) & (c.fsqr + c.fsqz <= ACTIVATION_FSQ)
+        return jnp.logical_not(c.done | activate)
+
+    return lax.while_loop(cond, body, carry)
+
+
+@dataclass(frozen=True)
+class _VacuumLoopCarry:
+    """Traced carry of the steady-state free-boundary loop.
+
+    Extends the solver ``_LoopCarry`` with the funct3d.f module state the
+    host driver used to keep in :class:`FreeBoundaryState` / rebuilt
+    runtimes: the damped ``rcon0/zcon0`` baselines, the NESTOR cache
+    (``amatsav``/``bvecsav``), the vacuum cadence counters and the DEL-BSQ
+    diagnostic (plus its per-iteration history for verbose printing).
+    """
+
+    carry: Any                  # solver._LoopCarry
+    rcon0: Array; zcon0: Array
+    bsqvac: Array               # NESTOR 0.5*|B|^2 on the boundary grid
+    mode_matrix: Array          # amatsav (scalpot.f)
+    bvec_nonsing: Array         # bvecsav (scalpot.f)
+    potvac: Array
+    ivac: Array; nvacskip: Array; nvskip0: Array
+    delbsq: Array; delbsq_traj: Array
+    ctor: Array; rbtor: Array
+    vacuum_calls: Array; full_updates: Array
+
+
+_register(_VacuumLoopCarry)
+
+
+def _make_vacuum_lane(fused: FusedVacuum):
+    """Build the jitted steady-state (post-turn-on) free-boundary loop.
+
+    Closed over the per-basis :class:`FusedVacuum` (cached alongside it in
+    ``_VACUUM_EXECUTABLE_CACHE``); ``rt``/``field``/carry enter as traced
+    arguments, so one executable serves every solve at a given resolution.
+    """
+
+    def _pass(vc: _VacuumLoopCarry, rt: SolverRuntime, field) -> _VacuumLoopCarry:
+        c = vc.carry
+        it = c.iteration
+        fsq_rz = c.fsqr + c.fsqz
+
+        # -- funct3d.f IVAC0 block (traced; same order as the host pass) ----
+        ivac = vc.ivac + ((it > 1) & (fsq_rz <= ACTIVATION_FSQ)).astype(vc.ivac.dtype)
+        rcon0 = 0.9 * vc.rcon0
+        zcon0 = 0.9 * vc.zcon0
+        one = jnp.ones((), dtype=vc.nvacskip.dtype)
+        ivacskip = jnp.where(
+            ivac <= 2, jnp.zeros_like(vc.nvacskip),
+            (it - c.iter1).astype(vc.nvacskip.dtype) % jnp.maximum(one, vc.nvacskip),
+        )
+        full = ivacskip == 0
+        # int() truncation toward zero == astype for the positive operand.
+        nvacskip = jnp.where(
+            full,
+            jnp.maximum(vc.nvskip0, (1.0 / jnp.maximum(1.0e-1, 1.0e11 * fsq_rz))
+                        .astype(vc.nvacskip.dtype)),
+            vc.nvacskip,
+        )
+
+        # -- vacuum.f update: full rebuild vs cached-matrix skip ------------
+        rt_vac = replace(rt, rcon0=rcon0, zcon0=zcon0, bsqvac_edge=vc.bsqvac)
+
+        def _full(_):
+            out = fused.full(c.state, rt_vac, field)
+            return (out["bsqvac"], out["ctor"], out["rbtor"], out["potvac"],
+                    out["delbsq_num"], out["delbsq_den"],
+                    out["mode_matrix"], out["bvec_nonsing"])
+
+        def _skip(_):
+            out = fused.skip(c.state, rt_vac, field, vc.bvec_nonsing,
+                             vc.mode_matrix)
+            return (out["bsqvac"], out["ctor"], out["rbtor"], out["potvac"],
+                    out["delbsq_num"], out["delbsq_den"],
+                    vc.mode_matrix, vc.bvec_nonsing)
+
+        (bsqvac, ctor, rbtor, potvac, num, den, mode_matrix,
+         bvec_nonsing) = lax.cond(full, _full, _skip, None)
+
+        delbsq = jnp.where(den != 0.0, num / den, vc.delbsq)
+        idx = jnp.clip(it - 1, 0, rt.max_iterations - 1)
+        delbsq_traj = lax.dynamic_update_slice_in_dim(
+            vc.delbsq_traj, delbsq[None], idx, axis=0)
+
+        # -- one eqsolve iteration with the refreshed edge field ------------
+        new_carry = _make_body(replace(rt_vac, bsqvac_edge=bsqvac))(c)
+
+        return _VacuumLoopCarry(
+            carry=new_carry, rcon0=rcon0, zcon0=zcon0, bsqvac=bsqvac,
+            mode_matrix=mode_matrix, bvec_nonsing=bvec_nonsing, potvac=potvac,
+            ivac=ivac, nvacskip=nvacskip, nvskip0=vc.nvskip0,
+            delbsq=delbsq, delbsq_traj=delbsq_traj, ctor=ctor, rbtor=rbtor,
+            vacuum_calls=vc.vacuum_calls + 1,
+            full_updates=vc.full_updates + full.astype(vc.full_updates.dtype),
+        )
+
+    def _lane(vc: _VacuumLoopCarry, rt: SolverRuntime, field) -> _VacuumLoopCarry:
+        return lax.while_loop(
+            lambda v: jnp.logical_not(v.carry.done),
+            lambda v: _pass(v, rt, field), vc)
+
+    return jax.jit(_lane)
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
@@ -865,7 +1022,7 @@ def solve_free_boundary(
 
     _init_state = _initial_state(rt.setup)
     _axis_r0, _axis_z0 = _vacuum_scalars(_init_state, rt)[2:4]
-    basis, fused_vac = _vacuum_executables(
+    basis, fused_vac, vacuum_lane = _vacuum_executables(
         resolution, mf=int(inp.mpol) + 1, nf=int(inp.ntor),
         signgs=int(rt.setup.signgs), wint=np.asarray(rt.trig.wint, dtype=float),
         modes=rt.modes, axis_r0=_axis_r0, axis_z0=_axis_z0,
@@ -892,6 +1049,10 @@ def solve_free_boundary(
 
     carry = _initial_carry(_init_state, rt_fixed, ijacob=0)
     printed: set[int] = set()
+    #: per-iteration DEL-BSQ recorded by the batched steady-state lane; rows
+    #: not covered (pre-activation, turn-on pass) fall back to ``fb.delbsq``
+    #: exactly as the per-pass driver printed them.
+    delbsq_rows: dict[int, float] = {}
 
     def _emit_due(final: bool) -> None:
         if not verbose:
@@ -909,14 +1070,65 @@ def solve_free_boundary(
                 it_p, float(row[1]), float(row[2]), float(row[3]),
                 float(row[7]), float(row[10]), float(row[9]),
                 z_axis=float(row[8]) if resolution.lasym else None,
-                del_bsq=float(fb.delbsq),
+                del_bsq=delbsq_rows.get(it_p, float(fb.delbsq)),
             ), end="")
             printed.add(it_p)
 
+    int_dtype = carry.iteration.dtype
     max_passes = rt.max_iterations + 400
     for _ in range(max_passes):
         if bool(carry.done):
             break
+        if fb.ivac == -1:
+            # F.2: every fixed-boundary iteration before vacuum activation
+            # runs as ONE jitted while_loop; the lane exits precisely where
+            # the per-pass driver would have entered the IVAC0 block below.
+            carry = _preactivation_lane(carry, rt_fixed)
+            _emit_due(final=False)
+            if bool(carry.done):
+                break
+            # Activation is now due: fall through to the host-stepped
+            # turn-on pass (first vacuum call, soft restart, banners).
+        elif fb.turned_on and not fb.banner_pending:
+            # F.2: the whole post-turn-on steady state runs as ONE jitted
+            # while_loop (vacuum cadence + damping + iteration, traced).
+            vc = _VacuumLoopCarry(
+                carry=carry,
+                rcon0=rt_freeb.rcon0, zcon0=rt_freeb.zcon0,
+                bsqvac=rt_freeb.bsqvac_edge,
+                mode_matrix=fb.mode_matrix, bvec_nonsing=fb.bvec_nonsing,
+                potvac=fb.potvac,
+                ivac=jnp.asarray(fb.ivac, dtype=int_dtype),
+                nvacskip=jnp.asarray(fb.nvacskip, dtype=int_dtype),
+                nvskip0=jnp.asarray(fb.nvskip0, dtype=int_dtype),
+                delbsq=jnp.asarray(fb.delbsq, dtype=dtype),
+                delbsq_traj=jnp.full((rt.max_iterations,), np.nan, dtype=dtype),
+                ctor=jnp.asarray(fb.ctor, dtype=dtype),
+                rbtor=jnp.asarray(fb.rbtor, dtype=dtype),
+                vacuum_calls=jnp.asarray(fb.vacuum_calls, dtype=int_dtype),
+                full_updates=jnp.asarray(fb.full_updates, dtype=int_dtype),
+            )
+            vc = vacuum_lane(vc, rt_freeb, external_field)
+            carry = vc.carry
+            rt_freeb = replace(rt_freeb, rcon0=vc.rcon0, zcon0=vc.zcon0,
+                               bsqvac_edge=vc.bsqvac)
+            fb.ivac = int(vc.ivac)
+            fb.nvacskip = int(vc.nvacskip)
+            fb.delbsq = float(vc.delbsq)
+            fb.bsqvac = vc.bsqvac
+            fb.mode_matrix = vc.mode_matrix
+            fb.bvec_nonsing = vc.bvec_nonsing
+            fb.potvac = vc.potvac
+            fb.ctor = float(vc.ctor)
+            fb.rbtor = float(vc.rbtor)
+            fb.vacuum_calls = int(vc.vacuum_calls)
+            fb.full_updates = int(vc.full_updates)
+            if verbose:
+                traj_db = np.asarray(vc.delbsq_traj)
+                for i in np.flatnonzero(~np.isnan(traj_db)):
+                    delbsq_rows[int(i) + 1] = float(traj_db[i])
+            _emit_due(final=False)
+            continue
         it = int(carry.iteration)
         iter1 = int(carry.iter1)
         fsq_rz = float(carry.fsqr) + float(carry.fsqz)
