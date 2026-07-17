@@ -12,6 +12,17 @@ One home (R26a consolidation) for the small private helpers that
   behind every solver-native scalar target;
 - :func:`_iotas_half` / :func:`_iotas_half_from_fields` — the ``ncurr``-aware
   half-mesh rotational transform (``add_fluxes.f90`` conventions);
+- the **canonical wout-parity scalar targets** (plan_pre_vmex Item I.7):
+  :func:`aspect_ratio` / :func:`volume` (``aspectratio.f`` boundary
+  quadrature, equal to the wout ``aspect``/``volume_p`` scalars) and
+  :func:`mean_iota` / :func:`edge_iota` (wout ``iotas``/``iotaf[-1]``
+  conventions), re-exported unchanged by :mod:`~vmec_jax.core.optimize`.
+  :mod:`~vmec_jax.core.implicit` keeps its historical ``aspect_ratio`` /
+  ``plasma_volume`` variants (shoelace boundary area on a fresh grid /
+  ``sum(vp)``) because :class:`~vmec_jax.core.implicit.ImplicitSolution`
+  fields and the FD-cached gradient tables of ``tests/test_implicit_grad.py``
+  pin those exact quadratures — the two families agree to quadrature
+  resolution, and each module's docstrings cross-reference the other;
 - the half-mesh radial sampling primitives :func:`_half_grid` /
   :func:`_interp_half_grid` and the wout-table utilities :func:`_as_1d` /
   :func:`_mode_matrix`;
@@ -139,6 +150,87 @@ def _iotas_half(state: SpectralState, rt: SolverRuntime) -> jnp.ndarray:
         return jnp.asarray(setup.iotas)
     _, _, _, fields, _ = _field_chain(state, rt)
     return _iotas_half_from_fields(setup, fields)
+
+
+# ---------------------------------------------------------------------------
+# Canonical wout-parity scalar targets (plan_pre_vmex Item I.7)
+# ---------------------------------------------------------------------------
+
+
+def _aspect_scalars(state: SpectralState, rt: SolverRuntime):
+    """``aspectratio.f`` scalars ``(Aminor_p, Rmajor_p, aspect, volume_p)``.
+
+    Boundary-surface quadrature identical to the wout writer
+    (:func:`vmec_jax.core.postprocess.aspect_ratio_scalars`), kept in JAX.
+    """
+    geometry, _, _, _, _ = _field_chain(state, rt)
+    sqrts_edge = jnp.asarray(rt.setup.sqrts)[-1]
+    rb = jnp.asarray(geometry.R_even)[-1] + sqrts_edge * jnp.asarray(geometry.R_odd)[-1]
+    zub = (jnp.asarray(geometry.dZ_dtheta_even)[-1]
+           + sqrts_edge * jnp.asarray(geometry.dZ_dtheta_odd)[-1])
+    wint = jnp.asarray(rt.trig.wint)
+    t1 = rb * zub * wint
+    volume_p = 2.0 * jnp.pi ** 2 * jnp.abs(jnp.sum(rb * t1))
+    area = 2.0 * jnp.pi * jnp.abs(jnp.sum(t1))
+    area_safe = jnp.where(area != 0.0, area, 1.0)
+    aminor = jnp.sqrt(area_safe / jnp.pi)
+    rmajor = volume_p / (2.0 * jnp.pi * area_safe)
+    return aminor, rmajor, rmajor / aminor, volume_p
+
+
+def aspect_ratio(state: SpectralState, rt: SolverRuntime) -> Array:
+    """VMEC aspect ratio ``Rmajor_p / Aminor_p`` (``aspectratio.f`` convention).
+
+    ``Aminor_p = sqrt(<cross-section area> / pi)``, ``Rmajor_p =
+    volume_p / (2 pi <area>)`` from the boundary surface quadrature; equals
+    the wout ``aspect`` scalar of the same state.  This is the canonical
+    (wout-parity) implementation, re-exported as
+    ``vmec_jax.core.optimize.aspect_ratio``;
+    :func:`vmec_jax.core.implicit.aspect_ratio` is the implicit module's
+    historical shoelace-quadrature variant of the same scalar (see there).
+    """
+    return _aspect_scalars(state, rt)[2]
+
+
+def volume(state: SpectralState, rt: SolverRuntime) -> Array:
+    """Plasma volume ``volume_p`` [m^3] (wout convention, boundary quadrature).
+
+    Canonical (wout-parity) implementation, re-exported as
+    ``vmec_jax.core.optimize.volume``;
+    :func:`vmec_jax.core.implicit.plasma_volume` is the implicit module's
+    ``sum(vp)`` variant of the same scalar (see there).
+    """
+    return _aspect_scalars(state, rt)[3]
+
+
+def mean_iota(state: SpectralState, rt: SolverRuntime) -> Array:
+    """Mean rotational transform over the half-mesh surfaces (axis excluded).
+
+    Matches the legacy optimization ``mean_iota`` convention
+    (``mean(iotas[1:])``, i.e. the mean of the wout ``iotas`` profile).
+    """
+    iotas = _iotas_half(state, rt)
+    return jnp.mean(iotas[1:])
+
+
+def edge_iota(state: SpectralState, rt: SolverRuntime) -> Array:
+    """Rotational transform at the boundary (wout ``iotaf[-1]`` convention:
+    linear extrapolation of the half mesh, ``1.5 iotas[-1] - 0.5 iotas[-2]``).
+
+    Naming note (Item I.7): ``optimize.edge_iota`` and
+    :func:`vmec_jax.core.implicit.iota_edge` are the same physical scalar —
+    identical for ``ncurr = 1`` (both reconstruct iota from the converged
+    ``chips``); at ``ncurr = 0`` this wout-parity version extrapolates the
+    prescribed half-mesh ``iotas`` while the implicit variant evaluates the
+    prescribed full-mesh ``iotaf`` endpoint directly.  ``iota_edge`` is
+    provided as an alias here (and ``edge_iota`` in ``implicit``) so either
+    spelling works in either module.
+    """
+    iotas = _iotas_half(state, rt)
+    return 1.5 * iotas[-1] - 0.5 * iotas[-2]
+
+
+iota_edge = edge_iota   # naming-flip alias (see the edge_iota docstring)
 
 
 # ---------------------------------------------------------------------------

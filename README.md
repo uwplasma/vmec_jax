@@ -282,19 +282,23 @@ density of the three (reproduce with
 
 ```python
 from vmec_jax.core.input import VmecInput
-from vmec_jax.core.multigrid import solve_multigrid
-from vmec_jax.core.wout import wout_from_state, write_wout
+from vmec_jax.core import optimize as opt
+from vmec_jax.core.wout import write_wout
 from vmec_jax.core.plotting import plot_wout
 
 inp = VmecInput.from_file("input.nfp4_QH_warm_start")
-result = solve_multigrid(inp)          # full NS_ARRAY ladder, VMEC2000 numerics
-print(result.converged, result.iterations, result.wmhd)
+eq = opt.solve_equilibrium(inp)        # full NS_ARRAY ladder, VMEC2000 numerics
+print(eq.result.converged, eq.result.iterations, float(eq.wout.aspect))
 
-wout = wout_from_state(inp=inp, state=result.state, niter=result.iterations,
-                       fsqr=result.fsqr, fsqz=result.fsqz, fsql=result.fsql)
-write_wout("wout_nfp4_QH_warm_start.nc", wout)
-plot_wout(wout, "figures/")
+write_wout("wout_nfp4_QH_warm_start.nc", eq.wout)   # wout built lazily on eq
+plot_wout(eq.wout, "figures/")
 ```
+
+Choosing an entry point: `optimize.solve_equilibrium` for Python analysis and
+objectives (state + runtime + lazy `.wout`); `multigrid.solve_multigrid` when
+you only need the converged state (the CLI's engine); `implicit.run` for
+gradients (`jax.grad`-able `ImplicitSolution`); `solver.solve` as the
+low-level single-grid building block.
 
 Optimization building blocks live in `vmec_jax.core.optimize`
 (quasisymmetry and omnigenity residuals; aspect ratio, iota, mirror ratio,

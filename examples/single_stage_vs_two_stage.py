@@ -417,12 +417,11 @@ def phase_single(case: str, out: Path, args, *, warm: bool = False) -> None:
     # The adjoint GMRES at its 1e-11 default dominates each gradient (audit:
     # one warm gradient ~ 10-15 forward solves); 1e-8 is ample for L-BFGS-B.
     run_kw = dict(solve_kwargs(case), adjoint_tol=1e-8)
-    cfg = im.make_config(inp, **solve_kwargs(case))
 
     def objective(x):
         params, cdofs, cur = unpack(x)
         sol = im.run(inp, params, **run_kw)
-        rt = im.runtime_from_params(params, cfg)
+        rt = sol.runtime          # the SolverRuntime im.run built (Item I.6)
         j_qs = jnp.sum(qs.residuals_state(sol.state, rt) ** 2)
         sd = FBD.surface_field_data_from_state(inp, sol.state,
                                                nphi=NPHI, ntheta=NTHETA)
@@ -451,7 +450,7 @@ def phase_single(case: str, out: Path, args, *, warm: bool = False) -> None:
     # NOTE: jax.jit around this value_and_grad fails today with a
     # TracerArrayConversionError inside the FBD/im.run stack (host-side
     # conversions that pass under bare grad) -- jit-closing that path is
-    # plan_pre_vmex Item I.6/F; the adjoint_tol relaxation above is the
+    # plan_pre_vmex Item F; the adjoint_tol relaxation above is the
     # dominant per-eval win meanwhile.
     vg = jax.value_and_grad(objective, has_aux=True)
     hist: list[float] = []

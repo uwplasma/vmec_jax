@@ -1,10 +1,11 @@
-"""Unit tests for :mod:`vmec_jax._compat` (JAX/NumPy backend shim).
+"""Unit tests for :mod:`vmec_jax._compat` (JAX environment + cache policy).
 
-Covers the numpy-mode thread-local override, the no-op jit fallback, the
-machine-scoped compilation-cache policy (env-var precedence table in
-``_default_compilation_cache_dir``), the cache wiring against a recording
-fake JAX module, and the backend helpers (``asarray``/``einsum``/
-``enable_x64``/``x64_enabled``).
+Covers the machine-scoped compilation-cache policy (env-var precedence table
+in ``_default_compilation_cache_dir``), the cache wiring against a recording
+fake JAX module, and the import-time environment defaults
+(``_configure_jax_environment``).  The old JAX/NumPy backend shim
+(``has_jax``/``asarray``/``einsum``/numpy mode/no-op jit) was deleted in the
+Item I.8a dead-code prune — the core is JAX-only.
 """
 
 from __future__ import annotations
@@ -12,39 +13,9 @@ from __future__ import annotations
 import re
 import types
 
-import numpy as np
 import pytest
 
 from vmec_jax import _compat
-
-
-# ---------------------------------------------------------------------------
-# numpy-mode override + jit fallback
-# ---------------------------------------------------------------------------
-
-
-def test_numpy_mode_context_toggles_has_jax():
-    assert _compat.has_jax()  # suite runs with real JAX
-    assert not _compat.numpy_mode_enabled()
-    with _compat.numpy_mode_context():
-        assert _compat.numpy_mode_enabled()
-        assert not _compat.has_jax()
-        # einsum dispatches to numpy inside the context
-        out = _compat.einsum("i,i->", np.arange(3.0), np.arange(3.0))
-        assert isinstance(out, np.ndarray | np.floating | float)
-    assert not _compat.numpy_mode_enabled()
-    assert _compat.has_jax()
-
-
-def test_noop_jit_bare_and_decorator_factory_forms():
-    fn = lambda x: x + 1  # noqa: E731
-    assert _compat._noop_jit(fn) is fn
-    assert _compat._noop_jit(fn, static_argnames=("x",)) is fn
-    # @partial(jit, static_argnames=...) form: jit() returns a decorator
-    deco = _compat._noop_jit(None, static_argnames=("x",))
-    assert deco(fn) is fn
-    deco = _compat._noop_jit()
-    assert deco(fn) is fn
 
 
 # ---------------------------------------------------------------------------
@@ -161,82 +132,21 @@ def test_configure_compilation_cache_gpu_autotune_default(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# backend helpers
+# import-time environment defaults
 # ---------------------------------------------------------------------------
 
 
-def test_asarray_and_einsum_jax_backend():
-    a = _compat.asarray([1.0, 2.0, 3.0])
-    assert float(a.sum()) == 6.0
-    dot = _compat.einsum("i,i->", a, a)
-    assert float(dot) == pytest.approx(14.0)
-    # explicit precision path
-    from jax import lax
+def test_configure_jax_environment_idempotent_and_respects_user_env(monkeypatch):
+    """Re-running the import-time setup is safe and never clobbers user env."""
+    import os
 
-    dot2 = _compat.einsum("i,i->", a, a, precision=lax.Precision.DEFAULT)
-    assert float(dot2) == pytest.approx(14.0)
-
-
-def test_enable_x64_roundtrip_and_query():
-    assert _compat.has_jax()
-    original = _compat.x64_enabled()
-    try:
-        _compat.enable_x64(True)
-        assert _compat.x64_enabled()
-        _compat.enable_x64(False)
-        assert not _compat.x64_enabled()
-    finally:
-        _compat.enable_x64(original)
-    assert _compat.x64_enabled() == original
-
-
-def test_helpers_with_jax_unavailable(monkeypatch):
-    """The no-JAX branches of enable_x64/x64_enabled/einsum."""
-    monkeypatch.setattr(_compat, "jax", None)
-    assert not _compat.has_jax()
-    _compat.enable_x64(True)  # must be a silent no-op
-    assert _compat.x64_enabled() is True  # default-true without JAX
-    out = _compat.einsum("i,i->", np.arange(3.0), np.arange(3.0))
-    assert float(out) == pytest.approx(5.0)
-
-
-def test_x64_enabled_env_fallback(monkeypatch):
-    """When jax.config.read raises, x64_enabled falls back to the env var."""
-    class _Cfg:
-        def read(self, key):
-            raise RuntimeError("no such config")
-
-        def update(self, key, value):
-            raise RuntimeError("frozen")
-
-    monkeypatch.setattr(_compat, "jax", types.SimpleNamespace(config=_Cfg()))
+    monkeypatch.setenv("XLA_FLAGS", "--user_set_flag")
     monkeypatch.setenv("JAX_ENABLE_X64", "1")
-    assert _compat.x64_enabled() is True
-    monkeypatch.setenv("JAX_ENABLE_X64", "0")
-    assert _compat.x64_enabled() is False
-    _compat.enable_x64(True)  # update raising is swallowed
+    monkeypatch.setenv("TF_CPP_MIN_LOG_LEVEL", "0")
+    _compat._configure_jax_environment()  # must not raise (jax already imported)
+    assert os.environ["XLA_FLAGS"] == "--user_set_flag"       # setdefault only
+    assert os.environ["TF_CPP_MIN_LOG_LEVEL"] == "0"          # user wins
+    # the x64 default survives (VMEC parity: float64 mandatory)
+    import jax
 
-
-def test_try_import_jax_mocked_module_falls_back_to_numpy(monkeypatch):
-    """A non-module ``jax`` in sys.modules (docs mocking) -> NumPy fallback."""
-    import sys
-
-    class _Mock:  # not a types.ModuleType instance
-        pass
-
-    monkeypatch.setitem(sys.modules, "jax", _Mock())
-    jax_mod, np_mod, jit = _compat._try_import_jax()
-    assert jax_mod is None
-    assert np_mod is np
-    fn = lambda x: x  # noqa: E731
-    assert jit(fn) is fn  # _noop_jit
-
-
-def test_module_level_backend_objects():
-    assert _compat.jax is not None
-    assert _compat.jnp is not None
-    assert callable(_compat.jit)
-    assert hasattr(_compat.tree_util, "register_pytree_node_class")
-    # _try_import_jax is idempotent
-    jax2, jnp2, jit2 = _compat._try_import_jax()
-    assert jax2 is not None and callable(jit2)
+    assert jax.config.read("jax_enable_x64") is True

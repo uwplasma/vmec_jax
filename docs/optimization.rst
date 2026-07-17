@@ -153,6 +153,16 @@ of :doc:`algorithms` for the formulation and cost analysis.
    sol = implicit.run(inp, p0)                        # ImplicitSolution pytree
    grad = jax.grad(lambda p: implicit.run(inp, p).wb)(p0)   # adjoint gradient
 
+:func:`~vmec_jax.core.implicit.run` is the differentiable member of the
+entry-point family (see *Choosing an entry point* in :doc:`quickstart`; the
+non-differentiable Python default is
+:func:`~vmec_jax.core.optimize.solve_equilibrium`).  Besides the scalar
+outputs, the returned solution carries the internally built evaluation
+context as ``sol.runtime`` (a non-pytree convenience attribute), so custom
+objectives can evaluate further ``(state, runtime)`` targets —
+``opt.mean_iota(sol.state, sol.runtime)`` — without rebuilding the runtime
+per evaluation.
+
 Gradient accuracy is validated in CI against central finite differences for
 fixed-boundary degrees of freedom — boundary Fourier coefficients,
 ``phiedge``, and profile parameters (``pres_scale``) — on a 2D (solovev)

@@ -93,29 +93,61 @@ Python:
 .. code-block:: python
 
    from vmec_jax.core.input import VmecInput
-   from vmec_jax.core.multigrid import solve_multigrid
-   from vmec_jax.core.wout import wout_from_state, write_wout
+   from vmec_jax.core import optimize as opt
+   from vmec_jax.core.wout import write_wout
 
    inp = VmecInput.from_file("input.circular_tokamak")
-   result = solve_multigrid(inp)          # full NS_ARRAY ladder
-   print("converged:", result.converged, "in", result.iterations, "iterations")
+   eq = opt.solve_equilibrium(inp)        # full NS_ARRAY ladder -> Equilibrium
+   r = eq.result
+   print("converged:", r.converged, "in", r.iterations, "iterations")
 
-   wout = wout_from_state(
-       inp=inp, state=result.state,
-       fsqr=float(result.fsqr), fsqz=float(result.fsqz), fsql=float(result.fsql),
-       niter=int(result.iterations), converged=bool(result.converged),
-       input_extension="circular_tokamak",
-   )
-   write_wout("wout_circular_tokamak.nc", wout)
+   print("aspect ratio:", float(eq.wout.aspect))   # wout built lazily, cached
+   write_wout("wout_circular_tokamak.nc", eq.wout)
+
+:func:`~vmec_jax.core.optimize.solve_equilibrium` bundles the converged
+state with its evaluation contexts: ``eq.state`` and ``eq.runtime`` feed the
+differentiable scalar targets of :mod:`~vmec_jax.core.optimize` (e.g.
+``opt.aspect_ratio(eq.state, eq.runtime)``), and ``eq.wout`` is the full
+VMEC2000 wout dataset (built on first access — no manual
+``wout_from_state`` plumbing needed).
 
 ``VmecInput`` is a frozen dataclass with VMEC2000 semantics and defaults —
 you can also build one from scratch in Python (all INDATA fields are keyword
 arguments; see :doc:`input_reference`) and round-trip it to INDATA or
 VMEC++-style JSON.
 
+Choosing an entry point
+-----------------------
+
+Four solve entry points share the same numerics; pick by what you need back:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 24 46
+
+   * - entry point
+     - returns
+     - use when
+   * - :func:`vmec_jax.core.optimize.solve_equilibrium`
+     - ``Equilibrium`` (state + runtime + lazy ``.wout``)
+     - **Default for Python work**: analysis, objectives, anything that
+       reads wout tables or the ``(state, runtime)`` scalar targets.
+   * - :func:`vmec_jax.core.multigrid.solve_multigrid`
+     - ``SolveResult`` (state + convergence data)
+     - You only need the converged state / iteration diagnostics — the
+       engine behind the CLI and ``solve_equilibrium``.
+   * - :func:`vmec_jax.core.implicit.run`
+     - ``ImplicitSolution`` (differentiable pytree, carries ``.runtime``)
+     - Gradients: wrap it in ``jax.grad``/``jax.value_and_grad`` — the
+       implicit-adjoint path of :doc:`optimization`.
+   * - :func:`vmec_jax.core.solver.solve`
+     - ``SolveResult`` (one grid stage)
+     - Low-level single-``ns`` building block (no NS_ARRAY ladder);
+       mainly for solver development and tests.
+
 For gradient-based work, wrap the solve with the implicit-differentiation
-driver in :mod:`vmec_jax.core.implicit` and the objectives in
-:mod:`vmec_jax.core.optimize` — see :doc:`optimization`.
+driver in :mod:`vmec_jax.core.implicit` (:func:`~vmec_jax.core.implicit.run`)
+and the objectives in :mod:`vmec_jax.core.optimize` — see :doc:`optimization`.
 
 Reading wout files
 ------------------

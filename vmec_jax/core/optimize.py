@@ -102,11 +102,16 @@ from .statephysics import (
     _field_chain,
     _half_grid,
     _interp_half_grid,
-    _iotas_half,
+    _iotas_half as _iotas_half,  # unused here; kept importable for back compat
     _iotas_half_from_fields,
     _lgradb_grid,
     _lgradb_state_tables,
     _mode_matrix,
+    aspect_ratio,
+    edge_iota,
+    iota_edge,
+    mean_iota,
+    volume,
 )
 from .wout import WoutData, wout_from_state
 
@@ -117,6 +122,7 @@ __all__ = [
     "aspect_ratio",
     "mean_iota",
     "edge_iota",
+    "iota_edge",
     "mirror_ratio",
     "volume",
     "magnetic_well",
@@ -490,58 +496,11 @@ class QuasisymmetryRatioResidual:
 # Practical scalar targets — pure functions of (SpectralState, SolverRuntime)
 # ===========================================================================
 
-
-def _aspect_scalars(state: SpectralState, rt: SolverRuntime):
-    """``aspectratio.f`` scalars ``(Aminor_p, Rmajor_p, aspect, volume_p)``.
-
-    Boundary-surface quadrature identical to the wout writer
-    (:func:`vmec_jax.core.postprocess.aspect_ratio_scalars`), kept in JAX.
-    """
-    geometry, _, _, _, _ = _field_chain(state, rt)
-    sqrts_edge = jnp.asarray(rt.setup.sqrts)[-1]
-    rb = jnp.asarray(geometry.R_even)[-1] + sqrts_edge * jnp.asarray(geometry.R_odd)[-1]
-    zub = (jnp.asarray(geometry.dZ_dtheta_even)[-1]
-           + sqrts_edge * jnp.asarray(geometry.dZ_dtheta_odd)[-1])
-    wint = jnp.asarray(rt.trig.wint)
-    t1 = rb * zub * wint
-    volume_p = 2.0 * jnp.pi ** 2 * jnp.abs(jnp.sum(rb * t1))
-    area = 2.0 * jnp.pi * jnp.abs(jnp.sum(t1))
-    area_safe = jnp.where(area != 0.0, area, 1.0)
-    aminor = jnp.sqrt(area_safe / jnp.pi)
-    rmajor = volume_p / (2.0 * jnp.pi * area_safe)
-    return aminor, rmajor, rmajor / aminor, volume_p
-
-
-def aspect_ratio(state: SpectralState, rt: SolverRuntime) -> Array:
-    """VMEC aspect ratio ``Rmajor_p / Aminor_p`` (``aspectratio.f`` convention).
-
-    ``Aminor_p = sqrt(<cross-section area> / pi)``, ``Rmajor_p =
-    volume_p / (2 pi <area>)`` from the boundary surface quadrature; equals
-    the wout ``aspect`` scalar of the same state.
-    """
-    return _aspect_scalars(state, rt)[2]
-
-
-def volume(state: SpectralState, rt: SolverRuntime) -> Array:
-    """Plasma volume ``volume_p`` [m^3] (wout convention, boundary quadrature)."""
-    return _aspect_scalars(state, rt)[3]
-
-
-def mean_iota(state: SpectralState, rt: SolverRuntime) -> Array:
-    """Mean rotational transform over the half-mesh surfaces (axis excluded).
-
-    Matches the legacy optimization ``mean_iota`` convention
-    (``mean(iotas[1:])``, i.e. the mean of the wout ``iotas`` profile).
-    """
-    iotas = _iotas_half(state, rt)
-    return jnp.mean(iotas[1:])
-
-
-def edge_iota(state: SpectralState, rt: SolverRuntime) -> Array:
-    """Rotational transform at the boundary (wout ``iotaf[-1]`` convention:
-    linear extrapolation of the half mesh, ``1.5 iotas[-1] - 0.5 iotas[-2]``)."""
-    iotas = _iotas_half(state, rt)
-    return 1.5 * iotas[-1] - 0.5 * iotas[-2]
+# The canonical wout-parity scalars — aspect_ratio / volume (aspectratio.f
+# boundary quadrature) and mean_iota / edge_iota (wout iotas / iotaf[-1]
+# conventions) — live in statephysics.py (Item I.7 consolidation) and are
+# re-exported here unchanged; ``iota_edge`` is the naming-flip alias of
+# ``edge_iota`` (implicit.py exposes the mirror alias).
 
 
 def mirror_ratio(state: SpectralState, rt: SolverRuntime, *, s_index: int = -1) -> Array:
@@ -1768,6 +1727,9 @@ def _least_squares_implicit(
     def jacobian_rows_recycled(x: jnp.ndarray, C: jnp.ndarray,
                                U: jnp.ndarray):
         """``jacobian_rows`` with GCROT recycle carry (plan R25.3).
+
+        EXPERIMENTAL / opt-in (``recycle=True``), currently untested in CI;
+        an A/B measurement of this lane is running separately (Item I.8c).
 
         Same ``cfg.adjoint_tol`` / ``cfg.adjoint_maxiter`` budget per solve
         as the default path; the Jacobian matches to solver tolerance *when

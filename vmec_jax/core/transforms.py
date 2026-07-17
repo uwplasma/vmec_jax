@@ -61,15 +61,23 @@ Array = Any
 _DERIVATIVES = ("value", "dtheta", "dzeta")
 
 
-def register_pytree_dataclass(cls, *, meta: tuple[str, ...] = ()):
+def register_pytree_dataclass(cls, *, meta: tuple[str, ...] = (),
+                              drop: tuple[str, ...] = ()):
     """Register a result dataclass as a JAX pytree (``meta`` fields static).
 
     The one shared registration helper of all core result containers (R26a;
     formerly copied in fields/forces/geometry/residuals/setup/solver/implicit).
+
+    ``drop`` fields (which must have defaults) are excluded from the pytree
+    entirely: they do not appear as leaves *or* in the treedef, and are reset
+    to their default on unflatten.  Use for host-side convenience attributes
+    (e.g. :attr:`~vmec_jax.core.implicit.ImplicitSolution.runtime`) that must
+    not change an established pytree structure.
     """
-    names = [f.name for f in dataclass_fields(cls) if f.name not in meta]
+    names = [f.name for f in dataclass_fields(cls)
+             if f.name not in meta and f.name not in drop]
     return jax.tree_util.register_dataclass(
-        cls, data_fields=names, meta_fields=list(meta)
+        cls, data_fields=names, meta_fields=list(meta), drop_fields=list(drop)
     )
 
 

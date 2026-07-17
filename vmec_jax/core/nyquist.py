@@ -54,7 +54,6 @@ from .geometry import HalfMeshJacobian, RealSpaceGeometry
 __all__ = [
     "WoutFieldTables",
     "nyquist_limits",
-    "nyquist_mode_table_from_grid",
     "bsubs_half_mesh",
     "bsubs_full_mesh_for_wrout",
     "apply_bsubv_equif_correction",
@@ -79,18 +78,6 @@ def nyquist_limits(trig: TrigTables) -> tuple[int, int]:
     ntheta2 = int(trig.ntheta2)
     nzeta = int(np.asarray(trig.cosnv).shape[0])
     return max(ntheta2 - 1, 0), max(nzeta // 2, 0)
-
-
-def nyquist_mode_table_from_grid(*, mpol: int, ntor: int, ntheta: int, nzeta: int) -> ModeTable:
-    """Nyquist (m, n) mode table from the angular grid sizes (``fixaray.f``).
-
-    ``mnyq = max(ntheta1/2, mpol - 1)``, ``nnyq = max(nzeta/2, ntor)`` with
-    ``ntheta1 = 2*(ntheta//2)``; ordering matches :func:`mode_table`.
-    """
-    ntheta1 = 2 * (int(ntheta) // 2)
-    mnyq = max(ntheta1 // 2, max(int(mpol) - 1, 0))
-    nnyq = max(int(nzeta) // 2, max(int(ntor), 0))
-    return mode_table(mnyq + 1, nnyq)
 
 
 def _analysis_theta_tables(trig: TrigTables) -> tuple[np.ndarray, np.ndarray]:

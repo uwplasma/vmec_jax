@@ -1,69 +1,33 @@
-"""Small compatibility layer.
+"""JAX environment defaults + persistent compilation-cache policy.
 
-We want minimal dependencies, but also want the code to be importable in environments
-without JAX (e.g. for parsing / numpy-only debugging). If JAX is available, we use it.
+Historically this module was a full JAX/NumPy backend shim (``has_jax`` /
+``asarray`` / ``einsum`` / a no-op ``jit`` and a thread-local numpy mode).
+The core became JAX-only long ago and nothing imported that machinery any
+more, so it was deleted (plan_pre_vmex Item I.8a).  What remains — and is
+actually used — is:
 
-Notes on float64
-----------------
-VMEC historically relies on float64. JAX defaults to float32 unless x64 is enabled.
-To keep results stable and reduce warning spam, we *default* to enabling x64 when
-JAX is imported, unless the user has explicitly set ``JAX_ENABLE_X64``.
+- :func:`_configure_jax_environment` (run at import, i.e. before
+  ``vmec_jax/__init__`` does ``import jax``): environment defaults that must
+  be set before JAX/XLA initializes — float64 (``JAX_ENABLE_X64``, VMEC
+  parity), synchronous CPU dispatch, quiet XLA/PjRt C++ logging, GPU
+  demand allocation, the machine-scoped persistent compilation-cache
+  directory, and the XLA:CPU fast-compile flags;
+- the compilation-cache policy helpers
+  :func:`_default_compilation_cache_dir` / :func:`_cache_machine_fingerprint`
+  / :func:`_configure_compilation_cache`, consumed by ``vmec_jax/__init__``
+  and re-applied by ``core.solver._harden_compilation_cache`` on every solve
+  path (namespace-package shadowing guard).
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Tuple
+from typing import Any
 import hashlib
 from importlib import metadata as importlib_metadata
 import sys
-import threading
-import types
 
 import os
 import platform
-
-import numpy as _np
-
-
-# ---------------------------------------------------------------------------
-# Thread-local NumPy-mode override (for pure-NumPy force hot path).
-# ---------------------------------------------------------------------------
-
-_numpy_mode_local = threading.local()
-
-
-def numpy_mode_enabled() -> bool:
-    """Return True if the current thread is inside a numpy_mode_context."""
-    return getattr(_numpy_mode_local, "active", False)
-
-
-class numpy_mode_context:
-    """Context manager to force pure-NumPy paths in has_jax()-gated code.
-
-    Inside this context, ``has_jax()`` returns False so that all
-    ``jnp.*`` dispatch is replaced by ``np.*`` (via the fallback path).
-    This eliminates all JAX eager-dispatch overhead in the force hot loop.
-    """
-
-    def __enter__(self):
-        _numpy_mode_local.active = True
-        return self
-
-    def __exit__(self, *_):
-        _numpy_mode_local.active = False
-
-
-def _noop_jit(f=None, *args, **_kwargs):
-    """Fallback jit decorator when JAX is unavailable.
-
-    Accepts arbitrary args/kwargs so @partial(jit, static_argnames=...) works
-    in docs builds and numpy-only environments.
-    """
-    if f is None:
-        def _wrap(fn):
-            return fn
-        return _wrap
-    return f
 
 
 def _cache_machine_fingerprint() -> str:
@@ -228,7 +192,14 @@ def _configure_compilation_cache(jax_module: Any, cache_dir: str | None) -> None
         pass
 
 
-def _try_import_jax() -> Tuple[Any, Any, Callable[[Callable[..., Any]], Callable[..., Any]]]:
+def _configure_jax_environment() -> None:
+    """Set JAX/XLA environment defaults, then import + configure JAX.
+
+    Runs once at ``vmec_jax._compat`` import time — before
+    ``vmec_jax/__init__`` (or anything else in the package) imports JAX — so
+    the env-var defaults reliably reach XLA backend initialization.  Every
+    default uses ``setdefault``: an explicit user environment always wins.
+    """
     try:
         # Enable x64 by default for VMEC parity unless the user opted out.
         os.environ.setdefault("JAX_ENABLE_X64", "1")
@@ -300,12 +271,6 @@ def _try_import_jax() -> Tuple[Any, Any, Callable[[Callable[..., Any]], Callable
 
         import jax
 
-        # If Sphinx (or other tooling) has inserted a mock, treat JAX as unavailable.
-        if not isinstance(jax, types.ModuleType):
-            raise ImportError("mocked jax module")
-
-        # Also set via config. This must happen before importing `jax.numpy`
-        # to reliably affect dtype defaults.
         try:
             jax.config.update("jax_enable_x64", os.environ.get("JAX_ENABLE_X64", "0") == "1")
         except Exception:
@@ -322,85 +287,11 @@ def _try_import_jax() -> Tuple[Any, Any, Callable[[Callable[..., Any]], Callable
         # Wire up the compilation cache via jax.config too; the env-var path
         # alone does not cover all JAX/JAXLIB versions and cache thresholds.
         _configure_compilation_cache(jax, _cache_dir)
-
-        import jax.numpy as jnp
-
-        return jax, jnp, jax.jit
     except Exception:
-        # numpy fallback: no autodiff, no jit
-        return None, _np, _noop_jit
-
-
-jax, jnp, jit = _try_import_jax()
-
-try:
-    if jax is None:
-        raise ImportError
-    from jax import tree_util as tree_util  # type: ignore
-except Exception:
-    class _TreeUtilFallback:
-        @staticmethod
-        def register_pytree_node_class(cls):
-            """Register this type as a JAX pytree for JIT and automatic differentiation."""
-            return cls
-
-    tree_util = _TreeUtilFallback()
-
-
-def has_jax() -> bool:
-    """Return whether the active backend is real JAX rather than NumPy fallback."""
-
-    if getattr(_numpy_mode_local, "active", False):
-        return False
-    return jax is not None
-
-
-def enable_x64(enable: bool = True) -> None:
-    """Enable/disable float64 for JAX (no-op if JAX unavailable).
-
-    VMEC historically relies on float64; we therefore enable x64 by default.
-    This helper is useful in scripts/tests to be explicit.
-    """
-    if jax is None:
-        return
-    try:
-        jax.config.update("jax_enable_x64", bool(enable))
-    except Exception:
-        # If JAX is already initialized in a way that disallows toggling,
-        # we silently ignore (the existing dtype policy will apply).
+        # Never block a vmec_jax import over environment tuning (e.g. docs
+        # builds with a mocked JAX): core.solver enforces the hard
+        # requirements (x64, cache hardening) on every solve path anyway.
         pass
 
 
-def x64_enabled() -> bool:
-    """Return the effective JAX x64 setting, defaulting to true without JAX."""
-
-    if jax is None:
-        return True
-    try:
-        return bool(jax.config.read("jax_enable_x64"))
-    except Exception:
-        return bool(os.environ.get("JAX_ENABLE_X64", "0") == "1")
-
-
-def asarray(x: Any, dtype: Any | None = None):
-    """Create an array using the active backend (jax.numpy or numpy)."""
-    return jnp.asarray(x, dtype=dtype)
-
-
-def einsum(expr: str, *operands: Any, precision: Any | None = None):
-    """Backend-aware einsum with high-precision accumulation when available."""
-    if jax is None or getattr(_numpy_mode_local, "active", False):
-        return _np.einsum(expr, *operands)
-    if precision is None:
-        try:
-            from jax import lax
-
-            precision = lax.Precision.HIGHEST
-        except Exception:
-            precision = None
-    if precision is None:
-        return jnp.einsum(expr, *operands)
-    try:
-        return jnp.einsum(expr, *operands, precision=precision)
-    except TypeError:
-        return jnp.einsum(expr, *operands)
+_configure_jax_environment()

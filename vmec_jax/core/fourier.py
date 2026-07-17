@@ -50,7 +50,6 @@ __all__ = [
     "TrigTables",
     "mode_table",
     "trig_tables",
-    "angle_grids",
 ]
 
 
@@ -370,20 +369,3 @@ def trig_tables(res: Resolution) -> TrigTables:
         wint=wint,
     )
 
-
-def angle_grids(res: Resolution) -> tuple[np.ndarray, np.ndarray]:
-    """Return the VMEC internal ``(theta, zeta)`` angle grids.
-
-    VMEC2000: implied by ``read_indata.f`` / ``fixaray.f``.
-
-    - ``lasym=False``: ``theta`` has ``ntheta3 = ntheta2`` points covering
-      ``[0, pi]`` *including* the endpoint pi (reduced symmetric grid).
-    - ``lasym=True``: ``theta`` has ``ntheta3 = ntheta1`` points covering
-      ``[0, 2*pi)`` endpoint-free.
-
-    ``zeta`` always spans one field period ``[0, 2*pi)`` endpoint-free with
-    ``nzeta`` points (the physical toroidal angle is ``zeta / nfp``).
-    """
-    theta = (2.0 * np.pi) * np.arange(res.ntheta3, dtype=float) / float(res.ntheta1)
-    zeta = (2.0 * np.pi) * np.arange(res.nzeta, dtype=float) / float(res.nzeta)
-    return theta, zeta

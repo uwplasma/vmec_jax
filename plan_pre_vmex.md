@@ -298,22 +298,38 @@ small-to-medium and independently PR-able; batch 1-4 as one "robustness" PR.
    **DONE 2026-07-17**: `test_multigrid_gradient_vs_frozen_path_fd`
    (`im.run(multigrid=True)` through a genuine ns 5 -> 11 solovev ladder vs
    `frozen_path_directional_fd`, rel <= 1e-6).
-5. **"Choosing an entry point" docs** (MED): `solver.solve` vs `solve_multigrid`
-   vs `opt.solve_equilibrium` vs `im.run` — no when-to-use-which anywhere;
-   quickstart teaches the manual `wout_from_state` plumbing while
-   `solve_equilibrium` appears in no doc page.
-6. **`ImplicitSolution.runtime`** (MED): callers rebuild
-   `runtime_from_params(make_config(...))` per objective eval (e.g. the
-   single-stage example) duplicating work `im.run` already did; also jit the
-   example objectives (measured 30% win from `jit(grad)`).
-7. **Consolidate duplicate physics helpers** (MED): `optimize.aspect_ratio`
-   (wint quadrature) vs `implicit.aspect_ratio` (shoelace), `volume` vs
-   `plasma_volume`, `edge_iota` vs `iota_edge` — same scalars, different math,
-   will drift; one family in `statephysics.py`, re-exported.
-8. **Dead-code prune** (LOW): `_compat.py` numpy-mode block (~250 lines; only 2
-   cache helpers are used), `fourier.angle_grids`, `nyquist.
-   nyquist_mode_table_from_grid` (exported, zero call sites); test-or-gate the
-   untested `recycle=True` Jacobian lane (optimize.py:1806-1829).
+5. [x] **"Choosing an entry point" docs** (MED) — **DONE 2026-07-17**:
+   quickstart gained a four-row entry-point table
+   (`solve_equilibrium` / `solve_multigrid` / `im.run` / `solver.solve`) and
+   its Python API example now uses `opt.solve_equilibrium(...).wout` instead
+   of the manual 6-arg `wout_from_state` plumbing; README carries the
+   3-line version; optimization.rst cross-links `im.run` into the family.
+6. [x] **`ImplicitSolution.runtime`** (MED) — **DONE 2026-07-17**: `im.run`
+   now attaches its internal `SolverRuntime` as `sol.runtime`, registered as
+   a *dropped* pytree field (`register_pytree_dataclass(..., drop=...)` →
+   JAX `drop_fields`), so the established 13-leaf pytree structure is
+   unchanged (resets to `None` across flatten/unflatten); the single-stage
+   example objective uses it instead of rebuilding cfg+runtime per eval.
+   Jitting the example objectives NOT done here — blocked by the FBD-stack
+   `TracerArrayConversionError` (→ Item F).
+7. [x] **Consolidate duplicate physics helpers** (MED) — **DONE 2026-07-17**
+   (conservative variant): the canonical wout-parity family
+   (`aspect_ratio`/`volume` wint quadrature, `mean_iota`/`edge_iota`) moved
+   to `statephysics.py`, re-exported unchanged by `optimize`; the naming
+   flip is closed with aliases (`optimize.iota_edge`, `implicit.edge_iota`)
+   and cross-referencing docstrings.  `implicit.aspect_ratio` /
+   `plasma_volume` deliberately KEEP their historical quadratures
+   (shoelace / `sum(vp)`): `ImplicitSolution.aspect`/`.volume` and the
+   FD-cached solovev gradient table in `test_implicit_grad.py` pin those
+   exact values (the disk cache keys do not version the math); both
+   docstrings document the two conventions (agree to quadrature resolution).
+8. [x] **Dead-code prune** (LOW) — **DONE 2026-07-17**: `_compat.py` numpy-mode
+   block deleted (kept: the cache-policy helpers + the import-time
+   `_configure_jax_environment` env defaults, which were load-bearing side
+   effects of the old `_try_import_jax`); `fourier.angle_grids` and
+   `nyquist.nyquist_mode_table_from_grid` deleted (zero call sites);
+   the `recycle=True` Jacobian lane kept (A/B measurement in flight) with an
+   explicit EXPERIMENTAL/opt-in docstring note.
 9. **Near-axis seeding** (decide): the README/docs claimed pyQSC/pyQIC seeding
    with ZERO implementing code — claim struck 2026-07-16. Either implement it
    properly (near-axis surface → VmecInput; ESSOS has near-axis fields to

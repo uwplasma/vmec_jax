@@ -147,7 +147,7 @@ __all__ = [
     "make_config", "solve_implicit", "solve_implicit_with_aux",
     "implicit_state_pullback_multi_rhs", "run",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
-    "iota_axis", "iota_edge", "residual_fn", "adjoint_matvec",
+    "iota_axis", "iota_edge", "edge_iota", "residual_fn", "adjoint_matvec",
     "frozen_path_directional_fd",
 ]
 
@@ -1017,7 +1017,15 @@ def mhd_energy(state: SpectralState, rt: SolverRuntime) -> tuple[Array, Array]:
 
 
 def plasma_volume(state: SpectralState, rt: SolverRuntime) -> Array:
-    """Plasma volume ``volume_p`` [m^3] (``= (2 pi)^2 * hs * sum vp``)."""
+    """Plasma volume ``volume_p`` [m^3] (``= (2 pi)^2 * hs * sum vp``).
+
+    Quadrature note (Item I.7): this is the implicit module's historical
+    differential-volume sum, pinned by :class:`ImplicitSolution.volume` and
+    the FD-cached gradient tables of ``tests/test_implicit_grad.py``.  The
+    canonical wout-parity boundary quadrature of the same scalar is
+    :func:`vmec_jax.core.statephysics.volume` (re-exported as
+    ``optimize.volume``); the two agree to quadrature resolution.
+    """
     _, _, _, _, energies = _field_chain(state, rt)
     return (2.0 * jnp.pi) ** 2 * jnp.abs(energies.volume)
 
@@ -1039,6 +1047,15 @@ def aspect_ratio(state: SpectralState, rt: SolverRuntime,
     ``Aminor_p = sqrt(<cross-section area>_zeta / pi)`` with the area from
     the shoelace integral ``-oint Z dR/dtheta dtheta`` on the boundary, and
     ``Rmajor_p = volume_p / (2 pi^2 Aminor_p^2)`` (``aspectratio.f``).
+
+    Quadrature note (Item I.7): this is the implicit module's historical
+    shoelace-on-a-fresh-grid variant, pinned by
+    :class:`ImplicitSolution.aspect` and the FD-cached solovev gradient table
+    of ``tests/test_implicit_grad.py``.  The canonical wout-parity
+    ``aspectratio.f`` boundary quadrature (internal-grid ``wint`` weights,
+    equal to the wout ``aspect`` scalar) is
+    :func:`vmec_jax.core.statephysics.aspect_ratio` (re-exported as
+    ``optimize.aspect_ratio``); the two agree to quadrature resolution.
     """
     rmnc, rmns, zmnc, zmns = _edge_physical(state, rt)
     m = jnp.asarray(np.asarray(rt.modes.m, dtype=float))
@@ -1085,7 +1102,19 @@ def iota_axis(state: SpectralState, rt: SolverRuntime) -> Array:
 
 
 def iota_edge(state: SpectralState, rt: SolverRuntime) -> Array:
+    """Boundary rotational transform ``iotaf[-1]`` (differentiable).
+
+    Naming note (Item I.7): the same physical scalar as
+    :func:`vmec_jax.core.statephysics.edge_iota` (``optimize.edge_iota``) —
+    identical for ``ncurr = 1``; at ``ncurr = 0`` this evaluates the
+    prescribed full-mesh ``iotaf`` endpoint while the wout-parity version
+    extrapolates the half-mesh ``iotas``.  ``edge_iota`` is provided as an
+    alias here so either spelling works in either module.
+    """
     return iota_profile(state, rt)[-1]
+
+
+edge_iota = iota_edge   # naming-flip alias (see the iota_edge docstring)
 
 
 # ---------------------------------------------------------------------------
@@ -1095,7 +1124,21 @@ def iota_edge(state: SpectralState, rt: SolverRuntime) -> Array:
 
 @dataclass(frozen=True)
 class ImplicitSolution:
-    """Differentiable outputs of :func:`run` (a JAX pytree)."""
+    """Differentiable outputs of :func:`run` (a JAX pytree).
+
+    ``runtime`` is the :class:`~vmec_jax.core.solver.SolverRuntime` that
+    :func:`run` built internally (``runtime_from_params(params, cfg)``), so
+    objective callers can evaluate further ``(state, runtime)`` scalar
+    targets without rebuilding it per evaluation.  It is deliberately **not**
+    part of the pytree (registered as a dropped field): the solution's
+    established pytree structure — six state leaves plus seven scalars — is
+    unchanged, and a solution that round-trips through
+    ``flatten``/``unflatten`` (e.g. across a ``jax.jit`` boundary) comes back
+    with ``runtime = None``.  Inside a ``jax.grad``/``jax.value_and_grad``
+    trace of :func:`run` the attribute is available and fully traced, so
+    gradients flow through ``runtime``-consuming objectives exactly as
+    through an explicit ``runtime_from_params`` rebuild.
+    """
 
     state: SpectralState
     wb: Array
@@ -1105,9 +1148,10 @@ class ImplicitSolution:
     aspect: Array
     iota_axis: Array
     iota_edge: Array
+    runtime: SolverRuntime | None = None
 
 
-_register(ImplicitSolution)
+_register(ImplicitSolution, drop=("runtime",))
 
 
 def run(
@@ -1137,6 +1181,13 @@ def run(
     get ``wmhd = nan`` (as in VMEC).  All outputs are differentiable in
     ``params`` (state via the implicit adjoint; scalars additionally through
     their explicit parameter dependence).
+
+    The returned solution also carries the internally built
+    :class:`~vmec_jax.core.solver.SolverRuntime` as ``sol.runtime`` (a
+    non-pytree convenience attribute, see :class:`ImplicitSolution`), so
+    objective code can evaluate additional ``(state, runtime)`` targets —
+    e.g. ``optimize.mean_iota(sol.state, sol.runtime)`` — without repeating
+    ``runtime_from_params(params, make_config(...))`` per evaluation.
     """
     inp = VmecInput.from_file(source) if isinstance(source, str) else source
     cfg = make_config(
@@ -1156,6 +1207,7 @@ def run(
         state=state, wb=wb, wp=wp, wmhd=wmhd, volume=vol,
         aspect=aspect_ratio(state, rt),
         iota_axis=iota_axis(state, rt), iota_edge=iota_edge(state, rt),
+        runtime=rt,
     )
 
 
