@@ -1,0 +1,44 @@
+{
+ "backend": "cpu",
+ "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+ "cases": {
+  "fixed_ns201": {
+   "cold_s": 8.686668583075516,
+   "warm_s": 3.384206874994561,
+   "iters": 1275,
+   "ms_per_iter": 2.6542799019565186,
+   "converged": true,
+   "peak_rss_gb": 0.84492288,
+   "rss_delta_gb": 0.7227637760000001
+  },
+  "multigrid_ns201": {
+   "cold_s": 11.294581625028513,
+   "warm_s": 3.292103165993467,
+   "iters": 964,
+   "converged": true,
+   "peak_rss_gb": 1.348386816,
+   "rss_delta_gb": 0.5034639360000001
+  },
+  "free_boundary": {
+   "cold_s": 6.702511999988928,
+   "warm_s": 1.5714469579979777,
+   "iters": 574,
+   "ms_per_iter": 2.737712470379752,
+   "converged": true,
+   "peak_rss_gb": 2.1692416,
+   "rss_delta_gb": 0.8208547839999998
+  },
+  "implicit_grad": {
+   "cold_s": 16.356775457970798,
+   "warm_s": 5.159058583085425,
+   "peak_rss_gb": 2.755821568,
+   "rss_delta_gb": 0.5865799680000001
+  },
+  "opt_step": {
+   "cold_s": 54.33216150000226,
+   "warm_s": 40.632689042016864,
+   "peak_rss_gb": 2.845589504,
+   "rss_delta_gb": 0.08976793599999988
+  }
+ }
+}

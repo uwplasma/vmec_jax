@@ -134,10 +134,10 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
 `python benchmarks/run_baseline.py`):
 
 - **Warm** — kernels already compiled; the number that matters inside an
-  optimization loop or scan. Faster than VMEC2000 on most decks (typically
-  1.3–2.2×, up to ~4× on small ones); the only exceptions are the
-  free-boundary rows, which now converge to parity but whose NESTOR vacuum
-  solve is not yet speed-tuned. Ratios measured on a shared CPU are
+  optimization loop or scan. Faster than VMEC2000 on **every** benchmark row
+  (1.3–2.6× on typical decks, up to ~7× on small ones) — including the
+  free-boundary rows (1.3–1.5×) since the NESTOR iteration loop was fused
+  into jitted multi-iteration lanes. Ratios measured on a shared CPU are
   conservative lower bounds.
 - **Cold** — a fresh CLI process pays a one-time 5–25 s JAX/XLA compile, so a
   single run is slower than Fortran. Executables cache per solver structure, so

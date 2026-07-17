@@ -246,8 +246,11 @@ maxiter 300) dominates. Priorities, in measured-value order:
    Arnoldi cycles, so the cost is the FIXED matvec work (each matvec = one
    residual linearization), not the convergence criterion. Remaining levers,
    in order: (a) cheaper matvecs (jit/donate the residual linearization),
-   (b) fewer matvecs via cross-eval warm-starting/recycling (GCROT recycle —
-   measure, default it if it wins), (c) the shipped multi-RHS batching for
+   (b) ~~fewer matvecs via cross-eval recycling~~ **RULED OUT (measured
+   2026-07-17): GCROT recycle=True is 8.4× SLOWER** (539 s vs 64.5 s at
+   identical nfev=32 on the minimal-seed max_mode-2 campaign) — the k
+   re-orthonormalization matvecs per solve swamp any deflation benefit at
+   these sizes; the lane stays opt-in/experimental, (c) the shipped multi-RHS batching for
    multi-objective campaigns.
 2. **NESTOR loop batching** (freeboundary.py:917-973): per-iteration host
    dispatch with several device→host syncs + per-iteration runtime rebuilds; run
@@ -256,8 +259,12 @@ maxiter 300) dominates. Priorities, in measured-value order:
    already fused).
 3. **Document `jax.jit(jax.grad(...))`** — measured 30% on the implicit gradient;
    docs/examples currently don't say it.
-4. Re-run `benchmarks/run_baseline.py` + refresh the performance figure/claims;
-   commit a `profile.json` artifact so "last measured" exists in-tree.
+4. ~~Re-run baselines~~ **DONE (2026-07-17)**: `baseline.json` refreshed —
+   with the F.2 NESTOR lanes, vmec_jax warm now beats VMEC2000 on **every**
+   row (1.26–6.9×), including both free-boundary rows (1.45×/1.28×; the
+   README's old free-boundary caveat is retired). `benchmarks/profile.json`
+   committed as the in-tree "last measured" artifact (free-boundary warm
+   1.57 s / 574 iters / 2.7 ms-per-iter).
 
 ## 8. Item G — Parallelization (#41)
 
