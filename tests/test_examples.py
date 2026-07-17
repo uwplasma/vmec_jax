@@ -203,6 +203,34 @@ def test_qi_optimization_example(tmp_path):
     assert (outdir / "wout_QI_optimized.nc").exists()
 
 
+@pytest.mark.full  # nightly: two showcase campaigns (implicit + FD lane) at smoke budget
+def test_objectives_showcase(tmp_path):
+    """objectives_showcase.py covers both gradient lanes under the CI budget.
+
+    ``--only lgradb,dmerc`` is enough coverage: ``lgradb`` exercises the
+    traceable ``l_grad_b_state`` soft-min term through ``jac="implicit"``,
+    ``dmerc`` the wout-lane finite-difference campaign (beta calibration +
+    Mercier hinge).  Asserts clean exit + the promised deck/metrics outputs.
+    """
+    import json
+
+    script = EXAMPLES / "optimization" / "objectives_showcase.py"
+    out = _run_example(script, tmp_path, timeout=2400,
+                       args=("--only", "lgradb,dmerc"))
+    _assert_cost_decreased(out, "objectives-showcase")
+    for name in ("lgradb", "dmerc"):
+        outdir = tmp_path / "output_objectives_showcase" / name
+        assert (outdir / f"input.{name}").exists()
+        mpath = outdir / "metrics.json"
+        assert mpath.exists()
+        m = json.loads(mpath.read_text())
+        assert m["campaign"] == name
+        for stage in ("seed", "final"):
+            assert np.isfinite(m[stage]["metric"]), f"{name}/{stage}: metric"
+            assert np.isfinite(m[stage]["qs_total"]), f"{name}/{stage}: QS"
+    assert "wout-engine objective" in out  # the honest-FD-cost printout
+
+
 def test_extra_terms_work_uncommented():
     """The commented-out example terms run as objectives when uncommented."""
     import jax

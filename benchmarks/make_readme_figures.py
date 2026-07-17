@@ -33,10 +33,17 @@ Produces (into ``docs/_static/figures/``):
   the outputs of ``examples/single_stage_vs_two_stage.py`` from
   ``output_single_stage_vs_two_stage/{vacuum,beta}/``; that experiment is
   multi-hour at full budget, so it is NEVER auto-run here — run it first.
+- ``readme_objectives.png``           — the objectives showcase: one dumbbell
+  row per refinement campaign off the precise-QA deck (L∇B, magnetic well,
+  iota, aspect, finite-beta Mercier), seed -> final for each campaign's own
+  metric with the QS/aspect/iota drift annotated.  Reads the ``metrics.json``
+  files of ``examples/optimization/objectives_showcase.py`` from
+  ``output_objectives_showcase/<campaign>/``; NEVER auto-run here — run the
+  example first.
 
 Usage:
     python benchmarks/make_readme_figures.py
-        [--only runtime,convergence,optimization,qi,precond,showcase,single_stage]
+        [--only runtime,convergence,optimization,qi,precond,showcase,single_stage,objectives]
         [--outdir docs/_static/figures]
 
 Figures are written uncompressed; compress before committing:
@@ -1081,11 +1088,105 @@ def make_single_stage_figure(out: Path) -> None:
     print("wrote", out)
 
 
+# --------------------------------------------------------------------------
+# 8. Objectives showcase: one dumbbell row per refinement campaign off the
+#    precise-QA deck.  Reads output_objectives_showcase/<name>/metrics.json
+#    written by examples/optimization/objectives_showcase.py (each records the
+#    campaign's own metric plus the held QS/aspect/iota, seed and final).
+#    The campaigns are minutes-to-hours at full budget, so NEVER auto-run.
+# --------------------------------------------------------------------------
+
+OBJECTIVES_OUT = REPO / "output_objectives_showcase"
+OBJECTIVES_CAMPAIGNS = [
+    ("lgradb", "raise min $L_{\\nabla B}$ (coil proxy)", "implicit adjoint"),
+    ("well", "deepen the magnetic well", "implicit adjoint"),
+    ("iota_up", "raise mean iota", "implicit adjoint"),
+    ("aspect_down", "lower the aspect ratio", "implicit adjoint"),
+    ("dmerc", "Mercier $D_{Merc}$ at finite $\\beta$", "finite differences"),
+]
+
+
+def make_objectives_figure(out: Path) -> None:
+    rows = []
+    for name, label, lane in OBJECTIVES_CAMPAIGNS:
+        path = OBJECTIVES_OUT / name / "metrics.json"
+        if not path.exists():
+            print(f"skipping objectives figure: missing {path} — run "
+                  "examples/optimization/objectives_showcase.py first")
+            return
+        rows.append((label, lane, json.loads(path.read_text())))
+
+    fig, ax = plt.subplots(figsize=(9.8, 0.98 * len(rows) + 1.7), dpi=150)
+    fig.subplots_adjust(left=0.235, right=0.665, top=0.80, bottom=0.06)
+    ys = np.arange(len(rows))[::-1].astype(float)
+    tr = ax.get_yaxis_transform()  # x in axes fraction, y in data
+
+    for y, (label, lane, m) in zip(ys, rows):
+        fmt = m.get("fmt", "{:.3g}")
+        seed, final = m["seed"], m["final"]
+        vals = (seed["metric"], final["metric"], m["target"])
+        lo, hi = min(vals), max(vals)
+        span = (hi - lo) or max(abs(hi), 1.0)
+        pad = 0.18 * span
+        pos = lambda v: (v - lo + pad) / (span + 2.0 * pad)  # noqa: E731
+        xs, xf, xt = (pos(v) for v in vals)
+
+        ax.plot([xt], [y], marker="|", ms=15, mew=1.4, color=BASELINE, zorder=1)
+        ax.annotate("target " + fmt.format(m["target"]), xy=(xt, y),
+                    xytext=(0, -13), textcoords="offset points", ha="center",
+                    fontsize=7, color=MUTED)
+        ax.annotate("", xy=(xf, y), xytext=(xs, y),
+                    arrowprops=dict(arrowstyle="-|>", color=BLUE, lw=1.7,
+                                    shrinkA=5, shrinkB=2), zorder=2)
+        ax.plot([xs], [y], "o", ms=7, color=BASELINE, mec=SURFACE, zorder=3)
+        ax.plot([xf], [y], "o", ms=8, color=BLUE, mec=SURFACE, zorder=3)
+        # nearly-unmoved metrics: split the value labels left/right of the
+        # dots so they never overprint each other
+        near = abs(xf - xs) < 0.12
+        ax.annotate(fmt.format(seed["metric"]), xy=(xs, y),
+                    xytext=(-7 if near else 0, 9), textcoords="offset points",
+                    ha="right" if near else "center", fontsize=8, color=INK2)
+        ax.annotate(fmt.format(final["metric"]), xy=(xf, y),
+                    xytext=(7 if near else 0, 9), textcoords="offset points",
+                    ha="left" if near else "center", fontsize=8.5,
+                    color=BLUE, fontweight="bold")
+        arrow = " $\\rightarrow$ "  # mathtext: the plain glyph is missing in
+        # the mixed math/text layout of the second drift line
+        drift = (f"QS {seed['qs_total']:.0e}{arrow}{final['qs_total']:.0e}\n"
+                 f"A {seed['aspect']:.2f}{arrow}{final['aspect']:.2f}   "
+                 f"$\\iota$ {seed['mean_iota']:.3f}{arrow}{final['mean_iota']:.3f}")
+        ax.text(1.05, y, drift, transform=tr, fontsize=7.5, color=INK2,
+                va="center", ha="left", linespacing=1.5)
+
+    ax.set_yticks(ys)
+    ax.set_yticklabels([f"{label}\n" for label, _lane, _m in rows], fontsize=9.5)
+    for y, (_label, lane, m) in zip(ys, rows):
+        ax.text(-0.02, y - 0.18, f"{lane} · {m['label']}", transform=tr,
+                fontsize=7, color=MUTED, va="center", ha="right")
+    ax.set_ylim(-0.75, len(rows) - 0.25)
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xticks([])
+    for s in ("top", "right", "left", "bottom"):
+        ax.spines[s].set_visible(False)
+    ax.tick_params(axis="y", length=0)
+    ax.set_title("Beyond quasisymmetry: one new objective per campaign, QS held",
+                 loc="left", pad=44, fontsize=12.5, color=INK)
+    ax.text(0.0, 1.035, "precise-QA seed (grey) $\\rightarrow$ after one short "
+            "campaign (blue); the held metrics on the right",
+            transform=ax.transAxes, fontsize=8.5, color=INK2, va="bottom")
+    ax.text(1.05, len(rows) - 0.32, "held-metric drift", transform=tr,
+            fontsize=7.5, color=MUTED, va="bottom", ha="left")
+    fig.savefig(out, dpi=150)
+    _compress_png(out)
+    plt.close(fig)
+    print("wrote", out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--only",
-        default="runtime,convergence,optimization,qi,precond,showcase,single_stage")
+        default="runtime,convergence,optimization,qi,precond,showcase,single_stage,objectives")
     ap.add_argument("--outdir", default=str(REPO / "docs" / "_static" / "figures"))
     args = ap.parse_args()
     outdir = Path(args.outdir)
@@ -1106,6 +1207,8 @@ def main() -> None:
         make_showcase_figure(outdir / "readme_equilibrium_showcase.png")
     if "single_stage" in which:
         make_single_stage_figure(outdir / "readme_single_stage.png")
+    if "objectives" in which:
+        make_objectives_figure(outdir / "readme_objectives.png")
 
 
 if __name__ == "__main__":
