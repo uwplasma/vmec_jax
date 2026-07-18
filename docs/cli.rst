@@ -13,14 +13,15 @@ Usage
 
    vmex input.X                — solve (INDATA or VMEC++ JSON), write wout_X.nc
    vmex --plot wout_*.nc       — diagnostic plots from a WOUT file
+   vmex --plot mout_*.nc       — straight-axis mirror diagnostics
    vmex --booz wout_*.nc       — run booz_xform_jax, write boozmn_*.nc
    vmex --plot boozmn_*.nc     — Boozer contour/spectrum plots
    vmex --doctor               — installation and JAX backend diagnostics
    vmex --test                 — run and plot the bundled quick-start case
 
 The positional argument is a VMEC input file (``input.*`` namelist or a
-VMEC++-style ``.json`` deck), or a ``wout_*.nc``/``boozmn_*.nc`` file for
-``--plot``/``--booz``.
+VMEC++-style ``.json`` deck), or a ``wout_*.nc``/``mout_*.nc``/``boozmn_*.nc``
+file for ``--plot``/``--booz``.
 
 Options
 -------
@@ -33,8 +34,9 @@ Options
      - Meaning
    * - ``--plot [PATH]``
      - Generate plots. With a ``wout_*.nc`` file, plot WOUT diagnostics; with
-       a ``boozmn_*.nc`` file, plot Boozer diagnostics; with an input file,
-       solve first and plot the resulting WOUT.
+       a ``mout_*.nc`` file, plot horizontal straight-axis mirror diagnostics;
+       with a ``boozmn_*.nc`` file, plot Boozer diagnostics; with an input
+       file, solve first and plot the resulting WOUT.
    * - ``--booz``
      - Run ``booz_xform_jax`` after solving, or directly from a ``wout_*.nc``
        file, and write ``boozmn_*.nc``.

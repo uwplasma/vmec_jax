@@ -91,6 +91,7 @@ Documentation
       algorithms
       confinement
       architecture
+      mirror_geometry
 
    .. toctree::
       :maxdepth: 1

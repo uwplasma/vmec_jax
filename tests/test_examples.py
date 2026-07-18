@@ -145,6 +145,48 @@ def test_free_boundary_beta_scan(tmp_path):
     assert len(betas) == 3 and betas[-1] > 1e-2, f"beta should reach finite values: {betas}"
 
 
+@pytest.mark.full
+def test_mirror_fixed_boundary_nonaxisymmetric_example(tmp_path):
+    import json
+    _run_example(
+        EXAMPLES / "mirror_fixed_boundary_nonaxisymmetric.py",
+        tmp_path,
+        timeout=1200,
+    )
+    outdir = tmp_path / "results" / "mirror_fixed_boundary_nonaxisymmetric"
+    summary = json.loads((outdir / "summary.json").read_text())
+    assert summary["rotating_ellipse"]["status"] == "supported"
+    assert summary["rotating_ellipse"]["variational_max"] < 1.0e-12
+    assert summary["rotating_ellipse"]["strong_force_normalized_rms"] < 5.0e-2
+    assert summary["rotating_ellipse"]["boundary_gradient_relative_error"] < 1.0e-4
+    assert summary["rotating_ellipse"]["adjoint_relative_residual"] < 1.0e-8
+    assert summary["straight_field_line"]["status"].startswith("not-supported")
+    assert summary["straight_field_line"]["variational_max"] < 1.0e-12
+    assert summary["straight_field_line"]["final_linear_residual"] < 1.0e-8
+    assert summary["straight_field_line"]["linear_iterations"] < 1000
+    assert summary["straight_field_line"]["strong_force_normalized_rms"] > 0.5
+    assert summary["straight_field_line"]["axial_flux_derivative_min"] > 4.49e-4
+    for case in summary:
+        for suffix in ("3d", "cross_sections", "modB", "summary"):
+            assert (outdir / f"{case}_{suffix}.png").stat().st_size > 10_000
+
+
+@pytest.mark.full
+def test_mirror_free_boundary_beta_scan_example(tmp_path):
+    import json
+    pytest.importorskip("essos")
+    _run_example(EXAMPLES / "mirror_free_boundary_beta_scan.py", tmp_path, timeout=2400)
+    outdir = tmp_path / "results" / "mirror_free_boundary_beta_scan"
+    summary = json.loads((outdir / "beta_scan_summary.json").read_text())
+    assert [row["requested_beta"] for row in summary] == [0.0, 0.01, 0.03, 0.10, 0.25, 0.50]
+    assert [row["supported_lane"] for row in summary] == [True, True, True, True, False, False]
+    assert summary[-1]["center_radius"] > summary[0]["center_radius"]
+    assert summary[-1]["center_axis_field"] < summary[0]["center_axis_field"]
+    for beta in ("000p0", "010p0", "050p0"):
+        for suffix in ("3d", "cross_sections", "modB", "summary"):
+            assert (outdir / f"mirror_beta_{beta}pct_{suffix}.png").stat().st_size > 10_000
+
+
 @pytest.mark.full  # nightly: free-bdy NESTOR solve with direct-coil Biot-Savart (~30s)
 def test_free_boundary_essos_coils(tmp_path):
     pytest.importorskip("essos")

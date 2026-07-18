@@ -1,0 +1,48 @@
+{
+  "schema": "vmex.benchmark.mirror/1",
+  "model": "free-open-axisymmetric",
+  "status": "supported-through-beta-0.10",
+  "provenance": {
+    "measurement_commit": "d4f56dae0be0da9e5d245bdf66e2ccee5164ef55",
+    "hardware": "NVIDIA RTX A4000",
+    "external_field": "two concentric circular loops supplied by ESSOS",
+    "basis": "cubic B-spline in xi, m=0 plasma, panel exterior",
+    "ftol": 1e-12
+  },
+  "case": {
+    "betas": [0.0, 0.01, 0.03, 0.10, 0.25, 0.50],
+    "supported_beta_max": 0.10,
+    "coil_radius_m": 0.9,
+    "coil_centers_z_m": [-1.0, 1.0],
+    "current_A_each": 200000.0,
+    "cut_planes_z_m": [-0.8, 0.8],
+    "initial_center_radius_m": 0.25,
+    "initialization": "nested finite-radius vacuum-flux surfaces",
+    "exterior_order": 6,
+    "spectral_side_density": true
+  },
+  "refinement": [
+    {"beta": 0.0, "strong": [0.0421244, 0.00341100, 0.00208290], "bulk_fine": 0.00110282, "observable_change_max": 1.46e-6, "passed": true},
+    {"beta": 0.01, "strong": [0.0400994, 0.00537337, 0.00303422], "bulk_fine": 0.00090507, "observable_change_max": 1.28e-4, "passed": true},
+    {"beta": 0.03, "strong": [0.0362556, 0.00955656, 0.00540964], "bulk_fine": 0.00061240, "observable_change_max": 3.91e-4, "passed": true},
+    {"beta": 0.10, "strong": [0.0269987, 0.0245537, 0.0143612], "bulk_fine": 0.00162490, "observable_change_max": 0.001376, "passed": true},
+    {"beta": 0.25, "strong": [0.0469394, 0.0568261, 0.0336591], "bulk_fine": 0.00560566, "observable_change_max": 0.003928, "passed": false},
+    {"beta": 0.50, "strong": [0.129758, 0.111046, 0.0668759], "bulk_fine": 0.0149580, "observable_change_max": 0.010245, "passed": false}
+  ],
+  "beta_50_research_observables": {
+    "center_radius_relative_change": 0.0773406,
+    "center_field_relative_change": -0.237313
+  },
+  "implicit_derivative": {
+    "relative_error": 1.08e-10,
+    "adjoint_relative_residual": 1.37e-9,
+    "reconverged_finite_difference": true
+  },
+  "gates": {
+    "supported_sequence_ftol": true,
+    "supported_sequence_force": true,
+    "supported_sequence_observables": true,
+    "beta_25_force": false,
+    "beta_50_force_and_observables": false
+  }
+}

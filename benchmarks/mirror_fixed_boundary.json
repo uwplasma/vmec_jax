@@ -1,0 +1,58 @@
+{
+  "schema": "vmex.benchmark.mirror/1",
+  "model": "fixed-open",
+  "status": "supported",
+  "provenance": {
+    "measurement_commit": "e02dcea7",
+    "hardware": "Apple CPU",
+    "basis": "cubic B-spline in xi, Fourier in theta, staggered radial mesh",
+    "ftol": 1e-12
+  },
+  "axisymmetric_refinement": [
+    {"ns": 5, "nxi": 9, "elements": 4, "wall_s": 2.6954, "variational": 7.78e-16, "weak": 7.39e-16, "strong": 0.0434898, "field_relative_rms": 0.00145105},
+    {"ns": 7, "nxi": 13, "elements": 6, "wall_s": 3.3244, "variational": 1.22e-15, "weak": 1.21e-15, "strong": 0.0347410, "field_relative_rms": 0.00106525},
+    {"ns": 9, "nxi": 17, "elements": 8, "wall_s": 4.1390, "variational": 9.93e-16, "weak": 9.68e-16, "strong": 0.0287343, "field_relative_rms": 0.00070249}
+  ],
+  "nonaxisymmetric_corrected_cut_audit": {
+    "rotating_ellipse": {
+      "status": "release-candidate",
+      "ns": 7,
+      "mpol": 6,
+      "elements": 6,
+      "variational": 1.71875e-16,
+      "weak": 1.69407e-16,
+      "strong": 0.0417842,
+      "bulk_strong": 0.0189702,
+      "end_collar_strong": 0.0731512,
+      "divergence": 6.60646e-15,
+      "linear_iterations": 345
+    },
+    "straight_field_line": {
+      "status": "validation-only",
+      "ns": 7,
+      "mpol": 6,
+      "elements": 6,
+      "variational": 3.10087e-16,
+      "weak": 3.10738e-16,
+      "strong": 1.08936,
+      "bulk_strong": 0.174518,
+      "end_collar_strong": 2.27187,
+      "divergence": 7.21735e-15,
+      "linear_iterations": 383,
+      "note": "The pre-corrected-cut refinement record was removed because it no longer reproduces the current boundary condition."
+    }
+  },
+  "derivatives": {
+    "rotating_ellipse_relative_error": 5.00947e-10,
+    "rotating_ellipse_linear_residual": 1.79965e-11
+  },
+  "gates": {
+    "axisymmetric_refinement": true,
+    "rotating_ellipse_ftol": true,
+    "rotating_ellipse_independent_weak_force": true,
+    "rotating_ellipse_strong_force": true,
+    "field_refines": true,
+    "rotating_ellipse_implicit_derivative": true,
+    "straight_field_line_independent_strong_force": false
+  }
+}

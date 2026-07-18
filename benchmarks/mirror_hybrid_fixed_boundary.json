@@ -1,0 +1,146 @@
+{
+  "schema": "vmex.benchmark.mirror/1",
+  "model": "fixed-closed-stellarator-mirror-hybrid",
+  "status": "active-validation",
+  "provenance": {
+    "measurement_commit": "56d7c4b7",
+    "hardware": "Apple CPU and NVIDIA RTX A4000",
+    "basis": "periodic cubic B-spline axis and LCFS, Fourier poloidal basis",
+    "ftol": 1e-12
+  },
+  "same_geometry": {
+    "controls": [16, 32, 64],
+    "quadrature_order_3_strong": [0.0527702, 0.1075621, 0.0236528],
+    "quadrature_order_4_strong": [0.0527961, 0.1071398, 0.0235340],
+    "finest_ns9_mpol7_strong": {"q3": 0.0233920, "q4": 0.0232650},
+    "maximum_exact_transfer_error": 2e-13
+  },
+  "h1_20260716": {
+    "measurement_commit": "2e77f521",
+    "hardware": "NVIDIA RTX A4000 GPU 1",
+    "resolution": {"ns": 5, "mpol": 3, "quadrature_order": 3},
+    "controls": [16, 32, 64],
+    "wall_seconds": [70.8183, 83.7888, 78.5301],
+    "iterations": [479, 479, 454],
+    "variational_max": [4.78193e-14, 6.59660e-14, 5.30053e-14],
+    "strong_force": [0.573280, 0.355589, 0.332521],
+    "normalized_divergence": [1.54404e-14, 3.99360e-14, 8.31291e-14],
+    "volume": [12.8249023, 12.8249665, 12.8249557],
+    "monotone_longitudinal_force": true,
+    "strong_force_below_0.05": false,
+    "radial_poloidal": [
+      {
+        "ns": 5,
+        "mpol": 3,
+        "variables": 4480,
+        "wall_seconds": 78.5301,
+        "iterations": 454,
+        "variational_max": 5.30053e-14,
+        "strong_force": 0.332521,
+        "normalized_divergence": 8.31291e-14,
+        "volume": 12.8249557,
+        "status": "completed"
+      },
+      {
+        "ns": 7,
+        "mpol": 4,
+        "variables": 8064,
+        "wall_seconds": 437.388,
+        "iterations": 26,
+        "variational_max": 3.89677e-16,
+        "strong_force": 0.227128,
+        "axis_and_first_row_strong_force": 0.444301,
+        "normalized_divergence": 8.30680e-14,
+        "energy": 448878.27,
+        "volume": 12.8254034,
+        "status": "completed"
+      },
+      {
+        "ns": 9,
+        "mpol": 5,
+        "variables": 12672,
+        "wall_seconds_lower_bound": 1800.0,
+        "peak_rss_gib": 2.11,
+        "gpu_memory_gib": 0.26,
+        "status": "terminated-at-resource-gate"
+      }
+    ],
+    "monotone_completed_radial_poloidal_force": true,
+    "radial_poloidal_strong_force_below_0.05": false,
+    "radial_poloidal_resource_limit": false,
+    "beta_zero_ablation": {
+      "resolution": {"ns": 5, "mpol": 3, "controls": 32},
+      "rotating_ellipse_finite_current": 0.429726,
+      "rotating_ellipse_current_free": 0.423698,
+      "fixed_ellipse_current_free": 0.164067,
+      "circular_section_current_free": 0.157547,
+      "circular_axis_and_section_current_free": 0.00832,
+      "conclusion": "racetrack curvature creates the baseline; longitudinal section rotation creates the additional force floor; current is negligible"
+    }
+  },
+  "preconditioner": {
+    "variables": 2524,
+    "colored_probes": 634,
+    "controls32_krylov_before": 7383,
+    "controls32_krylov_after": 37,
+    "controls64_krylov_after": 11,
+    "factor_action_relative_residual": 3.1e-11,
+    "cpu_gpu_strong_absolute_difference": 2.7e-14,
+    "cpu_wall_s": 136.3,
+    "gpu_wall_s": 773.3,
+    "gpu_peak_rss_gib": 2.604
+  },
+  "differentiation_20260716": {
+    "measurement_commit": "6b8f60f2",
+    "fixture": "closed circular limit",
+    "controls": ["boundary spline", "periodic axis spline"],
+    "ftol": 1e-12,
+    "adjoint_relative_residual_below": 1e-8,
+    "parameter_jvp_vjp_rtol": 2e-12,
+    "reconverged_finite_difference_steps": [0.0004, 0.0002, 0.0001],
+    "finite_difference_plateau_rtol": 5e-5,
+    "finest_finite_difference_rtol": 2e-5,
+    "wall_seconds": 24.57,
+    "status": "algorithm-validated-on-promoted-limit"
+  },
+  "linear_backend_audit_20260716": {
+    "hardware": "Apple CPU",
+    "primal_two_case_before": {"wall_seconds": 20.87, "peak_rss_bytes": 2076262400},
+    "primal_two_case_accepted": {"wall_seconds": 20.80, "peak_rss_bytes": 2104442880},
+    "primal_solvax_restart_200": {"wall_seconds": 22.74, "peak_rss_bytes": 2493480960},
+    "primal_solvax_restart_64": {"status": "failed true-linear-residual gates"},
+    "primal_solvax_restart_128": {"status": "failed rotating-ellipse linear-residual gate"},
+    "derivative_three_case_before": {"wall_seconds": 45.87, "peak_rss_bytes": 4713480192},
+    "derivative_three_case_accepted": {"wall_seconds": 45.85, "peak_rss_bytes": 4648026112},
+    "derivative_solvax_restart_100": {"wall_seconds": 49.88, "peak_rss_bytes": 6068355072},
+    "gpu_closed_adjoint": {
+      "device": "NVIDIA RTX A4000 GPU 0",
+      "variables": 164,
+      "host_seconds": 0.0323124,
+      "host_iterations": 30,
+      "host_relative_residual": 4.28623e-10,
+      "solvax_cold_seconds": 4.54329,
+      "solvax_warm_seconds": 0.0227635,
+      "solvax_iterations": 28,
+      "solvax_relative_residual": 7.42706e-10,
+      "solvax_peak_bytes_in_use": 1220864,
+      "estimated_same-operator_break_even_solves": 478
+    },
+    "decision": "retain host SciPy GMRES around exact JAX actions; SOLVAX warm GPU speed does not amortize compilation in the current one-shot derivative API"
+  },
+  "gates": {
+    "exact_transfer": true,
+    "ftol_and_weak_force": true,
+    "linear_residual": true,
+    "positive_geometry": true,
+    "finest_strong_below_0.05": true,
+    "resource_limits": true,
+    "monotone_same_geometry_refinement": false,
+    "h1_monotone_longitudinal_refinement": true,
+    "h1_absolute_strong_force": false,
+    "h1_radial_poloidal_refinement": false,
+    "h1_radial_poloidal_resource_limit": false,
+    "closed_limit_derivatives": true,
+    "cpu_linear_backend_time_and_memory": true
+  }
+}

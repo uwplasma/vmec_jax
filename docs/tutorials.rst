@@ -157,6 +157,72 @@ against it — calibrating ``PRES_SCALE`` per step so the converged wout
    :language: python
 
 
+Mirror equilibria
+-----------------
+
+Fixed-boundary nonaxisymmetric mirrors and gradients
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Solve the supported rotating ellipse and the validation-only Straight Field Line
+Mirror target with native axial B-splines at ``ftol=1e-12``. The example
+asserts every rotating-ellipse gate and reports the SFLM corrected-cut force
+failure. Its volume derivative is checked against independently reconverged
+central differences before MOUT and the standard plots are written.
+
+.. image:: _static/figures/mirror_fixed_boundary_3d.png
+   :alt: Fixed-boundary mirror geometry and magnetic field
+   :width: 82%
+
+.. literalinclude:: ../examples/mirror_fixed_boundary_nonaxisymmetric.py
+   :language: python
+
+Free-boundary mirror beta scan
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two circular end coils drive an open-field equilibrium whose lateral LCFS is
+solved jointly with the exterior vacuum. The model is supported through 10%;
+the 25% and 50% endpoints are converged but remain validation-only because
+their independent force/refinement gates fail. The plots include the
+horizontal mirror, coils, cap-to-cap field lines, ``|B|``, pressure,
+cross-sections, and force history. The default exterior solve is intentionally
+a full/nightly workflow.
+
+.. image:: _static/figures/mirror_free_boundary_beta50_summary.png
+   :alt: Free-boundary mirror refinement, field response, and force support gates
+   :width: 95%
+
+.. literalinclude:: ../examples/mirror_free_boundary_beta_scan.py
+   :language: python
+
+Periodic stellarator-mirror hybrid
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Join two exactly straight mirror legs with two curved periodic B-spline
+returns. The elliptical section rotates by 90 degrees through each return, and
+a finite current produces visible field-line pitch. The example performs the
+fixed-boundary equilibrium solve before plotting its LCFS ``|B|``, actual
+field lines, cross-sections, iota, and convergence diagnostics. Its present
+coarse strong-force residual is displayed as a failed validation gate.
+
+.. image:: _static/figures/stellarator_mirror_hybrid.png
+   :alt: Periodic spline stellarator-mirror hybrid
+   :width: 100%
+
+.. literalinclude:: ../examples/stellarator_mirror_hybrid.py
+   :language: python
+
+Independent Pleiades reference
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The resolution-qualified two-coil beta trend is independently regenerated
+with Pleiades at pinned commit ``0161abb3``. Set ``PLEIADES_ROOT`` at the top;
+the script writes ignored review output and never silently replaces the bundled
+CSV benchmark.
+
+.. literalinclude:: ../examples/validation/pleiades_mirror_reference.py
+   :language: python
+
+
 Optimization
 ------------
 

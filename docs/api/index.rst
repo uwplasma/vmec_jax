@@ -1,9 +1,9 @@
 API reference
 =============
 
-The production API is :mod:`vmex.core`. Modules are grouped as in
-:doc:`/architecture`; every docstring names the VMEC2000 counterpart it
-ports.
+The toroidal production API is :mod:`vmex.core`; the open-field-line API
+is :mod:`vmex.mirror`. Modules are grouped as in :doc:`/architecture`;
+every docstring names the VMEC2000 counterpart it ports.
 
 Inputs and profiles
 -------------------
@@ -122,6 +122,30 @@ Outputs
    :members:
 
 .. automodule:: vmex.core.boozer
+   :members:
+
+Straight-axis mirrors
+---------------------
+
+.. automodule:: vmex.mirror.analytic
+   :members:
+
+.. automodule:: vmex.mirror.splines
+   :members:
+
+.. automodule:: vmex.mirror.model
+   :members:
+
+.. automodule:: vmex.mirror.solver
+   :members:
+
+.. automodule:: vmex.mirror.free_boundary
+   :members:
+
+.. automodule:: vmex.mirror.implicit
+   :members:
+
+.. automodule:: vmex.mirror.output
    :members:
 
 Errors and CLI
