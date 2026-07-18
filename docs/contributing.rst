@@ -38,3 +38,18 @@ Development install and checks::
 Documentation builds must pass strict mode::
 
   python -m sphinx -W -j auto -b html docs docs/_build/html
+
+Releasing
+---------
+
+Releases are cut from ``main``:
+
+#. Move the ``Unreleased`` entries in ``CHANGELOG.md`` under a new version
+   heading and record the version and date.
+#. Bump ``version`` in ``pyproject.toml`` (semantic versioning).
+#. Tag the commit (``vX.Y.Z``) and publish a GitHub Release. The
+   ``publish-pypi`` workflow validates that the tag matches the project version
+   and uploads the wheel and sdist to PyPI.
+
+Keep ``CHANGELOG.md`` current as part of each change rather than at release
+time: add a bullet under ``Unreleased`` in the same PR that makes the change.
