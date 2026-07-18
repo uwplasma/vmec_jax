@@ -103,7 +103,7 @@ jobs:
   parity:
     name: Parity suite ${{ matrix.shard }} (goldens, coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -172,7 +172,9 @@ jobs:
                    tests/test_freeboundary.py \
                    tests/test_cli_freeboundary.py \
                    tests/test_solver_end_to_end.py"
-          B_FILES="tests/test_golden_digests.py"
+          B_FILES="tests/test_golden_digests.py \
+                   tests/test_bootstrap.py \
+                   tests/test_wout_golden.py"
           D_FILES="tests/test_optimize.py"
           if [ "${{ matrix.shard }}" = "a" ]; then
             pytest -q -n 4 --dist loadscope $A_FILES --durations=15 --cov=vmex --cov-report=term
