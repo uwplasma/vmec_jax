@@ -23,6 +23,9 @@ with (_ROOT / "pyproject.toml").open("rb") as _f:
     release = tomllib.load(_f)["project"]["version"]
 version = ".".join(release.split(".")[:2])
 
+# Clean, un-versioned documentation title (browser tab / sidebar).
+html_title = "VMEX documentation"
+
 
 # -- General configuration ------------------------------------------------------
 

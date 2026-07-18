@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmex"
-version = "0.1.0"
+version = "0.2.0"
 description = "JAX implementation of VMEC2000 with differentiable fixed-boundary and branch-local free-boundary research paths."
 readme = "README.md"
 requires-python = ">=3.10"

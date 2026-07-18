@@ -6,6 +6,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-18
+
+First release under the **VMEX** name (formerly `vmec-jax`). Highlights:
+the `vmec_jax → vmex` rename, the `vmex.mirror` open/closed magnetic-mirror
+equilibrium package, `vmex.parallel` concurrent ensembles, the traceable
+`l_grad_b` objective and objectives showcase, the cold-start single-stage
+plasma+coil benchmark, NESTOR free-boundary speedups (warm now faster than
+VMEC2000 on every benchmark row), and typed errors through the callback
+boundary. See the entries below.
+
 ### Changed
 - **Renamed `vmec_jax` → VMEX.** The import package is now `vmex`, the PyPI
   distribution is `vmex`, and the primary CLI command is `vmex`. The `vmec`

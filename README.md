@@ -6,6 +6,11 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/uwplasma/vmex/ci.yml?branch=main&label=ci)](https://github.com/uwplasma/VMEX/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/readthedocs/vmex/latest?label=docs)](https://vmex.readthedocs.io/en/latest/)
 
+> **`vmec_jax` is now `vmex`.** The package was renamed: install with
+> `pip install vmex` and `import vmex`. The `vmec` CLI command still works as an
+> alias, and `import vmec_jax` keeps working (with a deprecation warning) for
+> one release. Full documentation: **[vmex.readthedocs.io](https://vmex.readthedocs.io/en/latest/)**.
+
 **VMEX** is a clean-room, JAX-native reimplementation of the
 [VMEC2000](https://princetonuniversity.github.io/STELLOPT/VMEC) ideal-MHD
 equilibrium code for stellarators and tokamaks. It reproduces VMEC2000
