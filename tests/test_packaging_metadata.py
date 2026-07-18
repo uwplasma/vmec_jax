@@ -40,8 +40,8 @@ def test_project_metadata_has_public_package_links() -> None:
     assert "stellarator" in project["keywords"]
     assert "Topic :: Scientific/Engineering :: Physics" in project["classifiers"]
     assert project["urls"]["Documentation"] == "https://vmex.readthedocs.io/en/latest/"
-    assert project["urls"]["Repository"] == "https://github.com/uwplasma/VMEX"
-    assert project["urls"]["Changelog"] == "https://github.com/uwplasma/VMEX/releases"
+    assert project["urls"]["Repository"] == "https://github.com/uwplasma/vmex"
+    assert project["urls"]["Changelog"] == "https://github.com/uwplasma/vmex/releases"
 
 
 def test_project_exposes_vmec_console_aliases() -> None:

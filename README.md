@@ -1,9 +1,9 @@
 # VMEX
 
 [![PyPI version](https://img.shields.io/pypi/v/vmex.svg)](https://pypi.org/project/vmex/)
-[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://github.com/uwplasma/VMEX/blob/main/pyproject.toml)
-[![License](https://img.shields.io/github/license/uwplasma/vmex)](https://github.com/uwplasma/VMEX/blob/main/LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/uwplasma/vmex/ci.yml?branch=main&label=ci)](https://github.com/uwplasma/VMEX/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://github.com/uwplasma/vmex/blob/main/pyproject.toml)
+[![License](https://img.shields.io/github/license/uwplasma/vmex)](https://github.com/uwplasma/vmex/blob/main/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/uwplasma/vmex/ci.yml?branch=main&label=ci)](https://github.com/uwplasma/vmex/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/readthedocs/vmex/latest?label=docs)](https://vmex.readthedocs.io/en/latest/)
 
 > **`vmec_jax` is now `vmex`.** The package was renamed: install with
@@ -59,7 +59,7 @@ pip install vmex
 Development install from source:
 
 ```bash
-git clone https://github.com/uwplasma/VMEX
+git clone https://github.com/uwplasma/vmex
 cd vmex && pip install -e .
 ```
 

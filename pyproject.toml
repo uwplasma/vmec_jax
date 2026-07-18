@@ -39,11 +39,11 @@ vmex = "vmex.core.cli:main"
 vmec = "vmex.core.cli:main"  # alias
 
 [project.urls]
-Homepage = "https://github.com/uwplasma/VMEX"
+Homepage = "https://github.com/uwplasma/vmex"
 Documentation = "https://vmex.readthedocs.io/en/latest/"
-Repository = "https://github.com/uwplasma/VMEX"
-Issues = "https://github.com/uwplasma/VMEX/issues"
-Changelog = "https://github.com/uwplasma/VMEX/releases"
+Repository = "https://github.com/uwplasma/vmex"
+Issues = "https://github.com/uwplasma/vmex/issues"
+Changelog = "https://github.com/uwplasma/vmex/releases"
 
 [project.optional-dependencies]
 # Differentiable free boundary via virtual casing (plan.md R15.3 + R19).
