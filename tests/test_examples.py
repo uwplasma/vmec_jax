@@ -111,6 +111,15 @@ def test_hot_restart_scan(tmp_path):
     assert len(warm) == 5 and max(warm) <= 5, f"warm restarts should be cheap: {warm}"
 
 
+def test_parallel_ensemble_scan(tmp_path):
+    out = _run_example(EXAMPLES / "parallel_ensemble_scan.py", tmp_path, timeout=900)
+    # the correctness contract: threaded ensemble is bit-identical to serial
+    assert "max|state diff| vs serial = 0.0e+00" in out
+    assert "iterations identical: True" in out
+    # the strong-scaling table printed at least one worker row
+    assert re.search(r"^\s*\d+\s+[0-9.]+\s+[0-9.]+x", out, re.M) is not None
+
+
 @pytest.mark.full  # nightly: free-bdy NESTOR solve ~10s; parity already covered in shard-a
 def test_free_boundary_mgrid(tmp_path):
     out = _run_example(EXAMPLES / "free_boundary_mgrid.py", tmp_path, timeout=900)

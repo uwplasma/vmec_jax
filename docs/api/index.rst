@@ -83,6 +83,9 @@ Differentiation and optimization
 .. automodule:: vmex.core.optimize
    :members:
 
+.. automodule:: vmex.core.parallel
+   :members:
+
 Physics objectives
 ------------------
 

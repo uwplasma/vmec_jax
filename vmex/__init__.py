@@ -15,6 +15,7 @@ Public API (lazily imported; ``import vmex as vj``):
   ``xyz->B`` callable; coils live in ESSOS, ``essos.coils.Coils``)
 - ``vmex.optimize`` — objectives + least-squares driver (module)
 - ``vmex.implicit`` — implicit differentiation of the equilibrium (module)
+- ``vmex.parallel`` — concurrent ensembles of independent solves (module)
 - ``vmex.errors`` — typed zero-crash exceptions (also exported directly)
 
 The ``vmec`` console entry point lives in :mod:`vmex.core.cli`.
@@ -108,6 +109,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "errors": (".core.errors", None),
     "optimize": (".core.optimize", None),
     "implicit": (".core.implicit", None),
+    "parallel": (".core.parallel", None),
     "doctor": (".doctor", None),
 }
 

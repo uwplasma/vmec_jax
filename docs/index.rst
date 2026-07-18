@@ -106,6 +106,7 @@ Documentation
       :caption: Performance and validation
 
       performance
+      parallelization
 
    .. toctree::
       :maxdepth: 1

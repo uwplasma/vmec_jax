@@ -15,6 +15,9 @@ All runnable examples live under this single `examples/` tree.
     state; warm restarts converge in ~1 iteration and recompile nothing.
   - `finite_beta_scan.py` — ramp the pressure (hot-restarted) and read beta,
     the Shafranov shift (magnetic-axis motion), and Mercier `DMerc` stability.
+  - `parallel_ensemble_scan.py` — solve an ensemble of independent equilibria
+    concurrently on CPU (`vmex.parallel.solve_ensemble`); prints the measured
+    strong-scaling curve and checks the results are bit-identical to serial.
   - `take_gradients.py` — exact fixed-boundary gradients of wout scalars
     (aspect, magnetic energy, ...) by implicit differentiation, checked against
     finite differences; O(1) memory, no step size to tune.
