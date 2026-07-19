@@ -789,3 +789,100 @@ def test_lasym_adjoint_vs_frozen_path_fd(lasym):
         print(f"  d(wb)/d({field}{idx}): analytic={an:+.9e} "
               f"frozen-FD={fd:+.9e} rel={rel:.2e}")
         assert rel <= 5e-5, f"{field}{idx}: adjoint vs frozen-path FD rel {rel:.2e}"
+
+
+# ===========================================================================
+# 3D lasym (non-stellarator-symmetric AND toroidally varying, ntor > 0)
+# ===========================================================================
+#
+# The 2D lasym lane above (up_down deck, ntor = 0) locks the asymmetric
+# readin.f map and the adjoint linearization; this lane exercises the same
+# machinery with a genuinely *toroidal* boundary (ntor = 2, nonzero n = 1
+# harmonics in all four families).  The dof plumbing
+# (``optimize._dof_modes`` / ``pack_boundary`` / ``_ess_scale``, all keyed on
+# ``min(max_mode, ntor)``) and the traceable map are dimension-general, so no
+# 3D-lasym-specific code path exists — this is the FD-validation that let the
+# ``optimize._least_squares_implicit`` ``ntor > 0`` guard be removed.
+#
+# ``basic_non_stellsym_simsopt`` (nfp = 1, mpol = 2, ntor = 2) converges
+# cleanly fixed-boundary at ns = 11 / ftol = 1e-12.  The smooth-bulk metrics
+# (``wb``, ``aspect``) match the frozen-path central FD on the n = 1 dofs to
+# ~1e-6..1e-8 (asymmetric rbs/zbc even tighter than the symmetric rbc, which
+# floors near the m = 1 lconm1 constraint) — the same solver-limited pattern
+# the 3D li383 tests document.
+
+LASYM3D_CASE = dict(ns=11, ftol=1e-12, max_iterations=4000)
+
+
+@pytest.fixture(scope="module")
+def lasym_3d():
+    """Converged fixed-boundary 3D lasym case (basic_non_stellsym_simsopt)."""
+    inp0 = VmecInput.from_file(str(DATA_DIR / "input.basic_non_stellsym_simsopt"))
+    inp = dataclasses.replace(
+        inp0,
+        ns_array=np.array([LASYM3D_CASE["ns"]]),
+        ftol_array=np.array([LASYM3D_CASE["ftol"]]),
+        niter_array=np.array([LASYM3D_CASE["max_iterations"]]),
+    )
+    assert bool(inp.lasym) and int(inp.ntor) > 0          # genuinely 3D lasym
+    ntor = int(inp.ntor)
+    # nonzero asymmetric families at a toroidal (n > 0) harmonic
+    assert float(np.max(np.abs(np.asarray(inp.rbs)[ntor + 1:, :]))) > 0.0
+    assert float(np.max(np.abs(np.asarray(inp.zbc)[ntor + 1:, :]))) > 0.0
+    cfg = im.make_config(inp, ftol=LASYM3D_CASE["ftol"],
+                         max_iterations=LASYM3D_CASE["max_iterations"])
+    p0 = im.params_from_input(inp)
+    result = solver.solve(inp, cfg.resolution, ftol=cfg.ftol,
+                          max_iterations=cfg.max_iterations, mode="cli")
+    assert result.converged
+    rt = im.runtime_from_params(p0, cfg)
+    mask = im._dof_mask(result.state, rt, cfg)
+    return "basic_non_stellsym_simsopt", inp, cfg, p0, result.state, rt, mask
+
+
+def test_lasym_3d_gradient_vs_frozen_path_fd(lasym_3d):
+    """``jax.grad`` through ``im.run`` on a 3D lasym boundary vs the frozen-path
+    central FD, for genuinely toroidal (n = 1) dofs in the asymmetric rbs/zbc
+    families and — as a symmetric-path regression guard — the symmetric rbc
+    family.  Both anchor the same frozen fixed point, so they agree to the
+    solver-limited floor of this ncurr = 1 / m = 1-constrained deck (measured
+    ~1e-6..1e-8 on the smooth bulk metrics, printed).  This is the end-to-end
+    check behind lifting the ``optimize`` ntor > 0 guard for lasym.
+    """
+    name, inp, cfg, p0, _, _, _ = lasym_3d
+    ntor = int(inp.ntor)
+
+    def outs(p):
+        sol = im.run(inp, p, ftol=cfg.ftol, max_iterations=cfg.max_iterations)
+        return jnp.stack([sol.wb, sol.aspect])
+
+    jac = jax.jacrev(outs)(p0)
+    row = {"wb": 0, "aspect": 1}
+    metric = {"wb": lambda s, rt: im.mhd_energy(s, rt)[0], "aspect": im.aspect_ratio}
+    zero = jax.tree.map(jnp.zeros_like, p0)
+
+    # (metric, family, (n_row, m), FD step, rel tolerance).  n_row = ntor + 1
+    # is the toroidal n = +1 harmonic.  rbs/zbc are the asymmetric families
+    # (the point of this lane); rbc is the symmetric-path regression guard.
+    checks = [
+        ("wb", "rbs", (ntor + 1, 1), 3e-5, 5e-6),
+        ("aspect", "rbs", (ntor + 1, 1), 3e-5, 5e-6),
+        ("wb", "zbc", (ntor + 1, 1), 3e-5, 5e-6),
+        ("wb", "rbc", (ntor + 1, 1), 3e-5, 5e-5),
+    ]
+    print(f"\n[{name}] 3D lasym adjoint vs frozen-path FD "
+          f"(ntor={ntor}, forward ftol={cfg.ftol:g}):")
+    for out, field, idx, h, tol in checks:
+        tangent = dataclasses.replace(
+            zero, **{field: getattr(zero, field).at[idx].set(1.0)})
+        fd, info = im.frozen_path_directional_fd(p0, cfg, metric[out], tangent, h=h)
+        ad = float(np.asarray(getattr(jac, field))[row[out], idx[0], idx[1]])
+        res = max(info["newton_res"])
+        rel = abs(ad / fd - 1.0) if fd else abs(ad - fd)
+        print(f"  d({out})/d({field}[n={idx[0] - ntor:+d},m={idx[1]}]) h={h:.0e}: "
+              f"AD={ad:+.9e}  frozen-FD={fd:+.9e}  rel={rel:.2e}  "
+              f"(Newton res {res:.0e})")
+        assert res < 1e-8, f"{field}{idx}: frozen solve not converged (res {res:.1e})"
+        assert rel <= tol, (
+            f"{out}/{field}[n={idx[0] - ntor},m={idx[1]}]: 3D lasym adjoint vs "
+            f"frozen-path FD rel {rel:.2e} > {tol:.0e}")

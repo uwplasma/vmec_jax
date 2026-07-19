@@ -1460,14 +1460,13 @@ def _least_squares_implicit(
     from .device import resolve_implicit_device
 
     lasym = bool(inp.lasym)
-    if lasym and int(inp.ntor) > 0:
-        # The 4-family traceable map (implicit._boundary_from_params) and the
-        # dof plumbing below handle a general lasym boundary, but the 3D lasym
-        # forward+adjoint path has not yet been FD-validated end to end; guard
-        # it explicitly rather than ship an unchecked Jacobian.
-        raise NotImplementedError(
-            "jac='implicit' for lasym is currently validated for 2D (ntor = 0) "
-            "boundaries only; use jac=None (finite differences) for 3D lasym")
+    # The 4-family traceable map (implicit._boundary_from_params), the dof
+    # plumbing below (_dof_modes / pack_boundary / _ess_scale, all keyed on
+    # min(max_mode, ntor)) and the forward+adjoint path are dimension-general:
+    # 3D lasym (ntor > 0) is FD-validated end to end against the frozen-path
+    # central FD (tests/test_implicit_grad.py::test_lasym_3d_gradient_vs_frozen_path_fd,
+    # basic_non_stellsym_simsopt), matching the same solver-limited noise floor
+    # the 3D li383 tests document.  The earlier 2D-only guard is removed.
     terms = [(_traceable_term(f), float(t), float(w)) for (f, t, w) in objective_terms]
     modes = _dof_modes(inp, max_mode)
     nm = len(modes)
