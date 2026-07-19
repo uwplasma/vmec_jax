@@ -769,9 +769,30 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
     return result
 
 
-# cfg -> host dof mask (structural)
-_MASK_CACHE: weakref.WeakKeyDictionary[ImplicitConfig, SpectralState] = \
-    weakref.WeakKeyDictionary()
+# structural-signature -> host dof mask.  The mask is a *structural* property
+# (module docstring / ``_dof_mask``): it depends only on the resolution, the
+# symmetry/lconm1 mode families and the ncurr force branch — NOT on the
+# parameter values, and NOT on the ``ImplicitConfig`` object identity.  Keying
+# by identity (the previous ``WeakKeyDictionary``) missed on every ``run`` /
+# ``make_config`` call, because :class:`ImplicitConfig` is ``eq=False`` and
+# ``make_config`` mints a fresh object per call, so an optimization loop that
+# calls ``im.run`` hundreds of times at one resolution recomputed the mask
+# (the eager ``evaluate_forces`` x2 + VJP, measured 20-40 s) every time.
+# A plain dict keyed by the structural signature hits across all such calls.
+_MASK_CACHE: dict[tuple, SpectralState] = {}
+
+
+def _mask_cache_key(cfg: ImplicitConfig) -> tuple:
+    """Structural identity of the dof mask (see :func:`_dof_mask`).
+
+    Everything the mask's zero pattern depends on and nothing else, so two
+    configs that differ only in parameter values, tolerances, iteration caps,
+    the multigrid schedule or object identity share one entry.  ``resolution``
+    is a value-hashable frozen dataclass (``mpol/ntor/ntheta/nzeta/nfp/lasym/
+    ns``); ``lconm1`` drives the m=1 pair equalization; ``ncurr`` is carried as
+    a conservative safety margin for the current-constrained force branch.
+    """
+    return (cfg.resolution, bool(cfg.lconm1), int(cfg.inp.ncurr))
 
 
 def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
@@ -790,14 +811,27 @@ def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
             "(re-raised typed at the pure_callback call site)") from None
     as_np = lambda t: jax.tree.map(  # noqa: E731
         lambda a: np.asarray(a, dtype=np.float64), t)
+    # Prime the per-cfg-identity differentiable template *concretely* here (this
+    # host callback runs outside any trace).  The jitted residual ``F`` later
+    # calls ``runtime_from_params(params, cfg)`` -> ``_template_runtime(cfg)``
+    # under a ``jax.jit`` trace, where the host-side ``run_setup`` cannot run;
+    # its ``lru_cache`` must therefore be filled by a concrete call first.  The
+    # forward solve used to fill it as a side effect of building ``rt`` for the
+    # mask — preserve that guarantee even when the structural mask cache hits
+    # and skips that rebuild (``_template_runtime`` is keyed by object identity,
+    # so a fresh ``make_config``/``run`` config needs its own concrete prime).
+    _template_runtime(cfg)
     # The dof mask captures *structural* zero patterns (resolution, symmetry,
     # lconm1 pairing) — invariant across the parameter values of one config,
     # so repeated solves of an optimization reuse the first solve's mask.
-    mask = _MASK_CACHE.get(cfg)
+    # Keyed by structural signature (not object identity) so a fresh
+    # ``make_config``/``run`` at the same resolution hits — see ``_MASK_CACHE``.
+    cache_key = _mask_cache_key(cfg)
+    mask = _MASK_CACHE.get(cache_key)
     if mask is None:
         rt = runtime_from_params(params, cfg)
         mask = as_np(_dof_mask(result.state, rt, cfg))
-        _MASK_CACHE[cfg] = mask
+        _MASK_CACHE[cache_key] = mask
     return as_np(result.state), mask
 
 

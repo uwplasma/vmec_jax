@@ -220,6 +220,59 @@ def test_residual_zero_at_fixed_point(case):
 
 
 # ---------------------------------------------------------------------------
+# 2b. the dof mask is a structural invariant -> memoized by structural key
+# ---------------------------------------------------------------------------
+
+
+def _mask_bit_ident(a, b) -> bool:
+    return all(np.array_equal(np.asarray(getattr(a, f)), np.asarray(getattr(b, f)))
+               for f in im._STATE_FIELDS)
+
+
+def test_dof_mask_structural_invariance_and_cache(solovev):
+    """The dof mask depends only on the structure (resolution / lconm1 / ncurr),
+    not on the parameter values or the ``ImplicitConfig`` object identity, so
+    ``_MASK_CACHE`` (keyed by ``_mask_cache_key``) reuses it across the fresh
+    configs ``make_config``/``run`` mint on every call.  Proven here: the mask
+    is *bit-identical* when recomputed (a different random perturbation seed, and
+    a runtime built from perturbed parameters), and the module cache hits across
+    two fresh configs of the same structure (one entry, no recompute)."""
+    name, inp, cfg, p0, x_star, rt, mask = solovev
+
+    # fresh configs of the same structure share one hashable structural key,
+    # even though ImplicitConfig is eq=False (object-identity equality).
+    cfg_a = im.make_config(inp, **CASES[name])
+    cfg_b = im.make_config(inp, **CASES[name])
+    assert cfg_a is not cfg_b and cfg_a != cfg_b
+    key = im._mask_cache_key(cfg)
+    assert im._mask_cache_key(cfg_a) == key == im._mask_cache_key(cfg_b)
+    assert hash(im._mask_cache_key(cfg_a)) == hash(key)
+
+    # structural invariance: recompute with a different random seed and with a
+    # runtime built from PERTURBED parameters -> bit-identical every time.
+    mask_seed = im._dof_mask(x_star, rt, cfg, seed=7)
+    p1 = _perturb(p0, "rbc", (int(inp.ntor), 1), 0.01)
+    rt1 = im.runtime_from_params(p1, cfg)
+    mask_pert = im._dof_mask(x_star, rt1, cfg, seed=0)
+    assert _mask_bit_ident(mask, mask_seed), f"{name}: mask not seed-invariant"
+    assert _mask_bit_ident(mask, mask_pert), f"{name}: mask not parameter-invariant"
+
+    # end-to-end: the module cache hits across two fresh configs (one entry).
+    saved = dict(im._MASK_CACHE)
+    try:
+        im._MASK_CACHE.clear()
+        _, m_a = im._host_solve_and_mask(cfg_a, p0)
+        assert len(im._MASK_CACHE) == 1
+        _, m_b = im._host_solve_and_mask(cfg_b, p0)  # fresh cfg -> cache HIT
+        assert len(im._MASK_CACHE) == 1, "a second structural entry was minted"
+        assert _mask_bit_ident(m_a, m_b)
+        assert _mask_bit_ident(mask, m_a)
+    finally:
+        im._MASK_CACHE.clear()
+        im._MASK_CACHE.update(saved)
+
+
+# ---------------------------------------------------------------------------
 # 3. solovev gradient table vs central FD (rtol <= 1e-6)
 # ---------------------------------------------------------------------------
 
