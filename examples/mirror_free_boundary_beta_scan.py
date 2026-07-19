@@ -34,6 +34,7 @@ from vmex.mirror import (  # noqa: E402
     write_mout,
 )
 from vmex.mirror.output import (  # noqa: E402
+    plot_axisymmetric_beta_scan_summary,
     summarize_axisymmetric_beta_scan,
 )
 from vmex.mirror.output import (  # noqa: E402
@@ -55,9 +56,11 @@ EXTERIOR_SPECTRAL_SIDE_DENSITY = True
 FTOL = 1.0e-12
 MAX_ITERATIONS = 2000
 Z_MIN, Z_MAX = -0.8, 0.8
-COIL_RADIUS = 0.9
+# Compact coils sized to the plasma: same vacuum on-axis midplane field as the
+# former 0.9 m / 2.0e5 A loops (B(0) ~ 0.0836 T), with a deeper mirror well.
+COIL_RADIUS = 0.5
 COIL_SEPARATION = 2.0
-COIL_CURRENT = 2.0e5
+COIL_CURRENT = 3.72e5
 CENTER_RADIUS = 0.25
 OUTPUT_DIR = Path("results/mirror_free_boundary_beta_scan")
 SAVE_RESTARTS = True
@@ -173,6 +176,9 @@ summary = [
     for item, result in zip(diagnostics, results, strict=True)
 ]
 (OUTPUT_DIR / "beta_scan_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+for row in summary:
+    if row["model_supported_beta_range"]:
+        assert row["passes_strong_force_gate"], f"supported beta point failed the force gate: {row}"
 
 middle_beta = min(0.10, 0.5 * float(BETAS[-1]))
 display_indices = sorted({0, int(np.argmin(np.abs(BETAS - middle_beta))), len(BETAS) - 1})
@@ -184,5 +190,36 @@ for index in display_indices:
         name=f"mirror_{label}",
     )
 
+mirror_ratio = float(jnp.max(vacuum_axis_field) / vacuum_axis_field[center])
+radius_expansion = 100.0 * (summary[-1]["center_radius"] / summary[0]["center_radius"] - 1.0)
+field_reduction = 100.0 * (1.0 - summary[-1]["diamagnetic_field_ratio"])
+final_gate = (
+    "its independent force gate fails"
+    if not summary[-1]["passes_strong_force_gate"]
+    else "beyond the supported model range"
+)
+caption = (
+    f"Two ESSOS loops (radius {COIL_RADIUS} m at z = +/-{0.5 * COIL_SEPARATION} m, "
+    f"{COIL_CURRENT:.3g} A each) give vacuum B(0) = {float(vacuum_axis_field[center]):.4f} T and "
+    f"on-grid mirror ratio {mirror_ratio:.2f}. Betas through {100 * SUPPORTED_BETA_MAX:g}% pass the "
+    f"strong-force gate; the {100 * float(BETAS[-1]):g}% validation continuation expands the center radius by "
+    f"{radius_expansion:.2f}% and lowers the on-axis field by {field_reduction:.2f}% ({final_gate})."
+)
+composite = plot_axisymmetric_beta_scan_summary(
+    [
+        (
+            f"beta = {100 * beta:g}%",
+            OUTPUT_DIR / f"mout_mirror_{f'beta_{100 * beta:05.1f}pct'.replace('.', 'p')}.nc",
+            bool(row["supported_lane"]),
+        )
+        for beta, row in zip(BETAS, summary, strict=True)
+    ],
+    OUTPUT_DIR,
+    display=tuple(display_indices),
+    caption=caption,
+    strong_force_gate=STRONG_FORCE_GATE,
+)
+
 print(json.dumps(summary, indent=2))
 print(f"Wrote solved-state 3D, cross-section, |B|, and summary plots in {OUTPUT_DIR}")
+print(f"Wrote beta-scan composite figure: {composite}")

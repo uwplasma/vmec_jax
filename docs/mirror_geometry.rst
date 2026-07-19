@@ -255,7 +255,7 @@ energy and force diagnostics are in ``forces.py``; and the reviewed figure is
 produced by ``output.plot_stellarator_mirror_hybrid``.
 
 .. image:: _static/figures/stellarator_mirror_hybrid.png
-   :alt: Solved periodic B-spline stellarator-mirror hybrid with field lines, magnetic field, cross-sections, transform, and residuals
+   :alt: Solved periodic B-spline stellarator-mirror hybrid with its axis, boundary magnetic field, cross-sections, transform, and residuals
    :width: 100%
 
 Plotting and output scope
@@ -463,18 +463,22 @@ radius ``0.10 m``, the corrected-cut solve reaches variational residual
 and end-collar strong forces are ``0.335`` and ``0.701``.
 
 The parser-free root example runs both fixtures through five coefficient-space
-continuation stages and writes MOUT plus horizontal 3-D, cross-section,
-``|B|``, residual, symmetry, and analytic-direction figures::
+continuation stages, solves a standard axisymmetric mirror through
+``solve_fixed_boundary_from_radius``, and writes MOUT plus horizontal 3-D,
+cross-section, ``|B|``, residual, symmetry, and analytic-direction figures::
 
    python examples/mirror_fixed_boundary_nonaxisymmetric.py
 
-The example checks every convergence gate for the rotating ellipse and labels
-the SFLM result as unsupported. Its figures expose variational and
-reconstructed-force histories and show actual solved nested surfaces and
-cap-to-cap field lines, not the analytic target alone.
+The example checks every convergence gate for the rotating ellipse and the
+axisymmetric mirror and labels the SFLM result as unsupported. Its figures
+expose variational and reconstructed-force histories and show actual solved
+nested surfaces and cap-to-cap field lines, not the analytic target alone.
+The paired 3-D figure below shows the two solved supported lanes side by
+side, coloured by the local LCFS ``|B|``: the circular-section axisymmetric
+mirror (mirror ratio 1.5) and the 90-degree rotating ellipse.
 
 .. image:: _static/figures/mirror_fixed_boundary_3d.png
-   :alt: Fixed-boundary rotating-ellipse mirror with a large cross-section and cap-to-cap field lines
+   :alt: Solved axisymmetric and 90-degree rotating-ellipse fixed-boundary mirrors coloured by LCFS field strength
    :width: 100%
 
 Coefficient fixed-boundary gradients
@@ -566,17 +570,24 @@ solves every beta point from 0 through 50% and writes one MOUT per state, a
 compact JSON summary, restart files, and reviewed figures under
 ``results/mirror_free_boundary_beta_scan/``. The figures include horizontal
 ``z`` geometry, LCFS displacement, on-axis and LCFS ``|B|``, pressure balance,
-coils, cap-to-cap field lines, field arrows, and coupled residual histories.
+coils, cap-to-cap field lines, and coupled residual histories, plus one
+composite summary pairing the solved 3-D states with whole-scan diagnostics.
 Generated results are ignored by git. Values through 10% are supported; 25%
 and 50% are labeled validation continuation points and should not be read as
 supported merely because the nonlinear solve ends.
 
-The default free-boundary center radius remains ``0.25 m``. Before continuation,
-the CLI now traces finite-radius nested vacuum-flux surfaces from the supplied
-axisymmetric field and fits them directly in the spline basis. This selects the
-same physical basin as the three-grid benchmark: the default beta-zero medium
-case has strong force ``0.003411`` rather than ``0.0697`` from the former
-paraxial boundary-only start. The example also uses the benchmark's
+The default free-boundary center radius remains ``0.25 m``. The example's two
+ESSOS loops are sized to the plasma: radius ``0.5 m`` at ``z = +/-1.0 m``
+carrying ``3.72e5 A`` each. This reproduces the central vacuum field
+``B(0) = 0.0836 T`` of the recorded benchmark geometry (0.9 m loops at
+``2.0e5 A``) while deepening the on-grid vacuum mirror ratio to ``4.58``; the
+recorded three-grid evidence in
+``benchmarks/mirror_free_boundary_axisymmetric.json`` retains the original
+coil geometry. Before continuation, the CLI traces finite-radius nested
+vacuum-flux surfaces from the supplied axisymmetric field and fits them
+directly in the spline basis, selecting the same physical basin as the
+three-grid benchmark: with the compact coils the default beta-zero medium
+case has strong force ``0.00456``. The example also uses the benchmark's
 sixth-order spectral side-density exterior. Initialization is a bounded host
 operation; the converged coefficient residual and its implicit derivatives
 remain JAX differentiable. The larger ``0.35 m`` cross-section is not supported

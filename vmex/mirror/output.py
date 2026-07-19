@@ -581,6 +581,249 @@ def _field_line(data, radial_index: int, theta0: float, z_order):
     return z, radius_line * np.cos(angles), radius_line * np.sin(angles)
 
 
+_MOD_B_CMAP = "jet"
+
+
+def _draw_solved_mirror_3d(
+    axis,
+    data: MoutData,
+    plt,
+    norm,
+    *,
+    surface_alpha: float = 0.9,
+    field_lines: int = 8,
+    field_line_color: str = "#18C3D6",
+    field_line_width: float = 1.5,
+    coil_label: str | None = None,
+    field_line_label: str | None = None,
+    zlabel: str | None = None,
+):
+    """Draw one solved mirror (surface, coils, field lines) on a 3D axis.
+
+    The lateral surface is coloured by the local LCFS ``|B|`` under ``norm``
+    with the shared ``|B|`` colormap. Field lines are thin single-stroke
+    curves traced from the saved Cartesian field samples.
+    """
+
+    from scipy.interpolate import CubicSpline
+
+    theta_dense = np.linspace(0.0, 2.0 * np.pi, 129)
+    z_order = np.argsort(np.asarray(data.z))
+    z = np.asarray(data.z)[z_order]
+    boundary = np.take(np.asarray(data.boundary_radius), z_order, axis=1)
+    mod_b = np.take(np.asarray(data.mod_b), z_order, axis=2)
+    boundary_b = _theta_samples(data, mod_b[-1], theta_dense)
+    radius_dense = _theta_samples(data, boundary, theta_dense)
+    z_dense = np.linspace(float(z[0]), float(z[-1]), max(97, z.size))
+    boundary_b = CubicSpline(z, boundary_b, axis=1)(z_dense)
+    radius_dense = CubicSpline(z, radius_dense, axis=1)(z_dense)
+    zz, tt = np.meshgrid(z_dense, theta_dense)
+    surface = axis.plot_surface(
+        zz,
+        radius_dense * np.cos(tt),
+        radius_dense * np.sin(tt),
+        facecolors=plt.get_cmap(_MOD_B_CMAP)(norm(boundary_b)),
+        linewidth=0,
+        antialiased=False,
+        alpha=surface_alpha,
+    )
+    surface.set_rasterized(True)
+    for coil_index, coil in enumerate(np.asarray(data.coil_xyz)):
+        closed = np.vstack([coil, coil[0]])
+        axis.plot(
+            closed[:, 2],
+            closed[:, 0],
+            closed[:, 1],
+            color="#C44E52",
+            lw=1.8,
+            label=coil_label if coil_index == 0 else None,
+        )
+    outermost = len(np.asarray(data.s)) - 1
+    for line_index, theta0 in enumerate(np.linspace(0.0, 2.0 * np.pi, field_lines, endpoint=False)):
+        line_z, line_x, line_y = _field_line(data, outermost, theta0, z_order)
+        axis.plot(
+            line_z,
+            line_x,
+            line_y,
+            color=field_line_color,
+            lw=field_line_width,
+            label=field_line_label if line_index == 0 else None,
+            zorder=20,
+        )
+    axis.set(xlabel="z [m]", ylabel="x [m]")
+    if zlabel is not None:
+        axis.set_zlabel(zlabel)
+    from matplotlib.ticker import MaxNLocator
+
+    axis.yaxis.set_major_locator(MaxNLocator(4))
+    axis.zaxis.set_major_locator(MaxNLocator(4))
+    return boundary_b
+
+
+def plot_mirror_3d_pair(
+    left: MoutData | str | Path,
+    right: MoutData | str | Path,
+    outdir: str | Path,
+    *,
+    titles: tuple[str, str],
+    name: str = "mirror_fixed_boundary_3d",
+) -> Path:
+    """Render two solved fixed-boundary mirrors side by side in 3D.
+
+    Each panel is coloured by its own LCFS ``|B|`` range with an attached
+    colorbar, so an axisymmetric mirror and a rotating-ellipse mirror can be
+    compared at a glance.
+    """
+
+    plt = _matplotlib()
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    fig = plt.figure(figsize=(12.6, 4.4), constrained_layout=True)
+    grid = fig.add_gridspec(1, 4, width_ratios=(1.0, 0.045, 1.0, 0.045), wspace=0.08)
+    for column, (mout, title) in enumerate(zip((left, right), titles, strict=True)):
+        data, _ = _as_mout(mout)
+        axis = fig.add_subplot(grid[0, 2 * column], projection="3d")
+        mod_b_boundary = np.asarray(data.mod_b)[-1]
+        norm = plt.Normalize(float(np.min(mod_b_boundary)), float(np.max(mod_b_boundary)))
+        _draw_solved_mirror_3d(
+            axis,
+            data,
+            plt,
+            norm,
+            field_lines=6,
+            field_line_color="0.15",
+            field_line_width=0.9,
+        )
+        axis.set_title(title, pad=0.0)
+        axis.set_box_aspect((2.3, 1.0, 1.0), zoom=1.12)
+        axis.view_init(elev=20, azim=-58)
+        colorbar_slot = grid[0, 2 * column + 1].subgridspec(3, 1, height_ratios=(0.18, 0.64, 0.18))
+        fig.colorbar(
+            plt.cm.ScalarMappable(norm=norm, cmap=_MOD_B_CMAP),
+            cax=fig.add_subplot(colorbar_slot[1]),
+            label="LCFS |B| [T]",
+        )
+    return _save_figure(fig, plt, outdir / f"{name}.png")
+
+
+_SCAN_COLORS = ("#0072B2", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#E69F00")
+
+
+def plot_axisymmetric_beta_scan_summary(
+    entries,
+    outdir: str | Path,
+    *,
+    display: tuple[int, ...],
+    name: str = "mirror_free_boundary_beta50_summary",
+    caption: str | None = None,
+    strong_force_gate: float | None = None,
+) -> Path:
+    """Render one tight beta-scan composite: 3D states plus scan diagnostics.
+
+    ``entries`` is a sequence of ``(label, mout, supported)`` tuples in
+    increasing-beta order; ``display`` selects which entries get a 3D panel.
+    All entries appear in the shared diagnostics row. Unsupported
+    (validation-only) entries are drawn dashed.
+    """
+
+    plt = _matplotlib()
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    loaded = [(label, _as_mout(mout)[0], bool(supported)) for label, mout, supported in entries]
+    if not loaded or len(display) < 1:
+        raise ValueError("beta-scan summary requires entries and display indices")
+
+    fig = plt.figure(figsize=(15.0, 7.6), constrained_layout=True)
+    outer = fig.add_gridspec(2, 1, height_ratios=(1.3, 1.0))
+    top = outer[0].subgridspec(1, len(display) + 1, width_ratios=(1.0,) * len(display) + (0.035,))
+    b_values = [np.asarray(loaded[index][1].mod_b)[-1] for index in display]
+    norm = plt.Normalize(
+        min(float(np.min(values)) for values in b_values),
+        max(float(np.max(values)) for values in b_values),
+    )
+    for slot, index in enumerate(display):
+        label, data, supported = loaded[index]
+        axis = fig.add_subplot(top[0, slot], projection="3d")
+        _draw_solved_mirror_3d(
+            axis,
+            data,
+            plt,
+            norm,
+            field_lines=6,
+            field_line_color="0.15",
+            field_line_width=0.8,
+            coil_label="ESSOS coils" if slot == 0 else None,
+            field_line_label="field lines" if slot == 0 else None,
+        )
+        axis.set_title(label if supported else f"{label} (validation)", pad=0.0)
+        axis.set_box_aspect((2.0, 1.0, 1.0), zoom=1.15)
+        axis.view_init(elev=20, azim=-58)
+        if slot == 0:
+            axis.legend(loc="upper left", fontsize=8)
+    colorbar_slot = top[0, len(display)].subgridspec(3, 1, height_ratios=(0.16, 0.68, 0.16))
+    fig.colorbar(
+        plt.cm.ScalarMappable(norm=norm, cmap=_MOD_B_CMAP),
+        cax=fig.add_subplot(colorbar_slot[1]),
+        label="LCFS |B| [T]",
+    )
+
+    bottom = outer[1].subgridspec(1, 4)
+    panels = [fig.add_subplot(bottom[0, i]) for i in range(4)]
+    lcfs_axis, field_axis, pressure_axis, convergence_axis = panels
+    for order, (label, data, supported) in enumerate(loaded):
+        color = _SCAN_COLORS[order % len(_SCAN_COLORS)]
+        style = {"color": color, "lw": 1.7} if supported else {"color": color, "lw": 1.4, "ls": "--", "alpha": 0.85}
+        z_order = np.argsort(np.asarray(data.z))
+        z = np.asarray(data.z)[z_order]
+        boundary = np.take(np.asarray(data.boundary_radius), z_order, axis=1)
+        mod_b = np.take(np.asarray(data.mod_b), z_order, axis=2)
+        pressure = np.take(np.asarray(data.pressure), z_order, axis=2)
+        center = int(np.argmin(np.abs(z)))
+        lcfs_axis.plot(z, np.mean(boundary, axis=0), label=label, **style)
+        field_axis.plot(z, np.mean(mod_b[0], axis=0), **style)
+        pressure_axis.plot(
+            np.sqrt(np.asarray(data.s)),
+            np.mean(pressure[:, :, center], axis=1) / 1.0e3,
+            **style,
+        )
+        history = np.asarray(data.history)
+        if history.size:
+            convergence_axis.semilogy(
+                history[:, 0],
+                np.maximum(history[:, -1], 1.0e-18),
+                **style,
+            )
+    lcfs_axis.set(title="Solved LCFS", xlabel="Axial position z [m]", ylabel="Radius [m]")
+    lcfs_axis.legend(fontsize=8, ncols=2)
+    field_axis.set(title="On-axis |B|", xlabel="Axial position z [m]", ylabel="|B| [T]")
+    pressure_axis.set(
+        title="Midplane pressure",
+        xlabel="Normalized radius sqrt(s)",
+        ylabel="Pressure [kPa]",
+    )
+    ftol_values = [float(data.ftol) for _, data, _ in loaded]
+    convergence_axis.axhline(min(ftol_values), color="0.25", ls=":", lw=1.2, label="ftol")
+    if strong_force_gate is not None:
+        convergence_axis.axhline(
+            float(strong_force_gate),
+            color="0.45",
+            lw=1.2,
+            label="strong-force gate",
+        )
+    convergence_axis.set(
+        title="Coupled residual history",
+        xlabel="Residual evaluation",
+        ylabel="Maximum normalized residual",
+    )
+    convergence_axis.legend(fontsize=8, loc="center right")
+    for panel in panels:
+        panel.grid(alpha=0.22)
+    if caption:
+        fig.suptitle("Axisymmetric free-boundary mirror: solved beta scan with ESSOS coils")
+        fig.text(0.5, -0.015, caption, ha="center", va="top", fontsize=9)
+    return _save_figure(fig, plt, outdir / f"{name}.png")
+
+
 def plot_mout(
     mout: MoutData | str | Path,
     outdir: str | Path,
@@ -674,117 +917,31 @@ def plot_mout(
     )
     paths["modB"] = _save_figure(fig, plt, outdir / f"{label}_modB.png")
 
-    radius_dense = _theta_samples(data, boundary, theta_dense)
-    zz, tt = np.meshgrid(z, theta_dense)
-    arrow_length = 0.65 * float(np.max(radius_dense))
     fig = plt.figure(figsize=(11.5, 6.2), constrained_layout=True)
     axis = fig.add_subplot(111, projection="3d")
     norm = plt.Normalize(float(np.min(boundary_b)), float(np.max(boundary_b)))
-    surface = axis.plot_surface(
-        zz,
-        radius_dense * np.cos(tt),
-        radius_dense * np.sin(tt),
-        facecolors=plt.cm.viridis(norm(boundary_b)),
-        linewidth=0,
-        alpha=0.52,
+    _draw_solved_mirror_3d(
+        axis,
+        data,
+        plt,
+        norm,
+        coil_label="ESSOS coils",
+        field_line_label="field lines",
+        zlabel="y [m]",
     )
-    surface.set_rasterized(True)
-    for coil_index, coil in enumerate(np.asarray(data.coil_xyz)):
-        closed = np.vstack([coil, coil[0]])
-        axis.plot(
-            closed[:, 2],
-            closed[:, 0],
-            closed[:, 1],
-            color="#C44E52",
-            lw=2,
-            label="ESSOS coils" if coil_index == 0 else None,
-        )
-    for line_index, theta0 in enumerate(np.linspace(0.0, 2.0 * np.pi, 8, endpoint=False)):
-        line_z, line_x, line_y = _field_line(data, len(s) - 1, theta0, z_order)
-        axis.plot(line_z, line_x, line_y, color="black", lw=3.5, zorder=20)
-        axis.plot(
-            line_z,
-            line_x,
-            line_y,
-            color="#18C3D6",
-            lw=1.8,
-            label="field lines" if line_index == 0 else None,
-            zorder=21,
-        )
-        if line_index % 2 == 0:
-            center_index = len(line_z) // 2
-            tangent = np.asarray(
-                [
-                    np.gradient(line_z)[center_index],
-                    np.gradient(line_x)[center_index],
-                    np.gradient(line_y)[center_index],
-                ]
-            )
-            tangent /= max(np.linalg.norm(tangent), np.finfo(float).tiny)
-            axis.quiver(
-                line_z[center_index],
-                line_x[center_index],
-                line_y[center_index],
-                *tangent,
-                length=arrow_length,
-                color="#E66100",
-                arrow_length_ratio=0.28,
-                linewidth=1.4,
-            )
     fig.colorbar(
-        plt.cm.ScalarMappable(norm=norm, cmap="viridis"),
+        plt.cm.ScalarMappable(norm=norm, cmap=_MOD_B_CMAP),
         ax=axis,
         shrink=0.72,
         pad=0.05,
         label="LCFS |B| [T]",
     )
-    axis.set(
-        title="Solved mirror equilibrium",
-        xlabel="z [m]",
-        ylabel="x [m]",
-        zlabel="y [m]",
-    )
+    axis.set(title="Solved mirror equilibrium")
     axis.set_box_aspect((2.2, 1.0, 1.0))
     axis.view_init(elev=22, azim=-57)
     axis.legend(loc="upper left")
     paths["3d"] = _save_figure(fig, plt, outdir / f"{label}_3d.png")
     return paths
-
-
-def _periodic_theta_sample(values, theta):
-    """Evaluate uniform-theta samples at one angle per axial point."""
-
-    values = np.asarray(values)
-    theta = np.asarray(theta)
-    modes = np.fft.fftfreq(values.shape[0], d=1.0 / values.shape[0])
-    coefficients = np.fft.fft(values, axis=0) / values.shape[0]
-    return np.real(np.sum(coefficients * np.exp(1j * modes[:, None] * theta[None]), axis=0))
-
-
-def _closed_field_line_xyz(line, state, discretization, axis, radial_index):
-    """Interpolate a traced periodic field line into Cartesian space."""
-
-    parameter = np.mod(np.asarray(line.axial_parameter), 2.0 * np.pi)
-    recovery = np.asarray(discretization.grid.axial_basis.recovery_matrix)
-    radius_coefficients = np.asarray(state.radius_scale[radial_index]) @ recovery.T
-    radius_table = np.asarray(discretization.spline.evaluate(radius_coefficients, parameter))
-    radius = np.sqrt(float(discretization.grid.s[radial_index])) * _periodic_theta_sample(
-        radius_table,
-        np.asarray(line.theta),
-    )
-
-    def interpolate_axis(values):
-        coefficients = recovery @ np.asarray(values)
-        return np.asarray(discretization.spline.evaluate(coefficients, parameter, axis=0))
-
-    centerline = interpolate_axis(axis.centerline)
-    normal = interpolate_axis(axis.normal)
-    normal = normal / np.linalg.norm(normal, axis=1)[:, None]
-    binormal = interpolate_axis(axis.binormal)
-    binormal = binormal - np.sum(binormal * normal, axis=1)[:, None] * normal
-    binormal = binormal / np.linalg.norm(binormal, axis=1)[:, None]
-    radial = np.cos(np.asarray(line.theta))[:, None] * normal + np.sin(np.asarray(line.theta))[:, None] * binormal
-    return centerline + radius[:, None] * radial
 
 
 def plot_stellarator_mirror_hybrid(
@@ -816,41 +973,38 @@ def plot_stellarator_mirror_hybrid(
         + np.sin(theta_dense)[:, None, None] * np.asarray(axis.binormal)[None]
     )
     surface_xyz = np.asarray(axis.centerline)[None] + boundary_radius[..., None] * radial
+    # Close the periodic seam so the lateral surface has no white gap at u=0.
+    surface_xyz = np.concatenate([surface_xyz, surface_xyz[:, :1]], axis=1)
     mod_b = np.sqrt(np.maximum(np.asarray(magnetic_field_squared(field, geometry)), 0.0))
     boundary_b = dense_theta(mod_b[-1])
+    boundary_b_closed = np.concatenate([boundary_b, boundary_b[:, :1]], axis=1)
     b_min, b_max = float(np.min(boundary_b)), float(np.max(boundary_b))
     color_norm = plt.Normalize(b_min, b_max)
 
-    fig = plt.figure(figsize=(14.0, 9.0), constrained_layout=True)
-    grid = fig.add_gridspec(2, 3, height_ratios=(1.18, 1.0))
+    fig = plt.figure(figsize=(13.6, 7.6), constrained_layout=True)
+    grid = fig.add_gridspec(2, 3, height_ratios=(1.12, 1.0))
     view = fig.add_subplot(grid[0, :2], projection="3d")
     surface = view.plot_surface(
         surface_xyz[..., 2],
         surface_xyz[..., 0],
         surface_xyz[..., 1],
-        facecolors=plt.cm.viridis(color_norm(boundary_b)),
+        facecolors=plt.get_cmap(_MOD_B_CMAP)(color_norm(boundary_b_closed)),
         linewidth=0,
-        alpha=0.68,
+        antialiased=False,
+        alpha=0.9,
     )
     surface.set_rasterized(True)
+    centerline = np.asarray(axis.centerline)
+    centerline = np.concatenate([centerline, centerline[:1]], axis=0)
     view.plot(
-        np.asarray(axis.centerline)[:, 2],
-        np.asarray(axis.centerline)[:, 0],
-        np.asarray(axis.centerline)[:, 1],
-        color="white",
-        lw=3.5,
+        centerline[:, 2],
+        centerline[:, 0],
+        centerline[:, 1],
+        color="#101010",
+        lw=1.6,
+        label="B-spline axis",
         zorder=20,
     )
-    view.plot(
-        np.asarray(axis.centerline)[:, 2],
-        np.asarray(axis.centerline)[:, 0],
-        np.asarray(axis.centerline)[:, 1],
-        color="#222222",
-        lw=1.2,
-        label="B-spline axis",
-        zorder=21,
-    )
-    radial_index = max(1, discretization.grid.ns - 2)
     iota_values = []
     radial_samples = np.arange(1, discretization.grid.ns)
     for index in radial_samples:
@@ -864,43 +1018,15 @@ def plot_stellarator_mirror_hybrid(
                 ).iota
             )
         )
-    for line_index, theta0 in enumerate(np.linspace(0.0, 2.0 * np.pi, 7, endpoint=False)):
-        line = trace_closed_field_line(
-            field,
-            discretization,
-            radial_index=radial_index,
-            theta0=float(theta0),
-            turns=1,
-            steps_per_turn=320,
-        )
-        xyz = _closed_field_line_xyz(line, state, discretization, axis, radial_index)
-        view.plot(xyz[:, 2], xyz[:, 0], xyz[:, 1], color="#101010", lw=2.8, zorder=30)
-        view.plot(
-            xyz[:, 2],
-            xyz[:, 0],
-            xyz[:, 1],
-            color="#35D0E2",
-            lw=1.35,
-            label="field lines" if line_index == 0 else None,
-            zorder=31,
-        )
     view.set(
         title="Solved spline stellarator-mirror hybrid",
         xlabel="z [m]",
         ylabel="x [m]",
         zlabel="y [m]",
     )
-    view.set_box_aspect((2.35, 1.25, 0.42))
+    view.set_box_aspect((2.35, 1.25, 0.42), zoom=1.24)
     view.view_init(elev=24, azim=-61)
     view.legend(loc="upper left")
-    fig.colorbar(
-        plt.cm.ScalarMappable(norm=color_norm, cmap="viridis"),
-        ax=view,
-        orientation="horizontal",
-        shrink=0.58,
-        pad=0.04,
-        label="LCFS |B| [T]",
-    )
 
     map_axis = fig.add_subplot(grid[0, 2])
     image = map_axis.pcolormesh(
@@ -908,7 +1034,8 @@ def plot_stellarator_mirror_hybrid(
         theta_dense,
         boundary_b,
         shading="auto",
-        cmap="viridis",
+        cmap=_MOD_B_CMAP,
+        norm=color_norm,
     )
     fig.colorbar(image, ax=map_axis, label="LCFS |B| [T]")
     map_axis.set(
@@ -1001,6 +1128,8 @@ __all__ = [
     "MoutData",
     "load_free_boundary_restart",
     "mout_from_result",
+    "plot_axisymmetric_beta_scan_summary",
+    "plot_mirror_3d_pair",
     "plot_mout",
     "plot_stellarator_mirror_hybrid",
     "read_mout",

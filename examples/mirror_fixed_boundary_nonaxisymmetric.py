@@ -1,4 +1,9 @@
-"""Native-spline nonaxisymmetric fixed-boundary mirror equilibria."""
+"""Native-spline fixed-boundary mirror equilibria.
+
+Solves the supported rotating-ellipse case, the validation-only straight
+field-line mirror, and a standard axisymmetric mirror, then renders the
+axisymmetric and 90-degree rotating-ellipse solves side by side in 3-D.
+"""
 
 from __future__ import annotations
 
@@ -23,13 +28,16 @@ from vmex.mirror import (  # noqa: E402
     mout_from_result,
     plot_mout,
     solve_fixed_boundary,
+    solve_fixed_boundary_from_radius,
     spline_fixed_boundary_adjoint,
     write_mout,
 )
 from vmex.mirror.analytic import (  # noqa: E402
+    AxisymmetricPolynomialMirror,
     RotatingEllipseParaxial,
     StraightFieldLineMirror,
 )
+from vmex.mirror.output import plot_mirror_3d_pair  # noqa: E402
 from vmex.mirror.implicit import spline_fixed_boundary_parameters  # noqa: E402
 from vmex.mirror.splines import initialize_from_cartesian_field  # noqa: E402
 
@@ -47,6 +55,9 @@ OUTPUT_DIR = Path("results/mirror_fixed_boundary_nonaxisymmetric")
 
 RADIUS = {"rotating_ellipse": 0.12, "straight_field_line": 0.10}
 AXIAL_FLUX_DERIVATIVE = {"rotating_ellipse": 0.0072, "straight_field_line": 0.005}
+AXISYMMETRIC_RADIUS = 0.12
+AXISYMMETRIC_MPOL = 4
+AXISYMMETRIC_MIRROR_STRENGTH = 0.5
 
 jax.config.update("jax_enable_x64", True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -211,6 +222,81 @@ for case in CASES:
         assert float(result.staggered_weak_force.maximum) <= 1.1 * FTOL
         assert float(result.force.normalized_rms) < STRONG_FORCE_GATE
         assert float(result.normalized_divergence_rms) < 1.0e-12
+
+# Standard axisymmetric mirror through the one-call entry point: the boundary
+# is the exact circular flux surface of an analytic vacuum mirror.
+axisymmetric_fixture = AxisymmetricPolynomialMirror(
+    center_field=1.0,
+    half_length=1.0,
+    mirror_strength=AXISYMMETRIC_MIRROR_STRENGTH,
+)
+axisymmetric_config = MirrorConfig(
+    resolution=MirrorResolution(ns=NS, mpol=AXISYMMETRIC_MPOL, nxi=SOURCE_NXI),
+    z_min=-1.0,
+    z_max=1.0,
+    ftol=FTOL,
+    max_iterations=MAX_ITERATIONS,
+)
+axisymmetric_grid = axisymmetric_config.build_grid()
+axisymmetric_radius = axisymmetric_fixture.boundary_radius(
+    AXISYMMETRIC_RADIUS,
+    jnp.asarray(axisymmetric_grid.z),
+)
+axisymmetric_flux_derivative = float(axisymmetric_fixture.poloidal_flux(AXISYMMETRIC_RADIUS, 0.0))
+axisymmetric_result = solve_fixed_boundary_from_radius(
+    axisymmetric_radius,
+    axisymmetric_config,
+    elements=SPLINE_ELEMENTS,
+    axial_flux_derivative=axisymmetric_flux_derivative,
+    solve_lambda=True,
+    gradient_tolerance=FTOL,
+    require_convergence=True,
+)
+axisymmetric_evaluated = axisymmetric_result.evaluated
+axisymmetric_discretization = SplineMirrorDiscretization.build(axisymmetric_config, elements=SPLINE_ELEMENTS)
+axisymmetric_boundary = axisymmetric_discretization.fit_boundary(
+    MirrorBoundary.from_radius(axisymmetric_radius, axisymmetric_grid),
+    axisymmetric_grid,
+)
+axisymmetric_mout = write_mout(
+    OUTPUT_DIR / "mout_axisymmetric.nc",
+    mout_from_result(
+        axisymmetric_evaluated,
+        axisymmetric_discretization.grid,
+        axisymmetric_config,
+        boundary=axisymmetric_discretization.evaluate_boundary(axisymmetric_boundary),
+        axial_flux_derivative=axisymmetric_flux_derivative,
+    ),
+)
+plot_mout(axisymmetric_mout, OUTPUT_DIR, name="axisymmetric")
+summaries["axisymmetric"] = {
+    "status": "supported",
+    "iterations": axisymmetric_evaluated.iterations,
+    "variational_max": float(axisymmetric_evaluated.variational.maximum),
+    "staggered_weak_max": float(axisymmetric_evaluated.staggered_weak_force.maximum),
+    "strong_force_normalized_rms": float(axisymmetric_evaluated.force.normalized_rms),
+    "normalized_divergence_rms": float(axisymmetric_evaluated.normalized_divergence_rms),
+    "axial_flux_derivative": axisymmetric_flux_derivative,
+    "mirror_ratio": float(1.0 + AXISYMMETRIC_MIRROR_STRENGTH),
+}
+assert float(axisymmetric_evaluated.variational.maximum) <= FTOL
+assert float(axisymmetric_evaluated.staggered_weak_force.maximum) <= 1.1 * FTOL
+assert float(axisymmetric_evaluated.force.normalized_rms) < STRONG_FORCE_GATE
+assert float(axisymmetric_evaluated.normalized_divergence_rms) < 1.0e-12
+
+# Side-by-side solved 3-D geometry: circular-section axisymmetric mirror on
+# the left, the 90-degree rotating ellipse on the right, coloured by LCFS |B|.
+pair_figure = plot_mirror_3d_pair(
+    axisymmetric_mout,
+    OUTPUT_DIR / "mout_rotating_ellipse.nc",
+    OUTPUT_DIR,
+    titles=(
+        "Axisymmetric mirror (circular sections)",
+        "Rotating-ellipse mirror (90-degree twist)",
+    ),
+    name="mirror_fixed_boundary_3d",
+)
+print(f"Wrote paired fixed-boundary 3-D figure: {pair_figure}")
 
 (OUTPUT_DIR / "summary.json").write_text(json.dumps(summaries, indent=2) + "\n")
 print(json.dumps(summaries, indent=2))

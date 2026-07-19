@@ -161,7 +161,7 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
 | Free boundary from an mgrid file | ✅ | ✅ | ✅ |
 | Free boundary directly from coils (no mgrid) | ✅ | ❌ | ❌ |
 | Free-boundary tokamaks (`ntor = 0`) | ✅ | ✅ | ❌ |
-| Non-stellarator-symmetric (`LASYM = T`) | ✅ | ✅ | ❌ |
+| Non-stellarator-symmetric (`LASYM = T`) | ✅ | ✅ | ✅ |
 | Fixed-boundary fallback on missing mgrid | ✅ | ✅ | ❌ |
 | Spline profiles (cubic / Akima) | ✅ | ✅ | ❌ |
 | VMEC++-schema JSON input | ✅ | ❌ | ✅ |
@@ -229,8 +229,10 @@ polish pattern is recommended.
 *Top: seed (grey, dashed) vs two-stage (orange) vs cold-start single-stage
 (blue) boundaries at φ = 0 and a half field period — the polish boundary is
 visually indistinguishable from two-stage (same aspect and iota), so it is not
-drawn. Middle/bottom: each approach's final LCFS coloured by |B| inside its
-own final coils.*
+drawn. Middle/bottom: each approach's final LCFS coloured by the local signed
+field-alignment error B·n/|B| inside its own final coils (red: field leaving
+the surface, blue: entering), on one shared colour scale per column so the
+two approaches compare directly.*
 
 Vacuum (measured; identical seeds and coil budgets across columns):
 
@@ -513,22 +515,29 @@ config = MirrorConfig(resolution=MirrorResolution(ns=7, mpol=4, nxi=17))
 result = solve_fixed_boundary_from_radius(0.3, config)   # radius: scalar, (nxi,), or (ntheta, nxi)
 ```
 
-![Fixed-boundary rotating-ellipse mirror: solved geometry, field lines, cross-sections, and convergence](docs/_static/figures/mirror_fixed_boundary_3d.png)
+![Solved fixed-boundary mirrors coloured by |B|: axisymmetric circular-section mirror (left) and 90-degree rotating-ellipse mirror (right), with thin cap-to-cap field lines](docs/_static/figures/mirror_fixed_boundary_3d.png)
 
-The rotating-ellipse mirror converges at `ftol = 1e-12` to a normalized
-divergence of `6.6e-15`, in **6 s cold / 0.2 s warm** (peak ≈1.2 GB, CPU). Its
+Both lanes above are solved equilibria from the same example: a standard
+axisymmetric mirror (circular sections, mirror ratio 1.5, strong-force
+residual `9.9e-3`) through the one-call entry point, and the supported
+rotating ellipse whose section turns by 90 degrees between the end cuts. The
+rotating-ellipse mirror converges at `ftol = 1e-12` to a normalized
+divergence of `1.4e-14`, in **6 s cold / 0.2 s warm** (peak ≈1.2 GB, CPU). Its
 implicit boundary gradient agrees with two fully reconverged finite-difference
-solves to `5.9e-10` relative — the derivative an external optimizer needs.
+solves to `9.3e-10` relative — the derivative an external optimizer needs.
 
 ### Free-boundary β scan
 
 `solve_beta_scan` jointly updates the spline last-closed surface, the plasma
-state, and the unbounded exterior vacuum, driven by an ESSOS two-coil field.
-The supported sequence runs from 0 % to 10 % β, and the implicit free-boundary
-derivative matches a reconverged finite difference to `1.1e-10` relative
-(adjoint residual `1.4e-9`). Pushing to a requested 50 % β grows the central
-radius 7.7 % and drops the on-axis field 23.7 % from vacuum, exercising the
-finite-β coupling end to end.
+state, and the unbounded exterior vacuum, driven by an ESSOS two-coil field
+(0.5 m loops at z = ±1.0 m, 3.72e5 A: vacuum B(0) = 0.0836 T, mirror
+ratio 4.58). The supported sequence runs from 0 % to 10 % β, and the implicit
+free-boundary derivative matches a reconverged finite difference to `1.1e-10`
+relative (adjoint residual `1.4e-9`). Pushing to a requested 50 % β grows the
+central radius 7.5 % and drops the on-axis field 22.3 % from vacuum — and with
+this compact-coil configuration the 25 % and 50 % continuation states also
+pass the pointwise strong-force gate at the scan resolution, ahead of their
+formal promotion to the supported range.
 
 ![Free-boundary beta scan with ESSOS coils: field lines, LCFS, |B|, pressure, and residual histories](docs/_static/figures/mirror_free_boundary_beta50_summary.png)
 
@@ -543,7 +552,7 @@ under same-geometry refinement, so it ships as a validated **research
 candidate**, not a supported benchmark — the same implicit API already
 differentiates its periodic boundary and axis controls.
 
-![Periodic B-spline stellarator–mirror hybrid: straight legs, rotating returns, field lines, and |B|](docs/_static/figures/stellarator_mirror_hybrid.png)
+![Periodic B-spline stellarator–mirror hybrid: straight legs, rotating returns, B-spline axis, and boundary |B|](docs/_static/figures/stellarator_mirror_hybrid.png)
 
 ### Run the mirror examples
 
