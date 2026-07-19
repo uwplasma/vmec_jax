@@ -33,7 +33,7 @@ The numerics are ported verbatim from the parity-proven legacy kernels
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields as dataclass_fields
+from dataclasses import MISSING, dataclass, fields as dataclass_fields
 from typing import Any, Sequence
 
 import numpy as np
@@ -74,8 +74,38 @@ def register_pytree_dataclass(cls, *, meta: tuple[str, ...] = (),
     (e.g. :attr:`~vmex.core.implicit.ImplicitSolution.runtime`) that must
     not change an established pytree structure.
     """
-    names = [f.name for f in dataclass_fields(cls)
-             if f.name not in meta and f.name not in drop]
+    fields = tuple(dataclass_fields(cls))
+    names = [f.name for f in fields if f.init and f.name not in meta and f.name not in drop]
+    if drop:
+        meta_names = [f.name for f in fields if f.init and f.name in meta]
+        drop_names = [f.name for f in fields if f.init and f.name in drop]
+        defaults = {}
+        for field in fields:
+            if field.name not in drop_names:
+                continue
+            if field.default is not MISSING:
+                defaults[field.name] = (False, field.default)
+            elif field.default_factory is not MISSING:  # type: ignore[attr-defined]
+                defaults[field.name] = (True, field.default_factory)  # type: ignore[misc]
+            else:
+                raise TypeError(
+                    f"Dropped pytree dataclass field {cls.__name__}.{field.name} must have a default."
+                )
+
+        def flatten(instance):
+            children = tuple(getattr(instance, name) for name in names)
+            aux_data = tuple(getattr(instance, name) for name in meta_names)
+            return children, aux_data
+
+        def unflatten(aux_data, children):
+            values = dict(zip(names, children))
+            values.update(zip(meta_names, aux_data))
+            for name, (is_factory, default) in defaults.items():
+                values[name] = default() if is_factory else default
+            return cls(**values)
+
+        return jax.tree_util.register_pytree_node(cls, flatten, unflatten)
+
     return jax.tree_util.register_dataclass(
         cls, data_fields=names, meta_fields=list(meta), drop_fields=list(drop)
     )
