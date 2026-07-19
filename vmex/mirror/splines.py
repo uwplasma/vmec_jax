@@ -343,6 +343,7 @@ def build_stellarator_mirror_hybrid(
     resolution: MirrorResolution,
     *,
     coefficient_count: int = 32,
+    axis_coefficient_count: int | None = None,
     straight_length: float = 8.0,
     return_radius: float = 2.5,
     semi_major: float = 0.45,
@@ -350,7 +351,21 @@ def build_stellarator_mirror_hybrid(
     axial_flux_derivative: Array = 0.02,
     quadrature_order: int = 4,
 ) -> StellaratorMirrorSetup:
-    """Build a closed two-leg mirror with rotating stellarator returns."""
+    """Build a closed two-leg mirror with rotating stellarator returns.
+
+    ``axis_coefficient_count`` freezes the leg-return junction transition. The
+    junction between an exactly straight leg (zero curvature) and a circular
+    return (curvature ``1/return_radius``) is rounded across the cubic spline's
+    local support, so building the axis directly in a finer solve basis narrows
+    that transition and sharpens the curvature overshoot at the junction as fast
+    as refinement helps. When ``axis_coefficient_count`` is set, the racetrack
+    axis and rotating section are constructed at that base control count and
+    then exactly refined (``refine_periodic_uniform``) to ``coefficient_count``,
+    so the junction-transition width is a fixed design parameter of the family
+    while the equilibrium solve basis refines. ``coefficient_count`` must be a
+    dyadic multiple of ``axis_coefficient_count``. The default ``None`` keeps the
+    legacy behaviour of building the geometry directly in the solve basis.
+    """
 
     discretization = SplineMirrorDiscretization.build_closed(
         resolution,
@@ -358,22 +373,44 @@ def build_stellarator_mirror_hybrid(
         quadrature_order=quadrature_order,
     )
     basis = discretization.spline
+    if axis_coefficient_count is None or axis_coefficient_count == coefficient_count:
+        source_basis = basis
+    else:
+        ratio = coefficient_count // axis_coefficient_count
+        if (
+            axis_coefficient_count > coefficient_count
+            or coefficient_count % axis_coefficient_count
+            or ratio & (ratio - 1)
+        ):
+            raise ValueError(
+                "coefficient_count must be a dyadic multiple of axis_coefficient_count "
+                "to freeze the junction geometry under exact spline refinement"
+            )
+        source_basis = CubicBSplineBasis.periodic_uniform(
+            axis_coefficient_count,
+            quadrature_order=quadrature_order,
+        )
     axis_coefficients = stellarator_mirror_axis_coefficients(
-        basis,
+        source_basis,
         straight_length=straight_length,
         return_radius=return_radius,
     )
+    edge = stellarator_mirror_section_coefficients(
+        source_basis,
+        jnp.asarray(discretization.grid.theta),
+        semi_major=semi_major,
+        semi_minor=semi_minor,
+    )
+    if source_basis is not basis:
+        _, axis_coefficients = source_basis.refine_periodic_uniform(
+            axis_coefficients, coefficient_count, axis=0
+        )
+        _, edge = source_basis.refine_periodic_uniform(edge, coefficient_count, axis=-1)
     axis = evaluate_closed_spline_axis(
         axis_coefficients,
         basis,
         discretization.grid.z,
         initial_normal=jnp.asarray([0.0, 1.0, 0.0]),
-    )
-    edge = stellarator_mirror_section_coefficients(
-        basis,
-        jnp.asarray(discretization.grid.theta),
-        semi_major=semi_major,
-        semi_minor=semi_minor,
     )
     boundary = SplineMirrorBoundary(edge)
     radius = jnp.broadcast_to(

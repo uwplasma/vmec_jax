@@ -18,8 +18,11 @@ from vmex.mirror import (  # noqa: E402
     MirrorState,
 )
 from vmex.mirror.forces import (  # noqa: E402
+    force_gate_zones,
     isotropic_force_residual,
     mirror_energy,
+    passes_promotion_gate,
+    refinement_convergence,
 )
 from vmex.mirror.free_boundary import (  # noqa: E402
     _SplineFreeBoundaryVectorizer,
@@ -259,7 +262,10 @@ def test_closed_circular_limit_reaches_ftol_with_independent_strong_force() -> N
     assert result.converged
     assert float(result.variational.maximum) <= config.ftol
     assert float(result.staggered_weak_force.maximum) <= config.ftol
-    assert float(result.force.normalized_rms) < 1.0e-2
+    # Minor-radius norm: the former device-length gate of 1.0e-2 scales by
+    # exactly a/L = 0.25/(2*pi*2.5) on this closed circular limit.
+    assert float(result.force.normalized_rms) < 1.6e-4
+    assert float(result.force.device_normalized_rms) < 1.0e-2
     assert float(result.normalized_divergence_rms) < 1.0e-12
 
 
@@ -302,6 +308,109 @@ def test_stellarator_mirror_fixed_boundary_reaches_ftol() -> None:
     assert line.theta.shape == (513,)
     assert np.isfinite(float(line.iota))
     assert abs(float(line.iota)) > 1.0e-3
+
+
+_CIRCULAR_HYBRID = dict(
+    straight_length=8.0,
+    return_radius=2.5,
+    semi_major=0.45,
+    semi_minor=0.45,
+    quadrature_order=3,
+)
+
+
+def test_stellarator_mirror_junction_freeze_fixes_axis_geometry() -> None:
+    """axis_coefficient_count freezes the leg-return junction geometry.
+
+    Building the racetrack at a fixed base control count and refining the solve
+    basis by exact dyadic subdivision leaves the axis curve unchanged, so the
+    junction-transition width stops sharpening. Building the axis directly in a
+    finer basis is a genuinely different, sharper-junction curve.
+    """
+
+    resolution = MirrorResolution(ns=5, mpol=2, nxi=4)
+    points = np.linspace(0.0, 2.0 * np.pi, 401, endpoint=False)
+
+    def axis_curve(coefficient_count: int, axis_coefficient_count: int | None) -> np.ndarray:
+        setup = build_stellarator_mirror_hybrid(
+            resolution,
+            coefficient_count=coefficient_count,
+            axis_coefficient_count=axis_coefficient_count,
+            **_CIRCULAR_HYBRID,
+        )
+        return np.asarray(
+            setup.discretization.spline.evaluate(setup.axis_coefficients, points, axis=0)
+        )
+
+    base = axis_curve(16, 16)
+    frozen_32 = axis_curve(32, 16)
+    frozen_64 = axis_curve(64, 16)
+    # Exact spline refinement keeps the frozen junction curve identical.
+    np.testing.assert_allclose(frozen_32, base, atol=1.0e-12)
+    np.testing.assert_allclose(frozen_64, base, atol=1.0e-12)
+    # Rebuilding the axis directly in the finer basis is a different curve.
+    rebuilt_32 = axis_curve(32, None)
+    assert np.max(np.abs(rebuilt_32 - base)) > 1.0e-2
+    # The solve basis must be a dyadic multiple of the frozen axis basis.
+    with pytest.raises(ValueError):
+        build_stellarator_mirror_hybrid(
+            resolution,
+            coefficient_count=48,
+            axis_coefficient_count=16,
+            **_CIRCULAR_HYBRID,
+        )
+
+
+@pytest.mark.full
+@pytest.mark.usefixtures("_module_jit_enabled")
+def test_stellarator_mirror_frozen_junction_force_ladder_converges() -> None:
+    """The frozen-junction circular-section hybrid passes the promotion gate.
+
+    With the junction geometry frozen at 16 controls, exact refinement of the
+    solve basis to 32 and 64 controls drives a monotone decrease of the
+    minor-radius bulk force below the 0.05 gate, reproducing the audit's
+    device-normalized 0.204 -> 0.176 -> 0.118 all-volume ladder.
+    """
+
+    resolution = MirrorResolution(ns=5, mpol=2, nxi=4)
+    config = MirrorConfig(resolution=resolution, ftol=1.0e-12, max_iterations=1500)
+    flux = 0.02
+    device_ladder = []
+    bulk_ladder = []
+    for coefficient_count in (16, 32, 64):
+        setup = build_stellarator_mirror_hybrid(
+            resolution,
+            coefficient_count=coefficient_count,
+            axis_coefficient_count=16,
+            axial_flux_derivative=flux,
+            **_CIRCULAR_HYBRID,
+        )
+        result = solve_spline_fixed_boundary(
+            setup.initial_state,
+            setup.boundary,
+            setup.discretization,
+            config,
+            axial_flux_derivative=flux,
+            current_derivative=0.0,
+            solve_lambda=True,
+            axis=setup.axis,
+            require_convergence=False,
+        ).evaluated
+        assert bool(result.converged)
+        assert float(result.variational.maximum) <= config.ftol
+        assert float(result.normalized_divergence_rms) < 1.0e-12
+        zones = force_gate_zones(result.force)
+        device_ladder.append(zones.device_all_volume)
+        bulk_ladder.append(zones.bulk)
+
+    # Device-normalized all-volume ladder reproduces the audit and is monotone.
+    assert refinement_convergence(device_ladder).monotone
+    assert device_ladder[0] > 0.2 > device_ladder[-1]
+    # Minor-radius bulk force converges monotonically below the promotion gate.
+    bulk = refinement_convergence(bulk_ladder)
+    assert bulk.monotone
+    assert passes_promotion_gate(bulk_ladder, absolute_gate=5.0e-2)
+    assert bulk_ladder[-1] < 2.0e-3
 
 
 def _spline_polynomial_state():
@@ -746,7 +855,10 @@ def test_supplied_field_initializer_recovers_straight_field_line_mirror() -> Non
     assert not bool(energy.geometry.jacobian_sign_changed)
     assert float(tangency_rms) < 2.0e-4
     assert float(field_error) < 5.0e-4
-    assert float(force.normalized_rms) < 6.0e-3
+    # Minor-radius norm: the former device-length bound of 6.0e-3 scales by
+    # a/L = 0.03/2 for this thin analytic tube.
+    assert float(force.normalized_rms) < 1.0e-4
+    assert float(force.device_normalized_rms) < 6.0e-3
     assert float(jnp.max(jnp.abs(initialized.state.lambda_coefficients))) > 1.0e-6
     assert np.all(np.asarray(initialized.axial_flux_derivative) > 0.0)
     np.testing.assert_allclose(
@@ -820,8 +932,11 @@ def test_equal_end_axisymmetric_mirror_is_independent_of_cut_location(_module_ji
         assert result.final_linear_residual < 2.0e-9
         assert float(result.variational.maximum) <= config.ftol
         assert float(result.staggered_weak_force.maximum) <= config.ftol
-        assert float(result.force.normalized_rms) < 6.0e-3
-        assert float(result.force.bulk_normalized_rms) < 2.0e-3
+        # Minor-radius norm: the former device-length bounds of 6.0e-3 and
+        # 2.0e-3 scale by a/L <= 0.12/1.2 across the three cut locations.
+        assert float(result.force.normalized_rms) < 6.0e-4
+        assert float(result.force.bulk_normalized_rms) < 2.0e-4
+        assert float(result.force.device_normalized_rms) < 6.0e-3
 
     np.testing.assert_allclose(center_radius, center_radius[0], rtol=3.0e-8)
     np.testing.assert_allclose(center_axis_field, center_axis_field[0], rtol=2.0e-5)

@@ -215,24 +215,31 @@ def test_two_coil_paraxial_tensor_residual_decreases_with_tube_radius() -> None:
     )
     center = grid.nxi // 2
     residuals = []
+    device_residuals = []
     for center_radius in (0.1, 0.05, 0.025):
         flux = 0.5 * bz[center] * center_radius**2
         boundary = MirrorBoundary.from_axis_field(flux, bz, grid)
         state = MirrorState.from_boundary(boundary, grid)
         energy = mirror_energy(state, grid, axial_flux_derivative=flux)
-        residuals.append(
-            float(
-                isotropic_force_residual(
-                    energy,
-                    grid,
-                    state=state,
-                    axial_flux_derivative=flux,
-                ).normalized_rms
-            )
+        force = isotropic_force_residual(
+            energy,
+            grid,
+            state=state,
+            axial_flux_derivative=flux,
         )
+        np.testing.assert_allclose(force.minor_radius, center_radius, rtol=1.0e-12)
+        residuals.append(float(force.normalized_rms))
+        device_residuals.append(float(force.device_normalized_rms))
     assert residuals[0] > residuals[1] > residuals[2]
+    # The device-length residual halves with the tube radius; the primary
+    # minor-radius norm gains the extra factor of two from its scale.
+    np.testing.assert_allclose(
+        np.asarray(device_residuals[:-1]) / np.asarray(device_residuals[1:]),
+        2.0,
+        rtol=3.0e-3,
+    )
     np.testing.assert_allclose(
         np.asarray(residuals[:-1]) / np.asarray(residuals[1:]),
-        2.0,
+        4.0,
         rtol=3.0e-3,
     )

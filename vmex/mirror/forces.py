@@ -13,6 +13,7 @@ diagnostic.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from math import pi
 from typing import Any
@@ -471,7 +472,13 @@ class MirrorEnergy:
 
 @dataclass(frozen=True)
 class IsotropicForceResidual:
-    """Covariant physical force components and convergence diagnostics."""
+    """Covariant physical force components and convergence diagnostics.
+
+    ``normalized_rms`` and the regional norms use the minor-radius force scale
+    ``B^2/(mu0 a)``, which is comparable across open and closed lanes.
+    ``device_normalized_rms`` keeps the legacy device-length normalization
+    ``B^2/(mu0 L)`` quoted by the recorded benchmark JSONs.
+    """
 
     covariant_s: Array
     covariant_theta: Array
@@ -485,6 +492,8 @@ class IsotropicForceResidual:
     axis_normalized_rms: Array
     first_row_normalized_rms: Array
     end_collar_normalized_rms: Array
+    device_normalized_rms: Array
+    minor_radius: Array
     axis_field_nonuniformity: Array
     component_rms: Array
 
@@ -718,6 +727,31 @@ def _normalized_variational_residual(
     )
 
 
+def effective_minor_radius(
+    state: MirrorState,
+    grid: "MirrorGrid",
+    *,
+    closed: bool = False,
+) -> Array:
+    """Return the flux-equivalent LCFS minor radius of a mirror state.
+
+    Open mirrors use the midplane LCFS cross-section; closed hybrids average
+    the section around the full circuit, where no midplane exists. The
+    quadratic mean ``sqrt(<r^2>)`` reproduces a circular radius exactly and
+    the area-equivalent ``sqrt(A B)`` for an elliptical polar section.
+    """
+
+    lcfs = jnp.asarray(state.radius_scale)[-1]
+    theta_weights = jnp.asarray(grid.theta_basis.weights)
+    if closed:
+        axial_weights = jnp.asarray(grid.axial_basis.weights)
+        weights = theta_weights[:, None] * axial_weights[None, :]
+        return jnp.sqrt(jnp.sum(weights * lcfs**2) / jnp.sum(weights))
+    midplane = int(abs(grid.z - 0.5 * (grid.z[0] + grid.z[-1])).argmin())
+    section = lcfs[:, midplane]
+    return jnp.sqrt(jnp.sum(theta_weights * section**2) / jnp.sum(theta_weights))
+
+
 def isotropic_force_residual(
     energy: MirrorEnergy,
     grid: "MirrorGrid",
@@ -730,6 +764,7 @@ def isotropic_force_residual(
     axis: ClosedAxisGeometry | None = None,
     closed: bool = False,
     characteristic_length: float | Array | None = None,
+    minor_radius: float | Array | None = None,
     mu0: float = float(MU0),
 ) -> IsotropicForceResidual:
     """Reconstruct ``curl(B)/mu0 x B - grad(p)`` on full radial surfaces.
@@ -737,6 +772,16 @@ def isotropic_force_residual(
     Covariant field and pressure are first evaluated on the same radial Gauss
     cells as the energy. Radial differences then place current and force on
     interior full surfaces, following VMEC's half-to-full ``jxbforce`` layout.
+
+    The primary ``normalized_rms`` and every regional norm divide the force
+    density by the transverse magnetic force scale ``B^2/(mu0 a)``, where the
+    minor radius ``a`` defaults to :func:`effective_minor_radius`. This scale
+    is structural (each lane has one minor radius), so open mirrors and closed
+    hybrids are gated on the same footing. The legacy device-length number,
+    ``B^2/(mu0 L)`` with ``L`` from ``characteristic_length`` (open default:
+    the cap-to-cap extent; closed callers pass the axis arc length), is linear
+    in the arbitrary device length and is kept only as
+    ``device_normalized_rms`` because recorded benchmarks quote it.
     """
 
     if gamma <= 1.0:
@@ -826,9 +871,18 @@ def isotropic_force_residual(
         if characteristic_length is not None
         else jnp.asarray(float(grid.z[-1] - grid.z[0]))
     )
-    magnetic_force_scale = energy.b_squared[1:-1, :, axial_slice] / (float(mu0) * length)
+    radius_scale_reference = (
+        jnp.asarray(minor_radius)
+        if minor_radius is not None
+        else effective_minor_radius(state, grid, closed=closed)
+    )
+    magnetic_force_scale = energy.b_squared[1:-1, :, axial_slice] / (float(mu0) * radius_scale_reference)
     reference_rms = jnp.sqrt(jnp.sum(weights * magnetic_force_scale**2) / jnp.sum(weights))
     normalized_rms = physical_rms / jnp.maximum(reference_rms, jnp.finfo(physical_rms.dtype).tiny)
+    device_reference_rms = reference_rms * radius_scale_reference / length
+    device_normalized_rms = physical_rms / jnp.maximum(
+        device_reference_rms, jnp.finfo(physical_rms.dtype).tiny
+    )
     active_s = jnp.asarray(grid.s[1:-1])
 
     def regional_normalized_rms(radial_mask: Array, axial_mask: Array = 1.0) -> Array:
@@ -874,9 +928,90 @@ def isotropic_force_residual(
         axis_normalized_rms=axis_normalized_rms,
         first_row_normalized_rms=first_row_normalized_rms,
         end_collar_normalized_rms=end_collar_normalized_rms,
+        device_normalized_rms=device_normalized_rms,
+        minor_radius=radius_scale_reference,
         axis_field_nonuniformity=axis_field_nonuniformity,
         component_rms=component_rms,
     )
+
+
+@dataclass(frozen=True)
+class ForceGateZones:
+    """Zone breakdown of the strong-force gate under the primary normalization.
+
+    ``bulk`` covers the unconstrained volume (``s >= 0.2``, central 80% of the
+    axial coordinate for open mirrors). ``end_collar`` is the outer 20%
+    nearest the two frozen cuts (empty for closed hybrids), and ``axis_row``
+    and ``first_row`` cover the constrained near-axis region, so constrained
+    zones are visible instead of being folded into ``all_volume``.
+    ``device_all_volume`` restates the total under the legacy device-length
+    normalization recorded by the benchmark JSONs.
+    """
+
+    all_volume: float
+    bulk: float
+    end_collar: float
+    axis_row: float
+    first_row: float
+    device_all_volume: float
+    minor_radius: float
+
+
+def force_gate_zones(residual: IsotropicForceResidual) -> ForceGateZones:
+    """Summarize a force residual as the zone report used by gate evaluation."""
+
+    return ForceGateZones(
+        all_volume=float(residual.normalized_rms),
+        bulk=float(residual.bulk_normalized_rms),
+        end_collar=float(residual.end_collar_normalized_rms),
+        axis_row=float(residual.axis_normalized_rms),
+        first_row=float(residual.first_row_normalized_rms),
+        device_all_volume=float(residual.device_normalized_rms),
+        minor_radius=float(residual.minor_radius),
+    )
+
+
+@dataclass(frozen=True)
+class RefinementConvergence:
+    """Per-step refinement behaviour of a residual sequence.
+
+    ``ratios[i] = residuals[i] / residuals[i + 1]``, so every ratio above one
+    means the residual fell at that refinement step. ``monotone`` requires a
+    strict decrease at every step.
+    """
+
+    residuals: tuple[float, ...]
+    ratios: tuple[float, ...]
+    monotone: bool
+
+
+def refinement_convergence(residuals: Sequence[float] | Array) -> RefinementConvergence:
+    """Report per-step ratios and monotonicity of a coarse-to-fine sequence."""
+
+    values = tuple(float(value) for value in residuals)
+    if len(values) < 2:
+        raise ValueError("refinement convergence needs residuals from at least two resolutions")
+    if any(value <= 0.0 or value != value for value in values):
+        raise ValueError("refinement residuals must be positive and finite")
+    ratios = tuple(coarse / fine for coarse, fine in zip(values[:-1], values[1:], strict=True))
+    return RefinementConvergence(
+        residuals=values,
+        ratios=ratios,
+        monotone=all(ratio > 1.0 for ratio in ratios),
+    )
+
+
+def passes_promotion_gate(
+    residuals: Sequence[float] | Array,
+    *,
+    absolute_gate: float,
+) -> bool:
+    """Promotion criterion: finest residual under the gate and monotone refinement."""
+
+    if absolute_gate <= 0.0:
+        raise ValueError("absolute_gate must be positive")
+    convergence = refinement_convergence(residuals)
+    return convergence.monotone and convergence.residuals[-1] <= absolute_gate
 
 
 from typing import TYPE_CHECKING

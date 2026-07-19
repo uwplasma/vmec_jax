@@ -519,7 +519,9 @@ result = solve_fixed_boundary_from_radius(0.3, config)   # radius: scalar, (nxi,
 
 Both lanes above are solved equilibria from the same example: a standard
 axisymmetric mirror (circular sections, mirror ratio 1.5, strong-force
-residual `9.9e-3`) through the one-call entry point, and the supported
+residual `5.9e-4` under the primary minor-radius normalization `B²/(μ₀a)`,
+`9.9e-3` under the legacy device-length normalization the recorded
+benchmarks quote) through the one-call entry point, and the supported
 rotating ellipse whose section turns by 90 degrees between the end cuts. The
 rotating-ellipse mirror converges at `ftol = 1e-12` to a normalized
 divergence of `1.4e-14`, in **6 s cold / 0.2 s warm** (peak ≈1.2 GB, CPU). Its
@@ -541,16 +543,22 @@ formal promotion to the supported range.
 
 ![Free-boundary beta scan with ESSOS coils: field lines, LCFS, |B|, pressure, and residual histories](docs/_static/figures/mirror_free_boundary_beta50_summary.png)
 
-### Stellarator–mirror hybrid (research)
+### Stellarator–mirror hybrid
 
 A closed periodic hybrid — two exactly straight mirror legs joined by two
 curved stellarator returns on a rotation-minimizing B-spline axis — has a
 complete fixed-boundary solve and example. A finite axial current gives
 `ι = 0.085`; the case reaches a `2.4e-14` variational residual and `3.1e-14`
-normalized divergence. Its independent strong-force gate does not yet converge
-under same-geometry refinement, so it ships as a validated **research
-candidate**, not a supported benchmark — the same implicit API already
-differentiates its periodic boundary and axis controls.
+normalized divergence. The leg-return junction is frozen as an explicit design
+parameter (`axis_coefficient_count`): the axis is built at a fixed base control
+count and the solve basis is exactly refined, so the junction stops sharpening.
+With that contract the **circular-section lane is supported** — its strong-force
+gate converges monotonically under same-geometry refinement (device-normalized
+all-volume `0.204 → 0.176 → 0.118`, minor-radius bulk `0.00304 → 0.00261 →
+0.00175`, below the `0.05` gate). The **rotating-elliptical-section hybrid
+remains a research candidate**, held back by a separately scoped near-axis
+representation defect in the rotating section rather than by the junction. The
+same implicit API differentiates the periodic boundary and axis controls.
 
 ![Periodic B-spline stellarator–mirror hybrid: straight legs, rotating returns, B-spline axis, and boundary |B|](docs/_static/figures/stellarator_mirror_hybrid.png)
 

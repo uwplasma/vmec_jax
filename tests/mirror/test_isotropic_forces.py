@@ -21,12 +21,16 @@ from vmex.mirror import (  # noqa: E402
 from vmex.mirror.forces import (  # noqa: E402
     MU0,
     _interpolate_radius_scale,
+    effective_minor_radius,
+    force_gate_zones,
     isotropic_force_residual,
     isotropic_staggered_energy_gradient,
     isotropic_staggered_fixed_boundary_gradient,
     isotropic_staggered_weak_residual,
     mass_profile_from_pressure,
     mirror_energy,
+    passes_promotion_gate,
+    refinement_convergence,
     staggered_field_strength,
 )
 from vmex.mirror.solver import (  # noqa: E402
@@ -222,6 +226,166 @@ def test_manufactured_radial_pressure_balance_converges_second_order() -> None:
         4.1,
         rtol=0.08,
     )
+
+
+def _manufactured_pressure_balance(ns: int = 9):
+    """Deterministic finite-beta cylinder with a nonzero pointwise residual."""
+
+    grid, _, _ = _cylinder(ns=ns, nxi=9)
+    s = jnp.asarray(grid.s)
+    radius, shaping, flux = 0.3, 0.4, 0.1
+    radius_scale = radius * jnp.sqrt(1.0 + shaping * s)
+    state = MirrorState(
+        jnp.broadcast_to(radius_scale[:, None, None], grid.shape),
+        jnp.zeros(grid.shape),
+    )
+    vacuum = mirror_energy(state, grid, axial_flux_derivative=flux)
+    radial_jacobian = 0.5 * radius**2 * (1.0 + 2.0 * shaping * s)
+    field = flux / radial_jacobian
+    pressure = 2.0e5 + (field[-1] ** 2 - field**2) / (2.0 * MU0)
+    mass = mass_profile_from_pressure(pressure, vacuum.volume_derivative)
+    energy = mirror_energy(state, grid, axial_flux_derivative=flux, mass_profile=mass)
+    return grid, state, energy, mass, flux
+
+
+def test_minor_radius_normalization_matches_independent_recomputation() -> None:
+    """The primary norm is ``B^2/(mu0 a)`` with the midplane LCFS radius."""
+
+    grid, state, energy, mass, flux = _manufactured_pressure_balance()
+    residual = isotropic_force_residual(
+        energy,
+        grid,
+        state=state,
+        axial_flux_derivative=flux,
+        mass_profile=mass,
+    )
+    lcfs_midplane_radius = 0.3 * np.sqrt(1.4)
+    np.testing.assert_allclose(residual.minor_radius, lcfs_midplane_radius, rtol=1.0e-13)
+    np.testing.assert_allclose(
+        effective_minor_radius(state, grid), lcfs_midplane_radius, rtol=1.0e-13
+    )
+
+    geometry = energy.geometry
+    metric = np.stack(
+        [
+            np.stack([geometry.g_ss, geometry.g_stheta, geometry.g_sxi], axis=-1),
+            np.stack([geometry.g_stheta, geometry.g_thetatheta, geometry.g_thetaxi], axis=-1),
+            np.stack([geometry.g_sxi, geometry.g_thetaxi, geometry.g_xixi], axis=-1),
+        ],
+        axis=-2,
+    )
+    force = np.stack(
+        [residual.covariant_s, residual.covariant_theta, residual.covariant_xi],
+        axis=-1,
+    )[1:-1, :, 1:-1]
+    force_squared = np.einsum(
+        "...i,...ij,...j->...",
+        force,
+        np.linalg.inv(metric[1:-1, :, 1:-1]),
+        force,
+    )
+    weights = (
+        np.asarray(grid.radial_weights[1:-1])[:, None, None]
+        * np.asarray(grid.theta_basis.weights)[None, :, None]
+        * np.asarray(grid.axial_basis.weights)[None, None, 1:-1]
+        * np.asarray(geometry.sqrt_g)[1:-1, :, 1:-1]
+    )
+    physical_rms = np.sqrt(np.sum(weights * force_squared) / np.sum(weights))
+    reference = np.asarray(energy.b_squared)[1:-1, :, 1:-1] / (MU0 * lcfs_midplane_radius)
+    expected = physical_rms / np.sqrt(np.sum(weights * reference**2) / np.sum(weights))
+    np.testing.assert_allclose(residual.normalized_rms, expected, rtol=1.0e-12)
+
+    device_length = float(grid.z[-1] - grid.z[0])
+    np.testing.assert_allclose(
+        residual.device_normalized_rms,
+        expected * device_length / lcfs_midplane_radius,
+        rtol=1.0e-12,
+    )
+
+
+def test_legacy_device_normalization_is_preserved_and_length_linear() -> None:
+    """``device_normalized_rms`` reproduces the pre-redesign recorded value."""
+
+    grid, state, energy, mass, flux = _manufactured_pressure_balance()
+    residual = isotropic_force_residual(
+        energy,
+        grid,
+        state=state,
+        axial_flux_derivative=flux,
+        mass_profile=mass,
+    )
+    # Recorded by the device-length implementation at commit 5a7f2f60.
+    np.testing.assert_allclose(residual.device_normalized_rms, 1.1848032715345534e-3, rtol=1.0e-10)
+
+    doubled = isotropic_force_residual(
+        energy,
+        grid,
+        state=state,
+        axial_flux_derivative=flux,
+        mass_profile=mass,
+        minor_radius=2.0 * float(residual.minor_radius),
+    )
+    np.testing.assert_allclose(doubled.normalized_rms, 2.0 * residual.normalized_rms, rtol=1.0e-13)
+    np.testing.assert_allclose(
+        doubled.device_normalized_rms, residual.device_normalized_rms, rtol=1.0e-13
+    )
+    halved_length = isotropic_force_residual(
+        energy,
+        grid,
+        state=state,
+        axial_flux_derivative=flux,
+        mass_profile=mass,
+        characteristic_length=0.5 * float(grid.z[-1] - grid.z[0]),
+    )
+    np.testing.assert_allclose(
+        halved_length.device_normalized_rms, 0.5 * residual.device_normalized_rms, rtol=1.0e-13
+    )
+    np.testing.assert_allclose(halved_length.normalized_rms, residual.normalized_rms, rtol=1.0e-13)
+
+
+def test_force_gate_zones_reports_regions_under_both_normalizations() -> None:
+    grid, state, energy, mass, flux = _manufactured_pressure_balance()
+    residual = isotropic_force_residual(
+        energy,
+        grid,
+        state=state,
+        axial_flux_derivative=flux,
+        mass_profile=mass,
+    )
+    zones = force_gate_zones(residual)
+    assert zones.all_volume == float(residual.normalized_rms)
+    assert zones.bulk == float(residual.bulk_normalized_rms)
+    assert zones.end_collar == float(residual.end_collar_normalized_rms)
+    assert zones.axis_row == float(residual.axis_normalized_rms)
+    assert zones.first_row == float(residual.first_row_normalized_rms)
+    assert zones.device_all_volume == float(residual.device_normalized_rms)
+    assert zones.minor_radius == float(residual.minor_radius)
+    assert zones.all_volume < zones.device_all_volume
+
+
+def test_refinement_convergence_reports_ratios_and_monotonicity() -> None:
+    ladder = refinement_convergence([0.0667, 0.0267, 0.0142])
+    np.testing.assert_allclose(ladder.ratios, (0.0667 / 0.0267, 0.0267 / 0.0142))
+    assert ladder.monotone
+    assert ladder.residuals == (0.0667, 0.0267, 0.0142)
+
+    plateau = refinement_convergence([0.0267, 0.0142, 0.0151])
+    assert not plateau.monotone
+    np.testing.assert_allclose(plateau.ratios[-1], 0.0142 / 0.0151)
+
+    with pytest.raises(ValueError):
+        refinement_convergence([0.1])
+    with pytest.raises(ValueError):
+        refinement_convergence([0.1, -0.2])
+
+
+def test_promotion_gate_requires_absolute_pass_and_refinement() -> None:
+    ladder = [0.0667, 0.0267, 0.0142]
+    assert passes_promotion_gate(ladder, absolute_gate=0.05)
+    assert not passes_promotion_gate(ladder, absolute_gate=0.01)
+    assert not passes_promotion_gate([0.0267, 0.0142, 0.0151], absolute_gate=0.05)
+    with pytest.raises(ValueError):
+        passes_promotion_gate(ladder, absolute_gate=0.0)
 
 
 def test_staggered_polynomial_force_converges_with_lambda_current_and_pressure() -> None:

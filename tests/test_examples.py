@@ -160,11 +160,19 @@ def test_mirror_fixed_boundary_nonaxisymmetric_example(tmp_path):
     assert summary["rotating_ellipse"]["strong_force_normalized_rms"] < 5.0e-2
     assert summary["rotating_ellipse"]["boundary_gradient_relative_error"] < 1.0e-4
     assert summary["rotating_ellipse"]["adjoint_relative_residual"] < 1.0e-8
-    assert summary["straight_field_line"]["status"].startswith("not-supported")
+    assert summary["straight_field_line"]["status"].startswith("paraxial")
     assert summary["straight_field_line"]["variational_max"] < 1.0e-12
     assert summary["straight_field_line"]["final_linear_residual"] < 1.0e-8
     assert summary["straight_field_line"]["linear_iterations"] < 1000
-    assert summary["straight_field_line"]["strong_force_normalized_rms"] > 0.5
+    # Paraxial benchmark: the unconstrained bulk force is clean and gated,
+    # while the expected cut boundary layer dominates the all-volume and
+    # end-collar norms (device-normalized all-volume above 0.1).
+    assert summary["straight_field_line"]["strong_force_bulk_rms"] < 5.0e-2
+    assert (
+        summary["straight_field_line"]["strong_force_end_collar_rms"]
+        > summary["straight_field_line"]["strong_force_bulk_rms"]
+    )
+    assert summary["straight_field_line"]["strong_force_device_normalized_rms"] > 0.1
     assert summary["straight_field_line"]["axial_flux_derivative_min"] > 4.49e-4
     for case in summary:
         for suffix in ("3d", "cross_sections", "modB", "summary"):
