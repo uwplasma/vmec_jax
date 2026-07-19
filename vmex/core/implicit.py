@@ -302,28 +302,66 @@ def _template_runtime(cfg: ImplicitConfig) -> SolverRuntime:
 # ---------------------------------------------------------------------------
 
 
-def _boundary_from_params(params: ImplicitParams, cfg: ImplicitConfig):
-    """Traceable ``readin.f`` boundary processing (symmetric inputs).
+def _lasym_delta_rotation_traceable(rbc, rbs, zbc, zbs, cfg: ImplicitConfig,
+                                    *, mpol: int, ntor: int):
+    """Traceable ``readin.f`` lasym theta-normalization.
 
-    Reproduces :func:`vmex.core.setup.boundary_from_input` for
-    ``lasym = False`` with the theta-flip decision frozen from the reference
-    input (it is a discrete function of ``p`` — constant in any neighborhood
-    where the gradient exists).  Returns the internal-normalized,
-    m=1-constrained signed helical arrays plus the physical ``r00``.
+    Reproduces :func:`vmex.core.setup._lasym_delta_rotation`: rotate theta so
+    ``RBS(0, 1) = ZBC(0, 1)``, every ``(n, m)`` pair mixed by ``m*delta``.  The
+    *discrete* rotate/don't-rotate decision (``mpol < 2``, a zero denominator,
+    or ``delta == 0`` — each a measure-zero surface in parameter space) is
+    frozen from the reference input ``cfg.inp``, exactly like ``lflip``; the
+    ``delta`` value and the ``cos(m*delta)/sin(m*delta)`` family mixing are
+    smooth functions of the ``(0, 1)`` coefficients and are traced.
+    """
+    r0 = np.asarray(cfg.inp.rbc, dtype=float)
+    s0 = np.asarray(cfg.inp.rbs, dtype=float)
+    c0 = np.asarray(cfg.inp.zbc, dtype=float)
+    z0 = np.asarray(cfg.inp.zbs, dtype=float)
+    if mpol < 2:
+        return rbc, rbs, zbc, zbs
+    denom0 = abs(r0[ntor, 1]) + abs(z0[ntor, 1])
+    if denom0 == 0.0:
+        return rbc, rbs, zbc, zbs
+    if float(np.arctan((s0[ntor, 1] - c0[ntor, 1]) / denom0)) == 0.0:
+        return rbc, rbs, zbc, zbs
+    denom = jnp.abs(rbc[ntor, 1]) + jnp.abs(zbs[ntor, 1])
+    delta = jnp.arctan((rbs[ntor, 1] - zbc[ntor, 1]) / denom)
+    m = jnp.arange(mpol, dtype=rbc.dtype)[None, :]
+    cos_md, sin_md = jnp.cos(m * delta), jnp.sin(m * delta)
+    rbc_new = rbc * cos_md + rbs * sin_md
+    rbs_new = rbs * cos_md - rbc * sin_md
+    zbc_new = zbc * cos_md + zbs * sin_md
+    zbs_new = zbs * cos_md - zbc * sin_md
+    return rbc_new, rbs_new, zbc_new, zbs_new
+
+
+def _boundary_from_params(params: ImplicitParams, cfg: ImplicitConfig):
+    """Traceable ``readin.f`` boundary processing (symmetric and lasym inputs).
+
+    Reproduces :func:`vmex.core.setup.boundary_from_input` with the discrete
+    decisions — the theta-flip (``lflip``) and the lasym ``delta`` rotate/skip
+    branch — frozen from the reference input (they are discrete functions of
+    ``p``, constant in any neighborhood where the gradient exists).  Returns
+    the internal-normalized, m=1-constrained signed helical arrays
+    ``(R_cos, R_sin, Z_cos, Z_sin)`` plus the physical ``r00``; for
+    ``lasym = False`` the ``R_sin``/``Z_cos`` arrays are zero.
     """
     res = cfg.resolution
-    if res.lasym:
-        raise NotImplementedError(
-            "implicit parameter map: lasym boundary processing (the readin.f "
-            "delta rotation) is not implemented yet; run with lasym = False"
-        )
     mpol, ntor = int(res.mpol), int(res.ntor)
     modes, trig = _static_tables(res)[0], _static_tables(res)[1]
     template = _template_runtime(cfg)
     lflip = bool(template.setup.lflip)
+    lthreed = ntor > 0
+    lasym = bool(res.lasym)
 
     rbc = jnp.asarray(params.rbc)
     zbs = jnp.asarray(params.zbs)
+    if lasym:
+        rbs = jnp.asarray(params.rbs)
+        zbc = jnp.asarray(params.zbc)
+        rbc, rbs, zbc, zbs = _lasym_delta_rotation_traceable(
+            rbc, rbs, zbc, zbs, cfg, mpol=mpol, ntor=ntor)
 
     # readin.f accumulation into the internal (|n|, m) blocks.
     shape = (ntor + 1, mpol)
@@ -331,7 +369,11 @@ def _boundary_from_params(params: ImplicitParams, cfg: ImplicitConfig):
     rbss = jnp.zeros(shape, dtype=rbc.dtype)
     zbcs = jnp.zeros(shape, dtype=rbc.dtype)
     zbsc = jnp.zeros(shape, dtype=rbc.dtype)
-    lthreed = ntor > 0
+    if lasym:
+        rbsc = jnp.zeros(shape, dtype=rbc.dtype)
+        rbcs = jnp.zeros(shape, dtype=rbc.dtype)
+        zbcc = jnp.zeros(shape, dtype=rbc.dtype)
+        zbss = jnp.zeros(shape, dtype=rbc.dtype)
     for m in range(mpol):
         if cfg.inp.lfreeb and 1 < cfg.inp.mfilter_fbdy < m:
             continue
@@ -346,6 +388,14 @@ def _boundary_from_params(params: ImplicitParams, cfg: ImplicitConfig):
                 if m > 0:
                     rbss = rbss.at[ni, m].add(isgn * rbc[j, m])
                 zbcs = zbcs.at[ni, m].add(-isgn * zbs[j, m])
+            if lasym:
+                if m > 0:
+                    rbsc = rbsc.at[ni, m].add(rbs[j, m])
+                zbcc = zbcc.at[ni, m].add(zbc[j, m])
+                if lthreed:
+                    rbcs = rbcs.at[ni, m].add(-isgn * rbs[j, m])
+                    if m > 0:
+                        zbss = zbss.at[ni, m].add(isgn * zbc[j, m])
 
     r00 = rbcc[0, 0]
 
@@ -356,31 +406,58 @@ def _boundary_from_params(params: ImplicitParams, cfg: ImplicitConfig):
         zbsc = keep0(-signs * zbsc, zbsc)
         rbss = keep0(-signs * rbss, rbss)
         zbcs = keep0(signs * zbcs, zbcs)
+        if lasym:
+            rbsc = keep0(-signs * rbsc, rbsc)
+            zbcc = keep0(signs * zbcc, zbcc)
+            rbcs = keep0(signs * rbcs, rbcs)
+            zbss = keep0(-signs * zbss, zbss)
 
     # internal blocks -> signed helical packing (setup._helical_from_internal_blocks)
     m_arr = np.asarray(modes.m, dtype=int)
     n_arr = np.asarray(modes.n, dtype=int)
-    R_list, Z_list = [], []
+    R_cos_list, Z_sin_list = [], []
+    R_sin_list, Z_cos_list = [], []
     for m, n in zip(m_arr, n_arr):
         ni = abs(n)
         if m == 0 and n != 0:
             isgn = 1 if n > 0 else -1
-            R_list.append(rbcc[ni, m])
-            Z_list.append(-isgn * zbcs[ni, m])
+            R_cos_list.append(rbcc[ni, m])
+            Z_sin_list.append(-isgn * zbcs[ni, m])
+            if lasym:
+                R_sin_list.append(-isgn * rbcs[ni, m])
+                Z_cos_list.append(zbcc[ni, m])
         elif n == 0:
-            R_list.append(rbcc[ni, m])
-            Z_list.append(zbsc[ni, m])
+            R_cos_list.append(rbcc[ni, m])
+            Z_sin_list.append(zbsc[ni, m])
+            if lasym:
+                R_sin_list.append(rbsc[ni, m])
+                Z_cos_list.append(zbcc[ni, m])
         elif n > 0:
-            R_list.append(0.5 * (rbcc[ni, m] + rbss[ni, m]))
-            Z_list.append(0.5 * (zbsc[ni, m] - zbcs[ni, m]))
+            R_cos_list.append(0.5 * (rbcc[ni, m] + rbss[ni, m]))
+            Z_sin_list.append(0.5 * (zbsc[ni, m] - zbcs[ni, m]))
+            if lasym:
+                R_sin_list.append(0.5 * (rbsc[ni, m] - rbcs[ni, m]))
+                Z_cos_list.append(0.5 * (zbcc[ni, m] + zbss[ni, m]))
         else:
-            R_list.append(0.5 * (rbcc[ni, m] - rbss[ni, m]))
-            Z_list.append(0.5 * (zbsc[ni, m] + zbcs[ni, m]))
+            R_cos_list.append(0.5 * (rbcc[ni, m] - rbss[ni, m]))
+            Z_sin_list.append(0.5 * (zbsc[ni, m] + zbcs[ni, m]))
+            if lasym:
+                R_sin_list.append(0.5 * (rbsc[ni, m] + rbcs[ni, m]))
+                Z_cos_list.append(0.5 * (zbcc[ni, m] - zbss[ni, m]))
     scale = jnp.asarray(physical_to_internal_scale(modes, trig))
-    R_cos = jnp.stack(R_list) * scale
-    Z_sin = jnp.stack(Z_list) * scale
-    zeros = jnp.zeros_like(R_cos)
+    R_cos = jnp.stack(R_cos_list) * scale
+    Z_sin = jnp.stack(Z_sin_list) * scale
 
+    if lasym:
+        R_sin = jnp.stack(R_sin_list) * scale
+        Z_cos = jnp.stack(Z_cos_list) * scale
+        R_cos2, Z_sin2, R_sin2, Z_cos2 = m1_physical_to_constrained(
+            R_cos[None, :], Z_sin[None, :], R_sin[None, :], Z_cos[None, :],
+            modes=modes, lthreed=lthreed, lasym=True, lconm1=cfg.lconm1,
+        )
+        return R_cos2[0], R_sin2[0], Z_cos2[0], Z_sin2[0], r00
+
+    zeros = jnp.zeros_like(R_cos)
     R_cos2, Z_sin2, _, _ = m1_physical_to_constrained(
         R_cos[None, :], Z_sin[None, :], None, None,
         modes=modes, lthreed=lthreed, lasym=False, lconm1=cfg.lconm1,

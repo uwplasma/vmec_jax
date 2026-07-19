@@ -518,3 +518,274 @@ def test_multigrid_gradient_vs_frozen_path_fd():
           f"(Newton res {res:.0e})")
     assert res < 1e-8, f"frozen solve not converged (res {res:.1e})"
     assert rel <= 1e-6
+
+
+# ===========================================================================
+# lasym (non-stellarator-symmetric) implicit-gradient lane
+# ===========================================================================
+#
+# simsopt 1.10.3 / VMEC++ 0.6.0 added non-stellarator-symmetric boundary
+# optimization (up-down-asymmetric tokamaks, reconstruction).  The traceable
+# parameter map (implicit._boundary_from_params) reproduces the readin.f
+# ``delta`` theta-normalization and the four internal-block families
+# (rbcc/rbss/rbcs/rbsc, zbcc/zbss/zbcs/zbsc) for lasym, so ``jax.grad`` /
+# ``jax.jacrev`` through ``im.run`` now differentiate an rbs/zbc boundary dof.
+#
+# The 2D lasym golden deck ``up_down_asymmetric_tokamak`` exhausts NITER at its
+# native ns = 17; ns = 11 / ftol = 1e-12 converges and is the fixed-boundary
+# case here (the same "modified deck" pattern as the multigrid test above).
+#
+# On this deck the m = 1 lasym constraint (residue.f90 ``constrain_m1`` on the
+# asymmetric ``force_Z_cc`` pair) floors the *frozen* residual F that the
+# implicit adjoint linearizes at ~1e-7 even after the solver's force metric
+# crosses ftol — the same convergence-floor phenomenon the li383 3D tests
+# document.  That anchor shift caps the naive/frozen FD-vs-AD agreement of the
+# full ``im.run`` gradient at a solver-limited ~1e-4 (asserted with margin, and
+# printed, below), while the gradient *itself* is exact:
+#   * the traceable p -> boundary map derivative FD-validates to <= 1e-6 with
+#     no solver in the loop (``test_lasym_boundary_map_derivative_vs_fd``), and
+#   * the analytic directional derivative equals the frozen-path central FD to
+#     solver accuracy (<= 5e-5) once *both* are anchored at a Newton-refined
+#     fixed point, isolating the linearization
+#     (``test_lasym_adjoint_vs_frozen_path_fd``).
+
+LASYM_CASE = dict(ns=11, ftol=1e-12, max_iterations=4000)
+
+
+@pytest.fixture(scope="module")
+def lasym():
+    """Converged fixed-boundary 2D lasym case (up_down deck, ns = 11)."""
+    inp0 = VmecInput.from_file(str(DATA_DIR / "input.up_down_asymmetric_tokamak"))
+    inp = dataclasses.replace(
+        inp0,
+        ns_array=np.array([LASYM_CASE["ns"]]),
+        ftol_array=np.array([LASYM_CASE["ftol"]]),
+        niter_array=np.array([LASYM_CASE["max_iterations"]]),
+    )
+    assert bool(inp.lasym)
+    cfg = im.make_config(inp, ftol=LASYM_CASE["ftol"],
+                         max_iterations=LASYM_CASE["max_iterations"])
+    p0 = im.params_from_input(inp)
+    result = solver.solve(inp, cfg.resolution, ftol=cfg.ftol,
+                          max_iterations=cfg.max_iterations, mode="cli")
+    assert result.converged
+    rt = im.runtime_from_params(p0, cfg)
+    mask = im._dof_mask(result.state, rt, cfg)
+    return "up_down_asymmetric_tokamak", inp, cfg, p0, result.state, rt, mask
+
+
+def test_lasym_delta_rotation_traceable():
+    """``implicit._lasym_delta_rotation_traceable`` reproduces the numeric
+    ``setup._lasym_delta_rotation`` (the readin.f theta-normalization) to
+    ~1e-12 on the golden lasym deck, and stays differentiable in the (0,1)
+    coefficients that set ``delta``."""
+    from vmex.core import setup as setup_mod
+
+    inp = VmecInput.from_file(str(DATA_DIR / "input.up_down_asymmetric_tokamak"))
+    cfg = im.make_config(inp, ftol=1e-12, max_iterations=10)
+    mpol, ntor = int(inp.mpol), int(inp.ntor)
+    rbc = np.asarray(inp.rbc, dtype=float)
+    rbs = np.asarray(inp.rbs, dtype=float)
+    zbc = np.asarray(inp.zbc, dtype=float)
+    zbs = np.asarray(inp.zbs, dtype=float)
+    ref = setup_mod._lasym_delta_rotation(rbc, rbs, zbc, zbs, mpol=mpol, ntor=ntor)
+    tr = im._lasym_delta_rotation_traceable(
+        jnp.asarray(rbc), jnp.asarray(rbs), jnp.asarray(zbc), jnp.asarray(zbs),
+        cfg, mpol=mpol, ntor=ntor)
+    worst = 0.0
+    for nm, a, b in zip(("rbc", "rbs", "zbc", "zbs"), tr, ref):
+        err = float(np.max(np.abs(np.asarray(a) - np.asarray(b))))
+        worst = max(worst, err)
+        assert err <= 1e-12, f"delta rotation {nm}: {err:.2e}"
+    print(f"\n[up_down] traceable delta rotation vs setup reference: "
+          f"max abs err = {worst:.2e}")
+
+    # delta is a smooth function of RBS(0,1)/ZBC(0,1) -> finite gradient
+    def rot_scalar(rbs_a):
+        out = im._lasym_delta_rotation_traceable(
+            jnp.asarray(rbc), rbs_a, jnp.asarray(zbc), jnp.asarray(zbs),
+            cfg, mpol=mpol, ntor=ntor)
+        return jnp.sum(out[1])  # rotated rbs block
+    g = jax.grad(rot_scalar)(jnp.asarray(rbs))
+    assert np.all(np.isfinite(np.asarray(g)))
+
+
+def test_lasym_runtime_from_params_matches_run_setup(lasym):
+    """The lasym traceable map reproduces ``prepare_runtime`` at the base
+    parameters (all four boundary families, rcon0/zcon0)."""
+    name, inp, cfg, p0, _, rt_p, _ = lasym
+    rt_ref = solver.prepare_runtime(inp, cfg.resolution, ftol=cfg.ftol,
+                                    max_iterations=cfg.max_iterations)
+    for f in dataclasses.fields(type(rt_ref.setup)):
+        a = getattr(rt_ref.setup, f.name)
+        b = getattr(rt_p.setup, f.name)
+        if isinstance(a, (bool, int)):
+            assert a == b, f"{name}: setup.{f.name}"
+            continue
+        np.testing.assert_allclose(
+            np.asarray(a), np.asarray(b), rtol=0.0, atol=1e-13,
+            err_msg=f"{name}: setup.{f.name}")
+    np.testing.assert_allclose(np.asarray(rt_ref.rcon0), np.asarray(rt_p.rcon0),
+                               rtol=0.0, atol=1e-15, err_msg=f"{name}: rcon0")
+    np.testing.assert_allclose(np.asarray(rt_ref.zcon0), np.asarray(rt_p.zcon0),
+                               rtol=0.0, atol=1e-15, err_msg=f"{name}: zcon0")
+    # the asymmetric edge families actually carry the RBS content of the deck
+    assert float(np.max(np.abs(np.asarray(rt_p.setup.boundary_R_sin)))) > 0.0
+
+
+def test_lasym_residual_zero_at_fixed_point(lasym):
+    name, inp, cfg, p0, x_star, rt, mask = lasym
+    P = im._dof_projector(cfg, mask)
+    F = im.residual_fn(cfg, jax.lax.stop_gradient(x_star), mask)
+    r0 = _tnorm(F(P(x_star), p0))
+    delta = jax.tree.map(lambda a: a * (1.0 + 1e-3), x_star)
+    r1 = _tnorm(F(P(delta), p0))
+    assert r1 > 0.0
+    assert r0 < 1e-4 * r1, f"{name}: |F(x*)| = {r0:.3e} vs |F(x*+d)| = {r1:.3e}"
+
+
+def test_lasym_boundary_map_derivative_vs_fd(lasym):
+    """The traceable ``p -> processed boundary`` map derivative FD-validates to
+    <= 1e-6 for *all four* families (rbc/zbs/rbs/zbc) — no solver in the loop,
+    so this isolates the correctness of the lasym readin.f map (delta rotation,
+    the asymmetric internal-block accumulation, lflip, and the m=1 lconm1
+    constraint) from any solver-convergence floor."""
+    name, inp, cfg, p0, _, _, _ = lasym
+    ntor = int(inp.ntor)
+
+    def bnd_scalar(p):
+        s = im.runtime_from_params(p, cfg).setup
+        wsum = lambda a, c: jnp.sum(a * jnp.arange(1, a.size + 1)) * c  # noqa: E731
+        return (wsum(s.boundary_R_cos, 1.0) + wsum(s.boundary_R_sin, 1.3)
+                + wsum(s.boundary_Z_cos, 0.7) + wsum(s.boundary_Z_sin, 1.9))
+
+    g = jax.grad(bnd_scalar)(p0)
+    print(f"\n[{name}] boundary-map derivative AD vs FD (no solver):")
+    for field, idx in (("rbc", (ntor, 1)), ("zbs", (ntor, 2)),
+                       ("rbs", (ntor, 1)), ("rbs", (ntor, 2)),
+                       ("zbc", (ntor, 1)), ("zbc", (ntor, 2))):
+        h = 1e-6
+        fp = float(bnd_scalar(_perturb(p0, field, idx, h)))
+        fm = float(bnd_scalar(_perturb(p0, field, idx, -h)))
+        fd = (fp - fm) / (2.0 * h)
+        ad = float(np.asarray(getattr(g, field))[idx])
+        rel = abs(ad / fd - 1.0) if fd else abs(ad - fd)
+        print(f"  d/d({field}{idx}): AD={ad:+.10e} FD={fd:+.10e} rel={rel:.2e}")
+        assert rel <= 1e-6, f"{field}{idx}: boundary-map rel {rel:.2e}"
+
+
+def test_lasym_wb_aspect_gradient_vs_fd(lasym):
+    """``d(wb)/d`` and ``d(aspect)/d`` an rbs/zbc boundary dof vs central FD
+    through the host solve.  The naive re-solve FD is the physical total
+    derivative; the implicit adjoint (the *frozen*-path gradient) matches it to
+    the solver-limited floor of this m=1-constrained deck (~1e-4, printed), the
+    same documented-noise-floor pattern as the li383 3D tests.  Clean m = 2
+    asymmetric dofs (outside both the delta denominator and the m = 1 lconm1
+    constraint) are used."""
+    name, inp, cfg, p0, _, _, _ = lasym
+    ntor = int(inp.ntor)
+
+    def outs(p):
+        sol = im.run(inp, p, ftol=cfg.ftol, max_iterations=cfg.max_iterations)
+        return jnp.stack([sol.wb, sol.aspect])
+
+    jac = jax.jacrev(outs)(p0)
+    row = {"wb": 0, "aspect": 1}
+    checks = [
+        ("wb", "rbs", (ntor, 2), 3e-5, 2e-4),
+        ("aspect", "rbs", (ntor, 2), 3e-5, 1e-3),
+        ("wb", "zbc", (ntor, 2), 3e-5, 2e-4),
+        ("aspect", "zbc", (ntor, 2), 3e-5, 5e-4),
+    ]
+    print(f"\n[{name}] lasym boundary gradient vs naive central FD "
+          f"(forward ftol = {cfg.ftol:g}, solver-limited ~1e-4):")
+    for out, field, idx, h, tol in checks:
+        fd = _fd(name, inp, cfg, p0, field, idx, h)[out]
+        ad = float(np.asarray(getattr(jac, field))[row[out], idx[0], idx[1]])
+        rel = abs(ad / fd - 1.0)
+        print(f"  d({out})/d({field}{idx}) h={h:.0e}: "
+              f"AD={ad:+.10e} FD={fd:+.10e} rel={rel:.2e}")
+        assert rel <= tol, f"{out}/{field}{idx}: rel {rel:.3e} > {tol:.0e}"
+
+
+def test_lasym_adjoint_vs_frozen_path_fd(lasym):
+    """Definitive lasym-adjoint correctness lock.
+
+    The analytic directional derivative of the frozen fixed-point map and its
+    central frozen-path FD, BOTH anchored at the *same* Newton-refined fixed
+    point (the frozen residual driven to ~1e-14), agree to solver accuracy.
+    This removes the forward-solver anchor shift (see the section header) and
+    isolates the linearization ``dz = -(dF/dz)^{-1} dF/dp t`` plus the boundary
+    map — proving the implicit lasym gradient is exact, not merely close.
+    """
+    name, inp, _cfg, p0, x_star, _, mask = lasym
+    ntor = int(inp.ntor)
+    # Tight adjoint budget so the frozen-Newton refinement reaches ~1e-14 (the
+    # fixture cfg's optimizer-grade 1e-11 would floor it near 1e-10 and leave
+    # ~1e-4 FD noise); the fixed point and the resolution are unchanged.
+    cfg = im.make_config(inp, ftol=_cfg.ftol, max_iterations=_cfg.max_iterations,
+                         adjoint_tol=1e-14, adjoint_maxiter=800)
+    im._template_runtime(cfg)  # warm the host template before any trace below
+    P = im._dof_projector(cfg, mask)
+    edge_mask = im._edge_mask(cfg)
+    metric = lambda s, rt: im.mhd_energy(s, rt)[0]  # noqa: E731
+
+    def _norm(t):
+        return float(jnp.sqrt(sum(jnp.vdot(v, v).real
+                                  for v in jax.tree.leaves(t))))
+
+    def _newton(z, p, F, steps=40, tol=1e-14):
+        r0 = max(_norm(F(z, p)), 1.0)
+        for _ in range(steps):
+            fz = F(z, p)
+            if _norm(fz) <= tol * r0:
+                break
+            _, jvp = jax.linearize(lambda zz: F(zz, p), z)
+            step, _ = im._adjoint_solve(jvp, fz, cfg)
+            z = jax.tree.map(lambda a, b: a - b, z, step)
+        return z
+
+    # Newton-refine the fixed point, then re-freeze F there so the analytic
+    # anchor and the FD base point coincide exactly.
+    frozen0 = jax.lax.stop_gradient(x_star)
+    z_ref = _newton(P(x_star), p0, im.residual_fn(cfg, frozen0, mask))
+    rt0 = im.runtime_from_params(p0, cfg)
+    frozen = jax.lax.stop_gradient(im._assemble(z_ref, rt0, frozen0, P, edge_mask))
+    F = im.residual_fn(cfg, frozen, mask)
+    z0 = P(frozen)
+    base_res = _norm(F(z0, p0))
+    assert base_res < 1e-11, f"refined base residual {base_res:.1e}"
+
+    def Fz(dz):
+        return jax.jvp(lambda zz: F(zz, p0), (z0,), (dz,))[1]
+
+    def G(zz, prm):
+        rt = im.runtime_from_params(prm, cfg)
+        return metric(im._assemble(zz, rt, frozen, P, edge_mask), rt)
+
+    def analytic_dir(tangent):
+        b = jax.jvp(lambda prm: F(z0, prm), (p0,), (tangent,))[1]
+        dz, _ = im._adjoint_solve(Fz, jax.tree.map(jnp.negative, b), cfg)
+        return float(jax.jvp(G, (z0, p0), (P(dz), tangent))[1])
+
+    def frozen_fd(tangent, h=1e-5):
+        vals = []
+        for sign in (+1.0, -1.0):
+            p_h = jax.tree.map(lambda a, d, s=sign: a + s * h * d, p0, tangent)
+            zz = _newton(z0, p_h, F)
+            rt = im.runtime_from_params(p_h, cfg)
+            vals.append(float(metric(im._assemble(zz, rt, frozen, P, edge_mask), rt)))
+        return (vals[0] - vals[1]) / (2.0 * h)
+
+    zero = jax.tree.map(jnp.zeros_like, p0)
+    print(f"\n[{name}] lasym adjoint vs frozen-path FD at refined fixed point "
+          f"(base |F| = {base_res:.1e}):")
+    for field, idx in (("rbs", (ntor, 2)), ("zbc", (ntor, 2)), ("zbs", (ntor, 1))):
+        tangent = dataclasses.replace(
+            zero, **{field: getattr(zero, field).at[idx].set(1.0)})
+        an = analytic_dir(tangent)
+        fd = frozen_fd(tangent)
+        rel = abs(an / fd - 1.0) if fd else abs(an - fd)
+        print(f"  d(wb)/d({field}{idx}): analytic={an:+.9e} "
+              f"frozen-FD={fd:+.9e} rel={rel:.2e}")
+        assert rel <= 5e-5, f"{field}{idx}: adjoint vs frozen-path FD rel {rel:.2e}"

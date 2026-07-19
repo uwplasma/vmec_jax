@@ -951,41 +951,81 @@ def _dof_modes(inp: VmecInput, max_mode: int) -> list[tuple[int, int]]:
     return out
 
 
+def _n_boundary_families(inp: VmecInput) -> int:
+    """Packed boundary Fourier families: 2 (``rbc``/``zbs``) for a
+    stellarator-symmetric boundary, 4 (``rbc``/``zbs``/``rbs``/``zbc``) when
+    ``inp.lasym`` — the non-stellarator-symmetric families that simsopt 1.10.3
+    / VMEC++ 0.6.0 added for up-down-asymmetric tokamaks and reconstruction.
+    """
+    return 4 if bool(inp.lasym) else 2
+
+
 def boundary_dof_names(inp: VmecInput, max_mode: int) -> list[str]:
-    """Human-readable labels ("RBC(n,m)" / "ZBS(n,m)", INDATA index order)."""
+    """Human-readable labels ("RBC(n,m)" / "ZBS(n,m)", INDATA index order).
+
+    For ``lasym`` boundaries the non-symmetric ``RBS(n,m)`` / ``ZBC(n,m)``
+    families are appended (same ``(m, n)`` order as the symmetric block).
+    """
     modes = _dof_modes(inp, max_mode)
-    return ([f"RBC({n},{m})" for (m, n) in modes]
-            + [f"ZBS({n},{m})" for (m, n) in modes])
+    names = ([f"RBC({n},{m})" for (m, n) in modes]
+             + [f"ZBS({n},{m})" for (m, n) in modes])
+    if bool(inp.lasym):
+        names += ([f"RBS({n},{m})" for (m, n) in modes]
+                  + [f"ZBC({n},{m})" for (m, n) in modes])
+    return names
 
 
 def pack_boundary(inp: VmecInput, max_mode: int) -> np.ndarray:
-    """Flat boundary-dof vector ``[rbc..., zbs...]`` (see :func:`_dof_modes`).
+    """Flat boundary-dof vector (see :func:`_dof_modes`).
 
     Inverse of :func:`unpack_boundary`; ``RBC(0,0)`` is excluded (fixed major
-    radius).  Only the stellarator-symmetric ``rbc``/``zbs`` families are
-    packed — lasym boundary optimization is out of scope here.
+    radius).  For a stellarator-symmetric boundary the layout is
+    ``[rbc..., zbs...]``; for ``lasym`` the non-symmetric families are appended
+    as ``[rbc..., zbs..., rbs..., zbc...]`` (four families — the same
+    ``m = 0 / RBC(0,0)`` fixing convention applies to every family, so the
+    rigid vertical shift ``ZBC(0,0)`` and the identically-zero ``RBS(0,0)`` are
+    excluded too).
     """
     modes = _dof_modes(inp, max_mode)
     ntor = int(inp.ntor)
     rbc = np.asarray(inp.rbc, dtype=float)
     zbs = np.asarray(inp.zbs, dtype=float)
-    return np.asarray([rbc[n + ntor, m] for (m, n) in modes]
-                      + [zbs[n + ntor, m] for (m, n) in modes], dtype=float)
+    vals = ([rbc[n + ntor, m] for (m, n) in modes]
+            + [zbs[n + ntor, m] for (m, n) in modes])
+    if bool(inp.lasym):
+        rbs = np.asarray(inp.rbs, dtype=float)
+        zbc = np.asarray(inp.zbc, dtype=float)
+        vals += ([rbs[n + ntor, m] for (m, n) in modes]
+                 + [zbc[n + ntor, m] for (m, n) in modes])
+    return np.asarray(vals, dtype=float)
 
 
 def unpack_boundary(inp: VmecInput, x, max_mode: int) -> VmecInput:
-    """New :class:`VmecInput` with the boundary dofs ``x`` applied."""
+    """New :class:`VmecInput` with the boundary dofs ``x`` applied.
+
+    Handles both the 2-family symmetric layout and the 4-family ``lasym``
+    layout (see :func:`pack_boundary`).
+    """
     modes = _dof_modes(inp, max_mode)
+    nm = len(modes)
     x = np.asarray(x, dtype=float).ravel()
-    if x.size != 2 * len(modes):
-        raise ValueError(f"expected {2 * len(modes)} dofs, got {x.size}")
+    nfam = _n_boundary_families(inp)
+    if x.size != nfam * nm:
+        raise ValueError(f"expected {nfam * nm} dofs, got {x.size}")
     ntor = int(inp.ntor)
     rbc = np.array(inp.rbc, dtype=float, copy=True)
     zbs = np.array(inp.zbs, dtype=float, copy=True)
     for k, (m, n) in enumerate(modes):
         rbc[n + ntor, m] = x[k]
-        zbs[n + ntor, m] = x[len(modes) + k]
-    return dataclasses.replace(inp, rbc=rbc, zbs=zbs)
+        zbs[n + ntor, m] = x[nm + k]
+    if not bool(inp.lasym):
+        return dataclasses.replace(inp, rbc=rbc, zbs=zbs)
+    rbs = np.array(inp.rbs, dtype=float, copy=True)
+    zbc = np.array(inp.zbc, dtype=float, copy=True)
+    for k, (m, n) in enumerate(modes):
+        rbs[n + ntor, m] = x[2 * nm + k]
+        zbc[n + ntor, m] = x[3 * nm + k]
+    return dataclasses.replace(inp, rbc=rbc, zbs=zbs, rbs=rbs, zbc=zbc)
 
 
 #: curtor dof storage scale (dof = CURTOR/1e6, i.e. MA) — keeps the trust
@@ -1073,7 +1113,8 @@ def _ess_scale(inp: VmecInput, max_mode: int, alpha: float) -> np.ndarray:
     ``least_squares_solve``); passed to scipy as ``x_scale``.
     """
     modes = _dof_modes(inp, max_mode)
-    levels = np.asarray([max(abs(m), abs(n)) for (m, n) in modes] * 2, dtype=float)
+    levels = np.asarray([max(abs(m), abs(n)) for (m, n) in modes]
+                        * _n_boundary_families(inp), dtype=float)
     if alpha <= 0.0:
         return np.ones_like(levels)
     return np.exp(-alpha * levels) / np.exp(-alpha)
@@ -1296,7 +1337,7 @@ def least_squares(
         x0 = pack_boundary(inp, max_mode)
         if k_cur:
             x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
-    nb = 2 * len(_dof_modes(inp, max_mode))
+    nb = _n_boundary_families(inp) * len(_dof_modes(inp, max_mode))
 
     def unpack_full(x: np.ndarray) -> VmecInput:
         trial = unpack_boundary(inp, np.asarray(x, dtype=float)[:nb], max_mode)
@@ -1418,13 +1459,19 @@ def _least_squares_implicit(
     from . import implicit as imp
     from .device import resolve_implicit_device
 
-    if bool(inp.lasym):
+    lasym = bool(inp.lasym)
+    if lasym and int(inp.ntor) > 0:
+        # The 4-family traceable map (implicit._boundary_from_params) and the
+        # dof plumbing below handle a general lasym boundary, but the 3D lasym
+        # forward+adjoint path has not yet been FD-validated end to end; guard
+        # it explicitly rather than ship an unchecked Jacobian.
         raise NotImplementedError(
-            "jac='implicit' requires lasym = False (the implicit parameter map "
-            "does not implement the lasym readin.f boundary rotation)")
+            "jac='implicit' for lasym is currently validated for 2D (ntor = 0) "
+            "boundaries only; use jac=None (finite differences) for 3D lasym")
     terms = [(_traceable_term(f), float(t), float(w)) for (f, t, w) in objective_terms]
     modes = _dof_modes(inp, max_mode)
     nm = len(modes)
+    nfam = _n_boundary_families(inp)
     ntor = int(inp.ntor)
     row_idx = np.asarray([n + ntor for (_, n) in modes], dtype=int)
     col_idx = np.asarray([m for (m, _) in modes], dtype=int)
@@ -1432,7 +1479,8 @@ def _least_squares_implicit(
     # tangents through ImplicitParams.ac / .curtor (runtime_from_params
     # already traces both).
     k_cur, ac_scale = _current_dof_setup(inp, current_dofs)
-    ndof = 2 * nm + (k_cur + 1 if k_cur else 0)
+    nboundary = nfam * nm
+    ndof = nboundary + (k_cur + 1 if k_cur else 0)
     # multigrid=True routes the host solve through solve_multigrid (even for
     # single-stage ladders) so NITER-exhausted trials are penalized instead
     # of raising, matching the finite-difference path's trial policy.
@@ -1468,13 +1516,16 @@ def _least_squares_implicit(
     # eagerly so runtime_from_params stays traceable under jit below
 
     def params_of(x: jnp.ndarray):
-        rbc = params0.rbc.at[row_idx, col_idx].set(x[:nm])
-        zbs = params0.zbs.at[row_idx, col_idx].set(x[nm:2 * nm])
-        params = dataclasses.replace(params0, rbc=rbc, zbs=zbs)
+        repl = dict(rbc=params0.rbc.at[row_idx, col_idx].set(x[:nm]),
+                    zbs=params0.zbs.at[row_idx, col_idx].set(x[nm:2 * nm]))
+        if lasym:  # non-symmetric families [rbs..., zbc...] (see pack_boundary)
+            repl["rbs"] = params0.rbs.at[row_idx, col_idx].set(x[2 * nm:3 * nm])
+            repl["zbc"] = params0.zbc.at[row_idx, col_idx].set(x[3 * nm:4 * nm])
+        params = dataclasses.replace(params0, **repl)
         if k_cur:
-            ac = params0.ac.at[:k_cur].set(x[2 * nm:2 * nm + k_cur] * ac_scale)
+            ac = params0.ac.at[:k_cur].set(x[nboundary:nboundary + k_cur] * ac_scale)
             params = dataclasses.replace(
-                params, ac=ac, curtor=x[2 * nm + k_cur] * _CURTOR_SCALE)
+                params, ac=ac, curtor=x[nboundary + k_cur] * _CURTOR_SCALE)
         return params
 
     def term_rows(state, rt) -> jnp.ndarray:
@@ -1503,21 +1554,32 @@ def _least_squares_implicit(
 
     # One-hot dof tangents in ImplicitParams space, stacked over dofs
     # (leading axis ndof) so chunk_map can process them in fixed-size chunks:
-    # boundary rbc/zbs rows first, then the scaled AC/CURTOR rows.
+    # boundary rbc/zbs (and, for lasym, rbs/zbc) rows first, then the scaled
+    # AC/CURTOR rows.
     t_rbc = np.zeros((ndof,) + np.shape(params0.rbc))
     t_zbs = np.zeros((ndof,) + np.shape(params0.zbs))
+    t_rbs = np.zeros((ndof,) + np.shape(params0.rbs))
+    t_zbc = np.zeros((ndof,) + np.shape(params0.zbc))
     t_ac = np.zeros((ndof,) + np.shape(params0.ac))
     t_curtor = np.zeros((ndof,))
     for j in range(nm):
         t_rbc[j, row_idx[j], col_idx[j]] = 1.0
         t_zbs[nm + j, row_idx[j], col_idx[j]] = 1.0
+        if lasym:
+            t_rbs[2 * nm + j, row_idx[j], col_idx[j]] = 1.0
+            t_zbc[3 * nm + j, row_idx[j], col_idx[j]] = 1.0
     for j in range(k_cur):
-        t_ac[2 * nm + j, j] = ac_scale
+        t_ac[nboundary + j, j] = ac_scale
     if k_cur:
-        t_curtor[2 * nm + k_cur] = _CURTOR_SCALE
+        t_curtor[nboundary + k_cur] = _CURTOR_SCALE
     zerop = jax.tree.map(jnp.zeros_like, params0)
-    tangent_stack = (jnp.asarray(t_rbc), jnp.asarray(t_zbs),
-                     jnp.asarray(t_ac), jnp.asarray(t_curtor))
+    if lasym:
+        tangent_stack = (jnp.asarray(t_rbc), jnp.asarray(t_zbs),
+                         jnp.asarray(t_rbs), jnp.asarray(t_zbc),
+                         jnp.asarray(t_ac), jnp.asarray(t_curtor))
+    else:
+        tangent_stack = (jnp.asarray(t_rbc), jnp.asarray(t_zbs),
+                         jnp.asarray(t_ac), jnp.asarray(t_curtor))
 
     # R17.1 memory knob: chunk_size None == one wide vmap (current behavior),
     # an int / "auto" caps peak Jacobian memory at that many dofs at a time.
@@ -1558,6 +1620,10 @@ def _least_squares_implicit(
             return jax.jvp(lambda z: F(z, params), (z_star,), (dz,))[1]
 
         def tangent_of(tp):
+            if lasym:
+                return dataclasses.replace(zerop, rbc=tp[0], zbs=tp[1],
+                                           rbs=tp[2], zbc=tp[3],
+                                           ac=tp[4], curtor=tp[5])
             return dataclasses.replace(zerop, rbc=tp[0], zbs=tp[1],
                                        ac=tp[2], curtor=tp[3])
 
@@ -1579,7 +1645,7 @@ def _least_squares_implicit(
         geometry to scipy.  Columns are mathematically independent, so the
         result is identical across chunk sizes to float64 round-off.
         Also returns the per-dof state responses ``dz_j`` (leading axis
-        ``2*nm``): they are the R25.4 perturbation warm-start linearization,
+        ``ndof``): they are the R25.4 perturbation warm-start linearization,
         already paid for by the column solves.
         """
         Fz, tangent_of, rhs_of, column_of, _ = _jac_parts(x)
@@ -1604,7 +1670,7 @@ def _least_squares_implicit(
     # is the same solution through either: assemble the raw blocks once with
     # 3-colored jvp probes (cost ~3*(3*mn) residual linearizations,
     # independent of the dof count), factor once (solvax block Thomas), and
-    # backsolve all 2*nm right-hand sides — then one short preconditioned
+    # backsolve every dof right-hand side — then one short preconditioned
     # GMRES pass per column (warm-started at the direct solution) certifies
     # cfg.adjoint_tol in the same norm as the default path: solvax checks
     # the initial residual before the first Arnoldi cycle, so columns whose
@@ -1710,7 +1776,7 @@ def _least_squares_implicit(
             chunk_size=chunk)
         return jnp.transpose(cols), dz_cols
 
-    # R25.3 recycled variant: all 2*nm solves share the operator Fz (and Fz
+    # R25.3 recycled variant: all ndof solves share the operator Fz (and Fz
     # drifts slowly between accepted trust-region iterates), so a GCROT
     # deflation pair (C, U) is threaded through a lax.scan over fixed-size
     # dof chunks — vmapped *within* a chunk with the incoming pair shared
@@ -1880,9 +1946,9 @@ def _least_squares_implicit(
 
     result = scipy.optimize.least_squares(fun, np.asarray(x0, dtype=float),
                                           jac=jac_fn, **scipy_kwargs)
-    result.input = unpack_boundary(inp, result.x[:2 * nm], max_mode)
+    result.input = unpack_boundary(inp, result.x[:nboundary], max_mode)
     if k_cur:
-        result.input = _apply_current(result.input, result.x[2 * nm:],
+        result.input = _apply_current(result.input, result.x[nboundary:],
                                       k_cur, ac_scale)
     stats = imp._SOLVE_STATS.get(cfg)
     result.solve_stats = None if stats is None else dict(stats)
