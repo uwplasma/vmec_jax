@@ -288,7 +288,10 @@ The package currently includes:
 * a periodic B-spline racetrack with two straight mirror legs, rotating
   elliptical returns, a fixed-boundary solve, and closed field-line tracing.
 
-The axisymmetric free-boundary path is supported through 10% requested beta
+With the compact-coil configuration (0.5 m loops, vacuum ``B(0) = 0.0836 T``,
+mirror ratio 4.58), a requested 50% beta continuation grows the central radius
+by 7.5% and lowers the on-axis field by 22.3% from vacuum, exercising the
+finite-beta coupling end to end. The axisymmetric free-boundary path is supported through 10% requested beta
 and retains 25% and 50% as explicitly labeled validation continuations. The
 nonaxisymmetric free-boundary path is deferred because its
 point observables were not monotone under spatial refinement.
@@ -721,7 +724,9 @@ only the supplied field object.
 
 The adjoint consumes the same primal coefficient residual, coefficient
 packing, and block preconditioner. It is supported through the 10% beta ceiling
-and is checked against fully reconverged field and mass perturbations. The nonaxisymmetric free-boundary derivative is
+and is checked against fully reconverged field and mass perturbations: the
+implicit free-boundary derivative matches a reconverged finite difference to
+``1.1e-10`` relative (transpose linear residual ``1.4e-9``). The nonaxisymmetric free-boundary derivative is
 deliberately unavailable because
 local Fourier-mode refinement failed; it will not be presented as a supported
 gradient.
