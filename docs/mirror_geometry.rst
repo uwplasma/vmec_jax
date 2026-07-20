@@ -12,8 +12,11 @@ periodic hybrid has a complete fixed-boundary solve and example. Its
 circular-section lane is supported: with the leg-return junction frozen as a
 design parameter, its independent strong-force residual converges monotonically
 under same-geometry refinement. The rotating-elliptical-section hybrid remains
-the single research candidate, held back by a separately scoped near-axis
-representation defect in the rotating section rather than by the junction.
+the single research candidate. ``section_turns`` now turns the ellipse
+continuously around the closed circuit -- a genuine rotating-ellipse section --
+which raises the transform from the return-only ``iota=0.085`` to ``iota=0.141``
+at ``s=0.75``, but the separately scoped near-axis representation defect in the
+rotating section persists at the higher rotation, so it is not promoted.
 
 Quickstart
 ----------
@@ -286,8 +289,9 @@ The package currently includes:
   restart files,
 * a closed-surface Neumann solve on the lateral LCFS and both end disks,
 * component-wise nonlinear convergence checks at a requested ``ftol=1e-12``.
-* a periodic B-spline racetrack with two straight mirror legs, rotating
-  elliptical returns, a fixed-boundary solve, and closed field-line tracing.
+* a periodic B-spline racetrack with two straight mirror legs, a continuously
+  rotating elliptical section, a fixed-boundary solve, and closed field-line
+  tracing.
 
 With the compact-coil configuration (0.5 m loops, vacuum ``B(0) = 0.0836 T``,
 mirror ratio 4.58), a requested 50% beta continuation grows the central radius
@@ -350,12 +354,24 @@ The LCFS is an ellipse written as a polar radius,
    \frac{A B}{\sqrt{[B\cos(\theta-\alpha(u))]^2
                    +[A\sin(\theta-\alpha(u))]^2}}.
 
-The section angle :math:`\alpha` is constant on each straight leg and changes
-smoothly by 90 degrees through each return. The radial surfaces and stream
+The section angle is :math:`\alpha(u)=\alpha_{\mathrm{ret}}(u)+N\,u`. The
+return term :math:`\alpha_{\mathrm{ret}}` is constant on each straight leg and
+changes smoothly by 90 degrees through each return, so on its own it returns the
+ellipse to its original orientation once per circuit. The ``section_turns``
+integer :math:`N` superposes a genuine rotating ellipse: the major axis turns
+continuously by :math:`N` full :math:`2\pi` turns per circuit. Because the polar
+radius is :math:`2\pi`-periodic in :math:`\theta-\alpha` and :math:`N` is an
+integer, the section closes on itself exactly (verified by the m=2 harmonic
+winding by :math:`4\pi N`), and the straight-leg axis stays exactly straight
+while the ellipse it carries keeps rotating. The radial surfaces and stream
 function use the same periodic longitudinal basis. The divergence-free field
 is the open expression with :math:`\xi` replaced by :math:`u`; periodicity
 removes end cuts, and all longitudinal coefficients are active. A finite
-:math:`I'(s)` gives visible pitch and nonzero rotational transform.
+:math:`I'(s)` gives visible pitch and nonzero rotational transform; at the
+device aspect ratio :math:`L/a\approx 67` the rotating ellipse adds negligible
+transform on its own (with :math:`I'(s)=0` the traced :math:`\iota` stays below
+:math:`10^{-3}` for every ``section_turns``), so it acts by amplifying the
+current-driven transform rather than by a standalone geometric one.
 
 ``build_stellarator_mirror_hybrid`` constructs the discretization, closed
 axis, LCFS, and a vacuum-field initial stream function. The ordinary
@@ -396,27 +412,41 @@ residual in this section is quoted device- (arc-length-) normalized where noted
 about 67 minor radii, so the device numbers are roughly 67 times the
 minor-radius numbers.
 
-The rotating-elliptical-section hybrid remains the single research candidate.
-Its default ``ns=5``, ``mpol=3``, 32-control case reaches variational residual
-``2.36e-14`` and normalized ``div(B)=3.14e-14`` with axis closure ``8.88e-16``,
-and the solved finite-current state gives ``iota=0.0851`` at ``s=0.75``, but its
-reconstructed strong-force residual is ``0.430`` and does not converge even
-with the junction frozen: exact 16/32/64 spline transfer of one geometry gives
-a monotone but plateauing sequence ``0.5733 -> 0.3556 -> 0.3325`` at fixed
-volume (agreement ``5.0e-6`` relative, variational residual below ``6.7e-14``),
-and refining ``ns=5, mpol=3`` to ``ns=7, mpol=4`` at 64 controls only lowers it
-from ``0.333`` to ``0.227``. That plateau is a separately scoped near-axis
-representation defect in the rotating section, not a junction effect;
-finite-beta continuation and rotating-section sensitivity claims are deferred
-until it is resolved.
+The rotating-elliptical-section hybrid remains the single research candidate,
+now driven by the genuine toroidal rotation ``section_turns``. Its shipped
+``ns=5``, ``mpol=4``, 32-control case (``semi_major=0.45``, ``semi_minor=0.25``,
+``section_turns=2``) reaches variational residual ``3.19e-13`` and normalized
+``div(B)=4.55e-14`` with axis closure ``8.88e-16``, and the solved
+finite-current state gives ``iota=0.141`` at ``s=0.75`` -- roughly 1.7 times the
+return-only ``iota=0.085`` at the same imposed current. The transform is
+current-driven and amplified by the rotating geometry: with ``I'(s)=0`` the
+traced transform stays below ``10^{-3}`` for every ``section_turns``, so at
+``L/a`` near 67 the rotating ellipse adds no standalone geometric transform and
+instead reshapes the metric so the same current winds field lines faster.
 
-A sensitivity study localizes the rotating-section residual to the racetrack
-geometry rather than to pressure or imposed current. At the default 32-control
-resolution, removing current changes the strong force only from ``0.430`` to
-``0.424``; replacing the rotating ellipse by a circular section gives ``0.158``
-and a fixed ellipse ``0.164``, while the circular-axis/circular-section limit
-gives ``0.0083``. The periodic derivative algorithm is validated separately on
-the closed circular limit below.
+Under the junction-freeze contract the toroidally rotating hybrid converges at
+every rung, but the near-axis defect persists. With the junction frozen at 16
+controls and the section built at that base count, exact 16/32/64 refinement
+(``ns=5``, ``mpol=6``, ``section_turns=2``) drives the minor-radius bulk force
+``0.0445 -> 0.0056 -> 0.0046`` -- monotone, every rung below the ``0.05`` gate,
+so the operational promotion gate passes -- with each rung at variational
+residual below ``3.6e-13`` and normalized ``div(B)`` below ``1e-13``. The
+device- (arc-length-) normalized strong force, however, plateaus
+``4.07 -> 0.51 -> 0.42`` (per-step ratios ``7.97`` and ``1.21``): it does not
+head toward zero like the promoted circular lane (``0.204 -> 0.176 -> 0.118``),
+and its ``~0.42`` floor is even higher than the return-only ``~0.33``. That
+plateau is the same separately scoped near-axis representation defect in the
+rotating section, made no better by the faster rotation, so the toroidally
+rotating hybrid is kept a research candidate; finite-beta continuation and
+rotating-section sensitivity claims are deferred until it is resolved.
+
+A sensitivity study on the return-only baseline localizes the rotating-section
+residual to the racetrack geometry rather than to pressure or imposed current.
+At the 32-control resolution, removing current changes the return-only strong
+force only from ``0.430`` to ``0.424``; replacing the rotating ellipse by a
+circular section gives ``0.158`` and a fixed ellipse ``0.164``, while the
+circular-axis/circular-section limit gives ``0.0083``. The periodic derivative
+algorithm is validated separately on the closed circular limit below.
 
 Source ownership is compact: periodic basis/refinement is in ``basis.py``;
 axis, Bishop frame, and embedding are in ``geometry.py``; coefficient packing,

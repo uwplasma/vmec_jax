@@ -192,6 +192,36 @@ def test_stellarator_mirror_ellipse_rotates_ninety_degrees_between_legs() -> Non
     np.testing.assert_allclose(leg_radii[minor_index], [0.30, 0.45], rtol=3.0e-3)
 
 
+def test_stellarator_mirror_toroidal_rotation_winds_ellipse_by_full_turns() -> None:
+    """``section_turns`` rotates the ellipse by that many full circuit turns.
+
+    The default reproduces the return-only rotation exactly. A nonzero
+    ``section_turns`` superposes a genuine rotating ellipse whose major axis
+    winds by that many ``2*pi`` turns around the circuit; the phase of the m=2
+    poloidal harmonic (which equals ``-2*alpha``) therefore advances by exactly
+    ``-4*pi*section_turns``, and the section stays positive and periodic.
+    """
+
+    basis = CubicBSplineBasis.periodic_uniform(64)
+    theta = jnp.linspace(0.0, 2.0 * jnp.pi, 64, endpoint=False)
+    default = stellarator_mirror_section_coefficients(basis, theta, semi_major=0.45, semi_minor=0.30)
+    explicit_zero = stellarator_mirror_section_coefficients(
+        basis, theta, semi_major=0.45, semi_minor=0.30, section_turns=0
+    )
+    np.testing.assert_array_equal(np.asarray(default), np.asarray(explicit_zero))
+
+    points = jnp.asarray(np.linspace(0.0, 2.0 * np.pi, 257))
+    for turns in (1, 2, 3):
+        coefficients = stellarator_mirror_section_coefficients(
+            basis, theta, semi_major=0.45, semi_minor=0.25, section_turns=turns
+        )
+        assert float(jnp.min(coefficients)) > 0.0
+        curve = np.asarray(basis.evaluate(coefficients, points, axis=-1))
+        second_harmonic = np.fft.fft(curve, axis=0)[2]
+        winding = np.unwrap(np.angle(second_harmonic))
+        np.testing.assert_allclose(winding[-1] - winding[0], -4.0 * np.pi * turns, atol=1.0e-6)
+
+
 def test_stellarator_mirror_builder_has_positive_nested_spline_geometry() -> None:
     resolution = MirrorResolution(ns=7, mpol=8, nxi=4)
     setup = build_stellarator_mirror_hybrid(resolution)
@@ -308,6 +338,52 @@ def test_stellarator_mirror_fixed_boundary_reaches_ftol() -> None:
     assert line.theta.shape == (513,)
     assert np.isfinite(float(line.iota))
     assert abs(float(line.iota)) > 1.0e-3
+
+
+@pytest.mark.full
+@pytest.mark.usefixtures("_module_jit_enabled")
+def test_stellarator_mirror_toroidal_rotation_raises_transform() -> None:
+    """A toroidally rotating ellipse solves and lifts iota above return-only.
+
+    Two full section turns amplify the current-driven transform from the
+    return-only ``iota=0.085`` to ``iota=0.141`` at ``s=0.75`` while the
+    equilibrium still reaches ftol with a divergence-free field.
+    """
+
+    resolution = MirrorResolution(ns=5, mpol=4, nxi=4)
+    config = MirrorConfig(resolution=resolution, ftol=1.0e-12, max_iterations=1000)
+    setup = build_stellarator_mirror_hybrid(
+        resolution,
+        coefficient_count=32,
+        straight_length=8.0,
+        return_radius=2.5,
+        semi_major=0.45,
+        semi_minor=0.25,
+        section_turns=2,
+        quadrature_order=3,
+    )
+    result = solve_spline_fixed_boundary(
+        setup.initial_state,
+        setup.boundary,
+        setup.discretization,
+        config,
+        axial_flux_derivative=0.02,
+        current_derivative=0.002,
+        solve_lambda=True,
+        axis=setup.axis,
+        require_convergence=True,
+    ).evaluated
+    assert result.converged
+    assert float(result.variational.maximum) <= config.ftol
+    assert float(result.normalized_divergence_rms) < 1.0e-12
+    assert not bool(result.energy.geometry.jacobian_sign_changed)
+    line = trace_closed_field_line(
+        result.energy.field,
+        setup.discretization,
+        radial_index=resolution.ns - 2,
+        turns=2,
+    )
+    assert abs(float(line.iota)) > 0.12
 
 
 _CIRCULAR_HYBRID = dict(

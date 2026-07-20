@@ -348,10 +348,19 @@ def build_stellarator_mirror_hybrid(
     return_radius: float = 2.5,
     semi_major: float = 0.45,
     semi_minor: float = 0.30,
+    section_turns: int = 0,
     axial_flux_derivative: Array = 0.02,
     quadrature_order: int = 4,
 ) -> StellaratorMirrorSetup:
     """Build a closed two-leg mirror with rotating stellarator returns.
+
+    ``section_turns`` turns the elliptical cross-section continuously around the
+    closed circuit by that many full ``2*pi`` turns, superposed on the
+    return-only 90-degree rotation. The straight legs keep an exactly straight
+    axis; only the ellipse they carry rotates, so a nonzero ``section_turns``
+    raises the rotational transform (by amplifying the current-driven transform:
+    ``iota`` 0.085 -> 0.141 at ``s=0.75`` for two turns). The default ``0``
+    reproduces the legacy return-only rotation.
 
     ``axis_coefficient_count`` freezes the leg-return junction transition. The
     junction between an exactly straight leg (zero curvature) and a circular
@@ -400,6 +409,7 @@ def build_stellarator_mirror_hybrid(
         jnp.asarray(discretization.grid.theta),
         semi_major=semi_major,
         semi_minor=semi_minor,
+        section_turns=section_turns,
     )
     if source_basis is not basis:
         _, axis_coefficients = source_basis.refine_periodic_uniform(

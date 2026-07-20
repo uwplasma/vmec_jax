@@ -18,6 +18,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
   the local B-spline reproduces the straight mirror cell to machine precision
   (~1e-12) once each leg is backed by enough collinear controls. See
   `docs/mirror_geometry.rst`.
+- **Toroidally rotating ellipse for the stellarator-mirror hybrid.** A new
+  `section_turns` parameter on `build_stellarator_mirror_hybrid` /
+  `stellarator_mirror_section_coefficients` turns the elliptical cross-section
+  continuously around the closed circuit by that many full turns, superposed on
+  the return-only 90-degree rotation, while the legs keep an exactly straight
+  axis. Two turns lift the traced transform from the return-only `iota=0.085` to
+  `iota=0.141` at `s=0.75`. The default `section_turns=0` reproduces the prior
+  return-only geometry exactly. The rotating-elliptical-section hybrid stays a
+  research candidate: the toroidal rotation passes the minor-radius bulk
+  promotion gate but its device-normalized strong force still plateaus on the
+  scoped near-axis representation defect.
 
 ## [0.2.0] — 2026-07-18
 

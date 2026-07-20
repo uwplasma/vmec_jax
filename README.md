@@ -536,12 +536,17 @@ keeps the plasma finite-β equilibrium visibly coupled to the coils.
 ### Stellarator–mirror hybrid
 
 A closed periodic hybrid joins two straight mirror legs to two curved
-stellarator returns on a rotation-minimizing B-spline axis, with a finite axial
-current giving `ι = 0.085`. Freezing the leg-return junction as an explicit
-design parameter makes the **circular-section lane supported** (its force gate
-converges under refinement); the **rotating-elliptical-section hybrid is a
-research candidate**, limited by a scoped near-axis representation issue. The
-same implicit API differentiates the periodic boundary and axis controls.
+stellarator returns on a rotation-minimizing B-spline axis. A `section_turns`
+parameter turns the elliptical cross-section continuously around the circuit (a
+genuine rotating-ellipse section) while the legs keep an exactly straight axis;
+two turns lift the transform from the return-only `ι = 0.085` to `ι = 0.141` at
+`s = 0.75`. Freezing the leg-return junction as an explicit design parameter
+makes the **circular-section lane supported** (its force gate converges under
+refinement); the **rotating-elliptical-section hybrid is a research candidate**
+— the toroidal rotation passes the minor-radius bulk gate but its
+device-normalized force still plateaus on the scoped near-axis representation
+issue. The same implicit API differentiates the periodic boundary and axis
+controls.
 
 ![Periodic B-spline stellarator–mirror hybrid: straight legs, rotating returns, B-spline axis, and boundary |B|](docs/_static/figures/stellarator_mirror_hybrid.png)
 
