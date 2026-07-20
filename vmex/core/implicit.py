@@ -1115,8 +1115,8 @@ def _raw_block_transpose_adjoint_solve(
     diag_t = jnp.swapaxes(diag, -1, -2)
     upper_t = jnp.concatenate([jnp.swapaxes(lower[1:], -1, -2), zeros[:1]], axis=0)
     factors_t = block_thomas_factor(lower_t, diag_t, upper_t)
-    mu_mat = block_thomas_solve(factors_t, _pack(rhs)[..., None])[..., 0]
-    return _unpack(mu_mat)
+    mu_mat = block_thomas_solve(factors_t, _pack(P(rhs))[..., None])[..., 0]
+    return P(_unpack(mu_mat))
 
 
 def implicit_state_pullback_multi_rhs_raw_transpose(
