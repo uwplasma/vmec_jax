@@ -54,8 +54,9 @@ Wout-engine terms (:func:`d_merc`, :func:`l_grad_b`, the Boozer-based QI
 residual) run on host NumPy and are finite-difference-only —
 :func:`l_grad_b_state` is the traceable ``(state, rt)`` lane of the same
 ``L_grad_B`` convention for ``jac="implicit"``.  The implicit parameter map
-does not implement the lasym ``readin.f`` delta rotation, so
-``jac="implicit"`` requires ``lasym = False``.
+supports lasym via the four RBC/ZBS/RBS/ZBC boundary families and a traceable
+``readin.f`` delta rotation (FD-validated), so ``jac="implicit"`` handles
+``lasym = True`` as well (the QS-ratio traceable term is symmetric-only).
 
 Measured cost (2026-07-10, RTX A4000, nfp2 circular seed, QS + aspect +
 iota objective, ``max_mode=2`` -> 24 dofs): warm implicit Jacobian 2.5 s
@@ -1198,9 +1199,10 @@ def least_squares(
     docstring): every term traceable in ``(state, runtime)`` (vector terms
     expose ``residuals_state``; wout-engine terms like :func:`d_merc` /
     :func:`l_grad_b` / the Boozer QI residual need ``jac=None`` — for
-    ``L_grad_B`` use the traceable :func:`l_grad_b_state` instead) and
-    ``lasym = False`` (the implicit parameter map does not implement the
-    lasym ``readin.f`` boundary rotation).
+    ``L_grad_B`` use the traceable :func:`l_grad_b_state` instead).  Both
+    stellarator-symmetric and ``lasym`` boundaries are supported: the implicit
+    parameter map packs the four RBC/ZBS/RBS/ZBC families and a traceable
+    ``readin.f`` delta rotation.
     ``jac_chunk_size`` (R17.1 memory knob, ``jac="implicit"`` only) chunks the
     per-dof Jacobian columns via :func:`solvax.chunk_map`: ``"auto"`` (default)
     lets :func:`solvax.auto_chunk_size` pick a memory-bounded width (the

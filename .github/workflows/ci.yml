@@ -141,7 +141,10 @@ jobs:
   parity:
     name: Parity suite ${{ matrix.shard }} (goldens, coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Headroom for slow shared runners: the golden solves run ~15-20 min on a
+    # healthy runner but tip over a tighter limit on a slow one (the suite
+    # content is unchanged). 35 absorbs that variance without masking a hang.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -244,7 +247,9 @@ jobs:
   gradient:
     name: Implicit-gradient suite (JIT on, coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # ~9-10 min on a healthy runner (JIT-heavy); a slow runner runs the full
+    # 10 and gets cancelled. 15 gives real headroom without hiding a hang.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6.0.2
 
