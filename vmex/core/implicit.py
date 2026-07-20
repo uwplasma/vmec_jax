@@ -113,7 +113,7 @@ import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
-from solvax import block_thomas_factor, block_thomas_solve, chunk_map
+from solvax import auto_chunk_size, block_thomas_factor, block_thomas_solve, chunk_map
 from solvax import gcrot as _solvax_gcrot
 from solvax import gmres as _solvax_gmres
 
@@ -1091,7 +1091,11 @@ def _raw_block_transpose_adjoint_solve(
         # projected RHS solution is unchanged.
         return _pack(jax.tree.map(lambda a, b, p: a + (b - p), Fz_raw(dz), dz, P(dz)))
 
-    probes = chunk_map(probe_response, (probe_color, probe_field, probe_col), chunk_size=3 * m_block)
+    probes = chunk_map(
+        probe_response,
+        (probe_color, probe_field, probe_col),
+        chunk_size=int(auto_chunk_size(3 * m_block)),
+    )
     probes = probes.reshape((3, m_block, ns_state, m_block))
     ii = jnp.arange(ns_state)
 
