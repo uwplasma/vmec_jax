@@ -297,17 +297,17 @@ With the compact-coil configuration (0.5 m loops, vacuum ``B(0) = 0.0836 T``,
 mirror ratio 4.58), a requested 50% beta continuation grows the central radius
 by 7.5% and lowers the on-axis field by 22.3% from vacuum, exercising the
 finite-beta coupling end to end. The axisymmetric free-boundary path is
-**supported through 25% requested beta**: a size-scaled Krylov span in the
+**supported through 50% requested beta**: a size-scaled Krylov span in the
 Newton-GMRES polish (``restart = max(24, min(problem.size, ...))``) clears the
 fine-grid restart starvation that previously stalled the polish short of
-``ftol``, and a fine-grid run (``ns=11, nxi=21, elements=11``) converges every
-beta point through 25% at ~43 iterations with bulk minor-radius force below
-``1e-3`` — far under the ``0.05`` gate (see
-``benchmarks/mirror_free_boundary_axisymmetric.json``). The 50% continuation
-converges and passes the gate at scan resolution; its ``(13,25)`` fine-grid
-confirmation is a slow CPU / GPU follow-up. The nonaxisymmetric free-boundary
-path is deferred because its point observables were not monotone under spatial
-refinement.
+``ftol``, and a fine grid (``ns=13, nxi=25, elements=13, exterior_ntheta=24``)
+converges *every* beta point from 0 through 50% (≤ 44 Newton-GMRES iterations,
+variational residual ≤ 8.5e-15) with bulk minor-radius force rising from
+``1.21e-4`` (beta 0) to ``2.41e-3`` (beta 50%) — far under the ``0.05`` gate
+(see the ``fine_grid_promotion.fine_grid_50`` block in
+``benchmarks/mirror_free_boundary_axisymmetric.json``). The nonaxisymmetric
+free-boundary path is deferred because its point observables were not monotone
+under spatial refinement.
 
 Periodic stellarator-mirror hybrid
 ----------------------------------
@@ -890,9 +890,13 @@ compact JSON summary, restart files, and reviewed figures under
 ``z`` geometry, LCFS displacement, on-axis and LCFS ``|B|``, pressure balance,
 coils, cap-to-cap field lines, and coupled residual histories, plus one
 composite summary pairing the solved 3-D states with whole-scan diagnostics.
-Generated results are ignored by git. Values through 10% are supported; 25%
-and 50% are labeled validation continuation points and should not be read as
-supported merely because the nonlinear solve ends.
+Generated results are ignored by git. Every beta point from 0 through 50% is
+supported: the fine-grid promotion run above (``(13,25,13,24)`` grid,
+size-scaled Krylov span, minor-radius force normalization) converges each point
+below the ``0.05`` bulk gate. The per-grid figures in the two paragraphs that
+follow predate that fix and use the legacy *device-length* force normalization
+on a coarser exterior grid, so their higher strong-force numbers are a
+coarser-grid legacy diagnostic, not the operational gate.
 
 The default free-boundary center radius remains ``0.25 m``. The example's two
 ESSOS loops are sized to the plasma: radius ``0.5 m`` at ``z = +/-1.0 m``
@@ -947,11 +951,13 @@ expands by 1.21%, while the central field falls by 4.38%. Thus field depression
 is the more sensitive validation observable for this zero-edge-pressure
 profile.
 
-On that grid, the 50% validation-only point reaches center radius ``0.272554 m``,
-field ratio ``0.762687``, and volume beta ``0.216984`` with nonlinear residual
-``8.31e-13``. The paraxial small-beta estimate is intentionally shown but is
-not an accuracy reference at 50%; the unconverged strong-force reconstruction
-controls its status.
+On that (legacy device-length-normalized) grid the 50% point reaches center
+radius ``0.272554 m``, field ratio ``0.762687``, and volume beta ``0.216984``
+with nonlinear residual ``8.31e-13``. The paraxial small-beta estimate is
+intentionally shown but is not an accuracy reference at 50%. This coarser-grid
+strong-force reconstruction is what originally held 50% at validation status;
+it is superseded by the ``(13,25,13,24)`` fine-grid promotion run above, which
+converges every point 0–50% below the minor-radius bulk gate.
 
 The finite-beta mirror trend follows the WHAM/Pleiades discussion in Frank et
 al., `Confinement performance predictions for a high field axisymmetric tandem
@@ -1044,9 +1050,11 @@ The beta-zero exterior resolution study at ``(ns,nxi,ntheta_panel)`` equal to
 gives center radius ``0.272554 m``, axis field ``0.063578 T``, volume beta
 ``0.216984``, and device-normalized all-volume/core force
 ``6.69e-2``/``1.50e-2``, with
-medium-to-fine changes of ``0.137%`` in radius and ``1.02%`` in center field;
-that point remains validation-only, while 10% passes all independent force and
-observable checks.
+medium-to-fine changes of ``0.137%`` in radius and ``1.02%`` in center field.
+Those device-length force figures are a legacy diagnostic on this coarser grid;
+under the operational minor-radius normalization the ``(13,25,13,24)`` fine-grid
+promotion run reaches bulk force ``2.41e-3`` at 50% (gate-passing), so the lane
+is supported through 50% (see the free-boundary β section above).
 
 The coefficient solver uses a dense ``jacfwd`` only through 32 unknowns; larger
 systems expose exact repeated JVP/VJP actions through a SciPy ``LinearOperator``

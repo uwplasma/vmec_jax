@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-20
+
 ### Added
 - **QI-mirror hybrid (Fourier vs B-spline).** `vmex.mirror.splice_straight_legs`
   cuts a closed magnetic axis at its curvature minima and inserts exactly-straight
@@ -29,6 +31,37 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
   research candidate: the toroidal rotation passes the minor-radius bulk
   promotion gate but its device-normalized strong force still plateaus on the
   scoped near-axis representation defect.
+
+### Changed
+- **Axisymmetric free-boundary mirror validated through 50 % β** (was 25 %). A
+  size-scaled Krylov span in the Newton-GMRES polish clears the fine-grid restart
+  starvation, and a fine grid (`ns=13, nxi=25, elements=13, exterior_ntheta=24`)
+  converges every β point from 0 through 50 % (≤ 44 Newton-GMRES iterations) with
+  bulk minor-radius force `1.21e-4 → 2.41e-3`, far below the `0.05` promotion
+  gate. The older per-grid device-length force figures are reframed as a
+  coarser-grid legacy diagnostic. See `benchmarks/mirror_free_boundary_axisymmetric.json`
+  (`fine_grid_promotion.fine_grid_50`).
+- **CI timeout headroom** for the borderline parity goldens (25 → 35 min) and
+  implicit-gradient (10 → 15 min) jobs, so slow shared runners no longer cancel
+  otherwise-passing suites.
+
+### Fixed
+- **ESSOS `Coils.from_json`.** Current ESSOS renamed the coils-JSON loader to the
+  `Coils.from_json` classmethod and removed the old `Coils_from_json` free
+  function; the `--coils` CLI path and the two ESSOS coil examples now use it
+  (with a `hasattr` fallback to the legacy name).
+- **ESSOS `Coils.to_mgrid` guard.** The `--coils` coils→mgrid path now raises a
+  clear `VmecInputError` (instead of an opaque `AttributeError`) on ESSOS builds
+  that predate `Coils.to_mgrid`, and the matching test skips rather than fails.
+- **`tools/fetch_assets.py` fixture download.** The fetch constants pointed at
+  non-existent `vmex_*.tar.gz` release tarballs (the published bundles kept their
+  pre-rename `vmec_jax_*.tar.gz` names), 404-ing every fixture download; repointed
+  at the real filenames (SHA256 unchanged).
+- **Stale lasym-rejection test + docstrings.** `test_..._rejects_lasym_decks`
+  and two `optimize.py` docstrings claimed `jac="implicit"` requires
+  `lasym = False`; the implicit lane has supported (FD-validated) lasym since the
+  4-family boundary map + traceable `readin.f` delta rotation landed. Replaced the
+  test with a fast 4-family boundary-map round-trip and corrected the docstrings.
 
 ## [0.2.0] — 2026-07-18
 

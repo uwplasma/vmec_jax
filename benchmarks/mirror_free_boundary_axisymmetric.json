@@ -1,139 +1,160 @@
 {
-  "schema": "vmex.benchmark.mirror/1",
-  "model": "free-open-axisymmetric",
-  "status": "supported-through-beta-0.10",
-  "provenance": {
-    "measurement_commit": "d4f56dae0be0da9e5d245bdf66e2ccee5164ef55",
-    "hardware": "NVIDIA RTX A4000",
-    "external_field": "two concentric circular loops supplied by ESSOS",
-    "basis": "cubic B-spline in xi, m=0 plasma, panel exterior",
-    "ftol": 1e-12
-  },
-  "case": {
-    "betas": [
-      0.0,
-      0.01,
-      0.03,
-      0.1,
-      0.25,
-      0.5
-    ],
-    "supported_beta_max": 0.1,
-    "coil_radius_m": 0.9,
-    "coil_centers_z_m": [
-      -1.0,
-      1.0
-    ],
-    "current_A_each": 200000.0,
-    "cut_planes_z_m": [
-      -0.8,
-      0.8
-    ],
-    "initial_center_radius_m": 0.25,
-    "initialization": "nested finite-radius vacuum-flux surfaces",
-    "exterior_order": 6,
-    "spectral_side_density": true
-  },
-  "refinement": [
-    {
-      "beta": 0.0,
-      "strong": [
-        0.0421244,
-        0.003411,
-        0.0020829
-      ],
-      "bulk_fine": 0.00110282,
-      "observable_change_max": 1.46e-06,
-      "passed": true
-    },
-    {
-      "beta": 0.01,
-      "strong": [
-        0.0400994,
-        0.00537337,
-        0.00303422
-      ],
-      "bulk_fine": 0.00090507,
-      "observable_change_max": 0.000128,
-      "passed": true
-    },
-    {
-      "beta": 0.03,
-      "strong": [
-        0.0362556,
-        0.00955656,
-        0.00540964
-      ],
-      "bulk_fine": 0.0006124,
-      "observable_change_max": 0.000391,
-      "passed": true
-    },
-    {
-      "beta": 0.1,
-      "strong": [
-        0.0269987,
-        0.0245537,
-        0.0143612
-      ],
-      "bulk_fine": 0.0016249,
-      "observable_change_max": 0.001376,
-      "passed": true
-    },
-    {
-      "beta": 0.25,
-      "strong": [
-        0.0469394,
-        0.0568261,
-        0.0336591
-      ],
-      "bulk_fine": 0.00560566,
-      "observable_change_max": 0.003928,
-      "passed": false
-    },
-    {
-      "beta": 0.5,
-      "strong": [
-        0.129758,
-        0.111046,
-        0.0668759
-      ],
-      "bulk_fine": 0.014958,
-      "observable_change_max": 0.010245,
-      "passed": false
-    }
+ "schema": "vmex.benchmark.mirror/1",
+ "model": "free-open-axisymmetric",
+ "status": "supported-through-beta-0.10",
+ "provenance": {
+  "measurement_commit": "d4f56dae0be0da9e5d245bdf66e2ccee5164ef55",
+  "hardware": "NVIDIA RTX A4000",
+  "external_field": "two concentric circular loops supplied by ESSOS",
+  "basis": "cubic B-spline in xi, m=0 plasma, panel exterior",
+  "ftol": 1e-12
+ },
+ "case": {
+  "betas": [
+   0.0,
+   0.01,
+   0.03,
+   0.1,
+   0.25,
+   0.5
   ],
-  "beta_50_research_observables": {
-    "center_radius_relative_change": 0.0773406,
-    "center_field_relative_change": -0.237313
+  "supported_beta_max": 0.1,
+  "coil_radius_m": 0.9,
+  "coil_centers_z_m": [
+   -1.0,
+   1.0
+  ],
+  "current_A_each": 200000.0,
+  "cut_planes_z_m": [
+   -0.8,
+   0.8
+  ],
+  "initial_center_radius_m": 0.25,
+  "initialization": "nested finite-radius vacuum-flux surfaces",
+  "exterior_order": 6,
+  "spectral_side_density": true
+ },
+ "refinement": [
+  {
+   "beta": 0.0,
+   "strong": [
+    0.0421244,
+    0.003411,
+    0.0020829
+   ],
+   "bulk_fine": 0.00110282,
+   "observable_change_max": 1.46e-06,
+   "passed": true
   },
-  "implicit_derivative": {
-    "relative_error": 1.08e-10,
-    "adjoint_relative_residual": 1.37e-09,
-    "reconverged_finite_difference": true
+  {
+   "beta": 0.01,
+   "strong": [
+    0.0400994,
+    0.00537337,
+    0.00303422
+   ],
+   "bulk_fine": 0.00090507,
+   "observable_change_max": 0.000128,
+   "passed": true
   },
-  "gates": {
-    "supported_sequence_ftol": true,
-    "supported_sequence_force": true,
-    "supported_sequence_observables": true,
-    "beta_25_force": false,
-    "beta_50_force_and_observables": false
+  {
+   "beta": 0.03,
+   "strong": [
+    0.0362556,
+    0.00955656,
+    0.00540964
+   ],
+   "bulk_fine": 0.0006124,
+   "observable_change_max": 0.000391,
+   "passed": true
   },
-  "fine_grid_promotion": {
-    "note": "Fine-grid confirmation of the 25% beta continuation with the size-scaled Krylov span (office CPU, ns=11 nxi=21 elements=11 exterior_ntheta=20). Every beta point converges (~43 Newton-GMRES iterations, no restart starvation) with bulk minor-radius force far below the 0.05 promotion gate.",
-    "grid": {
-      "ns": 11,
-      "nxi": 21,
-      "elements": 11,
-      "exterior_ntheta": 20
-    },
-    "wall_s": 11666.8,
-    "bulk_minor_radius_force": {
-      "beta_0": 9.39e-05,
-      "beta_10": 0.000385,
-      "beta_25": 0.00097
-    },
-    "promotion_gate": 0.05,
-    "passes_through_beta": 0.25,
-    "beta_50_status": "converges + passes the gate at scan resolution (compact-coil scan); the (13,25) fine-grid confirmation is a slow CPU / GPU follow-up"
+  {
+   "beta": 0.1,
+   "strong": [
+    0.0269987,
+    0.0245537,
+    0.0143612
+   ],
+   "bulk_fine": 0.0016249,
+   "observable_change_max": 0.001376,
+   "passed": true
+  },
+  {
+   "beta": 0.25,
+   "strong": [
+    0.0469394,
+    0.0568261,
+    0.0336591
+   ],
+   "bulk_fine": 0.00560566,
+   "observable_change_max": 0.003928,
+   "passed": false
+  },
+  {
+   "beta": 0.5,
+   "strong": [
+    0.129758,
+    0.111046,
+    0.0668759
+   ],
+   "bulk_fine": 0.014958,
+   "observable_change_max": 0.010245,
+   "passed": false
   }
+ ],
+ "beta_50_research_observables": {
+  "center_radius_relative_change": 0.0773406,
+  "center_field_relative_change": -0.237313
+ },
+ "implicit_derivative": {
+  "relative_error": 1.08e-10,
+  "adjoint_relative_residual": 1.37e-09,
+  "reconverged_finite_difference": true
+ },
+ "gates": {
+  "supported_sequence_ftol": true,
+  "supported_sequence_force": true,
+  "supported_sequence_observables": true,
+  "beta_25_force": false,
+  "beta_50_force_and_observables": false
+ },
+ "fine_grid_promotion": {
+  "note": "Fine-grid confirmation of the 25% beta continuation with the size-scaled Krylov span (office CPU, ns=11 nxi=21 elements=11 exterior_ntheta=20). Every beta point converges (~43 Newton-GMRES iterations, no restart starvation) with bulk minor-radius force far below the 0.05 promotion gate.",
+  "grid": {
+   "ns": 11,
+   "nxi": 21,
+   "elements": 11,
+   "exterior_ntheta": 20
+  },
+  "wall_s": 11666.8,
+  "bulk_minor_radius_force": {
+   "beta_0": 9.39e-05,
+   "beta_10": 0.000385,
+   "beta_25": 0.00097
+  },
+  "promotion_gate": 0.05,
+  "passes_through_beta": 0.5,
+  "beta_50_status": "confirmed: the (13,25,13,24) fine grid converges every beta point from 0 through 50% (<=44 Newton-GMRES iterations, variational residual <=8.5e-15) with bulk minor-radius force <=2.41e-3 -- far below the 0.05 promotion gate (see fine_grid_50).",
+  "fine_grid_50": {
+   "grid": {
+    "ns": 13,
+    "nxi": 25,
+    "elements": 13,
+    "exterior_ntheta": 24
+   },
+   "wall_s": 22599.2,
+   "bulk_minor_radius_force": {
+    "beta_0": 0.0001208,
+    "beta_3": 0.000153,
+    "beta_10": 0.0002904,
+    "beta_25": 0.0007797,
+    "beta_50": 0.002409
+   },
+   "newton_gmres_iterations_max": 44,
+   "variational_max": 8.5e-15,
+   "all_converged": true,
+   "passes_through_beta": 0.5,
+   "promotion_gate": 0.05
+  }
+ }
 }

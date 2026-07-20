@@ -527,9 +527,12 @@ finite-difference-validated — the derivative an external optimizer needs.
 
 `solve_beta_scan` jointly updates the spline boundary, the plasma state, and
 the unbounded exterior vacuum, driven by an ESSOS two-coil field. The lane is
-supported through **25 % β** (fine-grid-confirmed) and the free-boundary
-derivative is finite-difference-validated. The compact-coil configuration shown
-keeps the plasma finite-β equilibrium visibly coupled to the coils.
+supported through **50 % β** (fine-grid-confirmed: every β point from 0 through
+50 % converges on the `(ns, nxi, elements, ntheta) = (13, 25, 13, 24)` grid with
+bulk minor-radius force ≤ 2.4 × 10⁻³, far under the 0.05 promotion gate) and the
+free-boundary derivative is finite-difference-validated. The compact-coil
+configuration shown keeps the plasma finite-β equilibrium visibly coupled to the
+coils.
 
 ![Free-boundary beta scan with ESSOS coils: field lines, LCFS, |B|, pressure, and residual histories](docs/_static/figures/mirror_free_boundary_beta50_summary.png)
 
