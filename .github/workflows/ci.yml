@@ -245,11 +245,18 @@ jobs:
           retention-days: 3
 
   gradient:
-    name: Implicit-gradient suite (JIT on, coverage)
+    name: Implicit-gradient suite ${{ matrix.shard }} (JIT on, coverage)
     runs-on: ubuntu-latest
-    # ~9-10 min on a healthy runner (JIT-heavy); a slow runner runs the full
-    # 10 and gets cancelled. 15 gives real headroom without hiding a hang.
+    # Sharded so no single job exceeds the timeout even with a COLD finite-
+    # difference cache (first run after the test file changes recomputes every
+    # FD reference). The two dominant FD tests (lasym-adjoint, lasym-3d) each get
+    # their own shard; shard "c" is the 17 remaining, lighter tests. Each shard
+    # keeps its own FD reference cache. Warm-cache runs finish in ~4 min.
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [a, b, c]
     steps:
       - uses: actions/checkout@v6.0.2
 
@@ -271,24 +278,34 @@ jobs:
           path: /tmp/vmex_implicit_fd_cache.pkl
           # entries are keyed by (case, dof, step, ftol, ns) inside the pickle,
           # so hash the test file: changed FD parameters invalidate the cache.
-          key: implicit-fd-v1-${{ hashFiles('tests/test_implicit_grad.py') }}
+          # keyed per shard so the two jobs never overwrite each other's cache.
+          key: implicit-fd-v2-${{ matrix.shard }}-${{ hashFiles('tests/test_implicit_grad.py') }}
 
       - name: Run implicit-gradient tests with coverage
         env:
           JAX_ENABLE_X64: "1"
         run: |
-          pytest -q tests/test_implicit_grad.py \
+          # -k with unique test names partitions the suite exactly into the two
+          # dominant FD tests (a, b) and their complement (c).
+          A="test_lasym_adjoint_vs_frozen_path_fd"
+          B="test_lasym_3d_gradient_vs_frozen_path_fd"
+          case "${{ matrix.shard }}" in
+            a) SELECT="$A" ;;
+            b) SELECT="$B" ;;
+            *) SELECT="not $A and not $B" ;;
+          esac
+          pytest -q tests/test_implicit_grad.py -k "$SELECT" \
             --durations=0 \
             --cov=vmex --cov-report=term
 
       - name: Stash coverage data
-        run: mv .coverage coverage.gradient
+        run: mv .coverage coverage.gradient-${{ matrix.shard }}
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-gradient
-          path: coverage.gradient
+          name: coverage-gradient-${{ matrix.shard }}
+          path: coverage.gradient-${{ matrix.shard }}
           retention-days: 3
 
   examples:
@@ -353,7 +370,7 @@ jobs:
 
       - name: Combine shards and enforce the gate
         run: |
-          coverage combine coverage.parity-a coverage.parity-b coverage.parity-c coverage.parity-d coverage.gradient coverage.examples
+          coverage combine coverage.parity-a coverage.parity-b coverage.parity-c coverage.parity-d coverage.gradient-a coverage.gradient-b coverage.gradient-c coverage.examples
           # The mirror release audit reaches 95% only after appending nightly
           # fixed/free adjoint tests. The fast core artifacts intentionally
           # exclude those tests, so do not mix a partial mirror number into
