@@ -291,10 +291,18 @@ The package currently includes:
 With the compact-coil configuration (0.5 m loops, vacuum ``B(0) = 0.0836 T``,
 mirror ratio 4.58), a requested 50% beta continuation grows the central radius
 by 7.5% and lowers the on-axis field by 22.3% from vacuum, exercising the
-finite-beta coupling end to end. The axisymmetric free-boundary path is supported through 10% requested beta
-and retains 25% and 50% as explicitly labeled validation continuations. The
-nonaxisymmetric free-boundary path is deferred because its
-point observables were not monotone under spatial refinement.
+finite-beta coupling end to end. The axisymmetric free-boundary path is
+**supported through 25% requested beta**: a size-scaled Krylov span in the
+Newton-GMRES polish (``restart = max(24, min(problem.size, ...))``) clears the
+fine-grid restart starvation that previously stalled the polish short of
+``ftol``, and a fine-grid run (``ns=11, nxi=21, elements=11``) converges every
+beta point through 25% at ~43 iterations with bulk minor-radius force below
+``1e-3`` — far under the ``0.05`` gate (see
+``benchmarks/mirror_free_boundary_axisymmetric.json``). The 50% continuation
+converges and passes the gate at scan resolution; its ``(13,25)`` fine-grid
+confirmation is a slow CPU / GPU follow-up. The nonaxisymmetric free-boundary
+path is deferred because its point observables were not monotone under spatial
+refinement.
 
 Periodic stellarator-mirror hybrid
 ----------------------------------
