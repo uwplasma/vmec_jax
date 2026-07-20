@@ -5,8 +5,13 @@ Physics.  A quasi-isodynamic (QI) stellarator has poloidally closed ``|B|``
 contours and near-straight (low-curvature) magnetic-axis segments at its
 field-period-symmetric planes.  Cutting the axis there and inserting a straight
 magnetic-mirror cell is therefore natural: the seam sits where the QI axis is
-already almost straight.  This example builds that QI-mirror hybrid and compares
-the two ways of representing the cut-and-spliced axis.
+already almost straight.  An ``nfp = 2`` QI axis has two such planes per field
+period, so it is cut at all *four* low-curvature planes, and at each cut a
+straight leg is inserted **along the local axis tangent** (extending the axis in
+its own direction, not a shared transverse direction).  Choosing the leg lengths
+so the inserted displacements cancel and reflecting one half about the symmetry
+axis makes the four-legged racetrack stellarator symmetric.  This example builds
+that QI-mirror hybrid and compares the two ways of representing the spliced axis.
 
   * Fourier (VMEC-native) is a *global* basis: a truncated series rings at the
     straight->curved seam (a Gibbs-type feature) and its error decays only
@@ -102,12 +107,21 @@ def qi_axis_and_curvature(wout, nfp: int, n_axis: int):
     return phi, points, curvature
 
 
-def symmetric_cut_indices(curvature: np.ndarray, nfp: int) -> tuple[int, int]:
-    """Deepest curvature minimum in the first field period and its image."""
+def symmetric_cut_indices(curvature: np.ndarray, nfp: int) -> tuple[int, ...]:
+    """The ``2 * nfp`` low-curvature symmetry planes of a QI axis.
 
-    period = curvature.size // nfp
-    first = int(np.argmin(curvature[: period // 2 + 1]))
-    return first, first + period
+    A stellarator-symmetric QI axis is nearly straight at two planes per field
+    period, so the curvature has ``2 * nfp`` minima (four for ``nfp = 2``).  All
+    of them are cut so the straight mirror legs inserted along the local axis
+    tangent are arranged stellarator symmetrically.
+    """
+
+    prev, nxt = np.roll(curvature, 1), np.roll(curvature, -1)
+    minima = np.where((curvature < prev) & (curvature <= nxt))[0]
+    if minima.size < 2 * nfp:
+        raise ValueError(f"expected >= {2 * nfp} curvature minima, found {minima.size}")
+    deepest = minima[np.argsort(curvature[minima])[: 2 * nfp]]
+    return tuple(sorted(int(i) for i in deepest))
 
 
 # ------------------------- representation fits ------------------------------
@@ -147,7 +161,7 @@ def bspline_leg_midpoint_error(splice, controls: int) -> float:
         _sample_closed_polyline(splice.points, nodes / (2.0 * np.pi) * splice.total_length),
         axis=0,
     )
-    (start, stop), _ = splice.leg_windows
+    start, stop = splice.leg_windows[0]
     midpoint = 0.5 * (start + stop)
     fitted = np.asarray(
         basis.evaluate(coefficients, np.array([midpoint / splice.total_length * 2.0 * np.pi]), axis=0)
@@ -191,13 +205,15 @@ def main() -> None:  # noqa: PLR0915 - a single linear example script
     cut = symmetric_cut_indices(curvature, int(inp.nfp))
     print(f"\naxis curvature: min={curvature.min():.3e} max={curvature.max():.3e} 1/m "
           f"(ratio {curvature.max() / curvature.min():.0f}x)")
-    print(f"cut locations (curvature minima): phi={phi[cut[0]]:.3f}, {phi[cut[1]]:.3f} rad; "
-          f"kappa={curvature[cut[0]]:.3e}, {curvature[cut[1]]:.3e} 1/m")
+    print(f"cut locations ({len(cut)} curvature minima): "
+          f"phi={[round(float(phi[c]), 3) for c in cut]} rad; "
+          f"kappa={[float(f'{curvature[c]:.2e}') for c in cut]} 1/m")
 
     # ---------------- cut-and-splice the straight mirror legs ------------------
     splice = splice_straight_legs(axis_points, cut_indices=cut, straight_length=STRAIGHT_LENGTH)
     print(f"\nspliced hybrid axis: length={splice.total_length:.3f} m  "
-          f"closure={splice.closure_error:.1e}  leg-return corner={splice.corner_angle:.1f} deg")
+          f"legs={len(splice.leg_windows)}  leg lengths={np.round(splice.leg_lengths, 3).tolist()} m  "
+          f"closure={splice.closure_error:.1e}  leg-return corner={splice.corner_angle:.2f} deg")
 
     # ---------------- representation accuracy: Fourier vs B-spline -------------
     dense = np.linspace(0.0, 2.0 * np.pi, 4000, endpoint=False)
@@ -259,8 +275,9 @@ def main() -> None:  # noqa: PLR0915 - a single linear example script
         "qi_iota_axis": qi_iota_axis, "qi_iota_edge": qi_iota_edge,
         "qi_b0": float(wout.b0), "qi_aspect": float(wout.aspect),
         "curvature_min": float(curvature.min()), "curvature_max": float(curvature.max()),
-        "cut_phi": [float(phi[cut[0]]), float(phi[cut[1]])],
-        "cut_kappa": [float(curvature[cut[0]]), float(curvature[cut[1]])],
+        "cut_phi": [float(phi[c]) for c in cut],
+        "cut_kappa": [float(curvature[c]) for c in cut],
+        "leg_lengths": [float(x) for x in splice.leg_lengths],
         "splice_length": splice.total_length, "splice_closure": splice.closure_error,
         "corner_angle_deg": splice.corner_angle,
         "fourier": [dict(zip(("modes", "dof", "rms", "max", "leg"), row)) for row in fourier_rows],
@@ -313,7 +330,7 @@ def make_figure(path, phi, axis_points, curvature, cut, splice, target, dense_ar
                 color=plt.cm.jet(norm_k(kap[i])), lw=2.4)
     for c in cut:
         ax.scatter(*axis_points[c], color=ink, s=55, marker="o", depthshade=False, zorder=6)
-    ax.set_title("QI magnetic axis, curvature $\\kappa(\\phi)$\ncut at the minima (dots)",
+    ax.set_title("QI magnetic axis, curvature $\\kappa(\\phi)$\ncut at 4 symmetry planes (dots)",
                  fontsize=11, color=ink)
     ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("z")
     fig.colorbar(plt.cm.ScalarMappable(norm=norm_k, cmap="jet"), ax=ax, shrink=0.55,
@@ -330,7 +347,7 @@ def make_figure(path, phi, axis_points, curvature, cut, splice, target, dense_ar
             color="#b8b7ad", lw=2.0, label="QI curved return")
     legpts = splice.points[on_leg[:-1]]
     ax.scatter(legpts[:, 0], legpts[:, 1], legpts[:, 2], color=blue, s=6, label="straight mirror leg")
-    ax.set_title("QI-mirror hybrid axis\nstraight legs + QI returns", fontsize=11, color=ink)
+    ax.set_title("QI-mirror hybrid axis\n4 tangent-aligned legs + QI returns", fontsize=11, color=ink)
     ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("z")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.02))
 
@@ -389,7 +406,7 @@ def make_figure(path, phi, axis_points, curvature, cut, splice, target, dense_ar
         ("Cut curvature (min of axis)", f"{summary['cut_kappa'][0]:.2e} 1/m"),
         ("  curvature max / min", f"{summary['curvature_max'] / summary['curvature_min']:.0f}x"),
         ("Spliced axis closure", f"{summary['splice_closure']:.0e} m"),
-        ("  leg-return corner", f"{summary['corner_angle_deg']:.1f} deg"),
+        ("  legs (tangent break)", f"{len(summary['cut_phi'])} ({summary['corner_angle_deg']:.2f} deg)"),
         ("B-spline hybrid equilibrium", ""),
         ("  divergence rms", f"{summary['hybrid_divergence_rms']:.1e}"),
         ("  force normalized rms", f"{summary['hybrid_force_normalized_rms']:.2e}"),

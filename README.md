@@ -559,23 +559,27 @@ A quasi-isodynamic (QI) stellarator already has poloidally closed `|B|` contours
 and near-straight (low-curvature) magnetic-axis segments at its
 field-period-symmetric planes, so cutting the axis there and inserting a straight
 mirror cell is natural. `examples/qi_mirror_hybrid_fourier_vs_bspline.py` solves
-`input.nfp2_QI` (VMEC, Fourier), reads its magnetic axis, and confirms the
-curvature minima: `κ` drops to **0.036 1/m** at `φ = 0, π` (a 70× spread over the
-torus). It then cuts there and splices in two exactly-straight mirror legs, and
+`input.nfp2_QI` (VMEC, Fourier), reads its magnetic axis, and confirms the four
+curvature minima of an nfp=2 QI axis: `κ` drops to **0.036 1/m** at `φ = 0, π` and
+**0.088 1/m** at `φ = π/2, 3π/2` (a 70× spread over the torus). It cuts at all
+**four** symmetry planes and inserts a straight mirror leg at each **along the
+local axis tangent** — so every leg continues the axis in its own direction.
+Choosing the leg lengths so the inserted displacements cancel and reflecting one
+half about the `x` axis makes the four-legged racetrack **stellarator symmetric**,
+with each leg tangent to the axis (junction break `~0.04°`, not a corner). It then
 represents that closed hybrid axis both ways:
 
 | representation | straight mirror leg | seam behaviour |
 | --- | --- | --- |
-| **Fourier** (VMEC-native, global) | ringing decays only `~1/N`; **5.3e-4 m** at 387 DOF | Gibbs-type ringing everywhere at once |
-| **B-splines** (`vmex.mirror`, local) | **machine precision** (`1e-12 m` once each leg spans ≳30 knots) | error confined to a few knots around the junction |
+| **Fourier** (VMEC-native, global) | ringing floors near **2e-6 m** at 387 DOF | Gibbs-type ringing everywhere at once |
+| **B-splines** (`vmex.mirror`, local) | **machine precision** (`1.5e-12 m` once each leg spans ≳30 knots) | error confined to a few knots around the junction |
 
-At matched degrees of freedom the local B-spline reproduces the straight cell
-~100× more accurately than the global Fourier series; the residual maximum error
-of both is set by the sharp leg–return corner (the QI axis weaves in `Z` through
-its symmetry planes, so a straight leg meets the return at a **36° corner**). The
-B-spline lane also solves the hybrid equilibrium (divergence-free to `1e-13`,
-`ι = 0.11`, mirror ratio 2.2); the loose force residual (`4.6e-2`) is set by that
-corner curvature. A literal VMEC re-solve of a straight-axis device is degenerate
+Only the local B-spline reproduces the exactly-straight cell to machine
+precision; the residual maximum of both is set by the leg–return **curvature**
+break (a cubic B-spline is `C²` and also rounds a curvature step — an honest
+shared limit). The B-spline lane also solves the hybrid equilibrium
+(divergence-free to `9e-14`, `ι = 0.11`, mirror ratio 1.8; force residual
+`1.3e-2`). A literal VMEC re-solve of a straight-axis device is degenerate
 in cylindrical `(R, φ, Z)` coordinates — which is exactly why the closed-axis
 B-spline lane exists.
 

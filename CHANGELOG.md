@@ -6,6 +6,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 
 ## [Unreleased]
 
+### Changed
+- **QI-mirror hybrid: tangent-aligned legs at all four symmetry planes.**
+  `splice_straight_legs` now inserts each straight mirror leg *along the local
+  axis tangent* (rather than a shared transverse "bisector" that produced a
+  ~36-degree corner), and cuts the nfp=2 QI axis at all **four** low-curvature
+  symmetry planes (rather than two). Per-cut leg lengths are chosen so the
+  inserted displacements cancel (splitting into two symmetry classes), and one
+  half is reflected 180 degrees about the x axis, so the four-legged racetrack is
+  exactly stellarator symmetric and every leg/return junction is
+  tangent-continuous (residual break ~0.04 deg). `QIMirrorSplice` gains
+  `leg_lengths` / `leg_directions` (per cut) and its `leg_windows` / `cut_*`
+  fields are now length-`N`; `build_qi_mirror_hybrid` accepts N cuts.
+
 ## [0.3.0] — 2026-07-20
 
 ### Added

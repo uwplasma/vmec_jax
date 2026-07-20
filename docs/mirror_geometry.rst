@@ -472,20 +472,27 @@ core, reads the magnetic axis :math:`\mathbf{r}(\phi)` from the axis Fourier
 arrays, and computes the 3-D curvature
 :math:`\kappa = \lVert \mathbf{r}' \times \mathbf{r}'' \rVert / \lVert
 \mathbf{r}' \rVert^{3}` spectrally over the torus. For this nfp=2 QI the
-curvature spans ``70x``, with clean minima :math:`\kappa \approx 0.036`
-:math:`\mathrm{m}^{-1}` at :math:`\phi = 0, \pi` (the stellarator-symmetry
-planes, where the axis crosses the midplane) and maxima :math:`\approx 2.5`
-:math:`\mathrm{m}^{-1}` at the bean tips. The field-period-symmetric minima are
-the cut locations.
+curvature spans ``70x``. An nfp=2 QI axis is near-straight at two planes per
+field period, so the curvature has *four* minima: :math:`\kappa \approx 0.036`
+:math:`\mathrm{m}^{-1}` at :math:`\phi = 0, \pi` and :math:`\approx 0.088`
+:math:`\mathrm{m}^{-1}` at :math:`\phi = \pi/2, 3\pi/2` (the four
+stellarator-symmetry planes, where the axis crosses the midplane), and maxima
+:math:`\approx 2.5` :math:`\mathrm{m}^{-1}` at the bean tips. All four
+low-curvature planes are cut, so the inserted legs are stellarator symmetric.
 
-Cut-and-splice.  ``splice_straight_legs`` splits the closed axis at the two
-minima into two curved returns, translates the returns apart by the mirror-leg
-length along the bisector of the two cut tangents, and fills each gap with an
-exactly-straight leg. The loop closes to rounding (``closure < 1e-13``) and the
-returns carry the unmodified (rigidly translated) QI shaping. Because the QI
-axis weaves in :math:`Z` through its symmetry planes, no single leg direction is
-tangent to both cuts, so each leg meets its return at a ``36 deg`` corner --
-a sharp seam that is exactly what separates the two representations.
+Cut-and-splice.  ``splice_straight_legs`` cuts the closed axis at the four minima
+and inserts an exactly-straight leg at each **along the local axis tangent**, so
+every leg continues the axis in its own direction (not a shared transverse
+direction). The per-cut leg lengths are chosen so the inserted displacements
+cancel -- the loop closes to rounding (``closure ~ 1e-16``) -- which splits the
+legs into two symmetry classes (the two symmetry-plane types, here ``1.31 m`` and
+``1.07 m``). One stellarator-symmetric half, between the two symmetry-fixed
+planes, is built and reflected 180 degrees about the ``x`` axis, so the
+four-legged racetrack is stellarator symmetric to rounding. Each leg is tangent
+to the axis at its cut, so the leg/return junction is tangent-continuous
+(residual break ``~0.04 deg``, versus a real corner): the seam is now a
+*curvature* break -- the exactly-zero-curvature leg meeting the finite-curvature
+return -- which is what separates the two representations.
 
 Representation accuracy.  The same closed hybrid axis is fitted with a truncated
 Fourier series (global, VMEC-native) and a periodic cubic B-spline (local, the
@@ -499,41 +506,44 @@ Fourier series (global, VMEC-native) and a periodic cubic B-spline (local, the
      - deviation on the straight leg
    * - Fourier, :math:`N=8`
      - 51
-     - ``1.9e-2`` (ringing)
+     - ``2.0e-2`` (ringing)
    * - Fourier, :math:`N=32`
      - 195
-     - ``2.1e-3`` (ringing, ``~1/N``)
+     - ``2.7e-5`` (ringing)
    * - Fourier, :math:`N=64`
      - 387
-     - ``5.3e-4`` (ringing, ``~1/N``)
+     - ``2.0e-6`` (ringing, floor)
    * - B-spline, :math:`M=64`
      - 192
-     - ``1.5e-5`` (leg midpoint)
+     - ``2.2e-6`` (leg midpoint)
    * - B-spline, :math:`M=128`
      - 384
-     - ``6.4e-8`` (leg midpoint)
+     - ``6.0e-9`` (leg midpoint)
    * - B-spline, :math:`M=256`
      - 768
-     - ``1.1e-12`` (leg midpoint)
+     - ``1.5e-12`` (leg midpoint)
 
 The B-spline reproduces the straight cell to machine precision once each leg is
 backed by enough collinear controls (its error is confined to a fixed few
 knot-spacings around the junction, the signature of local support), while the
-global Fourier series rings across the whole leg and decays only ``~1/N``. The
-*maximum* error of both bases is instead set by the leg-return corner: a cubic
-spline also rounds a tangent break, so this is an honest, shared limit, not a
-B-spline advantage. The comparison is the point: the local basis wins precisely
-on the exactly-straight mirror cell.
+global Fourier series rings across the whole leg and floors near ``2e-6``. The
+tangent-continuous seam lets the Fourier ringing decay faster than the old
+sharp-corner case, but only the local basis reproduces the exactly-straight cell
+to machine precision. The *maximum* error of both bases is instead set by the
+leg/return curvature break (a cubic B-spline is :math:`C^2` and also rounds a
+curvature step), so this is an honest, shared limit, not a B-spline advantage.
+The comparison is the point: the local basis wins precisely on the
+exactly-straight mirror cell.
 
 Equilibrium.  ``build_qi_mirror_hybrid`` fits the spliced axis into the closed
 solve basis, wraps it in a constant circular section (rotation-invariant, so the
 large frame holonomy of a fully 3-D axis does not enter the boundary), and
 returns a ``StellaratorMirrorSetup`` that feeds ``solve_fixed_boundary`` like the
 analytic racetrack. The solved hybrid is divergence-free to ``9.4e-14`` with
-``iota = 0.11`` and mirror ratio ``2.2``; its normalized strong-force residual is
-``4.6e-2``, loose because the 36-degree corner concentrates axis curvature at
-:math:`\kappa \approx 6.5\,\mathrm{m}^{-1}` (the smooth analytic racetrack, with
-circular returns, converges to ``2.6e-3`` by contrast). This B-spline
+``iota = 0.11`` and mirror ratio ``1.8``; its normalized strong-force residual is
+``1.3e-2`` (the smooth analytic racetrack, with circular returns, converges to
+``2.6e-3`` by contrast -- the QI returns' finite curvature and the four
+curvature-break seams still load the force). This B-spline
 equilibrium is a scalar-pressure spline model whose transform comes from a weak
 axial current: it demonstrates the geometry and the exactly-straight mirror cell,
 **not** a reproduction of the QI rotational transform (``|iota| ~ 0.45``).

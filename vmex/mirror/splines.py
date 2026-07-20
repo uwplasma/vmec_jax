@@ -489,25 +489,33 @@ class QIMirrorSplice:
     """Closed magnetic axis formed by inserting straight mirror legs.
 
     ``points`` is a closed, arc-length-orderable polyline (the final point
-    precedes the first).  Cutting a quasi-isodynamic axis at two field-period
-    -symmetric curvature minima and translating the two curved returns apart
-    along ``leg_direction`` opens two exactly-straight mirror legs that occupy
-    the arc-length windows ``leg_windows``.  Because the QI axis weaves in Z
-    through its symmetry planes, a single leg direction cannot be tangent to
-    both cuts, so each leg meets its return at the tangent break
-    ``corner_angle`` (degrees) -- the sharp seam a global Fourier basis rings on
-    and a local B-spline represents cleanly.  ``closure_error`` is the residual
-    of the closed loop (zero to rounding by construction).
+    precedes the first).  A quasi-isodynamic axis is cut at its low-curvature
+    symmetry planes (``2 * nfp`` of them -- four for ``nfp = 2``) and at each cut
+    an exactly-straight mirror leg is inserted *along the local axis tangent*, so
+    every leg continues the axis in its own direction.  The per-cut leg lengths
+    (``leg_lengths``, one per cut) are chosen so the inserted displacements
+    cancel (the loop closes), and the curve is assembled from one
+    stellarator-symmetric half reflected 180 degrees about the ``x`` axis, so the
+    result is stellarator symmetric to rounding.
+
+    ``leg_windows`` are the arc-length spans of the straight legs (one per cut,
+    in curve order).  ``corner_angle`` (degrees) is the residual tangent break at
+    the leg/return junctions -- now near zero, since each leg is tangent to the
+    axis: the seam is a *curvature* break (the exactly-zero-curvature leg meeting
+    the finite-curvature return), which a global Fourier basis still rings on and
+    a local B-spline represents cleanly.  ``closure_error`` is the residual of the
+    closed loop (zero to rounding by construction).
     """
 
     points: np.ndarray
-    leg_windows: tuple[tuple[float, float], tuple[float, float]]
+    leg_windows: tuple[tuple[float, float], ...]
     total_length: float
     corner_angle: float
     closure_error: float
-    leg_direction: np.ndarray
+    leg_directions: np.ndarray
+    leg_lengths: np.ndarray
     cut_points: np.ndarray
-    cut_indices: tuple[int, int]
+    cut_indices: tuple[int, ...]
 
 
 def _closed_tangent(points: np.ndarray, index: int) -> np.ndarray:
@@ -532,77 +540,147 @@ def _sample_closed_polyline(points: np.ndarray, arc_length: np.ndarray) -> np.nd
     return np.stack([np.interp(query, cumulative, closed[:, j]) for j in range(3)], axis=-1)
 
 
+#: stellarator symmetry acting on Cartesian points -- a 180 degree rotation
+#: about the ``x`` axis, ``(x, y, z) -> (x, -y, -z)`` (the image of ``phi -> -phi``
+#: on a magnetic axis with ``R(-phi) = R(phi)``, ``Z(-phi) = -Z(phi)``).
+_STELL_SYMMETRY = np.diag([1.0, -1.0, -1.0])
+
+
+def _closure_leg_lengths(tangents: np.ndarray, base_length: float) -> np.ndarray:
+    """Per-cut leg lengths closest to ``base_length`` with ``sum_k L_k t_k = 0``.
+
+    Inserting a straight leg of length ``L_k`` along the local unit tangent
+    ``t_k`` at each cut translates the downstream axis by ``L_k t_k``; the loop
+    closes iff those displacements cancel.  This returns the minimum-norm
+    departure from a uniform ``base_length`` that satisfies the constraint --
+    the least-squares projection of ``base_length * 1`` onto the null space of
+    the ``(3, N)`` tangent matrix.  For a stellarator-symmetric axis cut at its
+    symmetry planes the tangents pair up and the result splits into a few equal
+    length classes (two for ``nfp = 2``).
+    """
+
+    matrix = np.asarray(tangents, dtype=float).T  # (3, N)
+    target = np.full(matrix.shape[1], float(base_length))
+    return target - np.linalg.pinv(matrix) @ (matrix @ target)
+
+
 def splice_straight_legs(
     axis_points: Array,
     *,
-    cut_indices: tuple[int, int],
+    cut_indices: tuple[int, ...],
     straight_length: float,
     samples_per_leg: int = 256,
 ) -> QIMirrorSplice:
-    """Cut a closed axis at two points and insert exactly-straight mirror legs.
+    """Cut a stellarator-symmetric closed axis and insert tangent-aligned legs.
 
-    The closed input ``axis_points`` (shape ``(P, 3)``) is split at
-    ``cut_indices`` into two curved returns.  The returns are translated apart
-    by ``straight_length`` along the field-period-symmetric bisector of the two
-    cut tangents, and the gap at each cut is filled with a straight leg.  The
-    result is a closed racetrack whose two legs are the inserted mirror cells
-    and whose returns carry the unmodified (rigidly translated) axis shaping.
+    The closed input ``axis_points`` (shape ``(P, 3)``) is cut at the ``N``
+    ``cut_indices`` (its low-curvature symmetry planes -- ``2 * nfp`` of them),
+    and at each cut an exactly-straight mirror leg is inserted **along the local
+    axis tangent**, so every leg continues the axis in its own direction (no
+    shared "bisector", so each leg meets its curved returns tangentially).  The
+    per-cut leg lengths are set by :func:`_closure_leg_lengths` so the inserted
+    displacements cancel, and the curve is built from one stellarator-symmetric
+    half (between the two symmetry-fixed cuts) reflected 180 degrees about the
+    ``x`` axis, so the racetrack is stellarator symmetric to rounding.
+
+    Requires a stellarator-symmetric axis whose cuts include exactly two
+    symmetry-fixed planes (where the tangent reverses under the symmetry); an
+    ``nfp = 2`` QI axis cut at its four low-curvature planes satisfies this.
     """
 
     points = np.asarray(axis_points, dtype=float)
     if points.ndim != 2 or points.shape[1] != 3:
         raise ValueError("axis_points must have shape (P, 3)")
     count = points.shape[0]
-    first, second = int(cut_indices[0]), int(cut_indices[1])
-    if not 0 <= first < second < count:
-        raise ValueError("cut_indices must satisfy 0 <= i0 < i1 < len(axis_points)")
+    cuts = tuple(int(c) for c in cut_indices)
+    n_cut = len(cuts)
+    if n_cut < 2:
+        raise ValueError("cut_indices must contain at least two cuts")
+    if list(cuts) != sorted(cuts) or len(set(cuts)) != n_cut or cuts[0] < 0 or cuts[-1] >= count:
+        raise ValueError("cut_indices must be strictly increasing, distinct, and in range")
     if float(straight_length) <= 0.0:
         raise ValueError("straight_length must be positive")
     if int(samples_per_leg) < 4:
         raise ValueError("samples_per_leg must be at least four")
 
-    tangent_first = _closed_tangent(points, first)
-    tangent_second = _closed_tangent(points, second)
-    leg_direction = tangent_second - tangent_first
-    norm = float(np.linalg.norm(leg_direction))
-    if norm == 0.0:
-        raise ValueError("cut tangents are anti-parallel; choose distinct cut locations")
-    leg_direction = leg_direction / norm
-    displacement = float(straight_length) * leg_direction
+    tangents = np.stack([_closed_tangent(points, c) for c in cuts])
+    lengths = _closure_leg_lengths(tangents, float(straight_length))
+    if not np.all(lengths > 0.0):
+        raise ValueError(
+            "no positive tangent-aligned closing legs exist for these cuts; supply a "
+            "stellarator-symmetric axis cut at its low-curvature symmetry planes"
+        )
+    fixed = [k for k in range(n_cut)
+             if np.allclose(_STELL_SYMMETRY @ tangents[k], -tangents[k], atol=1.0e-4)]
+    if len(fixed) != 2:
+        raise ValueError(
+            f"expected exactly two stellarator-symmetry-fixed cuts, found {len(fixed)}; "
+            "supply a stellarator-symmetric axis cut at its symmetry planes"
+        )
+    left, right = fixed
 
-    arc_one = points[first : second + 1]
-    arc_two = np.concatenate((points[second:], points[first : first + 1]), axis=0)
-    fraction = np.linspace(0.0, 1.0, int(samples_per_leg), endpoint=False)[:, None]
-    leg_one = arc_one[-1] + fraction * displacement
-    arc_two_shifted = arc_two + displacement
-    leg_two = arc_two_shifted[-1] - fraction * displacement
-    spliced = np.concatenate(
-        (arc_one[:-1], leg_one, arc_two_shifted[:-1], leg_two), axis=0
-    )
+    frac = np.linspace(0.0, 1.0, int(samples_per_leg), endpoint=True)[:, None]
 
-    lengths = np.linalg.norm(np.diff(np.concatenate((spliced, spliced[:1])), axis=0), axis=1)
-    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
-    total = float(cumulative[-1])
-    start_one = float(cumulative[arc_one.shape[0] - 1])
-    start_two = float(
-        cumulative[arc_one.shape[0] - 1 + int(samples_per_leg) + arc_two_shifted.shape[0] - 1]
-    )
-    leg_windows = (
-        (start_one, start_one + float(straight_length)),
-        (start_two, start_two + float(straight_length)),
-    )
-    corner = float(np.degrees(np.arccos(np.clip(float(np.dot(leg_direction, tangent_second)), -1.0, 1.0))))
-    closure = float(np.linalg.norm((arc_two_shifted[-1] - displacement) - spliced[0]))
-    cut_points = np.stack((points[first], points[second]), axis=0)
+    def curved_arc(i: int, j: int) -> np.ndarray:
+        ci, cj = cuts[i], cuts[j]
+        return points[ci : cj + 1] if ci < cj else np.vstack((points[ci:], points[: cj + 1]))
+
+    # Forward half: leg-``left`` midpoint (on the x axis) -> leg-``right`` midpoint.
+    pieces: list[np.ndarray] = []
+    on_leg: list[np.ndarray] = []
+    start = np.array([points[cuts[left], 0], 0.0, 0.0])         # symmetry-fixed midpoint
+    seg = start + frac * (0.5 * lengths[left] * tangents[left])  # first half of leg-``left``
+    pieces.append(seg); on_leg.append(np.ones(len(seg), dtype=bool))
+    offset = seg[-1] - points[cuts[left]]
+    for k in range(left, right):
+        arc = curved_arc(k, k + 1) + offset
+        pieces.append(arc[1:]); on_leg.append(np.zeros(len(arc) - 1, dtype=bool))
+        offset = arc[-1] - points[cuts[k + 1]]
+        length_k = lengths[k + 1] * (0.5 if k + 1 == right else 1.0)
+        seg = arc[-1] + frac[1:] * (length_k * tangents[k + 1])
+        pieces.append(seg); on_leg.append(np.ones(len(seg), dtype=bool))
+        if k + 1 != right:
+            offset = seg[-1] - points[cuts[k + 1]]
+    forward = np.concatenate(pieces, axis=0)
+    forward_leg = np.concatenate(on_leg)
+
+    # Backward half = the forward half reflected 180 degrees about x, reversed.
+    backward = (forward @ _STELL_SYMMETRY)[::-1]
+    closed = np.concatenate((forward, backward[1:-1]), axis=0)
+    closed_leg = np.concatenate((forward_leg, forward_leg[::-1][1:-1]))
+
+    # Roll so index 0 sits on a curved return, making every leg a contiguous run.
+    arc_index = int(np.argmax(~closed_leg))
+    closed = np.roll(closed, -arc_index, axis=0)
+    closed_leg = np.roll(closed_leg, -arc_index)
+
+    seg_len = np.linalg.norm(np.diff(np.concatenate((closed, closed[:1])), axis=0), axis=1)
+    arclen = np.concatenate(([0.0], np.cumsum(seg_len)))
+    total = float(arclen[-1])
+    n_pts = len(closed_leg)
+    # index 0 sits on a return (rolled above), so every leg is a contiguous run
+    starts = [i for i in range(n_pts) if closed_leg[i] and not closed_leg[i - 1]]
+    ends = [i for i in range(n_pts) if closed_leg[i] and not closed_leg[(i + 1) % n_pts]]
+    leg_windows = tuple((float(arclen[s]), float(arclen[e])) for s, e in zip(starts, ends))
+
+    corner = 0.0
+    for s in starts:
+        leg_dir = closed[(s + 1) % n_pts] - closed[s]
+        arc_dir = closed[s] - closed[(s - 1) % n_pts]
+        cos = float(np.dot(leg_dir, arc_dir) / (np.linalg.norm(leg_dir) * np.linalg.norm(arc_dir) + 1e-30))
+        corner = max(corner, float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))))
+    # loop closure = residual of the cancelling leg displacements (0 by construction)
+    closure = float(np.linalg.norm((lengths[:, None] * tangents).sum(axis=0)))
     return QIMirrorSplice(
-        points=spliced,
+        points=closed,
         leg_windows=leg_windows,
         total_length=total,
         corner_angle=corner,
         closure_error=closure,
-        leg_direction=leg_direction,
-        cut_points=cut_points,
-        cut_indices=(first, second),
+        leg_directions=tangents,
+        leg_lengths=lengths,
+        cut_points=points[list(cuts)],
+        cut_indices=cuts,
     )
 
 
@@ -610,7 +688,7 @@ def build_qi_mirror_hybrid(
     axis_points: Array,
     resolution: MirrorResolution,
     *,
-    cut_indices: tuple[int, int],
+    cut_indices: tuple[int, ...],
     straight_length: float,
     section_radius: float,
     coefficient_count: int = 64,
