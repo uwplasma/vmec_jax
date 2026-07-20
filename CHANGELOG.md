@@ -6,6 +6,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 
 ## [Unreleased]
 
+### Added
+- **QI-mirror hybrid (Fourier vs B-spline).** `vmex.mirror.splice_straight_legs`
+  cuts a closed magnetic axis at its curvature minima and inserts exactly-straight
+  mirror legs (closing the loop to rounding); `build_qi_mirror_hybrid` fits the
+  spliced axis into the closed-spline solve basis with a circular section and
+  returns a solvable `StellaratorMirrorSetup`. The new example
+  `examples/qi_mirror_hybrid_fourier_vs_bspline.py` cuts the nfp=2 QI axis at its
+  low-curvature symmetry planes and compares the two representations: a global
+  Fourier series rings at the straight↔curved seam and decays only ~1/N, while
+  the local B-spline reproduces the straight mirror cell to machine precision
+  (~1e-12) once each leg is backed by enough collinear controls. See
+  `docs/mirror_geometry.rst`.
+
 ## [0.2.0] — 2026-07-18
 
 First release under the **VMEX** name (formerly `vmec-jax`). Highlights:

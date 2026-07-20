@@ -41,6 +41,7 @@ arguments:
    python examples/mirror_fixed_boundary_nonaxisymmetric.py   # rotating-ellipse fixed boundary
    python examples/mirror_free_boundary_beta_scan.py          # axisymmetric free-boundary beta scan
    python examples/stellarator_mirror_hybrid.py               # periodic B-spline racetrack hybrid
+   python examples/qi_mirror_hybrid_fourier_vs_bspline.py     # QI-mirror hybrid: Fourier vs B-spline
 
 Open-mirror solves write mirror-native ``mout_*.nc`` files, which plot with
 
@@ -425,6 +426,99 @@ produced by ``output.plot_stellarator_mirror_hybrid``.
 
 .. image:: _static/figures/stellarator_mirror_hybrid.png
    :alt: Solved periodic B-spline stellarator-mirror hybrid with its axis, boundary magnetic field, cross-sections, transform, and residuals
+   :width: 100%
+
+QI-mirror hybrid: Fourier vs B-spline
+-------------------------------------
+
+A quasi-isodynamic (QI) stellarator has poloidally closed ``|B|`` contours and
+near-straight magnetic-axis segments at its field-period-symmetric planes, so
+the QI axis is the natural place to cut and insert a straight mirror cell.
+``examples/qi_mirror_hybrid_fourier_vs_bspline.py`` makes that construction
+concrete and compares the two ways of representing the resulting axis.
+
+Cut locations.  The example solves ``input.nfp2_QI`` with the VMEC (Fourier)
+core, reads the magnetic axis :math:`\mathbf{r}(\phi)` from the axis Fourier
+arrays, and computes the 3-D curvature
+:math:`\kappa = \lVert \mathbf{r}' \times \mathbf{r}'' \rVert / \lVert
+\mathbf{r}' \rVert^{3}` spectrally over the torus. For this nfp=2 QI the
+curvature spans ``70x``, with clean minima :math:`\kappa \approx 0.036`
+:math:`\mathrm{m}^{-1}` at :math:`\phi = 0, \pi` (the stellarator-symmetry
+planes, where the axis crosses the midplane) and maxima :math:`\approx 2.5`
+:math:`\mathrm{m}^{-1}` at the bean tips. The field-period-symmetric minima are
+the cut locations.
+
+Cut-and-splice.  ``splice_straight_legs`` splits the closed axis at the two
+minima into two curved returns, translates the returns apart by the mirror-leg
+length along the bisector of the two cut tangents, and fills each gap with an
+exactly-straight leg. The loop closes to rounding (``closure < 1e-13``) and the
+returns carry the unmodified (rigidly translated) QI shaping. Because the QI
+axis weaves in :math:`Z` through its symmetry planes, no single leg direction is
+tangent to both cuts, so each leg meets its return at a ``36 deg`` corner --
+a sharp seam that is exactly what separates the two representations.
+
+Representation accuracy.  The same closed hybrid axis is fitted with a truncated
+Fourier series (global, VMEC-native) and a periodic cubic B-spline (local, the
+``vmex.mirror`` lane). On the straight mirror leg:
+
+.. list-table::
+   :header-rows: 1
+
+   * - basis
+     - degrees of freedom
+     - deviation on the straight leg
+   * - Fourier, :math:`N=8`
+     - 51
+     - ``1.9e-2`` (ringing)
+   * - Fourier, :math:`N=32`
+     - 195
+     - ``2.1e-3`` (ringing, ``~1/N``)
+   * - Fourier, :math:`N=64`
+     - 387
+     - ``5.3e-4`` (ringing, ``~1/N``)
+   * - B-spline, :math:`M=64`
+     - 192
+     - ``1.5e-5`` (leg midpoint)
+   * - B-spline, :math:`M=128`
+     - 384
+     - ``6.4e-8`` (leg midpoint)
+   * - B-spline, :math:`M=256`
+     - 768
+     - ``1.1e-12`` (leg midpoint)
+
+The B-spline reproduces the straight cell to machine precision once each leg is
+backed by enough collinear controls (its error is confined to a fixed few
+knot-spacings around the junction, the signature of local support), while the
+global Fourier series rings across the whole leg and decays only ``~1/N``. The
+*maximum* error of both bases is instead set by the leg-return corner: a cubic
+spline also rounds a tangent break, so this is an honest, shared limit, not a
+B-spline advantage. The comparison is the point: the local basis wins precisely
+on the exactly-straight mirror cell.
+
+Equilibrium.  ``build_qi_mirror_hybrid`` fits the spliced axis into the closed
+solve basis, wraps it in a constant circular section (rotation-invariant, so the
+large frame holonomy of a fully 3-D axis does not enter the boundary), and
+returns a ``StellaratorMirrorSetup`` that feeds ``solve_fixed_boundary`` like the
+analytic racetrack. The solved hybrid is divergence-free to ``9.4e-14`` with
+``iota = 0.11`` and mirror ratio ``2.2``; its normalized strong-force residual is
+``4.6e-2``, loose because the 36-degree corner concentrates axis curvature at
+:math:`\kappa \approx 6.5\,\mathrm{m}^{-1}` (the smooth analytic racetrack, with
+circular returns, converges to ``2.6e-3`` by contrast). This B-spline
+equilibrium is a scalar-pressure spline model whose transform comes from a weak
+axial current: it demonstrates the geometry and the exactly-straight mirror cell,
+**not** a reproduction of the QI rotational transform (``|iota| ~ 0.45``).
+
+Fourier-lane limitation.  A literal VMEC re-solve of a straight-axis QI-mirror
+device is out of scope by construction, not by effort: VMEC's toroidal
+coordinate is the cylindrical angle :math:`\phi`, and a straight axis segment
+cannot be parameterised by :math:`\phi` (its :math:`R(\phi), Z(\phi)` are
+degenerate). This is exactly why the closed-axis, arc-length-parameterised
+B-spline lane exists. The VMEC solve therefore serves as the QI *reference*
+(axis, ``iota``, ``|B|``, ``B_0``), and the Fourier side of the comparison is the
+axis-representation accuracy above.
+
+.. image:: _static/figures/qi_mirror_hybrid.png
+   :alt: QI-mirror hybrid comparison: QI axis coloured by curvature with cut locations, the spliced straight-leg hybrid axis, hybrid boundary magnetic field, and Fourier-versus-B-spline representation accuracy at the seam
    :width: 100%
 
 Plotting and output scope

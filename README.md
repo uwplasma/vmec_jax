@@ -545,12 +545,41 @@ same implicit API differentiates the periodic boundary and axis controls.
 
 ![Periodic B-spline stellarator–mirror hybrid: straight legs, rotating returns, B-spline axis, and boundary |B|](docs/_static/figures/stellarator_mirror_hybrid.png)
 
+### QI–mirror hybrid: Fourier vs B-spline
+
+A quasi-isodynamic (QI) stellarator already has poloidally closed `|B|` contours
+and near-straight (low-curvature) magnetic-axis segments at its
+field-period-symmetric planes, so cutting the axis there and inserting a straight
+mirror cell is natural. `examples/qi_mirror_hybrid_fourier_vs_bspline.py` solves
+`input.nfp2_QI` (VMEC, Fourier), reads its magnetic axis, and confirms the
+curvature minima: `κ` drops to **0.036 1/m** at `φ = 0, π` (a 70× spread over the
+torus). It then cuts there and splices in two exactly-straight mirror legs, and
+represents that closed hybrid axis both ways:
+
+| representation | straight mirror leg | seam behaviour |
+| --- | --- | --- |
+| **Fourier** (VMEC-native, global) | ringing decays only `~1/N`; **5.3e-4 m** at 387 DOF | Gibbs-type ringing everywhere at once |
+| **B-splines** (`vmex.mirror`, local) | **machine precision** (`1e-12 m` once each leg spans ≳30 knots) | error confined to a few knots around the junction |
+
+At matched degrees of freedom the local B-spline reproduces the straight cell
+~100× more accurately than the global Fourier series; the residual maximum error
+of both is set by the sharp leg–return corner (the QI axis weaves in `Z` through
+its symmetry planes, so a straight leg meets the return at a **36° corner**). The
+B-spline lane also solves the hybrid equilibrium (divergence-free to `1e-13`,
+`ι = 0.11`, mirror ratio 2.2); the loose force residual (`4.6e-2`) is set by that
+corner curvature. A literal VMEC re-solve of a straight-axis device is degenerate
+in cylindrical `(R, φ, Z)` coordinates — which is exactly why the closed-axis
+B-spline lane exists.
+
+![QI–mirror hybrid: QI axis with the curvature-minimum cut locations, the spliced straight-leg hybrid axis, hybrid |B|, and the Fourier-vs-B-spline accuracy at the seam](docs/_static/figures/qi_mirror_hybrid.png)
+
 ### Run the mirror examples
 
 ```bash
 python examples/mirror_fixed_boundary_nonaxisymmetric.py
 python examples/mirror_free_boundary_beta_scan.py
 python examples/stellarator_mirror_hybrid.py
+python examples/qi_mirror_hybrid_fourier_vs_bspline.py
 ```
 
 Open-mirror `mout_*.nc` files plot with `vmex --plot mout_*.nc`. The

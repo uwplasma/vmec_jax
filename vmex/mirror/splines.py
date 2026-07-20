@@ -474,6 +474,198 @@ def _initialize_closed_vacuum_stream_function(
     return SplineMirrorState(state.radius_coefficients, coefficients)
 
 
+@dataclass(frozen=True)
+class QIMirrorSplice:
+    """Closed magnetic axis formed by inserting straight mirror legs.
+
+    ``points`` is a closed, arc-length-orderable polyline (the final point
+    precedes the first).  Cutting a quasi-isodynamic axis at two field-period
+    -symmetric curvature minima and translating the two curved returns apart
+    along ``leg_direction`` opens two exactly-straight mirror legs that occupy
+    the arc-length windows ``leg_windows``.  Because the QI axis weaves in Z
+    through its symmetry planes, a single leg direction cannot be tangent to
+    both cuts, so each leg meets its return at the tangent break
+    ``corner_angle`` (degrees) -- the sharp seam a global Fourier basis rings on
+    and a local B-spline represents cleanly.  ``closure_error`` is the residual
+    of the closed loop (zero to rounding by construction).
+    """
+
+    points: np.ndarray
+    leg_windows: tuple[tuple[float, float], tuple[float, float]]
+    total_length: float
+    corner_angle: float
+    closure_error: float
+    leg_direction: np.ndarray
+    cut_points: np.ndarray
+    cut_indices: tuple[int, int]
+
+
+def _closed_tangent(points: np.ndarray, index: int) -> np.ndarray:
+    """Unit central-difference tangent of a closed polyline at ``index``."""
+
+    count = points.shape[0]
+    direction = points[(index + 1) % count] - points[(index - 1) % count]
+    norm = float(np.linalg.norm(direction))
+    if norm == 0.0:
+        raise ValueError("degenerate axis tangent at the requested cut")
+    return direction / norm
+
+
+def _sample_closed_polyline(points: np.ndarray, arc_length: np.ndarray) -> np.ndarray:
+    """Interpolate a closed polyline at requested arc-length coordinates."""
+
+    closed = np.concatenate((points, points[:1]), axis=0)
+    lengths = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    total = float(cumulative[-1])
+    query = np.mod(np.asarray(arc_length, dtype=float), total)
+    return np.stack([np.interp(query, cumulative, closed[:, j]) for j in range(3)], axis=-1)
+
+
+def splice_straight_legs(
+    axis_points: Array,
+    *,
+    cut_indices: tuple[int, int],
+    straight_length: float,
+    samples_per_leg: int = 256,
+) -> QIMirrorSplice:
+    """Cut a closed axis at two points and insert exactly-straight mirror legs.
+
+    The closed input ``axis_points`` (shape ``(P, 3)``) is split at
+    ``cut_indices`` into two curved returns.  The returns are translated apart
+    by ``straight_length`` along the field-period-symmetric bisector of the two
+    cut tangents, and the gap at each cut is filled with a straight leg.  The
+    result is a closed racetrack whose two legs are the inserted mirror cells
+    and whose returns carry the unmodified (rigidly translated) axis shaping.
+    """
+
+    points = np.asarray(axis_points, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("axis_points must have shape (P, 3)")
+    count = points.shape[0]
+    first, second = int(cut_indices[0]), int(cut_indices[1])
+    if not 0 <= first < second < count:
+        raise ValueError("cut_indices must satisfy 0 <= i0 < i1 < len(axis_points)")
+    if float(straight_length) <= 0.0:
+        raise ValueError("straight_length must be positive")
+    if int(samples_per_leg) < 4:
+        raise ValueError("samples_per_leg must be at least four")
+
+    tangent_first = _closed_tangent(points, first)
+    tangent_second = _closed_tangent(points, second)
+    leg_direction = tangent_second - tangent_first
+    norm = float(np.linalg.norm(leg_direction))
+    if norm == 0.0:
+        raise ValueError("cut tangents are anti-parallel; choose distinct cut locations")
+    leg_direction = leg_direction / norm
+    displacement = float(straight_length) * leg_direction
+
+    arc_one = points[first : second + 1]
+    arc_two = np.concatenate((points[second:], points[first : first + 1]), axis=0)
+    fraction = np.linspace(0.0, 1.0, int(samples_per_leg), endpoint=False)[:, None]
+    leg_one = arc_one[-1] + fraction * displacement
+    arc_two_shifted = arc_two + displacement
+    leg_two = arc_two_shifted[-1] - fraction * displacement
+    spliced = np.concatenate(
+        (arc_one[:-1], leg_one, arc_two_shifted[:-1], leg_two), axis=0
+    )
+
+    lengths = np.linalg.norm(np.diff(np.concatenate((spliced, spliced[:1])), axis=0), axis=1)
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    total = float(cumulative[-1])
+    start_one = float(cumulative[arc_one.shape[0] - 1])
+    start_two = float(
+        cumulative[arc_one.shape[0] - 1 + int(samples_per_leg) + arc_two_shifted.shape[0] - 1]
+    )
+    leg_windows = (
+        (start_one, start_one + float(straight_length)),
+        (start_two, start_two + float(straight_length)),
+    )
+    corner = float(np.degrees(np.arccos(np.clip(float(np.dot(leg_direction, tangent_second)), -1.0, 1.0))))
+    closure = float(np.linalg.norm((arc_two_shifted[-1] - displacement) - spliced[0]))
+    cut_points = np.stack((points[first], points[second]), axis=0)
+    return QIMirrorSplice(
+        points=spliced,
+        leg_windows=leg_windows,
+        total_length=total,
+        corner_angle=corner,
+        closure_error=closure,
+        leg_direction=leg_direction,
+        cut_points=cut_points,
+        cut_indices=(first, second),
+    )
+
+
+def build_qi_mirror_hybrid(
+    axis_points: Array,
+    resolution: MirrorResolution,
+    *,
+    cut_indices: tuple[int, int],
+    straight_length: float,
+    section_radius: float,
+    coefficient_count: int = 64,
+    axial_flux_derivative: Array = 0.02,
+    quadrature_order: int = 3,
+    samples_per_leg: int = 256,
+) -> StellaratorMirrorSetup:
+    """Build a solvable closed-spline hybrid from a spliced QI magnetic axis.
+
+    The closed ``axis_points`` are spliced with :func:`splice_straight_legs`,
+    fitted to a periodic cubic B-spline of ``coefficient_count`` controls at
+    uniform arc length, and wrapped with a constant circular cross-section of
+    radius ``section_radius``.  A circular section is rotation-invariant, so the
+    large frame holonomy of a fully three-dimensional QI axis does not enter the
+    boundary.  The returned :class:`StellaratorMirrorSetup` feeds
+    :func:`solve_fixed_boundary` exactly like the analytic racetrack.
+    """
+
+    if float(section_radius) <= 0.0:
+        raise ValueError("section_radius must be positive")
+    splice = splice_straight_legs(
+        axis_points,
+        cut_indices=cut_indices,
+        straight_length=straight_length,
+        samples_per_leg=samples_per_leg,
+    )
+    discretization = SplineMirrorDiscretization.build_closed(
+        resolution,
+        coefficient_count=coefficient_count,
+        quadrature_order=quadrature_order,
+    )
+    basis = discretization.spline
+    nodes = np.asarray(basis.collocation_nodes)
+    control_values = _sample_closed_polyline(
+        splice.points, nodes / (2.0 * np.pi) * splice.total_length
+    )
+    axis_coefficients = jnp.asarray(basis.fit(control_values, axis=0))
+    axis = evaluate_closed_spline_axis(
+        axis_coefficients,
+        basis,
+        discretization.grid.z,
+        initial_normal=jnp.asarray([0.0, 0.0, 1.0]),
+    )
+    edge = jnp.full((discretization.grid.ntheta, basis.size), float(section_radius))
+    boundary = SplineMirrorBoundary(edge)
+    radius = jnp.broadcast_to(edge[None], (resolution.ns,) + edge.shape)
+    nested_state = discretization.project_fixed_boundary(
+        SplineMirrorState(radius, jnp.zeros_like(radius)),
+        boundary,
+    )
+    initial_state = _initialize_closed_vacuum_stream_function(
+        nested_state,
+        discretization,
+        axis,
+        axial_flux_derivative=axial_flux_derivative,
+    )
+    return StellaratorMirrorSetup(
+        discretization,
+        axis_coefficients,
+        axis,
+        boundary,
+        initial_state,
+    )
+
+
 def trace_closed_field_line(
     field: Any,
     discretization: SplineMirrorDiscretization,
@@ -1202,13 +1394,16 @@ jax.tree_util.register_dataclass(
 __all__ = [
     "ClosedFieldLine",
     "CubicBSplineBasis",
+    "QIMirrorSplice",
     "SplineMirrorBoundary",
     "SplineMirrorDiscretization",
     "SplineMirrorSolveResult",
     "SplineMirrorState",
     "StellaratorMirrorSetup",
+    "build_qi_mirror_hybrid",
     "build_stellarator_mirror_hybrid",
     "solve_fixed_boundary",
     "solve_fixed_boundary_from_radius",
+    "splice_straight_legs",
     "trace_closed_field_line",
 ]
