@@ -113,6 +113,7 @@ import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
+from solvax import block_thomas_factor, block_thomas_solve, chunk_map
 from solvax import gcrot as _solvax_gcrot
 from solvax import gmres as _solvax_gmres
 
@@ -145,7 +146,8 @@ __all__ = [
     "ImplicitParams", "ImplicitConfig", "ImplicitSolution",
     "params_from_input", "input_with_params", "runtime_from_params",
     "make_config", "solve_implicit", "solve_implicit_with_aux",
-    "implicit_state_pullback_multi_rhs", "run",
+    "implicit_state_pullback_multi_rhs",
+    "implicit_state_pullback_multi_rhs_block_transpose_init", "run",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
     "iota_axis", "iota_edge", "edge_iota", "residual_fn", "adjoint_matvec",
     "frozen_path_directional_fd",
@@ -1017,6 +1019,164 @@ def implicit_state_pullback_multi_rhs(
     g1_batch = jax.vmap(lambda lam: vjp_p(jax.tree.map(jnp.negative, lam))[0])(lam_batch)
     g2_batch = jax.vmap(lambda gbar: vjp_p2(gbar)[0])(gbar_batch)
     return jax.tree.map(jnp.add, g1_batch, g2_batch)
+
+
+def _raw_block_transpose_initial_guess(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    rhs: SpectralState,
+    *,
+    probe_chunk_size: int = 1,
+) -> SpectralState:
+    """Raw block-tridiagonal transpose solve used only as an adjoint x0.
+
+    The returned vector is not used as a gradient by itself.  It seeds the
+    true preconditioned transpose GMRES solve, mirroring the optimization
+    block path where the raw direct solve initializes forward columns.
+    """
+
+    frozen = jax.lax.stop_gradient(x_star)
+    P = _dof_projector(cfg, dof_mask)
+    z_star = P(x_star)
+    F_raw = residual_fn(cfg, frozen, dof_mask, formulation="raw")
+
+    ns_state = int(cfg.resolution.ns)
+    mask_np = jax.device_get(dof_mask)
+    mn_state = int(np.asarray(mask_np.R_cos).shape[1])
+    active_fields = tuple(
+        field for field in _STATE_FIELDS
+        if np.asarray(getattr(mask_np, field)).any()
+    )
+    if not active_fields:
+        return jax.tree.map(jnp.zeros_like, rhs)
+    n_act = len(active_fields)
+    m_block = n_act * mn_state
+
+    def _pack(tree) -> jnp.ndarray:
+        return jnp.concatenate(
+            [jnp.asarray(getattr(tree, field), dtype=jnp.float64) for field in active_fields],
+            axis=1,
+        )
+
+    def _unpack(mat: jnp.ndarray) -> SpectralState:
+        parts = dict(zip(active_fields, jnp.split(mat, n_act, axis=1)))
+        return SpectralState(**{
+            field: parts.get(field, jnp.zeros((ns_state, mn_state), mat.dtype))
+            for field in _STATE_FIELDS
+        })
+
+    def Fz_raw(dz):
+        return jax.jvp(lambda z: F_raw(z, params), (z_star,), (dz,))[1]
+
+    probe_color = jnp.asarray(np.repeat(np.arange(3), m_block))
+    probe_field = jnp.asarray(np.tile(np.repeat(np.arange(n_act), mn_state), 3))
+    probe_col = jnp.asarray(np.tile(np.tile(np.arange(mn_state), n_act), 3))
+
+    def probe_response(spec):
+        color, field_index, col = spec
+        rows = jnp.arange(ns_state) % 3 == color
+        mat = jnp.where(
+            rows[:, None],
+            jax.nn.one_hot(col, mn_state, dtype=jnp.float64)[None, :],
+            0.0,
+        )
+        stack = (
+            jax.nn.one_hot(field_index, n_act, dtype=jnp.float64)[:, None, None]
+            * mat[None]
+        )
+        dz = _unpack(jnp.concatenate([stack[i] for i in range(n_act)], axis=1))
+        # Fill the non-evolved complement with identity, exactly like the
+        # forward block path, so the block system is invertible while the
+        # P-masked solution is unchanged.
+        return _pack(jax.tree.map(lambda a, b, p: a + (b - p), Fz_raw(dz), dz, P(dz)))
+
+    probes = chunk_map(
+        probe_response,
+        (probe_color, probe_field, probe_col),
+        chunk_size=max(1, int(probe_chunk_size)),
+    )
+    probes = probes.reshape((3, m_block, ns_state, m_block))
+    ii = jnp.arange(ns_state)
+
+    def band(offset: int):
+        gathered = probes[(ii + offset) % 3, :, ii, :]
+        return jnp.swapaxes(gathered, 1, 2)
+
+    lower = band(-1)
+    diag = band(0)
+    upper = band(1)
+    zeros = jnp.zeros_like(diag)
+    lower_t = jnp.concatenate([zeros[:1], jnp.swapaxes(upper[:-1], -1, -2)], axis=0)
+    diag_t = jnp.swapaxes(diag, -1, -2)
+    upper_t = jnp.concatenate([jnp.swapaxes(lower[1:], -1, -2), zeros[:1]], axis=0)
+    factors_t = block_thomas_factor(lower_t, diag_t, upper_t)
+    mu_mat = block_thomas_solve(factors_t, _pack(P(rhs))[..., None])[..., 0]
+    return P(_unpack(mu_mat))
+
+
+def implicit_state_pullback_multi_rhs_block_transpose_init(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    gbar_batch: SpectralState,
+    *,
+    corrector_max_restarts: int | None = None,
+    probe_chunk_size: int = 1,
+) -> ImplicitParams:
+    """Batched reverse pullback with a raw block-transpose GMRES warm start.
+
+    This is the transpose analogue of optimization's block forward-column
+    path: the raw block solve is only an initial guess.  The final lambda is
+    produced by the real preconditioned adjoint equation
+    ``(dF_pre/dz)^T lambda = rhs``, so this remains a reverse rule.
+    """
+
+    frozen = jax.lax.stop_gradient(x_star)
+    edge_mask = _edge_mask(cfg)
+    P = _dof_projector(cfg, dof_mask)
+    residual = residual_fn(cfg, frozen, dof_mask)
+    z_star = P(x_star)
+
+    _, assemble_vjp_z = jax.vjp(
+        lambda z: _assemble(z, runtime_from_params(params, cfg), frozen, P, edge_mask),
+        z_star,
+    )
+    _, residual_vjp_z = jax.vjp(lambda z: residual(z, params), z_star)
+    _, residual_vjp_p = jax.vjp(lambda prm: residual(z_star, prm), params)
+    _, assemble_vjp_p = jax.vjp(
+        lambda prm: _assemble(z_star, runtime_from_params(prm, cfg), frozen, P, edge_mask),
+        params,
+    )
+
+    rhs_batch = jax.vmap(lambda state_bar: assemble_vjp_z(state_bar)[0])(gbar_batch)
+
+    def solve_rhs(rhs):
+        x0 = _raw_block_transpose_initial_guess(
+            params,
+            cfg,
+            x_star,
+            dof_mask,
+            rhs,
+            probe_chunk_size=probe_chunk_size,
+        )
+        lam, _ = _adjoint_solve(
+            lambda vec: residual_vjp_z(vec)[0],
+            rhs,
+            cfg,
+            x0=x0,
+            max_restarts=corrector_max_restarts,
+        )
+        return lam
+
+    lambda_batch = jax.vmap(solve_rhs)(rhs_batch)
+    implicit_param_bar = jax.vmap(
+        lambda lam: residual_vjp_p(jax.tree.map(jnp.negative, lam))[0]
+    )(lambda_batch)
+    assemble_param_bar = jax.vmap(lambda state_bar: assemble_vjp_p(state_bar)[0])(gbar_batch)
+    return jax.tree.map(lambda left, right: left + right, implicit_param_bar, assemble_param_bar)
 
 
 def adjoint_matvec(cfg: ImplicitConfig, params: ImplicitParams,
