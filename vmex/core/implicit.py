@@ -150,7 +150,7 @@ __all__ = [
     "implicit_state_pullback_multi_rhs_raw_block_transpose",
     "implicit_state_pullback_multi_rhs_block_transpose_right_preconditioned",
     "implicit_state_pullback_multi_rhs_block_transpose_init", "run",
-    "implicit_state_tangent_raw_block",
+    "implicit_state_tangent_raw_block", "implicit_state_tangent_block_corrected",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
     "iota_axis", "iota_edge", "edge_iota", "residual_fn", "adjoint_matvec",
     "frozen_path_directional_fd",
@@ -1237,6 +1237,71 @@ def implicit_state_tangent_raw_block(
         ),
         (z_star, params),
         (dz, param_tangent),
+    )[1]
+
+
+def implicit_state_tangent_block_corrected(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    param_tangent: ImplicitParams,
+    *,
+    corrector_max_restarts: int | None = None,
+    probe_chunk_size: int = 1,
+) -> SpectralState:
+    """Optimization-style forward tangent: raw block solve plus correction.
+
+    This mirrors ``optimize.jacobian_rows_block`` for a single parameter
+    direction: use the raw block-tridiagonal solve as ``dz0``, then certify
+    against the preconditioned residual Jacobian with a short GMRES correction.
+    """
+
+    frozen = jax.lax.stop_gradient(x_star)
+    edge_mask = _edge_mask(cfg)
+    P = _dof_projector(cfg, dof_mask)
+    F_pre = residual_fn(cfg, frozen, dof_mask)
+    F_raw = residual_fn(cfg, frozen, dof_mask, formulation="raw")
+    z_star = P(x_star)
+
+    raw_rhs = jax.tree.map(
+        jnp.negative,
+        jax.jvp(lambda prm: F_raw(z_star, prm), (params,), (param_tangent,))[1],
+    )
+    dz0 = _raw_block_forward_solve(
+        params,
+        cfg,
+        x_star,
+        dof_mask,
+        raw_rhs,
+        probe_chunk_size=probe_chunk_size,
+    )
+
+    pre_rhs = jax.tree.map(
+        jnp.negative,
+        jax.jvp(lambda prm: F_pre(z_star, prm), (params,), (param_tangent,))[1],
+    )
+    dz, _ = _adjoint_solve(
+        lambda vec: jax.jvp(lambda z: F_pre(z, params), (z_star,), (vec,))[1],
+        pre_rhs,
+        cfg,
+        x0=dz0,
+        max_restarts=(
+            min(3, cfg.adjoint_maxiter)
+            if corrector_max_restarts is None
+            else int(corrector_max_restarts)
+        ),
+    )
+    return jax.jvp(
+        lambda z, prm: _assemble(
+            z,
+            runtime_from_params(prm, cfg),
+            frozen,
+            P,
+            edge_mask,
+        ),
+        (z_star, params),
+        (P(dz), param_tangent),
     )[1]
 
 
