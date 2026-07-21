@@ -147,6 +147,7 @@ __all__ = [
     "params_from_input", "input_with_params", "runtime_from_params",
     "make_config", "solve_implicit", "solve_implicit_with_aux",
     "implicit_state_pullback_multi_rhs",
+    "implicit_state_pullback_multi_rhs_raw_block_transpose",
     "implicit_state_pullback_multi_rhs_block_transpose_init", "run",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
     "iota_axis", "iota_edge", "edge_iota", "residual_fn", "adjoint_matvec",
@@ -1175,6 +1176,58 @@ def implicit_state_pullback_multi_rhs_block_transpose_init(
     implicit_param_bar = jax.vmap(
         lambda lam: residual_vjp_p(jax.tree.map(jnp.negative, lam))[0]
     )(lambda_batch)
+    assemble_param_bar = jax.vmap(lambda state_bar: assemble_vjp_p(state_bar)[0])(gbar_batch)
+    return jax.tree.map(lambda left, right: left + right, implicit_param_bar, assemble_param_bar)
+
+
+def implicit_state_pullback_multi_rhs_raw_block_transpose(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    gbar_batch: SpectralState,
+    *,
+    probe_chunk_size: int = 1,
+) -> ImplicitParams:
+    """Batched reverse pullback using the raw block-tridiagonal transpose.
+
+    This is the direct transpose of the raw block formulation used by the
+    optimization forward-column path.  At the fixed point the preconditioned
+    and raw formulations have the same implicit tangent, but the adjoint must
+    keep the operator and parameter VJP paired: solve
+    ``(dF_raw/dz)^T mu = dJ/dz`` and apply ``-mu^T dF_raw/dp``.
+    """
+
+    frozen = jax.lax.stop_gradient(x_star)
+    edge_mask = _edge_mask(cfg)
+    P = _dof_projector(cfg, dof_mask)
+    F_raw = residual_fn(cfg, frozen, dof_mask, formulation="raw")
+    z_star = P(x_star)
+
+    _, assemble_vjp_z = jax.vjp(
+        lambda z: _assemble(z, runtime_from_params(params, cfg), frozen, P, edge_mask),
+        z_star,
+    )
+    _, raw_residual_vjp_p = jax.vjp(lambda prm: F_raw(z_star, prm), params)
+    _, assemble_vjp_p = jax.vjp(
+        lambda prm: _assemble(z_star, runtime_from_params(prm, cfg), frozen, P, edge_mask),
+        params,
+    )
+
+    rhs_batch = jax.vmap(lambda state_bar: assemble_vjp_z(state_bar)[0])(gbar_batch)
+    mu_batch = jax.vmap(
+        lambda rhs: _raw_block_transpose_initial_guess(
+            params,
+            cfg,
+            x_star,
+            dof_mask,
+            rhs,
+            probe_chunk_size=probe_chunk_size,
+        )
+    )(rhs_batch)
+    implicit_param_bar = jax.vmap(
+        lambda mu: raw_residual_vjp_p(jax.tree.map(jnp.negative, mu))[0]
+    )(mu_batch)
     assemble_param_bar = jax.vmap(lambda state_bar: assemble_vjp_p(state_bar)[0])(gbar_batch)
     return jax.tree.map(lambda left, right: left + right, implicit_param_bar, assemble_param_bar)
 
