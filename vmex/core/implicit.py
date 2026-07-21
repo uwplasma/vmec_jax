@@ -148,7 +148,9 @@ __all__ = [
     "make_config", "solve_implicit", "solve_implicit_with_aux",
     "implicit_state_pullback_multi_rhs",
     "implicit_state_pullback_multi_rhs_raw_block_transpose",
+    "implicit_state_pullback_multi_rhs_block_transpose_right_preconditioned",
     "implicit_state_pullback_multi_rhs_block_transpose_init", "run",
+    "implicit_state_tangent_raw_block",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
     "iota_axis", "iota_edge", "edge_iota", "residual_fn", "adjoint_matvec",
     "frozen_path_directional_fd",
@@ -1117,6 +1119,127 @@ def _raw_block_transpose_initial_guess(
     return P(_unpack(mu_mat))
 
 
+def _raw_block_forward_solve(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    rhs: SpectralState,
+    *,
+    probe_chunk_size: int = 1,
+) -> SpectralState:
+    """Raw block-tridiagonal forward solve ``(dF_raw/dz) dz = rhs``."""
+
+    frozen = jax.lax.stop_gradient(x_star)
+    P = _dof_projector(cfg, dof_mask)
+    z_star = P(x_star)
+    F_raw = residual_fn(cfg, frozen, dof_mask, formulation="raw")
+
+    ns_state = int(cfg.resolution.ns)
+    mask_np = jax.device_get(dof_mask)
+    mn_state = int(np.asarray(mask_np.R_cos).shape[1])
+    active_fields = tuple(
+        field for field in _STATE_FIELDS
+        if np.asarray(getattr(mask_np, field)).any()
+    )
+    if not active_fields:
+        return jax.tree.map(jnp.zeros_like, rhs)
+    n_act = len(active_fields)
+    m_block = n_act * mn_state
+
+    def _pack(tree) -> jnp.ndarray:
+        return jnp.concatenate(
+            [jnp.asarray(getattr(tree, field), dtype=jnp.float64) for field in active_fields],
+            axis=1,
+        )
+
+    def _unpack(mat: jnp.ndarray) -> SpectralState:
+        parts = dict(zip(active_fields, jnp.split(mat, n_act, axis=1)))
+        return SpectralState(**{
+            field: parts.get(field, jnp.zeros((ns_state, mn_state), mat.dtype))
+            for field in _STATE_FIELDS
+        })
+
+    def Fz_raw(dz):
+        return jax.jvp(lambda z: F_raw(z, params), (z_star,), (dz,))[1]
+
+    probe_color = jnp.asarray(np.repeat(np.arange(3), m_block))
+    probe_field = jnp.asarray(np.tile(np.repeat(np.arange(n_act), mn_state), 3))
+    probe_col = jnp.asarray(np.tile(np.tile(np.arange(mn_state), n_act), 3))
+
+    def probe_response(spec):
+        color, field_index, col = spec
+        rows = jnp.arange(ns_state) % 3 == color
+        mat = jnp.where(
+            rows[:, None],
+            jax.nn.one_hot(col, mn_state, dtype=jnp.float64)[None, :],
+            0.0,
+        )
+        stack = (
+            jax.nn.one_hot(field_index, n_act, dtype=jnp.float64)[:, None, None]
+            * mat[None]
+        )
+        dz = _unpack(jnp.concatenate([stack[i] for i in range(n_act)], axis=1))
+        return _pack(jax.tree.map(lambda a, b, p: a + (b - p), Fz_raw(dz), dz, P(dz)))
+
+    probes = chunk_map(
+        probe_response,
+        (probe_color, probe_field, probe_col),
+        chunk_size=max(1, int(probe_chunk_size)),
+    )
+    probes = probes.reshape((3, m_block, ns_state, m_block))
+    ii = jnp.arange(ns_state)
+
+    def band(offset: int):
+        gathered = probes[(ii + offset) % 3, :, ii, :]
+        return jnp.swapaxes(gathered, 1, 2)
+
+    factors = block_thomas_factor(band(-1), band(0), band(1))
+    dz_mat = block_thomas_solve(factors, _pack(P(rhs))[..., None])[..., 0]
+    return P(_unpack(dz_mat))
+
+
+def implicit_state_tangent_raw_block(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    param_tangent: ImplicitParams,
+    *,
+    probe_chunk_size: int = 1,
+) -> SpectralState:
+    """Assembled state tangent from the raw block-tridiagonal implicit solve."""
+
+    frozen = jax.lax.stop_gradient(x_star)
+    edge_mask = _edge_mask(cfg)
+    P = _dof_projector(cfg, dof_mask)
+    F_raw = residual_fn(cfg, frozen, dof_mask, formulation="raw")
+    z_star = P(x_star)
+    rhs = jax.tree.map(
+        jnp.negative,
+        jax.jvp(lambda prm: F_raw(z_star, prm), (params,), (param_tangent,))[1],
+    )
+    dz = _raw_block_forward_solve(
+        params,
+        cfg,
+        x_star,
+        dof_mask,
+        rhs,
+        probe_chunk_size=probe_chunk_size,
+    )
+    return jax.jvp(
+        lambda z, prm: _assemble(
+            z,
+            runtime_from_params(prm, cfg),
+            frozen,
+            P,
+            edge_mask,
+        ),
+        (z_star, params),
+        (dz, param_tangent),
+    )[1]
+
+
 def implicit_state_pullback_multi_rhs_block_transpose_init(
     params: ImplicitParams,
     cfg: ImplicitConfig,
@@ -1228,6 +1351,64 @@ def implicit_state_pullback_multi_rhs_raw_block_transpose(
     implicit_param_bar = jax.vmap(
         lambda mu: raw_residual_vjp_p(jax.tree.map(jnp.negative, mu))[0]
     )(mu_batch)
+    assemble_param_bar = jax.vmap(lambda state_bar: assemble_vjp_p(state_bar)[0])(gbar_batch)
+    return jax.tree.map(lambda left, right: left + right, implicit_param_bar, assemble_param_bar)
+
+
+def implicit_state_pullback_multi_rhs_block_transpose_right_preconditioned(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    gbar_batch: SpectralState,
+    *,
+    probe_chunk_size: int = 1,
+) -> ImplicitParams:
+    """Batched reverse pullback with raw-block right preconditioning.
+
+    Solves the exact preconditioned adjoint equation using the raw block
+    transpose solve as a right preconditioner: ``A^T M y = rhs``, then
+    ``lambda = M y``.  Unlike ``*_block_transpose_init``, the block solve is
+    used at every Krylov matvec rather than only as the initial guess.
+    """
+
+    frozen = jax.lax.stop_gradient(x_star)
+    edge_mask = _edge_mask(cfg)
+    P = _dof_projector(cfg, dof_mask)
+    residual = residual_fn(cfg, frozen, dof_mask)
+    z_star = P(x_star)
+
+    _, assemble_vjp_z = jax.vjp(
+        lambda z: _assemble(z, runtime_from_params(params, cfg), frozen, P, edge_mask),
+        z_star,
+    )
+    _, residual_vjp_z = jax.vjp(lambda z: residual(z, params), z_star)
+    _, residual_vjp_p = jax.vjp(lambda prm: residual(z_star, prm), params)
+    _, assemble_vjp_p = jax.vjp(
+        lambda prm: _assemble(z_star, runtime_from_params(prm, cfg), frozen, P, edge_mask),
+        params,
+    )
+
+    def M(rhs):
+        return _raw_block_transpose_initial_guess(
+            params,
+            cfg,
+            x_star,
+            dof_mask,
+            rhs,
+            probe_chunk_size=probe_chunk_size,
+        )
+
+    rhs_batch = jax.vmap(lambda state_bar: assemble_vjp_z(state_bar)[0])(gbar_batch)
+
+    def solve_rhs(rhs):
+        y, _ = _adjoint_solve(lambda vec: residual_vjp_z(M(vec))[0], rhs, cfg)
+        return M(y)
+
+    lambda_batch = jax.vmap(solve_rhs)(rhs_batch)
+    implicit_param_bar = jax.vmap(
+        lambda lam: residual_vjp_p(jax.tree.map(jnp.negative, lam))[0]
+    )(lambda_batch)
     assemble_param_bar = jax.vmap(lambda state_bar: assemble_vjp_p(state_bar)[0])(gbar_batch)
     return jax.tree.map(lambda left, right: left + right, implicit_param_bar, assemble_param_bar)
 
