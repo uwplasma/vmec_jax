@@ -44,6 +44,16 @@ def _soft_min_idx(values, beta: float = 50.0):
     return jnp.sum(jnp.arange(values.shape[0], dtype=values.dtype) * weights)
 
 
+def _cummin(values):
+    values = jnp.asarray(values, dtype=jnp.float64)
+    return jax.lax.associative_scan(jnp.minimum, values)
+
+
+def _cummax(values):
+    values = jnp.asarray(values, dtype=jnp.float64)
+    return jax.lax.associative_scan(jnp.maximum, values)
+
+
 def _apply_smooth_goodman_transform(b_line, phi_coords):
     """Smooth squash/stretch surrogate of the Goodman constructed-QI well."""
 
@@ -54,9 +64,9 @@ def _apply_smooth_goodman_transform(b_line, phi_coords):
     s_indmin = _soft_min_idx(b_line)
     mask_l = jax.nn.sigmoid(2.0 * (s_indmin - indices))
     mask_r = 1.0 - mask_l
-    bl_sq = jnp.minimum.accumulate(b_line)
+    bl_sq = _cummin(b_line)
     br_seed = jnp.where(indices >= s_indmin, b_line, b_line[0])
-    br_sq = jnp.maximum.accumulate(br_seed)
+    br_sq = _cummax(br_seed)
     pmax = jnp.asarray(50.0, dtype=b_line.dtype)
     pmin = jnp.asarray(15.0, dtype=b_line.dtype)
     b_min_val = jnp.interp(s_indmin, indices, b_line)
