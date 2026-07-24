@@ -36,6 +36,7 @@ import jax.numpy as jnp
 import vmex as vj
 from vmex import optimize as opt
 from vmex.core.omnigenity import QIResidual
+from vmex.core.omnigenity_j import JInvariantQIAndMaxJResidual, JInvariantQIResidual
 
 # --------------------------- parameters ------------------------------------
 NFP = 1
@@ -51,6 +52,7 @@ MAX_MODE = 6                               # ALL harmonics at once — no ladder
 ESS_ALPHA = 0.7
 MAX_NFEV = 4000
 FTOL = 1e-8
+QI_OBJECTIVE = os.environ.get("VMEX_QI_OBJECTIVE", "goodman").strip().lower()
 if os.environ.get("VMEX_EXAMPLES_CI") == "1":  # smoke-test budget
     MAX_MODE, MAX_NFEV, FTOL = 2, 4, 1e-4
     SURFACES = np.linspace(0.25, 0.75, 3)
@@ -69,7 +71,16 @@ inp = vj.VmecInput(
     ncurr=1, curtor=0.0, pres_scale=0.0,
     ns_array=[35], ftol_array=[1e-13], niter_array=[1500], delt=0.9,
 )
-qi = QIResidual(SURFACES)
+if QI_OBJECTIVE == "goodman":
+    qi = QIResidual(SURFACES)
+elif QI_OBJECTIVE == "j_invariant":
+    qi = JInvariantQIResidual(SURFACES)
+elif QI_OBJECTIVE == "j_invariant_maxj":
+    qi = JInvariantQIAndMaxJResidual(SURFACES)
+else:
+    raise ValueError(
+        "VMEX_QI_OBJECTIVE must be 'goodman', 'j_invariant', or 'j_invariant_maxj'."
+    )
 qp = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=0, helicity_n=1)
 
 
@@ -79,7 +90,7 @@ def iota_shortfall(state, rt):
 
 def report(tag, eq):
     total = float(qi.total(eq))
-    print(f"[{tag}] QI total = {total:.6e}, "
+    print(f"[{tag}] objective[{QI_OBJECTIVE}] = {total:.6e}, "
           f"aspect = {float(opt.aspect_ratio(eq.state, eq.runtime)):.4f}, "
           f"mean iota = {float(opt.mean_iota(eq.state, eq.runtime)):.4f}, "
           f"mirror = {float(opt.mirror_ratio(eq.state, eq.runtime)):.4f}")

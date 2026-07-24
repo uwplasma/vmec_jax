@@ -366,6 +366,9 @@ def boozer_bmnc_state(
         "xm_b": xm_b,
         "xn_b": xn_b,
         "iota_b": iota,
+        "buco_b": I,
+        "bvco_b": G,
+        "gi_b": GI,
         "nfp": nfp,
         "s_b": jnp.asarray(s_half_np, dtype=dtype)[rows - 1],
     }

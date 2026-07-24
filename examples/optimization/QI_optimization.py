@@ -53,6 +53,7 @@ import jax.numpy as jnp
 import vmex as vj
 from vmex import optimize as opt
 from vmex.core.omnigenity import QIResidual
+from vmex.core.omnigenity_j import JInvariantQIAndMaxJResidual, JInvariantQIResidual
 
 # --------------------------- parameters ------------------------------------
 NFP = 1
@@ -69,6 +70,7 @@ QP_SCHEDULE = MAX_MODE_SCHEDULE[:3]        # stage 1: QP basin (implicit)
 QI_SCHEDULE = MAX_MODE_SCHEDULE[2:]        # stage 2: QI refinement (implicit)
 QP_NFEV, QI_NFEV = 2000, 1000              # trial budgets per stage
 FTOL = 1e-6                                # per-stage convergence tolerance
+QI_OBJECTIVE = os.environ.get("VMEX_QI_OBJECTIVE", "goodman").strip().lower()
 if os.environ.get("VMEX_EXAMPLES_CI") == "1":  # smoke-test budget
     QP_SCHEDULE, QI_SCHEDULE, QP_NFEV, QI_NFEV = (1,), (1,), 6, 3
     FTOL = 1e-4
@@ -87,7 +89,16 @@ inp = vj.VmecInput(
 )
 eq = opt.solve_equilibrium(inp)
 qp = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=0, helicity_n=1)
-qi = QIResidual(SURFACES)                  # traceable omnigenity residual
+if QI_OBJECTIVE == "goodman":
+    qi = QIResidual(SURFACES)              # traceable omnigenity residual
+elif QI_OBJECTIVE == "j_invariant":
+    qi = JInvariantQIResidual(SURFACES)
+elif QI_OBJECTIVE == "j_invariant_maxj":
+    qi = JInvariantQIAndMaxJResidual(SURFACES)
+else:
+    raise ValueError(
+        "VMEX_QI_OBJECTIVE must be 'goodman', 'j_invariant', or 'j_invariant_maxj'."
+    )
 
 
 def iota_shortfall(state, rt):
@@ -96,7 +107,7 @@ def iota_shortfall(state, rt):
 
 def report(tag, eq):
     qi_total = float(qi.total(eq))
-    print(f"[{tag}] QI total = {qi_total:.6e}, QP total = {float(qp.total(eq)):.6e}, "
+    print(f"[{tag}] objective[{QI_OBJECTIVE}] = {qi_total:.6e}, QP total = {float(qp.total(eq)):.6e}, "
           f"aspect = {float(opt.aspect_ratio(eq.state, eq.runtime)):.4f}, "
           f"mean iota = {float(opt.mean_iota(eq.state, eq.runtime)):.4f}")
     return qi_total

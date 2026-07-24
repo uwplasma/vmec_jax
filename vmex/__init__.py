@@ -104,6 +104,14 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "VmecJacobianError": (".core.errors", "VmecJacobianError"),
     "VmecConvergenceError": (".core.errors", "VmecConvergenceError"),
     "MgridNotFoundError": (".core.errors", "MgridNotFoundError"),
+    # optional J-based QI / max-J objectives
+    "JInvariantQIResidual": (".core.omnigenity_j", "JInvariantQIResidual"),
+    "JInvariantMaxJResidual": (".core.omnigenity_j", "JInvariantMaxJResidual"),
+    "JInvariantQIAndMaxJResidual": (".core.omnigenity_j", "JInvariantQIAndMaxJResidual"),
+    "j_invariant_qi_maxj_residual_from_boozer": (
+        ".core.omnigenity_j",
+        "j_invariant_qi_maxj_residual_from_boozer",
+    ),
     # modules
     "core": (".core", None),
     "errors": (".core.errors", None),
