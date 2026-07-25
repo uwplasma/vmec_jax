@@ -253,6 +253,7 @@ class ForcePipelineHealth:
     spectral_finite: Array
     scaled_finite: Array
     rhs_finite: Array
+    radial_preconditioner_safe: Array
     radial_solve_finite: Array
     preconditioned_finite: Array
 
@@ -600,7 +601,7 @@ def _resolve_prec2d(
         pt = "NONE" if precon_type is None else precon_type
         thr = 1e-30 if prec2d_threshold is None else prec2d_threshold
     pt_normalized = str(pt).strip().upper()
-    if pt_normalized in {"", "NONE", "DEFAULT"}:
+    if pt_normalized in {"NONE", "DEFAULT"}:
         return None
     if pt_normalized != "GMRES":
         raise NotImplementedError(
@@ -636,7 +637,7 @@ def prepare_runtime(
     false).  ``precon_type``/``prec2d_threshold`` (or an explicit ``prec2d``
     :class:`~vmex.core.preconditioner_2d.Prec2DConfig`) switch on the
     optional 2D block preconditioner (``precon2d.f``); ``None``/``"NONE"``
-    (the default) leaves the 1D-only path byte-identical.
+    (the default) leaves the VMEC2000 1-D radial/lambda path unchanged.
     """
     if isinstance(source, RunSetup):
         if resolution is None:
@@ -666,12 +667,19 @@ def prepare_runtime(
                         lforbal=bool(inp.lforbal),
                         lmove_axis=bool(inp.lmove_axis))
 
+    requested_iterations = int(
+        defaults["niter"] if max_iterations is None else max_iterations
+    )
+    # readin.f can leave -1 in a partially assigned NITER_ARRAY.  eqsolve.f
+    # still performs its first evolve/funct3d pass before ``iter2 >= niter``
+    # terminates the stage, so the effective trajectory capacity is one.
+    effective_iterations = max(1, requested_iterations)
     rt = SolverRuntime(
         resolution=resolution, setup=setup,
         gamma=float(defaults["gamma"] if gamma is None else gamma),
         tcon0=float(defaults["tcon0"] if tcon0 is None else tcon0),
         ftol=float(defaults["ftol"] if ftol is None else ftol),
-        max_iterations=int(defaults["niter"] if max_iterations is None else max_iterations),
+        max_iterations=effective_iterations,
         time_step0=float(defaults["delt"] if time_step is None else time_step),
         nstep=int(defaults["nstep"] if nstep is None else nstep),
         jmax=int(resolution.ns) - 1,
@@ -886,7 +894,13 @@ def _force_pipeline(
     else:
         rhs = scaled
     rhs_finite = _all_finite(rhs) if collect_health else passing
-    solved = apply_radial_preconditioner(rhs, matrices_R=cache.matrices_R, matrices_Z=cache.matrices_Z, jmax=rt.jmax)
+    solved, radial_safe = apply_radial_preconditioner(
+        rhs,
+        matrices_R=cache.matrices_R,
+        matrices_Z=cache.matrices_Z,
+        jmax=rt.jmax,
+        return_safe=True,
+    )
     radial_solve_finite = _all_finite(solved) if collect_health else passing
     preconditioned = apply_lambda_preconditioner(solved, cache.faclam)
     health = ForcePipelineHealth(
@@ -894,6 +908,7 @@ def _force_pipeline(
         spectral_finite=spectral_finite,
         scaled_finite=scaled_finite,
         rhs_finite=rhs_finite,
+        radial_preconditioner_safe=radial_safe,
         radial_solve_finite=radial_solve_finite,
         preconditioned_finite=(
             _all_finite(preconditioned) if collect_health else passing
@@ -1491,8 +1506,16 @@ def _initial_carry(
     *,
     ijacob: int,
     xcdot: SpectralState | None = None,
+    residuals: tuple[float | Array, float | Array, float | Array] | None = None,
 ) -> _LoopCarry:
-    """Initial loop carry (reset_params.f / initialize_radial.f values)."""
+    """Initial loop carry (``reset_params.f`` / ``initialize_radial.f``).
+
+    ``initialize_radial.f`` resets ``fsq`` to one but intentionally leaves
+    the module variables ``fsqr/fsqz/fsql`` unchanged across radial grids.
+    Those retained values control the first-pass free-boundary edge gate in
+    ``residue.f90``.  ``residuals=None`` is the cold-start
+    ``reset_params.f`` value ``(1, 1, 1)``.
+    """
     dtype = rt.setup.s_full.dtype
     one = jnp.asarray(1.0, dtype=dtype)
     zeros = (
@@ -1506,12 +1529,19 @@ def _initial_carry(
     # return; weak-typed Python scalars here would force a second lane
     # compilation on the first block round-trip.
     int_ = lambda v: jnp.asarray(v, dtype=jnp.int64)  # noqa: E731
+    if residuals is None:
+        fsqr0 = fsqz0 = fsql0 = one
+    else:
+        fsqr0, fsqz0, fsql0 = (
+            jnp.asarray(value, dtype=dtype) for value in residuals
+        )
     return _LoopCarry(
         state=state, xcdot=zeros, xstore=state, cache=_zero_cache(rt),
         time_step=delt0,
         inv_tau=jnp.full((NDAMP,), DAMPING_CAP, dtype=dtype) / delt0,
         fsq=one, res0=inf, res1=inf,
-        fsqr=one, fsqz=one, fsql=one, fsqr1=one, fsqz1=one, fsql1=one,
+        fsqr=fsqr0, fsqz=fsqz0, fsql=fsql0,
+        fsqr1=one, fsqz1=one, fsql1=one,
         wb=zero, wp=zero, r00=zero,
         iteration=int_(1), iter1=int_(1),
         ijacob=int_(int(ijacob)),
@@ -1675,10 +1705,15 @@ def _block_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
 def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
               ijacob: int, verbose: bool, emit,
               emit_banner: bool = True,
-              initial_xcdot: SpectralState | None = None) -> _LoopCarry:
+              initial_xcdot: SpectralState | None = None,
+              initial_residuals: (
+                  tuple[float | Array, float | Array, float | Array] | None
+              ) = None) -> _LoopCarry:
     """Run the iteration loop in the requested lane; return the final carry."""
     carry = _initial_carry(
-        state0, rt, ijacob=ijacob, xcdot=initial_xcdot)
+        state0, rt, ijacob=ijacob, xcdot=initial_xcdot,
+        residuals=initial_residuals,
+    )
 
     if mode == "jit":
         return _while_lane(carry, rt)
@@ -1719,7 +1754,10 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
 def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
                  mode: str, verbose: bool, emit,
                  try_axis_reguess: bool = True,
-                 jacobian_retries: int = 2) -> _LoopCarry:
+                 jacobian_retries: int = 2,
+                 residual_continuation: (
+                     tuple[float | Array, float | Array, float | Array] | None
+                 ) = None) -> _LoopCarry:
     """Run one solve at a fixed runtime, with the eqsolve.f axis-retry.
 
     ``state0=None`` starts from the runtime's ``profil3d.f`` interior guess.
@@ -1744,10 +1782,24 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
         attempt_state: SpectralState,
         *,
         emit_banner: bool,
+        allow_axis_reguess: bool,
+        attempt_residuals: (
+            tuple[float | Array, float | Array, float | Array] | None
+        ),
     ) -> tuple[_LoopCarry, SolverRuntime]:
+        # A JAC75 recovery is a continuation from xstore, not a new
+        # profil3d.f initialization.  Disable the iteration-1 LMOVE_AXIS
+        # transfer for that attempt so the checkpoint cannot be replaced by a
+        # reconstructed cold state merely because its force is still large.
+        loop_rt = (
+            attempt_rt
+            if allow_axis_reguess
+            else replace(attempt_rt, lmove_axis=False)
+        )
         carry = _run_loop(
-            attempt_state, attempt_rt, mode=mode, ijacob=0,
+            attempt_state, loop_rt, mode=mode, ijacob=0,
             verbose=verbose, emit=emit, emit_banner=emit_banner,
+            initial_residuals=attempt_residuals,
         )
 
         # eqsolve.f: on a first-iteration Jacobian sign change with
@@ -1756,7 +1808,8 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
         # preserving the triggering pass's momentum.
         retry_reason = int(carry.ier)
         if (
-            try_axis_reguess
+            allow_axis_reguess
+            and try_axis_reguess
             and retry_reason in (BAD_JACOBIAN_FLAG, AXIS_REGUESS_FLAG)
             and int(carry.ijacob) == 0
             and attempt_rt.resolution.ns >= 3
@@ -1775,13 +1828,17 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
                     carry.xcdot
                     if retry_reason == AXIS_REGUESS_FLAG else None
                 ),
+                initial_residuals=(
+                    carry.fsqr, carry.fsqz, carry.fsql
+                ),
             )
         return carry, attempt_rt
 
     attempt_state = _initial_state(rt.setup) if state0 is None else state0
     attempt_rt = rt
     carry, attempt_rt = run_attempt(
-        attempt_rt, attempt_state, emit_banner=True,
+        attempt_rt, attempt_state, emit_banner=True, allow_axis_reguess=True,
+        attempt_residuals=residual_continuation,
     )
     for attempt in range(1, int(jacobian_retries) + 1):
         if int(carry.ier) != JAC75_FLAG:
@@ -1801,6 +1858,8 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
             )
         carry, attempt_rt = run_attempt(
             attempt_rt, attempt_state, emit_banner=False,
+            allow_axis_reguess=False,
+            attempt_residuals=(carry.fsqr, carry.fsqz, carry.fsql),
         )
     return carry
 

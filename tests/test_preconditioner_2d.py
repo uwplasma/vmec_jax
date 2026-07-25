@@ -17,6 +17,7 @@ reaches the *same* equilibrium in *fewer* iterations (the R20 showcase claim).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +32,7 @@ from jax.flatten_util import ravel_pytree
 
 from vmex.core.fourier import Resolution
 from vmex.core.input import VmecInput
+from vmex.core import solver as solver_module
 from vmex.core.preconditioner_2d import (
     Prec2DConfig, flat_operator, newton_direction,
 )
@@ -135,7 +137,10 @@ def test_prec2d_config_is_hashable():
 
 
 def test_precon_type_has_explicit_non_aliasing_semantics() -> None:
-    """DEFAULT is 1-D; VMEC2000's other Krylov names are not GMRES aliases."""
+    """NONE/DEFAULT are 1-D; other VMEC Krylov names are not GMRES aliases."""
+    assert _resolve_prec2d(
+        VmecInput(precon_type="NONE"), None, None, None
+    ) is None
     assert _resolve_prec2d(
         VmecInput(precon_type="DEFAULT"), None, None, None
     ) is None
@@ -145,6 +150,31 @@ def test_precon_type_has_explicit_non_aliasing_semantics() -> None:
     )
     with pytest.raises(NotImplementedError, match="CG, GMRESR, and TFQMR"):
         _resolve_prec2d(VmecInput(precon_type="TFQMR"), None, None, None)
+
+
+def test_precon_none_keeps_vmec2000_radial_preconditioner(monkeypatch) -> None:
+    """PRECON_TYPE=NONE disables 2-D blocks, never scalfor/faclam."""
+    inp = replace(
+        VmecInput.from_file(str(DATA_DIR / "input.circular_tokamak")),
+        precon_type="NONE",
+        raxis_c=np.asarray([6.0]),
+    )
+    resolution = resolution_from_input(inp, ns=7)
+    runtime = prepare_runtime(inp, resolution)
+    state = _initial_state(runtime.setup)
+    original = solver_module.apply_radial_preconditioner
+    calls = 0
+
+    def tracked(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(solver_module, "apply_radial_preconditioner", tracked)
+    _gc, _residuals, diagnostics = evaluate_forces(state, runtime)
+    assert calls == 1
+    assert bool(diagnostics.health.pipeline.radial_preconditioner_safe)
+    assert runtime.prec2d is None
 
 
 @pytest.mark.full

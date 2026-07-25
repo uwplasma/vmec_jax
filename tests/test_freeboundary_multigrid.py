@@ -61,6 +61,14 @@ def test_stage_transfer_carries_vacuum_and_interpolates_final_xc(monkeypatch) ->
         ns = kwargs["resolution"].ns
         incoming = kwargs["initial_state"]
         continuation = kwargs["vacuum_continuation"]
+        if calls:
+            assert kwargs["residual_continuation"] == (
+                float(len(calls)),
+                float(len(calls)) + 0.1,
+                float(len(calls)) + 0.2,
+            )
+        else:
+            assert kwargs["residual_continuation"] is None
         calls.append((ns, incoming, continuation))
         vacuum = FB.FreeBoundaryState(
             ivac=5 + len(calls), nvacskip=11 + len(calls), nvskip0=9,
@@ -70,7 +78,13 @@ def test_stage_transfer_carries_vacuum_and_interpolates_final_xc(monkeypatch) ->
         # Deliberately make current xc and xstore distinguishable.
         current = _state(ns, kwargs["resolution"].mnmax, 10.0 + len(calls))
         xstore = _state(ns, kwargs["resolution"].mnmax, 20.0 + len(calls))
-        result = SimpleNamespace(state=current, marker=ns)
+        result = SimpleNamespace(
+            state=current,
+            marker=ns,
+            fsqr=float(len(calls)),
+            fsqz=float(len(calls)) + 0.1,
+            fsql=float(len(calls)) + 0.2,
+        )
         return SimpleNamespace(
             result=result, continuation_state=xstore, vacuum=vacuum,
             rcon0=jnp.asarray([len(calls)], dtype=float),
@@ -181,8 +195,11 @@ def test_lforbal_free_ladder_matches_vmec2000_before_vacuum_activation() -> None
         [1.89e-2, 3.61e-3, 8.96e-3],
         rtol=7e-3,
     )
-    assert result.r00 == pytest.approx(0.7430400635, rel=2e-10)
-    assert result.wmhd == pytest.approx(0.0507912723, rel=2e-9)
+    # The full-mesh chipf reconstruction used by calc_fbal/add_fluxes also
+    # restores the VMEC2000 energy row (5.079117E-02) rather than the former
+    # half-mesh-substitution value.
+    assert result.r00 == pytest.approx(0.7430400335, rel=2e-10)
+    assert result.wmhd == pytest.approx(0.05079117051, rel=2e-9)
 
 
 @pytest.mark.full
@@ -265,11 +282,30 @@ def test_converged_multigrid_final_state_matches_vmec2000_wout() -> None:
     if not CONV_MGRID.exists() or not CONV_WOUT.exists():
         pytest.skip("converged CTH mgrid/wout assets unavailable")
     from vmex.core.wout import read_wout
+    from benchmarks.run_freeboundary_multigrid import _stage_iterations
 
     inp = VmecInput.from_file(CONV_DECK)
+    lines: list[str] = []
     result = solve_free_boundary_multigrid(
         inp, ns_array=[7, 15], ftol_array=[1e-8, 1e-10],
         niter_array=[1000, 2500], mgrid_path=CONV_MGRID,
+        verbose=True,
+        emit=lambda value="", end="\n": lines.append(str(value) + end),
+    )
+    stages = _stage_iterations("".join(lines))
+    assert len(stages) == 2
+    # initialize_radial.f retains the coarse-grid residual module variables.
+    # On the first fine-grid pass they activate residue.f90's medge=1 gate,
+    # so the carried vacuum edge force is included immediately.  These are
+    # the local VMEC2000/PARVMEC screen values for the same public assets.
+    np.testing.assert_allclose(
+        [
+            stages[1]["first_fsqr"],
+            stages[1]["first_fsqz"],
+            stages[1]["first_fsql"],
+        ],
+        [1.73, 0.887, 1.51e-5],
+        rtol=1.5e-2,
     )
     reference = read_wout(CONV_WOUT)
     mine = {(int(m), int(n)): i for i, (m, n) in enumerate(zip(result.xm, result.xn))}

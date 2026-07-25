@@ -16,6 +16,30 @@ solver support: the complete supported/rejected/no-op classification is in
 :doc:`vmec2000_compatibility`. Unknown names and active unsupported physics
 fail before setup.
 
+Fortran namelist assignment semantics
+--------------------------------------
+
+INDATA assignments are replayed in source order, as a Fortran namelist reader
+writes into the already initialized ``vmec_input.f`` arrays.  A later short
+dense assignment replaces only the elements it supplies; it does not clear an
+earlier tail.  Indexed writes and dense writes override one another according
+to their textual order.  For example,
+
+.. code-block:: fortran
+
+   FTOL_ARRAY = 1e-6, 1e-11, 1e-30, 1e-30
+   FTOL_ARRAY = 1e-7, 1e-7
+
+leaves entries 3 and 4 at ``1e-30``.
+
+An indexed designator followed by several values is a *starting-element*
+assignment, so ``APHI(1)=1,0`` writes elements 1 and 2.  Array sections use
+inclusive Fortran bounds, and the first subscript varies fastest.  Thus compact
+boundary syntax such as ``RBC(-6:6,0)=...`` is equivalent to the corresponding
+13 scalar assignments.  Omitted section limits (``RBC(:,0)`` or
+``RBC(-6:,0)``) are resolved from the declared VMEC2000 array bounds.  Bounds,
+rank, and value count are checked before setup.
+
 INDATA variables
 ----------------
 
@@ -62,14 +86,19 @@ Multigrid ladder and stepping
    * - ``NS_ARRAY``
      - ``[31]``
      - radial surfaces per multigrid stage; explicit ``NS_ARRAY(1)=0`` uses
-       the VMEC2000 ``NSIN -> 31`` legacy expansion
+       the VMEC2000 ``NSIN -> 31`` legacy expansion.  The active ladder ends
+       at the first nonpositive or decreasing entry; equal entries rerun.
    * - ``FTOL_ARRAY``
      - ``[1e-10]``
      - force tolerance per stage (converged when ``fsqr, fsqz, fsql`` are all
-       below it)
+       below it).  If its first element is explicitly zero, ``readin.f``'s
+       geometric ladder from ``1e-8`` to scalar ``FTOL`` is generated.
    * - ``NITER_ARRAY`` (or ``NITER``)
      - ``[100]``
-     - iteration cap per stage
+     - iteration cap per stage.  Scalar ``NITER`` fills the complete array
+       only when every initialized ``NITER_ARRAY`` entry remains ``-1``.
+       A preserved ``-1`` in a partially assigned array still executes the
+       first ``eqsolve`` pass before the iteration-limit check, as in VMEC2000.
    * - ``DELT``
      - 1.0
      - initial time step
@@ -218,6 +247,8 @@ Free boundary
      - ``NONE``/``DEFAULT`` use the 1-D VMEC path; ``GMRES`` selects VMEX's
        exact-JVP matrix-free Newton--GMRES path. VMEC2000 ``CG``, ``GMRESR``,
        and ``TFQMR`` are distinct and are rejected, not aliased.
+       ``NONE`` does **not** disable ``scalfor`` or lambda scaling; it disables
+       only the optional 2-D block preconditioner, as in VMEC2000.
 
 VMEC++-style JSON
 -----------------

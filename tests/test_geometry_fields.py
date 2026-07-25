@@ -30,6 +30,7 @@ from vmex.core.fields import (
     energies_and_force_norms,
     magnetic_fields,
     metric_elements,
+    radial_force_balance_error,
     surface_currents,
 )
 from vmex.core.geometry import (
@@ -172,6 +173,57 @@ def test_surface_currents_finite(case):
         assert np.isfinite(float(getattr(cur, name))), name
     # The toroidal-field profile bvco must be nonzero away from the axis.
     assert np.max(np.abs(np.asarray(cur.bvco)[1:])) > 0.0
+
+
+def test_lforbal_uses_add_fluxes_full_mesh_chipf(case):
+    """calc_fbal consumes full-mesh chipf reconstructed from effective chips."""
+    currents = surface_currents(
+        bsubu=case.mf.bsubu,
+        bsubv=case.mf.bsubv,
+        trig=case.rt.trig,
+        s=case.s,
+        signgs=int(case.setup.signgs),
+    )
+    s = np.asarray(case.s)
+    hs = s[1] - s[0]
+    signgs = float(case.setup.signgs)
+    buco = np.asarray(currents.buco)
+    bvco = np.asarray(currents.bvco)
+    jcurv = signgs * (buco[2:] - buco[1:-1]) / hs
+    jcuru = -signgs * (bvco[2:] - bvco[1:-1]) / hs
+    vp = np.asarray(case.mf.vp)
+    pressure = np.asarray(case.mf.pressure)
+    vpphi = 0.5 * (vp[2:] + vp[1:-1])
+    presgrad = (pressure[2:] - pressure[1:-1]) / hs
+    chips = np.asarray(case.mf.chips)
+    chipf = np.empty_like(chips)
+    chipf[0] = 1.5 * chips[1] - 0.5 * chips[2]
+    chipf[1:-1] = 0.5 * (chips[1:-1] + chips[2:])
+    chipf[-1] = 1.5 * chips[-1] - 0.5 * chips[-2]
+    expected = np.zeros_like(chips)
+    expected[1:-1] = (
+        -np.asarray(case.setup.phipf)[1:-1] * jcuru
+        + chipf[1:-1] * jcurv
+    ) / vpphi + presgrad
+
+    actual = radial_force_balance_error(
+        fields=case.mf,
+        phipf=case.setup.phipf,
+        trig=case.rt.trig,
+        s=case.s,
+        signgs=int(case.setup.signgs),
+    )
+    np.testing.assert_allclose(actual, expected, rtol=2e-13, atol=2e-14)
+
+    if case.name == "cth_like_fixed_bdy":
+        half_mesh_substitution = np.zeros_like(chips)
+        half_mesh_substitution[1:-1] = (
+            -np.asarray(case.setup.phipf)[1:-1] * jcuru
+            + chips[1:-1] * jcurv
+        ) / vpphi + presgrad
+        assert not np.allclose(
+            actual, half_mesh_substitution, rtol=1e-8, atol=1e-12
+        )
 
 
 # ---------------------------------------------------------------------------

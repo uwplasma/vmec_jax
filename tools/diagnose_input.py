@@ -217,11 +217,18 @@ def diagnose(path: Path, *, details: bool = False) -> int:
         f"Z={'PASS' if _ok(health.raw_z_residual_finite) else 'FAIL'} "
         f"L={'PASS' if _ok(health.raw_lambda_residual_finite) else 'FAIL'}"
     )
+    if (
+        _ok(health.pipeline.radial_solve_finite)
+        and _ok(health.pipeline.radial_preconditioner_safe)
+    ):
+        radial_status = "PASS"
+    else:
+        radial_status = "FAIL"
     print(
         "preconditioner stages finite: "
         f"cache={'PASS' if _ok(health.cache_finite) else 'FAIL'} "
         f"rhs={'PASS' if _ok(health.pipeline.rhs_finite) else 'FAIL'} "
-        f"radial={'PASS' if _ok(health.pipeline.radial_solve_finite) else 'FAIL'} "
+        f"radial={radial_status} "
         f"lambda={'PASS' if _ok(health.pipeline.preconditioned_finite) else 'FAIL'}"
     )
     print(f"raw force residuals finite: {'PASS' if not raw_bad else 'FAIL'}")
@@ -341,6 +348,10 @@ def diagnose(path: Path, *, details: bool = False) -> int:
         assessment = "D04A_PRECONDITIONER_CACHE_NONFINITE"
     elif not _ok(health.pipeline.rhs_finite):
         assessment = "D04B_PRECONDITIONER_RHS_NONFINITE"
+    elif (
+        not _ok(health.pipeline.radial_preconditioner_safe)
+    ):
+        assessment = "D04E_RADIAL_PRECONDITIONER_REJECTED"
     elif not _ok(health.pipeline.radial_solve_finite):
         assessment = "D04C_RADIAL_PRECONDITIONER_NONFINITE"
     elif not _ok(health.pipeline.preconditioned_finite):

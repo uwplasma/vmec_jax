@@ -657,14 +657,13 @@ def wout_from_state(
     phips = np.asarray(prof["phips"], dtype=float).copy()
     phips[0] = 0.0
     phipf_int = np.asarray(prof["phipf"], dtype=float)
+    chips = np.asarray(fields.chips, dtype=float)
+    chipf_int = _pp.chipf_from_chips(chips)
     if ncurr == 1:
         # add_fluxes.f90: the current-constrained chips defines iota/chipf.
-        chips = np.asarray(fields.chips, dtype=float)
         iotas = np.divide(chips, phips, out=np.zeros_like(chips), where=phips != 0.0)
-        chipf_int = _pp.chipf_from_chips(chips)
     else:
         iotas = np.asarray(prof["iotas"], dtype=float).copy()
-        chipf_int = np.asarray(prof["chipf"], dtype=float)
     iotas[0] = 0.0
     iotaf = _pp.iotaf_from_iotas(iotas)
     two_pi_sg = 2.0 * np.pi * float(signgs)

@@ -4,7 +4,7 @@
 The default case is the public, converged CTH-like fixture.  The report stores
 only aggregate timings, residuals, iteration counts, and normalized output
 errors; it never copies input-deck text or coil/mgrid data into the JSON.  This
-makes the harness safe to use with confidential collaborator cases too::
+makes the harness safe to use with private validation cases too::
 
     python benchmarks/run_freeboundary_multigrid.py \
       --deck /private/path/input.case --mgrid /private/path/mgrid.nc \

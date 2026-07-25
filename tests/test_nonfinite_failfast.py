@@ -159,26 +159,28 @@ def test_shareable_diagnostic_reports_high_force_axis_recovery(
     assert "4.4" not in output
 
 
-def test_shareable_diagnostic_redacts_input_parse_error(
+def test_shareable_diagnostic_accepts_open_boundary_section(
     tmp_path: Path, capsys
 ) -> None:
-    """A parser failure gets a useful code without echoing private syntax."""
-    path = tmp_path / "input.private_parse_error"
+    """Declared Fortran bounds make ``RBC(:,m)`` a legal array section."""
+    path = tmp_path / "input.private_open_section"
     path.write_text(
         """&INDATA
         MPOL = 3
         NTOR = 1
-        RBC(:,0) = 1.0
+        RBC(:,0) = 101*0.0, 1.0
+        RBC(0,1) = 0.1
+        ZBS(0,1) = 0.1
         /
         """
     )
 
-    assert diagnose(path) == 1
+    assert diagnose(path) == 0
     output = capsys.readouterr().out
-    assert "D00C_INPUT_PARSE_ERROR" in output
-    assert "private_parse_error" not in output
+    assert "input parsing: PASS" in output
+    assert "OK_FIRST_FORCE_PASS_FINITE" in output
+    assert "private_open_section" not in output
     assert "RBC" not in output
-    assert "ValueError" not in output
 
 
 def test_inert_reconstruction_flag_matches_vmec2000_disable(

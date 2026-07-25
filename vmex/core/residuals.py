@@ -42,7 +42,7 @@ modules ``solvers/fixed_boundary/residual/payload_blocks.py`` /
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal, overload
 
 import numpy as np
 
@@ -525,13 +525,36 @@ def scale_m1_preconditioner_rhs(
     return replace(force, **updates) if updates else force
 
 
+@overload
 def apply_radial_preconditioner(
     force: SpectralForce,
     *,
     matrices_R: TridiagonalMatrices,
     matrices_Z: TridiagonalMatrices,
     jmax: int,
-) -> SpectralForce:
+    return_safe: Literal[False] = False,
+) -> SpectralForce: ...
+
+
+@overload
+def apply_radial_preconditioner(
+    force: SpectralForce,
+    *,
+    matrices_R: TridiagonalMatrices,
+    matrices_Z: TridiagonalMatrices,
+    jmax: int,
+    return_safe: Literal[True],
+) -> tuple[SpectralForce, Array]: ...
+
+
+def apply_radial_preconditioner(
+    force: SpectralForce,
+    *,
+    matrices_R: TridiagonalMatrices,
+    matrices_Z: TridiagonalMatrices,
+    jmax: int,
+    return_safe: bool = False,
+) -> SpectralForce | tuple[SpectralForce, Array]:
     """Solve the R and Z radial tridiagonal systems against all force blocks.
 
     VMEC2000: ``scalfor.f`` applied to ``gcr`` (with the ``arm/ard/brm/brd/
@@ -540,15 +563,20 @@ def apply_radial_preconditioner(
     Lambda blocks pass through (see :func:`apply_lambda_preconditioner`).
     """
     updates: dict[str, Array] = {}
+    safe = jnp.asarray(True)
     for names, matrices in ((_R_BLOCKS, matrices_R), (_Z_BLOCKS, matrices_Z)):
         present = [name for name in names if getattr(force, name) is not None]
         if not present:
             continue
         stacked = jnp.stack([jnp.asarray(getattr(force, name)) for name in present], axis=-1)
-        solved = scalfor(stacked, matrices, jmax=jmax)
+        solved, block_safe = scalfor(
+            stacked, matrices, jmax=jmax, return_safe=True
+        )
+        safe = safe & block_safe
         for idx, name in enumerate(present):
             updates[name] = solved[..., idx]
-    return replace(force, **updates)
+    result = replace(force, **updates)
+    return (result, safe) if return_safe else result
 
 
 def apply_lambda_preconditioner(force: SpectralForce, faclam: Array) -> SpectralForce:

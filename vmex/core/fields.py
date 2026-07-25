@@ -636,8 +636,9 @@ def radial_force_balance_error(
 
     where the contravariant current averages follow from radial differences
     of ``<B_u>`` and ``<B_v>``.  The axis and edge rows are zero, exactly as
-    in ``calc_fbal``.  ``fields.chips`` is the effective ``chipf`` after the
-    ``NCURR=1`` current constraint, when active.
+    in ``calc_fbal``.  ``fields.chips`` is the effective half-mesh profile
+    after the ``NCURR=1`` current constraint, when active.  ``add_fluxes.f90``
+    reconstructs the full-mesh ``chipf`` used here for both current modes.
     """
     s = jnp.asarray(s)
     ns = int(s.shape[0])
@@ -660,9 +661,17 @@ def radial_force_balance_error(
     jcuru = -signgs_f * ohs * (currents.bvco[2:] - currents.bvco[1:-1])
     vpphi = 0.5 * (fields.vp[2:] + fields.vp[1:-1])
     presgrad = ohs * (fields.pressure[2:] - fields.pressure[1:-1])
+    chips = jnp.asarray(fields.chips, dtype=dtype)
+    chipf = jnp.concatenate(
+        (
+            (1.5 * chips[1] - 0.5 * chips[2])[None],
+            0.5 * (chips[1:-1] + chips[2:]),
+            (1.5 * chips[-1] - 0.5 * chips[-2])[None],
+        )
+    )
     core = (
         -jnp.asarray(phipf, dtype=dtype)[1:-1] * jcuru
-        + fields.chips[1:-1] * jcurv
+        + chipf[1:-1] * jcurv
     ) / vpphi + presgrad
     return jnp.concatenate(
         [jnp.zeros((1,), dtype=dtype), core, jnp.zeros((1,), dtype=dtype)]

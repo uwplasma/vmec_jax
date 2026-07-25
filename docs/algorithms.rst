@@ -112,6 +112,10 @@ the velocity and rescales ``delt``):
   stop at 75 (``jac75_flag``).  VMEX then offers a bounded driver-level
   recovery (two attempts by default): restart the best finite checkpoint with
   zero velocity and half the preceding initial ``DELT`` (capped at 0.5).
+  This is a continuation, not a fresh ``profil3d`` initialization: the
+  first-pass ``LMOVE_AXIS`` transfer is disabled on the driver-level retry, so
+  a still-large force cannot replace the checkpoint with a cold axis-derived
+  state.
   The force equations and stopping tolerance do not change.  Set
   ``jacobian_retries=0`` (Python) or ``--jacobian-retries 0`` (CLI) for the
   exact VMEC2000 fatal-stop policy.  Free-boundary recovery rebuilds the
@@ -149,7 +153,12 @@ system with the :math:`m^2` and :math:`(n\,\mathrm{NFP})^2` weights, the
 algorithm vectorized over all spectral columns simultaneously
 (:func:`vmex.core.preconditioner.tridiagonal_solve`, a thin arg-order
 adapter over ``solvax.tridiagonal_solve`` — the shared SOLVAX linear-solver
-package). :math:`\lambda` uses the diagonal ``faclam`` factors from
+package). Production application uses ``solvax.tridiagonal_solve_checked``:
+the unregularized Thomas pivots must pass VMEC2000's
+``abs(pivot) > 1e-8*abs(diagonal)`` condition and a backward-residual check.
+Rejected columns receive an identity preconditioner action and a typed
+diagnostic instead of an amplified finite or NaN/Inf update. :math:`\lambda`
+uses the diagonal ``faclam`` factors from
 ``lamcal.f90`` (:func:`~vmex.core.preconditioner.lamcal`):
 
 .. math::
@@ -270,6 +279,16 @@ The same interpolation seam provides hot restart
 the previous point of a parameter scan) can seed the solve directly, at the
 same or a different radial resolution.
 
+The transfer includes VMEC2000's non-geometric module state.  In particular,
+``initialize_radial.f`` resets ``fsq``, ``iter1``, ``iter2``, ``ijacob``,
+and the time-step controller, but it does **not** reset
+``fsqr/fsqz/fsql``.  VMEX therefore passes the previous stage's three
+invariant residuals into the first force evaluation on the next grid.  This
+matters in free boundary: ``residue.f90`` uses the retained
+``fsqr + fsqz`` to decide whether the carried edge-force row belongs in the
+first fine-grid norm.  Axis re-guess transfers and bounded JAC75 retries
+retain the same residual state instead of silently becoming cold starts.
+
 Free boundary (NESTOR)
 ----------------------
 
@@ -330,16 +349,17 @@ with the VMEC2000 cadence (``funct3d.f``):
      \frac{1}{\max(0.1,\; 10^{11}\,(\mathrm{fsqr}+\mathrm{fsqz}))}\right);
 
 - the vacuum pressure enters the edge force through
-  ``rbsq = bsqvac + presf(ns)`` at ``js = ns``, and the constraint reference
-  surfaces ``rcon0, zcon0`` ramp by 0.9 per iteration.
+  ``rbsq = (bsqvac + presf_ns) * R(edge) / hs`` at ``js = ns``, and the
+  constraint reference surfaces ``rcon0, zcon0`` ramp by 0.9 per iteration.
 
 :func:`vmex.core.multigrid.solve_free_boundary_multigrid` implements
 ``runvmec.f``'s radial ladder.  Increasing grids interpolate ``xstore`` using
 the same odd-m :math:`\sqrt{s}` scaling as fixed boundary; equal grids rerun
-the current state and decreasing entries are skipped.  ``ivac``, adaptive
-``nvacskip``, and the last ``bsqvac`` are carried.  Because the free-boundary
-block is guarded by ``iter2 > 1``, a new stage uses that carried pressure on
-iteration 1 and performs its first full update on iteration 2.  The
+the current state and the ladder stops at the first decreasing entry.
+``ivac``, adaptive ``nvacskip``, the exact ``rbsq`` edge product, and the
+three invariant residual channels are carried.  Because the free-boundary
+block is guarded by ``iter2 > 1``, a new stage uses that carried edge product
+on iteration 1 and performs its first full update on iteration 2.  The
 resolution-specific NESTOR basis, Green-function program, axis-current
 filament program, cached potential matrix, and traced cadence loop are selected
 or rebuilt for the new stage.  Vacuum activates only once across the ladder.

@@ -17,13 +17,13 @@
     ]
   },
   "environment": {
-    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
     "jax_backend": "cpu",
     "jax_version": "0.11.0",
     "x64": true
   },
   "vmec2000": {
-    "wall_s": 0.9823904170189053,
+    "wall_s": 0.9156720000319183,
     "converged": true,
     "vacuum_turnons": 1,
     "stages": [
@@ -56,7 +56,7 @@
     ]
   },
   "vmex_cold": {
-    "wall_s": 10.065343208843842,
+    "wall_s": 8.61459045810625,
     "converged": true,
     "vacuum_turnons": 1,
     "stages": [
@@ -78,18 +78,18 @@
         "ftol": 1e-10,
         "niter_cap": 2500,
         "first_iteration": 1,
-        "first_fsqr": 0.00201,
-        "first_fsqz": 0.00125,
-        "first_fsql": 1.52e-05,
+        "first_fsqr": 1.73,
+        "first_fsqz": 0.887,
+        "first_fsql": 1.53e-05,
         "iterations": 340,
-        "fsqr": 9.72e-11,
+        "fsqr": 9.69e-11,
         "fsqz": 2.28e-11,
-        "fsql": 2.44e-11
+        "fsql": 2.45e-11
       }
     ]
   },
   "vmex_warm": {
-    "wall_s": 1.9825521658640355,
+    "wall_s": 1.1960331248119473,
     "converged": true,
     "vacuum_turnons": 1,
     "stages": [
@@ -111,21 +111,21 @@
         "ftol": 1e-10,
         "niter_cap": 2500,
         "first_iteration": 1,
-        "first_fsqr": 0.00201,
-        "first_fsqz": 0.00125,
-        "first_fsql": 1.52e-05,
+        "first_fsqr": 1.73,
+        "first_fsqz": 0.887,
+        "first_fsql": 1.53e-05,
         "iterations": 340,
-        "fsqr": 9.72e-11,
+        "fsqr": 9.69e-11,
         "fsqz": 2.28e-11,
-        "fsql": 2.44e-11
+        "fsql": 2.45e-11
       }
     ],
-    "peak_rss_mb": 3421.749248
+    "peak_rss_mb": 3982.753792
   },
   "final_wout_parity": {
-    "rmnc_scale_relative_max": 6.101819389044875e-05,
-    "zmns_scale_relative_max": 0.0003593757378372186,
-    "iotaf_scale_relative_max": 1.52135512200139e-06,
-    "wb_relative": 5.9358469873606814e-08
+    "rmnc_scale_relative_max": 6.079271399094438e-05,
+    "zmns_scale_relative_max": 0.00035877512680282587,
+    "iotaf_scale_relative_max": 1.994041086342155e-06,
+    "wb_relative": 6.065743061267379e-08
   }
 }

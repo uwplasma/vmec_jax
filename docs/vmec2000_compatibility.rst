@@ -116,7 +116,8 @@ Equilibrium capability matrix
    * - Fixed-boundary ``NS_ARRAY``
      - parity-regressed
      - Increasing stages interpolate the final state, equal stages rerun, and
-       decreasing stages are skipped as in ``runvmec.f``.
+       ``readin.f`` ends the active ladder at the first decreasing or
+       nonpositive entry.
    * - Free-boundary ``NS_ARRAY``
      - implemented by PR #70
      - Plasma state, ``ivac``, adaptive ``nvacskip``, boundary pressure, and
@@ -190,17 +191,23 @@ Core grid, profiles, and geometry
      - implemented
      - Radial resolution-continuation ladder.  The explicit old-style
        ``NS_ARRAY(1)=0`` form expands through ``NSIN`` to ``[NSIN,31]``.
+       ``readin.f`` accepts a positive nondecreasing prefix (equal grids
+       rerun) and excludes the first decreasing/nonpositive value and its tail.
    * - ``FTOL_ARRAY``
      - implemented
-     - Per-stage physical-force stopping tolerance.
+     - Per-stage physical-force stopping tolerance.  Repeated dense/indexed
+       namelist assignments overlay in source order.  An explicit zero first
+       entry generates VMEC2000's geometric ``1e-8 -> FTOL`` ladder.
    * - ``FTOL``
-     - deliberate divergence
-     - Accepted as a useful scalar fallback.  In the audited VMEC2000 source,
-       the initialized nonzero ``FTOL_ARRAY(1)`` can make scalar ``FTOL``
-       ineffective unless the array sentinel is also changed.
+     - implemented
+     - Used directly for a single grid when ``FTOL_ARRAY(1)=0`` and as the
+       final target of the generated multigrid tolerance ladder.
    * - ``NITER_ARRAY, NITER``
      - implemented
-     - VMEC2000's ``ALL(NITER_ARRAY==-1) -> NITER`` fallback is reproduced.
+     - VMEC2000's ``ALL(NITER_ARRAY==-1) -> NITER`` fallback is reproduced;
+       any explicit array write preserves unassigned ``-1`` elements.  Such a
+       stage executes one force/evolution pass before the ``iter2 >= niter``
+       limit is observed.
    * - ``DELT, TCON0, NSTEP``
      - implemented
      - Initial time step, spectral-condensation multiplier, and print cadence.
@@ -233,8 +240,9 @@ Core grid, profiles, and geometry
        ``read_indata_namelist``.
    * - ``RBC, ZBS, RBS, ZBC``
      - implemented
-     - Scalar, one-dimensional section, and multidimensional Fortran namelist
-       assignments are supported.
+     - Scalar, starting-element, and multidimensional Fortran namelist
+       sections are supported with declared bounds, inclusive section limits,
+       first-subscript-fastest order, and source-ordered overlay.
    * - ``TVOLUME, LVOLUME_RFIX``
      - rejected when active
      - Positive target-volume rescaling is not silently omitted.
@@ -252,7 +260,10 @@ Force, axis, and iteration controls
    * - ``LFORBAL``
      - implemented by PR #70
      - Selects VMEC2000's non-variational average-force replacement for the
-       ``m=1,n=0`` R/Z channels.
+       ``m=1,n=0`` R/Z channels.  ``calc_fbal`` consumes full-mesh ``chipf``
+       reconstructed from the effective half-mesh ``chips`` by the
+       ``add_fluxes.f90`` formulas for both ``NCURR`` modes; WOUT uses the
+       same reconstruction.
    * - ``LMOVE_AXIS``
      - implemented by PR #70
      - Enables the first-pass ``irst=4`` axis re-guess when the finite force sum
@@ -332,7 +343,8 @@ VMEX uses this explicit contract:
      - Meaning
    * - ``NONE`` or ``DEFAULT``
      - implemented
-     - VMEC-parity 1-D radial tridiagonal preconditioner only.
+     - VMEC-parity 1-D radial tridiagonal plus lambda preconditioner.  These
+       spellings disable only the optional 2-D block preconditioner.
    * - ``GMRES``
      - deliberate divergence
      - Exact JAX JVP of the preconditioned force, solved matrix-free by
@@ -349,6 +361,15 @@ VMEX uses this explicit contract:
 after the minimum-iteration gate.  An explicit Python
 :class:`~vmex.core.preconditioner_2d.Prec2DConfig` remains the VMEX-native
 advanced interface.
+
+The production radial solve uses SOLVAX's checked tridiagonal interface.  It
+replays VMEC2000 ``serial_tridslv``'s unregularized modified-pivot test at the
+same ``1e-8`` relative threshold and additionally verifies a normwise backward
+residual.  VMEC2000 executes a process-wide ``STOP`` on a rejected pivot;
+VMEX instead applies the identity action only to rejected coefficient columns,
+keeps the update finite, and reports
+``D04E_RADIAL_PRECONDITIONER_REJECTED``.  Well-conditioned columns retain the
+ordinary platform-selected Thomas/fused solve and its existing parity tests.
 
 Reconstruction, anisotropy, and legacy output controls
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -491,6 +512,7 @@ Multigrid
    In VMEC terminology, a radial *resolution-continuation ladder*
    (``NS_ARRAY``), not a V-cycle correction method.  Each stage performs a
    nonlinear equilibrium solve and transfers the state to the next stage.
+   Fixed and free boundary use the same normalized nondecreasing prefix.
 
 Hot restart
    Seeding a solve with an existing spectral state.  Fixed-boundary hot restart
@@ -508,8 +530,10 @@ Preconditioned update residual
 
 ``LFORBAL``
    Replaces selected R/Z force coefficients with a non-variational
-   flux-averaged force-balance form.  It changes the force operator and must be
-   propagated through setup, solve, diagnostics, and differentiation.
+   flux-averaged force-balance form.  Its radial force uses full-mesh
+   ``phipf/chipf`` and half-mesh current/pressure differences exactly as
+   ``fbal.f``/``add_fluxes.f90`` specify.  It changes the force operator and
+   must be propagated through setup, solve, diagnostics, and differentiation.
 
 ``LMOVE_AXIS``
    Enables the VMEC2000 first-force axis-recovery control transfer.  It is not
@@ -558,12 +582,13 @@ Open-PR ownership and merge preservation
        Production enforcement and the complete no-silent-mode policy belong to
        the revised #70 stack and must survive merge.
    * - #70
-     - Free-boundary multigrid plus collaborator fixes
+     - Free-boundary multigrid and VMEC2000 parity hardening
      - Owns multidimensional namelist sections, APHI/profile parsing, finite
        first-force diagnosis, exact single-transfer axis recovery, LFORBAL,
-       bounded JAC75 best-checkpoint recovery, angular-grid risk diagnostics,
-       free-boundary vacuum continuation/rebuild, effective fallback metadata,
-       preconditioner semantics, and this compatibility ledger.
+       full-mesh force-balance profiles, bounded JAC75 best-checkpoint recovery,
+       angular-grid risk diagnostics, free-boundary vacuum
+       continuation/rebuild, guarded radial solves, effective fallback
+       metadata, preconditioner semantics, and this compatibility ledger.
    * - #71
      - Hot-restart example/documentation
      - Depends on #70's free-boundary multigrid behavior; keep after #70.
@@ -577,6 +602,32 @@ Open-PR ownership and merge preservation
    * - #74
      - Bounded nightly validation
      - CI scheduling/limits only; no solver semantics.
+
+Public integrated stress gate
+-----------------------------
+
+``tests/test_vmec2000_feature_stress.py`` constructs a reproducible difficult
+case solely from the tracked public
+``input.serial2500170_surface_points_mpol12_ntor12`` boundary.  The stress
+header combines ``MPOL=13``, ``NTOR=9`` (238 modes), no supplied axis,
+``LFORBAL=T``, ``PRECON_TYPE='NONE'``, compact multidimensional boundary
+sections, repeated dense array overlays, an ``APHI`` starting-element write,
+and a four-stage ``21,34,55,89`` ladder.  The mandatory gate parses the exact
+combination and reaches a finite first force with automatic axis recovery and
+an accepted radial solve.  The full gate runs the 21-surface fixed-boundary
+problem to the VMEC2000 equilibrium and pins its residual channels, energy,
+axis, iteration count, and reset count.
+
+The same PR's public free-boundary matrix uses the bundled CTH-like mgrid
+fixtures to cover one-time vacuum activation, increasing/equal radial grids,
+NESTOR structure rebuild/reuse, carried ``ivac/nvacskip/rbsq`` and invariant
+residuals, first-fine-grid edge-force norms, evolved-edge hot restart,
+``LFORBAL``, ``PRECON_TYPE='NONE'``, active VMEX GMRES, JAC75 checkpoint
+recovery, and WOUT comparison.  Its ``7 -> 15`` converged trajectory pins the
+same first fine-grid ``FSQR/FSQZ/FSQL`` screen row as local VMEC2000 before
+comparing the final WOUT.  The ESSOS/SIMSOPT adapters and free-boundary
+AD-versus-FD tests remain separate so an optional external package cannot
+weaken the mandatory mgrid/NESTOR gates.
 
 Research-grade completion criteria
 ----------------------------------
@@ -599,6 +650,6 @@ A remaining row is complete only when all applicable evidence exists:
 The highest-priority unimplemented parity work exposed by this audit is:
 VMEC2000 continuation controls (``PRE_NITER``, ``MAX_MAIN_ITERATIONS``,
 ``LGIVEUP``), target-volume rescaling, the non-GMRES 2-D preconditioner modes,
-TRIP3D/reconstruction/RFP/ANIMEC physics where required by collaborators, a
+TRIP3D/reconstruction/RFP/ANIMEC physics where required by research programs, a
 true NESTOR equilibrium derivative, and complete asymmetric NESTOR WOUT
 structures.

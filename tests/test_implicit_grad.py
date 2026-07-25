@@ -411,7 +411,7 @@ def test_gradient_independent_of_iteration_policy(solovev):
 
 def test_iota_edge_gradient_vs_frozen_path_fd():
     """``d(iota_edge)/d(boundary)`` on the 3D ``ncurr=1`` case — the hard case
-    from the collaborator AD-vs-FD feedback.  ``iota`` is derived from the
+    from the solver-sensitive AD-vs-FD regression.  ``iota`` is derived from the
     current-constrained ``chips``, so the metric reads the converged solver
     state and is *solver-sensitive*: a naive re-solve FD at ``p ± h`` lets the
     convergence logic re-form and gives the wrong answer (measured, ``h=1e-4``):

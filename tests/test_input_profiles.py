@@ -66,6 +66,7 @@ def test_vmecpp_json_example() -> None:
     assert new.lfreeb is False  # VMEC++ default
     assert new.gamma == 0.0  # default (JSON alias: adiabatic_index)
     assert new.mgrid_file == "NONE"
+    assert new.precon_type == "NONE"
     assert new.lmove_axis is True
 
     # And it survives both writers.
@@ -126,6 +127,65 @@ def test_legacy_niter_scalar_fills_the_multigrid_ladder() -> None:
         "&INDATA\nNS_ARRAY = 7, 15\nNITER = 321\n/\n"
     )
     np.testing.assert_array_equal(inp.niter_array, [321, 321])
+
+
+def test_readin_stops_at_first_decreasing_ns_entry() -> None:
+    """Later resolutions do not resume after readin.f closes multi_ns_grid."""
+    inp = VmecInput.from_indata_text(
+        """&INDATA
+        NS_ARRAY = 21, 34, 20, 55
+        FTOL_ARRAY = 1e-7, 1e-8, 1e-9, 1e-10
+        NITER_ARRAY = 100, 200, 300, 400
+        /
+        """
+    )
+    np.testing.assert_array_equal(inp.ns_array, [21, 34])
+    np.testing.assert_array_equal(inp.ftol_array, [1e-7, 1e-8])
+    np.testing.assert_array_equal(inp.niter_array, [100, 200])
+
+
+def test_zero_first_ftol_builds_vmec2000_geometric_ladder() -> None:
+    """readin.f interpolates from 1e-8 to scalar FTOL across the ladder."""
+    inp = VmecInput.from_indata_text(
+        """&INDATA
+        NS_ARRAY = 21, 34, 55, 89
+        FTOL = 1e-14
+        FTOL_ARRAY(1) = 0.0
+        /
+        """
+    )
+    expected = 1.0e-8 * (1.0e-6 ** (np.arange(4) / 3.0))
+    np.testing.assert_allclose(inp.ftol_array, expected, rtol=1e-15)
+    assert inp.ftol_array[-1] == pytest.approx(1e-14)
+
+
+def test_partial_niter_array_preserves_unassigned_minus_one_entries() -> None:
+    """Any explicit NITER_ARRAY write disables the all--1 scalar fallback."""
+    inp = VmecInput.from_indata_text(
+        """&INDATA
+        NS_ARRAY = 21, 34, 55
+        NITER = 999
+        NITER_ARRAY(2) = 400
+        /
+        """
+    )
+    np.testing.assert_array_equal(inp.niter_array, [-1, 400, -1])
+
+
+def test_partial_niter_minus_one_executes_one_vmec_pass() -> None:
+    """eqsolve evaluates once before its ``iter2 >= niter`` termination."""
+    from vmex.core.solver import prepare_runtime, resolution_from_input
+
+    inp = VmecInput.from_indata_text(
+        """&INDATA
+        NS_ARRAY = 7, 11
+        NITER_ARRAY(2) = 400
+        /
+        """
+    )
+    runtime = prepare_runtime(inp, resolution_from_input(inp, ns=7))
+    assert inp.niter_array[0] == -1
+    assert runtime.max_iterations == 1
 
 
 @pytest.mark.parametrize(
@@ -359,6 +419,75 @@ def test_boundary_section_accepts_negative_stride() -> None:
         """
     )
     np.testing.assert_array_equal(inp.rbc[:, 0], [3.0, 0.0, 2.0, 0.0, 1.0])
+
+
+def test_negative_stride_section_uses_fortran_default_bounds() -> None:
+    """Omitted bounds reverse the declared extent when the stride is negative."""
+    values = ", ".join(str(value) for value in range(1, 21))
+    inp = VmecInput.from_indata_text(
+        f"""&INDATA
+        APHI(::-1) = {values}
+        /
+        """
+    )
+    np.testing.assert_array_equal(inp.aphi[:3], [20.0, 19.0, 18.0])
+
+
+def test_repeated_dense_assignments_overlay_in_source_order() -> None:
+    """A short later assignment preserves the earlier Fortran array tail."""
+    inp = VmecInput.from_indata_text(
+        """&INDATA
+        NS_ARRAY = 11, 25, 49, 75
+        FTOL_ARRAY = 1e-7, 1e-8, 1e-9, 1e-10
+        FTOL_ARRAY = 1e-6, 1e-11
+        /
+        """
+    )
+    np.testing.assert_array_equal(inp.ns_array, [11, 25, 49, 75])
+    np.testing.assert_array_equal(inp.ftol_array, [1e-6, 1e-11, 1e-9, 1e-10])
+
+
+def test_dense_and_indexed_assignments_honor_source_order() -> None:
+    """Later dense writes override earlier indexed elements, not vice versa."""
+    inp = VmecInput.from_indata_text(
+        """&INDATA
+        APHI(2) = 0.25
+        APHI = 0.0, 1.0
+        APHI(3) = 0.5
+        /
+        """
+    )
+    np.testing.assert_array_equal(inp.aphi[:4], [0.0, 1.0, 0.5, 0.0])
+
+
+def test_multidimensional_starting_element_continues_in_fortran_order() -> None:
+    """Multiple values after ``RBC(n,m)`` continue with n varying fastest."""
+    inp = VmecInput.from_indata_text(
+        """&INDATA
+        MPOL = 2
+        NTOR = 2
+        RBC(-1,0) = 1.0, 2.0, 3.0, 4.0
+        /
+        """
+    )
+    np.testing.assert_array_equal(inp.rbc[:, 0], [0.0, 1.0, 2.0, 3.0, 4.0])
+
+
+@pytest.mark.parametrize("designator", ["RBC", "RBC(:,0)", "RBC(-101:,0)"])
+def test_dense_and_open_boundary_sections_use_declared_fortran_bounds(
+    designator: str,
+) -> None:
+    """Whole/open sections are resolved from VMEC2000's allocated bounds."""
+    inp = VmecInput.from_indata_text(
+        f"""&INDATA
+        MPOL = 2
+        NTOR = 1
+        {designator} = 101*0.0, 2.5
+        /
+        """
+    )
+    assert inp.rbc[1, 0] == 2.5  # physical n=0 at row ntor
+    assert np.count_nonzero(inp.rbc) == 1
 
 
 def test_indexed_legacy_axis_overlays_vmec_axis() -> None:

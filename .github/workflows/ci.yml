@@ -22,9 +22,8 @@ permissions:
 
 # Sharded CI (plan.md Phase-2 review item 1): bounded parallel test jobs, plus
 # a fast lint gate (ruff + mypy) and a coverage gate that combines the parity
-# and gradient shards and enforces >= 95% on vmex. Manual/nightly runs add the
-# full-physics tests below. The explicit job limits include dependency setup,
-# coverage handling, and hosted-runner variance.
+# and gradient shards and enforces >= 95% on vmex.  The explicit job limits
+# include dependency setup, coverage handling, and hosted-runner variance.
 jobs:
   lint:
     # Fast fail-first gate (plan Item I.3): ruff + mypy over the whole tree,
@@ -127,7 +126,7 @@ jobs:
           if [ "${{ matrix.shard }}" = "field" ]; then
             FILES="tests/mirror/test_exterior.py \
                    tests/mirror/test_free_boundary.py \
-                   tests/mirror/test_mirror_geometry_fields.py"
+                   tests/mirror/test_geometry_fields.py"
           elif [ "${{ matrix.shard }}" = "equilibrium" ]; then
             FILES="tests/mirror/test_implicit.py \
                    tests/mirror/test_isotropic_forces.py \
@@ -142,14 +141,14 @@ jobs:
   parity:
     name: Parity suite ${{ matrix.shard }} (goldens, coverage)
     runs-on: ubuntu-latest
-    # The former 431-test catch-all passed in 15-20 min on healthy runners but
-    # repeatedly lost slow shared runners. Shards c/e preserve its exact test
-    # set with enough headroom to distinguish runner variance from a hang.
+    # Headroom for slow shared runners: the golden solves run ~15-20 min on a
+    # healthy runner but tip over a tighter limit on a slow one (the suite
+    # content is unchanged). 35 absorbs that variance without masking a hang.
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        shard: [a, b, c, d, e]
+        shard: [a, b, c1, c2, d]
     steps:
       - uses: actions/checkout@v6.0.2
 
@@ -182,8 +181,8 @@ jobs:
           print("golden dir:", mod.resolve_golden_dir())
           EOF
 
-      # Five bounded shards.  The xdist dist MODE is
-      # chosen PER SHARD by whether its modules share an expensive fixture:
+      # Five bounded shards.  The xdist dist MODE is chosen PER SHARD by
+      # whether its modules share an expensive fixture:
       #   * loadscope groups a whole module onto ONE worker, so module-scoped
       #     equilibrium fixtures (omnigenity qi_eq/tok_eq, bootstrap eq,
       #     stability vacuum/highbeta/shaped) are solved ONCE, not once-per-
@@ -202,12 +201,13 @@ jobs:
       #   a = heaviest solver-golden modules, including all free-boundary
       #       modules so their JAX caches leave with this bounded shard instead
       #       of accumulating in the catch-all worker processes;
-      #   c = the slow fixture-sharing modules from the former catch-all;
-      #   e = the remaining catch-all modules.
+      #   c1/c2 = the former catch-all, split explicitly after two hosted
+      #           runners were externally shut down above 84% despite no test
+      #           failure.  Explicit file ownership keeps coverage disjoint.
       # Together they cover the whole non-gradient, non-example core suite once;
       # the separate mirror matrix owns tests/mirror. Therefore
       # every test file appears in exactly one shard (coverage gate combines
-      # a+b+c+d+e), so coverage is invariant under this reshuffle.
+      # a+b+c+d), so coverage is invariant under this reshuffle.
       - name: Run parity shard ${{ matrix.shard }} with coverage
         env:
           JAX_ENABLE_X64: "1"
@@ -223,34 +223,58 @@ jobs:
           B_FILES="tests/test_golden_digests.py \
                    tests/test_bootstrap.py \
                    tests/test_wout_golden.py"
-          C_FILES="tests/test_input_profiles.py \
-                   tests/test_setup.py \
-                   tests/test_profiles.py \
-                   tests/test_omnigenity.py \
-                   tests/test_implicit_multi_rhs.py \
-                   tests/test_parallel.py \
-                   tests/test_optimize_penalty.py \
-                   tests/test_lgradb.py \
-                   tests/test_package_api.py \
-                   tests/test_stability.py \
-                   tests/test_multigrid_interp.py"
+          C1_FILES="tests/test_baseline_benchmark.py \
+                    tests/test_boozer_tables.py \
+                    tests/test_cli.py \
+                    tests/test_cli_device.py \
+                    tests/test_compat.py \
+                    tests/test_coverage_margin.py \
+                    tests/test_device.py \
+                    tests/test_device_parity_tool.py \
+                    tests/test_doctor.py \
+                    tests/test_fetch_assets.py \
+                    tests/test_forces_residuals.py \
+                    tests/test_fourier_transforms.py \
+                    tests/test_geometry_fields.py \
+                    tests/test_gpu_ci.py \
+                    tests/test_implicit_device.py \
+                    tests/test_implicit_multi_rhs.py \
+                    tests/test_input_profiles.py \
+                    tests/test_lgradb.py \
+                    tests/test_mgrid.py \
+                    tests/test_multigrid_interp.py \
+                    tests/test_nonfinite_failfast.py"
+          C2_FILES="tests/test_omnigenity.py \
+                    tests/test_optimization_convergence.py \
+                    tests/test_optimize_penalty.py \
+                    tests/test_package_api.py \
+                    tests/test_packaging_metadata.py \
+                    tests/test_parallel.py \
+                    tests/test_plotting_boozer.py \
+                    tests/test_preconditioner.py \
+                    tests/test_preconditioner_2d.py \
+                    tests/test_printing.py \
+                    tests/test_profiles.py \
+                    tests/test_setup.py \
+                    tests/test_setup_extras.py \
+                    tests/test_single_stage_simultaneous.py \
+                    tests/test_solver_axis_initialization.py \
+                    tests/test_stability.py \
+                    tests/test_step_control.py \
+                    tests/test_turbulence.py \
+                    tests/test_validation_guards.py \
+                    tests/test_vmec2000_feature_stress.py"
           D_FILES="tests/test_optimize.py"
           if [ "${{ matrix.shard }}" = "a" ]; then
             pytest -q -n 4 --dist loadscope $A_FILES --durations=15 --cov=vmex --cov-report=term
           elif [ "${{ matrix.shard }}" = "b" ]; then
             pytest -q -n 4 --dist load $B_FILES --durations=15 --cov=vmex --cov-report=term
+          elif [ "${{ matrix.shard }}" = "c1" ]; then
+            pytest -q -n 4 --dist loadscope $C1_FILES --durations=15 --cov=vmex --cov-report=term
+          elif [ "${{ matrix.shard }}" = "c2" ]; then
+            pytest -q -n 4 --dist loadscope $C2_FILES --durations=15 --cov=vmex --cov-report=term
           elif [ "${{ matrix.shard }}" = "d" ]; then
             pytest -q -n 4 --dist load $D_FILES --durations=15 --cov=vmex --cov-report=term
-          elif [ "${{ matrix.shard }}" = "c" ]; then
-            pytest -q -n 4 --dist loadscope $C_FILES --durations=15 --cov=vmex --cov-report=term
-          else
-            IGNORES=$(for f in $A_FILES $B_FILES $C_FILES $D_FILES; do echo "--ignore=$f"; done)
-            pytest -q -n 4 --dist loadscope tests \
-              --ignore=tests/mirror \
-              --ignore=tests/test_implicit_grad.py \
-              --ignore=tests/test_examples.py \
-              $IGNORES \
-              --durations=15 --cov=vmex --cov-report=term
           fi
 
       - name: Stash coverage data
@@ -391,7 +415,7 @@ jobs:
 
       - name: Combine shards and enforce the gate
         run: |
-          coverage combine coverage.parity-a coverage.parity-b coverage.parity-c coverage.parity-d coverage.parity-e coverage.gradient-a coverage.gradient-b coverage.gradient-c coverage.examples
+          coverage combine coverage.parity-a coverage.parity-b coverage.parity-c1 coverage.parity-c2 coverage.parity-d coverage.gradient-a coverage.gradient-b coverage.gradient-c coverage.examples
           # The mirror release audit reaches 95% only after appending nightly
           # fixed/free adjoint tests. The fast core artifacts intentionally
           # exclude those tests, so do not mix a partial mirror number into
@@ -463,20 +487,15 @@ jobs:
     runs-on: ubuntu-latest
     # A sequential whole-suite job reached only 39% before the previous
     # 150-minute limit, and the core job later lost hosted runners three times
-    # after 37/79/81 minutes. Keep exact aggregate RUN_FULL coverage, split
-    # core alphabetically, isolate each stateful optimization campaign, and
-    # isolate free-boundary, examples, and long LASYM/mirror campaigns on
-    # fresh workers.
-    # The ordinary gradient jobs own non-full implicit tests; the dedicated
-    # shard below adds its full-marked cases without rerunning that large JAX
-    # suite in one process.
+    # after 37/79/81 minutes. Keep exact RUN_FULL coverage, split core
+    # alphabetically, isolate each stateful optimization campaign, and isolate
+    # examples/mirror so every shard stays bounded on a fresh worker.
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        shard: [core-a-f, core-freeboundary, core-g-h, core-i-m, implicit-stability, core-n-s,
-                core-t-z, lasym-free, opt-qa, opt-qh, opt-qp, examples, mirror-field,
-                mirror-beta-observables, mirror-equilibrium, mirror-spline]
+        shard: [core-a-f, core-g-m, core-n-s, core-t-z, opt-qa, opt-qh,
+                opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
       - uses: actions/checkout@v6.0.2
 
@@ -513,35 +532,12 @@ jobs:
           case "${{ matrix.shard }}" in
             core-a-f)
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
-                     --ignore=tests/test_cli_freeboundary.py \
-                     --ignore=tests/test_freeboundary.py \
-                     --ignore=tests/test_freeboundary_diff.py \
-                     --ignore=tests/test_freeboundary_multigrid.py \
                      --ignore-glob=tests/test_[g-z]*.py"
               ;;
-            core-freeboundary)
-              FILES="tests/test_cli_freeboundary.py \
-                     tests/test_freeboundary.py \
-                     tests/test_freeboundary_diff.py \
-                     tests/test_freeboundary_multigrid.py"
-              ;;
-            core-g-h)
+            core-g-m)
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
                      --ignore-glob=tests/test_[a-f]*.py \
-                     --ignore-glob=tests/test_[i-z]*.py"
-              ;;
-            core-i-m)
-              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
-                     --ignore=tests/test_implicit_grad.py \
-                     --ignore=tests/test_lasym_free_convergence.py \
-                     --ignore-glob=tests/test_[a-h]*.py \
                      --ignore-glob=tests/test_[n-z]*.py"
-              ;;
-            implicit-stability)
-              # Ordinary gradient a/b/c already own every non-full test in
-              # this module; this shard adds its full-marked DMerc, jdotb,
-              # and Glasser D_R implicit-AD cases.
-              FILES="tests/test_implicit_grad.py -m full"
               ;;
             core-n-s)
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
@@ -552,9 +548,6 @@ jobs:
             core-t-z)
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
                      --ignore-glob=tests/test_[a-s]*.py"
-              ;;
-            lasym-free)
-              FILES="tests/test_lasym_free_convergence.py"
               ;;
             opt-qa)
               FILES="tests/test_optimization_convergence.py::test_qa_reaches_precise"
@@ -571,11 +564,7 @@ jobs:
             mirror-field)
               FILES="tests/mirror/test_exterior.py \
                      tests/mirror/test_free_boundary.py \
-                     tests/mirror/test_mirror_geometry_fields.py \
-                     --deselect=tests/mirror/test_free_boundary.py::test_unbounded_exterior_beta_observables_converge_with_resolution"
-              ;;
-            mirror-beta-observables)
-              FILES="tests/mirror/test_free_boundary.py::test_unbounded_exterior_beta_observables_converge_with_resolution"
+                     tests/mirror/test_geometry_fields.py"
               ;;
             mirror-equilibrium)
               FILES="tests/mirror/test_implicit.py \
@@ -590,14 +579,13 @@ jobs:
               ;;
           esac
           # Some optimization tests are silent for more than 15 minutes.
-          # Keep long shards observable without changing pytest semantics.
+          # Keep the hosted runner live without changing pytest semantics.
           pytest -q $FILES --durations=25 &
           pytest_pid=$!
           while kill -0 "$pytest_pid" 2>/dev/null; do
             sleep 60
             if kill -0 "$pytest_pid" 2>/dev/null; then
               echo "pytest shard ${{ matrix.shard }} still running (${SECONDS}s)"
-              awk '/VmRSS|VmHWM/ {print "  " $0}' "/proc/$pytest_pid/status" 2>/dev/null || true
             fi
           done
           wait "$pytest_pid"

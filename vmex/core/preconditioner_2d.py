@@ -42,10 +42,11 @@ could equally drive the block-tridiagonal :func:`solvax.block_thomas_truncated`
 route if the blocks were assembled explicitly (they are not, by design — the
 matrix-free HVP keeps peak memory at one force graph).
 
-Wiring lives in :mod:`vmex.core.solver` (``_make_body``): when
-``precon_type != "NONE"`` the traced iteration replaces the 1D force direction
-by :func:`newton_direction` under a ``lax.cond`` gated on the activation
-predicate, so the default 1D-only path is untouched.
+Wiring lives in :mod:`vmex.core.solver` (``_make_body``): when VMEX's explicit
+``PRECON_TYPE='GMRES'`` mode is selected, the traced iteration replaces the
+1D force direction by :func:`newton_direction` under a ``lax.cond`` gated on
+the activation predicate.  ``NONE`` and ``DEFAULT`` retain VMEC2000's ordinary
+1D radial/lambda preconditioner.
 """
 
 from __future__ import annotations

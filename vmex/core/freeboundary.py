@@ -1079,6 +1079,10 @@ def _solve_free_boundary_stage(
     jacobian_retries: int = 2,
     constraint_continuation: tuple[Array, Array] | None = None,
     reuse_vacuum_cache: bool = False,
+    allow_initial_axis_reguess: bool = True,
+    residual_continuation: (
+        tuple[float | Array, float | Array, float | Array] | None
+    ) = None,
 ) -> _FreeBoundaryStageResult:
     """Internal single-grid free-boundary stage with multigrid continuation.
 
@@ -1111,6 +1115,8 @@ def _solve_free_boundary_stage(
         lconm1=lconm1, precon_type=precon_type,
         prec2d_threshold=prec2d_threshold, prec2d=prec2d,
     )
+    if not allow_initial_axis_reguess:
+        rt = replace(rt, lmove_axis=False)
     ns = int(resolution.ns)
     dtype = rt.setup.s_full.dtype
 
@@ -1150,7 +1156,11 @@ def _solve_free_boundary_stage(
     # guard before iteration 1.
     _, _initial_geometry = _geometry(_init_state, rt)
     _initial_jacobian = half_mesh_jacobian(_initial_geometry, s=rt.setup.s_full)
-    if bool(_initial_jacobian.jacobian_sign_changed) and ns >= 3:
+    if (
+        allow_initial_axis_reguess
+        and bool(_initial_jacobian.jacobian_sign_changed)
+        and ns >= 3
+    ):
         if verbose:
             emit(" INITIAL JACOBIAN CHANGED SIGN!")
             emit(" TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS")
@@ -1247,7 +1257,12 @@ def _solve_free_boundary_stage(
     # An already-active multigrid stage evaluates with the free-boundary edge
     # row on its first pass, so its zero cache must have jmax=ns (not ns-1).
     rt_initial = rt_freeb if vacuum_active else rt_fixed
-    carry = _initial_carry(_init_state, rt_initial, ijacob=_initial_ijacob)
+    carry = _initial_carry(
+        _init_state,
+        rt_initial,
+        ijacob=_initial_ijacob,
+        residuals=residual_continuation,
+    )
     printed: set[int] = set()
     #: per-iteration DEL-BSQ recorded by the batched steady-state lane; rows
     #: not covered (pre-activation, turn-on pass) fall back to ``fb.delbsq``
@@ -1281,7 +1296,8 @@ def _solve_free_boundary_stage(
     # axis-dependent NESTOR filament/executables, then repeat iteration 1
     # once with ijacob=1.  The discarded triggering pass is not printed.
     carry = _iter_lane(carry, rt_initial)
-    if (int(carry.ier) == AXIS_REGUESS_FLAG
+    if (allow_initial_axis_reguess
+            and int(carry.ier) == AXIS_REGUESS_FLAG
             and int(carry.ijacob) == 0 and ns >= 3):
         if verbose:
             emit(" TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS")
@@ -1333,7 +1349,9 @@ def _solve_free_boundary_stage(
         retry_xcdot = carry.xcdot
         carry = _initial_carry(
             _init_state, rt_initial, ijacob=_initial_ijacob,
-            xcdot=retry_xcdot)
+            xcdot=retry_xcdot,
+            residuals=(carry.fsqr, carry.fsqz, carry.fsql),
+        )
         carry = _iter_lane(carry, rt_initial)
     _emit_due(final=False)
 
@@ -1505,6 +1523,8 @@ def _solve_free_boundary_stage(
             # checkpoint geometry; never reuse the failed attempt's compiled
             # dynamic cache even at an equal radial resolution.
             reuse_vacuum_cache=False,
+            allow_initial_axis_reguess=False,
+            residual_continuation=(carry.fsqr, carry.fsqz, carry.fsql),
         )
     if ier == MORE_ITER_FLAG and not error_on_no_convergence:
         result = _result_from_carry(carry, rt_freeb if fb.turned_on else rt_fixed)

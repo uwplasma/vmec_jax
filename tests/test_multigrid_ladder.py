@@ -243,15 +243,23 @@ def test_qh_ladder_wb_matches_direct_1e10_target():
     assert abs(ladder.wb / direct.wb - 1.0) < 1e-10
 
 
-def test_ladder_skips_decreasing_stages():
-    """runvmec.f: decreasing NS_ARRAY entries are skipped, equal re-run."""
-    result = multigrid.solve_multigrid(
+def test_ladder_stops_at_first_decreasing_stage():
+    """readin.f excludes the first decreasing entry and every later value."""
+    stopped = multigrid.solve_multigrid(
         _load_input("cth_like_fixed_bdy"), ns_array=[5, 9, 5, 15],
         ftol_array=[1e-8, 1e-10, 1e-10, 1e-14], niter_array=[25000],
     )
-    assert result.converged
-    np.testing.assert_allclose(result.wb, VMEC2000_LADDER_WB["cth_like_fixed_bdy"],
-                               rtol=5e-12)
+    reference = multigrid.solve_multigrid(
+        _load_input("cth_like_fixed_bdy"), ns_array=[5, 9],
+        ftol_array=[1e-8, 1e-10], niter_array=[25000],
+    )
+    assert stopped.converged and reference.converged
+    np.testing.assert_allclose(
+        [stopped.wb, stopped.wp, stopped.r00],
+        [reference.wb, reference.wp, reference.r00],
+        rtol=2e-13,
+        atol=2e-14,
+    )
 
 
 def test_ladder_forwards_explicit_2d_preconditioner(monkeypatch):
@@ -338,6 +346,7 @@ def test_jac75_best_checkpoint_retry_converges_to_same_equilibrium(
     )
     output = capsys.readouterr().out
     assert "JACOBIAN RECOVERY RETRY 1/2" in output
+    assert "TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS" not in output
     assert recovered.converged
     np.testing.assert_allclose(
         [recovered.wb, recovered.wp, recovered.r00],
@@ -391,7 +400,7 @@ def test_lforbal_thirty_rows_and_cache_refresh_match_vmec2000() -> None:
     assert result.r00 == pytest.approx(3.9897106225, rel=2e-10)
     assert result.wmhd == pytest.approx(2.5489005543, rel=2e-10)
 
-    # Collaborator regression: before this port, deleting LFORBAL produced
+    # Regression coverage: before this port, deleting LFORBAL produced
     # the same trajectory because the normal solver silently ignored the
     # flag.  The supported default-F formulation remains the established
     # VMEC2000 row and is now detectably distinct from the T formulation.

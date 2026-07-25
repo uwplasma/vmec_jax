@@ -44,7 +44,7 @@ import jax.numpy as jnp
 from .device import AUTO, _placement_device, _put_numeric_leaves, device_context
 from .errors import MORE_ITER_FLAG, SUCCESSFUL_TERM_FLAG
 from .fourier import ModeTable, mode_table
-from .input import VmecInput
+from .input import VmecInput, _vmec_ns_prefix
 from .preconditioner_2d import Prec2DConfig
 from .solver import (
     SolveResult, SpectralState, _finalize, _result_from_carry, _solve_stage,
@@ -205,9 +205,8 @@ def solve_multigrid(
     VMEC2000 ``Sources/TimeStep/runvmec.f``: for each grid ``igrid`` the
     radial resolution ``nsval = ns_array(igrid)`` is solved with tolerance
     ``ftol_array(igrid)`` and iteration cap ``niter_array(igrid)``; stages
-    with ``nsval`` *below* the best resolution reached so far are skipped
-    (``IF (nsval < ns_min) CYCLE`` — decreasing entries are ignored, equal
-    entries re-run), and each executed stage after the first starts from the
+    stop at the first decreasing entry during ``readin.f`` normalization
+    (equal entries re-run), and each executed stage after the first starts from the
     ``interp.f`` coarse -> fine interpolation (:func:`interpolate_state`) of
     the previous stage's final state.  Although ``initialize_radial.f`` reads
     ``xstore``, ``allocate_ns.f`` first overwrites it from the old ``xc``;
@@ -255,9 +254,7 @@ def solve_multigrid(
 
     Returns the final stage's :class:`~vmex.core.solver.SolveResult`.
     """
-    ns_arr = np.atleast_1d(np.asarray(
-        inp.ns_array if ns_array is None else ns_array, dtype=np.int64)).ravel()
-    ns_arr = ns_arr[: int(np.argmax(ns_arr <= 0))] if np.any(ns_arr <= 0) else ns_arr
+    ns_arr = _vmec_ns_prefix(inp.ns_array if ns_array is None else ns_array)
     if ns_arr.size == 0:
         raise ValueError("ns_array has no positive stages")
     n_stages = int(ns_arr.size)
@@ -276,13 +273,10 @@ def solve_multigrid(
 
     state: SpectralState | None = initial_state
     first_executed = True
-    ns_min = 0
+    residual_continuation = None
     carry = rt = None
     for igrid in range(n_stages):
         nsval = int(ns_arr[igrid])
-        if nsval < ns_min:      # runvmec.f: decreasing ns values are skipped
-            continue
-        ns_min = nsval
         resolution = resolution_from_input(inp, ns=nsval)
         rt = prepare_runtime(
             inp, resolution, ftol=float(ftol_arr[igrid]),
@@ -308,6 +302,7 @@ def solve_multigrid(
                 # available after interpolation and on hot starts.
                 try_axis_reguess=True,
                 jacobian_retries=jacobian_retries,
+                residual_continuation=residual_continuation,
             )
         first_executed = False
         ier = int(carry.ier)
@@ -319,6 +314,10 @@ def solve_multigrid(
         # allocate_ns.f saves old xc and copies it into the newly allocated
         # xstore before initialize_radial.f scales/interpolates that array.
         state = carry.state
+        # initialize_radial.f resets fsq/iter counters but not the three
+        # invariant residual module variables.  The next grid's residue.f90
+        # edge and m=1 startup gates therefore see this stage's final values.
+        residual_continuation = (carry.fsqr, carry.fsqz, carry.fsql)
 
     if int(carry.ier) == MORE_ITER_FLAG and not raise_on_max_iterations:
         return _result_from_carry(carry, rt)
@@ -352,8 +351,8 @@ def solve_free_boundary_multigrid(
 
     The plasma continuation follows :func:`solve_multigrid`: each increasing
     grid starts from ``interp.f`` interpolation of the preceding stage's final
-    state, equal grids rerun without interpolation, and decreasing
-    entries are skipped.  The external field is loaded once.  Resolution-
+    state, equal grids rerun without interpolation, and the ladder stops at
+    the first decreasing entry.  The external field is loaded once.  Resolution-
     specific NESTOR bases, Green-function programs, axis-current filament
     tables and traced vacuum loops are selected/rebuilt when the radial grid
     changes; equal-grid reruns reuse their dynamic vacuum cache.
@@ -362,8 +361,10 @@ def solve_free_boundary_multigrid(
     activated on a coarse stage, the next stage begins with vacuum active and
     uses the carried coarse-grid boundary pressure on iteration 1, then performs
     a full vacuum update on iteration 2 with new caches (no second turn-on
-    banner or soft restart).  If an intermediate stage reaches ``NITER`` before
-    activation, the next stage continues in the pre-activation lane.
+    banner or soft restart).  The prior stage's ``fsqr/fsqz/fsql`` values are
+    retained too, matching ``initialize_radial.f`` and its first-pass
+    ``residue.f90`` edge gate.  If an intermediate stage reaches ``NITER``
+    before activation, the next stage continues in the pre-activation lane.
 
     ``initial_state`` hot-starts the first executed stage and is interpolated
     when its radial shape differs from that stage.  It follows reset-file
@@ -382,9 +383,7 @@ def solve_free_boundary_multigrid(
     if not bool(inp.lfreeb):
         raise ValueError("solve_free_boundary_multigrid requires an LFREEB=T input")
 
-    ns_arr = np.atleast_1d(np.asarray(
-        inp.ns_array if ns_array is None else ns_array, dtype=np.int64)).ravel()
-    ns_arr = ns_arr[: int(np.argmax(ns_arr <= 0))] if np.any(ns_arr <= 0) else ns_arr
+    ns_arr = _vmec_ns_prefix(inp.ns_array if ns_array is None else ns_array)
     if ns_arr.size == 0:
         raise ValueError("ns_array has no positive stages")
     n_stages = int(ns_arr.size)
@@ -417,14 +416,11 @@ def solve_free_boundary_multigrid(
     previous_ns = int(initial_state.R_cos.shape[0]) if initial_state is not None else None
     vacuum_continuation = None
     constraint_continuation = None
-    ns_min = 0
+    residual_continuation = None
     stage_result = None
     modes = mode_table(int(inp.mpol), int(inp.ntor))
     for igrid in range(n_stages):
         nsval = int(ns_arr[igrid])
-        if nsval < ns_min:
-            continue
-        ns_min = nsval
         resolution = resolution_from_input(inp, ns=nsval)
         same_grid = previous_ns == nsval
         if state is not None and previous_ns != nsval:
@@ -475,6 +471,7 @@ def solve_free_boundary_multigrid(
                 constraint_continuation=(
                     constraint_continuation if same_grid else None),
                 reuse_vacuum_cache=bool(same_grid),
+                residual_continuation=residual_continuation,
             )
         # allocate_ns.f overwrites xstore from old xc before interp.f, so the
         # effective VMEC2000 source is the stage's final state, not its
@@ -484,6 +481,11 @@ def solve_free_boundary_multigrid(
         previous_ns = nsval
         vacuum_continuation = stage_result.vacuum
         constraint_continuation = (stage_result.rcon0, stage_result.zcon0)
+        residual_continuation = (
+            stage_result.result.fsqr,
+            stage_result.result.fsqz,
+            stage_result.result.fsql,
+        )
 
     if stage_result is None:  # defensive; positive ns_arr guarantees a stage
         raise ValueError("ns_array has no executable stages")
