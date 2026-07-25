@@ -241,8 +241,8 @@ def j_invariant_qi_maxj_residual_from_boozer(
         return ji_all, jc_all
 
     ji_all, jc_all = jax.vmap(_per_surface, in_axes=(0, 0))(b_lines, gi_b)
-    ji_pow = jnp.abs(ji_all) ** float(p_j)
-    jc_pow = jnp.abs(jc_all) ** float(p_j)
+    ji_pow = jnp.power(ji_all, float(p_j))
+    jc_pow = jnp.power(jc_all, float(p_j))
 
     residual_blocks: list[jnp.ndarray] = []
     diagnostics: dict[str, Array] = {
@@ -256,16 +256,18 @@ def j_invariant_qi_maxj_residual_from_boozer(
     }
 
     if bool(include_qi):
-        mean_jc = jnp.mean(jc_pow, axis=1, keepdims=True)
-        mean_ji = jnp.mean(ji_pow, axis=1, keepdims=True)
-        denom = jnp.mean(ji_pow, axis=(1, 2), keepdims=True) + jnp.mean(jc_pow, axis=(1, 2), keepdims=True)
-        sqrt_w = jnp.sqrt(w_arr)[:, None, None]
-        qi_res_i = (ji_pow - mean_jc) / (denom + 1.0e-10)
-        qi_res_c = (jc_pow - mean_ji) / (denom + 1.0e-10)
-        qi_block = float(qi_weight) * sqrt_w * jnp.concatenate([qi_res_i, qi_res_c], axis=1)
-        qi_block = jnp.ravel(qi_block) / jnp.sqrt(jnp.asarray(2.0 * nalpha * n_bounce, dtype=jnp.float64))
+        nalpha_f = jnp.asarray(float(nalpha), dtype=jnp.float64)
+        sum_ji = jnp.sum(ji_pow, axis=1)
+        sum_jc = jnp.sum(jc_pow, axis=1)
+        sum_ji_sq = jnp.sum(ji_pow * ji_pow, axis=1)
+        sum_jc_sq = jnp.sum(jc_pow * jc_pow, axis=1)
+        qi_pair_sum = nalpha_f * (sum_ji_sq + sum_jc_sq) - 2.0 * sum_ji * sum_jc
+        qi_num = jnp.sum(qi_pair_sum, axis=1)
+        mean_denom = ((jnp.sum(sum_ji + sum_jc, axis=1) / (2.0 * float(n_bounce))) ** 2) + 1.0e-10
+        qi_surface = jnp.sqrt(jnp.maximum(qi_num, 0.0) / mean_denom)
+        qi_block = float(qi_weight) * jnp.sqrt(w_arr) * qi_surface
         residual_blocks.append(qi_block)
-        diagnostics["qi_surface"] = jnp.sqrt(jnp.mean((qi_res_i**2 + qi_res_c**2), axis=(1, 2)))
+        diagnostics["qi_surface"] = qi_surface
         diagnostics["qi_objective"] = jnp.sum(qi_block * qi_block)
     else:
         diagnostics["qi_surface"] = jnp.zeros((nsurf,), dtype=jnp.float64)
@@ -278,15 +280,24 @@ def j_invariant_qi_maxj_residual_from_boozer(
         else:
             ds = s_b[1:] - s_b[:-1]
             ds = jnp.where(jnp.abs(ds) > 0.0, ds, 1.0e-10)
-            jc_lo = jc_pow[:-1, :, 1:]
-            jc_hi = jc_pow[1:, :, 1:]
-            jc_lo_mean = jnp.mean(jc_lo, axis=1, keepdims=True)
-            slope = (jc_hi - jc_lo_mean) / (ds[:, None, None] * (0.5 * (jc_hi + jc_lo_mean) + 1.0e-10))
+            jc_lo = jc_pow[:-1, 1:, :]
+            jc_hi = jc_pow[1:, 1:, :]
+            ds3 = ds[:, None, None]
+
+            def _surface_pair_slope(hi_surface, lo_surface, ds_surface):
+                def _alpha_slope(hi_alpha):
+                    slope_terms = (hi_alpha[:, None] - lo_surface) / (
+                        ds_surface * (0.5 * (hi_alpha[:, None] + lo_surface) + 1.0e-10)
+                    )
+                    return jnp.mean(slope_terms, axis=1)
+
+                return jax.vmap(_alpha_slope, in_axes=1, out_axes=1)(hi_surface)
+
+            slope = jax.vmap(_surface_pair_slope, in_axes=(0, 0, 0))(jc_hi, jc_lo, ds)
             violation = jnp.maximum(0.0, slope - float(target_maxj))
             pair_w = jnp.sqrt(0.5 * (w_arr[:-1] + w_arr[1:]))[:, None, None]
-            maxj_surface = jnp.sqrt(jnp.mean(violation**2, axis=(1, 2)))
-            maxj_block = float(maxj_weight) * pair_w * violation
-            maxj_block = jnp.ravel(maxj_block) / jnp.sqrt(jnp.asarray((n_bounce - 1) * nalpha, dtype=jnp.float64))
+            maxj_surface = jnp.sqrt(jnp.sum(violation**2, axis=(1, 2)))
+            maxj_block = float(maxj_weight) * jnp.sqrt(0.5 * (w_arr[:-1] + w_arr[1:])) * maxj_surface
         residual_blocks.append(maxj_block)
         diagnostics["maxj_surface"] = maxj_surface
         diagnostics["maxj_objective"] = jnp.sum(maxj_block * maxj_block)
