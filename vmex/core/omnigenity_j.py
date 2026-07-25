@@ -69,11 +69,25 @@ def _apply_smooth_goodman_transform(b_line, phi_coords):
     n = int(b_line.shape[0])
     indices = jnp.arange(n, dtype=b_line.dtype)
     s_indmin = _soft_min_idx(b_line)
-    mask_l = jax.nn.sigmoid(2.0 * (s_indmin - indices))
+    split_beta = jnp.asarray(10.0, dtype=b_line.dtype)
+    mask_l = jax.nn.sigmoid(split_beta * (s_indmin - indices))
     mask_r = 1.0 - mask_l
+
+    # Left branch: keep the original smooth cumulative-min surrogate.
     bl_sq = _cummin(b_line)
-    br_seed = jnp.where(indices >= s_indmin, b_line, b_line[0])
-    br_sq = _cummax(br_seed)
+
+    # Right branch: build a smoother analogue of the reference logic:
+    # isolate the RHS of the well, locate its peak, flatten only after that
+    # peak, then squash from right-to-left with a reverse cumulative minimum.
+    rhs_gate = jax.nn.sigmoid(split_beta * (indices - s_indmin))
+    rhs_penalty = jnp.asarray(10.0, dtype=b_line.dtype) * (1.0 - rhs_gate)
+    rhs_weights = jax.nn.softmax(40.0 * (b_line - rhs_penalty))
+    rhs_peak_val = jnp.sum(rhs_weights * b_line)
+    rhs_peak_idx = jnp.sum(rhs_weights * indices)
+    after_peak = jax.nn.sigmoid(split_beta * (indices - rhs_peak_idx))
+    br_base = after_peak * rhs_peak_val + (1.0 - after_peak) * b_line
+    br_sq = jnp.flip(_cummin(jnp.flip(br_base)))
+
     pmax = jnp.asarray(50.0, dtype=b_line.dtype)
     pmin = jnp.asarray(15.0, dtype=b_line.dtype)
     b_min_val = jnp.interp(s_indmin, indices, b_line)
@@ -92,7 +106,7 @@ def _apply_smooth_goodman_transform(b_line, phi_coords):
     f_r = jnp.where(
         x1_r < 0.5,
         (-b_min_val) * (shape_r**pmin),
-        (1.0 - br_sq[-1]) * (shape_r**pmax),
+        (1.0 - rhs_peak_val) * (shape_r**pmax),
     )
     return mask_l * (bl_sq + f_l) + mask_r * (br_sq + f_r)
 
