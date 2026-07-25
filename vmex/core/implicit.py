@@ -1197,6 +1197,19 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig):
 # depth; 10 matches the solvax default and the GCRO-DR literature.
 _RECYCLE_K = 10
 
+# solvax >= 0.8.7 reports ``recycle_drift`` on warm-started gcrot solves: the
+# mean principal-angle sine between the incoming recycle image space and its
+# re-established span under the current operator (zero for an unchanged
+# operator, growing linearly with the operator step — the gap-free bound
+# sin(theta) <= ||dA|| ||U||). Probe once; older solvax simply lacks the field
+# and the drift-gated carry below degenerates to the previous behavior.
+try:
+    from solvax.krylov import KrylovSolution as _KrylovSolution
+
+    _GCROT_REPORTS_DRIFT = "recycle_drift" in _KrylovSolution._fields
+except ImportError:  # pragma: no cover - solvax is a hard dependency
+    _GCROT_REPORTS_DRIFT = False
+
 
 def _recycled_solve(A, b, cfg: ImplicitConfig, recycle):
     """Linearized solve via :func:`solvax.gcrot` with subspace recycling.
@@ -1222,6 +1235,10 @@ def _recycled_solve(A, b, cfg: ImplicitConfig, recycle):
         m=cfg.adjoint_restart, k=_RECYCLE_K,
         max_restarts=cfg.adjoint_maxiter, recycle=recycle,
     )
+    # On solvax >= 0.8.7, ``sol.recycle_drift`` measures how far the operator
+    # has rotated the recycled space since the pair was built — the quantity
+    # callers need to decide whether carrying the pair is still worthwhile
+    # (see optimize.jacobian_rows_recycled's drift-gated carry).
     return unravel(sol.x), sol
 
 

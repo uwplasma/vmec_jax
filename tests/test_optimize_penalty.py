@@ -177,3 +177,22 @@ def test_implicit_lane_jac_fallback_and_diagnostic_resolve(monkeypatch, capsys):
     assert np.isfinite(res.cost)
     assert res.equilibrium is not None  # cold-solve fallback delivered it
     assert res.equilibrium.result.converged
+
+
+def test_recycled_jacobian_lane_scan_shapes() -> None:
+    """The drift-gated recycled Jacobian lane (recycle=True) must run.
+
+    Exercises optimize.jacobian_rows_recycled's lax.scan carry — the path that
+    threads and drift-gates the GCROT pair across dof chunks. A shape bug there
+    (gating against the full stacked recs leaf instead of a single lane) makes
+    lax.scan reject the carry-type mismatch; this pins that the lane completes
+    on a real (small) equilibrium and returns a usable result. The recycled
+    lane is otherwise opt-in and was previously uncovered in CI.
+    """
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    res = opt.least_squares(
+        OBJECTIVE, inp, max_mode=1, jac="implicit", recycle=True,
+        max_nfev=3, verbose=0,
+    )
+    assert isinstance(res.input, VmecInput)
+    assert np.all(np.isfinite(np.asarray(res.x)))

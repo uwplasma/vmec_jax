@@ -1907,6 +1907,11 @@ def _least_squares_implicit(
     # have zero RHS (gcrot converges in zero cycles) and are discarded.
     n_flat = sum(int(np.prod(s.shape))
                  for s in jax.tree.leaves(imp._state_struct(cfg)))
+    # A recycled pair rotated past this mean principal-angle sine no longer
+    # deflates the current operator usefully (drift ~1 is an orthogonal
+    # rotation); measured drift per accepted trust-region step is ~1e-3 on
+    # slowly-varying operators, so 0.5 only trips on genuinely large steps.
+    _RECYCLE_DRIFT_LIMIT = 0.5
     csize = int(chunk) if chunk else ndof
     nchunks = -(-ndof // csize)
     pad = nchunks * csize - ndof
@@ -1921,35 +1926,55 @@ def _least_squares_implicit(
         Same ``cfg.adjoint_tol`` / ``cfg.adjoint_maxiter`` budget per solve
         as the default path; the Jacobian matches to solver tolerance *when
         the solves converge within budget*.  See the ``recycle`` note in
-        :func:`least_squares` for why this is opt-in: the solvax v0.1
-        recycle space measurably slows warm-started columns on the
-        production operator, so budget-capped columns can come back with
-        larger residuals than the GMRES path.
+        :func:`least_squares` for why this started opt-in: an unconditioned
+        carry of a stale recycle space measurably slowed warm-started columns
+        on the production operator.  On solvax >= 0.8.7 the carry is
+        **drift-gated**: every warm-started solve reports ``recycle_drift``
+        (mean principal-angle sine between the incoming recycle image space
+        and its re-established span; grows linearly with the operator step,
+        ``sin(theta) <= ||dA|| ||U||``), and a pair whose lane-0 drift exceeds
+        ``_RECYCLE_DRIFT_LIMIT`` is dropped to a cold start instead of being
+        carried — a stale pair from a large accepted trust-region step can
+        therefore slow at most the one chunk that measures it.  The maximum
+        drift over chunks is returned for observability.  On older solvax the
+        gate degenerates to the previous unconditional carry.
         """
         Fz, tangent_of, rhs_of, column_of, _ = _jac_parts(x)
 
         def column(tp_stack_j, rec):
             tp = tangent_of(tp_stack_j)
             dz, sol = imp._recycled_solve(Fz, rhs_of(tp), cfg, rec)
-            return column_of(dz, tp), sol.recycle
+            drift = (sol.recycle_drift if imp._GCROT_REPORTS_DRIFT
+                     else jnp.asarray(0.0))
+            return column_of(dz, tp), sol.recycle, drift
 
         def scan_body(carry, tp_chunk):
-            cols_chunk, recs = jax.vmap(
+            cols_chunk, recs, drifts = jax.vmap(
                 column, in_axes=(0, None))(tp_chunk, carry)
             # Lane 0 is always a real dof (pad < csize): its updated pair
-            # seeds the next chunk / the next Jacobian evaluation.
-            return jax.tree.map(lambda a: a[0], recs), cols_chunk
+            # seeds the next chunk / the next Jacobian evaluation — unless its
+            # measured drift says the incoming space no longer matches the
+            # operator, in which case the next chunk cold-starts.
+            drift0 = drifts[0]
+            # recs leaves are vmapped over the chunk (shape (chunk, n, k)); the
+            # carried pair is a single lane (n, k), so gate lane 0 against a
+            # zero of *lane* shape, not the whole stack.
+            pair = jax.tree.map(
+                lambda a: jnp.where(drift0 > _RECYCLE_DRIFT_LIMIT,
+                                    jnp.zeros_like(a[0]), a[0]),
+                recs)
+            return pair, (cols_chunk, drift0)
 
         def pad_stack(t):
             t = jnp.concatenate(
                 [t, jnp.zeros((pad,) + t.shape[1:], t.dtype)])
             return t.reshape((nchunks, csize) + t.shape[1:])
 
-        (C, U), cols = jax.lax.scan(
+        (C, U), (cols, drifts) = jax.lax.scan(
             scan_body, (C, U),
             tuple(pad_stack(t) for t in tangent_stack))
         cols = cols.reshape((nchunks * csize,) + cols.shape[2:])[:ndof]
-        return jnp.transpose(cols), C, U
+        return jnp.transpose(cols), C, U, jnp.max(drifts)
 
     if jac_solver not in ("auto", "block", "gmres", "reverse"):
         raise ValueError(
@@ -2049,7 +2074,10 @@ def _least_squares_implicit(
                 )
                 holder["lin"] = None
             elif recycle:
-                rows, C, U = jac_jit(_place(x), *holder["recycle"])
+                rows, C, U, drift = jac_jit(_place(x), *holder["recycle"])
+                holder["recycle_drift"] = float(drift)
+                if verbose and holder["recycle_drift"] > 0.0:
+                    print(f"[least_squares] recycle drift {holder['recycle_drift']:.2e}")
                 holder["recycle"] = (C, U)  # deflate the next jac evaluation
                 jac = np.asarray(jax.device_get(rows), dtype=float)
             else:
