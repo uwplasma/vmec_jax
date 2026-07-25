@@ -84,6 +84,6 @@ Parity with VMEC2000
 WOUT parity against representative VMEC2000 golden runs is asserted
 per-variable with
 combined relative + absolute tolerances (CompareWOut-style methodology from
-VMEC++ validation), with a documented looser bound for ``currumnc/currvmnc``.
+reference validation), with a documented looser bound for ``currumnc/currvmnc``.
 This is not a claim that fill-valued or untested modes have parity. See
 :doc:`performance` and :doc:`vmec2000_compatibility`.

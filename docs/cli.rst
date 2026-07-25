@@ -11,7 +11,7 @@ Usage
 
 .. code-block:: text
 
-   vmex input.X                — solve (INDATA or VMEC++ JSON), write wout_X.nc
+   vmex input.X                — solve (INDATA or structured JSON), write wout_X.nc
    vmex --plot wout_*.nc       — diagnostic plots from a WOUT file
    vmex --plot mout_*.nc       — straight-axis mirror diagnostics
    vmex --booz wout_*.nc       — run booz_xform_jax, write boozmn_*.nc
@@ -20,7 +20,7 @@ Usage
    vmex --test                 — run and plot the bundled quick-start case
 
 The positional argument is a VMEC input file (``input.*`` namelist or a
-VMEC++-style ``.json`` deck), or a ``wout_*.nc``/``mout_*.nc``/``boozmn_*.nc``
+structured-JSON ``.json`` deck), or a ``wout_*.nc``/``mout_*.nc``/``boozmn_*.nc``
 file for ``--plot``/``--booz``.
 
 Options
@@ -90,7 +90,7 @@ For ``LFREEB = T`` decks:
   and free-boundary wout metadata (``nextcur``/``extcur``/``curlabel``/
   ``mgrid_mode``);
 - a **missing** mgrid file falls back to a fixed-boundary solve with a
-  warning (VMEC2000 behavior, dropped by VMEC++);
+  warning (retained VMEC2000 behavior);
 - ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
   field from an ESSOS coils file (``essos.coils.Coils``): the coils are tabulated
   into an in-memory mgrid (``Coils.to_mgrid``) and read back as an

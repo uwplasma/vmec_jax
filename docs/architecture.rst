@@ -18,7 +18,7 @@ Module map
      - Role
      - VMEC2000 counterpart
    * - :mod:`~vmex.core.input`
-     - ``VmecInput``: INDATA + VMEC++-style JSON parsing, round-trip writers
+     - ``VmecInput``: INDATA + structured JSON parsing, round-trip writers
      - ``readin.f``, ``vmec_input.f``
    * - :mod:`~vmex.core.profiles`
      - pressure / iota / current parameterizations (power series, splines,

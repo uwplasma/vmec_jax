@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""VMEC++-style JSON input: convert an &INDATA deck, round-trip, solve.
+"""structured JSON input: convert an &INDATA deck, round-trip, solve.
 
 vmex reads *both* the classic Fortran ``&INDATA`` namelist and the JSON
-schema used by VMEC++ (``vmecpp.VmecInput``), and can write the JSON form.  So
+structured JSON schema, and can write the JSON form.  So
 it is a drop-in for either ecosystem: ``vmec input.json`` and
 ``vmec input.circular_tokamak`` both work, and this script shows the conversion
 and that the two representations describe the same equilibrium.
@@ -41,7 +41,7 @@ def _solve(inp):
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 inp_indata = vj.VmecInput.from_file(INPUT_FILE)
 json_path = inp_indata.to_json(OUT_DIR / "circular_tokamak.json")
-print(f"read {INPUT_FILE.name} (&INDATA) -> wrote {json_path} (VMEC++ JSON)")
+print(f"read {INPUT_FILE.name} (&INDATA) -> wrote {json_path} (structured JSON)")
 
 # --------------------------- read the JSON back ----------------------------
 # from_file dispatches on the .json suffix (or a leading '{') to the JSON parser.

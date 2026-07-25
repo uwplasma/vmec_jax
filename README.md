@@ -35,7 +35,7 @@ The exact support and validation matrix is documented in
   `extcur` parameters on a specified plasma boundary and is
   finite-difference-validated. The host-driven NESTOR equilibrium solve itself
   is not differentiated.
-- **Drop-in.** Reads VMEC2000 `input.*` namelists and VMEC++-style JSON,
+- **Drop-in.** Reads VMEC2000 `input.*` namelists and structured JSON,
   prints VMEC2000-format iteration output, and writes `wout_*.nc` files
   that load unchanged in simsopt and booz_xform.
 - **Batteries included.** Plotting (`vmex --plot`), Boozer transform
@@ -85,7 +85,7 @@ cd vmex && pip install -e .
 ```bash
 vmex --doctor     # check the installation and JAX backend
 vmex --test       # solve the bundled QH case, write wout + plots
-vmex input.X      # run any VMEC2000 input deck (or VMEC++-style JSON)
+vmex input.X      # run any VMEC2000 input deck (or structured JSON)
 ```
 
 `vmex input.X` writes `wout_X.nc` next to the input (`--outdir` to
@@ -116,14 +116,14 @@ it converges in *fewer* iterations (1681 vs 2829). Per-variable wout agreement
 and the full test gates live in the
 [documentation](https://vmex.readthedocs.io/en/latest/).
 
-![Force residual vs iteration for vmex, VMEC2000, and VMEC++](docs/_static/figures/readme_convergence.png)
+![Force residual vs iteration for vmex, VMEC2000 and a reference C++ implementation](docs/_static/figures/readme_convergence.png)
 
 *Parity is per-iteration, not just end-to-end: the total force residual
 (`fsqr + fsqz + fsql`) of the quick-start QH case at ns=51, per iteration.
 The vmex trajectory lies exactly on top of VMEC2000's (both converge in
-502 iterations); VMEC++ follows a near-identical path (501 iterations).
+502 iterations); the reference C++ implementation follows a near-identical path (501 iterations).
 Traces: vmex `SolveResult.fsq_history`, VMEC2000 `NSTEP=1` stdout,
-VMEC++ wout `fsqt`.*
+reference wout `fsqt`.*
 
 ### Optional 2D preconditioner: fewer iterations on stiff cases
 
@@ -146,7 +146,7 @@ bottleneck or stalls.
 
 ## Performance
 
-![Wall-clock comparison against VMEC2000 and VMEC++](docs/_static/figures/readme_runtime_compare.png)
+![Wall-clock comparison against VMEC2000 and a reference C++ implementation](docs/_static/figures/readme_runtime_compare.png)
 
 Full-solve wall-clock times on the bundled benchmark suite (Apple Silicon
 CPU, single thread; `benchmarks/baseline.json`; reproduce with
@@ -175,7 +175,7 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
   completed radial-stage executables while the reusable library API retains
   them by default. Convergence and VMEC2000 parity are unchanged. That is
   faster than the measured
-  one-thread VMEC++ control (449.79 s), though ten-thread VMEC++ remains
+  one-thread reference C++ control (449.79 s), though the ten-thread reference remains
   faster and smaller (92.03 s / 380 MiB); one-radial-process VMEC2000
   took 1154.82 s / 265 MiB.
   The measured default selects this kernel only above 512 modes on ARM CPUs
@@ -205,11 +205,11 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
   On the full supplied HSX deck, eight native threads took 215.37 s /
   1.63 GiB versus recent JAX controls at 218.94–224.64 s /
   1.57–1.71 GiB, with unchanged 2737-iteration convergence and VMEC2000
-  parity. This modest 2–4% result does not close the VMEC++ gap.
+  parity. This modest 2–4% result does not close the remaining gap to the reference.
 
 ## Features
 
-| | VMEX | VMEC2000 | VMEC++ |
+| | VMEX | VMEC2000 | reference C++ |
 |---|:---:|:---:|:---:|
 | Fixed-boundary equilibria | ✅ | ✅ | ✅ |
 | Free boundary from an mgrid file | ✅ | ✅ | ✅ |
@@ -219,7 +219,7 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
 | Non-stellarator-symmetric (`LASYM = T`) | ✅ | ✅ | ✅ |
 | Fixed-boundary fallback on missing mgrid | ✅ | ✅ | ❌ |
 | Spline profiles (cubic / Akima) | ✅ | ✅ | ❌ |
-| VMEC++-schema JSON input | ✅ | ❌ | ✅ |
+| structured JSON input | ✅ | ❌ | ✅ |
 | Hot restart from a previous state | ✅ | ❌ | ✅ |
 | Typed zero-crash errors | ✅ | ❌ | ✅ |
 | Boozer transform built in (`--booz`) | ✅ | ❌ | ❌ |
@@ -327,9 +327,9 @@ language bindings, and vendored third-party excluded), counted with
 |---|---|---:|---:|---:|---:|
 | **VMEX** | Python | 41 | **13,326** | 6,744 | **0.51** |
 | VMEC2000 (PARVMEC) | Fortran | 115 | 24,190 | 8,425 | 0.35 |
-| VMEC++ | C++ / Python | 117 | 22,824 | 7,646 | 0.34 |
+| reference C++ | C++ / Python | 117 | 22,824 | 7,646 | 0.34 |
 
-VMEX is little more than half the SLOC of VMEC2000 and VMEC++, while
+VMEX is little more than half the SLOC of VMEC2000 and a reference C++ implementation, while
 *adding* differentiability, GPU execution, direct-coil free boundary, and a
 built-in Boozer transform — and it carries the highest comment/docstring
 density of the three (reproduce with
@@ -528,7 +528,7 @@ complementary:
 | Where **VMEX** wins | Where **DESC** wins |
 |---|---|
 | **Is VMEC**: iteration-for-iteration VMEC2000 parity, standard `wout_*.nc`, VMEC-format prints | **Low-resolution accuracy**: global Zernike basis converges in fewer radial points |
-| **Drop-in**: reads VMEC2000 `input.*` and VMEC++ JSON unchanged | **Objective library**: large, mature set of built-in optimization targets |
+| **Drop-in**: reads VMEC2000 `input.*` and structured JSON unchanged | **Objective library**: large, mature set of built-in optimization targets |
 | **Full namelist**: non-symmetric surfaces (`LASYM = T`), NESTOR *and* virtual-casing free boundary | **Optimizers**: more built-in stochastic / constrained optimizers |
 | **O(1)-memory adjoint**: peak memory flat in the number of design variables | Adjoint gradients (both codes are differentiable) |
 
@@ -540,7 +540,7 @@ objective library.
 ## CLI reference
 
 ```text
-vmex input.X             solve (INDATA or VMEC++ JSON), write wout_X.nc
+vmex input.X             solve (INDATA or structured JSON), write wout_X.nc
 vmex --plot wout_*.nc    diagnostic plots from a WOUT file
 vmex --booz wout_*.nc    run booz_xform_jax, write boozmn_*.nc
 vmex --plot boozmn_*.nc  Boozer contour/spectrum plots

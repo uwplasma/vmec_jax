@@ -26,7 +26,7 @@ First run
 ---------
 
 ``vmec`` behaves like the ``xvmec2000`` executable: point it at a VMEC input
-file (an ``input.*`` INDATA namelist or a VMEC++-style ``.json`` deck):
+file (an ``input.*`` INDATA namelist or a structured-JSON ``.json`` deck):
 
 .. code-block:: bash
 
@@ -119,7 +119,7 @@ VMEC2000 wout dataset (built on first access — no manual
 ``VmecInput`` is a frozen dataclass with VMEC2000 semantics and defaults —
 you can also build one from scratch in Python (all INDATA fields are keyword
 arguments; see :doc:`input_reference`) and round-trip it to INDATA or
-VMEC++-style JSON.
+structured JSON.
 
 Choosing an entry point
 -----------------------

@@ -42,10 +42,10 @@ flux surface — the view used to judge quasisymmetry.
 .. literalinclude:: ../examples/plot_and_boozer.py
    :language: python
 
-VMEC++ JSON input
-~~~~~~~~~~~~~~~~~
+structured JSON input
+~~~~~~~~~~~~~~~~~~~~~
 
-vmex reads both the classic ``&INDATA`` namelist and the VMEC++ JSON schema,
+vmex reads both the classic ``&INDATA`` namelist and the structured JSON schema,
 and can write the JSON form — a drop-in for either ecosystem.  This converts a
 deck, reads it back, and confirms the two representations describe one
 equilibrium.

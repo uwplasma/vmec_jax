@@ -36,7 +36,7 @@ Why VMEX?
   into a least-squares driver with those exact gradients, reaching precise
   QA in a single 14.5-minute CPU call (:doc:`optimization`).
 - **Drop-in workflow.** The ``vmec`` command reads VMEC2000 ``input.*``
-  namelists and VMEC++-style JSON, prints VMEC2000-format iteration output,
+  namelists and structured JSON, prints VMEC2000-format iteration output,
   and writes ``wout_*.nc`` files that load unchanged in simsopt and
   booz_xform.
 - **Batteries included.** Built-in plotting (``vmex --plot``), Boozer
@@ -60,12 +60,12 @@ See :doc:`quickstart` for a full tour, including the Python API and the
 Boozer-coordinate workflow.
 
 .. figure:: _static/figures/readme_runtime_compare.png
-   :alt: Runtime comparison of vmex against VMEC2000 and VMEC++
+   :alt: Runtime comparison of vmex against VMEC2000 and a reference C++ implementation
    :align: center
    :width: 95%
 
    Benchmark-suite runtimes: ``vmex`` (cold and warm) versus VMEC2000 and
-   VMEC++. Warm (compiled-cache) solves are the relevant number for
+   the reference. Warm (compiled-cache) solves are the relevant number for
    optimization loops; see :doc:`performance` for the full table.
 
 Documentation

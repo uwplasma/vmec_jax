@@ -5,10 +5,10 @@ Input file reference
 :meth:`vmex.core.input.VmecInput.from_file`:
 
 - the classic VMEC2000 ``&INDATA`` Fortran namelist (``input.<case>``), and
-- VMEC++-style JSON (``.json`` suffix or leading ``{``) with identical key
+- structured JSON (``.json`` suffix or leading ``{``) with identical key
   names.
 
-Both round-trip: ``VmecInput.to_json`` writes a VMEC++-schema JSON deck that
+Both round-trip: ``VmecInput.to_json`` writes a structured JSON deck that
 parses back to the same input. Implemented VMEC2000 defaults and ``readin.f``
 normalizations are applied on construction (see the
 :mod:`vmex.core.input` docstring for the exact rules). Parsing does not imply
@@ -250,10 +250,10 @@ Free boundary
        ``NONE`` does **not** disable ``scalfor`` or lambda scaling; it disables
        only the optional 2-D block preconditioner, as in VMEC2000.
 
-VMEC++-style JSON
+structured JSON
 -----------------
 
-The JSON schema follows the implemented ``vmecpp.VmecInput`` subset: the keys
+The JSON schema follows the implemented structured-JSON subset: the keys
 are the
 lower-case INDATA names (``lasym, nfp, mpol, ntor, ntheta, nzeta, ns_array,
 ftol_array, niter_array, delt, tcon0, aphi, phiedge, nstep, pmass_type, am,
@@ -288,7 +288,7 @@ length ``ntor + 1``:
      ]
    }
 
-Extensions beyond VMEC++ (ignored by VMEC++ but accepted here): the spline
+Extensions beyond the base schema (accepted here): the spline
 and pedestal profile types listed above, with the same key names as INDATA.
 ``free_boundary_method="nestor"`` is accepted explicitly. ``only_coils`` and
 ``biest`` select different models and are rejected. Unknown JSON keys are

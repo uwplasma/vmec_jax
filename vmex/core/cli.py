@@ -6,7 +6,7 @@ VMEC2000 counterpart: the ``xvmec2000`` executable driver
 ``wout_<case>.nc`` file, and print the ``fileout.f`` termination summary.
 
 The solve path is the clean-room core end to end:
-:class:`vmex.core.input.VmecInput` (INDATA or VMEC++-style JSON) ->
+:class:`vmex.core.input.VmecInput` (INDATA or structured JSON) ->
 :func:`vmex.core.multigrid.solve_multigrid` (fixed boundary) or
 :func:`vmex.core.multigrid.solve_free_boundary_multigrid` (free boundary) ->
 :func:`vmex.core.wout.wout_from_state` -> :func:`vmex.core.wout.write_wout`,
@@ -25,7 +25,7 @@ Free-boundary routing (``LFREEB = T``):
   and free-boundary wout metadata (``nextcur``/``extcur``/``curlabel``/
   ``mgrid_mode``);
 - a missing mgrid file falls back to a fixed-boundary solve with a warning
-  (VMEC2000 behavior, dropped by VMEC++);
+  (retained VMEC2000 behavior);
 - ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
   field from an ESSOS coils file (``essos.coils.Coils``): the coils are tabulated
   into an in-memory mgrid (``Coils.to_mgrid``) and read back as an
@@ -126,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="vmex",
         description=(
             "vmex equilibrium solver (fixed- and free-boundary core).\n\n"
-            "  vmex input.X           — solve (INDATA or VMEC++ JSON), write wout_X.nc\n"
+            "  vmex input.X           — solve (INDATA or structured JSON), write wout_X.nc\n"
             "  vmex --plot wout_*.nc  — diagnostic plots from a WOUT file\n"
             "  vmex --plot mout_*.nc  — straight-axis mirror diagnostics\n"
             "  vmex --booz wout_*.nc  — run booz_xform_jax, write boozmn_*.nc\n"

@@ -1,4 +1,4 @@
-"""VMEC input handling: the ``&INDATA`` namelist and VMEC++-style JSON.
+"""VMEC input handling: the ``&INDATA`` namelist and structured JSON.
 
 VMEC2000 counterparts: ``LIBSTELL/Sources/Modules/vmec_input.f``
 (``read_indata_namelist``: variable set and defaults) and ``readin.f``
@@ -552,7 +552,7 @@ def _validate_indata_modes(
 
 
 def _validate_json_modes(data: Dict[str, Any]) -> None:
-    """Apply the same no-silent-fallback policy to VMEC++ JSON controls."""
+    """Apply the same no-silent-fallback policy to structured JSON controls."""
     method = str(data.get("free_boundary_method", "nestor")).strip().lower()
     if method != "nestor":
         raise UnsupportedInputModeError(
@@ -566,7 +566,7 @@ def _validate_json_modes(data: Dict[str, Any]) -> None:
     unknown = sorted(set(data) - known)
     if unknown:
         raise ValueError(
-            "unknown VMEC++ JSON input key(s): " + ", ".join(unknown)
+            "unknown structured JSON input key(s): " + ", ".join(unknown)
         )
 
 
@@ -742,7 +742,7 @@ class VmecInput:
         """Read a VMEC input file, auto-detecting INDATA vs JSON format.
 
         Files whose first non-whitespace character is ``{`` (or with a
-        ``.json`` suffix) are parsed as VMEC++-style JSON; everything else as
+        ``.json`` suffix) are parsed as structured JSON; everything else as
         a classic ``&INDATA`` Fortran namelist (VMEC2000 ``readin.f``).
         """
         path = Path(path)
@@ -929,7 +929,7 @@ class VmecInput:
 
     @classmethod
     def from_json_text(cls, text: str) -> "VmecInput":
-        """Build from VMEC++-style JSON text (plan Appendix C / vmecpp.VmecInput).
+        """Build from structured JSON text (plan Appendix C / vmecpp.VmecInput).
 
         Same key names as the dataclass fields; ``adiabatic_index`` is
         accepted as an alias for ``gamma``; ``rbc/zbs/rbs/zbc`` are sparse

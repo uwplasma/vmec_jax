@@ -67,7 +67,7 @@ Input passes through four distinct gates:
 Parsing a name is not evidence that the solver uses it.  VMEX therefore
 applies these rules:
 
-1. Unknown INDATA variables and unknown VMEC++ JSON keys are input errors.
+1. Unknown INDATA variables and unknown structured JSON keys are input errors.
 2. Active controls which change the mathematical problem, iteration contract,
    or requested WOUT convention are either implemented or rejected before
    iteration 1.
@@ -142,13 +142,13 @@ Equilibrium capability matrix
      - deliberate VMEX extension
      - ESSOS exports an mgrid representation which then follows the same
        NESTOR path.  This is not an interpolation-free coil solve.
-   * - VMEC++ ``free_boundary_method='only_coils'``
+   * - ``free_boundary_method='only_coils'``
      - rejected when active
      - This is a different boundary model, not an alias for choosing a coil
        input source.
    * - BIEST vacuum method
      - not implemented
-     - VMEC++'s ``biest`` selector is rejected rather than mapped to NESTOR.
+     - the ``biest`` selector is rejected rather than mapped to NESTOR.
    * - TRIP3D coupling
      - rejected when active
      - A non-``NONE`` ``TRIP3D_FILE`` receives

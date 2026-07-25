@@ -370,7 +370,7 @@ def diagnose(path: Path, *, details: bool = False) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="VMEC &INDATA or VMEC++ JSON deck")
+    parser.add_argument("input", type=Path, help="VMEC &INDATA or structured JSON deck")
     parser.add_argument(
         "--details", action="store_true",
         help="print input-derived values for local use only; never share for a confidential deck",
