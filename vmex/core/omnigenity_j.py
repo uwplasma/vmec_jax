@@ -38,7 +38,7 @@ __all__ = [
 Array = Any
 
 
-def _soft_min_idx(values, beta: float = 80.0):
+def _soft_min_idx(values, beta: float = 50.0):
     values = jnp.asarray(values, dtype=jnp.float64)
     weights = jax.nn.softmax(-jnp.asarray(beta, dtype=values.dtype) * values)
     return jnp.sum(jnp.arange(values.shape[0], dtype=values.dtype) * weights)
@@ -61,28 +61,19 @@ def _smooth_signed_sqrt(values, eps: float = 1.0e-9):
     return values / jnp.sqrt(abs_smooth + eps_arr)
 
 
-def _apply_piecewise_goodman_transform(b_line, phi_coords):
-    """Piecewise-linear Goodman squash/stretch close to ``qi_functions_mod.py``."""
+def _apply_smooth_goodman_transform(b_line, phi_coords):
+    """Smooth squash/stretch surrogate of the Goodman constructed-QI well."""
 
     b_line = jnp.asarray(b_line, dtype=jnp.float64)
     phi_coords = jnp.asarray(phi_coords, dtype=jnp.float64)
     n = int(b_line.shape[0])
     indices = jnp.arange(n, dtype=b_line.dtype)
     s_indmin = _soft_min_idx(b_line)
-    split_sharp = jnp.asarray(8.0, dtype=b_line.dtype)
-    left_mask = jax.nn.sigmoid(split_sharp * (s_indmin - indices))
-    right_mask = 1.0 - left_mask
-    big_neg = jnp.asarray(-1.0e6, dtype=b_line.dtype)
-    max_beta = jnp.asarray(40.0, dtype=b_line.dtype)
-    left_logits = max_beta * (b_line + big_neg * (1.0 - left_mask))
-    right_logits = max_beta * (b_line + big_neg * (1.0 - right_mask))
-    left_cap = jnp.sum(jax.nn.softmax(left_logits) * b_line)
-    right_cap = jnp.sum(jax.nn.softmax(right_logits) * b_line)
-    bl_seed = left_mask * b_line + (1.0 - left_mask) * left_cap
-    bl_sq = _cummin(bl_seed)
-    br_seed = right_mask * b_line + (1.0 - right_mask) * right_cap
-    br_sq = jnp.flip(_cummin(jnp.flip(br_seed)))
-
+    mask_l = jax.nn.sigmoid(2.0 * (s_indmin - indices))
+    mask_r = 1.0 - mask_l
+    bl_sq = _cummin(b_line)
+    br_seed = jnp.where(indices >= s_indmin, b_line, b_line[0])
+    br_sq = _cummax(br_seed)
     pmax = jnp.asarray(50.0, dtype=b_line.dtype)
     pmin = jnp.asarray(15.0, dtype=b_line.dtype)
     b_min_val = jnp.interp(s_indmin, indices, b_line)
@@ -103,59 +94,35 @@ def _apply_piecewise_goodman_transform(b_line, phi_coords):
         (-b_min_val) * (shape_r**pmin),
         (1.0 - br_sq[-1]) * (shape_r**pmax),
     )
-    left_branch = bl_sq + f_l
-    right_branch = br_sq + f_r
-    return left_mask * left_branch + right_mask * right_branch
-
-
-def _smooth_branch_crossing(phi_branch, b_branch, bj_level):
-    """Differentiable local-linear inverse of a monotone branch."""
-
-    phi_branch = jnp.asarray(phi_branch, dtype=jnp.float64)
-    b_branch = jnp.asarray(b_branch, dtype=jnp.float64)
-    bj_level = jnp.asarray(bj_level, dtype=jnp.float64)
-    b0 = b_branch[:-1]
-    b1 = b_branch[1:]
-    phi0 = phi_branch[:-1]
-    phi1 = phi_branch[1:]
-    seg_db = b1 - b0
-    t_seg = (bj_level - b0) / (seg_db + 1.0e-12)
-    phi_seg = phi0 + t_seg * (phi1 - phi0)
-
-    mid_res = 0.5 * ((b0 - bj_level) + (b1 - bj_level))
-    prod = (b0 - bj_level) * (b1 - bj_level)
-    branch_scale = jnp.maximum(5.0e-3 * jnp.max(jnp.abs(b_branch)), 1.0e-6)
-    sign_gate = jax.nn.sigmoid(-60.0 * prod / (branch_scale * branch_scale))
-    interval_gate = jax.nn.sigmoid(25.0 * t_seg) * jax.nn.sigmoid(25.0 * (1.0 - t_seg))
-    proximity = jnp.exp(-((mid_res / branch_scale) ** 2))
-    seg_w = sign_gate * interval_gate * proximity + 1.0e-14
-    return jnp.sum(seg_w * phi_seg) / jnp.sum(seg_w)
+    return mask_l * (bl_sq + f_l) + mask_r * (br_sq + f_r)
 
 
 def _branch_crossings(phi_coords, b_line, bj_level):
-    """Differentiable analogue of ``GetBranches`` using branch-local inverses."""
+    """Smooth inverse-branch evaluation for ``B(phi)=Bj`` crossings."""
 
     phi_coords = jnp.asarray(phi_coords, dtype=jnp.float64)
     b_line = jnp.asarray(b_line, dtype=jnp.float64)
     bj_level = jnp.asarray(bj_level, dtype=jnp.float64)
     indices = jnp.arange(b_line.shape[0], dtype=jnp.float64)
     s_indmin = _soft_min_idx(b_line)
-    split_sharp = jnp.asarray(10.0, dtype=b_line.dtype)
-    left_mask = jax.nn.sigmoid(split_sharp * (s_indmin - indices))
-    right_mask = 1.0 - left_mask
     high = jnp.asarray(1.1 * jnp.max(b_line), dtype=b_line.dtype)
-    b_left = left_mask * b_line + (1.0 - left_mask) * high
-    b_right = right_mask * b_line + (1.0 - right_mask) * high
+    branch_sharpness = jnp.asarray(6.0, dtype=b_line.dtype)
+    left_mask = jax.nn.sigmoid(branch_sharpness * (s_indmin - indices))
+    right_mask = 1.0 - left_mask
+    b_l = left_mask * b_line + (1.0 - left_mask) * high
+    b_r = right_mask * b_line + (1.0 - right_mask) * high
+    left_phi = jnp.flip(phi_coords)
+    left_b = jnp.flip(b_l)
+    right_phi = phi_coords
+    right_b = b_r
 
-    phi_lo = _smooth_branch_crossing(jnp.flip(phi_coords), jnp.flip(b_left), bj_level)
-    phi_hi = _smooth_branch_crossing(phi_coords, b_right, bj_level)
-    phi_min = jnp.interp(s_indmin, indices, phi_coords)
-    bmin = jnp.min(b_line)
-    bmax = jnp.max(b_line)
-    phi_lo = jnp.where(bj_level <= bmin, phi_min, phi_lo)
-    phi_hi = jnp.where(bj_level <= bmin, phi_min, phi_hi)
-    phi_lo = jnp.where(bj_level >= bmax, phi_coords[0], phi_lo)
-    phi_hi = jnp.where(bj_level >= bmax, phi_coords[-1], phi_hi)
+    branch_eps = jnp.maximum(5.0e-3 * jnp.max(jnp.asarray([bj_level])), 1.0e-6)
+    left_logits = -((left_b - bj_level) / branch_eps) ** 2
+    right_logits = -((right_b - bj_level) / branch_eps) ** 2
+    left_w = jax.nn.softmax(left_logits, axis=0)
+    right_w = jax.nn.softmax(right_logits, axis=0)
+    phi_lo = jnp.sum(left_w * left_phi)
+    phi_hi = jnp.sum(right_w * right_phi)
     return phi_lo, phi_hi
 
 
@@ -180,7 +147,7 @@ def _compute_j_pair(phi_coords, b_input, b_target, bj_levels, gi_value, *, nphi_
     res_i = 1.0 - bi_g / (bj_v + 1.0e-9)
     res_c = 1.0 - bc_g / (bj_v + 1.0e-9)
     vi_g = _smooth_signed_sqrt(res_i)
-    vc_g = jnp.sqrt(jnp.maximum(res_c, 0.0))
+    vc_g = _smooth_signed_sqrt(res_c)
 
     ji = jnp.trapezoid(vi_g * metric_factor, x=phi_grid, axis=1)
     jc = jnp.trapezoid(vc_g * metric_factor, x=phi_grid, axis=1)
@@ -272,7 +239,7 @@ def j_invariant_qi_maxj_residual_from_boozer(
             bmax = jnp.max(b_line)
             scale = jnp.maximum(bmax - bmin, 1.0e-10)
             b_norm = (b_line - bmin) / scale
-            b_target_norm = _apply_piecewise_goodman_transform(b_norm, phi)
+            b_target_norm = _apply_smooth_goodman_transform(b_norm, phi)
             b_target = b_target_norm * scale + bmin
             bj_phys = bj_norm * scale + bmin
             return _compute_j_pair(phi, b_line, b_target, bj_phys, gi_surface, nphi_int=int(nphi_int))
