@@ -70,21 +70,31 @@ def _apply_smooth_goodman_transform(b_line, phi_coords):
     indices = jnp.arange(n, dtype=b_line.dtype)
     s_indmin = _soft_min_idx(b_line)
     split_beta = jnp.asarray(10.0, dtype=b_line.dtype)
+    peak_beta = jnp.asarray(120.0, dtype=b_line.dtype)
+    cap_beta = jnp.asarray(35.0, dtype=b_line.dtype)
     mask_l = jax.nn.sigmoid(split_beta * (s_indmin - indices))
     mask_r = 1.0 - mask_l
 
-    # Left branch: keep the original smooth cumulative-min surrogate.
-    bl_sq = _cummin(b_line)
+    # Left branch: mirror the reference logic by identifying the LHS peak,
+    # flattening before it, then squashing toward the minimum.
+    lhs_gate = jax.nn.sigmoid(split_beta * (s_indmin - indices))
+    lhs_penalty = jnp.asarray(10.0, dtype=b_line.dtype) * (1.0 - lhs_gate)
+    lhs_weights = jax.nn.softmax(peak_beta * (b_line - lhs_penalty))
+    lhs_peak_val = jnp.sum(lhs_weights * b_line)
+    lhs_peak_idx = jnp.sum(lhs_weights * indices)
+    before_peak = jax.nn.sigmoid(cap_beta * (lhs_peak_idx - indices))
+    bl_base = before_peak * lhs_peak_val + (1.0 - before_peak) * b_line
+    bl_sq = _cummin(bl_base)
 
     # Right branch: build a smoother analogue of the reference logic:
     # isolate the RHS of the well, locate its peak, flatten only after that
     # peak, then squash from right-to-left with a reverse cumulative minimum.
     rhs_gate = jax.nn.sigmoid(split_beta * (indices - s_indmin))
     rhs_penalty = jnp.asarray(10.0, dtype=b_line.dtype) * (1.0 - rhs_gate)
-    rhs_weights = jax.nn.softmax(40.0 * (b_line - rhs_penalty))
+    rhs_weights = jax.nn.softmax(peak_beta * (b_line - rhs_penalty))
     rhs_peak_val = jnp.sum(rhs_weights * b_line)
     rhs_peak_idx = jnp.sum(rhs_weights * indices)
-    after_peak = jax.nn.sigmoid(split_beta * (indices - rhs_peak_idx))
+    after_peak = jax.nn.sigmoid(cap_beta * (indices - rhs_peak_idx))
     br_base = after_peak * rhs_peak_val + (1.0 - after_peak) * b_line
     br_sq = jnp.flip(_cummin(jnp.flip(br_base)))
 
@@ -108,7 +118,8 @@ def _apply_smooth_goodman_transform(b_line, phi_coords):
         (-b_min_val) * (shape_r**pmin),
         (1.0 - rhs_peak_val) * (shape_r**pmax),
     )
-    return mask_l * (bl_sq + f_l) + mask_r * (br_sq + f_r)
+    out = mask_l * (bl_sq + f_l) + mask_r * (br_sq + f_r)
+    return jnp.clip(out, 0.0, 1.0)
 
 
 def _branch_crossings(phi_coords, b_line, bj_level):
@@ -130,13 +141,41 @@ def _branch_crossings(phi_coords, b_line, bj_level):
     right_phi = phi_coords
     right_b = b_r
 
-    branch_eps = jnp.maximum(5.0e-3 * jnp.max(jnp.asarray([bj_level])), 1.0e-6)
-    left_logits = -((left_b - bj_level) / branch_eps) ** 2
-    right_logits = -((right_b - bj_level) / branch_eps) ** 2
-    left_w = jax.nn.softmax(left_logits, axis=0)
-    right_w = jax.nn.softmax(right_logits, axis=0)
-    phi_lo = jnp.sum(left_w * left_phi)
-    phi_hi = jnp.sum(right_w * right_phi)
+    def _segment_crossing(phi_branch, b_branch, *, prefer: str):
+        phi0 = phi_branch[:-1]
+        phi1 = phi_branch[1:]
+        b0 = b_branch[:-1]
+        b1 = b_branch[1:]
+        db = b1 - b0
+        t_raw = (bj_level - b0) / (db + 1.0e-12)
+        # Keep the candidate crossing local to the segment even when a nearly
+        # flat segment would otherwise extrapolate far outside the interval.
+        t = jnp.clip(t_raw, 0.0, 1.0)
+        phi_seg = phi0 + t * (phi1 - phi0)
+
+        scale = jnp.maximum(5.0e-3 * jnp.max(jnp.abs(b_branch)), 1.0e-6)
+        prod = (b0 - bj_level) * (b1 - bj_level)
+        sign_gate = jax.nn.sigmoid(-120.0 * prod / (scale * scale))
+        inside_gate = jax.nn.sigmoid(30.0 * t_raw) * jax.nn.sigmoid(30.0 * (1.0 - t_raw))
+        prox = jnp.exp(-((0.5 * (b0 + b1) - bj_level) / scale) ** 2)
+        slope_gate = jnp.tanh(jnp.abs(db) / scale) ** 2
+        valid = sign_gate * inside_gate * prox * slope_gate + 1.0e-14
+        select_beta = jnp.asarray(80.0, dtype=phi_branch.dtype)
+        if prefer == "left":
+            logits = jnp.log(valid) - select_beta * phi_seg
+        else:
+            logits = jnp.log(valid) + select_beta * phi_seg
+        pick = jax.nn.softmax(logits)
+        return jnp.sum(pick * phi_seg)
+
+    phi_min = jnp.interp(s_indmin, indices, phi_coords)
+    phi_lo = _segment_crossing(left_phi, left_b, prefer="left")
+    phi_hi = _segment_crossing(right_phi, right_b, prefer="right")
+    # Match the normalized reference ``GetBranches(..., Bmax=1, Bmin=0)``.
+    phi_lo = jnp.where(bj_level <= 0.0, phi_min, phi_lo)
+    phi_hi = jnp.where(bj_level <= 0.0, phi_min, phi_hi)
+    phi_lo = jnp.where(bj_level >= 1.0, phi_coords[0], phi_lo)
+    phi_hi = jnp.where(bj_level >= 1.0, phi_coords[-1], phi_hi)
     return phi_lo, phi_hi
 
 
@@ -149,7 +188,13 @@ def _compute_j_pair(phi_coords, b_input, b_target, bj_levels, gi_value, *, nphi_
     bj_levels = jnp.asarray(bj_levels, dtype=jnp.float64)
     gi_value = jnp.asarray(gi_value, dtype=jnp.float64)
 
-    p1, p2 = jax.vmap(lambda bj: _branch_crossings(phi_coords, b_target, bj))(bj_levels)
+    bmin = jnp.min(b_target)
+    bmax = jnp.max(b_target)
+    scale = jnp.maximum(bmax - bmin, 1.0e-12)
+    b_target_norm = (b_target - bmin) / scale
+    bj_norm = (bj_levels - bmin) / scale
+
+    p1, p2 = jax.vmap(lambda bj: _branch_crossings(phi_coords, b_target_norm, bj))(bj_norm)
 
     t = jnp.linspace(0.0, 1.0, int(nphi_int), dtype=b_target.dtype)
     phi_grid = p1[:, None] + t[None, :] * (p2 - p1)[:, None]
@@ -161,7 +206,7 @@ def _compute_j_pair(phi_coords, b_input, b_target, bj_levels, gi_value, *, nphi_
     res_i = 1.0 - bi_g / (bj_v + 1.0e-9)
     res_c = 1.0 - bc_g / (bj_v + 1.0e-9)
     vi_g = _smooth_signed_sqrt(res_i)
-    vc_g = _smooth_signed_sqrt(res_c)
+    vc_g = jnp.sqrt(jnp.maximum(res_c, 0.0))
 
     ji = jnp.trapezoid(vi_g * metric_factor, x=phi_grid, axis=1)
     jc = jnp.trapezoid(vc_g * metric_factor, x=phi_grid, axis=1)
