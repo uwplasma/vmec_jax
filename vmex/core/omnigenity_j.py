@@ -38,6 +38,12 @@ __all__ = [
 Array = Any
 
 
+def _soft_min_idx(values, beta: float = 80.0):
+    values = jnp.asarray(values, dtype=jnp.float64)
+    weights = jax.nn.softmax(-jnp.asarray(beta, dtype=values.dtype) * values)
+    return jnp.sum(jnp.arange(values.shape[0], dtype=values.dtype) * weights)
+
+
 def _cummin(values):
     values = jnp.asarray(values, dtype=jnp.float64)
     return jax.lax.associative_scan(jnp.minimum, values)
@@ -62,25 +68,25 @@ def _apply_piecewise_goodman_transform(b_line, phi_coords):
     phi_coords = jnp.asarray(phi_coords, dtype=jnp.float64)
     n = int(b_line.shape[0])
     indices = jnp.arange(n, dtype=b_line.dtype)
-    indmin = jnp.argmin(b_line)
-
-    left_mask = indices <= indmin
-    right_mask = indices >= indmin
-    big_neg = jnp.asarray(-1.0e30, dtype=b_line.dtype)
-    indmax_l = jnp.argmax(jnp.where(left_mask, b_line, big_neg))
-    indmax_r = jnp.argmax(jnp.where(right_mask, b_line, big_neg))
-
-    left_cap = b_line[indmax_l]
-    right_cap = b_line[indmax_r]
-    bl_seed = jnp.where(indices < indmax_l, left_cap, b_line)
+    s_indmin = _soft_min_idx(b_line)
+    split_sharp = jnp.asarray(8.0, dtype=b_line.dtype)
+    left_mask = jax.nn.sigmoid(split_sharp * (s_indmin - indices))
+    right_mask = 1.0 - left_mask
+    big_neg = jnp.asarray(-1.0e6, dtype=b_line.dtype)
+    max_beta = jnp.asarray(40.0, dtype=b_line.dtype)
+    left_logits = max_beta * (b_line + big_neg * (1.0 - left_mask))
+    right_logits = max_beta * (b_line + big_neg * (1.0 - right_mask))
+    left_cap = jnp.sum(jax.nn.softmax(left_logits) * b_line)
+    right_cap = jnp.sum(jax.nn.softmax(right_logits) * b_line)
+    bl_seed = left_mask * b_line + (1.0 - left_mask) * left_cap
     bl_sq = _cummin(bl_seed)
-    br_seed = jnp.where(indices > indmax_r, right_cap, b_line)
+    br_seed = right_mask * b_line + (1.0 - right_mask) * right_cap
     br_sq = jnp.flip(_cummin(jnp.flip(br_seed)))
 
     pmax = jnp.asarray(50.0, dtype=b_line.dtype)
     pmin = jnp.asarray(15.0, dtype=b_line.dtype)
-    b_min_val = b_line[indmin]
-    phi_mid = phi_coords[indmin]
+    b_min_val = jnp.interp(s_indmin, indices, b_line)
+    phi_mid = jnp.interp(s_indmin, indices, phi_coords)
     phi_start = phi_coords[0]
     phi_end = phi_coords[-1]
     x1_l = (phi_coords - phi_start) / (phi_mid - phi_start + 1.0e-10)
@@ -99,44 +105,55 @@ def _apply_piecewise_goodman_transform(b_line, phi_coords):
     )
     left_branch = bl_sq + f_l
     right_branch = br_sq + f_r
-    return jnp.where(indices < indmin, left_branch, right_branch)
+    return left_mask * left_branch + right_mask * right_branch
+
+
+def _smooth_branch_crossing(phi_branch, b_branch, bj_level):
+    """Differentiable local-linear inverse of a monotone branch."""
+
+    phi_branch = jnp.asarray(phi_branch, dtype=jnp.float64)
+    b_branch = jnp.asarray(b_branch, dtype=jnp.float64)
+    bj_level = jnp.asarray(bj_level, dtype=jnp.float64)
+    b0 = b_branch[:-1]
+    b1 = b_branch[1:]
+    phi0 = phi_branch[:-1]
+    phi1 = phi_branch[1:]
+    seg_db = b1 - b0
+    t_seg = (bj_level - b0) / (seg_db + 1.0e-12)
+    phi_seg = phi0 + t_seg * (phi1 - phi0)
+
+    mid_res = 0.5 * ((b0 - bj_level) + (b1 - bj_level))
+    prod = (b0 - bj_level) * (b1 - bj_level)
+    branch_scale = jnp.maximum(5.0e-3 * jnp.max(jnp.abs(b_branch)), 1.0e-6)
+    sign_gate = jax.nn.sigmoid(-60.0 * prod / (branch_scale * branch_scale))
+    interval_gate = jax.nn.sigmoid(25.0 * t_seg) * jax.nn.sigmoid(25.0 * (1.0 - t_seg))
+    proximity = jnp.exp(-((mid_res / branch_scale) ** 2))
+    seg_w = sign_gate * interval_gate * proximity + 1.0e-14
+    return jnp.sum(seg_w * phi_seg) / jnp.sum(seg_w)
 
 
 def _branch_crossings(phi_coords, b_line, bj_level):
-    """First/last linear crossings of ``B(phi)=Bj`` following ``GetBranches``."""
+    """Differentiable analogue of ``GetBranches`` using branch-local inverses."""
 
     phi_coords = jnp.asarray(phi_coords, dtype=jnp.float64)
     b_line = jnp.asarray(b_line, dtype=jnp.float64)
     bj_level = jnp.asarray(bj_level, dtype=jnp.float64)
+    indices = jnp.arange(b_line.shape[0], dtype=jnp.float64)
+    s_indmin = _soft_min_idx(b_line)
+    split_sharp = jnp.asarray(10.0, dtype=b_line.dtype)
+    left_mask = jax.nn.sigmoid(split_sharp * (s_indmin - indices))
+    right_mask = 1.0 - left_mask
+    high = jnp.asarray(1.1 * jnp.max(b_line), dtype=b_line.dtype)
+    b_left = left_mask * b_line + (1.0 - left_mask) * high
+    b_right = right_mask * b_line + (1.0 - right_mask) * high
 
-    diffs = b_line - bj_level
-    prod = diffs[:-1] * diffs[1:]
-    cross_lt = prod < 0.0
-    cross_le = prod <= 0.0
-    count_lt = jnp.sum(cross_lt.astype(jnp.int32))
-    use_mask = jnp.where(count_lt < 2, cross_le, cross_lt)
-
-    first_idx = jnp.argmax(use_mask.astype(jnp.int32))
-    last_idx = use_mask.shape[0] - 1 - jnp.argmax(jnp.flip(use_mask).astype(jnp.int32))
-
-    dy1 = b_line[first_idx] - b_line[first_idx + 1]
-    dx1 = phi_coords[first_idx] - phi_coords[first_idx + 1]
-    m1 = dy1 / (dx1 + 1.0e-14)
-    b1 = b_line[first_idx] - m1 * phi_coords[first_idx]
-    phi1 = jnp.where(jnp.abs(m1) > 1.0e-14, (bj_level - b1) / m1, phi_coords[first_idx])
-
-    dy2 = b_line[last_idx] - b_line[last_idx + 1]
-    dx2 = phi_coords[last_idx] - phi_coords[last_idx + 1]
-    m2 = dy2 / (dx2 + 1.0e-14)
-    b2 = b_line[last_idx] - m2 * phi_coords[last_idx]
-    phi2 = jnp.where(jnp.abs(m2) > 1.0e-14, (bj_level - b2) / m2, phi_coords[last_idx + 1])
-
-    indmin = jnp.argmin(b_line)
-    phi_min = phi_coords[indmin]
+    phi_lo = _smooth_branch_crossing(jnp.flip(phi_coords), jnp.flip(b_left), bj_level)
+    phi_hi = _smooth_branch_crossing(phi_coords, b_right, bj_level)
+    phi_min = jnp.interp(s_indmin, indices, phi_coords)
     bmin = jnp.min(b_line)
     bmax = jnp.max(b_line)
-    phi_lo = jnp.where(bj_level <= bmin, phi_min, phi1)
-    phi_hi = jnp.where(bj_level <= bmin, phi_min, phi2)
+    phi_lo = jnp.where(bj_level <= bmin, phi_min, phi_lo)
+    phi_hi = jnp.where(bj_level <= bmin, phi_min, phi_hi)
     phi_lo = jnp.where(bj_level >= bmax, phi_coords[0], phi_lo)
     phi_hi = jnp.where(bj_level >= bmax, phi_coords[-1], phi_hi)
     return phi_lo, phi_hi
