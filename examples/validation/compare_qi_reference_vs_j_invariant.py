@@ -184,6 +184,64 @@ def _parse_int_list(value: str | None, default: list[int]) -> list[int]:
     return [int(item.strip()) for item in value.split(",") if item.strip()]
 
 
+def _print_mismatch_tables(
+    bj_norm: np.ndarray,
+    ref_p1: np.ndarray,
+    ref_p2: np.ndarray,
+    smooth_p1: np.ndarray,
+    smooth_p2: np.ndarray,
+    ji_ref: np.ndarray,
+    jc_ref: np.ndarray,
+    ji_smooth: np.ndarray,
+    jc_smooth: np.ndarray,
+    *,
+    top_k: int = 20,
+):
+    rows = []
+    for j in range(len(bj_norm)):
+        for a in range(ref_p1.shape[1]):
+            rows.append(
+                (
+                    int(j),
+                    float(bj_norm[j]),
+                    int(a),
+                    float(abs(ref_p1[j, a] - smooth_p1[j, a])),
+                    float(abs(ref_p2[j, a] - smooth_p2[j, a])),
+                    float(abs(ji_ref[j, a] - ji_smooth[j, a])),
+                    float(abs(jc_ref[j, a] - jc_smooth[j, a])),
+                )
+            )
+
+    print("\n[compare-qi] Top-bounce crossing mismatch table")
+    print("[compare-qi] bj_idx  bj_norm  alpha  |dp1|      |dp2|      |dJI|      |dJC|")
+    rows_top = sorted(rows, key=lambda x: (x[1], x[3] + x[4]), reverse=True)
+    for row in rows_top[:top_k]:
+        print(
+            f"[compare-qi] {row[0]:5d}  {row[1]:7.4f}  {row[2]:5d}  "
+            f"{row[3]:9.3e}  {row[4]:9.3e}  {row[5]:9.3e}  {row[6]:9.3e}"
+        )
+
+    print("\n[compare-qi] Worst by crossing error only")
+    rows_cross = sorted(rows, key=lambda x: x[3] + x[4], reverse=True)
+    for row in rows_cross[:top_k]:
+        print(
+            f"[compare-qi] {row[0]:5d}  {row[1]:7.4f}  {row[2]:5d}  "
+            f"{row[3]:9.3e}  {row[4]:9.3e}  {row[5]:9.3e}  {row[6]:9.3e}"
+        )
+
+    print("\n[compare-qi] Near-top bounce summary")
+    print("[compare-qi] bj_norm   mean_cross_err   max_cross_err   mean_dJI   mean_dJC")
+    err_cross = np.sqrt((ref_p1 - smooth_p1) ** 2 + (ref_p2 - smooth_p2) ** 2)
+    err_ji = np.abs(ji_ref - ji_smooth)
+    err_jc = np.abs(jc_ref - jc_smooth)
+    start = max(len(bj_norm) - 10, 0)
+    for j in range(start, len(bj_norm)):
+        print(
+            f"[compare-qi] {bj_norm[j]:7.4f}   {err_cross[j].mean():14.3e}   "
+            f"{err_cross[j].max():13.3e}   {err_ji[j].mean():8.3e}   {err_jc[j].mean():8.3e}"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--vmec-input", type=Path, required=True)
@@ -351,6 +409,18 @@ def main():
         ref_p2=ref_p2,
         smooth_p1=smooth_p1,
         smooth_p2=smooth_p2,
+    )
+
+    _print_mismatch_tables(
+        bj_norm,
+        ref_p1,
+        ref_p2,
+        smooth_p1,
+        smooth_p2,
+        ji_ref,
+        jc_ref,
+        ji_smooth,
+        jc_smooth,
     )
 
     print(f"[compare-qi] wrote {out_dir / 'summary.json'}")
