@@ -576,9 +576,14 @@ def d_merc(eq) -> jnp.ndarray:
     two surfaces and the edge carry the usual near-axis noise, so practical
     targets should penalize e.g. ``min(DMerc[2:-1], 0)``).  Accepts an
     :class:`Equilibrium` or any wout-like object.  Use traceable
-    :func:`mercier_stability_residual` with ``jac="implicit"``.
+    :func:`mercier_stability_residual` with ``jac="implicit"``.  ``lasym``
+    equilibria are rejected pending independent DCON/JMC validation.
     """
     wout = eq.wout if isinstance(eq, Equilibrium) else eq
+    if bool(getattr(wout, "lasym", False)):
+        raise NotImplementedError(
+            "DMerc is not independently validated for lasym equilibria"
+        )
     return jnp.asarray(np.asarray(wout.DMerc, dtype=float))
 
 

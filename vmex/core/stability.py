@@ -40,8 +40,8 @@ all requested (surface, α, ζ0) field lines.
 
 Scope notes
 -----------
-- Stellarator-symmetric states only (``lasym = False``), matching the other
-  traceable objectives in :mod:`vmex.core.optimize`.
+- The current profile supports symmetric and ``lasym`` states. Mercier,
+  Glasser and ballooning stability remain stellarator-symmetric.
 - Surfaces need ``ι ≠ 0`` (the field-line parameterization divides by ι).
 - :func:`d_merc_state` is the traceable counterpart of the parity-proven
   wout calculation.  As in VMEC2000, its first two surfaces and edge are not
@@ -117,8 +117,103 @@ def _mercier_bsubs(geometry, jacobian, fields, s: Array) -> Array:
 
 
 def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: SolverRuntime) -> tuple[Array, Array, Array]:
-    """Traceable symmetric jxbforce filter and ``B_s`` derivatives."""
+    """Traceable jxbforce filter and ``B_s`` derivatives."""
     trig = rt.trig
+    if bool(rt.setup.lasym):
+        mmax, nmax = int(rt.resolution.mpol) - 1, int(rt.resolution.ntor)
+        nt1, nt2, nt3 = int(trig.ntheta1), int(trig.ntheta2), int(trig.ntheta3)
+        nzeta = int(np.asarray(trig.cosnv).shape[0])
+        cosmu = jnp.asarray(trig.cosmu[:nt2, : mmax + 1])
+        sinmu = jnp.asarray(trig.sinmu[:nt2, : mmax + 1])
+        cosnv = jnp.asarray(trig.cosnv[:, : nmax + 1])
+        sinnv = jnp.asarray(trig.sinnv[:, : nmax + 1])
+        dnorm = 1.0 / (nzeta * nt3)
+        cosmui = (dnorm * cosmu).at[0].multiply(0.5).at[-1].multiply(0.5)
+        sinmui = dnorm * sinmu
+        dmult = jnp.ones(
+            (mmax + 1, nmax + 1), dtype=jnp.asarray(bsubu).dtype)
+        mnyq, nnyq = nt2 - 1, nzeta // 2
+        if 0 < mnyq <= mmax:
+            dmult = dmult.at[mnyq].multiply(0.5)
+        if 0 < nnyq <= nmax:
+            dmult = dmult.at[:, nnyq].multiply(0.5)
+        reflected_theta = np.where(
+            np.arange(nt2) == 0, 0, nt1 - np.arange(nt2))
+        reflected_zeta = (-np.arange(nzeta)) % nzeta
+        extension_theta = nt1 - np.arange(nt2, nt3)
+
+        def split(field, *, reversed_sym=False):
+            half = field[:, :nt2]
+            reflected = field[:, reflected_theta][:, :, reflected_zeta]
+            sign = -1.0 if reversed_sym else 1.0
+            return (
+                0.5 * (half + sign * reflected),
+                0.5 * (half - sign * reflected),
+            )
+
+        def analyze_lasym(field, theta, zeta):
+            return jnp.einsum(
+                "smk,kn->smn",
+                jnp.einsum("sik,im->smk", field, theta),
+                zeta,
+            ) * dmult
+
+        def synth(first, theta1, zeta1, second, theta2, zeta2):
+            return (
+                jnp.einsum("smn,im,kn->sik", first, theta1, zeta1)
+                + jnp.einsum("smn,im,kn->sik", second, theta2, zeta2)
+            )
+
+        def extend(symmetric, asymmetric):
+            full = jnp.zeros(
+                (symmetric.shape[0], nt3, nzeta), dtype=symmetric.dtype)
+            full = full.at[:, :nt2].set(symmetric + asymmetric)
+            return full.at[:, nt2:].set(
+                symmetric[:, extension_theta][:, :, reflected_zeta]
+                - asymmetric[:, extension_theta][:, :, reflected_zeta]
+            )
+
+        def filter_lasym(field):
+            symmetric, asymmetric = split(field)
+            symmetric = synth(
+                analyze_lasym(symmetric, cosmui, cosnv), cosmu, cosnv,
+                analyze_lasym(symmetric, sinmui, sinnv), sinmu, sinnv)
+            asymmetric = synth(
+                analyze_lasym(asymmetric, sinmui, cosnv), sinmu, cosnv,
+                analyze_lasym(asymmetric, cosmui, sinnv), cosmu, sinnv)
+            return extend(symmetric, asymmetric)
+
+        bsubu, bsubv = filter_lasym(bsubu), filter_lasym(bsubv)
+        bsubu, bsubv = filter_lasym(bsubu), filter_lasym(bsubv)
+        bsubs_full = bsubs.at[1:-1].set(
+            0.5 * (bsubs[1:-1] + bsubs[2:])).at[0].set(0.0)
+        symmetric, asymmetric = split(bsubs_full, reversed_sym=True)
+        symmetric_sin = (
+            analyze_lasym(symmetric, sinmui, cosnv),
+            analyze_lasym(symmetric, cosmui, sinnv),
+        )
+        asymmetric_cos = (
+            analyze_lasym(asymmetric, cosmui, cosnv),
+            analyze_lasym(asymmetric, sinmui, sinnv),
+        )
+        bsubsu = extend(
+            synth(
+                symmetric_sin[0], jnp.asarray(trig.cosmum[:nt2, :mmax + 1]), cosnv,
+                symmetric_sin[1], jnp.asarray(trig.sinmum[:nt2, :mmax + 1]), sinnv),
+            synth(
+                asymmetric_cos[0], jnp.asarray(trig.sinmum[:nt2, :mmax + 1]), cosnv,
+                asymmetric_cos[1], jnp.asarray(trig.cosmum[:nt2, :mmax + 1]), sinnv),
+        )
+        bsubsv = extend(
+            synth(
+                symmetric_sin[0], sinmu, jnp.asarray(trig.sinnvn[:, :nmax + 1]),
+                symmetric_sin[1], cosmu, jnp.asarray(trig.cosnvn[:, :nmax + 1])),
+            synth(
+                asymmetric_cos[0], cosmu, jnp.asarray(trig.sinnvn[:, :nmax + 1]),
+                asymmetric_cos[1], sinmu, jnp.asarray(trig.cosnvn[:, :nmax + 1])),
+        )
+        return bsubu, bsubv, (bsubsu, bsubsv)
+
     mmax, nmax = int(rt.resolution.mpol) - 1, int(rt.resolution.ntor)
     nt2 = int(trig.ntheta2)
     cosmu = jnp.asarray(trig.cosmu[:nt2, : mmax + 1])
@@ -167,10 +262,6 @@ def _mercier_profiles_state(
     Landreman & Jorge (2020), Eqs. (51) and (53).
     """
     setup = rt.setup
-    if bool(setup.lasym):
-        raise NotImplementedError(
-            "traceable Mercier/Glasser profiles support lasym = False only"
-        )
     s = jnp.asarray(setup.s_full)
     ns = int(s.shape[0])
     if ns < 3:
@@ -244,6 +335,10 @@ def _mercier_profiles_state(
     )
     bdotb = average_norm * jnp.einsum("sij,ij->s", sqgb2, wint)
     jdotb_full = jnp.zeros_like(s).at[1:-1].set(jdotb_mu0 / _MU0)
+    if bool(setup.lasym):
+        # Match WOUT's four factor-two LASYM output normalizations; see
+        # vmex.core.wout for the VMEC2000 convention and golden comparison.
+        jdotb_full = 16.0 * jdotb_full
     jdotb_full = jdotb_full.at[0].set(2.0 * jdotb_full[1] - jdotb_full[2])
     jdotb_full = jdotb_full.at[-1].set(
         2.0 * jdotb_full[-2] - jdotb_full[-3]
@@ -276,6 +371,11 @@ def d_merc_state(state: SpectralState, rt: SolverRuntime) -> Array:
     The axis, first near-axis surface and edge retain VMEC's zero/noisy output
     convention and should be excluded from objectives (normally ``[2:-1]``).
     """
+    if bool(rt.setup.lasym):
+        raise NotImplementedError(
+            "traceable Mercier profiles are not independently validated "
+            "for lasym equilibria"
+        )
     return _mercier_profiles_state(state, rt)[0]
 
 
@@ -313,6 +413,11 @@ def glasser_d_r_state(
     As for ``DMerc``, use only validated interior surfaces (normally
     ``[2:-1]``) as optimization targets.
     """
+    if bool(rt.setup.lasym):
+        raise NotImplementedError(
+            "traceable Glasser profiles are not independently validated "
+            "for lasym equilibria"
+        )
     if shear_epsilon < 0.0:
         raise ValueError(
             f"shear_epsilon must be non-negative, got {shear_epsilon}"

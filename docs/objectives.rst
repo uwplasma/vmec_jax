@@ -391,7 +391,8 @@ Which objectives differentiate how
 ``jac="implicit"`` requires a fixed-boundary problem. Its boundary parameter
 map supports both symmetric and ``LASYM = T`` equilibria, but individual
 objectives can be symmetry-limited; in particular the traceable Mercier and
-quasisymmetry objectives currently require ``LASYM = F``. See
+Glasser objectives and quasisymmetry currently require ``LASYM = F``.
+The traceable ``jdotb`` objective supports both symmetry modes. See
 :doc:`optimization` for the gradient machinery and measured cost of each
 piece.
 

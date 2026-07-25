@@ -364,7 +364,9 @@ Optimization building blocks live in `vmex.core.optimize`
 magnetic well, `DMerc`, Glasser `D_R`, `<J·B>`, and ballooning-stability
 targets; a least-squares driver over boundary Fourier coefficients) with
 implicit-differentiation gradients from
-`vmex.core.implicit` (`jac="implicit"`). The recommended pattern is **one
+`vmex.core.implicit` (`jac="implicit"`). `<J·B>` also supports `LASYM = T`;
+`DMerc` and `D_R` remain symmetry-gated pending independent DCON/JMC parity.
+The recommended pattern is **one
 `least_squares` call** — no `max_mode` continuation loop — with **Exponential
 Spectral Scaling** ordering the harmonics through the trust region:
 

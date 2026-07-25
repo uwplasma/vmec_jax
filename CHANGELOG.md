@@ -38,6 +38,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
   `glasser_stability_residual` expose the published Glasser--Greene--Johnson
   `D_R <= 0` condition to JIT, AD and optimization, with the documented
   `DMerc > 0` and nonzero-shear prerequisites.
+- **Differentiable LASYM parallel current.** `jdotb_state` and its implicit
+  least-squares Jacobian now support non-stellarator-symmetric equilibria.
+  LASYM `DMerc` and `D_R` remain guarded after independent DCON validation
+  exposed unresolved sensitivity near marginal stability.
 - **LASYM NESTOR WOUT fields.** Free-boundary asymmetric runs now write
   `potcos` and all cosine/sine surface-field tables instead of netCDF fill.
 - **Live VMEC2000 integration gate.** `pytest --run-vmec2000` runs both public

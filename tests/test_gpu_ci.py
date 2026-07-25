@@ -85,6 +85,35 @@ def test_implicit_auto_prefers_cpu_but_none_follows_jax_gpu():
     assert {_platform(x) for x in jax.tree.leaves(following_jax)} == {"gpu"}
 
 
+def test_lasym_jdotb_implicit_cpu_gpu_parity():
+    inp = VmecInput.from_file(DATA_DIR / "input.up_down_asymmetric_tokamak")
+    inp = dataclasses.replace(
+        inp,
+        ns_array=np.array([13]),
+        ftol_array=np.array([1e-10]),
+        niter_array=np.array([5000]),
+        am=np.array([1.0, -1.0]),
+        pres_scale=5000.0,
+    )
+    results = {
+        platform: optimize.least_squares(
+            [(optimize.jdotb_residual, 0.0, 1e-6)],
+            inp,
+            max_mode=1,
+            jac="implicit",
+            max_nfev=1,
+            device=platform,
+        )
+        for platform in ("cpu", "gpu")
+    }
+    cpu, gpu = results["cpu"], results["gpu"]
+    assert np.all(np.isfinite(cpu.jac)) and np.all(np.isfinite(gpu.jac))
+    relative = np.linalg.norm(cpu.jac - gpu.jac) / max(
+        np.linalg.norm(cpu.jac), np.linalg.norm(gpu.jac)
+    )
+    assert relative < 1e-9
+
+
 def test_explicit_gpu_mirror_fixed_boundary():
     """The mirror policy honors an explicit GPU through a real solve."""
     config = MirrorConfig(

@@ -75,6 +75,26 @@ def finite_beta_3d_eq():
     return eq
 
 
+def _lasym_finite_beta_input():
+    inp = VmecInput.from_file(DATA_DIR / "input.up_down_asymmetric_tokamak")
+    return dataclasses.replace(
+        inp,
+        ns_array=np.array([13]),
+        ftol_array=np.array([1e-10]),
+        niter_array=np.array([5000]),
+        am=np.array([1.0, -1.0]),
+        pres_scale=5000.0,
+    )
+
+
+@pytest.fixture(scope="module")
+def lasym_finite_beta_eq():
+    """Converged finite-pressure up-down-asymmetric tokamak."""
+    eq = opt.solve_equilibrium(_lasym_finite_beta_input())
+    assert eq.result.converged
+    return eq
+
+
 def test_zero_pressure_case_is_ballooning_stable(vacuum_eq):
     lam = np.asarray(stab.ballooning_lambda(vacuum_eq.state, vacuum_eq.runtime, **FAST))
     assert lam.shape == (3, 4, 1)  # default surfaces x alphas x zeta0s
@@ -178,6 +198,28 @@ def test_traceable_jdotb_and_glasser_profiles(shaped_eq):
         interior = np.asarray(profile)[2:-1]
         assert np.all(np.isfinite(interior))
         assert np.any(interior != 0.0)
+
+
+def test_glasser_profiles_match_independent_dcon_reference():
+    """Normalized D_I and D_R retain the independent DCON comparison."""
+    eq = opt.solve_equilibrium(
+        VmecInput.from_file(DATA_DIR / "input.shaped_tokamak_pressure")
+    )
+    shear = np.asarray(stab.mercier_shear_state(eq.state, eq.runtime))
+    shear2 = np.where(shear != 0.0, shear**2, 1.0)
+    d_i = -np.asarray(stab.d_merc_state(eq.state, eq.runtime)) / shear2
+    d_r = np.asarray(stab.glasser_d_r_state(eq.state, eq.runtime)) / shear2
+    use = (np.asarray(eq.wout.chi) / eq.wout.chi[-1] >= 0.1) & (shear != 0.0)
+    sample = np.flatnonzero(use)[[0, 11, 22, 33, 44]]
+    np.testing.assert_allclose(
+        d_i[sample], [-0.2512125, -0.2520461, -0.2521, -0.2521, -0.252],
+        atol=1e-3,
+    )
+    np.testing.assert_allclose(
+        d_r[sample], [-0.00246688, -0.00337077, -0.00351137,
+                      -0.00358343, -0.003687],
+        atol=1e-4,
+    )
 
 
 def test_mercier_stability_residual_is_smooth_interior_hinge(shaped_eq):
@@ -340,6 +382,59 @@ def test_traceable_dmerc_matches_wout_in_3d(finite_beta_3d_eq):
         rtol=1e-10,
         atol=1e-12,
     )
+
+
+def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
+    """The LASYM current profile retains WOUT parity and a finite JVP."""
+    eq = lasym_finite_beta_eq
+    _, jdotb, bdotb, _, _ = jax.jit(
+        stab._mercier_profiles_state
+    )(eq.state, eq.runtime)
+    np.testing.assert_allclose(jdotb, eq.wout.jdotb, rtol=1e-10, atol=1e-6)
+    np.testing.assert_allclose(bdotb, eq.wout.bdotb, rtol=1e-10, atol=1e-12)
+    vmec2000 = np.array([
+        -6616939.15535494, -5857538.49901135, -5122081.61798096,
+        -4407383.21220917, -3718146.82840926, -3061781.04575250,
+        -2445074.81564557, -1869459.08846507, -1317836.93988867,
+        -658744.51123515,
+    ])
+    np.testing.assert_allclose(
+        np.asarray(jdotb)[2:-1], vmec2000, rtol=2e-3
+    )
+
+    tangent = jax.tree.map(jnp.zeros_like, eq.state)
+    tangent = dataclasses.replace(
+        tangent,
+        R_sin=jnp.ones_like(eq.state.R_sin),
+        Z_cos=jnp.ones_like(eq.state.Z_cos),
+    )
+    _, profile = jax.jvp(
+        lambda state: stab.jdotb_state(state, eq.runtime),
+        (eq.state,),
+        (tangent,),
+    )
+    interior = np.asarray(profile)[2:-1]
+    assert np.all(np.isfinite(interior))
+    assert np.any(interior != 0.0)
+    with pytest.raises(NotImplementedError, match="independently validated"):
+        stab.d_merc_state(eq.state, eq.runtime)
+    with pytest.raises(NotImplementedError, match="independently validated"):
+        stab.glasser_d_r_state(eq.state, eq.runtime)
+    with pytest.raises(NotImplementedError, match="independently validated"):
+        opt.d_merc(eq)
+
+
+@pytest.mark.full
+def test_lasym_jdotb_has_implicit_jacobian():
+    result = opt.least_squares(
+        [(opt.jdotb_residual, 0.0, 1e-6)],
+        _lasym_finite_beta_input(),
+        max_mode=1,
+        jac="implicit",
+        max_nfev=1,
+    )
+    assert result.nfev == 1
+    assert np.all(np.isfinite(result.jac))
 
 
 def test_reductions_hard_and_smooth_max(highbeta_eq):

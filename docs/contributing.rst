@@ -60,10 +60,11 @@ must not define ``JAX_PLATFORMS`` or ``JAX_PLATFORM_NAME``.  The workflow
 installs the official ``jax[cuda13]`` distribution, verifies that JAX selects
 the GPU by ordinary hardware discovery, then runs focused placement checks and
 the quick nonzero-shear CPU/GPU parity audit for MHD energy, magnetic well,
-DMerc, ``jdotb``, Glasser ``D_R``, quasisymmetry, and quasi-isodynamic gradients. Timing is
-recorded in the uploaded ``device-parity`` artifact but is not a pass/fail
-gate. A missing or misconfigured accelerator is a failure, not a skipped
-green GPU job.
+DMerc, ``jdotb``, Glasser ``D_R``, quasisymmetry, and quasi-isodynamic
+gradients. Timing is recorded in the uploaded ``device-parity`` artifact but
+is not a pass/fail gate. The focused suite also compares the LASYM ``jdotb``
+implicit Jacobian on CPU and GPU. A missing or misconfigured accelerator is
+a failure, not a skipped green GPU job.
 
 Releasing
 ---------

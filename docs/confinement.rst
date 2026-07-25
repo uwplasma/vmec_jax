@@ -310,8 +310,8 @@ and the edge and returns
 penalizes unstable (negative) ``DMerc`` with a smooth gradient.  At finite
 ``smoothing`` the residual is positive, rather than exactly zero, on stable
 surfaces but decays exponentially with the stability margin.  Both profile
-lanes retain VMEC's near-axis and edge limitations; the traceable lane does
-not yet support ``lasym = True``.
+lanes retain VMEC's near-axis and edge limitations; the traceable Mercier
+lane does not yet support ``lasym = True``.
 
 Parallel current and resistive interchange
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -325,10 +325,9 @@ an implicit-differentiation current objective. This is a direct port of the
 ``bootstrap.vmec_j_dot_B`` force-balance identity used by the Redl mismatch.
 For optimization, :func:`~vmex.core.stability.jdotb_residual` selects
 ``jdotb[2:-1]`` to exclude the usual axis/edge entries.
-The live low-resolution current-driven VMEC2000 case measured a maximum
-``4.72e-4`` difference; its regression gate is ``1e-3``.  The remaining
-sensitivity is from the radial derivative of VMEC's filtered ``bsubv``
-coefficients.
+This lane supports ``lasym = True``.  A converged finite-pressure,
+up-down-asymmetric tokamak agrees with live VMEC2000 to ``1.52e-3`` relative
+over ``[2:-1]``; its regression gate is ``2e-3``.
 
 Assuming the ideal prerequisite :math:`D_{\rm Merc}>0`, the
 Glasser--Greene--Johnson necessary condition for local resistive interchange
@@ -356,10 +355,24 @@ ideal-Mercier-unstable surface is never accepted based on :math:`D_R` alone.
 After optimization, use ``mercier_shear_state`` to verify
 ``abs(S) >> shear_epsilon`` on every target surface; regularization makes the
 numerics finite but cannot establish GGJ stability at zero shear.
-VMEC2000 does not write ``D_R`` itself, so validation is by the published
-identity and live VMEC2000 parity of the traceable ``DMerc``, ``jdotb`` and
-``bdotb`` constituents. Independent evaluation of :math:`H` and
-:math:`D_R` with JMC/DCON remains a separate external validation gate.
+VMEC2000 does not write ``D_R`` itself.  A live `DCON/GPEC
+<https://github.com/PrincetonUniversity/GPEC>`_ evaluation independently
+reproduces the symmetric VMEC normalization at ``ns=51`` (``D_I`` maximum
+absolute difference ``9.10e-4`` and ``D_R`` ``8.63e-5`` over normalized
+poloidal flux ``[0.1, 1)``).  The same test on an
+up-down-asymmetric tokamak exposed unresolved sensitivity in :math:`H`:
+at ``ns=201`` the candidate reconstruction's normalized ``D_I`` differs by
+at most ``1.85e-2`` over normalized poloidal flux ``[0.2, 0.9]``, but
+``D_R`` differs by ``1.49e-2`` and can change sign near marginality.
+On that same input, all four geometry families agree with VMEC2000 to
+``2.49e-10`` relative or better, while the interior VMEX/VMEC2000 ``DMerc``
+relative difference is ``18.6`` with sign disagreements.  This isolates the
+problem to the LASYM Mercier reconstruction rather than the equilibrium.
+Consequently :func:`~vmex.core.stability.d_merc_state` and
+:func:`~vmex.core.stability.glasser_d_r_state` still reject ``lasym = True``;
+the independently validated ``jdotb`` lane is available.  A 3-D LASYM
+extension additionally requires JMC or an equivalent nonaxisymmetric
+reference.
 
 Magnetic well
 ~~~~~~~~~~~~~~
