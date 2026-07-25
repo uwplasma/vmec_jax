@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import vmex as vj
 from vmex.core.omnigenity import boozer_bmnc_state
 from vmex.core import omnigenity_j as qi_j
+from vmex import optimize as opt
 
 
 def _reference_goodman_transform(b_line: np.ndarray, phi: np.ndarray) -> np.ndarray:
@@ -209,7 +210,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     inp = vj.VmecInput.from_file(args.vmec_input)
-    eq = vj.solve_multigrid(inp, verbose=True)
+    eq = opt.solve_equilibrium(inp)
     booz = boozer_bmnc_state(
         eq.state,
         eq.runtime,
