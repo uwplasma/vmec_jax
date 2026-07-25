@@ -2,8 +2,8 @@
 
 For every bundled input deck, :class:`vmex.core.input.VmecInput` is
 round-tripped through both writers (JSON and INDATA) and must reproduce every
-field exactly.  A VMEC++ JSON example (``data/solovev.json``, copied verbatim
-from the vmecpp repository) validates JSON-schema compatibility.  (Field-level
+field exactly.  A structured JSON example (``data/solovev.json``, taken verbatim
+from the published schema) validates JSON-schema compatibility.  (Field-level
 parity with the historical parser stack was proven by the A/B suite that
 accompanied the port and retired with the legacy tree.)
 """
@@ -41,8 +41,8 @@ def test_indata_round_trip(deck: Path, tmp_path: Path) -> None:
     assert reread == original
 
 
-def test_vmecpp_json_example() -> None:
-    """The VMEC++ solovev.json example parses with VMEC++ schema semantics."""
+def test_structured_json_example() -> None:
+    """The solovev.json example parses with structured-JSON schema semantics."""
     new = VmecInput.from_file(FIXTURES / "solovev.json")
     assert new.mpol == 6
     assert new.ntor == 0
@@ -63,7 +63,7 @@ def test_vmecpp_json_example() -> None:
     np.testing.assert_array_equal(new.rbc[0, :3], [3.999, 1.026, -0.068])
     np.testing.assert_array_equal(new.zbs[0, :3], [0.0, 1.58, 0.01])
     assert not np.any(new.rbs) and not np.any(new.zbc)
-    assert new.lfreeb is False  # VMEC++ default
+    assert new.lfreeb is False  # structured-JSON default
     assert new.gamma == 0.0  # default (JSON alias: adiabatic_index)
     assert new.mgrid_file == "NONE"
     assert new.precon_type == "NONE"
@@ -260,8 +260,8 @@ def test_unimplemented_legacy_artifact_request_warns() -> None:
         VmecInput.from_indata_text("&INDATA\nLDIAGNO=T\n/\n")
 
 
-def test_vmecpp_json_modes_and_unknown_keys_are_not_ignored() -> None:
-    """VMEC++ model selection and misspelled keys fail before setup."""
+def test_structured_json_modes_and_unknown_keys_are_not_ignored() -> None:
+    """Structured-JSON model selection and misspelled keys fail before setup."""
     with pytest.raises(
         UnsupportedInputModeError,
         match="free_boundary_method",
@@ -269,7 +269,7 @@ def test_vmecpp_json_modes_and_unknown_keys_are_not_ignored() -> None:
         VmecInput.from_json_text('{"free_boundary_method": "only_coils"}')
     assert caught.value.code == "D00K_FREE_BOUNDARY_METHOD_UNSUPPORTED"
 
-    with pytest.raises(ValueError, match="unknown VMEC\\+\\+ JSON input key"):
+    with pytest.raises(ValueError, match="unknown structured JSON input key"):
         VmecInput.from_json_text('{"free_boundary_method": "nestor", "mpoll": 6}')
 
 

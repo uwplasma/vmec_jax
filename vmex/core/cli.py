@@ -584,6 +584,7 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
                 getattr(inp, "lfull3d1out", False)
             ),
             device=None if args.device == "none" else args.device,
+            release_stage_cache=True,
             jacobian_retries=int(args.jacobian_retries),
             **freeb_plan.solver_kwargs,
         )

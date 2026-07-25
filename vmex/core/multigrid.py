@@ -384,6 +384,8 @@ def solve_free_boundary_multigrid(
     force_backend: str = "jax",
     threads: int = 1,
     jacobian_retries: int = 2,
+    use_fft: bool | None = None,
+    release_stage_cache: bool = False,
 ) -> SolveResult:
     """Free-boundary solve over the VMEC2000 ``NS_ARRAY`` ladder.
 
@@ -512,6 +514,7 @@ def solve_free_boundary_multigrid(
                 prec2d_threshold=prec2d_threshold, prec2d=prec2d,
                 force_backend=force_backend, threads=threads,
                 jacobian_retries=jacobian_retries,
+                use_fft=_resolve_use_fft(use_fft, device, resolution),
                 constraint_continuation=(
                     constraint_continuation if same_grid else None),
                 reuse_vacuum_cache=bool(same_grid),
@@ -530,6 +533,20 @@ def solve_free_boundary_multigrid(
             stage_result.result.fsqz,
             stage_result.result.fsql,
         )
+        # Match the fixed-boundary ladder: drop this rung's compiled
+        # executables before the next (larger) grid compiles its own, so peak
+        # memory tracks the largest single rung rather than the whole ladder.
+        # The vacuum/state continuation above is materialised first.
+        future = ns_arr[igrid + 1:]
+        executable = future[future >= nsval]
+        if (
+            release_stage_cache
+            and executable.size
+            and int(executable[0]) != nsval
+        ):
+            jax.block_until_ready((state, vacuum_continuation))
+            jax.clear_caches()
+            gc.collect()
 
     if stage_result is None:  # defensive; positive ns_arr guarantees a stage
         raise ValueError("ns_array has no executable stages")

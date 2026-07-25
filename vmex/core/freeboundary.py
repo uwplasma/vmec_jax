@@ -1082,6 +1082,7 @@ def _solve_free_boundary_stage(
     constraint_continuation: tuple[Array, Array] | None = None,
     reuse_vacuum_cache: bool = False,
     allow_initial_axis_reguess: bool = True,
+    use_fft: bool = False,
     residual_continuation: (
         tuple[float | Array, float | Array, float | Array] | None
     ) = None,
@@ -1116,7 +1117,7 @@ def _solve_free_boundary_stage(
         time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
         lconm1=lconm1, precon_type=precon_type,
         prec2d_threshold=prec2d_threshold, prec2d=prec2d,
-        force_backend=force_backend, threads=threads,
+        force_backend=force_backend, threads=threads, use_fft=use_fft,
     )
     if not allow_initial_axis_reguess:
         rt = replace(rt, lmove_axis=False)
@@ -1150,7 +1151,7 @@ def _solve_free_boundary_stage(
                 rt, rcon0=jnp.zeros_like(rt.rcon0),
                 zcon0=jnp.zeros_like(rt.zcon0))
         else:
-            rt = runtime_with_baselines(rt, _init_state)
+            rt = runtime_with_baselines(rt, _init_state, use_fft=use_fft)
     _initial_ijacob = 0
     # ``eqsolve.f`` retries a supplied axis when the first Jacobian changes
     # sign.  The fixed-boundary driver already did this in ``_solve_stage``;
