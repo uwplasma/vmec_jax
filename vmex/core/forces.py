@@ -59,6 +59,7 @@ from .fourier import ModeTable, TrigTables
 from .geometry import HalfMeshJacobian, RealSpaceGeometry, sqrt_s_half_mesh
 from .transforms import (
     SpectralForce,
+    _fourier_to_real_fft,
     fourier_to_real,
     register_pytree_dataclass as _register,
     symforce_split,
@@ -629,6 +630,7 @@ def constraint_force(
     signgs: int,
     rcon0: Array | None = None,
     zcon0: Array | None = None,
+    use_fft: bool = False,
 ) -> tuple[Array, Array, Array, Array, Array]:
     """Spectral-condensation constraint force pipeline (funct3d.f + alias.f).
 
@@ -682,7 +684,8 @@ def constraint_force(
         ],
         axis=0,
     )
-    (value,) = fourier_to_real(
+    synthesize = _fourier_to_real_fft if use_fft else fourier_to_real
+    (value,) = synthesize(
         coeff_cos,
         coeff_sin,
         modes=modes,
@@ -746,6 +749,7 @@ def mhd_forces(
     signgs: int,
     rcon0: Array | None = None,
     zcon0: Array | None = None,
+    use_fft: bool = False,
 ) -> RealSpaceForces:
     """Assemble all real-space force kernels (funct3d.f force stage).
 
@@ -785,6 +789,7 @@ def mhd_forces(
         signgs=signgs,
         rcon0=rcon0,
         zcon0=zcon0,
+        use_fft=use_fft,
     )
 
     s = jnp.asarray(s)

@@ -12,6 +12,7 @@ during the port:
 from __future__ import annotations
 
 import jax
+import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
@@ -25,6 +26,7 @@ from vmex.core.nyquist import (
     wrout_sin_coeffs,
 )
 from vmex.core.transforms import (
+    _fourier_to_real_fft,
     fourier_to_real,
     real_to_fourier,
     symforce_split,
@@ -141,6 +143,59 @@ def test_lasym_nestor_surface_analysis_preserves_mode_signs():
     np.testing.assert_allclose(
         actual_sin, sin_coefficients, rtol=0.0, atol=roundtrip_atol
     )
+
+
+def test_synthesis_accepts_nyquist_extended_trig_tables():
+    """WOUT evaluates main-mode coefficients on Nyquist-extended grids."""
+    base = Resolution(
+        mpol=6, ntor=3, ntheta=22, nzeta=16, nfp=3, lasym=False, ns=NS
+    )
+    extended = Resolution(
+        mpol=9, ntor=8, ntheta=22, nzeta=16, nfp=3, lasym=False, ns=NS
+    )
+    modes = mode_table(base.mpol, base.ntor)
+    rng = np.random.default_rng(4)
+    coefficient_cos = rng.standard_normal((NS, modes.mnmax))
+    coefficient_sin = rng.standard_normal((NS, modes.mnmax))
+    kwargs = dict(modes=modes, derivatives=("value", "dtheta", "dzeta"))
+    actual = _fourier_to_real_fft(
+        coefficient_cos, coefficient_sin, trig=trig_tables(extended), **kwargs
+    )
+    expected = fourier_to_real(
+        coefficient_cos, coefficient_sin, trig=trig_tables(base), **kwargs
+    )
+    for left, right in zip(actual, expected):
+        np.testing.assert_allclose(left, right, rtol=RTOL, atol=1e-12)
+
+
+def test_fft_and_dense_synthesis_match_through_ad():
+    """The fast primal and lower-memory implicit path have matching AD."""
+    resolution = Resolution(
+        mpol=4, ntor=2, ntheta=16, nzeta=12, nfp=3, lasym=True, ns=NS
+    )
+    modes = mode_table(resolution.mpol, resolution.ntor)
+    trig = trig_tables(resolution)
+    rng = np.random.default_rng(5)
+    shape = (NS, modes.mnmax)
+    primals = tuple(jnp.asarray(rng.standard_normal(shape)) for _ in range(2))
+    tangents = tuple(jnp.asarray(rng.standard_normal(shape)) for _ in range(2))
+
+    def synthesize(c, s, *, use_fft):
+        transform = _fourier_to_real_fft if use_fft else fourier_to_real
+        return transform(c, s, modes=modes, trig=trig)
+
+    fast = lambda c, s: synthesize(c, s, use_fft=True)  # noqa: E731
+    dense = lambda c, s: synthesize(c, s, use_fft=False)  # noqa: E731
+    values, tangent = jax.jvp(fast, primals, tangents)
+    dense_values, dense_tangent = jax.jvp(dense, primals, tangents)
+    for left, right in zip(values + tangent, dense_values + dense_tangent):
+        np.testing.assert_allclose(left, right, rtol=2e-13, atol=2e-12)
+    cotangent = tuple(jnp.asarray(rng.standard_normal(x.shape)) for x in values)
+    _, pullback = jax.vjp(fast, *primals)
+    adjoint = pullback(cotangent)
+    lhs = sum(jnp.vdot(x, y) for x, y in zip(tangent, cotangent))
+    rhs = sum(jnp.vdot(x, y) for x, y in zip(tangents, adjoint))
+    np.testing.assert_allclose(lhs, rhs, rtol=2e-13, atol=2e-12)
 
 
 # ---------------------------------------------------------------------------

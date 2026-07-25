@@ -203,6 +203,11 @@ class Equilibrium:
         )
 
 
+def _auto_jac_chunk(dim: int) -> int:
+    """Bound device-aware batching by the conservative square-root policy."""
+    return min(int(auto_chunk_size(dim)), int(np.ceil(np.sqrt(dim))))
+
+
 def solve_equilibrium(
     inp: VmecInput,
     *,
@@ -1157,7 +1162,7 @@ def least_squares(
     current_dofs: int | None = None,
     jac: str | None = None,
     jac_chunk_size: int | str | None = "auto",
-    jac_solver: str = "block",
+    jac_solver: str = "auto",
     recycle: bool = False,
     hot_restart: bool = True,
     warm_start: str | None = "perturbation",
@@ -1234,19 +1239,18 @@ def least_squares(
     ``readin.f`` delta rotation.
     ``jac_chunk_size`` (R17.1 memory knob, ``jac="implicit"`` only) chunks the
     per-dof Jacobian columns via :func:`solvax.chunk_map`: ``"auto"`` (default)
-    lets :func:`solvax.auto_chunk_size` pick a memory-bounded width (the
-    largest block that fits the device budget on GPU, a sqrt-balanced width on
-    CPU) so peak Jacobian memory is ``m0 + m1*chunk`` instead of scaling with
-    the full dof count; an ``int`` fixes that many boundary dofs at a time; and
-    ``None`` forces one wide ``vmap`` over all dofs (the pre-R17.1 behavior,
-    fastest but peak memory O(dofs)).  The column blocks are mathematically
-    independent, so the assembled Jacobian is identical to float64 round-off
-    (~1e-15) across chunk sizes.  It is inert for ``jac=None`` (scipy computes
-    the finite-difference Jacobian itself).
+    uses SOLVAX's device-aware width capped by a conservative square-root
+    width, so an accelerator memory report cannot expand the full probe batch;
+    an ``int`` fixes that many boundary dofs at a time; and ``None`` forces one
+    wide ``vmap`` over all dofs. The column blocks are mathematically
+    independent, so the assembled Jacobian is identical to float64 round-off.
+    It is inert for ``jac=None``.
 
-    ``jac_solver`` (plan R25.2, ``jac="implicit"`` only) selects the linear
-    solver behind the per-dof implicit-Jacobian columns.  ``"block"``
-    (default) amortizes one block-tridiagonal factorization of the *raw*
+    ``jac_solver`` (``jac="implicit"`` only) selects the implicit-Jacobian
+    direction. ``"auto"`` (default) uses one matrix-free reverse solve for a
+    scalar residual and the ``"block"`` path below otherwise. ``"reverse"``
+    requests one reverse solve per residual row. ``"block"``
+    amortizes one block-tridiagonal factorization of the *raw*
     force Jacobian — whose radial coupling is exactly nearest-neighbor, so
     ns dense ``(3*mn, 3*mn)`` blocks assembled by 3-colored ``jax.jvp``
     probes capture it completely at a cost independent of the dof count —
@@ -1453,7 +1457,7 @@ def _least_squares_implicit(
     x0: np.ndarray | None,
     current_dofs: int | None = None,
     jac_chunk_size: int | str | None = "auto",
-    jac_solver: str = "block",
+    jac_solver: str = "auto",
     recycle: bool = False,
     warm_start: str | None = "perturbation",
     solve_kwargs: dict,
@@ -1470,13 +1474,11 @@ def _least_squares_implicit(
     :func:`~vmex.core.implicit.runtime_from_params` -> the stacked
     objective rows: one warm host solve per trial ``x``.  ``jac`` computes
     the exact residual Jacobian by *forward* implicit differentiation:
-    by default (``jac_solver="block"``, see ``jacobian_rows_block``) one
-    amortized block-tridiagonal factorization backsolves every boundary-dof
-    column at once; ``jac_solver="gmres"`` (see ``jacobian_rows``) runs one
-    preconditioned GMRES per boundary dof, batched.  Either way this is far
-    below one full equilibrium solve per dof (finite differences) while
-    keeping the full pointwise Gauss-Newton residual geometry.  Both are
-    jit-compiled once per stage.
+    with one reverse adjoint for a scalar residual (``jac_solver="auto"``);
+    vector residuals use one amortized block-tridiagonal factorization
+    (``jacobian_rows_block``), while ``jac_solver="gmres"`` keeps the
+    per-boundary-dof fallback. All paths retain the full pointwise
+    Gauss-Newton residual geometry and are jit-compiled once per stage.
 
     The residual and Jacobian graphs run on the device chosen by
     :func:`vmex.core.device.resolve_implicit_device` — the CPU by default,
@@ -1618,7 +1620,7 @@ def _least_squares_implicit(
     # latter (a wrong aspect-ratio column), whereas the full-width lax.map
     # batch agrees with the chunked paths and independent central FD.
     if jac_chunk_size == "auto":
-        chunk = int(auto_chunk_size(ndof))
+        chunk = _auto_jac_chunk(ndof)
     elif jac_chunk_size is None or isinstance(jac_chunk_size, int):
         chunk = jac_chunk_size
     else:
@@ -1724,7 +1726,7 @@ def _least_squares_implicit(
     probe_field = jnp.asarray(np.tile(np.repeat(np.arange(n_act), mn_state), 3))
     probe_col = jnp.asarray(np.tile(np.tile(np.arange(mn_state), n_act), 3))
     if jac_chunk_size == "auto":
-        probe_chunk = int(auto_chunk_size(3 * m_block))
+        probe_chunk = _auto_jac_chunk(3 * m_block)
     elif jac_chunk_size is None:
         probe_chunk = 3 * m_block
     else:
@@ -1870,16 +1872,18 @@ def _least_squares_implicit(
         cols = cols.reshape((nchunks * csize,) + cols.shape[2:])[:ndof]
         return jnp.transpose(cols), C, U
 
-    if jac_solver not in ("block", "gmres"):
+    if jac_solver not in ("auto", "block", "gmres", "reverse"):
         raise ValueError(
-            f"jac_solver must be 'block' or 'gmres', got {jac_solver!r}")
+            "jac_solver must be 'auto', 'block', 'gmres', or 'reverse', "
+            f"got {jac_solver!r}")
     if recycle:
         jac_impl = jacobian_rows_recycled  # opt-in R25.3 experiment wins
-    elif jac_solver == "block":
+    elif jac_solver in ("auto", "block"):
         jac_impl = jacobian_rows_block
     else:
         jac_impl = jacobian_rows
     jac_jit = jax.jit(jac_impl)
+    reverse_jit = jax.jit(jax.jacrev(residual_rows))
 
     holder: dict[str, Any] = {"nres": None, "lin": None}
     if recycle:
@@ -1953,7 +1957,19 @@ def _least_squares_implicit(
 
     def jac_fn(x: np.ndarray) -> np.ndarray:
         try:
-            if recycle:
+            reverse = (
+                not recycle
+                and (
+                    jac_solver == "reverse"
+                    or (jac_solver == "auto" and holder["nres"] == 1)
+                )
+            )
+            if reverse:
+                jac = np.asarray(
+                    jax.device_get(reverse_jit(_place(x))), dtype=float
+                )
+                holder["lin"] = None
+            elif recycle:
                 rows, C, U = jac_jit(_place(x), *holder["recycle"])
                 holder["recycle"] = (C, U)  # deflate the next jac evaluation
                 jac = np.asarray(jax.device_get(rows), dtype=float)

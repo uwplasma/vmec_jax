@@ -312,6 +312,7 @@ def _template_runtime(cfg: ImplicitConfig) -> SolverRuntime:
     return prepare_runtime(
         cfg.inp, cfg.resolution, ftol=cfg.ftol,
         max_iterations=cfg.max_iterations, lconm1=cfg.lconm1,
+        use_fft=False,
     )
 
 
@@ -750,6 +751,7 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
             fields=fields, R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
             modes=rt_p.modes, trig=rt_p.trig, s=s, phipf=setup.phipf,
             tcon=tcon, signgs=setup.signgs, rcon0=rt_p.rcon0, zcon0=rt_p.zcon0,
+            use_fft=False,
         )
         spectral = spectral_mhd_forces(
             forces, mpol=cfg.resolution.mpol, ntor=cfg.resolution.ntor,
@@ -896,12 +898,12 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
         run = lambda init: solve_multigrid(  # noqa: E731
             inp2, ns_array=ns_arr, ftol_array=ftol_arr, mode=cfg.mode,
             lconm1=cfg.lconm1, raise_on_max_iterations=False,
-            initial_state=init)
+            initial_state=init, use_fft=False)
     else:
         run = lambda init: solve(  # noqa: E731
             inp2, cfg.resolution, ftol=cfg.ftol,
             max_iterations=cfg.max_iterations, mode=cfg.mode,
-            lconm1=cfg.lconm1, initial_state=init)
+            lconm1=cfg.lconm1, initial_state=init, use_fft=False)
     # Seed ladder: perturbation prediction -> plain hot restart -> cold.
     # A bad warm seed must not fail the trial (only the initial guess is at
     # stake — every rung converges to the same fixed point).

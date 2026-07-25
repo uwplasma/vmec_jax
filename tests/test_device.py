@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from vmex.core import device as dev
-from vmex.core import freeboundary, multigrid
+from vmex.core import freeboundary, multigrid, solver
 from vmex.core.fourier import Resolution
 
 
@@ -89,6 +89,30 @@ def test_auto_cpu_recommendation_is_a_noop_on_cpu(monkeypatch):
     # CPU-recommended + default backend already CPU -> nothing to place.
     if jax.default_backend() == "cpu":
         assert dev.resolve_device(dev.AUTO, _res(ns=11, mpol=6, ntor=0)) is None
+
+
+def test_synthesis_policy_uses_measured_hardware_defaults(monkeypatch):
+    resolution = _res(ns=101, mpol=18, ntor=24, nfp=4)
+    target = SimpleNamespace(platform="cpu")
+    monkeypatch.setattr(solver, "_placement_device", lambda *_: target)
+    monkeypatch.setattr(solver.platform, "machine", lambda: "x86_64")
+    assert not solver._resolve_use_fft(None, "cpu", resolution)
+    monkeypatch.setattr(solver.platform, "machine", lambda: "arm64")
+    assert solver._resolve_use_fft(None, "cpu", resolution)
+    target.platform = "gpu"
+    assert solver._resolve_use_fft(None, "gpu", resolution)
+    assert not solver._resolve_use_fft(
+        None, "gpu", _res(ns=50, mpol=8, ntor=8, nfp=2)
+    )
+    assert solver._resolve_use_fft(False, "gpu", resolution) is False
+    assert solver._resolve_use_fft(True, "cpu", resolution) is True
+
+
+def test_synthesis_policy_respects_active_default_device(monkeypatch):
+    monkeypatch.setattr(solver.platform, "machine", lambda: "x86_64")
+    resolution = _res(ns=101, mpol=18, ntor=24, nfp=4)
+    with jax.default_device(jax.devices("cpu")[0]):
+        assert not solver._resolve_use_fft(None, None, resolution)
 
 
 def test_auto_gpu_recommendation_without_accelerator(monkeypatch):

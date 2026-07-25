@@ -7,6 +7,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 ## [Unreleased]
 
 ### Added
+- **High-resolution resource profiler.**
+  `benchmarks/profile_high_resolution.py` records fresh-process implicit
+  Jacobian checksums and per-resolution mirror wall/RSS scaling without
+  hardware-selection environment variables.
 - **Explicit device selection.** Forward, free-boundary, implicit, and CLI
   solve paths accept public CPU/GPU/JAX placement controls: omitted or
   `"auto"` retains VMEX's measured policy, `None` follows JAX, and explicit
@@ -31,6 +35,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
   implicit-gradient parity without JAX platform environment variables.
 
 ### Changed
+- **Measured high-mode synthesis.** Above 512 modes on accelerators and ARM
+  CPUs, equilibrium solves now repack signed helical modes into toroidal FFTs
+  plus a short poloidal contraction; smaller decks retain the dense lane
+  after routine M4 timing. The exact supplied HSX run on an Apple M4 falls
+  from
+  676.46 s / 3.896 GiB to
+  206.56 s / 1.634 GiB without changing convergence or WOUT parity. The
+  dense real contraction remains the x86 CPU default after it beat the FFT
+  path 413.24 s to 570.47 s on the office Xeon; explicit `use_fft` wins.
+  The one-shot CLI releases completed radial-stage executables; library
+  calls retain them by default. Implicit AD keeps the established real
+  contraction to avoid complex batched tangent storage.
+- **Direction-adaptive implicit Jacobians.** Scalar least-squares residuals
+  now use one matrix-free reverse adjoint by default, avoiding the dense
+  high-mode block assembly; vector residuals retain the exact block path.
+  Automatic probe chunks are capped by the conservative square-root width.
 - **Mirror-specific device policy.** Fixed/free-boundary mirror solves and
   beta scans now accept the common `device=` contract and default to CPU for
   their measured host-SciPy/JAX callback workload.

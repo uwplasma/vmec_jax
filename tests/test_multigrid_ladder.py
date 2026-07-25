@@ -262,6 +262,19 @@ def test_ladder_stops_at_first_decreasing_stage():
     )
 
 
+def test_ladder_can_release_distinct_stage_caches(monkeypatch):
+    """One-shot ladders may discard a completed grid's in-memory executable."""
+    cleared = []
+    monkeypatch.setattr(multigrid.jax, "clear_caches", lambda: cleared.append(1))
+    monkeypatch.setattr(multigrid.gc, "collect", lambda: 0)
+    multigrid.solve_multigrid(
+        _load_input("cth_like_fixed_bdy"), ns_array=[5, 9],
+        ftol_array=[1e-30], niter_array=[1], raise_on_max_iterations=False,
+        release_stage_cache=True,
+    )
+    assert cleared == [1]
+
+
 def test_ladder_forwards_explicit_2d_preconditioner(monkeypatch):
     seen = []
     marker = object()

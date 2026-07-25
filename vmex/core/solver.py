@@ -61,6 +61,7 @@ from dataclasses import dataclass, fields as dataclass_fields, is_dataclass, rep
 from typing import Any, Callable
 
 import functools
+import platform
 
 import numpy as np
 
@@ -125,7 +126,12 @@ _harden_compilation_cache()
 import jax.numpy as jnp
 from jax import lax
 
-from .device import AUTO, device_context
+from .device import (
+    AUTO,
+    GPU_MAX_SPECTRAL_MODES,
+    _placement_device,
+    device_context,
+)
 from .errors import (
     AXIS_REGUESS_FLAG, BAD_JACOBIAN_FLAG, JAC75_FLAG, MISC_ERROR_FLAG, MORE_ITER_FLAG,
     NONFINITE_FLAG, NORM_TERM_FLAG, SUCCESSFUL_TERM_FLAG,
@@ -559,7 +565,9 @@ def _physical_coefficients(state: SpectralState, *, modes, lthreed, lasym, lconm
     return R_cos, R_sin, Z_cos, Z_sin
 
 
-def _geometry(state: SpectralState, rt: SolverRuntime):
+def _geometry(
+    state: SpectralState, rt: SolverRuntime, *, use_fft: bool = False
+):
     """Constrained state -> physical coefficients + real-space geometry."""
     setup = rt.setup
     R_cos, R_sin, Z_cos, Z_sin = _physical_coefficients(
@@ -570,7 +578,7 @@ def _geometry(state: SpectralState, rt: SolverRuntime):
     geometry = real_space_geometry(
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         lambda_cos=state.L_cos, lambda_sin=lambda_sin,
-        modes=rt.modes, trig=rt.trig, s=setup.s_full,
+        modes=rt.modes, trig=rt.trig, s=setup.s_full, use_fft=use_fft,
     )
     return (R_cos, R_sin, Z_cos, Z_sin), geometry
 
@@ -622,6 +630,7 @@ def prepare_runtime(
     setup: RunSetup | None = None,
     precon_type: str | None = None, prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
+    use_fft: bool = False,
 ) -> SolverRuntime:
     """Build the static solver context from an input file or a RunSetup.
 
@@ -659,7 +668,7 @@ def prepare_runtime(
             # second time in _solve_stage.
             setup = run_setup(
                 inp, resolution, lconm1=lconm1,
-                infer_axis_if_missing=False,
+                infer_axis_if_missing=False, use_fft=use_fft,
             )
         defaults = dict(ftol=float(inp.ftol_array[0]), niter=int(inp.niter_array[0]),
                         delt=float(inp.delt), tcon0=float(inp.tcon0),
@@ -688,7 +697,9 @@ def prepare_runtime(
         rcon0=jnp.zeros(()), zcon0=jnp.zeros(()),  # placeholder, replaced below
         prec2d=_resolve_prec2d(source, prec2d, precon_type, prec2d_threshold),
     )
-    rcon0, zcon0 = _constraint_baselines(_initial_state(setup), rt)
+    rcon0, zcon0 = _constraint_baselines(
+        _initial_state(setup), rt, use_fft=use_fft
+    )
     return replace(rt, rcon0=rcon0, zcon0=zcon0)
 
 
@@ -730,7 +741,9 @@ def hot_restart_state(rt: SolverRuntime, state: SpectralState) -> SpectralState:
     )
 
 
-def runtime_with_baselines(rt: SolverRuntime, state: SpectralState) -> SolverRuntime:
+def runtime_with_baselines(
+    rt: SolverRuntime, state: SpectralState, *, use_fft: bool = False
+) -> SolverRuntime:
     """Rebind ``rcon0/zcon0`` to a new starting state (``funct3d.f``).
 
     VMEC2000 sets the constraint baselines from the *current* state whenever
@@ -742,19 +755,24 @@ def runtime_with_baselines(rt: SolverRuntime, state: SpectralState) -> SolverRun
     and hence the converged equilibrium — is subtly wrong (observed as a
     ~1e-8 relative ``wb`` shift on the nfp4_QH ladder).
     """
-    rcon0, zcon0 = _constraint_baselines(state, rt)
+    rcon0, zcon0 = _constraint_baselines(state, rt, use_fft=use_fft)
     return replace(rt, rcon0=rcon0, zcon0=zcon0)
 
 
-def _constraint_baselines(state: SpectralState, rt: SolverRuntime):
+def _constraint_baselines(
+    state: SpectralState, rt: SolverRuntime, *, use_fft: bool = False
+):
     """One-time ``rcon0/zcon0 = s * rcon(ns)`` (funct3d.f, iter2 == iter1)."""
-    (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(state, rt)
+    (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(
+        state, rt, use_fft=use_fft
+    )
     ns = int(rt.setup.s_full.shape[0])
     _, _, _, rcon0, zcon0 = constraint_force(
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         geometry=geometry, modes=rt.modes, trig=rt.trig, s=rt.setup.s_full,
         tcon=jnp.zeros((ns,), dtype=rt.setup.s_full.dtype),
         signgs=rt.setup.signgs,
+        use_fft=use_fft,
     )
     return rcon0, zcon0
 
@@ -815,6 +833,7 @@ def _force_pipeline(
     cache: PreconditionerCache, rt: SolverRuntime,
     iteration: Array, fsqz_previous: Array,
     collect_health: bool = False,
+    use_fft: bool = False,
 ) -> tuple[Any, Any, ForcePipelineHealth]:
     """MHD forces -> residue.f90 chain -> scalfor/faclam preconditioning.
 
@@ -838,6 +857,7 @@ def _force_pipeline(
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         modes=rt.modes, trig=rt.trig, s=s, phipf=setup.phipf,
         tcon=cache.tcon, signgs=setup.signgs, rcon0=rt.rcon0, zcon0=rt.zcon0,
+        use_fft=use_fft,
     )
     if rt.lfreeb:
         # forces.f (ivac >= 1): vacuum-pressure edge force.  funct3d.f builds
@@ -1014,6 +1034,7 @@ def _evaluate(
     iter_last_reset: Array, fsqz_previous: Array, rt: SolverRuntime,
     fsq_rz_previous: Array | None = None,
     *, collect_health: bool = False,
+    use_fft: bool = False,
 ) -> _EvalResult:
     """One funct3d.f pass (fixed boundary), pure and jit-friendly.
 
@@ -1033,7 +1054,9 @@ def _evaluate(
     ns = int(s.shape[0])
     hs = setup.hs
 
-    (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(state, rt)
+    (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(
+        state, rt, use_fft=use_fft
+    )
     jacobian = half_mesh_jacobian(geometry, s=s)
     jac_changed = jacobian.jacobian_sign_changed
 
@@ -1130,7 +1153,7 @@ def _evaluate(
         geometry=geometry, jacobian=jacobian, metrics=metrics, fields=fields,
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         cache=cache, rt=rt, iteration=iteration, fsqz_previous=fsqz_previous,
-        collect_health=collect_health,
+        collect_health=collect_health, use_fft=use_fft,
     )
     if rt.lfreeb:
         # residue.f90 medge rule: the edge rows join fsqr/fsqz only when
@@ -1250,7 +1273,7 @@ def _evaluation_is_finite(result: _EvalResult) -> Array:
 
 
 def reguess_initial_axis(
-    rt: SolverRuntime, state: SpectralState
+    rt: SolverRuntime, state: SpectralState, *, use_fft: bool = False
 ) -> tuple[SolverRuntime, SpectralState, tuple[Array, Array, Array, Array]]:
     """Apply VMEC2000's first-pass magnetic-axis retry.
 
@@ -1261,7 +1284,7 @@ def reguess_initial_axis(
     (``funct3d.f: iter2 == iter1``).
     """
     setup = rt.setup
-    _, geometry = _geometry(state, rt)
+    _, geometry = _geometry(state, rt, use_fft=use_fft)
     axis = guess_axis(
         geometry, s=setup.s_full, trig=rt.trig, signgs=setup.signgs
     )
@@ -1283,7 +1306,9 @@ def reguess_initial_axis(
         R_cos=arrays[0], R_sin=arrays[1], Z_cos=arrays[2], Z_sin=arrays[3],
         L_cos=arrays[4], L_sin=arrays[5],
     )
-    rt = runtime_with_baselines(replace(rt, setup=new_setup), state)
+    rt = runtime_with_baselines(
+        replace(rt, setup=new_setup), state, use_fft=use_fft
+    )
     return rt, state, axis
 
 
@@ -1294,6 +1319,7 @@ def _make_body(
     rt: SolverRuntime,
     *,
     evaluation_state: SpectralState | None = None,
+    use_fft: bool = False,
 ) -> Callable[[_LoopCarry], _LoopCarry]:
     """Build the traced single-iteration body shared by both lanes.
 
@@ -1315,7 +1341,7 @@ def _make_body(
         # ---- funct3d (evolve.f) -------------------------------------------
         state_e1 = carry.state if evaluation_state is None else evaluation_state
         e1 = _evaluate(state_e1, carry.cache, it, carry.iter1, carry.fsqz, rt,
-                       carry.fsqr + carry.fsqz)
+                       carry.fsqr + carry.fsqz, use_fft=use_fft)
         jac1 = e1.jacobian_sign_changed
         nonfinite1 = (~jac1) & (~_evaluation_is_finite(e1))
         # On irst=2 funct3d skips residue: the module residuals stay stale.
@@ -1377,7 +1403,10 @@ def _make_body(
         # Re-evaluate at the restored state (TimeStepControl calls funct3d).
         e2 = lax.cond(
             restart,
-            lambda args: _evaluate(args[0], args[1], it, it, args[2], rt, args[3]),
+            lambda args: _evaluate(
+                args[0], args[1], it, it, args[2], rt, args[3],
+                use_fft=use_fft,
+            ),
             lambda args: e1,
             (state_r, e1.cache, fsqz_c, fsqr_c + fsqz_c),
         )
@@ -1702,8 +1731,44 @@ def _block_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
     return lax.scan(lambda cc, _: (body(cc), None), carry, None, length=BLOCK_SIZE)[0]
 
 
+@jax.jit
+def _while_lane_fft(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
+    """Whole-solve lane using separable Fourier synthesis."""
+    body = _make_body(rt, use_fft=True)
+    return lax.while_loop(lambda c: jnp.logical_not(c.done), body, carry)
+
+
+@functools.partial(jax.jit, donate_argnums=(0,))
+def _block_lane_fft(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
+    """Donated CLI block using separable Fourier synthesis."""
+    body = _make_body(rt, use_fft=True)
+    return lax.scan(
+        lambda cc, _: (body(cc), None), carry, None, length=BLOCK_SIZE
+    )[0]
+
+
+def _resolve_use_fft(
+    use_fft: bool | None, device: Any, resolution: Resolution
+) -> bool:
+    """Select the measured synthesis kernel without environment routing."""
+    if use_fft is not None:
+        return bool(use_fft)
+    if int(resolution.mnmax) <= GPU_MAX_SPECTRAL_MODES:
+        return False
+    target = _placement_device(device, resolution)
+    if target is None:
+        target = jax.config.jax_default_device
+    backend = (
+        getattr(target, "platform", None)
+        if target is not None
+        else jax.default_backend()
+    )
+    return backend != "cpu" or platform.machine().lower() in ("arm64", "aarch64")
+
+
 def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
               ijacob: int, verbose: bool, emit,
+              use_fft: bool = False,
               emit_banner: bool = True,
               initial_xcdot: SpectralState | None = None,
               initial_residuals: (
@@ -1716,7 +1781,7 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
     )
 
     if mode == "jit":
-        return _while_lane(carry, rt)
+        return (_while_lane_fft if use_fft else _while_lane)(carry, rt)
 
     if mode != "cli":
         raise ValueError(f"unknown mode {mode!r}; expected 'cli' or 'jit'")
@@ -1734,8 +1799,9 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
 
     printed: set[int] = set()
     max_passes = rt.max_iterations + 200
+    lane = _block_lane_fft if use_fft else _block_lane
     for _ in range(max_passes):
-        carry = _block_lane(carry, rt)
+        carry = lane(carry, rt)
         done = bool(carry.done)
         upto = int(carry.iteration) if done else int(carry.iteration) - 1
         # VMEC2000's irst=4 and first-bad-Jacobian transfers return to
@@ -1754,6 +1820,7 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
 def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
                  mode: str, verbose: bool, emit,
                  try_axis_reguess: bool = True,
+                 use_fft: bool = False,
                  jacobian_retries: int = 2,
                  residual_continuation: (
                      tuple[float | Array, float | Array, float | Array] | None
@@ -1798,7 +1865,8 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
         )
         carry = _run_loop(
             attempt_state, loop_rt, mode=mode, ijacob=0,
-            verbose=verbose, emit=emit, emit_banner=emit_banner,
+            verbose=verbose, emit=emit, use_fft=use_fft,
+            emit_banner=emit_banner,
             initial_residuals=attempt_residuals,
         )
 
@@ -1819,11 +1887,12 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
                     emit(" INITIAL JACOBIAN CHANGED SIGN!")
                 emit(" TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS")
             attempt_rt, attempt_state, _axis = reguess_initial_axis(
-                attempt_rt, attempt_state
+                attempt_rt, attempt_state, use_fft=use_fft
             )
             carry = _run_loop(
                 attempt_state, attempt_rt, mode=mode, ijacob=1,
-                verbose=verbose, emit=emit, emit_banner=False,
+                verbose=verbose, emit=emit, use_fft=use_fft,
+                emit_banner=False,
                 initial_xcdot=(
                     carry.xcdot
                     if retry_reason == AXIS_REGUESS_FLAG else None
@@ -1908,6 +1977,7 @@ def solve(
     device: Any = AUTO,
     precon_type: str | None = None, prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
+    use_fft: bool | None = None,
     jacobian_retries: int = 2,
 ) -> SolveResult:
     """Single-grid fixed-boundary solve (VMEC2000 ``eqsolve.f``).
@@ -1948,6 +2018,12 @@ def solve(
     follow JAX placement.  The automatic policy never overrides an active
     ``jax.default_device`` context or user-pinned JAX platform.
 
+    ``use_fft=None`` (default) selects separable FFT only above 512 modes on
+    accelerators and ARM CPUs; smaller problems and x86 CPUs retain the dense
+    real contraction. Explicit ``True``/``False`` always wins. The implicit
+    API sets it False internally so its equilibrium and Jacobian share one
+    lower-memory real-contraction executable.
+
     ``precon_type`` (``"NONE"`` default) with a finite ``prec2d_threshold`` —
     or an explicit ``prec2d``
     :class:`~vmex.core.preconditioner_2d.Prec2DConfig` — switches on the
@@ -1958,11 +2034,17 @@ def solve(
     stiff cases (high beta/aspect/mode-number) in far fewer iterations.  The
     default (``NONE``) path is byte-identical to the 1D-only solver.
     """
+    if resolution is None and isinstance(source, VmecInput):
+        resolution = resolution_from_input(source)
+    if resolution is None:
+        raise ValueError("solve(RunSetup) requires a Resolution")
+    use_fft_resolved = _resolve_use_fft(use_fft, device, resolution)
     rt = prepare_runtime(
         source, resolution, ftol=ftol, max_iterations=max_iterations,
         time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
         lconm1=lconm1, precon_type=precon_type,
         prec2d_threshold=prec2d_threshold, prec2d=prec2d,
+        use_fft=use_fft_resolved,
     )
     if initial_state is not None:
         ns, mnmax = rt.resolution.ns, rt.modes.mnmax
@@ -1973,10 +2055,13 @@ def solve(
                 "vmex.core.multigrid.interpolate_state first"
             )
         initial_state = hot_restart_state(rt, initial_state)
-        rt = runtime_with_baselines(rt, initial_state)  # funct3d.f iter2==iter1
+        rt = runtime_with_baselines(
+            rt, initial_state, use_fft=use_fft_resolved
+        )  # funct3d.f iter2==iter1
     with device_context(device, rt.resolution):
         carry = _solve_stage(
             rt, initial_state, mode=mode, verbose=verbose, emit=emit,
+            use_fft=use_fft_resolved,
             jacobian_retries=jacobian_retries,
         )
     return _finalize(carry, rt)

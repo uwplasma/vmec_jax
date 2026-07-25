@@ -524,9 +524,11 @@ Forward-mode Jacobians for least squares (block-tridiagonal)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The adjoint above is the right tool for *one* scalar objective and many
-parameters. A least-squares optimizer needs the opposite object — the full
-residual Jacobian over all boundary dofs — which is computed in **forward**
-mode: per dof tangent :math:`t_j`, the state response is
+parameters. ``jac_solver="auto"`` therefore uses that reverse path for a
+scalar least-squares residual: one matrix-free solve, with no dense angular
+block assembly. Vector residuals need the full Jacobian over all boundary
+dofs, which the automatic policy computes in **forward** mode. Per dof
+tangent :math:`t_j`, the state response is
 
 .. math::
 
@@ -534,7 +536,7 @@ mode: per dof tangent :math:`t_j`, the state response is
           \frac{\partial F}{\partial p}\, t_j ,
 
 one linear solve per dof. Rather than running an independent GMRES per
-column, the default path (``jac_solver="block"``) exploits a structural
+column, the vector-residual path (``jac_solver="block"``) exploits a structural
 fact: in the **raw** force formulation the radial coupling of
 :math:`\partial F/\partial z` is exactly nearest-neighbor (the
 finite-difference stencil in :math:`s`), so the operator is *exactly*

@@ -917,6 +917,7 @@ def run_setup(
     *,
     lconm1: bool = True,
     infer_axis_if_missing: bool = True,
+    use_fft: bool = False,
 ) -> RunSetup:
     """Build the complete pre-iteration setup for one radial resolution.
 
@@ -975,7 +976,7 @@ def run_setup(
                 modes=modes, lthreed=bool(resolution.lthreed),
                 lasym=bool(resolution.lasym), lconm1=bool(lconm1),
             ),
-            modes=modes, trig=trig, s=grids.s_full,
+            modes=modes, trig=trig, s=grids.s_full, use_fft=use_fft,
         )
         axis = guess_axis(geom, s=grids.s_full, trig=trig, signgs=boundary.signgs)
         raxis_c, raxis_s, zaxis_c, zaxis_s = axis

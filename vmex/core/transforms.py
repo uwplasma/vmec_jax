@@ -15,10 +15,12 @@ VMEC2000 counterparts
 
 Structure
 ---------
-All transforms are two-stage DFTs expressed as batched matrix products
-(theta stage then zeta stage, or mode-stacked phase tables), pure ``jax.numpy``
-with ``Precision.HIGHEST``, no host round-trips, and jit-friendly: the trig
-tables and mode tables are static (NumPy) trace-time constants.
+Production geometry synthesis can use a batched toroidal FFT followed by a
+poloidal contraction (with a dense-DFT fallback for undersampled grids).
+The solver selects it on measured winning hardware; the public dense synthesis
+is retained for x86 CPUs and high-column implicit AD. Force projection uses the
+reverse two-stage order. All paths are pure ``jax.numpy``, have no host
+round-trips, and are jit-friendly.
 
 Naming: variables use physical names with the VMEC2000 Fortran name recorded
 in docstrings/comments (e.g. ``force_R`` for ``armn``, ``force_R_cc`` for
@@ -202,6 +204,122 @@ def _phase_pair(modes: ModeTable, trig: TrigTables, derivative: str) -> tuple[np
     return cos_phase, sin_phase
 
 
+def _packed_toroidal_coefficients(
+    coefficient_cos: Array, coefficient_sin: Array, modes: ModeTable
+) -> tuple[Array, Array, Array, Array]:
+    """Repack signed helical modes into separable cos/sin theta-zeta blocks."""
+    mpol = int(np.max(np.asarray(modes.m))) + 1
+    ntor = int(np.max(np.abs(np.asarray(modes.n)))) if modes.mnmax else 0
+    split = ntor + 1
+    cos0 = coefficient_cos[..., :split][..., None, :]
+    sin0 = coefficient_sin[..., :split][..., None, :]
+    shape = (*coefficient_cos.shape[:-1], mpol - 1, 2 * ntor + 1)
+    cos_rest = coefficient_cos[..., split:].reshape(shape)
+    sin_rest = coefficient_sin[..., split:].reshape(shape)
+
+    cos_neg = cos_rest[..., :ntor][..., ::-1]
+    sin_neg = sin_rest[..., :ntor][..., ::-1]
+    cos_pos = cos_rest[..., ntor + 1 :]
+    sin_pos = sin_rest[..., ntor + 1 :]
+    cos_zero = cos_rest[..., ntor : ntor + 1]
+    sin_zero = sin_rest[..., ntor : ntor + 1]
+
+    theta_cos_cos = jnp.concatenate(
+        [cos_zero, cos_neg + cos_pos], axis=-1
+    )
+    theta_cos_sin = jnp.concatenate(
+        [jnp.zeros_like(sin_zero), sin_neg - sin_pos], axis=-1
+    )
+    theta_sin_cos = jnp.concatenate(
+        [sin_zero, sin_neg + sin_pos], axis=-1
+    )
+    theta_sin_sin = jnp.concatenate(
+        [jnp.zeros_like(cos_zero), cos_pos - cos_neg], axis=-1
+    )
+
+    zero = jnp.zeros_like(cos0)
+    sin0_zeta = jnp.concatenate(
+        [jnp.zeros_like(sin0[..., :1]), -sin0[..., 1:]], axis=-1
+    )
+    return tuple(
+        jnp.concatenate([axis, rest], axis=-2)
+        for axis, rest in (
+            (cos0, theta_cos_cos),
+            (sin0_zeta, theta_cos_sin),
+            (zero, theta_sin_cos),
+            (zero, theta_sin_sin),
+        )
+    )
+
+
+def _toroidal_synthesis(
+    coefficient_cos: Array, coefficient_sin: Array, trig: TrigTables
+) -> Array:
+    """Evaluate one real toroidal Fourier series, using an FFT when unaliased."""
+    nzeta = int(np.shape(trig.cosnv)[0])
+    n_modes = int(coefficient_cos.shape[-1])
+    ntor = n_modes - 1
+    if ntor <= (nzeta - 1) // 2:
+        factors = jnp.full((n_modes,), nzeta / 2, dtype=coefficient_cos.dtype)
+        factors = factors.at[0].set(nzeta)
+        spectrum = (
+            factors * jnp.asarray(trig.nscale[:n_modes])
+            * (coefficient_cos - 1j * coefficient_sin)
+        )
+        spectrum = jnp.pad(
+            spectrum,
+            [(0, 0)] * (spectrum.ndim - 1)
+            + [(0, nzeta // 2 + 1 - n_modes)],
+        )
+        return jnp.fft.irfft(spectrum, n=nzeta, axis=-1)
+    return (
+        _einsum("...mn,kn->...mk", coefficient_cos, trig.cosnv[:, :n_modes])
+        + _einsum("...mn,kn->...mk", coefficient_sin, trig.sinnv[:, :n_modes])
+    )
+
+
+def _fast_synthesis(
+    coefficient_cos: Array,
+    coefficient_sin: Array,
+    modes: ModeTable,
+    trig: TrigTables,
+    derivatives: tuple[str, ...],
+) -> tuple[Array, ...]:
+    """Use separable FFT synthesis without expanding mode-stacked phases."""
+    a_cos, a_sin, b_cos, b_sin = _packed_toroidal_coefficients(
+        coefficient_cos, coefficient_sin, modes
+    )
+    a = _toroidal_synthesis(a_cos, a_sin, trig)
+    b = _toroidal_synthesis(b_cos, b_sin, trig)
+    mpol = int(a.shape[-2])
+    theta = {
+        "value": (trig.cosmu[:, :mpol], trig.sinmu[:, :mpol]),
+        "dtheta": (trig.sinmum[:, :mpol], trig.cosmum[:, :mpol]),
+    }
+    fields: list[Array] = []
+    for derivative in derivatives:
+        if derivative == "dzeta":
+            frequency = (
+                jnp.arange(a_cos.shape[-1], dtype=coefficient_cos.dtype)
+                * float(trig.nfp)
+            )
+            a_d = _toroidal_synthesis(frequency * a_sin, -frequency * a_cos, trig)
+            b_d = _toroidal_synthesis(frequency * b_sin, -frequency * b_cos, trig)
+            cosmu, sinmu = trig.cosmu[:, :mpol], trig.sinmu[:, :mpol]
+        elif derivative in theta:
+            a_d, b_d = a, b
+            cosmu, sinmu = theta[derivative]
+        else:
+            raise ValueError(
+                f"Unknown derivative {derivative!r}; expected one of {_DERIVATIVES}"
+            )
+        fields.append(
+            _einsum("...mk,im->...ik", a_d, cosmu)
+            + _einsum("...mk,im->...ik", b_d, sinmu)
+        )
+    return tuple(fields)
+
+
 # ---------------------------------------------------------------------------
 # Fourier -> real space (totzsps/totzspa)
 # ---------------------------------------------------------------------------
@@ -287,6 +405,51 @@ def fourier_to_real(
         phase = jnp.asarray(np.concatenate([cos_phase, sin_phase], axis=0))
         fields.append(_einsum("...k,kij->...ij", coeff, phase))
     return tuple(fields)
+
+
+def _fourier_to_real_fft(
+    coefficient_cos: Array,
+    coefficient_sin: Array,
+    *,
+    modes: ModeTable,
+    trig: TrigTables,
+    derivatives: Sequence[str] = _DERIVATIVES,
+    internal_coeffs: bool = False,
+    odd_m_sqrt_s: bool = False,
+    s: Array | None = None,
+) -> tuple[Array, ...]:
+    """Internal separable-FFT variant of :func:`fourier_to_real`."""
+    coeff_cos = jnp.asarray(coefficient_cos)
+    coeff_sin = jnp.asarray(coefficient_sin)
+    if coeff_cos.ndim < 2 or coeff_sin.ndim < 2:
+        raise ValueError("Expected coefficient arrays with shape (..., ns, mnmax)")
+    if coeff_cos.shape != coeff_sin.shape:
+        raise ValueError("coefficient_cos and coefficient_sin must have the same shape")
+    if int(coeff_cos.shape[-1]) != modes.mnmax:
+        raise ValueError("Mode count mismatch between coefficients and mode table")
+
+    if not internal_coeffs:
+        scale = jnp.asarray(
+            physical_to_internal_scale(modes, trig), dtype=coeff_cos.dtype
+        )
+        scale = scale.reshape((1,) * (coeff_cos.ndim - 1) + (modes.mnmax,))
+        coeff_cos = coeff_cos * scale
+        coeff_sin = coeff_sin * scale
+    if odd_m_sqrt_s:
+        ns = int(coeff_cos.shape[-2])
+        if s is None:
+            s = _default_radial_grid(ns, coeff_cos.dtype)
+        mpol = int(np.max(np.asarray(modes.m))) + 1
+        scalxc = odd_m_sqrt_s_scaling(s, mpol).astype(coeff_cos.dtype)
+        scalxc_mn = scalxc[:, np.asarray(modes.m, dtype=np.int64)]
+        scalxc_mn = scalxc_mn.reshape(
+            (1,) * (coeff_cos.ndim - 2) + scalxc_mn.shape
+        )
+        coeff_cos = coeff_cos * scalxc_mn
+        coeff_sin = coeff_sin * scalxc_mn
+    return _fast_synthesis(
+        coeff_cos, coeff_sin, modes, trig, tuple(derivatives)
+    )
 
 
 def real_to_fourier(

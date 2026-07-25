@@ -414,10 +414,16 @@ def test_least_squares_implicit_jac_chunking(solovev_eq):
                                    err_msg=f"chunk={chunk!r}")
 
 
+def test_auto_jac_chunk_stays_bounded_with_large_device(monkeypatch):
+    """A reported accelerator budget must not turn ``auto`` into one vmap."""
+    monkeypatch.setattr(opt, "auto_chunk_size", lambda dim: dim)
+    assert opt._auto_jac_chunk(120) == 11
+
+
 def test_least_squares_implicit_jac_solver_block(solovev_eq):
     """The R25.2 block-tridiagonal Jacobian matches the per-dof GMRES one.
 
-    ``jac_solver="block"`` (default) assembles the raw force Jacobian's
+    ``jac_solver="block"`` assembles the raw force Jacobian's
     radial blocks by colored jvp probes, factors once
     (:func:`solvax.block_thomas_factor`) and backsolves every dof column,
     then certifies each column with a short warm-started GMRES pass against
@@ -431,8 +437,11 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq):
                             jac_solver="gmres", max_nfev=1)
     got = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                             jac_solver="block", max_nfev=1)
+    reverse = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
+                                jac_solver="reverse", max_nfev=1)
     assert got.jac.shape == ref.jac.shape
     np.testing.assert_allclose(got.jac, ref.jac, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(reverse.jac, ref.jac, rtol=1e-6, atol=1e-8)
     with pytest.raises(ValueError, match="jac_solver"):
         opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                           jac_solver="svd", max_nfev=1)

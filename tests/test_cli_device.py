@@ -36,6 +36,7 @@ def test_fixed_boundary_cli_forwards_device(monkeypatch, tmp_path, choice, expec
     monkeypatch.setattr(multigrid, "solve_multigrid", fake_solve)
     assert cli._solve_input_file(args, tmp_path / "input.case", tmp_path, emit=print) == 0
     assert seen["device"] == expected
+    assert seen["release_stage_cache"] is True
 
 
 def test_free_boundary_cli_forwards_device(monkeypatch, tmp_path):

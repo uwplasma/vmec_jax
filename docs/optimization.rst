@@ -206,8 +206,12 @@ default:
    Reproduce the campaign numbers with the two
    ``examples/optimization/QA_optimization*.py`` scripts.
 
-- **Block-tridiagonal Jacobian factorization** (``jac_solver="block"``,
-  default).  The raw force Jacobian ``dF/dz`` is *exactly*
+- **Direction-adaptive Jacobians** (``jac_solver="auto"``, default). A scalar
+  residual uses one matrix-free reverse adjoint and never assembles dense
+  angular blocks. Vector residuals use the block path below; ``"reverse"``
+  and ``"block"`` remain explicit controls.
+- **Block-tridiagonal Jacobian factorization** (``jac_solver="block"``).
+  The raw force Jacobian ``dF/dz`` is *exactly*
   block-tridiagonal in radius (nearest-neighbor coupling; verified to
   1e-14), so ``ns`` dense ``(3mn, 3mn)`` blocks are assembled with
   3-colored ``jax.jvp`` probes — a cost independent of the dof count —
@@ -231,10 +235,10 @@ default:
   hot restart hit a Jacobian-sign failure.  ``"state"`` (plain hot restart)
   and ``None`` are the fallbacks; all three converge to identical fixed
   points.
-- **Memory** stays bounded by column chunking
-  (``jac_chunk_size="auto"``, the same knob DESC exposes): peak Jacobian
-  memory is ``m0 + m1*chunk`` instead of scaling with the dof count, and
-  the chunked columns are identical to float64 round-off.
+- **Memory** stays bounded by column chunking. ``jac_chunk_size="auto"`` caps
+  SOLVAX's device-aware choice by the square-root width, so accelerator
+  capacity cannot accidentally request one full probe ``vmap``. Chunked
+  columns are identical to float64 round-off.
 - **Krylov recycling** (``recycle=True``) carries a GCROT deflation space
   across the per-dof solves.  It is **off by default for a measured
   reason**: solvax v0.1's FIFO recycle space *slows* warm-started columns

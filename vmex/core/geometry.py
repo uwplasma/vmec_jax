@@ -38,7 +38,11 @@ import numpy as np
 import jax.numpy as jnp
 
 from .fourier import ModeTable, TrigTables
-from .transforms import fourier_to_real, register_pytree_dataclass as _register
+from .transforms import (
+    _fourier_to_real_fft,
+    fourier_to_real,
+    register_pytree_dataclass as _register,
+)
 
 __all__ = [
     "RealSpaceGeometry",
@@ -204,6 +208,7 @@ def real_space_geometry(
     modes: ModeTable,
     trig: TrigTables,
     s: Array,
+    use_fft: bool = False,
 ) -> RealSpaceGeometry:
     """Synthesize the VMEC even-m/odd-m geometry channels from coefficients.
 
@@ -223,6 +228,9 @@ def real_space_geometry(
         (:func:`apply_lambda_axis_closure`).
     s:
         Full-mesh radial grid, shape ``(ns,)`` (uniform, ``s in [0, 1]``).
+    use_fft:
+        Use separable toroidal FFT synthesis; False retains the real dense
+        contraction used by the high-column implicit Jacobian.
 
     Returns
     -------
@@ -249,7 +257,8 @@ def real_space_geometry(
     # single odd_m_sqrt_s=True synthesis serves all three parity subsets.
     batched_cos = coeff_cos[None, ...] * mask_stack[:, None, None, :]
     batched_sin = coeff_sin[None, ...] * mask_stack[:, None, None, :]
-    value, dtheta, dzeta = fourier_to_real(
+    synthesize = _fourier_to_real_fft if use_fft else fourier_to_real
+    value, dtheta, dzeta = synthesize(
         batched_cos,
         batched_sin,
         modes=modes,
