@@ -121,7 +121,9 @@ from .device import AUTO, resolve_implicit_device
 from .errors import VmecError
 from .fields import magnetic_fields, metric_elements
 from .fourier import Resolution
-from .geometry import half_mesh_jacobian
+from .geometry import (
+    apply_lambda_axis_closure, half_mesh_jacobian, real_space_geometry,
+)
 from .input import VmecInput
 from .multigrid import solve_multigrid
 from .residuals import (
@@ -131,7 +133,7 @@ from .residuals import (
 from .setup import RadialGrids, flux_profiles, interior_guess
 from .solver import (
     SolveResult, SolverRuntime, SpectralState, _constraint_baselines,
-    _force_to_state, _geometry, _initial_state, _physical_coefficients,
+    _force_to_state, _initial_state, _physical_coefficients,
     _static_tables, evaluate_forces, prepare_runtime, resolution_from_input,
     solve,
 )
@@ -257,6 +259,8 @@ class ImplicitConfig:
     #: ~30% less wall — a strictly faster path to the identical converged adjoint.
     adjoint_gcrot_m: int = 100
     adjoint_gcrot_k: int = 20
+    force_backend: str = "jax"
+    force_threads: int = 1
     #: seed repeated host solves from the last converged state of this config
     #: (optimization trials; the fixed point — hence the gradient — is
     #: unchanged, only the iteration count drops).  Makes the callback
@@ -278,6 +282,8 @@ def make_config(
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
     adjoint_gcrot_k: int = 20,
+    force_backend: str = "jax",
+    threads: int = 1,
     hot_restart: bool = False,
 ) -> ImplicitConfig:
     """Build the static config; ``resolution`` is the (final-stage) grid."""
@@ -295,6 +301,7 @@ def make_config(
         adjoint_tol=float(adjoint_tol), adjoint_restart=int(adjoint_restart),
         adjoint_maxiter=int(adjoint_maxiter),
         adjoint_gcrot_m=int(adjoint_gcrot_m), adjoint_gcrot_k=int(adjoint_gcrot_k),
+        force_backend=force_backend, force_threads=int(threads),
         hot_restart=bool(hot_restart),
     )
 
@@ -312,7 +319,8 @@ def _template_runtime(cfg: ImplicitConfig) -> SolverRuntime:
     return prepare_runtime(
         cfg.inp, cfg.resolution, ftol=cfg.ftol,
         max_iterations=cfg.max_iterations, lconm1=cfg.lconm1,
-        use_fft=False,
+        use_fft=False, force_backend=cfg.force_backend,
+        threads=cfg.force_threads,
     )
 
 
@@ -690,6 +698,107 @@ def _assemble(z: SpectralState, rt_p: SolverRuntime, frozen: SpectralState,
     return SpectralState(**out)
 
 
+def _raw_force_state(
+    x: SpectralState,
+    rt: SolverRuntime,
+    *,
+    s: Array | None = None,
+    phips: Array | None = None,
+    phipf: Array | None = None,
+    chips: Array | None = None,
+    mass: Array | None = None,
+    icurv: Array | None = None,
+    rcon0: Array | None = None,
+    zcon0: Array | None = None,
+    lamscale: Array | None = None,
+    scalxc: Array | None = None,
+    ns_total: int | None = None,
+    axis_closure: bool = True,
+) -> SpectralState:
+    """Raw fixed-boundary force for a full grid or a radial segment."""
+    setup = rt.setup
+    s = setup.s_full if s is None else s
+    phips = setup.phips if phips is None else phips
+    phipf = setup.phipf if phipf is None else phipf
+    chips = setup.chips if chips is None else chips
+    mass = setup.mass if mass is None else mass
+    icurv = setup.icurv if icurv is None else icurv
+    rcon0 = rt.rcon0 if rcon0 is None else rcon0
+    zcon0 = rt.zcon0 if zcon0 is None else zcon0
+    R_cos, R_sin, Z_cos, Z_sin = _physical_coefficients(
+        x, modes=rt.modes, lthreed=setup.lthreed, lasym=setup.lasym,
+        lconm1=setup.lconm1,
+    )
+    lambda_sin = (
+        apply_lambda_axis_closure(
+            x.L_sin, modes=rt.modes, ntor=rt.resolution.ntor
+        )
+        if axis_closure else x.L_sin
+    )
+    geometry = real_space_geometry(
+        R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
+        lambda_cos=x.L_cos, lambda_sin=lambda_sin, modes=rt.modes,
+        trig=rt.trig, s=s, axis_closure=axis_closure,
+        odd_m_scaling=scalxc,
+    )
+    jacobian = half_mesh_jacobian(geometry, s=s)
+    metrics = metric_elements(geometry, s=s)
+    fields = magnetic_fields(
+        geometry=geometry, jacobian=jacobian, metrics=metrics, trig=rt.trig,
+        s=s, phips=phips, phipf=phipf, chips=chips, signgs=setup.signgs,
+        gamma=rt.gamma, mass=mass, lamscale=lamscale, ncurr=setup.ncurr,
+        enclosed_current=icurv,
+    )
+    tcon = constraint_scaling(
+        tcon0=rt.tcon0, geometry=geometry, jacobian=jacobian,
+        total_pressure=fields.total_pressure, trig=rt.trig, s=s,
+        ns_total=ns_total,
+    )
+    forces = mhd_forces(
+        geometry=geometry, jacobian=jacobian, metrics=metrics, fields=fields,
+        R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
+        modes=rt.modes, trig=rt.trig, s=s, phipf=phipf, tcon=tcon,
+        signgs=setup.signgs, rcon0=rcon0, zcon0=zcon0,
+    )
+    spectral = spectral_mhd_forces(
+        forces, mpol=rt.resolution.mpol, ntor=rt.resolution.ntor,
+        trig=rt.trig, include_edge=False,
+    )
+    released = zero_m1_z_force(
+        m1_residue_rotation(spectral, lconm1=setup.lconm1),
+        jnp.asarray(True),
+    )
+    return _force_to_state(
+        scalxc_scale_force(released, s=s, scaling=scalxc), rt
+    )
+
+
+def _raw_residual_segment(
+    x: SpectralState,
+    rt: SolverRuntime,
+    start: Array,
+    *,
+    axis_closure: bool = False,
+) -> SpectralState:
+    """Evaluate the nonlinear raw-force chain on exactly three surfaces.
+
+    ``x`` contains constrained coefficients for global rows
+    ``start:start+3``. Only the small radial profiles and constraint
+    baselines are sliced from ``rt``; every angular nonlinear temporary has
+    leading dimension three. Set ``axis_closure`` only for ``start == 0``.
+    """
+    take = lambda a: jax.lax.dynamic_slice_in_dim(a, start, 3, axis=0)  # noqa: E731
+    setup = rt.setup
+    return _raw_force_state(
+        x, rt, s=take(setup.s_full), phips=take(setup.phips),
+        phipf=take(setup.phipf), chips=take(setup.chips),
+        mass=take(setup.mass), icurv=take(setup.icurv),
+        rcon0=take(rt.rcon0), zcon0=take(rt.zcon0),
+        lamscale=setup.lamscale, scalxc=take(setup.scalxc),
+        ns_total=rt.resolution.ns, axis_closure=axis_closure,
+    )
+
+
 def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
                 dof_mask: SpectralState,
                 formulation: str = "preconditioned") -> Callable:
@@ -731,37 +840,7 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
     def F_raw(z: SpectralState, params: ImplicitParams) -> SpectralState:
         rt_p = runtime_from_params(params, cfg)
         x = _assemble(z, rt_p, frozen, P, edge_mask)
-        setup = rt_p.setup
-        s = setup.s_full
-        (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(x, rt_p)
-        jacobian = half_mesh_jacobian(geometry, s=s)
-        metrics = metric_elements(geometry, s=s)
-        fields = magnetic_fields(
-            geometry=geometry, jacobian=jacobian, metrics=metrics,
-            trig=rt_p.trig, s=s, phips=setup.phips, phipf=setup.phipf,
-            chips=setup.chips, signgs=setup.signgs, gamma=rt_p.gamma,
-            mass=setup.mass, ncurr=setup.ncurr, enclosed_current=setup.icurv,
-        )
-        tcon = constraint_scaling(
-            tcon0=rt_p.tcon0, geometry=geometry, jacobian=jacobian,
-            total_pressure=fields.total_pressure, trig=rt_p.trig, s=s,
-        )
-        forces = mhd_forces(
-            geometry=geometry, jacobian=jacobian, metrics=metrics,
-            fields=fields, R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
-            modes=rt_p.modes, trig=rt_p.trig, s=s, phipf=setup.phipf,
-            tcon=tcon, signgs=setup.signgs, rcon0=rt_p.rcon0, zcon0=rt_p.zcon0,
-            use_fft=False,
-        )
-        spectral = spectral_mhd_forces(
-            forces, mpol=cfg.resolution.mpol, ntor=cfg.resolution.ntor,
-            trig=rt_p.trig, include_edge=False,
-        )
-        rotated = m1_residue_rotation(spectral, lconm1=setup.lconm1)
-        # converged branch: fsqz < threshold zeroes the constrained m=1 Z force
-        released = zero_m1_z_force(rotated, jnp.asarray(True))
-        scaled = scalxc_scale_force(released, s=s)
-        return P(_force_to_state(scaled, rt_p))
+        return P(_raw_force_state(x, rt_p))
 
     return F_raw
 
@@ -888,6 +967,7 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
     inp2 = input_with_params(cfg.inp, params)
     hot = _HOT_CACHE.get(cfg) if cfg.hot_restart else None
     perturb = _PERTURB_SEED.pop(cfg, None) if cfg.hot_restart else None
+    solver_device = "cpu" if cfg.force_backend == "native" else AUTO
     if cfg.multigrid:
         ns_arr = np.asarray(inp2.ns_array)
         ftol_arr = np.asarray(inp2.ftol_array, dtype=float).copy()
@@ -898,12 +978,16 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
         run = lambda init: solve_multigrid(  # noqa: E731
             inp2, ns_array=ns_arr, ftol_array=ftol_arr, mode=cfg.mode,
             lconm1=cfg.lconm1, raise_on_max_iterations=False,
-            initial_state=init, use_fft=False)
+            initial_state=init, use_fft=False,
+            force_backend=cfg.force_backend, threads=cfg.force_threads,
+            device=solver_device)
     else:
         run = lambda init: solve(  # noqa: E731
             inp2, cfg.resolution, ftol=cfg.ftol,
             max_iterations=cfg.max_iterations, mode=cfg.mode,
-            lconm1=cfg.lconm1, initial_state=init, use_fft=False)
+            lconm1=cfg.lconm1, initial_state=init, use_fft=False,
+            force_backend=cfg.force_backend, threads=cfg.force_threads,
+            device=solver_device)
     # Seed ladder: perturbation prediction -> plain hot restart -> cold.
     # A bad warm seed must not fail the trial (only the initial guess is at
     # stake — every rung converges to the same fixed point).
@@ -1388,6 +1472,8 @@ def run(
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
     adjoint_gcrot_k: int = 20,
+    force_backend: str = "jax",
+    threads: int = 1,
     device: Any = AUTO,
 ) -> ImplicitSolution:
     """Differentiable fixed-boundary equilibrium: input -> outputs pytree.
@@ -1410,6 +1496,9 @@ def run(
     leaves placement to JAX.  When ``params`` is supplied, an explicit
     hardware device moves the complete parameter pytree consistently;
     otherwise its existing placement is preserved.
+    ``force_backend="native"`` opts into the CPU FFI primal with ``threads``
+    workers; its JVP/VJP is the exact pure-JAX projection. The default remains
+    ``"jax"`` and must be used for GPU placement.
 
     The returned solution also carries the internally built
     :class:`~vmex.core.solver.SolverRuntime` as ``sol.runtime`` (a
@@ -1419,11 +1508,15 @@ def run(
     ``runtime_from_params(params, make_config(...))`` per evaluation.
     """
     inp = VmecInput.from_file(source) if isinstance(source, str) else source
+    if force_backend == "native":
+        from .native_force import require_native_cpu
+        require_native_cpu(device, resolution_from_input(inp, ns=ns))
     cfg = make_config(
         inp, ns=ns, ftol=ftol, max_iterations=max_iterations, mode=mode,
         multigrid=multigrid, lconm1=lconm1, adjoint_tol=adjoint_tol,
         adjoint_restart=adjoint_restart, adjoint_maxiter=adjoint_maxiter,
         adjoint_gcrot_m=adjoint_gcrot_m, adjoint_gcrot_k=adjoint_gcrot_k,
+        force_backend=force_backend, threads=threads,
     )
     if params is None:
         params = params_from_input(inp, device=device)

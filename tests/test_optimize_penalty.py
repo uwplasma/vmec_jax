@@ -107,6 +107,31 @@ def test_implicit_lane_fun_penalty_path(monkeypatch, capsys):
     np.testing.assert_allclose(res.x, opt.pack_boundary(inp, 1))  # stayed at x0
 
 
+def test_minimize_penalty_path(monkeypatch, capsys):
+    """A failed scalarized trial reuses the last finite reverse gradient."""
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    real = im._host_solve
+    calls = {"new": 0, "poisoned": 0}
+
+    def flaky(cfg, params):
+        hit = im._LAST_SOLVE.get(cfg)
+        if hit is None or hit[0] != im._params_key(params):
+            calls["new"] += 1
+            if calls["new"] >= 2:
+                calls["poisoned"] += 1
+                raise _boom()
+        return real(cfg, params)
+
+    monkeypatch.setattr(im, "_host_solve", flaky)
+    res = opt.minimize(
+        OBJECTIVE, inp, max_mode=1, verbose=1,
+        options={"maxiter": 2, "maxls": 3})
+    out = capsys.readouterr().out
+    assert calls["poisoned"] >= 1
+    assert "trial solve/gradient failed" in out
+    assert np.isfinite(res.cost)
+
+
 def test_implicit_lane_jac_fallback_and_diagnostic_resolve(monkeypatch, capsys):
     """jac='implicit': failed Jacobian reuses the last valid one; final
     diagnostic re-solve falls back to a cold solve when the hot seed fails.

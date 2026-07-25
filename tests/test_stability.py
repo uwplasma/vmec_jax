@@ -233,12 +233,13 @@ def test_glasser_stability_residual_is_smooth_upper_bound(shaped_eq):
 
 
 def test_least_squares_accepts_implicit_stability_terms():
-    """One optimizer evaluation builds DMerc/D_R/<J.B> rows and Jacobian."""
+    """Profile scalarization matches the Gauss--Newton cost and gradient."""
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    terms = [(opt.mercier_stability_residual, 0.0, 1.0),
+             (opt.glasser_stability_residual, 0.0, 1.0),
+             (opt.jdotb_residual, 0.0, 1.0e-6)]
     result = opt.least_squares(
-        [(opt.mercier_stability_residual, 0.0, 1.0),
-         (opt.glasser_stability_residual, 0.0, 1.0),
-         (opt.jdotb_residual, 0.0, 1.0e-6)],
+        terms,
         inp,
         max_mode=1,
         jac="implicit",
@@ -247,6 +248,12 @@ def test_least_squares_accepts_implicit_stability_terms():
     assert result.nfev == 1
     assert np.isfinite(result.cost)
     assert np.all(np.isfinite(result.jac))
+    x0 = opt.pack_boundary(inp, 1)
+    scalar = opt.minimize(
+        terms, inp, max_mode=1, bounds=list(zip(x0, x0)))
+    np.testing.assert_allclose(scalar.cost, result.cost, rtol=1e-12)
+    np.testing.assert_allclose(
+        scalar.jac, result.jac.T @ result.fun, rtol=2e-5, atol=1e-8)
 
 
 @pytest.mark.full

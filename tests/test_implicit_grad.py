@@ -210,6 +210,67 @@ def test_runtime_from_params_matches_run_setup(case):
                                rtol=0.0, atol=1e-15, err_msg=f"{name}: zcon0")
 
 
+@pytest.mark.parametrize("source", [0, 5, 9])
+def test_raw_residual_jvp_is_exactly_nearest_neighbor(solovev, source):
+    """A one-surface tangent has no raw-force response beyond adjacent rows."""
+    _, _, cfg, p0, state, _, mask = solovev
+    P = im._dof_projector(cfg, mask)
+    z_star = P(state)
+    tangent = jax.tree.map(
+        lambda active: jnp.zeros_like(active).at[source].set(active[source]),
+        mask,
+    )
+    F = im.residual_fn(cfg, state, mask, formulation="raw")
+    response = jax.jvp(lambda z: F(z, p0), (z_star,), (tangent,))[1]
+    keep = jnp.abs(jnp.arange(cfg.resolution.ns) - source) <= 1
+    local_max = 0.0
+    for value in jax.tree.leaves(response):
+        assert float(jnp.max(jnp.abs(jnp.where(keep[:, None], 0.0, value)))) == 0.0
+        local_max = max(local_max, float(jnp.max(jnp.abs(value[keep]))))
+    assert local_max > 0.0
+
+
+def test_three_surface_raw_kernel_matches_global_nonlinear_rows(case):
+    """The local nonlinear chain reproduces every row with a complete halo."""
+    _, _, cfg, p0, state, rt, mask = case
+    ns = cfg.resolution.ns
+    P = im._dof_projector(cfg, mask)
+    edge = im._edge_mask(cfg)
+    z_star = P(state)
+    key = jax.random.key(13)
+    noise = jax.tree.map(
+        lambda a: 1e-5 * a * jax.random.normal(
+            key, a.shape, dtype=jnp.asarray(a).dtype
+        ),
+        mask,
+    )
+    z = jax.tree.map(jnp.add, z_star, noise)
+    x = im._assemble(z, rt, state, P, edge)
+    full = im.residual_fn(cfg, state, mask, formulation="raw")(z, p0)
+
+    segments = ((0, (0, 1)), (max(0, ns // 2 - 1), (1,)), (ns - 3, (1, 2)))
+    for start, rows in segments:
+        window = jax.tree.map(lambda a: a[start:start + 3], x)
+        local = im._raw_residual_segment(
+            window, rt, jnp.asarray(start), axis_closure=(start == 0)
+        )
+        embedded = jax.tree.map(
+            lambda a, whole: jnp.zeros_like(whole).at[start:start + 3].set(a),
+            local, full,
+        )
+        projected = P(embedded)
+        for name, actual, expected in zip(
+            im._STATE_FIELDS, jax.tree.leaves(projected),
+            jax.tree.leaves(full), strict=True
+        ):
+            np.testing.assert_allclose(
+                np.asarray(actual)[start + np.asarray(rows)],
+                np.asarray(expected)[start + np.asarray(rows)],
+                rtol=2e-12, atol=2e-12,
+                err_msg=f"{name}, segment {start}, local rows {rows}",
+            )
+
+
 # ---------------------------------------------------------------------------
 # 2. the implicit residual vanishes at the converged fixed point
 # ---------------------------------------------------------------------------

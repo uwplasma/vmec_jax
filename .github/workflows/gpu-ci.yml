@@ -49,7 +49,9 @@ jobs:
           PY
 
       - name: Run focused placement, solve, and gradient checks
-        run: pytest -q tests/test_gpu_ci.py tests/test_device.py tests/test_implicit_device.py --durations=0
+        run: |
+          pytest -q tests/test_gpu_ci.py tests/test_device.py \
+            tests/test_implicit_device.py tests/test_native_force.py --durations=0
 
       - name: Audit all physics gradients on CPU and GPU
         run: |

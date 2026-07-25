@@ -12,7 +12,7 @@ import pytest
 
 from vmex.core import device as device_policy
 from vmex.core import implicit as im
-from vmex.core import freeboundary, multigrid, solver
+from vmex.core import freeboundary, multigrid, optimize, solver
 from vmex.core.input import VmecInput
 from vmex.core.mgrid import MgridField
 from vmex.core.wout import wout_from_state
@@ -469,3 +469,24 @@ def test_explicit_implicit_gradient_cpu_gpu_parity():
     assert {_platform(x) for x in jax.tree.leaves(gpu_tree)} == {"gpu"}
     np.testing.assert_allclose(gpu_value, cpu_value, rtol=1e-11)
     np.testing.assert_allclose(gpu_gradient, cpu_gradient, rtol=2e-7, atol=1e-12)
+
+
+def test_scalarized_profile_gradient_cpu_gpu_parity():
+    """The bounded-storage DMerc/D_R/<J.B> optimizer uses either device."""
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    terms = [
+        (optimize.mercier_stability_residual, 0.0, 1.0),
+        (optimize.glasser_stability_residual, 0.0, 1.0),
+        (optimize.jdotb_residual, 0.0, 1.0e-6),
+    ]
+    x0 = optimize.pack_boundary(inp, 1)
+    results = {
+        platform: optimize.minimize(
+            terms, inp, max_mode=1, device=platform,
+            bounds=list(zip(x0, x0)))
+        for platform in ("cpu", "gpu")
+    }
+    np.testing.assert_allclose(
+        results["gpu"].cost, results["cpu"].cost, rtol=1e-11)
+    np.testing.assert_allclose(
+        results["gpu"].jac, results["cpu"].jac, rtol=2e-7, atol=1e-12)

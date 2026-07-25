@@ -781,6 +781,7 @@ def _mode_matrix_from_grpmn(grpmn: Array, basis: VacuumBasis) -> Array:
 class VacuumSolver:
     """Jitted NESTOR update closures over one :class:`VacuumBasis`.
 
+    ``assemble`` returns the unsolved ``(mode_matrix, rhs, ...)`` equation.
     ``full``: complete update — returns ``(potvac, mode_matrix,
     bvec_nonsing, rhs, gsource, grpmn)``.  ``skip``: incremental update with
     the cached ``(bvec_nonsing, mode_matrix)`` — returns ``(potvac, rhs)``.
@@ -790,12 +791,13 @@ class VacuumSolver:
     signgs: int
     full: Any
     skip: Any
+    assemble: Any = None
 
 
 def make_vacuum_solver(basis: VacuumBasis, *, signgs: int = -1) -> VacuumSolver:
     """Build the jit-compiled full/skip NESTOR updates for one basis."""
 
-    def _full(boundary: VacuumBoundary, bexni: Array):
+    def _assemble(boundary: VacuumBoundary, bexni: Array):
         full_grid = _full_grid_from_active(boundary, basis)
         gsource, grpmn_nonsing = _nonsingular_terms(full_grid, bexni, basis, signgs)
         bvec_nonsing = _mode_rhs_from_gsource(gsource, basis)
@@ -805,6 +807,12 @@ def make_vacuum_solver(basis: VacuumBasis, *, signgs: int = -1) -> VacuumSolver:
         rhs = bvec_nonsing + bvec_analytic
         grpmn = grpmn_nonsing + grpmn_analytic
         mode_matrix = _mode_matrix_from_grpmn(grpmn, basis)
+        return mode_matrix, rhs, bvec_nonsing, gsource, grpmn
+
+    def _full(boundary: VacuumBoundary, bexni: Array):
+        mode_matrix, rhs, bvec_nonsing, gsource, grpmn = _assemble(
+            boundary, bexni
+        )
         potvac = jnp.linalg.solve(mode_matrix, rhs)
         return potvac, mode_matrix, bvec_nonsing, rhs, gsource, grpmn
 
@@ -817,7 +825,8 @@ def make_vacuum_solver(basis: VacuumBasis, *, signgs: int = -1) -> VacuumSolver:
         return potvac, rhs
 
     return VacuumSolver(
-        basis=basis, signgs=int(signgs), full=jax.jit(_full), skip=jax.jit(_skip)
+        basis=basis, signgs=int(signgs), full=jax.jit(_full),
+        skip=jax.jit(_skip), assemble=jax.jit(_assemble),
     )
 
 

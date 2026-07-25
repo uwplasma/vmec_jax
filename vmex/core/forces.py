@@ -878,6 +878,8 @@ def spectral_mhd_forces(
     ntor: int,
     trig: TrigTables,
     include_edge: bool = False,
+    backend: str = "jax",
+    threads: int = 1,
 ) -> SpectralForce:
     """Project the real-space force kernels onto the Fourier basis.
 
@@ -896,18 +898,33 @@ def spectral_mhd_forces(
             for parity in ("even", "odd")
         }
 
+    project = None
+    if backend != "jax":
+        from .native_force import project_force
+        project = lambda values, asym=False: project_force(  # noqa: E731
+            values, mpol=mpol, ntor=ntor, trig=trig,
+            include_edge=include_edge, asym=asym,
+            backend=backend, threads=threads,
+        )
+
     if not bool(trig.lasym):
+        if project is not None:
+            return project(kernel_kwargs(forces))
         return tomnsps(
             **kernel_kwargs(forces), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
         )
 
     forces_sym, forces_asym = symmetrize_forces(forces, trig=trig)
-    out_sym = tomnsps(
-        **kernel_kwargs(forces_sym), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
-    )
-    out_asym = tomnspa(
-        **kernel_kwargs(forces_asym), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
-    )
+    if project is None:
+        out_sym = tomnsps(
+            **kernel_kwargs(forces_sym), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
+        )
+        out_asym = tomnspa(
+            **kernel_kwargs(forces_asym), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
+        )
+    else:
+        out_sym = project(kernel_kwargs(forces_sym))
+        out_asym = project(kernel_kwargs(forces_asym), asym=True)
     return replace(
         out_sym,
         force_R_sc=out_asym.force_R_sc,

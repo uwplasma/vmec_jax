@@ -195,6 +195,17 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
   GMRES path was over 5× slower without finishing. Scalar objectives now
   default to one matrix-free reverse adjoint and avoid that block assembly;
   reducing block storage for high-mode vector objectives remains open work.
+- **Native CPU force projection (experimental)** — source builds attempt an
+  optional JAX-FFI extension that fuses the weighted theta/zeta force
+  projection and reuses compiler-managed scratch. It is never selected
+  implicitly: pass `force_backend="native", threads=N` to `solve`,
+  `solve_multigrid`, or the implicit API. The default `force_backend="jax"`
+  remains portable across CPU, GPU, and TPU; GPU execution currently uses
+  that pure-JAX path because there is no native CUDA handler yet.
+  On the full supplied HSX deck, eight native threads took 215.37 s /
+  1.63 GiB versus recent JAX controls at 218.94–224.64 s /
+  1.57–1.71 GiB, with unchanged 2737-iteration convergence and VMEC2000
+  parity. This modest 2–4% result does not close the VMEC++ gap.
 
 ## Features
 
@@ -436,6 +447,23 @@ objective at a stiff weight:
 - raise mean iota to 0.55 at fixed aspect;
 - lower the aspect ratio to 4.8 at fixed iota;
 - push the Mercier criterion `DMerc` toward stability at ⟨β⟩ ≈ 1.25%.
+
+High-resolution vector profiles can use `opt.minimize(...)` with the same
+`(objective, target, weight)` terms. It minimizes the identical squared
+residual cost with L-BFGS-B and one matrix-free reverse adjoint per gradient,
+avoiding the dense residual Jacobian used by Gauss–Newton:
+
+```python
+result = opt.minimize(
+    [(opt.mercier_stability_residual, 0.0, 1.0),
+     (opt.glasser_stability_residual, 0.0, 1.0),
+     (opt.jdotb_residual, 0.0, 1e-6)],
+    inp, max_mode=5, bounds=bounds, options={"maxiter": 100},
+)
+```
+
+This bounded-storage optimizer is opt-in because its quasi-Newton steps differ
+from `least_squares`; existing defaults and objective minima are unchanged.
 
 The first four use the implicit adjoint (`jac="implicit"`). The published
 `DMerc` showcase deliberately preserves its legacy host-side reporting lane

@@ -23,6 +23,9 @@ Simsopt-style vocabulary for the QA/QH/QP/QI examples on the pure new core:
 - :func:`least_squares` — a thin :func:`scipy.optimize.least_squares` driver
   over boundary Fourier dofs (:func:`pack_boundary`/:func:`unpack_boundary`),
   taking simsopt-style ``(callable, target, weight)`` terms.
+- :func:`minimize` — the same residual definition scalarized as
+  ``0.5 * sum(residual**2)`` and minimized with L-BFGS-B, so one reverse
+  implicit adjoint supplies the gradient without a dense residual Jacobian.
 
 Helicity conventions (match legacy/simsopt exactly)
 ---------------------------------------------------
@@ -157,6 +160,7 @@ __all__ = [
     "pack_boundary",
     "unpack_boundary",
     "least_squares",
+    "minimize",
     "RedlBootstrapMismatch",  # noqa: F822 - provided lazily by __getattr__ below
 ]
 
@@ -1412,6 +1416,64 @@ def least_squares(
     return result
 
 
+def minimize(
+    objective_terms: Sequence[tuple[Callable, float, float]],
+    inp: VmecInput,
+    *,
+    max_mode: int | Sequence[int] = 1,
+    x0: np.ndarray | None = None,
+    current_dofs: int | None = None,
+    hot_restart: bool = True,
+    device: Any = AUTO,
+    solve_kwargs: dict | None = None,
+    verbose: int = 0,
+    method: str = "L-BFGS-B",
+    **scipy_kwargs,
+):
+    """Minimize the scalarized residual norm with one adjoint per gradient.
+
+    The objective is exactly ``0.5 * sum(rows**2)``, with ``rows`` defined by
+    :func:`least_squares`.  Unlike Gauss--Newton least squares, a reverse
+    gradient of this scalar needs one matrix-free implicit adjoint and never
+    forms the vector residual Jacobian or its dense radial block factors.
+    This is the bounded-storage path for profile objectives such as ``DMerc``,
+    ``jdotb``, and Glasser ``D_R``.  It changes the optimization algorithm,
+    not the objective or its unconstrained minimizers, and is therefore
+    opt-in; :func:`least_squares` retains all existing defaults.
+
+    ``method`` and remaining keywords are passed to
+    :func:`scipy.optimize.minimize` (default ``"L-BFGS-B"``; use ``bounds=``
+    and ``options={"maxiter": ...}`` in the usual scipy form).  All objective
+    terms must support ``jac="implicit"`` as documented by
+    :func:`least_squares`.  Plain state hot restarts are used because the
+    first-order perturbation warm start requires the forward state-response
+    columns that this lower-storage path deliberately avoids.
+    """
+    modes_schedule = ([int(max_mode)] if np.isscalar(max_mode)
+                      else [int(m) for m in max_mode])
+    if len(modes_schedule) > 1:
+        if x0 is not None:
+            raise ValueError("x0 cannot be combined with a max_mode schedule")
+        stage_results = []
+        current = inp
+        for mm in modes_schedule:
+            result = minimize(
+                objective_terms, current, max_mode=mm,
+                current_dofs=current_dofs, hot_restart=hot_restart,
+                device=device, solve_kwargs=solve_kwargs, verbose=verbose,
+                method=method, **scipy_kwargs)
+            stage_results.append(result)
+            current = result.input
+        result.stage_results = stage_results
+        return result
+    return _least_squares_implicit(
+        objective_terms, inp, max_mode=modes_schedule[0], x0=x0,
+        current_dofs=current_dofs, jac_solver="reverse", recycle=False,
+        warm_start=("state" if hot_restart else None),
+        solve_kwargs=dict(solve_kwargs or {}), device=device, verbose=verbose,
+        minimize_method=method, **scipy_kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Implicit-gradient mode (vmex.core.implicit wiring)
 # ---------------------------------------------------------------------------
@@ -1463,6 +1525,7 @@ def _least_squares_implicit(
     solve_kwargs: dict,
     device: Any = AUTO,
     verbose: int = 0,
+    minimize_method: str | None = None,
     **scipy_kwargs,
 ):
     """Single-stage boundary least squares with implicit-gradient Jacobians.
@@ -1532,7 +1595,12 @@ def _least_squares_implicit(
         warm_start = "state"  # the recycled variant carries (C, U) instead
     cfg = imp.make_config(inp, multigrid=True,
                           hot_restart=(warm_start is not None),
-                          adjoint_tol=1e-6, adjoint_maxiter=30)
+                          adjoint_tol=1e-6, adjoint_maxiter=30,
+                          force_backend=solve_kwargs.get("force_backend", "jax"),
+                          threads=solve_kwargs.get("threads", 1))
+    if cfg.force_backend == "native":
+        from .native_force import require_native_cpu
+        require_native_cpu(device, cfg.resolution)
     # Pin the residual/Jacobian graphs to the fastest device for this launch-
     # bound path (CPU by default; explicit device= honored) — committing the
     # input dof vector to it makes both jits compile and run there, and their
@@ -1571,6 +1639,12 @@ def _least_squares_implicit(
         return term_rows(state, imp.runtime_from_params(params, cfg))
 
     rows_jit = jax.jit(residual_rows)
+
+    def scalar_loss(x: jnp.ndarray) -> jnp.ndarray:
+        rows = residual_rows(x)
+        return 0.5 * jnp.vdot(rows, rows)
+
+    value_grad_jit = jax.jit(jax.value_and_grad(scalar_loss))
 
     # The evolved-dof mask is a *structural* per-config constant; fetch it
     # once (first host solve, cached in implicit._MASK_CACHE) so the Jacobian
@@ -2000,8 +2074,37 @@ def _least_squares_implicit(
         except Exception:  # the seed itself does not converge -> fun raises clearly
             pass
 
-    result = scipy.optimize.least_squares(fun, np.asarray(x0, dtype=float),
-                                          jac=jac_fn, **scipy_kwargs)
+    if minimize_method is None:
+        result = scipy.optimize.least_squares(
+            fun, np.asarray(x0, dtype=float), jac=jac_fn, **scipy_kwargs)
+    else:
+        def value_and_grad(x: np.ndarray):
+            try:
+                value, grad = value_grad_jit(_place(x))
+                value = float(jax.device_get(value))
+                grad = np.asarray(jax.device_get(grad), dtype=float)
+            except Exception as exc:
+                if holder.get("last_grad") is None:
+                    raise
+                if verbose:
+                    print(f"[minimize] trial solve/gradient failed: {exc}")
+                return 1.0e12, holder["last_grad"]
+            if np.isfinite(value) and np.all(np.isfinite(grad)):
+                holder["last_grad"] = grad
+                if verbose:
+                    print(f"[minimize] cost = {value:.6e}")
+                return value, grad
+            if holder.get("last_grad") is None:
+                raise FloatingPointError("non-finite initial objective or gradient")
+            return 1.0e12, holder["last_grad"]
+
+        result = scipy.optimize.minimize(
+            value_and_grad, np.asarray(x0, dtype=float), jac=True,
+            method=minimize_method, **scipy_kwargs)
+        if "jac" not in result:  # scipy may skip evaluation if every dof is fixed
+            result.fun, result.jac = value_and_grad(result.x)
+        result.cost = float(result.fun)
+        result.optimality = float(np.linalg.norm(result.jac, ord=np.inf))
     result.input = unpack_boundary(inp, result.x[:nboundary], max_mode)
     if k_cur:
         result.input = _apply_current(result.input, result.x[nboundary:],

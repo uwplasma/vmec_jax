@@ -406,16 +406,22 @@ def _map_blocks(force: SpectralForce, names: tuple[str, ...], fn) -> dict[str, A
     return out
 
 
-def scalxc_scale_force(force: SpectralForce, *, s: Array) -> SpectralForce:
+def scalxc_scale_force(
+    force: SpectralForce, *, s: Array, scaling: Array | None = None
+) -> SpectralForce:
     """Apply the odd-m ``1/sqrt(s)`` scaling to every force block.
 
     VMEC2000: ``funct3d.f`` — ``gc = gc * scalxc`` right after ``tomnsps``,
     making the scaling part of the definition of the reported residuals.
     Uses :func:`vmex.core.transforms.odd_m_sqrt_s_scaling` (``profil3d.f``
-    ``scalxc``).
+    ``scalxc``). ``scaling`` may supply the corresponding global-table slice
+    for a local radial segment.
     """
     mpol = int(jnp.asarray(force.force_R_cc).shape[1])
-    scalxc = odd_m_sqrt_s_scaling(jnp.asarray(s), mpol)[:, :, None]
+    scalxc = (
+        odd_m_sqrt_s_scaling(jnp.asarray(s), mpol)
+        if scaling is None else jnp.asarray(scaling)
+    )[:, :, None]
     updates = _map_blocks(
         force, _R_BLOCKS + _Z_BLOCKS + _LAMBDA_BLOCKS, lambda b: b * scalxc.astype(b.dtype)
     )

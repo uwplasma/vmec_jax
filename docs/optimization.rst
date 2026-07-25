@@ -52,11 +52,44 @@ Two gradient modes share the same term list.  ``jac=None`` uses scipy
 freedom per Jacobian, works with *every* objective.  ``jac="implicit"``
 computes the exact residual Jacobian by implicit differentiation (one
 amortized linear-algebra pass instead of ~2N solves) and requires traceable
-terms and a stellarator-symmetric fixed-boundary problem — the
+terms and a fixed-boundary problem — the
 compatibility table is in :doc:`objectives`.  ``current_dofs=k``
 additionally frees the first ``k`` current-profile (``AC``) coefficients
 plus ``CURTOR`` in either mode — the dof set of the self-consistent
 bootstrap objective.
+
+Bounded-storage profile optimization
+------------------------------------
+
+Vector profile objectives normally require their complete residual Jacobian
+for a Gauss--Newton step.  At high Fourier resolution those radial
+block-tridiagonal factors can dominate memory.  :func:`~vmex.core.optimize.minimize`
+instead minimizes the identical scalar cost
+
+.. math::
+
+   \Phi(p) = \frac{1}{2}\sum_i r_i(p)^2
+
+with scipy L-BFGS-B.  Reverse implicit differentiation evaluates
+``grad(Phi)`` with one matrix-free adjoint, independent of the number of
+profile samples, and does not form the dense residual Jacobian:
+
+.. code-block:: python
+
+   result = opt.minimize(
+       [(opt.mercier_stability_residual, 0.0, 1.0),
+        (opt.glasser_stability_residual, 0.0, 1.0),
+        (opt.jdotb_residual, 0.0, 1e-6)],
+       inp, max_mode=5,
+       bounds=bounds,
+       options={"maxiter": 100})
+
+This is opt-in because it changes the step model from Gauss--Newton
+trust-region to limited-memory quasi-Newton, although the objective and its
+unconstrained minimizers are unchanged.  Existing
+:func:`~vmex.core.optimize.least_squares` behavior is unaffected.  Plain
+state hot restarts remain enabled; the perturbation warm start is unavailable
+because it would require the forward state-response columns this path avoids.
 
 Single-call ESS optimization (the recommended pattern)
 ------------------------------------------------------
@@ -220,6 +253,9 @@ default:
   column to the same ``adjoint_tol`` as the old path.  Measured: the warm
   Jacobian phase drops 20.35 s to 0.61 s (**33x**); ``jac_solver="gmres"``
   (one preconditioned GMRES per dof) remains as a fallback.
+  A true width-three nonlinear row kernel is parity-tested, but its direct
+  streamed SOLVAX assembly is not selected: the high-resolution HSX resource
+  gate was slower and used more peak memory than this three-color path.
 - **Converged-state memo.**  scipy's trust-region drivers call ``jac(x)``
   at exactly the ``x`` that ``fun(x)`` just converged; a one-entry
   params-keyed memo removes that redundant solve per accepted iterate, and

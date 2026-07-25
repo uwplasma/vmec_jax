@@ -33,21 +33,34 @@ def _implicit(args) -> dict:
     if args.input is None:
         raise ValueError("--input is required for the implicit case")
     inp = VmecInput.from_file(args.input)
-    result = opt.least_squares(
-        [(opt.aspect_ratio, args.aspect_target, 1.0)],
-        inp,
-        max_mode=args.max_mode,
-        jac="implicit",
-        jac_solver=args.jac_solver,
-        jac_chunk_size=args.jac_chunk,
-        max_nfev=1,
-        ftol=1e-9,
-        xtol=1e-10,
-        device=args.device,
-    )
+    terms = ([(opt.aspect_ratio, args.aspect_target, 1.0)]
+             if args.implicit_objective == "aspect" else
+             [(opt.mercier_stability_residual, 0.0, 1.0),
+              (opt.glasser_stability_residual, 0.0, 1.0),
+              (opt.jdotb_residual, 0.0, 1.0e-6)])
+    if args.optimizer == "minimize":
+        x0 = opt.pack_boundary(inp, args.max_mode)
+        result = opt.minimize(
+            terms, inp, max_mode=args.max_mode, device=args.device,
+            solve_kwargs={
+                "force_backend": args.force_backend, "threads": args.threads
+            },
+            bounds=list(zip(x0, x0)))
+    else:
+        result = opt.least_squares(
+            terms, inp, max_mode=args.max_mode, jac="implicit",
+            jac_solver=args.jac_solver, jac_chunk_size=args.jac_chunk,
+            max_nfev=1, ftol=1e-9, xtol=1e-10, device=args.device,
+            solve_kwargs={
+                "force_backend": args.force_backend, "threads": args.threads
+            })
     jac = np.asarray(result.jac, dtype=np.float64)
     return {
+        "optimizer": args.optimizer,
+        "objective": args.implicit_objective,
         "jac_solver": args.jac_solver,
+        "force_backend": args.force_backend,
+        "threads": args.threads,
         "ns_array": np.asarray(inp.ns_array).tolist(),
         "mpol": int(inp.mpol),
         "ntor": int(inp.ntor),
@@ -133,10 +146,21 @@ def main() -> None:
     parser.add_argument("--max-mode", type=int, default=5)
     parser.add_argument("--aspect-target", type=float, default=8.0)
     parser.add_argument(
-        "--jac-solver", choices=("auto", "block", "gmres", "reverse"),
+        "--implicit-objective", choices=("aspect", "stability"),
+        default="aspect",
+    )
+    parser.add_argument(
+        "--optimizer", choices=("least-squares", "minimize"),
+        default="least-squares",
+    )
+    parser.add_argument(
+        "--jac-solver",
+        choices=("auto", "block", "gmres", "reverse"),
         default="auto",
     )
     parser.add_argument("--jac-chunk", default="auto")
+    parser.add_argument("--force-backend", choices=("jax", "native"), default="jax")
+    parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--ns", type=int, default=5)
     parser.add_argument("--nxi", type=int, default=7)
     parser.add_argument("--elements", type=int, default=4)

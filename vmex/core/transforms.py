@@ -334,6 +334,7 @@ def fourier_to_real(
     derivatives: Sequence[str] = _DERIVATIVES,
     internal_coeffs: bool = False,
     odd_m_sqrt_s: bool = False,
+    odd_m_scaling: Array | None = None,
     s: Array | None = None,
 ) -> tuple[Array, ...]:
     """Synthesize real-space fields on the VMEC internal angular grid.
@@ -365,6 +366,9 @@ def fourier_to_real(
         If True apply the odd-m ``1/sqrt(s)`` factors (``profil3d.f`` scalxc)
         to the coefficients before synthesis — VMEC's ``totzsps`` consumes
         internal coefficients that carry this scaling.
+    odd_m_scaling:
+        Optional precomputed ``(ns, mpol)`` scaling table. This preserves
+        global radial scaling when synthesizing a local segment.
     s:
         Radial grid for ``odd_m_sqrt_s`` (defaults to a uniform [0, 1] grid).
 
@@ -392,7 +396,10 @@ def fourier_to_real(
         if s is None:
             s = _default_radial_grid(ns, coeff_cos.dtype)
         mpol = int(np.max(np.asarray(modes.m))) + 1
-        scalxc = odd_m_sqrt_s_scaling(s, mpol).astype(coeff_cos.dtype)
+        scalxc = (
+            odd_m_sqrt_s_scaling(s, mpol)
+            if odd_m_scaling is None else jnp.asarray(odd_m_scaling)
+        ).astype(coeff_cos.dtype)
         scalxc_mn = scalxc[:, np.asarray(modes.m, dtype=np.int64)]
         scalxc_mn = scalxc_mn.reshape((1,) * (coeff_cos.ndim - 2) + scalxc_mn.shape)
         coeff_cos = coeff_cos * scalxc_mn
@@ -416,6 +423,7 @@ def _fourier_to_real_fft(
     derivatives: Sequence[str] = _DERIVATIVES,
     internal_coeffs: bool = False,
     odd_m_sqrt_s: bool = False,
+    odd_m_scaling: Array | None = None,
     s: Array | None = None,
 ) -> tuple[Array, ...]:
     """Internal separable-FFT variant of :func:`fourier_to_real`."""
@@ -440,7 +448,10 @@ def _fourier_to_real_fft(
         if s is None:
             s = _default_radial_grid(ns, coeff_cos.dtype)
         mpol = int(np.max(np.asarray(modes.m))) + 1
-        scalxc = odd_m_sqrt_s_scaling(s, mpol).astype(coeff_cos.dtype)
+        scalxc = (
+            odd_m_sqrt_s_scaling(s, mpol)
+            if odd_m_scaling is None else jnp.asarray(odd_m_scaling)
+        ).astype(coeff_cos.dtype)
         scalxc_mn = scalxc[:, np.asarray(modes.m, dtype=np.int64)]
         scalxc_mn = scalxc_mn.reshape(
             (1,) * (coeff_cos.ndim - 2) + scalxc_mn.shape

@@ -376,6 +376,41 @@ Explicit ``use_fft=True`` or ``use_fft=False`` always wins. Implicit AD
 retains the dense lanes and their existing checksum/storage gate. The shared
 runtime pytree is unchanged.
 
+Native projection experiment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Source builds attempt a CPU JAX-FFI force-projection extension. It is
+deliberately opt-in and leaves all solver defaults unchanged::
+
+   result = solve_multigrid(
+       inp, force_backend="native", threads=8, device="cpu"
+   )
+
+The handler fuses the weighted poloidal and toroidal projection and uses
+compiler-owned reusable scratch. Its exact JVP/VJP is the pure-JAX
+linearization, so implicit gradients remain portable. At the supplied-HSX
+projection shape (``ns=101, mpol=18, ntor=24``), the isolated warm M4 result
+was 8.21 ms for JAX, 8.22 ms for four native threads, and 6.99 ms for eight
+threads; cold execution fell from 122.8 ms to 22.5 ms at eight threads.
+These are microkernel numbers, not an end-to-end VMEC++ parity claim. The
+default remains JAX, and GPUs use it: a safe native CUDA version needs a
+separate device handler.
+
+The fresh five-stage HSX solve with eight native threads took 215.37 s /
+1.63 GiB and the same 2737 final-stage iterations. Recent JAX controls took
+218.94--224.64 s / 1.57--1.71 GiB, so the end-to-end gain is only about
+2--4% and RSS is unchanged within run-to-run variation. The native WOUT
+remains at VMEC2000 parity (relative L2: ``rmnc 1.62e-11``,
+``zmns 1.00e-10``, ``bmnc 2.61e-11``, ``iotaf 5.64e-10``). This backend is
+therefore a small measured CPU option, not closure of the ten-thread VMEC++
+runtime or memory gap.
+
+The high-resolution profiler accepts the backend controls::
+
+   python benchmarks/profile_high_resolution.py implicit \
+       --input input.case --force-backend native --threads 8 \
+       --jac-solver block --device cpu
+
 The one-shot fixed-boundary CLI additionally calls JAX's public
 ``clear_caches`` between distinct radial grids. This clears in-memory
 compilation/staging entries while VMEX's persistent on-disk compilation cache
@@ -425,6 +460,19 @@ their complete response tensor.  It preserved the norm and checksum and reduced
 wall time to 284.69 s, but increased peak RSS by 8.6 % to 4.833 GiB as the
 allocator retained loop intermediates into factorization.  It was also rejected:
 lower storage must be demonstrated end to end, not inferred from one live array.
+
+A sixth experiment differentiated a genuinely local nonlinear raw-force
+kernel containing exactly three full surfaces. The kernel itself matches the
+global nonlinear residual to ``2e-12`` on axis/interior/edge rows for both
+stellarator symmetry and LASYM. Connecting its rows to the same checkpointed
+SOLVAX block-Thomas solve nevertheless failed the end-to-end resource gate:
+one-row streaming was stopped after 10.6 minutes (versus the 352.73 s /
+4.450 GiB baseline), and an eight-row batch was stopped after 6.7 minutes
+when live RSS exceeded 5.1 GiB. Both retained the exact small-case Jacobian,
+but XLA compilation/allocator retention plus the unchanged dense block bands
+and factors erased the local-temporary saving. The local kernel remains as a
+tested foundation; the production assembler remains the faster three-color
+path until the factor representation itself becomes lower-storage.
 
 The same profiler isolates one free-boundary mirror resolution per process:
 

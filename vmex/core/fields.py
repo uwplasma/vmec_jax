@@ -297,6 +297,7 @@ def magnetic_fields(
     gamma: float = 0.0,
     pressure: Array | None = None,
     mass: Array | None = None,
+    lamscale: Array | None = None,
     ncurr: int = 0,
     enclosed_current: Array | None = None,
 ) -> MagneticFields:
@@ -332,6 +333,9 @@ def magnetic_fields(
     pressure, mass:
         Half-mesh profiles ``(ns,)`` in VMEC internal units (mu0*Pa).  Exactly
         one should be provided; ``mass`` takes precedence.
+    lamscale:
+        Optional precomputed global lambda normalization. This avoids
+        recomputing a resolution-wide scalar from a local radial segment.
     ncurr, enclosed_current:
         ``ncurr = 1`` activates the current-constrained mode with the
         prescribed ``icurv`` profile (``enclosed_current``, defaults to zero).
@@ -341,7 +345,10 @@ def magnetic_fields(
     sqrt_g = jacobian.sqrt_g
     dtype = sqrt_g.dtype
 
-    lamscale = lambda_scale(jnp.asarray(phips, dtype=dtype), s)
+    lamscale = (
+        lambda_scale(jnp.asarray(phips, dtype=dtype), s)
+        if lamscale is None else jnp.asarray(lamscale, dtype=dtype)
+    )
     phipf = jnp.asarray(phipf, dtype=dtype)
     chips = jnp.asarray(chips, dtype=dtype)
 
@@ -760,6 +767,7 @@ def constraint_scaling(
     total_pressure: Array,
     trig: TrigTables,
     s: Array,
+    ns_total: int | None = None,
 ) -> Array:
     """Spectral-condensation constraint strength ``tcon(js)``.
 
@@ -785,6 +793,8 @@ def constraint_scaling(
     tcon0`` before overwriting the interior; the value is never used by the
     constraint operator).  The ``ns4 = 25``-iteration refresh cadence of
     VMEC2000 lives in the solver, not here — this is the pure recompute.
+    ``ns_total`` preserves the global resolution ramp when evaluating a local
+    radial segment.
     """
     s = jnp.asarray(s)
     ns = int(s.shape[0])
@@ -819,7 +829,7 @@ def constraint_scaling(
     aznorm = jnp.where(aznorm != 0, aznorm, jnp.ones_like(aznorm))
 
     tcon0_clamped = jnp.minimum(jnp.abs(jnp.asarray(tcon0, dtype=dtype)), 1.0)
-    ns_f = float(ns)
+    ns_f = float(ns if ns_total is None else ns_total)
     tcon_multiplier = tcon0_clamped * (1.0 + ns_f * (1.0 / 60.0 + ns_f / (200.0 * 120.0)))
     tcon_multiplier = tcon_multiplier / ((4.0 * r0scale**2) ** 2)
 
