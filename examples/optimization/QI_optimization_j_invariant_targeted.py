@@ -11,6 +11,7 @@ It runs a pure QI continuation ladder with additional soft targets on:
 
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 import vmex as vj
@@ -53,6 +54,56 @@ qi = JInvariantQIResidual(
     mboz=QI_MBOZ,
     nboz=QI_NBOZ,
 )
+
+
+def plot_j_polar_contours(eq, objective, out_dir, *, lambda_samples=(0.1, 0.3, 0.5, 0.7, 0.9)):
+    """Write polar J_I / J_C contours at fixed lambda with radius = flux surface."""
+
+    out = objective.compute_state(eq.state, eq.runtime)
+    alpha = np.asarray(out["alpha"], dtype=float)
+    surfaces = np.asarray(out["surfaces"], dtype=float)
+    ji = np.asarray(out["ji"], dtype=float)
+    jc = np.asarray(out["jc"], dtype=float)
+    lambda_grid = np.power(
+        np.arange(objective.n_bounce, dtype=float) / max(objective.n_bounce - 1, 1),
+        objective.p_lambda,
+    )
+
+    theta = np.concatenate([alpha, alpha[:1] + 2.0 * np.pi])
+    radius = np.asarray(surfaces, dtype=float)
+    theta_grid, radius_grid = np.meshgrid(theta, radius, indexing="xy")
+    sample_idx = sorted({
+        int(np.clip(round(lam * (objective.n_bounce - 1)), 0, objective.n_bounce - 1))
+        for lam in lambda_samples
+    })
+
+    for name, data in (("ji", ji), ("jc", jc)):
+        for idx in sample_idx:
+            values = data[:, :, idx]
+            values_periodic = np.concatenate([values, values[:, :1]], axis=1)
+
+            fig = plt.figure(figsize=(12, 5))
+            ax_polar = fig.add_subplot(1, 2, 1, projection="polar")
+            contour = ax_polar.contourf(theta_grid, radius_grid, values_periodic, levels=32, cmap="viridis")
+            lam = lambda_grid[idx]
+            ax_polar.set_title(f"{name.upper()} polar contour at lambda={lam:.2f}")
+            ax_polar.set_ylim(float(radius.min()), float(radius.max()))
+            fig.colorbar(contour, ax=ax_polar, pad=0.12, label=name.upper())
+
+            ax_lines = fig.add_subplot(1, 2, 2)
+            for isurf, surface in enumerate(surfaces):
+                ax_lines.plot(alpha, data[isurf, :, idx], label=f"s={surface:.2f}")
+            ax_lines.set_title(f"{name.upper()} vs alpha across surfaces")
+            ax_lines.set_xlabel("alpha")
+            ax_lines.set_ylabel(name.upper())
+            ax_lines.grid(True, alpha=0.3)
+            ax_lines.legend(loc="best", ncol=2, fontsize=8)
+
+            fig.tight_layout()
+            path = out_dir / f"{name}_polar_lambda_{idx:02d}.png"
+            fig.savefig(path, dpi=180, bbox_inches="tight")
+            plt.close(fig)
+            print(f"wrote {path}")
 
 
 def report(tag, eq):
@@ -104,3 +155,4 @@ print(
 )
 for key, path in vj.plot_wout(wout_path, OUT_DIR).items():
     print(f"wrote {path}")
+plot_j_polar_contours(eq, qi, OUT_DIR)
