@@ -49,16 +49,6 @@ tables are built in :mod:`vmex.core.fourier` and the transforms
 ``dot_general`` matmuls in :mod:`vmex.core.transforms` — GEMM-friendly
 and XLA-fusable while matching VMEC2000 normalization exactly.
 
-Source builds may also provide the opt-in ``force_backend="native"`` CPU
-projection. Its JAX-FFI handler fuses the two analysis stages, parallelizes
-over surface/mode work with explicit ``threads=``, and uses an XLA-owned
-scratch result that the allocator can reuse between calls. The primal handler
-is value-only; a custom JVP evaluates the exact pure-JAX linearization, so
-forward and transpose/reverse AD retain the portable implementation. This
-also defines the accelerator policy: the ordinary ``"jax"`` backend is the
-unchanged default on every platform, and is currently the only GPU path. A
-native GPU implementation would require a separate CUDA FFI target rather
-than calling the host kernel on device buffers.
 
 Geometry pipeline
 ~~~~~~~~~~~~~~~~~

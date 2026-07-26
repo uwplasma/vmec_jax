@@ -195,17 +195,11 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
   GMRES path was over 5× slower without finishing. Scalar objectives now
   default to one matrix-free reverse adjoint and avoid that block assembly;
   reducing block storage for high-mode vector objectives remains open work.
-- **Native CPU force projection (experimental)** — source builds attempt an
-  optional JAX-FFI extension that fuses the weighted theta/zeta force
-  projection and reuses compiler-managed scratch. It is never selected
-  implicitly: pass `force_backend="native", threads=N` to `solve`,
-  `solve_multigrid`, or the implicit API. The default `force_backend="jax"`
-  remains portable across CPU, GPU, and TPU; GPU execution currently uses
-  that pure-JAX path because there is no native CUDA handler yet.
-  On the full supplied HSX deck, eight native threads took 215.37 s /
-  1.63 GiB versus recent JAX controls at 218.94–224.64 s /
-  1.57–1.71 GiB, with unchanged 2737-iteration convergence and VMEC2000
-  parity. This modest 2–4% result does not close the remaining gap to the reference.
+- **Pure JAX, no compiled extensions** — every kernel is JAX, so installing
+  vmex never requires a C or C++ toolchain and the same code runs on CPU, GPU
+  and TPU. An experimental native CPU projection was evaluated and removed: it
+  bought only a few percent while adding a compiler dependency and a
+  platform-specific code path.
 
 ## Features
 

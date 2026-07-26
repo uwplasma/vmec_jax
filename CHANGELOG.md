@@ -7,11 +7,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 ## [Unreleased]
 
 ### Added
-- **Opt-in native force projection.** Source builds can provide a CPU JAX-FFI
-  kernel for the fused weighted theta/zeta force projection with explicit
-  `threads=` control and compiler-reusable scratch. Exact pure-JAX JVP/VJP
-  rules preserve implicit gradients; the portable JAX backend remains the
-  default and the GPU path.
+- **Generated QI free-boundary stress case.** A portable free-boundary fixture
+  needing no external mgrid, coil file or equilibrium: planar modular filaments
+  are placed on a winding surface offset from a QI boundary, their Biot-Savart
+  field is tabulated onto a cylindrical grid, and finite pressure makes the
+  free-boundary equilibrium genuinely differ from the fixed-boundary one. The
+  assertions cover lawful degradation under strain, including that a recovery
+  restart measurably changes the trajectory rather than replaying it.
+- **High-mode free-boundary resilience case.** One deck combining Fortran
+  indexed array sections, `LFORBAL=T`, 1-D profile arrays, a displaced axis that
+  forces an initial Jacobian sign change, a radial ladder carrying vacuum state
+  across grid changes, and `LFULL3D1OUT`.
+- **CI shard-coverage guard.** The parity workflow lists test files explicitly
+  per shard, so a file nobody adds is collected by nobody while CI stays green.
+  A guard now fails the build when any test file is unclaimed; it recovered 24
+  passing tests that had silently stopped running.
 - **Structured free-boundary primitive.**
   `NestorBorderedOperator` supplies matrix-free coupled plasma/vacuum action,
   exact transpose, Schur action, and block inversion without changing the
@@ -90,6 +100,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
   tangent-continuous (residual break ~0.04 deg). `QIMirrorSplice` gains
   `leg_lengths` / `leg_directions` (per cut) and its `leg_windows` / `cut_*`
   fields are now length-`N`; `build_qi_mirror_hybrid` accepts N cuts.
+
+### Fixed
+- **Iteration baseline rebased only on a Jacobian reset.** `restart.f` advances
+  `ijacob` *and* `iter1` inside the same `IF (irst .eq. 2)` guard, so a
+  residual-growth back-off restores the state and rescales the step but leaves
+  the baseline alone. VMEX advanced it on any non-OK restart, which rebuilt the
+  `rcon0`/`zcon0` constraint baselines and restarted the vacuum cadence on every
+  growth back-off.
+- **Free-boundary access to the high-mode transform.** The free-boundary ladder
+  carried the VMEC2000 continuation state but not the high-resolution transform
+  selection or the per-rung executable release, so that lane could not reach the
+  same kernel policy the fixed-boundary ladder uses.
+
+### Removed
+- **The native C++ force backend.** The optional CPU JAX-FFI force-projection
+  kernel, its dispatch module, its `force_backend` selector and its test are
+  removed, together with the `pybind11` build requirement and the JAX build pin
+  that existed only to match the extension ABI. VMEX is purely JAX-native and a
+  normal install requires no C or C++ toolchain.
 
 ## [0.3.0] — 2026-07-20
 
