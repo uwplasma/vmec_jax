@@ -161,7 +161,13 @@ def apply_restart(xc, xcdot, xc_saved, control: StepControl, kind: jax.Array, it
         control,
         time_step=time_step,
         jacobian_resets=control.jacobian_resets + jac.astype(control.jacobian_resets.dtype),
-        iter_last_reset=jnp.where(ok, control.iter_last_reset, iteration),
+        # restart.f advances ``ijacob`` and ``iter1`` inside the ``irst == 2``
+        # guard, so only a *Jacobian* reset rebases the iteration counter.  A
+        # growth backoff (``irst == 3``) restores the state and rescales the
+        # step but leaves ``iter1`` alone -- it must not re-trigger the
+        # ``iter2 == iter1`` rcon0/zcon0 rebuild in funct3d.f, nor restart the
+        # ``MOD(iter2 - iter1, nvacskip)`` vacuum cadence.
+        iter_last_reset=jnp.where(jac, iteration, control.iter_last_reset),
         residual_best_precond=jnp.where(ok, control.residual_best_precond, jnp.inf),
         residual_best_raw=jnp.where(ok, control.residual_best_raw, jnp.inf),
     )

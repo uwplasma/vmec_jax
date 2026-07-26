@@ -157,8 +157,12 @@ def test_apply_restart(kind, dt_factor):
         np.testing.assert_array_equal(np.asarray(new_xc["a"]), np.asarray(saved["a"]))
         np.testing.assert_array_equal(np.asarray(new_v["a"]), 0.0)
         np.testing.assert_array_equal(np.asarray(new_saved["a"]), np.asarray(saved["a"]))
-        assert int(c2.iter_last_reset) == 42
         assert math.isinf(float(c2.residual_best_precond))
         assert math.isinf(float(c2.residual_best_raw))
+        # restart.f advances ``ijacob`` *and* ``iter1`` inside the same
+        # ``IF (irst .eq. 2)`` guard, so a growth back-off (irst = 3) restores
+        # the state and rescales the step while leaving both counters alone.
         expected_resets = 1 if kind == step.RESTART_JACOBIAN else 0
         assert int(c2.jacobian_resets) == expected_resets
+        expected_iter1 = 42 if kind == step.RESTART_JACOBIAN else 0
+        assert int(c2.iter_last_reset) == expected_iter1
