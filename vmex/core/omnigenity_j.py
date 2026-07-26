@@ -128,8 +128,13 @@ def _apply_smooth_goodman_transform(b_line, phi_coords):
     )
     out = mask_l * (bl_sq + f_l) + mask_r * (br_sq + f_r)
     out = jnp.clip(out, 0.0, 1.0)
-    out = out.at[0].set(1.0)
-    out = out.at[-1].set(1.0)
+    x_edge = (phi_coords - phi_start) / (phi_end - phi_start + 1.0e-10)
+    edge_beta = jnp.asarray(120.0, dtype=b_line.dtype)
+    edge_width = jnp.asarray(0.015, dtype=b_line.dtype)
+    left_edge = jax.nn.sigmoid(edge_beta * (edge_width - x_edge))
+    right_edge = jax.nn.sigmoid(edge_beta * (x_edge - (1.0 - edge_width)))
+    edge_blend = left_edge + right_edge - left_edge * right_edge
+    out = (1.0 - edge_blend) * out + edge_blend
     return out
 
 
@@ -175,10 +180,14 @@ def _branch_crossings(phi_coords, b_line, bj_level):
     phi_lo = _invert_branch(jnp.flip(phi_coords), jnp.flip(b_line), jnp.flip(left_mask))
     phi_hi = _invert_branch(phi_coords, b_line, right_mask)
     # Match the normalized reference ``GetBranches(..., Bmax=1, Bmin=0)``.
-    phi_lo = jnp.where(bj_level <= 0.0, phi_min, phi_lo)
-    phi_hi = jnp.where(bj_level <= 0.0, phi_min, phi_hi)
-    phi_lo = jnp.where(bj_level >= 1.0, phi_coords[0], phi_lo)
-    phi_hi = jnp.where(bj_level >= 1.0, phi_coords[-1], phi_hi)
+    endpoint_beta = jnp.asarray(250.0, dtype=b_line.dtype)
+    endpoint_width = jnp.asarray(0.01, dtype=b_line.dtype)
+    low_blend = jax.nn.sigmoid(endpoint_beta * (endpoint_width - bj_level))
+    high_blend = jax.nn.sigmoid(endpoint_beta * (bj_level - (1.0 - endpoint_width)))
+    phi_lo = (1.0 - low_blend) * phi_lo + low_blend * phi_min
+    phi_hi = (1.0 - low_blend) * phi_hi + low_blend * phi_min
+    phi_lo = (1.0 - high_blend) * phi_lo + high_blend * phi_coords[0]
+    phi_hi = (1.0 - high_blend) * phi_hi + high_blend * phi_coords[-1]
     return phi_lo, phi_hi
 
 
