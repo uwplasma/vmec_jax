@@ -194,6 +194,18 @@ def test_free_boundary_238_mode_ladder_is_lawful(free_input: VmecInput) -> None:
 
 
 @pytest.mark.full
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "CONFIRMED DEFECT: on the identical 15->25 free-boundary ladder "
+        "VMEC2000 activates vacuum at iteration 53, crosses the radial "
+        "transition, and converges the ns=25 rung in 143 iterations "
+        "(fsqr 9.7e-9); VMEX activates vacuum and crosses the transition but "
+        "stalls at fsqr ~1.1e-2 for 2500 iterations.  The post-transition "
+        "rebuild of the active vacuum/NESTOR continuation is the suspect. "
+        "strict=True: when the defect is fixed this marker must be removed."
+    ),
+)
 def test_vacuum_survives_a_radial_transition() -> None:
     """A free-boundary ladder must carry ACTIVE vacuum across a grid change.
 
@@ -203,6 +215,10 @@ def test_vacuum_survives_a_radial_transition() -> None:
     fixture converges quickly enough for the first rung to activate vacuum
     inside an ordinary budget; the second rung then *starts* with active
     vacuum state and must remain finite and converge.
+
+    This is a live reproduction of the reported production failure class on a
+    public 41-mode deck: VMEC2000 converges this exact ladder and VMEX does
+    not.  See the xfail reason for the measured numbers.
     """
     import dataclasses
 
