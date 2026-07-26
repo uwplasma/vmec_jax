@@ -69,6 +69,14 @@ def _smooth_positive_sqrt(values, eps: float = 1.0e-10):
     return jnp.sqrt(positive + eps_arr) - jnp.sqrt(eps_arr)
 
 
+def _smooth_abs_power(values, exponent: float, eps: float = 1.0e-12):
+    """Differentiable surrogate for ``|x|**p`` that stays finite at zero."""
+
+    values = jnp.asarray(values, dtype=jnp.float64)
+    eps_arr = jnp.asarray(eps, dtype=values.dtype)
+    return jnp.power(values * values + eps_arr * eps_arr, 0.5 * float(exponent))
+
+
 def _apply_smooth_goodman_transform(b_line, phi_coords):
     """Smooth squash/stretch surrogate of the Goodman constructed-QI well."""
 
@@ -320,8 +328,6 @@ def j_invariant_qi_maxj_residual_from_boozer(
         return ji_all, jc_all
 
     ji_all, jc_all = jax.vmap(_per_surface, in_axes=(0, 0))(b_lines, gi_b)
-    ji_pow = jnp.power(ji_all, float(p_j))
-    jc_pow = jnp.power(jc_all, float(p_j))
 
     residual_blocks: list[jnp.ndarray] = []
     diagnostics: dict[str, Array] = {
@@ -330,11 +336,11 @@ def j_invariant_qi_maxj_residual_from_boozer(
         "surfaces": s_b,
         "ji": ji_all,
         "jc": jc_all,
-        "ji_pow": ji_pow,
-        "jc_pow": jc_pow,
     }
 
     if bool(include_qi):
+        ji_pow = jnp.power(ji_all, float(p_j))
+        jc_pow = jnp.power(jc_all, float(p_j))
         nalpha_f = jnp.asarray(float(nalpha), dtype=jnp.float64)
         sum_ji = jnp.sum(ji_pow, axis=1)
         sum_jc = jnp.sum(jc_pow, axis=1)
@@ -348,20 +354,25 @@ def j_invariant_qi_maxj_residual_from_boozer(
         residual_blocks.append(qi_block)
         diagnostics["qi_surface"] = qi_surface
         diagnostics["qi_objective"] = jnp.sum(qi_block * qi_block)
+        diagnostics["ji_pow"] = ji_pow
+        diagnostics["jc_pow"] = jc_pow
     else:
         diagnostics["qi_surface"] = jnp.zeros((nsurf,), dtype=jnp.float64)
         diagnostics["qi_objective"] = jnp.asarray(0.0, dtype=jnp.float64)
+        diagnostics["ji_pow"] = jnp.zeros_like(ji_all)
+        diagnostics["jc_pow"] = jnp.zeros_like(jc_all)
 
     if bool(include_maxj):
         if nsurf < 2:
             maxj_block = jnp.zeros((0,), dtype=jnp.float64)
             maxj_surface = jnp.zeros((0,), dtype=jnp.float64)
+            jc_pow_maxj = jnp.zeros_like(jc_all)
         else:
+            jc_pow_maxj = _smooth_abs_power(jc_all, float(p_j))
             ds = s_b[1:] - s_b[:-1]
             ds = jnp.where(jnp.abs(ds) > 0.0, ds, 1.0e-10)
-            jc_lo = jc_pow[:-1, 1:, :]
-            jc_hi = jc_pow[1:, 1:, :]
-            ds3 = ds[:, None, None]
+            jc_lo = jc_pow_maxj[:-1, 1:, :]
+            jc_hi = jc_pow_maxj[1:, 1:, :]
 
             def _surface_pair_slope(hi_surface, lo_surface, ds_surface):
                 def _alpha_slope(hi_alpha):
@@ -374,15 +385,16 @@ def j_invariant_qi_maxj_residual_from_boozer(
 
             slope = jax.vmap(_surface_pair_slope, in_axes=(0, 0, 0))(jc_hi, jc_lo, ds)
             violation = jnp.maximum(0.0, slope - float(target_maxj))
-            pair_w = jnp.sqrt(0.5 * (w_arr[:-1] + w_arr[1:]))[:, None, None]
             maxj_surface = jnp.sqrt(jnp.sum(violation**2, axis=(1, 2)))
             maxj_block = float(maxj_weight) * jnp.sqrt(0.5 * (w_arr[:-1] + w_arr[1:])) * maxj_surface
         residual_blocks.append(maxj_block)
         diagnostics["maxj_surface"] = maxj_surface
         diagnostics["maxj_objective"] = jnp.sum(maxj_block * maxj_block)
+        diagnostics["jc_pow_maxj"] = jc_pow_maxj
     else:
         diagnostics["maxj_surface"] = jnp.zeros((max(nsurf - 1, 0),), dtype=jnp.float64)
         diagnostics["maxj_objective"] = jnp.asarray(0.0, dtype=jnp.float64)
+        diagnostics["jc_pow_maxj"] = jnp.zeros_like(jc_all)
 
     if not residual_blocks:
         raise ValueError("At least one of include_qi/include_maxj must be True.")
