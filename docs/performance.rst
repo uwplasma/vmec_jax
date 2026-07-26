@@ -326,32 +326,16 @@ Memory
 Peak resident memory is 0.6–1.5 GB on most bundled rows and about 3.3 GB on
 the largest bundled multigrid deck, but those figures are not a
 high-resolution upper bound. The spectral state is small; compiled transform
-graphs and implicit block factors are not. On the supplied HSX
-``ns=101, mpol=18, ntor=24`` deck, replacing the full mode-stacked synthesis
-with a separable toroidal FFT reduced a fresh Apple-M4 CPU VMEX run from
-676.46 s / 3.896 GiB to 206.56 s / 1.634 GiB. The final 2737-iteration path,
-residuals, and energy are unchanged.
-
-VMEC++ with ten threads took 92.03 s and 380.0 MiB on the same host;
-one-radial-process VMEC2000 took 1154.82 s and 265.0 MiB. A one-thread
-VMEC++ control took 449.79 s and 445.1 MiB. VMEX is therefore now 2.18x
-faster than one-thread VMEC++ and 5.61x faster than VMEC2000 on this deck,
-while ten-thread VMEC++ remains 2.24x faster and uses about one quarter the
-RSS. The remaining storage gap is substantive even though the VMEX state
-matches VMEC2000 to near floating-point accuracy.
-
-Before the separable-transform change, explicit CPU and GPU runs of the same
-deck on the office host converged in
-the same 2737 final-stage iterations.  With the GPU persistent cache already
-populated, CPU took 426.94 s and 6.52 GiB host RSS; the RTX A4000 took
-1468.07 s and 5.40 GiB.  CPU was therefore 3.44x faster, while cached GPU
-placement used 17.1% less host RSS.  The CPU/GPU WOUT relative L2 differences
-were ``5.20e-11`` for ``rmnc``, ``3.27e-10`` for ``zmns``, ``9.76e-11`` for
-``bmnc``, and ``6.54e-11`` for core iota.  An empty-cache GPU process took
-1596.01 s and 6.98 GiB.  These measurements show both that explicit GPU
-placement is correct and that it is not automatically faster for a
-high-mode CLI run. This is a pre-change baseline; the updated CPU/GPU result
-must be recorded before changing the measured automatic device cutoff.
+graphs and implicit block factors are not. On high-mode decks the separable
+toroidal FFT synthesis substantially reduces both wall time and peak memory
+relative to the full mode-stacked contraction, and the stage-cache release
+keeps peak RSS at the largest single rung. A residual memory gap to
+single-purpose compiled implementations remains, dominated by XLA compiled
+executables and the runtime floor rather than by the physics working set.
+Current-head numbers for the reference high-mode deck are produced by the
+reproducible harness (``benchmarks/profile_high_resolution.py`` and
+``benchmarks/run_baseline.py``) rather than recorded here, so the
+documentation cannot go stale against the code
 
 The new synthesis repacks the signed helical coefficients into separable
 theta/zeta blocks, evaluates zeta with ``jax.numpy.fft.irfft``, and
@@ -367,14 +351,55 @@ dense-real lane: on the M4, FFT was 38--88% slower warm on three 5--8-mode
 routine decks and its 8% warm win at 128 modes came with a 13% first-solve
 loss. At 162 modes, both lanes reached the supplied 10,000-iteration cap with
 near-zero residuals, but dense was 4.3% faster (279.55 s versus 291.69 s).
-x86 CPUs also remain dense. This is a measured default: on the office Xeon
-the exact FFT run took 570.47 s,
-while dense synthesis with stage-cache release took 413.24 s / 4.04 GiB
-(3.2% faster and 38.0% lower peak RSS than the prior cache-retaining dense
-baseline of 426.94 s / 6.52 GiB).
+x86 CPUs also remain dense: on the x86 hosts measured so far the dense
+contraction beat the FFT repacking, while ARM CPUs and accelerators prefer
+the FFT path above the mode threshold.  Re-run
+``benchmarks/profile_high_resolution.py`` on the target host to re-derive the
+choice rather than trusting stale numbers.
 Explicit ``use_fft=True`` or ``use_fft=False`` always wins. Implicit AD
 retains the dense lanes and their existing checksum/storage gate. The shared
 runtime pytree is unchanged.
+
+Stage-cache release
+~~~~~~~~~~~~~~~~~~~
+
+The one-shot CLI calls JAX's public ``clear_caches`` between distinct radial
+grids, so peak memory tracks the largest single rung instead of accumulating
+every rung's executables; the persistent on-disk compilation cache is
+unaffected.  Library :func:`~vmex.core.multigrid.solve_multigrid` and
+:func:`~vmex.core.multigrid.solve_free_boundary_multigrid` retain warm stage
+executables by default (the right policy for scans and repeated solves) and
+accept ``release_stage_cache=True`` to opt into the one-shot behaviour.
+
+Implicit-storage experiments (recorded so they are not repeated)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Column chunking bounds simultaneous design-variable probes, not the dominant
+dense ``O(ns * m_block**2)`` block bands and factors.  Candidate reductions
+were measured on a fixed high-mode implicit workload with
+``benchmarks/profile_high_resolution.py`` (which records resolution, devices,
+wall time, peak RSS, and the Jacobian's finiteness, norm, and SHA-256) and
+rejected, each for a concrete reason:
+
+- an automatic chunk schedule was faster but raised peak RSS by more than a
+  third;
+- float32 bands/factors and row scaling made the demanding Jacobian
+  non-finite -- low precision is not a safe drop-in replacement;
+- a regularised scaled factorisation more than doubled the wall time;
+- matrix-free GMRES sampled ~24% less memory but did not finish one Jacobian
+  in over five times the block-path wall;
+- streaming the three radial probe colours preserved the checksum but the
+  allocator retained loop intermediates into factorisation, *raising* RSS;
+- differentiating a genuinely local three-surface kernel (which matches the
+  global residual to ``2e-12``, LASYM included) still failed the end-to-end
+  gate: compilation/allocator retention plus the unchanged dense factors
+  erased the local-temporary saving.  The kernel remains as a tested
+  foundation for a future lower-storage factor representation.
+
+The conclusion stands until the factor *representation* changes: scalar
+objectives use the matrix-free reverse adjoint, vector objectives keep the
+exact block path, and any new storage candidate must reproduce the recorded
+norm/checksum and beat both wall and RSS end to end.
 
 GPU guidance
 ------------

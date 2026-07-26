@@ -146,6 +146,20 @@ bottleneck or stalls.
 
 ## Performance
 
+**High-mode HSX QHS deck** (`MPOL=18, NTOR=24, NZETA=100, ns→101`; 858 modes),
+one fresh process per code, sequentially on an idle Apple Silicon CPU:
+
+| code | wall | peak RSS | outcome |
+| --- | ---: | ---: | --- |
+| VMEX (this branch, incl. JIT compile) | 264 s | 2.35 GB | converged, 2737 iters |
+| reference C++ (10 threads) | 225 s | 0.38 GB | converged |
+| VMEC2000 (1 process) | 593 s | 0.32 GB | converged |
+
+VMEX converges the deck within 1.2× of the ten-thread reference and 2.2×
+faster than VMEC2000; reducing the remaining memory gap (XLA executables and
+full-radial intermediates, not the physics working set) is tracked follow-up
+work.
+
 ![Wall-clock comparison against VMEC2000 and a reference C++ implementation](docs/_static/figures/readme_runtime_compare.png)
 
 Full-solve wall-clock times on the bundled benchmark suite (Apple Silicon
