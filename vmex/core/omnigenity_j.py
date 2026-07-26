@@ -119,7 +119,10 @@ def _apply_smooth_goodman_transform(b_line, phi_coords):
         (1.0 - rhs_peak_val) * (shape_r**pmax),
     )
     out = mask_l * (bl_sq + f_l) + mask_r * (br_sq + f_r)
-    return jnp.clip(out, 0.0, 1.0)
+    out = jnp.clip(out, 0.0, 1.0)
+    out = out.at[0].set(1.0)
+    out = out.at[-1].set(1.0)
+    return out
 
 
 def _branch_crossings(phi_coords, b_line, bj_level):
@@ -160,7 +163,7 @@ def _branch_crossings(phi_coords, b_line, bj_level):
         phi_seg = phi0 + t * (phi1 - phi0)
         return jnp.sum(valid * phi_seg) / jnp.sum(valid)
 
-    phi_min = jnp.interp(s_indmin, indices, phi_coords)
+    phi_min = phi_coords[jnp.argmin(b_line)]
     phi_lo = _invert_branch(jnp.flip(phi_coords), jnp.flip(b_line), jnp.flip(left_mask))
     phi_hi = _invert_branch(phi_coords, b_line, right_mask)
     # Match the normalized reference ``GetBranches(..., Bmax=1, Bmin=0)``.
