@@ -130,47 +130,39 @@ def _branch_crossings(phi_coords, b_line, bj_level):
     bj_level = jnp.asarray(bj_level, dtype=jnp.float64)
     indices = jnp.arange(b_line.shape[0], dtype=jnp.float64)
     s_indmin = _soft_min_idx(b_line)
-    high = jnp.asarray(1.1 * jnp.max(b_line), dtype=b_line.dtype)
-    branch_sharpness = jnp.asarray(6.0, dtype=b_line.dtype)
-    left_mask = jax.nn.sigmoid(branch_sharpness * (s_indmin - indices))
+    branch_beta = jnp.asarray(10.0, dtype=b_line.dtype)
+    left_mask = jax.nn.sigmoid(branch_beta * (s_indmin - indices))
     right_mask = 1.0 - left_mask
-    b_l = left_mask * b_line + (1.0 - left_mask) * high
-    b_r = right_mask * b_line + (1.0 - right_mask) * high
-    left_phi = jnp.flip(phi_coords)
-    left_b = jnp.flip(b_l)
-    right_phi = phi_coords
-    right_b = b_r
 
-    def _segment_crossing(phi_branch, b_branch, *, prefer: str):
+    def _invert_branch(phi_branch, b_branch, branch_mask):
         phi0 = phi_branch[:-1]
         phi1 = phi_branch[1:]
         b0 = b_branch[:-1]
         b1 = b_branch[1:]
+        m0 = branch_mask[:-1]
+        m1 = branch_mask[1:]
         db = b1 - b0
+        scale = jnp.maximum(5.0e-3 * jnp.max(jnp.abs(b_branch)), 1.0e-6)
+
+        # On both oriented branches, B should increase as we move away from the minimum.
+        mono_gate = jax.nn.sigmoid(60.0 * db / scale)
+        lo = jnp.minimum(b0, b1)
+        hi = jnp.maximum(b0, b1)
+        between_gate = jax.nn.sigmoid(40.0 * (bj_level - lo) / scale) * jax.nn.sigmoid(
+            40.0 * (hi - bj_level) / scale
+        )
+        slope_gate = jnp.tanh(jnp.abs(db) / scale) ** 2
+        branch_gate = m0 * m1
+        valid = branch_gate * mono_gate * between_gate * slope_gate + 1.0e-14
+
         t_raw = (bj_level - b0) / (db + 1.0e-12)
-        # Keep the candidate crossing local to the segment even when a nearly
-        # flat segment would otherwise extrapolate far outside the interval.
         t = jnp.clip(t_raw, 0.0, 1.0)
         phi_seg = phi0 + t * (phi1 - phi0)
-
-        scale = jnp.maximum(5.0e-3 * jnp.max(jnp.abs(b_branch)), 1.0e-6)
-        prod = (b0 - bj_level) * (b1 - bj_level)
-        sign_gate = jax.nn.sigmoid(-120.0 * prod / (scale * scale))
-        inside_gate = jax.nn.sigmoid(30.0 * t_raw) * jax.nn.sigmoid(30.0 * (1.0 - t_raw))
-        prox = jnp.exp(-((0.5 * (b0 + b1) - bj_level) / scale) ** 2)
-        slope_gate = jnp.tanh(jnp.abs(db) / scale) ** 2
-        valid = sign_gate * inside_gate * prox * slope_gate + 1.0e-14
-        select_beta = jnp.asarray(80.0, dtype=phi_branch.dtype)
-        if prefer == "left":
-            logits = jnp.log(valid) - select_beta * phi_seg
-        else:
-            logits = jnp.log(valid) + select_beta * phi_seg
-        pick = jax.nn.softmax(logits)
-        return jnp.sum(pick * phi_seg)
+        return jnp.sum(valid * phi_seg) / jnp.sum(valid)
 
     phi_min = jnp.interp(s_indmin, indices, phi_coords)
-    phi_lo = _segment_crossing(left_phi, left_b, prefer="left")
-    phi_hi = _segment_crossing(right_phi, right_b, prefer="right")
+    phi_lo = _invert_branch(jnp.flip(phi_coords), jnp.flip(b_line), jnp.flip(left_mask))
+    phi_hi = _invert_branch(phi_coords, b_line, right_mask)
     # Match the normalized reference ``GetBranches(..., Bmax=1, Bmin=0)``.
     phi_lo = jnp.where(bj_level <= 0.0, phi_min, phi_lo)
     phi_hi = jnp.where(bj_level <= 0.0, phi_min, phi_hi)
