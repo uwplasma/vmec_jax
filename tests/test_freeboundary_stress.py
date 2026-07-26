@@ -116,6 +116,19 @@ def stress_input(tmp_path_factory) -> VmecInput:
     return VmecInput.from_file(str(path))
 
 
+def _stress_field(inp: VmecInput) -> MgridField:
+    """The deck's external field with EXTCUR applied.
+
+    ``from_mgrid_data`` without ``extcur`` defaults to the file's raw currents
+    and would silently drop the deck's ``EXTCUR`` scaling.
+    """
+    data = read_mgrid(MGRID)
+    return MgridField.from_mgrid_data(
+        data,
+        extcur=np.asarray(inp.extcur, dtype=float)[: data.nextcur],
+    )
+
+
 def test_indexed_sections_and_profile_arrays_parse(stress_input: VmecInput) -> None:
     """Indexed ``RBC``/``ZBS`` sections, ``LFORBAL`` and ``APHI`` all survive parsing."""
     inp = stress_input
@@ -152,13 +165,7 @@ def test_bad_axis_free_boundary_ladder_stays_finite(stress_input: VmecInput) -> 
     and finish with a typed VMEX outcome -- never a raw crash, and never a NaN
     force silently carried forward.
     """
-    # Deck-scaled currents: from_mgrid_data without extcur defaults to the
-    # file's raw currents and would silently drop the deck's EXTCUR scaling.
-    data = read_mgrid(MGRID)
-    field = MgridField.from_mgrid_data(
-        data,
-        extcur=np.asarray(stress_input.extcur, dtype=float)[: data.nextcur],
-    )
+    field = _stress_field(stress_input)
     lines: list[str] = []
 
     def collect(text: str = "", end: str = "\n") -> None:
@@ -178,3 +185,94 @@ def test_bad_axis_free_boundary_ladder_stays_finite(stress_input: VmecInput) -> 
     assert int(result.iterations) >= 1
     # the recovery machinery must be reachable, not silently bypassed
     assert any("FORCE ITERATIONS" in ln for ln in lines)
+
+
+@pytest.mark.full  # ~2 min: forced 75-reset event, instrumented recovery
+@pytest.mark.skipif(not MGRID.exists(), reason="mgrid fixture not fetched")
+def test_jacobian_recovery_uses_checkpoint_and_reduces_delt(monkeypatch) -> None:
+    """The 75-reset recovery restarts the CHECKPOINT with a HALVED time step.
+
+    ``eqsolve.f`` aborts fatally at ``ijacob >= 75``; the bounded recovery
+    instead restarts the best finite checkpoint with a reduced ``DELT``.  Two
+    silent regressions would defeat it while keeping the end-to-end recovery
+    tests green:
+
+    * restarting a *reconstructed cold state* instead of the checkpoint
+      (``initial_state=None`` in the recursive stage call), and
+    * replaying the *identical trajectory* because the time step was not
+      actually reduced.
+
+    A deliberately absurd ``DELT = 1e4`` on the converging CTH deck forces the
+    75-reset event deterministically (the ``jacobian_retries=0`` policy test
+    proves ``jacobian_resets == 75`` for this recipe).  This test intercepts
+    the module-level stage recursion and asserts: (a) the recovery event fires
+    (banner + recursive call); (b) the restored state is the recorded
+    checkpoint -- present and fully finite, never ``None`` (bitwise restore
+    semantics are unit-locked in ``tests/test_step_control.py``); (c) each
+    retry uses ``min(0.5, 0.5 * prev)`` -- a genuinely different time step
+    from the failing attempt, so the trajectory cannot replay; (d) the
+    recovered trajectory then *converges*, which the failing attempt provably
+    never does.
+    """
+    import dataclasses
+
+    import vmex.core.freeboundary as FBmod
+
+    inp = dataclasses.replace(
+        VmecInput.from_file(str(DATA / "input.cth_like_free_bdy")),
+        delt=1.0e4,
+    )
+
+    recorded: list[dict] = []
+    original = FBmod._solve_free_boundary_stage
+
+    def recording(deck, **kw):
+        state = kw.get("initial_state")
+        recorded.append({
+            "time_step": kw.get("time_step"),
+            "retries": kw.get("jacobian_retries"),
+            "has_state": state is not None,
+            "state_finite": bool(
+                np.all(np.isfinite(np.asarray(state.R_cos)))
+                and np.all(np.isfinite(np.asarray(state.Z_sin)))
+            ) if state is not None else None,
+        })
+        return original(deck, **kw)
+
+    monkeypatch.setattr(FBmod, "_solve_free_boundary_stage", recording)
+
+    lines: list[str] = []
+
+    def collect(text: str = "", end: str = "\n") -> None:
+        lines.append(str(text))
+
+    result = solve_free_boundary_multigrid(
+        inp, mgrid_path=str(MGRID), verbose=True, emit=collect,
+        raise_on_max_iterations=False,
+    )
+
+    # (a) the recovery event happened, visibly and structurally
+    assert any("JACOBIAN RECOVERY RETRY" in ln for ln in lines), (
+        "DELT=1e4 no longer reaches the 75-reset recovery")
+    retries = [c for c in recorded if c["time_step"] is not None]
+    assert retries, "no recursive recovery call was recorded"
+
+    # (b) every retry restarts a real, fully finite checkpoint state
+    for call in retries:
+        assert call["has_state"], (
+            "recovery restarted a cold state instead of the checkpoint")
+        assert call["state_finite"], "restored checkpoint has non-finite leaves"
+
+    # (c) the halving chain min(0.5, 0.5*prev): the retry time step genuinely
+    # differs from the failing attempt's, so the trajectory cannot replay
+    prev = float(inp.delt)
+    for call in retries:
+        expected = min(0.5, 0.5 * prev)
+        assert call["time_step"] == pytest.approx(expected), (
+            f"retry DELT {call['time_step']} != min(0.5, 0.5*{prev})")
+        assert call["retries"] is not None and call["retries"] >= 0
+        prev = expected
+
+    # (d) the recovered trajectory converges; the DELT=1e4 attempt never does
+    assert bool(result.converged), (
+        f"recovered run failed to converge (fsqr={float(result.fsqr):.2e})")

@@ -148,7 +148,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [a, b, c1, c2, d]
+        shard: [a1, a2, b, c1, c2, d]
     steps:
       - uses: actions/checkout@v6.0.2
 
@@ -198,9 +198,13 @@ jobs:
       #                         cheap + /tmp-cached, so per-worker re-solve is
       #                         negligible; loadscope serialised 383 s)
       # The fixture-sharing modules stay on loadscope:
-      #   a = heaviest solver-golden modules, including all free-boundary
-      #       modules so their JAX caches leave with this bounded shard instead
-      #       of accumulating in the catch-all worker processes;
+      #   a1 = ALL free-boundary modules, so their JAX caches leave with one
+      #        bounded shard; split from the former combined "a" after hosted
+      #        runners were shut down mid-run twice on the accumulated
+      #        free-boundary + solver-golden shard (same syndrome that split c)
+      #        -- locally the combined content runs in under a minute, so the
+      #        overruns were runner-resource pressure, not test cost;
+      #   a2 = the solver-golden parity/ladder modules formerly in "a";
       #   c1/c2 = the former catch-all, split explicitly after two hosted
       #           runners were externally shut down above 84% despite no test
       #           failure.  Explicit file ownership keeps coverage disjoint.
@@ -212,18 +216,18 @@ jobs:
         env:
           JAX_ENABLE_X64: "1"
         run: |
-          A_FILES="tests/test_parity_breadth.py \
-                   tests/test_multigrid_ladder.py \
-                   tests/test_optimize_traceable_qs.py \
-                   tests/test_freeboundary.py \
-                   tests/test_freeboundary_multigrid.py \
-                   tests/test_freeboundary_stress.py \
-                   tests/test_freeboundary_linear.py \
-                   tests/test_qi_free_boundary_stress.py \
-                   tests/test_high_mode_free_boundary_parity.py \
-                   tests/test_freeboundary_diff.py \
-                   tests/test_cli_freeboundary.py \
-                   tests/test_solver_end_to_end.py"
+          A1_FILES="tests/test_freeboundary.py \
+                    tests/test_freeboundary_multigrid.py \
+                    tests/test_freeboundary_stress.py \
+                    tests/test_freeboundary_linear.py \
+                    tests/test_qi_free_boundary_stress.py \
+                    tests/test_high_mode_free_boundary_parity.py \
+                    tests/test_freeboundary_diff.py \
+                    tests/test_cli_freeboundary.py"
+          A2_FILES="tests/test_parity_breadth.py \
+                    tests/test_multigrid_ladder.py \
+                    tests/test_optimize_traceable_qs.py \
+                    tests/test_solver_end_to_end.py"
           B_FILES="tests/test_golden_digests.py \
                    tests/test_bootstrap.py \
                    tests/test_wout_golden.py"
@@ -271,8 +275,10 @@ jobs:
                     tests/test_validation_guards.py \
                     tests/test_vmec2000_feature_stress.py"
           D_FILES="tests/test_optimize.py"
-          if [ "${{ matrix.shard }}" = "a" ]; then
-            pytest -q -n 4 --dist loadscope $A_FILES --durations=15 --cov=vmex --cov-report=term
+          if [ "${{ matrix.shard }}" = "a1" ]; then
+            pytest -q -n 4 --dist loadscope $A1_FILES --durations=15 --cov=vmex --cov-report=term
+          elif [ "${{ matrix.shard }}" = "a2" ]; then
+            pytest -q -n 4 --dist loadscope $A2_FILES --durations=15 --cov=vmex --cov-report=term
           elif [ "${{ matrix.shard }}" = "b" ]; then
             pytest -q -n 4 --dist load $B_FILES --durations=15 --cov=vmex --cov-report=term
           elif [ "${{ matrix.shard }}" = "c1" ]; then
@@ -421,7 +427,7 @@ jobs:
 
       - name: Combine shards and enforce the gate
         run: |
-          coverage combine coverage.parity-a coverage.parity-b coverage.parity-c1 coverage.parity-c2 coverage.parity-d coverage.gradient-a coverage.gradient-b coverage.gradient-c coverage.examples
+          coverage combine coverage.parity-a1 coverage.parity-a2 coverage.parity-b coverage.parity-c1 coverage.parity-c2 coverage.parity-d coverage.gradient-a coverage.gradient-b coverage.gradient-c coverage.examples
           # The mirror release audit reaches 95% only after appending nightly
           # fixed/free adjoint tests. The fast core artifacts intentionally
           # exclude those tests, so do not mix a partial mirror number into
