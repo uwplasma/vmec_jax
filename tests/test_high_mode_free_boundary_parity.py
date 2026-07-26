@@ -194,18 +194,6 @@ def test_free_boundary_238_mode_ladder_is_lawful(free_input: VmecInput) -> None:
 
 
 @pytest.mark.full
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CONFIRMED DEFECT: on the identical 15->25 free-boundary ladder "
-        "VMEC2000 activates vacuum at iteration 53, crosses the radial "
-        "transition, and converges the ns=25 rung in 143 iterations "
-        "(fsqr 9.7e-9); VMEX activates vacuum and crosses the transition but "
-        "stalls at fsqr ~1.1e-2 for 2500 iterations.  The post-transition "
-        "rebuild of the active vacuum/NESTOR continuation is the suspect. "
-        "strict=True: when the defect is fixed this marker must be removed."
-    ),
-)
 def test_vacuum_survives_a_radial_transition() -> None:
     """A free-boundary ladder must carry ACTIVE vacuum across a grid change.
 
@@ -216,13 +204,20 @@ def test_vacuum_survives_a_radial_transition() -> None:
     inside an ordinary budget; the second rung then *starts* with active
     vacuum state and must remain finite and converge.
 
-    This is a live reproduction of the reported production failure class on a
-    public 41-mode deck: VMEC2000 converges this exact ladder and VMEX does
-    not.  See the xfail reason for the measured numbers.
+    Measured parity on this exact ladder: VMEC2000 activates vacuum at
+    iteration 53, carries it across the transition, and converges the ns=25
+    rung in 143 iterations (fsqr 9.7e-9); VMEX converges the same rung in 143
+    iterations (fsqr 9.5e-9) -- the carried-vacuum restart is
+    iteration-for-iteration faithful.  The generous iteration bound below
+    absorbs cross-platform float jitter without weakening the gate.
+
+    The external field MUST come from the deck-aware loader (``mgrid_path``):
+    ``MgridField.from_mgrid_data(read_mgrid(...))`` without ``extcur``
+    defaults to the file's raw currents and silently ignores the deck's
+    ``EXTCUR`` scaling, which turns this case into a different (and
+    non-convergent) physics problem.
     """
     import dataclasses
-
-    from vmex.core.mgrid import MgridField, read_mgrid
 
     mgrid = DATA / "mgrid_cth_like.nc"
     if not mgrid.exists():
@@ -231,7 +226,6 @@ def test_vacuum_survives_a_radial_transition() -> None:
     inp = dataclasses.replace(
         inp, ns_array=[15, 25], ftol_array=[1.0e-8, 1.0e-8],
         niter_array=[2500, 2500])
-    field = MgridField.from_mgrid_data(read_mgrid(mgrid))
 
     lines: list[str] = []
 
@@ -239,7 +233,7 @@ def test_vacuum_survives_a_radial_transition() -> None:
         lines.append(str(text))
 
     result = solve_free_boundary_multigrid(
-        inp, external_field=field, verbose=True, emit=collect,
+        inp, mgrid_path=str(mgrid), verbose=True, emit=collect,
         raise_on_max_iterations=False)
 
     output = "\n".join(lines)
@@ -252,3 +246,9 @@ def test_vacuum_survives_a_radial_transition() -> None:
     for name in ("fsqr", "fsqz", "fsql"):
         assert np.isfinite(float(getattr(result, name)))
     assert bool(result.converged), "post-transition rung failed to converge"
+    # VMEC2000 needs 143 iterations on the carried-vacuum ns=25 rung; a
+    # faithful restart lands in the same neighbourhood, not at a fresh
+    # activation's cost (a full reactivation restarts the residual at ~1e0).
+    assert int(result.iterations) <= 500, (
+        f"post-transition rung took {int(result.iterations)} iterations; "
+        "VMEC2000 needs 143 -- the carried vacuum state is not being reused")

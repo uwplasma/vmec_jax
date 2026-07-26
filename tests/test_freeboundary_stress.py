@@ -152,7 +152,13 @@ def test_bad_axis_free_boundary_ladder_stays_finite(stress_input: VmecInput) -> 
     and finish with a typed VMEX outcome -- never a raw crash, and never a NaN
     force silently carried forward.
     """
-    field = MgridField.from_mgrid_data(read_mgrid(MGRID))
+    # Deck-scaled currents: from_mgrid_data without extcur defaults to the
+    # file's raw currents and would silently drop the deck's EXTCUR scaling.
+    data = read_mgrid(MGRID)
+    field = MgridField.from_mgrid_data(
+        data,
+        extcur=np.asarray(stress_input.extcur, dtype=float)[: data.nextcur],
+    )
     lines: list[str] = []
 
     def collect(text: str = "", end: str = "\n") -> None:
