@@ -61,6 +61,14 @@ def _smooth_signed_sqrt(values, eps: float = 1.0e-9):
     return values / jnp.sqrt(abs_smooth + eps_arr)
 
 
+def _smooth_positive_sqrt(values, eps: float = 1.0e-10):
+    values = jnp.asarray(values, dtype=jnp.float64)
+    eps_arr = jnp.asarray(eps, dtype=values.dtype)
+    positive = jnp.maximum(values, 0.0)
+    # Finite derivative at zero, while staying close to sqrt(max(values, 0)).
+    return jnp.sqrt(positive + eps_arr) - jnp.sqrt(eps_arr)
+
+
 def _apply_smooth_goodman_transform(b_line, phi_coords):
     """Smooth squash/stretch surrogate of the Goodman constructed-QI well."""
 
@@ -163,7 +171,7 @@ def _branch_crossings(phi_coords, b_line, bj_level):
         phi_seg = phi0 + t * (phi1 - phi0)
         return jnp.sum(valid * phi_seg) / jnp.sum(valid)
 
-    phi_min = phi_coords[jnp.argmin(b_line)]
+    phi_min = jnp.interp(s_indmin, indices, phi_coords)
     phi_lo = _invert_branch(jnp.flip(phi_coords), jnp.flip(b_line), jnp.flip(left_mask))
     phi_hi = _invert_branch(phi_coords, b_line, right_mask)
     # Match the normalized reference ``GetBranches(..., Bmax=1, Bmin=0)``.
@@ -195,13 +203,14 @@ def _compute_j_pair(phi_coords, b_input, b_target, bj_levels, gi_value, *, nphi_
     phi_grid = p1[:, None] + t[None, :] * (p2 - p1)[:, None]
     bi_g = jnp.interp(phi_grid, phi_coords, b_input)
     bc_g = jnp.interp(phi_grid, phi_coords, b_target)
-    metric_factor = gi_value / (bi_g + 1.0e-9)
-    bj_v = bj_levels[:, None]
+    bi_safe = jnp.maximum(bi_g, 1.0e-9)
+    bj_v = jnp.maximum(bj_levels[:, None], 1.0e-9)
+    metric_factor = gi_value / bi_safe
 
-    res_i = 1.0 - bi_g / (bj_v + 1.0e-9)
-    res_c = 1.0 - bc_g / (bj_v + 1.0e-9)
+    res_i = 1.0 - bi_g / bj_v
+    res_c = 1.0 - bc_g / bj_v
     vi_g = _smooth_signed_sqrt(res_i)
-    vc_g = jnp.sqrt(jnp.maximum(res_c, 0.0))
+    vc_g = _smooth_positive_sqrt(res_c)
 
     ji = jnp.trapezoid(vi_g * metric_factor, x=phi_grid, axis=1)
     jc = jnp.trapezoid(vc_g * metric_factor, x=phi_grid, axis=1)
