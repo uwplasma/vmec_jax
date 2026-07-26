@@ -219,6 +219,7 @@ jobs:
                    tests/test_freeboundary_multigrid.py \
                    tests/test_freeboundary_stress.py \
                    tests/test_freeboundary_linear.py \
+                   tests/test_qi_free_boundary_stress.py \
                    tests/test_freeboundary_diff.py \
                    tests/test_cli_freeboundary.py \
                    tests/test_solver_end_to_end.py"

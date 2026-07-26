@@ -27,6 +27,7 @@ DEDICATED_LANES = {
     "tests/test_implicit_grad.py": "own sharded implicit-gradient job",
     "tests/test_examples.py": "own example-smoke job",
     "tests/test_lasym_free_case.py": "helper module, defines no tests",
+    "tests/test_qi_free_boundary_case.py": "helper module, defines no tests",
     "tests/test_lasym_free_convergence.py": "pytest.mark.full -> nightly lane",
     "tests/test_vmec2000_live.py": "pytest.mark.vmec2000_live -> external binary",
 }
