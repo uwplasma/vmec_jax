@@ -1076,7 +1076,6 @@ def _solve_free_boundary_stage(
     precon_type: str | None = None,
     prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
-    threads: int = 1,
     jacobian_retries: int = 2,
     constraint_continuation: tuple[Array, Array] | None = None,
     reuse_vacuum_cache: bool = False,
@@ -1116,7 +1115,7 @@ def _solve_free_boundary_stage(
         time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
         lconm1=lconm1, precon_type=precon_type,
         prec2d_threshold=prec2d_threshold, prec2d=prec2d,
-        threads=threads, use_fft=use_fft,
+        use_fft=use_fft,
     )
     if not allow_initial_axis_reguess:
         rt = replace(rt, lmove_axis=False)
@@ -1518,6 +1517,10 @@ def _solve_free_boundary_stage(
             precon_type=precon_type,
             prec2d_threshold=prec2d_threshold,
             prec2d=prec2d,
+            # The retry must keep the same synthesis kernel: dropping this
+            # silently fell back to the dense transform exactly on the
+            # high-mode recoveries where the FFT selection matters most.
+            use_fft=use_fft,
             jacobian_retries=int(jacobian_retries) - 1,
             constraint_continuation=(
                 current_rt.rcon0, current_rt.zcon0
@@ -1575,7 +1578,6 @@ def solve_free_boundary(
     precon_type: str | None = None,
     prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
-    threads: int = 1,
     jacobian_retries: int = 2,
 ) -> SolveResult:
     """Single-grid free-boundary solve (``eqsolve.f`` + ``funct3d.f`` IVAC0).
@@ -1592,7 +1594,7 @@ def solve_free_boundary(
     optional 2D-preconditioner overrides, and bounded ``jacobian_retries``
     recovery mirror :func:`vmex.core.solver.solve`. The returned
     ``result.vacuum`` contains the final NESTOR potential modes and surface
-    fields, without internal matrix caches.     ``threads`` affect only the plasma force projection; NESTOR remains JAX.
+    fields, without internal matrix caches.
     """
     if resolution is None:
         resolution = resolution_from_input(inp)
@@ -1610,7 +1612,6 @@ def solve_free_boundary(
             lconm1=lconm1,
             precon_type=precon_type, prec2d_threshold=prec2d_threshold,
             prec2d=prec2d,
-            threads=threads,
             jacobian_retries=jacobian_retries,
             constraint_continuation=None, reuse_vacuum_cache=False,
         )

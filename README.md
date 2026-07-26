@@ -164,37 +164,8 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
   the workflow number.
 - **GPU** — at these sizes a fixed per-solve dispatch cost dominates and the CPU
   wins outright; per-iteration throughput favours the GPU ~3× on the largest
-  moderate-mode decks. A same-host, cache-warm A4000 run of the supplied
-  858-mode HSX case was instead 3.44× slower than CPU. The measured device
-  policy therefore keeps both small-work and very-high-mode stages on CPU,
-  while explicit placement always wins.
-- **High resolution** — on Apple Silicon, separable toroidal FFT synthesis
-  cuts the supplied
-  `ns=101`, `mpol=18`, `ntor=24` HSX deck from 676.46 s / 3.90 GiB to
-  206.56 s / 1.63 GiB in a fresh CPU VMEX CLI process; the CLI releases
-  completed radial-stage executables while the reusable library API retains
-  them by default. Convergence and VMEC2000 parity are unchanged. That is
-  faster than the measured
-  one-thread reference C++ control (449.79 s), though the ten-thread reference remains
-  faster and smaller (92.03 s / 380 MiB); one-radial-process VMEC2000
-  took 1154.82 s / 265 MiB.
-  The measured default selects this kernel only above 512 modes on ARM CPUs
-  and accelerators. Smaller problems retain the established dense lane (FFT
-  was slower on three routine M4 decks and only marginally faster warm at
-  128 modes); x86 CPUs also remain dense because FFT was slower.
-  Dense synthesis with CLI stage-cache release took 413.24 s /
-  4.04 GiB on the office Xeon, versus 570.47 s for FFT and the previous
-  cache-retaining dense baseline of 426.94 s / 6.52 GiB (3.2% faster and
-  38.0% lower peak RSS). `use_fft=True` or `False` remains an explicit
-  library override.
-  Column chunking bounds simultaneous design probes, while the implicit
-  block factors still scale as `O(ns * m_block²)`; an `ns=201` one-Jacobian
-  measurement used 4.11 GiB. The implicit callback deliberately retains the
-  real dense transform: complex FFT tangents exceeded 10 GiB. A candidate
-  chunk schedule that raised RSS by 36.7% was rejected, and the lower-memory
-  GMRES path was over 5× slower without finishing. Scalar objectives now
-  default to one matrix-free reverse adjoint and avoid that block assembly;
-  reducing block storage for high-mode vector objectives remains open work.
+  moderate-mode decks. The measured device policy therefore keeps small-work
+  and very-high-mode stages on CPU, while explicit placement always wins.
 - **Pure JAX, no compiled extensions** — every kernel is JAX, so installing
   vmex never requires a C or C++ toolchain and the same code runs on CPU, GPU
   and TPU. An experimental native CPU projection was evaluated and removed: it

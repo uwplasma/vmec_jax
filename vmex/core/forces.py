@@ -878,7 +878,6 @@ def spectral_mhd_forces(
     ntor: int,
     trig: TrigTables,
     include_edge: bool = False,
-    threads: int = 1,
 ) -> SpectralForce:
     """Project the real-space force kernels onto the Fourier basis.
 

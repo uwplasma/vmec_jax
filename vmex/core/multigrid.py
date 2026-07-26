@@ -202,7 +202,6 @@ def solve_multigrid(
     device: Any = AUTO,
     raise_on_max_iterations: bool = True,
     use_fft: bool | None = None,
-    threads: int = 1,
     release_stage_cache: bool = False,
 ) -> SolveResult:
     """Fixed-boundary multigrid solve over the ``NS_ARRAY`` ladder.
@@ -299,7 +298,6 @@ def solve_multigrid(
             time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
             precon_type=precon_type, prec2d_threshold=prec2d_threshold,
             prec2d=prec2d, use_fft=stage_use_fft,
-            threads=threads,
         )
         if state is not None and int(state.R_cos.shape[0]) != nsval:
             state = interpolate_state(state, ns_fine=nsval, modes=rt.modes)
@@ -375,7 +373,6 @@ def solve_free_boundary_multigrid(
     precon_type: str | None = None,
     prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
-    threads: int = 1,
     jacobian_retries: int = 2,
     use_fft: bool | None = None,
     release_stage_cache: bool = False,
@@ -410,7 +407,6 @@ def solve_free_boundary_multigrid(
     ``device="auto"`` (default) applies the measured policy independently at
     each grid and relocates carried plasma/vacuum arrays when the policy changes;
     ``None`` leaves placement to JAX.
-    The optional ``threads`` control is forwarded to every plasma stage.
     The final stage's publishable potential and surface fields are retained in
     ``result.vacuum``; internal NESTOR matrix caches are not exposed.
     """
@@ -501,8 +497,7 @@ def solve_free_boundary_multigrid(
                 lconm1=lconm1,
                 precon_type=precon_type,
                 prec2d_threshold=prec2d_threshold, prec2d=prec2d,
-                threads=threads,
-                jacobian_retries=jacobian_retries,
+                    jacobian_retries=jacobian_retries,
                 use_fft=_resolve_use_fft(use_fft, device, resolution),
                 constraint_continuation=(
                     constraint_continuation if same_grid else None),

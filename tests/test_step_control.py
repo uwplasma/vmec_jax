@@ -159,10 +159,11 @@ def test_apply_restart(kind, dt_factor):
         np.testing.assert_array_equal(np.asarray(new_saved["a"]), np.asarray(saved["a"]))
         assert math.isinf(float(c2.residual_best_precond))
         assert math.isinf(float(c2.residual_best_raw))
-        # restart.f advances ``ijacob`` *and* ``iter1`` inside the same
-        # ``IF (irst .eq. 2)`` guard, so a growth back-off (irst = 3) restores
-        # the state and rescales the step while leaving both counters alone.
+        # ``ijacob`` advances only on a Jacobian reset (restart.f irst == 2
+        # guard), but ``iter1`` is rebased on ANY non-OK restart: the caller,
+        # evolve.f TimeStepControl, runs ``iter1 = iter2`` unconditionally
+        # inside ``IF (irst .NE. 1)``.  The production loop in solver.py does
+        # the same, and this helper must match the full call path.
         expected_resets = 1 if kind == step.RESTART_JACOBIAN else 0
         assert int(c2.jacobian_resets) == expected_resets
-        expected_iter1 = 42 if kind == step.RESTART_JACOBIAN else 0
-        assert int(c2.iter_last_reset) == expected_iter1
+        assert int(c2.iter_last_reset) == 42

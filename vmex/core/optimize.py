@@ -1601,7 +1601,7 @@ def _least_squares_implicit(
     cfg = imp.make_config(inp, multigrid=True,
                           hot_restart=(warm_start is not None),
                           adjoint_tol=1e-6, adjoint_maxiter=30,
-                          threads=solve_kwargs.get("threads", 1))
+)
     # Pin the residual/Jacobian graphs to the fastest device for this launch-
     # bound path (CPU by default; explicit device= honored) — committing the
     # input dof vector to it makes both jits compile and run there, and their

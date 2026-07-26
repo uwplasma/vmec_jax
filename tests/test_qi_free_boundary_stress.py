@@ -72,9 +72,25 @@ def test_generated_mgrid_has_field_period_symmetry() -> None:
     assert np.mean(np.abs(bp)) > np.mean(np.abs(br))
     assert np.mean(np.abs(bp)) > np.mean(np.abs(bz))
 
-    # Periodicity across the stored period: the tabulation covers [0, 2*pi/nfp)
-    # so rolling by a full period returns the same plane.
-    np.testing.assert_allclose(np.roll(bp, bp.shape[0], axis=0), bp, rtol=0, atol=0)
+    # Genuine field-period symmetry of the source field: rotating an
+    # evaluation point by 2*pi/nfp must rotate the Cartesian field with it.
+    # (Rolling the stored table by its own length is a tautology -- this
+    # compares two physically distinct evaluation points instead.)
+    from tests.test_qi_free_boundary_case import (
+        COIL_CURRENT, _biot_savart, _coil_filaments,
+    )
+    analytic = _biot_savart(_coil_filaments(2), COIL_CURRENT)
+    point = np.array([[1.05, 0.10, 0.07]])
+    rot = np.pi  # one full field period for nfp = 2
+    c, s_ = np.cos(rot), np.sin(rot)
+    rotated = np.array([[point[0, 0] * c - point[0, 1] * s_,
+                         point[0, 0] * s_ + point[0, 1] * c,
+                         point[0, 2]]])
+    b0, b1 = analytic(point)[0], analytic(rotated)[0]
+    b0_rotated = np.array([b0[0] * c - b0[1] * s_,
+                           b0[0] * s_ + b0[1] * c,
+                           b0[2]])
+    np.testing.assert_allclose(b1, b0_rotated, rtol=1e-10, atol=1e-14)
 
 
 @pytest.mark.full  # a real two-rung free-boundary ladder with recovery

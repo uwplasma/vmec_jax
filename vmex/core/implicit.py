@@ -101,6 +101,7 @@ verified against :func:`~vmex.core.setup.run_setup` in
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import functools
 import types
@@ -259,7 +260,6 @@ class ImplicitConfig:
     #: ~30% less wall — a strictly faster path to the identical converged adjoint.
     adjoint_gcrot_m: int = 100
     adjoint_gcrot_k: int = 20
-    force_threads: int = 1
     #: seed repeated host solves from the last converged state of this config
     #: (optimization trials; the fixed point — hence the gradient — is
     #: unchanged, only the iteration count drops).  Makes the callback
@@ -281,7 +281,6 @@ def make_config(
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
     adjoint_gcrot_k: int = 20,
-    threads: int = 1,
     hot_restart: bool = False,
 ) -> ImplicitConfig:
     """Build the static config; ``resolution`` is the (final-stage) grid."""
@@ -299,7 +298,6 @@ def make_config(
         adjoint_tol=float(adjoint_tol), adjoint_restart=int(adjoint_restart),
         adjoint_maxiter=int(adjoint_maxiter),
         adjoint_gcrot_m=int(adjoint_gcrot_m), adjoint_gcrot_k=int(adjoint_gcrot_k),
-        force_threads=int(threads),
         hot_restart=bool(hot_restart),
     )
 
@@ -318,7 +316,6 @@ def _template_runtime(cfg: ImplicitConfig) -> SolverRuntime:
         cfg.inp, cfg.resolution, ftol=cfg.ftol,
         max_iterations=cfg.max_iterations, lconm1=cfg.lconm1,
         use_fft=False,
-        threads=cfg.force_threads,
     )
 
 
@@ -977,15 +974,13 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
             inp2, ns_array=ns_arr, ftol_array=ftol_arr, mode=cfg.mode,
             lconm1=cfg.lconm1, raise_on_max_iterations=False,
             initial_state=init, use_fft=False,
-            threads=cfg.force_threads,
-            device=solver_device)
+                device=solver_device)
     else:
         run = lambda init: solve(  # noqa: E731
             inp2, cfg.resolution, ftol=cfg.ftol,
             max_iterations=cfg.max_iterations, mode=cfg.mode,
             lconm1=cfg.lconm1, initial_state=init, use_fft=False,
-            threads=cfg.force_threads,
-            device=solver_device)
+                device=solver_device)
     # Seed ladder: perturbation prediction -> plain hot restart -> cold.
     # A bad warm seed must not fail the trial (only the initial guess is at
     # stake — every rung converges to the same fixed point).
@@ -1487,7 +1482,6 @@ def run(
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
     adjoint_gcrot_k: int = 20,
-    threads: int = 1,
     device: Any = AUTO,
 ) -> ImplicitSolution:
     """Differentiable fixed-boundary equilibrium: input -> outputs pytree.
@@ -1524,28 +1518,34 @@ def run(
         multigrid=multigrid, lconm1=lconm1, adjoint_tol=adjoint_tol,
         adjoint_restart=adjoint_restart, adjoint_maxiter=adjoint_maxiter,
         adjoint_gcrot_m=adjoint_gcrot_m, adjoint_gcrot_k=adjoint_gcrot_k,
-        threads=threads,
     )
-    if params is None:
-        params = params_from_input(inp, device=device)
-    elif device is not None and not (
-        isinstance(device, str) and device.strip().lower() == AUTO
-    ):
-        dev = resolve_implicit_device(device, cfg.resolution)
-        if dev is not None:
+    # Resolve the requested device ONCE and run the entire operation inside
+    # its context.  Moving only the parameter pytree is not enough: the solve
+    # and runtime_from_params rebuild static tables from host constants, and
+    # outside a matching jax.default_device those tables commit to whatever
+    # device is JAX's default (the first GPU).  With params on a *different*
+    # explicit device that produced mixed-device runtime arrays and NaNs; the
+    # context makes every freshly created constant land on the same device as
+    # the parameters.
+    dev = resolve_implicit_device(device, cfg.resolution)
+    placement = jax.default_device(dev) if dev is not None else contextlib.nullcontext()
+    with placement:
+        if params is None:
+            params = params_from_input(inp, device=device)
+        elif dev is not None:
             params = jax.tree.map(lambda a: jax.device_put(a, dev), params)
-    state = solve_implicit(params, cfg)
-    rt = runtime_from_params(params, cfg)
-    wb, wp = mhd_energy(state, rt)
-    vol = plasma_volume(state, rt)
-    gamma = float(rt.gamma)
-    wmhd = (wb + wp / (gamma - 1.0)) * (2.0 * np.pi) ** 2
-    return ImplicitSolution(
-        state=state, wb=wb, wp=wp, wmhd=wmhd, volume=vol,
-        aspect=aspect_ratio(state, rt),
-        iota_axis=iota_axis(state, rt), iota_edge=iota_edge(state, rt),
-        runtime=rt,
-    )
+        state = solve_implicit(params, cfg)
+        rt = runtime_from_params(params, cfg)
+        wb, wp = mhd_energy(state, rt)
+        vol = plasma_volume(state, rt)
+        gamma = float(rt.gamma)
+        wmhd = (wb + wp / (gamma - 1.0)) * (2.0 * np.pi) ** 2
+        return ImplicitSolution(
+            state=state, wb=wb, wp=wp, wmhd=wmhd, volume=vol,
+            aspect=aspect_ratio(state, rt),
+            iota_axis=iota_axis(state, rt), iota_edge=iota_edge(state, rt),
+            runtime=rt,
+        )
 
 
 # ---------------------------------------------------------------------------

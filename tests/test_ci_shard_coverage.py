@@ -53,3 +53,24 @@ def test_dedicated_lane_entries_still_exist() -> None:
     assert not missing, (
         "DEDICATED_LANES names files that no longer exist: " + ", ".join(missing)
     )
+
+
+def test_workflow_referenced_test_files_exist() -> None:
+    """Every test path named in ANY workflow must exist on disk.
+
+    The claim check above only covers top-level ``tests/test_*.py``; a stale
+    reference to a renamed or deleted file (including ``tests/mirror/...`` and
+    the GPU workflow) fails the job at collection time on CI while looking like
+    an infrastructure problem.  Guard the reverse direction here.
+    """
+    workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    assert workflows, "no workflow files found"
+    missing: list[str] = []
+    for wf in workflows:
+        for ref in re.findall(r"tests/[A-Za-z0-9_/]+\.py", wf.read_text()):
+            if not (ROOT / ref).exists():
+                missing.append(f"{wf.name}: {ref}")
+    assert not missing, (
+        "workflows reference test files that do not exist:\n  "
+        + "\n  ".join(missing)
+    )

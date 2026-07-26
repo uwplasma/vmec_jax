@@ -409,7 +409,6 @@ class SolverRuntime:
     jmax: int                           # evolved radial rows (fixed: ns-1)
     lforbal: bool = False               # tomnsp_mod.f m=1,n=0 force replacement
     lmove_axis: bool = True             # funct3d.f first-force irst=4 path
-    force_threads: int = 1
 
     # -- free-boundary seam (core/freeboundary.py; funct3d.f/forces.f) ------
     # lfreeb=True selects the vacuum-coupled lane: the edge row is evolved
@@ -466,7 +465,7 @@ class SolverRuntime:
 _register(SolverRuntime, meta=(
     "resolution", "gamma", "tcon0", "ftol", "max_iterations", "time_step0",
     "nstep", "jmax", "lforbal", "lmove_axis",
-    "force_threads", "lfreeb", "prec2d",
+    "lfreeb", "prec2d",
 ))
 
 
@@ -635,7 +634,6 @@ def prepare_runtime(
     precon_type: str | None = None, prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
     use_fft: bool = False,
-    threads: int = 1,
 ) -> SolverRuntime:
     """Build the static solver context from an input file or a RunSetup.
 
@@ -680,9 +678,6 @@ def prepare_runtime(
                         gamma=float(inp.gamma), nstep=int(inp.nstep),
                         lforbal=bool(inp.lforbal),
                         lmove_axis=bool(inp.lmove_axis))
-    if int(threads) < 1:
-        raise ValueError("threads must be positive")
-
     requested_iterations = int(
         defaults["niter"] if max_iterations is None else max_iterations
     )
@@ -701,7 +696,6 @@ def prepare_runtime(
         jmax=int(resolution.ns) - 1,
         lforbal=bool(defaults["lforbal"] if lforbal is None else lforbal),
         lmove_axis=bool(defaults["lmove_axis"]),
-        force_threads=int(threads),
         rcon0=jnp.zeros(()), zcon0=jnp.zeros(()),  # placeholder, replaced below
         prec2d=_resolve_prec2d(source, prec2d, precon_type, prec2d_threshold),
     )
@@ -890,7 +884,6 @@ def _force_pipeline(
     spectral = spectral_mhd_forces(
         forces, mpol=res.mpol, ntor=res.ntor, trig=rt.trig,
         include_edge=bool(rt.lfreeb),
-        threads=rt.force_threads,
     )
     if rt.lforbal:
         equif = radial_force_balance_error(
@@ -1988,7 +1981,6 @@ def solve(
     precon_type: str | None = None, prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
     use_fft: bool | None = None,
-    threads: int = 1,
     jacobian_retries: int = 2,
 ) -> SolveResult:
     """Single-grid fixed-boundary solve (VMEC2000 ``eqsolve.f``).
@@ -2056,7 +2048,7 @@ def solve(
         time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
         lconm1=lconm1, precon_type=precon_type,
         prec2d_threshold=prec2d_threshold, prec2d=prec2d,
-        use_fft=use_fft_resolved, threads=threads,
+        use_fft=use_fft_resolved,
     )
     if initial_state is not None:
         ns, mnmax = rt.resolution.ns, rt.modes.mnmax

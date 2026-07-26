@@ -43,7 +43,6 @@ def _implicit(args) -> dict:
         result = opt.minimize(
             terms, inp, max_mode=args.max_mode, device=args.device,
             solve_kwargs={
-                "force_backend": args.force_backend, "threads": args.threads
             },
             bounds=list(zip(x0, x0)))
     else:
@@ -52,15 +51,12 @@ def _implicit(args) -> dict:
             jac_solver=args.jac_solver, jac_chunk_size=args.jac_chunk,
             max_nfev=1, ftol=1e-9, xtol=1e-10, device=args.device,
             solve_kwargs={
-                "force_backend": args.force_backend, "threads": args.threads
             })
     jac = np.asarray(result.jac, dtype=np.float64)
     return {
         "optimizer": args.optimizer,
         "objective": args.implicit_objective,
         "jac_solver": args.jac_solver,
-        "force_backend": args.force_backend,
-        "threads": args.threads,
         "ns_array": np.asarray(inp.ns_array).tolist(),
         "mpol": int(inp.mpol),
         "ntor": int(inp.ntor),
@@ -159,8 +155,6 @@ def main() -> None:
         default="auto",
     )
     parser.add_argument("--jac-chunk", default="auto")
-    parser.add_argument("--force-backend", choices=("jax", "native"), default="jax")
-    parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--ns", type=int, default=5)
     parser.add_argument("--nxi", type=int, default=7)
     parser.add_argument("--elements", type=int, default=4)
