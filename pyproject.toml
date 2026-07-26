@@ -1,7 +1,7 @@
 [build-system]
-# Compile the optional FFI against VMEX's minimum JAX ABI; newer JAX releases
-# accept that handler version, while a newer handler cannot load on JAX 0.4.x.
-requires = ["setuptools", "wheel", "packaging", "jax==0.4.38", "pybind11>=2.12"]
+# Pure-Python build: VMEX ships no compiled extensions, so installing it never
+# requires a C/C++ toolchain.  All numerics are JAX.
+requires = ["setuptools", "wheel", "packaging"]
 build-backend = "setuptools.build_meta"
 
 [project]

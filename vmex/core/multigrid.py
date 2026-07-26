@@ -202,7 +202,6 @@ def solve_multigrid(
     device: Any = AUTO,
     raise_on_max_iterations: bool = True,
     use_fft: bool | None = None,
-    force_backend: str = "jax",
     threads: int = 1,
     release_stage_cache: bool = False,
 ) -> SolveResult:
@@ -260,8 +259,6 @@ def solve_multigrid(
 
     ``use_fft`` has the same measured-hardware default and implicit-AD role as in
     :func:`vmex.core.solver.solve`.
-    ``force_backend="native"`` and ``threads`` explicitly select the optional
-    CPU JAX-FFI force projection at every stage; the JAX backend stays default.
 
     ``release_stage_cache=True`` clears JAX's in-memory compilation/staging
     caches between distinct radial grids. This lowers peak RSS for a one-shot
@@ -295,9 +292,6 @@ def solve_multigrid(
     for igrid in range(n_stages):
         nsval = int(ns_arr[igrid])
         resolution = resolution_from_input(inp, ns=nsval)
-        if force_backend == "native":
-            from .native_force import require_native_cpu
-            require_native_cpu(device, resolution)
         stage_use_fft = _resolve_use_fft(use_fft, device, resolution)
         rt = prepare_runtime(
             inp, resolution, ftol=float(ftol_arr[igrid]),
@@ -305,7 +299,7 @@ def solve_multigrid(
             time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
             precon_type=precon_type, prec2d_threshold=prec2d_threshold,
             prec2d=prec2d, use_fft=stage_use_fft,
-            force_backend=force_backend, threads=threads,
+            threads=threads,
         )
         if state is not None and int(state.R_cos.shape[0]) != nsval:
             state = interpolate_state(state, ns_fine=nsval, modes=rt.modes)
@@ -381,7 +375,6 @@ def solve_free_boundary_multigrid(
     precon_type: str | None = None,
     prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
-    force_backend: str = "jax",
     threads: int = 1,
     jacobian_retries: int = 2,
     use_fft: bool | None = None,
@@ -417,8 +410,7 @@ def solve_free_boundary_multigrid(
     ``device="auto"`` (default) applies the measured policy independently at
     each grid and relocates carried plasma/vacuum arrays when the policy changes;
     ``None`` leaves placement to JAX.
-    The optional ``force_backend`` and ``threads`` controls are forwarded to
-    every plasma stage; native projection is CPU-only and never automatic.
+    The optional ``threads`` control is forwarded to every plasma stage.
     The final stage's publishable potential and surface fields are retained in
     ``result.vacuum``; internal NESTOR matrix caches are not exposed.
     """
@@ -464,9 +456,6 @@ def solve_free_boundary_multigrid(
     for igrid in range(n_stages):
         nsval = int(ns_arr[igrid])
         resolution = resolution_from_input(inp, ns=nsval)
-        if force_backend == "native":
-            from .native_force import require_native_cpu
-            require_native_cpu(device, resolution)
         same_grid = previous_ns == nsval
         if state is not None and previous_ns != nsval:
             # initialize_radial.f interpolates pxstore only when ns increases;
@@ -512,7 +501,7 @@ def solve_free_boundary_multigrid(
                 lconm1=lconm1,
                 precon_type=precon_type,
                 prec2d_threshold=prec2d_threshold, prec2d=prec2d,
-                force_backend=force_backend, threads=threads,
+                threads=threads,
                 jacobian_retries=jacobian_retries,
                 use_fft=_resolve_use_fft(use_fft, device, resolution),
                 constraint_continuation=(

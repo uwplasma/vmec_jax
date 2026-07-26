@@ -878,7 +878,6 @@ def spectral_mhd_forces(
     ntor: int,
     trig: TrigTables,
     include_edge: bool = False,
-    backend: str = "jax",
     threads: int = 1,
 ) -> SpectralForce:
     """Project the real-space force kernels onto the Fourier basis.
@@ -899,13 +898,6 @@ def spectral_mhd_forces(
         }
 
     project = None
-    if backend != "jax":
-        from .native_force import project_force
-        project = lambda values, asym=False: project_force(  # noqa: E731
-            values, mpol=mpol, ntor=ntor, trig=trig,
-            include_edge=include_edge, asym=asym,
-            backend=backend, threads=threads,
-        )
 
     if not bool(trig.lasym):
         if project is not None:

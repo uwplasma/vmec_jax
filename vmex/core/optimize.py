@@ -1601,11 +1601,7 @@ def _least_squares_implicit(
     cfg = imp.make_config(inp, multigrid=True,
                           hot_restart=(warm_start is not None),
                           adjoint_tol=1e-6, adjoint_maxiter=30,
-                          force_backend=solve_kwargs.get("force_backend", "jax"),
                           threads=solve_kwargs.get("threads", 1))
-    if cfg.force_backend == "native":
-        from .native_force import require_native_cpu
-        require_native_cpu(device, cfg.resolution)
     # Pin the residual/Jacobian graphs to the fastest device for this launch-
     # bound path (CPU by default; explicit device= honored) — committing the
     # input dof vector to it makes both jits compile and run there, and their
