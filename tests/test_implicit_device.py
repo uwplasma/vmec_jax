@@ -126,6 +126,8 @@ def test_second_device_placement_and_gradient_no_outer_context(tmp_path):
     script.write_text(textwrap.dedent("""
         import jax
         import numpy as np
+        import vmex
+        print("VMEX-AT", __import__("pathlib").Path(vmex.__file__).resolve().parents[1])
         from vmex.core import implicit as im
         from vmex.core import optimize
         from vmex.core.input import VmecInput
@@ -172,9 +174,15 @@ def test_second_device_placement_and_gradient_no_outer_context(tmp_path):
                         + " --xla_force_host_platform_device_count=2")
     env["JAX_ENABLE_X64"] = "1"
     repo = str(Path(__file__).resolve().parents[1])
+    # `python script.py` puts the SCRIPT's directory (tmp) on sys.path, not
+    # the cwd — without this the child imports whatever vmex happens to be
+    # installed (review found it picking up an older editable checkout).
+    # Prepend this exact checkout and assert the child really used it.
+    env["PYTHONPATH"] = repo + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(
         [sys.executable, str(script)], cwd=repo, env=env,
         capture_output=True, text=True, timeout=600,
     )
     assert proc.returncode == 0, proc.stderr[-3000:]
     assert "SECOND-DEVICE AUDIT OK" in proc.stdout
+    assert f"VMEX-AT {repo}" in proc.stdout, proc.stdout[-500:]

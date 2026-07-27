@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_gpu:
+        description: "Also run the trusted self-hosted GPU job"
+        type: boolean
+        default: false
   schedule:
     # nightly full-physics run (RUN_FULL=1 tests)
     - cron: "17 4 * * *"
@@ -168,15 +173,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/vmex
-          # Rolling key: a fixed key freezes the cache at its FIRST save, so
-          # the persistent XLA compile cache (which lives under ~/.cache/vmex)
-          # never learned new kernels -- every dispatch recompiled the
-          # 238-mode executables from scratch on slow hosted cores.  The
-          # per-run key with a shared restore prefix restores the newest
-          # snapshot and saves an updated one each run.
-          key: golden-v2-${{ github.run_id }}
+          # Rolling PER-SHARD key.  Two prior defects: a fixed key freezes
+          # the cache at its FIRST save (kernels compiled later were never
+          # persisted), and a per-run key SHARED across the matrix lets the
+          # first finishing shard win the save while the expensive shards'
+          # kernels are dropped (GitHub caches are immutable per key).  Each
+          # shard therefore rolls its own key, scoped by OS and dependency
+          # signature so toolchain changes start a fresh lineage.
+          key: vmex-v3-${{ runner.os }}-parity-${{ matrix.shard }}-${{ hashFiles('pyproject.toml') }}-${{ github.run_id }}
           restore-keys: |
-            golden-v2-
+            vmex-v3-${{ runner.os }}-parity-${{ matrix.shard }}-${{ hashFiles('pyproject.toml') }}-
             golden-v1
 
       - name: Prefetch golden fixtures (once, before xdist workers fork)
@@ -542,15 +548,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/vmex
-          # Rolling key: a fixed key freezes the cache at its FIRST save, so
-          # the persistent XLA compile cache (which lives under ~/.cache/vmex)
-          # never learned new kernels -- every dispatch recompiled the
-          # 238-mode executables from scratch on slow hosted cores.  The
-          # per-run key with a shared restore prefix restores the newest
-          # snapshot and saves an updated one each run.
-          key: golden-v2-${{ github.run_id }}
+          # Rolling PER-SHARD key.  Two prior defects: a fixed key freezes
+          # the cache at its FIRST save (kernels compiled later were never
+          # persisted), and a per-run key SHARED across the matrix lets the
+          # first finishing shard win the save while the expensive shards'
+          # kernels are dropped (GitHub caches are immutable per key).  Each
+          # shard therefore rolls its own key, scoped by OS and dependency
+          # signature so toolchain changes start a fresh lineage.
+          key: vmex-v3-${{ runner.os }}-full-${{ matrix.shard }}-${{ hashFiles('pyproject.toml') }}-${{ github.run_id }}
           restore-keys: |
-            golden-v2-
+            vmex-v3-${{ runner.os }}-full-${{ matrix.shard }}-${{ hashFiles('pyproject.toml') }}-
             golden-v1
 
       # The free-boundary example smokes run the examples as subprocesses,
@@ -652,3 +659,77 @@ jobs:
             fi
           done
           wait "$pytest_pid"
+
+  # Trusted self-hosted GPU job.  It lives in THIS workflow (not a separate
+  # file) because GitHub can only manually dispatch workflows that already
+  # exist on the default branch -- a gpu-ci.yml present only on a PR branch
+  # cannot be invoked at all.  Gated on an explicit dispatch input so a
+  # public pull request can never route untrusted code onto persistent
+  # hardware.
+  gpu:
+    name: CUDA placement and parity (manual, self-hosted)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_gpu
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install VMEX and official CUDA JAX
+        run: |
+          python -m pip install -U pip
+          python -m pip install -U "jax[cuda13]"
+          python -m pip install . pytest
+
+      - name: Assert unpinned GPU runtime
+        shell: bash
+        run: |
+          if [[ -n "${JAX_PLATFORMS+x}" || -n "${JAX_PLATFORM_NAME+x}" ]]; then
+            echo "GPU CI must discover hardware without JAX platform environment pins"
+            exit 1
+          fi
+          nvidia-smi
+          python - <<'PY'
+          import jax
+
+          print("backend:", jax.default_backend())
+          print("devices:", jax.devices())
+          assert jax.default_backend() == "gpu"
+          assert any(device.platform == "gpu" for device in jax.devices())
+          PY
+
+      - name: Run focused placement, solve, and gradient checks
+        run: |
+          pytest -q tests/test_gpu_ci.py tests/test_device.py \
+            tests/test_implicit_device.py --durations=0
+
+      - name: Audit all physics gradients on CPU and both GPUs
+        shell: bash
+        run: |
+          python benchmarks/device_parity.py \
+            --quick \
+            --devices cpu,gpu \
+            --output device-parity-gpu0.json
+          # second GPU when present: the reported gradient-collapse class
+          # only reproduces on a NON-default device
+          python - <<'PY'
+          import jax, subprocess, sys
+          if len(jax.devices("gpu")) > 1:
+              sys.exit(subprocess.call([
+                  sys.executable, "benchmarks/device_parity.py", "--quick",
+                  "--devices", "cpu,gpu", "--gpu-id", "1",
+                  "--output", "device-parity-gpu1.json"]))
+          print("single GPU: skipping gpu-id 1 audit")
+          PY
+
+      - name: Upload parity measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-parity-${{ github.run_id }}
+          path: device-parity-*.json
+          if-no-files-found: ignore

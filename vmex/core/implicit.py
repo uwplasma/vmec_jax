@@ -325,6 +325,32 @@ def _device_context(cfg: ImplicitConfig):
     return jax.default_device(cfg.device)
 
 
+def _device_pin(cfg: ImplicitConfig, tree):
+    """Explicitly place every array leaf of ``tree`` on ``cfg.device``.
+
+    A ``jax.default_device`` context only steers CONCRETE values created
+    while it is entered — it does not bind into a traced computation, so
+    under ``jax.value_and_grad`` the staged forward/backward ops still
+    follow JAX's default device.  Hardware verification on a two-GPU box
+    showed exactly that: with every internal context in place, the forward
+    on ``cuda:1`` was correct while the traced gradient collapsed to zero
+    unless the CALLER wrapped the whole transformation in an outer context.
+    ``jax.device_put`` with an explicit device is different: it is a
+    traceable placement op that survives staging, so pinning the pytrees at
+    each transformation boundary (custom-VJP forward/backward entries, the
+    multi-RHS pullback, the cached template) forces the staged computation
+    onto the carried device regardless of any caller context.  A no-op
+    (cheap identity) for leaves already home or when no device is carried.
+    """
+    if cfg.device is None:
+        return tree
+    return jax.tree.map(
+        lambda a: jax.device_put(a, cfg.device)
+        if isinstance(a, (jax.Array, np.ndarray)) else a,
+        tree,
+    )
+
+
 def _params_committed_device(params: ImplicitParams):
     """The single device every concrete committed leaf lives on, else None.
 
@@ -369,11 +395,11 @@ def _template_runtime(cfg: ImplicitConfig) -> SolverRuntime:
     later assembled from this template on another device.
     """
     with _device_context(cfg):
-        return prepare_runtime(
+        return _device_pin(cfg, prepare_runtime(
             cfg.inp, cfg.resolution, ftol=cfg.ftol,
             max_iterations=cfg.max_iterations, lconm1=cfg.lconm1,
             use_fft=False,
-        )
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -620,7 +646,7 @@ def runtime_from_params(params: ImplicitParams, cfg: ImplicitConfig) -> SolverRu
     holds no outer ``jax.default_device`` context.
     """
     with _device_context(cfg):
-        return _runtime_from_params_impl(params, cfg)
+        return _device_pin(cfg, _runtime_from_params_impl(params, cfg))
 
 
 def _runtime_from_params_impl(params: ImplicitParams, cfg: ImplicitConfig) -> SolverRuntime:
@@ -1191,7 +1217,10 @@ def solve_implicit(params: ImplicitParams, cfg: ImplicitConfig) -> SpectralState
 
 def _solve_implicit_fwd(params, cfg):
     with _device_context(cfg):
+        params = _device_pin(cfg, params)
         state, mask = _callback_solve(params, cfg)
+        state = _device_pin(cfg, state)
+        mask = _device_pin(cfg, mask)
     return state, (params, state, mask)
 
 
@@ -1317,10 +1346,14 @@ def _recycled_solve(A, b, cfg: ImplicitConfig, recycle):
 def _solve_implicit_bwd(cfg, res, gbar):
     # The backward pass typically executes AFTER the caller's forward context
     # has exited (jax.grad pulls cotangents back later); re-enter the
-    # config's device context so the adjoint solve and its fresh constants
-    # stay colocated with the committed state on an explicit device.
+    # config's device context so eagerly created constants stay colocated —
+    # and, decisively, PIN the residuals and the incoming cotangent with
+    # explicit device_put, which binds into the staged computation where a
+    # context cannot (see _device_pin).
     with _device_context(cfg):
-        return _solve_implicit_bwd_impl(cfg, res, gbar)
+        res = _device_pin(cfg, res)
+        gbar = _device_pin(cfg, gbar)
+        return _device_pin(cfg, _solve_implicit_bwd_impl(cfg, res, gbar))
 
 
 def _solve_implicit_bwd_impl(cfg, res, gbar):
@@ -1367,8 +1400,12 @@ def implicit_state_pullback_multi_rhs(
     context (see ``_solve_implicit_bwd``).
     """
     with _device_context(cfg):
-        return _implicit_state_pullback_multi_rhs_impl(
-            params, cfg, x_star, dof_mask, gbar_batch)
+        params = _device_pin(cfg, params)
+        x_star = _device_pin(cfg, x_star)
+        dof_mask = _device_pin(cfg, dof_mask)
+        gbar_batch = _device_pin(cfg, gbar_batch)
+        return _device_pin(cfg, _implicit_state_pullback_multi_rhs_impl(
+            params, cfg, x_star, dof_mask, gbar_batch))
 
 
 def _implicit_state_pullback_multi_rhs_impl(

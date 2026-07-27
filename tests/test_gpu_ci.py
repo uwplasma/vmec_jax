@@ -424,8 +424,12 @@ def test_free_boundary_multigrid_auto_relocates_every_carry(monkeypatch):
     resolutions = [solver.resolution_from_input(inp, ns=ns) for ns in (7, 15)]
     work = [device_policy.iteration_work(resolution) for resolution in resolutions]
     monkeypatch.setattr(device_policy, "GPU_MIN_ITERATION_WORK", sum(work) // 2)
+    # kp equal to the deck's toroidal grid: the mgrid angular-compatibility
+    # rule (kp divisible by NZETA) must hold for the ladder to reach the
+    # (mocked) stages at all.
+    kp = int(resolutions[0].nzeta)
     field = MgridField(
-        *(jax.numpy.ones((1, 1, 2, 2)) for _ in range(3)),
+        *(jax.numpy.ones((1, kp, 2, 2)) for _ in range(3)),
         extcur=jax.numpy.ones(1), rmin=0.0, rmax=1.0,
         zmin=-1.0, zmax=1.0, nfp=1,
     )
