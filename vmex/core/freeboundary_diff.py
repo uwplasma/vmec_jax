@@ -74,6 +74,30 @@ except Exception as _exc:  # pragma: no cover - exercised only when the dep is a
     _HAVE_VCJ = False
     _IMPORT_ERROR = _exc
 
+    import dataclasses as _dataclasses
+
+    @_dataclasses.dataclass(frozen=True)
+    class VmecSurfaceFieldData:  # type: ignore[no-redef]
+        """Duck-typed stand-in when ``virtual_casing_jax`` is absent.
+
+        The surface-data CONSTRUCTION (`surface_field_data_from_state` /
+        `_from_wout`) is pure vmex numerics; only the virtual-casing
+        SOLVER paths genuinely need the optional dependency.  Consumers
+        that read ``gamma``/``B_total``/``normal``/... (e.g. the QI
+        sheet-current builder) work identically with this container.
+        """
+
+        gamma: object
+        B_total: object
+        normal: object
+        area_vector: object
+        theta: object
+        phi: object
+        nfp: int
+        stellsym: bool
+        signgs: int
+        source_convention: str
+
 
 #: Vacuum permeability [T m / A] (VMEC2000 ``mu0`` convention).
 MU0 = 4.0e-7 * np.pi
@@ -184,9 +208,10 @@ def surface_field_data_from_wout(
 
     The construction is validated by ``|B_total . n| / |B|`` ~ 1e-16 on a
     converged equilibrium (the VMEC free-boundary condition), see the module test.
+
+    Pure vmex numerics — usable without ``virtual_casing_jax``.
     """
 
-    _require_vcj()
     nfp = int(wout.nfp)
     lasym = bool(getattr(wout, "lasym", False))
     ns = int(wout.ns)
@@ -341,8 +366,10 @@ def surface_field_data_from_state(
     (possibly traced) spectral geometry.  Stellarator-symmetric only for now;
     ``lasym=True`` is rejected because this path has not been validated with
     the asymmetric surface-field channels.
+
+    Pure vmex numerics — usable without ``virtual_casing_jax`` (the optional
+    dependency is required only by the virtual-casing solver paths).
     """
-    _require_vcj()
     if bool(inp.lasym):
         raise NotImplementedError(
             "surface_field_data_from_state supports lasym = False only"
