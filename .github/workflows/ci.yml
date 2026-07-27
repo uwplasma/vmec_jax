@@ -236,6 +236,7 @@ jobs:
                     tests/test_freeboundary_stress.py \
                     tests/test_freeboundary_linear.py \
                     tests/test_qi_free_boundary_stress.py \
+                    tests/test_qi_sheet_gate.py \
                     tests/test_high_mode_free_boundary_parity.py \
                     tests/test_freeboundary_diff.py \
                     tests/test_cli_freeboundary.py"
