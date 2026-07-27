@@ -27,9 +27,9 @@ Free-boundary routing (``LFREEB = T``):
 - a missing mgrid file falls back to a fixed-boundary solve with a warning
   (retained VMEC2000 behavior);
 - ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
-  field from an ESSOS coils file (``essos.coils.Coils``): the coils are tabulated
-  into an in-memory mgrid (``Coils.to_mgrid``) and read back as an
-  :class:`vmex.core.mgrid.MgridField`
+  field from an ESSOS coils file (``essos.coils.Coils``): the Biot-Savart field
+  is tabulated directly into an in-memory
+  :class:`vmex.core.mgrid.MgridField` via ``MgridField.from_cartesian_field``
   (``solve_free_boundary(inp, external_field=mgrid_field)``); requires ESSOS.
 
 Free-boundary output behavior:
@@ -355,12 +355,11 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
     ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``, optional
     ``currents_scale``), tabulates the coil field onto a cylindrical grid
     spanning the coil bounding box (:meth:`essos.coils.Coils.to_mgrid`), and
-    reads it back with vmex's own :func:`~vmex.core.mgrid.read_mgrid` —
-    yielding the very same :class:`~vmex.core.mgrid.MgridField` the mgrid-file
-    lane produces.  Requires ESSOS (``pip install essos``).
+    tabulates its Biot-Savart field directly into an in-memory
+    :class:`~vmex.core.mgrid.MgridField` — the very same field type the
+    mgrid-file lane produces, with no temporary file and no dependency on
+    an mgrid export API.  Requires ESSOS (``pip install essos``).
     """
-    import tempfile
-
     import numpy as np
 
     try:
@@ -371,7 +370,7 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
             hint="--coils requires essos (pip install essos)",
         ) from exc
 
-    from .mgrid import MgridField, read_mgrid
+    from .mgrid import MgridField
 
     try:
         if path.suffix.lower() == ".npz":
@@ -410,20 +409,23 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
     rmin, rmax = max(1.0e-2, float(r.min()) - rpad), float(r.max()) + rpad
     zmin, zmax = float(z.min()) - zpad, float(z.max()) + zpad
 
-    if not hasattr(coils, "to_mgrid"):
-        raise VmecInputError(
-            WERROR_MESSAGES[INPUT_ERROR_FLAG],
-            hint=(
-                "--coils needs an ESSOS build providing Coils.to_mgrid "
-                "(coils->mgrid export); update ESSOS (pip install -U essos)"
-            ),
-        )
+    # Tabulate the Biot-Savart field directly into an in-memory MgridField.
+    # This removes the previous hard dependency on an unpublished
+    # ``Coils.to_mgrid`` export (review finding: current ESSOS main does not
+    # provide it, which made ``--coils`` unusable) — every released ESSOS
+    # exposes ``fields.BiotSavart``.
+    from essos.fields import BiotSavart
 
-    with tempfile.TemporaryDirectory() as tmp:
-        mgrid_path = Path(tmp) / "essos_coils_mgrid.nc"
-        coils.to_mgrid(str(mgrid_path), nr=int(nr), nphi=int(nphi), nz=int(nz),
-                       rmin=rmin, rmax=rmax, zmin=zmin, zmax=zmax)
-        return MgridField.from_mgrid_data(read_mgrid(mgrid_path))
+    bs = BiotSavart(coils)
+
+    def cartesian_field(points):
+        return bs.B(points)
+
+    return MgridField.from_cartesian_field(
+        cartesian_field, rmin=rmin, rmax=rmax, zmin=zmin, zmax=zmax,
+        ir=int(nr), jz=int(nz), kp=int(nphi), nfp=int(coils.nfp),
+        label="essos_coils",
+    )
 
 
 def _free_boundary_plan(args, inp, input_path: Path, *, emit):
