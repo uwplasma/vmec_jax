@@ -42,6 +42,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import functools
+
 import numpy as np
 
 import jax
@@ -72,6 +74,7 @@ from .solver import (
     _finalize, _geometry, _initial_carry, _initial_state, _make_body,
     _result_from_carry, _zero_cache, prepare_runtime, resolution_from_input,
     reguess_initial_axis, runtime_with_baselines,
+    _resolve_use_fft,
 )
 from .transforms import register_pytree_dataclass as _register
 from .vacuum import (
@@ -363,16 +366,18 @@ def _vacuum_scalars(state: SpectralState, rt: SolverRuntime):
     return ctor, rbtor, axis_r, axis_z, bsq_edge_extrap, fields.pressure[-1]
 
 
-@jax.jit
-def _iter_lane(carry, rt: SolverRuntime):
+@functools.partial(jax.jit, static_argnames=("use_fft",))
+def _iter_lane(carry, rt: SolverRuntime, *, use_fft: bool = False):
     """One jitted eqsolve iteration (shared traced body; per-``rt`` lane)."""
-    return _make_body(rt)(carry)
+    return _make_body(rt, use_fft=use_fft)(carry)
 
 
-@jax.jit
-def _turnon_iter_lane(carry, rt: SolverRuntime, evaluation_state: SpectralState):
+@functools.partial(jax.jit, static_argnames=("use_fft",))
+def _turnon_iter_lane(carry, rt: SolverRuntime, evaluation_state: SpectralState,
+                      *, use_fft: bool = False):
     """VMEC2000 turn-on pass: old-geometry forces evolve restored ``xc``."""
-    return _make_body(rt, evaluation_state=evaluation_state)(carry)
+    return _make_body(rt, evaluation_state=evaluation_state,
+                      use_fft=use_fft)(carry)
 
 
 # ---------------------------------------------------------------------------
@@ -858,13 +863,17 @@ _VACUUM_EXECUTABLE_CACHE: dict[tuple[Any, int, int, int], tuple[VacuumBasis, Fus
 
 
 def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
-                        modes: ModeTable, axis_r0, axis_z0) -> tuple[VacuumBasis, FusedVacuum, Any]:
+                        modes: ModeTable, axis_r0, axis_z0,
+                        use_fft: bool = False) -> tuple[VacuumBasis, FusedVacuum, Any]:
     """Return the cached ``(basis, fused vacuum, steady lane)`` for one resolution/signgs.
 
     ``wint``/``modes`` are resolution-determined build inputs consumed only on
-    a cache miss.  The dynamic axis is validated on every call.
+    a cache miss.  The dynamic axis is validated on every call.  ``use_fft``
+    is part of the cache key: the steady vacuum lane bakes the synthesis
+    kernel into its traced body, so the two kernels must never share an
+    executable.
     """
-    key = (resolution, int(signgs), int(mf), int(nf))
+    key = (resolution, int(signgs), int(mf), int(nf), bool(use_fft))
     cached = _VACUUM_EXECUTABLE_CACHE.get(key)
     if cached is not None:
         _assert_static_filament_topology(cached[0], axis_r0, axis_z0)
@@ -879,7 +888,7 @@ def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
         basis, modes=modes, signgs=int(signgs), solver_vac=solver_vac,
         axis_r0=axis_r0, axis_z0=axis_z0,
     )
-    lane = _make_vacuum_lane(fused)
+    lane = _make_vacuum_lane(fused, use_fft=use_fft)
     _VACUUM_EXECUTABLE_CACHE[key] = (basis, fused, lane)
     return basis, fused, lane
 
@@ -986,8 +995,8 @@ def _presf_ns_scale(inp: VmecInput, ns: int) -> float:
 # mutates the carry/runtime once, between the two lanes.
 
 
-@jax.jit
-def _preactivation_lane(carry, rt: SolverRuntime):
+@functools.partial(jax.jit, static_argnames=("use_fft",))
+def _preactivation_lane(carry, rt: SolverRuntime, *, use_fft: bool = False):
     """Fixed-boundary iterations up to vacuum activation, as one jitted loop.
 
     Iterates the shared traced body while the run is live and the funct3d.f
@@ -995,7 +1004,7 @@ def _preactivation_lane(carry, rt: SolverRuntime):
     fired; the returned carry is exactly the carry the per-pass host driver
     held when it first entered the IVAC0 block (or finished the run).
     """
-    body = _make_body(rt)
+    body = _make_body(rt, use_fft=use_fft)
 
     def cond(c):
         activate = (c.iteration > 1) & (c.fsqr + c.fsqz <= ACTIVATION_FSQ)
@@ -1032,7 +1041,7 @@ class _VacuumLoopCarry:
 _register(_VacuumLoopCarry)
 
 
-def _make_vacuum_lane(fused: FusedVacuum):
+def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
     """Build the jitted steady-state (post-turn-on) free-boundary loop.
 
     Closed over the per-basis :class:`FusedVacuum` (cached alongside it in
@@ -1091,7 +1100,7 @@ def _make_vacuum_lane(fused: FusedVacuum):
             vc.delbsq_traj, delbsq[None], idx, axis=0)
 
         # -- one eqsolve iteration with the refreshed edge field ------------
-        new_carry = _make_body(replace(rt_vac, bsqvac_edge=bsqvac))(c)
+        new_carry = _make_body(replace(rt_vac, bsqvac_edge=bsqvac), use_fft=use_fft)(c)
 
         return _VacuumLoopCarry(
             carry=new_carry, rcon0=rcon0, zcon0=zcon0, bsqvac=bsqvac,
@@ -1261,7 +1270,7 @@ def _solve_free_boundary_stage(
     basis, fused_vac, vacuum_lane = _vacuum_executables(
         resolution, mf=int(inp.mpol) + 1, nf=int(inp.ntor),
         signgs=int(rt.setup.signgs), wint=np.asarray(rt.trig.wint, dtype=float),
-        modes=rt.modes, axis_r0=_axis_r0, axis_z0=_axis_z0,
+        modes=rt.modes, axis_r0=_axis_r0, axis_z0=_axis_z0, use_fft=use_fft,
     )
 
     zeros_edge = jnp.zeros((basis.ntheta3, basis.nzeta), dtype=dtype)
@@ -1374,7 +1383,7 @@ def _solve_free_boundary_stage(
     # internal irst=4 transfer, rebuild both the plasma profiles and the
     # axis-dependent NESTOR filament/executables, then repeat iteration 1
     # once with ijacob=1.  The discarded triggering pass is not printed.
-    carry = _iter_lane(carry, rt_initial)
+    carry = _iter_lane(carry, rt_initial, use_fft=use_fft)
     if (allow_initial_axis_reguess
             and int(carry.ier) == AXIS_REGUESS_FLAG
             and int(carry.ijacob) == 0 and ns >= 3):
@@ -1431,7 +1440,7 @@ def _solve_free_boundary_stage(
             xcdot=retry_xcdot,
             residuals=(carry.fsqr, carry.fsqz, carry.fsql),
         )
-        carry = _iter_lane(carry, rt_initial)
+        carry = _iter_lane(carry, rt_initial, use_fft=use_fft)
     _emit_due(final=False)
 
     int_dtype = carry.iteration.dtype
@@ -1443,7 +1452,7 @@ def _solve_free_boundary_stage(
             # F.2: every fixed-boundary iteration before vacuum activation
             # runs as ONE jitted while_loop; the lane exits precisely where
             # the per-pass driver would have entered the IVAC0 block below.
-            carry = _preactivation_lane(carry, rt_fixed)
+            carry = _preactivation_lane(carry, rt_fixed, use_fft=use_fft)
             _emit_due(final=False)
             if bool(carry.done):
                 break
@@ -1454,7 +1463,7 @@ def _solve_free_boundary_stage(
             # new radial grid, iteration 1 therefore uses the coarse stage's
             # carried bsqvac once; iteration 2 performs the first full update
             # against freshly selected resolution-specific NESTOR programs.
-            carry = _iter_lane(carry, rt_freeb)
+            carry = _iter_lane(carry, rt_freeb, use_fft=use_fft)
             _emit_due(final=False)
             continue
         elif (fb.turned_on and not fb.banner_pending
@@ -1553,9 +1562,10 @@ def _solve_free_boundary_stage(
                 rt_use = rt_freeb
 
         if turnon_evaluation_state is None:
-            carry = _iter_lane(carry, rt_use)
+            carry = _iter_lane(carry, rt_use, use_fft=use_fft)
         else:
-            carry = _turnon_iter_lane(carry, rt_use, turnon_evaluation_state)
+            carry = _turnon_iter_lane(carry, rt_use, turnon_evaluation_state,
+                                      use_fft=use_fft)
 
         if fb.banner_pending:
             if verbose:
@@ -1656,6 +1666,7 @@ def solve_free_boundary(
     prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
     jacobian_retries: int = 2,
+    use_fft: bool | None = None,
 ) -> SolveResult:
     """Single-grid free-boundary solve (``eqsolve.f`` + ``funct3d.f`` IVAC0).
 
@@ -1697,5 +1708,6 @@ def solve_free_boundary(
             prec2d=prec2d,
             jacobian_retries=jacobian_retries,
             constraint_continuation=None, reuse_vacuum_cache=False,
+            use_fft=_resolve_use_fft(use_fft, device, resolution),
         )
     return stage.result

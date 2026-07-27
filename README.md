@@ -171,8 +171,9 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
   optimization loop or scan. Faster than VMEC2000 on **every** benchmark row
   (1.3–2.6× on typical decks, up to ~7× on small ones) — including the
   free-boundary rows (1.3–1.5×) since the NESTOR iteration loop was fused
-  into jitted multi-iteration lanes. Ratios measured on a shared CPU are
-  conservative lower bounds.
+  into jitted multi-iteration lanes. Each row is one
+  controlled sequential measurement on an idle host — not a repeated-run
+  statistic.
 - **Cold** — a fresh CLI process pays a one-time 5–25 s JAX/XLA compile, so a
   single run is slower than Fortran. Executables cache per solver structure, so
   scans, ladders, and optimizations recompile nothing — which is why *warm* is
@@ -193,21 +194,21 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
 |---|:---:|:---:|:---:|
 | Fixed-boundary equilibria | ✅ | ✅ | ✅ |
 | Free boundary from an mgrid file | ✅ | ✅ | ✅ |
-| Free-boundary radial multigrid + hot restart | ✅ | ✅ | ❌ |
+| Free-boundary radial multigrid | ✅ | ✅ | ✅ |
 | Free boundary from an in-memory coil-field table | ✅ | ❌ | ❌ |
 | Free-boundary tokamaks (`ntor = 0`) | ✅ | ✅ | ❌ |
 | Non-stellarator-symmetric (`LASYM = T`) | ✅ | ✅ | ✅ |
 | Fixed-boundary fallback on missing mgrid | ✅ | ✅ | ❌ |
 | Spline profiles (cubic / Akima) | ✅ | ✅ | ❌ |
 | structured JSON input | ✅ | ❌ | ✅ |
-| Hot restart from a previous state | ✅ | ❌ | ✅ |
+| Hot restart (VMEX: in-memory Python state; VMEC2000: WOUT reset file) | ✅ | ✅ | ✅ |
 | Typed zero-crash errors | ✅ | ❌ | ✅ |
 | Boozer transform built in (`--booz`) | ✅ | ❌ | ❌ |
 | Plotting built in (`--plot`) | ✅ | ❌ | ❌ |
 | GPU execution | ✅ | ❌ | ❌ |
 | Differentiable fixed boundary (implicit diff, O(1) memory) | ✅ | ❌ | ❌ |
 | Differentiable virtual-casing residual on a specified boundary | ✅ | ❌ | ❌ |
-| 2D block preconditioner (stiff-case speedup) | ✅ | ❌ | ❌ |
+| Optional matrix-free 2D preconditioner (iteration-count reduction on stiff cases; not a general wall-time win) | ✅ | ✅ | ❌ |
 
 ### Free boundary from coil-field tabulation
 

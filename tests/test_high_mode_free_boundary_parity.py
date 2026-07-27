@@ -306,6 +306,8 @@ def test_combined_238_mode_cth_free_ladder_matches_vmec2000(tmp_path) -> None:
         inp, mgrid_path=str(mgrid), verbose=True, emit=collect,
         raise_on_max_iterations=False)
 
+    import re
+
     output = "\n".join(lines)
     banner_at = output.find("VACUUM PRESSURE TURNED ON")
     second_rung_at = output.rfind("NS = ")
@@ -314,13 +316,34 @@ def test_combined_238_mode_cth_free_ladder_matches_vmec2000(tmp_path) -> None:
     assert bool(result.converged), (
         f"combined 238-mode ladder failed to converge "
         f"(fsqr={float(result.fsqr):.2e})")
-    assert int(result.iterations) <= 500, (
+
+    # activation iteration: VMEC2000 and VMEX both print 38 on this deck;
+    # a small band absorbs cross-platform float jitter in the 1e-3 crossing
+    m = re.search(r"VACUUM PRESSURE TURNED ON AT\s+(\d+)", output)
+    assert m is not None
+    assert 36 <= int(m.group(1)) <= 40, (
+        f"vacuum activated at {m.group(1)}; both codes activate at 38")
+
+    # carried-vacuum rung: both codes converge it in 156 iterations; the
+    # band rejects a silent fall-back to fresh reactivation (~260) while
+    # absorbing chaotic cross-platform drift
+    assert 130 <= int(result.iterations) <= 200, (
         f"carried-vacuum rung took {int(result.iterations)} iterations; "
-        "VMEC2000 needs 156")
+        "both codes need 156")
+
+    # residual triplet at the recorded VMEC2000 magnitudes (converged just
+    # under ftol, with fsqz/fsql well below fsqr)
+    assert float(result.fsqr) <= 1.0e-8
+    assert float(result.fsqz) <= 2.0e-8 and float(result.fsql) <= 2.0e-8
+
     # same equilibrium as the recorded VMEC2000 wout: the v=0 axis radius
-    # (sum of raxis_cc) and the magnetic energy scalar
+    # (sum raxis_cc: 0.74414896), the magnetic energy scalar
+    # (wb = 1.283590394747e-3) and the edge rotational transform
+    # (iotaf(edge) = 0.869037528)
     assert float(result.r00) == pytest.approx(0.7441489627, rel=1e-4)
     assert float(result.wb) == pytest.approx(1.283590394747e-3, rel=2e-4)
+    assert float(np.asarray(result.iotaf)[-1]) == pytest.approx(
+        0.869037528260457, rel=2e-4)
 
 
 @pytest.mark.full
@@ -433,3 +456,111 @@ def test_mgrid_nzeta_policy_matches_vmec2000() -> None:
             return r, phi, z
 
     assert int(free_boundary_resolution(bad, _Analytic(), ns=21).nzeta) == 22
+
+
+def test_use_fft_reaches_every_free_boundary_lane(tmp_path, monkeypatch):
+    """``use_fft=True`` must reach the traced body of EVERY free lane.
+
+    Review finding: the resolver computed ``use_fft`` and the stage accepted
+    it, but the iteration lanes called ``_make_body`` with its default dense
+    transform — the FFT kernel was never actually used in free boundary.
+    The lanes now take ``use_fft`` as a static jit argument; this spy records
+    what ``_make_body`` receives during a short real solve.
+    """
+    import vmex.core.freeboundary as FBmod
+
+    mgrid = DATA / "mgrid_cth_like.nc"
+    if not mgrid.exists():
+        pytest.skip("mgrid fixture not fetched")
+
+    seen: list[bool] = []
+    original = FBmod._make_body
+
+    def recording(rt, *, evaluation_state=None, use_fft=False):
+        seen.append(bool(use_fft))
+        return original(rt, evaluation_state=evaluation_state, use_fft=use_fft)
+
+    monkeypatch.setattr(FBmod, "_make_body", recording)
+    # fresh vacuum-lane cache: the steady lane bakes use_fft into its traced
+    # body, so a cached lane from another test would bypass the spy
+    monkeypatch.setattr(FBmod, "_VACUUM_EXECUTABLE_CACHE", {})
+
+    import dataclasses
+
+    inp = dataclasses.replace(
+        VmecInput.from_file(str(DATA / "input.cth_like_free_bdy")),
+        ns_array=[15], ftol_array=[1.0e-8], niter_array=[80])
+    from vmex.core.freeboundary import solve_free_boundary
+
+    solve_free_boundary(inp, mgrid_path=str(mgrid), use_fft=True,
+                        error_on_no_convergence=False)
+    assert seen, "no lane was traced -- the spy never fired"
+    assert all(seen), (
+        f"{seen.count(False)} lane trace(s) fell back to the dense body")
+
+
+@pytest.mark.full  # ~minutes: two short solves through vacuum activation
+def test_dense_and_fft_free_boundary_trajectories_match(tmp_path):
+    """The separable FFT synthesis is the SAME math as the dense transform.
+
+    Runs the CTH free-boundary case through vacuum activation with both
+    kernels and requires matching residual trajectories and final states.
+    """
+    import dataclasses
+
+    mgrid = DATA / "mgrid_cth_like.nc"
+    if not mgrid.exists():
+        pytest.skip("mgrid fixture not fetched")
+    inp = dataclasses.replace(
+        VmecInput.from_file(str(DATA / "input.cth_like_free_bdy")),
+        ns_array=[15], ftol_array=[1.0e-8], niter_array=[120])
+    from vmex.core.freeboundary import solve_free_boundary
+
+    results = {
+        flag: solve_free_boundary(
+            inp, mgrid_path=str(mgrid), use_fft=flag,
+            error_on_no_convergence=False)
+        for flag in (False, True)
+    }
+    np.testing.assert_allclose(
+        np.asarray(results[True].fsq_history),
+        np.asarray(results[False].fsq_history),
+        rtol=5e-9, atol=1e-15,
+        err_msg="FFT and dense free-boundary trajectories diverged")
+    for a, b in zip(jax.tree.leaves(results[True].state),
+                    jax.tree.leaves(results[False].state), strict=True):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(b),
+                                   rtol=1e-9, atol=1e-13)
+
+
+@pytest.mark.full  # ~15 min: above the 512-mode automatic-FFT threshold
+def test_free_boundary_537_modes_converges_with_fft(tmp_path):
+    """A CONVERGENT free-boundary case above the 512-mode FFT threshold.
+
+    ``MPOL=19/NTOR=14`` on the CTH fixture gives ``mnmax = 15 + 18*29 = 537``
+    — above the automatic-selection threshold that the 238-mode suite cannot
+    reach.  The FFT kernel must carry a converging high-mode free-boundary
+    solve end to end (the fixed-boundary lanes already had this; free
+    boundary did not, which is exactly what the review flagged).
+    """
+    mgrid = DATA / "mgrid_cth_like.nc"
+    if not mgrid.exists():
+        pytest.skip("mgrid fixture not fetched")
+    text = (DATA / "input.cth_like_free_bdy").read_text().split("&END")[0]
+    text = text.replace("  MPOL = 5,", "  MPOL = 19,")
+    text = text.replace("  NTOR = 4,", "  NTOR = 14,")
+    text = text.replace("  NZETA = 36,", "  NZETA = 36,")  # 36 % 36 == 0
+    text = text.replace("  FTOL_ARRAY  = 1.0E-10,", "  FTOL_ARRAY  = 1.0E-8,")
+    path = tmp_path / "input.cth_537"
+    path.write_text(text + "&END\n")
+    inp = VmecInput.from_file(str(path))
+    assert int(resolution_from_input(inp, ns=15).mnmax) == 537
+
+    from vmex.core.freeboundary import solve_free_boundary
+
+    result = solve_free_boundary(
+        inp, mgrid_path=str(mgrid), use_fft=True,
+        error_on_no_convergence=False)
+    assert bool(result.converged), (
+        f"537-mode FFT free-boundary solve failed to converge "
+        f"(fsqr={float(result.fsqr):.2e})")

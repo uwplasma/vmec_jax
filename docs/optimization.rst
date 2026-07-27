@@ -181,10 +181,13 @@ of :doc:`algorithms` for the formulation and cost analysis.
    from vmex.core.input import VmecInput
 
    inp = VmecInput.from_file("input.solovev")
-   p0 = implicit.params_from_input(inp, device="gpu")
+   gpu = jax.devices("gpu")[0]
+   p0 = implicit.params_from_input(inp, device=gpu)
 
-   sol = implicit.run(inp, p0)                        # ImplicitSolution pytree
-   grad = jax.grad(lambda p: implicit.run(inp, p).wb)(p0)   # adjoint gradient
+   sol = implicit.run(inp, p0, device=gpu)            # ImplicitSolution pytree
+   # pass the SAME device inside the differentiated function: under jax.grad
+   # the parameters are tracers, which carry no placement to infer
+   grad = jax.grad(lambda p: implicit.run(inp, p, device=gpu).wb)(p0)
 
 Pass ``device="cpu"`` / ``"gpu"`` (or a ``jax.Device``) to
 :func:`~vmex.core.implicit.params_from_input` or

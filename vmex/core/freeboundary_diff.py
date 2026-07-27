@@ -45,7 +45,7 @@ implicit adjoint (boundary) and virtual casing (coils) at once.  See
 ``examples/single_stage_simultaneous_opt.py`` and the *True single-stage*
 section of ``docs/optimization.rst``.
 
-``virtual_casing_jax`` is an optional dependency (``pip install vmex[freeb]``
+``virtual_casing_jax`` is an optional dependency (install from source
 or ``pip install -e /path/to/virtual_casing_jax``).  Importing this module raises
 a clear error if it is missing.
 """
@@ -100,7 +100,8 @@ def _require_vcj() -> None:
         raise ImportError(
             "vmex.core.freeboundary_diff requires the optional dependency "
             "'virtual_casing_jax' (uwplasma). Install it with "
-            "`pip install vmex[freeb]` or `pip install -e /path/to/virtual_casing_jax`."
+            "`pip install git+https://github.com/rogeriojorge/virtual_casing_jax` "
+            "(not yet on PyPI)."
         ) from _IMPORT_ERROR
 
 

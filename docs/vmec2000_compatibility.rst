@@ -436,10 +436,11 @@ variable.  The following distinctions are important:
   fallback is not labeled free-boundary.
 * ``ier_flag=2`` WOUT output requires ``LFULL3D1OUT=T`` for either boundary
   mode.
-* On the base of PR #70, NESTOR potential/surface variables are present as
-  netCDF fill because the solver result does not expose them.  PR #73 adds the
-  symmetric potential/surface export; its asymmetric extension remains a
-  separate requirement and must not be lost during merge.
+* NESTOR potential/surface WOUT variables are exported for both symmetric
+  and asymmetric solves; the live VMEC2000 comparison includes a converged
+  LASYM free-boundary case whose ``potcos`` and asymmetric surface partners
+  match.  (Earlier consolidation states exported only the symmetric set —
+  that gap is closed.)
 * PR #72 adds ``curlabel`` schema preservation.  It is complementary to, not a
   replacement for, the free-boundary solve changes.
 

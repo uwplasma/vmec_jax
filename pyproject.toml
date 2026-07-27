@@ -51,14 +51,14 @@ Changelog = "https://github.com/uwplasma/vmex/releases"
 # Differentiable virtual-casing residual on a specified boundary
 # (plan.md R15.3 + R19); this is not a NESTOR equilibrium adjoint.
 # ``virtual_casing_jax`` is a uwplasma package (https://github.com/uwplasma/
-# virtual_casing_jax); it is NOT yet on PyPI, so ``pip install vmex[freeb]``
-# will not resolve it from an index — install it editable alongside vmex:
-#   pip install -e /path/to/virtual_casing_jax
+# The differentiable virtual-casing lane needs virtual_casing_jax, which is
+# NOT yet published on PyPI — an extra declaring it would make
+# ``pip install vmex[freeb]`` fail to resolve from an ordinary index, so no
+# such extra is advertised until the dependency is publishable.  Install it
+# from source alongside vmex instead:
+#   pip install git+https://github.com/rogeriojorge/virtual_casing_jax
 # The ``vmex.core.freeboundary_diff`` module and its tests are gated behind an
 # ``importorskip`` so CI stays green when the dependency is absent.
-freeb = [
-  "virtual_casing_jax",
-]
 docs = [
   "sphinx",
   "sphinx-copybutton",

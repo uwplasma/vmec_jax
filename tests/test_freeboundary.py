@@ -553,7 +553,7 @@ def test_cached_vacuum_executable_rechecks_dynamic_axis(monkeypatch):
     resolution = object()
     cached = (object(), object(), object())
     monkeypatch.setitem(
-        FB._VACUUM_EXECUTABLE_CACHE, (resolution, 1, 2, 3), cached,
+        FB._VACUUM_EXECUTABLE_CACHE, (resolution, 1, 2, 3, False), cached,
     )
     seen = []
     monkeypatch.setattr(
