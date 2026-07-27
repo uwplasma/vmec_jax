@@ -257,6 +257,7 @@ jobs:
                     tests/test_optimize_penalty.py \
                     tests/test_recycle_drift.py \
                     tests/test_ci_shard_coverage.py \
+                    tests/test_performance_docs.py \
                     tests/test_package_api.py \
                     tests/test_packaging_metadata.py \
                     tests/test_parallel.py \

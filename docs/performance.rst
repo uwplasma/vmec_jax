@@ -20,6 +20,8 @@ final ``NS_ARRAY`` stage is ramped to **ns = 201** — production radial
 resolution, where the physics dominates the compile overhead and the warm
 comparison is fairest.
 
+.. begin generated-baseline-table (tools/render_performance_docs.py)
+
 .. list-table::
    :header-rows: 1
    :widths: 34 14 14 14 14
@@ -28,101 +30,111 @@ comparison is fairest.
      - VMEC2000
      - vmex cold
      - vmex warm
-     - VMEC++
+     - reference C++
+   * - li383_low_res
+     - 0.86
+     - 3.36
+     - **0.434**
+     - 0.341
    * - solovev
-     - 1.41
-     - 11.5
-     - **0.62**
-     - 1.45
-   * - li383_low_res (NCSX)
-     - 1.06
-     - 8.3
-     - **0.69**
-     - 0.53
-   * - nfp4_QH_warm_start
-     - 1.91
-     - 10.9
-     - **1.32**
-     - 1.35
-   * - nfp4_QH_warm_start (multigrid)
-     - 1.89
-     - 29.1
-     - **1.44**
-     - 1.56
+     - 1.07
+     - 3.23
+     - **0.319**
+     - 0.845
    * - circular_tokamak
-     - 2.02
-     - 22.6
-     - **1.63**
-     - 3.70
+     - 1.35
+     - 4.12
+     - **0.522**
+     - 1.26
+   * - nfp4_QH_warm_start
+     - 1.42
+     - 3.51
+     - **0.641**
+     - 0.782
+   * - nfp4_QH_warm_start (multigrid)
+     - 1.48
+     - 11.9
+     - **0.787**
+     - 1.05
    * - DSHAPE
-     - 2.31
-     - 32.7
-     - 2.37
-     - 5.45
-   * - cth_like_fixed_bdy (multigrid)
-     - 10.2
-     - 38.5
-     - **7.76**
-     - failed
+     - 1.83
+     - 6.27
+     - **0.812**
+     - 1.87
    * - cth_like_fixed_bdy
-     - 13.2
-     - 28.0
-     - **9.51**
+     - 6.04
+     - 6.65
+     - **3.5**
      - failed
-   * - cth_like_free_bdy (free boundary)
-     - 26.7
-     - 71.3
-     - **24.9**
-     - 6.9
+   * - cth_like_fixed_bdy (multigrid)
+     - 7.08
+     - 17.3
+     - **4.57**
+     - failed
+   * - cth_like_free_bdy
+     - 20.2
+     - 28.9
+     - **13**
+     - 6.36
    * - LandremanPaul2021_QA_lowres
-     - 45.0
-     - 72.3
-     - **42.7**
-     - 24.7
+     - 34.7
+     - 28.6
+     - **22.2**
+     - 12.2
    * - LandremanPaul2021_QA_lowres (multigrid)
-     - 73.7
-     - 103.4
-     - **68.1**
-     - 30.9
+     - 55.8
+     - 45.2
+     - **35.9**
+     - 16.5
    * - LandremanPaul2021_QH_reactorScale_lowres
-     - 64.8
-     - 76.8
-     - 65.6
+     - 61.7
+     - 45.7
+     - **38.4**
      - failed
    * - NuhrenbergZille_1988_QHS
-     - 137
-     - **108**
-     - **76.8**
-     - 72.7
-   * - cth_like_free_bdy_lasym_small (free bdy, lasym)
-     - 228
-     - --
-     - **196**
-     - n/a
+     - 106
+     - 98.6
+     - **74.6**
+     - 45.7
+   * - cth_like_free_bdy_lasym_small
+     - 154
+     - 133*
+     - **105**
+     - failed
 
-Bold marks vmex beating VMEC2000. These are wall-clock seconds on a
-shared Apple-Silicon CPU (``benchmarks/baseline.json``), so the
-warm/Fortran *ratio* is the comparable quantity, not the absolute numbers.
+Bold marks vmex warm beating VMEC2000 (14 of 14 rows).
+``*`` marks an equal-iteration-budget run whose CLI exit was nonzero
+(the deliberately NITER-bounded LASYM stress row: both codes exhaust
+the same budget, so the wall times compare equal work); ``failed``
+marks an aborted run and ``n/a`` an unsupported configuration.
+
+.. end generated-baseline-table
+
+These are wall-clock seconds measured on an otherwise idle Apple-Silicon
+host — one fresh process per code, run sequentially (never interleaved), so
+each row is one controlled baseline rather than a statistical benchmark;
+repeated runs move the small rows by tens of milliseconds and the ratios by
+a few percent.  The comparable quantity across hosts is the warm/Fortran
+*ratio*, not the absolute numbers.
 
 Reading the table:
 
-- **Warm** solves beat VMEC2000 on 12 of the 14 rows — typically 1.2–2.3x —
-  and tie on the other two (DSHAPE, the reactor-scale QH). This includes
-  the converged symmetric **free-boundary** row: the NESTOR path reaches
-  VMEC2000 parity *and* edges out the Fortran wall clock. The LASYM row is a
-  deliberately bounded 10,000-iteration stress case that reaches ``NITER``
-  in both codes; its wall time compares equal work, not convergence.
-- **Cold** runs pay a one-time 7–30 s XLA compile, so a single
-  fire-and-forget run is slower than Fortran — except on the biggest deck
-  (NuhrenbergZille at ns=201), where even the cold run, compile included,
-  beats VMEC2000. The persistent compilation cache removes most of the
-  compile cost on subsequent processes.
-- **VMEC++** is faster on some converged large decks (free
-  boundary, LandremanPaul QA) but *failed* rows aborted during the first
-  iterations; ``vmex`` completes every supported convergent row and the
-  deliberately NITER-bounded LASYM stress row (zero-crash policy).
-  ``n/a`` marks a configuration VMEC++ does not support (``lasym`` free
-  boundary).
+- **Warm** solves reuse the compiled executable — the number that matters
+  inside optimization loops.  The generated caption above counts the rows
+  where the warm solve beats VMEC2000; the converged symmetric
+  **free-boundary** row is among them (the NESTOR path reaches VMEC2000
+  parity *and* edges out the Fortran wall clock).
+- **Cold** runs pay a one-time XLA compile, so a single fire-and-forget run
+  is usually slower than Fortran — except on the biggest decks, where even
+  the cold run, compile included, wins.  The persistent compilation cache
+  removes most of the compile cost on subsequent processes.
+- The **reference C++ implementation** (10-thread default; invoked once per
+  deck through its Python API in a fresh process, same host, same sequential
+  protocol) is faster on some converged large decks; its ``failed`` rows
+  aborted during the first iterations.  ``vmex`` completes every supported
+  convergent row and the deliberately NITER-bounded LASYM stress row
+  (zero-crash policy); ``n/a`` marks a configuration the reference does not
+  support (``lasym`` free boundary).
 
 Production workflows: CPU vs GPU
 --------------------------------
@@ -247,13 +259,14 @@ trajectory.  The trace below runs the quick-start QH case
 (``nfp4_QH_warm_start``, single grid at ``ns=51``) through all three codes
 and plots the total force residual ``fsqr + fsqz + fsql`` per iteration:
 the vmex curve lies exactly on top of VMEC2000's (both converge in 502
-iterations), and VMEC++ follows a near-identical path (501 iterations).
+iterations), and the reference C++ implementation follows a
+near-identical path (501 iterations).
 The vmex trace comes from ``SolveResult.fsq_history``, the VMEC2000
 trace from its stdout iteration table run with ``NSTEP = 1``, and the
-VMEC++ trace from the ``fsqt`` array of its wout payload.
+reference trace from the ``fsqt`` array of its wout payload.
 
 .. figure:: _static/figures/readme_convergence.png
-   :alt: force residual vs iteration for vmex, VMEC2000, and VMEC++
+   :alt: force residual vs iteration for vmex, VMEC2000, and the reference C++ implementation
    :align: center
    :width: 95%
 

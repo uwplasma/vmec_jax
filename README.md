@@ -147,7 +147,8 @@ bottleneck or stalls.
 ## Performance
 
 **High-mode HSX QHS deck** (`MPOL=18, NTOR=24, NZETA=100, ns→101`; 858 modes),
-one fresh process per code, sequentially on an idle Apple Silicon CPU:
+one fresh process per code, sequentially on an idle Apple Silicon CPU — a
+single controlled baseline, not a repeated-run statistic:
 
 | code | wall | peak RSS | outcome |
 | --- | ---: | ---: | --- |
