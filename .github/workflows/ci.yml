@@ -507,7 +507,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [core-a-f, core-g-m, core-n-s, core-t-z, opt-qa, opt-qh,
+        shard: [core-a-f, core-g-i, core-j-m, core-n-s, core-t-z, opt-qa, opt-qh,
                 opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
       - uses: actions/checkout@v6.0.2
@@ -547,9 +547,18 @@ jobs:
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
                      --ignore-glob=tests/test_[g-z]*.py"
               ;;
-            core-g-m)
+            core-g-i)
+              # split from core-g-m: the rebuilt high-mode free-boundary
+              # lanes (test_high_mode_..., ~50 min locally) pushed the
+              # combined g-m shard past its 180-minute budget on a slow
+              # hosted runner
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
                      --ignore-glob=tests/test_[a-f]*.py \
+                     --ignore-glob=tests/test_[j-z]*.py"
+              ;;
+            core-j-m)
+              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
+                     --ignore-glob=tests/test_[a-i]*.py \
                      --ignore-glob=tests/test_[n-z]*.py"
               ;;
             core-n-s)

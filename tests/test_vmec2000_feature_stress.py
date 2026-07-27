@@ -140,10 +140,15 @@ def test_public_238_mode_lforbal_solve_matches_vmec2000() -> None:
     assert result.iterations == 462
     assert result.jacobian_resets == 7
     assert output.count("TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS") == 1
+    # rtol: the 462-iteration, 7-reset trajectory is bitwise reproducible on
+    # one platform but float-op reordering shifts the final residuals across
+    # architectures (measured arm64 vs x64: fsqz 3.13954504e-8 vs
+    # 3.13954514e-8, a 3e-8 relative delta); 1e-7 pins ~7 significant digits
+    # while holding on both.
     np.testing.assert_allclose(
         [result.fsqr, result.fsqz, result.fsql],
         [9.78117163e-8, 3.13954504e-8, 7.69528620e-9],
-        rtol=2e-8,
+        rtol=1e-7,
     )
     np.testing.assert_allclose(
         [result.wb, result.r00, result.wmhd],
