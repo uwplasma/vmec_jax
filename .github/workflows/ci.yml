@@ -520,8 +520,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [core-a-f, core-g-i, core-j-m, core-n-s, core-t-z,
-                high-mode-fb, opt-qa, opt-qh,
+        shard: [core-a-c, core-d-f, core-g-h, core-i, core-j-m,
+                core-n-s, core-t-z, high-mode-fb, opt-qa, opt-qh,
                 opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
       - uses: actions/checkout@v6.0.2
@@ -566,17 +566,32 @@ jobs:
           RUN_FULL: "1"
         run: |
           case "${{ matrix.shard }}" in
-            core-a-f)
+            core-a-c)
+              # a-f split again: the shard was killed by runner shutdowns
+              # three dispatches in a row, always deep into the run while
+              # ten other shards survived -- the sequential full suite
+              # accumulates JAX executable caches until the hosted runner's
+              # memory ceiling evicts the runner service itself.  Smaller
+              # letter ranges keep each process's accumulation bounded.
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
+                     --ignore-glob=tests/test_[d-z]*.py"
+              ;;
+            core-d-f)
+              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
+                     --ignore-glob=tests/test_[a-c]*.py \
                      --ignore-glob=tests/test_[g-z]*.py"
               ;;
-            core-g-i)
-              # split from core-g-m after it exceeded 180 minutes; the
-              # high-mode free-boundary file is compile-dominated on hosted
-              # cores and owns its own shard (high-mode-fb)
+            core-g-h)
+              # g-i split likewise; the high-mode free-boundary file (h)
+              # stays in its own high-mode-fb shard
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
                      --ignore=tests/test_high_mode_free_boundary_parity.py \
                      --ignore-glob=tests/test_[a-f]*.py \
+                     --ignore-glob=tests/test_[i-z]*.py"
+              ;;
+            core-i)
+              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
+                     --ignore-glob=tests/test_[a-h]*.py \
                      --ignore-glob=tests/test_[j-z]*.py"
               ;;
             high-mode-fb)
