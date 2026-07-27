@@ -1606,7 +1606,13 @@ def _least_squares_implicit(
     # bound path (CPU by default; explicit device= honored) — committing the
     # input dof vector to it makes both jits compile and run there, and their
     # uncommitted constants follow.  ``None`` leaves placement untouched.
+    # The resolved device is ALSO carried in the static config so the host
+    # callback (worker thread), the cached runtime template, and the
+    # custom-VJP backward re-enter the same placement context on their own —
+    # objective evaluation and its gradients then work on an explicit
+    # non-default device without an outer jax.default_device context.
     jac_device = resolve_implicit_device(device, cfg.resolution)
+    cfg = dataclasses.replace(cfg, device=jac_device)
 
     def _place(x: np.ndarray) -> jnp.ndarray:
         a = jnp.asarray(x, dtype=jnp.float64)

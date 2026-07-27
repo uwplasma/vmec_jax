@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import jax
 import pytest
 
@@ -93,3 +95,86 @@ def test_least_squares_places_params_on_jacobian_device(monkeypatch):
             device=requested,
         )
     assert seen == [requested]
+
+
+def test_second_device_placement_and_gradient_no_outer_context(tmp_path):
+    """Full-fidelity second-device audit on forced host devices (subprocess).
+
+    Reproduces the reported multi-accelerator failure class without GPU
+    hardware: with ``--xla_force_host_platform_device_count=2``, cpu:1 stands
+    in for the second accelerator and cpu:0 for the default device.  The
+    caches are deliberately warmed by a default-device pass first (the order
+    that poisoned the cached runtime template), then the second-device pass
+    asserts — with NO outer ``jax.default_device`` context:
+
+    * every leaf of the state, the returned runtime, AND the gradient is
+      committed exactly to device 1 (device identity, not merely platform);
+    * ``value_and_grad`` matches the default-device gradient and is nonzero
+      (the reported regression collapsed gradients to exactly zero);
+    * a caller-side derived diagnostic stays finite;
+    * ``device="auto"`` preserves the supplied parameters' committed home.
+
+    A subprocess is required because the device-count flag must be set before
+    JAX initializes.
+    """
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    script = tmp_path / "second_device_audit.py"
+    script.write_text(textwrap.dedent("""
+        import jax
+        import numpy as np
+        from vmex.core import implicit as im
+        from vmex.core import optimize
+        from vmex.core.input import VmecInput
+
+        inp = VmecInput.from_file("examples/data/input.solovev")
+        dev0, dev1 = jax.devices("cpu")[:2]
+
+        def strays(tree, home):
+            bad = set()
+            for leaf in jax.tree.leaves(tree):
+                if hasattr(leaf, "devices"):
+                    ds = {str(d) for d in leaf.devices()}
+                    if ds != {str(home)}:
+                        bad |= ds
+            return bad
+
+        # default-device pass FIRST: warms every device-blind cache the way
+        # a CPU-then-accelerator audit does
+        p0 = im.params_from_input(inp, device=dev0)
+        v0, g0 = jax.value_and_grad(lambda p: im.run(
+            inp, p, ftol=1e-11, max_iterations=600, device=dev0).wb)(p0)
+
+        p1 = im.params_from_input(inp, device=dev1)
+        v1, g1 = jax.value_and_grad(lambda p: im.run(
+            inp, p, ftol=1e-11, max_iterations=600, device=dev1).wb)(p1)
+        s1 = im.run(inp, p1, ftol=1e-11, max_iterations=600, device=dev1)
+        well = float(np.asarray(optimize.magnetic_well(s1.state, s1.runtime)))
+        s1a = im.run(inp, p1, ftol=1e-11, max_iterations=600)  # AUTO
+
+        assert not strays(s1.state, dev1), strays(s1.state, dev1)
+        assert not strays(s1.runtime, dev1), strays(s1.runtime, dev1)
+        assert not strays(g1, dev1), strays(g1, dev1)
+        assert not strays(s1a.state, dev1) and not strays(s1a.runtime, dev1)
+        gr0 = float(np.asarray(g0.rbc)[inp.ntor, 1])
+        gr1 = float(np.asarray(g1.rbc)[inp.ntor, 1])
+        assert gr1 != 0.0, "second-device gradient collapsed to zero"
+        np.testing.assert_allclose(gr1, gr0, rtol=1e-9)
+        np.testing.assert_allclose(float(v1), float(v0), rtol=1e-12)
+        assert np.isfinite(well), "derived diagnostic went non-finite"
+        print("SECOND-DEVICE AUDIT OK")
+    """))
+    env = dict(os.environ)
+    env["XLA_FLAGS"] = (env.get("XLA_FLAGS", "")
+                        + " --xla_force_host_platform_device_count=2")
+    env["JAX_ENABLE_X64"] = "1"
+    repo = str(Path(__file__).resolve().parents[1])
+    proc = subprocess.run(
+        [sys.executable, str(script)], cwd=repo, env=env,
+        capture_output=True, text=True, timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    assert "SECOND-DEVICE AUDIT OK" in proc.stdout

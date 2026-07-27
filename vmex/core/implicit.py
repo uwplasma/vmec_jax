@@ -265,6 +265,16 @@ class ImplicitConfig:
     #: unchanged, only the iteration count drops).  Makes the callback
     #: stateful across calls, so keep False for one-shot/diagnostic use.
     hot_restart: bool = False
+    #: the RESOLVED placement device (a ``jax.Device``) or ``None``.  Carried
+    #: in the static config so every stage of the operation — the
+    #: ``pure_callback`` host solve (which runs on a runtime worker thread
+    #: where the caller's thread-local ``jax.default_device`` context does
+    #: NOT apply), the cached runtime template, the custom-VJP backward and
+    #: the multi-RHS pullback — re-enters the same device context on its own,
+    #: without relying on an outer user-supplied context.  Without this, a
+    #: gradient evaluated outside such a context creates its constants on
+    #: JAX's default device and mixes devices with the committed state.
+    device: Any = None
 
 
 def make_config(
@@ -282,8 +292,14 @@ def make_config(
     adjoint_gcrot_m: int = 100,
     adjoint_gcrot_k: int = 20,
     hot_restart: bool = False,
+    device: Any = None,
 ) -> ImplicitConfig:
-    """Build the static config; ``resolution`` is the (final-stage) grid."""
+    """Build the static config; ``resolution`` is the (final-stage) grid.
+
+    ``device`` is the already-RESOLVED placement device (pass the result of
+    :func:`vmex.core.device.resolve_implicit_device`, not a policy string) —
+    see :class:`ImplicitConfig.device`.
+    """
     if multigrid and ns is None:
         ns = int(np.max(np.asarray(inp.ns_array)))
     resolution = resolution_from_input(inp, ns=ns)
@@ -298,8 +314,40 @@ def make_config(
         adjoint_tol=float(adjoint_tol), adjoint_restart=int(adjoint_restart),
         adjoint_maxiter=int(adjoint_maxiter),
         adjoint_gcrot_m=int(adjoint_gcrot_m), adjoint_gcrot_k=int(adjoint_gcrot_k),
-        hot_restart=bool(hot_restart),
+        hot_restart=bool(hot_restart), device=device,
     )
+
+
+def _device_context(cfg: ImplicitConfig):
+    """The config's placement context (a no-op when no device is carried)."""
+    if cfg.device is None:
+        return contextlib.nullcontext()
+    return jax.default_device(cfg.device)
+
+
+def _params_committed_device(params: ImplicitParams):
+    """The single device every concrete committed leaf lives on, else None.
+
+    Used by :func:`run` to make ``device="auto"`` PRESERVE the placement of a
+    supplied parameter pytree, as documented.  Tracers (under ``jax.grad``)
+    carry no placement, and an uncommitted or mixed pytree has no unambiguous
+    home — both return ``None``, falling back to the auto policy; pass
+    ``device=`` explicitly in those cases.
+    """
+    devices = set()
+    for leaf in jax.tree.leaves(params):
+        if not isinstance(leaf, jax.Array):
+            return None
+        try:
+            leaf_devices = leaf.devices()
+        except Exception:  # tracers under jit/grad have no placement
+            return None
+        if len(leaf_devices) != 1:
+            return None
+        devices.add(next(iter(leaf_devices)))
+        if len(devices) > 1:
+            return None
+    return devices.pop() if devices else None
 
 
 @functools.lru_cache(maxsize=8)
@@ -311,12 +359,21 @@ def _template_runtime(cfg: ImplicitConfig) -> SolverRuntime:
     every trial solve of an optimization and keeps
     :func:`runtime_from_params` traceable (the host-side ``run_setup`` logic
     never runs under a trace once the template is a closure constant).
+
+    Built inside the config's device context: the first concrete call may
+    come from the ``pure_callback`` host thread (see
+    ``_host_solve_and_mask``), where the caller's thread-local
+    ``jax.default_device`` does not apply — without the explicit context the
+    cached template's p-independent arrays (radial grids, ``scalxc``, axis
+    rows) would commit to JAX's default device and poison every runtime
+    later assembled from this template on another device.
     """
-    return prepare_runtime(
-        cfg.inp, cfg.resolution, ftol=cfg.ftol,
-        max_iterations=cfg.max_iterations, lconm1=cfg.lconm1,
-        use_fft=False,
-    )
+    with _device_context(cfg):
+        return prepare_runtime(
+            cfg.inp, cfg.resolution, ftol=cfg.ftol,
+            max_iterations=cfg.max_iterations, lconm1=cfg.lconm1,
+            use_fft=False,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +614,16 @@ def runtime_from_params(params: ImplicitParams, cfg: ImplicitConfig) -> SolverRu
     (functions of the edge row alone).  All p-independent fields (grids,
     ``scalxc``, axis arrays, static metadata) come from the reference
     runtime.
+
+    Runs inside the config's device context so freshly created constants
+    (and the cached template) land on ``cfg.device`` even when the caller
+    holds no outer ``jax.default_device`` context.
     """
+    with _device_context(cfg):
+        return _runtime_from_params_impl(params, cfg)
+
+
+def _runtime_from_params_impl(params: ImplicitParams, cfg: ImplicitConfig) -> SolverRuntime:
     template = _template_runtime(cfg)
     setup0 = template.setup
     inp = cfg.inp
@@ -1028,6 +1094,18 @@ def _mask_cache_key(cfg: ImplicitConfig) -> tuple:
 
 
 def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
+    # This function executes on a pure_callback WORKER THREAD, where the
+    # caller's thread-local ``jax.default_device`` context is not active.
+    # Re-enter the config's device context explicitly, otherwise everything
+    # created here — including the primed ``_template_runtime`` cache entry —
+    # commits to JAX's default device and later mixes devices with the
+    # explicitly placed state (observed as NaN diagnostics / zero gradients
+    # on a non-default GPU).
+    with _device_context(cfg):
+        return _host_solve_and_mask_impl(cfg, params_np)
+
+
+def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
     _HOST_ERROR.clear()  # fresh callback: drop any stale relayed error
     params = jax.tree.map(jnp.asarray, params_np)
     try:
@@ -1112,7 +1190,8 @@ def solve_implicit(params: ImplicitParams, cfg: ImplicitConfig) -> SpectralState
 
 
 def _solve_implicit_fwd(params, cfg):
-    state, mask = _callback_solve(params, cfg)
+    with _device_context(cfg):
+        state, mask = _callback_solve(params, cfg)
     return state, (params, state, mask)
 
 
@@ -1236,6 +1315,15 @@ def _recycled_solve(A, b, cfg: ImplicitConfig, recycle):
 
 
 def _solve_implicit_bwd(cfg, res, gbar):
+    # The backward pass typically executes AFTER the caller's forward context
+    # has exited (jax.grad pulls cotangents back later); re-enter the
+    # config's device context so the adjoint solve and its fresh constants
+    # stay colocated with the committed state on an explicit device.
+    with _device_context(cfg):
+        return _solve_implicit_bwd_impl(cfg, res, gbar)
+
+
+def _solve_implicit_bwd_impl(cfg, res, gbar):
     params, x_star, dof_mask = res
     frozen = jax.lax.stop_gradient(x_star)
     edge_mask = _edge_mask(cfg)
@@ -1275,8 +1363,17 @@ def implicit_state_pullback_multi_rhs(
     This preserves the scalar solve_implicit VJP and only adds a helper for
     callers that already have several state cotangents for the same fixed
     point.  It reuses the residual/projector/VJP setup once, then applies the
-    existing single-RHS GMRES per row.
+    existing single-RHS GMRES per row.  Runs inside the config's device
+    context (see ``_solve_implicit_bwd``).
     """
+    with _device_context(cfg):
+        return _implicit_state_pullback_multi_rhs_impl(
+            params, cfg, x_star, dof_mask, gbar_batch)
+
+
+def _implicit_state_pullback_multi_rhs_impl(
+    params, cfg, x_star, dof_mask, gbar_batch,
+) -> ImplicitParams:
     frozen = jax.lax.stop_gradient(x_star)
     edge_mask = _edge_mask(cfg)
     P = _dof_projector(cfg, dof_mask)
@@ -1487,23 +1584,33 @@ def run(
     """Differentiable fixed-boundary equilibrium: input -> outputs pytree.
 
     ``params`` defaults to :func:`params_from_input`; pass a perturbed /
-    traced :class:`ImplicitParams` to differentiate::
+    traced :class:`ImplicitParams` to differentiate — and pass the SAME
+    ``device`` to both calls (under ``jax.grad`` the parameters are tracers,
+    which carry no placement to infer)::
 
         inp = VmecInput.from_file("input.solovev")
-        p0 = params_from_input(inp, device="gpu")
-        grad = jax.grad(lambda p: run(inp, p).wb)(p0)
+        gpu = jax.devices("gpu")[1]          # any explicit device works
+        p0 = params_from_input(inp, device=gpu)
+        grad = jax.grad(lambda p: run(inp, p, device=gpu).wb)(p0)
 
     ``wmhd`` follows the printed ``WMHD`` normalization; ``gamma = 1`` inputs
     get ``wmhd = nan`` (as in VMEC).  All outputs are differentiable in
     ``params`` (state via the implicit adjoint; scalars additionally through
     their explicit parameter dependence).
 
-    ``device`` selects where implicit residual and adjoint operations run.
-    It accepts ``"cpu"``, ``"gpu"`` or a ``jax.Device``; ``"auto"`` keeps
-    the default CPU preference for this launch-bound path, while ``None``
-    leaves placement to JAX.  When ``params`` is supplied, an explicit
-    hardware device moves the complete parameter pytree consistently;
-    otherwise its existing placement is preserved.
+    ``device`` selects where the ENTIRE operation runs — host solve,
+    runtime construction, derived outputs, and (carried in the static
+    config) the custom-VJP backward and multi-RHS pullbacks, so gradients
+    on an explicit non-default device work without any outer
+    ``jax.default_device`` context.  It accepts ``"cpu"``, ``"gpu"`` or a
+    ``jax.Device``; ``None`` leaves placement to JAX.  ``"auto"``: when
+    ``params`` is supplied with CONCRETE arrays all committed to one
+    device, that placement is preserved and used for the whole operation;
+    otherwise (no params, tracers under ``jax.grad``, or mixed placement)
+    the default CPU preference of this launch-bound path applies — pass
+    ``device=`` explicitly when differentiating on an accelerator.  An
+    explicit hardware device moves a supplied parameter pytree
+    consistently.
 
     The returned solution also carries the internally built
     :class:`~vmex.core.solver.SolverRuntime` as ``sol.runtime`` (a
@@ -1513,26 +1620,38 @@ def run(
     ``runtime_from_params(params, make_config(...))`` per evaluation.
     """
     inp = VmecInput.from_file(source) if isinstance(source, str) else source
+    # Resolve the requested device ONCE, before the config is minted, and run
+    # the entire operation inside its context.  Moving only the parameter
+    # pytree is not enough: the solve and runtime_from_params rebuild static
+    # tables from host constants, and outside a matching jax.default_device
+    # those tables commit to whatever device is JAX's default (the first
+    # GPU).  With params on a *different* explicit device that produced
+    # mixed-device runtime arrays and NaNs.  The resolved device is ALSO
+    # carried in the static config (cfg.device) so the pure_callback host
+    # thread, the cached runtime template, and the custom-VJP backward —
+    # which all execute outside this ``with`` block's thread/lifetime —
+    # re-enter the same context on their own.
     cfg = make_config(
         inp, ns=ns, ftol=ftol, max_iterations=max_iterations, mode=mode,
         multigrid=multigrid, lconm1=lconm1, adjoint_tol=adjoint_tol,
         adjoint_restart=adjoint_restart, adjoint_maxiter=adjoint_maxiter,
         adjoint_gcrot_m=adjoint_gcrot_m, adjoint_gcrot_k=adjoint_gcrot_k,
     )
-    # Resolve the requested device ONCE and run the entire operation inside
-    # its context.  Moving only the parameter pytree is not enough: the solve
-    # and runtime_from_params rebuild static tables from host constants, and
-    # outside a matching jax.default_device those tables commit to whatever
-    # device is JAX's default (the first GPU).  With params on a *different*
-    # explicit device that produced mixed-device runtime arrays and NaNs; the
-    # context makes every freshly created constant land on the same device as
-    # the parameters.
-    dev = resolve_implicit_device(device, cfg.resolution)
+    dev = None
+    inferred_home = False
+    if device is AUTO and params is not None:
+        # "auto" preserves a concretely committed parameter pytree's home.
+        dev = _params_committed_device(params)
+        inferred_home = dev is not None
+    if dev is None:
+        dev = resolve_implicit_device(device, cfg.resolution)
+    cfg = dataclasses.replace(cfg, device=dev)
     placement = jax.default_device(dev) if dev is not None else contextlib.nullcontext()
     with placement:
         if params is None:
             params = params_from_input(inp, device=device)
-        elif dev is not None:
+        elif dev is not None and not inferred_home:
+            # already home when the device was inferred from the params
             params = jax.tree.map(lambda a: jax.device_put(a, dev), params)
         state = solve_implicit(params, cfg)
         rt = runtime_from_params(params, cfg)

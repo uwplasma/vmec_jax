@@ -454,7 +454,12 @@ def test_free_boundary_multigrid_auto_relocates_every_carry(monkeypatch):
             bvec_nonsing=cache, potvac=cache,
             surface_fields=(cache, cache, cache, cache),
         )
-        result = type("Result", (), {"state": state})()
+        # The production ladder reads the stage's final residuals for the
+        # residual continuation, so the fake must carry them too.
+        zero = jax.numpy.zeros(())
+        result = type("Result", (), {
+            "state": state, "fsqr": zero, "fsqz": zero, "fsql": zero,
+        })()
         return freeboundary._FreeBoundaryStageResult(
             result, vacuum, state, cache, cache,
         )
@@ -519,3 +524,69 @@ def test_scalarized_profile_gradient_cpu_gpu_parity():
         results["gpu"].cost, results["cpu"].cost, rtol=1e-11)
     np.testing.assert_allclose(
         results["gpu"].jac, results["cpu"].jac, rtol=2e-7, atol=1e-12)
+
+
+def test_second_gpu_explicit_values_and_gradients():
+    """The full differentiable path on a NON-DEFAULT GPU, no outer context.
+
+    The reported regression: with ``device=jax.devices("gpu")[1]`` the
+    forward solve was correct but every gradient collapsed to zero and the
+    derived diagnostics went NaN, because the pure_callback host thread, the
+    cached runtime template, and the custom-VJP backward all executed outside
+    the caller's device context.  The resolved device is now carried in the
+    static config; this test drives the whole audit WITHOUT any outer
+    ``jax.default_device`` context and asserts device IDENTITY (id 1), not
+    merely platform.
+    """
+    gpus = jax.devices("gpu")
+    if len(gpus) < 2:
+        pytest.skip("needs at least two GPUs")
+    gpu1 = gpus[1]
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+
+    metrics = {
+        "wb": lambda sol: sol.wb,
+        "wp": lambda sol: sol.wp,
+        "volume": lambda sol: sol.volume,
+        "aspect": lambda sol: sol.aspect,
+        "iota_axis": lambda sol: sol.iota_axis,
+        "iota_edge": lambda sol: sol.iota_edge,
+        "magnetic_well": lambda sol: optimize.magnetic_well(
+            sol.state, sol.runtime),
+    }
+
+    def audit(device):
+        params = im.params_from_input(inp, device=device)
+        values, grads = {}, {}
+        for name, metric in metrics.items():
+            v, g = jax.value_and_grad(lambda p: jax.numpy.asarray(
+                metric(im.run(inp, p, ftol=1e-12, max_iterations=1000,
+                              device=device))).ravel()[0])(params)
+            values[name] = float(v)
+            grads[name] = float(np.asarray(g.rbc)[inp.ntor, 1])
+        sol = im.run(inp, params, ftol=1e-12, max_iterations=1000,
+                     device=device)
+        return values, grads, sol
+
+    # deliberately warm every cache on the DEFAULT devices first
+    cpu_values, cpu_grads, _ = audit(jax.devices("cpu")[0])
+    _ = audit(gpus[0])
+    gpu_values, gpu_grads, sol1 = audit(gpu1)
+
+    # device IDENTITY, not platform: every leaf committed exactly to gpu:1
+    for tree in (sol1.state, sol1.runtime):
+        for leaf in jax.tree.leaves(tree):
+            if hasattr(leaf, "devices"):
+                assert leaf.devices() == {gpu1}, (
+                    f"leaf on {leaf.devices()}, expected {{{gpu1}}}")
+
+    for name in metrics:
+        np.testing.assert_allclose(
+            gpu_values[name], cpu_values[name], rtol=1e-10,
+            err_msg=f"{name} value diverged on the second GPU")
+        assert gpu_grads[name] != 0.0, (
+            f"{name} gradient collapsed to zero on the second GPU")
+        assert np.isfinite(gpu_grads[name])
+        np.testing.assert_allclose(
+            gpu_grads[name], cpu_grads[name], rtol=2e-6, atol=1e-12,
+            err_msg=f"{name} gradient diverged on the second GPU")

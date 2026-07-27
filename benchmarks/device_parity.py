@@ -67,12 +67,16 @@ def _relative_difference(left: float, right: float) -> float:
     return abs(left - right) / scale
 
 
-def _available_devices() -> dict[str, Any]:
+def _available_devices(gpu_id: int = 0) -> dict[str, Any]:
     devices = {"cpu": jax.devices("cpu")[0]}
     try:
-        devices["gpu"] = jax.devices("gpu")[0]
+        gpus = jax.devices("gpu")
     except RuntimeError:
-        pass
+        return devices
+    if gpu_id >= len(gpus):
+        raise ValueError(
+            f"--gpu-id {gpu_id} requested but only {len(gpus)} GPU(s) present")
+    devices["gpu"] = gpus[gpu_id]
     return devices
 
 
@@ -269,6 +273,10 @@ def _parser() -> argparse.ArgumentParser:
         help=f"comma-separated subset of {','.join(METRIC_NAMES)}",
     )
     parser.add_argument("--quick", action="store_true", help="use a smaller smoke-test grid")
+    parser.add_argument(
+        "--gpu-id", type=int, default=0,
+        help="which GPU to benchmark (jax.devices('gpu')[GPU_ID]); errors if absent",
+    )
     parser.add_argument("--rtol", type=float, default=1.0e-7)
     parser.add_argument("--output", type=Path)
     return parser
@@ -276,7 +284,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    available = _available_devices()
+    available = _available_devices(gpu_id=int(args.gpu_id))
     try:
         devices, skipped = _requested_devices(args.devices, available)
     except ValueError as exc:
