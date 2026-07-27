@@ -22,13 +22,20 @@ from vmex.mirror import (
 )
 
 # Inputs: edit these values, then run this file directly.
-NS, MPOL = 5, 3
+NS, MPOL = 5, 4
 SPLINE_COEFFICIENTS = 32
 SPLINE_QUADRATURE_ORDER = 3
 STRAIGHT_LENGTH = 8.0
 RETURN_RADIUS = 2.5
 SEMI_MAJOR = 0.45
-SEMI_MINOR = 0.30
+SEMI_MINOR = 0.25
+# Turn the elliptical cross-section continuously around the closed circuit by
+# this many full 2*pi turns (a genuine rotating-ellipse section) on top of the
+# return-only 90-degree rotation. The legs keep an exactly straight axis; only
+# the ellipse they carry rotates. Two turns lifts the transform from the
+# return-only iota=0.085 to iota=0.141 at s=0.75 here. Set 0 for the legacy
+# return-only rotation.
+SECTION_TURNS = 2
 AXIAL_FLUX_DERIVATIVE = 0.02
 CURRENT_DERIVATIVE = 0.002
 FTOL = 1.0e-12
@@ -51,6 +58,7 @@ setup = build_stellarator_mirror_hybrid(
     return_radius=RETURN_RADIUS,
     semi_major=SEMI_MAJOR,
     semi_minor=SEMI_MINOR,
+    section_turns=SECTION_TURNS,
     axial_flux_derivative=AXIAL_FLUX_DERIVATIVE,
     quadrature_order=SPLINE_QUADRATURE_ORDER,
 )
@@ -87,6 +95,7 @@ summary = {
     "axis_length": float(setup.axis.arc_length),
     "axis_closure_error": float(setup.axis.closure_error),
     "frame_closure_error": float(setup.axis.frame_closure_error),
+    "section_turns": SECTION_TURNS,
     "iota_at_s_0p75": float(field_line.iota),
     "figure": str(figure),
 }

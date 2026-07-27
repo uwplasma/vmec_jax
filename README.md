@@ -517,50 +517,73 @@ result = solve_fixed_boundary_from_radius(0.3, config)   # radius: scalar, (nxi,
 
 ![Solved fixed-boundary mirrors coloured by |B|: axisymmetric circular-section mirror (left) and 90-degree rotating-ellipse mirror (right), with thin cap-to-cap field lines](docs/_static/figures/mirror_fixed_boundary_3d.png)
 
-Both lanes above are solved equilibria from the same example: a standard
-axisymmetric mirror (circular sections, mirror ratio 1.5, strong-force
-residual `5.9e-4` under the primary minor-radius normalization `B²/(μ₀a)`,
-`9.9e-3` under the legacy device-length normalization the recorded
-benchmarks quote) through the one-call entry point, and the supported
-rotating ellipse whose section turns by 90 degrees between the end cuts. The
-rotating-ellipse mirror converges at `ftol = 1e-12` to a normalized
-divergence of `1.4e-14`, in **6 s cold / 0.2 s warm** (peak ≈1.2 GB, CPU). Its
-implicit boundary gradient agrees with two fully reconverged finite-difference
-solves to `9.3e-10` relative — the derivative an external optimizer needs.
+Two solved equilibria from the same example: a standard axisymmetric mirror
+(circular sections) via the one-call entry point, and a rotating ellipse whose
+cross-section turns 90° between the end caps. Both converge at `ftol = 1e-12`
+(divergence ~1e-14) in seconds, and their boundary gradients are
+finite-difference-validated — the derivative an external optimizer needs.
 
 ### Free-boundary β scan
 
-`solve_beta_scan` jointly updates the spline last-closed surface, the plasma
-state, and the unbounded exterior vacuum, driven by an ESSOS two-coil field
-(0.5 m loops at z = ±1.0 m, 3.72e5 A: vacuum B(0) = 0.0836 T, mirror
-ratio 4.58). The supported sequence runs from 0 % to 10 % β, and the implicit
-free-boundary derivative matches a reconverged finite difference to `1.1e-10`
-relative (adjoint residual `1.4e-9`). Pushing to a requested 50 % β grows the
-central radius 7.5 % and drops the on-axis field 22.3 % from vacuum — and with
-this compact-coil configuration the 25 % and 50 % continuation states also
-pass the pointwise strong-force gate at the scan resolution, ahead of their
-formal promotion to the supported range.
+`solve_beta_scan` jointly updates the spline boundary, the plasma state, and
+the unbounded exterior vacuum, driven by an ESSOS two-coil field. The lane is
+supported through **50 % β** (fine-grid-confirmed: every β point from 0 through
+50 % converges on the `(ns, nxi, elements, ntheta) = (13, 25, 13, 24)` grid with
+bulk minor-radius force ≤ 2.4 × 10⁻³, far under the 0.05 promotion gate) and the
+free-boundary derivative is finite-difference-validated. The compact-coil
+configuration shown keeps the plasma finite-β equilibrium visibly coupled to the
+coils.
 
 ![Free-boundary beta scan with ESSOS coils: field lines, LCFS, |B|, pressure, and residual histories](docs/_static/figures/mirror_free_boundary_beta50_summary.png)
 
 ### Stellarator–mirror hybrid
 
-A closed periodic hybrid — two exactly straight mirror legs joined by two
-curved stellarator returns on a rotation-minimizing B-spline axis — has a
-complete fixed-boundary solve and example. A finite axial current gives
-`ι = 0.085`; the case reaches a `2.4e-14` variational residual and `3.1e-14`
-normalized divergence. The leg-return junction is frozen as an explicit design
-parameter (`axis_coefficient_count`): the axis is built at a fixed base control
-count and the solve basis is exactly refined, so the junction stops sharpening.
-With that contract the **circular-section lane is supported** — its strong-force
-gate converges monotonically under same-geometry refinement (device-normalized
-all-volume `0.204 → 0.176 → 0.118`, minor-radius bulk `0.00304 → 0.00261 →
-0.00175`, below the `0.05` gate). The **rotating-elliptical-section hybrid
-remains a research candidate**, held back by a separately scoped near-axis
-representation defect in the rotating section rather than by the junction. The
-same implicit API differentiates the periodic boundary and axis controls.
+A closed periodic hybrid joins two straight mirror legs to two curved
+stellarator returns on a rotation-minimizing B-spline axis. A `section_turns`
+parameter turns the elliptical cross-section continuously around the circuit (a
+genuine rotating-ellipse section) while the legs keep an exactly straight axis;
+two turns lift the transform from the return-only `ι = 0.085` to `ι = 0.141` at
+`s = 0.75`. Freezing the leg-return junction as an explicit design parameter
+makes the **circular-section lane supported** (its force gate converges under
+refinement); the **rotating-elliptical-section hybrid is a research candidate**
+— the toroidal rotation passes the minor-radius bulk gate but its
+device-normalized force still plateaus on the scoped near-axis representation
+issue. The same implicit API differentiates the periodic boundary and axis
+controls.
 
 ![Periodic B-spline stellarator–mirror hybrid: straight legs, rotating returns, B-spline axis, and boundary |B|](docs/_static/figures/stellarator_mirror_hybrid.png)
+
+### QI–mirror hybrid: Fourier vs B-spline
+
+A quasi-isodynamic (QI) stellarator already has poloidally closed `|B|` contours
+and near-straight (low-curvature) magnetic-axis segments at its
+field-period-symmetric planes, so cutting the axis there and inserting a straight
+mirror cell is natural. `examples/qi_mirror_hybrid_fourier_vs_bspline.py` solves
+`input.nfp2_QI` (VMEC, Fourier), reads its magnetic axis, and confirms the four
+curvature minima of an nfp=2 QI axis: `κ` drops to **0.036 1/m** at `φ = 0, π` and
+**0.088 1/m** at `φ = π/2, 3π/2` (a 70× spread over the torus). It cuts at all
+**four** symmetry planes and inserts a straight mirror leg at each **along the
+local axis tangent** — so every leg continues the axis in its own direction.
+Choosing the leg lengths so the inserted displacements cancel and reflecting one
+half about the `x` axis makes the four-legged racetrack **stellarator symmetric**,
+with each leg tangent to the axis (junction break `~0.04°`, not a corner). It then
+represents that closed hybrid axis both ways:
+
+| representation | straight mirror leg | seam behaviour |
+| --- | --- | --- |
+| **Fourier** (VMEC-native, global) | ringing floors near **2e-6 m** at 387 DOF | Gibbs-type ringing everywhere at once |
+| **B-splines** (`vmex.mirror`, local) | **machine precision** (`1.5e-12 m` once each leg spans ≳30 knots) | error confined to a few knots around the junction |
+
+Only the local B-spline reproduces the exactly-straight cell to machine
+precision; the residual maximum of both is set by the leg–return **curvature**
+break (a cubic B-spline is `C²` and also rounds a curvature step — an honest
+shared limit). The B-spline lane also solves the hybrid equilibrium
+(divergence-free to `9e-14`, `ι = 0.11`, mirror ratio 1.8; force residual
+`1.3e-2`). A literal VMEC re-solve of a straight-axis device is degenerate
+in cylindrical `(R, φ, Z)` coordinates — which is exactly why the closed-axis
+B-spline lane exists.
+
+![QI–mirror hybrid: QI axis with the curvature-minimum cut locations, the spliced straight-leg hybrid axis, hybrid |B|, and the Fourier-vs-B-spline accuracy at the seam](docs/_static/figures/qi_mirror_hybrid.png)
 
 ### Run the mirror examples
 
@@ -568,12 +591,14 @@ same implicit API differentiates the periodic boundary and axis controls.
 python examples/mirror_fixed_boundary_nonaxisymmetric.py
 python examples/mirror_free_boundary_beta_scan.py
 python examples/stellarator_mirror_hybrid.py
+python examples/qi_mirror_hybrid_fourier_vs_bspline.py
 ```
 
 Open-mirror `mout_*.nc` files plot with `vmex --plot mout_*.nc`. The
 [mirror-geometry documentation](https://vmex.readthedocs.io/en/latest/mirror_geometry.html)
-derives the coordinate and field models, defines the boundary conditions and
-residuals, and records the validation and derivative limits.
+derives the coordinate and field models and records the coil geometry,
+convergence residuals, promotion-gate ladders, and derivative-validation
+numbers behind these figures.
 
 ## License
 

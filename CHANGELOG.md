@@ -6,6 +6,76 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 
 ## [Unreleased]
 
+### Changed
+- **QI-mirror hybrid: tangent-aligned legs at all four symmetry planes.**
+  `splice_straight_legs` now inserts each straight mirror leg *along the local
+  axis tangent* (rather than a shared transverse "bisector" that produced a
+  ~36-degree corner), and cuts the nfp=2 QI axis at all **four** low-curvature
+  symmetry planes (rather than two). Per-cut leg lengths are chosen so the
+  inserted displacements cancel (splitting into two symmetry classes), and one
+  half is reflected 180 degrees about the x axis, so the four-legged racetrack is
+  exactly stellarator symmetric and every leg/return junction is
+  tangent-continuous (residual break ~0.04 deg). `QIMirrorSplice` gains
+  `leg_lengths` / `leg_directions` (per cut) and its `leg_windows` / `cut_*`
+  fields are now length-`N`; `build_qi_mirror_hybrid` accepts N cuts.
+
+## [0.3.0] — 2026-07-20
+
+### Added
+- **QI-mirror hybrid (Fourier vs B-spline).** `vmex.mirror.splice_straight_legs`
+  cuts a closed magnetic axis at its curvature minima and inserts exactly-straight
+  mirror legs (closing the loop to rounding); `build_qi_mirror_hybrid` fits the
+  spliced axis into the closed-spline solve basis with a circular section and
+  returns a solvable `StellaratorMirrorSetup`. The new example
+  `examples/qi_mirror_hybrid_fourier_vs_bspline.py` cuts the nfp=2 QI axis at its
+  low-curvature symmetry planes and compares the two representations: a global
+  Fourier series rings at the straight↔curved seam and decays only ~1/N, while
+  the local B-spline reproduces the straight mirror cell to machine precision
+  (~1e-12) once each leg is backed by enough collinear controls. See
+  `docs/mirror_geometry.rst`.
+- **Toroidally rotating ellipse for the stellarator-mirror hybrid.** A new
+  `section_turns` parameter on `build_stellarator_mirror_hybrid` /
+  `stellarator_mirror_section_coefficients` turns the elliptical cross-section
+  continuously around the closed circuit by that many full turns, superposed on
+  the return-only 90-degree rotation, while the legs keep an exactly straight
+  axis. Two turns lift the traced transform from the return-only `iota=0.085` to
+  `iota=0.141` at `s=0.75`. The default `section_turns=0` reproduces the prior
+  return-only geometry exactly. The rotating-elliptical-section hybrid stays a
+  research candidate: the toroidal rotation passes the minor-radius bulk
+  promotion gate but its device-normalized strong force still plateaus on the
+  scoped near-axis representation defect.
+
+### Changed
+- **Axisymmetric free-boundary mirror validated through 50 % β** (was 25 %). A
+  size-scaled Krylov span in the Newton-GMRES polish clears the fine-grid restart
+  starvation, and a fine grid (`ns=13, nxi=25, elements=13, exterior_ntheta=24`)
+  converges every β point from 0 through 50 % (≤ 44 Newton-GMRES iterations) with
+  bulk minor-radius force `1.21e-4 → 2.41e-3`, far below the `0.05` promotion
+  gate. The older per-grid device-length force figures are reframed as a
+  coarser-grid legacy diagnostic. See `benchmarks/mirror_free_boundary_axisymmetric.json`
+  (`fine_grid_promotion.fine_grid_50`).
+- **CI timeout headroom** for the borderline parity goldens (25 → 35 min) and
+  implicit-gradient (10 → 15 min) jobs, so slow shared runners no longer cancel
+  otherwise-passing suites.
+
+### Fixed
+- **ESSOS `Coils.from_json`.** Current ESSOS renamed the coils-JSON loader to the
+  `Coils.from_json` classmethod and removed the old `Coils_from_json` free
+  function; the `--coils` CLI path and the two ESSOS coil examples now use it
+  (with a `hasattr` fallback to the legacy name).
+- **ESSOS `Coils.to_mgrid` guard.** The `--coils` coils→mgrid path now raises a
+  clear `VmecInputError` (instead of an opaque `AttributeError`) on ESSOS builds
+  that predate `Coils.to_mgrid`, and the matching test skips rather than fails.
+- **`tools/fetch_assets.py` fixture download.** The fetch constants pointed at
+  non-existent `vmex_*.tar.gz` release tarballs (the published bundles kept their
+  pre-rename `vmec_jax_*.tar.gz` names), 404-ing every fixture download; repointed
+  at the real filenames (SHA256 unchanged).
+- **Stale lasym-rejection test + docstrings.** `test_..._rejects_lasym_decks`
+  and two `optimize.py` docstrings claimed `jac="implicit"` requires
+  `lasym = False`; the implicit lane has supported (FD-validated) lasym since the
+  4-family boundary map + traceable `readin.f` delta rotation landed. Replaced the
+  test with a fast 4-family boundary-map round-trip and corrected the docstrings.
+
 ## [0.2.0] — 2026-07-18
 
 First release under the **VMEX** name (formerly `vmec-jax`). Highlights:

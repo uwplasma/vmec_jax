@@ -348,10 +348,19 @@ def build_stellarator_mirror_hybrid(
     return_radius: float = 2.5,
     semi_major: float = 0.45,
     semi_minor: float = 0.30,
+    section_turns: int = 0,
     axial_flux_derivative: Array = 0.02,
     quadrature_order: int = 4,
 ) -> StellaratorMirrorSetup:
     """Build a closed two-leg mirror with rotating stellarator returns.
+
+    ``section_turns`` turns the elliptical cross-section continuously around the
+    closed circuit by that many full ``2*pi`` turns, superposed on the
+    return-only 90-degree rotation. The straight legs keep an exactly straight
+    axis; only the ellipse they carry rotates, so a nonzero ``section_turns``
+    raises the rotational transform (by amplifying the current-driven transform:
+    ``iota`` 0.085 -> 0.141 at ``s=0.75`` for two turns). The default ``0``
+    reproduces the legacy return-only rotation.
 
     ``axis_coefficient_count`` freezes the leg-return junction transition. The
     junction between an exactly straight leg (zero curvature) and a circular
@@ -400,6 +409,7 @@ def build_stellarator_mirror_hybrid(
         jnp.asarray(discretization.grid.theta),
         semi_major=semi_major,
         semi_minor=semi_minor,
+        section_turns=section_turns,
     )
     if source_basis is not basis:
         _, axis_coefficients = source_basis.refine_periodic_uniform(
@@ -472,6 +482,276 @@ def _initialize_closed_vacuum_stream_function(
     coefficients = jnp.broadcast_to(lam[:, :, None], state.lambda_coefficients.shape)
     coefficients = coefficients.at[0].set(coefficients[1])
     return SplineMirrorState(state.radius_coefficients, coefficients)
+
+
+@dataclass(frozen=True)
+class QIMirrorSplice:
+    """Closed magnetic axis formed by inserting straight mirror legs.
+
+    ``points`` is a closed, arc-length-orderable polyline (the final point
+    precedes the first).  A quasi-isodynamic axis is cut at its low-curvature
+    symmetry planes (``2 * nfp`` of them -- four for ``nfp = 2``) and at each cut
+    an exactly-straight mirror leg is inserted *along the local axis tangent*, so
+    every leg continues the axis in its own direction.  The per-cut leg lengths
+    (``leg_lengths``, one per cut) are chosen so the inserted displacements
+    cancel (the loop closes), and the curve is assembled from one
+    stellarator-symmetric half reflected 180 degrees about the ``x`` axis, so the
+    result is stellarator symmetric to rounding.
+
+    ``leg_windows`` are the arc-length spans of the straight legs (one per cut,
+    in curve order).  ``corner_angle`` (degrees) is the residual tangent break at
+    the leg/return junctions -- now near zero, since each leg is tangent to the
+    axis: the seam is a *curvature* break (the exactly-zero-curvature leg meeting
+    the finite-curvature return), which a global Fourier basis still rings on and
+    a local B-spline represents cleanly.  ``closure_error`` is the residual of the
+    closed loop (zero to rounding by construction).
+    """
+
+    points: np.ndarray
+    leg_windows: tuple[tuple[float, float], ...]
+    total_length: float
+    corner_angle: float
+    closure_error: float
+    leg_directions: np.ndarray
+    leg_lengths: np.ndarray
+    cut_points: np.ndarray
+    cut_indices: tuple[int, ...]
+
+
+def _closed_tangent(points: np.ndarray, index: int) -> np.ndarray:
+    """Unit central-difference tangent of a closed polyline at ``index``."""
+
+    count = points.shape[0]
+    direction = points[(index + 1) % count] - points[(index - 1) % count]
+    norm = float(np.linalg.norm(direction))
+    if norm == 0.0:
+        raise ValueError("degenerate axis tangent at the requested cut")
+    return direction / norm
+
+
+def _sample_closed_polyline(points: np.ndarray, arc_length: np.ndarray) -> np.ndarray:
+    """Interpolate a closed polyline at requested arc-length coordinates."""
+
+    closed = np.concatenate((points, points[:1]), axis=0)
+    lengths = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    total = float(cumulative[-1])
+    query = np.mod(np.asarray(arc_length, dtype=float), total)
+    return np.stack([np.interp(query, cumulative, closed[:, j]) for j in range(3)], axis=-1)
+
+
+#: stellarator symmetry acting on Cartesian points -- a 180 degree rotation
+#: about the ``x`` axis, ``(x, y, z) -> (x, -y, -z)`` (the image of ``phi -> -phi``
+#: on a magnetic axis with ``R(-phi) = R(phi)``, ``Z(-phi) = -Z(phi)``).
+_STELL_SYMMETRY = np.diag([1.0, -1.0, -1.0])
+
+
+def _closure_leg_lengths(tangents: np.ndarray, base_length: float) -> np.ndarray:
+    """Per-cut leg lengths closest to ``base_length`` with ``sum_k L_k t_k = 0``.
+
+    Inserting a straight leg of length ``L_k`` along the local unit tangent
+    ``t_k`` at each cut translates the downstream axis by ``L_k t_k``; the loop
+    closes iff those displacements cancel.  This returns the minimum-norm
+    departure from a uniform ``base_length`` that satisfies the constraint --
+    the least-squares projection of ``base_length * 1`` onto the null space of
+    the ``(3, N)`` tangent matrix.  For a stellarator-symmetric axis cut at its
+    symmetry planes the tangents pair up and the result splits into a few equal
+    length classes (two for ``nfp = 2``).
+    """
+
+    matrix = np.asarray(tangents, dtype=float).T  # (3, N)
+    target = np.full(matrix.shape[1], float(base_length))
+    return target - np.linalg.pinv(matrix) @ (matrix @ target)
+
+
+def splice_straight_legs(
+    axis_points: Array,
+    *,
+    cut_indices: tuple[int, ...],
+    straight_length: float,
+    samples_per_leg: int = 256,
+) -> QIMirrorSplice:
+    """Cut a stellarator-symmetric closed axis and insert tangent-aligned legs.
+
+    The closed input ``axis_points`` (shape ``(P, 3)``) is cut at the ``N``
+    ``cut_indices`` (its low-curvature symmetry planes -- ``2 * nfp`` of them),
+    and at each cut an exactly-straight mirror leg is inserted **along the local
+    axis tangent**, so every leg continues the axis in its own direction (no
+    shared "bisector", so each leg meets its curved returns tangentially).  The
+    per-cut leg lengths are set by :func:`_closure_leg_lengths` so the inserted
+    displacements cancel, and the curve is built from one stellarator-symmetric
+    half (between the two symmetry-fixed cuts) reflected 180 degrees about the
+    ``x`` axis, so the racetrack is stellarator symmetric to rounding.
+
+    Requires a stellarator-symmetric axis whose cuts include exactly two
+    symmetry-fixed planes (where the tangent reverses under the symmetry); an
+    ``nfp = 2`` QI axis cut at its four low-curvature planes satisfies this.
+    """
+
+    points = np.asarray(axis_points, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("axis_points must have shape (P, 3)")
+    count = points.shape[0]
+    cuts = tuple(int(c) for c in cut_indices)
+    n_cut = len(cuts)
+    if n_cut < 2:
+        raise ValueError("cut_indices must contain at least two cuts")
+    if list(cuts) != sorted(cuts) or len(set(cuts)) != n_cut or cuts[0] < 0 or cuts[-1] >= count:
+        raise ValueError("cut_indices must be strictly increasing, distinct, and in range")
+    if float(straight_length) <= 0.0:
+        raise ValueError("straight_length must be positive")
+    if int(samples_per_leg) < 4:
+        raise ValueError("samples_per_leg must be at least four")
+
+    tangents = np.stack([_closed_tangent(points, c) for c in cuts])
+    lengths = _closure_leg_lengths(tangents, float(straight_length))
+    if not np.all(lengths > 0.0):
+        raise ValueError(
+            "no positive tangent-aligned closing legs exist for these cuts; supply a "
+            "stellarator-symmetric axis cut at its low-curvature symmetry planes"
+        )
+    fixed = [k for k in range(n_cut)
+             if np.allclose(_STELL_SYMMETRY @ tangents[k], -tangents[k], atol=1.0e-4)]
+    if len(fixed) != 2:
+        raise ValueError(
+            f"expected exactly two stellarator-symmetry-fixed cuts, found {len(fixed)}; "
+            "supply a stellarator-symmetric axis cut at its symmetry planes"
+        )
+    left, right = fixed
+
+    frac = np.linspace(0.0, 1.0, int(samples_per_leg), endpoint=True)[:, None]
+
+    def curved_arc(i: int, j: int) -> np.ndarray:
+        ci, cj = cuts[i], cuts[j]
+        return points[ci : cj + 1] if ci < cj else np.vstack((points[ci:], points[: cj + 1]))
+
+    # Forward half: leg-``left`` midpoint (on the x axis) -> leg-``right`` midpoint.
+    pieces: list[np.ndarray] = []
+    on_leg: list[np.ndarray] = []
+    start = np.array([points[cuts[left], 0], 0.0, 0.0])         # symmetry-fixed midpoint
+    seg = start + frac * (0.5 * lengths[left] * tangents[left])  # first half of leg-``left``
+    pieces.append(seg); on_leg.append(np.ones(len(seg), dtype=bool))
+    offset = seg[-1] - points[cuts[left]]
+    for k in range(left, right):
+        arc = curved_arc(k, k + 1) + offset
+        pieces.append(arc[1:]); on_leg.append(np.zeros(len(arc) - 1, dtype=bool))
+        offset = arc[-1] - points[cuts[k + 1]]
+        length_k = lengths[k + 1] * (0.5 if k + 1 == right else 1.0)
+        seg = arc[-1] + frac[1:] * (length_k * tangents[k + 1])
+        pieces.append(seg); on_leg.append(np.ones(len(seg), dtype=bool))
+        if k + 1 != right:
+            offset = seg[-1] - points[cuts[k + 1]]
+    forward = np.concatenate(pieces, axis=0)
+    forward_leg = np.concatenate(on_leg)
+
+    # Backward half = the forward half reflected 180 degrees about x, reversed.
+    backward = (forward @ _STELL_SYMMETRY)[::-1]
+    closed = np.concatenate((forward, backward[1:-1]), axis=0)
+    closed_leg = np.concatenate((forward_leg, forward_leg[::-1][1:-1]))
+
+    # Roll so index 0 sits on a curved return, making every leg a contiguous run.
+    arc_index = int(np.argmax(~closed_leg))
+    closed = np.roll(closed, -arc_index, axis=0)
+    closed_leg = np.roll(closed_leg, -arc_index)
+
+    seg_len = np.linalg.norm(np.diff(np.concatenate((closed, closed[:1])), axis=0), axis=1)
+    arclen = np.concatenate(([0.0], np.cumsum(seg_len)))
+    total = float(arclen[-1])
+    n_pts = len(closed_leg)
+    # index 0 sits on a return (rolled above), so every leg is a contiguous run
+    starts = [i for i in range(n_pts) if closed_leg[i] and not closed_leg[i - 1]]
+    ends = [i for i in range(n_pts) if closed_leg[i] and not closed_leg[(i + 1) % n_pts]]
+    leg_windows = tuple((float(arclen[s]), float(arclen[e])) for s, e in zip(starts, ends))
+
+    corner = 0.0
+    for s in starts:
+        leg_dir = closed[(s + 1) % n_pts] - closed[s]
+        arc_dir = closed[s] - closed[(s - 1) % n_pts]
+        cos = float(np.dot(leg_dir, arc_dir) / (np.linalg.norm(leg_dir) * np.linalg.norm(arc_dir) + 1e-30))
+        corner = max(corner, float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))))
+    # loop closure = residual of the cancelling leg displacements (0 by construction)
+    closure = float(np.linalg.norm((lengths[:, None] * tangents).sum(axis=0)))
+    return QIMirrorSplice(
+        points=closed,
+        leg_windows=leg_windows,
+        total_length=total,
+        corner_angle=corner,
+        closure_error=closure,
+        leg_directions=tangents,
+        leg_lengths=lengths,
+        cut_points=points[list(cuts)],
+        cut_indices=cuts,
+    )
+
+
+def build_qi_mirror_hybrid(
+    axis_points: Array,
+    resolution: MirrorResolution,
+    *,
+    cut_indices: tuple[int, ...],
+    straight_length: float,
+    section_radius: float,
+    coefficient_count: int = 64,
+    axial_flux_derivative: Array = 0.02,
+    quadrature_order: int = 3,
+    samples_per_leg: int = 256,
+) -> StellaratorMirrorSetup:
+    """Build a solvable closed-spline hybrid from a spliced QI magnetic axis.
+
+    The closed ``axis_points`` are spliced with :func:`splice_straight_legs`,
+    fitted to a periodic cubic B-spline of ``coefficient_count`` controls at
+    uniform arc length, and wrapped with a constant circular cross-section of
+    radius ``section_radius``.  A circular section is rotation-invariant, so the
+    large frame holonomy of a fully three-dimensional QI axis does not enter the
+    boundary.  The returned :class:`StellaratorMirrorSetup` feeds
+    :func:`solve_fixed_boundary` exactly like the analytic racetrack.
+    """
+
+    if float(section_radius) <= 0.0:
+        raise ValueError("section_radius must be positive")
+    splice = splice_straight_legs(
+        axis_points,
+        cut_indices=cut_indices,
+        straight_length=straight_length,
+        samples_per_leg=samples_per_leg,
+    )
+    discretization = SplineMirrorDiscretization.build_closed(
+        resolution,
+        coefficient_count=coefficient_count,
+        quadrature_order=quadrature_order,
+    )
+    basis = discretization.spline
+    nodes = np.asarray(basis.collocation_nodes)
+    control_values = _sample_closed_polyline(
+        splice.points, nodes / (2.0 * np.pi) * splice.total_length
+    )
+    axis_coefficients = jnp.asarray(basis.fit(control_values, axis=0))
+    axis = evaluate_closed_spline_axis(
+        axis_coefficients,
+        basis,
+        discretization.grid.z,
+        initial_normal=jnp.asarray([0.0, 0.0, 1.0]),
+    )
+    edge = jnp.full((discretization.grid.ntheta, basis.size), float(section_radius))
+    boundary = SplineMirrorBoundary(edge)
+    radius = jnp.broadcast_to(edge[None], (resolution.ns,) + edge.shape)
+    nested_state = discretization.project_fixed_boundary(
+        SplineMirrorState(radius, jnp.zeros_like(radius)),
+        boundary,
+    )
+    initial_state = _initialize_closed_vacuum_stream_function(
+        nested_state,
+        discretization,
+        axis,
+        axial_flux_derivative=axial_flux_derivative,
+    )
+    return StellaratorMirrorSetup(
+        discretization,
+        axis_coefficients,
+        axis,
+        boundary,
+        initial_state,
+    )
 
 
 def trace_closed_field_line(
@@ -1202,13 +1482,16 @@ jax.tree_util.register_dataclass(
 __all__ = [
     "ClosedFieldLine",
     "CubicBSplineBasis",
+    "QIMirrorSplice",
     "SplineMirrorBoundary",
     "SplineMirrorDiscretization",
     "SplineMirrorSolveResult",
     "SplineMirrorState",
     "StellaratorMirrorSetup",
+    "build_qi_mirror_hybrid",
     "build_stellarator_mirror_hybrid",
     "solve_fixed_boundary",
     "solve_fixed_boundary_from_radius",
+    "splice_straight_legs",
     "trace_closed_field_line",
 ]

@@ -39,7 +39,10 @@ def test_public_api_keeps_numerical_kernels_in_owning_modules() -> None:
         "SplineMirrorBoundary",
         "SplineMirrorDiscretization",
         "SplineMirrorState",
+        "QIMirrorSplice",
         "build_stellarator_mirror_hybrid",
+        "build_qi_mirror_hybrid",
+        "splice_straight_legs",
         "trace_closed_field_line",
         "solve_fixed_boundary",
         "solve_fixed_boundary_from_radius",
@@ -63,7 +66,7 @@ def test_public_api_keeps_numerical_kernels_in_owning_modules() -> None:
     }
     assert required <= set(mirror_api.__all__)
     assert internal.isdisjoint(mirror_api.__all__)
-    assert len(mirror_api.__all__) == 25
+    assert len(mirror_api.__all__) == 28
     assert mirror_api.solve_fixed_boundary.__module__ == "vmex.mirror.splines"
 
 
