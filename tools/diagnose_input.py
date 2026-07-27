@@ -22,6 +22,7 @@ from typing import Any
 import jax
 import numpy as np
 
+from vmex.core.errors import VmecError
 from vmex.core.geometry import half_mesh_jacobian
 from vmex.core.input import UnsupportedInputModeError, VmecInput
 from vmex.core.solver import (
@@ -162,6 +163,23 @@ def diagnose(path: Path, *, details: bool = False) -> int:
         "angular grid meets VMEC automatic-resolution floor: "
         f"{'PASS' if angular_grid_ok else 'FAIL'}"
     )
+    # Free boundary with a tabulated field: NZETA must divide the mgrid's
+    # toroidal planes per period (mgrid_mod.f ier=9).  Privacy-safe output:
+    # PASS/FAIL/n_a only, no deck values.
+    mgrid_compat = "n/a"
+    if bool(getattr(inp, "lfreeb", False)):
+        try:
+            from vmex.core.freeboundary import (
+                _external_field_from_input, free_boundary_resolution,
+            )
+            field = _external_field_from_input(inp, None)
+            free_boundary_resolution(inp, field)
+            mgrid_compat = "PASS"
+        except VmecError:
+            mgrid_compat = "FAIL"
+        except Exception:  # missing/unreadable mgrid: not this check's job
+            mgrid_compat = "n/a"
+    print(f"mgrid toroidal planes compatible with NZETA: {mgrid_compat}")
     sqrt_g = np.asarray(jacobian.sqrt_g)[1:]
     jacobian_finite = np.isfinite(sqrt_g).all()
     jacobian_nonzero = _ok(health.jacobian_nonzero)

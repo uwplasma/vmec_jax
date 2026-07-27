@@ -130,13 +130,6 @@ def fixed_input(tmp_path_factory) -> VmecInput:
     return VmecInput.from_file(str(path))
 
 
-@pytest.fixture(scope="module")
-def free_input(tmp_path_factory) -> VmecInput:
-    path = tmp_path_factory.mktemp("hm_free") / "input.hm_free"
-    path.write_text(stress_indata_text(lfreeb=True))
-    return VmecInput.from_file(str(path))
-
-
 def test_all_reported_features_parse_together(fixed_input: VmecInput) -> None:
     """Every reported ingredient survives one combined parse."""
     inp = fixed_input
@@ -178,19 +171,149 @@ def _require_lawful(run) -> tuple[float, float, float]:
 
 
 @pytest.mark.full  # ~minutes: 238-mode fixed ladder with LFORBAL + recovery
-def test_fixed_boundary_238_mode_ladder_is_lawful(fixed_input: VmecInput) -> None:
-    fsq = _require_lawful(lambda: solve_multigrid(
-        fixed_input, verbose=False, raise_on_max_iterations=True))
-    assert all(v < 1.0e12 for v in fsq), f"residuals diverged: {fsq}"
+def test_fixed_boundary_238_mode_ladder_converges(tmp_path) -> None:
+    """The public fixed 238-mode case CONVERGES at a realistic budget.
+
+    Review finding: a 30-iteration budget passed via the lawful
+    ``VmecConvergenceError`` before proving anything.  With 1000 iterations
+    the deck converges (~453 iterations to ~1e-11), so the test now demands
+    convergence outright.
+    """
+    path = tmp_path / "input.hm_fixed_1000"
+    path.write_text(stress_indata_text(lfreeb=False, niter=1000))
+    inp = VmecInput.from_file(str(path))
+    result = solve_multigrid(inp, verbose=False, raise_on_max_iterations=False)
+    assert bool(result.converged), (
+        f"fixed 238-mode ladder failed to converge: fsqr={float(result.fsqr):.2e}")
 
 
-@pytest.mark.full  # ~minutes: 238-mode free ladder against the generated coils
-def test_free_boundary_238_mode_ladder_is_lawful(free_input: VmecInput) -> None:
-    field = qi_free_field(int(free_input.nfp))
+@pytest.mark.full  # ~minutes: generated-coils free ladder PAST vacuum activation
+def test_free_boundary_238_mode_ladder_survives_activation(tmp_path) -> None:
+    """The generated-coils free case stays finite THROUGH vacuum activation.
+
+    Review finding: the old 30-iteration budget ended before activation
+    (iteration ~68) and therefore could not catch the post-activation NaN
+    produced by an angularly incompatible mgrid/NZETA pairing.  With the
+    compatibility policy the automatic resolution selects the field table's
+    24 planes, and the run must remain finite well past activation.  It is
+    NOT expected to converge: the generated coil set is deliberately poor
+    (vacuum and plasma ``R*BTOR`` disagree), and the reference code on a
+    compatible grid does not converge it either -- the combined CTH case
+    below carries the convergence requirement.
+    """
+    path = tmp_path / "input.hm_free_200"
+    path.write_text(stress_indata_text(lfreeb=True, niter=200))
+    inp = VmecInput.from_file(str(path))
+    field = qi_free_field(int(inp.nfp))
+
+    lines: list[str] = []
+
+    def collect(text: str = "", end: str = "\n") -> None:
+        lines.append(str(text))
+
     fsq = _require_lawful(lambda: solve_free_boundary_multigrid(
-        free_input, external_field=field, verbose=False,
+        inp, external_field=field, verbose=True, emit=collect,
         raise_on_max_iterations=True))
-    assert all(v < 1.0e12 for v in fsq), f"residuals diverged: {fsq}"
+    output = "\n".join(lines)
+    assert "VACUUM PRESSURE TURNED ON" in output, (
+        "budget ended before vacuum activation -- the post-activation "
+        "regression surface is not exercised")
+    assert all(np.isfinite(v) for v in fsq)
+
+
+def combined_cth_indata_text() -> str:
+    """The 238-mode COMBINED case: every reported feature on a deck that
+    converges in both codes.
+
+    Base: the public CTH-like free-boundary fixture, raised to
+    ``MPOL=13/NTOR=9`` (mnmax = 238 exactly; the added modes start at zero),
+    with ``LFORBAL=T``, ``PRECON_TYPE='NONE'``, ``PREC2D_THRESHOLD=1e-30``,
+    ``APHI``, the magnetic axis REMOVED (recovery path), the m=0 boundary
+    row as indexed Fortran sections, automatic toroidal resolution
+    (``NZETA=0`` -- the mgrid compatibility policy selects the table's 36
+    planes), and a 15->25 radial ladder crossing vacuum activation.
+    """
+    import re
+
+    text = (DATA / "input.cth_like_free_bdy").read_text().split("&END")[0]
+    text = text.replace("  MPOL = 5,", "  MPOL = 13,")
+    text = text.replace("  NTOR = 4,", "  NTOR = 9,")
+    text = text.replace("  NZETA = 36,", "  NZETA = 0,")
+    text = text.replace("  NS_ARRAY    = 15,", "  NS_ARRAY    = 15, 25,")
+    text = text.replace("  FTOL_ARRAY  = 1.0E-10,",
+                        "  FTOL_ARRAY  = 1.0E-8, 1.0E-8,")
+    text = text.replace("  NITER_ARRAY = 2500,", "  NITER_ARRAY = 2500, 2500,")
+    text = text.replace(
+        "  LFREEB = T,",
+        "  LFREEB = T,\n  LFORBAL = T,\n  PRECON_TYPE = 'NONE',\n"
+        "  PREC2D_THRESHOLD = 1.0E-30,\n  APHI = 1.0, 0.0, 0.0,")
+    text = re.sub(r"  RAXIS_CC\(\:\) =[^\n]*\n", "", text)
+    text = re.sub(r"  ZAXIS_CS\(\:\) =[^\n]*\n", "", text)
+    m0_r, m0_z = {}, {}
+    for n in range(0, 5):
+        mr = re.search(rf"  RBC\({n},0\) = ([^,\n]+),\n", text)
+        mz = re.search(rf"  ZBS\({n},0\) = ([^,\n]+),\n", text)
+        m0_r[n], m0_z[n] = mr.group(1), mz.group(1)
+        text = text.replace(mr.group(0), "")
+        text = text.replace(mz.group(0), "")
+    r_sec = " ".join(m0_r[n] for n in range(0, 5))
+    z_sec = " ".join(m0_z[n] for n in range(0, 5))
+    text = text.replace(
+        "  RBC(-4,1)",
+        f"  RBC(0:4,0) = {r_sec}\n  ZBS(0:4,0) = {z_sec}\n  RBC(-4,1)")
+    return text + "&END\n"
+
+
+@pytest.mark.full  # ~15 min: the full claimed path in ONE deck, vs VMEC2000
+def test_combined_238_mode_cth_free_ladder_matches_vmec2000(tmp_path) -> None:
+    """All reported ingredients at once, on a CONVERGENT deck, vs VMEC2000.
+
+    Fresh local xvmec2000/PARVMEC on this exact generated deck (recorded
+    2026-07-27, ``NZETA = 36`` explicit since VMEC2000 has no automatic
+    compatible selection):
+
+    * 238 Fourier modes; vacuum on at iteration 38 (rung 1);
+    * rung 1 (ns=15) converges at 260 iterations (fsqr 9.73e-9);
+    * rung 2 (ns=25) converges at 156 iterations (fsqr 9.84e-9);
+    * wout: ``wb = 1.283590394747e-3``, ``rmnc(axis,0) = 0.77332874``,
+      ``iotaf(edge) = 0.8690375``, ``aspect = 5.4332138``.
+
+    VMEX must activate vacuum on rung 1, carry it across the transition,
+    converge, and land on the same equilibrium.
+    """
+    mgrid = DATA / "mgrid_cth_like.nc"
+    if not mgrid.exists():
+        pytest.skip("mgrid fixture not fetched")
+    path = tmp_path / "input.combined_238"
+    path.write_text(combined_cth_indata_text())
+    inp = VmecInput.from_file(str(path))
+    res = resolution_from_input(inp, ns=15)
+    assert int(res.mnmax) == 238
+    assert bool(inp.lforbal) and not np.any(np.asarray(inp.raxis_c))
+
+    lines: list[str] = []
+
+    def collect(text: str = "", end: str = "\n") -> None:
+        lines.append(str(text))
+
+    result = solve_free_boundary_multigrid(
+        inp, mgrid_path=str(mgrid), verbose=True, emit=collect,
+        raise_on_max_iterations=False)
+
+    output = "\n".join(lines)
+    banner_at = output.find("VACUUM PRESSURE TURNED ON")
+    second_rung_at = output.rfind("NS = ")
+    assert banner_at != -1 and second_rung_at > banner_at, (
+        "vacuum did not activate before the radial transition")
+    assert bool(result.converged), (
+        f"combined 238-mode ladder failed to converge "
+        f"(fsqr={float(result.fsqr):.2e})")
+    assert int(result.iterations) <= 500, (
+        f"carried-vacuum rung took {int(result.iterations)} iterations; "
+        "VMEC2000 needs 156")
+    # same equilibrium as the recorded VMEC2000 wout
+    assert float(result.r00) == pytest.approx(0.77332874, rel=2e-4)
+    assert float(result.wb) == pytest.approx(1.283590394747e-3, rel=2e-4)
 
 
 @pytest.mark.full
@@ -252,3 +375,54 @@ def test_vacuum_survives_a_radial_transition() -> None:
     assert int(result.iterations) <= 500, (
         f"post-transition rung took {int(result.iterations)} iterations; "
         "VMEC2000 needs 143 -- the carried vacuum state is not being reused")
+
+
+def test_mgrid_nzeta_policy_matches_vmec2000() -> None:
+    """VMEC2000's angular-compatibility rule (``mgrid_mod.f`` ier=9).
+
+    A tabulated field with ``kp`` planes per period constrains the solver's
+    toroidal grid: NZETA must divide ``kp`` evenly.  Automatic resolution
+    (``NZETA = 0``) must therefore select the smallest DIVISOR of ``kp`` at
+    or above the ``2*ntor + 4`` floor — for the generated 24-plane field at
+    ``NTOR = 9`` that is 24, not the floor 22 (the incompatible 24/22
+    pairing produced NaN after vacuum activation; VMEC2000 rejects it
+    before solving).  An explicitly incompatible NZETA raises the typed
+    input error before iteration one.
+    """
+    from vmex.core.errors import VmecInputError
+    from vmex.core.freeboundary import free_boundary_resolution
+
+    field = qi_free_field(2)
+    kp = int(field.br.shape[1])
+    assert kp == 24  # the generated fixture's plane count
+
+    def parse(text: str, tmp=[0]) -> VmecInput:
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "input.nzeta_policy"
+            path.write_text(text)
+            return VmecInput.from_file(str(path))
+
+    # automatic: smallest divisor of kp at/above the 2*ntor+4 floor
+    auto = parse(stress_indata_text(lfreeb=True))
+    res = free_boundary_resolution(auto, field, ns=21)
+    assert int(res.nzeta) == 24
+    assert kp % int(res.nzeta) == 0
+
+    # explicit compatible divisors pass through unchanged
+    ok = parse(
+        stress_indata_text(lfreeb=True).replace("NZETA = 0", "NZETA = 12"))
+    assert int(free_boundary_resolution(ok, field, ns=21).nzeta) == 12
+
+    # explicit incompatible NZETA: typed error before iteration one
+    bad = parse(
+        stress_indata_text(lfreeb=True).replace("NZETA = 0", "NZETA = 22"))
+    with pytest.raises(VmecInputError, match="divide evenly"):
+        free_boundary_resolution(bad, field, ns=21)
+
+    # a non-tabulated (analytic) field imposes no constraint
+    class _Analytic:
+        def b_cyl(self, r, phi, z):  # pragma: no cover - never called
+            return r, phi, z
+
+    assert int(free_boundary_resolution(bad, _Analytic(), ns=21).nzeta) == 22

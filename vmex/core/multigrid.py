@@ -436,6 +436,7 @@ def solve_free_boundary_multigrid(
     # this module owns the shared interp.f transfer.
     from .freeboundary import (
         _external_field_from_input, _solve_free_boundary_stage,
+        free_boundary_resolution,
     )
 
     if external_field is None:
@@ -451,7 +452,11 @@ def solve_free_boundary_multigrid(
     modes = mode_table(int(inp.mpol), int(inp.ntor))
     for igrid in range(n_stages):
         nsval = int(ns_arr[igrid])
-        resolution = resolution_from_input(inp, ns=nsval)
+        # resolution_from_input plus VMEC2000's mgrid angular-compatibility
+        # policy: NZETA must divide the field table's planes per period
+        # (automatic NZETA selects the smallest compatible divisor; an
+        # explicit incompatible NZETA raises before iteration one).
+        resolution = free_boundary_resolution(inp, external_field, ns=nsval)
         same_grid = previous_ns == nsval
         if state is not None and previous_ns != nsval:
             # initialize_radial.f interpolates pxstore only when ns increases;

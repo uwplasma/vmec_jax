@@ -55,6 +55,7 @@ from .errors import (
     JAC75_FLAG,
     MORE_ITER_FLAG,
     SUCCESSFUL_TERM_FLAG,
+    VmecInputError,
 )
 from .fields import magnetic_fields, metric_elements
 from .fourier import ModeTable
@@ -455,6 +456,67 @@ def _external_field_from_input(
         raw = np.asarray(data.raw_coil_cur, dtype=float)
         extcur = np.divide(extcur, raw, out=extcur, where=raw != 0.0)
     return MgridField.from_mgrid_data(data, extcur=extcur)
+
+
+def _mgrid_planes(external_field: Any) -> int | None:
+    """Toroidal planes per field period of a tabulated field, else ``None``.
+
+    Only :class:`~vmex.core.mgrid.MgridField`-shaped objects (a 4-D ``br``
+    table ``(nextcur, kp, jz, ir)``) constrain the solver's toroidal grid;
+    analytic/direct-coil fields evaluate at arbitrary angles.
+    """
+    br = getattr(external_field, "br", None)
+    if br is None:
+        return None
+    shape = tuple(getattr(br, "shape", ()))
+    return int(shape[1]) if len(shape) == 4 else None
+
+
+def free_boundary_resolution(
+    inp: VmecInput, external_field: Any, *, ns: int | None = None,
+):
+    """``resolution_from_input`` plus VMEC2000's mgrid angular-grid policy.
+
+    VMEC2000 requires the solver's ``NZETA`` to divide evenly into the mgrid
+    file's toroidal planes per period (``mgrid_mod.f``:
+    ``MOD(np0b, nv) /= 0 -> ier_flag = 9``) — its vacuum path samples the
+    file planes by stride.  An incompatible pair must therefore never reach
+    iteration one:
+
+    * explicit incompatible ``NZETA`` -> typed :class:`VmecInputError`
+      (VMEC2000 rejects the same deck before solving);
+    * automatic resolution (``NZETA = 0``) -> the smallest divisor of the
+      table's plane count at or above the ``read_indata.f`` floor
+      ``2*ntor + 4`` (e.g. a 24-plane table with ``ntor = 9`` selects 24,
+      not the floor 22); when even the full plane count is below the floor,
+      the table cannot support the requested mode content -> typed error
+      advising a finer mgrid.
+    """
+    resolution = resolution_from_input(inp, ns=ns)
+    kp = _mgrid_planes(external_field)
+    if kp is None or int(inp.ntor) == 0:
+        return resolution
+    if int(inp.nzeta) > 0:
+        if kp % int(inp.nzeta) != 0:
+            raise VmecInputError(
+                f"NZETA = {int(inp.nzeta)} does not divide evenly into the "
+                f"mgrid table's {kp} toroidal planes per period; VMEC2000 "
+                "rejects this pairing before solving (mgrid_mod.f ier=9)",
+                hint="set NZETA to a divisor of the mgrid plane count "
+                     "(or NZETA = 0 for automatic compatible selection)",
+            )
+        return resolution
+    floor = int(resolution.nzeta)  # 2*ntor + 4 automatic floor
+    compatible = [d for d in range(1, kp + 1) if kp % d == 0 and d >= floor]
+    if not compatible:
+        raise VmecInputError(
+            f"the mgrid table has {kp} toroidal planes per period, below "
+            f"the automatic-resolution floor {floor} for NTOR = "
+            f"{int(inp.ntor)}",
+            hint="regenerate the mgrid with at least "
+                 f"{floor} planes per period (kp a multiple works best)",
+        )
+    return replace(resolution, nzeta=int(compatible[0]))
 
 
 # ---------------------------------------------------------------------------
@@ -1109,7 +1171,22 @@ def _solve_free_boundary_stage(
         external_field = _external_field_from_input(inp, mgrid_path)
 
     if resolution is None:
-        resolution = resolution_from_input(inp)
+        resolution = free_boundary_resolution(inp, external_field)
+    else:
+        # A supplied resolution must still satisfy VMEC2000's angular
+        # compatibility rule against a tabulated field — never let an
+        # incompatible pairing reach iteration one (it produces NaN after
+        # vacuum activation; VMEC2000 rejects it before solving).
+        kp = _mgrid_planes(external_field)
+        if (kp is not None and int(resolution.ntor) > 0
+                and kp % int(resolution.nzeta) != 0):
+            raise VmecInputError(
+                f"solver NZETA = {int(resolution.nzeta)} does not divide "
+                f"evenly into the mgrid table's {kp} toroidal planes per "
+                "period (mgrid_mod.f ier=9)",
+                hint="use free_boundary_resolution(), NZETA = 0, or a "
+                     "divisor of the mgrid plane count",
+            )
     rt = prepare_runtime(
         inp, resolution, ftol=ftol, max_iterations=max_iterations,
         time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
@@ -1596,8 +1673,10 @@ def solve_free_boundary(
     ``result.vacuum`` contains the final NESTOR potential modes and surface
     fields, without internal matrix caches.
     """
+    if external_field is None:
+        external_field = _external_field_from_input(inp, mgrid_path)
     if resolution is None:
-        resolution = resolution_from_input(inp)
+        resolution = free_boundary_resolution(inp, external_field)
     target = _placement_device(device, resolution)
     external_field = _put_numeric_leaves(external_field, target)
     initial_state = _put_numeric_leaves(initial_state, target)

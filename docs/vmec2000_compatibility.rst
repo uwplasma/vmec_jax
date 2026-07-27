@@ -187,6 +187,14 @@ Core grid, profiles, and geometry
    * - ``LASYM, NFP, MPOL, NTOR, NTHETA, NZETA``
      - implemented
      - Select symmetry, Fourier resolution, and angular quadrature.
+       Free boundary with a tabulated field adds VMEC2000's angular
+       compatibility rule (``mgrid_mod.f``: ``MOD(kp, NZETA) /= 0`` is
+       ``ier_flag = 9``): an explicitly incompatible ``NZETA`` raises the
+       typed input error before iteration one, and ``NZETA = 0`` selects the
+       smallest divisor of the mgrid's planes-per-period at or above the
+       ``2*NTOR + 4`` floor (VMEC2000 itself has no automatic compatible
+       selection and simply rejects) — see
+       :func:`vmex.core.freeboundary.free_boundary_resolution`.
    * - ``NS_ARRAY``
      - implemented
      - Radial resolution-continuation ladder.  The explicit old-style
