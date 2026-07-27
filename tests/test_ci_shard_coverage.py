@@ -74,3 +74,87 @@ def test_workflow_referenced_test_files_exist() -> None:
         "workflows reference test files that do not exist:\n  "
         + "\n  ".join(missing)
     )
+
+
+def _full_shard_sets() -> dict[str, set[str]]:
+    """Simulate the full-matrix selection rules against the real test tree.
+
+    Parses each ``FILES="..."`` assignment in the full job's case block and
+    applies its ``--ignore`` / ``--ignore-glob`` semantics, returning the
+    top-level test files each core shard would collect.
+    """
+    import fnmatch
+
+    text = WORKFLOW.read_text()
+    # several jobs use a matrix.shard case statement; take the
+    # full-physics one -- the block defining the core-* letter ranges
+    case_block = None
+    start = 0
+    while True:
+        i = text.find('case "${{ matrix.shard }}" in', start)
+        if i < 0:
+            break
+        candidate = text[i:text.index("esac", i)]
+        if "core-a-c)" in candidate:
+            case_block = candidate
+            break
+        start = i + 1
+    assert case_block is not None, "full-physics case block not found"
+    on_disk = sorted(f"tests/{p.name}" for p in TESTS.glob("test_*.py"))
+
+    shards: dict[str, set[str]] = {}
+    for m in re.finditer(
+            r"(\S+)\)\s*(?:#[^\n]*\n\s*)*FILES=\"((?:[^\"\\]|\\.|\\\n)*)\"",
+            case_block):
+        name, spec = m.group(1), m.group(2).replace("\\\n", " ")
+        tokens = spec.split()
+        if tokens and tokens[0] != "tests":
+            # explicit-file shard (e.g. high-mode-fb, opt-*): the listed files
+            shards[name] = {t.split("::")[0] for t in tokens
+                            if t.startswith("tests/test_")}
+            continue
+        ignored_globs = [t.split("=", 1)[1] for t in tokens
+                         if t.startswith("--ignore-glob=")]
+        ignored = {t.split("=", 1)[1] for t in tokens
+                   if t.startswith("--ignore=") and not t.startswith("--ignore-glob=")}
+        selected = set()
+        for f in on_disk:
+            if f in ignored:
+                continue
+            if any(fnmatch.fnmatch(f, g) for g in ignored_globs):
+                continue
+            selected.add(f)
+        shards[name] = selected
+    return shards
+
+
+def test_full_matrix_core_shards_partition_the_suite() -> None:
+    """Core shards must be DISJOINT and jointly COMPLETE (simulated rules).
+
+    Review finding: the earlier guard only checked that each filename appears
+    somewhere in the workflow text — it could not catch a file collected by
+    two shards (duplicate coverage skews timings) or dropped by every letter
+    range (silent skip).  This simulates the actual --ignore/--ignore-glob
+    selection against the on-disk tree.
+    """
+    shards = _full_shard_sets()
+    core = {k: v for k, v in shards.items() if k.startswith("core-")}
+    assert core, "no core-* shard definitions parsed from the workflow"
+
+    # disjoint among core shards and against the dedicated-file shards
+    dedicated = set().union(*(v for k, v in shards.items()
+                              if not k.startswith("core-")))
+    seen: dict[str, str] = {}
+    for name, files in core.items():
+        for f in files - dedicated:
+            assert f not in seen, (
+                f"{f} collected by BOTH {seen[f]} and {name}")
+            seen[f] = name
+
+    # complete: every top-level test file lands in exactly one full shard
+    on_disk = {f"tests/{p.name}" for p in TESTS.glob("test_*.py")}
+    covered = set(seen) | dedicated | {"tests/test_examples.py"}
+    missing = sorted(on_disk - covered - set(DEDICATED_LANES))
+    assert not missing, (
+        "full-matrix selection drops these files from every shard:\n  "
+        + "\n  ".join(missing))
