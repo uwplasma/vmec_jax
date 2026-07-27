@@ -715,7 +715,6 @@ def plot_axisymmetric_beta_scan_summary(
     *,
     display: tuple[int, ...],
     name: str = "mirror_free_boundary_beta50_summary",
-    caption: str | None = None,
     strong_force_gate: float | None = None,
 ) -> Path:
     """Render one tight beta-scan composite: 3D states plus scan diagnostics.
@@ -818,9 +817,9 @@ def plot_axisymmetric_beta_scan_summary(
     convergence_axis.legend(fontsize=8, loc="center right")
     for panel in panels:
         panel.grid(alpha=0.22)
-    if caption:
-        fig.suptitle("Axisymmetric free-boundary mirror: solved beta scan with ESSOS coils")
-        fig.text(0.5, -0.015, caption, ha="center", va="top", fontsize=9)
+    # A short title only -- the coil geometry, vacuum field, mirror ratio, and
+    # beta observables live in docs/mirror_geometry.rst, not on the figure.
+    fig.suptitle("Free-boundary mirror: solved β scan with ESSOS coils")
     return _save_figure(fig, plt, outdir / f"{name}.png")
 
 

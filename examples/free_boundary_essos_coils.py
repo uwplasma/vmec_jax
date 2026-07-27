@@ -50,9 +50,14 @@ if CI:  # smoke budget: one finite-beta point on a coarse grid
     TARGET_BETAS, NS, NITER, FTOL = [1.0], 16, 4000, 1e-8
 
 # --------------------------- coils -> external field ------------------------
-from essos.coils import Coils_from_json  # noqa: E402 (optional heavy import)
+from essos.coils import Coils  # noqa: E402 (optional heavy import)
 
-coils = Coils_from_json(str(COILS_JSON))
+if hasattr(Coils, "from_json"):
+    coils = Coils.from_json(str(COILS_JSON))
+else:  # legacy ESSOS predating the Coils.from_json classmethod
+    from essos.coils import Coils_from_json
+
+    coils = Coils_from_json(str(COILS_JSON))
 currents = np.asarray(coils.currents)  # symmetry-expanded physical currents [A]
 mean_current = float(np.mean(np.abs(currents)))
 print(f"ESSOS coils: {currents.shape[0]} filaments after nfp={coils.nfp}/stellsym "

@@ -119,7 +119,9 @@ def _coils_payload():
 def test_coils_mgrid_field_json_and_npz(tmp_path):
     # vmex is coil-agnostic: --coils loads ESSOS coils and tabulates them
     # into an in-memory mgrid, returning a plain MgridField.
-    pytest.importorskip("essos")
+    Coils = pytest.importorskip("essos.coils").Coils
+    if not hasattr(Coils, "to_mgrid"):
+        pytest.skip("ESSOS build lacks Coils.to_mgrid (coils->mgrid export)")
     payload = _coils_payload()
 
     jpath = tmp_path / "coils.json"

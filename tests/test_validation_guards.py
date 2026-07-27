@@ -91,13 +91,26 @@ def test_least_squares_rejects_unknown_jac():
         opt.least_squares([(opt.aspect_ratio, 6.0, 1.0)], inp, jac="magic")
 
 
-def test_least_squares_implicit_rejects_lasym_decks():
+def test_least_squares_implicit_boundary_map_supports_lasym():
+    """The implicit lane's boundary parameter map handles non-stellarator-
+    symmetric (lasym) decks via the four RBC/ZBS/RBS/ZBC families — the map
+    that lets ``jac="implicit"`` optimise lasym boundaries (the end-to-end
+    differentiable lasym gradients are validated in ``test_implicit_grad.py``).
+    Fast, pure-function check of the pack/unpack round-trip; no solve."""
     from vmex.core.input import VmecInput
 
     inp = VmecInput.from_file(str(DATA_DIR / "input.up_down_asymmetric_tokamak"))
     assert bool(inp.lasym)
-    with pytest.raises(NotImplementedError, match="lasym"):
-        opt.least_squares([(opt.aspect_ratio, 6.0, 1.0)], inp, jac="implicit")
+    assert opt._n_boundary_families(inp) == 4  # rbc/zbs/rbs/zbc
+
+    names = opt.boundary_dof_names(inp, 1)
+    assert any(nm.startswith("RBS") for nm in names)
+    assert any(nm.startswith("ZBC") for nm in names)
+
+    x = opt.pack_boundary(inp, 1)
+    assert x.size == len(names)
+    inp2 = opt.unpack_boundary(inp, x, 1)
+    np.testing.assert_allclose(opt.pack_boundary(inp2, 1), x)
 
 
 def test_traceable_term_vetting():
