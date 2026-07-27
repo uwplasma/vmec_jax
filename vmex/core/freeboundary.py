@@ -1673,9 +1673,13 @@ def solve_free_boundary(
     ``result.vacuum`` contains the final NESTOR potential modes and surface
     fields, without internal matrix caches.
     """
-    if external_field is None:
-        external_field = _external_field_from_input(inp, mgrid_path)
     if resolution is None:
+        # The angular grid depends on the field table (VMEC2000's NZETA
+        # divisibility rule), so the field must be loaded before the
+        # resolution is minted; a supplied resolution is validated against
+        # the field inside the stage instead.
+        if external_field is None:
+            external_field = _external_field_from_input(inp, mgrid_path)
         resolution = free_boundary_resolution(inp, external_field)
     target = _placement_device(device, resolution)
     external_field = _put_numeric_leaves(external_field, target)

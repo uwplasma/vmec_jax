@@ -275,8 +275,14 @@ def test_combined_238_mode_cth_free_ladder_matches_vmec2000(tmp_path) -> None:
     * 238 Fourier modes; vacuum on at iteration 38 (rung 1);
     * rung 1 (ns=15) converges at 260 iterations (fsqr 9.73e-9);
     * rung 2 (ns=25) converges at 156 iterations (fsqr 9.84e-9);
-    * wout: ``wb = 1.283590394747e-3``, ``rmnc(axis,0) = 0.77332874``,
-      ``iotaf(edge) = 0.8690375``, ``aspect = 5.4332138``.
+    * wout: ``wb = 1.283590394747e-3``, axis ``R(v=0) = 0.74414896``
+      (``sum raxis_cc``), ``iotaf(edge) = 0.8690375``,
+      ``aspect = 5.4332138``.
+
+    Measured VMEX on the same deck (automatic ``NZETA = 0`` -> 36): vacuum
+    on at 38, rung 2 converges in **156 iterations** (fsqr 9.74e-9),
+    ``r00 = 0.74416249`` -- iteration-for-iteration and axis agreement at
+    the shared ftol.
 
     VMEX must activate vacuum on rung 1, carry it across the transition,
     converge, and land on the same equilibrium.
@@ -311,8 +317,9 @@ def test_combined_238_mode_cth_free_ladder_matches_vmec2000(tmp_path) -> None:
     assert int(result.iterations) <= 500, (
         f"carried-vacuum rung took {int(result.iterations)} iterations; "
         "VMEC2000 needs 156")
-    # same equilibrium as the recorded VMEC2000 wout
-    assert float(result.r00) == pytest.approx(0.77332874, rel=2e-4)
+    # same equilibrium as the recorded VMEC2000 wout: the v=0 axis radius
+    # (sum of raxis_cc) and the magnetic energy scalar
+    assert float(result.r00) == pytest.approx(0.7441489627, rel=1e-4)
     assert float(result.wb) == pytest.approx(1.283590394747e-3, rel=2e-4)
 
 
