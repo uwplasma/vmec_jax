@@ -113,6 +113,10 @@ def _gate_deck(base_deck: str) -> str:
     return _indexed_m0(deck)
 
 
+@pytest.mark.full  # the fixture builds the sheet field (~90 s jitted, GB-
+# scale Biot-Savart temporaries) -- too heavy for the shared parity shard,
+# whose 4-worker-with-coverage runner was memory-evicted four times once
+# this module joined it.  The whole gate runs in the full matrix only.
 def test_sheet_field_confines(sheet_field):
     """The deterministic fit reaches the confining Bn threshold."""
     _, meta = sheet_field
