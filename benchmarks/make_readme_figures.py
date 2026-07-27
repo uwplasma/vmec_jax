@@ -1034,6 +1034,7 @@ def _plot_coils_and_bn(ax3d, xyz, val, coil_gamma, nfp, norm):
     the (larger) coil bounding box, as before.
     """
     from matplotlib import cm
+    from scipy.ndimage import map_coordinates
 
     x1, y1, z1 = (np.asarray(a) for a in xyz)
     val = np.asarray(val)
@@ -1047,6 +1048,22 @@ def _plot_coils_and_bn(ax3d, xyz, val, coil_gamma, nfp, norm):
     X, Y, Z, V = (np.concatenate(v, axis=0) for v in (Xs, Ys, Zs, Vs))
     X, Y, Z, V = (np.vstack([a, a[:1]]) for a in (X, Y, Z, V))      # close phi
     X, Y, Z, V = (np.hstack([a, a[:, :1]]) for a in (X, Y, Z, V))   # close theta
+
+    # Upsample geometry + colour onto a denser render grid (3x each way) by
+    # bilinear interpolation of the tiled/closed surface.  No re-solve: this
+    # only subdivides each drawn quad so facets stay small at every viewing
+    # angle -- the large foreshortened rim/far-side quads (which don't tile and
+    # let the background bleed through, making equal B.n render at unequal
+    # brightness) become many small quads that tile cleanly.  The physics/data
+    # and the shared colour scale are untouched.
+    fac = 3
+    P, T = X.shape
+    ii = np.linspace(0.0, P - 1, fac * (P - 1) + 1)
+    jj = np.linspace(0.0, T - 1, fac * (T - 1) + 1)
+    Ig, Jg = np.meshgrid(ii, jj, indexing="ij")
+    coords = np.vstack([Ig.ravel(), Jg.ravel()])
+    X, Y, Z, V = (map_coordinates(a, coords, order=1, mode="nearest")
+                  .reshape(Ig.shape) for a in (X, Y, Z, V))
     ax3d.plot_surface(X, Y, Z, facecolors=cm.RdBu_r(norm(V)), rstride=1,
                       cstride=1, antialiased=False, linewidth=0.0, shade=False)
     for k in range(coil_gamma.shape[0]):  # ESSOS filaments, closed loops (copper)

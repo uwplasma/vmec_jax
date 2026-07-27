@@ -19,7 +19,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 REFERENCE_TAG = "assets-20260316-nc"
-REFERENCE_ASSET_NAME = "vmex_assets_20260316_nc_only.tar.gz"
+# NOTE: the published release tarball keeps the pre-rename "vmec_jax_" prefix --
+# it was uploaded before the vmec_jax -> vmex repo rename, and only the repo and
+# its code were renamed, not the already-published GitHub release assets. Keep
+# this in sync with the actual asset filename, not the current package name.
+REFERENCE_ASSET_NAME = "vmec_jax_assets_20260316_nc_only.tar.gz"
 REFERENCE_URL = (
     "https://github.com/uwplasma/vmex/releases/download/"
     f"{REFERENCE_TAG}/{REFERENCE_ASSET_NAME}"
@@ -27,7 +31,8 @@ REFERENCE_URL = (
 REFERENCE_SHA256 = "3344fc2401fffed240ee57ae741ec521594c592627c76dae203503f485e4c0d8"
 
 WOUT_FIXTURES_TAG = "assets-20260526-wout-fixtures"
-WOUT_FIXTURES_ASSET_NAME = "vmex_wout_fixtures_20260526.tar.gz"
+# Same pre-rename asset-filename caveat as REFERENCE_ASSET_NAME above.
+WOUT_FIXTURES_ASSET_NAME = "vmec_jax_wout_fixtures_20260526.tar.gz"
 WOUT_FIXTURES_URL = (
     "https://github.com/uwplasma/vmex/releases/download/"
     f"{WOUT_FIXTURES_TAG}/{WOUT_FIXTURES_ASSET_NAME}"

@@ -25,6 +25,9 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".splines",
         "build_stellarator_mirror_hybrid",
     ),
+    "build_qi_mirror_hybrid": (".splines", "build_qi_mirror_hybrid"),
+    "splice_straight_legs": (".splines", "splice_straight_legs"),
+    "QIMirrorSplice": (".splines", "QIMirrorSplice"),
     "trace_closed_field_line": (".splines", "trace_closed_field_line"),
     "solve_fixed_boundary": (".splines", "solve_fixed_boundary"),
     "solve_fixed_boundary_from_radius": (

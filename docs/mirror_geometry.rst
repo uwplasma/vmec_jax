@@ -12,8 +12,11 @@ periodic hybrid has a complete fixed-boundary solve and example. Its
 circular-section lane is supported: with the leg-return junction frozen as a
 design parameter, its independent strong-force residual converges monotonically
 under same-geometry refinement. The rotating-elliptical-section hybrid remains
-the single research candidate, held back by a separately scoped near-axis
-representation defect in the rotating section rather than by the junction.
+the single research candidate. ``section_turns`` now turns the ellipse
+continuously around the closed circuit -- a genuine rotating-ellipse section --
+which raises the transform from the return-only ``iota=0.085`` to ``iota=0.141``
+at ``s=0.75``, but the separately scoped near-axis representation defect in the
+rotating section persists at the higher rotation, so it is not promoted.
 
 Quickstart
 ----------
@@ -41,6 +44,7 @@ arguments:
    python examples/mirror_fixed_boundary_nonaxisymmetric.py   # rotating-ellipse fixed boundary
    python examples/mirror_free_boundary_beta_scan.py          # axisymmetric free-boundary beta scan
    python examples/stellarator_mirror_hybrid.py               # periodic B-spline racetrack hybrid
+   python examples/qi_mirror_hybrid_fourier_vs_bspline.py     # QI-mirror hybrid: Fourier vs B-spline
 
 Open-mirror solves write mirror-native ``mout_*.nc`` files, which plot with
 
@@ -285,13 +289,25 @@ The package currently includes:
   restart files,
 * a closed-surface Neumann solve on the lateral LCFS and both end disks,
 * component-wise nonlinear convergence checks at a requested ``ftol=1e-12``.
-* a periodic B-spline racetrack with two straight mirror legs, rotating
-  elliptical returns, a fixed-boundary solve, and closed field-line tracing.
+* a periodic B-spline racetrack with two straight mirror legs, a continuously
+  rotating elliptical section, a fixed-boundary solve, and closed field-line
+  tracing.
 
-The axisymmetric free-boundary path is supported through 10% requested beta
-and retains 25% and 50% as explicitly labeled validation continuations. The
-nonaxisymmetric free-boundary path is deferred because its
-point observables were not monotone under spatial refinement.
+With the compact-coil configuration (0.5 m loops, vacuum ``B(0) = 0.0836 T``,
+mirror ratio 4.58), a requested 50% beta continuation grows the central radius
+by 7.5% and lowers the on-axis field by 22.3% from vacuum, exercising the
+finite-beta coupling end to end. The axisymmetric free-boundary path is
+**supported through 50% requested beta**: a size-scaled Krylov span in the
+Newton-GMRES polish (``restart = max(24, min(problem.size, ...))``) clears the
+fine-grid restart starvation that previously stalled the polish short of
+``ftol``, and a fine grid (``ns=13, nxi=25, elements=13, exterior_ntheta=24``)
+converges *every* beta point from 0 through 50% (≤ 44 Newton-GMRES iterations,
+variational residual ≤ 8.5e-15) with bulk minor-radius force rising from
+``1.21e-4`` (beta 0) to ``2.41e-3`` (beta 50%) — far under the ``0.05`` gate
+(see the ``fine_grid_promotion.fine_grid_50`` block in
+``benchmarks/mirror_free_boundary_axisymmetric.json``). The nonaxisymmetric
+free-boundary path is deferred because its point observables were not monotone
+under spatial refinement.
 
 Periodic stellarator-mirror hybrid
 ----------------------------------
@@ -338,12 +354,24 @@ The LCFS is an ellipse written as a polar radius,
    \frac{A B}{\sqrt{[B\cos(\theta-\alpha(u))]^2
                    +[A\sin(\theta-\alpha(u))]^2}}.
 
-The section angle :math:`\alpha` is constant on each straight leg and changes
-smoothly by 90 degrees through each return. The radial surfaces and stream
+The section angle is :math:`\alpha(u)=\alpha_{\mathrm{ret}}(u)+N\,u`. The
+return term :math:`\alpha_{\mathrm{ret}}` is constant on each straight leg and
+changes smoothly by 90 degrees through each return, so on its own it returns the
+ellipse to its original orientation once per circuit. The ``section_turns``
+integer :math:`N` superposes a genuine rotating ellipse: the major axis turns
+continuously by :math:`N` full :math:`2\pi` turns per circuit. Because the polar
+radius is :math:`2\pi`-periodic in :math:`\theta-\alpha` and :math:`N` is an
+integer, the section closes on itself exactly (verified by the m=2 harmonic
+winding by :math:`4\pi N`), and the straight-leg axis stays exactly straight
+while the ellipse it carries keeps rotating. The radial surfaces and stream
 function use the same periodic longitudinal basis. The divergence-free field
 is the open expression with :math:`\xi` replaced by :math:`u`; periodicity
 removes end cuts, and all longitudinal coefficients are active. A finite
-:math:`I'(s)` gives visible pitch and nonzero rotational transform.
+:math:`I'(s)` gives visible pitch and nonzero rotational transform; at the
+device aspect ratio :math:`L/a\approx 67` the rotating ellipse adds negligible
+transform on its own (with :math:`I'(s)=0` the traced :math:`\iota` stays below
+:math:`10^{-3}` for every ``section_turns``), so it acts by amplifying the
+current-driven transform rather than by a standalone geometric one.
 
 ``build_stellarator_mirror_hybrid`` constructs the discretization, closed
 axis, LCFS, and a vacuum-field initial stream function. The ordinary
@@ -384,27 +412,41 @@ residual in this section is quoted device- (arc-length-) normalized where noted
 about 67 minor radii, so the device numbers are roughly 67 times the
 minor-radius numbers.
 
-The rotating-elliptical-section hybrid remains the single research candidate.
-Its default ``ns=5``, ``mpol=3``, 32-control case reaches variational residual
-``2.36e-14`` and normalized ``div(B)=3.14e-14`` with axis closure ``8.88e-16``,
-and the solved finite-current state gives ``iota=0.0851`` at ``s=0.75``, but its
-reconstructed strong-force residual is ``0.430`` and does not converge even
-with the junction frozen: exact 16/32/64 spline transfer of one geometry gives
-a monotone but plateauing sequence ``0.5733 -> 0.3556 -> 0.3325`` at fixed
-volume (agreement ``5.0e-6`` relative, variational residual below ``6.7e-14``),
-and refining ``ns=5, mpol=3`` to ``ns=7, mpol=4`` at 64 controls only lowers it
-from ``0.333`` to ``0.227``. That plateau is a separately scoped near-axis
-representation defect in the rotating section, not a junction effect;
-finite-beta continuation and rotating-section sensitivity claims are deferred
-until it is resolved.
+The rotating-elliptical-section hybrid remains the single research candidate,
+now driven by the genuine toroidal rotation ``section_turns``. Its shipped
+``ns=5``, ``mpol=4``, 32-control case (``semi_major=0.45``, ``semi_minor=0.25``,
+``section_turns=2``) reaches variational residual ``3.19e-13`` and normalized
+``div(B)=4.55e-14`` with axis closure ``8.88e-16``, and the solved
+finite-current state gives ``iota=0.141`` at ``s=0.75`` -- roughly 1.7 times the
+return-only ``iota=0.085`` at the same imposed current. The transform is
+current-driven and amplified by the rotating geometry: with ``I'(s)=0`` the
+traced transform stays below ``10^{-3}`` for every ``section_turns``, so at
+``L/a`` near 67 the rotating ellipse adds no standalone geometric transform and
+instead reshapes the metric so the same current winds field lines faster.
 
-A sensitivity study localizes the rotating-section residual to the racetrack
-geometry rather than to pressure or imposed current. At the default 32-control
-resolution, removing current changes the strong force only from ``0.430`` to
-``0.424``; replacing the rotating ellipse by a circular section gives ``0.158``
-and a fixed ellipse ``0.164``, while the circular-axis/circular-section limit
-gives ``0.0083``. The periodic derivative algorithm is validated separately on
-the closed circular limit below.
+Under the junction-freeze contract the toroidally rotating hybrid converges at
+every rung, but the near-axis defect persists. With the junction frozen at 16
+controls and the section built at that base count, exact 16/32/64 refinement
+(``ns=5``, ``mpol=6``, ``section_turns=2``) drives the minor-radius bulk force
+``0.0445 -> 0.0056 -> 0.0046`` -- monotone, every rung below the ``0.05`` gate,
+so the operational promotion gate passes -- with each rung at variational
+residual below ``3.6e-13`` and normalized ``div(B)`` below ``1e-13``. The
+device- (arc-length-) normalized strong force, however, plateaus
+``4.07 -> 0.51 -> 0.42`` (per-step ratios ``7.97`` and ``1.21``): it does not
+head toward zero like the promoted circular lane (``0.204 -> 0.176 -> 0.118``),
+and its ``~0.42`` floor is even higher than the return-only ``~0.33``. That
+plateau is the same separately scoped near-axis representation defect in the
+rotating section, made no better by the faster rotation, so the toroidally
+rotating hybrid is kept a research candidate; finite-beta continuation and
+rotating-section sensitivity claims are deferred until it is resolved.
+
+A sensitivity study on the return-only baseline localizes the rotating-section
+residual to the racetrack geometry rather than to pressure or imposed current.
+At the 32-control resolution, removing current changes the return-only strong
+force only from ``0.430`` to ``0.424``; replacing the rotating ellipse by a
+circular section gives ``0.158`` and a fixed ellipse ``0.164``, while the
+circular-axis/circular-section limit gives ``0.0083``. The periodic derivative
+algorithm is validated separately on the closed circular limit below.
 
 Source ownership is compact: periodic basis/refinement is in ``basis.py``;
 axis, Bishop frame, and embedding are in ``geometry.py``; coefficient packing,
@@ -414,6 +456,109 @@ produced by ``output.plot_stellarator_mirror_hybrid``.
 
 .. image:: _static/figures/stellarator_mirror_hybrid.png
    :alt: Solved periodic B-spline stellarator-mirror hybrid with its axis, boundary magnetic field, cross-sections, transform, and residuals
+   :width: 100%
+
+QI-mirror hybrid: Fourier vs B-spline
+-------------------------------------
+
+A quasi-isodynamic (QI) stellarator has poloidally closed ``|B|`` contours and
+near-straight magnetic-axis segments at its field-period-symmetric planes, so
+the QI axis is the natural place to cut and insert a straight mirror cell.
+``examples/qi_mirror_hybrid_fourier_vs_bspline.py`` makes that construction
+concrete and compares the two ways of representing the resulting axis.
+
+Cut locations.  The example solves ``input.nfp2_QI`` with the VMEC (Fourier)
+core, reads the magnetic axis :math:`\mathbf{r}(\phi)` from the axis Fourier
+arrays, and computes the 3-D curvature
+:math:`\kappa = \lVert \mathbf{r}' \times \mathbf{r}'' \rVert / \lVert
+\mathbf{r}' \rVert^{3}` spectrally over the torus. For this nfp=2 QI the
+curvature spans ``70x``. An nfp=2 QI axis is near-straight at two planes per
+field period, so the curvature has *four* minima: :math:`\kappa \approx 0.036`
+:math:`\mathrm{m}^{-1}` at :math:`\phi = 0, \pi` and :math:`\approx 0.088`
+:math:`\mathrm{m}^{-1}` at :math:`\phi = \pi/2, 3\pi/2` (the four
+stellarator-symmetry planes, where the axis crosses the midplane), and maxima
+:math:`\approx 2.5` :math:`\mathrm{m}^{-1}` at the bean tips. All four
+low-curvature planes are cut, so the inserted legs are stellarator symmetric.
+
+Cut-and-splice.  ``splice_straight_legs`` cuts the closed axis at the four minima
+and inserts an exactly-straight leg at each **along the local axis tangent**, so
+every leg continues the axis in its own direction (not a shared transverse
+direction). The per-cut leg lengths are chosen so the inserted displacements
+cancel -- the loop closes to rounding (``closure ~ 1e-16``) -- which splits the
+legs into two symmetry classes (the two symmetry-plane types, here ``1.31 m`` and
+``1.07 m``). One stellarator-symmetric half, between the two symmetry-fixed
+planes, is built and reflected 180 degrees about the ``x`` axis, so the
+four-legged racetrack is stellarator symmetric to rounding. Each leg is tangent
+to the axis at its cut, so the leg/return junction is tangent-continuous
+(residual break ``~0.04 deg``, versus a real corner): the seam is now a
+*curvature* break -- the exactly-zero-curvature leg meeting the finite-curvature
+return -- which is what separates the two representations.
+
+Representation accuracy.  The same closed hybrid axis is fitted with a truncated
+Fourier series (global, VMEC-native) and a periodic cubic B-spline (local, the
+``vmex.mirror`` lane). On the straight mirror leg:
+
+.. list-table::
+   :header-rows: 1
+
+   * - basis
+     - degrees of freedom
+     - deviation on the straight leg
+   * - Fourier, :math:`N=8`
+     - 51
+     - ``2.0e-2`` (ringing)
+   * - Fourier, :math:`N=32`
+     - 195
+     - ``2.7e-5`` (ringing)
+   * - Fourier, :math:`N=64`
+     - 387
+     - ``2.0e-6`` (ringing, floor)
+   * - B-spline, :math:`M=64`
+     - 192
+     - ``2.2e-6`` (leg midpoint)
+   * - B-spline, :math:`M=128`
+     - 384
+     - ``6.0e-9`` (leg midpoint)
+   * - B-spline, :math:`M=256`
+     - 768
+     - ``1.5e-12`` (leg midpoint)
+
+The B-spline reproduces the straight cell to machine precision once each leg is
+backed by enough collinear controls (its error is confined to a fixed few
+knot-spacings around the junction, the signature of local support), while the
+global Fourier series rings across the whole leg and floors near ``2e-6``. The
+tangent-continuous seam lets the Fourier ringing decay faster than the old
+sharp-corner case, but only the local basis reproduces the exactly-straight cell
+to machine precision. The *maximum* error of both bases is instead set by the
+leg/return curvature break (a cubic B-spline is :math:`C^2` and also rounds a
+curvature step), so this is an honest, shared limit, not a B-spline advantage.
+The comparison is the point: the local basis wins precisely on the
+exactly-straight mirror cell.
+
+Equilibrium.  ``build_qi_mirror_hybrid`` fits the spliced axis into the closed
+solve basis, wraps it in a constant circular section (rotation-invariant, so the
+large frame holonomy of a fully 3-D axis does not enter the boundary), and
+returns a ``StellaratorMirrorSetup`` that feeds ``solve_fixed_boundary`` like the
+analytic racetrack. The solved hybrid is divergence-free to ``9.4e-14`` with
+``iota = 0.11`` and mirror ratio ``1.8``; its normalized strong-force residual is
+``1.3e-2`` (the smooth analytic racetrack, with circular returns, converges to
+``2.6e-3`` by contrast -- the QI returns' finite curvature and the four
+curvature-break seams still load the force). This B-spline
+equilibrium is a scalar-pressure spline model whose transform comes from a weak
+axial current: it demonstrates the geometry and the exactly-straight mirror cell,
+**not** a reproduction of the QI rotational transform (``|iota| ~ 0.45``).
+
+Fourier-lane limitation.  A literal VMEC re-solve of a straight-axis QI-mirror
+device is out of scope by construction, not by effort: VMEC's toroidal
+coordinate is the cylindrical angle :math:`\phi`, and a straight axis segment
+cannot be parameterised by :math:`\phi` (its :math:`R(\phi), Z(\phi)` are
+degenerate). This is exactly why the closed-axis, arc-length-parameterised
+B-spline lane exists. The VMEC solve therefore serves as the QI *reference*
+(axis, ``iota``, ``|B|``, ``B_0``), and the Fourier side of the comparison is the
+axis-representation accuracy above.
+
+.. image:: _static/figures/qi_mirror_hybrid.png
+   :alt: QI-mirror hybrid comparison: QI axis coloured by curvature with cut locations, the spliced straight-leg hybrid axis, hybrid boundary magnetic field, and Fourier-versus-B-spline representation accuracy at the seam
    :width: 100%
 
 Plotting and output scope
@@ -721,7 +866,9 @@ only the supplied field object.
 
 The adjoint consumes the same primal coefficient residual, coefficient
 packing, and block preconditioner. It is supported through the 10% beta ceiling
-and is checked against fully reconverged field and mass perturbations. The nonaxisymmetric free-boundary derivative is
+and is checked against fully reconverged field and mass perturbations: the
+implicit free-boundary derivative matches a reconverged finite difference to
+``1.1e-10`` relative (transpose linear residual ``1.4e-9``). The nonaxisymmetric free-boundary derivative is
 deliberately unavailable because
 local Fourier-mode refinement failed; it will not be presented as a supported
 gradient.
@@ -753,9 +900,13 @@ compact JSON summary, restart files, and reviewed figures under
 ``z`` geometry, LCFS displacement, on-axis and LCFS ``|B|``, pressure balance,
 coils, cap-to-cap field lines, and coupled residual histories, plus one
 composite summary pairing the solved 3-D states with whole-scan diagnostics.
-Generated results are ignored by git. Values through 10% are supported; 25%
-and 50% are labeled validation continuation points and should not be read as
-supported merely because the nonlinear solve ends.
+Generated results are ignored by git. Every beta point from 0 through 50% is
+supported: the fine-grid promotion run above (``(13,25,13,24)`` grid,
+size-scaled Krylov span, minor-radius force normalization) converges each point
+below the ``0.05`` bulk gate. The per-grid figures in the two paragraphs that
+follow predate that fix and use the legacy *device-length* force normalization
+on a coarser exterior grid, so their higher strong-force numbers are a
+coarser-grid legacy diagnostic, not the operational gate.
 
 The default free-boundary center radius remains ``0.25 m``. The example's two
 ESSOS loops are sized to the plasma: radius ``0.5 m`` at ``z = +/-1.0 m``
@@ -810,11 +961,13 @@ expands by 1.21%, while the central field falls by 4.38%. Thus field depression
 is the more sensitive validation observable for this zero-edge-pressure
 profile.
 
-On that grid, the 50% validation-only point reaches center radius ``0.272554 m``,
-field ratio ``0.762687``, and volume beta ``0.216984`` with nonlinear residual
-``8.31e-13``. The paraxial small-beta estimate is intentionally shown but is
-not an accuracy reference at 50%; the unconverged strong-force reconstruction
-controls its status.
+On that (legacy device-length-normalized) grid the 50% point reaches center
+radius ``0.272554 m``, field ratio ``0.762687``, and volume beta ``0.216984``
+with nonlinear residual ``8.31e-13``. The paraxial small-beta estimate is
+intentionally shown but is not an accuracy reference at 50%. This coarser-grid
+strong-force reconstruction is what originally held 50% at validation status;
+it is superseded by the ``(13,25,13,24)`` fine-grid promotion run above, which
+converges every point 0–50% below the minor-radius bulk gate.
 
 The finite-beta mirror trend follows the WHAM/Pleiades discussion in Frank et
 al., `Confinement performance predictions for a high field axisymmetric tandem
@@ -907,9 +1060,11 @@ The beta-zero exterior resolution study at ``(ns,nxi,ntheta_panel)`` equal to
 gives center radius ``0.272554 m``, axis field ``0.063578 T``, volume beta
 ``0.216984``, and device-normalized all-volume/core force
 ``6.69e-2``/``1.50e-2``, with
-medium-to-fine changes of ``0.137%`` in radius and ``1.02%`` in center field;
-that point remains validation-only, while 10% passes all independent force and
-observable checks.
+medium-to-fine changes of ``0.137%`` in radius and ``1.02%`` in center field.
+Those device-length force figures are a legacy diagnostic on this coarser grid;
+under the operational minor-radius normalization the ``(13,25,13,24)`` fine-grid
+promotion run reaches bulk force ``2.41e-3`` at 50% (gate-passing), so the lane
+is supported through 50% (see the free-boundary β section above).
 
 The coefficient solver uses a dense ``jacfwd`` only through 32 unknowns; larger
 systems expose exact repeated JVP/VJP actions through a SciPy ``LinearOperator``

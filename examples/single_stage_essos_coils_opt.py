@@ -250,13 +250,18 @@ def main() -> None:
     if not FBD.have_virtual_casing_jax():
         raise SystemExit("needs virtual_casing_jax (pip install -e /path/to/virtual_casing_jax)")
     try:
-        from essos.coils import Coils_from_json
+        from essos.coils import Coils
     except ImportError as exc:  # pragma: no cover - optional heavy dependency
         raise SystemExit("needs essos (pip install -e /path/to/ESSOS)") from exc
     if not COILS_JSON.exists():
         raise SystemExit(f"missing {COILS_JSON.name} in {DATA}")
 
-    coils = Coils_from_json(str(COILS_JSON))
+    if hasattr(Coils, "from_json"):
+        coils = Coils.from_json(str(COILS_JSON))
+    else:  # legacy ESSOS predating the Coils.from_json classmethod
+        from essos.coils import Coils_from_json
+
+        coils = Coils_from_json(str(COILS_JSON))
     coil_field = make_coil_field(coils.gamma, coils.gamma_dash, int(coils.nfp), bool(coils.stellsym))
     base0 = np.asarray(coils.dofs_currents, dtype=float) * float(coils.currents_scale)
     print(f"ESSOS LP-QA coils: {int(np.asarray(coils.currents).shape[0])} filaments "

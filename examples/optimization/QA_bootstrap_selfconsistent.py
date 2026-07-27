@@ -156,13 +156,12 @@ if all(p.exists() for p in paths.values()):
     for ax, (t, p) in zip(axes, paths.items()):
         draw_panel(ax, np.load(p))
     axes[0].set_ylabel(r"$\langle J\cdot B\rangle$  [MA T / m$^2$]")
-    # Collect legend entries from BOTH panels (the SFINCS reference points are
-    # published for QA only, so the QA axes carry an artist QH does not).
-    handles, labels = [], []
-    for a in axes:
-        for h, lab in zip(*a.get_legend_handles_labels()):
-            if lab not in labels:
-                handles.append(h); labels.append(lab)
-    axes[1].legend(handles, labels, frameon=False, fontsize=7.5, loc="upper center")
+    # Each panel carries its OWN legend built from its OWN artists: the SFINCS
+    # reference points are published for QA only (fig 16), so only the left (QA)
+    # legend shows that entry -- it is the panel with the red circles.  The
+    # right (QH) legend lists just the three curves it draws, with no orphan
+    # SFINCS entry that has no matching markers.
+    axes[0].legend(frameon=False, fontsize=7.5, loc="upper center")
+    axes[1].legend(frameon=False, fontsize=7.5, loc="upper center")
     fig.tight_layout(); fig.savefig("readme_bootstrap.png")
     print("wrote readme_bootstrap.png (both configurations available)")
