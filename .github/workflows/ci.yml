@@ -164,11 +164,20 @@ jobs:
           python -m pip install .
           python -m pip install pytest pytest-xdist pytest-cov
 
-      - name: Cache golden fixtures
+      - name: Cache golden fixtures and compiled kernels
         uses: actions/cache@v4
         with:
           path: ~/.cache/vmex
-          key: golden-v1
+          # Rolling key: a fixed key freezes the cache at its FIRST save, so
+          # the persistent XLA compile cache (which lives under ~/.cache/vmex)
+          # never learned new kernels -- every dispatch recompiled the
+          # 238-mode executables from scratch on slow hosted cores.  The
+          # per-run key with a shared restore prefix restores the newest
+          # snapshot and saves an updated one each run.
+          key: golden-v2-${{ github.run_id }}
+          restore-keys: |
+            golden-v2-
+            golden-v1
 
       - name: Prefetch golden fixtures (once, before xdist workers fork)
         run: |
@@ -503,11 +512,16 @@ jobs:
     # after 37/79/81 minutes. Keep exact RUN_FULL coverage, split core
     # alphabetically, isolate each stateful optimization campaign, and isolate
     # examples/mirror so every shard stays bounded on a fresh worker.
-    timeout-minutes: 180
+    # 300: the 238-mode free-boundary lanes are compile-dominated on
+    # hosted cores (one lane measured ~2 h cold); the rolling kernel
+    # cache above makes warm dispatches far cheaper, but the cold path
+    # must still fit.
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        shard: [core-a-f, core-g-i, core-j-m, core-n-s, core-t-z, opt-qa, opt-qh,
+        shard: [core-a-f, core-g-i, core-j-m, core-n-s, core-t-z,
+                high-mode-fb, opt-qa, opt-qh,
                 opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
       - uses: actions/checkout@v6.0.2
@@ -524,11 +538,20 @@ jobs:
           python -m pip install .
           python -m pip install pytest
 
-      - name: Cache golden fixtures
+      - name: Cache golden fixtures and compiled kernels
         uses: actions/cache@v4
         with:
           path: ~/.cache/vmex
-          key: golden-v1
+          # Rolling key: a fixed key freezes the cache at its FIRST save, so
+          # the persistent XLA compile cache (which lives under ~/.cache/vmex)
+          # never learned new kernels -- every dispatch recompiled the
+          # 238-mode executables from scratch on slow hosted cores.  The
+          # per-run key with a shared restore prefix restores the newest
+          # snapshot and saves an updated one each run.
+          key: golden-v2-${{ github.run_id }}
+          restore-keys: |
+            golden-v2-
+            golden-v1
 
       # The free-boundary example smokes run the examples as subprocesses,
       # which read examples/data/mgrid_*.nc directly — fetched assets, not
@@ -548,13 +571,16 @@ jobs:
                      --ignore-glob=tests/test_[g-z]*.py"
               ;;
             core-g-i)
-              # split from core-g-m: the rebuilt high-mode free-boundary
-              # lanes (test_high_mode_..., ~50 min locally) pushed the
-              # combined g-m shard past its 180-minute budget on a slow
-              # hosted runner
+              # split from core-g-m after it exceeded 180 minutes; the
+              # high-mode free-boundary file is compile-dominated on hosted
+              # cores and owns its own shard (high-mode-fb)
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
+                     --ignore=tests/test_high_mode_free_boundary_parity.py \
                      --ignore-glob=tests/test_[a-f]*.py \
                      --ignore-glob=tests/test_[j-z]*.py"
+              ;;
+            high-mode-fb)
+              FILES="tests/test_high_mode_free_boundary_parity.py"
               ;;
             core-j-m)
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
