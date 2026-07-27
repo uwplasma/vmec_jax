@@ -367,21 +367,25 @@ def j_invariant_qi_maxj_residual_from_boozer(
             maxj_block = jnp.zeros((0,), dtype=jnp.float64)
             maxj_surface = jnp.zeros((0,), dtype=jnp.float64)
             jc_pow_maxj = jnp.zeros_like(jc_all)
+            slope = jnp.zeros((0, 0, 0), dtype=jnp.float64)
         else:
             jc_pow_maxj = _smooth_abs_power(jc_all, float(p_j))
             ds = s_b[1:] - s_b[:-1]
             ds = jnp.where(jnp.abs(ds) > 0.0, ds, 1.0e-10)
-            jc_lo = jc_pow_maxj[:-1, 1:, :]
-            jc_hi = jc_pow_maxj[1:, 1:, :]
+            # jc_* shape is (surface, alpha, bounce). max-J compares adjacent
+            # surfaces at fixed bounce level and averages over lower-surface alphas.
+            jc_lo = jc_pow_maxj[:-1, :, 1:]
+            jc_hi = jc_pow_maxj[1:, :, 1:]
 
             def _surface_pair_slope(hi_surface, lo_surface, ds_surface):
                 def _alpha_slope(hi_alpha):
-                    slope_terms = (hi_alpha[:, None] - lo_surface) / (
-                        ds_surface * (0.5 * (hi_alpha[:, None] + lo_surface) + 1.0e-10)
+                    lo_by_bounce = jnp.swapaxes(lo_surface, 0, 1)
+                    slope_terms = (hi_alpha[:, None] - lo_by_bounce) / (
+                        ds_surface * (0.5 * (hi_alpha[:, None] + lo_by_bounce) + 1.0e-10)
                     )
                     return jnp.mean(slope_terms, axis=1)
 
-                return jax.vmap(_alpha_slope, in_axes=1, out_axes=1)(hi_surface)
+                return jax.vmap(_alpha_slope, in_axes=0, out_axes=0)(hi_surface)
 
             slope = jax.vmap(_surface_pair_slope, in_axes=(0, 0, 0))(jc_hi, jc_lo, ds)
             violation = jnp.maximum(0.0, slope - float(target_maxj))
@@ -391,10 +395,12 @@ def j_invariant_qi_maxj_residual_from_boozer(
         diagnostics["maxj_surface"] = maxj_surface
         diagnostics["maxj_objective"] = jnp.sum(maxj_block * maxj_block)
         diagnostics["jc_pow_maxj"] = jc_pow_maxj
+        diagnostics["maxj_slope"] = slope
     else:
         diagnostics["maxj_surface"] = jnp.zeros((max(nsurf - 1, 0),), dtype=jnp.float64)
         diagnostics["maxj_objective"] = jnp.asarray(0.0, dtype=jnp.float64)
         diagnostics["jc_pow_maxj"] = jnp.zeros_like(jc_all)
+        diagnostics["maxj_slope"] = jnp.zeros((max(nsurf - 1, 0), 0, 0), dtype=jnp.float64)
 
     if not residual_blocks:
         raise ValueError("At least one of include_qi/include_maxj must be True.")
