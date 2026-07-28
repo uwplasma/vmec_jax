@@ -109,10 +109,12 @@ vmex --plot boozmn_nfp4_QH_warm_start.nc   # Boozer |B| contours + spectrum
 VMEX is validated end-to-end against golden VMEC2000 (PARVMEC 9.0) runs:
 benchmark decks converge in **exactly** the golden iteration count — including
 DSHAPE's mid-run jacobian reset — and reproduce the plasma energy `wb` to
-1 part in 10¹⁵. Across the full benchmark suite (14 rows, all at `ns ≥ 201`),
-the iteration count matches VMEC2000 exactly on 12 rows; on the free-boundary
-CTH-like row it converges in a ~9% iteration tail, and on Nuhrenberg–Zille QHS
-it converges in *fewer* iterations (1681 vs 2829). Per-variable wout agreement
+1 part in 10¹⁵. Across the full benchmark suite (14 rows, all at `ns = 201`),
+the iteration count matches VMEC2000 exactly on 12 rows (including the
+deliberately NITER-bounded LASYM stress row, where both codes exhaust the same
+10,000-iteration budget); on the free-boundary CTH-like row VMEX converges in
+~8% *fewer* iterations (1518 vs 1652), and on the reactor-scale QH row it
+takes 17 more (5239 vs 5222). Per-variable wout agreement
 and the full test gates live in the
 [documentation](https://vmex.readthedocs.io/en/latest/).
 
@@ -168,16 +170,19 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
 `python benchmarks/run_baseline.py`):
 
 - **Warm** — kernels already compiled; the number that matters inside an
-  optimization loop or scan. Faster than VMEC2000 on **every** benchmark row
-  (1.3–2.6× on typical decks, up to ~7× on small ones) — including the
-  free-boundary rows (1.3–1.5×) since the NESTOR iteration loop was fused
-  into jitted multi-iteration lanes. Each row is one
-  controlled sequential measurement on an idle host — not a repeated-run
-  statistic.
-- **Cold** — a fresh CLI process pays a one-time 5–25 s JAX/XLA compile, so a
-  single run is slower than Fortran. Executables cache per solver structure, so
-  scans, ladders, and optimizations recompile nothing — which is why *warm* is
-  the workflow number.
+  optimization loop or scan. Faster than VMEC2000 on **every** benchmark row:
+  the recorded speedups span 1.42× (Nuhrenberg–Zille QHS) to 3.35×
+  (Solov'ev), with both free-boundary rows at ~1.5× (1.55× on the converged
+  symmetric row, 1.46× on the NITER-bounded LASYM stress row) since the
+  NESTOR iteration loop was fused into jitted multi-iteration lanes. Each
+  row is one controlled sequential measurement on an idle host — not a
+  repeated-run statistic.
+- **Cold** — a fresh CLI process pays a one-time JAX/XLA compile (~2 s on the
+  small decks up to ~18 s on the largest), so a single fire-and-forget run is
+  usually slower than Fortran — though on the five biggest decks even the
+  cold run, compile included, beats VMEC2000. Executables cache per solver
+  structure, so scans, ladders, and optimizations recompile nothing — which
+  is why *warm* is the workflow number.
 - **GPU** — at these sizes a fixed per-solve dispatch cost dominates and the CPU
   wins outright; per-iteration throughput favours the GPU ~3× on the largest
   moderate-mode decks. The measured device policy therefore keeps small-work
@@ -212,10 +217,12 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
 
 ### Free boundary from coil-field tabulation
 
-Free-boundary solves can use a coil set by tabulating an
-[ESSOS](https://github.com/uwplasma/ESSOS) coil set onto the solver grid in
-memory (`essos.coils.Coils.to_mgrid`) and pass it as `external_field=`,
-without a persistent MAKEGRID file. This forward route still uses mgrid
+Free-boundary solves can use a coil set directly: load the coils with
+[ESSOS](https://github.com/uwplasma/ESSOS) (`essos.coils.Coils`), evaluate
+their field with `essos.fields.BiotSavart`, and tabulate it once into an
+in-memory table via `MgridField.from_cartesian_field`, passed as
+`external_field=` — no MAKEGRID file involved (this is the route the CLI's
+`--coils` flag takes). This forward route still uses mgrid
 interpolation. Separately, the virtual-casing residual can evaluate a JAX
 Biot-Savart callable directly on a specified boundary, retaining coil
 derivatives for that residual; it is not an adjoint of the reconverged NESTOR
@@ -226,8 +233,7 @@ solve. All coil geometry lives in ESSOS; vmex has no coil code of its own.
 *Free-boundary equilibria of the Landreman–Paul precise-QA configuration held
 by its 16 modular coils as optimized in
 [ESSOS](https://github.com/uwplasma/ESSOS) (3 KB coil JSON bundled in
-`examples/data/`; until `Coils.to_mgrid` is merged, use ESSOS branch
-`feature/mgrid-from-coils`). Pressure is ramped at fixed coil currents with each point
+`examples/data/`). Pressure is ramped at fixed coil currents with each point
 warm-started from the previous boundary, and `PRES_SCALE` is calibrated per
 point so the **actual** volume-average beta of the converged wout
 (`betatotal`) — not a nominal input value — lands on 0, 1, 2, 3 % (all within

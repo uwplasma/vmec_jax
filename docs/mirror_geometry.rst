@@ -1083,7 +1083,8 @@ systems expose exact repeated JVP/VJP actions through a SciPy ``LinearOperator``
 with no materialized Jacobian, globalized by a bounded trust region and polished
 by a Newton--GMRES step using the fixed-solver spline preconditioner. Generic
 interior and full-node virtual-casing adapters are intentionally left to
-virtual-casing-jax; VMEX retains only the operator used by mirror equilibria.
+``virtual_casing_jax``; VMEX retains only the operator used by mirror
+equilibria.
 
 Nonaxisymmetric free-boundary mirrors are explicitly deferred. A historical
 three-grid study reached roundoff nonlinear residuals, but local ``m=1``

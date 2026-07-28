@@ -92,10 +92,12 @@ For ``LFREEB = T`` decks:
 - a **missing** mgrid file falls back to a fixed-boundary solve with a
   warning (retained VMEC2000 behavior);
 - ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
-  field from an ESSOS coils file (``essos.coils.Coils``): the coils are tabulated
-  into an in-memory mgrid (``Coils.to_mgrid``) and read back as an
-  :class:`vmex.core.mgrid.MgridField` (requires an ESSOS build providing
-  ``Coils.to_mgrid``; currently branch ``feature/mgrid-from-coils``).
+  field from an ESSOS coils file (``essos.coils.Coils``): the coils' Biot-Savart
+  field (``essos.fields.BiotSavart``) is tabulated directly into an in-memory
+  :class:`vmex.core.mgrid.MgridField` via
+  :meth:`~vmex.core.mgrid.MgridField.from_cartesian_field` — no temporary
+  mgrid file and no mgrid-export API involved (requires ESSOS,
+  ``pip install essos``).
 
 The free-boundary path runs the complete ``NS_ARRAY`` ladder.  It interpolates
 the preceding stage's final plasma state, carries VMEC2000's active-vacuum and adaptive

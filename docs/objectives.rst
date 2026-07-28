@@ -285,19 +285,20 @@ interchange stability, combine with
 :func:`~vmex.core.optimize.mercier_stability_residual` (traceable); retain
 :func:`~vmex.core.optimize.d_merc` for wout-lane reporting or ``jac=None``.
 
-Turbulence proxies (SPECTRAX-GK)
---------------------------------
+Turbulence proxies (GKX)
+------------------------
 
 :mod:`vmex.core.turbulence` wires the gyrokinetic proxies of
-`SPECTRAX-GK <https://github.com/uwplasma/spectrax-gk>`_ (uwplasma's
-JAX-native Hermite–Laguerre flux-tube solver; ``pip install spectraxgk``,
-optional dependency) into the objective protocol (plan R26h.h4):
+`GKX <https://github.com/uwplasma/GKX>`_ (uwplasma's
+JAX-native Hermite–Laguerre flux-tube solver, formerly SPECTRAX-GK;
+``pip install gkx``, optional dependency) into the objective protocol
+(plan R26h.h4):
 
 - :func:`~vmex.core.turbulence.gk_fieldline_geometry` /
   :func:`~vmex.core.turbulence.flux_tube_geometry` — sample one field
   line of the converged interior solution into GS2/GX-normalized flux-tube
   geometry (``bmag``, ``gds2/gds21/gds22``, curvature/grad-B drifts, …),
-  pure JAX, no spectraxgk import needed;
+  pure JAX, no gkx import needed;
 - :func:`~vmex.core.turbulence.turbulent_growth_rate` — the dominant
   linear ITG/TEM growth rate on that flux tube.  Fully differentiable in
   *both* gradient modes (validated 0.44 ``v_th/L`` at the Cyclone-base

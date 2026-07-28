@@ -111,8 +111,10 @@ Free-boundary gradients (virtual casing)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The differentiable complement for free boundary: the plasma–vacuum interface
-mismatch is written as a smooth objective and differentiated with respect to the
-coil currents (``extcur``) and coil Fourier shape, finite-difference-validated.
+mismatch on a specified plasma boundary is written as a smooth objective and
+differentiated with respect to the coil currents (``extcur``) and coil Fourier
+shape, finite-difference-validated; the NESTOR equilibrium solve itself is not
+differentiated.
 
 .. literalinclude:: ../examples/take_free_boundary_gradients.py
    :language: python

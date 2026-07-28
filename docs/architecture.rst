@@ -101,7 +101,7 @@ Module map
        objective (COBRA-style)
      - ``mercier.f`` / ``jxbforce.f``; COBRA companion code
    * - :mod:`~vmex.core.turbulence`
-     - GK flux-tube geometry adapter + SPECTRAX-GK turbulence proxies
+     - GK flux-tube geometry adapter + GKX turbulence proxies
      - (no VMEC2000 equivalent)
    * - :mod:`~vmex.core.nyquist`
      - Nyquist-resolution Fourier tables, ``bsubs``, jxbforce, Mercier

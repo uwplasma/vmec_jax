@@ -231,8 +231,8 @@ Free boundary
      - free-boundary mode; forced ``F`` when ``MGRID_FILE = 'NONE'``
    * - ``MGRID_FILE``
      - ``'NONE'``
-     - MAKEGRID vacuum-field file, or ``'DIRECT_COILS'`` to ask ESSOS to
-       tabulate a temporary mgrid (with ``vmex --coils``)
+     - MAKEGRID vacuum-field file, or ``'DIRECT_COILS'`` to tabulate the
+       ESSOS coil field into an in-memory mgrid table (with ``vmex --coils``)
    * - ``EXTCUR``
      - —
      - external coil-group currents [A]

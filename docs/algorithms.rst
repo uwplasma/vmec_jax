@@ -407,7 +407,9 @@ the field produced outside :math:`\partial\Omega` by the plasma currents
 equals that of the surface current
 :math:`\mathbf{K} = \mathbf{n}\times\mathbf{B}/\mu_0` on
 :math:`\partial\Omega`, evaluated with an accurate on-surface singular
-quadrature (reused from ``virtual_casing_jax``;
+quadrature (reused from the optional ``virtual_casing_jax`` package,
+which is unreleased/experimental — canonical repo
+``uwplasma/virtual_casing_jax``;
 :func:`~vmex.core.freeboundary_diff.surface_field_data_from_wout`
 adapts a converged boundary + field, and
 :func:`~vmex.core.freeboundary_diff.plasma_field_on_boundary` evaluates

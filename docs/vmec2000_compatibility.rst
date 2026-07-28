@@ -110,9 +110,10 @@ Equilibrium capability matrix
      - Mgrid external field, plasma-current filament, full/incremental vacuum
        cadence, pressure coupling, and WOUT equilibrium channels.
    * - Free boundary, NESTOR, ``LASYM=T``
-     - implemented; limited regression envelope
-     - A CTH-like asymmetric case exercises the solve.  Symmetric and
-       asymmetric vacuum-potential WOUT completeness are tracked separately.
+     - implemented; live-VMEC2000-tested
+     - A CTH-like asymmetric case exercises the solve, and the live VMEC2000
+       comparison covers a converged LASYM free-boundary case including its
+       NESTOR vacuum-potential and surface-field WOUT partners.
    * - Fixed-boundary ``NS_ARRAY``
      - parity-regressed
      - Increasing stages interpolate the final state, equal stages rerun, and
@@ -140,8 +141,9 @@ Equilibrium capability matrix
        geometry derivatives are not retained by tabulation.
    * - CLI ``--coils`` / ``DIRECT_COILS``
      - deliberate VMEX extension
-     - ESSOS exports an mgrid representation which then follows the same
-       NESTOR path.  This is not an interpolation-free coil solve.
+     - The ESSOS coils' Biot-Savart field is tabulated in memory into an
+       ``MgridField`` which then follows the same NESTOR path.  This is not
+       an interpolation-free coil solve.
    * - ``free_boundary_method='only_coils'``
      - rejected when active
      - This is a different boundary model, not an alias for choosing a coil
@@ -473,9 +475,11 @@ difference; it does not mean the method itself uses FD.
        the derivative of a fully reconverged NESTOR equilibrium.
    * - Simultaneous boundary + coil surface-field construction
      - partial
-     - Traceable state-to-surface data exists for ``LASYM=F`` with the optional
-       ``virtual_casing_jax`` dependency.  ``LASYM=T`` is rejected as
-       unvalidated.
+     - Traceable state-to-surface data is vmex-native and needs no optional
+       dependency; ``LASYM=T`` is rejected as unvalidated.  The virtual-casing
+       solver paths built on it require the optional ``virtual_casing_jax``
+       package, which is unreleased/experimental (canonical repo
+       ``uwplasma/virtual_casing_jax``; integration PR #2 pending there).
    * - Mgrid tabulation
      - partial derivative contract
      - Differentiable in table values/current scale, not in the coil geometry
@@ -606,8 +610,8 @@ Open-PR ownership and merge preservation
      - Complementary output parity; retain when resolving WOUT conflicts.
    * - #73
      - Symmetric NESTOR potential/surface WOUT export
-     - Closes part of the documented fill-value gap; asymmetric export remains
-       explicit follow-up work.
+     - Closes part of the documented fill-value gap; the asymmetric export has
+       since landed and is live-VMEC2000-tested.
    * - #74
      - Bounded nightly validation
      - CI scheduling/limits only; no solver semantics.
@@ -659,6 +663,5 @@ A remaining row is complete only when all applicable evidence exists:
 The highest-priority unimplemented parity work exposed by this audit is:
 VMEC2000 continuation controls (``PRE_NITER``, ``MAX_MAIN_ITERATIONS``,
 ``LGIVEUP``), target-volume rescaling, the non-GMRES 2-D preconditioner modes,
-TRIP3D/reconstruction/RFP/ANIMEC physics where required by research programs, a
-true NESTOR equilibrium derivative, and complete asymmetric NESTOR WOUT
-structures.
+TRIP3D/reconstruction/RFP/ANIMEC physics where required by research programs,
+and a true NESTOR equilibrium derivative.

@@ -348,7 +348,7 @@ executables and the runtime floor rather than by the physics working set.
 Current-head numbers for the reference high-mode deck are produced by the
 reproducible harness (``benchmarks/profile_high_resolution.py`` and
 ``benchmarks/run_baseline.py``) rather than recorded here, so the
-documentation cannot go stale against the code
+documentation cannot go stale against the code.
 
 The new synthesis repacks the signed helical coefficients into separable
 theta/zeta blocks, evaluates zeta with ``jax.numpy.fft.irfft``, and
