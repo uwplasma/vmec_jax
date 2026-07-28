@@ -309,6 +309,100 @@ def test_fused_vacuum_matches_reference(ab_inputs):
     assert float(out["ctor"]) == pytest.approx(float(ctor), rel=1e-12, abs=1e-14)
 
 
+def test_vacuum_lane_never_consumes_a_sign_changed_state():
+    """funct3d.f parity: NESTOR evaluates ``xstore`` on a bad-Jacobian pass.
+
+    ``funct3d.f`` computes the Jacobian first; a sign-changed pass restarts
+    (``irst = 2``) and the SAME iteration's re-evaluation runs the IVAC0
+    block at the restored state with ``iter1 = iter2`` — a FULL vacuum
+    update that never sees the invalid geometry.  Feeding NESTOR the
+    sign-changed state instead hands ``analyt.f``'s log/sqrt kernels a
+    degenerate boundary: on the QI sheet-current gate ladder at the DELT
+    stability edge the poisoned ``bsqvac`` surfaced as a fatal NON-FINITE
+    FORCE EVALUATION (DEL-BSQ = NaN on the failing screen row) where
+    VMEC2000 recovers.  The steady lane must keep the vacuum response
+    finite and come out of the pass through the ordinary restart.
+    """
+    from dataclasses import replace
+
+    from vmex.core.errors import NONFINITE_FLAG
+
+    inp = VmecInput.from_file(DECK)
+    field = FB._external_field_from_input(inp, MGRID)
+    res = FB.free_boundary_resolution(inp, field)
+    rt = prepare_runtime(inp, res)
+    ns = int(res.ns)
+    dtype = rt.setup.s_full.dtype
+
+    healthy = _initial_state(rt.setup)
+    axis_r, axis_z = FB._vacuum_scalars(healthy, rt)[2:4]
+    basis, fused, lane = FB._vacuum_executables(
+        res, mf=int(inp.mpol) + 1, nf=int(inp.ntor),
+        signgs=int(rt.setup.signgs),
+        wint=np.asarray(rt.trig.wint, dtype=float),
+        modes=rt.modes, axis_r0=axis_r, axis_z0=axis_z, use_fft=False,
+    )
+    rt_freeb = replace(
+        rt, lfreeb=True, jmax=ns, max_iterations=5,
+        bsqvac_edge=jnp.zeros((basis.ntheta3, basis.nzeta), dtype=dtype),
+        presf_ns_scale=jnp.asarray(FB._presf_ns_scale(inp, ns), dtype=dtype),
+    )
+
+    # Collapse the edge row onto the magnetic axis: the boundary surface
+    # degenerates (Ru = Zu = 0, analyt.f log argument -> 0) and, lying
+    # inside the interior surfaces, flips the Jacobian sign.
+    keep00 = ((np.asarray(rt.modes.m) == 0)
+              & (np.asarray(rt.modes.n) == 0)).astype(float)
+    bad = dataclasses.replace(
+        healthy,
+        R_cos=healthy.R_cos.at[-1].set(healthy.R_cos[-1] * keep00),
+        R_sin=healthy.R_sin.at[-1].set(0.0),
+        Z_cos=healthy.Z_cos.at[-1].set(0.0),
+        Z_sin=healthy.Z_sin.at[-1].set(0.0),
+    )
+    assert bool(FB._jacobian_ok(healthy, rt))
+    assert not bool(FB._jacobian_ok(bad, rt))
+
+    # The mechanism: NESTOR on the sign-changed state IS non-finite — this
+    # is exactly what the pre-gate lane consumed.
+    seed = fused.full(healthy, rt_freeb, field)
+    poisoned = fused.full(bad, rt_freeb, field)
+    assert np.all(np.isfinite(np.asarray(seed["bsqvac"])))
+    assert not np.all(np.isfinite(np.asarray(poisoned["bsqvac"])))
+
+    int64 = lambda v: jnp.asarray(v, dtype=jnp.int64)  # noqa: E731
+    carry = FB._initial_carry(bad, rt_freeb, ijacob=0,
+                              residuals=(1.0e-4, 1.0e-4, 1.0e-4))
+    # A steady-state pass: mid-run iteration, best state stored at xstore;
+    # max_iterations=5 bounds the lane to this single pass.
+    carry = dataclasses.replace(carry, xstore=healthy,
+                                iteration=int64(5), iter1=int64(1))
+    vc = FB._VacuumLoopCarry(
+        carry=carry,
+        rcon0=rt_freeb.rcon0, zcon0=rt_freeb.zcon0,
+        bsqvac=seed["bsqvac"], rbsq=seed["rbsq"],
+        mode_matrix=seed["mode_matrix"], bvec_nonsing=seed["bvec_nonsing"],
+        potvac=seed["potvac"], surface_fields=seed["surface_fields"],
+        ivac=int64(3), nvacskip=int64(1), nvskip0=int64(1),
+        delbsq=jnp.asarray(1.0, dtype=dtype),
+        delbsq_traj=jnp.full((5,), np.nan, dtype=dtype),
+        ctor=seed["ctor"], rbtor=seed["rbtor"],
+        vacuum_calls=int64(0), full_updates=int64(0),
+    )
+    out = lane(vc, rt_freeb, field)
+
+    # NESTOR consumed the restored state: the vacuum response equals the
+    # healthy evaluation and stays finite; the pass ends in the ordinary
+    # restart path, not the non-finite failure.
+    np.testing.assert_allclose(
+        np.asarray(out.bsqvac), np.asarray(seed["bsqvac"]),
+        rtol=1e-12, atol=1e-14)
+    assert np.all(np.isfinite(np.asarray(out.carry.fsqr)))
+    for leaf in jax.tree.leaves(out.carry.state):
+        assert np.all(np.isfinite(np.asarray(leaf)))
+    assert int(out.carry.ier) != NONFINITE_FLAG
+
+
 # ---------------------------------------------------------------------------
 # End-to-end golden run
 # ---------------------------------------------------------------------------

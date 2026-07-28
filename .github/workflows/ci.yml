@@ -529,7 +529,7 @@ jobs:
       matrix:
         shard: [core-a-c, core-d-f, core-g-h, core-i, core-i-grad, core-j-m,
                 core-n-s, core-t-z, hmfb-ladders, hmfb-combined, hmfb-fft537,
-                qi-gate-free, qi-gate-ladder,
+                qi-gate-free, qi-gate-ladder, qi-gate-ladder-fft,
                 qi-gate-fixed, opt-qa, opt-qh,
                 opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
@@ -648,6 +648,13 @@ jobs:
               ;;
             qi-gate-ladder)
               FILES="tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_matches_vmec2000"
+              ;;
+            qi-gate-ladder-fft)
+              # Same ladder through the separable-FFT kernel: pins
+              # FFT == dense == VMEC2000 on the gate deck (regression for
+              # the NON-FINITE FORCE EVALUATION when NESTOR consumed a
+              # sign-changed transient at the DELT stability edge).
+              FILES="tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_fft_matches_dense"
               ;;
             qi-gate-fixed)
               FILES="tests/test_qi_sheet_gate.py::test_qi_fixed_238_ladder_converges"

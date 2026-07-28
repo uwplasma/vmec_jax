@@ -367,6 +367,30 @@ def _vacuum_scalars(state: SpectralState, rt: SolverRuntime):
 
 
 @functools.partial(jax.jit, static_argnames=("use_fft",))
+def _jacobian_ok(state: SpectralState, rt: SolverRuntime,
+                 *, use_fft: bool = False) -> Array:
+    """funct3d.f Jacobian gate: True while the state's ``tau`` has one sign.
+
+    ``funct3d.f`` calls ``jacobian`` immediately after synthesis and, when
+    the sign changed (``irst = 2``, ``iequi = 0``), sets ``gc = 0`` and
+    jumps past ``bcovar``, the whole ``IVAC0`` block and the force build;
+    ``evolve.f`` then restores ``xc = xstore`` (``restart_iter``,
+    ``iter1 = iter2``) and re-calls funct3d, whose IVAC0 block performs a
+    FULL NESTOR update at the restored state (``ivacskip = 0``).  The
+    free-boundary cadence uses this flag to substitute ``xstore`` as the
+    NESTOR source on exactly those passes, so the vacuum never consumes a
+    sign-changed state.  Evaluating NESTOR on such a transient hands
+    ``analyt.f``'s ``log``/``sqrt`` kernels a degenerate boundary, and the
+    resulting non-finite ``bsqvac`` turns funct3d.f's recoverable restart
+    into a fatal NON-FINITE FORCE EVALUATION.
+    """
+    _, geometry = _geometry(state, rt, use_fft=use_fft)
+    return jnp.logical_not(
+        half_mesh_jacobian(geometry, s=rt.setup.s_full).jacobian_sign_changed
+    )
+
+
+@functools.partial(jax.jit, static_argnames=("use_fft",))
 def _iter_lane(carry, rt: SolverRuntime, *, use_fft: bool = False):
     """One jitted eqsolve iteration (shared traced body; per-``rt`` lane)."""
     return _make_body(rt, use_fft=use_fft)(carry)
@@ -1054,13 +1078,30 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
         it = c.iteration
         fsq_rz = c.fsqr + c.fsqz
 
+        # funct3d.f: ``jacobian`` runs before ``bcovar``/IVAC0, and a
+        # sign-changed pass skips the whole block (``gc = 0``, GOTO 100).
+        # evolve.f then restores ``xc = xstore`` (``restart_iter`` with
+        # ``iter1 = iter2``) and re-calls funct3d, whose IVAC0 block runs
+        # with ``ivacskip = mod(iter2-iter1, nvacskip) = 0`` — a FULL
+        # NESTOR update at the restored state.  NESTOR therefore never
+        # consumes a sign-changed state: feed it ``xstore`` and force a
+        # full update whenever the current state is invalid.  Without
+        # this, a transient sign-changed state near the DELT stability
+        # edge hands ``analyt.f``'s log/sqrt kernels a degenerate
+        # boundary and the poisoned ``bsqvac`` turns funct3d.f's
+        # recoverable restart into a fatal NON-FINITE FORCE EVALUATION
+        # (see :func:`_jacobian_ok`).
+        good = _jacobian_ok(c.state, rt, use_fft=use_fft)
+        vac_state = jax.tree.map(
+            lambda a, b: jnp.where(good, a, b), c.state, c.xstore)
+
         # -- funct3d.f IVAC0 block (traced; same order as the host pass) ----
         ivac = vc.ivac + ((it > 1) & (fsq_rz <= ACTIVATION_FSQ)).astype(vc.ivac.dtype)
         rcon0 = 0.9 * vc.rcon0
         zcon0 = 0.9 * vc.zcon0
         one = jnp.ones((), dtype=vc.nvacskip.dtype)
         ivacskip = jnp.where(
-            ivac <= 2, jnp.zeros_like(vc.nvacskip),
+            (ivac <= 2) | jnp.logical_not(good), jnp.zeros_like(vc.nvacskip),
             (it - c.iter1).astype(vc.nvacskip.dtype) % jnp.maximum(one, vc.nvacskip),
         )
         full = ivacskip == 0
@@ -1076,14 +1117,14 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
         rt_vac = replace(rt, rcon0=rcon0, zcon0=zcon0, bsqvac_edge=vc.bsqvac)
 
         def _full(_):
-            out = fused.full(c.state, rt_vac, field)
+            out = fused.full(vac_state, rt_vac, field)
             return (out["bsqvac"], out["rbsq"], out["ctor"], out["rbtor"], out["potvac"],
                     out["surface_fields"],
                     out["delbsq_num"], out["delbsq_den"],
                     out["mode_matrix"], out["bvec_nonsing"])
 
         def _skip(_):
-            out = fused.skip(c.state, rt_vac, field, vc.bvec_nonsing,
+            out = fused.skip(vac_state, rt_vac, field, vc.bvec_nonsing,
                              vc.mode_matrix)
             return (out["bsqvac"], out["rbsq"], out["ctor"], out["rbtor"], out["potvac"],
                     out["surface_fields"],
@@ -1517,6 +1558,16 @@ def _solve_free_boundary_stage(
         iter1 = int(carry.iter1)
         fsq_rz = float(carry.fsqr) + float(carry.fsqz)
 
+        # funct3d.f: ``jacobian`` precedes ``bcovar``/IVAC0; a sign-changed
+        # pass restarts from ``xstore`` and the SAME iteration's
+        # re-evaluation runs the IVAC0 block with ``iter1 = iter2``
+        # (``ivacskip = 0``) at the restored state — NESTOR never consumes
+        # a sign-changed state (:func:`_jacobian_ok`).
+        jacobian_good = bool(
+            _jacobian_ok(carry.state, rt, use_fft=use_fft))
+        vacuum_source = carry if jacobian_good else replace(
+            carry, state=carry.xstore)
+
         # -- funct3d.f IVAC0 block (host) -----------------------------------
         if it > 1 and fsq_rz <= ACTIVATION_FSQ:
             fb.ivac += 1
@@ -1527,12 +1578,12 @@ def _solve_free_boundary_stage(
             rt_fixed = replace(rt_fixed, rcon0=0.9 * rt_fixed.rcon0, zcon0=0.9 * rt_fixed.zcon0)
             rt_freeb = replace(rt_freeb, rcon0=0.9 * rt_freeb.rcon0, zcon0=0.9 * rt_freeb.zcon0)
             ivacskip = (it - iter1) % max(1, fb.nvacskip)
-            if fb.ivac <= 2:
+            if fb.ivac <= 2 or not jacobian_good:
                 ivacskip = 0
             if ivacskip == 0:
                 fb.nvacskip = max(fb.nvskip0, int(1.0 / max(1.0e-1, 1.0e11 * fsq_rz)))
             bsqvac = _vacuum_step(
-                carry=carry, rt=rt_freeb, fb=fb, basis=basis,
+                carry=vacuum_source, rt=rt_freeb, fb=fb, basis=basis,
                 fused_vac=fused_vac, field=external_field,
                 ivacskip=ivacskip, emit=emit, verbose=verbose,
             )
@@ -1544,7 +1595,7 @@ def _solve_free_boundary_stage(
                 # pass's force evaluation (the momentum base remains xstore).
                 fb.turned_on = True
                 fb.banner_pending = True
-                turnon_evaluation_state = carry.state
+                turnon_evaluation_state = vacuum_source.state
                 carry = replace(
                     carry,
                     state=carry.xstore,

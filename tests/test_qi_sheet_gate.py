@@ -196,6 +196,49 @@ def test_qi_sheet_gate_ladder_matches_vmec2000(sheet_field, tmp_path):
     assert iota_edge == pytest.approx(GOLDEN_IOTA_EDGE, rel=2e-3)
 
 
+@pytest.mark.full  # ~20 min: the SAME gate ladder through the FFT kernel
+def test_qi_sheet_gate_ladder_fft_matches_dense(sheet_field, tmp_path):
+    """FFT and dense kernels land the SAME gate equilibrium (golden bands).
+
+    Identical deck, field and ladder as
+    :func:`test_qi_sheet_gate_ladder_matches_vmec2000`, forced through the
+    separable-FFT synthesis (``use_fft=True``).  The FFT kernel is the same
+    math to roundoff at this deck's exact 238-mode/NZETA=36 table (the
+    transform A/B is machine-precision), so the FFT lane must activate in
+    the same window and land inside the same recorded VMEC2000 bands as
+    the dense lane: FFT == dense == VMEC2000 within the gate tolerances.
+
+    Regression: with the FFT roundoff realization this ladder sat on the
+    wrong side of the DELT stability edge and a sign-changed transient
+    reached NESTOR, whose poisoned ``bsqvac`` (DEL-BSQ = NaN) raised
+    NON-FINITE FORCE EVALUATION where VMEC2000 recovers — funct3d.f
+    validates the Jacobian first and re-evaluates the restored state
+    (see ``freeboundary._jacobian_ok``).
+    """
+    outdir, _ = sheet_field
+    deck = _gate_deck((outdir / "input.qi_sheet_free").read_text())
+    path = tmp_path / "input.qi_gate_fft"
+    path.write_text(deck)
+    inp = VmecInput.from_file(str(path))
+
+    lines: list[str] = []
+    result = solve_free_boundary_multigrid(
+        inp, mgrid_path=str(outdir / "mgrid_qi_sheet.nc"), verbose=True,
+        emit=lambda t="", end="\n": lines.append(str(t)),
+        raise_on_max_iterations=False, release_stage_cache=True,
+        use_fft=True)
+    output = "\n".join(lines)
+
+    m = re.search(r"VACUUM PRESSURE TURNED ON AT\s+(\d+)", output)
+    assert m is not None, "vacuum never activated under the FFT kernel"
+    assert abs(int(m.group(1)) - GOLDEN_ACTIVATION) <= 4, m.group(0)
+    assert bool(result.converged), f"fsqr={float(result.fsqr):.2e}"
+    assert float(result.wb) == pytest.approx(GOLDEN_WB, rel=5e-4)
+    assert float(result.r00) == pytest.approx(GOLDEN_R00, rel=3e-3)
+    iota_edge = float(np.asarray(result.iotaf)[-1])
+    assert iota_edge == pytest.approx(GOLDEN_IOTA_EDGE, rel=2e-3)
+
+
 @pytest.mark.full  # ~25 min: fixed-boundary ladder at full 1e-8 (no floor)
 def test_qi_fixed_238_ladder_converges(tmp_path):
     deck = (ROOT / "examples" / "data" / "input.nfp2_QI").read_text()
