@@ -528,7 +528,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [core-a-c, core-d-f, core-g-h, core-i, core-i-grad, core-j-m,
-                core-n-s, core-t-z, high-mode-fb, qi-gate-free, qi-gate-ladder,
+                core-n-s, core-t-z, hmfb-ladders, hmfb-combined, hmfb-fft537,
+                qi-gate-free, qi-gate-ladder,
                 qi-gate-fixed, opt-qa, opt-qh,
                 opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
@@ -592,7 +593,7 @@ jobs:
               ;;
             core-g-h)
               # g-i split likewise; the high-mode free-boundary file (h)
-              # stays in its own high-mode-fb shard
+              # stays in its own hmfb-* campaign shards
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
                      --ignore=tests/test_high_mode_free_boundary_parity.py \
                      --ignore-glob=tests/test_[a-f]*.py \
@@ -611,8 +612,27 @@ jobs:
             core-i-grad)
               FILES="tests/test_implicit_grad.py"
               ;;
-            high-mode-fb)
-              FILES="tests/test_high_mode_free_boundary_parity.py"
+            # The single high-mode-fb worker timed out at 300 minutes when
+            # its kernel cache went cold (every dispatch that day was
+            # cancelled before the post-job cache save, and the rolling
+            # saves from 18 other shards evicted the old lineage from the
+            # repo's 10 GB cache pool).  Six compile-dominated 238/537-mode
+            # lanes in one job do not fit a cold worker; three campaign
+            # workers each fit with margin, and each saves its own cache.
+            hmfb-ladders)
+              FILES="tests/test_high_mode_free_boundary_parity.py::test_all_reported_features_parse_together \
+                     tests/test_high_mode_free_boundary_parity.py::test_fixed_boundary_238_mode_ladder_converges \
+                     tests/test_high_mode_free_boundary_parity.py::test_free_boundary_238_mode_ladder_survives_activation \
+                     tests/test_high_mode_free_boundary_parity.py::test_vacuum_survives_a_radial_transition \
+                     tests/test_high_mode_free_boundary_parity.py::test_mgrid_nzeta_policy_matches_vmec2000"
+              ;;
+            hmfb-combined)
+              FILES="tests/test_high_mode_free_boundary_parity.py::test_combined_238_mode_cth_free_ladder_matches_vmec2000 \
+                     tests/test_high_mode_free_boundary_parity.py::test_use_fft_reaches_every_free_boundary_lane \
+                     tests/test_high_mode_free_boundary_parity.py::test_dense_and_fft_free_boundary_trajectories_match"
+              ;;
+            hmfb-fft537)
+              FILES="tests/test_high_mode_free_boundary_parity.py::test_free_boundary_537_modes_converges_with_fft"
               ;;
             qi-gate-free)
               # The QI sheet-current gate lanes are the heaviest single
