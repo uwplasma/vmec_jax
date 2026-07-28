@@ -13,7 +13,13 @@ coefficients).  :func:`solve_implicit` wraps the opaque host solver
 matrix-free (one ``jax.vjp`` linearization of the residual, re-applied by a
 recycling GCROT(m, k) Krylov solve — see ``_adjoint_solve_gcrot``) and returns
 ``g_p - lambda^T dF/dp`` with one more VJP — O(1) memory in the forward
-iteration count.
+iteration count.  The adjoint solve executes host-eagerly on the caller's
+thread and is bound to the config's carried device on its own (see the
+"Adjoint execution site" section note); its convergence is enforced — an
+exhausted Krylov budget raises the typed
+:class:`~vmex.core.errors.AdjointSolveError` instead of silently returning a
+plausible-but-wrong gradient — and setting ``VMEX_ADJOINT_DEBUG=1`` prints
+per-stage device/norm lines for hardware placement triage.
 
 Residual formulation (documented choice)
 ----------------------------------------
@@ -104,6 +110,8 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import functools
+import os
+import sys
 import types
 import weakref
 from dataclasses import dataclass
@@ -119,7 +127,7 @@ from solvax import gcrot as _solvax_gcrot
 from solvax import gmres as _solvax_gmres
 
 from .device import AUTO, resolve_implicit_device
-from .errors import VmecError
+from .errors import AdjointSolveError, VmecError
 from .fields import magnetic_fields, metric_elements
 from .fourier import Resolution
 from .geometry import (
@@ -319,10 +327,16 @@ def make_config(
 
 
 def _device_context(cfg: ImplicitConfig):
-    """The config's placement context (a no-op when no device is carried)."""
-    if cfg.device is None:
+    """The config's placement context (a no-op when no device is carried).
+
+    ``getattr``: the Krylov helpers accept duck-typed configs (the recycle
+    tests pass a ``SimpleNamespace`` carrying only the solver knobs), for
+    which "no device carried" is the correct reading.
+    """
+    device = getattr(cfg, "device", None)
+    if device is None:
         return contextlib.nullcontext()
-    return jax.default_device(cfg.device)
+    return jax.default_device(device)
 
 
 def _device_pin(cfg: ImplicitConfig, tree):
@@ -1256,6 +1270,151 @@ def solve_implicit_with_aux(params: ImplicitParams, cfg: ImplicitConfig):
     return _callback_solve(params, cfg)
 
 
+# ---------------------------------------------------------------------------
+# Adjoint execution site, device binding, instrumentation, convergence check
+# ---------------------------------------------------------------------------
+#
+# WHERE THE ADJOINT ACTUALLY EXECUTES (verified on the forced-two-host-device
+# rig): a custom-VJP backward runs HOST-EAGERLY on the *caller's* thread with
+# concrete arrays — not under a trace and not on the ``pure_callback`` worker
+# thread — unless the caller wraps the whole gradient in ``jax.jit`` (the
+# ``optimize.minimize`` scalar path does; then every value below is a
+# tracer).  In the host-eager mode each fresh constant the Krylov solve
+# creates (the zero recycle pair, the Arnoldi basis, the tolerance scalar)
+# follows the *thread-local* default device, and the ``lax.while_loop`` the
+# iteration compiles to follows its committed operands.  The helpers below
+# therefore bind the SMALLEST possible computation to ``cfg.device``: the
+# raveled RHS is pinned with an explicit ``jax.device_put`` (a placement that
+# commits, steering the loop) and the solver call itself runs inside the
+# config's ``jax.default_device`` context (steering the eager fresh
+# constants) — independent of any caller-held context, and cheap no-ops when
+# no device is carried.
+
+#: Environment gate for the off-by-default adjoint instrumentation: set
+#: ``VMEX_ADJOINT_DEBUG=1`` to print one ``[vmex adjoint]`` line per stage
+#: (devices + commitment + norm) of every reverse pass — enough for a
+#: hardware session to localize a device-placement divergence to a stage
+#: without rebuilding.  Read per call so tests can toggle it via the
+#: environment without reloading the module.
+_ADJOINT_DEBUG_ENV = "VMEX_ADJOINT_DEBUG"
+
+
+def _adjoint_debug_enabled() -> bool:
+    value = os.environ.get(_ADJOINT_DEBUG_ENV, "")
+    return value.strip().lower() not in ("", "0", "false", "off")
+
+
+def _debug_stage(stage: str, tree: Any) -> None:
+    """One ``[vmex adjoint] <stage>: devices=... committed=... norm=...`` line.
+
+    Concrete leaves report their device set, commitment and joint 2-norm
+    (forcing a sync — acceptable under an explicit debug gate); traced leaves
+    (gradient under an outer ``jax.jit``/``jax.vmap``) report ``traced``, the
+    execution-site information itself.  No-op unless the environment gate is
+    set.
+    """
+    if not _adjoint_debug_enabled():
+        return
+    devices: set[str] = set()
+    committed: set[bool] = set()
+    total = 0.0
+    traced = False
+    for leaf in jax.tree.leaves(tree):
+        if isinstance(leaf, jax.core.Tracer):
+            traced = True
+        elif isinstance(leaf, jax.Array):
+            devices.update(str(d) for d in leaf.devices())
+            committed.add(bool(getattr(leaf, "committed", False)))
+            total += float(jnp.vdot(leaf, leaf).real)
+        elif isinstance(leaf, np.ndarray):
+            devices.add("host-numpy")
+            total += float(np.vdot(leaf, leaf).real)
+    where = "traced" if traced else (",".join(sorted(devices)) or "-")
+    norm = "traced" if traced else f"{float(np.sqrt(total)):.9e}"
+    print(f"[vmex adjoint] {stage}: devices={where} "
+          f"committed={sorted(committed)} norm={norm}", file=sys.stderr)
+
+
+def _pin_concrete(cfg: ImplicitConfig, tree):
+    """:func:`_device_pin`, skipping tracer leaves.
+
+    Inside a trace (the vmapped multi-RHS rows, a jitted gradient) placement
+    is governed by the transformation and the boundary pins the callers
+    already apply; a ``device_put`` on a batch tracer is unnecessary there.
+    Concrete leaves — the host-eager reverse pass — are committed to
+    ``cfg.device``.  ``getattr``: duck-typed configs without a ``device``
+    attribute (the recycle tests) mean "no device carried".
+    """
+    device = getattr(cfg, "device", None)
+    if device is None:
+        return tree
+    return jax.tree.map(
+        lambda a: jax.device_put(a, device)
+        if isinstance(a, (jax.Array, np.ndarray))
+        and not isinstance(a, jax.core.Tracer) else a,
+        tree,
+    )
+
+
+#: Acceptance slack on the adjoint residual: a GCROT stall within
+#: ``slack * adjoint_tol * ||b||`` still yields a gradient-accurate lambda
+#: (``adjoint_tol`` defaults to 1e-11, two orders tighter than the ~1e-9
+#: gradient parity the tests pin), while anything beyond it is rejected —
+#: never returned as a plausible gradient.
+_ADJOINT_RESIDUAL_SLACK = 10.0
+
+
+def _adjoint_acceptance(cfg: ImplicitConfig, b_norm):
+    """Largest acceptable true residual for an adjoint solve of RHS norm."""
+    return _ADJOINT_RESIDUAL_SLACK * cfg.adjoint_tol * b_norm
+
+
+def _raise_adjoint_unconverged(cfg: ImplicitConfig, *, iterations: int,
+                               residual_norm: float, tolerance: float):
+    raise AdjointSolveError(
+        message=(
+            f"implicit adjoint GCROT({cfg.adjoint_gcrot_m}, "
+            f"{cfg.adjoint_gcrot_k}) solve did not converge: residual "
+            f"{residual_norm:.3e} > acceptance {tolerance:.3e} "
+            f"(= {_ADJOINT_RESIDUAL_SLACK:g} x adjoint_tol x ||rhs||) after "
+            f"{iterations} Krylov iterations "
+            f"(max_restarts={cfg.adjoint_maxiter})"),
+        hint=("increase adjoint_maxiter / adjoint_gcrot_m / adjoint_gcrot_k "
+              "or loosen adjoint_tol; an unconverged adjoint is a silently "
+              "wrong gradient and is never returned"),
+        iterations=int(iterations),
+        residual_norm=float(residual_norm),
+        tolerance=float(tolerance),
+    )
+
+
+def _checked_adjoint_x(sol, b_flat, cfg: ImplicitConfig):
+    """Enforce adjoint convergence; never return an unconverged ``lambda``.
+
+    ``sol.converged``/``sol.residual_norm`` used to be discarded, letting an
+    exhausted-budget solve return whatever residual it reached as a
+    plausible-looking gradient.  Host-eager reverse passes (the default
+    execution site, see the section note) raise the typed
+    :class:`~vmex.core.errors.AdjointSolveError` with iteration/residual
+    info.  Under a trace the concrete check is impossible — there the
+    returned ``x`` is NaN-poisoned on failure instead, so the gradient can
+    never silently pass a finiteness check (the vmapped multi-RHS caller
+    re-checks its rows concretely and raises the same typed error).
+    """
+    b_norm = jnp.linalg.norm(b_flat)
+    accept = _adjoint_acceptance(cfg, b_norm)
+    ok = jnp.logical_or(sol.converged, sol.residual_norm <= accept)
+    if not any(isinstance(v, jax.core.Tracer)
+               for v in (ok, sol.x, sol.residual_norm, sol.iterations)):
+        if not bool(np.asarray(ok)):
+            _raise_adjoint_unconverged(
+                cfg, iterations=int(np.asarray(sol.iterations)),
+                residual_norm=float(np.asarray(sol.residual_norm)),
+                tolerance=float(np.asarray(accept)))
+        return sol.x
+    return jnp.where(ok, sol.x, jnp.full_like(sol.x, jnp.nan))
+
+
 def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None):
     """Adjoint linear solve ``(dF/dz)^T lambda = b`` via ``solvax.gmres``.
 
@@ -1273,19 +1432,28 @@ def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None):
     meets the tolerance costs exactly one matvec (the plan R25.2 corrector
     pass over the block-tridiagonal direct solve).  ``max_restarts``
     overrides ``cfg.adjoint_maxiter`` for such short corrector budgets.
+
+    Runs bound to ``cfg.device`` (RHS/x0 pinned, solver call inside the
+    config's device context) — see the adjoint execution-site note above.
+    Best-effort by contract (Newton/corrector callers inspect ``sol``
+    themselves); convergence is *enforced* only on the reverse-pass default
+    :func:`_adjoint_solve_gcrot`.
     """
-    b_flat, unravel = ravel_pytree(b)
+    b_flat, unravel = ravel_pytree(_pin_concrete(cfg, b))
+    b_flat = _pin_concrete(cfg, b_flat)
+    x0_flat = None if x0 is None else _pin_concrete(cfg, ravel_pytree(x0)[0])
 
     def matvec(v):
         return ravel_pytree(A(unravel(v)))[0]
 
-    sol = _solvax_gmres(
-        matvec, b_flat,
-        x0=None if x0 is None else ravel_pytree(x0)[0],
-        rtol=cfg.adjoint_tol, atol=0.0, restart=cfg.adjoint_restart,
-        max_restarts=(cfg.adjoint_maxiter if max_restarts is None
-                      else int(max_restarts)),
-    )
+    with _device_context(cfg):
+        sol = _solvax_gmres(
+            matvec, b_flat,
+            x0=x0_flat,
+            rtol=cfg.adjoint_tol, atol=0.0, restart=cfg.adjoint_restart,
+            max_restarts=(cfg.adjoint_maxiter if max_restarts is None
+                          else int(max_restarts)),
+        )
     return unravel(sol.x), sol
 
 
@@ -1303,8 +1471,24 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig):
     of ``adjoint_tol`` inside its ``adjoint_maxiter`` budget there).  A cold
     (``recycle=None``) start; ``m``/``k`` capped at the problem size ``n`` so a
     small system degenerates to an exact single-cycle solve.
+
+    Device binding (two-A4000 review): this call is the adjoint's actual
+    execution site and runs HOST-EAGERLY on the caller's thread (see the
+    section note above), so the raveled RHS is pinned to ``cfg.device`` with
+    an explicit ``jax.device_put`` — committing it, which steers the
+    ``lax.while_loop`` the iteration compiles to — and the solver call runs
+    inside the config's ``jax.default_device`` context, which steers every
+    fresh eager constant solvax creates (the zero recycle pair, the Krylov
+    basis, the tolerance scalar).  The binding is the smallest that covers
+    the solve and is independent of any caller-held context.
+
+    Convergence is ENFORCED: :func:`_checked_adjoint_x` raises the typed
+    :class:`~vmex.core.errors.AdjointSolveError` (host-eager) or
+    NaN-poisons ``x`` (traced) instead of ever returning an unconverged
+    adjoint as a plausible gradient.
     """
-    b_flat, unravel = ravel_pytree(b)
+    b_flat, unravel = ravel_pytree(_pin_concrete(cfg, b))
+    b_flat = _pin_concrete(cfg, b_flat)
     n = int(b_flat.shape[0])
     m = min(int(cfg.adjoint_gcrot_m), n)
     k = min(int(cfg.adjoint_gcrot_k), n)
@@ -1312,11 +1496,13 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig):
     def matvec(v):
         return ravel_pytree(A(unravel(v)))[0]
 
-    sol = _solvax_gcrot(
-        matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0, m=m, k=k,
-        max_restarts=cfg.adjoint_maxiter,
-    )
-    return unravel(sol.x), sol
+    with _device_context(cfg):
+        sol = _solvax_gcrot(
+            matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0, m=m, k=k,
+            max_restarts=cfg.adjoint_maxiter,
+        )
+        x = _checked_adjoint_x(sol, b_flat, cfg)
+    return unravel(x), sol
 
 
 # Recycle-space width for _recycled_solve (plan R25.3).  GCROT keeps k
@@ -1352,17 +1538,24 @@ def _recycled_solve(A, b, cfg: ImplicitConfig, recycle):
     of solves sharing (or slowly varying) the operator — the plan R25.3
     per-dof implicit-Jacobian loop (opt-in via
     ``least_squares(..., recycle=True)``; see the measured caveat there).
+
+    Runs bound to ``cfg.device`` like :func:`_adjoint_solve_gcrot`
+    (RHS/recycle pair pinned, solver call inside the config's device
+    context); convergence stays the caller's contract as documented above.
     """
-    b_flat, unravel = ravel_pytree(b)
+    b_flat, unravel = ravel_pytree(_pin_concrete(cfg, b))
+    b_flat = _pin_concrete(cfg, b_flat)
+    recycle = _pin_concrete(cfg, recycle)
 
     def matvec(v):
         return ravel_pytree(A(unravel(v)))[0]
 
-    sol = _solvax_gcrot(
-        matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0,
-        m=cfg.adjoint_restart, k=_RECYCLE_K,
-        max_restarts=cfg.adjoint_maxiter, recycle=recycle,
-    )
+    with _device_context(cfg):
+        sol = _solvax_gcrot(
+            matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0,
+            m=cfg.adjoint_restart, k=_RECYCLE_K,
+            max_restarts=cfg.adjoint_maxiter, recycle=recycle,
+        )
     # On solvax >= 0.8.7, ``sol.recycle_drift`` measures how far the operator
     # has rotated the recycled space since the pair was built — the quantity
     # callers need to decide whether carrying the pair is still worthwhile
@@ -1392,19 +1585,38 @@ def _solve_implicit_bwd_impl(cfg, res, gbar):
 
     z_star = P(x_star)
 
+    debug = _adjoint_debug_enabled()
+    if debug:
+        import threading
+        print(f"[vmex adjoint] backward entry: thread="
+              f"{threading.current_thread().name} default_device="
+              f"{jax.config.jax_default_device} cfg.device={cfg.device}",
+              file=sys.stderr)
+
     # (dF/dz)^T lambda = P gbar, matrix-free (one linearization reused).
     _, vjp_z = jax.vjp(lambda z: F(z, params), z_star)
     b = P(gbar)
+    if debug:
+        _debug_stage("adjoint rhs P(gbar)", b)
+        # One extra operator application, only under the debug gate: places
+        # the whole matvec chain (jitted-residual transpose included).
+        _debug_stage("operator application (dF/dz)^T b", vjp_z(b)[0])
     lam, _ = _adjoint_solve_gcrot(lambda v: vjp_z(v)[0], b, cfg)
+    if debug:
+        _debug_stage("recovered lambda", lam)
 
     # -lambda^T dF/dp ...
     _, vjp_p = jax.vjp(lambda prm: F(z_star, prm), params)
     g1 = vjp_p(jax.tree.map(jnp.negative, lam))[0]
+    if debug:
+        _debug_stage("implicit parameter contribution -lambda^T dF/dp", g1)
     # ... plus the direct boundary(p) path through the fixed edge row.
     _, vjp_p2 = jax.vjp(
         lambda prm: _assemble(z_star, runtime_from_params(prm, cfg),
                               frozen, P, edge_mask), params)
     g2 = vjp_p2(gbar)[0]
+    if debug:
+        _debug_stage("direct parameter contribution", g2)
     return (jax.tree.map(jnp.add, g1, g2),)
 
 
@@ -1451,9 +1663,29 @@ def _implicit_state_pullback_multi_rhs_impl(
                               frozen, P, edge_mask), params)
 
     rhs_batch = jax.vmap(P)(gbar_batch)
-    lam_batch = jax.vmap(
-        lambda rhs: _adjoint_solve_gcrot(lambda v: vjp_z(v)[0], rhs, cfg)[0]
-    )(rhs_batch)
+
+    def solve_row(rhs):
+        lam, sol = _adjoint_solve_gcrot(lambda v: vjp_z(v)[0], rhs, cfg)
+        b_norm = jnp.sqrt(sum(jnp.vdot(v, v).real
+                              for v in jax.tree.leaves(rhs)))
+        return lam, sol.residual_norm, sol.iterations, sol.converged, b_norm
+
+    # Inside the vmap every row is traced, so _adjoint_solve_gcrot can only
+    # NaN-poison an unconverged row; the per-row solve stats are returned and
+    # re-checked concretely here (this helper runs host-eagerly) so the
+    # multi-RHS path raises the same typed AdjointSolveError as the scalar
+    # reverse pass.
+    lam_batch, res_batch, iter_batch, conv_batch, bnorm_batch = jax.vmap(
+        solve_row)(rhs_batch)
+    if not isinstance(conv_batch, jax.core.Tracer):
+        accept = np.asarray(_adjoint_acceptance(cfg, bnorm_batch))
+        bad = ~(np.asarray(conv_batch) | (np.asarray(res_batch) <= accept))
+        if np.any(bad):
+            worst = int(np.argmax(np.where(bad, np.asarray(res_batch), -1.0)))
+            _raise_adjoint_unconverged(
+                cfg, iterations=int(np.asarray(iter_batch)[worst]),
+                residual_norm=float(np.asarray(res_batch)[worst]),
+                tolerance=float(accept[worst]))
     g1_batch = jax.vmap(lambda lam: vjp_p(jax.tree.map(jnp.negative, lam))[0])(lam_batch)
     g2_batch = jax.vmap(lambda gbar: vjp_p2(gbar)[0])(gbar_batch)
     return jax.tree.map(jnp.add, g1_batch, g2_batch)

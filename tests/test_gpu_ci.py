@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import numpy as np
 import pytest
 
 from vmex.core import device as device_policy
+from vmex.core import errors
 from vmex.core import implicit as im
 from vmex.core import freeboundary, multigrid, optimize, solver
 from vmex.core.input import VmecInput
@@ -628,11 +630,30 @@ def _assert_audit_committed(target, grads, sol):
     assert not stray, f"leaves committed off {target}: {stray[:8]}"
 
 
+# Metrics whose FULL gradient pytree (every leaf, not just the probed
+# boundary element) must match the default-device reference: the smooth bulk
+# integral plus one solver-sensitive iota metric — the pair the two-A4000
+# review used to demonstrate plausible-but-wrong second-device gradients.
+FULL_GRADIENT_METRICS = ("wb", "iota_edge")
+
+
 def _assert_audit_matches(inp, reference, audit, *, value_rtol, grad_rtol,
                           label):
     """Value and gradient parity for every metric; gradients must be nonzero."""
     ref_values, ref_grads, _ = reference
     values, grads, _ = audit
+    for name in FULL_GRADIENT_METRICS:
+        # GRADIENT VALUE equality leaf by leaf — placement alone (and a
+        # single probed element) can pass while the adjoint silently
+        # computes a plausible-but-wrong lambda on the wrong device.
+        for ref_leaf, leaf in zip(
+            jax.tree.leaves(ref_grads[name]), jax.tree.leaves(grads[name]),
+            strict=True,
+        ):
+            np.testing.assert_allclose(
+                np.asarray(leaf), np.asarray(ref_leaf), rtol=grad_rtol,
+                atol=1e-12,
+                err_msg=f"{name} full gradient pytree diverged on {label}")
     for name in IMPLICIT_METRICS:
         np.testing.assert_allclose(
             values[name], ref_values[name], rtol=value_rtol,
@@ -833,3 +854,122 @@ def test_second_host_device_values_and_gradients_with_outer_context():
     _assert_audit_matches(
         inp, reference, audit, value_rtol=1e-12, grad_rtol=1e-9,
         label="the second host device (outer context)")
+
+
+@_requires_host_rig
+def test_second_host_device_unconverged_adjoint_raises_typed_error():
+    """An exhausted adjoint Krylov budget must raise, never return.
+
+    The backward used to discard ``sol.converged``/``sol.residual_norm``
+    from the GCROT result, so an unconverged adjoint silently became a
+    plausible gradient.  A 2-vector Krylov budget (m=2, k=1, one restart)
+    against an unreachable tolerance forces non-convergence; the reverse
+    pass must surface the typed AdjointSolveError with iteration/residual
+    info instead of a gradient.
+    """
+    _assert_no_platform_pins()
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    params = im.params_from_input(inp, device=HOST_DEVICES[1])
+
+    with pytest.raises(errors.AdjointSolveError) as excinfo:
+        jax.grad(
+            lambda p: im.run(
+                inp, p, ftol=1e-11, max_iterations=600,
+                adjoint_tol=1e-30, adjoint_maxiter=1,
+                adjoint_gcrot_m=2, adjoint_gcrot_k=1,
+                device=HOST_DEVICES[1],
+            ).wb)(params)
+
+    err = excinfo.value
+    assert isinstance(err, errors.VmecNumericalError)  # zero-crash taxonomy
+    assert err.iterations >= 1
+    assert err.residual_norm > err.tolerance > 0.0
+    assert "adjoint" in err.message and err.hint
+
+
+def test_device_scope_basics():
+    """Null context for None, explicit-device contract, 'auto' rejected."""
+    with device_policy.device_scope(None):
+        pass  # placement left to JAX — a plain null context
+    with pytest.raises(ValueError):
+        device_policy.device_scope("auto")
+    cpu0 = jax.devices("cpu")[0]
+    with device_policy.device_scope("cpu"):
+        assert jax.numpy.zeros(()).devices() == {cpu0}
+    with device_policy.device_scope(cpu0):
+        assert jax.numpy.zeros(()).devices() == {cpu0}
+
+
+@_requires_host_rig
+def test_device_scope_second_host_device_gradient_equality():
+    """The supported scope path: gradient VALUES equal the default device.
+
+    ``device_scope`` holds ``jax.default_device`` around transformation
+    creation AND execution — the belt-and-braces path for whole-program
+    non-default-device work.  The wb (smooth bulk) and iota_edge
+    (solver-sensitive) gradients on the scoped second device must equal the
+    default-device reference leaf by leaf, and stay committed to the second
+    device.
+    """
+    _assert_no_platform_pins()
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+
+    def gradients(device, scope):
+        with scope:
+            params = im.params_from_input(inp, device=device)
+            return {
+                name: jax.grad(
+                    lambda p, name=name: getattr(
+                        im.run(inp, p, ftol=1e-11, max_iterations=600,
+                               device=device), name))(params)
+                for name in FULL_GRADIENT_METRICS
+            }
+
+    reference = gradients(HOST_DEVICES[0], contextlib.nullcontext())
+    scoped = gradients(HOST_DEVICES[1],
+                       device_policy.device_scope(HOST_DEVICES[1]))
+
+    for name in FULL_GRADIENT_METRICS:
+        stray = _stray_leaves(f"grad[{name}]", scoped[name], HOST_DEVICES[1])
+        assert not stray, f"leaves committed off {HOST_DEVICES[1]}: {stray}"
+        for ref_leaf, leaf in zip(
+            jax.tree.leaves(reference[name]), jax.tree.leaves(scoped[name]),
+            strict=True,
+        ):
+            np.testing.assert_allclose(
+                np.asarray(leaf), np.asarray(ref_leaf), rtol=1e-9,
+                atol=1e-12, err_msg=f"{name} gradient diverged under scope")
+
+
+@_requires_host_rig
+def test_adjoint_debug_instrumentation_reports_stages(monkeypatch, capfd):
+    """VMEX_ADJOINT_DEBUG=1 prints per-stage device+norm lines on cpu:1.
+
+    The off-by-default instrumentation is the hardware-session triage tool:
+    each reverse pass must report the execution site plus device set and
+    norm for the adjoint RHS, one operator application, the recovered
+    lambda, and both parameter contributions, so a placement divergence
+    localizes to a stage without rebuilding.
+    """
+    _assert_no_platform_pins()
+    monkeypatch.setenv("VMEX_ADJOINT_DEBUG", "1")
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    params = im.params_from_input(inp, device=HOST_DEVICES[1])
+
+    gradient = jax.grad(
+        lambda p: im.run(inp, p, ftol=1e-11, max_iterations=600,
+                         device=HOST_DEVICES[1]).wb)(params)
+    assert np.all(np.isfinite(np.asarray(gradient.rbc)))
+
+    err = capfd.readouterr().err
+    for stage in (
+        "backward entry",
+        "adjoint rhs P(gbar)",
+        "operator application (dF/dz)^T b",
+        "recovered lambda",
+        "implicit parameter contribution -lambda^T dF/dp",
+        "direct parameter contribution",
+    ):
+        assert f"[vmex adjoint] {stage}" in err, stage
+    # the stage lines must localize the device: everything on the target
+    assert "TFRT_CPU_1" in err or "cpu:1" in err

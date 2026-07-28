@@ -69,6 +69,7 @@ __all__ = [
     "resolve_implicit_device",
     "resolve_mirror_device",
     "device_context",
+    "device_scope",
     "mirror_device_context",
 ]
 
@@ -222,6 +223,46 @@ def device_context(device: Any = AUTO, resolution: Any = None):
     """
     dev = resolve_device(device, resolution)
     if dev is None:
+        return contextlib.nullcontext()
+    return jax.default_device(dev)
+
+
+def device_scope(device: Any):
+    """Hold ``jax.default_device(device)`` around building AND executing a
+    JAX transformation — the belt-and-braces supported path for running a
+    whole program (forward solves, ``jax.grad``/``jax.value_and_grad``/
+    ``jax.jacrev`` over :func:`vmex.core.implicit.run`, optimization
+    drivers) on an explicit non-default device::
+
+        gpu1 = jax.devices("gpu")[1]
+        with device_scope(gpu1):
+            p0 = im.params_from_input(inp, device=gpu1)
+            grad = jax.grad(lambda p: im.run(inp, p, device=gpu1).wb)(p0)
+
+    Raw ``jax.grad`` without the scope is supported too: the implicit module
+    binds its own stages to the carried config device internally — the
+    ``pure_callback`` host solve, the cached runtime template, the custom-VJP
+    boundary pins, and the host-eager adjoint Krylov solve (see
+    ``vmex.core.implicit._adjoint_solve_gcrot``).  The scope is the *robust*
+    path on top of that: it additionally steers every caller-side eager
+    constant and JAX's own transformation machinery — placement layers
+    outside vmex's control — so it is recommended whenever an entire
+    workflow should live on one non-default device.
+
+    Accepts ``"cpu"``/``"gpu"``/``"cuda"``/``"rocm"``/``"tpu"`` or a
+    ``jax.Device``; ``None`` returns a null context (leave placement to
+    JAX).  ``"auto"`` is rejected — the scope exists precisely to express an
+    explicit placement choice.
+    """
+    if device is None:
+        return contextlib.nullcontext()
+    if isinstance(device, str) and device.strip().lower() == AUTO:
+        raise ValueError(
+            "device_scope needs an explicit device ('cpu', 'gpu', a "
+            "jax.Device, ...); 'auto' expresses no placement to hold"
+        )
+    dev = resolve_device(device)
+    if dev is None:  # pragma: no cover - only device=None maps to None here
         return contextlib.nullcontext()
     return jax.default_device(dev)
 

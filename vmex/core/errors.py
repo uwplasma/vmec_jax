@@ -136,6 +136,38 @@ class VmecNumericalError(VmecError):
 
 
 @dataclass
+class AdjointSolveError(VmecNumericalError):
+    """The implicit-adjoint Krylov solve returned an unconverged ``lambda``.
+
+    Raised by the reverse pass of :func:`vmex.core.implicit.solve_implicit`
+    (and the multi-RHS pullback) when the GCROT(m, k) adjoint solve exhausts
+    its budget with a residual above the acceptance threshold.  An
+    unconverged adjoint is a *silently wrong* gradient — plausible magnitude,
+    wrong value — so it is never returned: host-eager reverse passes raise
+    this typed error; traced reverse passes (a ``jax.jit`` around the whole
+    gradient) NaN-poison the adjoint instead, which the optimize drivers'
+    finite-gradient guards catch.
+
+    Attributes
+    ----------
+    iterations:
+        Total inner Krylov (Arnoldi) iterations the solve performed.
+    residual_norm:
+        The true residual norm ``||b - A^T lambda||`` the solve reached.
+    tolerance:
+        The acceptance threshold it failed to meet
+        (``slack * adjoint_tol * ||b||``).
+
+    Remedies: raise ``adjoint_maxiter``/``adjoint_gcrot_m``/
+    ``adjoint_gcrot_k`` (more Krylov budget) or loosen ``adjoint_tol``.
+    """
+
+    iterations: int = 0
+    residual_norm: float = 0.0
+    tolerance: float = 0.0
+
+
+@dataclass
 class MgridNotFoundError(VmecError):
     """A free-boundary run referenced an mgrid file that cannot be read.
 
