@@ -166,9 +166,14 @@ def test_qi_sheet_gate_ladder_matches_vmec2000(sheet_field, tmp_path):
     def collect(t="", end="\n"):
         lines.append(str(t))
 
+    # release_stage_cache: the five-rung 238-mode ladder otherwise retains
+    # every rung's executables (12.4 GB peak RSS measured), which does not
+    # fit a 16 GB hosted CI runner; per-rung release bounds the peak at the
+    # largest single rung and changes no numerics.
     result = solve_free_boundary_multigrid(
         inp, mgrid_path=str(outdir / "mgrid_qi_sheet.nc"), verbose=True,
-        emit=collect, raise_on_max_iterations=False)
+        emit=collect, raise_on_max_iterations=False,
+        release_stage_cache=True)
     output = "\n".join(lines)
 
     m = re.search(r"VACUUM PRESSURE TURNED ON AT\s+(\d+)", output)
@@ -199,5 +204,6 @@ def test_qi_fixed_238_ladder_converges(tmp_path):
     path = tmp_path / "input.qi_fixed_gate"
     path.write_text(_indexed_m0(deck))
     inp = VmecInput.from_file(str(path))
-    result = solve_multigrid(inp, verbose=False, raise_on_max_iterations=False)
+    result = solve_multigrid(inp, verbose=False, raise_on_max_iterations=False,
+                             release_stage_cache=True)
     assert bool(result.converged), f"fsqr={float(result.fsqr):.2e}"
