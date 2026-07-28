@@ -353,8 +353,8 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
     ``essos.coils.Coils.from_json``) or the same keys in an ``.npz`` archive
     (``dofs_curves`` with shape ``(n_base_coils, 3, 2*order + 1)``,
     ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``, optional
-    ``currents_scale``), tabulates the coil field onto a cylindrical grid
-    spanning the coil bounding box (:meth:`essos.coils.Coils.to_mgrid`), and
+    ``currents_scale``), builds a cylindrical grid spanning the coil
+    bounding box, and
     tabulates its Biot-Savart field directly into an in-memory
     :class:`~vmex.core.mgrid.MgridField` — the very same field type the
     mgrid-file lane produces, with no temporary file and no dependency on
@@ -458,8 +458,8 @@ def _free_boundary_plan(args, inp, input_path: Path, *, emit):
                 hint=(
                     "MGRID_FILE = 'DIRECT_COILS' needs --coils <essos_coils"
                     ".json|.npz>, or use the Python API: solve_free_boundary("
-                    "inp, external_field=MgridField.from_mgrid_data(...)) with a "
-                    "field tabulated from ESSOS coils (essos.coils.Coils.to_mgrid)"
+                    "inp, external_field=MgridField.from_cartesian_field(...)) "
+                    "with a field built from ESSOS coils (essos.fields.BiotSavart)"
                 ),
             )
         coils_path = Path(coils_arg).expanduser().resolve()

@@ -10,6 +10,10 @@ on:
         description: "Also run the trusted self-hosted GPU job"
         type: boolean
         default: false
+      run_full:
+        description: "Run the full-physics matrix (disable for a GPU-only dispatch)"
+        type: boolean
+        default: true
   schedule:
     # nightly full-physics run (RUN_FULL=1 tests)
     - cron: "17 4 * * *"
@@ -143,6 +147,43 @@ jobs:
           fi
           pytest -q -n 2 -m "not full" $FILES --durations=20
 
+  optional-integrations:
+    # The ESSOS / GKX / virtual-casing test lanes silently skipped in every
+    # hosted job because the optional packages were never installed.  This
+    # lane pins exact revisions and asserts the imports BEFORE pytest, so
+    # the gated tests cannot skip: a broken integration fails instead of
+    # vanishing.  virtual_casing_jax is pinned to the canonical unreleased
+    # feature commit until its PR is merged and released (see pyproject).
+    name: Optional integrations (pinned ESSOS, GKX, virtual-casing)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install with pinned optional integrations
+        run: |
+          python -m pip install -U pip
+          python -m pip install .
+          python -m pip install pytest pytest-xdist
+          python -m pip install "gkx==1.7.1"
+          python -m pip install "essos @ git+https://github.com/uwplasma/ESSOS@4e19e7f129fe41c7f5aed53a032d1cf3c90ecfc8"
+          python -m pip install "virtual-casing-jax @ git+https://github.com/uwplasma/virtual_casing_jax@97797576bc15e3f782de571c9cf021edacb5f594"
+      - name: Assert the integrations import (no silent skips possible)
+        run: python -c "import essos, gkx, virtual_casing_jax"
+      - name: Run the gated lanes
+        env:
+          JAX_ENABLE_X64: "1"
+        run: |
+          pytest -q -n 2 -m "not full" \
+            tests/test_package_api.py \
+            tests/test_turbulence.py \
+            tests/test_freeboundary_diff.py \
+            tests/test_single_stage_simultaneous.py \
+            --durations=15
+
   parity:
     name: Parity suite ${{ matrix.shard }} (goldens, coverage)
     runs-on: ubuntu-latest
@@ -257,6 +298,7 @@ jobs:
                     tests/test_device_parity_tool.py \
                     tests/test_doctor.py \
                     tests/test_fetch_assets.py \
+                    tests/test_first_divergence.py \
                     tests/test_forces_residuals.py \
                     tests/test_fourier_transforms.py \
                     tests/test_geometry_fields.py \
@@ -512,7 +554,9 @@ jobs:
 
   full:
     name: Full-physics ${{ matrix.shard }} (nightly / manual only)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # run_full lets a GPU-only dispatch skip the long matrix instead of
+    # relaunching (and, via the concurrency group, cancelling) it.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_full)
     runs-on: ubuntu-latest
     # A sequential whole-suite job reached only 39% before the previous
     # 150-minute limit, and the core job later lost hosted runners three times
