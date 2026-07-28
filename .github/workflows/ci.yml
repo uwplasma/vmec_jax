@@ -369,6 +369,7 @@ jobs:
                     tests/test_step_control.py \
                     tests/test_stress_high_force.py \
                     tests/test_turbulence.py \
+                    tests/test_vacuum_analytic_recurrence.py \
                     tests/test_validation_guards.py \
                     tests/test_vmec2000_feature_stress.py"
           D_FILES="tests/test_optimize.py"
