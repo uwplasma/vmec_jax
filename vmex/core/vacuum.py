@@ -570,6 +570,149 @@ def _nonsingular_terms(
     return gstore, grpmn
 
 
+#: ``ln(1e7)`` — forward/backward switch threshold for the analytic
+#: ``T^{+/-}_l`` recurrence: forward iteration is kept while the spurious-
+#: mode growth ``(B/A)^(mf+nf)`` stays below ``1e7`` of the particular
+#: solution (rounding then amplifies to at most ~1e-16 * sqrt(1e7) * O(mf+nf)
+#: ~ 1e-11 relative).  Same criterion form as vmecpp
+#: ``singular_integrals.cc`` (which uses ``ln(1e10)``); tightened here, with
+#: the Miller tail below sized to match, so both branches stay ~1e-11 or
+#: better on their own side of the switch even at ``mf + nf = 45``.
+_TL_LOG_GROWTH_THRESHOLD = 7.0 * 2.30258509299
+
+
+def _tl_backward_tail(lmax: int) -> int:
+    """Extra backward (Miller) steps beyond ``l = lmax`` (vmecpp
+    ``kTailExtra``, made ``lmax``-aware).
+
+    The zero-seed contamination decays like ``(B/A)^(-tail/2)`` and is worst
+    at the switch ratio ``B/A = exp(threshold / lmax)``, giving
+    ``exp(-1.75 * threshold) ~ 3e-13`` for ``tail = 3.5 * lmax`` — vmecpp's
+    fixed 50 is enough only for ``lmax`` up to ~20.
+    """
+    return max(50, -(-7 * lmax // 2))  # ceil(3.5 * lmax)
+
+
+def _tl_forward(
+    A: Array, B: Array, cma: Array, sqrtc: Array, sqrta: Array, t0: Array,
+    lmax: int,
+) -> Array:
+    """Forward three-term recurrence for ``T_l``, ``l = 0..lmax``.
+
+    ``T_l = int_{-1}^{1} x^l / sqrt(A x^2 + 2 cma x + B) dx`` satisfies
+
+        ``A (l+1) T_{l+1} + (2l+1) cma T_l + l B T_{l-1}
+        = sqrtc + (-1)^{l+1} sqrta``
+
+    (``analyt.f``; ``T^+``: ``A = adp, B = adm``, ``T^-`` swapped).  The
+    arithmetic below reproduces the legacy in-loop update bit-for-bit, so
+    every result below the instability onset is unchanged.  Returns shape
+    ``(lmax + 1,) + t0.shape``.
+    """
+    tl = [t0]
+    t_prev = jnp.zeros_like(t0)
+    t = t0
+    sign1 = 1.0
+    fl1 = 0.0
+    for _ell in range(lmax):
+        fl = fl1
+        fl1 = fl1 + 1.0
+        fl2 = 2.0 * fl1 - 1.0
+        sign1 = -sign1
+        t_next = ((sqrtc + sign1 * sqrta) - fl2 * cma * t - fl * B * t_prev) / (A * fl1)
+        t_prev = t
+        t = t_next
+        tl.append(t)
+    return jnp.stack(tl, axis=0)
+
+
+def _tl_backward(
+    A: Array, B: Array, cma: Array, sqrtc: Array, sqrta: Array, t0: Array,
+    lmax: int,
+) -> Array:
+    """Backward (Miller) recurrence for ``T_l``, normalized to the analytic
+    ``T_0`` (vmecpp ``singular_integrals.cc`` backward branch).
+
+    Runs the same three-term recurrence downward from a zero seed at
+    ``l = lmax + _tl_backward_tail(lmax)``; the homogeneous modes (which
+    grow forward like ``(B/A)^{l/2}``) decay in this direction, so the seed
+    error is damped over the tail and the final scaling to the analytic
+    ``T_0`` removes the residual contamination.
+    """
+    kltail = lmax + _tl_backward_tail(lmax)
+    ls = np.arange(kltail, 0, -1)
+    lsf = jnp.asarray(ls, dtype=t0.dtype)
+    sgn = jnp.asarray(np.where(ls % 2 == 0, -1.0, 1.0), dtype=t0.dtype)
+
+    def _step(carry, xs):
+        t_hi, t_cur = carry
+        lf, s = xs
+        rhs = sqrtc + s * sqrta
+        t_lo = (rhs - (2.0 * lf + 1.0) * cma * t_cur - (lf + 1.0) * A * t_hi) / (lf * B)
+        return (t_cur, t_lo), t_lo
+
+    seed = (jnp.zeros_like(t0), jnp.full_like(t0, 1.0e-300))
+    _, ys = jax.lax.scan(_step, seed, (lsf, sgn))
+    # ys[i] = T_{kltail - 1 - i}; keep T_0..T_lmax in ascending order.
+    t = ys[kltail - 1 - np.arange(lmax + 1)]
+    t0_b = t[0]
+    scale = t0 / jnp.where(t0_b == 0.0, 1.0, t0_b)
+    return t * scale[None]
+
+
+def _tl_stable(
+    A: Array, B: Array, cma: Array, sqrtc: Array, sqrta: Array, t0: Array,
+    lmax: int,
+) -> Array:
+    """``T_l`` for ``l = 0..lmax`` via the stability-selected recurrence.
+
+    The legacy VMEC2000 ``analyt.f`` forward recurrence is numerically
+    unstable whenever ``B > A``: rounding excites the homogeneous modes
+    (complex-conjugate roots of ``A r^2 + 2 cma r + B = 0``, modulus
+    ``sqrt(B/A)``), which grow like ``(B/A)^{l/2}`` and destroy double
+    precision once ``(mf + nf) * ln(B/A)`` exceeds ``ln(1e10)`` — the
+    free-boundary onset sits around ``mpol``/``ntor`` ~ 12.  Following
+    vmecpp (``free_boundary/singular_integrals/singular_integrals.cc``,
+    commit f5dbf76), each evaluation point selects between the forward
+    recurrence (kept while spurious growth stays bounded, where the
+    zero-seed backward pass would misconverge) and the backward Miller
+    recurrence (stable exactly where forward is not); see
+    ``_TL_LOG_GROWTH_THRESHOLD`` / ``_tl_backward_tail`` for the constants,
+    tightened relative to vmecpp's so both branches hold ~1e-11 relative
+    accuracy through the switch at any practical ``mf + nf``.
+
+    Both directions are evaluated unconditionally with static shapes (jit/
+    vmap-safe) and combined with ``jnp.where``; each branch sees mask-
+    sanitized coefficients (benign, branch-stable dummies on the points it
+    does not own) so neither the primal nor its AD sweeps can meet the huge
+    intermediates of the wrong branch.  On forward-selected points the
+    inputs pass through unchanged and the result is bit-identical to the
+    legacy recurrence.
+    """
+    kl = float(lmax)
+    pos = A > 0.0
+    grow = (B > A) & pos
+    ratio = jnp.where(grow, B, 1.0) / jnp.where(pos, A, 1.0)
+    log_ratio = jnp.where(grow, jnp.log(ratio), 0.0)
+    use_bwd = kl * log_ratio > _TL_LOG_GROWTH_THRESHOLD
+
+    # Dummy coefficients (a = c = 1, guv-like cross term -/+1) keep the
+    # unselected branch of each point finite and well-conditioned: B/A = 3
+    # damps backward, B/A = 1/3 damps forward.
+    one = jnp.ones_like(A)
+    t_fwd = _tl_forward(
+        jnp.where(use_bwd, 3.0, A), jnp.where(use_bwd, 1.0, B),
+        jnp.where(use_bwd, 0.0, cma), jnp.where(use_bwd, 2.0, sqrtc),
+        jnp.where(use_bwd, 2.0, sqrta), jnp.where(use_bwd, one, t0), lmax,
+    )
+    t_bwd = _tl_backward(
+        jnp.where(use_bwd, A, 1.0), jnp.where(use_bwd, B, 3.0),
+        jnp.where(use_bwd, cma, 0.0), jnp.where(use_bwd, sqrtc, 2.0),
+        jnp.where(use_bwd, sqrta, 2.0), jnp.where(use_bwd, t0, one), lmax,
+    )
+    return jnp.where(use_bwd[None], t_bwd, t_fwd)
+
+
 def _analytic_terms(
     b: VacuumBoundary, bexni: Array, basis: VacuumBasis, signgs: int,
     *, include_kernel: bool = True,
@@ -579,7 +722,10 @@ def _analytic_terms(
     Ported from the legacy ``vmec_analytic_terms_from_geometry_jax``,
     including the Fortran ``analysesum2`` swapped-argument quirk for the
     ``m != 0 and n != 0`` branch.  ``include_kernel=False`` mirrors
-    ``analyt(ivacskip != 0)``, which recomputes the source only.
+    ``analyt(ivacskip != 0)``, which recomputes the source only.  The
+    ``T^{+/-}_l`` integrals use the stability-selected recurrence
+    (:func:`_tl_stable`) instead of ``analyt.f``'s forward-only loop, which
+    loses double precision at high mode numbers.
     """
     lasym = bool(basis.lasym)
     mf = int(basis.mf)
@@ -613,11 +759,14 @@ def _analytic_terms(
     sqrta = 2.0 * jnp.sqrt(guu_b)
     sqad1 = jnp.sqrt(adp)
     sqad2 = jnp.sqrt(adm)
-    tlp = (1.0 / sqad1) * jnp.log((sqad1 * sqrtc + adp + cma) / (sqad1 * sqrta - adp + cma))
-    tlm = (1.0 / sqad2) * jnp.log((sqad2 * sqrtc + adm + cma) / (sqad2 * sqrta - adm + cma))
-    tlp_prev = jnp.zeros_like(tlp)
-    tlm_prev = jnp.zeros_like(tlm)
-    tlpm = tlp + tlm
+    tlp0 = (1.0 / sqad1) * jnp.log((sqad1 * sqrtc + adp + cma) / (sqad1 * sqrta - adp + cma))
+    tlm0 = (1.0 / sqad2) * jnp.log((sqad2 * sqrtc + adm + cma) / (sqad2 * sqrta - adm + cma))
+    # All T^{+/-}_l up front via the stability-selected recurrence
+    # (T^+: A = adp, B = adm; T^- swapped) — see _tl_stable.
+    lmax = mf + nf
+    tlp_all = _tl_stable(adp, adm, cma, sqrtc, sqrta, tlp0, lmax)
+    tlm_all = _tl_stable(adm, adp, cma, sqrtc, sqrta, tlm0, lmax)
+    zero_t = jnp.zeros_like(tlp0)
 
     snr = sign * Rf * Zuf
     snv = sign * (Ruf * Zvf - Rvf * Zuf)
@@ -642,10 +791,14 @@ def _analytic_terms(
     gcos = jnp.zeros((mf + 1, 2 * nf + 1, npts), dtype=Rf.dtype) if include_kernel else None
     cmns = np.asarray(basis.cmns)  # static: skip exact-zero coefficients
 
-    sign1 = 1.0
-    fl1 = 0.0
     for ell in range(0, mf + nf + 1):
-        fl = fl1
+        fl = float(ell)
+        sign1 = 1.0 if ell % 2 == 0 else -1.0
+        tlp = tlp_all[ell]
+        tlm = tlm_all[ell]
+        tlp_prev = tlp_all[ell - 1] if ell > 0 else zero_t
+        tlm_prev = tlm_all[ell - 1] if ell > 0 else zero_t
+        tlpm = tlp + tlm
         slp = slm = slpm = None
         if include_kernel:
             slp = (r1p * fl + ra1p) * tlp + r0p * fl * tlp_prev \
@@ -698,17 +851,6 @@ def _analytic_terms(
                         if include_kernel:
                             gcos = gcos.at[m, col_p, :].add(slm * cosp)
                             gcos = gcos.at[m, col_m, :].add(slp * cosm)
-
-        fl1 = fl1 + 1.0
-        fl2 = 2.0 * fl1 - 1.0
-        sign1 = -sign1
-        tlp_next = ((sqrtc + sign1 * sqrta) - fl2 * cma * tlp - fl * adm * tlp_prev) / (adp * fl1)
-        tlm_next = ((sqrtc + sign1 * sqrta) - fl2 * cma * tlm - fl * adp * tlm_prev) / (adm * fl1)
-        tlp_prev = tlp
-        tlm_prev = tlm
-        tlp = tlp_next
-        tlm = tlm_next
-        tlpm = tlp + tlm
 
     m_j = np.asarray(basis.xmpot, dtype=np.int64)
     col_j = np.asarray(basis.n_raw + nf, dtype=np.int64)
