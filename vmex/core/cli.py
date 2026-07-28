@@ -627,6 +627,10 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             raise_on_max_iterations=False,
             device=None if args.device == "none" else args.device,
             release_stage_cache=True,
+            # Cold-run overlap is a CLI concern: the library default is
+            # False so embedding programs and test farms never gain
+            # background compile threads implicitly.
+            prefetch_compile=True,
             jacobian_retries=int(args.jacobian_retries),
         )
     solve_s = time.perf_counter() - t1

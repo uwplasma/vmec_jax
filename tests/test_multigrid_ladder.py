@@ -478,7 +478,8 @@ def test_prefetch_serves_second_rung_and_legend_prints_once():
         lines.append(str(text) + end)
 
     result = multigrid.solve_multigrid(
-        inp, verbose=True, emit=collect, release_stage_cache=True, **ladder)
+        inp, verbose=True, emit=collect, release_stage_cache=True,
+        prefetch_compile=True, **ladder)
     output = "".join(lines)
     assert result.converged
     # A2: legend once, banners and column headers per rung.

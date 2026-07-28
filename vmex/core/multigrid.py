@@ -250,7 +250,7 @@ def solve_multigrid(
     raise_on_max_iterations: bool = True,
     use_fft: bool | None = None,
     release_stage_cache: bool = False,
-    prefetch_compile: bool = True,
+    prefetch_compile: bool = False,
 ) -> SolveResult:
     """Fixed-boundary multigrid solve over the ``NS_ARRAY`` ladder.
 
@@ -313,7 +313,10 @@ def solve_multigrid(
     It is false by default so repeated library solves retain warm executables;
     the standalone CLI enables it.
 
-    ``prefetch_compile=True`` (default) overlaps compilation with iteration
+    ``prefetch_compile=True`` (False by default: a library call must not
+    spawn background compile threads implicitly — four coverage workers
+    each prefetching evicted a 16 GB hosted CI runner; the standalone
+    CLI enables it) overlaps compilation with iteration
     on cold runs: while rung k iterates, a background thread AOT-compiles
     rung k+1's block-lane executable (the ladder is known up front).  Cache
     warming only — results are bit-identical, and any prefetch failure falls
