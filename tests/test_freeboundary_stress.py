@@ -276,3 +276,114 @@ def test_jacobian_recovery_uses_checkpoint_and_reduces_delt(monkeypatch) -> None
     # (d) the recovered trajectory converges; the DELT=1e4 attempt never does
     assert bool(result.converged), (
         f"recovered run failed to converge (fsqr={float(result.fsqr):.2e})")
+
+
+@pytest.mark.full  # ~3 min: TWO real 75-reset events + a converging retry
+@pytest.mark.skipif(not MGRID.exists(), reason="mgrid fixture not fetched")
+def test_consecutive_jacobian_recoveries_free_boundary(monkeypatch) -> None:
+    """MULTIPLE consecutive JAC75 events in the (pre-vacuum) free lane.
+
+    The single-event test above proves one recovery; the confidential-case
+    signature is REPEATED 75-reset events.  Here the first retry is forced
+    to run as hostile as the initial attempt (its ``time_step`` override is
+    reset to the absurd input ``DELT``), so a SECOND genuine 75-reset event
+    occurs inside the recovery chain, and only the second retry runs at the
+    reduced step.  Contract asserted across BOTH events:
+
+    * every retry restarts a present, fully finite checkpoint state (never
+      ``initial_state=None`` — a reconstructed cold state);
+    * the requested retry ``DELT`` follows ``min(0.5, 0.5 * prev)`` from
+      the runtime the failing attempt actually used;
+    * the retry budget decrements once per event (2 -> 1 -> 0);
+    * retries never re-enable the initial axis re-guess and never reuse the
+      failed attempt's vacuum cache;
+    * BOTH events restore the recorded best finite checkpoint — for the
+      forced second event that is the SAME state as the first (the
+      sabotaged attempt never records a lower residual, so the best
+      checkpoint cannot improve; measured fingerprints equal), and the
+      no-identical-replay guarantee is carried by the time step: the
+      retry's requested DELT (0.5) differs from the DELT the failing
+      attempt actually executed with (1e4);
+    * the final attempt converges.
+
+    All events happen BEFORE vacuum activation (DELT=1e4 collapses within
+    the first iterations, long before the fsqr < 1e-1 turn-on gate).
+    """
+    import dataclasses
+
+    import vmex.core.freeboundary as FBmod
+
+    inp = dataclasses.replace(
+        VmecInput.from_file(str(DATA / "input.cth_like_free_bdy")),
+        delt=1.0e4,
+    )
+
+    recorded: list[dict] = []
+    original = FBmod._solve_free_boundary_stage
+
+    def hostile_first_retry(deck, **kw):
+        n = len(recorded)
+        forced = dict(kw)
+        if n == 1:  # first retry: as hostile as the initial attempt
+            forced["time_step"] = float(inp.delt)
+        state = kw.get("initial_state")
+        recorded.append({
+            "requested_time_step": kw.get("time_step"),
+            "retries": kw.get("jacobian_retries"),
+            "allow_reguess": kw.get("allow_initial_axis_reguess", True),
+            "reuse_vacuum": kw.get("reuse_vacuum_cache", False),
+            "has_state": state is not None,
+            "state_finite": bool(
+                np.all(np.isfinite(np.asarray(state.R_cos)))
+                and np.all(np.isfinite(np.asarray(state.Z_sin)))
+            ) if state is not None else None,
+            "fingerprint": float(np.asarray(state.R_cos).sum())
+            if state is not None else None,
+        })
+        return original(deck, **forced)
+
+    monkeypatch.setattr(FBmod, "_solve_free_boundary_stage", hostile_first_retry)
+
+    lines: list[str] = []
+
+    def collect(text: str = "", end: str = "\n") -> None:
+        lines.append(str(text))
+
+    result = solve_free_boundary_multigrid(
+        inp, mgrid_path=str(MGRID), verbose=True, emit=collect,
+        raise_on_max_iterations=False,
+    )
+
+    banners = [ln for ln in lines if "JACOBIAN RECOVERY RETRY" in ln]
+    assert len(banners) == 2, "expected TWO consecutive 75-reset recoveries"
+    assert len(recorded) == 3
+    assert recorded[0]["requested_time_step"] is None
+    assert recorded[0]["has_state"] is False    # fresh profil3d start
+
+    # both events restart a real finite checkpoint with the halved/capped
+    # DELT law computed from the runtime the failing attempt actually used
+    # (attempt 1 ran at DELT=1e4; the forced attempt 2 also ran at 1e4).
+    for event, call in enumerate(recorded[1:], start=1):
+        assert call["has_state"], (
+            f"recovery {event} restarted a cold state instead of the "
+            "checkpoint")
+        assert call["state_finite"], (
+            f"recovery {event} checkpoint has non-finite leaves")
+        assert call["requested_time_step"] == pytest.approx(
+            min(0.5, 0.5 * float(inp.delt)))
+        assert call["allow_reguess"] is False
+        assert call["reuse_vacuum"] is False
+    assert recorded[1]["retries"] == 1
+    assert recorded[2]["retries"] == 0
+
+    # Best-checkpoint semantics under the forced second event: the
+    # sabotaged attempt records no lower residual, so the SAME best finite
+    # checkpoint is (correctly) restored again — while the no-replay
+    # guarantee holds through the time step, which differs from the DELT
+    # the failing attempt actually executed with (1e4).
+    assert recorded[2]["fingerprint"] == recorded[1]["fingerprint"]
+    assert recorded[2]["requested_time_step"] != pytest.approx(
+        float(inp.delt))
+
+    assert bool(result.converged), (
+        f"chain failed to converge (fsqr={float(result.fsqr):.2e})")

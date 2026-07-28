@@ -5,6 +5,14 @@ against the closed-form definitions recorded in the module docstring:
 the ndamp damping recurrence, the momentum update, and the three restart
 outcomes (STEP_OK / RESTART_JACOBIAN / RESTART_GROWTH) including the
 time-step rescaling, velocity zeroing, and best-residual bookkeeping.
+
+The final section pins the JAC75 recovery-chain CONTRACT at the
+``vmex.core.solver._solve_stage`` level, driving MULTIPLE consecutive
+75-reset events structurally (the loop is faked, the recovery policy is
+real): each retry must restart the recorded best finite checkpoint (never
+a reconstructed cold state), reduce ``DELT`` before the next update, keep
+the iteration-1 axis transfer disabled, and never replay the identical
+(state, time-step) attempt.
 """
 
 from __future__ import annotations
@@ -167,3 +175,171 @@ def test_apply_restart(kind, dt_factor):
         expected_resets = 1 if kind == step.RESTART_JACOBIAN else 0
         assert int(c2.jacobian_resets) == expected_resets
         assert int(c2.iter_last_reset) == 42
+
+
+# ---------------------------------------------------------------------------
+# Recovery-chain contract: consecutive JAC75 events through _solve_stage
+# ---------------------------------------------------------------------------
+
+
+def _recovery_runtime():
+    """Small real runtime (solovev, ns=5) for the structural recovery tests."""
+    from pathlib import Path
+
+    from vmex.core import solver
+    from vmex.core.input import VmecInput
+
+    deck = Path(__file__).resolve().parents[1] / "examples" / "data" / "input.solovev"
+    inp = VmecInput.from_file(str(deck))
+    resolution = solver.resolution_from_input(inp, ns=5)
+    return solver.prepare_runtime(inp, resolution, max_iterations=8)
+
+
+def _install_fake_loop(monkeypatch, rt, calls, *, failures: int):
+    """Replace ``solver._run_loop`` with a JAC75-emitting fake.
+
+    The first ``failures`` attempts return a JAC75 carry whose ``xstore``
+    is a DISTINCT perturbed checkpoint (as the real loop would record);
+    later attempts succeed.  The recovery POLICY under test —
+    ``_solve_stage``'s checkpoint/DELT/axis handling — runs unmodified.
+    """
+    import dataclasses
+
+    import jax
+    import jax.numpy as jnp
+
+    from vmex.core import solver
+    from vmex.core.errors import JAC75_FLAG, SUCCESSFUL_TERM_FLAG
+
+    def fake_run_loop(state0, loop_rt, *, mode, ijacob, verbose, emit,
+                      use_fft=False, emit_banner=True, initial_xcdot=None,
+                      initial_residuals=None):
+        n = len(calls)
+        calls.append(dict(
+            state={
+                name: np.asarray(getattr(state0, name)).copy()
+                for name in ("R_cos", "Z_sin", "L_sin")
+            },
+            lmove_axis=bool(loop_rt.lmove_axis),
+            delt0=float(loop_rt.time_step0),
+            residuals=None if initial_residuals is None else tuple(
+                float(v) for v in initial_residuals),
+        ))
+        carry = solver._initial_carry(state0, loop_rt, ijacob=ijacob)
+        if n < failures:
+            checkpoint = jax.tree.map(
+                lambda x: x + 1e-3 * (n + 1), state0)
+            return dataclasses.replace(
+                carry,
+                done=jnp.asarray(True),
+                ier=jnp.asarray(JAC75_FLAG, dtype=carry.ier.dtype),
+                ijacob=jnp.asarray(75, dtype=carry.ijacob.dtype),
+                xstore=checkpoint,
+                fsqr=jnp.asarray(0.5 + n, dtype=carry.fsqr.dtype),
+                fsqz=jnp.asarray(0.25 + n, dtype=carry.fsqz.dtype),
+                fsql=jnp.asarray(0.125 + n, dtype=carry.fsql.dtype),
+            )
+        return dataclasses.replace(
+            carry,
+            done=jnp.asarray(True),
+            ier=jnp.asarray(SUCCESSFUL_TERM_FLAG, dtype=carry.ier.dtype),
+        )
+
+    monkeypatch.setattr(solver, "_run_loop", fake_run_loop)
+
+    def no_axis_rebuild(*args, **kwargs):  # pragma: no cover - contract trap
+        raise AssertionError(
+            "reguess_initial_axis ran during a JAC75 retry: the recovery "
+            "must continue the checkpoint, never rebuild a cold axis state")
+
+    monkeypatch.setattr(solver, "reguess_initial_axis", no_axis_rebuild)
+
+
+def test_consecutive_jac75_retries_restore_checkpoints_and_reduce_delt(
+    monkeypatch,
+) -> None:
+    """TWO consecutive JAC75 events: checkpoint restored, DELT halved, no
+    cold axis rebuild, no identical replay — then success on attempt 3."""
+    from vmex.core import solver
+    from vmex.core.errors import SUCCESSFUL_TERM_FLAG
+
+    rt = _recovery_runtime()
+    calls: list[dict] = []
+    _install_fake_loop(monkeypatch, rt, calls, failures=2)
+
+    lines: list[str] = []
+    carry = solver._solve_stage(
+        rt, None, mode="cli", verbose=True,
+        emit=lambda value="", end="\n": lines.append(str(value)),
+        jacobian_retries=2,
+    )
+
+    assert int(carry.ier) == SUCCESSFUL_TERM_FLAG
+    assert len(calls) == 3
+    banners = [ln for ln in lines if "JACOBIAN RECOVERY RETRY" in ln]
+    assert len(banners) == 2
+    assert "JACOBIAN RECOVERY RETRY 1/2" in banners[0]
+    assert "JACOBIAN RECOVERY RETRY 2/2" in banners[1]
+
+    interior = calls[0]["state"]
+    # attempt 1: fresh interior guess, axis transfer allowed, input DELT
+    assert calls[0]["lmove_axis"] is True
+    assert calls[0]["delt0"] == pytest.approx(float(rt.time_step0))
+
+    # each retry restarts the PREVIOUS attempt's recorded best checkpoint
+    for attempt in (1, 2):
+        expected = {
+            name: calls[attempt - 1]["state"][name] + 1e-3 * attempt
+            for name in ("R_cos", "Z_sin")
+        }
+        for name, want in expected.items():
+            np.testing.assert_array_equal(
+                calls[attempt]["state"][name], want,
+                err_msg=f"retry {attempt} did not restart the recorded "
+                        f"checkpoint ({name})",
+            )
+        # ... and NOT a reconstructed cold state
+        assert not np.array_equal(
+            calls[attempt]["state"]["R_cos"], interior["R_cos"])
+        # the iteration-1 axis transfer stays disabled on retries
+        assert calls[attempt]["lmove_axis"] is False
+        # residual continuation from the failing attempt is carried
+        assert calls[attempt]["residuals"] == pytest.approx(
+            (0.5 + attempt - 1, 0.25 + attempt - 1, 0.125 + attempt - 1))
+
+    # DELT reduced BEFORE the next update: min(0.5, 0.5 * previous)
+    d0 = float(rt.time_step0)
+    assert calls[1]["delt0"] == pytest.approx(min(0.5, 0.5 * d0))
+    assert calls[2]["delt0"] == pytest.approx(min(0.5, 0.5 * calls[1]["delt0"]))
+    assert calls[0]["delt0"] > calls[1]["delt0"] > calls[2]["delt0"]
+
+    # no identical replay: every attempt is a distinct (state, DELT) pair
+    for a in range(3):
+        for b in range(a + 1, 3):
+            assert calls[a]["delt0"] != calls[b]["delt0"]
+            assert not np.array_equal(
+                calls[a]["state"]["R_cos"], calls[b]["state"]["R_cos"])
+
+
+def test_jac75_chain_exhausts_retries_with_typed_error(monkeypatch) -> None:
+    """When every retry fails, the chain surfaces the JAC75 class typed —
+    after restarting a genuine checkpoint at each event, never a cold state."""
+    import pytest as _pytest
+
+    from vmex.core import solver
+    from vmex.core.errors import JAC75_FLAG, VmecJacobianError
+
+    rt = _recovery_runtime()
+    calls: list[dict] = []
+    _install_fake_loop(monkeypatch, rt, calls, failures=99)
+
+    carry = solver._solve_stage(
+        rt, None, mode="cli", verbose=False, emit=lambda *a, **k: None,
+        jacobian_retries=2,
+    )
+    assert int(carry.ier) == JAC75_FLAG
+    assert len(calls) == 3          # initial + exactly jacobian_retries
+    assert calls[1]["lmove_axis"] is False
+    assert calls[2]["lmove_axis"] is False
+    with _pytest.raises(VmecJacobianError):
+        solver._finalize(carry, rt)
