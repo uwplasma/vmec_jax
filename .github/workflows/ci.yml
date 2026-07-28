@@ -528,7 +528,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [core-a-c, core-d-f, core-g-h, core-i, core-i-grad, core-j-m,
-                core-n-s, core-t-z, high-mode-fb, qi-gate, opt-qa, opt-qh,
+                core-n-s, core-t-z, high-mode-fb, qi-gate-free, qi-gate-ladder,
+                qi-gate-fixed, opt-qa, opt-qh,
                 opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
       - uses: actions/checkout@v6.0.2
@@ -613,12 +614,23 @@ jobs:
             high-mode-fb)
               FILES="tests/test_high_mode_free_boundary_parity.py"
               ;;
-            qi-gate)
-              # The QI sheet-current gate builds its field once (module
-              # fixture, ~90 s jitted) and then runs one 13-minute two-code
-              # ladder; its lanes are the heaviest single tests in the tree,
-              # so they get their own worker like high-mode-fb.
-              FILES="tests/test_qi_sheet_gate.py"
+            qi-gate-free)
+              # The QI sheet-current gate lanes are the heaviest single
+              # tests in the tree; running all of them in ONE process
+              # accumulated past the hosted runner's memory ceiling even
+              # with per-test cache clearing (evicted 18 minutes into the
+              # equilibrium lanes after the builder itself was bounded).
+              # Same per-campaign isolation as the opt-* shards: each
+              # worker rebuilds the deterministic field (~4 min hosted) and
+              # runs one equilibrium campaign.
+              FILES="tests/test_qi_sheet_gate.py::test_sheet_field_confines \
+                     tests/test_qi_sheet_gate.py::test_qi_sheet_free_boundary_converges"
+              ;;
+            qi-gate-ladder)
+              FILES="tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_matches_vmec2000"
+              ;;
+            qi-gate-fixed)
+              FILES="tests/test_qi_sheet_gate.py::test_qi_fixed_238_ladder_converges"
               ;;
             core-j-m)
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
