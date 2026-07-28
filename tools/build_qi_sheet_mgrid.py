@@ -25,9 +25,15 @@ for.  Recipe (every step was probe-validated against both codes):
 
 Measured cross-validation (2026-07-28): VMEX converges the free case to
 fsqr ~ 4e-6 within 200 iterations of activation (DELT = 0.9 works);
-VMEC2000 converges to 1e-8-class residuals with DELT = 0.55 (its activation
-kick at DELT 0.9 death-spirals the time step); both settle on the QI
-boundary (r00 0.9270 / 0.9302 vs the fixed solve's 0.9266).
+VMEC2000 converges with DELT <= 0.55 (its activation kick at DELT 0.9
+death-spirals the time step); both settle on the QI boundary (r00
+0.9270 / 0.9302 vs the fixed solve's 0.9266).  The deck ships DELT = 0.50:
+a four-point DELT sweep on the gate ladder showed VMEX's free-multigrid
+trajectory on x86-linux hits a non-finite force at 0.55 and 0.60 while
+0.45 and 0.50 converge on x86-linux AND arm64-macos with the same vacuum
+activation iteration (45) as VMEC2000 — 0.50 keeps a full step of margin
+from the platform-sensitive stability edge and gives the tightest
+two-code agreement (wb to ~1e-5 relative).
 
 Usage::
 
@@ -283,8 +289,10 @@ def build(outdir: Path, *, offset_factor: float = 1.2, mmax: int = 18,
     ))
     _log(f"wrote {mgrid_path}")
 
-    # matching free-boundary deck (DELT 0.55: VMEC2000's activation kick at
-    # the native 0.9 collapses its time step; VMEX converges at either)
+    # matching free-boundary deck (DELT 0.50: VMEC2000's activation kick at
+    # the native 0.9 collapses its time step, and the VMEX ladder on
+    # x86-linux is non-finite at 0.55/0.60 — see the module docstring's
+    # measured DELT sweep; 0.50 is green on both platforms in both codes)
     import re
     deck = deck_path.read_text()
     deck = deck.replace(
@@ -292,7 +300,7 @@ def build(outdir: Path, *, offset_factor: float = 1.2, mmax: int = 18,
         "&INDATA\n  LFREEB = T\n  MGRID_FILE = 'mgrid_qi_sheet.nc'\n"
         "  EXTCUR = 1.0\n  NZETA = 36", 1)
     deck = re.sub(r"PHIEDGE *= *[0-9.eE+-]+", f"PHIEDGE = {phiedge:.10e}", deck)
-    deck = re.sub(r"DELT *= *[0-9.eE+-]+", "DELT = 0.55", deck)
+    deck = re.sub(r"DELT *= *[0-9.eE+-]+", "DELT = 0.50", deck)
     (outdir / "input.qi_sheet_free").write_text(deck)
     _log(f"wrote {outdir / 'input.qi_sheet_free'}")
     return {"fit_metric": fit_metric, "scale": scale, "phiedge": phiedge,

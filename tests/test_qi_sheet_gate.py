@@ -7,12 +7,20 @@ recorded VMEC2000 comparison — all from public data, built deterministically
 in-session by :mod:`tools.build_qi_sheet_mgrid` (no fetched asset).
 
 Recorded fresh local xvmec2000/PARVMEC goldens on the byte-equivalent gate
-deck (2026-07-28): all five rungs (21→34→55→89→144, 238 modes, LFORBAL=T,
-PRECON_TYPE='NONE', PREC2D_THRESHOLD=1e-30, APHI, no supplied axis) —
-vacuum on at iteration 45, EXECUTION TERMINATED NORMALLY, wout written:
-``wb = 2.2738091757e-3``, ``sum raxis_cc = 0.93032287``,
-``iotaf(edge) = -0.4160441``, ``aspect = 8.0965``.  VMEX on the identical
-ladder: vacuum on at 45, ``wb = 2.2740006e-3`` (8.4e-5 relative agreement).
+deck (2026-07-28, DELT = 0.50): all five rungs (21→34→55→89→144, 238
+modes, LFORBAL=T, PRECON_TYPE='NONE', PREC2D_THRESHOLD=1e-30, APHI, no
+supplied axis) — vacuum on at iteration 45, EXECUTION TERMINATED NORMALLY,
+wout written: ``wb = 2.2735640332e-3``, ``sum raxis_cc = 0.93039119``,
+``iotaf(edge) = -0.4147612``, ``aspect = 8.0935``.  VMEX on the identical
+ladder, measured on BOTH platforms: arm64-macos ``wb = 2.2735814e-3``
+(7.7e-6 relative), x86-linux ``wb = 2.2735892e-3`` (1.1e-5 relative),
+vacuum on at 45 on both.
+
+DELT rationale: a four-point sweep showed the VMEX free-multigrid
+trajectory on x86-linux is non-finite at DELT 0.55/0.60 while 0.45 and
+0.50 converge on both platforms with the same activation iteration as
+VMEC2000; the deck ships 0.50 — a full step of margin from the
+platform-sensitive stability edge and the tightest two-code agreement.
 
 ftol rationale: the sheet fit nulls ``B.n`` to 2.5e-4 of ``|B|`` and the
 64x64x36 trilinear mgrid adds interpolation error, which floors the
@@ -63,9 +71,9 @@ def _release_jax_caches():
     gc.collect()
 
 
-GOLDEN_WB = 2.2738091756761185e-3
-GOLDEN_R00 = 0.9303228697937338
-GOLDEN_IOTA_EDGE = -0.416044061525186
+GOLDEN_WB = 2.2735640332039e-3
+GOLDEN_R00 = 0.9303911858840
+GOLDEN_IOTA_EDGE = -0.4147611657
 GOLDEN_ACTIVATION = 45
 
 
