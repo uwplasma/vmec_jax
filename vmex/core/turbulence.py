@@ -1,14 +1,15 @@
-"""Turbulence-proxy optimization objectives via SPECTRAX-GK (R26h.h4).
+"""Turbulence-proxy optimization objectives via GKX (R26h.h4).
 
-Wires the gyrokinetic turbulence proxies of `SPECTRAX-GK
-<https://github.com/uwplasma/spectrax-gk>`_ (uwplasma; JAX-native
-Hermite-Laguerre flux-tube solver) to converged ``(SpectralState,
-SolverRuntime)`` pairs, in two layers:
+Wires the gyrokinetic turbulence proxies of `GKX
+<https://github.com/uwplasma/GKX>`_ (uwplasma; JAX-native Hermite-Laguerre
+flux-tube solver; PyPI ``gkx`` >= 1.7.1, formerly published as
+``spectraxgk``) to converged ``(SpectralState, SolverRuntime)`` pairs, in
+two layers:
 
 1. **Geometry adapter** — :func:`gk_fieldline_geometry` samples one field
    line of the converged interior solution and emits the solver-ready
    flux-tube geometry contract of
-   ``spectraxgk.flux_tube_geometry_from_mapping`` (``bmag``, ``gradpar``,
+   ``gkx.flux_tube_geometry_from_mapping`` (``bmag``, ``gradpar``,
    ``gds2/gds21/gds22``, ``gbdrift/gbdrift0``, ``cvdrift/cvdrift0``,
    ``bgrad``, …).  The arrays follow the GS2/GX normalizations of simsopt's
    ``vmec_fieldlines`` (Landreman) — the exact conventions already used by
@@ -17,29 +18,29 @@ SolverRuntime)`` pairs, in two layers:
    ``_parabola``, ``_theta_vmec_from_pest``) is reused here, extended with
    the ``grad s``/``grad psi`` metric and drift projections that ballooning
    does not need.  Everything is exact trig sums + JAX AD: the adapter is
-   jit/grad-transparent and needs no spectraxgk import.
+   jit/grad-transparent and needs no gkx import.
 
 2. **Objective wrappers** — thin ``(state, runtime)`` callables around the
-   proxies SPECTRAX-GK itself promotes for VMEC-side optimization (its
-   ``VMECJAXTransportObjectiveConfig`` kinds, docs
+   proxies GKX itself promotes for VMEX-side optimization (its
+   ``VMEXTransportObjectiveConfig`` kinds, docs
    ``stellarator_optimization.rst``):
 
    - :func:`turbulent_growth_rate` — kind ``"growth"``: dominant linear
      ITG/TEM-branch growth rate ``gamma`` of the spectral gyrokinetic
      operator on the sampled flux tube
-     (``spectraxgk.solver_growth_rate_from_geometry``; the eigenvalue
-     carries SPECTRAX-GK's implicit-eigenpair custom AD rule).
+     (``gkx.solver_growth_rate_from_geometry``; the eigenvalue
+     carries GKX's implicit-eigenpair custom AD rule).
    - :func:`quasilinear_flux_proxy` — kind ``"quasilinear_flux"``: the
      mixing-length quasilinear heat-flux proxy
      ``gamma * W_Q / k_perp_eff^2`` built from the dominant eigenmode's
      heat-flux weight and effective perpendicular wavenumber.
    - :func:`nonlinear_heat_flux_proxy` — kind
-     ``"nonlinear_window_heat_flux"``: SPECTRAX-GK's smooth reduced
+     ``"nonlinear_window_heat_flux"``: GKX's smooth reduced
      nonlinear-window heat-flux surrogate (saturation-rule closure
      ``csat * W_Q * 2 gamma_+ / (1 + 2.2 k_perp_eff^2 + 0.15 gamma_+)``,
-     ``spectraxgk.objectives.vmec_transport_tables``).  This is the
+     ``gkx.objectives.vmec_transport``).  This is the
      documented *proxy* for the nonlinear transport window; a production
-     nonlinear claim still requires SPECTRAX-GK's matched long nonlinear
+     nonlinear claim still requires GKX's matched long nonlinear
      audits, per its own docs.
    - :func:`turbulence_objective_vector` — the underlying ordered
      ``SOLVER_OBJECTIVE_NAMES`` vector ``(gamma, omega, kperp_eff2,
@@ -49,10 +50,10 @@ SolverRuntime)`` pairs, in two layers:
    Each wrapper is a two-positional ``(state, runtime)`` callable, so it
    composes with :func:`vmex.core.optimize.least_squares`.
    Traceability status (validated in ``tests/test_turbulence.py``):
-   SPECTRAX-GK is JAX-native, and :func:`turbulent_growth_rate` is fully
+   GKX is JAX-native, and :func:`turbulent_growth_rate` is fully
    differentiable in both AD modes (``jac=None`` *and* ``jac="implicit"``
-   — the wrapper reduces SPECTRAX-GK's explicit operator matrix with
-   ``jnp.linalg.eigvals``, which carries a JVP, where SPECTRAX-GK's own
+   — the wrapper reduces GKX's explicit operator matrix with
+   ``jnp.linalg.eigvals``, which carries a JVP, where GKX's own
    ``dominant_real_eigenvalue`` is a reverse-only ``custom_vjp`` that the
    forward-mode implicit Jacobian cannot trace).  The quasilinear and
    nonlinear-window proxies additionally weight the dominant *eigenvector*
@@ -62,9 +63,10 @@ SolverRuntime)`` pairs, in two layers:
    terms (``d_merc``, ``l_grad_b``) in the optimization examples.
 
 The heavy dependency is optional: only the objective wrappers import
-``spectraxgk`` (``pip install spectraxgk``; its ``solvax`` pin is satisfied
-API-wise by the in-house solvax's ``gmres``/``tridiagonal_solve``/
-``chunked_jacfwd``).  The geometry adapter works without it.
+``gkx`` (>= 1.7.1; ``pip install 'vmex[turbulence]'`` or
+``pip install 'gkx>=1.7.1'``; its ``solvax`` pin is satisfied API-wise by
+the in-house solvax's ``gmres``/``tridiagonal_solve``/``chunked_jacfwd``).
+The geometry adapter works without it.
 
 Scope notes
 -----------
@@ -72,13 +74,13 @@ Scope notes
   :func:`vmex.core.stability._ballooning_context`.
 - Surfaces need ``iota != 0`` (field-line parameterization divides by iota).
 - The flux tube covers one poloidal turn ``theta in [-pi, pi)`` (the solver
-  z-grid convention of ``spectraxgk.core.grid.build_spectral_grid``); the
-  parallel boundary is handled by SPECTRAX-GK's twist-shift machinery from
+  z-grid convention of ``gkx.core.grid.build_spectral_grid``); the
+  parallel boundary is handled by GKX's twist-shift machinery from
   the emitted ``q``/``s_hat``/``nfp``.
 - ``gds21``/``gbdrift0`` signs follow simsopt ``vmec_fieldlines`` with
   ``psi = s * psi_edge`` in vmex's internal (signed) edge-flux
   convention.  The default single-``kx`` proxies (``nx = 1``) are
-  insensitive to this overall sign, matching SPECTRAX-GK's own VMEC bridge.
+  insensitive to this overall sign, matching GKX's own VMEC bridge.
 """
 
 from __future__ import annotations
@@ -107,15 +109,15 @@ __all__ = [
 
 Array = Any
 
-#: Field-line array fields of the SPECTRAX-GK flux-tube geometry contract
-#: (``spectraxgk.geometry.flux_tube_contract._ARRAY_FIELDS``).
+#: Field-line array fields of the GKX flux-tube geometry contract
+#: (``gkx.geometry.flux_tube_contract._ARRAY_FIELDS``).
 GK_GEOMETRY_FIELDS = (
     "theta", "gradpar", "bmag", "bgrad", "gds2", "gds21", "gds22",
     "cvdrift", "gbdrift", "cvdrift0", "gbdrift0",
 )
 
 #: Ordered observables of :func:`turbulence_objective_vector`
-#: (``spectraxgk.SOLVER_OBJECTIVE_NAMES``).
+#: (``gkx.SOLVER_OBJECTIVE_NAMES``).
 TURBULENCE_OBJECTIVE_NAMES = (
     "gamma",
     "omega",
@@ -126,30 +128,25 @@ TURBULENCE_OBJECTIVE_NAMES = (
 )
 
 
-def _spectraxgk():
+def _gkx():
     """Import the optional GKX dependency with a helpful error.
 
-    The package was renamed spectraxgk -> gkx.  The old name is kept as a
-    fallback so an environment pinned to a pre-rename release still works, but
-    ``gkx`` is tried first: a stale ``spectraxgk`` dist-info can survive the
-    rename with no importable module behind it, which is exactly how the
-    turbulence objectives silently stopped working.
+    Only ``gkx`` (>= 1.7.1, the package formerly published as ``spectraxgk``)
+    is supported: the objective wrappers import ``gkx.objectives`` submodules
+    directly, so a pre-rename ``spectraxgk`` install can never satisfy them —
+    the legacy-name fallback once advertised here was nonfunctional and has
+    been removed.
     """
     try:
         import gkx
 
         return gkx
-    except ImportError:
-        pass
-    try:
-        import spectraxgk
-
-        return spectraxgk
     except ImportError as err:  # pragma: no cover - exercised via message test
         raise ImportError(
             "the turbulence objectives need the optional dependency "
-            "gkx (github.com/uwplasma/GKX): pip install gkx.  The geometry "
-            "adapter gk_fieldline_geometry works without it.") from err
+            "gkx >= 1.7.1 (github.com/uwplasma/GKX): pip install 'vmex[turbulence]' "
+            "or pip install 'gkx>=1.7.1'.  The geometry adapter "
+            "gk_fieldline_geometry works without it.") from err
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +269,7 @@ def gk_fieldline_geometry(
     """Flux-tube geometry mapping of one field line of a converged state.
 
     Returns the in-memory geometry contract consumed by
-    ``spectraxgk.flux_tube_geometry_from_mapping`` (keys
+    ``gkx.flux_tube_geometry_from_mapping`` (keys
     :data:`GK_GEOMETRY_FIELDS` plus ``grho``/``jacobian`` and the scalar
     metadata ``q``, ``s_hat``, ``epsilon``, ``R0``, ``B0``, ``alpha``,
     ``nfp``), all in the GS2/GX normalizations of simsopt
@@ -281,7 +278,7 @@ def gk_fieldline_geometry(
     :mod:`vmex.core.stability`).  A ``"vmex"`` sub-dict carries
     diagnostics used by the parity tests (``dp_drho``, ``gradpar_profile``,
     the sampled PEST angles, …).  Pure jnp — traceable and differentiable
-    w.r.t. ``(state, runtime)``; no spectraxgk import.
+    w.r.t. ``(state, runtime)``; no gkx import.
 
     Parameters
     ----------
@@ -294,16 +291,16 @@ def gk_fieldline_geometry(
     ntheta:
         Parallel samples over one poloidal turn; the emitted ``theta`` is
         ``linspace(-pi, pi, ntheta, endpoint=False)`` — exactly the
-        SPECTRAX-GK solver z grid.
+        GKX solver z grid.
     equal_arc:
         Resample the parallel coordinate so ``b . grad z`` is constant
-        (``gradpar`` exactly uniform, SPECTRAX-GK's validated contract).
+        (``gradpar`` exactly uniform, GKX's validated contract).
         The coordinate map is built from an ``arc_oversample`` x finer
         quadrature of ``1/gradpar``; geometry values are exact spectral
         evaluations at the mapped points (only the map itself is
         interpolated).  ``equal_arc=False`` samples uniformly in the PEST
         angle instead (stability.py's grid; ``gradpar`` then varies along
-        the line and downstream use relies on spectraxgk's mean-``gradpar``
+        the line and downstream use relies on gkx's mean-``gradpar``
         reduction, as in its own VMEC bridge).
     """
     if int(ntheta) < 8:
@@ -411,15 +408,15 @@ def flux_tube_geometry(
     validate: bool = False,
     **geometry_kwargs,
 ):
-    """SPECTRAX-GK ``FluxTubeGeometryData`` for one field line (needs spectraxgk).
+    """GKX ``FluxTubeGeometryData`` for one field line (needs gkx).
 
     Thin wrapper: :func:`gk_fieldline_geometry` ->
-    ``spectraxgk.flux_tube_geometry_from_mapping``.  ``validate=True`` turns
-    on spectraxgk's host-side finite/constant-``gradpar`` checks (concrete
+    ``gkx.flux_tube_geometry_from_mapping``.  ``validate=True`` turns
+    on gkx's host-side finite/constant-``gradpar`` checks (concrete
     arrays only — leave ``False`` under jit/grad tracing).
     """
-    spx = _spectraxgk()
-    return spx.flux_tube_geometry_from_mapping(
+    gkx = _gkx()
+    return gkx.flux_tube_geometry_from_mapping(
         gk_fieldline_geometry(state, rt, **geometry_kwargs),
         source_model="vmex:core.turbulence",
         validate_finite=bool(validate),
@@ -427,7 +424,7 @@ def flux_tube_geometry(
 
 
 # ---------------------------------------------------------------------------
-# Objective wrappers (SPECTRAX-GK proxies as (state, runtime) callables)
+# Objective wrappers (GKX proxies as (state, runtime) callables)
 # ---------------------------------------------------------------------------
 
 _GEOMETRY_KEYS = ("s_index", "alpha", "zeta0", "ntheta", "equal_arc", "arc_oversample")
@@ -438,8 +435,8 @@ def _split_kwargs(kwargs: dict) -> tuple[dict, dict]:
     return geometry, kwargs
 
 
-def _linear_params(spx, params_linear, r_over_lt, r_over_ln):
-    """SPECTRAX-GK LinearParams: explicit object, or its collisionless
+def _linear_params(params_linear, r_over_lt, r_over_ln):
+    """GKX LinearParams: explicit object, or its collisionless
     optimization defaults with optionally overridden drive gradients."""
     if params_linear is not None:
         if r_over_lt is not None or r_over_ln is not None:
@@ -473,29 +470,29 @@ def turbulence_objective_vector(
     r_over_ln: float | None = None,
     **geometry_kwargs,
 ) -> jnp.ndarray:
-    """Ordered SPECTRAX-GK linear/quasilinear observable vector (traceable).
+    """Ordered GKX linear/quasilinear observable vector (traceable).
 
     Samples one flux tube (:func:`gk_fieldline_geometry` keyword arguments
     ``s_index``/``alpha``/``zeta0``/``ntheta``/``equal_arc`` pass through),
-    builds SPECTRAX-GK's spectral linear gyrokinetic operator on it at the
+    builds GKX's spectral linear gyrokinetic operator on it at the
     ``selected_ky_index`` binormal wavenumber (``ky = 2 pi k / ly`` in
     ``rho_ref`` units), selects the maximum-growth eigenbranch, and returns
     :data:`TURBULENCE_OBJECTIVE_NAMES`
-    (``spectraxgk.solver_objective_vector_from_geometry``).
+    (``gkx.solver_objective_vector_from_geometry``).
 
-    The drive gradients live in SPECTRAX-GK's ``LinearParams``
+    The drive gradients live in GKX's ``LinearParams``
     (``params_linear``; default: its collisionless optimization defaults
     ``R/L_n = 2.2``, ``R/L_Ti = 6.9`` — the Cyclone-base ITG drive —
     optionally overridden via ``r_over_lt``/``r_over_ln``).
     """
-    spx = _spectraxgk()
+    gkx = _gkx()
     geom = flux_tube_geometry(state, rt, **geometry_kwargs)
-    return spx.solver_objective_vector_from_geometry(
+    return gkx.solver_objective_vector_from_geometry(
         geom,
         selected_ky_index=int(selected_ky_index),
         n_laguerre=int(n_laguerre), n_hermite=int(n_hermite),
         nx=int(nx), ny=int(ny), lx=float(lx), ly=float(ly),
-        params_linear=_linear_params(spx, params_linear, r_over_lt, r_over_ln),
+        params_linear=_linear_params(params_linear, r_over_lt, r_over_ln),
         terms=terms,
     )
 
@@ -503,15 +500,15 @@ def turbulence_objective_vector(
 def turbulent_growth_rate(state: SpectralState, rt: SolverRuntime, **kwargs) -> jnp.ndarray:
     """Dominant linear gyrokinetic growth rate on one flux tube (traceable).
 
-    SPECTRAX-GK objective kind ``"growth"``: the largest real part of the
+    GKX objective kind ``"growth"``: the largest real part of the
     eigenvalues of its spectral Hermite-Laguerre linear operator on the
     sampled flux tube, in ``v_th / L_ref`` units.  Positive = unstable.
 
-    The operator matrix is SPECTRAX-GK's own
-    (``spectraxgk.solver_linear_operator_matrix_from_geometry`` — the exact
+    The operator matrix is GKX's own
+    (``gkx.solver_linear_operator_matrix_from_geometry`` — the exact
     matrix behind its ``solver_growth_rate_from_geometry``); the eigenvalue
     reduction here uses ``jnp.linalg.eigvals`` so the objective carries
-    *both* JVP and VJP rules — SPECTRAX-GK's ``dominant_real_eigenvalue``
+    *both* JVP and VJP rules — GKX's ``dominant_real_eigenvalue``
     is a reverse-only ``custom_vjp``, which vmex's forward-mode
     implicit Jacobian cannot trace (values agree to roundoff; gated in
     ``tests/test_turbulence.py``).  Keyword arguments as
@@ -521,12 +518,12 @@ def turbulent_growth_rate(state: SpectralState, rt: SolverRuntime, **kwargs) -> 
     ``jac=None`` or ``jac="implicit"``.
     """
     geometry_kwargs, solver_kwargs = _split_kwargs(dict(kwargs))
-    spx = _spectraxgk()
+    gkx = _gkx()
     params_linear = _linear_params(
-        spx, solver_kwargs.pop("params_linear", None),
+        solver_kwargs.pop("params_linear", None),
         solver_kwargs.pop("r_over_lt", None), solver_kwargs.pop("r_over_ln", None))
     geom = flux_tube_geometry(state, rt, **geometry_kwargs)
-    matrix = spx.solver_linear_operator_matrix_from_geometry(
+    matrix = gkx.solver_linear_operator_matrix_from_geometry(
         geom, params_linear=params_linear, **solver_kwargs)
     eigenvalues = jnp.linalg.eigvals(matrix)
     return jnp.real(eigenvalues[jnp.argmax(jnp.real(eigenvalues))])
@@ -535,7 +532,7 @@ def turbulent_growth_rate(state: SpectralState, rt: SolverRuntime, **kwargs) -> 
 def quasilinear_flux_proxy(state: SpectralState, rt: SolverRuntime, **kwargs) -> jnp.ndarray:
     """Mixing-length quasilinear heat-flux proxy (value-level; ``jac=None``).
 
-    SPECTRAX-GK objective kind ``"quasilinear_flux"``: ``gamma * W_Q /
+    GKX objective kind ``"quasilinear_flux"``: ``gamma * W_Q /
     max(kperp_eff^2, 1e-12)`` with ``W_Q`` the dominant mode's normalized
     heat-flux weight — the mixing-length saturation rule of its quasilinear
     transport lane.  The weight depends on the dominant *eigenvector*, whose
@@ -543,9 +540,9 @@ def quasilinear_flux_proxy(state: SpectralState, rt: SolverRuntime, **kwargs) ->
     (``jac=None``), like the wout-engine terms.  Keyword arguments as
     :func:`turbulence_objective_vector`.
     """
-    spx = _spectraxgk()
+    gkx = _gkx()
     vector = turbulence_objective_vector(state, rt, **kwargs)
-    return spx.solver_scalar_objective_from_vector(vector, "quasilinear_flux")
+    return gkx.solver_scalar_objective_from_vector(vector, "quasilinear_flux")
 
 
 def nonlinear_heat_flux_proxy(
@@ -558,19 +555,19 @@ def nonlinear_heat_flux_proxy(
 ) -> jnp.ndarray:
     """Smooth reduced nonlinear-window heat-flux surrogate (value-level; ``jac=None``).
 
-    SPECTRAX-GK objective kind ``"nonlinear_window_heat_flux"``: its
+    GKX objective kind ``"nonlinear_window_heat_flux"``: its
     saturation-rule closure ``csat * max(W_Q, 0) * 2 gamma_+ /
     (1 + 2.2 kperp_eff^2 + 0.15 gamma_+)`` mapping the linear solver row to
-    a nonlinear heat-flux proxy (``spectraxgk.objectives.
-    vmec_transport_tables._solver_table_to_nonlinear_window_proxy`` — the
-    exact objective its VMEC-JAX optimization scripts use for this kind).
+    a nonlinear heat-flux proxy (``gkx.objectives.
+    vmec_transport._solver_table_to_nonlinear_window_proxy`` — the
+    exact objective its VMEX optimization scripts use for this kind).
     This is a smooth *surrogate* for the nonlinear transport window;
-    SPECTRAX-GK's docs require matched long nonlinear audits before any
+    GKX's docs require matched long nonlinear audits before any
     production nonlinear claim.  Eigenvector-weighted like
     :func:`quasilinear_flux_proxy` — use ``jac=None``.  Keyword arguments
     as :func:`turbulence_objective_vector`.
     """
-    _spectraxgk()
+    _gkx()
     # GKX consolidated vmec_transport_config and vmec_transport_tables into one
     # module, and renamed the config class in the VMEC-JAX -> VMEX rename.
     from gkx.objectives.vmec_transport import (
