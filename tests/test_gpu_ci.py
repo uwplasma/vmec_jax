@@ -62,11 +62,24 @@ def _paraxial_mirror_field(center_field, curvature, points):
 
 pytestmark = [
     pytest.mark.gpu,
-    pytest.mark.skipif(GPU is None, reason="GPU unavailable"),
     pytest.mark.usefixtures("_module_jit_enabled"),
 ]
 
+# Per-test hardware gating (the module-level skip would also veto the host-rig
+# lanes below, which exercise the same placement/gradient helpers on
+# ``--xla_force_host_platform_device_count=2`` forced CPU devices, no CUDA).
+_requires_gpu = pytest.mark.skipif(GPU is None, reason="GPU unavailable")
 
+# Forced host devices stand in for a second accelerator (cpu:1 <-> cuda:1);
+# a plain run exposes a single CPU device and skips these lanes.
+HOST_DEVICES = jax.devices("cpu")
+_requires_host_rig = pytest.mark.skipif(
+    len(HOST_DEVICES) < 2,
+    reason='needs XLA_FLAGS="--xla_force_host_platform_device_count=2"',
+)
+
+
+@_requires_gpu
 def test_gpu_is_default_without_platform_environment_pins():
     """The dedicated lane must fail rather than silently exercise the CPU."""
     _gpu()
@@ -76,6 +89,7 @@ def test_gpu_is_default_without_platform_environment_pins():
     assert _platform(jax.numpy.ones(())) == "gpu"
 
 
+@_requires_gpu
 def test_implicit_auto_prefers_cpu_but_none_follows_jax_gpu():
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     automatic = im.params_from_input(inp)
@@ -85,6 +99,7 @@ def test_implicit_auto_prefers_cpu_but_none_follows_jax_gpu():
     assert {_platform(x) for x in jax.tree.leaves(following_jax)} == {"gpu"}
 
 
+@_requires_gpu
 def test_lasym_jdotb_implicit_cpu_gpu_parity():
     inp = VmecInput.from_file(DATA_DIR / "input.up_down_asymmetric_tokamak")
     inp = dataclasses.replace(
@@ -114,6 +129,7 @@ def test_lasym_jdotb_implicit_cpu_gpu_parity():
     assert relative < 1e-9
 
 
+@_requires_gpu
 def test_explicit_gpu_mirror_fixed_boundary():
     """The mirror policy honors an explicit GPU through a real solve."""
     config = MirrorConfig(
@@ -135,6 +151,7 @@ def test_explicit_gpu_mirror_fixed_boundary():
     assert float(result.evaluated.variational.maximum) <= config.ftol
 
 
+@_requires_gpu
 def test_explicit_gpu_mirror_free_boundary_beta_scan():
     """A finite-beta continuation and its free-boundary solves stay on GPU."""
     config = MirrorConfig(
@@ -180,6 +197,7 @@ def test_explicit_gpu_mirror_free_boundary_beta_scan():
         assert float(result.variational_max) <= config.ftol
 
 
+@_requires_gpu
 def test_explicit_forward_solve_cpu_gpu_parity():
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     results = {
@@ -220,6 +238,7 @@ def test_explicit_forward_solve_cpu_gpu_parity():
         assert _platform(restarted.state.R_cos) == platform
 
 
+@_requires_gpu
 def test_multigrid_auto_moves_state_across_policy_threshold(monkeypatch):
     """A CPU coarse stage must not commit an AUTO-selected fine stage to CPU."""
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
@@ -244,6 +263,7 @@ def test_multigrid_auto_moves_state_across_policy_threshold(monkeypatch):
     assert seen == ["cpu", "gpu"]
 
 
+@_requires_gpu
 def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
     """A converged LASYM ladder and every NESTOR WOUT field agree."""
     inp = lasym_free_input(DATA_DIR)
@@ -418,6 +438,7 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
             )
 
 
+@_requires_gpu
 def test_free_boundary_multigrid_auto_relocates_every_carry(monkeypatch):
     """AUTO may cross CPU/GPU between stages without retaining committed leaves."""
     inp = VmecInput.from_file(DATA_DIR / "input.cth_like_free_bdy_lasym_small")
@@ -484,6 +505,7 @@ def test_free_boundary_multigrid_auto_relocates_every_carry(monkeypatch):
     assert _platform(result.state.R_cos) == "gpu"
 
 
+@_requires_gpu
 def test_explicit_implicit_gradient_cpu_gpu_parity():
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
 
@@ -509,6 +531,7 @@ def test_explicit_implicit_gradient_cpu_gpu_parity():
     np.testing.assert_allclose(gpu_gradient, cpu_gradient, rtol=2e-7, atol=1e-12)
 
 
+@_requires_gpu
 def test_scalarized_profile_gradient_cpu_gpu_parity():
     """The bounded-storage DMerc/D_R/<J.B> optimizer uses either device."""
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
@@ -530,6 +553,149 @@ def test_scalarized_profile_gradient_cpu_gpu_parity():
         results["gpu"].jac, results["cpu"].jac, rtol=2e-7, atol=1e-12)
 
 
+# ---------------------------------------------------------------------------
+# Second-device placement/gradient audit (shared by the CUDA lanes and the
+# forced-host-device rig lanes)
+# ---------------------------------------------------------------------------
+
+# Every physics metric of the implicit differentiable path; each is audited
+# for its VALUE and its full gradient PYTREE on the target device.
+IMPLICIT_METRICS = {
+    "wb": lambda sol: sol.wb,
+    "wp": lambda sol: sol.wp,
+    "volume": lambda sol: sol.volume,
+    "aspect": lambda sol: sol.aspect,
+    "iota_axis": lambda sol: sol.iota_axis,
+    "iota_edge": lambda sol: sol.iota_edge,
+    "magnetic_well": lambda sol: optimize.magnetic_well(
+        sol.state, sol.runtime),
+}
+
+
+def _assert_no_platform_pins():
+    """The audit must run on hardware discovery alone, without env pins."""
+    assert "JAX_PLATFORMS" not in os.environ
+    assert "JAX_PLATFORM_NAME" not in os.environ
+
+
+def _stray_leaves(label, tree, device):
+    """``(path, devices)`` for every array leaf not committed to ``device``.
+
+    Device IDENTITY, not platform: cuda:0 leaves in a cuda:1 solve are
+    exactly the mixed-device failure class under audit.  One artifact is
+    exempt: ``jax.grad`` materializes the cotangent of a parameter the
+    metric does not touch (e.g. the boundary for iota on an ncurr=0 deck)
+    as an UNCOMMITTED all-zero array on the default device
+    (``instantiate_zeros``) — placement-neutral, since an uncommitted
+    operand follows the committed operands of any downstream op, and
+    unreachable from the pinned operation.  A COMMITTED off-device leaf or
+    a nonzero off-device leaf is always a stray.
+    """
+    stray = []
+    for path, leaf in jax.tree_util.tree_flatten_with_path(tree)[0]:
+        if not hasattr(leaf, "devices") or leaf.devices() == {device}:
+            continue
+        if (not getattr(leaf, "committed", True)
+                and not np.any(np.asarray(leaf))):
+            continue
+        stray.append((label + jax.tree_util.keystr(path), leaf.devices()))
+    return stray
+
+
+def _implicit_audit(inp, device, *, ftol, max_iterations):
+    """Values, gradient PYTREES and a solution for every implicit metric."""
+    params = im.params_from_input(inp, device=device)
+    values, grads = {}, {}
+    for name, metric in IMPLICIT_METRICS.items():
+        v, g = jax.value_and_grad(
+            lambda p, metric=metric: jax.numpy.asarray(
+                metric(im.run(inp, p, ftol=ftol,
+                              max_iterations=max_iterations,
+                              device=device))).ravel()[0])(params)
+        values[name] = float(v)
+        grads[name] = g
+    sol = im.run(inp, params, ftol=ftol, max_iterations=max_iterations,
+                 device=device)
+    return values, grads, sol
+
+
+def _assert_audit_committed(target, grads, sol):
+    """Every array leaf of the state, the runtime AND every gradient."""
+    trees = {"state": sol.state, "runtime": sol.runtime}
+    trees.update({f"grad[{name}]": grad for name, grad in grads.items()})
+    stray = [entry for label, tree in trees.items()
+             for entry in _stray_leaves(label, tree, target)]
+    assert not stray, f"leaves committed off {target}: {stray[:8]}"
+
+
+def _assert_audit_matches(inp, reference, audit, *, value_rtol, grad_rtol,
+                          label):
+    """Value and gradient parity for every metric; gradients must be nonzero."""
+    ref_values, ref_grads, _ = reference
+    values, grads, _ = audit
+    for name in IMPLICIT_METRICS:
+        np.testing.assert_allclose(
+            values[name], ref_values[name], rtol=value_rtol,
+            err_msg=f"{name} value diverged on {label}")
+        for leaf in jax.tree.leaves(grads[name]):
+            assert np.all(np.isfinite(np.asarray(leaf))), (
+                f"{name} gradient non-finite on {label}")
+        # The regression collapsed gradients to EXACTLY zero.  Some parameter
+        # drives every metric, so the whole pytree must retain signal; the
+        # boundary element must stay nonzero only where the reference says it
+        # is (iota on an ncurr=0 deck has a structurally zero rbc gradient).
+        norm = np.sqrt(sum(
+            float(np.vdot(leaf, leaf))
+            for leaf in map(np.asarray, jax.tree.leaves(grads[name]))))
+        assert norm != 0.0, f"{name} gradient collapsed to zero on {label}"
+        got = float(np.asarray(grads[name].rbc)[inp.ntor, 1])
+        want = float(np.asarray(ref_grads[name].rbc)[inp.ntor, 1])
+        if want != 0.0:
+            assert got != 0.0, (
+                f"{name} boundary gradient collapsed to zero on {label}")
+        np.testing.assert_allclose(
+            got, want, rtol=grad_rtol, atol=1e-12,
+            err_msg=f"{name} gradient diverged on {label}")
+
+
+# (device, ftol, max_iterations) -> reference audit.  Memoized so the three
+# lanes per rig do not repeat the 7-metric reference sweep; computed lazily so
+# the cold-start lane can run its target-device audit FIRST.
+_REFERENCE_AUDITS: dict = {}
+
+
+def _reference_audit(inp, device, *, ftol, max_iterations):
+    key = (str(device), ftol, max_iterations)
+    if key not in _REFERENCE_AUDITS:
+        _REFERENCE_AUDITS[key] = _implicit_audit(
+            inp, device, ftol=ftol, max_iterations=max_iterations)
+    return _REFERENCE_AUDITS[key]
+
+
+def _reset_device_blind_caches():
+    """Cold-start lane: the target-device pass must be the first real work.
+
+    Drops every compiled computation plus the implicit module's device-blind
+    memos (the runtime-template lru_cache, the structural dof-mask cache and
+    the boundary-packing tables) — the caches whose warm entries masked the
+    callback-payload placement bug: a default-device pass primes the mask
+    cache, and the poisoned-order lane then never reconstructs parameters
+    inside the callback at all.
+    """
+    jax.clear_caches()
+    im._template_runtime.cache_clear()
+    im._MASK_CACHE.clear()
+    im._PACK_TABLE_CACHE.clear()
+
+
+def _second_gpus():
+    gpus = jax.devices("gpu")
+    if len(gpus) < 2:
+        pytest.skip("needs at least two GPUs")
+    return gpus
+
+
+@_requires_gpu
 def test_second_gpu_explicit_values_and_gradients():
     """The full differentiable path on a NON-DEFAULT GPU, no outer context.
 
@@ -537,60 +703,133 @@ def test_second_gpu_explicit_values_and_gradients():
     forward solve was correct but every gradient collapsed to zero and the
     derived diagnostics went NaN, because the pure_callback host thread, the
     cached runtime template, and the custom-VJP backward all executed outside
-    the caller's device context.  The resolved device is now carried in the
-    static config; this test drives the whole audit WITHOUT any outer
-    ``jax.default_device`` context and asserts device IDENTITY (id 1), not
-    merely platform.
+    the caller's device context.  The resolved device is carried in the
+    static config and the callback outputs carry explicit single-device
+    sharding; this lane drives the whole audit WITHOUT any outer
+    ``jax.default_device`` context, in the cache-poisoned order (CPU, then
+    the default GPU, then the second GPU), and asserts device IDENTITY for
+    every leaf of the state, the runtime and every gradient pytree.
     """
-    gpus = jax.devices("gpu")
-    if len(gpus) < 2:
-        pytest.skip("needs at least two GPUs")
-    gpu1 = gpus[1]
+    gpus = _second_gpus()
+    _assert_no_platform_pins()
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
 
-    metrics = {
-        "wb": lambda sol: sol.wb,
-        "wp": lambda sol: sol.wp,
-        "volume": lambda sol: sol.volume,
-        "aspect": lambda sol: sol.aspect,
-        "iota_axis": lambda sol: sol.iota_axis,
-        "iota_edge": lambda sol: sol.iota_edge,
-        "magnetic_well": lambda sol: optimize.magnetic_well(
-            sol.state, sol.runtime),
-    }
-
-    def audit(device):
-        params = im.params_from_input(inp, device=device)
-        values, grads = {}, {}
-        for name, metric in metrics.items():
-            v, g = jax.value_and_grad(lambda p: jax.numpy.asarray(
-                metric(im.run(inp, p, ftol=1e-12, max_iterations=1000,
-                              device=device))).ravel()[0])(params)
-            values[name] = float(v)
-            grads[name] = float(np.asarray(g.rbc)[inp.ntor, 1])
-        sol = im.run(inp, params, ftol=1e-12, max_iterations=1000,
-                     device=device)
-        return values, grads, sol
-
     # deliberately warm every cache on the DEFAULT devices first
-    cpu_values, cpu_grads, _ = audit(jax.devices("cpu")[0])
-    _ = audit(gpus[0])
-    gpu_values, gpu_grads, sol1 = audit(gpu1)
+    reference = _reference_audit(
+        inp, jax.devices("cpu")[0], ftol=1e-12, max_iterations=1000)
+    _implicit_audit(inp, gpus[0], ftol=1e-12, max_iterations=1000)
+    audit = _implicit_audit(inp, gpus[1], ftol=1e-12, max_iterations=1000)
 
-    # device IDENTITY, not platform: every leaf committed exactly to gpu:1
-    for tree in (sol1.state, sol1.runtime):
-        for leaf in jax.tree.leaves(tree):
-            if hasattr(leaf, "devices"):
-                assert leaf.devices() == {gpu1}, (
-                    f"leaf on {leaf.devices()}, expected {{{gpu1}}}")
+    _assert_audit_committed(gpus[1], audit[1], audit[2])
+    _assert_audit_matches(
+        inp, reference, audit, value_rtol=1e-10, grad_rtol=2e-6,
+        label="the second GPU (poisoned caches)")
 
-    for name in metrics:
-        np.testing.assert_allclose(
-            gpu_values[name], cpu_values[name], rtol=1e-10,
-            err_msg=f"{name} value diverged on the second GPU")
-        assert gpu_grads[name] != 0.0, (
-            f"{name} gradient collapsed to zero on the second GPU")
-        assert np.isfinite(gpu_grads[name])
-        np.testing.assert_allclose(
-            gpu_grads[name], cpu_grads[name], rtol=2e-6, atol=1e-12,
-            err_msg=f"{name} gradient diverged on the second GPU")
+
+@_requires_gpu
+def test_second_gpu_cold_first_values_and_gradients():
+    """Cold second-GPU-FIRST audit, no outer context.
+
+    The hardware review's second failure mode: without warm caches the
+    parameters reconstructed from the pure_callback payload landed on CPU
+    while the runtime intermediates were on the second GPU.  The
+    poisoned-order lane cannot see this — its default-device warmup primes
+    the structural mask cache, so the callback never rebuilds a runtime.
+    Here every compiled computation and device-blind memo is dropped and the
+    second-GPU audit runs BEFORE any other-device work in this test.
+    """
+    gpus = _second_gpus()
+    _assert_no_platform_pins()
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+
+    _reset_device_blind_caches()
+    audit = _implicit_audit(inp, gpus[1], ftol=1e-12, max_iterations=1000)
+    _assert_audit_committed(gpus[1], audit[1], audit[2])
+
+    reference = _reference_audit(
+        inp, jax.devices("cpu")[0], ftol=1e-12, max_iterations=1000)
+    _assert_audit_matches(
+        inp, reference, audit, value_rtol=1e-10, grad_rtol=2e-6,
+        label="the second GPU (cold first)")
+
+
+@_requires_gpu
+def test_second_gpu_values_and_gradients_with_outer_context():
+    """The explicit staging must not REQUIRE the absence of an outer context.
+
+    The matching regression to the no-context lanes: a caller that does hold
+    ``jax.default_device(gpu1)`` around the whole transformation gets the
+    same values, gradients and single-device placement.
+    """
+    gpus = _second_gpus()
+    _assert_no_platform_pins()
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+
+    reference = _reference_audit(
+        inp, jax.devices("cpu")[0], ftol=1e-12, max_iterations=1000)
+    with jax.default_device(gpus[1]):
+        audit = _implicit_audit(inp, gpus[1], ftol=1e-12,
+                                max_iterations=1000)
+
+    _assert_audit_committed(gpus[1], audit[1], audit[2])
+    _assert_audit_matches(
+        inp, reference, audit, value_rtol=1e-10, grad_rtol=2e-6,
+        label="the second GPU (outer context)")
+
+
+@_requires_host_rig
+def test_second_host_device_poisoned_order_values_and_gradients():
+    """CUDA-free rig for the poisoned-order lane: cpu:1 stands in for cuda:1."""
+    _assert_no_platform_pins()
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+
+    reference = _reference_audit(
+        inp, HOST_DEVICES[0], ftol=1e-11, max_iterations=600)
+    audit = _implicit_audit(inp, HOST_DEVICES[1], ftol=1e-11,
+                            max_iterations=600)
+
+    _assert_audit_committed(HOST_DEVICES[1], audit[1], audit[2])
+    _assert_audit_matches(
+        inp, reference, audit, value_rtol=1e-12, grad_rtol=1e-9,
+        label="the second host device (poisoned caches)")
+
+
+@_requires_host_rig
+def test_second_host_device_cold_first_values_and_gradients():
+    """CUDA-free rig for the cold second-device-FIRST lane.
+
+    Reproduces the mixed-device callback-payload failure class without
+    hardware: with cleared caches the first solve reconstructs parameters
+    inside the callback against a cpu:1-committed runtime template.
+    """
+    _assert_no_platform_pins()
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+
+    _reset_device_blind_caches()
+    audit = _implicit_audit(inp, HOST_DEVICES[1], ftol=1e-11,
+                            max_iterations=600)
+    _assert_audit_committed(HOST_DEVICES[1], audit[1], audit[2])
+
+    reference = _reference_audit(
+        inp, HOST_DEVICES[0], ftol=1e-11, max_iterations=600)
+    _assert_audit_matches(
+        inp, reference, audit, value_rtol=1e-12, grad_rtol=1e-9,
+        label="the second host device (cold first)")
+
+
+@_requires_host_rig
+def test_second_host_device_values_and_gradients_with_outer_context():
+    """CUDA-free rig for the outer-context regression lane."""
+    _assert_no_platform_pins()
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+
+    reference = _reference_audit(
+        inp, HOST_DEVICES[0], ftol=1e-11, max_iterations=600)
+    with jax.default_device(HOST_DEVICES[1]):
+        audit = _implicit_audit(inp, HOST_DEVICES[1], ftol=1e-11,
+                                max_iterations=600)
+
+    _assert_audit_committed(HOST_DEVICES[1], audit[1], audit[2])
+    _assert_audit_matches(
+        inp, reference, audit, value_rtol=1e-12, grad_rtol=1e-9,
+        label="the second host device (outer context)")

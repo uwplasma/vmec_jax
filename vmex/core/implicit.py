@@ -1133,7 +1133,15 @@ def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
 
 def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
     _HOST_ERROR.clear()  # fresh callback: drop any stale relayed error
-    params = jax.tree.map(jnp.asarray, params_np)
+    # The callback payload arrives committed to the runtime's LOCAL CPU
+    # regardless of ``cfg.device``, and ``jnp.asarray`` preserves an existing
+    # commitment — the surrounding ``_device_context`` steers only fresh
+    # uncommitted arrays.  Unpinned, the parameters mix devices with the
+    # cfg.device-committed template inside ``runtime_from_params`` whenever
+    # the structural mask cache misses (two-GPU review: a cold GPU1-first
+    # solve reconstructed the parameters on CPU against GPU1 runtime
+    # intermediates).  Explicit per-leaf device_put rehomes them.
+    params = _device_pin(cfg, jax.tree.map(jnp.asarray, params_np))
     try:
         result = _host_solve(cfg, params)
     except VmecError as exc:
@@ -1171,12 +1179,30 @@ def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
     return as_np(result.state), mask
 
 
+def _callback_sharding(cfg: ImplicitConfig):
+    """Explicit single-device placement of the ``pure_callback`` outputs.
+
+    Without a ``sharding`` the callback results follow the enclosing
+    computation's device assignment, NOT ``cfg.device`` — on a
+    multi-accelerator box a solve traced without an outer context therefore
+    materializes the converged state/mask on JAX's default device (two-GPU
+    review at the ``_device_pin`` boundary staging: forward leaves correct on
+    ``cuda:1`` but the ``wb`` boundary gradient exactly 0.0).  A
+    ``SingleDeviceSharding`` on the carried device commits both outputs where
+    every other stage of the operation already lives.
+    """
+    if cfg.device is None:
+        return None
+    return jax.sharding.SingleDeviceSharding(cfg.device)
+
+
 def _callback_solve(params: ImplicitParams, cfg: ImplicitConfig):
     """``pure_callback`` host solve returning ``(state, dof_mask)``.
 
     Shared by :func:`solve_implicit`, ``_solve_implicit_fwd`` and
-    :func:`solve_implicit_with_aux`.  Re-raises the ORIGINAL typed
-    :class:`VmecError` deposited in ``_HOST_ERROR`` by
+    :func:`solve_implicit_with_aux`.  Outputs carry the config's
+    single-device sharding (see :func:`_callback_sharding`).  Re-raises the
+    ORIGINAL typed :class:`VmecError` deposited in ``_HOST_ERROR`` by
     ``_host_solve_and_mask`` (``from None`` suppresses the noisy
     ``JaxRuntimeError`` context) so eager callers see the short typed
     exception.  Under ``jax.jit`` this try/except is trace-time only and the
@@ -1187,6 +1213,7 @@ def _callback_solve(params: ImplicitParams, cfg: ImplicitConfig):
         return jax.pure_callback(
             functools.partial(_host_solve_and_mask, cfg),
             (_state_struct(cfg), _state_struct(cfg)), params,
+            sharding=_callback_sharding(cfg),
         )
     except Exception:
         if _HOST_ERROR:
