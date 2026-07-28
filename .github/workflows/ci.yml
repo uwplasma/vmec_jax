@@ -527,7 +527,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [core-a-c, core-d-f, core-g-h, core-i, core-j-m,
+        shard: [core-a-c, core-d-f, core-g-h, core-i, core-i-grad, core-j-m,
                 core-n-s, core-t-z, high-mode-fb, qi-gate, opt-qa, opt-qh,
                 opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
@@ -598,9 +598,17 @@ jobs:
                      --ignore-glob=tests/test_[i-z]*.py"
               ;;
             core-i)
+              # The implicit-gradient file runs 23 solve+adjoint lanes whose
+              # executable caches accumulate past the hosted runner's memory
+              # ceiling when stacked with the rest of the letter (evicted in
+              # two dispatches); it gets its own worker below.
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
+                     --ignore=tests/test_implicit_grad.py \
                      --ignore-glob=tests/test_[a-h]*.py \
                      --ignore-glob=tests/test_[j-z]*.py"
+              ;;
+            core-i-grad)
+              FILES="tests/test_implicit_grad.py"
               ;;
             high-mode-fb)
               FILES="tests/test_high_mode_free_boundary_parity.py"
