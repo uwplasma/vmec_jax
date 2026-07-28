@@ -231,7 +231,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [a1, a2, b, c1, c2, d]
+        shard: [a1, a2, b, c1, c2, c3, d]
     steps:
       - uses: actions/checkout@v6.0.2
 
@@ -341,10 +341,7 @@ jobs:
                     tests/test_fourier_transforms.py \
                     tests/test_geometry_fields.py \
                     tests/test_gpu_ci.py \
-                    tests/test_implicit_device.py \
-                    tests/test_implicit_multi_rhs.py \
                     tests/test_input_profiles.py \
-                    tests/test_lgradb.py \
                     tests/test_mgrid.py \
                     tests/test_multigrid_interp.py \
                     tests/test_nonfinite_failfast.py"
@@ -374,6 +371,14 @@ jobs:
                     tests/test_validation_guards.py \
                     tests/test_vmec2000_feature_stress.py"
           D_FILES="tests/test_optimize.py"
+          # c3: the implicit-AD device/multi-RHS/LgradB files.  Their
+          # combined residency (plus the device-audit SUBPROCESS, a fifth
+          # jax process) evicted the 16 GB c1 runner three times once c1
+          # also carried the new oracle/comparator files; a dedicated
+          # 2-worker shard bounds the concurrent footprint.
+          C3_FILES="tests/test_implicit_device.py \
+                    tests/test_implicit_multi_rhs.py \
+                    tests/test_lgradb.py"
           if [ "${{ matrix.shard }}" = "a1" ]; then
             pytest -q -n 4 --dist loadscope $A1_FILES --durations=15 --cov=vmex --cov-report=term
           elif [ "${{ matrix.shard }}" = "a2" ]; then
@@ -384,6 +389,8 @@ jobs:
             pytest -q -n 4 --dist loadscope $C1_FILES --durations=15 --cov=vmex --cov-report=term
           elif [ "${{ matrix.shard }}" = "c2" ]; then
             pytest -q -n 4 --dist loadscope $C2_FILES --durations=15 --cov=vmex --cov-report=term
+          elif [ "${{ matrix.shard }}" = "c3" ]; then
+            pytest -q -n 2 --dist loadscope $C3_FILES --durations=15 --cov=vmex --cov-report=term
           elif [ "${{ matrix.shard }}" = "d" ]; then
             pytest -q -n 4 --dist load $D_FILES --durations=15 --cov=vmex --cov-report=term
           fi
@@ -526,7 +533,7 @@ jobs:
 
       - name: Combine shards and enforce the gate
         run: |
-          coverage combine coverage.parity-a1 coverage.parity-a2 coverage.parity-b coverage.parity-c1 coverage.parity-c2 coverage.parity-d coverage.gradient-a coverage.gradient-b coverage.gradient-c coverage.examples
+          coverage combine coverage.parity-a1 coverage.parity-a2 coverage.parity-b coverage.parity-c1 coverage.parity-c2 coverage.parity-c3 coverage.parity-d coverage.gradient-a coverage.gradient-b coverage.gradient-c coverage.examples
           # The mirror release audit reaches 95% only after appending nightly
           # fixed/free adjoint tests. The fast core artifacts intentionally
           # exclude those tests, so do not mix a partial mirror number into
