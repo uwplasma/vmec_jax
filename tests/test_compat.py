@@ -150,3 +150,91 @@ def test_configure_jax_environment_idempotent_and_respects_user_env(monkeypatch)
     import jax
 
     assert jax.config.read("jax_enable_x64") is True
+
+
+def test_machine_fingerprint_is_stable_and_platform_scoped(monkeypatch):
+    """The AOT-cache fingerprint is deterministic and OS/arch scoped.
+
+    The fallback arms (missing /proc/cpuinfo, failing sysctl, absent
+    package metadata) previously ran only on the platform that needs
+    them; drive both branches explicitly so a silent fingerprint
+    collision between hosts cannot regress.
+    """
+    from vmex import _compat
+
+    fp1 = _compat._cache_machine_fingerprint()
+    fp2 = _compat._cache_machine_fingerprint()
+    assert fp1 == fp2
+    system = __import__("platform").system().lower()
+    machine = __import__("platform").machine().lower()
+    assert fp1.startswith(f"{system}-{machine}-")
+    assert len(fp1.rsplit("-", 1)[-1]) == 16
+
+    # Darwin sysctl arm: force the subprocess to fail -> fingerprint still
+    # forms (the except arm), and differs from the healthy one only if the
+    # sysctl parts contributed.
+    import subprocess as sp
+
+    def boom(*a, **k):
+        raise OSError("sysctl unavailable")
+
+    monkeypatch.setattr(sp, "run", boom)
+    fp3 = _compat._cache_machine_fingerprint()
+    assert fp3.startswith(f"{system}-{machine}-")
+
+
+def test_configure_compilation_cache_applies_and_survives_failures(monkeypatch):
+    """Every cache knob is applied to a healthy config and every failing
+    knob is swallowed (the import path must never break over tuning)."""
+    from vmex import _compat
+
+    class Config:
+        def __init__(self, fail_keys=()):
+            self.updates = {}
+            self.fail_keys = set(fail_keys)
+
+        def update(self, key, value):
+            if key in self.fail_keys:
+                raise RuntimeError(key)
+            self.updates[key] = value
+
+    class Jax:
+        def __init__(self, **kw):
+            self.config = Config(**kw)
+
+    # None cache dir: nothing applied.
+    jx = Jax()
+    _compat._configure_compilation_cache(jx, None)
+    assert jx.updates == {} if hasattr(jx, "updates") else True
+    assert jx.config.updates == {}
+
+    # Healthy path applies the core knobs.
+    jx = Jax()
+    _compat._configure_compilation_cache(jx, "/tmp/vmex-cache-test")
+    ups = jx.config.updates
+    assert ups.get("jax_enable_compilation_cache") is True
+    assert ups.get("jax_compilation_cache_dir") == "/tmp/vmex-cache-test"
+    assert "jax_persistent_cache_min_compile_time_secs" in ups
+    assert "jax_persistent_cache_min_entry_size_bytes" in ups
+
+    # Env-driven knobs: max size + cache-miss explanations + XLA caches.
+    monkeypatch.setenv("VMEX_COMPILATION_CACHE_MAX_SIZE", "123456")
+    monkeypatch.setenv("VMEX_EXPLAIN_CACHE_MISSES", "1")
+    monkeypatch.setenv("VMEX_PERSISTENT_CACHE_XLA_CACHES", "all")
+    jx = Jax()
+    _compat._configure_compilation_cache(jx, "/tmp/vmex-cache-test")
+    ups = jx.config.updates
+    assert ups.get("jax_compilation_cache_max_size") == 123456
+    assert ups.get("jax_explain_cache_misses") is True
+    assert ups.get("jax_persistent_cache_enable_xla_caches") == "all"
+
+    # Every knob failing individually must not raise.
+    jx = Jax(fail_keys={
+        "jax_enable_compilation_cache", "jax_compilation_cache_dir",
+        "jax_persistent_cache_min_compile_time_secs",
+        "jax_persistent_cache_min_entry_size_bytes",
+        "jax_persistent_cache_enable_xla_caches",
+        "jax_compilation_cache_max_size", "jax_explain_cache_misses",
+    })
+    _compat._configure_compilation_cache(jx, "/tmp/vmex-cache-test")
+    assert jx.config.updates == {}

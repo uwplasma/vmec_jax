@@ -355,27 +355,37 @@ def test_cth_fixture_below_onset_and_bit_identical(cth_vacuum_inputs, monkeypatc
         return V._tl_forward(A, B, c, sc, sa, t0, lm)
 
     # 2. eager: bit-identical end to end (assumes the conftest default lane)
-    assert jax.config.jax_disable_jit, "test assumes the eager conftest lane"
-    new_solver = V.make_vacuum_solver(basis, signgs=signgs)
-    new_out = new_solver.full(boundary, bexni)
-    with monkeypatch.context() as mp:
-        mp.setattr(V, "_tl_stable", forward_only)
-        old_out = V.make_vacuum_solver(basis, signgs=signgs).full(boundary, bexni)
-    names = ("potvac", "mode_matrix", "bvec_nonsing", "rhs", "gsource", "grpmn")
-    for name, a, b in zip(names, new_out, old_out, strict=True):
-        assert np.array_equal(np.asarray(a), np.asarray(b)), (
-            f"eager {name} not bit-identical"
-        )
+    # Enforce the eager lane rather than assuming it: under xdist a prior
+    # module's jit-enabling module fixture can still be live on this worker
+    # (lazy teardown), which silently turned this comparison into the
+    # jitted one and broke bit-identity at the documented ~1e-12 level.
+    prev_disable_jit = bool(jax.config.jax_disable_jit)
+    jax.config.update("jax_disable_jit", True)
+    try:
+        new_solver = V.make_vacuum_solver(basis, signgs=signgs)
+        new_out = new_solver.full(boundary, bexni)
+        with monkeypatch.context() as mp:
+            mp.setattr(V, "_tl_stable", forward_only)
+            old_out = V.make_vacuum_solver(basis, signgs=signgs).full(
+                boundary, bexni)
+        names = ("potvac", "mode_matrix", "bvec_nonsing", "rhs", "gsource",
+                 "grpmn")
+        for name, a, b in zip(names, new_out, old_out, strict=True):
+            assert np.array_equal(np.asarray(a), np.asarray(b)), (
+                f"eager {name} not bit-identical"
+            )
 
-    # ... and the T arrays themselves, for both families
-    for A, B, t0 in ((adp, adm, tlp0), (adm, adp, tlm0)):
-        args = tuple(
-            jnp.asarray(x) for x in (A, B, cma, sqrtc, sqrta, t0)
-        )
-        assert np.array_equal(
-            np.asarray(V._tl_stable(*args, lmax)),
-            np.asarray(V._tl_forward(*args, lmax)),
-        )
+        # ... and the T arrays themselves, for both families
+        for A, B, t0 in ((adp, adm, tlp0), (adm, adp, tlm0)):
+            args = tuple(
+                jnp.asarray(x) for x in (A, B, cma, sqrtc, sqrta, t0)
+            )
+            assert np.array_equal(
+                np.asarray(V._tl_stable(*args, lmax)),
+                np.asarray(V._tl_forward(*args, lmax)),
+            )
+    finally:
+        jax.config.update("jax_disable_jit", prev_disable_jit)
 
     # 3. jitted: reordering-level agreement only (documented above)
     jax.config.update("jax_disable_jit", False)
@@ -393,7 +403,7 @@ def test_cth_fixture_below_onset_and_bit_identical(cth_vacuum_inputs, monkeypatc
                 f"jit {name}: {diff:.3e} vs scale {scale:.3e}"
             )
     finally:
-        jax.config.update("jax_disable_jit", True)
+        jax.config.update("jax_disable_jit", prev_disable_jit)
 
 
 def test_solver_dataclass_unchanged():
