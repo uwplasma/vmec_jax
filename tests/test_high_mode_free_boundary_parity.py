@@ -534,15 +534,33 @@ def test_dense_and_fft_free_boundary_trajectories_match(tmp_path):
 
 
 @pytest.mark.full  # ~15 min: above the 512-mode automatic-FFT threshold
-def test_free_boundary_537_modes_converges_with_fft(tmp_path):
-    """A CONVERGENT free-boundary case above the 512-mode FFT threshold.
+def test_free_boundary_537_modes_converges_with_fft(tmp_path, monkeypatch):
+    """A CONVERGENT free-boundary case that AUTO-selects the FFT kernel.
 
     ``MPOL=19/NTOR=14`` on the CTH fixture gives ``mnmax = 15 + 18*29 = 537``
-    — above the automatic-selection threshold that the 238-mode suite cannot
-    reach.  The FFT kernel must carry a converging high-mode free-boundary
+    — above ``GPU_MAX_SPECTRAL_MODES = 512``, the automatic-selection
+    threshold that the 238-mode suite cannot reach.
+
+    Review finding: the previous version passed ``use_fft=True`` explicitly,
+    so the automatic path (``use_fft=None`` through ``_resolve_use_fft``)
+    was never exercised at high mode count.  The solve below therefore omits
+    ``use_fft`` entirely; a resolver spy proves the automatic rule was
+    consulted with ``None`` and resolved to the FFT kernel, and a
+    ``_make_body`` spy (the same mechanism as
+    ``test_use_fft_reaches_every_free_boundary_lane``) proves the resolved
+    value reached the traced body of every lane.  The host-architecture
+    input of the rule is pinned to an FFT-favorable answer so the
+    537 > 512 threshold — not the CI runner's CPU vendor — decides,
+    deterministically on every host.
+
+    The FFT kernel must then carry the converging high-mode free-boundary
     solve end to end (the fixed-boundary lanes already had this; free
     boundary did not, which is exactly what the review flagged).
     """
+    import types
+
+    import vmex.core.freeboundary as FBmod
+
     mgrid = DATA / "mgrid_cth_like.nc"
     if not mgrid.exists():
         pytest.skip("mgrid fixture not fetched")
@@ -556,11 +574,47 @@ def test_free_boundary_537_modes_converges_with_fft(tmp_path):
     inp = VmecInput.from_file(str(path))
     assert int(resolution_from_input(inp, ns=15).mnmax) == 537
 
+    # Pin the host-architecture input of the automatic rule (solver.platform
+    # is consulted only by _resolve_use_fft): CI's x86 CPU runners would
+    # otherwise answer the arch gate with "dense" and mask the threshold.
+    monkeypatch.setattr("vmex.core.solver.platform",
+                        types.SimpleNamespace(machine=lambda: "arm64"))
+
+    resolved: list[tuple[bool | None, bool]] = []
+    original_resolve = FBmod._resolve_use_fft
+
+    def recording_resolve(use_fft, device, resolution):
+        out = original_resolve(use_fft, device, resolution)
+        resolved.append((use_fft, bool(out)))
+        return out
+
+    monkeypatch.setattr(FBmod, "_resolve_use_fft", recording_resolve)
+
+    seen: list[bool] = []
+    original_body = FBmod._make_body
+
+    def recording_body(rt, *, evaluation_state=None, use_fft=False):
+        seen.append(bool(use_fft))
+        return original_body(
+            rt, evaluation_state=evaluation_state, use_fft=use_fft)
+
+    monkeypatch.setattr(FBmod, "_make_body", recording_body)
+    # fresh vacuum-lane cache: the steady lane bakes use_fft into its traced
+    # body, so a cached lane from another test would bypass the spy
+    monkeypatch.setattr(FBmod, "_VACUUM_EXECUTABLE_CACHE", {})
+
     from vmex.core.freeboundary import solve_free_boundary
 
+    # use_fft OMITTED on purpose: this drives the automatic selection path.
     result = solve_free_boundary(
-        inp, mgrid_path=str(mgrid), use_fft=True,
+        inp, mgrid_path=str(mgrid),
         error_on_no_convergence=False)
+    assert resolved == [(None, True)], (
+        f"automatic selection did not resolve the FFT kernel above the "
+        f"512-mode threshold: {resolved}")
+    assert seen and all(seen), (
+        f"{seen.count(False)} traced lane bod(y/ies) received the dense "
+        f"transform despite the FFT auto-selection")
     assert bool(result.converged), (
         f"537-mode FFT free-boundary solve failed to converge "
         f"(fsqr={float(result.fsqr):.2e})")
