@@ -127,16 +127,29 @@ TURBULENCE_OBJECTIVE_NAMES = (
 
 
 def _spectraxgk():
-    """Import the optional spectraxgk dependency with a helpful error."""
+    """Import the optional GKX dependency with a helpful error.
+
+    The package was renamed spectraxgk -> gkx.  The old name is kept as a
+    fallback so an environment pinned to a pre-rename release still works, but
+    ``gkx`` is tried first: a stale ``spectraxgk`` dist-info can survive the
+    rename with no importable module behind it, which is exactly how the
+    turbulence objectives silently stopped working.
+    """
+    try:
+        import gkx
+
+        return gkx
+    except ImportError:
+        pass
     try:
         import spectraxgk
+
+        return spectraxgk
     except ImportError as err:  # pragma: no cover - exercised via message test
         raise ImportError(
             "the turbulence objectives need the optional dependency "
-            "spectraxgk (github.com/uwplasma/spectrax-gk): pip install "
-            "spectraxgk.  The geometry adapter gk_fieldline_geometry works "
-            "without it.") from err
-    return spectraxgk
+            "gkx (github.com/uwplasma/GKX): pip install gkx.  The geometry "
+            "adapter gk_fieldline_geometry works without it.") from err
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +445,7 @@ def _linear_params(spx, params_linear, r_over_lt, r_over_ln):
         if r_over_lt is not None or r_over_ln is not None:
             raise ValueError("pass either params_linear or r_over_lt/r_over_ln, not both")
         return params_linear
-    from spectraxgk.objectives.core import _default_gradient_linear_params
+    from gkx.objectives.core import _default_gradient_linear_params
     params = _default_gradient_linear_params()
     import dataclasses
     updates = {}
@@ -558,11 +571,14 @@ def nonlinear_heat_flux_proxy(
     as :func:`turbulence_objective_vector`.
     """
     _spectraxgk()
-    from spectraxgk.objectives.vmec_transport_config import VMECJAXTransportObjectiveConfig
-    from spectraxgk.objectives.vmec_transport_tables import (
+    # GKX consolidated vmec_transport_config and vmec_transport_tables into one
+    # module, and renamed the config class in the VMEC-JAX -> VMEX rename.
+    from gkx.objectives.vmec_transport import (
+        VMEXTransportObjectiveConfig,
         _solver_table_to_nonlinear_window_proxy,
     )
-    config = VMECJAXTransportObjectiveConfig(
+
+    config = VMEXTransportObjectiveConfig(
         kind="nonlinear_window_heat_flux",
         nonlinear_csat=float(csat),
         nonlinear_saturation_floor=float(saturation_floor),

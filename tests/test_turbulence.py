@@ -199,7 +199,7 @@ def test_surface_index_validation(shaped_eq):
 
 def test_contract_passes_spectraxgk_validation(shaped_eq):
     """The mapping satisfies spectraxgk's validated flux-tube contract."""
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     geom = turb.flux_tube_geometry(shaped_eq.state, shaped_eq.runtime,
                                    validate=True, ntheta=32, **LINE)
     assert type(geom).__name__ == "FluxTubeGeometryData"
@@ -210,7 +210,7 @@ def test_contract_passes_spectraxgk_validation(shaped_eq):
 
 def test_growth_rate_is_itg_critical_gradient_monotone(shaped_eq):
     """Strong ITG drive unstable, weak drive marginal; proxies positive."""
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     state, rt = shaped_eq.state, shaped_eq.runtime
     gamma_hi = float(turb.turbulent_growth_rate(state, rt, r_over_lt=6.9, **GK))
     gamma_lo = float(turb.turbulent_growth_rate(state, rt, r_over_lt=1.0, **GK))
@@ -221,7 +221,7 @@ def test_growth_rate_is_itg_critical_gradient_monotone(shaped_eq):
 
 def test_objective_vector_and_scalar_proxies_consistent(shaped_eq):
     """Vector entries reproduce the documented saturation-rule proxies."""
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     state, rt = shaped_eq.state, shaped_eq.runtime
     vec = np.asarray(turb.turbulence_objective_vector(state, rt, **GK))
     named = dict(zip(turb.TURBULENCE_OBJECTIVE_NAMES, vec))
@@ -251,7 +251,7 @@ def test_growth_rate_gradient_matches_finite_differences(shaped_eq):
     and forward (``jax.jacfwd`` — what ``jac="implicit"``'s forward implicit
     Jacobian traces through the objective rows).
     """
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     state, rt = shaped_eq.state, shaped_eq.runtime
 
     def gamma(scale):
@@ -277,7 +277,7 @@ def test_eigenvector_weighted_proxies_are_value_level(shaped_eq):
     Values remain finite-difference-friendly, which is what ``jac=None``
     uses; revisit if spectraxgk adopts ``enable_eigvec_derivs``.
     """
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     state, rt = shaped_eq.state, shaped_eq.runtime
 
     def ql(scale):
@@ -285,16 +285,21 @@ def test_eigenvector_weighted_proxies_are_value_level(shaped_eq):
         return turb.quasilinear_flux_proxy(state, dataclasses.replace(rt, setup=setup),
                                            **GK)
 
-    with pytest.raises(NotImplementedError, match="eigenvector"):
-        jax.grad(ql)(1.0)
-    eps = 1e-3                                       # FD lane stays healthy
-    fd = (ql(1.0 + eps) - ql(1.0 - eps)) / (2.0 * eps)
-    assert np.isfinite(float(fd))
+    # GKX now opts in to eigenvector derivatives (objectives/core.py sets
+    # enable_eigvec_derivs=True), so jax.grad no longer refuses. Both lanes must
+    # be finite and must agree; this used to assert the refusal.
+    analytic = float(jax.grad(ql)(1.0))
+    eps = 1e-3
+    fd = float((ql(1.0 + eps) - ql(1.0 - eps)) / (2.0 * eps))
+    assert np.isfinite(analytic)
+    assert np.isfinite(fd)
+    scale = max(abs(fd), 1.0e-12)
+    assert abs(analytic - fd) <= 1.0e-4 * scale + 1.0e-10
 
 
 def test_grad_wrt_state_is_finite(shaped_eq):
     """The state gradient the implicit-gradient lane composes with is finite."""
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     rt = shaped_eq.runtime
     grad = jax.grad(lambda st: turb.turbulent_growth_rate(st, rt, **GK))(shaped_eq.state)
     leaves = jax.tree.leaves(grad)
