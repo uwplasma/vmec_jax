@@ -50,19 +50,14 @@ Changelog = "https://github.com/uwplasma/vmex/releases"
 [project.optional-dependencies]
 # Differentiable virtual-casing residual on a specified boundary
 # (plan.md R15.3 + R19); this is not a NESTOR equilibrium adjoint.
-# The free-boundary virtual-casing integration is UNRELEASED/EXPERIMENTAL:
-# it needs ``virtual_casing_jax`` APIs that exist only on the canonical
-# repository's open PR #2 (https://github.com/uwplasma/virtual_casing_jax,
-# branch ``feature/jax-vmec-extender``, commit
-# 97797576bc15e3f782de571c9cf021edacb5f594).  The ``virtual-casing-jax==0.0.2``
-# release on PyPI does NOT contain the API vmex uses, so a versioned extra
-# would resolve to a package vmex cannot drive — no ``freeb`` extra is
-# advertised here; a versioned optional extra will be restored once that PR
-# is merged and released.  Until then install the pinned source directly:
-#   pip install git+https://github.com/uwplasma/virtual_casing_jax@feature/jax-vmec-extender
-# (or pin the reviewed commit: ...@97797576bc15e3f782de571c9cf021edacb5f594)
-# The ``vmex.core.freeboundary_diff`` module and its tests are gated behind an
-# ``importorskip`` so CI stays green when the dependency is absent.
+# virtual-casing-jax >= 0.0.3 (released 2026-07-28 from the canonical
+# https://github.com/uwplasma/virtual_casing_jax) carries the exterior-field
+# API vmex drives; 0.0.2 and earlier predate it.  The
+# ``vmex.core.freeboundary_diff`` module and its tests are gated behind an
+# ``importorskip`` so a bare install stays functional without the extra.
+freeb = [
+    "virtual-casing-jax>=0.0.3",
+]
 #
 # Gyrokinetic turbulence-proxy objectives (``vmex.core.turbulence``) via GKX,
 # uwplasma's JAX-native Hermite-Laguerre flux-tube gyrokinetic solver
