@@ -33,7 +33,22 @@ trajectory on x86-linux hits a non-finite force at 0.55 and 0.60 while
 0.45 and 0.50 converge on x86-linux AND arm64-macos with the same vacuum
 activation iteration (45) as VMEC2000 — 0.50 keeps a full step of margin
 from the platform-sensitive stability edge and gives the tightest
-two-code agreement (wb to ~1e-5 relative).
+two-code agreement (wb to ~1e-5 relative).  (The 0.55/0.60 non-finite
+trajectories predate the vacuum-source ordering fix "Free boundary: never
+feed NESTOR a sign-changed state"; post-fix all four swept DELT values
+converge on both platforms — hosted x86-linux confirmed 0.55 dense/FFT
+and 0.60 dense — the 0.55 ladder is pinned as a regression by
+``tests/test_qi_sheet_gate.py``, and the shipped deck stays at the
+doubly-safe 0.50.)
+
+Calibration disclosure: the sheet-current AMPLITUDE is calibrated against
+the VMEX fixed-boundary solve of this same deck — the boundary-``<|B|^2>``
+scale of step 4 and the measured PHIEDGE written into the free deck both
+derive from VMEX outputs (``res.state`` surface fields and the scaled
+field's flux integral).  The free-boundary comparison is therefore
+self-consistent rather than fully independent; the independent check is
+that VMEC2000 then solves the SAME deck + mgrid byte-for-byte and lands
+the same equilibrium.
 
 Usage::
 
@@ -237,7 +252,15 @@ def build(outdir: Path, *, offset_factor: float = 1.2, mmax: int = 18,
     Bs_mag = np.linalg.norm(Bs, axis=-1).reshape(Beq.shape)
     scale = float(np.sqrt(np.mean(Beq ** 2) / np.mean(Bs_mag ** 2)))
     fit_metric = float(np.abs(bn_res).max() / Bs_mag.mean())
+    # field-direction alignment: mean boundary cosine between the sheet field
+    # and the equilibrium boundary field (sd.B_total components on axis 0;
+    # Bs rows follow the same gamma flattening).  Scale-invariant.
+    Beq_vec = np.asarray(sd.B_total).reshape(3, -1).T
+    alignment = float(np.mean(np.sum(
+        (Bs / np.linalg.norm(Bs, axis=-1, keepdims=True))
+        * (Beq_vec / np.linalg.norm(Beq_vec, axis=-1, keepdims=True)), -1)))
     _log(f"fit max|Bn|/<|B|> = {fit_metric:.3e}; boundary-bsq scale {scale:.6f}")
+    _log(f"sheet/equilibrium boundary field alignment <cos> = {alignment:.6f}")
 
     # accurate toroidal flux of the SCALED field -> the deck's PHIEDGE
     th_f = np.linspace(0, 2 * np.pi, 256, endpoint=False)
@@ -291,8 +314,10 @@ def build(outdir: Path, *, offset_factor: float = 1.2, mmax: int = 18,
 
     # matching free-boundary deck (DELT 0.50: VMEC2000's activation kick at
     # the native 0.9 collapses its time step, and the VMEX ladder on
-    # x86-linux is non-finite at 0.55/0.60 — see the module docstring's
-    # measured DELT sweep; 0.50 is green on both platforms in both codes)
+    # x86-linux was non-finite at 0.55/0.60 before the vacuum-source
+    # ordering fix — see the module docstring's measured DELT sweep; 0.50
+    # is green on both platforms in both codes, and 0.55 is now pinned as
+    # a regression by tests/test_qi_sheet_gate.py)
     import re
     deck = deck_path.read_text()
     deck = deck.replace(
@@ -304,7 +329,7 @@ def build(outdir: Path, *, offset_factor: float = 1.2, mmax: int = 18,
     (outdir / "input.qi_sheet_free").write_text(deck)
     _log(f"wrote {outdir / 'input.qi_sheet_free'}")
     return {"fit_metric": fit_metric, "scale": scale, "phiedge": phiedge,
-            "mgrid": str(mgrid_path)}
+            "alignment": alignment, "mgrid": str(mgrid_path)}
 
 
 def main() -> int:

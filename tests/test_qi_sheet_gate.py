@@ -16,11 +16,30 @@ ladder, measured on BOTH platforms: arm64-macos ``wb = 2.2735814e-3``
 (7.7e-6 relative), x86-linux ``wb = 2.2735892e-3`` (1.1e-5 relative),
 vacuum on at 45 on both.
 
-DELT rationale: a four-point sweep showed the VMEX free-multigrid
-trajectory on x86-linux is non-finite at DELT 0.55/0.60 while 0.45 and
-0.50 converge on both platforms with the same activation iteration as
-VMEC2000; the deck ships 0.50 — a full step of margin from the
-platform-sensitive stability edge and the tightest two-code agreement.
+DELT rationale: a four-point sweep MAPPED a platform-sensitive stability
+edge — the VMEX free-multigrid trajectory on x86-linux was non-finite at
+DELT 0.55/0.60 while 0.45 and 0.50 converged on both platforms with the
+same activation iteration as VMEC2000.  That edge was root-caused to
+NESTOR consuming a sign-changed transient state and fixed at base commit
+"Free boundary: never feed NESTOR a sign-changed state" (funct3d.f
+ordering); post-fix ALL FOUR swept DELT values converge on both
+platforms — hosted x86-linux measured 0.55 dense (activation 45,
+``wb = 2.2733959436e-3``), 0.55 FFT (``wb = 2.2733959503e-3``, dense/FFT
+agreement 3e-9), and 0.60 dense (activation 44).  The deck keeps 0.50 as
+the stable default gate (full step of margin, tightest two-code
+agreement), and :func:`test_qi_sheet_gate_ladder_delt_055_regression`
+pins the previously-failing 0.55 case against fresh VMEC2000 goldens on
+the DELT = 0.55 gate deck (recorded 2026-07-28):
+``wb = 2.2738091757e-3``, ``sum raxis_cc = 0.93032287``,
+``iotaf(edge) = -0.4160441``, ``aspect = 8.0965``, activation 45.
+
+Calibration disclosure: the sheet-current amplitude is calibrated against
+the VMEX fixed-boundary solve of the same deck — the boundary-<|B|^2>
+scale and the measured PHIEDGE both derive from VMEX outputs (see
+:mod:`tools.build_qi_sheet_mgrid`) — so the free-boundary comparison is
+self-consistent rather than fully independent.  The independent leg is
+that VMEC2000 then solves the SAME deck + mgrid byte-for-byte and lands
+the same equilibrium.
 
 ftol rationale: the sheet fit nulls ``B.n`` to 2.5e-4 of ``|B|`` and the
 64x64x36 trilinear mgrid adds interpolation error, which floors the
@@ -74,7 +93,79 @@ def _release_jax_caches():
 GOLDEN_WB = 2.2735640332039e-3
 GOLDEN_R00 = 0.9303911858840
 GOLDEN_IOTA_EDGE = -0.4147611657
+GOLDEN_ASPECT = 8.0935
 GOLDEN_ACTIVATION = 45
+
+# VMEC2000 on the SAME gate deck rewritten to DELT = 0.55 (recorded
+# 2026-07-28) — the historically non-finite case the vacuum-source fix
+# restored; see test_qi_sheet_gate_ladder_delt_055_regression.
+GOLDEN_WB_055 = 2.2738091756761185e-3
+GOLDEN_R00_055 = 0.9303228697937338
+GOLDEN_IOTA_EDGE_055 = -0.416044061525186
+
+# VMEC2000 on the FIXED-boundary 238-mode ladder (2026-07-28, ftol 1e-8,
+# fsqr 9.32e-9); VMEX parity measured at the 1e-10 class on this deck.
+FIXED_GOLDEN_WB = 2.2762082139521e-3
+FIXED_GOLDEN_R00 = 0.9293551107718
+FIXED_GOLDEN_IOTA_EDGE = -0.4410936869
+FIXED_GOLDEN_ASPECT = 8.0019
+
+# initialize_radial.f FORMAT 1000 stage banner and the printout.f screen
+# line (iteration, FSQR, FSQZ, FSQL lead every row; the terminating
+# iteration of a stage is always printed).
+_NS_BANNER = re.compile(
+    r"NS = *(\d+) NO\. FOURIER MODES = *(\d+) FTOLV = *([0-9.E+-]+)"
+    r" NITER = *(\d+)")
+_ITER_LINE = re.compile(
+    r"^ *(\d+) +(\d[\d.]*E[+-]\d+) +(\d[\d.]*E[+-]\d+) +(\d[\d.]*E[+-]\d+)",
+    re.M)
+
+
+def _assert_five_rungs_crossed_ftol(output: str) -> None:
+    """Every NS_ARRAY rung terminates by crossing its own ftol.
+
+    Parses the emitted VMEC2000-format transcript: exactly one
+    initialize_radial.f ``NS = `` banner per rung (FTOLV and NITER captured
+    from the banner — a Jacobian-recovery retry would re-banner and fail
+    the count) and the printout.f screen lines.  A rung passes when its
+    final printed FSQR/FSQZ/FSQL each sit at/below its FTOLV (the
+    eqsolve.f convergence test is per-residual) in strictly fewer than
+    NITER iterations — no rung may end by iteration exhaustion.
+    """
+    banners = list(_NS_BANNER.finditer(output))
+    assert len(banners) == 5, f"expected 5 rung banners, found {len(banners)}"
+    assert [int(b.group(1)) for b in banners] == [21, 34, 55, 89, 144]
+    assert all(int(b.group(2)) == 238 for b in banners)
+    for i, banner in enumerate(banners):
+        ns = int(banner.group(1))
+        ftol = float(banner.group(3))
+        niter = int(banner.group(4))
+        end = banners[i + 1].start() if i + 1 < len(banners) else len(output)
+        rows = _ITER_LINE.findall(output[banner.start():end])
+        assert rows, f"rung NS={ns} printed no iteration rows"
+        last_it, fsqr, fsqz, fsql = rows[-1]
+        assert int(last_it) < niter, (
+            f"rung NS={ns} exhausted NITER={niter} without crossing ftol")
+        worst = max(float(fsqr), float(fsqz), float(fsql))
+        # screen lines round to 3 significant digits; 1.5% absorbs the
+        # worst-case print rounding of a residual just under ftol.
+        assert worst <= 1.015 * ftol, (
+            f"rung NS={ns} final residuals {rows[-1]} above ftol={ftol:g}")
+
+
+def _wout_parity_aspect(inp: VmecInput, result) -> float:
+    """wout ``aspect`` scalar of the final state (aspectratio.f quadrature).
+
+    One boundary-quadrature geometry evaluation of ``result.state`` on a
+    fresh runtime at the final radial resolution — the exact wout-writer
+    convention (:func:`vmex.core.statephysics.aspect_ratio`), no re-solve.
+    """
+    from vmex.core.solver import prepare_runtime, resolution_from_input
+    from vmex.core.statephysics import aspect_ratio
+
+    ns = int(result.state.R_cos.shape[0])
+    rt = prepare_runtime(inp, resolution_from_input(inp, ns=ns))
+    return float(aspect_ratio(result.state, rt))
 
 
 @pytest.fixture(scope="module")
@@ -126,9 +217,15 @@ def _gate_deck(base_deck: str) -> str:
 # whose 4-worker-with-coverage runner was memory-evicted four times once
 # this module joined it.  The whole gate runs in the full matrix only.
 def test_sheet_field_confines(sheet_field):
-    """The deterministic fit reaches the confining Bn threshold."""
+    """The deterministic fit reaches the confining Bn + alignment thresholds.
+
+    ``alignment`` is the mean boundary cosine between the sheet field and
+    the equilibrium boundary field (measured 0.9999883 on this build; the
+    gate demands > 0.999985, ~20% margin on the 1.17e-5 defect from 1).
+    """
     _, meta = sheet_field
     assert meta["fit_metric"] < 1.0e-3, meta
+    assert meta["alignment"] > 0.999985, meta
     assert meta["phiedge"] == pytest.approx(0.0307113284, rel=1e-3)
 
 
@@ -189,11 +286,14 @@ def test_qi_sheet_gate_ladder_matches_vmec2000(sheet_field, tmp_path):
     assert abs(int(m.group(1)) - GOLDEN_ACTIVATION) <= 4, m.group(0)
     assert output.rfind("NS = ") > output.find("VACUUM PRESSURE"), (
         "activation did not precede the radial transitions")
+    _assert_five_rungs_crossed_ftol(output)
     assert bool(result.converged), f"fsqr={float(result.fsqr):.2e}"
     assert float(result.wb) == pytest.approx(GOLDEN_WB, rel=5e-4)
     assert float(result.r00) == pytest.approx(GOLDEN_R00, rel=3e-3)
     iota_edge = float(np.asarray(result.iotaf)[-1])
     assert iota_edge == pytest.approx(GOLDEN_IOTA_EDGE, rel=2e-3)
+    assert _wout_parity_aspect(inp, result) == pytest.approx(
+        GOLDEN_ASPECT, rel=3e-3)
 
 
 @pytest.mark.full  # ~20 min: the SAME gate ladder through the FFT kernel
@@ -232,6 +332,7 @@ def test_qi_sheet_gate_ladder_fft_matches_dense(sheet_field, tmp_path):
     m = re.search(r"VACUUM PRESSURE TURNED ON AT\s+(\d+)", output)
     assert m is not None, "vacuum never activated under the FFT kernel"
     assert abs(int(m.group(1)) - GOLDEN_ACTIVATION) <= 4, m.group(0)
+    _assert_five_rungs_crossed_ftol(output)
     assert bool(result.converged), f"fsqr={float(result.fsqr):.2e}"
     assert float(result.wb) == pytest.approx(GOLDEN_WB, rel=5e-4)
     assert float(result.r00) == pytest.approx(GOLDEN_R00, rel=3e-3)
@@ -239,8 +340,71 @@ def test_qi_sheet_gate_ladder_fft_matches_dense(sheet_field, tmp_path):
     assert iota_edge == pytest.approx(GOLDEN_IOTA_EDGE, rel=2e-3)
 
 
+@pytest.mark.full  # ~12 min: the restored-DELT free ladder vs VMEC2000
+def test_qi_sheet_gate_ladder_delt_055_regression(sheet_field, tmp_path):
+    """DELT = 0.55 free gate ladder: the vacuum-source fix stays fixed.
+
+    History: with DELT = 0.55 this exact ladder previously produced a
+    NON-FINITE FORCE EVALUATION on x86-linux (and under the FFT kernel on
+    arm64-macos) because a sign-changed transient state reached NESTOR,
+    whose poisoned ``bsqvac`` (DEL-BSQ = NaN) then entered the force
+    evaluation — while VMEC2000 always converged this case: funct3d.f
+    validates the Jacobian FIRST and re-evaluates the restored state
+    before computing vacuum pressure.  The vacuum-source fix (commit
+    "Free boundary: never feed NESTOR a sign-changed state") restores
+    that funct3d.f ordering (see ``freeboundary._jacobian_ok``); this
+    regression pins the repaired behavior on the public deck so it cannot
+    silently rot.  The 0.50 deck stays the stable default gate
+    (:func:`test_qi_sheet_gate_ladder_matches_vmec2000`).
+
+    Goldens: fresh local xvmec2000/PARVMEC on the byte-equivalent gate
+    deck rewritten to DELT = 0.55 (2026-07-28): ``wb = 2.2738091757e-3``,
+    ``sum raxis_cc = 0.93032287``, ``iotaf(edge) = -0.4160441``,
+    ``aspect = 8.0965``, vacuum on at 45.  Bands are identical to the
+    0.50 ladder test; VMEX measured inside all of them on BOTH platforms:
+    arm64-macos dense ``wb = 2.2733947272e-3`` (wb 1.8e-4, r00 4.5e-4,
+    iota 8.1e-4 relative), hosted x86-linux dense ``wb = 2.2733959436e-3``
+    (wb 1.8e-4, r00 6.3e-4, iota 3.8e-4 relative; x86 FFT agrees with x86
+    dense to 3e-9), activation 45 everywhere.
+    """
+    outdir, _ = sheet_field
+    deck = _gate_deck((outdir / "input.qi_sheet_free").read_text())
+    deck = re.sub(r"DELT *= *[0-9.eE+-]+", "DELT = 0.55", deck)
+    path = tmp_path / "input.qi_gate_055"
+    path.write_text(deck)
+    inp = VmecInput.from_file(str(path))
+    assert float(inp.delt) == pytest.approx(0.55)
+
+    lines: list[str] = []
+    result = solve_free_boundary_multigrid(
+        inp, mgrid_path=str(outdir / "mgrid_qi_sheet.nc"), verbose=True,
+        emit=lambda t="", end="\n": lines.append(str(t)),
+        raise_on_max_iterations=False, release_stage_cache=True)
+    output = "\n".join(lines)
+
+    m = re.search(r"VACUUM PRESSURE TURNED ON AT\s+(\d+)", output)
+    assert m is not None, "vacuum never activated at DELT = 0.55"
+    assert abs(int(m.group(1)) - GOLDEN_ACTIVATION) <= 4, m.group(0)
+    assert bool(result.converged), f"fsqr={float(result.fsqr):.2e}"
+    assert float(result.wb) == pytest.approx(GOLDEN_WB_055, rel=5e-4)
+    assert float(result.r00) == pytest.approx(GOLDEN_R00_055, rel=3e-3)
+    iota_edge = float(np.asarray(result.iotaf)[-1])
+    assert iota_edge == pytest.approx(GOLDEN_IOTA_EDGE_055, rel=2e-3)
+
+
 @pytest.mark.full  # ~25 min: fixed-boundary ladder at full 1e-8 (no floor)
 def test_qi_fixed_238_ladder_converges(tmp_path):
+    """FIXED 238-mode ladder converges at 1e-8 AND matches VMEC2000 wout.
+
+    Fresh local xvmec2000/PARVMEC on the byte-equivalent deck (2026-07-28,
+    MPOL=13/NTOR=9, NS 21→34→55→89→144, ftol 1e-8, fsqr 9.32e-9):
+    ``wb = 2.2762082139521e-3``, ``r00 = 0.9293551107718``,
+    ``iotaf(edge) = -0.4410936869``, ``aspect = 8.0019``.  VMEX parity on
+    this machine is at the 1e-10 class (wb identical to all printed
+    digits, r00 to 1.4e-11 relative); the 1e-6 bands below leave platform
+    margin while remaining ~3 orders tighter than the free-boundary gate
+    bands (no mgrid-interpolation floor in the fixed problem).
+    """
     deck = (ROOT / "examples" / "data" / "input.nfp2_QI").read_text()
     deck = re.sub(r"MPOL *= *\d+", "MPOL = 13", deck)
     deck = re.sub(r"NTOR *= *\d+", "NTOR = 9", deck)
@@ -258,3 +422,9 @@ def test_qi_fixed_238_ladder_converges(tmp_path):
     result = solve_multigrid(inp, verbose=False, raise_on_max_iterations=False,
                              release_stage_cache=True)
     assert bool(result.converged), f"fsqr={float(result.fsqr):.2e}"
+    assert float(result.wb) == pytest.approx(FIXED_GOLDEN_WB, rel=1e-6)
+    assert float(result.r00) == pytest.approx(FIXED_GOLDEN_R00, rel=1e-6)
+    iota_edge = float(np.asarray(result.iotaf)[-1])
+    assert iota_edge == pytest.approx(FIXED_GOLDEN_IOTA_EDGE, rel=1e-6)
+    assert _wout_parity_aspect(inp, result) == pytest.approx(
+        FIXED_GOLDEN_ASPECT, rel=1e-3)
