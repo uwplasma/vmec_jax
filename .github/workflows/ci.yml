@@ -528,7 +528,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [core-a-c, core-d-f, core-g-h, core-i, core-j-m,
-                core-n-s, core-t-z, high-mode-fb, opt-qa, opt-qh,
+                core-n-s, core-t-z, high-mode-fb, qi-gate, opt-qa, opt-qh,
                 opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
       - uses: actions/checkout@v6.0.2
@@ -605,6 +605,13 @@ jobs:
             high-mode-fb)
               FILES="tests/test_high_mode_free_boundary_parity.py"
               ;;
+            qi-gate)
+              # The QI sheet-current gate builds its field once (module
+              # fixture, ~90 s jitted) and then runs one 13-minute two-code
+              # ladder; its lanes are the heaviest single tests in the tree,
+              # so they get their own worker like high-mode-fb.
+              FILES="tests/test_qi_sheet_gate.py"
+              ;;
             core-j-m)
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
                      --ignore-glob=tests/test_[a-i]*.py \
@@ -613,6 +620,7 @@ jobs:
             core-n-s)
               FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
                      --ignore=tests/test_optimization_convergence.py \
+                     --ignore=tests/test_qi_sheet_gate.py \
                      --ignore-glob=tests/test_[a-m]*.py \
                      --ignore-glob=tests/test_[t-z]*.py"
               ;;
