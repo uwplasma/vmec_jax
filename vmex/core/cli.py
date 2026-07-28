@@ -36,10 +36,14 @@ Free-boundary output behavior:
 
 - Symmetric and LASYM NESTOR potential and surface-field arrays are exported
   to wout.
-- ``LFULL3D1OUT = T`` requests a WOUT after NITER exhaustion for either
-  boundary mode.  With the default ``F``, VMEC2000 and VMEX return
-  ``ier_flag = 2`` without a WOUT.  Fatal numerical/Jacobian errors never
-  produce one.
+
+Iteration-budget exhaustion (``ier_flag = 2``): the CLI keeps the final
+state, writes the WOUT, and prints the full equilibrium summary +
+``MORE ITERATIONS REQUIRED`` termination block — the VMEC2000 ``fileout.f``
+behavior, where a mere NITER exhaustion of the final grid still terminates
+normally through the output path.  The exit code remains the distinct
+``ier_flag = 2``.  Fatal numerical/Jacobian errors never produce a WOUT
+and exit with their own ``ier_flag`` codes.
 """
 
 from __future__ import annotations
@@ -282,7 +286,18 @@ def _preamble(case: str, *, time_slice: float = 0.0) -> str:
 
 
 def _threed1_summary(wout) -> str:
-    """Compact threed1-style equilibrium summary from the WoutData."""
+    """Compact threed1-style equilibrium summary from the WoutData.
+
+    The iota/|B| lines report wout quantities directly: the ``iotaf``
+    full-mesh endpoints, ``b0`` (eqfor.f: ``rbtor0 / R_axis(v=0)``, the
+    toroidal field at the v=0 axis point), and the ``(m=0, n=0)`` mode of
+    ``bmnc`` on the outermost HALF-mesh surface (the angular average of
+    |B| there — the closest edge-|B| scalar the wout carries).
+    """
+    import numpy as np
+
+    iotaf = np.asarray(wout.iotaf, dtype=float).ravel()
+    bmnc = np.asarray(wout.bmnc, dtype=float)
     lines = [
         "",
         f" Aspect Ratio          = {float(wout.aspect):14.6f}",
@@ -290,6 +305,10 @@ def _threed1_summary(wout) -> str:
         f" Major Radius          = {float(wout.Rmajor_p):14.6f} [M]",
         f" Minor Radius          = {float(wout.Aminor_p):14.6f} [M]",
         f" Volume Average B      = {float(wout.volavgB):14.6f} [T]",
+        f" Iota on Axis          = {float(iotaf[0]):14.6f}",
+        f" Iota at Edge          = {float(iotaf[-1]):14.6f}",
+        f" |B| on Axis (b0)      = {float(wout.b0):14.6f} [T]",
+        f" <|B|> at Edge (half)  = {float(bmnc[-1, 0]):14.6f} [T]",
         f" beta total            = {float(wout.betatotal):14.6E}",
         f" MHD Energy (wb + wp)  = {float(wout.wb) + float(wout.wp):14.6E}",
         "",
@@ -582,9 +601,10 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             inp, ftol_array=ftol_array, niter_array=niter_array,
             verbose=verbose,
             emit=emit,
-            raise_on_max_iterations=not bool(
-                getattr(inp, "lfull3d1out", False)
-            ),
+            # VMEC2000 fileout.f semantics: NITER exhaustion of the final
+            # grid terminates normally through the output path (WOUT +
+            # summary) with ier_flag = 2; only genuine failures raise.
+            raise_on_max_iterations=False,
             device=None if args.device == "none" else args.device,
             release_stage_cache=True,
             jacobian_retries=int(args.jacobian_retries),
@@ -601,9 +621,10 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             mode=str(args.mode),
             verbose=verbose,
             emit=emit,
-            raise_on_max_iterations=not bool(
-                getattr(inp, "lfull3d1out", False)
-            ),
+            # VMEC2000 fileout.f semantics: NITER exhaustion of the final
+            # grid terminates normally through the output path (WOUT +
+            # summary) with ier_flag = 2; only genuine failures raise.
+            raise_on_max_iterations=False,
             device=None if args.device == "none" else args.device,
             release_stage_cache=True,
             jacobian_retries=int(args.jacobian_retries),
@@ -630,6 +651,8 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
         )
         emit(_timing_block(read_s, solve_s, wout_s), end="")
         emit(f"\n Wrote WOUT file: {wout_path}")
+        if not bool(result.converged):
+            emit("\n HINT : increase NITER or loosen FTOL")
 
     plot_dir = outdir if outdir is not None else input_path.parent
     if args.plot is not None:
@@ -639,7 +662,7 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             wout_path, args, plot_dir,
             plot=args.plot is not None, emit=emit, quiet=bool(args.quiet),
         )
-    if not bool(result.converged):  # free-boundary NITER exhaustion (wout kept)
+    if not bool(result.converged):  # NITER exhaustion: wout kept, distinct code
         return int(result.ier_flag) or 1
     return 0
 
@@ -837,7 +860,18 @@ def _dispatch(args, parser: argparse.ArgumentParser, *, emit) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the ``vmec`` command-line entry point (zero-crash)."""
+    """Run the ``vmec`` command-line entry point (zero-crash).
+
+    Cold-run compile scheduling: the first-ever run of a configuration is
+    served by the multigrid compile prefetch (rung k+1's executable is
+    built on a background thread while rung k iterates — see
+    :func:`vmex.core.multigrid.solve_multigrid`).  SECONDARY to that, the
+    persistent XLA compilation cache — enabled package-wide on import in
+    the machine-fingerprinted ``~/.cache/vmex/jax_cache/<fingerprint>``
+    directory (``vmex._compat``, knobs ``VMEX_COMPILATION_CACHE*`` /
+    ``JAX_COMPILATION_CACHE_DIR``) — makes repeat processes of the same
+    configuration skip compilation entirely.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     emit = print

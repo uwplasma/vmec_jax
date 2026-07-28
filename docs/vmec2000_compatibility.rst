@@ -282,9 +282,13 @@ Force, axis, and iteration controls
        zero-axis first pass and exactly one ``eqsolve.f`` recovery transfer.
        The value is preserved in WOUT.
    * - ``LFULL3D1OUT``
-     - implemented
-     - On fixed or free NITER exhaustion, ``T`` writes the unconverged WOUT and
-       ``F`` does not.  Numerical/Jacobian failures never write one.
+     - implemented (accepted; no CLI effect)
+     - The CLI always terminates an NITER-exhausted run through the normal
+       output path (unconverged WOUT + summary, ``ier_flag = 2`` —
+       ``fileout.f`` semantics), so the flag no longer gates the WOUT
+       there.  The library API keeps the choice via
+       ``raise_on_max_iterations``.  Numerical/Jacobian failures never
+       write one.
    * - ``PRE_NITER``
      - rejected when active with 2-D GMRES
      - VMEC2000 changes the total post-activation iteration cap.  VMEX does not
@@ -436,8 +440,9 @@ variable.  The following distinctions are important:
 * ``lmove_axis`` records the actual input value.
 * ``lfreeb`` records the *effective* solve.  A missing-mgrid fixed-boundary
   fallback is not labeled free-boundary.
-* ``ier_flag=2`` WOUT output requires ``LFULL3D1OUT=T`` for either boundary
-  mode.
+* ``ier_flag=2`` runs (NITER exhaustion) write the unconverged WOUT for
+  either boundary mode — the CLI default, matching ``fileout.f``'s normal
+  termination on ``more_iter_flag``.
 * NESTOR potential/surface WOUT variables are exported for both symmetric
   and asymmetric solves; the live VMEC2000 comparison includes a converged
   LASYM free-boundary case whose ``potcos`` and asymmetric surface partners
@@ -553,8 +558,9 @@ Preconditioned update residual
    equivalent to supplying an axis and is independent of the preconditioner.
 
 ``LFULL3D1OUT``
-   Controls output after iteration-budget exhaustion; it does not declare the
-   unconverged state converged.
+   Accepted for compatibility.  The CLI now always writes the unconverged
+   WOUT after iteration-budget exhaustion (``fileout.f`` semantics); the
+   flag does not declare the unconverged state converged.
 
 CLI lane / JIT lane
    Two controllers around the same force and update kernels.  The CLI lane

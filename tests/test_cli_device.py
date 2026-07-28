@@ -64,4 +64,6 @@ def test_free_boundary_cli_forwards_device(monkeypatch, tmp_path):
     assert seen["device"] == "gpu"
     assert seen["ftol_array"] is ftol_array
     assert seen["niter_array"] is niter_array
-    assert seen["raise_on_max_iterations"] is True
+    # CLI default: NITER exhaustion terminates through the output path
+    # (WOUT + summary, fileout.f semantics) instead of raising.
+    assert seen["raise_on_max_iterations"] is False

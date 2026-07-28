@@ -108,8 +108,10 @@ Python API for hot restarts.
 The CLI exports the final NESTOR potential and surface fields to the wout
 ``potsin``/``xmpot``/``xnpot``/``*_sur`` variables. LASYM runs additionally
 write ``potcos`` and the sine ``*_sur`` partners. An NITER-exhausted
-fixed- or free-boundary run writes a WOUT only when ``LFULL3D1OUT=T`` and exits
-with ``ier_flag = 2``; with the default ``F`` no WOUT is produced.
+fixed- or free-boundary run terminates through the normal output path —
+unconverged WOUT, equilibrium summary, and the ``MORE ITERATIONS REQUIRED``
+block (``fileout.f`` semantics) — and exits with the distinct
+``ier_flag = 2``.  Fatal numerical/Jacobian failures never produce a WOUT.
 
 Exit codes (zero-crash policy)
 ------------------------------

@@ -126,8 +126,9 @@ Multigrid ladder and stepping
      - permit automatic first-pass axis recovery for a large finite force
    * - ``LFULL3D1OUT``
      - ``F``
-     - write an unconverged WOUT after NITER exhaustion (fixed or free
-       boundary); fatal numerical/Jacobian failures never write one
+     - accepted for compatibility; the CLI always writes the unconverged
+       WOUT after NITER exhaustion (fixed or free boundary, ``fileout.f``
+       semantics) — fatal numerical/Jacobian failures never write one
 
 Pressure profile
 ~~~~~~~~~~~~~~~~

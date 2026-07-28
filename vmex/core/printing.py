@@ -17,6 +17,8 @@ threed1 file, or a ``jax.debug.callback``).
 
 from __future__ import annotations
 
+import numpy as np
+
 FORCE_ITERATIONS_BANNER = (
     " FSQR, FSQZ = Normalized Physical Force Residuals\n"
     " fsqr, fsqz = Preconditioned Force Residuals\n"
@@ -24,6 +26,59 @@ FORCE_ITERATIONS_BANNER = (
     " BEGIN FORCE ITERATIONS\n"
     " -----------------------\n"
 )
+
+
+def _fortran_positional(value: float) -> str:
+    """One double in Fortran list-directed style: 17 significant digits,
+    positional (no exponent), signed zero preserved — the gfortran
+    ``WRITE(*,*)`` rendering of the axis coefficients."""
+    value = float(value)
+    if value == 0.0:
+        return "-0.0000000000000000" if np.signbit(value) else "0.0000000000000000"
+    return np.format_float_positional(
+        value, precision=17, unique=False, fractional=False, trim="k"
+    )
+
+
+def _axis_line(label: str, values) -> str:
+    """One ``      RAXIS_CC = ...`` line (values right-justified in width-22
+    fields, 4-space separators — the gfortran list-directed layout)."""
+    line = f"      {label} ="
+    for v in np.atleast_1d(np.asarray(values, dtype=float)).ravel():
+        line += _fortran_positional(v).rjust(22) + "    "
+    return line.rstrip()
+
+
+def improved_axis_block(
+    raxis_cc, zaxis_cs, *, raxis_cs=None, zaxis_cc=None
+) -> str:
+    """PARVMEC-style report of the adopted re-guessed magnetic axis.
+
+    Printed right after ``TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS``
+    (``guess_axis.f``) with the axis Fourier coefficients the retry actually
+    adopted.  ``raxis_cs``/``zaxis_cc`` add the two LASYM families when
+    given (symmetric runs print only ``RAXIS_CC``/``ZAXIS_CS``).
+    """
+    lines = ["  ---- Improved AXIS Guess ----", _axis_line("RAXIS_CC", raxis_cc)]
+    if raxis_cs is not None:
+        lines.append(_axis_line("RAXIS_CS", raxis_cs))
+    if zaxis_cc is not None:
+        lines.append(_axis_line("ZAXIS_CC", zaxis_cc))
+    lines.append(_axis_line("ZAXIS_CS", zaxis_cs))
+    lines.append("  -----------------------------")
+    return "\n".join(lines) + "\n"
+
+
+def compile_notice(ns: int, *, prefetched: bool = False) -> str:
+    """One-line attribution for an XLA compile pause at a rung boundary.
+
+    Emitted when a rung's iteration executable is not already available in
+    this process, so cold-start pauses in the console output are
+    attributable; ``prefetched`` marks executables built ahead of time by
+    the multigrid compile-overlap thread.
+    """
+    suffix = " (prefetched)" if prefetched else ""
+    return f" compiling NS = {int(ns)} executable...{suffix}\n"
 
 
 def stage_banner(ns: int, mnmax: int, ftol: float, niter: int) -> str:

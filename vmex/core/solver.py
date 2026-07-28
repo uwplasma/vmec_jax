@@ -155,7 +155,10 @@ from .preconditioner import (
     angular_integration_weights, lamcal, precondn, scalfor_matrices,
 )
 from .preconditioner_2d import Prec2DConfig, newton_direction
-from .printing import FORCE_ITERATIONS_BANNER, screen_header, screen_line, stage_banner
+from .printing import (
+    FORCE_ITERATIONS_BANNER, compile_notice, improved_axis_block,
+    screen_header, screen_line, stage_banner,
+)
 from .residuals import (
     ForceResiduals, PreconditionedResiduals, apply_lambda_preconditioner,
     apply_radial_preconditioner, edge_force_condition, force_residuals,
@@ -1750,6 +1753,75 @@ def _block_lane_fft(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
     )[0]
 
 
+# -- Overlapped stage compilation (multigrid compile scheduling) ------------------------------------------------------
+#
+# The ``NS_ARRAY`` ladder knows every rung's structure up front, so the
+# multigrid driver AOT-compiles rung k+1's CLI block-lane executable on a
+# background thread while rung k iterates (XLA compilation releases the
+# GIL).  The standalone :class:`jax.stages.Compiled` object is stored here,
+# keyed on the exact ``(lane, treedef, leaf-avals)`` structure, and consumed
+# by :func:`_run_loop`; any mismatch falls back silently to the ordinary
+# jitted lane.  Standalone executables survive ``jax.clear_caches()`` — the
+# CLI's ``release_stage_cache`` point — which is why the prefetch stores
+# them instead of relying only on the shared in-memory executable cache
+# that ``Lowered.compile()`` happens to prime.  This is cache warming only:
+# the prefetched executable is byte-identical XLA output for the identical
+# lowering, so every iteration is bit-for-bit the on-demand result.
+
+_LANE_EXECUTABLES: dict[Any, Any] = {}   #: prefetched AOT lane executables
+_USED_LANE_KEYS: set = set()             #: lane structures already compiled/used
+
+
+def _leaf_signature(leaf: Any) -> tuple:
+    """Hashable (shape, dtype, weak-typed) triple of one pytree leaf."""
+    if hasattr(leaf, "shape") and hasattr(leaf, "dtype"):
+        return (tuple(leaf.shape), str(leaf.dtype), False)
+    return ((), str(np.result_type(type(leaf))), True)
+
+
+def _lane_signature(lane_name: str, carry: _LoopCarry, rt: SolverRuntime):
+    """Structural key of one ``lane(carry, rt)`` call (treedef + avals)."""
+    leaves, treedef = jax.tree_util.tree_flatten((carry, rt))
+    return (lane_name, treedef, tuple(_leaf_signature(leaf) for leaf in leaves))
+
+
+def _prefetch_block_lane(rt: SolverRuntime, *, use_fft: bool) -> bool:
+    """AOT-compile the CLI block lane for ``rt``'s structure ahead of use.
+
+    Called from the multigrid prefetch thread.  Builds the same initial
+    carry :func:`_run_loop` would build (cheap structure assembly — no
+    force evaluation) and compiles the lane via ``jit.lower(...).compile()``.
+    Returns ``True`` when an executable for the structure is available
+    (freshly built, or already compiled earlier in this process).
+    """
+    if jax.config.jax_disable_jit:
+        return False
+    lane = _block_lane_fft if use_fft else _block_lane
+    lane_name = "block_fft" if use_fft else "block"
+    carry = jax.tree.map(
+        jnp.array, _initial_carry(_initial_state(rt.setup), rt, ijacob=0)
+    )
+    key = _lane_signature(lane_name, carry, rt)
+    if key in _LANE_EXECUTABLES or key in _USED_LANE_KEYS:
+        return True
+    _LANE_EXECUTABLES[key] = lane.lower(carry, rt).compile()
+    return True
+
+
+def _release_used_lane_executables() -> None:
+    """Drop lane executables already consumed by a finished rung.
+
+    Companion of the multigrid ``release_stage_cache`` point (called next to
+    ``jax.clear_caches()``): consumed standalone executables die with the
+    jit caches, while a just-prefetched — not yet used — executable for the
+    NEXT rung survives the release.
+    """
+    for key in list(_LANE_EXECUTABLES):
+        if key in _USED_LANE_KEYS:
+            del _LANE_EXECUTABLES[key]
+    _USED_LANE_KEYS.clear()
+
+
 def _resolve_use_fft(
     use_fft: bool | None, device: Any, resolution: Resolution
 ) -> bool:
@@ -1773,11 +1845,17 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
               ijacob: int, verbose: bool, emit,
               use_fft: bool = False,
               emit_banner: bool = True,
+              emit_legend: bool = True,
               initial_xcdot: SpectralState | None = None,
               initial_residuals: (
                   tuple[float | Array, float | Array, float | Array] | None
               ) = None) -> _LoopCarry:
-    """Run the iteration loop in the requested lane; return the final carry."""
+    """Run the iteration loop in the requested lane; return the final carry.
+
+    ``emit_legend=False`` suppresses the ``BEGIN FORCE ITERATIONS`` legend
+    while keeping the ``NS = ...`` banner and column header (runvmec.f
+    prints the legend once per run, not once per radial grid).
+    """
     carry = _initial_carry(
         state0, rt, ijacob=ijacob, xcdot=initial_xcdot,
         residuals=initial_residuals,
@@ -1797,14 +1875,38 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
     if verbose and emit_banner:
         # initialize_radial.f prints the total Fourier mode count (mnmax), not mpol.
         emit(stage_banner(rt.resolution.ns, rt.resolution.mnmax, rt.ftol, rt.max_iterations), end="")
-        emit(FORCE_ITERATIONS_BANNER, end="")
+        if emit_legend:
+            emit(FORCE_ITERATIONS_BANNER, end="")
         emit(screen_header(lasym=rt.resolution.lasym, lfreeb=False), end="")
 
     printed: set[int] = set()
     max_passes = rt.max_iterations + 200
     lane = _block_lane_fft if use_fft else _block_lane
+    # Prefetched-executable consumption + compile attribution.  The
+    # structural key selects a background-compiled standalone executable
+    # when one exists (identical lowering — bit-identical iterations); a
+    # first-time structure without one is compiled on demand by the jitted
+    # lane, and the notice makes that pause attributable on screen.
+    executable = None
+    if not jax.config.jax_disable_jit:
+        key = _lane_signature("block_fft" if use_fft else "block", carry, rt)
+        executable = _LANE_EXECUTABLES.get(key)
+        if verbose and key not in _USED_LANE_KEYS:
+            emit(compile_notice(rt.resolution.ns,
+                                prefetched=executable is not None), end="")
+        _USED_LANE_KEYS.add(key)
     for _ in range(max_passes):
-        carry = lane(carry, rt)
+        if executable is not None:
+            try:
+                carry = executable(carry, rt)
+            except Exception:
+                # Structural/placement drift (argument validation precedes
+                # execution and donation, so the carry is intact): fall back
+                # to the on-demand jitted lane for the rest of the rung.
+                executable = None
+                carry = lane(carry, rt)
+        else:
+            carry = lane(carry, rt)
         done = bool(carry.done)
         upto = int(carry.iteration) if done else int(carry.iteration) - 1
         # VMEC2000's irst=4 and first-bad-Jacobian transfers return to
@@ -1825,6 +1927,7 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
                  try_axis_reguess: bool = True,
                  use_fft: bool = False,
                  jacobian_retries: int = 2,
+                 emit_legend: bool = True,
                  residual_continuation: (
                      tuple[float | Array, float | Array, float | Array] | None
                  ) = None) -> _LoopCarry:
@@ -1869,7 +1972,7 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
         carry = _run_loop(
             attempt_state, loop_rt, mode=mode, ijacob=0,
             verbose=verbose, emit=emit, use_fft=use_fft,
-            emit_banner=emit_banner,
+            emit_banner=emit_banner, emit_legend=emit_legend,
             initial_residuals=attempt_residuals,
         )
 
@@ -1892,6 +1995,13 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
             attempt_rt, attempt_state, _axis = reguess_initial_axis(
                 attempt_rt, attempt_state, use_fft=use_fft
             )
+            if verbose:
+                lasym = bool(attempt_rt.resolution.lasym)
+                emit(improved_axis_block(
+                    _axis[0], _axis[3],
+                    raxis_cs=_axis[1] if lasym else None,
+                    zaxis_cc=_axis[2] if lasym else None,
+                ), end="")
             carry = _run_loop(
                 attempt_state, attempt_rt, mode=mode, ijacob=1,
                 verbose=verbose, emit=emit, use_fft=use_fft,

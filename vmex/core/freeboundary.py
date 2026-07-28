@@ -66,7 +66,8 @@ from .input import VmecInput
 from .mgrid import MgridField
 from .preconditioner_2d import Prec2DConfig
 from .printing import (
-    FORCE_ITERATIONS_BANNER, screen_header, screen_line, stage_banner,
+    FORCE_ITERATIONS_BANNER, improved_axis_block, screen_header, screen_line,
+    stage_banner,
     vacuum_banner,
 )
 from .solver import (
@@ -1193,6 +1194,7 @@ def _solve_free_boundary_stage(
     reuse_vacuum_cache: bool = False,
     allow_initial_axis_reguess: bool = True,
     use_fft: bool = False,
+    emit_legend: bool = True,
     residual_continuation: (
         tuple[float | Array, float | Array, float | Array] | None
     ) = None,
@@ -1294,6 +1296,12 @@ def _solve_free_boundary_stage(
             emit(" INITIAL JACOBIAN CHANGED SIGN!")
             emit(" TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS")
         rt, _init_state, _axis = reguess_initial_axis(rt, _init_state)
+        if verbose:
+            emit(improved_axis_block(
+                _axis[0], _axis[3],
+                raxis_cs=_axis[1] if resolution.lasym else None,
+                zaxis_cc=_axis[2] if resolution.lasym else None,
+            ), end="")
         _initial_ijacob = 1
         _, _retry_geometry = _geometry(_init_state, rt)
         _retry_jacobian = half_mesh_jacobian(_retry_geometry, s=rt.setup.s_full)
@@ -1380,7 +1388,10 @@ def _solve_free_boundary_stage(
 
     if verbose:
         emit(stage_banner(ns, resolution.mnmax, rt.ftol, rt.max_iterations), end="")
-        emit(FORCE_ITERATIONS_BANNER, end="")
+        # runvmec.f prints the residual legend once per run; later radial
+        # rungs of a ladder keep only the NS banner and the column header.
+        if emit_legend:
+            emit(FORCE_ITERATIONS_BANNER, end="")
         emit(screen_header(lasym=resolution.lasym, lfreeb=True), end="")
 
     # An already-active multigrid stage evaluates with the free-boundary edge
@@ -1431,6 +1442,12 @@ def _solve_free_boundary_stage(
         if verbose:
             emit(" TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS")
         rt, _init_state, _axis = reguess_initial_axis(rt, _init_state)
+        if verbose:
+            emit(improved_axis_block(
+                _axis[0], _axis[3],
+                raxis_cs=_axis[1] if resolution.lasym else None,
+                zaxis_cc=_axis[2] if resolution.lasym else None,
+            ), end="")
         _initial_ijacob = 1
 
         _axis_r0, _axis_z0 = _vacuum_scalars(_init_state, rt)[2:4]

@@ -92,6 +92,39 @@ def test_threed1_line_freeb_appends_vacuum_diagnostics():
     assert partial == fixed
 
 
+def test_improved_axis_block_symmetric_bytes():
+    """PARVMEC-style block, byte-exact against the recorded gfortran layout."""
+    s = printing.improved_axis_block(
+        [1.0243853352608869, 0.17589213467129849],
+        [-0.0, -0.16638393524554693],
+    )
+    assert s == (
+        "  ---- Improved AXIS Guess ----\n"
+        "      RAXIS_CC =    1.0243853352608869       0.17589213467129849\n"
+        "      ZAXIS_CS =   -0.0000000000000000      -0.16638393524554693\n"
+        "  -----------------------------\n"
+    )
+
+
+def test_improved_axis_block_lasym_adds_cs_cc_lines():
+    s = printing.improved_axis_block(
+        [1.0], [0.0], raxis_cs=[0.25], zaxis_cc=[-0.5],
+    )
+    lines = s.splitlines()
+    assert [ln.split("=")[0].strip() for ln in lines[1:5]] == [
+        "RAXIS_CC", "RAXIS_CS", "ZAXIS_CC", "ZAXIS_CS",
+    ]
+    assert "      RAXIS_CS =    0.2500000000000000" in s
+    assert "      ZAXIS_CC =   -0.5000000000000000" in s
+
+
+def test_compile_notice_variants():
+    assert printing.compile_notice(31) == " compiling NS = 31 executable...\n"
+    assert printing.compile_notice(31, prefetched=True) == (
+        " compiling NS = 31 executable... (prefetched)\n"
+    )
+
+
 def test_termination_summary_known_and_unknown_flags():
     s = printing.termination_summary(errors.SUCCESSFUL_TERM_FLAG, "input.solovev", 2, 12.5)
     assert "EXECUTION TERMINATED NORMALLY" in s

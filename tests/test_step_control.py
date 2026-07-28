@@ -212,8 +212,8 @@ def _install_fake_loop(monkeypatch, rt, calls, *, failures: int):
     from vmex.core.errors import JAC75_FLAG, SUCCESSFUL_TERM_FLAG
 
     def fake_run_loop(state0, loop_rt, *, mode, ijacob, verbose, emit,
-                      use_fft=False, emit_banner=True, initial_xcdot=None,
-                      initial_residuals=None):
+                      use_fft=False, emit_banner=True, emit_legend=True,
+                      initial_xcdot=None, initial_residuals=None):
         n = len(calls)
         calls.append(dict(
             state={

@@ -8,8 +8,8 @@ Covered:
    ``In VACUUM`` block and ``VACUUM PRESSURE TURNED ON`` banner appear, the
    wout is written and readable with ``lfreeb = True`` and the mgrid's
    ``nextcur``/``extcur``, and the exit code is 2 (MORE ITERATIONS
-   REQUIRED — the fixture explicitly sets ``LFULL3D1OUT=T`` so VMEC2000 and
-   VMEX write the capped state);
+   REQUIRED — the CLI default keeps the capped state and terminates through
+   the normal output path, fileout.f semantics);
 2. missing mgrid file: warning + fixed-boundary fallback (VMEC2000 policy);
 3. direct-coil conventions: ``MGRID_FILE = 'DIRECT_COILS'`` without
    ``--coils`` and ``--coils`` on a fixed-boundary deck are typed input
@@ -64,16 +64,16 @@ def _run_cli(argv: list[str]) -> tuple[int, str]:
 
 @pytest.fixture(scope="module")
 def freeb_cli(tmp_path_factory) -> tuple[int, str, Path]:
-    """One capped CLI free-boundary run of the golden deck (shared)."""
+    """One capped CLI free-boundary run of the golden deck (shared).
+
+    Deliberately does NOT set ``LFULL3D1OUT``: the CLI's default is the
+    VMEC2000 fileout.f behavior — NITER exhaustion terminates normally
+    through the output path (WOUT + summary) with exit code 2.
+    """
     jax.config.update("jax_disable_jit", False)
     workdir = tmp_path_factory.mktemp("cli_freeb")
     deck = workdir / DECK.name
     shutil.copyfile(DECK, deck)
-    text, count = re.subn(
-        r"(?m)^\s*/\s*$", "  LFULL3D1OUT = T,\n/", deck.read_text(), count=1
-    )
-    assert count == 1
-    deck.write_text(text)
     shutil.copyfile(MGRID, workdir / MGRID.name)
     outdir = workdir / "out"
     rc, stdout = _run_cli([str(deck), "--max-iter", "80", "--outdir", str(outdir)])
@@ -105,7 +105,10 @@ def test_exit_code_reflects_more_iter(freeb_cli):
 
 def test_wout_written_with_free_boundary_fields(freeb_cli):
     _, _, wout_path = freeb_cli
-    assert wout_path.exists(), "LFULL3D1OUT must retain the capped free-boundary state"
+    assert wout_path.exists(), (
+        "the CLI default must retain the capped free-boundary state "
+        "(fileout.f NITER-exhaustion semantics)"
+    )
     # wrout.f dimensions extcur by the mgrid's nextcur (the bundled synthetic
     # mgrid holds a single summed coil group), truncating the deck's EXTCUR.
     mgrid = read_mgrid(MGRID)
@@ -157,9 +160,12 @@ def test_missing_mgrid_falls_back_to_fixed_boundary(tmp_path):
     assert "FIXED-BOUNDARY" in stdout
     assert "VACUUM PRESSURE TURNED ON" not in stdout
     assert "In VACUUM" not in stdout
-    # the capped fixed-boundary fallback exhausts NITER -> exit code 2.
+    # the capped fixed-boundary fallback exhausts NITER -> exit code 2 with
+    # the WOUT written (fileout.f semantics), labeled effectively fixed.
     assert rc == MORE_ITER_FLAG
-    assert not (tmp_path / f"wout_{CASE}.nc").exists()
+    wout = read_wout(tmp_path / f"wout_{CASE}.nc")
+    assert int(wout.ier_flag) == MORE_ITER_FLAG
+    assert bool(wout.lfreeb) is False
 
 
 def test_missing_mgrid_forced_wout_has_effective_fixed_metadata(tmp_path):

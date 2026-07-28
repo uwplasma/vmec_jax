@@ -35,6 +35,7 @@ host round-trips of traced values.
 from __future__ import annotations
 
 import gc
+import threading
 from dataclasses import replace
 from typing import Any
 
@@ -49,7 +50,8 @@ from .fourier import ModeTable, mode_table
 from .input import VmecInput, _vmec_ns_prefix
 from .preconditioner_2d import Prec2DConfig
 from .solver import (
-    SolveResult, SpectralState, _finalize, _result_from_carry, _solve_stage,
+    SolveResult, SpectralState, _finalize, _prefetch_block_lane,
+    _release_used_lane_executables, _result_from_carry, _solve_stage,
     _resolve_use_fft, hot_restart_state, prepare_runtime, resolution_from_input,
     runtime_with_baselines,
 )
@@ -182,6 +184,51 @@ def interpolate_state(
 # ---------------------------------------------------------------------------
 
 
+#: Cheap proxy keys of rungs a prefetch thread was already launched for in
+#: this process.  Repeated warm ladders (optimization/implicit trial solves)
+#: then spawn no background threads at all — their executables are already
+#: in place.  Entries are purged at the ``release_stage_cache`` point, where
+#: the executables they vouch for are dropped.
+_PREFETCH_ATTEMPTED: set = set()
+
+
+def _launch_lane_prefetch(
+    inp: VmecInput, *, ns_next: int, ftol_next: float, niter_next: int,
+    lconm1: bool, time_step, tcon0, gamma, nstep, precon_type,
+    prec2d_threshold, prec2d, use_fft, device,
+) -> threading.Thread:
+    """Start compiling the NEXT rung's block-lane executable in the background.
+
+    The ladder is known up front, so rung k+1's runtime template is built and
+    its CLI block lane AOT-compiled (``jit.lower(...).compile()``) on a
+    daemon thread while rung k iterates — XLA compilation releases the GIL,
+    so the compile overlaps rung k's device work.  This is cache warming
+    only: the runtime built here is discarded (the main loop builds its own,
+    structurally identical one), and any failure leaves the rung to compile
+    on demand exactly as without prefetch.
+    """
+    def worker() -> None:
+        try:
+            resolution = resolution_from_input(inp, ns=ns_next)
+            with device_context(device, resolution):
+                rt = prepare_runtime(
+                    inp, resolution, ftol=float(ftol_next),
+                    max_iterations=int(niter_next), lconm1=lconm1,
+                    time_step=time_step, tcon0=tcon0, gamma=gamma,
+                    nstep=nstep, precon_type=precon_type,
+                    prec2d_threshold=prec2d_threshold, prec2d=prec2d,
+                    use_fft=use_fft,
+                )
+                _prefetch_block_lane(rt, use_fft=use_fft)
+        except Exception:      # silent fallback: on-demand compilation
+            pass
+
+    thread = threading.Thread(
+        target=worker, name="vmex-lane-prefetch", daemon=True)
+    thread.start()
+    return thread
+
+
 def solve_multigrid(
     inp: VmecInput,
     ns_array=None,
@@ -203,6 +250,7 @@ def solve_multigrid(
     raise_on_max_iterations: bool = True,
     use_fft: bool | None = None,
     release_stage_cache: bool = False,
+    prefetch_compile: bool = True,
 ) -> SolveResult:
     """Fixed-boundary multigrid solve over the ``NS_ARRAY`` ladder.
 
@@ -265,6 +313,18 @@ def solve_multigrid(
     It is false by default so repeated library solves retain warm executables;
     the standalone CLI enables it.
 
+    ``prefetch_compile=True`` (default) overlaps compilation with iteration
+    on cold runs: while rung k iterates, a background thread AOT-compiles
+    rung k+1's block-lane executable (the ladder is known up front).  Cache
+    warming only — results are bit-identical, and any prefetch failure falls
+    back silently to on-demand compilation.  The prefetch thread is joined
+    *before* the ``release_stage_cache`` point, and the prefetched
+    executable is held as a standalone object, so releasing rung k's caches
+    cannot evict rung k+1's just-built executable.  Only the ``mode="cli"``
+    block lane is prefetched, and equal-structure reruns (same ``ns``,
+    ``ftol``, ``niter``) skip the prefetch because the previous rung's
+    executable is reused directly.
+
     Returns the final stage's :class:`~vmex.core.solver.SolveResult`.
     """
     ns_arr = _vmec_ns_prefix(inp.ns_array if ns_array is None else ns_array)
@@ -288,6 +348,7 @@ def solve_multigrid(
     first_executed = True
     residual_continuation = None
     carry = rt = None
+    prefetch_thread: threading.Thread | None = None
     for igrid in range(n_stages):
         nsval = int(ns_arr[igrid])
         resolution = resolution_from_input(inp, ns=nsval)
@@ -308,6 +369,43 @@ def solve_multigrid(
             # funct3d.f: rcon0/zcon0 are set from the state at iter2 == iter1,
             # i.e. from THIS stage's starting state, not the interior guess.
             rt = runtime_with_baselines(rt, state, use_fft=stage_use_fft)
+        # Overlapped compilation (see the docstring): start building rung
+        # igrid+1's executable now, so it is (mostly) ready when this rung's
+        # iterations finish.  Equal-structure next rungs reuse this rung's
+        # executable directly, so nothing needs prefetching.
+        if (
+            prefetch_compile
+            and mode == "cli"
+            and igrid + 1 < n_stages
+            and not jax.config.jax_disable_jit
+            and (
+                int(ns_arr[igrid + 1]) != nsval
+                or float(ftol_arr[igrid + 1]) != float(ftol_arr[igrid])
+                or int(niter_arr[igrid + 1]) != int(niter_arr[igrid])
+            )
+        ):
+            ns_next = int(ns_arr[igrid + 1])
+            use_fft_next = _resolve_use_fft(
+                use_fft, device, resolution_from_input(inp, ns=ns_next))
+            attempt_key = (
+                ns_next, float(ftol_arr[igrid + 1]), int(niter_arr[igrid + 1]),
+                bool(use_fft_next), int(inp.mpol), int(inp.ntor),
+                int(inp.nfp), bool(inp.lasym), bool(lconm1), time_step, tcon0,
+                gamma, nstep, precon_type, prec2d_threshold, prec2d is None,
+                str(device),
+            )
+            if attempt_key not in _PREFETCH_ATTEMPTED:
+                _PREFETCH_ATTEMPTED.add(attempt_key)
+                prefetch_thread = _launch_lane_prefetch(
+                    inp, ns_next=ns_next,
+                    ftol_next=float(ftol_arr[igrid + 1]),
+                    niter_next=int(niter_arr[igrid + 1]),
+                    lconm1=lconm1, time_step=time_step, tcon0=tcon0,
+                    gamma=gamma, nstep=nstep, precon_type=precon_type,
+                    prec2d_threshold=prec2d_threshold, prec2d=prec2d,
+                    use_fft=use_fft_next,
+                    device=device,
+                )
         with device_context(device, resolution):
             carry = _solve_stage(
                 rt, state, mode=mode, verbose=verbose, emit=emit,
@@ -318,7 +416,14 @@ def solve_multigrid(
                 jacobian_retries=jacobian_retries,
                 residual_continuation=residual_continuation,
                 use_fft=stage_use_fft,
+                emit_legend=first_executed,
             )
+        # Join the prefetch before any cache release below: a mid-compile
+        # jax.clear_caches() on another thread is the one interaction the
+        # overlap must never have.
+        if prefetch_thread is not None:
+            prefetch_thread.join()
+            prefetch_thread = None
         first_executed = False
         ier = int(carry.ier)
         last_stage = not np.any(ns_arr[igrid + 1:] >= nsval)
@@ -345,6 +450,13 @@ def solve_multigrid(
         ):
             jax.block_until_ready(carry)
             jax.clear_caches()
+            # Companion release for the standalone prefetched executables:
+            # consumed ones are dropped with the jit caches; the next rung's
+            # just-prefetched executable (not yet used) survives.  The
+            # attempt registry is purged with them so a later ladder in this
+            # process re-prefetches what was just released.
+            _release_used_lane_executables()
+            _PREFETCH_ATTEMPTED.clear()
             gc.collect()
 
     if int(carry.ier) == MORE_ITER_FLAG and not raise_on_max_iterations:
@@ -409,6 +521,12 @@ def solve_free_boundary_multigrid(
     ``None`` leaves placement to JAX.
     The final stage's publishable potential and surface fields are retained in
     ``result.vacuum``; internal NESTOR matrix caches are not exposed.
+
+    Compile prefetch (the fixed-boundary ladder's ``prefetch_compile``) is
+    deliberately NOT applied here: a free-boundary rung selects among
+    several lanes (pre-activation, turn-on, batched steady-state vacuum)
+    whose structures depend on when vacuum activates at runtime, so there
+    is no single executable to build ahead of time without speculation.
     """
     if not bool(inp.lfreeb):
         raise ValueError("solve_free_boundary_multigrid requires an LFREEB=T input")
@@ -508,6 +626,7 @@ def solve_free_boundary_multigrid(
                     constraint_continuation if same_grid else None),
                 reuse_vacuum_cache=bool(same_grid),
                 residual_continuation=residual_continuation,
+                emit_legend=(igrid == 0),
             )
         # allocate_ns.f overwrites xstore from old xc before interp.f, so the
         # effective VMEC2000 source is the stage's final state, not its

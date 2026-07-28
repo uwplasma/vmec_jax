@@ -13,7 +13,10 @@ Covered here (plan.md Phase 2 STATUS item 4 — first vertical slice):
    same ``wb``;
 5. ``--test`` (bundled quick-start deck) smoke at a reduced tolerance;
 6. zero-crash exit codes: unreadable input -> ``ier_flag = 5`` with the
-   VMEC2000 werror INPUT message; iteration exhaustion -> ``ier_flag = 2``.
+   VMEC2000 werror INPUT message; iteration exhaustion -> ``ier_flag = 2``
+   with the WOUT written and the full summary/termination block printed
+   (VMEC2000 fileout.f semantics — NITER exhaustion terminates normally
+   through the output path).
 """
 
 from __future__ import annotations
@@ -154,6 +157,20 @@ def test_solovev_stdout_structure_matches_golden(solovev_cli):
     np.testing.assert_allclose(ours[-1][1][-1], gold[-1][1][-1], rtol=1e-3)  # WMHD
 
 
+def test_summary_reports_iota_and_modb(solovev_cli):
+    """The equilibrium summary carries the iota and |B| axis/edge lines."""
+    _, stdout, _ = solovev_cli
+    for pattern in (
+        " Iota on Axis          = ",
+        " Iota at Edge          = ",
+        " |B| on Axis (b0)      = ",
+        " <|B|> at Edge (half)  = ",
+    ):
+        line = _line_containing(stdout, pattern)
+        assert line is not None, f"missing summary line: {pattern!r}"
+        assert np.isfinite(float(line.split("=")[1].split("[")[0]))
+
+
 # ---------------------------------------------------------------------------
 # --plot / --booz on the produced wout
 # ---------------------------------------------------------------------------
@@ -231,12 +248,34 @@ def test_missing_input_exits_with_input_error(tmp_path):
     assert WERROR_MESSAGES[INPUT_ERROR_FLAG] in stdout
 
 
-def test_iteration_exhaustion_exits_with_more_iter(tmp_path):
+def test_iteration_exhaustion_exits_with_more_iter_and_writes_wout(tmp_path):
+    """VMEC2000 fileout.f: NITER exhaustion terminates normally through the
+    output path — full summary + MORE ITERATIONS REQUIRED block + WOUT —
+    while the exit code stays the distinct ier_flag = 2."""
+    rc, stdout = _run_cli(
+        [str(SOLOVEV_DECK), "--outdir", str(tmp_path), "--max-iter", "20"]
+    )
+    assert rc == MORE_ITER_FLAG
+    assert WERROR_MESSAGES[MORE_ITER_FLAG] in stdout
+    # the same summary block a converged run prints, incl. the new lines
+    for pattern in (
+        "Aspect Ratio", "Volume Average B", "Iota on Axis", "Iota at Edge",
+        "|B| on Axis (b0)", "<|B|> at Edge (half)", "MHD Energy (wb + wp)",
+        "NUMBER OF JACOBIAN RESETS", "TOTAL COMPUTATIONAL TIME",
+        "Wrote WOUT file:", "HINT : increase NITER or loosen FTOL",
+    ):
+        assert _line_containing(stdout, pattern) is not None, pattern
+    wout = read_wout(tmp_path / "wout_solovev.nc")
+    assert int(wout.ier_flag) == MORE_ITER_FLAG
+
+
+def test_iteration_exhaustion_quiet_still_writes_wout(tmp_path):
     rc, stdout = _run_cli(
         [str(SOLOVEV_DECK), "--outdir", str(tmp_path), "--max-iter", "20", "--quiet"]
     )
     assert rc == MORE_ITER_FLAG
-    assert WERROR_MESSAGES[MORE_ITER_FLAG] in stdout
+    assert stdout.strip() == ""            # --quiet silences everything
+    assert (tmp_path / "wout_solovev.nc").exists()
 
 
 def test_lforbal_iteration_exhaustion_writes_wout(tmp_path):

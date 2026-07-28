@@ -453,6 +453,49 @@ def test_niter_exhausted_stage_transfers_final_xc_like_vmec2000() -> None:
     assert result.r00 == pytest.approx(3.8635255062, rel=2e-10)
 
 
+def test_prefetch_serves_second_rung_and_legend_prints_once():
+    """Overlapped compilation + console attribution + one legend per run.
+
+    While rung 1 iterates, a background thread AOT-compiles rung 2's block
+    lane; rung 2 must then be served by that prefetched executable (the
+    ``(prefetched)`` compile notice proves it — a silent fallback to
+    on-demand compilation would drop the marker).  The ``BEGIN FORCE
+    ITERATIONS`` legend appears exactly once per run (runvmec.f), while
+    every rung keeps its ``NS = `` banner and ITER column header.  A second
+    identical ladder without prefetch must produce the bit-identical
+    trajectory (cache warming only).
+    """
+    inp = _load_input("solovev")
+    # Unique NITER values give this test's rungs lane structures no other
+    # test in the process can have compiled, so the compile notices are
+    # deterministic.
+    ladder = dict(ns_array=[5, 9], ftol_array=[1e-8, 1e-10],
+                  niter_array=[731, 733])
+
+    lines: list[str] = []
+
+    def collect(text: str = "", end: str = "\n") -> None:
+        lines.append(str(text) + end)
+
+    result = multigrid.solve_multigrid(
+        inp, verbose=True, emit=collect, release_stage_cache=True, **ladder)
+    output = "".join(lines)
+    assert result.converged
+    # A2: legend once, banners and column headers per rung.
+    assert output.count("BEGIN FORCE ITERATIONS") == 1
+    assert output.count("FSQR, FSQZ = Normalized Physical Force Residuals") == 1
+    assert "NS =    5" in output and "NS =    9" in output
+    assert output.count("  ITER    FSQR") == 2
+    # B2: attribution — rung 1 compiles on demand, rung 2 was prefetched.
+    assert " compiling NS = 5 executable...\n" in output
+    assert " compiling NS = 9 executable... (prefetched)\n" in output
+
+    baseline = multigrid.solve_multigrid(inp, prefetch_compile=False, **ladder)
+    np.testing.assert_array_equal(result.fsq_history, baseline.fsq_history)
+    assert float(result.wb) == float(baseline.wb)
+    assert int(result.iterations) == int(baseline.iterations)
+
+
 # ---------------------------------------------------------------------------
 # TASK B: compile counts + wall time (cold subprocesses)
 # ---------------------------------------------------------------------------
