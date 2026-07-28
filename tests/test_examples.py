@@ -195,11 +195,14 @@ def test_mirror_free_boundary_beta_scan_example(tmp_path):
             assert (outdir / f"mirror_beta_{beta}pct_{suffix}.png").stat().st_size > 10_000
 
 
-@pytest.mark.full  # nightly: free-bdy NESTOR solve with direct-coil Biot-Savart (~30s)
+@pytest.mark.full  # nightly: free-bdy NESTOR solve with direct-coil Biot-Savart (~90s)
 def test_free_boundary_essos_coils(tmp_path):
-    Coils = pytest.importorskip("essos.coils").Coils
-    if not hasattr(Coils, "to_mgrid"):
-        pytest.skip("ESSOS build lacks Coils.to_mgrid (use feature/mgrid-from-coils)")
+    # The example needs only ``essos.coils`` (loading) + ``essos.fields.BiotSavart``
+    # (tabulation) — present in every released ESSOS >= 0.16, with an in-example
+    # fallback to the legacy ``Coils_from_json`` loader.  Under VMEX_EXAMPLES_CI=1
+    # the script solves a single coarse beta point (ns=16), keeping this bounded.
+    pytest.importorskip("essos.coils")
+    pytest.importorskip("essos.fields")
     out = _run_example(EXAMPLES / "free_boundary_essos_coils.py", tmp_path, timeout=900)
     # table rows: nominal%  PRES_SCALE  actual-beta%  iters  fsq  aspect  axis-R
     rows = re.findall(r"^\s*([0-9.]+)%\s+([0-9.]+)\s+([0-9.]+)%\s+\d+\s+([0-9.eE+-]+)",

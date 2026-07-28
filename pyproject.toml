@@ -71,6 +71,14 @@ Changelog = "https://github.com/uwplasma/vmex/releases"
 turbulence = [
   "gkx>=1.7.1",
 ]
+# Direct-coil free-boundary support: the CLI ``--coils`` flag and the ESSOS
+# examples load ``essos.coils`` and tabulate ``essos.fields.BiotSavart`` into
+# an in-memory MgridField.  Any released ESSOS >= 0.16 suffices (0.16 ships
+# the legacy ``Coils_from_json`` loader; the callers fall back to it when the
+# ``Coils.from_json`` classmethod is absent).
+coils = [
+  "essos>=0.16",
+]
 docs = [
   "sphinx",
   "sphinx-copybutton",
