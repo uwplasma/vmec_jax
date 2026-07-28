@@ -147,6 +147,35 @@ jobs:
           fi
           pytest -q -n 2 -m "not full" $FILES --durations=20
 
+  device-rig:
+    # Two-device placement/gradient coverage on every ordinary run: the
+    # host-rig lanes previously skipped in ALL hosted jobs (single visible
+    # device), so the placement logic was only exercised on developer
+    # machines and real GPU hardware.  A forced two-CPU-device rig runs the
+    # same audit helpers as the CUDA lanes: gradient-pytree device identity
+    # AND gradient values, cold device-1-first, cache-poisoned, and
+    # outer-context orders.
+    name: Two-host-device placement and gradients
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install .
+          python -m pip install pytest
+      - name: Run the two-host-device lanes
+        env:
+          JAX_ENABLE_X64: "1"
+          XLA_FLAGS: "--xla_force_host_platform_device_count=2"
+        run: |
+          pytest -q tests/test_gpu_ci.py -k second_host_device --durations=10
+
   optional-integrations:
     # The ESSOS / GKX / virtual-casing test lanes silently skipped in every
     # hosted job because the optional packages were never installed.  This
