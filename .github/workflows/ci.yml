@@ -183,25 +183,27 @@ jobs:
     # the gated tests cannot skip: a broken integration fails instead of
     # vanishing.  virtual_casing_jax is pinned to the canonical unreleased
     # feature commit until its PR is merged and released (see pyproject).
-    name: Optional integrations (pinned ESSOS, GKX, virtual-casing)
+    name: Optional integrations (released ESSOS/GKX, pinned virtual-casing)
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # 45: un-skipping the wout/mgrid-gated lanes added ~17 min serial local
+    # (absorbed by -n 2, but slow hosted runners need the headroom).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6.0.2
       - uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install with pinned optional integrations
+      - name: Install with released/pinned optional integrations
         run: |
           python -m pip install -U pip
-          python -m pip install .
+          python -m pip install ".[coils,turbulence]"
           python -m pip install pytest pytest-xdist
-          python -m pip install "gkx==1.7.1"
-          python -m pip install "essos @ git+https://github.com/uwplasma/ESSOS@4e19e7f129fe41c7f5aed53a032d1cf3c90ecfc8"
           python -m pip install "virtual-casing-jax @ git+https://github.com/uwplasma/virtual_casing_jax@97797576bc15e3f782de571c9cf021edacb5f594"
       - name: Assert the integrations import (no silent skips possible)
         run: python -c "import essos, gkx, virtual_casing_jax"
+      - name: Fetch reference assets (wout/mgrid fixtures for the gated lanes)
+        run: python tools/fetch_assets.py --bundle reference-nc
       - name: Run the gated lanes
         env:
           JAX_ENABLE_X64: "1"
@@ -212,6 +214,11 @@ jobs:
             tests/test_freeboundary_diff.py \
             tests/test_single_stage_simultaneous.py \
             --durations=15
+      - name: Run the ESSOS direct-coil example (full-marked, targeted)
+        env:
+          JAX_ENABLE_X64: "1"
+          RUN_FULL: "1"
+        run: pytest -q tests/test_examples.py::test_free_boundary_essos_coils --durations=5
 
   parity:
     name: Parity suite ${{ matrix.shard }} (goldens, coverage)
@@ -328,6 +335,7 @@ jobs:
                     tests/test_doctor.py \
                     tests/test_fetch_assets.py \
                     tests/test_first_divergence.py \
+                    tests/test_force_oracle.py \
                     tests/test_forces_residuals.py \
                     tests/test_fourier_transforms.py \
                     tests/test_geometry_fields.py \
@@ -359,6 +367,7 @@ jobs:
                     tests/test_solver_axis_initialization.py \
                     tests/test_stability.py \
                     tests/test_step_control.py \
+                    tests/test_stress_high_force.py \
                     tests/test_turbulence.py \
                     tests/test_validation_guards.py \
                     tests/test_vmec2000_feature_stress.py"
@@ -603,7 +612,7 @@ jobs:
         shard: [core-a-c, core-d-f, core-g-h, core-i, core-i-grad, core-j-m,
                 core-n-s, core-t-z, hmfb-ladders, hmfb-combined, hmfb-fft537,
                 qi-gate-free, qi-gate-ladder, qi-gate-ladder-fft,
-                qi-gate-fixed, opt-qa, opt-qh,
+                qi-gate-ladder-055, qi-gate-fixed, opt-qa, opt-qh,
                 opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
     steps:
       - uses: actions/checkout@v6.0.2
@@ -705,7 +714,7 @@ jobs:
                      tests/test_high_mode_free_boundary_parity.py::test_dense_and_fft_free_boundary_trajectories_match"
               ;;
             hmfb-fft537)
-              FILES="tests/test_high_mode_free_boundary_parity.py::test_free_boundary_537_modes_converges_with_fft"
+              FILES="tests/test_high_mode_free_boundary_parity.py::test_free_boundary_537_modes_fft_auto_smoke"
               ;;
             qi-gate-free)
               # The QI sheet-current gate lanes are the heaviest single
@@ -728,6 +737,11 @@ jobs:
               # the NON-FINITE FORCE EVALUATION when NESTOR consumed a
               # sign-changed transient at the DELT stability edge).
               FILES="tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_fft_matches_dense"
+              ;;
+            qi-gate-ladder-055)
+              # The public regression pinning the previously platform-fatal
+              # DELT = 0.55 ladder (converged in both codes post-fix).
+              FILES="tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_delt_055_regression"
               ;;
             qi-gate-fixed)
               FILES="tests/test_qi_sheet_gate.py::test_qi_fixed_238_ladder_converges"
