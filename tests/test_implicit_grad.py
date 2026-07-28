@@ -49,6 +49,8 @@ h = 4e-4 (boundary).
 from __future__ import annotations
 
 import dataclasses
+import gc
+import os
 import pickle
 import tempfile
 from pathlib import Path
@@ -80,6 +82,19 @@ def _jit_enabled():
     jax.config.update("jax_disable_jit", False)
     yield
     jax.config.update("jax_disable_jit", prev)
+
+
+@pytest.fixture(autouse=True)
+def _release_jax_caches_in_full_matrix():
+    """The full-lane sweep of this file (solve+adjoint campaigns across every
+    case) accumulates executable caches until the dedicated hosted CI worker
+    is memory-evicted (it happened twice).  Release after each test in the
+    full matrix; the ordinary parity lanes are low-mode and keep their
+    compile reuse."""
+    yield
+    if os.environ.get("RUN_FULL"):
+        jax.clear_caches()
+        gc.collect()
 
 CASES = {
     "solovev": dict(ftol=1e-14, max_iterations=2000),
