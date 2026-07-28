@@ -199,10 +199,28 @@ def build(outdir: Path, *, offset_factor: float = 1.2, mmax: int = 18,
     K = jnp.asarray(phi_t)[:, None] * ep_w - jnp.asarray(phi_p)[:, None] * et_w
 
     @jax.jit
-    def b_at(points):
+    def _b_chunk(points):
         d = points[:, None, :] - src[None, :, :]
         r3 = jnp.sum(d * d, -1) ** 1.5
         return jnp.sum(jnp.cross(K[None], d) / r3[..., None], 1) * dA_w / (4 * np.pi)
+
+    # The naive single-call broadcast is n_pts x n_src x 3 doubles plus the
+    # cross/r3 intermediates -- ~20 GB at the 200x200 flux grid -- which
+    # evicts a 16 GB hosted CI runner.  Fixed-size chunks (padded, so XLA
+    # compiles exactly one shape) bound the peak below ~1 GB; each point's
+    # source sum is unchanged.
+    chunk = 2048
+
+    def b_at(points):
+        pts = np.asarray(points)
+        out = np.empty_like(pts)
+        for i in range(0, len(pts), chunk):
+            blk = pts[i:i + chunk]
+            n = len(blk)
+            if n < chunk:
+                blk = np.concatenate([blk, np.zeros((chunk - n, 3))], 0)
+            out[i:i + n] = np.asarray(_b_chunk(jnp.asarray(blk)))[:n]
+        return out
 
     # scale to the equilibrium's boundary <|B|^2>
     sd = surface_field_data_from_state(inp, res.state, nphi=48, ntheta=48)
