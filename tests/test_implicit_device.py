@@ -181,7 +181,12 @@ def test_second_device_placement_and_gradient_no_outer_context(tmp_path):
     env["PYTHONPATH"] = repo + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(
         [sys.executable, str(script)], cwd=repo, env=env,
-        capture_output=True, text=True, timeout=600,
+        # 1800: the audit subprocess cold-imports jax and compiles the
+        # implicit solve from scratch; ~25 s on a developer machine but
+        # measured >600 s on a busy 4-core hosted runner sharing the shard
+        # with three coverage workers (two c1 failures were exactly this
+        # cap expiring).  The generous cap only bounds a genuine hang.
+        capture_output=True, text=True, timeout=1800,
     )
     assert proc.returncode == 0, proc.stderr[-3000:]
     assert "SECOND-DEVICE AUDIT OK" in proc.stdout

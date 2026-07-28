@@ -224,8 +224,10 @@ jobs:
     runs-on: ubuntu-latest
     # Headroom for slow shared runners: the golden solves run ~15-20 min on a
     # healthy runner but tip over a tighter limit on a slow one (the suite
-    # content is unchanged). 35 absorbs that variance without masking a hang.
-    timeout-minutes: 35
+    # content is unchanged), and c1's device-audit subprocess alone measured
+    # >10 min on a busy runner (its own cap is 30 min). 50 absorbs both
+    # without masking a hang.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
