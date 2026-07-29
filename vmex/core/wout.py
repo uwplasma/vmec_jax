@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from . import postprocess as _pp
+from ._netcdf import assign_array
 
 if TYPE_CHECKING:
     from .solver import VacuumOutput
@@ -307,7 +308,11 @@ def _put_string(ds, name: str, dim: str, width: int, value: str | None) -> None:
     if value is None:
         return  # leave at fill (VMEC skips mgrid_mode when nextcur == 0)
     text = (str(value)[:width]).ljust(width)
-    var[:] = np.frombuffer(text.encode("ascii", "replace"), dtype="S1")
+    assign_array(
+        var,
+        slice(None),
+        np.frombuffer(text.encode("ascii", "replace"), dtype="S1"),
+    )
 
 
 def _put(ds, name: str, dims: tuple[str, ...], data, dtype: str = "f8") -> None:
@@ -322,7 +327,7 @@ def _put(ds, name: str, dims: tuple[str, ...], data, dtype: str = "f8") -> None:
     if data is not None:
         if dims:
             arr = np.asarray(data, dtype=np.float64 if dtype == "f8" else np.int32)
-            var[:] = np.reshape(arr, var.shape)
+            assign_array(var, slice(None), np.reshape(arr, var.shape))
         else:
             var.assignValue(np.float64(data) if dtype == "f8" else np.int32(data))
 
@@ -425,7 +430,7 @@ def write_wout(path: str | Path, data: WoutData, *, overwrite: bool = True) -> P
                 for i, lbl in enumerate(d.curlabel[: int(d.nextcur)]):
                     for j, ch in enumerate(str(lbl)[:30].ljust(30)):
                         arr[i, j] = ch.encode("ascii", "replace")
-                var[:] = arr
+                assign_array(var, slice(None), arr)
         for name in _MN2D_SYM:
             _put(ds, name, (_DIM_RADIUS, _DIM_MN), getattr(d, name))
         for name in _NYQ2D_SYM:

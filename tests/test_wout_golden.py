@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -365,7 +366,9 @@ def test_roundtrip(case):
     w = read_wout(out)
     assert isinstance(w, WoutData)
     tmp = out.parent / "roundtrip.nc"
-    write_wout(tmp, w)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        write_wout(tmp, w)
     w2 = read_wout(tmp)
     for f in dataclasses.fields(WoutData):
         a, b = getattr(w, f.name), getattr(w2, f.name)

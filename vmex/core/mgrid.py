@@ -45,7 +45,6 @@ readable by both.  Known convention divergences:
 from __future__ import annotations
 
 import re
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,32 +54,12 @@ import jax.numpy as jnp
 import numpy as np
 
 from .errors import MgridNotFoundError
+from ._netcdf import assign_array
 
 _FIELD_RE = re.compile(r"^(br|bp|bz)_(\d{3})$")
 
 #: Default coil-group label width used by MAKEGRID (and ESSOS).
 _STRINGSIZE = 30
-
-_NETCDF_NUMPY25_SHAPE_WARNING = r"Setting the shape on a NumPy array has been deprecated in NumPy 2\.5\."
-
-
-def _netcdf_assign(variable: Any, key: Any, value: Any) -> None:
-    """Assign an array while isolating netCDF4's NumPy 2.5 warning.
-
-    netCDF4 1.7.4 reshapes an internal view with ``data.shape = ...`` for
-    every non-scalar assignment.  NumPy 2.5 deprecates that internal
-    operation even though the write and file layout are valid.  Keep the
-    suppression exact and local so unrelated deprecations remain visible.
-    """
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=_NETCDF_NUMPY25_SHAPE_WARNING,
-            category=DeprecationWarning,
-        )
-        variable[key] = value
-
 
 @dataclass(frozen=True)
 class MgridData:
@@ -297,7 +276,7 @@ def write_mgrid(path: str | Path, data: MgridData) -> None:
         ds.createVariable("zmax", "f8")[()] = float(data.zmax)
 
         mode = ds.createVariable("mgrid_mode", "S1", ("dim_00001",))
-        _netcdf_assign(
+        assign_array(
             mode,
             slice(None),
             np.array([(data.mgrid_mode or "S")[:1].encode()], dtype="S1"),
@@ -308,14 +287,14 @@ def write_mgrid(path: str | Path, data: MgridData) -> None:
             [s[:stringsize].ljust(stringsize).encode() for s in data.coil_groups],
             dtype=f"S{stringsize}",
         )
-        _netcdf_assign(
+        assign_array(
             cg,
             slice(None),
             labels.view("S1").reshape(nextcur, stringsize),
         )
 
         raw = ds.createVariable("raw_coil_cur", "f8", ("external_coils",))
-        _netcdf_assign(
+        assign_array(
             raw,
             slice(None),
             np.asarray(data.raw_coil_cur, dtype=np.float64),
@@ -325,7 +304,7 @@ def write_mgrid(path: str | Path, data: MgridData) -> None:
             tag = f"_{i + 1:03d}"
             for name, arr in (("br", data.br), ("bp", data.bp), ("bz", data.bz)):
                 var = ds.createVariable(name + tag, "f8", ("phi", "zee", "rad"))
-                _netcdf_assign(
+                assign_array(
                     var,
                     (slice(None), slice(None), slice(None)),
                     np.asarray(arr[i], dtype=np.float64),
