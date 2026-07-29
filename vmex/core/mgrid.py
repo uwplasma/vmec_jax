@@ -45,6 +45,7 @@ readable by both.  Known convention divergences:
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,26 @@ _FIELD_RE = re.compile(r"^(br|bp|bz)_(\d{3})$")
 
 #: Default coil-group label width used by MAKEGRID (and ESSOS).
 _STRINGSIZE = 30
+
+_NETCDF_NUMPY25_SHAPE_WARNING = r"Setting the shape on a NumPy array has been deprecated in NumPy 2\.5\."
+
+
+def _netcdf_assign(variable: Any, key: Any, value: Any) -> None:
+    """Assign an array while isolating netCDF4's NumPy 2.5 warning.
+
+    netCDF4 1.7.4 reshapes an internal view with ``data.shape = ...`` for
+    every non-scalar assignment.  NumPy 2.5 deprecates that internal
+    operation even though the write and file layout are valid.  Keep the
+    suppression exact and local so unrelated deprecations remain visible.
+    """
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=_NETCDF_NUMPY25_SHAPE_WARNING,
+            category=DeprecationWarning,
+        )
+        variable[key] = value
 
 
 @dataclass(frozen=True)
@@ -108,13 +129,9 @@ class MgridData:
             if tuple(np.shape(arr)) != expected:
                 raise ValueError(f"mgrid {name} shape {np.shape(arr)} != expected {expected}")
         if len(self.coil_groups) != int(self.nextcur):
-            raise ValueError(
-                f"coil_groups length {len(self.coil_groups)} != nextcur {self.nextcur}"
-            )
+            raise ValueError(f"coil_groups length {len(self.coil_groups)} != nextcur {self.nextcur}")
         if len(self.raw_coil_cur) != int(self.nextcur):
-            raise ValueError(
-                f"raw_coil_cur length {len(self.raw_coil_cur)} != nextcur {self.nextcur}"
-            )
+            raise ValueError(f"raw_coil_cur length {len(self.raw_coil_cur)} != nextcur {self.nextcur}")
 
 
 def _decode_char_scalar(x: Any) -> str:
@@ -280,23 +297,39 @@ def write_mgrid(path: str | Path, data: MgridData) -> None:
         ds.createVariable("zmax", "f8")[()] = float(data.zmax)
 
         mode = ds.createVariable("mgrid_mode", "S1", ("dim_00001",))
-        mode[:] = np.array([(data.mgrid_mode or "S")[:1].encode()], dtype="S1")
+        _netcdf_assign(
+            mode,
+            slice(None),
+            np.array([(data.mgrid_mode or "S")[:1].encode()], dtype="S1"),
+        )
 
         cg = ds.createVariable("coil_group", "S1", ("external_coil_groups", "stringsize"))
         labels = np.array(
             [s[:stringsize].ljust(stringsize).encode() for s in data.coil_groups],
             dtype=f"S{stringsize}",
         )
-        cg[:] = labels.view("S1").reshape(nextcur, stringsize)
+        _netcdf_assign(
+            cg,
+            slice(None),
+            labels.view("S1").reshape(nextcur, stringsize),
+        )
 
         raw = ds.createVariable("raw_coil_cur", "f8", ("external_coils",))
-        raw[:] = np.asarray(data.raw_coil_cur, dtype=np.float64)
+        _netcdf_assign(
+            raw,
+            slice(None),
+            np.asarray(data.raw_coil_cur, dtype=np.float64),
+        )
 
         for i in range(nextcur):
             tag = f"_{i + 1:03d}"
             for name, arr in (("br", data.br), ("bp", data.bp), ("bz", data.bz)):
                 var = ds.createVariable(name + tag, "f8", ("phi", "zee", "rad"))
-                var[:, :, :] = np.asarray(arr[i], dtype=np.float64)
+                _netcdf_assign(
+                    var,
+                    (slice(None), slice(None), slice(None)),
+                    np.asarray(arr[i], dtype=np.float64),
+                )
 
 
 def _cartesian_field_values(field: Any, points: np.ndarray) -> np.ndarray:
@@ -315,8 +348,7 @@ def _cartesian_field_values(field: Any, points: np.ndarray) -> np.ndarray:
         evaluate = field if callable(field) else getattr(field, "B", None)
         if evaluate is None:
             raise TypeError(
-                "Cartesian field must be callable, expose B(points), or "
-                "expose set_points(points) followed by B()"
+                "Cartesian field must be callable, expose B(points), or expose set_points(points) followed by B()"
             )
         try:
             values = evaluate(pts)
@@ -326,9 +358,7 @@ def _cartesian_field_values(field: Any, points: np.ndarray) -> np.ndarray:
             values = np.stack([np.asarray(evaluate(p), dtype=float) for p in pts])
     out = np.asarray(values, dtype=np.float64)
     if out.shape != pts.shape:
-        raise ValueError(
-            f"Cartesian field returned shape {out.shape}; expected {pts.shape}"
-        )
+        raise ValueError(f"Cartesian field returned shape {out.shape}; expected {pts.shape}")
     if not np.all(np.isfinite(out)):
         raise ValueError("Cartesian field returned non-finite values while tabulating")
     return out
@@ -379,10 +409,21 @@ def tabulate_cartesian_field(
     br = bx * np.cos(pp) + by * np.sin(pp)
     bp = -bx * np.sin(pp) + by * np.cos(pp)
     return MgridData(
-        rmin=float(rmin), rmax=float(rmax), zmin=float(zmin), zmax=float(zmax),
-        ir=ir, jz=jz, kp=kp, nfp=nfp, nextcur=1, mgrid_mode="S",
-        coil_groups=(str(label),), raw_coil_cur=(1.0,),
-        br=br[None, ...], bp=bp[None, ...], bz=bz[None, ...],
+        rmin=float(rmin),
+        rmax=float(rmax),
+        zmin=float(zmin),
+        zmax=float(zmax),
+        ir=ir,
+        jz=jz,
+        kp=kp,
+        nfp=nfp,
+        nextcur=1,
+        mgrid_mode="S",
+        coil_groups=(str(label),),
+        raw_coil_cur=(1.0,),
+        br=br[None, ...],
+        bp=bp[None, ...],
+        bz=bz[None, ...],
     )
 
 
@@ -498,9 +539,7 @@ class MgridField:
         cur = data.raw_coil_cur if extcur is None else extcur
         cur_arr = jnp.atleast_1d(jnp.asarray(cur, dtype=jnp.float64)).reshape(-1)
         if int(cur_arr.shape[0]) != int(data.nextcur):
-            raise ValueError(
-                f"extcur length {int(cur_arr.shape[0])} does not match nextcur {data.nextcur}"
-            )
+            raise ValueError(f"extcur length {int(cur_arr.shape[0])} does not match nextcur {data.nextcur}")
         return cls(
             br=jnp.asarray(data.br),
             bp=jnp.asarray(data.bp),
@@ -537,8 +576,16 @@ class MgridField:
     ) -> "MgridField":
         """Tabulate an ESSOS/SIMSOPT/callable Cartesian field for a solve."""
         data = tabulate_cartesian_field(
-            field, rmin=rmin, rmax=rmax, zmin=zmin, zmax=zmax,
-            ir=ir, jz=jz, kp=kp, nfp=nfp, label=label,
+            field,
+            rmin=rmin,
+            rmax=rmax,
+            zmin=zmin,
+            zmax=zmax,
+            ir=ir,
+            jz=jz,
+            kp=kp,
+            nfp=nfp,
+            label=label,
         )
         return cls.from_mgrid_data(data, extcur=jnp.asarray([scale]))
 
@@ -574,6 +621,9 @@ jax.tree_util.register_dataclass(
 )
 
 __all__ = [
-    "MgridData", "MgridField", "read_mgrid", "tabulate_cartesian_field",
+    "MgridData",
+    "MgridField",
+    "read_mgrid",
+    "tabulate_cartesian_field",
     "write_mgrid",
 ]
