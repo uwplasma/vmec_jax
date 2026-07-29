@@ -72,6 +72,11 @@ VMEX does not require platform-selection environment variables for hardware
 detection. Its automatic policy keeps small solves, very high-mode stages,
 and implicit gradients on CPU when that is faster; the public solve and
 implicit APIs also accept an explicit ``device=`` argument.
+GPU free-boundary ladders keep the plasma iteration on the requested
+accelerator but solve the small dense NESTOR block on CPU, reusing one LU
+factor between full vacuum updates. Non-symmetric ladders use a CPU coarse
+rung to select the VMEC2000 branch before transferring all finer work and the
+final state to GPU.
 
 Development install from source:
 

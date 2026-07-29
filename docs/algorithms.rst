@@ -338,7 +338,9 @@ with the VMEC2000 cadence (``funct3d.f``):
 
 - the vacuum solve activates once :math:`\mathrm{fsqr}+\mathrm{fsqz} \le 10^{-3}`;
 - a **full** NESTOR solve runs when ``mod(iter2 - iter1, nvacskip) == 0``,
-  with cheaper incremental updates in between, and the cadence adapts as
+  factoring the dense potential matrix once; cheaper incremental updates
+  reuse that LU factor (VMEC2000's ``DGETRF``/``DGETRS`` split) while only
+  rebuilding the analytic right-hand side, and the cadence adapts as
 
   .. math::
 
@@ -367,8 +369,17 @@ It may be loaded from an ``mgrid`` file (trilinear interpolation weighted by
 :meth:`~vmex.core.mgrid.MgridField.from_cartesian_field`, which tabulates an
 ESSOS/SIMSOPT Biot--Savart object or any ``xyz -> B`` callable.  The resulting
 table and its current scale remain JAX-differentiable; tabulation itself does
-not retain coil-geometry derivatives.  Direct, interpolation-free ESSOS coil
+not retain coil-geometry derivatives. Direct, interpolation-free ESSOS coil
 derivatives use the virtual-casing residual below. vmex carries no coil code.
+
+On a GPU free-boundary run, the plasma iteration, mgrid interpolation, cached
+vacuum arrays, and final state remain on the accelerator. The dense NESTOR
+assembly/factor/solve is explicitly placed on CPU and its small boundary
+inputs/outputs are bridged inside the jitted cadence loop. This follows the
+VMEC++ accelerator decomposition and avoids the alternate LASYM branch seen
+with accelerator dense linear algebra. An explicitly requested GPU LASYM
+multigrid ladder therefore seeds only its coarsest rung on CPU, then transfers
+the converged branch to all finer GPU rungs.
 
 :class:`vmex.core.freeboundary_linear.NestorBorderedOperator` represents its
 linearization as ``[[A, B], [C, D]]`` with matrix-free plasma, vacuum, and

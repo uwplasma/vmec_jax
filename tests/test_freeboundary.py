@@ -289,6 +289,12 @@ def test_fused_vacuum_matches_reference(ab_inputs):
     assert _rel(out["mode_matrix"], mm_r) < 1e-10
     assert _rel(out["bvec_nonsing"], bv_r) < 1e-10
     assert float(out["ctor"]) == pytest.approx(float(ctor), rel=1e-12, abs=1e-14)
+    skipped = fused.skip(
+        state, rt_freeb, field, out["bvec_nonsing"],
+        out["mode_factor"], out["mode_pivots"],
+    )
+    assert _rel(skipped["potvac"], out["potvac"]) < 1e-10
+    assert _rel(skipped["bsqvac"], out["bsqvac"]) < 1e-10
 
 
 def test_vacuum_lane_never_consumes_a_sign_changed_state():
@@ -357,7 +363,9 @@ def test_vacuum_lane_never_consumes_a_sign_changed_state():
         carry=carry,
         rcon0=rt_freeb.rcon0, zcon0=rt_freeb.zcon0,
         bsqvac=seed["bsqvac"], rbsq=seed["rbsq"],
-        mode_matrix=seed["mode_matrix"], bvec_nonsing=seed["bvec_nonsing"],
+        mode_matrix=seed["mode_matrix"], mode_factor=seed["mode_factor"],
+        mode_pivots=seed["mode_pivots"],
+        bvec_nonsing=seed["bvec_nonsing"],
         potvac=seed["potvac"], surface_fields=seed["surface_fields"],
         ivac=int64(3), nvacskip=int64(1), nvskip0=int64(1),
         delbsq=jnp.asarray(1.0, dtype=dtype),
@@ -644,8 +652,13 @@ def test_cached_vacuum_executable_rechecks_dynamic_axis(monkeypatch):
     """A structural cache hit must still validate the current magnetic axis."""
     resolution = object()
     cached = (object(), object(), object())
+    axis_r = jnp.asarray([1.0])
+    axis_z = jnp.asarray([0.0])
+    device = next(iter(axis_r.devices()))
     monkeypatch.setitem(
-        FB._VACUUM_EXECUTABLE_CACHE, (resolution, 1, 2, 3, False), cached,
+        FB._VACUUM_EXECUTABLE_CACHE,
+        (resolution, 1, 2, 3, False, str(device), "None"),
+        cached,
     )
     seen = []
     monkeypatch.setattr(
@@ -653,11 +666,14 @@ def test_cached_vacuum_executable_rechecks_dynamic_axis(monkeypatch):
     )
     result = FB._vacuum_executables(
         resolution, mf=2, nf=3, signgs=1, wint=None, modes=None,
-        axis_r0="r", axis_z0="z",
+        axis_r0=axis_r, axis_z0=axis_z,
     )
 
     assert result is cached
-    assert seen == [(cached[0], "r", "z")]
+    assert len(seen) == 1
+    assert seen[0][0] is cached[0]
+    assert seen[0][1] is axis_r
+    assert seen[0][2] is axis_z
 
 
 def test_cli_missing_mgrid_fallback_warns(tmp_path):

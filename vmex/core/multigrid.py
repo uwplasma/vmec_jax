@@ -635,15 +635,31 @@ def solve_free_boundary_multigrid(
                 prefetch_handle = handle
 
         last_stage = not np.any(ns_arr[igrid + 1:] >= nsval)
-        target = _placement_device(device, resolution)
+        stage_device = device
+        requested_target = _placement_device(device, resolution)
+        # LASYM free-boundary trajectories can bifurcate from accelerator
+        # roundoff during vacuum turn-on.  Seed an explicitly requested GPU
+        # ladder on its coarsest CPU rung, then transfer the converged branch
+        # to every finer GPU rung.  This preserves the requested final
+        # placement and matches the VMEC2000 branch; AUTO already makes this
+        # measured small-rung choice on its own.
+        if (
+            bool(inp.lasym)
+            and igrid == 0
+            and np.any(ns_arr[igrid + 1:] > nsval)
+            and requested_target is not None
+            and requested_target.platform == "gpu"
+        ):
+            stage_device = "cpu"
+        target = _placement_device(stage_device, resolution)
         external_field = _put_numeric_leaves(external_field, target)
         state = _put_numeric_leaves(state, target)
         constraint_continuation = _put_numeric_leaves(
             constraint_continuation, target)
         if (vacuum_continuation is not None and target is not None
                 and any(getattr(vacuum_continuation, name) is not None for name in (
-                    "bsqvac", "rbsq", "mode_matrix", "bvec_nonsing", "potvac",
-                    "surface_fields",
+                    "bsqvac", "rbsq", "mode_matrix", "mode_factor",
+                    "mode_pivots", "bvec_nonsing", "potvac", "surface_fields",
                 ))):
             vacuum_continuation = replace(
                 vacuum_continuation,
@@ -651,6 +667,10 @@ def solve_free_boundary_multigrid(
                 rbsq=_put_numeric_leaves(vacuum_continuation.rbsq, target),
                 mode_matrix=_put_numeric_leaves(
                     vacuum_continuation.mode_matrix, target),
+                mode_factor=_put_numeric_leaves(
+                    vacuum_continuation.mode_factor, target),
+                mode_pivots=_put_numeric_leaves(
+                    vacuum_continuation.mode_pivots, target),
                 bvec_nonsing=_put_numeric_leaves(
                     vacuum_continuation.bvec_nonsing, target),
                 potvac=_put_numeric_leaves(vacuum_continuation.potvac, target),
@@ -658,7 +678,7 @@ def solve_free_boundary_multigrid(
                     vacuum_continuation.surface_fields, target),
             )
         try:
-            with device_context(device, resolution):
+            with device_context(stage_device, resolution):
                 stage_result = _solve_free_boundary_stage(
                     inp, external_field=external_field, resolution=resolution,
                     ftol=float(ftol_arr[igrid]),
@@ -673,14 +693,14 @@ def solve_free_boundary_multigrid(
                     precon_type=precon_type,
                     prec2d_threshold=prec2d_threshold, prec2d=prec2d,
                     jacobian_retries=jacobian_retries,
-                    use_fft=_resolve_use_fft(use_fft, device, resolution),
+                    use_fft=_resolve_use_fft(use_fft, stage_device, resolution),
                     constraint_continuation=(
                         constraint_continuation if same_grid else None),
                     reuse_vacuum_cache=bool(same_grid),
                     residual_continuation=residual_continuation,
                     emit_legend=(igrid == 0),
                     prefetch_compile=prefetch_compile,
-                    prefetch_device=device,
+                    prefetch_device=stage_device,
                 )
         except BaseException:
             # A failed stage propagates with no live background compiler:

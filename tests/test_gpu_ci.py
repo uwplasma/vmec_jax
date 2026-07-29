@@ -273,6 +273,7 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
     output = {}
     active_platform = ["cpu"]
     vacuum_devices = {}
+    solve_devices = {}
     stage_devices = {"cpu": [], "gpu": []}
     vacuum_step = freeboundary._vacuum_step
     solve_stage = freeboundary._solve_free_boundary_stage
@@ -280,11 +281,15 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
     def recording_vacuum_step(*args, **kwargs):
         value = vacuum_step(*args, **kwargs)
         fb = kwargs["fb"]
+        solve_device = kwargs["fused_vac"].solve_device
+        solve_devices[active_platform[0]] = (
+            None if solve_device is None else solve_device.platform
+        )
         vacuum_devices[active_platform[0]] = {
             _platform(x)
             for name in (
-                "potvac", "mode_matrix", "bvec_nonsing", "bsqvac",
-                "surface_fields",
+                "potvac", "mode_matrix", "mode_factor", "mode_pivots",
+                "bvec_nonsing", "bsqvac", "surface_fields",
             )
             for x in jax.tree.leaves(getattr(fb, name))
         }
@@ -305,8 +310,8 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
             record["vacuum"] = {
                 _platform(x)
                 for name in (
-                    "bsqvac", "rbsq", "mode_matrix", "bvec_nonsing",
-                    "potvac", "surface_fields",
+                    "bsqvac", "rbsq", "mode_matrix", "mode_factor",
+                    "mode_pivots", "bvec_nonsing", "potvac", "surface_fields",
                 )
                 for x in jax.tree.leaves(getattr(vacuum, name))
             }
@@ -335,10 +340,15 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
         assert "VACUUM PRESSURE TURNED ON" in output[platform]
         assert _platform(results[platform].state.R_cos) == platform
         assert vacuum_devices[platform] == {platform}
-        assert stage_devices[platform][0]["field"] == {platform}
-        assert stage_devices[platform][1] == {
-            "field": {platform}, "state": {platform}, "vacuum": {platform},
-        }
+    assert stage_devices["cpu"][0]["field"] == {"cpu"}
+    assert stage_devices["cpu"][1] == {
+        "field": {"cpu"}, "state": {"cpu"}, "vacuum": {"cpu"},
+    }
+    assert stage_devices["gpu"][0]["field"] == {"cpu"}
+    assert stage_devices["gpu"][1] == {
+        "field": {"gpu"}, "state": {"gpu"}, "vacuum": {"gpu"},
+    }
+    assert solve_devices == {"cpu": None, "gpu": "cpu"}
     np.testing.assert_allclose(
         [results["gpu"].fsqr, results["gpu"].fsqz, results["gpu"].fsql],
         [results["cpu"].fsqr, results["cpu"].fsqz, results["cpu"].fsql],

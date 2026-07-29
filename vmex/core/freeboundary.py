@@ -50,6 +50,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax import lax
+from jax.scipy import linalg as jsp_linalg
 
 from . import profiles as _profiles
 from .device import AUTO, _placement_device, _put_numeric_leaves, device_context
@@ -82,7 +83,7 @@ from .solver import (
 )
 from .transforms import register_pytree_dataclass as _register
 from .vacuum import (
-    VacuumBasis, VacuumBoundary, make_vacuum_solver, vacuum_basis,
+    VacuumBasis, VacuumBoundary, _analytic_terms, make_vacuum_solver, vacuum_basis,
     vacuum_channels,
 )
 
@@ -426,6 +427,8 @@ class FreeBoundaryState:
     rbsq: np.ndarray | None = None
     # NESTOR cache (amatsav / bvecsav of scalpot.f):
     mode_matrix: Any = None
+    mode_factor: Any = None
+    mode_pivots: Any = None
     bvec_nonsing: Any = None
     potvac: np.ndarray | None = None
     surface_fields: Any = None
@@ -732,14 +735,13 @@ def _external_field_channels_jax(boundary: VacuumBoundary, br, bp, bz, *,
 
 @dataclass(frozen=True, eq=False)
 class FusedVacuum:
-    """Jitted whole-pipeline NESTOR update closures (host-side full/skip choice).
+    """Jitted whole-pipeline NESTOR update closures.
 
     ``full(state, rt, field)`` and ``skip(state, rt, field, bvec_nonsing,
-    mode_matrix)`` each run the ENTIRE per-iteration vacuum update on-device —
-    plasma scalars, boundary synthesis, mgrid + axis-current external field,
-    NESTOR solve, surface field and the DEL-BSQ / banner reductions — returning
-    a dict of device arrays.  Composing them into one jitted program removes the
-    ~27 NumPy<->JAX host round-trips the step-by-step host driver incurred.
+    mode_factor, mode_pivots)`` each run the full per-iteration vacuum update
+    as one jitted program. On GPU, only NESTOR's small dense
+    assembly/factor/solve is CPU-sharded; plasma geometry, external field,
+    surface fields, and the returned cache stay on the accelerator.
 
     ``cache_key`` is the owning ``_VACUUM_EXECUTABLE_CACHE`` key (set by
     :func:`_vacuum_executables`): the prefetch registry uses it to tell apart
@@ -751,10 +753,12 @@ class FusedVacuum:
     full: Any
     skip: Any
     cache_key: Any = None
+    solve_device: Any = None
 
 
 def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
-                       solver_vac, axis_r0, axis_z0) -> FusedVacuum:
+                       solver_vac, axis_r0, axis_z0, solve_device=None,
+                       output_device=None) -> FusedVacuum:
     """Build the jitted full/skip whole-pipeline vacuum updates for one basis."""
     axis_tb = _axis_current_tables(basis)
     _assert_static_filament_topology(basis, axis_r0, axis_z0)
@@ -765,6 +769,35 @@ def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
     wint2 = jnp.asarray(np.asarray(basis.wint, dtype=float).reshape(shape))
     two_pi = 2.0 * float(np.pi)
     sgn = float(int(signgs))
+
+    def _move(tree, device):
+        if device is None:
+            return tree
+        return jax.tree.map(lambda x: jax.device_put(x, device), tree)
+
+    def _solve_full(boundary, bexni):
+        boundary, bexni = _move((boundary, bexni), solve_device)
+        mode_matrix, rhs, bvec_nonsing, _gsource, _grpmn = (
+            solver_vac.assemble(boundary, bexni)
+        )
+        mode_factor, mode_pivots = jsp_linalg.lu_factor(mode_matrix)
+        potvac = jsp_linalg.lu_solve((mode_factor, mode_pivots), rhs)
+        return _move(
+            (potvac, mode_matrix, mode_factor, mode_pivots, bvec_nonsing),
+            output_device,
+        )
+
+    def _solve_skip(boundary, bexni, bvec_nonsing, mode_factor, mode_pivots):
+        boundary, bexni, bvec_nonsing, mode_factor, mode_pivots = _move(
+            (boundary, bexni, bvec_nonsing, mode_factor, mode_pivots),
+            solve_device,
+        )
+        bvec_analytic, _ = _analytic_terms(
+            boundary, bexni, basis, signgs, include_kernel=False
+        )
+        rhs = bvec_nonsing + bvec_analytic
+        potvac = jsp_linalg.lu_solve((mode_factor, mode_pivots), rhs)
+        return _move(potvac, output_device)
 
     def _pipeline(field, boundary, ctor, axis_r, axis_z):
         br_c, bp_c, bz_c = field.b_cyl(boundary.R, phi_geom, boundary.Z)
@@ -792,8 +825,9 @@ def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
             rmnc, zmns, rmns, zmnc, modes=modes, basis=basis
         )
         ext = _pipeline(field, boundary, ctor, axis_r, axis_z)
-        potvac, mode_matrix, bvec_nonsing, _rhs, _gsrc, _grp = solver_vac.full(
-            boundary, ext["bexni"]
+        (potvac, mode_matrix, mode_factor, mode_pivots,
+         bvec_nonsing) = _solve_full(
+            boundary, ext["bexni"],
         )
         bsqvac, bsubu_s, bsubv_s, bsupu_s, bsupv_s = vacuum_channels(
             basis=basis, potvac=potvac, bexu=ext["bexu"], bexv=ext["bexv"],
@@ -806,22 +840,23 @@ def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
             "bsqvac": bsqvac, "ctor": ctor, "rbtor": rbtor, "potvac": potvac,
             "rbsq": (bsqvac + pres_ns * jnp.asarray(rt.presf_ns_scale))
                     * boundary.R / jnp.asarray(rt.setup.hs),
-            "mode_matrix": mode_matrix, "bvec_nonsing": bvec_nonsing,
+            "mode_matrix": mode_matrix, "mode_factor": mode_factor,
+            "mode_pivots": mode_pivots, "bvec_nonsing": bvec_nonsing,
             "surface_fields": (bsubu_s, bsubv_s, bsupu_s, bsupv_s),
             "delbsq_num": delbsq_num, "delbsq_den": delbsq_den,
             "bsubuvac": bsubuvac, "bsubvvac": bsubvvac,
         }
 
     def _skip(state: SpectralState, rt: SolverRuntime, field: MgridField,
-              bvec_nonsing, mode_matrix):
+              bvec_nonsing, mode_factor, mode_pivots):
         ctor, rbtor, axis_r, axis_z, bsq3, pres_ns = _vacuum_scalars(state, rt)
         rmnc, zmns, rmns, zmnc = _edge_fourier_jax(state, rt)
         boundary = _boundary_from_coefficients_jax(
             rmnc, zmns, rmns, zmnc, modes=modes, basis=basis
         )
         ext = _pipeline(field, boundary, ctor, axis_r, axis_z)
-        potvac, _rhs = solver_vac.skip(
-            boundary, ext["bexni"], bvec_nonsing, mode_matrix
+        potvac = _solve_skip(
+            boundary, ext["bexni"], bvec_nonsing, mode_factor, mode_pivots
         )
         bsqvac, bsubu_s, bsubv_s, bsupu_s, bsupv_s = vacuum_channels(
             basis=basis, potvac=potvac, bexu=ext["bexu"], bexv=ext["bexv"],
@@ -839,7 +874,9 @@ def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
             "bsubuvac": bsubuvac, "bsubvvac": bsubvvac,
         }
 
-    return FusedVacuum(full=jax.jit(_full), skip=jax.jit(_skip))
+    return FusedVacuum(
+        full=jax.jit(_full), skip=jax.jit(_skip), solve_device=solve_device,
+    )
 
 
 def _assert_static_filament_topology(basis: VacuumBasis, axis_r0, axis_z0) -> None:
@@ -887,13 +924,15 @@ def _assert_static_filament_topology(basis: VacuumBasis, axis_r0, axis_z0) -> No
 #: ``solver._static_tables``: repeated free-boundary solves at one resolution
 #: (the warm benchmark's second solve, hot restarts, optimization iterates)
 #: reuse ONE compiled NESTOR fused program instead of recompiling the
-#: greenf/analyt/solve kernels (~5 s on CPU) every solve.  Keyed on the
-#: hashable ``(resolution, signgs, mf, nf)``; the boundary/profile/mgrid values
+#: greenf/analyt/solve kernels (~5 s on CPU) every solve. Keyed on
+#: resolution/sign/device structure; the boundary/profile/mgrid values
 #: enter the jitted program as traced arguments, so one executable serves every
 #: solve at a given resolution.  The third element is the jitted steady-state
 #: free-boundary loop (:func:`_make_vacuum_lane`) built over the same fused
 #: vacuum closures.
-_VACUUM_EXECUTABLE_CACHE: dict[tuple[Any, int, int, int], tuple[VacuumBasis, FusedVacuum, Any]] = {}
+_VACUUM_EXECUTABLE_CACHE: dict[
+    tuple[Any, ...], tuple[VacuumBasis, FusedVacuum, Any]
+] = {}
 
 
 def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
@@ -907,7 +946,14 @@ def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
     kernel into its traced body, so the two kernels must never share an
     executable.
     """
-    key = (resolution, int(signgs), int(mf), int(nf), bool(use_fft))
+    plasma_device = next(iter(jnp.asarray(axis_r0).devices()))
+    solve_device = (
+        jax.devices("cpu")[0] if plasma_device.platform == "gpu" else None
+    )
+    key = (
+        resolution, int(signgs), int(mf), int(nf), bool(use_fft),
+        str(plasma_device), str(solve_device),
+    )
     cached = _VACUUM_EXECUTABLE_CACHE.get(key)
     if cached is not None:
         _assert_static_filament_topology(cached[0], axis_r0, axis_z0)
@@ -920,7 +966,8 @@ def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
     solver_vac = make_vacuum_solver(basis, signgs=int(signgs))
     fused = replace(_make_fused_vacuum(
         basis, modes=modes, signgs=int(signgs), solver_vac=solver_vac,
-        axis_r0=axis_r0, axis_z0=axis_z0,
+        axis_r0=axis_r0, axis_z0=axis_z0, solve_device=solve_device,
+        output_device=plasma_device if solve_device is not None else None,
     ), cache_key=key)
     lane = _make_vacuum_lane(fused, use_fft=use_fft)
     _VACUUM_EXECUTABLE_CACHE[key] = (basis, fused, lane)
@@ -941,23 +988,32 @@ def _vacuum_step(
 ) -> Array:
     """One NESTOR update (``vacuum.f``): returns ``bsqvac`` on the grid (device).
 
-    The whole update — plasma scalars, boundary synthesis, mgrid + axis-current
-    external field, NESTOR solve, surface field and DEL-BSQ reduction — runs as
-    ONE jitted program (:class:`FusedVacuum`).  Only a few diagnostic scalars are
-    pulled to the host (screen line + turn-on banner); ``bsqvac`` and the cached
-    ``amatsav``/``bvecsav`` matrices stay on-device across iterations.
+    The whole update runs as one jitted program (:class:`FusedVacuum`). On a
+    GPU lane the dense NESTOR block is CPU-sharded, while ``bsqvac`` and the
+    cached matrix/factor/RHS stay on the selected plasma device across
+    iterations. Only a few diagnostic scalars reach Python.
     """
-    if int(ivacskip) == 0 or fb.mode_matrix is None:
+    if (
+        int(ivacskip) == 0
+        or fb.mode_matrix is None
+        or fb.mode_factor is None
+        or fb.mode_pivots is None
+    ):
         if fused_vac.cache_key is None:
             out = fused_vac.full(carry.state, rt, field)
         else:
             out = _call_lane(("fb_vacfull", fused_vac.cache_key),
                              fused_vac.full, (carry.state, rt, field))
         fb.mode_matrix = out["mode_matrix"]
+        fb.mode_factor = out["mode_factor"]
+        fb.mode_pivots = out["mode_pivots"]
         fb.bvec_nonsing = out["bvec_nonsing"]
         fb.full_updates += 1
     else:
-        out = fused_vac.skip(carry.state, rt, field, fb.bvec_nonsing, fb.mode_matrix)
+        out = fused_vac.skip(
+            carry.state, rt, field, fb.bvec_nonsing,
+            fb.mode_factor, fb.mode_pivots,
+        )
     bsqvac = out["bsqvac"]
     fb.rbsq = out["rbsq"]
     fb.potvac = out["potvac"]
@@ -1143,6 +1199,8 @@ def _prefetch_stage_lane_set(
             rcon0=rt_freeb.rcon0, zcon0=rt_freeb.zcon0,
             bsqvac=zeros_edge, rbsq=z(out["rbsq"]),
             mode_matrix=z(out["mode_matrix"]),
+            mode_factor=z(out["mode_factor"]),
+            mode_pivots=z(out["mode_pivots"]),
             bvec_nonsing=z(out["bvec_nonsing"]), potvac=z(out["potvac"]),
             surface_fields=tuple(z(s) for s in out["surface_fields"]),
             ivac=jnp.asarray(1, dtype=int_dtype),
@@ -1306,6 +1364,8 @@ class _VacuumLoopCarry:
     bsqvac: Array               # NESTOR 0.5*|B|^2 on the boundary grid
     rbsq: Array                 # carried forces.f edge-pressure product
     mode_matrix: Array          # amatsav (scalpot.f)
+    mode_factor: Array          # DGETRF factors of amatsav
+    mode_pivots: Array
     bvec_nonsing: Array         # bvecsav (scalpot.f)
     potvac: Array
     surface_fields: tuple[Array, Array, Array, Array]
@@ -1364,18 +1424,21 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
             return (out["bsqvac"], out["rbsq"], out["ctor"], out["rbtor"], out["potvac"],
                     out["surface_fields"],
                     out["delbsq_num"], out["delbsq_den"],
-                    out["mode_matrix"], out["bvec_nonsing"])
+                    out["mode_matrix"], out["mode_factor"],
+                    out["mode_pivots"], out["bvec_nonsing"])
 
         def _skip(_):
             out = fused.skip(vac_state, rt_vac, field, vc.bvec_nonsing,
-                             vc.mode_matrix)
+                             vc.mode_factor, vc.mode_pivots)
             return (out["bsqvac"], out["rbsq"], out["ctor"], out["rbtor"], out["potvac"],
                     out["surface_fields"],
                     out["delbsq_num"], out["delbsq_den"],
-                    vc.mode_matrix, vc.bvec_nonsing)
+                    vc.mode_matrix, vc.mode_factor,
+                    vc.mode_pivots, vc.bvec_nonsing)
 
         (bsqvac, rbsq, ctor, rbtor, potvac, surface_fields,
-         num, den, mode_matrix, bvec_nonsing) = lax.cond(
+         num, den, mode_matrix, mode_factor, mode_pivots,
+         bvec_nonsing) = lax.cond(
              full, _full, _skip, None)
 
         delbsq = jnp.where(den != 0.0, num / den, vc.delbsq)
@@ -1389,7 +1452,9 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
         return _VacuumLoopCarry(
             carry=new_carry, rcon0=rcon0, zcon0=zcon0, bsqvac=bsqvac,
             rbsq=rbsq,
-            mode_matrix=mode_matrix, bvec_nonsing=bvec_nonsing, potvac=potvac,
+            mode_matrix=mode_matrix, mode_factor=mode_factor,
+            mode_pivots=mode_pivots, bvec_nonsing=bvec_nonsing,
+            potvac=potvac,
             surface_fields=surface_fields,
             ivac=ivac, nvacskip=nvacskip, nvskip0=vc.nvskip0,
             delbsq=delbsq, delbsq_traj=delbsq_traj, ctor=ctor, rbtor=rbtor,
@@ -1627,6 +1692,10 @@ def _solve_free_boundary_stage(
             rbtor=float(vacuum_continuation.rbtor),
             mode_matrix=(vacuum_continuation.mode_matrix
                          if reuse_vacuum_cache else None),
+            mode_factor=(vacuum_continuation.mode_factor
+                         if reuse_vacuum_cache else None),
+            mode_pivots=(vacuum_continuation.mode_pivots
+                         if reuse_vacuum_cache else None),
             bvec_nonsing=(vacuum_continuation.bvec_nonsing
                           if reuse_vacuum_cache else None),
             potvac=(vacuum_continuation.potvac
@@ -1763,6 +1832,8 @@ def _solve_free_boundary_stage(
             )
             # The NESTOR matrix/vector were built for the discarded axis.
             fb.mode_matrix = None
+            fb.mode_factor = None
+            fb.mode_pivots = None
             fb.bvec_nonsing = None
             fb.potvac = None
             rt_initial = rt_freeb if vacuum_active else rt_fixed
@@ -1802,7 +1873,9 @@ def _solve_free_boundary_stage(
                 _emit_due(final=False)
                 continue
             elif (fb.turned_on and not fb.banner_pending
-                  and fb.mode_matrix is not None):
+                  and fb.mode_matrix is not None
+                  and fb.mode_factor is not None
+                  and fb.mode_pivots is not None):
                 # The whole post-turn-on steady state runs as ONE jitted
                 # while_loop (vacuum cadence + damping + iteration, traced).
                 zeros_sur = jnp.zeros_like(rt_freeb.bsqvac_edge)
@@ -1811,7 +1884,9 @@ def _solve_free_boundary_stage(
                     rcon0=rt_freeb.rcon0, zcon0=rt_freeb.zcon0,
                     bsqvac=rt_freeb.bsqvac_edge,
                     rbsq=jnp.asarray(fb.rbsq, dtype=dtype),
-                    mode_matrix=fb.mode_matrix, bvec_nonsing=fb.bvec_nonsing,
+                    mode_matrix=fb.mode_matrix, mode_factor=fb.mode_factor,
+                    mode_pivots=fb.mode_pivots,
+                    bvec_nonsing=fb.bvec_nonsing,
                     potvac=fb.potvac,
                     surface_fields=((zeros_sur,) * 4 if fb.surface_fields is None
                                     else fb.surface_fields),
@@ -1836,6 +1911,8 @@ def _solve_free_boundary_stage(
                 fb.bsqvac = vc.bsqvac
                 fb.rbsq = vc.rbsq
                 fb.mode_matrix = vc.mode_matrix
+                fb.mode_factor = vc.mode_factor
+                fb.mode_pivots = vc.mode_pivots
                 fb.bvec_nonsing = vc.bvec_nonsing
                 fb.potvac = vc.potvac
                 fb.surface_fields = vc.surface_fields

@@ -165,9 +165,10 @@ A4000, jax cuda12 — different hosts, so read each column on its own terms):
      - 151 s
 
 The headline: **a fast desktop CPU beats the A4000 GPU on every production
-workflow, even at ns = 201.** Forward solves are close (the GPU is
-iteration-competitive at this size — free-boundary NESTOR runs 13.9 ms/iter
-on the GPU), but the gradient pipeline is launch-bound on an accelerator,
+workflow, even at ns = 201.** Forward solves are close. Free-boundary GPU
+runs use a hybrid decomposition: plasma iterations stay on the accelerator,
+while the small dense NESTOR block runs on CPU with a reused LU factor. The
+gradient pipeline is launch-bound on an accelerator,
 which is why high-level optimization uses
 :func:`vmex.core.device.resolve_implicit_device` to pin implicit-gradient work
 to the CPU by default. Low-level :func:`vmex.core.implicit.run` follows JAX

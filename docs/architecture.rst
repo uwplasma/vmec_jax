@@ -193,6 +193,13 @@ user-pinned JAX platform.  The recommendation is applied only when its
 platform is available. :func:`~vmex.core.device.device_context` wraps a stage
 in the corresponding ``jax.default_device``.
 
+Free-boundary accelerator runs use one deliberate hybrid exception: plasma
+iterations and persistent state follow the selected device, while the dense
+NESTOR block runs on CPU and reuses its LU factor between full updates.
+Explicitly requested GPU LASYM ladders also seed the coarsest rung on CPU to
+select the VMEC2000 branch before finer rungs move to GPU; the returned state
+still resides on the requested accelerator.
+
 The optimization path is different:
 :func:`~vmex.core.device.resolve_implicit_device` **pins high-level
 optimization's implicit-gradient work to the CPU by default when VMEX owns
