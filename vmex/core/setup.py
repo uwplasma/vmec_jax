@@ -5,10 +5,8 @@ the first iteration.
 VMEC2000 counterparts
 ---------------------
 - ``Sources/Initialization_Cleanup/profil1d.f`` — radial grids (``hs``,
-  ``sqrts``, ``shalf``, ``sm/sp``), the 1D flux profiles ``phips/chips`` and
-  ``phipf/chipf``, ``iotas/iotaf`` (``piota``), the enclosed-current profile
-  ``icurv`` (``pcurr`` + ``CURTOR`` scaling) and the ``mass`` profile
-  (``pmass`` in internal ``mu0*Pa`` units), plus ``lamscale``:
+  ``sqrts``, ``shalf``, ``sm/sp``) and the 1D profiles ``phips/chips``,
+  ``phipf/chipf``, ``iotas/iotaf``, ``icurv``, ``mass``, ``lamscale``:
   :func:`radial_grids`, :func:`flux_profiles`.
 - ``Sources/Initialization_Cleanup/magnetic_fluxes.f`` — ``torflux``/
   ``torflux_deriv`` from the ``APHI`` polynomial and ``polflux_deriv =
@@ -16,14 +14,13 @@ VMEC2000 counterparts
 - ``Sources/Input_Output/readin.f`` — boundary-coefficient processing: the
   ``lasym`` ``delta`` rotation, conversion to the internal ``rbcc/rbss/...``
   blocks, the Jacobian-sign check ``lflip = (rtest*ztest < 0)`` with
-  ``signgs = -1``, and the ``lconm1`` m = 1 constraint
-  (``rbss = (rbss + zbcs)/2`` etc.): :func:`boundary_from_input`.
+  ``signgs = -1``, and the ``lconm1`` m = 1 constraint:
+  :func:`boundary_from_input`.
 - ``Sources/Initialization_Cleanup/init_geometry.f90`` — ``flip_theta``
   (``theta -> pi - theta`` sign factors ``(-1)**m``).
-- ``Sources/Initialization_Cleanup/profil3d.f`` — the interior guess: odd/even
-  ``scalxc`` factors and the interpolation of boundary + axis into the volume
-  (``rmn(js,m>0) = rmn_bdy * sqrts(js)**m``; ``rmn(js,m=0) = s*rmn_bdy +
-  (1-s)*axis``): :func:`interior_guess`, :func:`run_setup`.
+- ``Sources/Initialization_Cleanup/profil3d.f`` — odd/even ``scalxc`` factors
+  and the interior interpolation of boundary + axis into the volume:
+  :func:`interior_guess`, :func:`run_setup`.
 - ``Sources/Initialization_Cleanup/guess_axis.f`` — the axis re-guess grid
   search used after a first bad-Jacobian start: :func:`guess_axis`.
 
@@ -151,19 +148,11 @@ class RunSetup:
     :func:`vmex.core.transforms.odd_m_sqrt_s_scaling`).
 
     1D profiles (``profil1d.f``, half mesh unless noted; index 0 = axis slot
-    is zeroed exactly as in Fortran):
-
-    - ``phips/chips``: ``torflux_edge * torflux_deriv/polflux_deriv(s_half)``
-      with ``torflux_edge = signgs*phiedge/(2*pi)`` (normalized by
-      ``torflux(1)``); ``chips`` (and ``iotas``) are negated when ``lflip``.
-    - ``iotas``: ``piota(min(torflux(s_half), 1))``; ``iotaf/phipf/chipf``:
-      the full-mesh companions (*not* flipped — profil1d.f quirk).
-    - ``icurv``: ``Itor * pcurr(tf)`` with ``Itor = signgs*mu0*curtor /
-      (2*pi*pcurr(1))`` (zero when ``|pcurr(1)| <= eps*|curtor|``).  Computed
-      unconditionally; consumed by ``add_fluxes`` only when ``ncurr = 1``.
-    - ``mass``: ``mu0*pres_scale*pmass(tf) * (|phips|*r00)**gamma`` with the
-      ``spres_ped`` clamp (``pmass(spres_ped)`` for ``s_half > spres_ped``).
-    - ``lamscale = sqrt(hs * sum(phips(2:ns)**2))``.
+    is zeroed exactly as in Fortran): ``phips/chips/iotas/icurv/mass``, the
+    full-mesh companions ``phipf/chipf/iotaf`` and ``lamscale`` — formulas
+    and flip/clamp conventions in :func:`flux_profiles`.  ``icurv`` is
+    computed unconditionally; ``add_fluxes`` consumes it only when
+    ``ncurr = 1``.
 
     Boundary/axis: ``boundary_R_cos/...`` per :class:`ProcessedBoundary`;
     ``raxis_c/raxis_s/zaxis_c/zaxis_s`` are the *physical* axis coefficients
@@ -237,9 +226,7 @@ _register(RunSetup, meta=("signgs", "lflip", "lasym", "lthreed", "lconm1", "ncur
 def radial_grids(ns: int, *, dtype=jnp.float64) -> RadialGrids:
     """Build the VMEC radial meshes (VMEC2000: ``profil1d.f``).
 
-    ``s_full(i) = hs*(i-1)``, ``s_half(i) = hs*|i-1.5|`` (1-based ``i``),
-    ``sqrts/shalf`` their square roots (``sqrts(ns) = 1`` exactly), and the
-    ``sm/sp`` odd-m interpolation weights (see :class:`RadialGrids`).
+    Mesh definitions and axis/edge conventions: see :class:`RadialGrids`.
     """
     ns = int(ns)
     if ns < 2:

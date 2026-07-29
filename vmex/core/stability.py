@@ -1,4 +1,4 @@
-"""Differentiable ideal-MHD stability objectives (R26h.h1).
+"""Differentiable ideal-MHD stability objectives.
 
 Infinite-n ideal-ballooning growth rate as a pure, traceable function of a
 converged ``(SpectralState, SolverRuntime)`` pair — the JAX analogue of the

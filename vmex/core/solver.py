@@ -37,11 +37,11 @@ The per-iteration ``(fsqr, fsqz, fsql, fsqr1, fsqz1, fsql1, ...)`` trajectory
 is recorded in a preallocated buffer carried through the loop, so the two
 lanes produce identical histories.
 
-Structural executable reuse (2026-07-09, Phase 2 item (1))
-------------------------------------------------------------------
+Structural executable reuse
+---------------------------
 :class:`SolverRuntime` is a registered pytree passed as an *argument* to the
-module-level jitted lanes :func:`_while_lane`/:func:`_block_lane` (previously
-per-runtime closures cached by object identity).  Array-valued run data
+module-level jitted lanes :func:`_while_lane`/:func:`_block_lane`.
+Array-valued run data
 (:class:`~vmex.core.setup.RunSetup`, ``rcon0/zcon0``) are pytree data;
 the hashable configuration (:class:`~vmex.core.fourier.Resolution`,
 ``gamma/tcon0/ftol/max_iterations/time_step0/nstep/jmax``) is pytree meta;
@@ -73,16 +73,15 @@ jax.config.update("jax_enable_x64", True)  # float64 mandatory (§7.7)
 def _harden_compilation_cache() -> None:
     """Idempotent persistent compile-cache setup at ``core.solver`` import.
 
-    benchmarks/gpu_baseline.json pitfall (2026-07-09): launching Python from a
-    cwd that contains the repo checkout can resolve ``vmex`` as a
-    *namespace* package, so ``vmex/__init__.py`` — which configures the
-    persistent XLA compilation cache — never runs and every ``solve()`` pays a
-    full recompile (~7 s vs ~1.7 s warm on CUDA for solovev).  This module
-    always executes on any core solve path, so the cache policy is re-applied
-    here: warn on the shadowed import, then configure the ``_compat`` cache
-    defaults *only* when neither the user (``JAX_COMPILATION_CACHE_DIR`` env /
-    an explicit ``jax.config.update``) nor ``vmex/__init__`` already set a
-    cache directory.
+    Launching Python from a cwd containing the repo checkout can resolve
+    ``vmex`` as a *namespace* package, so ``vmex/__init__.py`` — which
+    configures the persistent XLA compilation cache — never runs and every
+    ``solve()`` pays a full recompile.  This module always executes on any
+    core solve path, so the cache policy is re-applied here: warn on the
+    shadowed import, then configure the ``_compat`` cache defaults *only*
+    when neither the user (``JAX_COMPILATION_CACHE_DIR`` env / an explicit
+    ``jax.config.update``) nor ``vmex/__init__`` already set a cache
+    directory.
     """
     import os
     import sys
@@ -368,7 +367,7 @@ def _static_tables(resolution: Resolution):
     weights).  The lru_cache guarantees that two runtimes built from the same
     ``Resolution`` share the *identical* table objects, so the runtime pytree
     treedefs compare equal and ``jax.jit`` reuses one executable across
-    solves with different boundary/profile values (Phase 2 item (1)).
+    solves with different boundary/profile values.
     """
     modes = mode_table(resolution.mpol, resolution.ntor)
     trig = trig_tables(resolution)
@@ -1725,13 +1724,12 @@ def _while_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
 def _block_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
     """One ``BLOCK_SIZE``-iteration ``lax.scan`` block (CLI lane), structural.
 
-    ``donate_argnums=(0,)`` (R16.3): the CLI lane drives the solve as a Python
-    loop ``carry = _block_lane(carry, rt)``, so the input carry is dead after
-    each call — donating it lets XLA alias the (multi-array) carry's output
-    onto the input buffers instead of allocating a fresh copy per block,
-    removing the transient 2x-carry high-water mark.  ``rt`` (argument 1) is
-    reused across blocks and is *not* donated.  Numerically identical to the
-    non-donated lane.
+    ``donate_argnums=(0,)``: the CLI lane drives the solve as a Python loop
+    ``carry = _block_lane(carry, rt)``, so the input carry is dead after each
+    call — donating it lets XLA alias the carry's output onto the input
+    buffers, removing the transient 2x-carry high-water mark.  ``rt``
+    (argument 1) is reused across blocks and is *not* donated.  Numerically
+    identical to the non-donated lane.
     """
     body = _make_body(rt)
     return lax.scan(lambda cc, _: (body(cc), None), carry, None, length=BLOCK_SIZE)[0]
@@ -2136,7 +2134,6 @@ def solve(
     real contraction. Explicit ``True``/``False`` always wins. The implicit
     API sets it False internally so its equilibrium and Jacobian share one
     lower-memory real-contraction executable.
-
 
     ``precon_type`` (``"NONE"`` default) with a finite ``prec2d_threshold`` —
     or an explicit ``prec2d``

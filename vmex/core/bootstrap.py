@@ -1,64 +1,48 @@
-"""Differentiable Redl (2021) bootstrap current (R26.g, steps 1-2).
-
-Implements the pure-formula layer and the two geometry lanes of
-``notes_r26g_redl_spec.md``:
+"""Differentiable Redl (2021) bootstrap current (see ``notes_r26g_redl_spec.md``).
 
 - :func:`compute_trapped_fraction` — effective trapped fraction, epsilon and
-  the flux-surface averages ``<B^2>``, ``<1/B>`` from ``|B|``/``sqrt(g)`` on
-  an angular grid.  Differentiable rewrite of simsopt
+  the flux-surface averages ``<B^2>``, ``<1/B>`` from ``|B|``/``sqrt(g)``.
+  Differentiable rewrite of simsopt
   ``simsopt.mhd.bootstrap.compute_trapped_fraction`` (fixed-order
   Gauss-Legendre lambda quadrature instead of adaptive ``scipy.integrate.quad``;
   plain grid max/min instead of spline-refined extrema; double-where guard on
   the ``sqrt(1 - lambda B)`` near-singularity so reverse-mode AD stays finite).
 - :func:`j_dot_B_redl` — the Redl et al., Phys. Plasmas 28, 022502 (2021)
   ``<J.B>`` formula (eqs. 10-16, 19-21 with the Sauter 18b-18e
-  collisionalities), transcribed verbatim from simsopt
-  ``j_dot_B_Redl`` including the quasisymmetry isomorphism as simsopt applies
-  it: ``iota -> iota - nfp*helicity_n`` everywhere iota appears, ``G``
-  unshifted (spec section 3 note).
+  collisionalities), transcribed verbatim from simsopt ``j_dot_B_Redl``
+  including its quasisymmetry isomorphism: ``iota -> iota - nfp*helicity_n``
+  everywhere iota appears, ``G`` unshifted.
 - :class:`KineticProfiles` / :func:`profile_value_and_dds` — polynomial
   ``ne/Te/Ti/Zeff`` profiles in ``s`` (lowest order first, simsopt
   ``ProfilePolynomial`` convention), value + analytic d/ds via Horner.
 - :func:`redl_geometry_from_wout` — parity lane mirroring simsopt
-  ``RedlGeomVmec.__call__``: half-mesh linear interpolation of
-  ``iotas/bvco/buco/gmnc/bmnc`` onto the requested surfaces, cosine synthesis
-  of ``|B|``/``sqrt(g)`` on a uniform ``(theta, phi)`` grid, then
-  :func:`compute_trapped_fraction`.
+  ``RedlGeomVmec.__call__`` (half-mesh interpolation of
+  ``iotas/bvco/buco/gmnc/bmnc``, cosine synthesis of ``|B|``/``sqrt(g)``).
 - :func:`redl_geometry_from_state` — traceable lane on
-  ``(SpectralState, SolverRuntime)``: ``|B|`` and ``sqrt(g)`` from the
-  solver's half-mesh internal grid (mirrored from the reduced ``[0, pi]``
-  theta grid exactly as ``QuasisymmetryRatioResidual._pointwise_state``),
-  iota/G/I from ``_iotas_half``/``surface_currents``.
-
-Steps 3-4 of the spec (this module, second landing):
-
-- :func:`vmec_j_dot_B` / :func:`vmec_j_dot_B_from_wout` — the equilibrium
-  ``<J.B>`` via the MHD identity (spec section 6.2, validated against the
-  Zenodo ``convertSfincsToVmecCurrentProfile`` script and the wout
-  ``jdotb``):
+  ``(SpectralState, SolverRuntime)`` using the solver's half-mesh internal
+  grid; iota/G/I from ``_iotas_half``/``surface_currents``.
+- :func:`vmec_j_dot_B` / :func:`vmec_j_dot_B_from_wout` — equilibrium
+  ``<J.B>`` via the MHD identity (validated against the Zenodo
+  ``convertSfincsToVmecCurrentProfile`` script and the wout ``jdotb``):
 
       <J.B>(s) = [<B^2> dI/ds + mu0 I dp/ds] / (2 pi psi_a),
       I(s) = signgs*(2 pi/mu0)*buco(s) [A],  psi_a = phi(1)/(2 pi) [Wb/rad]
 
-  (the ``signgs`` matches VMEC's ``ctor = signgs*(2 pi/mu0)*buco(ns)``
+  (``signgs`` matches VMEC's ``ctor = signgs*(2 pi/mu0)*buco(ns)``
   convention, so the identity reproduces the sign of the wout ``jdotb``).
 - :class:`RedlBootstrapMismatch` — the paper/simsopt ``f_boot`` normalized
-  residual ``R_j = (Jv_j - Jr_j)/sqrt(sum_k (Jv_k + Jr_k)^2)`` comparing
-  ``<J.B>_vmec`` against :func:`j_dot_B_redl`, with the same wout /
-  traceable-state dual-lane shape as ``QuasisymmetryRatioResidual`` (so it
-  composes with ``least_squares`` at ``jac=None`` and ``jac="implicit"``).
+  residual comparing ``<J.B>_vmec`` against :func:`j_dot_B_redl`; same wout /
+  traceable-state dual-lane shape as ``QuasisymmetryRatioResidual`` (composes
+  with ``least_squares`` at ``jac=None`` and ``jac="implicit"``).
 - :func:`self_consistent_bootstrap` — fixed-boundary Picard iteration
   ``AC/CURTOR <- current profile implied by the Redl <J.B>`` (the Zenodo
-  script's "smooth method": solve ``[<B^2> d/ds + mu0 dp/ds] I = 2 pi psi_a
-  J_Redl`` with ``I(0) = 0``, then re-fit the ``I'(s)`` power series).
+  script's "smooth method").
 
 Units follow simsopt/the spec: ``ne`` [1/m^3], ``Te/Ti`` [eV], ``G/I/R``
-[T*m], ``psi_edge`` [Wb/rad], output ``<J.B>`` [A*T/m^2].
-
-Note (spec section 6.1b): the spec's stated decision was to hoist
-``_field_chain``/``_iotas_half``/``_half_grid``/``_interp_half_grid`` into a
-shared module; since R26a they live in :mod:`vmex.core.statephysics`
-(``optimize`` re-exports them for backward compatibility).
+[T*m], ``psi_edge`` [Wb/rad], output ``<J.B>`` [A*T/m^2].  The shared
+half-mesh helpers (``_field_chain``/``_iotas_half``/``_half_grid``/
+``_interp_half_grid``) live in :mod:`vmex.core.statephysics`; ``optimize``
+re-exports them for backward compatibility.
 """
 
 from __future__ import annotations

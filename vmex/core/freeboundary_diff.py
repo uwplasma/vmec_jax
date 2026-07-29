@@ -1,8 +1,8 @@
-"""Differentiable free-boundary residual via virtual casing (R15.3 + R19).
+"""Differentiable free-boundary residual via virtual casing.
 
 This module adds a *differentiable* free-boundary path that complements — and
-does not touch — the NESTOR forward solve in :mod:`vmex.core.freeboundary`
-(R15.1/R15.2, VMEC2000-parity).  The idea (DESC R17.8): instead of
+does not touch — the VMEC2000-parity NESTOR forward solve in
+:mod:`vmex.core.freeboundary`.  The idea (as in DESC): instead of
 differentiating the NESTOR fixed point, express the free-boundary condition as a
 smooth objective.  At the plasma-vacuum interface the total field is tangent,
 

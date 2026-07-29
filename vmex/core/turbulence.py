@@ -1,4 +1,4 @@
-"""Turbulence-proxy optimization objectives via GKX (R26h.h4).
+"""Turbulence-proxy optimization objectives via GKX.
 
 Wires the gyrokinetic turbulence proxies of `GKX
 <https://github.com/uwplasma/GKX>`_ (uwplasma; JAX-native Hermite-Laguerre
@@ -7,60 +7,44 @@ flux-tube solver; PyPI ``gkx`` >= 1.7.1, formerly published as
 two layers:
 
 1. **Geometry adapter** — :func:`gk_fieldline_geometry` samples one field
-   line of the converged interior solution and emits the solver-ready
-   flux-tube geometry contract of
-   ``gkx.flux_tube_geometry_from_mapping`` (``bmag``, ``gradpar``,
-   ``gds2/gds21/gds22``, ``gbdrift/gbdrift0``, ``cvdrift/cvdrift0``,
-   ``bgrad``, …).  The arrays follow the GS2/GX normalizations of simsopt's
-   ``vmec_fieldlines`` (Landreman) — the exact conventions already used by
-   the ballooning objective in :mod:`vmex.core.stability`, whose
-   spectral point-evaluation machinery (``_ballooning_context``,
-   ``_parabola``, ``_theta_vmec_from_pest``) is reused here, extended with
-   the ``grad s``/``grad psi`` metric and drift projections that ballooning
-   does not need.  Everything is exact trig sums + JAX AD: the adapter is
-   jit/grad-transparent and needs no gkx import.
+   line of the converged interior solution and emits the flux-tube
+   geometry contract of ``gkx.flux_tube_geometry_from_mapping``
+   (``bmag``, ``gradpar``, ``gds2/gds21/gds22``, ``gbdrift/gbdrift0``,
+   ``cvdrift/cvdrift0``, ``bgrad``, …) in the GS2/GX normalizations of
+   simsopt's ``vmec_fieldlines`` (Landreman) — the conventions of the
+   ballooning objective in :mod:`vmex.core.stability`, whose spectral
+   point-evaluation machinery is reused here, extended with the
+   ``grad s``/``grad psi`` metric and drift projections.  Exact trig sums
+   + JAX AD throughout: jit/grad-transparent, no gkx import.
 
-2. **Objective wrappers** — thin ``(state, runtime)`` callables around the
-   proxies GKX itself promotes for VMEX-side optimization (its
-   ``VMEXTransportObjectiveConfig`` kinds, docs
-   ``stellarator_optimization.rst``):
+2. **Objective wrappers** — thin two-positional ``(state, runtime)``
+   callables around the proxies GKX itself promotes for VMEX-side
+   optimization (its ``VMEXTransportObjectiveConfig`` kinds, docs
+   ``stellarator_optimization.rst``), composing with
+   :func:`vmex.core.optimize.least_squares`:
 
    - :func:`turbulent_growth_rate` — kind ``"growth"``: dominant linear
-     ITG/TEM-branch growth rate ``gamma`` of the spectral gyrokinetic
-     operator on the sampled flux tube
-     (``gkx.solver_growth_rate_from_geometry``; the eigenvalue
-     carries GKX's implicit-eigenpair custom AD rule).
+     ITG/TEM-branch growth rate ``gamma`` on the sampled flux tube.
+     Traceable in both AD modes (``jac=None`` and ``jac="implicit"``;
+     its docstring has the eigvals-vs-custom_vjp detail).
    - :func:`quasilinear_flux_proxy` — kind ``"quasilinear_flux"``: the
      mixing-length quasilinear heat-flux proxy
-     ``gamma * W_Q / k_perp_eff^2`` built from the dominant eigenmode's
-     heat-flux weight and effective perpendicular wavenumber.
+     ``gamma * W_Q / k_perp_eff^2``.
    - :func:`nonlinear_heat_flux_proxy` — kind
      ``"nonlinear_window_heat_flux"``: GKX's smooth reduced
-     nonlinear-window heat-flux surrogate (saturation-rule closure
-     ``csat * W_Q * 2 gamma_+ / (1 + 2.2 k_perp_eff^2 + 0.15 gamma_+)``,
-     ``gkx.objectives.vmec_transport``).  This is the
-     documented *proxy* for the nonlinear transport window; a production
-     nonlinear claim still requires GKX's matched long nonlinear
-     audits, per its own docs.
+     nonlinear-window heat-flux surrogate.  A documented *proxy*: a
+     production nonlinear claim still requires GKX's matched long
+     nonlinear audits, per its own docs.
    - :func:`turbulence_objective_vector` — the underlying ordered
-     ``SOLVER_OBJECTIVE_NAMES`` vector ``(gamma, omega, kperp_eff2,
-     linear_heat_flux_weight, linear_particle_flux_weight,
-     mixing_length_heat_flux_proxy)``.
+     ``SOLVER_OBJECTIVE_NAMES`` vector
+     (:data:`TURBULENCE_OBJECTIVE_NAMES`).
 
-   Each wrapper is a two-positional ``(state, runtime)`` callable, so it
-   composes with :func:`vmex.core.optimize.least_squares`.
-   Traceability status (validated in ``tests/test_turbulence.py``):
-   GKX is JAX-native, and :func:`turbulent_growth_rate` is fully
-   differentiable in both AD modes (``jac=None`` *and* ``jac="implicit"``
-   — the wrapper reduces GKX's explicit operator matrix with
-   ``jnp.linalg.eigvals``, which carries a JVP, where GKX's own
-   ``dominant_real_eigenvalue`` is a reverse-only ``custom_vjp`` that the
-   forward-mode implicit Jacobian cannot trace).  The quasilinear and
-   nonlinear-window proxies additionally weight the dominant *eigenvector*
-   (heat-flux weight, ``kperp_eff``), and JAX declines derivatives of
-   non-symmetric eigenvectors — those two are value-level objectives:
-   use ``jac=None`` (finite differences), exactly like the wout-engine
-   terms (``d_merc``, ``l_grad_b``) in the optimization examples.
+   The quasilinear and nonlinear-window proxies weight the dominant
+   *eigenvector* (heat-flux weight, ``kperp_eff``), and JAX declines
+   derivatives of non-symmetric eigenvectors — those two are value-level
+   objectives: use ``jac=None`` (finite differences), exactly like the
+   wout-engine terms (``d_merc``, ``l_grad_b``).  Traceability is
+   validated in ``tests/test_turbulence.py``.
 
 The heavy dependency is optional: only the objective wrappers import
 ``gkx`` (>= 1.7.1; ``pip install 'vmex[turbulence]'`` or
@@ -131,11 +115,9 @@ TURBULENCE_OBJECTIVE_NAMES = (
 def _gkx():
     """Import the optional GKX dependency with a helpful error.
 
-    Only ``gkx`` (>= 1.7.1, the package formerly published as ``spectraxgk``)
-    is supported: the objective wrappers import ``gkx.objectives`` submodules
-    directly, so a pre-rename ``spectraxgk`` install can never satisfy them —
-    the legacy-name fallback once advertised here was nonfunctional and has
-    been removed.
+    Only ``gkx`` (>= 1.7.1; formerly published as ``spectraxgk``) works:
+    the objective wrappers import ``gkx.objectives`` submodules directly,
+    so a pre-rename ``spectraxgk`` install can never satisfy them.
     """
     try:
         import gkx
@@ -535,9 +517,8 @@ def quasilinear_flux_proxy(state: SpectralState, rt: SolverRuntime, **kwargs) ->
     GKX objective kind ``"quasilinear_flux"``: ``gamma * W_Q /
     max(kperp_eff^2, 1e-12)`` with ``W_Q`` the dominant mode's normalized
     heat-flux weight — the mixing-length saturation rule of its quasilinear
-    transport lane.  The weight depends on the dominant *eigenvector*, whose
-    non-symmetric derivatives JAX declines — use finite differences
-    (``jac=None``), like the wout-engine terms.  Keyword arguments as
+    transport lane.  Eigenvector-weighted, hence value-level (module
+    docstring): use ``jac=None``.  Keyword arguments as
     :func:`turbulence_objective_vector`.
     """
     gkx = _gkx()
@@ -557,19 +538,17 @@ def nonlinear_heat_flux_proxy(
 
     GKX objective kind ``"nonlinear_window_heat_flux"``: its
     saturation-rule closure ``csat * max(W_Q, 0) * 2 gamma_+ /
-    (1 + 2.2 kperp_eff^2 + 0.15 gamma_+)`` mapping the linear solver row to
-    a nonlinear heat-flux proxy (``gkx.objectives.
-    vmec_transport._solver_table_to_nonlinear_window_proxy`` — the
-    exact objective its VMEX optimization scripts use for this kind).
-    This is a smooth *surrogate* for the nonlinear transport window;
-    GKX's docs require matched long nonlinear audits before any
-    production nonlinear claim.  Eigenvector-weighted like
-    :func:`quasilinear_flux_proxy` — use ``jac=None``.  Keyword arguments
-    as :func:`turbulence_objective_vector`.
+    (1 + 2.2 kperp_eff^2 + 0.15 gamma_+)`` mapping the linear solver row
+    to a nonlinear heat-flux proxy
+    (``gkx.objectives.vmec_transport._solver_table_to_nonlinear_window_proxy``,
+    the exact objective its VMEX optimization scripts use for this kind).
+    A smooth *surrogate* only — see the module docstring's audit caveat.
+    Eigenvector-weighted like :func:`quasilinear_flux_proxy` — use
+    ``jac=None``.  Keyword arguments as
+    :func:`turbulence_objective_vector`.
     """
     _gkx()
-    # GKX consolidated vmec_transport_config and vmec_transport_tables into one
-    # module, and renamed the config class in the VMEC-JAX -> VMEX rename.
+    # Config class and tables live in GKX's consolidated vmec_transport module.
     from gkx.objectives.vmec_transport import (
         VMEXTransportObjectiveConfig,
         _solver_table_to_nonlinear_window_proxy,

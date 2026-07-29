@@ -288,14 +288,13 @@ def solve_multigrid(
     more_iter_flag``).  This exposes the state to callers; the CLI writes it
     only when ``LFULL3D1OUT=T``, matching the VMEC2000 driver policy.
 
-    Executable reuse: stage runtimes are structural pytrees (solver.py,
-    Phase 2 item (1)), so one XLA executable is compiled per distinct
-    stage structure ``(ns, ftol, niter, ...)`` per session, and repeated
-    ladders (parameter scans, hot restarts) recompile nothing.  Full radial
-    padding to ``max(ns_array)`` — ONE executable for all stages — is the
-    recorded follow-up (§7 item 1); it requires masked radial
-    reductions through geometry/fields/forces/preconditioner and is not
-    attempted here.
+    Executable reuse: stage runtimes are structural pytrees (solver.py), so
+    one XLA executable is compiled per distinct stage structure ``(ns,
+    ftol, niter, ...)`` per session, and repeated ladders (parameter scans,
+    hot restarts) recompile nothing.  Full radial padding to
+    ``max(ns_array)`` — ONE executable for all stages — would need masked
+    radial reductions through geometry/fields/forces/preconditioner and is
+    not attempted here.
 
     ``device`` places each stage's jitted lanes (see
     :func:`vmex.core.solver.solve`): an explicit ``"cpu"``/``"gpu"``/
@@ -314,11 +313,11 @@ def solve_multigrid(
     the standalone CLI enables it.
 
     ``prefetch_compile=True`` (False by default: a library call must not
-    spawn background compile threads implicitly — four coverage workers
-    each prefetching evicted a 16 GB hosted CI runner; the standalone
-    CLI enables it) overlaps compilation with iteration
-    on cold runs: while rung k iterates, a background thread AOT-compiles
-    rung k+1's block-lane executable (the ladder is known up front).  Cache
+    spawn background compile threads implicitly — concurrent prefetching
+    workers can exhaust CI-runner memory; the standalone CLI enables it)
+    overlaps compilation with iteration on cold runs: while rung k
+    iterates, a background thread AOT-compiles rung k+1's block-lane
+    executable (the ladder is known up front).  Cache
     warming only — results are bit-identical, and any prefetch failure falls
     back silently to on-demand compilation.  The prefetch thread is joined
     *before* the ``release_stage_cache`` point, and the prefetched

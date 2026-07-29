@@ -22,7 +22,7 @@ fixed-boundary iteration of :mod:`vmex.core.solver`:
   baselines are damped by 0.9 per active iteration (``funct3d.f``).
 
 The iteration itself runs the *same* traced body as the fixed-boundary
-lanes.  Scheduling (plan item F.2): the pre-activation fixed-boundary
+lanes.  Scheduling: the pre-activation fixed-boundary
 iterations run as one jitted ``lax.while_loop`` (:func:`_preactivation_lane`)
 and the whole post-turn-on steady state — vacuum cadence, constraint damping,
 ``bsqvac_edge`` refresh and the eqsolve iteration — as another
@@ -122,11 +122,10 @@ def boundary_from_coefficients(
     xn = np.asarray(modes.n, dtype=float) * float(basis.nfp)
     th = np.asarray(basis.theta, dtype=float)[:, None]
     # ``basis.zeta`` spans [0, 2*pi) per field period; the geometric toroidal
-    # angle is ``phi = zeta * onp`` (onp = 1/nfp).  The wout-convention phase
-    # is ``m*theta - xn*phi`` with ``xn = n*nfp`` (so all v-derivatives below
-    # are geometric-phi derivatives, matching surface.f and the ``onp`` folding
-    # in ``vacuum.py``/``external_field_channels``).  Using ``zeta`` directly
-    # here double-counts nfp and mis-places every n != 0 harmonic toroidally.
+    # angle is ``phi = zeta * onp`` (onp = 1/nfp; matches surface.f and the
+    # ``onp`` folding in ``vacuum.py``/``external_field_channels``).  Using
+    # ``zeta`` directly here double-counts nfp and mis-places every n != 0
+    # harmonic toroidally.
     ze = np.asarray(basis.zeta, dtype=float)[:, None] * float(basis.onp)
     arg = th * xm[None, :] - ze * xn[None, :]
     cosmn = np.cos(arg)
@@ -993,27 +992,21 @@ def _presf_ns_scale(inp: VmecInput, ns: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Batched iteration lanes (plan item F.2: NESTOR loop batching)
+# Batched iteration lanes (NESTOR loop batching)
 # ---------------------------------------------------------------------------
 #
-# The host driver used to dispatch ONE jitted iteration per Python pass, with
-# several device->host syncs (`bool(carry.done)`, `int(carry.iteration)`,
-# `float(carry.fsqr)`, ...) and per-pass `replace(rt, rcon0=0.9*rcon0, ...)`
-# runtime rebuilds.  The two lanes below move that scaffolding on-device
+# The two lanes below keep the per-pass host driver's scaffolding on-device
 # without touching the per-iteration numerics (same ops, same order):
 #
 # - :func:`_preactivation_lane` runs every fixed-boundary iteration BEFORE
-#   vacuum activation as one ``lax.while_loop`` (the free-boundary analogue of
-#   ``solver._while_lane``), exiting exactly when the host driver would have
-#   entered the funct3d.f IVAC0 block (``iter2 > 1`` and
-#   ``fsqr + fsqz <= 1e-3``) so the turn-on pass still runs host-side.
+#   vacuum activation as one ``lax.while_loop``, exiting exactly where the
+#   host driver would enter the funct3d.f IVAC0 block.
 # - :func:`_make_vacuum_lane` runs the whole POST-turn-on steady state as one
-#   ``lax.while_loop`` whose body replays the host pass verbatim in traced
-#   form: ivac increment, 0.9 rcon0/zcon0 damping, the ivacskip/nvacskip
-#   cadence, the full/skip fused NESTOR update (``lax.cond``), the
-#   ``bsqvac_edge`` runtime update, then the shared ``_make_body`` iteration.
-#   ``delbsq_traj`` records the per-iteration DEL-BSQ diagnostic so verbose
-#   screen lines print the same value the per-pass driver printed.
+#   ``lax.while_loop`` replaying the host pass verbatim in traced form: ivac
+#   increment, 0.9 rcon0/zcon0 damping, the ivacskip/nvacskip cadence, the
+#   full/skip fused NESTOR update, the ``bsqvac_edge`` runtime update, then
+#   the shared ``_make_body`` iteration.  ``delbsq_traj`` records the
+#   per-iteration DEL-BSQ diagnostic for verbose screen lines.
 #
 # Only the single turn-on pass (first vacuum call, ``In VACUUM`` block, soft
 # restart, ``VACUUM PRESSURE TURNED ON`` banner) stays host-stepped: it
@@ -1079,19 +1072,9 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
         it = c.iteration
         fsq_rz = c.fsqr + c.fsqz
 
-        # funct3d.f: ``jacobian`` runs before ``bcovar``/IVAC0, and a
-        # sign-changed pass skips the whole block (``gc = 0``, GOTO 100).
-        # evolve.f then restores ``xc = xstore`` (``restart_iter`` with
-        # ``iter1 = iter2``) and re-calls funct3d, whose IVAC0 block runs
-        # with ``ivacskip = mod(iter2-iter1, nvacskip) = 0`` — a FULL
-        # NESTOR update at the restored state.  NESTOR therefore never
-        # consumes a sign-changed state: feed it ``xstore`` and force a
-        # full update whenever the current state is invalid.  Without
-        # this, a transient sign-changed state near the DELT stability
-        # edge hands ``analyt.f``'s log/sqrt kernels a degenerate
-        # boundary and the poisoned ``bsqvac`` turns funct3d.f's
-        # recoverable restart into a fatal NON-FINITE FORCE EVALUATION
-        # (see :func:`_jacobian_ok`).
+        # NESTOR must never consume a sign-changed state (full funct3d.f/
+        # evolve.f rationale: _jacobian_ok): feed it xstore and force a full
+        # update whenever the current state is invalid.
         good = _jacobian_ok(c.state, rt, use_fft=use_fft)
         vac_state = jax.tree.map(
             lambda a, b: jnp.where(good, a, b), c.state, c.xstore)
@@ -1507,7 +1490,7 @@ def _solve_free_boundary_stage(
         if bool(carry.done):
             break
         if fb.ivac == -1:
-            # F.2: every fixed-boundary iteration before vacuum activation
+            # Every fixed-boundary iteration before vacuum activation
             # runs as ONE jitted while_loop; the lane exits precisely where
             # the per-pass driver would have entered the IVAC0 block below.
             carry = _preactivation_lane(carry, rt_fixed, use_fft=use_fft)
@@ -1526,7 +1509,7 @@ def _solve_free_boundary_stage(
             continue
         elif (fb.turned_on and not fb.banner_pending
               and fb.mode_matrix is not None):
-            # F.2: the whole post-turn-on steady state runs as ONE jitted
+            # The whole post-turn-on steady state runs as ONE jitted
             # while_loop (vacuum cadence + damping + iteration, traced).
             zeros_sur = jnp.zeros_like(rt_freeb.bsqvac_edge)
             vc = _VacuumLoopCarry(
@@ -1575,11 +1558,8 @@ def _solve_free_boundary_stage(
         iter1 = int(carry.iter1)
         fsq_rz = float(carry.fsqr) + float(carry.fsqz)
 
-        # funct3d.f: ``jacobian`` precedes ``bcovar``/IVAC0; a sign-changed
-        # pass restarts from ``xstore`` and the SAME iteration's
-        # re-evaluation runs the IVAC0 block with ``iter1 = iter2``
-        # (``ivacskip = 0``) at the restored state — NESTOR never consumes
-        # a sign-changed state (:func:`_jacobian_ok`).
+        # NESTOR never consumes a sign-changed state: the restored xstore is
+        # the vacuum source and the update is forced full (_jacobian_ok).
         jacobian_good = bool(
             _jacobian_ok(carry.state, rt, use_fft=use_fft))
         vacuum_source = carry if jacobian_good else replace(

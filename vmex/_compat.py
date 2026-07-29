@@ -1,10 +1,7 @@
 """JAX environment defaults + persistent compilation-cache policy.
 
-Historically this module was a full JAX/NumPy backend shim (``has_jax`` /
-``asarray`` / ``einsum`` / a no-op ``jit`` and a thread-local numpy mode).
-The core became JAX-only long ago and nothing imported that machinery any
-more, so it was deleted (Item I.8a).  What remains — and is
-actually used — is:
+The old JAX/NumPy backend shim is gone (the core is JAX-only); what remains —
+and is actually used — is:
 
 - :func:`_configure_jax_environment` (run at import, i.e. before
   ``vmex/__init__`` does ``import jax``): environment defaults that must
@@ -108,15 +105,14 @@ def _default_compilation_cache_dir() -> str | None:
     """Return the configured JAX compilation-cache directory.
 
     The persistent cache is enabled **by default on every backend** (CPU too)
-    so that repeated cold-process CLI/API runs reuse compiled kernels instead
-    of recompiling — a solovev CLI run drops 4.3 s -> 1.2 s on the second
-    invocation (R26c).  The XLA:CPU host-feature-mismatch hazard (AOT
-    executables tied to a specific instruction set, dangerous on shared home
-    filesystems) is handled by :func:`_cache_machine_fingerprint`, whose
-    per-machine suffix hashes the CPU model + feature flags (AVX2/AVX512/...),
-    so heterogeneous machines never share a cache entry.  Opt out with
-    ``VMEX_COMPILATION_CACHE=disabled`` (or ``VMEX_COMPILATION_CACHE_DIR=
-    disabled``); point it elsewhere with ``JAX_COMPILATION_CACHE_DIR=/path``.
+    so repeated cold-process CLI/API runs reuse compiled kernels instead of
+    recompiling (a solovev CLI rerun drops 4.3 s -> 1.2 s).  The XLA:CPU
+    host-feature-mismatch hazard (AOT executables tied to a specific
+    instruction set, dangerous on shared home filesystems) is handled by
+    :func:`_cache_machine_fingerprint`, so heterogeneous machines never share
+    a cache entry.  Opt out with ``VMEX_COMPILATION_CACHE=disabled`` (or
+    ``VMEX_COMPILATION_CACHE_DIR=disabled``); point it elsewhere with
+    ``JAX_COMPILATION_CACHE_DIR=/path``.
     """
     # Already set by the user — respect it.
     if "JAX_COMPILATION_CACHE_DIR" in os.environ:
@@ -136,10 +132,8 @@ def _default_compilation_cache_dir() -> str | None:
     if cache_flag in ("disabled", "0", "false", "no", "off"):
         return None
 
-    # Default cache location: ~/.cache/vmex/jax_cache/<machine-fingerprint>
-    # The host-specific suffix (CPU model + feature flags) prevents unsafe
-    # XLA:CPU AOT reuse on shared home filesystems where different machines see
-    # the same ~/.cache directory.
+    # Default: ~/.cache/vmex/jax_cache/<machine-fingerprint> (see
+    # _cache_machine_fingerprint for the XLA:CPU AOT-reuse hazard).
     try:
         import pathlib
         return str(
@@ -224,12 +218,10 @@ def _configure_jax_environment() -> None:
         # memory is reclaimed at callback boundaries; users can still override
         # this before import with JAX_CPU_ENABLE_ASYNC_DISPATCH=true.
         os.environ.setdefault("JAX_CPU_ENABLE_ASYNC_DISPATCH", "false")
-        # Suppress noisy C++ warnings from XLA/PjRt backend (e.g.
-        # repeated "Assume version compatibility. PjRt-IFRT does not
-        # track XLA executable versions." on persistent-cache hits).
-        # These are harmless informational messages emitted by the XLA
-        # runtime logging stack. Level 0=INFO, 1=WARNING, 2=ERROR — we
-        # default to ERROR-only so that genuine errors still surface.
+        # Suppress harmless informational C++ logs from XLA/PjRt (e.g.
+        # repeated "Assume version compatibility..." on persistent-cache
+        # hits).  Level 0=INFO, 1=WARNING, 2=ERROR — default to ERROR-only so
+        # genuine errors still surface.
         os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
         os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
         os.environ.setdefault("GLOG_minloglevel", "2")
@@ -246,23 +238,20 @@ def _configure_jax_environment() -> None:
         ):
             os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
-        # Enable the JAX disk compilation cache in a machine-scoped directory.
-        # This avoids unsafe XLA:CPU AOT reuse across hosts while preserving
-        # repeated cold-process speedups on the same machine.
+        # Enable the JAX disk compilation cache in a machine-scoped directory
+        # (see _default_compilation_cache_dir for the AOT-reuse hazard).
         _cache_dir = _default_compilation_cache_dir()
         if _cache_dir is not None:
             os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", _cache_dir)
 
         # XLA:CPU compile-time flags.  The differentiable/optimization pipeline
-        # is COMPILE-dominated (the fused adjoint VJP + GMRES graph is ~21 s of a
-        # ~24 s cold ``value_and_grad``); XLA's default backend optimization
-        # level (3) spends most of that in expensive LLVM passes.  Level 1 plus
-        # disabling the expensive passes typically cuts compile wall-time
-        # ~1.3-2x, at the cost of slightly slower *warm* kernels -- a good trade
-        # for this compile-bound workload.  Applied on CPU only (LLVM codegen),
-        # never with fast-math (that would break float64 parity/determinism),
-        # skipped if the user set XLA_FLAGS, and opt-out via
-        # VMEX_FAST_COMPILE=0 (e.g. a very long single-process opt loop that
+        # is COMPILE-dominated (the fused adjoint VJP + GMRES graph dominates a
+        # cold ``value_and_grad``); backend optimization level 1 plus disabling
+        # expensive LLVM passes cuts compile wall-time ~1.3-2x at the cost of
+        # slightly slower *warm* kernels -- a good trade here.  Applied on CPU
+        # only (LLVM codegen), never with fast-math (that would break float64
+        # parity/determinism), skipped if the user set XLA_FLAGS, and opt-out
+        # via VMEX_FAST_COMPILE=0 (a very long single-process opt loop that
         # amortizes compile over many warm calls prefers level 3).
         _fast_compile = _env("FAST_COMPILE", "1").strip().lower()
         _accel_req = os.environ.get("JAX_PLATFORM_NAME", "").strip().lower()

@@ -1,4 +1,4 @@
-"""Traceable omnigenity/QI objective (R26h.h2).
+"""Traceable omnigenity/QI objective.
 
 A quasi-isodynamic (QI) omnigenity residual evaluated as a pure, traceable
 function of a converged ``(SpectralState, SolverRuntime)`` pair, so it

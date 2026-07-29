@@ -778,11 +778,10 @@ class VmecInput:
         ) -> np.ndarray:
             """Apply dense and indexed namelist assignments to one vector.
 
-            Fortran namelist reads overlay assignments on the values initialized
-            by ``read_indata_namelist``.  In particular, ``APHI(2)=...`` must
-            retain VMEC's default ``APHI(1)=1``.  The old parser consumed only
-            unindexed vector assignments, silently ignoring indexed profile and
-            multigrid entries.
+            Fortran namelist reads overlay assignments onto the
+            ``read_indata_namelist`` defaults: ``APHI(2)=...`` must retain
+            the default ``APHI(1)=1``, and indexed profile/multigrid entries
+            must be honored, not ignored.
             """
             dense = get_list(name) or []
             entries = indexed.get(name, {})

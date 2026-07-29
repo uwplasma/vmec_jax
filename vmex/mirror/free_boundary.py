@@ -637,14 +637,12 @@ def solve_free_boundary(
     lower, upper = vectorizer.bounds()
     matrix_free = problem.size > _DENSE_JACOBIAN_MAX_SIZE
     # The Newton-GMRES polish that closes a matrix-free solve to ``ftol`` needs
-    # a Krylov space that scales with the coupled unknown count. Restarted
-    # GMRES(24) stagnates on a fine-grid state of a hundred-plus unknowns, so
-    # the polish stalls just above tolerance (a well-conditioned fine grid was
-    # observed frozen at 4.5e-11) even though compute remains. A full Krylov
-    # cycle of ``problem.size`` (clipped by ``max_iterations``) resolves each
-    # Newton direction; the trust-region globalizer keeps its cheap fixed
-    # budget because it only has to reach the polish basin, which the finer
-    # beta continuation ladder brings within reach. Enlarging a Krylov budget
+    # a Krylov space that scales with the coupled unknown count: restarted
+    # GMRES(24) stagnates on fine-grid states of a hundred-plus unknowns,
+    # stalling the polish just above tolerance. A full Krylov cycle of
+    # ``problem.size`` (clipped by ``max_iterations``) resolves each Newton
+    # direction; the trust-region globalizer keeps its cheap fixed budget
+    # because it only has to reach the polish basin. Enlarging a Krylov budget
     # never perturbs an already converged state: the polish stops on its own
     # ``ftol`` and a richer subspace only sharpens intermediate directions.
     krylov_span = max(24, min(problem.size, int(config.max_iterations)))

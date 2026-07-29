@@ -34,13 +34,8 @@ between surfaces) and diagonal (``axd/bxd``, per surface) elements, each with
 an even-m column and an odd-m column (odd-m carries the ``sm/sp`` internal
 ``sqrt(s)`` scalings from ``profil1d``).
 
-``scalfor`` forms, per mode (m,n), the radial tridiagonal system::
-
-    ax(js) = -(axm(js+1) + bxm(js+1) * m**2)          couples X(js+1)
-    bx(js) = -(axm(js)   + bxm(js)   * m**2)          couples X(js-1)
-    dx(js) = -(axd(js) + bxd(js)*m**2 + cx(js)*(n*nfp)**2)
-
-with the even/odd column selected by ``mod(m,2)``, and solves
+``scalfor`` forms, per mode (m,n), the radial tridiagonal system from these
+elements (assembly formulas: see :func:`scalfor_matrices`) and solves
 ``[bx, dx, ax] . X = force`` by the Thomas algorithm (``tridslv``).
 
 ``lamcal`` builds the diagonal lambda scaling::
@@ -622,13 +617,12 @@ def tridiagonal_solve(
     force fields) beyond the shape of ``diagonal``; they are solved in one
     pass.
 
-    Thin arg-order adapter over :func:`solvax.tridiagonal_solve` (roadmap R18b
-    shared-solver consolidation).  SOLVAX uses the ``(lower, diag, upper)``
-    band convention (``lower = sub``, ``upper = super``), so the sub-/super-
-    diagonals are swapped here to preserve vmex's ``(super, diag, sub)``
-    signature and the two ``scalfor`` call sites.  The numerics are unchanged:
-    SOLVAX's Thomas backend is the verbatim port of the legacy parity-proven
-    sweep (same ``eps = 1e-12``), so ``method`` still selects it bit-for-bit —
+    Thin arg-order adapter over :func:`solvax.tridiagonal_solve`: SOLVAX uses
+    the ``(lower, diag, upper)`` band convention, so the sub-/super-diagonals
+    are swapped here to preserve vmex's ``(super, diag, sub)`` signature.
+    Numerics unchanged — SOLVAX's Thomas backend is the verbatim port of the
+    legacy parity-proven sweep (same ``eps = 1e-12``), so ``method`` still
+    selects it bit-for-bit:
 
     - ``"thomas"``: two ``lax.scan`` Thomas sweeps (jit-friendly, no host
       round-trips); the CPU path, **bitwise** identical to the pinned A/B tests.

@@ -1,7 +1,7 @@
 """MAKEGRID mgrid file IO and differentiable field interpolation.
 
 This module is the clean-core home of the VMEC free-boundary external-field
-inputs (§8):
+inputs:
 
 - :class:`MgridData` — an immutable snapshot of a VMEC2000/MAKEGRID mgrid
   netCDF file (grid extents, dimensions, per-coil-group cylindrical field
@@ -21,8 +21,8 @@ becoil).  The IO layer is ported from the legacy parity-proven
 ``vmex.solvers.free_boundary.mgrid``; the interpolation kernel from
 ``vmex.external_fields.mgrid_jax``.
 
-ESSOS compatibility (``essos.mgrid.MGrid``, PR#33)
---------------------------------------------------
+ESSOS compatibility (``essos.mgrid.MGrid``)
+-------------------------------------------
 The netCDF layout is identical (same variable names, dimensions, and
 ``(phi, zee, rad)`` field ordering), so files written by either package are
 readable by both.  Known convention divergences:

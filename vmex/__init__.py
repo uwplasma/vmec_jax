@@ -53,19 +53,15 @@ try:
 except _PackageNotFoundError:  # pragma: no cover - source tree without installed metadata.
     __version__ = "0+unknown"
 
-# Suppress noisy C++ warnings from XLA/PjRt backend (e.g. repeated
-# "Assume version compatibility. PjRt-IFRT does not track XLA executable
-# versions." on persistent-cache hits). Must be set before *any* ``import
-# jax`` in the process. Uses setdefault so the user can still override via the
-# environment.
+# Suppress noisy XLA/PjRt C++ logs (see _compat._configure_jax_environment).
+# Must be set before *any* ``import jax`` in the process; setdefault keeps
+# user overrides working.
 _os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 _os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
 _os.environ.setdefault("GLOG_minloglevel", "2")
 
 # Enable the JAX persistent XLA compilation cache in a machine-scoped
-# directory when requested by the backend/env policy in _compat. Accelerator
-# runs use the cache by default; CPU runs are opt-in to avoid XLA:CPU AOT
-# feature-mismatch warnings on shared or changing runtime environments.
+# directory per the _compat policy (see _default_compilation_cache_dir).
 # ``core.solver._harden_compilation_cache`` re-applies this policy on every
 # solve path in case this module never ran (namespace-package shadowing).
 import jax as _jax

@@ -275,10 +275,10 @@ def trig_tables(res: Resolution) -> TrigTables:
     # (symforce.f), so the endpoint-half-weighted reduced integral with
     # weight 2/ntheta1 equals the full-grid average.  Only the full-surface
     # average normalization ``dnorm3`` (wint/cosmui3) is lasym-dependent:
-    # 1/(nzeta*ntheta1) on the full grid.  (The previous revision used the
-    # full-grid dnorm for cosmui too, halving every lasym force projection
-    # and, through alias.f's gcon, the constraint-force weight relative to
-    # the MHD force -- shifting the lasym fixed point away from VMEC2000.)
+    # 1/(nzeta*ntheta1) on the full grid.  Do not use the full-grid dnorm for
+    # cosmui too: that halves every lasym force projection and, through
+    # alias.f's gcon, the constraint-force weight relative to the MHD force
+    # -- shifting the lasym fixed point away from VMEC2000.
     dnorm = 1.0 / (nzeta * (ntheta2 - 1))
     dnorm3 = 1.0 / (nzeta * ntheta3) if lasym else dnorm
 

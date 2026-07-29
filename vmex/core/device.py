@@ -1,49 +1,28 @@
 """Backend (CPU/GPU) selection policy for the core solve lanes.
 
-Measured basis: ``benchmarks/gpu_baseline.json`` (2026-07-09, 2x RTX A4000,
-jax 0.6.2 cuda12) — see its ``meta.notes`` and commit ``a324f503``:
+Measured basis: ``benchmarks/gpu_baseline.json`` (see its ``meta.notes`` for
+the per-deck timings).  Per-iteration throughput favours the GPU (up to 3x
+wall on NuhrenbergZille-class decks), but the GPU pays fixed per-solve
+overheads (~0.2-0.4 s dispatch/transfer floor plus compile/cache-load on
+cold processes), so small decks that converge in well under a second of CPU
+work finish faster on the CPU.
 
-- Per-*iteration* throughput favours the GPU across the measured low- and
-  moderate-mode legacy lane (0.83 ms vs 1.90 ms at
-  ``ns=35, mpol=2, ntor=2``, up to 3x on NuhrenbergZille-class decks:
-  90 s vs 277 s wall).
-- The GPU pays fixed per-solve overheads (~0.2-0.4 s dispatch/transfer floor
-  plus compile/cache-load on cold processes), so *small* decks that converge
-  in well under a second of CPU work finish faster on the CPU
-  (``solovev``: 0.043 s CPU vs 0.289 s CUDA warm wall; ``cth_like_fixed_bdy``:
-  0.198 s vs 0.383 s).
+The rule uses the per-iteration work proxy ``ns * mnmax * nznt`` (radial
+surfaces x spectral modes x angular grid — the cost driver of the
+``totzsps/tomnsps`` batched matmuls that dominate one ``funct3d`` pass).
+The measured decks split into two clusters: work proxies up to ~24e3 where
+the CPU wins and any misclassification costs < 0.5 s either way, and
+proxies >= ~490e3 where the GPU wins by 2-3x.
+:data:`GPU_MIN_ITERATION_WORK` = ``100_000`` sits between them (their
+geometric mean is ~109e3).
 
-The rule implemented here uses the per-iteration work proxy
-``ns * mnmax * nznt`` (radial surfaces x spectral modes x angular grid — the
-cost driver of the ``totzsps/tomnsps`` batched matmuls that dominate one
-``funct3d`` pass):
-
-======================================  ==========  =================  ======
-deck (first NS_ARRAY stage)             work proxy  warm wall CPU/GPU  winner
-======================================  ==========  =================  ======
-solovev (11*6*10)                              660  0.043 / 0.289 s    cpu
-nfp4_QH_warm_start (35*8*48)                13,440  0.954 / 0.574 s    gpu*
-cth_like_fixed_bdy (15*5*324)               24,300  0.198 / 0.383 s    cpu
-LandremanPaul2021_QA (16*128*240)          491,520  14.54 / 4.19 s     gpu
-NuhrenbergZille_1988_QHS (11*162*286)      509,652  276.9 / 90.1 s     gpu
-======================================  ==========  =================  ======
-
-Below :data:`GPU_MIN_ITERATION_WORK` the measured difference is < 0.5 s
-either way (the ``*`` misclassification costs ~0.4 s); above it the GPU wins
-by 2-3x within the measured low/moderate-mode cluster.  The threshold
-``100_000`` sits between those two clusters (geometric mean of 24.3e3 and
-491.5e3 ~ 109e3).
-
-Mode count is an independent guard.  On the supplied high-resolution HSX
-deck (``ns=101, mnmax=858, nznt=2200``), a same-host office measurement took
-426.94 s on CPU versus 1468.07 s on an RTX A4000 after its persistent cache
-was populated.  The conservative :data:`GPU_MAX_SPECTRAL_MODES` cutoff of 512
-sits between the largest measured GPU winner (288 modes) and that high-mode
-CPU winner.  The existing measured GPU winners have at most 162 modes; the
-intermediate range is not calibrated.  The round cutoff preserves AUTO for
-common stages through 288 modes while catching the measured HSX regression.
-It is not claimed as a hardware-independent physical crossover; explicit
-placement remains available for users to measure newer hardware.
+Mode count is an independent guard: the measured GPU winners have at most
+162 active Fourier modes, while a high-resolution HSX deck (``mnmax=858``)
+ran ~3.4x *slower* on the GPU even warm, despite a large work proxy.
+:data:`GPU_MAX_SPECTRAL_MODES` = 512 sits between the largest measured GPU
+winner (288 modes) and that high-mode CPU winner; the intermediate range is
+not calibrated, and the cutoff is not claimed as a hardware-independent
+crossover — explicit placement remains available to measure newer hardware.
 
 The policy is a *default* only: an explicit ``device=`` argument to
 ``solve``/``solve_multigrid`` always wins, while ``device=None`` follows
@@ -167,13 +146,12 @@ def resolve_implicit_device(device: Any = AUTO, resolution: Any = None):
     *vmapped* forward-implicit-differentiation graph — dozens of preconditioned
     GMRES solves (each with control flow), one per boundary Fourier dof — whose
     XLA compile grows with the dof count and whose evaluation is kernel-launch
-    bound.  Measured on 2x RTX A4000 (R1, ``benchmarks`` notes) it is
-    *slower* on the GPU than on the CPU at every optimization size tested: a
-    ``max_mode=2`` QH stage (24 dofs) did not finish a single Jacobian eval in
-    37 min on the GPU, versus minutes on the CPU.  The forward equilibrium
-    callback uses the solver's independent automatic per-stage policy; this
-    resolver controls only the residual/Jacobian work.  So the default here is
-    always the CPU:
+    bound.  Measured (``benchmarks`` notes), it is *slower* on the GPU than on
+    the CPU at every optimization size tested: a ``max_mode=2`` QH stage
+    (24 dofs) did not finish a single Jacobian eval in 37 min on the GPU,
+    versus minutes on the CPU.  The forward equilibrium callback uses the
+    solver's independent automatic per-stage policy; this resolver controls
+    only the residual/Jacobian work.  So the default here is always the CPU:
 
     - explicit devices are honored (delegated to :func:`resolve_device`);
     - ``None`` leaves placement to JAX;
@@ -201,10 +179,10 @@ def resolve_mirror_device(device: Any = AUTO):
     """Device for mirror solves with host SciPy control flow.
 
     The mirror fixed/free-boundary solvers repeatedly cross between SciPy and
-    exact JAX value/JVP/VJP callbacks.  The measured ``15x15`` office case is
-    faster on CPU (35.2 s versus 44.2 s on an RTX A4000), so ``"auto"``
-    selects CPU unless the user has chosen a JAX placement.  Explicit devices
-    and ``None`` retain the same meanings as in :func:`resolve_device`.
+    exact JAX value/JVP/VJP callbacks.  The measured ``15x15`` case is faster
+    on CPU (35.2 s versus 44.2 s on GPU), so ``"auto"`` selects CPU unless
+    the user has chosen a JAX placement.  Explicit devices and ``None``
+    retain the same meanings as in :func:`resolve_device`.
     """
     if device is None:
         return None

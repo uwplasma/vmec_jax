@@ -1,18 +1,15 @@
 """Shared state-physics primitives of the derived-quantity/objective modules.
 
-One home (R26a consolidation) for the small private helpers that
-:mod:`~vmex.core.optimize`, :mod:`~vmex.core.implicit`,
-:mod:`~vmex.core.bootstrap`, :mod:`~vmex.core.stability` and
-:mod:`~vmex.core.omnigenity` all need — formerly byte-identical copies in
-``optimize.py``/``implicit.py`` plus re-inlined recipes in ``stability.py``
-(the shared module the bootstrap spec section 6.1b called ``_state_diag.py``):
+One home for the small private helpers that :mod:`~vmex.core.optimize`,
+:mod:`~vmex.core.implicit`, :mod:`~vmex.core.bootstrap`,
+:mod:`~vmex.core.stability` and :mod:`~vmex.core.omnigenity` all need:
 
 - :func:`_field_chain` — geometry -> Jacobian -> metric -> fields -> energies
   of a core ``(SpectralState, SolverRuntime)`` pair, the evaluation chain
   behind every solver-native scalar target;
 - :func:`_iotas_half` / :func:`_iotas_half_from_fields` — the ``ncurr``-aware
   half-mesh rotational transform (``add_fluxes.f90`` conventions);
-- the **canonical wout-parity scalar targets** (Item I.7):
+- the **canonical wout-parity scalar targets**:
   :func:`aspect_ratio` / :func:`volume` (``aspectratio.f`` boundary
   quadrature, equal to the wout ``aspect``/``volume_p`` scalars) and
   :func:`mean_iota` / :func:`edge_iota` (wout ``iotas``/``iotaf[-1]``
@@ -22,11 +19,11 @@ One home (R26a consolidation) for the small private helpers that
   ``sum(vp)``) because :class:`~vmex.core.implicit.ImplicitSolution`
   fields and the FD-cached gradient tables of ``tests/test_implicit_grad.py``
   pin those exact quadratures — the two families agree to quadrature
-  resolution, and each module's docstrings cross-reference the other;
+  resolution;
 - the half-mesh radial sampling primitives :func:`_half_grid` /
   :func:`_interp_half_grid` and the wout-table utilities :func:`_as_1d` /
   :func:`_mode_matrix`;
-- the ``L_grad_B`` primitives (Item E): :func:`_lgradb_grid`
+- the ``L_grad_B`` primitives: :func:`_lgradb_grid`
   (the pointwise magnetic-gradient scale length from wout-convention
   coefficient tables, pure jnp — shared by the wout-lane and traceable
   objectives) and :func:`_lgradb_state_tables` (those tables rebuilt
@@ -153,7 +150,7 @@ def _iotas_half(state: SpectralState, rt: SolverRuntime) -> jnp.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Canonical wout-parity scalar targets (Item I.7)
+# Canonical wout-parity scalar targets
 # ---------------------------------------------------------------------------
 
 
@@ -217,7 +214,7 @@ def edge_iota(state: SpectralState, rt: SolverRuntime) -> Array:
     """Rotational transform at the boundary (wout ``iotaf[-1]`` convention:
     linear extrapolation of the half mesh, ``1.5 iotas[-1] - 0.5 iotas[-2]``).
 
-    Naming note (Item I.7): ``optimize.edge_iota`` and
+    Naming note: ``optimize.edge_iota`` and
     :func:`vmex.core.implicit.iota_edge` are the same physical scalar —
     identical for ``ncurr = 1`` (both reconstruct iota from the converged
     ``chips``); at ``ncurr = 0`` this wout-parity version extrapolates the
@@ -234,7 +231,7 @@ iota_edge = edge_iota   # naming-flip alias (see the edge_iota docstring)
 
 
 # ---------------------------------------------------------------------------
-# Magnetic-gradient scale length L_grad_B (Item E)
+# Magnetic-gradient scale length L_grad_B
 # ---------------------------------------------------------------------------
 
 

@@ -772,7 +772,7 @@ def constraint_scaling(
     """Spectral-condensation constraint strength ``tcon(js)``.
 
     VMEC2000: ``bcovar.f`` (with the ``m = 0`` diagonal elements of
-    ``precondn.f``) — per plan Appendix D::
+    ``precondn.f``)::
 
         tcon(js) = min(|ard(js,1)|/arnorm(js), |azd(js,1)|/aznorm(js))
                    * tcon_multiplier * (32*hs)^2    for js = 2..ns-1,

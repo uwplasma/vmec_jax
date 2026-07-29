@@ -67,8 +67,7 @@ def register_pytree_dataclass(cls, *, meta: tuple[str, ...] = (),
                               drop: tuple[str, ...] = ()):
     """Register a result dataclass as a JAX pytree (``meta`` fields static).
 
-    The one shared registration helper of all core result containers (R26a;
-    formerly copied in fields/forces/geometry/residuals/setup/solver/implicit).
+    The one shared registration helper of all core result containers.
 
     ``drop`` fields (which must have defaults) are excluded from the pytree
     entirely: they do not appear as leaves *or* in the treedef, and are reset
@@ -615,14 +614,9 @@ def _tomnsp_theta_stage(
 
     VMEC2000: the ``work1(:, 1..12)`` arrays of ``tomnsp_mod.f``.  Inputs are
     the real-space force kernels on the internal grid, one (even-m, odd-m)
-    pair per channel, shapes ``(ns, ntheta3, nzeta)``:
-
-    - ``force_R`` / ``force_Z``        : ``armn`` / ``azmn`` (multiply the basis),
-    - ``force_R_du`` / ``force_Z_du``  : ``brmn`` / ``bzmn`` (multiply d(basis)/d theta),
-    - ``force_R_dv`` / ``force_Z_dv``  : ``crmn`` / ``czmn`` (multiply d(basis)/d zeta),
-    - ``force_lambda_du/dv``           : ``blmn`` / ``clmn``,
-    - ``constraint_R`` / ``constraint_Z``: ``arcon`` / ``azcon`` (spectral-
-      condensation constraint force, weighted by ``xmpq = m(m-1)``).
+    pair per channel, shapes ``(ns, ntheta3, nzeta)``; the kernel-name mapping
+    (``armn/brmn/crmn/azmn/bzmn/czmn/blmn/clmn/arcon/azcon``) is documented in
+    :func:`tomnsps`.
 
     The theta integration is restricted to the reduced interval
     ``theta in [0, pi]`` (``ntheta2`` points) in both transforms, and the

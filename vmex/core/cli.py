@@ -12,7 +12,7 @@ The solve path is the clean-room core end to end:
 :func:`vmex.core.wout.wout_from_state` -> :func:`vmex.core.wout.write_wout`,
 plus the core plotting (``--plot``) and Boozer (``--booz``) drivers.
 
-Zero-crash policy (§2.5): every failure maps to a typed
+Zero-crash policy: every failure maps to a typed
 :class:`vmex.core.errors.VmecError`; the CLI prints the VMEC2000
 ``werror`` message plus a one-line hint and exits with the matching
 ``ier_flag`` code.
@@ -32,10 +32,8 @@ Free-boundary routing (``LFREEB = T``):
   :class:`vmex.core.mgrid.MgridField` via ``MgridField.from_cartesian_field``
   (``solve_free_boundary(inp, external_field=mgrid_field)``); requires ESSOS.
 
-Free-boundary output behavior:
-
-- Symmetric and LASYM NESTOR potential and surface-field arrays are exported
-  to wout.
+Both symmetric and LASYM NESTOR potential and surface-field arrays are
+exported to wout.
 
 Iteration-budget exhaustion (``ier_flag = 2``): the CLI keeps the final
 state, writes the WOUT, and prints the full equilibrium summary +
@@ -366,18 +364,15 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
                        nz: int = 96):  # pragma: no cover  (ESSOS-only; unavailable in CI)
     """:class:`~vmex.core.mgrid.MgridField` from an ESSOS coils file.
 
-    vmex keeps no coil code — coils live in ESSOS
-    (:class:`essos.coils.Coils`).  This loads the coils from the
-    ``essos.coils.Coils.to_json`` layout (``.json``, via
-    ``essos.coils.Coils.from_json``) or the same keys in an ``.npz`` archive
-    (``dofs_curves`` with shape ``(n_base_coils, 3, 2*order + 1)``,
-    ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``, optional
-    ``currents_scale``), builds a cylindrical grid spanning the coil
-    bounding box, and
-    tabulates its Biot-Savart field directly into an in-memory
-    :class:`~vmex.core.mgrid.MgridField` — the very same field type the
-    mgrid-file lane produces, with no temporary file and no dependency on
-    an mgrid export API.  Requires ESSOS (``pip install essos``).
+    vmex keeps no coil code — coils live in ESSOS (:class:`essos.coils.Coils`).
+    Accepts the ``Coils.to_json`` layout (``.json``) or the same keys in an
+    ``.npz`` archive (``dofs_curves`` of shape ``(n_base_coils, 3,
+    2*order + 1)``, ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``,
+    optional ``currents_scale``).  Builds a cylindrical grid spanning the coil
+    bounding box and tabulates the Biot-Savart field into an in-memory
+    :class:`~vmex.core.mgrid.MgridField` — the same field type the mgrid-file
+    lane produces, with no temporary file.  Requires ESSOS
+    (``pip install essos``).
     """
     import numpy as np
 
@@ -428,11 +423,9 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
     rmin, rmax = max(1.0e-2, float(r.min()) - rpad), float(r.max()) + rpad
     zmin, zmax = float(z.min()) - zpad, float(z.max()) + zpad
 
-    # Tabulate the Biot-Savart field directly into an in-memory MgridField.
-    # This removes the previous hard dependency on an unpublished
-    # ``Coils.to_mgrid`` export (review finding: current ESSOS main does not
-    # provide it, which made ``--coils`` unusable) — every released ESSOS
-    # exposes ``fields.BiotSavart``.
+    # Tabulate the Biot-Savart field directly into an in-memory MgridField
+    # via ``fields.BiotSavart`` (present in every released ESSOS); do not
+    # switch to a ``Coils.to_mgrid`` export — ESSOS main does not provide one.
     from essos.fields import BiotSavart
 
     bs = BiotSavart(coils)
@@ -621,9 +614,7 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             mode=str(args.mode),
             verbose=verbose,
             emit=emit,
-            # VMEC2000 fileout.f semantics: NITER exhaustion of the final
-            # grid terminates normally through the output path (WOUT +
-            # summary) with ier_flag = 2; only genuine failures raise.
+            # fileout.f semantics — see the free-boundary call above.
             raise_on_max_iterations=False,
             device=None if args.device == "none" else args.device,
             release_stage_cache=True,
