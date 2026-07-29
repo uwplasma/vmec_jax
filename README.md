@@ -154,22 +154,26 @@ bottleneck or stalls.
 ## Performance
 
 **High-mode HSX QHS deck** (`MPOL=18, NTOR=24, NZETA=100, ns→101`; 858 modes),
-one fresh process per code, sequentially on an idle Apple Silicon CPU — a
-single controlled baseline, not a repeated-run statistic:
+sequentially on an idle Apple Silicon CPU. VMEX was measured once with an
+empty persistent compilation cache and twice in fresh processes reusing that
+cache; VMEC++ was measured twice:
 
 | code | wall | peak RSS | outcome |
 | --- | ---: | ---: | --- |
-| VMEX (this branch, incl. JIT compile) | 224 s | 1.93 GB | converged, 2737 iters |
-| VMEC++ 0.7.1 (10 threads) | 91.6 s | 0.395 GB | converged, 2913 iters |
+| VMEX, empty compilation cache | 238.8 s | 1.88 GiB | converged, 2737 iters |
+| VMEX, cache reuse (median of 2) | 225.2 s | 1.75 GiB | converged, 2737 iters |
+| VMEC++ 0.7.1, 10 threads (median of 2) | 89.0 s | 396 MiB | converged, 2913 iters |
 | VMEC2000 (1 process) | 593 s | 0.32 GB | converged |
 
-VMEX is 2.45× slower and uses about 5× the peak memory of ten-thread VMEC++,
-while remaining 2.6× faster than VMEC2000. Its WOUT matches VMEC2000 at
+With compilation-cache reuse, VMEX is 2.53× slower and uses 4.53× the peak
+memory of ten-thread VMEC++; an empty-cache run is 2.68× slower. VMEX remains
+2.6× faster than VMEC2000. Its WOUT matches VMEC2000 at
 ``5.96e-12`` relative L2 in ``rmnc``, ``3.42e-11`` in ``zmns``,
 ``1.02e-11`` in ``bmnc``, and ``2.37e-11`` in core ``iota``. The runtime
-target for this PR is met; the remaining XLA executable/full-radial memory
-gap is stated explicitly rather than treated as closed. For memory-constrained
-cold runs, ``--no-prefetch-compile`` trades startup latency for a lower peak.
+is therefore about the 2.5× target for this PR; the remaining XLA
+executable/full-radial memory gap is stated explicitly rather than treated as
+closed. For memory-constrained cold runs, ``--no-prefetch-compile`` trades
+startup latency for a lower peak.
 
 ![Wall-clock comparison against VMEC2000 and a reference C++ implementation](docs/_static/figures/readme_runtime_compare.png)
 
