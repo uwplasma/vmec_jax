@@ -62,6 +62,10 @@ Options
      - Override the final-stage ``FTOL_ARRAY`` tolerance.
    * - ``--max-iter N``
      - Override the final-stage ``NITER_ARRAY`` iteration cap.
+   * - ``--no-prefetch-compile``
+     - Compile solver lanes sequentially to reduce peak memory. The default
+       overlaps compilation to reduce cold-start latency; numerical results
+       are identical.
    * - ``--jacobian-retries N``
      - Retry a stage from its best finite checkpoint after the VMEC2000
        75-Jacobian-reset condition, using a reduced ``DELT`` (default 2).

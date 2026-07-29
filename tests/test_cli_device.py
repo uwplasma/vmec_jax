@@ -12,6 +12,10 @@ from vmex.core import cli, multigrid
 def test_device_option_parses_supported_choices():
     parser = cli.build_parser()
     assert parser.parse_args(["input.case"]).device == "auto"
+    assert parser.parse_args(["input.case"]).prefetch_compile is True
+    assert parser.parse_args(
+        ["input.case", "--no-prefetch-compile"]
+    ).prefetch_compile is False
     assert parser.parse_args(["input.case", "--device", "none"]).device == "none"
     assert parser.parse_args(["input.case", "--device", "gpu"]).device == "gpu"
     with pytest.raises(SystemExit):
@@ -38,11 +42,15 @@ def test_fixed_boundary_cli_forwards_device(monkeypatch, tmp_path, choice, expec
     assert seen["device"] == expected
     assert seen["release_stage_cache"] is True
     assert seen["raise_on_max_iterations"] is True
+    assert seen["prefetch_compile"] is True
 
 
 def test_free_boundary_cli_forwards_device(monkeypatch, tmp_path):
     args = cli.build_parser().parse_args(
-        ["input.case", "--quiet", "--device", "gpu"]
+        [
+            "input.case", "--quiet", "--device", "gpu",
+            "--no-prefetch-compile",
+        ]
     )
     inp = SimpleNamespace(ns_array=[11], lfull3d1out=False)
     plan = SimpleNamespace(solver_kwargs={})
@@ -68,3 +76,4 @@ def test_free_boundary_cli_forwards_device(monkeypatch, tmp_path):
     # VMEC2000 only forces an NITER-exhausted state through fileout when
     # LFULL3D1OUT=T. The default false value therefore raises before WOUT.
     assert seen["raise_on_max_iterations"] is True
+    assert seen["prefetch_compile"] is False

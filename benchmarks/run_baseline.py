@@ -10,6 +10,8 @@ source for the README performance figure; re-run it after performance work
 Usage:
     python benchmarks/run_baseline.py [--out baseline.json] [--cases a,b,...]
         [--timeout 600] [--skip vmecpp]
+        [--xvmec2000 /path/to/xvmec2000]
+        [--vmecpp-python /path/to/python] [--vmecpp-threads 10]
 
 Solvers exercised per case:
 - ``vmec2000``       — /Users/rogerio/local/STELLOPT/VMEC2000/Release/xvmec2000
@@ -61,6 +63,7 @@ DATA = REPO / "examples" / "data"
 XVMEC2000 = Path("/Users/rogerio/local/STELLOPT/VMEC2000/Release/xvmec2000")
 VMEX_PY = Path(sys.executable)
 VMECPP_PY = Path.home() / ".venvs/vmecpp/bin/python"
+VMECPP_THREADS = 10
 
 # (case name, aux files to copy alongside the deck)
 CASES: dict[str, list[str]] = {
@@ -304,15 +307,17 @@ def run_vmex_warm(deck: Path, aux: list[str], timeout: int) -> dict:
 
 
 VMECPP_SNIPPET = r"""
-import json, sys, time, resource
+import importlib.metadata, json, sys, time, resource
 import vmecpp
 inp = vmecpp.VmecInput.from_file(sys.argv[1])
 t0 = time.time()
-out = vmecpp.run(inp)
+out = vmecpp.run(inp, max_threads=int(sys.argv[2]), verbose=False)
 wall = time.time() - t0
 rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
 print(json.dumps({"wall_s": round(wall,3), "peak_rss_mb": round(rss,1),
-                  "iterations": int(out.wout.niter), "converged": True}))
+                  "iterations": int(out.wout.niter), "converged": True,
+                  "version": importlib.metadata.version("vmecpp"),
+                  "max_threads": int(sys.argv[2])}))
 """
 
 
@@ -324,7 +329,10 @@ def run_vmecpp(deck: Path, aux: list[str], timeout: int) -> dict:
             shutil.copy(DATA / a, wd)
         try:
             proc = subprocess.run(
-                [str(VMECPP_PY), "-c", VMECPP_SNIPPET, deck.name],
+                [
+                    str(VMECPP_PY), "-c", VMECPP_SNIPPET, deck.name,
+                    str(VMECPP_THREADS),
+                ],
                 cwd=wd,
                 capture_output=True,
                 text=True,
@@ -338,12 +346,28 @@ def run_vmecpp(deck: Path, aux: list[str], timeout: int) -> dict:
 
 
 def main() -> None:
+    global XVMEC2000, VMECPP_PY, VMECPP_THREADS
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(REPO / "benchmarks" / "baseline.json"))
     ap.add_argument("--cases", default=None, help="comma-separated subset")
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--skip", default="", help="comma-separated solvers to skip")
+    ap.add_argument(
+        "--xvmec2000", type=Path, default=XVMEC2000,
+        help="VMEC2000 executable (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--vmecpp-python", type=Path, default=VMECPP_PY,
+        help="Python containing VMEC++ (default: %(default)s)",
+    )
+    ap.add_argument("--vmecpp-threads", type=int, default=10)
     args = ap.parse_args()
+    XVMEC2000 = args.xvmec2000
+    VMECPP_PY = args.vmecpp_python
+    VMECPP_THREADS = int(args.vmecpp_threads)
+    if VMECPP_THREADS < 1:
+        ap.error("--vmecpp-threads must be positive")
 
     cases = args.cases.split(",") if args.cases else list(CASES)
     skip = set(args.skip.split(",")) if args.skip else set()
@@ -357,6 +381,10 @@ def main() -> None:
         "vmex_version": vmex.__version__,
         "vmex_module": VMEX_MODULE,
         "vmec2000_executable_sha256": (file_sha256(XVMEC2000) if XVMEC2000.is_file() else None),
+        "vmecpp_python_sha256": (
+            file_sha256(VMECPP_PY) if VMECPP_PY.is_file() else None
+        ),
+        "vmecpp_threads": VMECPP_THREADS,
     }
 
     for name in cases:
@@ -384,10 +412,6 @@ def main() -> None:
             ]:
                 if solver in skip:
                     continue
-                if solver in ("vmex_warm", "vmecpp") and name.endswith("free_bdy_lasym_small"):
-                    if solver == "vmecpp":
-                        row[solver] = {"ok": False, "error": "lasym unsupported"}
-                        continue
                 r = fn(deck, aux, args.timeout)
                 row[solver] = r
                 print(f"  {solver:15s} wall={r.get('wall_s', r.get('warm_s'))} ok={r.get('ok')}", flush=True)

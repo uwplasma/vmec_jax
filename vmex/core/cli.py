@@ -204,6 +204,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ftol", type=float, default=None, help="Override the final-stage FTOL_ARRAY tolerance.")
     p.add_argument("--max-iter", type=int, default=None, help="Override the final-stage NITER_ARRAY iteration cap.")
     p.add_argument(
+        "--no-prefetch-compile",
+        dest="prefetch_compile",
+        action="store_false",
+        default=True,
+        help=(
+            "Compile solver lanes sequentially to lower peak memory; the "
+            "default overlaps compilation for lower cold-start latency."
+        ),
+    )
+    p.add_argument(
         "--jacobian-retries",
         type=int,
         default=2,
@@ -609,7 +619,7 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             device=None if args.device == "none" else args.device,
             release_stage_cache=True,
             # Cold-run overlap is a CLI concern (library default False).
-            prefetch_compile=True,
+            prefetch_compile=bool(args.prefetch_compile),
             jacobian_retries=int(args.jacobian_retries),
             **freeb_plan.solver_kwargs,
         )
@@ -631,7 +641,7 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             # Cold-run overlap is a CLI concern: the library default is
             # False so embedding programs and test farms never gain
             # background compile threads implicitly.
-            prefetch_compile=True,
+            prefetch_compile=bool(args.prefetch_compile),
             jacobian_retries=int(args.jacobian_retries),
         )
     solve_s = time.perf_counter() - t1

@@ -159,14 +159,17 @@ single controlled baseline, not a repeated-run statistic:
 
 | code | wall | peak RSS | outcome |
 | --- | ---: | ---: | --- |
-| VMEX (this branch, incl. JIT compile) | 264 s | 2.35 GB | converged, 2737 iters |
-| reference C++ (10 threads) | 225 s | 0.38 GB | converged |
+| VMEX (this branch, incl. JIT compile) | 224 s | 1.93 GB | converged, 2737 iters |
+| VMEC++ 0.7.1 (10 threads) | 91.6 s | 0.395 GB | converged, 2913 iters |
 | VMEC2000 (1 process) | 593 s | 0.32 GB | converged |
 
-VMEX converges the deck within 1.2× of the ten-thread reference and 2.2×
-faster than VMEC2000; reducing the remaining memory gap (XLA executables and
-full-radial intermediates, not the physics working set) is tracked follow-up
-work.
+VMEX is 2.45× slower and uses about 5× the peak memory of ten-thread VMEC++,
+while remaining 2.6× faster than VMEC2000. Its WOUT matches VMEC2000 at
+``5.96e-12`` relative L2 in ``rmnc``, ``3.42e-11`` in ``zmns``,
+``1.02e-11`` in ``bmnc``, and ``2.37e-11`` in core ``iota``. The runtime
+target for this PR is met; the remaining XLA executable/full-radial memory
+gap is stated explicitly rather than treated as closed. For memory-constrained
+cold runs, ``--no-prefetch-compile`` trades startup latency for a lower peak.
 
 ![Wall-clock comparison against VMEC2000 and a reference C++ implementation](docs/_static/figures/readme_runtime_compare.png)
 
@@ -549,6 +552,7 @@ options:
                          cuda, rocm, or tpu; applies to all solve paths
   --ftol F               override the final-stage FTOL_ARRAY tolerance
   --max-iter N           override the final-stage NITER_ARRAY cap
+  --no-prefetch-compile  lower peak memory by compiling lanes sequentially
   --coils PATH           ESSOS-style coils file: tabulate its Biot-Savart
                          field in memory instead of reading an mgrid file
   --mbooz/--nbooz N      Boozer spectral resolution (default 32/32)
