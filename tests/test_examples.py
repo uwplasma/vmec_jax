@@ -1,19 +1,9 @@
-"""Smoke tests for the plan.md §10 examples at reduced budgets.
-
-Each example script reads ``VMEX_EXAMPLES_CI=1`` (parameters-at-top
-hook) and shrinks its continuation schedule / trial budget; the tests run
-the scripts as subprocesses in a temp cwd and assert that
-
-- the script exits cleanly,
-- the reported least-squares cost decreases from its first evaluation,
-- the promised outputs (optimized input deck, wout file, figures) exist.
-
-The "commented-out but CI-tested" extra objective terms of the optimization
-examples (magnetic well, traceable DMerc floor, L_grad_B floor) are exercised
-*uncommented* in ``test_extra_terms_work_uncommented`` — exactly the
-expressions the example comments show, one finite-difference least-squares
-iteration each, plus the traceable magnetic-well and DMerc terms through
-``jac="implicit"``.
+"""Smoke tests for the plan.md §10 examples at reduced budgets: each script
+reads ``VMEX_EXAMPLES_CI=1`` and shrinks its budget; the tests run them as
+subprocesses and assert clean exit, decreasing least-squares cost, and the
+promised outputs.  The examples' "commented-out but CI-tested" extra
+objective terms are exercised uncommented in
+``test_extra_terms_work_uncommented``.
 """
 
 from __future__ import annotations

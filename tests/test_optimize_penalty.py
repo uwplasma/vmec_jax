@@ -1,28 +1,11 @@
-"""Zero-crash penalty-path tests for ``optimize.least_squares`` (plan Item I.2).
-
-The zero-crash policy: a mid-campaign trial whose equilibrium solve fails
-(e.g. ``VmecJacobianError`` from a self-intersecting trial boundary) must be
-*penalized* — a large finite residual so the trust region backs off — never
-crash the campaign.  These paths were previously uncovered; the tests below
-exercise all four except-bodies deterministically by making the host solve
-fail on chosen calls (a naturally self-intersecting trial depends on scipy
-trust-region internals and is not deterministic across scipy versions):
-
-- ``jac=None`` (finite-difference lane): the ``fun`` except body
-  (penalize + ``trial solve failed`` print) via a ``solve_equilibrium`` that
-  fails on one finite-difference probe;
-- ``jac="implicit"``: the ``fun`` except body via a poisoned
-  ``implicit._host_solve`` on trial (new-parameter-key) solves — this also
-  exercises the Item I.1 typed-error relay *under jit* (the short sentinel
-  surfaces at the jit boundary and is caught by the penalty lane);
-- ``jac="implicit"``: the ``jac_fn`` last-valid-Jacobian fallback
-  (``trial jacobian failed`` print) via a poison on later memo-hit solves
-  (the Jacobian re-evaluates exactly the parameters ``fun`` just solved);
-- ``jac="implicit"``: the final diagnostic re-solve fallback (hot-seeded
-  ``solve_equilibrium`` fails -> plain cold re-solve).
-
-Each campaign must complete, return a finite cost and record the penalty
-prints (``verbose=1`` -> capsys).
+"""Zero-crash penalty-path tests for ``optimize.least_squares`` (plan Item
+I.2): a mid-campaign trial whose equilibrium solve fails must be penalized
+(large finite residual, trust region backs off), never crash.  All four
+except-bodies are exercised deterministically by making the host solve fail
+on chosen calls: the jac=None ``fun`` body, the jac="implicit" ``fun`` body
+(which also exercises the Item I.1 typed-error relay under jit), the
+last-valid-Jacobian fallback, and the final diagnostic cold re-solve.
+Each campaign must complete with a finite cost and the penalty prints.
 """
 
 from __future__ import annotations

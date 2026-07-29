@@ -214,19 +214,12 @@ def _rz_mask(ns: int, mpol: int) -> np.ndarray:
 
 @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
 def test_tomnsps_recovers_band_limited_coefficients(case):
-    """tomnsps is the exact inverse of the totzsps synthesis on band-limited data.
-
-    Feed ``tomnsps`` a pure geometry-style field through the undifferentiated
-    kernels (``armn``/``azmn``) built from internal coefficients ``x`` with the
-    scaled trig tables.  The mscale/nscale normalization makes the projection
-    recover ``x`` exactly (factor 1) in both symmetry modes: for
-    ``lasym=True`` the reduced-interval integration carries the fixaray.f
-    weight ``dnorm = 1/(nzeta*(ntheta2-1)) = 2/(nzeta*ntheta1)`` with
-    endpoint half-weights, which equals the full-grid average for the
-    reflection-symmetric basis products fed here.  (Before the core lasym
-    dnorm fix this recovered ``x/2`` — the inherited legacy defect that
-    halved every lasym force projection.)
-    """
+    """tomnsps is the exact inverse of the totzsps synthesis on band-limited
+    data: the mscale/nscale normalization recovers ``x`` exactly (factor 1)
+    in both symmetry modes — for lasym the fixaray.f weight
+    ``dnorm = 2/(nzeta*ntheta1)`` with endpoint half-weights equals the
+    full-grid average here.  (Pre-fix this recovered ``x/2``, the legacy
+    defect that halved every lasym force projection.)"""
     mpol, ntor, _, _, _, lasym = case
     res = _resolution(case)
     trig = trig_tables(res)

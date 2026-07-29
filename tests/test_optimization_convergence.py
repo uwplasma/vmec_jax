@@ -1,24 +1,13 @@
-"""R1 convergence protection: from a circular-torus seed, the QS optimization
-building blocks reach a real, non-trivial residual reduction (not just the
-``VMEX_EXAMPLES_CI`` smoke budget of ``test_examples.py``).
-
-These are ``full``-marked (nightly only, ``RUN_FULL=1``): each runs *real*
-implicit-gradient continuation (``jac="implicit"`` + ESS, the exact path the
-``examples/optimization`` scripts use) and asserts the achieved
-``QuasisymmetryRatioResidual.total`` bound.  QA runs two continuation stages
-to its precise bound (< 1e-3); QH and QP run a single stage.  QP uses a
-bounded ten-evaluation smoke: longer campaigns are basin-sensitive.  The
-module explicitly enables JIT, matching the example scripts instead of the
-suite-wide interpreted unit-test default.  The *full* precise campaigns -- QA
-1.70e-04 (max_mode 2) and QH 5.83e-05 (max_mode 5, ~100 min just for the
-max_mode-2 stage) -- are recorded/guarded in the example scripts + README, and
-the nightly guards bounded campaigns that fit reliably on hosted workers.
-
-Measured on the office 36-core CPU (2026-07-11, implicit Jacobian CPU-pinned):
-QA 2.043e-01 -> 9.82e-03 (max_mode 1) -> 1.70e-04 (2, precise); QH 6.908e-01
--> 1.401e-01 (1), continuing to 5.83e-05 by max_mode 5 in the example; QP
-4.458e-01 -> 9.4e-02 (basin-limited, same basin to max_mode 5).  Bounds below
-carry margin over those.
+"""R1 convergence protection: from a circular-torus seed, the QS building
+blocks reach real residual reduction via implicit-gradient continuation
+(``jac="implicit"`` + ESS, the exact examples/optimization path).  All
+``full``-marked (nightly): QA runs two stages to its precise bound
+(< 1e-3); QH and QP run a single bounded stage (QP is basin-sensitive).
+The full precise campaigns — QA 1.70e-04 (max_mode 2), QH 5.83e-05
+(max_mode 5) — are guarded by the example scripts + README; measured
+2026-07-11 (office 36-core CPU): QA 2.043e-01 -> 9.82e-03 -> 1.70e-04, QH
+6.908e-01 -> 1.401e-01 (stage 1), QP 4.458e-01 -> 9.4e-02 (basin-limited).
+Bounds below carry margin over those.
 """
 
 from __future__ import annotations
@@ -84,23 +73,14 @@ def test_qa_reaches_precise():
 
 @pytest.mark.full
 def test_qh_implicit_converges():
-    """QH (nfp4, helicity (1,-1)) descends from the axisymmetric seed via implicit.
-
-    Implicit escapes the exact-axisymmetric saddle where finite differences
-    stall (the QS residual is even in the symmetry-breaking harmonic, so the
-    FD gradient vanishes) — no seed kick needed.  The full continuation reaches
-    *precise* QH — QS 6.908e-01 -> 1.401e-01 (max_mode 1) -> 2.79e-03 (2) ->
-    2.41e-04 (3) -> ... -> 5.83e-05 (max_mode 5), aspect 8.000 (office 36-core
-    CPU, 2026-07-11; Landreman-Paul literature value ~2e-3) — and that precise
-    result is guarded by ``QH_optimization.py`` + the README table.
-
-    This nightly test asserts only the single-stage bound: the deep implicit
-    Jacobian is launch-bound (~101 s/eval at max_mode 2, and QH needs ~60 evals
-    there — ~100 min), so a multi-stage precise assertion would exceed the
-    reliable hosted-worker budget.  The bound below (< 0.16) tightens the
-    prior < 0.30 over the measured 0.140. A bounded 40-evaluation replay
-    reached 2.12e-03, so the shorter hosted campaign retains ample margin.
-    """
+    """QH (nfp4, helicity (1,-1)) descends from the axisymmetric seed via
+    implicit — no kick needed (implicit escapes the saddle where the even QS
+    residual makes FD gradients vanish).  The full continuation reaches
+    precise QH (6.908e-01 -> 1.401e-01 -> ... -> 5.83e-05 by max_mode 5,
+    guarded by ``QH_optimization.py`` + README).  This nightly asserts only
+    the single-stage bound < 0.16 (measured 0.140; multi-stage would exceed
+    the hosted-worker budget at ~101 s/eval); a 40-evaluation replay reached
+    2.12e-03, ample margin."""
     inp = _qh_seed()
     qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10), 1, -1)
     seed = float(qs.total(opt.solve_equilibrium(inp)))

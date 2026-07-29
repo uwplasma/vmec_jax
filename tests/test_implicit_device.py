@@ -98,25 +98,14 @@ def test_least_squares_places_params_on_jacobian_device(monkeypatch):
 
 
 def test_second_device_placement_and_gradient_no_outer_context(tmp_path):
-    """Full-fidelity second-device audit on forced host devices (subprocess).
-
-    Reproduces the reported multi-accelerator failure class without GPU
-    hardware: with ``--xla_force_host_platform_device_count=2``, cpu:1 stands
-    in for the second accelerator and cpu:0 for the default device.  The
-    caches are deliberately warmed by a default-device pass first (the order
-    that poisoned the cached runtime template), then the second-device pass
-    asserts — with NO outer ``jax.default_device`` context:
-
-    * every leaf of the state, the returned runtime, AND the gradient is
-      committed exactly to device 1 (device identity, not merely platform);
-    * ``value_and_grad`` matches the default-device gradient and is nonzero
-      (the reported regression collapsed gradients to exactly zero);
-    * a caller-side derived diagnostic stays finite;
-    * ``device="auto"`` preserves the supplied parameters' committed home.
-
-    A subprocess is required because the device-count flag must be set before
-    JAX initializes.
-    """
+    """Full-fidelity second-device audit on forced host devices (subprocess —
+    the device-count flag must precede JAX init).  cpu:1 stands in for the
+    second accelerator; caches are warmed by a default-device pass first
+    (the poisoning order), then with NO outer context the second-device pass
+    asserts: every state/runtime/gradient leaf committed to device 1
+    (identity, not platform); ``value_and_grad`` matches the default device
+    and is nonzero; a derived diagnostic stays finite; ``device="auto"``
+    preserves the supplied parameters' committed home."""
     import os
     import subprocess
     import sys

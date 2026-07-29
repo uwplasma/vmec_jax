@@ -1,42 +1,18 @@
 """Validation gates for the GKX turbulence proxies (plan.md R26h.h4).
 
-Lanes
------
-- **Geometry adapter parity** (gkx-free): the flux-tube arrays of
-  :func:`vmex.core.turbulence.gk_fieldline_geometry` reproduce, at
-  machine precision, the field-line geometry that
-  :mod:`vmex.core.stability` assembles from the same converged state
-  (identical simsopt ``vmec_fieldlines`` conventions), plus internal
-  consistency: the Cauchy-Schwarz metric inequality
-  ``gds21^2 <= gds2 * gds22``, the mirror-term identity
-  ``bgrad = gradpar d(ln bmag)/dtheta``, the vacuum-limit
-  ``cvdrift = gbdrift``, and the exactly-constant equal-arc ``gradpar``.
-- **Contract gate** (needs gkx): the mapping passes
-  ``flux_tube_geometry_from_mapping`` with host-side validation ON —
-  finite arrays and the constant-``gradpar`` equal-arc contract.
-- **Proxy physics** (needs gkx): on a solved finite-beta shaped
-  tokamak the dominant gyrokinetic growth rate is ITG-critical-gradient
-  monotone — strongly driven (``R/L_Ti = 6.9``, Cyclone-level) is unstable,
-  weakly driven (``R/L_Ti = 1``) is marginal/stable — and the quasilinear
-  and reduced nonlinear-window heat-flux proxies are positive for the
-  unstable case, with the documented saturation-rule relations between the
-  objective-vector entries reproduced exactly.
-- **Differentiability** (needs gkx): GKX is JAX-traceable —
-  both ``jax.grad`` (reverse) and ``jax.jacfwd`` (forward — the mode
-  vmex's implicit Jacobian lane uses) of the growth rate w.r.t. a
-  pressure-profile rescale match central finite differences, the gradient
-  w.r.t. the converged state (the piece ``jac="implicit"`` composes with)
-  is finite and nonzero, and the wrappers satisfy the two-positional
-  ``(state, runtime)`` objective-term contract of
-  :func:`vmex.core.optimize.least_squares`.  The eigenvector-weighted
-  quasilinear/nonlinear proxies are value-level (``jac=None``): JAX
-  declines non-symmetric eigenvector derivatives, and the gate documents
-  that limitation explicitly.
+Lanes: geometry adapter parity (gkx-free — the flux-tube arrays reproduce
+:mod:`vmex.core.stability`'s field-line assembly at machine precision,
+plus Cauchy-Schwarz, mirror-term, vacuum-limit and equal-arc identities);
+the gkx flux-tube contract with host validation ON; proxy physics on a
+finite-beta shaped tokamak (ITG-critical-gradient monotone growth rate,
+positive heat-flux proxies, saturation-rule relations reproduced exactly);
+and differentiability (reverse and forward AD vs central FD, finite state
+gradient, the two-positional objective-term contract; the eigenvector-
+weighted proxies are value-level because JAX declines non-symmetric
+eigenvector derivatives).
 
-The gkx dependency is optional (``pip install 'vmex[turbulence]'`` or
-``pip install 'gkx>=1.7.1'`` — only the post-rename ``gkx`` package works;
-the legacy ``spectraxgk`` name is not supported); like
-``test_freeboundary_diff.py``, the dependent lanes skip cleanly without it.
+gkx is optional (``pip install 'gkx>=1.7.1'``; the legacy ``spectraxgk``
+name is not supported) — dependent lanes skip cleanly without it.
 """
 
 from __future__ import annotations
@@ -271,17 +247,11 @@ def test_growth_rate_gradient_matches_finite_differences(shaped_eq):
 
 
 def test_eigenvector_weighted_proxies_are_value_level(shaped_eq):
-    """Documented guidance: quasilinear/nonlinear proxies use ``jac=None``.
-
-    Their heat-flux weights depend on the dominant eigenvector of the
-    non-symmetric GK operator.  gkx 1.7.1 evaluates it with plain
-    ``jnp.linalg.eig`` (``gkx.objectives.core``), whose eigenvector
-    derivatives JAX declines unless ``enable_eigvec_derivs`` is passed —
-    reverse-mode AD must either refuse with that documented error, or (if a
-    newer gkx opts in) agree with the finite-difference lane that
-    ``jac=None`` actually uses.  Values stay FD-friendly either way, which
-    is exactly the wout-engine-terms workflow.
-    """
+    """Documented guidance: quasilinear/nonlinear proxies use ``jac=None``
+    (their weights depend on the dominant eigenvector of the non-symmetric
+    GK operator, whose derivatives JAX declines unless
+    ``enable_eigvec_derivs``); reverse AD must either refuse with that
+    error or agree with the FD lane that ``jac=None`` actually uses."""
     pytest.importorskip("gkx")
     state, rt = shaped_eq.state, shaped_eq.runtime
 

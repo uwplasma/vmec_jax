@@ -1,49 +1,25 @@
 """Multigrid ladder (``solve_multigrid``), structural executable reuse, and
 hot restart: measurements and parity vs VMEC2000 ladders.
 
-Golden / reference facts baked into this file (measured 2026-07-09):
+Reference facts (measured 2026-07-09, local xvmec2000 / PARVMEC 9.0):
 
-- **VMEC2000 ladder parity.**  xvmec2000 (STELLOPT PARVMEC 9.0, single rank)
-  run locally on the same decks with the same ladders gives
+- Ladder parity goldens: cth_like_fixed_bdy (NS 5 9 15, ftol 1e-8/1e-10/
+  1e-14) ``wb = 0.0011262898008028658``; nfp4_QH_warm_start (NS 9 17 35,
+  ftol 1e-8/1e-10/1e-13) ``wb = 0.0037851929572631044``; reproduced at
+  rtol 5e-12.
+- Ladder-vs-single-grid ``wb`` scatter is inherent to VMEC: VMEC2000's own
+  nfp4_QH ladder differs from its own ns=35 run by 1.36e-8 (residue.f90
+  m=1 force freeze below fsqz < 1e-6), so 1e-10 is asserted only for cth
+  (measured 3.2e-11); nfp4_QH gets the ladder golden plus a 5e-8 bound.
+- Hot restart: a 1% RBC(0,1) perturbation restarted from the converged cth
+  ns=15 state starts at fsqr ~ 4e-6 (cold: 3.8e-2) and converges in ~298
+  vs 434/435 cold iterations (~69%).  <25% is unattainable at ftol 1e-14
+  for ANY warm start (damped-Richardson rate ~0.028 decades/iter, same as
+  VMEC2000, needs ~300 iters from fsq ~ 4e-6); the test asserts <75%.
 
-  - cth_like_fixed_bdy, ``NS_ARRAY = 5 9 15``, ``FTOL_ARRAY = 1e-8 1e-10
-    1e-14``: ``wb = 0.0011262898008028658``;
-  - nfp4_QH_warm_start, ``NS_ARRAY = 9 17 35``, ``FTOL_ARRAY = 1e-8 1e-10
-    1e-13``: ``wb = 0.0037851929572631044``.
-
-  Our ladders reproduce these to machine precision (asserted below at
-  rtol 5e-12).
-
-- **Ladder-vs-single-grid ``wb`` scatter is inherent to VMEC.**  For the
-  nfp4_QH deck, VMEC2000's own ladder differs from VMEC2000's own
-  single-grid ``ns = 35`` run by ``|wb_ladder/wb_direct - 1| = 1.36e-8``
-  (dominated by the ``residue.f90`` m = 1 force freeze below
-  ``fsqz < 1e-6``, which leaves a trajectory-dependent m = 1 remainder).
-  The 1e-10 ladder-vs-direct agreement target is therefore asserted for cth
-  (measured 3.2e-11) and, for nfp4_QH, replaced by (a) machine-precision
-  agreement with the VMEC2000 *ladder* value and (b) the measured inherent
-  bound vs our own direct solve (5e-8).
-
-- **Hot restart.**  With ``solve(initial_state=...)`` the boundary delta is
-  spread into the volume with the profil3d.f radial profile
-  (``solver.hot_restart_state``).  For a 1% RBC(0,1) perturbation of the
-  converged cth ns=15 state this starts at ``fsqr ~ 4e-6`` (vs 3.8e-2 for a
-  cold start and ~0.5 for a bare edge-row swap) and converges in ~298
-  iterations vs 434/435 cold (~69%).  The <25% target from the task is NOT
-  achievable for this deck at ftol 1e-14 by ANY warm start: the damped
-  Richardson iteration converges at ~0.028 residual decades/iteration
-  (identical to VMEC2000 — same stepper), so even a perfect-but-not-exact
-  start at fsq ~ 4e-6 needs ~8.5 decades ~ 300 iterations, and a 10x
-  smaller (0.1%) perturbation still measures 36% of the cold count.  The
-  test asserts the measured-achievable <75% (plus correctness of the hot
-  equilibrium); reaching <25% requires a linearized-response warm start or
-  the Phase-4 2D (Newton) preconditioner, recorded in plan.md.
-
-Compile counting uses ``jax_log_compiles`` (the "Compiling <name>" records
-from ``jax._src.interpreters.pxla``) via a logging handler, inside
-subprocesses so every measurement starts from a cold process (rules out
-in-process cache pollution between tests).  Converged states are cached as
-pickles under ``/tmp/vmex_ladder_cache`` to keep reruns fast.
+Compile counting uses ``jax_log_compiles`` in cold subprocesses (rules out
+in-process cache pollution); converged states are pickle-cached under
+``/tmp/vmex_ladder_cache``.
 """
 
 from __future__ import annotations
@@ -173,9 +149,7 @@ print(json.dumps(dict(c1=c1, t1=t1, c2=c2, t2=t2, l1=l1, l2=l2,
     assert out["c1"] > 0                       # cold solve does compile
     assert out["l1"] == 1                      # exactly one block-lane compile
     assert out["c2"] == 0, f"second solve recompiled {out['c2']} executables"
-    # c2 == 0 already proves executable reuse (a recompile would be seconds).
-    # The wall-time bound is a coarse backstop with generous CI/coverage
-    # headroom — not a tight microbenchmark (that lives in benchmarks/).
+    # coarse wall-time backstop; the tight microbenchmark lives in benchmarks/
     assert out["t2"] < 1.0, f"second solve took {out['t2']:.3f}s (>= 1.0s)"
 
 
@@ -413,10 +387,8 @@ def test_lforbal_thirty_rows_and_cache_refresh_match_vmec2000() -> None:
     assert result.r00 == pytest.approx(3.9897106225, rel=2e-10)
     assert result.wmhd == pytest.approx(2.5489005543, rel=2e-10)
 
-    # Regression coverage: before this port, deleting LFORBAL produced
-    # the same trajectory because the normal solver silently ignored the
-    # flag.  The supported default-F formulation remains the established
-    # VMEC2000 row and is now detectably distinct from the T formulation.
+    # regression: the solver once silently ignored LFORBAL; the default-F
+    # formulation must stay detectably distinct from T
     variational = multigrid.solve_multigrid(
         dataclasses.replace(
             inp,
@@ -454,21 +426,14 @@ def test_niter_exhausted_stage_transfers_final_xc_like_vmec2000() -> None:
 
 
 def test_prefetch_serves_second_rung_and_legend_prints_once():
-    """Overlapped compilation + console attribution + one legend per run.
-
-    While rung 1 iterates, a background thread AOT-compiles rung 2's block
-    lane; rung 2 must then be served by that prefetched executable (the
-    ``(prefetched)`` compile notice proves it — a silent fallback to
-    on-demand compilation would drop the marker).  The ``BEGIN FORCE
-    ITERATIONS`` legend appears exactly once per run (runvmec.f), while
-    every rung keeps its ``NS = `` banner and ITER column header.  A second
-    identical ladder without prefetch must produce the bit-identical
-    trajectory (cache warming only).
-    """
+    """While rung 1 iterates, a background thread AOT-compiles rung 2's
+    block lane; the ``(prefetched)`` compile notice proves rung 2 was served
+    by it.  The ``BEGIN FORCE ITERATIONS`` legend appears exactly once per
+    run (runvmec.f) while every rung keeps its banner and column header,
+    and a no-prefetch ladder must be bit-identical (cache warming only)."""
     inp = _load_input("solovev")
-    # Unique NITER values give this test's rungs lane structures no other
-    # test in the process can have compiled, so the compile notices are
-    # deterministic.
+    # unique NITER values make the compile notices deterministic (no other
+    # test can have compiled these lane structures)
     ladder = dict(ns_array=[5, 9], ftol_array=[1e-8, 1e-10],
                   niter_array=[731, 733])
 
@@ -503,19 +468,11 @@ def test_prefetch_serves_second_rung_and_legend_prints_once():
 
 
 def test_ladder_compile_counts_and_walltime():
-    """Measured (cold process each):
-
-    - the ladder compiles exactly one block-lane executable per executed
-      stage (3), plus one-time eager/setup glue; a second identical ladder
-      in the same process compiles NOTHING and runs in well under a second;
-    - PER-STAGE COMPILE COST DOMINATES cold ladders on these small decks
-      (~3.4 s/stage), so ladder-cold (~12 s) does NOT beat direct-cold
-      (~5 s).  The honest wall-time assertion here is therefore the
-      steady-state regime that multigrid exists for (scans, optimization,
-      restarts): a structurally-warm ladder beats a cold direct solve by
-      an order of magnitude.  ONE executable for ALL stages (radial padding
-      + masked reductions) is the recorded follow-up (plan.md §7 item 1).
-    """
+    """Cold-process measurements: one block-lane compile per executed stage
+    (3) plus one-time glue, and a second identical ladder compiles NOTHING.
+    Per-stage compile cost dominates cold ladders on these small decks
+    (~3.4 s/stage), so the honest wall-time assertion is the steady-state
+    regime: a structurally-warm ladder beats a cold direct solve."""
     out = _run_measurement(r"""
 inp = VmecInput.from_file("examples/data/input.cth_like_fixed_bdy")
 ladder = lambda: multigrid.solve_multigrid(
@@ -531,9 +488,7 @@ print(json.dumps(dict(c_cold=c1, t_cold=t1, l_cold=l1,
                       conv=(r1.converged and r2.converged and rd.converged))))
 """)
     assert out["conv"]
-    # exactly one lane compile per executed stage in the cold ladder: the
-    # block lane at ns = 5, 9, 15 (everything else is one-time eager glue
-    # shared with any solve).  Assert the structural-reuse consequences:
+    # one lane compile per executed stage (ns = 5, 9, 15); rest is glue
     assert out["l_cold"] == 3, f"expected 3 stage-lane compiles, got {out['l_cold']}"
     assert out["c_warm"] == 0, f"warm ladder recompiled {out['c_warm']}"
     assert out["t_warm"] < out["t_cold"] / 3

@@ -1,18 +1,10 @@
-"""Validation gates for the differentiable ideal-ballooning objective (R26h.h1).
-
-Physics limits on bundled axisymmetric decks (small resolutions, fast):
-
-- a zero-pressure tokamak (``input.circular_tokamak``, ``AM = 0``) must be
-  ballooning-STABLE on every surface/field line (the drive term vanishes, so
-  the spectrum of ``d/dη(g X')' = λ f X`` is strictly negative);
-- the Solovev deck with ``pres_scale`` raised to reactor-grade beta must be
-  ballooning-UNSTABLE (positive eigenvalue);
-- on the finite-beta ``input.shaped_tokamak_pressure`` deck the growth-rate
-  sign agrees with the Mercier expectation from the parity-proven wout
-  engine (interior ``DMerc > 0`` and ballooning-stable at this beta);
-- the smooth-max objective is AD-transparent: ``jax.grad`` w.r.t. a pressure
-  rescale matches finite differences, and the state gradient (the piece the
-  implicit-gradient lane composes with) is finite.
+"""Validation gates for the differentiable ideal-ballooning objective
+(R26h.h1), on bundled axisymmetric decks: a zero-pressure tokamak is
+ballooning-STABLE everywhere (the drive term vanishes); Solovev at
+reactor-grade beta is UNSTABLE; the shaped finite-beta deck's growth-rate
+sign agrees with the Mercier expectation from the wout engine; and the
+smooth-max objective is AD-transparent (``jax.grad`` vs FD, finite state
+gradient).
 """
 
 from __future__ import annotations

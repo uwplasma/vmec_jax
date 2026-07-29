@@ -1,32 +1,13 @@
 """Generated quasi-isodynamic free-boundary stress case (coils + mgrid).
 
-A portable, fully generated free-boundary case built around a QI boundary.  No
-external mgrid, coil file, or equilibrium is needed: filamentary modular coils
-are constructed analytically around the plasma, their Biot-Savart field is
-tabulated onto a cylindrical grid with
-:func:`~vmex.core.mgrid.tabulate_cartesian_field`, and the resulting table is
-consumed exactly like a file-based mgrid.
-
-Why this case exists
---------------------
-Free-boundary failures reported against the solver combine several stresses at
-once, and a case that isolates them individually cannot reproduce the coupling:
-
-* a **finite pressure** profile, so the free-boundary equilibrium is genuinely
-  different from the fixed-boundary one (a vacuum case would let the plasma sit
-  on its prescribed boundary and hide vacuum/plasma feedback);
-* a **QI** boundary, whose weak, strongly shaped fields make the Jacobian and
-  the spectral constraint far more delicate than a tokamak-like case;
-* a **coil field that does not exactly hold the prescribed boundary** — the
-  coils are placed on a smooth winding surface offset from the LCFS rather than
-  optimised against it, so the plasma must move to find its own equilibrium;
-* a **radial ladder**, exercising the vacuum/NESTOR continuation across grid
-  changes.
-
-The coil geometry is deliberately simple and closed-form so the fixture is
-cheap, reproducible and free of any external dependency.  It is a *stress*
-fixture, not a physics benchmark: the assertions are about the solver behaving
-lawfully under strain, not about the accuracy of the resulting equilibrium.
+Fully generated, no external asset: analytic filamentary modular coils are
+tabulated onto a cylindrical grid (``tabulate_cartesian_field``) and
+consumed exactly like a file-based mgrid.  The case couples the reported
+stresses at once: finite pressure (so the free answer genuinely differs
+from fixed), a delicate QI boundary, a coil field that does NOT hold the
+prescribed boundary (the plasma must move), and a radial ladder crossing
+the vacuum/NESTOR continuation.  A *stress* fixture, not a physics
+benchmark: the assertions are about lawful solver behavior under strain.
 """
 
 from __future__ import annotations
@@ -62,14 +43,9 @@ _MU0_OVER_4PI = 1.0e-7
 
 
 def _coil_filaments(nfp: int) -> np.ndarray:
-    """Closed modular filaments, shape ``(n_coils, COIL_SEGMENTS, 3)``.
-
-    Planar circular loops of radius :data:`COIL_MINOR`, centred on the circle
-    ``R = COIL_MAJOR`` and oriented normal to it, i.e. the simplest layout that
-    produces a toroidal field with the correct field-period symmetry.  Planar
-    coils cannot hold a QI plasma exactly -- that is the point: the plasma has
-    to relax away from its prescribed boundary.
-    """
+    """Closed planar modular filaments, shape ``(n_coils, COIL_SEGMENTS, 3)``
+    — the simplest layout with the right field-period symmetry.  Planar
+    coils cannot hold a QI plasma exactly; that is the point."""
     n_coils = COILS_PER_PERIOD * int(nfp)
     phi_centres = 2.0 * np.pi * (np.arange(n_coils) + 0.5) / n_coils
     theta = 2.0 * np.pi * np.arange(COIL_SEGMENTS) / COIL_SEGMENTS
@@ -86,13 +62,9 @@ def _coil_filaments(nfp: int) -> np.ndarray:
 
 
 def _biot_savart(filaments: np.ndarray, current: float):
-    """Return ``field(points) -> B`` for closed filaments carrying ``current``.
-
-    Straight-segment Biot-Savart:  each segment contributes
-    ``mu0/4pi * I * dl x r / |r|^3`` evaluated at the segment midpoint, which
-    is second-order accurate in the segment length and ample for a tabulated
-    external field that the solver only ever interpolates.
-    """
+    """``field(points) -> B`` by straight-segment Biot-Savart at segment
+    midpoints — second-order in segment length, ample for a tabulated field
+    the solver only interpolates."""
     starts = filaments
     ends = np.roll(filaments, -1, axis=1)
     segments = (ends - starts).reshape(-1, 3)          # (N, 3)
@@ -135,13 +107,9 @@ def qi_free_input(
     niter: int = 40,
     pressure_scale: float = 4.0e3,
 ) -> VmecInput:
-    """QI boundary + finite pressure + free boundary, at stress resolution.
-
-    ``pressure_scale`` sets a parabolic ``p(s) = PRES_SCALE (1 - s)`` profile.
-    A non-zero pressure is what makes the free-boundary answer differ from the
-    fixed-boundary one: the plasma expands against the coil field instead of
-    resting on the prescribed boundary.
-    """
+    """QI boundary + finite pressure + free boundary, at stress resolution;
+    ``pressure_scale`` sets ``p(s) = PRES_SCALE (1 - s)`` — nonzero pressure
+    is what makes the free answer differ from the fixed one."""
     import dataclasses
 
     inp = VmecInput.from_file(str(QI_DECK))

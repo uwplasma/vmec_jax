@@ -1,28 +1,13 @@
-"""Staged force-oracle tests (``tools/force_oracle.py``).
-
-The oracle replays the PRODUCTION iteration body
-(:func:`vmex.core.solver._make_body`) on the host and records staged
-``funct3d.f``-chain quantities (state/axis, geometry/Jacobian, bcovar
-fields, real-space and spectral lambda force, ``scalxc``, ``fnormL``,
-raw/normalized ``fsql``, ``faclam``, final update direction) at iterations
-1, 2, 25, 26 and at the first iteration after an in-loop Jacobian retry.
-
-Contract pinned here:
-
-* the replayed per-iteration rows are IDENTICAL (to float-reassociation
-  noise) to the production ``solve_multigrid`` trajectory — the oracle can
-  never drift away from the solver it instruments;
-* the staged chain is self-consistent — its recomputed ``fsql`` equals the
-  production evaluation's ``fsql`` bit-for-bit-ish;
-* the staged internals match the RECORDED goldens committed under
-  ``tests/data/`` (VMEX-regression-only stages: VMEC2000 prints only
-  iteration rows, so the interior stages cannot be cross-code — see the
-  tool docstring for the exact cross-code/VMEX-only split);
-* the default output mode is VALUES-FREE (stage codes + PASS/FAIL) and the
-  comparison stops at the FIRST differing stage;
-* (opt-in ``--run-vmec2000``) the cross-code row stages
-  ``R01_FSQR..R05_WMHD`` PASS against a local ``xvmec2000`` on the same
-  public deck.
+"""Staged force-oracle tests (``tools/force_oracle.py``): the oracle
+replays the PRODUCTION iteration body and records staged funct3d.f-chain
+quantities at iterations 1, 2, 25, 26 and after an in-loop Jacobian retry.
+Pinned: replayed rows are identical (to reassociation noise) to the
+production ``solve_multigrid`` trajectory; the staged chain's recomputed
+``fsql`` equals the production one; staged internals match the recorded
+goldens under ``tests/data/`` (interior stages are VMEX-regression-only —
+VMEC2000 prints only iteration rows); the default output is VALUES-FREE
+and stops at the first differing stage; opt-in ``--run-vmec2000`` checks
+the cross-code row stages ``R01_FSQR..R05_WMHD``.
 """
 
 from __future__ import annotations

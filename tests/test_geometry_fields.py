@@ -1,16 +1,9 @@
 """Tests for ``vmex.core.{geometry,fields}`` (jacobian.f / bcovar.f).
-
-Field-by-field parity of the geometry/field chain with the legacy
-parity-proven kernels (jacobian, metrics, B fields, energies/norms, surface
-currents, tcon) was proven by the A/B suite that retired with the legacy
-tree.  Kept here, on realistic profil3d.f initial states for sym 2D, sym 2D
-ncurr=1, sym 3D and lasym decks:
-
-- Jacobian sign-change detection (healthy state clean; an m=1 spike flips it),
-- physical invariants of the field chain (finite energies, positive volume,
-  signgs-consistent sqrt(g)),
-- jit equivalence of the full pipeline and grad of ``wb`` w.r.t. the
-  spectral coefficients.
+Field-by-field legacy parity was proven by the retired A/B suite; kept
+here, on realistic profil3d.f initial states (sym 2D, sym 2D ncurr=1, sym
+3D, lasym): Jacobian sign-change detection, physical invariants (finite
+energies, positive volume, signgs-consistent sqrt(g)), jit equivalence,
+and grad of ``wb`` w.r.t. the spectral coefficients.
 """
 
 from __future__ import annotations

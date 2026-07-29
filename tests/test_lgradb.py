@@ -1,29 +1,14 @@
-"""Traceable ``L_grad_B`` objective (plan_pre_vmex Item E, part 1).
+"""Traceable ``L_grad_B`` objective (plan_pre_vmex Item E, part 1) —
+validation gates for ``l_grad_b_state``: (a) value parity vs the wout lane
+on three decks (both lanes share the pointwise math; measured 0 to 4.4e-16
+relative, 2026-07-17 x64 CPU; asserted rtol 1e-12, plan gate 1e-6);
+(b) ``jax.grad`` of the soft-min objective through the implicit solve vs
+``frozen_path_directional_fd`` on solovev (measured rel 1.7e-6, gate 1e-4);
+(c) a ``jac="implicit"`` least-squares smoke with the new term.
 
-Validation gates for :func:`vmex.core.optimize.l_grad_b_state`, the
-implicit-adjoint-compatible ``(state, runtime)`` lane of the wout-engine
-:func:`~vmex.core.optimize.l_grad_b`:
-
-a. **Value parity** — the traceable hard-min lane vs the wout lane on three
-   decks (solovev 2D, li383_low_res 3D ncurr=1, LandremanPaul2021_QA_lowres
-   3D QA), same sampling surfaces.  Both lanes share the pointwise math
-   (:func:`vmex.core.statephysics._lgradb_grid`); the traceable lane
-   rebuilds the wout coefficient tables (``rmnc/zmns`` renormalization, the
-   ``wrout.f`` Nyquist analysis of ``B^u/B^v``) in jnp, so they agree to
-   float round-off — measured 0 to 4.4e-16 relative on all three decks
-   (2026-07-17, x64 CPU); asserted at rtol 1e-12 (headroom for BLAS/einsum
-   reassociation), far inside the 1e-6 plan gate.
-b. **Gradient** — ``jax.grad`` of the smooth (soft-min) objective through
-   the implicit solve vs :func:`vmex.core.implicit.frozen_path_directional_fd`
-   on solovev, one boundary dof: measured rel 1.7e-6, gate 1e-4.
-c. A ``jac="implicit"`` least-squares smoke including the new term.
-
-Converged states are cached in ``/tmp`` (same pattern as test_optimize.py) so
-repeated runs skip the solves.  No golden fixtures needed — every comparison
-is self-referential against the wout engine / frozen-path FD of the same
-state.  The LandremanPaul deck exhausts its iteration budget at this
-resolution (``converged=False``); parity is a property of the returned state,
-not of convergence, so it is asserted regardless.
+States are /tmp-cached; every comparison is self-referential.  The
+LandremanPaul deck exhausts its budget (``converged=False``); parity is a
+property of the returned state, so it is asserted regardless.
 """
 
 from __future__ import annotations

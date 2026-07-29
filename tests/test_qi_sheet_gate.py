@@ -1,53 +1,36 @@
 """The self-consistent public QI free-boundary gate (sheet-current field).
 
-This is the public replacement for the confidential high-mode QI failure
-class the reviews required: a QI boundary, a field that actually confines
-it, the private-style radial ladder, every reported input feature, and a
-recorded VMEC2000 comparison — all from public data, built deterministically
-in-session by :mod:`tools.build_qi_sheet_mgrid` (no fetched asset).
+Public replacement for the confidential high-mode QI failure class: a QI
+boundary, a confining field, the private-style radial ladder, every
+reported input feature, and a recorded VMEC2000 comparison — built
+deterministically in-session by :mod:`tools.build_qi_sheet_mgrid`.
 
-Recorded fresh local xvmec2000/PARVMEC goldens on the byte-equivalent gate
-deck (2026-07-28, DELT = 0.50): all five rungs (21→34→55→89→144, 238
-modes, LFORBAL=T, PRECON_TYPE='NONE', PREC2D_THRESHOLD=1e-30, APHI, no
-supplied axis) — vacuum on at iteration 45, EXECUTION TERMINATED NORMALLY,
-wout written: ``wb = 2.2735640332e-3``, ``sum raxis_cc = 0.93039119``,
-``iotaf(edge) = -0.4147612``, ``aspect = 8.0935``.  VMEX on the identical
-ladder, measured on BOTH platforms: arm64-macos ``wb = 2.2735814e-3``
-(7.7e-6 relative), x86-linux ``wb = 2.2735892e-3`` (1.1e-5 relative),
-vacuum on at 45 on both.
+VMEC2000 goldens on the byte-equivalent gate deck (2026-07-28,
+DELT = 0.50; five rungs 21→34→55→89→144, 238 modes, LFORBAL=T,
+PRECON_TYPE='NONE', PREC2D_THRESHOLD=1e-30, APHI, no supplied axis):
+vacuum on at 45, ``wb = 2.2735640332e-3``, ``sum raxis_cc = 0.93039119``,
+``iotaf(edge) = -0.4147612``, ``aspect = 8.0935``.  VMEX measured:
+arm64-macos ``wb = 2.2735814e-3`` (7.7e-6 rel), x86-linux
+``wb = 2.2735892e-3`` (1.1e-5 rel), vacuum on at 45 on both.
 
-DELT rationale: a four-point sweep MAPPED a platform-sensitive stability
-edge — the VMEX free-multigrid trajectory on x86-linux was non-finite at
-DELT 0.55/0.60 while 0.45 and 0.50 converged on both platforms with the
-same activation iteration as VMEC2000.  That edge was root-caused to
-NESTOR consuming a sign-changed transient state and fixed at base commit
-"Free boundary: never feed NESTOR a sign-changed state" (funct3d.f
-ordering); post-fix ALL FOUR swept DELT values converge on both
-platforms — hosted x86-linux measured 0.55 dense (activation 45,
-``wb = 2.2733959436e-3``), 0.55 FFT (``wb = 2.2733959503e-3``, dense/FFT
-agreement 3e-9), and 0.60 dense (activation 44).  The deck keeps 0.50 as
-the stable default gate (full step of margin, tightest two-code
-agreement), and :func:`test_qi_sheet_gate_ladder_delt_055_regression`
-pins the previously-failing 0.55 case against fresh VMEC2000 goldens on
-the DELT = 0.55 gate deck (recorded 2026-07-28):
-``wb = 2.2738091757e-3``, ``sum raxis_cc = 0.93032287``,
-``iotaf(edge) = -0.4160441``, ``aspect = 8.0965``, activation 45.
+DELT rationale: a sweep mapped a platform-sensitive stability edge (0.55 /
+0.60 once non-finite on x86-linux), root-caused to NESTOR consuming a
+sign-changed transient and fixed at base commit "Free boundary: never feed
+NESTOR a sign-changed state"; post-fix all four swept DELT values converge
+on both platforms.  0.50 stays the stable default gate;
+:func:`test_qi_sheet_gate_ladder_delt_055_regression` pins the 0.55 case
+against its own VMEC2000 goldens (2026-07-28): ``wb = 2.2738091757e-3``,
+``sum raxis_cc = 0.93032287``, ``iotaf(edge) = -0.4160441``,
+``aspect = 8.0965``, activation 45.
 
-Calibration disclosure: the sheet-current amplitude is calibrated against
-the VMEX fixed-boundary solve of the same deck — the boundary-<|B|^2>
-scale and the measured PHIEDGE both derive from VMEX outputs (see
-:mod:`tools.build_qi_sheet_mgrid`) — so the free-boundary comparison is
-self-consistent rather than fully independent.  The independent leg is
-that VMEC2000 then solves the SAME deck + mgrid byte-for-byte and lands
-the same equilibrium.
+Calibration disclosure: the sheet amplitude and PHIEDGE derive from VMEX
+fixed-boundary outputs, so the free comparison is self-consistent; the
+independent leg is VMEC2000 solving the SAME deck + mgrid byte-for-byte.
 
 ftol rationale: the sheet fit nulls ``B.n`` to 2.5e-4 of ``|B|`` and the
-64x64x36 trilinear mgrid adds interpolation error, which floors the
-free-boundary residual near 1e-6 (measured per rung: 6.7e-7 … 2.7e-6).
-The gate therefore demands convergence at ``ftol = 1e-5`` — decisively
-crossed on every rung by both codes — rather than pretending to 1e-8 the
-field cannot support.  The FIXED-boundary ladder has no such floor and
-must converge at 1e-8.
+64x64x36 trilinear mgrid floors the free residual near 1e-6 (measured
+6.7e-7 … 2.7e-6 per rung), so the free gate demands ``ftol = 1e-5``; the
+FIXED ladder has no floor and must converge at 1e-8.
 """
 
 from __future__ import annotations
@@ -61,9 +44,8 @@ import pytest
 
 jax = pytest.importorskip("jax")
 
-# The suite-wide conftest disables jit by default; the sheet-current build
-# and the 238-mode ladders are jit-dependent (unjitted, the fixture alone
-# takes ~24 minutes and its Biot-Savart loops exhaust memory).
+# jit required: unjitted, the fixture alone takes ~24 min and its
+# Biot-Savart loops exhaust memory.
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,12 +59,8 @@ from vmex.core.multigrid import (  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _release_jax_caches():
-    """Free compiled executables between the heavy gate lanes.
-
-    Four 238-mode lanes in one process accumulate JAX executable caches
-    (the same syndrome that evicted hosted CI runners); releasing after
-    each test keeps peak memory at the largest single lane.
-    """
+    """Free compiled executables between the heavy 238-mode lanes; keeps
+    peak memory at the largest single lane (hosted runners were evicted)."""
     yield
     jax.clear_caches()
     import gc
@@ -111,8 +89,7 @@ FIXED_GOLDEN_IOTA_EDGE = -0.4410936869
 FIXED_GOLDEN_ASPECT = 8.0019
 
 # initialize_radial.f FORMAT 1000 stage banner and the printout.f screen
-# line (iteration, FSQR, FSQZ, FSQL lead every row; the terminating
-# iteration of a stage is always printed).
+# line (the terminating iteration of a stage is always printed).
 _NS_BANNER = re.compile(
     r"NS = *(\d+) NO\. FOURIER MODES = *(\d+) FTOLV = *([0-9.E+-]+)"
     r" NITER = *(\d+)")
@@ -122,16 +99,10 @@ _ITER_LINE = re.compile(
 
 
 def _assert_five_rungs_crossed_ftol(output: str) -> None:
-    """Every NS_ARRAY rung terminates by crossing its own ftol.
-
-    Parses the emitted VMEC2000-format transcript: exactly one
-    initialize_radial.f ``NS = `` banner per rung (FTOLV and NITER captured
-    from the banner — a Jacobian-recovery retry would re-banner and fail
-    the count) and the printout.f screen lines.  A rung passes when its
-    final printed FSQR/FSQZ/FSQL each sit at/below its FTOLV (the
-    eqsolve.f convergence test is per-residual) in strictly fewer than
-    NITER iterations — no rung may end by iteration exhaustion.
-    """
+    """Every NS_ARRAY rung terminates by crossing its own ftol: exactly one
+    ``NS = `` banner per rung (a Jacobian-recovery retry would re-banner and
+    fail the count), and each rung's final FSQR/FSQZ/FSQL at/below its FTOLV
+    in strictly fewer than NITER iterations — no iteration exhaustion."""
     banners = list(_NS_BANNER.finditer(output))
     assert len(banners) == 5, f"expected 5 rung banners, found {len(banners)}"
     assert [int(b.group(1)) for b in banners] == [21, 34, 55, 89, 144]
@@ -154,12 +125,9 @@ def _assert_five_rungs_crossed_ftol(output: str) -> None:
 
 
 def _wout_parity_aspect(inp: VmecInput, result) -> float:
-    """wout ``aspect`` scalar of the final state (aspectratio.f quadrature).
-
-    One boundary-quadrature geometry evaluation of ``result.state`` on a
-    fresh runtime at the final radial resolution — the exact wout-writer
-    convention (:func:`vmex.core.statephysics.aspect_ratio`), no re-solve.
-    """
+    """wout ``aspect`` of the final state (aspectratio.f quadrature, the
+    exact wout-writer convention), evaluated on a fresh runtime — no
+    re-solve."""
     from vmex.core.solver import prepare_runtime, resolution_from_input
     from vmex.core.statephysics import aspect_ratio
 
@@ -212,10 +180,8 @@ def _gate_deck(base_deck: str) -> str:
     return _indexed_m0(deck)
 
 
-@pytest.mark.full  # the fixture builds the sheet field (~90 s jitted, GB-
-# scale Biot-Savart temporaries) -- too heavy for the shared parity shard,
-# whose 4-worker-with-coverage runner was memory-evicted four times once
-# this module joined it.  The whole gate runs in the full matrix only.
+@pytest.mark.full  # sheet-field build (~90 s jitted, GB-scale temporaries)
+# memory-evicted the shared parity shard; the gate runs in the full matrix.
 def test_sheet_field_confines(sheet_field):
     """The deterministic fit reaches the confining Bn + alignment thresholds.
 
@@ -271,10 +237,8 @@ def test_qi_sheet_gate_ladder_matches_vmec2000(sheet_field, tmp_path):
     def collect(t="", end="\n"):
         lines.append(str(t))
 
-    # release_stage_cache: the five-rung 238-mode ladder otherwise retains
-    # every rung's executables (12.4 GB peak RSS measured), which does not
-    # fit a 16 GB hosted CI runner; per-rung release bounds the peak at the
-    # largest single rung and changes no numerics.
+    # release_stage_cache: retaining every rung's executables peaks at
+    # 12.4 GB RSS (measured); per-rung release changes no numerics.
     result = solve_free_boundary_multigrid(
         inp, mgrid_path=str(outdir / "mgrid_qi_sheet.nc"), verbose=True,
         emit=collect, raise_on_max_iterations=False,
@@ -298,23 +262,13 @@ def test_qi_sheet_gate_ladder_matches_vmec2000(sheet_field, tmp_path):
 
 @pytest.mark.full  # ~20 min: the SAME gate ladder through the FFT kernel
 def test_qi_sheet_gate_ladder_fft_matches_dense(sheet_field, tmp_path):
-    """FFT and dense kernels land the SAME gate equilibrium (golden bands).
-
-    Identical deck, field and ladder as
-    :func:`test_qi_sheet_gate_ladder_matches_vmec2000`, forced through the
-    separable-FFT synthesis (``use_fft=True``).  The FFT kernel is the same
-    math to roundoff at this deck's exact 238-mode/NZETA=36 table (the
-    transform A/B is machine-precision), so the FFT lane must activate in
-    the same window and land inside the same recorded VMEC2000 bands as
-    the dense lane: FFT == dense == VMEC2000 within the gate tolerances.
-
-    Regression: with the FFT roundoff realization this ladder sat on the
-    wrong side of the DELT stability edge and a sign-changed transient
-    reached NESTOR, whose poisoned ``bsqvac`` (DEL-BSQ = NaN) raised
-    NON-FINITE FORCE EVALUATION where VMEC2000 recovers — funct3d.f
-    validates the Jacobian first and re-evaluates the restored state
-    (see ``freeboundary._jacobian_ok``).
-    """
+    """The gate ladder forced through the separable-FFT synthesis
+    (``use_fft=True``) must land inside the same recorded VMEC2000 bands as
+    the dense lane (the FFT kernel is the same math to roundoff at this
+    238-mode/NZETA=36 table).  Regression context: the FFT roundoff
+    realization once sat on the wrong side of the DELT stability edge and a
+    sign-changed transient poisoned NESTOR (``bsqvac`` NaN); fixed by the
+    funct3d.f Jacobian-first ordering (``freeboundary._jacobian_ok``)."""
     outdir, _ = sheet_field
     deck = _gate_deck((outdir / "input.qi_sheet_free").read_text())
     path = tmp_path / "input.qi_gate_fft"
@@ -344,28 +298,15 @@ def test_qi_sheet_gate_ladder_fft_matches_dense(sheet_field, tmp_path):
 def test_qi_sheet_gate_ladder_delt_055_regression(sheet_field, tmp_path):
     """DELT = 0.55 free gate ladder: the vacuum-source fix stays fixed.
 
-    History: with DELT = 0.55 this exact ladder previously produced a
-    NON-FINITE FORCE EVALUATION on x86-linux (and under the FFT kernel on
-    arm64-macos) because a sign-changed transient state reached NESTOR,
-    whose poisoned ``bsqvac`` (DEL-BSQ = NaN) then entered the force
-    evaluation — while VMEC2000 always converged this case: funct3d.f
-    validates the Jacobian FIRST and re-evaluates the restored state
-    before computing vacuum pressure.  The vacuum-source fix (commit
-    "Free boundary: never feed NESTOR a sign-changed state") restores
-    that funct3d.f ordering (see ``freeboundary._jacobian_ok``); this
-    regression pins the repaired behavior on the public deck so it cannot
-    silently rot.  The 0.50 deck stays the stable default gate
-    (:func:`test_qi_sheet_gate_ladder_matches_vmec2000`).
-
-    Goldens: fresh local xvmec2000/PARVMEC on the byte-equivalent gate
-    deck rewritten to DELT = 0.55 (2026-07-28): ``wb = 2.2738091757e-3``,
+    This exact ladder once raised NON-FINITE FORCE EVALUATION (sign-changed
+    transient reaching NESTOR, poisoned ``bsqvac``); the fix restores the
+    funct3d.f Jacobian-first ordering (``freeboundary._jacobian_ok``), and
+    this pin keeps the repaired behavior from rotting.  Goldens (VMEC2000,
+    2026-07-28, DELT = 0.55): ``wb = 2.2738091757e-3``,
     ``sum raxis_cc = 0.93032287``, ``iotaf(edge) = -0.4160441``,
-    ``aspect = 8.0965``, vacuum on at 45.  Bands are identical to the
-    0.50 ladder test; VMEX measured inside all of them on BOTH platforms:
-    arm64-macos dense ``wb = 2.2733947272e-3`` (wb 1.8e-4, r00 4.5e-4,
-    iota 8.1e-4 relative), hosted x86-linux dense ``wb = 2.2733959436e-3``
-    (wb 1.8e-4, r00 6.3e-4, iota 3.8e-4 relative; x86 FFT agrees with x86
-    dense to 3e-9), activation 45 everywhere.
+    ``aspect = 8.0965``, vacuum on at 45.  VMEX measured inside all bands
+    on both platforms (worst rel: wb 1.8e-4, r00 6.3e-4, iota 8.1e-4; x86
+    FFT agrees with x86 dense to 3e-9), activation 45 everywhere.
     """
     outdir, _ = sheet_field
     deck = _gate_deck((outdir / "input.qi_sheet_free").read_text())
@@ -396,14 +337,12 @@ def test_qi_sheet_gate_ladder_delt_055_regression(sheet_field, tmp_path):
 def test_qi_fixed_238_ladder_converges(tmp_path):
     """FIXED 238-mode ladder converges at 1e-8 AND matches VMEC2000 wout.
 
-    Fresh local xvmec2000/PARVMEC on the byte-equivalent deck (2026-07-28,
-    MPOL=13/NTOR=9, NS 21→34→55→89→144, ftol 1e-8, fsqr 9.32e-9):
-    ``wb = 2.2762082139521e-3``, ``r00 = 0.9293551107718``,
-    ``iotaf(edge) = -0.4410936869``, ``aspect = 8.0019``.  VMEX parity on
-    this machine is at the 1e-10 class (wb identical to all printed
-    digits, r00 to 1.4e-11 relative); the 1e-6 bands below leave platform
-    margin while remaining ~3 orders tighter than the free-boundary gate
-    bands (no mgrid-interpolation floor in the fixed problem).
+    VMEC2000 goldens (2026-07-28, MPOL=13/NTOR=9, NS 21→34→55→89→144, ftol
+    1e-8, fsqr 9.32e-9): ``wb = 2.2762082139521e-3``,
+    ``r00 = 0.9293551107718``, ``iotaf(edge) = -0.4410936869``,
+    ``aspect = 8.0019``.  Local VMEX parity is at the 1e-10 class; the 1e-6
+    bands leave platform margin while staying ~3 orders tighter than the
+    free gate (no mgrid-interpolation floor in the fixed problem).
     """
     deck = (ROOT / "examples" / "data" / "input.nfp2_QI").read_text()
     deck = re.sub(r"MPOL *= *\d+", "MPOL = 13", deck)

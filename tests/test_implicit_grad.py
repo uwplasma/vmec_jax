@@ -1,49 +1,20 @@
 """Implicit-differentiation gradient tests (``vmex.core.implicit``, plan.md §6).
 
-Validated here (no golden fixtures needed — everything is self-referential
-against central finite differences through the full host solver):
+Self-referential against central finite differences through the full host
+solver: the traceable parameter map reproduces ``prepare_runtime`` exactly;
+the residual vanishes at the fixed point; solovev (ns=11, ftol=1e-14)
+gradients match central FD to rtol <= 1e-6; the adjoint GMRES converges
+(< 1e-10) within ~300 matvecs on the preconditioned formulation but not on
+raw force; li383 3D ``d(wb)/d(RBC(0,1))`` matches FD to rtol 2e-4 (measured
+FD noise floor ~3e-5); the gradient is iteration-policy independent;
+solver-sensitive metrics (iota_edge, DMerc, jdotb, D_R) match the
+*frozen-path* FD where a naive re-solve FD sign-flips; typed errors relay
+through the callback; and the multigrid lane is FD-validated directly.
 
-1. the traceable parameter map ``runtime_from_params`` reproduces
-   ``run_setup``/``prepare_runtime`` exactly at the base parameters
-   (solovev 2D ncurr=0 and li383 3D ncurr=1/lconm1);
-2. the implicit residual vanishes at the converged fixed point;
-3. solovev (ns=11, ftol=1e-14) gradients vs central FD, rtol <= 1e-6:
-   ``d(wb)/d(RBC(0,1))``, ``d(aspect)/d(RBC(0,1))``, ``d(wb)/d(phiedge)``,
-   ``d(wp)/d(pres_scale)``;
-4. the adjoint GMRES converges (< 1e-10 relative) within a ~300-matvec
-   budget on the preconditioned-residual formulation and is orders of
-   magnitude away on the raw-force formulation (informational print — this
-   is the value of the 1D preconditioner);
-5. one 3D case (li383_low_res, ns=16, forward ftol=1e-13):
-   ``d(wb)/d(RBC(0,1))`` vs central FD.  The FD noise floor from the
-   iterative forward solver (where exactly the ftol crossing lands) was
-   measured at ~3e-5 relative across h in [2e-5, 1e-3]; the assertion uses
-   rtol 2e-4 with the measured agreement (~1e-5) printed;
-6. the gradient is independent of the iteration policy (max_iterations cap)
-   — only the fixed point defines the derivative — with informational
-   peak-RSS prints for the O(1)-memory claim (the backward pass costs a
-   handful of residual linearizations, never a per-iteration tape);
-7. a solver-sensitive metric (li383 ``ncurr=1`` ``d(iota_edge)/d(boundary)``):
-   the implicit adjoint equals the *frozen-path* central FD
-   (``frozen_path_directional_fd``) to solver accuracy on the m=1 modes,
-   where a *naive* full re-solve FD sign-flips (adjoint -0.773 vs naive
-   +0.045) — the adjoint is the correct frozen-logic gradient;
-8. typed errors through the callback (plan Item I.1): an unconvergeable
-   ``im.run`` raises the SHORT typed ``VmecConvergenceError`` (the
-   ``_HOST_ERROR`` relay), not a multi-KB ``JaxRuntimeError``;
-9. the multigrid lane directly (plan Item I.4): ``im.run(multigrid=True)``
-   through a genuine ns 5 -> 11 ladder, ``d(wb)/d(RBC(0,1))`` vs the
-   frozen-path FD;
-10. implicit DMerc, ``jdotb``, and regularized Glasser ``D_R`` gradients in
-    boundary and pressure/current directions against frozen-path central
-    differences.
-
-FD steps (documented choices): central differences with the *same* ftol and
-iteration policy on both sides, converged outputs cached on disk (``/tmp``)
-keyed by (case, parameter, step, ftol).  Steps are chosen per parameter so
-truncation ~ h^2 sits above the solver-termination noise ~ eps_wb / h:
-solovev h = 3e-5 (boundary), 1e-5 (phiedge), 1e-4 (pres_scale); li383
-h = 4e-4 (boundary).
+FD steps: central differences with the same ftol/iteration policy on both
+sides, disk-cached per (case, parameter, step, ftol); chosen so truncation
+~ h^2 sits above solver-termination noise ~ eps_wb / h: solovev h = 3e-5
+(boundary), 1e-5 (phiedge), 1e-4 (pres_scale); li383 h = 4e-4 (boundary).
 """
 
 from __future__ import annotations
@@ -75,9 +46,8 @@ FD_CACHE = Path(tempfile.gettempdir()) / "vmex_implicit_fd_cache.pkl"
 
 @pytest.fixture(autouse=True, scope="module")
 def _jit_enabled():
-    """tests/conftest.py disables jit globally for cheap unit tests; the
-    implicit-gradient tests run full solves + adjoint GMRES and are ~40x
-    slower interpreted (105-160 s/test in CI) — run them jitted."""
+    """conftest disables jit globally; these full solves are ~40x slower
+    interpreted (105-160 s/test in CI) — run them jitted."""
     prev = bool(jax.config.jax_disable_jit)
     jax.config.update("jax_disable_jit", False)
     yield
@@ -86,11 +56,9 @@ def _jit_enabled():
 
 @pytest.fixture(autouse=True)
 def _release_jax_caches_in_full_matrix():
-    """The full-lane sweep of this file (solve+adjoint campaigns across every
-    case) accumulates executable caches until the dedicated hosted CI worker
-    is memory-evicted (it happened twice).  Release after each test in the
-    full matrix; the ordinary parity lanes are low-mode and keep their
-    compile reuse."""
+    """Full-lane sweeps accumulate executable caches until the hosted CI
+    worker is memory-evicted (happened twice); release after each test in
+    the full matrix only — the ordinary lanes keep their compile reuse."""
     yield
     if os.environ.get("RUN_FULL"):
         jax.clear_caches()
@@ -315,13 +283,11 @@ def _mask_bit_ident(a, b) -> bool:
 
 
 def test_dof_mask_structural_invariance_and_cache(solovev):
-    """The dof mask depends only on the structure (resolution / lconm1 / ncurr),
-    not on the parameter values or the ``ImplicitConfig`` object identity, so
-    ``_MASK_CACHE`` (keyed by ``_mask_cache_key``) reuses it across the fresh
-    configs ``make_config``/``run`` mint on every call.  Proven here: the mask
-    is *bit-identical* when recomputed (a different random perturbation seed, and
-    a runtime built from perturbed parameters), and the module cache hits across
-    two fresh configs of the same structure (one entry, no recompute)."""
+    """The dof mask depends only on structure (resolution / lconm1 / ncurr),
+    so ``_MASK_CACHE`` (keyed by ``_mask_cache_key``) reuses it across the
+    fresh configs ``make_config``/``run`` mint: bit-identical under recompute
+    (different seed, perturbed parameters) and one cache entry, no recompute,
+    across two fresh configs of the same structure."""
     name, inp, cfg, p0, x_star, rt, mask = solovev
 
     # fresh configs of the same structure share one hashable structural key,
@@ -333,8 +299,7 @@ def test_dof_mask_structural_invariance_and_cache(solovev):
     assert im._mask_cache_key(cfg_a) == key == im._mask_cache_key(cfg_b)
     assert hash(im._mask_cache_key(cfg_a)) == hash(key)
 
-    # structural invariance: recompute with a different random seed and with a
-    # runtime built from PERTURBED parameters -> bit-identical every time.
+    # recompute with a different seed and with perturbed parameters
     mask_seed = im._dof_mask(x_star, rt, cfg, seed=7)
     p1 = _perturb(p0, "rbc", (int(inp.ntor), 1), 0.01)
     rt1 = im.runtime_from_params(p1, cfg)
@@ -486,20 +451,12 @@ def test_gradient_independent_of_iteration_policy(solovev):
 
 
 def test_iota_edge_gradient_vs_frozen_path_fd():
-    """``d(iota_edge)/d(boundary)`` on the 3D ``ncurr=1`` case — the hard case
-    from the solver-sensitive AD-vs-FD regression.  ``iota`` is derived from the
-    current-constrained ``chips``, so the metric reads the converged solver
-    state and is *solver-sensitive*: a naive re-solve FD at ``p ± h`` lets the
-    convergence logic re-form and gives the wrong answer (measured, ``h=1e-4``):
+    """``d(iota_edge)/d(boundary)`` on the 3D ``ncurr=1`` case: the implicit
+    adjoint must equal the frozen-path central FD to solver accuracy.  A naive
+    re-solve FD is deliberately NOT the reference (measured, ``h=1e-4``):
 
         RBC(n=-1,m=1):  adjoint -0.77343,  frozen-path FD -0.77343,  naive FD +0.04543  (sign flip)
         RBC(n=+1,m=1):  adjoint -1.26567,  frozen-path FD -1.26567,  naive FD -2.14135  (69% off)
-
-    The implicit adjoint linearizes the *frozen* fixed point; this test locks in
-    that it reproduces the frozen-path central FD
-    (:func:`im.frozen_path_directional_fd`, Newton-solving the frozen residual
-    at ``p ± h``) to solver accuracy — i.e. the adjoint is the correct
-    frozen-logic gradient, and the naive FD is deliberately not the reference.
     """
     name = "li383_low_res"
     inp = VmecInput.from_file(str(DATA_DIR / f"input.{name}"))
@@ -534,16 +491,10 @@ def test_iota_edge_gradient_vs_frozen_path_fd():
 
 
 def test_typed_error_through_pure_callback():
-    """A failing host solve raises the SHORT typed exception, not callback noise.
-
-    Before the ``_HOST_ERROR`` relay (see the implicit module docstring,
-    "Zero-crash typed errors through the callback") an unconvergeable
-    ``im.run`` surfaced as a raw ``jax.errors.JaxRuntimeError`` with a
-    ~3.7 KB message embedding the whole host traceback and the typed
-    :class:`VmecConvergenceError` lost (``__cause__`` was ``None``).  Now the
-    original typed exception is stashed by the host callback and re-raised at
-    the ``pure_callback`` call site with ``from None``.
-    """
+    """A failing host solve raises the SHORT typed exception, not callback
+    noise: the ``_HOST_ERROR`` relay stashes the typed exception in the host
+    callback and re-raises it at the ``pure_callback`` site with ``from
+    None`` (previously a ~3.7 KB raw ``JaxRuntimeError``)."""
     from vmex.core.errors import VmecConvergenceError
 
     inp = VmecInput.from_file(str(DATA_DIR / "input.solovev"))
@@ -567,14 +518,9 @@ def test_typed_error_through_pure_callback():
 
 
 def test_multigrid_gradient_vs_frozen_path_fd():
-    """``im.run(multigrid=True)`` gradients FD-validated directly.
-
-    ``cfg.multigrid=True`` routes the host solve through ``solve_multigrid``
-    (the lane ``optimize._least_squares_implicit`` hardcodes); only the final
-    fixed point defines the derivative, so the adjoint through a genuine
-    two-stage ladder (ns 5 -> 11 on solovev) must match the frozen-path
-    central FD of ``wb`` along ``RBC(0,1)``.
-    """
+    """``im.run(multigrid=True)`` through a genuine ns 5 -> 11 solovev ladder:
+    the adjoint must match the frozen-path central FD of ``wb`` along
+    ``RBC(0,1)`` (only the final fixed point defines the derivative)."""
     inp0 = VmecInput.from_file(str(DATA_DIR / "input.solovev"))
     inp = dataclasses.replace(
         inp0,
@@ -719,30 +665,16 @@ def test_jdotb_and_glasser_3d_current_gradients_vs_frozen_path_fd(case):
 # lasym (non-stellarator-symmetric) implicit-gradient lane
 # ===========================================================================
 #
-# simsopt 1.10.3 / VMEC++ 0.6.0 added non-stellarator-symmetric boundary
-# optimization (up-down-asymmetric tokamaks, reconstruction).  The traceable
-# parameter map (implicit._boundary_from_params) reproduces the readin.f
-# ``delta`` theta-normalization and the four internal-block families
-# (rbcc/rbss/rbcs/rbsc, zbcc/zbss/zbcs/zbsc) for lasym, so ``jax.grad`` /
-# ``jax.jacrev`` through ``im.run`` now differentiate an rbs/zbc boundary dof.
-#
-# The 2D lasym golden deck ``up_down_asymmetric_tokamak`` exhausts NITER at its
-# native ns = 17; ns = 11 / ftol = 1e-12 converges and is the fixed-boundary
-# case here (the same "modified deck" pattern as the multigrid test above).
-#
-# On this deck the m = 1 lasym constraint (residue.f90 ``constrain_m1`` on the
-# asymmetric ``force_Z_cc`` pair) floors the *frozen* residual F that the
-# implicit adjoint linearizes at ~1e-7 even after the solver's force metric
-# crosses ftol — the same convergence-floor phenomenon the li383 3D tests
-# document.  That anchor shift caps the naive/frozen FD-vs-AD agreement of the
-# full ``im.run`` gradient at a solver-limited ~1e-4 (asserted with margin, and
-# printed, below), while the gradient *itself* is exact:
-#   * the traceable p -> boundary map derivative FD-validates to <= 1e-6 with
-#     no solver in the loop (``test_lasym_boundary_map_derivative_vs_fd``), and
-#   * the analytic directional derivative equals the frozen-path central FD to
-#     solver accuracy (<= 5e-5) once *both* are anchored at a Newton-refined
-#     fixed point, isolating the linearization
-#     (``test_lasym_adjoint_vs_frozen_path_fd``).
+# The traceable parameter map reproduces the readin.f ``delta``
+# theta-normalization and the four internal-block families for lasym, so
+# ``jax.grad`` through ``im.run`` differentiates rbs/zbc boundary dofs.
+# The 2D lasym deck ``up_down_asymmetric_tokamak`` exhausts NITER at its
+# native ns = 17; ns = 11 / ftol = 1e-12 converges and is used here.
+# The m = 1 lasym constraint floors the *frozen* residual at ~1e-7, capping
+# naive FD-vs-AD agreement of the full im.run gradient at ~1e-4, while the
+# gradient itself is exact: the p -> boundary map FD-validates to <= 1e-6
+# with no solver in the loop, and the analytic directional derivative equals
+# the frozen-path FD to <= 5e-5 at a Newton-refined fixed point.
 
 LASYM_CASE = dict(ns=11, ftol=1e-12, max_iterations=4000)
 
@@ -770,10 +702,8 @@ def lasym():
 
 
 def test_lasym_delta_rotation_traceable():
-    """``implicit._lasym_delta_rotation_traceable`` reproduces the numeric
-    ``setup._lasym_delta_rotation`` (the readin.f theta-normalization) to
-    ~1e-12 on the golden lasym deck, and stays differentiable in the (0,1)
-    coefficients that set ``delta``."""
+    """The traceable delta rotation reproduces ``setup._lasym_delta_rotation``
+    to ~1e-12 and stays differentiable in the (0,1) coefficients."""
     from vmex.core import setup as setup_mod
 
     inp = VmecInput.from_file(str(DATA_DIR / "input.up_down_asymmetric_tokamak"))
@@ -840,11 +770,9 @@ def test_lasym_residual_zero_at_fixed_point(lasym):
 
 
 def test_lasym_boundary_map_derivative_vs_fd(lasym):
-    """The traceable ``p -> processed boundary`` map derivative FD-validates to
-    <= 1e-6 for *all four* families (rbc/zbs/rbs/zbc) — no solver in the loop,
-    so this isolates the correctness of the lasym readin.f map (delta rotation,
-    the asymmetric internal-block accumulation, lflip, and the m=1 lconm1
-    constraint) from any solver-convergence floor."""
+    """The traceable ``p -> processed boundary`` map derivative FD-validates
+    to <= 1e-6 for all four families (rbc/zbs/rbs/zbc), no solver in the
+    loop — isolating the lasym readin.f map from any convergence floor."""
     name, inp, cfg, p0, _, _, _ = lasym
     ntor = int(inp.ntor)
 
@@ -870,13 +798,9 @@ def test_lasym_boundary_map_derivative_vs_fd(lasym):
 
 
 def test_lasym_wb_aspect_gradient_vs_fd(lasym):
-    """``d(wb)/d`` and ``d(aspect)/d`` an rbs/zbc boundary dof vs central FD
-    through the host solve.  The naive re-solve FD is the physical total
-    derivative; the implicit adjoint (the *frozen*-path gradient) matches it to
-    the solver-limited floor of this m=1-constrained deck (~1e-4, printed), the
-    same documented-noise-floor pattern as the li383 3D tests.  Clean m = 2
-    asymmetric dofs (outside both the delta denominator and the m = 1 lconm1
-    constraint) are used."""
+    """``d(wb)/d`` and ``d(aspect)/d`` clean m = 2 rbs/zbc dofs vs naive
+    central FD through the host solve; agreement is at the solver-limited
+    floor of this m=1-constrained deck (~1e-4, printed)."""
     name, inp, cfg, p0, _, _, _ = lasym
     ntor = int(inp.ntor)
 
@@ -904,15 +828,10 @@ def test_lasym_wb_aspect_gradient_vs_fd(lasym):
 
 
 def test_lasym_adjoint_vs_frozen_path_fd(lasym):
-    """Definitive lasym-adjoint correctness lock.
-
-    The analytic directional derivative of the frozen fixed-point map and its
-    central frozen-path FD, BOTH anchored at the *same* Newton-refined fixed
-    point (the frozen residual driven to ~1e-14), agree to solver accuracy.
-    This removes the forward-solver anchor shift (see the section header) and
-    isolates the linearization ``dz = -(dF/dz)^{-1} dF/dp t`` plus the boundary
-    map — proving the implicit lasym gradient is exact, not merely close.
-    """
+    """Lasym-adjoint correctness lock: the analytic directional derivative and
+    the central frozen-path FD, BOTH anchored at the same Newton-refined
+    fixed point (frozen residual ~1e-14), agree to solver accuracy —
+    isolating the linearization ``dz = -(dF/dz)^{-1} dF/dp t``."""
     name, inp, _cfg, p0, x_star, _, mask = lasym
     ntor = int(inp.ntor)
     # Tight adjoint budget so the frozen-Newton refinement reaches ~1e-14 (the
@@ -998,21 +917,11 @@ def test_lasym_adjoint_vs_frozen_path_fd(lasym):
 # 3D lasym (non-stellarator-symmetric AND toroidally varying, ntor > 0)
 # ===========================================================================
 #
-# The 2D lasym lane above (up_down deck, ntor = 0) locks the asymmetric
-# readin.f map and the adjoint linearization; this lane exercises the same
-# machinery with a genuinely *toroidal* boundary (ntor = 2, nonzero n = 1
-# harmonics in all four families).  The dof plumbing
-# (``optimize._dof_modes`` / ``pack_boundary`` / ``_ess_scale``, all keyed on
-# ``min(max_mode, ntor)``) and the traceable map are dimension-general, so no
-# 3D-lasym-specific code path exists — this is the FD-validation that let the
-# ``optimize._least_squares_implicit`` ``ntor > 0`` guard be removed.
-#
-# ``basic_non_stellsym_simsopt`` (nfp = 1, mpol = 2, ntor = 2) converges
-# cleanly fixed-boundary at ns = 11 / ftol = 1e-12.  The smooth-bulk metrics
-# (``wb``, ``aspect``) match the frozen-path central FD on the n = 1 dofs to
-# ~1e-6..1e-8 (asymmetric rbs/zbc even tighter than the symmetric rbc, which
-# floors near the m = 1 lconm1 constraint) — the same solver-limited pattern
-# the 3D li383 tests document.
+# Same machinery as the 2D lane but with a genuinely toroidal boundary
+# (``basic_non_stellsym_simsopt``: nfp = 1, mpol = 2, ntor = 2, converges
+# fixed-boundary at ns = 11 / ftol = 1e-12).  ``wb``/``aspect`` match the
+# frozen-path central FD on the n = 1 dofs to ~1e-6..1e-8 — the
+# FD-validation that let the ``optimize`` ``ntor > 0`` guard be removed.
 
 LASYM3D_CASE = dict(ns=11, ftol=1e-12, max_iterations=4000)
 
@@ -1044,14 +953,9 @@ def lasym_3d():
 
 
 def test_lasym_3d_gradient_vs_frozen_path_fd(lasym_3d):
-    """``jax.grad`` through ``im.run`` on a 3D lasym boundary vs the frozen-path
-    central FD, for genuinely toroidal (n = 1) dofs in the asymmetric rbs/zbc
-    families and — as a symmetric-path regression guard — the symmetric rbc
-    family.  Both anchor the same frozen fixed point, so they agree to the
-    solver-limited floor of this ncurr = 1 / m = 1-constrained deck (measured
-    ~1e-6..1e-8 on the smooth bulk metrics, printed).  This is the end-to-end
-    check behind lifting the ``optimize`` ntor > 0 guard for lasym.
-    """
+    """``jax.grad`` through ``im.run`` on a 3D lasym boundary vs frozen-path
+    central FD: toroidal (n = 1) rbs/zbc dofs plus the symmetric rbc family
+    as a regression guard; measured agreement ~1e-6..1e-8 (printed)."""
     name, inp, cfg, p0, _, _, _ = lasym_3d
     ntor = int(inp.ntor)
 

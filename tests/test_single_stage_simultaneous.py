@@ -1,19 +1,10 @@
-"""True simultaneous plasma-boundary + coil single-stage: the joint gradient.
-
-The differentiable free boundary is differentiable in the *coils* out of the box;
-these tests lock in the extra capability that it is also differentiable in the
-plasma *boundary* through virtual casing, so ``jax.value_and_grad`` of a combined
-objective threads through the implicit adjoint (boundary dofs) AND virtual casing
-(coil dofs) at once.
-
-Two pieces make it work and are checked here:
-  * ``surface_field_data_from_state`` rebuilds the virtual-casing surface field
-    traceably from a live equilibrium state (bit-exact vs the wout path);
-  * a frozen ``PrecisionPlan`` (``plan_vc_precision``) plus the NaN-safe Laplace
-    kernel gradient in ``virtual_casing_jax`` keep the boundary gradient finite.
-
-Skipped where ``virtual_casing_jax`` is not installed (the optional free-boundary
-dependency), so this does not run on the fixed-boundary CI shards.
+"""True simultaneous plasma-boundary + coil single-stage joint gradient:
+``jax.value_and_grad`` of a combined objective threads through the implicit
+adjoint (boundary dofs) AND virtual casing (coil dofs) at once.  Checked:
+``surface_field_data_from_state`` rebuilds the surface field traceably
+(bit-exact vs the wout path), and a frozen ``PrecisionPlan`` + the NaN-safe
+Laplace kernel gradient keep the boundary gradient finite.  Skipped
+without ``virtual_casing_jax``.
 """
 
 from __future__ import annotations

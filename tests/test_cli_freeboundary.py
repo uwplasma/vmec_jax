@@ -1,19 +1,10 @@
-"""CLI free-boundary routing tests (``vmex.core.cli`` -> ``core.freeboundary``).
-
-Covered:
-
-1. the golden free-boundary deck (``input.cth_like_free_bdy_lasym_small``)
-   through the CLI with a reduced iteration cap (``--max-iter 80`` — enough
-   to activate the vacuum solve, golden turn-on iteration 53): the
-   ``In VACUUM`` block and ``VACUUM PRESSURE TURNED ON`` banner appear, the
-   wout is written and readable with ``lfreeb = True`` and the mgrid's
-   ``nextcur``/``extcur``, and the exit code is 2 (MORE ITERATIONS
-   REQUIRED — the CLI default keeps the capped state and terminates through
-   the normal output path, fileout.f semantics);
-2. missing mgrid file: warning + fixed-boundary fallback (VMEC2000 policy);
-3. direct-coil conventions: ``MGRID_FILE = 'DIRECT_COILS'`` without
-   ``--coils`` and ``--coils`` on a fixed-boundary deck are typed input
-   errors (exit code 5).
+"""CLI free-boundary routing tests (``vmex.core.cli`` ->
+``core.freeboundary``): the golden lasym deck at ``--max-iter 80`` (past
+the golden turn-on iteration 53) shows the ``In VACUUM`` block and
+activation banner, writes a readable ``lfreeb = True`` wout with the
+mgrid's ``nextcur``/``extcur``, and exits 2 (fileout.f semantics); a
+missing mgrid warns and falls back to fixed boundary (VMEC2000 policy);
+direct-coil misuse is a typed input error (exit code 5).
 """
 
 from __future__ import annotations

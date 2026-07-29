@@ -1,32 +1,16 @@
-"""Validation gates for :mod:`vmex.core.bootstrap` (R26.g steps 1-4).
+"""Validation gates for :mod:`vmex.core.bootstrap` (R26.g steps 1-4; spec
+``notes_r26g_redl_spec.md`` sections 7-8, CI-sized subset): analytic
+trapped-fraction model; V1 formula parity vs pasted simsopt rows at
+Zeff > 1; V2/V3 Zenodo QA/QH cross-check (<= 1% vs simsopt Redl curves,
+<= 10% RMS vs SFINCS interior, trapped-fraction parity; skips without the
+local dataset); differentiability of the double-where guards; traceable vs
+wout lane agreement; V4 ``<J.B>`` identity vs wout ``jdotb`` (<= 2% Zenodo,
+<= 1% solovev); V5 ``f_boot <= 1e-3`` on the published optima; V6 Picard
+convergence in <= 10 iterations; and the ``current_dofs`` driver with
+FD-checked AC/CURTOR Jacobian columns.
 
-Spec: ``notes_r26g_redl_spec.md`` sections 7-8 — the CI-sized subset:
-
-- analytic ``B0(1 + eps cos theta)`` trapped-fraction model (physics limits);
-- V1 formula parity vs a pasted simsopt ``j_dot_B_Redl`` row at Zeff > 1;
-- V2/V3 Zenodo cross-check on the precise QA/QH wouts (skips when the local
-  Zenodo dataset is absent): <= 1% vs the stored simsopt Redl curves, <= 10%
-  RMS vs the verbatim SFINCS arrays (interior), trapped-fraction parity;
-- differentiability (double-where guards): finite grads through
-  ``compute_trapped_fraction`` and ``j_dot_B_redl``;
-- traceable lane vs wout lane agreement on the solovev equilibrium.
-
-Steps 3-4 gates:
-
-- V4: the section-6.2 ``<J.B>`` identity vs the wout ``jdotb`` — on the
-  three optimized Zenodo wouts (<= 2%) and, traceably, on the solovev
-  equilibrium (<= 1%);
-- V5: ``f_boot <= 1e-3`` on the Zenodo published optima with the paper
-  profiles (wout lane of :class:`RedlBootstrapMismatch`);
-- lane agreement + finite state/profile grads of the mismatch;
-- V6 (small): the fixed-boundary Picard loop converges on a solovev-derived
-  ncurr=1 tokamak in <= 10 iterations;
-- driver: ``least_squares(..., current_dofs=k, jac="implicit")`` runs and
-  its AC/CURTOR Jacobian columns match central finite differences.
-
-Reference arrays were generated offline with simsopt master (2026-07-11,
-``RedlGeomVmec`` + ``j_dot_B_Redl``) and are pasted to 8-9 significant
-digits, which bounds the achievable fsa_* comparison at ~1e-7 relative.
+Reference arrays were generated offline with simsopt master (2026-07-11)
+and pasted to 8-9 significant digits, bounding fsa_* comparisons at ~1e-7.
 """
 
 from __future__ import annotations

@@ -1,69 +1,31 @@
 """Public confidential-proxy stress case: genuinely huge initial force.
 
-A confidential external case shows: initial ``FSQR ~ 1e8`` (public proxies
-start ~``8.5e3``), repeated JAC75 resets, ``FSQL`` pinned near 0.5 across
-resolutions and retries, in both boundary modes before vacuum activation;
-the reference PARVMEC run completes WITHOUT reaching tolerance yet writes a
-WOUT (``LFULL3D1OUT=T``).  This module provides a PUBLIC deck that
-reproduces the class of that behavior so the pipeline can be instrumented
-without the confidential data.
+The confidential signature: initial ``FSQR ~ 1e8`` (public proxies start
+~8.5e3), repeated JAC75 resets, ``FSQL`` pinned near 0.5, and a PARVMEC
+run that completes without tolerance yet writes a WOUT (``LFULL3D1OUT=T``).
+This module reproduces the class on a PUBLIC deck: the 238-mode boundary
+``input.serial2500170_surface_points_mpol12_ntor12`` with major radius 3.5
+(R0/|RBC(0,1)| ~ 24), no axis, LFORBAL, PRECON NONE, PREC2D 1e-30, indexed
+sections, NS 21..144, LFULL3D1OUT.
 
-Deck design (iterated; the mechanism, with measurements)
---------------------------------------------------------
-The deck combines every confidential-adjacent compatibility feature on the
-public 238-mode boundary ``input.serial2500170_surface_points_mpol12_ntor12``:
-major radius 3.5 at high aspect ratio (R0/|RBC(0,1)| ~ 24), no axis guess,
-``LFORBAL=T``, ``PRECON_TYPE='NONE'``, ``PREC2D_THRESHOLD=1e-30``, indexed
-namelist sections (``RBC(-6:6,0)``, ``NS_ARRAY(1)``, ``APHI(1)``),
-``NS_ARRAY = 21,34,55,89,144``, ``LFULL3D1OUT=T``.
+Only two levers defeat VMEC's dimensionless force normalization (everything
+that rescales the physics cancels in bcovar.f; measured row 1 stayed
+~4.6e3 under pressure/PHIEDGE/CURTOR/scale/TCON0/elongation/axis attempts):
+an extreme prescribed transform (``AI = 3, -300``) and an ``APHI`` flux
+remap whose derivative reverses sign in s in (0.20, 0.69) — the profil3d.f
+interior guess assumes monotone flux, so no axis recovery can remove the
+resulting force.  Combined measurement (both codes, ns=21 rung): row 1 =
+``FSQR 1.65E+07, FSQZ 2.70E+05, FSQL 5.12``, 24 resets in 40 iterations,
+DELT 0.9 -> 0.08, FSQL pinned O(1) while FSQR stays above 1e5.
 
-Getting the measured initial FSQR above 1e7 took deliberate iteration,
-because VMEC's force residuals are dimensionless — levers that rescale the
-physics rescale the ``bcovar.f`` normalization with it and CANCEL (measured
-on this boundary, first-rung row 1 stayed at ~4.6e3 under: pressure
-amplitude x2e5, PHIEDGE /2, CURTOR up to 1e6, boundary scale 3.5x, TCON0
-x12, helical-excursion x3, elongation x4, displaced-axis attempts — the
-unconditional ``eqsolve.f`` bad-Jacobian axis rescue erases any poor axis
-in BOTH codes).  Two levers survive because they break assumptions of the
-``profil3d.f`` interior guess itself:
-
-* an extreme prescribed rotational transform (``NCURR=0``,
-  ``AI = 3, -300`` -> iota from 3 to -297): row 1 rises to ~1.2e6 and then
-  saturates (the ``wb``-based force norm also grows like iota^2);
-* an ``APHI`` toroidal-flux remap whose derivative REVERSES SIGN inside
-  the plasma: ``APHI = 5, -16, 12`` gives ``phi'(s) = 5 - 32 s + 36 s^2``,
-  negative for ``s`` in (0.20, 0.69).  The interior guess distributes
-  surfaces for a monotone flux, so the initial state carries a genuinely
-  enormous relative force that no axis recovery can remove.
-
-Combined measurement (both codes agree to the printed digits, ns=21 rung):
-row 1 = ``FSQR 1.65E+07, FSQZ 2.70E+05, FSQL 5.12``, followed by repeated
-Jacobian resets (24 within 40 iterations) with the DELT ladder
-0.9 -> 0.08, and — the confidential signature — ``FSQL`` pinned at O(1)
-(successful-step rows dip to 0.5-1.6) while FSQR stays above 1e5.
-
-Cross-code findings pinned here (do NOT paper over)
----------------------------------------------------
-* At the identical planted state (same axis to 1e-16, identical
-  ``phips/iotas`` against the VMEC2000 wout arrays) the row-1 energy
-  differs: VMEX WMHD 1.4762E+03 vs VMEC2000 1.4768E+03 (~4e-4 relative)
-  and FSQZ 2.706E+05 vs ~2.70E+05, ONLY when the APHI flux-remap
-  derivative reverses sign (without APHI the same deck matches to all
-  printed digits).  The residual-channel rows still agree inside the
-  factor-2 band used below; the offset seeds a one-iteration phase shift
-  in the first successful damped step (VMEC2000 at iteration 20, VMEX at
-  21), which the banded comparison absorbs with a +-1 iteration shift.
-* On the FULL 5-rung ladder the termination classes genuinely diverge:
-  PARVMEC marches through NaN rows at the ns=55 rung and still completes,
-  writing a WOUT (exactly the confidential reference behavior), while
-  VMEX's documented fail-fast policy raises a typed error at the same
-  rung.  ``test_full_ladder_termination_classes`` pins that measured
-  difference explicitly instead of hiding it.
-
-Free-boundary variant: not provided — there is no public external-field
-(mgrid) table for this boundary, and the pre-vacuum free lane shares this
-fixed-boundary iteration path until activation; the free-side recovery
-contract is exercised on the public CTH deck in
+Cross-code findings pinned here (do NOT paper over): with the sign-
+reversing APHI the row-1 energy differs (VMEX WMHD 1.4762E+03 vs VMEC2000
+1.4768E+03, ~4e-4) and seeds a one-iteration phase shift absorbed by the
+banded comparison; on the FULL 5-rung ladder the termination classes
+diverge — PARVMEC NaN-marches at ns=55 and still writes a WOUT, VMEX's
+fail-fast policy raises a typed error (``test_full_ladder_termination_
+classes`` pins the difference).  No free-boundary variant: no public mgrid
+exists for this boundary; the free-side recovery contract lives in
 ``tests/test_freeboundary_stress.py``.
 """
 
@@ -284,16 +246,11 @@ def _executable(pytestconfig) -> Path:
 def test_fixed_termination_class_and_first_25_rows_match_vmec2000(
     pytestconfig, tmp_path: Path,
 ) -> None:
-    """Acceptance: same termination class + banded row agreement (25 rows).
-
-    Both codes run the SAME bounded deck (first rung of the ladder, the
-    deck otherwise identical): both must exhaust the iteration budget
-    without reaching tolerance (neither converges, neither aborts), VMEX
-    must write a WOUT under ``LFULL3D1OUT=T``, and the first 25 iteration
-    rows must agree channel-by-channel within a factor-2 log band allowing
-    a +-1 iteration shift (the measured one-iteration phase shift of the
-    first successful damped step — see the module docstring finding).
-    """
+    """Acceptance on the bounded first-rung deck: both codes exhaust the
+    budget without tolerance (neither converges nor aborts), VMEX writes a
+    WOUT under ``LFULL3D1OUT=T``, and the first 25 rows agree channel-by-
+    channel within a factor-2 log band allowing the measured +-1 iteration
+    phase shift."""
     deck_text = stress_indata_text(single_stage=True)
     v2k_dir = tmp_path / "vmec2000"
     vmex_dir = tmp_path / "vmex"
@@ -348,18 +305,12 @@ def test_fixed_termination_class_and_first_25_rows_match_vmec2000(
 @pytest.mark.full
 @pytest.mark.vmec2000_live
 def test_full_ladder_termination_classes(pytestconfig, tmp_path: Path) -> None:
-    """Full 5-rung ladder: the measured (divergent) termination classes.
-
-    REPORTED FINDING, deliberately pinned rather than papered over: on the
-    full ladder the interpolated state entering the ns=55 rung has no valid
-    axis.  PARVMEC re-guesses, produces NaN forces, and MARCHES ON through
-    NaN iteration rows to a "completed" exit that still writes a WOUT —
-    exactly the confidential reference behavior (completes without
-    tolerance, WOUT under LFULL3D1OUT).  VMEX's documented zero-crash /
-    fail-fast policy instead raises a typed error at the same rung.  If a
-    future change makes the two classes MATCH, this test must be updated —
-    that would itself be a significant parity change.
-    """
+    """Full 5-rung ladder: the measured (divergent) termination classes,
+    deliberately pinned — the ns=55 interpolated state has no valid axis;
+    PARVMEC re-guesses, NaN-marches to a "completed" WOUT-writing exit,
+    while VMEX's fail-fast policy raises a typed error at the same rung.
+    If a future change makes the classes MATCH, update this test — that is
+    itself a significant parity change."""
     deck_text = stress_indata_text()
     v2k_dir = tmp_path / "vmec2000"
     v2k_dir.mkdir()

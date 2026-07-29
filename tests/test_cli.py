@@ -1,22 +1,10 @@
-"""End-to-end tests for the new-core ``vmec`` CLI (``vmex.core.cli``).
-
-Covered here (plan.md Phase 2 STATUS item 4 — first vertical slice):
-
-1. ``vmec input.solovev`` writes a wout readable by
-   :func:`vmex.core.wout.read_wout` with correct ``ns``/``mnmax`` and
-   ``wb`` at golden VMEC2000 parity (1e-8);
-2. stdout structure matches the golden ``xvmec2000`` capture: banners,
-   NS-stage banner, iteration header, and the first/last iteration rows are
-   present with matching columns and values at print precision;
-3. ``--plot`` and ``--booz`` smoke on the produced wout;
-4. VMEC++-style JSON input (``VmecInput.to_json`` round trip) solves to the
-   same ``wb``;
-5. ``--test`` (bundled quick-start deck) smoke at a reduced tolerance;
-6. zero-crash exit codes: unreadable input -> ``ier_flag = 5`` with the
-   VMEC2000 werror INPUT message; iteration exhaustion -> ``ier_flag = 2``
-   with the WOUT written and the full summary/termination block printed
-   (VMEC2000 fileout.f semantics — NITER exhaustion terminates normally
-   through the output path).
+"""End-to-end tests for the new-core ``vmec`` CLI (``vmex.core.cli``):
+``vmec input.solovev`` writes a readable wout with ``wb`` at golden parity
+(1e-8); stdout structure matches the golden ``xvmec2000`` capture at print
+precision; ``--plot``/``--booz`` smoke; JSON input solves to the same
+``wb``; ``--test`` smoke; and zero-crash exit codes (unreadable input ->
+``ier_flag = 5`` with the werror INPUT message; NITER exhaustion ->
+``ier_flag = 2`` with the WOUT written — fileout.f semantics).
 """
 
 from __future__ import annotations

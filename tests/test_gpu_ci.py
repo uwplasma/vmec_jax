@@ -67,9 +67,8 @@ pytestmark = [
     pytest.mark.usefixtures("_module_jit_enabled"),
 ]
 
-# Per-test hardware gating (the module-level skip would also veto the host-rig
-# lanes below, which exercise the same placement/gradient helpers on
-# ``--xla_force_host_platform_device_count=2`` forced CPU devices, no CUDA).
+# Per-test hardware gating (a module-level skip would also veto the CUDA-free
+# host-rig lanes below).
 _requires_gpu = pytest.mark.skipif(GPU is None, reason="GPU unavailable")
 
 # Forced host devices stand in for a second accelerator (cpu:1 <-> cuda:1);
@@ -583,15 +582,11 @@ def _assert_no_platform_pins():
 def _stray_leaves(label, tree, device):
     """``(path, devices)`` for every array leaf not committed to ``device``.
 
-    Device IDENTITY, not platform: cuda:0 leaves in a cuda:1 solve are
-    exactly the mixed-device failure class under audit.  One artifact is
-    exempt: ``jax.grad`` materializes the cotangent of a parameter the
-    metric does not touch (e.g. the boundary for iota on an ncurr=0 deck)
-    as an UNCOMMITTED all-zero array on the default device
-    (``instantiate_zeros``) — placement-neutral, since an uncommitted
-    operand follows the committed operands of any downstream op, and
-    unreachable from the pinned operation.  A COMMITTED off-device leaf or
-    a nonzero off-device leaf is always a stray.
+    Device IDENTITY, not platform: cuda:0 leaves in a cuda:1 solve are the
+    failure class under audit.  Exempt: the UNCOMMITTED all-zero cotangent
+    ``jax.grad`` materializes for an untouched parameter
+    (``instantiate_zeros``) — placement-neutral.  A COMMITTED off-device
+    leaf or a nonzero off-device leaf is always a stray.
     """
     stray = []
     for path, leaf in jax.tree_util.tree_flatten_with_path(tree)[0]:
@@ -630,10 +625,9 @@ def _assert_audit_committed(target, grads, sol):
     assert not stray, f"leaves committed off {target}: {stray[:8]}"
 
 
-# Metrics whose FULL gradient pytree (every leaf, not just the probed
-# boundary element) must match the default-device reference: the smooth bulk
-# integral plus one solver-sensitive iota metric — the pair the two-A4000
-# review used to demonstrate plausible-but-wrong second-device gradients.
+# Metrics whose FULL gradient pytree must match the default-device
+# reference: the pair the two-A4000 review used to demonstrate
+# plausible-but-wrong second-device gradients.
 FULL_GRADIENT_METRICS = ("wb", "iota_edge")
 
 
@@ -643,9 +637,8 @@ def _assert_audit_matches(inp, reference, audit, *, value_rtol, grad_rtol,
     ref_values, ref_grads, _ = reference
     values, grads, _ = audit
     for name in FULL_GRADIENT_METRICS:
-        # GRADIENT VALUE equality leaf by leaf — placement alone (and a
-        # single probed element) can pass while the adjoint silently
-        # computes a plausible-but-wrong lambda on the wrong device.
+        # leaf-by-leaf VALUE equality — placement alone can pass while the
+        # adjoint computes a plausible-but-wrong lambda on the wrong device
         for ref_leaf, leaf in zip(
             jax.tree.leaves(ref_grads[name]), jax.tree.leaves(grads[name]),
             strict=True,
@@ -661,10 +654,9 @@ def _assert_audit_matches(inp, reference, audit, *, value_rtol, grad_rtol,
         for leaf in jax.tree.leaves(grads[name]):
             assert np.all(np.isfinite(np.asarray(leaf))), (
                 f"{name} gradient non-finite on {label}")
-        # The regression collapsed gradients to EXACTLY zero.  Some parameter
-        # drives every metric, so the whole pytree must retain signal; the
-        # boundary element must stay nonzero only where the reference says it
-        # is (iota on an ncurr=0 deck has a structurally zero rbc gradient).
+        # The regression collapsed gradients to EXACTLY zero: the pytree must
+        # retain signal, and the boundary element must stay nonzero wherever
+        # the reference says it is.
         norm = np.sqrt(sum(
             float(np.vdot(leaf, leaf))
             for leaf in map(np.asarray, jax.tree.leaves(grads[name]))))
@@ -694,15 +686,10 @@ def _reference_audit(inp, device, *, ftol, max_iterations):
 
 
 def _reset_device_blind_caches():
-    """Cold-start lane: the target-device pass must be the first real work.
-
-    Drops every compiled computation plus the implicit module's device-blind
-    memos (the runtime-template lru_cache, the structural dof-mask cache and
-    the boundary-packing tables) — the caches whose warm entries masked the
-    callback-payload placement bug: a default-device pass primes the mask
-    cache, and the poisoned-order lane then never reconstructs parameters
-    inside the callback at all.
-    """
+    """Cold-start lane: drop every compiled computation plus the implicit
+    module's device-blind memos (runtime-template lru_cache, dof-mask cache,
+    boundary-packing tables) — the warm entries that masked the
+    callback-payload placement bug."""
     jax.clear_caches()
     im._template_runtime.cache_clear()
     im._MASK_CACHE.clear()
@@ -720,16 +707,12 @@ def _second_gpus():
 def test_second_gpu_explicit_values_and_gradients():
     """The full differentiable path on a NON-DEFAULT GPU, no outer context.
 
-    The reported regression: with ``device=jax.devices("gpu")[1]`` the
-    forward solve was correct but every gradient collapsed to zero and the
-    derived diagnostics went NaN, because the pure_callback host thread, the
-    cached runtime template, and the custom-VJP backward all executed outside
-    the caller's device context.  The resolved device is carried in the
-    static config and the callback outputs carry explicit single-device
-    sharding; this lane drives the whole audit WITHOUT any outer
-    ``jax.default_device`` context, in the cache-poisoned order (CPU, then
-    the default GPU, then the second GPU), and asserts device IDENTITY for
-    every leaf of the state, the runtime and every gradient pytree.
+    Reported regression: on gpu[1] the forward solve was correct but every
+    gradient collapsed to zero and diagnostics went NaN (callback thread,
+    cached runtime template and custom-VJP backward ran outside the device
+    context).  This lane runs WITHOUT ``jax.default_device``, in the
+    cache-poisoned order (CPU, default GPU, second GPU), and asserts device
+    IDENTITY for every leaf of state, runtime and every gradient pytree.
     """
     gpus = _second_gpus()
     _assert_no_platform_pins()
@@ -749,16 +732,11 @@ def test_second_gpu_explicit_values_and_gradients():
 
 @_requires_gpu
 def test_second_gpu_cold_first_values_and_gradients():
-    """Cold second-GPU-FIRST audit, no outer context.
-
-    The hardware review's second failure mode: without warm caches the
-    parameters reconstructed from the pure_callback payload landed on CPU
-    while the runtime intermediates were on the second GPU.  The
-    poisoned-order lane cannot see this — its default-device warmup primes
-    the structural mask cache, so the callback never rebuilds a runtime.
-    Here every compiled computation and device-blind memo is dropped and the
-    second-GPU audit runs BEFORE any other-device work in this test.
-    """
+    """Cold second-GPU-FIRST audit, no outer context: with caches dropped,
+    the callback-payload reconstruction once landed parameters on CPU while
+    runtime intermediates sat on the second GPU — invisible to the
+    poisoned-order lane, whose warmup primes the mask cache.  The
+    second-GPU audit runs BEFORE any other-device work here."""
     gpus = _second_gpus()
     _assert_no_platform_pins()
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
@@ -817,12 +795,9 @@ def test_second_host_device_poisoned_order_values_and_gradients():
 
 @_requires_host_rig
 def test_second_host_device_cold_first_values_and_gradients():
-    """CUDA-free rig for the cold second-device-FIRST lane.
-
-    Reproduces the mixed-device callback-payload failure class without
-    hardware: with cleared caches the first solve reconstructs parameters
-    inside the callback against a cpu:1-committed runtime template.
-    """
+    """CUDA-free rig for the cold second-device-FIRST lane: with cleared
+    caches the first solve reconstructs parameters inside the callback
+    against a cpu:1-committed runtime template."""
     _assert_no_platform_pins()
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
 
@@ -858,15 +833,11 @@ def test_second_host_device_values_and_gradients_with_outer_context():
 
 @_requires_host_rig
 def test_second_host_device_unconverged_adjoint_raises_typed_error():
-    """An exhausted adjoint Krylov budget must raise, never return.
-
-    The backward used to discard ``sol.converged``/``sol.residual_norm``
-    from the GCROT result, so an unconverged adjoint silently became a
-    plausible gradient.  A 2-vector Krylov budget (m=2, k=1, one restart)
-    against an unreachable tolerance forces non-convergence; the reverse
-    pass must surface the typed AdjointSolveError with iteration/residual
-    info instead of a gradient.
-    """
+    """An exhausted adjoint Krylov budget must raise, never return (the
+    backward once discarded GCROT convergence info, turning an unconverged
+    adjoint into a plausible gradient).  A 2-vector budget (m=2, k=1, one
+    restart) against an unreachable tolerance forces non-convergence; the
+    reverse pass must surface the typed AdjointSolveError."""
     _assert_no_platform_pins()
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     params = im.params_from_input(inp, device=HOST_DEVICES[1])
@@ -902,15 +873,10 @@ def test_device_scope_basics():
 
 @_requires_host_rig
 def test_device_scope_second_host_device_gradient_equality():
-    """The supported scope path: gradient VALUES equal the default device.
-
-    ``device_scope`` holds ``jax.default_device`` around transformation
-    creation AND execution — the belt-and-braces path for whole-program
-    non-default-device work.  The wb (smooth bulk) and iota_edge
-    (solver-sensitive) gradients on the scoped second device must equal the
-    default-device reference leaf by leaf, and stay committed to the second
-    device.
-    """
+    """The supported scope path (``device_scope`` holds ``jax.default_device``
+    around creation AND execution): wb and iota_edge gradients on the scoped
+    second device must equal the default-device reference leaf by leaf and
+    stay committed to the second device."""
     _assert_no_platform_pins()
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
 
@@ -943,14 +909,10 @@ def test_device_scope_second_host_device_gradient_equality():
 
 @_requires_host_rig
 def test_adjoint_debug_instrumentation_reports_stages(monkeypatch, capfd):
-    """VMEX_ADJOINT_DEBUG=1 prints per-stage device+norm lines on cpu:1.
-
-    The off-by-default instrumentation is the hardware-session triage tool:
-    each reverse pass must report the execution site plus device set and
-    norm for the adjoint RHS, one operator application, the recovered
-    lambda, and both parameter contributions, so a placement divergence
-    localizes to a stage without rebuilding.
-    """
+    """VMEX_ADJOINT_DEBUG=1 prints per-stage device+norm lines on cpu:1 —
+    the hardware-session triage tool: adjoint RHS, one operator application,
+    the recovered lambda, and both parameter contributions, so a placement
+    divergence localizes to a stage without rebuilding."""
     _assert_no_platform_pins()
     monkeypatch.setenv("VMEX_ADJOINT_DEBUG", "1")
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")

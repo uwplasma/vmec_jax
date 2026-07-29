@@ -1,64 +1,24 @@
-"""New-core end-to-end parity breadth: six benchmark decks vs VMEC2000 golden.
+"""New-core end-to-end parity breadth: six benchmark decks vs VMEC2000
+golden (DSHAPE, circular_tokamak, li383_low_res,
+LandremanPaul2021_QA_lowres, nfp4_QH_warm_start,
+up_down_asymmetric_tokamak).  Multi-stage decks run the full ``NS_ARRAY``
+ladder via ``solve_multigrid`` (golden iteration counts are per-stage,
+warm-started); single-stage decks call ``solver.solve`` directly.
 
-Extends ``test_solver_end_to_end.py`` (solovev + cth_like_fixed_bdy) to the
-remaining fixed-boundary golden fixtures (PARVMEC 9.0 single-rank runs under
-``resolve_golden_dir()``):
+Golden caveats (details in the ``CASES`` table): QA_lowres and up_down are
+NITER-capped goldens, so their final-stage ftol is relaxed to the matched
+residual and the harmonic atol covers golden's OWN non-convergence, not
+core drift (a fully converged VMEC2000 rerun of up_down moves golden by up
+to 7e-5; the converged new core matches that rerun to <= 7.3e-7).  The
+historic ~3% lasym drift was the fixaray.f dnorm defect fixed in
+``vmex/core/fourier.py``.
 
-==========================  ====================  ==========================
-case                        physics               solve path
-==========================  ====================  ==========================
-DSHAPE                      2D, pressure, ncurr=0 multigrid 16/32/64/128
-circular_tokamak            2D, ncurr=0           multigrid 10/17
-li383_low_res               3D nfp=3, ncurr=1     single grid ns=16
-LandremanPaul2021_QA_lowres 3D nfp=2, ncurr=1     multigrid 16/31/50
-nfp4_QH_warm_start          3D nfp=4, ncurr=1     single grid ns=35
-up_down_asymmetric_tokamak  lasym, ncurr=0        single grid ns=17
-==========================  ====================  ==========================
-
-Multi-stage decks run the full ``NS_ARRAY`` ladder via
-:func:`vmex.core.multigrid.solve_multigrid` (the golden stdout's final
-iteration count is per-stage and warm-started, so a cold single-grid run of
-the final ``ns`` is not comparable); single-stage decks call
-:func:`vmex.core.solver.solve` directly.
-
-Golden caveats measured from the fixtures (see the ``CASES`` table):
-
-- ``LandremanPaul2021_QA_lowres``: the golden final stage is NITER-capped
-  (1000 iterations, final fsq 2.63e-13 > FTOL 1e-13, "Try increasing
-  NITER").  We relax the final-stage ftol to 3e-13 (just above the golden
-  terminal residual) so both runs stop at a matched residual.  Converging
-  the new core further (fsq ~5e-15) moves the coefficients ~2.5e-5 AWAY
-  from the golden snapshot, i.e. the residual harmonic tolerance here
-  (atol 5e-6) measures golden's own non-convergence, not core drift.
-- ``up_down_asymmetric_tokamak``: golden is also NITER-capped (2000
-  iterations at FTOL 1e-14, final fsq {5.25e-14, 1.11e-13, 5.80e-16}); we
-  use ftol 1.5e-13 and ``harmonic_atol = 2e-5`` — both runs stop at a
-  matched residual, and the atol covers golden's own remaining
-  non-convergence (re-running VMEC2000 on this deck to fsq ~1e-16 moves the
-  golden harmonics by up to 7e-5, e.g. mid-surface rmnc m=0; the new core
-  converged to fsq ~2e-16 matches that fully-converged VMEC2000 run to
-  <= 7.3e-7 on every checked surface, iotaf to machine precision, wb to
-  1.3e-11, in 3118 vs 3197 iterations).  The historic ~3% lasym fixed-point
-  drift was the inherited ``fixaray.f`` dnorm defect fixed in
-  ``vmex/core/fourier.py`` (lasym force projections and the alias.f
-  constraint force were scaled by 1/2).
-
-Per case this module asserts:
-
-1. convergence at the deck's ftol (relaxed as documented above);
-2. iteration count within +-25% of the golden stdout's final-stage count
-   (parsed from ``stdout.txt``);
-3. ``wb`` within 1e-7 relative of the golden wout;
-4. ``rmnc/zmns`` on the first interior, mid and boundary surfaces
-   (rtol 1e-5, atol 1e-9 unless noted);
-5. ``iotaf`` (rtol 1e-5).
-
-Converged results are cached as pickles under ``/tmp`` keyed by
-case + ``git describe`` for fast re-runs.
-
-Deliberately skipped: ``NuhrenbergZille`` (no golden fixture in the bundle;
-would exceed 120 s) and ``cth_like_free_bdy_lasym_small`` (the new core has
-no free-boundary path yet).
+Per case: convergence at the (possibly relaxed) ftol; iterations within
++-25% of the golden stdout; ``wb`` within 1e-7 relative; ``rmnc/zmns`` on
+first-interior/mid/boundary surfaces (rtol 1e-5, atol 1e-9 unless noted);
+``iotaf`` rtol 1e-5.  Results are pickle-cached under ``/tmp`` keyed by
+case + git describe.  Deliberately skipped: ``NuhrenbergZille`` (no golden
+fixture, > 120 s) and ``cth_like_free_bdy_lasym_small`` (free boundary).
 """
 
 from __future__ import annotations

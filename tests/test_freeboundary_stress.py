@@ -1,32 +1,15 @@
-"""High-mode free-boundary resilience case.
+"""High-mode free-boundary resilience case: a *regression barrier*, not an
+accuracy benchmark.  One deck combines every reported free-boundary failure
+mode: Fortran indexed array sections (``RBC(-2:2,0) = ...``), ``LFORBAL=T``
+actually selecting the alternative force balance, 1-D profile arrays
+(``APHI``), a deliberately bad magnetic axis (initial Jacobian sign change
+-> eqsolve.f axis re-guess), a large first-iteration force, a free-boundary
+``NS_ARRAY`` ladder carrying vacuum/NESTOR state across grid changes, high
+mode count, and ``LFULL3D1OUT`` on a run that misses ``ftol``.
 
-This is a *regression barrier*, not an accuracy benchmark.  It combines, in one
-deck, every failure mode that has been reported against the free-boundary
-driver, so a future refactor cannot quietly reintroduce any of them:
-
-1. **Fortran indexed array sections** — ``RBC(-2:2,0) = ...`` assigns a slice in
-   one statement instead of one element per line.  A parser that rejects the
-   ``lo:hi`` form, or silently drops the assigned run, fails here.
-2. **``LFORBAL = T``** — selects the alternative radial force-balance
-   formulation.  A driver that parses the flag but always runs the default
-   equations produces a different trajectory and fails the mode assertion.
-3. **1-D profile arrays (``APHI``)** — present alongside the usual ``AM``/``AI``/
-   ``AC``, and must survive parsing into the toroidal-flux derivative.
-4. **A deliberately bad magnetic axis** — displaced far enough that the initial
-   Jacobian changes sign, forcing the ``eqsolve.f`` axis re-guess.  A driver
-   that skips recovery reports a non-finite first force instead.
-5. **A large first-iteration force** on a high-mode grid, which is what drives
-   the axis-improvement and Jacobian-reset paths.
-6. **A free-boundary ``NS_ARRAY`` ladder** with the vacuum/NESTOR state carried
-   across radial-grid changes.
-7. **High mode count** (``MPOL``/``NTOR`` well above the fixture defaults), the
-   regime where the mode-stacked synthesis and the block storage are expensive.
-8. **``LFULL3D1OUT``** semantics on a run that does not reach ``ftol``.
-
-The physics does not need to converge: the contract is that the solver stays
-finite, reports a *typed* outcome, and never crashes.  Iteration budgets are
-small so the case stays inside the ordinary test budget; the failure modes all
-trigger in the first stage.
+The physics need not converge: the contract is that the solver stays
+finite, reports a *typed* outcome, and never crashes; every failure mode
+fires in the first stage, so budgets stay small.
 """
 
 from __future__ import annotations
@@ -47,30 +30,22 @@ from vmex.core.solver import resolution_from_input  # noqa: E402
 DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
 MGRID = DATA / "mgrid_cth_like.nc"
 
-#: Poloidal/toroidal resolution for the stress deck.  Chosen above the fixture
-#: defaults (5/4) so ``mnmax`` is large enough to exercise the high-mode paths
-#: while still fitting the ordinary test budget.
+#: Above the fixture defaults (5/4) to exercise the high-mode paths within
+#: the ordinary test budget.
 STRESS_MPOL, STRESS_NTOR = 8, 6
 
-#: Radial ladder: a coarse rung that must survive the bad axis, then a refine
-#: step so the vacuum/NESTOR continuation is exercised across a grid change.
-#: Kept small deliberately -- every failure mode below fires in the first
-#: iterations of the first rung, and a displaced axis multiplies the cost via
-#: recovery restarts, so a large budget buys no extra coverage.
+#: Coarse rung surviving the bad axis, then a refine step so the
+#: vacuum/NESTOR continuation crosses a grid change; every failure mode
+#: fires in the first iterations, so a larger ladder buys nothing.
 STRESS_NS = (9, 11)
 
-#: Iterations per rung.  The contract under test is "stays finite and reports a
-#: typed outcome", which is decided immediately; this is not a convergence run.
+#: Per-rung budget; "stays finite, typed outcome" is decided immediately.
 STRESS_NITER = 5
 
 
 def stress_indata_text() -> str:
-    """A free-boundary deck exercising every reported failure mode at once.
-
-    Built as INDATA *text* (not a constructed dataclass) precisely so the
-    Fortran-compatibility surface -- indexed array sections, 1-D profile
-    arrays, logical flags -- is what gets tested.
-    """
+    """A free-boundary deck exercising every reported failure mode at once,
+    built as INDATA *text* so the Fortran-compatibility surface is tested."""
     return f"""&INDATA
   MGRID_FILE = '{MGRID.name}',
   LFREEB = T,
@@ -158,13 +133,9 @@ def test_stress_case_is_high_mode(stress_input: VmecInput) -> None:
 @pytest.mark.full  # ~2 min: a real two-rung free-boundary ladder with recovery
 @pytest.mark.skipif(not MGRID.exists(), reason="mgrid fixture not fetched")
 def test_bad_axis_free_boundary_ladder_stays_finite(stress_input: VmecInput) -> None:
-    """The headline contract: a hostile deck degrades *gracefully*.
-
-    With a displaced axis on a high-mode free-boundary ladder the run is not
-    expected to reach ``ftol``.  It must nonetheless keep every residual finite
-    and finish with a typed VMEX outcome -- never a raw crash, and never a NaN
-    force silently carried forward.
-    """
+    """Headline contract: the hostile deck degrades gracefully — residuals
+    stay finite and the outcome is typed; never a raw crash or a silently
+    carried NaN force (ftol is not expected to be reached)."""
     field = _stress_field(stress_input)
     lines: list[str] = []
 
@@ -190,30 +161,15 @@ def test_bad_axis_free_boundary_ladder_stays_finite(stress_input: VmecInput) -> 
 @pytest.mark.full  # ~2 min: forced 75-reset event, instrumented recovery
 @pytest.mark.skipif(not MGRID.exists(), reason="mgrid fixture not fetched")
 def test_jacobian_recovery_uses_checkpoint_and_reduces_delt(monkeypatch) -> None:
-    """The 75-reset recovery restarts the CHECKPOINT with a HALVED time step.
-
-    ``eqsolve.f`` aborts fatally at ``ijacob >= 75``; the bounded recovery
-    instead restarts the best finite checkpoint with a reduced ``DELT``.  Two
-    silent regressions would defeat it while keeping the end-to-end recovery
-    tests green:
-
-    * restarting a *reconstructed cold state* instead of the checkpoint
-      (``initial_state=None`` in the recursive stage call), and
-    * replaying the *identical trajectory* because the time step was not
-      actually reduced.
-
-    A deliberately absurd ``DELT = 1e4`` on the converging CTH deck forces the
-    75-reset event deterministically (the ``jacobian_retries=0`` policy test
-    proves ``jacobian_resets == 75`` for this recipe).  This test intercepts
-    the module-level stage recursion and asserts: (a) the recovery event fires
-    (banner + recursive call); (b) the restored state is the recorded
-    checkpoint -- present and fully finite, never ``None`` (bitwise restore
-    semantics are unit-locked in ``tests/test_step_control.py``); (c) each
-    retry uses ``min(0.5, 0.5 * prev)`` -- a genuinely different time step
-    from the failing attempt, so the trajectory cannot replay; (d) the
-    recovered trajectory then *converges*, which the failing attempt provably
-    never does.
-    """
+    """The 75-reset recovery restarts the CHECKPOINT with a HALVED time step
+    (eqsolve.f aborts fatally at ``ijacob >= 75``).  ``DELT = 1e4`` on the
+    converging CTH deck forces the event deterministically; a stage-recursion
+    spy asserts: (a) the recovery fires (banner + recursive call); (b) the
+    restored state is the recorded checkpoint — present and fully finite,
+    never ``None``/cold (bitwise restore semantics live in
+    ``tests/test_step_control.py``); (c) each retry uses
+    ``min(0.5, 0.5 * prev)`` so the trajectory cannot replay; (d) the
+    recovered trajectory converges, which the failing attempt never does."""
     import dataclasses
 
     import vmex.core.freeboundary as FBmod
@@ -281,34 +237,17 @@ def test_jacobian_recovery_uses_checkpoint_and_reduces_delt(monkeypatch) -> None
 @pytest.mark.full  # ~3 min: TWO real 75-reset events + a converging retry
 @pytest.mark.skipif(not MGRID.exists(), reason="mgrid fixture not fetched")
 def test_consecutive_jacobian_recoveries_free_boundary(monkeypatch) -> None:
-    """MULTIPLE consecutive JAC75 events in the (pre-vacuum) free lane.
-
-    The single-event test above proves one recovery; the confidential-case
-    signature is REPEATED 75-reset events.  Here the first retry is forced
-    to run as hostile as the initial attempt (its ``time_step`` override is
-    reset to the absurd input ``DELT``), so a SECOND genuine 75-reset event
-    occurs inside the recovery chain, and only the second retry runs at the
-    reduced step.  Contract asserted across BOTH events:
-
-    * every retry restarts a present, fully finite checkpoint state (never
-      ``initial_state=None`` — a reconstructed cold state);
-    * the requested retry ``DELT`` follows ``min(0.5, 0.5 * prev)`` from
-      the runtime the failing attempt actually used;
-    * the retry budget decrements once per event (2 -> 1 -> 0);
-    * retries never re-enable the initial axis re-guess and never reuse the
-      failed attempt's vacuum cache;
-    * BOTH events restore the recorded best finite checkpoint — for the
-      forced second event that is the SAME state as the first (the
-      sabotaged attempt never records a lower residual, so the best
-      checkpoint cannot improve; measured fingerprints equal), and the
-      no-identical-replay guarantee is carried by the time step: the
-      retry's requested DELT (0.5) differs from the DELT the failing
-      attempt actually executed with (1e4);
-    * the final attempt converges.
-
-    All events happen BEFORE vacuum activation (DELT=1e4 collapses within
-    the first iterations, long before the fsqr < 1e-1 turn-on gate).
-    """
+    """MULTIPLE consecutive JAC75 events in the (pre-vacuum) free lane — the
+    confidential-case signature.  The first retry is forced back to the
+    hostile input ``DELT``, producing a SECOND genuine 75-reset event inside
+    the recovery chain.  Asserted across BOTH events: every retry restarts a
+    present, fully finite checkpoint; the requested ``DELT`` follows
+    ``min(0.5, 0.5 * prev)`` from the runtime the failing attempt used; the
+    retry budget decrements 2 -> 1 -> 0; retries never re-enable the axis
+    re-guess nor reuse the failed vacuum cache; both events restore the SAME
+    best checkpoint (the sabotaged attempt records no lower residual —
+    fingerprints equal, no-replay carried by the differing time step); the
+    final attempt converges.  All events precede vacuum activation."""
     import dataclasses
 
     import vmex.core.freeboundary as FBmod
@@ -360,9 +299,7 @@ def test_consecutive_jacobian_recoveries_free_boundary(monkeypatch) -> None:
     assert recorded[0]["requested_time_step"] is None
     assert recorded[0]["has_state"] is False    # fresh profil3d start
 
-    # both events restart a real finite checkpoint with the halved/capped
-    # DELT law computed from the runtime the failing attempt actually used
-    # (attempt 1 ran at DELT=1e4; the forced attempt 2 also ran at 1e4).
+    # both events: real finite checkpoint + halved/capped DELT law
     for event, call in enumerate(recorded[1:], start=1):
         assert call["has_state"], (
             f"recovery {event} restarted a cold state instead of the "
@@ -376,11 +313,7 @@ def test_consecutive_jacobian_recoveries_free_boundary(monkeypatch) -> None:
     assert recorded[1]["retries"] == 1
     assert recorded[2]["retries"] == 0
 
-    # Best-checkpoint semantics under the forced second event: the
-    # sabotaged attempt records no lower residual, so the SAME best finite
-    # checkpoint is (correctly) restored again — while the no-replay
-    # guarantee holds through the time step, which differs from the DELT
-    # the failing attempt actually executed with (1e4).
+    # same best checkpoint restored again; no-replay carried by the DELT
     assert recorded[2]["fingerprint"] == recorded[1]["fingerprint"]
     assert recorded[2]["requested_time_step"] != pytest.approx(
         float(inp.delt))

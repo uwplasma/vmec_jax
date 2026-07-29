@@ -1,15 +1,9 @@
 """Tests for ``vmex.core.{forces,residuals}`` (forces.f / residue.f90).
-
-Stage-by-stage parity of the force/residual chain with the legacy
-parity-proven kernels (real-space kernels, spectral projections, m=1
-rotation, scalxc, fsq norms, preconditioned lane) was proven by the A/B
-suite that retired with the legacy tree.  Kept here, on realistic profil3d.f
-initial states for sym 2D, sym 2D ncurr=1, sym 3D and lasym decks:
-
-- the residue.f90 m=1 constrained <-> physical mappings round-trip exactly,
-- the m1-zero / edge-force release conditions are traced (jit-safe) values,
-- the full funct3d pass (``core.solver.evaluate_forces``) is finite, jit
-  matches eager, and grad of ``fsqr`` w.r.t. ``R_cos`` is finite/nonzero.
+Stage-by-stage legacy parity was proven by the retired A/B suite; kept
+here, on realistic profil3d.f initial states (sym 2D, sym 2D ncurr=1, sym
+3D, lasym): the residue.f90 m=1 constrained <-> physical round trip, the
+m1-zero / edge-force release conditions as traced values, and the full
+funct3d pass (finite, jit == eager, finite/nonzero grad of ``fsqr``).
 """
 
 from __future__ import annotations

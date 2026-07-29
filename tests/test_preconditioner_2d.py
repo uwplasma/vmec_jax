@@ -1,18 +1,9 @@
-"""Tests for ``vmex.core.preconditioner_2d`` (2D block preconditioner).
-
-Fast unit tests exercise the matrix-free block operator directly:
-
-- :func:`test_hvp_matches_dense` pins the exact Hessian-vector product
-  (``jax.jvp`` of the 1D-preconditioned force map) against a dense reference
-  Jacobian (``jax.jacfwd``) on a tiny real solver state — the "block assembly
-  vs dense" check the roadmap (R10.2) asks for;
-- :func:`test_newton_direction_solves_dense_system` pins the SOLVAX-GMRES
-  Newton solve against ``jnp.linalg.solve`` on a synthetic nonsingular
-  operator (independent of the VMEC physics).
-
-The ``full``-marked :func:`test_2d_fewer_iterations_same_equilibrium` runs a
-stiff single-grid solve twice (1D vs 2D) and asserts the 2D preconditioner
-reaches the *same* equilibrium in *fewer* iterations (the R20 showcase claim).
+"""Tests for ``vmex.core.preconditioner_2d``: the exact Hessian-vector
+product vs a dense ``jax.jacfwd`` reference on a tiny real state (R10.2
+"block assembly vs dense"); the SOLVAX-GMRES Newton solve vs
+``jnp.linalg.solve`` on a synthetic operator; and the ``full``-marked stiff
+solve asserting the 2D preconditioner reaches the SAME equilibrium in
+FEWER iterations (the R20 showcase claim).
 """
 
 from __future__ import annotations

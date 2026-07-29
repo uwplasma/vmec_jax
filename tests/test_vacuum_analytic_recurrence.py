@@ -1,33 +1,15 @@
 """Stability-selected NESTOR analytic ``T^{+/-}_l`` recurrence.
 
-``analyt.f`` (VMEC2000, inherited by the original ``vmex`` port) fills the
-singular-integral family
-
-    ``T_l = int_{-1}^{1} x^l / sqrt(A x^2 + 2 d x + B) dx``
-
-(``T^+``: ``A = adp, B = adm``; ``T^-`` swapped; ``d = cma``) with a FORWARD
-three-term recurrence.  Its homogeneous modes are the roots of
-``A r^2 + 2 d r + B = 0`` — complex conjugates of modulus ``sqrt(B/A)``
-whenever the metric is positive definite — so rounding in ``T_0`` is
-amplified by ``(B/A)^{l/2}``.  Once ``(mf + nf) * ln(B/A)`` is large the
-forward pass returns garbage: in free boundary this sets in around
-``mpol``/``ntor`` ~ 12.  VMEC2000 and any straight port compute the *same*
-wrong integrals, so two-code parity cannot see the defect; these tests pin
-the fixed implementation (``vmex.core.vacuum._tl_stable``, which follows the
-per-point forward/backward selection of vmecpp's
-``free_boundary/singular_integrals/singular_integrals.cc``, commit f5dbf76,
-with re-dimensioned switch threshold and Miller tail) against an
-*independent* high-precision reference.
-
-Reference choice
-----------------
-``mpmath`` is not available in the test environment, so the reference
-evaluates the integral definition directly with ``scipy.integrate.quad``
-(adaptive Gauss-Kronrod, ``epsrel = 1e-13``, ``epsabs = 0``).  The
-integrand is smooth (the quadratic has no real roots on the positive-
-definite parameter domain), and quad's self-reported error — asserted below
-— stays under ``1e-11`` relative on the whole grid, comfortably beyond the
-``1e-10`` gates.
+analyt.f fills ``T_l = int_{-1}^{1} x^l / sqrt(A x^2 + 2 d x + B) dx`` with
+a FORWARD three-term recurrence whose homogeneous modes grow like
+``(B/A)^{l/2}``; once ``(mf + nf) * ln(B/A)`` is large (free boundary
+around mpol/ntor ~ 12) the forward pass returns garbage.  VMEC2000 computes
+the SAME wrong integrals, so two-code parity cannot see the defect; these
+tests pin the fixed ``vmex.core.vacuum._tl_stable`` (per-point
+forward/backward selection following vmecpp's singular_integrals.cc, commit
+f5dbf76, re-dimensioned threshold + Miller tail) against an independent
+reference: ``scipy.integrate.quad`` (epsrel 1e-13, epsabs 0), whose
+self-reported error stays under 1e-11 relative — beyond the 1e-10 gates.
 """
 
 from __future__ import annotations
@@ -86,13 +68,9 @@ def _tl_quad_reference(A, B, d, lmax):
 
 
 def _tl_forward_legacy(A, B, d, sqrtc, sqrta, t0, lmax):
-    """The pre-fix ``analyt.f`` forward recurrence, op-for-op (NumPy).
-
-    This is the exact update the shipped code ran before the fix
-    (``vacuum.py`` used to advance ``tlp/tlm`` in-loop with this
-    arithmetic); reimplemented here so the tests can compare against the
-    OLD behavior without keeping dead code in the library.
-    """
+    """The pre-fix ``analyt.f`` forward recurrence, op-for-op (NumPy),
+    reimplemented here so tests can compare against the OLD behavior
+    without keeping dead code in the library."""
     t = np.empty((lmax + 1,) + np.shape(t0))
     t[0] = t0
     t_prev = np.zeros_like(np.asarray(t0, dtype=float))
@@ -185,15 +163,10 @@ def test_stability_selected_recurrence_matches_quadrature():
 
 
 def test_forward_branch_reproduces_legacy_below_onset():
-    """Below the switch the new path IS the old forward recurrence.
-
-    The selection masks pass the untouched operands through ``jnp.where``
-    on forward-selected points and the update arithmetic is op-for-op the
-    legacy loop, so in eager mode (the default test lane) the agreement is
-    exact; the assert allows 1e-14 relative slack per the acceptance spec.
-    Every shipped golden/parity number below the onset is therefore pinned
-    unchanged.
-    """
+    """Below the switch the new path IS the old forward recurrence (op-for-op
+    through ``jnp.where``), so eager agreement is exact and every shipped
+    golden/parity number below onset is pinned unchanged; the allclose
+    allows 1e-14 slack per the acceptance spec."""
     lmax = 10  # stable: lmax * ln(B/A) <= 10*ln(2.5) ~ 9.2 < threshold 16.1
     ratios = np.array([0.1, 0.5, 0.9, 1.01, 1.2, 1.5, 2.0, 2.5])
     deltas = np.array([-0.7, -0.2, 0.4, 0.8])
@@ -215,14 +188,10 @@ def test_forward_branch_reproduces_legacy_below_onset():
 
 
 def test_legacy_forward_recurrence_diverges_above_onset():
-    """Documents why the fix exists: forward-only ``T_l`` loses everything.
-
-    At ``B/A = 10`` the spurious mode grows like ``10^{l/2}``; by ``l = 45``
-    the legacy result is off by more than a million times the true value
-    (measured ~1e7-1e8), while the stability-selected result stays at
-    ~1e-15.  Both VMEC2000 and the pre-fix port produced the legacy values,
-    which is why two-code parity gates could never catch this.
-    """
+    """Why the fix exists: at ``B/A = 10``, ``l = 45`` the legacy forward
+    result is off by > 1e6 (measured ~1e7-1e8) while the stability-selected
+    result stays at ~1e-15; VMEC2000 produced the same legacy values, so
+    parity gates could never catch this."""
     lmax = 45
     A, B = 1.0, 10.0
     for delta in (-0.6, 0.3):
@@ -319,23 +288,12 @@ def _fixture_recurrence_operands(basis, boundary):
 
 
 def test_cth_fixture_below_onset_and_bit_identical(cth_vacuum_inputs, monkeypatch):
-    """The shipped low-mode free-boundary vacuum output is unchanged.
-
-    Three stacked guarantees on the real CTH-like LASYM fixture at its
-    normal resolution:
-
-    1. every evaluation point of both ``T^+`` and ``T^-`` sits below the
-       switch (measured margin ~2x), so the forward branch is selected
-       everywhere;
-    2. eager lane (the conftest default): the full NESTOR solve with the
-       new selection is BIT-IDENTICAL to the same solve forced through the
-       forward-only legacy recurrence;
-    3. jitted lane (how production runs): outputs agree to max-normalized
-       ~1e-11 — two *different* XLA programs are never guaranteed
-       bit-equal (fusion/FMA contraction), and the observed ~1e-12-level
-       reordering noise is the same class the free-boundary golden
-       docstrings already document for any graph change.
-    """
+    """The shipped low-mode free-boundary vacuum output is unchanged on the
+    real CTH-like LASYM fixture: (1) every ``T^+``/``T^-`` point sits below
+    the switch (measured margin ~2x); (2) eager: the full NESTOR solve is
+    BIT-IDENTICAL to the forward-only legacy recurrence; (3) jitted:
+    max-normalized ~1e-11 (two different XLA programs are never guaranteed
+    bit-equal — fusion/FMA reordering noise)."""
     basis = cth_vacuum_inputs["basis"]
     boundary = cth_vacuum_inputs["boundary"]
     bexni = cth_vacuum_inputs["bexni"]
@@ -354,11 +312,9 @@ def test_cth_fixture_below_onset_and_bit_identical(cth_vacuum_inputs, monkeypatc
     def forward_only(A, B, c, sc, sa, t0, lm):
         return V._tl_forward(A, B, c, sc, sa, t0, lm)
 
-    # 2. eager: bit-identical end to end (assumes the conftest default lane)
-    # Enforce the eager lane rather than assuming it: under xdist a prior
-    # module's jit-enabling module fixture can still be live on this worker
-    # (lazy teardown), which silently turned this comparison into the
-    # jitted one and broke bit-identity at the documented ~1e-12 level.
+    # 2. eager: bit-identical end to end.  Enforce the eager lane rather
+    # than assuming it — under xdist a prior module's jit-enabling fixture
+    # can still be live on this worker (lazy teardown).
     prev_disable_jit = bool(jax.config.jax_disable_jit)
     jax.config.update("jax_disable_jit", True)
     try:
