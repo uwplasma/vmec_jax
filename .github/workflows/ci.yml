@@ -350,6 +350,7 @@ jobs:
                     tests/test_boozer_tables.py \
                     tests/test_cli.py \
                     tests/test_cli_device.py \
+                    tests/test_cli_summary_wout.py \
                     tests/test_compat.py \
                     tests/test_coverage_margin.py \
                     tests/test_device.py \
