@@ -490,6 +490,7 @@ def solve_free_boundary_multigrid(
     jacobian_retries: int = 2,
     use_fft: bool | None = None,
     release_stage_cache: bool = False,
+    prefetch_compile: bool = False,
 ) -> SolveResult:
     """Free-boundary solve over the VMEC2000 ``NS_ARRAY`` ladder.
 
@@ -524,11 +525,21 @@ def solve_free_boundary_multigrid(
     The final stage's publishable potential and surface fields are retained in
     ``result.vacuum``; internal NESTOR matrix caches are not exposed.
 
-    Compile prefetch (the fixed-boundary ladder's ``prefetch_compile``) is
-    deliberately NOT applied here: a free-boundary rung selects among
-    several lanes (pre-activation, turn-on, batched steady-state vacuum)
-    whose structures depend on when vacuum activates at runtime, so there
-    is no single executable to build ahead of time without speculation.
+    ``prefetch_compile=True`` (False by default, exactly like
+    :func:`solve_multigrid`: a library call must not spawn background
+    compile threads implicitly) overlaps compilation with iteration on cold
+    runs.  A free-boundary rung selects among several lanes (first force
+    pass, pre-activation loop, fused NESTOR update, turn-on pass, batched
+    steady-state vacuum loop) and only the activation *iteration* is
+    runtime-dependent — every lane *structure* is known once the rung's
+    runtimes exist.  Two overlaps therefore apply (see
+    ``freeboundary._launch_free_lane_prefetch``): within each rung, the
+    post-entry lanes compile in the background while the entry lanes
+    compile/iterate on the main thread; across rungs, the next rung's whole
+    lane set compiles while the current rung iterates.  Cache warming only —
+    results are bit-identical, any prefetch failure falls back silently to
+    on-demand compilation, and background threads are joined before the
+    ``release_stage_cache`` point exactly like the fixed-boundary ladder.
     """
     if not bool(inp.lfreeb):
         raise ValueError("solve_free_boundary_multigrid requires an LFREEB=T input")
@@ -555,7 +566,8 @@ def solve_free_boundary_multigrid(
     # Lazy import avoids a module cycle: freeboundary uses SolverRuntime while
     # this module owns the shared interp.f transfer.
     from .freeboundary import (
-        _external_field_from_input, _solve_free_boundary_stage,
+        _FB_PREFETCH_ATTEMPTED, _external_field_from_input,
+        _launch_free_lane_prefetch, _solve_free_boundary_stage,
         free_boundary_resolution,
     )
 
@@ -569,6 +581,7 @@ def solve_free_boundary_multigrid(
     constraint_continuation = None
     residual_continuation = None
     stage_result = None
+    prefetch_handle: tuple[threading.Thread, threading.Event] | None = None
     modes = mode_table(int(inp.mpol), int(inp.ntor))
     for igrid in range(n_stages):
         nsval = int(ns_arr[igrid])
@@ -584,6 +597,42 @@ def solve_free_boundary_multigrid(
             # therefore reruns the current xc state unchanged.
             state = interpolate_state(
                 interpolation_source, ns_fine=nsval, modes=modes)
+
+        # Overlapped compilation across rungs (see the docstring): while this
+        # rung iterates, a background thread AOT-compiles rung igrid+1's lane
+        # set.  Equal-structure next rungs reuse this rung's executables
+        # directly, so nothing needs prefetching.  ``vacuum_on`` reflects the
+        # carried IVAC monotonicity: once on, every later rung enters with
+        # vacuum active; before that, both entry modes are compiled.
+        if (
+            prefetch_compile
+            and igrid + 1 < n_stages
+            and not jax.config.jax_disable_jit
+            and (
+                int(ns_arr[igrid + 1]) != nsval
+                or float(ftol_arr[igrid + 1]) != float(ftol_arr[igrid])
+                or int(niter_arr[igrid + 1]) != int(niter_arr[igrid])
+            )
+        ):
+            ns_next = int(ns_arr[igrid + 1])
+            handle = _launch_free_lane_prefetch(
+                inp, external_field=external_field, ns=ns_next,
+                ftol=float(ftol_arr[igrid + 1]),
+                max_iterations=int(niter_arr[igrid + 1]),
+                time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
+                lconm1=lconm1, precon_type=precon_type,
+                prec2d_threshold=prec2d_threshold, prec2d=prec2d,
+                use_fft=_resolve_use_fft(
+                    use_fft, device,
+                    free_boundary_resolution(inp, external_field, ns=ns_next)),
+                device=device, lmove_axis=None,
+                vacuum_on=(True if (vacuum_continuation is not None
+                                    and vacuum_continuation.turned_on)
+                           else None),
+                entry_lanes=True,
+            )
+            if handle is not None:
+                prefetch_handle = handle
 
         last_stage = not np.any(ns_arr[igrid + 1:] >= nsval)
         target = _placement_device(device, resolution)
@@ -608,28 +657,47 @@ def solve_free_boundary_multigrid(
                 surface_fields=_put_numeric_leaves(
                     vacuum_continuation.surface_fields, target),
             )
-        with device_context(device, resolution):
-            stage_result = _solve_free_boundary_stage(
-                inp, external_field=external_field, resolution=resolution,
-                ftol=float(ftol_arr[igrid]),
-                max_iterations=int(niter_arr[igrid]), verbose=verbose,
-                emit=emit,
-                error_on_no_convergence=bool(
-                    last_stage and raise_on_max_iterations),
-                initial_state=state,
-                vacuum_continuation=vacuum_continuation,
-                time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
-                lconm1=lconm1,
-                precon_type=precon_type,
-                prec2d_threshold=prec2d_threshold, prec2d=prec2d,
+        try:
+            with device_context(device, resolution):
+                stage_result = _solve_free_boundary_stage(
+                    inp, external_field=external_field, resolution=resolution,
+                    ftol=float(ftol_arr[igrid]),
+                    max_iterations=int(niter_arr[igrid]), verbose=verbose,
+                    emit=emit,
+                    error_on_no_convergence=bool(
+                        last_stage and raise_on_max_iterations),
+                    initial_state=state,
+                    vacuum_continuation=vacuum_continuation,
+                    time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
+                    lconm1=lconm1,
+                    precon_type=precon_type,
+                    prec2d_threshold=prec2d_threshold, prec2d=prec2d,
                     jacobian_retries=jacobian_retries,
-                use_fft=_resolve_use_fft(use_fft, device, resolution),
-                constraint_continuation=(
-                    constraint_continuation if same_grid else None),
-                reuse_vacuum_cache=bool(same_grid),
-                residual_continuation=residual_continuation,
-                emit_legend=(igrid == 0),
-            )
+                    use_fft=_resolve_use_fft(use_fft, device, resolution),
+                    constraint_continuation=(
+                        constraint_continuation if same_grid else None),
+                    reuse_vacuum_cache=bool(same_grid),
+                    residual_continuation=residual_continuation,
+                    emit_legend=(igrid == 0),
+                    prefetch_compile=prefetch_compile,
+                    prefetch_device=device,
+                )
+        except BaseException:
+            # A failed stage propagates with no live background compiler:
+            # stop the cross-rung prefetch at its next lane boundary and
+            # join it before unwinding.
+            if prefetch_handle is not None:
+                prefetch_handle[1].set()
+                prefetch_handle[0].join()
+                prefetch_handle = None
+            raise
+        # Join the cross-rung prefetch before any cache release below: a
+        # mid-compile jax.clear_caches() on another thread is the one
+        # interaction the overlap must never have.  Unfinished lanes are NOT
+        # cancelled — the next rung consumes them either way.
+        if prefetch_handle is not None:
+            prefetch_handle[0].join()
+            prefetch_handle = None
         # allocate_ns.f overwrites xstore from old xc before interp.f, so the
         # effective VMEC2000 source is the stage's final state, not its
         # best-residual restart checkpoint.
@@ -656,6 +724,12 @@ def solve_free_boundary_multigrid(
         ):
             jax.block_until_ready((state, vacuum_continuation))
             jax.clear_caches()
+            # Companion release for the standalone prefetched lane
+            # executables (see solve_multigrid): consumed ones are dropped,
+            # the next rung's just-prefetched set survives, and the attempt
+            # registry is purged so a later ladder re-prefetches.
+            _release_used_lane_executables()
+            _FB_PREFETCH_ATTEMPTED.clear()
             gc.collect()
 
     if stage_result is None:  # defensive; positive ns_arr guarantees a stage

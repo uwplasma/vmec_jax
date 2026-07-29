@@ -383,3 +383,39 @@ def test_symmetric_multigrid_exports_final_nestor_wout(tmp_path) -> None:
     with netCDF4.Dataset(fixed_path) as ds:
         assert "potsin" not in ds.variables
         assert "bsubumnc_sur" not in ds.variables
+
+
+def test_prefetch_compile_parity_and_bookkeeping() -> None:
+    """Free-boundary ``prefetch_compile`` is cache warming only.
+
+    A prefetched ladder must be bit-identical to the no-prefetch ladder,
+    every background compile thread must be joined before the driver
+    returns, and the machinery must actually have produced standalone
+    free-boundary lane executables (the consumption paths fall back
+    silently, so parity alone would also pass with a broken prefetch).
+    """
+    import threading
+
+    from vmex.core import solver as S
+
+    inp = VmecInput.from_file(DECK)
+    # Unique NITER values keep these lane structures private to this test
+    # (no other test can have compiled or registered them).
+    ladder = dict(
+        ns_array=[7, 15], ftol_array=[1e-30], niter_array=[741, 743],
+        mgrid_path=MGRID, raise_on_max_iterations=False,
+        release_stage_cache=True,
+    )
+    result = solve_free_boundary_multigrid(inp, prefetch_compile=True, **ladder)
+    assert not [t for t in threading.enumerate()
+                if t.name == "vmex-fb-lane-prefetch"]
+    fb_tags = {key[0][0] for key in S._LANE_EXECUTABLES
+               if isinstance(key[0], tuple)}
+    assert any(str(tag).startswith("fb_") for tag in fb_tags)
+
+    baseline = solve_free_boundary_multigrid(
+        inp, prefetch_compile=False, **ladder)
+    np.testing.assert_array_equal(result.fsq_history, baseline.fsq_history)
+    assert float(result.wb) == float(baseline.wb)
+    assert float(result.r00) == float(baseline.r00)
+    assert int(result.iterations) == int(baseline.iterations)

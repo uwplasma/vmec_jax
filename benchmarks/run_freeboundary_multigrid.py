@@ -110,6 +110,10 @@ def main() -> None:
     parser.add_argument("--niter", default="1000,2500")
     parser.add_argument("--out", type=Path,
                         default=REPO / "benchmarks" / "freeboundary_multigrid.json")
+    parser.add_argument(
+        "--prefetch-compile", action="store_true",
+        help="overlap lane compilation with iteration (the CLI cold-run "
+             "path); results are bit-identical either way")
     args = parser.parse_args()
 
     ns = _numbers(args.ns, int)
@@ -157,6 +161,7 @@ def main() -> None:
                 inp, mgrid_path=args.mgrid.resolve(), verbose=True,
                 emit=lambda value="", end="\n": lines.append(str(value) + end),
                 raise_on_max_iterations=False,
+                prefetch_compile=bool(args.prefetch_compile),
             )
             jax.block_until_ready(result.state.R_cos)
             return result, "".join(lines), time.perf_counter() - start

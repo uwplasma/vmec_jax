@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 import functools
+import threading
 
 import numpy as np
 
@@ -72,7 +73,9 @@ from .printing import (
 )
 from .solver import (
     SolveResult, SolverRuntime, SpectralState, VacuumOutput,
-    _finalize, _geometry, _initial_carry, _initial_state, _make_body,
+    _LANE_EXECUTABLES, _USED_LANE_KEYS,
+    _finalize, _geometry, _initial_carry, _initial_state, _leaf_signature,
+    _make_body,
     _result_from_carry, _zero_cache, prepare_runtime, resolution_from_input,
     reguess_initial_axis, runtime_with_baselines,
     _resolve_use_fft,
@@ -737,10 +740,17 @@ class FusedVacuum:
     NESTOR solve, surface field and the DEL-BSQ / banner reductions — returning
     a dict of device arrays.  Composing them into one jitted program removes the
     ~27 NumPy<->JAX host round-trips the step-by-step host driver incurred.
+
+    ``cache_key`` is the owning ``_VACUUM_EXECUTABLE_CACHE`` key (set by
+    :func:`_vacuum_executables`): the prefetch registry uses it to tell apart
+    same-shaped closures built for different resolutions/signs, so a
+    background-compiled executable can never be consumed by a different
+    NESTOR program.
     """
 
     full: Any
     skip: Any
+    cache_key: Any = None
 
 
 def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
@@ -908,10 +918,10 @@ def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
         lasym=bool(resolution.lasym), wint=wint,
     )
     solver_vac = make_vacuum_solver(basis, signgs=int(signgs))
-    fused = _make_fused_vacuum(
+    fused = replace(_make_fused_vacuum(
         basis, modes=modes, signgs=int(signgs), solver_vac=solver_vac,
         axis_r0=axis_r0, axis_z0=axis_z0,
-    )
+    ), cache_key=key)
     lane = _make_vacuum_lane(fused, use_fft=use_fft)
     _VACUUM_EXECUTABLE_CACHE[key] = (basis, fused, lane)
     return basis, fused, lane
@@ -938,7 +948,11 @@ def _vacuum_step(
     ``amatsav``/``bvecsav`` matrices stay on-device across iterations.
     """
     if int(ivacskip) == 0 or fb.mode_matrix is None:
-        out = fused_vac.full(carry.state, rt, field)
+        if fused_vac.cache_key is None:
+            out = fused_vac.full(carry.state, rt, field)
+        else:
+            out = _call_lane(("fb_vacfull", fused_vac.cache_key),
+                             fused_vac.full, (carry.state, rt, field))
         fb.mode_matrix = out["mode_matrix"]
         fb.bvec_nonsing = out["bvec_nonsing"]
         fb.full_updates += 1
@@ -989,6 +1003,251 @@ def _presf_ns_scale(inp: VmecInput, ns: int) -> float:
     p_one = float(np.asarray(_profiles.pressure(
         inp.pmass_type, inp.am, inp.am_aux_s, inp.am_aux_f, 1.0, **kwargs)))
     return p_one / p_edge
+
+
+# ---------------------------------------------------------------------------
+# Overlapped lane compilation (free-boundary compile scheduling)
+# ---------------------------------------------------------------------------
+#
+# A cold free-boundary rung pays a SERIAL chain of lane compiles: the first
+# force pass (``_iter_lane``), the pre-activation while-loop, the fused
+# NESTOR full update, the turn-on pass, and finally the steady-state vacuum
+# loop — each blocking iteration progress while it builds.  Every one of
+# those structures is known the moment the stage's runtimes exist (the
+# activation ITERATION is runtime-dependent, the lane STRUCTURES are not),
+# so a background thread AOT-compiles the post-entry lanes while the main
+# thread compiles/runs the entry phase, and the multigrid driver prefetches
+# the next rung's whole set while the current rung iterates — the
+# free-boundary counterpart of ``solver._prefetch_block_lane``.
+#
+# The standalone :class:`jax.stages.Compiled` objects live in the solver's
+# shared ``_LANE_EXECUTABLES`` registry, keyed on ``(tag, treedef,
+# leaf-avals)`` where the tag carries the lane name plus — for the
+# per-basis NESTOR closures — the owning ``_VACUUM_EXECUTABLE_CACHE`` key,
+# so same-shaped programs with different baked constants can never be
+# confused.  Consumption (:func:`_call_lane`) falls back silently to the
+# ordinary jitted lane on any mismatch.  This is cache warming only: a
+# prefetched executable is XLA output for the IDENTICAL lowering, so every
+# iteration is bit-for-bit the on-demand result.  Standalone executables
+# survive ``jax.clear_caches()`` (the driver's ``release_stage_cache``
+# point), and consumed ones are dropped there by the shared
+# ``solver._release_used_lane_executables``.
+
+#: Cheap proxy keys of stage lane-sets a prefetch thread was already
+#: launched for in this process (mirrors ``multigrid._PREFETCH_ATTEMPTED``).
+_FB_PREFETCH_ATTEMPTED: set = set()
+
+#: Keys whose background compile is currently in flight, mapped to the event
+#: set when it finishes.  Serves two purposes: duplicate-launch suppression
+#: between the within-stage and next-rung prefetch threads, and the
+#: join-in-progress path of :func:`_call_lane` — a background compile that
+#: started EARLIER always finishes before a fresh main-thread compile of the
+#: same lowering would, so the main thread waits for it instead of
+#: duplicating the work.
+_FB_INFLIGHT: dict = {}
+_FB_LOCK = threading.Lock()
+
+
+def _fb_lane_signature(tag: Any, args: tuple) -> tuple:
+    """Structural key of one ``lane(*args)`` call (tag + treedef + avals)."""
+    leaves, treedef = jax.tree_util.tree_flatten(args)
+    return (tag, treedef, tuple(_leaf_signature(leaf) for leaf in leaves))
+
+
+def _call_lane(tag: Any, lane: Any, args: tuple,
+               static: dict[str, Any] | None = None) -> Any:
+    """Run ``lane(*args, **static)``, preferring a prefetched executable.
+
+    ``static`` holds jit static kwargs (baked into a prefetched executable's
+    lowering; the tag encodes them).  A background compile still in flight
+    for exactly this structure is joined rather than duplicated (it started
+    earlier, so it finishes first; the worker signals the event in a
+    ``finally``, so the wait always terminates).  A structural/placement
+    mismatch — the executable's argument validation precedes execution, so
+    ``args`` are intact — falls back to the ordinary jitted lane.
+    """
+    kwargs = static or {}
+    if jax.config.jax_disable_jit or (
+            not _LANE_EXECUTABLES and not _FB_PREFETCH_ATTEMPTED):
+        return lane(*args, **kwargs)
+    key = _fb_lane_signature(tag, args)
+    _USED_LANE_KEYS.add(key)
+    with _FB_LOCK:
+        pending = _FB_INFLIGHT.get(key)
+    if pending is not None:
+        pending.wait()
+    executable = _LANE_EXECUTABLES.get(key)
+    if executable is not None:
+        try:
+            return executable(*args)
+        except Exception:
+            pass
+    return lane(*args, **kwargs)
+
+
+def _prefetch_stage_lane_set(
+    inp: VmecInput, *, external_field: Any, ns: int, ftol: float | None,
+    max_iterations: int | None, time_step: float | None, tcon0: float | None,
+    gamma: float | None, nstep: int | None, lconm1: bool,
+    precon_type: str | None, prec2d_threshold: float | None, prec2d: Any,
+    use_fft: bool, device: Any, lmove_axis: bool | None,
+    vacuum_on: bool | None, entry_lanes: bool, cancel: threading.Event,
+) -> None:
+    """AOT-compile one free-boundary stage's lane set (background worker).
+
+    Builds runtime/carry templates exactly as ``_solve_free_boundary_stage``
+    does (cheap structure assembly — no force evaluation) and compiles the
+    lanes the stage will need: the entry lanes first (``entry_lanes`` is set
+    by the cross-rung launch only — the within-stage launch skips them
+    because the main thread is already compiling them), then the
+    post-activation set ordered by the scheduling rationale on the job list
+    below.  ``vacuum_on`` prunes the set when the stage's entry mode is
+    known (``None`` compiles both).  Any failure leaves the affected lane
+    to on-demand compilation.
+    """
+    resolution = free_boundary_resolution(inp, external_field, ns=int(ns))
+    with device_context(device, resolution):
+        rt = prepare_runtime(
+            inp, resolution, ftol=ftol, max_iterations=max_iterations,
+            time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
+            lconm1=lconm1, precon_type=precon_type,
+            prec2d_threshold=prec2d_threshold, prec2d=prec2d, use_fft=use_fft,
+        )
+        if lmove_axis is not None and bool(rt.lmove_axis) != bool(lmove_axis):
+            rt = replace(rt, lmove_axis=bool(lmove_axis))
+        state = _initial_state(rt.setup)
+        axis_r0, axis_z0 = _vacuum_scalars(state, rt)[2:4]
+        basis, fused, vacuum_lane = _vacuum_executables(
+            resolution, mf=int(inp.mpol) + 1, nf=int(inp.ntor),
+            signgs=int(rt.setup.signgs),
+            wint=np.asarray(rt.trig.wint, dtype=float),
+            modes=rt.modes, axis_r0=axis_r0, axis_z0=axis_z0, use_fft=use_fft,
+        )
+        ns_i = int(resolution.ns)
+        dtype = rt.setup.s_full.dtype
+        zeros_edge = jnp.zeros((basis.ntheta3, basis.nzeta), dtype=dtype)
+        rt_fixed = replace(rt, lfreeb=False, bsqvac_edge=zeros_edge,
+                           presf_ns_scale=jnp.asarray(0.0, dtype=dtype))
+        rt_freeb = replace(
+            rt, lfreeb=True, jmax=ns_i, bsqvac_edge=zeros_edge,
+            presf_ns_scale=jnp.asarray(
+                _presf_ns_scale(inp, ns_i), dtype=dtype),
+        )
+        carry_fixed = _initial_carry(state, rt_fixed, ijacob=0)
+        carry_freeb = _initial_carry(state, rt_freeb, ijacob=0)
+        out = jax.eval_shape(fused.full, state, rt_freeb, external_field)
+        z = lambda sd: jnp.zeros(sd.shape, dtype=sd.dtype)  # noqa: E731
+        int_dtype = carry_freeb.iteration.dtype
+        vc = _VacuumLoopCarry(
+            carry=carry_freeb,
+            rcon0=rt_freeb.rcon0, zcon0=rt_freeb.zcon0,
+            bsqvac=zeros_edge, rbsq=z(out["rbsq"]),
+            mode_matrix=z(out["mode_matrix"]),
+            bvec_nonsing=z(out["bvec_nonsing"]), potvac=z(out["potvac"]),
+            surface_fields=tuple(z(s) for s in out["surface_fields"]),
+            ivac=jnp.asarray(1, dtype=int_dtype),
+            nvacskip=jnp.asarray(1, dtype=int_dtype),
+            nvskip0=jnp.asarray(1, dtype=int_dtype),
+            delbsq=jnp.asarray(1.0, dtype=dtype),
+            delbsq_traj=jnp.full((rt.max_iterations,), np.nan, dtype=dtype),
+            ctor=jnp.asarray(0.0, dtype=dtype),
+            rbtor=jnp.asarray(0.0, dtype=dtype),
+            vacuum_calls=jnp.asarray(0, dtype=int_dtype),
+            full_updates=jnp.asarray(0, dtype=int_dtype),
+        )
+
+        # Job order is first-use order for the entry lanes (the next rung
+        # needs them the moment it starts), then LONGEST-FIRST for the
+        # post-activation set: the steady vacuum loop is both the costliest
+        # compile and the stage's critical path, and ``_call_lane`` joining
+        # an in-flight compile means starting it as early as possible always
+        # wins, while the cheaper fused-full/turn-on lanes compile on the
+        # main thread in parallel exactly as they would without prefetch.
+        fft = {"use_fft": use_fft}
+        jobs: list[tuple[Any, Any, tuple, dict[str, Any]]] = []
+        if entry_lanes and vacuum_on is not True:
+            jobs += [
+                (("fb_iter", use_fft), _iter_lane, (carry_fixed, rt_fixed), fft),
+                (("fb_preact", use_fft), _preactivation_lane,
+                 (carry_fixed, rt_fixed), fft),
+            ]
+        if entry_lanes and vacuum_on is not False:
+            jobs.append(
+                (("fb_iter", use_fft), _iter_lane, (carry_freeb, rt_freeb), fft))
+        jobs.append((("fb_vac", fused.cache_key), vacuum_lane,
+                     (vc, rt_freeb, external_field), {}))
+        if vacuum_on is not True:
+            jobs.append((("fb_turnon", use_fft), _turnon_iter_lane,
+                         (carry_freeb, rt_freeb, state), fft))
+        jobs.append((("fb_vacfull", fused.cache_key), fused.full,
+                     (state, rt_freeb, external_field), {}))
+
+        for tag, lane, args, static in jobs:
+            if cancel.is_set():
+                return
+            key = _fb_lane_signature(tag, args)
+            with _FB_LOCK:
+                if (key in _LANE_EXECUTABLES or key in _USED_LANE_KEYS
+                        or key in _FB_INFLIGHT):
+                    continue
+                done = threading.Event()
+                _FB_INFLIGHT[key] = done
+            try:
+                _LANE_EXECUTABLES[key] = lane.lower(*args, **static).compile()
+            finally:
+                done.set()
+                with _FB_LOCK:
+                    _FB_INFLIGHT.pop(key, None)
+
+
+def _launch_free_lane_prefetch(
+    inp: VmecInput, *, external_field: Any, ns: int, ftol: float | None,
+    max_iterations: int | None, time_step: float | None, tcon0: float | None,
+    gamma: float | None, nstep: int | None, lconm1: bool,
+    precon_type: str | None, prec2d_threshold: float | None, prec2d: Any,
+    use_fft: bool, device: Any, lmove_axis: bool | None,
+    vacuum_on: bool | None, entry_lanes: bool,
+) -> tuple[threading.Thread, threading.Event] | None:
+    """Start a stage lane-set prefetch thread; ``None`` when not applicable.
+
+    Cache warming only (see the section comment): any failure inside the
+    worker leaves every lane to on-demand compilation.  Returns the thread
+    and its cancel event; setting the event stops the worker at the next
+    lane boundary (an in-progress XLA compile cannot be interrupted).
+    """
+    if jax.config.jax_disable_jit:
+        return None
+    attempt_key = (
+        int(ns), None if ftol is None else float(ftol),
+        None if max_iterations is None else int(max_iterations),
+        bool(use_fft), int(inp.mpol), int(inp.ntor), int(inp.nfp),
+        bool(inp.lasym), bool(lconm1), time_step, tcon0, gamma, nstep,
+        precon_type, prec2d_threshold, prec2d is None, str(device),
+        lmove_axis, vacuum_on, bool(entry_lanes),
+    )
+    if attempt_key in _FB_PREFETCH_ATTEMPTED:
+        return None
+    _FB_PREFETCH_ATTEMPTED.add(attempt_key)
+    cancel = threading.Event()
+
+    def worker() -> None:
+        try:
+            _prefetch_stage_lane_set(
+                inp, external_field=external_field, ns=ns, ftol=ftol,
+                max_iterations=max_iterations, time_step=time_step,
+                tcon0=tcon0, gamma=gamma, nstep=nstep, lconm1=lconm1,
+                precon_type=precon_type, prec2d_threshold=prec2d_threshold,
+                prec2d=prec2d, use_fft=use_fft, device=device,
+                lmove_axis=lmove_axis, vacuum_on=vacuum_on,
+                entry_lanes=entry_lanes, cancel=cancel,
+            )
+        except Exception:      # silent fallback: on-demand compilation
+            pass
+
+    thread = threading.Thread(
+        target=worker, name="vmex-fb-lane-prefetch", daemon=True)
+    thread.start()
+    return thread, cancel
 
 
 # ---------------------------------------------------------------------------
@@ -1181,6 +1440,8 @@ def _solve_free_boundary_stage(
     residual_continuation: (
         tuple[float | Array, float | Array, float | Array] | None
     ) = None,
+    prefetch_compile: bool = False,
+    prefetch_device: Any = None,
 ) -> _FreeBoundaryStageResult:
     """Internal single-grid free-boundary stage with multigrid continuation.
 
@@ -1197,6 +1458,12 @@ def _solve_free_boundary_stage(
     ``jacobian_retries`` restarts the best finite plasma checkpoint with
     zero velocity and a halved/capped ``DELT``.  Vacuum/NESTOR structures are
     rebuilt for that checkpoint.  Set zero for the exact VMEC2000 stop.
+
+    ``prefetch_compile=True`` overlaps this stage's post-entry lane
+    compilation with its entry phase (see the free-boundary compile
+    scheduling section above; results are bit-identical).
+    ``prefetch_device`` is the multigrid driver's placement policy, consumed
+    only by the prefetch worker.
     """
     if int(jacobian_retries) < 0:
         raise ValueError("jacobian_retries must be non-negative")
@@ -1369,327 +1636,368 @@ def _solve_free_boundary_stage(
         )
     vacuum_active = fb.turned_on
 
-    if verbose:
-        emit(stage_banner(ns, resolution.mnmax, rt.ftol, rt.max_iterations), end="")
-        # runvmec.f prints the residual legend once per run; later radial
-        # rungs of a ladder keep only the NS banner and the column header.
-        if emit_legend:
-            emit(FORCE_ITERATIONS_BANNER, end="")
-        emit(screen_header(lasym=resolution.lasym, lfreeb=True), end="")
-
-    # An already-active multigrid stage evaluates with the free-boundary edge
-    # row on its first pass, so its zero cache must have jmax=ns (not ns-1).
-    rt_initial = rt_freeb if vacuum_active else rt_fixed
-    carry = _initial_carry(
-        _init_state,
-        rt_initial,
-        ijacob=_initial_ijacob,
-        residuals=residual_continuation,
-    )
-    printed: set[int] = set()
-    #: per-iteration DEL-BSQ recorded by the batched steady-state lane; rows
-    #: not covered (pre-activation, turn-on pass) fall back to ``fb.delbsq``
-    #: exactly as the per-pass driver printed them.
-    delbsq_rows: dict[int, float] = {}
-
-    def _emit_due(final: bool) -> None:
-        if not verbose:
-            return
-        upto = int(carry.iteration) if bool(carry.done) or final else int(carry.iteration) - 1
-        trajectory = np.asarray(carry.trajectory[: max(upto, 0)])
-        for it_p in range(1, upto + 1):
-            due = (it_p == 1) or (it_p % rt.nstep == 0) or (final and it_p == upto)
-            if not due or it_p in printed:
-                continue
-            row = trajectory[it_p - 1]
-            if int(row[0]) != it_p:
-                continue
-            emit(screen_line(
-                it_p, float(row[1]), float(row[2]), float(row[3]),
-                float(row[7]), float(row[10]), float(row[9]),
-                z_axis=float(row[8]) if resolution.lasym else None,
-                del_bsq=delbsq_rows.get(it_p, float(fb.delbsq)),
-            ), end="")
-            printed.add(it_p)
-
-    # VMEC2000's LMOVE_AXIS path is triggered by the *first force pass*, not
-    # only by a bad Jacobian.  Run that pass explicitly before entering the
-    # batched pre-/post-vacuum lanes.  If the shared solver body returns the
-    # internal irst=4 transfer, rebuild both the plasma profiles and the
-    # axis-dependent NESTOR filament/executables, then repeat iteration 1
-    # once with ijacob=1.  The discarded triggering pass is not printed.
-    carry = _iter_lane(carry, rt_initial, use_fft=use_fft)
-    if (allow_initial_axis_reguess
-            and int(carry.ier) == AXIS_REGUESS_FLAG
-            and int(carry.ijacob) == 0 and ns >= 3):
+    # Overlapped lane compilation (opt-in; see the compile-scheduling section
+    # above): while the main thread compiles/runs this stage's entry lanes, a
+    # background thread AOT-compiles the lanes activation will need.  The
+    # thread is joined before every exit below — a mid-compile
+    # ``jax.clear_caches()`` from the driver's ``release_stage_cache`` point
+    # is the one interaction the overlap must never have.
+    prefetch = None
+    if prefetch_compile:
+        prefetch = _launch_free_lane_prefetch(
+            inp, external_field=external_field, ns=ns, ftol=float(rt.ftol),
+            max_iterations=int(rt.max_iterations),
+            time_step=float(rt.time_step0), tcon0=float(rt.tcon0),
+            gamma=float(rt.gamma), nstep=int(rt.nstep), lconm1=lconm1,
+            precon_type=precon_type, prec2d_threshold=prec2d_threshold,
+            prec2d=prec2d, use_fft=use_fft, device=prefetch_device,
+            lmove_axis=bool(rt.lmove_axis), vacuum_on=bool(vacuum_active),
+            entry_lanes=False,
+        )
+    try:
         if verbose:
-            emit(" TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS")
-        rt, _init_state, _axis = reguess_initial_axis(rt, _init_state)
-        if verbose:
-            emit(improved_axis_block(
-                _axis[0], _axis[3],
-                raxis_cs=_axis[1] if resolution.lasym else None,
-                zaxis_cc=_axis[2] if resolution.lasym else None,
-            ), end="")
-        _initial_ijacob = 1
+            emit(stage_banner(ns, resolution.mnmax, rt.ftol, rt.max_iterations), end="")
+            # runvmec.f prints the residual legend once per run; later radial
+            # rungs of a ladder keep only the NS banner and the column header.
+            if emit_legend:
+                emit(FORCE_ITERATIONS_BANNER, end="")
+            emit(screen_header(lasym=resolution.lasym, lfreeb=True), end="")
 
-        _axis_r0, _axis_z0 = _vacuum_scalars(_init_state, rt)[2:4]
-        basis, fused_vac, vacuum_lane = _vacuum_executables(
-            resolution, mf=int(inp.mpol) + 1, nf=int(inp.ntor),
-            signgs=int(rt.setup.signgs),
-            wint=np.asarray(rt.trig.wint, dtype=float),
-            modes=rt.modes, axis_r0=_axis_r0, axis_z0=_axis_z0,
-        )
-        zeros_edge = jnp.zeros(
-            (basis.ntheta3, basis.nzeta), dtype=dtype)
-        carried_edge = zeros_edge
-        if (vacuum_continuation is not None
-                and vacuum_continuation.turned_on):
-            if vacuum_continuation.rbsq is not None:
-                _, carried_geometry = _geometry(_init_state, rt)
-                r_edge = (
-                    carried_geometry.R_even[-1] + carried_geometry.R_odd[-1]
-                )
-                pres_ns = _vacuum_scalars(_init_state, rt)[5]
-                rbsq = jnp.asarray(vacuum_continuation.rbsq, dtype=dtype)
-                carried_edge = jnp.where(
-                    r_edge != 0.0,
-                    rbsq * jnp.asarray(rt.setup.hs) / r_edge,
-                    jnp.zeros_like(r_edge),
-                ) - pres_ns * jnp.asarray(
-                    _presf_ns_scale(inp, ns), dtype=dtype)
-            elif vacuum_continuation.bsqvac is not None:
-                carried_edge = jnp.asarray(
-                    vacuum_continuation.bsqvac, dtype=dtype)
-        rt_fixed = replace(
-            rt, lfreeb=False, bsqvac_edge=zeros_edge,
-            presf_ns_scale=jnp.asarray(0.0, dtype=dtype),
-        )
-        rt_freeb = replace(
-            rt, lfreeb=True, jmax=ns, bsqvac_edge=carried_edge,
-            presf_ns_scale=jnp.asarray(
-                _presf_ns_scale(inp, ns), dtype=dtype),
-        )
-        # The NESTOR matrix/vector were built for the discarded axis.
-        fb.mode_matrix = None
-        fb.bvec_nonsing = None
-        fb.potvac = None
+        # An already-active multigrid stage evaluates with the free-boundary edge
+        # row on its first pass, so its zero cache must have jmax=ns (not ns-1).
         rt_initial = rt_freeb if vacuum_active else rt_fixed
-        retry_xcdot = carry.xcdot
         carry = _initial_carry(
-            _init_state, rt_initial, ijacob=_initial_ijacob,
-            xcdot=retry_xcdot,
-            residuals=(carry.fsqr, carry.fsqz, carry.fsql),
+            _init_state,
+            rt_initial,
+            ijacob=_initial_ijacob,
+            residuals=residual_continuation,
         )
-        carry = _iter_lane(carry, rt_initial, use_fft=use_fft)
-    _emit_due(final=False)
+        printed: set[int] = set()
+        #: per-iteration DEL-BSQ recorded by the batched steady-state lane; rows
+        #: not covered (pre-activation, turn-on pass) fall back to ``fb.delbsq``
+        #: exactly as the per-pass driver printed them.
+        delbsq_rows: dict[int, float] = {}
 
-    int_dtype = carry.iteration.dtype
-    max_passes = rt.max_iterations + 400
-    for _ in range(max_passes):
-        if bool(carry.done):
-            break
-        if fb.ivac == -1:
-            # Every fixed-boundary iteration before vacuum activation
-            # runs as ONE jitted while_loop; the lane exits precisely where
-            # the per-pass driver would have entered the IVAC0 block below.
-            carry = _preactivation_lane(carry, rt_fixed, use_fft=use_fft)
-            _emit_due(final=False)
-            if bool(carry.done):
-                break
-            # Activation is now due: fall through to the host-stepped
-            # turn-on pass (first vacuum call, soft restart, banners).
-        elif fb.turned_on and int(carry.iteration) == 1:
-            # funct3d.f wraps the entire IVAC0 block in ``iter2 > 1``.  At a
-            # new radial grid, iteration 1 therefore uses the coarse stage's
-            # carried bsqvac once; iteration 2 performs the first full update
-            # against freshly selected resolution-specific NESTOR programs.
-            carry = _iter_lane(carry, rt_freeb, use_fft=use_fft)
-            _emit_due(final=False)
-            continue
-        elif (fb.turned_on and not fb.banner_pending
-              and fb.mode_matrix is not None):
-            # The whole post-turn-on steady state runs as ONE jitted
-            # while_loop (vacuum cadence + damping + iteration, traced).
-            zeros_sur = jnp.zeros_like(rt_freeb.bsqvac_edge)
-            vc = _VacuumLoopCarry(
-                carry=carry,
-                rcon0=rt_freeb.rcon0, zcon0=rt_freeb.zcon0,
-                bsqvac=rt_freeb.bsqvac_edge,
-                rbsq=jnp.asarray(fb.rbsq, dtype=dtype),
-                mode_matrix=fb.mode_matrix, bvec_nonsing=fb.bvec_nonsing,
-                potvac=fb.potvac,
-                surface_fields=((zeros_sur,) * 4 if fb.surface_fields is None
-                                else fb.surface_fields),
-                ivac=jnp.asarray(fb.ivac, dtype=int_dtype),
-                nvacskip=jnp.asarray(fb.nvacskip, dtype=int_dtype),
-                nvskip0=jnp.asarray(fb.nvskip0, dtype=int_dtype),
-                delbsq=jnp.asarray(fb.delbsq, dtype=dtype),
-                delbsq_traj=jnp.full((rt.max_iterations,), np.nan, dtype=dtype),
-                ctor=jnp.asarray(fb.ctor, dtype=dtype),
-                rbtor=jnp.asarray(fb.rbtor, dtype=dtype),
-                vacuum_calls=jnp.asarray(fb.vacuum_calls, dtype=int_dtype),
-                full_updates=jnp.asarray(fb.full_updates, dtype=int_dtype),
-            )
-            vc = vacuum_lane(vc, rt_freeb, external_field)
-            carry = vc.carry
-            rt_freeb = replace(rt_freeb, rcon0=vc.rcon0, zcon0=vc.zcon0,
-                               bsqvac_edge=vc.bsqvac)
-            fb.ivac = int(vc.ivac)
-            fb.nvacskip = int(vc.nvacskip)
-            fb.delbsq = float(vc.delbsq)
-            fb.bsqvac = vc.bsqvac
-            fb.rbsq = vc.rbsq
-            fb.mode_matrix = vc.mode_matrix
-            fb.bvec_nonsing = vc.bvec_nonsing
-            fb.potvac = vc.potvac
-            fb.surface_fields = vc.surface_fields
-            fb.ctor = float(vc.ctor)
-            fb.rbtor = float(vc.rbtor)
-            fb.vacuum_calls = int(vc.vacuum_calls)
-            fb.full_updates = int(vc.full_updates)
+        def _emit_due(final: bool) -> None:
+            if not verbose:
+                return
+            upto = int(carry.iteration) if bool(carry.done) or final else int(carry.iteration) - 1
+            trajectory = np.asarray(carry.trajectory[: max(upto, 0)])
+            for it_p in range(1, upto + 1):
+                due = (it_p == 1) or (it_p % rt.nstep == 0) or (final and it_p == upto)
+                if not due or it_p in printed:
+                    continue
+                row = trajectory[it_p - 1]
+                if int(row[0]) != it_p:
+                    continue
+                emit(screen_line(
+                    it_p, float(row[1]), float(row[2]), float(row[3]),
+                    float(row[7]), float(row[10]), float(row[9]),
+                    z_axis=float(row[8]) if resolution.lasym else None,
+                    del_bsq=delbsq_rows.get(it_p, float(fb.delbsq)),
+                ), end="")
+                printed.add(it_p)
+
+        # VMEC2000's LMOVE_AXIS path is triggered by the *first force pass*, not
+        # only by a bad Jacobian.  Run that pass explicitly before entering the
+        # batched pre-/post-vacuum lanes.  If the shared solver body returns the
+        # internal irst=4 transfer, rebuild both the plasma profiles and the
+        # axis-dependent NESTOR filament/executables, then repeat iteration 1
+        # once with ijacob=1.  The discarded triggering pass is not printed.
+        carry = _call_lane(("fb_iter", use_fft), _iter_lane,
+                           (carry, rt_initial), {"use_fft": use_fft})
+        if (allow_initial_axis_reguess
+                and int(carry.ier) == AXIS_REGUESS_FLAG
+                and int(carry.ijacob) == 0 and ns >= 3):
             if verbose:
-                traj_db = np.asarray(vc.delbsq_traj)
-                for i in np.flatnonzero(~np.isnan(traj_db)):
-                    delbsq_rows[int(i) + 1] = float(traj_db[i])
-            _emit_due(final=False)
-            continue
-        it = int(carry.iteration)
-        iter1 = int(carry.iter1)
-        fsq_rz = float(carry.fsqr) + float(carry.fsqz)
-
-        # NESTOR never consumes a sign-changed state: the restored xstore is
-        # the vacuum source and the update is forced full (_jacobian_ok).
-        jacobian_good = bool(
-            _jacobian_ok(carry.state, rt, use_fft=use_fft))
-        vacuum_source = carry if jacobian_good else replace(
-            carry, state=carry.xstore)
-
-        # -- funct3d.f IVAC0 block (host) -----------------------------------
-        if it > 1 and fsq_rz <= ACTIVATION_FSQ:
-            fb.ivac += 1
-        rt_use = rt_fixed
-        turnon_evaluation_state = None
-        if fb.ivac >= 0:
-            # Damp the constraint baselines (funct3d: 0.9 per iteration).
-            rt_fixed = replace(rt_fixed, rcon0=0.9 * rt_fixed.rcon0, zcon0=0.9 * rt_fixed.zcon0)
-            rt_freeb = replace(rt_freeb, rcon0=0.9 * rt_freeb.rcon0, zcon0=0.9 * rt_freeb.zcon0)
-            ivacskip = (it - iter1) % max(1, fb.nvacskip)
-            if fb.ivac <= 2 or not jacobian_good:
-                ivacskip = 0
-            if ivacskip == 0:
-                fb.nvacskip = max(fb.nvskip0, int(1.0 / max(1.0e-1, 1.0e11 * fsq_rz)))
-            bsqvac = _vacuum_step(
-                carry=vacuum_source, rt=rt_freeb, fb=fb, basis=basis,
-                fused_vac=fused_vac, field=external_field,
-                ivacskip=ivacskip, emit=emit, verbose=verbose,
-            )
-            if fb.ivac >= 1 and not fb.turned_on:
-                # funct3d.f soft start (restart_iter, irst = 2) applied on
-                # the host: best state restored, velocity zeroed, delt*0.9,
-                # iter1 = iter2, ijacob += 1.  funct3d.f has already computed
-                # geometry at the pre-restart state, so preserve it for this
-                # pass's force evaluation (the momentum base remains xstore).
-                fb.turned_on = True
-                fb.banner_pending = True
-                turnon_evaluation_state = vacuum_source.state
-                carry = replace(
-                    carry,
-                    state=carry.xstore,
-                    xcdot=jax.tree.map(jnp.zeros_like, carry.xcdot),
-                    time_step=carry.time_step * 0.9,
-                    ijacob=carry.ijacob + 1,
-                    iter1=carry.iteration,
-                    # The preconditioner cache changes shape with jmax = ns;
-                    # iter1 = iteration forces an immediate ns4 refresh, so
-                    # the zeroed cache is never consumed.
-                    cache=_zero_cache(rt_freeb),
-                )
-            if fb.ivac >= 1:
-                rt_freeb = replace(rt_freeb, bsqvac_edge=jnp.asarray(bsqvac, dtype=dtype))
-                rt_use = rt_freeb
-
-        if turnon_evaluation_state is None:
-            carry = _iter_lane(carry, rt_use, use_fft=use_fft)
-        else:
-            carry = _turnon_iter_lane(carry, rt_use, turnon_evaluation_state,
-                                      use_fft=use_fft)
-
-        if fb.banner_pending:
+                emit(" TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS")
+            rt, _init_state, _axis = reguess_initial_axis(rt, _init_state)
             if verbose:
-                emit(vacuum_banner(it), end="")
-            fb.banner_pending = False
-            fb.ivac = max(fb.ivac, 2)  # eqsolve.f: ivac = ivac + 1 after banner
+                emit(improved_axis_block(
+                    _axis[0], _axis[3],
+                    raxis_cs=_axis[1] if resolution.lasym else None,
+                    zaxis_cc=_axis[2] if resolution.lasym else None,
+                ), end="")
+            _initial_ijacob = 1
+
+            _axis_r0, _axis_z0 = _vacuum_scalars(_init_state, rt)[2:4]
+            basis, fused_vac, vacuum_lane = _vacuum_executables(
+                resolution, mf=int(inp.mpol) + 1, nf=int(inp.ntor),
+                signgs=int(rt.setup.signgs),
+                wint=np.asarray(rt.trig.wint, dtype=float),
+                modes=rt.modes, axis_r0=_axis_r0, axis_z0=_axis_z0,
+            )
+            zeros_edge = jnp.zeros(
+                (basis.ntheta3, basis.nzeta), dtype=dtype)
+            carried_edge = zeros_edge
+            if (vacuum_continuation is not None
+                    and vacuum_continuation.turned_on):
+                if vacuum_continuation.rbsq is not None:
+                    _, carried_geometry = _geometry(_init_state, rt)
+                    r_edge = (
+                        carried_geometry.R_even[-1] + carried_geometry.R_odd[-1]
+                    )
+                    pres_ns = _vacuum_scalars(_init_state, rt)[5]
+                    rbsq = jnp.asarray(vacuum_continuation.rbsq, dtype=dtype)
+                    carried_edge = jnp.where(
+                        r_edge != 0.0,
+                        rbsq * jnp.asarray(rt.setup.hs) / r_edge,
+                        jnp.zeros_like(r_edge),
+                    ) - pres_ns * jnp.asarray(
+                        _presf_ns_scale(inp, ns), dtype=dtype)
+                elif vacuum_continuation.bsqvac is not None:
+                    carried_edge = jnp.asarray(
+                        vacuum_continuation.bsqvac, dtype=dtype)
+            rt_fixed = replace(
+                rt, lfreeb=False, bsqvac_edge=zeros_edge,
+                presf_ns_scale=jnp.asarray(0.0, dtype=dtype),
+            )
+            rt_freeb = replace(
+                rt, lfreeb=True, jmax=ns, bsqvac_edge=carried_edge,
+                presf_ns_scale=jnp.asarray(
+                    _presf_ns_scale(inp, ns), dtype=dtype),
+            )
+            # The NESTOR matrix/vector were built for the discarded axis.
+            fb.mode_matrix = None
+            fb.bvec_nonsing = None
+            fb.potvac = None
+            rt_initial = rt_freeb if vacuum_active else rt_fixed
+            retry_xcdot = carry.xcdot
+            carry = _initial_carry(
+                _init_state, rt_initial, ijacob=_initial_ijacob,
+                xcdot=retry_xcdot,
+                residuals=(carry.fsqr, carry.fsqz, carry.fsql),
+            )
+            carry = _call_lane(("fb_iter", use_fft), _iter_lane,
+                               (carry, rt_initial), {"use_fft": use_fft})
         _emit_due(final=False)
 
-    _emit_due(final=True)
-    ier = int(carry.ier)
-    if ier == JAC75_FLAG and int(jacobian_retries) > 0:
-        retry_step = min(0.5, 0.5 * float(rt.time_step0))
-        if verbose:
-            emit(
-                " JACOBIAN RECOVERY RETRY: RESTARTING BEST FINITE "
-                f"STATE WITH DELT = {retry_step:.6g}"
+        int_dtype = carry.iteration.dtype
+        max_passes = rt.max_iterations + 400
+        for _ in range(max_passes):
+            if bool(carry.done):
+                break
+            if fb.ivac == -1:
+                # Every fixed-boundary iteration before vacuum activation
+                # runs as ONE jitted while_loop; the lane exits precisely where
+                # the per-pass driver would have entered the IVAC0 block below.
+                carry = _call_lane(("fb_preact", use_fft), _preactivation_lane,
+                                   (carry, rt_fixed), {"use_fft": use_fft})
+                _emit_due(final=False)
+                if bool(carry.done):
+                    break
+                # Activation is now due: fall through to the host-stepped
+                # turn-on pass (first vacuum call, soft restart, banners).
+            elif fb.turned_on and int(carry.iteration) == 1:
+                # funct3d.f wraps the entire IVAC0 block in ``iter2 > 1``.  At a
+                # new radial grid, iteration 1 therefore uses the coarse stage's
+                # carried bsqvac once; iteration 2 performs the first full update
+                # against freshly selected resolution-specific NESTOR programs.
+                carry = _call_lane(("fb_iter", use_fft), _iter_lane,
+                                   (carry, rt_freeb), {"use_fft": use_fft})
+                _emit_due(final=False)
+                continue
+            elif (fb.turned_on and not fb.banner_pending
+                  and fb.mode_matrix is not None):
+                # The whole post-turn-on steady state runs as ONE jitted
+                # while_loop (vacuum cadence + damping + iteration, traced).
+                zeros_sur = jnp.zeros_like(rt_freeb.bsqvac_edge)
+                vc = _VacuumLoopCarry(
+                    carry=carry,
+                    rcon0=rt_freeb.rcon0, zcon0=rt_freeb.zcon0,
+                    bsqvac=rt_freeb.bsqvac_edge,
+                    rbsq=jnp.asarray(fb.rbsq, dtype=dtype),
+                    mode_matrix=fb.mode_matrix, bvec_nonsing=fb.bvec_nonsing,
+                    potvac=fb.potvac,
+                    surface_fields=((zeros_sur,) * 4 if fb.surface_fields is None
+                                    else fb.surface_fields),
+                    ivac=jnp.asarray(fb.ivac, dtype=int_dtype),
+                    nvacskip=jnp.asarray(fb.nvacskip, dtype=int_dtype),
+                    nvskip0=jnp.asarray(fb.nvskip0, dtype=int_dtype),
+                    delbsq=jnp.asarray(fb.delbsq, dtype=dtype),
+                    delbsq_traj=jnp.full((rt.max_iterations,), np.nan, dtype=dtype),
+                    ctor=jnp.asarray(fb.ctor, dtype=dtype),
+                    rbtor=jnp.asarray(fb.rbtor, dtype=dtype),
+                    vacuum_calls=jnp.asarray(fb.vacuum_calls, dtype=int_dtype),
+                    full_updates=jnp.asarray(fb.full_updates, dtype=int_dtype),
+                )
+                vc = _call_lane(("fb_vac", fused_vac.cache_key), vacuum_lane,
+                                (vc, rt_freeb, external_field))
+                carry = vc.carry
+                rt_freeb = replace(rt_freeb, rcon0=vc.rcon0, zcon0=vc.zcon0,
+                                   bsqvac_edge=vc.bsqvac)
+                fb.ivac = int(vc.ivac)
+                fb.nvacskip = int(vc.nvacskip)
+                fb.delbsq = float(vc.delbsq)
+                fb.bsqvac = vc.bsqvac
+                fb.rbsq = vc.rbsq
+                fb.mode_matrix = vc.mode_matrix
+                fb.bvec_nonsing = vc.bvec_nonsing
+                fb.potvac = vc.potvac
+                fb.surface_fields = vc.surface_fields
+                fb.ctor = float(vc.ctor)
+                fb.rbtor = float(vc.rbtor)
+                fb.vacuum_calls = int(vc.vacuum_calls)
+                fb.full_updates = int(vc.full_updates)
+                if verbose:
+                    traj_db = np.asarray(vc.delbsq_traj)
+                    for i in np.flatnonzero(~np.isnan(traj_db)):
+                        delbsq_rows[int(i) + 1] = float(traj_db[i])
+                _emit_due(final=False)
+                continue
+            it = int(carry.iteration)
+            iter1 = int(carry.iter1)
+            fsq_rz = float(carry.fsqr) + float(carry.fsqz)
+
+            # NESTOR never consumes a sign-changed state: the restored xstore is
+            # the vacuum source and the update is forced full (_jacobian_ok).
+            jacobian_good = bool(
+                _jacobian_ok(carry.state, rt, use_fft=use_fft))
+            vacuum_source = carry if jacobian_good else replace(
+                carry, state=carry.xstore)
+
+            # -- funct3d.f IVAC0 block (host) -----------------------------------
+            if it > 1 and fsq_rz <= ACTIVATION_FSQ:
+                fb.ivac += 1
+            rt_use = rt_fixed
+            turnon_evaluation_state = None
+            if fb.ivac >= 0:
+                # Damp the constraint baselines (funct3d: 0.9 per iteration).
+                rt_fixed = replace(rt_fixed, rcon0=0.9 * rt_fixed.rcon0, zcon0=0.9 * rt_fixed.zcon0)
+                rt_freeb = replace(rt_freeb, rcon0=0.9 * rt_freeb.rcon0, zcon0=0.9 * rt_freeb.zcon0)
+                ivacskip = (it - iter1) % max(1, fb.nvacskip)
+                if fb.ivac <= 2 or not jacobian_good:
+                    ivacskip = 0
+                if ivacskip == 0:
+                    fb.nvacskip = max(fb.nvskip0, int(1.0 / max(1.0e-1, 1.0e11 * fsq_rz)))
+                bsqvac = _vacuum_step(
+                    carry=vacuum_source, rt=rt_freeb, fb=fb, basis=basis,
+                    fused_vac=fused_vac, field=external_field,
+                    ivacskip=ivacskip, emit=emit, verbose=verbose,
+                )
+                if fb.ivac >= 1 and not fb.turned_on:
+                    # funct3d.f soft start (restart_iter, irst = 2) applied on
+                    # the host: best state restored, velocity zeroed, delt*0.9,
+                    # iter1 = iter2, ijacob += 1.  funct3d.f has already computed
+                    # geometry at the pre-restart state, so preserve it for this
+                    # pass's force evaluation (the momentum base remains xstore).
+                    fb.turned_on = True
+                    fb.banner_pending = True
+                    turnon_evaluation_state = vacuum_source.state
+                    carry = replace(
+                        carry,
+                        state=carry.xstore,
+                        xcdot=jax.tree.map(jnp.zeros_like, carry.xcdot),
+                        time_step=carry.time_step * 0.9,
+                        ijacob=carry.ijacob + 1,
+                        iter1=carry.iteration,
+                        # The preconditioner cache changes shape with jmax = ns;
+                        # iter1 = iteration forces an immediate ns4 refresh, so
+                        # the zeroed cache is never consumed.
+                        cache=_zero_cache(rt_freeb),
+                    )
+                if fb.ivac >= 1:
+                    rt_freeb = replace(rt_freeb, bsqvac_edge=jnp.asarray(bsqvac, dtype=dtype))
+                    rt_use = rt_freeb
+
+            if turnon_evaluation_state is None:
+                carry = _call_lane(("fb_iter", use_fft), _iter_lane,
+                                   (carry, rt_use), {"use_fft": use_fft})
+            else:
+                carry = _call_lane(
+                    ("fb_turnon", use_fft), _turnon_iter_lane,
+                    (carry, rt_use, turnon_evaluation_state),
+                    {"use_fft": use_fft})
+
+            if fb.banner_pending:
+                if verbose:
+                    emit(vacuum_banner(it), end="")
+                fb.banner_pending = False
+                fb.ivac = max(fb.ivac, 2)  # eqsolve.f: ivac = ivac + 1 after banner
+            _emit_due(final=False)
+
+        _emit_due(final=True)
+        ier = int(carry.ier)
+        if ier == JAC75_FLAG and int(jacobian_retries) > 0:
+            retry_step = min(0.5, 0.5 * float(rt.time_step0))
+            if verbose:
+                emit(
+                    " JACOBIAN RECOVERY RETRY: RESTARTING BEST FINITE "
+                    f"STATE WITH DELT = {retry_step:.6g}"
+                )
+            # Retire this stage's prefetch before recursing: the retry's
+            # halved DELT is static meta, so none of the pending lanes match
+            # its structures (the finally below re-joins harmlessly).
+            if prefetch is not None:
+                prefetch[1].set()
+                prefetch[0].join()
+            current_rt = rt_freeb if fb.turned_on else rt_fixed
+            return _solve_free_boundary_stage(
+                inp,
+                mgrid_path=mgrid_path,
+                external_field=external_field,
+                resolution=resolution,
+                ftol=ftol,
+                max_iterations=max_iterations,
+                verbose=verbose,
+                emit=emit,
+                error_on_no_convergence=error_on_no_convergence,
+                initial_state=carry.xstore,
+                vacuum_continuation=fb,
+                time_step=retry_step,
+                tcon0=tcon0,
+                gamma=gamma,
+                nstep=nstep,
+                lconm1=lconm1,
+                precon_type=precon_type,
+                prec2d_threshold=prec2d_threshold,
+                prec2d=prec2d,
+                # The retry must keep the same synthesis kernel: dropping this
+                # silently fell back to the dense transform exactly on the
+                # high-mode recoveries where the FFT selection matters most.
+                use_fft=use_fft,
+                jacobian_retries=int(jacobian_retries) - 1,
+                constraint_continuation=(
+                    current_rt.rcon0, current_rt.zcon0
+                ) if fb.turned_on else None,
+                # NESTOR's matrix and axis-current filament depend on the
+                # checkpoint geometry; never reuse the failed attempt's compiled
+                # dynamic cache even at an equal radial resolution.
+                reuse_vacuum_cache=False,
+                allow_initial_axis_reguess=False,
+                residual_continuation=(carry.fsqr, carry.fsqz, carry.fsql),
+                prefetch_compile=prefetch_compile,
+                prefetch_device=prefetch_device,
             )
-        current_rt = rt_freeb if fb.turned_on else rt_fixed
-        return _solve_free_boundary_stage(
-            inp,
-            mgrid_path=mgrid_path,
-            external_field=external_field,
-            resolution=resolution,
-            ftol=ftol,
-            max_iterations=max_iterations,
-            verbose=verbose,
-            emit=emit,
-            error_on_no_convergence=error_on_no_convergence,
-            initial_state=carry.xstore,
-            vacuum_continuation=fb,
-            time_step=retry_step,
-            tcon0=tcon0,
-            gamma=gamma,
-            nstep=nstep,
-            lconm1=lconm1,
-            precon_type=precon_type,
-            prec2d_threshold=prec2d_threshold,
-            prec2d=prec2d,
-            # The retry must keep the same synthesis kernel: dropping this
-            # silently fell back to the dense transform exactly on the
-            # high-mode recoveries where the FFT selection matters most.
-            use_fft=use_fft,
-            jacobian_retries=int(jacobian_retries) - 1,
-            constraint_continuation=(
-                current_rt.rcon0, current_rt.zcon0
-            ) if fb.turned_on else None,
-            # NESTOR's matrix and axis-current filament depend on the
-            # checkpoint geometry; never reuse the failed attempt's compiled
-            # dynamic cache even at an equal radial resolution.
-            reuse_vacuum_cache=False,
-            allow_initial_axis_reguess=False,
-            residual_continuation=(carry.fsqr, carry.fsqz, carry.fsql),
-        )
-    if ier == MORE_ITER_FLAG and not error_on_no_convergence:
-        result = _result_from_carry(carry, rt_freeb if fb.turned_on else rt_fixed)
-        return _FreeBoundaryStageResult(
-            replace(result, converged=False, ier_flag=MORE_ITER_FLAG,
-                    vacuum=_vacuum_output(fb, basis)), fb,
-            carry.xstore, rt_freeb.rcon0 if fb.turned_on else rt_fixed.rcon0,
-            rt_freeb.zcon0 if fb.turned_on else rt_fixed.zcon0)
-    if ier == SUCCESSFUL_TERM_FLAG:
+        if ier == MORE_ITER_FLAG and not error_on_no_convergence:
+            result = _result_from_carry(carry, rt_freeb if fb.turned_on else rt_fixed)
+            return _FreeBoundaryStageResult(
+                replace(result, converged=False, ier_flag=MORE_ITER_FLAG,
+                        vacuum=_vacuum_output(fb, basis)), fb,
+                carry.xstore, rt_freeb.rcon0 if fb.turned_on else rt_fixed.rcon0,
+                rt_freeb.zcon0 if fb.turned_on else rt_fixed.zcon0)
+        if ier == SUCCESSFUL_TERM_FLAG:
+            return _FreeBoundaryStageResult(
+                replace(
+                    _result_from_carry(
+                        carry, rt_freeb if fb.turned_on else rt_fixed),
+                    vacuum=_vacuum_output(fb, basis),
+                ), fb,
+                carry.xstore, rt_freeb.rcon0 if fb.turned_on else rt_fixed.rcon0,
+                rt_freeb.zcon0 if fb.turned_on else rt_fixed.zcon0)
         return _FreeBoundaryStageResult(
             replace(
-                _result_from_carry(
-                    carry, rt_freeb if fb.turned_on else rt_fixed),
+                _finalize(carry, rt_freeb if fb.turned_on else rt_fixed),
                 vacuum=_vacuum_output(fb, basis),
             ), fb,
             carry.xstore, rt_freeb.rcon0 if fb.turned_on else rt_fixed.rcon0,
             rt_freeb.zcon0 if fb.turned_on else rt_fixed.zcon0)
-    return _FreeBoundaryStageResult(
-        replace(
-            _finalize(carry, rt_freeb if fb.turned_on else rt_fixed),
-            vacuum=_vacuum_output(fb, basis),
-        ), fb,
-        carry.xstore, rt_freeb.rcon0 if fb.turned_on else rt_fixed.rcon0,
-        rt_freeb.zcon0 if fb.turned_on else rt_fixed.zcon0)
+    finally:
+        if prefetch is not None:
+            prefetch[1].set()      # stop at the next lane boundary
+            prefetch[0].join()
+
+
 
 
 def solve_free_boundary(
