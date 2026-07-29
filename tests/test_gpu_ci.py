@@ -91,13 +91,13 @@ def test_gpu_is_default_without_platform_environment_pins():
 
 
 @_requires_gpu
-def test_implicit_auto_prefers_cpu_but_none_follows_jax_gpu():
+def test_implicit_default_follows_jax_but_auto_prefers_cpu():
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
-    automatic = im.params_from_input(inp)
-    following_jax = im.params_from_input(inp, device=None)
+    following_jax = im.params_from_input(inp)
+    automatic = im.params_from_input(inp, device="auto")
 
-    assert {_platform(x) for x in jax.tree.leaves(automatic)} == {"cpu"}
     assert {_platform(x) for x in jax.tree.leaves(following_jax)} == {"gpu"}
+    assert {_platform(x) for x in jax.tree.leaves(automatic)} == {"cpu"}
 
 
 @_requires_gpu

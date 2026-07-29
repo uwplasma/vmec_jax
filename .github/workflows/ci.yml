@@ -938,21 +938,26 @@ jobs:
       - name: Audit all physics gradients on CPU and both GPUs
         shell: bash
         run: |
-          python benchmarks/device_parity.py \
-            --quick \
-            --devices cpu,gpu \
-            --output device-parity-gpu0.json
-          # second GPU when present: the reported gradient-collapse class
-          # only reproduces on a NON-default device
-          python - <<'PY'
-          import jax, subprocess, sys
-          if len(jax.devices("gpu")) > 1:
-              sys.exit(subprocess.call([
-                  sys.executable, "benchmarks/device_parity.py", "--quick",
-                  "--devices", "cpu,gpu", "--gpu-id", "1",
-                  "--output", "device-parity-gpu1.json"]))
-          print("single GPU: skipping gpu-id 1 audit")
-          PY
+          metrics=(
+            mhd_energy magnetic_well dmerc_interior_mean
+            jdotb_interior_mean glasser_d_r_interior_mean
+            quasisymmetry quasi_isodynamic
+          )
+          for metric in "${metrics[@]}"; do
+            # One process per metric bounds XLA executable/allocator peaks.
+            python benchmarks/device_parity.py \
+              --quick --devices cpu,gpu --metrics "$metric" \
+              --output "device-parity-gpu0-${metric}.json"
+          done
+          if [[ $(python -c 'import jax; print(len(jax.devices("gpu")))') -gt 1 ]]; then
+            for metric in "${metrics[@]}"; do
+              python benchmarks/device_parity.py \
+                --quick --devices cpu,gpu --gpu-id 1 --metrics "$metric" \
+                --output "device-parity-gpu1-${metric}.json"
+            done
+          else
+            echo "single GPU: skipping gpu-id 1 audit"
+          fi
 
       - name: Upload parity measurements
         if: always()

@@ -34,6 +34,7 @@ import jax
 
 from vmex.core import implicit as im
 from vmex.core import optimize as opt
+from vmex.core.device import device_scope
 from vmex.core.input import VmecInput
 from vmex.core.omnigenity import QIResidual
 
@@ -151,7 +152,7 @@ def _run_lane(
     ftol = float(inp.ftol_array[-1])
     max_iterations = int(inp.niter_array[-1])
     index = (int(inp.ntor) + 1, 1)
-    params = im.params_from_input(inp, device=device)
+    params = im.params_from_input(inp)
 
     solve = lambda: im.run(  # noqa: E731
         inp,
@@ -159,7 +160,7 @@ def _run_lane(
         ns=ns,
         ftol=ftol,
         max_iterations=max_iterations,
-        device=device,
+        device=None,
     )
     cold_solution, cold_s = _timed(solve)
     solution, warm_s = _timed(solve)
@@ -202,7 +203,7 @@ def _run_lane(
                 ns=ns,
                 ftol=ftol,
                 max_iterations=max_iterations,
-                device=device,
+                device=None,
             ))
 
         value_and_grad = jax.value_and_grad(objective)
@@ -335,9 +336,10 @@ def main(argv: list[str] | None = None) -> int:
     artifacts = {}
     for kind in devices:
         print(f"running {kind} lane ({', '.join(metric_names)})", file=sys.stderr, flush=True)
-        lane, artifact = _run_lane(
-            kind, available[kind], inp, metric_names, quick=args.quick
-        )
+        with device_scope(available[kind]):
+            lane, artifact = _run_lane(
+                kind, available[kind], inp, metric_names, quick=args.quick
+            )
         result["lanes"][kind] = lane
         artifacts[kind] = artifact
 

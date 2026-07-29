@@ -189,18 +189,14 @@ class ImplicitParams:
 _register(ImplicitParams)
 
 
-def params_from_input(inp: VmecInput, *, device: Any = AUTO) -> ImplicitParams:
+def params_from_input(inp: VmecInput, *, device: Any = None) -> ImplicitParams:
     """Extract the differentiable parameters of an input as a pytree.
 
-    On an accelerator box the pytree is *committed* to the CPU
-    (:func:`vmex.core.device.resolve_implicit_device`): every eager op of a
-    ``jax.grad``/``jax.jacrev`` over :func:`run` then executes there, which
-    is far faster for this launch-bound path than the GPU.  An active
-    ``jax.default_device`` context, user JAX platform pin, or an already-CPU
-    backend stands the pin down; ``optimize.least_squares`` applies the same
-    rule to its dof vector.  Pass ``device="cpu"`` / ``"gpu"`` or a
-    ``jax.Device`` to override the automatic policy; ``device=None`` leaves
-    placement to JAX.
+    Omitted ``device`` (like explicit ``None``) follows ordinary JAX
+    placement.  Pass ``device="auto"`` to request VMEX's measured CPU
+    preference for implicit Jacobians, or pass ``"cpu"`` / ``"gpu"`` or a
+    :class:`jax.Device` explicitly.  High-level optimization entry points
+    retain ``device="auto"`` as their default.
     """
     dev = resolve_implicit_device(device, None)
     if dev is None:
@@ -1824,7 +1820,7 @@ def run(
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
     adjoint_gcrot_k: int = 20,
-    device: Any = AUTO,
+    device: Any = None,
 ) -> ImplicitSolution:
     """Differentiable fixed-boundary equilibrium: input -> outputs pytree.
 
@@ -1834,9 +1830,10 @@ def run(
     which carry no placement to infer)::
 
         inp = VmecInput.from_file("input.solovev")
-        gpu = jax.devices("gpu")[1]          # any explicit device works
-        p0 = params_from_input(inp, device=gpu)
-        grad = jax.grad(lambda p: run(inp, p, device=gpu).wb)(p0)
+        gpu = jax.devices("gpu")[1]
+        with device_scope(gpu):
+            p0 = params_from_input(inp)
+            grad = jax.grad(lambda p: run(inp, p).wb)(p0)
 
     ``wmhd`` follows the printed ``WMHD`` normalization; ``gamma = 1`` inputs
     get ``wmhd = nan`` (as in VMEC).  All outputs are differentiable in
@@ -1845,10 +1842,11 @@ def run(
 
     ``device`` selects where the ENTIRE operation runs — host solve,
     runtime construction, derived outputs, and (carried in the static
-    config) the custom-VJP backward and multi-RHS pullbacks, so gradients
-    on an explicit non-default device work without any outer
-    ``jax.default_device`` context.  It accepts ``"cpu"``, ``"gpu"`` or a
-    ``jax.Device``; ``None`` leaves placement to JAX.  ``"auto"``: when
+    config) the custom-VJP backward and multi-RHS pullbacks.  It accepts
+    ``"cpu"``, ``"gpu"`` or a ``jax.Device``; omitted ``device`` and
+    ``None`` leave placement to JAX.  Use :func:`device_scope` around both
+    parameter creation and differentiation for a non-default accelerator.
+    ``"auto"``: when
     ``params`` is supplied with CONCRETE arrays all committed to one
     device, that placement is preserved and used for the whole operation;
     otherwise (no params, tracers under ``jax.grad``, or mixed placement)
@@ -1887,7 +1885,24 @@ def run(
         inferred_home = dev is not None
     if dev is None:
         dev = resolve_implicit_device(device, cfg.resolution)
-    cfg = dataclasses.replace(cfg, device=dev)
+    # Carrying an accelerator through cfg inserts explicit device_put
+    # constraints into every custom-VJP boundary.  On 3-D equilibria that
+    # over-constrains the staged graph (and can deadlock); ordinary JAX
+    # ownership is both sufficient and reliable on the active/default
+    # accelerator.  CPU remains explicitly carried for the measured AUTO
+    # optimization policy and for host-device test rigs.
+    cfg_device = dev
+    if dev is not None and dev.platform != "cpu":
+        active = jax.config.jax_default_device
+        active = active if active is not None else jax.devices()[0]
+        if dev != active:
+            raise ValueError(
+                f"{dev} is not JAX's active/default device; wrap parameter "
+                "creation and differentiation in device_scope(device), then "
+                "omit device (or pass device=None) to run"
+            )
+        cfg_device = None
+    cfg = dataclasses.replace(cfg, device=cfg_device)
     placement = jax.default_device(dev) if dev is not None else contextlib.nullcontext()
     with placement:
         if params is None:

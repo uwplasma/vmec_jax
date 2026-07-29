@@ -52,6 +52,19 @@ def test_run_forwards_device_when_constructing_params(monkeypatch, requested):
     assert seen == [requested]
 
 
+def test_omitted_implicit_device_follows_jax(monkeypatch):
+    seen = []
+
+    def params_from_input(inp, *, device=None):
+        seen.append(device)
+        raise _Stop
+
+    monkeypatch.setattr(im, "params_from_input", params_from_input)
+    with pytest.raises(_Stop):
+        im.run(VmecInput())
+    assert seen == [None]
+
+
 def test_run_preserves_supplied_params_for_auto_and_none(monkeypatch):
     params = im.params_from_input(VmecInput(), device="cpu")
 
@@ -144,7 +157,7 @@ def test_second_device_placement_and_gradient_no_outer_context(tmp_path):
             inp, p, ftol=1e-11, max_iterations=600, device=dev1).wb)(p1)
         s1 = im.run(inp, p1, ftol=1e-11, max_iterations=600, device=dev1)
         well = float(np.asarray(optimize.magnetic_well(s1.state, s1.runtime)))
-        s1a = im.run(inp, p1, ftol=1e-11, max_iterations=600)  # AUTO
+        s1a = im.run(inp, p1, ftol=1e-11, max_iterations=600, device="auto")
 
         assert not strays(s1.state, dev1), strays(s1.state, dev1)
         assert not strays(s1.runtime, dev1), strays(s1.runtime, dev1)

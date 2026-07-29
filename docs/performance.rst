@@ -168,9 +168,11 @@ The headline: **a fast desktop CPU beats the A4000 GPU on every production
 workflow, even at ns = 201.** Forward solves are close (the GPU is
 iteration-competitive at this size — free-boundary NESTOR runs 13.9 ms/iter
 on the GPU), but the gradient pipeline is launch-bound on an accelerator,
-which is why :func:`vmex.core.device.resolve_implicit_device` pins
-implicit-gradient work to the CPU by default (an earlier placement leak
-here cost 2x on GPU boxes — fixed, and the pin is now automatic). The
+which is why high-level optimization uses
+:func:`vmex.core.device.resolve_implicit_device` to pin implicit-gradient work
+to the CPU by default. Low-level :func:`vmex.core.implicit.run` follows JAX
+placement when ``device`` is omitted; ``device="auto"`` opts into the
+measured CPU policy. The
 GPU's wins come against slower server cores and larger-than-production
 problem sizes (see the GPU guidance below).
 

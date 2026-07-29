@@ -182,19 +182,21 @@ of :doc:`algorithms` for the formulation and cost analysis.
 
    inp = VmecInput.from_file("input.solovev")
    gpu = jax.devices("gpu")[0]
-   p0 = implicit.params_from_input(inp, device=gpu)
+   from vmex.core.device import device_scope
 
-   sol = implicit.run(inp, p0, device=gpu)            # ImplicitSolution pytree
-   # pass the SAME device inside the differentiated function: under jax.grad
-   # the parameters are tracers, which carry no placement to infer
-   grad = jax.grad(lambda p: implicit.run(inp, p, device=gpu).wb)(p0)
+   with device_scope(gpu):
+       p0 = implicit.params_from_input(inp)
+       sol = implicit.run(inp, p0)                    # ImplicitSolution pytree
+       grad = jax.grad(lambda p: implicit.run(inp, p).wb)(p0)
 
 Pass ``device="cpu"`` / ``"gpu"`` (or a ``jax.Device``) to
 :func:`~vmex.core.implicit.params_from_input` or
 :func:`~vmex.core.implicit.run` to select the implicit-gradient hardware
-without environment variables.  ``device=None`` leaves placement to JAX;
-omitting the argument (or passing ``"auto"``) keeps VMEX's default CPU
-preference for this launch-bound path.
+without environment variables. Omitted ``device`` and ``device=None`` leave
+placement to JAX; ``device="auto"`` requests VMEX's CPU preference for this
+launch-bound path. High-level optimization entry points use ``"auto"`` by
+default. Hold :func:`~vmex.core.device.device_scope` around parameter creation
+and differentiation when selecting a non-default accelerator.
 
 :func:`~vmex.core.implicit.run` is the differentiable member of the
 entry-point family (see *Choosing an entry point* in :doc:`quickstart`; the

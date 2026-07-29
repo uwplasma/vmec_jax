@@ -194,8 +194,11 @@ platform is available. :func:`~vmex.core.device.device_context` wraps a stage
 in the corresponding ``jax.default_device``.
 
 The optimization path is different:
-:func:`~vmex.core.device.resolve_implicit_device` **pins the
-implicit-gradient work to the CPU by default when VMEX owns placement**. The
+:func:`~vmex.core.device.resolve_implicit_device` **pins high-level
+optimization's implicit-gradient work to the CPU by default when VMEX owns
+placement**. Low-level :func:`~vmex.core.implicit.run` follows JAX placement
+when ``device`` is omitted; ``device="auto"`` opts into the same measured
+policy. The
 ``jac="implicit"`` Jacobian builds a per-dof vmapped
 forward-implicit-differentiation graph —
 dozens of preconditioned GMRES solves with inner control flow — whose XLA

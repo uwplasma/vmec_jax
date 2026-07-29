@@ -417,12 +417,14 @@ for QP. Three measured optimizations keep each campaign in the minutes range:
 - a converged-state memo avoids re-solving the point the residual just
   converged.
 
-The implicit path runs on CPU by default, where it is fastest at production
-sizes; suitably sized forward solves can use the GPU. The device policy
-chooses per stage using both work and Fourier-mode thresholds, and
-`device="cpu"` / `device="gpu"` explicitly overrides it without environment
-variables. Passing `device=None` leaves placement to JAX; omitting it retains
-VMEX's measured automatic policy.
+High-level optimization uses the measured CPU implicit-Jacobian policy by
+default; suitably sized forward solves can use the GPU. Low-level
+`implicit.params_from_input` and `implicit.run` follow ordinary JAX placement
+when `device` is omitted, so an accelerator installation works without
+environment variables. Pass `device="auto"` to opt into the measured implicit
+policy, or use `device="cpu"` / `"gpu"` explicitly. For a non-default
+accelerator, hold `device_scope(device)` around parameter creation and the JAX
+transformation.
 
 ### Beyond quasisymmetry: any objective, same gradients
 
@@ -551,10 +553,10 @@ options:
 
 `vmec` detects the available JAX hardware without environment variables and
 uses CPU or GPU according to the measured per-stage policy. Use `--device
-cpu` or `--device gpu` to override it explicitly. Implicit-gradient work
-defaults to CPU because it is launch-bound on the tested GPUs; passing
-`device=None` to the Python API follows JAX placement. `vmex --doctor`
-reports the devices and all three VMEX placement policies.
+cpu` or `--device gpu` to override it explicitly. High-level optimization
+defaults implicit Jacobians to CPU because they are launch-bound on the tested
+GPUs; low-level `implicit.run` follows JAX placement when `device` is omitted.
+`vmex --doctor` reports the devices and all three VMEX placement policies.
 
 ## Documentation
 

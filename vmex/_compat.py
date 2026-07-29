@@ -248,12 +248,13 @@ def _configure_jax_environment() -> None:
         # is COMPILE-dominated (the fused adjoint VJP + GMRES graph dominates a
         # cold ``value_and_grad``); backend optimization level 1 plus disabling
         # expensive LLVM passes cuts compile wall-time ~1.3-2x at the cost of
-        # slightly slower *warm* kernels -- a good trade here.  Applied on CPU
-        # only (LLVM codegen), never with fast-math (that would break float64
-        # parity/determinism), skipped if the user set XLA_FLAGS, and opt-out
-        # via VMEX_FAST_COMPILE=0 (a very long single-process opt loop that
-        # amortizes compile over many warm calls prefers level 3).
-        _fast_compile = _env("FAST_COMPILE", "1").strip().lower()
+        # slightly slower *warm* kernels.  Applied on CPU only (LLVM codegen),
+        # never with fast-math (that would break float64 parity/determinism),
+        # skipped if the user set XLA_FLAGS, and opt-in via
+        # VMEX_FAST_COMPILE=1.  Pre-import environment hints cannot reliably
+        # distinguish a normally discovered GPU installation, so VMEX must
+        # not inject CPU-only XLA flags by default.
+        _fast_compile = _env("FAST_COMPILE", "0").strip().lower()
         _accel_req = os.environ.get("JAX_PLATFORM_NAME", "").strip().lower()
         _accel_reqs = os.environ.get("JAX_PLATFORMS", "").strip().lower()
         _cuda_vis = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()

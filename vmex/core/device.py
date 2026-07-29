@@ -214,18 +214,12 @@ def device_scope(device: Any):
 
         gpu1 = jax.devices("gpu")[1]
         with device_scope(gpu1):
-            p0 = im.params_from_input(inp, device=gpu1)
-            grad = jax.grad(lambda p: im.run(inp, p, device=gpu1).wb)(p0)
+            p0 = im.params_from_input(inp)
+            grad = jax.grad(lambda p: im.run(inp, p).wb)(p0)
 
-    Raw ``jax.grad`` without the scope is supported too: the implicit module
-    binds its own stages to the carried config device internally — the
-    ``pure_callback`` host solve, the cached runtime template, the custom-VJP
-    boundary pins, and the host-eager adjoint Krylov solve (see
-    ``vmex.core.implicit._adjoint_solve_gcrot``).  The scope is the *robust*
-    path on top of that: it additionally steers every caller-side eager
-    constant and JAX's own transformation machinery — placement layers
-    outside vmex's control — so it is recommended whenever an entire
-    workflow should live on one non-default device.
+    The scope is required for a non-default accelerator because it also
+    steers caller-side constants and JAX's transformation machinery.  Inside
+    it, omit ``device`` (or pass ``None``) so JAX owns the staged placement.
 
     Accepts ``"cpu"``/``"gpu"``/``"cuda"``/``"rocm"``/``"tpu"`` or a
     ``jax.Device``; ``None`` returns a null context (leave placement to
