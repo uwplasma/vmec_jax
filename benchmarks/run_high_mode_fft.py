@@ -4,9 +4,11 @@
 The case is the public CTH-like free-boundary fixture raised to
 ``MPOL=19/NTOR=14`` (``mnmax = 15 + 18*29 = 537``) — the exact deck of
 ``tests/test_high_mode_free_boundary_parity.py::
-test_free_boundary_537_modes_converges_with_fft``, which sits above the
+test_free_boundary_537_modes_fft_auto_smoke``, which sits above the
 512-spectral-mode automatic-FFT threshold that the 238-mode suite cannot
-reach.  Both transform kernels are measured the same way:
+reach.  This is a bounded throughput/memory comparison: the committed
+2500-iteration campaign did not converge under either kernel.  Both
+transform kernels are measured the same way:
 
 * **cold**: a fresh subprocess per transform (JAX compilation included),
   wrapped in ``/usr/bin/time -l`` (darwin) or ``/usr/bin/time -v`` (linux)
@@ -197,7 +199,10 @@ def main() -> None:
         "--niter",
         type=int,
         default=None,
-        help="fixed iteration cap; default: the deck's own convergent budget, identical to the guarded 537-mode test",
+        help=(
+            "fixed iteration cap; default: the deck's bounded budget "
+            "(neither kernel converged in the committed 2500-iteration run)"
+        ),
     )
     parser.add_argument("--out", type=Path, default=REPO / "benchmarks" / "high_mode_fft.json")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
