@@ -169,6 +169,13 @@ jobs:
           python -m pip install -U pip
           python -m pip install .
           python -m pip install pytest pytest-cov
+      - name: Add swap for XLA compile-arena headroom
+        run: |
+          sudo fallocate -l 12G /mnt/vmex-swap
+          sudo chmod 600 /mnt/vmex-swap
+          sudo mkswap /mnt/vmex-swap
+          sudo swapon /mnt/vmex-swap
+
       - name: Run the two-host-device lanes
         env:
           JAX_ENABLE_X64: "1"
@@ -212,6 +219,13 @@ jobs:
           python -m pip install -U pip
           python -m pip install ".[coils,turbulence,freeb]"
           python -m pip install pytest pytest-xdist pytest-cov
+      - name: Add swap for XLA compile-arena headroom
+        run: |
+          sudo fallocate -l 12G /mnt/vmex-swap
+          sudo chmod 600 /mnt/vmex-swap
+          sudo mkswap /mnt/vmex-swap
+          sudo swapon /mnt/vmex-swap
+
       - name: Assert the integrations import (no silent skips possible)
         run: python -c "import essos, gkx, virtual_casing_jax"
       - name: Fetch reference assets (wout/mgrid fixtures for the gated lanes)
@@ -267,6 +281,13 @@ jobs:
           python -m pip install -U pip
           python -m pip install .
           python -m pip install pytest pytest-xdist pytest-cov
+
+      - name: Add swap for XLA compile-arena headroom
+        run: |
+          sudo fallocate -l 12G /mnt/vmex-swap
+          sudo chmod 600 /mnt/vmex-swap
+          sudo mkswap /mnt/vmex-swap
+          sudo swapon /mnt/vmex-swap
 
       - name: Cache golden fixtures and compiled kernels
         uses: actions/cache@v4
@@ -466,6 +487,13 @@ jobs:
           # keyed per shard so the two jobs never overwrite each other's cache.
           key: implicit-fd-v2-${{ matrix.shard }}-${{ hashFiles('tests/test_implicit_grad.py') }}
 
+      - name: Add swap for XLA compile-arena headroom
+        run: |
+          sudo fallocate -l 12G /mnt/vmex-swap
+          sudo chmod 600 /mnt/vmex-swap
+          sudo mkswap /mnt/vmex-swap
+          sudo swapon /mnt/vmex-swap
+
       - name: Run implicit-gradient tests with coverage
         env:
           JAX_ENABLE_X64: "1"
@@ -511,6 +539,13 @@ jobs:
           python -m pip install -U pip
           python -m pip install .
           python -m pip install pytest pytest-cov
+
+      - name: Add swap for XLA compile-arena headroom
+        run: |
+          sudo fallocate -l 12G /mnt/vmex-swap
+          sudo chmod 600 /mnt/vmex-swap
+          sudo mkswap /mnt/vmex-swap
+          sudo swapon /mnt/vmex-swap
 
       - name: Run example smokes (QH/QP/QI gated to nightly RUN_FULL)
         env:
