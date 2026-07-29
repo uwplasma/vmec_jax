@@ -255,7 +255,8 @@ Core grid, profiles, and geometry
      - implemented
      - Scalar, starting-element, and multidimensional Fortran namelist
        sections are supported with declared bounds, inclusive section limits,
-       first-subscript-fastest order, and source-ordered overlay.
+       first-subscript-fastest order, source-ordered overlay, repeat and null
+       fields, and single/double-quoted character literals.
    * - ``TVOLUME, LVOLUME_RFIX``
      - rejected when active
      - Positive target-volume rescaling is not silently omitted.

@@ -447,6 +447,55 @@ def test_repeated_dense_assignments_overlay_in_source_order() -> None:
     np.testing.assert_array_equal(inp.ftol_array, [1e-6, 1e-11, 1e-9, 1e-10])
 
 
+def test_null_array_values_preserve_initialized_and_prior_entries() -> None:
+    """Fortran null fields advance positions without overwriting values."""
+    inp = VmecInput.from_indata_text(
+        """&INDATA
+        APHI = 0.1, 0.2, 0.3, 0.4
+        APHI = , 0.9, 2*, 0.8
+        /
+        """
+    )
+    np.testing.assert_array_equal(
+        inp.aphi[:5], [0.1, 0.9, 0.3, 0.4, 0.8]
+    )
+
+
+def test_zero_repeat_count_is_rejected_like_gfortran() -> None:
+    """List-directed namelist input requires a positive repeat count."""
+    with pytest.raises(ValueError, match="repeat count must be positive"):
+        VmecInput.from_indata_text("&INDATA\nAPHI = 0*1.0\n/\n")
+
+
+def test_double_quoted_assignment_like_string_and_comment_are_preserved() -> None:
+    """``!``, comma, whitespace and ``=`` inside double quotes are data."""
+    inp = VmecInput.from_indata_text(
+        """&INDATA
+        MGRID_FILE = "coil! set, version=2.nc" ! actual comment
+        /
+        """
+    )
+    assert inp.mgrid_file == "coil! set, version=2.nc"
+
+
+def test_doubled_quotes_are_unescaped_in_character_values() -> None:
+    """Fortran represents a literal quote by doubling the delimiter."""
+    single = VmecInput.from_indata_text(
+        """&INDATA
+        MGRID_FILE = 'coil''set.nc'
+        /
+        """
+    )
+    double = VmecInput.from_indata_text(
+        '''&INDATA
+        MGRID_FILE = "coil""set.nc"
+        /
+        '''
+    )
+    assert single.mgrid_file == "coil'set.nc"
+    assert double.mgrid_file == 'coil"set.nc'
+
+
 def test_dense_and_indexed_assignments_honor_source_order() -> None:
     """Later dense writes override earlier indexed elements, not vice versa."""
     inp = VmecInput.from_indata_text(

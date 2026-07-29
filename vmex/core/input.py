@@ -101,7 +101,7 @@ class UnsupportedInputModeError(ValueError):
 # ---------------------------------------------------------------------------
 
 _ASSIGN_RE = re.compile(r"(?P<key>[A-Za-z_]\w*(?:\([^\)]*\))?)\s*=", re.MULTILINE)
-_REPEAT_RE = re.compile(r"^(?P<count>\d+)\*(?P<value>.+)$")
+_REPEAT_RE = re.compile(r"^(?P<count>\d+)\*(?P<value>.*)$")
 _BOOL_TRUE = {"T", ".T.", ".TRUE.", "TRUE"}
 _BOOL_FALSE = {"F", ".F.", ".FALSE.", "FALSE"}
 
@@ -140,41 +140,120 @@ _KNOWN_INDATA_NAMES = {
 
 
 def _strip_fortran_comments(line: str) -> str:
-    """Remove ``!`` comments, respecting single-quoted strings."""
+    """Remove ``!`` comments outside single- or double-quoted strings."""
     out: List[str] = []
-    in_quote = False
-    for ch in line:
-        if ch == "'":
-            in_quote = not in_quote
-        elif ch == "!" and not in_quote:
+    quote: str | None = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote is not None:
+            out.append(ch)
+            if ch == quote:
+                # Fortran escapes a quote by doubling it inside the same
+                # character literal.
+                if i + 1 < len(line) and line[i + 1] == quote:
+                    out.append(line[i + 1])
+                    i += 2
+                    continue
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+        elif ch == "!":
             break
-        out.append(ch)
+        else:
+            out.append(ch)
+        i += 1
     return "".join(out)
 
 
-def _tokenize_values(chunk: str) -> List[str]:
-    """Split a value chunk into tokens, keeping quoted strings intact."""
+def _split_unquoted_whitespace(field: str) -> List[str]:
+    """Split one comma field on whitespace outside character literals."""
     tokens: List[str] = []
     buf: List[str] = []
-    in_quote = False
-    for ch in chunk.strip():
-        if ch == "'":
-            in_quote = not in_quote
+    quote: str | None = None
+    i = 0
+    while i < len(field):
+        ch = field[i]
+        if quote is not None:
             buf.append(ch)
-        elif not in_quote and ch in ", \t\r\n":
+            if ch == quote:
+                if i + 1 < len(field) and field[i + 1] == quote:
+                    buf.append(field[i + 1])
+                    i += 2
+                    continue
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+        elif ch in " \t\r\n":
             if buf:
                 tokens.append("".join(buf))
                 buf = []
         else:
             buf.append(ch)
+        i += 1
     if buf:
         tokens.append("".join(buf))
-    # Expand Fortran repeat syntax like ``11*0.0``.
-    out: List[str] = []
-    for tok in tokens:
+    return tokens
+
+
+def _tokenize_values(chunk: str) -> List[str | None]:
+    """Tokenize list-directed namelist values, preserving null positions.
+
+    A null field (``A=1,,3``) advances the target array position without
+    changing its initialized value.  ``r*`` is the corresponding repeated
+    null form.  A final comma terminates a list and is not itself a null.
+    """
+    fields: List[str] = []
+    buf: List[str] = []
+    quote: str | None = None
+    i = 0
+    stripped = chunk.strip()
+    while i < len(stripped):
+        ch = stripped[i]
+        if quote is not None:
+            buf.append(ch)
+            if ch == quote:
+                # The next identical quote is an escaped literal character,
+                # not the end of the string.
+                if i + 1 < len(stripped) and stripped[i + 1] == quote:
+                    buf.append(stripped[i + 1])
+                    i += 2
+                    continue
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+        elif ch == ",":
+            fields.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    fields.append("".join(buf))
+
+    raw: List[str | None] = []
+    for field_index, field in enumerate(fields):
+        pieces = _split_unquoted_whitespace(field)
+        if pieces:
+            raw.extend(pieces)
+        elif field_index < len(fields) - 1:
+            raw.append(None)
+
+    # Expand Fortran repeat syntax like ``11*0.0`` and repeated nulls ``3*``.
+    out: List[str | None] = []
+    for tok in raw:
+        if tok is None:
+            out.append(None)
+            continue
         m = _REPEAT_RE.match(tok)
-        if m and int(m.group("count")) > 0 and m.group("value").strip():
-            out.extend([m.group("value").strip()] * int(m.group("count")))
+        if m:
+            count = int(m.group("count"))
+            if count <= 0:
+                raise ValueError("Fortran repeat count must be positive")
+            value = m.group("value").strip()
+            out.extend(([value] if value else [None]) * count)
         else:
             out.append(tok)
     return out
@@ -185,7 +264,7 @@ def _parse_scalar(tok: str) -> Scalar:
     tok = tok.strip()
     for quote in ("'", '"'):
         if len(tok) >= 2 and tok[0] == quote and tok[-1] == quote:
-            return tok[1:-1].strip()
+            return tok[1:-1].replace(quote * 2, quote).strip()
     up = tok.upper()
     if up in _BOOL_TRUE:
         return True
@@ -311,6 +390,36 @@ def _fortran_positions(
     return positions[:value_count]
 
 
+def _find_assignments(text: str) -> List[re.Match[str]]:
+    """Find namelist assignments outside quoted character literals."""
+    matches: List[re.Match[str]] = []
+    quote: str | None = None
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote is not None:
+            if ch == quote:
+                if i + 1 < len(text) and text[i + 1] == quote:
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        match = _ASSIGN_RE.match(text, i)
+        if match is not None and (
+            i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")
+        ):
+            matches.append(match)
+            i = match.end()
+            continue
+        i += 1
+    return matches
+
+
 def _read_indata_text(text: str) -> tuple[Dict[str, List[Scalar]], Dict[str, Dict[Tuple[int, ...], Scalar]]]:
     """Parse and sequentially replay the ``&INDATA`` block.
 
@@ -330,24 +439,26 @@ def _read_indata_text(text: str) -> tuple[Dict[str, List[Scalar]], Dict[str, Dic
 
     scalars: Dict[str, List[Scalar]] = {}
     indexed: Dict[str, Dict[Tuple[int, ...], Scalar]] = {}
-    matches = list(_ASSIGN_RE.finditer(cleaned))
+    matches = _find_assignments(cleaned)
     for i, m in enumerate(matches):
         name, idx = _parse_key(m.group("key"))
         val_end = matches[i + 1].start() if i + 1 < len(matches) else len(cleaned)
-        chunk = re.sub(r",\s*$", "", cleaned[m.end(): val_end].strip())
-        values = [_parse_scalar(t) for t in _tokenize_values(chunk)]
+        chunk = cleaned[m.end(): val_end].strip()
+        values = _tokenize_values(chunk)
         if not values:
             continue
         is_array = name in _INDATA_ARRAY_BOUNDS or idx is not None
         if not is_array:
             if len(values) != 1:
                 raise ValueError(f"too many values for scalar INDATA variable: {name}")
-            scalars[name] = values
+            if values[0] is not None:
+                scalars[name] = [_parse_scalar(values[0])]
         else:
             entries = indexed.setdefault(name, {})
             positions = _fortran_positions(name, idx, len(values))
             for position, value in zip(positions, values, strict=True):
-                entries[position] = value
+                if value is not None:
+                    entries[position] = _parse_scalar(value)
     return scalars, indexed
 
 

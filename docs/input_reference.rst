@@ -40,6 +40,13 @@ boundary syntax such as ``RBC(-6:6,0)=...`` is equivalent to the corresponding
 ``RBC(-6:,0)``) are resolved from the declared VMEC2000 array bounds.  Bounds,
 rank, and value count are checked before setup.
 
+List-directed repeat syntax is supported for both values (``4*0.0``) and
+nulls (``3*``).  Null fields advance the array position without replacing its
+initialized or previously assigned value, so ``APHI=,0.5`` retains the default
+first coefficient.  Single- and double-quoted character values may contain
+spaces, commas, ``!``, or ``=``; doubling the active quote delimiter represents
+that literal quote, following the Fortran runtime.
+
 INDATA variables
 ----------------
 
