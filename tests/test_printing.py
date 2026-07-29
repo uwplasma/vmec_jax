@@ -22,6 +22,12 @@ def test_vacuum_banner_format():
 
 def test_force_iterations_banner():
     assert "BEGIN FORCE ITERATIONS" in printing.FORCE_ITERATIONS_BANNER
+    assert "FSQR, FSQZ = Normalized Physical Force Residuals" in (
+        printing.FORCE_ITERATIONS_BANNER
+    )
+    # The screen path never prints the lowercase preconditioned rows (they
+    # are threed1-file-only, FORMAT 40), so the legend must not promise them.
+    assert "Preconditioned" not in printing.FORCE_ITERATIONS_BANNER
 
 
 def test_screen_header_variants():
@@ -104,6 +110,37 @@ def test_improved_axis_block_symmetric_bytes():
         "      ZAXIS_CS =   -0.0000000000000000      -0.16638393524554693\n"
         "  -----------------------------\n"
     )
+
+
+def test_improved_axis_block_small_values_use_fortran_e_notation():
+    """|x| < 1e-3 renders as gfortran list-directed E-notation (three-digit
+    exponent, 17 significant digits), not as raw positional digits — the
+    PARVMEC layout (e.g. ``2.3239183094066352E-002``)."""
+    s = printing.improved_axis_block(
+        [1.0, 9.9999999998882687e-06],
+        [-0.0, 1.4226517621245727e-16],
+    )
+    assert s == (
+        "  ---- Improved AXIS Guess ----\n"
+        "      RAXIS_CC =    1.0000000000000000       9.9999999998882687E-006\n"
+        "      ZAXIS_CS =   -0.0000000000000000       1.4226517621245727E-016\n"
+        "  -----------------------------\n"
+    )
+    # raw float-repr strings like 0.0000099999999998882687 must never appear
+    assert "0.0000099999999998882687" not in s
+
+
+def test_fortran_double_thresholds_and_signs():
+    """Positional inside [1e-3, 1e4); E-notation outside; zero positional."""
+    f = printing._fortran_double
+    assert f(2.3239183094066352e-2) == "0.023239183094066352"
+    assert f(1.0e-3) == "0.0010000000000000000"
+    assert f(9.9999e-4) == "9.9999000000000008E-004"
+    assert f(9999.9) == "9999.8999999999996"
+    assert f(1.0e4) == "1.0000000000000000E+004"
+    assert f(-4.5728589400603229e-18) == "-4.5728589400603229E-018"
+    assert f(0.0) == "0.0000000000000000"
+    assert f(-0.0) == "-0.0000000000000000"
 
 
 def test_improved_axis_block_lasym_adds_cs_cc_lines():

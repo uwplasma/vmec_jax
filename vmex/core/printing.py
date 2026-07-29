@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import numpy as np
 
+# The screen path prints only the physical residuals (printout.f FORMATs
+# 45/50/65/70); the lowercase preconditioned rows exist solely in the threed1
+# file (FORMAT 40, :func:`threed1_line`), so the screen legend does not
+# mention them.
 FORCE_ITERATIONS_BANNER = (
     " FSQR, FSQZ = Normalized Physical Force Residuals\n"
-    " fsqr, fsqz = Preconditioned Force Residuals\n"
     " -----------------------\n"
     " BEGIN FORCE ITERATIONS\n"
     " -----------------------\n"
@@ -40,12 +43,27 @@ def _fortran_positional(value: float) -> str:
     )
 
 
+def _fortran_double(value: float) -> str:
+    """One double in Fortran list-directed style (the PARVMEC axis report):
+    positional with 17 significant digits when ``1e-3 <= |x| < 1e4`` (or
+    exactly zero), otherwise 17-significant-digit E-notation with the
+    gfortran three-digit exponent (``2.3239183094066352E-002``)."""
+    value = float(value)
+    if value == 0.0 or 1.0e-3 <= abs(value) < 1.0e4:
+        return _fortran_positional(value)
+    mantissa, _, exponent = f"{value:.16E}".partition("E")
+    return f"{mantissa}E{exponent[0]}{int(exponent[1:]):03d}"
+
+
 def _axis_line(label: str, values) -> str:
-    """One ``      RAXIS_CC = ...`` line (values right-justified in width-22
-    fields, 4-space separators — the gfortran list-directed layout)."""
+    """One ``      RAXIS_CC = ...`` line in the gfortran list-directed layout:
+    positional values right-justified in width-22 fields with 4-space
+    separators; E-notation values fill the same 26-column field flush right
+    (G-editing puts the trailing blanks inside the field)."""
     line = f"      {label} ="
     for v in np.atleast_1d(np.asarray(values, dtype=float)).ravel():
-        line += _fortran_positional(v).rjust(22) + "    "
+        text = _fortran_double(v)
+        line += (text.rjust(22) + "    ") if len(text) <= 22 else text.rjust(26)
     return line.rstrip()
 
 

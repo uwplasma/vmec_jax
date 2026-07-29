@@ -291,6 +291,11 @@ def _threed1_summary(wout) -> str:
     toroidal field at the v=0 axis point), and the ``(m=0, n=0)`` mode of
     ``bmnc`` on the outermost HALF-mesh surface (the angular average of
     |B| there — the closest edge-|B| scalar the wout carries).
+
+    Quantities that can be legitimately tiny — iota (near-axisymmetric
+    decks have |iota| ~ 1e-10), beta, and the MHD energy — print in
+    E-notation; fixed-point %f would render them as ``-0.000000``.  The
+    |B|, radius, and volume lines are O(1)-positive and stay fixed-point.
     """
     import numpy as np
 
@@ -303,8 +308,8 @@ def _threed1_summary(wout) -> str:
         f" Major Radius          = {float(wout.Rmajor_p):14.6f} [M]",
         f" Minor Radius          = {float(wout.Aminor_p):14.6f} [M]",
         f" Volume Average B      = {float(wout.volavgB):14.6f} [T]",
-        f" Iota on Axis          = {float(iotaf[0]):14.6f}",
-        f" Iota at Edge          = {float(iotaf[-1]):14.6f}",
+        f" Iota on Axis          = {float(iotaf[0]):14.6E}",
+        f" Iota at Edge          = {float(iotaf[-1]):14.6E}",
         f" |B| on Axis (b0)      = {float(wout.b0):14.6f} [T]",
         f" <|B|> at Edge (half)  = {float(bmnc[-1, 0]):14.6f} [T]",
         f" beta total            = {float(wout.betatotal):14.6E}",
@@ -573,7 +578,10 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
     read_s = time.perf_counter() - t0
 
     if verbose:
-        emit(_preamble(case, time_slice=float(getattr(inp, "time_slice", 0.0))))
+        # end="": the preamble already ends with a newline, and the stage
+        # banner opens with one — the default print newline would stack a
+        # second consecutive blank line after the COMPUTER line.
+        emit(_preamble(case, time_slice=float(getattr(inp, "time_slice", 0.0))), end="")
     freeb_plan = _free_boundary_plan(args, inp, input_path, emit=emit)
     # VMEC2000 turns off LFREEB when the requested mgrid cannot be opened.
     # Use that effective mode in setup and WOUT metadata, not merely in CLI

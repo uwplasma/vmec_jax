@@ -157,6 +157,25 @@ def test_summary_reports_iota_and_modb(solovev_cli):
         line = _line_containing(stdout, pattern)
         assert line is not None, f"missing summary line: {pattern!r}"
         assert np.isfinite(float(line.split("=")[1].split("[")[0]))
+    # iota can be legitimately tiny (near-axisymmetric decks: ~1e-10), so the
+    # summary prints it in E-notation; fixed-point %f would show -0.000000.
+    for pattern in (" Iota on Axis ", " Iota at Edge "):
+        value_text = _line_containing(stdout, pattern).split("=")[1].strip()
+        assert "E" in value_text, f"iota not in E-notation: {value_text!r}"
+
+
+def test_stdout_has_no_consecutive_blank_lines(solovev_cli):
+    """At most one blank line between blocks anywhere in the CLI output."""
+    _, stdout, _ = solovev_cli
+    assert "\n\n\n" not in stdout
+
+
+def test_no_stale_preconditioned_legend(solovev_cli):
+    """The screen path never prints lowercase preconditioned rows, so the
+    legend must not announce them (threed1-file-only, printout.f FORMAT 40)."""
+    _, stdout, _ = solovev_cli
+    assert "Preconditioned" not in stdout
+    assert _line_containing(stdout, "FSQR, FSQZ = Normalized") is not None
 
 
 # ---------------------------------------------------------------------------
