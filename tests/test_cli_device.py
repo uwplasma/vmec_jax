@@ -21,7 +21,7 @@ def test_device_option_parses_supported_choices():
 @pytest.mark.parametrize(("choice", "expected"), [("none", None), ("cpu", "cpu")])
 def test_fixed_boundary_cli_forwards_device(monkeypatch, tmp_path, choice, expected):
     args = cli.build_parser().parse_args(["input.case", "--quiet", "--device", choice])
-    inp = object()
+    inp = SimpleNamespace(lfull3d1out=False)
     seen = {}
 
     monkeypatch.setattr(cli, "_read_input", lambda _: inp)
@@ -37,6 +37,7 @@ def test_fixed_boundary_cli_forwards_device(monkeypatch, tmp_path, choice, expec
     assert cli._solve_input_file(args, tmp_path / "input.case", tmp_path, emit=print) == 0
     assert seen["device"] == expected
     assert seen["release_stage_cache"] is True
+    assert seen["raise_on_max_iterations"] is True
 
 
 def test_free_boundary_cli_forwards_device(monkeypatch, tmp_path):
@@ -64,6 +65,6 @@ def test_free_boundary_cli_forwards_device(monkeypatch, tmp_path):
     assert seen["device"] == "gpu"
     assert seen["ftol_array"] is ftol_array
     assert seen["niter_array"] is niter_array
-    # CLI default: NITER exhaustion terminates through the output path
-    # (WOUT + summary, fileout.f semantics) instead of raising.
-    assert seen["raise_on_max_iterations"] is False
+    # VMEC2000 only forces an NITER-exhausted state through fileout when
+    # LFULL3D1OUT=T. The default false value therefore raises before WOUT.
+    assert seen["raise_on_max_iterations"] is True
