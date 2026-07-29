@@ -683,6 +683,24 @@ jobs:
       - name: Fetch reference assets (mgrid files for free-boundary examples)
         run: python tools/fetch_assets.py --bundle reference-nc
 
+      # XLA's compile arena for the enlarged free-boundary lane programs
+      # (funct3d.f Jacobian gate + stability-selected T_l recurrence)
+      # transiently exceeds the 16 GB hosted-runner RAM on x86 (the three
+      # QI-ladder shards and core-d-f were memory-evicted ~12 min into
+      # pytest on two consecutive attempts, during the first-rung compile;
+      # macOS peaks lower, ~12 GB).  Disk-backed swap lets the compile
+      # spill instead of killing the runner; the 300-minute budget absorbs
+      # the slowdown.  Program-size reduction (reusing the iteration
+      # body's Jacobian sign instead of a second synthesis) is tracked as
+      # a follow-up optimization.
+      - name: Add swap for XLA compile-arena headroom
+        run: |
+          sudo fallocate -l 12G /mnt/vmex-swap
+          sudo chmod 600 /mnt/vmex-swap
+          sudo mkswap /mnt/vmex-swap
+          sudo swapon /mnt/vmex-swap
+          free -h
+
       - name: Run the whole suite including full-marked tests
         env:
           JAX_ENABLE_X64: "1"
