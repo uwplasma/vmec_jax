@@ -282,13 +282,11 @@ Force, axis, and iteration controls
        zero-axis first pass and exactly one ``eqsolve.f`` recovery transfer.
        The value is preserved in WOUT.
    * - ``LFULL3D1OUT``
-     - implemented (accepted; no CLI effect)
-     - The CLI always terminates an NITER-exhausted run through the normal
-       output path (unconverged WOUT + summary, ``ier_flag = 2`` —
-       ``fileout.f`` semantics), so the flag no longer gates the WOUT
-       there.  The library API keeps the choice via
-       ``raise_on_max_iterations``.  Numerical/Jacobian failures never
-       write one.
+     - implemented
+     - With ``T``, an NITER-exhausted fixed- or free-boundary run writes the
+       unconverged WOUT and summary with ``ier_flag=2``.  With ``F``, the CLI
+       returns that typed status before fileout, matching ``vmec.f``.  Fatal
+       numerical/Jacobian failures never write a WOUT.
    * - ``PRE_NITER``
      - rejected when active with 2-D GMRES
      - VMEC2000 changes the total post-activation iteration cap.  VMEX does not
@@ -558,9 +556,9 @@ Preconditioned update residual
    equivalent to supplying an axis and is independent of the preconditioner.
 
 ``LFULL3D1OUT``
-   Accepted for compatibility.  The CLI now always writes the unconverged
-   WOUT after iteration-budget exhaustion (``fileout.f`` semantics); the
-   flag does not declare the unconverged state converged.
+   Selects VMEC2000's forced-output path after iteration-budget exhaustion.
+   The resulting WOUT retains ``ier_flag=2`` and does not declare the state
+   converged.  When false, no WOUT is written for ordinary NITER exhaustion.
 
 CLI lane / JIT lane
    Two controllers around the same force and update kernels.  The CLI lane

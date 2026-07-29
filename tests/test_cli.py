@@ -255,16 +255,28 @@ def test_missing_input_exits_with_input_error(tmp_path):
     assert WERROR_MESSAGES[INPUT_ERROR_FLAG] in stdout
 
 
-def test_iteration_exhaustion_exits_with_more_iter_and_writes_wout(tmp_path):
-    """VMEC2000 fileout.f: NITER exhaustion terminates normally through the
-    output path — full summary + MORE ITERATIONS REQUIRED block + WOUT —
-    while the exit code stays the distinct ier_flag = 2."""
+def test_iteration_exhaustion_without_lfull3d1out_does_not_write_wout(tmp_path):
+    """VMEC2000: ordinary NITER exhaustion returns ier=2 before fileout."""
     rc, stdout = _run_cli(
         [str(SOLOVEV_DECK), "--outdir", str(tmp_path), "--max-iter", "20"]
     )
     assert rc == MORE_ITER_FLAG
     assert WERROR_MESSAGES[MORE_ITER_FLAG] in stdout
-    # the same summary block a converged run prints, incl. the new lines
+    assert "Wrote WOUT file:" not in stdout
+    assert not (tmp_path / "wout_solovev.nc").exists()
+
+
+def test_lfull3d1out_writes_wout_on_iteration_exhaustion(tmp_path):
+    """LFULL3D1OUT=T forces VMEC2000's full-output path for ier=2."""
+    inp = dataclasses.replace(
+        VmecInput.from_file(SOLOVEV_DECK),
+        lfull3d1out=True,
+    )
+    deck = inp.to_indata(tmp_path / "input.lfull3d1out")
+    rc, stdout = _run_cli(
+        [str(deck), "--outdir", str(tmp_path), "--max-iter", "20"]
+    )
+    assert rc == MORE_ITER_FLAG
     for pattern in (
         "Aspect Ratio", "Volume Average B", "Iota on Axis", "Iota at Edge",
         "|B| on Axis (b0)", "<|B|> at Edge (half)", "MHD Energy (wb + wp)",
@@ -272,17 +284,18 @@ def test_iteration_exhaustion_exits_with_more_iter_and_writes_wout(tmp_path):
         "Wrote WOUT file:", "HINT : increase NITER or loosen FTOL",
     ):
         assert _line_containing(stdout, pattern) is not None, pattern
-    wout = read_wout(tmp_path / "wout_solovev.nc")
+    wout = read_wout(tmp_path / "wout_lfull3d1out.nc")
     assert int(wout.ier_flag) == MORE_ITER_FLAG
 
 
-def test_iteration_exhaustion_quiet_still_writes_wout(tmp_path):
+def test_iteration_exhaustion_quiet_without_lfull3d1out_has_no_wout(tmp_path):
     rc, stdout = _run_cli(
         [str(SOLOVEV_DECK), "--outdir", str(tmp_path), "--max-iter", "20", "--quiet"]
     )
     assert rc == MORE_ITER_FLAG
-    assert stdout.strip() == ""            # --quiet silences everything
-    assert (tmp_path / "wout_solovev.nc").exists()
+    # Typed termination messages remain visible even under --quiet.
+    assert WERROR_MESSAGES[MORE_ITER_FLAG] in stdout
+    assert not (tmp_path / "wout_solovev.nc").exists()
 
 
 def test_lforbal_iteration_exhaustion_writes_wout(tmp_path):

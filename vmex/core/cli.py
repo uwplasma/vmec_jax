@@ -602,10 +602,10 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             inp, ftol_array=ftol_array, niter_array=niter_array,
             verbose=verbose,
             emit=emit,
-            # VMEC2000 fileout.f semantics: NITER exhaustion of the final
-            # grid terminates normally through the output path (WOUT +
-            # summary) with ier_flag = 2; only genuine failures raise.
-            raise_on_max_iterations=False,
+            # vmec.f only forces an NITER-exhausted state through fileout
+            # when LFULL3D1OUT=T.  Otherwise the typed ier_flag=2 error
+            # returns before the WOUT path.
+            raise_on_max_iterations=not bool(inp.lfull3d1out),
             device=None if args.device == "none" else args.device,
             release_stage_cache=True,
             # Cold-run overlap is a CLI concern (library default False).
@@ -624,8 +624,8 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             mode=str(args.mode),
             verbose=verbose,
             emit=emit,
-            # fileout.f semantics — see the free-boundary call above.
-            raise_on_max_iterations=False,
+            # vmec.f/fileout.f semantics — see the free-boundary call above.
+            raise_on_max_iterations=not bool(effective_inp.lfull3d1out),
             device=None if args.device == "none" else args.device,
             release_stage_cache=True,
             # Cold-run overlap is a CLI concern: the library default is

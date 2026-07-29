@@ -126,9 +126,8 @@ Multigrid ladder and stepping
      - permit automatic first-pass axis recovery for a large finite force
    * - ``LFULL3D1OUT``
      - ``F``
-     - accepted for compatibility; the CLI always writes the unconverged
-       WOUT after NITER exhaustion (fixed or free boundary, ``fileout.f``
-       semantics) — fatal numerical/Jacobian failures never write one
+     - write a WOUT after ordinary NITER exhaustion; when false, the CLI
+       returns ``ier_flag=2`` before the output path, matching VMEC2000
 
 Pressure profile
 ~~~~~~~~~~~~~~~~

@@ -1,8 +1,9 @@
 """CLI free-boundary routing tests (``vmex.core.cli`` ->
 ``core.freeboundary``): the golden lasym deck at ``--max-iter 80`` (past
 the golden turn-on iteration 53) shows the ``In VACUUM`` block and
-activation banner, writes a readable ``lfreeb = True`` wout with the
-mgrid's ``nextcur``/``extcur``, and exits 2 (fileout.f semantics); a
+activation banner, uses ``LFULL3D1OUT=T`` to write a readable
+``lfreeb = True`` wout with the mgrid's ``nextcur``/``extcur``, and exits
+2; a
 missing mgrid warns and falls back to fixed boundary (VMEC2000 policy);
 direct-coil misuse is a typed input error (exit code 5).
 """
@@ -24,7 +25,12 @@ jax = pytest.importorskip("jax")
 jax.config.update("jax_enable_x64", True)
 
 from vmex.core import cli
-from vmex.core.errors import INPUT_ERROR_FLAG, MORE_ITER_FLAG
+from vmex.core.errors import (
+    INPUT_ERROR_FLAG,
+    MORE_ITER_FLAG,
+    VmecConvergenceError,
+    WERROR_MESSAGES,
+)
 from vmex.core.mgrid import read_mgrid
 from vmex.core.wout import read_wout
 
@@ -55,16 +61,15 @@ def _run_cli(argv: list[str]) -> tuple[int, str]:
 
 @pytest.fixture(scope="module")
 def freeb_cli(tmp_path_factory) -> tuple[int, str, Path]:
-    """One capped CLI free-boundary run of the golden deck (shared).
-
-    Deliberately does NOT set ``LFULL3D1OUT``: the CLI's default is the
-    VMEC2000 fileout.f behavior — NITER exhaustion terminates normally
-    through the output path (WOUT + summary) with exit code 2.
-    """
+    """One capped ``LFULL3D1OUT=T`` free-boundary run (shared)."""
     jax.config.update("jax_disable_jit", False)
     workdir = tmp_path_factory.mktemp("cli_freeb")
     deck = workdir / DECK.name
-    shutil.copyfile(DECK, deck)
+    text, count = re.subn(
+        r"(?m)^\s*/\s*$", "  LFULL3D1OUT = T,\n/", DECK.read_text(), count=1
+    )
+    assert count == 1
+    deck.write_text(text)
     shutil.copyfile(MGRID, workdir / MGRID.name)
     outdir = workdir / "out"
     rc, stdout = _run_cli([str(deck), "--max-iter", "80", "--outdir", str(outdir)])
@@ -97,8 +102,7 @@ def test_exit_code_reflects_more_iter(freeb_cli):
 def test_wout_written_with_free_boundary_fields(freeb_cli):
     _, _, wout_path = freeb_cli
     assert wout_path.exists(), (
-        "the CLI default must retain the capped free-boundary state "
-        "(fileout.f NITER-exhaustion semantics)"
+        "LFULL3D1OUT=T must retain the capped free-boundary state"
     )
     # wrout.f dimensions extcur by the mgrid's nextcur (the bundled synthetic
     # mgrid holds a single summed coil group), truncating the deck's EXTCUR.
@@ -143,7 +147,7 @@ def test_wout_written_with_free_boundary_fields(freeb_cli):
 # ---------------------------------------------------------------------------
 
 
-def test_missing_mgrid_falls_back_to_fixed_boundary(tmp_path):
+def test_missing_mgrid_falls_back_to_fixed_boundary_without_wout(tmp_path):
     deck = tmp_path / DECK.name
     shutil.copyfile(DECK, deck)  # mgrid deliberately not copied
     rc, stdout = _run_cli([str(deck), "--max-iter", "5", "--outdir", str(tmp_path)])
@@ -151,12 +155,37 @@ def test_missing_mgrid_falls_back_to_fixed_boundary(tmp_path):
     assert "FIXED-BOUNDARY" in stdout
     assert "VACUUM PRESSURE TURNED ON" not in stdout
     assert "In VACUUM" not in stdout
-    # the capped fixed-boundary fallback exhausts NITER -> exit code 2 with
-    # the WOUT written (fileout.f semantics), labeled effectively fixed.
+    # The capped fixed-boundary fallback exhausts NITER.  With the deck's
+    # default LFULL3D1OUT=F, VMEC2000 returns ier=2 before fileout.
     assert rc == MORE_ITER_FLAG
-    wout = read_wout(tmp_path / f"wout_{CASE}.nc")
-    assert int(wout.ier_flag) == MORE_ITER_FLAG
-    assert bool(wout.lfreeb) is False
+    assert not (tmp_path / f"wout_{CASE}.nc").exists()
+
+
+def test_free_boundary_default_raises_before_wout(monkeypatch, tmp_path):
+    """The free solver receives the same LFULL3D1OUT gate as fixed boundary."""
+    deck = tmp_path / DECK.name
+    shutil.copyfile(DECK, deck)
+    shutil.copyfile(MGRID, tmp_path / MGRID.name)
+    seen = {}
+
+    def fake_solve(_inp, **kwargs):
+        seen["raise_on_max_iterations"] = kwargs["raise_on_max_iterations"]
+        raise VmecConvergenceError(
+            WERROR_MESSAGES[MORE_ITER_FLAG],
+            hint="increase NITER or loosen FTOL",
+            iteration=1,
+            fsq=(1.0, 1.0, 1.0),
+            ftol=1.0e-12,
+        )
+
+    import vmex.core.multigrid as multigrid
+
+    monkeypatch.setattr(multigrid, "solve_free_boundary_multigrid", fake_solve)
+    rc, stdout = _run_cli([str(deck), "--outdir", str(tmp_path)])
+    assert seen == {"raise_on_max_iterations": True}
+    assert rc == MORE_ITER_FLAG
+    assert WERROR_MESSAGES[MORE_ITER_FLAG] in stdout
+    assert not (tmp_path / f"wout_{CASE}.nc").exists()
 
 
 def test_missing_mgrid_forced_wout_has_effective_fixed_metadata(tmp_path):
