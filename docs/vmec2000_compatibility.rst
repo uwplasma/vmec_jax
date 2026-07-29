@@ -102,9 +102,12 @@ Equilibrium capability matrix
      - VMEC force iteration, multigrid, restart logic, profiles, and WOUT
        variables have representative VMEC2000 golden tests.
    * - Fixed boundary, ``LASYM=T``
-     - parity-regressed
+     - parity-regressed with one corrected legacy diagnostic
      - Full asymmetric solve and WOUT partner channels are implemented.
-       Symmetry-limited *derived objectives* are a separate row below.
+       ``currvmns`` uses the corrected PARVMEC-calibrated VMEC++ 0.7.1
+       inner-half-mesh denominator rather than the known legacy
+       ``read_wout_mod.f90`` index slip.  Symmetry-limited *derived
+       objectives* are a separate row below.
    * - Free boundary, NESTOR, symmetric
      - implemented; parity-regressed on representative cases
      - Mgrid external field, plasma-current filament, full/incremental vacuum
@@ -554,6 +557,14 @@ Preconditioned update residual
 ``LMOVE_AXIS``
    Enables the VMEC2000 first-force axis-recovery control transfer.  It is not
    equivalent to supplying an axis and is independent of the preconditioner.
+
+LASYM ``currvmns``
+   The legacy ``read_wout_mod.f90::Compute_Currents`` asymmetric odd-``m``
+   branch divides the inner ``bsubumns`` coefficient by the outer
+   half-mesh ``sqrt(s)``.  VMEX deliberately uses the corresponding inner
+   half-mesh denominator, matching the PARVMEC-calibrated correction in
+   VMEC++ 0.7.1.  This changes only the derived asymmetric current-density
+   WOUT channel, not the equilibrium force iteration.
 
 ``LFULL3D1OUT``
    Selects VMEC2000's forced-output path after iteration-budget exhaustion.

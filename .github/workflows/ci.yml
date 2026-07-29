@@ -398,6 +398,7 @@ jobs:
                     tests/test_packaging_metadata.py \
                     tests/test_parallel.py \
                     tests/test_plotting_boozer.py \
+                    tests/test_postprocess_currents.py \
                     tests/test_preconditioner.py \
                     tests/test_preconditioner_2d.py \
                     tests/test_printing.py \

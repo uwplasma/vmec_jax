@@ -179,6 +179,12 @@ _DRIFT_FINITE_ONLY = {"DMerc", "DShear", "DWell", "DCurr", "DGeod", "equif"}
 _LASYM_DIAG_DRIFT = {
     "bsubvmnc", "bsubvmns", "currumnc", "currumns", "currvmnc", "currvmns",
 }
+# The legacy VMEC2000/LIBSTELL Compute_Currents branch used shalf(js+1)
+# for both neighboring bsubumns coefficients.  VMEX follows the corrected
+# PARVMEC-calibrated VMEC++ 0.7.1 formula, so the old golden's currvmns is
+# useful only as a finite/shape check.  tests/test_postprocess_currents.py
+# pins the corrected formula directly.
+_LASYM_CORRECTED_LEGACY_OUTPUT = {"currvmns"}
 # For goldens stored at loose ftol (li383: 1e-6), the current-density
 # harmonics (radial derivatives of the ~1e-3-drifted field) lose all
 # significant digits in subdominant channels: finite-only there.
@@ -315,6 +321,8 @@ def test_golden_values(case):
                 continue
             if ((drift or lasym) and name in _DRIFT_FINITE_ONLY) or (
                 ftolv > 1e-9 and name in _LOOSE_FINITE_ONLY
+            ) or (
+                lasym and name in _LASYM_CORRECTED_LEGACY_OUTPUT
             ):
                 if not np.all(np.isfinite(n)):
                     failures.append(f"{name}: non-finite values")

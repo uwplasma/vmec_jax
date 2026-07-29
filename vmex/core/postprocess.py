@@ -158,12 +158,13 @@ def expand_mode_columns(table, xm_old, xn_old, xm_new, xn_new):
 # currents (LIBSTELL read_wout_mod.f90 :: Compute_Currents)
 # --------------------------------------------------------------------------
 
-def _current_terms(bs, bu, bv, xm_nyq, xn_nyq, *, shalf, sfull, ohs, ns, s_weighted_bu0_index):
+def _current_terms(bs, bu, bv, xm_nyq, xn_nyq, *, shalf, sfull, ohs, ns):
     """Shared js-loop of ``Compute_Currents`` for one parity block.
 
-    ``s_weighted_bu0_index`` selects ``shalf(js)`` (symmetric block) or the
-    Fortran source's ``shalf(js+1)`` (asymmetric block, replicated verbatim
-    for bit-parity with VMEC2000, including its apparent index slip).
+    Both stellarator-symmetric and asymmetric blocks use the inner
+    half-mesh ``sqrt(s)`` for the inner covariant coefficient.  A historical
+    ``read_wout_mod.f90`` asymmetric branch used the outer value for both
+    terms; VMEC++ corrected that indexing defect against PARVMEC in v0.7.1.
     """
     mn = bs.shape[1]
     t1 = np.zeros((ns, mn))
@@ -171,13 +172,12 @@ def _current_terms(bs, bu, bv, xm_nyq, xn_nyq, *, shalf, sfull, ohs, ns, s_weigh
     t3 = np.zeros((ns, mn))
     odd = (np.asarray(xm_nyq).astype(int) % 2) == 1
     for j in range(1, ns - 1):  # Fortran js = 2, ns-1
-        sh0 = shalf[j] if s_weighted_bu0_index == 0 else shalf[j + 1]
         t1[j] = np.where(
             odd,
             0.5 * (shalf[j + 1] * bs[j + 1] + shalf[j] * bs[j]) / sfull[j],
             0.5 * (bs[j + 1] + bs[j]),
         )
-        bu0 = bu[j] / sh0
+        bu0 = bu[j] / shalf[j]
         bu1 = bu[j + 1] / shalf[j + 1]
         t2[j] = np.where(
             odd,
@@ -226,8 +226,10 @@ def compute_currents(*, bsubsmns, bsubumnc, bsubvmnc, xm_nyq, xn_nyq,
     xn = np.asarray(xn_nyq, dtype=float)
     xm = np.asarray(xm_nyq, dtype=float)
 
-    t1, t2, t3 = _current_terms(bs, bu, bv, xm_nyq, xn_nyq, shalf=shalf,
-                                sfull=sfull, ohs=ohs, ns=ns, s_weighted_bu0_index=0)
+    t1, t2, t3 = _current_terms(
+        bs, bu, bv, xm_nyq, xn_nyq,
+        shalf=shalf, sfull=sfull, ohs=ohs, ns=ns,
+    )
     currumnc = -xn[None, :] * t1 - t3
     currvmnc = -xm[None, :] * t1 + t2
     _current_endpoints(currumnc, currvmnc, xm_nyq, ns)
@@ -239,8 +241,10 @@ def compute_currents(*, bsubsmns, bsubumnc, bsubvmnc, xm_nyq, xn_nyq,
     bsc = np.asarray(bsubsmnc, dtype=float)
     bus = np.asarray(bsubumns, dtype=float)
     bvs = np.asarray(bsubvmns, dtype=float)
-    t1, t2, t3 = _current_terms(bsc, bus, bvs, xm_nyq, xn_nyq, shalf=shalf,
-                                sfull=sfull, ohs=ohs, ns=ns, s_weighted_bu0_index=1)
+    t1, t2, t3 = _current_terms(
+        bsc, bus, bvs, xm_nyq, xn_nyq,
+        shalf=shalf, sfull=sfull, ohs=ohs, ns=ns,
+    )
     currumns = xn[None, :] * t1 - t3
     currvmns = xm[None, :] * t1 + t2
     _current_endpoints(currumns, currvmns, xm_nyq, ns)
