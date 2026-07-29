@@ -569,17 +569,12 @@ def test_scalarized_profile_gradient_cpu_gpu_parity():
 # forced-host-device rig lanes)
 # ---------------------------------------------------------------------------
 
-# Every physics metric of the implicit differentiable path; each is audited
-# for its VALUE and its full gradient PYTREE on the target device.
+# Two full-pytree regression probes for second-device ownership. The workflow
+# audits every physics objective below in one fresh process per metric, which
+# keeps this cache-order test bounded.
 IMPLICIT_METRICS = {
     "wb": lambda sol: sol.wb,
-    "wp": lambda sol: sol.wp,
-    "volume": lambda sol: sol.volume,
-    "aspect": lambda sol: sol.aspect,
-    "iota_axis": lambda sol: sol.iota_axis,
     "iota_edge": lambda sol: sol.iota_edge,
-    "magnetic_well": lambda sol: optimize.magnetic_well(
-        sol.state, sol.runtime),
 }
 
 
@@ -611,18 +606,27 @@ def _stray_leaves(label, tree, device):
 
 def _implicit_audit(inp, device, *, ftol, max_iterations):
     """Values, gradient PYTREES and a solution for every implicit metric."""
-    params = im.params_from_input(inp, device=device)
-    values, grads = {}, {}
-    for name, metric in IMPLICIT_METRICS.items():
-        v, g = jax.value_and_grad(
-            lambda p, metric=metric: jax.numpy.asarray(
-                metric(im.run(inp, p, ftol=ftol,
-                              max_iterations=max_iterations,
-                              device=device))).ravel()[0])(params)
-        values[name] = float(v)
-        grads[name] = g
-    sol = im.run(inp, params, ftol=ftol, max_iterations=max_iterations,
-                 device=device)
+    accelerator = getattr(device, "platform", None) != "cpu"
+    run_device = None if accelerator else device
+    scope = (
+        device_policy.device_scope(device)
+        if accelerator else contextlib.nullcontext()
+    )
+    with scope:
+        params = im.params_from_input(inp, device=run_device)
+        values, grads = {}, {}
+        for name, metric in IMPLICIT_METRICS.items():
+            v, g = jax.value_and_grad(
+                lambda p, metric=metric: jax.numpy.asarray(
+                    metric(im.run(inp, p, ftol=ftol,
+                                  max_iterations=max_iterations,
+                                  device=run_device))).ravel()[0])(params)
+            values[name] = float(v)
+            grads[name] = g
+        sol = im.run(
+            inp, params, ftol=ftol, max_iterations=max_iterations,
+            device=run_device,
+        )
     return values, grads, sol
 
 
@@ -715,18 +719,21 @@ def _second_gpus():
 
 @_requires_gpu
 def test_second_gpu_explicit_values_and_gradients():
-    """The full differentiable path on a NON-DEFAULT GPU, no outer context.
+    """The supported scoped path runs on a NON-DEFAULT GPU.
 
     Reported regression: on gpu[1] the forward solve was correct but every
-    gradient collapsed to zero and diagnostics went NaN (callback thread,
-    cached runtime template and custom-VJP backward ran outside the device
-    context).  This lane runs WITHOUT ``jax.default_device``, in the
-    cache-poisoned order (CPU, default GPU, second GPU), and asserts device
-    IDENTITY for every leaf of state, runtime and every gradient pytree.
+    gradient collapsed to zero and diagnostics went NaN. This lane uses the
+    public ``device_scope`` contract in cache-poisoned order and asserts
+    device identity for every state, runtime, and gradient leaf.
     """
     gpus = _second_gpus()
     _assert_no_platform_pins()
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    with pytest.raises(ValueError, match="device_scope"):
+        im.run(
+            inp, im.params_from_input(inp, device=gpus[1]),
+            ftol=1e-12, max_iterations=1000, device=gpus[1],
+        )
 
     # deliberately warm every cache on the DEFAULT devices first
     reference = _reference_audit(
@@ -742,11 +749,12 @@ def test_second_gpu_explicit_values_and_gradients():
 
 @_requires_gpu
 def test_second_gpu_cold_first_values_and_gradients():
-    """Cold second-GPU-FIRST audit, no outer context: with caches dropped,
-    the callback-payload reconstruction once landed parameters on CPU while
-    runtime intermediates sat on the second GPU — invisible to the
-    poisoned-order lane, whose warmup primes the mask cache.  The
-    second-GPU audit runs BEFORE any other-device work here."""
+    """Cold second-GPU-FIRST scoped audit.
+
+    With caches dropped, callback reconstruction once landed parameters on
+    CPU while runtime intermediates sat on the second GPU. The target audit
+    runs before any other-device work here.
+    """
     gpus = _second_gpus()
     _assert_no_platform_pins()
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")

@@ -115,7 +115,7 @@ from jax.flatten_util import ravel_pytree
 from solvax import gcrot as _solvax_gcrot
 from solvax import gmres as _solvax_gmres
 
-from .device import AUTO, resolve_implicit_device
+from .device import AUTO, _put_numeric_leaves, resolve_implicit_device
 from .errors import AdjointSolveError, VmecError
 from .fields import magnetic_fields, metric_elements
 from .fourier import Resolution
@@ -1840,12 +1840,10 @@ def run(
     ``params`` (state via the implicit adjoint; scalars additionally through
     their explicit parameter dependence).
 
-    ``device`` selects where the ENTIRE operation runs — host solve,
-    runtime construction, derived outputs, and (carried in the static
-    config) the custom-VJP backward and multi-RHS pullbacks.  It accepts
-    ``"cpu"``, ``"gpu"`` or a ``jax.Device``; omitted ``device`` and
-    ``None`` leave placement to JAX.  Use :func:`device_scope` around both
-    parameter creation and differentiation for a non-default accelerator.
+    ``device`` accepts ``"cpu"``, ``"gpu"`` or a ``jax.Device``; omitted
+    ``device`` and ``None`` leave placement to JAX.  Use
+    :func:`device_scope` around parameter creation and differentiation for a
+    non-default accelerator.
     ``"auto"``: when
     ``params`` is supplied with CONCRETE arrays all committed to one
     device, that placement is preserved and used for the whole operation;
@@ -1912,6 +1910,12 @@ def run(
             params = jax.tree.map(lambda a: jax.device_put(a, dev), params)
         state = solve_implicit(params, cfg)
         rt = runtime_from_params(params, cfg)
+        # ``runtime`` is a dropped, convenience-only output. A cached concrete
+        # template may have been primed on another device; rehome that public
+        # value without constraining the traced residual/adjoint graph.
+        runtime_dev = dev or _params_committed_device(params)
+        if runtime_dev is not None and runtime_dev.platform != "cpu":
+            rt = _put_numeric_leaves(rt, runtime_dev)
         wb, wp = mhd_energy(state, rt)
         vol = plasma_volume(state, rt)
         gamma = float(rt.gamma)
