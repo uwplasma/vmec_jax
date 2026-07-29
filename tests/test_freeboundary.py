@@ -603,6 +603,43 @@ def test_high_first_force_reguesses_valid_axis_before_vacuum(capsys):
     assert np.isfinite(result.fsqr)
 
 
+def test_axis_reguess_rebuild_keeps_fft_vacuum_lane(capsys, monkeypatch):
+    """The mid-flight axis-reguess rebuild must keep the resolved ``use_fft``.
+
+    The LMOVE_AXIS transfer rebuilds the NESTOR executables for the improved
+    axis; that rebuild once dropped the ``use_fft`` kwarg, silently swapping
+    an FFT-selected run onto the dense-synthesis vacuum lane for the rest of
+    the stage.  A ``_vacuum_executables`` spy records the kwarg every call
+    receives during a forced first-force reguess under ``use_fft=True``.
+    """
+    seen: list[object] = []
+    original = FB._vacuum_executables
+
+    def recording(resolution, **kwargs):
+        seen.append(kwargs.get("use_fft", "MISSING"))
+        return original(resolution, **kwargs)
+
+    monkeypatch.setattr(FB, "_vacuum_executables", recording)
+    # fresh cache: the steady lane bakes use_fft into its traced body, so a
+    # cached entry from another test would hide a wrong-kwarg rebuild
+    monkeypatch.setattr(FB, "_VACUUM_EXECUTABLE_CACHE", {})
+
+    inp = VmecInput.from_file(DECK)
+    raxis_c = inp.raxis_c.copy()
+    raxis_c[0] = 0.81  # valid Jacobian, first-force sum > 1e2 -> LMOVE_AXIS
+    inp = dataclasses.replace(inp, raxis_c=raxis_c, niter_array=[2], nstep=1)
+    FB.solve_free_boundary(
+        inp, mgrid_path=MGRID, max_iterations=2, verbose=True,
+        error_on_no_convergence=False, use_fft=True,
+    )
+    output = capsys.readouterr().out
+    assert "TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS" in output
+    assert len(seen) >= 2, "axis reguess never rebuilt the vacuum executables"
+    assert seen == [True] * len(seen), (
+        f"vacuum-executable builds saw use_fft={seen}; the reguess rebuild "
+        "fell back to the dense-synthesis lane")
+
+
 def test_cached_vacuum_executable_rechecks_dynamic_axis(monkeypatch):
     """A structural cache hit must still validate the current magnetic axis."""
     resolution = object()

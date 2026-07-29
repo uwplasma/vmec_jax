@@ -1726,6 +1726,10 @@ def _solve_free_boundary_stage(
                 signgs=int(rt.setup.signgs),
                 wint=np.asarray(rt.trig.wint, dtype=float),
                 modes=rt.modes, axis_r0=_axis_r0, axis_z0=_axis_z0,
+                # The rebuild must keep the same synthesis kernel: dropping
+                # this silently swapped an FFT-selected run onto the dense
+                # vacuum lane for the rest of the stage.
+                use_fft=use_fft,
             )
             zeros_edge = jnp.zeros(
                 (basis.ntheta3, basis.nzeta), dtype=dtype)
