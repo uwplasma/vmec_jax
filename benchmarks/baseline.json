@@ -1,4 +1,10 @@
 {
+ "_provenance": {
+  "schema": 1,
+  "measurement_commit": "314e5ba5b9718472b954a0c5bec1e4613ceff1d8",
+  "input_data_embedded": false,
+  "limitation": "Historical artifact: exact runtime package versions and executable hashes were not recorded. New runs record them."
+ },
  "solovev[ns201]": {
   "ns": 201,
   "vmec2000": {

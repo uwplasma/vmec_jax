@@ -11,6 +11,7 @@ Usage::
     python tools/render_performance_docs.py           # rewrite in place
     python tools/render_performance_docs.py --check   # exit 1 when stale
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,6 +42,8 @@ def _cell(entry: dict | None) -> tuple[str, float | None]:
 def render(baseline: dict) -> str:
     rows = []
     for key, row in baseline.items():
+        if key.startswith("_"):
+            continue
         case, grid = key[:-1].split("[")
         label = case + (" (multigrid)" if grid == "multigrid" else "")
         v2k_txt, v2k = _cell(row.get("vmec2000"))
@@ -49,8 +52,7 @@ def render(baseline: dict) -> str:
         ref_txt, _ = _cell(row.get("vmecpp"))
         if warm is not None and v2k is not None and warm < v2k:
             warm_txt = f"**{warm_txt}**"
-        rows.append((v2k if v2k is not None else float("inf"),
-                     label, v2k_txt, cold_txt, warm_txt, ref_txt))
+        rows.append((v2k if v2k is not None else float("inf"), label, v2k_txt, cold_txt, warm_txt, ref_txt))
     rows.sort()
 
     wins = sum(1 for r in rows if r[4].startswith("**"))
@@ -68,11 +70,13 @@ def render(baseline: dict) -> str:
         "     - reference C++",
     ]
     for _, label, v2k_txt, cold_txt, warm_txt, ref_txt in rows:
-        lines += [f"   * - {label}",
-                  f"     - {v2k_txt}",
-                  f"     - {cold_txt}",
-                  f"     - {warm_txt}",
-                  f"     - {ref_txt}"]
+        lines += [
+            f"   * - {label}",
+            f"     - {v2k_txt}",
+            f"     - {cold_txt}",
+            f"     - {warm_txt}",
+            f"     - {ref_txt}",
+        ]
     lines += [
         "",
         f"Bold marks vmex warm beating VMEC2000 ({wins} of {len(rows)} rows).",
@@ -88,8 +92,7 @@ def render(baseline: dict) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--check", action="store_true",
-                    help="exit 1 when the doc is stale instead of rewriting")
+    ap.add_argument("--check", action="store_true", help="exit 1 when the doc is stale instead of rewriting")
     args = ap.parse_args()
 
     baseline = json.loads(BASELINE.read_text())
@@ -103,8 +106,10 @@ def main() -> int:
     new = head + render(baseline) + tail
     if args.check:
         if new != text:
-            print("docs/performance.rst baseline table is stale; run "
-                  "python tools/render_performance_docs.py", file=sys.stderr)
+            print(
+                "docs/performance.rst baseline table is stale; run python tools/render_performance_docs.py",
+                file=sys.stderr,
+            )
             return 1
         print("performance table is current")
         return 0

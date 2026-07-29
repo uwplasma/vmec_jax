@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -45,6 +46,17 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+import vmex  # noqa: E402
+
+from benchmarks._provenance import (  # noqa: E402
+    assert_repo_vmex,
+    file_sha256,
+    git_state,
+)
+
 DATA = REPO / "examples" / "data"
 XVMEC2000 = Path("/Users/rogerio/local/STELLOPT/VMEC2000/Release/xvmec2000")
 VMEX_PY = Path(sys.executable)
@@ -119,11 +131,9 @@ def make_ramped_deck(deck: Path, dest: Path, min_ns: int = RAMP_NS) -> None:
     # is ignored — several bundled decks (circular_tokamak, QA/QH lowres) put
     # bare NITER first, so "first match wins" would rewrite the ineffective
     # line.  Prefer NITER_ARRAY; fall back to bare NITER.
-    text, n = re.subn(r"^\s*NITER_ARRAY\s*=\s*[\d,\s]+", repl_niter, text,
-                      count=1, flags=re.I | re.M)
+    text, n = re.subn(r"^\s*NITER_ARRAY\s*=\s*[\d,\s]+", repl_niter, text, count=1, flags=re.I | re.M)
     if n == 0:
-        text = re.sub(r"^\s*NITER\s*=\s*[\d,\s]+", repl_niter, text,
-                      count=1, flags=re.I | re.M)
+        text = re.sub(r"^\s*NITER\s*=\s*[\d,\s]+", repl_niter, text, count=1, flags=re.I | re.M)
     dest.write_text(text)
 
 
@@ -140,28 +150,53 @@ def make_multigrid_deck(deck: Path, ladder: str | None, dest: Path) -> None:
     # Active-line anchored like NS_ARRAY_RE (a `!`-commented line must not
     # match); prefer NITER_ARRAY over bare NITER for the same reason as in
     # make_ramped_deck.
-    text = re.sub(r"^\s*FTOL_ARRAY\s*=\s*[\deE.+\- \t,]+",
-                  f"FTOL_ARRAY = {' '.join(['1e-8'] * (len(stages) - 1))} 1e-14\n ",
-                  text, count=1, flags=re.I | re.M)
+    text = re.sub(
+        r"^\s*FTOL_ARRAY\s*=\s*[\deE.+\- \t,]+",
+        f"FTOL_ARRAY = {' '.join(['1e-8'] * (len(stages) - 1))} 1e-14\n ",
+        text,
+        count=1,
+        flags=re.I | re.M,
+    )
     # Final stage gets the same >=10000 budget as make_ramped_deck: at the
     # 1e-14 final ftol the ns=201 stage can legitimately need >4000 sweeps
     # (measured: QA_lowres multigrid raised VmecConvergenceError at 4000).
-    niter_line = ("NITER_ARRAY = "
-                  + " ".join(["4000"] * (len(stages) - 1)) + " 10000\n ")
-    text, n = re.subn(r"^\s*NITER_ARRAY\s*=\s*[\d,\s]+", niter_line, text,
-                      count=1, flags=re.I | re.M)
+    niter_line = "NITER_ARRAY = " + " ".join(["4000"] * (len(stages) - 1)) + " 10000\n "
+    text, n = re.subn(r"^\s*NITER_ARRAY\s*=\s*[\d,\s]+", niter_line, text, count=1, flags=re.I | re.M)
     if n == 0:
-        text = re.sub(r"^\s*NITER\s*=\s*[\d,\s]+", niter_line, text,
-                      count=1, flags=re.I | re.M)
+        text = re.sub(r"^\s*NITER\s*=\s*[\d,\s]+", niter_line, text, count=1, flags=re.I | re.M)
     dest.write_text(text)
 
 
-def timed_subprocess(cmd: list[str], cwd: Path, timeout: int) -> dict:
+VMEX_MODULE = assert_repo_vmex(vmex.__file__, REPO)
+
+
+def _vmex_env() -> dict[str, str]:
+    """Child environment pinned to this checkout, never an installed VMEX."""
+    env = os.environ.copy()
+    prior = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(REPO) + (os.pathsep + prior if prior else "")
+    return env
+
+
+def timed_subprocess(
+    cmd: list[str],
+    cwd: Path,
+    timeout: int,
+    *,
+    env: dict[str, str] | None = None,
+) -> dict:
     """Run under /usr/bin/time -l, return wall seconds, peak RSS, output."""
     full = ["/usr/bin/time", "-l"] + cmd
     t0 = time.time()
     try:
-        proc = subprocess.run(full, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            full,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "timeout", "wall_s": timeout}
     wall = time.time() - t0
@@ -177,10 +212,7 @@ def timed_subprocess(cmd: list[str], cwd: Path, timeout: int) -> dict:
 
 def parse_vmec2000(out: dict) -> dict:
     txt = out.pop("stdout", "")
-    out["converged"] = (
-        "EXECUTION TERMINATED NORMALLY" in txt
-        and "Try increasing NITER" not in txt
-    )
+    out["converged"] = "EXECUTION TERMINATED NORMALLY" in txt and "Try increasing NITER" not in txt
     iters = re.findall(r"^\s*(\d+)\s+[\d.E+-]+\s+[\d.E+-]+", txt, re.M)
     out["iterations"] = int(iters[-1]) if iters else None
     return out
@@ -209,8 +241,14 @@ def run_vmex_cold(deck: Path, aux: list[str], timeout: int) -> dict:
         shutil.copy(deck, wd)
         for a in aux:
             shutil.copy(DATA / a, wd)
-        vmec = VMEX_PY.parent / "vmec"
-        return parse_vmex(timed_subprocess([str(vmec), deck.name], wd, timeout))
+        return parse_vmex(
+            timed_subprocess(
+                [str(VMEX_PY), "-m", "vmex.core.cli", deck.name],
+                wd,
+                timeout,
+                env=_vmex_env(),
+            )
+        )
 
 
 WARM_SNIPPET = r"""
@@ -249,8 +287,14 @@ def run_vmex_warm(deck: Path, aux: list[str], timeout: int) -> dict:
         for a in aux:
             shutil.copy(DATA / a, wd)
         try:
-            proc = subprocess.run([str(VMEX_PY), "-c", WARM_SNIPPET, deck.name],
-                                  cwd=wd, capture_output=True, text=True, timeout=timeout)
+            proc = subprocess.run(
+                [str(VMEX_PY), "-c", WARM_SNIPPET, deck.name],
+                cwd=wd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=_vmex_env(),
+            )
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "timeout"}
         if proc.returncode != 0:
@@ -279,8 +323,13 @@ def run_vmecpp(deck: Path, aux: list[str], timeout: int) -> dict:
         for a in aux:
             shutil.copy(DATA / a, wd)
         try:
-            proc = subprocess.run([str(VMECPP_PY), "-c", VMECPP_SNIPPET, deck.name],
-                                  cwd=wd, capture_output=True, text=True, timeout=timeout)
+            proc = subprocess.run(
+                [str(VMECPP_PY), "-c", VMECPP_SNIPPET, deck.name],
+                cwd=wd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "timeout"}
         if proc.returncode != 0:
@@ -301,8 +350,14 @@ def main() -> None:
     # Merge semantics: --cases reruns update their rows in the existing file
     # instead of clobbering the other cases' results.
     out_path = Path(args.out)
-    results: dict[str, dict] = (
-        json.loads(out_path.read_text()) if out_path.exists() else {})
+    results: dict[str, dict] = json.loads(out_path.read_text()) if out_path.exists() else {}
+    results["_provenance"] = {
+        "schema": 1,
+        **git_state(REPO),
+        "vmex_version": vmex.__version__,
+        "vmex_module": VMEX_MODULE,
+        "vmec2000_executable_sha256": (file_sha256(XVMEC2000) if XVMEC2000.is_file() else None),
+    }
 
     for name in cases:
         aux = CASES.get(name, [])
@@ -321,10 +376,12 @@ def main() -> None:
             key = f"{name}[{grid}]"
             row: dict[str, dict] = {"ns": read_deck_ns(deck)}
             print(f"=== {key} (ns={row['ns']}) ===", flush=True)
-            for solver, fn in [("vmec2000", run_vmec2000),
-                               ("vmex_cold", run_vmex_cold),
-                               ("vmex_warm", run_vmex_warm),
-                               ("vmecpp", run_vmecpp)]:
+            for solver, fn in [
+                ("vmec2000", run_vmec2000),
+                ("vmex_cold", run_vmex_cold),
+                ("vmex_warm", run_vmex_warm),
+                ("vmecpp", run_vmecpp),
+            ]:
                 if solver in skip:
                     continue
                 if solver in ("vmex_warm", "vmecpp") and name.endswith("free_bdy_lasym_small"):

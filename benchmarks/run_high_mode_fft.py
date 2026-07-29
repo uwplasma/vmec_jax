@@ -37,6 +37,8 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 DEFAULT_DECK = REPO / "examples" / "data" / "input.cth_like_free_bdy"
 DEFAULT_MGRID = REPO / "examples" / "data" / "mgrid_cth_like.nc"
 
@@ -65,22 +67,26 @@ def _cpu_brand() -> str:
         try:
             return subprocess.run(
                 ["sysctl", "-n", "machdep.cpu.brand_string"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             ).stdout.strip()
         except (OSError, subprocess.CalledProcessError):
             pass
     return platform.processor() or platform.machine()
 
 
-def child(transform: str, niter: int | None, deck: Path, mgrid: Path,
-          report: Path) -> None:
+def child(transform: str, niter: int | None, deck: Path, mgrid: Path, report: Path) -> None:
     """One transform kernel: cold solve (compile included) + warm repeat."""
     import jax
+    import vmex
 
+    from benchmarks._provenance import assert_repo_vmex
     from vmex.core.freeboundary import solve_free_boundary
     from vmex.core.input import VmecInput
     from vmex.core.solver import resolution_from_input
 
+    assert_repo_vmex(vmex.__file__, REPO)
     use_fft = transform == "fft"
     with tempfile.TemporaryDirectory(prefix="vmex-hm-fft-") as td:
         path = Path(td) / "input.cth_537"
@@ -95,9 +101,7 @@ def child(transform: str, niter: int | None, deck: Path, mgrid: Path,
 
     def run() -> dict:
         start = time.perf_counter()
-        result = solve_free_boundary(
-            inp, mgrid_path=str(mgrid), use_fft=use_fft,
-            error_on_no_convergence=False)
+        result = solve_free_boundary(inp, mgrid_path=str(mgrid), use_fft=use_fft, error_on_no_convergence=False)
         jax.block_until_ready(result.state.R_cos)
         wall = time.perf_counter() - start
         return {
@@ -112,15 +116,21 @@ def child(transform: str, niter: int | None, deck: Path, mgrid: Path,
 
     cold = run()
     warm = run()
-    report.write_text(json.dumps({
-        "transform": transform,
-        "use_fft": use_fft,
-        "mnmax": int(resolution.mnmax),
-        "ns": int(resolution.ns),
-        "niter_cap": int(inp.niter_array[0]),
-        "cold": cold,
-        "warm": warm,
-    }, indent=2) + "\n")
+    report.write_text(
+        json.dumps(
+            {
+                "transform": transform,
+                "use_fft": use_fft,
+                "mnmax": int(resolution.mnmax),
+                "ns": int(resolution.ns),
+                "niter_cap": int(inp.niter_array[0]),
+                "cold": cold,
+                "warm": warm,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
 
 def _time_command() -> list[str]:
@@ -136,12 +146,10 @@ def _peak_rss_bytes(time_stderr: str) -> int:
     match = re.search(r"(\d+)\s+maximum resident set size", time_stderr)
     if match:  # darwin /usr/bin/time -l reports bytes
         return int(match.group(1))
-    match = re.search(
-        r"Maximum resident set size \(kbytes\):\s*(\d+)", time_stderr)
+    match = re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)", time_stderr)
     if match:  # GNU time -v reports kbytes
         return int(match.group(1)) * 1024
-    raise RuntimeError(
-        f"peak RSS not found in time output:\n{time_stderr[-2000:]}")
+    raise RuntimeError(f"peak RSS not found in time output:\n{time_stderr[-2000:]}")
 
 
 def measure(transform: str, args: argparse.Namespace) -> dict:
@@ -149,11 +157,17 @@ def measure(transform: str, args: argparse.Namespace) -> dict:
     with tempfile.TemporaryDirectory(prefix="vmex-hm-fft-") as td:
         report = Path(td) / f"{transform}.json"
         command = _time_command() + [
-            sys.executable, str(Path(__file__).resolve()),
-            "--child", "--transform", transform,
-            "--deck", str(args.deck.resolve()),
-            "--mgrid", str(args.mgrid.resolve()),
-            "--child-report", str(report),
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--child",
+            "--transform",
+            transform,
+            "--deck",
+            str(args.deck.resolve()),
+            "--mgrid",
+            str(args.mgrid.resolve()),
+            "--child-report",
+            str(report),
         ]
         if args.niter is not None:
             command += ["--niter", str(args.niter)]
@@ -161,14 +175,12 @@ def measure(transform: str, args: argparse.Namespace) -> dict:
         env["JAX_ENABLE_X64"] = "1"
         env["PYTHONPATH"] = str(REPO)
         start = time.perf_counter()
-        proc = subprocess.run(
-            command, cwd=REPO, env=env, capture_output=True, text=True,
-            check=False)
+        proc = subprocess.run(command, cwd=REPO, env=env, capture_output=True, text=True, check=False)
         wall = time.perf_counter() - start
         if proc.returncode != 0:
             raise RuntimeError(
-                f"{transform} child failed with {proc.returncode}:\n"
-                f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}")
+                f"{transform} child failed with {proc.returncode}:\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+            )
         payload = json.loads(report.read_text())
     payload["subprocess"] = {
         "wall_s": wall,
@@ -182,15 +194,14 @@ def main() -> None:
     parser.add_argument("--deck", type=Path, default=DEFAULT_DECK)
     parser.add_argument("--mgrid", type=Path, default=DEFAULT_MGRID)
     parser.add_argument(
-        "--niter", type=int, default=None,
-        help="fixed iteration cap; default: the deck's own convergent "
-             "budget, identical to the guarded 537-mode test")
-    parser.add_argument("--out", type=Path,
-                        default=REPO / "benchmarks" / "high_mode_fft.json")
-    parser.add_argument("--child", action="store_true",
-                        help=argparse.SUPPRESS)
-    parser.add_argument("--transform", choices=("fft", "dense"),
-                        help=argparse.SUPPRESS)
+        "--niter",
+        type=int,
+        default=None,
+        help="fixed iteration cap; default: the deck's own convergent budget, identical to the guarded 537-mode test",
+    )
+    parser.add_argument("--out", type=Path, default=REPO / "benchmarks" / "high_mode_fft.json")
+    parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--transform", choices=("fft", "dense"), help=argparse.SUPPRESS)
     parser.add_argument("--child-report", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -199,30 +210,39 @@ def main() -> None:
             raise FileNotFoundError(path)
 
     if args.child:
-        child(args.transform, args.niter, args.deck, args.mgrid,
-              args.child_report)
+        child(args.transform, args.niter, args.deck, args.mgrid, args.child_report)
         return
 
     modes = {name: measure(name, args) for name in ("fft", "dense")}
 
     import jax
+    import vmex
+
+    from benchmarks._provenance import assert_repo_vmex, git_state
 
     report = {
-        "schema": 1,
+        "schema": 2,
         "case": args.deck.name,
         "modifications": {
-            "mpol": HIGH_MPOL, "ntor": HIGH_NTOR, "ftol": 1.0e-8,
+            "mpol": HIGH_MPOL,
+            "ntor": HIGH_NTOR,
+            "ftol": 1.0e-8,
             "mnmax": EXPECTED_MNMAX,
         },
         "input_data_embedded": False,
+        "provenance": {
+            **git_state(REPO),
+            "vmex_version": vmex.__version__,
+            "vmex_module": assert_repo_vmex(vmex.__file__, REPO),
+        },
         "protocol": {
             "cold": "fresh subprocess per transform; compile included; "
-                    "wall_s measured around the solve, subprocess.wall_s "
-                    "around the whole process",
+            "wall_s measured around the solve, subprocess.wall_s "
+            "around the whole process",
             "warm": "in-process repeat inside the same subprocess",
             "peak_rss": "subprocess.peak_rss_bytes is the OS-reported "
-                        "process peak (cold + warm together); "
-                        "ru_maxrss_bytes snapshots attribute it per solve",
+            "process peak (cold + warm together); "
+            "ru_maxrss_bytes snapshots attribute it per solve",
         },
         "environment": {
             "platform": platform.platform(),

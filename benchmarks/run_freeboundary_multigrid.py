@@ -24,18 +24,25 @@ import platform
 import re
 import resource
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import replace
 from pathlib import Path
 
+REPO = Path(__file__).resolve().parent.parent
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 import jax
 import numpy as np
+import vmex
 
+from benchmarks._provenance import assert_repo_vmex, file_sha256, git_state
 from vmex.core.input import VmecInput
 from vmex.core.multigrid import solve_free_boundary_multigrid
 
-REPO = Path(__file__).resolve().parent.parent
+VMEX_MODULE = assert_repo_vmex(vmex.__file__, REPO)
 DEFAULT_DECK = REPO / "examples" / "data" / "input.cth_like_free_bdy"
 DEFAULT_MGRID = REPO / "examples" / "data" / "mgrid_cth_like.nc"
 DEFAULT_XVMEC = Path("/Users/rogerio/local/STELLOPT/VMEC2000/Release/xvmec2000")
@@ -56,38 +63,40 @@ def _replace_array(text: str, name: str, values: list) -> str:
 
 def _stage_iterations(stdout: str) -> list[dict]:
     stages = []
-    matches = list(re.finditer(
-        r"NS\s*=\s*(\d+).*?FTOLV\s*=\s*([\d.E+\-]+).*?NITER\s*=\s*(\d+)",
-        stdout,
-    ))
+    matches = list(
+        re.finditer(
+            r"NS\s*=\s*(\d+).*?FTOLV\s*=\s*([\d.E+\-]+).*?NITER\s*=\s*(\d+)",
+            stdout,
+        )
+    )
     for i, match in enumerate(matches):
-        block = stdout[match.end(): matches[i + 1].start() if i + 1 < len(matches) else None]
+        block = stdout[match.end() : matches[i + 1].start() if i + 1 < len(matches) else None]
         rows = re.findall(
             r"(?m)^\s*(\d+)\s+([\d.E+\-]+)\s+([\d.E+\-]+)\s+([\d.E+\-]+)",
             block,
         )
         first = rows[0] if rows else (None, None, None, None)
         last = rows[-1] if rows else (None, None, None, None)
-        stages.append({
-            "ns": int(match.group(1)), "ftol": float(match.group(2)),
-            "niter_cap": int(match.group(3)),
-            "first_iteration": None if first[0] is None else int(first[0]),
-            "first_fsqr": None if first[1] is None else float(first[1]),
-            "first_fsqz": None if first[2] is None else float(first[2]),
-            "first_fsql": None if first[3] is None else float(first[3]),
-            "iterations": None if last[0] is None else int(last[0]),
-            "fsqr": None if last[1] is None else float(last[1]),
-            "fsqz": None if last[2] is None else float(last[2]),
-            "fsql": None if last[3] is None else float(last[3]),
-        })
+        stages.append(
+            {
+                "ns": int(match.group(1)),
+                "ftol": float(match.group(2)),
+                "niter_cap": int(match.group(3)),
+                "first_iteration": None if first[0] is None else int(first[0]),
+                "first_fsqr": None if first[1] is None else float(first[1]),
+                "first_fsqz": None if first[2] is None else float(first[2]),
+                "first_fsql": None if first[3] is None else float(first[3]),
+                "iterations": None if last[0] is None else int(last[0]),
+                "fsqr": None if last[1] is None else float(last[1]),
+                "fsqz": None if last[2] is None else float(last[2]),
+                "fsql": None if last[3] is None else float(last[3]),
+            }
+        )
     return stages
 
 
 def _vmec_converged(stdout: str) -> bool:
-    return (
-        "EXECUTION TERMINATED NORMALLY" in stdout
-        and "Try increasing NITER" not in stdout
-    )
+    return "EXECUTION TERMINATED NORMALLY" in stdout and "Try increasing NITER" not in stdout
 
 
 def _normalized_max_error(mine: np.ndarray, reference: np.ndarray) -> float:
@@ -108,12 +117,12 @@ def main() -> None:
     parser.add_argument("--ns", default="7,15")
     parser.add_argument("--ftol", default="1e-8,1e-10")
     parser.add_argument("--niter", default="1000,2500")
-    parser.add_argument("--out", type=Path,
-                        default=REPO / "benchmarks" / "freeboundary_multigrid.json")
+    parser.add_argument("--out", type=Path, default=REPO / "benchmarks" / "freeboundary_multigrid.json")
     parser.add_argument(
-        "--prefetch-compile", action="store_true",
-        help="overlap lane compilation with iteration (the CLI cold-run "
-             "path); results are bit-identical either way")
+        "--prefetch-compile",
+        action="store_true",
+        help="overlap lane compilation with iteration (the CLI cold-run path); results are bit-identical either way",
+    )
     args = parser.parse_args()
 
     ns = _numbers(args.ns, int)
@@ -139,26 +148,30 @@ def main() -> None:
 
         t0 = time.perf_counter()
         vmec = subprocess.run(
-            [str(args.xvmec.resolve()), deck.name], cwd=work,
-            capture_output=True, text=True, check=False,
+            [str(args.xvmec.resolve()), deck.name],
+            cwd=work,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         vmec_wall = time.perf_counter() - t0
         if vmec.returncode != 0:
-            raise RuntimeError(
-                f"VMEC2000 failed with {vmec.returncode}:\n{vmec.stdout[-2000:]}\n"
-                f"{vmec.stderr[-2000:]}"
-            )
+            raise RuntimeError(f"VMEC2000 failed with {vmec.returncode}:\n{vmec.stdout[-2000:]}\n{vmec.stderr[-2000:]}")
 
         inp = replace(
-            VmecInput.from_file(deck), ns_array=np.asarray(ns),
-            ftol_array=np.asarray(ftol), niter_array=np.asarray(niter),
+            VmecInput.from_file(deck),
+            ns_array=np.asarray(ns),
+            ftol_array=np.asarray(ftol),
+            niter_array=np.asarray(niter),
         )
 
         def vmex_run():
             lines: list[str] = []
             start = time.perf_counter()
             result = solve_free_boundary_multigrid(
-                inp, mgrid_path=args.mgrid.resolve(), verbose=True,
+                inp,
+                mgrid_path=args.mgrid.resolve(),
+                verbose=True,
                 emit=lambda value="", end="\n": lines.append(str(value) + end),
                 raise_on_max_iterations=False,
                 prefetch_compile=bool(args.prefetch_compile),
@@ -173,28 +186,31 @@ def main() -> None:
 
         reference = read_wout(work / f"wout_{case}.nc")
         mine = {(int(m), int(n)): i for i, (m, n) in enumerate(zip(warm.xm, warm.xn))}
-        indices = np.asarray([
-            mine[(int(m), int(n))] for m, n in zip(reference.xm, reference.xn)
-        ])
+        indices = np.asarray([mine[(int(m), int(n))] for m, n in zip(reference.xm, reference.xn)])
         parity = {
-            "rmnc_scale_relative_max": _normalized_max_error(
-                warm.rmnc[:, indices], np.asarray(reference.rmnc)),
-            "zmns_scale_relative_max": _normalized_max_error(
-                warm.zmns[:, indices], np.asarray(reference.zmns)),
-            "iotaf_scale_relative_max": _normalized_max_error(
-                warm.iotaf, np.asarray(reference.iotaf)),
+            "rmnc_scale_relative_max": _normalized_max_error(warm.rmnc[:, indices], np.asarray(reference.rmnc)),
+            "zmns_scale_relative_max": _normalized_max_error(warm.zmns[:, indices], np.asarray(reference.zmns)),
+            "iotaf_scale_relative_max": _normalized_max_error(warm.iotaf, np.asarray(reference.iotaf)),
             "wb_relative": abs(float(warm.wb) - float(reference.wb))
             / max(abs(float(reference.wb)), np.finfo(float).tiny),
         }
 
     report = {
-        "schema": 1,
+        "schema": 2,
         "case": args.deck.name,
         "input_data_embedded": False,
+        "provenance": {
+            **git_state(REPO),
+            "vmex_version": vmex.__version__,
+            "vmex_module": VMEX_MODULE,
+            "vmec2000_executable_sha256": file_sha256(args.xvmec.resolve()),
+        },
         "ladder": {"ns": ns, "ftol": ftol, "niter": niter},
         "environment": {
-            "platform": platform.platform(), "jax_backend": jax.default_backend(),
-            "jax_version": jax.__version__, "x64": bool(jax.config.jax_enable_x64),
+            "platform": platform.platform(),
+            "jax_backend": jax.default_backend(),
+            "jax_version": jax.__version__,
+            "x64": bool(jax.config.jax_enable_x64),
         },
         "vmec2000": {
             "wall_s": vmec_wall,
@@ -203,12 +219,14 @@ def main() -> None:
             "stages": _stage_iterations(vmec.stdout),
         },
         "vmex_cold": {
-            "wall_s": cold_wall, "converged": bool(cold.converged),
+            "wall_s": cold_wall,
+            "converged": bool(cold.converged),
             "vacuum_turnons": cold_stdout.count("VACUUM PRESSURE TURNED ON"),
             "stages": _stage_iterations(cold_stdout),
         },
         "vmex_warm": {
-            "wall_s": warm_wall, "converged": bool(warm.converged),
+            "wall_s": warm_wall,
+            "converged": bool(warm.converged),
             "vacuum_turnons": warm_stdout.count("VACUUM PRESSURE TURNED ON"),
             "stages": _stage_iterations(warm_stdout),
             "peak_rss_mb": _peak_rss_mb(),

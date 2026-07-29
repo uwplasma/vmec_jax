@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "case": "input.cth_like_free_bdy",
   "modifications": {
     "mpol": 19,
@@ -8,6 +8,12 @@
     "mnmax": 537
   },
   "input_data_embedded": false,
+  "provenance": {
+    "schema": 1,
+    "measurement_commit": "ecfbe31de34d62fb26580f3fbcd006f198d96afa",
+    "input_data_embedded": false,
+    "limitation": "Historical artifact: the benchmark script did not yet record the imported VMEX module or dirty-tree state."
+  },
   "protocol": {
     "cold": "fresh subprocess per transform; compile included; wall_s measured around the solve, subprocess.wall_s around the whole process",
     "warm": "in-process repeat inside the same subprocess",

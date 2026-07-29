@@ -135,6 +135,8 @@ def make_runtime_figure(out: Path) -> None:
 
     rows = []
     for key, r in base.items():
+        if key.startswith("_"):
+            continue
         case, grid = key[:-1].split("[")
         v2k, cold = r.get("vmec2000", {}), r.get("vmex_cold", {})
         warm, vpp = r.get("vmex_warm", {}), r.get("vmecpp", {})

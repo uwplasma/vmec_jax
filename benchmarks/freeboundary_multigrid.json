@@ -1,7 +1,13 @@
 {
-  "schema": 1,
+  "schema": 2,
   "case": "input.cth_like_free_bdy",
   "input_data_embedded": false,
+  "provenance": {
+    "schema": 1,
+    "measurement_commit": "b0cc789e626e246356c744ce20cffefb08a16a4c",
+    "input_data_embedded": false,
+    "limitation": "Historical artifact: the benchmark script did not yet record the imported VMEX module, dirty-tree state, or VMEC2000 executable hash."
+  },
   "ladder": {
     "ns": [
       7,

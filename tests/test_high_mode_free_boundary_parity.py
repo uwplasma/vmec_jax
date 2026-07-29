@@ -477,9 +477,10 @@ def test_free_boundary_537_modes_fft_auto_smoke(tmp_path, monkeypatch):
 
     Bounded smoke (a cold 537-mode convergence campaign exceeded the
     300-minute shard timeout): a fixed 150-iteration budget must cross
-    vacuum activation with finite, decreasing residuals; full convergence is
-    evidenced in ``benchmarks/run_high_mode_fft.py`` →
-    ``benchmarks/high_mode_fft.json``.
+    vacuum activation with finite, decreasing residuals.  The longer
+    ``benchmarks/run_high_mode_fft.py`` campaign is intentionally bounded
+    too: neither kernel converged in 2500 iterations, while FFT reached a
+    lower residual with lower peak memory than the dense transform.
     """
     import types
 

@@ -107,12 +107,11 @@ markers = [
 ]
 
 [tool.coverage.run]
-# freeboundary_diff.py requires the unreleased virtual_casing_jax API
-# (uwplasma/virtual_casing_jax PR #2 — see [project.optional-dependencies]);
-# its FD-validated gradient tests are importorskip-gated and skip in the core
-# CI, so the module is excluded from the core >=95% coverage gate.  It IS
-# exercised when that dependency is installed from source (locally / a
-# dedicated free-boundary CI lane — R15.3/R19 follow-up).  turbulence.py is
+# freeboundary_diff.py requires the optional virtual-casing-jax >= 0.0.3
+# extra (see [project.optional-dependencies]). Its FD-validated gradient
+# tests are importorskip-gated and skip in the dependency-minimal core CI,
+# so the module is excluded from the core >=95% coverage gate. It is
+# exercised by the optional-integrations CI lane. turbulence.py is
 # likewise gated on the optional ``turbulence`` extra (gkx).
 omit = ["*/freeboundary_diff.py", "*/turbulence.py"]
 
