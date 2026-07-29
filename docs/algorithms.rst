@@ -246,20 +246,16 @@ Two execution lanes, one physics
 --------------------------------
 
 :mod:`vmex.core.solver` exposes the same jitted iteration through two
-lanes (selected by ``vmex --mode cli|jit``):
-
-- **CLI lane** (default): a Python ``while`` loop around a jitted
-  *N-iteration block* kernel, with residuals checked on the host between
-  blocks. This gives exact-``ftol`` early exit, live VMEC2000-format printing
-  every ``NSTEP`` iterations, and buffer donation, with zero autodiff
-  bookkeeping.
-- **JIT lane**: a single ``lax.while_loop`` over the same physics — fully
-  traceable, used as the forward solver inside the differentiable API.
-
-A regression test asserts per-block state agreement between the lanes to
-machine precision. Which device (CPU or GPU) a lane runs on is decided by
-the measured placement policy of :mod:`vmex.core.device` — see
-:ref:`architecture:Device policy (CPU/GPU)`.
+lanes (selected by ``vmex --mode cli|jit``): the default **CLI lane**, a
+Python ``while`` loop around a jitted *N-iteration block* kernel with host
+residual checks between blocks (exact-``ftol`` early exit, live
+VMEC2000-format printing every ``NSTEP`` iterations, buffer donation, zero
+autodiff bookkeeping), and the **JIT lane**, a single ``lax.while_loop``
+over the same physics — fully traceable, the forward solver inside the
+differentiable API. A regression test asserts per-block state agreement
+between the lanes to machine precision. Which device (CPU or GPU) a lane
+runs on is decided by the measured placement policy of
+:mod:`vmex.core.device` — see :ref:`architecture:Device policy (CPU/GPU)`.
 
 Multigrid and hot restart (``runvmec.f``, ``interp.f``)
 -------------------------------------------------------

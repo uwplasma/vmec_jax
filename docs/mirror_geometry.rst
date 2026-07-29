@@ -11,12 +11,10 @@ supported, as is axisymmetric free boundary through 10% requested beta. The
 periodic hybrid has a complete fixed-boundary solve and example. Its
 circular-section lane is supported: with the leg-return junction frozen as a
 design parameter, its independent strong-force residual converges monotonically
-under same-geometry refinement. The rotating-elliptical-section hybrid remains
-the single research candidate. ``section_turns`` now turns the ellipse
-continuously around the closed circuit -- a genuine rotating-ellipse section --
-which raises the transform from the return-only ``iota=0.085`` to ``iota=0.141``
-at ``s=0.75``, but the separately scoped near-axis representation defect in the
-rotating section persists at the higher rotation, so it is not promoted.
+under same-geometry refinement. The rotating-elliptical-section hybrid --
+``section_turns`` turns the ellipse continuously around the closed circuit --
+remains the single research candidate; the hybrid sections below give its
+transform gain and the near-axis representation defect that blocks promotion.
 
 Quickstart
 ----------
@@ -236,10 +234,9 @@ values match the recorded evidence bit-for-bit):
 
 The rotating-ellipse ladder stays monotone under the new normalization
 (per-step ratios 2.50 and 1.88), and the frozen-junction circular-section
-hybrid ladder is likewise monotone (minor-radius bulk
-``0.00304 -> 0.00261 -> 0.00175``, device-normalized all-volume
-``0.204 -> 0.176 -> 0.118``): with the junction geometry held fixed, exact
-refinement of the solve basis drives the force down instead of plateauing.
+hybrid ladder in the table is likewise monotone: with the junction geometry
+held fixed, exact refinement of the solve basis drives the force down instead
+of plateauing.
 Its minor-radius number sits between the coarse and medium open rungs instead
 of appearing an order of magnitude worse: the apparent cross-lane gap was the
 ``L/a`` disparity, not a larger force error. The straight field-line mirror (SFLM) is a
@@ -418,11 +415,9 @@ now driven by the genuine toroidal rotation ``section_turns``. Its shipped
 ``section_turns=2``) reaches variational residual ``3.19e-13`` and normalized
 ``div(B)=4.55e-14`` with axis closure ``8.88e-16``, and the solved
 finite-current state gives ``iota=0.141`` at ``s=0.75`` -- roughly 1.7 times the
-return-only ``iota=0.085`` at the same imposed current. The transform is
-current-driven and amplified by the rotating geometry: with ``I'(s)=0`` the
-traced transform stays below ``10^{-3}`` for every ``section_turns``, so at
-``L/a`` near 67 the rotating ellipse adds no standalone geometric transform and
-instead reshapes the metric so the same current winds field lines faster.
+return-only ``iota=0.085`` at the same imposed current. As noted above, the
+transform is current-driven and amplified by the rotating geometry, which
+reshapes the metric so the same current winds field lines faster.
 
 Under the junction-freeze contract the toroidally rotating hybrid converges at
 every rung, but the near-axis defect persists. With the junction frozen at 16
@@ -433,7 +428,7 @@ so the operational promotion gate passes -- with each rung at variational
 residual below ``3.6e-13`` and normalized ``div(B)`` below ``1e-13``. The
 device- (arc-length-) normalized strong force, however, plateaus
 ``4.07 -> 0.51 -> 0.42`` (per-step ratios ``7.97`` and ``1.21``): it does not
-head toward zero like the promoted circular lane (``0.204 -> 0.176 -> 0.118``),
+head toward zero like the promoted circular lane's ladder above,
 and its ``~0.42`` floor is even higher than the return-only ``~0.33``. That
 plateau is the same separately scoped near-axis representation defect in the
 rotating section, made no better by the faster rotation, so the toroidally
@@ -575,10 +570,8 @@ variational residual defines ``ftol``. The staggered weak residual independently
 assembles the first variation on the energy quadrature and is checked on the
 same constrained solver variables. The pointwise force reconstructs
 ``J x B - grad(p)`` on the full mesh. It does not define nonlinear ``ftol``,
-but its magnitude and refinement are independent diagnostics. Its total,
-near-axis, first-radial-row, bulk, and end-collar norms are reported
-separately, all under the primary minor-radius normalization; the legacy
-device-length total remains available as ``device_normalized_rms``.
+but its magnitude and refinement are independent diagnostics, reported as the
+zone norms of the strong-force gate section above.
 ``div(B)`` checks the field representation.
 Open mirror data are never encoded as a toroidal WOUT file. The closed hybrid
 currently writes a reviewed PNG and JSON summary directly from the solved
@@ -809,12 +802,10 @@ Coefficient fixed-boundary gradients
 the converged coefficient residual. Boundary and periodic-axis spline
 coefficients, flux, conserved mass, and current remain differentiable. The transpose Hessian
 action uses exact JAX reverse AD and the nonlinear iteration history is never
-differentiated or stored. The root example differentiates rotating-ellipse
-volume with respect to a native boundary coefficient and checks it against two
-fully reconverged equilibria::
-
-   python examples/mirror_fixed_boundary_nonaxisymmetric.py
-
+differentiated or stored. The same root example
+(``mirror_fixed_boundary_nonaxisymmetric.py``, above) differentiates
+rotating-ellipse volume with respect to a native boundary coefficient and
+checks it against two fully reconverged equilibria.
 For the corrected-cut rotating ellipse, the volume adjoint agrees with two
 fully reconverged centered-difference solves to ``5.91e-10`` relative and its
 transpose linear residual is ``2.30e-10``. An SFLM adjoint is not reported
@@ -885,16 +876,12 @@ Field callables that capture committed arrays should use
 relocate the captured leaves. An ordinary Python closure is opaque, so its
 captured arrays retain their original placement.
 
-The one-shot mirror adjoint still uses SciPy GMRES around exact JAX JVP/VJP
-actions. It inherits the placement of its primal arrays rather than exposing
-an independent accelerator solver policy, because that solve cannot amortize
-a separate compiled SOLVAX path.
-
-Fixed- and free-boundary derivatives solve the linearized converged coefficient
-residual and never retain or differentiate the nonlinear iteration history. The
-mirror CPU path uses SciPy GMRES around exact JAX JVP/VJP actions; no
-accelerator solver option is exposed because the one-shot derivative API cannot
-amortize a SOLVAX solver's first compiled solve.
+The one-shot mirror adjoint uses SciPy GMRES around exact JAX JVP/VJP actions
+and inherits the placement of its primal arrays; no independent accelerator
+solver policy is exposed because the one-shot derivative API cannot amortize a
+SOLVAX solver's first compiled solve. Fixed- and free-boundary derivatives
+solve the linearized converged coefficient residual and never retain or
+differentiate the nonlinear iteration history.
 
 Beta scan example
 -----------------

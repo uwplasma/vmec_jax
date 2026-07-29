@@ -442,20 +442,13 @@ Device policy
 
 :mod:`vmex.core.device` encodes this as a default placement rule using
 the per-iteration work proxy ``ns * mnmax * nznt`` (the cost driver of the
-batched-matmul transforms).  The solve stays on CPU below
+batched-matmul transforms): the solve stays on CPU below
 ``GPU_MIN_ITERATION_WORK = 100_000`` and above
-``GPU_MAX_SPECTRAL_MODES = 512``; the middle region uses GPU.  The measured
-GPU winners have at most 162 modes and the measured CPU winner has 858; the
-intermediate range is not calibrated.  The round cutoff preserves prior AUTO
-behavior for common stages through 288 modes while catching the HSX
-regression, not a claimed universal hardware crossover.  The policy is a
-*default* only:
-
-- an explicit ``device=`` argument to ``solve``/``solve_multigrid`` always
-  wins;
-- ``device=None`` leaves placement to JAX;
-- an active ``jax.default_device`` context or a user-pinned JAX platform makes
-  the default ``device="auto"`` policy stand down entirely.
+``GPU_MAX_SPECTRAL_MODES = 512``, and uses GPU in the middle region.  The
+calibration evidence and the full precedence rules — an explicit ``device=``
+argument always wins, ``device=None`` leaves placement to JAX, and an active
+``jax.default_device`` context or user-pinned platform makes ``"auto"``
+stand down — are in :ref:`architecture:Device policy (CPU/GPU)`.
 
 .. code-block:: python
 
@@ -465,10 +458,9 @@ regression, not a claimed universal hardware crossover.  The policy is a
        solve(inp)  # AUTO respects this context
 
 The mirror solver uses its own measured default because host SciPy repeatedly
-drives JAX callbacks. ``vmex.mirror.solve_fixed_boundary``,
-``solve_free_boundary``, and ``solve_beta_scan`` choose CPU under ``"auto"``
-(35.2 s CPU versus 44.2 s RTX A4000 on the office ``15x15`` case), but expose
-the same explicit/``None``/active-context precedence.
+drives JAX callbacks: ``vmex.mirror`` solves choose CPU under ``"auto"``
+with the same explicit/``None``/active-context precedence (measurement in
+:ref:`architecture:Device policy (CPU/GPU)`).
 
 Persistent compilation cache
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
