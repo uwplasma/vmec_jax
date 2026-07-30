@@ -112,6 +112,7 @@
     ],
     "pr-physics-mirror-output": ["tests/mirror/test_output.py"],
     "pr-device": [
+      "tests/test_device.py::test_fixed_boundary_builds_runtime_in_device_context",
       "tests/test_gpu_ci.py::test_device_scope_second_host_device_gradient_equality",
       "tests/test_gpu_ci.py::test_second_host_device_unconverged_adjoint_raises_typed_error"
     ],
