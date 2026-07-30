@@ -189,15 +189,7 @@ jobs:
             golden-v1
 
       - name: Prefetch golden fixtures (once, before xdist workers fork)
-        run: |
-          python - <<'EOF'
-          import importlib.util
-          spec = importlib.util.spec_from_file_location(
-              "tests_conftest", "tests/conftest.py")
-          mod = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(mod)
-          print("golden dir:", mod.resolve_golden_dir())
-          EOF
+        run: python tools/fetch_assets.py --bundle golden-v1
 
       # Seven bounded shards.  The xdist dist MODE is chosen PER SHARD by
       # whether its modules share an expensive fixture:

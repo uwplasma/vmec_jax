@@ -104,6 +104,9 @@ jobs:
           sudo chmod 600 /mnt/vmex-swap
           sudo mkswap /mnt/vmex-swap
           sudo swapon /mnt/vmex-swap
+      - name: Fetch the core parity fixture
+        if: matrix.selector == 'pr-physics-core'
+        run: python tools/fetch_assets.py --bundle golden-v1
       - name: Run representative physics
         env:
           JAX_ENABLE_X64: "1"
