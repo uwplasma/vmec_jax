@@ -101,6 +101,13 @@ def test_field_resolution_and_well_capacity_contract():
         periodic=False)
     assert cut["truncated"][0]
 
+    phi = jnp.linspace(jnp.pi, 6.0 * jnp.pi, 641)
+    interior = bounce_action(
+        1.0 + 0.2 * jnp.cos(phi), 1.0, length=5.0 * np.pi,
+        periodic=False, max_wells=3)
+    assert interior["truncated"][0]
+    assert int(jnp.sum(interior["usable_mask"])) == 2
+
 
 def test_quadrature_resolution_converges_for_shaped_well():
     phi = jnp.arange(128, dtype=jnp.float64) * (2.0 * jnp.pi / 128)
