@@ -130,7 +130,7 @@ def test_stress_case_is_high_mode(stress_input: VmecInput) -> None:
     assert int(res.ntheta) >= 2 * STRESS_MPOL + 6  # automatic-resolution floor
 
 
-@pytest.mark.full  # ~2 min: a real two-rung free-boundary ladder with recovery
+@pytest.mark.full  # multi-minute real two-rung free-boundary recovery
 @pytest.mark.skipif(not MGRID.exists(), reason="mgrid fixture not fetched")
 def test_bad_axis_free_boundary_ladder_stays_finite(stress_input: VmecInput) -> None:
     """Headline contract: the hostile deck degrades gracefully — residuals
@@ -158,7 +158,7 @@ def test_bad_axis_free_boundary_ladder_stays_finite(stress_input: VmecInput) -> 
     assert any("FORCE ITERATIONS" in ln for ln in lines)
 
 
-@pytest.mark.full  # ~2 min: forced 75-reset event, instrumented recovery
+@pytest.mark.full  # multi-minute forced 75-reset event
 @pytest.mark.skipif(not MGRID.exists(), reason="mgrid fixture not fetched")
 def test_jacobian_recovery_uses_checkpoint_and_reduces_delt(monkeypatch) -> None:
     """The 75-reset recovery restarts the CHECKPOINT with a HALVED time step
@@ -234,7 +234,7 @@ def test_jacobian_recovery_uses_checkpoint_and_reduces_delt(monkeypatch) -> None
         f"recovered run failed to converge (fsqr={float(result.fsqr):.2e})")
 
 
-@pytest.mark.full  # ~3 min: TWO real 75-reset events + a converging retry
+@pytest.mark.full  # long-running two-reset recovery plus converging retry
 @pytest.mark.skipif(not MGRID.exists(), reason="mgrid fixture not fetched")
 def test_consecutive_jacobian_recoveries_free_boundary(monkeypatch) -> None:
     """MULTIPLE consecutive JAC75 events in the (pre-vacuum) free lane — the

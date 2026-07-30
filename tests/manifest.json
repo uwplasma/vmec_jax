@@ -36,7 +36,7 @@
     ["tests/test_freeboundary_diff.py", "free-boundary", "ad", "medium", "cpu-gpu", "reference-nc", "fd", ["pr-parity-a1", "optional", "full-core-fb-a"]],
     ["tests/test_freeboundary_linear.py", "free-boundary", "ad", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-a1", "full-core-fb-a"]],
     ["tests/test_freeboundary_multigrid.py", "free-boundary", "integration", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a1", "full-core-fb-b"]],
-    ["tests/test_freeboundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1", "full-core-fb-b"]],
+    ["tests/test_freeboundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1", "full-core-fb-stress"]],
     ["tests/test_geometry_fields.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-g-h"]],
     ["tests/test_golden_digests.py", "equilibrium", "oracle", "slow", "cpu", "golden", "vmec2000", ["pr-parity-b", "full-core-g-h"]],
     ["tests/test_gpu_ci.py", "infrastructure", "gpu", "slow", "cpu-gpu", "generated", "fd", ["pr-parity-c1", "device-rig", "gpu-smoke", "full-core-g-h"]],
