@@ -4,60 +4,24 @@
 Generated optimization figures are intentionally not part of this asset bundle:
 rerun the optimization renderers when report-quality panels are needed.
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import io
+import json
 import shutil
 import tarfile
 import urllib.request
-from dataclasses import dataclass
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+MANIFEST_PATH = REPO_ROOT / "assets" / "manifest.json"
 
-REFERENCE_TAG = "assets-20260316-nc"
-# NOTE: the published release tarball keeps the pre-rename "vmec_jax_" prefix --
-# it was uploaded before the vmec_jax -> vmex repo rename, and only the repo and
-# its code were renamed, not the already-published GitHub release assets. Keep
-# this in sync with the actual asset filename, not the current package name.
-REFERENCE_ASSET_NAME = "vmec_jax_assets_20260316_nc_only.tar.gz"
-REFERENCE_URL = (
-    "https://github.com/uwplasma/vmex/releases/download/"
-    f"{REFERENCE_TAG}/{REFERENCE_ASSET_NAME}"
-)
-REFERENCE_SHA256 = "3344fc2401fffed240ee57ae741ec521594c592627c76dae203503f485e4c0d8"
-
-WOUT_FIXTURES_TAG = "assets-20260526-wout-fixtures"
-# Same pre-rename asset-filename caveat as REFERENCE_ASSET_NAME above.
-WOUT_FIXTURES_ASSET_NAME = "vmec_jax_wout_fixtures_20260526.tar.gz"
-WOUT_FIXTURES_URL = (
-    "https://github.com/uwplasma/vmex/releases/download/"
-    f"{WOUT_FIXTURES_TAG}/{WOUT_FIXTURES_ASSET_NAME}"
-)
-WOUT_FIXTURES_SHA256 = "e9fd844a4ebed043576eec8ac2b17f7ff3e2a0e0a1b5adfc89742139101e00f9"
-
-REFERENCE_ASSET_PATHS = (
-    "examples/data/mgrid_cth_like.nc",
-    "examples/data/mgrid_d3d_ef.nc",
-    "examples/data/wout_*_reference.nc",
-    "examples/data/single_grid/mgrid_cth_like.nc",
-    "examples/data/single_grid/mgrid_d3d_ef.nc",
-    "examples/data/single_grid/wout_*_reference.nc",
-)
-
-WOUT_FIXTURE_PATHS = (
-    "examples/data/wout_*.nc",
-    "examples/data/single_grid/wout_*.nc",
-    "docs/_static/readme_best_cases/*/wout_*.nc",
-    "docs/_static/qi_readme_cases/*/wout_*.nc",
-)
-
-ASSET_PATH_REWRITES = (
-    ("examples_single_grid/data", "examples/data/single_grid"),
-)
+ASSET_PATH_REWRITES = (("examples_single_grid/data", "examples/data/single_grid"),)
 
 
 @dataclass(frozen=True)
@@ -65,6 +29,12 @@ class AssetBundle:
     name: str
     url: str
     sha256: str
+    size_bytes: int
+    source: str
+    license: str
+    generator_revision: str
+    destination: str
+    default: bool
     common_paths: tuple[str, ...]
 
     @property
@@ -72,21 +42,21 @@ class AssetBundle:
         return f".assets_installed_{self.name}.txt"
 
 
-DEFAULT_BUNDLES = (
-    AssetBundle(
-        name="reference-nc",
-        url=REFERENCE_URL,
-        sha256=REFERENCE_SHA256,
-        common_paths=REFERENCE_ASSET_PATHS,
-    ),
-    AssetBundle(
-        name="wout-fixtures",
-        url=WOUT_FIXTURES_URL,
-        sha256=WOUT_FIXTURES_SHA256,
-        common_paths=WOUT_FIXTURE_PATHS,
-    ),
-)
-BUNDLES_BY_NAME = {bundle.name: bundle for bundle in DEFAULT_BUNDLES}
+def _load_bundles() -> tuple[AssetBundle, ...]:
+    data = json.loads(MANIFEST_PATH.read_text())
+    if data.get("schema") != "vmex.release-assets/1":
+        raise RuntimeError(f"unsupported asset manifest schema in {MANIFEST_PATH}")
+    bundles = tuple(
+        AssetBundle(**{**record, "common_paths": tuple(record["common_paths"])}) for record in data["bundles"]
+    )
+    if any(bundle.destination not in {"cache", "repository"} for bundle in bundles):
+        raise RuntimeError(f"invalid asset destination in {MANIFEST_PATH}")
+    return bundles
+
+
+ALL_BUNDLES = _load_bundles()
+DEFAULT_BUNDLES = tuple(bundle for bundle in ALL_BUNDLES if bundle.default)
+BUNDLES_BY_NAME = {bundle.name: bundle for bundle in ALL_BUNDLES}
 
 
 def _sha256(data: bytes) -> str:
@@ -104,10 +74,15 @@ def _safe_extract(tf: tarfile.TarFile, dest: Path, members=None) -> None:
     dest_resolved = dest.resolve()
     selected = tf.getmembers() if members is None else members
     for member in selected:
+        if member.issym() or member.islnk():
+            raise SystemExit(f"Refusing to extract archive link: {member.name}")
         target = (dest_resolved / member.name).resolve()
         if target != dest_resolved and dest_resolved not in target.parents:
             raise SystemExit(f"Refusing to extract path outside destination: {member.name}")
-    tf.extractall(dest_resolved, members=selected)
+    if hasattr(tarfile, "data_filter"):
+        tf.extractall(dest_resolved, members=selected, filter="data")
+    else:  # Python 3.10 and 3.11
+        tf.extractall(dest_resolved, members=selected)
 
 
 def _print_bundle_info(bundles: Sequence[AssetBundle]) -> None:
@@ -115,7 +90,12 @@ def _print_bundle_info(bundles: Sequence[AssetBundle]) -> None:
     for bundle in bundles:
         print(f"- {bundle.name}")
         print(f"  URL:             {bundle.url}")
+        print(f"  Expected bytes:  {bundle.size_bytes}")
         print(f"  Expected SHA256: {bundle.sha256 or '(not checked)'}")
+        print(f"  Source:          {bundle.source}")
+        print(f"  License:         {bundle.license}")
+        print(f"  Generator:       {bundle.generator_revision}")
+        print(f"  Destination:     {bundle.destination}")
         print("  Common installed paths:")
         for path in bundle.common_paths:
             print(f"    {path}")
@@ -151,16 +131,21 @@ def _selected_default_bundles(names: Sequence[str] | None) -> tuple[AssetBundle,
 
 
 def _download_and_extract_bundle(bundle: AssetBundle, *, dest: Path, force: bool) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
     marker = dest / bundle.marker_name
     if marker.exists() and not force:
-        print(f"Assets already installed for bundle {bundle.name!r} at {dest}. Use --force to re-download.")
-        _migrate_release_asset_paths(dest)
-        return
+        if marker.read_text().splitlines() == [bundle.url, bundle.sha256]:
+            print(f"Assets already installed for bundle {bundle.name!r} at {dest}. Use --force to re-download.")
+            _migrate_release_asset_paths(dest)
+            return
+        print(f"Replacing stale marker for bundle {bundle.name!r}")
 
     print(f"Downloading {bundle.name} assets from: {bundle.url}")
     with urllib.request.urlopen(bundle.url) as resp:
         data = resp.read()
 
+    if bundle.size_bytes and len(data) != bundle.size_bytes:
+        raise SystemExit(f"Size mismatch for {bundle.name}: expected {bundle.size_bytes}, got {len(data)}")
     digest = _sha256(data)
     if bundle.sha256 and digest != bundle.sha256:
         raise SystemExit(f"SHA256 mismatch for {bundle.name}: expected {bundle.sha256}, got {digest}")
@@ -174,12 +159,10 @@ def _download_and_extract_bundle(bundle: AssetBundle, *, dest: Path, force: bool
             # one poisoned the nightly free-boundary golden test
             # (edge zmns 17.8% error, 2026-07-12).  --force restores the
             # old overwrite-everything behavior.
-            members = [m for m in tf.getmembers()
-                       if not (dest / m.name).exists()]
+            members = [m for m in tf.getmembers() if not (dest / m.name).exists()]
             skipped = len(tf.getmembers()) - len(members)
             if skipped:
-                print(f"  (skipping {skipped} already-present files; "
-                      "--force overwrites)")
+                print(f"  (skipping {skipped} already-present files; --force overwrites)")
             _safe_extract(tf, dest, members=members)
         else:
             _safe_extract(tf, dest)
@@ -198,7 +181,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     p.add_argument("--url", type=str, default="", help="Custom asset tarball URL. Overrides --bundle.")
     p.add_argument("--sha256", type=str, default="", help="Expected SHA256 for --url.")
-    p.add_argument("--dest", type=str, default=str(REPO_ROOT), help="Destination repo root.")
+    p.add_argument(
+        "--dest",
+        type=str,
+        help="Override the manifest destination (repository or user cache).",
+    )
     p.add_argument("--force", action="store_true", help="Re-download even if files already exist.")
     p.add_argument("--list", action="store_true", help="Print the default bundle location and common paths.")
     p.add_argument("--dry-run", action="store_true", help="Print what would be downloaded without fetching it.")
@@ -210,6 +197,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 name="custom",
                 url=args.url,
                 sha256=args.sha256,
+                size_bytes=0,
+                source="custom URL",
+                license="user supplied",
+                generator_revision="user supplied",
+                destination="repository",
+                default=False,
                 common_paths=(),
             ),
         )
@@ -222,10 +215,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Dry run: no files downloaded or extracted.")
         return 0
 
-    dest = Path(args.dest).expanduser().resolve()
+    dest_override = Path(args.dest).expanduser().resolve() if args.dest else None
     for bundle in bundles:
+        dest = dest_override
+        if dest is None:
+            dest = Path.home() / ".cache" / "vmex" / bundle.name if bundle.destination == "cache" else REPO_ROOT
         _download_and_extract_bundle(bundle, dest=dest, force=bool(args.force))
-    _migrate_release_asset_paths(dest)
     print("Assets installed.")
     return 0
 

@@ -1,0 +1,55 @@
+{
+  "schema": "vmex.release-assets/1",
+  "bundles": [
+    {
+      "name": "reference-nc",
+      "url": "https://github.com/uwplasma/vmex/releases/download/assets-20260316-nc/vmec_jax_assets_20260316_nc_only.tar.gz",
+      "sha256": "3344fc2401fffed240ee57ae741ec521594c592627c76dae203503f485e4c0d8",
+      "size_bytes": 81559426,
+      "source": "VMEX reference NetCDF and mgrid release assets",
+      "license": "MIT; see repository LICENSE",
+      "generator_revision": "4ead9b814f8333d4dfbc3034d127085667743fd8",
+      "destination": "repository",
+      "default": true,
+      "common_paths": [
+        "examples/data/mgrid_cth_like.nc",
+        "examples/data/mgrid_d3d_ef.nc",
+        "examples/data/wout_*_reference.nc",
+        "examples/data/single_grid/mgrid_cth_like.nc",
+        "examples/data/single_grid/mgrid_d3d_ef.nc",
+        "examples/data/single_grid/wout_*_reference.nc"
+      ]
+    },
+    {
+      "name": "wout-fixtures",
+      "url": "https://github.com/uwplasma/vmex/releases/download/assets-20260526-wout-fixtures/vmec_jax_wout_fixtures_20260526.tar.gz",
+      "sha256": "e9fd844a4ebed043576eec8ac2b17f7ff3e2a0e0a1b5adfc89742139101e00f9",
+      "size_bytes": 9801091,
+      "source": "VMEX generated and reference WOUT fixtures",
+      "license": "MIT; see repository LICENSE",
+      "generator_revision": "3d839e4fd8cfa66d19752bbaa4a6d526b51995b6",
+      "destination": "repository",
+      "default": true,
+      "common_paths": [
+        "examples/data/wout_*.nc",
+        "examples/data/single_grid/wout_*.nc",
+        "docs/_static/readme_best_cases/*/wout_*.nc",
+        "docs/_static/qi_readme_cases/*/wout_*.nc"
+      ]
+    },
+    {
+      "name": "golden-v1",
+      "url": "https://github.com/uwplasma/vmex/releases/download/golden-v1/vmec-jax-golden-v1.tar.gz",
+      "sha256": "85b1de372066d1dd0c57b1a9ffb569ccc1276bb67dec81e7bf15a5a943ca05d7",
+      "size_bytes": 2167603,
+      "source": "VMEC2000 STELLOPT 9.0 outputs for nine public VMEX decks",
+      "license": "See repository LICENSE and release notes",
+      "generator_revision": "9c1ba849487aaba6163d201c80c3b8b6bcab05a3",
+      "destination": "cache",
+      "default": false,
+      "common_paths": [
+        "~/.cache/vmex/golden-v1/golden"
+      ]
+    }
+  ]
+}
