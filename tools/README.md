@@ -2,8 +2,15 @@
 
 This directory contains developer-facing tools, not end-user examples.
 
-- `fetch_assets.py`: downloads optional large validation/reference assets
-  (reference netCDF files and wout fixtures) from GitHub release bundles.
+- `fetch_assets.py`: downloads optional validation assets and verifies their
+  byte size and SHA-256 before extraction. `assets/manifest.json` records the
+  release URL, provenance, license, generator revision, and installed paths.
+  Repository fixtures are the default; VMEC2000 goldens use the user cache:
+
+  ```console
+  python tools/fetch_assets.py
+  python tools/fetch_assets.py --bundle golden-v1
+  ```
 
 - `profile_hotpaths.py`: cold-vs-warm wall-time + peak-RSS profile of the
   production hot paths (fixed-boundary solve and the differentiable

@@ -10,9 +10,10 @@ The suite tests the `vmex.core` and `vmex.mirror` packages:
   metadata.
 - `tests/mirror/`: analytic, geometry/field, fixed/free-boundary, spline,
   implicit-derivative, hybrid, output, and exterior-vacuum coverage.
-- `tests/conftest.py` resolves the VMEC2000 golden parity fixtures
-  (`VMEX_GOLDEN_DIR` env var, `~/vmex_notes/golden`, or a one-time
-  sha256-verified download of the `golden-v1` GitHub release).
+- `tests/conftest.py` resolves the VMEC2000 golden parity fixtures from an
+  explicit local override, `~/vmex_notes/golden`, or the verified user cache.
+  Populate the cache with
+  `python tools/fetch_assets.py --bundle golden-v1`.
 - `tests/manifest.json` assigns every collected test module one owner,
   primary class, duration class, device, asset bundle, oracle, and CI lanes.
   Run `python tools/test_manifest.py check` after adding or moving a test.

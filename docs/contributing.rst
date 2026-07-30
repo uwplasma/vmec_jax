@@ -53,6 +53,17 @@ The workflows obtain their selectors from the manifest:
 Use ``pytest --vmex-report=report.json`` to record the 50 slowest tests and all
 skip reasons with the same metadata.
 
+Reference assets
+----------------
+
+Keep input decks and analytic fixtures in git. Put generated WOUT, mgrid, and
+benchmark archives in a GitHub Release and add their URL, byte size, SHA-256,
+source, license, generator revision, and installed paths to
+``assets/manifest.json``. Fetch repository fixtures with
+``python tools/fetch_assets.py`` and VMEC2000 goldens with
+``python tools/fetch_assets.py --bundle golden-v1``. CI rejects any tracked
+file larger than 1 MiB.
+
 Documentation builds must pass strict mode::
 
   python -m sphinx -W -j auto -b html docs docs/_build/html
