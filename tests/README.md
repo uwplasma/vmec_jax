@@ -19,7 +19,12 @@ The suite tests the `vmex.core` and `vmex.mirror` packages:
   CI selects files from this manifest rather than maintaining path lists in
   workflow YAML.
 
-Markers: `full` tests are skipped unless `RUN_FULL=1` is set.
+Markers: `full` tests are skipped unless `RUN_FULL=1` is set. The `weekly`
+marker identifies high-resolution campaigns that also stay out of the nightly
+matrix. Pull requests run fast API tests plus representative fixed-boundary,
+free-boundary/NESTOR, mirror, device, and AD selectors. Nightly runs the
+complete integration/oracle matrix; weekly runs the high-mode free-boundary
+ladder and exterior-mirror resolution study.
 `vmec2000_live` tests additionally require `--run-vmec2000` and accept
 `--vmec2000-executable PATH`; they are never part of ordinary offline CI. The
 live lane includes fixed-boundary current/Mercier profiles and a converged
