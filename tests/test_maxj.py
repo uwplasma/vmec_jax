@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from scipy.integrate import quad
 
 import jax
 import jax.numpy as jnp
@@ -36,12 +37,14 @@ def _boozer(outer_mean=1.02, *, psi=(0.25, 0.75)):
 
 def _residual(outer_mean=1.02, *, psi=(0.25, 0.75), **options):
     booz = _boozer(outer_mean, psi=psi)
+    settings = dict(
+        nalpha=5, points_per_period=64, num_periods=4, max_wells=6)
+    settings.update(options)
     return maxj.maximum_j_residual_from_boozer(
         bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
         iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
         nfp=booz["nfp"], psi_b=booz["psi_b"],
-        psi_edge=booz["psi_edge"], pitch=[1.0 / 1.1], nalpha=5,
-        points_per_period=64, num_periods=4, max_wells=6, **options)
+        psi_edge=booz["psi_edge"], pitch=[1.0 / 1.1], **settings)
 
 
 def test_maximum_j_sign_and_signed_flux_convention():
@@ -56,9 +59,34 @@ def test_maximum_j_sign_and_signed_flux_convention():
     assert np.all(np.asarray(
         adverse["relative_slope"][adverse["matched_well_mask"]]) > 0.0)
     assert float(reversed_flux["total"]) > 1.0e-3
+    assert float(favorable["maximum_j_fraction"]) == pytest.approx(1.0)
+    assert float(adverse["maximum_j_fraction"]) == pytest.approx(0.0)
+    assert float(favorable["excluded_pitch_fraction"]) == pytest.approx(0.0)
     np.testing.assert_allclose(
         reversed_flux["relative_slope"][reversed_flux["matched_well_mask"]],
         -favorable["relative_slope"][favorable["matched_well_mask"]])
+
+
+def test_maximum_j_slope_matches_adaptive_quadrature():
+    pitch = 1.0 / 1.1
+
+    def action(mean):
+        root = 0.5 * np.arccos((1.1 - mean) / 0.2)
+        return 2.0 * quad(
+            lambda phi: (
+                np.sqrt(max(1.0 - pitch * (mean + 0.2 * np.cos(2.0 * phi)), 0.0))
+                * 2.0 / (mean + 0.2 * np.cos(2.0 * phi))
+            ),
+            root, np.pi - root, epsabs=1.0e-13,
+        )[0]
+
+    lo, hi = action(1.0), action(1.02)
+    expected = ((hi - lo) / 0.5) / (0.5 * (lo + hi))
+    result = _residual(
+        1.02, points_per_period=256, quadrature_order=96)
+    np.testing.assert_allclose(
+        result["relative_slope"][result["matched_well_mask"]],
+        expected, rtol=5.0e-6)
 
 
 def test_well_identity_matching_and_invalid_topology():
@@ -81,6 +109,7 @@ def test_well_identity_matching_and_invalid_topology():
         **shifted_options, match_tolerance=1.0e-4)
     assert not unmatched["valid_pitch_pair"][0, 0]
     assert np.isnan(float(unmatched["total"]))
+    assert float(unmatched["excluded_pitch_fraction"]) == pytest.approx(1.0)
 
     nonmonotone = _residual(1.02, psi=(0.75, 0.25))
     assert not nonmonotone["valid_pitch_pair"][0, 0]
@@ -134,6 +163,8 @@ def test_maximum_j_input_guards():
             psi_edge=1.0, pitch=[1.0])
     with pytest.raises(ValueError, match="match_tolerance"):
         _residual(match_tolerance=0.0)
+    with pytest.raises(ValueError, match="pitch_weights"):
+        _residual(pitch_weights=[1.0, 1.0])
 
 
 @pytest.mark.full
