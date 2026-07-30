@@ -153,6 +153,8 @@ class RunSetup:
     and flip/clamp conventions in :func:`flux_profiles`.  ``icurv`` is
     computed unconditionally; ``add_fluxes`` consumes it only when
     ``ncurr = 1``.
+    ``psi_half`` and ``psi_edge`` are signed toroidal flux divided by
+    ``2*pi`` at the half mesh and boundary.
 
     Boundary/axis: ``boundary_R_cos/...`` per :class:`ProcessedBoundary`;
     ``raxis_c/raxis_s/zaxis_c/zaxis_s`` are the *physical* axis coefficients
@@ -186,6 +188,8 @@ class RunSetup:
     iotas: Array
     icurv: Array
     mass: Array
+    psi_half: Array
+    psi_edge: Array
     phipf: Array
     chipf: Array
     iotaf: Array
@@ -481,19 +485,23 @@ def flux_profiles(
       eps*|curtor|``), ``mass = mu0*pres_scale*pmass * (|phips|*r00)**gamma``
       with the ``spres_ped`` clamp;
     - full mesh: ``phipf/chipf/iotaf`` analogously;
+    - flux coordinate: ``psi_half = torflux_edge*torflux(s_half)`` and
+      ``psi_edge = signgs*phiedge/(2*pi)``;
     - ``lamscale = sqrt(hs*sum(phips(2:)**2))``;
     - ``lflip`` negates ``iotas`` and ``chips`` (only — profil1d.f leaves the
       full-mesh arrays unflipped).
 
     ``lrfp`` (RFP mode) is not supported.  Returns a dict of ``jnp`` arrays
-    keyed ``phips, chips, iotas, icurv, mass, phipf, chipf, iotaf, lamscale``.
+    keyed ``phips, chips, iotas, icurv, mass, psi_half, psi_edge, phipf,
+    chipf, iotaf, lamscale``.
     """
     dtype = grids.s_full.dtype
     ns = int(grids.s_full.shape[0])
     torflux, torflux_deriv = _torflux_functions(inp.aphi)
 
     two_pi = 2.0 * np.pi
-    torflux_edge = jnp.asarray(signgs * inp.phiedge / two_pi, dtype=dtype)
+    psi_edge = jnp.asarray(signgs * inp.phiedge / two_pi, dtype=dtype)
+    torflux_edge = psi_edge
     tf1 = torflux(jnp.asarray(1.0, dtype=dtype))
     torflux_edge = jnp.where(tf1 != 0.0, torflux_edge / jnp.where(tf1 != 0.0, tf1, 1.0),
                              torflux_edge)
@@ -561,8 +569,11 @@ def flux_profiles(
         gamma_factor = jnp.where(not_axis, safe_vpnorm ** inp.gamma, 0.0)
     mass = jnp.where(not_axis, prof.MU0 * p_half_pa * gamma_factor, 0.0)
 
-    return dict(phips=phips, chips=chips, iotas=iotas, icurv=icurv, mass=mass,
-                phipf=phipf, chipf=chipf, iotaf=iotaf, lamscale=lamscale)
+    return dict(
+        phips=phips, chips=chips, iotas=iotas, icurv=icurv, mass=mass,
+        psi_half=torflux_edge * tf_half, psi_edge=psi_edge,
+        phipf=phipf, chipf=chipf, iotaf=iotaf, lamscale=lamscale,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -975,7 +986,8 @@ def run_setup(
         scalxc=odd_m_sqrt_s_scaling(grids.s_full, resolution.mpol),
         phips=profiles_1d["phips"], chips=profiles_1d["chips"],
         iotas=profiles_1d["iotas"], icurv=profiles_1d["icurv"],
-        mass=profiles_1d["mass"], phipf=profiles_1d["phipf"],
+        mass=profiles_1d["mass"], psi_half=profiles_1d["psi_half"],
+        psi_edge=profiles_1d["psi_edge"], phipf=profiles_1d["phipf"],
         chipf=profiles_1d["chipf"], iotaf=profiles_1d["iotaf"],
         lamscale=profiles_1d["lamscale"],
         boundary_R_cos=boundary.R_cos, boundary_R_sin=boundary.R_sin,
