@@ -10,6 +10,7 @@ the jit lane re-enable it explicitly), and gates ``full``-marked tests behind
 """
 
 import hashlib
+import json
 import os
 import sys
 import tarfile
@@ -48,6 +49,12 @@ def pytest_addoption(parser):
         metavar="PATH",
         help="VMEC2000 executable for --run-vmec2000 (otherwise auto-discover)",
     )
+    group.addoption(
+        "--vmex-report",
+        default="",
+        metavar="PATH",
+        help="write the 50 slowest tests and every skip with manifest metadata",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -65,6 +72,61 @@ def pytest_collection_modifyitems(config, items):
                     reason="Live VMEC2000 integration disabled; use --run-vmec2000"
                 )
             )
+
+
+def _manifest_metadata(nodeid: str) -> dict[str, str]:
+    """Metadata inherited by a collected test from its module."""
+    data = json.loads((_ROOT / "tests" / "manifest.json").read_text())
+    path = nodeid.split("::", 1)[0]
+    row = next(row for row in data["records"] if row[0] == path)
+    record = dict(zip(data["fields"], row, strict=True))
+    return {
+        key: record[key]
+        for key in ("owner", "primary", "duration", "device", "asset", "oracle")
+    }
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Write machine-readable durations and otherwise-silent skip reasons."""
+    target = config.getoption("--vmex-report")
+    if not target:
+        return
+    durations: dict[str, float] = {}
+    for reports in terminalreporter.stats.values():
+        for report in reports:
+            nodeid = getattr(report, "nodeid", "")
+            duration = getattr(report, "duration", None)
+            if nodeid and duration is not None:
+                durations[nodeid] = durations.get(nodeid, 0.0) + duration
+    slowest = [
+        {"nodeid": nodeid, "seconds": seconds, **_manifest_metadata(nodeid)}
+        for nodeid, seconds in sorted(
+            durations.items(), key=lambda item: item[1], reverse=True
+        )[:50]
+    ]
+    skips = []
+    for report in terminalreporter.stats.get("skipped", ()):
+        reason = (
+            report.longrepr[2]
+            if isinstance(report.longrepr, tuple)
+            else str(report.longrepr)
+        )
+        skips.append(
+            {"nodeid": report.nodeid, "reason": reason, **_manifest_metadata(report.nodeid)}
+        )
+    payload = {
+        "schema": "vmex.test-report/1",
+        "collected": len(durations),
+        "exitstatus": int(exitstatus),
+        "slowest": slowest,
+        "skips": sorted(skips, key=lambda item: item["nodeid"]),
+    }
+    path = Path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    terminalreporter.write_line(
+        f"VMEX test report: {path} ({len(slowest)} timings, {len(skips)} skips)"
+    )
 
 
 # ---------------------------------------------------------------------------

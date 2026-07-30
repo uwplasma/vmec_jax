@@ -13,6 +13,11 @@ The suite tests the `vmex.core` and `vmex.mirror` packages:
 - `tests/conftest.py` resolves the VMEC2000 golden parity fixtures
   (`VMEX_GOLDEN_DIR` env var, `~/vmex_notes/golden`, or a one-time
   sha256-verified download of the `golden-v1` GitHub release).
+- `tests/manifest.json` assigns every collected test module one owner,
+  primary class, duration class, device, asset bundle, oracle, and CI lanes.
+  Run `python tools/test_manifest.py check` after adding or moving a test.
+  CI selects files from this manifest rather than maintaining path lists in
+  workflow YAML.
 
 Markers: `full` tests are skipped unless `RUN_FULL=1` is set.
 `vmec2000_live` tests additionally require `--run-vmec2000` and accept
@@ -22,3 +27,6 @@ LASYM free-boundary DIII-D regression with generated compact mgrid data and
 all NESTOR WOUT potential/surface-field tables. The
 root `tests/conftest.py` disables jit globally for speed; tests that exercise
 the jit lane re-enable it explicitly.
+
+Pass `--vmex-report=PATH` to pytest to save the 50 slowest collected tests and
+every skip reason with inherited manifest metadata.
