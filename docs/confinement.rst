@@ -199,6 +199,31 @@ isodynamic** (QI) field is an omnigenous field whose :math:`|B|` contours close
 poloidal and the bootstrap current is small by construction — the target of the
 nfp1–nfp4 decks in ``examples/data/``.
 
+Bounce action
+~~~~~~~~~~~~~
+
+:func:`vmex.core.bounce.bounce_action` evaluates the physical-pitch form
+
+.. math::
+
+   \mathcal J_\parallel
+   = 2\int_{\ell_1}^{\ell_2}\sqrt{1-\lambda B}\,d\ell
+
+for every complete magnetic well in a sampled field line. The factor two
+closes the bounce orbit; multiply by the chosen reference speed for a
+dimensional invariant. Crossings and wells retain fixed array shapes, while a
+sine-mapped Gauss--Legendre rule removes the square-root singularity at each
+bounce point. Invalid slots are NaN and carry explicit absent, marginal,
+merged, truncated, and overflow masks.
+
+:func:`vmex.core.bounce.bounce_action_from_boozer` synthesizes field lines from
+``booz_xform``-convention harmonics. It uses
+:math:`d\ell/d\zeta_B=|G+\iota I|/B`, so pitch values are shared physical
+values rather than separately normalized levels. Both entry points support
+JIT, forward AD, and reverse AD. Derivatives are defined within a fixed well
+topology; marginal and merged masks identify topology changes that an
+optimizer must exclude or resolve.
+
 The constructed-QI target
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
