@@ -5,7 +5,7 @@ objective with ``B_plasma`` from the virtual-casing principle
 Lanes: the wout->surface-data adapter reproduces ``B_total . n / |B|`` ~
 1e-16 on a converged equilibrium; asset-free synthetic-torus ``jax.grad``
 vs central FD; and the real cth-like ``extcur``/coil-dof gradients vs FD
-(``full``).  Gated behind ``importorskip('virtual_casing_jax')``.
+(``full``).  Skipped explicitly when ``virtual_casing_jax`` is unavailable.
 """
 
 from __future__ import annotations
@@ -16,19 +16,23 @@ import numpy as np
 import pytest
 
 jax = pytest.importorskip("jax")
-pytest.importorskip("virtual_casing_jax")
 import jax.numpy as jnp  # noqa: E402
 
 jax.config.update("jax_enable_x64", True)
-
-from virtual_casing_jax import VmecSurfaceFieldData  # noqa: E402
 
 from vmex.core import freeboundary_diff as FBD  # noqa: E402
 from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
 from vmex.core.wout import read_wout  # noqa: E402
 
 # jit-enable the whole module: virtual casing is far too slow interpreted.
-pytestmark = pytest.mark.usefixtures("_module_jit_enabled")
+pytestmark = [
+    pytest.mark.usefixtures("_module_jit_enabled"),
+    pytest.mark.skipif(
+        not FBD.have_virtual_casing_jax(),
+        reason="requires virtual_casing_jax",
+    ),
+]
+VmecSurfaceFieldData = FBD.VmecSurfaceFieldData
 
 REPO = Path(__file__).resolve().parents[1]
 WOUT = REPO / "examples" / "data" / "single_grid" / "wout_cth_like_free_bdy.nc"

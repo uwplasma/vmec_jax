@@ -21,7 +21,9 @@ Workflow
    VMEC2000 counterpart file it ports — keep that cross-reference current.
 2. Add a regression test under ``tests/`` (fast, offline where possible);
    parity-sensitive changes need a check against the golden VMEC2000
-   fixtures.
+   fixtures. Add its module to ``tests/manifest.json``; the collection gate
+   requires one owner, primary class, expected duration, device, asset bundle,
+   oracle, and CI lane.
 3. Keep JAX gotchas in mind:
 
    - jitted functions should only take arrays / pytrees (static config stays
@@ -33,7 +35,12 @@ Development install and checks::
 
   pip install -e .[dev]
   ruff check .
+  python tools/test_manifest.py check
   pytest -q
+
+The workflow obtains its file and campaign selectors from the manifest. Use
+``pytest --vmex-report=report.json`` to record the 50 slowest tests and all
+skip reasons with the same metadata.
 
 Documentation builds must pass strict mode::
 

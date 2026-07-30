@@ -96,18 +96,8 @@ jobs:
         env:
           JAX_ENABLE_X64: "1"
         run: |
-          pytest -q -n 4 -m "not full" \
-            tests/test_packaging_metadata.py \
-            tests/test_fetch_assets.py \
-            tests/test_input_profiles.py \
-            tests/test_profiles.py \
-            tests/test_step_control.py \
-            tests/test_printing.py \
-            tests/test_fourier_transforms.py \
-            tests/test_preconditioner.py \
-            tests/test_setup.py \
-            tests/test_mgrid.py \
-            --durations=25
+          FILES="$(python tools/test_manifest.py select pr-fast)"
+          pytest -q -n 4 -m "not full" $FILES --durations=25
 
   mirror:
     name: Mirror ${{ matrix.shard }} tests
@@ -132,20 +122,15 @@ jobs:
         env:
           JAX_ENABLE_X64: "1"
         run: |
-          if [ "${{ matrix.shard }}" = "field" ]; then
-            FILES="tests/mirror/test_exterior.py \
-                   tests/mirror/test_free_boundary.py \
-                   tests/mirror/test_mirror_geometry_fields.py"
-          elif [ "${{ matrix.shard }}" = "equilibrium" ]; then
-            FILES="tests/mirror/test_implicit.py \
-                   tests/mirror/test_isotropic_forces.py \
-                   tests/mirror/test_model_basis.py"
-          else
-            FILES="tests/mirror/test_analytic.py \
-                   tests/mirror/test_splines.py \
-                   tests/mirror/test_output.py"
-          fi
-          pytest -q -n 2 -m "not full" $FILES --durations=20
+          FILES="$(python tools/test_manifest.py select pr-mirror-${{ matrix.shard }})"
+          pytest -q -n 2 -m "not full" $FILES --durations=20 \
+            --vmex-report="test-report-mirror-${{ matrix.shard }}.json"
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-mirror-${{ matrix.shard }}
+          path: test-report-mirror-${{ matrix.shard }}.json
+          retention-days: 3
 
   device-rig:
     # Two-device placement/gradient coverage on every ordinary run: the
@@ -185,7 +170,9 @@ jobs:
           # device-binding, instrumentation and device_scope code paths, so
           # its coverage feeds the gate (the parity shards skip these lanes
           # on their single visible device).
-          pytest -q tests/test_gpu_ci.py -k second_host_device --durations=10 \
+          FILES="$(python tools/test_manifest.py select device-rig)"
+          pytest -q $FILES -k second_host_device --durations=10 \
+            --vmex-report=test-report-device-rig.json \
             --cov=vmex --cov-report=term
       - name: Stash coverage data
         run: mv .coverage coverage.device-rig
@@ -193,7 +180,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-device-rig
-          path: coverage.device-rig
+          path: |
+            coverage.device-rig
+            test-report-device-rig.json
           retention-days: 3
 
   optional-integrations:
@@ -234,24 +223,27 @@ jobs:
         env:
           JAX_ENABLE_X64: "1"
         run: |
-          pytest -q -n 2 -m "not full" \
-            tests/test_package_api.py \
-            tests/test_turbulence.py \
-            tests/test_freeboundary_diff.py \
-            tests/test_single_stage_simultaneous.py \
-            --durations=15 --cov=vmex --cov-report=term
+          FILES="$(python tools/test_manifest.py select optional)"
+          pytest -q -n 2 -m "not full" $FILES \
+            --durations=15 --vmex-report=test-report-optional.json \
+            --cov=vmex --cov-report=term
       - name: Run the ESSOS direct-coil example (full-marked, targeted)
         env:
           JAX_ENABLE_X64: "1"
           RUN_FULL: "1"
-        run: pytest -q tests/test_examples.py::test_free_boundary_essos_coils --durations=5 --cov=vmex --cov-append --cov-report=term
+        run: |
+          pytest -q tests/test_examples.py::test_free_boundary_essos_coils \
+            --durations=5 --vmex-report=test-report-optional-example.json \
+            --cov=vmex --cov-append --cov-report=term
       - name: Stash coverage data
         run: mv .coverage coverage.optional
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
           name: coverage-optional
-          path: coverage.optional
+          path: |
+            coverage.optional
+            test-report-optional*.json
           retention-days: 3
 
   parity:
@@ -316,7 +308,7 @@ jobs:
           print("golden dir:", mod.resolve_golden_dir())
           EOF
 
-      # Five bounded shards.  The xdist dist MODE is chosen PER SHARD by
+      # Seven bounded shards.  The xdist dist MODE is chosen PER SHARD by
       # whether its modules share an expensive fixture:
       #   * loadscope groups a whole module onto ONE worker, so module-scoped
       #     equilibrium fixtures (omnigenity qi_eq/tok_eq, bootstrap eq,
@@ -342,7 +334,7 @@ jobs:
       #   a2 = the solver-golden parity/ladder modules formerly in "a";
       #   c1/c2 = the former catch-all, split explicitly after two hosted
       #           runners were externally shut down above 84% despite no test
-      #           failure.  Explicit file ownership keeps coverage disjoint.
+      #           failure.  Manifest ownership keeps coverage disjoint.
       # Together they cover the whole non-gradient, non-example core suite once;
       # the separate mirror matrix owns tests/mirror. Therefore
       # every test file appears in exactly one shard (coverage gate combines
@@ -351,94 +343,17 @@ jobs:
         env:
           JAX_ENABLE_X64: "1"
         run: |
-          A1_FILES="tests/test_freeboundary.py \
-                    tests/test_freeboundary_multigrid.py \
-                    tests/test_freeboundary_stress.py \
-                    tests/test_freeboundary_linear.py \
-                    tests/test_qi_free_boundary_stress.py \
-                    tests/test_qi_sheet_gate.py \
-                    tests/test_high_mode_free_boundary_parity.py \
-                    tests/test_freeboundary_diff.py \
-                    tests/test_cli_freeboundary.py"
-          A2_FILES="tests/test_parity_breadth.py \
-                    tests/test_multigrid_ladder.py \
-                    tests/test_optimize_traceable_qs.py \
-                    tests/test_solver_end_to_end.py"
-          B_FILES="tests/test_golden_digests.py \
-                   tests/test_bootstrap.py \
-                   tests/test_wout_golden.py"
-          C1_FILES="tests/test_baseline_benchmark.py \
-                    tests/test_boozer_tables.py \
-                    tests/test_cli.py \
-                    tests/test_cli_device.py \
-                    tests/test_cli_summary_wout.py \
-                    tests/test_compat.py \
-                    tests/test_coverage_margin.py \
-                    tests/test_device.py \
-                    tests/test_device_parity_tool.py \
-                    tests/test_doctor.py \
-                    tests/test_fetch_assets.py \
-                    tests/test_first_divergence.py \
-                    tests/test_force_oracle.py \
-                    tests/test_forces_residuals.py \
-                    tests/test_fourier_transforms.py \
-                    tests/test_geometry_fields.py \
-                    tests/test_gpu_ci.py \
-                    tests/test_input_profiles.py \
-                    tests/test_mgrid.py \
-                    tests/test_multigrid_interp.py \
-                    tests/test_nonfinite_failfast.py"
-          C2_FILES="tests/test_omnigenity.py \
-                    tests/test_capability_docs.py \
-                    tests/test_optimization_convergence.py \
-                    tests/test_optimize_penalty.py \
-                    tests/test_recycle_drift.py \
-                    tests/test_ci_shard_coverage.py \
-                    tests/test_performance_docs.py \
-                    tests/test_package_api.py \
-                    tests/test_packaging_metadata.py \
-                    tests/test_parallel.py \
-                    tests/test_plotting_boozer.py \
-                    tests/test_postprocess_currents.py \
-                    tests/test_preconditioner.py \
-                    tests/test_preconditioner_2d.py \
-                    tests/test_printing.py \
-                    tests/test_profiles.py \
-                    tests/test_setup.py \
-                    tests/test_setup_extras.py \
-                    tests/test_single_stage_simultaneous.py \
-                    tests/test_solver_axis_initialization.py \
-                    tests/test_stability.py \
-                    tests/test_step_control.py \
-                    tests/test_stress_high_force.py \
-                    tests/test_turbulence.py \
-                    tests/test_vacuum_analytic_recurrence.py \
-                    tests/test_validation_guards.py \
-                    tests/test_vmec2000_feature_stress.py"
-          D_FILES="tests/test_optimize.py"
-          # c3: the implicit-AD device/multi-RHS/LgradB files.  Their
-          # combined residency (plus the device-audit SUBPROCESS, a fifth
-          # jax process) evicted the 16 GB c1 runner three times once c1
-          # also carried the new oracle/comparator files; a dedicated
-          # 2-worker shard bounds the concurrent footprint.
-          C3_FILES="tests/test_implicit_device.py \
-                    tests/test_implicit_multi_rhs.py \
-                    tests/test_lgradb.py"
-          if [ "${{ matrix.shard }}" = "a1" ]; then
-            pytest -q -n 4 --dist loadscope $A1_FILES --durations=15 --cov=vmex --cov-report=term
-          elif [ "${{ matrix.shard }}" = "a2" ]; then
-            pytest -q -n 4 --dist loadscope $A2_FILES --durations=15 --cov=vmex --cov-report=term
-          elif [ "${{ matrix.shard }}" = "b" ]; then
-            pytest -q -n 4 --dist load $B_FILES --durations=15 --cov=vmex --cov-report=term
-          elif [ "${{ matrix.shard }}" = "c1" ]; then
-            pytest -q -n 4 --dist loadscope $C1_FILES --durations=15 --cov=vmex --cov-report=term
-          elif [ "${{ matrix.shard }}" = "c2" ]; then
-            pytest -q -n 4 --dist loadscope $C2_FILES --durations=15 --cov=vmex --cov-report=term
-          elif [ "${{ matrix.shard }}" = "c3" ]; then
-            pytest -q -n 2 --dist loadscope $C3_FILES --durations=15 --cov=vmex --cov-report=term
-          elif [ "${{ matrix.shard }}" = "d" ]; then
-            pytest -q -n 4 --dist load $D_FILES --durations=15 --cov=vmex --cov-report=term
+          FILES="$(python tools/test_manifest.py select pr-parity-${{ matrix.shard }})"
+          if [[ "${{ matrix.shard }}" =~ ^(b|d)$ ]]; then
+            DIST=load
+          else
+            DIST=loadscope
           fi
+          WORKERS=4
+          if [ "${{ matrix.shard }}" = "c3" ]; then WORKERS=2; fi
+          pytest -q -n "$WORKERS" --dist "$DIST" $FILES --durations=15 \
+            --vmex-report="test-report-parity-${{ matrix.shard }}.json" \
+            --cov=vmex --cov-report=term
 
       - name: Stash coverage data
         run: mv .coverage coverage.parity-${{ matrix.shard }}
@@ -447,7 +362,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-parity-${{ matrix.shard }}
-          path: coverage.parity-${{ matrix.shard }}
+          path: |
+            coverage.parity-${{ matrix.shard }}
+            test-report-parity-${{ matrix.shard }}.json
           retention-days: 3
 
   gradient:
@@ -509,8 +426,10 @@ jobs:
             b) SELECT="$B" ;;
             *) SELECT="not $A and not $B" ;;
           esac
-          pytest -q tests/test_implicit_grad.py -k "$SELECT" \
+          FILES="$(python tools/test_manifest.py select pr-gradient)"
+          pytest -q $FILES -k "$SELECT" \
             --durations=0 \
+            --vmex-report="test-report-gradient-${{ matrix.shard }}.json" \
             --cov=vmex --cov-report=term
 
       - name: Stash coverage data
@@ -520,7 +439,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-gradient-${{ matrix.shard }}
-          path: coverage.gradient-${{ matrix.shard }}
+          path: |
+            coverage.gradient-${{ matrix.shard }}
+            test-report-gradient-${{ matrix.shard }}.json
           retention-days: 3
 
   examples:
@@ -553,8 +474,10 @@ jobs:
         env:
           JAX_ENABLE_X64: "1"
         run: |
-          pytest -q tests/test_examples.py \
+          FILES="$(python tools/test_manifest.py select pr-examples)"
+          pytest -q $FILES \
             --durations=10 \
+            --vmex-report=test-report-examples.json \
             --cov=vmex --cov-report=term
 
       - name: Stash coverage data
@@ -564,7 +487,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-examples
-          path: coverage.examples
+          path: |
+            coverage.examples
+            test-report-examples.json
           retention-days: 3
 
   coverage-gate:
@@ -694,7 +619,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install -U pip
-          python -m pip install .
+          python -m pip install ".[coils,turbulence,freeb]"
           python -m pip install pytest
 
       - name: Cache golden fixtures and compiled kernels
@@ -743,143 +668,11 @@ jobs:
           JAX_ENABLE_X64: "1"
           RUN_FULL: "1"
         run: |
-          case "${{ matrix.shard }}" in
-            core-a-c)
-              # a-f split again: the shard was killed by runner shutdowns
-              # three dispatches in a row, always deep into the run while
-              # ten other shards survived -- the sequential full suite
-              # accumulates JAX executable caches until the hosted runner's
-              # memory ceiling evicts the runner service itself.  Smaller
-              # letter ranges keep each process's accumulation bounded.
-              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
-                     --ignore-glob=tests/test_[d-z]*.py"
-              ;;
-            core-d-f)
-              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
-                     --ignore-glob=tests/test_[a-c]*.py \
-                     --ignore-glob=tests/test_[g-z]*.py"
-              ;;
-            core-g-h)
-              # g-i split likewise; the high-mode free-boundary file (h)
-              # stays in its own hmfb-* campaign shards
-              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
-                     --ignore=tests/test_high_mode_free_boundary_parity.py \
-                     --ignore-glob=tests/test_[a-f]*.py \
-                     --ignore-glob=tests/test_[i-z]*.py"
-              ;;
-            core-i)
-              # The implicit-gradient file runs 23 solve+adjoint lanes whose
-              # executable caches accumulate past the hosted runner's memory
-              # ceiling when stacked with the rest of the letter (evicted in
-              # two dispatches); it gets its own worker below.
-              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
-                     --ignore=tests/test_implicit_grad.py \
-                     --ignore-glob=tests/test_[a-h]*.py \
-                     --ignore-glob=tests/test_[j-z]*.py"
-              ;;
-            core-i-grad)
-              FILES="tests/test_implicit_grad.py"
-              ;;
-            # The single high-mode-fb worker timed out at 300 minutes when
-            # its kernel cache went cold (every dispatch that day was
-            # cancelled before the post-job cache save, and the rolling
-            # saves from 18 other shards evicted the old lineage from the
-            # repo's 10 GB cache pool).  Six compile-dominated 238/537-mode
-            # lanes in one job do not fit a cold worker; three campaign
-            # workers each fit with margin, and each saves its own cache.
-            hmfb-ladders)
-              FILES="tests/test_high_mode_free_boundary_parity.py::test_all_reported_features_parse_together \
-                     tests/test_high_mode_free_boundary_parity.py::test_fixed_boundary_238_mode_ladder_converges \
-                     tests/test_high_mode_free_boundary_parity.py::test_free_boundary_238_mode_ladder_survives_activation \
-                     tests/test_high_mode_free_boundary_parity.py::test_vacuum_survives_a_radial_transition \
-                     tests/test_high_mode_free_boundary_parity.py::test_mgrid_nzeta_policy_matches_vmec2000"
-              ;;
-            hmfb-combined)
-              FILES="tests/test_high_mode_free_boundary_parity.py::test_combined_238_mode_cth_free_ladder_matches_vmec2000 \
-                     tests/test_high_mode_free_boundary_parity.py::test_use_fft_reaches_every_free_boundary_lane \
-                     tests/test_high_mode_free_boundary_parity.py::test_dense_and_fft_free_boundary_trajectories_match"
-              ;;
-            hmfb-fft537)
-              FILES="tests/test_high_mode_free_boundary_parity.py::test_free_boundary_537_modes_fft_auto_smoke"
-              ;;
-            qi-gate-free)
-              # The QI sheet-current gate lanes are the heaviest single
-              # tests in the tree; running all of them in ONE process
-              # accumulated past the hosted runner's memory ceiling even
-              # with per-test cache clearing (evicted 18 minutes into the
-              # equilibrium lanes after the builder itself was bounded).
-              # Same per-campaign isolation as the opt-* shards: each
-              # worker rebuilds the deterministic field (~4 min hosted) and
-              # runs one equilibrium campaign.
-              FILES="tests/test_qi_sheet_gate.py::test_sheet_field_confines \
-                     tests/test_qi_sheet_gate.py::test_qi_sheet_free_boundary_converges"
-              ;;
-            qi-gate-ladder)
-              FILES="tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_matches_vmec2000"
-              ;;
-            qi-gate-ladder-fft)
-              # Same ladder through the separable-FFT kernel: pins
-              # FFT == dense == VMEC2000 on the gate deck (regression for
-              # the NON-FINITE FORCE EVALUATION when NESTOR consumed a
-              # sign-changed transient at the DELT stability edge).
-              FILES="tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_fft_matches_dense"
-              ;;
-            qi-gate-ladder-055)
-              # The public regression pinning the previously platform-fatal
-              # DELT = 0.55 ladder (converged in both codes post-fix).
-              FILES="tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_delt_055_regression"
-              ;;
-            qi-gate-fixed)
-              FILES="tests/test_qi_sheet_gate.py::test_qi_fixed_238_ladder_converges"
-              ;;
-            core-j-m)
-              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
-                     --ignore-glob=tests/test_[a-i]*.py \
-                     --ignore-glob=tests/test_[n-z]*.py"
-              ;;
-            core-n-s)
-              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
-                     --ignore=tests/test_optimization_convergence.py \
-                     --ignore=tests/test_qi_sheet_gate.py \
-                     --ignore-glob=tests/test_[a-m]*.py \
-                     --ignore-glob=tests/test_[t-z]*.py"
-              ;;
-            core-t-z)
-              FILES="tests --ignore=tests/mirror --ignore=tests/test_examples.py \
-                     --ignore-glob=tests/test_[a-s]*.py"
-              ;;
-            opt-qa)
-              FILES="tests/test_optimization_convergence.py::test_qa_reaches_precise"
-              ;;
-            opt-qh)
-              FILES="tests/test_optimization_convergence.py::test_qh_implicit_converges"
-              ;;
-            opt-qp)
-              FILES="tests/test_optimization_convergence.py::test_qp_implicit_descends"
-              ;;
-            examples)
-              FILES="tests/test_examples.py"
-              ;;
-            mirror-field)
-              FILES="tests/mirror/test_exterior.py \
-                     tests/mirror/test_free_boundary.py \
-                     tests/mirror/test_mirror_geometry_fields.py"
-              ;;
-            mirror-equilibrium)
-              FILES="tests/mirror/test_implicit.py \
-                     tests/mirror/test_isotropic_forces.py \
-                     tests/mirror/test_model_basis.py"
-              ;;
-            mirror-spline)
-              FILES="tests/mirror/test_analytic.py \
-                     tests/mirror/test_output.py \
-                     tests/mirror/test_qi_hybrid.py \
-                     tests/mirror/test_splines.py"
-              ;;
-          esac
+          FILES="$(python tools/test_manifest.py select full-${{ matrix.shard }})"
           # Some optimization tests are silent for more than 15 minutes.
           # Keep the hosted runner live without changing pytest semantics.
-          pytest -q $FILES --durations=25 &
+          pytest -q $FILES --durations=25 \
+            --vmex-report="test-report-full-${{ matrix.shard }}.json" &
           pytest_pid=$!
           while kill -0 "$pytest_pid" 2>/dev/null; do
             sleep 60
@@ -888,6 +681,15 @@ jobs:
             fi
           done
           wait "$pytest_pid"
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-full-${{ matrix.shard }}
+          path: test-report-full-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 7
 
   # Trusted self-hosted GPU job.  It lives in THIS workflow (not a separate
   # file) because GitHub can only manually dispatch workflows that already
@@ -933,8 +735,8 @@ jobs:
 
       - name: Run focused placement, solve, and gradient checks
         run: |
-          pytest -q tests/test_gpu_ci.py tests/test_device.py \
-            tests/test_implicit_device.py --durations=0
+          FILES="$(python tools/test_manifest.py select gpu-smoke)"
+          pytest -q $FILES --durations=0
 
       - name: Audit all physics gradients on CPU and both GPUs
         shell: bash

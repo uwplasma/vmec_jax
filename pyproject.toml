@@ -52,9 +52,8 @@ Changelog = "https://github.com/uwplasma/vmex/releases"
 # (plan.md R15.3 + R19); this is not a NESTOR equilibrium adjoint.
 # virtual-casing-jax >= 0.0.3 (released 2026-07-28 from the canonical
 # https://github.com/uwplasma/virtual_casing_jax) carries the exterior-field
-# API vmex drives; 0.0.2 and earlier predate it.  The
-# ``vmex.core.freeboundary_diff`` module and its tests are gated behind an
-# ``importorskip`` so a bare install stays functional without the extra.
+# API vmex drives; 0.0.2 and earlier predate it. Surface-data construction
+# remains available without the extra; solver tests use an explicit skip.
 freeb = [
     "virtual-casing-jax>=0.0.3",
 ]

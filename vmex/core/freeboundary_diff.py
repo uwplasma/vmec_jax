@@ -45,9 +45,8 @@ implicit adjoint (boundary) and virtual casing (coils) at once.  See
 ``examples/single_stage_simultaneous_opt.py`` and the *True single-stage*
 section of ``docs/optimization.rst``.
 
-``virtual_casing_jax`` is an optional dependency (install from source
-or ``pip install -e /path/to/virtual_casing_jax``).  Importing this module raises
-a clear error if it is missing.
+``virtual_casing_jax`` is an optional dependency. Surface-data construction
+remains available without it; virtual-casing solver paths raise a clear error.
 """
 
 from __future__ import annotations

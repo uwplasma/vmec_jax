@@ -51,7 +51,8 @@ def _synthetic_case(case):
     weights = newp.angular_integration_weights(ntheta=ntheta, nzeta=nzeta, lasym=lasym)
     ntheta_eff = int(weights.shape[0])
     shape = (ns, ntheta_eff, nzeta)
-    rng = np.random.default_rng(abs(hash(case)) % (2**31))
+    seed = sum((i + 1) * int(value) for i, value in enumerate(case))
+    rng = np.random.default_rng(seed)
 
     def uniform(lo, hi):
         return rng.uniform(lo, hi, size=shape)

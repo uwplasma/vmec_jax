@@ -54,7 +54,7 @@ def _resolution(case) -> Resolution:
 
 
 def _seed(case) -> int:
-    return abs(hash(case)) % (2**31)
+    return sum((i + 1) * int(value) for i, value in enumerate(case))
 
 
 @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
