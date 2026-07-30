@@ -78,7 +78,6 @@ def test_multi_rhs_pullback_matches_scalar_vjp():
             assert np.max(np.abs(a - b)) <= 1e-8 * scale, "multi-rhs != scalar VJP"
 
 
-@pytest.mark.full
 def test_block_response_forward_transpose_and_fd():
     """One factorization serves tangent and transpose responses accurately."""
     inp, cfg, p0 = _solovev_setup()
