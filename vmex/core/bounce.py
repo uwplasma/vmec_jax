@@ -174,7 +174,7 @@ def bounce_action(
             | (b[:, -1:] < threshold[None, :])
         )
         truncated = (n_down != n_up) | boundary_cut
-    usable = well_mask & ~(marginal | merged | overflow | truncated)[..., None]
+    usable = well_mask & ~(marginal | merged | overflow)[..., None]
     action = jnp.where(well_mask, action, jnp.nan)
 
     out_shape = lead_shape + (int(pitch.shape[0]), max_wells)
