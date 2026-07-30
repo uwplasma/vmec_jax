@@ -114,3 +114,9 @@ Confinement objectives and optimization:
     with electromagnetic coils,” *PNAS* 119(13), e2202084119 (2022) — coil
     regularization set (length, curvature, coil–coil distance) and the
     normalized ``max |B·n|/|B|`` reporting convention.
+
+28. K. Unalmis et al., “Spectrally accurate, reverse-mode differentiable
+    bounce-averaging algorithm and its applications,” *Journal of Plasma
+    Physics* (2026), doi:10.1017/S0022377826101652 — endpoint-regularized
+    quadrature and the independent DESC oracle for
+    :mod:`vmex.core.bounce`.
