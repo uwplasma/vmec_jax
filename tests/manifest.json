@@ -98,6 +98,12 @@
       "tests/test_freeboundary_linear.py",
       "tests/test_freeboundary_diff.py::test_synthetic_surface_gradient_fd_validates"
     ],
+    "pr-physics-mirror-spline": [
+      "tests/mirror/test_analytic.py",
+      "tests/mirror/test_qi_hybrid.py",
+      "tests/mirror/test_splines.py"
+    ],
+    "pr-physics-mirror-output": ["tests/mirror/test_output.py"],
     "pr-device": [
       "tests/test_gpu_ci.py::test_device_scope_second_host_device_gradient_equality",
       "tests/test_gpu_ci.py::test_second_host_device_unconverged_adjoint_raises_typed_error"

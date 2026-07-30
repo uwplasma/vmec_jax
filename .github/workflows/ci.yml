@@ -83,7 +83,9 @@ jobs:
           - lane: mirror-field
             selector: pr-mirror-field
           - lane: mirror-spline
-            selector: pr-mirror-spline
+            selector: pr-physics-mirror-spline
+          - lane: mirror-output
+            selector: pr-physics-mirror-output
     steps:
       - uses: actions/checkout@v7.0.1
         with:

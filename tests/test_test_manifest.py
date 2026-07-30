@@ -33,8 +33,11 @@ def test_manifest_routes_short_pr_and_weekly_selectors() -> None:
         "pr-mirror-field"
     )
     assert "tests/mirror/test_splines.py" in test_manifest.select(
-        "pr-mirror-spline"
+        "pr-physics-mirror-spline"
     )
+    assert test_manifest.select("pr-physics-mirror-output") == [
+        "tests/mirror/test_output.py"
+    ]
     weekly = test_manifest.select("weekly-mirror")
     assert weekly == [
         "tests/mirror/test_free_boundary.py::"
