@@ -61,6 +61,22 @@ def _checksum(tree: Any) -> str:
     return digest.hexdigest()
 
 
+def _repeat_error(first: Any, second: Any) -> tuple[float, float]:
+    """Maximum absolute and state-relative difference between two pytrees."""
+    import jax
+    import numpy as np
+
+    pairs = zip(jax.tree.leaves(first), jax.tree.leaves(second), strict=True)
+    differences = [
+        (np.max(np.abs(np.asarray(left) - np.asarray(right))),
+         np.max(np.abs(np.asarray(left))))
+        for left, right in pairs
+    ]
+    absolute = float(max(error for error, _ in differences))
+    scale = float(max(value for _, value in differences))
+    return absolute, absolute / max(scale, np.finfo(float).tiny)
+
+
 def _device_memory() -> dict[str, dict[str, int]]:
     import jax
 
@@ -336,6 +352,9 @@ def _profile_mirror(args: argparse.Namespace) -> dict[str, Any]:
 
     cold, cold_s = _timed(run)
     warm, warm_s = _timed(run)
+    cold_state = tuple(result.coefficient_state for result in cold)
+    warm_state = tuple(result.coefficient_state for result in warm)
+    repeat_absolute, repeat_relative = _repeat_error(cold_state, warm_state)
     return {
         "resolution": {
             "ns": ns,
@@ -350,12 +369,10 @@ def _profile_mirror(args: argparse.Namespace) -> dict[str, Any]:
         "converged": [bool(result.converged) for result in warm],
         "iterations": [int(result.iterations) for result in warm],
         "variational_max": [float(result.variational_max) for result in warm],
-        "state_sha256": _checksum(
-            tuple(result.coefficient_state for result in warm)
-        ),
-        "cold_state_sha256": _checksum(
-            tuple(result.coefficient_state for result in cold)
-        ),
+        "state_sha256": _checksum(warm_state),
+        "cold_state_sha256": _checksum(cold_state),
+        "repeat_max_absolute": repeat_absolute,
+        "repeat_max_relative": repeat_relative,
         "xla_memory": None,
         "xla_memory_reason": "host-driven nonlinear solve has no single compiled executable",
         "device_memory": _device_memory(),

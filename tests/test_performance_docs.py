@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
@@ -24,6 +26,7 @@ from benchmarks.profile_resources import (  # noqa: E402
     _mirror_ladder,
     _parser,
     _peak_rss_bytes,
+    _repeat_error,
 )
 
 
@@ -78,6 +81,9 @@ def test_resource_profiler_parses_platform_memory_and_mirror_ladders() -> None:
     )
     assert _mirror_ladder("5:7:4,9:17:9") == [(5, 7, 4), (9, 17, 9)]
     assert _parser().parse_args(["--device", "gpu", "--device-index", "1"]).device_index == 1
+    absolute, relative = _repeat_error([1.0, 2.0], [1.0, 2.0 + 1e-12])
+    assert absolute == pytest.approx(1e-12)
+    assert relative == pytest.approx(5e-13)
 
 
 def test_benchmark_artifacts_disclose_redacted_provenance() -> None:
