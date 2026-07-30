@@ -76,6 +76,8 @@ def _safe_extract(tf: tarfile.TarFile, dest: Path, members=None) -> None:
     for member in selected:
         if member.issym() or member.islnk():
             raise SystemExit(f"Refusing to extract archive link: {member.name}")
+        if not (member.isfile() or member.isdir()):
+            raise SystemExit(f"Refusing to extract special archive member: {member.name}")
         target = (dest_resolved / member.name).resolve()
         if target != dest_resolved and dest_resolved not in target.parents:
             raise SystemExit(f"Refusing to extract path outside destination: {member.name}")

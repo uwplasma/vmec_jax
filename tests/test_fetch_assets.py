@@ -132,6 +132,20 @@ def test_fetch_assets_safe_extract_rejects_links(tmp_path) -> None:
             module._safe_extract(tf, tmp_path)
 
 
+def test_fetch_assets_safe_extract_rejects_special_files(tmp_path) -> None:
+    module = _load_fetch_assets()
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as tf:
+        info = tarfile.TarInfo("fifo")
+        info.type = tarfile.FIFOTYPE
+        tf.addfile(info)
+    payload.seek(0)
+
+    with tarfile.open(fileobj=payload, mode="r:gz") as tf:
+        with pytest.raises(SystemExit, match="special archive member"):
+            module._safe_extract(tf, tmp_path)
+
+
 def test_no_tracked_file_exceeds_one_mib() -> None:
     if not (ROOT / ".git").exists():
         pytest.skip("tracked-file gate requires a git checkout")
