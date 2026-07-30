@@ -294,11 +294,15 @@ penalizes only violations of the condition above, while a negative target
 requests a finite margin.
 
 The result also reports the maximum-J fraction of resolved trapped samples,
-the fraction meeting ``target``, deep and shallow pitch subsets, and the
-fraction of radial-pitch blocks excluded by topology guards. Fractions are
-uniform over the supplied pitch samples by default. Pass ``pitch_weights``
-from a physical pitch quadrature when interpreting them as phase-space
-fractions.
+the fraction meeting ``target``, deep and shallow subsets split at normalized
+trapping depth
+:math:`(B_{\max}-1/\lambda)/(B_{\max}-B_{\min})=1/2`, and the fraction of
+radial-pitch blocks excluded by topology guards. Fractions are uniform over
+the supplied pitch samples by default; ``pitch_weights`` accepts user
+quadrature weights. These values are not the bounce-time-weighted Maxwellian
+phase-space fraction :math:`f_J` defined by Rodríguez and Plunk. That
+diagnostic additionally requires radial and pitch integration weighted by the
+normalized bounce time.
 
 VMEX carries the VMEC sign convention into this diagnostic:
 ``psi_edge = signgs*phiedge/(2*pi)`` and the ``APHI`` remap sets the half-mesh

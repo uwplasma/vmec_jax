@@ -52,7 +52,8 @@ def maximum_j_residual_from_boozer(
     ``abs(psi_edge) / J * dJ/dpsi``. The default enforces the maximum-J
     condition ``dJ/dpsi <= 0`` without changing its physical sign. Reported
     fractions use uniform pitch-sample weights unless ``pitch_weights``
-    supplies physical pitch-quadrature weights.
+    supplies user quadrature weights. They are resolved-orbit summaries, not
+    the bounce-time-weighted Maxwellian phase-space fraction.
     """
     bmnc_b = jnp.asarray(bmnc_b, dtype=jnp.float64)
     psi = jnp.atleast_1d(jnp.asarray(psi_b, dtype=bmnc_b.dtype))
@@ -148,10 +149,16 @@ def maximum_j_residual_from_boozer(
         numerator = jnp.sum(jnp.where(matched & group & select, sample_weight, 0.0))
         return jnp.where(denominator > 0.0, numerator / denominator, jnp.nan)
 
-    maximum_j = dJ_dpsi <= 0.0
-    pitch_rank = jnp.argsort(jnp.argsort(pitch))
-    shallow = pitch_rank <= (int(pitch.shape[0]) - 1) // 2
-    deep = pitch_rank >= int(pitch.shape[0]) // 2
+    maximum_j = dJ_dpsi < 0.0
+    bmin = jnp.min(out["bmag"], axis=-1)
+    bmax = jnp.max(out["bmag"], axis=-1)
+    trapping_depth = jnp.clip(
+        (bmax[..., None] - 1.0 / pitch[None, None, :])
+        / jnp.maximum(bmax[..., None] - bmin[..., None], eps),
+        0.0, 1.0)
+    pair_depth = 0.5 * (trapping_depth[:-1] + trapping_depth[1:])
+    shallow = pair_depth[..., None] < 0.5
+    deep = pair_depth[..., None] >= 0.5
     out.update({
         "residuals1d": residuals1d,
         "total": jnp.sum(residuals1d * residuals1d),
@@ -163,11 +170,10 @@ def maximum_j_residual_from_boozer(
         "valid_pitch_pair": valid_pitch,
         "maximum_j_fraction": fraction(maximum_j),
         "target_fraction": fraction(relative_slope <= float(target)),
-        "shallow_maximum_j_fraction": fraction(
-            maximum_j, shallow[None, None, :, None]),
-        "deep_maximum_j_fraction": fraction(
-            maximum_j, deep[None, None, :, None]),
+        "shallow_maximum_j_fraction": fraction(maximum_j, shallow),
+        "deep_maximum_j_fraction": fraction(maximum_j, deep),
         "excluded_pitch_fraction": 1.0 - jnp.mean(valid_pitch),
+        "trapping_depth": pair_depth,
         "psi_b": psi,
         "psi_edge": psi_edge,
     })
