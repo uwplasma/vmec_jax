@@ -130,6 +130,7 @@ def validate(nodes: list[str]) -> list[str]:
     random_patterns = (
         r"default_rng\(\s*\)",
         r"np\.random\.(?:rand|randn|random|random_sample|standard_normal)\(",
+        r"(?:return|default_rng\()[^\n]*\bhash\(",
     )
     for path in paths:
         text = (ROOT / path).read_text()
