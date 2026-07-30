@@ -113,9 +113,11 @@
     "pr-physics-mirror-output": ["tests/mirror/test_output.py"],
     "pr-device": [
       "tests/test_device.py::test_fixed_boundary_builds_runtime_in_device_context",
+      "tests/test_device.py::test_fixed_boundary_honors_second_device_without_outer_context",
       "tests/test_device.py::test_put_numeric_leaves_preserves_metadata_and_none_contract",
       "tests/test_device.py::test_put_numeric_leaves_host_stages_cross_accelerator_copy",
       "tests/test_device.py::test_put_numeric_leaves_does_not_inspect_tracer_devices",
+      "tests/test_device.py::test_wout_builder_uses_state_device_context",
       "tests/test_gpu_ci.py::test_device_scope_second_host_device_gradient_equality",
       "tests/test_gpu_ci.py::test_second_host_device_unconverged_adjoint_raises_typed_error"
     ],
