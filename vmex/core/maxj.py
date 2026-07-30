@@ -31,6 +31,7 @@ def maximum_j_residual_from_boozer(
     pitch,
     bmns_b=None,
     weights: Iterable[float] | None = None,
+    pitch_weights: Iterable[float] | None = None,
     target: float = 0.0,
     nalpha: int = 17,
     points_per_period: int = 128,
@@ -49,7 +50,9 @@ def maximum_j_residual_from_boozer(
 
     ``target`` is the upper bound on the dimensionless logarithmic slope
     ``abs(psi_edge) / J * dJ/dpsi``. The default enforces the maximum-J
-    condition ``dJ/dpsi <= 0`` without changing its physical sign.
+    condition ``dJ/dpsi <= 0`` without changing its physical sign. Reported
+    fractions use uniform pitch-sample weights unless ``pitch_weights``
+    supplies physical pitch-quadrature weights.
     """
     bmnc_b = jnp.asarray(bmnc_b, dtype=jnp.float64)
     psi = jnp.atleast_1d(jnp.asarray(psi_b, dtype=bmnc_b.dtype))
@@ -64,6 +67,11 @@ def maximum_j_residual_from_boozer(
               else _as_1d(weights))
     if int(weight.shape[0]) != nsurface:
         raise ValueError("weights must have the same length as surfaces")
+    pitch = jnp.atleast_1d(jnp.asarray(pitch, dtype=bmnc_b.dtype))
+    pitch_weight = (jnp.ones_like(pitch) if pitch_weights is None
+                    else _as_1d(pitch_weights))
+    if pitch_weight.shape != pitch.shape:
+        raise ValueError("pitch_weights must have the same length as pitch")
 
     alpha = jnp.arange(nalpha, dtype=bmnc_b.dtype) * (2.0 * jnp.pi / nalpha)
     out = bounce_action_from_boozer(
@@ -131,6 +139,19 @@ def maximum_j_residual_from_boozer(
     residual = jnp.where(matched, violation * scale, 0.0)
     residual = jnp.where(valid_pitch[:, None, :, None], residual, jnp.nan)
     residuals1d = jnp.ravel(residual)
+    sample_weight = pair_weight[:, None, None, None] * pitch_weight[
+        None, None, :, None]
+
+    def fraction(select, group=True):
+        group = jnp.asarray(group)
+        denominator = jnp.sum(jnp.where(matched & group, sample_weight, 0.0))
+        numerator = jnp.sum(jnp.where(matched & group & select, sample_weight, 0.0))
+        return jnp.where(denominator > 0.0, numerator / denominator, jnp.nan)
+
+    maximum_j = dJ_dpsi <= 0.0
+    pitch_rank = jnp.argsort(jnp.argsort(pitch))
+    shallow = pitch_rank <= (int(pitch.shape[0]) - 1) // 2
+    deep = pitch_rank >= int(pitch.shape[0]) // 2
     out.update({
         "residuals1d": residuals1d,
         "total": jnp.sum(residuals1d * residuals1d),
@@ -140,6 +161,13 @@ def maximum_j_residual_from_boozer(
         "matched_well_index": hi_index,
         "match_distance": jnp.where(matched, match_distance, jnp.nan),
         "valid_pitch_pair": valid_pitch,
+        "maximum_j_fraction": fraction(maximum_j),
+        "target_fraction": fraction(relative_slope <= float(target)),
+        "shallow_maximum_j_fraction": fraction(
+            maximum_j, shallow[None, None, :, None]),
+        "deep_maximum_j_fraction": fraction(
+            maximum_j, deep[None, None, :, None]),
+        "excluded_pitch_fraction": 1.0 - jnp.mean(valid_pitch),
         "psi_b": psi,
         "psi_edge": psi_edge,
     })
