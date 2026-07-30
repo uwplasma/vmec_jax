@@ -22,7 +22,12 @@ already uses several cores. This is automatic and needs no user action.
 :func:`vmex.core.implicit.implicit_state_pullback_multi_rhs` uses
 ``jax.vmap`` over the adjoint right-hand sides, so several state cotangents for
 the same fixed point share one implicit linearization and one set of GMRES
-operators. This is the batching behind the multi-RHS Jacobian assembly.
+operators. For vector forward responses,
+:func:`vmex.core.implicit.implicit_state_tangent_multi_rhs` assembles and
+factors the nearest-neighbor raw radial operator once, solves all right-hand
+sides, and reports each corrected residual. The same factorization supports
+the opt-in block-preconditioned transpose pullback; ordinary reverse AD keeps
+the established GCROT default.
 
 **Across independent solves (this module).**
 An ensemble of independent equilibria — a parameter scan, an ensemble
