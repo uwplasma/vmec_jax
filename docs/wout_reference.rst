@@ -54,6 +54,28 @@ Half mesh: ``iotas``, ``mass``, ``pres``, ``beta_vol``, ``buco``, ``bvco``,
 
 Convergence history: ``fsqt(:)``, ``wdot(:)``.
 
+VMEX extension
+--------------
+
+VMEX adds two names that VMEC2000 readers may ignore:
+
+- ``vmex_diagnostics_schema = 1`` identifies this extension.
+- ``vmex_trapped_fraction`` is the effective trapped-particle fraction
+  :math:`f_t` on the full normalized-toroidal-flux mesh.
+
+The profile is computed from the converged half-mesh :math:`|B|` and
+:math:`\sqrt{g}` fields with 64-point pitch quadrature. At the axis, VMEX
+keeps the poloidal :math:`m=0` field and extrapolates it linearly in
+:math:`s`; finite-radius poloidal modes vanish there by regularity. This
+recovers zero trapped fraction for a constant on-axis field without forcing
+the result to zero, so a QI :math:`B_0(\varphi)` with finite mirror ratio
+remains finite. Linear extrapolation supplies the boundary value. Symmetric
+and LASYM equilibria use their respective full-surface angular grids.
+
+Reading an older WOUT sets ``vmex_diagnostics_schema`` to zero and
+``vmex_trapped_fraction`` to ``None``. Rewriting that object does not add the
+extension.
+
 Fourier tables (mode x radius)
 ------------------------------
 

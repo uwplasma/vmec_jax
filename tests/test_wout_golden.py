@@ -256,11 +256,14 @@ def case(request, tmp_path_factory):
 def test_completeness_and_structure(case):
     """New wout covers every golden variable with identical dims/dtypes."""
     out, golden = case
+    old = read_wout(golden)
+    assert old.vmex_diagnostics_schema == 0
+    assert old.vmex_trapped_fraction is None
     with netCDF4.Dataset(golden) as gd, netCDF4.Dataset(out) as nd:
         gvars, nvars = set(gd.variables), set(nd.variables)
         missing = gvars - nvars
         assert not missing, f"variables missing from new wout: {sorted(missing)}"
-        extra = nvars - gvars
+        extra = {name for name in nvars - gvars if not name.startswith("vmex_")}
         assert not extra, f"nonstandard extra variables written: {sorted(extra)}"
 
         lasym = bool(int(_get(gd, "lasym__logical__")))
