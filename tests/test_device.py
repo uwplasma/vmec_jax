@@ -267,6 +267,36 @@ def test_put_numeric_leaves_moves_registered_partial_captures():
     np.testing.assert_allclose(moved(jax.numpy.asarray([3.0])), 6.0)
 
 
+def test_put_numeric_leaves_host_stages_cross_accelerator_copy(monkeypatch):
+    class Device:
+        platform = "gpu"
+
+    class Array:
+        def devices(self):
+            return {Device()}
+
+        def __array__(self, dtype=None):
+            return np.asarray([1.0, 2.0], dtype=dtype)
+
+    target = Device()
+    monkeypatch.setattr(dev.jax, "Array", Array)
+    monkeypatch.setattr(
+        dev.jax, "device_put", lambda value, device: (np.asarray(value), device)
+    )
+    moved, placed = dev._put_numeric_leaves(Array(), target)
+    np.testing.assert_array_equal(moved, [1.0, 2.0])
+    assert placed is target
+
+
+def test_put_numeric_leaves_does_not_inspect_tracer_devices(monkeypatch):
+    target = SimpleNamespace(platform="gpu")
+    monkeypatch.setattr(dev.jax, "device_put", lambda value, _: value)
+    gradient = jax.grad(
+        lambda x: jax.numpy.sum(dev._put_numeric_leaves(x, target))
+    )(jax.numpy.ones(2))
+    np.testing.assert_array_equal(gradient, np.ones(2))
+
+
 def test_free_boundary_uses_shared_device_context(monkeypatch):
     resolution = _res(ns=11, mpol=6, ntor=0)
     seen = {}
