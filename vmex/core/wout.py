@@ -33,6 +33,7 @@ remaining VMEC2000 output quantities (``eqfor.f``/``spectrum.f``/
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, fields as _dc_fields
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -541,6 +542,22 @@ def _ftolv_from_input(inp) -> float:
     return float(ftol_arr[min(idx, ftol_arr.size - 1)])
 
 
+def _on_state_device(fun):
+    """Run postprocessing where the committed equilibrium state lives."""
+    @functools.wraps(fun)
+    def wrapped(*args, **kwargs):
+        target = getattr(kwargs["state"].R_cos, "device", None)
+        target = target() if callable(target) else target
+        if target is None:
+            return fun(*args, **kwargs)
+        import jax
+
+        with jax.default_device(target):
+            return fun(*args, **kwargs)
+    return wrapped
+
+
+@_on_state_device
 def wout_from_state(
     *,
     inp,

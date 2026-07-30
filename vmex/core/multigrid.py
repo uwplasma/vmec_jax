@@ -462,9 +462,10 @@ def solve_multigrid(
             _PREFETCH_ATTEMPTED.clear()
             gc.collect()
 
-    if int(carry.ier) == MORE_ITER_FLAG and not raise_on_max_iterations:
-        return _result_from_carry(carry, rt)
-    return _finalize(carry, rt)
+    with device_context(device, resolution):
+        if int(carry.ier) == MORE_ITER_FLAG and not raise_on_max_iterations:
+            return _result_from_carry(carry, rt)
+        return _finalize(carry, rt)
 
 
 def solve_free_boundary_multigrid(

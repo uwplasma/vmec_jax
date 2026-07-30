@@ -402,6 +402,17 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
         for platform, result in results.items()
     }
     for name in (
+        "rmnc", "zmns", "rmns", "zmnc", "lmns", "lmnc",
+        "bmnc", "bmns", "iotaf",
+    ):
+        np.testing.assert_allclose(
+            getattr(wouts["gpu"], name),
+            getattr(wouts["cpu"], name),
+            rtol=5e-4,
+            atol=1e-9,
+            err_msg=name,
+        )
+    for name in (
         "potsin",
         "potcos",
         "bsubumnc_sur",

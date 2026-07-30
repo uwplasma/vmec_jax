@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from vmex.core import device as dev
-from vmex.core import freeboundary, multigrid, solver
+from vmex.core import freeboundary, multigrid, solver, wout as wout_module
 from vmex.core.fourier import Resolution
 from vmex.core.input import VmecInput
 
@@ -156,8 +156,12 @@ def test_fixed_boundary_honors_second_gpu_without_outer_context():
         devices = []
     if len(devices) < 2:
         pytest.skip("two GPUs unavailable")
+    inp = VmecInput.from_file(DATA / "input.li383_low_res")
+    reference = multigrid.solve_multigrid(
+        inp, device="cpu", verbose=False, prefetch_compile=False,
+    )
     result = multigrid.solve_multigrid(
-        VmecInput.from_file(DATA / "input.li383_low_res"),
+        inp,
         device=devices[1],
         verbose=False,
         prefetch_compile=False,
@@ -168,6 +172,18 @@ def test_fixed_boundary_honors_second_gpu_without_outer_context():
         for leaf in jax.tree.leaves(result.state)
         if hasattr(leaf, "device")
     } == {devices[1]}
+    for name in ("rmnc", "zmns", "iotaf", "fsq_history"):
+        np.testing.assert_allclose(
+            getattr(result, name), getattr(reference, name),
+            rtol=5e-9, atol=1e-12,
+        )
+
+    single = solver.solve(inp, device=devices[1], verbose=False)
+    for name in ("rmnc", "zmns", "iotaf", "fsq_history"):
+        np.testing.assert_allclose(
+            getattr(single, name), getattr(reference, name),
+            rtol=5e-9, atol=1e-12,
+        )
 
 
 def test_fixed_boundary_builds_runtime_in_device_context(monkeypatch):
@@ -243,6 +259,27 @@ def test_device_context_wraps_default_device_for_explicit_cpu():
     assert not isinstance(ctx, contextlib.nullcontext)
     with ctx:
         pass
+
+
+def test_wout_builder_uses_state_device_context(monkeypatch):
+    active = False
+    target = SimpleNamespace(platform="gpu")
+    state = SimpleNamespace(R_cos=SimpleNamespace(device=target))
+
+    @contextlib.contextmanager
+    def context(device):
+        nonlocal active
+        assert device is target
+        active = True
+        yield
+        active = False
+
+    def build(**_):
+        assert active
+        return "wout"
+
+    monkeypatch.setattr(jax, "default_device", context)
+    assert wout_module._on_state_device(build)(state=state) == "wout"
 
 
 def test_put_numeric_leaves_preserves_metadata_and_none_contract():
