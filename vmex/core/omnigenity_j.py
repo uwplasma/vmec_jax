@@ -290,7 +290,7 @@ def j_invariant_qi_maxj_residual_from_boozer(
     maxj_weight: float = 1.0,
     include_qi: bool = True,
     include_maxj: bool = True,
-    maxj_pairing: str = "soft_local",
+    maxj_pairing: str = "same_alpha",
     maxj_sigma_alpha: float | None = None,
 ) -> dict[str, Array]:
     """Shared-J QI/max-J residual blocks from precomputed Boozer spectra."""
@@ -464,7 +464,7 @@ def j_invariant_qi_maxj_residual(
     maxj_weight: float = 1.0,
     include_qi: bool = True,
     include_maxj: bool = True,
-    maxj_pairing: str = "soft_local",
+    maxj_pairing: str = "same_alpha",
     maxj_sigma_alpha: float | None = None,
 ) -> dict[str, Array]:
     """Shared-J QI/max-J residual blocks from one traceable Boozer evaluation."""
@@ -526,7 +526,7 @@ class JInvariantQIAndMaxJResidual:
         maxj_weight: float = 1.0,
         include_qi: bool = True,
         include_maxj: bool = True,
-        maxj_pairing: str = "soft_local",
+        maxj_pairing: str = "same_alpha",
         maxj_sigma_alpha: float | None = None,
     ):
         self.surfaces = np.atleast_1d(np.asarray(surfaces, dtype=float))
