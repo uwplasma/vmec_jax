@@ -347,7 +347,9 @@ def j_invariant_qi_maxj_residual_from_boozer(
         sum_ji_sq = jnp.sum(ji_pow * ji_pow, axis=1)
         sum_jc_sq = jnp.sum(jc_pow * jc_pow, axis=1)
         qi_pair_sum = nalpha_f * (sum_ji_sq + sum_jc_sq) - 2.0 * sum_ji * sum_jc
-        qi_num = jnp.sum(qi_pair_sum, axis=1)
+        # Normalize the surface residual by the number of bounce samples so
+        # refining ``n_bounce`` does not inflate the per-surface QI cost.
+        qi_num = jnp.mean(qi_pair_sum, axis=1)
         mean_denom = ((jnp.sum(sum_ji + sum_jc, axis=1) / (2.0 * float(n_bounce))) ** 2) + 1.0e-10
         qi_surface = jnp.sqrt(jnp.maximum(qi_num, 0.0) / mean_denom)
         qi_block = float(qi_weight) * jnp.sqrt(w_arr) * qi_surface
@@ -389,7 +391,9 @@ def j_invariant_qi_maxj_residual_from_boozer(
 
             slope = jax.vmap(_surface_pair_slope, in_axes=(0, 0, 0))(jc_hi, jc_lo, ds)
             violation = jnp.maximum(0.0, slope - float(target_maxj))
-            maxj_surface = jnp.sqrt(jnp.sum(violation**2, axis=(1, 2)))
+            # Normalize by the sampled (alpha, bounce) grid so refining the
+            # max-J discretization does not inflate the per-surface-pair cost.
+            maxj_surface = jnp.sqrt(jnp.mean(violation**2, axis=(1, 2)))
             maxj_block = float(maxj_weight) * jnp.sqrt(0.5 * (w_arr[:-1] + w_arr[1:])) * maxj_surface
         residual_blocks.append(maxj_block)
         diagnostics["maxj_surface"] = maxj_surface

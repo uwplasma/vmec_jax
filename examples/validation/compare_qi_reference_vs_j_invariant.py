@@ -196,6 +196,8 @@ def _print_mismatch_tables(
     jc_smooth: np.ndarray,
     *,
     top_k: int = 20,
+    focus_lambda_min: float | None = None,
+    focus_lambda_max: float | None = None,
 ):
     rows = []
     for j in range(len(bj_norm)):
@@ -241,6 +243,55 @@ def _print_mismatch_tables(
             f"{err_cross[j].max():13.3e}   {err_ji[j].mean():8.3e}   {err_jc[j].mean():8.3e}"
         )
 
+    if focus_lambda_min is not None or focus_lambda_max is not None:
+        lam_min = float(-np.inf if focus_lambda_min is None else focus_lambda_min)
+        lam_max = float(np.inf if focus_lambda_max is None else focus_lambda_max)
+        focused = [row for row in rows if lam_min <= row[1] <= lam_max]
+        print("\n[compare-qi] Focused lambda-window mismatch table")
+        print(
+            f"[compare-qi] window = [{lam_min if np.isfinite(lam_min) else '-inf'}, "
+            f"{lam_max if np.isfinite(lam_max) else 'inf'}]"
+        )
+        print("[compare-qi] bj_idx  bj_norm  alpha  |dp1|      |dp2|      |dJI|      |dJC|")
+        focused = sorted(focused, key=lambda x: (x[6], x[5], x[3] + x[4]), reverse=True)
+        for row in focused[:top_k]:
+            print(
+                f"[compare-qi] {row[0]:5d}  {row[1]:7.4f}  {row[2]:5d}  "
+                f"{row[3]:9.3e}  {row[4]:9.3e}  {row[5]:9.3e}  {row[6]:9.3e}"
+            )
+
+
+def _plot_j_vs_lambda(
+    out_dir: Path,
+    alpha_indices: list[int],
+    bj_norm: np.ndarray,
+    ji_ref: np.ndarray,
+    jc_ref: np.ndarray,
+    ji_smooth: np.ndarray,
+    jc_smooth: np.ndarray,
+):
+    for ialpha in alpha_indices:
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
+        axes[0].plot(bj_norm, ji_ref[:, ialpha], label="JI reference", lw=2.0)
+        axes[0].plot(bj_norm, ji_smooth[:, ialpha], label="JI smooth", lw=2.0, ls="--")
+        axes[0].set_title(f"JI vs lambda, alpha_index={ialpha}")
+        axes[0].set_xlabel("lambda")
+        axes[0].set_ylabel("JI")
+        axes[0].grid(True, alpha=0.2)
+        axes[0].legend()
+
+        axes[1].plot(bj_norm, jc_ref[:, ialpha], label="JC reference", lw=2.0)
+        axes[1].plot(bj_norm, jc_smooth[:, ialpha], label="JC smooth", lw=2.0, ls="--")
+        axes[1].set_title(f"JC vs lambda, alpha_index={ialpha}")
+        axes[1].set_xlabel("lambda")
+        axes[1].set_ylabel("JC")
+        axes[1].grid(True, alpha=0.2)
+        axes[1].legend()
+
+        fig.tight_layout()
+        fig.savefig(out_dir / f"j_vs_lambda_alpha_{ialpha:03d}.png", dpi=180)
+        plt.close(fig)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
@@ -257,6 +308,8 @@ def main():
     parser.add_argument("--p-lambda", type=float, default=1.0)
     parser.add_argument("--alpha-indices", type=str, default="")
     parser.add_argument("--bounce-indices", type=str, default="")
+    parser.add_argument("--focus-lambda-min", type=float, default=None)
+    parser.add_argument("--focus-lambda-max", type=float, default=None)
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -391,6 +444,8 @@ def main():
         "jc_rms_diff": float(np.sqrt(np.mean((jc_ref - jc_smooth) ** 2))),
         "alpha_indices": alpha_indices,
         "bounce_indices": bounce_indices,
+        "focus_lambda_min": args.focus_lambda_min,
+        "focus_lambda_max": args.focus_lambda_max,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     np.savez(
@@ -421,6 +476,17 @@ def main():
         jc_ref,
         ji_smooth,
         jc_smooth,
+        focus_lambda_min=args.focus_lambda_min,
+        focus_lambda_max=args.focus_lambda_max,
+    )
+    _plot_j_vs_lambda(
+        out_dir,
+        alpha_indices,
+        bj_norm,
+        ji_ref,
+        jc_ref,
+        ji_smooth,
+        jc_smooth,
     )
 
     print(f"[compare-qi] wrote {out_dir / 'summary.json'}")
@@ -429,6 +495,7 @@ def main():
     print(f"[compare-qi] rel_diff             = {summary['qi_surface_rel_diff']:.6e}")
     for ialpha in alpha_indices:
         print(f"[compare-qi] wrote {out_dir / f'well_compare_alpha_{ialpha:03d}.png'}")
+        print(f"[compare-qi] wrote {out_dir / f'j_vs_lambda_alpha_{ialpha:03d}.png'}")
 
 
 if __name__ == "__main__":
