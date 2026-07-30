@@ -223,6 +223,7 @@ def test_unbounded_exterior_free_boundary_beta_scan_converges(_module_jit_enable
 
 
 @pytest.mark.full
+@pytest.mark.weekly
 def test_unbounded_exterior_beta_observables_converge_with_resolution(_module_jit_enabled) -> None:
     observables = []
     compatibility = []

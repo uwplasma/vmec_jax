@@ -25,6 +25,15 @@ def test_manifest_routes_the_previously_nightly_only_mirror_module() -> None:
     assert "tests/mirror/test_qi_hybrid.py" in selected
 
 
+def test_manifest_routes_short_pr_and_weekly_selectors() -> None:
+    assert "tests/mirror" in test_manifest.select("pr-physics-mirror")
+    weekly = test_manifest.select("weekly-mirror")
+    assert weekly == [
+        "tests/mirror/test_free_boundary.py::"
+        "test_unbounded_exterior_beta_observables_converge_with_resolution"
+    ]
+
+
 def test_manifest_report_lists_timings_and_every_skip(tmp_path: Path) -> None:
     report = tmp_path / "report.json"
     env = os.environ.copy()
@@ -61,7 +70,12 @@ def test_manifest_report_lists_timings_and_every_skip(tmp_path: Path) -> None:
 
 
 def test_workflow_selects_manifest_lanes() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
-    assert "tools/test_manifest.py select" in workflow
+    workflows = {
+        path.name: path.read_text()
+        for path in (ROOT / ".github" / "workflows").glob("*.yml")
+    }
+    for name in ("ci.yml", "gpu.yml", "nightly.yml", "weekly.yml"):
+        assert "tools/test_manifest.py select" in workflows[name]
+    assert "name: PR gate" in workflows["ci.yml"]
     for stale in ("A1_FILES=", "C2_FILES=", "core-a-c)"):
-        assert stale not in workflow
+        assert stale not in "".join(workflows.values())

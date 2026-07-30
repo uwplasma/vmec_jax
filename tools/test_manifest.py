@@ -107,6 +107,21 @@ def validate(nodes: list[str]) -> list[str]:
             )
 
     node_set = set(nodes)
+    for lane, selectors in data.get("selectors", {}).items():
+        if not lane.startswith(("pr-", "weekly-")):
+            errors.append(f"selector lane must be pr-* or weekly-*: {lane}")
+        for selector in selectors:
+            if "::" in selector:
+                collected = selector in node_set
+            else:
+                prefix = selector.rstrip("/")
+                collected = any(
+                    node.startswith(f"{prefix}::") or node.startswith(f"{prefix}/")
+                    for node in nodes
+                )
+            if not collected:
+                errors.append(f"{lane}: selector does not collect: {selector}")
+
     full_members: list[str] = []
     by_file: dict[str, list[str]] = {}
     for node in nodes:
@@ -143,6 +158,7 @@ def select(lane: str) -> list[str]:
     """Return module or node selectors owned by a CI lane."""
     data, records = load()
     selected = [record["path"] for record in records if lane in record["lanes"]]
+    selected.extend(data.get("selectors", {}).get(lane, ()))
     selected.extend(data["campaigns"].get(lane, ()))
     if not selected:
         raise ValueError(f"unknown or empty manifest lane: {lane}")

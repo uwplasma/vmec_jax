@@ -14,6 +14,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from vmex.core import implicit as im
 from vmex.core.input import VmecInput
@@ -39,6 +40,7 @@ def test_solve_implicit_with_aux_matches_solve_implicit():
     assert jax.tree.structure(mask) == jax.tree.structure(state_ref)
 
 
+@pytest.mark.full
 def test_multi_rhs_pullback_matches_scalar_vjp():
     """Batched pullback == stacking the scalar solve_implicit VJP per cotangent."""
     _, cfg, p0 = _solovev_setup()

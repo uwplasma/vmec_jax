@@ -52,6 +52,7 @@ def _mf(base, extcur):
                       zmax=base.zmax, nfp=base.nfp)
 
 
+@pytest.mark.full
 def test_surface_field_from_state_matches_wout(cth):
     """The traceable state->surface bridge reproduces the wout path bit-for-bit."""
     inp, res, _ = cth
@@ -85,6 +86,7 @@ def _setup(cth):
     return inp, base, p0, obj
 
 
+@pytest.mark.full
 def test_joint_gradient_is_finite(cth):
     """value_and_grad wrt BOTH boundary params and coil currents is finite.
 

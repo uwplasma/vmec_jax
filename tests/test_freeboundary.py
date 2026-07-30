@@ -119,6 +119,7 @@ def test_nestor_skip_branch_matches_full_solve(ab_inputs):
     np.testing.assert_allclose(np.asarray(rhs_skip), np.asarray(rhs), rtol=1e-12, atol=1e-14)
 
 
+@pytest.mark.full
 def test_live_nestor_blocks_match_coupled_residual_jvp_and_vjp():
     """The bordered blocks come from a live, small LASYM NESTOR equation."""
     basis = V.vacuum_basis(
