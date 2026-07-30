@@ -73,6 +73,10 @@ def test_boozer_spectrum_matches_booz_xform(qi_eq):
     assert float(trace["iota_b"][0]) == pytest.approx(float(host["iota_b"][0]), rel=1e-8)
     assert float(trace["s_b"][0]) == pytest.approx(float(host["s_b"][0]), abs=1e-12)
     row = int(np.argmin(abs(np.asarray(qi_eq.runtime.setup.s_full) - trace["s_b"][0])))
+    assert float(trace["psi_b"][0]) == pytest.approx(
+        float(qi_eq.runtime.setup.psi_half[row]))
+    assert float(trace["psi_edge"]) == pytest.approx(
+        float(qi_eq.runtime.setup.psi_edge))
     assert float(trace["G_b"][0]) == pytest.approx(float(qi_eq.wout.bvco[row]), rel=1e-8)
     assert float(trace["I_b"][0]) == pytest.approx(float(qi_eq.wout.buco[row]), rel=1e-8)
     lookup = {(int(m), int(n)): float(v) for m, n, v in
