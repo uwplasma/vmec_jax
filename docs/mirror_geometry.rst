@@ -6,8 +6,9 @@ models. Open mirrors use coordinates ``(s, theta, xi)`` with a nonperiodic
 axial coordinate and fixed-flux end cuts; they are not reinterpreted as thin
 periodic tori. Closed stellarator-mirror hybrids use a periodic longitudinal
 B-spline around two exactly straight mirror legs and two curved stellarator
-returns. Axisymmetric and rotating-ellipse fixed-boundary open lanes are
-supported, as is axisymmetric free boundary through 10% requested beta. The
+returns. The axisymmetric fixed-boundary open lane is supported; the
+rotating-ellipse lane is a release candidate. Axisymmetric free boundary is
+supported through 10% requested beta. The
 periodic hybrid has a complete fixed-boundary solve and example. Its
 circular-section lane is supported: with the leg-return junction frozen as a
 design parameter, its independent strong-force residual converges monotonically
@@ -177,7 +178,7 @@ values match the recorded evidence bit-for-bit):
      - 0.00231
      - 0.00683
      - 0.00343
-   * - Rotating ellipse ``(7,6,17,6)``, the supported lane
+   * - Rotating ellipse ``(7,6,17,6)``, the release-candidate lane
      - 0.0267
      - 0.00160
      - 0.00073
@@ -275,8 +276,8 @@ Current capability and limits
 
 The package currently includes:
 
-* supported axisymmetric and nonaxisymmetric fixed-boundary finite-current
-  solves,
+* a supported axisymmetric and a release-candidate nonaxisymmetric
+  fixed-boundary finite-current solve,
 * an isotropic VMEC-style conserved-mass pressure energy with independent
   weak and pointwise force diagnostics,
 * a free-space boundary-integral vacuum model with an ``xyz -> B`` field
@@ -294,17 +295,13 @@ With the compact-coil configuration (0.5 m loops, vacuum ``B(0) = 0.0836 T``,
 mirror ratio 4.58), a requested 50% beta continuation grows the central radius
 by 7.5% and lowers the on-axis field by 22.3% from vacuum, exercising the
 finite-beta coupling end to end. The axisymmetric free-boundary path is
-**supported through 50% requested beta**: a size-scaled Krylov span in the
-Newton-GMRES polish (``restart = max(24, min(problem.size, ...))``) clears the
-fine-grid restart starvation that previously stalled the polish short of
-``ftol``, and a fine grid (``ns=13, nxi=25, elements=13, exterior_ntheta=24``)
-converges *every* beta point from 0 through 50% (≤ 44 Newton-GMRES iterations,
-variational residual ≤ 8.5e-15) with bulk minor-radius force rising from
-``1.21e-4`` (beta 0) to ``2.41e-3`` (beta 50%) — far under the ``0.05`` gate
-(see the ``fine_grid_promotion.fine_grid_50`` block in
-``benchmarks/mirror_free_boundary_axisymmetric.json``). The nonaxisymmetric
-free-boundary path is deferred because its point observables were not monotone
-under spatial refinement.
+**supported through 10% requested beta**. The 25% and 50% points are retained
+as extended validation: they converge variationally, but the independent
+strong-force promotion gate in
+``benchmarks/mirror_free_boundary_axisymmetric.json`` fails. The
+nonaxisymmetric free-boundary path is deferred because its point observables
+were not monotone under spatial refinement. See :doc:`capabilities` for the
+normative status.
 
 Periodic stellarator-mirror hybrid
 ----------------------------------
@@ -750,7 +747,7 @@ ellipse has variational residual ``2.11e-16``, independent weak residual
 ``2.08e-16``, all-volume strong force ``2.67e-2`` device-normalized
 (``1.60e-3`` under the primary minor-radius normalization), and normalized
 divergence ``6.68e-15`` at LCFS radius ``0.12 m``. This is the current
-supported nonaxisymmetric fixed-boundary case.
+release-candidate nonaxisymmetric fixed-boundary case.
 
 ``initialize_from_cartesian_field`` now keeps a supplied spline geometry fixed,
 infers :math:`\Psi'(s)` from the surface-averaged axial flux, and obtains the
@@ -771,7 +768,7 @@ satisfy the discrete equilibrium to machine precision, is held fixed at the two
 end cuts. Refining once to ``(9,8,21,8)`` halves the bulk force to ``1.40e-3``
 (ratio ``1.85``) and lowers the all-volume and end-collar norms to ``8.83e-3``
 and ``1.69e-2``, so every zone converges under refinement; it therefore ships
-as a validated paraxial benchmark, distinct from the supported rotating
+as a validated paraxial benchmark, distinct from the release-candidate rotating
 ellipse, whose section is an exact discrete flux surface.
 
 The parser-free root example runs both fixtures through five coefficient-space
@@ -787,7 +784,7 @@ axisymmetric mirror, and gates the SFLM benchmark on its clean bulk force
 expected cut collar. Its figures expose variational and reconstructed-force
 histories and show actual solved nested surfaces and cap-to-cap field lines,
 not the analytic target alone.
-The paired 3-D figure below shows the two solved supported lanes side by
+The paired 3-D figure below shows the two solved lanes side by
 side, coloured by the local LCFS ``|B|``: the circular-section axisymmetric
 mirror (mirror ratio 1.5) and the 90-degree rotating ellipse.
 
@@ -809,7 +806,7 @@ checks it against two fully reconverged equilibria.
 For the corrected-cut rotating ellipse, the volume adjoint agrees with two
 fully reconverged centered-difference solves to ``5.91e-10`` relative and its
 transpose linear residual is ``2.30e-10``. An SFLM adjoint is not reported
-because it is a paraxial-accuracy benchmark rather than a supported
+because it is a paraxial-accuracy benchmark rather than a release-candidate
 equilibrium: its analytic cut profile is fixed input data, not a solved exact
 discrete flux surface, so a shape derivative through it is not a meaningful
 optimization sensitivity.
@@ -1060,10 +1057,9 @@ gives center radius ``0.272554 m``, axis field ``0.063578 T``, volume beta
 ``0.216984``, and device-normalized all-volume/core force
 ``6.69e-2``/``1.50e-2``, with
 medium-to-fine changes of ``0.137%`` in radius and ``1.02%`` in center field.
-Those device-length force figures are a legacy diagnostic on this coarser grid;
-under the operational minor-radius normalization the ``(13,25,13,24)`` fine-grid
-promotion run reaches bulk force ``2.41e-3`` at 50% (gate-passing), so the lane
-is supported through 50% (see the free-boundary β section above).
+Those device-length force figures are a legacy diagnostic on this coarser grid.
+They keep the 25% and 50% rows in extended validation rather than the supported
+lane; see :doc:`capabilities`.
 
 The coefficient solver uses a dense ``jacfwd`` only through 32 unknowns; larger
 systems expose exact repeated JVP/VJP actions through a SciPy ``LinearOperator``
@@ -1080,7 +1076,7 @@ observables changed by 73--81% between the first two grids and runtime grew from
 regularity map, so the unsupported theta-dependent exterior has been removed
 rather than presented as an equilibrium model; compact negative evidence remains
 in ``benchmarks/mirror_free_boundary_nonaxisymmetric.json``. The fixed-boundary
-rotating ellipse remains the supported nonaxisymmetric case. The axisymmetric
+rotating ellipse remains the release-candidate nonaxisymmetric case. The axisymmetric
 ``solve_beta_scan`` is the coefficient-native hot-start driver.
 
 Cheaper boundary-limit approximations were tested and rejected: offset

@@ -389,6 +389,7 @@ jobs:
                     tests/test_multigrid_interp.py \
                     tests/test_nonfinite_failfast.py"
           C2_FILES="tests/test_omnigenity.py \
+                    tests/test_capability_docs.py \
                     tests/test_optimization_convergence.py \
                     tests/test_optimize_penalty.py \
                     tests/test_recycle_drift.py \
