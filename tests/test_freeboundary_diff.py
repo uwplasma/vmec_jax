@@ -16,19 +16,23 @@ import numpy as np
 import pytest
 
 jax = pytest.importorskip("jax")
-pytest.importorskip("virtual_casing_jax")
 import jax.numpy as jnp  # noqa: E402
 
 jax.config.update("jax_enable_x64", True)
-
-from virtual_casing_jax import VmecSurfaceFieldData  # noqa: E402
 
 from vmex.core import freeboundary_diff as FBD  # noqa: E402
 from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
 from vmex.core.wout import read_wout  # noqa: E402
 
 # jit-enable the whole module: virtual casing is far too slow interpreted.
-pytestmark = pytest.mark.usefixtures("_module_jit_enabled")
+pytestmark = [
+    pytest.mark.usefixtures("_module_jit_enabled"),
+    pytest.mark.skipif(
+        not FBD.have_virtual_casing_jax(),
+        reason="requires virtual_casing_jax",
+    ),
+]
+VmecSurfaceFieldData = FBD.VmecSurfaceFieldData
 
 REPO = Path(__file__).resolve().parents[1]
 WOUT = REPO / "examples" / "data" / "single_grid" / "wout_cth_like_free_bdy.nc"

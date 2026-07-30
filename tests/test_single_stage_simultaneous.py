@@ -15,8 +15,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytest.importorskip("virtual_casing_jax")
-
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 
@@ -31,6 +29,10 @@ INPUT = DATA / "input.cth_like_free_bdy"
 MGRID = DATA / "mgrid_cth_like.nc"
 NP = NT = 16
 SOLVE = dict(ftol=1e-10, max_iterations=1500)
+pytestmark = pytest.mark.skipif(
+    not FBD.have_virtual_casing_jax(),
+    reason="requires virtual_casing_jax",
+)
 
 
 @pytest.fixture(scope="module")
