@@ -413,7 +413,10 @@ def j_invariant_qi_maxj_residual_from_boozer(
 
             slope = jax.vmap(_surface_pair_slope, in_axes=(0, 0, 0))(jc_hi, jc_lo, ds)
             violation = jnp.maximum(0.0, slope - float(target_maxj))
-            maxj_surface = jnp.sqrt(jnp.sum(violation**2, axis=(1, 2)))
+            # Once the local positive-part penalties are formed, aggregate
+            # them with a mean-square reduction so the final surface-pair cost
+            # is not inflated by the sampled (alpha, bounce) resolution.
+            maxj_surface = jnp.sqrt(jnp.mean(violation**2, axis=(1, 2)))
             maxj_block = float(maxj_weight) * jnp.sqrt(0.5 * (w_arr[:-1] + w_arr[1:])) * maxj_surface
             maxj_pair_weights = alpha_weights
         residual_blocks.append(maxj_block)
