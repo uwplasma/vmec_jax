@@ -32,8 +32,6 @@ def test_manifest_report_lists_timings_and_every_skip(tmp_path: Path) -> None:
             "-m",
             "pytest",
             "-q",
-            "-n",
-            "2",
             "tests/test_capability_docs.py",
             "tests/test_lasym_free_convergence.py",
             f"--vmex-report={report}",
