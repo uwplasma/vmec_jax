@@ -72,6 +72,9 @@ def test_boozer_spectrum_matches_booz_xform(qi_eq):
     host = opt.boozer_modes_from_wout(qi_eq, surfaces=[0.53], mboz=10, nboz=10)
     assert float(trace["iota_b"][0]) == pytest.approx(float(host["iota_b"][0]), rel=1e-8)
     assert float(trace["s_b"][0]) == pytest.approx(float(host["s_b"][0]), abs=1e-12)
+    row = int(np.argmin(abs(np.asarray(qi_eq.runtime.setup.s_full) - trace["s_b"][0])))
+    assert float(trace["G_b"][0]) == pytest.approx(float(qi_eq.wout.bvco[row]), rel=1e-8)
+    assert float(trace["I_b"][0]) == pytest.approx(float(qi_eq.wout.buco[row]), rel=1e-8)
     lookup = {(int(m), int(n)): float(v) for m, n, v in
               zip(host["xm_b"], host["xn_b"], np.asarray(host["bmnc_b"])[0])}
     bt = np.asarray(trace["bmnc_b"])[0]
