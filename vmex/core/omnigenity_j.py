@@ -290,7 +290,7 @@ def j_invariant_qi_maxj_residual_from_boozer(
     maxj_weight: float = 1.0,
     include_qi: bool = True,
     include_maxj: bool = True,
-    maxj_pairing: str = "same_alpha",
+    maxj_pairing: str = "soft_local",
     maxj_sigma_alpha: float | None = None,
 ) -> dict[str, Array]:
     """Shared-J QI/max-J residual blocks from precomputed Boozer spectra."""
@@ -406,13 +406,27 @@ def j_invariant_qi_maxj_residual_from_boozer(
                 )
 
             def _surface_pair_slope(hi_surface, lo_surface, ds_surface):
+                if str(maxj_pairing) == "soft_local":
+                    hi_pairs = hi_surface[:, :, None]
+                    lo_pairs = jnp.swapaxes(lo_surface, 0, 1)[None, :, :]
+                    pair_slope = (hi_pairs - lo_pairs) / (
+                        ds_surface * (0.5 * (hi_pairs + lo_pairs) + 1.0e-10)
+                    )
+                    pair_violation = jnp.maximum(0.0, pair_slope - float(target_maxj))
+                    weighted_violation_sq = jnp.einsum(
+                        "abl,al->ab", pair_violation * pair_violation, alpha_weights
+                    )
+                    slope_local = jnp.einsum("abl,al->ab", pair_slope, alpha_weights)
+                    return slope_local, jnp.sqrt(weighted_violation_sq)
+
                 lo_matched = alpha_weights @ lo_surface
-                return (hi_surface - lo_matched) / (
+                slope_local = (hi_surface - lo_matched) / (
                     ds_surface * (0.5 * (hi_surface + lo_matched) + 1.0e-10)
                 )
+                violation_local = jnp.maximum(0.0, slope_local - float(target_maxj))
+                return slope_local, violation_local
 
-            slope = jax.vmap(_surface_pair_slope, in_axes=(0, 0, 0))(jc_hi, jc_lo, ds)
-            violation = jnp.maximum(0.0, slope - float(target_maxj))
+            slope, violation = jax.vmap(_surface_pair_slope, in_axes=(0, 0, 0))(jc_hi, jc_lo, ds)
             # Once the local positive-part penalties are formed, aggregate
             # them with a mean-square reduction so the final surface-pair cost
             # is not inflated by the sampled (alpha, bounce) resolution.
@@ -464,7 +478,7 @@ def j_invariant_qi_maxj_residual(
     maxj_weight: float = 1.0,
     include_qi: bool = True,
     include_maxj: bool = True,
-    maxj_pairing: str = "same_alpha",
+    maxj_pairing: str = "soft_local",
     maxj_sigma_alpha: float | None = None,
 ) -> dict[str, Array]:
     """Shared-J QI/max-J residual blocks from one traceable Boozer evaluation."""
@@ -526,7 +540,7 @@ class JInvariantQIAndMaxJResidual:
         maxj_weight: float = 1.0,
         include_qi: bool = True,
         include_maxj: bool = True,
-        maxj_pairing: str = "same_alpha",
+        maxj_pairing: str = "soft_local",
         maxj_sigma_alpha: float | None = None,
     ):
         self.surfaces = np.atleast_1d(np.asarray(surfaces, dtype=float))
