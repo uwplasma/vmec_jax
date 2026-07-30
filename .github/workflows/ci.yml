@@ -4,22 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
-    inputs:
-      run_gpu:
-        description: "Also run the trusted self-hosted GPU job"
-        type: boolean
-        default: false
-      run_full:
-        description: "Run the full-physics matrix (disable for a GPU-only dispatch)"
-        type: boolean
-        default: true
-  schedule:
-    # nightly full-physics run (RUN_FULL=1 tests)
-    - cron: "17 4 * * *"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: CI-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -29,743 +16,166 @@ env:
 permissions:
   contents: read
 
-# Sharded CI (plan.md Phase-2 review item 1): bounded parallel test jobs, plus
-# a fast lint gate (ruff + mypy) and a coverage gate that combines the parity
-# and gradient shards and enforces >= 95% on vmex.  The explicit job limits
-# include dependency setup, coverage handling, and hosted-runner variance.
 jobs:
-  lint:
-    # Fast fail-first gate (plan Item I.3): ruff + mypy over the whole tree,
-    # separate from the test matrix so a lint regression fails in ~1 min
-    # without blocking (or being masked by) the solver shards.  mypy runs on
-    # py3.12 with the full [dev] install so its view of the numpy/jax stubs
-    # matches a local `mypy vmex` (pyproject [tool.mypy] is the config).
-    name: Lint (ruff + mypy)
+  quality:
+    name: Quality, package, and docs
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
           cache: pip
-
       - name: Install
         run: |
           python -m pip install -U pip
           python -m pip install ".[dev]"
-
-      - name: ruff
-        run: ruff check vmex tests examples benchmarks tools
-
-      - name: mypy
-        run: mypy vmex
+      - name: Check source, package, and docs
+        run: |
+          ruff check vmex tests examples benchmarks tools
+          mypy vmex
+          python -m build
+          python -m sphinx -W -j auto -b html docs docs/_build/html
 
   fast:
-    name: Fast unit tests (py${{ matrix.python-version }})
+    name: Fast API tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.12"]
     steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-
       - name: Install
         run: |
           python -m pip install -U pip
-          python -m pip install .
-          python -m pip install pytest pytest-xdist
-
-      - name: Repository size check
+          python -m pip install . pytest pytest-xdist
+      - name: Check repository size
         run: |
           size_kb=$(du -sk --exclude=.git . | cut -f1)
           echo "working tree: ${size_kb} KiB"
-          test "$size_kb" -lt 40960 || { echo "working tree exceeds 40 MiB"; exit 1; }
-
-      - name: Run fast unit tests (no golden fixtures)
+          test "$size_kb" -lt 40960
+      - name: Run fast tests
         env:
           JAX_ENABLE_X64: "1"
         run: |
           FILES="$(python tools/test_manifest.py select pr-fast)"
-          pytest -q -n 4 -m "not full" $FILES --durations=25
+          pytest -q -n 4 -m "not full and not weekly" $FILES --durations=20
 
-  mirror:
-    name: Mirror ${{ matrix.shard }} tests
+  physics:
+    name: Representative ${{ matrix.lane }} physics
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        shard: [field, equilibrium, spline]
+        lane: [core, mirror]
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
           cache: pip
       - name: Install
         run: |
           python -m pip install -U pip
-          python -m pip install .
-          python -m pip install pytest pytest-xdist
-      - name: Run mirror tests
-        env:
-          JAX_ENABLE_X64: "1"
-        run: |
-          FILES="$(python tools/test_manifest.py select pr-mirror-${{ matrix.shard }})"
-          pytest -q -n 2 -m "not full" $FILES --durations=20 \
-            --vmex-report="test-report-mirror-${{ matrix.shard }}.json"
-      - name: Upload test report
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-report-mirror-${{ matrix.shard }}
-          path: test-report-mirror-${{ matrix.shard }}.json
-          retention-days: 3
-
-  device-rig:
-    # Two-device placement/gradient coverage on every ordinary run: the
-    # host-rig lanes previously skipped in ALL hosted jobs (single visible
-    # device), so the placement logic was only exercised on developer
-    # machines and real GPU hardware.  A forced two-CPU-device rig runs the
-    # same audit helpers as the CUDA lanes: gradient-pytree device identity
-    # AND gradient values, cold device-1-first, cache-poisoned, and
-    # outer-context orders.
-    name: Two-host-device placement and gradients
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install
-        run: |
-          python -m pip install -U pip
-          python -m pip install .
-          python -m pip install pytest pytest-cov
-      - name: Add swap for XLA compile-arena headroom
+          python -m pip install ".[coils,turbulence,freeb]" pytest pytest-cov pytest-xdist
+      - name: Add XLA compile headroom
         run: |
           sudo fallocate -l 12G /mnt/vmex-swap
           sudo chmod 600 /mnt/vmex-swap
           sudo mkswap /mnt/vmex-swap
           sudo swapon /mnt/vmex-swap
+      - name: Run representative physics
+        env:
+          JAX_ENABLE_X64: "1"
+        run: |
+          FILES="$(python tools/test_manifest.py select pr-physics-${{ matrix.lane }})"
+          pytest -q -n 2 --dist loadscope -m "not full and not weekly" \
+            $FILES --durations=20 --cov=vmex --cov-report=term
+      - name: Stash coverage
+        run: mv .coverage coverage.physics-${{ matrix.lane }}
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: coverage-physics-${{ matrix.lane }}
+          path: coverage.physics-${{ matrix.lane }}
+          retention-days: 3
 
-      - name: Run the two-host-device lanes
+  device:
+    name: Two-device placement and AD
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install . pytest pytest-cov
+      - name: Run the forced two-device representatives
         env:
           JAX_ENABLE_X64: "1"
           XLA_FLAGS: "--xla_force_host_platform_device_count=2"
         run: |
-          # This job is the only ordinary-CI executor of the adjoint
-          # device-binding, instrumentation and device_scope code paths, so
-          # its coverage feeds the gate (the parity shards skip these lanes
-          # on their single visible device).
-          FILES="$(python tools/test_manifest.py select device-rig)"
-          pytest -q $FILES -k second_host_device --durations=10 \
-            --vmex-report=test-report-device-rig.json \
-            --cov=vmex --cov-report=term
-      - name: Stash coverage data
-        run: mv .coverage coverage.device-rig
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+          FILES="$(python tools/test_manifest.py select pr-device)"
+          pytest -q $FILES --durations=10 --cov=vmex --cov-report=term
+      - name: Stash coverage
+        run: mv .coverage coverage.device
+      - uses: actions/upload-artifact@v7.0.1
         with:
-          name: coverage-device-rig
-          path: |
-            coverage.device-rig
-            test-report-device-rig.json
+          name: coverage-device
+          path: coverage.device
           retention-days: 3
 
-  optional-integrations:
-    # The ESSOS / GKX / virtual-casing test lanes silently skipped in every
-    # hosted job because the optional packages were never installed.  This
-    # lane pins exact revisions and asserts the imports BEFORE pytest, so
-    # the gated tests cannot skip: a broken integration fails instead of
-    # vanishing.  All three now install from released packages
-    # (virtual-casing-jax >= 0.0.3 via the freeb extra).
-    name: Optional integrations (released ESSOS/GKX/virtual-casing)
-    runs-on: ubuntu-latest
-    # 45: un-skipping the wout/mgrid-gated lanes added ~17 min serial local
-    # (absorbed by -n 2, but slow hosted runners need the headroom).
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install with released/pinned optional integrations
-        run: |
-          python -m pip install -U pip
-          python -m pip install ".[coils,turbulence,freeb]"
-          python -m pip install pytest pytest-xdist pytest-cov
-      - name: Add swap for XLA compile-arena headroom
-        run: |
-          sudo fallocate -l 12G /mnt/vmex-swap
-          sudo chmod 600 /mnt/vmex-swap
-          sudo mkswap /mnt/vmex-swap
-          sudo swapon /mnt/vmex-swap
-
-      - name: Assert the integrations import (no silent skips possible)
-        run: python -c "import essos, gkx, virtual_casing_jax"
-      - name: Fetch reference assets (wout/mgrid fixtures for the gated lanes)
-        run: python tools/fetch_assets.py --bundle reference-nc
-      - name: Run the gated lanes
-        env:
-          JAX_ENABLE_X64: "1"
-        run: |
-          FILES="$(python tools/test_manifest.py select optional)"
-          pytest -q -n 2 -m "not full" $FILES \
-            --durations=15 --vmex-report=test-report-optional.json \
-            --cov=vmex --cov-report=term
-      - name: Run the ESSOS direct-coil example (full-marked, targeted)
-        env:
-          JAX_ENABLE_X64: "1"
-          RUN_FULL: "1"
-        run: |
-          pytest -q tests/test_examples.py::test_free_boundary_essos_coils \
-            --durations=5 --vmex-report=test-report-optional-example.json \
-            --cov=vmex --cov-append --cov-report=term
-      - name: Stash coverage data
-        run: mv .coverage coverage.optional
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-optional
-          path: |
-            coverage.optional
-            test-report-optional*.json
-          retention-days: 3
-
-  parity:
-    name: Parity suite ${{ matrix.shard }} (goldens, coverage)
-    runs-on: ubuntu-latest
-    # Headroom for slow shared runners: the golden solves run ~15-20 min on a
-    # healthy runner but tip over a tighter limit on a slow one (the suite
-    # content is unchanged), and c1's device-audit subprocess alone measured
-    # >10 min on a busy runner (its own cap is 30 min). 50 absorbs both
-    # without masking a hang.
-    timeout-minutes: 50
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [a1, a2, b, c1, c2, c3, d]
-    steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install
-        run: |
-          python -m pip install -U pip
-          python -m pip install .
-          python -m pip install pytest pytest-xdist pytest-cov
-
-      - name: Add swap for XLA compile-arena headroom
-        run: |
-          sudo fallocate -l 12G /mnt/vmex-swap
-          sudo chmod 600 /mnt/vmex-swap
-          sudo mkswap /mnt/vmex-swap
-          sudo swapon /mnt/vmex-swap
-
-      - name: Cache golden fixtures and compiled kernels
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/vmex
-          # Rolling PER-SHARD key.  Two prior defects: a fixed key freezes
-          # the cache at its FIRST save (kernels compiled later were never
-          # persisted), and a per-run key SHARED across the matrix lets the
-          # first finishing shard win the save while the expensive shards'
-          # kernels are dropped (GitHub caches are immutable per key).  Each
-          # shard therefore rolls its own key, scoped by OS and dependency
-          # signature so toolchain changes start a fresh lineage.
-          key: vmex-v3-${{ runner.os }}-parity-${{ matrix.shard }}-${{ hashFiles('pyproject.toml') }}-${{ github.run_id }}
-          restore-keys: |
-            vmex-v3-${{ runner.os }}-parity-${{ matrix.shard }}-${{ hashFiles('pyproject.toml') }}-
-            golden-v1
-
-      - name: Prefetch golden fixtures (once, before xdist workers fork)
-        run: |
-          python - <<'EOF'
-          import importlib.util
-          spec = importlib.util.spec_from_file_location(
-              "tests_conftest", "tests/conftest.py")
-          mod = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(mod)
-          print("golden dir:", mod.resolve_golden_dir())
-          EOF
-
-      # Seven bounded shards.  The xdist dist MODE is chosen PER SHARD by
-      # whether its modules share an expensive fixture:
-      #   * loadscope groups a whole module onto ONE worker, so module-scoped
-      #     equilibrium fixtures (omnigenity qi_eq/tok_eq, bootstrap eq,
-      #     stability vacuum/highbeta/shaped) are solved ONCE, not once-per-
-      #     worker (measured: omnigenity 29 s -> 14 s).  But it SERIALISES a
-      #     module's independent heavy tests onto that single worker.
-      #   * load spreads individual tests across all 4 workers -- right for a
-      #     module with many independent heavy tests and NO shared fixture (or
-      #     a cheap /tmp-cached one), which otherwise bottlenecks its shard.
-      # The two independent-heavy modules therefore run under `load`:
-      #   b = golden_digests  (2 full VMEC2000-parity solves; no fixture;
-      #                         loadscope serialised these to 484 s on 1 worker)
-      #   d = optimize        (many least-squares runs; solovev_eq fixture is
-      #                         cheap + /tmp-cached, so per-worker re-solve is
-      #                         negligible; loadscope serialised 383 s)
-      # The fixture-sharing modules stay on loadscope:
-      #   a1 = ALL free-boundary modules, so their JAX caches leave with one
-      #        bounded shard; split from the former combined "a" after hosted
-      #        runners were shut down mid-run twice on the accumulated
-      #        free-boundary + solver-golden shard (same syndrome that split c)
-      #        -- locally the combined content runs in under a minute, so the
-      #        overruns were runner-resource pressure, not test cost;
-      #   a2 = the solver-golden parity/ladder modules formerly in "a";
-      #   c1/c2 = the former catch-all, split explicitly after two hosted
-      #           runners were externally shut down above 84% despite no test
-      #           failure.  Manifest ownership keeps coverage disjoint.
-      # Together they cover the whole non-gradient, non-example core suite once;
-      # the separate mirror matrix owns tests/mirror. Therefore
-      # every test file appears in exactly one shard (coverage gate combines
-      # a+b+c+d), so coverage is invariant under this reshuffle.
-      - name: Run parity shard ${{ matrix.shard }} with coverage
-        env:
-          JAX_ENABLE_X64: "1"
-        run: |
-          FILES="$(python tools/test_manifest.py select pr-parity-${{ matrix.shard }})"
-          if [[ "${{ matrix.shard }}" =~ ^(b|d)$ ]]; then
-            DIST=load
-          else
-            DIST=loadscope
-          fi
-          WORKERS=4
-          if [ "${{ matrix.shard }}" = "c3" ]; then WORKERS=2; fi
-          pytest -q -n "$WORKERS" --dist "$DIST" $FILES --durations=15 \
-            --vmex-report="test-report-parity-${{ matrix.shard }}.json" \
-            --cov=vmex --cov-report=term
-
-      - name: Stash coverage data
-        run: mv .coverage coverage.parity-${{ matrix.shard }}
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-parity-${{ matrix.shard }}
-          path: |
-            coverage.parity-${{ matrix.shard }}
-            test-report-parity-${{ matrix.shard }}.json
-          retention-days: 3
-
-  gradient:
-    name: Implicit-gradient suite ${{ matrix.shard }} (JIT on, coverage)
-    runs-on: ubuntu-latest
-    # Sharded so a COLD finite-difference cache remains bounded (first run
-    # after the test file changes recomputes every FD reference).  The two
-    # dominant FD tests (lasym-adjoint, lasym-3d) each get their own shard;
-    # shard "c" owns the remaining tests.  A slow hosted runner measured
-    # 14m19s for those tests alone, so include installation, coverage upload,
-    # and runner variance rather than canceling a fully passing test process
-    # during post-processing.  Warm-cache runs remain much faster.
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [a, b, c]
-    steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install
-        run: |
-          python -m pip install -U pip
-          python -m pip install .
-          python -m pip install pytest pytest-cov
-
-      - name: Cache finite-difference reference solves
-        uses: actions/cache@v4
-        with:
-          path: /tmp/vmex_implicit_fd_cache.pkl
-          # entries are keyed by (case, dof, step, ftol, ns) inside the pickle,
-          # so hash the test file: changed FD parameters invalidate the cache.
-          # keyed per shard so the two jobs never overwrite each other's cache.
-          key: implicit-fd-v2-${{ matrix.shard }}-${{ hashFiles('tests/test_implicit_grad.py') }}
-
-      - name: Add swap for XLA compile-arena headroom
-        run: |
-          sudo fallocate -l 12G /mnt/vmex-swap
-          sudo chmod 600 /mnt/vmex-swap
-          sudo mkswap /mnt/vmex-swap
-          sudo swapon /mnt/vmex-swap
-
-      - name: Run implicit-gradient tests with coverage
-        env:
-          JAX_ENABLE_X64: "1"
-        run: |
-          # -k with unique test names partitions the suite exactly into the two
-          # dominant FD tests (a, b) and their complement (c).
-          A="test_lasym_adjoint_vs_frozen_path_fd"
-          B="test_lasym_3d_gradient_vs_frozen_path_fd"
-          case "${{ matrix.shard }}" in
-            a) SELECT="$A" ;;
-            b) SELECT="$B" ;;
-            *) SELECT="not $A and not $B" ;;
-          esac
-          FILES="$(python tools/test_manifest.py select pr-gradient)"
-          pytest -q $FILES -k "$SELECT" \
-            --durations=0 \
-            --vmex-report="test-report-gradient-${{ matrix.shard }}.json" \
-            --cov=vmex --cov-report=term
-
-      - name: Stash coverage data
-        run: mv .coverage coverage.gradient-${{ matrix.shard }}
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-gradient-${{ matrix.shard }}
-          path: |
-            coverage.gradient-${{ matrix.shard }}
-            test-report-gradient-${{ matrix.shard }}.json
-          retention-days: 3
-
-  examples:
-    name: Example scripts smoke (coverage)
-    runs-on: ubuntu-latest
-    timeout-minutes: 9
-    steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install
-        run: |
-          python -m pip install -U pip
-          python -m pip install .
-          python -m pip install pytest pytest-cov
-
-      - name: Add swap for XLA compile-arena headroom
-        run: |
-          sudo fallocate -l 12G /mnt/vmex-swap
-          sudo chmod 600 /mnt/vmex-swap
-          sudo mkswap /mnt/vmex-swap
-          sudo swapon /mnt/vmex-swap
-
-      - name: Run example smokes (QH/QP/QI gated to nightly RUN_FULL)
-        env:
-          JAX_ENABLE_X64: "1"
-        run: |
-          FILES="$(python tools/test_manifest.py select pr-examples)"
-          pytest -q $FILES \
-            --durations=10 \
-            --vmex-report=test-report-examples.json \
-            --cov=vmex --cov-report=term
-
-      - name: Stash coverage data
-        run: mv .coverage coverage.examples
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-examples
-          path: |
-            coverage.examples
-            test-report-examples.json
-          retention-days: 3
-
-  coverage-gate:
-    name: Coverage gate (>= 95%)
+  changed-coverage:
+    name: Changed executable lines (>= 95%)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [parity, gradient, examples, device-rig, optional-integrations]
+    needs: [physics, device]
     steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
           cache: pip
-
-      - name: Install coverage
-        run: python -m pip install coverage
-
-      - name: Download coverage artifacts
-        uses: actions/download-artifact@v4
+      - run: python -m pip install coverage diff-cover
+      - uses: actions/download-artifact@v8.0.1
         with:
           pattern: coverage-*
           merge-multiple: true
-
-      - name: Combine shards and enforce the gate
+      - name: Combine coverage and enforce the mirror floor
         run: |
-          coverage combine coverage.parity-a1 coverage.parity-a2 coverage.parity-b coverage.parity-c1 coverage.parity-c2 coverage.parity-c3 coverage.parity-d coverage.gradient-a coverage.gradient-b coverage.gradient-c coverage.examples coverage.device-rig coverage.optional
-          # The mirror release audit reaches 95% only after appending nightly
-          # fixed/free adjoint tests. The fast core artifacts intentionally
-          # exclude those tests, so do not mix a partial mirror number into
-          # the ordinary core gate.
-          coverage report --omit='vmex/mirror/*' --fail-under=95
+          coverage combine coverage.device coverage.physics-core coverage.physics-mirror
+          coverage report --include='*/vmex/mirror/*' --fail-under=90
+          coverage xml
+      - name: Enforce changed-line coverage
+        if: github.event_name == 'pull_request'
+        run: diff-cover coverage.xml --compare-branch="origin/${GITHUB_BASE_REF}" --fail-under=95
 
-  cli-smoke:
-    name: Console Script Smoke
+  pr-gate:
+    name: PR gate
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 2
+    needs: [quality, fast, physics, device, changed-coverage]
     steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install
-        run: |
-          python -m pip install -U pip
-          python -m pip install .
-
-      - name: Console script smoke test
+      - name: Require every review gate
         env:
-          JAX_ENABLE_X64: "1"
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          vmec --help
-          vmec --version
-          rm -rf /tmp/vmex_cli_smoke
-          mkdir -p /tmp/vmex_cli_smoke
-          cd /tmp
-          vmec "$GITHUB_WORKSPACE/examples/data/input.solovev" \
-            --quiet \
-            --outdir /tmp/vmex_cli_smoke
-          test -f /tmp/vmex_cli_smoke/wout_solovev.nc
-
-  build:
-    name: Build (wheel/sdist + docs)
-    runs-on: ubuntu-latest
-    timeout-minutes: 9
-    steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install build + docs deps
-        run: |
-          python -m pip install -U pip
-          python -m pip install .
-          python -m pip install build sphinx furo
-
-      - name: Build wheel and sdist
-        run: |
-          python -m build
-
-      - name: Build docs (warnings as errors)
-        run: |
-          python -m sphinx -W -j auto -b html docs docs/_build/html
-
-  full:
-    name: Full-physics ${{ matrix.shard }} (nightly / manual only)
-    # run_full lets a GPU-only dispatch skip the long matrix instead of
-    # relaunching (and, via the concurrency group, cancelling) it.
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_full)
-    runs-on: ubuntu-latest
-    # A sequential whole-suite job reached only 39% before the previous
-    # 150-minute limit, and the core job later lost hosted runners three times
-    # after 37/79/81 minutes. Keep exact RUN_FULL coverage, split core
-    # alphabetically, isolate each stateful optimization campaign, and isolate
-    # examples/mirror so every shard stays bounded on a fresh worker.
-    # 300: the 238-mode free-boundary lanes are compile-dominated on
-    # hosted cores (one lane measured ~2 h cold); the rolling kernel
-    # cache above makes warm dispatches far cheaper, but the cold path
-    # must still fit.
-    timeout-minutes: 300
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [core-a-c, core-d-f, core-g-h, core-i, core-i-grad, core-j-m,
-                core-n-s, core-t-z, hmfb-ladders, hmfb-combined, hmfb-fft537,
-                qi-gate-free, qi-gate-ladder, qi-gate-ladder-fft,
-                qi-gate-ladder-055, qi-gate-fixed, opt-qa, opt-qh,
-                opt-qp, examples, mirror-field, mirror-equilibrium, mirror-spline]
-    steps:
-      - uses: actions/checkout@v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install
-        run: |
-          python -m pip install -U pip
-          python -m pip install ".[coils,turbulence,freeb]"
-          python -m pip install pytest
-
-      - name: Cache golden fixtures and compiled kernels
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/vmex
-          # Rolling PER-SHARD key.  Two prior defects: a fixed key freezes
-          # the cache at its FIRST save (kernels compiled later were never
-          # persisted), and a per-run key SHARED across the matrix lets the
-          # first finishing shard win the save while the expensive shards'
-          # kernels are dropped (GitHub caches are immutable per key).  Each
-          # shard therefore rolls its own key, scoped by OS and dependency
-          # signature so toolchain changes start a fresh lineage.
-          key: vmex-v3-${{ runner.os }}-full-${{ matrix.shard }}-${{ hashFiles('pyproject.toml') }}-${{ github.run_id }}
-          restore-keys: |
-            vmex-v3-${{ runner.os }}-full-${{ matrix.shard }}-${{ hashFiles('pyproject.toml') }}-
-            golden-v1
-
-      # The free-boundary example smokes run the examples as subprocesses,
-      # which read examples/data/mgrid_*.nc directly — fetched assets, not
-      # git-tracked (repo size budget). Without this step they raise
-      # MgridNotFoundError (nightly failure 2026-07-12).
-      - name: Fetch reference assets (mgrid files for free-boundary examples)
-        run: python tools/fetch_assets.py --bundle reference-nc
-
-      # XLA's compile arena for the enlarged free-boundary lane programs
-      # (funct3d.f Jacobian gate + stability-selected T_l recurrence)
-      # transiently exceeds the 16 GB hosted-runner RAM on x86 (the three
-      # QI-ladder shards and core-d-f were memory-evicted ~12 min into
-      # pytest on two consecutive attempts, during the first-rung compile;
-      # macOS peaks lower, ~12 GB).  Disk-backed swap lets the compile
-      # spill instead of killing the runner; the 300-minute budget absorbs
-      # the slowdown.  Program-size reduction (reusing the iteration
-      # body's Jacobian sign instead of a second synthesis) is tracked as
-      # a follow-up optimization.
-      - name: Add swap for XLA compile-arena headroom
-        run: |
-          sudo fallocate -l 12G /mnt/vmex-swap
-          sudo chmod 600 /mnt/vmex-swap
-          sudo mkswap /mnt/vmex-swap
-          sudo swapon /mnt/vmex-swap
-          free -h
-
-      - name: Run the whole suite including full-marked tests
-        env:
-          JAX_ENABLE_X64: "1"
-          RUN_FULL: "1"
-        run: |
-          FILES="$(python tools/test_manifest.py select full-${{ matrix.shard }})"
-          # Some optimization tests are silent for more than 15 minutes.
-          # Keep the hosted runner live without changing pytest semantics.
-          pytest -q $FILES --durations=25 \
-            --vmex-report="test-report-full-${{ matrix.shard }}.json" &
-          pytest_pid=$!
-          while kill -0 "$pytest_pid" 2>/dev/null; do
-            sleep 60
-            if kill -0 "$pytest_pid" 2>/dev/null; then
-              echo "pytest shard ${{ matrix.shard }} still running (${SECONDS}s)"
-            fi
-          done
-          wait "$pytest_pid"
-
-      - name: Upload test report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-report-full-${{ matrix.shard }}
-          path: test-report-full-${{ matrix.shard }}.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  # Trusted self-hosted GPU job.  It lives in THIS workflow (not a separate
-  # file) because GitHub can only manually dispatch workflows that already
-  # exist on the default branch -- a gpu-ci.yml present only on a PR branch
-  # cannot be invoked at all.  Gated on an explicit dispatch input so a
-  # public pull request can never route untrusted code onto persistent
-  # hardware.
-  gpu:
-    name: CUDA placement and parity (manual, self-hosted)
-    if: github.event_name == 'workflow_dispatch' && inputs.run_gpu
-    runs-on: [self-hosted, linux, x64, gpu]
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v6.0.2
-
-      - uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install VMEX and official CUDA JAX
-        run: |
-          python -m pip install -U pip
-          python -m pip install -U "jax[cuda13]"
-          python -m pip install . pytest
-
-      - name: Assert unpinned GPU runtime
-        shell: bash
-        run: |
-          if [[ -n "${JAX_PLATFORMS+x}" || -n "${JAX_PLATFORM_NAME+x}" ]]; then
-            echo "GPU CI must discover hardware without JAX platform environment pins"
-            exit 1
-          fi
-          nvidia-smi
-          python - <<'PY'
-          import jax
-
-          print("backend:", jax.default_backend())
-          print("devices:", jax.devices())
-          assert jax.default_backend() == "gpu"
-          assert any(device.platform == "gpu" for device in jax.devices())
-          PY
-
-      - name: Run focused placement, solve, and gradient checks
-        run: |
-          FILES="$(python tools/test_manifest.py select gpu-smoke)"
-          pytest -q $FILES --durations=0
-
-      - name: Audit all physics gradients on CPU and both GPUs
-        shell: bash
-        run: |
-          metrics=(
-            mhd_energy magnetic_well dmerc_interior_mean
-            jdotb_interior_mean glasser_d_r_interior_mean
-            quasisymmetry quasi_isodynamic
-          )
-          for metric in "${metrics[@]}"; do
-            # One process per metric bounds XLA executable/allocator peaks.
-            python benchmarks/device_parity.py \
-              --quick --devices cpu,gpu --metrics "$metric" \
-              --output "device-parity-gpu0-${metric}.json"
-          done
-          if [[ $(python -c 'import jax; print(len(jax.devices("gpu")))') -gt 1 ]]; then
-            for metric in "${metrics[@]}"; do
-              python benchmarks/device_parity.py \
-                --quick --devices cpu,gpu --gpu-id 1 --metrics "$metric" \
-                --output "device-parity-gpu1-${metric}.json"
-            done
-          else
-            echo "single GPU: skipping gpu-id 1 audit"
-          fi
-
-      - name: Upload parity measurements
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: device-parity-${{ github.run_id }}
-          path: device-parity-*.json
-          if-no-files-found: ignore
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'

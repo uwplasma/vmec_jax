@@ -1,0 +1,82 @@
+name: Trusted GPU physics
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: GPU-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gpu:
+    name: CUDA placement and physics gradients
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install VMEX and official CUDA JAX
+        run: |
+          python -m pip install -U pip
+          python -m pip install -U "jax[cuda13]"
+          python -m pip install ".[coils,turbulence,freeb]" pytest
+
+      - name: Assert unpinned GPU runtime
+        shell: bash
+        run: |
+          if [[ -n "${JAX_PLATFORMS+x}" || -n "${JAX_PLATFORM_NAME+x}" ]]; then
+            echo "GPU CI must discover hardware without JAX platform environment pins"
+            exit 1
+          fi
+          nvidia-smi
+          python - <<'PY'
+          import jax
+
+          print("backend:", jax.default_backend())
+          print("devices:", jax.devices())
+          assert jax.default_backend() == "gpu"
+          assert any(device.platform == "gpu" for device in jax.devices())
+          PY
+
+      - name: Run placement, solve, and gradient checks
+        run: |
+          FILES="$(python tools/test_manifest.py select gpu-smoke)"
+          pytest -q $FILES --durations=0
+
+      - name: Audit physics gradients on CPU and both GPUs
+        shell: bash
+        run: |
+          metrics=(
+            mhd_energy magnetic_well dmerc_interior_mean
+            jdotb_interior_mean glasser_d_r_interior_mean
+            quasisymmetry quasi_isodynamic
+          )
+          for metric in "${metrics[@]}"; do
+            python benchmarks/device_parity.py \
+              --quick --devices cpu,gpu --metrics "$metric" \
+              --output "device-parity-gpu0-${metric}.json"
+          done
+          if [[ $(python -c 'import jax; print(len(jax.devices("gpu")))') -gt 1 ]]; then
+            for metric in "${metrics[@]}"; do
+              python benchmarks/device_parity.py \
+                --quick --devices cpu,gpu --gpu-id 1 --metrics "$metric" \
+                --output "device-parity-gpu1-${metric}.json"
+            done
+          else
+            echo "single GPU: skipping gpu-id 1 audit"
+          fi
+
+      - name: Upload parity measurements
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: device-parity-${{ github.run_id }}
+          path: device-parity-*.json
+          if-no-files-found: ignore
