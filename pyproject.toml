@@ -101,6 +101,7 @@ vmex = ["resources/input.nfp4_QH_warm_start"]
 [tool.pytest.ini_options]
 markers = [
   "full: slower/full-physics tests; set RUN_FULL=1 to run",
+  "weekly: high-resolution campaigns excluded from nightly CI",
   "gpu: tests that require a real GPU; skipped when no GPU is available",
   "vmec2000_live: opt-in integration tests requiring a local VMEC2000 executable",
 ]

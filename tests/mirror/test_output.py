@@ -21,12 +21,19 @@ from vmex.mirror import (
     MirrorConfig,
     MirrorResolution,
     MirrorState,
+    build_stellarator_mirror_hybrid,
     mout_from_result,
     read_mout,
     write_mout,
 )
 from vmex.mirror.forces import mirror_energy
-from vmex.mirror.output import MoutData, _theta_samples
+from vmex.mirror.output import (
+    MoutData,
+    _theta_samples,
+    plot_axisymmetric_beta_scan_summary,
+    plot_mirror_3d_pair,
+    plot_stellarator_mirror_hybrid,
+)
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -242,3 +249,59 @@ def test_command_line_plots_mout_without_toroidal_dispatch(tmp_path) -> None:
     pixels = mpimg.imread(tmp_path / "sample_3d.png")
     cyan = (pixels[..., 0] < 0.2) & (pixels[..., 1] > 0.6) & (pixels[..., 2] > 0.7)
     assert int(np.count_nonzero(cyan)) > 200
+
+
+@pytest.mark.filterwarnings(
+    "ignore:constrained_layout not applied because axes sizes collapsed to zero.*"
+)
+def test_mirror_comparison_and_beta_scan_plots(tmp_path) -> None:
+    data = _sample_mout()
+    paths = [
+        plot_mirror_3d_pair(
+            data,
+            data,
+            tmp_path,
+            titles=("baseline", "comparison"),
+        ),
+        plot_axisymmetric_beta_scan_summary(
+            [("supported", data, True), ("validation", data, False)],
+            tmp_path,
+            display=(0, 1),
+            strong_force_gate=1.0e-3,
+        ),
+    ]
+    for path in paths:
+        pixels = mpimg.imread(path)
+        assert pixels.shape[0] > 200 and pixels.shape[1] > 300
+        assert float(np.std(pixels)) > 0.03
+
+
+def test_stellarator_mirror_hybrid_plot(tmp_path) -> None:
+    resolution = MirrorResolution(ns=3, mpol=1, nxi=3)
+    setup = build_stellarator_mirror_hybrid(
+        resolution,
+        coefficient_count=16,
+        quadrature_order=2,
+    )
+    state = setup.discretization.evaluate_state(setup.initial_state)
+    energy = mirror_energy(
+        state,
+        setup.discretization.grid,
+        axial_flux_derivative=0.02,
+        axis=setup.axis,
+    )
+    result = SimpleNamespace(
+        state=state,
+        energy=energy,
+        history=np.asarray([[0.0, 0.0, 0.0, 0.0, 1.0e-5]]),
+        iterations=0,
+        force=SimpleNamespace(normalized_rms=1.0e-5),
+        normalized_divergence_rms=1.0e-12,
+        variational=SimpleNamespace(maximum=1.0e-5),
+    )
+
+    path = plot_stellarator_mirror_hybrid(result, setup, tmp_path)
+
+    pixels = mpimg.imread(path)
+    assert pixels.shape[0] > 200 and pixels.shape[1] > 300
+    assert float(np.std(pixels)) > 0.03

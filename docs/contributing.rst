@@ -38,8 +38,18 @@ Development install and checks::
   python tools/test_manifest.py check
   pytest -q
 
-The workflow obtains its file and campaign selectors from the manifest. Use
-``pytest --vmex-report=report.json`` to record the 50 slowest tests and all
+The workflows obtain their selectors from the manifest:
+
+- ``CI`` is the stable pull-request gate. It runs fast API checks and
+  representative fixed-boundary, free-boundary/NESTOR, mirror, device, and AD
+  paths. Changed executable lines must be at least 95% covered.
+- ``Nightly`` owns the complete integration/oracle matrix and aggregate
+  package coverage.
+- ``Weekly high resolution`` owns campaigns that exceed the 150-minute cold
+  nightly budget.
+- ``Trusted GPU physics`` is an explicit self-hosted dispatch.
+
+Use ``pytest --vmex-report=report.json`` to record the 50 slowest tests and all
 skip reasons with the same metadata.
 
 Documentation builds must pass strict mode::
@@ -59,7 +69,7 @@ potential and surface-field tables. Omitting ``--run-vmec2000`` skips it.
 GPU CI
 ------
 
-``GPU CI`` is a manual workflow because this is a public repository: pull
+``Trusted GPU physics`` is a manual workflow because this is a public repository: pull
 requests from forks are never run automatically on persistent self-hosted
 hardware.  Its runner must carry the labels ``self-hosted``, ``linux``,
 ``x64``, and ``gpu``, provide an NVIDIA driver 580 or newer for CUDA 13, and

@@ -585,6 +585,10 @@ equation-to-source cross-references, API reference, and
 performance/validation notes — at
 [vmex.readthedocs.io](https://vmex.readthedocs.io/en/latest/).
 
+Pull requests use short representative fixed/free-boundary, mirror, device,
+and AD checks. Exhaustive oracle, high-resolution, and trusted-GPU campaigns
+run separately; the contributor guide describes the test layers.
+
 ## Mirror equilibria
 
 Alongside the toroidal VMEC core, `vmex.mirror` solves scalar-pressure

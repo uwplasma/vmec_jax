@@ -1,0 +1,64 @@
+name: Weekly high resolution
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 1 * * 6"
+
+concurrency:
+  group: Weekly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  campaign:
+    name: Weekly ${{ matrix.campaign }}
+    runs-on: ubuntu-latest
+    # The 238-mode free-boundary activation test measured 124 minutes and
+    # its five-test campaign 164 minutes cold. Keep bounded variance headroom.
+    timeout-minutes: 210
+    strategy:
+      fail-fast: false
+      matrix:
+        campaign: [hmfb, mirror]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install ".[coils,turbulence,freeb]" pytest
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/vmex
+          key: vmex-v4-${{ runner.os }}-weekly-${{ matrix.campaign }}-${{ hashFiles('pyproject.toml') }}-${{ github.run_id }}
+          restore-keys: |
+            vmex-v4-${{ runner.os }}-weekly-${{ matrix.campaign }}-${{ hashFiles('pyproject.toml') }}-
+            golden-v1
+      - run: python tools/fetch_assets.py --bundle reference-nc
+      - name: Add XLA compile headroom
+        run: |
+          sudo fallocate -l 12G /mnt/vmex-swap
+          sudo chmod 600 /mnt/vmex-swap
+          sudo mkswap /mnt/vmex-swap
+          sudo swapon /mnt/vmex-swap
+      - name: Run the high-resolution campaign
+        env:
+          JAX_ENABLE_X64: "1"
+          RUN_FULL: "1"
+        run: |
+          FILES="$(python tools/test_manifest.py select weekly-${{ matrix.campaign }})"
+          pytest -q $FILES --durations=25 \
+            --vmex-report="test-report-weekly-${{ matrix.campaign }}.json"
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: test-report-weekly-${{ matrix.campaign }}
+          path: test-report-weekly-${{ matrix.campaign }}.json
+          if-no-files-found: warn
+          retention-days: 14

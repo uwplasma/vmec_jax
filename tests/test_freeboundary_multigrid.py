@@ -132,6 +132,7 @@ def test_vmec2000_niter_exhaustion_is_not_converged() -> None:
     assert not _vmec_converged(stdout)
 
 
+@pytest.mark.full
 def test_public_two_stage_free_boundary_rebuilds_and_stays_finite() -> None:
     """The bundled non-confidential LASYM case crosses vacuum turn-on."""
     inp = VmecInput.from_file(DECK)
@@ -385,6 +386,7 @@ def test_symmetric_multigrid_exports_final_nestor_wout(tmp_path) -> None:
         assert "bsubumnc_sur" not in ds.variables
 
 
+@pytest.mark.full
 def test_prefetch_compile_parity_and_bookkeeping() -> None:
     """Free-boundary ``prefetch_compile`` is cache warming only.
 

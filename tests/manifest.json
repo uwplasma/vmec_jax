@@ -23,20 +23,20 @@
     ["tests/test_cli_summary_wout.py", "interface", "integration", "medium", "cpu", "golden", "golden", ["pr-parity-c1", "full-core-a-c"]],
     ["tests/test_compat.py", "interface", "unit", "fast", "cpu", "none", "none", ["pr-parity-c1", "full-core-a-c"]],
     ["tests/test_coverage_margin.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c1", "full-core-a-c"]],
-    ["tests/test_device.py", "infrastructure", "unit", "fast", "cpu-gpu", "none", "none", ["pr-parity-c1", "pr-fast", "gpu-smoke", "full-core-d-f"]],
-    ["tests/test_device_parity_tool.py", "infrastructure", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f"]],
-    ["tests/test_doctor.py", "interface", "unit", "fast", "cpu-gpu", "none", "none", ["pr-parity-c1", "full-core-d-f"]],
+    ["tests/test_device.py", "infrastructure", "unit", "fast", "cpu-gpu", "none", "none", ["pr-parity-c1", "pr-fast", "gpu-smoke", "full-core-d-f0"]],
+    ["tests/test_device_parity_tool.py", "infrastructure", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f0"]],
+    ["tests/test_doctor.py", "interface", "unit", "fast", "cpu-gpu", "none", "none", ["pr-parity-c1", "full-core-d-f0"]],
     ["tests/test_examples.py", "interface", "campaign", "campaign", "cpu-gpu", "reference-nc", "external", ["pr-examples", "full-examples"]],
-    ["tests/test_fetch_assets.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c1", "pr-fast", "full-core-d-f"]],
-    ["tests/test_first_divergence.py", "infrastructure", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f"]],
-    ["tests/test_force_oracle.py", "equilibrium", "oracle", "medium", "cpu", "golden", "vmec2000", ["pr-parity-c1", "full-core-d-f"]],
-    ["tests/test_forces_residuals.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f"]],
-    ["tests/test_fourier_transforms.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "pr-fast", "full-core-d-f"]],
-    ["tests/test_freeboundary.py", "free-boundary", "integration", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a1", "full-core-d-f"]],
-    ["tests/test_freeboundary_diff.py", "free-boundary", "ad", "medium", "cpu-gpu", "reference-nc", "fd", ["pr-parity-a1", "optional", "full-core-d-f"]],
-    ["tests/test_freeboundary_linear.py", "free-boundary", "ad", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-a1", "full-core-d-f"]],
-    ["tests/test_freeboundary_multigrid.py", "free-boundary", "integration", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a1", "full-core-d-f"]],
-    ["tests/test_freeboundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1", "full-core-d-f"]],
+    ["tests/test_fetch_assets.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c1", "pr-fast", "full-core-d-f0"]],
+    ["tests/test_first_divergence.py", "infrastructure", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f0"]],
+    ["tests/test_force_oracle.py", "equilibrium", "oracle", "medium", "cpu", "golden", "vmec2000", ["pr-parity-c1", "full-core-d-f0"]],
+    ["tests/test_forces_residuals.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f0"]],
+    ["tests/test_fourier_transforms.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "pr-fast", "full-core-d-f0"]],
+    ["tests/test_freeboundary.py", "free-boundary", "integration", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a1", "full-core-fb-a"]],
+    ["tests/test_freeboundary_diff.py", "free-boundary", "ad", "medium", "cpu-gpu", "reference-nc", "fd", ["pr-parity-a1", "optional", "full-core-fb-a"]],
+    ["tests/test_freeboundary_linear.py", "free-boundary", "ad", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-a1", "full-core-fb-a"]],
+    ["tests/test_freeboundary_multigrid.py", "free-boundary", "integration", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a1", "full-core-fb-b"]],
+    ["tests/test_freeboundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1", "full-core-fb-b"]],
     ["tests/test_geometry_fields.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-g-h"]],
     ["tests/test_golden_digests.py", "equilibrium", "oracle", "slow", "cpu", "golden", "vmec2000", ["pr-parity-b", "full-core-g-h"]],
     ["tests/test_gpu_ci.py", "infrastructure", "gpu", "slow", "cpu-gpu", "generated", "fd", ["pr-parity-c1", "device-rig", "gpu-smoke", "full-core-g-h"]],
@@ -88,6 +88,36 @@
   "excluded": {
     "tests/test_lasym_free_case.py": "fixture helper; no collected tests",
     "tests/test_qi_free_boundary_case.py": "fixture helper; no collected tests"
+  },
+  "selectors": {
+    "pr-physics-core": [
+      "tests/test_solver_end_to_end.py::test_converges_with_golden_iteration_count[solovev]",
+      "tests/test_implicit_grad.py::test_solovev_gradients_vs_fd",
+      "tests/test_implicit_grad.py::test_jdotb_and_glasser_gradients_vs_frozen_path_fd[solovev]",
+      "tests/test_freeboundary.py::test_nestor_skip_branch_matches_full_solve",
+      "tests/test_freeboundary_linear.py",
+      "tests/test_freeboundary_diff.py::test_synthetic_surface_gradient_fd_validates"
+    ],
+    "pr-physics-mirror-spline": [
+      "tests/mirror/test_analytic.py",
+      "tests/mirror/test_qi_hybrid.py",
+      "tests/mirror/test_splines.py"
+    ],
+    "pr-physics-mirror-output": ["tests/mirror/test_output.py"],
+    "pr-device": [
+      "tests/test_gpu_ci.py::test_device_scope_second_host_device_gradient_equality",
+      "tests/test_gpu_ci.py::test_second_host_device_unconverged_adjoint_raises_typed_error"
+    ],
+    "weekly-hmfb": [
+      "tests/test_high_mode_free_boundary_parity.py::test_all_reported_features_parse_together",
+      "tests/test_high_mode_free_boundary_parity.py::test_fixed_boundary_238_mode_ladder_converges",
+      "tests/test_high_mode_free_boundary_parity.py::test_free_boundary_238_mode_ladder_survives_activation",
+      "tests/test_high_mode_free_boundary_parity.py::test_vacuum_survives_a_radial_transition",
+      "tests/test_high_mode_free_boundary_parity.py::test_mgrid_nzeta_policy_matches_vmec2000"
+    ],
+    "weekly-mirror": [
+      "tests/mirror/test_free_boundary.py::test_unbounded_exterior_beta_observables_converge_with_resolution"
+    ]
   },
   "campaigns": {
     "full-hmfb-ladders": [

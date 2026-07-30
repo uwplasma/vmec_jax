@@ -827,6 +827,7 @@ def test_lasym_wb_aspect_gradient_vs_fd(lasym):
         assert rel <= tol, f"{out}/{field}{idx}: rel {rel:.3e} > {tol:.0e}"
 
 
+@pytest.mark.full
 def test_lasym_adjoint_vs_frozen_path_fd(lasym):
     """Lasym-adjoint correctness lock: the analytic directional derivative and
     the central frozen-path FD, BOTH anchored at the same Newton-refined
@@ -952,6 +953,7 @@ def lasym_3d():
     return "basic_non_stellsym_simsopt", inp, cfg, p0, result.state, rt, mask
 
 
+@pytest.mark.full
 def test_lasym_3d_gradient_vs_frozen_path_fd(lasym_3d):
     """``jax.grad`` through ``im.run`` on a 3D lasym boundary vs frozen-path
     central FD: toroidal (n = 1) rbs/zbc dofs plus the symmetric rbc family
