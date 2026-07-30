@@ -176,8 +176,8 @@ def test_mirror_free_boundary_beta_scan_example(tmp_path):
     _run_example(EXAMPLES / "mirror_free_boundary_beta_scan.py", tmp_path, timeout=2400)
     outdir = tmp_path / "results" / "mirror_free_boundary_beta_scan"
     summary = json.loads((outdir / "beta_scan_summary.json").read_text())
-    assert [row["requested_beta"] for row in summary] == [0.0, 0.01, 0.03, 0.10, 0.25, 0.50]
-    assert [row["supported_lane"] for row in summary] == [True, True, True, True, False, False]
+    assert [row["requested_beta"] for row in summary] == [0.0, 0.10, 0.25, 0.50]
+    assert [row["supported_lane"] for row in summary] == [True, True, False, False]
     assert summary[-1]["center_radius"] > summary[0]["center_radius"]
     assert summary[-1]["center_axis_field"] < summary[0]["center_axis_field"]
     for beta in ("000p0", "010p0", "050p0"):

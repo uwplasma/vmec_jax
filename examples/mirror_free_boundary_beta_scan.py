@@ -12,6 +12,7 @@ prescribed finite-beta boundary is plotted.
 """
 
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -44,17 +45,23 @@ from vmex.mirror.output import (  # noqa: E402
 )
 
 # Inputs: edit these values, then run the file directly.
-BETAS = np.asarray([0.0, 0.01, 0.03, 0.10, 0.25, 0.50])
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
+# The smoke run retains vacuum, the supported endpoint, and an extended state.
+BETAS = np.asarray(
+    [0.0, 0.10, 0.25, 0.50]
+    if CI
+    else [0.0, 0.01, 0.03, 0.10, 0.25, 0.50]
+)
 SUPPORTED_BETA_MAX = 0.10
 STRONG_FORCE_GATE = 5.0e-2
-NS = 7
-NXI = 13
-SPLINE_ELEMENTS = 7
-EXTERIOR_NTHETA = 12
+NS = 5 if CI else 7
+NXI = 7 if CI else 13
+SPLINE_ELEMENTS = 4 if CI else 7
+EXTERIOR_NTHETA = 8 if CI else 12
 EXTERIOR_ORDER = 6
 EXTERIOR_SPECTRAL_SIDE_DENSITY = True
 FTOL = 1.0e-12
-MAX_ITERATIONS = 2000
+MAX_ITERATIONS = 500 if CI else 2000
 Z_MIN, Z_MAX = -0.8, 0.8
 # Compact coils sized to the plasma: same vacuum on-axis midplane field as the
 # former 0.9 m / 2.0e5 A loops (B(0) ~ 0.0836 T), with a deeper mirror well.
