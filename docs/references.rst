@@ -120,3 +120,9 @@ Confinement objectives and optimization:
     Physics* (2026), doi:10.1017/S0022377826101652 — endpoint-regularized
     quadrature and the independent DESC oracle for
     :mod:`vmex.core.bounce`.
+
+29. E. Rodríguez, P. Helander, and A. G. Goodman, “The maximum-J property
+    in quasi-isodynamic stellarators,” *Journal of Plasma Physics* 90,
+    905900212 (2024), doi:10.1017/S0022377824000345 — the signed
+    :math:`\partial\mathcal J_\parallel/\partial\psi<0` condition implemented
+    by :class:`~vmex.core.maxj.MaximumJResidual`.
