@@ -77,6 +77,14 @@ def _smooth_abs_power(values, exponent: float, eps: float = 1.0e-12):
     return jnp.power(values * values + eps_arr * eps_arr, 0.5 * float(exponent))
 
 
+def _periodic_angle_distance(alpha_a, alpha_b):
+    """Shortest periodic distance on the 2π circle."""
+
+    two_pi = jnp.asarray(2.0 * jnp.pi, dtype=jnp.result_type(alpha_a, alpha_b))
+    delta = jnp.abs(alpha_a - alpha_b)
+    return jnp.minimum(delta, two_pi - delta)
+
+
 def _apply_smooth_goodman_transform(b_line, phi_coords):
     """Smooth squash/stretch surrogate of the Goodman constructed-QI well."""
 
@@ -282,6 +290,8 @@ def j_invariant_qi_maxj_residual_from_boozer(
     maxj_weight: float = 1.0,
     include_qi: bool = True,
     include_maxj: bool = True,
+    maxj_pairing: str = "soft_local",
+    maxj_sigma_alpha: float | None = None,
 ) -> dict[str, Array]:
     """Shared-J QI/max-J residual blocks from precomputed Boozer spectra."""
 
@@ -312,6 +322,11 @@ def j_invariant_qi_maxj_residual_from_boozer(
         jnp.arange(int(n_bounce), dtype=jnp.float64) / jnp.maximum(int(n_bounce) - 1, 1),
         float(p_lambda),
     )
+    if str(maxj_pairing) not in {"all_to_all", "same_alpha", "soft_local"}:
+        raise ValueError("maxj_pairing must be 'all_to_all', 'same_alpha', or 'soft_local'")
+    if maxj_sigma_alpha is None:
+        maxj_sigma_alpha = 2.0 * np.pi / max(int(nalpha), 1)
+    sigma_alpha = max(float(maxj_sigma_alpha), 1.0e-8)
 
     def _per_surface(b_surface, gi_surface):
         def _per_line(b_line):
@@ -370,41 +385,49 @@ def j_invariant_qi_maxj_residual_from_boozer(
             maxj_surface = jnp.zeros((0,), dtype=jnp.float64)
             jc_pow_maxj = jnp.zeros_like(jc_all)
             slope = jnp.zeros((0, 0, 0), dtype=jnp.float64)
+            maxj_pair_weights = jnp.zeros((0, 0), dtype=jnp.float64)
         else:
             jc_pow_maxj = _smooth_abs_power(jc_all, float(p_j))
             ds = s_b[1:] - s_b[:-1]
             ds = jnp.where(jnp.abs(ds) > 0.0, ds, 1.0e-10)
             # jc_* shape is (surface, alpha, bounce). max-J compares adjacent
-            # surfaces at fixed bounce level and averages over lower-surface alphas.
+            # surfaces at fixed bounce level, with selectable lower-surface alpha pairing.
             jc_lo = jc_pow_maxj[:-1, :, 1:]
             jc_hi = jc_pow_maxj[1:, :, 1:]
+            alpha_arr = jnp.asarray(alpha, dtype=jnp.float64)
+            if str(maxj_pairing) == "all_to_all":
+                alpha_weights = jnp.ones((int(nalpha), int(nalpha)), dtype=jnp.float64) / float(nalpha)
+            elif str(maxj_pairing) == "same_alpha":
+                alpha_weights = jnp.eye(int(nalpha), dtype=jnp.float64)
+            else:
+                alpha_dist = _periodic_angle_distance(alpha_arr[:, None], alpha_arr[None, :])
+                alpha_weights = jax.nn.softmax(
+                    -(alpha_dist * alpha_dist) / (2.0 * sigma_alpha * sigma_alpha), axis=1
+                )
 
             def _surface_pair_slope(hi_surface, lo_surface, ds_surface):
-                def _alpha_slope(hi_alpha):
-                    lo_by_bounce = jnp.swapaxes(lo_surface, 0, 1)
-                    slope_terms = (hi_alpha[:, None] - lo_by_bounce) / (
-                        ds_surface * (0.5 * (hi_alpha[:, None] + lo_by_bounce) + 1.0e-10)
-                    )
-                    return jnp.mean(slope_terms, axis=1)
-
-                return jax.vmap(_alpha_slope, in_axes=0, out_axes=0)(hi_surface)
+                lo_matched = alpha_weights @ lo_surface
+                return (hi_surface - lo_matched) / (
+                    ds_surface * (0.5 * (hi_surface + lo_matched) + 1.0e-10)
+                )
 
             slope = jax.vmap(_surface_pair_slope, in_axes=(0, 0, 0))(jc_hi, jc_lo, ds)
             violation = jnp.maximum(0.0, slope - float(target_maxj))
-            # Normalize by the sampled (alpha, bounce) grid so refining the
-            # max-J discretization does not inflate the per-surface-pair cost.
-            maxj_surface = jnp.sqrt(jnp.mean(violation**2, axis=(1, 2)))
+            maxj_surface = jnp.sqrt(jnp.sum(violation**2, axis=(1, 2)))
             maxj_block = float(maxj_weight) * jnp.sqrt(0.5 * (w_arr[:-1] + w_arr[1:])) * maxj_surface
+            maxj_pair_weights = alpha_weights
         residual_blocks.append(maxj_block)
         diagnostics["maxj_surface"] = maxj_surface
         diagnostics["maxj_objective"] = jnp.sum(maxj_block * maxj_block)
         diagnostics["jc_pow_maxj"] = jc_pow_maxj
         diagnostics["maxj_slope"] = slope
+        diagnostics["maxj_pair_weights"] = maxj_pair_weights
     else:
         diagnostics["maxj_surface"] = jnp.zeros((max(nsurf - 1, 0),), dtype=jnp.float64)
         diagnostics["maxj_objective"] = jnp.asarray(0.0, dtype=jnp.float64)
         diagnostics["jc_pow_maxj"] = jnp.zeros_like(jc_all)
         diagnostics["maxj_slope"] = jnp.zeros((max(nsurf - 1, 0), 0, 0), dtype=jnp.float64)
+        diagnostics["maxj_pair_weights"] = jnp.zeros((0, 0), dtype=jnp.float64)
 
     if not residual_blocks:
         raise ValueError("At least one of include_qi/include_maxj must be True.")
@@ -438,6 +461,8 @@ def j_invariant_qi_maxj_residual(
     maxj_weight: float = 1.0,
     include_qi: bool = True,
     include_maxj: bool = True,
+    maxj_pairing: str = "soft_local",
+    maxj_sigma_alpha: float | None = None,
 ) -> dict[str, Array]:
     """Shared-J QI/max-J residual blocks from one traceable Boozer evaluation."""
 
@@ -469,6 +494,8 @@ def j_invariant_qi_maxj_residual(
         maxj_weight=maxj_weight,
         include_qi=include_qi,
         include_maxj=include_maxj,
+        maxj_pairing=maxj_pairing,
+        maxj_sigma_alpha=maxj_sigma_alpha,
     )
 
 
@@ -496,6 +523,8 @@ class JInvariantQIAndMaxJResidual:
         maxj_weight: float = 1.0,
         include_qi: bool = True,
         include_maxj: bool = True,
+        maxj_pairing: str = "soft_local",
+        maxj_sigma_alpha: float | None = None,
     ):
         self.surfaces = np.atleast_1d(np.asarray(surfaces, dtype=float))
         self.weights = None if weights is None else np.asarray(list(weights), dtype=float)
@@ -515,6 +544,8 @@ class JInvariantQIAndMaxJResidual:
         self.maxj_weight = float(maxj_weight)
         self.include_qi = bool(include_qi)
         self.include_maxj = bool(include_maxj)
+        self.maxj_pairing = str(maxj_pairing)
+        self.maxj_sigma_alpha = None if maxj_sigma_alpha is None else float(maxj_sigma_alpha)
 
     def compute_state(self, state, rt) -> dict[str, Array]:
         return j_invariant_qi_maxj_residual(
@@ -536,6 +567,8 @@ class JInvariantQIAndMaxJResidual:
             maxj_weight=self.maxj_weight,
             include_qi=self.include_qi,
             include_maxj=self.include_maxj,
+            maxj_pairing=self.maxj_pairing,
+            maxj_sigma_alpha=self.maxj_sigma_alpha,
         )
 
     def residuals_state(self, state, rt) -> jnp.ndarray:

@@ -46,6 +46,8 @@ MAX_MODE_SCHEDULE = (1,2)#, 3, 4, 5, 6)
 QI_NFEV = 10 
 FTOL = 1e-6
 QI_OBJECTIVE = "j_invariant"
+MAXJ_PAIRING = "soft_local"  # "all_to_all", "same_alpha", or "soft_local"
+MAXJ_SIGMA_ALPHA = 2.0 * np.pi / QI_NALPHA
 
 # --------------------------- seed equilibrium -------------------------------
 inp = vj.VmecInput.from_file(SEED_INPUT)
@@ -63,7 +65,9 @@ qi_maxj_0p5 = JInvariantQIAndMaxJResidual(
     target_maxj=-0.06,
     include_qi=False,
     include_maxj=True,
-    p_j=0.5
+    p_j=0.5,
+    maxj_pairing=MAXJ_PAIRING,
+    maxj_sigma_alpha=MAXJ_SIGMA_ALPHA,
 )
 
 qi_maxj_1 = JInvariantQIAndMaxJResidual(
@@ -78,7 +82,9 @@ qi_maxj_1 = JInvariantQIAndMaxJResidual(
     target_maxj=-0.06,
     include_qi=False,
     include_maxj=True,
-    p_j=1.0
+    p_j=1.0,
+    maxj_pairing=MAXJ_PAIRING,
+    maxj_sigma_alpha=MAXJ_SIGMA_ALPHA,
 )
 
 qi_maxj_2 = JInvariantQIAndMaxJResidual(
@@ -93,7 +99,9 @@ qi_maxj_2 = JInvariantQIAndMaxJResidual(
     target_maxj=-0.06,
     include_qi=False,
     include_maxj=True,
-    p_j=2.0
+    p_j=2.0,
+    maxj_pairing=MAXJ_PAIRING,
+    maxj_sigma_alpha=MAXJ_SIGMA_ALPHA,
 )
 
 qi = JInvariantQIResidual(
