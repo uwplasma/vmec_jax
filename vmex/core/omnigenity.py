@@ -209,8 +209,8 @@ def boozer_bmnc_state(
     angle transform, reducing the aliasing of ``cos(m theta_B - n zeta_B)``
     products; ``mboz``/``nboz`` are capped at the fine grid's Nyquist.
 
-    Returns ``{bmnc_b (nsurf, nmodes), xm_b, xn_b (physical), iota_b, nfp,
-    s_b}`` — ``bmnc_b/xm_b/xn_b/iota_b/nfp`` are the spectrum inputs of
+    Returns ``{bmnc_b (nsurf, nmodes), xm_b, xn_b (physical), iota_b, G_b,
+    I_b, nfp, s_b}`` — ``bmnc_b/xm_b/xn_b/iota_b/G_b/I_b/nfp`` are the inputs of
     :func:`omnigenity_residual` and of
     :func:`vmex.core.optimize.quasi_isodynamic_residual`.
     """
@@ -366,6 +366,8 @@ def boozer_bmnc_state(
         "xm_b": xm_b,
         "xn_b": xn_b,
         "iota_b": iota,
+        "G_b": G,
+        "I_b": I,
         "nfp": nfp,
         "s_b": jnp.asarray(s_half_np, dtype=dtype)[rows - 1],
     }
