@@ -71,7 +71,7 @@ jobs:
   physics:
     name: Representative ${{ matrix.lane }} physics
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -99,7 +99,7 @@ jobs:
           JAX_ENABLE_X64: "1"
         run: |
           FILES="$(python tools/test_manifest.py select pr-physics-${{ matrix.lane }})"
-          pytest -q -n 2 --dist loadscope -m "not full and not weekly" \
+          pytest -q -m "not full and not weekly" \
             $FILES --durations=20 --cov=vmex --cov-report=term
       - name: Stash coverage
         run: mv .coverage coverage.physics-${{ matrix.lane }}
