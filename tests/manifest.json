@@ -13,6 +13,7 @@
     ["tests/mirror/test_qi_hybrid.py", "mirror", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-mirror-spline", "full-mirror-spline"]],
     ["tests/mirror/test_splines.py", "mirror", "integration", "slow", "cpu-gpu", "none", "analytic", ["pr-mirror-spline", "full-mirror-spline"]],
     ["tests/test_baseline_benchmark.py", "infrastructure", "oracle", "fast", "cpu", "golden", "golden", ["pr-parity-c1", "full-core-a-c"]],
+    ["tests/test_bounce.py", "diagnostics", "ad", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-a-c"]],
     ["tests/test_bootstrap.py", "diagnostics", "oracle", "slow", "cpu", "golden", "external", ["pr-parity-b", "full-core-a-c"]],
     ["tests/test_boozer_tables.py", "diagnostics", "oracle", "medium", "cpu", "golden", "golden", ["pr-parity-c1", "full-core-a-c"]],
     ["tests/test_capability_docs.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c2", "full-core-a-c"]],
