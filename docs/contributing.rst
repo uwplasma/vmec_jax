@@ -44,7 +44,8 @@ The workflows obtain their selectors from the manifest:
   representative fixed-boundary, free-boundary/NESTOR, mirror, device, and AD
   paths. Changed executable lines must be at least 95% covered.
 - ``Nightly`` owns the complete integration/oracle matrix and aggregate
-  package coverage.
+  package coverage. Its matrices leave hosted capacity for pull-request
+  checks.
 - ``Weekly high resolution`` owns campaigns that exceed the 150-minute cold
   nightly budget.
 - ``Trusted GPU physics`` is an explicit self-hosted dispatch.
