@@ -46,7 +46,7 @@ MAX_MODE_SCHEDULE = (1,2)#, 3, 4, 5, 6)
 QI_NFEV = 10 
 FTOL = 1e-6
 QI_OBJECTIVE = "j_invariant"
-MAXJ_PAIRING = "same_alpha"  # "all_to_all", "same_alpha", or "soft_local"
+MAXJ_PAIRING = "soft_local"  # "all_to_all", "same_alpha", or "soft_local"
 MAXJ_SIGMA_ALPHA = 2.0 * np.pi / QI_NALPHA
 
 # --------------------------- seed equilibrium -------------------------------
