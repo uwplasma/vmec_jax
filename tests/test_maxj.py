@@ -35,7 +35,9 @@ def _boozer(outer_mean=1.02, *, psi=(0.25, 0.75)):
     }
 
 
-def _residual(outer_mean=1.02, *, psi=(0.25, 0.75), **options):
+def _residual(
+    outer_mean=1.02, *, psi=(0.25, 0.75), pitch=(1.0 / 1.1,), **options,
+):
     booz = _boozer(outer_mean, psi=psi)
     settings = dict(
         nalpha=5, points_per_period=64, num_periods=4, max_wells=6)
@@ -44,7 +46,7 @@ def _residual(outer_mean=1.02, *, psi=(0.25, 0.75), **options):
         bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
         iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
         nfp=booz["nfp"], psi_b=booz["psi_b"],
-        psi_edge=booz["psi_edge"], pitch=[1.0 / 1.1], **settings)
+        psi_edge=booz["psi_edge"], pitch=pitch, **settings)
 
 
 def test_maximum_j_sign_and_signed_flux_convention():
@@ -65,6 +67,12 @@ def test_maximum_j_sign_and_signed_flux_convention():
     np.testing.assert_allclose(
         reversed_flux["relative_slope"][reversed_flux["matched_well_mask"]],
         -favorable["relative_slope"][favorable["matched_well_mask"]])
+
+    depths = _residual(1.02, pitch=(1.0 / 1.1, 1.0 / 0.85))
+    assert float(jnp.min(depths["trapping_depth"])) < 0.5
+    assert float(jnp.max(depths["trapping_depth"])) > 0.5
+    assert float(depths["shallow_maximum_j_fraction"]) == pytest.approx(1.0)
+    assert float(depths["deep_maximum_j_fraction"]) == pytest.approx(1.0)
 
 
 def test_maximum_j_slope_matches_adaptive_quadrature():

@@ -126,3 +126,9 @@ Confinement objectives and optimization:
     905900212 (2024), doi:10.1017/S0022377824000345 — the signed
     :math:`\partial\mathcal J_\parallel/\partial\psi<0` condition implemented
     by :class:`~vmex.core.maxj.MaximumJResidual`.
+
+30. E. Rodríguez and G. G. Plunk, “Near-axis quasi-isodynamic database,”
+    *Journal of Plasma Physics* (2026),
+    doi:10.1017/S0022377826101688 — defines the bounce-time-weighted
+    Maxwellian maximum-J fraction :math:`f_J`, which is distinct from a
+    uniform resolved-orbit count.
