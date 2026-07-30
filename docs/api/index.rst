@@ -103,6 +103,9 @@ The objective catalog with usage snippets is :doc:`/objectives`.
 .. automodule:: vmex.core.qi
    :members:
 
+.. automodule:: vmex.core.maxj
+   :members:
+
 .. automodule:: vmex.core.bootstrap
    :members:
 

@@ -48,6 +48,7 @@
     ["tests/test_input_profiles.py", "equilibrium", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-c1", "pr-fast", "full-core-i"]],
     ["tests/test_lasym_free_convergence.py", "free-boundary", "campaign", "campaign", "cpu-gpu", "generated", "vmec2000", ["pr-full-only", "full-core-j-m"]],
     ["tests/test_lgradb.py", "diagnostics", "ad", "medium", "cpu-gpu", "none", "fd", ["pr-parity-c3", "full-core-j-m"]],
+    ["tests/test_maxj.py", "diagnostics", "ad", "slow", "cpu-gpu", "none", "fd", ["pr-parity-c2", "full-core-j-m"]],
     ["tests/test_mgrid.py", "free-boundary", "unit", "fast", "cpu", "generated", "analytic", ["pr-parity-c1", "pr-fast", "full-core-j-m"]],
     ["tests/test_multigrid_interp.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-j-m"]],
     ["tests/test_multigrid_ladder.py", "equilibrium", "oracle", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-j-m"]],
@@ -98,6 +99,7 @@
       "tests/test_implicit_grad.py::test_jdotb_and_glasser_gradients_vs_frozen_path_fd[solovev]",
       "tests/test_bounce.py",
       "tests/test_qi_residuals.py",
+      "tests/test_maxj.py",
       "tests/test_freeboundary.py::test_nestor_skip_branch_matches_full_solve",
       "tests/test_freeboundary_linear.py",
       "tests/test_freeboundary_diff.py::test_synthetic_surface_gradient_fd_validates"
