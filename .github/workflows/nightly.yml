@@ -402,7 +402,8 @@ jobs:
       - name: Combine shards and enforce the gate
         run: |
           files=(coverage.*)
-          test "${#files[@]}" -eq 37
+          # 13 PR-gate artifacts plus the 26 full-physics shards above.
+          test "${#files[@]}" -eq 39
           coverage combine "${files[@]}"
           # The mirror release audit reaches 95% only after appending nightly
           # fixed/free adjoint tests. The fast core artifacts intentionally
