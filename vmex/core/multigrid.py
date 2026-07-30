@@ -355,13 +355,14 @@ def solve_multigrid(
         nsval = int(ns_arr[igrid])
         resolution = resolution_from_input(inp, ns=nsval)
         stage_use_fft = _resolve_use_fft(use_fft, device, resolution)
-        rt = prepare_runtime(
-            inp, resolution, ftol=float(ftol_arr[igrid]),
-            max_iterations=int(niter_arr[igrid]), lconm1=lconm1,
-            time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
-            precon_type=precon_type, prec2d_threshold=prec2d_threshold,
-            prec2d=prec2d, use_fft=stage_use_fft,
-        )
+        with device_context(device, resolution):
+            rt = prepare_runtime(
+                inp, resolution, ftol=float(ftol_arr[igrid]),
+                max_iterations=int(niter_arr[igrid]), lconm1=lconm1,
+                time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
+                precon_type=precon_type, prec2d_threshold=prec2d_threshold,
+                prec2d=prec2d, use_fft=stage_use_fft,
+            )
         if state is not None and int(state.R_cos.shape[0]) != nsval:
             state = interpolate_state(state, ns_fine=nsval, modes=rt.modes)
         if state is not None:

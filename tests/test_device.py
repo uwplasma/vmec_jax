@@ -8,6 +8,7 @@ decision, not the presence of an accelerator.
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -17,6 +18,9 @@ import pytest
 from vmex.core import device as dev
 from vmex.core import freeboundary, multigrid, solver
 from vmex.core.fourier import Resolution
+from vmex.core.input import VmecInput
+
+DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
 
 
 def _res(ns: int, mpol: int, ntor: int, nfp: int = 1) -> Resolution:
@@ -143,6 +147,27 @@ def test_gpu_request_on_cpu_machine_raises():
     if jax.default_backend() == "cpu":
         with pytest.raises(RuntimeError):
             dev.resolve_device("gpu", _res(ns=11, mpol=6, ntor=0))
+
+
+def test_fixed_boundary_honors_second_gpu_without_outer_context():
+    try:
+        devices = jax.devices("gpu")
+    except RuntimeError:
+        devices = []
+    if len(devices) < 2:
+        pytest.skip("two GPUs unavailable")
+    result = multigrid.solve_multigrid(
+        VmecInput.from_file(DATA / "input.li383_low_res"),
+        device=devices[1],
+        verbose=False,
+        prefetch_compile=False,
+    )
+    assert result.converged
+    assert {
+        leaf.device
+        for leaf in jax.tree.leaves(result.state)
+        if hasattr(leaf, "device")
+    } == {devices[1]}
 
 
 def test_resolve_implicit_device_defaults_to_cpu(monkeypatch):
