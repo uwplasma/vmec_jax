@@ -147,6 +147,7 @@ jobs:
     timeout-minutes: 50
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         shard: [a1, a2, b, c1, c2, c3, d]
     steps:
@@ -270,6 +271,7 @@ jobs:
     timeout-minutes: 25
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         shard: [a, b, c]
     steps:
@@ -429,6 +431,7 @@ jobs:
     timeout-minutes: 150
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         shard: [core-a-c, core-d-f0, core-fb-a, core-fb-b, core-g-h,
                 core-i, core-i-grad, core-j-m, core-n-s, core-t-z,
