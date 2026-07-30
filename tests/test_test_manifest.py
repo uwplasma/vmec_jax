@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,8 @@ def test_manifest_routes_the_previously_nightly_only_mirror_module() -> None:
 
 def test_manifest_report_lists_timings_and_every_skip(tmp_path: Path) -> None:
     report = tmp_path / "report.json"
+    env = os.environ.copy()
+    env.pop("RUN_FULL", None)
     result = subprocess.run(
         [
             sys.executable,
@@ -37,6 +40,7 @@ def test_manifest_report_lists_timings_and_every_skip(tmp_path: Path) -> None:
             f"--vmex-report={report}",
         ],
         cwd=ROOT,
+        env=env,
         text=True,
         capture_output=True,
         timeout=120,
