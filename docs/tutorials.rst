@@ -170,8 +170,8 @@ Mirror equilibria
 Fixed-boundary nonaxisymmetric mirrors and gradients
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Solve the supported rotating ellipse and the validation-only Straight Field Line
-Mirror target with native axial B-splines at ``ftol=1e-12``. The example
+Solve the release-candidate rotating ellipse and the validation-only Straight
+Field Line Mirror target with native axial B-splines at ``ftol=1e-12``. The example
 asserts every rotating-ellipse gate and reports the SFLM corrected-cut force
 failure. Its volume derivative is checked against independently reconverged
 central differences before MOUT and the standard plots are written.

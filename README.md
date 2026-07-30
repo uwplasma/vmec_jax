@@ -17,6 +17,8 @@ equilibrium code for stellarators and tokamaks. It reproduces VMEC2000
 iteration-for-iteration on representative benchmark decks — and, unlike the
 Fortran original, provides differentiable research paths and runs on GPUs.
 The exact support and validation matrix is documented in
+[the generated capability contract](https://vmex.readthedocs.io/en/latest/capabilities.html);
+input-flag coverage is tracked separately in
 [VMEC2000 compatibility and research scope](https://vmex.readthedocs.io/en/latest/vmec2000_compatibility.html).
 
 - **VMEC2000 parity.** The solver ports VMEC2000's algorithms
@@ -34,7 +36,9 @@ The exact support and validation matrix is documented in
   **free-boundary virtual-casing residual** is differentiable in coil /
   `extcur` parameters on a specified plasma boundary and is
   finite-difference-validated. The host-driven NESTOR equilibrium solve itself
-  is not differentiated.
+  is not differentiated. See the
+  [capability contract](https://vmex.readthedocs.io/en/latest/capabilities.html)
+  for the exact forward, JVP, VJP, and optimization scope.
 - **Drop-in.** Reads VMEC2000 `input.*` namelists and structured JSON,
   prints VMEC2000-format iteration output, and writes `wout_*.nc` files
   that load unchanged in simsopt and booz_xform.
@@ -206,6 +210,9 @@ CPU, single thread; `benchmarks/baseline.json`; reproduce with
   platform-specific code path.
 
 ## Features
+
+The status of each solver, device, and differentiation lane is defined by the
+[evidence-linked capability contract](https://vmex.readthedocs.io/en/latest/capabilities.html).
 
 | | VMEX | VMEC2000 | reference C++ |
 |---|:---:|:---:|:---:|
@@ -624,13 +631,12 @@ finite-difference-validated — the derivative an external optimizer needs.
 ### Free-boundary β scan
 
 `solve_beta_scan` jointly updates the spline boundary, the plasma state, and
-the unbounded exterior vacuum, driven by an ESSOS two-coil field. The lane is
-supported through **50 % β** (fine-grid-confirmed: every β point from 0 through
-50 % converges on the `(ns, nxi, elements, ntheta) = (13, 25, 13, 24)` grid with
-bulk minor-radius force ≤ 2.4 × 10⁻³, far under the 0.05 promotion gate) and the
-free-boundary derivative is finite-difference-validated. The compact-coil
-configuration shown keeps the plasma finite-β equilibrium visibly coupled to the
-coils.
+the unbounded exterior vacuum, driven by an ESSOS two-coil field. The
+[capability contract](https://vmex.readthedocs.io/en/latest/capabilities.html)
+supports this lane through **10% requested β**. The 25% and 50% points are
+extended validation: they converge variationally, but the committed benchmark's
+independent strong-force promotion gate fails. The supported-lane field
+derivative is finite-difference-validated.
 
 ![Free-boundary beta scan with ESSOS coils: field lines, LCFS, |B|, pressure, and residual histories](docs/_static/figures/mirror_free_boundary_beta50_summary.png)
 

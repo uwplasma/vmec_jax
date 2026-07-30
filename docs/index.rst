@@ -7,8 +7,8 @@ free-boundary equilibria with VMEC2000-derived numerics, writes standard
 ``wout_*.nc`` output, and — unlike the Fortran original — provides
 differentiable fixed-boundary equilibria plus differentiable virtual-casing
 external-field residuals on a specified free boundary. It runs on CPUs and
-GPUs. Exact support and validation scope is in
-:doc:`vmec2000_compatibility`.
+GPUs. Exact support and validation scope is in :doc:`capabilities`;
+input-flag coverage is in :doc:`vmec2000_compatibility`.
 
 Why VMEX?
 ---------
@@ -103,6 +103,7 @@ Documentation
 
       api/index
       cli
+      capabilities
       input_reference
       vmec2000_compatibility
       wout_reference
