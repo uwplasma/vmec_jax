@@ -153,10 +153,12 @@ def _profile_core(args: argparse.Namespace, *, free_boundary: bool) -> dict[str,
     from vmex.core.input import VmecInput
     from vmex.core.multigrid import solve_free_boundary_multigrid, solve_multigrid
     from vmex.core import solver
+    from vmex.core.device import device_context
     from benchmarks._provenance import file_sha256
 
     path = Path(args.free_input if free_boundary else args.fixed_input)
     inp = VmecInput.from_file(path)
+    target = _device(args)
     if bool(inp.lfreeb) != free_boundary:
         expected = "free" if free_boundary else "fixed"
         raise ValueError(f"{path.name} is not a {expected}-boundary input")
@@ -166,14 +168,14 @@ def _profile_core(args: argparse.Namespace, *, free_boundary: bool) -> dict[str,
             return solve_free_boundary_multigrid(
                 inp,
                 mgrid_path=args.mgrid,
-                device=_device(args),
+                device=target,
                 verbose=False,
                 prefetch_compile=args.prefetch_compile,
                 release_stage_cache=args.release_stage_cache,
             )
         return solve_multigrid(
             inp,
-            device=_device(args),
+            device=target,
             verbose=False,
             prefetch_compile=args.prefetch_compile,
             release_stage_cache=args.release_stage_cache,
@@ -182,11 +184,12 @@ def _profile_core(args: argparse.Namespace, *, free_boundary: bool) -> dict[str,
     compile_s = None
     if not free_boundary and args.prefetch_compile:
         resolution = solver.resolution_from_input(inp)
-        runtime = solver.prepare_runtime(inp, resolution)
-        use_fft = solver._resolve_use_fft(None, _device(args), resolution)
-        started = time.perf_counter()
-        solver._prefetch_block_lane(runtime, use_fft=use_fft)
-        compile_s = time.perf_counter() - started
+        with device_context(target, resolution):
+            runtime = solver.prepare_runtime(inp, resolution)
+            use_fft = solver._resolve_use_fft(None, target, resolution)
+            started = time.perf_counter()
+            solver._prefetch_block_lane(runtime, use_fft=use_fft)
+            compile_s = time.perf_counter() - started
     cold, cold_exec_s = _timed(run)
     warm, warm_s = _timed(run)
     cold_s = (compile_s or 0.0) + cold_exec_s
