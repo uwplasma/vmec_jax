@@ -79,6 +79,7 @@ Documentation
 
       installation
       quickstart
+      scaling
 
    .. toctree::
       :maxdepth: 1

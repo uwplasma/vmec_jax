@@ -112,6 +112,9 @@ Outputs
 .. automodule:: vmex.core.wout
    :members:
 
+.. automodule:: vmex.core.scaling
+   :members:
+
 .. automodule:: vmex.core.nyquist
    :members:
 

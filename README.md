@@ -43,7 +43,8 @@ input-flag coverage is tracked separately in
   prints VMEC2000-format iteration output, and writes `wout_*.nc` files
   that load unchanged in simsopt and booz_xform.
 - **Batteries included.** Plotting (`vmex --plot`), Boozer transform
-  (`vmex --booz`), spline profiles, multigrid, hot restart, free boundary
+  (`vmex --booz`), dimensional scaling for fast-particle studies
+  (`vmex --scale`), spline profiles, multigrid, hot restart, free boundary
   from mgrid files or fields tabulated from coils,
   typed zero-crash errors — with the shared linear/adjoint solver layer
   factored out into [SOLVAX](https://pypi.org/project/solvax/).
@@ -95,6 +96,7 @@ cd vmex && pip install -e .
 vmex --doctor     # check the installation and JAX backend
 vmex --test       # solve the bundled QH case, write wout + plots
 vmex input.X      # run any VMEC2000 input deck (or structured JSON)
+vmex --plot --booz input.X  # solve, transform, and make both plot sets
 ```
 
 `vmex input.X` writes `wout_X.nc` next to the input (`--outdir` to
@@ -112,6 +114,27 @@ vmex --plot wout_nfp4_QH_warm_start.nc     # surfaces, |B|, profiles, 3D
 vmex --booz wout_nfp4_QH_warm_start.nc     # Boozer transform -> boozmn_*.nc
 vmex --plot boozmn_nfp4_QH_warm_start.nc   # Boozer |B| contours + spectrum
 ```
+
+Scale for fast-particle studies
+-------------------------------
+
+Scale an input or WOUT to the ARIES-CS reference dimensions
+(`|b0| = 5.7 T`, `Aminor_p = 1.7 m`), or give explicit multiplicative
+magnetic-field and size factors:
+
+```bash
+vmex --scale input.X             # writes input.X_scaled at ARIES-CS scale
+vmex --scale input.X 1.2 0.8     # B_scale=1.2, R_scale=0.8
+vmex --scale wout_X.nc           # writes wout_X_scaled.nc
+vmex --plot --booz input.X_scaled
+```
+
+Input and WOUT transforms obey the same dimensional similarity law and are
+tested to commute with reconverged fixed- and free-boundary solves. This makes
+it straightforward to set the physical field and size for fixed-energy orbit
+calculations, including 3.5 MeV alpha studies.
+See the [scaling reference](https://vmex.readthedocs.io/en/latest/scaling.html)
+for the field table, the bounded input probe, and free-boundary mgrid handling.
 
 ## Parity with VMEC2000
 
@@ -229,6 +252,7 @@ The status of each solver, device, and differentiation lane is defined by the
 | Typed zero-crash errors | ✅ | ❌ | ✅ |
 | Boozer transform built in (`--booz`) | ✅ | ❌ | ❌ |
 | Plotting built in (`--plot`) | ✅ | ❌ | ❌ |
+| Input/WOUT dimensional scaling (`--scale`) | ✅ | ❌ | ❌ |
 | GPU execution | ✅ | ❌ | ❌ |
 | Differentiable fixed boundary (implicit diff, O(1) memory) | ✅ | ❌ | ❌ |
 | Differentiable virtual-casing residual on a specified boundary | ✅ | ❌ | ❌ |
