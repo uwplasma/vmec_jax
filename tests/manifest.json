@@ -103,7 +103,9 @@
       "tests/test_freeboundary_linear.py",
       "tests/test_freeboundary_diff.py::test_synthetic_surface_gradient_fd_validates",
       "tests/test_printing.py::test_compile_notice_variants",
-      "tests/test_printing.py::test_emit_flushed_writes_and_flushes"
+      "tests/test_printing.py::test_emit_flushed_writes_and_flushes",
+      "tests/test_bootstrap.py",
+      "tests/test_wout_golden.py"
     ],
     "pr-physics-mirror-spline": [
       "tests/mirror/test_analytic.py",
