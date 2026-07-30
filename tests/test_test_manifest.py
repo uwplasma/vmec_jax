@@ -88,6 +88,10 @@ def test_workflow_selects_manifest_lanes() -> None:
     for name in ("ci.yml", "gpu.yml", "nightly.yml", "weekly.yml"):
         assert "tools/test_manifest.py select" in workflows[name]
     assert "name: PR gate" in workflows["ci.yml"]
-    assert workflows["nightly.yml"].count("max-parallel:") == 3
+    nightly = workflows["nightly.yml"]
+    assert nightly.count("max-parallel:") == 3
+    assert 'test "${#files[@]}" -eq 37' in nightly
+    assert 'coverage.full-${{ matrix.shard }}' in nightly
+    assert "--cov=vmex --cov-report=" in nightly
     for stale in ("A1_FILES=", "C2_FILES=", "core-a-c)"):
         assert stale not in "".join(workflows.values())
