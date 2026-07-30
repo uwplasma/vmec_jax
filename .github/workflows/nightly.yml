@@ -427,7 +427,8 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        shard: [core-a-c, core-d-f0, core-fb-a, core-fb-b, core-fb-stress, core-g-h,
+        shard: [core-a-c, core-d-f0, core-fb-a, core-fb-b,
+                core-fb-stress-a, core-fb-stress-b, core-g-h,
                 core-i, core-i-grad, core-j-m, core-n-s, core-t-z,
                 hmfb-combined, hmfb-fft537,
                 qi-gate-free, qi-gate-ladder, qi-gate-ladder-fft,

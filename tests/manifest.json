@@ -36,7 +36,7 @@
     ["tests/test_freeboundary_diff.py", "free-boundary", "ad", "medium", "cpu-gpu", "reference-nc", "fd", ["pr-parity-a1", "optional", "full-core-fb-a"]],
     ["tests/test_freeboundary_linear.py", "free-boundary", "ad", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-a1", "full-core-fb-a"]],
     ["tests/test_freeboundary_multigrid.py", "free-boundary", "integration", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a1", "full-core-fb-b"]],
-    ["tests/test_freeboundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1", "full-core-fb-stress"]],
+    ["tests/test_freeboundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1"]],
     ["tests/test_geometry_fields.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-g-h"]],
     ["tests/test_golden_digests.py", "equilibrium", "oracle", "slow", "cpu", "golden", "vmec2000", ["pr-parity-b", "full-core-g-h"]],
     ["tests/test_gpu_ci.py", "infrastructure", "gpu", "slow", "cpu-gpu", "generated", "fd", ["pr-parity-c1", "device-rig", "gpu-smoke", "full-core-g-h"]],
@@ -127,6 +127,15 @@
     ]
   },
   "campaigns": {
+    "full-core-fb-stress-a": [
+      "tests/test_freeboundary_stress.py::test_indexed_sections_and_profile_arrays_parse",
+      "tests/test_freeboundary_stress.py::test_stress_case_is_high_mode",
+      "tests/test_freeboundary_stress.py::test_bad_axis_free_boundary_ladder_stays_finite",
+      "tests/test_freeboundary_stress.py::test_jacobian_recovery_uses_checkpoint_and_reduces_delt"
+    ],
+    "full-core-fb-stress-b": [
+      "tests/test_freeboundary_stress.py::test_consecutive_jacobian_recoveries_free_boundary"
+    ],
     "full-hmfb-ladders": [
       "tests/test_high_mode_free_boundary_parity.py::test_all_reported_features_parse_together",
       "tests/test_high_mode_free_boundary_parity.py::test_fixed_boundary_238_mode_ladder_converges",
