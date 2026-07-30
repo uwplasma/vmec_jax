@@ -21,11 +21,11 @@ becoil).  The IO layer is ported from the legacy parity-proven
 ``vmex.solvers.free_boundary.mgrid``; the interpolation kernel from
 ``vmex.external_fields.mgrid_jax``.
 
-ESSOS compatibility (``essos.mgrid.MGrid``)
--------------------------------------------
-The netCDF layout is identical (same variable names, dimensions, and
-``(phi, zee, rad)`` field ordering), so files written by either package are
-readable by both.  Known convention divergences:
+ESSOS feature-branch compatibility
+----------------------------------
+ESSOS's unmerged ``feature/mgrid-from-coils`` branch uses the same netCDF
+layout, dimensions, and ``(phi, zee, rad)`` field ordering. Known convention
+divergences:
 
 - **Label padding**: ESSOS centers coil-group names in 30 characters and
   replaces spaces with underscores (SIMSOPT ``to_mgrid`` convention);

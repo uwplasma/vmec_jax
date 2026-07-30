@@ -6,7 +6,7 @@ Covers (plan.md §8):
   ``mgrid_cth_like_lasym_small.nc`` fixture,
 - extcur-scaling linearity of the interpolated field,
 - jit equivalence and grad of ``|B|^2`` w.r.t. extcur,
-- cross-read consistency with ``essos.mgrid.MGrid`` (same netCDF layout).
+- cross-read consistency with ESSOS's unmerged ``feature/mgrid-from-coils``.
 """
 
 from __future__ import annotations
@@ -242,7 +242,9 @@ def test_tabulate_actual_essos_biot_savart() -> None:
 
 
 def test_essos_reads_same_grid_and_fields(data: MgridData) -> None:
-    essos_mgrid = pytest.importorskip("essos.mgrid")
+    essos_mgrid = pytest.importorskip(
+        "essos.mgrid", reason="requires ESSOS feature/mgrid-from-coils"
+    )
     eg = essos_mgrid.MGrid.from_file(MGRID_PATH)
 
     # ESSOS naming: nr/nz/nphi == ir/jz/kp; same extents and nfp.
@@ -268,7 +270,9 @@ def test_essos_reads_same_grid_and_fields(data: MgridData) -> None:
 
 
 def test_essos_reads_our_written_file(data: MgridData, tmp_path: Path) -> None:
-    essos_mgrid = pytest.importorskip("essos.mgrid")
+    essos_mgrid = pytest.importorskip(
+        "essos.mgrid", reason="requires ESSOS feature/mgrid-from-coils"
+    )
     out = tmp_path / "mgrid_for_essos.nc"
     write_mgrid(out, data)
     eg = essos_mgrid.MGrid.from_file(out)
