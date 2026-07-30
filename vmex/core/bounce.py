@@ -47,7 +47,7 @@ def bounce_action(
     length: float = 2.0 * np.pi,
     periodic: bool = True,
     max_wells: int | None = None,
-    quadrature_order: int = 32,
+    quadrature_order: int = 64,
     topology_tolerance: float = 1.0e-6,
 ) -> dict[str, Array]:
     """Compute ``J = 2 int sqrt(1 - pitch * B) dl`` in every magnetic well.
@@ -250,7 +250,7 @@ def trace_boozer_field_lines(
     }
 
 
-def bounce_action_from_boozer(*, pitch, max_wells=None, quadrature_order=32, **kwargs):
+def bounce_action_from_boozer(*, pitch, max_wells=None, quadrature_order=64, **kwargs):
     """Trace Boozer field lines and evaluate :func:`bounce_action`."""
     trace = trace_boozer_field_lines(**kwargs)
     result = bounce_action(

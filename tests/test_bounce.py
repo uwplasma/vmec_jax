@@ -102,6 +102,25 @@ def test_field_resolution_and_well_capacity_contract():
     assert cut["truncated"][0]
 
 
+def test_quadrature_resolution_converges_for_shaped_well():
+    phi = jnp.arange(128, dtype=jnp.float64) * (2.0 * jnp.pi / 128)
+    field = (
+        1.2 + 0.11 * jnp.cos(phi + 4.5)
+        + 0.135 * jnp.cos(3.0 * phi + 1.45)
+        + 0.023 * jnp.cos(5.0 * phi + 5.33)
+    )
+    dl_dphi = 1.0 + 0.12 * jnp.cos(2.0 * phi + 5.36)
+
+    def evaluate(order):
+        return jnp.nansum(
+            bounce_action(
+                field, 0.767, dl_dphi=dl_dphi,
+                quadrature_order=order)["action"])
+
+    coarse, default, reference = map(evaluate, (32, 64, 128))
+    assert abs(default - reference) < 0.1 * abs(coarse - reference)
+
+
 def test_jit_jvp_vjp_and_finite_difference_agree():
     def value(amplitude):
         out = bounce_action(
