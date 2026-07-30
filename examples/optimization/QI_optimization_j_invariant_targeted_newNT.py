@@ -186,9 +186,9 @@ qi_seed = report("seed", eq)
 # --------------------------- QI-only objective ------------------------------
 qi_terms = [
     (qi, 0.0, QI_WEIGHT),
-    (qi_maxj_1, 0.0, 0.1), 
-    (qi_maxj_2, 0.0, 0.1),  
-    (qi_maxj_0p5, 0.0, 0.1),      
+    #(qi_maxj_1, 0.0, 0.1), 
+    #(qi_maxj_2, 0.0, 0.1),  
+    #(qi_maxj_0p5, 0.0, 0.1),      
     (opt.aspect_ratio, ASPECT_TARGET, ASPECT_WEIGHT),
     #(iota_shortfall, 0.0, IOTA_WEIGHT),    
     (opt.mean_iota, IOTA_TARGET, IOTA_WEIGHT),
