@@ -139,6 +139,7 @@ def finite_beta_similarity():
 
     def run(deck):
         result = solve_multigrid(deck, verbose=False)
+        assert result.converged
         return wout_from_state(
             inp=deck,
             state=result.state,
@@ -173,10 +174,13 @@ def _assert_wout_similarity(actual, expected):
         else:
             expected_array = np.asarray(expected_value)
             error = np.linalg.norm(np.asarray(actual_value) - expected_array)
+            # ``curr*`` applies a first radial difference, whose condition
+            # number grows as 2 / hs = 2 * (ns - 1).
+            condition = 2 * (expected.ns - 1) if name.startswith("curr") else 1
             limit = (
                 2e-8 * np.linalg.norm(expected_array)
                 + 2e-9 * np.sqrt(expected_array.size)
-            )
+            ) * condition
             assert error <= limit, (name, error, limit)
 
 
@@ -185,6 +189,7 @@ def _assert_free_boundary_similarity(
 ):
     def run(deck, grid, path):
         result = solve_free_boundary_multigrid(deck, mgrid_path=path, verbose=False)
+        assert result.converged
         return wout_from_state(
             inp=deck,
             state=result.state,
@@ -231,10 +236,11 @@ def test_scale_symmetric_free_boundary_commutes_through_nestor(tmp_path):
 
 @pytest.mark.full
 def test_scale_lasym_free_boundary_commutes_through_nestor(tmp_path):
-    from test_lasym_free_case import lasym_free_input, lasym_free_mgrid_data
+    from tests.test_lasym_free_case import lasym_free_input, lasym_free_mgrid_data
 
     mgrid = lasym_free_mgrid_data()
-    mgrid_path = write_mgrid(tmp_path / "mgrid_d3d_lasym.nc", mgrid)
+    mgrid_path = tmp_path / "mgrid_d3d_lasym.nc"
+    write_mgrid(mgrid_path, mgrid)
     _assert_free_boundary_similarity(
         lasym_free_input(DATA),
         mgrid,
