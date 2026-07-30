@@ -26,7 +26,15 @@ def test_manifest_routes_the_previously_nightly_only_mirror_module() -> None:
 
 
 def test_manifest_routes_short_pr_and_weekly_selectors() -> None:
-    assert "tests/mirror" in test_manifest.select("pr-physics-mirror")
+    assert "tests/mirror/test_implicit.py" in test_manifest.select(
+        "pr-mirror-equilibrium"
+    )
+    assert "tests/mirror/test_free_boundary.py" in test_manifest.select(
+        "pr-mirror-field"
+    )
+    assert "tests/mirror/test_splines.py" in test_manifest.select(
+        "pr-mirror-spline"
+    )
     weekly = test_manifest.select("weekly-mirror")
     assert weekly == [
         "tests/mirror/test_free_boundary.py::"
