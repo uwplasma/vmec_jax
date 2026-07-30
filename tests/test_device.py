@@ -170,6 +170,26 @@ def test_fixed_boundary_honors_second_gpu_without_outer_context():
     } == {devices[1]}
 
 
+def test_fixed_boundary_builds_runtime_in_device_context(monkeypatch):
+    active = False
+
+    @contextlib.contextmanager
+    def context(*_):
+        nonlocal active
+        active = True
+        yield
+        active = False
+
+    def prepare(*_, **__):
+        assert active
+        raise RuntimeError("runtime reached")
+
+    monkeypatch.setattr(multigrid, "device_context", context)
+    monkeypatch.setattr(multigrid, "prepare_runtime", prepare)
+    with pytest.raises(RuntimeError, match="runtime reached"):
+        multigrid.solve_multigrid(VmecInput(ns_array=[3]), device="cpu")
+
+
 def test_resolve_implicit_device_defaults_to_cpu(monkeypatch):
     monkeypatch.delenv("JAX_PLATFORMS", raising=False)
     monkeypatch.delenv("JAX_PLATFORM_NAME", raising=False)
