@@ -74,13 +74,13 @@ MU0 = 4e-7 * np.pi
 # ``LIBSTELL/Sources/Miscel/profile_functions.f`` (``gln = 10``, ``glx/glw``)
 # so the integrated 'two_power'/'gauss_trunc' current profiles are bit-exact
 # against VMEC2000 (a higher-order rule would be *less* parity-accurate).
-_GL_X = jnp.asarray([
+_GL_X = np.asarray([
     0.01304673574141414, 0.06746831665550774, 0.1602952158504878,
     0.2833023029353764, 0.4255628305091844, 0.5744371694908156,
     0.7166976970646236, 0.8397047841495122, 0.9325316833444923,
     0.9869532642585859,
 ])
-_GL_W = jnp.asarray([
+_GL_W = np.asarray([
     0.03333567215434407, 0.0747256745752903, 0.1095431812579910,
     0.1346333596549982, 0.1477621123573764, 0.1477621123573764,
     0.1346333596549982, 0.1095431812579910, 0.0747256745752903,
@@ -207,8 +207,10 @@ def _integrate_0_to_x(fun, coefficients, x):
     the hard-coded ``[0, 1]`` nodes/weights above (exact VMEC2000 parity).
     """
     x = jnp.asarray(x)
-    t = x[..., None] * _GL_X[None, :]
-    return x * jnp.sum(_GL_W[None, :] * fun(coefficients, t), axis=-1)
+    nodes = jnp.asarray(_GL_X, dtype=x.dtype)
+    weights = jnp.asarray(_GL_W, dtype=x.dtype)
+    t = x[..., None] * nodes[None, :]
+    return x * jnp.sum(weights[None, :] * fun(coefficients, t), axis=-1)
 
 
 def _pcurr_two_power_ip(coefficients, x):

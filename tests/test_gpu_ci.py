@@ -735,6 +735,25 @@ def test_second_gpu_relocation_preserves_values():
 
 
 @_requires_gpu
+def test_second_gpu_runtime_profiles_preserve_values():
+    """Profile quadrature constants must follow the selected accelerator."""
+    gpus = _second_gpus()
+    inp = VmecInput.from_file(DATA_DIR / "input.cth_like_free_bdy")
+    resolution = solver.resolution_from_input(inp, ns=15)
+    runtimes = []
+    for device in gpus[:2]:
+        with jax.default_device(device):
+            runtime = solver.prepare_runtime(inp, resolution)
+        assert {leaf.device for leaf in jax.tree.leaves(runtime)} == {device}
+        runtimes.append(runtime)
+    assert np.any(np.asarray(runtimes[0].setup.icurv) != 0.0)
+    for left, right in zip(
+        jax.tree.leaves(runtimes[0]), jax.tree.leaves(runtimes[1]), strict=True
+    ):
+        np.testing.assert_array_equal(left, right)
+
+
+@_requires_gpu
 def test_second_gpu_explicit_values_and_gradients():
     """The supported scoped path runs on a NON-DEFAULT GPU.
 
