@@ -619,7 +619,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install -U pip
-          python -m pip install .
+          python -m pip install ".[coils,turbulence,freeb]"
           python -m pip install pytest
 
       - name: Cache golden fixtures and compiled kernels

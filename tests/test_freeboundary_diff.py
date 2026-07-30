@@ -5,7 +5,7 @@ objective with ``B_plasma`` from the virtual-casing principle
 Lanes: the wout->surface-data adapter reproduces ``B_total . n / |B|`` ~
 1e-16 on a converged equilibrium; asset-free synthetic-torus ``jax.grad``
 vs central FD; and the real cth-like ``extcur``/coil-dof gradients vs FD
-(``full``).  Gated behind ``importorskip('virtual_casing_jax')``.
+(``full``).  Skipped explicitly when ``virtual_casing_jax`` is unavailable.
 """
 
 from __future__ import annotations
