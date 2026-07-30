@@ -63,15 +63,8 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.get_closest_marker("full") is not None and not run_full:
             item.add_marker(pytest.mark.skip(reason="Full tests disabled. Set RUN_FULL=1."))
-        if (
-            item.get_closest_marker("vmec2000_live") is not None
-            and not run_vmec2000
-        ):
-            item.add_marker(
-                pytest.mark.skip(
-                    reason="Live VMEC2000 integration disabled; use --run-vmec2000"
-                )
-            )
+        if item.get_closest_marker("vmec2000_live") is not None and not run_vmec2000:
+            item.add_marker(pytest.mark.skip(reason="Live VMEC2000 integration disabled; use --run-vmec2000"))
 
 
 def _manifest_metadata(nodeid: str) -> dict[str, str]:
@@ -80,10 +73,7 @@ def _manifest_metadata(nodeid: str) -> dict[str, str]:
     path = nodeid.split("::", 1)[0]
     row = next(row for row in data["records"] if row[0] == path)
     record = dict(zip(data["fields"], row, strict=True))
-    return {
-        key: record[key]
-        for key in ("owner", "primary", "duration", "device", "asset", "oracle")
-    }
+    return {key: record[key] for key in ("owner", "primary", "duration", "device", "asset", "oracle")}
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -100,20 +90,12 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
                 durations[nodeid] = durations.get(nodeid, 0.0) + duration
     slowest = [
         {"nodeid": nodeid, "seconds": seconds, **_manifest_metadata(nodeid)}
-        for nodeid, seconds in sorted(
-            durations.items(), key=lambda item: item[1], reverse=True
-        )[:50]
+        for nodeid, seconds in sorted(durations.items(), key=lambda item: item[1], reverse=True)[:50]
     ]
     skips = []
     for report in terminalreporter.stats.get("skipped", ()):
-        reason = (
-            report.longrepr[2]
-            if isinstance(report.longrepr, tuple)
-            else str(report.longrepr)
-        )
-        skips.append(
-            {"nodeid": report.nodeid, "reason": reason, **_manifest_metadata(report.nodeid)}
-        )
+        reason = report.longrepr[2] if isinstance(report.longrepr, tuple) else str(report.longrepr)
+        skips.append({"nodeid": report.nodeid, "reason": reason, **_manifest_metadata(report.nodeid)})
     payload = {
         "schema": "vmex.test-report/1",
         "collected": len(durations),
@@ -124,9 +106,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     path = Path(target)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    terminalreporter.write_line(
-        f"VMEX test report: {path} ({len(slowest)} timings, {len(skips)} skips)"
-    )
+    terminalreporter.write_line(f"VMEX test report: {path} ({len(slowest)} timings, {len(skips)} skips)")
 
 
 # ---------------------------------------------------------------------------
@@ -136,12 +116,11 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
 #   2. ~/vmex_notes/golden (local development snapshot),
 #   3. ~/.cache/vmex/golden-v1 (downloaded once from the golden-v1 release).
 # ---------------------------------------------------------------------------
-# Keep the owner/repo as ``vmec_jax`` (the pre-rename name): the release asset
-# lives there, and after the repo is renamed to VMEX GitHub redirects the old
-# path to the new one, so this URL resolves both before and after the rename.
-# Pointing it at ``VMEX`` directly 404s until the rename lands.
-GOLDEN_URL = "https://github.com/uwplasma/vmec_jax/releases/download/golden-v1/vmec-jax-golden-v1.tar.gz"
-GOLDEN_SHA256 = "85b1de372066d1dd0c57b1a9ffb569ccc1276bb67dec81e7bf15a5a943ca05d7"
+_ASSET_MANIFEST = json.loads((_ROOT / "assets" / "manifest.json").read_text())
+_GOLDEN_BUNDLE = next(bundle for bundle in _ASSET_MANIFEST["bundles"] if bundle["name"] == "golden-v1")
+GOLDEN_URL = _GOLDEN_BUNDLE["url"]
+GOLDEN_SHA256 = _GOLDEN_BUNDLE["sha256"]
+GOLDEN_SIZE_BYTES = _GOLDEN_BUNDLE["size_bytes"]
 
 
 def _download_golden(cache_root: Path) -> Path:
@@ -149,6 +128,9 @@ def _download_golden(cache_root: Path) -> Path:
     tarball = cache_root / "vmec-jax-golden-v1.tar.gz"
     if not tarball.exists():
         urllib.request.urlretrieve(GOLDEN_URL, tarball)  # noqa: S310 - fixed https URL
+    if tarball.stat().st_size != GOLDEN_SIZE_BYTES:
+        tarball.unlink()
+        raise RuntimeError("golden bundle size mismatch")
     digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
     if digest != GOLDEN_SHA256:
         tarball.unlink()
