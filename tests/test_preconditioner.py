@@ -243,6 +243,57 @@ def test_tridiagonal_solve_broadcast_rank():
         )
 
 
+def test_scalfor_checked_solve_reports_well_conditioned_system() -> None:
+    """The production solve accepts a stable radial system without fallback."""
+    ns, mpol, nrange = 6, 2, 3
+    matrices = newp.TridiagonalMatrices(
+        ax=jnp.full((ns, mpol, nrange), -0.25),
+        bx=jnp.full((ns, mpol, nrange), -0.25),
+        dx=jnp.full((ns, mpol, nrange), 2.0),
+    )
+    force = jnp.arange(ns * mpol * nrange, dtype=float).reshape(
+        ns, mpol, nrange
+    )
+    solved, safe = newp.scalfor(force, matrices, jmax=ns, return_safe=True)
+    reference = np.asarray(force).copy()
+    reference[:, 0] = np.asarray(newp.tridiagonal_solve(
+        matrices.ax[:, 0],
+        matrices.dx[:, 0],
+        matrices.bx[:, 0],
+        force[:, 0],
+    ))
+    reference[1:, 1] = np.asarray(newp.tridiagonal_solve(
+        matrices.ax[1:, 1],
+        matrices.dx[1:, 1],
+        matrices.bx[1:, 1],
+        force[1:, 1],
+    ))
+    reference[0, 1] = 0.0
+    assert bool(safe)
+    np.testing.assert_allclose(np.asarray(solved), reference)
+
+
+def test_scalfor_checked_solve_falls_back_without_nonfinite_update() -> None:
+    """A singular radial block returns its RHS and a typed unsafe status."""
+    ns, mpol, nrange = 5, 2, 2
+    matrices = newp.TridiagonalMatrices(
+        ax=jnp.zeros((ns, mpol, nrange)),
+        bx=jnp.zeros((ns, mpol, nrange)),
+        dx=jnp.zeros((ns, mpol, nrange)),
+    )
+    force = jnp.arange(ns * mpol * nrange, dtype=float).reshape(
+        ns, mpol, nrange
+    )
+    solved, safe = newp.scalfor(force, matrices, jmax=ns, return_safe=True)
+    assert not bool(safe)
+    assert np.all(np.isfinite(np.asarray(solved)))
+    # SOLVAX's identity fallback leaves each rejected RHS column unchanged;
+    # scalfor still enforces VMEC's m>0 axis constraint.
+    np.testing.assert_array_equal(np.asarray(solved[:, 0]), np.asarray(force[:, 0]))
+    np.testing.assert_array_equal(np.asarray(solved[1:, 1]), np.asarray(force[1:, 1]))
+    np.testing.assert_array_equal(np.asarray(solved[0, 1]), 0.0)
+
+
 # ---------------------------------------------------------------------------
 # jit compatibility
 # ---------------------------------------------------------------------------

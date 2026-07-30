@@ -299,9 +299,80 @@ geodesic term is a manifestly non-positive Schwarz-inequality remainder. Because
 the individual pieces involve radial derivatives of surface averages, the two
 surfaces nearest the axis and the edge carry the usual numerical noise; a
 practical objective penalizes ``min(DMerc[2:-1], 0)``. ``vmex`` exposes the
-profile as :func:`~vmex.core.optimize.d_merc`, evaluated through the
-parity-proven wout engine (host NumPy, hence ``jac=None``); it is validated
-against VMEC2000 golden ``wout`` files.
+reporting profile as :func:`~vmex.core.optimize.d_merc`, evaluated through the
+parity-proven wout engine.  The symmetric live-state counterpart
+:func:`~vmex.core.stability.d_merc_state` is a pure-JAX port of the same
+``jxbforce.f``/``mercier.f`` path for ``jit``/AD use and agrees with the wout
+profile to floating-point round-off.  For optimization,
+:func:`~vmex.core.stability.mercier_stability_residual` excludes ``[0:2]``
+and the edge and returns
+``smoothing * softplus((margin - DMerc) / smoothing)``; targeting it to zero
+penalizes unstable (negative) ``DMerc`` with a smooth gradient.  At finite
+``smoothing`` the residual is positive, rather than exactly zero, on stable
+surfaces but decays exponentially with the stability margin.  Both profile
+lanes retain VMEC's near-axis and edge limitations; the traceable Mercier
+lane does not yet support ``lasym = True``.
+
+Parallel current and resistive interchange
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`~vmex.core.stability.jdotb_state` exposes the same full-mesh
+``jdotb = <J.B>`` profile that VMEC2000 computes in ``jxbforce.f``, but as a
+pure-JAX function of the converged state.  Its WOUT normalization and
+extrapolated axis/edge entries are unchanged, so it can be used directly as
+an implicit-differentiation current objective. This is a direct port of the
+``jxbforce.f`` current reconstruction, distinct from the cheaper
+``bootstrap.vmec_j_dot_B`` force-balance identity used by the Redl mismatch.
+For optimization, :func:`~vmex.core.stability.jdotb_residual` selects
+``jdotb[2:-1]`` to exclude the usual axis/edge entries.
+This lane supports ``lasym = True``.  A converged finite-pressure,
+up-down-asymmetric tokamak agrees with live VMEC2000 to ``1.52e-3`` relative
+over ``[2:-1]``; its regression gate is ``2e-3``.
+
+Assuming the ideal prerequisite :math:`D_{\rm Merc}>0`, the
+Glasser--Greene--Johnson necessary condition for local resistive interchange
+stability is :math:`D_R \leq 0`.  In the VMEC Mercier normalization, with
+:math:`S=d\iota/d\Phi` and
+:math:`D_{\rm shear}=S^2/4`, Landreman--Jorge's relation is
+
+.. math::
+
+   D_R = -D_{\rm Merc}
+       + \frac{(H-S^2/2)^2}{S^2},\qquad
+   H=S\left(t_{JB}-\frac{\langle\mu_0J\cdot B\rangle}
+                              {\langle B^2\rangle}t_{BB}\right).
+
+:func:`~vmex.core.stability.glasser_d_r_state` reuses the traceable Mercier
+surface integrals and the VMEC-consistent ``jdotb/bdotb`` averages to evaluate
+this expression.  Exact zero-shear entries are set to zero because the
+criterion is undefined there; a positive ``shear_epsilon`` provides a smooth,
+explicit regularization for optimization.  The
+:func:`~vmex.core.stability.glasser_stability_residual` helper selects
+``D_R[2:-1]`` and smoothly penalizes values above ``-margin``; it defaults to
+``shear_epsilon=1e-8`` so zero-shear optimization seeds remain finite.
+It must be combined with ``mercier_stability_residual`` so an
+ideal-Mercier-unstable surface is never accepted based on :math:`D_R` alone.
+After optimization, use ``mercier_shear_state`` to verify
+``abs(S) >> shear_epsilon`` on every target surface; regularization makes the
+numerics finite but cannot establish GGJ stability at zero shear.
+VMEC2000 does not write ``D_R`` itself.  A live `DCON/GPEC
+<https://github.com/PrincetonUniversity/GPEC>`_ evaluation independently
+reproduces the symmetric VMEC normalization at ``ns=51`` (``D_I`` maximum
+absolute difference ``9.10e-4`` and ``D_R`` ``8.63e-5`` over normalized
+poloidal flux ``[0.1, 1)``).  The same test on an
+up-down-asymmetric tokamak exposed unresolved sensitivity in :math:`H`:
+at ``ns=201`` the candidate reconstruction's normalized ``D_I`` differs by
+at most ``1.85e-2`` over normalized poloidal flux ``[0.2, 0.9]``, but
+``D_R`` differs by ``1.49e-2`` and can change sign near marginality.
+On that same input, all four geometry families agree with VMEC2000 to
+``2.49e-10`` relative or better, while the interior VMEX/VMEC2000 ``DMerc``
+relative difference is ``18.6`` with sign disagreements.  This isolates the
+problem to the LASYM Mercier reconstruction rather than the equilibrium.
+Consequently :func:`~vmex.core.stability.d_merc_state` and
+:func:`~vmex.core.stability.glasser_d_r_state` still reject ``lasym = True``;
+the independently validated ``jdotb`` lane is available.  A 3-D LASYM
+extension additionally requires JMC or an equivalent nonaxisymmetric
+reference.
 
 Magnetic well
 ~~~~~~~~~~~~~~
@@ -319,10 +390,9 @@ with :math:`V'=dV/ds` extrapolated from the half-mesh differential volume
 :math:`vp` (VMEC ``bcovar.f``). Positive :math:`W` means :math:`V'` decreases
 outward — a magnetic well, favorable for interchange stability — matching
 simsopt's ``vacuum_well``. Being a pure ``(state, runtime)`` function it carries
-exact implicit gradients and is the traceable stand-in whenever the full
-``DMerc`` profile is too expensive or not differentiable. Near-axis analytic
-context for both measures is in Landreman–Jorge (2020) and Kim–Jorge–Dorland
-(2021); see :doc:`references`.
+exact implicit gradients and is a cheaper Mercier-adjacent target. Near-axis
+analytic context for both measures is in Landreman–Jorge (2020) and
+Kim–Jorge–Dorland (2021); see :doc:`references`.
 
 Ideal ballooning
 ~~~~~~~~~~~~~~~~~

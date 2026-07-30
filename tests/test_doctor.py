@@ -32,6 +32,7 @@ def test_collect_report_reflects_interpreter():
     assert sys.version.split()[0] in report.python
     # this test suite runs with JAX importable
     assert report.jax_backend is not None
+    assert report.jax_default_device is None or isinstance(report.jax_default_device, str)
     assert len(report.jax_devices) >= 1
     assert set(doctor._CORE_PACKAGES) == set(report.versions)
     assert report.versions["numpy"] != "not installed"
@@ -45,6 +46,10 @@ def test_format_report_healthy_and_warning_paths():
     assert "vmex installation doctor" in text
     assert "Status: no obvious installation problems detected." in text
     assert "JAX backend:" in text
+    assert "JAX default device:" in text
+    assert "VMEX forward default:" in text
+    assert "VMEX implicit default:" in text
+    assert "VMEX mirror default:" in text
     for name in doctor._CORE_PACKAGES:
         assert name in text
 

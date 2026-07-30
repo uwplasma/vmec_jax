@@ -68,6 +68,9 @@ Free boundary
 .. automodule:: vmex.core.freeboundary
    :members:
 
+.. automodule:: vmex.core.freeboundary_linear
+   :members:
+
 .. automodule:: vmex.core.freeboundary_diff
    :members:
 

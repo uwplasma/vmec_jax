@@ -1,28 +1,11 @@
-"""Zero-crash penalty-path tests for ``optimize.least_squares`` (plan Item I.2).
-
-The zero-crash policy: a mid-campaign trial whose equilibrium solve fails
-(e.g. ``VmecJacobianError`` from a self-intersecting trial boundary) must be
-*penalized* — a large finite residual so the trust region backs off — never
-crash the campaign.  These paths were previously uncovered; the tests below
-exercise all four except-bodies deterministically by making the host solve
-fail on chosen calls (a naturally self-intersecting trial depends on scipy
-trust-region internals and is not deterministic across scipy versions):
-
-- ``jac=None`` (finite-difference lane): the ``fun`` except body
-  (penalize + ``trial solve failed`` print) via a ``solve_equilibrium`` that
-  fails on one finite-difference probe;
-- ``jac="implicit"``: the ``fun`` except body via a poisoned
-  ``implicit._host_solve`` on trial (new-parameter-key) solves — this also
-  exercises the Item I.1 typed-error relay *under jit* (the short sentinel
-  surfaces at the jit boundary and is caught by the penalty lane);
-- ``jac="implicit"``: the ``jac_fn`` last-valid-Jacobian fallback
-  (``trial jacobian failed`` print) via a poison on later memo-hit solves
-  (the Jacobian re-evaluates exactly the parameters ``fun`` just solved);
-- ``jac="implicit"``: the final diagnostic re-solve fallback (hot-seeded
-  ``solve_equilibrium`` fails -> plain cold re-solve).
-
-Each campaign must complete, return a finite cost and record the penalty
-prints (``verbose=1`` -> capsys).
+"""Zero-crash penalty-path tests for ``optimize.least_squares`` (plan Item
+I.2): a mid-campaign trial whose equilibrium solve fails must be penalized
+(large finite residual, trust region backs off), never crash.  All four
+except-bodies are exercised deterministically by making the host solve fail
+on chosen calls: the jac=None ``fun`` body, the jac="implicit" ``fun`` body
+(which also exercises the Item I.1 typed-error relay under jit), the
+last-valid-Jacobian fallback, and the final diagnostic cold re-solve.
+Each campaign must complete with a finite cost and the penalty prints.
 """
 
 from __future__ import annotations
@@ -107,6 +90,31 @@ def test_implicit_lane_fun_penalty_path(monkeypatch, capsys):
     np.testing.assert_allclose(res.x, opt.pack_boundary(inp, 1))  # stayed at x0
 
 
+def test_minimize_penalty_path(monkeypatch, capsys):
+    """A failed scalarized trial reuses the last finite reverse gradient."""
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    real = im._host_solve
+    calls = {"new": 0, "poisoned": 0}
+
+    def flaky(cfg, params):
+        hit = im._LAST_SOLVE.get(cfg)
+        if hit is None or hit[0] != im._params_key(params):
+            calls["new"] += 1
+            if calls["new"] >= 2:
+                calls["poisoned"] += 1
+                raise _boom()
+        return real(cfg, params)
+
+    monkeypatch.setattr(im, "_host_solve", flaky)
+    res = opt.minimize(
+        OBJECTIVE, inp, max_mode=1, verbose=1,
+        options={"maxiter": 2, "maxls": 3})
+    out = capsys.readouterr().out
+    assert calls["poisoned"] >= 1
+    assert "trial solve/gradient failed" in out
+    assert np.isfinite(res.cost)
+
+
 def test_implicit_lane_jac_fallback_and_diagnostic_resolve(monkeypatch, capsys):
     """jac='implicit': failed Jacobian reuses the last valid one; final
     diagnostic re-solve falls back to a cold solve when the hot seed fails.
@@ -152,3 +160,22 @@ def test_implicit_lane_jac_fallback_and_diagnostic_resolve(monkeypatch, capsys):
     assert np.isfinite(res.cost)
     assert res.equilibrium is not None  # cold-solve fallback delivered it
     assert res.equilibrium.result.converged
+
+
+def test_recycled_jacobian_lane_scan_shapes() -> None:
+    """The drift-gated recycled Jacobian lane (recycle=True) must run.
+
+    Exercises optimize.jacobian_rows_recycled's lax.scan carry — the path that
+    threads and drift-gates the GCROT pair across dof chunks. A shape bug there
+    (gating against the full stacked recs leaf instead of a single lane) makes
+    lax.scan reject the carry-type mismatch; this pins that the lane completes
+    on a real (small) equilibrium and returns a usable result. The recycled
+    lane is otherwise opt-in and was previously uncovered in CI.
+    """
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    res = opt.least_squares(
+        OBJECTIVE, inp, max_mode=1, jac="implicit", recycle=True,
+        max_nfev=3, verbose=0,
+    )
+    assert isinstance(res.input, VmecInput)
+    assert np.all(np.isfinite(np.asarray(res.x)))

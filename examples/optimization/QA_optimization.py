@@ -83,10 +83,10 @@ objective_terms = [
     (opt.aspect_ratio, ASPECT_TARGET, 1.0),
     (opt.mean_iota, IOTA_TARGET, 10.0),
     # Extra physics terms, CI-tested (tests/test_examples.py runs
-    # them uncommented).  magnetic_well works with JAC="implicit"; d_merc and
-    # l_grad_b are wout-engine (host) objectives -> set JAC = None for those.
+    # them uncommented).  These state objectives work with JAC="implicit";
+    # d_merc and l_grad_b remain the host reporting lanes.
     # (opt.magnetic_well, 0.05, 1.0),
-    # (lambda eq: np.minimum(opt.d_merc(eq)[2:-1], 0.0), 0.0, 100.0),
+    # (opt.mercier_stability_residual, 0.0, 100.0),
     # (lambda eq: max(1.0 / opt.l_grad_b(eq) - 1.0 / 0.35, 0.0), 0.0, 1.0),
     # Turbulence proxies (plan R26h.h4; optional dep: pip install spectraxgk;
     # gates in tests/test_turbulence.py).  SPECTRAX-GK linear ITG growth rate

@@ -4,7 +4,7 @@ Installation
 Requirements
 ------------
 
-- Python 3.10+
+- Python 3.10+ (Python 3.12+ recommended for current accelerator-enabled JAX)
 - ``numpy``, ``jax`` + ``jaxlib``, ``netCDF4``, ``matplotlib``,
   ``booz_xform_jax`` (all installed automatically)
 
@@ -71,12 +71,22 @@ e.g.:
 
 .. code-block:: bash
 
-   pip install -U "jax[cuda12]"
+   pip install -U "jax[cuda13]"
 
-``vmex`` then picks CPU or GPU per solve using a measured device policy —
-small decks stay on the CPU, large ones move to the GPU. See
-:ref:`performance:GPU guidance` for the policy, how to pin a backend with
-``JAX_PLATFORMS``, and the persistent compilation cache.
+CUDA 13 wheels currently require an NVIDIA driver version of at least 580
+and a Python version supported by the current JAX release. On older Python
+versions, package resolution can select an older JAX release whose accelerator
+extras differ; always confirm the result with ``vmex --doctor``. CUDA 12,
+ROCm, TPU, and platform-specific alternatives remain documented in JAX's
+installation matrix.
+
+``vmex`` then picks CPU or GPU per forward solve using a measured device
+policy. High-level optimization defaults its implicit Jacobians to CPU because
+they are launch-bound on the tested GPUs; low-level
+:func:`vmex.core.implicit.run` follows ordinary JAX placement when ``device``
+is omitted. See :ref:`performance:GPU guidance` for the policies and
+persistent compilation cache. Environment variables are not required for
+ordinary hardware detection.
 
 Build the documentation locally
 -------------------------------

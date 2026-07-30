@@ -30,10 +30,11 @@ before/after:
     ``single_stage_vs_two_stage.py`` recipe) and push the interior
     :func:`~vmex.optimize.d_merc` profile toward POSITIVE (= Mercier
     stable) through a hinge penalty on its negative part.  ``d_merc`` is a
-    wout-engine objective (host-NumPy Mercier tables) with NO traceable lane,
-    so this one campaign runs honest finite differences (``jac=None``) at
+    wout-engine reporting objective (host-NumPy Mercier tables), so this one
+    campaign deliberately runs finite differences (``jac=None``) at
     ``max_mode 2`` — few dofs keep the FD cost affordable, and the cost gap
-    vs the implicit campaigns is part of the story.
+    vs the implicit campaigns is part of the story.  New campaigns can use
+    ``mercier_stability_residual`` with ``jac="implicit"`` instead.
 
 Each campaign: measure the seed metrics -> optimize (short budget, ESS
 trust-region scaling) -> re-solve the final deck -> print a before/after row
@@ -283,11 +284,9 @@ def run_campaign(name: str) -> dict:
     print(f"lane: {lane}; max_mode {spec['max_mode']} ({ndofs} dofs), "
           f"max_nfev {spec['max_nfev']}, use_ess=True")
     if name == "dmerc":
-        print("note: d_merc is a wout-engine objective (host-NumPy Mercier "
-              "tables, vmex.core.nyquist) with NO traceable lane — this "
-              "campaign pays one full equilibrium re-solve PER DOF per "
-              "Jacobian, which is exactly why it runs at max_mode "
-              f"{spec['max_mode']}.  Honest cost is part of the story.")
+        print("note: this campaign deliberately uses the d_merc wout-reporting "
+              "lane and finite differences.  For exact implicit gradients, "
+              "use opt.mercier_stability_residual with jac='implicit'.")
 
     seed = dict(metric=metric(seed_eq), **held_metrics(seed_eq))
     print(f"[seed]  {spec['label']} = {fmt.format(seed['metric'])} | "

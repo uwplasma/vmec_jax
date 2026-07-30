@@ -11,6 +11,13 @@ import numpy as np
 from scipy.optimize import brentq, least_squares
 from scipy.sparse.linalg import LinearOperator
 
+from vmex.core.device import (
+    AUTO,
+    _mirror_placement_device,
+    _put_numeric_leaves,
+    mirror_device_context,
+)
+
 from .forces import (
     MU0,
     InterfaceResidual,
@@ -536,8 +543,42 @@ def solve_free_boundary(
     exterior_order: int = 8,
     exterior_spectral_side_density: bool = False,
     require_convergence: bool = False,
+    device: Any = AUTO,
 ) -> FreeBoundaryMirrorResult:
-    """Solve an open free-boundary mirror in longitudinal B-spline coefficients."""
+    """Solve an open free-boundary mirror in longitudinal B-spline coefficients.
+
+    ``device="auto"`` uses the measured mirror CPU policy; explicit devices
+    and ``None`` follow the common VMEX placement contract. Numeric values
+    captured by a field callable can be relocated only when the callable is a
+    registered pytree such as :class:`jax.tree_util.Partial`.
+    """
+
+    if device is not None:
+        target = _mirror_placement_device(device)
+        with mirror_device_context(device):
+            return solve_free_boundary(
+                _put_numeric_leaves(initial_boundary, target),
+                discretization,
+                config,
+                _put_numeric_leaves(external_field, target),
+                axial_flux_derivative=_put_numeric_leaves(
+                    axial_flux_derivative, target
+                ),
+                mass_profile=_put_numeric_leaves(mass_profile, target),
+                current_derivative=_put_numeric_leaves(
+                    current_derivative, target
+                ),
+                solve_lambda=solve_lambda,
+                gamma=gamma,
+                initial_state=_put_numeric_leaves(initial_state, target),
+                target_central_pressure=target_central_pressure,
+                initial_mass_scale=initial_mass_scale,
+                exterior_ntheta=exterior_ntheta,
+                exterior_order=exterior_order,
+                exterior_spectral_side_density=exterior_spectral_side_density,
+                require_convergence=require_convergence,
+                device=None,
+            )
 
     grid = discretization.grid
     if grid.ntheta != 1:
@@ -596,14 +637,12 @@ def solve_free_boundary(
     lower, upper = vectorizer.bounds()
     matrix_free = problem.size > _DENSE_JACOBIAN_MAX_SIZE
     # The Newton-GMRES polish that closes a matrix-free solve to ``ftol`` needs
-    # a Krylov space that scales with the coupled unknown count. Restarted
-    # GMRES(24) stagnates on a fine-grid state of a hundred-plus unknowns, so
-    # the polish stalls just above tolerance (a well-conditioned fine grid was
-    # observed frozen at 4.5e-11) even though compute remains. A full Krylov
-    # cycle of ``problem.size`` (clipped by ``max_iterations``) resolves each
-    # Newton direction; the trust-region globalizer keeps its cheap fixed
-    # budget because it only has to reach the polish basin, which the finer
-    # beta continuation ladder brings within reach. Enlarging a Krylov budget
+    # a Krylov space that scales with the coupled unknown count: restarted
+    # GMRES(24) stagnates on fine-grid states of a hundred-plus unknowns,
+    # stalling the polish just above tolerance. A full Krylov cycle of
+    # ``problem.size`` (clipped by ``max_iterations``) resolves each Newton
+    # direction; the trust-region globalizer keeps its cheap fixed budget
+    # because it only has to reach the polish basin. Enlarging a Krylov budget
     # never perturbs an already converged state: the polish stops on its own
     # ``ftol`` and a richer subspace only sharpens intermediate directions.
     krylov_span = max(24, min(problem.size, int(config.max_iterations)))
@@ -864,8 +903,42 @@ def solve_beta_scan(
     exterior_ntheta: int = 40,
     exterior_order: int = 8,
     exterior_spectral_side_density: bool = False,
+    device: Any = AUTO,
 ) -> tuple[FreeBoundaryMirrorResult, ...]:
-    """Continue one coefficient-native free-boundary state through increasing beta."""
+    """Continue one free-boundary state through beta on one selected device."""
+
+    if device is not None:
+        target = _mirror_placement_device(device)
+        restart = initial_restart
+        if restart is not None:
+            restart = FreeBoundaryRestart(
+                _put_numeric_leaves(restart.boundary, target),
+                _put_numeric_leaves(restart.plasma_state, target),
+                restart.mass_scale,
+            )
+        with mirror_device_context(device):
+            return solve_beta_scan(
+                _put_numeric_leaves(initial_boundary, target),
+                discretization,
+                config,
+                _put_numeric_leaves(external_field, target),
+                beta_values,
+                axial_flux_derivative=_put_numeric_leaves(
+                    axial_flux_derivative, target
+                ),
+                reference_field=reference_field,
+                current_derivative=_put_numeric_leaves(
+                    current_derivative, target
+                ),
+                gamma=gamma,
+                beta_rtol=beta_rtol,
+                initial_state=_put_numeric_leaves(initial_state, target),
+                initial_restart=restart,
+                exterior_ntheta=exterior_ntheta,
+                exterior_order=exterior_order,
+                exterior_spectral_side_density=exterior_spectral_side_density,
+                device=None,
+            )
 
     beta_values = np.asarray(beta_values, dtype=float)
     if beta_values.ndim != 1 or beta_values.size < 1:
@@ -927,6 +1000,7 @@ def solve_beta_scan(
             exterior_spectral_side_density=exterior_spectral_side_density,
             target_central_pressure=None if beta == 0.0 else central_pressure,
             require_convergence=True,
+            device=None,
         )
         if beta > 0.0:
             center = int(np.argmin(np.abs(grid.z)))

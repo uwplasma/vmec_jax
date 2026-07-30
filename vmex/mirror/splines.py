@@ -13,6 +13,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from vmex.core.device import (
+    AUTO,
+    _mirror_placement_device,
+    _put_numeric_leaves,
+    mirror_device_context,
+)
+
 from .basis import CubicBSplineBasis, MirrorGrid, ThetaBasis
 from .geometry import (
     evaluate_closed_spline_axis,
@@ -354,26 +361,23 @@ def build_stellarator_mirror_hybrid(
 ) -> StellaratorMirrorSetup:
     """Build a closed two-leg mirror with rotating stellarator returns.
 
-    ``section_turns`` turns the elliptical cross-section continuously around the
-    closed circuit by that many full ``2*pi`` turns, superposed on the
-    return-only 90-degree rotation. The straight legs keep an exactly straight
-    axis; only the ellipse they carry rotates, so a nonzero ``section_turns``
-    raises the rotational transform (by amplifying the current-driven transform:
-    ``iota`` 0.085 -> 0.141 at ``s=0.75`` for two turns). The default ``0``
-    reproduces the legacy return-only rotation.
+    ``section_turns`` rotates the elliptical cross-section continuously around
+    the closed circuit by that many full ``2*pi`` turns, superposed on the
+    return-only 90-degree rotation. The legs keep an exactly straight axis;
+    only the ellipse rotates, so nonzero turns raise the current-driven
+    rotational transform (``iota`` 0.085 -> 0.141 at ``s=0.75`` for two
+    turns). The default ``0`` keeps the return-only rotation.
 
-    ``axis_coefficient_count`` freezes the leg-return junction transition. The
-    junction between an exactly straight leg (zero curvature) and a circular
-    return (curvature ``1/return_radius``) is rounded across the cubic spline's
-    local support, so building the axis directly in a finer solve basis narrows
-    that transition and sharpens the curvature overshoot at the junction as fast
-    as refinement helps. When ``axis_coefficient_count`` is set, the racetrack
-    axis and rotating section are constructed at that base control count and
-    then exactly refined (``refine_periodic_uniform``) to ``coefficient_count``,
-    so the junction-transition width is a fixed design parameter of the family
-    while the equilibrium solve basis refines. ``coefficient_count`` must be a
-    dyadic multiple of ``axis_coefficient_count``. The default ``None`` keeps the
-    legacy behaviour of building the geometry directly in the solve basis.
+    ``axis_coefficient_count`` freezes the leg-return junction transition: the
+    junction between the zero-curvature leg and the ``1/return_radius`` return
+    is rounded across the cubic spline's local support, so building the axis
+    directly in a finer solve basis narrows that transition and sharpens the
+    curvature overshoot. When set, the racetrack axis and rotating section are
+    built at that base control count and exactly refined
+    (``refine_periodic_uniform``) to ``coefficient_count`` -- which must be a
+    dyadic multiple of it -- making the junction-transition width a fixed
+    design parameter while the solve basis refines. The default ``None``
+    builds the geometry directly in the solve basis.
     """
 
     discretization = SplineMirrorDiscretization.build_closed(
@@ -489,22 +493,21 @@ class QIMirrorSplice:
     """Closed magnetic axis formed by inserting straight mirror legs.
 
     ``points`` is a closed, arc-length-orderable polyline (the final point
-    precedes the first).  A quasi-isodynamic axis is cut at its low-curvature
-    symmetry planes (``2 * nfp`` of them -- four for ``nfp = 2``) and at each cut
-    an exactly-straight mirror leg is inserted *along the local axis tangent*, so
-    every leg continues the axis in its own direction.  The per-cut leg lengths
-    (``leg_lengths``, one per cut) are chosen so the inserted displacements
-    cancel (the loop closes), and the curve is assembled from one
-    stellarator-symmetric half reflected 180 degrees about the ``x`` axis, so the
-    result is stellarator symmetric to rounding.
+    precedes the first).  A quasi-isodynamic axis is cut at its ``2 * nfp``
+    low-curvature symmetry planes and at each cut an exactly-straight leg is
+    inserted *along the local axis tangent*, so every leg continues the axis
+    in its own direction.  Per-cut ``leg_lengths`` are chosen so the inserted
+    displacements cancel (the loop closes), and the curve is assembled from
+    one stellarator-symmetric half reflected 180 degrees about the ``x``
+    axis, so the result is stellarator symmetric to rounding.
 
-    ``leg_windows`` are the arc-length spans of the straight legs (one per cut,
-    in curve order).  ``corner_angle`` (degrees) is the residual tangent break at
-    the leg/return junctions -- now near zero, since each leg is tangent to the
-    axis: the seam is a *curvature* break (the exactly-zero-curvature leg meeting
-    the finite-curvature return), which a global Fourier basis still rings on and
-    a local B-spline represents cleanly.  ``closure_error`` is the residual of the
-    closed loop (zero to rounding by construction).
+    ``leg_windows`` are the arc-length spans of the legs (one per cut, in
+    curve order).  ``corner_angle`` (degrees) is the residual tangent break at
+    the leg/return junctions -- near zero since each leg is tangent to the
+    axis; the seam is a *curvature* break (zero-curvature leg meeting the
+    finite-curvature return), which a global Fourier basis rings on and a
+    local B-spline represents cleanly.  ``closure_error`` is the loop-closure
+    residual (zero to rounding by construction).
     """
 
     points: np.ndarray
@@ -573,15 +576,10 @@ def splice_straight_legs(
 ) -> QIMirrorSplice:
     """Cut a stellarator-symmetric closed axis and insert tangent-aligned legs.
 
-    The closed input ``axis_points`` (shape ``(P, 3)``) is cut at the ``N``
-    ``cut_indices`` (its low-curvature symmetry planes -- ``2 * nfp`` of them),
-    and at each cut an exactly-straight mirror leg is inserted **along the local
-    axis tangent**, so every leg continues the axis in its own direction (no
-    shared "bisector", so each leg meets its curved returns tangentially).  The
-    per-cut leg lengths are set by :func:`_closure_leg_lengths` so the inserted
-    displacements cancel, and the curve is built from one stellarator-symmetric
-    half (between the two symmetry-fixed cuts) reflected 180 degrees about the
-    ``x`` axis, so the racetrack is stellarator symmetric to rounding.
+    ``axis_points`` (shape ``(P, 3)``) is cut at the ``N`` ``cut_indices``;
+    the construction is described on :class:`QIMirrorSplice`, with per-cut leg
+    lengths from :func:`_closure_leg_lengths` and the stellarator-symmetric
+    half taken between the two symmetry-fixed cuts.
 
     Requires a stellarator-symmetric axis whose cuts include exactly two
     symmetry-fixed planes (where the tangent reverses under the symmetry); an
@@ -1219,8 +1217,39 @@ def solve_fixed_boundary(
     axis: Any | None = None,
     gradient_tolerance: float = 1.0e-11,
     require_convergence: bool = False,
+    device: Any = AUTO,
 ) -> SplineMirrorSolveResult:
-    """Solve an open or periodic closed scalar-pressure equilibrium."""
+    """Solve an open or periodic closed scalar-pressure equilibrium.
+
+    ``device="auto"`` uses the measured mirror CPU policy; an explicit JAX
+    device/platform wins, while ``device=None`` follows ordinary JAX
+    placement. Numeric values captured by a field callable can be relocated
+    only when the callable is a registered pytree such as
+    :class:`jax.tree_util.Partial`.
+    """
+
+    if device is not None:
+        target = _mirror_placement_device(device)
+        with mirror_device_context(device):
+            return solve_fixed_boundary(
+                _put_numeric_leaves(initial_state, target),
+                _put_numeric_leaves(boundary, target),
+                discretization,
+                config,
+                axial_flux_derivative=_put_numeric_leaves(
+                    axial_flux_derivative, target
+                ),
+                mass_profile=_put_numeric_leaves(mass_profile, target),
+                current_derivative=_put_numeric_leaves(
+                    current_derivative, target
+                ),
+                gamma=gamma,
+                solve_lambda=solve_lambda,
+                axis=_put_numeric_leaves(axis, target),
+                gradient_tolerance=gradient_tolerance,
+                require_convergence=require_convergence,
+                device=None,
+            )
 
     from .forces import (
         VariationalResidual,
@@ -1438,6 +1467,7 @@ def solve_fixed_boundary_from_radius(
     axial_flux_derivative: Array = 0.01,
     solve_lambda: bool = True,
     require_convergence: bool = True,
+    device: Any = AUTO,
     **kwargs: Any,
 ) -> SplineMirrorSolveResult:
     """Solve a fixed-boundary mirror equilibrium directly from a boundary radius.
@@ -1464,6 +1494,7 @@ def solve_fixed_boundary_from_radius(
         axial_flux_derivative=axial_flux_derivative,
         solve_lambda=solve_lambda,
         require_convergence=require_convergence,
+        device=device,
         **kwargs,
     )
 

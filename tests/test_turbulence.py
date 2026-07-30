@@ -1,40 +1,18 @@
-"""Validation gates for the SPECTRAX-GK turbulence proxies (plan.md R26h.h4).
+"""Validation gates for the GKX turbulence proxies (plan.md R26h.h4).
 
-Lanes
------
-- **Geometry adapter parity** (spectraxgk-free): the flux-tube arrays of
-  :func:`vmex.core.turbulence.gk_fieldline_geometry` reproduce, at
-  machine precision, the field-line geometry that
-  :mod:`vmex.core.stability` assembles from the same converged state
-  (identical simsopt ``vmec_fieldlines`` conventions), plus internal
-  consistency: the Cauchy-Schwarz metric inequality
-  ``gds21^2 <= gds2 * gds22``, the mirror-term identity
-  ``bgrad = gradpar d(ln bmag)/dtheta``, the vacuum-limit
-  ``cvdrift = gbdrift``, and the exactly-constant equal-arc ``gradpar``.
-- **Contract gate** (needs spectraxgk): the mapping passes
-  ``flux_tube_geometry_from_mapping`` with host-side validation ON —
-  finite arrays and the constant-``gradpar`` equal-arc contract.
-- **Proxy physics** (needs spectraxgk): on a solved finite-beta shaped
-  tokamak the dominant gyrokinetic growth rate is ITG-critical-gradient
-  monotone — strongly driven (``R/L_Ti = 6.9``, Cyclone-level) is unstable,
-  weakly driven (``R/L_Ti = 1``) is marginal/stable — and the quasilinear
-  and reduced nonlinear-window heat-flux proxies are positive for the
-  unstable case, with the documented saturation-rule relations between the
-  objective-vector entries reproduced exactly.
-- **Differentiability** (needs spectraxgk): SPECTRAX-GK is JAX-traceable —
-  both ``jax.grad`` (reverse) and ``jax.jacfwd`` (forward — the mode
-  vmex's implicit Jacobian lane uses) of the growth rate w.r.t. a
-  pressure-profile rescale match central finite differences, the gradient
-  w.r.t. the converged state (the piece ``jac="implicit"`` composes with)
-  is finite and nonzero, and the wrappers satisfy the two-positional
-  ``(state, runtime)`` objective-term contract of
-  :func:`vmex.core.optimize.least_squares`.  The eigenvector-weighted
-  quasilinear/nonlinear proxies are value-level (``jac=None``): JAX
-  declines non-symmetric eigenvector derivatives, and the gate documents
-  that limitation explicitly.
+Lanes: geometry adapter parity (gkx-free — the flux-tube arrays reproduce
+:mod:`vmex.core.stability`'s field-line assembly at machine precision,
+plus Cauchy-Schwarz, mirror-term, vacuum-limit and equal-arc identities);
+the gkx flux-tube contract with host validation ON; proxy physics on a
+finite-beta shaped tokamak (ITG-critical-gradient monotone growth rate,
+positive heat-flux proxies, saturation-rule relations reproduced exactly);
+and differentiability (reverse and forward AD vs central FD, finite state
+gradient, the two-positional objective-term contract; the eigenvector-
+weighted proxies are value-level because JAX declines non-symmetric
+eigenvector derivatives).
 
-The spectraxgk dependency is optional (``pip install spectraxgk``); like
-``test_freeboundary_diff.py``, the dependent lanes skip cleanly without it.
+gkx is optional (``pip install 'gkx>=1.7.1'``; the legacy ``spectraxgk``
+name is not supported) — dependent lanes skip cleanly without it.
 """
 
 from __future__ import annotations
@@ -84,7 +62,7 @@ def vacuum_eq():
 
 
 # ---------------------------------------------------------------------------
-# Geometry adapter (no spectraxgk needed)
+# Geometry adapter (no gkx needed)
 # ---------------------------------------------------------------------------
 
 
@@ -193,13 +171,13 @@ def test_surface_index_validation(shaped_eq):
 
 
 # ---------------------------------------------------------------------------
-# SPECTRAX-GK contract + proxies (importorskip-gated, like freeboundary_diff)
+# GKX contract + proxies (importorskip-gated, like freeboundary_diff)
 # ---------------------------------------------------------------------------
 
 
-def test_contract_passes_spectraxgk_validation(shaped_eq):
-    """The mapping satisfies spectraxgk's validated flux-tube contract."""
-    pytest.importorskip("spectraxgk")
+def test_contract_passes_gkx_validation(shaped_eq):
+    """The mapping satisfies gkx's validated flux-tube contract."""
+    pytest.importorskip("gkx")
     geom = turb.flux_tube_geometry(shaped_eq.state, shaped_eq.runtime,
                                    validate=True, ntheta=32, **LINE)
     assert type(geom).__name__ == "FluxTubeGeometryData"
@@ -210,7 +188,7 @@ def test_contract_passes_spectraxgk_validation(shaped_eq):
 
 def test_growth_rate_is_itg_critical_gradient_monotone(shaped_eq):
     """Strong ITG drive unstable, weak drive marginal; proxies positive."""
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     state, rt = shaped_eq.state, shaped_eq.runtime
     gamma_hi = float(turb.turbulent_growth_rate(state, rt, r_over_lt=6.9, **GK))
     gamma_lo = float(turb.turbulent_growth_rate(state, rt, r_over_lt=1.0, **GK))
@@ -221,7 +199,7 @@ def test_growth_rate_is_itg_critical_gradient_monotone(shaped_eq):
 
 def test_objective_vector_and_scalar_proxies_consistent(shaped_eq):
     """Vector entries reproduce the documented saturation-rule proxies."""
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     state, rt = shaped_eq.state, shaped_eq.runtime
     vec = np.asarray(turb.turbulence_objective_vector(state, rt, **GK))
     named = dict(zip(turb.TURBULENCE_OBJECTIVE_NAMES, vec))
@@ -235,7 +213,7 @@ def test_objective_vector_and_scalar_proxies_consistent(shaped_eq):
         gamma * named["linear_heat_flux_weight"] / max(named["kperp_eff2"], 1e-12),
         rel=1e-12)
     assert ql == pytest.approx(named["mixing_length_heat_flux_proxy"], rel=1e-12)
-    # reduced nonlinear-window rule (spectraxgk's smooth surrogate)
+    # reduced nonlinear-window rule (gkx's smooth surrogate)
     nl = float(turb.nonlinear_heat_flux_proxy(state, rt, csat=0.85, **GK))
     gamma_plus = np.logaddexp(0.0, 18.0 * gamma) / 18.0   # smooth_positive(gamma)
     expected_nl = (0.85 * max(named["linear_heat_flux_weight"], 0.0) * 2.0 * gamma_plus
@@ -245,13 +223,13 @@ def test_objective_vector_and_scalar_proxies_consistent(shaped_eq):
 
 
 def test_growth_rate_gradient_matches_finite_differences(shaped_eq):
-    """spectraxgk is JAX-traceable: AD == FD through geometry + eigensolve.
+    """gkx is JAX-traceable: AD == FD through geometry + eigensolve.
 
     Both AD modes: reverse (``jax.grad``, the hand-written objective lane)
     and forward (``jax.jacfwd`` — what ``jac="implicit"``'s forward implicit
     Jacobian traces through the objective rows).
     """
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     state, rt = shaped_eq.state, shaped_eq.runtime
 
     def gamma(scale):
@@ -269,15 +247,12 @@ def test_growth_rate_gradient_matches_finite_differences(shaped_eq):
 
 
 def test_eigenvector_weighted_proxies_are_value_level(shaped_eq):
-    """Documented limitation: quasilinear/nonlinear proxies need jac=None.
-
-    Their heat-flux weights depend on the dominant eigenvector of the
-    non-symmetric GK operator, whose derivatives JAX declines
-    (spectraxgk >= 1.6.10 evaluates them with plain ``jnp.linalg.eig``).
-    Values remain finite-difference-friendly, which is what ``jac=None``
-    uses; revisit if spectraxgk adopts ``enable_eigvec_derivs``.
-    """
-    pytest.importorskip("spectraxgk")
+    """Documented guidance: quasilinear/nonlinear proxies use ``jac=None``
+    (their weights depend on the dominant eigenvector of the non-symmetric
+    GK operator, whose derivatives JAX declines unless
+    ``enable_eigvec_derivs``); reverse AD must either refuse with that
+    error or agree with the FD lane that ``jac=None`` actually uses."""
+    pytest.importorskip("gkx")
     state, rt = shaped_eq.state, shaped_eq.runtime
 
     def ql(scale):
@@ -285,16 +260,25 @@ def test_eigenvector_weighted_proxies_are_value_level(shaped_eq):
         return turb.quasilinear_flux_proxy(state, dataclasses.replace(rt, setup=setup),
                                            **GK)
 
-    with pytest.raises(NotImplementedError, match="eigenvector"):
-        jax.grad(ql)(1.0)
-    eps = 1e-3                                       # FD lane stays healthy
-    fd = (ql(1.0 + eps) - ql(1.0 - eps)) / (2.0 * eps)
-    assert np.isfinite(float(fd))
+    eps = 1e-3
+    fd = float((ql(1.0 + eps) - ql(1.0 - eps)) / (2.0 * eps))
+    assert np.isfinite(fd)                      # the jac=None lane always works
+    try:
+        analytic = float(jax.grad(ql)(1.0))
+    except NotImplementedError as err:
+        # gkx 1.7.1: JAX's documented refusal of non-symmetric eigenvector
+        # derivatives (jax#2748) — the reason the proxies are value-level.
+        assert "enable_eigvec_derivs" in str(err)
+    else:
+        # A gkx that opts in must reproduce the FD gradient it replaces.
+        assert np.isfinite(analytic)
+        scale = max(abs(fd), 1.0e-12)
+        assert abs(analytic - fd) <= 1.0e-4 * scale + 1.0e-10
 
 
 def test_grad_wrt_state_is_finite(shaped_eq):
     """The state gradient the implicit-gradient lane composes with is finite."""
-    pytest.importorskip("spectraxgk")
+    pytest.importorskip("gkx")
     rt = shaped_eq.runtime
     grad = jax.grad(lambda st: turb.turbulent_growth_rate(st, rt, **GK))(shaped_eq.state)
     leaves = jax.tree.leaves(grad)

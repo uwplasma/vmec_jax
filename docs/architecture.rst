@@ -18,7 +18,7 @@ Module map
      - Role
      - VMEC2000 counterpart
    * - :mod:`~vmex.core.input`
-     - ``VmecInput``: INDATA + VMEC++-style JSON parsing, round-trip writers
+     - ``VmecInput``: INDATA + structured JSON parsing, round-trip writers
      - ``readin.f``, ``vmec_input.f``
    * - :mod:`~vmex.core.profiles`
      - pressure / iota / current parameterizations (power series, splines,
@@ -63,7 +63,8 @@ Module map
      - single-grid solve loop: ``lax.while_loop`` core + host-blocked CLI lane
      - ``funct3d.f``, ``eqsolve.f``
    * - :mod:`~vmex.core.multigrid`
-     - ``NS_ARRAY`` ladder, coarse-to-fine interpolation, hot restart
+     - fixed- and free-boundary ``NS_ARRAY`` ladders, coarse-to-fine
+       interpolation, hot restart, vacuum continuation/rebuild
      - ``runvmec.f``, ``interp.f``
    * - :mod:`~vmex.core.vacuum`
      - NESTOR: Green's function, ``analyt``/``scalpot``, ``potvac`` solve
@@ -77,9 +78,8 @@ Module map
      - differentiable free-boundary residual via virtual casing
      - (no VMEC2000 equivalent)
    * - :mod:`~vmex.core.mgrid`
-     - mgrid netCDF read/write, differentiable interpolated field; external
-       coils live in ESSOS (``essos.coils.Coils``), consumed as an mgrid or
-       ``xyz -> B`` callable
+     - mgrid netCDF read/write, differentiable interpolated field, and
+       ESSOS/SIMSOPT/``xyz -> B`` host-side Biot--Savart tabulation
      - MAKEGRID file format, ``mgrid_mod.f90``
    * - :mod:`~vmex.core.implicit`
      - implicit differentiation of the equilibrium (``custom_vjp`` + adjoint
@@ -97,10 +97,11 @@ Module map
        self-consistency Picard loop
      - (no VMEC2000 equivalent; BOOTSJ-adjacent scope)
    * - :mod:`~vmex.core.stability`
-     - infinite-n ideal-ballooning eigenvalue objective (COBRA-style)
-     - (no VMEC2000 equivalent; COBRA companion code)
+     - traceable Mercier profile and infinite-n ideal-ballooning eigenvalue
+       objective (COBRA-style)
+     - ``mercier.f`` / ``jxbforce.f``; COBRA companion code
    * - :mod:`~vmex.core.turbulence`
-     - GK flux-tube geometry adapter + SPECTRAX-GK turbulence proxies
+     - GK flux-tube geometry adapter + GKX turbulence proxies
      - (no VMEC2000 equivalent)
    * - :mod:`~vmex.core.nyquist`
      - Nyquist-resolution Fourier tables, ``bsubs``, jxbforce, Mercier
@@ -109,7 +110,8 @@ Module map
      - derived wout quantities (beta, currents, ``specw``, ``equif``, ...)
      - ``eqfor.f``, ``bcovar.f`` outputs
    * - :mod:`~vmex.core.wout`
-     - complete ``wout_*.nc`` schema, writer and reader
+     - VMEC-compatible ``wout_*.nc`` schema, writer and reader, including
+       symmetric and LASYM NESTOR potential/surface tables
      - ``wrout.f``
    * - :mod:`~vmex.core.printing`
      - VMEC2000-format iteration lines, stage banners, termination summary
@@ -169,31 +171,57 @@ work, proxied by
    w = \mathrm{ns} \times \mathrm{mnmax} \times \mathrm{nznt}
 
 (:func:`~vmex.core.device.iteration_work`). Per-iteration throughput
-favours the GPU at every tested size, but the GPU pays fixed per-solve
-overheads (dispatch/transfer floor plus compile or cache load), so small
-decks finish faster on the CPU. The measured crossover is
-:data:`~vmex.core.device.GPU_MIN_ITERATION_WORK` (``100_000``):
-:func:`~vmex.core.device.recommended_device` returns ``"cpu"`` below it
-and ``"gpu"`` at or above it, per multigrid stage.
+favours the GPU across the tested low- and moderate-mode cases, but the GPU
+pays fixed per-solve overheads (dispatch/transfer floor plus compile or cache
+load), so small decks finish faster on the CPU.  High-mode transforms are a
+second measured exception: an 858-mode HSX deck was 3.44x faster on CPU than
+on a cache-warm RTX A4000 on the same host.  Therefore
+:func:`~vmex.core.device.recommended_device` returns ``"cpu"`` below
+:data:`~vmex.core.device.GPU_MIN_ITERATION_WORK` (``100_000``), ``"cpu"``
+above :data:`~vmex.core.device.GPU_MAX_SPECTRAL_MODES` (``512``), and
+``"gpu"`` in the middle region, per multigrid stage.  The measured GPU
+winners have at most 162 modes and the measured CPU winner has 858; the
+intermediate range is not calibrated.  The round 512 cutoff preserves prior
+AUTO behavior for common stages through 288 modes while catching that
+high-mode regression; it is not a universal crossover.
 
 :func:`~vmex.core.device.resolve_device` turns this into a concrete
-placement with strict precedence rules: an explicit ``device=`` argument to
-``solve``/``solve_multigrid`` always wins; a user pin via ``JAX_PLATFORMS``
-or ``JAX_PLATFORM_NAME`` makes the automatic policy stand down entirely; and
-the recommendation is applied only when the recommended platform is actually
-available. :func:`~vmex.core.device.device_context` wraps a stage in the
-corresponding ``jax.default_device``.
+placement with strict precedence rules: an explicit device always wins;
+``device=None`` follows JAX placement; and the default ``device="auto"``
+policy stands down for an active ``jax.default_device`` context or a
+user-pinned JAX platform.  The recommendation is applied only when its
+platform is available. :func:`~vmex.core.device.device_context` wraps a stage
+in the corresponding ``jax.default_device``.
+
+Free-boundary accelerator runs use one deliberate hybrid exception: plasma
+iterations and persistent state follow the selected device, while the dense
+NESTOR block runs on CPU and reuses its LU factor between full updates.
+Explicitly requested GPU LASYM ladders also seed the coarsest rung on CPU to
+select the VMEC2000 branch before finer rungs move to GPU; the returned state
+still resides on the requested accelerator.
 
 The optimization path is different:
-:func:`~vmex.core.device.resolve_implicit_device` **always pins the
-implicit-gradient work to the CPU** by default. The ``jac="implicit"``
-Jacobian builds a per-dof vmapped forward-implicit-differentiation graph —
+:func:`~vmex.core.device.resolve_implicit_device` **pins high-level
+optimization's implicit-gradient work to the CPU by default when VMEX owns
+placement**. Low-level :func:`~vmex.core.implicit.run` follows JAX placement
+when ``device`` is omitted; ``device="auto"`` opts into the same measured
+policy. The
+``jac="implicit"`` Jacobian builds a per-dof vmapped
+forward-implicit-differentiation graph —
 dozens of preconditioned GMRES solves with inner control flow — whose XLA
 compile time grows with the dof count and whose execution is
 kernel-launch-bound; measured on GPU it is slower than the CPU at every
-optimization size tested, while the forward equilibrium solve inside it is a
-host callback that never touches the accelerator anyway. Explicit
-``device=`` arguments and user platform pins are still honored.
+optimization size tested. The forward equilibrium callback uses the solver's
+independent automatic per-stage placement policy; the implicit-device choice
+controls the residual and Jacobian graphs. Explicit ``device=`` arguments and
+JAX placement contexts are still honored for those graphs.
+
+Mirror equilibria have a third measured policy:
+:func:`~vmex.core.device.resolve_mirror_device` selects CPU by default for
+their SciPy-controlled JAX callback loop (35.2 s CPU versus 44.2 s RTX A4000
+on the office ``15x15`` case). Fixed/free-boundary mirror solves and beta
+scans still honor explicit devices, ``device=None``, and active JAX placement
+without environment variables.
 
 Naming conventions
 ------------------

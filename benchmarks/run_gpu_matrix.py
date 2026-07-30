@@ -3,28 +3,28 @@
 
 Runs, one cell at a time (the machine may be shared):
 
-  {decks + synthetic nfp4_QH size scan} x {JAX_PLATFORMS=cpu, cuda}
-      x {legacy vj.run_fixed_boundary, core solver.solve(mode="jit")}
+  {decks + synthetic nfp4_QH size scan} x {device=cpu, device=gpu}
+      x {solve_multigrid, solver.solve(mode="jit")}
 
 recording cold wall (first in-process solve, includes compile), warm wall
 (second in-process solve, compile cache hot), compile-vs-run split
 (cold - warm), per-iteration step time (warm / iterations), and peak device
-memory (``jax.local_devices()[0].memory_stats()`` on cuda).
+memory (``jax.local_devices()[0].memory_stats()`` on GPU).
 
 Plus two microbenchmarks of ``vmex.core.preconditioner.tridiagonal_solve``
 (hypotheses c/d of §7.8.3): CPU-vs-GPU across (ns, ncols) at fp64, and
 fp32-vs-fp64 on GPU.
 
-Every cell is a fresh subprocess with ``JAX_PLATFORMS`` set, so device
-selection and the compile cache are per-cell.
+Every cell is a fresh subprocess and selects hardware through VMEX's public
+``device=`` API.  No JAX platform environment variable is required.
 
 Usage (orchestrator):
     python benchmarks/run_gpu_matrix.py [--out benchmarks/gpu_baseline.json]
         [--only substr] [--timeout 1800] [--skip-tridiag]
 
 Internal worker modes (spawned by the orchestrator):
-    --worker solve  --deck PATH --lane {legacy,core_jit}
-    --worker tridiag --dtype {f32,f64}
+    --worker solve  --deck PATH --lane {multigrid,single_jit} --device {cpu,gpu}
+    --worker tridiag --dtype {f32,f64} --device {cpu,gpu}
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ TRIDIAG_NCOLS = [30, 150, 600, 2400]
 
 
 # --------------------------------------------------------------------------
-# workers (run in a subprocess with JAX_PLATFORMS already set)
+# workers (each subprocess receives an explicit device selector)
 # --------------------------------------------------------------------------
 
 def _device_mem_mb():
@@ -73,11 +73,6 @@ def _device_mem_mb():
 
 
 def _extract_iterations(result) -> int | None:
-    inner = getattr(result, "result", None)  # legacy FixedBoundaryRun.result
-    if inner is not None and inner is not result:
-        v = _extract_iterations(inner)
-        if v:
-            return v
     for attr in ("iterations", "n_iter", "niter"):
         v = getattr(result, attr, None)
         if isinstance(v, (int, float)) and v > 0:
@@ -91,7 +86,7 @@ def _extract_iterations(result) -> int | None:
     return None
 
 
-def worker_solve(deck: str, lane: str) -> dict:
+def worker_solve(deck: str, lane: str, device: str) -> dict:
     t_import0 = time.perf_counter()
     import jax
     out: dict = {
@@ -100,20 +95,22 @@ def worker_solve(deck: str, lane: str) -> dict:
     }
 
     def one_solve():
-        if lane == "legacy":
+        if lane == "multigrid":
             import vmex as vj
+            from vmex.core.input import VmecInput
+            inp = VmecInput.from_file(deck)
             t0 = time.perf_counter()
-            res = vj.run_fixed_boundary(deck, verbose=False)
+            res = vj.solve_multigrid(inp, verbose=False, device=device)
             wall = time.perf_counter() - t0
             return wall, _extract_iterations(res), True
-        elif lane == "core_jit":
+        elif lane == "single_jit":
             from vmex.core.input import VmecInput
             from vmex.core import solver
             from vmex.core.errors import VmecConvergenceError
             inp = VmecInput.from_file(deck)
             t0 = time.perf_counter()
             try:
-                res = solver.solve(inp, mode="jit", verbose=False)
+                res = solver.solve(inp, mode="jit", verbose=False, device=device)
                 wall = time.perf_counter() - t0
                 return wall, int(res.iterations), True
             except VmecConvergenceError as e:
@@ -137,7 +134,7 @@ def worker_solve(deck: str, lane: str) -> dict:
     return out
 
 
-def worker_stepscan(deck150: str, deck450: str, lane: str) -> dict:
+def worker_stepscan(deck150: str, deck450: str, lane: str, device: str) -> dict:
     """True per-iteration step time via marginal iterations.
 
     ``solve()`` retraces/recompiles per call (per-solve closures), so a plain
@@ -150,11 +147,13 @@ def worker_stepscan(deck150: str, deck450: str, lane: str) -> dict:
     import jax
 
     def one(deck):
-        if lane == "legacy":
+        if lane == "multigrid":
             import vmex as vj
+            from vmex.core.input import VmecInput
+            inp = VmecInput.from_file(deck)
             t0 = time.perf_counter()
             try:
-                vj.run_fixed_boundary(deck, verbose=False)
+                vj.solve_multigrid(inp, verbose=False, device=device)
             except Exception:
                 pass
             return time.perf_counter() - t0
@@ -163,7 +162,7 @@ def worker_stepscan(deck150: str, deck450: str, lane: str) -> dict:
         inp = VmecInput.from_file(deck)
         t0 = time.perf_counter()
         try:
-            solver.solve(inp, mode="jit", verbose=False)
+            solver.solve(inp, mode="jit", verbose=False, device=device)
         except Exception:
             pass
         return time.perf_counter() - t0
@@ -180,14 +179,15 @@ def worker_stepscan(deck150: str, deck450: str, lane: str) -> dict:
             "peak_device_mem_mb": _device_mem_mb()}
 
 
-def worker_tridiag(dtype: str) -> dict:
+def worker_tridiag(dtype: str, device: str) -> dict:
     import numpy as np
     import jax
     import jax.numpy as jnp
     from vmex.core.preconditioner import tridiagonal_solve
 
     dt = jnp.float32 if dtype == "f32" else jnp.float64
-    solve = jax.jit(tridiagonal_solve)
+    target = jax.devices(device)[0]
+    solve = jax.jit(tridiagonal_solve, device=target)
     rng = np.random.default_rng(0)
     rows = {}
     for ns in TRIDIAG_NS:
@@ -196,7 +196,7 @@ def worker_tridiag(dtype: str) -> dict:
             d = 4.0 + np.abs(rng.standard_normal((ns, ncols)))
             b = rng.standard_normal((ns, ncols))
             r = rng.standard_normal((ns, ncols))
-            args = [jnp.asarray(x, dtype=dt) for x in (a, d, b, r)]
+            args = [jax.device_put(jnp.asarray(x, dtype=dt), target) for x in (a, d, b, r)]
             solve(*args).block_until_ready()  # compile + warm
             reps = 50 if ns * ncols < 200_000 else 10
             best = min(
@@ -232,16 +232,14 @@ def make_synth_deck(ns: int, mpol: int, ntor: int, dest_dir: Path,
     return dest
 
 
-def run_cell(platform: str, worker_args: list[str], timeout: int,
+def run_cell(device: str, worker_args: list[str], timeout: int,
              cwd: Path | None = None) -> dict:
-    env = dict(os.environ)
-    env["JAX_PLATFORMS"] = platform
-    env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-    cmd = [sys.executable, str(Path(__file__).resolve())] + worker_args
+    cmd = [sys.executable, str(Path(__file__).resolve()),
+           "--device", device] + worker_args
     t0 = time.perf_counter()
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=timeout, env=env, cwd=cwd)
+                              timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "timeout", "subprocess_wall_s": timeout}
     wall = time.perf_counter() - t0
@@ -261,7 +259,8 @@ def main() -> None:
     ap.add_argument("--deck")
     ap.add_argument("--deck150")
     ap.add_argument("--deck450")
-    ap.add_argument("--lane", choices=["legacy", "core_jit"])
+    ap.add_argument("--lane", choices=["multigrid", "single_jit"])
+    ap.add_argument("--device", choices=["cpu", "gpu"])
     ap.add_argument("--dtype", choices=["f32", "f64"], default="f64")
     ap.add_argument("--out", default=str(REPO / "benchmarks" / "gpu_baseline.json"))
     ap.add_argument("--only", default=None, help="substring filter on case names")
@@ -271,14 +270,14 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.worker == "solve":
-        print(MARKER + json.dumps(worker_solve(args.deck, args.lane)))
+        print(MARKER + json.dumps(worker_solve(args.deck, args.lane, args.device)))
         return
     if args.worker == "tridiag":
-        print(MARKER + json.dumps(worker_tridiag(args.dtype)))
+        print(MARKER + json.dumps(worker_tridiag(args.dtype, args.device)))
         return
     if args.worker == "stepscan":
         print(MARKER + json.dumps(
-            worker_stepscan(args.deck150, args.deck450, args.lane)))
+            worker_stepscan(args.deck150, args.deck450, args.lane, args.device)))
         return
 
     synth_dir = Path(tempfile.mkdtemp(prefix="vmecjax_synth_"))
@@ -304,11 +303,11 @@ def main() -> None:
         if args.only and args.only not in name:
             continue
         results["matrix"][name] = {}
-        for platform in ("cpu", "cuda"):
-            for lane in ("legacy", "core_jit"):
-                key = f"{platform}/{lane}"
+        for device in ("cpu", "gpu"):
+            for lane in ("multigrid", "single_jit"):
+                key = f"{device}/{lane}"
                 print(f"=== {name} [{key}] ===", flush=True)
-                r = run_cell(platform,
+                r = run_cell(device,
                              ["--worker", "solve", "--deck", str(deck),
                               "--lane", lane], args.timeout)
                 results["matrix"][name][key] = r
@@ -328,11 +327,11 @@ def main() -> None:
                 d450 = make_synth_deck(ns, mpol, ntor, synth_dir, niter=450)
                 name = f"ns{ns}_mpol{mpol}_ntor{ntor}"
                 results["stepscan"][name] = {}
-                for platform in ("cpu", "cuda"):
-                    for lane in ("legacy", "core_jit"):
-                        key = f"{platform}/{lane}"
+                for device in ("cpu", "gpu"):
+                    for lane in ("multigrid", "single_jit"):
+                        key = f"{device}/{lane}"
                         print(f"=== stepscan {name} [{key}] ===", flush=True)
-                        r = run_cell(platform,
+                        r = run_cell(device,
                                      ["--worker", "stepscan",
                                       "--deck150", str(d150),
                                       "--deck450", str(d450),
@@ -344,11 +343,11 @@ def main() -> None:
                         Path(args.out).write_text(json.dumps(results, indent=1))
 
     if not args.skip_tridiag and not args.only:
-        for platform, dtype in [("cpu", "f64"), ("cuda", "f64"), ("cuda", "f32")]:
-            key = f"{platform}/{dtype}"
+        for device, dtype in [("cpu", "f64"), ("gpu", "f64"), ("gpu", "f32")]:
+            key = f"{device}/{dtype}"
             print(f"=== tridiag microbench [{key}] ===", flush=True)
             results["tridiag"][key] = run_cell(
-                platform, ["--worker", "tridiag", "--dtype", dtype],
+                device, ["--worker", "tridiag", "--dtype", dtype],
                 args.timeout)
             Path(args.out).write_text(json.dumps(results, indent=1))
 

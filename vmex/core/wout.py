@@ -1,8 +1,10 @@
-"""Complete VMEC2000-compatible ``wout_*.nc`` schema, writer and reader.
+"""VMEC2000-compatible ``wout_*.nc`` schema, writer and reader.
 
 This module implements the full variable set written by VMEC2000's
-``wrout.f`` (Appendix A), with the exact netCDF names, dimensions,
-dtypes and unit conventions of the reference implementation:
+``wrout.f`` (Appendix A).  Core fixed-boundary fields use the reference
+netCDF names, dimensions, dtypes and unit conventions.  Free-boundary results
+also populate the symmetric or LASYM NESTOR potential and surface fields when
+their public ``VacuumOutput`` is supplied:
 
 - ``presf``/``pres``/``mass`` are stored in Pa (``wrout.f`` divides the
   internal ``mu0*Pa`` values by ``mu0`` on write);
@@ -33,10 +35,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields as _dc_fields
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from . import postprocess as _pp
+from ._netcdf import assign_array
+
+if TYPE_CHECKING:
+    from .solver import VacuumOutput
 
 MU0 = _pp.MU0
 
@@ -301,7 +308,11 @@ def _put_string(ds, name: str, dim: str, width: int, value: str | None) -> None:
     if value is None:
         return  # leave at fill (VMEC skips mgrid_mode when nextcur == 0)
     text = (str(value)[:width]).ljust(width)
-    var[:] = np.frombuffer(text.encode("ascii", "replace"), dtype="S1")
+    assign_array(
+        var,
+        slice(None),
+        np.frombuffer(text.encode("ascii", "replace"), dtype="S1"),
+    )
 
 
 def _put(ds, name: str, dims: tuple[str, ...], data, dtype: str = "f8") -> None:
@@ -316,7 +327,7 @@ def _put(ds, name: str, dims: tuple[str, ...], data, dtype: str = "f8") -> None:
     if data is not None:
         if dims:
             arr = np.asarray(data, dtype=np.float64 if dtype == "f8" else np.int32)
-            var[:] = np.reshape(arr, var.shape)
+            assign_array(var, slice(None), np.reshape(arr, var.shape))
         else:
             var.assignValue(np.float64(data) if dtype == "f8" else np.int32(data))
 
@@ -351,7 +362,11 @@ def write_wout(path: str | Path, data: WoutData, *, overwrite: bool = True) -> P
         if lfreeb:
             mnpot = int(np.asarray(d.xmpot).size) if d.xmpot is not None else max(int(d.mnmaxpot or 1), 1)
             ds.createDimension("mn_mode_pot", max(mnpot, 1))
-            ds.createDimension("current_label", max(int(d.nextcur), 1))
+            if int(d.nextcur) > 0:
+                label_count_dim = f"dim_{int(d.nextcur):05d}"
+                if label_count_dim not in ds.dimensions:
+                    ds.createDimension(label_count_dim, int(d.nextcur))
+                ds.createDimension("current_label", 30)
 
         _put(ds, "version_", (), float(d.version_))
         for name, dim, width in _STRINGS:
@@ -409,12 +424,13 @@ def write_wout(path: str | Path, data: WoutData, *, overwrite: bool = True) -> P
             if lasym:
                 _put(ds, "potcos", ("mn_mode_pot",), d.potcos)
             if d.curlabel is not None and int(d.nextcur) > 0:
-                var = ds.createVariable("curlabel", "S1", ("current_label", "dim_00020"))
-                arr = np.full((len(d.curlabel), 20), b" ", dtype="S1")
-                for i, lbl in enumerate(d.curlabel):
-                    for j, ch in enumerate(str(lbl)[:20].ljust(20)):
+                label_count_dim = f"dim_{int(d.nextcur):05d}"
+                var = ds.createVariable("curlabel", "S1", (label_count_dim, "current_label"))
+                arr = np.full((int(d.nextcur), 30), b" ", dtype="S1")
+                for i, lbl in enumerate(d.curlabel[: int(d.nextcur)]):
+                    for j, ch in enumerate(str(lbl)[:30].ljust(30)):
                         arr[i, j] = ch.encode("ascii", "replace")
-                var[:] = arr
+                assign_array(var, slice(None), arr)
         for name in _MN2D_SYM:
             _put(ds, name, (_DIM_RADIUS, _DIM_MN), getattr(d, name))
         for name in _NYQ2D_SYM:
@@ -543,8 +559,9 @@ def wout_from_state(
     extcur=None,
     mgrid_mode: str = "",
     curlabel=None,
+    vacuum_output: VacuumOutput | None = None,
 ) -> WoutData:
-    """Build a complete :class:`WoutData` from a solved fixed-boundary state.
+    """Build a complete :class:`WoutData` from a solved equilibrium state.
 
     ``inp`` is the parsed :class:`vmex.core.input.VmecInput` deck and
     ``state`` the converged :class:`vmex.core.solver.SpectralState`
@@ -565,12 +582,9 @@ def wout_from_state(
     Free-boundary metadata: ``nextcur``/``extcur``/``mgrid_mode``/
     ``curlabel`` are caller-supplied (the CLI reads them from the mgrid file;
     ``extcur`` is the input EXTCUR array in Amperes, as ``wrout.f`` writes
-    it).  The NESTOR vacuum potential is NOT populated: ``potsin``/
-    ``potcos``/``xmpot``/``xnpot`` and the ``*_sur`` surface-field tables
-    stay ``None`` (netCDF fill) because
-    :func:`vmex.core.freeboundary.solve_free_boundary` does not return
-    its :class:`~vmex.core.freeboundary.FreeBoundaryState` (which holds
-    ``potvac``) — a documented gap until the solver exposes it.
+    it).  Pass the public ``result.vacuum`` as ``vacuum_output`` to populate
+    NESTOR ``potsin``/``xmpot``/``xnpot`` and ``*_sur`` tables.  LASYM runs
+    additionally populate ``potcos`` and the four sine ``*_sur`` partners.
     """
     import jax
 
@@ -648,14 +662,13 @@ def wout_from_state(
     phips = np.asarray(prof["phips"], dtype=float).copy()
     phips[0] = 0.0
     phipf_int = np.asarray(prof["phipf"], dtype=float)
+    chips = np.asarray(fields.chips, dtype=float)
+    chipf_int = _pp.chipf_from_chips(chips)
     if ncurr == 1:
         # add_fluxes.f90: the current-constrained chips defines iota/chipf.
-        chips = np.asarray(fields.chips, dtype=float)
         iotas = np.divide(chips, phips, out=np.zeros_like(chips), where=phips != 0.0)
-        chipf_int = _pp.chipf_from_chips(chips)
     else:
         iotas = np.asarray(prof["iotas"], dtype=float).copy()
-        chipf_int = np.asarray(prof["chipf"], dtype=float)
     iotas[0] = 0.0
     iotaf = _pp.iotaf_from_iotas(iotas)
     two_pi_sg = 2.0 * np.pi * float(signgs)
@@ -719,6 +732,59 @@ def wout_from_state(
     nyq_a = {name: (np.asarray(getattr(tabs, name), dtype=float) if lasym else None)
              for name in ("gmns", "bmns", "bsubumns", "bsubvmns",
                           "bsubsmnc", "bsupumns", "bsupvmns")}
+    vacuum_sur: dict[str, np.ndarray] = {}
+    export_vacuum = vacuum_output is not None and bool(inp.lfreeb)
+    if export_vacuum:
+        potential_arrays = {
+            name: np.asarray(getattr(vacuum_output, name), dtype=float)
+            for name in ("potsin", "xmpot", "xnpot")
+        }
+        if lasym:
+            if vacuum_output.potcos is None:
+                raise ValueError("LASYM vacuum_output requires potcos")
+            potential_arrays["potcos"] = np.asarray(
+                vacuum_output.potcos, dtype=float
+            )
+        potential_sizes = {values.size for values in potential_arrays.values()}
+        if len(potential_sizes) != 1 or any(
+            values.ndim != 1 for values in potential_arrays.values()
+        ):
+            shapes = {
+                name: values.shape for name, values in potential_arrays.items()
+            }
+            raise ValueError(
+                f"vacuum potential arrays must be equal-length 1-D arrays: {shapes}"
+            )
+        expected = (int(trig.ntheta3), int(res.nzeta))
+        nyq_modes = mode_table(
+            int(np.max(xm_nyq)) + 1,
+            int(np.max(np.abs(xn_nyq))) // nfp if xn_nyq.size else 0,
+        )
+        for cos_name, sin_name, source_name in (
+            ("bsubumnc_sur", "bsubumns_sur", "bsubu"),
+            ("bsubvmnc_sur", "bsubvmns_sur", "bsubv"),
+            ("bsupumnc_sur", "bsupumns_sur", "bsupu"),
+            ("bsupvmnc_sur", "bsupvmns_sur", "bsupv"),
+        ):
+            surface = np.asarray(getattr(vacuum_output, source_name), dtype=float)
+            if surface.shape != expected:
+                raise ValueError(
+                    f"vacuum_output.{source_name} has shape {surface.shape}, "
+                    f"expected {expected}"
+                )
+            surface = surface[None, ...]
+            if lasym:
+                symmetric, asymmetric = _nyq.symoutput_split(
+                    f=surface, trig=trig
+                )
+                vacuum_sur[sin_name] = _nyq.wrout_sin_coeffs(
+                    f=asymmetric, modes=nyq_modes, trig=trig
+                )[0]
+            else:
+                symmetric = surface
+            vacuum_sur[cos_name] = _nyq.wrout_cos_coeffs(
+                f=symmetric, modes=nyq_modes, trig=trig
+            )[0]
     nzeta_vmec = int(inp.nzeta) or (1 if ntor == 0 else nzeta)
     nnyq_target = int(nzeta_vmec) // 2
     nnyq_have = int(np.max(xn_nyq)) // nfp if xn_nyq.size else 0
@@ -730,6 +796,9 @@ def wout_from_state(
         if lasym:
             for name, tab in nyq_a.items():
                 nyq_a[name] = _pp.expand_mode_columns(tab, xm_nyq, xn_nyq, xm_new, xn_new)
+        for name, tab in vacuum_sur.items():
+            vacuum_sur[name] = _pp.expand_mode_columns(
+                tab[None, :], xm_nyq, xn_nyq, xm_new, xn_new)[0]
         xm_nyq, xn_nyq = xm_new, xn_new
 
     # -- fbal.f/bcovar.f: current averages from the bsub[uv]mnc tables ------
@@ -799,7 +868,7 @@ def wout_from_state(
         niter=int(niter), itfsq=int(itfsq),
         lasym=lasym, lrecon=False,
         lfreeb=bool(inp.lfreeb),
-        lmove_axis=True,
+        lmove_axis=bool(inp.lmove_axis),
         lrfp=False,
         ier_flag=0 if bool(converged) else 2,
         aspect=aspect, betatotal=betatotal,
@@ -857,6 +926,20 @@ def wout_from_state(
         bsubsmnc=nyq_a["bsubsmnc"],
         currumns=currumns, currvmns=currvmns,
         bsupumns=nyq_a["bsupumns"], bsupvmns=nyq_a["bsupvmns"],
+        mnmaxpot=(int(np.asarray(vacuum_output.xmpot).size)
+                  if export_vacuum else None),
+        potsin=(potential_arrays["potsin"] if export_vacuum else None),
+        potcos=(potential_arrays.get("potcos") if export_vacuum else None),
+        xmpot=(potential_arrays["xmpot"] if export_vacuum else None),
+        xnpot=(potential_arrays["xnpot"] if export_vacuum else None),
+        bsubumnc_sur=vacuum_sur.get("bsubumnc_sur"),
+        bsubvmnc_sur=vacuum_sur.get("bsubvmnc_sur"),
+        bsupumnc_sur=vacuum_sur.get("bsupumnc_sur"),
+        bsupvmnc_sur=vacuum_sur.get("bsupvmnc_sur"),
+        bsubumns_sur=vacuum_sur.get("bsubumns_sur"),
+        bsubvmns_sur=vacuum_sur.get("bsubvmns_sur"),
+        bsupumns_sur=vacuum_sur.get("bsupumns_sur"),
+        bsupvmns_sur=vacuum_sur.get("bsupvmns_sur"),
     )
 
 

@@ -1,19 +1,9 @@
-"""End-to-end fixed-boundary solve tests: ``vmex.core.solver`` vs VMEC2000.
-
-Golden references (VMEC2000, PARVMEC 9.0 single-rank runs, FTOL = 1e-14):
-
-- ``~/vmex_notes/golden/solovev/``            (2D, ncurr=0, ns=11, 215 iters)
-- ``~/vmex_notes/golden/cth_like_fixed_bdy/`` (nfp=5 ntor=0, ncurr=1,
-  two_power mass/current, ns=15, 434 iters)
-
-Checked here:
-
-1. convergence to ftol = 1e-14 with the golden iteration count (+-20%);
-2. wout parity: ``wb``, ``iotaf``, ``rmnc/zmns`` against the golden wout;
-3. early trajectory: the first 40 iterations of (fsqr, fsqz, fsql) against
-   golden threed1 printed iterations (rtol 5e-2, both cases);
-4. lane equivalence: the ``mode="cli"`` (scan blocks) and ``mode="jit"``
-   (``lax.while_loop``) trajectories agree to 1e-15 (same jitted body).
+"""End-to-end fixed-boundary solve tests vs VMEC2000 goldens (PARVMEC 9.0,
+FTOL = 1e-14: solovev ns=11 215 iters; cth_like_fixed_bdy ns=15 434
+iters).  Checked: convergence at 1e-14 with the golden iteration count
+(+-20%); wout parity (``wb``, ``iotaf``, ``rmnc/zmns``); the first 40
+(fsqr, fsqz, fsql) iterations vs golden threed1 (rtol 5e-2); and
+``mode="cli"`` vs ``mode="jit"`` trajectory agreement to 1e-15.
 """
 
 from __future__ import annotations
@@ -31,7 +21,7 @@ from vmex.core.input import VmecInput
 from vmex.core import solver
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
-from conftest import resolve_golden_dir
+from tests.conftest import resolve_golden_dir
 
 GOLDEN_DIR = resolve_golden_dir()
 pytestmark_golden = pytest.mark.skipif(

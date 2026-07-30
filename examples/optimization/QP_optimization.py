@@ -89,7 +89,7 @@ objective_terms = [
     (opt.mirror_ratio, MIRROR_TARGET, 10.0),
     # CI-tested extras (see QA_optimization.py for the jac caveats):
     # (opt.magnetic_well, 0.05, 1.0),
-    # (lambda eq: np.minimum(opt.d_merc(eq)[2:-1], 0.0), 0.0, 100.0),
+    # (opt.mercier_stability_residual, 0.0, 100.0),
     # (lambda eq: max(1.0 / opt.l_grad_b(eq) - 1.0 / 0.35, 0.0), 0.0, 1.0),
 ]
 

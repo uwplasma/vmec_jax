@@ -44,7 +44,7 @@ print(f"\nconverged = {result.converged} after {int(result.iterations)} "
 wout = vj.wout_from_state(
     inp=inp, state=result.state, fsqr=float(result.fsqr), fsqz=float(result.fsqz),
     fsql=float(result.fsql), niter=int(result.iterations),
-    converged=bool(result.converged))
+    converged=bool(result.converged), vacuum_output=result.vacuum)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 wout_path = vj.write_wout(OUT_DIR / "wout_cth_like_free_bdy.nc", wout)
 print(f"aspect = {float(wout.aspect):.4f}, volume = {float(wout.volume_p):.4f} m^3 "

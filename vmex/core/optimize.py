@@ -3,26 +3,22 @@
 Simsopt-style vocabulary for the QA/QH/QP/QI examples on the pure new core:
 
 - :class:`QuasisymmetryRatioResidual` — the two-term quasisymmetry ratio
-  residual of Landreman & Paul (simsopt ``QuasisymmetryRatioResidual``),
-  evaluated from the wout-engine field tables of a converged core state;
-  math ported verbatim from the parity-proven legacy
-  ``vmex/quasisymmetry.py`` (``quasisymmetry_ratio_residual_from_wout``).
+  residual of Landreman & Paul (simsopt convention), evaluated from the
+  wout-engine field tables of a converged core state (parity port of the
+  legacy ``quasisymmetry_ratio_residual_from_wout``).
 - practical scalar targets — :func:`aspect_ratio`, :func:`mean_iota`,
   :func:`edge_iota`, :func:`mirror_ratio`, :func:`volume`,
   :func:`magnetic_well` — each a pure function of
-  ``(SpectralState, SolverRuntime)`` on :mod:`vmex.core.geometry` /
-  :mod:`vmex.core.fields`.
-- a distilled Goodman-style QI residual (:func:`quasi_isodynamic_residual`)
+  ``(SpectralState, SolverRuntime)``.
+- :func:`quasi_isodynamic_residual` — a distilled Goodman-style QI residual
   keeping exactly the four terms the legacy minimal-seed QI examples
-  exercised (now ``examples/optimization/QI_optimization.py``): level-set
-  bounce-width
-  variance, branch trapped-well width variance, field-line profile
-  consistency, and the branch-shuffle profile comparison.  The unused legacy
-  knobs (``aligned_profile_*``, ``weighted_shuffle_*``,
-  ``shuffle_profile_nphi_out``) were dropped.
+  exercised (see its docstring).
 - :func:`least_squares` — a thin :func:`scipy.optimize.least_squares` driver
   over boundary Fourier dofs (:func:`pack_boundary`/:func:`unpack_boundary`),
   taking simsopt-style ``(callable, target, weight)`` terms.
+- :func:`minimize` — the same residual definition scalarized as
+  ``0.5 * sum(residual**2)`` and minimized with L-BFGS-B, so one reverse
+  implicit adjoint supplies the gradient without a dense residual Jacobian.
 
 Helicity conventions (match legacy/simsopt exactly)
 ---------------------------------------------------
@@ -38,31 +34,25 @@ units of ``nfp`` (the internal target mode number is ``nn = helicity_n * nfp``):
 Gradient modes
 --------------
 :func:`least_squares` defaults to scipy finite differences (``jac=None`` ->
-``"2-point"``).  ``jac="implicit"`` uses the Phase-6 implicit-gradient path
-(:mod:`vmex.core.implicit`): each trial boundary is solved once through
-:func:`~vmex.core.implicit.solve_implicit` (a ``jax.custom_vjp`` around
-the host solver) and the exact residual Jacobian comes from *forward*
-implicit differentiation of the fixed point — one preconditioned GMRES per
-boundary dof (a few dozen residual linearizations each) instead of one full
-equilibrium solve per dof.  In implicit mode every objective term must be a
-traceable function of ``(SpectralState, SolverRuntime)``; vector-valued
-terms exposing a ``residuals_state`` method
-(:class:`QuasisymmetryRatioResidual`) contribute their full pointwise
-residual vector, matching the finite-difference stacked-residual cost and
-Gauss-Newton geometry (internal-grid sampling instead of the wout grid).
-Wout-engine terms (:func:`d_merc`, :func:`l_grad_b`, the Boozer-based QI
-residual) run on host NumPy and are finite-difference-only —
-:func:`l_grad_b_state` is the traceable ``(state, rt)`` lane of the same
-``L_grad_B`` convention for ``jac="implicit"``.  The implicit parameter map
-supports lasym via the four RBC/ZBS/RBS/ZBC boundary families and a traceable
-``readin.f`` delta rotation (FD-validated), so ``jac="implicit"`` handles
-``lasym = True`` as well (the QS-ratio traceable term is symmetric-only).
-
-Measured cost (2026-07-10, RTX A4000, nfp2 circular seed, QS + aspect +
-iota objective, ``max_mode=2`` -> 24 dofs): warm implicit Jacobian 2.5 s
-(~1.5 hot-restart equilibrium-solve equivalents, independent of the dof
-count) vs the 2-point FD Jacobian's 24 hot solves ~ 39 s — **15.7x**; the
-gap widens linearly with ``max_mode``.
+``"2-point"``).  ``jac="implicit"`` uses :mod:`vmex.core.implicit`: each
+trial boundary is solved once through
+:func:`~vmex.core.implicit.solve_implicit` (a ``jax.custom_vjp`` around the
+host solver) and the exact residual Jacobian comes from *forward* implicit
+differentiation of the fixed point — one preconditioned GMRES per boundary
+dof instead of one full equilibrium solve per dof (warm cost ~1.5 hot
+equilibrium solves independent of the dof count, vs one hot solve per dof
+for 2-point FD).  In implicit mode every objective term must be a traceable
+function of ``(SpectralState, SolverRuntime)``; terms exposing a
+``residuals_state`` method (:class:`QuasisymmetryRatioResidual`) contribute
+their full pointwise residual vector (Gauss-Newton geometry, internal-grid
+sampling instead of the wout grid).  Wout-engine terms (:func:`d_merc`,
+:func:`l_grad_b`, the Boozer-based QI residual) run on host NumPy and are
+finite-difference-only; under ``jac="implicit"`` use :func:`d_merc_state` /
+:func:`mercier_stability_residual`, :func:`jdotb_residual`, and
+:func:`l_grad_b_state` instead.  The implicit parameter map supports lasym
+via the four RBC/ZBS/RBS/ZBC boundary families and a traceable ``readin.f``
+delta rotation (FD-validated); the QS-ratio traceable term is
+symmetric-only.
 """
 
 from __future__ import annotations
@@ -85,6 +75,7 @@ from solvax import (
     chunk_map,
 )
 
+from .device import AUTO
 from .input import VmecInput
 from .multigrid import solve_multigrid
 from .solver import (
@@ -95,6 +86,16 @@ from .solver import (
     resolution_from_input,
 )
 from .fields import surface_currents
+from .stability import (
+    d_merc_state,
+    glasser_d_r_state,
+    glasser_stability_residual,
+    jdotb_residual,
+    jdotb_state,
+    mercier_shear_state,
+    mercier_stability_residual,
+)
+
 # Shared state-physics primitives (statephysics.py, R26a).  Re-exported here
 # for backward compatibility: external user code and tests reach them as
 # ``vmex.core.optimize._as_1d`` etc.
@@ -128,6 +129,13 @@ __all__ = [
     "volume",
     "magnetic_well",
     "d_merc",
+    "d_merc_state",
+    "mercier_stability_residual",
+    "jdotb_state",
+    "jdotb_residual",
+    "mercier_shear_state",
+    "glasser_d_r_state",
+    "glasser_stability_residual",
     "l_grad_b",
     "l_grad_b_state",
     "quasi_isodynamic_residual",
@@ -137,6 +145,7 @@ __all__ = [
     "pack_boundary",
     "unpack_boundary",
     "least_squares",
+    "minimize",
     "RedlBootstrapMismatch",  # noqa: F822 - provided lazily by __getattr__ below
 ]
 
@@ -181,6 +190,11 @@ class Equilibrium:
             fsqr=float(r.fsqr), fsqz=float(r.fsqz), fsql=float(r.fsql),
             niter=int(r.iterations), converged=bool(r.converged),
         )
+
+
+def _auto_jac_chunk(dim: int) -> int:
+    """Bound device-aware batching by the conservative square-root policy."""
+    return min(int(auto_chunk_size(dim)), int(np.ceil(np.sqrt(dim))))
 
 
 def solve_equilibrium(
@@ -365,18 +379,15 @@ class QuasisymmetryRatioResidual:
     def _pointwise_state(self, state: SpectralState, rt: SolverRuntime):
         """Weighted pointwise QS residual on the solver's internal grid.
 
-        Traceable core of :meth:`residuals_state` / :meth:`profile_state` /
-        :meth:`total_state`.  The reduced symmetric ``[0, pi]`` theta grid is
-        mirrored to the full circle with the stellarator-symmetry map
-        ``X(2 pi - theta, -zeta) = X(theta, zeta)`` and the ``|B|`` angular
-        derivatives come from FFT spectral differentiation on that full
-        periodic grid (exact at grid resolution).  Returns ``(r3d, s_half)``
-        with ``r3d`` shaped ``(ns - 1, ntheta1, nzeta)`` normalized so that
-        ``sum_angles r3d[i]**2`` is the surface-averaged QS ratio ``<f^2>``
-        of half-mesh surface ``i`` — the same quantity as the wout-table
-        :meth:`profile`, agreeing at discretization level (solver angular
-        grid vs the 63x64 wout sampling), not bitwise.  Symmetric
-        configurations only (``lasym = False``).
+        Traceable core of the ``*_state`` methods.  The reduced ``[0, pi]``
+        theta grid is mirrored to the full circle with the
+        stellarator-symmetry map ``X(2 pi - theta, -zeta) = X(theta, zeta)``;
+        ``|B|`` angular derivatives are FFT-spectral on that periodic grid.
+        Returns ``(r3d, s_half)`` with ``r3d`` shaped
+        ``(ns - 1, ntheta1, nzeta)`` normalized so ``sum_angles r3d[i]**2``
+        is the surface-averaged QS ratio ``<f^2>`` of half-mesh surface
+        ``i`` — same quantity as the wout-table :meth:`profile`, agreeing at
+        discretization level, not bitwise.  ``lasym = False`` only.
         """
         setup = rt.setup
         if bool(setup.lasym):
@@ -546,38 +557,44 @@ def d_merc(eq) -> jnp.ndarray:
     objective is finite-difference-only (not jit/AD transparent; the first
     two surfaces and the edge carry the usual near-axis noise, so practical
     targets should penalize e.g. ``min(DMerc[2:-1], 0)``).  Accepts an
-    :class:`Equilibrium` or any wout-like object.
+    :class:`Equilibrium` or any wout-like object.  Use traceable
+    :func:`mercier_stability_residual` with ``jac="implicit"``.  ``lasym``
+    equilibria are rejected pending independent DCON/JMC validation.
     """
     wout = eq.wout if isinstance(eq, Equilibrium) else eq
+    if bool(getattr(wout, "lasym", False)):
+        raise NotImplementedError(
+            "DMerc is not independently validated for lasym equilibria"
+        )
     return jnp.asarray(np.asarray(wout.DMerc, dtype=float))
 
 
 def l_grad_b(eq, *, s_index: int = -1, ntheta: int = 24, nphi: int = 24) -> Array:
     """Magnetic-gradient scale length ``min L_grad_B`` on one half-mesh surface.
 
-    ``L_grad_B = |B| sqrt(2 / (grad B : grad B))`` with ``grad B : grad B``
-    the squared Frobenius norm of the Cartesian field-gradient tensor —
-    the Kappel/Landreman coil-complexity / compactness proxy, and the
-    ``L_grad_B`` diagnostic of the legacy QI scripts
-    (``vmex.quasi_isodynamic.objectives.lgradb_from_state``).  Here it is
-    evaluated from the wout tables of the converged state: ``B^u``/``B^v``
-    from the half-mesh ``bsupumnc/bsupvmnc`` Nyquist spectra, the coordinate
-    basis vectors and their derivatives spectrally from ``rmnc/zmns``, and
-    radial derivatives from the native half/full-mesh finite differences
-    (one-sided at the edge) — so values agree with the legacy diagnostic at
-    discretization level, not bitwise (the pointwise math lives in
-    :func:`vmex.core.statephysics._lgradb_grid`, shared with the
-    traceable :func:`l_grad_b_state`).
+    ``L_grad_B = |B| sqrt(2 / (grad B : grad B))`` (squared Frobenius norm of
+    the Cartesian field-gradient tensor) — the Kappel/Landreman
+    coil-complexity / compactness proxy.  Evaluated from the wout tables of
+    the converged state (``bsupumnc/bsupvmnc`` Nyquist spectra, spectral
+    angular derivatives of ``rmnc/zmns``, native half/full-mesh radial finite
+    differences, one-sided at the edge); the pointwise math lives in
+    :func:`vmex.core.statephysics._lgradb_grid`, shared with the traceable
+    :func:`l_grad_b_state`.
 
     Returns the (hard) minimum over a uniform ``(theta, phi)`` grid on the
     selected surface (``s_index`` indexes the ``ns``-long half-mesh arrays;
     default edge).  Larger is better; a practical least-squares term is
-    ``max(1/L - 1/threshold, 0)``.  Symmetric configurations only (lasym
-    sine partners are ignored).  Accepts an :class:`Equilibrium` or wout-like.
-    This lane consumes host-NumPy wout tables (finite-difference-only); use
-    :func:`l_grad_b_state` for ``jac="implicit"``.
+    ``max(1/L - 1/threshold, 0)``.  Symmetric configurations only; asymmetric
+    inputs raise instead of silently dropping their sine/cosine partners.
+    Accepts an :class:`Equilibrium` or wout-like.  Host-NumPy wout tables ->
+    finite-difference-only; use :func:`l_grad_b_state` for ``jac="implicit"``.
     """
     wout = eq.wout if isinstance(eq, Equilibrium) else eq
+    if bool(wout.lasym):
+        raise NotImplementedError(
+            "l_grad_b supports stellarator-symmetric equilibria only "
+            "(lasym = False); asymmetric Fourier partners are not ignored"
+        )
     grid = _lgradb_grid(
         xm=jnp.asarray(np.asarray(wout.xm, dtype=float)),
         xn=jnp.asarray(np.asarray(wout.xn, dtype=float)),
@@ -604,25 +621,21 @@ def l_grad_b_state(
 ) -> Array:
     """Traceable ``min L_grad_B`` of a core state (implicit-adjoint ready).
 
-    The ``(state, runtime)`` lane of :func:`l_grad_b` (Item E):
-    identical convention — ``L_grad_B = |B| sqrt(2/(grad B : grad B))``
-    minimized over the same uniform ``(theta, phi)`` grid of one half-mesh
-    surface — with the wout coefficient tables rebuilt traceably from the
-    state (:func:`~vmex.core.statephysics._lgradb_state_tables`: physical
-    ``rmnc/zmns`` from the spectral state, the ``wrout.f`` Nyquist analysis
-    of ``B^u/B^v`` as jnp einsums) and the same half/full-mesh radial
-    finite-difference stencils, so the default hard minimum matches the
-    wout lane to float round-off.  Fully jnp: usable directly as a
-    two-positional objective term under ``jac="implicit"``.
+    The ``(state, runtime)`` lane of :func:`l_grad_b`: identical convention
+    and grid, with the wout coefficient tables rebuilt traceably from the
+    state (:func:`~vmex.core.statephysics._lgradb_state_tables`, the
+    ``wrout.f`` Nyquist analysis as jnp einsums) and the same radial
+    finite-difference stencils, so the default hard minimum matches the wout
+    lane to float round-off.  Fully jnp: usable directly as a two-positional
+    objective term under ``jac="implicit"``.
 
     ``softmin_k`` selects the reduction: ``None`` (default) is the hard
-    ``min`` — exact, and differentiable almost everywhere (the subgradient
-    follows the argmin point), but its gradient jumps when the minimizing
-    gridpoint switches.  A float ``k`` [1/m] returns the smooth soft minimum
-    ``-logsumexp(-k * L) / k``, a lower bound on the hard minimum within
-    ``log(ntheta * nphi) / k`` (about ``6.4 / k`` m at the default 24x24
-    grid; ``k = 50`` biases a ~1 m scale length by < 0.13 m).  Optimize with
-    the smooth form, report the hard minimum.
+    ``min`` — exact, differentiable almost everywhere, but its gradient
+    jumps when the minimizing gridpoint switches.  A float ``k`` [1/m]
+    returns the smooth soft minimum ``-logsumexp(-k * L) / k``, a lower
+    bound on the hard minimum within ``log(ntheta * nphi) / k`` (about
+    ``6.4 / k`` m at the default 24x24 grid; ``k = 50`` biases a ~1 m scale
+    length by < 0.13 m).  Optimize smooth, report the hard minimum.
     """
     tables = _lgradb_state_tables(state, rt)
     grid = _lgradb_grid(s_index=s_index, ntheta=ntheta, nphi=nphi, **tables)
@@ -730,12 +743,11 @@ def quasi_isodynamic_residual(
       original ``bnorm`` (the closest smooth analogue of Goodman et al.'s
       construction of the nearest omnigenous field).
 
-    Ported from the legacy ``vmex.quasi_isodynamic.objectives.
-    quasi_isodynamic_residual_from_boozer_modes`` with the unused
-    ``aligned_profile_*`` / ``weighted_shuffle_*`` / ``shuffle_profile_nphi_out``
-    machinery removed (they defaulted to off in the QI examples).  ``xn_b``
-    uses physical toroidal mode numbers (booz_xform convention).  Returns
-    ``residuals1d`` (least-squares vector) and ``total`` (its squared norm).
+    Legacy port (``quasi_isodynamic_residual_from_boozer_modes``) with the
+    unused ``aligned_profile_*`` / ``weighted_shuffle_*`` /
+    ``shuffle_profile_nphi_out`` machinery removed.  ``xn_b`` uses physical
+    toroidal mode numbers (booz_xform convention).  Returns ``residuals1d``
+    (least-squares vector) and ``total`` (its squared norm).
     """
     (weights_arr, phi0, phi1, phi, alpha, bmag, bnorm, levels, eps) = _qi_grid(
         bmnc_b, xm_b, xn_b, iota_b, nfp=int(nfp), weights=weights, nphi=int(nphi),
@@ -1130,13 +1142,13 @@ def least_squares(
     current_dofs: int | None = None,
     jac: str | None = None,
     jac_chunk_size: int | str | None = "auto",
-    jac_solver: str = "block",
+    jac_solver: str = "auto",
     recycle: bool = False,
     hot_restart: bool = True,
     warm_start: str | None = "perturbation",
     use_ess: bool = False,
     ess_alpha: float = 1.2,
-    device: Any = None,
+    device: Any = AUTO,
     solve_kwargs: dict | None = None,
     verbose: int = 0,
     **scipy_kwargs,
@@ -1148,131 +1160,102 @@ def least_squares(
     callables, its ``(state, runtime)`` pair) to a scalar or residual vector,
     and contributes ``weight * (fun(eq) - target)`` rows to the stacked
     residual, i.e. ``cost = 1/2 sum_i w_i^2 (f_i - t_i)^2`` (scipy's 1/2
-    convention).  The decision variables are the boundary Fourier
-    coefficients up to ``max_mode`` (:func:`pack_boundary` — ``RBC(0,0)``
-    fixed).  Trial boundaries whose solve fails return a large finite
-    residual so the trust region backs off instead of crashing.  Objective
-    swaps between stages of a staged campaign (e.g. the QP-basin-then-QI
-    route) are just two calls with different ``objective_terms``, the second
-    seeded with the first call's ``result.input``.
+    convention).  Decision variables are the boundary Fourier coefficients
+    up to ``max_mode`` (:func:`pack_boundary`; ``RBC(0,0)`` fixed).  Trial
+    boundaries whose solve fails return a large finite residual so the trust
+    region backs off instead of crashing.  Staged campaigns with different
+    objectives are just successive calls, each seeded with the previous
+    call's ``result.input``.
 
-    ``current_dofs = k`` (plan R26.g, spec section 6.4) additionally frees
-    the equilibrium current profile: the first ``k`` ``AC`` power-series
-    coefficients (VMEC ``pcurr_type="power_series"``, i.e. ``I'(s)``) plus
-    ``CURTOR``, appended to the dof vector as
-    ``[..boundary.., ac_0/ac_scale, ..., ac_{k-1}/ac_scale, curtor/1e6]``
-    (``ac_scale = max(|curtor|, 1)`` frozen from the seed) so the trust
-    region sees O(1) numbers.  Requires ``ncurr = 1`` and an
-    AC-parameterized ``pcurr_type`` (splines are rejected — re-fit them to a
-    power series first, e.g. via
-    :func:`vmex.core.bootstrap.self_consistent_bootstrap`).  Both
-    gradient modes support it (finite differences re-solve per current dof;
+    ``current_dofs = k`` additionally frees the current profile: the first
+    ``k`` ``AC`` power-series coefficients (``pcurr_type="power_series"``,
+    i.e. ``I'(s)``) plus ``CURTOR``, appended to the dof vector as
+    ``[..boundary.., ac_0/ac_scale, ..., curtor/1e6]`` (``ac_scale`` frozen
+    from the seed) so the trust region sees O(1) numbers.  Requires
+    ``ncurr = 1`` and an AC-parameterized ``pcurr_type`` (splines are
+    rejected — re-fit to a power series first, e.g. via
+    :func:`vmex.core.bootstrap.self_consistent_bootstrap`).  Both gradient
+    modes support it (finite differences re-solve per current dof;
     ``jac="implicit"`` adds ``k + 1`` one-hot tangent rows through
-    ``ImplicitParams.ac``/``curtor``, which ``runtime_from_params`` already
-    traces).  Note that VMEC normalizes the AC profile by its own edge
-    integral (only the *shape* of ``I'`` matters; ``CURTOR`` sets the
-    amplitude), so the overall-AC-scale direction is objective-neutral; the
-    trust-region solvers handle the resulting Jacobian null direction.
-    This is the dof set of the self-consistent-bootstrap objective
-    (:class:`vmex.core.bootstrap.RedlBootstrapMismatch`).
+    ``ImplicitParams.ac``/``curtor``).  VMEC normalizes the AC profile by
+    its own edge integral (only the *shape* of ``I'`` matters; ``CURTOR``
+    sets the amplitude), so the overall-AC-scale direction is
+    objective-neutral; the trust-region solvers handle the resulting
+    Jacobian null direction.  This is the dof set of
+    :class:`vmex.core.bootstrap.RedlBootstrapMismatch`.
 
     ``max_mode`` may be a single int or an increasing schedule (e.g.
     ``(1, 2, 3)``): each continuation stage optimizes the enlarged dof set
-    starting from the previous stage's boundary (higher harmonics enter at
-    their current — typically zero — values).  Repeated trial solves are
-    cheap by construction: runtimes with the same
-    :class:`~vmex.core.fourier.Resolution` are structural pytrees, so the
-    solver reuses one XLA executable across all boundary trials
-    (``vmex.core.solver`` Phase-2 cache; only the first solve of
-    a stage compiles).  ``device`` is forwarded to the solver
-    (:mod:`vmex.core.device` policy applies when ``None``).
-
-    ``use_ess`` enables Exponential Spectral Scaling of the trust region
-    (:func:`_ess_scale`, ``ess_alpha``), the legacy ``use_ess`` option.
+    starting from the previous stage's boundary.  Trial solves are cheap by
+    construction: runtimes with the same
+    :class:`~vmex.core.fourier.Resolution` are structural pytrees, so one
+    XLA executable is reused across all boundary trials (only the first
+    solve of a stage compiles).  ``device`` is forwarded to the solver
+    (``"auto"`` applies :mod:`vmex.core.device`'s policy; ``None`` follows
+    JAX placement).  ``use_ess`` enables Exponential Spectral Scaling of the
+    trust region (:func:`_ess_scale`, ``ess_alpha``).
 
     ``jac=None`` (default) uses scipy ``"2-point"`` finite differences.
-    ``jac="implicit"`` uses the Phase-6 implicit-gradient path
-    (:mod:`vmex.core.implicit`): one hot-restarted forward solve per
-    trial boundary, and the exact residual Jacobian by forward implicit
-    differentiation — one preconditioned GMRES per boundary dof instead of
-    one full equilibrium solve per dof.  Requirements (see the module
-    docstring): every term traceable in ``(state, runtime)`` (vector terms
-    expose ``residuals_state``; wout-engine terms like :func:`d_merc` /
-    :func:`l_grad_b` / the Boozer QI residual need ``jac=None`` — for
-    ``L_grad_B`` use the traceable :func:`l_grad_b_state` instead).  Both
-    stellarator-symmetric and ``lasym`` boundaries are supported: the implicit
-    parameter map packs the four RBC/ZBS/RBS/ZBC families and a traceable
-    ``readin.f`` delta rotation.
-    ``jac_chunk_size`` (R17.1 memory knob, ``jac="implicit"`` only) chunks the
-    per-dof Jacobian columns via :func:`solvax.chunk_map`: ``"auto"`` (default)
-    lets :func:`solvax.auto_chunk_size` pick a memory-bounded width (the
-    largest block that fits the device budget on GPU, a sqrt-balanced width on
-    CPU) so peak Jacobian memory is ``m0 + m1*chunk`` instead of scaling with
-    the full dof count; an ``int`` fixes that many boundary dofs at a time; and
-    ``None`` forces one wide ``vmap`` over all dofs (the pre-R17.1 behavior,
-    fastest but peak memory O(dofs)).  The column blocks are mathematically
-    independent, so the assembled Jacobian is identical to float64 round-off
-    (~1e-15) across chunk sizes.  It is inert for ``jac=None`` (scipy computes
-    the finite-difference Jacobian itself).
+    ``jac="implicit"`` computes the exact residual Jacobian by forward
+    implicit differentiation (module docstring): one hot-restarted forward
+    solve per trial boundary and one preconditioned GMRES per boundary dof
+    instead of one full equilibrium solve per dof.  Every term must be
+    traceable in ``(state, runtime)`` (vector terms expose
+    ``residuals_state``; wout-engine terms like :func:`d_merc` /
+    :func:`l_grad_b` / the Boozer QI residual need ``jac=None`` — use the
+    traceable :func:`mercier_stability_residual` / :func:`l_grad_b_state`
+    instead).  Symmetric and ``lasym`` boundaries are both supported.
+    The knobs below are inert for ``jac=None``.
 
-    ``jac_solver`` (plan R25.2, ``jac="implicit"`` only) selects the linear
-    solver behind the per-dof implicit-Jacobian columns.  ``"block"``
-    (default) amortizes one block-tridiagonal factorization of the *raw*
-    force Jacobian — whose radial coupling is exactly nearest-neighbor, so
-    ns dense ``(3*mn, 3*mn)`` blocks assembled by 3-colored ``jax.jvp``
-    probes capture it completely at a cost independent of the dof count —
-    then backsolves every dof right-hand side directly
+    ``jac_chunk_size`` chunks the per-dof Jacobian columns via
+    :func:`solvax.chunk_map`: ``"auto"`` (default) caps SOLVAX's
+    device-aware width by a conservative square-root policy, so an
+    accelerator memory report cannot expand the full probe batch; an ``int``
+    fixes that many dofs at a time; ``None`` forces one wide batch.  Column
+    blocks are mathematically independent, so the assembled Jacobian is
+    identical across chunk sizes to float64 round-off.
+
+    ``jac_solver`` selects the implicit-Jacobian direction.  ``"auto"``
+    (default) uses one matrix-free reverse solve for a scalar residual and
+    the ``"block"`` path otherwise.  ``"reverse"`` requests one reverse
+    solve per residual row.  ``"block"`` amortizes one block-tridiagonal
+    factorization of the *raw* force Jacobian — whose radial coupling is
+    exactly nearest-neighbor, so ns dense ``(3*mn, 3*mn)`` blocks assembled
+    by 3-colored ``jax.jvp`` probes capture it completely at a cost
+    independent of the dof count — then backsolves every dof right-hand side
     (:func:`solvax.block_thomas_factor` / :func:`solvax.block_thomas_solve`)
     and certifies each column with a short warm-started GMRES pass against
-    the preconditioned system (same ``adjoint_tol`` norm as the default
-    path; columns already at tolerance cost one matvec).  ``"gmres"`` is the
-    pre-R25.2 path: one independent preconditioned GMRES per dof column.
-    Both produce the same Jacobian to solver tolerance; ``"gmres"`` is the
-    fallback if the block path misbehaves on an exotic configuration.
-    Inert for ``jac=None``; ``recycle=True`` takes precedence.
+    the preconditioned system (same ``adjoint_tol`` norm; columns already at
+    tolerance cost one matvec).  ``"gmres"`` is the per-dof-column fallback
+    if the block path misbehaves on an exotic configuration; both produce
+    the same Jacobian to solver tolerance.  ``recycle=True`` takes
+    precedence.
 
-    ``recycle`` (plan R25.3, ``jac="implicit"`` only) carries a GCROT
-    deflation pair across the per-dof implicit-Jacobian solves — a
-    ``lax.scan`` over dof chunks (vmapped within a chunk) threads the
-    :func:`solvax.gcrot` recycle space ``(C, U)`` between chunks and, via a
-    Python-side holder, between successive trust-region Jacobian
-    evaluations.  Recycled solves keep the exact ``adjoint_tol`` /
-    ``adjoint_maxiter`` budget of the default path.  **Default False**:
-    measured on the nfp2 minimal-seed max_mode-2 operator (2026-07-11), the
-    solvax v0.1 recycle space (FIFO cycle corrections, not the harmonic
-    Ritz vectors of GCRO-DR) *slows* warm-started columns — e.g. 140 (cold
-    GMRES) -> 236/347/479 iterations at k = 2/5/10 — so columns that then
-    exhaust ``adjoint_maxiter`` return larger residuals.  Enable only after
+    ``recycle`` carries a GCROT deflation pair across the per-dof
+    implicit-Jacobian solves and successive trust-region Jacobian
+    evaluations, at the exact ``adjoint_tol`` / ``adjoint_maxiter`` budget
+    of the default path.  **Default False**: the solvax recycle space (FIFO
+    cycle corrections, not GCRO-DR harmonic Ritz vectors) measurably *slows*
+    warm-started columns on the production operator, and columns that then
+    exhaust ``adjoint_maxiter`` return larger residuals — enable only after
     benchmarking per-column iteration counts on your operator.
-    ``recycle=False`` uses the independent per-column :func:`solvax.gmres`
-    path (identical columns across chunk sizes to float64 round-off).
-    Inert for ``jac=None``.
 
     ``hot_restart`` seeds each trial solve from the previous converged state
     (both modes; in implicit mode via the per-config host-solve cache).
-
-    ``warm_start`` (plan R25.4, ``jac="implicit"`` only) refines what that
-    seed is.  ``"perturbation"`` (default) seeds each *trial* solve with the
-    DESC-style first-order prediction ``x_ref + sum_j (dx)_j dz_j``
-    (arXiv:2203.15927 ``eq.perturb`` before ``eq.solve``): the per-dof state
-    responses ``dz_j = -(dF/dz)^{-1} dF/dp t_j`` are exactly the columns the
-    implicit Jacobian already solves, so the linearization is stashed at
-    each ``jac(x_ref)`` call for free and evaluated per trial at the cost of
-    one small tensor contraction.  ``"state"`` is the plain hot restart
-    (seed = last converged state); ``None`` disables warm starting entirely
-    (every trial re-solves from the interior guess).  All three converge to
-    the same fixed points — only the inner iteration count changes — and
-    anything missing or mismatched (first call, stage change, failed seed)
-    falls back silently down the ladder perturbation -> state -> cold.
-    ``recycle=True`` bypasses the perturbation stash (its Jacobian variant
-    carries the GCROT pair instead); ``hot_restart=False`` forces
-    ``warm_start=None``.  Inert for ``jac=None``.  Measured (2026-07-12,
-    M-series CPU, nfp2 minimal seed, max_mode=2, QS+aspect, ``max_nfev=20``):
-    total forward-solve iterations 23685 (``"state"``) -> 6364
-    (``"perturbation"``), **3.7x fewer**, wall 156 s -> 145 s (this deck's
-    wall is Jacobian-dominated at ns=35; the solve-phase win grows with
-    ``ns``), and the seed additionally rescued a trial whose plain hot
-    restart failed with a Jacobian-sign error.
+    ``warm_start`` (``jac="implicit"`` only) refines that seed.
+    ``"perturbation"`` (default) seeds each trial with the DESC-style
+    first-order prediction ``x_ref + sum_j (dx)_j dz_j`` (arXiv:2203.15927
+    ``eq.perturb`` before ``eq.solve``): the per-dof state responses are
+    exactly the columns the implicit Jacobian already solves, so the
+    linearization is stashed at each ``jac(x_ref)`` call for free.
+    ``"state"`` is the plain hot restart; ``None`` disables warm starting.
+    All three converge to the same fixed points — only the inner iteration
+    count changes (measured ~3.7x fewer forward-solve iterations than
+    ``"state"``) — and anything missing or mismatched (first call, stage
+    change, failed seed) falls back silently down the ladder perturbation ->
+    state -> cold.  ``recycle=True`` bypasses the perturbation stash (its
+    Jacobian variant carries the GCROT pair instead); ``hot_restart=False``
+    forces ``warm_start=None``.
 
     Remaining keywords go to :func:`scipy.optimize.least_squares` (e.g.
     ``max_nfev``, ``ftol``, ``xtol``, ``diff_step``).
@@ -1282,7 +1265,7 @@ def least_squares(
     (last successfully solved :class:`Equilibrium`), ``stage_results``
     (per-``max_mode`` results for schedules) and, in implicit mode,
     ``solve_stats`` (``{"solves", "iterations"}`` totals of the stage's host
-    forward solves — the R25.4 warm-start instrumentation).
+    forward solves).
     """
     import scipy.optimize
 
@@ -1331,8 +1314,7 @@ def least_squares(
         raise ValueError(f"jac must be None or 'implicit', got {jac!r}")
 
     solve_kwargs = dict(solve_kwargs or {})
-    if device is not None:
-        solve_kwargs.setdefault("device", device)
+    solve_kwargs.setdefault("device", device)
     if use_ess:
         scipy_kwargs.setdefault("x_scale", _ess_scale_full())
     if x0 is None:
@@ -1380,6 +1362,64 @@ def least_squares(
     return result
 
 
+def minimize(
+    objective_terms: Sequence[tuple[Callable, float, float]],
+    inp: VmecInput,
+    *,
+    max_mode: int | Sequence[int] = 1,
+    x0: np.ndarray | None = None,
+    current_dofs: int | None = None,
+    hot_restart: bool = True,
+    device: Any = AUTO,
+    solve_kwargs: dict | None = None,
+    verbose: int = 0,
+    method: str = "L-BFGS-B",
+    **scipy_kwargs,
+):
+    """Minimize the scalarized residual norm with one adjoint per gradient.
+
+    The objective is exactly ``0.5 * sum(rows**2)``, with ``rows`` defined by
+    :func:`least_squares`.  Unlike Gauss--Newton least squares, a reverse
+    gradient of this scalar needs one matrix-free implicit adjoint and never
+    forms the vector residual Jacobian or its dense radial block factors.
+    This is the bounded-storage path for profile objectives such as ``DMerc``,
+    ``jdotb``, and Glasser ``D_R``.  It changes the optimization algorithm,
+    not the objective or its unconstrained minimizers, and is therefore
+    opt-in; :func:`least_squares` retains all existing defaults.
+
+    ``method`` and remaining keywords are passed to
+    :func:`scipy.optimize.minimize` (default ``"L-BFGS-B"``; use ``bounds=``
+    and ``options={"maxiter": ...}`` in the usual scipy form).  All objective
+    terms must support ``jac="implicit"`` as documented by
+    :func:`least_squares`.  Plain state hot restarts are used because the
+    first-order perturbation warm start requires the forward state-response
+    columns that this lower-storage path deliberately avoids.
+    """
+    modes_schedule = ([int(max_mode)] if np.isscalar(max_mode)
+                      else [int(m) for m in max_mode])
+    if len(modes_schedule) > 1:
+        if x0 is not None:
+            raise ValueError("x0 cannot be combined with a max_mode schedule")
+        stage_results = []
+        current = inp
+        for mm in modes_schedule:
+            result = minimize(
+                objective_terms, current, max_mode=mm,
+                current_dofs=current_dofs, hot_restart=hot_restart,
+                device=device, solve_kwargs=solve_kwargs, verbose=verbose,
+                method=method, **scipy_kwargs)
+            stage_results.append(result)
+            current = result.input
+        result.stage_results = stage_results
+        return result
+    return _least_squares_implicit(
+        objective_terms, inp, max_mode=modes_schedule[0], x0=x0,
+        current_dofs=current_dofs, jac_solver="reverse", recycle=False,
+        warm_start=("state" if hot_restart else None),
+        solve_kwargs=dict(solve_kwargs or {}), device=device, verbose=verbose,
+        minimize_method=method, **scipy_kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Implicit-gradient mode (vmex.core.implicit wiring)
 # ---------------------------------------------------------------------------
@@ -1413,7 +1453,8 @@ def _traceable_term(fun: Callable) -> Callable:
         "needs traceable (state, runtime) callables or a residuals_state method. "
         "Wout-engine terms (d_merc, l_grad_b, the Boozer QI residual) run on "
         "host NumPy — use jac=None (finite differences) for those, or the "
-        "traceable l_grad_b_state for L_grad_B.")
+        "traceable d_merc_state / mercier_stability_residual and "
+        "l_grad_b_state alternatives.")
 
 
 def _least_squares_implicit(
@@ -1424,12 +1465,13 @@ def _least_squares_implicit(
     x0: np.ndarray | None,
     current_dofs: int | None = None,
     jac_chunk_size: int | str | None = "auto",
-    jac_solver: str = "block",
+    jac_solver: str = "auto",
     recycle: bool = False,
     warm_start: str | None = "perturbation",
     solve_kwargs: dict,
-    device: Any = None,
+    device: Any = AUTO,
     verbose: int = 0,
+    minimize_method: str | None = None,
     **scipy_kwargs,
 ):
     """Single-stage boundary least squares with implicit-gradient Jacobians.
@@ -1441,20 +1483,18 @@ def _least_squares_implicit(
     :func:`~vmex.core.implicit.runtime_from_params` -> the stacked
     objective rows: one warm host solve per trial ``x``.  ``jac`` computes
     the exact residual Jacobian by *forward* implicit differentiation:
-    by default (``jac_solver="block"``, see ``jacobian_rows_block``) one
-    amortized block-tridiagonal factorization backsolves every boundary-dof
-    column at once; ``jac_solver="gmres"`` (see ``jacobian_rows``) runs one
-    preconditioned GMRES per boundary dof, batched.  Either way this is far
-    below one full equilibrium solve per dof (finite differences) while
-    keeping the full pointwise Gauss-Newton residual geometry.  Both are
-    jit-compiled once per stage.
+    with one reverse adjoint for a scalar residual (``jac_solver="auto"``);
+    vector residuals use one amortized block-tridiagonal factorization
+    (``jacobian_rows_block``), while ``jac_solver="gmres"`` keeps the
+    per-boundary-dof fallback. All paths retain the full pointwise
+    Gauss-Newton residual geometry and are jit-compiled once per stage.
 
     The residual and Jacobian graphs run on the device chosen by
     :func:`vmex.core.device.resolve_implicit_device` — the CPU by default,
     where the per-dof vmapped adjoint GMRES is far faster than the
     launch-bound, dof-count-scaling GPU compile (R1); an explicit
-    ``device=`` overrides this.  The forward equilibrium solve is a host
-    callback and always runs on the CPU regardless.
+    ``device=`` overrides this.  The forward equilibrium callback uses the
+    solver's independent automatic per-stage placement policy.
     """
     import scipy.optimize
 
@@ -1462,13 +1502,9 @@ def _least_squares_implicit(
     from .device import resolve_implicit_device
 
     lasym = bool(inp.lasym)
-    # The 4-family traceable map (implicit._boundary_from_params), the dof
-    # plumbing below (_dof_modes / pack_boundary / _ess_scale, all keyed on
-    # min(max_mode, ntor)) and the forward+adjoint path are dimension-general:
-    # 3D lasym (ntor > 0) is FD-validated end to end against the frozen-path
-    # central FD (tests/test_implicit_grad.py::test_lasym_3d_gradient_vs_frozen_path_fd,
-    # basic_non_stellsym_simsopt), matching the same solver-limited noise floor
-    # the 3D li383 tests document.  The earlier 2D-only guard is removed.
+    # The 4-family traceable map, the dof plumbing below, and the
+    # forward+adjoint path are dimension-general; 3D lasym is FD-validated
+    # end to end (tests/test_implicit_grad.py).
     terms = [(_traceable_term(f), float(t), float(w)) for (f, t, w) in objective_terms]
     modes = _dof_modes(inp, max_mode)
     nm = len(modes)
@@ -1482,17 +1518,12 @@ def _least_squares_implicit(
     k_cur, ac_scale = _current_dof_setup(inp, current_dofs)
     nboundary = nfam * nm
     ndof = nboundary + (k_cur + 1 if k_cur else 0)
-    # multigrid=True routes the host solve through solve_multigrid (even for
-    # single-stage ladders) so NITER-exhausted trials are penalized instead
-    # of raising, matching the finite-difference path's trial policy.
-    # Loose adjoint budget: the trust-region optimizer only needs ~1e-3
-    # gradient accuracy; measured row-norm deviation vs the tight
-    # (1e-11, 300) diagnostics default is <~1e-4 at a fraction of the cost.
-    # hot_restart seeds each trial's host solve from the stage's previous
-    # converged state (same fixed points, far fewer iterations) — the
-    # implicit-mode analogue of the finite-difference path's hot restart.
-    # warm_start="perturbation" (R25.4) sharpens that seed to the DESC-style
-    # first-order prediction; see least_squares.
+    # multigrid=True routes the host solve through solve_multigrid so
+    # NITER-exhausted trials are penalized instead of raising (same trial
+    # policy as the finite-difference path).  Loose adjoint budget: the
+    # trust region only needs ~1e-3 gradient accuracy; row-norm deviation vs
+    # the tight (1e-11, 300) diagnostics default is <~1e-4 at a fraction of
+    # the cost.  hot_restart / warm_start semantics: see least_squares.
     if warm_start not in ("perturbation", "state", None):
         raise ValueError(
             "warm_start must be 'perturbation', 'state' or None, "
@@ -1501,18 +1532,22 @@ def _least_squares_implicit(
         warm_start = "state"  # the recycled variant carries (C, U) instead
     cfg = imp.make_config(inp, multigrid=True,
                           hot_restart=(warm_start is not None),
-                          adjoint_tol=1e-6, adjoint_maxiter=30)
-    # Pin the residual/Jacobian graphs to the fastest device for this launch-
-    # bound path (CPU by default; explicit device= honored) — committing the
-    # input dof vector to it makes both jits compile and run there, and their
-    # uncommitted constants follow.  ``None`` leaves placement untouched.
+                          adjoint_tol=1e-6, adjoint_maxiter=30,
+)
+    # Pin the residual/Jacobian graphs to the fastest device for this
+    # launch-bound path (CPU by default; explicit device= honored; None
+    # leaves placement untouched).  The resolved device is ALSO carried in
+    # the static config so the host callback, the cached runtime template,
+    # and the custom-VJP backward re-enter the same placement context on
+    # their own — no outer jax.default_device context needed.
     jac_device = resolve_implicit_device(device, cfg.resolution)
+    cfg = dataclasses.replace(cfg, device=jac_device)
 
     def _place(x: np.ndarray) -> jnp.ndarray:
         a = jnp.asarray(x, dtype=jnp.float64)
         return a if jac_device is None else jax.device_put(a, jac_device)
 
-    params0 = imp.params_from_input(inp)
+    params0 = imp.params_from_input(inp, device=jac_device)
     imp._template_runtime(cfg)  # host-built template: warm the per-cfg cache
     # eagerly so runtime_from_params stays traceable under jit below
 
@@ -1540,6 +1575,12 @@ def _least_squares_implicit(
         return term_rows(state, imp.runtime_from_params(params, cfg))
 
     rows_jit = jax.jit(residual_rows)
+
+    def scalar_loss(x: jnp.ndarray) -> jnp.ndarray:
+        rows = residual_rows(x)
+        return 0.5 * jnp.vdot(rows, rows)
+
+    value_grad_jit = jax.jit(jax.value_and_grad(scalar_loss))
 
     # The evolved-dof mask is a *structural* per-config constant; fetch it
     # once (first host solve, cached in implicit._MASK_CACHE) so the Jacobian
@@ -1582,10 +1623,14 @@ def _least_squares_implicit(
         tangent_stack = (jnp.asarray(t_rbc), jnp.asarray(t_zbs),
                          jnp.asarray(t_ac), jnp.asarray(t_curtor))
 
-    # R17.1 memory knob: chunk_size None == one wide vmap (current behavior),
-    # an int / "auto" caps peak Jacobian memory at that many dofs at a time.
+    # R17.1 memory knob: chunk_size None == one full-width batch, while an int
+    # / "auto" caps peak Jacobian memory at that many dofs at a time.  Route
+    # the full-width case through lax.map(batch_size=ndof), not a bare vmap:
+    # JAX 0.6.2 mis-transforms the nested iterative implicit solve under the
+    # latter (a wrong aspect-ratio column), whereas the full-width lax.map
+    # batch agrees with the chunked paths and independent central FD.
     if jac_chunk_size == "auto":
-        chunk = int(auto_chunk_size(ndof))
+        chunk = _auto_jac_chunk(ndof)
     elif jac_chunk_size is None or isinstance(jac_chunk_size, int):
         chunk = jac_chunk_size
     else:
@@ -1656,26 +1701,25 @@ def _least_squares_implicit(
             dz, _ = imp._adjoint_solve(Fz, rhs_of(tp), cfg)
             return column_of(dz, tp), dz
 
-        cols, dz_cols = chunk_map(column, tangent_stack, chunk_size=chunk)
+        tangent_chunk = ndof if chunk is None else chunk
+        cols, dz_cols = chunk_map(
+            column, tangent_stack, chunk_size=tangent_chunk
+        )
         return jnp.transpose(cols), dz_cols
 
-    # R25.2 amortized block-tridiagonal variant.  The *raw* residual
-    # formulation (un-preconditioned scalxc-scaled spectral force; see
-    # implicit.residual_fn) has a Jacobian that is exactly block-tridiagonal
-    # in the radial index (verified numerically: per-surface probe response
-    # is 0.0 beyond |i-j| = 1 — the radial coupling is the nearest-neighbor
-    # full/half-mesh FD stencil; the *preconditioned* formulation is dense
-    # in radius because the 1D preconditioner applies per-mode radial
-    # tridiagonal *solves*).  Both formulations share the fixed point, so
-    #   dz_j = -(dF/dz)^{-1} dF/dp t_j
-    # is the same solution through either: assemble the raw blocks once with
-    # 3-colored jvp probes (cost ~3*(3*mn) residual linearizations,
-    # independent of the dof count), factor once (solvax block Thomas), and
-    # backsolve every dof right-hand side — then one short preconditioned
-    # GMRES pass per column (warm-started at the direct solution) certifies
-    # cfg.adjoint_tol in the same norm as the default path: solvax checks
-    # the initial residual before the first Arnoldi cycle, so columns whose
-    # direct solve already meets tolerance cost one matvec.
+    # Amortized block-tridiagonal variant.  The *raw* residual formulation
+    # (un-preconditioned scalxc-scaled spectral force; implicit.residual_fn)
+    # has an exactly block-tridiagonal Jacobian in the radial index
+    # (verified numerically: probe response is 0.0 beyond |i-j| = 1); the
+    # *preconditioned* formulation is dense in radius because the 1D
+    # preconditioner applies per-mode radial tridiagonal *solves*.  Both
+    # share the fixed point, so dz_j = -(dF/dz)^{-1} dF/dp t_j is the same
+    # through either: assemble the raw blocks with 3-colored jvp probes
+    # (~3*(3*mn) linearizations, dof-count independent), factor once (solvax
+    # block Thomas), backsolve every dof RHS, then one short warm-started
+    # GMRES pass per column certifies cfg.adjoint_tol (solvax checks the
+    # initial residual first, so columns already at tolerance cost one
+    # matvec).
     mn_state = int(np.asarray(mask_np.R_cos).shape[1])
     ns_state = int(cfg.resolution.ns)
     active_fields = tuple(f for f in imp._STATE_FIELDS
@@ -1688,7 +1732,9 @@ def _least_squares_implicit(
     probe_field = jnp.asarray(np.tile(np.repeat(np.arange(n_act), mn_state), 3))
     probe_col = jnp.asarray(np.tile(np.tile(np.arange(mn_state), n_act), 3))
     if jac_chunk_size == "auto":
-        probe_chunk = int(auto_chunk_size(3 * m_block))
+        probe_chunk = _auto_jac_chunk(3 * m_block)
+    elif jac_chunk_size is None:
+        probe_chunk = 3 * m_block
     else:
         probe_chunk = chunk
 
@@ -1761,7 +1807,8 @@ def _least_squares_implicit(
             b = jax.jvp(lambda prm: F_raw(z_star, prm), (params,), (tp,))[1]
             return _pack(jax.tree.map(jnp.negative, b))
 
-        rhs = chunk_map(raw_rhs, tangent_stack, chunk_size=chunk)
+        tangent_chunk = ndof if chunk is None else chunk
+        rhs = chunk_map(raw_rhs, tangent_stack, chunk_size=tangent_chunk)
         dz0 = block_thomas_solve(factors, jnp.moveaxis(rhs, 0, -1))
 
         def column(args):
@@ -1774,73 +1821,92 @@ def _least_squares_implicit(
 
         cols, dz_cols = chunk_map(
             column, (*tangent_stack, jnp.moveaxis(dz0, -1, 0)),
-            chunk_size=chunk)
+            chunk_size=tangent_chunk)
         return jnp.transpose(cols), dz_cols
 
-    # R25.3 recycled variant: all ndof solves share the operator Fz (and Fz
-    # drifts slowly between accepted trust-region iterates), so a GCROT
-    # deflation pair (C, U) is threaded through a lax.scan over fixed-size
-    # dof chunks — vmapped *within* a chunk with the incoming pair shared
-    # read-only, then advanced from one representative (first) lane — and
-    # returned to the caller, which stashes it between jac_jit calls.  The
-    # dof axis is zero-padded to a whole number of chunks; padded columns
-    # have zero RHS (gcrot converges in zero cycles) and are discarded.
+    # Recycled variant: all ndof solves share the operator Fz (which drifts
+    # slowly between accepted trust-region iterates), so a GCROT deflation
+    # pair (C, U) is threaded through a lax.scan over fixed-size dof chunks
+    # (vmapped within a chunk, pair advanced from lane 0) and stashed
+    # between jac_jit calls.  The dof axis is zero-padded to whole chunks;
+    # padded columns have zero RHS (zero gcrot cycles) and are discarded.
     n_flat = sum(int(np.prod(s.shape))
                  for s in jax.tree.leaves(imp._state_struct(cfg)))
+    # A recycled pair rotated past this mean principal-angle sine no longer
+    # deflates the current operator usefully (drift ~1 is an orthogonal
+    # rotation); measured drift per accepted trust-region step is ~1e-3 on
+    # slowly-varying operators, so 0.5 only trips on genuinely large steps.
+    _RECYCLE_DRIFT_LIMIT = 0.5
     csize = int(chunk) if chunk else ndof
     nchunks = -(-ndof // csize)
     pad = nchunks * csize - ndof
 
     def jacobian_rows_recycled(x: jnp.ndarray, C: jnp.ndarray,
                                U: jnp.ndarray):
-        """``jacobian_rows`` with GCROT recycle carry (plan R25.3).
-
-        EXPERIMENTAL / opt-in (``recycle=True``), currently untested in CI;
-        an A/B measurement of this lane is running separately (Item I.8c).
+        """``jacobian_rows`` with GCROT recycle carry (opt-in, EXPERIMENTAL).
 
         Same ``cfg.adjoint_tol`` / ``cfg.adjoint_maxiter`` budget per solve
         as the default path; the Jacobian matches to solver tolerance *when
-        the solves converge within budget*.  See the ``recycle`` note in
-        :func:`least_squares` for why this is opt-in: the solvax v0.1
-        recycle space measurably slows warm-started columns on the
-        production operator, so budget-capped columns can come back with
-        larger residuals than the GMRES path.
+        the solves converge within budget* (the ``recycle`` note in
+        :func:`least_squares` explains why this is opt-in).  On solvax >=
+        0.8.7 the carry is **drift-gated**: each warm-started solve reports
+        ``recycle_drift`` (mean principal-angle sine between the incoming
+        recycle image space and its re-established span,
+        ``sin(theta) <= ||dA|| ||U||``); a pair whose lane-0 drift exceeds
+        ``_RECYCLE_DRIFT_LIMIT`` is dropped to a cold start, so a stale pair
+        from a large trust-region step can slow at most the one chunk that
+        measures it.  Max drift over chunks is returned for observability.
+        Older solvax degenerates to an unconditional carry.
         """
         Fz, tangent_of, rhs_of, column_of, _ = _jac_parts(x)
 
         def column(tp_stack_j, rec):
             tp = tangent_of(tp_stack_j)
             dz, sol = imp._recycled_solve(Fz, rhs_of(tp), cfg, rec)
-            return column_of(dz, tp), sol.recycle
+            drift = (sol.recycle_drift if imp._GCROT_REPORTS_DRIFT
+                     else jnp.asarray(0.0))
+            return column_of(dz, tp), sol.recycle, drift
 
         def scan_body(carry, tp_chunk):
-            cols_chunk, recs = jax.vmap(
+            cols_chunk, recs, drifts = jax.vmap(
                 column, in_axes=(0, None))(tp_chunk, carry)
             # Lane 0 is always a real dof (pad < csize): its updated pair
-            # seeds the next chunk / the next Jacobian evaluation.
-            return jax.tree.map(lambda a: a[0], recs), cols_chunk
+            # seeds the next chunk / the next Jacobian evaluation — unless its
+            # measured drift says the incoming space no longer matches the
+            # operator, in which case the next chunk cold-starts.
+            drift0 = drifts[0]
+            # recs leaves are vmapped over the chunk (shape (chunk, n, k)); the
+            # carried pair is a single lane (n, k), so gate lane 0 against a
+            # zero of *lane* shape, not the whole stack.
+            pair = jax.tree.map(
+                lambda a: jnp.where(drift0 > _RECYCLE_DRIFT_LIMIT,
+                                    jnp.zeros_like(a[0]), a[0]),
+                recs)
+            return pair, (cols_chunk, drift0)
 
         def pad_stack(t):
             t = jnp.concatenate(
                 [t, jnp.zeros((pad,) + t.shape[1:], t.dtype)])
             return t.reshape((nchunks, csize) + t.shape[1:])
 
-        (C, U), cols = jax.lax.scan(
+        (C, U), (cols, drifts) = jax.lax.scan(
             scan_body, (C, U),
             tuple(pad_stack(t) for t in tangent_stack))
         cols = cols.reshape((nchunks * csize,) + cols.shape[2:])[:ndof]
-        return jnp.transpose(cols), C, U
+        return jnp.transpose(cols), C, U, jnp.max(drifts)
 
-    if jac_solver not in ("block", "gmres"):
+    if jac_solver not in ("auto", "block", "gmres", "reverse"):
         raise ValueError(
-            f"jac_solver must be 'block' or 'gmres', got {jac_solver!r}")
+            "jac_solver must be 'auto', 'block', 'gmres', or 'reverse', "
+            f"got {jac_solver!r}")
     if recycle:
         jac_impl = jacobian_rows_recycled  # opt-in R25.3 experiment wins
-    elif jac_solver == "block":
+    elif jac_solver in ("auto", "block"):
         jac_impl = jacobian_rows_block
     else:
         jac_impl = jacobian_rows
     jac_jit = jax.jit(jac_impl)
+    reverse_jit = jax.jit(jax.jacrev(residual_rows))
 
     holder: dict[str, Any] = {"nres": None, "lin": None}
     if recycle:
@@ -1914,8 +1980,23 @@ def _least_squares_implicit(
 
     def jac_fn(x: np.ndarray) -> np.ndarray:
         try:
-            if recycle:
-                rows, C, U = jac_jit(_place(x), *holder["recycle"])
+            reverse = (
+                not recycle
+                and (
+                    jac_solver == "reverse"
+                    or (jac_solver == "auto" and holder["nres"] == 1)
+                )
+            )
+            if reverse:
+                jac = np.asarray(
+                    jax.device_get(reverse_jit(_place(x))), dtype=float
+                )
+                holder["lin"] = None
+            elif recycle:
+                rows, C, U, drift = jac_jit(_place(x), *holder["recycle"])
+                holder["recycle_drift"] = float(drift)
+                if verbose and holder["recycle_drift"] > 0.0:
+                    print(f"[least_squares] recycle drift {holder['recycle_drift']:.2e}")
                 holder["recycle"] = (C, U)  # deflate the next jac evaluation
                 jac = np.asarray(jax.device_get(rows), dtype=float)
             else:
@@ -1945,8 +2026,37 @@ def _least_squares_implicit(
         except Exception:  # the seed itself does not converge -> fun raises clearly
             pass
 
-    result = scipy.optimize.least_squares(fun, np.asarray(x0, dtype=float),
-                                          jac=jac_fn, **scipy_kwargs)
+    if minimize_method is None:
+        result = scipy.optimize.least_squares(
+            fun, np.asarray(x0, dtype=float), jac=jac_fn, **scipy_kwargs)
+    else:
+        def value_and_grad(x: np.ndarray):
+            try:
+                value, grad = value_grad_jit(_place(x))
+                value = float(jax.device_get(value))
+                grad = np.asarray(jax.device_get(grad), dtype=float)
+            except Exception as exc:
+                if holder.get("last_grad") is None:
+                    raise
+                if verbose:
+                    print(f"[minimize] trial solve/gradient failed: {exc}")
+                return 1.0e12, holder["last_grad"]
+            if np.isfinite(value) and np.all(np.isfinite(grad)):
+                holder["last_grad"] = grad
+                if verbose:
+                    print(f"[minimize] cost = {value:.6e}")
+                return value, grad
+            if holder.get("last_grad") is None:
+                raise FloatingPointError("non-finite initial objective or gradient")
+            return 1.0e12, holder["last_grad"]
+
+        result = scipy.optimize.minimize(
+            value_and_grad, np.asarray(x0, dtype=float), jac=True,
+            method=minimize_method, **scipy_kwargs)
+        if "jac" not in result:  # scipy may skip evaluation if every dof is fixed
+            result.fun, result.jac = value_and_grad(result.x)
+        result.cost = float(result.fun)
+        result.optimality = float(np.linalg.norm(result.jac, ord=np.inf))
     result.input = unpack_boundary(inp, result.x[:nboundary], max_mode)
     if k_cur:
         result.input = _apply_current(result.input, result.x[nboundary:],

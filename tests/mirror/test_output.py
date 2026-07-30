@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -118,7 +119,9 @@ def _sample_mout() -> MoutData:
 
 
 def test_mout_roundtrip(tmp_path) -> None:
-    path = write_mout(tmp_path / "mout_sample.nc", _sample_mout())
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        path = write_mout(tmp_path / "mout_sample.nc", _sample_mout())
     loaded = read_mout(path)
     assert loaded.schema == "vmex.mirror.mout/1"
     assert loaded.converged

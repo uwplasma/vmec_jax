@@ -1,24 +1,16 @@
-"""End-to-end tests for the new-core ``vmec`` CLI (``vmex.core.cli``).
-
-Covered here (plan.md Phase 2 STATUS item 4 — first vertical slice):
-
-1. ``vmec input.solovev`` writes a wout readable by
-   :func:`vmex.core.wout.read_wout` with correct ``ns``/``mnmax`` and
-   ``wb`` at golden VMEC2000 parity (1e-8);
-2. stdout structure matches the golden ``xvmec2000`` capture: banners,
-   NS-stage banner, iteration header, and the first/last iteration rows are
-   present with matching columns and values at print precision;
-3. ``--plot`` and ``--booz`` smoke on the produced wout;
-4. VMEC++-style JSON input (``VmecInput.to_json`` round trip) solves to the
-   same ``wb``;
-5. ``--test`` (bundled quick-start deck) smoke at a reduced tolerance;
-6. zero-crash exit codes: unreadable input -> ``ier_flag = 5`` with the
-   VMEC2000 werror INPUT message; iteration exhaustion -> ``ier_flag = 2``.
+"""End-to-end tests for the new-core ``vmec`` CLI (``vmex.core.cli``):
+``vmec input.solovev`` writes a readable wout with ``wb`` at golden parity
+(1e-8); stdout structure matches the golden ``xvmec2000`` capture at print
+precision; ``--plot``/``--booz`` smoke; JSON input solves to the same
+``wb``; ``--test`` smoke; and zero-crash exit codes (unreadable input ->
+``ier_flag = 5`` with the werror INPUT message; NITER exhaustion ->
+``ier_flag = 2`` with the WOUT written — fileout.f semantics).
 """
 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import re
 from pathlib import Path
@@ -36,7 +28,7 @@ from vmex.core.errors import INPUT_ERROR_FLAG, MORE_ITER_FLAG, WERROR_MESSAGES
 from vmex.core.input import VmecInput
 from vmex.core.wout import read_wout
 
-from conftest import resolve_golden_dir
+from tests.conftest import resolve_golden_dir
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 SOLOVEV_DECK = DATA_DIR / "input.solovev"
@@ -153,6 +145,39 @@ def test_solovev_stdout_structure_matches_golden(solovev_cli):
     np.testing.assert_allclose(ours[-1][1][-1], gold[-1][1][-1], rtol=1e-3)  # WMHD
 
 
+def test_summary_reports_iota_and_modb(solovev_cli):
+    """The equilibrium summary carries the iota and |B| axis/edge lines."""
+    _, stdout, _ = solovev_cli
+    for pattern in (
+        " Iota on Axis          = ",
+        " Iota at Edge          = ",
+        " |B| on Axis (b0)      = ",
+        " <|B|> at Edge (half)  = ",
+    ):
+        line = _line_containing(stdout, pattern)
+        assert line is not None, f"missing summary line: {pattern!r}"
+        assert np.isfinite(float(line.split("=")[1].split("[")[0]))
+    # iota can be legitimately tiny (near-axisymmetric decks: ~1e-10), so the
+    # summary prints it in E-notation; fixed-point %f would show -0.000000.
+    for pattern in (" Iota on Axis ", " Iota at Edge "):
+        value_text = _line_containing(stdout, pattern).split("=")[1].strip()
+        assert "E" in value_text, f"iota not in E-notation: {value_text!r}"
+
+
+def test_stdout_has_no_consecutive_blank_lines(solovev_cli):
+    """At most one blank line between blocks anywhere in the CLI output."""
+    _, stdout, _ = solovev_cli
+    assert "\n\n\n" not in stdout
+
+
+def test_no_stale_preconditioned_legend(solovev_cli):
+    """The screen path never prints lowercase preconditioned rows, so the
+    legend must not announce them (threed1-file-only, printout.f FORMAT 40)."""
+    _, stdout, _ = solovev_cli
+    assert "Preconditioned" not in stdout
+    assert _line_containing(stdout, "FSQR, FSQZ = Normalized") is not None
+
+
 # ---------------------------------------------------------------------------
 # --plot / --booz on the produced wout
 # ---------------------------------------------------------------------------
@@ -230,9 +255,71 @@ def test_missing_input_exits_with_input_error(tmp_path):
     assert WERROR_MESSAGES[INPUT_ERROR_FLAG] in stdout
 
 
-def test_iteration_exhaustion_exits_with_more_iter(tmp_path):
+def test_iteration_exhaustion_without_lfull3d1out_does_not_write_wout(tmp_path):
+    """VMEC2000: ordinary NITER exhaustion returns ier=2 before fileout."""
+    rc, stdout = _run_cli(
+        [str(SOLOVEV_DECK), "--outdir", str(tmp_path), "--max-iter", "20"]
+    )
+    assert rc == MORE_ITER_FLAG
+    assert WERROR_MESSAGES[MORE_ITER_FLAG] in stdout
+    assert "Wrote WOUT file:" not in stdout
+    assert not (tmp_path / "wout_solovev.nc").exists()
+
+
+def test_lfull3d1out_writes_wout_on_iteration_exhaustion(tmp_path):
+    """LFULL3D1OUT=T forces VMEC2000's full-output path for ier=2."""
+    inp = dataclasses.replace(
+        VmecInput.from_file(SOLOVEV_DECK),
+        lfull3d1out=True,
+    )
+    deck = inp.to_indata(tmp_path / "input.lfull3d1out")
+    rc, stdout = _run_cli(
+        [str(deck), "--outdir", str(tmp_path), "--max-iter", "20"]
+    )
+    assert rc == MORE_ITER_FLAG
+    for pattern in (
+        "Aspect Ratio", "Volume Average B", "Iota on Axis", "Iota at Edge",
+        "|B| on Axis (b0)", "<|B|> at Edge (half)", "MHD Energy (wb + wp)",
+        "NUMBER OF JACOBIAN RESETS", "TOTAL COMPUTATIONAL TIME",
+        "Wrote WOUT file:", "HINT : increase NITER or loosen FTOL",
+    ):
+        assert _line_containing(stdout, pattern) is not None, pattern
+    wout = read_wout(tmp_path / "wout_lfull3d1out.nc")
+    assert int(wout.ier_flag) == MORE_ITER_FLAG
+
+
+def test_iteration_exhaustion_quiet_without_lfull3d1out_has_no_wout(tmp_path):
     rc, stdout = _run_cli(
         [str(SOLOVEV_DECK), "--outdir", str(tmp_path), "--max-iter", "20", "--quiet"]
     )
     assert rc == MORE_ITER_FLAG
+    # Typed termination messages remain visible even under --quiet.
     assert WERROR_MESSAGES[MORE_ITER_FLAG] in stdout
+    assert not (tmp_path / "wout_solovev.nc").exists()
+
+
+def test_lforbal_iteration_exhaustion_writes_wout(tmp_path):
+    """LFORBAL=T is solved, not ignored, and keeps VMEC's NITER WOUT policy."""
+    inp = dataclasses.replace(
+        VmecInput.from_file(SOLOVEV_DECK),
+        lforbal=True,
+        lfull3d1out=True,
+        lmove_axis=False,
+        nstep=1,
+        niter_array=np.asarray([3]),
+        ftol_array=np.asarray([1.0e-30]),
+    )
+    deck = inp.to_indata(tmp_path / "input.lforbal")
+    rc, stdout = _run_cli([str(deck), "--outdir", str(tmp_path)])
+    assert rc == MORE_ITER_FLAG
+    rows = _iteration_rows(stdout)
+    assert [row[1][:3] for row in rows] == [
+        [8.33e-2, 4.94e-4, 3.21e-2],
+        [6.82e-3, 1.41e-3, 4.37e-3],
+        [1.52e-2, 9.15e-4, 6.98e-3],
+    ]
+    wout_path = tmp_path / "wout_lforbal.nc"
+    assert wout_path.exists()
+    wout = read_wout(wout_path)
+    assert int(wout.ier_flag) == MORE_ITER_FLAG
+    assert bool(wout.lmove_axis) is False

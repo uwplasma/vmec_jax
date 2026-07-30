@@ -1,8 +1,8 @@
-"""Differentiable free-boundary residual via virtual casing (R15.3 + R19).
+"""Differentiable free-boundary residual via virtual casing.
 
 This module adds a *differentiable* free-boundary path that complements — and
-does not touch — the NESTOR forward solve in :mod:`vmex.core.freeboundary`
-(R15.1/R15.2, VMEC2000-parity).  The idea (DESC R17.8): instead of
+does not touch — the VMEC2000-parity NESTOR forward solve in
+:mod:`vmex.core.freeboundary`.  The idea (as in DESC): instead of
 differentiating the NESTOR fixed point, express the free-boundary condition as a
 smooth objective.  At the plasma-vacuum interface the total field is tangent,
 
@@ -45,7 +45,7 @@ implicit adjoint (boundary) and virtual casing (coils) at once.  See
 ``examples/single_stage_simultaneous_opt.py`` and the *True single-stage*
 section of ``docs/optimization.rst``.
 
-``virtual_casing_jax`` is an optional dependency (``pip install vmex[freeb]``
+``virtual_casing_jax`` is an optional dependency (install from source
 or ``pip install -e /path/to/virtual_casing_jax``).  Importing this module raises
 a clear error if it is missing.
 """
@@ -74,6 +74,30 @@ except Exception as _exc:  # pragma: no cover - exercised only when the dep is a
     _HAVE_VCJ = False
     _IMPORT_ERROR = _exc
 
+    import dataclasses as _dataclasses
+
+    @_dataclasses.dataclass(frozen=True)
+    class VmecSurfaceFieldData:  # type: ignore[no-redef]
+        """Duck-typed stand-in when ``virtual_casing_jax`` is absent.
+
+        The surface-data CONSTRUCTION (`surface_field_data_from_state` /
+        `_from_wout`) is pure vmex numerics; only the virtual-casing
+        SOLVER paths genuinely need the optional dependency.  Consumers
+        that read ``gamma``/``B_total``/``normal``/... (e.g. the QI
+        sheet-current builder) work identically with this container.
+        """
+
+        gamma: object
+        B_total: object
+        normal: object
+        area_vector: object
+        theta: object
+        phi: object
+        nfp: int
+        stellsym: bool
+        signgs: int
+        source_convention: str
+
 
 #: Vacuum permeability [T m / A] (VMEC2000 ``mu0`` convention).
 MU0 = 4.0e-7 * np.pi
@@ -99,8 +123,10 @@ def _require_vcj() -> None:
     if not _HAVE_VCJ:  # pragma: no cover - dependency-guard branch
         raise ImportError(
             "vmex.core.freeboundary_diff requires the optional dependency "
-            "'virtual_casing_jax' (uwplasma). Install it with "
-            "`pip install vmex[freeb]` or `pip install -e /path/to/virtual_casing_jax`."
+            "'virtual_casing_jax' (canonical repository "
+            "https://github.com/uwplasma/virtual_casing_jax). Install it "
+            "with `pip install vmex[freeb]` (virtual-casing-jax>=0.0.3); "
+            "PyPI releases up to 0.0.2 predate the API vmex drives."
         ) from _IMPORT_ERROR
 
 
@@ -183,9 +209,10 @@ def surface_field_data_from_wout(
 
     The construction is validated by ``|B_total . n| / |B|`` ~ 1e-16 on a
     converged equilibrium (the VMEC free-boundary condition), see the module test.
+
+    Pure vmex numerics — usable without ``virtual_casing_jax``.
     """
 
-    _require_vcj()
     nfp = int(wout.nfp)
     lasym = bool(getattr(wout, "lasym", False))
     ns = int(wout.ns)
@@ -337,10 +364,17 @@ def surface_field_data_from_state(
     ``jax.grad`` threads through both this surface field and the coil field.
 
     ``inp`` supplies the static resolution / profile metadata; ``state`` the
-    (possibly traced) spectral geometry.  Stellarator-symmetric only for now
-    (``lasym`` uses the same path but is untested here).
+    (possibly traced) spectral geometry.  Stellarator-symmetric only for now;
+    ``lasym=True`` is rejected because this path has not been validated with
+    the asymmetric surface-field channels.
+
+    Pure vmex numerics — usable without ``virtual_casing_jax`` (the optional
+    dependency is required only by the virtual-casing solver paths).
     """
-    _require_vcj()
+    if bool(inp.lasym):
+        raise NotImplementedError(
+            "surface_field_data_from_state supports lasym = False only"
+        )
     from .fields import magnetic_fields, metric_elements
     from .fourier import Resolution, mode_table, trig_tables
     from .geometry import (

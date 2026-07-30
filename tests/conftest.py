@@ -35,11 +35,36 @@ except Exception:  # pragma: no cover
     pass
 
 
+def pytest_addoption(parser):
+    group = parser.getgroup("vmex integration")
+    group.addoption(
+        "--run-vmec2000",
+        action="store_true",
+        help="run live integration tests against a local VMEC2000 executable",
+    )
+    group.addoption(
+        "--vmec2000-executable",
+        default="",
+        metavar="PATH",
+        help="VMEC2000 executable for --run-vmec2000 (otherwise auto-discover)",
+    )
+
+
 def pytest_collection_modifyitems(config, items):
     run_full = os.environ.get("RUN_FULL", "") == "1"
+    run_vmec2000 = bool(config.getoption("--run-vmec2000"))
     for item in items:
         if item.get_closest_marker("full") is not None and not run_full:
             item.add_marker(pytest.mark.skip(reason="Full tests disabled. Set RUN_FULL=1."))
+        if (
+            item.get_closest_marker("vmec2000_live") is not None
+            and not run_vmec2000
+        ):
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="Live VMEC2000 integration disabled; use --run-vmec2000"
+                )
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,13 @@ coefficients).  :func:`solve_implicit` wraps the opaque host solver
 matrix-free (one ``jax.vjp`` linearization of the residual, re-applied by a
 recycling GCROT(m, k) Krylov solve — see ``_adjoint_solve_gcrot``) and returns
 ``g_p - lambda^T dF/dp`` with one more VJP — O(1) memory in the forward
-iteration count.
+iteration count.  The adjoint solve executes host-eagerly on the caller's
+thread and is bound to the config's carried device on its own (see the
+"Adjoint execution site" section note); its convergence is enforced — an
+exhausted Krylov budget raises the typed
+:class:`~vmex.core.errors.AdjointSolveError` instead of silently returning a
+plausible-but-wrong gradient — and setting ``VMEX_ADJOINT_DEBUG=1`` prints
+per-stage device/norm lines for hardware placement triage.
 
 Residual formulation (documented choice)
 ----------------------------------------
@@ -55,37 +61,26 @@ Gradient checking solver-sensitive metrics
 ------------------------------------------
 The adjoint gradient is the derivative of the fixed point of the *frozen*
 residual ``F`` — the preconditioner/``tcon``/m=1 branch/dof mask are captured
-once at the base parameters, not re-derived.  For a smooth bulk integral
-(``wb``, ``aspect``) a naive central FD through the full host solver already
-matches ``jax.grad`` to ``rtol <= 1e-6``.  But a **solver-sensitive** metric —
-``iota`` (derived from the current-constrained ``chips`` at ``ncurr=1``), the
-mirror ratio, the magnetic well, the Boozer/QI residual — reads the converged
-state directly, and a naive re-solve at ``p ± h`` lets that convergence logic
-re-form slightly differently on each side, an O(1) path perturbation that can
-sign-flip the FD (``d(iota_edge)/d(RBC(-1,1))`` on ``li383_low_res``: adjoint
-``-0.773``, naive FD ``+0.045``).  The naive FD is therefore *not* a valid
-reference for these metrics; :func:`frozen_path_directional_fd` provides the
-correct one (Newton-solve the frozen ``F`` at ``p ± h``), and it reproduces the
-adjoint to solver accuracy — see ``tests/test_implicit_grad.py``.
+once at the base parameters, not re-derived.  For solver-sensitive metrics
+(``iota`` at ``ncurr=1``, mirror ratio, magnetic well, Boozer/QI residual) a
+naive re-solve FD is *not* a valid reference — it can sign-flip; use
+:func:`frozen_path_directional_fd`, which reproduces the adjoint to solver
+accuracy (full rationale on that function; ``tests/test_implicit_grad.py``).
 
 Zero-crash typed errors through the callback
 --------------------------------------------
-The forward solve runs behind ``jax.pure_callback``, which converts any host
-exception into an opaque ``jax.errors.JaxRuntimeError`` whose message embeds
-the whole host traceback (measured ~3.7 KB) and *loses* the typed exception
-(``__cause__`` is ``None``) — breaking the :mod:`vmex.core.errors`
-zero-crash taxonomy.  The relay: ``_host_solve_and_mask`` catches any
-:class:`~vmex.core.errors.VmecError`, stashes it in the module-level
-``_HOST_ERROR`` slot (host callbacks are serialized per solve, so a single
-slot suffices) and re-raises a SHORT sentinel ``RuntimeError``; the
-``pure_callback`` call sites (``_callback_solve``) catch the runtime error,
-pop the slot and re-raise the ORIGINAL typed exception with ``from None`` to
-suppress the callback noise.  ``im.run`` / :func:`solve_implicit` therefore
-fail with a short :class:`~vmex.core.errors.VmecConvergenceError` /
-:class:`~vmex.core.errors.VmecJacobianError`.  Under ``jax.jit`` the
-error instead surfaces at the jit boundary (where the
-``optimize.least_squares`` zero-crash penalty lanes catch it); the sentinel
-keeps even that message short.
+``jax.pure_callback`` converts any host exception into an opaque
+``JaxRuntimeError`` that embeds the whole host traceback and *loses* the
+typed exception (``__cause__`` is ``None``) — breaking the
+:mod:`vmex.core.errors` zero-crash taxonomy.  The relay:
+``_host_solve_and_mask`` catches any :class:`~vmex.core.errors.VmecError`,
+stashes it in the single-slot ``_HOST_ERROR`` (host callbacks are serialized
+per solve) and re-raises a SHORT sentinel ``RuntimeError``;
+``_callback_solve`` pops the slot and re-raises the ORIGINAL typed exception
+``from None``.  ``im.run`` / :func:`solve_implicit` therefore fail with a
+short typed error.  Under ``jax.jit`` the sentinel surfaces at the jit
+boundary instead (where the ``optimize.least_squares`` zero-crash penalty
+lanes catch it).
 
 Parameter map
 -------------
@@ -101,8 +96,11 @@ verified against :func:`~vmex.core.setup.run_setup` in
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import functools
+import os
+import sys
 import types
 import weakref
 from dataclasses import dataclass
@@ -117,10 +115,13 @@ from jax.flatten_util import ravel_pytree
 from solvax import gcrot as _solvax_gcrot
 from solvax import gmres as _solvax_gmres
 
-from .errors import VmecError
+from .device import AUTO, _put_numeric_leaves, resolve_implicit_device
+from .errors import AdjointSolveError, VmecError
 from .fields import magnetic_fields, metric_elements
 from .fourier import Resolution
-from .geometry import half_mesh_jacobian
+from .geometry import (
+    apply_lambda_axis_closure, half_mesh_jacobian, real_space_geometry,
+)
 from .input import VmecInput
 from .multigrid import solve_multigrid
 from .residuals import (
@@ -130,7 +131,7 @@ from .residuals import (
 from .setup import RadialGrids, flux_profiles, interior_guess
 from .solver import (
     SolveResult, SolverRuntime, SpectralState, _constraint_baselines,
-    _force_to_state, _geometry, _initial_state, _physical_coefficients,
+    _force_to_state, _initial_state, _physical_coefficients,
     _static_tables, evaluate_forces, prepare_runtime, resolution_from_input,
     solve,
 )
@@ -188,20 +189,16 @@ class ImplicitParams:
 _register(ImplicitParams)
 
 
-def params_from_input(inp: VmecInput) -> ImplicitParams:
+def params_from_input(inp: VmecInput, *, device: Any = None) -> ImplicitParams:
     """Extract the differentiable parameters of an input as a pytree.
 
-    On an accelerator box the pytree is *committed* to the CPU
-    (:func:`vmex.core.device.resolve_implicit_device`): every eager op of
-    a ``jax.grad``/``jax.jacrev`` over :func:`run` then executes there, which
-    is where the launch-bound implicit adjoint is fastest — measured 57 s
-    (GPU) vs seconds (CPU) for one solovev ``value_and_grad`` (R24).
-    A user ``JAX_PLATFORMS`` pin or an already-CPU backend stands the pin
-    down; ``optimize.least_squares`` applies the same rule to its dof vector.
+    Omitted ``device`` (like explicit ``None``) follows ordinary JAX
+    placement.  Pass ``device="auto"`` to request VMEX's measured CPU
+    preference for implicit Jacobians, or pass ``"cpu"`` / ``"gpu"`` or a
+    :class:`jax.Device` explicitly.  High-level optimization entry points
+    retain ``device="auto"`` as their default.
     """
-    from .device import resolve_implicit_device
-
-    dev = resolve_implicit_device(None, None)
+    dev = resolve_implicit_device(device, None)
     if dev is None:
         arr = lambda a: jnp.asarray(np.asarray(a, dtype=np.float64))  # noqa: E731
     else:
@@ -244,14 +241,12 @@ class ImplicitConfig:
     adjoint_tol: float = 1e-11
     adjoint_restart: int = 30
     adjoint_maxiter: int = 300
-    #: reverse-adjoint GCROT(m, k) recycling solve (see ``_adjoint_solve_gcrot``):
-    #: the ``(dF/dz)^T lambda = g_x`` solve of the backward pass uses GCROT with
-    #: this inner FGMRES cycle size ``m`` and ``k`` deflation directions instead
-    #: of plain restarted GMRES.  Measured (padded nfp4_QH, ns=25): at high mode
-    #: number restarted GMRES stalls short of ``adjoint_tol`` within its budget
-    #: (the truncated Krylov cycle loses the small eigendirections), while
-    #: GCROT(100, 20) converges to the *same* lambda in ~40% fewer matvecs and
-    #: ~30% less wall — a strictly faster path to the identical converged adjoint.
+    #: reverse-adjoint GCROT(m, k) recycling solve (``_adjoint_solve_gcrot``):
+    #: inner FGMRES cycle size ``m`` and ``k`` deflation directions.  At high
+    #: mode number plain restarted GMRES stalls short of ``adjoint_tol``
+    #: within its budget (the truncated cycle loses the small
+    #: eigendirections); GCROT converges to the *same* lambda in fewer
+    #: matvecs.
     adjoint_gcrot_m: int = 100
     adjoint_gcrot_k: int = 20
     #: seed repeated host solves from the last converged state of this config
@@ -259,6 +254,16 @@ class ImplicitConfig:
     #: unchanged, only the iteration count drops).  Makes the callback
     #: stateful across calls, so keep False for one-shot/diagnostic use.
     hot_restart: bool = False
+    #: the RESOLVED placement device (a ``jax.Device``) or ``None``.  Carried
+    #: in the static config so every stage of the operation — the
+    #: ``pure_callback`` host solve (which runs on a runtime worker thread
+    #: where the caller's thread-local ``jax.default_device`` context does
+    #: NOT apply), the cached runtime template, the custom-VJP backward and
+    #: the multi-RHS pullback — re-enters the same device context on its own,
+    #: without relying on an outer user-supplied context.  Without this, a
+    #: gradient evaluated outside such a context creates its constants on
+    #: JAX's default device and mixes devices with the committed state.
+    device: Any = None
 
 
 def make_config(
@@ -276,8 +281,14 @@ def make_config(
     adjoint_gcrot_m: int = 100,
     adjoint_gcrot_k: int = 20,
     hot_restart: bool = False,
+    device: Any = None,
 ) -> ImplicitConfig:
-    """Build the static config; ``resolution`` is the (final-stage) grid."""
+    """Build the static config; ``resolution`` is the (final-stage) grid.
+
+    ``device`` is the already-RESOLVED placement device (pass the result of
+    :func:`vmex.core.device.resolve_implicit_device`, not a policy string) —
+    see :class:`ImplicitConfig.device`.
+    """
     if multigrid and ns is None:
         ns = int(np.max(np.asarray(inp.ns_array)))
     resolution = resolution_from_input(inp, ns=ns)
@@ -292,8 +303,70 @@ def make_config(
         adjoint_tol=float(adjoint_tol), adjoint_restart=int(adjoint_restart),
         adjoint_maxiter=int(adjoint_maxiter),
         adjoint_gcrot_m=int(adjoint_gcrot_m), adjoint_gcrot_k=int(adjoint_gcrot_k),
-        hot_restart=bool(hot_restart),
+        hot_restart=bool(hot_restart), device=device,
     )
+
+
+def _device_context(cfg: ImplicitConfig):
+    """The config's placement context (a no-op when no device is carried).
+
+    ``getattr``: the Krylov helpers accept duck-typed configs (the recycle
+    tests pass a ``SimpleNamespace`` carrying only the solver knobs), for
+    which "no device carried" is the correct reading.
+    """
+    device = getattr(cfg, "device", None)
+    if device is None:
+        return contextlib.nullcontext()
+    return jax.default_device(device)
+
+
+def _device_pin(cfg: ImplicitConfig, tree):
+    """Explicitly place every array leaf of ``tree`` on ``cfg.device``.
+
+    A ``jax.default_device`` context only steers CONCRETE values created
+    while it is entered — it does not bind into a traced computation, so
+    under ``jax.value_and_grad`` the staged forward/backward ops still
+    follow JAX's default device (verified on hardware: correct forward on a
+    non-default GPU, traced gradient collapsing to zero).  ``jax.device_put``
+    with an explicit device IS a traceable placement op that survives
+    staging, so pinning the pytrees at each transformation boundary
+    (custom-VJP forward/backward entries, multi-RHS pullback, cached
+    template) forces the staged computation onto the carried device
+    regardless of any caller context.  A cheap no-op for leaves already home
+    or when no device is carried.
+    """
+    if cfg.device is None:
+        return tree
+    return jax.tree.map(
+        lambda a: jax.device_put(a, cfg.device)
+        if isinstance(a, (jax.Array, np.ndarray)) else a,
+        tree,
+    )
+
+
+def _params_committed_device(params: ImplicitParams):
+    """The single device every concrete committed leaf lives on, else None.
+
+    Used by :func:`run` to make ``device="auto"`` PRESERVE the placement of a
+    supplied parameter pytree, as documented.  Tracers (under ``jax.grad``)
+    carry no placement, and an uncommitted or mixed pytree has no unambiguous
+    home — both return ``None``, falling back to the auto policy; pass
+    ``device=`` explicitly in those cases.
+    """
+    devices = set()
+    for leaf in jax.tree.leaves(params):
+        if not isinstance(leaf, jax.Array):
+            return None
+        try:
+            leaf_devices = leaf.devices()
+        except Exception:  # tracers under jit/grad have no placement
+            return None
+        if len(leaf_devices) != 1:
+            return None
+        devices.add(next(iter(leaf_devices)))
+        if len(devices) > 1:
+            return None
+    return devices.pop() if devices else None
 
 
 @functools.lru_cache(maxsize=8)
@@ -305,11 +378,21 @@ def _template_runtime(cfg: ImplicitConfig) -> SolverRuntime:
     every trial solve of an optimization and keeps
     :func:`runtime_from_params` traceable (the host-side ``run_setup`` logic
     never runs under a trace once the template is a closure constant).
+
+    Built inside the config's device context: the first concrete call may
+    come from the ``pure_callback`` host thread (see
+    ``_host_solve_and_mask``), where the caller's thread-local
+    ``jax.default_device`` does not apply — without the explicit context the
+    cached template's p-independent arrays (radial grids, ``scalxc``, axis
+    rows) would commit to JAX's default device and poison every runtime
+    later assembled from this template on another device.
     """
-    return prepare_runtime(
-        cfg.inp, cfg.resolution, ftol=cfg.ftol,
-        max_iterations=cfg.max_iterations, lconm1=cfg.lconm1,
-    )
+    with _device_context(cfg):
+        return _device_pin(cfg, prepare_runtime(
+            cfg.inp, cfg.resolution, ftol=cfg.ftol,
+            max_iterations=cfg.max_iterations, lconm1=cfg.lconm1,
+            use_fft=False,
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -366,11 +449,9 @@ def _boundary_pack_tables(cfg: ImplicitConfig):
     the ``readin.f`` ``|n|``-accumulation matrices, the ``m > 0`` gate and the
     signed-helical repacking coefficients — precomputed once (host-side numpy)
     so the traceable map is O(1) in graph structure instead of an unrolled
-    ``mpol * (2 ntor + 1)`` double loop.  The old loop made the *parameter* VJP
-    graph grow ~``mpol * ntor`` and its XLA compile blow up super-linearly at
-    high mode number (measured ``vjp_p`` 24 s -> 90 s from mn 50 -> 196); the
-    vectorized form keeps the same arithmetic (bit-identical output) with a
-    fixed handful of matmul/gather ops.  Memoized by structural signature.
+    ``mpol * (2 ntor + 1)`` double loop (whose parameter-VJP XLA compile blows
+    up super-linearly at high mode number).  Same arithmetic, bit-identical
+    output.  Memoized by structural signature.
     """
     key = (cfg.resolution, bool(cfg.inp.lfreeb),
            int(cfg.inp.mfilter_fbdy), int(cfg.inp.nfilter_fbdy))
@@ -453,10 +534,7 @@ def _boundary_from_params(params: ImplicitParams, cfg: ImplicitConfig):
     ``lasym = False`` the ``R_sin``/``Z_cos`` arrays are zero.
 
     The ``|n|`` accumulation and the signed-helical repacking are vectorized
-    (matmul over the precomputed :func:`_boundary_pack_tables`) rather than an
-    unrolled ``mpol * (2 ntor + 1)`` Python double loop: same arithmetic,
-    bit-identical output, but an O(1)-op graph whose parameter VJP no longer
-    blows up XLA compile at high mode number.
+    over the precomputed :func:`_boundary_pack_tables` (see there).
     """
     res = cfg.resolution
     mpol, ntor = int(res.mpol), int(res.ntor)
@@ -550,7 +628,16 @@ def runtime_from_params(params: ImplicitParams, cfg: ImplicitConfig) -> SolverRu
     (functions of the edge row alone).  All p-independent fields (grids,
     ``scalxc``, axis arrays, static metadata) come from the reference
     runtime.
+
+    Runs inside the config's device context so freshly created constants
+    (and the cached template) land on ``cfg.device`` even when the caller
+    holds no outer ``jax.default_device`` context.
     """
+    with _device_context(cfg):
+        return _device_pin(cfg, _runtime_from_params_impl(params, cfg))
+
+
+def _runtime_from_params_impl(params: ImplicitParams, cfg: ImplicitConfig) -> SolverRuntime:
     template = _template_runtime(cfg)
     setup0 = template.setup
     inp = cfg.inp
@@ -686,6 +773,107 @@ def _assemble(z: SpectralState, rt_p: SolverRuntime, frozen: SpectralState,
     return SpectralState(**out)
 
 
+def _raw_force_state(
+    x: SpectralState,
+    rt: SolverRuntime,
+    *,
+    s: Array | None = None,
+    phips: Array | None = None,
+    phipf: Array | None = None,
+    chips: Array | None = None,
+    mass: Array | None = None,
+    icurv: Array | None = None,
+    rcon0: Array | None = None,
+    zcon0: Array | None = None,
+    lamscale: Array | None = None,
+    scalxc: Array | None = None,
+    ns_total: int | None = None,
+    axis_closure: bool = True,
+) -> SpectralState:
+    """Raw fixed-boundary force for a full grid or a radial segment."""
+    setup = rt.setup
+    s = setup.s_full if s is None else s
+    phips = setup.phips if phips is None else phips
+    phipf = setup.phipf if phipf is None else phipf
+    chips = setup.chips if chips is None else chips
+    mass = setup.mass if mass is None else mass
+    icurv = setup.icurv if icurv is None else icurv
+    rcon0 = rt.rcon0 if rcon0 is None else rcon0
+    zcon0 = rt.zcon0 if zcon0 is None else zcon0
+    R_cos, R_sin, Z_cos, Z_sin = _physical_coefficients(
+        x, modes=rt.modes, lthreed=setup.lthreed, lasym=setup.lasym,
+        lconm1=setup.lconm1,
+    )
+    lambda_sin = (
+        apply_lambda_axis_closure(
+            x.L_sin, modes=rt.modes, ntor=rt.resolution.ntor
+        )
+        if axis_closure else x.L_sin
+    )
+    geometry = real_space_geometry(
+        R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
+        lambda_cos=x.L_cos, lambda_sin=lambda_sin, modes=rt.modes,
+        trig=rt.trig, s=s, axis_closure=axis_closure,
+        odd_m_scaling=scalxc,
+    )
+    jacobian = half_mesh_jacobian(geometry, s=s)
+    metrics = metric_elements(geometry, s=s)
+    fields = magnetic_fields(
+        geometry=geometry, jacobian=jacobian, metrics=metrics, trig=rt.trig,
+        s=s, phips=phips, phipf=phipf, chips=chips, signgs=setup.signgs,
+        gamma=rt.gamma, mass=mass, lamscale=lamscale, ncurr=setup.ncurr,
+        enclosed_current=icurv,
+    )
+    tcon = constraint_scaling(
+        tcon0=rt.tcon0, geometry=geometry, jacobian=jacobian,
+        total_pressure=fields.total_pressure, trig=rt.trig, s=s,
+        ns_total=ns_total,
+    )
+    forces = mhd_forces(
+        geometry=geometry, jacobian=jacobian, metrics=metrics, fields=fields,
+        R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
+        modes=rt.modes, trig=rt.trig, s=s, phipf=phipf, tcon=tcon,
+        signgs=setup.signgs, rcon0=rcon0, zcon0=zcon0,
+    )
+    spectral = spectral_mhd_forces(
+        forces, mpol=rt.resolution.mpol, ntor=rt.resolution.ntor,
+        trig=rt.trig, include_edge=False,
+    )
+    released = zero_m1_z_force(
+        m1_residue_rotation(spectral, lconm1=setup.lconm1),
+        jnp.asarray(True),
+    )
+    return _force_to_state(
+        scalxc_scale_force(released, s=s, scaling=scalxc), rt
+    )
+
+
+def _raw_residual_segment(
+    x: SpectralState,
+    rt: SolverRuntime,
+    start: Array,
+    *,
+    axis_closure: bool = False,
+) -> SpectralState:
+    """Evaluate the nonlinear raw-force chain on exactly three surfaces.
+
+    ``x`` contains constrained coefficients for global rows
+    ``start:start+3``. Only the small radial profiles and constraint
+    baselines are sliced from ``rt``; every angular nonlinear temporary has
+    leading dimension three. Set ``axis_closure`` only for ``start == 0``.
+    """
+    take = lambda a: jax.lax.dynamic_slice_in_dim(a, start, 3, axis=0)  # noqa: E731
+    setup = rt.setup
+    return _raw_force_state(
+        x, rt, s=take(setup.s_full), phips=take(setup.phips),
+        phipf=take(setup.phipf), chips=take(setup.chips),
+        mass=take(setup.mass), icurv=take(setup.icurv),
+        rcon0=take(rt.rcon0), zcon0=take(rt.zcon0),
+        lamscale=setup.lamscale, scalxc=take(setup.scalxc),
+        ns_total=rt.resolution.ns, axis_closure=axis_closure,
+    )
+
+
 def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
                 dof_mask: SpectralState,
                 formulation: str = "preconditioned") -> Callable:
@@ -704,14 +892,10 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
 
     if formulation == "preconditioned":
 
-        # jax.jit the residual so its linearization (``jax.vjp``/``jax.jvp``
-        # in the adjoint and the forward-mode Jacobian) compiles as a single
-        # reusable XLA sub-computation instead of being re-inlined into the
-        # enclosing ``jax.grad``/``jacrev`` program.  Measured: this shrinks
-        # the reverse-gradient *compile* working set — the dominant term of
-        # the implicit-gradient peak (R16 profiling: the peak is XLA compile
-        # memory, not runtime buffers) — by ~15-20% and speeds the compile,
-        # bit-identically (the gradient value is unchanged).
+        # jax.jit the residual so its linearization compiles as one reusable
+        # XLA sub-computation instead of being re-inlined into the enclosing
+        # jax.grad/jacrev program: the implicit-gradient memory peak is XLA
+        # *compile* working set, and this shrinks it bit-identically.
         @jax.jit
         def F(z: SpectralState, params: ImplicitParams) -> SpectralState:
             rt_p = runtime_from_params(params, cfg)
@@ -727,36 +911,7 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
     def F_raw(z: SpectralState, params: ImplicitParams) -> SpectralState:
         rt_p = runtime_from_params(params, cfg)
         x = _assemble(z, rt_p, frozen, P, edge_mask)
-        setup = rt_p.setup
-        s = setup.s_full
-        (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(x, rt_p)
-        jacobian = half_mesh_jacobian(geometry, s=s)
-        metrics = metric_elements(geometry, s=s)
-        fields = magnetic_fields(
-            geometry=geometry, jacobian=jacobian, metrics=metrics,
-            trig=rt_p.trig, s=s, phips=setup.phips, phipf=setup.phipf,
-            chips=setup.chips, signgs=setup.signgs, gamma=rt_p.gamma,
-            mass=setup.mass, ncurr=setup.ncurr, enclosed_current=setup.icurv,
-        )
-        tcon = constraint_scaling(
-            tcon0=rt_p.tcon0, geometry=geometry, jacobian=jacobian,
-            total_pressure=fields.total_pressure, trig=rt_p.trig, s=s,
-        )
-        forces = mhd_forces(
-            geometry=geometry, jacobian=jacobian, metrics=metrics,
-            fields=fields, R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
-            modes=rt_p.modes, trig=rt_p.trig, s=s, phipf=setup.phipf,
-            tcon=tcon, signgs=setup.signgs, rcon0=rt_p.rcon0, zcon0=rt_p.zcon0,
-        )
-        spectral = spectral_mhd_forces(
-            forces, mpol=cfg.resolution.mpol, ntor=cfg.resolution.ntor,
-            trig=rt_p.trig, include_edge=False,
-        )
-        rotated = m1_residue_rotation(spectral, lconm1=setup.lconm1)
-        # converged branch: fsqz < threshold zeroes the constrained m=1 Z force
-        released = zero_m1_z_force(rotated, jnp.asarray(True))
-        scaled = scalxc_scale_force(released, s=s)
-        return P(_force_to_state(scaled, rt_p))
+        return P(_raw_force_state(x, rt_p))
 
     return F_raw
 
@@ -883,6 +1038,7 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
     inp2 = input_with_params(cfg.inp, params)
     hot = _HOT_CACHE.get(cfg) if cfg.hot_restart else None
     perturb = _PERTURB_SEED.pop(cfg, None) if cfg.hot_restart else None
+    solver_device = AUTO
     if cfg.multigrid:
         ns_arr = np.asarray(inp2.ns_array)
         ftol_arr = np.asarray(inp2.ftol_array, dtype=float).copy()
@@ -893,12 +1049,14 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
         run = lambda init: solve_multigrid(  # noqa: E731
             inp2, ns_array=ns_arr, ftol_array=ftol_arr, mode=cfg.mode,
             lconm1=cfg.lconm1, raise_on_max_iterations=False,
-            initial_state=init)
+            initial_state=init, use_fft=False,
+                device=solver_device)
     else:
         run = lambda init: solve(  # noqa: E731
             inp2, cfg.resolution, ftol=cfg.ftol,
             max_iterations=cfg.max_iterations, mode=cfg.mode,
-            lconm1=cfg.lconm1, initial_state=init)
+            lconm1=cfg.lconm1, initial_state=init, use_fft=False,
+                device=solver_device)
     # Seed ladder: perturbation prediction -> plain hot restart -> cold.
     # A bad warm seed must not fail the trial (only the initial guess is at
     # stake — every rung converges to the same fixed point).
@@ -919,16 +1077,12 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
     return result
 
 
-# structural-signature -> host dof mask.  The mask is a *structural* property
-# (module docstring / ``_dof_mask``): it depends only on the resolution, the
-# symmetry/lconm1 mode families and the ncurr force branch — NOT on the
-# parameter values, and NOT on the ``ImplicitConfig`` object identity.  Keying
-# by identity (the previous ``WeakKeyDictionary``) missed on every ``run`` /
-# ``make_config`` call, because :class:`ImplicitConfig` is ``eq=False`` and
-# ``make_config`` mints a fresh object per call, so an optimization loop that
-# calls ``im.run`` hundreds of times at one resolution recomputed the mask
-# (the eager ``evaluate_forces`` x2 + VJP, measured 20-40 s) every time.
-# A plain dict keyed by the structural signature hits across all such calls.
+# structural-signature -> host dof mask.  The mask depends only on the
+# resolution, the symmetry/lconm1 mode families and the ncurr force branch —
+# NOT on parameter values or ``ImplicitConfig`` object identity.  It must be
+# keyed by structural signature, not identity: ``make_config`` mints a fresh
+# ``eq=False`` object per call, so identity keying would recompute the
+# expensive mask (eager ``evaluate_forces`` x2 + VJP) on every ``im.run``.
 _MASK_CACHE: dict[tuple, SpectralState] = {}
 
 
@@ -946,8 +1100,26 @@ def _mask_cache_key(cfg: ImplicitConfig) -> tuple:
 
 
 def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
+    # This function executes on a pure_callback WORKER THREAD, where the
+    # caller's thread-local ``jax.default_device`` context is not active.
+    # Re-enter the config's device context explicitly, otherwise everything
+    # created here — including the primed ``_template_runtime`` cache entry —
+    # commits to JAX's default device and later mixes devices with the
+    # explicitly placed state (observed as NaN diagnostics / zero gradients
+    # on a non-default GPU).
+    with _device_context(cfg):
+        return _host_solve_and_mask_impl(cfg, params_np)
+
+
+def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
     _HOST_ERROR.clear()  # fresh callback: drop any stale relayed error
-    params = jax.tree.map(jnp.asarray, params_np)
+    # The callback payload arrives committed to the runtime's LOCAL CPU
+    # regardless of ``cfg.device``, and ``jnp.asarray`` preserves an existing
+    # commitment (``_device_context`` steers only fresh uncommitted arrays);
+    # unpinned parameters would mix devices with the cfg.device-committed
+    # template inside ``runtime_from_params``.  Explicit per-leaf device_put
+    # rehomes them.
+    params = _device_pin(cfg, jax.tree.map(jnp.asarray, params_np))
     try:
         result = _host_solve(cfg, params)
     except VmecError as exc:
@@ -961,21 +1133,15 @@ def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
             "(re-raised typed at the pure_callback call site)") from None
     as_np = lambda t: jax.tree.map(  # noqa: E731
         lambda a: np.asarray(a, dtype=np.float64), t)
-    # Prime the per-cfg-identity differentiable template *concretely* here (this
-    # host callback runs outside any trace).  The jitted residual ``F`` later
-    # calls ``runtime_from_params(params, cfg)`` -> ``_template_runtime(cfg)``
-    # under a ``jax.jit`` trace, where the host-side ``run_setup`` cannot run;
-    # its ``lru_cache`` must therefore be filled by a concrete call first.  The
-    # forward solve used to fill it as a side effect of building ``rt`` for the
-    # mask — preserve that guarantee even when the structural mask cache hits
-    # and skips that rebuild (``_template_runtime`` is keyed by object identity,
-    # so a fresh ``make_config``/``run`` config needs its own concrete prime).
+    # Prime the per-cfg-identity template *concretely* here (this host
+    # callback runs outside any trace): the jitted residual ``F`` later calls
+    # ``runtime_from_params`` -> ``_template_runtime(cfg)`` under a jax.jit
+    # trace, where the host-side ``run_setup`` cannot run, so the lru_cache
+    # must be filled by a concrete call first — even when the structural mask
+    # cache hits and skips the runtime rebuild below.
     _template_runtime(cfg)
-    # The dof mask captures *structural* zero patterns (resolution, symmetry,
-    # lconm1 pairing) — invariant across the parameter values of one config,
-    # so repeated solves of an optimization reuse the first solve's mask.
-    # Keyed by structural signature (not object identity) so a fresh
-    # ``make_config``/``run`` at the same resolution hits — see ``_MASK_CACHE``.
+    # Structural dof mask, shared across parameter values and config objects
+    # at one resolution — see _MASK_CACHE.
     cache_key = _mask_cache_key(cfg)
     mask = _MASK_CACHE.get(cache_key)
     if mask is None:
@@ -985,12 +1151,30 @@ def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
     return as_np(result.state), mask
 
 
+def _callback_sharding(cfg: ImplicitConfig):
+    """Explicit single-device placement of the ``pure_callback`` outputs.
+
+    Without a ``sharding`` the callback results follow the enclosing
+    computation's device assignment, NOT ``cfg.device`` — on a
+    multi-accelerator box a solve traced without an outer context therefore
+    materializes the converged state/mask on JAX's default device (two-GPU
+    review at the ``_device_pin`` boundary staging: forward leaves correct on
+    ``cuda:1`` but the ``wb`` boundary gradient exactly 0.0).  A
+    ``SingleDeviceSharding`` on the carried device commits both outputs where
+    every other stage of the operation already lives.
+    """
+    if cfg.device is None:
+        return None
+    return jax.sharding.SingleDeviceSharding(cfg.device)
+
+
 def _callback_solve(params: ImplicitParams, cfg: ImplicitConfig):
     """``pure_callback`` host solve returning ``(state, dof_mask)``.
 
     Shared by :func:`solve_implicit`, ``_solve_implicit_fwd`` and
-    :func:`solve_implicit_with_aux`.  Re-raises the ORIGINAL typed
-    :class:`VmecError` deposited in ``_HOST_ERROR`` by
+    :func:`solve_implicit_with_aux`.  Outputs carry the config's
+    single-device sharding (see :func:`_callback_sharding`).  Re-raises the
+    ORIGINAL typed :class:`VmecError` deposited in ``_HOST_ERROR`` by
     ``_host_solve_and_mask`` (``from None`` suppresses the noisy
     ``JaxRuntimeError`` context) so eager callers see the short typed
     exception.  Under ``jax.jit`` this try/except is trace-time only and the
@@ -1001,6 +1185,7 @@ def _callback_solve(params: ImplicitParams, cfg: ImplicitConfig):
         return jax.pure_callback(
             functools.partial(_host_solve_and_mask, cfg),
             (_state_struct(cfg), _state_struct(cfg)), params,
+            sharding=_callback_sharding(cfg),
         )
     except Exception:
         if _HOST_ERROR:
@@ -1030,7 +1215,11 @@ def solve_implicit(params: ImplicitParams, cfg: ImplicitConfig) -> SpectralState
 
 
 def _solve_implicit_fwd(params, cfg):
-    state, mask = _callback_solve(params, cfg)
+    with _device_context(cfg):
+        params = _device_pin(cfg, params)
+        state, mask = _callback_solve(params, cfg)
+        state = _device_pin(cfg, state)
+        mask = _device_pin(cfg, mask)
     return state, (params, state, mask)
 
 
@@ -1039,36 +1228,184 @@ def solve_implicit_with_aux(params: ImplicitParams, cfg: ImplicitConfig):
     return _callback_solve(params, cfg)
 
 
+# ---------------------------------------------------------------------------
+# Adjoint execution site, device binding, instrumentation, convergence check
+# ---------------------------------------------------------------------------
+#
+# WHERE THE ADJOINT ACTUALLY EXECUTES (hardware-verified): a custom-VJP
+# backward runs HOST-EAGERLY on the *caller's* thread with concrete arrays —
+# not under a trace and not on the ``pure_callback`` worker thread — unless
+# the caller wraps the whole gradient in ``jax.jit`` (the
+# ``optimize.minimize`` scalar path does; then every value below is a
+# tracer).  Host-eagerly, each fresh constant the Krylov solve creates
+# follows the *thread-local* default device, and the ``lax.while_loop`` the
+# iteration compiles to follows its committed operands.  The helpers below
+# therefore bind the SMALLEST possible computation to ``cfg.device``: the
+# raveled RHS is pinned with an explicit ``jax.device_put`` (commits,
+# steering the loop) and the solver call runs inside the config's
+# ``jax.default_device`` context (steering eager fresh constants) —
+# independent of any caller-held context; cheap no-ops when no device is
+# carried.
+
+#: Environment gate for the off-by-default adjoint instrumentation: set
+#: ``VMEX_ADJOINT_DEBUG=1`` to print one ``[vmex adjoint]`` line per stage
+#: (devices + commitment + norm) of every reverse pass — enough for a
+#: hardware session to localize a device-placement divergence to a stage
+#: without rebuilding.  Read per call so tests can toggle it via the
+#: environment without reloading the module.
+_ADJOINT_DEBUG_ENV = "VMEX_ADJOINT_DEBUG"
+
+
+def _adjoint_debug_enabled() -> bool:
+    value = os.environ.get(_ADJOINT_DEBUG_ENV, "")
+    return value.strip().lower() not in ("", "0", "false", "off")
+
+
+def _debug_stage(stage: str, tree: Any) -> None:
+    """One ``[vmex adjoint] <stage>: devices=... committed=... norm=...`` line.
+
+    Concrete leaves report their device set, commitment and joint 2-norm
+    (forcing a sync — acceptable under an explicit debug gate); traced leaves
+    (gradient under an outer ``jax.jit``/``jax.vmap``) report ``traced``, the
+    execution-site information itself.  No-op unless the environment gate is
+    set.
+    """
+    if not _adjoint_debug_enabled():
+        return
+    devices: set[str] = set()
+    committed: set[bool] = set()
+    total = 0.0
+    traced = False
+    for leaf in jax.tree.leaves(tree):
+        if isinstance(leaf, jax.core.Tracer):
+            traced = True
+        elif isinstance(leaf, jax.Array):
+            devices.update(str(d) for d in leaf.devices())
+            committed.add(bool(getattr(leaf, "committed", False)))
+            total += float(jnp.vdot(leaf, leaf).real)
+        elif isinstance(leaf, np.ndarray):
+            devices.add("host-numpy")
+            total += float(np.vdot(leaf, leaf).real)
+    where = "traced" if traced else (",".join(sorted(devices)) or "-")
+    norm = "traced" if traced else f"{float(np.sqrt(total)):.9e}"
+    print(f"[vmex adjoint] {stage}: devices={where} "
+          f"committed={sorted(committed)} norm={norm}", file=sys.stderr)
+
+
+def _pin_concrete(cfg: ImplicitConfig, tree):
+    """:func:`_device_pin`, skipping tracer leaves.
+
+    Inside a trace (the vmapped multi-RHS rows, a jitted gradient) placement
+    is governed by the transformation and the boundary pins the callers
+    already apply; a ``device_put`` on a batch tracer is unnecessary there.
+    Concrete leaves — the host-eager reverse pass — are committed to
+    ``cfg.device``.  ``getattr``: duck-typed configs without a ``device``
+    attribute (the recycle tests) mean "no device carried".
+    """
+    device = getattr(cfg, "device", None)
+    if device is None:
+        return tree
+    return jax.tree.map(
+        lambda a: jax.device_put(a, device)
+        if isinstance(a, (jax.Array, np.ndarray))
+        and not isinstance(a, jax.core.Tracer) else a,
+        tree,
+    )
+
+
+#: Acceptance slack on the adjoint residual: a GCROT stall within
+#: ``slack * adjoint_tol * ||b||`` still yields a gradient-accurate lambda
+#: (``adjoint_tol`` defaults to 1e-11, two orders tighter than the ~1e-9
+#: gradient parity the tests pin), while anything beyond it is rejected —
+#: never returned as a plausible gradient.
+_ADJOINT_RESIDUAL_SLACK = 10.0
+
+
+def _adjoint_acceptance(cfg: ImplicitConfig, b_norm):
+    """Largest acceptable true residual for an adjoint solve of RHS norm."""
+    return _ADJOINT_RESIDUAL_SLACK * cfg.adjoint_tol * b_norm
+
+
+def _raise_adjoint_unconverged(cfg: ImplicitConfig, *, iterations: int,
+                               residual_norm: float, tolerance: float):
+    raise AdjointSolveError(
+        message=(
+            f"implicit adjoint GCROT({cfg.adjoint_gcrot_m}, "
+            f"{cfg.adjoint_gcrot_k}) solve did not converge: residual "
+            f"{residual_norm:.3e} > acceptance {tolerance:.3e} "
+            f"(= {_ADJOINT_RESIDUAL_SLACK:g} x adjoint_tol x ||rhs||) after "
+            f"{iterations} Krylov iterations "
+            f"(max_restarts={cfg.adjoint_maxiter})"),
+        hint=("increase adjoint_maxiter / adjoint_gcrot_m / adjoint_gcrot_k "
+              "or loosen adjoint_tol; an unconverged adjoint is a silently "
+              "wrong gradient and is never returned"),
+        iterations=int(iterations),
+        residual_norm=float(residual_norm),
+        tolerance=float(tolerance),
+    )
+
+
+def _checked_adjoint_x(sol, b_flat, cfg: ImplicitConfig):
+    """Enforce adjoint convergence; never return an unconverged ``lambda``.
+
+    Host-eager reverse passes (the default execution site, see the section
+    note) raise the typed :class:`~vmex.core.errors.AdjointSolveError` with
+    iteration/residual info.  Under a trace the concrete check is impossible
+    — there the returned ``x`` is NaN-poisoned on failure instead, so the
+    gradient can never silently pass a finiteness check (the vmapped
+    multi-RHS caller re-checks its rows concretely and raises the same typed
+    error).
+    """
+    b_norm = jnp.linalg.norm(b_flat)
+    accept = _adjoint_acceptance(cfg, b_norm)
+    ok = jnp.logical_or(sol.converged, sol.residual_norm <= accept)
+    if not any(isinstance(v, jax.core.Tracer)
+               for v in (ok, sol.x, sol.residual_norm, sol.iterations)):
+        if not bool(np.asarray(ok)):
+            _raise_adjoint_unconverged(
+                cfg, iterations=int(np.asarray(sol.iterations)),
+                residual_norm=float(np.asarray(sol.residual_norm)),
+                tolerance=float(np.asarray(accept)))
+        return sol.x
+    return jnp.where(ok, sol.x, jnp.full_like(sol.x, jnp.nan))
+
+
 def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None):
     """Adjoint linear solve ``(dF/dz)^T lambda = b`` via ``solvax.gmres``.
 
-    ``solvax.gmres`` (roadmap R18b shared-solver consolidation) operates on
-    flat ``(n,)`` vectors, so the :class:`SpectralState` pytree ``b`` is
-    raveled to a flat vector and the matrix-free operator ``A`` wrapped to
-    match; the flat GMRES is exactly the pytree GMRES because ``ravel_pytree``
-    is a linear isomorphism.  Tolerances/limits mirror the previous
-    ``jax.scipy.sparse.linalg.gmres`` call (``rtol = adjoint_tol``, ``atol =
-    0``, Arnoldi cycle size ``adjoint_restart``, up to ``adjoint_maxiter``
-    restarts), so the adjoint accuracy is unchanged.
+    ``solvax.gmres`` operates on flat ``(n,)`` vectors, so the pytree ``b``
+    is raveled and the matrix-free operator ``A`` wrapped to match (exactly
+    the pytree GMRES: ``ravel_pytree`` is a linear isomorphism).
+    ``rtol = adjoint_tol``, ``atol = 0``, Arnoldi cycle size
+    ``adjoint_restart``, up to ``adjoint_maxiter`` restarts.
 
     ``x0`` (pytree like ``b``) warm-starts GMRES — solvax checks the initial
-    residual before the first Arnoldi cycle, so a warm start that already
-    meets the tolerance costs exactly one matvec (the plan R25.2 corrector
-    pass over the block-tridiagonal direct solve).  ``max_restarts``
-    overrides ``cfg.adjoint_maxiter`` for such short corrector budgets.
+    residual before the first Arnoldi cycle, so a warm start already at
+    tolerance costs exactly one matvec (the corrector pass over the
+    block-tridiagonal direct solve).  ``max_restarts`` overrides
+    ``cfg.adjoint_maxiter`` for such short corrector budgets.
+
+    Runs bound to ``cfg.device`` (RHS/x0 pinned, solver call inside the
+    config's device context) — see the adjoint execution-site note above.
+    Best-effort by contract (Newton/corrector callers inspect ``sol``
+    themselves); convergence is *enforced* only on the reverse-pass default
+    :func:`_adjoint_solve_gcrot`.
     """
-    b_flat, unravel = ravel_pytree(b)
+    b_flat, unravel = ravel_pytree(_pin_concrete(cfg, b))
+    b_flat = _pin_concrete(cfg, b_flat)
+    x0_flat = None if x0 is None else _pin_concrete(cfg, ravel_pytree(x0)[0])
 
     def matvec(v):
         return ravel_pytree(A(unravel(v)))[0]
 
-    sol = _solvax_gmres(
-        matvec, b_flat,
-        x0=None if x0 is None else ravel_pytree(x0)[0],
-        rtol=cfg.adjoint_tol, atol=0.0, restart=cfg.adjoint_restart,
-        max_restarts=(cfg.adjoint_maxiter if max_restarts is None
-                      else int(max_restarts)),
-    )
+    with _device_context(cfg):
+        sol = _solvax_gmres(
+            matvec, b_flat,
+            x0=x0_flat,
+            rtol=cfg.adjoint_tol, atol=0.0, restart=cfg.adjoint_restart,
+            max_restarts=(cfg.adjoint_maxiter if max_restarts is None
+                          else int(max_restarts)),
+        )
     return unravel(sol.x), sol
 
 
@@ -1076,18 +1413,28 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig):
     """Adjoint linear solve ``(dF/dz)^T lambda = b`` via ``solvax.gcrot(m, k)``.
 
     The reverse-pass default (:func:`_solve_implicit_bwd`,
-    :func:`implicit_state_pullback_multi_rhs`).  Same matrix-free operator
-    wrapping and *exactly the same tolerance* as :func:`_adjoint_solve`
-    (``rtol = adjoint_tol``, ``atol = 0``) — GCROT keeps ``k`` recycled
-    deflation directions across its FGMRES cycles, so it retains the small
-    eigendirections that a truncated GMRES restart discards and reaches the
-    identical converged ``lambda`` in fewer matvecs / more robustly at high
-    poloidal mode number (module note; the plain restarted GMRES stalled short
-    of ``adjoint_tol`` inside its ``adjoint_maxiter`` budget there).  A cold
-    (``recycle=None``) start; ``m``/``k`` capped at the problem size ``n`` so a
-    small system degenerates to an exact single-cycle solve.
+    :func:`implicit_state_pullback_multi_rhs`).  Same operator wrapping and
+    *exactly the same tolerance* as :func:`_adjoint_solve` — GCROT keeps
+    ``k`` recycled deflation directions across its FGMRES cycles, retaining
+    the small eigendirections a truncated GMRES restart discards, and
+    reaches the identical converged ``lambda`` in fewer matvecs / more
+    robustly at high poloidal mode number (where plain restarted GMRES
+    stalls short of ``adjoint_tol`` inside its budget).  Cold
+    (``recycle=None``) start; ``m``/``k`` capped at the problem size ``n``
+    so a small system degenerates to an exact single-cycle solve.
+
+    Device binding: this call is the adjoint's actual execution site and
+    runs HOST-EAGERLY on the caller's thread (section note above) — RHS
+    pinned to ``cfg.device``, solver call inside the config's device
+    context.
+
+    Convergence is ENFORCED: :func:`_checked_adjoint_x` raises the typed
+    :class:`~vmex.core.errors.AdjointSolveError` (host-eager) or NaN-poisons
+    ``x`` (traced) instead of ever returning an unconverged adjoint as a
+    plausible gradient.
     """
-    b_flat, unravel = ravel_pytree(b)
+    b_flat, unravel = ravel_pytree(_pin_concrete(cfg, b))
+    b_flat = _pin_concrete(cfg, b_flat)
     n = int(b_flat.shape[0])
     m = min(int(cfg.adjoint_gcrot_m), n)
     k = min(int(cfg.adjoint_gcrot_k), n)
@@ -1095,11 +1442,13 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig):
     def matvec(v):
         return ravel_pytree(A(unravel(v)))[0]
 
-    sol = _solvax_gcrot(
-        matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0, m=m, k=k,
-        max_restarts=cfg.adjoint_maxiter,
-    )
-    return unravel(sol.x), sol
+    with _device_context(cfg):
+        sol = _solvax_gcrot(
+            matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0, m=m, k=k,
+            max_restarts=cfg.adjoint_maxiter,
+        )
+        x = _checked_adjoint_x(sol, b_flat, cfg)
+    return unravel(x), sol
 
 
 # Recycle-space width for _recycled_solve (plan R25.3).  GCROT keeps k
@@ -1107,6 +1456,19 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig):
 # overhead (k re-orthonormalization matvecs per solve) against deflation
 # depth; 10 matches the solvax default and the GCRO-DR literature.
 _RECYCLE_K = 10
+
+# solvax >= 0.8.7 reports ``recycle_drift`` on warm-started gcrot solves: the
+# mean principal-angle sine between the incoming recycle image space and its
+# re-established span under the current operator (zero for an unchanged
+# operator, growing linearly with the operator step — the gap-free bound
+# sin(theta) <= ||dA|| ||U||). Probe once; older solvax simply lacks the field
+# and the drift-gated carry below degenerates to the previous behavior.
+try:
+    from solvax.krylov import KrylovSolution as _KrylovSolution
+
+    _GCROT_REPORTS_DRIFT = "recycle_drift" in _KrylovSolution._fields
+except ImportError:  # pragma: no cover - solvax is a hard dependency
+    _GCROT_REPORTS_DRIFT = False
 
 
 def _recycled_solve(A, b, cfg: ImplicitConfig, recycle):
@@ -1122,21 +1484,45 @@ def _recycled_solve(A, b, cfg: ImplicitConfig, recycle):
     of solves sharing (or slowly varying) the operator — the plan R25.3
     per-dof implicit-Jacobian loop (opt-in via
     ``least_squares(..., recycle=True)``; see the measured caveat there).
+
+    Runs bound to ``cfg.device`` like :func:`_adjoint_solve_gcrot`
+    (RHS/recycle pair pinned, solver call inside the config's device
+    context); convergence stays the caller's contract as documented above.
     """
-    b_flat, unravel = ravel_pytree(b)
+    b_flat, unravel = ravel_pytree(_pin_concrete(cfg, b))
+    b_flat = _pin_concrete(cfg, b_flat)
+    recycle = _pin_concrete(cfg, recycle)
 
     def matvec(v):
         return ravel_pytree(A(unravel(v)))[0]
 
-    sol = _solvax_gcrot(
-        matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0,
-        m=cfg.adjoint_restart, k=_RECYCLE_K,
-        max_restarts=cfg.adjoint_maxiter, recycle=recycle,
-    )
+    with _device_context(cfg):
+        sol = _solvax_gcrot(
+            matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0,
+            m=cfg.adjoint_restart, k=_RECYCLE_K,
+            max_restarts=cfg.adjoint_maxiter, recycle=recycle,
+        )
+    # On solvax >= 0.8.7, ``sol.recycle_drift`` measures how far the operator
+    # has rotated the recycled space since the pair was built — the quantity
+    # callers need to decide whether carrying the pair is still worthwhile
+    # (see optimize.jacobian_rows_recycled's drift-gated carry).
     return unravel(sol.x), sol
 
 
 def _solve_implicit_bwd(cfg, res, gbar):
+    # The backward pass typically executes AFTER the caller's forward context
+    # has exited (jax.grad pulls cotangents back later); re-enter the
+    # config's device context so eagerly created constants stay colocated —
+    # and, decisively, PIN the residuals and the incoming cotangent with
+    # explicit device_put, which binds into the staged computation where a
+    # context cannot (see _device_pin).
+    with _device_context(cfg):
+        res = _device_pin(cfg, res)
+        gbar = _device_pin(cfg, gbar)
+        return _device_pin(cfg, _solve_implicit_bwd_impl(cfg, res, gbar))
+
+
+def _solve_implicit_bwd_impl(cfg, res, gbar):
     params, x_star, dof_mask = res
     frozen = jax.lax.stop_gradient(x_star)
     edge_mask = _edge_mask(cfg)
@@ -1145,19 +1531,38 @@ def _solve_implicit_bwd(cfg, res, gbar):
 
     z_star = P(x_star)
 
+    debug = _adjoint_debug_enabled()
+    if debug:
+        import threading
+        print(f"[vmex adjoint] backward entry: thread="
+              f"{threading.current_thread().name} default_device="
+              f"{jax.config.jax_default_device} cfg.device={cfg.device}",
+              file=sys.stderr)
+
     # (dF/dz)^T lambda = P gbar, matrix-free (one linearization reused).
     _, vjp_z = jax.vjp(lambda z: F(z, params), z_star)
     b = P(gbar)
+    if debug:
+        _debug_stage("adjoint rhs P(gbar)", b)
+        # One extra operator application, only under the debug gate: places
+        # the whole matvec chain (jitted-residual transpose included).
+        _debug_stage("operator application (dF/dz)^T b", vjp_z(b)[0])
     lam, _ = _adjoint_solve_gcrot(lambda v: vjp_z(v)[0], b, cfg)
+    if debug:
+        _debug_stage("recovered lambda", lam)
 
     # -lambda^T dF/dp ...
     _, vjp_p = jax.vjp(lambda prm: F(z_star, prm), params)
     g1 = vjp_p(jax.tree.map(jnp.negative, lam))[0]
+    if debug:
+        _debug_stage("implicit parameter contribution -lambda^T dF/dp", g1)
     # ... plus the direct boundary(p) path through the fixed edge row.
     _, vjp_p2 = jax.vjp(
         lambda prm: _assemble(z_star, runtime_from_params(prm, cfg),
                               frozen, P, edge_mask), params)
     g2 = vjp_p2(gbar)[0]
+    if debug:
+        _debug_stage("direct parameter contribution", g2)
     return (jax.tree.map(jnp.add, g1, g2),)
 
 
@@ -1176,8 +1581,21 @@ def implicit_state_pullback_multi_rhs(
     This preserves the scalar solve_implicit VJP and only adds a helper for
     callers that already have several state cotangents for the same fixed
     point.  It reuses the residual/projector/VJP setup once, then applies the
-    existing single-RHS GMRES per row.
+    existing single-RHS GMRES per row.  Runs inside the config's device
+    context (see ``_solve_implicit_bwd``).
     """
+    with _device_context(cfg):
+        params = _device_pin(cfg, params)
+        x_star = _device_pin(cfg, x_star)
+        dof_mask = _device_pin(cfg, dof_mask)
+        gbar_batch = _device_pin(cfg, gbar_batch)
+        return _device_pin(cfg, _implicit_state_pullback_multi_rhs_impl(
+            params, cfg, x_star, dof_mask, gbar_batch))
+
+
+def _implicit_state_pullback_multi_rhs_impl(
+    params, cfg, x_star, dof_mask, gbar_batch,
+) -> ImplicitParams:
     frozen = jax.lax.stop_gradient(x_star)
     edge_mask = _edge_mask(cfg)
     P = _dof_projector(cfg, dof_mask)
@@ -1191,9 +1609,29 @@ def implicit_state_pullback_multi_rhs(
                               frozen, P, edge_mask), params)
 
     rhs_batch = jax.vmap(P)(gbar_batch)
-    lam_batch = jax.vmap(
-        lambda rhs: _adjoint_solve_gcrot(lambda v: vjp_z(v)[0], rhs, cfg)[0]
-    )(rhs_batch)
+
+    def solve_row(rhs):
+        lam, sol = _adjoint_solve_gcrot(lambda v: vjp_z(v)[0], rhs, cfg)
+        b_norm = jnp.sqrt(sum(jnp.vdot(v, v).real
+                              for v in jax.tree.leaves(rhs)))
+        return lam, sol.residual_norm, sol.iterations, sol.converged, b_norm
+
+    # Inside the vmap every row is traced, so _adjoint_solve_gcrot can only
+    # NaN-poison an unconverged row; the per-row solve stats are returned and
+    # re-checked concretely here (this helper runs host-eagerly) so the
+    # multi-RHS path raises the same typed AdjointSolveError as the scalar
+    # reverse pass.
+    lam_batch, res_batch, iter_batch, conv_batch, bnorm_batch = jax.vmap(
+        solve_row)(rhs_batch)
+    if not isinstance(conv_batch, jax.core.Tracer):
+        accept = np.asarray(_adjoint_acceptance(cfg, bnorm_batch))
+        bad = ~(np.asarray(conv_batch) | (np.asarray(res_batch) <= accept))
+        if np.any(bad):
+            worst = int(np.argmax(np.where(bad, np.asarray(res_batch), -1.0)))
+            _raise_adjoint_unconverged(
+                cfg, iterations=int(np.asarray(iter_batch)[worst]),
+                residual_norm=float(np.asarray(res_batch)[worst]),
+                tolerance=float(accept[worst]))
     g1_batch = jax.vmap(lambda lam: vjp_p(jax.tree.map(jnp.negative, lam))[0])(lam_batch)
     g2_batch = jax.vmap(lambda gbar: vjp_p2(gbar)[0])(gbar_batch)
     return jax.tree.map(jnp.add, g1_batch, g2_batch)
@@ -1233,10 +1671,10 @@ def mhd_energy(state: SpectralState, rt: SolverRuntime) -> tuple[Array, Array]:
 def plasma_volume(state: SpectralState, rt: SolverRuntime) -> Array:
     """Plasma volume ``volume_p`` [m^3] (``= (2 pi)^2 * hs * sum vp``).
 
-    Quadrature note (Item I.7): this is the implicit module's historical
-    differential-volume sum, pinned by :class:`ImplicitSolution.volume` and
-    the FD-cached gradient tables of ``tests/test_implicit_grad.py``.  The
-    canonical wout-parity boundary quadrature of the same scalar is
+    Quadrature note: this differential-volume sum is pinned by
+    :class:`ImplicitSolution.volume` and the FD-cached gradient tables of
+    ``tests/test_implicit_grad.py`` — keep it as is.  The canonical
+    wout-parity boundary quadrature of the same scalar is
     :func:`vmex.core.statephysics.volume` (re-exported as
     ``optimize.volume``); the two agree to quadrature resolution.
     """
@@ -1262,12 +1700,11 @@ def aspect_ratio(state: SpectralState, rt: SolverRuntime,
     the shoelace integral ``-oint Z dR/dtheta dtheta`` on the boundary, and
     ``Rmajor_p = volume_p / (2 pi^2 Aminor_p^2)`` (``aspectratio.f``).
 
-    Quadrature note (Item I.7): this is the implicit module's historical
-    shoelace-on-a-fresh-grid variant, pinned by
-    :class:`ImplicitSolution.aspect` and the FD-cached solovev gradient table
-    of ``tests/test_implicit_grad.py``.  The canonical wout-parity
-    ``aspectratio.f`` boundary quadrature (internal-grid ``wint`` weights,
-    equal to the wout ``aspect`` scalar) is
+    Quadrature note: this shoelace-on-a-fresh-grid variant is pinned by
+    :class:`ImplicitSolution.aspect` and the FD-cached solovev gradient
+    table of ``tests/test_implicit_grad.py`` — keep it as is.  The canonical
+    wout-parity ``aspectratio.f`` boundary quadrature (internal-grid
+    ``wint`` weights, equal to the wout ``aspect`` scalar) is
     :func:`vmex.core.statephysics.aspect_ratio` (re-exported as
     ``optimize.aspect_ratio``); the two agree to quadrature resolution.
     """
@@ -1318,7 +1755,7 @@ def iota_axis(state: SpectralState, rt: SolverRuntime) -> Array:
 def iota_edge(state: SpectralState, rt: SolverRuntime) -> Array:
     """Boundary rotational transform ``iotaf[-1]`` (differentiable).
 
-    Naming note (Item I.7): the same physical scalar as
+    Naming note: the same physical scalar as
     :func:`vmex.core.statephysics.edge_iota` (``optimize.edge_iota``) —
     identical for ``ncurr = 1``; at ``ncurr = 0`` this evaluates the
     prescribed full-mesh ``iotaf`` endpoint while the wout-parity version
@@ -1383,20 +1820,38 @@ def run(
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
     adjoint_gcrot_k: int = 20,
+    device: Any = None,
 ) -> ImplicitSolution:
     """Differentiable fixed-boundary equilibrium: input -> outputs pytree.
 
     ``params`` defaults to :func:`params_from_input`; pass a perturbed /
-    traced :class:`ImplicitParams` to differentiate::
+    traced :class:`ImplicitParams` to differentiate — and pass the SAME
+    ``device`` to both calls (under ``jax.grad`` the parameters are tracers,
+    which carry no placement to infer)::
 
         inp = VmecInput.from_file("input.solovev")
-        p0 = params_from_input(inp)
-        grad = jax.grad(lambda p: run(inp, p).wb)(p0)
+        gpu = jax.devices("gpu")[1]
+        with device_scope(gpu):
+            p0 = params_from_input(inp)
+            grad = jax.grad(lambda p: run(inp, p).wb)(p0)
 
     ``wmhd`` follows the printed ``WMHD`` normalization; ``gamma = 1`` inputs
     get ``wmhd = nan`` (as in VMEC).  All outputs are differentiable in
     ``params`` (state via the implicit adjoint; scalars additionally through
     their explicit parameter dependence).
+
+    ``device`` accepts ``"cpu"``, ``"gpu"`` or a ``jax.Device``; omitted
+    ``device`` and ``None`` leave placement to JAX.  Use
+    :func:`device_scope` around parameter creation and differentiation for a
+    non-default accelerator.
+    ``"auto"``: when
+    ``params`` is supplied with CONCRETE arrays all committed to one
+    device, that placement is preserved and used for the whole operation;
+    otherwise (no params, tracers under ``jax.grad``, or mixed placement)
+    the default CPU preference of this launch-bound path applies — pass
+    ``device=`` explicitly when differentiating on an accelerator.  An
+    explicit hardware device moves a supplied parameter pytree
+    consistently.
 
     The returned solution also carries the internally built
     :class:`~vmex.core.solver.SolverRuntime` as ``sol.runtime`` (a
@@ -1406,26 +1861,71 @@ def run(
     ``runtime_from_params(params, make_config(...))`` per evaluation.
     """
     inp = VmecInput.from_file(source) if isinstance(source, str) else source
+    # Resolve the requested device ONCE and run the entire operation inside
+    # its context: the solve and runtime_from_params rebuild static tables
+    # from host constants, which otherwise commit to JAX's default device
+    # and mix devices (NaNs) with explicitly placed params.  The resolved
+    # device is ALSO carried in cfg.device so the pure_callback host thread,
+    # the cached runtime template, and the custom-VJP backward — which all
+    # execute outside this ``with`` block's thread/lifetime — re-enter the
+    # same context on their own.
     cfg = make_config(
         inp, ns=ns, ftol=ftol, max_iterations=max_iterations, mode=mode,
         multigrid=multigrid, lconm1=lconm1, adjoint_tol=adjoint_tol,
         adjoint_restart=adjoint_restart, adjoint_maxiter=adjoint_maxiter,
         adjoint_gcrot_m=adjoint_gcrot_m, adjoint_gcrot_k=adjoint_gcrot_k,
     )
-    if params is None:
-        params = params_from_input(inp)
-    state = solve_implicit(params, cfg)
-    rt = runtime_from_params(params, cfg)
-    wb, wp = mhd_energy(state, rt)
-    vol = plasma_volume(state, rt)
-    gamma = float(rt.gamma)
-    wmhd = (wb + wp / (gamma - 1.0)) * (2.0 * np.pi) ** 2
-    return ImplicitSolution(
-        state=state, wb=wb, wp=wp, wmhd=wmhd, volume=vol,
-        aspect=aspect_ratio(state, rt),
-        iota_axis=iota_axis(state, rt), iota_edge=iota_edge(state, rt),
-        runtime=rt,
-    )
+    dev = None
+    inferred_home = False
+    if device is AUTO and params is not None:
+        # "auto" preserves a concretely committed parameter pytree's home.
+        dev = _params_committed_device(params)
+        inferred_home = dev is not None
+    if dev is None:
+        dev = resolve_implicit_device(device, cfg.resolution)
+    # Carrying an accelerator through cfg inserts explicit device_put
+    # constraints into every custom-VJP boundary.  On 3-D equilibria that
+    # over-constrains the staged graph (and can deadlock); ordinary JAX
+    # ownership is both sufficient and reliable on the active/default
+    # accelerator.  CPU remains explicitly carried for the measured AUTO
+    # optimization policy and for host-device test rigs.
+    cfg_device = dev
+    if dev is not None and dev.platform != "cpu":
+        active = jax.config.jax_default_device
+        active = active if active is not None else jax.devices()[0]
+        if dev != active:
+            raise ValueError(
+                f"{dev} is not JAX's active/default device; wrap parameter "
+                "creation and differentiation in device_scope(device), then "
+                "omit device (or pass device=None) to run"
+            )
+        cfg_device = None
+    cfg = dataclasses.replace(cfg, device=cfg_device)
+    placement = jax.default_device(dev) if dev is not None else contextlib.nullcontext()
+    with placement:
+        if params is None:
+            params = params_from_input(inp, device=device)
+        elif dev is not None and not inferred_home:
+            # already home when the device was inferred from the params
+            params = jax.tree.map(lambda a: jax.device_put(a, dev), params)
+        state = solve_implicit(params, cfg)
+        rt = runtime_from_params(params, cfg)
+        # ``runtime`` is a dropped, convenience-only output. A cached concrete
+        # template may have been primed on another device; rehome that public
+        # value without constraining the traced residual/adjoint graph.
+        runtime_dev = dev or _params_committed_device(params)
+        if runtime_dev is not None and runtime_dev.platform != "cpu":
+            rt = _put_numeric_leaves(rt, runtime_dev)
+        wb, wp = mhd_energy(state, rt)
+        vol = plasma_volume(state, rt)
+        gamma = float(rt.gamma)
+        wmhd = (wb + wp / (gamma - 1.0)) * (2.0 * np.pi) ** 2
+        return ImplicitSolution(
+            state=state, wb=wb, wp=wp, wmhd=wmhd, volume=vol,
+            aspect=aspect_ratio(state, rt),
+            iota_axis=iota_axis(state, rt), iota_edge=iota_edge(state, rt),
+            runtime=rt,
+        )
 
 
 # ---------------------------------------------------------------------------

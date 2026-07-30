@@ -4,11 +4,13 @@
 Produces (into ``docs/_static/figures/``):
 
 - ``readme_runtime_compare.png``      — VMEC2000 vs vmex (cold/warm CPU,
-  GPU where comparable) vs VMEC++, from ``benchmarks/baseline.json`` and
+  GPU where comparable) vs the reference C++ implementation, from
+  ``benchmarks/baseline.json`` and
   ``benchmarks/gpu_baseline.json``.  Run ``benchmarks/run_baseline.py`` first.
 - ``readme_convergence.png``          — force residual vs iteration for one
   representative case (nfp4_QH_warm_start at ns=51) in vmex, VMEC2000
-  (NSTEP=1 stdout trace), and VMEC++ (wout ``fsqt``).  Traces are cached in
+  (NSTEP=1 stdout trace), and the reference C++ implementation (wout
+  ``fsqt``).  Traces are cached in
   ``benchmarks/convergence_nfp4_ns51.json``; delete it to re-run the codes.
 - ``readme_optimization.png``         — quasisymmetry (QA/QH/QP) seed vs
   optimized boundary cross-sections, 3-D LCFS geometry coloured by ``|B|``, and
@@ -80,7 +82,7 @@ GRID = "#e1e0d9"
 BASELINE = "#c3c2b7"
 BLUE = "#2a78d6"        # vmex warm (the hero series)
 BLUE_LIGHT = "#86b6ef"  # vmex cold (same hue, lighter step)
-YELLOW = "#eda100"      # VMEC++
+YELLOW = "#eda100"      # reference C++
 VIOLET = "#4a3aa7"      # GPU
 RED = "#e34948"
 GREEN_TEXT = "#006300"
@@ -133,6 +135,8 @@ def make_runtime_figure(out: Path) -> None:
 
     rows = []
     for key, r in base.items():
+        if key.startswith("_"):
+            continue
         case, grid = key[:-1].split("[")
         v2k, cold = r.get("vmec2000", {}), r.get("vmex_cold", {})
         warm, vpp = r.get("vmex_warm", {}), r.get("vmecpp", {})
@@ -170,7 +174,7 @@ def make_runtime_figure(out: Path) -> None:
                label="vmex cold (fresh CLI process)", **mk)
     vpp_pts = [(r["vpp"], y) for y, r in zip(ys, rows) if r["vpp"]]
     ax.scatter([p[0] for p in vpp_pts], [p[1] for p in vpp_pts],
-               color=YELLOW, label="VMEC++", **mk)
+               color=YELLOW, label="reference C++", **mk)
     gpu_pts = [(r["gpu"], y) for y, r in zip(ys, rows) if r["gpu"]]
     if gpu_pts:
         ax.scatter([p[0] for p in gpu_pts], [p[1] for p in gpu_pts],
@@ -216,7 +220,7 @@ def make_runtime_figure(out: Path) -> None:
         title += f"  (all cases ns={next(iter(ns_set))})"
     ax.set_title(title, loc="left", pad=54, fontsize=14, color=INK)
     handles, labels = ax.get_legend_handles_labels()
-    order = ["VMEC2000 (Fortran)", "VMEC++",
+    order = ["VMEC2000 (Fortran)", "reference C++",
              "vmex warm (in-process)", "vmex cold (fresh CLI process)",
              "vmex warm (GPU)"]
     pairs = sorted(zip(handles, labels), key=lambda hl: order.index(hl[1]))
@@ -366,7 +370,7 @@ def collect_convergence() -> dict:
 
     - vmex: ``SolveResult.fsq_history`` (recorded every iteration).
     - VMEC2000: stdout iteration table with NSTEP=1 (one row per iteration).
-    - VMEC++: ``wout.fsqt`` (stored per iteration).
+    - reference C++: ``wout.fsqt`` (stored per iteration).
     Cached in CONV_CACHE; delete the file to re-run all three codes.
     """
     if CONV_CACHE.exists():
@@ -403,7 +407,7 @@ def collect_convergence() -> dict:
             proc.stdout, re.M)
         v2k_fsq = [float(r[1]) + float(r[2]) + float(r[3]) for r in rows]
 
-        # VMEC++: fsqt array from the wout payload.
+        # reference C++: fsqt array from the wout payload.
         proc = subprocess.run([str(VMECPP_PY), "-c", VMECPP_TRACE_SNIPPET,
                                deck.name], cwd=td, capture_output=True,
                               text=True, timeout=900)
@@ -426,7 +430,7 @@ def make_convergence_figure(out: Path) -> None:
                 alpha=0.5, solid_capstyle="round",
                 label=f"VMEC2000 (Fortran), {len(v2k_t)} iterations")
     ax.semilogy(range(1, len(vpp_t) + 1), vpp_t, color=YELLOW, lw=2.2,
-                alpha=0.9, label=f"VMEC++, {len(vpp_t)} iterations")
+                alpha=0.9, label=f"reference C++, {len(vpp_t)} iterations")
     ax.semilogy(range(1, len(jax_t) + 1), jax_t, color=BLUE, lw=1.1,
                 label=f"vmex, {len(jax_t)} iterations")
 

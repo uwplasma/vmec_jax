@@ -11,6 +11,7 @@ Covers (plan.md §8):
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +21,13 @@ jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402
 
 from vmex.core.errors import MgridNotFoundError  # noqa: E402
-from vmex.core.mgrid import MgridData, MgridField, read_mgrid, write_mgrid  # noqa: E402
+from vmex.core.mgrid import (  # noqa: E402
+    MgridData,
+    MgridField,
+    read_mgrid,
+    tabulate_cartesian_field,
+    write_mgrid,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 MGRID_PATH = REPO / "examples" / "data" / "mgrid_cth_like_lasym_small.nc"
@@ -69,6 +76,15 @@ def test_round_trip_read_write_read(data: MgridData, tmp_path: Path) -> None:
     np.testing.assert_array_equal(back.br, data.br)
     np.testing.assert_array_equal(back.bp, data.bp)
     np.testing.assert_array_equal(back.bz, data.bz)
+
+
+def test_write_mgrid_has_no_numpy_deprecation(data: MgridData, tmp_path: Path) -> None:
+    """netCDF4's internal NumPy-2.5 reshape warning stays locally isolated."""
+    out = tmp_path / "mgrid_warning_free.nc"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        write_mgrid(out, data)
+    assert out.is_file()
 
 
 def test_missing_file_raises_mgrid_not_found(tmp_path: Path) -> None:
@@ -123,6 +139,103 @@ def test_grad_wrt_extcur_finite_nonzero(data: MgridData) -> None:
     assert np.max(np.abs(g_np)) > 0.0
 
 
+def test_tabulate_cartesian_callable_and_cylindrical_conversion() -> None:
+    def field(points):
+        p = np.asarray(points)
+        return np.stack((2.0 + 0.1 * p[:, 0], -3.0 + 0.2 * p[:, 1], 4.0 + 0.3 * p[:, 2]), axis=-1)
+
+    data = tabulate_cartesian_field(
+        field,
+        rmin=0.5,
+        rmax=1.5,
+        zmin=-0.4,
+        zmax=0.4,
+        ir=5,
+        jz=4,
+        kp=12,
+        nfp=2,
+    )
+    sampled = MgridField.from_mgrid_data(data, extcur=[1.7])
+    # Test exact grid points: no interpolation error obscures the Cartesian
+    # -> cylindrical convention.
+    phi = np.arange(data.kp) * 2.0 * np.pi / (data.nfp * data.kp)
+    r = np.full_like(phi, 1.0)
+    z = np.zeros_like(phi)
+    xyz = np.stack((r * np.cos(phi), r * np.sin(phi), z), axis=-1)
+    direct = 1.7 * field(xyz)
+    br, bp, bz = (np.asarray(v) for v in sampled.b_cyl(r, phi, z))
+    np.testing.assert_allclose(br, direct[:, 0] * np.cos(phi) + direct[:, 1] * np.sin(phi))
+    np.testing.assert_allclose(bp, -direct[:, 0] * np.sin(phi) + direct[:, 1] * np.cos(phi))
+    np.testing.assert_allclose(bz, direct[:, 2])
+
+
+def test_tabulate_simsopt_set_points_protocol() -> None:
+    class FakeSimsoptField:
+        def set_points(self, points):
+            self.points = np.asarray(points)
+
+        def B(self):
+            return np.column_stack(
+                (self.points[:, 0] * 0 + 1.0, self.points[:, 1] * 0 + 2.0, self.points[:, 2] * 0 + 3.0)
+            )
+
+    data = tabulate_cartesian_field(
+        FakeSimsoptField(),
+        rmin=0.4,
+        rmax=1.0,
+        zmin=-0.2,
+        zmax=0.2,
+        ir=3,
+        jz=3,
+        kp=5,
+        nfp=1,
+    )
+    assert data.br.shape == (1, 5, 3, 3)
+    assert np.all(np.isfinite(data.br))
+    assert np.all(np.isfinite(data.bp))
+    np.testing.assert_allclose(data.bz, 3.0)
+
+
+def test_tabulate_actual_essos_biot_savart() -> None:
+    pytest.importorskip("essos")
+    from essos.coils import Coils, Curves
+    from essos.fields import BiotSavart
+
+    dofs = np.zeros((2, 3, 3))
+    for i, phi0 in enumerate((0.2, 0.8)):
+        dofs[i, 0, 0], dofs[i, 0, 2] = 0.8 * np.cos(phi0), 0.25 * np.cos(phi0)
+        dofs[i, 1, 0], dofs[i, 1, 2] = 0.8 * np.sin(phi0), 0.25 * np.sin(phi0)
+        dofs[i, 2, 1] = 0.25
+    bs = BiotSavart(Coils(Curves(jnp.asarray(dofs), 32, 1, False), jnp.asarray([1.0e5, -0.7e5])))
+    data = tabulate_cartesian_field(
+        bs,
+        rmin=0.25,
+        rmax=0.55,
+        zmin=-0.15,
+        zmax=0.15,
+        ir=3,
+        jz=3,
+        kp=4,
+        nfp=1,
+    )
+    assert np.all(np.isfinite(data.br))
+    # At table nodes, cylindrical components must reconstruct ESSOS' direct
+    # Cartesian field to roundoff.
+    k, j, i = 1, 1, 1
+    phi = k * 2.0 * np.pi / data.kp
+    r = np.linspace(data.rmin, data.rmax, data.ir)[i]
+    z = np.linspace(data.zmin, data.zmax, data.jz)[j]
+    direct = np.asarray(bs.B(jnp.asarray([r * np.cos(phi), r * np.sin(phi), z])))
+    reconstructed = np.asarray(
+        [
+            data.br[0, k, j, i] * np.cos(phi) - data.bp[0, k, j, i] * np.sin(phi),
+            data.br[0, k, j, i] * np.sin(phi) + data.bp[0, k, j, i] * np.cos(phi),
+            data.bz[0, k, j, i],
+        ]
+    )
+    np.testing.assert_allclose(reconstructed, direct, rtol=1e-13, atol=1e-15)
+
+
 # ---------------------------------------------------------------------------
 # ESSOS cross-read
 # ---------------------------------------------------------------------------
@@ -142,9 +255,7 @@ def test_essos_reads_same_grid_and_fields(data: MgridData) -> None:
     )
     assert eg.n_ext_cur == data.nextcur
     assert eg.mode == data.mgrid_mode
-    np.testing.assert_array_equal(
-        np.asarray(eg.raw_coil_current), np.asarray(data.raw_coil_cur)
-    )
+    np.testing.assert_array_equal(np.asarray(eg.raw_coil_current), np.asarray(data.raw_coil_cur))
     # ESSOS strips via _unpack (whitespace only) — same convention as ours.
     assert tuple(eg.coil_names) == data.coil_groups
 

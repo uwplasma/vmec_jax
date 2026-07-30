@@ -11,7 +11,7 @@ Usage
 
 .. code-block:: text
 
-   vmex input.X                — solve (INDATA or VMEC++ JSON), write wout_X.nc
+   vmex input.X                — solve (INDATA or structured JSON), write wout_X.nc
    vmex --plot wout_*.nc       — diagnostic plots from a WOUT file
    vmex --plot mout_*.nc       — straight-axis mirror diagnostics
    vmex --booz wout_*.nc       — run booz_xform_jax, write boozmn_*.nc
@@ -20,7 +20,7 @@ Usage
    vmex --test                 — run and plot the bundled quick-start case
 
 The positional argument is a VMEC input file (``input.*`` namelist or a
-VMEC++-style ``.json`` deck), or a ``wout_*.nc``/``mout_*.nc``/``boozmn_*.nc``
+structured-JSON ``.json`` deck), or a ``wout_*.nc``/``mout_*.nc``/``boozmn_*.nc``
 file for ``--plot``/``--booz``.
 
 Options
@@ -54,10 +54,22 @@ Options
      - Solver lane: ``cli`` (jitted blocks with host residual checks, live
        printing, exact-``ftol`` exit; default) or ``jit`` (single
        ``lax.while_loop``).
+   * - ``--device {auto,none,cpu,gpu,cuda,rocm,tpu}``
+     - JAX solve placement. ``auto`` (default) applies VMEX's measured policy,
+       ``none`` leaves placement to JAX, and the other values request a
+       platform explicitly. This applies to fixed- and free-boundary solves.
    * - ``--ftol X``
      - Override the final-stage ``FTOL_ARRAY`` tolerance.
    * - ``--max-iter N``
      - Override the final-stage ``NITER_ARRAY`` iteration cap.
+   * - ``--no-prefetch-compile``
+     - Compile solver lanes sequentially to reduce peak memory. The default
+       overlaps compilation to reduce cold-start latency; numerical results
+       are identical.
+   * - ``--jacobian-retries N``
+     - Retry a stage from its best finite checkpoint after the VMEC2000
+       75-Jacobian-reset condition, using a reduced ``DELT`` (default 2).
+       Use 0 to preserve VMEC2000's immediate fatal-stop behavior.
    * - ``--coils PATH``
      - ESSOS-style coils file (``.json`` or ``.npz`` with ``dofs_curves``,
        ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``) supplying
@@ -82,18 +94,28 @@ For ``LFREEB = T`` decks:
   and free-boundary wout metadata (``nextcur``/``extcur``/``curlabel``/
   ``mgrid_mode``);
 - a **missing** mgrid file falls back to a fixed-boundary solve with a
-  warning (VMEC2000 behavior, dropped by VMEC++);
+  warning (retained VMEC2000 behavior);
 - ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
-  field from an ESSOS coils file (``essos.coils.Coils``): the coils are tabulated
-  into an in-memory mgrid (``Coils.to_mgrid``) and read back as an
-  :class:`vmex.core.mgrid.MgridField` (requires ESSOS).
+  field from an ESSOS coils file (``essos.coils.Coils``): the coils' Biot-Savart
+  field (``essos.fields.BiotSavart``) is tabulated directly into an in-memory
+  :class:`vmex.core.mgrid.MgridField` via
+  :meth:`~vmex.core.mgrid.MgridField.from_cartesian_field` — no temporary
+  mgrid file and no mgrid-export API involved (requires ESSOS,
+  ``pip install essos``).
 
-Known divergences of the current free-boundary lane: it is single-grid (only
-the final ``NS_ARRAY`` stage runs; multi-stage decks print a note), and the
-NESTOR potential is not yet exported to the wout ``potsin``/``xmpot``/
-``xnpot``/``*_sur`` variables (written as netCDF fill). An NITER-exhausted
-free-boundary run still writes the wout (VMEC2000 behavior) and exits with
-``ier_flag = 2``.
+The free-boundary path runs the complete ``NS_ARRAY`` ladder.  It interpolates
+the preceding stage's final plasma state, carries VMEC2000's active-vacuum and adaptive
+``NVACSKIP`` state, and selects fresh resolution-specific NESTOR programs at
+each new grid.  A user-provided ``initial_state`` is also supported by the
+Python API for hot restarts.
+
+The CLI exports the final NESTOR potential and surface fields to the wout
+``potsin``/``xmpot``/``xnpot``/``*_sur`` variables. LASYM runs additionally
+write ``potcos`` and the sine ``*_sur`` partners. An NITER-exhausted
+fixed- or free-boundary run terminates through the normal output path —
+unconverged WOUT, equilibrium summary, and the ``MORE ITERATIONS REQUIRED``
+block (``fileout.f`` semantics) — and exits with the distinct
+``ier_flag = 2``.  Fatal numerical/Jacobian failures never produce a WOUT.
 
 Exit codes (zero-crash policy)
 ------------------------------

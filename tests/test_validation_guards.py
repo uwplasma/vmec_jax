@@ -118,6 +118,11 @@ def test_traceable_term_vetting():
     qs = opt.QuasisymmetryRatioResidual([0.5], 1, 0)
     assert opt._traceable_term(qs.total_state) == qs.residuals_state
     assert opt._traceable_term(opt.aspect_ratio) is opt.aspect_ratio
+    assert opt._traceable_term(opt.d_merc_state) is opt.d_merc_state
+    assert (
+        opt._traceable_term(opt.mercier_stability_residual)
+        is opt.mercier_stability_residual
+    )
     with pytest.raises(ValueError, match="not implicit-differentiable"):
         opt._traceable_term(opt.d_merc)
 

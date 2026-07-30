@@ -1,23 +1,10 @@
-"""Regression and smoke tests for ``vmex.core.optimize``.
-
-Coverage:
-
-- QS ratio residual sanity/conventions on the golden VMEC2000 wout files
-  (solovev QA-sanity, nfp4_QH helicity sign): QH is
-  ``(helicity_m, helicity_n) = (1, -1)`` with ``helicity_n`` in units of nfp
-  (``nn = helicity_n * nfp``).  (Bit-level parity with the legacy
-  ``vmex.quasisymmetry`` port was proven by the A/B suite that retired
-  with the legacy tree.)
-- Scalar targets (aspect, volume, mean/edge iota, mirror ratio, magnetic
-  well, DMerc, LgradB) vs the wout engine of the same state at 1e-8 and vs
-  the golden VMEC2000 values at solver-drift tolerances.
-- QI residual: regression pin on a cached converged state, finiteness and
-  jit-vs-eager agreement.
-- Boundary dof packing round trip, ESS scaling, and a 2-iteration
-  finite-difference least-squares smoke on solovev (aspect target only).
-
-The converged solovev state is cached in ``/tmp`` so repeated test runs skip
-the solve.  Golden wout fixtures resolve through ``conftest.resolve_golden_dir``.
+"""Regression and smoke tests for ``vmex.core.optimize``: QS ratio residual
+conventions on golden wouts (QH is ``(helicity_m, helicity_n) = (1, -1)``
+with ``helicity_n`` in units of nfp); scalar targets vs the wout engine at
+1e-8 and vs golden VMEC2000 at solver-drift tolerances; QI residual pins;
+boundary dof packing, ESS scaling, and least-squares smokes on solovev.
+The converged solovev state is cached in ``/tmp``; golden wout fixtures
+resolve through ``conftest.resolve_golden_dir``.
 """
 
 from __future__ import annotations
@@ -37,7 +24,7 @@ from vmex.core.input import VmecInput  # noqa: E402
 from vmex.core.wout import read_wout  # noqa: E402
 from vmex.core import optimize as opt  # noqa: E402
 
-from conftest import resolve_golden_dir  # noqa: E402
+from tests.conftest import resolve_golden_dir  # noqa: E402
 
 GOLDEN_DIR = resolve_golden_dir()
 pytestmark = [
@@ -160,13 +147,9 @@ def test_scalar_targets_match_own_wout(solovev_eq):
 
 
 def test_scalar_targets_vs_golden(solovev_eq):
-    """Scalars vs golden VMEC2000 wout values.
-
-    The golden run is an *independently converged* state (ftol 1e-14), so the
-    comparison carries the residual solver drift, not writer error: the wout
-    golden suite (test_wout_golden.py) pins aspect at rtol 1e-6.  The iota
-    profile of this ncurr=0 deck is prescribed (AI = 1 flat), hence exact.
-    """
+    """Scalars vs golden VMEC2000 wout values: the golden run is an
+    independently converged state (ftol 1e-14), so tolerances carry solver
+    drift; the iota of this ncurr=0 deck is prescribed (AI = 1), hence exact."""
     eq = solovev_eq
     gold = _golden_wout("solovev")
     np.testing.assert_allclose(float(opt.aspect_ratio(eq.state, eq.runtime)),
@@ -195,14 +178,10 @@ def test_scalar_regression_pins(solovev_eq):
 
 
 def test_d_merc(solovev_eq):
-    """DMerc objective: identity to the parity-proven wout engine + golden A/B.
-
-    ``d_merc`` evaluates through wout_from_state, whose DMerc is
-    golden-validated in test_wout_golden.py; here we pin the objective's
-    plumbing and value.  Near-axis/edge surfaces carry the usual Mercier
-    noise, so the golden comparison uses the wout-suite drift tolerance on
-    interior surfaces.  Regression pin recorded 2026-07-09 (x64 CPU).
-    """
+    """DMerc objective: identity to the wout engine (golden-validated in
+    test_wout_golden.py) plus a golden A/B on interior surfaces (near
+    axis/edge carry the usual Mercier noise).  Pin recorded 2026-07-09
+    (x64 CPU)."""
     eq = solovev_eq
     dm = np.asarray(opt.d_merc(eq))
     assert np.all(np.isfinite(dm))
@@ -217,16 +196,9 @@ def test_d_merc(solovev_eq):
 
 
 def test_l_grad_b(solovev_eq):
-    """LgradB objective: finiteness, jit parity, grid convergence, pins.
-
-    Pins recorded 2026-07-09 (x64 CPU) on the deterministic golden
-    nfp4_QH wout (0.3238956855163282 m) and the cached converged solovev
-    state (2.2782393147008424 m ~ the minor radius scale, as expected for a
-    smooth tokamak field).  The legacy ``lgradb_from_state`` uses the same
-    ``|B| sqrt(2/(grad B : grad B))`` definition on a different grid /
-    radial stencil, so agreement is at discretization (not bitwise) level —
-    the grid-refinement check below bounds that error.
-    """
+    """LgradB objective: finiteness, jit parity, grid convergence, pins
+    (recorded 2026-07-09, x64 CPU: golden nfp4_QH 0.3238956855163282 m,
+    cached solovev 2.2782393147008424 m ~ minor-radius scale)."""
     jax.config.update("jax_disable_jit", False)
     gqh = _golden_wout("nfp4_QH_warm_start")
     val = float(opt.l_grad_b(gqh))
@@ -242,6 +214,12 @@ def test_l_grad_b(solovev_eq):
     np.testing.assert_allclose(fine, val, rtol=5e-2)
 
 
+def test_l_grad_b_rejects_asymmetric_wout() -> None:
+    """The symmetric diagnostic must not silently omit LASYM partners."""
+    with pytest.raises(NotImplementedError, match="lasym = False"):
+        opt.l_grad_b(SimpleNamespace(lasym=True))
+
+
 # ---------------------------------------------------------------------------
 # QI residual
 # ---------------------------------------------------------------------------
@@ -253,12 +231,9 @@ QI_KW = dict(nphi=61, nalpha=13, n_bounce=21, include_bounce_endpoints=True,
 
 
 def test_qi_residual_golden_pin():
-    """QI residual on the deterministic golden nfp4_QH wout: finite pin.
-
-    Pin recorded 2026-07-09 (x64 CPU) at the moment the core port was
-    A/B-verified term by term (rtol 1e-8) against the legacy Goodman-style
-    residual, before the legacy tree was deleted.
-    """
+    """QI residual on the golden nfp4_QH wout: finite pin (recorded
+    2026-07-09, when the port was A/B-verified at rtol 1e-8 against the
+    legacy Goodman-style residual)."""
     pytest.importorskip("booz_xform_jax")
     w = _golden_wout("nfp4_QH_warm_start")
     booz = opt.boozer_modes_from_wout(w, surfaces=[0.5, 1.0], mboz=10, nboz=10)
@@ -272,14 +247,10 @@ def test_qi_residual_golden_pin():
 
 def test_qi_regression_pin_and_jit(solovev_eq):
     """QI residual on a cached converged state: pin, finiteness, jit parity.
-
-    Pin recorded 2026-07-09 (x64 CPU): converged input.solovev (ns=11,
-    ftol 1e-14), surfaces (0.5, 1.0), mboz=nboz=8, sampling as in QI_KW ->
-    total = 0.13626.  The QI residual amplifies convergence-path drift of the
-    re-converged state (~1e-4 relative between jit configurations/BLAS), so
-    the pin uses rtol 1e-3; bit-level math parity vs the legacy residual was
-    proven on a deterministic golden file before the legacy tree retired.
-    """
+    Pin recorded 2026-07-09 (x64 CPU; solovev ns=11 ftol 1e-14, surfaces
+    (0.5, 1.0), mboz=nboz=8) -> total = 0.13626; rtol 1e-3 because the
+    residual amplifies convergence-path drift (~1e-4 between BLAS/jit
+    configurations)."""
     pytest.importorskip("booz_xform_jax")
     jax.config.update("jax_disable_jit", False)
     booz = opt.boozer_modes_from_wout(solovev_eq.wout, surfaces=[0.5, 1.0],
@@ -380,23 +351,34 @@ def test_least_squares_implicit_smoke(solovev_eq):
     assert abs(aspect1 - 4.0) < abs(aspect0 - 4.0)
 
 
-def test_least_squares_implicit_jac_chunking(solovev_eq):
-    """The R17.1 chunked implicit Jacobian matches the unchunked one.
+def test_minimize_scalarized_implicit_smoke(solovev_eq):
+    """L-BFGS-B lowers the same cost with a finite reverse gradient."""
+    jax.config.update("jax_disable_jit", False)
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    x0 = opt.pack_boundary(inp, 1)
+    cost0 = 0.5 * (float(opt.aspect_ratio(
+        solovev_eq.state, solovev_eq.runtime)) - 4.0) ** 2
+    bounds = list(zip(x0 - 0.5, x0 + 0.5))
+    res = opt.minimize(
+        [(opt.aspect_ratio, 4.0, 1.0)], inp, max_mode=1,
+        bounds=bounds, options={"maxiter": 1})
+    assert res.cost < cost0
+    assert np.isfinite(res.optimality)
+    assert np.all(np.isfinite(res.jac))
+    assert np.all(res.x >= x0 - 0.5) and np.all(res.x <= x0 + 0.5)
+    assert isinstance(res.input, VmecInput)
 
-    ``jac_chunk_size`` only changes how the per-dof Jacobian columns are
-    batched (:func:`solvax.chunk_map`: one wide ``vmap`` when ``None`` vs
-    ``jax.lax.map`` in fixed-size chunks otherwise), so the Jacobian scipy
-    evaluates at the initial boundary must be identical.  Compared at a single
-    evaluation (``max_nfev=1``, same default x0) to keep the test cheap; the
-    solovev deck has 2 boundary dofs so ``jac_chunk_size=1`` is a real
-    2-chunk pass.
-    """
+
+def test_least_squares_implicit_jac_chunking(solovev_eq):
+    """The R17.1 chunked implicit Jacobian matches the unchunked one:
+    ``jac_chunk_size`` only changes how the per-dof columns are batched
+    (:func:`solvax.chunk_map`), so the Jacobian at the initial boundary must
+    be identical.  ``max_nfev=1`` keeps it cheap; solovev has 2 dofs so
+    ``jac_chunk_size=1`` is a real 2-chunk pass."""
     jax.config.update("jax_disable_jit", False)
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     obj = [(opt.aspect_ratio, 4.0, 1.0)]
-    # Pin the reference to the unchunked (one wide vmap) path explicitly — the
-    # default is now jac_chunk_size="auto" (R17.1 memory-bounded default), so
-    # None is what makes this an unchunked-vs-chunked comparison.
+    # explicit None pins the unchunked reference (default is "auto")
     ref = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                             jac_chunk_size=None, max_nfev=1)
     assert ref.jac.shape[1] == 2  # RBC(0,1), ZBS(0,1)
@@ -408,16 +390,17 @@ def test_least_squares_implicit_jac_chunking(solovev_eq):
                                    err_msg=f"chunk={chunk!r}")
 
 
-def test_least_squares_implicit_jac_solver_block(solovev_eq):
-    """The R25.2 block-tridiagonal Jacobian matches the per-dof GMRES one.
+def test_auto_jac_chunk_stays_bounded_with_large_device(monkeypatch):
+    """A reported accelerator budget must not turn ``auto`` into one vmap."""
+    monkeypatch.setattr(opt, "auto_chunk_size", lambda dim: dim)
+    assert opt._auto_jac_chunk(120) == 11
 
-    ``jac_solver="block"`` (default) assembles the raw force Jacobian's
-    radial blocks by colored jvp probes, factors once
-    (:func:`solvax.block_thomas_factor`) and backsolves every dof column,
-    then certifies each column with a short warm-started GMRES pass against
-    the same preconditioned system the ``"gmres"`` path solves — so the two
-    Jacobians must agree to the solver tolerance (``adjoint_tol = 1e-6``).
-    """
+
+def test_least_squares_implicit_jac_solver_block(solovev_eq):
+    """The R25.2 block-tridiagonal Jacobian (``jac_solver="block"``: colored
+    jvp probes, one :func:`solvax.block_thomas_factor`, GMRES-certified
+    columns) must agree with the per-dof GMRES path to the solver tolerance
+    (``adjoint_tol = 1e-6``)."""
     jax.config.update("jax_disable_jit", False)
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     obj = [(opt.aspect_ratio, 4.0, 1.0)]
@@ -425,23 +408,21 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq):
                             jac_solver="gmres", max_nfev=1)
     got = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                             jac_solver="block", max_nfev=1)
+    reverse = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
+                                jac_solver="reverse", max_nfev=1)
     assert got.jac.shape == ref.jac.shape
     np.testing.assert_allclose(got.jac, ref.jac, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(reverse.jac, ref.jac, rtol=1e-6, atol=1e-8)
     with pytest.raises(ValueError, match="jac_solver"):
         opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                           jac_solver="svd", max_nfev=1)
 
 
 def test_least_squares_implicit_warm_start_modes(solovev_eq):
-    """R25.4 perturbation warm start reaches the same optimum as plain hot restart.
-
-    ``warm_start`` only changes the *initial guess* of each trial's host
-    solve (perturbation = first-order DESC-style prediction from the stashed
-    Jacobian linearization; state = last converged state), never the fixed
-    point — so the optimizer must walk the same trust-region path to the
-    same cost.  ``solve_stats`` exposes the forward-solve effort totals that
-    the R25.4 benchmark compares.
-    """
+    """R25.4 perturbation warm start reaches the same optimum as plain hot
+    restart: ``warm_start`` only changes each trial's initial guess, never
+    the fixed point, so the optimizer walks the same trust-region path;
+    ``solve_stats`` exposes the effort totals the R25.4 benchmark compares."""
     jax.config.update("jax_disable_jit", False)
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     obj = [(opt.aspect_ratio, 4.0, 1.0)]
@@ -461,13 +442,9 @@ def test_least_squares_implicit_warm_start_modes(solovev_eq):
 
 
 def test_least_squares_max_mode_schedule():
-    """Staged max_mode continuation: stages chain through result.input.
-
-    Two ultra-short stages at the same max_mode (this deck has no toroidal
-    modes) exercise the scheduling plumbing: per-stage results are recorded
-    and the second stage starts from — and does not regress — the first
-    stage's boundary.
-    """
+    """Staged max_mode continuation: two ultra-short stages chain through
+    result.input; the second starts from — and does not regress — the
+    first stage's boundary."""
     jax.config.update("jax_disable_jit", False)
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     res = opt.least_squares([(opt.aspect_ratio, 4.0, 1.0)], inp,

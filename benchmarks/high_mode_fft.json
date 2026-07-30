@@ -1,0 +1,91 @@
+{
+  "schema": 2,
+  "case": "input.cth_like_free_bdy",
+  "modifications": {
+    "mpol": 19,
+    "ntor": 14,
+    "ftol": 1e-08,
+    "mnmax": 537
+  },
+  "input_data_embedded": false,
+  "provenance": {
+    "schema": 1,
+    "measurement_commit": "ecfbe31de34d62fb26580f3fbcd006f198d96afa",
+    "input_data_embedded": false,
+    "limitation": "Historical artifact: the benchmark script did not yet record the imported VMEX module or dirty-tree state."
+  },
+  "protocol": {
+    "cold": "fresh subprocess per transform; compile included; wall_s measured around the solve, subprocess.wall_s around the whole process",
+    "warm": "in-process repeat inside the same subprocess",
+    "peak_rss": "subprocess.peak_rss_bytes is the OS-reported process peak (cold + warm together); ru_maxrss_bytes snapshots attribute it per solve"
+  },
+  "environment": {
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu": "Apple M4",
+    "python_version": "3.13.7",
+    "jax_version": "0.10.2",
+    "jax_backend": "cpu",
+    "x64": true
+  },
+  "modes": {
+    "fft": {
+      "transform": "fft",
+      "use_fft": true,
+      "mnmax": 537,
+      "ns": 15,
+      "niter_cap": 2500,
+      "cold": {
+        "wall_s": 983.4559999579942,
+        "iterations": 2500,
+        "converged": false,
+        "fsqr": 6.13744841668043e-06,
+        "fsqz": 4.729274248368513e-06,
+        "fsql": 7.72544094220901e-06,
+        "ru_maxrss_bytes": 8210579456
+      },
+      "warm": {
+        "wall_s": 335.2504069590068,
+        "iterations": 2500,
+        "converged": false,
+        "fsqr": 6.13744841668043e-06,
+        "fsqz": 4.729274248368513e-06,
+        "fsql": 7.72544094220901e-06,
+        "ru_maxrss_bytes": 8210579456
+      },
+      "subprocess": {
+        "wall_s": 1406.528147792007,
+        "peak_rss_bytes": 8210579456
+      }
+    },
+    "dense": {
+      "transform": "dense",
+      "use_fft": false,
+      "mnmax": 537,
+      "ns": 15,
+      "niter_cap": 2500,
+      "cold": {
+        "wall_s": 825.8181047499966,
+        "iterations": 2500,
+        "converged": false,
+        "fsqr": 4.678760268125555e-05,
+        "fsqz": 4.737803086043147e-05,
+        "fsql": 2.2719063354553324e-05,
+        "ru_maxrss_bytes": 9629171712
+      },
+      "warm": {
+        "wall_s": 335.4568001250009,
+        "iterations": 2500,
+        "converged": false,
+        "fsqr": 4.678760268125555e-05,
+        "fsqz": 4.737803086043147e-05,
+        "fsql": 2.2719063354553324e-05,
+        "ru_maxrss_bytes": 9629171712
+      },
+      "subprocess": {
+        "wall_s": 1219.5818613330048,
+        "peak_rss_bytes": 9629171712
+      }
+    }
+  }
+}

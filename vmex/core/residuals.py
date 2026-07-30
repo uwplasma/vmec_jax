@@ -42,7 +42,7 @@ modules ``solvers/fixed_boundary/residual/payload_blocks.py`` /
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal, overload
 
 import numpy as np
 
@@ -406,16 +406,22 @@ def _map_blocks(force: SpectralForce, names: tuple[str, ...], fn) -> dict[str, A
     return out
 
 
-def scalxc_scale_force(force: SpectralForce, *, s: Array) -> SpectralForce:
+def scalxc_scale_force(
+    force: SpectralForce, *, s: Array, scaling: Array | None = None
+) -> SpectralForce:
     """Apply the odd-m ``1/sqrt(s)`` scaling to every force block.
 
     VMEC2000: ``funct3d.f`` — ``gc = gc * scalxc`` right after ``tomnsps``,
     making the scaling part of the definition of the reported residuals.
     Uses :func:`vmex.core.transforms.odd_m_sqrt_s_scaling` (``profil3d.f``
-    ``scalxc``).
+    ``scalxc``). ``scaling`` may supply the corresponding global-table slice
+    for a local radial segment.
     """
     mpol = int(jnp.asarray(force.force_R_cc).shape[1])
-    scalxc = odd_m_sqrt_s_scaling(jnp.asarray(s), mpol)[:, :, None]
+    scalxc = (
+        odd_m_sqrt_s_scaling(jnp.asarray(s), mpol)
+        if scaling is None else jnp.asarray(scaling)
+    )[:, :, None]
     updates = _map_blocks(
         force, _R_BLOCKS + _Z_BLOCKS + _LAMBDA_BLOCKS, lambda b: b * scalxc.astype(b.dtype)
     )
@@ -525,13 +531,36 @@ def scale_m1_preconditioner_rhs(
     return replace(force, **updates) if updates else force
 
 
+@overload
 def apply_radial_preconditioner(
     force: SpectralForce,
     *,
     matrices_R: TridiagonalMatrices,
     matrices_Z: TridiagonalMatrices,
     jmax: int,
-) -> SpectralForce:
+    return_safe: Literal[False] = False,
+) -> SpectralForce: ...
+
+
+@overload
+def apply_radial_preconditioner(
+    force: SpectralForce,
+    *,
+    matrices_R: TridiagonalMatrices,
+    matrices_Z: TridiagonalMatrices,
+    jmax: int,
+    return_safe: Literal[True],
+) -> tuple[SpectralForce, Array]: ...
+
+
+def apply_radial_preconditioner(
+    force: SpectralForce,
+    *,
+    matrices_R: TridiagonalMatrices,
+    matrices_Z: TridiagonalMatrices,
+    jmax: int,
+    return_safe: bool = False,
+) -> SpectralForce | tuple[SpectralForce, Array]:
     """Solve the R and Z radial tridiagonal systems against all force blocks.
 
     VMEC2000: ``scalfor.f`` applied to ``gcr`` (with the ``arm/ard/brm/brd/
@@ -540,15 +569,20 @@ def apply_radial_preconditioner(
     Lambda blocks pass through (see :func:`apply_lambda_preconditioner`).
     """
     updates: dict[str, Array] = {}
+    safe = jnp.asarray(True)
     for names, matrices in ((_R_BLOCKS, matrices_R), (_Z_BLOCKS, matrices_Z)):
         present = [name for name in names if getattr(force, name) is not None]
         if not present:
             continue
         stacked = jnp.stack([jnp.asarray(getattr(force, name)) for name in present], axis=-1)
-        solved = scalfor(stacked, matrices, jmax=jmax)
+        solved, block_safe = scalfor(
+            stacked, matrices, jmax=jmax, return_safe=True
+        )
+        safe = safe & block_safe
         for idx, name in enumerate(present):
             updates[name] = solved[..., idx]
-    return replace(force, **updates)
+    result = replace(force, **updates)
+    return (result, safe) if return_safe else result
 
 
 def apply_lambda_preconditioner(force: SpectralForce, faclam: Array) -> SpectralForce:

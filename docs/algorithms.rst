@@ -49,6 +49,7 @@ tables are built in :mod:`vmex.core.fourier` and the transforms
 ``dot_general`` matmuls in :mod:`vmex.core.transforms` — GEMM-friendly
 and XLA-fusable while matching VMEC2000 normalization exactly.
 
+
 Geometry pipeline
 ~~~~~~~~~~~~~~~~~
 
@@ -109,7 +110,18 @@ the velocity and rescales ``delt``):
 - **bad Jacobian** (``irst = 2``): restore the checkpoint, zero the velocity,
   ``delt *= 0.90``; on the first bad Jacobian the axis guess is recomputed
   (``guess_axis``), and ``delt`` is reset at ``ijacob = 25, 50`` with a hard
-  stop at 75 (``jac75_flag``);
+  stop at 75 (``jac75_flag``).  VMEX then offers a bounded driver-level
+  recovery (two attempts by default): restart the best finite checkpoint with
+  zero velocity and half the preceding initial ``DELT`` (capped at 0.5).
+  This is a continuation, not a fresh ``profil3d`` initialization: the
+  first-pass ``LMOVE_AXIS`` transfer is disabled on the driver-level retry, so
+  a still-large force cannot replace the checkpoint with a cold axis-derived
+  state.
+  The force equations and stopping tolerance do not change.  Set
+  ``jacobian_retries=0`` (Python) or ``--jacobian-retries 0`` (CLI) for the
+  exact VMEC2000 fatal-stop policy.  Free-boundary recovery rebuilds the
+  axis-current filament and all resolution/geometry-dependent NESTOR
+  structures before continuing;
 - **residual blow-up** (``irst = 3``): if after more than 10 steps the
   residual exceeds :math:`10^4\times` the checkpoint value, restore and
   ``delt /= 1.03``.
@@ -142,7 +154,12 @@ system with the :math:`m^2` and :math:`(n\,\mathrm{NFP})^2` weights, the
 algorithm vectorized over all spectral columns simultaneously
 (:func:`vmex.core.preconditioner.tridiagonal_solve`, a thin arg-order
 adapter over ``solvax.tridiagonal_solve`` — the shared SOLVAX linear-solver
-package). :math:`\lambda` uses the diagonal ``faclam`` factors from
+package). Production application uses ``solvax.tridiagonal_solve_checked``:
+the unregularized Thomas pivots must pass VMEC2000's
+``abs(pivot) > 1e-8*abs(diagonal)`` condition and a backward-residual check.
+Rejected columns receive an identity preconditioner action and a typed
+diagnostic instead of an amplified finite or NaN/Inf update. :math:`\lambda`
+uses the diagonal ``faclam`` factors from
 ``lamcal.f90`` (:func:`~vmex.core.preconditioner.lamcal`):
 
 .. math::
@@ -193,11 +210,14 @@ jogs, no assembled blocks — and the system is solved with matrix-free
 restarted GMRES from SOLVAX (``solvax.gmres``) in
 :func:`~vmex.core.preconditioner_2d.newton_direction`. A loose GMRES
 tolerance yields an inexact Newton step; peak memory stays at one force
-graph. Activation mirrors ``evolve.f``
+graph. Activation mirrors the main ``evolve.f`` gates
 (:class:`~vmex.core.preconditioner_2d.Prec2DConfig`): finest grid only,
 ``iter2 >= 10``, and ``fsqr + fsqz + fsql < prec2d_threshold``; the wiring in
 :mod:`vmex.core.solver` swaps the Newton direction for the 1D force
 direction under a ``lax.cond``, leaving the default 1D-only path untouched.
+It does **not** reproduce VMEC2000's distinct CG/GMRESR/TFQMR evolution
+algorithms or its ``PRE_NITER`` budget mutation; see
+:doc:`vmec2000_compatibility`.
 
 Spectral condensation (``alias.f``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -226,20 +246,16 @@ Two execution lanes, one physics
 --------------------------------
 
 :mod:`vmex.core.solver` exposes the same jitted iteration through two
-lanes (selected by ``vmex --mode cli|jit``):
-
-- **CLI lane** (default): a Python ``while`` loop around a jitted
-  *N-iteration block* kernel, with residuals checked on the host between
-  blocks. This gives exact-``ftol`` early exit, live VMEC2000-format printing
-  every ``NSTEP`` iterations, and buffer donation, with zero autodiff
-  bookkeeping.
-- **JIT lane**: a single ``lax.while_loop`` over the same physics — fully
-  traceable, used as the forward solver inside the differentiable API.
-
-A regression test asserts per-block state agreement between the lanes to
-machine precision. Which device (CPU or GPU) a lane runs on is decided by
-the measured placement policy of :mod:`vmex.core.device` — see
-:ref:`architecture:Device policy (CPU/GPU)`.
+lanes (selected by ``vmex --mode cli|jit``): the default **CLI lane**, a
+Python ``while`` loop around a jitted *N-iteration block* kernel with host
+residual checks between blocks (exact-``ftol`` early exit, live
+VMEC2000-format printing every ``NSTEP`` iterations, buffer donation, zero
+autodiff bookkeeping), and the **JIT lane**, a single ``lax.while_loop``
+over the same physics — fully traceable, the forward solver inside the
+differentiable API. A regression test asserts per-block state agreement
+between the lanes to machine precision. Which device (CPU or GPU) a lane
+runs on is decided by the measured placement policy of
+:mod:`vmex.core.device` — see :ref:`architecture:Device policy (CPU/GPU)`.
 
 Multigrid and hot restart (``runvmec.f``, ``interp.f``)
 -------------------------------------------------------
@@ -252,12 +268,23 @@ interpolated in :math:`\sqrt{s}`-internal form to the next finer grid
 the scaled array, interpolate linearly in :math:`s`, unscale, and zero the
 odd-m axis row (:func:`~vmex.core.multigrid.interpolate_coefficients` /
 :func:`~vmex.core.multigrid.interpolate_state`; the equations are in
-:doc:`equations`). Mode and radial arrays are padded to the maximum
-resolution so all stages share one compiled executable — the ladder pays a
-single JIT compile. The same interpolation seam provides hot restart
+:doc:`equations`). Each distinct stage structure may compile once; repeated
+ladders with the same structures reuse those executables. A single
+maximum-resolution masked executable is future work, not current behavior.
+The same interpolation seam provides hot restart
 (:func:`vmex.core.solver.hot_restart_state`): a previous solution (e.g.
 the previous point of a parameter scan) can seed the solve directly, at the
 same or a different radial resolution.
+
+The transfer includes VMEC2000's non-geometric module state.  In particular,
+``initialize_radial.f`` resets ``fsq``, ``iter1``, ``iter2``, ``ijacob``,
+and the time-step controller, but it does **not** reset
+``fsqr/fsqz/fsql``.  VMEX therefore passes the previous stage's three
+invariant residuals into the first force evaluation on the next grid.  This
+matters in free boundary: ``residue.f90`` uses the retained
+``fsqr + fsqz`` to decide whether the carried edge-force row belongs in the
+first fine-grid norm.  Axis re-guess transfers and bounded JAC75 retries
+retain the same residual state instead of silently becoming cold starts.
 
 Free boundary (NESTOR)
 ----------------------
@@ -311,7 +338,9 @@ with the VMEC2000 cadence (``funct3d.f``):
 
 - the vacuum solve activates once :math:`\mathrm{fsqr}+\mathrm{fsqz} \le 10^{-3}`;
 - a **full** NESTOR solve runs when ``mod(iter2 - iter1, nvacskip) == 0``,
-  with cheaper incremental updates in between, and the cadence adapts as
+  factoring the dense potential matrix once; cheaper incremental updates
+  reuse that LU factor (VMEC2000's ``DGETRF``/``DGETRS`` split) while only
+  rebuilding the analytic right-hand side, and the cadence adapts as
 
   .. math::
 
@@ -319,15 +348,50 @@ with the VMEC2000 cadence (``funct3d.f``):
      \frac{1}{\max(0.1,\; 10^{11}\,(\mathrm{fsqr}+\mathrm{fsqz}))}\right);
 
 - the vacuum pressure enters the edge force through
-  ``rbsq = bsqvac + presf(ns)`` at ``js = ns``, and the constraint reference
-  surfaces ``rcon0, zcon0`` ramp by 0.9 per iteration.
+  ``rbsq = (bsqvac + presf_ns) * R(edge) / hs`` at ``js = ns``, and the
+  constraint reference surfaces ``rcon0, zcon0`` ramp by 0.9 per iteration.
 
-The external field comes either from an ``mgrid`` file
-(:mod:`vmex.core.mgrid`, trilinear interpolation weighted by ``EXTCUR``)
-or from any ``xyz -> B`` callable — e.g. an ESSOS ``essos.coils.Coils``
-Biot-Savart field (``lambda pts: coils.B(pts)``), interpolation-free and
-differentiable through the coil parameters. vmex itself carries no coil
-code; coils live in ESSOS.
+:func:`vmex.core.multigrid.solve_free_boundary_multigrid` implements
+``runvmec.f``'s radial ladder.  Increasing grids interpolate ``xstore`` using
+the same odd-m :math:`\sqrt{s}` scaling as fixed boundary; equal grids rerun
+the current state and the ladder stops at the first decreasing entry.
+``ivac``, adaptive ``nvacskip``, the exact ``rbsq`` edge product, and the
+three invariant residual channels are carried.  Because the free-boundary
+block is guarded by ``iter2 > 1``, a new stage uses that carried edge product
+on iteration 1 and performs its first full update on iteration 2.  The
+resolution-specific NESTOR basis, Green-function program, axis-current
+filament program, cached potential matrix, and traced cadence loop are selected
+or rebuilt for the new stage.  Vacuum activates only once across the ladder.
+
+The forward NESTOR solver consumes a :class:`~vmex.core.mgrid.MgridField`.
+It may be loaded from an ``mgrid`` file (trilinear interpolation weighted by
+``EXTCUR``) or built once with
+:meth:`~vmex.core.mgrid.MgridField.from_cartesian_field`, which tabulates an
+ESSOS/SIMSOPT Biot--Savart object or any ``xyz -> B`` callable.  The resulting
+table and its current scale remain JAX-differentiable; tabulation itself does
+not retain coil-geometry derivatives. Direct, interpolation-free ESSOS coil
+derivatives use the virtual-casing residual below. vmex carries no coil code.
+
+On a GPU free-boundary run, the plasma iteration, mgrid interpolation, cached
+vacuum arrays, and final state remain on the accelerator. The dense NESTOR
+assembly/factor/solve is explicitly placed on CPU and its small boundary
+inputs/outputs are bridged inside the jitted cadence loop. This follows the
+VMEC++ accelerator decomposition and avoids the alternate LASYM branch seen
+with accelerator dense linear algebra. An explicitly requested GPU LASYM
+multigrid ladder therefore seeds only its coarsest rung on CPU, then transfers
+the converged branch to all finer GPU rungs.
+
+:class:`vmex.core.freeboundary_linear.NestorBorderedOperator` represents its
+linearization as ``[[A, B], [C, D]]`` with matrix-free plasma, vacuum, and
+edge-coupling actions. :func:`~vmex.core.freeboundary_linear.linearize_nestor_coupling`
+builds those four actions directly from a live plasma residual and NESTOR's
+unsolved ``A(x) q - b(x)`` equation; :class:`~vmex.core.vacuum.VacuumSolver`
+exposes that equation through ``assemble`` without nesting a potential solve.
+The operator supplies the exact generated transpose, the Schur action
+:math:`D-C A^{-1}B`, and a block inverse. The live LASYM NESTOR blocks are
+tested against the complete coupled JVP/VJP. The host-driven cadence above is
+not yet replaced by a coupled Newton solve, so this foundation is not yet a
+public implicit free-boundary adjoint.
 
 Differentiable free boundary (virtual casing)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -350,7 +414,9 @@ the field produced outside :math:`\partial\Omega` by the plasma currents
 equals that of the surface current
 :math:`\mathbf{K} = \mathbf{n}\times\mathbf{B}/\mu_0` on
 :math:`\partial\Omega`, evaluated with an accurate on-surface singular
-quadrature (reused from ``virtual_casing_jax``;
+quadrature (reused from the optional ``virtual_casing_jax`` package,
+released as ``virtual-casing-jax >= 0.0.3`` from the canonical
+``uwplasma/virtual_casing_jax`` repository;
 :func:`~vmex.core.freeboundary_diff.surface_field_data_from_wout`
 adapts a converged boundary + field, and
 :func:`~vmex.core.freeboundary_diff.plasma_field_on_boundary` evaluates
@@ -480,9 +546,11 @@ Forward-mode Jacobians for least squares (block-tridiagonal)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The adjoint above is the right tool for *one* scalar objective and many
-parameters. A least-squares optimizer needs the opposite object — the full
-residual Jacobian over all boundary dofs — which is computed in **forward**
-mode: per dof tangent :math:`t_j`, the state response is
+parameters. ``jac_solver="auto"`` therefore uses that reverse path for a
+scalar least-squares residual: one matrix-free solve, with no dense angular
+block assembly. Vector residuals need the full Jacobian over all boundary
+dofs, which the automatic policy computes in **forward** mode. Per dof
+tangent :math:`t_j`, the state response is
 
 .. math::
 
@@ -490,7 +558,7 @@ mode: per dof tangent :math:`t_j`, the state response is
           \frac{\partial F}{\partial p}\, t_j ,
 
 one linear solve per dof. Rather than running an independent GMRES per
-column, the default path (``jac_solver="block"``) exploits a structural
+column, the vector-residual path (``jac_solver="block"``) exploits a structural
 fact: in the **raw** force formulation the radial coupling of
 :math:`\partial F/\partial z` is exactly nearest-neighbor (the
 finite-difference stencil in :math:`s`), so the operator is *exactly*
@@ -506,3 +574,10 @@ Jacobian phase of the benchmark optimization step (see
 :doc:`optimization`). The same per-dof responses :math:`dz_j` double as a
 first-order perturbation warm start for the optimizer's next trial solves —
 the DESC-style ``eq.perturb`` pattern — making the linearization pay twice.
+
+A separate width-three nonlinear kernel reproduces the full raw residual on
+axis, interior, edge, symmetric, and LASYM rows. A measured attempt to stream
+its generated rows directly into the SOLVAX factor was rejected: sequential
+rows exceeded 10.6 minutes on the ``ns=201`` HSX gate, while eight-row batches
+exceeded 5.1 GiB and 6.7 minutes before completion. The proven three-color
+assembler therefore remains in production; see :doc:`performance`.

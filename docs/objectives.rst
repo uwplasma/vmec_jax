@@ -42,8 +42,9 @@ gradient modes).  Terms that evaluate wout tables on host NumPy
 (:func:`~vmex.core.optimize.d_merc`,
 :func:`~vmex.core.optimize.l_grad_b`, the wout-lane QI residual, the
 eigenvector-weighted turbulence proxies) work with ``jac=None`` only —
-for ``L_grad_B`` the traceable lane
-:func:`~vmex.core.optimize.l_grad_b_state` covers ``jac="implicit"``.
+use :func:`~vmex.core.optimize.mercier_stability_residual` for Mercier and
+:func:`~vmex.core.optimize.l_grad_b_state` for ``L_grad_B`` with
+``jac="implicit"``.
 
 .. code-block:: python
 
@@ -105,13 +106,48 @@ and composable with both gradient modes:
 - :func:`~vmex.core.optimize.mirror_ratio` — ``(Bmax - Bmin)/(Bmax +
   Bmin)`` on a flux surface, the practical QI knob;
 - :func:`~vmex.core.optimize.magnetic_well` — the standard vacuum-well
-  measure (negative = well, stabilizing).
+  measure (positive = well, stabilizing).
 
-Two host-side diagnostics complete the set — they run on the wout engine
-(exact VMEC2000 ``mercier.f``/``jxbforce`` tables) and therefore need
-``jac=None``: :func:`~vmex.core.optimize.d_merc` (Mercier interchange
-criterion) and :func:`~vmex.core.optimize.l_grad_b` (the ``L_grad_B``
-coil-complexity proxy).
+Two reporting diagnostics run on the host-side wout engine:
+:func:`~vmex.core.optimize.d_merc` (Mercier interchange criterion) and
+:func:`~vmex.core.optimize.l_grad_b` (the ``L_grad_B`` coil-complexity proxy).
+Their live-state counterparts :func:`~vmex.core.stability.d_merc_state`
+(``lasym = False``), :func:`~vmex.core.stability.jdotb_state`,
+:func:`~vmex.core.stability.jdotb_residual`,
+:func:`~vmex.core.stability.glasser_d_r_state`, and
+:func:`~vmex.core.optimize.l_grad_b_state` are pure JAX and can be composed
+with implicit differentiation.  ``jdotb_state`` reproduces the VMEC
+``jdotb = <J.B>`` WOUT profile; ``jdotb_residual`` selects ``[2:-1]`` for a
+least-squares current target.  ``glasser_d_r_state`` evaluates the
+Glasser--Greene--Johnson resistive-interchange parameter, for which
+``D_R <= 0`` is the necessary stability condition on nonzero-shear surfaces
+provided the ideal prerequisite ``DMerc > 0`` also holds.
+The convenience
+:func:`~vmex.core.optimize.mercier_stability_residual` selects
+``DMerc[2:-1]`` and returns
+``smoothing * softplus((margin - DMerc) / smoothing)``.  Positive ``DMerc``
+is stable, so target this residual to zero; the default ``margin=0`` and
+``smoothing=1e-6`` give a smooth approximation to the instability hinge
+``max(-DMerc, 0)``.  Softplus is strictly positive at finite arguments, so a
+stable surface approaches rather than reaches zero; its residual decreases
+exponentially as ``DMerc - margin`` grows.
+
+.. code-block:: python
+
+   terms = [(opt.mercier_stability_residual, 0.0, 100.0)]
+   result = opt.least_squares(terms, inp, max_mode=3, jac="implicit")
+
+The analogous :func:`~vmex.core.optimize.glasser_stability_residual`
+penalizes positive ``D_R[2:-1]``.  Exact zero-shear surfaces are physically
+outside the GGJ criterion; the residual uses ``shear_epsilon=1e-8`` by
+default so zero-shear seeds have finite optimization rows.  The reporting
+profile keeps the strict zero default. Always include
+:func:`~vmex.core.optimize.mercier_stability_residual` in the same objective
+so ``DMerc > 0`` is enforced rather than treating ``D_R`` as a standalone
+criterion. Then post-check
+:func:`~vmex.core.optimize.mercier_shear_state` and require
+``abs(S) >> shear_epsilon`` on every target surface; a regularized zero-shear
+result is numerically defined but not a valid GGJ stability claim.
 
 ``L_grad_B`` additionally has a fully traceable ``(state, runtime)`` lane,
 :func:`~vmex.core.optimize.l_grad_b_state` — same convention
@@ -246,21 +282,23 @@ differences to 4.7e-9 in CI, and the objective destabilizes monotonically
 with pressure on the solovev family, in sign agreement with Mercier.  For
 interchange stability, combine with
 :func:`~vmex.core.optimize.magnetic_well` (traceable) or
-:func:`~vmex.core.optimize.d_merc` (wout lane, ``jac=None``).
+:func:`~vmex.core.optimize.mercier_stability_residual` (traceable); retain
+:func:`~vmex.core.optimize.d_merc` for wout-lane reporting or ``jac=None``.
 
-Turbulence proxies (SPECTRAX-GK)
---------------------------------
+Turbulence proxies (GKX)
+------------------------
 
 :mod:`vmex.core.turbulence` wires the gyrokinetic proxies of
-`SPECTRAX-GK <https://github.com/uwplasma/spectrax-gk>`_ (uwplasma's
-JAX-native Hermite–Laguerre flux-tube solver; ``pip install spectraxgk``,
-optional dependency) into the objective protocol (plan R26h.h4):
+`GKX <https://github.com/uwplasma/GKX>`_ (uwplasma's
+JAX-native Hermite–Laguerre flux-tube solver, formerly SPECTRAX-GK;
+``pip install gkx``, optional dependency) into the objective protocol
+(plan R26h.h4):
 
 - :func:`~vmex.core.turbulence.gk_fieldline_geometry` /
   :func:`~vmex.core.turbulence.flux_tube_geometry` — sample one field
   line of the converged interior solution into GS2/GX-normalized flux-tube
   geometry (``bmag``, ``gds2/gds21/gds22``, curvature/grad-B drifts, …),
-  pure JAX, no spectraxgk import needed;
+  pure JAX, no gkx import needed;
 - :func:`~vmex.core.turbulence.turbulent_growth_rate` — the dominant
   linear ITG/TEM growth rate on that flux tube.  Fully differentiable in
   *both* gradient modes (validated 0.44 ``v_th/L`` at the Cyclone-base
@@ -319,6 +357,21 @@ Which objectives differentiate how
      - yes
      - yes
      - traceable ``L_grad_B`` lane (soft-min via ``softmin_k``)
+   * - :func:`~vmex.core.optimize.d_merc_state`,
+       :func:`~vmex.core.optimize.mercier_stability_residual`
+     - yes
+     - yes
+     - traceable Mercier profile / smooth interior instability hinge
+       (stellarator-symmetric states only)
+   * - :func:`~vmex.core.optimize.jdotb_state`,
+       :func:`~vmex.core.optimize.jdotb_residual`,
+       :func:`~vmex.core.optimize.mercier_shear_state`,
+       :func:`~vmex.core.optimize.glasser_d_r_state`,
+       :func:`~vmex.core.optimize.glasser_stability_residual`
+     - yes
+     - yes
+     - traceable VMEC ``<J.B>`` and GGJ resistive-interchange profile /
+       smooth upper-bound residual (stellarator-symmetric states only)
    * - :func:`~vmex.core.optimize.d_merc`,
        :func:`~vmex.core.optimize.l_grad_b`
      - yes
@@ -336,9 +389,13 @@ Which objectives differentiate how
      - no
      - eigenvector weights have no nonsymmetric-eig derivative
 
-``jac="implicit"`` additionally requires a fixed-boundary,
-stellarator-symmetric problem (``LASYM = F``); see :doc:`optimization` for
-the gradient machinery itself and the measured cost of each piece.
+``jac="implicit"`` requires a fixed-boundary problem. Its boundary parameter
+map supports both symmetric and ``LASYM = T`` equilibria, but individual
+objectives can be symmetry-limited; in particular the traceable Mercier and
+Glasser objectives and quasisymmetry currently require ``LASYM = F``.
+The traceable ``jdotb`` objective supports both symmetry modes. See
+:doc:`optimization` for the gradient machinery and measured cost of each
+piece.
 
 Writing your own objective
 --------------------------

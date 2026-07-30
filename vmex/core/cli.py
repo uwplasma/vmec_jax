@@ -6,42 +6,42 @@ VMEC2000 counterpart: the ``xvmec2000`` executable driver
 ``wout_<case>.nc`` file, and print the ``fileout.f`` termination summary.
 
 The solve path is the clean-room core end to end:
-:class:`vmex.core.input.VmecInput` (INDATA or VMEC++-style JSON) ->
-:func:`vmex.core.multigrid.solve_multigrid` ->
+:class:`vmex.core.input.VmecInput` (INDATA or structured JSON) ->
+:func:`vmex.core.multigrid.solve_multigrid` (fixed boundary) or
+:func:`vmex.core.multigrid.solve_free_boundary_multigrid` (free boundary) ->
 :func:`vmex.core.wout.wout_from_state` -> :func:`vmex.core.wout.write_wout`,
 plus the core plotting (``--plot``) and Boozer (``--booz``) drivers.
 
-Zero-crash policy (§2.5): every failure maps to a typed
+Zero-crash policy: every failure maps to a typed
 :class:`vmex.core.errors.VmecError`; the CLI prints the VMEC2000
 ``werror`` message plus a one-line hint and exits with the matching
 ``ier_flag`` code.
 
 Free-boundary routing (``LFREEB = T``):
 
-- a readable mgrid file goes to
-  :func:`vmex.core.freeboundary.solve_free_boundary` with the VMEC2000
+- a readable mgrid file goes to the full free-boundary ``NS_ARRAY`` ladder
+  with the VMEC2000
   console output (``In VACUUM`` block, ``VACUUM PRESSURE TURNED ON`` banner)
   and free-boundary wout metadata (``nextcur``/``extcur``/``curlabel``/
   ``mgrid_mode``);
 - a missing mgrid file falls back to a fixed-boundary solve with a warning
-  (VMEC2000 behavior, dropped by VMEC++);
+  (retained VMEC2000 behavior);
 - ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
-  field from an ESSOS coils file (``essos.coils.Coils``): the coils are tabulated
-  into an in-memory mgrid (``Coils.to_mgrid``) and read back as an
-  :class:`vmex.core.mgrid.MgridField`
+  field from an ESSOS coils file (``essos.coils.Coils``): the Biot-Savart field
+  is tabulated directly into an in-memory
+  :class:`vmex.core.mgrid.MgridField` via ``MgridField.from_cartesian_field``
   (``solve_free_boundary(inp, external_field=mgrid_field)``); requires ESSOS.
 
-Documented divergences of the free-boundary lane:
+Both symmetric and LASYM NESTOR potential and surface-field arrays are
+exported to wout.
 
-- :func:`~vmex.core.freeboundary.solve_free_boundary` is single-grid
-  with no warm-start seam, so only the *final* ``NS_ARRAY`` stage is run
-  (from the standard interior guess); VMEC2000 runs the whole ladder with
-  vacuum re-activating per stage.  Multi-stage decks print a note.
-- The NESTOR vacuum potential is not returned by the solver, so the wout
-  ``potsin``/``xmpot``/``xnpot`` and ``*_sur`` variables are written as
-  netCDF fill (see :func:`vmex.core.wout.wout_from_state`).
-- An NITER-exhausted free-boundary run still writes the wout (VMEC2000
-  behavior) and exits with ``ier_flag = 2`` (MORE ITERATIONS REQUIRED).
+Iteration-budget exhaustion (``ier_flag = 2``): the CLI keeps the final
+state, writes the WOUT, and prints the full equilibrium summary +
+``MORE ITERATIONS REQUIRED`` termination block — the VMEC2000 ``fileout.f``
+behavior, where a mere NITER exhaustion of the final grid still terminates
+normally through the output path.  The exit code remains the distinct
+``ier_flag = 2``.  Fatal numerical/Jacobian errors never produce a WOUT
+and exit with their own ``ier_flag`` codes.
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="vmex",
         description=(
             "vmex equilibrium solver (fixed- and free-boundary core).\n\n"
-            "  vmex input.X           — solve (INDATA or VMEC++ JSON), write wout_X.nc\n"
+            "  vmex input.X           — solve (INDATA or structured JSON), write wout_X.nc\n"
             "  vmex --plot wout_*.nc  — diagnostic plots from a WOUT file\n"
             "  vmex --plot mout_*.nc  — straight-axis mirror diagnostics\n"
             "  vmex --booz wout_*.nc  — run booz_xform_jax, write boozmn_*.nc\n"
@@ -191,8 +191,37 @@ def build_parser() -> argparse.ArgumentParser:
             "printing, exact-ftol exit) or 'jit' (single lax.while_loop)."
         ),
     )
+    p.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=("auto", "none", "cpu", "gpu", "cuda", "rocm", "tpu"),
+        help=(
+            "JAX solve placement: automatic VMEX policy (default), 'none' to "
+            "follow JAX, or an explicit platform."
+        ),
+    )
     p.add_argument("--ftol", type=float, default=None, help="Override the final-stage FTOL_ARRAY tolerance.")
     p.add_argument("--max-iter", type=int, default=None, help="Override the final-stage NITER_ARRAY iteration cap.")
+    p.add_argument(
+        "--no-prefetch-compile",
+        dest="prefetch_compile",
+        action="store_false",
+        default=True,
+        help=(
+            "Compile solver lanes sequentially to lower peak memory; the "
+            "default overlaps compilation for lower cold-start latency."
+        ),
+    )
+    p.add_argument(
+        "--jacobian-retries",
+        type=int,
+        default=2,
+        help=(
+            "Best-checkpoint retries after 75 Jacobian resets (default: 2; "
+            "0 preserves the VMEC2000 fatal-stop policy)."
+        ),
+    )
     p.add_argument(
         "--coils",
         metavar="PATH",
@@ -245,7 +274,7 @@ def _parse_booz_surfaces(text: str | None):
 # ---------------------------------------------------------------------------
 
 
-def _preamble(case: str) -> str:
+def _preamble(case: str, *, time_slice: float = 0.0) -> str:
     """Run header block (vmec.f banner, structural match to xvmec2000)."""
     import platform
 
@@ -254,7 +283,7 @@ def _preamble(case: str) -> str:
     clock = time.strftime("%H:%M:%S", now)
     return (
         " - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\n"
-        "  SEQ =    1 TIME SLICE  0.0000E+00\n"
+        f"  SEQ =    1 TIME SLICE {float(time_slice):11.4E}\n"
         f"  PROCESSING INPUT.{case}\n"
         f"  THIS IS VMEX, VERSION {_package_version()}\n"
         "  Lambda: Full Radial Mesh. L-Force: hybrid full/half.\n"
@@ -265,7 +294,23 @@ def _preamble(case: str) -> str:
 
 
 def _threed1_summary(wout) -> str:
-    """Compact threed1-style equilibrium summary from the WoutData."""
+    """Compact threed1-style equilibrium summary from the WoutData.
+
+    The iota/|B| lines report wout quantities directly: the ``iotaf``
+    full-mesh endpoints, ``b0`` (eqfor.f: ``rbtor0 / R_axis(v=0)``, the
+    toroidal field at the v=0 axis point), and the ``(m=0, n=0)`` mode of
+    ``bmnc`` on the outermost HALF-mesh surface (the angular average of
+    |B| there — the closest edge-|B| scalar the wout carries).
+
+    Quantities that can be legitimately tiny — iota (near-axisymmetric
+    decks have |iota| ~ 1e-10), beta, and the MHD energy — print in
+    E-notation; fixed-point %f would render them as ``-0.000000``.  The
+    |B|, radius, and volume lines are O(1)-positive and stay fixed-point.
+    """
+    import numpy as np
+
+    iotaf = np.asarray(wout.iotaf, dtype=float).ravel()
+    bmnc = np.asarray(wout.bmnc, dtype=float)
     lines = [
         "",
         f" Aspect Ratio          = {float(wout.aspect):14.6f}",
@@ -273,6 +318,10 @@ def _threed1_summary(wout) -> str:
         f" Major Radius          = {float(wout.Rmajor_p):14.6f} [M]",
         f" Minor Radius          = {float(wout.Aminor_p):14.6f} [M]",
         f" Volume Average B      = {float(wout.volavgB):14.6f} [T]",
+        f" Iota on Axis          = {float(iotaf[0]):14.6E}",
+        f" Iota at Edge          = {float(iotaf[-1]):14.6E}",
+        f" |B| on Axis (b0)      = {float(wout.b0):14.6f} [T]",
+        f" <|B|> at Edge (half)  = {float(bmnc[-1, 0]):14.6f} [T]",
         f" beta total            = {float(wout.betatotal):14.6E}",
         f" MHD Energy (wb + wp)  = {float(wout.wb) + float(wout.wp):14.6E}",
         "",
@@ -330,20 +379,16 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
                        nz: int = 96):  # pragma: no cover  (ESSOS-only; unavailable in CI)
     """:class:`~vmex.core.mgrid.MgridField` from an ESSOS coils file.
 
-    vmex keeps no coil code — coils live in ESSOS
-    (:class:`essos.coils.Coils`).  This loads the coils from the
-    ``essos.coils.Coils.to_json`` layout (``.json``, via
-    ``essos.coils.Coils.from_json``) or the same keys in an ``.npz`` archive
-    (``dofs_curves`` with shape ``(n_base_coils, 3, 2*order + 1)``,
-    ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``, optional
-    ``currents_scale``), tabulates the coil field onto a cylindrical grid
-    spanning the coil bounding box (:meth:`essos.coils.Coils.to_mgrid`), and
-    reads it back with vmex's own :func:`~vmex.core.mgrid.read_mgrid` —
-    yielding the very same :class:`~vmex.core.mgrid.MgridField` the mgrid-file
-    lane produces.  Requires ESSOS (``pip install essos``).
+    vmex keeps no coil code — coils live in ESSOS (:class:`essos.coils.Coils`).
+    Accepts the ``Coils.to_json`` layout (``.json``) or the same keys in an
+    ``.npz`` archive (``dofs_curves`` of shape ``(n_base_coils, 3,
+    2*order + 1)``, ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``,
+    optional ``currents_scale``).  Builds a cylindrical grid spanning the coil
+    bounding box and tabulates the Biot-Savart field into an in-memory
+    :class:`~vmex.core.mgrid.MgridField` — the same field type the mgrid-file
+    lane produces, with no temporary file.  Requires ESSOS
+    (``pip install essos``).
     """
-    import tempfile
-
     import numpy as np
 
     try:
@@ -354,7 +399,7 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
             hint="--coils requires essos (pip install essos)",
         ) from exc
 
-    from .mgrid import MgridField, read_mgrid
+    from .mgrid import MgridField
 
     try:
         if path.suffix.lower() == ".npz":
@@ -393,20 +438,21 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
     rmin, rmax = max(1.0e-2, float(r.min()) - rpad), float(r.max()) + rpad
     zmin, zmax = float(z.min()) - zpad, float(z.max()) + zpad
 
-    if not hasattr(coils, "to_mgrid"):
-        raise VmecInputError(
-            WERROR_MESSAGES[INPUT_ERROR_FLAG],
-            hint=(
-                "--coils needs an ESSOS build providing Coils.to_mgrid "
-                "(coils->mgrid export); update ESSOS (pip install -U essos)"
-            ),
-        )
+    # Tabulate the Biot-Savart field directly into an in-memory MgridField
+    # via ``fields.BiotSavart`` (present in every released ESSOS); do not
+    # switch to a ``Coils.to_mgrid`` export — ESSOS main does not provide one.
+    from essos.fields import BiotSavart
 
-    with tempfile.TemporaryDirectory() as tmp:
-        mgrid_path = Path(tmp) / "essos_coils_mgrid.nc"
-        coils.to_mgrid(str(mgrid_path), nr=int(nr), nphi=int(nphi), nz=int(nz),
-                       rmin=rmin, rmax=rmax, zmin=zmin, zmax=zmax)
-        return MgridField.from_mgrid_data(read_mgrid(mgrid_path))
+    bs = BiotSavart(coils)
+
+    def cartesian_field(points):
+        return bs.B(points)
+
+    return MgridField.from_cartesian_field(
+        cartesian_field, rmin=rmin, rmax=rmax, zmin=zmin, zmax=zmax,
+        ir=int(nr), jz=int(nz), kp=int(nphi), nfp=int(coils.nfp),
+        label="essos_coils",
+    )
 
 
 def _free_boundary_plan(args, inp, input_path: Path, *, emit):
@@ -439,8 +485,8 @@ def _free_boundary_plan(args, inp, input_path: Path, *, emit):
                 hint=(
                     "MGRID_FILE = 'DIRECT_COILS' needs --coils <essos_coils"
                     ".json|.npz>, or use the Python API: solve_free_boundary("
-                    "inp, external_field=MgridField.from_mgrid_data(...)) with a "
-                    "field tabulated from ESSOS coils (essos.coils.Coils.to_mgrid)"
+                    "inp, external_field=MgridField.from_cartesian_field(...)) "
+                    "with a field built from ESSOS coils (essos.fields.BiotSavart)"
                 ),
             )
         coils_path = Path(coils_arg).expanduser().resolve()
@@ -475,24 +521,6 @@ def _free_boundary_plan(args, inp, input_path: Path, *, emit):
         nextcur=int(data.nextcur), extcur=extcur,
         mgrid_mode=str(data.mgrid_mode), curlabel=tuple(data.coil_groups),
     )
-
-
-def _final_stage_params(inp, args) -> tuple[int, float, int]:
-    """Final ``NS_ARRAY`` stage ``(ns, ftol, niter)`` incl. CLI overrides."""
-    import numpy as np
-
-    ns_arr = np.atleast_1d(np.asarray(inp.ns_array, dtype=np.int64)).ravel()
-    positive = ns_arr[ns_arr > 0]
-    ns = int(positive.max()) if positive.size else int(ns_arr[0])
-    ftol = (
-        float(args.ftol) if args.ftol is not None
-        else float(np.atleast_1d(np.asarray(inp.ftol_array, dtype=float)).ravel()[-1])
-    )
-    niter = (
-        int(args.max_iter) if args.max_iter is not None
-        else int(np.atleast_1d(np.asarray(inp.niter_array)).ravel()[-1])
-    )
-    return ns, ftol, niter
 
 
 def _stage_overrides(inp, *, ftol: float | None, max_iter: int | None):
@@ -543,6 +571,7 @@ def _write_wout_from_result(inp, input_path: Path, result, wout_path: Path,
         niter=int(result.iterations),
         converged=bool(result.converged),
         input_extension=case_from_input(input_path),
+        vacuum_output=result.vacuum,
         **freeb_kwargs,
     )
     write_wout(wout_path, wout)
@@ -551,8 +580,6 @@ def _write_wout_from_result(inp, input_path: Path, result, wout_path: Path,
 
 def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> int:
     """Full solve pipeline for one input deck (fixed- or free-boundary)."""
-    import numpy as np
-
     case = case_from_input(input_path)
     verbose = not bool(args.quiet)
 
@@ -561,31 +588,39 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
     read_s = time.perf_counter() - t0
 
     if verbose:
-        emit(_preamble(case))
+        # end="": the preamble already ends with a newline, and the stage
+        # banner opens with one — the default print newline would stack a
+        # second consecutive blank line after the COMPUTER line.
+        emit(_preamble(case, time_slice=float(getattr(inp, "time_slice", 0.0))), end="")
     freeb_plan = _free_boundary_plan(args, inp, input_path, emit=emit)
+    # VMEC2000 turns off LFREEB when the requested mgrid cannot be opened.
+    # Use that effective mode in setup and WOUT metadata, not merely in CLI
+    # routing; otherwise a fixed-boundary fallback is mislabeled free-boundary.
+    effective_inp = inp
+    if bool(getattr(inp, "lfreeb", False)) and freeb_plan is None:
+        import dataclasses
+
+        effective_inp = dataclasses.replace(inp, lfreeb=False)
 
     t1 = time.perf_counter()
     if freeb_plan is not None:
-        from .freeboundary import solve_free_boundary
-        from .solver import resolution_from_input
+        from .multigrid import solve_free_boundary_multigrid
 
-        ns, ftol, niter = _final_stage_params(inp, args)
-        n_stages = np.atleast_1d(np.asarray(inp.ns_array, dtype=np.int64))
-        if verbose and int(np.count_nonzero(n_stages > 0)) > 1:
-            emit(
-                " NOTE: free-boundary solves are single-grid; running only the "
-                f"final NS_ARRAY stage (NS = {ns})."
-            )
-        # NITER-exhausted runs return (not raise) so the wout is still
-        # written (VMEC2000 behavior); the exit code carries ier_flag = 2.
-        result = solve_free_boundary(
-            inp,
-            resolution=resolution_from_input(inp, ns=ns),
-            ftol=ftol,
-            max_iterations=niter,
+        ftol_array, niter_array = _stage_overrides(
+            inp, ftol=args.ftol, max_iter=args.max_iter)
+        result = solve_free_boundary_multigrid(
+            inp, ftol_array=ftol_array, niter_array=niter_array,
             verbose=verbose,
             emit=emit,
-            error_on_no_convergence=False,
+            # vmec.f only forces an NITER-exhausted state through fileout
+            # when LFULL3D1OUT=T.  Otherwise the typed ier_flag=2 error
+            # returns before the WOUT path.
+            raise_on_max_iterations=not bool(inp.lfull3d1out),
+            device=None if args.device == "none" else args.device,
+            release_stage_cache=True,
+            # Cold-run overlap is a CLI concern (library default False).
+            prefetch_compile=bool(args.prefetch_compile),
+            jacobian_retries=int(args.jacobian_retries),
             **freeb_plan.solver_kwargs,
         )
     else:
@@ -593,19 +628,28 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
 
         ftol_array, niter_array = _stage_overrides(inp, ftol=args.ftol, max_iter=args.max_iter)
         result = solve_multigrid(
-            inp,
+            effective_inp,
             ftol_array=ftol_array,
             niter_array=niter_array,
             mode=str(args.mode),
             verbose=verbose,
             emit=emit,
+            # vmec.f/fileout.f semantics — see the free-boundary call above.
+            raise_on_max_iterations=not bool(effective_inp.lfull3d1out),
+            device=None if args.device == "none" else args.device,
+            release_stage_cache=True,
+            # Cold-run overlap is a CLI concern: the library default is
+            # False so embedding programs and test farms never gain
+            # background compile threads implicitly.
+            prefetch_compile=bool(args.prefetch_compile),
+            jacobian_retries=int(args.jacobian_retries),
         )
     solve_s = time.perf_counter() - t1
 
     wout_path = resolve_wout_path(input_path=input_path, outdir=outdir)
     wout_path.parent.mkdir(parents=True, exist_ok=True)
     t2 = time.perf_counter()
-    wout = _write_wout_from_result(inp, input_path, result, wout_path,
+    wout = _write_wout_from_result(effective_inp, input_path, result, wout_path,
                                    freeb_plan=freeb_plan)
     wout_s = time.perf_counter() - t2
 
@@ -622,6 +666,8 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
         )
         emit(_timing_block(read_s, solve_s, wout_s), end="")
         emit(f"\n Wrote WOUT file: {wout_path}")
+        if not bool(result.converged):
+            emit("\n HINT : increase NITER or loosen FTOL")
 
     plot_dir = outdir if outdir is not None else input_path.parent
     if args.plot is not None:
@@ -631,7 +677,7 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             wout_path, args, plot_dir,
             plot=args.plot is not None, emit=emit, quiet=bool(args.quiet),
         )
-    if not bool(result.converged):  # free-boundary NITER exhaustion (wout kept)
+    if not bool(result.converged):  # NITER exhaustion: wout kept, distinct code
         return int(result.ier_flag) or 1
     return 0
 
@@ -829,7 +875,18 @@ def _dispatch(args, parser: argparse.ArgumentParser, *, emit) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the ``vmec`` command-line entry point (zero-crash)."""
+    """Run the ``vmec`` command-line entry point (zero-crash).
+
+    Cold-run compile scheduling: the first-ever run of a configuration is
+    served by the multigrid compile prefetch (rung k+1's executable is
+    built on a background thread while rung k iterates — see
+    :func:`vmex.core.multigrid.solve_multigrid`).  SECONDARY to that, the
+    persistent XLA compilation cache — enabled package-wide on import in
+    the machine-fingerprinted ``~/.cache/vmex/jax_cache/<fingerprint>``
+    directory (``vmex._compat``, knobs ``VMEX_COMPILATION_CACHE*`` /
+    ``JAX_COMPILATION_CACHE_DIR``) — makes repeat processes of the same
+    configuration skip compilation entirely.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     emit = print

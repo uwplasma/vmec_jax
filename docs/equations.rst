@@ -580,7 +580,11 @@ VMEC’s ``TimeStepControl`` tracks the minimum of the preconditioned residual
 (``res0``) and the physical residual (``res1``). If either grows by a factor of
 ``1e4`` after 10 steps, VMEC restores the last good state and reduces
 ``DELT`` by a factor of 1.03. ``vmex`` mirrors this logic to reproduce the
-VMEC2000 iteration trace.
+VMEC2000 iteration trace.  If that trace reaches VMEC2000's fatal limit of 75
+Jacobian resets, VMEX may perform the documented driver-level best-checkpoint
+retry with a reduced initial ``DELT``.  This is a solver globalization
+extension, not a change to the equilibrium residual; it is disabled with
+``jacobian_retries=0``.
 
 Multigrid interpolation (``interp.f``)
 --------------------------------------

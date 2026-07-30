@@ -774,9 +774,11 @@ def test_solve_fixed_boundary_from_radius_convenience_converges() -> None:
         config,
         elements=4,
         axial_flux_derivative=0.1,
+        device="cpu",
     )
 
     assert result.evaluated.converged
+    assert result.evaluated.state.radius_scale.device.platform == "cpu"
     assert float(result.evaluated.variational.maximum) <= config.ftol
     np.testing.assert_allclose(result.evaluated.state.radius_scale, 0.3, atol=1.0e-11)
 

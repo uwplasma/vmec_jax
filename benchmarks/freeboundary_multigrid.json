@@ -1,0 +1,137 @@
+{
+  "schema": 2,
+  "case": "input.cth_like_free_bdy",
+  "input_data_embedded": false,
+  "provenance": {
+    "schema": 1,
+    "measurement_commit": "b0cc789e626e246356c744ce20cffefb08a16a4c",
+    "input_data_embedded": false,
+    "limitation": "Historical artifact: the benchmark script did not yet record the imported VMEX module, dirty-tree state, or VMEC2000 executable hash."
+  },
+  "ladder": {
+    "ns": [
+      7,
+      15
+    ],
+    "ftol": [
+      1e-08,
+      1e-10
+    ],
+    "niter": [
+      1000,
+      2500
+    ]
+  },
+  "environment": {
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "jax_backend": "cpu",
+    "jax_version": "0.11.0",
+    "x64": true
+  },
+  "vmec2000": {
+    "wall_s": 0.9156720000319183,
+    "converged": true,
+    "vacuum_turnons": 1,
+    "stages": [
+      {
+        "ns": 7,
+        "ftol": 1e-08,
+        "niter_cap": 1000,
+        "first_iteration": 1,
+        "first_fsqr": 0.208,
+        "first_fsqz": 0.0147,
+        "first_fsql": 0.0486,
+        "iterations": 239,
+        "fsqr": 9.56e-09,
+        "fsqz": 2.07e-09,
+        "fsql": 5.1e-09
+      },
+      {
+        "ns": 15,
+        "ftol": 1e-10,
+        "niter_cap": 2500,
+        "first_iteration": 1,
+        "first_fsqr": 1.73,
+        "first_fsqz": 0.887,
+        "first_fsql": 1.51e-05,
+        "iterations": 340,
+        "fsqr": 9.78e-11,
+        "fsqz": 2.3e-11,
+        "fsql": 2.51e-11
+      }
+    ]
+  },
+  "vmex_cold": {
+    "wall_s": 8.61459045810625,
+    "converged": true,
+    "vacuum_turnons": 1,
+    "stages": [
+      {
+        "ns": 7,
+        "ftol": 1e-08,
+        "niter_cap": 1000,
+        "first_iteration": 1,
+        "first_fsqr": 0.208,
+        "first_fsqz": 0.0147,
+        "first_fsql": 0.0486,
+        "iterations": 250,
+        "fsqr": 1e-08,
+        "fsqz": 2.43e-09,
+        "fsql": 5.09e-09
+      },
+      {
+        "ns": 15,
+        "ftol": 1e-10,
+        "niter_cap": 2500,
+        "first_iteration": 1,
+        "first_fsqr": 1.73,
+        "first_fsqz": 0.887,
+        "first_fsql": 1.53e-05,
+        "iterations": 340,
+        "fsqr": 9.69e-11,
+        "fsqz": 2.28e-11,
+        "fsql": 2.45e-11
+      }
+    ]
+  },
+  "vmex_warm": {
+    "wall_s": 1.1960331248119473,
+    "converged": true,
+    "vacuum_turnons": 1,
+    "stages": [
+      {
+        "ns": 7,
+        "ftol": 1e-08,
+        "niter_cap": 1000,
+        "first_iteration": 1,
+        "first_fsqr": 0.208,
+        "first_fsqz": 0.0147,
+        "first_fsql": 0.0486,
+        "iterations": 250,
+        "fsqr": 1e-08,
+        "fsqz": 2.43e-09,
+        "fsql": 5.09e-09
+      },
+      {
+        "ns": 15,
+        "ftol": 1e-10,
+        "niter_cap": 2500,
+        "first_iteration": 1,
+        "first_fsqr": 1.73,
+        "first_fsqz": 0.887,
+        "first_fsql": 1.53e-05,
+        "iterations": 340,
+        "fsqr": 9.69e-11,
+        "fsqz": 2.28e-11,
+        "fsql": 2.45e-11
+      }
+    ],
+    "peak_rss_mb": 3982.753792
+  },
+  "final_wout_parity": {
+    "rmnc_scale_relative_max": 6.079271399094438e-05,
+    "zmns_scale_relative_max": 0.00035877512680282587,
+    "iotaf_scale_relative_max": 1.994041086342155e-06,
+    "wb_relative": 6.065743061267379e-08
+  }
+}

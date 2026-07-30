@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Production-run profiling: compile/warm/per-iteration/memory per use case.
 
-Profiles the five production workflows end-to-end on the current JAX backend
-(run with ``JAX_PLATFORMS=cpu`` for the CPU profile; run on a GPU box without
-the override for the GPU profile):
+Profiles the five production workflows end-to-end on an explicitly selected
+JAX device, using VMEX's public ``device=`` API rather than platform
+environment variables:
 
 1. ``fixed_ns201``      — single-grid ns=201 fixed-boundary solve (li383)
 2. ``multigrid_ns201``  — coarse->fine ladder 51/101/201 (li383)
@@ -17,7 +17,7 @@ reports per-device peak bytes from ``jax.local_devices()[i].memory_stats()``.
 
 Usage::
 
-    python benchmarks/profile_production.py [--out profile.json] [--cases a,b]
+    python benchmarks/profile_production.py --device cpu [--out profile.json]
 
 Wall numbers on a shared machine are indicative; the compile/warm SPLIT and
 the per-iteration number are the actionable quantities.
@@ -66,49 +66,50 @@ def _timed(fn):
     return out, time.perf_counter() - t0
 
 
-def profile_fixed(ns: int = 201):
+def profile_fixed(device, ns: int = 201):
     inp = vj.VmecInput.from_file(DATA / "input.li383_low_res")
     inp = dataclasses.replace(inp, ns_array=[ns], ftol_array=[1e-11],
                               niter_array=[10000])
-    r, cold = _timed(lambda: vj.solve_multigrid(inp, verbose=False))
-    r2, warm = _timed(lambda: vj.solve_multigrid(inp, verbose=False))
+    r, cold = _timed(lambda: vj.solve_multigrid(inp, verbose=False, device=device))
+    r2, warm = _timed(lambda: vj.solve_multigrid(inp, verbose=False, device=device))
     iters = int(r2.iterations)
     return {"cold_s": cold, "warm_s": warm, "iters": iters,
             "ms_per_iter": 1e3 * warm / max(iters, 1),
             "converged": bool(r2.converged)}
 
 
-def profile_multigrid(ns: int = 201):
+def profile_multigrid(device, ns: int = 201):
     inp = vj.VmecInput.from_file(DATA / "input.li383_low_res")
     inp = dataclasses.replace(inp, ns_array=[51, 101, ns],
                               ftol_array=[1e-8, 1e-8, 1e-11],
                               niter_array=[4000, 4000, 10000])
-    r, cold = _timed(lambda: vj.solve_multigrid(inp, verbose=False))
-    r2, warm = _timed(lambda: vj.solve_multigrid(inp, verbose=False))
+    r, cold = _timed(lambda: vj.solve_multigrid(inp, verbose=False, device=device))
+    r2, warm = _timed(lambda: vj.solve_multigrid(inp, verbose=False, device=device))
     return {"cold_s": cold, "warm_s": warm, "iters": int(r2.iterations),
             "converged": bool(r2.converged)}
 
 
-def profile_free_boundary():
+def profile_free_boundary(device):
     inp = vj.VmecInput.from_file(DATA / "input.cth_like_free_bdy")
     mg = DATA / "mgrid_cth_like.nc"
     r, cold = _timed(lambda: vj.solve_free_boundary(
-        inp, mgrid_path=mg, error_on_no_convergence=False))
+        inp, mgrid_path=mg, error_on_no_convergence=False, device=device))
     r2, warm = _timed(lambda: vj.solve_free_boundary(
-        inp, mgrid_path=mg, error_on_no_convergence=False))
+        inp, mgrid_path=mg, error_on_no_convergence=False, device=device))
     iters = int(r2.iterations)
     return {"cold_s": cold, "warm_s": warm, "iters": iters,
             "ms_per_iter": 1e3 * warm / max(iters, 1),
             "converged": bool(r2.converged)}
 
 
-def profile_implicit_grad():
+def profile_implicit_grad(device):
     from vmex.core import implicit as im
     inp = vj.VmecInput.from_file(DATA / "input.solovev")
-    p0 = im.params_from_input(inp)
+    p0 = im.params_from_input(inp, device=device)
 
     def obj(p):
-        return im.run(inp, p, ftol=1e-12, max_iterations=5000).aspect
+        return im.run(inp, p, ftol=1e-12, max_iterations=5000,
+                      device=device).aspect
 
     (v, g), cold = _timed(lambda: jax.value_and_grad(obj)(p0))
     _ = float(v), float(np.asarray(g.phiedge))
@@ -117,17 +118,17 @@ def profile_implicit_grad():
     return {"cold_s": cold, "warm_s": warm}
 
 
-def profile_opt_step():
+def profile_opt_step(device):
     from vmex import optimize as opt
     inp = vj.VmecInput.from_file(DATA / "input.minimal_seed_nfp2")
     qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10), 1, 0)
     terms = [(qs, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0)]
     res, cold = _timed(lambda: opt.least_squares(
         terms, inp, max_mode=1, jac="implicit", use_ess=True, max_nfev=2,
-        ftol=1e-30, xtol=1e-30))
+        ftol=1e-30, xtol=1e-30, device=device))
     res2, warm = _timed(lambda: opt.least_squares(
         terms, inp, max_mode=1, jac="implicit", use_ess=True, max_nfev=2,
-        ftol=1e-30, xtol=1e-30))
+        ftol=1e-30, xtol=1e-30, device=device))
     return {"cold_s": cold, "warm_s": warm}
 
 
@@ -142,18 +143,23 @@ CASES = {
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--device", choices=("auto", "none", "cpu", "gpu"),
+                    default="auto")
     ap.add_argument("--out", default=None)
     ap.add_argument("--cases", default=None, help="comma-separated subset")
     args = ap.parse_args()
     names = args.cases.split(",") if args.cases else list(CASES)
 
+    device = None if args.device == "none" else args.device
     backend = jax.default_backend()
-    print(f"backend={backend}  devices={[str(d) for d in jax.local_devices()]}")
-    results = {"backend": backend, "platform": platform.platform(), "cases": {}}
+    print(f"backend={backend}  requested_device={args.device}  "
+          f"devices={[str(d) for d in jax.local_devices()]}")
+    results = {"backend": backend, "requested_device": args.device,
+               "platform": platform.platform(), "cases": {}}
     for name in names:
         rss0 = _peak_rss_gb()
         try:
-            row = CASES[name]()
+            row = CASES[name](device)
         except Exception as exc:  # keep profiling the rest
             row = {"error": f"{type(exc).__name__}: {exc}"}
         row["peak_rss_gb"] = _peak_rss_gb()

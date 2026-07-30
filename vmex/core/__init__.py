@@ -18,7 +18,7 @@ Module map (each header docstring names its VMEC2000 counterpart):
 - ``solver``          single-grid fixed-boundary solve loop (funct3d.f, eqsolve.f)
 - ``statephysics``    shared state-physics primitives (_field_chain, half-mesh iota/sampling)
 - ``implicit``        implicit differentiation of the equilibrium (custom VJP + adjoint GMRES)
-- ``stability``       differentiable ideal-MHD stability (infinite-n ballooning; COBRA port)
+- ``stability``       differentiable ideal-MHD stability (Mercier and infinite-n ballooning)
 - ``freeboundary_diff`` differentiable free-boundary residual via virtual casing (R15.3/R19)
 - ``device``          CPU/GPU placement policy (measured: benchmarks/gpu_baseline.json)
 

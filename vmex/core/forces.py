@@ -59,6 +59,7 @@ from .fourier import ModeTable, TrigTables
 from .geometry import HalfMeshJacobian, RealSpaceGeometry, sqrt_s_half_mesh
 from .transforms import (
     SpectralForce,
+    _fourier_to_real_fft,
     fourier_to_real,
     register_pytree_dataclass as _register,
     symforce_split,
@@ -76,6 +77,7 @@ __all__ = [
     "mhd_forces",
     "symmetrize_forces",
     "spectral_mhd_forces",
+    "apply_m1_force_balance",
 ]
 
 Array = Any
@@ -628,6 +630,7 @@ def constraint_force(
     signgs: int,
     rcon0: Array | None = None,
     zcon0: Array | None = None,
+    use_fft: bool = False,
 ) -> tuple[Array, Array, Array, Array, Array]:
     """Spectral-condensation constraint force pipeline (funct3d.f + alias.f).
 
@@ -681,7 +684,8 @@ def constraint_force(
         ],
         axis=0,
     )
-    (value,) = fourier_to_real(
+    synthesize = _fourier_to_real_fft if use_fft else fourier_to_real
+    (value,) = synthesize(
         coeff_cos,
         coeff_sin,
         modes=modes,
@@ -745,6 +749,7 @@ def mhd_forces(
     signgs: int,
     rcon0: Array | None = None,
     zcon0: Array | None = None,
+    use_fft: bool = False,
 ) -> RealSpaceForces:
     """Assemble all real-space force kernels (funct3d.f force stage).
 
@@ -784,6 +789,7 @@ def mhd_forces(
         signgs=signgs,
         rcon0=rcon0,
         zcon0=zcon0,
+        use_fft=use_fft,
     )
 
     s = jnp.asarray(s)
@@ -890,18 +896,26 @@ def spectral_mhd_forces(
             for parity in ("even", "odd")
         }
 
+    project = None
+
     if not bool(trig.lasym):
+        if project is not None:
+            return project(kernel_kwargs(forces))
         return tomnsps(
             **kernel_kwargs(forces), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
         )
 
     forces_sym, forces_asym = symmetrize_forces(forces, trig=trig)
-    out_sym = tomnsps(
-        **kernel_kwargs(forces_sym), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
-    )
-    out_asym = tomnspa(
-        **kernel_kwargs(forces_asym), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
-    )
+    if project is None:
+        out_sym = tomnsps(
+            **kernel_kwargs(forces_sym), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
+        )
+        out_asym = tomnspa(
+            **kernel_kwargs(forces_asym), mpol=mpol, ntor=ntor, trig=trig, include_edge=include_edge
+        )
+    else:
+        out_sym = project(kernel_kwargs(forces_sym))
+        out_asym = project(kernel_kwargs(forces_asym), asym=True)
     return replace(
         out_sym,
         force_R_sc=out_asym.force_R_sc,
@@ -911,3 +925,49 @@ def spectral_mhd_forces(
         force_lambda_cc=out_asym.force_lambda_cc,
         force_lambda_ss=out_asym.force_lambda_ss,
     )
+
+
+def apply_m1_force_balance(
+    force: SpectralForce,
+    *,
+    equif: Array,
+    factor_R: Array,
+    factor_Z: Array,
+) -> SpectralForce:
+    """Apply VMEC2000's ``LFORBAL`` ``(m=1,n=0)`` force replacement.
+
+    ``tomnsp_mod.f`` replaces only the stellarator-symmetric ``frcc`` and
+    ``fzsc`` blocks, including in ``LASYM`` runs.  With ``factor_R/Z`` equal
+    to the pre-halving ``rzu_fac/rru_fac`` values from ``bcovar.f``, the
+    interior full-mesh rows are
+
+    ``work = frcc/factor_R - fzsc/factor_Z``
+
+    ``frcc = (factor_R/2)*(equif + work)``
+
+    ``fzsc = (factor_Z/2)*(equif - work)``.
+
+    Axis and edge rows, all other modes, and all asymmetric blocks are
+    unchanged.
+    """
+    frcc = force.force_R_cc
+    fzsc = force.force_Z_sc
+    if frcc is None or fzsc is None:
+        return force
+    frcc = jnp.asarray(frcc)
+    fzsc = jnp.asarray(fzsc)
+    ns, mpol, _ = frcc.shape
+    if int(ns) < 3 or int(mpol) < 2:
+        return force
+
+    factor_R = jnp.asarray(factor_R, dtype=frcc.dtype)
+    factor_Z = jnp.asarray(factor_Z, dtype=fzsc.dtype)
+    equif = jnp.asarray(equif, dtype=frcc.dtype)
+    old_R = frcc[1:-1, 1, 0]
+    old_Z = fzsc[1:-1, 1, 0]
+    work = old_R / factor_R[1:-1] - old_Z / factor_Z[1:-1]
+    new_R = 0.5 * factor_R[1:-1] * (equif[1:-1] + work)
+    new_Z = 0.5 * factor_Z[1:-1] * (equif[1:-1] - work)
+    frcc = frcc.at[1:-1, 1, 0].set(new_R)
+    fzsc = fzsc.at[1:-1, 1, 0].set(new_Z)
+    return replace(force, force_R_cc=frcc, force_Z_sc=fzsc)

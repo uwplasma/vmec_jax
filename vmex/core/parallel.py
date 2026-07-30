@@ -11,23 +11,15 @@ those independent solves therefore overlaps their XLA execution and gives real
 wall-clock speedup, while every result stays *byte-identical* to solving that
 input alone (the solves share no mutable state).
 
-Measured strong scaling (this box: 10 logical CPUs, ``nfp2_QA`` ``phiedge``
-scan, 8 balanced solves ~0.68 s each, best-of-3)::
-
-    workers   wall   speedup   efficiency
-    serial   5.46 s   1.00x       100 %
-    2        3.05 s   1.79x        89 %
-    4        2.15 s   2.54x        63 %
-    8        1.66 s   3.29x        41 %
-
-The scaling is deliberately sub-linear: XLA already multithreads *within* one
-solve, so as the worker count approaches the core count the per-solve XLA
-threads contend — the ensemble speedup and the intra-solve speedup draw from
-the same cores.  See :doc:`/parallelization` for the full mechanism study
-(why threading beats ``pmap`` across forced host devices and ``vmap`` over the
-callback here), the honest limits (Amdahl on imbalanced heterogeneous
-ensembles; the launch-bound implicit adjoint overlaps far less than the
-forward solve), and the multi-GPU design sketch.
+Measured strong scaling (10-core host, 8 balanced ``phiedge`` solves): 1.79x
+with 2 workers, 3.29x with 8.  The scaling is deliberately sub-linear: XLA
+already multithreads *within* one solve, so as the worker count approaches
+the core count the per-solve XLA threads contend — the ensemble speedup and
+the intra-solve speedup draw from the same cores.  See :doc:`/parallelization`
+for the full mechanism study (why threading beats ``pmap`` across forced host
+devices and ``vmap`` over the callback here), the honest limits (Amdahl on
+imbalanced heterogeneous ensembles; the launch-bound implicit adjoint
+overlaps far less than the forward solve), and the multi-GPU design sketch.
 
 This module is a thin, additive concurrency layer: it changes nothing in the
 single-solve path (which stays byte-identical) and imposes no new dependency.

@@ -12,6 +12,7 @@ during the port:
 from __future__ import annotations
 
 import jax
+import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
@@ -19,7 +20,13 @@ import numpy as np
 import pytest
 
 from vmex.core.fourier import Resolution, mode_table, trig_tables
+from vmex.core.nyquist import (
+    symoutput_split,
+    wrout_cos_coeffs,
+    wrout_sin_coeffs,
+)
 from vmex.core.transforms import (
+    _fourier_to_real_fft,
     fourier_to_real,
     real_to_fourier,
     symforce_split,
@@ -94,6 +101,103 @@ def test_synthesis_analysis_roundtrip(case):
         assert not np.any(np.asarray(back_cos))
 
 
+def test_lasym_nestor_surface_analysis_preserves_mode_signs():
+    """The shared LASYM ``*_sur`` WOUT transform preserves cos/sin signs."""
+    resolution = Resolution(
+        mpol=3,
+        ntor=2,
+        ntheta=12,
+        nzeta=10,
+        nfp=2,
+        lasym=True,
+        ns=1,
+    )
+    trig = trig_tables(resolution)
+    modes = mode_table(resolution.mpol, resolution.ntor)
+    cos_coefficients = np.zeros((1, modes.mnmax))
+    sin_coefficients = np.zeros_like(cos_coefficients)
+    mode_index = np.flatnonzero((modes.m == 1) & (modes.n == 1))[0]
+    cos_coefficients[0, mode_index] = 1.25
+    sin_coefficients[0, mode_index] = -0.75
+    (surface,) = fourier_to_real(
+        cos_coefficients,
+        sin_coefficients,
+        modes=modes,
+        trig=trig,
+        derivatives=("value",),
+    )
+
+    symmetric, asymmetric = symoutput_split(
+        f=np.asarray(surface), trig=trig
+    )
+    actual_cos = wrout_cos_coeffs(
+        f=symmetric, modes=modes, trig=trig
+    )
+    actual_sin = wrout_sin_coeffs(
+        f=asymmetric, modes=modes, trig=trig
+    )
+    roundtrip_atol = 8.0 * np.finfo(np.float64).eps
+    np.testing.assert_allclose(
+        actual_cos, cos_coefficients, rtol=0.0, atol=roundtrip_atol
+    )
+    np.testing.assert_allclose(
+        actual_sin, sin_coefficients, rtol=0.0, atol=roundtrip_atol
+    )
+
+
+def test_synthesis_accepts_nyquist_extended_trig_tables():
+    """WOUT evaluates main-mode coefficients on Nyquist-extended grids."""
+    base = Resolution(
+        mpol=6, ntor=3, ntheta=22, nzeta=16, nfp=3, lasym=False, ns=NS
+    )
+    extended = Resolution(
+        mpol=9, ntor=8, ntheta=22, nzeta=16, nfp=3, lasym=False, ns=NS
+    )
+    modes = mode_table(base.mpol, base.ntor)
+    rng = np.random.default_rng(4)
+    coefficient_cos = rng.standard_normal((NS, modes.mnmax))
+    coefficient_sin = rng.standard_normal((NS, modes.mnmax))
+    kwargs = dict(modes=modes, derivatives=("value", "dtheta", "dzeta"))
+    actual = _fourier_to_real_fft(
+        coefficient_cos, coefficient_sin, trig=trig_tables(extended), **kwargs
+    )
+    expected = fourier_to_real(
+        coefficient_cos, coefficient_sin, trig=trig_tables(base), **kwargs
+    )
+    for left, right in zip(actual, expected):
+        np.testing.assert_allclose(left, right, rtol=RTOL, atol=1e-12)
+
+
+def test_fft_and_dense_synthesis_match_through_ad():
+    """The fast primal and lower-memory implicit path have matching AD."""
+    resolution = Resolution(
+        mpol=4, ntor=2, ntheta=16, nzeta=12, nfp=3, lasym=True, ns=NS
+    )
+    modes = mode_table(resolution.mpol, resolution.ntor)
+    trig = trig_tables(resolution)
+    rng = np.random.default_rng(5)
+    shape = (NS, modes.mnmax)
+    primals = tuple(jnp.asarray(rng.standard_normal(shape)) for _ in range(2))
+    tangents = tuple(jnp.asarray(rng.standard_normal(shape)) for _ in range(2))
+
+    def synthesize(c, s, *, use_fft):
+        transform = _fourier_to_real_fft if use_fft else fourier_to_real
+        return transform(c, s, modes=modes, trig=trig)
+
+    fast = lambda c, s: synthesize(c, s, use_fft=True)  # noqa: E731
+    dense = lambda c, s: synthesize(c, s, use_fft=False)  # noqa: E731
+    values, tangent = jax.jvp(fast, primals, tangents)
+    dense_values, dense_tangent = jax.jvp(dense, primals, tangents)
+    for left, right in zip(values + tangent, dense_values + dense_tangent):
+        np.testing.assert_allclose(left, right, rtol=2e-13, atol=2e-12)
+    cotangent = tuple(jnp.asarray(rng.standard_normal(x.shape)) for x in values)
+    _, pullback = jax.vjp(fast, *primals)
+    adjoint = pullback(cotangent)
+    lhs = sum(jnp.vdot(x, y) for x, y in zip(tangent, cotangent))
+    rhs = sum(jnp.vdot(x, y) for x, y in zip(tangents, adjoint))
+    np.testing.assert_allclose(lhs, rhs, rtol=2e-13, atol=2e-12)
+
+
 # ---------------------------------------------------------------------------
 # tomnsp( totzsp(x) ) round trip
 # ---------------------------------------------------------------------------
@@ -110,19 +214,12 @@ def _rz_mask(ns: int, mpol: int) -> np.ndarray:
 
 @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
 def test_tomnsps_recovers_band_limited_coefficients(case):
-    """tomnsps is the exact inverse of the totzsps synthesis on band-limited data.
-
-    Feed ``tomnsps`` a pure geometry-style field through the undifferentiated
-    kernels (``armn``/``azmn``) built from internal coefficients ``x`` with the
-    scaled trig tables.  The mscale/nscale normalization makes the projection
-    recover ``x`` exactly (factor 1) in both symmetry modes: for
-    ``lasym=True`` the reduced-interval integration carries the fixaray.f
-    weight ``dnorm = 1/(nzeta*(ntheta2-1)) = 2/(nzeta*ntheta1)`` with
-    endpoint half-weights, which equals the full-grid average for the
-    reflection-symmetric basis products fed here.  (Before the core lasym
-    dnorm fix this recovered ``x/2`` — the inherited legacy defect that
-    halved every lasym force projection.)
-    """
+    """tomnsps is the exact inverse of the totzsps synthesis on band-limited
+    data: the mscale/nscale normalization recovers ``x`` exactly (factor 1)
+    in both symmetry modes — for lasym the fixaray.f weight
+    ``dnorm = 2/(nzeta*ntheta1)`` with endpoint half-weights equals the
+    full-grid average here.  (Pre-fix this recovered ``x/2``, the legacy
+    defect that halved every lasym force projection.)"""
     mpol, ntor, _, _, _, lasym = case
     res = _resolution(case)
     trig = trig_tables(res)

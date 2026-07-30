@@ -53,6 +53,8 @@ __all__ = [
     "energies_and_force_norms",
     "preconditioned_force_norm",
     "surface_currents",
+    "radial_force_balance_error",
+    "force_balance_preconditioner_factor",
     "constraint_scaling",
 ]
 
@@ -295,6 +297,7 @@ def magnetic_fields(
     gamma: float = 0.0,
     pressure: Array | None = None,
     mass: Array | None = None,
+    lamscale: Array | None = None,
     ncurr: int = 0,
     enclosed_current: Array | None = None,
 ) -> MagneticFields:
@@ -330,6 +333,9 @@ def magnetic_fields(
     pressure, mass:
         Half-mesh profiles ``(ns,)`` in VMEC internal units (mu0*Pa).  Exactly
         one should be provided; ``mass`` takes precedence.
+    lamscale:
+        Optional precomputed global lambda normalization. This avoids
+        recomputing a resolution-wide scalar from a local radial segment.
     ncurr, enclosed_current:
         ``ncurr = 1`` activates the current-constrained mode with the
         prescribed ``icurv`` profile (``enclosed_current``, defaults to zero).
@@ -339,7 +345,10 @@ def magnetic_fields(
     sqrt_g = jacobian.sqrt_g
     dtype = sqrt_g.dtype
 
-    lamscale = lambda_scale(jnp.asarray(phips, dtype=dtype), s)
+    lamscale = (
+        lambda_scale(jnp.asarray(phips, dtype=dtype), s)
+        if lamscale is None else jnp.asarray(lamscale, dtype=dtype)
+    )
     phipf = jnp.asarray(phipf, dtype=dtype)
     chips = jnp.asarray(chips, dtype=dtype)
 
@@ -613,6 +622,139 @@ def surface_currents(
 
 
 # ---------------------------------------------------------------------------
+# Non-variational m=1 force-balance replacement (fbal.f / precondn.f)
+# ---------------------------------------------------------------------------
+
+
+def radial_force_balance_error(
+    *,
+    fields: MagneticFields,
+    phipf: Array,
+    trig: TrigTables,
+    s: Array,
+    signgs: int,
+) -> Array:
+    """Flux-surface-averaged radial force error ``equif`` (VMEC ``fbal.f``).
+
+    This is the non-normalized quantity consumed by ``tomnsp_mod.f`` when
+    ``LFORBAL = T``.  On the interior full mesh,
+
+    ``equif = (-phipf*jcuru + chipf*jcurv)/vpphi + dp/ds``,
+
+    where the contravariant current averages follow from radial differences
+    of ``<B_u>`` and ``<B_v>``.  The axis and edge rows are zero, exactly as
+    in ``calc_fbal``.  ``fields.chips`` is the effective half-mesh profile
+    after the ``NCURR=1`` current constraint, when active.  ``add_fluxes.f90``
+    reconstructs the full-mesh ``chipf`` used here for both current modes.
+    """
+    s = jnp.asarray(s)
+    ns = int(s.shape[0])
+    dtype = fields.bsubu.dtype
+    if ns < 3:
+        return jnp.zeros((ns,), dtype=dtype)
+
+    currents = surface_currents(
+        bsubu=fields.bsubu,
+        bsubv=fields.bsubv,
+        trig=trig,
+        s=s,
+        signgs=signgs,
+    )
+    hs = jnp.asarray(s[1] - s[0], dtype=dtype)
+    ohs = 1.0 / hs
+    signgs_f = jnp.asarray(float(int(signgs)), dtype=dtype)
+
+    jcurv = signgs_f * ohs * (currents.buco[2:] - currents.buco[1:-1])
+    jcuru = -signgs_f * ohs * (currents.bvco[2:] - currents.bvco[1:-1])
+    vpphi = 0.5 * (fields.vp[2:] + fields.vp[1:-1])
+    presgrad = ohs * (fields.pressure[2:] - fields.pressure[1:-1])
+    chips = jnp.asarray(fields.chips, dtype=dtype)
+    chipf = jnp.concatenate(
+        (
+            (1.5 * chips[1] - 0.5 * chips[2])[None],
+            0.5 * (chips[1:-1] + chips[2:]),
+            (1.5 * chips[-1] - 0.5 * chips[-2])[None],
+        )
+    )
+    core = (
+        -jnp.asarray(phipf, dtype=dtype)[1:-1] * jcuru
+        + chipf[1:-1] * jcurv
+    ) / vpphi + presgrad
+    return jnp.concatenate(
+        [jnp.zeros((1,), dtype=dtype), core, jnp.zeros((1,), dtype=dtype)]
+    )
+
+
+def force_balance_preconditioner_factor(
+    *,
+    axd_odd: Array,
+    dxdu_half: Array,
+    trig_multiplier: Array,
+    jacobian: HalfMeshJacobian,
+    fields: MagneticFields,
+    trig: TrigTables,
+    s: Array,
+    signgs: int,
+) -> Array:
+    """Return the pre-halving ``rzu_fac``/``rru_fac`` of VMEC ``bcovar.f``.
+
+    ``precondn.f`` returns
+
+    ``eqfactor = axd(m-odd)*hs**2 / [signgs*(temp(js)+temp(js+1))]``
+
+    with ``temp = <(-4*r0scale**2)*R*bsq*trigmult*X_u*wint>/vp``.
+    ``bcovar.f`` multiplies this by ``sqrt(s)`` before constructing the
+    reciprocal ``frcc_fac``/``fzsc_fac`` and then halves it for the final
+    ``tomnsp_mod.f`` replacement.  This function deliberately returns the
+    value *before* that final division by two.
+
+    For the R-force factor, pass ``X_u=Z_u`` and ``trigmult=cos(theta)``;
+    for the Z-force factor, pass ``X_u=R_u`` and
+    ``trigmult=-sin(theta)``.
+    """
+    s = jnp.asarray(s)
+    ns = int(s.shape[0])
+    dtype = fields.total_pressure.dtype
+    if ns < 3:
+        return jnp.zeros((ns,), dtype=dtype)
+
+    hs = jnp.asarray(s[1] - s[0], dtype=dtype)
+    r0scale = jnp.asarray(_r0scale(trig), dtype=dtype)
+    pfactor = -4.0 * r0scale * r0scale
+    wint = _angle_weights(trig, dtype)[None, :, :]
+    multiplier = jnp.asarray(trig_multiplier, dtype=dtype)[None, :, None]
+    temp_half = jnp.sum(
+        pfactor
+        * jacobian.r12
+        * fields.total_pressure
+        * wint
+        * multiplier
+        * jnp.asarray(dxdu_half, dtype=dtype),
+        axis=(1, 2),
+    )
+    vp_safe = jnp.where(fields.vp != 0.0, fields.vp, jnp.ones_like(fields.vp))
+    temp_half = jnp.where(fields.vp != 0.0, temp_half / vp_safe, 0.0)
+    temp_full = jnp.asarray(float(int(signgs)), dtype=dtype) * (
+        temp_half
+        + jnp.concatenate([temp_half[1:], jnp.zeros((1,), dtype=dtype)])
+    )
+    eqfactor_core = (
+        jnp.asarray(axd_odd, dtype=dtype)[1:-1]
+        * hs
+        * hs
+        / temp_full[1:-1]
+    )
+    factor_core = jnp.sqrt(jnp.maximum(s[1:-1], 0.0)) * eqfactor_core
+    return jnp.concatenate(
+        [
+            jnp.zeros((1,), dtype=dtype),
+            factor_core,
+            jnp.zeros((1,), dtype=dtype),
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
 # Constraint scaling tcon (bcovar.f + precondn.f diagonal)
 # ---------------------------------------------------------------------------
 
@@ -625,11 +767,12 @@ def constraint_scaling(
     total_pressure: Array,
     trig: TrigTables,
     s: Array,
+    ns_total: int | None = None,
 ) -> Array:
     """Spectral-condensation constraint strength ``tcon(js)``.
 
     VMEC2000: ``bcovar.f`` (with the ``m = 0`` diagonal elements of
-    ``precondn.f``) — per plan Appendix D::
+    ``precondn.f``)::
 
         tcon(js) = min(|ard(js,1)|/arnorm(js), |azd(js,1)|/aznorm(js))
                    * tcon_multiplier * (32*hs)^2    for js = 2..ns-1,
@@ -650,6 +793,8 @@ def constraint_scaling(
     tcon0`` before overwriting the interior; the value is never used by the
     constraint operator).  The ``ns4 = 25``-iteration refresh cadence of
     VMEC2000 lives in the solver, not here — this is the pure recompute.
+    ``ns_total`` preserves the global resolution ramp when evaluating a local
+    radial segment.
     """
     s = jnp.asarray(s)
     ns = int(s.shape[0])
@@ -684,7 +829,7 @@ def constraint_scaling(
     aznorm = jnp.where(aznorm != 0, aznorm, jnp.ones_like(aznorm))
 
     tcon0_clamped = jnp.minimum(jnp.abs(jnp.asarray(tcon0, dtype=dtype)), 1.0)
-    ns_f = float(ns)
+    ns_f = float(ns if ns_total is None else ns_total)
     tcon_multiplier = tcon0_clamped * (1.0 + ns_f * (1.0 / 60.0 + ns_f / (200.0 * 120.0)))
     tcon_multiplier = tcon_multiplier / ((4.0 * r0scale**2) ** 2)
 

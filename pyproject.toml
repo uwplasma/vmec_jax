@@ -1,4 +1,6 @@
 [build-system]
+# Pure-Python build: VMEX ships no compiled extensions, so installing it never
+# requires a C/C++ toolchain.  All numerics are JAX.
 requires = ["setuptools", "wheel", "packaging"]
 build-backend = "setuptools.build_meta"
 
@@ -30,7 +32,7 @@ dependencies = [
   "matplotlib",
   "packaging",
   "booz_xform_jax",
-  "solvax",
+  "solvax>=0.8.8",
   "tomli; python_version < '3.11'",
 ]
 
@@ -46,15 +48,31 @@ Issues = "https://github.com/uwplasma/vmex/issues"
 Changelog = "https://github.com/uwplasma/vmex/releases"
 
 [project.optional-dependencies]
-# Differentiable free boundary via virtual casing (plan.md R15.3 + R19).
-# ``virtual_casing_jax`` is a uwplasma package (https://github.com/uwplasma/
-# virtual_casing_jax); it is NOT yet on PyPI, so ``pip install vmex[freeb]``
-# will not resolve it from an index — install it editable alongside vmex:
-#   pip install -e /path/to/virtual_casing_jax
-# The ``vmex.core.freeboundary_diff`` module and its tests are gated behind an
-# ``importorskip`` so CI stays green when the dependency is absent.
+# Differentiable virtual-casing residual on a specified boundary
+# (plan.md R15.3 + R19); this is not a NESTOR equilibrium adjoint.
+# virtual-casing-jax >= 0.0.3 (released 2026-07-28 from the canonical
+# https://github.com/uwplasma/virtual_casing_jax) carries the exterior-field
+# API vmex drives; 0.0.2 and earlier predate it.  The
+# ``vmex.core.freeboundary_diff`` module and its tests are gated behind an
+# ``importorskip`` so a bare install stays functional without the extra.
 freeb = [
-  "virtual_casing_jax",
+    "virtual-casing-jax>=0.0.3",
+]
+#
+# Gyrokinetic turbulence-proxy objectives (``vmex.core.turbulence``) via GKX,
+# uwplasma's JAX-native Hermite-Laguerre flux-tube gyrokinetic solver
+# (https://github.com/uwplasma/GKX; PyPI name ``gkx`` — the package formerly
+# published as ``spectraxgk``; vmex requires the post-rename >= 1.7.1 API).
+turbulence = [
+  "gkx>=1.7.1",
+]
+# Direct-coil free-boundary support: the CLI ``--coils`` flag and the ESSOS
+# examples load ``essos.coils`` and tabulate ``essos.fields.BiotSavart`` into
+# an in-memory MgridField.  Any released ESSOS >= 0.16 suffices (0.16 ships
+# the legacy ``Coils_from_json`` loader; the callers fall back to it when the
+# ``Coils.from_json`` classmethod is absent).
+coils = [
+  "essos>=0.16",
 ]
 docs = [
   "sphinx",
@@ -68,7 +86,7 @@ dev = [
   "pytest",
   "pytest-cov",
   "pytest-xdist",
-  "ruff",
+  "ruff<0.16",
   "sphinx",
   "types-setuptools",
 ]
@@ -84,15 +102,17 @@ vmex = ["resources/input.nfp4_QH_warm_start"]
 [tool.pytest.ini_options]
 markers = [
   "full: slower/full-physics tests; set RUN_FULL=1 to run",
+  "gpu: tests that require a real GPU; skipped when no GPU is available",
+  "vmec2000_live: opt-in integration tests requiring a local VMEC2000 executable",
 ]
 
 [tool.coverage.run]
-# freeboundary_diff.py is optional (vmex[freeb]) and requires
-# virtual_casing_jax, a uwplasma package not on PyPI; its FD-validated
-# gradient tests are importorskip-gated and skip in the core CI, so the module
-# is excluded from the core >=95% coverage gate.  It IS exercised when the
-# freeb extra is installed (locally / a dedicated freeb CI lane — R15.3/R19
-# follow-up).
+# freeboundary_diff.py requires the optional virtual-casing-jax >= 0.0.3
+# extra (see [project.optional-dependencies]). Its FD-validated gradient
+# tests are importorskip-gated and skip in the dependency-minimal core CI,
+# so the module is excluded from the core >=95% coverage gate. It is
+# exercised by the optional-integrations CI lane. turbulence.py is
+# likewise gated on the optional ``turbulence`` extra (gkx).
 omit = ["*/freeboundary_diff.py", "*/turbulence.py"]
 
 [tool.coverage.report]
@@ -102,6 +122,10 @@ omit = ["*/freeboundary_diff.py", "*/turbulence.py"]
 line-length = 120
 
 [tool.ruff.lint]
+# Ruff 0.16 changed its implicit default from the classic Pyflakes/pycodestyle
+# baseline to every stable rule.  Keep VMEX's existing lint contract explicit
+# so an unpinned developer-tool upgrade cannot reclassify the whole repository.
+select = ["E4", "E7", "E9", "F"]
 # E402: module-level import not at top-of-file.  Deferred imports (after env
 #        setup / jax.config calls) are deliberate to control JAX initialisation.
 # E501: line too long.  Handled by the line-length setting above; long lines in

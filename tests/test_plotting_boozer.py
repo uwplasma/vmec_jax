@@ -26,7 +26,7 @@ pytest.importorskip("matplotlib")
 from vmex.core.boozer import run_booz_xform  # noqa: E402
 from vmex.core.plotting import plot_boozmn, plot_wout  # noqa: E402
 
-from conftest import resolve_golden_dir
+from tests.conftest import resolve_golden_dir
 
 GOLDEN_DIR = resolve_golden_dir()
 pytestmark = pytest.mark.skipif(

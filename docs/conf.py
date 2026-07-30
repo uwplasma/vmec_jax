@@ -56,7 +56,7 @@ if _ENABLE_VIEWCODE:
 
 _FAST = _truthy(os.environ.get("SPHINX_FAST"))
 if _FAST:
-    tags.add("fast")
+    tags.add("fast")  # noqa: F821 - provided by the Sphinx configuration runtime
     # In fast mode build only a minimal landing page to keep CI under minutes.
     master_doc = "index_fast"
     include_patterns = ["index_fast.rst"]

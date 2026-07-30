@@ -1,16 +1,9 @@
 """Tests for ``vmex.core.{geometry,fields}`` (jacobian.f / bcovar.f).
-
-Field-by-field parity of the geometry/field chain with the legacy
-parity-proven kernels (jacobian, metrics, B fields, energies/norms, surface
-currents, tcon) was proven by the A/B suite that retired with the legacy
-tree.  Kept here, on realistic profil3d.f initial states for sym 2D, sym 2D
-ncurr=1, sym 3D and lasym decks:
-
-- Jacobian sign-change detection (healthy state clean; an m=1 spike flips it),
-- physical invariants of the field chain (finite energies, positive volume,
-  signgs-consistent sqrt(g)),
-- jit equivalence of the full pipeline and grad of ``wb`` w.r.t. the
-  spectral coefficients.
+Field-by-field legacy parity was proven by the retired A/B suite; kept
+here, on realistic profil3d.f initial states (sym 2D, sym 2D ncurr=1, sym
+3D, lasym): Jacobian sign-change detection, physical invariants (finite
+energies, positive volume, signgs-consistent sqrt(g)), jit equivalence,
+and grad of ``wb`` w.r.t. the spectral coefficients.
 """
 
 from __future__ import annotations
@@ -30,6 +23,7 @@ from vmex.core.fields import (
     energies_and_force_norms,
     magnetic_fields,
     metric_elements,
+    radial_force_balance_error,
     surface_currents,
 )
 from vmex.core.geometry import (
@@ -38,6 +32,7 @@ from vmex.core.geometry import (
     real_space_geometry,
 )
 from vmex.core.input import VmecInput
+from vmex.core.setup import run_setup
 from vmex.core.solver import (
     _geometry,
     _initial_state,
@@ -63,7 +58,13 @@ def case(request):
     """Initial state + a pure new-core pipeline closure for one deck."""
     name = request.param
     inp = VmecInput.from_file(DATA_DIR / f"input.{name}")
-    rt = prepare_runtime(inp, resolution_from_input(inp))
+    resolution = resolution_from_input(inp)
+    # These are kernel tests, not production-driver tests: construct a
+    # regular geometry even when a public deck supplies an all-zero axis.
+    # Production intentionally starts from that supplied axis and lets
+    # eqsolve perform its single VMEC2000-compatible recovery transfer.
+    setup = run_setup(inp, resolution, infer_axis_if_missing=True)
+    rt = prepare_runtime(inp, resolution, setup=setup)
     setup = rt.setup
     state = _initial_state(setup)
     s = setup.s_full
@@ -165,6 +166,57 @@ def test_surface_currents_finite(case):
         assert np.isfinite(float(getattr(cur, name))), name
     # The toroidal-field profile bvco must be nonzero away from the axis.
     assert np.max(np.abs(np.asarray(cur.bvco)[1:])) > 0.0
+
+
+def test_lforbal_uses_add_fluxes_full_mesh_chipf(case):
+    """calc_fbal consumes full-mesh chipf reconstructed from effective chips."""
+    currents = surface_currents(
+        bsubu=case.mf.bsubu,
+        bsubv=case.mf.bsubv,
+        trig=case.rt.trig,
+        s=case.s,
+        signgs=int(case.setup.signgs),
+    )
+    s = np.asarray(case.s)
+    hs = s[1] - s[0]
+    signgs = float(case.setup.signgs)
+    buco = np.asarray(currents.buco)
+    bvco = np.asarray(currents.bvco)
+    jcurv = signgs * (buco[2:] - buco[1:-1]) / hs
+    jcuru = -signgs * (bvco[2:] - bvco[1:-1]) / hs
+    vp = np.asarray(case.mf.vp)
+    pressure = np.asarray(case.mf.pressure)
+    vpphi = 0.5 * (vp[2:] + vp[1:-1])
+    presgrad = (pressure[2:] - pressure[1:-1]) / hs
+    chips = np.asarray(case.mf.chips)
+    chipf = np.empty_like(chips)
+    chipf[0] = 1.5 * chips[1] - 0.5 * chips[2]
+    chipf[1:-1] = 0.5 * (chips[1:-1] + chips[2:])
+    chipf[-1] = 1.5 * chips[-1] - 0.5 * chips[-2]
+    expected = np.zeros_like(chips)
+    expected[1:-1] = (
+        -np.asarray(case.setup.phipf)[1:-1] * jcuru
+        + chipf[1:-1] * jcurv
+    ) / vpphi + presgrad
+
+    actual = radial_force_balance_error(
+        fields=case.mf,
+        phipf=case.setup.phipf,
+        trig=case.rt.trig,
+        s=case.s,
+        signgs=int(case.setup.signgs),
+    )
+    np.testing.assert_allclose(actual, expected, rtol=2e-13, atol=2e-14)
+
+    if case.name == "cth_like_fixed_bdy":
+        half_mesh_substitution = np.zeros_like(chips)
+        half_mesh_substitution[1:-1] = (
+            -np.asarray(case.setup.phipf)[1:-1] * jcuru
+            + chips[1:-1] * jcurv
+        ) / vpphi + presgrad
+        assert not np.allclose(
+            actual, half_mesh_substitution, rtol=1e-8, atol=1e-12
+        )
 
 
 # ---------------------------------------------------------------------------

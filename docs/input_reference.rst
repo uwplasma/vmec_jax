@@ -5,13 +5,47 @@ Input file reference
 :meth:`vmex.core.input.VmecInput.from_file`:
 
 - the classic VMEC2000 ``&INDATA`` Fortran namelist (``input.<case>``), and
-- VMEC++-style JSON (``.json`` suffix or leading ``{``) with identical key
+- structured JSON (``.json`` suffix or leading ``{``) with identical key
   names.
 
-Both round-trip: ``VmecInput.to_json`` writes a VMEC++-schema JSON deck that
-parses back to the same input. All VMEC2000 defaults and ``readin.f``
+Both round-trip: ``VmecInput.to_json`` writes a structured JSON deck that
+parses back to the same input. Implemented VMEC2000 defaults and ``readin.f``
 normalizations are applied on construction (see the
-:mod:`vmex.core.input` docstring for the exact rules).
+:mod:`vmex.core.input` docstring for the exact rules). Parsing does not imply
+solver support: the complete supported/rejected/no-op classification is in
+:doc:`vmec2000_compatibility`. Unknown names and active unsupported physics
+fail before setup.
+
+Fortran namelist assignment semantics
+--------------------------------------
+
+INDATA assignments are replayed in source order, as a Fortran namelist reader
+writes into the already initialized ``vmec_input.f`` arrays.  A later short
+dense assignment replaces only the elements it supplies; it does not clear an
+earlier tail.  Indexed writes and dense writes override one another according
+to their textual order.  For example,
+
+.. code-block:: fortran
+
+   FTOL_ARRAY = 1e-6, 1e-11, 1e-30, 1e-30
+   FTOL_ARRAY = 1e-7, 1e-7
+
+leaves entries 3 and 4 at ``1e-30``.
+
+An indexed designator followed by several values is a *starting-element*
+assignment, so ``APHI(1)=1,0`` writes elements 1 and 2.  Array sections use
+inclusive Fortran bounds, and the first subscript varies fastest.  Thus compact
+boundary syntax such as ``RBC(-6:6,0)=...`` is equivalent to the corresponding
+13 scalar assignments.  Omitted section limits (``RBC(:,0)`` or
+``RBC(-6:,0)``) are resolved from the declared VMEC2000 array bounds.  Bounds,
+rank, and value count are checked before setup.
+
+List-directed repeat syntax is supported for both values (``4*0.0``) and
+nulls (``3*``).  Null fields advance the array position without replacing its
+initialized or previously assigned value, so ``APHI=,0.5`` retains the default
+first coefficient.  Single- and double-quoted character values may contain
+spaces, commas, ``!``, or ``=``; doubling the active quote delimiter represents
+that literal quote, following the Fortran runtime.
 
 INDATA variables
 ----------------
@@ -41,7 +75,10 @@ Symmetry and resolution
      - toroidal modes ``n = -ntor .. ntor``
    * - ``NTHETA`` / ``NZETA``
      - 0
-     - angular grid points (0 selects the VMEC default)
+     - angular grid points (0 selects the VMEC default).  Explicit values
+       below ``2*MPOL+6`` / ``2*NTOR+4`` remain legal for VMEC2000 parity but
+       can alias nonlinear force products; the privacy-safe diagnostic reports
+       ``W01_ANGULAR_GRID_BELOW_VMEC_DEFAULT`` without printing the values.
 
 Multigrid ladder and stepping
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -55,14 +92,20 @@ Multigrid ladder and stepping
      - Meaning
    * - ``NS_ARRAY``
      - ``[31]``
-     - radial surfaces per multigrid stage
+     - radial surfaces per multigrid stage; explicit ``NS_ARRAY(1)=0`` uses
+       the VMEC2000 ``NSIN -> 31`` legacy expansion.  The active ladder ends
+       at the first nonpositive or decreasing entry; equal entries rerun.
    * - ``FTOL_ARRAY``
      - ``[1e-10]``
      - force tolerance per stage (converged when ``fsqr, fsqz, fsql`` are all
-       below it)
+       below it).  If its first element is explicitly zero, ``readin.f``'s
+       geometric ladder from ``1e-8`` to scalar ``FTOL`` is generated.
    * - ``NITER_ARRAY`` (or ``NITER``)
      - ``[100]``
-     - iteration cap per stage
+     - iteration cap per stage.  Scalar ``NITER`` fills the complete array
+       only when every initialized ``NITER_ARRAY`` entry remains ``-1``.
+       A preserved ``-1`` in a partially assigned array still executes the
+       first ``eqsolve`` pass before the iteration-limit check, as in VMEC2000.
    * - ``DELT``
      - 1.0
      - initial time step
@@ -78,6 +121,20 @@ Multigrid ladder and stepping
    * - ``NSTEP``
      - 10
      - iterations between progress prints
+   * - ``TIME_SLICE``
+     - 0
+     - informational value preserved in the VMEC-style run header
+   * - ``LFORBAL``
+     - ``F``
+     - use VMEC2000's non-variational average-force replacement for the
+       ``m=1,n=0`` R/Z channels
+   * - ``LMOVE_AXIS``
+     - ``T``
+     - permit automatic first-pass axis recovery for a large finite force
+   * - ``LFULL3D1OUT``
+     - ``F``
+     - write a WOUT after ordinary NITER exhaustion; when false, the CLI
+       returns ``ier_flag=2`` before the output path, matching VMEC2000
 
 Pressure profile
 ~~~~~~~~~~~~~~~~
@@ -181,8 +238,8 @@ Free boundary
      - free-boundary mode; forced ``F`` when ``MGRID_FILE = 'NONE'``
    * - ``MGRID_FILE``
      - ``'NONE'``
-     - MAKEGRID vacuum-field file, or ``'DIRECT_COILS'`` for direct
-       Biot-Savart coil fields (with ``vmex --coils``)
+     - MAKEGRID vacuum-field file, or ``'DIRECT_COILS'`` to tabulate the
+       ESSOS coil field into an in-memory mgrid table (with ``vmex --coils``)
    * - ``EXTCUR``
      - —
      - external coil-group currents [A]
@@ -194,12 +251,17 @@ Free boundary
      - boundary spectral filtering
    * - ``PRECON_TYPE`` / ``PREC2D_THRESHOLD``
      - ``NONE`` / 1e-30
-     - 2D preconditioner selection (accepted for compatibility)
+     - ``NONE``/``DEFAULT`` use the 1-D VMEC path; ``GMRES`` selects VMEX's
+       exact-JVP matrix-free Newton--GMRES path. VMEC2000 ``CG``, ``GMRESR``,
+       and ``TFQMR`` are distinct and are rejected, not aliased.
+       ``NONE`` does **not** disable ``scalfor`` or lambda scaling; it disables
+       only the optional 2-D block preconditioner, as in VMEC2000.
 
-VMEC++-style JSON
+structured JSON
 -----------------
 
-The JSON schema follows ``vmecpp.VmecInput`` verbatim: the keys are the
+The JSON schema follows the implemented structured-JSON subset: the keys
+are the
 lower-case INDATA names (``lasym, nfp, mpol, ntor, ntheta, nzeta, ns_array,
 ftol_array, niter_array, delt, tcon0, aphi, phiedge, nstep, pmass_type, am,
 am_aux_s, am_aux_f, pres_scale, adiabatic_index, spres_ped, ncurr,
@@ -233,5 +295,17 @@ length ``ntor + 1``:
      ]
    }
 
-Extensions beyond VMEC++ (ignored by VMEC++ but accepted here): the spline
+Extensions beyond the base schema (accepted here): the spline
 and pedestal profile types listed above, with the same key names as INDATA.
+``free_boundary_method="nestor"`` is accepted explicitly. ``only_coils`` and
+``biest`` select different models and are rejected. Unknown JSON keys are
+errors rather than silent no-ops.
+
+Unsupported and output-only INDATA controls
+-------------------------------------------
+
+Active reconstruction, RFP, TRIP3D, ANIMEC, target-volume rescaling, and
+unsupported continuation/preconditioner modes fail with a typed error.
+Neutral legacy defaults remain accepted. Legacy output-only switches are
+listed individually in :doc:`vmec2000_compatibility`; they do not alter the
+equilibrium and VMEX does not imply that their auxiliary files are produced.

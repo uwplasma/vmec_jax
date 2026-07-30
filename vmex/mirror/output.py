@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import jax.numpy as jnp
 import numpy as np
 
+from ..core._netcdf import assign_array
 from .forces import MU0, staggered_field_strength
 from .geometry import (
     contravariant_field,
@@ -329,7 +330,7 @@ def write_mout(path: str | Path, data: MoutData, *, overwrite: bool = True) -> P
         }
         for name, (dimensions, values) in variables.items():
             variable = dataset.createVariable(name, "f8", dimensions, zlib=True, complevel=4)
-            variable[:] = np.asarray(values)
+            assign_array(variable, slice(None), np.asarray(values))
     return path
 
 

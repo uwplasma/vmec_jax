@@ -1,4 +1,4 @@
-"""VMEC input handling: the ``&INDATA`` namelist and VMEC++-style JSON.
+"""VMEC input handling: the ``&INDATA`` namelist and structured JSON.
 
 VMEC2000 counterparts: ``LIBSTELL/Sources/Modules/vmec_input.f``
 (``read_indata_namelist``: variable set and defaults) and ``readin.f``
@@ -7,17 +7,21 @@ VMEC2000 counterparts: ``LIBSTELL/Sources/Modules/vmec_input.f``
 ``{"m": int, "n": int, "value": float}`` lists, dense axis arrays, and
 ``adiabatic_index`` accepted as an alias for ``gamma``.
 
-:class:`VmecInput` is a frozen dataclass holding the full INDATA content this
-code base consumes, with VMEC2000 defaults.  Parsing is host-side NumPy code
-(nothing here needs JAX).
+:class:`VmecInput` is a frozen dataclass holding the INDATA content this code
+base actually consumes, with VMEC2000 defaults.  Parsing is host-side NumPy
+code (nothing here needs JAX).  Controls which would change the mathematical
+problem or iteration contract but are not implemented are rejected by
+:class:`UnsupportedInputModeError`; they are never silently converted into an
+ordinary fixed-/free-boundary solve.
 
 Normalizations applied on construction (all from VMEC2000):
 
 * ``read_indata_namelist``: ``raxis_s[0] = 0`` and ``zaxis_s[0] = 0``; the
   obsolete ``RAXIS``/``ZAXIS`` arrays override ``RAXIS_CC``/``ZAXIS_CS`` where
   nonzero; ``niter_array`` falls back to ``NITER`` when absent.
-* ``readin.f``: ``lfreeb`` is forced ``False`` when ``mgrid_file == 'NONE'``;
-  ``nvacskip <= 0`` falls back to ``nfp``.
+* ``readin.f``: the explicit legacy ``NS_ARRAY(1)=0`` form expands to
+  ``[max(3, NSIN), 31]``; ``lfreeb`` is forced ``False`` when
+  ``mgrid_file == 'NONE'``; ``nvacskip <= 0`` falls back to ``nfp``.
 * Boundary coefficients outside ``|n| <= ntor``, ``0 <= m < mpol`` are
   dropped (VMEC2000 reads them into oversized arrays but never uses them).
 
@@ -30,62 +34,226 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from dataclasses import dataclass, fields
+from itertools import product
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 
 import numpy as np
 
-__all__ = ["VmecInput"]
+__all__ = ["UnsupportedInputModeError", "VmecInput"]
 
 Scalar = Union[str, bool, int, float]
+IndexComponent = Union[int, slice]
+
+# Declared VMEC2000 namelist bounds for arrays consumed by VMEX or inspected
+# by the active-mode classifier.  Bounds are inclusive and ordered exactly as
+# in Fortran; the first subscript therefore varies fastest during namelist
+# sequence association.  vmec_input.f uses ntord=101, mpol1d=100,
+# ndatafmax=101, and nigroup=300.
+_INDATA_ARRAY_BOUNDS: dict[str, tuple[tuple[int, int], ...]] = {
+    "NS_ARRAY": ((1, 100),),
+    "NITER_ARRAY": ((1, 100),),
+    "FTOL_ARRAY": ((1, 100),),
+    "APHI": ((1, 20),),
+    **{name: ((0, 20),) for name in ("AM", "AI", "AC", "AH", "AT")},
+    **{
+        name: ((1, 101),)
+        for name in (
+            "AM_AUX_S", "AM_AUX_F", "AI_AUX_S", "AI_AUX_F",
+            "AC_AUX_S", "AC_AUX_F", "AH_AUX_S", "AH_AUX_F",
+            "AT_AUX_S", "AT_AUX_F", "PSA", "PFA", "ISA", "IFA",
+        )
+    },
+    **{
+        name: ((0, 101),)
+        for name in (
+            "RAXIS", "ZAXIS", "RAXIS_CC", "RAXIS_CS",
+            "ZAXIS_CC", "ZAXIS_CS",
+        )
+    },
+    **{
+        name: ((-101, 101), (0, 100))
+        for name in ("RBC", "ZBS", "RBS", "ZBC")
+    },
+    "EXTCUR": ((1, 300),),
+    "BOOZ_SURFACES": ((1, 10001),),
+}
+
+
+class UnsupportedInputModeError(ValueError):
+    """An input requests semantics which VMEX does not implement.
+
+    ``code`` is a stable, value-free diagnostic code suitable for the
+    privacy-preserving input checker.  ``control`` names the INDATA/JSON
+    control without echoing its value or any equilibrium data.
+    """
+
+    def __init__(self, code: str, control: str, reason: str):
+        self.code = str(code)
+        self.control = str(control)
+        self.reason = str(reason)
+        super().__init__(f"{self.control}: {self.reason}")
 
 # ---------------------------------------------------------------------------
 # Tolerant Fortran-namelist tokenizer (targeted at VMEC &INDATA files)
 # ---------------------------------------------------------------------------
 
 _ASSIGN_RE = re.compile(r"(?P<key>[A-Za-z_]\w*(?:\([^\)]*\))?)\s*=", re.MULTILINE)
-_REPEAT_RE = re.compile(r"^(?P<count>\d+)\*(?P<value>.+)$")
+_REPEAT_RE = re.compile(r"^(?P<count>\d+)\*(?P<value>.*)$")
 _BOOL_TRUE = {"T", ".T.", ".TRUE.", "TRUE"}
 _BOOL_FALSE = {"F", ".F.", ".FALSE.", "FALSE"}
 
+# Complete &INDATA name inventory from
+# STELLOPT/LIBSTELL/Sources/Modules/vmec_input.f, plus the documented VMEX
+# Boozer post-processing extension.  Values may be supported, explicitly
+# rejected when active, or accepted as output-only compatibility controls;
+# an unclassified spelling is always an input error.
+_KNOWN_INDATA_NAMES = {
+    "MGRID_FILE", "TIME_SLICE", "NFP", "NCURR", "NSIN", "NITER", "NSTEP",
+    "NVACSKIP", "DELT", "FTOL", "GAMMA", "BLOAT", "AM", "AI", "AC", "APHI",
+    "PCURR_TYPE", "PMASS_TYPE", "PIOTA_TYPE",
+    "AM_AUX_S", "AM_AUX_F", "AI_AUX_S", "AI_AUX_F", "AC_AUX_S", "AC_AUX_F",
+    "AH", "AT", "BCRIT", "PH_TYPE", "AH_AUX_S", "AH_AUX_F",
+    "PT_TYPE", "AT_AUX_S", "AT_AUX_F",
+    "RBC", "ZBS", "RBS", "ZBC", "SPRES_PED", "PRES_SCALE",
+    "RAXIS_CC", "ZAXIS_CS", "RAXIS_CS", "ZAXIS_CC", "RAXIS", "ZAXIS",
+    "MPOL", "NTOR", "NTHETA", "NZETA", "MFILTER_FBDY", "NFILTER_FBDY",
+    "NITER_ARRAY", "PRE_NITER", "NS_ARRAY", "FTOL_ARRAY", "TCON0",
+    "PRECON_TYPE", "PREC2D_THRESHOLD", "CURTOR", "SIGMA_CURRENT", "EXTCUR",
+    "OMP_NUM_THREADS", "PHIEDGE",
+    "PSA", "PFA", "ISA", "IFA", "IMATCH_PHIEDGE", "IOPT_RAXIS",
+    "TENSI", "TENSP", "MSEANGLE_OFFSET", "MSEANGLE_OFFSETM", "IMSE",
+    "ISNODES", "RSTARK", "DATASTARK", "SIGMA_STARK", "ITSE", "IPNODES",
+    "PRESFAC", "PRES_OFFSET", "RTHOM", "DATATHOM", "SIGMA_THOM", "PHIDIAM",
+    "SIGMA_DELPHID", "TENSI2", "FPOLYI", "NFLXS", "INDXFLX", "DSIOBT",
+    "SIGMA_FLUX", "NBFLD", "INDXBFLD", "BBC", "SIGMA_B", "LPOFR",
+    "LFORBAL", "LFREEB", "LMOVE_AXIS", "LRECON", "LMAC", "LMOVIE",
+    "LASYM", "LEDGE_DUMP", "LSPECTRUM_DUMP", "LOPTIM", "LRFP",
+    "LOLDOUT", "LWOUTTXT", "LDIAGNO", "LFULL3D1OUT",
+    "MAX_MAIN_ITERATIONS", "LGIVEUP", "FGIVEUP", "LBSUBS", "TRIP3D_FILE",
+    "LNYQUIST", "TVOLUME", "LVOLUME_RFIX",
+    # VMEX post-processing spellings found in the repository's input decks.
+    "LBOOZ", "MBOOZ", "NBOOZ", "BOOZ_SURFACES",
+}
+
 
 def _strip_fortran_comments(line: str) -> str:
-    """Remove ``!`` comments, respecting single-quoted strings."""
+    """Remove ``!`` comments outside single- or double-quoted strings."""
     out: List[str] = []
-    in_quote = False
-    for ch in line:
-        if ch == "'":
-            in_quote = not in_quote
-        elif ch == "!" and not in_quote:
+    quote: str | None = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote is not None:
+            out.append(ch)
+            if ch == quote:
+                # Fortran escapes a quote by doubling it inside the same
+                # character literal.
+                if i + 1 < len(line) and line[i + 1] == quote:
+                    out.append(line[i + 1])
+                    i += 2
+                    continue
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+        elif ch == "!":
             break
-        out.append(ch)
+        else:
+            out.append(ch)
+        i += 1
     return "".join(out)
 
 
-def _tokenize_values(chunk: str) -> List[str]:
-    """Split a value chunk into tokens, keeping quoted strings intact."""
+def _split_unquoted_whitespace(field: str) -> List[str]:
+    """Split one comma field on whitespace outside character literals."""
     tokens: List[str] = []
     buf: List[str] = []
-    in_quote = False
-    for ch in chunk.strip():
-        if ch == "'":
-            in_quote = not in_quote
+    quote: str | None = None
+    i = 0
+    while i < len(field):
+        ch = field[i]
+        if quote is not None:
             buf.append(ch)
-        elif not in_quote and ch in ", \t\r\n":
+            if ch == quote:
+                if i + 1 < len(field) and field[i + 1] == quote:
+                    buf.append(field[i + 1])
+                    i += 2
+                    continue
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+        elif ch in " \t\r\n":
             if buf:
                 tokens.append("".join(buf))
                 buf = []
         else:
             buf.append(ch)
+        i += 1
     if buf:
         tokens.append("".join(buf))
-    # Expand Fortran repeat syntax like ``11*0.0``.
-    out: List[str] = []
-    for tok in tokens:
+    return tokens
+
+
+def _tokenize_values(chunk: str) -> List[str | None]:
+    """Tokenize list-directed namelist values, preserving null positions.
+
+    A null field (``A=1,,3``) advances the target array position without
+    changing its initialized value.  ``r*`` is the corresponding repeated
+    null form.  A final comma terminates a list and is not itself a null.
+    """
+    fields: List[str] = []
+    buf: List[str] = []
+    quote: str | None = None
+    i = 0
+    stripped = chunk.strip()
+    while i < len(stripped):
+        ch = stripped[i]
+        if quote is not None:
+            buf.append(ch)
+            if ch == quote:
+                # The next identical quote is an escaped literal character,
+                # not the end of the string.
+                if i + 1 < len(stripped) and stripped[i + 1] == quote:
+                    buf.append(stripped[i + 1])
+                    i += 2
+                    continue
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+        elif ch == ",":
+            fields.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    fields.append("".join(buf))
+
+    raw: List[str | None] = []
+    for field_index, field in enumerate(fields):
+        pieces = _split_unquoted_whitespace(field)
+        if pieces:
+            raw.extend(pieces)
+        elif field_index < len(fields) - 1:
+            raw.append(None)
+
+    # Expand Fortran repeat syntax like ``11*0.0`` and repeated nulls ``3*``.
+    out: List[str | None] = []
+    for tok in raw:
+        if tok is None:
+            out.append(None)
+            continue
         m = _REPEAT_RE.match(tok)
-        if m and int(m.group("count")) > 0 and m.group("value").strip():
-            out.extend([m.group("value").strip()] * int(m.group("count")))
+        if m:
+            count = int(m.group("count"))
+            if count <= 0:
+                raise ValueError("Fortran repeat count must be positive")
+            value = m.group("value").strip()
+            out.extend(([value] if value else [None]) * count)
         else:
             out.append(tok)
     return out
@@ -96,7 +264,7 @@ def _parse_scalar(tok: str) -> Scalar:
     tok = tok.strip()
     for quote in ("'", '"'):
         if len(tok) >= 2 and tok[0] == quote and tok[-1] == quote:
-            return tok[1:-1].strip()
+            return tok[1:-1].replace(quote * 2, quote).strip()
     up = tok.upper()
     if up in _BOOL_TRUE:
         return True
@@ -110,23 +278,155 @@ def _parse_scalar(tok: str) -> Scalar:
         return tok
 
 
-def _parse_key(key: str) -> Tuple[str, Tuple[int, ...] | None]:
-    """Split ``KEY`` or ``KEY(i,j)`` into (name, indices); ``KEY(:)`` -> plain."""
+def _parse_key(key: str) -> Tuple[str, Tuple[IndexComponent, ...] | None]:
+    """Split a namelist key into its name and scalar/section designator.
+
+    A bare key returns ``None``.  Fortran triplets, including ``KEY(:)``,
+    retain their inclusive upper bound in a :class:`slice`; they are expanded
+    against the declared VMEC2000 bounds after tokenization.
+    """
     key = key.strip()
     if "(" not in key:
         return key.upper(), None
     base, rest = key.split("(", 1)
     rest = rest.rstrip(")")
-    if ":" in rest:
-        return base.upper(), None
-    return base.upper(), tuple(int(x) for x in rest.split(",") if x.strip())
+    components: list[IndexComponent] = []
+    for component in rest.split(","):
+        component = component.strip()
+        if ":" not in component:
+            components.append(int(component))
+            continue
+        parts = component.split(":")
+        if len(parts) not in (2, 3):
+            raise ValueError(f"invalid namelist array section: {key}")
+        start = int(parts[0]) if parts[0].strip() else None
+        stop = int(parts[1]) if parts[1].strip() else None
+        step = int(parts[2]) if len(parts) == 3 and parts[2].strip() else 1
+        if step == 0:
+            raise ValueError(f"zero stride in namelist array section: {key}")
+        components.append(slice(start, stop, step))
+    return base.upper(), tuple(components)
+
+
+def _fortran_positions(
+    name: str,
+    designator: Tuple[IndexComponent, ...] | None,
+    value_count: int,
+) -> list[tuple[int, ...]]:
+    """Expand one array assignment in Fortran namelist element order."""
+    bounds = _INDATA_ARRAY_BOUNDS.get(name)
+    if bounds is None:
+        if designator is None:
+            raise ValueError(f"array bounds unavailable for INDATA variable {name}")
+        if any(isinstance(component, slice) for component in designator):
+            raise ValueError(f"array bounds unavailable for INDATA section {name}")
+        # Explicit scalar subscripts remain usable for compatibility-only
+        # arrays whose compile-time extents do not affect the VMEX solve.
+        if value_count != 1:
+            raise ValueError(
+                f"multivalue starting-element assignment needs declared bounds: {name}"
+            )
+        return [tuple(int(component) for component in designator)]
+
+    rank = len(bounds)
+    if designator is None:
+        designator = tuple(slice(None, None, 1) for _ in bounds)
+    if len(designator) != rank:
+        raise ValueError(
+            f"wrong number of subscripts for {name}: expected {rank}, "
+            f"got {len(designator)}"
+        )
+
+    if all(not isinstance(component, slice) for component in designator):
+        start = tuple(int(component) for component in designator)
+        sizes = [upper - lower + 1 for lower, upper in bounds]
+        offset = 0
+        stride = 1
+        for component, (lower, upper), size in zip(
+            start, bounds, sizes, strict=True
+        ):
+            if not lower <= component <= upper:
+                raise ValueError(f"array subscript outside declared bounds: {name}")
+            offset += (component - lower) * stride
+            stride *= size
+        if offset + value_count > stride:
+            raise ValueError(f"too many values for namelist array assignment: {name}")
+        positions: list[tuple[int, ...]] = []
+        for linear in range(offset, offset + value_count):
+            remainder = linear
+            position: list[int] = []
+            for (lower, _upper), size in zip(bounds, sizes, strict=True):
+                position.append(lower + remainder % size)
+                remainder //= size
+            positions.append(tuple(position))
+        return positions
+
+    axes: list[list[int]] = []
+    for component, (lower, upper) in zip(designator, bounds, strict=True):
+        if not isinstance(component, slice):
+            value = int(component)
+            if not lower <= value <= upper:
+                raise ValueError(f"array subscript outside declared bounds: {name}")
+            axes.append([value])
+            continue
+        step = 1 if component.step is None else int(component.step)
+        start = (
+            lower if step > 0 else upper
+        ) if component.start is None else int(component.start)
+        stop = (
+            upper if step > 0 else lower
+        ) if component.stop is None else int(component.stop)
+        if not lower <= start <= upper or not lower <= stop <= upper:
+            raise ValueError(f"array section outside declared bounds: {name}")
+        exclusive = stop + (1 if step > 0 else -1)
+        axes.append(list(range(start, exclusive, step)))
+
+    positions = [
+        tuple(reversed(position))
+        for position in product(*reversed(axes))
+    ]
+    if value_count > len(positions):
+        raise ValueError(f"too many values for namelist array section: {name}")
+    return positions[:value_count]
+
+
+def _find_assignments(text: str) -> List[re.Match[str]]:
+    """Find namelist assignments outside quoted character literals."""
+    matches: List[re.Match[str]] = []
+    quote: str | None = None
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote is not None:
+            if ch == quote:
+                if i + 1 < len(text) and text[i + 1] == quote:
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        match = _ASSIGN_RE.match(text, i)
+        if match is not None and (
+            i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")
+        ):
+            matches.append(match)
+            i = match.end()
+            continue
+        i += 1
+    return matches
 
 
 def _read_indata_text(text: str) -> tuple[Dict[str, List[Scalar]], Dict[str, Dict[Tuple[int, ...], Scalar]]]:
-    """Parse the ``&INDATA`` block of ``text`` into scalar and indexed maps.
+    """Parse and sequentially replay the ``&INDATA`` block.
 
     Returns ``(scalars, indexed)`` where ``scalars`` maps upper-case names to
-    token lists and ``indexed`` maps names like ``RBC`` to ``{(n, m): value}``.
+    their final scalar token and ``indexed`` contains the final value of every
+    explicitly assigned array element.  Replaying assignments in source order
+    reproduces Fortran overlay semantics for repeated dense/indexed writes.
     """
     m_start = re.search(r"&\s*INDATA", text, flags=re.IGNORECASE)
     if not m_start:
@@ -139,18 +439,26 @@ def _read_indata_text(text: str) -> tuple[Dict[str, List[Scalar]], Dict[str, Dic
 
     scalars: Dict[str, List[Scalar]] = {}
     indexed: Dict[str, Dict[Tuple[int, ...], Scalar]] = {}
-    matches = list(_ASSIGN_RE.finditer(cleaned))
+    matches = _find_assignments(cleaned)
     for i, m in enumerate(matches):
         name, idx = _parse_key(m.group("key"))
         val_end = matches[i + 1].start() if i + 1 < len(matches) else len(cleaned)
-        chunk = re.sub(r",\s*$", "", cleaned[m.end(): val_end].strip())
-        values = [_parse_scalar(t) for t in _tokenize_values(chunk)]
+        chunk = cleaned[m.end(): val_end].strip()
+        values = _tokenize_values(chunk)
         if not values:
             continue
-        if idx is None:
-            scalars[name] = values
+        is_array = name in _INDATA_ARRAY_BOUNDS or idx is not None
+        if not is_array:
+            if len(values) != 1:
+                raise ValueError(f"too many values for scalar INDATA variable: {name}")
+            if values[0] is not None:
+                scalars[name] = [_parse_scalar(values[0])]
         else:
-            indexed.setdefault(name, {})[idx] = values[0]
+            entries = indexed.setdefault(name, {})
+            positions = _fortran_positions(name, idx, len(values))
+            for position, value in zip(positions, values, strict=True):
+                if value is not None:
+                    entries[position] = _parse_scalar(value)
     return scalars, indexed
 
 
@@ -182,6 +490,19 @@ def _fixed_length(values, n: int, fill: float = 0.0) -> np.ndarray:
     return out
 
 
+def _vmec_ns_prefix(values: Any) -> np.ndarray:
+    """Return the positive nondecreasing prefix selected by ``readin.f``."""
+    ns = np.atleast_1d(np.asarray(values, dtype=np.int64)).ravel()
+    end = 0
+    previous = 1
+    for value in ns:
+        if int(value) <= 0 or int(value) < previous:
+            break
+        previous = max(previous, int(value))
+        end += 1
+    return ns[:end].copy()
+
+
 def _trim_aux(aux_s, aux_f) -> tuple[np.ndarray, np.ndarray]:
     """Trim spline knots to the strictly increasing leading segment.
 
@@ -202,6 +523,162 @@ def _trim_aux(aux_s, aux_f) -> tuple[np.ndarray, np.ndarray]:
             n_valid = idx
             break
     return s[:n_valid].copy(), f[:n_valid].copy()
+
+
+def _indata_values(
+    name: str,
+    scalars: Dict[str, List[Scalar]],
+    indexed: Dict[str, Dict[Tuple[int, ...], Scalar]],
+) -> list[Scalar]:
+    """All explicitly assigned values for one INDATA variable."""
+    return list(scalars.get(name, ())) + list(indexed.get(name, {}).values())
+
+
+def _validate_indata_modes(
+    scalars: Dict[str, List[Scalar]],
+    indexed: Dict[str, Dict[Tuple[int, ...], Scalar]],
+) -> None:
+    """Reject active VMEC2000 modes that VMEX cannot faithfully execute.
+
+    This check deliberately runs before :class:`VmecInput` construction:
+    parsing a switch is not evidence that the production force/iteration path
+    honors it.  Neutral legacy spellings remain accepted so standard VMEC2000
+    decks need not be edited merely to remove default-valued controls.
+    """
+
+    unknown = sorted((set(scalars) | set(indexed)) - _KNOWN_INDATA_NAMES)
+    if unknown:
+        raise ValueError("unknown INDATA variable(s): " + ", ".join(unknown))
+
+    def first(name: str, default: Scalar) -> Scalar:
+        values = scalars.get(name)
+        return values[0] if values else default
+
+    reconstruction_active = bool(first("LRECON", True)) and (
+        int(first("ITSE", 0)) > 0 or int(first("IMSE", -1)) > 0
+    )
+    if reconstruction_active:
+        raise UnsupportedInputModeError(
+            "D00A_RECONSTRUCTION_MODE_UNSUPPORTED",
+            "LRECON/ITSE/IMSE",
+            "equilibrium reconstruction is not implemented",
+        )
+    if bool(first("LRFP", False)):
+        raise UnsupportedInputModeError(
+            "D00B_RFP_MODE_UNSUPPORTED",
+            "LRFP",
+            "reversed-field-pinch profile and vacuum semantics are not implemented",
+        )
+
+    trip3d_file = str(first("TRIP3D_FILE", "NONE")).strip().strip("'\"")
+    if trip3d_file.upper() not in {"", "NONE"}:
+        raise UnsupportedInputModeError(
+            "D00E_TRIP3D_MODE_UNSUPPORTED",
+            "TRIP3D_FILE",
+            "TRIP3D external-field coupling is not implemented",
+        )
+
+    ah_active = any(float(value) != 0.0 for value in _indata_values("AH", scalars, indexed))
+    at_active = False
+    dense_at = scalars.get("AT", ())
+    if dense_at:
+        at_active = float(dense_at[0]) != 1.0 or any(
+            float(value) != 0.0 for value in dense_at[1:]
+        )
+    for position, value in indexed.get("AT", {}).items():
+        if len(position) == 1:
+            expected = 1.0 if position[0] == 0 else 0.0
+            at_active = at_active or float(value) != expected
+    if ah_active or at_active:
+        raise UnsupportedInputModeError(
+            "D00F_ANIMEC_MODE_UNSUPPORTED",
+            "AH/AT",
+            "anisotropic-pressure/flow (ANIMEC) physics is not implemented",
+        )
+
+    if float(first("TVOLUME", -1.0)) > 0.0:
+        raise UnsupportedInputModeError(
+            "D00G_VOLUME_RESCALE_UNSUPPORTED",
+            "TVOLUME/LVOLUME_RFIX",
+            "VMEC2000 boundary-volume rescaling is not implemented",
+        )
+
+    precon_type = str(first("PRECON_TYPE", "NONE")).strip().upper()
+    if precon_type not in {"", "NONE", "DEFAULT", "GMRES"}:
+        raise UnsupportedInputModeError(
+            "D00H_PRECONDITIONER_MODE_UNSUPPORTED",
+            "PRECON_TYPE",
+            "only NONE/DEFAULT (1-D) and VMEX matrix-free GMRES are implemented",
+        )
+    if precon_type == "GMRES" and int(first("PRE_NITER", -1)) != -1:
+        raise UnsupportedInputModeError(
+            "D00I_ITERATION_CONTROL_UNSUPPORTED",
+            "PRE_NITER",
+            "the VMEC2000 post-activation iteration-budget override is not implemented",
+        )
+    if int(first("MAX_MAIN_ITERATIONS", 1)) > 1:
+        raise UnsupportedInputModeError(
+            "D00I_ITERATION_CONTROL_UNSUPPORTED",
+            "MAX_MAIN_ITERATIONS",
+            "automatic continuation by additional NITER blocks is not implemented",
+        )
+    if bool(first("LGIVEUP", False)):
+        raise UnsupportedInputModeError(
+            "D00I_ITERATION_CONTROL_UNSUPPORTED",
+            "LGIVEUP/FGIVEUP",
+            "VMEC2000 early termination between multigrid stages is not implemented",
+        )
+
+    if bool(first("LBSUBS", False)):
+        raise UnsupportedInputModeError(
+            "D00J_OUTPUT_MODE_UNSUPPORTED",
+            "LBSUBS",
+            "the alternative VMEC2000 B_s WOUT diagnostic is not implemented",
+        )
+    if not bool(first("LNYQUIST", True)):
+        raise UnsupportedInputModeError(
+            "D00J_OUTPUT_MODE_UNSUPPORTED",
+            "LNYQUIST",
+            "suppressing Nyquist WOUT tables is not implemented",
+        )
+    if bool(first("LBOOZ", False)):
+        raise UnsupportedInputModeError(
+            "D00J_OUTPUT_MODE_UNSUPPORTED",
+            "LBOOZ",
+            "INDATA-driven Boozer output is not implemented; use the --booz CLI option",
+        )
+    requested_legacy_artifacts = [
+        name
+        for name in ("LMAC", "LEDGE_DUMP", "LOLDOUT", "LWOUTTXT", "LDIAGNO")
+        if bool(first(name, False))
+    ]
+    if requested_legacy_artifacts:
+        controls = "/".join(requested_legacy_artifacts)
+        warnings.warn(
+            f"{controls}: requested VMEC2000 auxiliary output artifact is not "
+            "implemented; the equilibrium solve will continue",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
+def _validate_json_modes(data: Dict[str, Any]) -> None:
+    """Apply the same no-silent-fallback policy to structured JSON controls."""
+    method = str(data.get("free_boundary_method", "nestor")).strip().lower()
+    if method != "nestor":
+        raise UnsupportedInputModeError(
+            "D00K_FREE_BOUNDARY_METHOD_UNSUPPORTED",
+            "free_boundary_method",
+            "VMEX JSON solves support NESTOR; only_coils/biest are different models",
+        )
+
+    field_names = {field.name for field in fields(VmecInput)}
+    known = field_names | {"adiabatic_index", "free_boundary_method"}
+    unknown = sorted(set(data) - known)
+    if unknown:
+        raise ValueError(
+            "unknown structured JSON input key(s): " + ", ".join(unknown)
+        )
 
 
 @dataclass(frozen=True, eq=False)
@@ -228,9 +705,13 @@ class VmecInput:
     niter_array: Any = None      #: iteration cap per stage (default [100] = NITER)
     delt: float = 1.0            #: initial time step
     tcon0: float = 1.0           #: constraint-force multiplier (bcovar.f)
+    lforbal: bool = False        #: replace m=1,n=0 R/Z forces by average force balance
+    lmove_axis: bool = True      #: improve the axis when the first force sum is > 1e2
+    lfull3d1out: bool = False    #: write a WOUT when the iteration limit is reached
     aphi: Any = None             #: radial-flux remap polynomial (default [1,0,...], len 20)
     phiedge: float = 1.0         #: total enclosed toroidal flux [Wb]
     nstep: int = 10              #: iterations between progress prints
+    time_slice: float = 0.0      #: informational value in the VMEC run header
 
     # -- pressure profile (pmass; Pa before mu0 conversion) --
     pmass_type: str = "power_series"
@@ -281,25 +762,28 @@ class VmecInput:
     def __post_init__(self) -> None:
         set_ = object.__setattr__
         set_(self, "lasym", bool(self.lasym))
+        set_(self, "lforbal", bool(self.lforbal))
+        set_(self, "lmove_axis", bool(self.lmove_axis))
+        set_(self, "lfull3d1out", bool(self.lfull3d1out))
         for name in ("nfp", "mpol", "ntor", "ntheta", "nzeta", "ncurr", "nstep",
                      "nvacskip", "mfilter_fbdy", "nfilter_fbdy"):
             set_(self, name, int(getattr(self, name)))
-        for name in ("delt", "tcon0", "phiedge", "pres_scale", "gamma", "spres_ped",
-                     "curtor", "bloat", "prec2d_threshold"):
+        for name in ("delt", "tcon0", "phiedge", "time_slice", "pres_scale",
+                     "gamma", "spres_ped", "curtor", "bloat",
+                     "prec2d_threshold"):
             set_(self, name, float(getattr(self, name)))
         for name in ("pmass_type", "pcurr_type", "piota_type"):
             set_(self, name, str(getattr(self, name)).strip().lower())
         set_(self, "precon_type", str(self.precon_type).strip())
         set_(self, "mgrid_file", str(self.mgrid_file).strip())
 
-        # Multigrid ladder: ns_array trimmed to its positive prefix; ftol and
-        # niter arrays resized to the same number of stages (missing trailing
-        # entries repeat the last given value).
-        ns = np.atleast_1d(np.asarray(
-            [31] if self.ns_array is None else self.ns_array, dtype=np.int64)).ravel()
-        n_stages = int(np.argmax(ns <= 0)) if np.any(ns <= 0) else ns.size
-        n_stages = max(n_stages, 1)
-        set_(self, "ns_array", ns[:n_stages].copy())
+        # readin.f stops at the first nonpositive or decreasing entry; later
+        # values are outside multi_ns_grid and never reach runvmec.f.
+        ns = _vmec_ns_prefix([31] if self.ns_array is None else self.ns_array)
+        if ns.size == 0:
+            ns = np.asarray([31], dtype=np.int64)
+        n_stages = int(ns.size)
+        set_(self, "ns_array", ns)
         ftol = _float_array([1e-10] if self.ftol_array is None else self.ftol_array)
         niter = np.atleast_1d(np.asarray(
             [100] if self.niter_array is None else self.niter_array, dtype=np.int64)).ravel()
@@ -369,7 +853,7 @@ class VmecInput:
         """Read a VMEC input file, auto-detecting INDATA vs JSON format.
 
         Files whose first non-whitespace character is ``{`` (or with a
-        ``.json`` suffix) are parsed as VMEC++-style JSON; everything else as
+        ``.json`` suffix) are parsed as structured JSON; everything else as
         a classic ``&INDATA`` Fortran namelist (VMEC2000 ``readin.f``).
         """
         path = Path(path)
@@ -382,6 +866,7 @@ class VmecInput:
     def from_indata_text(cls, text: str) -> "VmecInput":
         """Build from ``&INDATA`` namelist text (VMEC2000 read_indata_namelist)."""
         scalars, indexed = _read_indata_text(text)
+        _validate_indata_modes(scalars, indexed)
 
         def get(name: str, default=None):
             values = scalars.get(name)
@@ -395,21 +880,77 @@ class VmecInput:
                 return None
             return list(values)
 
+        def vector(
+            name: str,
+            *,
+            lower: int,
+            default: list[float] | np.ndarray | None = None,
+            size: int | None = None,
+        ) -> np.ndarray:
+            """Apply dense and indexed namelist assignments to one vector.
+
+            Fortran namelist reads overlay assignments onto the
+            ``read_indata_namelist`` defaults: ``APHI(2)=...`` must retain
+            the default ``APHI(1)=1``, and indexed profile/multigrid entries
+            must be honored, not ignored.
+            """
+            dense = get_list(name) or []
+            entries = indexed.get(name, {})
+            indexed_length = max(
+                (idx[0] - lower + 1 for idx in entries if len(idx) == 1),
+                default=0,
+            )
+            default_values = _float_array(default)
+            length = size if size is not None else max(
+                len(dense), indexed_length, int(default_values.size)
+            )
+            out = _fixed_length(default_values, length) if length else np.zeros((0,))
+            if dense:
+                count = min(len(dense), length)
+                out[:count] = np.asarray(dense[:count], dtype=float)
+            for idx, value in entries.items():
+                if len(idx) != 1:
+                    continue
+                position = idx[0] - lower
+                if 0 <= position < length:
+                    out[position] = float(value)
+            return out
+
         mpol = int(get("MPOL", 6))
         ntor = int(get("NTOR", 0))
 
-        # ns_array: NS_ARRAY, or legacy NS, or the VMEC default 31.
-        ns_array = get_list("NS_ARRAY")
-        if ns_array is None:
-            ns_array = [int(get("NS", 31))]
+        # vmec_input.f initializes NS_ARRAY(1)=31.  readin.f's explicitly
+        # requested old-style sentinel NS_ARRAY(1)=0 expands to NSIN then 31.
+        ns_array = vector("NS_ARRAY", lower=1, default=[31])
+        if ns_array.size and int(ns_array[0]) == 0:
+            ns_array = np.asarray([max(3, int(get("NSIN", 31))), 31], dtype=np.int64)
+        ns_array = _vmec_ns_prefix(ns_array)
+        if ns_array.size == 0:
+            ns_array = np.asarray([31], dtype=np.int64)
+        n_stages = int(ns_array.size)
+
         # ftol_array: FTOL_ARRAY, or scalar FTOL (vmec_input.f: ftol_array(1)=ftol).
-        ftol_array = get_list("FTOL_ARRAY")
-        if ftol_array is None:
-            ftol_array = [float(get("FTOL", 1e-10))]
-        # niter_array falls back to NITER when absent (read_indata_namelist).
-        niter_array = get_list("NITER_ARRAY")
-        if niter_array is None:
-            niter_array = [int(get("NITER", 100))]
+        ftol_default = np.zeros((n_stages,))
+        ftol_default[0] = float(get("FTOL", 1e-10))
+        ftol_array = vector(
+            "FTOL_ARRAY", lower=1, default=ftol_default
+        )
+        if ftol_array.size and float(ftol_array[0]) == 0.0:
+            target_ftol = float(get("FTOL", 1e-10))
+            if n_stages == 1:
+                ftol_array[0] = target_ftol
+            else:
+                stage = np.arange(n_stages, dtype=float)
+                ftol_array[:n_stages] = 1.0e-8 * (
+                    1.0e8 * target_ftol
+                ) ** (stage / float(n_stages - 1))
+        # vmec_input.f initializes every NITER_ARRAY entry to -1, and replaces
+        # the complete array with NITER only when no element was assigned.
+        niter_assigned = "NITER_ARRAY" in scalars or "NITER_ARRAY" in indexed
+        niter_default = np.full((n_stages,), -1 if niter_assigned else int(get("NITER", 100)))
+        niter_array = vector(
+            "NITER_ARRAY", lower=1, default=niter_default
+        )
 
         def axis(name: str, legacy: str | None = None) -> np.ndarray:
             out = _fixed_length(get_list(name) or [], ntor + 1)
@@ -420,6 +961,9 @@ class VmecInput:
                 # Backwards compatibility (read_indata_namelist):
                 # WHERE (raxis /= 0) raxis_cc = raxis (idem zaxis -> zaxis_cs).
                 old = _fixed_length(get_list(legacy) or [], ntor + 1)
+                for idx, value in indexed.get(legacy, {}).items():
+                    if len(idx) == 1 and 0 <= idx[0] <= ntor:
+                        old[idx[0]] = float(value)
                 out = np.where(old != 0.0, old, out)
             return out
 
@@ -433,15 +977,10 @@ class VmecInput:
                     grid[n + ntor, m] = float(value)
             return grid
 
-        extcur_indexed = indexed.get("EXTCUR", {})
-        if extcur_indexed:
-            size = max(idx[0] for idx in extcur_indexed if len(idx) == 1)
-            extcur = np.zeros((size,))
-            for idx, value in extcur_indexed.items():
-                if len(idx) == 1 and idx[0] >= 1:
-                    extcur[idx[0] - 1] = float(value)
-        else:
-            extcur = _float_array(get_list("EXTCUR") or [])
+        extcur = vector("EXTCUR", lower=1)
+
+        aphi_default = np.zeros((20,))
+        aphi_default[0] = 1.0
 
         return cls(
             lasym=bool(get("LASYM", False)),
@@ -455,26 +994,30 @@ class VmecInput:
             niter_array=niter_array,
             delt=float(get("DELT", 1.0)),
             tcon0=float(get("TCON0", 1.0)),
-            aphi=get_list("APHI"),
+            lforbal=bool(get("LFORBAL", False)),
+            lmove_axis=bool(get("LMOVE_AXIS", True)),
+            lfull3d1out=bool(get("LFULL3D1OUT", False)),
+            aphi=vector("APHI", lower=1, default=aphi_default, size=20),
             phiedge=float(get("PHIEDGE", 1.0)),
             nstep=int(get("NSTEP", 10)),
+            time_slice=float(get("TIME_SLICE", 0.0)),
             pmass_type=str(get("PMASS_TYPE", "power_series")),
-            am=get_list("AM") or [],
-            am_aux_s=get_list("AM_AUX_S") or [],
-            am_aux_f=get_list("AM_AUX_F") or [],
+            am=vector("AM", lower=0, default=np.zeros((21,)), size=21),
+            am_aux_s=vector("AM_AUX_S", lower=1),
+            am_aux_f=vector("AM_AUX_F", lower=1),
             pres_scale=float(get("PRES_SCALE", 1.0)),
             gamma=float(get("GAMMA", 0.0)),
             spres_ped=float(get("SPRES_PED", 1.0)),
             ncurr=int(get("NCURR", 0)),
             pcurr_type=str(get("PCURR_TYPE", "power_series")),
-            ac=get_list("AC") or [],
-            ac_aux_s=get_list("AC_AUX_S") or [],
-            ac_aux_f=get_list("AC_AUX_F") or [],
+            ac=vector("AC", lower=0, default=np.zeros((21,)), size=21),
+            ac_aux_s=vector("AC_AUX_S", lower=1),
+            ac_aux_f=vector("AC_AUX_F", lower=1),
             curtor=float(get("CURTOR", 0.0)),
             piota_type=str(get("PIOTA_TYPE", "power_series")),
-            ai=get_list("AI") or [],
-            ai_aux_s=get_list("AI_AUX_S") or [],
-            ai_aux_f=get_list("AI_AUX_F") or [],
+            ai=vector("AI", lower=0, default=np.zeros((21,)), size=21),
+            ai_aux_s=vector("AI_AUX_S", lower=1),
+            ai_aux_f=vector("AI_AUX_F", lower=1),
             bloat=float(get("BLOAT", 1.0)),
             raxis_c=axis("RAXIS_CC", legacy="RAXIS"),
             zaxis_s=axis("ZAXIS_CS", legacy="ZAXIS"),
@@ -496,14 +1039,17 @@ class VmecInput:
 
     @classmethod
     def from_json_text(cls, text: str) -> "VmecInput":
-        """Build from VMEC++-style JSON text (plan Appendix C / vmecpp.VmecInput).
+        """Build from structured JSON text (plan Appendix C / vmecpp.VmecInput).
 
         Same key names as the dataclass fields; ``adiabatic_index`` is
         accepted as an alias for ``gamma``; ``rbc/zbs/rbs/zbc`` are sparse
-        ``{"m", "n", "value"}`` lists; axis arrays are dense.  Unknown keys
-        (e.g. VMEC++ ``free_boundary_method``) are ignored.
+        ``{"m", "n", "value"}`` lists; axis arrays are dense.  The VMEC++
+        ``free_boundary_method="nestor"`` spelling is accepted.  Other
+        free-boundary methods and unknown keys fail explicitly instead of
+        being silently ignored.
         """
         data = json.loads(text)
+        _validate_json_modes(data)
         if "adiabatic_index" in data and "gamma" not in data:
             data["gamma"] = data["adiabatic_index"]
 
@@ -601,9 +1147,13 @@ class VmecInput:
         put("NITER_ARRAY", self.niter_array)
         put("DELT", self.delt)
         put("TCON0", self.tcon0)
+        put("LFORBAL", self.lforbal)
+        put("LMOVE_AXIS", self.lmove_axis)
+        put("LFULL3D1OUT", self.lfull3d1out)
         put("APHI", self.aphi)
         put("PHIEDGE", self.phiedge)
         put("NSTEP", self.nstep)
+        put("TIME_SLICE", self.time_slice)
         put("GAMMA", self.gamma)
         put("SPRES_PED", self.spres_ped)
         put("PRES_SCALE", self.pres_scale)

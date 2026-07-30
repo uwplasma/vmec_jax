@@ -9,7 +9,7 @@ All runnable examples live under this single `examples/` tree.
     transform (`run_booz_xform` + `plot_boozmn`) on one converged equilibrium.
   - `profiles_power_and_spline.py` — the same equilibrium from power-series and
     cubic-spline pressure/iota profiles (they agree); `NCURR=0` vs `NCURR=1`.
-  - `run_from_json.py` — read/convert VMEC++-style JSON (`to_json` /
+  - `run_from_json.py` — read/convert structured JSON (`to_json` /
     `from_file`); the JSON and `&INDATA` forms describe one equilibrium.
   - `hot_restart_scan.py` — seed each scan point from the previous converged
     state; warm restarts converge in ~1 iteration and recompile nothing.
@@ -26,8 +26,9 @@ All runnable examples live under this single `examples/` tree.
   - `free_boundary_beta_scan.py` — ramp the pressure of the free-boundary case
     (coil currents fixed); the LCFS is re-solved by NESTOR at each beta.
   - `free_boundary_essos_coils.py` — free-boundary beta scan directly from
-    ESSOS coils (direct JAX Biot-Savart, no mgrid file); `PRES_SCALE` is
-    calibrated per point so the *actual* wout `betatotal` hits 0/1/2/3 %.
+    ESSOS coils (tabulated to a temporary mgrid; requires ESSOS branch
+    `feature/mgrid-from-coils`); `PRES_SCALE` is calibrated per point so the
+    *actual* wout `betatotal` hits 0/1/2/3 %.
   - `take_free_boundary_gradients.py` — differentiate a free-boundary field
     diagnostic through the virtual-casing vacuum field.
   - `single_stage_free_boundary_opt.py` — optimize coil currents to confine a

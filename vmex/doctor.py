@@ -44,6 +44,7 @@ class DoctorReport:
     pip_report: str
     versions: dict[str, str]
     jax_backend: str | None
+    jax_default_device: str | None
     jax_devices: tuple[str, ...]
     warnings: tuple[str, ...]
 
@@ -96,6 +97,16 @@ def _jax_info() -> tuple[str | None, tuple[str, ...], str | None]:
         return None, (), str(exc)
 
 
+def _jax_default_device() -> str | None:
+    try:
+        import jax
+
+        device = jax.config.jax_default_device
+        return None if device is None else str(device)
+    except Exception:  # pragma: no cover - defensive diagnostics only.
+        return None
+
+
 def collect_report() -> DoctorReport:
     """Collect installation diagnostics without modifying the environment."""
     versions = {name: _package_version(name) for name in _CORE_PACKAGES}
@@ -139,6 +150,7 @@ def collect_report() -> DoctorReport:
         pip_report=pip_text,
         versions=versions,
         jax_backend=backend,
+        jax_default_device=_jax_default_device(),
         jax_devices=devices,
         warnings=tuple(warnings),
     )
@@ -174,6 +186,7 @@ def format_report(report: DoctorReport) -> str:
         [
             "",
             f"JAX backend: {report.jax_backend or 'unavailable'}",
+            f"JAX default device: {report.jax_default_device or 'automatic'}",
             "JAX devices:",
         ]
     )
@@ -181,6 +194,13 @@ def format_report(report: DoctorReport) -> str:
         lines.extend(f"  - {device}" for device in report.jax_devices)
     else:
         lines.append("  - none detected")
+    lines.extend(
+        [
+            "VMEX forward default:  automatic work/mode-based CPU/GPU policy",
+            "VMEX implicit default: CPU on accelerator hosts (explicit device= overrides)",
+            "VMEX mirror default:   CPU for host-SciPy/JAX callback solves",
+        ]
+    )
     lines.append("")
     if report.warnings:
         lines.append("Warnings:")

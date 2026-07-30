@@ -161,6 +161,13 @@ def apply_restart(xc, xcdot, xc_saved, control: StepControl, kind: jax.Array, it
         control,
         time_step=time_step,
         jacobian_resets=control.jacobian_resets + jac.astype(control.jacobian_resets.dtype),
+        # ``iter1`` is rebased on ANY non-OK restart.  restart.f alone guards
+        # its internal ``iter1 = iter2`` behind ``irst == 2``, but the caller
+        # (evolve.f TimeStepControl) then executes ``iter1 = iter2``
+        # unconditionally inside ``IF (irst .NE. 1)`` -- for growth backoffs
+        # (irst = 3) as well.  The production loop in solver.py implements the
+        # same caller-level semantics (``iter1_r = where(restart, it, iter1)``);
+        # this helper must agree with it, not with restart.f in isolation.
         iter_last_reset=jnp.where(ok, control.iter_last_reset, iteration),
         residual_best_precond=jnp.where(ok, control.residual_best_precond, jnp.inf),
         residual_best_raw=jnp.where(ok, control.residual_best_raw, jnp.inf),

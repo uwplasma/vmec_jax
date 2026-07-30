@@ -1,33 +1,21 @@
-"""Golden-file validation of the complete ``vmex.core.wout`` writer.
+"""Golden-file validation of the complete ``vmex.core.wout`` writer: per
+deck, converge with ``solve_multigrid`` at the deck's own settings, build
+the dataset with ``wout_from_state``, write it, and compare EVERY variable
+that also exists in the golden VMEC2000 ``wout_*.nc`` — the same pure-core
+pipeline as the ``vmec`` CLI.
 
-For each reference deck, converge the equilibrium with the core multigrid
-solver (:func:`vmex.core.multigrid.solve_multigrid`) at the deck's own
-settings, build the full VMEC2000-compatible dataset with
-:func:`vmex.core.wout.wout_from_state`, write it with
-:func:`write_wout`, and compare EVERY variable that also exists in the
-golden VMEC2000 ``wout_*.nc`` (fresh VMEC2000 runs stored in
-``~/vmex_notes/golden``).  This drives the same pure-core pipeline as
-the ``vmec`` CLI (no legacy modules anywhere in the loop).
-
-Comparison policy per variable class:
-
-- integers / logicals / strings / mode tables / input profiles: exact;
-- iteration-history quantities (``niter``, ``itfsq``, ``fsqt``, ``wdot``,
-  ``ier_flag``, ``extcur``, ``mgrid_mode``): structural only (the solver
-  trajectory differs between implementations);
-- residual scalars ``fsqr``/``fsqz``/``fsql``: bounded by the deck ftol;
-- floats: per-variable (rtol, atol) with optional near-axis masking, the
-  tolerances adopted from ``tests/io/wout/test_wout_comprehensive_parity.py``
-  where stricter than plan.md Appendix A;
-- scalars VMEC2000 zeroes when it hits NITER without converging (the late
-  ``eqfor.f`` block) are skipped when the *golden* run did not converge
-  (vmex always writes the computed values - zero-crash policy).
+Policy per variable class: integers/logicals/strings/mode tables/input
+profiles exact; iteration-history quantities structural only; residual
+scalars bounded by the deck ftol; floats per-variable (rtol, atol) with
+optional near-axis masking; scalars VMEC2000 zeroes on non-converged exits
+(late eqfor.f block) are skipped when the golden run did not converge.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import os
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +33,7 @@ from vmex.core.wout import (  # noqa: E402
     write_wout,
 )
 
-from conftest import resolve_golden_dir
+from tests.conftest import resolve_golden_dir
 
 GOLDEN_DIR = resolve_golden_dir()
 pytestmark_golden = pytest.mark.skipif(
@@ -139,23 +127,13 @@ _FLOAT_TOL: dict[str, tuple[float, float, int, bool]] = {
     "ctor": (1e-3, 1e-6, 0, False),
 }
 
-# Equilibrium-drift tolerance set, applied when the solved state itself is
-# expected to differ from the golden state beyond the tight bounds:
-#  - loosely-converged goldens (ftolv > 1e-9, e.g. li383 at ftol=1e-6):
-#    both runs stop at fsq ~ 1e-6 where slow quantities (axis iota for
-#    current-driven decks) still carry ~1% drift.
-# (lasym runs used to be in this set wholesale: the legacy lasym solve
-# inherited the fixaray.f dnorm defect and converged ~5% away from VMEC2000.
-# With the dnorm fix in vmex/kernels/tomnsp.py / vmex/core/fourier.py
-# the up_down deck matches the golden at the tight bounds on the solved
-# harmonics and scalars, so lasym no longer triggers drift tolerances by
-# itself — only the writer-recomputed diagnostic channels below stay
-# relaxed for lasym.)
-# The wout *writer* itself is exact - proven by the tightly-converged
-# symmetric cases and by the bit-exact recomputation identities
-# (force_balance/currents/equif validated on the golden files). These
-# bounds pin the current accuracy while still catching any
-# normalization-factor (2x) regressions.
+# Equilibrium-drift tolerance set for loosely-converged goldens
+# (ftolv > 1e-9, e.g. li383 at 1e-6: slow quantities carry ~1% drift at the
+# shared stopping residual).  lasym no longer triggers these wholesale —
+# the fixaray.f dnorm fix closed the lasym solver gap; only
+# _LASYM_DIAG_DRIFT channels stay relaxed.  The writer itself is exact
+# (proven by the tight symmetric cases and bit-exact recomputation
+# identities); these bounds still catch normalization (2x) regressions.
 _DRIFT_TOL: dict[str, tuple[float, float, int, bool]] = {
     **{k: (5e-2, 2e-2, 0, True) for k in (
         "rmnc", "zmns", "rmns", "zmnc",
@@ -196,14 +174,18 @@ _DRIFT_TOL: dict[str, tuple[float, float, int, bool]] = {
 # Normalized force-balance/stability diagnostics of drifted states are
 # derivative-amplified beyond useful comparison: finite-only.
 _DRIFT_FINITE_ONLY = {"DMerc", "DShear", "DWell", "DCurr", "DGeod", "equif"}
-# lasym channels that stay drift-relaxed even though the lasym solve now
-# matches golden tightly (fixaray.f dnorm fix): the writer-recomputed
-# near-axis current/bsubv harmonics and Mercier-family diagnostics still
-# disagree with golden beyond drift levels while the solved harmonics agree
-# to ~1e-11 (lasym writer recomputation parity is a tracked follow-up).
+# lasym channels that stay drift-relaxed although the lasym solve matches
+# golden tightly: writer-recomputed near-axis current/bsubv harmonics
+# (lasym writer recomputation parity is a tracked follow-up).
 _LASYM_DIAG_DRIFT = {
     "bsubvmnc", "bsubvmns", "currumnc", "currumns", "currvmnc", "currvmns",
 }
+# The legacy VMEC2000/LIBSTELL Compute_Currents branch used shalf(js+1)
+# for both neighboring bsubumns coefficients.  VMEX follows the corrected
+# PARVMEC-calibrated VMEC++ 0.7.1 formula, so the old golden's currvmns is
+# useful only as a finite/shape check.  tests/test_postprocess_currents.py
+# pins the corrected formula directly.
+_LASYM_CORRECTED_LEGACY_OUTPUT = {"currvmns"}
 # For goldens stored at loose ftol (li383: 1e-6), the current-density
 # harmonics (radial derivatives of the ~1e-3-drifted field) lose all
 # significant digits in subdominant channels: finite-only there.
@@ -306,10 +288,8 @@ def test_golden_values(case):
     with netCDF4.Dataset(golden) as gd, netCDF4.Dataset(out) as nd:
         lasym = bool(int(_get(gd, "lasym__logical__")))
         ftolv = float(_get(gd, "ftolv"))
-        # lasym alone no longer triggers full drift tolerances: the
-        # fixaray.f dnorm fix (vmex/kernels/tomnsp.py) closed the lasym
-        # solver parity gap.  Only _LASYM_DIAG_DRIFT / _DRIFT_FINITE_ONLY
-        # channels stay relaxed for lasym goldens.
+        # lasym alone does not trigger full drift tolerances (dnorm fix);
+        # only _LASYM_DIAG_DRIFT / _DRIFT_FINITE_ONLY stay relaxed.
         drift = ftolv > 1e-9
         golden_conv = max(float(_get(gd, "fsqr")), float(_get(gd, "fsqz")),
                           float(_get(gd, "fsql"))) <= ftolv
@@ -342,6 +322,8 @@ def test_golden_values(case):
                 continue
             if ((drift or lasym) and name in _DRIFT_FINITE_ONLY) or (
                 ftolv > 1e-9 and name in _LOOSE_FINITE_ONLY
+            ) or (
+                lasym and name in _LASYM_CORRECTED_LEGACY_OUTPUT
             ):
                 if not np.all(np.isfinite(n)):
                     failures.append(f"{name}: non-finite values")
@@ -384,7 +366,9 @@ def test_roundtrip(case):
     w = read_wout(out)
     assert isinstance(w, WoutData)
     tmp = out.parent / "roundtrip.nc"
-    write_wout(tmp, w)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        write_wout(tmp, w)
     w2 = read_wout(tmp)
     for f in dataclasses.fields(WoutData):
         a, b = getattr(w, f.name), getattr(w2, f.name)

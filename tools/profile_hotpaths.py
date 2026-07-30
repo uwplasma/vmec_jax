@@ -10,11 +10,11 @@ run, warm = run only) and peak RSS, for the two paths that dominate real use:
 plus a cProfile of a warm solve to confirm Python-level orchestration overhead
 is negligible (all compute lives in XLA).
 
-Runs on whatever backend JAX is configured for, so it is the same script for
-the CPU numbers in the docs and for a GPU box::
+Selects hardware through VMEX's public API, so it is the same script for CPU
+and GPU measurements without JAX platform environment variables::
 
-    JAX_ENABLE_X64=1 python tools/profile_hotpaths.py
-    JAX_PLATFORMS=cuda JAX_ENABLE_X64=1 python tools/profile_hotpaths.py --cases solovev
+    python tools/profile_hotpaths.py --device cpu
+    python tools/profile_hotpaths.py --device gpu --cases solovev
 
 On CPU the dominant latency is compile time, which the persistent compilation
 cache (on by default; see ``vmex._compat``) amortises across processes; the
@@ -60,26 +60,26 @@ def _load(case: str) -> vj.VmecInput:
     return vj.VmecInput.from_file(os.path.join(DATA, f"input.{case}"))
 
 
-def profile_solve(cases: list[str]) -> None:
+def profile_solve(cases: list[str], device) -> None:
     print("\n1. FIXED-BOUNDARY MULTIGRID SOLVE  (cold = compile+run, warm = run)")
     print(f"{'case':18s} {'cold s':>9} {'warm s':>9} {'compile s':>10} "
           f"{'iters':>7} {'peakRSS MB':>11}")
     for case in cases:
         inp = _load(case)
-        _, t_cold = timed(lambda: vj.solve_multigrid(inp, verbose=False))
-        res, t_warm = timed(lambda: vj.solve_multigrid(inp, verbose=False))
+        _, t_cold = timed(lambda: vj.solve_multigrid(inp, verbose=False, device=device))
+        res, t_warm = timed(lambda: vj.solve_multigrid(inp, verbose=False, device=device))
         print(f"{case:18s} {t_cold:9.2f} {t_warm:9.2f} {t_cold - t_warm:10.2f} "
               f"{int(res.iterations):7d} {peak_mb():11.1f}")
 
 
-def profile_grad(cases: list[str]) -> None:
+def profile_grad(cases: list[str], device) -> None:
     print("\n2. DIFFERENTIABLE value_and_grad(wb)  (implicit forward + adjoint)")
     print(f"{'case':18s} {'cold s':>9} {'warm s':>9} {'compile s':>10} {'peakRSS MB':>11}")
     for case in cases:
         inp = _load(case)
-        p0 = im.params_from_input(inp)
+        p0 = im.params_from_input(inp, device=device)
         cfg = _GRAD_CFG.get(case, dict(ftol=1e-12, max_iterations=4000))
-        vg = jax.value_and_grad(lambda p: im.run(inp, p, **cfg).wb)
+        vg = jax.value_and_grad(lambda p: im.run(inp, p, device=device, **cfg).wb)
         (_, _), t_cold = timed(lambda: vg(p0))
         (v, g), t_warm = timed(lambda: vg(p0))
         print(f"{case:18s} {t_cold:9.2f} {t_warm:9.2f} {t_cold - t_warm:10.2f} "
@@ -88,13 +88,13 @@ def profile_grad(cases: list[str]) -> None:
               f"{float(np.linalg.norm(np.asarray(g.rbc))):.3e}")
 
 
-def profile_python_overhead(case: str) -> None:
+def profile_python_overhead(case: str, device) -> None:
     print("\n3. cProfile OF A WARM SOLVE  (top Python-level cumulative time)")
     inp = _load(case)
-    vj.solve_multigrid(inp, verbose=False)          # warm the cache
+    vj.solve_multigrid(inp, verbose=False, device=device)  # warm the cache
     pr = cProfile.Profile()
     pr.enable()
-    vj.solve_multigrid(inp, verbose=False)
+    vj.solve_multigrid(inp, verbose=False, device=device)
     pr.disable()
     buf = io.StringIO()
     pstats.Stats(pr, stream=buf).sort_stats("cumulative").print_stats(25)
@@ -113,17 +113,21 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--cases", default="solovev,li383_low_res",
                     help="comma-separated deck names under examples/data/input.*")
+    ap.add_argument("--device", choices=("auto", "none", "cpu", "gpu"),
+                    default="auto")
     ap.add_argument("--no-grad", action="store_true", help="skip the value_and_grad path")
     ap.add_argument("--no-cprofile", action="store_true", help="skip the cProfile section")
     args = ap.parse_args()
     cases = [c.strip() for c in args.cases.split(",") if c.strip()]
+    device = None if args.device == "none" else args.device
 
-    print(f"JAX backend: {jax.default_backend()}   x64={jax.config.read('jax_enable_x64')}")
-    profile_solve(cases)
+    print(f"JAX backend: {jax.default_backend()}   requested={args.device}   "
+          f"x64={jax.config.read('jax_enable_x64')}")
+    profile_solve(cases, device)
     if not args.no_grad:
-        profile_grad([c for c in cases if c == "solovev"] or cases[:1])
+        profile_grad([c for c in cases if c == "solovev"] or cases[:1], device)
     if not args.no_cprofile:
-        profile_python_overhead(cases[-1])
+        profile_python_overhead(cases[-1], device)
     print(f"\npeak RSS (whole run): {peak_mb():.1f} MB")
 
 

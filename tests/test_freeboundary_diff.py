@@ -1,26 +1,11 @@
-"""Differentiable free boundary via virtual casing (plan.md R15.3 + R19).
-
-Validates :mod:`vmex.core.freeboundary_diff` — the DIFFERENTIABLE
-free-boundary path that complements the NESTOR forward solve (R15.1/R15.2, which
-these tests never touch).  The free-boundary condition ``B_out . n = 0`` is
-written as a smooth objective with ``B_out = B_coil + B_plasma`` and the plasma's
-own field ``B_plasma`` from the virtual-casing principle (reusing
-``uwplasma/virtual_casing_jax``).
-
-Lanes
------
-- ``test_surface_data_reproduces_equilibrium_bnormal`` — the wout->surface-data
-  adapter reproduces the VMEC free-boundary condition ``B_total . n / |B|`` ~ 1e-16
-  on a converged equilibrium (validates the geometry+field synthesis).
-- ``test_synthetic_surface_gradient_fd_validates`` — asset-free: on a synthetic
-  torus, ``jax.grad`` of the residual w.r.t. coil Fourier dofs matches central FD
-  (the core deliverable's machinery, small grid).
-- ``test_cth_gradient_fd_validates`` (``full``) — the real cth-like case: gradients
-  w.r.t. ``extcur`` (mgrid) and coil dofs vs central FD.
-
-The whole module is gated behind ``importorskip('virtual_casing_jax')`` — the
-optional uwplasma dependency (``pip install -e /path/to/virtual_casing_jax``);
-CI stays green without it.
+"""Differentiable free boundary via virtual casing (plan.md R15.3 + R19):
+:mod:`vmex.core.freeboundary_diff` writes ``B_out . n = 0`` as a smooth
+objective with ``B_plasma`` from the virtual-casing principle
+(``uwplasma/virtual_casing_jax``); the NESTOR forward solve is untouched.
+Lanes: the wout->surface-data adapter reproduces ``B_total . n / |B|`` ~
+1e-16 on a converged equilibrium; asset-free synthetic-torus ``jax.grad``
+vs central FD; and the real cth-like ``extcur``/coil-dof gradients vs FD
+(``full``).  Gated behind ``importorskip('virtual_casing_jax')``.
 """
 
 from __future__ import annotations

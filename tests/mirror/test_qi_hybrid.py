@@ -160,5 +160,5 @@ def test_splice_rejects_bad_inputs() -> None:
         splice_straight_legs(points, cut_indices=_four_cuts(64), straight_length=-1.0)
     with pytest.raises(ValueError):  # not (P, 3)
         splice_straight_legs(points[:, :2], cut_indices=_four_cuts(64), straight_length=1.0)
-    with pytest.raises(ValueError):  # two cuts cannot supply two symmetry-fixed planes + closure
-        splice_straight_legs(points, cut_indices=(0, 32), straight_length=1.0)
+    with pytest.raises(ValueError):  # too few cuts
+        splice_straight_legs(points, cut_indices=(0,), straight_length=1.0)

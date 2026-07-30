@@ -1,21 +1,11 @@
-"""Analytic unit tests for :mod:`vmex.core.profiles`.
-
-Every supported profile *kind* (parameterized and tabulated, including the
-``_i``/``_ip`` current variants) is checked against a closed-form reference:
-
-- power series / two_power / gauss_trunc / pedestal against their defining
-  formulas and exact endpoint values (f(0), f(1));
-- integrated current kinds against analytic antiderivatives (the 10-point
-  Gauss-Legendre rule is exact for polynomial integrands of degree <= 19,
-  and hits quadrature-error level on the truncated Gaussian);
-- spline/line-segment kinds against data sampled from polynomials the
-  interpolant reproduces exactly (linear for all three; quadratic for the
-  clamped cubic spline, whose endpoint slopes come from a quadratic fit);
-- the ``pressure``/``iota``/``current`` wrappers: ``pres_scale``, ``bloat``
-  clamp, ``spres_ped`` pedestal hold, ``lrfp`` reciprocal, curtor-free
-  normalization, and the NotImplementedError guards;
-- differentiability: ``jax.grad`` through traced coefficients/scales (the
-  ``_coeffs`` tracer fallback path).
+"""Analytic unit tests for :mod:`vmex.core.profiles`: every profile kind
+(parameterized and tabulated, incl. ``_i``/``_ip`` current variants) vs a
+closed-form reference — defining formulas + exact endpoints; integrated
+current kinds vs analytic antiderivatives (10-point GL exact to degree 19);
+spline/line-segment kinds vs polynomials the interpolant reproduces
+exactly; the ``pressure``/``iota``/``current`` wrappers (pres_scale, bloat
+clamp, spres_ped hold, lrfp reciprocal, curtor-free normalization, typed
+guards); and ``jax.grad`` through traced coefficients/scales.
 """
 
 from __future__ import annotations

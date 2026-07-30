@@ -21,6 +21,8 @@ pytest.importorskip("netCDF4")
 
 import vmex as vj  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("_module_jit_enabled")
+
 REPO = Path(__file__).resolve().parents[1]
 DATA = REPO / "examples" / "data"
 DIGESTS = json.loads((REPO / "tests" / "golden_digests.json").read_text())

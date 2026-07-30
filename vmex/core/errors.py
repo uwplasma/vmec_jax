@@ -27,6 +27,19 @@ NS_ERROR_FLAG = 8
 MISC_ERROR_FLAG = 9
 SUCCESSFUL_TERM_FLAG = 11
 
+# Internal-only loop status.  VMEC2000 has no dedicated ``ier_flag`` for a
+# non-finite force evaluation; callers still receive ``MISC_ERROR_FLAG`` via
+# :class:`VmecNumericalError`, while this distinct carry value lets
+# ``solver._finalize`` distinguish NaN/Inf from a Jacobian-retry failure.
+NONFINITE_FLAG = 90
+
+# Internal-only eqsolve control transfer.  VMEC2000 communicates this as
+# ``irst = 4`` (not an ier_flag): with ``LMOVE_AXIS=T``, a finite first force
+# sum above 1e2 returns to eqsolve so ``guess_axis`` can rebuild the initial
+# profiles before any momentum step is taken.  A distinct carry status lets
+# the jitted VMEX loop make the same host-side control transfer.
+AXIS_REGUESS_FLAG = 91
+
 #: VMEC2000 termination messages, keyed by ier_flag
 #: (Sources/Input_Output/fileout.f, ``werror`` table).
 WERROR_MESSAGES: dict[int, str] = {
@@ -104,6 +117,54 @@ class VmecConvergenceError(VmecError):
     iteration: int = 0
     fsq: tuple[float, float, float] | None = None
     ftol: float = 0.0
+
+
+@dataclass
+class VmecNumericalError(VmecError):
+    """A force evaluation produced NaN or infinity.
+
+    This is intentionally a fail-fast error: once a non-finite value reaches
+    the Richardson momentum state, later iterations cannot diagnose or repair
+    its source.  Common first-iteration causes are zero effective toroidal
+    flux (``PHIEDGE``/``APHI``), a singular or sign-changing initial geometry,
+    and non-finite profile values.
+    """
+
+    ier_flag: int = MISC_ERROR_FLAG
+    iteration: int = 0
+    fsq: tuple[float, float, float] | None = None
+
+
+@dataclass
+class AdjointSolveError(VmecNumericalError):
+    """The implicit-adjoint Krylov solve returned an unconverged ``lambda``.
+
+    Raised by the reverse pass of :func:`vmex.core.implicit.solve_implicit`
+    (and the multi-RHS pullback) when the GCROT(m, k) adjoint solve exhausts
+    its budget with a residual above the acceptance threshold.  An
+    unconverged adjoint is a *silently wrong* gradient — plausible magnitude,
+    wrong value — so it is never returned: host-eager reverse passes raise
+    this typed error; traced reverse passes (a ``jax.jit`` around the whole
+    gradient) NaN-poison the adjoint instead, which the optimize drivers'
+    finite-gradient guards catch.
+
+    Attributes
+    ----------
+    iterations:
+        Total inner Krylov (Arnoldi) iterations the solve performed.
+    residual_norm:
+        The true residual norm ``||b - A^T lambda||`` the solve reached.
+    tolerance:
+        The acceptance threshold it failed to meet
+        (``slack * adjoint_tol * ||b||``).
+
+    Remedies: raise ``adjoint_maxiter``/``adjoint_gcrot_m``/
+    ``adjoint_gcrot_k`` (more Krylov budget) or loosen ``adjoint_tol``.
+    """
+
+    iterations: int = 0
+    residual_norm: float = 0.0
+    tolerance: float = 0.0
 
 
 @dataclass

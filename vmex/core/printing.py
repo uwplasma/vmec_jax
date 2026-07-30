@@ -17,13 +17,86 @@ threed1 file, or a ``jax.debug.callback``).
 
 from __future__ import annotations
 
+import numpy as np
+
+# The screen path prints only the physical residuals (printout.f FORMATs
+# 45/50/65/70); the lowercase preconditioned rows exist solely in the threed1
+# file (FORMAT 40, :func:`threed1_line`), so the screen legend does not
+# mention them.
 FORCE_ITERATIONS_BANNER = (
     " FSQR, FSQZ = Normalized Physical Force Residuals\n"
-    " fsqr, fsqz = Preconditioned Force Residuals\n"
     " -----------------------\n"
     " BEGIN FORCE ITERATIONS\n"
     " -----------------------\n"
 )
+
+
+def _fortran_positional(value: float) -> str:
+    """One double in Fortran list-directed style: 17 significant digits,
+    positional (no exponent), signed zero preserved — the gfortran
+    ``WRITE(*,*)`` rendering of the axis coefficients."""
+    value = float(value)
+    if value == 0.0:
+        return "-0.0000000000000000" if np.signbit(value) else "0.0000000000000000"
+    return np.format_float_positional(
+        value, precision=17, unique=False, fractional=False, trim="k"
+    )
+
+
+def _fortran_double(value: float) -> str:
+    """One double in Fortran list-directed style (the PARVMEC axis report):
+    positional with 17 significant digits when ``1e-3 <= |x| < 1e4`` (or
+    exactly zero), otherwise 17-significant-digit E-notation with the
+    gfortran three-digit exponent (``2.3239183094066352E-002``)."""
+    value = float(value)
+    if value == 0.0 or 1.0e-3 <= abs(value) < 1.0e4:
+        return _fortran_positional(value)
+    mantissa, _, exponent = f"{value:.16E}".partition("E")
+    return f"{mantissa}E{exponent[0]}{int(exponent[1:]):03d}"
+
+
+def _axis_line(label: str, values) -> str:
+    """One ``      RAXIS_CC = ...`` line in the gfortran list-directed layout:
+    positional values right-justified in width-22 fields with 4-space
+    separators; E-notation values fill the same 26-column field flush right
+    (G-editing puts the trailing blanks inside the field)."""
+    line = f"      {label} ="
+    for v in np.atleast_1d(np.asarray(values, dtype=float)).ravel():
+        text = _fortran_double(v)
+        line += (text.rjust(22) + "    ") if len(text) <= 22 else text.rjust(26)
+    return line.rstrip()
+
+
+def improved_axis_block(
+    raxis_cc, zaxis_cs, *, raxis_cs=None, zaxis_cc=None
+) -> str:
+    """PARVMEC-style report of the adopted re-guessed magnetic axis.
+
+    Printed right after ``TRYING TO IMPROVE INITIAL MAGNETIC AXIS GUESS``
+    (``guess_axis.f``) with the axis Fourier coefficients the retry actually
+    adopted.  ``raxis_cs``/``zaxis_cc`` add the two LASYM families when
+    given (symmetric runs print only ``RAXIS_CC``/``ZAXIS_CS``).
+    """
+    lines = ["  ---- Improved AXIS Guess ----", _axis_line("RAXIS_CC", raxis_cc)]
+    if raxis_cs is not None:
+        lines.append(_axis_line("RAXIS_CS", raxis_cs))
+    if zaxis_cc is not None:
+        lines.append(_axis_line("ZAXIS_CC", zaxis_cc))
+    lines.append(_axis_line("ZAXIS_CS", zaxis_cs))
+    lines.append("  -----------------------------")
+    return "\n".join(lines) + "\n"
+
+
+def compile_notice(ns: int, *, prefetched: bool = False) -> str:
+    """One-line attribution for an XLA compile pause at a rung boundary.
+
+    Emitted when a rung's iteration executable is not already available in
+    this process, so cold-start pauses in the console output are
+    attributable; ``prefetched`` marks executables built ahead of time by
+    the multigrid compile-overlap thread.
+    """
+    suffix = " (prefetched)" if prefetched else ""
+    return f" compiling NS = {int(ns)} executable...{suffix}\n"
 
 
 def stage_banner(ns: int, mnmax: int, ftol: float, niter: int) -> str:

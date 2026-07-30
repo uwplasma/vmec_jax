@@ -34,13 +34,8 @@ between surfaces) and diagonal (``axd/bxd``, per surface) elements, each with
 an even-m column and an odd-m column (odd-m carries the ``sm/sp`` internal
 ``sqrt(s)`` scalings from ``profil1d``).
 
-``scalfor`` forms, per mode (m,n), the radial tridiagonal system::
-
-    ax(js) = -(axm(js+1) + bxm(js+1) * m**2)          couples X(js+1)
-    bx(js) = -(axm(js)   + bxm(js)   * m**2)          couples X(js-1)
-    dx(js) = -(axd(js) + bxd(js)*m**2 + cx(js)*(n*nfp)**2)
-
-with the even/odd column selected by ``mod(m,2)``, and solves
+``scalfor`` forms, per mode (m,n), the radial tridiagonal system from these
+elements (assembly formulas: see :func:`scalfor_matrices`) and solves
 ``[bx, dx, ax] . X = force`` by the Thomas algorithm (``tridslv``).
 
 ``lamcal`` builds the diagonal lambda scaling::
@@ -90,7 +85,10 @@ import numpy as np
 
 import jax.numpy as jnp
 
-from solvax import tridiagonal_solve as _sx_tridiagonal_solve
+from solvax import (
+    tridiagonal_solve as _sx_tridiagonal_solve,
+    tridiagonal_solve_checked as _sx_tridiagonal_solve_checked,
+)
 
 __all__ = [
     "RadialPreconditionerCoefficients",
@@ -619,13 +617,12 @@ def tridiagonal_solve(
     force fields) beyond the shape of ``diagonal``; they are solved in one
     pass.
 
-    Thin arg-order adapter over :func:`solvax.tridiagonal_solve` (roadmap R18b
-    shared-solver consolidation).  SOLVAX uses the ``(lower, diag, upper)``
-    band convention (``lower = sub``, ``upper = super``), so the sub-/super-
-    diagonals are swapped here to preserve vmex's ``(super, diag, sub)``
-    signature and the two ``scalfor`` call sites.  The numerics are unchanged:
-    SOLVAX's Thomas backend is the verbatim port of the legacy parity-proven
-    sweep (same ``eps = 1e-12``), so ``method`` still selects it bit-for-bit —
+    Thin arg-order adapter over :func:`solvax.tridiagonal_solve`: SOLVAX uses
+    the ``(lower, diag, upper)`` band convention, so the sub-/super-diagonals
+    are swapped here to preserve vmex's ``(super, diag, sub)`` signature.
+    Numerics unchanged — SOLVAX's Thomas backend is the verbatim port of the
+    legacy parity-proven sweep (same ``eps = 1e-12``), so ``method`` still
+    selects it bit-for-bit:
 
     - ``"thomas"``: two ``lax.scan`` Thomas sweeps (jit-friendly, no host
       round-trips); the CPU path, **bitwise** identical to the pinned A/B tests.
@@ -646,7 +643,8 @@ def scalfor(
     *,
     jmax: int,
     tridiagonal_method: str = "auto",
-) -> Array:
+    return_safe: bool = False,
+) -> Array | tuple[Array, Array]:
     """Apply the assembled preconditioner to a spectral force (``scalfor.f``).
 
     Solves the radial tridiagonal systems of ``matrices`` against ``force``
@@ -666,10 +664,16 @@ def scalfor(
     jmax:
         Same ``jmax`` used to assemble ``matrices`` (static).
     tridiagonal_method:
-        Forwarded to :func:`tridiagonal_solve` (``"auto"``/``"thomas"``/
-        ``"lax"``; static).  The default picks per lowering platform: the
-        bit-parity Thomas scan on CPU, the fused cuSPARSE-backed kernel on
-        accelerators.
+        Forwarded to SOLVAX's checked tridiagonal solve
+        (``"auto"``/``"thomas"``/``"lax"``; static).  The default picks per
+        lowering platform: the bit-parity Thomas scan on CPU, the fused
+        backend on accelerators.
+    return_safe:
+        Also return a scalar status.  Production calls use SOLVAX's
+        unregularized pivot and backward-residual checks.  A rejected column
+        receives the identity fallback (its RHS is preserved) and makes this
+        status false, preventing a singular preconditioner from injecting a
+        NaN/Inf update while retaining a diagnosable failure signal.
     """
     ax, bx, dx = matrices
     f = jnp.asarray(force)
@@ -679,19 +683,34 @@ def scalfor(
     jmax = int(jmax)
     mpol = int(f.shape[1])
     out = f
+    safe = jnp.asarray(True)
+
+    def checked_solve(superdiagonal, diagonal, subdiagonal, rhs):
+        result = _sx_tridiagonal_solve_checked(
+            subdiagonal,
+            diagonal,
+            superdiagonal,
+            rhs,
+            method=tridiagonal_method,
+            pivot_rtol=1.0e-8,
+            residual_rtol=1.0e-8,
+            fallback="identity",
+        )
+        return result.solution, jnp.all(~result.diagnostics.fallback_used)
 
     if jmax > 0:
-        solution_m0 = tridiagonal_solve(
+        solution_m0, safe_m0 = checked_solve(
             ax[:jmax, 0, :], dx[:jmax, 0, :], bx[:jmax, 0, :], f[:jmax, 0, :, :],
-            method=tridiagonal_method,
         )
+        safe = safe & safe_m0
         out = out.at[:jmax, 0].set(solution_m0)
         if mpol > 1 and jmax > 1:
-            solution_m = tridiagonal_solve(
+            solution_m, safe_m = checked_solve(
                 ax[1:jmax, 1:, :], dx[1:jmax, 1:, :], bx[1:jmax, 1:, :], f[1:jmax, 1:, :, :],
-                method=tridiagonal_method,
             )
+            safe = safe & safe_m
             out = out.at[1:jmax, 1:].set(solution_m)
             out = out.at[0, 1:].set(0.0)
 
-    return out[..., 0] if not stacked else out
+    result = out[..., 0] if not stacked else out
+    return (result, safe) if return_safe else result

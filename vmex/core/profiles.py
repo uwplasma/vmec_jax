@@ -14,9 +14,7 @@ Units
 * :func:`pressure` returns pressure in **Pascals** (``PRES_SCALE * pmass(x)``
   with the VMEC input coefficients ``AM`` in Pa).  VMEC2000's ``pmass``
   function returns ``mu0 * pres_scale * pmass`` (internal units, same as
-  ``B**2``); multiply by :data:`MU0` to obtain VMEC internal units.  This
-  matches the historical ``vmex.profiles.eval_profiles`` behavior where
-  ``pressure_pa`` is Pa and ``pressure = MU0 * pressure_pa``.
+  ``B**2``); multiply by :data:`MU0` to obtain VMEC internal units.
 * :func:`iota` is dimensionless (or the safety factor ``q = 1/iota`` input
   when ``lrfp=True``).
 * :func:`current` returns VMEC's dimensionless current shape function
@@ -49,10 +47,10 @@ akima_spline_i(_ip)  idem, Akima spline
 line_segment_i(_ip)  idem, line segments
 ===================  =========================================================
 
-Numerical integration of the ``*_ip`` parameterized kinds uses a fixed
-16-point Gauss-Legendre rule on [0, x] (VMEC2000 uses a 10-point rule; the
-difference is at quadrature-error level).  Spline ``*_ip`` kinds are
-integrated analytically piecewise, as in the historical implementation.
+Numerical integration of the parameterized ``*_ip`` kinds uses VMEC2000's
+fixed 10-point Gauss-Legendre rule on [0, x] (nodes/weights copied verbatim
+from ``profile_functions.f`` for bit-exact parity).  Spline ``*_ip`` kinds
+are integrated analytically piecewise.
 """
 
 from __future__ import annotations
@@ -588,8 +586,7 @@ def iota(piota_type: str, ai, ai_aux_s, ai_aux_f, s, *, bloat=1.0, lrfp=False):
     ``q = 1/iota`` and the reciprocal is returned (infinite where q = 0).
 
     Note: VMEC2000's ``piota`` does not apply the ``bloat`` clamp internally;
-    the historical vmex implementation applied it uniformly and this port
-    keeps that behavior (identical for the default ``bloat = 1``).
+    this port applies it uniformly (identical for the default ``bloat = 1``).
     """
     kind = str(piota_type).strip().lower()
     if kind not in ("power_series", "cubic_spline", "akima_spline", "line_segment"):

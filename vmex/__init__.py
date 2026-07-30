@@ -5,14 +5,15 @@ Public API (lazily imported; ``import vmex as vj``):
 - :class:`~vmex.core.input.VmecInput` — INDATA / VMEC++-JSON input pytree
 - :func:`~vmex.core.solver.solve` — single-grid fixed-boundary solve
 - :func:`~vmex.core.multigrid.solve_multigrid` — NS_ARRAY ladder (runvmec.f)
+- :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` — free-boundary ladder
 - :func:`~vmex.core.freeboundary.solve_free_boundary` — NESTOR free boundary
 - :func:`~vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
   / :func:`~vmex.core.wout.wout_from_state` / :class:`~vmex.core.wout.WoutData`
 - :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
 - :func:`~vmex.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
 - :func:`~vmex.core.mgrid.read_mgrid` / :func:`~vmex.core.mgrid.write_mgrid`
-  / :class:`~vmex.core.mgrid.MgridField` (external field is an mgrid or any
-  ``xyz->B`` callable; coils live in ESSOS, ``essos.coils.Coils``)
+  / :func:`~vmex.core.mgrid.tabulate_cartesian_field`
+  / :class:`~vmex.core.mgrid.MgridField` (mgrid or tabulated direct field)
 - ``vmex.optimize`` — objectives + least-squares driver (module)
 - ``vmex.implicit`` — implicit differentiation of the equilibrium (module)
 - ``vmex.parallel`` — concurrent ensembles of independent solves (module)
@@ -52,19 +53,15 @@ try:
 except _PackageNotFoundError:  # pragma: no cover - source tree without installed metadata.
     __version__ = "0+unknown"
 
-# Suppress noisy C++ warnings from XLA/PjRt backend (e.g. repeated
-# "Assume version compatibility. PjRt-IFRT does not track XLA executable
-# versions." on persistent-cache hits). Must be set before *any* ``import
-# jax`` in the process. Uses setdefault so the user can still override via the
-# environment.
+# Suppress noisy XLA/PjRt C++ logs (see _compat._configure_jax_environment).
+# Must be set before *any* ``import jax`` in the process; setdefault keeps
+# user overrides working.
 _os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 _os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
 _os.environ.setdefault("GLOG_minloglevel", "2")
 
 # Enable the JAX persistent XLA compilation cache in a machine-scoped
-# directory when requested by the backend/env policy in _compat. Accelerator
-# runs use the cache by default; CPU runs are opt-in to avoid XLA:CPU AOT
-# feature-mismatch warnings on shared or changing runtime environments.
+# directory per the _compat policy (see _default_compilation_cache_dir).
 # ``core.solver._harden_compilation_cache`` re-applies this policy on every
 # solve path in case this module never ran (namespace-package shadowing).
 import jax as _jax
@@ -83,6 +80,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     # solvers
     "solve": (".core.solver", "solve"),
     "solve_multigrid": (".core.multigrid", "solve_multigrid"),
+    "solve_free_boundary_multigrid": (
+        ".core.multigrid", "solve_free_boundary_multigrid"),
     "solve_free_boundary": (".core.freeboundary", "solve_free_boundary"),
     # wout IO
     "WoutData": (".core.wout", "WoutData"),
@@ -97,12 +96,14 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "MgridData": (".core.mgrid", "MgridData"),
     "MgridField": (".core.mgrid", "MgridField"),
     "read_mgrid": (".core.mgrid", "read_mgrid"),
+    "tabulate_cartesian_field": (".core.mgrid", "tabulate_cartesian_field"),
     "write_mgrid": (".core.mgrid", "write_mgrid"),
     # errors
     "VmecError": (".core.errors", "VmecError"),
     "VmecInputError": (".core.errors", "VmecInputError"),
     "VmecJacobianError": (".core.errors", "VmecJacobianError"),
     "VmecConvergenceError": (".core.errors", "VmecConvergenceError"),
+    "VmecNumericalError": (".core.errors", "VmecNumericalError"),
     "MgridNotFoundError": (".core.errors", "MgridNotFoundError"),
     # modules
     "core": (".core", None),

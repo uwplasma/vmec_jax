@@ -42,10 +42,10 @@ flux surface — the view used to judge quasisymmetry.
 .. literalinclude:: ../examples/plot_and_boozer.py
    :language: python
 
-VMEC++ JSON input
-~~~~~~~~~~~~~~~~~
+structured JSON input
+~~~~~~~~~~~~~~~~~~~~~
 
-vmex reads both the classic ``&INDATA`` namelist and the VMEC++ JSON schema,
+vmex reads both the classic ``&INDATA`` namelist and the structured JSON schema,
 and can write the JSON form — a drop-in for either ecosystem.  This converts a
 deck, reads it back, and confirms the two representations describe one
 equilibrium.
@@ -111,8 +111,10 @@ Free-boundary gradients (virtual casing)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The differentiable complement for free boundary: the plasma–vacuum interface
-mismatch is written as a smooth objective and differentiated with respect to the
-coil currents (``extcur``) and coil Fourier shape, finite-difference-validated.
+mismatch on a specified plasma boundary is written as a smooth objective and
+differentiated with respect to the coil currents (``extcur``) and coil Fourier
+shape, finite-difference-validated; the NESTOR equilibrium solve itself is not
+differentiated.
 
 .. literalinclude:: ../examples/take_free_boundary_gradients.py
    :language: python
@@ -142,8 +144,8 @@ external field.
 .. literalinclude:: ../examples/free_boundary_beta_scan.py
    :language: python
 
-Directly from ESSOS coils (no mgrid file)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+From ESSOS coils (no mgrid file)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 vmex is coil-agnostic: the free-boundary solver consumes only a magnetic
 field, so coils can come from ESSOS (``essos.coils.Coils``) instead of a
@@ -152,6 +154,11 @@ set, tabulates its Biot–Savart field once into an in-memory
 :class:`~vmex.core.mgrid.MgridField`, and runs a free-boundary beta scan
 against it — calibrating ``PRES_SCALE`` per step so the converged wout
 ``betatotal`` lands on 0/1/2/3 %.
+
+The same adapter is available independently of the example as
+``MgridField.from_cartesian_field``.  It accepts ESSOS' ``B(points)`` protocol,
+SIMSOPT's ``set_points(points); B()`` protocol, or a plain Cartesian callable;
+the tabulated field can be reused across every radial stage and hot restart.
 
 .. literalinclude:: ../examples/free_boundary_essos_coils.py
    :language: python

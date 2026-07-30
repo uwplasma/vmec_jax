@@ -1,15 +1,9 @@
 """Tests for ``vmex.core.{forces,residuals}`` (forces.f / residue.f90).
-
-Stage-by-stage parity of the force/residual chain with the legacy
-parity-proven kernels (real-space kernels, spectral projections, m=1
-rotation, scalxc, fsq norms, preconditioned lane) was proven by the A/B
-suite that retired with the legacy tree.  Kept here, on realistic profil3d.f
-initial states for sym 2D, sym 2D ncurr=1, sym 3D and lasym decks:
-
-- the residue.f90 m=1 constrained <-> physical mappings round-trip exactly,
-- the m1-zero / edge-force release conditions are traced (jit-safe) values,
-- the full funct3d pass (``core.solver.evaluate_forces``) is finite, jit
-  matches eager, and grad of ``fsqr`` w.r.t. ``R_cos`` is finite/nonzero.
+Stage-by-stage legacy parity was proven by the retired A/B suite; kept
+here, on realistic profil3d.f initial states (sym 2D, sym 2D ncurr=1, sym
+3D, lasym): the residue.f90 m=1 constrained <-> physical round trip, the
+m1-zero / edge-force release conditions as traced values, and the full
+funct3d pass (finite, jit == eager, finite/nonzero grad of ``fsqr``).
 """
 
 from __future__ import annotations
@@ -26,13 +20,16 @@ import numpy as np
 import pytest
 
 from vmex.core import residuals as newr
+from vmex.core.forces import apply_m1_force_balance
 from vmex.core.input import VmecInput
+from vmex.core.setup import run_setup
 from vmex.core.solver import (
     _initial_state,
     evaluate_forces,
     prepare_runtime,
     resolution_from_input,
 )
+from vmex.core.transforms import SpectralForce
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 
@@ -57,7 +54,12 @@ def _allclose(new, old, name, rtol=RTOL, atol=ATOL):
 def case(request):
     name = request.param
     inp = VmecInput.from_file(DATA_DIR / f"input.{name}")
-    rt = prepare_runtime(inp, resolution_from_input(inp))
+    resolution = resolution_from_input(inp)
+    # These are pure force-kernel tests, so request a regular inferred axis
+    # for all-zero-axis decks.  Production keeps the supplied zero axis and
+    # performs its one VMEC2000-compatible recovery in the solve driver.
+    setup = run_setup(inp, resolution, infer_axis_if_missing=True)
+    rt = prepare_runtime(inp, resolution, setup=setup)
     state = _initial_state(rt.setup)
     return SimpleNamespace(name=name, inp=inp, rt=rt, state=state)
 
@@ -128,6 +130,48 @@ def test_release_conditions_are_traced_values():
         jax.jit(lambda f, i: newr.m1_zero_condition(fsqz_previous=f, iterations_since_restart=i))(
             jnp.asarray(1e-7), jnp.asarray(100)
         )
+    )
+
+
+def test_lforbal_replaces_only_symmetric_m1_n0_interior() -> None:
+    """tomnsp_mod.f leaves every block except frcc/fzsc(m=1,n=0) alone."""
+    shape = (5, 3, 2)
+    frcc = jnp.arange(np.prod(shape), dtype=jnp.float64).reshape(shape)
+    fzsc = 100.0 + frcc
+    untouched = -frcc
+    force = SpectralForce(
+        force_R_cc=frcc,
+        force_Z_sc=fzsc,
+        force_R_ss=untouched,
+        force_Z_cs=2.0 * untouched,
+    )
+    equif = jnp.asarray([0.0, 2.0, 4.0, 6.0, 0.0])
+    factor_R = jnp.asarray([0.0, 10.0, 20.0, 30.0, 0.0])
+    factor_Z = jnp.asarray([0.0, 5.0, 10.0, 15.0, 0.0])
+    got = apply_m1_force_balance(
+        force, equif=equif, factor_R=factor_R, factor_Z=factor_Z
+    )
+
+    expected_R = np.asarray(frcc).copy()
+    expected_Z = np.asarray(fzsc).copy()
+    old_R = expected_R[:, 1, 0].copy()
+    old_Z = expected_Z[:, 1, 0].copy()
+    work = old_R[1:-1] / np.asarray(factor_R)[1:-1] - (
+        old_Z[1:-1] / np.asarray(factor_Z)[1:-1]
+    )
+    expected_R[1:-1, 1, 0] = (
+        0.5 * np.asarray(factor_R)[1:-1]
+        * (np.asarray(equif)[1:-1] + work)
+    )
+    expected_Z[1:-1, 1, 0] = (
+        0.5 * np.asarray(factor_Z)[1:-1]
+        * (np.asarray(equif)[1:-1] - work)
+    )
+    np.testing.assert_allclose(np.asarray(got.force_R_cc), expected_R)
+    np.testing.assert_allclose(np.asarray(got.force_Z_sc), expected_Z)
+    np.testing.assert_array_equal(np.asarray(got.force_R_ss), np.asarray(untouched))
+    np.testing.assert_array_equal(
+        np.asarray(got.force_Z_cs), np.asarray(2.0 * untouched)
     )
 
 

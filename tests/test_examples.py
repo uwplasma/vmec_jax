@@ -1,19 +1,9 @@
-"""Smoke tests for the plan.md §10 examples at reduced budgets.
-
-Each example script reads ``VMEX_EXAMPLES_CI=1`` (parameters-at-top
-hook) and shrinks its continuation schedule / trial budget; the tests run
-the scripts as subprocesses in a temp cwd and assert that
-
-- the script exits cleanly,
-- the reported least-squares cost decreases from its first evaluation,
-- the promised outputs (optimized input deck, wout file, figures) exist.
-
-The "commented-out but CI-tested" extra objective terms of the optimization
-examples (magnetic well, DMerc floor, L_grad_B floor) are exercised
-*uncommented* in ``test_extra_terms_work_uncommented`` — exactly the
-expressions the example comments show, one finite-difference least-squares
-iteration each, plus the traceable magnetic-well term through
-``jac="implicit"``.
+"""Smoke tests for the plan.md §10 examples at reduced budgets: each script
+reads ``VMEX_EXAMPLES_CI=1`` and shrinks its budget; the tests run them as
+subprocesses and assert clean exit, decreasing least-squares cost, and the
+promised outputs.  The examples' "commented-out but CI-tested" extra
+objective terms are exercised uncommented in
+``test_extra_terms_work_uncommented``.
 """
 
 from __future__ import annotations
@@ -195,9 +185,14 @@ def test_mirror_free_boundary_beta_scan_example(tmp_path):
             assert (outdir / f"mirror_beta_{beta}pct_{suffix}.png").stat().st_size > 10_000
 
 
-@pytest.mark.full  # nightly: free-bdy NESTOR solve with direct-coil Biot-Savart (~30s)
+@pytest.mark.full  # nightly: free-bdy NESTOR solve with direct-coil Biot-Savart (~90s)
 def test_free_boundary_essos_coils(tmp_path):
-    pytest.importorskip("essos")
+    # The example needs only ``essos.coils`` (loading) + ``essos.fields.BiotSavart``
+    # (tabulation) — present in every released ESSOS >= 0.16, with an in-example
+    # fallback to the legacy ``Coils_from_json`` loader.  Under VMEX_EXAMPLES_CI=1
+    # the script solves a single coarse beta point (ns=16), keeping this bounded.
+    pytest.importorskip("essos.coils")
+    pytest.importorskip("essos.fields")
     out = _run_example(EXAMPLES / "free_boundary_essos_coils.py", tmp_path, timeout=900)
     # table rows: nominal%  PRES_SCALE  actual-beta%  iters  fsq  aspect  axis-R
     rows = re.findall(r"^\s*([0-9.]+)%\s+([0-9.]+)\s+([0-9.]+)%\s+\d+\s+([0-9.eE+-]+)",
@@ -287,7 +282,7 @@ def test_objectives_showcase(tmp_path):
         for stage in ("seed", "final"):
             assert np.isfinite(m[stage]["metric"]), f"{name}/{stage}: metric"
             assert np.isfinite(m[stage]["qs_total"]), f"{name}/{stage}: QS"
-    assert "wout-engine objective" in out  # the honest-FD-cost printout
+    assert "d_merc wout-reporting lane" in out  # deliberate FD campaign
 
 
 def test_extra_terms_work_uncommented():
@@ -304,7 +299,7 @@ def test_extra_terms_work_uncommented():
         # exactly the expressions the example comments show:
         extra_terms = [
             (opt.magnetic_well, 0.05, 1.0),
-            (lambda eq: np.minimum(opt.d_merc(eq)[2:-1], 0.0), 0.0, 100.0),
+            (opt.mercier_stability_residual, 0.0, 100.0),
             (lambda eq: max(1.0 / opt.l_grad_b(eq) - 1.0 / 0.35, 0.0), 0.0, 1.0),
         ]
         terms = [(opt.aspect_ratio, 5.0, 1.0)] + extra_terms
@@ -313,7 +308,9 @@ def test_extra_terms_work_uncommented():
         assert np.all(np.isfinite(result.fun))
         # the traceable extra term also differentiates through jac="implicit"
         result2 = opt.least_squares(
-            [(opt.aspect_ratio, 5.0, 1.0), (opt.magnetic_well, 0.05, 1.0)],
+            [(opt.aspect_ratio, 5.0, 1.0),
+             (opt.magnetic_well, 0.05, 1.0),
+             (opt.mercier_stability_residual, 0.0, 100.0)],
             inp, max_mode=1, jac="implicit", use_ess=True, max_nfev=2)
         assert np.all(np.isfinite(result2.fun))
         # host wout-engine terms are rejected with a clear error in implicit mode
@@ -371,7 +368,7 @@ def test_single_stage_vs_two_stage(tmp_path):
                 / "comparison.json")
     assert cmp_path.exists(), "comparison.json not written"
     results = json.loads(cmp_path.read_text())
-    assert set(results) == {"two_stage", "single_stage"}
+    assert set(results) == {"two_stage", "single_stage", "single_stage_polish"}
     for label, metrics in results.items():
         assert np.isfinite(metrics["qs_total"]), f"{label}: non-finite QS"
         assert np.isfinite(metrics["avg_Bn_over_B"]), f"{label}: non-finite B.n"

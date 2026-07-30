@@ -20,6 +20,8 @@ final ``NS_ARRAY`` stage is ramped to **ns = 201** — production radial
 resolution, where the physics dominates the compile overhead and the warm
 comparison is fairest.
 
+.. begin generated-baseline-table (tools/render_performance_docs.py)
+
 .. list-table::
    :header-rows: 1
    :widths: 34 14 14 14 14
@@ -28,98 +30,111 @@ comparison is fairest.
      - VMEC2000
      - vmex cold
      - vmex warm
-     - VMEC++
+     - reference C++
+   * - li383_low_res
+     - 0.86
+     - 3.36
+     - **0.434**
+     - 0.341
    * - solovev
-     - 1.41
-     - 11.5
-     - **0.62**
-     - 1.45
-   * - li383_low_res (NCSX)
-     - 1.06
-     - 8.3
-     - **0.69**
-     - 0.53
-   * - nfp4_QH_warm_start
-     - 1.91
-     - 10.9
-     - **1.32**
-     - 1.35
-   * - nfp4_QH_warm_start (multigrid)
-     - 1.89
-     - 29.1
-     - **1.44**
-     - 1.56
+     - 1.07
+     - 3.23
+     - **0.319**
+     - 0.845
    * - circular_tokamak
-     - 2.02
-     - 22.6
-     - **1.63**
-     - 3.70
+     - 1.35
+     - 4.12
+     - **0.522**
+     - 1.26
+   * - nfp4_QH_warm_start
+     - 1.42
+     - 3.51
+     - **0.641**
+     - 0.782
+   * - nfp4_QH_warm_start (multigrid)
+     - 1.48
+     - 11.9
+     - **0.787**
+     - 1.05
    * - DSHAPE
-     - 2.31
-     - 32.7
-     - 2.37
-     - 5.45
-   * - cth_like_fixed_bdy (multigrid)
-     - 10.2
-     - 38.5
-     - **7.76**
-     - failed
+     - 1.83
+     - 6.27
+     - **0.812**
+     - 1.87
    * - cth_like_fixed_bdy
-     - 13.2
-     - 28.0
-     - **9.51**
+     - 6.04
+     - 6.65
+     - **3.5**
      - failed
-   * - cth_like_free_bdy (free boundary)
-     - 26.7
-     - 71.3
-     - **24.9**
-     - 6.9
+   * - cth_like_fixed_bdy (multigrid)
+     - 7.08
+     - 17.3
+     - **4.57**
+     - failed
+   * - cth_like_free_bdy
+     - 20.2
+     - 28.9
+     - **13**
+     - 6.36
    * - LandremanPaul2021_QA_lowres
-     - 45.0
-     - 72.3
-     - **42.7**
-     - 24.7
+     - 34.7
+     - 28.6
+     - **22.2**
+     - 12.2
    * - LandremanPaul2021_QA_lowres (multigrid)
-     - 73.7
-     - 103.4
-     - **68.1**
-     - 30.9
+     - 55.8
+     - 45.2
+     - **35.9**
+     - 16.5
    * - LandremanPaul2021_QH_reactorScale_lowres
-     - 64.8
-     - 76.8
-     - 65.6
+     - 61.7
+     - 45.7
+     - **38.4**
      - failed
    * - NuhrenbergZille_1988_QHS
-     - 137
-     - **108**
-     - **76.8**
-     - 72.7
-   * - cth_like_free_bdy_lasym_small (free bdy, lasym)
-     - 228
-     - --
-     - **196**
-     - n/a
+     - 106
+     - 98.6
+     - **74.6**
+     - 45.7
+   * - cth_like_free_bdy_lasym_small
+     - 154
+     - 133*
+     - **105**
+     - failed
 
-Bold marks vmex beating VMEC2000. These are wall-clock seconds on a
-shared Apple-Silicon CPU (``benchmarks/baseline.json``), so the
-warm/Fortran *ratio* is the comparable quantity, not the absolute numbers.
+Bold marks vmex warm beating VMEC2000 (14 of 14 rows).
+``*`` marks an equal-iteration-budget run whose CLI exit was nonzero
+(the deliberately NITER-bounded LASYM stress row: both codes exhaust
+the same budget, so the wall times compare equal work); ``failed``
+marks an aborted run and ``n/a`` an unsupported configuration.
+
+.. end generated-baseline-table
+
+These are wall-clock seconds measured on an otherwise idle Apple-Silicon
+host — one fresh process per code, run sequentially (never interleaved), so
+each row is one controlled baseline rather than a statistical benchmark;
+repeated runs move the small rows by tens of milliseconds and the ratios by
+a few percent.  The comparable quantity across hosts is the warm/Fortran
+*ratio*, not the absolute numbers.
 
 Reading the table:
 
-- **Warm** solves beat VMEC2000 on 12 of the 14 rows — typically 1.2–2.3x —
-  and tie on the other two (DSHAPE, the reactor-scale QH). This includes
-  both **free-boundary** rows: the NESTOR path converges to VMEC2000 parity
-  *and* now edges out the Fortran wall clock.
-- **Cold** runs pay a one-time 7–30 s XLA compile, so a single
-  fire-and-forget run is slower than Fortran — except on the biggest deck
-  (NuhrenbergZille at ns=201), where even the cold run, compile included,
-  beats VMEC2000. The persistent compilation cache removes most of the
-  compile cost on subsequent processes.
-- **VMEC++** is faster on some converged large decks (free
-  boundary, LandremanPaul QA) but *failed* rows aborted during the first
-  iterations; ``vmex`` converges on the full suite (zero-crash policy).
-  ``n/a`` marks a configuration VMEC++ does not support (``lasym`` free
-  boundary).
+- **Warm** solves reuse the compiled executable — the number that matters
+  inside optimization loops.  The generated caption above counts the rows
+  where the warm solve beats VMEC2000; the converged symmetric
+  **free-boundary** row is among them (the NESTOR path reaches VMEC2000
+  parity *and* edges out the Fortran wall clock).
+- **Cold** runs pay a one-time XLA compile, so a single fire-and-forget run
+  is usually slower than Fortran — except on the biggest decks, where even
+  the cold run, compile included, wins.  The persistent compilation cache
+  removes most of the compile cost on subsequent processes.
+- The **reference C++ implementation** (10-thread default; invoked once per
+  deck through its Python API in a fresh process, same host, same sequential
+  protocol) is faster on some converged large decks; its ``failed`` rows
+  aborted during the first iterations.  ``vmex`` completes every supported
+  convergent row and the deliberately NITER-bounded LASYM stress row
+  (zero-crash policy); ``n/a`` marks a configuration the reference does not
+  support (``lasym`` free boundary).
 
 Production workflows: CPU vs GPU
 --------------------------------
@@ -150,12 +165,15 @@ A4000, jax cuda12 — different hosts, so read each column on its own terms):
      - 151 s
 
 The headline: **a fast desktop CPU beats the A4000 GPU on every production
-workflow, even at ns = 201.** Forward solves are close (the GPU is
-iteration-competitive at this size — free-boundary NESTOR runs 13.9 ms/iter
-on the GPU), but the gradient pipeline is launch-bound on an accelerator,
-which is why :func:`vmex.core.device.resolve_implicit_device` pins
-implicit-gradient work to the CPU by default (an earlier placement leak
-here cost 2x on GPU boxes — fixed, and the pin is now automatic). The
+workflow, even at ns = 201.** Forward solves are close. Free-boundary GPU
+runs use a hybrid decomposition: plasma iterations stay on the accelerator,
+while the small dense NESTOR block runs on CPU with a reused LU factor. The
+gradient pipeline is launch-bound on an accelerator,
+which is why high-level optimization uses
+:func:`vmex.core.device.resolve_implicit_device` to pin implicit-gradient work
+to the CPU by default. Low-level :func:`vmex.core.implicit.run` follows JAX
+placement when ``device`` is omitted; ``device="auto"`` opts into the
+measured CPU policy. The
 GPU's wins come against slower server cores and larger-than-production
 problem sizes (see the GPU guidance below).
 
@@ -174,6 +192,19 @@ phase) and the perturbation warm start (3.7x fewer trial-solve iterations)
 
 Parity with VMEC2000
 --------------------
+
+Free-boundary multigrid has a dedicated reproducible artifact,
+``benchmarks/freeboundary_multigrid.json``.  On the public converged CTH-like
+``NS_ARRAY = 7, 15`` ladder (Apple Silicon CPU, 2026-07-21), VMEC2000 takes
+239 + 340 iterations in 0.98 s; vmex takes 250 + 340 iterations, 10.07 s cold
+and 1.98 s warm.  Both activate vacuum exactly once.  Against an ns=15
+VMEC2000 wout, vmex's final scale-relative maximum errors are
+``6.10e-5`` (R), ``3.59e-4`` (Z), ``1.52e-6`` (iota), and ``5.94e-8``
+(relative ``wb``).  The first fine-grid raw residual remains a transient
+ordering difference (``FSQR=2.01e-3`` versus VMEC2000's ``1.73``), but both
+then take exactly 340 fine-grid iterations to the same fixed point.  Warm
+execution is within 2.1x of Fortran on this small case; the one-time XLA
+compile dominates the cold result.
 
 Per-iteration algorithmic parity (same step control, preconditioner cadence,
 constants) means the solver does not just reach the same answer — it takes
@@ -231,13 +262,14 @@ trajectory.  The trace below runs the quick-start QH case
 (``nfp4_QH_warm_start``, single grid at ``ns=51``) through all three codes
 and plots the total force residual ``fsqr + fsqz + fsql`` per iteration:
 the vmex curve lies exactly on top of VMEC2000's (both converge in 502
-iterations), and VMEC++ follows a near-identical path (501 iterations).
+iterations), and the reference C++ implementation follows a
+near-identical path (501 iterations).
 The vmex trace comes from ``SolveResult.fsq_history``, the VMEC2000
 trace from its stdout iteration table run with ``NSTEP = 1``, and the
-VMEC++ trace from the ``fsqt`` array of its wout payload.
+reference trace from the ``fsqt`` array of its wout payload.
 
 .. figure:: _static/figures/readme_convergence.png
-   :alt: force residual vs iteration for vmex, VMEC2000, and VMEC++
+   :alt: force residual vs iteration for vmex, VMEC2000, and the reference C++ implementation
    :align: center
    :width: 95%
 
@@ -307,31 +339,97 @@ to ~1e-10, so it changes the path, not the fixed point. Reach for it when the
 Memory
 ------
 
-Peak resident memory (0.6–1.5 GB, up to ~3.3 GB on the largest multigrid deck)
-is dominated by the transient JAX/XLA *compile* working set, not the
-equilibrium data — the spectral state, transform tensors, and solver carry
-together are a few MB, and a warm solve's runtime footprint is tens of MB. It
-is a per-process, per-resolution compile cost that amortizes across repeated
-solves. Two knobs bound the optimization-time footprint:
+Peak resident memory is 0.6–1.5 GB on most bundled rows and about 3.3 GB on
+the largest bundled multigrid deck, but those figures are not a
+high-resolution upper bound. The spectral state is small; compiled transform
+graphs and implicit block factors are not. On high-mode decks the separable
+toroidal FFT synthesis substantially reduces both wall time and peak memory
+relative to the full mode-stacked contraction, and the stage-cache release
+keeps peak RSS at the largest single rung. A residual memory gap to
+single-purpose compiled implementations remains, dominated by XLA compiled
+executables and the runtime floor rather than by the physics working set.
+Current-head numbers for the reference high-mode deck are produced by the
+reproducible harness (``benchmarks/profile_high_resolution.py`` and
+``benchmarks/run_baseline.py``) rather than recorded here, so the
+documentation cannot go stale against the code.
 
-- The optimization Jacobian is column-chunked (``jac_chunk_size="auto"``, the
-  same knob DESC exposes), so peak memory does not scale with the number of
-  boundary degrees of freedom.
-- Factoring the residual and field pipelines into reusable compiled
-  sub-computations cut the implicit-gradient compile ~20% in memory and ~21% in
-  wall time, bit-identically (R16).
-- The converged-state memo (R25.1) removed a redundant equilibrium
-  solve per accepted optimizer iterate and cut the profiled ``opt_step``
-  peak RSS from 6.0 to 3.5 GB.
+The new synthesis repacks the signed helical coefficients into separable
+theta/zeta blocks, evaluates zeta with ``jax.numpy.fft.irfft``, and
+performs a short real poloidal contraction. Undersampled toroidal grids fall
+back to the established dense DFT. The implicit callback also retains the
+dense-real path: a direct FFT tangent expanded complex Jacobian probe batches
+past 10 GiB RSS, and compiling fast primal plus dense tangent representations
+in one process exceeded 7 GiB. Fixed-boundary
+:func:`~vmex.core.solver.solve` and
+:func:`~vmex.core.multigrid.solve_multigrid` select separate FFT lanes only
+above 512 modes on accelerators and ARM CPUs. Smaller problems retain the
+dense-real lane: on the M4, FFT was 38--88% slower warm on three 5--8-mode
+routine decks and its 8% warm win at 128 modes came with a 13% first-solve
+loss. At 162 modes, both lanes reached the supplied 10,000-iteration cap with
+near-zero residuals, but dense was 4.3% faster (279.55 s versus 291.69 s).
+x86 CPUs also remain dense: on the x86 hosts measured so far the dense
+contraction beat the FFT repacking, while ARM CPUs and accelerators prefer
+the FFT path above the mode threshold.  Re-run
+``benchmarks/profile_high_resolution.py`` on the target host to re-derive the
+choice rather than trusting stale numbers.
+Explicit ``use_fft=True`` or ``use_fft=False`` always wins. Implicit AD
+retains the dense lanes and their existing checksum/storage gate. The shared
+runtime pytree is unchanged.
+
+Stage-cache release
+~~~~~~~~~~~~~~~~~~~
+
+The one-shot CLI calls JAX's public ``clear_caches`` between distinct radial
+grids, so peak memory tracks the largest single rung instead of accumulating
+every rung's executables; the persistent on-disk compilation cache is
+unaffected.  Library :func:`~vmex.core.multigrid.solve_multigrid` and
+:func:`~vmex.core.multigrid.solve_free_boundary_multigrid` retain warm stage
+executables by default (the right policy for scans and repeated solves) and
+accept ``release_stage_cache=True`` to opt into the one-shot behaviour.
+The CLI normally overlaps compilation to reduce cold-start latency.  On
+memory-constrained hosts, ``--no-prefetch-compile`` instead compiles solver
+lanes sequentially; the library equivalent is ``prefetch_compile=False``.
+
+Implicit-storage experiments (recorded so they are not repeated)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Column chunking bounds simultaneous design-variable probes, not the dominant
+dense ``O(ns * m_block**2)`` block bands and factors.  Candidate reductions
+were measured on a fixed high-mode implicit workload with
+``benchmarks/profile_high_resolution.py`` (which records resolution, devices,
+wall time, peak RSS, and the Jacobian's finiteness, norm, and SHA-256) and
+rejected, each for a concrete reason:
+
+- an automatic chunk schedule was faster but raised peak RSS by more than a
+  third;
+- float32 bands/factors and row scaling made the demanding Jacobian
+  non-finite -- low precision is not a safe drop-in replacement;
+- a regularised scaled factorisation more than doubled the wall time;
+- matrix-free GMRES sampled ~24% less memory but did not finish one Jacobian
+  in over five times the block-path wall;
+- streaming the three radial probe colours preserved the checksum but the
+  allocator retained loop intermediates into factorisation, *raising* RSS;
+- differentiating a genuinely local three-surface kernel (which matches the
+  global residual to ``2e-12``, LASYM included) still failed the end-to-end
+  gate: compilation/allocator retention plus the unchanged dense factors
+  erased the local-temporary saving.  The kernel remains as a tested
+  foundation for a future lower-storage factor representation.
+
+The conclusion stands until the factor *representation* changes: scalar
+objectives use the matrix-free reverse adjoint, vector objectives keep the
+exact block path, and any new storage candidate must reproduce the recorded
+norm/checksum and beat both wall and RSS end to end.
 
 GPU guidance
 ------------
 
-Measured behavior (``benchmarks/gpu_baseline.json``):
+Measured behavior (``benchmarks/gpu_baseline.json`` plus the supplied
+high-mode HSX case):
 
-- **Per-iteration throughput favours the GPU at every tested size** (0.83 ms
-  vs 1.90 ms per iteration at ``ns=35, mpol=2, ntor=2``; up to ~3x on
-  NuhrenbergZille-class decks: 90 s vs 277 s wall).
+- **Per-iteration throughput favours the GPU across the tested low- and
+  moderate-mode cases** (0.83 ms vs 1.90 ms per iteration at
+  ``ns=35, mpol=2, ntor=2``; up to ~3x on NuhrenbergZille-class decks:
+  90 s vs 277 s wall).
 - **The GPU pays fixed per-solve overheads** (~0.2-0.4 s dispatch/transfer
   floor plus compile or cache-load in cold processes), so small decks that
   finish in well under a second of CPU work stay faster on the CPU
@@ -341,25 +439,34 @@ Measured behavior (``benchmarks/gpu_baseline.json``):
   Apple-Silicon CPU, the CPU wins every production workflow even at
   ``ns = 201`` (the table above) — on a modern desktop, treat the GPU as
   an option for very large or heavily batched solves, not a default.
+- **High Fourier mode count is a separate limit**: on the same office host,
+  the 858-mode HSX deck was 3.44x faster on CPU than on a cache-warm A4000,
+  despite its large aggregate work proxy.
 
 Device policy
 ~~~~~~~~~~~~~
 
 :mod:`vmex.core.device` encodes this as a default placement rule using
 the per-iteration work proxy ``ns * mnmax * nznt`` (the cost driver of the
-batched-matmul transforms): below ``GPU_MIN_ITERATION_WORK = 100_000`` the
-solve stays on the CPU, above it the GPU is used. The policy is a *default*
-only:
+batched-matmul transforms): the solve stays on CPU below
+``GPU_MIN_ITERATION_WORK = 100_000`` and above
+``GPU_MAX_SPECTRAL_MODES = 512``, and uses GPU in the middle region.  The
+calibration evidence and the full precedence rules — an explicit ``device=``
+argument always wins, ``device=None`` leaves placement to JAX, and an active
+``jax.default_device`` context or user-pinned platform makes ``"auto"``
+stand down — are in :ref:`architecture:Device policy (CPU/GPU)`.
 
-- an explicit ``device=`` argument to ``solve``/``solve_multigrid`` always
-  wins;
-- if you pinned the platform yourself via ``JAX_PLATFORMS`` (or
-  ``JAX_PLATFORM_NAME``), the automatic policy stands down entirely.
+.. code-block:: python
 
-.. code-block:: bash
+   solve(inp, device="cpu")
+   solve(inp, device="gpu")
+   with jax.default_device(jax.devices("gpu")[0]):
+       solve(inp)  # AUTO respects this context
 
-   JAX_PLATFORMS=cpu  vmex input.solovev      # force CPU
-   JAX_PLATFORMS=cuda vmex input.big_case     # force GPU
+The mirror solver uses its own measured default because host SciPy repeatedly
+drives JAX callbacks: ``vmex.mirror`` solves choose CPU under ``"auto"``
+with the same explicit/``None``/active-context precedence (measurement in
+:ref:`architecture:Device policy (CPU/GPU)`).
 
 Persistent compilation cache
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -391,9 +498,26 @@ Reproducing the numbers
 .. code-block:: bash
 
    python benchmarks/run_baseline.py         # CPU suite -> benchmarks/baseline.json
+   python benchmarks/run_freeboundary_multigrid.py  # free-bdy ladder + VMEC2000 parity
    python benchmarks/run_gpu_matrix.py       # GPU matrix -> benchmarks/gpu_baseline.json
-   python benchmarks/profile_production.py   # the five production workflows
+   python benchmarks/profile_production.py --device cpu
+   python benchmarks/profile_production.py --device gpu
    pytest tests/test_parity_breadth.py     # end-to-end parity suite
+
+For a compact hardware-parity audit, ``device_parity.py`` runs the same small
+nonzero-shear equilibrium on explicitly selected CPU/GPU devices and records
+the forward state plus boundary derivatives of MHD energy, magnetic well, quasisymmetry,
+quasi-isodynamicity, and the mean traceable ``DMerc``, ``jdotb``, and
+Glasser ``D_R`` interior profiles in JSON. It does not set or require JAX
+platform environment variables::
+
+   python benchmarks/device_parity.py --quick --metrics mhd_energy --output /tmp/vmex-smoke.json
+   python benchmarks/device_parity.py --devices cpu,gpu --output /tmp/vmex-parity.json
+
+On a CPU-only host the default runs the CPU lane and marks the cross-device
+comparison as skipped; ``--devices cpu`` requests that lane explicitly.
+The first command is the short smoke lane; omit ``--metrics`` to audit all
+seven objectives.
 
 The parity suite needs the golden VMEC2000 fixtures (fetched release assets);
 it is skipped automatically when they are unavailable.

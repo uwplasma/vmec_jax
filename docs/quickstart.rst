@@ -13,8 +13,9 @@ Verify the installation
    vmex --doctor
    vmex --test
 
-``vmex --doctor`` prints the active Python, package versions, and the JAX
-backend (CPU/GPU). ``vmex --test`` runs the bundled fixed-boundary QH case
+``vmex --doctor`` prints the active Python, package versions, JAX backend and
+devices, active JAX default device, and VMEX's forward/implicit placement
+policies. ``vmex --test`` runs the bundled fixed-boundary QH case
 end to end: it copies the packaged ``input.nfp4_QH_warm_start`` deck into
 ``./vmex_test/``, solves it (with ``FTOL_ARRAY = 1e-12`` for a fast first
 check), writes ``wout_nfp4_QH_warm_start.nc``, and renders diagnostic figures
@@ -25,7 +26,7 @@ First run
 ---------
 
 ``vmec`` behaves like the ``xvmec2000`` executable: point it at a VMEC input
-file (an ``input.*`` INDATA namelist or a VMEC++-style ``.json`` deck):
+file (an ``input.*`` INDATA namelist or a structured-JSON ``.json`` deck):
 
 .. code-block:: bash
 
@@ -39,15 +40,20 @@ writes ``wout_circular_tokamak.nc`` next to the input file. Useful flags:
 - ``--quiet`` — silence the iteration table,
 - ``--ftol X`` / ``--max-iter N`` — override the final-stage tolerance or
   iteration cap,
+- ``--device cpu|gpu`` — select a platform explicitly; ``auto`` applies
+  VMEX's measured policy and ``none`` leaves placement to JAX,
 - ``--mode jit`` — run the fully traced ``lax.while_loop`` solver lane instead
   of the default host-blocked CLI lane (see :doc:`architecture`).
 
 Free-boundary decks (``LFREEB = T``) route automatically: a readable
 ``MGRID_FILE`` runs the free-boundary solver; a missing mgrid file falls back
 to a fixed-boundary solve with a warning (VMEC2000 behavior); and
-``MGRID_FILE = 'DIRECT_COILS'`` together with ``--coils coils.json`` evaluates
-the external field directly from an ESSOS-style coil set via Biot-Savart —
-no mgrid interpolation at all. See :doc:`cli` for the complete reference.
+``MGRID_FILE = 'DIRECT_COILS'`` together with ``--coils coils.json`` tabulates
+the ESSOS coils' Biot--Savart field into an in-memory mgrid table used by
+NESTOR.  The separate
+virtual-casing residual can evaluate a JAX Biot--Savart callable directly, but
+is not the derivative of the NESTOR equilibrium solve. See :doc:`cli` and
+:doc:`vmec2000_compatibility` for the complete contract.
 
 Plotting
 --------
@@ -114,7 +120,7 @@ VMEC2000 wout dataset (built on first access — no manual
 ``VmecInput`` is a frozen dataclass with VMEC2000 semantics and defaults —
 you can also build one from scratch in Python (all INDATA fields are keyword
 arguments; see :doc:`input_reference`) and round-trip it to INDATA or
-VMEC++-style JSON.
+structured JSON.
 
 Choosing an entry point
 -----------------------
@@ -161,8 +167,11 @@ Reading wout files
    print("edge iota:   ", float(wout.iotaf[-1]))
    print("beta total:  ", float(wout.betatotal))
 
-The written files carry the full VMEC2000 variable set (:doc:`wout_reference`)
+The written files declare the VMEC2000 variable set (:doc:`wout_reference`)
 and load unchanged in simsopt, booz_xform, and other VMEC-ecosystem tools.
+When ``wout_from_state`` receives ``vacuum_output=result.vacuum``,
+free-boundary files include the NESTOR potential and surface arrays, including
+the asymmetric partners for ``LASYM = T``. The CLI passes this automatically.
 
 Where to go next
 ----------------

@@ -9,7 +9,8 @@ reports beta and the plasma volume at each step.
 
 Unlike the fixed-boundary pressure scan (``finite_beta_scan.py``), here the
 boundary is recomputed by the NESTOR vacuum solve at every pressure, so each
-point is a full free-boundary solve.
+point is a full free-boundary solve.  Each converged state hot-starts the next
+pressure point.
 
 Physics: CTH-like torsatron (nfp=5), parabolic pressure, reaching beta ~ 2.6%.
 Heavier than the fixed-boundary scan (one NESTOR solve per point).
@@ -42,13 +43,17 @@ print(f"\n{'pres_scale':>11s} {'beta_tot':>10s} {'volume(m^3)':>12s} {'iters':>6
 print(f"{'-'*11} {'-'*10} {'-'*12} {'-'*6}")
 
 betas = []
+state = None
 for ps in PRES_SCALES:
     inp = dataclasses.replace(base, pres_scale=ps)
-    res = vj.solve_free_boundary(inp, mgrid_path=MGRID_FILE, error_on_no_convergence=False)
+    res = vj.solve_free_boundary(
+        inp, mgrid_path=MGRID_FILE, initial_state=state,
+        error_on_no_convergence=False)
+    state = res.state
     wout = vj.wout_from_state(
         inp=inp, state=res.state, fsqr=float(res.fsqr), fsqz=float(res.fsqz),
         fsql=float(res.fsql), niter=int(res.iterations),
-        converged=bool(res.converged))
+        converged=bool(res.converged), vacuum_output=res.vacuum)
     beta = float(wout.betatotal)
     betas.append(beta)
     print(f"{ps:11.1f} {beta:10.3e} {float(wout.volume_p):12.4f} {int(res.iterations):6d}")

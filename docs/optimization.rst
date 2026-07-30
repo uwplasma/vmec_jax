@@ -52,11 +52,44 @@ Two gradient modes share the same term list.  ``jac=None`` uses scipy
 freedom per Jacobian, works with *every* objective.  ``jac="implicit"``
 computes the exact residual Jacobian by implicit differentiation (one
 amortized linear-algebra pass instead of ~2N solves) and requires traceable
-terms and a stellarator-symmetric fixed-boundary problem — the
+terms and a fixed-boundary problem — the
 compatibility table is in :doc:`objectives`.  ``current_dofs=k``
 additionally frees the first ``k`` current-profile (``AC``) coefficients
 plus ``CURTOR`` in either mode — the dof set of the self-consistent
 bootstrap objective.
+
+Bounded-storage profile optimization
+------------------------------------
+
+Vector profile objectives normally require their complete residual Jacobian
+for a Gauss--Newton step.  At high Fourier resolution those radial
+block-tridiagonal factors can dominate memory.  :func:`~vmex.core.optimize.minimize`
+instead minimizes the identical scalar cost
+
+.. math::
+
+   \Phi(p) = \frac{1}{2}\sum_i r_i(p)^2
+
+with scipy L-BFGS-B.  Reverse implicit differentiation evaluates
+``grad(Phi)`` with one matrix-free adjoint, independent of the number of
+profile samples, and does not form the dense residual Jacobian:
+
+.. code-block:: python
+
+   result = opt.minimize(
+       [(opt.mercier_stability_residual, 0.0, 1.0),
+        (opt.glasser_stability_residual, 0.0, 1.0),
+        (opt.jdotb_residual, 0.0, 1e-6)],
+       inp, max_mode=5,
+       bounds=bounds,
+       options={"maxiter": 100})
+
+This is opt-in because it changes the step model from Gauss--Newton
+trust-region to limited-memory quasi-Newton, although the objective and its
+unconstrained minimizers are unchanged.  Existing
+:func:`~vmex.core.optimize.least_squares` behavior is unaffected.  Plain
+state hot restarts remain enabled; the perturbation warm start is unavailable
+because it would require the forward state-response columns this path avoids.
 
 Single-call ESS optimization (the recommended pattern)
 ------------------------------------------------------
@@ -148,10 +181,22 @@ of :doc:`algorithms` for the formulation and cost analysis.
    from vmex.core.input import VmecInput
 
    inp = VmecInput.from_file("input.solovev")
-   p0 = implicit.params_from_input(inp)
+   gpu = jax.devices("gpu")[0]
+   from vmex.core.device import device_scope
 
-   sol = implicit.run(inp, p0)                        # ImplicitSolution pytree
-   grad = jax.grad(lambda p: implicit.run(inp, p).wb)(p0)   # adjoint gradient
+   with device_scope(gpu):
+       p0 = implicit.params_from_input(inp)
+       sol = implicit.run(inp, p0)                    # ImplicitSolution pytree
+       grad = jax.grad(lambda p: implicit.run(inp, p).wb)(p0)
+
+Pass ``device="cpu"`` / ``"gpu"`` (or a ``jax.Device``) to
+:func:`~vmex.core.implicit.params_from_input` or
+:func:`~vmex.core.implicit.run` to select the implicit-gradient hardware
+without environment variables. Omitted ``device`` and ``device=None`` leave
+placement to JAX; ``device="auto"`` requests VMEX's CPU preference for this
+launch-bound path. High-level optimization entry points use ``"auto"`` by
+default. Hold :func:`~vmex.core.device.device_scope` around parameter creation
+and differentiation when selecting a non-default accelerator.
 
 :func:`~vmex.core.implicit.run` is the differentiable member of the
 entry-point family (see *Choosing an entry point* in :doc:`quickstart`; the
@@ -199,8 +244,12 @@ default:
    Reproduce the campaign numbers with the two
    ``examples/optimization/QA_optimization*.py`` scripts.
 
-- **Block-tridiagonal Jacobian factorization** (``jac_solver="block"``,
-  default).  The raw force Jacobian ``dF/dz`` is *exactly*
+- **Direction-adaptive Jacobians** (``jac_solver="auto"``, default). A scalar
+  residual uses one matrix-free reverse adjoint and never assembles dense
+  angular blocks. Vector residuals use the block path below; ``"reverse"``
+  and ``"block"`` remain explicit controls.
+- **Block-tridiagonal Jacobian factorization** (``jac_solver="block"``).
+  The raw force Jacobian ``dF/dz`` is *exactly*
   block-tridiagonal in radius (nearest-neighbor coupling; verified to
   1e-14), so ``ns`` dense ``(3mn, 3mn)`` blocks are assembled with
   3-colored ``jax.jvp`` probes — a cost independent of the dof count —
@@ -209,6 +258,9 @@ default:
   column to the same ``adjoint_tol`` as the old path.  Measured: the warm
   Jacobian phase drops 20.35 s to 0.61 s (**33x**); ``jac_solver="gmres"``
   (one preconditioned GMRES per dof) remains as a fallback.
+  A true width-three nonlinear row kernel is parity-tested, but its direct
+  streamed SOLVAX assembly is not selected: the high-resolution HSX resource
+  gate was slower and used more peak memory than this three-color path.
 - **Converged-state memo.**  scipy's trust-region drivers call ``jac(x)``
   at exactly the ``x`` that ``fun(x)`` just converged; a one-entry
   params-keyed memo removes that redundant solve per accepted iterate, and
@@ -224,10 +276,10 @@ default:
   hot restart hit a Jacobian-sign failure.  ``"state"`` (plain hot restart)
   and ``None`` are the fallbacks; all three converge to identical fixed
   points.
-- **Memory** stays bounded by column chunking
-  (``jac_chunk_size="auto"``, the same knob DESC exposes): peak Jacobian
-  memory is ``m0 + m1*chunk`` instead of scaling with the dof count, and
-  the chunked columns are identical to float64 round-off.
+- **Memory** stays bounded by column chunking. ``jac_chunk_size="auto"`` caps
+  SOLVAX's device-aware choice by the square-root width, so accelerator
+  capacity cannot accidentally request one full probe ``vmap``. Chunked
+  columns are identical to float64 round-off.
 - **Krylov recycling** (``recycle=True``) carries a GCROT deflation space
   across the per-dof solves.  It is **off by default for a measured
   reason**: solvax v0.1's FIFO recycle space *slows* warm-started columns
@@ -238,18 +290,28 @@ default:
 The end-to-end effect on the profiled production ``opt_step`` and the CPU
 versus GPU placement question are quantified in :doc:`performance`.
 
+For implicit Jacobians, ``jac_chunk_size=None`` means one full-width
+``lax.map`` batch rather than a bare ``vmap``.  This is a correctness
+workaround for JAX 0.6.2: the bare transform produced an incorrect nested
+iterative-solve column, while the full-width batch, smaller chunks, and
+independent central finite differences agree.  The memory meaning remains
+“unchunked”; ``"auto"`` or an integer supplies the research-grade bounded
+path.
+
 Free-boundary gradients (virtual casing)
 ----------------------------------------
 
-**Free boundary** is differentiable through a different route
+External-field optimization on a specified plasma boundary is differentiable
+through a different route
 (:mod:`vmex.core.freeboundary_diff`): rather than differentiating the
 NESTOR vacuum solve, the plasma-boundary contribution to the vacuum field
 is computed by **virtual casing**, which is a smooth function of the coil /
 ``extcur`` parameters and the plasma surface.  Coil-parameter derivatives
-of free-boundary outputs are obtained end-to-end this way and are
-finite-difference-validated.  (The two scopes are complementary: the
+of this boundary residual are finite-difference-validated.  They are not the
+derivative of a fully reconverged NESTOR equilibrium.  (The two scopes are
+complementary: the
 fixed-boundary implicit adjoint is validated to ~1e-6 relative; the
-free-boundary virtual-casing path is FD-validated.)  See the
+virtual-casing residual path is FD-validated.)  See the
 *Differentiable free boundary* section of :doc:`algorithms`.
 
 True single-stage (plasma boundary **and** coils at once)
