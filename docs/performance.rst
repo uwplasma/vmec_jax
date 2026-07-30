@@ -390,6 +390,50 @@ The CLI normally overlaps compilation to reduce cold-start latency.  On
 memory-constrained hosts, ``--no-prefetch-compile`` instead compiles solver
 lanes sequentially; the library equivalent is ``prefetch_compile=False``.
 
+Reproducible resource profiles
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``benchmarks/profile_resources.py`` is the common fixed-boundary,
+free-boundary, implicit-AD, and mirror resource harness. Each case runs in a
+fresh process and reports cold and warm wall time, OS peak RSS, device peak
+memory when the backend exposes it, residuals, iterations, native thread
+count, and output or gradient SHA-256. Prefetched fixed- and free-boundary
+rows also report XLA executable memory. Other rows state why no executable
+estimate is available.
+
+The harness selects hardware only through the public ``device=`` API. It
+records inherited JAX platform environment settings instead of creating
+them. ``--device gpu --device-index 1`` selects a second visible GPU by
+passing its JAX device object, without a platform environment pin. Fetch the
+released mgrid assets before the default free-boundary row::
+
+   python tools/fetch_assets.py --bundle reference-nc
+   python benchmarks/profile_resources.py --device cpu --out /tmp/vmex-resources.json
+
+An external high-resolution deck can replace the fixed and implicit inputs
+without copying it into the repository::
+
+   python benchmarks/profile_resources.py \
+     --cases fixed,implicit \
+     --fixed-input /path/to/input.hsx \
+     --implicit-input /path/to/input.hsx \
+     --vmec2000-executable /path/to/xvmec2000 \
+     --vmec2000-source /path/to/STELLOPT \
+     --vmecpp-python /path/to/vmecpp-python \
+     --vmecpp-source /path/to/vmecpp \
+     --vmecpp-threads 10 \
+     --out /tmp/hsx-resources.json
+
+The default retains compiled stages for a repeated library solve.
+``--release-stage-cache --no-prefetch-compile`` instead measures the
+lower-peak, one-shot policy used by the CLI. Its second timing can reload
+released stages and is therefore not an in-memory warm-run measurement.
+
+The report stores input and executable hashes, VMEX/JAX versions, VMEC++
+version, hardware, and git revision without storing private paths. Mirror
+scaling defaults to the ``5:7:4,7:13:7,9:17:9`` coarse/medium/fine ladder;
+``--mirror-ladder`` changes it explicitly.
+
 Implicit-storage experiments (recorded so they are not repeated)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import render_performance_docs as rpd  # noqa: E402
+from benchmarks.profile_resources import (  # noqa: E402
+    _mirror_ladder,
+    _parser,
+    _peak_rss_bytes,
+)
 
 
 def test_performance_table_matches_baseline_artifact() -> None:
@@ -52,6 +57,7 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
         "run_baseline.py",
         "run_freeboundary_multigrid.py",
         "run_high_mode_fft.py",
+        "profile_resources.py",
     ):
         proc = subprocess.run(
             [sys.executable, str(ROOT / "benchmarks" / script), "--help"],
@@ -62,6 +68,16 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
             timeout=30,
         )
         assert proc.returncode == 0, proc.stderr
+
+
+def test_resource_profiler_parses_platform_memory_and_mirror_ladders() -> None:
+    assert _peak_rss_bytes("12345 maximum resident set size") == 12345
+    assert (
+        _peak_rss_bytes("Maximum resident set size (kbytes): 12345")
+        == 12345 * 1024
+    )
+    assert _mirror_ladder("5:7:4,9:17:9") == [(5, 7, 4), (9, 17, 9)]
+    assert _parser().parse_args(["--device", "gpu", "--device-index", "1"]).device_index == 1
 
 
 def test_benchmark_artifacts_disclose_redacted_provenance() -> None:
