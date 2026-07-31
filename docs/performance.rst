@@ -515,9 +515,9 @@ with the same explicit/``None``/active-context precedence (measurement in
 Persistent compilation cache
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``vmex`` enables JAX's persistent XLA compilation cache on accelerators,
-so the multi-second compile cost is paid once per machine, not once per
-process.
+``vmex`` enables JAX's persistent XLA compilation cache on CPUs and
+accelerators, so the multi-second compile cost is paid once per machine, not
+once per process.
 
 .. warning::
 
