@@ -204,13 +204,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ftol", type=float, default=None, help="Override the final-stage FTOL_ARRAY tolerance.")
     p.add_argument("--max-iter", type=int, default=None, help="Override the final-stage NITER_ARRAY iteration cap.")
     p.add_argument(
-        "--no-prefetch-compile",
-        dest="prefetch_compile",
-        action="store_false",
-        default=True,
+        "--prefetch-compile",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help=(
-            "Compile solver lanes sequentially to lower peak memory; the "
-            "default overlaps compilation for lower cold-start latency."
+            "Overlap compilation of the next multigrid rung (default: off "
+            "to bound peak memory)."
         ),
     )
     p.add_argument(
@@ -618,7 +617,7 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             raise_on_max_iterations=not bool(inp.lfull3d1out),
             device=None if args.device == "none" else args.device,
             release_stage_cache=True,
-            # Cold-run overlap is a CLI concern (library default False).
+            # Opt-in cold-run overlap; the library default is also False.
             prefetch_compile=bool(args.prefetch_compile),
             jacobian_retries=int(args.jacobian_retries),
             **freeb_plan.solver_kwargs,
@@ -638,9 +637,8 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             raise_on_max_iterations=not bool(effective_inp.lfull3d1out),
             device=None if args.device == "none" else args.device,
             release_stage_cache=True,
-            # Cold-run overlap is a CLI concern: the library default is
-            # False so embedding programs and test farms never gain
-            # background compile threads implicitly.
+            # Opt-in cold-run overlap; background compiler threads otherwise
+            # contend with the solve and raise peak memory on constrained CPUs.
             prefetch_compile=bool(args.prefetch_compile),
             jacobian_retries=int(args.jacobian_retries),
         )

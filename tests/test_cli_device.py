@@ -12,7 +12,10 @@ from vmex.core import cli, multigrid
 def test_device_option_parses_supported_choices():
     parser = cli.build_parser()
     assert parser.parse_args(["input.case"]).device == "auto"
-    assert parser.parse_args(["input.case"]).prefetch_compile is True
+    assert parser.parse_args(["input.case"]).prefetch_compile is False
+    assert parser.parse_args(
+        ["input.case", "--prefetch-compile"]
+    ).prefetch_compile is True
     assert parser.parse_args(
         ["input.case", "--no-prefetch-compile"]
     ).prefetch_compile is False
@@ -24,7 +27,8 @@ def test_device_option_parses_supported_choices():
 
 @pytest.mark.parametrize(("choice", "expected"), [("none", None), ("cpu", "cpu")])
 def test_fixed_boundary_cli_forwards_device(monkeypatch, tmp_path, choice, expected):
-    args = cli.build_parser().parse_args(["input.case", "--quiet", "--device", choice])
+    args = cli.build_parser().parse_args(
+        ["input.case", "--quiet", "--device", choice, "--prefetch-compile"])
     inp = SimpleNamespace(lfull3d1out=False)
     seen = {}
 
