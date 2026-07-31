@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,6 +41,24 @@ def test_current_free_vacuum_nonconvergence_suggests_lforbal():
     with pytest.raises(VmecConvergenceError) as excinfo:
         solver._finalize(carry, runtime)
     assert excinfo.value.hint == "increase NITER or loosen FTOL"
+
+
+@pytest.mark.full
+def test_variational_current_free_vacuum_stops_above_tolerance():
+    """The supplied LFORBAL=F trajectory remains explicit and reproducible."""
+    inp = dataclasses.replace(VmecInput.from_file(DECK), lforbal=False)
+    result = solve_multigrid(
+        inp, device="cpu", verbose=False, raise_on_max_iterations=False,
+    )
+    assert not result.converged
+    assert result.iterations == 3500
+    assert result.ier_flag == MORE_ITER_FLAG
+    np.testing.assert_allclose(
+        [result.fsqr, result.fsqz, result.fsql],
+        [1.3457723434504725e-11, 5.111345594168806e-12,
+         4.1293629542542975e-12],
+        rtol=2e-6,
+    )
 
 
 @pytest.mark.full
