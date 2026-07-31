@@ -363,6 +363,9 @@ def solve_multigrid(
                 precon_type=precon_type, prec2d_threshold=prec2d_threshold,
                 prec2d=prec2d, use_fft=stage_use_fft,
             )
+        state = _put_numeric_leaves(
+            state, _placement_device(device, resolution)
+        )
         if state is not None and int(state.R_cos.shape[0]) != nsval:
             state = interpolate_state(state, ns_fine=nsval, modes=rt.modes)
         if state is not None:

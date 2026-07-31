@@ -129,6 +129,7 @@ from .device import (
     AUTO,
     GPU_MAX_SPECTRAL_MODES,
     _placement_device,
+    _put_numeric_leaves,
     device_context,
 )
 from .errors import (
@@ -2173,6 +2174,9 @@ def solve(
     if resolution is None:
         raise ValueError("solve(RunSetup) requires a Resolution")
     use_fft_resolved = _resolve_use_fft(use_fft, device, resolution)
+    initial_state = _put_numeric_leaves(
+        initial_state, _placement_device(device, resolution)
+    )
     with device_context(device, resolution):
         rt = prepare_runtime(
             source, resolution, ftol=ftol, max_iterations=max_iterations,
