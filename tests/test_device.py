@@ -205,6 +205,17 @@ def test_fixed_boundary_honors_second_device_without_outer_context():
 
 def test_fixed_boundary_builds_runtime_in_device_context(monkeypatch):
     active = False
+    seen = []
+    seed = SimpleNamespace(R_cos=np.zeros((2, 1)))
+    runtime = SimpleNamespace(modes=object())
+    carry = SimpleNamespace(
+        ier=multigrid.MORE_ITER_FLAG,
+        state=SimpleNamespace(R_cos=np.zeros((3, 1))),
+        fsqr=1.0,
+        fsqz=2.0,
+        fsql=3.0,
+    )
+    result = object()
 
     @contextlib.contextmanager
     def context(*_):
@@ -215,15 +226,55 @@ def test_fixed_boundary_builds_runtime_in_device_context(monkeypatch):
 
     def prepare(*_, **__):
         assert active
-        raise RuntimeError("runtime reached")
+        seen.append("runtime")
+        return runtime
+
+    def interpolate(*_, **__):
+        assert active
+        seen.append("interpolate")
+        return carry.state
+
+    def hot_restart(*_):
+        assert active
+        seen.append("hot restart")
+        return carry.state
+
+    def baselines(*_, **__):
+        assert active
+        seen.append("baselines")
+        return runtime
+
+    def solve(*_, **__):
+        assert active
+        return carry
+
+    def unconverged(*_):
+        assert active
+        return result
 
     monkeypatch.setattr(multigrid, "device_context", context)
     monkeypatch.setattr(multigrid, "prepare_runtime", prepare)
-    with pytest.raises(RuntimeError, match="runtime reached"):
-        multigrid.solve_multigrid(VmecInput(ns_array=[3]), device="cpu")
+    monkeypatch.setattr(multigrid, "interpolate_state", interpolate)
+    monkeypatch.setattr(multigrid, "hot_restart_state", hot_restart)
+    monkeypatch.setattr(multigrid, "runtime_with_baselines", baselines)
+    monkeypatch.setattr(multigrid, "_solve_stage", solve)
+    monkeypatch.setattr(multigrid, "_result_from_carry", unconverged)
+    actual = multigrid.solve_multigrid(
+        VmecInput(ns_array=[3]),
+        initial_state=seed,
+        device="cpu",
+        raise_on_max_iterations=False,
+    )
+    assert actual is result
+    assert seen == ["runtime", "interpolate", "hot restart", "baselines"]
 
 
-def test_free_boundary_loads_mgrid_in_explicit_device_context(monkeypatch):
+@pytest.mark.parametrize(
+    ("device", "expected_active"), [("cpu", True), (dev.AUTO, False)]
+)
+def test_free_boundary_loads_mgrid_in_explicit_device_context(
+    monkeypatch, device, expected_active
+):
     active = False
 
     @contextlib.contextmanager
@@ -234,14 +285,14 @@ def test_free_boundary_loads_mgrid_in_explicit_device_context(monkeypatch):
         active = False
 
     def load(*_):
-        assert active
+        assert active is expected_active
         raise RuntimeError("mgrid reached")
 
     monkeypatch.setattr(multigrid, "device_context", context)
     monkeypatch.setattr(freeboundary, "_external_field_from_input", load)
     with pytest.raises(RuntimeError, match="mgrid reached"):
         multigrid.solve_free_boundary_multigrid(
-            VmecInput(lfreeb=True, mgrid_file="fake", ns_array=[3]), device="cpu"
+            VmecInput(lfreeb=True, mgrid_file="fake", ns_array=[3]), device=device
         )
 
 
