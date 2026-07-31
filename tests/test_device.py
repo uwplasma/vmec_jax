@@ -302,7 +302,7 @@ def test_put_numeric_leaves_preserves_metadata_and_none_contract():
     resolution = _res(ns=11, mpol=6, ntor=0)
     assert dev._placement_device(None, resolution) is None
     cpu = jax.devices("cpu")[0]
-    resident = jax.numpy.ones(2)
+    resident = jax.device_put(np.ones(2), cpu)
     assert dev._put_numeric_leaves(resident, cpu) is resident
     moved = dev._put_numeric_leaves(
         {"array": np.ones(2), "metadata": "kept"}, cpu,
