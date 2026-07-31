@@ -745,6 +745,34 @@ def test_block_response_cpu_gpu_parity():
         )
 
 
+@_requires_gpu
+def test_implicit_optimizer_nondefault_gpu_parity():
+    """Optimizer constants must be created directly on the selected GPU."""
+    devices = jax.devices("gpu")
+    if len(devices) < 2:
+        pytest.skip("needs two GPUs")
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    results = [
+        optimize.least_squares(
+            [(optimize.aspect_ratio, 4.0, 1.0)],
+            inp,
+            max_mode=1,
+            jac="implicit",
+            jac_solver="block",
+            max_nfev=1,
+            device=device,
+        )
+        for device in devices[:2]
+    ]
+    assert all(np.all(np.isfinite(result.jac)) for result in results)
+    np.testing.assert_allclose(
+        results[1].fun, results[0].fun, rtol=2e-9, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        results[1].jac, results[0].jac, rtol=2e-8, atol=1e-11
+    )
+
+
 # (device, ftol, max_iterations) -> reference audit.  Memoized so the three
 # lanes per rig do not repeat the 7-metric reference sweep; computed lazily so
 # the cold-start lane can run its target-device audit FIRST.
