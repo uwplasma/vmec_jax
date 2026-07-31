@@ -275,7 +275,7 @@ def _put_numeric_leaves(value: Any, device: Any):
             return leaf
         if isinstance(leaf, jax.Array) and not isinstance(leaf, jax.core.Tracer):
             sources = leaf.devices()
-            if device in sources:
+            if sources == {device}:
                 return leaf
             if (
                 getattr(device, "platform", None) != "cpu"
