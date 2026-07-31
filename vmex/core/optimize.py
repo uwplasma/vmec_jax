@@ -1543,8 +1543,9 @@ def _least_squares_implicit(
     cfg = dataclasses.replace(cfg, device=jac_device)
 
     def _place(x: np.ndarray) -> jnp.ndarray:
-        a = jnp.asarray(x, dtype=jnp.float64)
-        return a if jac_device is None else jax.device_put(a, jac_device)
+        if jac_device is None:
+            return jnp.asarray(x, dtype=jnp.float64)
+        return jax.device_put(np.asarray(x, dtype=np.float64), jac_device)
 
     params0 = imp.params_from_input(inp, device=jac_device)
     imp._template_runtime(cfg)  # host-built template: warm the per-cfg cache
@@ -1589,9 +1590,9 @@ def _least_squares_implicit(
         if k_cur:
             x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
     params0_np = jax.tree.map(lambda a: np.asarray(a, dtype=np.float64),
-                              params_of(jnp.asarray(x0, dtype=jnp.float64)))
+                              params_of(_place(x0)))
     _, mask_np = imp._host_solve_and_mask(cfg, params0_np)
-    mask_const = jax.tree.map(jnp.asarray, mask_np)
+    mask_const = jax.tree.map(_place, mask_np)
 
     # One-hot dof tangents in ImplicitParams space, stacked over dofs
     # (leading axis ndof) so chunk_map can process them in fixed-size chunks:
@@ -1613,14 +1614,13 @@ def _least_squares_implicit(
         t_ac[nboundary + j, j] = ac_scale
     if k_cur:
         t_curtor[nboundary + k_cur] = _CURTOR_SCALE
-    zerop = jax.tree.map(jnp.zeros_like, params0)
+    zerop = jax.tree.map(lambda a: _place(np.zeros(a.shape)), params0)
     if lasym:
-        tangent_stack = (jnp.asarray(t_rbc), jnp.asarray(t_zbs),
-                         jnp.asarray(t_rbs), jnp.asarray(t_zbc),
-                         jnp.asarray(t_ac), jnp.asarray(t_curtor))
+        tangent_stack = tuple(map(
+            _place, (t_rbc, t_zbs, t_rbs, t_zbc, t_ac, t_curtor)
+        ))
     else:
-        tangent_stack = (jnp.asarray(t_rbc), jnp.asarray(t_zbs),
-                         jnp.asarray(t_ac), jnp.asarray(t_curtor))
+        tangent_stack = tuple(map(_place, (t_rbc, t_zbs, t_ac, t_curtor)))
 
     # R17.1 memory knob: chunk_size None == one full-width batch, while an int
     # / "auto" caps peak Jacobian memory at that many dofs at a time.  Route
@@ -1878,7 +1878,7 @@ def _least_squares_implicit(
         """Record ``(x_ref, converged state, dz columns)`` for trial seeding."""
         hit = imp._LAST_SOLVE.get(cfg)
         params_np = jax.tree.map(lambda a: np.asarray(a, dtype=np.float64),
-                                 params_of(jnp.asarray(x, dtype=jnp.float64)))
+                                 params_of(_place(x)))
         if hit is not None and hit[0] == imp._params_key(params_np):
             holder["lin"] = (np.array(x, dtype=float), hit[1].state, dz_cols)
         else:  # unexpected call pattern: better no seed than a wrong one
