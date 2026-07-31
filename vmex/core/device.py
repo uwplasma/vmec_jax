@@ -273,14 +273,15 @@ def _put_numeric_leaves(value: Any, device: Any):
     def put(leaf):
         if not isinstance(leaf, (jax.Array, np.ndarray)):
             return leaf
-        if (
-            isinstance(leaf, jax.Array)
-            and not isinstance(leaf, jax.core.Tracer)
-            and getattr(device, "platform", None) != "cpu"
-            and device not in leaf.devices()
-            and any(source.platform != "cpu" for source in leaf.devices())
-        ):
-            leaf = np.asarray(leaf)
+        if isinstance(leaf, jax.Array) and not isinstance(leaf, jax.core.Tracer):
+            sources = leaf.devices()
+            if device in sources:
+                return leaf
+            if (
+                getattr(device, "platform", None) != "cpu"
+                and any(source.platform != "cpu" for source in sources)
+            ):
+                leaf = np.asarray(leaf)
         return jax.device_put(leaf, device)
 
     return jax.tree.map(
