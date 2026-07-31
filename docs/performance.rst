@@ -336,6 +336,17 @@ tokamak, a tie even on the aspect-100 case) — and peak memory is ≈30% higher
 to ~1e-10, so it changes the path, not the fixed point. Reach for it when the
 1D iteration count is the bottleneck or stalls, not as a blanket default.
 
+One such stall is reproducible on the aspect-100 case at ``ns=51`` and
+``FTOL=1e-11``.  With ``PRECON_TYPE='GMRES'`` and
+``PREC2D_THRESHOLD=1e-6``, VMEX converges in 18 iterations, while VMEC2000's
+finite-difference block GMRES remains at a maximum residual of ``2.05e-9``
+after 1,600 explicit ``PRE_NITER`` steps.  A separate VMEC2000 1-D solve
+converges and agrees with the VMEX result in ``wb`` to ``1.3e-11`` relative
+and in the primary geometry to better than ``1e-5``.  The opt-in live test
+``test_live_vmec2000_exact_jvp_gmres_robustness`` reproduces all three paths.
+This is a robustness result, not a CPU speed or memory claim: the small
+VMEC2000 1-D solve is still much cheaper than a cold JAX process.
+
 Memory
 ------
 
