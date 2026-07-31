@@ -136,6 +136,46 @@ def test_live_vmec2000_fixed_boundary_parity(
     )
 
 
+def test_live_vmec2000_near_degenerate_vacuum(pytestconfig, tmp_path):
+    """The LFORBAL vacuum remedy converges to the same equilibrium."""
+    vmec2000_dir = tmp_path / "vmec2000_vacuum"
+    vmex_dir = tmp_path / "vmex_vacuum"
+    vmec2000_dir.mkdir()
+    vmex_dir.mkdir()
+    deck = DATA / "input.near_degenerate_vacuum_nfp3"
+    for directory in (vmec2000_dir, vmex_dir):
+        shutil.copy2(deck, directory / deck.name)
+
+    _run([str(_executable(pytestconfig)), deck.name], cwd=vmec2000_dir)
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "vmex.core.cli",
+            str(vmex_dir / deck.name),
+            "--outdir",
+            str(vmex_dir),
+            "--device",
+            "cpu",
+        ],
+        cwd=ROOT,
+    )
+
+    suffix = deck.name.removeprefix("input.")
+    reference = read_wout(vmec2000_dir / f"wout_{suffix}.nc")
+    actual = read_wout(vmex_dir / f"wout_{suffix}.nc")
+    assert int(actual.ier_flag) == int(reference.ier_flag) == 0
+    assert (int(actual.niter), int(reference.niter)) == (941, 942)
+    for name in ("volume_p", "Rmajor_p", "Aminor_p", "aspect", "b0", "wb"):
+        np.testing.assert_allclose(
+            getattr(actual, name), getattr(reference, name), rtol=5e-10
+        )
+    for name in ("rmnc", "zmns", "bmnc", "iotaf"):
+        expected = np.asarray(getattr(reference, name))
+        error = np.linalg.norm(np.asarray(getattr(actual, name)) - expected)
+        assert error / np.linalg.norm(expected) < 1e-8, (name, error)
+
+
 def test_live_vmec2000_converged_lasym_free_boundary(pytestconfig, tmp_path):
     """Converged LASYM geometry, vacuum potential, and surface fields agree."""
     vmec2000_dir = tmp_path / "vmec2000_lasym"
