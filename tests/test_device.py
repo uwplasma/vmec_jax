@@ -163,7 +163,7 @@ def test_fixed_boundary_honors_second_device_without_outer_context():
         pytest.skip("two devices unavailable")
     inp = replace(
         VmecInput.from_file(DATA / "input.solovev"),
-        ns_array=[3], niter_array=[2], ftol_array=[1.0],
+        ns_array=[3, 5], niter_array=[2, 2], ftol_array=[1.0, 1.0],
     )
     reference = multigrid.solve_multigrid(
         inp, device=devices[0], verbose=False, prefetch_compile=False,
@@ -187,7 +187,11 @@ def test_fixed_boundary_honors_second_device_without_outer_context():
         )
 
     single = solver.solve(
-        inp, initial_state=reference.state, device=devices[1], verbose=False,
+        inp,
+        resolution=solver.resolution_from_input(inp, ns=5),
+        initial_state=reference.state,
+        device=devices[1],
+        verbose=False,
     )
     for name in ("rmnc", "zmns", "iotaf"):
         np.testing.assert_allclose(
@@ -217,6 +221,28 @@ def test_fixed_boundary_builds_runtime_in_device_context(monkeypatch):
     monkeypatch.setattr(multigrid, "prepare_runtime", prepare)
     with pytest.raises(RuntimeError, match="runtime reached"):
         multigrid.solve_multigrid(VmecInput(ns_array=[3]), device="cpu")
+
+
+def test_free_boundary_loads_mgrid_in_explicit_device_context(monkeypatch):
+    active = False
+
+    @contextlib.contextmanager
+    def context(*_):
+        nonlocal active
+        active = True
+        yield
+        active = False
+
+    def load(*_):
+        assert active
+        raise RuntimeError("mgrid reached")
+
+    monkeypatch.setattr(multigrid, "device_context", context)
+    monkeypatch.setattr(freeboundary, "_external_field_from_input", load)
+    with pytest.raises(RuntimeError, match="mgrid reached"):
+        multigrid.solve_free_boundary_multigrid(
+            VmecInput(lfreeb=True, mgrid_file="fake", ns_array=[3]), device="cpu"
+        )
 
 
 def test_resolve_implicit_device_defaults_to_cpu(monkeypatch):

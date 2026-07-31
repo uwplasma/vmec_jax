@@ -363,18 +363,18 @@ def solve_multigrid(
                 precon_type=precon_type, prec2d_threshold=prec2d_threshold,
                 prec2d=prec2d, use_fft=stage_use_fft,
             )
-        state = _put_numeric_leaves(
-            state, _placement_device(device, resolution)
-        )
-        if state is not None and int(state.R_cos.shape[0]) != nsval:
-            state = interpolate_state(state, ns_fine=nsval, modes=rt.modes)
-        if state is not None:
-            if first_executed:
-                # user-provided hot-restart seed: adapt to this input's boundary
-                state = hot_restart_state(rt, state)
-            # funct3d.f: rcon0/zcon0 are set from the state at iter2 == iter1,
-            # i.e. from THIS stage's starting state, not the interior guess.
-            rt = runtime_with_baselines(rt, state, use_fft=stage_use_fft)
+            state = _put_numeric_leaves(
+                state, _placement_device(device, resolution)
+            )
+            if state is not None and int(state.R_cos.shape[0]) != nsval:
+                state = interpolate_state(state, ns_fine=nsval, modes=rt.modes)
+            if state is not None:
+                if first_executed:
+                    # user-provided hot-restart seed: adapt to this input's boundary
+                    state = hot_restart_state(rt, state)
+                # funct3d.f: rcon0/zcon0 are set from the state at iter2 == iter1,
+                # i.e. from THIS stage's starting state, not the interior guess.
+                rt = runtime_with_baselines(rt, state, use_fft=stage_use_fft)
         # Overlapped compilation (see the docstring): start building rung
         # igrid+1's executable now, so it is (mostly) ready when this rung's
         # iterations finish.  Equal-structure next rungs reuse this rung's
@@ -577,7 +577,13 @@ def solve_free_boundary_multigrid(
     )
 
     if external_field is None:
-        external_field = _external_field_from_input(inp, mgrid_path)
+        if device is not None and not (
+            isinstance(device, str) and device.strip().lower() == AUTO
+        ):
+            with device_context(device):
+                external_field = _external_field_from_input(inp, mgrid_path)
+        else:
+            external_field = _external_field_from_input(inp, mgrid_path)
 
     state = initial_state
     interpolation_source = initial_state
@@ -600,8 +606,9 @@ def solve_free_boundary_multigrid(
             # initialize_radial.f interpolates pxstore only when ns increases;
             # an equal-grid entry returns before allocation/interpolation and
             # therefore reruns the current xc state unchanged.
-            state = interpolate_state(
-                interpolation_source, ns_fine=nsval, modes=modes)
+            with device_context(device, resolution):
+                state = interpolate_state(
+                    interpolation_source, ns_fine=nsval, modes=modes)
 
         # Overlapped compilation across rungs (see the docstring): while this
         # rung iterates, a background thread AOT-compiles rung igrid+1's lane
