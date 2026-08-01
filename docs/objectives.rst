@@ -209,6 +209,27 @@ single-call campaign — seed 4.5e-1 to 1.8e-2 (25x) in 17.3 minutes — is in
    optimize with the traceable form, report with the wout form.  See
    :ref:`confinement-qi-fidelity`.
 
+For a direct action-based target, supply physical pitch values explicitly and
+compose the QI and maximum-J terms like any other residuals:
+
+.. code-block:: python
+
+   from vmex.core.maxj import MaximumJResidual
+   from vmex.core.qi import JInvariantQIResidual
+
+   surfaces = np.linspace(0.2, 0.9, 6)
+   pitch = np.array([1.0 / 1.1, 1.0 / 1.0])
+   qi_action = JInvariantQIResidual(surfaces, pitch)
+   maximum_j = MaximumJResidual(surfaces, pitch)
+   result = opt.least_squares(
+       [(qi_action, 0.0, 1.0), (maximum_j, 0.0, 1.0)],
+       inp, max_mode=6, jac="implicit")
+
+The two classes do not impose a shared weight. ``MaximumJResidual`` evaluates
+``dJ/dpsi`` at common pitch using signed toroidal flux and matched wells;
+invalid topology is NaN rather than a favorable zero. See
+:doc:`confinement` for the sign and matching contract.
+
 Bootstrap current (Redl)
 ------------------------
 
@@ -341,6 +362,14 @@ Which objectives differentiate how
      - yes
      - yes
      - traceable Boozer transform + smooth level-space residual
+   * - :class:`~vmex.core.qi.JInvariantQIResidual`
+     - yes
+     - yes
+     - physical-pitch action variation over complete wells
+   * - :class:`~vmex.core.maxj.MaximumJResidual`
+     - yes
+     - yes
+     - signed radial action slope with matched well identity
    * - :class:`~vmex.core.bootstrap.RedlBootstrapMismatch`
      - yes
      - yes

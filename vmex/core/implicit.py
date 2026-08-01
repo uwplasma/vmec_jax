@@ -690,7 +690,9 @@ def _runtime_from_params_impl(params: ImplicitParams, cfg: ImplicitConfig) -> So
     setup = dataclasses.replace(
         setup0,
         phips=prof["phips"], chips=prof["chips"], iotas=prof["iotas"],
-        icurv=prof["icurv"], mass=prof["mass"], phipf=prof["phipf"],
+        icurv=prof["icurv"], mass=prof["mass"],
+        psi_half=prof["psi_half"], psi_edge=prof["psi_edge"],
+        phipf=prof["phipf"],
         chipf=prof["chipf"], iotaf=prof["iotaf"], lamscale=prof["lamscale"],
         boundary_R_cos=bR_cos, boundary_R_sin=bR_sin,
         boundary_Z_cos=bZ_cos, boundary_Z_sin=bZ_sin,

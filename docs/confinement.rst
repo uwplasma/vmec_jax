@@ -273,8 +273,49 @@ with a false ``valid_pitch`` flag. This makes a topology error visible instead
 of turning it into a favorable zero. The low-level Boozer-spectrum function
 accepts cosine and sine harmonics; the equilibrium objective retains the
 traceable Boozer transform's current explicit ``lasym=False`` guard.
-Maximum-\(J\) is a separate objective because it requires radial derivatives
-and matched well identity.
+
+Maximum-J
+~~~~~~~~~~~~~
+
+A maximum-J field satisfies
+
+.. math::
+
+   \left.\frac{\partial\mathcal J_\parallel}{\partial\psi}
+   \right|_{\alpha,\lambda} < 0 ,
+
+where :math:`\psi` is signed toroidal flux divided by :math:`2\pi`.
+:class:`~vmex.core.maxj.MaximumJResidual` evaluates the action at the same
+physical pitch and field-line label on adjacent surfaces, pairs complete wells
+only when they are reciprocal nearest neighbours, and forms the physical
+finite-difference derivative. The least-squares rows use the dimensionless
+slope :math:`|\psi_{\rm edge}|\,(\partial J/\partial\psi)/J`; ``target=0``
+penalizes only violations of the condition above, while a negative target
+requests a finite margin.
+
+The result also reports the maximum-J fraction of resolved trapped samples,
+the fraction meeting ``target``, deep and shallow subsets split at normalized
+trapping depth
+:math:`(B_{\max}-1/\lambda)/(B_{\max}-B_{\min})=1/2`, and the fraction of
+radial-pitch blocks excluded by topology guards. Fractions are uniform over
+the supplied pitch samples by default; ``pitch_weights`` accepts user
+quadrature weights. These values are not the bounce-time-weighted Maxwellian
+phase-space fraction :math:`f_J` defined by Rodríguez and Plunk. That
+diagnostic additionally requires radial and pitch integration weighted by the
+normalized bounce time.
+
+VMEX carries the VMEC sign convention into this diagnostic:
+``psi_edge = signgs*phiedge/(2*pi)`` and the ``APHI`` remap sets the half-mesh
+``psi_b`` values. Reversing that signed coordinate reverses ``dJ/dpsi``; the
+implementation does not silently replace it by an unsigned radial label.
+A nonmonotone flux map, missing or ambiguous well, topology transition, or
+well displacement beyond ``match_tolerance`` returns NaN with
+``valid_pitch_pair=False``.
+
+Maximum-J remains a separate objective term. Users combine it with any QI,
+aspect-ratio, iota, stability, or engineering residual through VMEX's ordinary
+composite least-squares interface; no fixed QI-plus-maximum-J weighting is
+built into the class.
 
 .. _confinement-qi-fidelity:
 

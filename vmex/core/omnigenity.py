@@ -210,7 +210,9 @@ def boozer_bmnc_state(
     products; ``mboz``/``nboz`` are capped at the fine grid's Nyquist.
 
     Returns ``{bmnc_b (nsurf, nmodes), xm_b, xn_b (physical), iota_b, G_b,
-    I_b, nfp, s_b}`` — ``bmnc_b/xm_b/xn_b/iota_b/G_b/I_b/nfp`` are the inputs of
+    I_b, nfp, s_b, psi_b, psi_edge}``; ``psi_b`` and ``psi_edge`` are the
+    signed toroidal flux divided by ``2*pi``.
+    ``bmnc_b/xm_b/xn_b/iota_b/G_b/I_b/nfp`` are the inputs of
     :func:`omnigenity_residual` and of
     :func:`vmex.core.optimize.quasi_isodynamic_residual`.
     """
@@ -370,6 +372,8 @@ def boozer_bmnc_state(
         "I_b": I,
         "nfp": nfp,
         "s_b": jnp.asarray(s_half_np, dtype=dtype)[rows - 1],
+        "psi_b": jnp.asarray(setup.psi_half)[rows],
+        "psi_edge": jnp.asarray(setup.psi_edge),
     }
 
 
