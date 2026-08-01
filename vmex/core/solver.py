@@ -1040,6 +1040,7 @@ def _evaluate(
     fsq_rz_previous: Array | None = None,
     *, collect_health: bool = False,
     use_fft: bool = False,
+    synthesis: tuple | None = None,
 ) -> _EvalResult:
     """One funct3d.f pass (fixed boundary), pure and jit-friendly.
 
@@ -1052,6 +1053,13 @@ def _evaluate(
     ``fsqr1/fsqz1/fsql1``).  On a Jacobian sign change VMEC skips everything
     past the Jacobian; here the computation proceeds (traced) and the caller
     discards results, while the cache refresh is suppressed exactly.
+
+    ``synthesis`` optionally supplies the pass's already-computed
+    ``((R_cos, R_sin, Z_cos, Z_sin), geometry, jacobian)`` for ``state``
+    (funct3d.f computes them ONCE per pass and shares them with the vacuum
+    gate).  It must have been produced by the same ``_geometry``/
+    ``half_mesh_jacobian`` calls this function would make — the traced
+    free-boundary lane hoists exactly those, so results are bit-identical.
     """
     setup = rt.setup
     res = rt.resolution
@@ -1059,10 +1067,13 @@ def _evaluate(
     ns = int(s.shape[0])
     hs = setup.hs
 
-    (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(
-        state, rt, use_fft=use_fft
-    )
-    jacobian = half_mesh_jacobian(geometry, s=s)
+    if synthesis is None:
+        (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(
+            state, rt, use_fft=use_fft
+        )
+        jacobian = half_mesh_jacobian(geometry, s=s)
+    else:
+        (R_cos, R_sin, Z_cos, Z_sin), geometry, jacobian = synthesis
     jac_changed = jacobian.jacobian_sign_changed
 
     metrics = metric_elements(geometry, s=s)
@@ -1325,6 +1336,7 @@ def _make_body(
     *,
     evaluation_state: SpectralState | None = None,
     use_fft: bool = False,
+    evaluation_synthesis: tuple | None = None,
 ) -> Callable[[_LoopCarry], _LoopCarry]:
     """Build the traced single-iteration body shared by both lanes.
 
@@ -1334,6 +1346,16 @@ def _make_body(
     the already-computed geometry.  Supplying the pre-restart state here
     reproduces that one pass while momentum still evolves ``carry.state``
     (the restored best state).  Normal iterations leave it as ``None``.
+
+    ``evaluation_synthesis`` optionally hands the first funct3d pass its
+    already-computed ``((R_cos, R_sin, Z_cos, Z_sin), geometry, jacobian)``
+    (the ``_evaluate`` ``synthesis`` seam) — the free-boundary steady lane
+    synthesizes geometry once per pass, feeds its Jacobian sign to the
+    vacuum-source gate, and reuses it here, exactly as ``funct3d.f`` computes
+    the Jacobian ONCE before ``bcovar``/IVAC0 and shares it with the force
+    build.  It must correspond to the state the first pass evaluates
+    (``carry.state``, or ``evaluation_state`` when given); the restart
+    re-evaluation always re-synthesizes at the restored state.
     """
     ftol = rt.ftol
     max_iter = rt.max_iterations
@@ -1346,7 +1368,8 @@ def _make_body(
         # ---- funct3d (evolve.f) -------------------------------------------
         state_e1 = carry.state if evaluation_state is None else evaluation_state
         e1 = _evaluate(state_e1, carry.cache, it, carry.iter1, carry.fsqz, rt,
-                       carry.fsqr + carry.fsqz, use_fft=use_fft)
+                       carry.fsqr + carry.fsqz, use_fft=use_fft,
+                       synthesis=evaluation_synthesis)
         jac1 = e1.jacobian_sign_changed
         nonfinite1 = (~jac1) & (~_evaluation_is_finite(e1))
         # On irst=2 funct3d skips residue: the module residuals stay stale.

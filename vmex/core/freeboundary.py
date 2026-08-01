@@ -387,6 +387,12 @@ def _jacobian_ok(state: SpectralState, rt: SolverRuntime,
     ``analyt.f``'s ``log``/``sqrt`` kernels a degenerate boundary, and the
     resulting non-finite ``bsqvac`` turns funct3d.f's recoverable restart
     into a fatal NON-FINITE FORCE EVALUATION.
+
+    Used by the host-stepped activation passes only.  The traced steady
+    vacuum lane computes the same flag from its own single per-pass
+    synthesis (``_make_vacuum_lane``), which the force evaluation then
+    reuses — inlining this helper there duplicated a full geometry
+    synthesis inside the compiled free-lane program.
     """
     _, geometry = _geometry(state, rt, use_fft=use_fft)
     return jnp.logical_not(
@@ -1391,10 +1397,20 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
         it = c.iteration
         fsq_rz = c.fsqr + c.fsqz
 
+        # funct3d.f computes geometry and its Jacobian ONCE per pass, before
+        # bcovar/IVAC0, and the force build shares them.  Synthesize once
+        # here: the Jacobian sign feeds the vacuum-source gate below and the
+        # same synthesis is handed to the force evaluation at the end of the
+        # pass (``evaluation_synthesis``), instead of inlining a second full
+        # geometry synthesis into this traced lane (the old ``_jacobian_ok``
+        # call).  Same ops on the same state — rows are bit-identical.
+        coeffs, geometry = _geometry(c.state, rt, use_fft=use_fft)
+        jacobian = half_mesh_jacobian(geometry, s=rt.setup.s_full)
+
         # NESTOR must never consume a sign-changed state (full funct3d.f/
         # evolve.f rationale: _jacobian_ok): feed it xstore and force a full
         # update whenever the current state is invalid.
-        good = _jacobian_ok(c.state, rt, use_fft=use_fft)
+        good = jnp.logical_not(jacobian.jacobian_sign_changed)
         vac_state = jax.tree.map(
             lambda a, b: jnp.where(good, a, b), c.state, c.xstore)
 
@@ -1447,7 +1463,12 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
             vc.delbsq_traj, delbsq[None], idx, axis=0)
 
         # -- one eqsolve iteration with the refreshed edge field ------------
-        new_carry = _make_body(replace(rt_vac, bsqvac_edge=bsqvac), use_fft=use_fft)(c)
+        # The force pass reuses the pass's single synthesis (funct3d.f
+        # ordering: forces consume the geometry computed before IVAC0).
+        new_carry = _make_body(
+            replace(rt_vac, bsqvac_edge=bsqvac), use_fft=use_fft,
+            evaluation_synthesis=(coeffs, geometry, jacobian),
+        )(c)
 
         return _VacuumLoopCarry(
             carry=new_carry, rcon0=rcon0, zcon0=zcon0, bsqvac=bsqvac,
