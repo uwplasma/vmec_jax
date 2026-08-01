@@ -1,0 +1,38 @@
+&INDATA
+  ! Pressureless, current-free vacuum equilibrium with tiny n /= 0 modes.
+  ! LFORBAL removes the weak variational m=1,n=0 parameterization direction.
+  NFP = 3
+  LASYM = F
+
+  MPOL = 5
+  NTOR = 5
+  NTHETA = 18
+  NZETA = 16
+  NS_ARRAY = 25
+  NITER_ARRAY = 3500
+  FTOL_ARRAY = 1e-11
+
+  PHIEDGE = 0.03295687309
+  PMASS_TYPE = 'power_series'
+  AM = 0.0
+  PRES_SCALE = 1.0
+
+  NCURR = 1
+  CURTOR = 0.0
+  PCURR_TYPE = 'power_series'
+  AC = 0.0
+
+  DELT = 0.9
+  NSTEP = 200
+  LFORBAL = T
+
+  RBC( 0, 0) =  1.000000000000000e+00
+  RBC( 1, 0) =  1.132428904841995e-05
+  ZBS( 1, 0) =  3.109467908552061e-05
+  RBC(-1, 1) = -2.981090793306039e-05
+  ZBS(-1, 1) =  1.319356991672759e-05
+  RBC( 0, 1) =  3.848970406095167e-01
+  ZBS( 0, 1) =  2.835873833217062e-01
+  RBC( 1, 1) =  2.710568444616998e-05
+  ZBS( 1, 1) =  4.828592528079997e-05
+/

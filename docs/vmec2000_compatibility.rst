@@ -584,6 +584,29 @@ AD / FD
    research-grade only for the exact map disclosed and independently checked
    over a stated parameter/regime envelope.
 
+Pressureless current-free vacuum limit
+--------------------------------------
+
+A pressureless, current-free, nearly axisymmetric vacuum can be harder to
+iterate than its simple boundary suggests.  In the axisymmetric limit the
+interior surfaces have a weak parameterization direction: the variational
+``m=1,n=0`` force changes little while the magnetic axis drifts.  Tiny
+three-dimensional boundary modes only weakly remove that direction.
+
+The public :download:`NFP=3 example
+<../examples/data/input.near_degenerate_vacuum_nfp3>` reproduces this limit.
+With ``LFORBAL=F``, VMEX and VMEC2000 follow the same trajectory and stop just
+above ``FTOL=1e-11`` after 3,500 iterations.  With ``LFORBAL=T``, both replace
+that one variational equation by VMEC2000's flux-averaged force balance and
+converge in 941 iterations to
+``(FSQR, FSQZ, FSQL) = (9.13e-12, 5.38e-12, 2.32e-12)``.  The primary WOUT
+geometry and field coefficients agree to better than ``5e-10`` relative.
+
+For this class of input, review ``LFORBAL`` first.  Loosening ``FTOL`` or
+removing genuinely unused high-order volume modes may also end the iteration,
+but changes the requested accuracy or discretization.  VMEX does none of
+these automatically.
+
 Open-PR ownership and merge preservation
 ----------------------------------------
 

@@ -52,6 +52,7 @@
     ["tests/test_mgrid.py", "free-boundary", "unit", "fast", "cpu", "generated", "analytic", ["pr-parity-c1", "pr-fast", "full-core-j-m"]],
     ["tests/test_multigrid_interp.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-j-m"]],
     ["tests/test_multigrid_ladder.py", "equilibrium", "oracle", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-j-m"]],
+    ["tests/test_near_degenerate_vacuum.py", "equilibrium", "oracle", "slow", "cpu-gpu", "none", "vmec2000", ["pr-full-only", "full-core-n-s"]],
     ["tests/test_nonfinite_failfast.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-n-s"]],
     ["tests/test_omnigenity.py", "diagnostics", "ad", "slow", "cpu-gpu", "golden", "fd", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_optimization_convergence.py", "optimization", "campaign", "campaign", "cpu-gpu", "golden", "external", ["pr-parity-c2"]],
@@ -95,6 +96,7 @@
   "selectors": {
     "pr-physics-core": [
       "tests/test_solver_end_to_end.py::test_converges_with_golden_iteration_count[solovev]",
+      "tests/test_near_degenerate_vacuum.py::test_current_free_vacuum_nonconvergence_suggests_lforbal",
       "tests/test_implicit_grad.py::test_solovev_gradients_vs_fd",
       "tests/test_implicit_grad.py::test_jdotb_and_glasser_gradients_vs_frozen_path_fd[solovev]",
       "tests/test_bounce.py",

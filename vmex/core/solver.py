@@ -2075,9 +2075,17 @@ def _finalize(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
     if ier == SUCCESSFUL_TERM_FLAG:
         return _result_from_carry(carry, rt)
     if ier == MORE_ITER_FLAG:
+        hint = "increase NITER or loosen FTOL"
+        if (
+            not rt.lforbal
+            and rt.setup.ncurr == 1
+            and not np.any(np.asarray(rt.setup.mass))
+            and not np.any(np.asarray(rt.setup.icurv))
+        ):
+            hint += "; review LFORBAL=T for a weak vacuum m=1,n=0 direction"
         raise VmecConvergenceError(
             WERROR_MESSAGES[MORE_ITER_FLAG],
-            hint="increase NITER or loosen FTOL",
+            hint=hint,
             iteration=int(carry.iteration), fsq=fsq, ftol=rt.ftol,
         )
     if ier == NONFINITE_FLAG:
