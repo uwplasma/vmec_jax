@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from vmex.core import residuals as newr
+from vmex.core import solver as solver_core
 from vmex.core.forces import apply_m1_force_balance
 from vmex.core.input import VmecInput
 from vmex.core.setup import run_setup
@@ -130,6 +131,167 @@ def test_release_conditions_are_traced_values():
         jax.jit(lambda f, i: newr.m1_zero_condition(fsqz_previous=f, iterations_since_restart=i))(
             jnp.asarray(1e-7), jnp.asarray(100)
         )
+    )
+
+
+def test_free_boundary_edge_force_is_an_opt_in_stopping_gate():
+    common = dict(
+        jacobian_sign_changed=jnp.asarray(False),
+        fsqr=jnp.asarray(1.0e-12),
+        fsqz=jnp.asarray(1.0e-12),
+        fsql=jnp.asarray(1.0e-12),
+        ftol=1.0e-10,
+    )
+    # Legacy convergence is unchanged when the gate is disabled.
+    assert bool(solver_core._force_converged(
+        **common,
+        fedge=jnp.asarray(1.0),
+        lfreeb=False,
+        include_edge_in_convergence=False,
+    ))
+    # An enabled gate holds the fixed warm lane open until NESTOR activates.
+    assert not bool(solver_core._force_converged(
+        **common,
+        fedge=jnp.asarray(1.0e-12),
+        lfreeb=False,
+        include_edge_in_convergence=True,
+    ))
+    assert not bool(solver_core._force_converged(
+        **common,
+        fedge=jnp.asarray(2.0e-10),
+        lfreeb=True,
+        include_edge_in_convergence=True,
+        edge_force_tolerance=1.0e-10,
+    ))
+    assert bool(solver_core._force_converged(
+        **common,
+        fedge=jnp.asarray(1.0e-12),
+        lfreeb=True,
+        include_edge_in_convergence=True,
+        edge_force_tolerance=1.0e-10,
+    ))
+
+
+def test_force_pipeline_preserves_m1_constraint_slice(monkeypatch):
+    shape = (4, 3, 2)
+    zero = jnp.zeros(shape)
+    spectral = SpectralForce(
+        force_R_cc=zero,
+        force_R_ss=zero.at[:, 1, :].set(4.0),
+        force_Z_sc=zero,
+        force_Z_cs=zero.at[:, 1, :].set(1.0),
+        force_R_sc=zero.at[:, 1, :].set(5.0),
+        force_Z_cc=zero.at[:, 1, :].set(2.0),
+    )
+
+    monkeypatch.setattr(
+        solver_core,
+        "mhd_forces",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        solver_core,
+        "spectral_mhd_forces",
+        lambda *_args, **_kwargs: spectral,
+    )
+    monkeypatch.setattr(
+        solver_core,
+        "scalxc_scale_force",
+        lambda force, **_kwargs: force,
+    )
+    monkeypatch.setattr(
+        solver_core,
+        "scale_m1_preconditioner_rhs",
+        lambda force, **_kwargs: force,
+    )
+    monkeypatch.setattr(
+        solver_core,
+        "apply_radial_preconditioner",
+        lambda force, **_kwargs: (force, jnp.asarray(True)),
+    )
+    monkeypatch.setattr(
+        solver_core,
+        "apply_lambda_preconditioner",
+        lambda force, _faclam: force,
+    )
+
+    setup = SimpleNamespace(
+        s_full=jnp.linspace(0.0, 1.0, shape[0]),
+        hs=1.0 / (shape[0] - 1),
+        phipf=jnp.ones(shape[0]),
+        signgs=-1,
+        lconm1=True,
+        lthreed=True,
+        lasym=True,
+    )
+    runtime_fields = dict(
+        setup=setup,
+        resolution=SimpleNamespace(mpol=shape[1], ntor=shape[2] - 1),
+        modes=object(),
+        trig=object(),
+        rcon0=jnp.zeros(1),
+        zcon0=jnp.zeros(1),
+        lfreeb=False,
+        lforbal=False,
+        jmax=shape[0] - 1,
+    )
+    cache = SimpleNamespace(
+        tcon=1.0,
+        coefficients_R=object(),
+        coefficients_Z=object(),
+        matrices_R=object(),
+        matrices_Z=object(),
+        faclam=object(),
+    )
+
+    def run(preserve):
+        runtime = SimpleNamespace(
+            **runtime_fields,
+            preserve_m1_constraint_slice=preserve,
+        )
+        scaled, _preconditioned, _health = solver_core._force_pipeline(
+            geometry=object(),
+            jacobian=object(),
+            metrics=object(),
+            fields=object(),
+            R_cos=zero,
+            R_sin=zero,
+            Z_cos=zero,
+            Z_sin=zero,
+            cache=cache,
+            rt=runtime,
+            iteration=jnp.asarray(30),
+            fsqz_previous=jnp.asarray(1.0e-3),
+        )
+        return scaled
+
+    released = run(False)
+    preserved = run(True)
+
+    expected_released = 3.0 / np.sqrt(2.0)
+    np.testing.assert_allclose(
+        np.asarray(released.force_Z_cs[:, 1, :]),
+        expected_released,
+    )
+    np.testing.assert_allclose(
+        np.asarray(released.force_Z_cc[:, 1, :]),
+        expected_released,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(preserved.force_Z_cs[:, 1, :]),
+        np.zeros((shape[0], shape[2])),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(preserved.force_Z_cc[:, 1, :]),
+        np.zeros((shape[0], shape[2])),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(preserved.force_R_ss),
+        np.asarray(released.force_R_ss),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(preserved.force_R_sc),
+        np.asarray(released.force_R_sc),
     )
 
 

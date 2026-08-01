@@ -1312,6 +1312,9 @@ def _prefetch_stage_lane_set(
     precon_type: str | None, prec2d_threshold: float | None, prec2d: Any,
     use_fft: bool, device: Any, lmove_axis: bool | None,
     vacuum_on: bool | None, entry_lanes: bool, cancel: threading.Event,
+    preserve_m1_constraint_slice: bool,
+    include_edge_in_convergence: bool,
+    edge_force_tolerance: float | None,
 ) -> None:
     """AOT-compile one free-boundary stage's lane set (background worker).
 
@@ -1335,6 +1338,12 @@ def _prefetch_stage_lane_set(
         )
         if lmove_axis is not None and bool(rt.lmove_axis) != bool(lmove_axis):
             rt = replace(rt, lmove_axis=bool(lmove_axis))
+        rt = replace(
+            rt,
+            preserve_m1_constraint_slice=preserve_m1_constraint_slice,
+            include_edge_in_convergence=include_edge_in_convergence,
+            edge_force_tolerance=edge_force_tolerance,
+        )
         state = _initial_state(rt.setup)
         axis_r0, axis_z0 = _vacuum_scalars(state, rt)[2:4]
         basis, fused, vacuum_lane = _vacuum_executables(
@@ -1429,6 +1438,9 @@ def _launch_free_lane_prefetch(
     precon_type: str | None, prec2d_threshold: float | None, prec2d: Any,
     use_fft: bool, device: Any, lmove_axis: bool | None,
     vacuum_on: bool | None, entry_lanes: bool,
+    preserve_m1_constraint_slice: bool = False,
+    include_edge_in_convergence: bool = False,
+    edge_force_tolerance: float | None = None,
 ) -> tuple[threading.Thread, threading.Event] | None:
     """Start a stage lane-set prefetch thread; ``None`` when not applicable.
 
@@ -1446,6 +1458,8 @@ def _launch_free_lane_prefetch(
         bool(inp.lasym), bool(lconm1), time_step, tcon0, gamma, nstep,
         precon_type, prec2d_threshold, prec2d is None, str(device),
         lmove_axis, vacuum_on, bool(entry_lanes),
+        bool(preserve_m1_constraint_slice), bool(include_edge_in_convergence),
+        edge_force_tolerance,
     )
     if attempt_key in _FB_PREFETCH_ATTEMPTED:
         return None
@@ -1462,6 +1476,9 @@ def _launch_free_lane_prefetch(
                 prec2d=prec2d, use_fft=use_fft, device=device,
                 lmove_axis=lmove_axis, vacuum_on=vacuum_on,
                 entry_lanes=entry_lanes, cancel=cancel,
+                preserve_m1_constraint_slice=preserve_m1_constraint_slice,
+                include_edge_in_convergence=include_edge_in_convergence,
+                edge_force_tolerance=edge_force_tolerance,
             )
         except Exception:      # silent fallback: on-demand compilation
             pass
@@ -1639,6 +1656,36 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
 # ---------------------------------------------------------------------------
 
 
+def _validate_edge_force_tolerance(
+    value: Any,
+    *,
+    include_edge_in_convergence: bool,
+) -> float | None:
+    """Validate one optional edge-force threshold without resolving it."""
+    if value is None:
+        return None
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(
+            "edge_force_tolerance must be a finite real scalar > 0, "
+            "not a boolean"
+        )
+    array = np.asarray(value)
+    if (
+        array.shape != ()
+        or np.iscomplexobj(array)
+        or not np.issubdtype(array.dtype, np.number)
+    ):
+        raise TypeError("edge_force_tolerance must be a finite real scalar > 0")
+    tolerance = float(array)
+    if not np.isfinite(tolerance) or tolerance <= 0.0:
+        raise ValueError("edge_force_tolerance must be finite and > 0")
+    if not include_edge_in_convergence:
+        raise ValueError(
+            "edge_force_tolerance requires include_edge_in_convergence=True"
+        )
+    return tolerance
+
+
 def _solve_free_boundary_stage(
     inp: VmecInput,
     *,
@@ -1657,6 +1704,9 @@ def _solve_free_boundary_stage(
     gamma: float | None = None,
     nstep: int | None = None,
     lconm1: bool = True,
+    preserve_m1_constraint_slice: bool = False,
+    include_edge_in_convergence: bool = False,
+    edge_force_tolerance: float | None = None,
     precon_type: str | None = None,
     prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
@@ -1698,6 +1748,27 @@ def _solve_free_boundary_stage(
         raise ValueError("jacobian_retries must be non-negative")
     if not bool(inp.lfreeb):
         raise ValueError("solve_free_boundary requires an LFREEB=T input")
+    if type(preserve_m1_constraint_slice) is not bool:
+        raise TypeError("preserve_m1_constraint_slice must be a bool")
+    if type(include_edge_in_convergence) is not bool:
+        raise TypeError("include_edge_in_convergence must be a bool")
+    configured_preconditioner = str(
+        inp.precon_type if precon_type is None else precon_type
+    ).strip().upper()
+    if preserve_m1_constraint_slice and (
+        prec2d is not None
+        or configured_preconditioner not in {"NONE", "DEFAULT"}
+    ):
+        raise NotImplementedError(
+            "preserve_m1_constraint_slice=True requires PRECON_TYPE='NONE' "
+            "or 'DEFAULT'; "
+            "the 2-D Newton preconditioner must first be reduced onto the "
+            "same m=1 active subspace"
+        )
+    edge_tolerance_option = _validate_edge_force_tolerance(
+        edge_force_tolerance,
+        include_edge_in_convergence=include_edge_in_convergence,
+    )
     if external_field is None:
         external_field = _external_field_from_input(inp, mgrid_path)
 
@@ -1724,6 +1795,18 @@ def _solve_free_boundary_stage(
         lconm1=lconm1, precon_type=precon_type,
         prec2d_threshold=prec2d_threshold, prec2d=prec2d,
         use_fft=use_fft,
+    )
+    resolved_edge_tolerance = None
+    if include_edge_in_convergence:
+        resolved_edge_tolerance = _validate_edge_force_tolerance(
+            rt.ftol if edge_tolerance_option is None else edge_tolerance_option,
+            include_edge_in_convergence=True,
+        )
+    rt = replace(
+        rt,
+        preserve_m1_constraint_slice=preserve_m1_constraint_slice,
+        include_edge_in_convergence=include_edge_in_convergence,
+        edge_force_tolerance=resolved_edge_tolerance,
     )
     if not allow_initial_axis_reguess:
         rt = replace(rt, lmove_axis=False)
@@ -1886,6 +1969,9 @@ def _solve_free_boundary_stage(
             prec2d=prec2d, use_fft=use_fft, device=prefetch_device,
             lmove_axis=bool(rt.lmove_axis), vacuum_on=bool(vacuum_active),
             entry_lanes=False,
+            preserve_m1_constraint_slice=preserve_m1_constraint_slice,
+            include_edge_in_convergence=include_edge_in_convergence,
+            edge_force_tolerance=resolved_edge_tolerance,
         )
     try:
         if verbose:
@@ -2194,6 +2280,9 @@ def _solve_free_boundary_stage(
                 gamma=gamma,
                 nstep=nstep,
                 lconm1=lconm1,
+                preserve_m1_constraint_slice=preserve_m1_constraint_slice,
+                include_edge_in_convergence=include_edge_in_convergence,
+                edge_force_tolerance=resolved_edge_tolerance,
                 precon_type=precon_type,
                 prec2d_threshold=prec2d_threshold,
                 prec2d=prec2d,
@@ -2263,6 +2352,9 @@ def solve_free_boundary(
     gamma: float | None = None,
     nstep: int | None = None,
     lconm1: bool = True,
+    preserve_m1_constraint_slice: bool = False,
+    include_edge_in_convergence: bool = False,
+    edge_force_tolerance: float | None = None,
     precon_type: str | None = None,
     prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
@@ -2284,6 +2376,15 @@ def solve_free_boundary(
     recovery mirror :func:`vmex.core.solver.solve`. The returned
     ``result.vacuum`` contains the final NESTOR potential modes and surface
     fields, without internal matrix caches.
+
+    ``preserve_m1_constraint_slice=True`` keeps the constrained m=1 Z force
+    removed from the first iteration, giving hot-start continuations one
+    common affine chart for implicit differentiation.  It currently requires
+    the 1-D ``PRECON_TYPE='NONE'``/``'DEFAULT'`` path.
+    ``include_edge_in_convergence=True`` additionally
+    requires the separately normalized edge force to pass
+    ``edge_force_tolerance`` (defaulting to ``ftol``) after NESTOR activates.
+    The edge force remains outside timestep and restart control.
     """
     if resolution is None:
         # The angular grid depends on the field table (VMEC2000's NZETA
@@ -2305,6 +2406,9 @@ def solve_free_boundary(
             initial_state=initial_state, vacuum_continuation=None,
             time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
             lconm1=lconm1,
+            preserve_m1_constraint_slice=preserve_m1_constraint_slice,
+            include_edge_in_convergence=include_edge_in_convergence,
+            edge_force_tolerance=edge_force_tolerance,
             precon_type=precon_type, prec2d_threshold=prec2d_threshold,
             prec2d=prec2d,
             jacobian_retries=jacobian_retries,

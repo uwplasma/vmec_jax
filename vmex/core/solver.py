@@ -339,7 +339,7 @@ class _LoopCarry:
     state: SpectralState; xcdot: SpectralState; xstore: SpectralState
     cache: PreconditionerCache
     time_step: Array; inv_tau: Array; fsq: Array; res0: Array; res1: Array
-    fsqr: Array; fsqz: Array; fsql: Array
+    fsqr: Array; fsqz: Array; fsql: Array; fedge: Array
     fsqr1: Array; fsqz1: Array; fsql1: Array
     wb: Array; wp: Array; r00: Array
     iteration: Array; iter1: Array; ijacob: Array
@@ -424,6 +424,13 @@ class SolverRuntime:
     lfreeb: bool = False
     bsqvac_edge: Array | None = None
     presf_ns_scale: Array | None = None
+    # Optional branch-local implicit-solve contracts.  The edge force remains
+    # outside timestep/restart totals; it can only hold the stopping gate open.
+    include_edge_in_convergence: bool = False
+    edge_force_tolerance: float | None = None
+    # Keep the constrained m=1 Z-force removed from the first iteration so a
+    # hot-start continuation stays on one affine constraint slice.
+    preserve_m1_constraint_slice: bool = False
 
     # -- 2D block preconditioner seam (core/preconditioner_2d.py; precon2d.f) -
     # None disables it (the default 1D-only path is then byte-identical); a
@@ -467,7 +474,8 @@ class SolverRuntime:
 _register(SolverRuntime, meta=(
     "resolution", "gamma", "tcon0", "ftol", "max_iterations", "time_step0",
     "nstep", "jmax", "lforbal", "lmove_axis",
-    "lfreeb", "prec2d",
+    "lfreeb", "include_edge_in_convergence", "edge_force_tolerance",
+    "preserve_m1_constraint_slice", "prec2d",
 ))
 
 
@@ -904,7 +912,14 @@ def _force_pipeline(
 
     # -- residue.f90 chain ---------------------------------------------------
     rotated = m1_residue_rotation(spectral, lconm1=setup.lconm1)
-    zero_gate = m1_zero_condition(fsqz_previous=fsqz_previous, iterations_since_restart=iteration)
+    zero_gate = (
+        jnp.asarray(True)
+        if rt.preserve_m1_constraint_slice
+        else m1_zero_condition(
+            fsqz_previous=fsqz_previous,
+            iterations_since_restart=iteration,
+        )
+    )
     released = zero_m1_z_force(rotated, zero_gate)
     spectral_finite = (
         _all_finite((spectral, rotated, released)) if collect_health else passing
@@ -1320,6 +1335,38 @@ def reguess_initial_axis(
 # -- Iteration body (evolve.f + TimeStepControl + the eqsolve.f checks) ----------------------------------------------
 
 
+def _force_converged(
+    *,
+    jacobian_sign_changed: Array,
+    fsqr: Array,
+    fsqz: Array,
+    fsql: Array,
+    fedge: Array,
+    ftol: float,
+    lfreeb: bool,
+    include_edge_in_convergence: bool,
+    edge_force_tolerance: float | None = None,
+) -> Array:
+    """Evaluate the interior and optional free-boundary edge stopping gates."""
+    converged = (
+        (~jacobian_sign_changed)
+        & (fsqr <= ftol)
+        & (fsqz <= ftol)
+        & (fsql <= ftol)
+    )
+    if include_edge_in_convergence:
+        edge_ftol = ftol if edge_force_tolerance is None else edge_force_tolerance
+        # Never allow an edge-gated run to terminate in its fixed warm lane.
+        converged = (
+            converged
+            & lfreeb
+            & jnp.isfinite(fedge)
+            & (fedge >= 0.0)
+            & (fedge <= edge_ftol)
+        )
+    return converged
+
+
 def _make_body(
     rt: SolverRuntime,
     *,
@@ -1353,9 +1400,20 @@ def _make_body(
         fsqr_c = jnp.where(jac1, carry.fsqr, e1.residuals.fsqr)
         fsqz_c = jnp.where(jac1, carry.fsqz, e1.residuals.fsqz)
         fsql_c = jnp.where(jac1, carry.fsql, e1.residuals.fsql)
+        fedge_c = jnp.where(jac1, carry.fedge, e1.residuals.fedge)
         fsq0 = fsqr_c + fsqz_c + fsql_c
 
-        converged = (~jac1) & (fsqr_c <= ftol) & (fsqz_c <= ftol) & (fsql_c <= ftol)
+        converged = _force_converged(
+            jacobian_sign_changed=jac1,
+            fsqr=fsqr_c,
+            fsqz=fsqz_c,
+            fsql=fsql_c,
+            fedge=fedge_c,
+            ftol=ftol,
+            lfreeb=rt.lfreeb,
+            include_edge_in_convergence=rt.include_edge_in_convergence,
+            edge_force_tolerance=rt.edge_force_tolerance,
+        )
         bad_init = jac1 & (it == 1)
         # funct3d.f/eqsolve.f: LMOVE_AXIS=T and a finite first raw-force sum
         # above 1e2 set irst=4 and return to guess_axis before evolving xc.
@@ -1422,6 +1480,7 @@ def _make_body(
         fsqr_f = jnp.where(restart, e2.residuals.fsqr, fsqr_c)
         fsqz_f = jnp.where(restart, e2.residuals.fsqz, fsqz_c)
         fsql_f = jnp.where(restart, e2.residuals.fsql, fsql_c)
+        fedge_f = jnp.where(restart, e2.residuals.fedge, fedge_c)
         fsqr1_f = jnp.where(restart, e2.pre.fsqr1, e1.pre.fsqr1)
         fsqz1_f = jnp.where(restart, e2.pre.fsqz1, e1.pre.fsqz1)
         fsql1_f = jnp.where(restart, e2.pre.fsql1, e1.pre.fsql1)
@@ -1521,6 +1580,7 @@ def _make_body(
             fsqr=gate(running, fsqr_f, carry.fsqr),
             fsqz=gate(running, fsqz_f, carry.fsqz),
             fsql=gate(running, fsql_f, carry.fsql),
+            fedge=gate(running, fedge_f, carry.fedge),
             fsqr1=gate(running, fsqr1_f, carry.fsqr1),
             fsqz1=gate(running, fsqz1_f, carry.fsqz1),
             fsql1=gate(running, fsql1_f, carry.fsql1),
@@ -1574,7 +1634,7 @@ def _initial_carry(
         time_step=delt0,
         inv_tau=jnp.full((NDAMP,), DAMPING_CAP, dtype=dtype) / delt0,
         fsq=one, res0=inf, res1=inf,
-        fsqr=fsqr0, fsqz=fsqz0, fsql=fsql0,
+        fsqr=fsqr0, fsqz=fsqz0, fsql=fsql0, fedge=one,
         fsqr1=one, fsqz1=one, fsql1=one,
         wb=zero, wp=zero, r00=zero,
         iteration=int_(1), iter1=int_(1),
@@ -1628,6 +1688,10 @@ class SolveResult:
     rmns: np.ndarray | None; zmnc: np.ndarray | None
     iotaf: np.ndarray; fsq_history: np.ndarray
     vacuum: VacuumOutput | None = None
+    fedge: float = 0.0
+    include_edge_in_convergence: bool = False
+    edge_force_tolerance: float | None = None
+    preserve_m1_constraint_slice: bool = False
 
 
 def _result_from_carry(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
@@ -1685,6 +1749,18 @@ def _result_from_carry(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
         state=state, xm=xm, xn=xn,
         rmnc=rmnc, zmns=zmns, rmns=rmns, zmnc=zmnc, iotaf=iotaf,
         fsq_history=trajectory[:, 1:7].copy(),
+        fedge=float(carry.fedge),
+        include_edge_in_convergence=bool(rt.include_edge_in_convergence),
+        edge_force_tolerance=(
+            float(rt.ftol)
+            if rt.include_edge_in_convergence and rt.edge_force_tolerance is None
+            else (
+                None
+                if rt.edge_force_tolerance is None
+                else float(rt.edge_force_tolerance)
+            )
+        ),
+        preserve_m1_constraint_slice=bool(rt.preserve_m1_constraint_slice),
     )
 
 
@@ -2055,6 +2131,14 @@ def _finalize(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
             WERROR_MESSAGES[MORE_ITER_FLAG],
             hint="increase NITER or loosen FTOL",
             iteration=int(carry.iteration), fsq=fsq, ftol=rt.ftol,
+            fedge=float(carry.fedge),
+            include_edge_in_convergence=bool(rt.include_edge_in_convergence),
+            edge_force_tolerance=(
+                float(rt.ftol)
+                if rt.include_edge_in_convergence
+                and rt.edge_force_tolerance is None
+                else rt.edge_force_tolerance
+            ),
         )
     if ier == NONFINITE_FLAG:
         raise VmecNumericalError(

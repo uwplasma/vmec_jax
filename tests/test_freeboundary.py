@@ -29,10 +29,17 @@ import jax.numpy as jnp  # noqa: E402
 
 from vmex.core import freeboundary as FB  # noqa: E402
 from vmex.core import vacuum as V  # noqa: E402
-from vmex.core.errors import MgridNotFoundError, VmecJacobianError  # noqa: E402
+from vmex.core.errors import (  # noqa: E402
+    JAC75_FLAG,
+    MORE_ITER_FLAG,
+    MgridNotFoundError,
+    VmecConvergenceError,
+    VmecJacobianError,
+)
 from vmex.core.freeboundary_linear import linearize_nestor_coupling  # noqa: E402
 from vmex.core.input import VmecInput  # noqa: E402
 from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
+from vmex.core.preconditioner_2d import Prec2DConfig  # noqa: E402
 from vmex.core.solver import (  # noqa: E402
     _initial_state, prepare_runtime, resolution_from_input,
 )
@@ -638,6 +645,261 @@ def test_free_boundary_converged_golden(golden_dir):
 # ---------------------------------------------------------------------------
 # Missing-mgrid fallback policy
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [
+        (True, TypeError),
+        (np.bool_(True), TypeError),
+        (1.0 + 0.0j, TypeError),
+        ([1.0e-8], TypeError),
+        (0.0, ValueError),
+        (-1.0, ValueError),
+        (np.nan, ValueError),
+        (np.inf, ValueError),
+    ],
+)
+def test_edge_force_tolerance_rejects_invalid_values(value, error):
+    with pytest.raises(error):
+        FB._validate_edge_force_tolerance(
+            value,
+            include_edge_in_convergence=True,
+        )
+
+
+def test_edge_force_tolerance_requires_enabled_gate():
+    with pytest.raises(
+        ValueError,
+        match="requires include_edge_in_convergence=True",
+    ):
+        FB._validate_edge_force_tolerance(
+            1.0e-10,
+            include_edge_in_convergence=False,
+        )
+    assert FB._validate_edge_force_tolerance(
+        None,
+        include_edge_in_convergence=False,
+    ) is None
+    assert FB._validate_edge_force_tolerance(
+        1.0e-10,
+        include_edge_in_convergence=True,
+    ) == 1.0e-10
+
+
+def test_edge_gate_holds_fixed_warm_lane_and_reports_diagnostics():
+    inp = VmecInput.from_file(DECK)
+    common = dict(
+        mgrid_path=MGRID,
+        max_iterations=1,
+        ftol=1.0e9,
+        precon_type="DEFAULT",
+        device="cpu",
+    )
+    legacy = FB.solve_free_boundary(
+        inp,
+        error_on_no_convergence=False,
+        **common,
+    )
+    gated = FB.solve_free_boundary(
+        inp,
+        error_on_no_convergence=False,
+        preserve_m1_constraint_slice=True,
+        include_edge_in_convergence=True,
+        edge_force_tolerance=7.0e-3,
+        **common,
+    )
+    with pytest.raises(VmecConvergenceError) as exc:
+        FB.solve_free_boundary(
+            inp,
+            error_on_no_convergence=True,
+            preserve_m1_constraint_slice=True,
+            include_edge_in_convergence=True,
+            edge_force_tolerance=7.0e-3,
+            **common,
+        )
+
+    # The loose interior gate would stop on the fixed-boundary warm pass.
+    assert legacy.converged
+    assert legacy.include_edge_in_convergence is False
+    assert legacy.edge_force_tolerance is None
+    assert legacy.preserve_m1_constraint_slice is False
+
+    # The opt-in edge gate must wait for NESTOR even though fedge itself passes.
+    assert not gated.converged
+    assert gated.ier_flag == MORE_ITER_FLAG
+    assert np.isfinite(gated.fedge)
+    assert 0.0 <= gated.fedge <= gated.edge_force_tolerance
+    assert gated.include_edge_in_convergence is True
+    assert gated.edge_force_tolerance == pytest.approx(7.0e-3)
+    assert gated.preserve_m1_constraint_slice is True
+
+    error = exc.value
+    assert error.fedge == pytest.approx(gated.fedge)
+    assert error.include_edge_in_convergence is True
+    assert error.edge_force_tolerance == pytest.approx(7.0e-3)
+    assert error.ftol == pytest.approx(1.0e9)
+    assert error.fsq == pytest.approx(
+        (gated.fsqr, gated.fsqz, gated.fsql)
+    )
+
+
+def test_branch_controls_survive_jac75_retry_and_prefetch(monkeypatch):
+    inp = VmecInput.from_file(DECK)
+    resolution = resolution_from_input(inp, ns=7)
+    stage_calls = []
+    prefetch_calls = []
+    lane_tags = []
+    original_stage = FB._solve_free_boundary_stage
+
+    def recording_stage(deck, **kwargs):
+        stage_calls.append(kwargs.copy())
+        return original_stage(deck, **kwargs)
+
+    def fake_prefetch(_deck, **kwargs):
+        prefetch_calls.append(kwargs.copy())
+        return None
+
+    def fake_call(tag, _lane, args, static=None):
+        del static
+        carry = args[0]
+        attempt = len(lane_tags)
+        lane_tags.append(tag)
+        ier = JAC75_FLAG if attempt == 0 else MORE_ITER_FLAG
+        return dataclasses.replace(
+            carry,
+            done=jnp.asarray(True),
+            ier=jnp.asarray(ier, dtype=carry.ier.dtype),
+            fedge=jnp.asarray(
+                4.0e-8 + attempt * 1.0e-8,
+                dtype=carry.fedge.dtype,
+            ),
+        )
+
+    monkeypatch.setattr(FB, "_solve_free_boundary_stage", recording_stage)
+    monkeypatch.setattr(FB, "_launch_free_lane_prefetch", fake_prefetch)
+    monkeypatch.setattr(FB, "_call_lane", fake_call)
+    stage = FB._solve_free_boundary_stage(
+        inp,
+        external_field=object(),
+        resolution=resolution,
+        max_iterations=1,
+        error_on_no_convergence=False,
+        precon_type="NONE",
+        preserve_m1_constraint_slice=True,
+        include_edge_in_convergence=True,
+        edge_force_tolerance=3.0e-10,
+        jacobian_retries=1,
+        prefetch_compile=True,
+        use_fft=False,
+    )
+
+    assert lane_tags == [("fb_iter", False), ("fb_iter", False)]
+    assert [call["jacobian_retries"] for call in stage_calls] == [1, 0]
+
+    def controls(call):
+        return (
+            call["preserve_m1_constraint_slice"],
+            call["include_edge_in_convergence"],
+            call["edge_force_tolerance"],
+        )
+
+    expected = (True, True, 3.0e-10)
+    assert [controls(call) for call in stage_calls] == [expected, expected]
+    assert [controls(call) for call in prefetch_calls] == [expected, expected]
+
+    result = stage.result
+    assert not result.converged
+    assert result.ier_flag == MORE_ITER_FLAG
+    assert result.fedge == pytest.approx(5.0e-8)
+    assert result.preserve_m1_constraint_slice is True
+    assert result.include_edge_in_convergence is True
+    assert result.edge_force_tolerance == pytest.approx(3.0e-10)
+
+
+def test_prefetch_identity_and_worker_include_branch_controls(monkeypatch):
+    inp = VmecInput.from_file(DECK)
+    calls = []
+
+    def record_worker(_deck, **kwargs):
+        calls.append(kwargs.copy())
+
+    monkeypatch.setattr(FB, "_FB_PREFETCH_ATTEMPTED", set())
+    monkeypatch.setattr(FB, "_prefetch_stage_lane_set", record_worker)
+    common = dict(
+        external_field=object(),
+        ns=7,
+        ftol=1.0e-10,
+        max_iterations=3,
+        time_step=0.2,
+        tcon0=1.0,
+        gamma=0.0,
+        nstep=2,
+        lconm1=True,
+        precon_type="NONE",
+        prec2d_threshold=None,
+        prec2d=None,
+        use_fft=False,
+        device="cpu",
+        lmove_axis=False,
+        vacuum_on=False,
+        entry_lanes=False,
+    )
+
+    default_launch = FB._launch_free_lane_prefetch(inp, **common)
+    assert default_launch is not None
+    default_launch[0].join()
+    assert FB._launch_free_lane_prefetch(inp, **common) is None
+
+    implicit_launch = FB._launch_free_lane_prefetch(
+        inp,
+        preserve_m1_constraint_slice=True,
+        include_edge_in_convergence=True,
+        edge_force_tolerance=3.0e-10,
+        **common,
+    )
+    assert implicit_launch is not None
+    implicit_launch[0].join()
+
+    assert len(calls) == 2
+    assert (
+        calls[0]["preserve_m1_constraint_slice"],
+        calls[0]["include_edge_in_convergence"],
+        calls[0]["edge_force_tolerance"],
+    ) == (False, False, None)
+    assert (
+        calls[1]["preserve_m1_constraint_slice"],
+        calls[1]["include_edge_in_convergence"],
+        calls[1]["edge_force_tolerance"],
+    ) == (True, True, 3.0e-10)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"precon_type": "GMRES"}, id="input-gmres"),
+        pytest.param(
+            {"prec2d": Prec2DConfig(threshold=1.0e-6)},
+            id="explicit-config",
+        ),
+    ],
+)
+def test_preserved_m1_slice_rejects_2d_preconditioner(kwargs):
+    inp = VmecInput.from_file(DECK)
+    with pytest.raises(
+        NotImplementedError,
+        match=(
+            r"preserve_m1_constraint_slice=True requires PRECON_TYPE='NONE' "
+            r"or 'DEFAULT'"
+        ),
+    ):
+        FB._solve_free_boundary_stage(
+            inp,
+            external_field=object(),
+            resolution=resolution_from_input(inp),
+            preserve_m1_constraint_slice=True,
+            **kwargs,
+        )
 
 
 def test_missing_mgrid_raises(tmp_path):

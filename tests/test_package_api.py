@@ -83,6 +83,24 @@ def test_free_boundary_residual_api_is_public():
     )
 
 
+def test_solve_result_keeps_legacy_positional_vacuum_slot():
+    import inspect
+
+    from vmex.core.solver import SolveResult
+
+    parameters = list(inspect.signature(SolveResult).parameters.values())
+    first_default = next(
+        index
+        for index, parameter in enumerate(parameters)
+        if parameter.default is not inspect.Parameter.empty
+    )
+    assert parameters[first_default].name == "vacuum"
+
+    vacuum = object()
+    result = SolveResult(*([None] * first_default), vacuum)
+    assert result.vacuum is vacuum
+
+
 def test_python_dash_m_entrypoint_exposes_cli_main():
     import vmex.__main__ as main_mod
 

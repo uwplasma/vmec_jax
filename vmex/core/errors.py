@@ -117,6 +117,9 @@ class VmecConvergenceError(VmecError):
     iteration: int = 0
     fsq: tuple[float, float, float] | None = None
     ftol: float = 0.0
+    fedge: float | None = None
+    include_edge_in_convergence: bool = False
+    edge_force_tolerance: float | None = None
 
 
 @dataclass
