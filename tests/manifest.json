@@ -44,6 +44,7 @@
     ["tests/test_implicit_device.py", "ad", "ad", "medium", "cpu-gpu", "none", "fd", ["pr-parity-c3", "gpu-smoke", "full-core-i"]],
     ["tests/test_implicit_grad.py", "ad", "ad", "campaign", "cpu-gpu", "golden", "fd", ["pr-gradient", "full-core-i-grad"]],
     ["tests/test_implicit_multi_rhs.py", "ad", "ad", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c3", "full-core-i"]],
+    ["tests/test_aphi_flux_normalization.py", "equilibrium", "unit", "fast", "cpu", "none", "vmec2000", ["pr-parity-c1", "pr-fast", "full-core-i"]],
     ["tests/test_input_profiles.py", "equilibrium", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-c1", "pr-fast", "full-core-i"]],
     ["tests/test_lasym_free_convergence.py", "free-boundary", "campaign", "campaign", "cpu-gpu", "generated", "vmec2000", ["pr-full-only", "full-core-j-m"]],
     ["tests/test_lgradb.py", "diagnostics", "ad", "medium", "cpu-gpu", "none", "fd", ["pr-parity-c3", "full-core-j-m"]],
@@ -95,8 +96,14 @@
       "tests/test_implicit_grad.py::test_solovev_gradients_vs_fd",
       "tests/test_implicit_grad.py::test_jdotb_and_glasser_gradients_vs_frozen_path_fd[solovev]",
       "tests/test_freeboundary.py::test_nestor_skip_branch_matches_full_solve",
+      "tests/test_freeboundary.py::test_jac75_retry_rebuilds_vacuum_and_converges",
+      "tests/test_freeboundary.py::test_vacuum_step_skip_reuses_cached_matrix",
+      "tests/test_freeboundary.py::test_call_lane_emits_notice_once_before_compile",
+      "tests/test_freeboundary_multigrid.py",
       "tests/test_freeboundary_linear.py",
-      "tests/test_freeboundary_diff.py::test_synthetic_surface_gradient_fd_validates"
+      "tests/test_freeboundary_diff.py::test_synthetic_surface_gradient_fd_validates",
+      "tests/test_printing.py::test_compile_notice_variants",
+      "tests/test_printing.py::test_emit_flushed_writes_and_flushes"
     ],
     "pr-physics-mirror-spline": [
       "tests/mirror/test_analytic.py",
