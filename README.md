@@ -365,11 +365,11 @@ free-boundary ladder (including vacuum continuation and hot starts);
 gradients (`jax.grad`-able `ImplicitSolution`); `solver.solve` as the
 low-level single-grid building block.
 
-Optimization building blocks live in `vmex.core.optimize`
-(quasisymmetry and omnigenity residuals; aspect ratio, iota, mirror ratio,
-magnetic well, `DMerc`, Glasser `D_R`, `<J·B>`, and ballooning-stability
-targets; a least-squares driver over boundary Fourier coefficients) with
-implicit-differentiation gradients from
+Optimization building blocks include quasisymmetry, three separate QI
+residuals, matched-well maximum-J, aspect ratio, iota, mirror ratio, magnetic
+well, `DMerc`, Glasser `D_R`, `<J·B>`, and ballooning-stability targets. They
+compose in the same least-squares driver over boundary Fourier coefficients,
+with implicit-differentiation gradients from
 `vmex.core.implicit` (`jac="implicit"`). `<J·B>` also supports `LASYM = T`;
 `DMerc` and `D_R` remain symmetry-gated pending independent DCON/JMC parity.
 The recommended pattern is **one
