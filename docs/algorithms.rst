@@ -390,8 +390,14 @@ exposes that equation through ``assemble`` without nesting a potential solve.
 The operator supplies the exact generated transpose, the Schur action
 :math:`D-C A^{-1}B`, and a block inverse. The live LASYM NESTOR blocks are
 tested against the complete coupled JVP/VJP. The host-driven cadence above is
-not yet replaced by a coupled Newton solve, so this foundation is not yet a
-public implicit free-boundary adjoint.
+not itself differentiated or replaced by a coupled Newton solve. For
+stellarator-symmetric equilibria,
+:mod:`vmex.core.freeboundary_implicit` instead projects the fully rebuilt
+residual at a supplied converged VMEX--NESTOR root and exposes scalar-parameter
+tangents, state pullbacks, and scalar-objective adjoints. These lower-level
+B2--B4 APIs differentiate the converged residual equation; the adaptive solve
+path, a scalar custom-VJP wrapper, and common-anchor optimization remain
+outside the public API.
 
 Differentiable free boundary (virtual casing)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

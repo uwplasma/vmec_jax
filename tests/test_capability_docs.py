@@ -29,12 +29,18 @@ def test_capability_table_is_current_and_evidence_exists() -> None:
 
 
 def test_contract_does_not_overclaim_free_boundary_ad() -> None:
-    free_toroidal = [
-        row for row in _data()["rows"]
-        if row["topology"] == "toroidal" and row["boundary"] == "free"
-    ]
-    assert free_toroidal
-    assert not any(row["coupled_ad"] for row in free_toroidal)
+    rows = {row["id"]: row for row in _data()["rows"]}
+    symmetric = rows["toroidal-free-symmetric"]
+    assert symmetric["coupled_ad"] is True
+    assert symmetric["jvp"] == "limited"
+    assert symmetric["vjp"] == "limited"
+    assert "supplied converged" in symmetric["scope"]
+    assert "custom VJP" in symmetric["scope"]
+
+    lasym = rows["toroidal-free-lasym"]
+    assert lasym["coupled_ad"] is False
+    assert lasym["jvp"] == "not-available"
+    assert lasym["vjp"] == "not-available"
 
 
 def test_supported_mirror_beta_matches_benchmark() -> None:

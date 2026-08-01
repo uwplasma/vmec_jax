@@ -61,7 +61,7 @@ stated in the row is validated; ``—`` means no public path.
      - limited
      - limited
      - supported
-     - Forward NESTOR equilibrium. AD covers the virtual-casing residual on a specified boundary, not a reconverged plasma-vacuum root. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_diff.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_diff.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
+     - Public B2-B4 APIs differentiate a supplied converged symmetric VMEX-NESTOR root for scalar external-field parameters. Adaptive host-solve custom VJP and common-anchor optimization are not yet public. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_implicit_fast.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit_fast.py>`__, `test_freeboundary_implicit_integration.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit_integration.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
    * - toroidal
      - stellarator / tokamak
      - free
@@ -184,9 +184,13 @@ Free-boundary differentiation
 -----------------------------
 
 A supported forward free-boundary solve does not imply differentiation
-through the reconverged plasma-vacuum equilibrium. The toroidal
-specified-boundary virtual-casing residual is differentiable, but the
-fully coupled NESTOR root is not yet a public AD path.
+through its adaptive reconvergence path. For stellarator-symmetric
+toroidal equilibria, the public lower-level B2--B4 APIs provide
+projected tangents and state adjoints at a supplied converged
+VMEX--NESTOR root. The adaptive host solve, scalar custom VJP, and
+common-anchor optimization remain outside the public AD path. The
+specified-boundary virtual-casing residual is a separate differentiable
+interface.
 
 Mirror beta labels
 ------------------

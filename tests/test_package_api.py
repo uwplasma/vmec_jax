@@ -83,6 +83,29 @@ def test_free_boundary_residual_api_is_public():
     )
 
 
+def test_free_boundary_implicit_api_is_public():
+    from vmex.core import freeboundary_implicit
+
+    names = (
+        "FreeBoundaryAdjointResult",
+        "FreeBoundaryStatePullbackResult",
+        "FreeBoundaryTangentConfig",
+        "FreeBoundaryTangentResult",
+        "free_boundary_dof_mask",
+        "make_projected_free_boundary_residual",
+        "one_current_adjoint",
+        "one_current_tangent",
+        "scalar_parameter_state_pullback",
+        "scalar_parameter_tangent",
+        "scalar_state_objective_adjoint",
+    )
+    assert all(
+        getattr(vmex, name) is getattr(freeboundary_implicit, name)
+        for name in names
+    )
+    assert vmex.freeboundary_implicit is freeboundary_implicit
+
+
 def test_solve_result_keeps_legacy_positional_vacuum_slot():
     import inspect
 

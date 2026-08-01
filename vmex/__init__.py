@@ -9,6 +9,10 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.freeboundary.solve_free_boundary` — NESTOR free boundary
 - :func:`~vmex.core.freeboundary.make_free_boundary_residual_evaluator` —
   differentiable VMEX--NESTOR fixed-point residual
+- :func:`~vmex.core.freeboundary_implicit.scalar_parameter_tangent` —
+  projected free-boundary equilibrium tangent
+- :func:`~vmex.core.freeboundary_implicit.scalar_state_objective_adjoint` —
+  projected free-boundary state-objective adjoint
 - :func:`~vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
   / :func:`~vmex.core.wout.wout_from_state` / :class:`~vmex.core.wout.WoutData`
 - :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
@@ -90,6 +94,29 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".core.freeboundary", "FreeBoundaryResidualEvaluator"),
     "make_free_boundary_residual_evaluator": (
         ".core.freeboundary", "make_free_boundary_residual_evaluator"),
+    # projected free-boundary implicit differentiation
+    "FreeBoundaryAdjointResult": (
+        ".core.freeboundary_implicit", "FreeBoundaryAdjointResult"),
+    "FreeBoundaryStatePullbackResult": (
+        ".core.freeboundary_implicit", "FreeBoundaryStatePullbackResult"),
+    "FreeBoundaryTangentConfig": (
+        ".core.freeboundary_implicit", "FreeBoundaryTangentConfig"),
+    "FreeBoundaryTangentResult": (
+        ".core.freeboundary_implicit", "FreeBoundaryTangentResult"),
+    "free_boundary_dof_mask": (
+        ".core.freeboundary_implicit", "free_boundary_dof_mask"),
+    "make_projected_free_boundary_residual": (
+        ".core.freeboundary_implicit", "make_projected_free_boundary_residual"),
+    "one_current_adjoint": (
+        ".core.freeboundary_implicit", "one_current_adjoint"),
+    "one_current_tangent": (
+        ".core.freeboundary_implicit", "one_current_tangent"),
+    "scalar_parameter_state_pullback": (
+        ".core.freeboundary_implicit", "scalar_parameter_state_pullback"),
+    "scalar_parameter_tangent": (
+        ".core.freeboundary_implicit", "scalar_parameter_tangent"),
+    "scalar_state_objective_adjoint": (
+        ".core.freeboundary_implicit", "scalar_state_objective_adjoint"),
     # wout IO
     "WoutData": (".core.wout", "WoutData"),
     "read_wout": (".core.wout", "read_wout"),
@@ -117,6 +144,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "errors": (".core.errors", None),
     "optimize": (".core.optimize", None),
     "implicit": (".core.implicit", None),
+    "freeboundary_implicit": (".core.freeboundary_implicit", None),
     "parallel": (".core.parallel", None),
     "doctor": (".doctor", None),
 }
