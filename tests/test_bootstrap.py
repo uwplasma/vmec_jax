@@ -18,8 +18,10 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import netCDF4
 import numpy as np
 import pytest
+from scipy.integrate import quad
 
 import jax
 
@@ -184,12 +186,17 @@ def test_trapped_fraction_analytic_model():
     # Large-aspect-ratio asymptote f_t ~ 1.46 sqrt(eps) at small eps.
     ratio = np.asarray(f_t)[:2] / (1.46 * np.sqrt(eps[:2]))
     np.testing.assert_allclose(ratio, 1.0, atol=0.05)
+    np.testing.assert_allclose(
+        f_t, 1.46 * np.sqrt(eps) - 0.46 * eps, rtol=0.04)
     # f_t increases with eps and stays in (0, 1).
     ft = np.asarray(f_t)
     assert np.all(np.diff(ft) > 0) and np.all((ft > 0) & (ft < 1))
     # Fixed-order quadrature self-check: 64 vs 256 nodes.
     *_, f_t_hi = bs.compute_trapped_fraction(modB, sqrtg, n_lambda=256)
     np.testing.assert_allclose(ft, np.asarray(f_t_hi), rtol=1e-4)
+    constant, weight = _analytic_model([0.0], B0=B0)
+    assert abs(float(bs.compute_trapped_fraction(
+        constant, weight, n_lambda=8)[-1][0])) < 3e-14
 
 
 def test_trapped_fraction_grad_finite():
@@ -201,6 +208,93 @@ def test_trapped_fraction_grad_finite():
 
     grad = jax.grad(scalar)(modB)
     assert np.all(np.isfinite(np.asarray(grad)))
+
+
+def test_qi_axis_trapped_fraction_is_nonzero():
+    """pyQIC ``QI NFP1 r2`` axis field, whose mirror ratio stays finite."""
+    zeta = np.linspace(0.0, 2.0 * np.pi, 1024, endpoint=False)
+    modB = 1.0 + 0.15824229612567256 * np.cos(zeta)
+    modB = jnp.asarray(np.broadcast_to(modB[None, None, :], (1, 8, zeta.size)))
+    sqrtg = 1.2355077254369284 / modB**2
+    *_, coarse = bs.compute_trapped_fraction(modB, sqrtg, n_lambda=64)
+    *_, fine = bs.compute_trapped_fraction(modB, sqrtg, n_lambda=256)
+    assert float(fine[0]) == pytest.approx(0.5536054318, rel=2e-8)
+    np.testing.assert_allclose(coarse, fine, rtol=5e-8)
+
+
+def test_axis_limit_preserves_qi_b0_and_removes_poloidal_terms():
+    theta = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
+    zeta = np.linspace(0.0, 2.0 * np.pi, 65, endpoint=False)
+    theta, zeta = np.meshgrid(theta, zeta, indexing="ij")
+    s_full = np.linspace(0.0, 1.0, 4)
+    s_half = 0.5 * (s_full[:-1] + s_full[1:])
+    b0 = 1.0 + 0.15 * np.cos(zeta)
+    g0 = 1.2 / b0**2
+    modB = np.stack([
+        b0 + np.sqrt(s) * 0.2 * np.cos(theta) + s * 0.04 * np.cos(zeta)
+        for s in s_half
+    ])
+    sqrtg = np.stack([
+        g0 + np.sqrt(s) * 0.1 * np.sin(theta) + s * 0.03 * np.cos(zeta)
+        for s in s_half
+    ])
+    zeros = np.zeros((1,) + modB.shape[1:])
+    result = bs._trapped_fraction_from_fields(
+        total_pressure=0.5 * np.concatenate((zeros, modB**2)),
+        pressure=np.zeros(4),
+        sqrt_g=np.concatenate((zeros, sqrtg)),
+        s_full=s_full,
+        surfaces=np.array([0.0]),
+        lasym=True,
+        n_lambda=32,
+    )
+    expected = bs.compute_trapped_fraction(
+        b0[None], g0[None], n_lambda=32)
+    for actual, reference in zip(result, expected):
+        np.testing.assert_allclose(actual, reference, rtol=2e-13, atol=2e-13)
+
+
+def test_trapped_fraction_desc_and_adaptive_parity():
+    """DESC ``5bf45439`` two-surface oracle and independent adaptive integral."""
+    theta = np.linspace(0.0, 2.0 * np.pi, 201, endpoint=False)
+    zeta = np.linspace(0.0, 2.0 * np.pi / 3.0, 51, endpoint=False)
+    theta, zeta = np.meshgrid(theta, zeta, indexing="ij")
+    modB = np.stack((
+        13.0 + 2.6 * np.cos(theta),
+        9.0 + 3.7 * np.sin(theta - 3.0 * zeta),
+    ))
+    sqrtg = np.stack((
+        np.full_like(theta, 10.0),
+        np.full_like(theta, -25.0),
+    ))
+    result = tuple(np.asarray(x) for x in bs.compute_trapped_fraction(
+        modB, sqrtg, n_lambda=64))
+    expected = (
+        [10.400317571954302, 5.30000039095027],
+        [15.6, 12.69999960904973],
+        [0.1999853430119033, 0.4111110676721922],
+        [172.38, 87.845],
+        [0.07850928662766593, 0.12188779055693756],
+        [0.5618460489104805, 0.70107870190748],
+    )
+    for actual, reference in zip(result[:-1], expected[:-1]):
+        np.testing.assert_allclose(actual, reference, rtol=3e-14, atol=3e-14)
+    np.testing.assert_allclose(result[-1], expected[-1], rtol=5e-8)
+
+    for i in range(2):
+        weight = np.abs(sqrtg[i])
+        volume = np.mean(weight)
+        bmax = np.max(modB[i])
+
+        def integrand(pitch):
+            average = np.mean(
+                np.sqrt(np.maximum(1.0 - pitch * modB[i], 0.0)) * weight)
+            return pitch / (average / volume)
+
+        integral = quad(
+            integrand, 0.0, 1.0 / bmax, epsabs=1e-12, epsrel=1e-12)[0]
+        adaptive = 1.0 - 0.75 * result[3][i] * integral
+        assert result[-1][i] == pytest.approx(adaptive, rel=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -391,12 +485,86 @@ def test_state_lane_matches_wout_lane(eq):
     np.testing.assert_allclose(np.asarray(j_state), np.asarray(j_wout), rtol=5e-2)
 
 
+def test_wout_lane_uses_lasym_sine_fields(eq):
+    surfaces = np.array([0.3, 0.5, 0.7])
+    symmetric = bs.redl_geometry_from_wout(eq.wout, surfaces)
+    bmns = np.zeros_like(eq.wout.bmnc)
+    mode = int(np.flatnonzero(np.asarray(eq.wout.xm_nyq) > 0)[0])
+    bmns[:, mode] = 0.03
+    asymmetric = bs.redl_geometry_from_wout(
+        dataclasses.replace(
+            eq.wout, lasym=True, bmns=bmns, gmns=np.zeros_like(eq.wout.gmnc)),
+        surfaces,
+    )
+    assert np.all(np.isfinite(np.asarray(asymmetric.f_t)))
+    assert not np.allclose(asymmetric.f_t, symmetric.f_t)
+
+
 def test_state_lane_default_surfaces_and_pytree(eq):
     geom = bs.redl_geometry_from_state(eq.state, eq.runtime)
     assert geom.surfaces.shape == (16,)
     leaves = jax.tree_util.tree_leaves(geom)
     assert leaves and all(np.all(np.isfinite(np.asarray(leaf))) for leaf in leaves)
     assert 0.0 < float(np.min(np.asarray(geom.f_t))) < float(np.max(np.asarray(geom.f_t))) < 1.0
+
+
+def test_trapped_fraction_state_profile_and_wout_roundtrip(eq, tmp_path):
+    from vmex.core.wout import read_wout, write_wout
+
+    profile = bs.trapped_fraction_from_state(eq.state, eq.runtime)
+    assert profile.shape == (eq.wout.ns,)
+    assert np.all(np.isfinite(np.asarray(profile)))
+    np.testing.assert_allclose(
+        profile, eq.wout.vmex_trapped_fraction, rtol=2e-12, atol=2e-12)
+    assert abs(float(profile[0])) < 1e-10
+    assert abs(float(bs.redl_geometry_from_wout(
+        eq.wout, [0.0]).f_t[0])) < 1e-10
+    path = write_wout(tmp_path / "wout_trapped.nc", eq.wout)
+    loaded = read_wout(path)
+    assert loaded.vmex_diagnostics_schema == 1
+    np.testing.assert_array_equal(
+        loaded.vmex_trapped_fraction, eq.wout.vmex_trapped_fraction)
+    with netCDF4.Dataset(path) as dataset:
+        variable = dataset.variables["vmex_trapped_fraction"]
+        assert variable.units == "1"
+        assert variable.mesh == "full"
+        assert variable.n_lambda == 64
+    with pytest.raises(ValueError, match="must have shape"):
+        write_wout(
+            tmp_path / "wout_bad_trapped.nc",
+            dataclasses.replace(eq.wout, vmex_trapped_fraction=np.zeros(2)),
+        )
+
+
+def test_trapped_fraction_state_jvp_matches_finite_difference(eq):
+    surfaces = [0.3, 0.6]
+    direction = jnp.zeros_like(eq.state.R_cos).at[-1, 0].set(1.0)
+
+    def objective(r_cos):
+        state = dataclasses.replace(eq.state, R_cos=r_cos)
+        return jnp.sum(bs.trapped_fraction_from_state(
+            state, eq.runtime, surfaces=surfaces, n_lambda=16))
+
+    _, tangent = jax.jvp(objective, (eq.state.R_cos,), (direction,))
+    step = 1.0e-5
+    finite_difference = (
+        objective(eq.state.R_cos + step * direction)
+        - objective(eq.state.R_cos - step * direction)
+    ) / (2.0 * step)
+    np.testing.assert_allclose(tangent, finite_difference, rtol=3e-3)
+
+
+def test_trapped_fraction_angular_convergence(eq):
+    surfaces = [0.0, 0.25, 0.5, 0.75, 1.0]
+    profiles = [
+        np.asarray(bs.redl_geometry_from_wout(
+            eq.wout, surfaces, ntheta=n, nphi=n + 1).f_t)
+        for n in (16, 32, 64)
+    ]
+    coarse = np.max(np.abs(profiles[1] - profiles[0]))
+    fine = np.max(np.abs(profiles[2] - profiles[1]))
+    assert fine < 0.1 * coarse
+    np.testing.assert_allclose(profiles[1], profiles[2], rtol=2e-6, atol=2e-8)
 
 
 # ---------------------------------------------------------------------------

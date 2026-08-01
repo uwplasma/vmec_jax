@@ -11,6 +11,7 @@ import jax
 import numpy as np
 import pytest
 
+from vmex.core import bootstrap
 from vmex.core import device as device_policy
 from vmex.core import errors
 from vmex.core import implicit as im
@@ -98,6 +99,27 @@ def test_implicit_default_follows_jax_but_auto_prefers_cpu():
 
     assert {_platform(x) for x in jax.tree.leaves(following_jax)} == {"gpu"}
     assert {_platform(x) for x in jax.tree.leaves(automatic)} == {"cpu"}
+
+
+@_requires_gpu
+def test_trapped_fraction_value_and_gradient_cpu_gpu_parity():
+    def value_and_gradient(device):
+        with device_policy.device_scope(device):
+            zeta = jax.numpy.linspace(
+                0.0, 2.0 * jax.numpy.pi, 128, endpoint=False)
+            amplitude = jax.device_put(0.15, device)
+
+            def objective(a):
+                modb = 1.0 + a * jax.numpy.cos(zeta)
+                modb = jax.numpy.broadcast_to(modb, (2, 8, zeta.size))
+                return jax.numpy.sum(bootstrap.compute_trapped_fraction(
+                    modb, 1.2 / modb**2, n_lambda=32)[-1])
+
+            return jax.value_and_grad(objective)(amplitude)
+
+    cpu = value_and_gradient(jax.devices("cpu")[0])
+    gpu = value_and_gradient(_gpu())
+    np.testing.assert_allclose(gpu, cpu, rtol=2e-11, atol=2e-12)
 
 
 @_requires_gpu
@@ -397,6 +419,14 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
         )
         for platform, result in results.items()
     }
+    assert wouts["cpu"].vmex_diagnostics_schema == 1
+    assert wouts["gpu"].vmex_diagnostics_schema == 1
+    np.testing.assert_allclose(
+        wouts["gpu"].vmex_trapped_fraction,
+        wouts["cpu"].vmex_trapped_fraction,
+        rtol=2e-10,
+        atol=2e-12,
+    )
     for name in (
         "potsin",
         "potcos",

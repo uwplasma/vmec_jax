@@ -452,7 +452,11 @@ substitution :math:`y=\sqrt{1-\lambda B_{\max}}` in
          \frac{\lambda\,d\lambda}{\langle\sqrt{1-\lambda B}\rangle},
 
 evaluated with fixed-order Gauss–Legendre quadrature so the whole chain stays
-differentiable. Their normalized mismatch is the residual
+differentiable. :func:`~vmex.core.bootstrap.trapped_fraction_from_state`
+evaluates the radial profile directly from a converged state; every VMEX WOUT
+stores the same full-mesh result as ``vmex_trapped_fraction``. A QI axis with
+finite :math:`B_0(\varphi)` mirror ratio therefore has a finite trapped
+fraction rather than an imposed zero. Their normalized mismatch is the residual
 :class:`~vmex.core.bootstrap.RedlBootstrapMismatch` (the exact formula and
 the finite-beta profile conventions are in :doc:`equations`); driving it to
 zero, optionally with ``current_dofs`` freed, yields a current profile
