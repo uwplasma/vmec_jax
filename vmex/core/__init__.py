@@ -17,6 +17,7 @@ Module map (each header docstring names its VMEC2000 counterpart):
 - ``setup``           radial profiles + initial guess (profil1d/3d.f, readin.f)
 - ``solver``          single-grid fixed-boundary solve loop (funct3d.f, eqsolve.f)
 - ``statephysics``    shared state-physics primitives (_field_chain, half-mesh iota/sampling)
+- ``bounce``          differentiable second-adiabatic-invariant kernels
 - ``implicit``        implicit differentiation of the equilibrium (custom VJP + adjoint GMRES)
 - ``stability``       differentiable ideal-MHD stability (Mercier and infinite-n ballooning)
 - ``freeboundary_diff`` differentiable free-boundary residual via virtual casing (R15.3/R19)
