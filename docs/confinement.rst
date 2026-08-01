@@ -255,6 +255,27 @@ Every operation (sigmoid occupancies, running maxima, level-space quadrature) is
 smooth or piecewise-smooth, so the residual is jit/grad/jvp-transparent and QI
 optimization runs with the exact implicit adjoint, exactly like the QS residual.
 
+VMEX keeps the three QI formulations separate:
+
+* :class:`~vmex.core.omnigenity.QIResidual` is the existing compact level-set
+  objective; its call signature and defaults are unchanged.
+* :class:`~vmex.core.qi.ConstructedQIResidual` applies the fuller smooth
+  squash-and-shuffle construction to the same traceable Boozer spectrum.
+* :class:`~vmex.core.qi.JInvariantQIResidual` directly minimizes variation of
+  :math:`\mathcal J_\parallel` over complete wells. Its pitch array is supplied
+  in inverse tesla and is shared across surfaces; it is never renormalized
+  independently on each field line.
+
+The action residual excludes cut edge wells but retains complete wells inside
+the bounded trace. A pitch block with no complete well on even one sampled field
+line, a marginal or merged level, or more wells than ``max_wells`` returns NaN
+with a false ``valid_pitch`` flag. This makes a topology error visible instead
+of turning it into a favorable zero. The low-level Boozer-spectrum function
+accepts cosine and sine harmonics; the equilibrium objective retains the
+traceable Boozer transform's current explicit ``lasym=False`` guard.
+Maximum-\(J\) is a separate objective because it requires radial derivatives
+and matched well identity.
+
 .. _confinement-qi-fidelity:
 
 Metric fidelity: report the wout-based residual
