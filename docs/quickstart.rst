@@ -65,6 +65,7 @@ plotted directly:
 
    vmex --plot wout_circular_tokamak.nc
    vmex input.circular_tokamak --plot     # solve, then plot in one command
+   vmex --plot --booz input.circular_tokamak  # solve + both plot sets
 
 This writes a set of figures next to the file (or into ``--outdir``): a
 summary panel, flux-surface cross-sections at several toroidal angles,
@@ -89,6 +90,22 @@ and surfaces are configurable:
 
    vmex wout_nfp4_QH_warm_start.nc --booz --mbooz 48 --nbooz 48 \
         --booz-surfaces "0.25, 0.5, 1.0"
+
+Physical scaling
+----------------
+
+``--scale`` applies one dimensional similarity transform to a parsed input or
+WOUT. With no factors it targets the ARIES-CS on-axis field and minor radius:
+
+.. code-block:: bash
+
+   vmex --scale input.nfp4_QH_warm_start
+   vmex --scale input.nfp4_QH_warm_start 1.2 0.8
+   vmex --scale wout_nfp4_QH_warm_start.nc
+
+The explicit factors are ``B_scale R_scale``. The output name gains
+``_scaled``. See :doc:`scaling` for the units, input probe, and free-boundary
+mgrid contract.
 
 Python API
 ----------

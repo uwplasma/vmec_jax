@@ -133,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  vmex --plot mout_*.nc  — straight-axis mirror diagnostics\n"
             "  vmex --booz wout_*.nc  — run booz_xform_jax, write boozmn_*.nc\n"
             "  vmex --plot boozmn_*.nc— Boozer contour/spectrum plots\n"
+            "  vmex --scale input.X [B R] — scale an input or WOUT\n"
             "  vmex --doctor          — installation and JAX backend diagnostics\n"
             "  vmex --test            — run and plot the bundled quick-start case\n"
         ),
@@ -146,6 +147,22 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "VMEC input file (input.* namelist or VMEC++ .json) to solve, or a "
             "wout_*.nc/mout_*.nc/boozmn_*.nc file for --plot/--booz."
+        ),
+    )
+    p.add_argument(
+        "scale_factors",
+        type=float,
+        nargs="*",
+        metavar="SCALE",
+        help="with --scale: optional multiplicative B_scale R_scale factors",
+    )
+    p.add_argument(
+        "--scale",
+        action="store_true",
+        help=(
+            "Write a dimensionally scaled input or WOUT. Two positional factors "
+            "mean B_scale R_scale; omitting them targets |b0|=5.7 T and "
+            "Aminor_p=1.7 m (ARIES-CS)."
         ),
     )
     p.add_argument(
@@ -813,7 +830,123 @@ def _run_bundled_test(args, parser: argparse.ArgumentParser, *, emit) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _scaled_path(path: Path, outdir: Path | None) -> Path:
+    directory = path.parent if outdir is None else outdir
+    if path.suffix.lower() in (".json", ".nc"):
+        name = f"{path.stem}_scaled{path.suffix}"
+    else:
+        name = f"{path.name}_scaled"
+    return directory / name
+
+
+def _scale_file(args, input_path: Path, outdir: Path | None, *, emit) -> int:
+    """Scale one parsed input or WOUT and write a sibling artifact."""
+    from dataclasses import replace
+    from math import isfinite
+
+    from .scaling import (
+        aries_cs_input_scales,
+        aries_cs_scales,
+        scale_input,
+        scale_mgrid,
+        scale_wout,
+    )
+
+    factors = list(args.scale_factors)
+    if len(factors) not in (0, 2):
+        raise VmecInputError(
+            WERROR_MESSAGES[INPUT_ERROR_FLAG],
+            hint="--scale takes either no factors or B_scale R_scale",
+        )
+    if factors and (
+        not all(isfinite(factor) for factor in factors)
+        or any(factor <= 0.0 for factor in factors)
+    ):
+        raise VmecInputError(
+            WERROR_MESSAGES[INPUT_ERROR_FLAG],
+            hint="B_scale and R_scale must be finite and positive",
+        )
+    output = _scaled_path(input_path, outdir)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    if _is_wout_path(input_path):
+        from .wout import read_wout, write_wout
+
+        wout = read_wout(input_path)
+        b_scale, r_scale = factors or aries_cs_scales(wout)
+        write_wout(
+            output,
+            scale_wout(wout, b_scale=b_scale, r_scale=r_scale),
+        )
+    else:
+        inp = _read_input(input_path)
+        mgrid_path = None
+        if inp.lfreeb:
+            mgrid_name = str(inp.mgrid_file).strip().strip("'\"")
+            if mgrid_name.upper() == _DIRECT_COILS or args.coils:
+                raise VmecInputError(
+                    WERROR_MESSAGES[INPUT_ERROR_FLAG],
+                    hint="scale the direct-coil geometry and currents before tabulation",
+                )
+            mgrid_path = Path(mgrid_name).expanduser()
+            if not mgrid_path.is_absolute():
+                mgrid_path = (input_path.parent / mgrid_path).resolve()
+            if not mgrid_path.is_file():
+                raise VmecInputError(
+                    WERROR_MESSAGES[INPUT_ERROR_FLAG],
+                    hint=f"mgrid file not found: {mgrid_path}",
+                )
+
+        probe = None
+        if factors:
+            b_scale, r_scale = factors
+        else:
+            b_scale, r_scale, probe = aries_cs_input_scales(
+                inp,
+                mgrid_path=mgrid_path,
+                device=None if args.device == "none" else args.device,
+            )
+        scaled = scale_input(inp, b_scale=b_scale, r_scale=r_scale)
+
+        if mgrid_path is not None:
+            from .mgrid import read_mgrid, write_mgrid
+
+            mgrid_output = _scaled_path(mgrid_path, output.parent)
+            write_mgrid(
+                mgrid_output,
+                scale_mgrid(
+                    read_mgrid(mgrid_path),
+                    b_scale=b_scale,
+                    r_scale=r_scale,
+                ),
+            )
+            scaled = replace(scaled, mgrid_file=mgrid_output.name)
+            if not args.quiet:
+                emit(f" Wrote scaled mgrid: {mgrid_output}")
+
+        if input_path.suffix.lower() == ".json":
+            scaled.to_json(output)
+        else:
+            scaled.to_indata(output)
+        if probe is not None and not args.quiet:
+            emit(
+                f" ARIES-CS probe: ns={probe.coarse_ns},{probe.fine_ns}; "
+                f"b0={probe.b0:.8g} T (change {probe.b0_relative_change:.2e}), "
+                f"Aminor_p={probe.aminor:.8g} m "
+                f"(change {probe.aminor_relative_change:.2e})"
+            )
+
+    if not args.quiet:
+        emit(
+            f" Applied B_scale={b_scale:.12g}, R_scale={r_scale:.12g}\n"
+            f" Wrote scaled file: {output}"
+        )
+    return 0
+
+
 def _dispatch(args, parser: argparse.ArgumentParser, *, emit) -> int:
+    if args.scale_factors and not args.scale:
+        parser.error("scale factors require --scale")
     if bool(args.doctor):
         if args.input is not None:
             parser.error("--doctor does not take an input path")
@@ -845,6 +978,11 @@ def _dispatch(args, parser: argparse.ArgumentParser, *, emit) -> int:
     outdir = Path(args.outdir).expanduser().resolve() if args.outdir else None
     plot_outdir = outdir if outdir is not None else input_path.parent
     quiet = bool(args.quiet)
+
+    if bool(args.scale):
+        if plot_requested or bool(args.booz) or bool(args.test):
+            parser.error("--scale cannot be combined with --plot, --booz, or --test")
+        return _scale_file(args, input_path, outdir, emit=emit)
 
     if _is_boozmn_path(input_path):
         if not plot_requested:

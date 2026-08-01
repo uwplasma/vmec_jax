@@ -14,6 +14,8 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.mgrid.read_mgrid` / :func:`~vmex.core.mgrid.write_mgrid`
   / :func:`~vmex.core.mgrid.tabulate_cartesian_field`
   / :class:`~vmex.core.mgrid.MgridField` (mgrid or tabulated direct field)
+- :func:`~vmex.core.scaling.scale_input` / :func:`~vmex.core.scaling.scale_wout`
+  — dimensional similarity transforms
 - ``vmex.optimize`` — objectives + least-squares driver (module)
 - ``vmex.implicit`` — implicit differentiation of the equilibrium (module)
 - ``vmex.parallel`` — concurrent ensembles of independent solves (module)
@@ -98,6 +100,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "read_mgrid": (".core.mgrid", "read_mgrid"),
     "tabulate_cartesian_field": (".core.mgrid", "tabulate_cartesian_field"),
     "write_mgrid": (".core.mgrid", "write_mgrid"),
+    # dimensional scaling
+    "scale_input": (".core.scaling", "scale_input"),
+    "scale_mgrid": (".core.scaling", "scale_mgrid"),
+    "scale_wout": (".core.scaling", "scale_wout"),
     # errors
     "VmecError": (".core.errors", "VmecError"),
     "VmecInputError": (".core.errors", "VmecInputError"),
