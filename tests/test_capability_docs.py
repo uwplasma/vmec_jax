@@ -35,6 +35,10 @@ def test_contract_does_not_overclaim_free_boundary_ad() -> None:
     assert symmetric["jvp"] == "limited"
     assert symmetric["vjp"] == "limited"
     assert "supplied converged" in symmetric["scope"]
+    assert "Public B5" in symmetric["scope"]
+    assert "CPU-validated" in symmetric["scope"]
+    assert "B5 GPU qualification" in symmetric["scope"]
+    assert "projected-root-and-chart-gated common-anchor" in symmetric["scope"]
     assert "custom VJP" in symmetric["scope"]
 
     lasym = rows["toroidal-free-lasym"]

@@ -1,4 +1,4 @@
-"""Numerical B2--B4 gates against branch-local free-boundary solves."""
+"""Numerical B2--B5 gates against branch-local free-boundary solves."""
 
 from __future__ import annotations
 
@@ -393,3 +393,164 @@ def test_volume_adjoint_matches_tangent_and_shared_branch_fd(
         rtol=5.0e-3,
         atol=2.0e-5,
     )
+
+
+@pytest.fixture(scope="module")
+def scalar_implicit_case(converged_residual_case):
+    """Build one tight same-chart B5 family around the shared CTH root."""
+    inp, field, solution, evaluator, _evaluated = converged_residual_case
+
+    def field_from_fraction(fractional_change):
+        return replace(
+            field,
+            extcur=field.extcur.at[0].set(
+                field.extcur[0] * (1.0 + fractional_change)
+            ),
+        )
+
+    linear_config = FBI.FreeBoundaryTangentConfig(
+        rtol=1.0e-8,
+        restart=30,
+        max_restarts=50,
+        base_residual_atol=2.0e-8,
+        adjoint_backend="forward_dense",
+        adjoint_batch_size=4,
+    )
+    config = FBI.make_free_boundary_implicit_config(
+        inp,
+        field_from_fraction,
+        alpha_anchor=0.0,
+        resolution=evaluator.runtime.resolution,
+        ftol=1.0e-14,
+        max_iterations=2500,
+        initial_state=solution.state,
+        device="cpu",
+        preserve_m1_constraint_slice=True,
+        include_edge_in_convergence=True,
+        edge_force_tolerance=1.0e-14,
+        linear_config=linear_config,
+    )
+    return field_from_fraction, config
+
+
+def test_scalar_custom_vjp_matches_tight_common_anchor_fd(
+    scalar_implicit_case,
+):
+    """B5: the opaque host solve differentiates its converged common root."""
+    field_from_fraction, config = scalar_implicit_case
+    factory_stats = FBI.free_boundary_implicit_stats(config)
+    assert factory_stats["anchor_host_solves"] == 1
+    assert factory_stats["anchor_residual_norm"] <= 2.0e-8
+    assert factory_stats["preserve_m1_constraint_slice"] is True
+    assert factory_stats["include_edge_in_convergence"] is True
+    assert factory_stats["edge_force_tolerance"] == 1.0e-14
+    FBI.reset_free_boundary_implicit_stats(config)
+
+    def plasma_volume(alpha):
+        state = FBI.solve_free_boundary_implicit(alpha, config)
+        return IM.plasma_volume(state, config.evaluator.runtime)
+
+    direct_slope = 0.25
+
+    def objective(alpha):
+        return plasma_volume(alpha) + direct_slope * alpha
+
+    value, total_gradient = jax.jit(jax.value_and_grad(objective))(
+        jnp.asarray(0.0, dtype=config.dtype)
+    )
+    jax.block_until_ready((value, total_gradient))
+    implicit_gradient = float(total_gradient) - direct_slope
+    assert np.isfinite(float(value))
+    assert np.isfinite(implicit_gradient)
+    assert abs(implicit_gradient) > 1.0e-8
+
+    after_gradient = FBI.free_boundary_implicit_stats(config)
+    assert after_gradient["forward_callbacks"] == 1
+    assert after_gradient["forward_host_solves"] == 0
+    assert after_gradient["forward_memo_hits"] == 1
+    assert after_gradient["backward_callbacks"] == 1
+    assert after_gradient["backward_linear_solves"] == 1
+    assert after_gradient["backward_failures"] == 0
+    assert after_gradient["last_backward"]["converged"] is True
+    assert after_gradient["last_backward"]["linear_solver_converged"] is True
+    assert after_gradient["last_backward"]["relative_adjoint_residual"] < 1.1e-8
+
+    h = 1.0e-3
+    plus = plasma_volume(h)
+    minus = plasma_volume(-h)
+    jax.block_until_ready((plus, minus))
+    finite_difference = (float(plus) - float(minus)) / (2.0 * h)
+    assert abs(finite_difference) > 1.0e-3
+    relative_error = abs(implicit_gradient - finite_difference) / abs(
+        finite_difference
+    )
+    assert relative_error < 5.0e-3, relative_error
+    np.testing.assert_allclose(
+        implicit_gradient,
+        finite_difference,
+        rtol=5.0e-3,
+        atol=2.0e-5,
+    )
+
+    for alpha in (h, -h):
+        result = FBI.free_boundary_implicit_result(alpha, config)
+        assert result.converged
+        assert result.preserve_m1_constraint_slice is True
+        assert result.fedge <= result.edge_force_tolerance
+        diagnostics = FBI._implicit_projected_root_diagnostics(
+            config.evaluator,
+            config.dof_mask,
+            result.state,
+            field_from_fraction(jnp.asarray(alpha, dtype=config.dtype)),
+            base_residual_atol=config.linear_config.base_residual_atol,
+            context=f"B5 finite-difference endpoint alpha={alpha}",
+            reference_state=config.anchor_state,
+        )
+        assert (
+            diagnostics["projected_residual_norm"]
+            <= config.linear_config.base_residual_atol
+        )
+        assert (
+            diagnostics["constraint_slice_defect_norm"]
+            <= diagnostics["constraint_slice_atol"]
+        )
+
+    after_fd = FBI.free_boundary_implicit_stats(config)
+    assert after_fd["forward_host_solves"] == 2
+    assert after_fd["memo_entries"] == 3
+    assert after_fd["last_forward_projected_residual_norm"] <= 2.0e-8
+    assert (
+        after_fd["last_forward_constraint_slice_defect_norm"]
+        <= after_fd["last_forward_constraint_slice_atol"]
+    )
+
+    FBI.reset_free_boundary_implicit_stats(config, clear_memo=True)
+    assert FBI.free_boundary_implicit_stats(config)["memo_entries"] == 1
+    retained = FBI.free_boundary_implicit_result(0.0, config)
+    assert retained is config.anchor_result
+
+
+def test_scalar_custom_vjp_nonroot_pullback_fails_closed(
+    scalar_implicit_case,
+):
+    """B5 records a diagnosed NaN instead of differentiating a non-root."""
+    _field_from_fraction, config = scalar_implicit_case
+    nonroot = replace(
+        config.anchor_state,
+        R_cos=config.anchor_state.R_cos.at[-1, 0].add(1.0e-3),
+    )
+    state_cotangent = jax.grad(
+        lambda state: IM.plasma_volume(state, config.evaluator.runtime)
+    )(nonroot)
+    FBI.reset_free_boundary_implicit_stats(config)
+    derivative = FBI._host_free_boundary_pullback_callback(
+        config,
+        np.asarray(0.0),
+        jax.tree.map(np.asarray, nonroot),
+        jax.tree.map(np.asarray, state_cotangent),
+    )
+    assert np.isnan(np.asarray(derivative))
+    stats = FBI.free_boundary_implicit_stats(config)
+    assert stats["backward_callbacks"] == 1
+    assert stats["backward_failures"] == 1
+    assert "converged residual root" in stats["last_backward"]["error"]

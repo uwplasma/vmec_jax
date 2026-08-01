@@ -1,10 +1,11 @@
-"""Projected free-boundary tangents and state adjoints.
+"""Projected free-boundary derivatives and scalar implicit solve wrapper.
 
 This module linearizes the fully rebuilt VMEX--NESTOR residual at a converged
 single-stage free-boundary equilibrium.  It provides the lower-level B2--B4
 operations: the exact evolved-coordinate projector, scalar parameter tangents,
 state pullbacks, scalar state-objective adjoints, and one-current convenience
-wrappers.
+wrappers.  It also provides a scalar custom VJP around the opaque adaptive host
+solve; only the converged projected residual equation is differentiated.
 
 The adaptive host solve remains outside differentiation.  All derivatives are
 taken with respect to the converged projected residual equation.
@@ -14,7 +15,9 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import threading
 import types
+import weakref
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -25,22 +28,37 @@ from jax.flatten_util import ravel_pytree
 from solvax import gmres as _solvax_gmres
 
 from . import implicit as _fixed_implicit
-from .freeboundary import FreeBoundaryResidualEvaluator
-from .solver import SpectralState
+from .device import AUTO, device_context
+from .freeboundary import (
+    FreeBoundaryResidualEvaluator,
+    _validate_edge_force_tolerance,
+    make_free_boundary_residual_evaluator,
+    solve_free_boundary,
+)
+from .input import VmecInput
+from .solver import SolveResult, SpectralState
+from .solver import resolution_from_input as _resolution_from_input
 from .transforms import register_pytree_dataclass as _register
+from .wout import wout_from_state
 
 __all__ = [
     "FreeBoundaryAdjointResult",
+    "FreeBoundaryImplicitConfig",
     "FreeBoundaryStatePullbackResult",
     "FreeBoundaryTangentConfig",
     "FreeBoundaryTangentResult",
     "free_boundary_dof_mask",
+    "free_boundary_implicit_result",
+    "free_boundary_implicit_stats",
+    "make_free_boundary_implicit_config",
     "make_projected_free_boundary_residual",
     "one_current_adjoint",
     "one_current_tangent",
+    "reset_free_boundary_implicit_stats",
     "scalar_parameter_state_pullback",
     "scalar_parameter_tangent",
     "scalar_state_objective_adjoint",
+    "solve_free_boundary_implicit",
 ]
 
 Array = Any
@@ -1130,3 +1148,845 @@ def one_current_adjoint(
         dof_mask=dof_mask,
         config=config,
     )
+
+
+# ---------------------------------------------------------------------------
+# B5: opaque host free-boundary solve with an implicit scalar custom VJP
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, eq=False)
+class FreeBoundaryImplicitConfig:
+    """Identity-hashed context for one scalar free-boundary solve family.
+
+    ``field_from_alpha`` is the JAX-traceable scalar field constructor used by
+    B3/B4. Host solves begin from ``branch_inp``, whose LCFS and axis are
+    rebound to ``anchor_state``. Each distinct target restarts from that common
+    anchor and follows a deterministic, evenly spaced continuation path.
+
+    With ``preserve_m1_constraint_slice=True``, the rebound input stays fixed
+    and exact accepted states are carried between path points. Otherwise, the
+    input is rebound at each accepted intermediate point. Every accepted point
+    is checked against the config's common projected residual before it may be
+    cached or used by the custom VJP.
+
+    ``eq=False`` preserves identity hashing for JAX's static ``cfg`` argument
+    and the weak callback caches below. ``anchor_residual_norm`` is the active
+    ``||P(F)||`` used by B3/B4; the raw norm and projected maximum entry are
+    retained as diagnostics.
+    """
+
+    inp: VmecInput
+    field_from_alpha: Callable[[Array], Any]
+    alpha_anchor: float
+    resolution: Any
+    ftol: float
+    max_iterations: int
+    continuation_step: float
+    max_continuation_steps: int
+    anchor_result: SolveResult
+    anchor_state: SpectralState
+    anchor_iterations: int
+    anchor_residual_norm: float
+    anchor_raw_residual_norm: float
+    anchor_projected_residual_max_abs: float
+    anchor_volume: float
+    branch_inp: VmecInput
+    evaluator: FreeBoundaryResidualEvaluator
+    dof_mask: SpectralState
+    linear_config: FreeBoundaryTangentConfig
+    device: Any = AUTO
+    preserve_m1_constraint_slice: bool = False
+    include_edge_in_convergence: bool = False
+    edge_force_tolerance: float | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.preserve_m1_constraint_slice) is not bool:
+            raise TypeError("preserve_m1_constraint_slice must be a bool")
+        if type(self.include_edge_in_convergence) is not bool:
+            raise TypeError("include_edge_in_convergence must be a bool")
+        tolerance = _validate_edge_force_tolerance(
+            self.edge_force_tolerance,
+            include_edge_in_convergence=self.include_edge_in_convergence,
+        )
+        if self.include_edge_in_convergence and tolerance is None:
+            tolerance = _validate_edge_force_tolerance(
+                self.ftol,
+                include_edge_in_convergence=True,
+            )
+        object.__setattr__(self, "edge_force_tolerance", tolerance)
+
+    @property
+    def dtype(self):
+        return jnp.asarray(self.anchor_state.R_cos).dtype
+
+
+_FREEB_IMPLICIT_LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_FREEB_IMPLICIT_SOLVES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_FREEB_IMPLICIT_ROOTS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_FREEB_IMPLICIT_STATS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_FREEB_IMPLICIT_META_LOCK = threading.RLock()
+
+
+def _new_implicit_stats(*, anchor_solve: bool) -> dict[str, Any]:
+    return {
+        "anchor_host_solves": int(anchor_solve),
+        "forward_callbacks": 0,
+        "forward_host_solves": 0,
+        "forward_iterations": 0,
+        "forward_memo_hits": 0,
+        "forward_failures": 0,
+        "backward_callbacks": 0,
+        "backward_linear_solves": 0,
+        "backward_failures": 0,
+        "last_forward_alpha": None,
+        "last_forward_raw_residual_norm": None,
+        "last_forward_projected_residual_norm": None,
+        "last_forward_projected_residual_max_abs": None,
+        "last_forward_constraint_slice_defect_norm": None,
+        "last_forward_constraint_slice_atol": None,
+        "last_forward_error": None,
+        "last_backward": None,
+    }
+
+
+def _config_lock(cfg: FreeBoundaryImplicitConfig) -> threading.RLock:
+    with _FREEB_IMPLICIT_META_LOCK:
+        lock = _FREEB_IMPLICIT_LOCKS.get(cfg)
+        if lock is None:
+            lock = threading.RLock()
+            _FREEB_IMPLICIT_LOCKS[cfg] = lock
+        return lock
+
+
+def _host_scalar(value, *, name: str) -> float:
+    array = np.asarray(value)
+    if array.shape != ():
+        raise ValueError(f"{name} must be scalar, got shape {array.shape}")
+    scalar = float(array)
+    if not np.isfinite(scalar):
+        raise ValueError(f"{name} must be finite, got {scalar!r}")
+    return scalar
+
+
+def _alpha_key(value: float) -> bytes:
+    """Return a bit-exact float64 memo key without tolerance aliases."""
+    return np.asarray(np.float64(value)).tobytes()
+
+
+def _set_last_forward_root_diagnostics(
+    stats: dict[str, Any],
+    diagnostics: dict[str, float] | None,
+) -> None:
+    """Bind root metrics to the same target as ``last_forward_alpha``."""
+    names = (
+        "raw_residual_norm",
+        "projected_residual_norm",
+        "projected_residual_max_abs",
+        "constraint_slice_defect_norm",
+        "constraint_slice_atol",
+    )
+    for name in names:
+        stats[f"last_forward_{name}"] = (
+            None if diagnostics is None else diagnostics.get(name)
+        )
+
+
+def _implicit_limits(
+    inp: VmecInput,
+    ftol: float | None,
+    max_iterations: int | None,
+) -> tuple[float, int]:
+    """Resolve the final-grid defaults used by the implicit host solve."""
+    resolved_ftol = (
+        float(np.asarray(inp.ftol_array).reshape(-1)[-1])
+        if ftol is None
+        else float(ftol)
+    )
+    resolved_iterations = (
+        int(np.asarray(inp.niter_array).reshape(-1)[-1])
+        if max_iterations is None
+        else int(max_iterations)
+    )
+    return resolved_ftol, resolved_iterations
+
+
+def _implicit_resolution(inp: VmecInput, resolution):
+    """Use the final NS_ARRAY grid unless a resolution is supplied."""
+    if resolution is not None:
+        return resolution
+    final_ns = int(np.asarray(inp.ns_array).reshape(-1)[-1])
+    return _resolution_from_input(inp, ns=final_ns)
+
+
+def _branch_input_from_result(
+    source: VmecInput,
+    result: SolveResult,
+) -> VmecInput:
+    """Rebind a branch input to one converged LCFS and magnetic axis."""
+    wout = wout_from_state(
+        inp=source,
+        state=result.state,
+        fsqr=float(result.fsqr),
+        fsqz=float(result.fsqz),
+        fsql=float(result.fsql),
+        niter=int(result.iterations),
+        converged=bool(result.converged),
+    )
+    rbc = np.zeros_like(source.rbc)
+    zbs = np.zeros_like(source.zbs)
+    n_input = (np.asarray(wout.xn) / float(wout.nfp)).astype(int)
+    for mode, (m_value, n_value) in enumerate(
+        zip(np.asarray(wout.xm, dtype=int), n_input)
+    ):
+        if m_value < source.mpol and abs(n_value) <= source.ntor:
+            rbc[n_value + source.ntor, m_value] = np.asarray(wout.rmnc)[-1, mode]
+            zbs[n_value + source.ntor, m_value] = np.asarray(wout.zmns)[-1, mode]
+    axis_size = int(source.ntor) + 1
+    return dataclasses.replace(
+        source,
+        rbc=rbc,
+        zbs=zbs,
+        raxis_c=np.asarray(wout.raxis_cc)[:axis_size],
+        zaxis_s=np.asarray(wout.zaxis_cs)[:axis_size],
+    )
+
+
+def _implicit_constraint_slice_atol(state: SpectralState) -> float:
+    """Return a dtype-aware coefficient tolerance for the common chart."""
+    state_scale = max(1.0, float(_tree_norm(state)))
+    state_dtype = np.dtype(np.asarray(state.R_cos).dtype)
+    epsilon = (
+        float(np.finfo(state_dtype).eps)
+        if np.issubdtype(state_dtype, np.floating)
+        else float(np.finfo(np.float64).eps)
+    )
+    return max(1.0e-10, 100.0 * epsilon * state_scale)
+
+
+def _implicit_projected_root_diagnostics(
+    evaluator: FreeBoundaryResidualEvaluator,
+    dof_mask: SpectralState,
+    state: SpectralState,
+    field: Any,
+    *,
+    base_residual_atol: float,
+    context: str,
+    reference_state: SpectralState | None = None,
+) -> dict[str, float]:
+    """Gate one state against the projected equation and common chart."""
+    residual = evaluator(state, field).residual
+    projector = _projector(evaluator, dof_mask)
+    projected = projector(residual)
+    raw_residual_norm = float(_tree_norm(residual))
+    projected_residual_norm = float(_tree_norm(projected))
+    projected_residual_max_abs = max(
+            float(jnp.max(jnp.abs(leaf)))
+            for leaf in jax.tree.leaves(projected)
+        )
+    named_diagnostics = {
+        "raw ||F||": raw_residual_norm,
+        "||P(F)||": projected_residual_norm,
+        "max|P(F)|": projected_residual_max_abs,
+    }
+    constraint_slice_defect_norm = None
+    constraint_slice_atol = None
+    if reference_state is not None:
+        delta = jax.tree.map(
+            lambda actual, reference: actual - reference,
+            state,
+            reference_state,
+        )
+        projected_delta = projector(delta)
+        slice_defect = jax.tree.map(
+            lambda actual, active: actual - active,
+            delta,
+            projected_delta,
+        )
+        constraint_slice_defect_norm = float(_tree_norm(slice_defect))
+        constraint_slice_atol = _implicit_constraint_slice_atol(state)
+        named_diagnostics["constraint-slice defect"] = (
+            constraint_slice_defect_norm
+        )
+    try:
+        checked = _require_finite_residual_diagnostics(
+            named_diagnostics,
+            context=context,
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if checked["||P(F)||"] > float(base_residual_atol):
+        raise RuntimeError(
+            f"{context} is not a root of the projected free-boundary residual: "
+            f"||P(F)||={checked['||P(F)||']:.3e} > "
+            f"base_residual_atol={float(base_residual_atol):.3e} "
+            f"(raw ||F||={checked['raw ||F||']:.3e})"
+        )
+    if (
+        constraint_slice_defect_norm is not None
+        and constraint_slice_atol is not None
+        and constraint_slice_defect_norm > constraint_slice_atol
+    ):
+        raise RuntimeError(
+            f"{context} left the common implicit constraint slice: "
+            f"||(I-P)(state-anchor)||={constraint_slice_defect_norm:.3e} > "
+            f"constraint_slice_atol={constraint_slice_atol:.3e}"
+        )
+    diagnostics = {
+        "raw_residual_norm": checked["raw ||F||"],
+        "projected_residual_norm": checked["||P(F)||"],
+        "projected_residual_max_abs": checked["max|P(F)|"],
+    }
+    if constraint_slice_defect_norm is not None:
+        diagnostics["constraint_slice_defect_norm"] = (
+            constraint_slice_defect_norm
+        )
+        diagnostics["constraint_slice_atol"] = constraint_slice_atol
+    return diagnostics
+
+
+def make_free_boundary_implicit_config(
+    inp: VmecInput,
+    field_from_alpha: Callable[[Array], Any],
+    *,
+    alpha_anchor: float | Array = 0.0,
+    resolution=None,
+    ftol: float | None = None,
+    max_iterations: int | None = None,
+    continuation_step: float = 5.0e-2,
+    max_continuation_steps: int = 64,
+    initial_state: SpectralState | None = None,
+    device: Any = AUTO,
+    preserve_m1_constraint_slice: bool = False,
+    include_edge_in_convergence: bool = False,
+    edge_force_tolerance: float | None = None,
+    linear_config: FreeBoundaryTangentConfig | None = None,
+) -> FreeBoundaryImplicitConfig:
+    """Prepare a deterministic scalar free-boundary implicit solve family.
+
+    The factory performs and validates one complete host solve at
+    ``alpha_anchor``, then rebinds a common input to that solution's LCFS and
+    axis. Every later target follows a target-specific continuation path and
+    is accepted only when it solves the same projected residual used by the
+    implicit tangent and adjoint. ``device`` controls both the nonlinear host
+    solves and the projected-root/adjoint work inside the callbacks.
+    """
+    if not isinstance(inp, VmecInput):
+        raise TypeError("inp must be a VmecInput")
+    if not bool(inp.lfreeb):
+        raise ValueError("free-boundary implicit config requires LFREEB=T")
+    if bool(inp.lasym):
+        raise NotImplementedError(
+            "free-boundary implicit config currently supports "
+            "stellarator symmetry only"
+        )
+    if not callable(field_from_alpha):
+        raise TypeError("field_from_alpha must be callable")
+    if type(preserve_m1_constraint_slice) is not bool:
+        raise TypeError("preserve_m1_constraint_slice must be a bool")
+    if type(include_edge_in_convergence) is not bool:
+        raise TypeError("include_edge_in_convergence must be a bool")
+    edge_tolerance_option = _validate_edge_force_tolerance(
+        edge_force_tolerance,
+        include_edge_in_convergence=include_edge_in_convergence,
+    )
+    anchor = _host_scalar(alpha_anchor, name="alpha_anchor")
+    step = float(continuation_step)
+    if not np.isfinite(step) or step <= 0.0:
+        raise ValueError("continuation_step must be finite and > 0")
+    max_steps = int(max_continuation_steps)
+    if max_steps < 1:
+        raise ValueError("max_continuation_steps must be >= 1")
+    resolved_resolution = _implicit_resolution(inp, resolution)
+    resolved_ftol, resolved_iterations = _implicit_limits(
+        inp,
+        ftol,
+        max_iterations,
+    )
+    if not np.isfinite(resolved_ftol) or resolved_ftol <= 0.0:
+        raise ValueError("ftol must be finite and > 0")
+    resolved_edge_tolerance = (
+        resolved_ftol
+        if include_edge_in_convergence and edge_tolerance_option is None
+        else edge_tolerance_option
+    )
+    if resolved_iterations < 1:
+        raise ValueError("max_iterations must be >= 1")
+    linear = (
+        FreeBoundaryTangentConfig()
+        if linear_config is None
+        else _validated_config(linear_config)
+    )
+
+    anchor_alpha = jnp.asarray(anchor, dtype=jnp.float64)
+    try:
+        anchor_field = field_from_alpha(anchor_alpha)
+        anchor_result = solve_free_boundary(
+            inp,
+            external_field=anchor_field,
+            resolution=resolved_resolution,
+            ftol=resolved_ftol,
+            max_iterations=resolved_iterations,
+            error_on_no_convergence=False,
+            initial_state=initial_state,
+            device=device,
+            preserve_m1_constraint_slice=preserve_m1_constraint_slice,
+            include_edge_in_convergence=include_edge_in_convergence,
+            edge_force_tolerance=resolved_edge_tolerance,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"anchor free-boundary solve failed at alpha={anchor:.17g}: {exc}"
+        ) from exc
+    if not bool(anchor_result.converged):
+        edge = (
+            f", fedge={float(anchor_result.fedge):.3e}, "
+            f"edge_force_tolerance={float(resolved_edge_tolerance):.3e}"
+            if include_edge_in_convergence
+            else ""
+        )
+        raise RuntimeError(
+            "anchor free-boundary solve did not converge: "
+            f"alpha={anchor:.17g}, iterations={int(anchor_result.iterations)}, "
+            f"fsq=({float(anchor_result.fsqr):.3e}, "
+            f"{float(anchor_result.fsqz):.3e}, "
+            f"{float(anchor_result.fsql):.3e}){edge}"
+        )
+
+    branch_inp = _branch_input_from_result(inp, anchor_result)
+    with device_context(device, resolved_resolution):
+        evaluator = make_free_boundary_residual_evaluator(
+            branch_inp,
+            resolution=resolved_resolution,
+        )
+        dof_mask = free_boundary_dof_mask(evaluator)
+        anchor_diagnostics = _implicit_projected_root_diagnostics(
+            evaluator,
+            dof_mask,
+            anchor_result.state,
+            anchor_field,
+            base_residual_atol=linear.base_residual_atol,
+            context="anchor projected rebound free-boundary root",
+            reference_state=anchor_result.state,
+        )
+        anchor_volume = float(
+            _fixed_implicit.plasma_volume(
+                anchor_result.state,
+                evaluator.runtime,
+            )
+        )
+    cfg = FreeBoundaryImplicitConfig(
+        inp=inp,
+        field_from_alpha=field_from_alpha,
+        alpha_anchor=anchor,
+        resolution=resolved_resolution,
+        ftol=resolved_ftol,
+        max_iterations=resolved_iterations,
+        continuation_step=step,
+        max_continuation_steps=max_steps,
+        anchor_result=anchor_result,
+        anchor_state=anchor_result.state,
+        anchor_iterations=int(anchor_result.iterations),
+        anchor_residual_norm=anchor_diagnostics["projected_residual_norm"],
+        anchor_raw_residual_norm=anchor_diagnostics["raw_residual_norm"],
+        anchor_projected_residual_max_abs=anchor_diagnostics[
+            "projected_residual_max_abs"
+        ],
+        anchor_volume=anchor_volume,
+        branch_inp=branch_inp,
+        evaluator=evaluator,
+        dof_mask=dof_mask,
+        linear_config=linear,
+        device=device,
+        preserve_m1_constraint_slice=preserve_m1_constraint_slice,
+        include_edge_in_convergence=include_edge_in_convergence,
+        edge_force_tolerance=resolved_edge_tolerance,
+    )
+    with _FREEB_IMPLICIT_META_LOCK:
+        _FREEB_IMPLICIT_LOCKS[cfg] = threading.RLock()
+        _FREEB_IMPLICIT_SOLVES[cfg] = {
+            _alpha_key(anchor): anchor_result,
+        }
+        _FREEB_IMPLICIT_ROOTS[cfg] = {
+            _alpha_key(anchor): dict(anchor_diagnostics),
+        }
+        _FREEB_IMPLICIT_STATS[cfg] = _new_implicit_stats(anchor_solve=True)
+    return cfg
+
+
+def free_boundary_implicit_stats(
+    cfg: FreeBoundaryImplicitConfig,
+) -> dict[str, Any]:
+    """Return callback, host-solve, memo, root, and adjoint diagnostics."""
+    if not isinstance(cfg, FreeBoundaryImplicitConfig):
+        raise TypeError("cfg must be a FreeBoundaryImplicitConfig")
+    with _config_lock(cfg):
+        stats = dict(_FREEB_IMPLICIT_STATS[cfg])
+        last = stats.get("last_backward")
+        if isinstance(last, dict):
+            stats["last_backward"] = dict(last)
+        stats["memo_entries"] = len(_FREEB_IMPLICIT_SOLVES[cfg])
+        stats["anchor_iterations"] = cfg.anchor_iterations
+        stats["anchor_residual_norm"] = cfg.anchor_residual_norm
+        stats["anchor_raw_residual_norm"] = cfg.anchor_raw_residual_norm
+        stats["anchor_projected_residual_max_abs"] = (
+            cfg.anchor_projected_residual_max_abs
+        )
+        stats["anchor_volume"] = cfg.anchor_volume
+        stats["preserve_m1_constraint_slice"] = (
+            cfg.preserve_m1_constraint_slice
+        )
+        stats["include_edge_in_convergence"] = cfg.include_edge_in_convergence
+        stats["edge_force_tolerance"] = cfg.edge_force_tolerance
+        stats["device"] = cfg.device
+        return stats
+
+
+def reset_free_boundary_implicit_stats(
+    cfg: FreeBoundaryImplicitConfig,
+    *,
+    clear_memo: bool = False,
+) -> None:
+    """Reset counters, optionally dropping trials but retaining the anchor."""
+    if not isinstance(cfg, FreeBoundaryImplicitConfig):
+        raise TypeError("cfg must be a FreeBoundaryImplicitConfig")
+    with _config_lock(cfg):
+        _FREEB_IMPLICIT_STATS[cfg] = _new_implicit_stats(anchor_solve=False)
+        if clear_memo:
+            _FREEB_IMPLICIT_SOLVES[cfg] = {
+                _alpha_key(cfg.alpha_anchor): cfg.anchor_result,
+            }
+            _FREEB_IMPLICIT_ROOTS[cfg] = {
+                _alpha_key(cfg.alpha_anchor): {
+                    "raw_residual_norm": cfg.anchor_raw_residual_norm,
+                    "projected_residual_norm": cfg.anchor_residual_norm,
+                    "projected_residual_max_abs": (
+                        cfg.anchor_projected_residual_max_abs
+                    ),
+                    "constraint_slice_defect_norm": 0.0,
+                    "constraint_slice_atol": (
+                        _implicit_constraint_slice_atol(cfg.anchor_state)
+                    ),
+                },
+            }
+
+
+def free_boundary_implicit_result(
+    alpha: float | Array,
+    cfg: FreeBoundaryImplicitConfig,
+) -> SolveResult:
+    """Return the full host ``SolveResult`` through the shared exact memo."""
+    if not isinstance(cfg, FreeBoundaryImplicitConfig):
+        raise TypeError("cfg must be a FreeBoundaryImplicitConfig")
+    value = _host_scalar(alpha, name="alpha")
+    return _solve_alpha_from_anchor(cfg, value)
+
+
+def _solve_alpha_from_anchor(
+    cfg: FreeBoundaryImplicitConfig,
+    alpha: float,
+) -> SolveResult:
+    """Host solve with exact memo and target-specific anchor continuation."""
+    key = _alpha_key(alpha)
+    lock = _config_lock(cfg)
+    with lock:
+        cache = _FREEB_IMPLICIT_SOLVES[cfg]
+        stats = _FREEB_IMPLICIT_STATS[cfg]
+        stats["last_forward_alpha"] = alpha
+        _set_last_forward_root_diagnostics(stats, None)
+        hit = cache.get(key)
+        if hit is not None:
+            stats["forward_memo_hits"] += 1
+            root_cache = _FREEB_IMPLICIT_ROOTS.get(cfg, {})
+            _set_last_forward_root_diagnostics(stats, root_cache.get(key))
+            stats["last_forward_error"] = None
+            return hit
+
+        delta = alpha - cfg.alpha_anchor
+        count = max(1, int(np.ceil(abs(delta) / cfg.continuation_step)))
+        if count > cfg.max_continuation_steps:
+            stats["forward_failures"] += 1
+            stats["last_forward_error"] = (
+                f"target requires {count} continuation steps, "
+                f"limit is {cfg.max_continuation_steps}"
+            )
+            raise RuntimeError(stats["last_forward_error"])
+
+        source = cfg.branch_inp
+        initial_state = cfg.anchor_state
+        result = None
+        for index in range(1, count + 1):
+            point = (
+                alpha
+                if index == count
+                else cfg.alpha_anchor
+                + delta * (float(index) / float(count))
+            )
+            try:
+                field = cfg.field_from_alpha(
+                    jnp.asarray(point, dtype=cfg.dtype)
+                )
+                result = solve_free_boundary(
+                    source,
+                    external_field=field,
+                    resolution=cfg.resolution,
+                    ftol=cfg.ftol,
+                    max_iterations=cfg.max_iterations,
+                    error_on_no_convergence=False,
+                    initial_state=(
+                        initial_state
+                        if cfg.preserve_m1_constraint_slice
+                        else None
+                    ),
+                    device=cfg.device,
+                    preserve_m1_constraint_slice=(
+                        cfg.preserve_m1_constraint_slice
+                    ),
+                    include_edge_in_convergence=(
+                        cfg.include_edge_in_convergence
+                    ),
+                    edge_force_tolerance=cfg.edge_force_tolerance,
+                )
+            except Exception as exc:
+                stats["forward_failures"] += 1
+                _set_last_forward_root_diagnostics(stats, None)
+                stats["last_forward_error"] = (
+                    "free-boundary continuation failed at "
+                    f"alpha={point:.17g}: {exc}"
+                )
+                raise RuntimeError(stats["last_forward_error"]) from exc
+            stats["forward_host_solves"] += 1
+            stats["forward_iterations"] += int(result.iterations)
+            if not bool(result.converged):
+                stats["forward_failures"] += 1
+                _set_last_forward_root_diagnostics(stats, None)
+                edge = (
+                    f", fedge={float(result.fedge):.3e}, "
+                    f"edge_force_tolerance="
+                    f"{float(cfg.edge_force_tolerance):.3e}"
+                    if cfg.include_edge_in_convergence
+                    else ""
+                )
+                stats["last_forward_error"] = (
+                    "free-boundary continuation did not converge at "
+                    f"alpha={point:.17g}: "
+                    f"iterations={int(result.iterations)}, "
+                    f"fsq=({float(result.fsqr):.3e}, "
+                    f"{float(result.fsqz):.3e}, "
+                    f"{float(result.fsql):.3e}){edge}"
+                )
+                raise RuntimeError(stats["last_forward_error"])
+
+            try:
+                with device_context(cfg.device, cfg.resolution):
+                    diagnostics = _implicit_projected_root_diagnostics(
+                        cfg.evaluator,
+                        cfg.dof_mask,
+                        result.state,
+                        field,
+                        base_residual_atol=(
+                            cfg.linear_config.base_residual_atol
+                        ),
+                        context=(
+                            "accepted scalar continuation point "
+                            f"{index}/{count} at alpha={point:.17g}"
+                        ),
+                        reference_state=cfg.anchor_state,
+                    )
+            except Exception as exc:
+                stats["forward_failures"] += 1
+                _set_last_forward_root_diagnostics(stats, None)
+                stats["last_forward_error"] = str(exc)
+                raise RuntimeError(stats["last_forward_error"]) from exc
+            _set_last_forward_root_diagnostics(stats, diagnostics)
+
+            if index < count:
+                if cfg.preserve_m1_constraint_slice:
+                    initial_state = result.state
+                else:
+                    try:
+                        source = _branch_input_from_result(source, result)
+                    except Exception as exc:
+                        stats["forward_failures"] += 1
+                        _set_last_forward_root_diagnostics(stats, None)
+                        stats["last_forward_error"] = (
+                            "free-boundary scalar continuation could not "
+                            f"rebind accepted point {index}/{count}, "
+                            f"alpha={point:.17g}: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        raise RuntimeError(stats["last_forward_error"]) from exc
+
+        if result is None:  # pragma: no cover - count is always at least one.
+            raise RuntimeError("free-boundary continuation produced no result")
+        cache[key] = result
+        root_cache = _FREEB_IMPLICIT_ROOTS.get(cfg)
+        if root_cache is None:
+            root_cache = {}
+            _FREEB_IMPLICIT_ROOTS[cfg] = root_cache
+        root_cache[key] = dict(diagnostics)
+        stats["last_forward_error"] = None
+        return result
+
+
+def _state_as_numpy(
+    state: SpectralState,
+    cfg: FreeBoundaryImplicitConfig,
+) -> SpectralState:
+    dtype = np.dtype(cfg.dtype)
+    return jax.tree.map(
+        lambda value: np.asarray(value, dtype=dtype),
+        state,
+    )
+
+
+def _host_free_boundary_state_callback(
+    cfg: FreeBoundaryImplicitConfig,
+    alpha_value,
+) -> SpectralState:
+    alpha = _host_scalar(alpha_value, name="alpha")
+    with _config_lock(cfg):
+        _FREEB_IMPLICIT_STATS[cfg]["forward_callbacks"] += 1
+    result = _solve_alpha_from_anchor(cfg, alpha)
+    return _state_as_numpy(result.state, cfg)
+
+
+def _host_free_boundary_pullback_callback(
+    cfg: FreeBoundaryImplicitConfig,
+    alpha_value,
+    state_value: SpectralState,
+    state_cotangent_value: SpectralState,
+):
+    alpha = _host_scalar(alpha_value, name="alpha")
+    with _config_lock(cfg):
+        _FREEB_IMPLICIT_STATS[cfg]["backward_callbacks"] += 1
+
+    try:
+        with device_context(cfg.device, cfg.resolution):
+            state = jax.tree.map(jnp.asarray, state_value)
+            state_cotangent = jax.tree.map(
+                jnp.asarray,
+                state_cotangent_value,
+            )
+            result = scalar_parameter_state_pullback(
+                cfg.evaluator,
+                state,
+                cfg.field_from_alpha,
+                state_cotangent,
+                alpha0=alpha,
+                dof_mask=cfg.dof_mask,
+                config=cfg.linear_config,
+            )
+        diagnostics = {
+            "alpha": alpha,
+            "base_residual_norm": float(result.base_residual_norm),
+            "adjoint_residual_norm": float(result.adjoint_residual_norm),
+            "relative_adjoint_residual": float(
+                result.relative_adjoint_residual
+            ),
+            "active_dimension": int(result.active_dimension),
+            "linear_solver_converged": bool(
+                result.linear_solver_converged
+            ),
+            "converged": bool(result.converged),
+            "backend": result.backend,
+            "error": None,
+        }
+        derivative = float(result.parameter_cotangent)
+        diagnostics["parameter_cotangent"] = derivative
+        valid = (
+            np.isfinite(derivative)
+            and diagnostics["linear_solver_converged"]
+            and diagnostics["converged"]
+            and diagnostics["base_residual_norm"]
+            <= cfg.linear_config.base_residual_atol
+        )
+        with _config_lock(cfg):
+            stats = _FREEB_IMPLICIT_STATS[cfg]
+            stats["backward_linear_solves"] += 1
+            stats["last_backward"] = diagnostics
+            if not valid:
+                stats["backward_failures"] += 1
+        if not valid:
+            derivative = np.nan
+    except Exception as exc:
+        derivative = np.nan
+        with _config_lock(cfg):
+            stats = _FREEB_IMPLICIT_STATS[cfg]
+            stats["backward_failures"] += 1
+            stats["last_backward"] = {
+                "alpha": alpha,
+                "error": f"{type(exc).__name__}: {exc}",
+                "linear_solver_converged": False,
+                "converged": False,
+            }
+    return np.asarray(derivative, dtype=np.dtype(cfg.dtype))
+
+
+def _free_boundary_state_struct(
+    cfg: FreeBoundaryImplicitConfig,
+) -> SpectralState:
+    return jax.tree.map(
+        lambda value: jax.ShapeDtypeStruct(np.shape(value), cfg.dtype),
+        cfg.anchor_state,
+    )
+
+
+def _coerce_implicit_alpha(
+    alpha: float | Array,
+    cfg: FreeBoundaryImplicitConfig,
+) -> Array:
+    if not isinstance(cfg, FreeBoundaryImplicitConfig):
+        raise TypeError("cfg must be a FreeBoundaryImplicitConfig")
+    value = jnp.asarray(alpha, dtype=cfg.dtype)
+    if value.ndim != 0:
+        raise ValueError(f"alpha must be scalar, got shape {value.shape}")
+    return value
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
+def solve_free_boundary_implicit(
+    alpha: float | Array,
+    cfg: FreeBoundaryImplicitConfig,
+) -> SpectralState:
+    """Run an opaque host NESTOR solve with a B4 implicit scalar pullback.
+
+    Adaptive activation, cadence, continuation, and iteration history stay
+    outside AD. The backward callback differentiates only the validated
+    converged projected residual and launches no nonlinear equilibrium solve.
+    Direct terms in ``alpha`` should be composed outside this wrapper.
+    """
+    value = _coerce_implicit_alpha(alpha, cfg)
+    return jax.pure_callback(
+        functools.partial(_host_free_boundary_state_callback, cfg),
+        _free_boundary_state_struct(cfg),
+        value,
+    )
+
+
+def _solve_free_boundary_implicit_fwd(alpha, cfg):
+    value = _coerce_implicit_alpha(alpha, cfg)
+    state = jax.pure_callback(
+        functools.partial(_host_free_boundary_state_callback, cfg),
+        _free_boundary_state_struct(cfg),
+        value,
+    )
+    return state, (value, state)
+
+
+def _solve_free_boundary_implicit_bwd(cfg, residual, state_cotangent):
+    alpha, state = residual
+    derivative = jax.pure_callback(
+        functools.partial(_host_free_boundary_pullback_callback, cfg),
+        jax.ShapeDtypeStruct((), cfg.dtype),
+        alpha,
+        state,
+        state_cotangent,
+    )
+    return (derivative,)
+
+
+solve_free_boundary_implicit.defvjp(
+    _solve_free_boundary_implicit_fwd,
+    _solve_free_boundary_implicit_bwd,
+)

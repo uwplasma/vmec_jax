@@ -13,6 +13,8 @@ Public API (lazily imported; ``import vmex as vj``):
   projected free-boundary equilibrium tangent
 - :func:`~vmex.core.freeboundary_implicit.scalar_state_objective_adjoint` —
   projected free-boundary state-objective adjoint
+- :func:`~vmex.core.freeboundary_implicit.solve_free_boundary_implicit` —
+  common-anchor scalar host solve with an implicit custom VJP
 - :func:`~vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
   / :func:`~vmex.core.wout.wout_from_state` / :class:`~vmex.core.wout.WoutData`
 - :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
@@ -97,6 +99,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     # projected free-boundary implicit differentiation
     "FreeBoundaryAdjointResult": (
         ".core.freeboundary_implicit", "FreeBoundaryAdjointResult"),
+    "FreeBoundaryImplicitConfig": (
+        ".core.freeboundary_implicit", "FreeBoundaryImplicitConfig"),
     "FreeBoundaryStatePullbackResult": (
         ".core.freeboundary_implicit", "FreeBoundaryStatePullbackResult"),
     "FreeBoundaryTangentConfig": (
@@ -105,18 +109,28 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".core.freeboundary_implicit", "FreeBoundaryTangentResult"),
     "free_boundary_dof_mask": (
         ".core.freeboundary_implicit", "free_boundary_dof_mask"),
+    "free_boundary_implicit_result": (
+        ".core.freeboundary_implicit", "free_boundary_implicit_result"),
+    "free_boundary_implicit_stats": (
+        ".core.freeboundary_implicit", "free_boundary_implicit_stats"),
+    "make_free_boundary_implicit_config": (
+        ".core.freeboundary_implicit", "make_free_boundary_implicit_config"),
     "make_projected_free_boundary_residual": (
         ".core.freeboundary_implicit", "make_projected_free_boundary_residual"),
     "one_current_adjoint": (
         ".core.freeboundary_implicit", "one_current_adjoint"),
     "one_current_tangent": (
         ".core.freeboundary_implicit", "one_current_tangent"),
+    "reset_free_boundary_implicit_stats": (
+        ".core.freeboundary_implicit", "reset_free_boundary_implicit_stats"),
     "scalar_parameter_state_pullback": (
         ".core.freeboundary_implicit", "scalar_parameter_state_pullback"),
     "scalar_parameter_tangent": (
         ".core.freeboundary_implicit", "scalar_parameter_tangent"),
     "scalar_state_objective_adjoint": (
         ".core.freeboundary_implicit", "scalar_state_objective_adjoint"),
+    "solve_free_boundary_implicit": (
+        ".core.freeboundary_implicit", "solve_free_boundary_implicit"),
     # wout IO
     "WoutData": (".core.wout", "WoutData"),
     "read_wout": (".core.wout", "read_wout"),

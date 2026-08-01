@@ -61,7 +61,7 @@ stated in the row is validated; ``—`` means no public path.
      - limited
      - limited
      - supported
-     - Public B2-B4 APIs differentiate a supplied converged symmetric VMEX-NESTOR root for scalar external-field parameters. Adaptive host-solve custom VJP and common-anchor optimization are not yet public. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_implicit_fast.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit_fast.py>`__, `test_freeboundary_implicit_integration.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit_integration.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
+     - Public B2-B4 APIs differentiate a supplied converged symmetric VMEX-NESTOR root for scalar external-field parameters. Public B5 adds a CPU-validated, projected-root-and-chart-gated common-anchor scalar host solve with a custom VJP; B5 GPU qualification, vector design, and a common optimizer are not yet public. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_implicit_fast.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit_fast.py>`__, `test_freeboundary_implicit_integration.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit_integration.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
    * - toroidal
      - stellarator / tokamak
      - free
@@ -187,8 +187,12 @@ A supported forward free-boundary solve does not imply differentiation
 through its adaptive reconvergence path. For stellarator-symmetric
 toroidal equilibria, the public lower-level B2--B4 APIs provide
 projected tangents and state adjoints at a supplied converged
-VMEX--NESTOR root. The adaptive host solve, scalar custom VJP, and
-common-anchor optimization remain outside the public AD path. The
+VMEX--NESTOR root. Public B5 adds a deterministic common-anchor scalar
+host solve with a custom VJP and gates every accepted endpoint against
+that projected root and the anchor's affine constraint slice. Adaptive
+host decisions stay outside AD; vector
+design and a common optimizer remain outside the public path. B5 is
+currently CPU-qualified; its GPU wrapper gate remains open. The
 specified-boundary virtual-casing residual is a separate differentiable
 interface.
 

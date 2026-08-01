@@ -35,8 +35,10 @@ input-flag coverage is tracked separately in
   (see the gradient table in the docs), with an O(1)-memory adjoint. The
   **free-boundary virtual-casing residual** is differentiable in coil /
   `extcur` parameters on a specified plasma boundary and is
-  finite-difference-validated. The host-driven NESTOR equilibrium solve itself
-  is not differentiated. See the
+  finite-difference-validated. For stellarator-symmetric VMEX--NESTOR roots,
+  projected tangents/adjoints and a scalar common-anchor custom VJP
+  differentiate the converged coupled equation while leaving the adaptive host
+  path opaque. See the
   [capability contract](https://vmex.readthedocs.io/en/latest/capabilities.html)
   for the exact forward, JVP, VJP, and optimization scope.
 - **Drop-in.** Reads VMEC2000 `input.*` namelists and structured JSON,

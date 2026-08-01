@@ -88,16 +88,22 @@ def test_free_boundary_implicit_api_is_public():
 
     names = (
         "FreeBoundaryAdjointResult",
+        "FreeBoundaryImplicitConfig",
         "FreeBoundaryStatePullbackResult",
         "FreeBoundaryTangentConfig",
         "FreeBoundaryTangentResult",
         "free_boundary_dof_mask",
+        "free_boundary_implicit_result",
+        "free_boundary_implicit_stats",
+        "make_free_boundary_implicit_config",
         "make_projected_free_boundary_residual",
         "one_current_adjoint",
         "one_current_tangent",
+        "reset_free_boundary_implicit_stats",
         "scalar_parameter_state_pullback",
         "scalar_parameter_tangent",
         "scalar_state_objective_adjoint",
+        "solve_free_boundary_implicit",
     )
     assert all(
         getattr(vmex, name) is getattr(freeboundary_implicit, name)

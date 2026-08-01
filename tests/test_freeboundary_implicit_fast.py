@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import NamedTuple
 
@@ -17,7 +18,12 @@ from jax.flatten_util import ravel_pytree  # noqa: E402
 import vmex as vj  # noqa: E402
 from vmex.core import freeboundary as FB  # noqa: E402
 from vmex.core import freeboundary_implicit as FBI  # noqa: E402
+from vmex.core.input import VmecInput  # noqa: E402
 from vmex.core.solver import SpectralState  # noqa: E402
+
+
+REPO = Path(__file__).resolve().parents[1]
+DECK = REPO / "examples" / "data" / "input.cth_like_free_bdy"
 
 
 def _state(shape=(1, 2), dtype=jnp.float64):
@@ -26,6 +32,79 @@ def _state(shape=(1, 2), dtype=jnp.float64):
         for index in range(6)
     ]
     return SpectralState(*leaves)
+
+
+def _minimal_implicit_config(
+    *,
+    state=None,
+    evaluator=None,
+    dof_mask=None,
+    anchor_result=None,
+    branch_inp=None,
+    field_from_alpha=lambda alpha: alpha,
+    continuation_step=0.1,
+    max_continuation_steps=4,
+    preserve_m1_constraint_slice=False,
+    include_edge_in_convergence=False,
+    edge_force_tolerance=None,
+    linear_config=None,
+):
+    state = _state() if state is None else state
+    dof_mask = jax.tree.map(jnp.ones_like, state) if dof_mask is None else dof_mask
+    anchor_result = (
+        SimpleNamespace(state=state)
+        if anchor_result is None
+        else anchor_result
+    )
+    return FBI.FreeBoundaryImplicitConfig(
+        inp=None,
+        field_from_alpha=field_from_alpha,
+        alpha_anchor=0.0,
+        resolution=SimpleNamespace(ns=1, mnmax=1, nznt=1),
+        ftol=1.0e-10,
+        max_iterations=20,
+        continuation_step=continuation_step,
+        max_continuation_steps=max_continuation_steps,
+        anchor_result=anchor_result,
+        anchor_state=state,
+        anchor_iterations=1,
+        anchor_residual_norm=0.0,
+        anchor_raw_residual_norm=0.0,
+        anchor_projected_residual_max_abs=0.0,
+        anchor_volume=1.0,
+        branch_inp=branch_inp,
+        evaluator=evaluator,
+        dof_mask=dof_mask,
+        linear_config=(
+            FBI.FreeBoundaryTangentConfig()
+            if linear_config is None
+            else linear_config
+        ),
+        preserve_m1_constraint_slice=preserve_m1_constraint_slice,
+        include_edge_in_convergence=include_edge_in_convergence,
+        edge_force_tolerance=edge_force_tolerance,
+    )
+
+
+def _register_implicit_config(cfg, *, anchor_solve=False):
+    FBI._config_lock(cfg)
+    FBI._FREEB_IMPLICIT_SOLVES[cfg] = {
+        FBI._alpha_key(cfg.alpha_anchor): cfg.anchor_result,
+    }
+    FBI._FREEB_IMPLICIT_ROOTS[cfg] = {
+        FBI._alpha_key(cfg.alpha_anchor): {
+            "raw_residual_norm": cfg.anchor_raw_residual_norm,
+            "projected_residual_norm": cfg.anchor_residual_norm,
+            "projected_residual_max_abs": (
+                cfg.anchor_projected_residual_max_abs
+            ),
+            "constraint_slice_defect_norm": 0.0,
+            "constraint_slice_atol": 1.0e-10,
+        },
+    }
+    FBI._FREEB_IMPLICIT_STATS[cfg] = FBI._new_implicit_stats(
+        anchor_solve=anchor_solve,
+    )
 
 
 @dataclass(frozen=True)
@@ -41,16 +120,22 @@ class _ResidualOnly(NamedTuple):
 def test_public_exports_are_lazy_aliases():
     names = (
         "FreeBoundaryAdjointResult",
+        "FreeBoundaryImplicitConfig",
         "FreeBoundaryStatePullbackResult",
         "FreeBoundaryTangentConfig",
         "FreeBoundaryTangentResult",
         "free_boundary_dof_mask",
+        "free_boundary_implicit_result",
+        "free_boundary_implicit_stats",
+        "make_free_boundary_implicit_config",
         "make_projected_free_boundary_residual",
         "one_current_adjoint",
         "one_current_tangent",
+        "reset_free_boundary_implicit_stats",
         "scalar_parameter_state_pullback",
         "scalar_parameter_tangent",
         "scalar_state_objective_adjoint",
+        "solve_free_boundary_implicit",
     )
     assert all(getattr(vj, name) is getattr(FBI, name) for name in names)
     assert vj.freeboundary_implicit is FBI
@@ -496,3 +581,462 @@ def test_scalar_tangent_and_adjoint_match_nonsymmetric_analytic_root(
         rtol=1.0e-11,
         atol=1.0e-11,
     )
+
+
+def test_implicit_factory_gates_projected_root_and_uses_auto_device(
+    monkeypatch,
+):
+    inp = VmecInput.from_file(DECK)
+    state = _state()
+    residual = state
+    mask = jax.tree.map(jnp.ones_like, state)
+    result = SimpleNamespace(
+        converged=True,
+        state=state,
+        iterations=7,
+        fsqr=0.0,
+        fsqz=0.0,
+        fsql=0.0,
+        fedge=0.0,
+    )
+    captured = {}
+
+    class FakeEvaluator:
+        runtime = object()
+
+        def __call__(self, _state, _field):
+            return _ResidualOnly(residual)
+
+    evaluator = FakeEvaluator()
+
+    def fake_solve(*_args, **kwargs):
+        captured.update(kwargs)
+        return result
+
+    def projector(tree):
+        return replace(
+            tree,
+            R_cos=tree.R_cos.at[0, 0].set(0.0),
+        )
+
+    monkeypatch.setattr(FBI, "solve_free_boundary", fake_solve)
+    monkeypatch.setattr(FBI, "_branch_input_from_result", lambda *_args: inp)
+    monkeypatch.setattr(
+        FBI,
+        "make_free_boundary_residual_evaluator",
+        lambda *_args, **_kwargs: evaluator,
+    )
+    monkeypatch.setattr(FBI, "free_boundary_dof_mask", lambda _evaluator: mask)
+    monkeypatch.setattr(FBI, "_projector", lambda *_args: projector)
+    monkeypatch.setattr(
+        FBI._fixed_implicit,
+        "plasma_volume",
+        lambda *_args: 1.25,
+    )
+
+    config = FBI.make_free_boundary_implicit_config(
+        inp,
+        lambda alpha: alpha,
+        linear_config=FBI.FreeBoundaryTangentConfig(
+            base_residual_atol=100.0,
+        ),
+    )
+    projected = projector(residual)
+
+    assert config.anchor_raw_residual_norm == pytest.approx(
+        float(FBI._tree_norm(residual))
+    )
+    assert config.anchor_residual_norm == pytest.approx(
+        float(FBI._tree_norm(projected))
+    )
+    assert config.anchor_projected_residual_max_abs == pytest.approx(
+        max(
+            float(jnp.max(jnp.abs(leaf)))
+            for leaf in jax.tree.leaves(projected)
+        )
+    )
+    assert config.anchor_residual_norm < config.anchor_raw_residual_norm
+    assert captured["device"] == "auto"
+    assert FBI.free_boundary_implicit_stats(config)["anchor_host_solves"] == 1
+
+
+def test_implicit_projected_root_gate_fails_closed():
+    state = _state()
+    mask = jax.tree.map(jnp.ones_like, state)
+
+    class FakeEvaluator:
+        runtime = SimpleNamespace(
+            setup=SimpleNamespace(lconm1=False),
+            resolution=SimpleNamespace(ntor=0, lasym=False),
+        )
+
+        def __call__(self, actual_state, _field):
+            return _ResidualOnly(actual_state)
+
+    with pytest.raises(RuntimeError, match=r"not a root.*\|\|P\(F\)\|\|"):
+        FBI._implicit_projected_root_diagnostics(
+            FakeEvaluator(),
+            mask,
+            state,
+            object(),
+            base_residual_atol=1.0e-12,
+            context="test continuation point",
+        )
+
+
+def test_implicit_root_gate_rejects_common_chart_defect():
+    reference = jax.tree.map(jnp.zeros_like, _state())
+    state = replace(
+        reference,
+        R_sin=reference.R_sin.at[0, 0].set(1.0e-3),
+    )
+    mask = jax.tree.map(jnp.ones_like, state)
+    mask = replace(mask, R_sin=jnp.zeros_like(mask.R_sin))
+    zero_residual = jax.tree.map(jnp.zeros_like, state)
+
+    class FakeEvaluator:
+        runtime = SimpleNamespace(
+            setup=SimpleNamespace(lconm1=False),
+            resolution=SimpleNamespace(ntor=0, lasym=False),
+        )
+
+        def __call__(self, _state, _field):
+            return _ResidualOnly(zero_residual)
+
+    with pytest.raises(RuntimeError, match="common implicit constraint slice"):
+        FBI._implicit_projected_root_diagnostics(
+            FakeEvaluator(),
+            mask,
+            state,
+            object(),
+            base_residual_atol=1.0e-12,
+            context="test continuation point",
+            reference_state=reference,
+        )
+
+
+def test_scalar_continuation_restarts_each_target_from_common_anchor(
+    monkeypatch,
+):
+    anchor_state = jax.tree.map(jnp.zeros_like, _state())
+    anchor_result = SimpleNamespace(state=anchor_state)
+    branch_inp = object()
+    config = _minimal_implicit_config(
+        state=anchor_state,
+        anchor_result=anchor_result,
+        branch_inp=branch_inp,
+        preserve_m1_constraint_slice=True,
+        include_edge_in_convergence=True,
+        edge_force_tolerance=3.0e-10,
+    )
+    _register_implicit_config(config)
+    calls = []
+
+    def fake_solve(source, *, external_field, initial_state, **kwargs):
+        accepted_state = jax.tree.map(
+            lambda leaf: leaf + float(len(calls) + 1),
+            anchor_state,
+        )
+        result = SimpleNamespace(
+            converged=True,
+            iterations=len(calls) + 1,
+            fsqr=0.0,
+            fsqz=0.0,
+            fsql=0.0,
+            fedge=0.0,
+            state=accepted_state,
+        )
+        calls.append(
+            {
+                "source": source,
+                "alpha": float(np.asarray(external_field)),
+                "initial_state": initial_state,
+                "kwargs": kwargs,
+                "result": result,
+            }
+        )
+        return result
+
+    monkeypatch.setattr(FBI, "solve_free_boundary", fake_solve)
+    monkeypatch.setattr(
+        FBI,
+        "_implicit_projected_root_diagnostics",
+        lambda *_args, **_kwargs: {
+            "raw_residual_norm": 0.0,
+            "projected_residual_norm": 0.0,
+            "projected_residual_max_abs": 0.0,
+            "constraint_slice_defect_norm": 0.0,
+            "constraint_slice_atol": 1.0e-10,
+        },
+    )
+    monkeypatch.setattr(
+        FBI,
+        "_branch_input_from_result",
+        lambda *_args: pytest.fail("preserved m=1 path must not rebind input"),
+    )
+
+    first = FBI._solve_alpha_from_anchor(config, 0.15)
+    second = FBI._solve_alpha_from_anchor(config, -0.05)
+
+    assert first is calls[1]["result"]
+    assert second is calls[2]["result"]
+    assert [call["source"] for call in calls] == [branch_inp] * 3
+    np.testing.assert_allclose(
+        [call["alpha"] for call in calls],
+        [0.075, 0.15, -0.05],
+    )
+    assert calls[0]["initial_state"] is anchor_state
+    assert calls[1]["initial_state"] is calls[0]["result"].state
+    assert calls[2]["initial_state"] is anchor_state
+    for call in calls:
+        assert call["kwargs"]["preserve_m1_constraint_slice"] is True
+        assert call["kwargs"]["include_edge_in_convergence"] is True
+        assert call["kwargs"]["edge_force_tolerance"] == 3.0e-10
+        assert call["kwargs"]["device"] == "auto"
+    stats = FBI.free_boundary_implicit_stats(config)
+    assert stats["forward_host_solves"] == 3
+    assert stats["forward_iterations"] == 6
+    assert stats["memo_entries"] == 3
+    assert stats["last_forward_projected_residual_norm"] == 0.0
+
+
+def test_scalar_cold_rebind_path_restarts_from_original_branch_input(
+    monkeypatch,
+):
+    anchor_state = jax.tree.map(jnp.zeros_like, _state())
+    branch_inp = object()
+    config = _minimal_implicit_config(
+        state=anchor_state,
+        branch_inp=branch_inp,
+        preserve_m1_constraint_slice=False,
+    )
+    _register_implicit_config(config)
+    calls = []
+    rebounds = []
+
+    def fake_solve(source, *, external_field, initial_state, **_kwargs):
+        result = SimpleNamespace(
+            converged=True,
+            iterations=1,
+            fsqr=0.0,
+            fsqz=0.0,
+            fsql=0.0,
+            state=anchor_state,
+        )
+        calls.append(
+            (source, float(np.asarray(external_field)), initial_state, result)
+        )
+        return result
+
+    def fake_rebind(source, result):
+        rebound = object()
+        rebounds.append((source, result, rebound))
+        return rebound
+
+    monkeypatch.setattr(FBI, "solve_free_boundary", fake_solve)
+    monkeypatch.setattr(FBI, "_branch_input_from_result", fake_rebind)
+    monkeypatch.setattr(
+        FBI,
+        "_implicit_projected_root_diagnostics",
+        lambda *_args, **_kwargs: {
+            "raw_residual_norm": 0.0,
+            "projected_residual_norm": 0.0,
+            "projected_residual_max_abs": 0.0,
+            "constraint_slice_defect_norm": 0.0,
+            "constraint_slice_atol": 1.0e-10,
+        },
+    )
+
+    FBI._solve_alpha_from_anchor(config, 0.15)
+    FBI._solve_alpha_from_anchor(config, -0.05)
+
+    assert calls[0][0] is branch_inp
+    assert calls[1][0] is rebounds[0][2]
+    assert calls[2][0] is branch_inp
+    assert all(call[2] is None for call in calls)
+    np.testing.assert_allclose(
+        [call[1] for call in calls],
+        [0.075, 0.15, -0.05],
+    )
+
+
+def test_scalar_continuation_rejects_intermediate_root_and_stops(
+    monkeypatch,
+):
+    anchor_state = jax.tree.map(jnp.zeros_like, _state())
+    config = _minimal_implicit_config(
+        state=anchor_state,
+        branch_inp=object(),
+        preserve_m1_constraint_slice=True,
+    )
+    _register_implicit_config(config)
+    solve_points = []
+    gate_points = []
+
+    def fake_solve(_source, *, external_field, **_kwargs):
+        solve_points.append(float(np.asarray(external_field)))
+        return SimpleNamespace(
+            converged=True,
+            iterations=1,
+            fsqr=0.0,
+            fsqz=0.0,
+            fsql=0.0,
+            state=anchor_state,
+        )
+
+    def fake_gate(_evaluator, _mask, _state, field, **_kwargs):
+        gate_points.append(float(np.asarray(field)))
+        if len(gate_points) == 2:
+            raise RuntimeError("intermediate point is not a projected root")
+        return {
+            "raw_residual_norm": 0.0,
+            "projected_residual_norm": 0.0,
+            "projected_residual_max_abs": 0.0,
+            "constraint_slice_defect_norm": 0.0,
+            "constraint_slice_atol": 1.0e-10,
+        }
+
+    monkeypatch.setattr(FBI, "solve_free_boundary", fake_solve)
+    monkeypatch.setattr(FBI, "_implicit_projected_root_diagnostics", fake_gate)
+
+    target = 0.25
+    with pytest.raises(RuntimeError, match="intermediate point"):
+        FBI._solve_alpha_from_anchor(config, target)
+
+    np.testing.assert_allclose(solve_points, [1.0 / 12.0, 1.0 / 6.0])
+    np.testing.assert_allclose(gate_points, solve_points)
+    target_key = FBI._alpha_key(target)
+    assert target_key not in FBI._FREEB_IMPLICIT_SOLVES[config]
+    assert target_key not in FBI._FREEB_IMPLICIT_ROOTS[config]
+    stats = FBI.free_boundary_implicit_stats(config)
+    assert stats["forward_host_solves"] == 2
+    assert stats["forward_failures"] == 1
+    assert stats["last_forward_projected_residual_norm"] is None
+
+
+def test_forward_diagnostics_follow_failure_and_exact_memo_recovery():
+    config = _minimal_implicit_config(
+        continuation_step=0.1,
+        max_continuation_steps=2,
+    )
+    _register_implicit_config(config)
+
+    assert FBI._solve_alpha_from_anchor(config, 0.0) is config.anchor_result
+    anchored = FBI.free_boundary_implicit_stats(config)
+    assert anchored["last_forward_alpha"] == 0.0
+    assert anchored["last_forward_projected_residual_norm"] == 0.0
+
+    with pytest.raises(RuntimeError, match="target requires 3"):
+        FBI._solve_alpha_from_anchor(config, 0.25)
+    failed = FBI.free_boundary_implicit_stats(config)
+    assert failed["last_forward_alpha"] == 0.25
+    assert failed["last_forward_projected_residual_norm"] is None
+    assert failed["last_forward_error"] is not None
+
+    assert FBI._solve_alpha_from_anchor(config, 0.0) is config.anchor_result
+    recovered = FBI.free_boundary_implicit_stats(config)
+    assert recovered["last_forward_alpha"] == 0.0
+    assert recovered["last_forward_projected_residual_norm"] == 0.0
+    assert recovered["last_forward_error"] is None
+
+
+@pytest.mark.usefixtures("_module_jit_enabled")
+def test_scalar_custom_vjp_matches_analytic_pullback_and_direct_term(
+    monkeypatch,
+):
+    state = jax.tree.map(jnp.zeros_like, _state())
+    flat_state, unravel = ravel_pytree(state)
+    size = int(flat_state.size)
+    dof_mask = jax.tree.map(jnp.ones_like, state)
+    evaluator = SimpleNamespace(
+        runtime=SimpleNamespace(
+            setup=SimpleNamespace(lconm1=False),
+            resolution=SimpleNamespace(ntor=0),
+        )
+    )
+    state_matrix = np.diag(np.linspace(1.0, 2.0, size))
+    state_matrix += 0.04 * np.diag(np.ones(size - 1), k=1)
+    parameter_column = np.sin(0.19 * np.arange(1, size + 1)) + 0.2
+    state_cotangent_flat = np.cos(0.11 * np.arange(size)) + 0.3
+    state_matrix_jax = jnp.asarray(state_matrix)
+    parameter_column_jax = jnp.asarray(parameter_column)
+    state_cotangent = unravel(jnp.asarray(state_cotangent_flat))
+
+    def fake_projected_residual(_evaluator, frozen_state, actual_mask):
+        assert actual_mask is dof_mask
+
+        def residual(value, alpha):
+            flat_value = ravel_pytree(value)[0]
+            return unravel(
+                state_matrix_jax @ flat_value
+                + parameter_column_jax * alpha
+            )
+
+        return residual, frozen_state, lambda tree: tree
+
+    monkeypatch.setattr(
+        FBI,
+        "make_projected_free_boundary_residual",
+        fake_projected_residual,
+    )
+    config = _minimal_implicit_config(
+        state=state,
+        evaluator=evaluator,
+        dof_mask=dof_mask,
+        field_from_alpha=lambda alpha: alpha,
+        linear_config=FBI.FreeBoundaryTangentConfig(
+            rtol=1.0e-11,
+            restart=size,
+            max_restarts=5,
+            adjoint_backend="forward_dense",
+            adjoint_batch_size=4,
+        ),
+    )
+    _register_implicit_config(config)
+    monkeypatch.setattr(
+        FBI,
+        "solve_free_boundary",
+        lambda *_args, **_kwargs: pytest.fail(
+            "custom-VJP anchor hit or backward launched a nonlinear solve"
+        ),
+    )
+
+    direct_slope = 0.375
+
+    def objective(alpha):
+        solved_state = FBI.solve_free_boundary_implicit(alpha, config)
+        return (
+            FBI._tree_dot(state_cotangent, solved_state)
+            + direct_slope * alpha
+        )
+
+    value, derivative = jax.jit(jax.value_and_grad(objective))(
+        jnp.asarray(0.0, dtype=config.dtype)
+    )
+    jax.block_until_ready((value, derivative))
+
+    expected_adjoint = np.linalg.solve(state_matrix.T, state_cotangent_flat)
+    expected_implicit = -expected_adjoint @ parameter_column
+    assert float(value) == pytest.approx(0.0)
+    np.testing.assert_allclose(
+        float(derivative),
+        expected_implicit + direct_slope,
+        rtol=1.0e-11,
+        atol=1.0e-11,
+    )
+    stats = FBI.free_boundary_implicit_stats(config)
+    assert stats["forward_callbacks"] == 1
+    assert stats["forward_host_solves"] == 0
+    assert stats["forward_memo_hits"] == 1
+    assert stats["backward_callbacks"] == 1
+    assert stats["backward_linear_solves"] == 1
+    assert stats["backward_failures"] == 0
+    assert stats["last_backward"]["converged"] is True
+
+    with pytest.raises(ValueError, match="alpha must be scalar"):
+        FBI.solve_free_boundary_implicit(jnp.zeros((2,)), config)
+    assert FBI.free_boundary_implicit_result(0.0, config) is config.anchor_result
+    FBI.reset_free_boundary_implicit_stats(config, clear_memo=True)
+    reset_stats = FBI.free_boundary_implicit_stats(config)
+    assert reset_stats["memo_entries"] == 1
+    assert reset_stats["forward_host_solves"] == 0

@@ -395,9 +395,15 @@ stellarator-symmetric equilibria,
 :mod:`vmex.core.freeboundary_implicit` instead projects the fully rebuilt
 residual at a supplied converged VMEX--NESTOR root and exposes scalar-parameter
 tangents, state pullbacks, and scalar-objective adjoints. These lower-level
-B2--B4 APIs differentiate the converged residual equation; the adaptive solve
-path, a scalar custom-VJP wrapper, and common-anchor optimization remain
-outside the public API.
+B2--B4 APIs differentiate the converged residual equation. The B5
+:func:`~vmex.solve_free_boundary_implicit` wrapper adds deterministic
+common-anchor scalar continuation and a custom VJP: every accepted host state
+must pass the same projected-root gate and remain on the anchor's affine
+constraint slice, and its backward callback launches no nonlinear equilibrium
+solve. Adaptive solve decisions stay outside AD; vector
+design parameters and a common free-boundary optimizer remain outside this
+public API. The B5 custom VJP is numerically qualified on CPU; GPU wrapper
+qualification remains a later accelerator step.
 
 Differentiable free boundary (virtual casing)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
