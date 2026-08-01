@@ -234,6 +234,30 @@ def test_qs_optimization_examples(case, tmp_path):
     assert match is not None and np.isfinite(float(match.group(2)))
 
 
+def test_qi_maxj_continuation_example(tmp_path):
+    """QI+maxJ continuation ladder from the nfp=2 simsopt seed (tiny default).
+
+    The default invocation is the smoke budget (one implicit stage, coarse
+    ns/Boozer sampling): asserts decreasing cost, the machine-parseable QI
+    line, the shared-Boozer bounce-action diagnostics, and the promised
+    deck/wout/figure outputs including the polar J(alpha, s) maps.
+    """
+    script = EXAMPLES / "optimization" / "QI_maxJ_continuation.py"
+    out = _run_example(script, tmp_path, timeout=900)
+    _assert_cost_decreased(out, "QI-maxJ")
+    match = re.search(r"QI total: seed ([0-9.eE+-]+) -> final ([0-9.eE+-]+)", out)
+    assert match is not None
+    seed, final = float(match.group(1)), float(match.group(2))
+    assert np.isfinite(final) and final <= seed * 1.05
+    match = re.search(r"maximum-J fraction = ([0-9.]+)", out)
+    assert match is not None and 0.0 <= float(match.group(1)) <= 1.0
+    outdir = tmp_path / "output_QI_maxJ_continuation"
+    assert (outdir / "input.QI_maxJ_continuation_optimized").exists()
+    assert (outdir / "wout_QI_maxJ_continuation_optimized.nc").exists()
+    for ip in range(3):
+        assert (outdir / f"j_polar_pitch_{ip:02d}.png").stat().st_size > 10_000
+
+
 @pytest.mark.full  # nightly: single-stage ESS variants (one least_squares call, no ladder)
 @pytest.mark.parametrize("case", ["QA", "QI"])
 def test_ess_optimization_examples(case, tmp_path):
