@@ -81,6 +81,62 @@ def freeb_cli(tmp_path_factory) -> tuple[int, str, Path]:
 # ---------------------------------------------------------------------------
 
 
+def test_redirected_stdout_streams_banner_and_compile_notice(tmp_path):
+    """Cluster-log contract: with stdout redirected to a FILE, the ``NS =``
+    stage banner and a free-lane ``compiling NS = ...`` notice must be
+    readable in that file WHILE the solve is still running.
+
+    This pins two independent fixes: the CLI sink flushes every line
+    (otherwise block buffering hides hours of output on a batch node), and
+    every free-lane compile prints its attribution BEFORE the compile
+    starts (otherwise a large-grid run sits silently inside XLA).  The
+    subprocess is killed as soon as both lines are observed live.
+    """
+    import os
+    import subprocess
+    import sys
+    import time
+
+    deck = tmp_path / DECK.name
+    deck.write_text(DECK.read_text())
+    shutil.copyfile(MGRID, tmp_path / MGRID.name)
+    log = tmp_path / "run.log"
+
+    env = dict(os.environ)
+    env["JAX_ENABLE_X64"] = "1"
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(Path(__file__).resolve().parents[1]),
+                    env.get("PYTHONPATH")) if p
+    )
+    with open(log, "wb") as sink:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "vmex.core.cli", str(deck),
+             "--max-iter", "40", "--outdir", str(tmp_path / "out")],
+            stdout=sink, stderr=subprocess.DEVNULL, cwd=str(tmp_path),
+            env=env,
+        )
+        try:
+            seen_live = False
+            deadline = time.monotonic() + 600.0
+            while proc.poll() is None and time.monotonic() < deadline:
+                text = log.read_text(errors="replace")
+                if "NS = " in text and " compiling NS =" in text:
+                    seen_live = True
+                    break
+                time.sleep(0.05)
+        finally:
+            proc.kill()
+            proc.wait()
+    assert seen_live, (
+        "NS banner + compile notice never reached the redirected log while "
+        "the run was still executing; log contents:\n"
+        + log.read_text(errors="replace")[:4000]
+    )
+    # the observed notice is a tagged free-lane one, not a stray fragment
+    assert re.search(r" compiling NS = *\d+ .*executable\.\.\.",
+                     log.read_text(errors="replace"))
+
+
 def test_vacuum_banners_printed(freeb_cli):
     _, stdout, _ = freeb_cli
     assert "In VACUUM" in stdout

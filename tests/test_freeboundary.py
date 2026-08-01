@@ -677,6 +677,34 @@ def test_cached_vacuum_executable_rechecks_dynamic_axis(monkeypatch):
     assert seen[0][2] is axis_z
 
 
+def test_call_lane_emits_notice_once_before_compile():
+    """Free-lane compile visibility: the first call of a lane structure
+    emits the tagged ``compile_notice`` BEFORE compiling/running; repeats of
+    the same structure stay silent (the pause happens once per process)."""
+    lane = jax.jit(lambda x: x + 1.0)
+    x = jnp.asarray(1.0)
+    tag = ("test_notice_lane", id(lane))  # unique per test run
+    notices: list[str] = []
+
+    def emit(text="", end="\n"):
+        notices.append(str(text) + str(end))
+
+    out = FB._call_lane(tag, lane, (x,),
+                        notice=(emit, 15, "steady vacuum loop"))
+    assert float(out) == 2.0
+    assert notices == [" compiling NS = 15 steady vacuum loop executable...\n"]
+
+    out = FB._call_lane(tag, lane, (x,),
+                        notice=(emit, 15, "steady vacuum loop"))
+    assert float(out) == 2.0
+    assert len(notices) == 1, "same-structure recall must not re-notice"
+
+    # non-verbose callers pass notice=None: never a print, same result.
+    out = FB._call_lane(("test_notice_lane_quiet", id(lane)), lane, (x,))
+    assert float(out) == 2.0
+    assert len(notices) == 1
+
+
 def test_cli_missing_mgrid_fallback_warns(tmp_path):
     """CLI policy: missing mgrid -> fixed-boundary fallback warning (VMEC2000)."""
     import types
