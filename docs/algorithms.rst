@@ -567,9 +567,15 @@ block-tridiagonal — ``ns`` dense :math:`(3\,mn \times 3\,mn)` blocks.
 because the 1D preconditioner's inverse is.) The blocks are assembled with
 3-colored ``jax.jvp`` probes — a cost independent of the dof count —
 factored once with SOLVAX's block-Thomas elimination (the BCYCLIC
-analogue), and back-substituted for every dof right-hand side; a short
-warm-started GMRES pass against the preconditioned system certifies each
-column to the same tolerance as the per-column path. Measured: 33x on the
+analogue), and back-substituted for every dof right-hand side; a
+warm-started GMRES pass against the preconditioned system uses the configured
+iteration budget and certifies each column to the same tolerance as the
+per-column path. The stored SOLVAX factors also serve the exact transposed
+raw system; :func:`~vmex.core.implicit.implicit_state_tangent_multi_rhs` and
+the opt-in ``solver="block"`` form of
+:func:`~vmex.core.implicit.implicit_state_pullback_multi_rhs` expose the paired
+forward and reverse responses with per-right-hand-side residual reports.
+Measured: 33x on the
 Jacobian phase of the benchmark optimization step (see
 :doc:`optimization`). The same per-dof responses :math:`dz_j` double as a
 first-order perturbation warm start for the optimizer's next trial solves —
