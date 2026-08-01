@@ -76,6 +76,7 @@ __all__ = [
     "KineticProfiles",
     "profile_value_and_dds",
     "compute_trapped_fraction",
+    "trapped_fraction_from_state",
     "RedlGeometry",
     "redl_geometry_from_wout",
     "redl_geometry_from_state",
@@ -161,9 +162,9 @@ def compute_trapped_fraction(modB: Array, sqrtg: Array, *, n_lambda: int = 64):
         modB: ``(nsurf, ntheta, nzeta)`` array of :math:`|B|` on a uniform
             angular grid (leading surface axis — note simsopt uses trailing).
         sqrtg: same shape, the Jacobian :math:`\sqrt{g}` on the grid.
-        n_lambda: fixed Gauss-Legendre quadrature order for the lambda
-            integral on ``[0, 1/Bmax]`` (replaces simsopt's adaptive quad;
-            the nodes exclude the ``lambda = 1/Bmax`` endpoint).
+        n_lambda: fixed Gauss-Legendre order after the substitution
+            :math:`y=\sqrt{1-\lambda B_{\max}}` (replaces simsopt's
+            adaptive quadrature).
 
     Returns:
         ``(Bmin, Bmax, epsilon, fsa_B2, fsa_1overB, f_t)`` — 1D arrays of
@@ -189,7 +190,8 @@ def compute_trapped_fraction(modB: Array, sqrtg: Array, *, n_lambda: int = 64):
     x = jnp.asarray(0.5 * (nodes + 1.0), dtype=modB.dtype)      # (nl,) in (0, 1)
     wq = jnp.asarray(0.5 * weights, dtype=modB.dtype)
 
-    lam = x[None, :] / Bmax[:, None]                            # (nsurf, nl)
+    y = x[None, :]
+    lam = (1.0 - y * y) / Bmax[:, None]
     arg = 1.0 - lam[:, :, None, None] * modB[:, None, :, :]
     # Double-where guard: at the |B| = Bmax grid point arg -> 0 as
     # lambda -> 1/Bmax; d/dx sqrt(x) is infinite there, so reverse-mode AD
@@ -198,8 +200,9 @@ def compute_trapped_fraction(modB: Array, sqrtg: Array, *, n_lambda: int = 64):
     safe = jnp.where(positive, arg, 1.0)
     root = jnp.where(positive, jnp.sqrt(safe), 0.0)
     fsa_root = (jnp.mean(root * w[:, None, :, :], axis=(2, 3))
-                / Vp[:, None])                                  # <sqrt(1 - lam B)>
-    integral = jnp.sum(wq[None, :] * lam / fsa_root, axis=1) / Bmax
+                / Vp[:, None])
+    integral = jnp.sum(
+        wq[None, :] * 2.0 * y * lam / fsa_root, axis=1) / Bmax
     f_t = 1.0 - 0.75 * fsa_B2 * integral
     return Bmin, Bmax, epsilon, fsa_B2, fsa_1overB, f_t
 
@@ -266,8 +269,7 @@ def redl_geometry_from_wout(
     if isinstance(wout, (str, Path)):
         wout = read_wout(wout)
     wout = getattr(wout, "wout", wout)
-    if bool(getattr(wout, "lasym", False)):
-        raise NotImplementedError("redl_geometry_from_wout supports lasym = False only")
+    lasym = bool(getattr(wout, "lasym", False))
 
     surfaces = _as_1d(surfaces)
     nfp = int(wout.nfp)
@@ -287,6 +289,14 @@ def redl_geometry_from_wout(
     mn = int(xm.shape[0])
     bmnc = half(_mode_matrix(wout, "bmnc", ns=ns, mn=mn))
     gmnc = half(_mode_matrix(wout, "gmnc", ns=ns, mn=mn))
+    bmns = half(_mode_matrix(wout, "bmns", ns=ns, mn=mn)) if lasym else None
+    gmns = half(_mode_matrix(wout, "gmns", ns=ns, mn=mn)) if lasym else None
+    axis_modes = (surfaces == 0.0)[:, None] & (xm != 0.0)[None, :]
+    bmnc, gmnc = jnp.where(axis_modes, 0.0, bmnc), jnp.where(
+        axis_modes, 0.0, gmnc)
+    if lasym:
+        bmns, gmns = jnp.where(axis_modes, 0.0, bmns), jnp.where(
+            axis_modes, 0.0, gmns)
 
     theta1d = jnp.linspace(0.0, 2.0 * jnp.pi, int(ntheta), endpoint=False)
     phi1d = jnp.linspace(0.0, 2.0 * jnp.pi / nfp, int(nphi), endpoint=False)
@@ -295,6 +305,10 @@ def redl_geometry_from_wout(
     cosangle = jnp.cos(angle)
     modB = jnp.einsum("sm,tpm->stp", bmnc, cosangle)
     sqrtg = jnp.einsum("sm,tpm->stp", gmnc, cosangle)
+    if lasym:
+        sinangle = jnp.sin(angle)
+        modB += jnp.einsum("sm,tpm->stp", bmns, sinangle)
+        sqrtg += jnp.einsum("sm,tpm->stp", gmns, sinangle)
 
     Bmin, Bmax, epsilon, fsa_B2, fsa_1overB, f_t = compute_trapped_fraction(
         modB, sqrtg, n_lambda=n_lambda)
@@ -328,6 +342,65 @@ class _HalfMeshFields(NamedTuple):
     nfp: int
 
 
+def _full_surface_values(values: Array, *, lasym: bool) -> Array:
+    """Drop the axis slot and restore the full poloidal surface."""
+    values = jnp.asarray(values)[1:]
+    if lasym:
+        return values
+    ntheta2, nzeta = int(values.shape[1]), int(values.shape[2])
+    ntheta1 = max(2 * (ntheta2 - 1), 1)
+    i_full = np.arange(ntheta1)
+    i_src = np.where(i_full < ntheta2, i_full, ntheta1 - i_full)
+    k = np.arange(nzeta)
+    k_src = np.where(
+        i_full[:, None] < ntheta2, k[None, :],
+        (nzeta - k[None, :]) % nzeta,
+    )
+    return values[:, np.broadcast_to(i_src[:, None], k_src.shape), k_src]
+
+
+def _trapped_fraction_from_fields(
+    *,
+    total_pressure,
+    pressure,
+    sqrt_g,
+    s_full,
+    surfaces,
+    lasym: bool,
+    n_lambda: int,
+    serial_surfaces: bool = False,
+):
+    """Evaluate trapped-fraction quantities from an existing field pass."""
+    b2 = 2.0 * (
+        jnp.asarray(total_pressure) - jnp.asarray(pressure)[:, None, None])
+    tiny = jnp.asarray(jnp.finfo(b2.dtype).tiny, dtype=b2.dtype)
+    modB = _full_surface_values(jnp.sqrt(jnp.maximum(b2, tiny)), lasym=lasym)
+    sqrtg = jnp.abs(_full_surface_values(sqrt_g, lasym=lasym))
+    s_full = jnp.asarray(s_full)
+    s_half = 0.5 * (s_full[:-1] + s_full[1:])
+
+    def interpolate(values):
+        result = _interp_half_grid(values, surfaces, s_half)
+        axis_samples = jnp.mean(values, axis=1, keepdims=True)
+        axis = _interp_half_grid(
+            axis_samples, jnp.zeros((1,), dtype=surfaces.dtype), s_half)[0]
+        mask = (surfaces == 0.0).reshape(
+            (surfaces.shape[0],) + (1,) * (values.ndim - 1))
+        result = jnp.where(mask, axis, result)
+        return result
+
+    modB = interpolate(modB)
+    sqrtg = interpolate(sqrtg)
+    if serial_surfaces:
+        result = jax.lax.map(
+            lambda x: compute_trapped_fraction(
+                x[0][None], x[1][None], n_lambda=n_lambda),
+            (modB, sqrtg),
+        )
+        return tuple(x[:, 0] for x in result)
+    return compute_trapped_fraction(modB, sqrtg, n_lambda=n_lambda)
+
+
 def _half_mesh_fields(state: SpectralState, rt: SolverRuntime) -> _HalfMeshFields:
     """One ``_field_chain`` pass -> the half-mesh inputs of both bootstrap lanes.
 
@@ -340,34 +413,17 @@ def _half_mesh_fields(state: SpectralState, rt: SolverRuntime) -> _HalfMeshField
     :func:`~vmex.core.fields.surface_currents` (``bvco``/``buco``).
     """
     setup = rt.setup
-    if bool(setup.lasym):
-        raise NotImplementedError(
-            "bootstrap state-lane evaluation supports lasym = False only")
     s = jnp.asarray(setup.s_full)
     nfp = int(rt.resolution.nfp)
     _, jacobian, _, fields, _ = _field_chain(state, rt)
 
-    # Mirror the reduced [0, pi] theta grid to the full circle
-    # (stellarator-symmetry map X(2 pi - theta, -zeta) = X(theta, zeta)).
-    ntheta2 = int(np.shape(fields.total_pressure)[1])
-    nzeta = int(np.shape(fields.total_pressure)[2])
-    ntheta1 = max(2 * (ntheta2 - 1), 1)
-    i_full = np.arange(ntheta1)
-    i_src = np.where(i_full < ntheta2, i_full, ntheta1 - i_full)
-    k = np.arange(nzeta)
-    k_src = np.where(i_full[:, None] < ntheta2, k[None, :],
-                     (nzeta - k[None, :]) % nzeta)
-    i_src = np.broadcast_to(i_src[:, None], (ntheta1, nzeta))
-
-    def full(a):
-        # Drop the zeroed axis row (js = 0) before the divisions downstream.
-        return jnp.asarray(a)[1:, i_src, k_src]
-
     bsq2 = 2.0 * (jnp.asarray(fields.total_pressure)
                   - jnp.asarray(fields.pressure)[:, None, None])
     tiny = jnp.asarray(jnp.finfo(bsq2.dtype).tiny, dtype=bsq2.dtype)
-    bmag = jnp.sqrt(jnp.maximum(full(bsq2), tiny))     # half mesh js = 1..ns-1
-    w = jnp.abs(full(jacobian.sqrt_g))
+    bmag = _full_surface_values(
+        jnp.sqrt(jnp.maximum(bsq2, tiny)), lasym=bool(setup.lasym))
+    w = jnp.abs(_full_surface_values(
+        jacobian.sqrt_g, lasym=bool(setup.lasym)))
 
     iota_h = _iotas_half(state, rt)[1:]
     cur = surface_currents(bsubu=fields.bsubu, bsubv=fields.bsubv,
@@ -424,6 +480,34 @@ def redl_geometry_from_state(
     surfaces = _as_1d(surfaces)
     return _geometry_from_half(_half_mesh_fields(state, rt), surfaces,
                                n_lambda=n_lambda)
+
+
+def trapped_fraction_from_state(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    surfaces=None,
+    n_lambda: int = 64,
+) -> Array:
+    """Effective trapped fraction on requested normalized-flux surfaces.
+
+    The default is VMEX's full radial mesh. The axis keeps only the regular
+    poloidal ``m=0`` limit; the boundary uses linear half-mesh extrapolation.
+    LASYM uses the full poloidal grid; symmetric runs restore it by parity.
+    """
+    if surfaces is None:
+        surfaces = jnp.asarray(rt.setup.s_full)
+    surfaces = _as_1d(surfaces)
+    _, jacobian, _, fields, _ = _field_chain(state, rt)
+    return _trapped_fraction_from_fields(
+        total_pressure=fields.total_pressure,
+        pressure=fields.pressure,
+        sqrt_g=jacobian.sqrt_g,
+        s_full=rt.setup.s_full,
+        surfaces=surfaces,
+        lasym=bool(rt.setup.lasym),
+        n_lambda=n_lambda,
+    )[-1]
 
 
 # ===========================================================================

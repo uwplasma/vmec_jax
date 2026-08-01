@@ -16,6 +16,7 @@ Usage
    vmex --plot mout_*.nc       — straight-axis mirror diagnostics
    vmex --booz wout_*.nc       — run booz_xform_jax, write boozmn_*.nc
    vmex --plot boozmn_*.nc     — Boozer contour/spectrum plots
+   vmex --scale PATH [B R]     — dimensionally scale an input or WOUT
    vmex --doctor               — installation and JAX backend diagnostics
    vmex --test                 — run and plot the bundled quick-start case
 
@@ -37,6 +38,10 @@ Options
        a ``mout_*.nc`` file, plot horizontal straight-axis mirror diagnostics;
        with a ``boozmn_*.nc`` file, plot Boozer diagnostics; with an input
        file, solve first and plot the resulting WOUT.
+   * - ``--scale``
+     - Write a scaled input or WOUT. Optional positional factors are
+       ``B_scale R_scale``; with no factors the targets are
+       ``|b0| = 5.7 T`` and ``Aminor_p = 1.7 m`` (ARIES-CS).
    * - ``--booz``
      - Run ``booz_xform_jax`` after solving, or directly from a ``wout_*.nc``
        file, and write ``boozmn_*.nc``.
@@ -62,10 +67,10 @@ Options
      - Override the final-stage ``FTOL_ARRAY`` tolerance.
    * - ``--max-iter N``
      - Override the final-stage ``NITER_ARRAY`` iteration cap.
-   * - ``--no-prefetch-compile``
-     - Compile solver lanes sequentially to reduce peak memory. The default
-       overlaps compilation to reduce cold-start latency; numerical results
-       are identical.
+   * - ``--prefetch-compile`` / ``--no-prefetch-compile``
+     - Opt in to or out of overlapping the next multigrid rung's compilation.
+       Sequential compilation is the default and uses less peak memory;
+       numerical results are identical.
    * - ``--jacobian-retries N``
      - Retry a stage from its best finite checkpoint after the VMEC2000
        75-Jacobian-reset condition, using a reduced ``DELT`` (default 2).

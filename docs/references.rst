@@ -114,3 +114,21 @@ Confinement objectives and optimization:
     with electromagnetic coils,” *PNAS* 119(13), e2202084119 (2022) — coil
     regularization set (length, curvature, coil–coil distance) and the
     normalized ``max |B·n|/|B|`` reporting convention.
+
+28. K. Unalmis et al., “Spectrally accurate, reverse-mode differentiable
+    bounce-averaging algorithm and its applications,” *Journal of Plasma
+    Physics* (2026), doi:10.1017/S0022377826101652 — endpoint-regularized
+    quadrature and the independent DESC oracle for
+    :mod:`vmex.core.bounce`.
+
+29. E. Rodríguez, P. Helander, and A. G. Goodman, “The maximum-J property
+    in quasi-isodynamic stellarators,” *Journal of Plasma Physics* 90,
+    905900212 (2024), doi:10.1017/S0022377824000345 — the signed
+    :math:`\partial\mathcal J_\parallel/\partial\psi<0` condition implemented
+    by :class:`~vmex.core.maxj.MaximumJResidual`.
+
+30. E. Rodríguez and G. G. Plunk, “Near-axis quasi-isodynamic database,”
+    *Journal of Plasma Physics* (2026),
+    doi:10.1017/S0022377826101688 — defines the bounce-time-weighted
+    Maxwellian maximum-J fraction :math:`f_J`, which is distinct from a
+    uniform resolved-orbit count.

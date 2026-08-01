@@ -11,12 +11,16 @@ import jax
 import numpy as np
 import pytest
 
+from vmex.core import bootstrap
 from vmex.core import device as device_policy
 from vmex.core import errors
 from vmex.core import implicit as im
 from vmex.core import freeboundary, multigrid, optimize, solver
+from vmex.core.bounce import bounce_action
 from vmex.core.input import VmecInput
+from vmex.core.maxj import maximum_j_residual_from_boozer
 from vmex.core.mgrid import MgridField
+from vmex.core.qi import j_invariant_qi_residual_from_boozer
 from vmex.core.wout import wout_from_state
 from vmex.mirror import (
     MirrorBoundary,
@@ -91,6 +95,75 @@ def test_gpu_is_default_without_platform_environment_pins():
 
 
 @_requires_gpu
+def test_bounce_action_cpu_gpu_parity():
+    """Multiple-well values and derivatives agree on the discovered GPU."""
+    outputs = {}
+    for name, device in (("cpu", jax.devices("cpu")[0]), ("gpu", _gpu())):
+        with device_policy.device_scope(device):
+            phi = jax.numpy.arange(512, dtype=jax.numpy.float64) * (
+                2.0 * jax.numpy.pi / 512)
+
+            def value(amplitude):
+                result = bounce_action(
+                    1.0 + amplitude * jax.numpy.cos(2.0 * phi), 1.0)
+                return jax.numpy.nansum(result["action"])
+
+            amplitude = jax.numpy.asarray(0.2)
+            outputs[name] = (
+                jax.device_get(value(amplitude)),
+                jax.device_get(jax.grad(value)(amplitude)),
+            )
+    np.testing.assert_allclose(outputs["cpu"], outputs["gpu"], rtol=1e-10)
+
+
+@_requires_gpu
+def test_j_invariant_qi_cpu_gpu_parity():
+    """Action-invariance values and derivatives agree on CPU and GPU."""
+    outputs = {}
+    for name, device in (("cpu", jax.devices("cpu")[0]), ("gpu", _gpu())):
+        with device_policy.device_scope(device):
+            def value(perturbation):
+                result = j_invariant_qi_residual_from_boozer(
+                    bmnc_b=jax.numpy.array([[1.0, 0.2, perturbation]]),
+                    xm_b=[0.0, 0.0, 1.0], xn_b=[0.0, 2.0, 0.0],
+                    iota_b=[0.4], G_b=[2.0], I_b=[0.0], nfp=2,
+                    pitch=[1.0], nalpha=7, points_per_period=64,
+                    num_periods=4, max_wells=6)
+                return result["total"]
+
+            perturbation = jax.numpy.asarray(0.06)
+            outputs[name] = (
+                jax.device_get(value(perturbation)),
+                jax.device_get(jax.grad(value)(perturbation)),
+            )
+    np.testing.assert_allclose(outputs["cpu"], outputs["gpu"], rtol=1e-10)
+
+
+@_requires_gpu
+def test_maximum_j_cpu_gpu_parity():
+    """Matched-well values and derivatives agree on CPU and GPU."""
+    outputs = {}
+    for name, device in (("cpu", jax.devices("cpu")[0]), ("gpu", _gpu())):
+        with device_policy.device_scope(device):
+            def value(outer_mean):
+                result = maximum_j_residual_from_boozer(
+                    bmnc_b=jax.numpy.array([[1.0, 0.2], [outer_mean, 0.2]]),
+                    xm_b=[0.0, 0.0], xn_b=[0.0, 2.0],
+                    iota_b=[0.4, 0.45], G_b=[2.0, 2.0], I_b=[0.0, 0.0],
+                    nfp=2, psi_b=[0.25, 0.75], psi_edge=1.0,
+                    pitch=[1.0 / 1.1], nalpha=5, points_per_period=64,
+                    num_periods=4, max_wells=6)
+                return result["total"]
+
+            outer_mean = jax.numpy.asarray(0.98)
+            outputs[name] = (
+                jax.device_get(value(outer_mean)),
+                jax.device_get(jax.grad(value)(outer_mean)),
+            )
+    np.testing.assert_allclose(outputs["cpu"], outputs["gpu"], rtol=1e-10)
+
+
+@_requires_gpu
 def test_implicit_default_follows_jax_but_auto_prefers_cpu():
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     following_jax = im.params_from_input(inp)
@@ -98,6 +171,27 @@ def test_implicit_default_follows_jax_but_auto_prefers_cpu():
 
     assert {_platform(x) for x in jax.tree.leaves(following_jax)} == {"gpu"}
     assert {_platform(x) for x in jax.tree.leaves(automatic)} == {"cpu"}
+
+
+@_requires_gpu
+def test_trapped_fraction_value_and_gradient_cpu_gpu_parity():
+    def value_and_gradient(device):
+        with device_policy.device_scope(device):
+            zeta = jax.numpy.linspace(
+                0.0, 2.0 * jax.numpy.pi, 128, endpoint=False)
+            amplitude = jax.device_put(0.15, device)
+
+            def objective(a):
+                modb = 1.0 + a * jax.numpy.cos(zeta)
+                modb = jax.numpy.broadcast_to(modb, (2, 8, zeta.size))
+                return jax.numpy.sum(bootstrap.compute_trapped_fraction(
+                    modb, 1.2 / modb**2, n_lambda=32)[-1])
+
+            return jax.value_and_grad(objective)(amplitude)
+
+    cpu = value_and_gradient(jax.devices("cpu")[0])
+    gpu = value_and_gradient(_gpu())
+    np.testing.assert_allclose(gpu, cpu, rtol=2e-11, atol=2e-12)
 
 
 @_requires_gpu
@@ -321,7 +415,8 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
     monkeypatch.setattr(
         freeboundary, "_solve_free_boundary_stage", recording_solve_stage,
     )
-    for platform in ("cpu", "gpu"):
+    gpu_target = jax.devices("gpu")[-1]
+    for platform, target in (("cpu", "cpu"), ("gpu", gpu_target)):
         active_platform[0] = platform
         lines = []
         results[platform] = multigrid.solve_free_boundary_multigrid(
@@ -331,7 +426,7 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
             emit=lambda *args, _lines=lines, **kwargs: _lines.append(
                 args[0] if args else ""
             ),
-            device=platform,
+            device=target,
         )
         output[platform] = "".join(lines)
 
@@ -348,6 +443,9 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
     assert stage_devices["gpu"][1] == {
         "field": {"gpu"}, "state": {"gpu"}, "vacuum": {"gpu"},
     }
+    assert all(
+        leaf.device == gpu_target for leaf in jax.tree.leaves(results["gpu"].state)
+    )
     assert solve_devices == {"cpu": None, "gpu": "cpu"}
     np.testing.assert_allclose(
         [results["gpu"].fsqr, results["gpu"].fsqz, results["gpu"].fsql],
@@ -397,6 +495,25 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
         )
         for platform, result in results.items()
     }
+    assert wouts["cpu"].vmex_diagnostics_schema == 1
+    assert wouts["gpu"].vmex_diagnostics_schema == 1
+    np.testing.assert_allclose(
+        wouts["gpu"].vmex_trapped_fraction,
+        wouts["cpu"].vmex_trapped_fraction,
+        rtol=2e-10,
+        atol=2e-12,
+    )
+    for name in (
+        "rmnc", "zmns", "rmns", "zmnc", "lmns", "lmnc",
+        "bmnc", "bmns", "iotaf",
+    ):
+        np.testing.assert_allclose(
+            getattr(wouts["gpu"], name),
+            getattr(wouts["cpu"], name),
+            rtol=5e-4,
+            atol=1e-9,
+            err_msg=name,
+        )
     for name in (
         "potsin",
         "potcos",
@@ -424,7 +541,10 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
         return solve_stage(*args, **kwargs)
 
     monkeypatch.setattr(freeboundary, "_solve_free_boundary_stage", recording_restart)
-    for target, source in (("gpu", "cpu"), ("cpu", "gpu")):
+    for platform, target, source in (
+        ("gpu", gpu_target, "cpu"),
+        ("cpu", "cpu", "gpu"),
+    ):
         seed = results[source].state
         seed = dataclasses.replace(
             seed,
@@ -440,8 +560,8 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
             max_iterations=1,
             error_on_no_convergence=False, initial_state=seed, device=target,
         )
-        assert _platform(restarted.state.R_cos) == target
-        assert _platform(restart_inputs[-1].R_cos) == target
+        assert _platform(restarted.state.R_cos) == platform
+        assert _platform(restart_inputs[-1].R_cos) == platform
         for family in ("R_cos", "R_sin", "Z_sin", "Z_cos"):
             np.testing.assert_array_equal(
                 getattr(restart_inputs[-1], family)[-1],
@@ -685,6 +805,94 @@ def _assert_audit_matches(inp, reference, audit, *, value_rtol, grad_rtol,
             err_msg=f"{name} gradient diverged on {label}")
 
 
+def _block_response_audit(inp, device):
+    with device_policy.device_scope(device):
+        cfg = im.make_config(inp, ftol=1e-13, max_iterations=2000)
+        params = im.params_from_input(inp)
+        state, mask = im.solve_implicit_with_aux(params, cfg)
+        zero = jax.tree.map(jax.numpy.zeros_like, params)
+        tangent = dataclasses.replace(
+            zero, rbc=zero.rbc.at[inp.ntor, 1].set(1.0)
+        )
+        tangent_batch = jax.tree.map(lambda value: value[None], tangent)
+        state_tangent, report = im.implicit_state_tangent_multi_rhs(
+            params, cfg, state, mask, tangent_batch,
+            probe_chunk_size=4, response_chunk_size=1,
+        )
+        cotangent = jax.tree.map(
+            lambda value: jax.numpy.ones((1,) + value.shape, value.dtype),
+            state,
+        )
+        pullback = im.implicit_state_pullback_multi_rhs(
+            params, cfg, state, mask, cotangent, solver="block",
+            probe_chunk_size=4, response_chunk_size=1,
+        )
+        direction = jax.jvp(
+            lambda x, p: im.aspect_ratio(
+                x, im.runtime_from_params(p, cfg)
+            ),
+            (state, params),
+            (jax.tree.map(lambda value: value[0], state_tangent), tangent),
+        )[1]
+        result = (
+            state_tangent, report, direction, pullback.rbc[0, inp.ntor, 1]
+        )
+        return jax.tree.map(
+            lambda value: value.block_until_ready(), result
+        )
+
+
+@_requires_gpu
+def test_block_response_cpu_gpu_parity():
+    """Factor-once tangents and transpose responses obey the device contract."""
+    _assert_no_platform_pins()
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    devices = (jax.devices("cpu")[0], *jax.devices("gpu"))
+    audits = [_block_response_audit(inp, device) for device in devices]
+    reference = audits[0]
+    for device, (tangent, report, direction, pullback) in zip(
+        devices, audits, strict=True
+    ):
+        assert all(
+            value.devices() == {device} for value in jax.tree.leaves(tangent)
+        )
+        assert np.all(np.asarray(report.converged))
+        np.testing.assert_allclose(
+            direction, reference[2], rtol=2e-9, atol=1e-12
+        )
+        np.testing.assert_allclose(
+            pullback, reference[3], rtol=2e-9, atol=1e-12
+        )
+
+
+@_requires_gpu
+def test_implicit_optimizer_nondefault_gpu_parity():
+    """Optimizer constants must be created directly on the selected GPU."""
+    devices = jax.devices("gpu")
+    if len(devices) < 2:
+        pytest.skip("needs two GPUs")
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    results = [
+        optimize.least_squares(
+            [(optimize.aspect_ratio, 4.0, 1.0)],
+            inp,
+            max_mode=1,
+            jac="implicit",
+            jac_solver="block",
+            max_nfev=1,
+            device=device,
+        )
+        for device in devices[:2]
+    ]
+    assert all(np.all(np.isfinite(result.jac)) for result in results)
+    np.testing.assert_allclose(
+        results[1].fun, results[0].fun, rtol=2e-9, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        results[1].jac, results[0].jac, rtol=2e-8, atol=1e-11
+    )
+
+
 # (device, ftol, max_iterations) -> reference audit.  Memoized so the three
 # lanes per rig do not repeat the 7-metric reference sweep; computed lazily so
 # the cold-start lane can run its target-device audit FIRST.
@@ -715,6 +923,35 @@ def _second_gpus():
     if len(gpus) < 2:
         pytest.skip("needs at least two GPUs")
     return gpus
+
+
+@_requires_gpu
+def test_second_gpu_relocation_preserves_values():
+    """Cross-accelerator placement must not trust unsafe peer copies."""
+    source, target = _second_gpus()[:2]
+    values = jax.device_put(np.arange(16.0), source)
+    moved = device_policy._put_numeric_leaves(values, target)
+    np.testing.assert_array_equal(np.asarray(moved), np.asarray(values))
+    assert moved.devices() == {target}
+
+
+@_requires_gpu
+def test_second_gpu_runtime_profiles_preserve_values():
+    """Profile quadrature constants must follow the selected accelerator."""
+    gpus = _second_gpus()
+    inp = VmecInput.from_file(DATA_DIR / "input.cth_like_free_bdy")
+    resolution = solver.resolution_from_input(inp, ns=15)
+    runtimes = []
+    for device in gpus[:2]:
+        with jax.default_device(device):
+            runtime = solver.prepare_runtime(inp, resolution)
+        assert {leaf.device for leaf in jax.tree.leaves(runtime)} == {device}
+        runtimes.append(runtime)
+    assert np.any(np.asarray(runtimes[0].setup.icurv) != 0.0)
+    for left, right in zip(
+        jax.tree.leaves(runtimes[0]), jax.tree.leaves(runtimes[1]), strict=True
+    ):
+        np.testing.assert_array_equal(left, right)
 
 
 @_requires_gpu

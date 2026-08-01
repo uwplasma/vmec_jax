@@ -199,6 +199,31 @@ isodynamic** (QI) field is an omnigenous field whose :math:`|B|` contours close
 poloidal and the bootstrap current is small by construction — the target of the
 nfp1–nfp4 decks in ``examples/data/``.
 
+Bounce action
+~~~~~~~~~~~~~
+
+:func:`vmex.core.bounce.bounce_action` evaluates the physical-pitch form
+
+.. math::
+
+   \mathcal J_\parallel
+   = 2\int_{\ell_1}^{\ell_2}\sqrt{1-\lambda B}\,d\ell
+
+for every complete magnetic well in a sampled field line. The factor two
+closes the bounce orbit; multiply by the chosen reference speed for a
+dimensional invariant. Crossings and wells retain fixed array shapes, while a
+sine-mapped Gauss--Legendre rule removes the square-root singularity at each
+bounce point. Invalid slots are NaN and carry explicit absent, marginal,
+merged, truncated, and overflow masks.
+
+:func:`vmex.core.bounce.bounce_action_from_boozer` synthesizes field lines from
+``booz_xform``-convention harmonics. It uses
+:math:`d\ell/d\zeta_B=|G+\iota I|/B`, so pitch values are shared physical
+values rather than separately normalized levels. Both entry points support
+JIT, forward AD, and reverse AD. Derivatives are defined within a fixed well
+topology; marginal and merged masks identify topology changes that an
+optimizer must exclude or resolve.
+
 The constructed-QI target
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -229,6 +254,68 @@ residual — each an **exact zero of an exactly QI field** — are stacked:
 Every operation (sigmoid occupancies, running maxima, level-space quadrature) is
 smooth or piecewise-smooth, so the residual is jit/grad/jvp-transparent and QI
 optimization runs with the exact implicit adjoint, exactly like the QS residual.
+
+VMEX keeps the three QI formulations separate:
+
+* :class:`~vmex.core.omnigenity.QIResidual` is the existing compact level-set
+  objective; its call signature and defaults are unchanged.
+* :class:`~vmex.core.qi.ConstructedQIResidual` applies the fuller smooth
+  squash-and-shuffle construction to the same traceable Boozer spectrum.
+* :class:`~vmex.core.qi.JInvariantQIResidual` directly minimizes variation of
+  :math:`\mathcal J_\parallel` over complete wells. Its pitch array is supplied
+  in inverse tesla and is shared across surfaces; it is never renormalized
+  independently on each field line.
+
+The action residual excludes cut edge wells but retains complete wells inside
+the bounded trace. A pitch block with no complete well on even one sampled field
+line, a marginal or merged level, or more wells than ``max_wells`` returns NaN
+with a false ``valid_pitch`` flag. This makes a topology error visible instead
+of turning it into a favorable zero. The low-level Boozer-spectrum function
+accepts cosine and sine harmonics; the equilibrium objective retains the
+traceable Boozer transform's current explicit ``lasym=False`` guard.
+
+Maximum-J
+~~~~~~~~~~~~~
+
+A maximum-J field satisfies
+
+.. math::
+
+   \left.\frac{\partial\mathcal J_\parallel}{\partial\psi}
+   \right|_{\alpha,\lambda} < 0 ,
+
+where :math:`\psi` is signed toroidal flux divided by :math:`2\pi`.
+:class:`~vmex.core.maxj.MaximumJResidual` evaluates the action at the same
+physical pitch and field-line label on adjacent surfaces, pairs complete wells
+only when they are reciprocal nearest neighbours, and forms the physical
+finite-difference derivative. The least-squares rows use the dimensionless
+slope :math:`|\psi_{\rm edge}|\,(\partial J/\partial\psi)/J`; ``target=0``
+penalizes only violations of the condition above, while a negative target
+requests a finite margin.
+
+The result also reports the maximum-J fraction of resolved trapped samples,
+the fraction meeting ``target``, deep and shallow subsets split at normalized
+trapping depth
+:math:`(B_{\max}-1/\lambda)/(B_{\max}-B_{\min})=1/2`, and the fraction of
+radial-pitch blocks excluded by topology guards. Fractions are uniform over
+the supplied pitch samples by default; ``pitch_weights`` accepts user
+quadrature weights. These values are not the bounce-time-weighted Maxwellian
+phase-space fraction :math:`f_J` defined by Rodríguez and Plunk. That
+diagnostic additionally requires radial and pitch integration weighted by the
+normalized bounce time.
+
+VMEX carries the VMEC sign convention into this diagnostic:
+``psi_edge = signgs*phiedge/(2*pi)`` and the ``APHI`` remap sets the half-mesh
+``psi_b`` values. Reversing that signed coordinate reverses ``dJ/dpsi``; the
+implementation does not silently replace it by an unsigned radial label.
+A nonmonotone flux map, missing or ambiguous well, topology transition, or
+well displacement beyond ``match_tolerance`` returns NaN with
+``valid_pitch_pair=False``.
+
+Maximum-J remains a separate objective term. Users combine it with any QI,
+aspect-ratio, iota, stability, or engineering residual through VMEX's ordinary
+composite least-squares interface; no fixed QI-plus-maximum-J weighting is
+built into the class.
 
 .. _confinement-qi-fidelity:
 
@@ -452,7 +539,11 @@ substitution :math:`y=\sqrt{1-\lambda B_{\max}}` in
          \frac{\lambda\,d\lambda}{\langle\sqrt{1-\lambda B}\rangle},
 
 evaluated with fixed-order Gauss–Legendre quadrature so the whole chain stays
-differentiable. Their normalized mismatch is the residual
+differentiable. :func:`~vmex.core.bootstrap.trapped_fraction_from_state`
+evaluates the radial profile directly from a converged state; every VMEX WOUT
+stores the same full-mesh result as ``vmex_trapped_fraction``. A QI axis with
+finite :math:`B_0(\varphi)` mirror ratio therefore has a finite trapped
+fraction rather than an imposed zero. Their normalized mismatch is the residual
 :class:`~vmex.core.bootstrap.RedlBootstrapMismatch` (the exact formula and
 the finite-beta profile conventions are in :doc:`equations`); driving it to
 zero, optionally with ``current_dofs`` freed, yields a current profile

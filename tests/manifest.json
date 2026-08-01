@@ -13,6 +13,7 @@
     ["tests/mirror/test_qi_hybrid.py", "mirror", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-mirror-spline", "full-mirror-spline"]],
     ["tests/mirror/test_splines.py", "mirror", "integration", "slow", "cpu-gpu", "none", "analytic", ["pr-mirror-spline", "full-mirror-spline"]],
     ["tests/test_baseline_benchmark.py", "infrastructure", "oracle", "fast", "cpu", "golden", "golden", ["pr-parity-c1", "full-core-a-c"]],
+    ["tests/test_bounce.py", "diagnostics", "ad", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "full-core-a-c"]],
     ["tests/test_bootstrap.py", "diagnostics", "oracle", "slow", "cpu", "golden", "external", ["pr-parity-b", "full-core-a-c"]],
     ["tests/test_boozer_tables.py", "diagnostics", "oracle", "medium", "cpu", "golden", "golden", ["pr-parity-c1", "full-core-a-c"]],
     ["tests/test_capability_docs.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c2", "full-core-a-c"]],
@@ -48,9 +49,11 @@
     ["tests/test_input_profiles.py", "equilibrium", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-c1", "pr-fast", "full-core-i"]],
     ["tests/test_lasym_free_convergence.py", "free-boundary", "campaign", "campaign", "cpu-gpu", "generated", "vmec2000", ["pr-full-only", "full-core-j-m"]],
     ["tests/test_lgradb.py", "diagnostics", "ad", "medium", "cpu-gpu", "none", "fd", ["pr-parity-c3", "full-core-j-m"]],
+    ["tests/test_maxj.py", "diagnostics", "ad", "slow", "cpu-gpu", "none", "fd", ["pr-parity-c2", "full-core-j-m"]],
     ["tests/test_mgrid.py", "free-boundary", "unit", "fast", "cpu", "generated", "analytic", ["pr-parity-c1", "pr-fast", "full-core-j-m"]],
     ["tests/test_multigrid_interp.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-j-m"]],
     ["tests/test_multigrid_ladder.py", "equilibrium", "oracle", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-j-m"]],
+    ["tests/test_near_degenerate_vacuum.py", "equilibrium", "oracle", "slow", "cpu-gpu", "none", "vmec2000", ["pr-full-only", "full-core-n-s"]],
     ["tests/test_nonfinite_failfast.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-n-s"]],
     ["tests/test_omnigenity.py", "diagnostics", "ad", "slow", "cpu-gpu", "golden", "fd", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_optimization_convergence.py", "optimization", "campaign", "campaign", "cpu-gpu", "golden", "external", ["pr-parity-c2"]],
@@ -68,9 +71,13 @@
     ["tests/test_preconditioner_2d.py", "equilibrium", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_printing.py", "interface", "unit", "fast", "cpu", "none", "golden", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
     ["tests/test_profiles.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
+    ["tests/test_qi_maxj_composition.py", "diagnostics", "unit", "fast", "cpu-gpu", "none", "none", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
+    ["tests/test_qi_reference_oracle.py", "diagnostics", "oracle", "fast", "cpu-gpu", "none", "external", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
+    ["tests/test_qi_residuals.py", "diagnostics", "ad", "slow", "cpu-gpu", "none", "fd", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_qi_free_boundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1", "full-core-n-s"]],
     ["tests/test_qi_sheet_gate.py", "free-boundary", "campaign", "campaign", "cpu-gpu", "generated", "vmec2000", ["pr-parity-a1"]],
     ["tests/test_recycle_drift.py", "optimization", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
+    ["tests/test_scaling.py", "equilibrium", "oracle", "slow", "cpu-gpu", "reference-nc", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_setup.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
     ["tests/test_setup_extras.py", "equilibrium", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_single_stage_simultaneous.py", "optimization", "ad", "slow", "cpu-gpu", "reference-nc", "fd", ["pr-parity-c2", "optional", "full-core-n-s"]],
@@ -93,8 +100,12 @@
   "selectors": {
     "pr-physics-core": [
       "tests/test_solver_end_to_end.py::test_converges_with_golden_iteration_count[solovev]",
+      "tests/test_near_degenerate_vacuum.py::test_current_free_vacuum_nonconvergence_suggests_lforbal",
       "tests/test_implicit_grad.py::test_solovev_gradients_vs_fd",
       "tests/test_implicit_grad.py::test_jdotb_and_glasser_gradients_vs_frozen_path_fd[solovev]",
+      "tests/test_bounce.py",
+      "tests/test_qi_residuals.py",
+      "tests/test_maxj.py",
       "tests/test_freeboundary.py::test_nestor_skip_branch_matches_full_solve",
       "tests/test_freeboundary.py::test_jac75_retry_rebuilds_vacuum_and_converges",
       "tests/test_freeboundary.py::test_vacuum_step_skip_reuses_cached_matrix",
@@ -103,7 +114,18 @@
       "tests/test_freeboundary_linear.py",
       "tests/test_freeboundary_diff.py::test_synthetic_surface_gradient_fd_validates",
       "tests/test_printing.py::test_compile_notice_variants",
-      "tests/test_printing.py::test_emit_flushed_writes_and_flushes"
+      "tests/test_printing.py::test_emit_flushed_writes_and_flushes",
+      "tests/test_bootstrap.py",
+      "tests/test_wout_golden.py",
+      "tests/test_scaling.py"
+    ],
+    "pr-implicit-response": [
+      "tests/test_implicit_multi_rhs.py::test_block_response_forward_transpose_and_fd",
+      "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block"
+    ],
+    "pr-implicit-response": [
+      "tests/test_implicit_multi_rhs.py::test_block_response_forward_transpose_and_fd",
+      "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block"
     ],
     "pr-physics-mirror-spline": [
       "tests/mirror/test_analytic.py",
@@ -112,6 +134,15 @@
     ],
     "pr-physics-mirror-output": ["tests/mirror/test_output.py"],
     "pr-device": [
+      "tests/test_device.py::test_fixed_boundary_builds_runtime_in_device_context",
+      "tests/test_device.py::test_fixed_boundary_honors_second_device_without_outer_context",
+      "tests/test_device.py::test_free_boundary_loads_mgrid_in_explicit_device_context[cpu-True]",
+      "tests/test_device.py::test_free_boundary_loads_mgrid_in_explicit_device_context[auto-False]",
+      "tests/test_device.py::test_put_numeric_leaves_preserves_metadata_and_none_contract",
+      "tests/test_device.py::test_put_numeric_leaves_host_stages_cross_accelerator_copy",
+      "tests/test_device.py::test_put_numeric_leaves_does_not_inspect_tracer_devices",
+      "tests/test_device.py::test_wout_builder_uses_state_device_context",
+      "tests/test_freeboundary_multigrid.py::test_stage_transfer_carries_vacuum_and_interpolates_final_xc",
       "tests/test_gpu_ci.py::test_device_scope_second_host_device_gradient_equality",
       "tests/test_gpu_ci.py::test_second_host_device_unconverged_adjoint_raises_typed_error"
     ],

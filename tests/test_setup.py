@@ -22,6 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from vmex.core import implicit as im
 from vmex.core.fourier import mode_table, trig_tables
 from vmex.core.geometry import (
     half_mesh_jacobian,
@@ -123,12 +124,25 @@ def test_profiles_and_current_lane(case):
     # phips carries a zeroed axis slot; lamscale is finite and positive.
     assert float(np.asarray(setup.phips)[0]) == 0.0
     assert np.isfinite(float(setup.lamscale)) and float(setup.lamscale) > 0.0
+    assert float(setup.psi_edge) == pytest.approx(
+        setup.signgs * float(case.inp.phiedge) / (2.0 * np.pi))
     assert setup.ncurr == int(case.inp.ncurr)
     if setup.ncurr == 1 and abs(float(case.inp.curtor)) > 0 and np.any(
         np.asarray(case.inp.ac)
     ):
         # The current-driven deck must exercise a nonzero pcurr lane.
         assert np.any(np.asarray(setup.icurv) != 0.0)
+
+
+def test_signed_flux_updates_with_implicit_parameters():
+    inp = VmecInput.from_file(DATA_DIR / "input.nfp1_QI")
+    cfg = im.make_config(inp, ns=9)
+    params = im.params_from_input(inp, device=None)
+    scaled = dataclasses.replace(params, phiedge=1.2 * params.phiedge)
+    original = im.runtime_from_params(params, cfg).setup
+    updated = im.runtime_from_params(scaled, cfg).setup
+    np.testing.assert_allclose(updated.psi_edge, 1.2 * original.psi_edge)
+    np.testing.assert_allclose(updated.psi_half, 1.2 * original.psi_half)
 
 
 # ---------------------------------------------------------------------------

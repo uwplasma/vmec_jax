@@ -336,6 +336,17 @@ tokamak, a tie even on the aspect-100 case) — and peak memory is ≈30% higher
 to ~1e-10, so it changes the path, not the fixed point. Reach for it when the
 1D iteration count is the bottleneck or stalls, not as a blanket default.
 
+One such stall is reproducible on the aspect-100 case at ``ns=51`` and
+``FTOL=1e-11``.  With ``PRECON_TYPE='GMRES'`` and
+``PREC2D_THRESHOLD=1e-6``, VMEX converges in 18 iterations, while VMEC2000's
+finite-difference block GMRES remains at a maximum residual of ``2.05e-9``
+after 1,600 explicit ``PRE_NITER`` steps.  A separate VMEC2000 1-D solve
+converges and agrees with the VMEX result in ``wb`` to ``1.3e-11`` relative
+and in the primary geometry to better than ``1e-5``.  The opt-in live test
+``test_live_vmec2000_exact_jvp_gmres_robustness`` reproduces all three paths.
+This is a robustness result, not a CPU speed or memory claim: the small
+VMEC2000 1-D solve is still much cheaper than a cold JAX process.
+
 Memory
 ------
 
@@ -386,9 +397,56 @@ unaffected.  Library :func:`~vmex.core.multigrid.solve_multigrid` and
 :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` retain warm stage
 executables by default (the right policy for scans and repeated solves) and
 accept ``release_stage_cache=True`` to opt into the one-shot behaviour.
-The CLI normally overlaps compilation to reduce cold-start latency.  On
-memory-constrained hosts, ``--no-prefetch-compile`` instead compiles solver
-lanes sequentially; the library equivalent is ``prefetch_compile=False``.
+The CLI and library compile solver lanes sequentially by default.
+``--prefetch-compile`` (or ``prefetch_compile=True`` in the library) overlaps
+the next rung's compilation.  This can reduce cold-start latency on a
+core-rich host, but increases peak memory and can contend with the active
+solve when the available CPU set is small.  ``--no-prefetch-compile`` remains
+an explicit spelling of the default.
+
+Reproducible resource profiles
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``benchmarks/profile_resources.py`` is the common fixed-boundary,
+free-boundary, implicit-AD, and mirror resource harness. Each case runs in a
+fresh process and reports cold and warm wall time, OS peak RSS, device peak
+memory when the backend exposes it, residuals, iterations, native thread
+count, and output or gradient SHA-256. Prefetched fixed- and free-boundary
+rows also report XLA executable memory. Other rows state why no executable
+estimate is available.
+
+The harness selects hardware only through the public ``device=`` API. It
+records inherited JAX platform environment settings instead of creating
+them. ``--device gpu --device-index 1`` selects a second visible GPU by
+passing its JAX device object, without a platform environment pin. Fetch the
+released mgrid assets before the default free-boundary row::
+
+   python tools/fetch_assets.py --bundle reference-nc
+   python benchmarks/profile_resources.py --device cpu --out /tmp/vmex-resources.json
+
+An external high-resolution deck can replace the fixed and implicit inputs
+without copying it into the repository::
+
+   python benchmarks/profile_resources.py \
+     --cases fixed,implicit \
+     --fixed-input /path/to/input.hsx \
+     --implicit-input /path/to/input.hsx \
+     --vmec2000-executable /path/to/xvmec2000 \
+     --vmec2000-source /path/to/STELLOPT \
+     --vmecpp-python /path/to/vmecpp-python \
+     --vmecpp-source /path/to/vmecpp \
+     --vmecpp-threads 10 \
+     --out /tmp/hsx-resources.json
+
+The default retains compiled stages for a repeated library solve.
+``--release-stage-cache --no-prefetch-compile`` instead measures the
+lower-peak, one-shot policy used by the CLI. Its second timing can reload
+released stages and is therefore not an in-memory warm-run measurement.
+
+The report stores input and executable hashes, VMEX/JAX versions, VMEC++
+version, hardware, and git revision without storing private paths. Mirror
+scaling defaults to the ``5:7:4,7:13:7,9:17:9`` coarse/medium/fine ladder;
+``--mirror-ladder`` changes it explicitly.
 
 Implicit-storage experiments (recorded so they are not repeated)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -471,9 +529,9 @@ with the same explicit/``None``/active-context precedence (measurement in
 Persistent compilation cache
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``vmex`` enables JAX's persistent XLA compilation cache on accelerators,
-so the multi-second compile cost is paid once per machine, not once per
-process.
+``vmex`` enables JAX's persistent XLA compilation cache on CPUs and
+accelerators, so the multi-second compile cost is paid once per machine, not
+once per process.
 
 .. warning::
 

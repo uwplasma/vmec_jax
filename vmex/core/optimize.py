@@ -70,8 +70,6 @@ import jax.numpy as jnp
 
 from solvax import (
     auto_chunk_size,
-    block_thomas_factor,
-    block_thomas_solve,
     chunk_map,
 )
 
@@ -1224,9 +1222,10 @@ def least_squares(
     by 3-colored ``jax.jvp`` probes capture it completely at a cost
     independent of the dof count — then backsolves every dof right-hand side
     (:func:`solvax.block_thomas_factor` / :func:`solvax.block_thomas_solve`)
-    and certifies each column with a short warm-started GMRES pass against
-    the preconditioned system (same ``adjoint_tol`` norm; columns already at
-    tolerance cost one matvec).  ``"gmres"`` is the per-dof-column fallback
+    and certifies each column with a warm-started GMRES pass against the
+    preconditioned system (same ``adjoint_tol`` and configured iteration
+    budget; columns already at tolerance cost one matvec).  ``"gmres"`` is
+    the per-dof-column fallback
     if the block path misbehaves on an exotic configuration; both produce
     the same Jacobian to solver tolerance.  ``recycle=True`` takes
     precedence.
@@ -1544,8 +1543,9 @@ def _least_squares_implicit(
     cfg = dataclasses.replace(cfg, device=jac_device)
 
     def _place(x: np.ndarray) -> jnp.ndarray:
-        a = jnp.asarray(x, dtype=jnp.float64)
-        return a if jac_device is None else jax.device_put(a, jac_device)
+        if jac_device is None:
+            return jnp.asarray(x, dtype=jnp.float64)
+        return jax.device_put(np.asarray(x, dtype=np.float64), jac_device)
 
     params0 = imp.params_from_input(inp, device=jac_device)
     imp._template_runtime(cfg)  # host-built template: warm the per-cfg cache
@@ -1590,9 +1590,9 @@ def _least_squares_implicit(
         if k_cur:
             x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
     params0_np = jax.tree.map(lambda a: np.asarray(a, dtype=np.float64),
-                              params_of(jnp.asarray(x0, dtype=jnp.float64)))
+                              params_of(_place(x0)))
     _, mask_np = imp._host_solve_and_mask(cfg, params0_np)
-    mask_const = jax.tree.map(jnp.asarray, mask_np)
+    mask_const = jax.tree.map(_place, mask_np)
 
     # One-hot dof tangents in ImplicitParams space, stacked over dofs
     # (leading axis ndof) so chunk_map can process them in fixed-size chunks:
@@ -1614,14 +1614,13 @@ def _least_squares_implicit(
         t_ac[nboundary + j, j] = ac_scale
     if k_cur:
         t_curtor[nboundary + k_cur] = _CURTOR_SCALE
-    zerop = jax.tree.map(jnp.zeros_like, params0)
+    zerop = jax.tree.map(lambda a: _place(np.zeros(a.shape)), params0)
     if lasym:
-        tangent_stack = (jnp.asarray(t_rbc), jnp.asarray(t_zbs),
-                         jnp.asarray(t_rbs), jnp.asarray(t_zbc),
-                         jnp.asarray(t_ac), jnp.asarray(t_curtor))
+        tangent_stack = tuple(map(
+            _place, (t_rbc, t_zbs, t_rbs, t_zbc, t_ac, t_curtor)
+        ))
     else:
-        tangent_stack = (jnp.asarray(t_rbc), jnp.asarray(t_zbs),
-                         jnp.asarray(t_ac), jnp.asarray(t_curtor))
+        tangent_stack = tuple(map(_place, (t_rbc, t_zbs, t_ac, t_curtor)))
 
     # R17.1 memory knob: chunk_size None == one full-width batch, while an int
     # / "auto" caps peak Jacobian memory at that many dofs at a time.  Route
@@ -1716,38 +1715,17 @@ def _least_squares_implicit(
     # share the fixed point, so dz_j = -(dF/dz)^{-1} dF/dp t_j is the same
     # through either: assemble the raw blocks with 3-colored jvp probes
     # (~3*(3*mn) linearizations, dof-count independent), factor once (solvax
-    # block Thomas), backsolve every dof RHS, then one short warm-started
-    # GMRES pass per column certifies cfg.adjoint_tol (solvax checks the
-    # initial residual first, so columns already at tolerance cost one
-    # matvec).
-    mn_state = int(np.asarray(mask_np.R_cos).shape[1])
-    ns_state = int(cfg.resolution.ns)
-    active_fields = tuple(f for f in imp._STATE_FIELDS
-                          if np.asarray(getattr(mask_np, f)).any())
-    n_act = len(active_fields)
-    m_block = n_act * mn_state
-    # Probe (color, field, column) index triples, color-major so the probe
-    # axis reshapes to (3, m_block, ...) below.
-    probe_color = jnp.asarray(np.repeat(np.arange(3), m_block))
-    probe_field = jnp.asarray(np.tile(np.repeat(np.arange(n_act), mn_state), 3))
-    probe_col = jnp.asarray(np.tile(np.tile(np.arange(mn_state), n_act), 3))
+    # block Thomas), backsolve every dof RHS, then one warm-started GMRES pass
+    # per column certifies cfg.adjoint_tol (solvax checks the initial residual
+    # first, so columns already at tolerance cost one matvec).
+    active_fields = imp._active_state_fields(cfg)
+    m_block = len(active_fields) * int(np.asarray(mask_np.R_cos).shape[1])
     if jac_chunk_size == "auto":
         probe_chunk = _auto_jac_chunk(3 * m_block)
     elif jac_chunk_size is None:
         probe_chunk = 3 * m_block
     else:
         probe_chunk = chunk
-
-    def _pack(t) -> jnp.ndarray:
-        """SpectralState -> (ns, m_block): active fields side by side."""
-        return jnp.concatenate([getattr(t, f) for f in active_fields], axis=1)
-
-    def _unpack(mat: jnp.ndarray) -> SpectralState:
-        """(ns, m_block) -> SpectralState (structurally-zero fields zero)."""
-        parts = dict(zip(active_fields, jnp.split(mat, n_act, axis=1)))
-        return SpectralState(**{
-            f: parts.get(f, jnp.zeros((ns_state, mn_state), mat.dtype))
-            for f in imp._STATE_FIELDS})
 
     def jacobian_rows_block(x: jnp.ndarray):
         """``jacobian_rows`` via one block-tridiagonal factorization (R25.2).
@@ -1759,69 +1737,24 @@ def _least_squares_implicit(
         perturbation warm-start linearization, same contract as
         ``jacobian_rows``).
         """
-        Fz, tangent_of, rhs_of, column_of, (params, frozen, P, z_star) = \
+        _, tangent_of, _, column_of, (params, frozen, _, _) = \
             _jac_parts(x)
-        F_raw = imp.residual_fn(cfg, frozen, mask_const, formulation="raw")
-
-        def Fz_raw(dz):
-            return jax.jvp(lambda z: F_raw(z, params), (z_star,), (dz,))[1]
-
-        def probe_response(spec):
-            c, fi, k = spec
-            rows = (jnp.arange(ns_state) % 3 == c)
-            mat = jnp.where(rows[:, None],
-                            jax.nn.one_hot(k, mn_state, dtype=x.dtype)[None, :],
-                            0.0)
-            stack = (jax.nn.one_hot(fi, n_act, dtype=x.dtype)[:, None, None]
-                     * mat[None])
-            dz = _unpack(jnp.concatenate(
-                [stack[i] for i in range(n_act)], axis=1))
-            # F_raw projects both sides onto the evolved-dof subspace, so
-            # its linearization is singular on the (I - P) complement; the
-            # identity fill (dz - P(dz)) makes the assembled blocks
-            # invertible without changing the solution for P-masked RHS.
-            return _pack(jax.tree.map(lambda a, b, p: a + (b - p),
-                                      Fz_raw(dz), dz, P(dz)))
-
-        probes = chunk_map(probe_response,
-                           (probe_color, probe_field, probe_col),
-                           chunk_size=probe_chunk)
-        # probes[c*m_block + q, i, :] = rows i of A(dz) for the color-c
-        # one-hot-q tangent; for row i the unique in-stencil source surface
-        # of color c is j = i + d with d = the offset satisfying
-        # (i + d) % 3 == c, so gathering at color (i + d) % 3 reads off the
-        # d-band blocks A[i, i+d] for every surface at once.
-        probes = probes.reshape((3, m_block, ns_state, m_block))
-        ii = jnp.arange(ns_state)
-
-        def band(d):
-            g = probes[(ii + d) % 3, :, ii, :]  # (ns, col q, row)
-            return jnp.swapaxes(g, 1, 2)  # (ns, row, col)
-
-        # lower[0] / upper[-1] gather out-of-stencil (zero) responses and
-        # are ignored by the factorization anyway.
-        factors = block_thomas_factor(band(-1), band(0), band(1))
-
-        def raw_rhs(tp_stack):
-            tp = tangent_of(tp_stack)
-            b = jax.jvp(lambda prm: F_raw(z_star, prm), (params,), (tp,))[1]
-            return _pack(jax.tree.map(jnp.negative, b))
-
+        tangent_batch = jax.vmap(tangent_of)(tangent_stack)
         tangent_chunk = ndof if chunk is None else chunk
-        rhs = chunk_map(raw_rhs, tangent_stack, chunk_size=tangent_chunk)
-        dz0 = block_thomas_solve(factors, jnp.moveaxis(rhs, 0, -1))
+        dz0, _ = imp._implicit_evolved_tangent_multi_rhs(
+            params, cfg, frozen, mask_const, tangent_batch,
+            active_fields=active_fields, probe_chunk_size=probe_chunk,
+            response_chunk_size=tangent_chunk,
+        )
 
         def column(args):
-            *tp_stack_j, dz0_mat = args
-            tp = tangent_of(tuple(tp_stack_j))
-            dz, _ = imp._adjoint_solve(
-                Fz, rhs_of(tp), cfg, x0=_unpack(dz0_mat),
-                max_restarts=min(3, cfg.adjoint_maxiter))
+            tp_stack, dz = args
+            tp = tangent_of(tp_stack)
             return column_of(dz, tp), dz
 
         cols, dz_cols = chunk_map(
-            column, (*tangent_stack, jnp.moveaxis(dz0, -1, 0)),
-            chunk_size=tangent_chunk)
+            column, (tangent_stack, dz0), chunk_size=tangent_chunk
+        )
         return jnp.transpose(cols), dz_cols
 
     # Recycled variant: all ndof solves share the operator Fz (which drifts
@@ -1945,7 +1878,7 @@ def _least_squares_implicit(
         """Record ``(x_ref, converged state, dz columns)`` for trial seeding."""
         hit = imp._LAST_SOLVE.get(cfg)
         params_np = jax.tree.map(lambda a: np.asarray(a, dtype=np.float64),
-                                 params_of(jnp.asarray(x, dtype=jnp.float64)))
+                                 params_of(_place(x)))
         if hit is not None and hit[0] == imp._params_key(params_np):
             holder["lin"] = (np.array(x, dtype=float), hit[1].state, dz_cols)
         else:  # unexpected call pattern: better no seed than a wrong one

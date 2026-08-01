@@ -21,6 +21,9 @@ their public ``VacuumOutput`` is supplied:
 
 :class:`WoutData` stores every field in **file convention** (exactly the
 values found in the netCDF file), so ``read_wout(write_wout(x)) == x``.
+VMEX-written files also carry the versioned ``vmex_trapped_fraction`` radial
+profile; older WOUT files remain readable and are rewritten without the
+extension.
 
 :func:`wout_from_state` builds the complete dataset from a converged
 fixed-boundary core state (:class:`vmex.core.input.VmecInput` +
@@ -33,6 +36,7 @@ remaining VMEC2000 output quantities (``eqfor.f``/``spectrum.f``/
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, fields as _dc_fields
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -108,6 +112,9 @@ _ATTRS = {
     "bsubvmns_sur": ("sinmn covaiant v-component of B, surface", None),
     "bsupumns_sur": ("sinmn contravariant u-component of B, surface", None),
     "bsupvmns_sur": ("sinmn contravariant v-component of B, surface", None),
+    "vmex_diagnostics_schema": ("VMEX diagnostics schema version", None),
+    "vmex_trapped_fraction": (
+        "Effective trapped-particle fraction on full mesh", "1"),
 }
 
 _LOGICALS = ("lasym", "lrecon", "lfreeb", "lmove_axis", "lrfp")
@@ -296,6 +303,9 @@ class WoutData:
     bsubvmns_sur: np.ndarray | None = None
     bsupumns_sur: np.ndarray | None = None
     bsupvmns_sur: np.ndarray | None = None
+    # -- backward-compatible VMEX extension -------------------------------
+    vmex_diagnostics_schema: int = 0
+    vmex_trapped_fraction: np.ndarray | None = None
 
 
 # ==========================================================================
@@ -446,6 +456,17 @@ def write_wout(path: str | Path, data: WoutData, *, overwrite: bool = True) -> P
             if lfreeb:
                 for name in _SUR_ASYM:
                     _put(ds, name, (_DIM_MN_NYQ,), getattr(d, name))
+        if int(d.vmex_diagnostics_schema) > 0:
+            if (d.vmex_trapped_fraction is None
+                    or np.shape(d.vmex_trapped_fraction) != (int(d.ns),)):
+                raise ValueError(
+                    "vmex_trapped_fraction must have shape (ns,) for schema >= 1")
+            _put(ds, "vmex_diagnostics_schema", (),
+                 int(d.vmex_diagnostics_schema), "i4")
+            _put(ds, "vmex_trapped_fraction", (_DIM_RADIUS,),
+                 d.vmex_trapped_fraction)
+            ds.variables["vmex_trapped_fraction"].mesh = "full"
+            ds.variables["vmex_trapped_fraction"].n_lambda = 64
     return path
 
 
@@ -515,6 +536,9 @@ def read_wout(path: str | Path) -> WoutData:
                     row.tobytes().decode("ascii", "ignore").rstrip(" \x00")
                     for row in np.atleast_2d(raw)
                 )
+        schema = _rd(ds, "vmex_diagnostics_schema", 0)
+        kw["vmex_diagnostics_schema"] = int(np.ravel(schema)[0])
+        kw["vmex_trapped_fraction"] = _rd(ds, "vmex_trapped_fraction")
     return WoutData(**kw)
 
 
@@ -541,6 +565,22 @@ def _ftolv_from_input(inp) -> float:
     return float(ftol_arr[min(idx, ftol_arr.size - 1)])
 
 
+def _on_state_device(fun):
+    """Run postprocessing where the committed equilibrium state lives."""
+    @functools.wraps(fun)
+    def wrapped(*args, **kwargs):
+        target = getattr(kwargs["state"].R_cos, "device", None)
+        target = target() if callable(target) else target
+        if target is None:
+            return fun(*args, **kwargs)
+        import jax
+
+        with jax.default_device(target):
+            return fun(*args, **kwargs)
+    return wrapped
+
+
+@_on_state_device
 def wout_from_state(
     *,
     inp,
@@ -589,6 +629,7 @@ def wout_from_state(
     import jax
 
     from . import nyquist as _nyq
+    from .bootstrap import _trapped_fraction_from_fields
     from .fields import energies_and_force_norms, magnetic_fields, metric_elements
     from .fourier import Resolution, mode_table, trig_tables
     from .geometry import (
@@ -645,10 +686,20 @@ def wout_from_state(
         jacobian=jacobian, metrics=metrics, fields=fields, trig=trig,
         s=grids.s_full, signgs=signgs,
     )
+    trapped_fraction = _trapped_fraction_from_fields(
+        total_pressure=fields.total_pressure,
+        pressure=fields.pressure,
+        sqrt_g=jacobian.sqrt_g,
+        s_full=grids.s_full,
+        surfaces=grids.s_full,
+        lasym=lasym,
+        n_lambda=64,
+        serial_surfaces=True,
+    )[-1]
     (geometry, jacobian, metrics, fields, norms, R_cos_p, Z_sin_p, R_sin_p,
-     Z_cos_p) = jax.device_get(
+     Z_cos_p, trapped_fraction) = jax.device_get(
         (geometry, jacobian, metrics, fields, norms, R_cos_p, Z_sin_p,
-         R_sin_p, Z_cos_p))
+         R_sin_p, Z_cos_p, trapped_fraction))
 
     # -- 1D profiles in file conventions ------------------------------------
     vp = np.asarray(norms.vp, dtype=float).copy()
@@ -940,6 +991,8 @@ def wout_from_state(
         bsubvmns_sur=vacuum_sur.get("bsubvmns_sur"),
         bsupumns_sur=vacuum_sur.get("bsupumns_sur"),
         bsupvmns_sur=vacuum_sur.get("bsupvmns_sur"),
+        vmex_diagnostics_schema=1,
+        vmex_trapped_fraction=np.asarray(trapped_fraction, dtype=float),
     )
 
 

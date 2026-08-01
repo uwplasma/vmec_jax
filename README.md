@@ -43,7 +43,8 @@ input-flag coverage is tracked separately in
   prints VMEC2000-format iteration output, and writes `wout_*.nc` files
   that load unchanged in simsopt and booz_xform.
 - **Batteries included.** Plotting (`vmex --plot`), Boozer transform
-  (`vmex --booz`), spline profiles, multigrid, hot restart, free boundary
+  (`vmex --booz`), dimensional scaling for fast-particle studies
+  (`vmex --scale`), spline profiles, multigrid, hot restart, free boundary
   from mgrid files or fields tabulated from coils,
   typed zero-crash errors — with the shared linear/adjoint solver layer
   factored out into [SOLVAX](https://pypi.org/project/solvax/).
@@ -95,6 +96,7 @@ cd vmex && pip install -e .
 vmex --doctor     # check the installation and JAX backend
 vmex --test       # solve the bundled QH case, write wout + plots
 vmex input.X      # run any VMEC2000 input deck (or structured JSON)
+vmex --plot --booz input.X  # solve, transform, and make both plot sets
 ```
 
 `vmex input.X` writes `wout_X.nc` next to the input (`--outdir` to
@@ -112,6 +114,27 @@ vmex --plot wout_nfp4_QH_warm_start.nc     # surfaces, |B|, profiles, 3D
 vmex --booz wout_nfp4_QH_warm_start.nc     # Boozer transform -> boozmn_*.nc
 vmex --plot boozmn_nfp4_QH_warm_start.nc   # Boozer |B| contours + spectrum
 ```
+
+Scale for fast-particle studies
+-------------------------------
+
+Scale an input or WOUT to the ARIES-CS reference dimensions
+(`|b0| = 5.7 T`, `Aminor_p = 1.7 m`), or give explicit multiplicative
+magnetic-field and size factors:
+
+```bash
+vmex --scale input.X             # writes input.X_scaled at ARIES-CS scale
+vmex --scale input.X 1.2 0.8     # B_scale=1.2, R_scale=0.8
+vmex --scale wout_X.nc           # writes wout_X_scaled.nc
+vmex --plot --booz input.X_scaled
+```
+
+Input and WOUT transforms obey the same dimensional similarity law and are
+tested to commute with reconverged fixed- and free-boundary solves. This makes
+it straightforward to set the physical field and size for fixed-energy orbit
+calculations, including 3.5 MeV alpha studies.
+See the [scaling reference](https://vmex.readthedocs.io/en/latest/scaling.html)
+for the field table, the bounded input probe, and free-boundary mgrid handling.
 
 ## Parity with VMEC2000
 
@@ -160,7 +183,8 @@ bottleneck or stalls.
 **High-mode HSX QHS deck** (`MPOL=18, NTOR=24, NZETA=100, ns→101`; 858 modes),
 sequentially on an idle Apple Silicon CPU. VMEX was measured once with an
 empty persistent compilation cache and twice in fresh processes reusing that
-cache; VMEC++ was measured twice:
+cache; those recorded VMEX runs used compilation prefetch. VMEC++ was
+measured twice:
 
 | code | wall | peak RSS | outcome |
 | --- | ---: | ---: | --- |
@@ -176,8 +200,8 @@ memory of ten-thread VMEC++; an empty-cache run is 2.68× slower. VMEX remains
 ``1.02e-11`` in ``bmnc``, and ``2.37e-11`` in core ``iota``. The runtime
 is therefore about the 2.5× target for this PR; the remaining XLA
 executable/full-radial memory gap is stated explicitly rather than treated as
-closed. For memory-constrained cold runs, ``--no-prefetch-compile`` trades
-startup latency for a lower peak.
+closed. The CLI compiles multigrid rungs sequentially to bound peak memory;
+``--prefetch-compile`` opts into overlapping the next rung's compilation.
 
 ![Wall-clock comparison against VMEC2000 and a reference C++ implementation](docs/_static/figures/readme_runtime_compare.png)
 
@@ -229,6 +253,7 @@ The status of each solver, device, and differentiation lane is defined by the
 | Typed zero-crash errors | ✅ | ❌ | ✅ |
 | Boozer transform built in (`--booz`) | ✅ | ❌ | ❌ |
 | Plotting built in (`--plot`) | ✅ | ❌ | ❌ |
+| Input/WOUT dimensional scaling (`--scale`) | ✅ | ❌ | ❌ |
 | GPU execution | ✅ | ❌ | ❌ |
 | Differentiable fixed boundary (implicit diff, O(1) memory) | ✅ | ❌ | ❌ |
 | Differentiable virtual-casing residual on a specified boundary | ✅ | ❌ | ❌ |
@@ -365,11 +390,11 @@ free-boundary ladder (including vacuum continuation and hot starts);
 gradients (`jax.grad`-able `ImplicitSolution`); `solver.solve` as the
 low-level single-grid building block.
 
-Optimization building blocks live in `vmex.core.optimize`
-(quasisymmetry and omnigenity residuals; aspect ratio, iota, mirror ratio,
-magnetic well, `DMerc`, Glasser `D_R`, `<J·B>`, and ballooning-stability
-targets; a least-squares driver over boundary Fourier coefficients) with
-implicit-differentiation gradients from
+Optimization building blocks include quasisymmetry, three separate QI
+residuals, matched-well maximum-J, aspect ratio, iota, mirror ratio, magnetic
+well, `DMerc`, Glasser `D_R`, `<J·B>`, and ballooning-stability targets. They
+compose in the same least-squares driver over boundary Fourier coefficients,
+with implicit-differentiation gradients from
 `vmex.core.implicit` (`jac="implicit"`). `<J·B>` also supports `LASYM = T`;
 `DMerc` and `D_R` remain symmetry-gated pending independent DCON/JMC parity.
 The recommended pattern is **one
@@ -563,7 +588,7 @@ options:
                          cuda, rocm, or tpu; applies to all solve paths
   --ftol F               override the final-stage FTOL_ARRAY tolerance
   --max-iter N           override the final-stage NITER_ARRAY cap
-  --no-prefetch-compile  lower peak memory by compiling lanes sequentially
+  --prefetch-compile     overlap next-rung compilation (higher peak memory)
   --coils PATH           ESSOS-style coils file: tabulate its Biot-Savart
                          field in memory instead of reading an mgrid file
   --mbooz/--nbooz N      Boozer spectral resolution (default 32/32)

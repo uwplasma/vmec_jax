@@ -254,8 +254,9 @@ default:
   1e-14), so ``ns`` dense ``(3mn, 3mn)`` blocks are assembled with
   3-colored ``jax.jvp`` probes — a cost independent of the dof count —
   factored once (``solvax.block_thomas``), and back-substituted for every
-  dof right-hand side.  A short warm-started GMRES corrector certifies each
-  column to the same ``adjoint_tol`` as the old path.  Measured: the warm
+  dof right-hand side.  A warm-started GMRES corrector uses the configured
+  budget and certifies each column to the same ``adjoint_tol`` as the old
+  path.  Measured: the warm
   Jacobian phase drops 20.35 s to 0.61 s (**33x**); ``jac_solver="gmres"``
   (one preconditioned GMRES per dof) remains as a fallback.
   A true width-three nonlinear row kernel is parity-tested, but its direct

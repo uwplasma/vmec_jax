@@ -97,6 +97,15 @@ The objective catalog with usage snippets is :doc:`/objectives`.
 .. automodule:: vmex.core.omnigenity
    :members:
 
+.. automodule:: vmex.core.bounce
+   :members:
+
+.. automodule:: vmex.core.qi
+   :members:
+
+.. automodule:: vmex.core.maxj
+   :members:
+
 .. automodule:: vmex.core.bootstrap
    :members:
 
@@ -110,6 +119,9 @@ Outputs
 -------
 
 .. automodule:: vmex.core.wout
+   :members:
+
+.. automodule:: vmex.core.scaling
    :members:
 
 .. automodule:: vmex.core.nyquist

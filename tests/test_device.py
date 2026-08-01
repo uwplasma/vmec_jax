@@ -1,13 +1,15 @@
 """Unit tests for :mod:`vmex.core.device` — the CPU/GPU placement policy.
 
-Pure host-side logic (no solves), so this is fast.  On a CPU-only runner the
-GPU branches resolve to ``None`` (nothing to place); the tests assert the
-decision, not the presence of an accelerator.
+Most tests exercise host-side policy.  One tiny solve verifies that final
+arrays stay on a selected nondefault CPU or GPU.  Accelerator-only branches
+skip when the required hardware is unavailable.
 """
 
 from __future__ import annotations
 
 import contextlib
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -15,8 +17,11 @@ import numpy as np
 import pytest
 
 from vmex.core import device as dev
-from vmex.core import freeboundary, multigrid, solver
+from vmex.core import freeboundary, multigrid, solver, wout as wout_module
 from vmex.core.fourier import Resolution
+from vmex.core.input import VmecInput
+
+DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
 
 
 def _res(ns: int, mpol: int, ntor: int, nfp: int = 1) -> Resolution:
@@ -145,6 +150,152 @@ def test_gpu_request_on_cpu_machine_raises():
             dev.resolve_device("gpu", _res(ns=11, mpol=6, ntor=0))
 
 
+def test_fixed_boundary_honors_second_device_without_outer_context():
+    devices = []
+    for platform in ("gpu", "cpu"):
+        try:
+            devices = jax.devices(platform)
+        except RuntimeError:
+            pass
+        if len(devices) >= 2:
+            break
+    if len(devices) < 2:
+        pytest.skip("two devices unavailable")
+    inp = replace(
+        VmecInput.from_file(DATA / "input.solovev"),
+        ns_array=[3, 5], niter_array=[2, 2], ftol_array=[1.0, 1.0],
+    )
+    reference = multigrid.solve_multigrid(
+        inp, device=devices[0], verbose=False, prefetch_compile=False,
+    )
+    result = multigrid.solve_multigrid(
+        inp,
+        device=devices[1],
+        verbose=False,
+        prefetch_compile=False,
+    )
+    assert result.converged
+    assert {
+        leaf.device
+        for leaf in jax.tree.leaves(result.state)
+        if hasattr(leaf, "device")
+    } == {devices[1]}
+    for name in ("rmnc", "zmns", "iotaf", "fsq_history"):
+        np.testing.assert_allclose(
+            getattr(result, name), getattr(reference, name),
+            rtol=5e-9, atol=1e-12,
+        )
+
+    single = solver.solve(
+        inp,
+        resolution=solver.resolution_from_input(inp, ns=5),
+        initial_state=reference.state,
+        device=devices[1],
+        verbose=False,
+    )
+    for name in ("rmnc", "zmns", "iotaf"):
+        np.testing.assert_allclose(
+            getattr(single, name), getattr(reference, name),
+            rtol=5e-9, atol=1e-12,
+        )
+    bad_state = replace(reference.state, R_cos=reference.state.R_cos[:-1])
+    with pytest.raises(ValueError, match="interpolate_state"):
+        solver.solve(inp, initial_state=bad_state, device=devices[1], verbose=False)
+
+
+def test_fixed_boundary_builds_runtime_in_device_context(monkeypatch):
+    active = False
+    seen = []
+    seed = SimpleNamespace(R_cos=np.zeros((2, 1)))
+    runtime = SimpleNamespace(modes=object())
+    carry = SimpleNamespace(
+        ier=multigrid.MORE_ITER_FLAG,
+        state=SimpleNamespace(R_cos=np.zeros((3, 1))),
+        fsqr=1.0,
+        fsqz=2.0,
+        fsql=3.0,
+    )
+    result = object()
+
+    @contextlib.contextmanager
+    def context(*_):
+        nonlocal active
+        active = True
+        yield
+        active = False
+
+    def prepare(*_, **__):
+        assert active
+        seen.append("runtime")
+        return runtime
+
+    def interpolate(*_, **__):
+        assert active
+        seen.append("interpolate")
+        return carry.state
+
+    def hot_restart(*_):
+        assert active
+        seen.append("hot restart")
+        return carry.state
+
+    def baselines(*_, **__):
+        assert active
+        seen.append("baselines")
+        return runtime
+
+    def solve(*_, **__):
+        assert active
+        return carry
+
+    def unconverged(*_):
+        assert active
+        return result
+
+    monkeypatch.setattr(multigrid, "device_context", context)
+    monkeypatch.setattr(multigrid, "prepare_runtime", prepare)
+    monkeypatch.setattr(multigrid, "interpolate_state", interpolate)
+    monkeypatch.setattr(multigrid, "hot_restart_state", hot_restart)
+    monkeypatch.setattr(multigrid, "runtime_with_baselines", baselines)
+    monkeypatch.setattr(multigrid, "_solve_stage", solve)
+    monkeypatch.setattr(multigrid, "_result_from_carry", unconverged)
+    actual = multigrid.solve_multigrid(
+        VmecInput(ns_array=[3]),
+        initial_state=seed,
+        device="cpu",
+        raise_on_max_iterations=False,
+    )
+    assert actual is result
+    assert seen == ["runtime", "interpolate", "hot restart", "baselines"]
+
+
+@pytest.mark.parametrize(
+    ("device", "expected_active"), [("cpu", True), (dev.AUTO, False)]
+)
+def test_free_boundary_loads_mgrid_in_explicit_device_context(
+    monkeypatch, device, expected_active
+):
+    active = False
+
+    @contextlib.contextmanager
+    def context(*_):
+        nonlocal active
+        active = True
+        yield
+        active = False
+
+    def load(*_):
+        assert active is expected_active
+        raise RuntimeError("mgrid reached")
+
+    monkeypatch.setattr(multigrid, "device_context", context)
+    monkeypatch.setattr(freeboundary, "_external_field_from_input", load)
+    with pytest.raises(RuntimeError, match="mgrid reached"):
+        multigrid.solve_free_boundary_multigrid(
+            VmecInput(lfreeb=True, mgrid_file="fake", ns_array=[3]), device=device
+        )
+
+
 def test_resolve_implicit_device_defaults_to_cpu(monkeypatch):
     monkeypatch.delenv("JAX_PLATFORMS", raising=False)
     monkeypatch.delenv("JAX_PLATFORM_NAME", raising=False)
@@ -200,10 +351,36 @@ def test_device_context_wraps_default_device_for_explicit_cpu():
         pass
 
 
+def test_wout_builder_uses_state_device_context(monkeypatch):
+    active = False
+    target = SimpleNamespace(platform="gpu")
+    state = SimpleNamespace(R_cos=SimpleNamespace(device=target))
+
+    @contextlib.contextmanager
+    def context(device):
+        nonlocal active
+        assert device is target
+        active = True
+        yield
+        active = False
+
+    def build(**_):
+        assert active
+        return "wout"
+
+    monkeypatch.setattr(jax, "default_device", context)
+    wrapped = wout_module._on_state_device(build)
+    assert wrapped(state=state) == "wout"
+    state.R_cos.device = None
+    assert wout_module._on_state_device(lambda **_: "wout")(state=state) == "wout"
+
+
 def test_put_numeric_leaves_preserves_metadata_and_none_contract():
     resolution = _res(ns=11, mpol=6, ntor=0)
     assert dev._placement_device(None, resolution) is None
     cpu = jax.devices("cpu")[0]
+    resident = jax.device_put(np.ones(2), cpu)
+    assert dev._put_numeric_leaves(resident, cpu) is resident
     moved = dev._put_numeric_leaves(
         {"array": np.ones(2), "metadata": "kept"}, cpu,
     )
@@ -220,6 +397,36 @@ def test_put_numeric_leaves_moves_registered_partial_captures():
     moved = dev._put_numeric_leaves(field, target)
     assert jax.tree.leaves(moved)[0].device.platform == "cpu"
     np.testing.assert_allclose(moved(jax.numpy.asarray([3.0])), 6.0)
+
+
+def test_put_numeric_leaves_host_stages_cross_accelerator_copy(monkeypatch):
+    class Device:
+        platform = "gpu"
+
+    class Array:
+        def devices(self):
+            return {Device()}
+
+        def __array__(self, dtype=None):
+            return np.asarray([1.0, 2.0], dtype=dtype)
+
+    target = Device()
+    monkeypatch.setattr(dev.jax, "Array", Array)
+    monkeypatch.setattr(
+        dev.jax, "device_put", lambda value, device: (np.asarray(value), device)
+    )
+    moved, placed = dev._put_numeric_leaves(Array(), target)
+    np.testing.assert_array_equal(moved, [1.0, 2.0])
+    assert placed is target
+
+
+def test_put_numeric_leaves_does_not_inspect_tracer_devices(monkeypatch):
+    target = SimpleNamespace(platform="gpu")
+    monkeypatch.setattr(dev.jax, "device_put", lambda value, _: value)
+    gradient = jax.grad(
+        lambda x: jax.numpy.sum(dev._put_numeric_leaves(x, target))
+    )(jax.numpy.ones(2))
+    np.testing.assert_array_equal(gradient, np.ones(2))
 
 
 def test_free_boundary_uses_shared_device_context(monkeypatch):

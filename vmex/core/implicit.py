@@ -104,7 +104,7 @@ import sys
 import types
 import weakref
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 import numpy as np
 
@@ -112,8 +112,13 @@ import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
-from solvax import gcrot as _solvax_gcrot
-from solvax import gmres as _solvax_gmres
+from solvax import (
+    block_thomas_factor,
+    block_thomas_solve,
+    chunk_map,
+    gcrot as _solvax_gcrot,
+    gmres as _solvax_gmres,
+)
 
 from .device import AUTO, _put_numeric_leaves, resolve_implicit_device
 from .errors import AdjointSolveError, VmecError
@@ -145,9 +150,10 @@ from .transforms import (
 
 __all__ = [
     "ImplicitParams", "ImplicitConfig", "ImplicitSolution",
+    "LinearResponseReport",
     "params_from_input", "input_with_params", "runtime_from_params",
     "make_config", "solve_implicit", "solve_implicit_with_aux",
-    "implicit_state_pullback_multi_rhs", "run",
+    "implicit_state_tangent_multi_rhs", "implicit_state_pullback_multi_rhs", "run",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
     "iota_axis", "iota_edge", "edge_iota", "residual_fn", "adjoint_matvec",
     "frozen_path_directional_fd",
@@ -156,6 +162,15 @@ __all__ = [
 Array = Any
 
 _STATE_FIELDS = ("R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin")
+
+
+class LinearResponseReport(NamedTuple):
+    """Per-right-hand-side residual certificate for an implicit response."""
+
+    residual_norm: Array
+    tolerance: Array
+    iterations: Array
+    converged: Array
 
 
 # ---------------------------------------------------------------------------
@@ -675,7 +690,9 @@ def _runtime_from_params_impl(params: ImplicitParams, cfg: ImplicitConfig) -> So
     setup = dataclasses.replace(
         setup0,
         phips=prof["phips"], chips=prof["chips"], iotas=prof["iotas"],
-        icurv=prof["icurv"], mass=prof["mass"], phipf=prof["phipf"],
+        icurv=prof["icurv"], mass=prof["mass"],
+        psi_half=prof["psi_half"], psi_edge=prof["psi_edge"],
+        phipf=prof["phipf"],
         chipf=prof["chipf"], iotaf=prof["iotaf"], lamscale=prof["lamscale"],
         boundary_R_cos=bR_cos, boundary_R_sin=bR_sin,
         boundary_Z_cos=bZ_cos, boundary_Z_sin=bZ_sin,
@@ -1327,11 +1344,14 @@ def _adjoint_acceptance(cfg: ImplicitConfig, b_norm):
 
 
 def _raise_adjoint_unconverged(cfg: ImplicitConfig, *, iterations: int,
-                               residual_norm: float, tolerance: float):
+                               residual_norm: float, tolerance: float,
+                               method: str | None = None):
+    method = method or (
+        f"GCROT({cfg.adjoint_gcrot_m}, {cfg.adjoint_gcrot_k})"
+    )
     raise AdjointSolveError(
         message=(
-            f"implicit adjoint GCROT({cfg.adjoint_gcrot_m}, "
-            f"{cfg.adjoint_gcrot_k}) solve did not converge: residual "
+            f"implicit adjoint {method} solve did not converge: residual "
             f"{residual_norm:.3e} > acceptance {tolerance:.3e} "
             f"(= {_ADJOINT_RESIDUAL_SLACK:g} x adjoint_tol x ||rhs||) after "
             f"{iterations} Krylov iterations "
@@ -1342,6 +1362,26 @@ def _raise_adjoint_unconverged(cfg: ImplicitConfig, *, iterations: int,
         iterations=int(iterations),
         residual_norm=float(residual_norm),
         tolerance=float(tolerance),
+    )
+
+
+def _tree_norm(tree):
+    return jnp.sqrt(sum(
+        (jnp.vdot(v, v).real for v in jax.tree.leaves(tree)),
+        jnp.asarray(0.0),
+    ))
+
+
+def _linear_response_report(sol, rhs, cfg: ImplicitConfig):
+    b_norm = _tree_norm(rhs)
+    tolerance = _adjoint_acceptance(cfg, b_norm)
+    return LinearResponseReport(
+        residual_norm=sol.residual_norm,
+        tolerance=tolerance,
+        iterations=sol.iterations,
+        converged=jnp.logical_or(
+            sol.converged, sol.residual_norm <= tolerance
+        ),
     )
 
 
@@ -1409,7 +1449,7 @@ def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None):
     return unravel(sol.x), sol
 
 
-def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig):
+def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig, *, precond=None):
     """Adjoint linear solve ``(dF/dz)^T lambda = b`` via ``solvax.gcrot(m, k)``.
 
     The reverse-pass default (:func:`_solve_implicit_bwd`,
@@ -1419,9 +1459,10 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig):
     the small eigendirections a truncated GMRES restart discards, and
     reaches the identical converged ``lambda`` in fewer matvecs / more
     robustly at high poloidal mode number (where plain restarted GMRES
-    stalls short of ``adjoint_tol`` inside its budget).  Cold
-    (``recycle=None``) start; ``m``/``k`` capped at the problem size ``n``
-    so a small system degenerates to an exact single-cycle solve.
+    stalls short of ``adjoint_tol`` inside its budget). ``precond`` optionally
+    supplies a pytree right preconditioner; ``recycle=None``. ``m``/``k`` are
+    capped at the problem size ``n`` so a small system degenerates to an exact
+    single-cycle solve.
 
     Device binding: this call is the adjoint's actual execution site and
     runs HOST-EAGERLY on the caller's thread (section note above) — RHS
@@ -1442,9 +1483,14 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig):
     def matvec(v):
         return ravel_pytree(A(unravel(v)))[0]
 
+    def precond_flat(v):
+        return ravel_pytree(precond(unravel(v)))[0]
+
     with _device_context(cfg):
         sol = _solvax_gcrot(
-            matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0, m=m, k=k,
+            matvec, b_flat,
+            precond=None if precond is None else precond_flat,
+            rtol=cfg.adjoint_tol, atol=0.0, m=m, k=k,
             max_restarts=cfg.adjoint_maxiter,
         )
         x = _checked_adjoint_x(sol, b_flat, cfg)
@@ -1507,6 +1553,272 @@ def _recycled_solve(A, b, cfg: ImplicitConfig, recycle):
     # callers need to decide whether carrying the pair is still worthwhile
     # (see optimize.jacobian_rows_recycled's drift-gated carry).
     return unravel(sol.x), sol
+
+
+@dataclass(frozen=True)
+class _RawBlockSystem:
+    """One factored raw-force linearization and its exact transpose."""
+
+    factors: Any
+    pack: Callable
+    unpack: Callable
+    project: Callable
+    operator: Callable
+    operator_t: Callable
+
+
+def _active_state_fields(cfg: ImplicitConfig) -> tuple[str, ...]:
+    if cfg.resolution.lasym:
+        return _STATE_FIELDS
+    return ("R_cos", "Z_sin", "L_sin")
+
+
+def _raw_block_system(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    frozen: SpectralState,
+    dof_mask: SpectralState,
+    active_fields: tuple[str, ...],
+    probe_chunk_size: int,
+) -> _RawBlockSystem:
+    """Factor the exactly nearest-neighbor raw-force Jacobian once."""
+    if not active_fields:
+        raise ValueError("implicit response has no active state fields")
+    ns = int(cfg.resolution.ns)
+    mn = int(dof_mask.R_cos.shape[1])
+    n_active = len(active_fields)
+    block_size = n_active * mn
+    project = _dof_projector(cfg, dof_mask)
+    z_star = project(frozen)
+    residual = residual_fn(cfg, frozen, dof_mask, formulation="raw")
+
+    def pack(tree):
+        return jnp.concatenate(
+            [getattr(tree, name) for name in active_fields], axis=1
+        )
+
+    def unpack(matrix):
+        parts = dict(zip(
+            active_fields, jnp.split(matrix, n_active, axis=1)
+        ))
+        return SpectralState(**{
+            name: parts.get(name, jnp.zeros((ns, mn), matrix.dtype))
+            for name in _STATE_FIELDS
+        })
+
+    def operator(tangent):
+        return jax.jvp(
+            lambda z: residual(z, params), (z_star,), (tangent,)
+        )[1]
+
+    _, pullback = jax.vjp(lambda z: residual(z, params), z_star)
+    operator_t = lambda cotangent: pullback(cotangent)[0]  # noqa: E731
+
+    colors = jnp.asarray(np.repeat(np.arange(3), block_size))
+    fields = jnp.asarray(np.tile(
+        np.repeat(np.arange(n_active), mn), 3
+    ))
+    columns = jnp.asarray(np.tile(
+        np.tile(np.arange(mn), n_active), 3
+    ))
+    dtype = frozen.R_cos.dtype
+
+    def probe(spec):
+        color, field, column = spec
+        rows = jnp.arange(ns) % 3 == color
+        values = jnp.where(
+            rows[:, None],
+            jax.nn.one_hot(column, mn, dtype=dtype)[None, :],
+            0.0,
+        )
+        stack = (
+            jax.nn.one_hot(field, n_active, dtype=dtype)[:, None, None]
+            * values[None]
+        )
+        tangent = unpack(jnp.concatenate(
+            [stack[i] for i in range(n_active)], axis=1
+        ))
+        response = jax.tree.map(
+            lambda a, b, p: a + b - p,
+            operator(tangent), tangent, project(tangent),
+        )
+        return pack(response)
+
+    probes = chunk_map(
+        probe, (colors, fields, columns),
+        chunk_size=max(1, int(probe_chunk_size)),
+    ).reshape((3, block_size, ns, block_size))
+    rows = jnp.arange(ns)
+
+    def band(offset):
+        values = probes[(rows + offset) % 3, :, rows, :]
+        return jnp.swapaxes(values, 1, 2)
+
+    factors = block_thomas_factor(band(-1), band(0), band(1))
+    return _RawBlockSystem(
+        factors, pack, unpack, project, operator, operator_t
+    )
+
+
+def _raw_block_solve(
+    system: _RawBlockSystem,
+    rhs_batch: SpectralState,
+    cfg: ImplicitConfig,
+    *,
+    transpose: bool = False,
+) -> tuple[SpectralState, LinearResponseReport]:
+    """Solve all raw-force right-hand sides with one stored factorization."""
+    rhs_batch = jax.vmap(system.project)(rhs_batch)
+    packed = jax.vmap(system.pack)(rhs_batch)
+    solution = block_thomas_solve(
+        system.factors, jnp.moveaxis(packed, 0, -1), transpose=transpose
+    )
+    solution = jax.vmap(
+        lambda matrix: system.project(system.unpack(matrix))
+    )(jnp.moveaxis(solution, -1, 0))
+    operator = system.operator_t if transpose else system.operator
+    residual = jax.vmap(
+        lambda x, b: jax.tree.map(jnp.subtract, b, operator(x))
+    )(solution, rhs_batch)
+    residual_norm = jax.vmap(_tree_norm)(residual)
+    tolerance = _adjoint_acceptance(
+        cfg, jax.vmap(_tree_norm)(rhs_batch)
+    )
+    return solution, LinearResponseReport(
+        residual_norm=residual_norm,
+        tolerance=tolerance,
+        iterations=jnp.ones(residual_norm.shape, dtype=jnp.int32),
+        converged=residual_norm <= tolerance,
+    )
+
+
+def _raw_block_apply(
+    system: _RawBlockSystem,
+    rhs: SpectralState,
+    *,
+    transpose: bool = False,
+) -> SpectralState:
+    """Apply one stored raw block inverse without rebuilding its factors."""
+    packed = system.pack(system.project(rhs))[..., None]
+    solution = block_thomas_solve(
+        system.factors, packed, transpose=transpose
+    )[..., 0]
+    return system.project(system.unpack(solution))
+
+
+def _implicit_evolved_tangent_multi_rhs(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    tangent_batch: ImplicitParams,
+    *,
+    active_fields: tuple[str, ...],
+    probe_chunk_size: int,
+    response_chunk_size: int,
+) -> tuple[SpectralState, LinearResponseReport]:
+    frozen = jax.lax.stop_gradient(x_star)
+    system = _raw_block_system(
+        params, cfg, frozen, dof_mask, active_fields, probe_chunk_size
+    )
+    z_star = system.project(x_star)
+    raw_residual = residual_fn(
+        cfg, frozen, dof_mask, formulation="raw"
+    )
+    residual = residual_fn(cfg, frozen, dof_mask)
+
+    def raw_rhs(tangent):
+        value = jax.jvp(
+            lambda prm: raw_residual(z_star, prm), (params,), (tangent,)
+        )[1]
+        return jax.tree.map(jnp.negative, value)
+
+    initial, _ = _raw_block_solve(
+        system, jax.vmap(raw_rhs)(tangent_batch), cfg
+    )
+
+    def correct(args):
+        tangent, x0 = args
+        rhs = jax.tree.map(
+            jnp.negative,
+            jax.jvp(
+                lambda prm: residual(z_star, prm),
+                (params,), (tangent,),
+            )[1],
+        )
+        solution, krylov = _adjoint_solve(
+            lambda value: jax.jvp(
+                lambda z: residual(z, params),
+                (z_star,), (value,),
+            )[1],
+            rhs, cfg, x0=x0,
+        )
+        return solution, _linear_response_report(krylov, rhs, cfg)
+
+    solution, report = chunk_map(
+        correct, (tangent_batch, initial),
+        chunk_size=max(1, int(response_chunk_size)),
+    )
+    solution = jax.tree.map(
+        lambda value: jnp.where(
+            report.converged.reshape(
+                (report.converged.shape[0],)
+                + (1,) * (value.ndim - 1)
+            ),
+            value, jnp.full_like(value, jnp.nan),
+        ),
+        solution,
+    )
+    return solution, report
+
+
+def implicit_state_tangent_multi_rhs(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    tangent_batch: ImplicitParams,
+    *,
+    probe_chunk_size: int = 1,
+    response_chunk_size: int = 1,
+) -> tuple[SpectralState, LinearResponseReport]:
+    """State tangents for several parameter directions, factored once.
+
+    The pure-JAX raw-force Jacobian is exactly block tridiagonal in radius.
+    One three-color assembly and SOLVAX factorization therefore initializes
+    every right-hand side; a warm-started solve then certifies the ordinary
+    preconditioned residual against ``10 * cfg.adjoint_tol * ||rhs||``.  The
+    two chunk sizes independently bound probe assembly and response solves.
+    The ordinary implicit reverse rule remains the default for
+    :func:`solve_implicit`.
+    """
+    active_fields = _active_state_fields(cfg)
+    with _device_context(cfg):
+        params, x_star, dof_mask, tangent_batch = _device_pin(
+            cfg, (params, x_star, dof_mask, tangent_batch)
+        )
+        dz_batch, report = _implicit_evolved_tangent_multi_rhs(
+            params, cfg, x_star, dof_mask, tangent_batch,
+            active_fields=active_fields,
+            probe_chunk_size=probe_chunk_size,
+            response_chunk_size=response_chunk_size,
+        )
+        frozen = jax.lax.stop_gradient(x_star)
+        project = _dof_projector(cfg, dof_mask)
+        edge = _edge_mask(cfg)
+        z_star = project(x_star)
+
+        def assemble_tangent(dz, tangent):
+            return jax.jvp(
+                lambda z, prm: _assemble(
+                    z, runtime_from_params(prm, cfg),
+                    frozen, project, edge,
+                ),
+                (z_star, params), (project(dz), tangent),
+            )[1]
+
+        state_batch = jax.vmap(assemble_tangent)(dz_batch, tangent_batch)
+        return _device_pin(cfg, (state_batch, report))
 
 
 def _solve_implicit_bwd(cfg, res, gbar):
@@ -1575,26 +1887,43 @@ def implicit_state_pullback_multi_rhs(
     x_star: SpectralState,
     dof_mask: SpectralState,
     gbar_batch: SpectralState,
+    *,
+    solver: str = "gcrot",
+    probe_chunk_size: int = 1,
+    response_chunk_size: int = 1,
 ) -> ImplicitParams:
     """Batched state-cotangent pullback with shared implicit-linearization setup.
 
     This preserves the scalar solve_implicit VJP and only adds a helper for
     callers that already have several state cotangents for the same fixed
-    point.  It reuses the residual/projector/VJP setup once, then applies the
-    existing single-RHS GMRES per row.  Runs inside the config's device
-    context (see ``_solve_implicit_bwd``).
+    point.  ``solver="gcrot"`` (default) is the ordinary reverse rule.
+    ``solver="block"`` factors the raw nearest-neighbor radial Jacobian once,
+    reuses the same factors with ``transpose=True`` as a right preconditioner,
+    and certifies the ordinary preconditioned VJP.  Runs inside the config's
+    device context (see ``_solve_implicit_bwd``); the two chunk sizes bound
+    probe assembly and right-hand-side solves independently.
     """
+    if solver not in ("gcrot", "block"):
+        raise ValueError("solver must be 'gcrot' or 'block'")
+    active_fields = (
+        _active_state_fields(cfg) if solver == "block" else ()
+    )
     with _device_context(cfg):
         params = _device_pin(cfg, params)
         x_star = _device_pin(cfg, x_star)
         dof_mask = _device_pin(cfg, dof_mask)
         gbar_batch = _device_pin(cfg, gbar_batch)
         return _device_pin(cfg, _implicit_state_pullback_multi_rhs_impl(
-            params, cfg, x_star, dof_mask, gbar_batch))
+            params, cfg, x_star, dof_mask, gbar_batch,
+            solver=solver, active_fields=active_fields,
+            probe_chunk_size=probe_chunk_size,
+            response_chunk_size=response_chunk_size))
 
 
 def _implicit_state_pullback_multi_rhs_impl(
     params, cfg, x_star, dof_mask, gbar_batch,
+    *, solver="gcrot", active_fields=(), probe_chunk_size=1,
+    response_chunk_size=1,
 ) -> ImplicitParams:
     frozen = jax.lax.stop_gradient(x_star)
     edge_mask = _edge_mask(cfg)
@@ -1610,28 +1939,59 @@ def _implicit_state_pullback_multi_rhs_impl(
 
     rhs_batch = jax.vmap(P)(gbar_batch)
 
-    def solve_row(rhs):
-        lam, sol = _adjoint_solve_gcrot(lambda v: vjp_z(v)[0], rhs, cfg)
-        b_norm = jnp.sqrt(sum(jnp.vdot(v, v).real
-                              for v in jax.tree.leaves(rhs)))
-        return lam, sol.residual_norm, sol.iterations, sol.converged, b_norm
+    if solver == "block":
+        system = _raw_block_system(
+            params, cfg, frozen, dof_mask, active_fields, probe_chunk_size
+        )
+        def solve_row(rhs):
+            lam, sol = _adjoint_solve_gcrot(
+                lambda value: vjp_z(value)[0], rhs, cfg,
+                precond=lambda value: _raw_block_apply(
+                    system, value, transpose=True
+                ),
+            )
+            return lam, _linear_response_report(sol, rhs, cfg)
 
-    # Inside the vmap every row is traced, so _adjoint_solve_gcrot can only
-    # NaN-poison an unconverged row; the per-row solve stats are returned and
-    # re-checked concretely here (this helper runs host-eagerly) so the
-    # multi-RHS path raises the same typed AdjointSolveError as the scalar
-    # reverse pass.
-    lam_batch, res_batch, iter_batch, conv_batch, bnorm_batch = jax.vmap(
-        solve_row)(rhs_batch)
+        lam_batch, report = chunk_map(
+            solve_row, rhs_batch,
+            chunk_size=max(1, int(response_chunk_size)),
+        )
+        res_batch = report.residual_norm
+        iter_batch = report.iterations
+        conv_batch = report.converged
+        accept = report.tolerance
+    else:
+        def solve_row(rhs):
+            lam, sol = _adjoint_solve_gcrot(
+                lambda v: vjp_z(v)[0], rhs, cfg
+            )
+            return lam, _linear_response_report(sol, rhs, cfg)
+
+        lam_batch, report = jax.vmap(solve_row)(rhs_batch)
+        res_batch = report.residual_norm
+        iter_batch = report.iterations
+        conv_batch = report.converged
+        accept = report.tolerance
+
+    # A vmapped Krylov row is traced and therefore NaN-poisoned on failure;
+    # Both solver paths use the same host-eager convergence contract.
     if not isinstance(conv_batch, jax.core.Tracer):
-        accept = np.asarray(_adjoint_acceptance(cfg, bnorm_batch))
-        bad = ~(np.asarray(conv_batch) | (np.asarray(res_batch) <= accept))
+        bad = ~np.asarray(conv_batch)
         if np.any(bad):
             worst = int(np.argmax(np.where(bad, np.asarray(res_batch), -1.0)))
             _raise_adjoint_unconverged(
                 cfg, iterations=int(np.asarray(iter_batch)[worst]),
                 residual_norm=float(np.asarray(res_batch)[worst]),
-                tolerance=float(accept[worst]))
+                tolerance=float(np.asarray(accept)[worst]),
+                method=("block-preconditioned GCROT" if solver == "block" else None))
+    lam_batch = jax.tree.map(
+        lambda value: jnp.where(
+            conv_batch.reshape((conv_batch.shape[0],)
+                               + (1,) * (value.ndim - 1)),
+            value, jnp.full_like(value, jnp.nan),
+        ),
+        lam_batch,
+    )
     g1_batch = jax.vmap(lambda lam: vjp_p(jax.tree.map(jnp.negative, lam))[0])(lam_batch)
     g2_batch = jax.vmap(lambda gbar: vjp_p2(gbar)[0])(gbar_batch)
     return jax.tree.map(jnp.add, g1_batch, g2_batch)
