@@ -129,6 +129,7 @@ from .device import (
     AUTO,
     GPU_MAX_SPECTRAL_MODES,
     _placement_device,
+    _put_numeric_leaves,
     device_context,
 )
 from .errors import (
@@ -2173,29 +2174,33 @@ def solve(
     if resolution is None:
         raise ValueError("solve(RunSetup) requires a Resolution")
     use_fft_resolved = _resolve_use_fft(use_fft, device, resolution)
-    rt = prepare_runtime(
-        source, resolution, ftol=ftol, max_iterations=max_iterations,
-        time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
-        lconm1=lconm1, precon_type=precon_type,
-        prec2d_threshold=prec2d_threshold, prec2d=prec2d,
-        use_fft=use_fft_resolved,
+    initial_state = _put_numeric_leaves(
+        initial_state, _placement_device(device, resolution)
     )
-    if initial_state is not None:
-        ns, mnmax = rt.resolution.ns, rt.modes.mnmax
-        if tuple(initial_state.R_cos.shape) != (ns, mnmax):
-            raise ValueError(
-                f"initial_state has shape {tuple(initial_state.R_cos.shape)}, "
-                f"expected ({ns}, {mnmax}); interpolate with "
-                "vmex.core.multigrid.interpolate_state first"
-            )
-        initial_state = hot_restart_state(rt, initial_state)
-        rt = runtime_with_baselines(
-            rt, initial_state, use_fft=use_fft_resolved
-        )  # funct3d.f iter2==iter1
+    with device_context(device, resolution):
+        rt = prepare_runtime(
+            source, resolution, ftol=ftol, max_iterations=max_iterations,
+            time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
+            lconm1=lconm1, precon_type=precon_type,
+            prec2d_threshold=prec2d_threshold, prec2d=prec2d,
+            use_fft=use_fft_resolved,
+        )
     with device_context(device, rt.resolution):
+        if initial_state is not None:
+            ns, mnmax = rt.resolution.ns, rt.modes.mnmax
+            if tuple(initial_state.R_cos.shape) != (ns, mnmax):
+                raise ValueError(
+                    f"initial_state has shape {tuple(initial_state.R_cos.shape)}, "
+                    f"expected ({ns}, {mnmax}); interpolate with "
+                    "vmex.core.multigrid.interpolate_state first"
+                )
+            initial_state = hot_restart_state(rt, initial_state)
+            rt = runtime_with_baselines(
+                rt, initial_state, use_fft=use_fft_resolved
+            )  # funct3d.f iter2==iter1
         carry = _solve_stage(
             rt, initial_state, mode=mode, verbose=verbose, emit=emit,
             use_fft=use_fft_resolved,
             jacobian_retries=jacobian_retries,
         )
-    return _finalize(carry, rt)
+        return _finalize(carry, rt)

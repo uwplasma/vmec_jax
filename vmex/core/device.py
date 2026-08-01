@@ -269,8 +269,22 @@ def _put_numeric_leaves(value: Any, device: Any):
     """Move registered-pytree array leaves while preserving metadata/objects."""
     if value is None or device is None:
         return value
+
+    def put(leaf):
+        if not isinstance(leaf, (jax.Array, np.ndarray)):
+            return leaf
+        if isinstance(leaf, jax.Array) and not isinstance(leaf, jax.core.Tracer):
+            sources = leaf.devices()
+            if sources == {device}:
+                return leaf
+            if (
+                getattr(device, "platform", None) != "cpu"
+                and any(source.platform != "cpu" for source in sources)
+            ):
+                leaf = np.asarray(leaf)
+        return jax.device_put(leaf, device)
+
     return jax.tree.map(
-        lambda leaf: jax.device_put(leaf, device)
-        if isinstance(leaf, (jax.Array, np.ndarray)) else leaf,
+        put,
         value,
     )

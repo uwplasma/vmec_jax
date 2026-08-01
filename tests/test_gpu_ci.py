@@ -343,7 +343,8 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
     monkeypatch.setattr(
         freeboundary, "_solve_free_boundary_stage", recording_solve_stage,
     )
-    for platform in ("cpu", "gpu"):
+    gpu_target = jax.devices("gpu")[-1]
+    for platform, target in (("cpu", "cpu"), ("gpu", gpu_target)):
         active_platform[0] = platform
         lines = []
         results[platform] = multigrid.solve_free_boundary_multigrid(
@@ -353,7 +354,7 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
             emit=lambda *args, _lines=lines, **kwargs: _lines.append(
                 args[0] if args else ""
             ),
-            device=platform,
+            device=target,
         )
         output[platform] = "".join(lines)
 
@@ -370,6 +371,9 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
     assert stage_devices["gpu"][1] == {
         "field": {"gpu"}, "state": {"gpu"}, "vacuum": {"gpu"},
     }
+    assert all(
+        leaf.device == gpu_target for leaf in jax.tree.leaves(results["gpu"].state)
+    )
     assert solve_devices == {"cpu": None, "gpu": "cpu"}
     np.testing.assert_allclose(
         [results["gpu"].fsqr, results["gpu"].fsqz, results["gpu"].fsql],
@@ -428,6 +432,17 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
         atol=2e-12,
     )
     for name in (
+        "rmnc", "zmns", "rmns", "zmnc", "lmns", "lmnc",
+        "bmnc", "bmns", "iotaf",
+    ):
+        np.testing.assert_allclose(
+            getattr(wouts["gpu"], name),
+            getattr(wouts["cpu"], name),
+            rtol=5e-4,
+            atol=1e-9,
+            err_msg=name,
+        )
+    for name in (
         "potsin",
         "potcos",
         "bsubumnc_sur",
@@ -454,7 +469,10 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
         return solve_stage(*args, **kwargs)
 
     monkeypatch.setattr(freeboundary, "_solve_free_boundary_stage", recording_restart)
-    for target, source in (("gpu", "cpu"), ("cpu", "gpu")):
+    for platform, target, source in (
+        ("gpu", gpu_target, "cpu"),
+        ("cpu", "cpu", "gpu"),
+    ):
         seed = results[source].state
         seed = dataclasses.replace(
             seed,
@@ -470,8 +488,8 @@ def test_converged_lasym_free_boundary_cpu_gpu_parity(monkeypatch):
             max_iterations=1,
             error_on_no_convergence=False, initial_state=seed, device=target,
         )
-        assert _platform(restarted.state.R_cos) == target
-        assert _platform(restart_inputs[-1].R_cos) == target
+        assert _platform(restarted.state.R_cos) == platform
+        assert _platform(restart_inputs[-1].R_cos) == platform
         for family in ("R_cos", "R_sin", "Z_sin", "Z_cos"):
             np.testing.assert_array_equal(
                 getattr(restart_inputs[-1], family)[-1],
@@ -833,6 +851,35 @@ def _second_gpus():
     if len(gpus) < 2:
         pytest.skip("needs at least two GPUs")
     return gpus
+
+
+@_requires_gpu
+def test_second_gpu_relocation_preserves_values():
+    """Cross-accelerator placement must not trust unsafe peer copies."""
+    source, target = _second_gpus()[:2]
+    values = jax.device_put(np.arange(16.0), source)
+    moved = device_policy._put_numeric_leaves(values, target)
+    np.testing.assert_array_equal(np.asarray(moved), np.asarray(values))
+    assert moved.devices() == {target}
+
+
+@_requires_gpu
+def test_second_gpu_runtime_profiles_preserve_values():
+    """Profile quadrature constants must follow the selected accelerator."""
+    gpus = _second_gpus()
+    inp = VmecInput.from_file(DATA_DIR / "input.cth_like_free_bdy")
+    resolution = solver.resolution_from_input(inp, ns=15)
+    runtimes = []
+    for device in gpus[:2]:
+        with jax.default_device(device):
+            runtime = solver.prepare_runtime(inp, resolution)
+        assert {leaf.device for leaf in jax.tree.leaves(runtime)} == {device}
+        runtimes.append(runtime)
+    assert np.any(np.asarray(runtimes[0].setup.icurv) != 0.0)
+    for left, right in zip(
+        jax.tree.leaves(runtimes[0]), jax.tree.leaves(runtimes[1]), strict=True
+    ):
+        np.testing.assert_array_equal(left, right)
 
 
 @_requires_gpu
