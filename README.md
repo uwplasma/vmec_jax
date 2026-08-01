@@ -160,7 +160,8 @@ bottleneck or stalls.
 **High-mode HSX QHS deck** (`MPOL=18, NTOR=24, NZETA=100, ns→101`; 858 modes),
 sequentially on an idle Apple Silicon CPU. VMEX was measured once with an
 empty persistent compilation cache and twice in fresh processes reusing that
-cache; VMEC++ was measured twice:
+cache; those recorded VMEX runs used compilation prefetch. VMEC++ was
+measured twice:
 
 | code | wall | peak RSS | outcome |
 | --- | ---: | ---: | --- |
@@ -176,8 +177,8 @@ memory of ten-thread VMEC++; an empty-cache run is 2.68× slower. VMEX remains
 ``1.02e-11`` in ``bmnc``, and ``2.37e-11`` in core ``iota``. The runtime
 is therefore about the 2.5× target for this PR; the remaining XLA
 executable/full-radial memory gap is stated explicitly rather than treated as
-closed. For memory-constrained cold runs, ``--no-prefetch-compile`` trades
-startup latency for a lower peak.
+closed. The CLI compiles multigrid rungs sequentially to bound peak memory;
+``--prefetch-compile`` opts into overlapping the next rung's compilation.
 
 ![Wall-clock comparison against VMEC2000 and a reference C++ implementation](docs/_static/figures/readme_runtime_compare.png)
 
@@ -563,7 +564,7 @@ options:
                          cuda, rocm, or tpu; applies to all solve paths
   --ftol F               override the final-stage FTOL_ARRAY tolerance
   --max-iter N           override the final-stage NITER_ARRAY cap
-  --no-prefetch-compile  lower peak memory by compiling lanes sequentially
+  --prefetch-compile     overlap next-rung compilation (higher peak memory)
   --coils PATH           ESSOS-style coils file: tabulate its Biot-Savart
                          field in memory instead of reading an mgrid file
   --mbooz/--nbooz N      Boozer spectral resolution (default 32/32)

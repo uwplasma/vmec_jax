@@ -386,9 +386,12 @@ unaffected.  Library :func:`~vmex.core.multigrid.solve_multigrid` and
 :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` retain warm stage
 executables by default (the right policy for scans and repeated solves) and
 accept ``release_stage_cache=True`` to opt into the one-shot behaviour.
-The CLI normally overlaps compilation to reduce cold-start latency.  On
-memory-constrained hosts, ``--no-prefetch-compile`` instead compiles solver
-lanes sequentially; the library equivalent is ``prefetch_compile=False``.
+The CLI and library compile solver lanes sequentially by default.
+``--prefetch-compile`` (or ``prefetch_compile=True`` in the library) overlaps
+the next rung's compilation.  This can reduce cold-start latency on a
+core-rich host, but increases peak memory and can contend with the active
+solve when the available CPU set is small.  ``--no-prefetch-compile`` remains
+an explicit spelling of the default.
 
 Implicit-storage experiments (recorded so they are not repeated)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
