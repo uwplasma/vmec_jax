@@ -685,6 +685,94 @@ def _assert_audit_matches(inp, reference, audit, *, value_rtol, grad_rtol,
             err_msg=f"{name} gradient diverged on {label}")
 
 
+def _block_response_audit(inp, device):
+    with device_policy.device_scope(device):
+        cfg = im.make_config(inp, ftol=1e-13, max_iterations=2000)
+        params = im.params_from_input(inp)
+        state, mask = im.solve_implicit_with_aux(params, cfg)
+        zero = jax.tree.map(jax.numpy.zeros_like, params)
+        tangent = dataclasses.replace(
+            zero, rbc=zero.rbc.at[inp.ntor, 1].set(1.0)
+        )
+        tangent_batch = jax.tree.map(lambda value: value[None], tangent)
+        state_tangent, report = im.implicit_state_tangent_multi_rhs(
+            params, cfg, state, mask, tangent_batch,
+            probe_chunk_size=4, response_chunk_size=1,
+        )
+        cotangent = jax.tree.map(
+            lambda value: jax.numpy.ones((1,) + value.shape, value.dtype),
+            state,
+        )
+        pullback = im.implicit_state_pullback_multi_rhs(
+            params, cfg, state, mask, cotangent, solver="block",
+            probe_chunk_size=4, response_chunk_size=1,
+        )
+        direction = jax.jvp(
+            lambda x, p: im.aspect_ratio(
+                x, im.runtime_from_params(p, cfg)
+            ),
+            (state, params),
+            (jax.tree.map(lambda value: value[0], state_tangent), tangent),
+        )[1]
+        result = (
+            state_tangent, report, direction, pullback.rbc[0, inp.ntor, 1]
+        )
+        return jax.tree.map(
+            lambda value: value.block_until_ready(), result
+        )
+
+
+@_requires_gpu
+def test_block_response_cpu_gpu_parity():
+    """Factor-once tangents and transpose responses obey the device contract."""
+    _assert_no_platform_pins()
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    devices = (jax.devices("cpu")[0], *jax.devices("gpu"))
+    audits = [_block_response_audit(inp, device) for device in devices]
+    reference = audits[0]
+    for device, (tangent, report, direction, pullback) in zip(
+        devices, audits, strict=True
+    ):
+        assert all(
+            value.devices() == {device} for value in jax.tree.leaves(tangent)
+        )
+        assert np.all(np.asarray(report.converged))
+        np.testing.assert_allclose(
+            direction, reference[2], rtol=2e-9, atol=1e-12
+        )
+        np.testing.assert_allclose(
+            pullback, reference[3], rtol=2e-9, atol=1e-12
+        )
+
+
+@_requires_gpu
+def test_implicit_optimizer_nondefault_gpu_parity():
+    """Optimizer constants must be created directly on the selected GPU."""
+    devices = jax.devices("gpu")
+    if len(devices) < 2:
+        pytest.skip("needs two GPUs")
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    results = [
+        optimize.least_squares(
+            [(optimize.aspect_ratio, 4.0, 1.0)],
+            inp,
+            max_mode=1,
+            jac="implicit",
+            jac_solver="block",
+            max_nfev=1,
+            device=device,
+        )
+        for device in devices[:2]
+    ]
+    assert all(np.all(np.isfinite(result.jac)) for result in results)
+    np.testing.assert_allclose(
+        results[1].fun, results[0].fun, rtol=2e-9, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        results[1].jac, results[0].jac, rtol=2e-8, atol=1e-11
+    )
+
+
 # (device, ftol, max_iterations) -> reference audit.  Memoized so the three
 # lanes per rig do not repeat the 7-metric reference sweep; computed lazily so
 # the cold-start lane can run its target-device audit FIRST.
