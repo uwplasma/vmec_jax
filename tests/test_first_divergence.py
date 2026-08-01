@@ -250,7 +250,7 @@ def test_nstep_inserted_when_missing_lowercase_indata(tmp_path):
 # (e) privacy: harness failures must never echo the deck path
 # ---------------------------------------------------------------------------
 
-def test_privacy_harness_error_hides_deck_path(tmp_path, capsys, monkeypatch):
+def test_privacy_usage_error_hides_deck_path(tmp_path, capsys, monkeypatch):
     marker = "CONFIDENTIAL_MARKER_7QX"
     deck = tmp_path / marker / "input.private"  # directory does not exist
     monkeypatch.setattr(sys, "argv", [
@@ -260,7 +260,51 @@ def test_privacy_harness_error_hides_deck_path(tmp_path, capsys, monkeypatch):
     captured = capsys.readouterr()
     assert rc == 3
     assert marker not in captured.out + captured.err
-    assert "C0 HARNESS_ERROR FileNotFoundError" in captured.out
+    assert "C0 USAGE_ERROR input file not found" in captured.out
+
+
+def test_usage_input_directory_is_path_free_hint(tmp_path, capsys, monkeypatch):
+    marker = "CONFIDENTIAL_MARKER_4TD"
+    deck_dir = tmp_path / marker
+    deck_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", [
+        "first_divergence.py", str(deck_dir),
+        "--xvmec2000", str(tmp_path / "xvmec2000")])
+    rc = fd.main()
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert marker not in captured.out + captured.err
+    assert "C0 USAGE_ERROR input is a directory" in captured.out
+
+
+def test_usage_executable_directory_without_binary(tmp_path, capsys, monkeypatch):
+    deck = tmp_path / "input.case"
+    deck.write_text("&INDATA\n  NSTEP = 5,\n/\n")
+    exe_dir = tmp_path / "build"
+    exe_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", [
+        "first_divergence.py", str(deck), "--xvmec2000", str(exe_dir)])
+    rc = fd.main()
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "C0 USAGE_ERROR --xvmec2000 is a directory" in captured.out
+
+
+def test_usage_executable_directory_resolves_to_binary(tmp_path, capsys,
+                                                       monkeypatch):
+    deck = tmp_path / "input.case"
+    deck.write_text("&INDATA\n  NSTEP = 5,\n/\n")
+    exe_dir = tmp_path / "build"
+    exe_dir.mkdir()
+    (exe_dir / "xvmec2000").write_text("")  # not runnable: C1 must follow
+    monkeypatch.setattr(sys, "argv", [
+        "first_divergence.py", str(deck), "--xvmec2000", str(exe_dir)])
+    rc = fd.main()
+    captured = capsys.readouterr()
+    assert "USAGE_ERROR" not in captured.out
+    assert "using the xvmec2000 executable found inside" in captured.out
+    assert rc == 2  # proceeds into compare; the stub cannot actually run
+    assert "C1 PARSE: VMEC2000 run failed" in captured.out
 
 
 def test_privacy_missing_executable_hides_paths(tmp_path, capsys, monkeypatch):
@@ -274,9 +318,28 @@ def test_privacy_missing_executable_hides_paths(tmp_path, capsys, monkeypatch):
         "--xvmec2000", str(deck_dir / "missing_exe")])
     rc = fd.main()
     captured = capsys.readouterr()
+    assert rc == 3
+    assert marker not in captured.out + captured.err
+    assert "C0 USAGE_ERROR --xvmec2000 executable not found" in captured.out
+
+
+def test_privacy_broken_executable_hides_paths(tmp_path, capsys, monkeypatch):
+    """A present-but-unrunnable executable exercises compare's internal C1
+    error path; the report must stay path-free."""
+    marker = "CONFIDENTIAL_MARKER_9ZK"
+    deck_dir = tmp_path / marker
+    deck_dir.mkdir()
+    deck = deck_dir / "input.case"
+    deck.write_text("&INDATA\n  NSTEP = 5,\n/\n")
+    broken = deck_dir / "broken_exe"
+    broken.write_text("")  # exists but is not runnable
+    monkeypatch.setattr(sys, "argv", [
+        "first_divergence.py", str(deck), "--xvmec2000", str(broken)])
+    rc = fd.main()
+    captured = capsys.readouterr()
     assert rc == 2
     assert marker not in captured.out + captured.err
-    assert "C1 PARSE: VMEC2000 run failed (FileNotFoundError)" in captured.out
+    assert "C1 PARSE: VMEC2000 run failed" in captured.out
 
 
 # ---------------------------------------------------------------------------

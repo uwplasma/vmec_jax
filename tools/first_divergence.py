@@ -41,6 +41,10 @@ Failure handling: any harness failure is reported as
 ``C0 HARNESS_ERROR <ExceptionClassName>`` — the exception class name only,
 never a traceback, so private paths, deck contents, or input-derived values
 cannot escape.  ``--details`` remains the only mode that prints values.
+Argument mistakes are caught up front as ``C0 USAGE_ERROR <hint>`` with a
+path-free hint (e.g. a directory passed where a file is expected); a
+directory passed as ``--xvmec2000`` is resolved to an ``xvmec2000``
+executable inside it when one exists.
 
 Usage::
 
@@ -478,6 +482,33 @@ def compare(deck: Path, xvmec2000: Path, *, niter: int | None,
     return 0 if worst != DIVERGENT else 1
 
 
+def _usage_error(hint: str) -> int:
+    """Path-free usage diagnostics (safe to share for a confidential deck)."""
+    print(f"C0 USAGE_ERROR {hint}")
+    return 3
+
+
+def _resolve_args(args: argparse.Namespace) -> int | None:
+    """Validate paths up front; returns an exit code on a usage error."""
+    if args.input.is_dir():
+        return _usage_error(
+            "input is a directory (pass the input.<case> file itself)")
+    if not args.input.is_file():
+        return _usage_error("input file not found")
+    if args.xvmec2000.is_dir():
+        candidate = args.xvmec2000 / "xvmec2000"
+        if not candidate.is_file():
+            return _usage_error(
+                "--xvmec2000 is a directory with no xvmec2000 executable "
+                "inside (pass the executable itself)")
+        print("note: --xvmec2000 was a directory; using the xvmec2000 "
+              "executable found inside it")
+        args.xvmec2000 = candidate
+    if not args.xvmec2000.is_file():
+        return _usage_error("--xvmec2000 executable not found")
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("input", type=Path)
@@ -489,6 +520,9 @@ def main() -> int:
     ap.add_argument("--details", action="store_true",
                     help="print values; NEVER share for a confidential deck")
     args = ap.parse_args()
+    usage_rc = _resolve_args(args)
+    if usage_rc is not None:
+        return usage_rc
     try:
         return compare(args.input, args.xvmec2000, niter=args.niter,
                        timeout=args.timeout, details=args.details)
