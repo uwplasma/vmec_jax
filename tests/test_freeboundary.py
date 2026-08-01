@@ -84,7 +84,8 @@ def ab_inputs():
         bz=np.asarray(bz_c) + bz_a,
         basis=basis, signgs=int(rt.setup.signgs),
     )
-    return dict(inp=inp, res=res, rt=rt, basis=basis, boundary=boundary, ext=ext)
+    return dict(inp=inp, res=res, rt=rt, basis=basis, boundary=boundary,
+                ext=ext, state=state, field=field, axis_r=axis_r, axis_z=axis_z)
 
 
 def test_nestor_skip_branch_matches_full_solve(ab_inputs):
@@ -578,6 +579,51 @@ def test_jac75_retry_rebuilds_vacuum_and_converges(capsys):
     assert max(result.fsqr, result.fsqz, result.fsql) <= 1.0e-10
 
 
+def test_vacuum_step_skip_reuses_cached_matrix(ab_inputs):
+    """``_vacuum_step`` cadence contract (vacuum.f): a skip step consumes the
+    full step's cached matrix/factor through the lane cache — with its own
+    tagged compile notice — and reproduces the full-step field at machine
+    precision on unchanged geometry."""
+    import types
+
+    inp, res, rt = ab_inputs["inp"], ab_inputs["res"], ab_inputs["rt"]
+    # the free driver populates the edge-pressure scale on its runtime
+    rt = dataclasses.replace(
+        rt, presf_ns_scale=FB._presf_ns_scale(inp, int(res.ns)))
+    basis_v, fused, _lane = FB._vacuum_executables(
+        res, mf=int(inp.mpol) + 1, nf=int(inp.ntor),
+        signgs=int(rt.setup.signgs), wint=np.asarray(rt.trig.wint),
+        modes=rt.modes, axis_r0=jnp.asarray(ab_inputs["axis_r"]),
+        axis_z0=jnp.asarray(ab_inputs["axis_z"]),
+    )
+    fb = FB.FreeBoundaryState()
+    fb.ivac = 0  # the IVAC0 host block has promoted -1 -> 0 before any step
+    carry = types.SimpleNamespace(state=ab_inputs["state"])
+    notices: list[str] = []
+
+    def emit(text="", end="\n"):
+        notices.append(str(text) + str(end))
+
+    FB._USED_LANE_KEYS.clear()  # earlier tests may have noticed these lanes
+    step = dict(carry=carry, rt=rt, fb=fb, basis=basis_v, fused_vac=fused,
+                field=ab_inputs["field"], emit=emit, verbose=True)
+    b_full = FB._vacuum_step(ivacskip=0, **step)
+    assert fb.mode_matrix is not None and fb.full_updates == 1
+    assert fb.ivac == 1  # vacuum.f first-call promotion + grid banner
+    b_skip = FB._vacuum_step(ivacskip=1, **step)
+    assert fb.full_updates == 1, "skip step must not rebuild the matrix"
+    output = "".join(notices)
+    assert "NESTOR full-update" in output and "NESTOR skip-update" in output
+    np.testing.assert_allclose(np.asarray(b_skip), np.asarray(b_full),
+                               rtol=1e-12, atol=1e-14)
+
+    # cache-bypassed fused vacuum (no cache_key): same skip result, direct call
+    step["fused_vac"] = dataclasses.replace(fused, cache_key=None)
+    b_direct = FB._vacuum_step(ivacskip=1, **step)
+    np.testing.assert_allclose(np.asarray(b_direct), np.asarray(b_full),
+                               rtol=1e-12, atol=1e-14)
+
+
 def test_bad_supplied_axis_is_reguessed_before_fused_filament(capsys):
     """Free boundary must share fixed boundary's first-bad-axis recovery."""
     inp = VmecInput.from_file(DECK)
@@ -675,6 +721,45 @@ def test_cached_vacuum_executable_rechecks_dynamic_axis(monkeypatch):
     assert seen[0][0] is cached[0]
     assert seen[0][1] is axis_r
     assert seen[0][2] is axis_z
+
+
+def test_call_lane_emits_notice_once_before_compile():
+    """Free-lane compile visibility: the first call of a lane structure
+    emits the tagged ``compile_notice`` BEFORE compiling/running; repeats of
+    the same structure stay silent (the pause happens once per process)."""
+    lane = jax.jit(lambda x: x + 1.0)
+    x = jnp.asarray(1.0)
+    tag = ("test_notice_lane", id(lane))  # unique per test run
+    notices: list[str] = []
+
+    def emit(text="", end="\n"):
+        notices.append(str(text) + str(end))
+
+    out = FB._call_lane(tag, lane, (x,),
+                        notice=(emit, 15, "steady vacuum loop"))
+    assert float(out) == 2.0
+    assert notices == [" compiling NS = 15 steady vacuum loop executable...\n"]
+
+    out = FB._call_lane(tag, lane, (x,),
+                        notice=(emit, 15, "steady vacuum loop"))
+    assert float(out) == 2.0
+    assert len(notices) == 1, "same-structure recall must not re-notice"
+
+    # non-verbose callers pass notice=None: never a print, same result.
+    out = FB._call_lane(("test_notice_lane_quiet", id(lane)), lane, (x,))
+    assert float(out) == 2.0
+    assert len(notices) == 1
+
+    # eager mode (jax_disable_jit) bypasses caching/notices entirely.
+    prev = bool(jax.config.jax_disable_jit)
+    jax.config.update("jax_disable_jit", True)
+    try:
+        out = FB._call_lane(tag, lane, (x,),
+                            notice=(emit, 15, "steady vacuum loop"))
+    finally:
+        jax.config.update("jax_disable_jit", prev)
+    assert float(out) == 2.0
+    assert len(notices) == 1, "eager passthrough must not notice"
 
 
 def test_cli_missing_mgrid_fallback_warns(tmp_path):

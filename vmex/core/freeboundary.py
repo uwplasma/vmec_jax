@@ -68,7 +68,8 @@ from .input import VmecInput
 from .mgrid import MgridField
 from .preconditioner_2d import Prec2DConfig
 from .printing import (
-    FORCE_ITERATIONS_BANNER, improved_axis_block, screen_header, screen_line,
+    FORCE_ITERATIONS_BANNER, compile_notice, improved_axis_block,
+    screen_header, screen_line,
     stage_banner,
     vacuum_banner,
 )
@@ -387,6 +388,12 @@ def _jacobian_ok(state: SpectralState, rt: SolverRuntime,
     ``analyt.f``'s ``log``/``sqrt`` kernels a degenerate boundary, and the
     resulting non-finite ``bsqvac`` turns funct3d.f's recoverable restart
     into a fatal NON-FINITE FORCE EVALUATION.
+
+    Used by the host-stepped activation passes only.  The traced steady
+    vacuum lane computes the same flag from its own single per-pass
+    synthesis (``_make_vacuum_lane``), which the force evaluation then
+    reuses — inlining this helper there duplicated a full geometry
+    synthesis inside the compiled free-lane program.
     """
     _, geometry = _geometry(state, rt, use_fft=use_fft)
     return jnp.logical_not(
@@ -993,6 +1000,7 @@ def _vacuum_step(
     cached matrix/factor/RHS stay on the selected plasma device across
     iterations. Only a few diagnostic scalars reach Python.
     """
+    ns_notice = int(rt.resolution.ns)
     if (
         int(ivacskip) == 0
         or fb.mode_matrix is None
@@ -1002,18 +1010,29 @@ def _vacuum_step(
         if fused_vac.cache_key is None:
             out = fused_vac.full(carry.state, rt, field)
         else:
-            out = _call_lane(("fb_vacfull", fused_vac.cache_key),
-                             fused_vac.full, (carry.state, rt, field))
+            out = _call_lane(
+                ("fb_vacfull", fused_vac.cache_key),
+                fused_vac.full, (carry.state, rt, field),
+                notice=(emit, ns_notice, "NESTOR full-update")
+                if verbose else None,
+            )
         fb.mode_matrix = out["mode_matrix"]
         fb.mode_factor = out["mode_factor"]
         fb.mode_pivots = out["mode_pivots"]
         fb.bvec_nonsing = out["bvec_nonsing"]
         fb.full_updates += 1
     else:
-        out = fused_vac.skip(
-            carry.state, rt, field, fb.bvec_nonsing,
-            fb.mode_factor, fb.mode_pivots,
-        )
+        skip_args = (carry.state, rt, field, fb.bvec_nonsing,
+                     fb.mode_factor, fb.mode_pivots)
+        if fused_vac.cache_key is None:
+            out = fused_vac.skip(*skip_args)
+        else:
+            out = _call_lane(
+                ("fb_vacskip", fused_vac.cache_key),
+                fused_vac.skip, skip_args,
+                notice=(emit, ns_notice, "NESTOR skip-update")
+                if verbose else None,
+            )
     bsqvac = out["bsqvac"]
     fb.rbsq = out["rbsq"]
     fb.potvac = out["potvac"]
@@ -1111,7 +1130,8 @@ def _fb_lane_signature(tag: Any, args: tuple) -> tuple:
 
 
 def _call_lane(tag: Any, lane: Any, args: tuple,
-               static: dict[str, Any] | None = None) -> Any:
+               static: dict[str, Any] | None = None,
+               *, notice: tuple | None = None) -> Any:
     """Run ``lane(*args, **static)``, preferring a prefetched executable.
 
     ``static`` holds jit static kwargs (baked into a prefetched executable's
@@ -1121,15 +1141,30 @@ def _call_lane(tag: Any, lane: Any, args: tuple,
     ``finally``, so the wait always terminates).  A structural/placement
     mismatch — the executable's argument validation precedes execution, so
     ``args`` are intact — falls back to the ordinary jitted lane.
+
+    ``notice = (emit, ns, label)`` extends the fixed-boundary
+    ``compile_notice`` convention to the free lanes: the first call for a
+    given structure in this process emits the one-line attribution BEFORE
+    the compile (or before joining an in-flight background compile), so a
+    file-redirected cluster log shows what a silent multi-minute pause is
+    building.  The caller passes it only when verbose; the emit must flush
+    (the CLI sink does).
     """
     kwargs = static or {}
-    if jax.config.jax_disable_jit or (
-            not _LANE_EXECUTABLES and not _FB_PREFETCH_ATTEMPTED):
+    if jax.config.jax_disable_jit:
+        return lane(*args, **kwargs)
+    if notice is None and not _LANE_EXECUTABLES and not _FB_PREFETCH_ATTEMPTED:
         return lane(*args, **kwargs)
     key = _fb_lane_signature(tag, args)
-    _USED_LANE_KEYS.add(key)
     with _FB_LOCK:
         pending = _FB_INFLIGHT.get(key)
+    if notice is not None and key not in _USED_LANE_KEYS:
+        emit, ns, label = notice
+        emit(compile_notice(
+            int(ns), lane=str(label),
+            prefetched=(pending is not None or key in _LANE_EXECUTABLES),
+        ), end="")
+    _USED_LANE_KEYS.add(key)
     if pending is not None:
         pending.wait()
     executable = _LANE_EXECUTABLES.get(key)
@@ -1391,10 +1426,20 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
         it = c.iteration
         fsq_rz = c.fsqr + c.fsqz
 
+        # funct3d.f computes geometry and its Jacobian ONCE per pass, before
+        # bcovar/IVAC0, and the force build shares them.  Synthesize once
+        # here: the Jacobian sign feeds the vacuum-source gate below and the
+        # same synthesis is handed to the force evaluation at the end of the
+        # pass (``evaluation_synthesis``), instead of inlining a second full
+        # geometry synthesis into this traced lane (the old ``_jacobian_ok``
+        # call).  Same ops on the same state — rows are bit-identical.
+        coeffs, geometry = _geometry(c.state, rt, use_fft=use_fft)
+        jacobian = half_mesh_jacobian(geometry, s=rt.setup.s_full)
+
         # NESTOR must never consume a sign-changed state (full funct3d.f/
         # evolve.f rationale: _jacobian_ok): feed it xstore and force a full
         # update whenever the current state is invalid.
-        good = _jacobian_ok(c.state, rt, use_fft=use_fft)
+        good = jnp.logical_not(jacobian.jacobian_sign_changed)
         vac_state = jax.tree.map(
             lambda a, b: jnp.where(good, a, b), c.state, c.xstore)
 
@@ -1447,7 +1492,12 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
             vc.delbsq_traj, delbsq[None], idx, axis=0)
 
         # -- one eqsolve iteration with the refreshed edge field ------------
-        new_carry = _make_body(replace(rt_vac, bsqvac_edge=bsqvac), use_fft=use_fft)(c)
+        # The force pass reuses the pass's single synthesis (funct3d.f
+        # ordering: forces consume the geometry computed before IVAC0).
+        new_carry = _make_body(
+            replace(rt_vac, bsqvac_edge=bsqvac), use_fft=use_fft,
+            evaluation_synthesis=(coeffs, geometry, jacobian),
+        )(c)
 
         return _VacuumLoopCarry(
             carry=new_carry, rcon0=rcon0, zcon0=zcon0, bsqvac=bsqvac,
@@ -1723,6 +1773,13 @@ def _solve_free_boundary_stage(
             lmove_axis=bool(rt.lmove_axis), vacuum_on=bool(vacuum_active),
             entry_lanes=False,
         )
+
+    def _lane_notice(label: str):
+        """Verbose ``compile_notice`` payload for the free lanes: every
+        free-lane compile pause is attributed in the (flushed) log BEFORE
+        the compile starts."""
+        return (emit, ns, label) if verbose else None
+
     try:
         if verbose:
             emit(stage_banner(ns, resolution.mnmax, rt.ftol, rt.max_iterations), end="")
@@ -1774,7 +1831,8 @@ def _solve_free_boundary_stage(
         # axis-dependent NESTOR filament/executables, then repeat iteration 1
         # once with ijacob=1.  The discarded triggering pass is not printed.
         carry = _call_lane(("fb_iter", use_fft), _iter_lane,
-                           (carry, rt_initial), {"use_fft": use_fft})
+                           (carry, rt_initial), {"use_fft": use_fft},
+                           notice=_lane_notice("free-iteration"))
         if (allow_initial_axis_reguess
                 and int(carry.ier) == AXIS_REGUESS_FLAG
                 and int(carry.ijacob) == 0 and ns >= 3):
@@ -1844,7 +1902,8 @@ def _solve_free_boundary_stage(
                 residuals=(carry.fsqr, carry.fsqz, carry.fsql),
             )
             carry = _call_lane(("fb_iter", use_fft), _iter_lane,
-                               (carry, rt_initial), {"use_fft": use_fft})
+                               (carry, rt_initial), {"use_fft": use_fft},
+                               notice=_lane_notice("free-iteration"))
         _emit_due(final=False)
 
         int_dtype = carry.iteration.dtype
@@ -1857,7 +1916,8 @@ def _solve_free_boundary_stage(
                 # runs as ONE jitted while_loop; the lane exits precisely where
                 # the per-pass driver would have entered the IVAC0 block below.
                 carry = _call_lane(("fb_preact", use_fft), _preactivation_lane,
-                                   (carry, rt_fixed), {"use_fft": use_fft})
+                                   (carry, rt_fixed), {"use_fft": use_fft},
+                                   notice=_lane_notice("pre-vacuum loop"))
                 _emit_due(final=False)
                 if bool(carry.done):
                     break
@@ -1869,7 +1929,8 @@ def _solve_free_boundary_stage(
                 # carried bsqvac once; iteration 2 performs the first full update
                 # against freshly selected resolution-specific NESTOR programs.
                 carry = _call_lane(("fb_iter", use_fft), _iter_lane,
-                                   (carry, rt_freeb), {"use_fft": use_fft})
+                                   (carry, rt_freeb), {"use_fft": use_fft},
+                                   notice=_lane_notice("free-iteration"))
                 _emit_due(final=False)
                 continue
             elif (fb.turned_on and not fb.banner_pending
@@ -1901,7 +1962,8 @@ def _solve_free_boundary_stage(
                     full_updates=jnp.asarray(fb.full_updates, dtype=int_dtype),
                 )
                 vc = _call_lane(("fb_vac", fused_vac.cache_key), vacuum_lane,
-                                (vc, rt_freeb, external_field))
+                                (vc, rt_freeb, external_field),
+                                notice=_lane_notice("steady vacuum loop"))
                 carry = vc.carry
                 rt_freeb = replace(rt_freeb, rcon0=vc.rcon0, zcon0=vc.zcon0,
                                    bsqvac_edge=vc.bsqvac)
@@ -1983,12 +2045,14 @@ def _solve_free_boundary_stage(
 
             if turnon_evaluation_state is None:
                 carry = _call_lane(("fb_iter", use_fft), _iter_lane,
-                                   (carry, rt_use), {"use_fft": use_fft})
+                                   (carry, rt_use), {"use_fft": use_fft},
+                                   notice=_lane_notice("free-iteration"))
             else:
                 carry = _call_lane(
                     ("fb_turnon", use_fft), _turnon_iter_lane,
                     (carry, rt_use, turnon_evaluation_state),
-                    {"use_fft": use_fft})
+                    {"use_fft": use_fft},
+                    notice=_lane_notice("vacuum turn-on"))
 
             if fb.banner_pending:
                 if verbose:

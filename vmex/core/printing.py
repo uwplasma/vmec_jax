@@ -87,16 +87,34 @@ def improved_axis_block(
     return "\n".join(lines) + "\n"
 
 
-def compile_notice(ns: int, *, prefetched: bool = False) -> str:
+def compile_notice(ns: int, *, lane: str | None = None,
+                   prefetched: bool = False) -> str:
     """One-line attribution for an XLA compile pause at a rung boundary.
 
     Emitted when a rung's iteration executable is not already available in
     this process, so cold-start pauses in the console output are
     attributable; ``prefetched`` marks executables built ahead of time by
-    the multigrid compile-overlap thread.
+    the multigrid compile-overlap thread.  ``lane`` tags the free-boundary
+    lanes (entry iteration, pre-vacuum loop, NESTOR full/skip updates,
+    vacuum turn-on, steady vacuum loop), which compile as several distinct
+    programs per rung — a large-grid free run pauses several times, and a
+    file-redirected cluster log must show which program each pause builds.
     """
     suffix = " (prefetched)" if prefetched else ""
-    return f" compiling NS = {int(ns)} executable...{suffix}\n"
+    what = f"{lane} executable" if lane else "executable"
+    return f" compiling NS = {int(ns)} {what}...{suffix}\n"
+
+
+def emit_flushed(*args, **kwargs) -> None:
+    """``print`` that always flushes.
+
+    The CLI's console sink: with stdout redirected to a file (cluster batch
+    logs), Python block-buffers ~8 KiB, so an unflushed long free-boundary
+    run shows nothing for hours.  Every emitted line must reach the file
+    immediately; callers may still pass ``flush=False`` explicitly.
+    """
+    kwargs.setdefault("flush", True)
+    print(*args, **kwargs)
 
 
 def stage_banner(ns: int, mnmax: int, ftol: float, niter: int) -> str:

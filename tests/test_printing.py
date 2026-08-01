@@ -160,6 +160,30 @@ def test_compile_notice_variants():
     assert printing.compile_notice(31, prefetched=True) == (
         " compiling NS = 31 executable... (prefetched)\n"
     )
+    # free-boundary lane tags (freeboundary._call_lane): each free lane
+    # compiles as its own program, so the pause attribution names it.
+    assert printing.compile_notice(15, lane="steady vacuum loop") == (
+        " compiling NS = 15 steady vacuum loop executable...\n"
+    )
+    assert printing.compile_notice(15, lane="free-iteration", prefetched=True) == (
+        " compiling NS = 15 free-iteration executable... (prefetched)\n"
+    )
+
+
+def test_emit_flushed_writes_and_flushes(capsys):
+    """The CLI sink must flush every line so file-redirected cluster logs
+    stream in real time (an unflushed run shows nothing for hours)."""
+    import io
+    import unittest.mock as mock
+
+    printing.emit_flushed("hello", end="")
+    assert capsys.readouterr().out == "hello"
+
+    sink = io.StringIO()
+    with mock.patch.object(sink, "flush", wraps=sink.flush) as spy:
+        printing.emit_flushed("line", file=sink)
+    assert sink.getvalue() == "line\n"
+    assert spy.called, "emit_flushed must flush the target stream"
 
 
 def test_termination_summary_known_and_unknown_flags():

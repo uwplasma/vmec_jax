@@ -889,7 +889,10 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
-    emit = print
+    # Flushing sink: with stdout redirected to a file (cluster batch logs),
+    # the default block buffering can hide hours of iteration rows and
+    # compile notices; every CLI line must reach the file immediately.
+    from .printing import emit_flushed as emit
 
     try:
         return _dispatch(args, parser, emit=emit)

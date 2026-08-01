@@ -250,7 +250,105 @@ def test_nstep_inserted_when_missing_lowercase_indata(tmp_path):
 # (e) privacy: harness failures must never echo the deck path
 # ---------------------------------------------------------------------------
 
-def test_privacy_harness_error_hides_deck_path(tmp_path, capsys, monkeypatch):
+# ---------------------------------------------------------------------------
+# (a2) threed1 input-echo parsing + C1 sub-stage comparison
+# ---------------------------------------------------------------------------
+
+_ECHO_HEAD = (
+    " R-Z FOURIER BOUNDARY COEFFICIENTS AND MAGNETIC AXIS INITIAL GUESS\n"
+    " --------------------------------------------------------------\n"
+    "   nb  mb     rbc         rbs         zbc         zbs       raxis(c)\n"
+)
+
+
+def _echo_from_input(deck: Path, doctor=None) -> str:
+    """A threed1-style boundary echo rendered from VMEX's own parse."""
+    import numpy as np
+
+    from vmex.core.input import VmecInput
+    inp = VmecInput.from_file(str(deck))
+    rbc, rbs = np.asarray(inp.rbc, float), np.asarray(inp.rbs, float)
+    zbc, zbs = np.asarray(inp.zbc, float), np.asarray(inp.zbs, float)
+    lines = [_ECHO_HEAD.rstrip("\n")]
+    for mb in range(int(inp.mpol)):
+        for nb in range(-int(inp.ntor), int(inp.ntor) + 1):
+            row = [rbc[inp.ntor + nb, mb], rbs[inp.ntor + nb, mb],
+                   zbc[inp.ntor + nb, mb], zbs[inp.ntor + nb, mb]]
+            if doctor is not None:
+                row = doctor(nb, mb, row)
+            if not any(abs(v) > 0 for v in row):
+                continue
+            vals = "  ".join(f"{v: .4E}" for v in row)
+            lines.append(f"   {nb:>2d}  {mb:>2d}  {vals}")
+    return "\n".join(lines) + "\n\n NEXT SECTION\n"
+
+
+def _run_echo_compare(ref_text: str, deck: Path) -> tuple[list[str], list[str]]:
+    stages: list[str] = []
+    klasses: list[str] = []
+
+    def stage(code: str, text: str) -> None:
+        stages.append(f"{code}: {text}")
+
+    fd._compare_parsed_inputs(ref_text, deck, stage, klasses.append, False)
+    return stages, klasses
+
+
+def test_threed1_scalar_and_coeff_parsers():
+    text = (
+        "    nfp      gamma      spres_ped    phiedge(wb)     curtor(A)        lRFP\n"
+        "      5  0.000E+00      1.000E+00     -3.500E-02     4.323E+04           F\n"
+        "  ncurr  niter   nsin  nstep  nvacskip      ftol     tcon0    lasym  lforbal lmove_axis lconm1\n"
+        "      1   2500     15    100         9  1.00E-10  1.00E+00        F        F        T        T\n"
+        " Pressure profile factor:  4.3229E+02 (multiplier for pressure)\n"
+        " MASS PROFILE COEFFICIENTS - newton/m**2 (EXPANSION IN NORMALIZED RADIUS):\n"
+        " PMASS parameterization type is 'two_power'\n"
+        " -----------------------------------\n"
+        "   1.000E+00   5.000E+00   1.000E+01\n"
+    )
+    scal = fd._threed1_scalars(text)
+    assert scal["nfp"] == 5 and scal["phiedge"] == pytest.approx(-0.035)
+    assert scal["curtor"] == pytest.approx(4.323e4)
+    assert scal["lforbal"] == 0.0 and scal["pres_scale"] == pytest.approx(432.29)
+    assert fd._threed1_coeffs(text, "MASS PROFILE COEFFICIENTS") == [1.0, 5.0, 10.0]
+    assert fd._threed1_coeffs(text, "IOTA PROFILE COEFFICIENTS") is None
+
+
+def test_parse_echo_matches_own_render():
+    deck = DATA / "input.cth_like_fixed_bdy"
+    stages, klasses = _run_echo_compare(_echo_from_input(deck), deck)
+    assert any("C1 PARSE_BOUNDARY: MATCH" in s for s in stages)
+    assert all(k == fd.MATCH for k in klasses)
+
+
+def test_parse_echo_flags_doctored_boundary_mode():
+    deck = DATA / "input.cth_like_fixed_bdy"
+
+    def doctor(nb, mb, row):
+        return [2.0 * v for v in row] if (nb, mb) == (0, 1) else row
+
+    stages, klasses = _run_echo_compare(
+        _echo_from_input(deck, doctor=doctor), deck)
+    line = next(s for s in stages if s.startswith("C1 PARSE_BOUNDARY"))
+    assert "DIVERGENT" in line and "(nb=0,mb=1)" in line
+    assert fd.DIVERGENT in klasses
+    # privacy: no coefficient values in the default (no --details) output
+    assert not re.search(r"\d\.\d{3,}E[+-]\d", line)
+
+
+def test_parse_echo_flags_vmex_only_mode():
+    """A mode VMEX parsed as nonzero but absent from the echo is a finding."""
+    deck = DATA / "input.cth_like_fixed_bdy"
+
+    def doctor(nb, mb, row):
+        return [0.0] * 4 if (nb, mb) == (0, 2) else row
+
+    stages, _ = _run_echo_compare(_echo_from_input(deck, doctor=doctor), deck)
+    line = next(s for s in stages if s.startswith("C1 PARSE_BOUNDARY"))
+    assert "DIVERGENT" in line and "(nb=0,mb=2)" in line
+
+
+def test_privacy_usage_error_hides_deck_path(tmp_path, capsys, monkeypatch):
     marker = "CONFIDENTIAL_MARKER_7QX"
     deck = tmp_path / marker / "input.private"  # directory does not exist
     monkeypatch.setattr(sys, "argv", [
@@ -260,7 +358,51 @@ def test_privacy_harness_error_hides_deck_path(tmp_path, capsys, monkeypatch):
     captured = capsys.readouterr()
     assert rc == 3
     assert marker not in captured.out + captured.err
-    assert "C0 HARNESS_ERROR FileNotFoundError" in captured.out
+    assert "C0 USAGE_ERROR input file not found" in captured.out
+
+
+def test_usage_input_directory_is_path_free_hint(tmp_path, capsys, monkeypatch):
+    marker = "CONFIDENTIAL_MARKER_4TD"
+    deck_dir = tmp_path / marker
+    deck_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", [
+        "first_divergence.py", str(deck_dir),
+        "--xvmec2000", str(tmp_path / "xvmec2000")])
+    rc = fd.main()
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert marker not in captured.out + captured.err
+    assert "C0 USAGE_ERROR input is a directory" in captured.out
+
+
+def test_usage_executable_directory_without_binary(tmp_path, capsys, monkeypatch):
+    deck = tmp_path / "input.case"
+    deck.write_text("&INDATA\n  NSTEP = 5,\n/\n")
+    exe_dir = tmp_path / "build"
+    exe_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", [
+        "first_divergence.py", str(deck), "--xvmec2000", str(exe_dir)])
+    rc = fd.main()
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "C0 USAGE_ERROR --xvmec2000 is a directory" in captured.out
+
+
+def test_usage_executable_directory_resolves_to_binary(tmp_path, capsys,
+                                                       monkeypatch):
+    deck = tmp_path / "input.case"
+    deck.write_text("&INDATA\n  NSTEP = 5,\n/\n")
+    exe_dir = tmp_path / "build"
+    exe_dir.mkdir()
+    (exe_dir / "xvmec2000").write_text("")  # not runnable: C1 must follow
+    monkeypatch.setattr(sys, "argv", [
+        "first_divergence.py", str(deck), "--xvmec2000", str(exe_dir)])
+    rc = fd.main()
+    captured = capsys.readouterr()
+    assert "USAGE_ERROR" not in captured.out
+    assert "using the xvmec2000 executable found inside" in captured.out
+    assert rc == 2  # proceeds into compare; the stub cannot actually run
+    assert "C1 PARSE: VMEC2000 run failed" in captured.out
 
 
 def test_privacy_missing_executable_hides_paths(tmp_path, capsys, monkeypatch):
@@ -274,9 +416,28 @@ def test_privacy_missing_executable_hides_paths(tmp_path, capsys, monkeypatch):
         "--xvmec2000", str(deck_dir / "missing_exe")])
     rc = fd.main()
     captured = capsys.readouterr()
+    assert rc == 3
+    assert marker not in captured.out + captured.err
+    assert "C0 USAGE_ERROR --xvmec2000 executable not found" in captured.out
+
+
+def test_privacy_broken_executable_hides_paths(tmp_path, capsys, monkeypatch):
+    """A present-but-unrunnable executable exercises compare's internal C1
+    error path; the report must stay path-free."""
+    marker = "CONFIDENTIAL_MARKER_9ZK"
+    deck_dir = tmp_path / marker
+    deck_dir.mkdir()
+    deck = deck_dir / "input.case"
+    deck.write_text("&INDATA\n  NSTEP = 5,\n/\n")
+    broken = deck_dir / "broken_exe"
+    broken.write_text("")  # exists but is not runnable
+    monkeypatch.setattr(sys, "argv", [
+        "first_divergence.py", str(deck), "--xvmec2000", str(broken)])
+    rc = fd.main()
+    captured = capsys.readouterr()
     assert rc == 2
     assert marker not in captured.out + captured.err
-    assert "C1 PARSE: VMEC2000 run failed (FileNotFoundError)" in captured.out
+    assert "C1 PARSE: VMEC2000 run failed" in captured.out
 
 
 # ---------------------------------------------------------------------------
