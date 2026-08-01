@@ -11,7 +11,13 @@ prints numerical values and must never be shared for such a deck.
 
 Stages compared (first failure is the leading suspect):
 
-  C1 PARSE          acceptance and early-termination status of BOTH codes
+  C1 PARSE          acceptance and early-termination status of BOTH codes;
+                    sub-stages PARSE_SCALARS / PARSE_PROFILES /
+                    PARSE_BOUNDARY then compare VMEX's parsed values against
+                    VMEC2000's threed1 input echo (field names, counts, and
+                    at most one worst (nb, mb) mode index — values only with
+                    ``--details``), so a parser divergence is localized to
+                    the exact field instead of surfacing obscurely at C2/C3
   C2 AXIS_ROW1      the printed initial axis position (RAX at iteration 1)
   C3 ITER1_FORCES   the iteration-1 FSQR/FSQZ/FSQL residual triplet
   C4 TRAJECTORY     first iteration where any residual channel leaves the
@@ -195,6 +201,184 @@ def _klass(rel: float) -> str:
     return DIVERGENT
 
 
+#: threed1 echoes carry 4-5 significant digits, so exact parses differ from
+#: the echo by up to ~5e-4 relative; only grosser differences are parse bugs.
+_ECHO_TOL = 1.5e-3
+#: coefficients this small print as (or are omitted as) zero in the echo
+_ECHO_ZERO = 1e-13
+
+
+def _echo_equal(ref: float, got: float) -> bool:
+    if abs(ref) <= _ECHO_ZERO and abs(got) <= _ECHO_ZERO:
+        return True
+    return _rel(ref, got) <= _ECHO_TOL
+
+
+_FLOAT = r"[+-]?\d+\.\d+E[+-]\d+"
+
+
+def _threed1_boundary(text: str) -> dict[tuple[int, int], tuple[float, ...]]:
+    """(nb, mb) -> (rbc, rbs, zbc, zbs) from the threed1 boundary echo."""
+    rows: dict[tuple[int, int], tuple[float, ...]] = {}
+    m = re.search(r"nb\s+mb\s+rbc\s+rbs\s+zbc\s+zbs", text)
+    if not m:
+        return rows
+    row_re = re.compile(
+        rf"^\s*(-?\d+)\s+(\d+)((?:\s+{_FLOAT}){{4,8}})\s*$")
+    for line in text[m.end():].splitlines()[1:]:  # [0] = header-line tail
+        if not line.strip():
+            continue
+        rm = row_re.match(line)
+        if not rm:
+            break  # end of the table
+        vals = [float(v) for v in rm.group(3).split()]
+        rows[(int(rm.group(1)), int(rm.group(2)))] = tuple(vals[:4])
+    return rows
+
+
+def _threed1_scalars(text: str) -> dict[str, float]:
+    """Pure parse-through scalars from the threed1 parameter echo.
+
+    Deliberately excludes controls VMEC2000 re-defaults itself (nvacskip,
+    niter, nstep, ftol) — those differ lawfully without being parse bugs.
+    """
+    out: dict[str, float] = {}
+    m = re.search(
+        r"nfp\s+gamma\s+spres_ped\s+phiedge\(wb\)\s+curtor\(A\)\s+lRFP\s*\n"
+        rf"\s*(\d+)\s+({_FLOAT})\s+({_FLOAT})\s+({_FLOAT})\s+({_FLOAT})",
+        text)
+    if m:
+        out.update(nfp=float(m.group(1)), gamma=float(m.group(2)),
+                   spres_ped=float(m.group(3)), phiedge=float(m.group(4)),
+                   curtor=float(m.group(5)))
+    m = re.search(
+        r"ncurr\s+niter\s+nsin\s+nstep\s+nvacskip\s+ftol\s+tcon0\s+lasym"
+        rf"\s+lforbal[^\n]*\n\s*(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+{_FLOAT}"
+        rf"\s+({_FLOAT})\s+([TF])\s+([TF])", text)
+    if m:
+        out.update(ncurr=float(m.group(1)), tcon0=float(m.group(2)),
+                   lasym=float(m.group(3) == "T"),
+                   lforbal=float(m.group(4) == "T"))
+    m = re.search(rf"Pressure profile factor:\s*({_FLOAT})", text)
+    if m:
+        out["pres_scale"] = float(m.group(1))
+    return out
+
+
+def _threed1_coeffs(text: str, header: str) -> list[float] | None:
+    """Coefficient lines following an echo ``header`` (skipping the
+    parameterization-type and separator lines), or None if not echoed."""
+    at = text.find(header)
+    if at < 0:
+        return None
+    coeffs: list[float] = []
+    num_line = re.compile(rf"^\s*(?:{_FLOAT}\s*)+$")
+    for line in text[at:].splitlines()[1:]:
+        if num_line.match(line):
+            coeffs.extend(float(v) for v in line.split())
+        elif coeffs:
+            break  # past the (possibly wrapped) coefficient lines
+        elif line.strip() and "----" not in line and "type is" not in line:
+            break  # a foreign section before any numbers appeared
+    return coeffs or None
+
+
+def _compare_parsed_inputs(ref_text: str, deck: Path, stage, note,
+                           details: bool) -> None:
+    """C1 sub-stages: the threed1 input echo vs VMEX's parsed values.
+
+    Localizes a parser divergence to the field (and, for the boundary, the
+    worst (nb, mb) index) BEFORE it surfaces obscurely in C2/C3.  Privacy:
+    field names, counts, and one mode-index pair only; values need
+    ``--details``.
+    """
+    import numpy as np
+
+    from vmex.core.input import VmecInput
+    inp = VmecInput.from_file(str(deck))
+
+    # scalars
+    echoed = _threed1_scalars(ref_text)
+    if echoed:
+        bad = [name for name, ref in echoed.items()
+               if not _echo_equal(ref, float(getattr(inp, name)))]
+        k = DIVERGENT if bad else MATCH
+        note(k)
+        body = f"{k} ({len(echoed)} compared)" if not bad else (
+            f"{k} " + " ".join(
+                f"{n}(ref={echoed[n]:.4e},vmex={float(getattr(inp, n)):.4e})"
+                if details else n for n in bad))
+        stage("C1 PARSE_SCALARS", body)
+
+    # profile parameterization types + coefficient arrays
+    parts, k_prof = [], MATCH
+    for label, header, type_field in (
+            ("aphi", "FLUX COEFFICIENTS aphi", None),
+            ("am", "MASS PROFILE COEFFICIENTS", "pmass_type"),
+            ("ac", "CURRENT DENSITY (*V') COEFFICIENTS ac", "pcurr_type"),
+            ("ai", "IOTA PROFILE COEFFICIENTS", "piota_type")):
+        ref_c = _threed1_coeffs(ref_text, header)
+        if ref_c is None:
+            continue
+        got_c = [float(v) for v in np.atleast_1d(
+            np.asarray(getattr(inp, label), dtype=float))]
+        width = max(len(ref_c), len(got_c))
+        ok = all(_echo_equal(r, g) for r, g in zip(
+            ref_c + [0.0] * (width - len(ref_c)),
+            got_c + [0.0] * (width - len(got_c))))
+        if type_field is not None:
+            tm = re.search(
+                rf"P{label[1:].upper()}\w* parameterization type is '(\w+)'",
+                ref_text)
+            vmex_type = str(getattr(inp, type_field, "")).strip().lower()
+            if tm and tm.group(1).strip().lower() != vmex_type:
+                ok = False
+        parts.append(label if ok else f"{label}=DIVERGENT")
+        if not ok:
+            k_prof = DIVERGENT
+    if parts:
+        note(k_prof)
+        stage("C1 PARSE_PROFILES", f"{k_prof} ({' '.join(parts)})")
+
+    # boundary coefficient table
+    ref_rows = _threed1_boundary(ref_text)
+    if ref_rows:
+        rbc = np.asarray(inp.rbc, dtype=float)
+        rbs = np.asarray(inp.rbs, dtype=float)
+        zbc = np.asarray(inp.zbc, dtype=float)
+        zbs = np.asarray(inp.zbs, dtype=float)
+        ntor, mpol = int(inp.ntor), int(inp.mpol)
+
+        def vmex_row(nb: int, mb: int) -> tuple[float, ...]:
+            if abs(nb) > ntor or not 0 <= mb < mpol:
+                return (0.0, 0.0, 0.0, 0.0)
+            return tuple(float(a[ntor + nb, mb]) for a in (rbc, rbs, zbc, zbs))
+
+        keys = set(ref_rows)
+        for mb in range(mpol):  # VMEX-nonzero modes VMEC2000 did not echo
+            for nb in range(-ntor, ntor + 1):
+                if any(abs(v) > 1e-10 for v in vmex_row(nb, mb)):
+                    keys.add((nb, mb))
+        bad_modes: list[tuple[float, int, int]] = []
+        for nb, mb in sorted(keys):
+            ref_v = ref_rows.get((nb, mb), (0.0,) * 4)
+            got_v = vmex_row(nb, mb)
+            worst_rel = max((_rel(r, g) for r, g in zip(ref_v, got_v)
+                             if not (abs(r) <= _ECHO_ZERO
+                                     and abs(g) <= _ECHO_ZERO)), default=0.0)
+            if not all(_echo_equal(r, g) for r, g in zip(ref_v, got_v)):
+                bad_modes.append((worst_rel, nb, mb))
+        k = DIVERGENT if bad_modes else MATCH
+        note(k)
+        if bad_modes:
+            rel, nb, mb = max(bad_modes)
+            stage("C1 PARSE_BOUNDARY",
+                  f"{k} {len(bad_modes)}/{len(keys)} modes, "
+                  f"worst (nb={nb},mb={mb}) rel={rel:.1e}")
+        else:
+            stage("C1 PARSE_BOUNDARY", f"{k} ({len(keys)} modes)")
+
+
 def _rel(a: float, b: float) -> float:
     scale = max(abs(a), abs(b), np.finfo(float).tiny)
     return abs(a - b) / scale
@@ -329,6 +513,15 @@ def compare(deck: Path, xvmec2000: Path, *, niter: int | None,
         note(k)
         stage("C1 PARSE", f"{k} ref={_acceptance(ref_term)} "
                           f"vmex={_acceptance(vmex_term, vmex_detail)}")
+
+        # C1 sub-stages: parsed VALUES via the threed1 input echo, so a
+        # parser divergence is localized to a field instead of surfacing
+        # obscurely as a C2/C3 mismatch.
+        if ref_ok and vmex_ok:
+            try:
+                _compare_parsed_inputs(ref_text, deck_j, stage, note, details)
+            except Exception as exc:  # noqa: BLE001 - class name only
+                stage("C1 PARSE_ECHO", f"SKIPPED ({type(exc).__name__})")
 
         ref = _rows(ref_text)
         got = _rows(vmex_text)

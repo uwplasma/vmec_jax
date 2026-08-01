@@ -250,6 +250,104 @@ def test_nstep_inserted_when_missing_lowercase_indata(tmp_path):
 # (e) privacy: harness failures must never echo the deck path
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# (a2) threed1 input-echo parsing + C1 sub-stage comparison
+# ---------------------------------------------------------------------------
+
+_ECHO_HEAD = (
+    " R-Z FOURIER BOUNDARY COEFFICIENTS AND MAGNETIC AXIS INITIAL GUESS\n"
+    " --------------------------------------------------------------\n"
+    "   nb  mb     rbc         rbs         zbc         zbs       raxis(c)\n"
+)
+
+
+def _echo_from_input(deck: Path, doctor=None) -> str:
+    """A threed1-style boundary echo rendered from VMEX's own parse."""
+    import numpy as np
+
+    from vmex.core.input import VmecInput
+    inp = VmecInput.from_file(str(deck))
+    rbc, rbs = np.asarray(inp.rbc, float), np.asarray(inp.rbs, float)
+    zbc, zbs = np.asarray(inp.zbc, float), np.asarray(inp.zbs, float)
+    lines = [_ECHO_HEAD.rstrip("\n")]
+    for mb in range(int(inp.mpol)):
+        for nb in range(-int(inp.ntor), int(inp.ntor) + 1):
+            row = [rbc[inp.ntor + nb, mb], rbs[inp.ntor + nb, mb],
+                   zbc[inp.ntor + nb, mb], zbs[inp.ntor + nb, mb]]
+            if doctor is not None:
+                row = doctor(nb, mb, row)
+            if not any(abs(v) > 0 for v in row):
+                continue
+            vals = "  ".join(f"{v: .4E}" for v in row)
+            lines.append(f"   {nb:>2d}  {mb:>2d}  {vals}")
+    return "\n".join(lines) + "\n\n NEXT SECTION\n"
+
+
+def _run_echo_compare(ref_text: str, deck: Path) -> tuple[list[str], list[str]]:
+    stages: list[str] = []
+    klasses: list[str] = []
+
+    def stage(code: str, text: str) -> None:
+        stages.append(f"{code}: {text}")
+
+    fd._compare_parsed_inputs(ref_text, deck, stage, klasses.append, False)
+    return stages, klasses
+
+
+def test_threed1_scalar_and_coeff_parsers():
+    text = (
+        "    nfp      gamma      spres_ped    phiedge(wb)     curtor(A)        lRFP\n"
+        "      5  0.000E+00      1.000E+00     -3.500E-02     4.323E+04           F\n"
+        "  ncurr  niter   nsin  nstep  nvacskip      ftol     tcon0    lasym  lforbal lmove_axis lconm1\n"
+        "      1   2500     15    100         9  1.00E-10  1.00E+00        F        F        T        T\n"
+        " Pressure profile factor:  4.3229E+02 (multiplier for pressure)\n"
+        " MASS PROFILE COEFFICIENTS - newton/m**2 (EXPANSION IN NORMALIZED RADIUS):\n"
+        " PMASS parameterization type is 'two_power'\n"
+        " -----------------------------------\n"
+        "   1.000E+00   5.000E+00   1.000E+01\n"
+    )
+    scal = fd._threed1_scalars(text)
+    assert scal["nfp"] == 5 and scal["phiedge"] == pytest.approx(-0.035)
+    assert scal["curtor"] == pytest.approx(4.323e4)
+    assert scal["lforbal"] == 0.0 and scal["pres_scale"] == pytest.approx(432.29)
+    assert fd._threed1_coeffs(text, "MASS PROFILE COEFFICIENTS") == [1.0, 5.0, 10.0]
+    assert fd._threed1_coeffs(text, "IOTA PROFILE COEFFICIENTS") is None
+
+
+def test_parse_echo_matches_own_render():
+    deck = DATA / "input.cth_like_fixed_bdy"
+    stages, klasses = _run_echo_compare(_echo_from_input(deck), deck)
+    assert any("C1 PARSE_BOUNDARY: MATCH" in s for s in stages)
+    assert all(k == fd.MATCH for k in klasses)
+
+
+def test_parse_echo_flags_doctored_boundary_mode():
+    deck = DATA / "input.cth_like_fixed_bdy"
+
+    def doctor(nb, mb, row):
+        return [2.0 * v for v in row] if (nb, mb) == (0, 1) else row
+
+    stages, klasses = _run_echo_compare(
+        _echo_from_input(deck, doctor=doctor), deck)
+    line = next(s for s in stages if s.startswith("C1 PARSE_BOUNDARY"))
+    assert "DIVERGENT" in line and "(nb=0,mb=1)" in line
+    assert fd.DIVERGENT in klasses
+    # privacy: no coefficient values in the default (no --details) output
+    assert not re.search(r"\d\.\d{3,}E[+-]\d", line)
+
+
+def test_parse_echo_flags_vmex_only_mode():
+    """A mode VMEX parsed as nonzero but absent from the echo is a finding."""
+    deck = DATA / "input.cth_like_fixed_bdy"
+
+    def doctor(nb, mb, row):
+        return [0.0] * 4 if (nb, mb) == (0, 2) else row
+
+    stages, _ = _run_echo_compare(_echo_from_input(deck, doctor=doctor), deck)
+    line = next(s for s in stages if s.startswith("C1 PARSE_BOUNDARY"))
+    assert "DIVERGENT" in line and "(nb=0,mb=2)" in line
+
+
 def test_privacy_usage_error_hides_deck_path(tmp_path, capsys, monkeypatch):
     marker = "CONFIDENTIAL_MARKER_7QX"
     deck = tmp_path / marker / "input.private"  # directory does not exist
