@@ -10,11 +10,16 @@ import jax.numpy as jnp
 
 from .bounce import bounce_action_from_boozer
 from .omnigenity import boozer_bmnc_state
+from .qi import j_invariant_qi_residual_from_boozer
 from .statephysics import _as_1d
 
 Array = Any
 
-__all__ = ["MaximumJResidual", "maximum_j_residual_from_boozer"]
+__all__ = [
+    "MaximumJResidual",
+    "maximum_j_residual_from_boozer",
+    "qi_and_maximum_j_from_boozer",
+]
 
 
 def maximum_j_residual_from_boozer(
@@ -178,6 +183,49 @@ def maximum_j_residual_from_boozer(
         "psi_edge": psi_edge,
     })
     return out
+
+
+def qi_and_maximum_j_from_boozer(
+    state,
+    rt,
+    *,
+    surfaces,
+    pitch,
+    weights: Iterable[float] | None = None,
+    mboz: int = 16,
+    nboz: int = 16,
+    oversample: int = 2,
+    qi_options: dict[str, Any] | None = None,
+    maxj_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Evaluate the J-invariance and maximum-J residuals from one Boozer pass.
+
+    :class:`~vmex.core.qi.JInvariantQIResidual` and :class:`MaximumJResidual`
+    each run their own :func:`~vmex.core.omnigenity.boozer_bmnc_state`
+    transform — the dominant cost when both objectives share the same
+    surfaces and physical pitch (the usual campaign layout).  This helper
+    runs the transform once and feeds both functional layers.
+
+    ``qi_options`` / ``maxj_options`` forward extra keyword arguments to
+    :func:`vmex.core.qi.j_invariant_qi_residual_from_boozer` and
+    :func:`maximum_j_residual_from_boozer` (``nalpha``,
+    ``points_per_period``, ``num_periods``, ``max_wells``, ``target``, ...).
+    Returns ``{"boozer", "qi", "maximum_j"}``; the two residual entries are
+    identical to the corresponding independent class evaluations.
+    """
+    booz = boozer_bmnc_state(
+        state, rt, surfaces=surfaces, mboz=int(mboz), nboz=int(nboz),
+        oversample=int(oversample))
+    common = dict(
+        bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+        iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
+        nfp=booz["nfp"], pitch=pitch, weights=weights)
+    qi_out = j_invariant_qi_residual_from_boozer(
+        **common, **(qi_options or {}))
+    maxj_out = maximum_j_residual_from_boozer(
+        **common, psi_b=booz["psi_b"], psi_edge=booz["psi_edge"],
+        **(maxj_options or {}))
+    return {"boozer": booz, "qi": qi_out, "maximum_j": maxj_out}
 
 
 class MaximumJResidual:
