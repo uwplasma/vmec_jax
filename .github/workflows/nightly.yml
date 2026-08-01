@@ -402,7 +402,8 @@ jobs:
       - name: Combine shards and enforce the gate
         run: |
           files=(coverage.*)
-          test "${#files[@]}" -eq 37
+          # 13 PR-gate artifacts plus the 26 full-physics shards above.
+          test "${#files[@]}" -eq 39
           coverage combine "${files[@]}"
           # The mirror release audit reaches 95% only after appending nightly
           # fixed/free adjoint tests. The fast core artifacts intentionally
@@ -427,7 +428,8 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        shard: [core-a-c, core-d-f0, core-fb-a, core-fb-b, core-g-h,
+        shard: [core-a-c, core-d-f0, core-fb-a, core-fb-b,
+                core-fb-stress-a, core-fb-stress-b, core-g-h,
                 core-i, core-i-grad, core-j-m, core-n-s, core-t-z,
                 hmfb-combined, hmfb-fft537,
                 qi-gate-free, qi-gate-ladder, qi-gate-ladder-fft,
