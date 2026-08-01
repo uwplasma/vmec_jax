@@ -18,6 +18,7 @@ from vmex.core import freeboundary, multigrid, optimize, solver
 from vmex.core.bounce import bounce_action
 from vmex.core.input import VmecInput
 from vmex.core.mgrid import MgridField
+from vmex.core.qi import j_invariant_qi_residual_from_boozer
 from vmex.core.wout import wout_from_state
 from vmex.mirror import (
     MirrorBoundary,
@@ -109,6 +110,29 @@ def test_bounce_action_cpu_gpu_parity():
             outputs[name] = (
                 jax.device_get(value(amplitude)),
                 jax.device_get(jax.grad(value)(amplitude)),
+            )
+    np.testing.assert_allclose(outputs["cpu"], outputs["gpu"], rtol=1e-10)
+
+
+@_requires_gpu
+def test_j_invariant_qi_cpu_gpu_parity():
+    """Action-invariance values and derivatives agree on CPU and GPU."""
+    outputs = {}
+    for name, device in (("cpu", jax.devices("cpu")[0]), ("gpu", _gpu())):
+        with device_policy.device_scope(device):
+            def value(perturbation):
+                result = j_invariant_qi_residual_from_boozer(
+                    bmnc_b=jax.numpy.array([[1.0, 0.2, perturbation]]),
+                    xm_b=[0.0, 0.0, 1.0], xn_b=[0.0, 2.0, 0.0],
+                    iota_b=[0.4], G_b=[2.0], I_b=[0.0], nfp=2,
+                    pitch=[1.0], nalpha=7, points_per_period=64,
+                    num_periods=4, max_wells=6)
+                return result["total"]
+
+            perturbation = jax.numpy.asarray(0.06)
+            outputs[name] = (
+                jax.device_get(value(perturbation)),
+                jax.device_get(jax.grad(value)(perturbation)),
             )
     np.testing.assert_allclose(outputs["cpu"], outputs["gpu"], rtol=1e-10)
 
