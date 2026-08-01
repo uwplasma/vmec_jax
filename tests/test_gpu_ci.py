@@ -16,6 +16,7 @@ from vmex.core import device as device_policy
 from vmex.core import errors
 from vmex.core import implicit as im
 from vmex.core import freeboundary, multigrid, optimize, solver
+from vmex.core.bounce import bounce_action
 from vmex.core.input import VmecInput
 from vmex.core.mgrid import MgridField
 from vmex.core.wout import wout_from_state
@@ -89,6 +90,28 @@ def test_gpu_is_default_without_platform_environment_pins():
     assert "JAX_PLATFORM_NAME" not in os.environ
     assert jax.default_backend() == "gpu"
     assert _platform(jax.numpy.ones(())) == "gpu"
+
+
+@_requires_gpu
+def test_bounce_action_cpu_gpu_parity():
+    """Multiple-well values and derivatives agree on the discovered GPU."""
+    outputs = {}
+    for name, device in (("cpu", jax.devices("cpu")[0]), ("gpu", _gpu())):
+        with device_policy.device_scope(device):
+            phi = jax.numpy.arange(512, dtype=jax.numpy.float64) * (
+                2.0 * jax.numpy.pi / 512)
+
+            def value(amplitude):
+                result = bounce_action(
+                    1.0 + amplitude * jax.numpy.cos(2.0 * phi), 1.0)
+                return jax.numpy.nansum(result["action"])
+
+            amplitude = jax.numpy.asarray(0.2)
+            outputs[name] = (
+                jax.device_get(value(amplitude)),
+                jax.device_get(jax.grad(value)(amplitude)),
+            )
+    np.testing.assert_allclose(outputs["cpu"], outputs["gpu"], rtol=1e-10)
 
 
 @_requires_gpu
