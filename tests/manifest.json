@@ -70,6 +70,7 @@
     ["tests/test_preconditioner_2d.py", "equilibrium", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_printing.py", "interface", "unit", "fast", "cpu", "none", "golden", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
     ["tests/test_profiles.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
+    ["tests/test_qi_maxj_composition.py", "diagnostics", "unit", "fast", "cpu-gpu", "none", "none", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
     ["tests/test_qi_residuals.py", "diagnostics", "ad", "slow", "cpu-gpu", "none", "fd", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_qi_free_boundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1", "full-core-n-s"]],
     ["tests/test_qi_sheet_gate.py", "free-boundary", "campaign", "campaign", "cpu-gpu", "generated", "vmec2000", ["pr-parity-a1"]],
