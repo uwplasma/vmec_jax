@@ -69,6 +69,20 @@ def test_unknown_attribute_raises_and_dir_lists_exports():
     assert set(vmex.__all__) >= set(vmex._LAZY_ATTRS)
 
 
+def test_free_boundary_residual_api_is_public():
+    from vmex.core import freeboundary
+
+    assert vmex.FreeBoundaryResidual is freeboundary.FreeBoundaryResidual
+    assert (
+        vmex.FreeBoundaryResidualEvaluator
+        is freeboundary.FreeBoundaryResidualEvaluator
+    )
+    assert (
+        vmex.make_free_boundary_residual_evaluator
+        is freeboundary.make_free_boundary_residual_evaluator
+    )
+
+
 def test_python_dash_m_entrypoint_exposes_cli_main():
     import vmex.__main__ as main_mod
 

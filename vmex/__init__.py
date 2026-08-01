@@ -7,6 +7,8 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.multigrid.solve_multigrid` — NS_ARRAY ladder (runvmec.f)
 - :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` — free-boundary ladder
 - :func:`~vmex.core.freeboundary.solve_free_boundary` — NESTOR free boundary
+- :func:`~vmex.core.freeboundary.make_free_boundary_residual_evaluator` —
+  differentiable VMEX--NESTOR fixed-point residual
 - :func:`~vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
   / :func:`~vmex.core.wout.wout_from_state` / :class:`~vmex.core.wout.WoutData`
 - :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
@@ -83,6 +85,11 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "solve_free_boundary_multigrid": (
         ".core.multigrid", "solve_free_boundary_multigrid"),
     "solve_free_boundary": (".core.freeboundary", "solve_free_boundary"),
+    "FreeBoundaryResidual": (".core.freeboundary", "FreeBoundaryResidual"),
+    "FreeBoundaryResidualEvaluator": (
+        ".core.freeboundary", "FreeBoundaryResidualEvaluator"),
+    "make_free_boundary_residual_evaluator": (
+        ".core.freeboundary", "make_free_boundary_residual_evaluator"),
     # wout IO
     "WoutData": (".core.wout", "WoutData"),
     "read_wout": (".core.wout", "read_wout"),

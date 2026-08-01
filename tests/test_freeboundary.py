@@ -298,6 +298,108 @@ def test_fused_vacuum_matches_reference(ab_inputs):
     assert _rel(skipped["bsqvac"], out["bsqvac"]) < 1e-10
 
 
+def test_residual_evaluator_keeps_runtime_dynamic():
+    runtime = object()
+    state = object()
+    field = object()
+    expected = object()
+    calls = []
+
+    def evaluate(actual_state, actual_runtime, actual_field):
+        calls.append((actual_state, actual_runtime, actual_field))
+        return expected
+
+    evaluator = FB.FreeBoundaryResidualEvaluator(
+        runtime=runtime,
+        basis=None,
+        _evaluate=evaluate,
+    )
+
+    assert evaluator(state, field) is expected
+    assert calls == [(state, runtime, field)]
+
+
+def test_residual_evaluator_rejects_fixed_boundary_input(ab_inputs):
+    inp = dataclasses.replace(ab_inputs["inp"], lfreeb=False)
+
+    with pytest.raises(ValueError, match="requires an LFREEB=T input"):
+        FB.make_free_boundary_residual_evaluator(
+            inp,
+            resolution=ab_inputs["res"],
+        )
+
+
+def test_live_coupled_residual_is_finite_and_differentiable(ab_inputs):
+    """The NERSC seam rebuilds NESTOR and differentiates the VMEX residual."""
+    inp = ab_inputs["inp"]
+    resolution = ab_inputs["res"]
+    field = MgridField.from_mgrid_data(
+        read_mgrid(MGRID),
+        extcur=np.asarray(inp.extcur, dtype=float)[: read_mgrid(MGRID).nextcur],
+    )
+    evaluator = FB.make_free_boundary_residual_evaluator(
+        inp, resolution=resolution
+    )
+    state = _initial_state(evaluator.runtime.setup)
+    value = evaluator(state, field)
+
+    assert isinstance(value, FB.FreeBoundaryResidual)
+    assert value.bsqvac.shape == (
+        evaluator.basis.ntheta3,
+        evaluator.basis.nzeta,
+    )
+    assert np.all(np.isfinite(np.asarray(value.bsqvac)))
+    assert np.all(np.isfinite(np.asarray(value.potvac)))
+    assert np.isfinite(float(value.delbsq))
+    for leaf in jax.tree.leaves(value):
+        assert np.all(np.isfinite(np.asarray(leaf)))
+
+    # EXTCUR has no direct path into the VMEX force calculation: differentiating
+    # a vector formed only from the spectral residual must therefore traverse
+    # mgrid interpolation, NESTOR, vacuum pressure, and the VMEX edge residual.
+    def residual_vector(extcur):
+        shifted_field = dataclasses.replace(
+            field,
+            extcur=extcur,
+        )
+        result = evaluator(state, shifted_field)
+        return jnp.concatenate(
+            [jnp.ravel(leaf) for leaf in jax.tree.leaves(result.residual)]
+        )
+
+    direction = jnp.linspace(
+        0.75,
+        1.25,
+        field.extcur.size,
+        dtype=field.extcur.dtype,
+    )
+    residual_value, residual_jvp = jax.jvp(
+        residual_vector,
+        (field.extcur,),
+        (direction,),
+    )
+    assert np.all(np.isfinite(np.asarray(residual_value)))
+    assert np.all(np.isfinite(np.asarray(residual_jvp)))
+    assert float(jnp.linalg.norm(residual_jvp)) > 0.0
+
+    cotangent = jnp.linspace(
+        -0.5,
+        0.5,
+        residual_value.size,
+        dtype=residual_value.dtype,
+    )
+    _, pullback = jax.vjp(residual_vector, field.extcur)
+    extcur_vjp, = pullback(cotangent)
+    lhs = jnp.vdot(cotangent, residual_jvp)
+    rhs = jnp.vdot(extcur_vjp, direction)
+    np.testing.assert_allclose(
+        np.asarray(lhs),
+        np.asarray(rhs),
+        rtol=5.0e-10,
+        atol=5.0e-12,
+    )
+
+
 def test_vacuum_lane_never_consumes_a_sign_changed_state():
     """funct3d.f parity: NESTOR evaluates ``xstore`` on a bad-Jacobian pass
     (Jacobian first; a sign-changed pass restarts and the re-evaluation runs

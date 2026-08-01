@@ -72,12 +72,14 @@ from .printing import (
     stage_banner,
     vacuum_banner,
 )
+from .residuals import ForceResiduals
 from .solver import (
-    SolveResult, SolverRuntime, SpectralState, VacuumOutput,
+    FunctDiagnostics, SolveResult, SolverRuntime, SpectralState, VacuumOutput,
     _LANE_EXECUTABLES, _USED_LANE_KEYS,
     _finalize, _geometry, _initial_carry, _initial_state, _leaf_signature,
     _make_body,
-    _result_from_carry, _zero_cache, prepare_runtime, resolution_from_input,
+    _result_from_carry, _zero_cache, evaluate_forces, prepare_runtime,
+    resolution_from_input,
     reguess_initial_axis, runtime_with_baselines,
     _resolve_use_fft,
 )
@@ -88,9 +90,12 @@ from .vacuum import (
 )
 
 __all__ = [
+    "FreeBoundaryResidual",
+    "FreeBoundaryResidualEvaluator",
     "FreeBoundaryState",
     "VacuumOutput",
     "boundary_from_coefficients",
+    "make_free_boundary_residual_evaluator",
     "solve_free_boundary",
 ]
 
@@ -752,8 +757,61 @@ class FusedVacuum:
 
     full: Any
     skip: Any
+    residual: Any = None
     cache_key: Any = None
     solve_device: Any = None
+
+
+@dataclass(frozen=True)
+class FreeBoundaryResidual:
+    """One pure evaluation of the coupled VMEX--NESTOR residual.
+
+    ``residual`` is VMEX's self-consistently preconditioned spectral force
+    after a complete NESTOR rebuild at the supplied state and external field.
+    Its interior rows enforce ideal-MHD force balance and its evolved edge row
+    contains the vacuum-pressure coupling.  The fixed-point equation is
+    therefore ``residual == 0`` without differentiating through host-side
+    activation, cadence, recovery, or time stepping.
+
+    ``force_residuals`` uses the converged ``medge = 0`` diagnostic branch, so
+    ``fsqr`` and ``fsqz`` cover the interior while ``fedge`` reports the edge
+    row separately.  ``delbsq`` is NESTOR's weighted boundary-pressure
+    mismatch diagnostic.
+    """
+
+    residual: SpectralState
+    force_residuals: ForceResiduals
+    diagnostics: FunctDiagnostics
+    bsqvac: Array
+    potvac: Array
+    delbsq: Array
+
+
+_register(FreeBoundaryResidual)
+
+
+@dataclass(frozen=True, eq=False)
+class FreeBoundaryResidualEvaluator:
+    """Prepared pure residual map for one input and resolution.
+
+    Construct with :func:`make_free_boundary_residual_evaluator`, then call as
+    ``evaluator(state, external_field)``.  The expensive host-only setup is
+    captured once, while every call rebuilds NESTOR and evaluates the coupled
+    force residual in a JAX-traceable program.
+    """
+
+    runtime: SolverRuntime
+    basis: VacuumBasis
+    _evaluate: Any
+    _runtime_argument_reusable: bool = False
+
+    def __call__(
+        self, state: SpectralState, external_field: Any
+    ) -> FreeBoundaryResidual:
+        # Keep runtime as an executable argument. Reanchored design configs
+        # can then replace its array leaves without rebuilding the
+        # resolution-scoped NESTOR executable.
+        return self._evaluate(state, self.runtime, external_field)
 
 
 def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
@@ -874,8 +932,47 @@ def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
             "bsubuvac": bsubuvac, "bsubvvac": bsubvvac,
         }
 
+    full = jax.jit(_full)
+    skip = jax.jit(_skip)
+
+    def _residual(
+        state: SpectralState,
+        residual_rt: SolverRuntime,
+        external_field: Any,
+    ) -> FreeBoundaryResidual:
+        """Evaluate one coupled residual with all root data traced."""
+        vacuum = full(state, residual_rt, external_field)
+        coupled_rt = replace(residual_rt, bsqvac_edge=vacuum["bsqvac"])
+        residual, force_residuals, diagnostics = evaluate_forces(
+            state,
+            coupled_rt,
+            # Fix the m=1 release and late-iteration medge diagnostic branches
+            # to their converged values. The spectral residual still contains
+            # the evolved edge row.
+            iteration=1,
+            iter_last_reset=1,
+            fsqz_previous=0.0,
+        )
+        denominator = vacuum["delbsq_den"]
+        delbsq = jnp.where(
+            denominator != 0.0,
+            vacuum["delbsq_num"] / denominator,
+            jnp.asarray(0.0, dtype=denominator.dtype),
+        )
+        return FreeBoundaryResidual(
+            residual=residual,
+            force_residuals=force_residuals,
+            diagnostics=diagnostics,
+            bsqvac=vacuum["bsqvac"],
+            potvac=vacuum["potvac"],
+            delbsq=delbsq,
+        )
+
     return FusedVacuum(
-        full=jax.jit(_full), skip=jax.jit(_skip), solve_device=solve_device,
+        full=full,
+        skip=skip,
+        residual=jax.jit(_residual),
+        solve_device=solve_device,
     )
 
 
@@ -972,6 +1069,73 @@ def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
     lane = _make_vacuum_lane(fused, use_fft=use_fft)
     _VACUUM_EXECUTABLE_CACHE[key] = (basis, fused, lane)
     return basis, fused, lane
+
+
+def make_free_boundary_residual_evaluator(
+    inp: VmecInput,
+    *,
+    resolution=None,
+) -> FreeBoundaryResidualEvaluator:
+    """Prepare the differentiable coupled residual ``F(state, field)``.
+
+    Preparation resolves the VMEX runtime and caches the geometry-independent
+    NESTOR program.  Calling the returned evaluator is pure JAX and performs:
+
+    1. boundary and magnetic-axis synthesis from ``state``;
+    2. external plus plasma-axis-filament field evaluation;
+    3. a complete NESTOR matrix rebuild and potential solve;
+    4. reconstruction of the vacuum boundary pressure; and
+    5. one fresh, self-consistently preconditioned free-boundary force pass.
+
+    The converged free-boundary branches are fixed explicitly: constraint
+    baselines are zero, m=1 is released, and diagnostics use ``medge = 0``.
+    Thus JVPs and VJPs differentiate the mathematical fixed point rather than
+    the adaptive host iteration path.  An explicit ``resolution`` is
+    recommended for tabulated mgrid fields so the caller can apply the same
+    angular-grid compatibility policy as :func:`solve_free_boundary`.
+    """
+    if not bool(inp.lfreeb):
+        raise ValueError(
+            "make_free_boundary_residual_evaluator requires an LFREEB=T input"
+        )
+    if resolution is None:
+        resolution = resolution_from_input(inp)
+
+    # The implicit lane deliberately keeps the dense real-space contraction:
+    # it is the lower-memory path and matches the NERSC campaign executable.
+    runtime = prepare_runtime(inp, resolution, use_fft=False)
+    initial_state = _initial_state(runtime.setup)
+    axis_r0, axis_z0 = _vacuum_scalars(initial_state, runtime)[2:4]
+    basis, fused_vacuum, _vacuum_lane = _vacuum_executables(
+        resolution,
+        mf=int(inp.mpol) + 1,
+        nf=int(inp.ntor),
+        signgs=int(runtime.setup.signgs),
+        wint=np.asarray(runtime.trig.wint, dtype=float),
+        modes=runtime.modes,
+        axis_r0=axis_r0,
+        axis_z0=axis_z0,
+        use_fft=False,
+    )
+
+    ns = int(resolution.ns)
+    dtype = runtime.setup.s_full.dtype
+    zeros_edge = jnp.zeros((basis.ntheta3, basis.nzeta), dtype=dtype)
+    residual_runtime = replace(
+        runtime,
+        lfreeb=True,
+        jmax=ns,
+        bsqvac_edge=zeros_edge,
+        presf_ns_scale=jnp.asarray(_presf_ns_scale(inp, ns), dtype=dtype),
+        rcon0=jnp.zeros_like(runtime.rcon0),
+        zcon0=jnp.zeros_like(runtime.zcon0),
+    )
+    return FreeBoundaryResidualEvaluator(
+        runtime=residual_runtime,
+        basis=basis,
+        _evaluate=fused_vacuum.residual,
+        _runtime_argument_reusable=True,
+    )
 
 
 def _vacuum_step(
