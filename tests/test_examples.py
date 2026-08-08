@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parents[1]
 EXAMPLES = REPO / "examples"
 DATA_DIR = EXAMPLES / "data"
 
-_COST_RE = re.compile(r"\[least_squares\] cost = ([0-9.eE+-]+)")
+_COST_RE = re.compile(r"^\s*\d+\s+\d+\s+([0-9.eE+-]+)", re.MULTILINE)
 
 
 def _run_example(script: Path, cwd: Path, timeout: int = 2400,
@@ -44,7 +44,7 @@ def _run_example(script: Path, cwd: Path, timeout: int = 2400,
 
 def _assert_cost_decreased(stdout: str, name: str) -> None:
     costs = [float(c) for c in _COST_RE.findall(stdout)]
-    assert len(costs) >= 2, f"{name}: expected verbose cost lines, got {costs}"
+    assert len(costs) >= 2, f"{name}: expected scipy iteration rows, got {costs}"
     assert min(costs) < costs[0], (
         f"{name}: least-squares cost did not decrease: first {costs[0]:.6e}, "
         f"best {min(costs):.6e}")

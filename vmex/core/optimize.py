@@ -117,11 +117,14 @@ from .statephysics import (
 )
 from .wout import WoutData, wout_from_state
 from .problem import Evaluation, FunctionProblem, VmecProblem, _run_with_progress
+from .monitoring import OptimizationMonitor, OptimizationRecord
 
 __all__ = [
     "VmecProblem",
     "FunctionProblem",
     "Evaluation",
+    "OptimizationMonitor",
+    "OptimizationRecord",
     "make_problem",
     "Equilibrium",
     "solve_equilibrium",
@@ -1510,7 +1513,12 @@ def least_squares(
                                    k_cur, ac_scale)
         return trial
 
-    state_holder: dict[str, Any] = {"hot": None, "eq": None, "nres": None}
+    state_holder: dict[str, Any] = {
+        "hot": None,
+        "eq": None,
+        "nres": None,
+        "failed_trials": 0,
+    }
     single_stage = int(np.asarray(inp.ns_array).size) == 1
 
     def fun(x: np.ndarray) -> np.ndarray:
@@ -1520,25 +1528,25 @@ def least_squares(
             eq = solve_equilibrium(trial, initial_state=seed, **solve_kwargs)
             parts = [w * (_call_term(f, eq) - t) for (f, t, w) in objective_terms]
             residual = np.concatenate(parts)
-        except Exception as exc:  # zero-crash policy: penalize, don't die
+        except Exception:  # zero-crash policy: penalize, don't die
             if state_holder["nres"] is None:
                 raise  # the very first evaluation must succeed (sizes scipy's residual)
-            if verbose:
-                print(f"[least_squares] trial solve failed: {exc}")
+            state_holder["failed_trials"] += 1
             return np.full((state_holder["nres"],), 1.0e6)
         if not np.all(np.isfinite(residual)):
             residual = np.where(np.isfinite(residual), residual, 1.0e6)
         state_holder["hot"] = eq.state
         state_holder["eq"] = eq
         state_holder["nres"] = residual.size
-        if verbose:
-            print(f"[least_squares] cost = {0.5 * float(residual @ residual):.6e}")
         return residual
 
     result = scipy.optimize.least_squares(fun, np.asarray(x0, dtype=float),
-                                          jac="2-point", **scipy_kwargs)
+                                          jac="2-point",
+                                          verbose=(2 if verbose else 0),
+                                          **scipy_kwargs)
     result.input = unpack_full(result.x)
     result.equilibrium = state_holder["eq"]
+    result.failed_trials = state_holder["failed_trials"]
     return result
 
 
@@ -2107,12 +2115,18 @@ def _least_squares_implicit(
     else:
         jac_impl = jacobian_rows
     jac_jit = jax.jit(jac_impl)
+    gmres_jit = jax.jit(jacobian_rows)
     reverse_jit = jax.jit(jax.jacrev(residual_rows))
 
     # The strict seed preflight above already evaluated and validated every
     # residual row.  Carry that known shape instead of compiling ``rows_jit``
     # eagerly while the public factory is still returning.
-    holder: dict[str, Any] = {"nres": residual_size, "lin": None}
+    holder: dict[str, Any] = {
+        "nres": residual_size,
+        "lin": None,
+        "failed_trials": 0,
+        "derivative_fallbacks": 0,
+    }
     if recycle:
         # An all-zero pair is a cold start (gcrot's warm-start QR masks the
         # rank-deficient columns out); shapes are static so jac_jit compiles
@@ -2170,16 +2184,16 @@ def _least_squares_implicit(
         except Exception as exc:  # zero-crash policy: penalize, don't die
             if holder["nres"] is None:
                 raise
-            if verbose:
-                print(f"[least_squares] trial solve failed: {exc}")
+            del exc
+            holder["failed_trials"] += 1
             return np.full((holder["nres"],), 1.0e6)
         finally:
             imp._PERTURB_SEED.pop(cfg, None)  # one-shot: never leak a seed
         if not np.all(np.isfinite(residual)):
             residual = np.where(np.isfinite(residual), residual, 1.0e6)
+        if imp._LAST_STATUS_ERROR.get(cfg) is not None:
+            holder["failed_trials"] += 1
         holder["nres"] = residual.size
-        if verbose:
-            print(f"[least_squares] cost = {0.5 * float(residual @ residual):.6e}")
         return residual
 
     def jac_fn(x: np.ndarray) -> np.ndarray:
@@ -2204,6 +2218,7 @@ def _least_squares_implicit(
             jac = failure_jacobian(x)
             holder["last_jac"] = jac
             return jac
+        primary_error = None
         try:
             reverse = (
                 not recycle
@@ -2220,8 +2235,6 @@ def _least_squares_implicit(
             elif recycle:
                 rows, C, U, drift = jac_jit(_place(x), *holder["recycle"])
                 holder["recycle_drift"] = float(drift)
-                if verbose and holder["recycle_drift"] > 0.0:
-                    print(f"[least_squares] recycle drift {holder['recycle_drift']:.2e}")
                 holder["recycle"] = (C, U)  # deflate the next jac evaluation
                 jac = np.asarray(jax.device_get(rows), dtype=float)
             else:
@@ -2229,16 +2242,36 @@ def _least_squares_implicit(
                 if warm_start == "perturbation":
                     _stash_linearization(np.asarray(x, dtype=float), dz_cols)
                 jac = np.asarray(jax.device_get(rows), dtype=float)
-        except Exception as exc:  # zero-crash policy (mirrors fun): a trial whose
-            # equilibrium fails (e.g. VmecJacobianError from a self-intersecting
-            # boundary) must be *rejected*, not crash the optimization.  Reuse
-            # the last valid Jacobian so scipy's trust region steps back off the
-            # bad point (fun already returns a large penalty residual there).
-            if holder.get("last_jac") is None:
-                raise
-            if verbose:
-                print(f"[least_squares] trial jacobian failed: {exc}")
-            return holder["last_jac"]
+        except Exception as exc:
+            primary_error = exc
+            jac = None
+
+        # The amortized block factorization is fastest, but a difficult new
+        # accepted point can occasionally make its warm corrector non-finite.
+        # Retry through the independent certified per-column GMRES lane before
+        # rejecting the derivative.  This fallback is paid only on failure.
+        if jac is None or not np.all(np.isfinite(jac)):
+            if not recycle and jac_solver in ("auto", "block"):
+                try:
+                    rows, dz_cols = gmres_jit(_place(x))
+                    candidate = np.asarray(jax.device_get(rows), dtype=float)
+                    if np.all(np.isfinite(candidate)):
+                        holder["derivative_fallbacks"] += 1
+                        if warm_start == "perturbation":
+                            _stash_linearization(np.asarray(x, dtype=float), dz_cols)
+                        holder["last_jac"] = candidate
+                        return candidate
+                except Exception as exc:
+                    primary_error = exc
+            # A failed trial already has a finite penalty residual.  Returning
+            # the last certified Jacobian makes SciPy shorten its step; the
+            # counter exposes this compatibility fallback in result diagnostics.
+            holder["failed_trials"] += 1
+            if holder.get("last_jac") is not None:
+                return holder["last_jac"]
+            if primary_error is not None:
+                raise primary_error
+            raise FloatingPointError("non-finite initial residual Jacobian")
         if np.all(np.isfinite(jac)):
             holder["last_jac"] = jac
         return jac
@@ -2252,13 +2285,13 @@ def _least_squares_implicit(
         except Exception as exc:
             if holder.get("last_grad") is None:
                 raise
-            if verbose:
-                print(f"[minimize] trial solve/gradient failed: {exc}")
+            del exc
+            holder["failed_trials"] += 1
             return 1.0e12, holder["last_grad"]
         if np.isfinite(value) and np.all(np.isfinite(grad)):
             holder["last_grad"] = grad
-            if verbose:
-                print(f"[minimize] cost = {value:.6e}")
+            if imp._LAST_STATUS_ERROR.get(cfg) is not None:
+                holder["failed_trials"] += 1
             return value, grad
         if holder.get("last_grad") is None:
             raise FloatingPointError("non-finite initial objective or gradient")
@@ -2378,10 +2411,20 @@ def _least_squares_implicit(
             },
         )
 
+    monitor = None
     if minimize_method is None:
+        scipy_kwargs.setdefault("verbose", 2 if verbose else 0)
         result = scipy.optimize.least_squares(
             fun, np.asarray(x0, dtype=float), jac=jac_fn, **scipy_kwargs)
     else:
+        if verbose and "callback" not in scipy_kwargs:
+            monitor_problem = FunctionProblem(
+                np.asarray(x0, dtype=float),
+                value_and_grad=value_and_grad,
+                metadata={"config": cfg, "holder": holder},
+            )
+            monitor = OptimizationMonitor(monitor_problem)
+            scipy_kwargs["callback"] = monitor
         result = scipy.optimize.minimize(
             value_and_grad, np.asarray(x0, dtype=float), jac=True,
             method=minimize_method, **scipy_kwargs)
@@ -2389,12 +2432,15 @@ def _least_squares_implicit(
             result.fun, result.jac = value_and_grad(result.x)
         result.cost = float(result.fun)
         result.optimality = float(np.linalg.norm(result.jac, ord=np.inf))
+        result.monitor = monitor
     result.input = unpack_boundary(inp, result.x[:nboundary], max_mode)
     if k_cur:
         result.input = _apply_current(result.input, result.x[nboundary:],
                                       k_cur, ac_scale)
     stats = imp._SOLVE_STATS.get(cfg)
     result.solve_stats = None if stats is None else dict(stats)
+    result.failed_trials = holder["failed_trials"]
+    result.derivative_fallbacks = holder["derivative_fallbacks"]
     try:
         # Hot-seed the diagnostic re-solve from the stage's last converged
         # trial state (plan R25.1): the optimizer's final x was just solved

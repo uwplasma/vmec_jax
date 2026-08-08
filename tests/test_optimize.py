@@ -549,6 +549,68 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
         problem.metadata["weight_description"]
         == "weight multiplies squared cost"
     )
+
+    # A non-finite block result retries the independently certified GMRES
+    # implementation; if both lanes raise, the last certified Jacobian is
+    # returned and the failed-trial counter remains observable.
+    real_device_get = opt.jax.device_get
+    poisoned = {"done": False}
+
+    def nonfinite_primary(value):
+        host = real_device_get(value)
+        if not poisoned["done"] and np.shape(host) == weighted_jac.shape:
+            poisoned["done"] = True
+            return np.full(weighted_jac.shape, np.nan)
+        return host
+
+    monkeypatch.setattr(opt.jax, "device_get", nonfinite_primary)
+    problem._rj_cache = None
+    np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
+    assert problem.metadata["holder"]["derivative_fallbacks"] == 1
+
+    def reject_both(value):
+        host = real_device_get(value)
+        if np.shape(host) == weighted_jac.shape:
+            raise RuntimeError("synthetic derivative failure")
+        return host
+
+    monkeypatch.setattr(opt.jax, "device_get", reject_both)
+    problem._rj_cache = None
+    np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
+    assert problem.metadata["holder"]["failed_trials"] >= 1
+
+    certified = problem.metadata["holder"]["last_jac"]
+    problem.metadata["holder"]["last_jac"] = None
+    problem._rj_cache = None
+    with pytest.raises(RuntimeError, match="synthetic derivative failure"):
+        problem.residual_jac(problem.x0)
+
+    def reject_with_nonfinite(value):
+        host = real_device_get(value)
+        if np.shape(host) == weighted_jac.shape:
+            return np.full(weighted_jac.shape, np.nan)
+        return host
+
+    monkeypatch.setattr(opt.jax, "device_get", reject_with_nonfinite)
+    problem._rj_cache = None
+    with pytest.raises(FloatingPointError, match="non-finite initial"):
+        problem.residual_jac(problem.x0)
+    problem.metadata["holder"]["last_jac"] = certified
+
+    monkeypatch.setattr(opt.jax, "device_get", real_device_get)
+    problem.metadata["holder"]["lin"] = None
+    failed_before = problem.metadata["holder"]["failed_trials"]
+
+    def reject_residual(_value):
+        raise RuntimeError("synthetic residual failure")
+
+    monkeypatch.setattr(opt.jax, "device_get", reject_residual)
+    assert np.all(problem.residual(problem.x0) == 1.0e6)
+    assert problem.metadata["holder"]["failed_trials"] >= failed_before + 1
+    monkeypatch.setattr(opt.jax, "device_get", real_device_get)
+
+    from vmex.core import implicit as implicit_module
+
     evaluation = problem.evaluate(problem.x0)
     assert evaluation.success
     assert evaluation.diagnostics["solve_stats"]["solves"] >= 1
@@ -600,7 +662,6 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
 
     with pytest.raises(AttributeError, match="residuals"):
         scalar.residual(scalar.x0)
-    from vmex.core import implicit as implicit_module
     from vmex.core.problem import Evaluation, FunctionProblem
 
     config = problem.metadata["config"]
