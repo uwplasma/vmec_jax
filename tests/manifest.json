@@ -58,6 +58,7 @@
     ["tests/test_omnigenity.py", "diagnostics", "ad", "slow", "cpu-gpu", "golden", "fd", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_optimization_convergence.py", "optimization", "campaign", "campaign", "cpu-gpu", "golden", "external", ["pr-parity-c2"]],
     ["tests/test_optimize.py", "optimization", "integration", "slow", "cpu-gpu", "none", "fd", ["pr-parity-d", "full-core-n-s"]],
+    ["tests/test_problem.py", "optimization", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-d", "pr-fast", "pr-implicit-response", "full-core-n-s"]],
     ["tests/test_optimize_penalty.py", "optimization", "integration", "slow", "cpu-gpu", "none", "fd", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_optimize_traceable_qs.py", "optimization", "integration", "slow", "cpu-gpu", "golden", "fd", ["pr-parity-a2", "full-core-n-s"]],
     ["tests/test_package_api.py", "interface", "integration", "medium", "cpu", "reference-nc", "external", ["pr-parity-c2", "optional", "full-core-n-s"]],
@@ -121,11 +122,8 @@
     ],
     "pr-implicit-response": [
       "tests/test_implicit_multi_rhs.py::test_block_response_forward_transpose_and_fd",
-      "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block"
-    ],
-    "pr-implicit-response": [
-      "tests/test_implicit_multi_rhs.py::test_block_response_forward_transpose_and_fd",
-      "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block"
+      "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block",
+      "tests/test_optimize.py::test_public_problem_factory_validation"
     ],
     "pr-physics-mirror-spline": [
       "tests/mirror/test_analytic.py",

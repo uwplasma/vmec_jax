@@ -393,24 +393,40 @@ low-level single-grid building block.
 Optimization building blocks include quasisymmetry, three separate QI
 residuals, matched-well maximum-J, aspect ratio, iota, mirror ratio, magnetic
 well, `DMerc`, Glasser `D_R`, `<J·B>`, and ballooning-stability targets. They
-compose in the same least-squares driver over boundary Fourier coefficients,
-with implicit-differentiation gradients from
-`vmex.core.implicit` (`jac="implicit"`). `<J·B>` also supports `LASYM = T`;
+compose into an optimizer-neutral `VmecProblem`, with
+implicit-differentiation gradients from `vmex.core.implicit`. The problem
+exposes ordinary value/gradient and residual/Jacobian callables, so the user
+chooses SciPy, JAXopt, Optax, or a custom optimizer. `<J·B>` also supports `LASYM = T`;
 `DMerc` and `D_R` remain symmetry-gated pending independent DCON/JMC parity.
-The recommended pattern is **one
-`least_squares` call** — no `max_mode` continuation loop — with **Exponential
-Spectral Scaling** ordering the harmonics through the trust region:
+The recommended pattern releases all harmonics in one problem and uses
+**Exponential Spectral Scaling** for the optimizer's variable scale:
 
 ```python
+from scipy.optimize import least_squares
 from vmex import optimize as opt
 
 qs = opt.QuasisymmetryRatioResidual(surfaces, helicity_m=1, helicity_n=0)
-result = opt.least_squares(
+problem = opt.VmecProblem.from_tuples(
+    inp,
     [(qs, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0), (opt.mean_iota, 0.42, 1.0)],
-    inp, max_mode=5, jac="implicit",
-    use_ess=True,        # exp(-alpha*max(|m|,|n|)) trust radius per dof:
-)                        # high harmonics on short leashes — no ladder needed
+    max_mode=5,
+)
+result = least_squares(
+    problem.residual, problem.x0, jac=problem.residual_jac,
+    x_scale=problem.scales,
+)
+optimized_input = problem.input_from_x(result.x)
 ```
+
+For scalar methods, pass `problem.value_and_grad` to
+`scipy.optimize.minimize(..., jac=True)`. `problem.jax_value_and_grad` and
+`problem.jax_residual` provide the same physics to JAXopt and Optax. The
+existing `opt.least_squares()` and `opt.minimize()` functions remain concise
+compatibility adapters.
+
+The architecture, derivative validation, performance criteria, documentation
+work, and staged pull-request plan are recorded in
+[`docs/optimization_api_plan.md`](docs/optimization_api_plan.md).
 
 Measured on a 36-core CPU from a near-circular torus (single call, all
 harmonics released at once; `examples/optimization/*_ess.py`; the staged

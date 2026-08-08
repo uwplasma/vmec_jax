@@ -94,6 +94,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "plot_wout": (".core.plotting", "plot_wout"),
     "plot_boozmn": (".core.plotting", "plot_boozmn"),
     "run_booz_xform": (".core.boozer", "run_booz_xform"),
+    # optimizer-neutral problem callables
+    "Evaluation": (".core.problem", "Evaluation"),
+    "FunctionProblem": (".core.problem", "FunctionProblem"),
+    "VmecProblem": (".core.problem", "VmecProblem"),
     # external fields
     "MgridData": (".core.mgrid", "MgridData"),
     "MgridField": (".core.mgrid", "MgridField"),

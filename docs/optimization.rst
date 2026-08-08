@@ -14,8 +14,53 @@ runnable script in ``examples/optimization/`` (see :doc:`tutorials`).
    :local:
    :depth: 1
 
-The least-squares driver
-------------------------
+The optimizer-neutral problem
+-----------------------------
+
+VMEX owns the equilibrium, objective composition, and derivatives; it does
+not require users to adopt one optimization algorithm.  Construct a
+:class:`~vmex.core.problem.VmecProblem` and pass its ordinary callables to
+SciPy, JAXopt, Optax, or user code:
+
+.. code-block:: python
+
+   import numpy as np
+   import scipy.optimize
+   import vmex as vj
+   from vmex import optimize as opt
+
+   inp = vj.VmecInput.from_file("input.minimal_seed_nfp2")
+   qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10),
+                                       helicity_m=1, helicity_n=0)
+   problem = opt.VmecProblem.from_tuples(
+       inp,
+       [(qs, 0.0, 1.0),
+        (opt.aspect_ratio, 6.0, 1.0),
+        (opt.mean_iota, 0.42, 1.0)],
+       max_mode=5,
+   )
+
+   result = scipy.optimize.least_squares(
+       problem.residual,
+       problem.x0,
+       jac=problem.residual_jac,
+       x_scale=problem.scales,
+   )
+   optimized_input = problem.input_from_x(result.x)
+
+The same object provides ``fun``/``grad``/``value_and_grad`` for scalar
+optimizers and ``jax_fun``/``jax_value_and_grad``/``jax_residual`` for JAX
+libraries.  The decision vector is always explicit; evaluation does not
+mutate a hidden ``problem.x``.  ``J(x)`` and ``dJ(x)`` are aliases for users
+familiar with SIMSOPT.
+
+Tuple weights follow the SIMSOPT cost convention: a tuple weight ``w``
+contributes ``sqrt(w) * (f - target)`` residual rows, so its squared cost is
+proportional to ``w`` rather than ``w**2``.  Existing high-level wrappers
+retain their historical residual-scale convention for reproducibility.
+
+The compatibility drivers
+-------------------------
 
 :func:`~vmex.core.optimize.least_squares` is a thin
 ``scipy.optimize.least_squares`` driver over the boundary Fourier degrees
@@ -25,13 +70,6 @@ taking simsopt-style ``(callable, target, weight)`` terms:
 
 .. code-block:: python
 
-   import numpy as np
-   import vmex as vj
-   from vmex import optimize as opt
-
-   inp = vj.VmecInput.from_file("input.minimal_seed_nfp2")
-   qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10),
-                                       helicity_m=1, helicity_n=0)   # QA
    result = opt.least_squares(
        [(qs, 0.0, 1.0),
         (opt.aspect_ratio, 6.0, 1.0),

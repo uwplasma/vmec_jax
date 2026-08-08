@@ -114,8 +114,13 @@ from .statephysics import (
     volume,
 )
 from .wout import WoutData, wout_from_state
+from .problem import Evaluation, FunctionProblem, VmecProblem
 
 __all__ = [
+    "VmecProblem",
+    "FunctionProblem",
+    "Evaluation",
+    "make_problem",
     "Equilibrium",
     "solve_equilibrium",
     "QuasisymmetryRatioResidual",
@@ -1131,6 +1136,72 @@ def _ess_scale(inp: VmecInput, max_mode: int, alpha: float) -> np.ndarray:
     return np.exp(-alpha * levels) / np.exp(-alpha)
 
 
+def make_problem(
+    inp: VmecInput,
+    *,
+    objective_terms: Sequence[tuple[Callable, float, float]] | None = None,
+    loss: Callable | None = None,
+    max_mode: int = 1,
+    x0: np.ndarray | None = None,
+    current_dofs: int | None = None,
+    derivatives: str = "implicit",
+    weight_mode: str = "simsopt",
+    jac_chunk_size: int | str | None = "auto",
+    jac_solver: str = "auto",
+    hot_restart: bool = True,
+    warm_start: str | None = "perturbation",
+    use_ess: bool = True,
+    ess_alpha: float = 1.2,
+    bounds: Any = None,
+    device: Any = AUTO,
+    solve_kwargs: dict | None = None,
+    problem_class: type[VmecProblem] = VmecProblem,
+) -> VmecProblem:
+    """Build optimizer-neutral VMEC objective and derivative callables.
+
+    Exactly one of ``objective_terms`` and ``loss`` is required.  Tuple terms
+    use SIMSOPT cost-weight semantics by default; pass ``weight_mode="legacy"``
+    only when reproducing an existing VMEX wrapper calculation.  ``loss`` must
+    be a traceable ``(state, runtime) -> scalar`` callable.
+
+    The returned object contains no optimization algorithm.  Pass
+    :meth:`VmecProblem.residual` / :meth:`VmecProblem.residual_jac` to a
+    nonlinear least-squares package, or :meth:`VmecProblem.value_and_grad` to
+    any scalar gradient optimizer.
+    """
+    if (objective_terms is None) == (loss is None):
+        raise ValueError("provide exactly one of objective_terms or loss")
+    if derivatives != "implicit":
+        raise ValueError(
+            "make_problem currently supports derivatives='implicit'; "
+            "use FunctionProblem.from_functions for supplied x-level derivatives"
+        )
+    max_mode = int(max_mode)
+    scales = _ess_scale(inp, max_mode, float(ess_alpha)) if use_ess else None
+    k_cur, _ = _current_dof_setup(inp, current_dofs)
+    if scales is not None and k_cur:
+        scales = np.concatenate([scales, np.ones(k_cur + 1)])
+    return _least_squares_implicit(
+        list(objective_terms or ()),
+        inp,
+        max_mode=max_mode,
+        x0=x0,
+        current_dofs=current_dofs,
+        jac_chunk_size=jac_chunk_size,
+        jac_solver=jac_solver,
+        recycle=False,
+        warm_start=(warm_start if hot_restart else None),
+        solve_kwargs=dict(solve_kwargs or {}),
+        device=device,
+        return_problem=True,
+        problem_class=problem_class,
+        weight_mode=weight_mode,
+        scalar_objective=loss,
+        problem_bounds=bounds,
+        problem_scales=scales,
+    )
+
+
 def least_squares(
     objective_terms: Sequence[tuple[Callable, float, float]],
     inp: VmecInput,
@@ -1471,6 +1542,12 @@ def _least_squares_implicit(
     device: Any = AUTO,
     verbose: int = 0,
     minimize_method: str | None = None,
+    return_problem: bool = False,
+    problem_class: type[VmecProblem] = VmecProblem,
+    weight_mode: str = "legacy",
+    scalar_objective: Callable | None = None,
+    problem_bounds: Any = None,
+    problem_scales: np.ndarray | None = None,
     **scipy_kwargs,
 ):
     """Single-stage boundary least squares with implicit-gradient Jacobians.
@@ -1504,7 +1581,21 @@ def _least_squares_implicit(
     # The 4-family traceable map, the dof plumbing below, and the
     # forward+adjoint path are dimension-general; 3D lasym is FD-validated
     # end to end (tests/test_implicit_grad.py).
-    terms = [(_traceable_term(f), float(t), float(w)) for (f, t, w) in objective_terms]
+    if weight_mode not in ("legacy", "simsopt"):
+        raise ValueError("weight_mode must be 'legacy' or 'simsopt'")
+    if scalar_objective is not None and objective_terms:
+        raise ValueError("provide objective_terms or scalar_objective, not both")
+    terms = []
+    for f, t, w in objective_terms:
+        weight = float(w)
+        if weight_mode == "simsopt":
+            if weight < 0.0:
+                raise ValueError("least-squares weights must be non-negative")
+            weight = float(np.sqrt(weight))
+        terms.append((_traceable_term(f), float(t), weight))
+    traceable_scalar = (
+        None if scalar_objective is None else _traceable_term(scalar_objective)
+    )
     modes = _dof_modes(inp, max_mode)
     nm = len(modes)
     nfam = _n_boundary_families(inp)
@@ -1565,6 +1656,8 @@ def _least_squares_implicit(
         return params
 
     def term_rows(state, rt) -> jnp.ndarray:
+        if traceable_scalar is not None:
+            return jnp.atleast_1d(jnp.asarray(traceable_scalar(state, rt))).ravel()
         return jnp.concatenate([
             jnp.atleast_1d(w * (jnp.asarray(f(state, rt)) - t)).ravel()
             for (f, t, w) in terms])
@@ -1577,9 +1670,16 @@ def _least_squares_implicit(
     rows_jit = jax.jit(residual_rows)
 
     def scalar_loss(x: jnp.ndarray) -> jnp.ndarray:
-        rows = residual_rows(x)
-        return 0.5 * jnp.vdot(rows, rows)
+        if traceable_scalar is None:
+            rows = residual_rows(x)
+            return 0.5 * jnp.vdot(rows, rows)
+        params = params_of(x)
+        state = imp.solve_implicit(params, cfg)
+        return jnp.asarray(
+            traceable_scalar(state, imp.runtime_from_params(params, cfg))
+        )
 
+    scalar_loss_jit = jax.jit(scalar_loss)
     value_grad_jit = jax.jit(jax.value_and_grad(scalar_loss))
 
     # The evolved-dof mask is a *structural* per-config constant; fetch it
@@ -1959,30 +2059,99 @@ def _least_squares_implicit(
         except Exception:  # the seed itself does not converge -> fun raises clearly
             pass
 
+    def value_and_grad(x: np.ndarray):
+        """Host scalar pair used by SciPy and the public problem object."""
+        try:
+            value, grad = value_grad_jit(_place(x))
+            value = float(jax.device_get(value))
+            grad = np.asarray(jax.device_get(grad), dtype=float)
+        except Exception as exc:
+            if holder.get("last_grad") is None:
+                raise
+            if verbose:
+                print(f"[minimize] trial solve/gradient failed: {exc}")
+            return 1.0e12, holder["last_grad"]
+        if np.isfinite(value) and np.all(np.isfinite(grad)):
+            holder["last_grad"] = grad
+            if verbose:
+                print(f"[minimize] cost = {value:.6e}")
+            return value, grad
+        if holder.get("last_grad") is None:
+            raise FloatingPointError("non-finite initial objective or gradient")
+        return 1.0e12, holder["last_grad"]
+
+    def scalar_fun_host(x: np.ndarray) -> float:
+        """Host scalar value without forcing a reverse pass."""
+        try:
+            value = float(jax.device_get(scalar_loss_jit(_place(x))))
+        except Exception:
+            if holder.get("last_grad") is None:
+                raise
+            return 1.0e12
+        return value if np.isfinite(value) else 1.0e12
+
+    def input_from_x(x: np.ndarray) -> VmecInput:
+        result_input = unpack_boundary(inp, np.asarray(x)[:nboundary], max_mode)
+        if k_cur:
+            result_input = _apply_current(
+                result_input, np.asarray(x)[nboundary:], k_cur, ac_scale
+            )
+        return result_input
+
+    def jax_residual_jacobian(x: jnp.ndarray) -> jnp.ndarray:
+        reverse = (
+            jac_solver == "reverse"
+            or (jac_solver == "auto" and holder["nres"] == 1)
+        )
+        if reverse:
+            return reverse_jit(x)
+        return jac_jit(x)[0]
+
+    if return_problem:
+        if recycle:
+            # Recycling intentionally carries mutable Krylov state between
+            # calls, so it is available through the legacy driver but not
+            # advertised as a pure JAX callable.
+            jax_jac_public = None
+        else:
+            jax_jac_public = jax_residual_jacobian
+        names = list(boundary_dof_names(inp, max_mode))
+        if k_cur:
+            names.extend([f"AC({j})/{ac_scale:.6g}" for j in range(k_cur)])
+            names.append("CURTOR/1e6")
+        scales = (
+            np.ones_like(np.asarray(x0, dtype=float))
+            if problem_scales is None else np.asarray(problem_scales, dtype=float)
+        )
+        residual_fun = None if traceable_scalar is not None else fun
+        residual_jac_fun = None if traceable_scalar is not None else jac_fn
+        return problem_class(
+            np.asarray(x0, dtype=float),
+            fun=scalar_fun_host,
+            value_and_grad=value_and_grad,
+            residual=residual_fun,
+            residual_jac=residual_jac_fun,
+            jax_fun=scalar_loss_jit,
+            jax_value_and_grad=value_grad_jit,
+            jax_residual=(None if traceable_scalar is not None else rows_jit),
+            jax_residual_jac=(None if traceable_scalar is not None else jax_jac_public),
+            names=names,
+            bounds=problem_bounds,
+            scales=scales,
+            input_from_x=input_from_x,
+            metadata={
+                "derivatives": "implicit",
+                "weight_mode": weight_mode,
+                "max_mode": max_mode,
+                "config": cfg,
+                "holder": holder,
+            },
+        )
+
     if minimize_method is None:
         result = scipy.optimize.least_squares(
             fun, np.asarray(x0, dtype=float), jac=jac_fn, **scipy_kwargs)
     else:
-        def value_and_grad(x: np.ndarray):
-            try:
-                value, grad = value_grad_jit(_place(x))
-                value = float(jax.device_get(value))
-                grad = np.asarray(jax.device_get(grad), dtype=float)
-            except Exception as exc:
-                if holder.get("last_grad") is None:
-                    raise
-                if verbose:
-                    print(f"[minimize] trial solve/gradient failed: {exc}")
-                return 1.0e12, holder["last_grad"]
-            if np.isfinite(value) and np.all(np.isfinite(grad)):
-                holder["last_grad"] = grad
-                if verbose:
-                    print(f"[minimize] cost = {value:.6e}")
-                return value, grad
-            if holder.get("last_grad") is None:
-                raise FloatingPointError("non-finite initial objective or gradient")
-            return 1.0e12, holder["last_grad"]
-
         result = scipy.optimize.minimize(
             value_and_grad, np.asarray(x0, dtype=float), jac=True,
             method=minimize_method, **scipy_kwargs)

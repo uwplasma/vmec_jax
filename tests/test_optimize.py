@@ -396,7 +396,7 @@ def test_auto_jac_chunk_stays_bounded_with_large_device(monkeypatch):
     assert opt._auto_jac_chunk(120) == 11
 
 
-def test_least_squares_implicit_jac_solver_block(solovev_eq):
+def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
     """The R25.2 block-tridiagonal Jacobian (``jac_solver="block"``: colored
     jvp probes, one :func:`solvax.block_thomas_factor`, GMRES-certified
     columns) must agree with the per-dof GMRES path to the solver tolerance
@@ -406,16 +406,97 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq):
     obj = [(opt.aspect_ratio, 4.0, 1.0)]
     ref = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                             jac_solver="gmres", max_nfev=1)
-    got = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
-                            jac_solver="block", max_nfev=1)
+    # The public problem uses SIMSOPT cost weights: weight=4 scales residuals
+    # and their Jacobian by sqrt(4)=2.  It exposes the same block engine the
+    # compatibility driver used to keep private.
+    problem = opt.VmecProblem.from_tuples(
+        inp, [(opt.aspect_ratio, 4.0, 4.0)], max_mode=1,
+        jac_solver="block", use_ess=False,
+    )
+    residual, weighted_jac = problem.residual_and_jac(problem.x0)
+    got_jac = weighted_jac / 2.0
     reverse = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                                 jac_solver="reverse", max_nfev=1)
-    assert got.jac.shape == ref.jac.shape
-    np.testing.assert_allclose(got.jac, ref.jac, rtol=1e-6, atol=1e-8)
+    assert got_jac.shape == ref.jac.shape
+    np.testing.assert_allclose(residual / 2.0, ref.fun, rtol=1e-12)
+    np.testing.assert_allclose(got_jac, ref.jac, rtol=1e-6, atol=1e-8)
     np.testing.assert_allclose(reverse.jac, ref.jac, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(problem.grad(problem.x0),
+                               weighted_jac.T @ residual, rtol=1e-6)
+    assert np.all(np.isfinite(np.asarray(problem.jax_residual_jac(problem.x0))))
+    assert problem.input_from_x(problem.x0) == inp
+    scalar = opt.VmecProblem.from_loss(
+        inp,
+        lambda state, runtime: 0.5 * (opt.aspect_ratio(state, runtime) - 4.0) ** 2,
+        max_mode=1,
+        use_ess=False,
+    )
+    value, gradient = scalar.value_and_grad(scalar.x0)
+    assert np.isfinite(value) and np.all(np.isfinite(gradient))
+    assert np.isfinite(scalar.fun(scalar.x0))
+    assert scalar.fun(np.full_like(scalar.x0, np.nan)) == 1.0e12
+    assert np.isfinite(float(scalar.jax_fun(scalar.x0)))
+
+    holder = scalar.metadata["holder"]
+    real_device_get = opt.jax.device_get
+
+    def fail_device_get(_value):
+        raise RuntimeError("synthetic transfer failure")
+
+    monkeypatch.setattr(opt.jax, "device_get", fail_device_get)
+    scalar._vg_cache = None
+    failed_value, failed_gradient = scalar.value_and_grad(scalar.x0)
+    assert failed_value == 1.0e12
+    np.testing.assert_array_equal(failed_gradient, gradient)
+    assert scalar.fun(scalar.x0) == 1.0e12
+    holder["last_grad"] = None
+    scalar._vg_cache = None
+    with pytest.raises(RuntimeError, match="synthetic transfer failure"):
+        scalar.value_and_grad(scalar.x0)
+    with pytest.raises(RuntimeError, match="synthetic transfer failure"):
+        scalar.fun(scalar.x0)
+
+    def nan_device_get(value):
+        return np.full_like(np.asarray(value), np.nan)
+
+    monkeypatch.setattr(opt.jax, "device_get", nan_device_get)
+    scalar._vg_cache = None
+    with pytest.raises(FloatingPointError, match="non-finite initial"):
+        scalar.value_and_grad(scalar.x0)
+    holder["last_grad"] = gradient
+    scalar._vg_cache = None
+    failed_value, failed_gradient = scalar.value_and_grad(scalar.x0)
+    assert failed_value == 1.0e12
+    np.testing.assert_array_equal(failed_gradient, gradient)
+    monkeypatch.setattr(opt.jax, "device_get", real_device_get)
+
+    with pytest.raises(AttributeError, match="residuals"):
+        scalar.residual(scalar.x0)
     with pytest.raises(ValueError, match="jac_solver"):
         opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                           jac_solver="svd", max_nfev=1)
+
+
+def test_public_problem_factory_validation():
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    term = [(opt.aspect_ratio, 4.0, 1.0)]
+    with pytest.raises(ValueError, match="exactly one"):
+        opt.make_problem(inp)
+    with pytest.raises(ValueError, match="exactly one"):
+        opt.make_problem(inp, objective_terms=term, loss=opt.aspect_ratio)
+    with pytest.raises(ValueError, match="currently supports"):
+        opt.make_problem(inp, objective_terms=term, derivatives="finite_difference")
+    with pytest.raises(ValueError, match="non-negative"):
+        opt.make_problem(
+            inp, objective_terms=[(opt.aspect_ratio, 4.0, -1.0)], max_mode=1
+        )
+    common = dict(max_mode=1, x0=None, solve_kwargs={})
+    with pytest.raises(ValueError, match="weight_mode"):
+        opt._least_squares_implicit(term, inp, weight_mode="unknown", **common)
+    with pytest.raises(ValueError, match="not both"):
+        opt._least_squares_implicit(
+            term, inp, scalar_objective=opt.aspect_ratio, **common
+        )
 
 
 def test_least_squares_implicit_warm_start_modes(solovev_eq):
