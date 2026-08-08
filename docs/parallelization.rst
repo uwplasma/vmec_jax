@@ -37,6 +37,15 @@ lanes, so a plain :class:`concurrent.futures.ThreadPoolExecutor` over the
 solves overlaps their execution and gives real wall-clock speedup. This is what
 :func:`vmex.core.parallel.solve_ensemble` provides.
 
+Opaque finite-difference derivatives use the same mechanism through
+:func:`vmex.core.parallel.finite_difference_jacobian`.  Central probes are
+independent, automatically use up to the available workers, and retain input
+order.  Advanced users select ``workers=1`` for a serial baseline or an
+explicit cap when XLA/BLAS threading would otherwise oversubscribe the host.
+For multistart or ensemble optimization,
+:func:`vmex.core.parallel.evaluate_problems` accepts one independent problem
+object per member so mutable equilibrium caches are never shared.
+
 Concurrent ensemble solves
 --------------------------
 

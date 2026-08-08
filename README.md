@@ -518,6 +518,11 @@ the VMEX option to `inherit` to leave the process setting unchanged. JAX
 versions older than 0.4.36 lack the unified Python/C++ logging control, so
 VMEX prints one actionable startup warning that PjRt messages may remain.
 
+Runnable QI examples cover SciPy least squares/BFGS/L-BFGS-B, JAXopt
+LBFGS/Levenberg–Marquardt, and Optax Adam. Opaque host objectives select
+`derivative_method="finite_difference"`; central probes use automatic workers,
+while traceable objectives retain the faster implicit adjoint.
+
 The architecture, derivative validation, performance criteria, documentation
 work, and staged pull-request plan are recorded in
 [`docs/optimization_api_plan.md`](docs/optimization_api_plan.md).
@@ -611,7 +616,7 @@ This bounded-storage optimizer is opt-in because its quasi-Newton steps differ
 from `least_squares`; existing defaults and objective minima are unchanged.
 
 The first four use the implicit adjoint (`jac="implicit"`). The published
-`DMerc` showcase deliberately preserves its legacy host-side reporting lane
+`DMerc` showcase deliberately preserves its host-side diagnostic evaluation
 and finite-difference baseline at `max_mode` 2. New campaigns can instead use
 the traceable `mercier_stability_residual` with `jac="implicit"`; see the
 optimization objectives documentation. The self-consistent Redl bootstrap

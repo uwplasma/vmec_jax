@@ -1,0 +1,28 @@
+{
+  "date": "2026-08-08",
+  "host": {
+    "model": "Mac15,11",
+    "logical_cpus": 14,
+    "architecture": "arm64"
+  },
+  "input": "/Users/rogeriojorge/local/alex_qi/input.nfp2_circular",
+  "max_mode": 5,
+  "dofs": 98,
+  "initial_cost": 1.2253193468250476,
+  "accepted_cost_after_one_step": 0.9287385369031277,
+  "finite_gradient": true,
+  "derivative_seconds": 47.764429916016525,
+  "one_step_least_squares_seconds": 40.781240167008946,
+  "failed_trials": 0,
+  "derivative_fallbacks": 0,
+  "versions": {
+    "python": "3.11.14",
+    "vmex": "0.4.0",
+    "numpy": "2.4.6",
+    "scipy": "1.17.1",
+    "jaxopt": "0.8.3",
+    "optax": "0.2.8",
+    "simsopt": "1.10.7.dev433+g24fa9b4b8",
+    "desc-opt": "0.17.1+11.g2471d5504.dirty"
+  }
+}

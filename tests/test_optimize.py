@@ -693,10 +693,16 @@ def test_public_problem_factory_validation():
         opt.make_problem(inp)
     with pytest.raises(ValueError, match="exactly one"):
         opt.make_problem(inp, objective_terms=term, loss=opt.aspect_ratio)
-    with pytest.raises(ValueError, match="derivative_method"):
-        opt.make_problem(
-            inp, objective_terms=term, derivative_method="finite_difference"
-        )
+    finite_difference = opt.make_problem(
+        inp,
+        objective_terms=term,
+        derivative_method="finite_difference",
+        workers=1,
+    )
+    assert finite_difference.metadata["derivative_method"] == "finite_difference"
+    assert "equilibrium re-solves" in finite_difference.metadata[
+        "derivative_description"
+    ]
     with pytest.raises(ValueError, match="non-negative"):
         opt.make_problem(
             inp, objective_terms=[(opt.aspect_ratio, 4.0, -1.0)], max_mode=1

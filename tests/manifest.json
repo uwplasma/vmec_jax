@@ -133,7 +133,8 @@
       "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block",
       "tests/test_optimize.py::test_public_problem_factory_validation",
       "tests/test_optimize_penalty.py",
-      "tests/test_bootstrap.py::test_least_squares_current_dofs_implicit"
+      "tests/test_bootstrap.py::test_least_squares_current_dofs_implicit",
+      "tests/test_parallel.py::test_parallel_finite_difference_and_problem_ensemble"
     ],
     "pr-physics-mirror-spline": [
       "tests/mirror/test_analytic.py",
