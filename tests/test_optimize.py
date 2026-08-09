@@ -411,9 +411,12 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
     # compatibility driver used to keep private.
     problem = opt.VmecProblem.from_tuples(
         inp, [(opt.aspect_ratio, 4.0, 4.0)], max_mode=1,
-        implicit_jacobian_method="block_tridiagonal", use_ess=False,
+        implicit_jacobian_method="block_tridiagonal",
+        jacobian_batch_size=1,
+        use_ess=False,
     )
     residual, weighted_jac = problem.residual_and_jac(problem.x0)
+    warmed = problem.warmup(progress=False)
     got_jac = weighted_jac / 2.0
     reverse = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                                 jac_solver="reverse", max_nfev=1)
@@ -429,6 +432,16 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
     assert "converged equilibrium" in problem.metadata["derivative_description"]
     assert problem.metadata["weight_semantics"] == "cost"
     assert problem.metadata["implicit_jacobian_method"] == "block_tridiagonal"
+    assert problem.metadata["jacobian_batch_size"] == 1
+    assert problem.metadata["input_resolution"] == {
+        "mpol": inp.mpol,
+        "ntor": inp.ntor,
+        "ntheta": inp.ntheta,
+        "nzeta": inp.nzeta,
+    }
+    assert "first-run ETA" in problem.metadata["warmup_note"]
+    np.testing.assert_array_equal(warmed.residual, residual)
+    np.testing.assert_array_equal(warmed.jacobian, weighted_jac)
     assert (
         problem.metadata["implicit_jacobian_description"]
         == "block-tridiagonal equilibrium response"
@@ -515,6 +528,8 @@ def test_public_problem_factory_validation():
             objective_terms=term,
             implicit_jacobian_method="block",
         )
+    with pytest.raises(ValueError, match="jacobian_batch_size"):
+        opt.make_problem(inp, objective_terms=term, jacobian_batch_size=0)
     with pytest.raises(ValueError, match="not both"):
         opt._least_squares_implicit(
             term, inp, scalar_objective=opt.aspect_ratio, **common

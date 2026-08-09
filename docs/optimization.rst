@@ -30,6 +30,8 @@ SciPy, JAXopt, Optax, or user code:
    from vmex import optimize as opt
 
    inp = vj.VmecInput.from_file("input.minimal_seed_nfp2")
+   max_mode = 5
+   inp = opt.prepare_optimization_input(inp, max_mode, minimum_mpol=5)
    qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10),
                                        helicity_m=1, helicity_n=0)
    problem = opt.VmecProblem.from_tuples(
@@ -37,11 +39,14 @@ SciPy, JAXopt, Optax, or user code:
        [(qs, 0.0, 1.0),
         (opt.aspect_ratio, 6.0, 1.0),
         (opt.mean_iota, 0.42, 1.0)],
-       max_mode=5,
+       max_mode=max_mode,
        derivative_method="implicit",  # exact converged-equilibrium derivative
        weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
        implicit_jacobian_method="auto",  # best method for scalar/vector shape
+       jacobian_batch_size="auto",    # 1 favors shorter cold compilation
+       progress=True,                 # show seed/structure preparation
    )
+   problem.warmup()  # visible first-use compilation and initial evaluation
 
    result = scipy.optimize.least_squares(
        problem.residual,
@@ -50,6 +55,37 @@ SciPy, JAXopt, Optax, or user code:
        x_scale=problem.scales,
    )
    optimized_input = problem.input_from_x(result.x)
+
+The immutable :func:`~vmex.core.optimize.prepare_optimization_input` helper is
+the VMEX equivalent of changing both ``vmec.indata`` and the separate SIMSOPT
+boundary surface.  Its defaults reproduce the staged QI policy:
+``DELT=0.5``, ``MPOL=max(max_mode + 2, minimum_mpol)``, ``NTOR=MPOL``,
+``NTHETA=2*MPOL+6``, and ``NZETA=2*NTOR+4``.  It preserves every existing
+axis and boundary coefficient representable at the new resolution; explicit
+``mpol``, ``ntor``, ``ntheta``, ``nzeta``, and ``delt`` keywords override the
+defaults.
+
+:func:`~vmex.core.optimize.make_problem` with ``progress=True`` reports seed
+validation and structure preparation;
+:meth:`~vmex.core.problem.FunctionProblem.warmup` reports and caches the
+initial residual/Jacobian (or scalar value/gradient) before entering an
+optimizer.  Both identify the first-use work, print an elapsed-time heartbeat
+every 10 seconds, and report completion time; warmup also prints the initial
+cost and Jacobian shape.  VMEX deliberately does not claim a first-run ETA
+because XLA compilation time depends on resolution,
+objective shape, backend, hardware, and persistent-cache state.  For a
+CPU-only job where cold latency matters more than peak warm-kernel speed, set
+``VMEX_FAST_COMPILE=1`` *before* importing VMEX; the machine-local persistent
+compilation cache is already enabled by default.
+
+``jacobian_batch_size`` is the direct compile-latency/warm-throughput control.
+The default ``"auto"`` batches response columns for larger warm campaigns;
+``1`` processes one column at a time and minimizes compilation complexity and
+peak memory.  On the max-mode-1 ``alex_qi`` case on an Apple M3 Max with
+JAX/JAXlib 0.9.2, a cold isolated-cache measurement reduced exact-Jacobian
+preparation from 34.5 s to 20.5 s, while two five-evaluation optimization
+stages rose from 8.1--8.5 s to 8.9 s each.  These are benchmark observations,
+not CI timing thresholds.
 
 The same object provides ``fun``/``grad``/``value_and_grad`` for scalar
 optimizers and ``jax_fun``/``jax_value_and_grad``/``jax_residual`` for JAX

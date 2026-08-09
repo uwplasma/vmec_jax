@@ -10,7 +10,9 @@ lightweight tests and does not introduce an import cycle with
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from threading import RLock
+import sys
+from threading import Event, RLock, Thread
+import time
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -18,6 +20,53 @@ import numpy as np
 
 Array = Any
 HostFun = Callable[[np.ndarray], Any]
+
+
+def _run_with_progress(
+    function: Callable[[], Any],
+    *,
+    description: str,
+    note: str | None = None,
+    progress: bool,
+    report_interval: float,
+    stream: Any = None,
+) -> Any:
+    """Run one operation with a low-overhead elapsed-time heartbeat."""
+    interval = float(report_interval)
+    if interval <= 0.0:
+        raise ValueError("report_interval must be positive")
+    if not progress:
+        return function()
+    stream = sys.stdout if stream is None else stream
+    print(f"Preparing {description}...", file=stream, flush=True)
+    if note:
+        print(note, file=stream, flush=True)
+    started = time.perf_counter()
+    finished = Event()
+
+    def heartbeat() -> None:
+        while not finished.wait(interval):
+            elapsed = time.perf_counter() - started
+            print(
+                f"  Still preparing: {elapsed:.1f} s elapsed.",
+                file=stream,
+                flush=True,
+            )
+
+    reporter = Thread(target=heartbeat, name="vmex-progress", daemon=True)
+    reporter.start()
+    try:
+        result = function()
+    except Exception:
+        elapsed = time.perf_counter() - started
+        print(f"Preparation failed after {elapsed:.1f} s.", file=stream, flush=True)
+        raise
+    finally:
+        finished.set()
+        reporter.join()
+    elapsed = time.perf_counter() - started
+    print(f"Preparation complete in {elapsed:.1f} s.", file=stream, flush=True)
+    return result
 
 
 @dataclass(frozen=True)
@@ -253,6 +302,98 @@ class FunctionProblem:
             x=xh, value=value, gradient=gradient,
             residual=residual, jacobian=jacobian,
         )
+
+    def warmup(
+        self,
+        x: Array | None = None,
+        *,
+        derivatives: bool = True,
+        progress: bool = True,
+        report_interval: float = 10.0,
+        stream: Any = None,
+    ) -> Evaluation:
+        """Evaluate once, populate caches, and report long first-use work.
+
+        Residual problems warm the residual/Jacobian path; scalar problems
+        warm the value/gradient path.  This distinction avoids compiling an
+        unused scalar-gradient graph before nonlinear least squares.  A
+        heartbeat reports elapsed time while the call is running.  VMEX does
+        not invent a first-run ETA: compilation time depends strongly on the
+        resolution, objective shape, backend, and local compilation cache.
+
+        Set ``progress=False`` for silent library use or reduce
+        ``report_interval`` for more frequent updates.  The returned
+        :class:`Evaluation` is the same initial value and derivative data that
+        the optimizer will consume.
+        """
+        xh = self.x0.copy() if x is None else self._x(x).copy()
+        has_residual = self._residual is not None or self._residual_and_jac is not None
+        has_residual_jac = (
+            self._residual_jac is not None or self._residual_and_jac is not None
+        )
+        has_gradient = self._grad is not None or self._value_and_grad is not None
+
+        def evaluate_primary() -> Evaluation:
+            if has_residual:
+                if derivatives and has_residual_jac:
+                    residual, jacobian = self.residual_and_jac(xh)
+                    gradient = jacobian.T @ residual
+                else:
+                    residual, jacobian, gradient = self.residual(xh), None, None
+                return Evaluation(
+                    x=xh,
+                    value=0.5 * float(residual @ residual),
+                    gradient=gradient,
+                    residual=residual,
+                    jacobian=jacobian,
+                )
+            if derivatives and has_gradient:
+                value, gradient = self.value_and_grad(xh)
+            else:
+                value, gradient = self.fun(xh), None
+            return Evaluation(x=xh, value=value, gradient=gradient)
+
+        description = self.metadata.get(
+            "warmup_description",
+            "initial residual and Jacobian" if has_residual else "initial value and gradient",
+        )
+        note = self.metadata.get("warmup_note")
+        evaluation = _run_with_progress(
+            evaluate_primary,
+            description=description,
+            note=None if note is None else str(note),
+            progress=progress,
+            report_interval=report_interval,
+            stream=stream,
+        )
+        if progress:
+            output = sys.stdout if stream is None else stream
+            if evaluation.residual is not None:
+                jacobian_shape = (
+                    "unavailable"
+                    if evaluation.jacobian is None
+                    else f"{evaluation.jacobian.shape[0]} x {evaluation.jacobian.shape[1]}"
+                )
+                print(
+                    f"Initial cost: {evaluation.value:.6e}; "
+                    f"residual rows: {evaluation.residual.size}; "
+                    f"Jacobian: {jacobian_shape}.",
+                    file=output,
+                    flush=True,
+                )
+            else:
+                gradient_size = (
+                    "unavailable"
+                    if evaluation.gradient is None
+                    else str(evaluation.gradient.size)
+                )
+                print(
+                    f"Initial value: {evaluation.value:.6e}; "
+                    f"gradient entries: {gradient_size}.",
+                    file=output,
+                    flush=True,
+                )
+        return evaluation
 
 
 class VmecProblem(FunctionProblem):

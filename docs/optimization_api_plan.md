@@ -27,15 +27,19 @@ decision vector.  It exposes the names used by SciPy and JAX rather than hiding
 them inside a solver driver:
 
 ```python
+max_mode = 5
+inp = opt.prepare_optimization_input(inp, max_mode, minimum_mpol=5)
 problem = opt.VmecProblem.from_tuples(
     inp,
     [(qi, 0.0, 1.0),
      (opt.aspect_ratio, 6.0, 0.1),
      (iota_shortfall, 0.0, 10.0)],
-    max_mode=5,
+    max_mode=max_mode,
     derivative_method="implicit",  # exact converged-equilibrium derivative
     weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
     implicit_jacobian_method="auto",
+    jacobian_batch_size="auto",
+    progress=True,
 )
 
 problem.x0
@@ -56,6 +60,7 @@ problem.jax_residual(x)        # JAX residual vector
 
 problem.input_from_x(x)
 problem.evaluate(x)            # value, residual, status, diagnostics
+problem.warmup()               # visible first evaluation/JIT preparation
 ```
 
 `J(x)` and `dJ(x)` are concise aliases for users familiar with SIMSOPT.  The
@@ -239,6 +244,10 @@ Tests are divided by what they prove.
 - exact cost-weight tuple semantics;
 - compatibility-wrapper residual-weight behavior;
 - value/gradient and residual/Jacobian consistency;
+- staged input resolution preserves existing Fourier coefficients, exposes all
+  requested decision modes, and satisfies the real-space anti-aliasing policy;
+- warmup selects only the optimizer-relevant derivative path, populates its
+  exact-key cache, and emits deterministic start/heartbeat/completion records;
 - a repeated `fun(x)`/`grad(x)` pair reuses one equilibrium evaluation;
 - the same unchanged problem is accepted by SciPy, JAXopt, and Optax;
 - optional backends use `pytest.importorskip` and remain optional dependencies.

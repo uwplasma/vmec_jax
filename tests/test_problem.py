@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -65,6 +67,91 @@ def test_evaluation_contains_consistent_scalar_and_residual_forms():
     np.testing.assert_array_equal(evaluation.gradient, [2.0, 3.0])
     np.testing.assert_array_equal(evaluation.residual, [2.0, 3.0])
     np.testing.assert_array_equal(evaluation.jacobian, np.eye(2))
+
+
+def test_warmup_primes_primary_path_and_reports_progress():
+    calls = {"value_and_grad": 0, "residual_and_jac": 0}
+    problem = _quadratic_problem(calls)
+    evaluation = problem.warmup(progress=False)
+    assert evaluation.value == 6.5
+    assert calls == {"value_and_grad": 0, "residual_and_jac": 1}
+
+    def slow_residual_and_jac(x):
+        time.sleep(0.03)
+        return x - 1.0, np.eye(x.size)
+
+    stream = io.StringIO()
+    slow = FunctionProblem(
+        [2.0, 4.0],
+        residual_and_jac=slow_residual_and_jac,
+        metadata={"warmup_description": "a synthetic derivative"},
+    )
+    warmed = slow.warmup(report_interval=0.005, stream=stream)
+    output = stream.getvalue()
+    assert "Preparing a synthetic derivative" in output
+    assert "Still preparing:" in output
+    assert "Preparation complete in" in output
+    assert "Initial cost:" in output
+    assert "Jacobian: 2 x 2" in output
+    np.testing.assert_array_equal(warmed.gradient, [1.0, 3.0])
+    with pytest.raises(ValueError, match="report_interval"):
+        slow.warmup(report_interval=0.0)
+
+
+def test_prepare_optimization_input_matches_staged_qi_resolution():
+    from vmex.core import optimize as opt
+    from vmex.core.input import VmecInput
+
+    rbc = np.arange(9.0).reshape(3, 3)
+    zbs = rbc + 20.0
+    inp = VmecInput(mpol=3, ntor=1, rbc=rbc, zbs=zbs)
+    staged = opt.prepare_optimization_input(inp, 4, minimum_mpol=5)
+    assert (staged.mpol, staged.ntor) == (6, 6)
+    assert (staged.ntheta, staged.nzeta, staged.delt) == (18, 16, 0.5)
+    assert (inp.mpol, inp.ntor, inp.ntheta, inp.nzeta, inp.delt) == (3, 1, 0, 0, 1.0)
+    for n in range(-1, 2):
+        for m in range(3):
+            assert staged.rbc[n + staged.ntor, m] == inp.rbc[n + inp.ntor, m]
+            assert staged.zbs[n + staged.ntor, m] == inp.zbs[n + inp.ntor, m]
+    assert np.count_nonzero(staged.rbc[:, 3:]) == 0
+
+    custom = opt.prepare_optimization_input(
+        inp, 1, mpol=4, ntor=2, ntheta=12, nzeta=7, delt=0.25
+    )
+    assert (custom.mpol, custom.ntor, custom.ntheta, custom.nzeta, custom.delt) == (
+        4, 2, 12, 7, 0.25,
+    )
+    with pytest.raises(ValueError, match="mpol"):
+        opt.prepare_optimization_input(inp, 4, mpol=4)
+    with pytest.raises(ValueError, match="aliasing"):
+        opt.prepare_optimization_input(inp, 1, ntor=2, nzeta=4)
+
+
+def test_vmec_problem_factory_reports_construction_progress(monkeypatch):
+    from vmex.core import optimize as opt
+    from vmex.core.input import VmecInput
+
+    def fake_implicit_problem(*args, **kwargs):
+        del args, kwargs
+        time.sleep(0.02)
+        return FunctionProblem(
+            [0.0], fun=np.sum, metadata={"derivative_method": "implicit"}
+        )
+
+    monkeypatch.setattr(opt, "_least_squares_implicit", fake_implicit_problem)
+    stream = io.StringIO()
+    problem = opt.make_problem(
+        VmecInput(mpol=2, ntor=1),
+        objective_terms=[(lambda equilibrium: equilibrium, 0.0, 1.0)],
+        progress=True,
+        report_interval=0.005,
+        progress_stream=stream,
+    )
+    output = stream.getvalue()
+    assert "Preparing the VMEC problem and initial equilibrium" in output
+    assert "Still preparing:" in output
+    assert "Preparation complete in" in output
+    assert problem.metadata["derivative_method"] == "implicit"
 
 
 def test_residual_only_problem_derives_scalar_value_and_gradient():

@@ -114,13 +114,14 @@ from .statephysics import (
     volume,
 )
 from .wout import WoutData, wout_from_state
-from .problem import Evaluation, FunctionProblem, VmecProblem
+from .problem import Evaluation, FunctionProblem, VmecProblem, _run_with_progress
 
 __all__ = [
     "VmecProblem",
     "FunctionProblem",
     "Evaluation",
     "make_problem",
+    "prepare_optimization_input",
     "Equilibrium",
     "solve_equilibrium",
     "QuasisymmetryRatioResidual",
@@ -1136,6 +1137,81 @@ def _ess_scale(inp: VmecInput, max_mode: int, alpha: float) -> np.ndarray:
     return np.exp(-alpha * levels) / np.exp(-alpha)
 
 
+def prepare_optimization_input(
+    inp: VmecInput,
+    max_mode: int,
+    *,
+    minimum_mpol: int = 5,
+    mpol: int | None = None,
+    ntor: int | None = None,
+    ntheta: int | None = None,
+    nzeta: int | None = None,
+    delt: float = 0.5,
+) -> VmecInput:
+    """Return a stage input with resolved solver and boundary grids.
+
+    The defaults reproduce the staged SIMSOPT QI setup: ``mpol`` is
+    ``max(max_mode + 2, minimum_mpol)``, ``ntor`` matches ``mpol``, and the
+    real-space grids are ``ntheta = 2 * mpol + 6`` and
+    ``nzeta = 2 * ntor + 4``.  Exact values remain ordinary keyword
+    overrides for advanced studies.
+
+    :class:`VmecInput` stores its boundary in resolution-sized arrays, so this
+    one immutable operation also performs the role of SIMSOPT's separate
+    ``Surface.change_resolution`` call.  Every Fourier coefficient and axis
+    coefficient representable at both resolutions is copied; newly exposed
+    modes are zero.  The original input is not modified.
+    """
+    max_mode = int(max_mode)
+    minimum_mpol = int(minimum_mpol)
+    if max_mode < 0:
+        raise ValueError("max_mode must be non-negative")
+    if minimum_mpol < 1:
+        raise ValueError("minimum_mpol must be positive")
+    mpol = max(max_mode + 2, minimum_mpol) if mpol is None else int(mpol)
+    ntor = mpol if ntor is None else int(ntor)
+    ntheta = 2 * mpol + 6 if ntheta is None else int(ntheta)
+    nzeta = 2 * ntor + 4 if nzeta is None else int(nzeta)
+    delt = float(delt)
+    if mpol <= max_mode:
+        raise ValueError("mpol must be greater than max_mode")
+    if ntor < max_mode:
+        raise ValueError("ntor must be at least max_mode")
+    if ntheta <= 2 * (mpol - 1):
+        raise ValueError("ntheta must resolve all poloidal Fourier modes")
+    if nzeta <= 2 * ntor:
+        raise ValueError("nzeta must be greater than 2 * ntor to avoid aliasing")
+    if delt <= 0.0:
+        raise ValueError("delt must be positive")
+
+    old_ntor = int(inp.ntor)
+    old_mpol = int(inp.mpol)
+    ncopy = min(old_ntor, ntor)
+    mcopy = min(old_mpol, mpol)
+    axis = {}
+    for name in ("raxis_c", "zaxis_s", "raxis_s", "zaxis_c"):
+        values = np.zeros(ntor + 1)
+        values[: ncopy + 1] = np.asarray(getattr(inp, name))[: ncopy + 1]
+        axis[name] = values
+    boundary = {}
+    old_rows = slice(old_ntor - ncopy, old_ntor + ncopy + 1)
+    new_rows = slice(ntor - ncopy, ntor + ncopy + 1)
+    for name in ("rbc", "zbs", "rbs", "zbc"):
+        values = np.zeros((2 * ntor + 1, mpol))
+        values[new_rows, :mcopy] = np.asarray(getattr(inp, name))[old_rows, :mcopy]
+        boundary[name] = values
+    return dataclasses.replace(
+        inp,
+        mpol=mpol,
+        ntor=ntor,
+        ntheta=ntheta,
+        nzeta=nzeta,
+        delt=delt,
+        **axis,
+        **boundary,
+    )
+
+
 _IMPLICIT_JACOBIAN_METHODS = {
     "auto": "auto",
     "block_tridiagonal": "block",
@@ -1161,7 +1237,7 @@ def make_problem(
     current_dofs: int | None = None,
     derivative_method: str = "implicit",
     weight_semantics: str = "cost",
-    jac_chunk_size: int | str | None = "auto",
+    jacobian_batch_size: int | str | None = "auto",
     implicit_jacobian_method: str = "auto",
     hot_restart: bool = True,
     warm_start: str | None = "perturbation",
@@ -1170,6 +1246,9 @@ def make_problem(
     bounds: Any = None,
     device: Any = AUTO,
     solve_kwargs: dict | None = None,
+    progress: bool = False,
+    report_interval: float = 10.0,
+    progress_stream: Any = None,
     problem_class: type[VmecProblem] = VmecProblem,
 ) -> VmecProblem:
     """Build optimizer-neutral VMEC objective and derivative callables.
@@ -1193,6 +1272,17 @@ def make_problem(
     ``"reverse_adjoint"``; the names describe how the exact implicit
     Jacobian is assembled.
 
+    ``jacobian_batch_size="auto"`` balances warm throughput and memory.
+    ``1`` minimizes cold compilation complexity and peak memory by processing
+    one response column at a time; it can make warm evaluations modestly
+    slower.  This public name maps to the compatibility drivers' established
+    ``jac_chunk_size`` implementation.
+
+    Set ``progress=True`` to report elapsed-time heartbeats while validating
+    the seed equilibrium and building resolution-dependent solver data.
+    :meth:`VmecProblem.warmup` provides the same visibility for the first
+    residual/Jacobian evaluation after this factory returns.
+
     The returned object contains no optimization algorithm.  Pass
     :meth:`VmecProblem.residual` / :meth:`VmecProblem.residual_jac` to a
     nonlinear least-squares package, or :meth:`VmecProblem.value_and_grad` to
@@ -1205,6 +1295,18 @@ def make_problem(
             "derivative_method must be 'implicit' (exact derivatives of the "
             "converged equilibrium); "
             "use FunctionProblem.from_functions for supplied x-level derivatives"
+        )
+    if not (
+        jacobian_batch_size in ("auto", None)
+        or (
+            isinstance(jacobian_batch_size, int)
+            and not isinstance(jacobian_batch_size, bool)
+            and jacobian_batch_size > 0
+        )
+    ):
+        raise ValueError(
+            "jacobian_batch_size must be 'auto', None, or a positive integer; "
+            f"got {jacobian_batch_size!r}"
         )
     try:
         jac_solver = _IMPLICIT_JACOBIAN_METHODS[implicit_jacobian_method]
@@ -1219,28 +1321,55 @@ def make_problem(
     k_cur, _ = _current_dof_setup(inp, current_dofs)
     if scales is not None and k_cur:
         scales = np.concatenate([scales, np.ones(k_cur + 1)])
-    problem = _least_squares_implicit(
-        list(objective_terms or ()),
-        inp,
-        max_mode=max_mode,
-        x0=x0,
-        current_dofs=current_dofs,
-        jac_chunk_size=jac_chunk_size,
-        jac_solver=jac_solver,
-        recycle=False,
-        warm_start=(warm_start if hot_restart else None),
-        solve_kwargs=dict(solve_kwargs or {}),
-        device=device,
-        return_problem=True,
-        problem_class=problem_class,
-        weight_semantics=weight_semantics,
-        scalar_objective=loss,
-        problem_bounds=bounds,
-        problem_scales=scales,
+    problem = _run_with_progress(
+        lambda: _least_squares_implicit(
+            list(objective_terms or ()),
+            inp,
+            max_mode=max_mode,
+            x0=x0,
+            current_dofs=current_dofs,
+            jac_chunk_size=jacobian_batch_size,
+            jac_solver=jac_solver,
+            recycle=False,
+            warm_start=(warm_start if hot_restart else None),
+            solve_kwargs=dict(solve_kwargs or {}),
+            device=device,
+            return_problem=True,
+            problem_class=problem_class,
+            weight_semantics=weight_semantics,
+            scalar_objective=loss,
+            problem_bounds=bounds,
+            problem_scales=scales,
+        ),
+        description="the VMEC problem and initial equilibrium",
+        note=(
+            "This validates the seed and prepares resolution-dependent solver "
+            "data. A new solver structure may compile JAX executables."
+        ),
+        progress=progress,
+        report_interval=report_interval,
+        stream=progress_stream,
     )
     problem.metadata["implicit_jacobian_method"] = implicit_jacobian_method
     problem.metadata["implicit_jacobian_description"] = (
         _IMPLICIT_JACOBIAN_DESCRIPTIONS[implicit_jacobian_method]
+    )
+    problem.metadata["input_resolution"] = {
+        "mpol": int(inp.mpol),
+        "ntor": int(inp.ntor),
+        "ntheta": int(inp.ntheta),
+        "nzeta": int(inp.nzeta),
+    }
+    problem.metadata["jacobian_batch_size"] = jacobian_batch_size
+    problem.metadata["warmup_description"] = (
+        "the initial residual and exact implicit Jacobian"
+        if loss is None
+        else "the initial value and exact implicit gradient"
+    )
+    problem.metadata["warmup_note"] = (
+        "The first call for a new resolution and objective shape may compile "
+        "JAX executables. There is no reliable first-run ETA; elapsed time "
+        "will be reported until the work completes."
     )
     return problem
 
@@ -1734,8 +1863,17 @@ def _least_squares_implicit(
             x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
     params0_np = jax.tree.map(lambda a: np.asarray(a, dtype=np.float64),
                               params_of(_place(x0)))
-    _, mask_np = imp._host_solve_and_mask(cfg, params0_np)
+    state0_np, mask_np = imp._host_solve_and_mask(cfg, params0_np)
     mask_const = jax.tree.map(_place, mask_np)
+    state0 = jax.tree.map(_place, state0_np)
+    params_at_x0 = params_of(_place(x0))
+    runtime0 = imp.runtime_from_params(params_at_x0, cfg)
+    initial_rows = np.asarray(
+        jax.device_get(term_rows(state0, runtime0)), dtype=float
+    ).ravel()
+    if initial_rows.size == 0 or not np.all(np.isfinite(initial_rows)):
+        raise FloatingPointError("non-finite or empty objective at the initial point")
+    residual_size = int(initial_rows.size)
 
     # One-hot dof tangents in ImplicitParams space, stacked over dofs
     # (leading axis ndof) so chunk_map can process them in fixed-size chunks:
@@ -1984,7 +2122,10 @@ def _least_squares_implicit(
     jac_jit = jax.jit(jac_impl)
     reverse_jit = jax.jit(jax.jacrev(residual_rows))
 
-    holder: dict[str, Any] = {"nres": None, "lin": None}
+    # The strict seed preflight above already evaluated and validated every
+    # residual row.  Carry that known shape instead of compiling ``rows_jit``
+    # eagerly while the public factory is still returning.
+    holder: dict[str, Any] = {"nres": residual_size, "lin": None}
     if recycle:
         # An all-zero pair is a cold start (gcrot's warm-start QR masks the
         # rank-deficient columns out); shapes are static so jac_jit compiles
@@ -2093,14 +2234,6 @@ def _least_squares_implicit(
         if np.all(np.isfinite(jac)):
             holder["last_jac"] = jac
         return jac
-
-    # Pre-size the residual from the (converged) seed so a *first*-iteration
-    # trial failure penalizes like any later one instead of re-raising.
-    if holder["nres"] is None:
-        try:
-            holder["nres"] = int(np.asarray(jax.device_get(rows_jit(_place(x0)))).size)
-        except Exception:  # the seed itself does not converge -> fun raises clearly
-            pass
 
     def value_and_grad(x: np.ndarray):
         """Host scalar pair used by SciPy and the public problem object."""

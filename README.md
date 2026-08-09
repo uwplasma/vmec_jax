@@ -405,21 +405,48 @@ The recommended pattern releases all harmonics in one problem and uses
 from scipy.optimize import least_squares
 from vmex import optimize as opt
 
+max_mode = 5
+inp = opt.prepare_optimization_input(inp, max_mode, minimum_mpol=5)
 qs = opt.QuasisymmetryRatioResidual(surfaces, helicity_m=1, helicity_n=0)
 problem = opt.VmecProblem.from_tuples(
     inp,
     [(qs, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0), (opt.mean_iota, 0.42, 1.0)],
-    max_mode=5,
+    max_mode=max_mode,
     derivative_method="implicit",  # exact converged-equilibrium derivative
     weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
     implicit_jacobian_method="auto",  # select by scalar/vector objective shape
+    jacobian_batch_size="auto",    # use 1 to favor shorter cold compilation
+    progress=True,                 # show initial-equilibrium preparation
 )
+problem.warmup()  # times first-use compilation and prints elapsed heartbeats
 result = least_squares(
     problem.residual, problem.x0, jac=problem.residual_jac,
     x_scale=problem.scales,
 )
 optimized_input = problem.input_from_x(result.x)
 ```
+
+`prepare_optimization_input()` is the immutable VMEX equivalent of updating
+SIMSOPT's `vmec.indata` and then calling `Surface.change_resolution()`. Its
+defaults set `DELT=0.5`, `MPOL=max(max_mode + 2, minimum_mpol)`, `NTOR=MPOL`,
+`NTHETA=2*MPOL+6`, and `NZETA=2*NTOR+4`; existing representable boundary and
+axis coefficients are preserved. Exact grid values are optional keyword
+overrides.
+
+`progress=True` covers seed validation and construction;
+`problem.warmup()` covers the initial residual and exact Jacobian before SciPy
+starts. Both label the operation, print elapsed-time heartbeats every 10
+seconds, and report final wall time; warmup also prints the initial cost and
+Jacobian shape. A trustworthy ETA is not available before a new
+resolution/objective structure has compiled.
+For CPU jobs in which cold compilation matters more than peak warm-kernel
+speed, set `VMEX_FAST_COMPILE=1` before importing VMEX; the persistent
+machine-local compilation cache remains enabled by default.
+For the max-mode-1 `alex_qi` problem on an Apple M3 Max with JAX/JAXlib 0.9.2,
+the more effective latency control was `jacobian_batch_size=1`: isolated-cache Jacobian
+preparation fell from 34.5 s with `"auto"` to 20.5 s, while each five-evaluation
+optimization stage increased only from 8.1–8.5 s to 8.9 s. The default remains
+`"auto"` because larger warm campaigns benefit from batching.
 
 For scalar methods, pass `problem.value_and_grad` to
 `scipy.optimize.minimize(..., jac=True)`. `problem.jax_value_and_grad` and
