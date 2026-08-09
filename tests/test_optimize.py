@@ -494,6 +494,18 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
     accepted = problem.equilibrium_from_x(problem.x0)
     assert accepted.inp == inp
     assert accepted.result.converged
+    with pytest.raises(ValueError, match="ntheta"):
+        opt.elongation_profile(
+            accepted.state, accepted.runtime, ntheta=3, nphi=1
+        )
+    asymmetric_runtime = dataclasses.replace(
+        accepted.runtime,
+        setup=dataclasses.replace(accepted.runtime.setup, lasym=True),
+    )
+    asymmetric_elongation = opt.elongation_profile(
+        accepted.state, asymmetric_runtime, ntheta=4, nphi=1
+    )
+    assert np.all(np.isfinite(asymmetric_elongation))
     assert problem.metadata["derivative_method"] == "implicit"
     assert "converged equilibrium" in problem.metadata["derivative_description"]
     assert problem.metadata["weight_semantics"] == "cost"
