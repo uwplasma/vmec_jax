@@ -17,6 +17,8 @@ def make_qi_problem() -> opt.VmecProblem:
     """Return one problem used unchanged by SciPy, JAXopt, and Optax."""
     data = Path(__file__).resolve().parents[1] / "data" / "input.minimal_seed_nfp2"
     inp = VmecInput.from_file(data)
+    max_mode = int(os.environ.get("VMEX_MAX_MODE", "1"))
+    inp = opt.prepare_optimization_input(inp, max_mode, minimum_mpol=5)
     qi = QIResidual(
         np.linspace(0.2, 1.0, 4),
         mboz=8,
@@ -36,16 +38,21 @@ def make_qi_problem() -> opt.VmecProblem:
             (opt.aspect_ratio, 6.0, 0.1),
             (iota_floor, 0.0, 10.0),
         ],
-        max_mode=int(os.environ.get("VMEX_MAX_MODE", "1")),
+        max_mode=max_mode,
         # "implicit": exact converged-equilibrium derivatives.
         # "finite_difference": independent equilibrium re-solves.
         derivative_method="implicit",
         # "auto" is recommended; advanced exact paths are
         # "block_tridiagonal", "forward_gmres", and "reverse_adjoint".
         implicit_jacobian_method="auto",
+        # "auto" favors warm throughput; 1 can shorten cold compilation for
+        # small problems.  Advanced users can change this one argument.
+        jacobian_batch_size="auto",
         # "cost": w multiplies squared cost; "residual": w multiplies rows.
         weight_semantics="cost",
         use_ess=True,
+        # Report elapsed-time heartbeats during first-use JAX preparation.
+        progress=True,
     )
 
 

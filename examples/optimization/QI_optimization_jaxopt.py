@@ -19,6 +19,7 @@ args = parser.parse_args()
 problem = make_qi_problem()
 budget = iteration_budget(20)
 x0 = jnp.asarray(problem.x0)
+problem.warmup(evaluation_path="residual" if args.method == "LM" else "scalar")
 
 if args.method == "LBFGS":
     ci = os.environ.get("VMEX_EXAMPLES_CI") == "1"
