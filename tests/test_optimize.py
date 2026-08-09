@@ -604,6 +604,11 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
 
     config = problem.metadata["config"]
     implicit_module._LAST_STATUS_ERROR[config] = ValueError("rejected boundary")
+
+    def rejected_equilibrium(_x):
+        raise RuntimeError("no converged equilibrium for this point")
+
+    monkeypatch.setattr(problem, "_equilibrium_from_x", rejected_equilibrium)
     monkeypatch.setattr(
         FunctionProblem,
         "evaluate",

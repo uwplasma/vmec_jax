@@ -434,6 +434,18 @@ class VmecProblem(FunctionProblem):
             return evaluation
         from . import implicit as imp
 
+        # A cached value/Jacobian can be revisited after an unrelated rejected
+        # trial.  Confirm that the requested point still maps to the cached
+        # converged equilibrium before consulting the process-local last-error
+        # slot, otherwise that older failure would incorrectly mark this
+        # successful evaluation as failed.
+        try:
+            self.equilibrium_from_x(evaluation.x)
+        except (AttributeError, RuntimeError):
+            pass
+        else:
+            imp._LAST_STATUS_ERROR.pop(cfg, None)
+
         diagnostics = dict(evaluation.diagnostics)
         stats = imp._SOLVE_STATS.get(cfg)
         if stats is not None:
