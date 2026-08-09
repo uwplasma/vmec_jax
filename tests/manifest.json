@@ -102,6 +102,7 @@
     "pr-physics-core": [
       "tests/test_solver_end_to_end.py::test_converges_with_golden_iteration_count[solovev]",
       "tests/test_near_degenerate_vacuum.py::test_current_free_vacuum_nonconvergence_suggests_lforbal",
+      "tests/test_multigrid_ladder.py::test_initial_bad_jacobian_retries_once_through_ns3",
       "tests/test_implicit_grad.py::test_solovev_gradients_vs_fd",
       "tests/test_bounce.py::test_jit_jvp_vjp_and_finite_difference_agree",
       "tests/test_qi_residuals.py::test_action_residual_ad_matches_finite_difference",
@@ -129,7 +130,9 @@
       "tests/test_input_profiles.py::test_change_resolution_preserves_representable_coefficients",
       "tests/test_implicit_multi_rhs.py::test_block_response_forward_transpose_and_fd",
       "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block",
-      "tests/test_optimize.py::test_public_problem_factory_validation"
+      "tests/test_optimize.py::test_public_problem_factory_validation",
+      "tests/test_optimize_penalty.py",
+      "tests/test_bootstrap.py::test_least_squares_current_dofs_implicit"
     ],
     "pr-physics-mirror-spline": [
       "tests/mirror/test_analytic.py",

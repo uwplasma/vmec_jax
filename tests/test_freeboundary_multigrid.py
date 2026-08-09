@@ -138,6 +138,22 @@ def test_initial_bad_jacobian_restarts_free_ladder_through_ns3(
         )
 
     monkeypatch.setattr(FB, "_solve_free_boundary_stage", bad_first_stage)
+    stopped = []
+    joined = []
+
+    class Stop:
+        def set(self):
+            stopped.append(True)
+
+    class Worker:
+        def join(self):
+            joined.append(True)
+
+    monkeypatch.setattr(
+        FB,
+        "_launch_free_lane_prefetch",
+        lambda *_args, **_kwargs: (Worker(), Stop()),
+    )
     marker = object()
     retried = {}
 
@@ -152,6 +168,8 @@ def test_initial_bad_jacobian_restarts_free_ladder_through_ns3(
         ftol_array=[1.0e-6, 1.0e-10],
         niter_array=[80, 200],
         external_field=object(),
+        verbose=True,
+        prefetch_compile=True,
     )
 
     assert result is marker
@@ -159,6 +177,18 @@ def test_initial_bad_jacobian_restarts_free_ladder_through_ns3(
     np.testing.assert_allclose(retried["ftol_array"], [1.0e-4, 1.0e-6, 1.0e-10])
     np.testing.assert_array_equal(retried["niter_array"], [80, 80, 200])
     assert retried["coarse_grid_retry"] is False
+    assert stopped == [True]
+    assert joined == [True]
+
+    with pytest.raises(VmecJacobianError):
+        original(
+            inp,
+            ns_array=[7],
+            ftol_array=[1.0e-6],
+            niter_array=[80],
+            external_field=object(),
+            coarse_grid_retry=False,
+        )
 
 
 def test_vmec2000_niter_exhaustion_is_not_converged() -> None:

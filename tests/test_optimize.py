@@ -489,6 +489,16 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     got_jac = weighted_jac[0] / 2.0
     reverse = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                                 jac_solver="reverse", max_nfev=1)
+    reverse_problem = opt.VmecProblem.from_tuples(
+        inp,
+        obj,
+        max_mode=1,
+        implicit_jacobian_method="reverse_adjoint",
+        use_ess=False,
+    )
+    assert np.all(np.isfinite(np.asarray(
+        reverse_problem.jax_residual_jac(reverse_problem.x0)
+    )))
     assert got_jac.shape == ref.jac[0].shape
     np.testing.assert_allclose(residual[0] / 2.0, ref.fun[0], rtol=1e-12)
     np.testing.assert_allclose(got_jac, ref.jac[0], rtol=1e-6, atol=1e-8)
@@ -503,6 +513,8 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     accepted = problem.equilibrium_from_x(problem.x0)
     assert accepted.inp == inp
     assert accepted.result.converged
+    with pytest.raises(RuntimeError, match="usable VMEC equilibrium"):
+        problem.equilibrium_from_x(np.full_like(problem.x0, np.nan))
     with pytest.raises(ValueError, match="ntheta"):
         opt.elongation_profile(
             accepted.state, accepted.runtime, ntheta=3, nphi=1
@@ -547,6 +559,7 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     assert np.isfinite(scalar.fun(scalar.x0))
     assert scalar.fun(np.full_like(scalar.x0, np.nan)) == 1.0e12
     assert np.isfinite(float(scalar.jax_fun(scalar.x0)))
+    assert scalar.equilibrium_from_x(scalar.x0).result.converged
 
     holder = scalar.metadata["holder"]
     real_device_get = opt.jax.device_get
@@ -616,6 +629,12 @@ def test_public_problem_factory_validation():
         )
     with pytest.raises(ValueError, match="jacobian_batch_size"):
         opt.make_problem(inp, objective_terms=term, jacobian_batch_size=0)
+    with pytest.raises(FloatingPointError, match="initial point"):
+        opt.make_problem(
+            inp,
+            objective_terms=[(lambda _state, _runtime: jax.numpy.nan, 0.0, 1.0)],
+            max_mode=1,
+        )
     with pytest.raises(ValueError, match="not both"):
         opt._least_squares_implicit(
             term, inp, scalar_objective=opt.aspect_ratio, **common

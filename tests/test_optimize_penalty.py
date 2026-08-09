@@ -35,6 +35,29 @@ def _boom() -> VmecJacobianError:
         hint="deterministic stand-in for a self-intersecting trial boundary")
 
 
+def test_status_callback_builds_safe_mask_before_seed_cache(monkeypatch):
+    """Even an unprimed failed trial returns a shape-safe zero mask."""
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    cfg = im.make_config(inp, ftol=1.0e-10, max_iterations=10)
+    params = im.params_from_input(inp)
+    params_np = jax.tree.map(np.asarray, params)
+    saved = dict(im._MASK_CACHE)
+    try:
+        im._MASK_CACHE.clear()
+        monkeypatch.setattr(
+            im,
+            "_host_solve_and_mask_impl",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(_boom()),
+        )
+        state, mask, status = im._host_solve_and_mask_status(cfg, params_np)
+        assert int(status) == 1
+        assert all(np.all(value == 0.0) for value in jax.tree.leaves(mask))
+        assert jax.tree.structure(state) == jax.tree.structure(mask)
+    finally:
+        im._MASK_CACHE.clear()
+        im._MASK_CACHE.update(saved)
+
+
 def test_fd_lane_penalty_path(monkeypatch, capsys):
     """jac=None: a failed trial solve is penalized and the campaign completes."""
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
