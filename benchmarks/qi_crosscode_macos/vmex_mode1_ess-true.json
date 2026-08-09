@@ -1,0 +1,49 @@
+{
+  "accepted_costs": [
+    1.2208446947384635,
+    0.5506510564969436,
+    0.07549935455015588,
+    0.056730327713030756,
+    0.05112010458918862,
+    0.04918787660113365,
+    0.045926691805829964,
+    0.0455446648566833,
+    0.0455446648566832
+  ],
+  "backend": "vmex",
+  "compile_seconds": 19.417528124991804,
+  "dofs": 8,
+  "ess": true,
+  "failed_trials": 0,
+  "final_cost": 0.0455446648566833,
+  "initial_cost": 1.2208446947384635,
+  "max_mode": 1,
+  "max_nfev": 15,
+  "nfev": 15,
+  "njev": 8,
+  "ns": 25,
+  "optimize_seconds": 25.458028374996502,
+  "provenance": {
+    "date": "2026-08-09T16:36:36-0500",
+    "input_sha256": "5d087fbd1fd04e97d49bf98c700c59eaeb135cdefe0bdd02e20872e84cb9ea33",
+    "jax": "0.9.2",
+    "logical_cpus": 14,
+    "machine": "macOS-14.4.1-arm64-arm-64bit",
+    "processor": "arm",
+    "python": "3.11.14",
+    "scipy": "1.17.1",
+    "simsopt": "1.10.7.dev433+g24fa9b4b8",
+    "vmex": "0.4.0"
+  },
+  "resolution": {
+    "mpol": 5,
+    "ntheta": 16,
+    "ntor": 5,
+    "nzeta": 14
+  },
+  "setup_seconds": 28.391075999999885,
+  "total_seconds": 73.26663249998819,
+  "parallelism": "XLA-managed CPU threading within each solve",
+  "workers": null,
+  "wout_initial_cost": 1.2208446947385807
+}

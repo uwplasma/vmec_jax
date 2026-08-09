@@ -1,0 +1,51 @@
+{
+  "accepted_costs": [
+    1.2208446947383673,
+    0.8072639124965649,
+    0.12239630219189952,
+    0.06165592927648322,
+    0.04549932322248502,
+    0.0388946218043897,
+    0.03807236713705196,
+    0.037677983273677745,
+    0.03737577615591888,
+    0.03704529565876587,
+    0.03701008671728794
+  ],
+  "backend": "simsopt",
+  "compile_seconds": 0.0,
+  "dofs": 48,
+  "ess": true,
+  "failed_trials": null,
+  "final_cost": 0.03701008671728794,
+  "initial_cost": 1.2208446947383673,
+  "max_mode": 3,
+  "max_nfev": 15,
+  "nfev": 15,
+  "njev": 10,
+  "ns": 25,
+  "optimize_seconds": 119.23471612500725,
+  "provenance": {
+    "date": "2026-08-09T16:24:54-0500",
+    "input_sha256": "5d087fbd1fd04e97d49bf98c700c59eaeb135cdefe0bdd02e20872e84cb9ea33",
+    "jax": "0.9.2",
+    "logical_cpus": 14,
+    "machine": "macOS-14.4.1-arm64-arm-64bit",
+    "processor": "arm",
+    "python": "3.11.14",
+    "scipy": "1.17.1",
+    "simsopt": "1.10.7.dev433+g24fa9b4b8",
+    "vmex": "0.4.0"
+  },
+  "resolution": {
+    "mpol": 5,
+    "ntheta": 16,
+    "ntor": 5,
+    "nzeta": 14
+  },
+  "setup_seconds": 0.0038286669878289104,
+  "total_seconds": 119.23854479199508,
+  "parallelism": "one SIMSOPT MPI finite-difference group per rank",
+  "workers": 14,
+  "wout_initial_cost": 1.2208446947383673
+}

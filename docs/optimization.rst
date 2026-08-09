@@ -146,6 +146,105 @@ axis:
    final_input.to_indata("input.optimized_final")
    vj.write_wout("wout_optimized_final.nc", final_equilibrium.wout)
 
+Mode ladders and resolution convergence
+---------------------------------------
+
+ESS is a variable scale, not a continuation method.  Releasing all modes at
+once is useful for a fast survey because it pays one JAX compilation.  A mode
+ladder can reach another basin by first solving the low-order shape, then
+carrying that boundary into successively richer spaces.  The explicit pattern
+is deliberately ordinary Python:
+
+.. code-block:: python
+
+   for max_mode in [1, 2, 3, 4, 5]:
+       mpol = max(max_mode + 2, 5)
+       inp = inp.change_resolution(
+           mpol=mpol,
+           ntor=mpol,
+           ntheta=2 * mpol + 6,
+           nzeta=2 * mpol + 4,
+       )
+       problem = opt.VmecProblem.from_tuples(
+           inp, terms, max_mode=max_mode
+       )
+       result = scipy.optimize.least_squares(
+           problem.residual,
+           problem.x_from_input(inp),
+           jac=problem.residual_jac,
+           x_scale=problem.scales,
+           max_nfev=15,
+       )
+       inp = problem.input_from_x(result.x)
+       equilibrium = problem.equilibrium_from_x(result.x)
+       inp.to_indata(f"input.qi_max_mode_{max_mode:03d}")
+
+On the bundled ``alex_qi`` nfp=2 case, direct ``max_mode=5`` stopped after 47
+evaluations at cost 0.03742.  The ``[1, 2, 3, 4, 5]`` ladder, capped at 15
+evaluations per stage (75 total), reached 0.02582 -- 31% lower.  This is a
+basin result, not a claim that every QS/QI problem needs a ladder.  A stage
+endpoint can be higher than the previous endpoint because changing ``mpol``,
+``ntor``, and JAX shapes changes the discretized problem.  Within each fixed
+stage, accepted least-squares costs remain monotone.
+
+Radial resolution should be treated as a convergence parameter, not a magic
+minimum.  Holding that ladder boundary fixed and resolving it at increasingly
+fine ``NS`` gave:
+
+.. list-table:: Fixed-boundary radial convergence (strict equilibrium solve)
+   :header-rows: 1
+   :widths: 15 25 25
+
+   * - ``NS``
+     - QI total
+     - total least-squares cost
+   * - 15
+     - 0.025795
+     - 0.025394
+   * - 19
+     - 0.026356
+     - 0.025714
+   * - 25
+     - 0.026463
+     - 0.025814
+   * - 35
+     - 0.026265
+     - 0.025776
+   * - 51
+     - 0.026407
+     - 0.025893
+   * - 75
+     - 0.026525
+     - 0.025983
+   * - 101
+     - 0.026479
+     - 0.025977
+
+Thus ``NS=25`` is the measured minimum suitable for inexpensive optimization
+of this smooth, vacuum, ``max_mode <= 5`` case (QI differs by 0.06% from
+``NS=101``); ``NS=35`` is the safer default when boundaries become strongly
+shaped or rejected equilibria appear.  ``NS=15`` is a coarse scouting grid,
+not a final optimization grid.  The ``NS=101`` run does not change the
+boundary variables, but it recomputes the equilibrium and objectives at a
+finer radial discretization, so it is validation/refinement rather than a
+guarantee that a coarse-grid minimum is unchanged.
+
+Likewise, ``mpol=ntor=max_mode+2`` is an efficient optimization resolution,
+not a spectral-convergence certificate.  On the same optimized mode-5
+boundary, raising both solver truncations from 7 to 9 changed the recomputed
+QI total by about 2.1%.  Validate final candidates with at least one larger
+``mpol``/``ntor`` buffer; if the target metric moves materially, polish the
+optimization at that resolution.  Keep the real-space grids above the
+spectral anti-aliasing threshold when doing so.
+
+At ``NS=101`` and ``FTOL=1e-14`` the hot solve converged in 2,656 iterations
+versus 3,046 from the automatic cold-axis path.  Both succeeded; carrying the
+accepted state saved 13% of the iterations.  Resolution and spectral-shape
+changes limit restart reuse, so the larger speedups occur between nearby
+optimization trials of the same shape.  ``verbose=True`` prints the live
+iteration table; the measured 2,656 iterations also shows why
+``NITER_ARRAY=8000`` is a conservative final-run limit here.
+
 The factory accepts ``weight_semantics="cost"`` (the default), for which a
 tuple weight ``w`` contributes ``sqrt(w) * (f - target)`` residual rows and
 therefore multiplies the squared cost.  ``weight_semantics="residual"`` makes
