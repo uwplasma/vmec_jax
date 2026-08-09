@@ -146,6 +146,59 @@ def test_scalar_targets_match_own_wout(solovev_eq):
     assert 0.0 < mirror < 1.0
 
 
+def test_boundary_elongation_is_traceable_and_grid_converged(solovev_eq):
+    """Equivalent-ellipse elongation is physical, resolved, and JAX-ready."""
+    eq = solovev_eq
+    coarse = np.asarray(
+        opt.elongation_profile(eq.state, eq.runtime, ntheta=32, nphi=16)
+    )
+    fine = np.asarray(
+        opt.elongation_profile(eq.state, eq.runtime, ntheta=64, nphi=32)
+    )
+    assert np.all(np.isfinite(coarse)) and np.all(coarse >= 1.0)
+    np.testing.assert_allclose(np.max(coarse), 1.5602656925818226, rtol=1e-7)
+    np.testing.assert_allclose(np.max(coarse), np.max(fine), rtol=1e-7)
+    np.testing.assert_allclose(float(opt.max_elongation(eq.state, eq.runtime)),
+                               np.max(coarse), rtol=1e-7)
+
+    gradient = np.asarray(jax.grad(
+        lambda z_sin: opt.max_elongation(
+            dataclasses.replace(eq.state, Z_sin=z_sin), eq.runtime
+        )
+    )(eq.state.Z_sin))
+    assert np.all(np.isfinite(gradient))
+    assert np.max(np.abs(gradient)) > 0.0
+
+
+def test_solve_equilibrium_forwards_verbose(monkeypatch, solovev_eq):
+    """The public final-solve helper exposes the VMEC iteration table flag."""
+    captured = {}
+    result = SimpleNamespace(
+        state=solovev_eq.state,
+        fsqr=solovev_eq.result.fsqr,
+        fsqz=solovev_eq.result.fsqz,
+        fsql=solovev_eq.result.fsql,
+        iterations=solovev_eq.result.iterations,
+        converged=solovev_eq.result.converged,
+    )
+
+    def fake_solve_multigrid(inp, **kwargs):
+        captured.update(kwargs)
+        return result
+
+    monkeypatch.setattr(opt, "solve_multigrid", fake_solve_multigrid)
+    solved = opt.solve_equilibrium(
+        solovev_eq.inp,
+        initial_state=solovev_eq.state,
+        raise_on_max_iterations=True,
+        verbose=True,
+    )
+    assert solved.state is solovev_eq.state
+    assert captured["initial_state"] is solovev_eq.state
+    assert captured["raise_on_max_iterations"] is True
+    assert captured["verbose"] is True
+
+
 def test_scalar_targets_vs_golden(solovev_eq):
     """Scalars vs golden VMEC2000 wout values: the golden run is an
     independently converged state (ftol 1e-14), so tolerances carry solver
@@ -404,30 +457,43 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
     jax.config.update("jax_disable_jit", False)
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     obj = [(opt.aspect_ratio, 4.0, 1.0)]
+
+    def elongation_excess(state, runtime):
+        return jax.numpy.maximum(
+            opt.max_elongation(state, runtime) - 8.0, 0.0
+        )
+
     ref = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                             jac_solver="gmres", max_nfev=1)
     # The public problem uses cost weights: weight=4 scales residuals and
     # their Jacobian by sqrt(4)=2.  It exposes the same block engine the
     # compatibility driver used to keep private.
     problem = opt.VmecProblem.from_tuples(
-        inp, [(opt.aspect_ratio, 4.0, 4.0)], max_mode=1,
+        inp,
+        [(opt.aspect_ratio, 4.0, 4.0), (elongation_excess, 0.0, 1.0)],
+        max_mode=1,
         implicit_jacobian_method="block_tridiagonal",
-        jacobian_batch_size=1,
         use_ess=False,
     )
     residual, weighted_jac = problem.residual_and_jac(problem.x0)
     compiled = problem.compile_residual_and_jacobian(progress=False)
-    got_jac = weighted_jac / 2.0
+    got_jac = weighted_jac[0] / 2.0
     reverse = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                                 jac_solver="reverse", max_nfev=1)
-    assert got_jac.shape == ref.jac.shape
-    np.testing.assert_allclose(residual / 2.0, ref.fun, rtol=1e-12)
-    np.testing.assert_allclose(got_jac, ref.jac, rtol=1e-6, atol=1e-8)
+    assert got_jac.shape == ref.jac[0].shape
+    np.testing.assert_allclose(residual[0] / 2.0, ref.fun[0], rtol=1e-12)
+    np.testing.assert_allclose(got_jac, ref.jac[0], rtol=1e-6, atol=1e-8)
+    assert residual[1] == 0.0
+    assert np.all(np.isfinite(weighted_jac[1]))
     np.testing.assert_allclose(reverse.jac, ref.jac, rtol=1e-6, atol=1e-8)
     np.testing.assert_allclose(problem.grad(problem.x0),
                                weighted_jac.T @ residual, rtol=1e-6)
     assert np.all(np.isfinite(np.asarray(problem.jax_residual_jac(problem.x0))))
     assert problem.input_from_x(problem.x0) == inp
+    np.testing.assert_array_equal(problem.x_from_input(inp), problem.x0)
+    accepted = problem.equilibrium_from_x(problem.x0)
+    assert accepted.inp == inp
+    assert accepted.result.converged
     assert problem.metadata["derivative_method"] == "implicit"
     assert "converged equilibrium" in problem.metadata["derivative_description"]
     assert problem.metadata["weight_semantics"] == "cost"

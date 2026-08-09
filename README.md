@@ -403,6 +403,7 @@ The recommended pattern releases all harmonics in one problem and uses
 
 ```python
 from dataclasses import replace
+import jax.numpy as jnp
 from scipy.optimize import least_squares
 from vmex import optimize as opt
 
@@ -416,14 +417,17 @@ inp = inp.change_resolution(
     mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta
 )
 qs = opt.QuasisymmetryRatioResidual(surfaces, helicity_m=1, helicity_n=0)
+
+def elongation_excess(state, runtime):
+    return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+
 problem = opt.VmecProblem.from_tuples(
     inp,
-    [(qs, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0), (opt.mean_iota, 0.42, 1.0)],
+    [(qs, 0.0, 1.0),
+     (opt.aspect_ratio, 6.0, 1.0),
+     (opt.mean_iota, 0.42, 1.0),
+     (elongation_excess, 0.0, 1.0)],
     max_mode=max_mode,
-    derivative_method="implicit",  # exact converged-equilibrium derivative
-    weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
-    implicit_jacobian_method="auto",  # select by scalar/vector objective shape
-    jacobian_batch_size="auto",    # use 1 to favor shorter cold compilation
     progress=True,                 # report elapsed time during construction
 )
 problem.compile_residual_and_jacobian()  # optional visible first compilation
@@ -432,6 +436,7 @@ result = least_squares(
     x_scale=problem.scales,
 )
 optimized_input = problem.input_from_x(result.x)
+optimized_equilibrium = problem.equilibrium_from_x(result.x)
 ```
 
 The script owns its resolution policy: `mpol`, `ntor`, `ntheta`, `nzeta`, and
@@ -448,11 +453,28 @@ is removed, SciPy triggers the same compilation on its first evaluation.
 For CPU jobs in which cold compilation matters more than peak warm-kernel
 speed, set `VMEX_FAST_COMPILE=1` before importing VMEX; the persistent
 machine-local compilation cache remains enabled by default.
-For the max-mode-1 `alex_qi` problem on an Apple M3 Max with JAX/JAXlib 0.9.2,
-the more effective latency control was `jacobian_batch_size=1`: isolated-cache Jacobian
-preparation fell from 34.5 s with `"auto"` to 20.5 s, while each five-evaluation
-optimization stage increased only from 8.1–8.5 s to 8.9 s. The default remains
-`"auto"` because larger warm campaigns benefit from batching.
+The beginner defaults are exact converged-equilibrium derivatives
+(`derivative_method="implicit"`), automatic scalar/vector Jacobian assembly
+(`implicit_jacobian_method="auto"`), one-column Jacobian batches
+(`jacobian_batch_size=1`), and cost weights (`weight_semantics="cost"`). Ordinary
+QI/QS scripts should omit these arguments. On an Apple M3 Max with JAX/JAXlib
+0.9.2, isolated cold-cache tests over QI, QS, and scalar geometry/profile terms
+at `max_mode` 1, 3, and 5 reduced first Jacobian compilation by 12.9–14.2 s
+with batch size 1; full 12-evaluation mode-5 QI and QS runs were 8.2 s and
+9.9 s faster overall than `"auto"`, with matching final costs. Select
+`jacobian_batch_size="auto"` only for long, repeated same-shape campaigns in
+which its roughly 1–4 s lower warm evaluation time amortizes the larger first
+compilation. Explicit Jacobian methods are intended for numerical studies and
+diagnostics; `"auto"` is the normal choice.
+
+`problem.equilibrium_from_x(result.x)` returns the accepted equilibrium state
+already evaluated by the optimizer. Use it for reporting and as
+`initial_state=` in a high-resolution final solve; cold-solving a strongly
+shaped optimized boundary can otherwise fail before VMEC reconstructs a good
+magnetic axis. `problem.x_from_input(inp)` is the inverse mapping used to start
+a continuation stage. A mutable `inp.x` is intentionally absent because the
+decision vector depends on that problem's `max_mode` and optional profile
+degrees of freedom.
 
 For scalar methods, pass `problem.value_and_grad` to
 `scipy.optimize.minimize(..., jac=True)`. `problem.jax_value_and_grad` and

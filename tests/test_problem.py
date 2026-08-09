@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 import vmex
-from vmex.core.problem import Evaluation, FunctionProblem
+from vmex.core.problem import Evaluation, FunctionProblem, VmecProblem
 
 
 def _quadratic_problem(calls=None):
@@ -58,6 +58,36 @@ def test_problem_contract_and_exact_key_cache():
     assert problem.names == ("a", "b")
     np.testing.assert_array_equal(problem.scales, [1.0, 2.0])
     assert FunctionProblem.from_functions([1.0], fun=np.sum).fun([2.0]) == 2.0
+
+
+def test_vmec_problem_maps_inputs_and_reuses_equilibria():
+    """The public continuation helpers are inverse, shape-safe mappings."""
+    equilibrium = SimpleNamespace(name="accepted equilibrium")
+    problem = VmecProblem(
+        [1.0, 2.0],
+        fun=np.sum,
+        input_from_x=lambda x: SimpleNamespace(coefficients=np.asarray(x)),
+        x_from_input=lambda inp: inp.coefficients,
+        equilibrium_from_x=lambda x: (equilibrium, np.asarray(x)),
+    )
+    inp = problem.input_from_x([3.0, 4.0])
+    np.testing.assert_array_equal(problem.x_from_input(inp), [3.0, 4.0])
+    accepted, x = problem.equilibrium_from_x([5.0, 6.0])
+    assert accepted is equilibrium
+    np.testing.assert_array_equal(x, [5.0, 6.0])
+
+    bad = SimpleNamespace(coefficients=np.ones(3))
+    with pytest.raises(ValueError, match="decision-vector shape"):
+        problem.x_from_input(bad)
+
+    no_equilibrium = VmecProblem(
+        [1.0],
+        fun=np.sum,
+        input_from_x=lambda x: x,
+        x_from_input=lambda inp: inp,
+    )
+    with pytest.raises(AttributeError, match="does not provide equilibria"):
+        no_equilibrium.equilibrium_from_x([1.0])
 
 
 def test_evaluation_contains_consistent_scalar_and_residual_forms():

@@ -25,6 +25,7 @@ SciPy, JAXopt, Optax, or user code:
 .. code-block:: python
 
    from dataclasses import replace
+   import jax.numpy as jnp
    import numpy as np
    import scipy.optimize
    import vmex as vj
@@ -42,16 +43,17 @@ SciPy, JAXopt, Optax, or user code:
    )
    qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10),
                                        helicity_m=1, helicity_n=0)
+
+   def elongation_excess(state, runtime):
+       return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+
    problem = opt.VmecProblem.from_tuples(
        inp,
        [(qs, 0.0, 1.0),
         (opt.aspect_ratio, 6.0, 1.0),
-        (opt.mean_iota, 0.42, 1.0)],
+        (opt.mean_iota, 0.42, 1.0),
+        (elongation_excess, 0.0, 1.0)],
        max_mode=max_mode,
-       derivative_method="implicit",  # exact converged-equilibrium derivative
-       weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
-       implicit_jacobian_method="auto",  # best method for scalar/vector shape
-       jacobian_batch_size="auto",    # 1 favors shorter cold compilation
        progress=True,                 # report elapsed construction time
    )
    problem.compile_residual_and_jacobian()  # optional visible first compilation
@@ -63,6 +65,7 @@ SciPy, JAXopt, Optax, or user code:
        x_scale=problem.scales,
    )
    optimized_input = problem.input_from_x(result.x)
+   optimized_equilibrium = problem.equilibrium_from_x(result.x)
 
 The optimization script owns its numerical policy.  It selects ``DELT``,
 ``MPOL``, ``NTOR``, ``NTHETA``, and ``NZETA`` explicitly.  The immutable
@@ -82,20 +85,62 @@ CPU-only job where cold latency matters more than peak warm-kernel speed, set
 ``VMEX_FAST_COMPILE=1`` *before* importing VMEX; the machine-local persistent
 compilation cache is already enabled by default.
 
-``jacobian_batch_size`` is the direct compile-latency/warm-throughput control.
-The default ``"auto"`` batches response columns for larger warm campaigns;
-``1`` processes one column at a time and minimizes compilation complexity and
-peak memory.  On the max-mode-1 ``alex_qi`` case on an Apple M3 Max with
-JAX/JAXlib 0.9.2, a cold isolated-cache measurement reduced exact-Jacobian
-preparation from 34.5 s to 20.5 s, while two five-evaluation optimization
-stages rose from 8.1--8.5 s to 8.9 s each.  These are benchmark observations,
-not CI timing thresholds.
+The factory's four ordinary defaults are:
+
+* ``derivative_method="implicit"`` -- exact derivatives of the converged
+  fixed-boundary equilibrium;
+* ``implicit_jacobian_method="auto"`` -- a reverse adjoint for one residual
+  row and the block-tridiagonal response for a residual vector;
+* ``jacobian_batch_size=1`` -- one response column per batch, minimizing cold
+  compilation complexity and peak memory;
+* ``weight_semantics="cost"`` -- tuple weight ``w`` multiplies
+  ``0.5 * (value - target)**2``.
+
+Beginner QI and QS scripts should omit all four.  ``jacobian_batch_size`` is
+the main compile-latency/warm-throughput control.  Isolated cold-cache tests on
+an Apple M3 Max (JAX/JAXlib 0.9.2) covered QI, QS, and four scalar geometry /
+profile terms at ``max_mode`` 1, 3, and 5.  Batch size 1 shortened the first
+Jacobian compilation by 12.9--14.2 s in every case.  Complete 12-evaluation
+mode-5 runs took 99.5 s versus 107.7 s for QI and 84.0 s versus 93.8 s for QS,
+with final costs agreeing within ``1e-10`` relative.  Use
+``jacobian_batch_size="auto"`` for long repeated campaigns at one array shape,
+where its faster warm stages amortize the larger initial compilation.  The
+explicit ``"block_tridiagonal"``, ``"forward_gmres"``, and
+``"reverse_adjoint"`` methods are advanced numerical controls rather than
+alternative beginner settings.  These timings are benchmark observations,
+not CI thresholds.
 
 The same object provides ``fun``/``grad``/``value_and_grad`` for scalar
 optimizers and ``jax_fun``/``jax_value_and_grad``/``jax_residual`` for JAX
 libraries.  The decision vector is always explicit; evaluation does not
 mutate a hidden ``problem.x``.  ``J(x)`` and ``dJ(x)`` are aliases for users
 familiar with SIMSOPT.
+
+For a continuation stage, ``problem.x_from_input(inp)`` maps the current input
+through the problem's exact boundary/profile parameterization.  There is no
+ambiguous mutable ``inp.x`` because the selected variables depend on
+``max_mode`` and ``current_dofs``.  After optimization,
+``problem.equilibrium_from_x(result.x)`` returns the accepted converged state
+already used to evaluate that point.  Reuse it when reporting or refining a
+strongly shaped result instead of cold-solving from a reconstructed magnetic
+axis:
+
+.. code-block:: python
+
+   final_input = replace(
+       optimized_input,
+       ns_array=np.array([101]),
+       ftol_array=np.array([1.0e-14]),
+       niter_array=np.array([8000]),
+   )
+   final_equilibrium = opt.solve_equilibrium(
+       final_input,
+       initial_state=optimized_equilibrium.state,
+       verbose=True,                    # print the VMEC iteration table
+       raise_on_max_iterations=True,
+   )
+   final_input.to_indata("input.optimized_final")
+   vj.write_wout("wout_optimized_final.nc", final_equilibrium.wout)
 
 The factory accepts ``weight_semantics="cost"`` (the default), for which a
 tuple weight ``w`` contributes ``sqrt(w) * (f - target)`` residual rows and
@@ -109,12 +154,11 @@ iterations.  This first factory supports that method.  Complete user-supplied
 x-level derivatives use ``FunctionProblem.from_functions``; the parallel
 finite-difference provider is added in the later derivative-provider layer.
 
-``implicit_jacobian_method="auto"`` is the normal choice.  It uses a reverse
-adjoint for a scalar residual and the block-tridiagonal equilibrium response
-for a vector residual.  Advanced comparisons can select
-``"block_tridiagonal"``, ``"forward_gmres"``, or ``"reverse_adjoint"``.
-These names describe the mathematical assembly path; the older compatibility
-drivers retain their established ``jac_solver`` spelling.
+``implicit_jacobian_method="auto"`` is the normal choice.  Advanced
+comparisons can select ``"block_tridiagonal"``, ``"forward_gmres"``, or
+``"reverse_adjoint"``.  These names describe the mathematical assembly path;
+the older compatibility drivers retain their established ``jac_solver``
+spelling.
 
 The compatibility drivers
 -------------------------

@@ -105,8 +105,35 @@ and composable with both gradient modes:
   (a floor on ``|iota|`` avoids the rational surfaces near zero transform);
 - :func:`~vmex.core.optimize.mirror_ratio` — ``(Bmax - Bmin)/(Bmax +
   Bmin)`` on a flux surface, the practical QI knob;
+- :func:`~vmex.core.optimize.elongation_profile` /
+  :func:`~vmex.core.optimize.max_elongation` — equivalent-ellipse boundary
+  elongation from Fourier-exact area and perimeter line integrals over one
+  field period;
 - :func:`~vmex.core.optimize.magnetic_well` — the standard vacuum-well
   measure (positive = well, stabilizing).
+
+For an upper elongation bound, use a zero-target hinge rather than targeting
+the threshold itself.  This reproduces the usual SIMSOPT QI constraint while
+remaining a pure traceable tuple term:
+
+.. code-block:: python
+
+   import jax.numpy as jnp
+
+   maximum_elongation = 8.0
+
+   def elongation_excess(state, runtime):
+       return jnp.maximum(
+           opt.max_elongation(state, runtime) - maximum_elongation, 0.0
+       )
+
+   terms = [(elongation_excess, 0.0, 1.0)]
+
+The default Fourier quadrature is resolved for optimization modes through
+``max_mode=5``.  ``ntheta`` and ``nphi`` can be passed explicitly to
+``elongation_profile`` or ``max_elongation`` for convergence studies.  The
+hard maximum and hinge are nonsmooth only at exact ties or at the threshold;
+away from those points their implicit derivatives are exact.
 
 Two reporting diagnostics run on the host-side wout engine:
 :func:`~vmex.core.optimize.d_merc` (Mercier interchange criterion) and
@@ -354,7 +381,7 @@ Which objectives differentiate how
      - yes
      - yes
      - traceable ``residuals_state`` lane
-   * - scalar targets (aspect, volume, iota, mirror, well)
+   * - scalar targets (aspect, volume, iota, mirror, elongation, well)
      - yes
      - yes
      - pure ``(state, runtime)`` functions

@@ -67,12 +67,13 @@ naive re-solve FD is *not* a valid reference — it can sign-flip; use
 :func:`frozen_path_directional_fd`, which reproduces the adjoint to solver
 accuracy (full rationale on that function; ``tests/test_implicit_grad.py``).
 
-Zero-crash typed errors through the callback
---------------------------------------------
+Strict and optimization-safe callback lanes
+---------------------------------------------
 ``jax.pure_callback`` converts any host exception into an opaque
 ``JaxRuntimeError`` that embeds the whole host traceback and *loses* the
 typed exception (``__cause__`` is ``None``) — breaking the
-:mod:`vmex.core.errors` zero-crash taxonomy.  The relay:
+:mod:`vmex.core.errors` zero-crash taxonomy.  The strict diagnostic lane uses
+the relay:
 ``_host_solve_and_mask`` catches any :class:`~vmex.core.errors.VmecError`,
 stashes it in the single-slot ``_HOST_ERROR`` (host callbacks are serialized
 per solve) and re-raises a SHORT sentinel ``RuntimeError``;
@@ -81,6 +82,13 @@ per solve) and re-raises a SHORT sentinel ``RuntimeError``;
 short typed error.  Under ``jax.jit`` the sentinel surfaces at the jit
 boundary instead (where the ``optimize.least_squares`` zero-crash penalty
 lanes catch it).
+
+Optimization uses :func:`solve_implicit_status` instead.  Its callback never
+raises: a failed trial returns a fixed-shape fallback state and status code,
+after which the objective selects a finite differentiable penalty.  This lane
+therefore obeys the pure-callback contract under JIT and does not emit a host
+traceback.  An invalid initial point is still rejected by a strict host
+preflight before an optimizer starts.
 
 Parameter map
 -------------
@@ -152,7 +160,8 @@ __all__ = [
     "ImplicitParams", "ImplicitConfig", "ImplicitSolution",
     "LinearResponseReport",
     "params_from_input", "input_with_params", "runtime_from_params",
-    "make_config", "solve_implicit", "solve_implicit_with_aux",
+    "make_config", "solve_implicit", "solve_implicit_status",
+    "solve_implicit_with_aux",
     "implicit_state_tangent_multi_rhs", "implicit_state_pullback_multi_rhs", "run",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
     "iota_axis", "iota_edge", "edge_iota", "residual_fn", "adjoint_matvec",
@@ -1040,6 +1049,12 @@ _SOLVE_STATS: weakref.WeakKeyDictionary[ImplicitConfig, dict[str, int]] = \
 # per solve, so one slot cannot race.
 _HOST_ERROR: list[VmecError] = []
 
+# Last recoverable error for the status-returning optimization lane.  This is
+# diagnostic state only; numerical callback outputs are deterministic functions
+# of their inputs and never read this mapping.
+_LAST_STATUS_ERROR: weakref.WeakKeyDictionary[ImplicitConfig, Exception] = \
+    weakref.WeakKeyDictionary()
+
 
 def _params_key(params: ImplicitParams) -> bytes:
     return b"".join(np.asarray(leaf, dtype=np.float64).tobytes()
@@ -1168,6 +1183,36 @@ def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
     return as_np(result.state), mask
 
 
+def _host_solve_and_mask_status(cfg: ImplicitConfig, params_np) -> tuple:
+    """Status-returning host callback for optimization trial points.
+
+    A failed solve returns a parameter-consistent initial state, the structural
+    mask (already primed by the required-valid optimization seed), and status
+    ``1``.  No exception crosses :func:`jax.pure_callback`, whose contract does
+    not define callback exceptions.  The strict :func:`solve_implicit` lane is
+    unchanged and continues to raise typed VMEX errors for direct callers.
+    """
+    with _device_context(cfg):
+        try:
+            state, mask = _host_solve_and_mask_impl(cfg, params_np)
+        except Exception as exc:  # optimizer trial: status, never callback raise
+            error = _HOST_ERROR.pop() if _HOST_ERROR else exc
+            _HOST_ERROR.clear()
+            _LAST_STATUS_ERROR[cfg] = error
+            params = _device_pin(cfg, jax.tree.map(jnp.asarray, params_np))
+            runtime = runtime_from_params(params, cfg)
+            state = _initial_state(runtime.setup)
+            mask = _MASK_CACHE.get(_mask_cache_key(cfg))
+            if mask is None:
+                mask = jax.tree.map(jnp.zeros_like, state)
+            as_np = lambda tree: jax.tree.map(  # noqa: E731
+                lambda value: np.asarray(value, dtype=np.float64), tree
+            )
+            return as_np(state), as_np(mask), np.int32(1)
+        _LAST_STATUS_ERROR.pop(cfg, None)
+        return state, mask, np.int32(0)
+
+
 def _callback_sharding(cfg: ImplicitConfig):
     """Explicit single-device placement of the ``pure_callback`` outputs.
 
@@ -1210,6 +1255,17 @@ def _callback_solve(params: ImplicitParams, cfg: ImplicitConfig):
         raise
 
 
+def _callback_solve_status(params: ImplicitParams, cfg: ImplicitConfig):
+    """Pure callback returning ``(state, mask, status)`` without exceptions."""
+    status_struct = jax.ShapeDtypeStruct((), jnp.int32)
+    return jax.pure_callback(
+        functools.partial(_host_solve_and_mask_status, cfg),
+        (_state_struct(cfg), _state_struct(cfg), status_struct),
+        params,
+        sharding=_callback_sharding(cfg),
+    )
+
+
 def _state_struct(cfg: ImplicitConfig) -> SpectralState:
     mn = int(np.asarray(_static_tables(cfg.resolution)[0].m).size)
     s = jax.ShapeDtypeStruct((cfg.resolution.ns, mn), jnp.float64)
@@ -1243,6 +1299,30 @@ def _solve_implicit_fwd(params, cfg):
 def solve_implicit_with_aux(params: ImplicitParams, cfg: ImplicitConfig):
     """Return ``(state, dof_mask)`` using the same callback as solve_implicit."""
     return _callback_solve(params, cfg)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
+def solve_implicit_status(
+    params: ImplicitParams, cfg: ImplicitConfig
+) -> tuple[SpectralState, Array]:
+    """Differentiable equilibrium with an exception-free trial status.
+
+    Status is ``0`` for a converged/usable state and ``1`` for a recoverable
+    failed trial.  On success the derivative is identical to
+    :func:`solve_implicit`.  On failure its state cotangent is zero; callers
+    should select their own differentiable penalty as a function of the
+    decision variables.
+    """
+    state, _, status = _callback_solve_status(params, cfg)
+    return state, status
+
+
+def _solve_implicit_status_fwd(params, cfg):
+    with _device_context(cfg):
+        params = _device_pin(cfg, params)
+        state, mask, status = _callback_solve_status(params, cfg)
+        state, mask = _device_pin(cfg, (state, mask))
+    return (state, status), (params, state, mask, status)
 
 
 # ---------------------------------------------------------------------------
@@ -1879,6 +1959,32 @@ def _solve_implicit_bwd_impl(cfg, res, gbar):
 
 
 solve_implicit.defvjp(_solve_implicit_fwd, _solve_implicit_bwd)
+
+
+def _solve_implicit_status_bwd(cfg, res, gbar):
+    """Use the ordinary adjoint on success and a zero pullback on failure."""
+    params, state, mask, status = res
+    state_bar, _ = gbar  # integer status has no differentiable cotangent
+    zeros = jax.tree.map(jnp.zeros_like, params)
+
+    def success(args):
+        prm, solved, dof_mask, cotangent = args
+        return _solve_implicit_bwd_impl(
+            cfg, (prm, solved, dof_mask), cotangent
+        )[0]
+
+    gradient = jax.lax.cond(
+        status == 0,
+        success,
+        lambda _: zeros,
+        (params, state, mask, state_bar),
+    )
+    return (_device_pin(cfg, gradient),)
+
+
+solve_implicit_status.defvjp(
+    _solve_implicit_status_fwd, _solve_implicit_status_bwd
+)
 
 
 def implicit_state_pullback_multi_rhs(

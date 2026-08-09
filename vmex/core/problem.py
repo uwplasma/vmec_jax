@@ -365,9 +365,18 @@ class FunctionProblem:
 class VmecProblem(FunctionProblem):
     """A :class:`FunctionProblem` backed by a VMEX equilibrium solve."""
 
-    def __init__(self, *args: Any, input_from_x: Callable[[Array], Any], **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        input_from_x: Callable[[Array], Any],
+        x_from_input: Callable[[Any], Array],
+        equilibrium_from_x: Callable[[Array], Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._input_from_x = input_from_x
+        self._x_from_input = x_from_input
+        self._equilibrium_from_x = equilibrium_from_x
 
     @classmethod
     def from_tuples(
@@ -389,6 +398,33 @@ class VmecProblem(FunctionProblem):
     def input_from_x(self, x: Array) -> Any:
         """Return a new :class:`VmecInput` containing decision vector ``x``."""
         return self._input_from_x(self._x(x))
+
+    def x_from_input(self, inp: Any) -> np.ndarray:
+        """Return this problem's decision vector for ``inp``.
+
+        This is the inverse of :meth:`input_from_x` for the boundary and any
+        optional current degrees of freedom selected when the problem was
+        constructed.  It is the normal continuation-stage starting vector.
+        """
+        x = np.asarray(self._x_from_input(inp), dtype=float)
+        if x.shape != self.x0.shape:
+            raise ValueError(
+                f"input produced decision-vector shape {x.shape}, "
+                f"expected {self.x0.shape}"
+            )
+        return x
+
+    def equilibrium_from_x(self, x: Array) -> Any:
+        """Return the converged equilibrium evaluated at ``x``.
+
+        Implicit problems reuse the accepted optimizer state instead of
+        cold-solving the optimized boundary again.  This matters for strongly
+        shaped boundaries whose cold magnetic-axis guess may have a
+        sign-changing initial Jacobian.
+        """
+        if self._equilibrium_from_x is None:
+            raise AttributeError("this problem does not provide equilibria")
+        return self._equilibrium_from_x(self._x(x))
 
 
 __all__ = ["Evaluation", "FunctionProblem", "VmecProblem"]

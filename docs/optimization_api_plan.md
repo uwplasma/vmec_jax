@@ -44,10 +44,6 @@ problem = opt.VmecProblem.from_tuples(
      (opt.aspect_ratio, 6.0, 0.1),
      (iota_shortfall, 0.0, 10.0)],
     max_mode=max_mode,
-    derivative_method="implicit",  # exact converged-equilibrium derivative
-    weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
-    implicit_jacobian_method="auto",
-    jacobian_batch_size="auto",
     progress=True,
 )
 
@@ -68,6 +64,8 @@ problem.jax_value_and_grad(x)  # JAX (value, gradient)
 problem.jax_residual(x)        # JAX residual vector
 
 problem.input_from_x(x)
+problem.x_from_input(inp)      # inverse mapping for continuation
+problem.equilibrium_from_x(x) # reuse the accepted converged state
 problem.evaluate(x)            # value, residual, status, diagnostics
 problem.compile_residual_and_jacobian()  # optional visible first compilation
 ```
@@ -96,6 +94,15 @@ cost       = 0.5 * sum_i weight_i * (value_i - target_i)^2
 The compatibility `least_squares()` and `minimize()` wrappers retain their
 existing residual-scale convention.  The distinction is explicit in their
 docstrings and tests; published VMEX inputs must not change meaning silently.
+
+The other beginner defaults are ``derivative_method="implicit"`` (exact
+derivatives of the converged equilibrium),
+``implicit_jacobian_method="auto"`` (select the exact scalar/vector assembly
+from objective shape), and ``jacobian_batch_size=1`` (short cold compilation
+for the usual QI/QS ``max_mode <= 5`` problem).  Documentation, rather than
+ordinary scripts, lists the advanced alternatives.  ``"auto"`` batching is
+reserved for long same-shape campaigns that amortize its larger first
+compilation.
 
 ## Internal boundaries
 
@@ -254,6 +261,8 @@ Tests are divided by what they prove.
 - compatibility-wrapper residual-weight behavior;
 - value/gradient and residual/Jacobian consistency;
 - explicit input-resolution changes preserve existing Fourier coefficients;
+- input/vector round trips and accepted-equilibrium reuse preserve continuation
+  state for a high-resolution final solve;
 - each named compilation method selects only its stated derivative pair,
   populates the exact-key cache, and emits concise progress records;
 - a repeated `fun(x)`/`grad(x)` pair reuses one equilibrium evaluation;
@@ -272,6 +281,9 @@ without a VMEC solve.
 - `d_merc_state` agrees with WOUT `DMerc` on validated surfaces;
 - `D_R` agrees with its published relation and independent DCON samples;
 - bootstrap and other residual classes retain existing independent oracles.
+- boundary elongation is grid-converged, JAX-traceable for symmetric and
+  asymmetric states, and manually cross-checked against the existing SIMSOPT
+  ``MaxElongationPen`` on the alex_qi result.
 
 ### Derivative tests
 
@@ -344,10 +356,12 @@ Documentation examples are smoke-tested so API drift fails CI.
 
 1. **Expose optimizer-agnostic VMEC problem callables.**  Add this plan, the
    public containers/factory, tuple composition, compatibility adapters, and
-   fast API tests.
-2. **Certify implicit derivatives and failed-trial behavior.**  Harden QI
-   adjoints, add status-safe callback behavior, complete the objective
-   derivative matrix, and consolidate numerical tests.
+   fast API tests.  Include the status-safe callback because a public
+   optimization problem must reject invalid trial boundaries without emitting
+   a ``pure_callback`` traceback.
+2. **Certify implicit derivatives and failure diagnostics.**  Harden QI
+   adjoints, expose certified linear-solve budgets, complete the objective
+   derivative matrix, and consolidate numerical and diagnostic tests.
 3. **Add backend-neutral monitoring and runtime hygiene.**  Remove noisy cache
    warnings, separate trials from accepted iterations, and document status.
 4. **Add SciPy, JAXopt, and Optax examples and automatic parallel evaluation.**
