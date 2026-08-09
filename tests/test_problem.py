@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
@@ -149,6 +153,26 @@ def test_direct_scipy_minimize_and_least_squares_use_same_problem():
     )
     np.testing.assert_allclose(minimized.x, [1.0, -2.0], atol=1e-8)
     np.testing.assert_allclose(fitted.x, [1.0, -2.0], atol=1e-8)
+
+
+def test_vmex_jax_logging_default_and_override() -> None:
+    """The default removes PjRt chatter without preventing an opt-in."""
+    code = "import vmex, jax; print(jax.config.jax_logging_level)"
+    env = os.environ.copy()
+    env.pop("VMEX_JAX_LOGGING_LEVEL", None)
+    default = subprocess.run(
+        [sys.executable, "-c", code], env=env, check=True,
+        capture_output=True, text=True,
+    )
+    assert default.stdout.strip() == "ERROR"
+    assert "pjrt_executable.cc" not in default.stderr
+
+    env["VMEX_JAX_LOGGING_LEVEL"] = "warning"
+    override = subprocess.run(
+        [sys.executable, "-c", code], env=env, check=True,
+        capture_output=True, text=True,
+    )
+    assert override.stdout.strip() == "WARNING"
 
 
 def test_direct_jaxopt_and_optax_contracts():

@@ -269,7 +269,7 @@ class VmecProblem(FunctionProblem):
         objective_terms: Sequence[tuple[Callable[..., Any], Any, float]],
         **kwargs: Any,
     ) -> "VmecProblem":
-        """Build a VMEC least-squares problem from SIMSOPT-style tuples."""
+        """Build a VMEC least-squares problem from weighted objective tuples."""
         from .optimize import make_problem
         return make_problem(inp, objective_terms=objective_terms, problem_class=cls, **kwargs)
 

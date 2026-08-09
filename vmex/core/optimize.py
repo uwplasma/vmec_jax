@@ -1144,8 +1144,8 @@ def make_problem(
     max_mode: int = 1,
     x0: np.ndarray | None = None,
     current_dofs: int | None = None,
-    derivatives: str = "implicit",
-    weight_mode: str = "simsopt",
+    derivative_method: str = "implicit",
+    weight_semantics: str = "cost",
     jac_chunk_size: int | str | None = "auto",
     jac_solver: str = "auto",
     hot_restart: bool = True,
@@ -1159,10 +1159,17 @@ def make_problem(
 ) -> VmecProblem:
     """Build optimizer-neutral VMEC objective and derivative callables.
 
-    Exactly one of ``objective_terms`` and ``loss`` is required.  Tuple terms
-    use SIMSOPT cost-weight semantics by default; pass ``weight_mode="legacy"``
-    only when reproducing an existing VMEX wrapper calculation.  ``loss`` must
-    be a traceable ``(state, runtime) -> scalar`` callable.
+    Exactly one of ``objective_terms`` and ``loss`` is required.  With the
+    default ``weight_semantics="cost"``, tuple weight ``w`` multiplies the
+    squared cost, so the residual row is ``sqrt(w) * (f - target)``.  Select
+    ``weight_semantics="residual"`` when ``w`` should multiply the residual
+    itself.  ``loss`` must be a traceable ``(state, runtime) -> scalar``
+    callable.
+
+    ``derivative_method="implicit"`` computes exact derivatives of the
+    converged fixed-boundary equilibrium by implicit differentiation.  It is
+    the only built-in derivative method in this factory; users with complete
+    x-level derivatives can use :meth:`FunctionProblem.from_functions`.
 
     The returned object contains no optimization algorithm.  Pass
     :meth:`VmecProblem.residual` / :meth:`VmecProblem.residual_jac` to a
@@ -1171,9 +1178,10 @@ def make_problem(
     """
     if (objective_terms is None) == (loss is None):
         raise ValueError("provide exactly one of objective_terms or loss")
-    if derivatives != "implicit":
+    if derivative_method != "implicit":
         raise ValueError(
-            "make_problem currently supports derivatives='implicit'; "
+            "derivative_method must be 'implicit' (exact derivatives of the "
+            "converged equilibrium); "
             "use FunctionProblem.from_functions for supplied x-level derivatives"
         )
     max_mode = int(max_mode)
@@ -1195,7 +1203,7 @@ def make_problem(
         device=device,
         return_problem=True,
         problem_class=problem_class,
-        weight_mode=weight_mode,
+        weight_semantics=weight_semantics,
         scalar_objective=loss,
         problem_bounds=bounds,
         problem_scales=scales,
@@ -1544,7 +1552,7 @@ def _least_squares_implicit(
     minimize_method: str | None = None,
     return_problem: bool = False,
     problem_class: type[VmecProblem] = VmecProblem,
-    weight_mode: str = "legacy",
+    weight_semantics: str = "residual",
     scalar_objective: Callable | None = None,
     problem_bounds: Any = None,
     problem_scales: np.ndarray | None = None,
@@ -1581,14 +1589,14 @@ def _least_squares_implicit(
     # The 4-family traceable map, the dof plumbing below, and the
     # forward+adjoint path are dimension-general; 3D lasym is FD-validated
     # end to end (tests/test_implicit_grad.py).
-    if weight_mode not in ("legacy", "simsopt"):
-        raise ValueError("weight_mode must be 'legacy' or 'simsopt'")
+    if weight_semantics not in ("cost", "residual"):
+        raise ValueError("weight_semantics must be 'cost' or 'residual'")
     if scalar_objective is not None and objective_terms:
         raise ValueError("provide objective_terms or scalar_objective, not both")
     terms = []
     for f, t, w in objective_terms:
         weight = float(w)
-        if weight_mode == "simsopt":
+        if weight_semantics == "cost":
             if weight < 0.0:
                 raise ValueError("least-squares weights must be non-negative")
             weight = float(np.sqrt(weight))
@@ -2140,8 +2148,17 @@ def _least_squares_implicit(
             scales=scales,
             input_from_x=input_from_x,
             metadata={
-                "derivatives": "implicit",
-                "weight_mode": weight_mode,
+                "derivative_method": "implicit",
+                "derivative_description": (
+                    "exact derivatives of the converged equilibrium by "
+                    "implicit differentiation"
+                ),
+                "weight_semantics": weight_semantics,
+                "weight_description": (
+                    "weight multiplies squared cost"
+                    if weight_semantics == "cost"
+                    else "weight multiplies residual"
+                ),
                 "max_mode": max_mode,
                 "config": cfg,
                 "holder": holder,

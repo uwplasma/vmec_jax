@@ -406,8 +406,8 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
     obj = [(opt.aspect_ratio, 4.0, 1.0)]
     ref = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                             jac_solver="gmres", max_nfev=1)
-    # The public problem uses SIMSOPT cost weights: weight=4 scales residuals
-    # and their Jacobian by sqrt(4)=2.  It exposes the same block engine the
+    # The public problem uses cost weights: weight=4 scales residuals and
+    # their Jacobian by sqrt(4)=2.  It exposes the same block engine the
     # compatibility driver used to keep private.
     problem = opt.VmecProblem.from_tuples(
         inp, [(opt.aspect_ratio, 4.0, 4.0)], max_mode=1,
@@ -425,6 +425,13 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
                                weighted_jac.T @ residual, rtol=1e-6)
     assert np.all(np.isfinite(np.asarray(problem.jax_residual_jac(problem.x0))))
     assert problem.input_from_x(problem.x0) == inp
+    assert problem.metadata["derivative_method"] == "implicit"
+    assert "converged equilibrium" in problem.metadata["derivative_description"]
+    assert problem.metadata["weight_semantics"] == "cost"
+    assert (
+        problem.metadata["weight_description"]
+        == "weight multiplies squared cost"
+    )
     scalar = opt.VmecProblem.from_loss(
         inp,
         lambda state, runtime: 0.5 * (opt.aspect_ratio(state, runtime) - 4.0) ** 2,
@@ -484,15 +491,19 @@ def test_public_problem_factory_validation():
         opt.make_problem(inp)
     with pytest.raises(ValueError, match="exactly one"):
         opt.make_problem(inp, objective_terms=term, loss=opt.aspect_ratio)
-    with pytest.raises(ValueError, match="currently supports"):
-        opt.make_problem(inp, objective_terms=term, derivatives="finite_difference")
+    with pytest.raises(ValueError, match="derivative_method"):
+        opt.make_problem(
+            inp, objective_terms=term, derivative_method="finite_difference"
+        )
     with pytest.raises(ValueError, match="non-negative"):
         opt.make_problem(
             inp, objective_terms=[(opt.aspect_ratio, 4.0, -1.0)], max_mode=1
         )
     common = dict(max_mode=1, x0=None, solve_kwargs={})
-    with pytest.raises(ValueError, match="weight_mode"):
-        opt._least_squares_implicit(term, inp, weight_mode="unknown", **common)
+    with pytest.raises(ValueError, match="weight_semantics"):
+        opt._least_squares_implicit(
+            term, inp, weight_semantics="unknown", **common
+        )
     with pytest.raises(ValueError, match="not both"):
         opt._least_squares_implicit(
             term, inp, scalar_objective=opt.aspect_ratio, **common

@@ -33,7 +33,8 @@ problem = opt.VmecProblem.from_tuples(
      (opt.aspect_ratio, 6.0, 0.1),
      (iota_shortfall, 0.0, 10.0)],
     max_mode=5,
-    derivatives="implicit",
+    derivative_method="implicit",  # exact converged-equilibrium derivative
+    weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
 )
 
 problem.x0
@@ -70,16 +71,16 @@ Two constructors cover the common extension points:
 for users who already have x-level callables.  It performs no equilibrium or
 optimizer work.
 
-Tuple weights use the SIMSOPT convention in the new API:
+Tuple weights use ``weight_semantics="cost"`` by default:
 
 ```text
 residual_i = sqrt(weight_i) * (value_i - target_i)
 cost       = 0.5 * sum_i weight_i * (value_i - target_i)^2
 ```
 
-The legacy `least_squares()` and `minimize()` wrappers retain their existing
-residual-scale convention.  The distinction is explicit in their docstrings
-and tests; published VMEX inputs must not change meaning silently.
+The compatibility `least_squares()` and `minimize()` wrappers retain their
+existing residual-scale convention.  The distinction is explicit in their
+docstrings and tests; published VMEX inputs must not change meaning silently.
 
 ## Internal boundaries
 
@@ -234,8 +235,8 @@ Tests are divided by what they prove.
 
 - scalar, vector, tuple, and supplied-derivative construction;
 - shapes, dtypes, aliases, names, bounds, and scales;
-- exact SIMSOPT tuple-weight semantics;
-- legacy wrapper weight compatibility;
+- exact cost-weight tuple semantics;
+- compatibility-wrapper residual-weight behavior;
 - value/gradient and residual/Jacobian consistency;
 - a repeated `fun(x)`/`grad(x)` pair reuses one equilibrium evaluation;
 - the same unchanged problem is accepted by SciPy, JAXopt, and Optax;

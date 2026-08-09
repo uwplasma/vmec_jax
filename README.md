@@ -410,6 +410,8 @@ problem = opt.VmecProblem.from_tuples(
     inp,
     [(qs, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0), (opt.mean_iota, 0.42, 1.0)],
     max_mode=5,
+    derivative_method="implicit",  # exact converged-equilibrium derivative
+    weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
 )
 result = least_squares(
     problem.residual, problem.x0, jac=problem.residual_jac,
@@ -423,6 +425,11 @@ For scalar methods, pass `problem.value_and_grad` to
 `problem.jax_residual` provide the same physics to JAXopt and Optax. The
 existing `opt.least_squares()` and `opt.minimize()` functions remain concise
 compatibility adapters.
+
+VMEX sets JAX's Python logging level to `ERROR` at import time, removing the
+repeated PjRt persistent-cache compatibility messages while retaining VMEX
+errors. Set `VMEX_JAX_LOGGING_LEVEL=WARNING` before import to restore JAX
+warnings, or set it to `inherit` to leave the process setting unchanged.
 
 The architecture, derivative validation, performance criteria, documentation
 work, and staged pull-request plan are recorded in

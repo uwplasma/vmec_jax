@@ -38,6 +38,8 @@ SciPy, JAXopt, Optax, or user code:
         (opt.aspect_ratio, 6.0, 1.0),
         (opt.mean_iota, 0.42, 1.0)],
        max_mode=5,
+       derivative_method="implicit",  # exact converged-equilibrium derivative
+       weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
    )
 
    result = scipy.optimize.least_squares(
@@ -54,10 +56,17 @@ libraries.  The decision vector is always explicit; evaluation does not
 mutate a hidden ``problem.x``.  ``J(x)`` and ``dJ(x)`` are aliases for users
 familiar with SIMSOPT.
 
-Tuple weights follow the SIMSOPT cost convention: a tuple weight ``w``
-contributes ``sqrt(w) * (f - target)`` residual rows, so its squared cost is
-proportional to ``w`` rather than ``w**2``.  Existing high-level wrappers
-retain their historical residual-scale convention for reproducibility.
+The factory accepts ``weight_semantics="cost"`` (the default), for which a
+tuple weight ``w`` contributes ``sqrt(w) * (f - target)`` residual rows and
+therefore multiplies the squared cost.  ``weight_semantics="residual"`` makes
+``w`` multiply the residual row itself.  These names state the formula and do
+not depend on knowledge of another package or an older VMEX interface.
+
+``derivative_method="implicit"`` means exact differentiation of the
+converged fixed-boundary equilibrium, not differentiation through its solver
+iterations.  This first factory supports that method.  Complete user-supplied
+x-level derivatives use ``FunctionProblem.from_functions``; the parallel
+finite-difference provider is added in the later derivative-provider layer.
 
 The compatibility drivers
 -------------------------

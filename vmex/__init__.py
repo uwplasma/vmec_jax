@@ -68,6 +68,10 @@ _os.environ.setdefault("GLOG_minloglevel", "2")
 # solve path in case this module never ran (namespace-package shadowing).
 import jax as _jax
 
+_jax_logging_level = _os.environ.get("VMEX_JAX_LOGGING_LEVEL", "ERROR").strip().upper()
+if _jax_logging_level not in ("", "INHERIT"):
+    _jax.config.update("jax_logging_level", _jax_logging_level)
+
 _jax_cache_dir = _default_jax_cache_dir()
 if _jax_cache_dir is not None:
     _os.makedirs(_jax_cache_dir, exist_ok=True)
