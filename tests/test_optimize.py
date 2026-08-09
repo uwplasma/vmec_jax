@@ -449,13 +449,22 @@ def test_auto_jac_chunk_stays_bounded_with_large_device(monkeypatch):
     assert opt._auto_jac_chunk(120) == 11
 
 
-def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
+def test_least_squares_implicit_jac_solver_block(monkeypatch):
     """The R25.2 block-tridiagonal Jacobian (``jac_solver="block"``: colored
     jvp probes, one :func:`solvax.block_thomas_factor`, GMRES-certified
     columns) must agree with the per-dof GMRES path to the solver tolerance
     (``adjoint_tol = 1e-6``)."""
     jax.config.update("jax_disable_jit", False)
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    inp = inp.change_resolution(
+        mpol=3, ntor=0, ntheta=12, nzeta=4,
+    )
+    inp = dataclasses.replace(
+        inp,
+        ns_array=np.asarray([5]),
+        ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([1000]),
+    )
     obj = [(opt.aspect_ratio, 4.0, 1.0)]
 
     def elongation_excess(state, runtime):

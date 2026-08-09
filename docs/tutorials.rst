@@ -88,6 +88,15 @@ restarts converge in about one iteration instead of hundreds, and because
 vmex caches one compiled executable per solver structure, the whole scan
 recompiles nothing.
 
+The public interface is simply ``initial_state=previous.state`` on
+:func:`vmex.core.multigrid.solve_multigrid` or
+:func:`vmex.core.optimize.solve_equilibrium`.  The next input may change its
+boundary, profiles, tolerance, or radial grid: VMEX adapts the boundary and
+interpolates the state to the requested ``ns``.  Carry the newly converged
+``result.state`` into each subsequent call.  Optimization problems perform
+this continuation automatically and add a first-order perturbation seed when
+exact implicit responses are available.
+
 .. literalinclude:: ../examples/hot_restart_scan.py
    :language: python
 

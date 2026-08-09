@@ -382,6 +382,26 @@ write_wout("wout_nfp4_QH_warm_start.nc", eq.wout)   # wout built lazily on eq
 plot_wout(eq.wout, "figures/")
 ```
 
+For a parameter scan or a tighter final solve, pass the last converged state
+into the next call. VMEX adapts it to the new boundary and interpolates it if
+the radial resolution changes:
+
+```python
+from dataclasses import replace
+
+next_inp = replace(
+    inp, ns_array=[101], ftol_array=[1e-14], niter_array=[8000]
+)
+next_eq = opt.solve_equilibrium(next_inp, initial_state=eq.state)
+```
+
+This in-memory `initial_state=` is VMEX's hot restart. It is useful outside
+optimization as well as inside it; keep carrying `next_eq.state` through a
+scan. Optimization problems do this automatically. If a genuinely cold first
+grid still has a bad Jacobian after the magnetic-axis re-guess, the driver also
+retries once through a coarse `NS=3` equilibrium, following current VMEC++
+behavior.
+
 Choosing an entry point: `optimize.solve_equilibrium` for Python analysis and
 objectives (state + runtime + lazy `.wout`); `multigrid.solve_multigrid` for a
 fixed-boundary ladder; `multigrid.solve_free_boundary_multigrid` for a
@@ -475,6 +495,11 @@ magnetic axis. `problem.x_from_input(inp)` is the inverse mapping used to start
 a continuation stage. A mutable `inp.x` is intentionally absent because the
 decision vector depends on that problem's `max_mode` and optional profile
 degrees of freedom.
+
+Every `VmecProblem` uses hot restart by default. For exact implicit derivatives
+the seed order is the first-order equilibrium prediction, the last converged
+state, then a cold solve only if both warm seeds fail. This changes iteration
+count, not the converged equilibrium or derivative.
 
 For scalar methods, pass `problem.value_and_grad` to
 `scipy.optimize.minimize(..., jac=True)`. `problem.jax_value_and_grad` and

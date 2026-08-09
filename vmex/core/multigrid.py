@@ -45,7 +45,9 @@ import jax
 import jax.numpy as jnp
 
 from .device import AUTO, _placement_device, _put_numeric_leaves, device_context
-from .errors import MORE_ITER_FLAG, SUCCESSFUL_TERM_FLAG
+from .errors import (
+    BAD_JACOBIAN_FLAG, MORE_ITER_FLAG, SUCCESSFUL_TERM_FLAG, VmecJacobianError,
+)
 from .fourier import ModeTable, mode_table
 from .input import VmecInput, _vmec_ns_prefix
 from .preconditioner_2d import Prec2DConfig
@@ -246,6 +248,7 @@ def solve_multigrid(
     prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
     jacobian_retries: int = 2,
+    coarse_grid_retry: bool = True,
     device: Any = AUTO,
     raise_on_max_iterations: bool = True,
     use_fft: bool | None = None,
@@ -271,12 +274,19 @@ def solve_multigrid(
     ``ns_array/ftol_array/niter_array`` default to the input's ladder; when
     given they are broadcast to a common stage count (shorter ``ftol/niter``
     arrays repeat their last entry).  ``initial_state`` seeds the *first*
-    executed stage (hot restart; must match that stage's ``ns``).
+    executed stage (hot restart).  Its radial resolution may differ: VMEX
+    interpolates the state before adapting its edge to the new boundary.
     ``precon_type``, ``prec2d_threshold``, and ``prec2d`` override the input's
     optional 2D-preconditioner configuration at every stage.
     ``jacobian_retries`` applies the same bounded best-checkpoint/``DELT``
     recovery as :func:`vmex.core.solver.solve` independently at each stage;
     zero preserves VMEC2000's immediate fatal stop after 75 resets.
+    If the first requested grid still has an invalid initial Jacobian after
+    its magnetic-axis re-guess, ``coarse_grid_retry=True`` retries the ladder
+    once with an automatic ``ns=3``, ``ftol=1e-4`` stage prepended.  This is
+    the current VMEC++ driver recovery: it supplies a coarse equilibrium for
+    interpolation without changing the user's requested stages.  Set it to
+    false to expose the original typed failure directly.
 
     Intermediate stages are allowed to exhaust their iteration cap
     (``more_iter_flag`` — VMEC2000 proceeds to the next grid); any other
@@ -432,6 +442,47 @@ def solve_multigrid(
             prefetch_thread = None
         first_executed = False
         ier = int(carry.ier)
+        if (
+            coarse_grid_retry
+            and igrid == 0
+            and nsval > 3
+            and ier == BAD_JACOBIAN_FLAG
+        ):
+            if verbose:
+                emit(
+                    " INITIAL AXIS REMAINS INVALID; RETRYING THROUGH NS = 3"
+                )
+            return solve_multigrid(
+                inp,
+                ns_array=np.concatenate(
+                    [np.asarray([3], dtype=ns_arr.dtype), ns_arr]
+                ),
+                ftol_array=np.concatenate(
+                    [np.asarray([1.0e-4], dtype=ftol_arr.dtype), ftol_arr]
+                ),
+                niter_array=np.concatenate(
+                    [np.asarray([niter_arr[0]], dtype=niter_arr.dtype), niter_arr]
+                ),
+                mode=mode,
+                lconm1=lconm1,
+                verbose=verbose,
+                emit=emit,
+                initial_state=initial_state,
+                time_step=time_step,
+                tcon0=tcon0,
+                gamma=gamma,
+                nstep=nstep,
+                precon_type=precon_type,
+                prec2d_threshold=prec2d_threshold,
+                prec2d=prec2d,
+                jacobian_retries=jacobian_retries,
+                coarse_grid_retry=False,
+                device=device,
+                raise_on_max_iterations=raise_on_max_iterations,
+                use_fft=use_fft,
+                release_stage_cache=release_stage_cache,
+                prefetch_compile=prefetch_compile,
+            )
         last_stage = not np.any(ns_arr[igrid + 1:] >= nsval)
         if ier not in (SUCCESSFUL_TERM_FLAG, MORE_ITER_FLAG) or (
                 last_stage and ier != SUCCESSFUL_TERM_FLAG
@@ -493,6 +544,7 @@ def solve_free_boundary_multigrid(
     prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
     jacobian_retries: int = 2,
+    coarse_grid_retry: bool = True,
     use_fft: bool | None = None,
     release_stage_cache: bool = False,
     prefetch_compile: bool = False,
@@ -524,6 +576,9 @@ def solve_free_boundary_multigrid(
     ``gamma``, ``nstep``, ``lconm1``, device placement, and 2D-preconditioner
     configuration) are accepted and forwarded identically, including bounded
     ``jacobian_retries`` recovery (zero restores the VMEC2000 fatal policy).
+    ``coarse_grid_retry`` provides the same one-time ``ns=3`` recovery as the
+    fixed-boundary ladder when the first requested grid retains an invalid
+    Jacobian after its axis re-guess; vacuum activation restarts cleanly.
     ``device="auto"`` (default) applies the measured policy independently at
     each grid and relocates carried plasma/vacuum arrays when the policy changes;
     ``None`` leaves placement to JAX.
@@ -714,6 +769,58 @@ def solve_free_boundary_multigrid(
                     prefetch_compile=prefetch_compile,
                     prefetch_device=stage_device,
                 )
+        except VmecJacobianError as exc:
+            if prefetch_handle is not None:
+                prefetch_handle[1].set()
+                prefetch_handle[0].join()
+                prefetch_handle = None
+            if (
+                coarse_grid_retry
+                and igrid == 0
+                and nsval > 3
+                and int(exc.ier_flag) == BAD_JACOBIAN_FLAG
+            ):
+                if verbose:
+                    emit(
+                        " INITIAL AXIS REMAINS INVALID; "
+                        "RETRYING THROUGH NS = 3"
+                    )
+                return solve_free_boundary_multigrid(
+                    inp,
+                    ns_array=np.concatenate(
+                        [np.asarray([3], dtype=ns_arr.dtype), ns_arr]
+                    ),
+                    ftol_array=np.concatenate(
+                        [np.asarray([1.0e-4], dtype=ftol_arr.dtype), ftol_arr]
+                    ),
+                    niter_array=np.concatenate(
+                        [
+                            np.asarray([niter_arr[0]], dtype=niter_arr.dtype),
+                            niter_arr,
+                        ]
+                    ),
+                    mgrid_path=mgrid_path,
+                    external_field=external_field,
+                    verbose=verbose,
+                    emit=emit,
+                    initial_state=initial_state,
+                    device=device,
+                    raise_on_max_iterations=raise_on_max_iterations,
+                    time_step=time_step,
+                    tcon0=tcon0,
+                    gamma=gamma,
+                    nstep=nstep,
+                    lconm1=lconm1,
+                    precon_type=precon_type,
+                    prec2d_threshold=prec2d_threshold,
+                    prec2d=prec2d,
+                    jacobian_retries=jacobian_retries,
+                    coarse_grid_retry=False,
+                    use_fft=use_fft,
+                    release_stage_cache=release_stage_cache,
+                    prefetch_compile=prefetch_compile,
+                )
+            raise
         except BaseException:
             # A failed stage propagates with no live background compiler:
             # stop the cross-rung prefetch at its next lane boundary and
