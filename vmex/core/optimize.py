@@ -2417,14 +2417,9 @@ def _least_squares_implicit(
         result = scipy.optimize.least_squares(
             fun, np.asarray(x0, dtype=float), jac=jac_fn, **scipy_kwargs)
     else:
-        if verbose and "callback" not in scipy_kwargs:
-            monitor_problem = FunctionProblem(
-                np.asarray(x0, dtype=float),
-                value_and_grad=value_and_grad,
-                metadata={"config": cfg, "holder": holder},
-            )
-            monitor = OptimizationMonitor(monitor_problem)
-            scipy_kwargs["callback"] = monitor
+        monitor = _configure_scipy_monitor(
+            x0, value_and_grad, cfg, holder, verbose, scipy_kwargs
+        )
         result = scipy.optimize.minimize(
             value_and_grad, np.asarray(x0, dtype=float), jac=True,
             method=minimize_method, **scipy_kwargs)
@@ -2459,3 +2454,24 @@ def _least_squares_implicit(
     except Exception:  # pragma: no cover - diagnostic attribute only
         result.equilibrium = None
     return result
+
+
+def _configure_scipy_monitor(
+    x0: np.ndarray,
+    value_and_grad: Callable,
+    cfg: Any,
+    holder: dict[str, Any],
+    verbose: int,
+    scipy_kwargs: dict[str, Any],
+) -> OptimizationMonitor | None:
+    """Install VMEX's monitor unless SciPy already has a callback."""
+    if not verbose or "callback" in scipy_kwargs:
+        return None
+    problem = FunctionProblem(
+        np.asarray(x0, dtype=float),
+        value_and_grad=value_and_grad,
+        metadata={"config": cfg, "holder": holder},
+    )
+    monitor = OptimizationMonitor(problem)
+    scipy_kwargs["callback"] = monitor
+    return monitor

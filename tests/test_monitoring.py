@@ -72,6 +72,38 @@ def test_monitor_callback_fallbacks_and_problem_counters() -> None:
         OptimizationMonitor(stream=None)({"x": np.array([1.0])})
 
 
+def test_default_scipy_monitor_respects_an_explicit_callback() -> None:
+    from vmex.core import optimize as opt
+
+    kwargs = {}
+    monitor = opt._configure_scipy_monitor(
+        np.zeros(1),
+        lambda x: (float(x @ x), 2.0 * x),
+        object(),
+        {"failed_trials": 0},
+        1,
+        kwargs,
+    )
+    assert isinstance(monitor, OptimizationMonitor)
+    assert kwargs["callback"] is monitor
+
+    callback = object()
+    explicit = {"callback": callback}
+    assert (
+        opt._configure_scipy_monitor(
+            np.zeros(1), lambda x: (0.0, x), object(), {}, 1, explicit
+        )
+        is None
+    )
+    assert explicit["callback"] is callback
+    assert (
+        opt._configure_scipy_monitor(
+            np.zeros(1), lambda x: (0.0, x), object(), {}, 0, {}
+        )
+        is None
+    )
+
+
 def test_compatibility_least_squares_failure_is_silent_and_counted(monkeypatch) -> None:
     """Rejected finite-difference trials update diagnostics without chatter."""
     import scipy.optimize
