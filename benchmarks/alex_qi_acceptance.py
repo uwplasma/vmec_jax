@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import platform
 import time
@@ -32,10 +33,21 @@ def installed_version(name: str) -> str | None:
 def build_problem(path: Path, max_mode: int) -> opt.VmecProblem:
     """Reproduce the objective tuple from alex_qi/QI_opt_vmex.py."""
     inp = VmecInput.from_file(path)
+    mpol = max(max_mode + 2, 5)
+    ntor = mpol
+    inp = replace(inp, delt=0.5).change_resolution(
+        mpol=mpol,
+        ntor=ntor,
+        ntheta=2 * mpol + 6,
+        nzeta=2 * ntor + 4,
+    )
     qi = QIResidual(np.linspace(0.1, 1.0, 6))
 
     def iota_floor(state, runtime):
         return jnp.maximum(0.33 - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
+
+    def elongation_excess(state, runtime):
+        return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
 
     return opt.VmecProblem.from_tuples(
         inp,
@@ -44,10 +56,9 @@ def build_problem(path: Path, max_mode: int) -> opt.VmecProblem:
             (qi, 0.0, 1.0),
             (iota_floor, 0.0, 10.0),
             (opt.mirror_ratio, 0.21, 1.0),
+            (elongation_excess, 0.0, 1.0),
         ],
         max_mode=max_mode,
-        derivative_method="implicit",
-        weight_semantics="cost",
         use_ess=True,
     )
 
@@ -70,7 +81,12 @@ def main() -> None:
 
     started = time.perf_counter()
     problem = build_problem(args.input, args.max_mode)
-    value, gradient = problem.value_and_grad(problem.x0)
+    if args.optimizer in ("none", "least_squares"):
+        residual, jacobian = problem.residual_and_jac(problem.x0)
+        value = 0.5 * residual @ residual
+        gradient = jacobian.T @ residual
+    else:
+        value, gradient = problem.value_and_grad(problem.x0)
     derivative_seconds = time.perf_counter() - started
     if not np.isfinite(value) or not np.all(np.isfinite(gradient)):
         raise FloatingPointError("initial QI value or gradient is non-finite")

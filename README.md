@@ -485,9 +485,11 @@ at `max_mode` 1, 3, and 5 reduced first Jacobian compilation by 12.9–14.2 s
 with batch size 1; full 12-evaluation mode-5 QI and QS runs were 8.2 s and
 9.9 s faster overall than `"auto"`, with matching final costs. Select
 `jacobian_batch_size="auto"` only for long, repeated same-shape campaigns in
-which its roughly 1–4 s lower warm evaluation time amortizes the larger first
+which its modestly lower warm stage time amortizes the larger first
 compilation. Explicit Jacobian methods are intended for numerical studies and
-diagnostics; `"auto"` is the normal choice.
+diagnostics; `"auto"` is the normal choice. The reproducible driver and full
+matrix are `benchmarks/optimization_defaults.py` and
+`benchmarks/optimization_defaults_macos.json`.
 
 `problem.equilibrium_from_x(result.x)` returns the accepted equilibrium state
 already evaluated by the optimizer. Use it for reporting and as

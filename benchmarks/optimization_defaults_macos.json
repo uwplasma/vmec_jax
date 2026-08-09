@@ -1,0 +1,37 @@
+{
+  "date": "2026-08-09",
+  "host": {
+    "processor": "Apple M3 Max",
+    "architecture": "arm64",
+    "jax": "0.9.2",
+    "jaxlib": "0.9.2"
+  },
+  "input": "/Users/rogeriojorge/local/alex_qi/input.nfp2_circular",
+  "protocol": "fresh process, persistent compilation cache disabled",
+  "short_runs": [
+    {"case": "qi", "max_mode": 1, "batch": "1", "build_s": 26.33, "compile_s": 19.08, "optimize_s": 10.85, "final_cost": 0.570230849},
+    {"case": "qi", "max_mode": 1, "batch": "auto", "build_s": 26.83, "compile_s": 32.29, "optimize_s": 10.71, "final_cost": 0.570230839},
+    {"case": "qi", "max_mode": 3, "batch": "1", "build_s": 27.10, "compile_s": 19.39, "optimize_s": 11.14, "final_cost": 0.703716587},
+    {"case": "qi", "max_mode": 3, "batch": "auto", "build_s": 26.89, "compile_s": 33.15, "optimize_s": 10.70, "final_cost": 0.703716585},
+    {"case": "qi", "max_mode": 5, "batch": "1", "build_s": 28.05, "compile_s": 21.03, "optimize_s": 12.59, "final_cost": 0.917653692267},
+    {"case": "qi", "max_mode": 5, "batch": "auto", "build_s": 28.02, "compile_s": 35.20, "optimize_s": 11.28, "final_cost": 0.917653692208},
+    {"case": "qs", "max_mode": 1, "batch": "1", "build_s": 24.87, "compile_s": 18.47, "optimize_s": 9.82, "final_cost": 0.539952020},
+    {"case": "qs", "max_mode": 1, "batch": "auto", "build_s": 24.80, "compile_s": 31.47, "optimize_s": 9.35, "final_cost": 0.539952020},
+    {"case": "qs", "max_mode": 3, "batch": "1", "build_s": 25.14, "compile_s": 18.81, "optimize_s": 10.38, "final_cost": 0.553790459293},
+    {"case": "qs", "max_mode": 3, "batch": "auto", "build_s": 24.83, "compile_s": 31.92, "optimize_s": 9.67, "final_cost": 0.553790459126},
+    {"case": "qs", "max_mode": 5, "batch": "1", "build_s": 25.91, "compile_s": 20.01, "optimize_s": 13.51, "final_cost": 0.553154363992},
+    {"case": "qs", "max_mode": 5, "batch": "auto", "build_s": 25.91, "compile_s": 33.72, "optimize_s": 12.32, "final_cost": 0.553154363899},
+    {"case": "mixed", "max_mode": 1, "batch": "1", "build_s": 24.03, "compile_s": 17.76, "optimize_s": 11.29, "final_cost": 4.91904405},
+    {"case": "mixed", "max_mode": 1, "batch": "auto", "build_s": 24.05, "compile_s": 30.65, "optimize_s": 11.12, "final_cost": 4.91904405},
+    {"case": "mixed", "max_mode": 3, "batch": "1", "build_s": 23.92, "compile_s": 18.26, "optimize_s": 10.66, "final_cost": 2.765093935},
+    {"case": "mixed", "max_mode": 3, "batch": "auto", "build_s": 23.94, "compile_s": 30.87, "optimize_s": 10.42, "final_cost": 2.765093935},
+    {"case": "mixed", "max_mode": 5, "batch": "1", "build_s": 24.78, "compile_s": 19.35, "optimize_s": 15.43, "final_cost": 2.788665241},
+    {"case": "mixed", "max_mode": 5, "batch": "auto", "build_s": 24.78, "compile_s": 32.49, "optimize_s": 14.55, "final_cost": 2.788665241}
+  ],
+  "mode5_12_evaluation_runs": [
+    {"case": "qi", "batch": "1", "total_s": 99.50, "final_cost": 0.016386333414, "failed_trials": 1},
+    {"case": "qi", "batch": "auto", "total_s": 107.70, "final_cost": 0.016386333460, "failed_trials": 1},
+    {"case": "qs", "batch": "1", "total_s": 83.95, "final_cost": 0.000013120979038, "failed_trials": 0},
+    {"case": "qs", "batch": "auto", "total_s": 93.83, "final_cost": 0.000013120979122, "failed_trials": 0}
+  ]
+}

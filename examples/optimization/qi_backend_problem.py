@@ -42,25 +42,18 @@ def make_qi_problem() -> opt.VmecProblem:
     def iota_floor(state, runtime):
         return jnp.maximum(0.3 - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
 
+    def elongation_excess(state, runtime):
+        return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+
     return opt.VmecProblem.from_tuples(
         inp,
         [
             (qi, 0.0, 1.0),
             (opt.aspect_ratio, 6.0, 0.1),
             (iota_floor, 0.0, 10.0),
+            (elongation_excess, 0.0, 1.0),
         ],
         max_mode=max_mode,
-        # "implicit": exact converged-equilibrium derivatives.
-        # "finite_difference": independent equilibrium re-solves.
-        derivative_method="implicit",
-        # "auto" is recommended; advanced exact paths are
-        # "block_tridiagonal", "forward_gmres", and "reverse_adjoint".
-        implicit_jacobian_method="auto",
-        # "auto" favors warm throughput; 1 can shorten cold compilation for
-        # small problems.  Advanced users can change this one argument.
-        jacobian_batch_size="auto",
-        # "cost": w multiplies squared cost; "residual": w multiplies rows.
-        weight_semantics="cost",
         use_ess=True,
         # Report elapsed-time heartbeats while constructing the problem.
         progress=True,

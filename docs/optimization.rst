@@ -108,7 +108,11 @@ where its faster warm stages amortize the larger initial compilation.  The
 explicit ``"block_tridiagonal"``, ``"forward_gmres"``, and
 ``"reverse_adjoint"`` methods are advanced numerical controls rather than
 alternative beginner settings.  These timings are benchmark observations,
-not CI thresholds.
+not CI thresholds.  Reproduce individual cold rows with
+``VMEX_COMPILATION_CACHE=disabled python
+benchmarks/optimization_defaults.py --input INPUT --case qi --max-mode 5
+--batch 1``; the complete recorded matrix is
+``benchmarks/optimization_defaults_macos.json``.
 
 The same object provides ``fun``/``grad``/``value_and_grad`` for scalar
 optimizers and ``jax_fun``/``jax_value_and_grad``/``jax_residual`` for JAX

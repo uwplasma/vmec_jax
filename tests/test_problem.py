@@ -387,6 +387,8 @@ def test_vmec_finite_difference_factory_uses_parallel_provider(monkeypatch):
     )
     jacobian = problem.residual_jac(problem.x0)
     np.testing.assert_allclose(jacobian, np.full((1, problem.x0.size), 2.0))
+    np.testing.assert_array_equal(problem.x_from_input(inp), problem.x0)
+    assert problem.equilibrium_from_x(problem.x0).value == np.sum(problem.x0)
     assert problem.metadata["fd_method"] == "3-point"
 
 

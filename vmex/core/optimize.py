@@ -1203,6 +1203,12 @@ def _make_finite_difference_problem(
             )
         return result
 
+    def x_from_input(source: VmecInput) -> np.ndarray:
+        x = pack_boundary(source, max_mode)
+        if k_cur:
+            x = np.concatenate([x, _pack_current(source, k_cur, ac_scale)])
+        return x
+
     holder: dict[str, Any] = {
         "cache": None,
         "failed_trials": 0,
@@ -1297,6 +1303,8 @@ def _make_finite_difference_problem(
         bounds=bounds,
         scales=scales,
         input_from_x=input_from_x,
+        x_from_input=x_from_input,
+        equilibrium_from_x=equilibrium,
         metadata={
             "derivative_method": "finite_difference",
             "derivative_description": (
