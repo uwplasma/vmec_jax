@@ -27,8 +27,17 @@ decision vector.  It exposes the names used by SciPy and JAX rather than hiding
 them inside a solver driver:
 
 ```python
+from dataclasses import replace
+
 max_mode = 5
-inp = opt.prepare_optimization_input(inp, max_mode, minimum_mpol=5)
+mpol = max(max_mode + 2, 5)
+ntor = mpol
+ntheta = 2 * mpol + 6
+nzeta = 2 * ntor + 4
+inp = replace(inp, delt=0.5)
+inp = inp.change_resolution(
+    mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta
+)
 problem = opt.VmecProblem.from_tuples(
     inp,
     [(qi, 0.0, 1.0),
@@ -60,7 +69,7 @@ problem.jax_residual(x)        # JAX residual vector
 
 problem.input_from_x(x)
 problem.evaluate(x)            # value, residual, status, diagnostics
-problem.warmup(evaluation_path="residual")  # least-squares JIT preparation
+problem.compile_residual_and_jacobian()  # optional visible first compilation
 ```
 
 `J(x)` and `dJ(x)` are concise aliases for users familiar with SIMSOPT.  The
@@ -244,10 +253,9 @@ Tests are divided by what they prove.
 - exact cost-weight tuple semantics;
 - compatibility-wrapper residual-weight behavior;
 - value/gradient and residual/Jacobian consistency;
-- staged input resolution preserves existing Fourier coefficients, exposes all
-  requested decision modes, and satisfies the real-space anti-aliasing policy;
-- warmup selects only the optimizer-relevant derivative path, populates its
-  exact-key cache, and emits deterministic start/heartbeat/completion records;
+- explicit input-resolution changes preserve existing Fourier coefficients;
+- each named compilation method selects only its stated derivative pair,
+  populates the exact-key cache, and emits concise progress records;
 - a repeated `fun(x)`/`grad(x)` pair reuses one equilibrium evaluation;
 - the same unchanged problem is accepted by SciPy, JAXopt, and Optax;
 - optional backends use `pytest.importorskip` and remain optional dependencies.

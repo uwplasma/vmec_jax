@@ -121,7 +121,6 @@ __all__ = [
     "FunctionProblem",
     "Evaluation",
     "make_problem",
-    "prepare_optimization_input",
     "Equilibrium",
     "solve_equilibrium",
     "QuasisymmetryRatioResidual",
@@ -1137,81 +1136,6 @@ def _ess_scale(inp: VmecInput, max_mode: int, alpha: float) -> np.ndarray:
     return np.exp(-alpha * levels) / np.exp(-alpha)
 
 
-def prepare_optimization_input(
-    inp: VmecInput,
-    max_mode: int,
-    *,
-    minimum_mpol: int = 5,
-    mpol: int | None = None,
-    ntor: int | None = None,
-    ntheta: int | None = None,
-    nzeta: int | None = None,
-    delt: float = 0.5,
-) -> VmecInput:
-    """Return a stage input with resolved solver and boundary grids.
-
-    The defaults reproduce the staged SIMSOPT QI setup: ``mpol`` is
-    ``max(max_mode + 2, minimum_mpol)``, ``ntor`` matches ``mpol``, and the
-    real-space grids are ``ntheta = 2 * mpol + 6`` and
-    ``nzeta = 2 * ntor + 4``.  Exact values remain ordinary keyword
-    overrides for advanced studies.
-
-    :class:`VmecInput` stores its boundary in resolution-sized arrays, so this
-    one immutable operation also performs the role of SIMSOPT's separate
-    ``Surface.change_resolution`` call.  Every Fourier coefficient and axis
-    coefficient representable at both resolutions is copied; newly exposed
-    modes are zero.  The original input is not modified.
-    """
-    max_mode = int(max_mode)
-    minimum_mpol = int(minimum_mpol)
-    if max_mode < 0:
-        raise ValueError("max_mode must be non-negative")
-    if minimum_mpol < 1:
-        raise ValueError("minimum_mpol must be positive")
-    mpol = max(max_mode + 2, minimum_mpol) if mpol is None else int(mpol)
-    ntor = mpol if ntor is None else int(ntor)
-    ntheta = 2 * mpol + 6 if ntheta is None else int(ntheta)
-    nzeta = 2 * ntor + 4 if nzeta is None else int(nzeta)
-    delt = float(delt)
-    if mpol <= max_mode:
-        raise ValueError("mpol must be greater than max_mode")
-    if ntor < max_mode:
-        raise ValueError("ntor must be at least max_mode")
-    if ntheta <= 2 * (mpol - 1):
-        raise ValueError("ntheta must resolve all poloidal Fourier modes")
-    if nzeta <= 2 * ntor:
-        raise ValueError("nzeta must be greater than 2 * ntor to avoid aliasing")
-    if delt <= 0.0:
-        raise ValueError("delt must be positive")
-
-    old_ntor = int(inp.ntor)
-    old_mpol = int(inp.mpol)
-    ncopy = min(old_ntor, ntor)
-    mcopy = min(old_mpol, mpol)
-    axis = {}
-    for name in ("raxis_c", "zaxis_s", "raxis_s", "zaxis_c"):
-        values = np.zeros(ntor + 1)
-        values[: ncopy + 1] = np.asarray(getattr(inp, name))[: ncopy + 1]
-        axis[name] = values
-    boundary = {}
-    old_rows = slice(old_ntor - ncopy, old_ntor + ncopy + 1)
-    new_rows = slice(ntor - ncopy, ntor + ncopy + 1)
-    for name in ("rbc", "zbs", "rbs", "zbc"):
-        values = np.zeros((2 * ntor + 1, mpol))
-        values[new_rows, :mcopy] = np.asarray(getattr(inp, name))[old_rows, :mcopy]
-        boundary[name] = values
-    return dataclasses.replace(
-        inp,
-        mpol=mpol,
-        ntor=ntor,
-        ntheta=ntheta,
-        nzeta=nzeta,
-        delt=delt,
-        **axis,
-        **boundary,
-    )
-
-
 _IMPLICIT_JACOBIAN_METHODS = {
     "auto": "auto",
     "block_tridiagonal": "block",
@@ -1280,8 +1204,9 @@ def make_problem(
 
     Set ``progress=True`` to report elapsed-time heartbeats while validating
     the seed equilibrium and building resolution-dependent solver data.
-    :meth:`VmecProblem.warmup` provides the same visibility for the first
-    residual/Jacobian evaluation after this factory returns.
+    :meth:`VmecProblem.compile_residual_and_jacobian` or
+    :meth:`VmecProblem.compile_value_and_gradient` provides the same
+    visibility for the first derivative evaluation after this factory returns.
 
     The returned object contains no optimization algorithm.  Pass
     :meth:`VmecProblem.residual` / :meth:`VmecProblem.residual_jac` to a
@@ -1341,11 +1266,8 @@ def make_problem(
             problem_bounds=bounds,
             problem_scales=scales,
         ),
-        description="the VMEC problem and initial equilibrium",
-        note=(
-            "This validates the seed and prepares resolution-dependent solver "
-            "data. A new solver structure may compile JAX executables."
-        ),
+        action="Building VMEX problem",
+        complete="VMEX problem ready",
         progress=progress,
         report_interval=report_interval,
         stream=progress_stream,
@@ -1361,17 +1283,6 @@ def make_problem(
         "nzeta": int(inp.nzeta),
     }
     problem.metadata["jacobian_batch_size"] = jacobian_batch_size
-    problem.metadata["residual_warmup_description"] = (
-        "the initial residual and exact implicit Jacobian"
-    )
-    problem.metadata["scalar_warmup_description"] = (
-        "the initial value and exact implicit gradient"
-    )
-    problem.metadata["warmup_note"] = (
-        "The first call for a new resolution and objective shape may compile "
-        "JAX executables. There is no reliable first-run ETA; elapsed time "
-        "will be reported until the work completes."
-    )
     return problem
 
 

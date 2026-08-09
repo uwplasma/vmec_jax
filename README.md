@@ -402,11 +402,19 @@ The recommended pattern releases all harmonics in one problem and uses
 **Exponential Spectral Scaling** for the optimizer's variable scale:
 
 ```python
+from dataclasses import replace
 from scipy.optimize import least_squares
 from vmex import optimize as opt
 
 max_mode = 5
-inp = opt.prepare_optimization_input(inp, max_mode, minimum_mpol=5)
+mpol = max(max_mode + 2, 5)
+ntor = mpol
+ntheta = 2 * mpol + 6
+nzeta = 2 * ntor + 4
+inp = replace(inp, delt=0.5)
+inp = inp.change_resolution(
+    mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta
+)
 qs = opt.QuasisymmetryRatioResidual(surfaces, helicity_m=1, helicity_n=0)
 problem = opt.VmecProblem.from_tuples(
     inp,
@@ -416,9 +424,9 @@ problem = opt.VmecProblem.from_tuples(
     weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
     implicit_jacobian_method="auto",  # select by scalar/vector objective shape
     jacobian_batch_size="auto",    # use 1 to favor shorter cold compilation
-    progress=True,                 # show initial-equilibrium preparation
+    progress=True,                 # report elapsed time during construction
 )
-problem.warmup(evaluation_path="residual")  # least-squares JIT + heartbeats
+problem.compile_residual_and_jacobian()  # optional visible first compilation
 result = least_squares(
     problem.residual, problem.x0, jac=problem.residual_jac,
     x_scale=problem.scales,
@@ -426,20 +434,17 @@ result = least_squares(
 optimized_input = problem.input_from_x(result.x)
 ```
 
-`prepare_optimization_input()` is the immutable VMEX equivalent of updating
-SIMSOPT's `vmec.indata` and then calling `Surface.change_resolution()`. Its
-defaults set `DELT=0.5`, `MPOL=max(max_mode + 2, minimum_mpol)`, `NTOR=MPOL`,
-`NTHETA=2*MPOL+6`, and `NZETA=2*NTOR+4`; existing representable boundary and
-axis coefficients are preserved. Exact grid values are optional keyword
-overrides.
+The script owns its resolution policy: `mpol`, `ntor`, `ntheta`, `nzeta`, and
+`delt` are ordinary visible values rather than defaults hidden in an
+optimization helper. `VmecInput.change_resolution()` only resizes the input;
+it preserves representable boundary and axis coefficients and zeroes newly
+exposed modes.
 
 `progress=True` covers seed validation and construction;
-`problem.warmup(evaluation_path="residual")` covers the initial residual and
-exact Jacobian before SciPy
-starts. Both label the operation, print elapsed-time heartbeats every 10
-seconds, and report final wall time; warmup also prints the initial cost and
-Jacobian shape. A trustworthy ETA is not available before a new
-resolution/objective structure has compiled.
+`problem.compile_residual_and_jacobian()` optionally performs the first
+least-squares derivative call before SciPy starts. Both print a short label,
+elapsed-time heartbeats, and final wall time. If the explicit compilation call
+is removed, SciPy triggers the same compilation on its first evaluation.
 For CPU jobs in which cold compilation matters more than peak warm-kernel
 speed, set `VMEX_FAST_COMPILE=1` before importing VMEX; the persistent
 machine-local compilation cache remains enabled by default.

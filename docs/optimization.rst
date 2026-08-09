@@ -24,6 +24,7 @@ SciPy, JAXopt, Optax, or user code:
 
 .. code-block:: python
 
+   from dataclasses import replace
    import numpy as np
    import scipy.optimize
    import vmex as vj
@@ -31,7 +32,14 @@ SciPy, JAXopt, Optax, or user code:
 
    inp = vj.VmecInput.from_file("input.minimal_seed_nfp2")
    max_mode = 5
-   inp = opt.prepare_optimization_input(inp, max_mode, minimum_mpol=5)
+   mpol = max(max_mode + 2, 5)
+   ntor = mpol
+   ntheta = 2 * mpol + 6
+   nzeta = 2 * ntor + 4
+   inp = replace(inp, delt=0.5)
+   inp = inp.change_resolution(
+       mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta
+   )
    qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10),
                                        helicity_m=1, helicity_n=0)
    problem = opt.VmecProblem.from_tuples(
@@ -44,9 +52,9 @@ SciPy, JAXopt, Optax, or user code:
        weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
        implicit_jacobian_method="auto",  # best method for scalar/vector shape
        jacobian_batch_size="auto",    # 1 favors shorter cold compilation
-       progress=True,                 # show seed/structure preparation
+       progress=True,                 # report elapsed construction time
    )
-   problem.warmup(evaluation_path="residual")  # least-squares JIT + progress
+   problem.compile_residual_and_jacobian()  # optional visible first compilation
 
    result = scipy.optimize.least_squares(
        problem.residual,
@@ -56,24 +64,20 @@ SciPy, JAXopt, Optax, or user code:
    )
    optimized_input = problem.input_from_x(result.x)
 
-The immutable :func:`~vmex.core.optimize.prepare_optimization_input` helper is
-the VMEX equivalent of changing both ``vmec.indata`` and the separate SIMSOPT
-boundary surface.  Its defaults reproduce the staged QI policy:
-``DELT=0.5``, ``MPOL=max(max_mode + 2, minimum_mpol)``, ``NTOR=MPOL``,
-``NTHETA=2*MPOL+6``, and ``NZETA=2*NTOR+4``.  It preserves every existing
-axis and boundary coefficient representable at the new resolution; explicit
-``mpol``, ``ntor``, ``ntheta``, ``nzeta``, and ``delt`` keywords override the
-defaults.
+The optimization script owns its numerical policy.  It selects ``DELT``,
+``MPOL``, ``NTOR``, ``NTHETA``, and ``NZETA`` explicitly.  The immutable
+:meth:`~vmex.core.input.VmecInput.change_resolution` operation only changes
+the four resolution fields, preserving every representable axis and boundary
+coefficient and zeroing newly exposed modes.
 
 :func:`~vmex.core.optimize.make_problem` with ``progress=True`` reports seed
 validation and structure preparation;
-:meth:`~vmex.core.problem.FunctionProblem.warmup` reports and caches the
-initial residual/Jacobian (or scalar value/gradient) before entering an
-optimizer.  Both identify the first-use work, print an elapsed-time heartbeat
-every 10 seconds, and report completion time; warmup also prints the initial
-cost and Jacobian shape.  VMEX deliberately does not claim a first-run ETA
-because XLA compilation time depends on resolution,
-objective shape, backend, hardware, and persistent-cache state.  For a
+:meth:`~vmex.core.problem.FunctionProblem.compile_residual_and_jacobian` or
+:meth:`~vmex.core.problem.FunctionProblem.compile_value_and_gradient` makes
+the first derivative compilation visible before entering an optimizer.  The
+compile calls are optional for correctness: without one, the optimizer
+performs the same work on its first evaluation.  Each operation prints a
+short label, elapsed-time heartbeats, and completion time.  For a
 CPU-only job where cold latency matters more than peak warm-kernel speed, set
 ``VMEX_FAST_COMPILE=1`` *before* importing VMEX; the machine-local persistent
 compilation cache is already enabled by default.

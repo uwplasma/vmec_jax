@@ -416,7 +416,7 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
         use_ess=False,
     )
     residual, weighted_jac = problem.residual_and_jac(problem.x0)
-    warmed = problem.warmup(progress=False)
+    compiled = problem.compile_residual_and_jacobian(progress=False)
     got_jac = weighted_jac / 2.0
     reverse = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                                 jac_solver="reverse", max_nfev=1)
@@ -439,9 +439,8 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
         "ntheta": inp.ntheta,
         "nzeta": inp.nzeta,
     }
-    assert "first-run ETA" in problem.metadata["warmup_note"]
-    np.testing.assert_array_equal(warmed.residual, residual)
-    np.testing.assert_array_equal(warmed.jacobian, weighted_jac)
+    np.testing.assert_array_equal(compiled.residual, residual)
+    np.testing.assert_array_equal(compiled.jacobian, weighted_jac)
     assert (
         problem.metadata["implicit_jacobian_description"]
         == "block-tridiagonal equilibrium response"

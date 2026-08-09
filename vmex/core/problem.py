@@ -25,8 +25,8 @@ HostFun = Callable[[np.ndarray], Any]
 def _run_with_progress(
     function: Callable[[], Any],
     *,
-    description: str,
-    note: str | None = None,
+    action: str,
+    complete: str,
     progress: bool,
     report_interval: float,
     stream: Any = None,
@@ -38,20 +38,14 @@ def _run_with_progress(
     if not progress:
         return function()
     stream = sys.stdout if stream is None else stream
-    print(f"Preparing {description}...", file=stream, flush=True)
-    if note:
-        print(note, file=stream, flush=True)
+    print(f"{action}...", file=stream, flush=True)
     started = time.perf_counter()
     finished = Event()
 
     def heartbeat() -> None:
         while not finished.wait(interval):
             elapsed = time.perf_counter() - started
-            print(
-                f"  Still preparing: {elapsed:.1f} s elapsed.",
-                file=stream,
-                flush=True,
-            )
+            print(f"  {elapsed:.1f} s elapsed.", file=stream, flush=True)
 
     reporter = Thread(target=heartbeat, name="vmex-progress", daemon=True)
     reporter.start()
@@ -59,13 +53,13 @@ def _run_with_progress(
         result = function()
     except Exception:
         elapsed = time.perf_counter() - started
-        print(f"Preparation failed after {elapsed:.1f} s.", file=stream, flush=True)
+        print(f"Failed after {elapsed:.1f} s.", file=stream, flush=True)
         raise
     finally:
         finished.set()
         reporter.join()
     elapsed = time.perf_counter() - started
-    print(f"Preparation complete in {elapsed:.1f} s.", file=stream, flush=True)
+    print(f"{complete} in {elapsed:.1f} s.", file=stream, flush=True)
     return result
 
 
@@ -303,123 +297,69 @@ class FunctionProblem:
             residual=residual, jacobian=jacobian,
         )
 
-    def warmup(
+    def compile_residual_and_jacobian(
         self,
         x: Array | None = None,
         *,
-        evaluation_path: str = "auto",
-        derivatives: bool = True,
         progress: bool = True,
         report_interval: float = 10.0,
         stream: Any = None,
     ) -> Evaluation:
-        """Evaluate once, populate caches, and report long first-use work.
+        """Compile and cache the least-squares residual and Jacobian.
 
-        ``evaluation_path="residual"`` prepares residuals and their Jacobian
-        for nonlinear least squares.  ``"scalar"`` prepares the value and
-        gradient used by BFGS, L-BFGS-B, Adam, and similar optimizers.  The
-        default ``"auto"`` selects residuals when available and otherwise the
-        scalar path.  Selecting the optimizer's actual path avoids compiling
-        an unused derivative graph.
-
-        A heartbeat reports elapsed time while the call is running.  VMEX
-        does not invent a first-run ETA: compilation time depends strongly on
-        the resolution, objective shape, backend, and local compilation cache.
-
-        Set ``progress=False`` for silent library use or reduce
-        ``report_interval`` for more frequent updates.  The returned
-        :class:`Evaluation` is the same initial value and derivative data that
-        the optimizer will consume.
+        This call is optional: an optimizer compiles on its first evaluation
+        if it is omitted.  Calling it explicitly provides elapsed-time output
+        during a potentially long first JAX compilation.  Later calls at the
+        same ``x`` use the normal one-entry problem cache.
         """
         xh = self.x0.copy() if x is None else self._x(x).copy()
-        has_residual = self._residual is not None or self._residual_and_jac is not None
-        has_residual_jac = (
-            self._residual_jac is not None or self._residual_and_jac is not None
-        )
-        has_gradient = self._grad is not None or self._value_and_grad is not None
-        if evaluation_path not in ("auto", "residual", "scalar"):
-            raise ValueError(
-                "evaluation_path must be 'auto', 'residual', or 'scalar'; "
-                f"got {evaluation_path!r}"
+
+        def compile_callables() -> Evaluation:
+            residual, jacobian = self.residual_and_jac(xh)
+            return Evaluation(
+                x=xh,
+                value=0.5 * float(residual @ residual),
+                gradient=jacobian.T @ residual,
+                residual=residual,
+                jacobian=jacobian,
             )
-        selected_path = (
-            "residual"
-            if evaluation_path == "auto" and has_residual
-            else "scalar"
-            if evaluation_path == "auto"
-            else evaluation_path
-        )
-        if selected_path == "residual" and not has_residual:
-            raise AttributeError("this problem does not provide residuals")
 
-        def evaluate_primary() -> Evaluation:
-            if selected_path == "residual":
-                if derivatives and has_residual_jac:
-                    residual, jacobian = self.residual_and_jac(xh)
-                    gradient = jacobian.T @ residual
-                else:
-                    residual, jacobian, gradient = self.residual(xh), None, None
-                return Evaluation(
-                    x=xh,
-                    value=0.5 * float(residual @ residual),
-                    gradient=gradient,
-                    residual=residual,
-                    jacobian=jacobian,
-                )
-            if derivatives and has_gradient:
-                value, gradient = self.value_and_grad(xh)
-            else:
-                value, gradient = self.fun(xh), None
-            return Evaluation(x=xh, value=value, gradient=gradient)
-
-        description = self.metadata.get(
-            f"{selected_path}_warmup_description",
-            self.metadata.get(
-                "warmup_description",
-                (
-                    "initial residual and Jacobian"
-                    if selected_path == "residual"
-                    else "initial value and gradient"
-                ),
-            ),
-        )
-        note = self.metadata.get("warmup_note")
-        evaluation = _run_with_progress(
-            evaluate_primary,
-            description=description,
-            note=None if note is None else str(note),
+        return _run_with_progress(
+            compile_callables,
+            action="Compiling residual and Jacobian (first call may take a minute)",
+            complete="Residual and Jacobian ready",
             progress=progress,
             report_interval=report_interval,
             stream=stream,
         )
-        if progress:
-            output = sys.stdout if stream is None else stream
-            if evaluation.residual is not None:
-                jacobian_shape = (
-                    "unavailable"
-                    if evaluation.jacobian is None
-                    else f"{evaluation.jacobian.shape[0]} x {evaluation.jacobian.shape[1]}"
-                )
-                print(
-                    f"Initial cost: {evaluation.value:.6e}; "
-                    f"residual rows: {evaluation.residual.size}; "
-                    f"Jacobian: {jacobian_shape}.",
-                    file=output,
-                    flush=True,
-                )
-            else:
-                gradient_size = (
-                    "unavailable"
-                    if evaluation.gradient is None
-                    else str(evaluation.gradient.size)
-                )
-                print(
-                    f"Initial value: {evaluation.value:.6e}; "
-                    f"gradient entries: {gradient_size}.",
-                    file=output,
-                    flush=True,
-                )
-        return evaluation
+
+    def compile_value_and_gradient(
+        self,
+        x: Array | None = None,
+        *,
+        progress: bool = True,
+        report_interval: float = 10.0,
+        stream: Any = None,
+    ) -> Evaluation:
+        """Compile and cache the scalar value and gradient.
+
+        This optional call makes the first JAX compilation visible before
+        BFGS, L-BFGS-B, Adam, or another gradient optimizer starts.
+        """
+        xh = self.x0.copy() if x is None else self._x(x).copy()
+
+        def compile_callables() -> Evaluation:
+            value, gradient = self.value_and_grad(xh)
+            return Evaluation(x=xh, value=value, gradient=gradient)
+
+        return _run_with_progress(
+            compile_callables,
+            action="Compiling value and gradient (first call may take a minute)",
+            complete="Value and gradient ready",
+            progress=progress,
+            report_interval=report_interval,
+            stream=stream,
+        )
 
 
 class VmecProblem(FunctionProblem):

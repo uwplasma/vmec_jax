@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import re
 import warnings
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from itertools import product
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
@@ -845,6 +845,63 @@ class VmecInput:
             elif a != b:
                 return False
         return True
+
+    def change_resolution(
+        self,
+        *,
+        mpol: int,
+        ntor: int,
+        ntheta: int | None = None,
+        nzeta: int | None = None,
+    ) -> "VmecInput":
+        """Return a copy at the requested Fourier and real-space resolution.
+
+        Fourier and axis coefficients present at both resolutions are copied;
+        newly added modes are zero.  ``ntheta`` and ``nzeta`` keep their
+        current values when omitted, including ``0`` for VMEC's automatic
+        grid choice.  This method applies no optimization policy: callers
+        choose every resolution explicitly.
+        """
+        mpol = int(mpol)
+        ntor = int(ntor)
+        ntheta = self.ntheta if ntheta is None else int(ntheta)
+        nzeta = self.nzeta if nzeta is None else int(nzeta)
+        if mpol < 1:
+            raise ValueError("mpol must be at least 1")
+        if ntor < 0:
+            raise ValueError("ntor must be non-negative")
+        if ntheta < 0:
+            raise ValueError("ntheta must be non-negative")
+        if nzeta < 0:
+            raise ValueError("nzeta must be non-negative")
+
+        ncopy = min(self.ntor, ntor)
+        mcopy = min(self.mpol, mpol)
+        axis = {}
+        for name in ("raxis_c", "zaxis_s", "raxis_s", "zaxis_c"):
+            values = np.zeros(ntor + 1)
+            values[: ncopy + 1] = np.asarray(getattr(self, name))[: ncopy + 1]
+            axis[name] = values
+
+        old_rows = slice(self.ntor - ncopy, self.ntor + ncopy + 1)
+        new_rows = slice(ntor - ncopy, ntor + ncopy + 1)
+        boundary = {}
+        for name in ("rbc", "zbs", "rbs", "zbc"):
+            values = np.zeros((2 * ntor + 1, mpol))
+            values[new_rows, :mcopy] = np.asarray(getattr(self, name))[
+                old_rows, :mcopy
+            ]
+            boundary[name] = values
+
+        return replace(
+            self,
+            mpol=mpol,
+            ntor=ntor,
+            ntheta=ntheta,
+            nzeta=nzeta,
+            **axis,
+            **boundary,
+        )
 
     # -- constructors ---------------------------------------------------------
 
