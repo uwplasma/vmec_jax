@@ -75,6 +75,9 @@ def test_vmec_problem_maps_inputs_and_reuses_equilibria():
     accepted, x = problem.equilibrium_from_x([5.0, 6.0])
     assert accepted is equilibrium
     np.testing.assert_array_equal(x, [5.0, 6.0])
+    evaluation = problem.evaluate([1.0, 2.0], derivatives=False)
+    assert evaluation.value == 3.0
+    assert evaluation.diagnostics == {}
 
     bad = SimpleNamespace(coefficients=np.ones(3))
     with pytest.raises(ValueError, match="decision-vector shape"):
