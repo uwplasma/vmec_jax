@@ -60,7 +60,7 @@ problem.jax_residual(x)        # JAX residual vector
 
 problem.input_from_x(x)
 problem.evaluate(x)            # value, residual, status, diagnostics
-problem.warmup()               # visible first evaluation/JIT preparation
+problem.warmup(evaluation_path="residual")  # least-squares JIT preparation
 ```
 
 `J(x)` and `dJ(x)` are concise aliases for users familiar with SIMSOPT.  The

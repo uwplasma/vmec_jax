@@ -46,7 +46,7 @@ SciPy, JAXopt, Optax, or user code:
        jacobian_batch_size="auto",    # 1 favors shorter cold compilation
        progress=True,                 # show seed/structure preparation
    )
-   problem.warmup()  # visible first-use compilation and initial evaluation
+   problem.warmup(evaluation_path="residual")  # least-squares JIT + progress
 
    result = scipy.optimize.least_squares(
        problem.residual,

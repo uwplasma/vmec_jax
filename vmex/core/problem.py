@@ -307,6 +307,7 @@ class FunctionProblem:
         self,
         x: Array | None = None,
         *,
+        evaluation_path: str = "auto",
         derivatives: bool = True,
         progress: bool = True,
         report_interval: float = 10.0,
@@ -314,12 +315,16 @@ class FunctionProblem:
     ) -> Evaluation:
         """Evaluate once, populate caches, and report long first-use work.
 
-        Residual problems warm the residual/Jacobian path; scalar problems
-        warm the value/gradient path.  This distinction avoids compiling an
-        unused scalar-gradient graph before nonlinear least squares.  A
-        heartbeat reports elapsed time while the call is running.  VMEX does
-        not invent a first-run ETA: compilation time depends strongly on the
-        resolution, objective shape, backend, and local compilation cache.
+        ``evaluation_path="residual"`` prepares residuals and their Jacobian
+        for nonlinear least squares.  ``"scalar"`` prepares the value and
+        gradient used by BFGS, L-BFGS-B, Adam, and similar optimizers.  The
+        default ``"auto"`` selects residuals when available and otherwise the
+        scalar path.  Selecting the optimizer's actual path avoids compiling
+        an unused derivative graph.
+
+        A heartbeat reports elapsed time while the call is running.  VMEX
+        does not invent a first-run ETA: compilation time depends strongly on
+        the resolution, objective shape, backend, and local compilation cache.
 
         Set ``progress=False`` for silent library use or reduce
         ``report_interval`` for more frequent updates.  The returned
@@ -332,9 +337,23 @@ class FunctionProblem:
             self._residual_jac is not None or self._residual_and_jac is not None
         )
         has_gradient = self._grad is not None or self._value_and_grad is not None
+        if evaluation_path not in ("auto", "residual", "scalar"):
+            raise ValueError(
+                "evaluation_path must be 'auto', 'residual', or 'scalar'; "
+                f"got {evaluation_path!r}"
+            )
+        selected_path = (
+            "residual"
+            if evaluation_path == "auto" and has_residual
+            else "scalar"
+            if evaluation_path == "auto"
+            else evaluation_path
+        )
+        if selected_path == "residual" and not has_residual:
+            raise AttributeError("this problem does not provide residuals")
 
         def evaluate_primary() -> Evaluation:
-            if has_residual:
+            if selected_path == "residual":
                 if derivatives and has_residual_jac:
                     residual, jacobian = self.residual_and_jac(xh)
                     gradient = jacobian.T @ residual
@@ -354,8 +373,15 @@ class FunctionProblem:
             return Evaluation(x=xh, value=value, gradient=gradient)
 
         description = self.metadata.get(
-            "warmup_description",
-            "initial residual and Jacobian" if has_residual else "initial value and gradient",
+            f"{selected_path}_warmup_description",
+            self.metadata.get(
+                "warmup_description",
+                (
+                    "initial residual and Jacobian"
+                    if selected_path == "residual"
+                    else "initial value and gradient"
+                ),
+            ),
         )
         note = self.metadata.get("warmup_note")
         evaluation = _run_with_progress(

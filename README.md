@@ -418,7 +418,7 @@ problem = opt.VmecProblem.from_tuples(
     jacobian_batch_size="auto",    # use 1 to favor shorter cold compilation
     progress=True,                 # show initial-equilibrium preparation
 )
-problem.warmup()  # times first-use compilation and prints elapsed heartbeats
+problem.warmup(evaluation_path="residual")  # least-squares JIT + heartbeats
 result = least_squares(
     problem.residual, problem.x0, jac=problem.residual_jac,
     x_scale=problem.scales,
@@ -434,7 +434,8 @@ axis coefficients are preserved. Exact grid values are optional keyword
 overrides.
 
 `progress=True` covers seed validation and construction;
-`problem.warmup()` covers the initial residual and exact Jacobian before SciPy
+`problem.warmup(evaluation_path="residual")` covers the initial residual and
+exact Jacobian before SciPy
 starts. Both label the operation, print elapsed-time heartbeats every 10
 seconds, and report final wall time; warmup also prints the initial cost and
 Jacobian shape. A trustworthy ETA is not available before a new

@@ -1361,10 +1361,11 @@ def make_problem(
         "nzeta": int(inp.nzeta),
     }
     problem.metadata["jacobian_batch_size"] = jacobian_batch_size
-    problem.metadata["warmup_description"] = (
+    problem.metadata["residual_warmup_description"] = (
         "the initial residual and exact implicit Jacobian"
-        if loss is None
-        else "the initial value and exact implicit gradient"
+    )
+    problem.metadata["scalar_warmup_description"] = (
+        "the initial value and exact implicit gradient"
     )
     problem.metadata["warmup_note"] = (
         "The first call for a new resolution and objective shape may compile "

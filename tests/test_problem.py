@@ -76,6 +76,17 @@ def test_warmup_primes_primary_path_and_reports_progress():
     assert evaluation.value == 6.5
     assert calls == {"value_and_grad": 0, "residual_and_jac": 1}
 
+    scalar = problem.warmup(evaluation_path="scalar", progress=False)
+    assert scalar.value == 6.5
+    assert scalar.residual is None
+    assert calls == {"value_and_grad": 1, "residual_and_jac": 1}
+
+    with pytest.raises(ValueError, match="evaluation_path"):
+        problem.warmup(evaluation_path="gradient", progress=False)
+    scalar_only = FunctionProblem([1.0], value_and_grad=lambda x: (x[0] ** 2, 2 * x))
+    with pytest.raises(AttributeError, match="does not provide residuals"):
+        scalar_only.warmup(evaluation_path="residual", progress=False)
+
     def slow_residual_and_jac(x):
         time.sleep(0.03)
         return x - 1.0, np.eye(x.size)
