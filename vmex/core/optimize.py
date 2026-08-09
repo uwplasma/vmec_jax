@@ -2190,7 +2190,14 @@ def _least_squares_implicit(
             lambda a: np.asarray(a, dtype=np.float64), params_of(_place(x))
         )
         hit = imp._LAST_SOLVE.get(cfg)
-        if hit is None or hit[0] != imp._params_key(params_np):
+        if (
+            hit is None
+            or hit[0] != imp._params_key(params_np)
+            or imp._LAST_STATUS_ERROR.get(cfg) is not None
+        ):
+            # A cached converged point can be revisited after a different trial
+            # failed.  Refresh the status callback in that rare case so the old
+            # error cannot turn this point's exact Jacobian into a penalty row.
             jax.device_get(rows_jit(_place(x)))
         if imp._LAST_STATUS_ERROR.get(cfg) is not None:
             holder["lin"] = None

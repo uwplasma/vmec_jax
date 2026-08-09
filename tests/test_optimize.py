@@ -515,6 +515,7 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     assert accepted.result.converged
     with pytest.raises(RuntimeError, match="usable VMEC equilibrium"):
         problem.equilibrium_from_x(np.full_like(problem.x0, np.nan))
+    np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
     with pytest.raises(ValueError, match="ntheta"):
         opt.elongation_profile(
             accepted.state, accepted.runtime, ntheta=3, nphi=1
