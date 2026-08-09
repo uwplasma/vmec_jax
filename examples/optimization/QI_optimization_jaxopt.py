@@ -19,9 +19,9 @@ args = parser.parse_args()
 problem = make_qi_problem()
 budget = iteration_budget(20)
 x0 = jnp.asarray(problem.x0)
-problem.warmup(evaluation_path="residual" if args.method == "LM" else "scalar")
 
 if args.method == "LBFGS":
+    problem.compile_value_and_gradient()
     ci = os.environ.get("VMEX_EXAMPLES_CI") == "1"
     result = jaxopt.LBFGS(
         problem.jax_value_and_grad,
@@ -32,6 +32,7 @@ if args.method == "LBFGS":
         jit=False,  # equilibrium is a host callback; only its kernels are jitted
     ).run(x0)
 else:
+    problem.compile_residual_and_jacobian()
     result = jaxopt.LevenbergMarquardt(
         problem.jax_residual,
         jac_fun=problem.jax_residual_jac,

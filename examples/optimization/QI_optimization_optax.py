@@ -13,7 +13,7 @@ from qi_backend_problem import iteration_budget, make_qi_problem
 
 problem = make_qi_problem()
 steps = iteration_budget(100)
-problem.warmup(evaluation_path="scalar")
+problem.compile_value_and_gradient()
 transform = optax.chain(
     optax.clip_by_global_norm(1.0),
     optax.adam(1.0e-2),

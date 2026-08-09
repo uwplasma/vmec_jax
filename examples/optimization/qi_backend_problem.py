@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 from pathlib import Path
 
@@ -18,7 +19,17 @@ def make_qi_problem() -> opt.VmecProblem:
     data = Path(__file__).resolve().parents[1] / "data" / "input.minimal_seed_nfp2"
     inp = VmecInput.from_file(data)
     max_mode = int(os.environ.get("VMEX_MAX_MODE", "1"))
-    inp = opt.prepare_optimization_input(inp, max_mode, minimum_mpol=5)
+    mpol = max(max_mode + 2, 5)
+    ntor = mpol
+    ntheta = 2 * mpol + 6
+    nzeta = 2 * ntor + 4
+    inp = replace(inp, delt=0.5)
+    inp = inp.change_resolution(
+        mpol=mpol,
+        ntor=ntor,
+        ntheta=ntheta,
+        nzeta=nzeta,
+    )
     qi = QIResidual(
         np.linspace(0.2, 1.0, 4),
         mboz=8,
@@ -51,7 +62,7 @@ def make_qi_problem() -> opt.VmecProblem:
         # "cost": w multiplies squared cost; "residual": w multiplies rows.
         weight_semantics="cost",
         use_ess=True,
-        # Report elapsed-time heartbeats during first-use JAX preparation.
+        # Report elapsed-time heartbeats while constructing the problem.
         progress=True,
     )
 

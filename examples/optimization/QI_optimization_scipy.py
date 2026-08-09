@@ -23,11 +23,9 @@ args = parser.parse_args()
 problem = make_qi_problem()
 monitor = OptimizationMonitor(problem)
 budget = iteration_budget(20)
-problem.warmup(
-    evaluation_path="residual" if args.method == "least_squares" else "scalar"
-)
 
 if args.method == "least_squares":
+    problem.compile_residual_and_jacobian()
     result = scipy.optimize.least_squares(
         problem.residual,
         problem.x0,
@@ -37,6 +35,7 @@ if args.method == "least_squares":
         max_nfev=budget,
     )
 else:
+    problem.compile_value_and_gradient()
     result = scipy.optimize.minimize(
         problem.value_and_grad,
         problem.x0,
