@@ -81,11 +81,36 @@ def test_warmup_primes_primary_path_and_reports_progress():
     assert scalar.residual is None
     assert calls == {"value_and_grad": 1, "residual_and_jac": 1}
 
+    scalar_stream = io.StringIO()
+    scalar_value = problem.warmup(
+        evaluation_path="scalar",
+        derivatives=False,
+        stream=scalar_stream,
+    )
+    assert scalar_value.gradient is None
+    assert "gradient entries: unavailable" in scalar_stream.getvalue()
+
+    residual_value = problem.warmup(derivatives=False, progress=False)
+    assert residual_value.jacobian is None
+
     with pytest.raises(ValueError, match="evaluation_path"):
         problem.warmup(evaluation_path="gradient", progress=False)
     scalar_only = FunctionProblem([1.0], value_and_grad=lambda x: (x[0] ** 2, 2 * x))
     with pytest.raises(AttributeError, match="does not provide residuals"):
         scalar_only.warmup(evaluation_path="residual", progress=False)
+
+    def fail(_x):
+        raise RuntimeError("synthetic failure")
+
+    broken = FunctionProblem([0.0], residual=fail)
+    failure_stream = io.StringIO()
+    with pytest.raises(RuntimeError, match="synthetic failure"):
+        broken.warmup(
+            derivatives=False,
+            report_interval=0.01,
+            stream=failure_stream,
+        )
+    assert "Preparation failed after" in failure_stream.getvalue()
 
     def slow_residual_and_jac(x):
         time.sleep(0.03)
@@ -136,6 +161,16 @@ def test_prepare_optimization_input_matches_staged_qi_resolution():
         opt.prepare_optimization_input(inp, 4, mpol=4)
     with pytest.raises(ValueError, match="aliasing"):
         opt.prepare_optimization_input(inp, 1, ntor=2, nzeta=4)
+    with pytest.raises(ValueError, match="non-negative"):
+        opt.prepare_optimization_input(inp, -1)
+    with pytest.raises(ValueError, match="minimum_mpol"):
+        opt.prepare_optimization_input(inp, 1, minimum_mpol=0)
+    with pytest.raises(ValueError, match="ntor"):
+        opt.prepare_optimization_input(inp, 2, ntor=1)
+    with pytest.raises(ValueError, match="ntheta"):
+        opt.prepare_optimization_input(inp, 1, mpol=4, ntheta=6)
+    with pytest.raises(ValueError, match="delt"):
+        opt.prepare_optimization_input(inp, 1, delt=0.0)
 
 
 def test_vmec_problem_factory_reports_construction_progress(monkeypatch):
