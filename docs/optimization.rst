@@ -40,6 +40,7 @@ SciPy, JAXopt, Optax, or user code:
        max_mode=5,
        derivative_method="implicit",  # exact converged-equilibrium derivative
        weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
+       implicit_jacobian_method="auto",  # best method for scalar/vector shape
    )
 
    result = scipy.optimize.least_squares(
@@ -67,6 +68,13 @@ converged fixed-boundary equilibrium, not differentiation through its solver
 iterations.  This first factory supports that method.  Complete user-supplied
 x-level derivatives use ``FunctionProblem.from_functions``; the parallel
 finite-difference provider is added in the later derivative-provider layer.
+
+``implicit_jacobian_method="auto"`` is the normal choice.  It uses a reverse
+adjoint for a scalar residual and the block-tridiagonal equilibrium response
+for a vector residual.  Advanced comparisons can select
+``"block_tridiagonal"``, ``"forward_gmres"``, or ``"reverse_adjoint"``.
+These names describe the mathematical assembly path; the older compatibility
+drivers retain their established ``jac_solver`` spelling.
 
 The compatibility drivers
 -------------------------

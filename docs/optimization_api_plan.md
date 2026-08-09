@@ -35,6 +35,7 @@ problem = opt.VmecProblem.from_tuples(
     max_mode=5,
     derivative_method="implicit",  # exact converged-equilibrium derivative
     weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
+    implicit_jacobian_method="auto",
 )
 
 problem.x0

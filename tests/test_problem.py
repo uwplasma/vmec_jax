@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+import vmex
 from vmex.core.problem import Evaluation, FunctionProblem
 
 
@@ -160,6 +162,7 @@ def test_vmex_jax_logging_default_and_override() -> None:
     code = "import vmex, jax; print(jax.config.jax_logging_level)"
     env = os.environ.copy()
     env.pop("VMEX_JAX_LOGGING_LEVEL", None)
+    env.pop("JAX_LOGGING_LEVEL", None)
     default = subprocess.run(
         [sys.executable, "-c", code], env=env, check=True,
         capture_output=True, text=True,
@@ -173,6 +176,20 @@ def test_vmex_jax_logging_default_and_override() -> None:
         capture_output=True, text=True,
     )
     assert override.stdout.strip() == "WARNING"
+
+    env.pop("VMEX_JAX_LOGGING_LEVEL")
+    env["JAX_LOGGING_LEVEL"] = "INFO"
+    standard_override = subprocess.run(
+        [sys.executable, "-c", code], env=env, check=True,
+        capture_output=True, text=True,
+    )
+    assert standard_override.stdout.strip() == "INFO"
+
+
+def test_old_jax_gets_one_actionable_logging_notice() -> None:
+    old_jax = SimpleNamespace(__version__="0.4.35", config=SimpleNamespace())
+    with pytest.warns(RuntimeWarning, match="JAX 0.4.35.*Upgrade JAX"):
+        vmex._configure_jax_logging(old_jax)
 
 
 def test_direct_jaxopt_and_optax_contracts():

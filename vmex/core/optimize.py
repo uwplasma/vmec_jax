@@ -1136,6 +1136,21 @@ def _ess_scale(inp: VmecInput, max_mode: int, alpha: float) -> np.ndarray:
     return np.exp(-alpha * levels) / np.exp(-alpha)
 
 
+_IMPLICIT_JACOBIAN_METHODS = {
+    "auto": "auto",
+    "block_tridiagonal": "block",
+    "forward_gmres": "gmres",
+    "reverse_adjoint": "reverse",
+}
+
+_IMPLICIT_JACOBIAN_DESCRIPTIONS = {
+    "auto": "automatic exact method selected from the objective shape",
+    "block_tridiagonal": "block-tridiagonal equilibrium response",
+    "forward_gmres": "one forward GMRES response per decision variable",
+    "reverse_adjoint": "one reverse adjoint per residual row",
+}
+
+
 def make_problem(
     inp: VmecInput,
     *,
@@ -1147,7 +1162,7 @@ def make_problem(
     derivative_method: str = "implicit",
     weight_semantics: str = "cost",
     jac_chunk_size: int | str | None = "auto",
-    jac_solver: str = "auto",
+    implicit_jacobian_method: str = "auto",
     hot_restart: bool = True,
     warm_start: str | None = "perturbation",
     use_ess: bool = True,
@@ -1171,6 +1186,13 @@ def make_problem(
     the only built-in derivative method in this factory; users with complete
     x-level derivatives can use :meth:`FunctionProblem.from_functions`.
 
+    ``implicit_jacobian_method="auto"`` is the beginner-facing default: it
+    selects one reverse adjoint for a scalar residual and an amortized
+    block-tridiagonal factorization for vector residuals.  Advanced choices
+    are ``"block_tridiagonal"``, ``"forward_gmres"``, and
+    ``"reverse_adjoint"``; the names describe how the exact implicit
+    Jacobian is assembled.
+
     The returned object contains no optimization algorithm.  Pass
     :meth:`VmecProblem.residual` / :meth:`VmecProblem.residual_jac` to a
     nonlinear least-squares package, or :meth:`VmecProblem.value_and_grad` to
@@ -1184,12 +1206,20 @@ def make_problem(
             "converged equilibrium); "
             "use FunctionProblem.from_functions for supplied x-level derivatives"
         )
+    try:
+        jac_solver = _IMPLICIT_JACOBIAN_METHODS[implicit_jacobian_method]
+    except KeyError as exc:
+        choices = ", ".join(repr(name) for name in _IMPLICIT_JACOBIAN_METHODS)
+        raise ValueError(
+            f"implicit_jacobian_method must be one of {choices}; "
+            f"got {implicit_jacobian_method!r}"
+        ) from exc
     max_mode = int(max_mode)
     scales = _ess_scale(inp, max_mode, float(ess_alpha)) if use_ess else None
     k_cur, _ = _current_dof_setup(inp, current_dofs)
     if scales is not None and k_cur:
         scales = np.concatenate([scales, np.ones(k_cur + 1)])
-    return _least_squares_implicit(
+    problem = _least_squares_implicit(
         list(objective_terms or ()),
         inp,
         max_mode=max_mode,
@@ -1208,6 +1238,11 @@ def make_problem(
         problem_bounds=bounds,
         problem_scales=scales,
     )
+    problem.metadata["implicit_jacobian_method"] = implicit_jacobian_method
+    problem.metadata["implicit_jacobian_description"] = (
+        _IMPLICIT_JACOBIAN_DESCRIPTIONS[implicit_jacobian_method]
+    )
+    return problem
 
 
 def least_squares(

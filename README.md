@@ -412,6 +412,7 @@ problem = opt.VmecProblem.from_tuples(
     max_mode=5,
     derivative_method="implicit",  # exact converged-equilibrium derivative
     weight_semantics="cost",       # w multiplies 0.5 * (f - target)**2
+    implicit_jacobian_method="auto",  # select by scalar/vector objective shape
 )
 result = least_squares(
     problem.residual, problem.x0, jac=problem.residual_jac,
@@ -426,10 +427,13 @@ For scalar methods, pass `problem.value_and_grad` to
 existing `opt.least_squares()` and `opt.minimize()` functions remain concise
 compatibility adapters.
 
-VMEX sets JAX's Python logging level to `ERROR` at import time, removing the
-repeated PjRt persistent-cache compatibility messages while retaining VMEX
-errors. Set `VMEX_JAX_LOGGING_LEVEL=WARNING` before import to restore JAX
-warnings, or set it to `inherit` to leave the process setting unchanged.
+VMEX sets JAX's logging level to `ERROR` at import time, removing repeated
+PjRt persistent-cache compatibility messages while retaining VMEX errors.
+`VMEX_JAX_LOGGING_LEVEL` takes precedence over JAX's standard
+`JAX_LOGGING_LEVEL`; set either to `WARNING` to restore JAX warnings, or set
+the VMEX option to `inherit` to leave the process setting unchanged. JAX
+versions older than 0.4.36 lack the unified Python/C++ logging control, so
+VMEX prints one actionable startup warning that PjRt messages may remain.
 
 The architecture, derivative validation, performance criteria, documentation
 work, and staged pull-request plan are recorded in

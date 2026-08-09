@@ -411,7 +411,7 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
     # compatibility driver used to keep private.
     problem = opt.VmecProblem.from_tuples(
         inp, [(opt.aspect_ratio, 4.0, 4.0)], max_mode=1,
-        jac_solver="block", use_ess=False,
+        implicit_jacobian_method="block_tridiagonal", use_ess=False,
     )
     residual, weighted_jac = problem.residual_and_jac(problem.x0)
     got_jac = weighted_jac / 2.0
@@ -428,6 +428,11 @@ def test_least_squares_implicit_jac_solver_block(solovev_eq, monkeypatch):
     assert problem.metadata["derivative_method"] == "implicit"
     assert "converged equilibrium" in problem.metadata["derivative_description"]
     assert problem.metadata["weight_semantics"] == "cost"
+    assert problem.metadata["implicit_jacobian_method"] == "block_tridiagonal"
+    assert (
+        problem.metadata["implicit_jacobian_description"]
+        == "block-tridiagonal equilibrium response"
+    )
     assert (
         problem.metadata["weight_description"]
         == "weight multiplies squared cost"
@@ -503,6 +508,12 @@ def test_public_problem_factory_validation():
     with pytest.raises(ValueError, match="weight_semantics"):
         opt._least_squares_implicit(
             term, inp, weight_semantics="unknown", **common
+        )
+    with pytest.raises(ValueError, match="implicit_jacobian_method"):
+        opt.make_problem(
+            inp,
+            objective_terms=term,
+            implicit_jacobian_method="block",
         )
     with pytest.raises(ValueError, match="not both"):
         opt._least_squares_implicit(
