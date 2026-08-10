@@ -747,8 +747,10 @@ class FusedVacuum:
     ``full(state, rt, field)`` and ``skip(state, rt, field, bvec_nonsing,
     mode_factor, mode_pivots)`` each run the full per-iteration vacuum update
     as one jitted program. On GPU, only NESTOR's small dense
-    assembly/factor/solve is CPU-sharded; plasma geometry, external field,
-    surface fields, and the returned cache stay on the accelerator.
+    assembly/factor/solve is CPU-sharded; plasma geometry, external field and
+    surface fields stay on the accelerator, while the cached
+    matrix/factors/RHS remain resident on the solve device between updates
+    (they are consumed only there).
 
     ``cache_key`` is the owning ``_VACUUM_EXECUTABLE_CACHE`` key (set by
     :func:`_vacuum_executables`): the prefetch registry uses it to tell apart
@@ -789,16 +791,22 @@ def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
         )
         mode_factor, mode_pivots = jsp_linalg.lu_factor(mode_matrix)
         potvac = jsp_linalg.lu_solve((mode_factor, mode_pivots), rhs)
-        return _move(
-            (potvac, mode_matrix, mode_factor, mode_pivots, bvec_nonsing),
-            output_device,
+        # Placement only: the LU factors and cached matrix/RHS stay resident
+        # on the solve device (CPU on a GPU lane) across vacuum skip steps —
+        # they are consumed only by _solve_skip's CPU-sharded lu_solve, so
+        # shipping them to the plasma device every full update and back on
+        # every skip step is a pure dense-matrix transfer round-trip.  Values
+        # are byte-identical; only potvac rejoins the plasma device.
+        return (
+            _move(potvac, output_device),
+            mode_matrix, mode_factor, mode_pivots, bvec_nonsing,
         )
 
     def _solve_skip(boundary, bexni, bvec_nonsing, mode_factor, mode_pivots):
-        boundary, bexni, bvec_nonsing, mode_factor, mode_pivots = _move(
-            (boundary, bexni, bvec_nonsing, mode_factor, mode_pivots),
-            solve_device,
-        )
+        boundary, bexni = _move((boundary, bexni), solve_device)
+        bvec_nonsing, mode_factor, mode_pivots = _move(
+            (bvec_nonsing, mode_factor, mode_pivots), solve_device,
+        )  # no-op for the resident cache; guards continuation-supplied arrays
         bvec_analytic, _ = _analytic_terms(
             boundary, bexni, basis, signgs, include_kernel=False
         )
@@ -996,9 +1004,10 @@ def _vacuum_step(
     """One NESTOR update (``vacuum.f``): returns ``bsqvac`` on the grid (device).
 
     The whole update runs as one jitted program (:class:`FusedVacuum`). On a
-    GPU lane the dense NESTOR block is CPU-sharded, while ``bsqvac`` and the
-    cached matrix/factor/RHS stay on the selected plasma device across
-    iterations. Only a few diagnostic scalars reach Python.
+    GPU lane the dense NESTOR block is CPU-sharded and its cached
+    matrix/factor/RHS stay resident there across skip steps, while ``bsqvac``
+    lives on the selected plasma device. Only a few diagnostic scalars reach
+    Python.
     """
     ns_notice = int(rt.resolution.ns)
     if (
@@ -1228,15 +1237,17 @@ def _prefetch_stage_lane_set(
         carry_freeb = _initial_carry(state, rt_freeb, ijacob=0)
         out = jax.eval_shape(fused.full, state, rt_freeb, external_field)
         z = lambda sd: jnp.zeros(sd.shape, dtype=sd.dtype)  # noqa: E731
+        zs = (z if fused.solve_device is None else
+              (lambda sd: jax.device_put(z(sd), fused.solve_device)))
         int_dtype = carry_freeb.iteration.dtype
         vc = _VacuumLoopCarry(
             carry=carry_freeb,
             rcon0=rt_freeb.rcon0, zcon0=rt_freeb.zcon0,
             bsqvac=zeros_edge, rbsq=z(out["rbsq"]),
-            mode_matrix=z(out["mode_matrix"]),
-            mode_factor=z(out["mode_factor"]),
-            mode_pivots=z(out["mode_pivots"]),
-            bvec_nonsing=z(out["bvec_nonsing"]), potvac=z(out["potvac"]),
+            mode_matrix=zs(out["mode_matrix"]),
+            mode_factor=zs(out["mode_factor"]),
+            mode_pivots=zs(out["mode_pivots"]),
+            bvec_nonsing=zs(out["bvec_nonsing"]), potvac=z(out["potvac"]),
             surface_fields=tuple(z(s) for s in out["surface_fields"]),
             ivac=jnp.asarray(1, dtype=int_dtype),
             nvacskip=jnp.asarray(1, dtype=int_dtype),
