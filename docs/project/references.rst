@@ -74,7 +74,7 @@ Confinement objectives and optimization:
 19. M. Landreman and E. Paul, “Magnetic fields with precise quasisymmetry for
     plasma confinement,” *Physical Review Letters* 128, 035001 (2022),
     arXiv:2108.03711 — the two-term quasisymmetry ratio residual and the
-    precise-QA/QH configurations (:doc:`confinement`).
+    precise-QA/QH configurations (:doc:`/explanation/confinement`).
 
 20. A. Goodman et al., “Constructing precisely quasi-isodynamic magnetic
     fields,” *Journal of Plasma Physics* 89(5), 905890504 (2023),

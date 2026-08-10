@@ -6,7 +6,7 @@ Migration status
 
 The repository recently completed a clean-room rewrite: the production
 implementation is :mod:`vmex.core` (~30 focused modules, one concern per
-file — see :doc:`architecture`), and the ``vmec`` CLI runs on it end to end.
+file — see :doc:`/explanation/architecture`), and the ``vmec`` CLI runs on it end to end.
 The remaining top-level legacy modules are being removed in an ongoing
 deletion sweep; new code, tests, and documentation should target
 ``vmex.core`` only. Every core module was validated by A/B equivalence
