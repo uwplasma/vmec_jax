@@ -2,6 +2,7 @@
   "date": "2026-08-08",
   "host": {
     "model": "Mac15,11",
+    "platform": "macOS-14.4.1-arm64",
     "logical_cpus": 14,
     "architecture": "arm64"
   },

@@ -489,7 +489,8 @@ which its modestly lower warm stage time amortizes the larger first
 compilation. Explicit Jacobian methods are intended for numerical studies and
 diagnostics; `"auto"` is the normal choice. The reproducible driver and full
 matrix are `benchmarks/optimization_defaults.py` and
-`benchmarks/optimization_defaults_macos.json`.
+`benchmarks/optimization_defaults.json` (the measurement platform is recorded
+inside the artifact).
 
 `problem.equilibrium_from_x(result.x)` returns the accepted equilibrium state
 already evaluated by the optimizer. Use it for reporting and as
@@ -531,8 +532,8 @@ work, and staged pull-request plan are recorded in
 
 ### Apples-to-apples QI optimization timing
 
-The comparison below uses one bundled copy of the `alex_qi` nfp=2 circular
-seed, not two look-alike examples.  Both codes optimize the same 8/24/48/80
+The comparison below uses the bundled near-circular nfp=2 QI seed
+(`examples/data/input.nfp2_QI_seed`), not two look-alike examples.  Both codes optimize the same 8/24/48/80
 boundary coefficients, at `NS=25`, with `mpol=ntor=max(max_mode+2, 5)`, the
 same angular grids, and the same 15-function-evaluation SciPy least-squares
 budget.  The residual is also shared: identical Goodman QI, aspect, mean-iota,
@@ -554,7 +555,7 @@ disabled, so later rows do not inherit executables from earlier rows.
 | 3 | 48 | 84.9 s  | 119.2 s | 99.7 s  | 95.4 s  |
 | 4 | 80 | 319.6 s | 176.6 s | 114.6 s | 100.7 s |
 
-![Cold SIMSOPT and VMEX QI optimization wall time versus maximum mode](benchmarks/qi_crosscode_macos/qi_optimization_time.png)
+![Cold SIMSOPT and VMEX QI optimization wall time versus maximum mode](benchmarks/optimization_crosscode/qi_optimization_time.png)
 
 Cold JIT cost makes VMEX slower for this short mode-1 job.  The exact
 derivative scales better: with ESS at mode 4, VMEX is 1.75x faster and reaches
@@ -564,7 +565,7 @@ spend the short budget shrinking poorly conditioned steps.  Every plotted
 accepted-cost history is monotone; rejected trial equilibria remain included
 in the wall time.
 
-![SIMSOPT and VMEX QI objective histories, with and without ESS](benchmarks/qi_crosscode_macos/qi_objective_history.png)
+![SIMSOPT and VMEX QI objective histories, with and without ESS](benchmarks/optimization_crosscode/qi_objective_history.png)
 
 ESS and a mode ladder solve different problems.  In a separate equal-budget
 VMEX test, direct `max_mode=5` stopped after 47 evaluations at cost 0.03742,
@@ -578,9 +579,11 @@ changed—but accepted iterations within each fixed stage remain monotone.
 Reproduce the timing matrix with
 [`benchmarks/qi_simsopt_vmex.py`](benchmarks/qi_simsopt_vmex.py).  Run every
 case in a fresh process; use `mpiexec -n N` for SIMSOPT, where `N` is the
-available logical CPU count, and pass `--plot benchmarks/qi_crosscode_macos`
-after all 16 JSON files exist.  The committed JSON records the input hash,
-versions, worker policy, timing split, costs, and accepted histories.  The
+available logical CPU count, and pass `--plot benchmarks/optimization_crosscode`
+after all 16 cases exist.  The committed consolidated
+`benchmarks/optimization_crosscode/qi_results.json` records the input hash,
+versions, platform, worker policy, timing split, costs, and accepted
+histories for every case.  The
 full resolution, continuation, CPU-worker, and accelerator guidance is in the
 [optimization](docs/optimization.rst) and
 [parallelization](docs/parallelization.rst) documentation.

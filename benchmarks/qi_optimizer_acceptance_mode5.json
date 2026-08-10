@@ -5,7 +5,8 @@
     "logical_cpus": 14,
     "architecture": "arm64"
   },
-  "input": "/Users/rogeriojorge/local/alex_qi/input.nfp2_circular",
+  "input": "examples/data/input.nfp2_QI_seed",
+  "platform": "macOS-14.4.1-arm64",
   "max_mode": 5,
   "dofs": 120,
   "initial_cost": 1.2250064616354313,

@@ -8,11 +8,13 @@ import optax
 
 from vmex import OptimizationMonitor
 
-from qi_backend_problem import iteration_budget, make_qi_problem
+from qi_shared_problem import iteration_budget, make_qi_problem
 
 
-problem = make_qi_problem()
-steps = iteration_budget(100)
+MAX_MODE = 1                  # boundary Fourier modes released to the optimizer
+STEPS = iteration_budget(100)  # Adam steps (1 under VMEX_EXAMPLES_CI=1)
+
+problem = make_qi_problem(MAX_MODE)
 problem.compile_value_and_gradient()
 transform = optax.chain(
     optax.clip_by_global_norm(1.0),
@@ -22,7 +24,7 @@ x = jnp.asarray(problem.x0)
 state = transform.init(x)
 monitor = OptimizationMonitor(problem)
 
-for iteration in range(steps):
+for iteration in range(STEPS):
     value, gradient = problem.jax_value_and_grad(x)
     updates, state = transform.update(gradient, state, x)
     x = optax.apply_updates(x, updates)

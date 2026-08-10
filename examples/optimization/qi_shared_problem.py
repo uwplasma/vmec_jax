@@ -14,11 +14,10 @@ from vmex.core.input import VmecInput
 from vmex.core.omnigenity import QIResidual
 
 
-def make_qi_problem() -> opt.VmecProblem:
+def make_qi_problem(max_mode: int = 1) -> opt.VmecProblem:
     """Return one problem used unchanged by SciPy, JAXopt, and Optax."""
     data = Path(__file__).resolve().parents[1] / "data" / "input.minimal_seed_nfp2"
     inp = VmecInput.from_file(data)
-    max_mode = int(os.environ.get("VMEX_MAX_MODE", "1"))
     mpol = max(max_mode + 2, 5)
     ntor = mpol
     ntheta = 2 * mpol + 6
@@ -64,4 +63,4 @@ def iteration_budget(default: int) -> int:
     """Keep documentation smoke runs short without changing normal defaults."""
     if os.environ.get("VMEX_EXAMPLES_CI") == "1":
         return 1
-    return int(os.environ.get("VMEX_MAXITER", str(default)))
+    return default

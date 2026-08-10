@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Reproducible alex_qi derivative and external-optimizer acceptance run."""
+"""Reproducible precise-QI derivative and external-optimizer acceptance run."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def installed_version(name: str) -> str | None:
 
 
 def build_problem(path: Path, max_mode: int) -> opt.VmecProblem:
-    """Reproduce the objective tuple from alex_qi/QI_opt_vmex.py."""
+    """Reproduce the precise-QI workflow objective tuple on the bundled seed."""
     inp = VmecInput.from_file(path)
     mpol = max(max_mode + 2, 5)
     ntor = mpol
@@ -68,7 +68,8 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("/Users/rogeriojorge/local/alex_qi/input.nfp2_circular"),
+        default=Path(__file__).resolve().parents[1]
+        / "examples/data/input.nfp2_QI_seed",
     )
     parser.add_argument("--max-mode", type=int, default=1)
     parser.add_argument(

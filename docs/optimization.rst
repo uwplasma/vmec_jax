@@ -112,7 +112,8 @@ not CI thresholds.  Reproduce individual cold rows with
 ``VMEX_COMPILATION_CACHE=disabled python
 benchmarks/optimization_defaults.py --input INPUT --case qi --max-mode 5
 --batch 1``; the complete recorded matrix is
-``benchmarks/optimization_defaults_macos.json``.
+``benchmarks/optimization_defaults.json`` (the measurement platform is
+recorded inside the artifact).
 
 The same object provides ``fun``/``grad``/``value_and_grad`` for scalar
 optimizers and ``jax_fun``/``jax_value_and_grad``/``jax_residual`` for JAX
@@ -179,7 +180,7 @@ is deliberately ordinary Python:
        equilibrium = problem.equilibrium_from_x(result.x)
        inp.to_indata(f"input.qi_max_mode_{max_mode:03d}")
 
-On the bundled ``alex_qi`` nfp=2 case, direct ``max_mode=5`` stopped after 47
+On the bundled ``input.nfp2_QI_seed`` case, direct ``max_mode=5`` stopped after 47
 evaluations at cost 0.03742.  The ``[1, 2, 3, 4, 5]`` ladder, capped at 15
 evaluations per stage (75 total), reached 0.02582 -- 31% lower.  This is a
 basin result, not a claim that every QS/QI problem needs a ladder.  A stage
@@ -329,7 +330,8 @@ derivatives all present identical optimizer-facing names.
 
 ``benchmarks/optimization_derivatives.py`` records exact/parallel-FD timing,
 work count, and numerical agreement under one input and objective.
-``benchmarks/alex_qi_acceptance.py`` reproduces the local ``alex_qi`` tuple,
+``benchmarks/qi_optimizer_acceptance.py`` reproduces the precise-QI objective
+tuple on the bundled ``input.nfp2_QI_seed``,
 checks finite derivatives at ``max_mode=1`` or 5, and can run every documented
 backend with a fixed iteration budget.  Reports include package versions and
 failure/fallback counters.  SIMSOPT and DESC versions are recorded for
@@ -337,13 +339,13 @@ provenance, but VMEX does not claim a cross-code speed ratio unless equation,
 resolution, variables, objective, tolerances, and warm-cache state match; a
 shorter run of different physics is not a defensible benchmark.
 
-The committed 2026-08-08 Apple-arm64 measurements are in
-``benchmarks/optimization_derivatives_macos.json`` and
-``benchmarks/alex_qi_max_mode5_macos.json``.  On the two-variable Solovev
+The committed 2026-08-08 measurements (platform recorded inside each
+artifact) are in ``benchmarks/optimization_derivatives.json`` and
+``benchmarks/qi_optimizer_acceptance_mode5.json``.  On the two-variable Solovev
 gate, after both lanes were warmed, the exact Jacobian took 1.52 ms versus
 277.83 ms for four parallel central probes (183x), agreeing to 1.23e-10
 relative error.  More importantly for scaling, the exact scalar-gradient work
-does not grow to 196 equilibrium probes at the 98-variable ``alex_qi``
+does not grow to 196 equilibrium probes at the 98-variable precise-QI
 ``max_mode=5`` point: its gradient was finite in 47.8 s, and one accepted
 least-squares step reduced cost from 1.225319 to 0.928739 in another 40.8 s
 with no failed trial or derivative fallback.  The recorded local SIMSOPT

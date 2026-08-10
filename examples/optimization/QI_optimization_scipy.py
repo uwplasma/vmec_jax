@@ -3,28 +3,21 @@
 
 from __future__ import annotations
 
-import argparse
-
 import scipy.optimize
 
 from vmex import OptimizationMonitor
 
-from qi_backend_problem import iteration_budget, make_qi_problem
+from qi_shared_problem import iteration_budget, make_qi_problem
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "--method",
-    choices=("least_squares", "BFGS", "L-BFGS-B"),
-    default="least_squares",
-)
-args = parser.parse_args()
+MAX_MODE = 1                   # boundary Fourier modes released to the optimizer
+METHOD = "least_squares"       # or "BFGS", "L-BFGS-B"
+BUDGET = iteration_budget(20)  # optimizer iterations (1 under VMEX_EXAMPLES_CI=1)
 
-problem = make_qi_problem()
+problem = make_qi_problem(MAX_MODE)
 monitor = OptimizationMonitor(problem)
-budget = iteration_budget(20)
 
-if args.method == "least_squares":
+if METHOD == "least_squares":
     problem.compile_residual_and_jacobian()
     result = scipy.optimize.least_squares(
         problem.residual,
@@ -32,7 +25,7 @@ if args.method == "least_squares":
         jac=problem.residual_jac,
         x_scale=problem.scales,
         callback=monitor,
-        max_nfev=budget,
+        max_nfev=BUDGET,
     )
 else:
     problem.compile_value_and_gradient()
@@ -40,11 +33,11 @@ else:
         problem.value_and_grad,
         problem.x0,
         jac=True,
-        method=args.method,
+        method=METHOD,
         bounds=problem.bounds,
         callback=monitor,
-        options={"maxiter": budget},
+        options={"maxiter": BUDGET},
     )
 
-problem.input_from_x(result.x).to_indata(f"input.QI_scipy_{args.method}")
-print(f"{args.method}: final cost = {problem.fun(result.x):.12e}")
+problem.input_from_x(result.x).to_indata(f"input.QI_scipy_{METHOD}")
+print(f"{METHOD}: final cost = {problem.fun(result.x):.12e}")

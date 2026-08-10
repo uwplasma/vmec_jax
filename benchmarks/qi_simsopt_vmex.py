@@ -4,7 +4,9 @@
 Both backends use the same input, VMEC resolution, boundary variables,
 least-squares residual, SciPy tolerances, and 15-evaluation budget.  SIMSOPT
 uses centered MPI finite differences; VMEX uses exact implicit derivatives.
-Run one case per fresh process, then use ``--plot`` to combine the JSON files.
+Run one case per fresh process; every case updates its entry in the single
+consolidated ``qi_results.json`` artifact (host platform and versions are
+recorded in each entry's provenance).  Use ``--plot`` afterwards.
 
 Examples
 --------
@@ -17,9 +19,9 @@ SIMSOPT on all 14 logical CPUs::
     mpiexec -n 14 python benchmarks/qi_simsopt_vmex.py \
         --backend simsopt --max-mode 1 --ess
 
-Plot every JSON file in a result directory::
+Plot the consolidated results in a result directory::
 
-    python benchmarks/qi_simsopt_vmex.py --plot benchmarks/qi_crosscode_macos
+    python benchmarks/qi_simsopt_vmex.py --plot benchmarks/optimization_crosscode
 """
 
 from __future__ import annotations
@@ -39,8 +41,9 @@ import numpy as np
 
 
 REPO = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = REPO / "benchmarks" / "data" / "input.alex_qi_nfp2"
-DEFAULT_RESULTS = REPO / "benchmarks" / "qi_crosscode_macos"
+DEFAULT_INPUT = REPO / "examples" / "data" / "input.nfp2_QI_seed"
+DEFAULT_RESULTS = REPO / "benchmarks" / "optimization_crosscode"
+RESULTS_NAME = "qi_results.json"
 SURFACES = np.linspace(0.1, 1.0, 6)
 QI_SETTINGS = {
     "mboz": 16,
@@ -392,8 +395,26 @@ def _simsopt_case(args: argparse.Namespace) -> dict[str, Any] | None:
     return payload
 
 
-def _case_path(result_dir: Path, backend: str, max_mode: int, ess: bool) -> Path:
-    return result_dir / f"{backend}_mode{max_mode}_ess-{str(ess).lower()}.json"
+def _case_key(backend: str, max_mode: int, ess: bool) -> str:
+    return f"{backend}_mode{max_mode}_ess-{str(ess).lower()}"
+
+
+def _load_cases(result_dir: Path) -> dict[str, Any]:
+    path = result_dir / RESULTS_NAME
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())["cases"]
+
+
+def _store_case(result_dir: Path, key: str, row: dict[str, Any]) -> Path:
+    """Update one entry of the consolidated benchmark artifact."""
+    path = result_dir / RESULTS_NAME
+    cases = _load_cases(result_dir)
+    cases[key] = row
+    path.write_text(
+        json.dumps({"cases": cases}, indent=2, sort_keys=True) + "\n"
+    )
+    return path
 
 
 def _plot(result_dir: Path) -> None:
@@ -401,8 +422,7 @@ def _plot(result_dir: Path) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    rows = [json.loads(path.read_text()) for path in sorted(result_dir.glob("*.json"))]
-    rows = [row for row in rows if "backend" in row]
+    rows = [row for row in _load_cases(result_dir).values() if "backend" in row]
     expected = {(b, m, e) for b in ("simsopt", "vmex") for m in range(1, 5) for e in (False, True)}
     found = {(row["backend"], row["max_mode"], row["ess"]) for row in rows}
     missing = sorted(expected - found)
@@ -495,9 +515,8 @@ def main() -> None:
     result["resolution"] = dict(zip(("mpol", "ntor", "ntheta", "nzeta"), _input_resolution(args.max_mode)))
     result["ns"] = 25
     result["provenance"] = _provenance(args.input)
-    path = _case_path(args.result_dir, args.backend, args.max_mode, args.ess)
-    path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-    print(path)
+    key = _case_key(args.backend, args.max_mode, args.ess)
+    print(_store_case(args.result_dir, key, result))
 
 
 if __name__ == "__main__":

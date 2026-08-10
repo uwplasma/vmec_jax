@@ -11,12 +11,12 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RESULTS = ROOT / "benchmarks" / "qi_crosscode_macos"
-INPUT = ROOT / "benchmarks" / "data" / "input.alex_qi_nfp2"
+RESULTS = ROOT / "benchmarks" / "optimization_crosscode" / "qi_results.json"
+INPUT = ROOT / "examples" / "data" / "input.nfp2_QI_seed"
 
 
 def _rows() -> list[dict]:
-    return [json.loads(path.read_text()) for path in sorted(RESULTS.glob("*.json"))]
+    return list(json.loads(RESULTS.read_text())["cases"].values())
 
 
 def test_crosscode_matrix_is_complete_comparable_and_monotone() -> None:
