@@ -135,6 +135,13 @@ Multigrid ladder and stepping
      - ``F``
      - write a WOUT after ordinary NITER exhaustion; when false, the CLI
        returns ``ier_flag=2`` before the output path, matching VMEC2000
+   * - ``RESTART_WOUT``
+     - ``''``
+     - **VMEX extension** (VMEC2000 has no wout-restart INDATA control): hot
+       restart from the named ``wout_*.nc``, resolved relative to the input
+       deck when not absolute; coarse multigrid rungs at or below the file's
+       resolution are skipped.  The CLI ``--restart`` flag overrides it.
+       See :doc:`algorithms`.
 
 Pressure profile
 ~~~~~~~~~~~~~~~~

@@ -597,6 +597,61 @@ def lambda_wout_from_full_mesh(*, lam_full, m_modes, s, phipf_internal, lamscale
     return lam_half
 
 
+def lambda_full_mesh_from_wout(*, lmns_half, m_modes, s, phipf_internal, lamscale):
+    """The wout half-mesh ``lmns`` -> internal full-mesh lambda coefficients.
+
+    Exact inverse of :func:`lambda_wout_from_full_mesh` (used to hot-restart
+    a solve from a ``wout`` file).  The forward map first rescales by
+    ``lamscale/phipf`` and then averages onto the half mesh with the
+    parity-dependent ``sm/sp`` weights, so the inverse solves the resulting
+    bidiagonal recurrences surface-by-surface and rescales back.  The one
+    free axis value per mode is closed exactly as the forward map assumes:
+    ``f(1) = f(2)`` for ``m <= 1`` (the ``wrout.f`` substitution) and
+    ``f(1) = 0`` for ``m >= 2`` (VMEC never evolves axis lambda for higher
+    poloidal harmonics), so a converged state round-trips to file and back
+    with only that axis-row assumption.
+    """
+    lmns_half = np.asarray(lmns_half, dtype=float)
+    s_arr = np.asarray(s, dtype=float).reshape(-1)
+    ns = int(s_arr.shape[0])
+    m_modes = np.asarray(m_modes, dtype=int)
+    phipf_internal = np.asarray(phipf_internal, dtype=float).reshape(-1)
+    if float(lamscale) == 0.0 or ns < 2:
+        return np.zeros_like(lmns_half)
+
+    sm_f, sp_f = _lambda_half_mesh_weights(s_arr)
+    even_mask = (m_modes % 2) == 0
+    odd_mask = ~even_mask
+    mask_m_le1 = m_modes <= 1
+
+    lam_ext = np.zeros_like(lmns_half)
+    # First interior surface from the axis closure (see the docstring):
+    # m<=1 even: h(2) = f(2);  m<=1 odd: h(2) = sm(2)*f(2)  (sp(1) = sm(2));
+    # m>=2:      h(2) = (f(2) + 0)/2 resp. sm(2)*f(2)/2.
+    first = lmns_half[1].copy()
+    first[even_mask & ~mask_m_le1] *= 2.0
+    if np.any(odd_mask):
+        odd_scale = np.where(mask_m_le1, sm_f[2], 0.5 * sm_f[2])
+        first[odd_mask] /= odd_scale[odd_mask]
+    lam_ext[1] = first
+    for js_idx in range(2, ns):
+        if np.any(even_mask):
+            lam_ext[js_idx, even_mask] = (
+                2.0 * lmns_half[js_idx, even_mask] - lam_ext[js_idx - 1, even_mask]
+            )
+        if np.any(odd_mask):
+            lam_ext[js_idx, odd_mask] = (
+                2.0 * lmns_half[js_idx, odd_mask]
+                - sp_f[js_idx] * lam_ext[js_idx - 1, odd_mask]
+            ) / sm_f[js_idx + 1]
+    # Axis row: the forward substitution copies the first interior surface
+    # for m <= 1 and never reads the m >= 2 axis row (kept at zero).
+    lam_ext[0, mask_m_le1] = lam_ext[1, mask_m_le1]
+
+    phipf_safe = np.where(phipf_internal == 0.0, 1.0, phipf_internal)
+    return lam_ext * (phipf_safe[:, None] / float(lamscale))
+
+
 def field_scalars(*, bvco, raxis_cc, wb, volume_p):
     """Edge/axis field scalars from ``bcovar.f`` / ``eqfor.f``.
 
