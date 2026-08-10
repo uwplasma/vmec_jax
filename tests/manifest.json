@@ -26,6 +26,7 @@
     ["tests/test_coverage_margin.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c1", "full-core-a-c"]],
     ["tests/test_device.py", "infrastructure", "unit", "fast", "cpu-gpu", "none", "none", ["pr-parity-c1", "pr-fast", "gpu-smoke", "full-core-d-f0"]],
     ["tests/test_device_parity_tool.py", "infrastructure", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f0"]],
+    ["tests/test_docs_nav.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c2", "full-core-a-c"]],
     ["tests/test_doctor.py", "interface", "unit", "fast", "cpu-gpu", "none", "none", ["pr-parity-c1", "full-core-d-f0"]],
     ["tests/test_examples.py", "interface", "campaign", "campaign", "cpu-gpu", "reference-nc", "external", ["pr-examples", "full-examples"]],
     ["tests/test_fetch_assets.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c1", "pr-fast", "full-core-d-f0"]],

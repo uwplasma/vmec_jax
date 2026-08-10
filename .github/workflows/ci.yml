@@ -36,6 +36,7 @@ jobs:
           ruff check vmex tests examples benchmarks tools
           mypy vmex
           python -m build
+          python tools/check_docs_prose.py
           python -m sphinx -W -j auto -b html docs docs/_build/html
 
   fast:
