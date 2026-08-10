@@ -283,7 +283,7 @@ without a VMEC solve.
 - bootstrap and other residual classes retain existing independent oracles.
 - boundary elongation is grid-converged, JAX-traceable for symmetric and
   asymmetric states, and manually cross-checked against the existing SIMSOPT
-  ``MaxElongationPen`` on the alex_qi result.
+  ``MaxElongationPen`` on the optimized precise-QI nfp=2 result.
 
 ### Derivative tests
 
@@ -313,7 +313,7 @@ for quantities near zero.
 
 ### End-to-end acceptance
 
-Using `/Users/rogeriojorge/local/alex_qi/QI_opt_vmex.py` and its seed:
+Using the precise-QI nfp=2 workflow and its near-circular seed:
 
 1. `max_mode=1`: the complete QI tuple objective passes a directional Taylor
    test and all supported optimizers reduce the same objective in a small
@@ -327,8 +327,8 @@ Using `/Users/rogeriojorge/local/alex_qi/QI_opt_vmex.py` and its seed:
 5. Results and Jacobians are invariant to automatic versus fixed batching
    within the certified tolerance.
 
-The full alex_qi acceptance script is a manual/benchmark workflow, not part of
-every pull-request CI shard.
+The full precise-QI acceptance script is a manual/benchmark workflow, not part
+of every pull-request CI shard.
 
 ### Keeping CI time flat
 
@@ -365,7 +365,7 @@ Documentation examples are smoke-tested so API drift fails CI.
 3. **Add backend-neutral monitoring and runtime hygiene.**  Remove noisy cache
    warnings, separate trials from accepted iterations, and document status.
 4. **Add SciPy, JAXopt, and Optax examples and automatic parallel evaluation.**
-   Add examples, optional integration tests, worker policies, alex_qi
+   Add examples, optional integration tests, worker policies, precise-QI
    acceptance scripts, and reproducible comparison benchmarks.
 
 Each PR is independently reviewable, contains its tests and documentation, and
