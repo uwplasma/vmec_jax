@@ -77,6 +77,7 @@
     ["tests/test_qi_free_boundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1", "full-core-n-s"]],
     ["tests/test_qi_sheet_gate.py", "free-boundary", "campaign", "campaign", "cpu-gpu", "generated", "vmec2000", ["pr-parity-a1"]],
     ["tests/test_recycle_drift.py", "optimization", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
+    ["tests/test_restart.py", "equilibrium", "integration", "medium", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-n-s"]],
     ["tests/test_scaling.py", "equilibrium", "oracle", "slow", "cpu-gpu", "reference-nc", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_setup.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
     ["tests/test_setup_extras.py", "equilibrium", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
@@ -117,7 +118,10 @@
       "tests/test_printing.py::test_emit_flushed_writes_and_flushes",
       "tests/test_bootstrap.py",
       "tests/test_wout_golden.py",
-      "tests/test_scaling.py"
+      "tests/test_scaling.py",
+      "tests/test_restart.py::test_round_trip_restart_converges_in_a_few_iterations",
+      "tests/test_restart.py::test_multigrid_restart_skips_coarse_rungs",
+      "tests/test_restart.py::test_cross_code_restart_from_vmec2000_wout"
     ],
     "pr-implicit-response": [
       "tests/test_implicit_multi_rhs.py::test_block_response_forward_transpose_and_fd",
