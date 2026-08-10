@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -61,6 +62,29 @@ def qa_eq():
 # ---------------------------------------------------------------------------
 # Traceable Boozer transform parity vs booz_xform_jax
 # ---------------------------------------------------------------------------
+
+
+def test_half_mesh_midpoint_tie_selects_lower_surface(monkeypatch):
+    """Surface snapping is stable when decimal input lies at a midpoint."""
+    s_half, rows = omn._nearest_half_mesh_rows(31, [0.1])
+    assert rows.tolist() == [3]
+    assert s_half[rows[0] - 1] == pytest.approx(1.0 / 12.0)
+    with pytest.raises(ValueError, match="surfaces must be non-empty"):
+        omn._nearest_half_mesh_rows(31, [])
+
+    class GeometryReached(RuntimeError):
+        pass
+
+    def stop_at_geometry(*_):
+        raise GeometryReached
+
+    monkeypatch.setattr(omn, "_geometry", stop_at_geometry)
+    runtime = SimpleNamespace(
+        setup=SimpleNamespace(lasym=False, s_full=np.linspace(0.0, 1.0, 31)),
+        resolution=SimpleNamespace(nfp=2),
+    )
+    with pytest.raises(GeometryReached):
+        omn.boozer_bmnc_state(object(), runtime, surfaces=[0.1])
 
 
 @pytest.mark.full

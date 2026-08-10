@@ -251,22 +251,22 @@ objective terms with implicit-differentiation gradients
 stability, turbulence proxies, scalar targets) and :doc:`optimization` for
 the differentiation machinery and the measured campaign timings.
 
-Single-call ESS optimization (recommended)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Single-call ESS optimization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The recommended pattern is **one** ``least_squares`` call with *all* the
-boundary harmonics released at once and Exponential Spectral Scaling
-(``use_ess=True``) ordering them through the trust region — no
-``max_mode`` continuation loop.  Measured: precise QA (QS 7.2e-6) in
-14.5 minutes on a CPU.
+One ``least_squares`` call with all boundary harmonics and Exponential
+Spectral Scaling (``use_ess=True``) is the quickest survey pattern.  Measured:
+QA (QS 7.2e-6) in 14.5 minutes on a CPU.  ESS improves trust-region scaling;
+it does not reproduce the basin selection of a mode ladder.
 
 .. literalinclude:: ../examples/optimization/QA_optimization_ess.py
    :language: python
 
-``QI_optimization_ess.py`` is the quasi-isodynamic analogue: the traceable
-Goodman constructed-QI residual (:class:`~vmex.core.omnigenity.QIResidual`)
-plus practical targets, one call at ``max_mode = 6`` (25x residual
-reduction in 17.3 minutes).
+``QI_optimization_ess.py`` is the quasi-isodynamic scouting analogue: the
+smooth traceable surrogate (:class:`~vmex.core.omnigenity.QIResidual`) plus
+practical targets, one call at ``max_mode = 6`` (25x surrogate reduction in
+17.3 minutes).  Use :class:`~vmex.core.qi.ConstructedQIResidual` for a
+production QI target.
 
 Staged ``max_mode`` continuation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -274,10 +274,10 @@ Staged ``max_mode`` continuation
 The classic ladder — one least-squares stage per ``max_mode``, each seeded
 with the previous stage's boundary — remains available and is what
 ``QA_optimization.py``, ``QH_optimization.py``, ``QP_optimization.py``, and
-``QI_optimization.py`` run (QI with a quasi-poloidal basin stage first).
-It reaches the same precision class as the single-call pattern at roughly
-twice the wall time; the scripts stay side by side so the comparison is
-reproducible.
+``QI_optimization.py`` run (constructed QI with a short quasi-poloidal basin
+stage first).  A ladder can reach a lower, different minimum even when the
+single-call pattern is faster; the scripts stay side by side so the comparison
+is reproducible.
 
 .. literalinclude:: ../examples/optimization/QA_optimization.py
    :language: python

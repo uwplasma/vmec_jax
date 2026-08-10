@@ -8,9 +8,9 @@ LASYM = F
 ! ---- Resolution parameters ----
 MPOL = 5
 NTOR = 5
-NS_ARRAY    =     25
+NS_ARRAY    =     31
 NITER_ARRAY =   5500
-FTOL_ARRAY  =  1e-11
+FTOL_ARRAY  =  1e-12
 
 ! ---- Boundary toroidal flux ----
 PHIEDGE = 0.03295687309
@@ -40,5 +40,5 @@ RBC(   1,   1) =  0.001,  ZBS(   1,   1) =  0.001
   LBOOZ = F
   MBOOZ = 32
   NBOOZ = 32
-  BOOZ_SURFACES = 0.5 0.75 1.0
+  BOOZ_SURFACES = 'all'
 /

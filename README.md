@@ -418,7 +418,7 @@ implicit-differentiation gradients from `vmex.core.implicit`. The problem
 exposes ordinary value/gradient and residual/Jacobian callables, so the user
 chooses SciPy, JAXopt, Optax, or a custom optimizer. `<J·B>` also supports `LASYM = T`;
 `DMerc` and `D_R` remain symmetry-gated pending independent DCON/JMC parity.
-The recommended pattern releases all harmonics in one problem and uses
+For a direct full-spectrum run, release all harmonics in one problem and use
 **Exponential Spectral Scaling** for the optimizer's variable scale:
 
 ```python
@@ -506,12 +506,15 @@ the seed order is the first-order equilibrium prediction, the last converged
 state, then a cold solve only if both warm seeds fail. This changes iteration
 count, not the converged equilibrium or derivative.
 
-For scalar methods, pass `problem.value_and_grad` to
-`scipy.optimize.minimize(..., jac=True)`. `problem.jax_value_and_grad` and
-`problem.jax_residual` provide the same physics to JAXopt and Optax. The
-existing `opt.least_squares()` and `opt.minimize()` functions remain concise
-compatibility adapters. Monitoring is callback-based, so it reports accepted
-iterations rather than every trial evaluation.
+For scalar methods, pass `problem.fun` and `problem.grad` separately to
+`scipy.optimize.minimize`. In ESS-scaled coordinates use
+`x = problem.x0 + problem.scales * y`; the examples show the short chain rule
+for the gradient. Value-only line-search trials then avoid an unnecessary
+adjoint. `problem.jax_value_and_grad` and `problem.jax_residual` provide the
+same physics to JAXopt and Optax. The existing `opt.least_squares()` and
+`opt.minimize()` functions remain concise compatibility adapters. Monitoring
+is callback-based, so it reports accepted iterations rather than every trial
+evaluation.
 
 VMEX sets JAX's logging level to `ERROR` at import time, removing repeated
 PjRt persistent-cache compatibility messages while retaining VMEX errors.
@@ -526,66 +529,106 @@ LBFGS/Levenberg–Marquardt, and Optax Adam. Opaque host objectives select
 `derivative_method="finite_difference"`; central probes use automatic workers,
 while traceable objectives retain the faster implicit adjoint.
 
+There are two geometric traceable QI targets with deliberately different roles.
+`QIResidual` is the inexpensive smooth surrogate used by short API and timing
+examples. `ConstructedQIResidual` evaluates the fuller Goodman
+squash-and-shuffle construction and is the production target. A measured nfp=2
+path uses 25 mode-1 QP evaluations to select a poloidally closed-contour basin,
+then three mode-5 constructed-QI trust-region stages with budgets 30, 20, and
+20, followed by ten evaluations of the full production residual. It reaches
+resolved all-radius QI `1.79e-3`; a direct mode-7/100 run required roughly 15
+minutes and stopped at `1.85e-3`, so larger mode is not automatically a better
+basin search. The final `NS=101`, `FTOL=1e-14` equilibrium is hot-started from
+the accepted optimization state. Relaxing the active mirror/elongation limits
+reached `1.19e-3` in VMEX but lost cold-solver portability, so it is documented
+as a tradeoff, not advertised as the default. The [optimization guide](docs/optimization.rst)
+gives the exact schedule, sampling, constraint conventions, and resolution
+checks.
+
+![Low-mode objective landscapes in RBC(1,1) and ZBS(1,1)](docs/_static/figures/readme_optimization_landscapes.png)
+
+These converged-equilibrium two-mode slices are not interchangeable convex
+bowls: QI, QA, and QH have different coupled valleys. The white circle is the
+reference equilibrium and the star is the sampled minimum. Regenerate the
+values and figure with `python benchmarks/optimization_landscapes.py`.
+
+Changing only `NFP` in the circular input is not a fair field-period search.
+The same short QP/QI workflow gave full-QI residuals 0.141, 0.00456, 0.110,
+0.0968, and 0.0923 for NFP 1–5, while an NFP-1 near-axis seed reached
+`1.86e-3`. An NFP-3 seed reached `7.47e-3` only with mirror ratio 0.461.
+The [optimization guide](docs/optimization.rst) records the scan and the
+NFP-specific seed/constraint strategy; NFP 3–5 should not reuse NFP 2's QP
+basin guide blindly.
+
 The architecture, derivative validation, performance criteria, documentation
 work, and staged pull-request plan are recorded in
 [`docs/optimization_api_plan.md`](docs/optimization_api_plan.md).
 
-### Apples-to-apples QI optimization timing
+### Apples-to-apples QI and QA optimization timing
 
-The comparison below uses the bundled near-circular nfp=2 QI seed
-(`examples/data/input.nfp2_QI_seed`), not two look-alike examples.  Both codes optimize the same 8/24/48/80
-boundary coefficients, at `NS=25`, with `mpol=ntor=max(max_mode+2, 5)`, the
-same angular grids, and the same 15-function-evaluation SciPy least-squares
-budget.  The residual is also shared: identical Goodman QI, aspect, mean-iota,
-mirror-limit, and elongation-limit rows are evaluated from wout in SIMSOPT and
-through the traceable forms in VMEX.  The VMEX seed cost agrees with the
-independent wout reconstruction to `1e-13` relative.
+The comparison uses the bundled near-circular nfp=2 QI seed
+(`examples/data/input.nfp2_QI_seed`).
+Both codes optimize the same boundary coefficients at `NS=31`, with
+`mpol=ntor=max(max_mode+2, 5)`, identical angular grids and objectives, and a
+15-function-evaluation SciPy least-squares budget.  The QI matrix reproduces
+the smooth-QI, aspect-5, iota-floor, mirror-limit, and elongation-limit tuples
+in the beginner driver; the QA matrix uses QS `(M,N)=(1,0)`, iota 0.41, and
+aspect 6.  For every completed VMEX case, the state residual and independent
+wout seed reconstruction agree to better than `2e-8` relative.
 
 These are cold end-to-end times on a 14-core Apple M3 Max (10 performance + 4
-efficiency cores, 36 GB): construction, first compilation, and optimization
-are all included.  SIMSOPT 1.10.7 uses 14 MPI finite-difference groups with
-centered differences; VMEX 0.4.0/JAX 0.9.2 uses the exact implicit Jacobian
-and XLA-managed CPU threading.  Persistent VMEX compilation caching was
-disabled, so later rows do not inherit executables from earlier rows.
+efficiency cores, 36 GB): setup, first compilation, and optimization are all
+included. SIMSOPT 1.10.7 uses 14 one-thread MPI groups and centered finite
+differences; VMEX 0.4.0/JAX 0.9.2 uses the exact implicit Jacobian and
+XLA-managed CPU threading. Persistent VMEX compilation caching was disabled,
+so each row starts from an empty process-local cache.
 
 | max mode | variables | SIMSOPT, ESS off | SIMSOPT, ESS on | VMEX, ESS off | VMEX, ESS on |
 |---------:|----------:|-----------------:|----------------:|--------------:|-------------:|
-| 1 | 8  | 33.6 s  | 33.4 s  | 73.4 s  | 73.3 s  |
-| 2 | 24 | 70.8 s  | 70.0 s  | 108.0 s | 84.2 s  |
-| 3 | 48 | 84.9 s  | 119.2 s | 99.7 s  | 95.4 s  |
-| 4 | 80 | 319.6 s | 176.6 s | 114.6 s | 100.7 s |
+| 1 | 8   | 55.3 s  | 55.5 s  | 97.2 s  | 96.7 s  |
+| 2 | 24  | 111.1 s | 87.3 s  | 330.2 s | 105.7 s |
+| 3 | 48  | 154.5 s | 128.9 s | 111.1 s | 92.5 s  |
+| 4 | 80  | 451.6 s | 359.7 s | 124.6 s | 122.1 s |
+| 5 | 120 | >=600 s | >=600 s | >=600 s | 129.8 s |
+| 6 | 168 | >=600 s | >=600 s | >=600 s | 135.7 s |
+| 7 | 224 | >=600 s | >=600 s | >=600 s | 187.1 s |
+| 8 | 288 | >=600 s | >=600 s | >=600 s | 220.2 s |
 
 ![Cold SIMSOPT and VMEX QI optimization wall time versus maximum mode](benchmarks/optimization_crosscode/qi_optimization_time.png)
 
-Cold JIT cost makes VMEX slower for this short mode-1 job.  The exact
-derivative scales better: with ESS at mode 4, VMEX is 1.75x faster and reaches
-cost 0.03717 versus SIMSOPT's 0.03722.  Wall time alone does not rank the ESS
-settings—the accepted-iteration histories show that unscaled modes 3–4 often
-spend the short budget shrinking poorly conditioned steps.  Every plotted
-accepted-cost history is monotone; rejected trial equilibria remain included
-in the wall time.
+`>=600 s` is an explicit right-censored lower bound, shown with an open marker;
+it is not presented as a completed runtime. Cold JIT dominates mode 1. From
+mode 3 onward, a completed VMEX/ESS run is faster than its completed SIMSOPT
+counterpart, while unscaled direct high-mode runs can spend the whole limit on
+ill-conditioned or failed trials. Runtime is not monotone in mode because the
+accepted/rejected trajectory is part of the measured work.
+
+The history comparison has exactly the three requested rows: ladder
+`[1,2,3,4,5]`, direct mode 2, and direct mode 5. The ladder has 15 evaluations
+*per stage*; a direct row has 15 total. Solid lines mean ESS on and dashed
+lines ESS off, with one color and marker per backend.
 
 ![SIMSOPT and VMEX QI objective histories, with and without ESS](benchmarks/optimization_crosscode/qi_objective_history.png)
 
-ESS and a mode ladder solve different problems.  In a separate equal-budget
-VMEX test, direct `max_mode=5` stopped after 47 evaluations at cost 0.03742,
-while `[1, 2, 3, 4, 5]` with up to 15 evaluations per stage reached 0.02582
-(31% lower).  ESS scales simultaneous high-order variables; the ladder also
-selects a basin by solving the low-order shape first.  Use a direct ESS run for
-quick scouting and a ladder for difficult QI campaigns.  A stage endpoint can
-rise when `mpol`, `ntor`, and array shapes change—the discretized problem has
-changed—but accepted iterations within each fixed stage remain monotone.
+![SIMSOPT and VMEX QA objective histories, with and without ESS](benchmarks/optimization_crosscode/qa_objective_history.png)
 
-Reproduce the timing matrix with
-[`benchmarks/qi_simsopt_vmex.py`](benchmarks/qi_simsopt_vmex.py).  Run every
-case in a fresh process; use `mpiexec -n N` for SIMSOPT, where `N` is the
-available logical CPU count, and pass `--plot benchmarks/optimization_crosscode`
-after all 16 cases exist.  The committed consolidated
-`benchmarks/optimization_crosscode/qi_results.json` records the input hash,
-versions, platform, worker policy, timing split, costs, and accepted
-histories for every case.  The
-full resolution, continuation, CPU-worker, and accelerator guidance is in the
-[optimization](docs/optimization.rst) and
+ESS and a mode ladder are complementary. ESS conditions simultaneous
+high-order variables; the ladder also chooses a basin by solving smaller
+problems first. In this fixed QI benchmark, VMEX's ladder reached cost 0.0393
+without ESS and 0.0419 with ESS, whereas the best direct mode-5 completion was
+0.0472 with ESS. A stage endpoint can rise when resolution and array shapes
+change because the discretized problem changed; accepted iterations within a
+fixed stage remain monotone.
+
+Reproduce the isolated-process matrix with
+[`benchmarks/run_optimization_crosscode.py`](benchmarks/run_optimization_crosscode.py).
+It defaults to all logical CPUs; `--workers N` caps SIMSOPT's MPI groups and
+`--timeout-seconds T` changes the explicit censor. The committed consolidated
+artifacts (`benchmarks/optimization_crosscode/qi_results.json` and
+`qa_results.json`, 48 cases) record the input hash, versions, platform,
+worker policy, timing split, status, and accepted histories. This hours-long evidence run is not CI: a fast test checks
+its schema, parity, provenance, and monotonicity. Full CPU-worker and
+accelerator guidance is in the [optimization](docs/optimization.rst) and
 [parallelization](docs/parallelization.rst) documentation.
 
 Measured on a 36-core CPU from a near-circular torus (single call, all
@@ -597,7 +640,7 @@ harmonics released at once; `examples/optimization/*_ess.py`; the staged
 | QA | 2 | QS (1, 0)  | 2.04e-01 | **7.2e-06** | 5 | **14.5 min** | precise; aspect 6.00, iota 0.42 (ladder: 3.7e-07 in 25.5 min) |
 | QH | 4 | QS (1, −1) | 6.91e-01 | **5.83e-05** | 5 | 25.5 min (ladder) | precise; aspect 8.00, iota −1.22 |
 | QP | 2 | QS (0, 1)  | 4.46e-01 | 3.3e-02 | 5 | ~3.4 h (ladder + refinement) | hardest QS class — see caption |
-| QI | 1 | omnigenity | 4.52e-01 | **1.81e-02** | 6 | **17.3 min** | 25× via the traceable Goodman constructed-QI residual |
+| QI | 1 | smooth QI surrogate | 4.52e-01 | **1.81e-02** | 6 | **17.3 min** | 25× scouting run; use the constructed residual for production |
 
 ![QA/QH/QP optimization: seed vs optimized boundary, 3-D |B| geometry, and Boozer |B| on the LCFS](docs/_static/figures/readme_optimization.png)
 

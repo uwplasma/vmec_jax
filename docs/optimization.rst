@@ -221,30 +221,180 @@ fine ``NS`` gave:
      - 0.026479
      - 0.025977
 
-Thus ``NS=25`` is the measured minimum suitable for inexpensive optimization
-of this smooth, vacuum, ``max_mode <= 5`` case (QI differs by 0.06% from
-``NS=101``); ``NS=35`` is the safer default when boundaries become strongly
-shaped or rejected equilibria appear.  ``NS=15`` is a coarse scouting grid,
-not a final optimization grid.  The ``NS=101`` run does not change the
-boundary variables, but it recomputes the equilibrium and objectives at a
-finer radial discretization, so it is validation/refinement rather than a
-guarantee that a coarse-grid minimum is unchanged.
+Thus ``NS=25`` is adequate for inexpensive scouting of this smooth, vacuum,
+``max_mode <= 5`` case; ``NS=31`` is the measured default for the constructed
+QI campaign below, and ``NS=35`` is a useful retry when strongly shaped trial
+equilibria fail.  On its optimized mode-5 boundary, the exact constructed-QI
+cost gradients at ``NS=25, 31, 35`` have pairwise direction cosines
+0.993--0.998.  ``NS=15`` is a coarse scouting grid, not a final optimization
+grid.  The ``NS=101`` run does not change the boundary variables, but it
+recomputes the equilibrium and objectives at a finer radial discretization,
+so it is validation rather than a guarantee that a coarse-grid minimum is
+unchanged.
 
 Likewise, ``mpol=ntor=max_mode+2`` is an efficient optimization resolution,
-not a spectral-convergence certificate.  On the same optimized mode-5
-boundary, raising both solver truncations from 7 to 9 changed the recomputed
-QI total by about 2.1%.  Validate final candidates with at least one larger
-``mpol``/``ntor`` buffer; if the target metric moves materially, polish the
-optimization at that resolution.  Keep the real-space grids above the
-spectral anti-aliasing threshold when doing so.
+not a spectral-convergence certificate.  Raising the buffer from 2 to 3
+changed the local gradient materially, but a controlled ten-evaluation polish
+at mode 5 reached resolved QI ``1.93e-3`` versus ``1.89e-3`` with the cheaper
+buffer.  The larger solve therefore did not improve this fixed-budget result.
+Validate final candidates with at least one larger ``mpol``/``ntor`` buffer;
+polish there only if the resolved metric improves.  Keep the real-space grids
+above the spectral anti-aliasing threshold.
 
-At ``NS=101`` and ``FTOL=1e-14`` the hot solve converged in 2,656 iterations
-versus 3,046 from the automatic cold-axis path.  Both succeeded; carrying the
-accepted state saved 13% of the iterations.  Resolution and spectral-shape
-changes limit restart reuse, so the larger speedups occur between nearby
-optimization trials of the same shape.  ``verbose=True`` prints the live
-iteration table; the measured 2,656 iterations also shows why
-``NITER_ARRAY=8000`` is a conservative final-run limit here.
+Changing the optimization equilibrium tolerance from ``1e-12`` to ``1e-10``
+reduced a representative solve from 2,052 to 1,269 iterations while retaining
+a 0.99977 cosine between the exact cost gradients.  ``1e-10`` is a reasonable
+scouting tolerance; use ``1e-12`` for the final polish.  At
+``NS=101`` and ``FTOL=1e-14`` the QP-to-QI result below hot-converged in 5,458
+iterations.  ``NITER_ARRAY`` is only a ceiling once convergence occurs, so
+raising it does not change the optimization direction.  ``verbose=True``
+prints the live iteration table, and ``NITER_ARRAY=8000`` leaves a useful
+margin for this final run.
+
+Precise QI: select the basin, then refine the full objective
+------------------------------------------------------------
+
+QI optimization is non-convex, and a low value of a smooth proxy is not a
+physics certificate.  The measured nfp=2 path from the bundled near-circular
+``input.nfp2_QI_seed`` uses two deliberately small changes to the ordinary
+least-squares loop:
+
+1. 25 evaluations of the QP ``(M, N) = (0, 1)`` residual at ``max_mode=1``
+   select a basin with poloidally closed ``|B|`` contours;
+2. replace only that first tuple with a reduced-sampling
+   :class:`~vmex.core.qi.ConstructedQIResidual`, then restart the mode-5
+   trust region with budgets 30, 20, and 20 before a ten-evaluation polish
+   with the full production sampling.
+
+The full-resolution constructed diagnostic reached ``1.786e-3`` at ``NS=31``
+and ``1.798e-3`` after the ``NS=101`` radial refinement.  The final
+``FTOL=1e-14`` solve is hot-started from the last accepted equilibrium.
+Before that radial refinement the resolved result has aspect
+5.57, mean iota 0.526, edge mirror ratio 0.217, and VMEX equivalent-ellipse
+elongation 8.00.  These metrics state the actual
+tradeoff: the QI target improved without hiding the shaping constraints.  In
+particular, the mirror limit is exceeded slightly and elongation is active;
+hinge weights are soft penalties, not a claim of hard feasibility.
+
+The shaping hinges materially limit this minimum.  A ten-evaluation polish
+with mirror and elongation limits relaxed from ``0.21``/``8`` to ``0.30``/``10``
+reduced the resolved constructed-QI value from ``2.02e-3`` to ``1.19e-3``;
+aspect became 5.07, mirror 0.301, and elongation 9.88.  VMEX converged that
+boundary at ``NS=101`` and ``FTOL=1e-14`` in 3,829 iterations.  It is not the
+beginner default: VMEC++ failed from a cold start and, when hot-restarted from
+the tighter accepted boundary, continuation failed beyond 50 percent of the
+shape change.  A current bounds-checking STELLOPT VMEC2000 build also hit an
+out-of-bounds failure after its magnetic-axis re-guess.  The tighter result
+above is therefore the portable reference; the relaxed result demonstrates
+the QI-versus-shaping tradeoff rather than hiding it behind a more favorable
+QI number.
+
+This objective choice was not inferred from the proxy's own score.  A direct
+mode-5 run drove the smooth surrogate to ``6.46e-3`` while the resolved
+constructed diagnostic remained ``1.16``--``1.33``.  The field had exploited
+the surrogate's finite-sampling conditions rather than becoming QI.  A
+constructed-QI-only ladder avoided that loophole but stopped near ``3.3e-2``;
+the short QP basin stage is what made the subsequent ``1.79e-3`` path both
+faster and more precise.
+
+The short QP stage is a basin guide, not another claimed definition of QI.
+A mode-2 QP start was much slower and led to a worse constructed-QI seed,
+while the mode-1 stage led to the better end-to-end path.  Three fixed-seed
+random boundary perturbations also produced worse
+constructed-QI values than the deterministic start.  Around the final
+mode-5 boundary, nine-point one-dimensional scans over +/-2 percent of an
+ESS-scaled coefficient unit placed the minimum at zero for both most-active
+directions, ``RBC(1,1)`` and ``ZBS(-1,1)``.  This is evidence for a locally
+curved basin, not a proof of a global minimum.  VMEX therefore keeps the
+deterministic trust-region method as the example default; ensemble, deflation,
+and stochastic searches remain user-level experiments.
+
+SciPy nonlinear least squares is the default here because its Gauss--Newton
+model uses the full residual Jacobian and rejects failed trial equilibria.
+BFGS, L-BFGS-B, JAXopt, and Optax consume the same public problem callables,
+but choosing one does not make this residual landscape easier.  Likewise, an
+augmented-Lagrangian trial enforced aspect more tightly but produced worse QI
+and remained infeasible at the same short budget.  Use it when a hard
+constraint is the primary requirement, not as a generic basin escape.
+
+For SciPy BFGS-family methods, pass ``problem.fun`` and ``problem.grad`` as
+separate callbacks.  Line-search trial points then evaluate only the scalar
+value instead of solving an implicit adjoint for every rejected step.  At
+higher Fourier mode, optimize the scaled coordinates
+``x = problem.x0 + problem.scales * y`` as shown in
+``QI_optimization_scipy.py``.
+
+On the same accepted mode-5 basin (full constructed QI ``1.873e-3``), ten
+SciPy least-squares evaluations reached ``1.788e-3`` in 32 s.  Ten JAXopt LM
+iterations with the materialized VMEX Jacobian reached ``1.786e-3`` in 76 s
+with no failed equilibrium trial.  Fifteen ESS-scaled L-BFGS-B iterations,
+using C1 constraint hinges and separate value/gradient callbacks, reached
+``1.798e-3`` in 271 s.  Thus all three backends work on the physical problem,
+but the tuple residual structure makes Gauss--Newton the faster default.
+Fixed-step Adam was more sensitive to learning rate and did not beat that
+minimum in the short scans; the Optax example keeps it available without
+presenting it as a QI-specific recommendation.
+
+Field-period scans and seeds
+----------------------------
+
+Changing only ``NFP`` in a circular boundary does not test whether precise QI
+exists at that field period; it tests whether one basin guide happens to work
+from the same axis.  The initial full constructed-QI values of the five
+circular inputs were all about 1.26.  Applying the identical mode-1 QP/10 plus
+mode-5 QI/30 workflow gave:
+
+.. list-table:: Controlled circular-seed scan
+   :header-rows: 1
+
+   * - NFP
+     - full constructed QI
+     - diagnosis
+   * - 1
+     - 0.1413
+     - QP guide misses the low-iota NFP-1 QI basin
+   * - 2
+     - 0.00456
+     - guide and target basins are compatible
+   * - 3
+     - 0.1101
+     - low proxy score does not certify constructed QI
+   * - 4
+     - 0.0968
+     - circular axis lacks the required NFP-specific shaping
+   * - 5
+     - 0.0923
+     - same seed/guide mismatch, with stronger shaping pressure
+
+The counterexample is decisive: starting NFP 1 from the bundled
+``input.nfp1_QI`` boundary and applying only 20 full-residual mode-5
+evaluations reaches ``1.86e-3``.  Precise QI is therefore not peculiar to
+NFP 2.  For NFP 1 use an NFP-1 near-axis seed and optimize the constructed
+residual directly.  An NFP-3 stellarator seed likewise reached ``7.47e-3``
+in 30 full-residual mode-5 evaluations, but only by accepting mirror ratio
+0.461.  Restoring the normal shaping weight moved it to QI ``2.26e-2`` and
+mirror 0.319.  More iterations in that basin therefore do not resolve the
+physics tradeoff; a better NFP-3 axis seed is required.  For NFP 3--5, screen
+field-period-specific near-axis/QIC axis seeds with the full constructed
+diagnostic before spending a long
+optimization budget; do not select them by the QP proxy alone.  Higher field
+period tends to require more axis and boundary shaping, so relax aspect,
+mirror, or elongation limits only as an explicit physics tradeoff and certify
+the result at larger radial and angular resolution.
+
+This seed policy follows the construction evidence in `Goodman et al. (2023)
+<https://doi.org/10.1017/S002237782300065X>`_, the geometric axis/elongation
+controls of `Plunk & Rodríguez (2026)
+<https://doi.org/10.1017/S002237782610124X>`_, and the more than 800,000
+field-period-specific candidates in the `near-axis QI database
+<https://www.cambridge.org/core/journals/journal-of-plasma-physics/article/nearaxis-quasiisodynamic-database/CD53C544991344334EC9318A18BC88C2>`_.
+
+The reproducible low-mode slices in
+``benchmarks/optimization_landscapes.py`` vary ``RBC(1,1)`` and
+``ZBS(1,1)`` around representative QI, QA, and QH equilibria.  They are
+documentation diagnostics, not routine CI: the expensive regeneration
+performs real equilibrium solves, while fast tests only validate the plotting
+and data schema.
 
 The factory accepts ``weight_semantics="cost"`` (the default), for which a
 tuple weight ``w`` contributes ``sqrt(w) * (f - target)`` residual rows and
@@ -300,10 +450,17 @@ External optimizers and supplied derivatives
 
 The files ``QI_optimization_scipy.py``, ``QI_optimization_jaxopt.py``, and
 ``QI_optimization_optax.py`` in ``examples/optimization`` construct the same
-QI :class:`~vmex.core.problem.VmecProblem`.  They demonstrate SciPy nonlinear
+small smooth-QI :class:`~vmex.core.problem.VmecProblem` for API comparison.
+They demonstrate SciPy nonlinear
 least squares, BFGS and L-BFGS-B; JAXopt LBFGS and Levenberg--Marquardt; and an
 arbitrary Optax transformation chain.  VMEX contains no method registry or
-hand-written clone of those algorithms.
+hand-written clone of those algorithms.  The JAXopt LM example supplies a
+small custom-JVP wrapper because VMEX exposes a converged-equilibrium custom
+VJP, whereas LM asks for Jacobian-vector products.  It materializes VMEX's
+already-available dense residual Jacobian and uses Cholesky rather than
+nesting matrix-free CG compilations.  JAXopt 0.8.3 also still
+uses the ``jax.tree_map`` alias removed by JAX 0.9; the example keeps that
+compatibility alias local instead of modifying VMEX or global startup state.
 
 Opaque host objectives use the same public object with a different derivative
 provider:
@@ -423,27 +580,22 @@ unconstrained minimizers are unchanged.  Existing
 state hot restarts remain enabled; the perturbation warm start is unavailable
 because it would require the forward state-response columns this path avoids.
 
-Single-call ESS optimization (the recommended pattern)
-------------------------------------------------------
+Single-call ESS optimization
+----------------------------
 
-The classic way to keep a shape optimization from tearing itself apart is
-*staged continuation*: optimize at ``max_mode = 1``, then 2, … releasing
-finer boundary harmonics only after the coarse shape has settled
-(``max_mode=(1, 2, 3, 4, 5)`` runs that ladder automatically).  The
-recommended pattern since R26 makes the ladder unnecessary: hand the
-optimizer **all** the harmonics at once and let **Exponential Spectral
-Scaling** (``use_ess=True``) impose the coarse-to-fine ordering through the
-trust region itself.  Each dof's trust radius is scaled by
+Exponential Spectral Scaling (``use_ess=True``) makes a direct, full-spectrum
+run much safer by giving high-order modes shorter trust-region scales.  It is
+an efficient scouting alternative to staged continuation, not a replacement
+for the ladder's basin selection.  Each dof's trust radius is scaled by
 
 .. math::
 
    \mathrm{x\_scale}_i
    = \frac{e^{-\alpha\,\max(|m_i|,\,|n_i|)}}{e^{-\alpha}},
 
-so high harmonics move on exponentially shorter leashes — the optimizer
-explores the same hierarchy the ladder enforced, in a single
-``least_squares`` call, with no stage boundaries for the objective to
-stall at.
+so high harmonics move on exponentially shorter leashes.  All variables are
+still present from the first iteration; a ladder solves genuinely smaller
+problems before adding them and can therefore reach a different minimum.
 
 .. figure:: _static/figures/ess_x_scale.png
    :alt: ESS trust-region scale versus harmonic level for alpha 0.7 and 1.2
@@ -482,17 +634,18 @@ harmonics released at once; scripts
      - **14.5 min**
    * - QI
      - 1
-     - omnigenity
+     - smooth QI surrogate
      - 4.52e-01
      - **1.81e-02** (25x)
      - 6
      - 168
      - **17.3 min**
 
-The staged ladder remains available (``max_mode=(1, ..., 5)``) and reaches
-comparable precision — QA at QS 3.7e-7 in 25.5 min — but takes ~1.8x
-longer for the same precision class.  Both patterns ship as side-by-side
-example scripts so the two patterns can be compared directly.
+The staged ladder remains available (``max_mode=(1, ..., 5)``).  On QA it
+reached QS 3.7e-7 in 25.5 min, while the direct ESS run reached 7.2e-6 in
+14.5 min.  The direct run was faster; the ladder found the lower minimum.
+Both patterns ship as side-by-side examples because the appropriate tradeoff
+depends on the objective and seed.
 
 Gradients (:mod:`vmex.core.implicit`)
 -----------------------------------------
