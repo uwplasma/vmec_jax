@@ -49,7 +49,10 @@ import numpy as np
 import jax.numpy as jnp
 
 from .fourier import ModeTable
-from .preconditioner import RadialPreconditionerCoefficients, TridiagonalMatrices, scalfor
+from .preconditioner import (
+    RadialPreconditionerCoefficients, ScalforPivotData, TridiagonalMatrices,
+    scalfor,
+)
 from .transforms import (
     SpectralForce, odd_m_sqrt_s_scaling,
     register_pytree_dataclass as _register,
@@ -539,6 +542,8 @@ def apply_radial_preconditioner(
     matrices_Z: TridiagonalMatrices,
     jmax: int,
     return_safe: Literal[False] = False,
+    pivot_data_R: ScalforPivotData | None = None,
+    pivot_data_Z: ScalforPivotData | None = None,
 ) -> SpectralForce: ...
 
 
@@ -550,6 +555,8 @@ def apply_radial_preconditioner(
     matrices_Z: TridiagonalMatrices,
     jmax: int,
     return_safe: Literal[True],
+    pivot_data_R: ScalforPivotData | None = None,
+    pivot_data_Z: ScalforPivotData | None = None,
 ) -> tuple[SpectralForce, Array]: ...
 
 
@@ -560,6 +567,8 @@ def apply_radial_preconditioner(
     matrices_Z: TridiagonalMatrices,
     jmax: int,
     return_safe: bool = False,
+    pivot_data_R: ScalforPivotData | None = None,
+    pivot_data_Z: ScalforPivotData | None = None,
 ) -> SpectralForce | tuple[SpectralForce, Array]:
     """Solve the R and Z radial tridiagonal systems against all force blocks.
 
@@ -570,13 +579,15 @@ def apply_radial_preconditioner(
     """
     updates: dict[str, Array] = {}
     safe = jnp.asarray(True)
-    for names, matrices in ((_R_BLOCKS, matrices_R), (_Z_BLOCKS, matrices_Z)):
+    for names, matrices, pivot_data in (
+        (_R_BLOCKS, matrices_R, pivot_data_R), (_Z_BLOCKS, matrices_Z, pivot_data_Z),
+    ):
         present = [name for name in names if getattr(force, name) is not None]
         if not present:
             continue
         stacked = jnp.stack([jnp.asarray(getattr(force, name)) for name in present], axis=-1)
         solved, block_safe = scalfor(
-            stacked, matrices, jmax=jmax, return_safe=True
+            stacked, matrices, jmax=jmax, return_safe=True, pivot_data=pivot_data
         )
         safe = safe & block_safe
         for idx, name in enumerate(present):

@@ -151,8 +151,9 @@ from .fourier import ModeTable, Resolution, TrigTables, mode_table, trig_tables
 from .geometry import apply_lambda_axis_closure, half_mesh_jacobian, real_space_geometry
 from .input import VmecInput
 from .preconditioner import (
-    RadialPreconditionerCoefficients, TridiagonalMatrices,
+    RadialPreconditionerCoefficients, ScalforPivotData, TridiagonalMatrices,
     angular_integration_weights, lamcal, precondn, scalfor_matrices,
+    scalfor_pivot_data,
 )
 from .preconditioner_2d import Prec2DConfig, newton_direction
 from .printing import (
@@ -232,8 +233,9 @@ class PreconditionerCache:
 
     ``tcon`` (constraint scaling), the residual norms ``fnorm/fnormL/fnorm1``,
     the :func:`precondn` coefficients and assembled :func:`scalfor_matrices`
-    for the R and Z force families, the ``LFORBAL`` ``rzu_fac/rru_fac``
-    factors, and the ``lamcal`` diagonal ``faclam``.
+    for the R and Z force families (plus their band-frozen
+    :func:`scalfor_pivot_data` checked-solve masks), the ``LFORBAL``
+    ``rzu_fac/rru_fac`` factors, and the ``lamcal`` diagonal ``faclam``.
     """
 
     tcon: Array
@@ -247,6 +249,8 @@ class PreconditionerCache:
     matrices_R: TridiagonalMatrices
     matrices_Z: TridiagonalMatrices
     faclam: Array
+    pivot_R: ScalforPivotData
+    pivot_Z: ScalforPivotData
 
 
 @dataclass(frozen=True)
@@ -794,11 +798,15 @@ def _zero_cache(rt: SolverRuntime) -> PreconditionerCache:
     )
     mats = TridiagonalMatrices(ax=z((rt.jmax, mpol, nr)), bx=z((rt.jmax, mpol, nr)),
                                dx=z((rt.jmax, mpol, nr)))
+    zb = lambda shape: jnp.zeros(shape, dtype=bool)  # noqa: E731
+    pivot = ScalforPivotData(m0_ok=zb((nr,)), m0_scale=z((nr,)),
+                             m1_ok=zb((mpol - 1, nr)), m1_scale=z((mpol - 1, nr)))
     return PreconditionerCache(
         tcon=z((ns,)), fnorm=z(()), fnormL=z(()), fnorm1=z(()),
         coefficients_R=coeffs, coefficients_Z=coeffs,
         force_balance_R=z((ns,)), force_balance_Z=z((ns,)),
         matrices_R=mats, matrices_Z=mats, faclam=z((ns, mpol, nr)),
+        pivot_R=pivot, pivot_Z=pivot,
     )
 
 
@@ -926,6 +934,8 @@ def _force_pipeline(
         matrices_Z=cache.matrices_Z,
         jmax=rt.jmax,
         return_safe=True,
+        pivot_data_R=cache.pivot_R,
+        pivot_data_Z=cache.pivot_Z,
     )
     radial_solve_finite = _all_finite(solved) if collect_health else passing
     preconditioned = apply_lambda_preconditioner(solved, cache.faclam)
@@ -1157,6 +1167,8 @@ def _evaluate(
         force_balance_R=force_balance_R,
         force_balance_Z=force_balance_Z, matrices_R=matrices_R,
         matrices_Z=matrices_Z, faclam=faclam_new,
+        pivot_R=scalfor_pivot_data(matrices_R, jmax=int(rt.jmax)),
+        pivot_Z=scalfor_pivot_data(matrices_Z, jmax=int(rt.jmax)),
     )
     refresh = (((iteration - iter_last_reset) % NS4) == 0) & (~jac_changed)
     cache = _select(refresh, fresh, cache)

@@ -84,6 +84,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 import jax.numpy as jnp
+from jax import lax
 
 from solvax import (
     tridiagonal_solve as _sx_tridiagonal_solve,
@@ -93,11 +94,13 @@ from solvax import (
 __all__ = [
     "RadialPreconditionerCoefficients",
     "TridiagonalMatrices",
+    "ScalforPivotData",
     "angular_integration_weights",
     "precondn",
     "lamcal",
     "scalfor_matrices",
     "scalfor",
+    "scalfor_pivot_data",
     "tridiagonal_solve",
 ]
 
@@ -600,6 +603,137 @@ def scalfor_matrices(
     return TridiagonalMatrices(ax=ax, bx=bx, dx=dx)
 
 
+#: Relative pivot / backward-residual thresholds of the checked radial solve.
+PIVOT_RTOL = 1.0e-8
+RESIDUAL_RTOL = 1.0e-8
+
+
+class ScalforPivotData(NamedTuple):
+    """Band-only ingredients of the checked solve, frozen with the matrices.
+
+    The pivot conditioning of the :func:`scalfor` tridiagonal systems depends
+    only on the coefficient bands, which VMEC freezes between ``ns4 = 25``
+    preconditioner refreshes.  Computing it per refresh (here) instead of per
+    call removes the sequential ns-length Thomas pivot-replay scans — a pure
+    kernel-launch-latency tax on GPUs — from every solver iteration.  Values
+    are exactly those of :func:`solvax.tridiagonal_solve_checked`.
+
+    ``m0_*`` cover the ``m = 0`` block (rows ``0..jmax-1``, columns ``(ntor+
+    1,)``); ``m1_*`` the ``m >= 1`` block (rows ``1..jmax-1``, columns
+    ``(mpol-1, ntor+1)``).  ``*_ok`` is the per-column ``well_conditioned``
+    mask; ``*_scale`` the ``max|diag| + max|sub| + max|super|`` coefficient
+    scale of the backward-residual denominator.
+    """
+
+    m0_ok: Array
+    m0_scale: Array
+    m1_ok: Array
+    m1_scale: Array
+
+
+def _thomas_pivot_mask(subdiagonal: Array, diagonal: Array, superdiagonal: Array) -> Array:
+    """Per-column ``well_conditioned`` mask of the checked Thomas replay.
+
+    Verbatim SOLVAX arithmetic (``_thomas_pivots`` + the ``pivot_rtol``
+    threshold of ``tridiagonal_solve_checked``), so the cached mask is
+    bit-identical to the per-call diagnostics it replaces.
+    """
+    lower, diag, upper = map(jnp.asarray, (subdiagonal, diagonal, superdiagonal))
+    pivot0 = diag[0]
+    safe0 = jnp.where(pivot0 != 0.0, pivot0, jnp.ones_like(pivot0))
+    upper0 = upper[0] / safe0
+
+    def eliminate(previous_upper, values):
+        upper_j, diagonal_j, lower_j = values
+        pivot = diagonal_j - previous_upper * lower_j
+        safe_pivot = jnp.where(pivot != 0.0, pivot, jnp.ones_like(pivot))
+        return upper_j / safe_pivot, pivot
+
+    if int(diag.shape[0]) == 1:
+        pivots = pivot0[None, ...]
+    else:
+        _, remaining = lax.scan(eliminate, upper0, (upper[1:], diag[1:], lower[1:]))
+        pivots = jnp.concatenate((pivot0[None, ...], remaining), axis=0)
+    abs_pivots = jnp.abs(pivots)
+    threshold = jnp.asarray(PIVOT_RTOL, dtype=abs_pivots.dtype) * jnp.abs(diag)
+    return jnp.all(jnp.isfinite(abs_pivots) & (abs_pivots > threshold), axis=0)
+
+
+def _band_scale(subdiagonal: Array, diagonal: Array, superdiagonal: Array) -> Array:
+    """Backward-residual coefficient scale (SOLVAX ``coefficient_scale``)."""
+    return (
+        jnp.max(jnp.abs(diagonal), axis=0)
+        + jnp.max(jnp.abs(subdiagonal), axis=0)
+        + jnp.max(jnp.abs(superdiagonal), axis=0)
+    )
+
+
+def scalfor_pivot_data(matrices: TridiagonalMatrices, *, jmax: int) -> ScalforPivotData:
+    """Precompute the band-frozen checked-solve data for :func:`scalfor`.
+
+    Slices the assembled system exactly as :func:`scalfor` does (``m = 0``
+    block over rows ``0..jmax-1``; ``m >= 1`` block over rows ``1..jmax-1``)
+    and evaluates the pivot masks and coefficient scales on those slices.
+    Refresh-cadence companion of the matrices: pass the result back to
+    :func:`scalfor` as ``pivot_data`` for every solve at these bands.
+    """
+    ax, bx, dx = matrices
+    jmax = int(jmax)
+    mpol = int(jnp.asarray(dx).shape[1])
+    m0 = (ax[:jmax, 0, :], dx[:jmax, 0, :], bx[:jmax, 0, :])
+    m0_ok = _thomas_pivot_mask(m0[2], m0[1], m0[0])
+    m0_scale = _band_scale(m0[2], m0[1], m0[0])
+    if mpol > 1 and jmax > 1:
+        m1 = (ax[1:jmax, 1:, :], dx[1:jmax, 1:, :], bx[1:jmax, 1:, :])
+        m1_ok = _thomas_pivot_mask(m1[2], m1[1], m1[0])
+        m1_scale = _band_scale(m1[2], m1[1], m1[0])
+    else:  # static shapes for the cache pytree; the block is never solved
+        m1_ok = jnp.zeros(dx.shape[1:], dtype=bool)[1:, :]
+        m1_scale = jnp.zeros(dx.shape[1:], dtype=dx.dtype)[1:, :]
+    return ScalforPivotData(m0_ok=m0_ok, m0_scale=m0_scale,
+                            m1_ok=m1_ok, m1_scale=m1_scale)
+
+
+def _masked_checked_solve(
+    superdiagonal: Array, diagonal: Array, subdiagonal: Array, rhs: Array,
+    *, pivot_ok: Array, coefficient_scale: Array, method: str,
+) -> tuple[Array, Array]:
+    """Checked solve with the band-frozen pivot data supplied.
+
+    The rhs-dependent half of :func:`solvax.tridiagonal_solve_checked`
+    (backward residual, fallback substitution) evaluated verbatim — same
+    reductions, same thresholds, same identity fallback — against the cached
+    ``well_conditioned`` mask and coefficient scale.  Bit-identical to the
+    per-call checked solve whenever ``pivot_ok``/``coefficient_scale`` were
+    computed from these bands (enforced by ``tests/test_preconditioner.py``).
+    """
+    solution = _sx_tridiagonal_solve(subdiagonal, diagonal, superdiagonal, rhs, method=method)
+    extra = tuple(range(diagonal.ndim, rhs.ndim))
+    residual = _tridiagonal_matvec(subdiagonal, diagonal, superdiagonal, solution) - rhs
+    residual_norm = jnp.max(jnp.abs(residual), axis=(0, *extra))
+    rhs_norm = jnp.max(jnp.abs(rhs), axis=(0, *extra))
+    solution_norm = jnp.max(jnp.abs(solution), axis=(0, *extra))
+    denominator = rhs_norm + coefficient_scale * solution_norm
+    relative_residual = jnp.where(denominator > 0.0, residual_norm / denominator, residual_norm)
+    residual_ok = jnp.isfinite(relative_residual) & (
+        relative_residual <= jnp.asarray(RESIDUAL_RTOL, dtype=relative_residual.dtype)
+    )
+    safe = pivot_ok & residual_ok
+    mask = safe.reshape((1, *safe.shape, *((1,) * (rhs.ndim - diagonal.ndim))))
+    return jnp.where(mask, solution, rhs), jnp.all(safe)
+
+
+def _tridiagonal_matvec(subdiagonal: Array, diagonal: Array, superdiagonal: Array, value: Array) -> Array:
+    """Leading-axis tridiagonal matvec (verbatim SOLVAX ``_tridiagonal_matvec``)."""
+    extra = (1,) * (value.ndim - diagonal.ndim)
+    lower_e = subdiagonal.reshape(subdiagonal.shape + extra)
+    diagonal_e = diagonal.reshape(diagonal.shape + extra)
+    upper_e = superdiagonal.reshape(superdiagonal.shape + extra)
+    result = diagonal_e * value
+    result = result.at[1:].add(lower_e[1:] * value[:-1])
+    return result.at[:-1].add(upper_e[:-1] * value[1:])
+
+
 def tridiagonal_solve(
     superdiagonal: Array,
     diagonal: Array,
@@ -644,6 +778,7 @@ def scalfor(
     jmax: int,
     tridiagonal_method: str = "auto",
     return_safe: bool = False,
+    pivot_data: ScalforPivotData | None = None,
 ) -> Array | tuple[Array, Array]:
     """Apply the assembled preconditioner to a spectral force (``scalfor.f``).
 
@@ -674,6 +809,13 @@ def scalfor(
         receives the identity fallback (its RHS is preserved) and makes this
         status false, preventing a singular preconditioner from injecting a
         NaN/Inf update while retaining a diagnosable failure signal.
+    pivot_data:
+        Band-frozen checked-solve data from :func:`scalfor_pivot_data` for
+        these ``matrices``.  When supplied, the per-call Thomas pivot replay
+        (sequential ns-length scans) is skipped and the cached masks/scales
+        stand in — bit-identical results, computed once per ``ns4`` refresh
+        instead of every iteration.  ``None`` keeps the self-contained
+        per-call checked solve.
     """
     ax, bx, dx = matrices
     f = jnp.asarray(force)
@@ -685,15 +827,21 @@ def scalfor(
     out = f
     safe = jnp.asarray(True)
 
-    def checked_solve(superdiagonal, diagonal, subdiagonal, rhs):
+    def checked_solve(superdiagonal, diagonal, subdiagonal, rhs, cached=None):
+        if cached is not None:
+            return _masked_checked_solve(
+                superdiagonal, diagonal, subdiagonal, rhs,
+                pivot_ok=cached[0], coefficient_scale=cached[1],
+                method=tridiagonal_method,
+            )
         result = _sx_tridiagonal_solve_checked(
             subdiagonal,
             diagonal,
             superdiagonal,
             rhs,
             method=tridiagonal_method,
-            pivot_rtol=1.0e-8,
-            residual_rtol=1.0e-8,
+            pivot_rtol=PIVOT_RTOL,
+            residual_rtol=RESIDUAL_RTOL,
             fallback="identity",
         )
         return result.solution, jnp.all(~result.diagnostics.fallback_used)
@@ -701,12 +849,14 @@ def scalfor(
     if jmax > 0:
         solution_m0, safe_m0 = checked_solve(
             ax[:jmax, 0, :], dx[:jmax, 0, :], bx[:jmax, 0, :], f[:jmax, 0, :, :],
+            cached=None if pivot_data is None else (pivot_data.m0_ok, pivot_data.m0_scale),
         )
         safe = safe & safe_m0
         out = out.at[:jmax, 0].set(solution_m0)
         if mpol > 1 and jmax > 1:
             solution_m, safe_m = checked_solve(
                 ax[1:jmax, 1:, :], dx[1:jmax, 1:, :], bx[1:jmax, 1:, :], f[1:jmax, 1:, :, :],
+                cached=None if pivot_data is None else (pivot_data.m1_ok, pivot_data.m1_scale),
             )
             safe = safe & safe_m
             out = out.at[1:jmax, 1:].set(solution_m)

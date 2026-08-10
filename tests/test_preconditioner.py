@@ -295,6 +295,100 @@ def test_scalfor_checked_solve_falls_back_without_nonfinite_update() -> None:
     np.testing.assert_array_equal(np.asarray(solved[0, 1]), 0.0)
 
 
+def _random_scalfor_system(seed: int, *, jmax=7, mpol=3, nrange=4, singular=()):
+    """Random assembled system + stacked force; ``singular`` zeroes columns."""
+    rng = np.random.default_rng(seed)
+    shape = (jmax, mpol, nrange)
+    ax = jnp.asarray(rng.uniform(-0.4, 0.4, size=shape))
+    bx = jnp.asarray(rng.uniform(-0.4, 0.4, size=shape))
+    dx = jnp.asarray(2.0 + rng.uniform(0.0, 1.0, size=shape))
+    for m, n in singular:
+        ax = ax.at[:, m, n].set(0.0)
+        bx = bx.at[:, m, n].set(0.0)
+        dx = dx.at[:, m, n].set(0.0)
+    matrices = newp.TridiagonalMatrices(ax=ax, bx=bx, dx=dx)
+    force = jnp.asarray(rng.standard_normal((jmax, mpol, nrange, 2)))
+    return matrices, force
+
+
+@pytest.mark.parametrize("singular", [(), ((0, 1), (2, 3)), "all"])
+@pytest.mark.parametrize("method", ["thomas", "auto"])
+def test_scalfor_cached_pivot_data_bitwise_equals_checked(singular, method) -> None:
+    """Cached-mask solve == per-call checked solve, bit for bit.
+
+    The ns4-refresh pivot-mask cache (``scalfor_pivot_data``) must reproduce
+    SOLVAX's per-call checked solve exactly — including the identity fallback
+    on singular columns — because the solver freezes the bands between
+    refreshes and replays only the rhs-dependent residual check per iteration.
+    """
+    jmax, mpol, nrange = 7, 3, 4
+    if singular == "all":
+        singular = tuple((m, n) for m in range(mpol) for n in range(nrange))
+    matrices, force = _random_scalfor_system(5, jmax=jmax, mpol=mpol,
+                                             nrange=nrange, singular=singular)
+    pivot_data = newp.scalfor_pivot_data(matrices, jmax=jmax)
+    checked, safe_checked = newp.scalfor(
+        force, matrices, jmax=jmax, return_safe=True, tridiagonal_method=method,
+    )
+    cached, safe_cached = newp.scalfor(
+        force, matrices, jmax=jmax, return_safe=True, tridiagonal_method=method,
+        pivot_data=pivot_data,
+    )
+    np.testing.assert_array_equal(np.asarray(cached), np.asarray(checked))
+    assert bool(safe_cached) == bool(safe_checked)
+    assert bool(safe_checked) == (not singular)
+
+
+def test_scalfor_pivot_data_matches_solvax_diagnostics() -> None:
+    """The cached masks/scales replicate SOLVAX's checked diagnostics exactly."""
+    from solvax import tridiagonal_solve_checked
+
+    jmax, mpol, nrange = 6, 3, 3
+    matrices, force = _random_scalfor_system(
+        7, jmax=jmax, mpol=mpol, nrange=nrange, singular=((1, 2),)
+    )
+    pivot_data = newp.scalfor_pivot_data(matrices, jmax=jmax)
+    ax, bx, dx = matrices
+    m0 = tridiagonal_solve_checked(
+        bx[:jmax, 0, :], dx[:jmax, 0, :], ax[:jmax, 0, :], force[:jmax, 0, :, :],
+        pivot_rtol=newp.PIVOT_RTOL, residual_rtol=newp.RESIDUAL_RTOL,
+    )
+    m1 = tridiagonal_solve_checked(
+        bx[1:jmax, 1:, :], dx[1:jmax, 1:, :], ax[1:jmax, 1:, :],
+        force[1:jmax, 1:, :, :],
+        pivot_rtol=newp.PIVOT_RTOL, residual_rtol=newp.RESIDUAL_RTOL,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(pivot_data.m0_ok), np.asarray(m0.diagnostics.well_conditioned)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(pivot_data.m1_ok), np.asarray(m1.diagnostics.well_conditioned)
+    )
+    for scale, (sub, diag, sup) in (
+        (pivot_data.m0_scale, (bx[:jmax, 0], dx[:jmax, 0], ax[:jmax, 0])),
+        (pivot_data.m1_scale, (bx[1:jmax, 1:], dx[1:jmax, 1:], ax[1:jmax, 1:])),
+    ):
+        expected = (
+            jnp.max(jnp.abs(diag), axis=0)
+            + jnp.max(jnp.abs(sub), axis=0)
+            + jnp.max(jnp.abs(sup), axis=0)
+        )
+        np.testing.assert_array_equal(np.asarray(scale), np.asarray(expected))
+
+
+def test_scalfor_pivot_data_degenerate_shapes() -> None:
+    """mpol=1 / jmax=1 systems keep static placeholder m1 blocks."""
+    matrices, force = _random_scalfor_system(9, jmax=1, mpol=1, nrange=2)
+    pivot_data = newp.scalfor_pivot_data(matrices, jmax=1)
+    assert pivot_data.m1_ok.shape == (0, 2)
+    cached, safe_cached = newp.scalfor(
+        force, matrices, jmax=1, return_safe=True, pivot_data=pivot_data
+    )
+    checked, safe_checked = newp.scalfor(force, matrices, jmax=1, return_safe=True)
+    np.testing.assert_array_equal(np.asarray(cached), np.asarray(checked))
+    assert bool(safe_cached) == bool(safe_checked)
+
+
 # ---------------------------------------------------------------------------
 # jit compatibility
 # ---------------------------------------------------------------------------
