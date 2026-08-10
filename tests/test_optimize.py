@@ -472,6 +472,12 @@ def test_scipy_bfgs_scalar_lane_completes_and_descends():
         x_scale=problem.scales, max_nfev=int(bfgs.nfev))
     assert float(reference.cost) < value0
 
+    # Malformed decision vectors stay on the finite wall instead of raising.
+    bad_value, bad_gradient = problem.value_and_grad(
+        np.zeros(problem.x0.size + 1))
+    assert bad_value == 1.0e12
+    np.testing.assert_array_equal(bad_gradient, np.zeros_like(problem.x0))
+
 
 def test_least_squares_implicit_jac_chunking(solovev_eq):
     """The R17.1 chunked implicit Jacobian matches the unchunked one:

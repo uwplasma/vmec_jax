@@ -2068,10 +2068,13 @@ def _least_squares_implicit(
         the seed and its exact derivative as the gradient, so a scalar line
         search always sees a consistent, smooth, bounded (value, slope)
         pair at rejected trials — never a stale gradient from a different
-        point.  A non-finite ``x`` gets the flat 1e12 / zero-gradient
-        fallback.
+        point.  A non-finite or malformed ``x`` gets the flat 1e12 /
+        zero-gradient fallback.
         """
-        delta = (np.asarray(x, dtype=float) - x0) / x_penalty_scale_host
+        x = np.asarray(x, dtype=float)
+        if x.shape != x0.shape:
+            return 1.0e12, np.zeros(ndof)
+        delta = (x - x0) / x_penalty_scale_host
         distance = float(np.linalg.norm(delta))
         if not np.isfinite(distance):
             return 1.0e12, np.zeros(ndof)
@@ -2571,6 +2574,8 @@ def _least_squares_implicit(
         value/slope pairs they can digest.
         """
         xh = np.asarray(x, dtype=float)
+        if xh.shape != x0.shape:  # malformed input: no solve, finite wall
+            return failure_value_and_gradient(xh)
         if traceable_scalar is None:
             residual = fun(xh)
             if certified_trial(xh):
@@ -2612,6 +2617,8 @@ def _least_squares_implicit(
         minimize contract) never disagree about a rejected trial.
         """
         xh = np.asarray(x, dtype=float)
+        if xh.shape != x0.shape:  # malformed input: no solve, finite wall
+            return failure_value_and_gradient(xh)[0]
         if traceable_scalar is None:
             residual = fun(xh)
             if certified_trial(xh):
