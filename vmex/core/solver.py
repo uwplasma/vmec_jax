@@ -1053,6 +1053,7 @@ def _evaluate(
     *, collect_health: bool = False,
     use_fft: bool = False,
     synthesis: tuple | None = None,
+    cond_refresh: bool = False,
 ) -> _EvalResult:
     """One funct3d.f pass (fixed boundary), pure and jit-friendly.
 
@@ -1072,6 +1073,21 @@ def _evaluate(
     gate).  It must have been produced by the same ``_geometry``/
     ``half_mesh_jacobian`` calls this function would make — the traced
     free-boundary lane hoists exactly those, so results are bit-identical.
+
+    ``cond_refresh`` (static) stages the sequential band work of the ns4
+    cache assembly — the :func:`scalfor_pivot_data` Thomas pivot replays,
+    four ns-length ``lax.scan`` sweeps — under ``lax.cond(refresh, ...)`` so
+    it runs only on the 1-in-25 refresh iterations.  This is bit-exact: a
+    scan compiles as its own fusion-isolated loop whether or not it sits in
+    a branch, and the surrounding mask arithmetic (abs/compare/isfinite/
+    max/all) is rounding-invariant to fusion.  Gating the *whole* assembly
+    (``precondn``/``scalfor_matrices``/``lamcal``/``tcon``) was measured to
+    shift eight cache leaves by 1-2 ulp on refresh iterations (XLA fuses the
+    branch body differently from the inline computation), violating the
+    bit-identity contract, so the wide parallel reductions deliberately stay
+    unconditional.  Only the iteration lanes (:func:`_make_body`) enable the
+    gate; the public :func:`evaluate_forces` and every AD-facing path keep
+    the unconditional computation.
     """
     setup = rt.setup
     res = rt.resolution
@@ -1101,7 +1117,7 @@ def _evaluate(
 
     # -- ns4-cadence refresh candidates (bcovar.f) --------------------------
     tcon_new = constraint_scaling(
-        tcon0=rt.tcon0, geometry=geometry, jacobian=jacobian,
+            tcon0=rt.tcon0, geometry=geometry, jacobian=jacobian,
         total_pressure=fields.total_pressure, trig=rt.trig, s=s,
     )
     common = dict(
@@ -1161,6 +1177,22 @@ def _evaluate(
         R_sin=state.R_sin if setup.lasym else None,
         Z_cos=state.Z_cos if setup.lasym else None,
     )
+    refresh = (((iteration - iter_last_reset) % NS4) == 0) & (~jac_changed)
+
+    def _pivot_pair() -> tuple[ScalforPivotData, ScalforPivotData]:
+        return (scalfor_pivot_data(matrices_R, jmax=int(rt.jmax)),
+                scalfor_pivot_data(matrices_Z, jmax=int(rt.jmax)))
+
+    if cond_refresh:
+        # The pivot replay is the assembly's only sequential (ns-length scan)
+        # work; run it solely when the cadence fires.  Bit-exact — see the
+        # docstring.  The non-refresh side carries the frozen masks through.
+        pivot_R, pivot_Z = lax.cond(
+            refresh, lambda c: _pivot_pair(), lambda c: c,
+            (cache.pivot_R, cache.pivot_Z),
+        )
+    else:
+        pivot_R, pivot_Z = _pivot_pair()
     fresh = PreconditionerCache(
         tcon=tcon_new, fnorm=energies.fnorm, fnormL=energies.fnormL,
         fnorm1=fnorm1_new, coefficients_R=coefficients_R,
@@ -1168,10 +1200,8 @@ def _evaluate(
         force_balance_R=force_balance_R,
         force_balance_Z=force_balance_Z, matrices_R=matrices_R,
         matrices_Z=matrices_Z, faclam=faclam_new,
-        pivot_R=scalfor_pivot_data(matrices_R, jmax=int(rt.jmax)),
-        pivot_Z=scalfor_pivot_data(matrices_Z, jmax=int(rt.jmax)),
+        pivot_R=pivot_R, pivot_Z=pivot_Z,
     )
-    refresh = (((iteration - iter_last_reset) % NS4) == 0) & (~jac_changed)
     cache = _select(refresh, fresh, cache)
 
     # -- constraint + MHD forces + residue.f90 preconditioning chain --------
@@ -1383,7 +1413,7 @@ def _make_body(
         state_e1 = carry.state if evaluation_state is None else evaluation_state
         e1 = _evaluate(state_e1, carry.cache, it, carry.iter1, carry.fsqz, rt,
                        carry.fsqr + carry.fsqz, use_fft=use_fft,
-                       synthesis=evaluation_synthesis)
+                       synthesis=evaluation_synthesis, cond_refresh=True)
         jac1 = e1.jacobian_sign_changed
         nonfinite1 = (~jac1) & (~_evaluation_is_finite(e1))
         # On irst=2 funct3d skips residue: the module residuals stay stale.
@@ -1447,7 +1477,7 @@ def _make_body(
             restart,
             lambda args: _evaluate(
                 args[0], args[1], it, it, args[2], rt, args[3],
-                use_fft=use_fft,
+                use_fft=use_fft, cond_refresh=True,
             ),
             lambda args: e1,
             (state_r, e1.cache, fsqz_c, fsqr_c + fsqz_c),

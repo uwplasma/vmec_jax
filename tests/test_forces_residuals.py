@@ -214,3 +214,50 @@ def test_grad_of_fsqr_wrt_R_cos(case):
     assert grad_np.shape == np.asarray(case.state.R_cos).shape
     assert np.all(np.isfinite(grad_np))
     assert np.any(grad_np != 0.0)
+
+
+# ---------------------------------------------------------------------------
+# solver._evaluate: the cond-gated ns4 pivot replay (GPU latency fix)
+# ---------------------------------------------------------------------------
+
+
+def test_cond_refresh_gate_is_bitwise_identical(case):
+    """``cond_refresh=True`` must be bit-identical to the ungated evaluation.
+
+    The iteration lanes stage the band-frozen pivot replay under
+    ``lax.cond(refresh, ...)``; on refresh iterations the taken side must
+    reproduce the unconditional assembly exactly, and on non-refresh
+    iterations the frozen masks must pass through untouched.
+    """
+    from vmex.core import solver as _solver
+
+    rt, state = case.rt, case.state
+    cache0 = _solver._zero_cache(rt)
+    one = jnp.asarray(1.0)
+    it1 = jnp.asarray(1)
+    it2 = jnp.asarray(2)
+
+    def run(cond, cache, it, last):
+        return _solver._evaluate(
+            state, cache, it, last, one, rt, one, cond_refresh=cond
+        )
+
+    def assert_equal(x, y):
+        for lx, ly in zip(jax.tree_util.tree_leaves(x), jax.tree_util.tree_leaves(y)):
+            np.testing.assert_array_equal(np.asarray(lx), np.asarray(ly))
+
+    # Refresh iteration (iteration == iter_last_reset): gate taken.
+    gated = jax.jit(lambda: run(True, cache0, it1, it1))()
+    plain = jax.jit(lambda: run(False, cache0, it1, it1))()
+    assert_equal((gated.cache, gated.gc, gated.pre), (plain.cache, plain.gc, plain.pre))
+
+    # Non-refresh iteration: gate skipped, frozen masks carried through.
+    gated2 = jax.jit(lambda: run(True, plain.cache, it2, it1))()
+    plain2 = jax.jit(lambda: run(False, plain.cache, it2, it1))()
+    assert_equal(
+        (gated2.cache, gated2.gc, gated2.pre), (plain2.cache, plain2.gc, plain2.pre)
+    )
+    assert_equal(
+        (gated2.cache.pivot_R, gated2.cache.pivot_Z),
+        (plain.cache.pivot_R, plain.cache.pivot_Z),
+    )
