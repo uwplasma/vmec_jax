@@ -318,11 +318,14 @@ and remained infeasible at the same short budget.  Use it when a hard
 constraint is the primary requirement, not as a generic basin escape.
 
 For SciPy BFGS-family methods, pass ``problem.fun`` and ``problem.grad`` as
-separate callbacks.  Line-search trial points then evaluate only the scalar
-value instead of solving an implicit adjoint for every rejected step.  At
-higher Fourier mode, optimize the scaled coordinates
-``x = problem.x0 + problem.scales * y`` as shown in
-``QI_optimization_scipy.py``.
+separate callbacks.  For objective-term problems both are served by the same
+certified residual/Jacobian lane least squares uses (value ``0.5 r.r``,
+gradient ``J^T r``), sharing the solve memo and perturbation warm starts; a
+trial whose equilibrium fails or stops far from a fixed point returns a
+smooth objective-scale wall with its exact gradient, which Wolfe line
+searches backtrack through instead of stalling.  At higher Fourier mode,
+optimize the scaled coordinates ``x = problem.x0 + problem.scales * y`` as
+shown in ``QI_optimization_scipy.py``.
 
 On the same accepted mode-5 basin (full constructed QI ``1.873e-3``), ten
 SciPy least-squares evaluations reached ``1.788e-3`` in 32 s.  Ten JAXopt LM

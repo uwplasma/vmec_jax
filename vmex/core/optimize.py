@@ -1855,6 +1855,18 @@ def _traceable_term(fun: Callable) -> Callable:
         "l_grad_b_state alternatives.")
 
 
+# Scalar-lane trial certification (see ``value_and_grad`` below): a trial
+# whose host solve returned without converging is still a usable *sample* for
+# the least-squares rows (VMEC2000 trial policy), but derivatives are only
+# meaningful at (near-)fixed points.  A final force residual within this
+# factor of the solve tolerance is close enough for the implicit
+# linearization; beyond it the scalar lane substitutes the smooth penalty
+# pair instead of differentiating an uncertifiable state.  Measured on the
+# precise-QI nfp=2 seed: every accepted NITER-exhausted trial sits within
+# 1e3 x ftol, while genuinely off-basin states fail by many decades.
+_TRIAL_FSQ_SLACK = 1.0e6
+
+
 def _least_squares_implicit(
     objective_terms: Sequence[tuple[Callable, float, float]],
     inp: VmecInput,
@@ -2034,6 +2046,72 @@ def _least_squares_implicit(
         )
         row = gradient / np.sqrt(float(residual_size))
         return np.broadcast_to(row, (residual_size, ndof)).copy()
+
+    # Scalar-lane trial wall.  Any certified value of a descending run stays
+    # at or below the seed cost, so a wall of at least ten seed costs is
+    # never accepted by a Wolfe line search — while remaining commensurate
+    # with the objective scale.  The least-squares 1e6-row magnitude must NOT
+    # be reused here: against a ~1e15 cliff the dcsrch interpolation
+    # collapses its step to machine zero (measured |dy| ~ 1e-20 on the QI
+    # example) instead of backtracking geometrically into the basin.
+    seed_cost = (
+        0.5 * float(initial_rows @ initial_rows)
+        if traceable_scalar is None
+        else float(initial_rows[0])
+    )
+    scalar_wall_base = max(10.0 * abs(seed_cost), 1.0)
+
+    def failure_value_and_gradient(x: np.ndarray) -> tuple[float, np.ndarray]:
+        """Exact scalar pair of the smooth scalar-lane trial wall.
+
+        ``value = base * (1 + d)**2`` with ``d`` the scaled distance from
+        the seed and its exact derivative as the gradient, so a scalar line
+        search always sees a consistent, smooth, bounded (value, slope)
+        pair at rejected trials — never a stale gradient from a different
+        point.  A non-finite ``x`` gets the flat 1e12 / zero-gradient
+        fallback.
+        """
+        delta = (np.asarray(x, dtype=float) - x0) / x_penalty_scale_host
+        distance = float(np.linalg.norm(delta))
+        if not np.isfinite(distance):
+            return 1.0e12, np.zeros(ndof)
+        growth = 1.0 + distance
+        gradient = (
+            np.zeros(ndof)
+            if distance == 0.0
+            else (2.0 * scalar_wall_base * growth / distance)
+            * delta / x_penalty_scale_host
+        )
+        return scalar_wall_base * growth ** 2, gradient
+
+    def certified_trial(x: np.ndarray) -> bool:
+        """Whether the memoized solve at ``x`` is a usable fixed point.
+
+        True when the status callback recorded no failure and the last host
+        solve belongs to exactly this ``x`` and either converged or stopped
+        (NITER-exhausted) with a final force residual within
+        ``_TRIAL_FSQ_SLACK * cfg.ftol`` — near enough for the implicit
+        linearization behind exact derivatives.  Call only after the trial's
+        own evaluation so the memo and status slot describe ``x``.
+        """
+        x = np.asarray(x, dtype=float)
+        if x.shape != x0.shape:  # malformed input stays on the penalty path
+            return False
+        if imp._LAST_STATUS_ERROR.get(cfg) is not None:
+            return False
+        hit = imp._LAST_SOLVE.get(cfg)
+        if hit is None:
+            return False
+        params_np = jax.tree.map(
+            lambda a: np.asarray(a, dtype=np.float64), params_of(_place(x))
+        )
+        if hit[0] != imp._params_key(params_np):
+            return False
+        result = hit[1]
+        if bool(result.converged):
+            return True
+        fsq = float(result.fsqr) + float(result.fsqz) + float(result.fsql)
+        return bool(np.isfinite(fsq) and fsq <= _TRIAL_FSQ_SLACK * cfg.ftol)
 
     def residual_rows(x: jnp.ndarray) -> jnp.ndarray:
         params = params_of(x)
@@ -2479,35 +2557,77 @@ def _least_squares_implicit(
         return jac
 
     def value_and_grad(x: np.ndarray):
-        """Host scalar pair used by SciPy and the public problem object."""
+        """Host scalar pair used by SciPy and the public problem object.
+
+        Objective-term problems assemble the pair from the same certified
+        residual/Jacobian lane the least-squares driver uses (``0.5 r.r``,
+        ``J^T r``): one warm memoized host solve, the block-factorized
+        implicit Jacobian, and the perturbation warm-start stash — no
+        separate reverse-adjoint graph.  Scalar-loss problems keep the
+        single reverse adjoint.  Both lanes gate on
+        :func:`certified_trial`: a trial without a usable fixed point gets
+        the smooth consistent penalty pair instead of a derivative of an
+        uncertifiable state, so BFGS-family line searches always see
+        value/slope pairs they can digest.
+        """
+        xh = np.asarray(x, dtype=float)
+        if traceable_scalar is None:
+            residual = fun(xh)
+            if certified_trial(xh):
+                value = 0.5 * float(residual @ residual)
+                gradient = jac_fn(xh).T @ residual
+                if np.isfinite(value) and np.all(np.isfinite(gradient)):
+                    holder["scalar_certified"] = True
+                    return value, gradient
+            if imp._LAST_STATUS_ERROR.get(cfg) is None:
+                holder["failed_trials"] += 1  # raised solves counted by fun
+            return failure_value_and_gradient(xh)
+        scalar_fun_host(xh)  # establish the memoized trial solve and status
+        if not certified_trial(xh):
+            holder["failed_trials"] += 1
+            return failure_value_and_gradient(xh)
         try:
-            value, grad = value_grad_jit(_place(x))
+            value, grad = value_grad_jit(_place(xh))
             value = float(jax.device_get(value))
             grad = np.asarray(jax.device_get(grad), dtype=float)
-        except Exception as exc:
-            if holder.get("last_grad") is None:
+        except Exception:
+            if not holder.get("scalar_certified"):
                 raise
-            del exc
             holder["failed_trials"] += 1
-            return 1.0e12, holder["last_grad"]
+            return failure_value_and_gradient(xh)
         if np.isfinite(value) and np.all(np.isfinite(grad)):
-            holder["last_grad"] = grad
-            if imp._LAST_STATUS_ERROR.get(cfg) is not None:
-                holder["failed_trials"] += 1
+            holder["scalar_certified"] = True
             return value, grad
-        if holder.get("last_grad") is None:
+        if not holder.get("scalar_certified"):
             raise FloatingPointError("non-finite initial objective or gradient")
-        return 1.0e12, holder["last_grad"]
+        holder["failed_trials"] += 1
+        return failure_value_and_gradient(xh)
 
     def scalar_fun_host(x: np.ndarray) -> float:
-        """Host scalar value without forcing a reverse pass."""
+        """Host scalar value without derivative work, penalty-consistent.
+
+        Returns the exact objective at certified trials and the same smooth
+        penalty value :func:`value_and_grad` pairs with its penalty
+        gradient otherwise, so separate ``fun``/``jac`` callables (the SciPy
+        minimize contract) never disagree about a rejected trial.
+        """
+        xh = np.asarray(x, dtype=float)
+        if traceable_scalar is None:
+            residual = fun(xh)
+            if certified_trial(xh):
+                value = 0.5 * float(residual @ residual)
+                if np.isfinite(value):
+                    return value
+            return failure_value_and_gradient(xh)[0]
         try:
-            value = float(jax.device_get(scalar_loss_jit(_place(x))))
+            value = float(jax.device_get(scalar_loss_jit(_place(xh))))
         except Exception:
-            if holder.get("last_grad") is None:
+            if not holder.get("scalar_certified"):
                 raise
-            return 1.0e12
-        return value if np.isfinite(value) else 1.0e12
+            return failure_value_and_gradient(xh)[0]
+        if not (np.isfinite(value) and certified_trial(xh)):
+            return failure_value_and_gradient(xh)[0]
+        return value
 
     def input_from_x(x: np.ndarray) -> VmecInput:
         result_input = unpack_boundary(inp, np.asarray(x)[:nboundary], max_mode)
