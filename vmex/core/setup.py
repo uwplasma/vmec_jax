@@ -47,11 +47,14 @@ Ported from the parity-proven legacy implementation
 
 from __future__ import annotations
 
+import functools
+import types
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+import jax
 import jax.numpy as jnp
 
 from . import profiles as prof
@@ -410,22 +413,34 @@ def boundary_from_input(
     blocks, lflip = _internal_blocks_from_input(inp)
     r00 = float(blocks["rbcc"][0, 0])
     helical = _helical_from_internal_blocks(blocks, modes)
-    scale = physical_to_internal_scale(modes, trig)
-    R_cos = jnp.asarray(helical["R_cos"] * scale)
-    R_sin = jnp.asarray(helical["R_sin"] * scale)
-    Z_cos = jnp.asarray(helical["Z_cos"] * scale)
-    Z_sin = jnp.asarray(helical["Z_sin"] * scale)
-    lthreed = int(inp.ntor) > 0
+    R_cos2, R_sin2, Z_cos2, Z_sin2 = _boundary_arrays(
+        helical, modes=modes, trig=trig, lthreed=int(inp.ntor) > 0,
+        lasym=bool(inp.lasym), lconm1=bool(lconm1),
+    )
+    return ProcessedBoundary(
+        R_cos=R_cos2, R_sin=R_sin2, Z_cos=Z_cos2, Z_sin=Z_sin2,
+        r00=jnp.asarray(r00), signgs=-1, lflip=bool(lflip),
+    )
+
+
+def _boundary_arrays(helical, *, modes, trig, lthreed, lasym, lconm1):
+    """Helical boundary dict -> internal-scaled, m=1-constrained arrays.
+
+    The ``jnp`` tail of :func:`boundary_from_input`, shared with the jitted
+    setup assembly so the two can never drift.
+    """
+    scale = jnp.asarray(physical_to_internal_scale(modes, trig))
+    R_cos = jnp.asarray(helical["R_cos"]) * scale
+    R_sin = jnp.asarray(helical["R_sin"]) * scale
+    Z_cos = jnp.asarray(helical["Z_cos"]) * scale
+    Z_sin = jnp.asarray(helical["Z_sin"]) * scale
     # readin.f lconm1 conversion (same rotation as residue.f90; the m=1 modes
     # share one mscale*nscale factor, so it commutes with the scaling above).
     R_cos2, Z_sin2, R_sin2, Z_cos2 = m1_physical_to_constrained(
         R_cos[None, :], Z_sin[None, :], R_sin[None, :], Z_cos[None, :],
-        modes=modes, lthreed=lthreed, lasym=bool(inp.lasym), lconm1=bool(lconm1),
+        modes=modes, lthreed=bool(lthreed), lasym=bool(lasym), lconm1=bool(lconm1),
     )
-    return ProcessedBoundary(
-        R_cos=R_cos2[0], R_sin=R_sin2[0], Z_cos=Z_cos2[0], Z_sin=Z_sin2[0],
-        r00=jnp.asarray(r00), signgs=-1, lflip=bool(lflip),
-    )
+    return R_cos2[0], R_sin2[0], Z_cos2[0], Z_sin2[0]
 
 
 # ---------------------------------------------------------------------------
@@ -909,6 +924,57 @@ def _axis_arrays(inp: VmecInput, dtype) -> tuple[Array, Array, Array, Array]:
                  (inp.raxis_c, inp.raxis_s, inp.zaxis_c, inp.zaxis_s))
 
 
+@functools.lru_cache(maxsize=None)
+def _setup_assembly(
+    resolution: Resolution, lconm1: bool, lflip: bool,
+    pmass_type: str, piota_type: str, pcurr_type: str,
+    aphi: tuple, bloat: float, gamma: float, spres_ped: float,
+):
+    """Jitted array assembly of :func:`run_setup`, keyed structurally.
+
+    Everything after the host-side ``readin.f`` parsing — radial grids,
+    boundary internal scaling + m = 1 constraint, ``profil1d.f`` profiles,
+    the ``profil3d.f`` interior guess and ``scalxc`` — is one jitted program
+    per static configuration (resolution, flags, profile types, ``APHI``).
+    The numeric inputs (helical boundary, axis, profile coefficients) enter
+    traced, so repeated solves at one configuration — multigrid rungs, hot
+    restarts, optimization iterates — reuse a single executable instead of
+    dispatching ~1000 eager host-to-device ops per solve.  Same math as the
+    former eager path (identical primitive sequence, jit-staged).
+    """
+    modes = mode_table(resolution.mpol, resolution.ntor)
+    trig = trig_tables(resolution)
+    lthreed = bool(resolution.lthreed)
+    lasym = bool(resolution.lasym)
+
+    @jax.jit
+    def build(helical, axis, numbers):
+        grids = radial_grids(resolution.ns)
+        b_R_cos, b_R_sin, b_Z_cos, b_Z_sin = _boundary_arrays(
+            helical, modes=modes, trig=trig, lthreed=lthreed, lasym=lasym,
+            lconm1=lconm1,
+        )
+        shim = types.SimpleNamespace(
+            aphi=np.asarray(aphi, dtype=float), bloat=bloat, gamma=gamma,
+            spres_ped=spres_ped, pmass_type=pmass_type,
+            piota_type=piota_type, pcurr_type=pcurr_type, **numbers,
+        )
+        profiles_1d = flux_profiles(
+            shim, grids, r00=numbers["r00"], signgs=-1, lflip=lflip
+        )
+        state = interior_guess(
+            boundary_R_cos=b_R_cos, boundary_R_sin=b_R_sin,
+            boundary_Z_cos=b_Z_cos, boundary_Z_sin=b_Z_sin,
+            raxis_c=axis[0], raxis_s=axis[1], zaxis_c=axis[2], zaxis_s=axis[3],
+            modes=modes, trig=trig, s=grids.s_full,
+        )
+        scalxc = odd_m_sqrt_s_scaling(grids.s_full, resolution.mpol)
+        boundary = (b_R_cos, b_R_sin, b_Z_cos, b_Z_sin)
+        return grids, boundary, profiles_1d, state, scalxc
+
+    return build
+
+
 def run_setup(
     inp: VmecInput,
     resolution: Resolution,
@@ -943,59 +1009,70 @@ def run_setup(
     -------
     :class:`RunSetup` (see its docstring for the field-by-field contract).
     """
-    modes = mode_table(resolution.mpol, resolution.ntor)
-    trig = trig_tables(resolution)
-    grids = radial_grids(resolution.ns)
-    dtype = grids.s_full.dtype
-
-    boundary = boundary_from_input(inp, modes=modes, trig=trig, lconm1=lconm1)
-    profiles_1d = flux_profiles(
-        inp, grids, r00=boundary.r00, signgs=boundary.signgs, lflip=boundary.lflip
+    blocks, lflip = _internal_blocks_from_input(inp)
+    helical = _helical_from_internal_blocks(blocks, modes := mode_table(
+        resolution.mpol, resolution.ntor))
+    build = _setup_assembly(
+        resolution, bool(lconm1), bool(lflip),
+        str(inp.pmass_type), str(inp.piota_type), str(inp.pcurr_type),
+        tuple(np.asarray(inp.aphi, dtype=float).ravel().tolist()),
+        float(inp.bloat), float(inp.gamma), float(inp.spres_ped),
     )
-
-    raxis_c, raxis_s, zaxis_c, zaxis_s = _axis_arrays(inp, dtype)
-
-    def build_state(axis):
-        return interior_guess(
-            boundary_R_cos=boundary.R_cos, boundary_R_sin=boundary.R_sin,
-            boundary_Z_cos=boundary.Z_cos, boundary_Z_sin=boundary.Z_sin,
-            raxis_c=axis[0], raxis_s=axis[1], zaxis_c=axis[2], zaxis_s=axis[3],
-            modes=modes, trig=trig, s=grids.s_full,
-        )
-
-    axis = (raxis_c, raxis_s, zaxis_c, zaxis_s)
-    state = build_state(axis)
+    dtype = jnp.zeros((), dtype=jnp.float64).dtype
+    axis = _axis_arrays(inp, dtype)
+    numbers = dict(
+        r00=jnp.asarray(float(blocks["rbcc"][0, 0]), dtype=dtype),
+        phiedge=jnp.asarray(float(inp.phiedge), dtype=dtype),
+        pres_scale=jnp.asarray(float(inp.pres_scale), dtype=dtype),
+        curtor=jnp.asarray(float(inp.curtor), dtype=dtype),
+        am=jnp.asarray(np.asarray(inp.am, dtype=float)),
+        ai=jnp.asarray(np.asarray(inp.ai, dtype=float)),
+        ac=jnp.asarray(np.asarray(inp.ac, dtype=float)),
+        am_aux_s=jnp.asarray(np.asarray(inp.am_aux_s, dtype=float)),
+        am_aux_f=jnp.asarray(np.asarray(inp.am_aux_f, dtype=float)),
+        ai_aux_s=jnp.asarray(np.asarray(inp.ai_aux_s, dtype=float)),
+        ai_aux_f=jnp.asarray(np.asarray(inp.ai_aux_f, dtype=float)),
+        ac_aux_s=jnp.asarray(np.asarray(inp.ac_aux_s, dtype=float)),
+        ac_aux_f=jnp.asarray(np.asarray(inp.ac_aux_f, dtype=float)),
+    )
+    grids, boundary, profiles_1d, state, scalxc = build(helical, axis, numbers)
+    b_R_cos, b_R_sin, b_Z_cos, b_Z_sin = boundary
 
     axis_missing = not any(bool(np.any(np.asarray(a) != 0.0)) for a in axis)
     if axis_missing and bool(infer_axis_if_missing) and resolution.ns >= 2:
+        trig = trig_tables(resolution)
+        processed = ProcessedBoundary(
+            R_cos=b_R_cos, R_sin=b_R_sin, Z_cos=b_Z_cos, Z_sin=b_Z_sin,
+            r00=numbers["r00"], signgs=-1, lflip=lflip,
+        )
         geom = real_space_geometry(
             **_geometry_state_arrays(
-                _axis_inference_state(boundary, modes=modes, s=grids.s_full),
+                _axis_inference_state(processed, modes=modes, s=grids.s_full),
                 modes=modes, lthreed=bool(resolution.lthreed),
                 lasym=bool(resolution.lasym), lconm1=bool(lconm1),
             ),
             modes=modes, trig=trig, s=grids.s_full, use_fft=use_fft,
         )
-        axis = guess_axis(geom, s=grids.s_full, trig=trig, signgs=boundary.signgs)
-        raxis_c, raxis_s, zaxis_c, zaxis_s = axis
-        state = build_state(axis)
+        axis = guess_axis(geom, s=grids.s_full, trig=trig, signgs=-1)
+        _grids, _b, _p, state, _sx = build(helical, axis, numbers)
 
+    raxis_c, raxis_s, zaxis_c, zaxis_s = axis
     return RunSetup(
         s_full=grids.s_full, s_half=grids.s_half, sqrts=grids.sqrts,
         shalf=grids.shalf, sm=grids.sm, sp=grids.sp, hs=grids.hs,
-        scalxc=odd_m_sqrt_s_scaling(grids.s_full, resolution.mpol),
+        scalxc=scalxc,
         phips=profiles_1d["phips"], chips=profiles_1d["chips"],
         iotas=profiles_1d["iotas"], icurv=profiles_1d["icurv"],
         mass=profiles_1d["mass"], psi_half=profiles_1d["psi_half"],
         psi_edge=profiles_1d["psi_edge"], phipf=profiles_1d["phipf"],
         chipf=profiles_1d["chipf"], iotaf=profiles_1d["iotaf"],
         lamscale=profiles_1d["lamscale"],
-        boundary_R_cos=boundary.R_cos, boundary_R_sin=boundary.R_sin,
-        boundary_Z_cos=boundary.Z_cos, boundary_Z_sin=boundary.Z_sin,
+        boundary_R_cos=b_R_cos, boundary_R_sin=b_R_sin,
+        boundary_Z_cos=b_Z_cos, boundary_Z_sin=b_Z_sin,
         raxis_c=raxis_c, raxis_s=raxis_s, zaxis_c=zaxis_c, zaxis_s=zaxis_s,
         R_cos=state[0], R_sin=state[1], Z_cos=state[2], Z_sin=state[3],
         lambda_cos=state[4], lambda_sin=state[5],
-        signgs=boundary.signgs, lflip=boundary.lflip,
+        signgs=-1, lflip=lflip,
         lasym=bool(resolution.lasym), lthreed=bool(resolution.lthreed),
         lconm1=bool(lconm1), ncurr=int(inp.ncurr),
     )

@@ -769,10 +769,18 @@ def runtime_with_baselines(
     return replace(rt, rcon0=rcon0, zcon0=zcon0)
 
 
+@functools.partial(jax.jit, static_argnames=("use_fft",))
 def _constraint_baselines(
     state: SpectralState, rt: SolverRuntime, *, use_fft: bool = False
 ):
-    """One-time ``rcon0/zcon0 = s * rcon(ns)`` (funct3d.f, iter2 == iter1)."""
+    """One-time ``rcon0/zcon0 = s * rcon(ns)`` (funct3d.f, iter2 == iter1).
+
+    Module-level jit keyed structurally on the runtime pytree (like the
+    lanes): the full geometry synthesis it hoists runs as one program
+    instead of a few hundred eager dispatches per solve — the dominant part
+    of the per-solve host-transfer floor on accelerators.  Two runtimes with
+    equal structure share one executable.
+    """
     (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(
         state, rt, use_fft=use_fft
     )
