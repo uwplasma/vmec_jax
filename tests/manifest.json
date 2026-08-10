@@ -65,6 +65,7 @@
     ["tests/test_parallel.py", "equilibrium", "integration", "medium", "cpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_parity_breadth.py", "equilibrium", "oracle", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-n-s"]],
     ["tests/test_performance_docs.py", "infrastructure", "unit", "fast", "cpu", "none", "golden", ["pr-parity-c2", "full-core-n-s"]],
+    ["tests/test_plot_summary.py", "diagnostics", "integration", "medium", "cpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
     ["tests/test_plotting_boozer.py", "diagnostics", "integration", "medium", "cpu", "golden", "external", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_postprocess_currents.py", "diagnostics", "oracle", "medium", "cpu-gpu", "golden", "vmec2000", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_preconditioner.py", "equilibrium", "unit", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
