@@ -9,7 +9,7 @@ lightweight tests and does not introduce an import cycle with
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import sys
 from threading import Event, RLock, Thread
 import time
@@ -425,6 +425,41 @@ class VmecProblem(FunctionProblem):
         if self._equilibrium_from_x is None:
             raise AttributeError("this problem does not provide equilibria")
         return self._equilibrium_from_x(self._x(x))
+
+    def evaluate(self, x: Array, *, derivatives: bool = True) -> Evaluation:
+        """Evaluate and attach VMEC solve/adjoint status diagnostics."""
+        evaluation = super().evaluate(x, derivatives=derivatives)
+        cfg = self.metadata.get("config")
+        if cfg is None:
+            return evaluation
+        from . import implicit as imp
+
+        # A cached value/Jacobian can be revisited after an unrelated rejected
+        # trial.  Confirm that the requested point still maps to the cached
+        # converged equilibrium before consulting the process-local last-error
+        # slot, otherwise that older failure would incorrectly mark this
+        # successful evaluation as failed.
+        try:
+            self.equilibrium_from_x(evaluation.x)
+        except (AttributeError, RuntimeError):
+            pass
+        else:
+            imp._LAST_STATUS_ERROR.pop(cfg, None)
+
+        diagnostics = dict(evaluation.diagnostics)
+        stats = imp._SOLVE_STATS.get(cfg)
+        if stats is not None:
+            diagnostics["solve_stats"] = dict(stats)
+        error = imp._LAST_STATUS_ERROR.get(cfg)
+        if error is None:
+            return replace(evaluation, diagnostics=diagnostics)
+        diagnostics["exception_type"] = type(error).__name__
+        return replace(
+            evaluation,
+            status="failed_solve",
+            message=str(error),
+            diagnostics=diagnostics,
+        )
 
 
 __all__ = ["Evaluation", "FunctionProblem", "VmecProblem"]

@@ -365,6 +365,22 @@ on the flagship campaigns they are *necessary*: the exact-axisymmetric seed
 is a saddle of the QS residual where finite differences stall, and on the
 QP class the implicit path selects a better basin.
 
+The high-level optimization APIs use ``adjoint_tol=1e-6`` and
+``adjoint_maxiter=300`` by default.  The tolerance is checked against the true
+linear residual, so VMEX never silently returns an unconverged adjoint.  The
+larger restart ceiling fixes stiff QI objectives without charging easier
+objectives for unused iterations; both controls remain ordinary keyword
+arguments for stricter studies.
+
+An optimizer's initial point is solved strictly before the run starts.  Later
+invalid trial boundaries use the status-returning implicit lane: the host
+callback returns a fixed-shape fallback and a status code, and the objective
+selects a finite differentiable penalty pointing back toward the valid seed.
+No Python exception crosses ``jax.pure_callback``, so rejected high-mode
+trials do not produce an opaque JAX traceback.  Use
+``problem.evaluate(x).status`` and its ``diagnostics`` mapping when a driver
+needs the typed failure rather than only the numerical penalty.
+
 The gradient stack: what makes a Jacobian cheap
 -----------------------------------------------
 

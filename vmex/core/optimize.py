@@ -1170,6 +1170,8 @@ def make_problem(
     weight_semantics: str = "cost",
     jacobian_batch_size: int | str | None = 1,
     implicit_jacobian_method: str = "auto",
+    adjoint_tol: float = 1e-6,
+    adjoint_maxiter: int = 300,
     hot_restart: bool = True,
     warm_start: str | None = "perturbation",
     use_ess: bool = True,
@@ -1220,6 +1222,11 @@ def make_problem(
     :meth:`VmecProblem.residual` / :meth:`VmecProblem.residual_jac` to a
     nonlinear least-squares package, or :meth:`VmecProblem.value_and_grad` to
     any scalar gradient optimizer.
+
+    ``adjoint_tol`` is a relative Krylov tolerance with a certified true
+    residual check; ``adjoint_maxiter`` is the restart budget.  The defaults
+    are sufficient for the precise-QI nfp=2 seed while remaining much cheaper than
+    one finite-difference equilibrium solve per variable.
     """
     if (objective_terms is None) == (loss is None):
         raise ValueError("provide exactly one of objective_terms or loss")
@@ -1263,6 +1270,8 @@ def make_problem(
             current_dofs=current_dofs,
             jac_chunk_size=jacobian_batch_size,
             jac_solver=jac_solver,
+            adjoint_tol=adjoint_tol,
+            adjoint_maxiter=adjoint_maxiter,
             recycle=False,
             warm_start=(warm_start if hot_restart else None),
             solve_kwargs=dict(solve_kwargs or {}),
@@ -1304,6 +1313,8 @@ def least_squares(
     jac: str | None = None,
     jac_chunk_size: int | str | None = "auto",
     jac_solver: str = "auto",
+    adjoint_tol: float = 1e-6,
+    adjoint_maxiter: int = 300,
     recycle: bool = False,
     hot_restart: bool = True,
     warm_start: str | None = "perturbation",
@@ -1393,6 +1404,11 @@ def least_squares(
     the same Jacobian to solver tolerance.  ``recycle=True`` takes
     precedence.
 
+    ``adjoint_tol`` and ``adjoint_maxiter`` control the certified linear
+    response solves.  All public optimization paths allow 300 restarts by
+    default so QI derivatives cannot fail merely because of the former
+    hard-coded 30-restart cap.  Easier problems normally stop far earlier.
+
     ``recycle`` carries a GCROT deflation pair across the per-dof
     implicit-Jacobian solves and successive trust-region Jacobian
     evaluations, at the exact ``adjoint_tol`` / ``adjoint_maxiter`` budget
@@ -1444,6 +1460,7 @@ def least_squares(
                 objective_terms, current, max_mode=mm,
                 current_dofs=current_dofs, jac=jac,
                 jac_chunk_size=jac_chunk_size, jac_solver=jac_solver,
+                adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
                 recycle=recycle, hot_restart=hot_restart,
                 warm_start=warm_start, use_ess=use_ess,
                 ess_alpha=ess_alpha, device=device, solve_kwargs=solve_kwargs,
@@ -1468,6 +1485,7 @@ def least_squares(
             objective_terms, inp, max_mode=max_mode, x0=x0,
             current_dofs=current_dofs,
             jac_chunk_size=jac_chunk_size, jac_solver=jac_solver,
+            adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
             recycle=recycle,
             warm_start=(warm_start if hot_restart else None),
             solve_kwargs=dict(solve_kwargs or {}),
@@ -1536,6 +1554,8 @@ def minimize(
     solve_kwargs: dict | None = None,
     verbose: int = 0,
     method: str = "L-BFGS-B",
+    adjoint_tol: float = 1e-6,
+    adjoint_maxiter: int = 300,
     **scipy_kwargs,
 ):
     """Minimize the scalarized residual norm with one adjoint per gradient.
@@ -1556,6 +1576,10 @@ def minimize(
     :func:`least_squares`.  Plain state hot restarts are used because the
     first-order perturbation warm start requires the forward state-response
     columns that this lower-storage path deliberately avoids.
+
+    ``adjoint_tol`` / ``adjoint_maxiter`` are exposed explicitly.  Their
+    defaults are certified on the QI, QS, ``L_grad_B``, ``DMerc`` and ``D_R``
+    objective lanes; an unconverged adjoint is never returned as a gradient.
     """
     modes_schedule = ([int(max_mode)] if np.isscalar(max_mode)
                       else [int(m) for m in max_mode])
@@ -1569,7 +1593,8 @@ def minimize(
                 objective_terms, current, max_mode=mm,
                 current_dofs=current_dofs, hot_restart=hot_restart,
                 device=device, solve_kwargs=solve_kwargs, verbose=verbose,
-                method=method, **scipy_kwargs)
+                method=method, adjoint_tol=adjoint_tol,
+                adjoint_maxiter=adjoint_maxiter, **scipy_kwargs)
             stage_results.append(result)
             current = result.input
         result.stage_results = stage_results
@@ -1578,6 +1603,7 @@ def minimize(
         objective_terms, inp, max_mode=modes_schedule[0], x0=x0,
         current_dofs=current_dofs, jac_solver="reverse", recycle=False,
         warm_start=("state" if hot_restart else None),
+        adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
         solve_kwargs=dict(solve_kwargs or {}), device=device, verbose=verbose,
         minimize_method=method, **scipy_kwargs)
 
@@ -1628,6 +1654,8 @@ def _least_squares_implicit(
     current_dofs: int | None = None,
     jac_chunk_size: int | str | None = "auto",
     jac_solver: str = "auto",
+    adjoint_tol: float = 1e-6,
+    adjoint_maxiter: int = 300,
     recycle: bool = False,
     warm_start: str | None = "perturbation",
     solve_kwargs: dict,
@@ -1702,20 +1730,22 @@ def _least_squares_implicit(
     ndof = nboundary + (k_cur + 1 if k_cur else 0)
     # multigrid=True routes the host solve through solve_multigrid so
     # NITER-exhausted trials are penalized instead of raising (same trial
-    # policy as the finite-difference path).  Loose adjoint budget: the
-    # trust region only needs ~1e-3 gradient accuracy; row-norm deviation vs
-    # the tight (1e-11, 300) diagnostics default is <~1e-4 at a fraction of
-    # the cost.  hot_restart / warm_start semantics: see least_squares.
+    # policy as the finite-difference path). Public problem/minimize defaults
+    # retain the inexpensive 1e-6 tolerance but allow enough restarts for QI.
+    # hot_restart / warm_start semantics: see least_squares.
     if warm_start not in ("perturbation", "state", None):
         raise ValueError(
             "warm_start must be 'perturbation', 'state' or None, "
             f"got {warm_start!r}")
     if recycle and warm_start == "perturbation":
         warm_start = "state"  # the recycled variant carries (C, U) instead
-    cfg = imp.make_config(inp, multigrid=True,
-                          hot_restart=(warm_start is not None),
-                          adjoint_tol=1e-6, adjoint_maxiter=30,
-)
+    cfg = imp.make_config(
+        inp,
+        multigrid=True,
+        hot_restart=(warm_start is not None),
+        adjoint_tol=adjoint_tol,
+        adjoint_maxiter=adjoint_maxiter,
+    )
     # Pin the residual/Jacobian graphs to the fastest device for this
     # launch-bound path (CPU by default; explicit device= honored; None
     # leaves placement untouched).  The resolved device is ALSO carried in
@@ -2160,7 +2190,14 @@ def _least_squares_implicit(
             lambda a: np.asarray(a, dtype=np.float64), params_of(_place(x))
         )
         hit = imp._LAST_SOLVE.get(cfg)
-        if hit is None or hit[0] != imp._params_key(params_np):
+        if (
+            hit is None
+            or hit[0] != imp._params_key(params_np)
+            or imp._LAST_STATUS_ERROR.get(cfg) is not None
+        ):
+            # A cached converged point can be revisited after a different trial
+            # failed.  Refresh the status callback in that rare case so the old
+            # error cannot turn this point's exact Jacobian into a penalty row.
             jax.device_get(rows_jit(_place(x)))
         if imp._LAST_STATUS_ERROR.get(cfg) is not None:
             holder["lin"] = None

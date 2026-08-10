@@ -162,11 +162,22 @@ def test_grad_wrt_state_is_finite_and_nonzero(qi_eq):
 
 @pytest.mark.full
 def test_least_squares_implicit_composes():
-    """QIResidual works as a jac='implicit' objective term (2 trial solves)."""
+    """Full QI boundary gradient is finite and agrees in both AD directions."""
     inp = VmecInput.from_file(DATA_DIR / "input.minimal_seed_nfp2")
     qi = omn.QIResidual((0.3, 0.7), mboz=8, nboz=8, nphi=41, nalpha=9, n_levels=6)
-    result = opt.least_squares(
-        [(qi, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0)], inp, max_mode=1,
-        jac="implicit", use_ess=True, max_nfev=2, ftol=1e-12, xtol=1e-14)
-    assert np.all(np.isfinite(result.fun))
-    assert np.isfinite(float(result.cost))
+    problem = opt.VmecProblem.from_tuples(
+        inp,
+        [(qi, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0)],
+        max_mode=1,
+    )
+    value, gradient = problem.value_and_grad(problem.x0)
+    residual, jacobian = problem.residual_and_jac(problem.x0)
+    assert np.isfinite(value)
+    assert np.all(np.isfinite(gradient))
+    assert np.all(np.isfinite(jacobian))
+    np.testing.assert_allclose(value, 0.5 * residual @ residual, rtol=1e-12)
+    gradient_from_jacobian = jacobian.T @ residual
+    relative_error = np.linalg.norm(gradient - gradient_from_jacobian) / max(
+        np.linalg.norm(gradient_from_jacobian), 1.0
+    )
+    assert relative_error < 5e-3
