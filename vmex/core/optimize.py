@@ -1225,7 +1225,7 @@ def make_problem(
 
     ``adjoint_tol`` is a relative Krylov tolerance with a certified true
     residual check; ``adjoint_maxiter`` is the restart budget.  The defaults
-    are sufficient for the QI alex_qi seed while remaining much cheaper than
+    are sufficient for the precise-QI nfp=2 seed while remaining much cheaper than
     one finite-difference equilibrium solve per variable.
     """
     if (objective_terms is None) == (loss is None):
