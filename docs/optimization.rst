@@ -255,8 +255,9 @@ Precise QI: select the basin, then refine the full objective
 ------------------------------------------------------------
 
 QI optimization is non-convex, and a low value of a smooth proxy is not a
-physics certificate.  The measured nfp=2 path from the ``alex_qi`` circular
-seed uses two deliberately small changes to the ordinary least-squares loop:
+physics certificate.  The measured nfp=2 path from the bundled near-circular
+``input.nfp2_QI_seed`` uses two deliberately small changes to the ordinary
+least-squares loop:
 
 1. ten evaluations of the QP ``(M, N) = (0, 1)`` residual at ``max_mode=1``
    select a basin with poloidally closed ``|B|`` contours;

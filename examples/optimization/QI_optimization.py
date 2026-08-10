@@ -22,7 +22,7 @@ from vmex.core.input import VmecInput
 from vmex.core.qi import ConstructedQIResidual
 
 
-DATA = Path(__file__).resolve().parents[1] / "data" / "input.alex_qi_nfp2"
+DATA = Path(__file__).resolve().parents[1] / "data" / "input.nfp2_QI_seed"
 OUT_DIR = Path("output_QI_optimization")
 SURFACES = np.linspace(0.1, 1.0, 6)
 ASPECT_TARGET = 5.0
