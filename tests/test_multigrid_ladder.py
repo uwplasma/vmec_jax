@@ -30,6 +30,7 @@ import pickle
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -39,7 +40,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 from vmex.core import multigrid, solver
-from vmex.core.errors import VmecJacobianError
+from vmex.core.errors import BAD_JACOBIAN_FLAG, VmecJacobianError
 from vmex.core.input import VmecInput
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solves: run jitted
@@ -266,6 +267,42 @@ def test_ladder_forwards_explicit_2d_preconditioner(monkeypatch):
     assert seen[0]["precon_type"] == "NONE"
     assert seen[0]["prec2d_threshold"] == 3e-7
     assert seen[0]["prec2d"] is marker
+
+
+def test_initial_bad_jacobian_retries_once_through_ns3(
+    monkeypatch, capsys,
+) -> None:
+    """The VMEC++ coarse-axis recovery prepends one bounded stage."""
+    original = multigrid.solve_multigrid
+    monkeypatch.setattr(
+        multigrid,
+        "_solve_stage",
+        lambda *_args, **_kwargs: SimpleNamespace(ier=BAD_JACOBIAN_FLAG),
+    )
+    marker = object()
+    retried = {}
+
+    def record_retry(inp, **kwargs):
+        retried.update(kwargs)
+        return marker
+
+    # Preserve the already-entered implementation while intercepting only
+    # its recursive retry call.
+    monkeypatch.setattr(multigrid, "solve_multigrid", record_retry)
+    result = original(
+        _load_input("cth_like_fixed_bdy"),
+        ns_array=[5, 9],
+        ftol_array=[1.0e-8, 1.0e-10],
+        niter_array=[100, 200],
+        verbose=True,
+    )
+
+    assert result is marker
+    np.testing.assert_array_equal(retried["ns_array"], [3, 5, 9])
+    np.testing.assert_allclose(retried["ftol_array"], [1.0e-4, 1.0e-8, 1.0e-10])
+    np.testing.assert_array_equal(retried["niter_array"], [100, 100, 200])
+    assert retried["coarse_grid_retry"] is False
+    assert "RETRYING THROUGH NS = 3" in capsys.readouterr().out
 
 
 def test_lmove_axis_high_first_force_retry_and_opt_out(capsys) -> None:

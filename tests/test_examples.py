@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parents[1]
 EXAMPLES = REPO / "examples"
 DATA_DIR = EXAMPLES / "data"
 
-_COST_RE = re.compile(r"\[least_squares\] cost = ([0-9.eE+-]+)")
+_COST_RE = re.compile(r"^\s*\d+\s+\d+\s+([0-9.eE+-]+)", re.MULTILINE)
 
 
 def _run_example(script: Path, cwd: Path, timeout: int = 2400,
@@ -44,7 +44,7 @@ def _run_example(script: Path, cwd: Path, timeout: int = 2400,
 
 def _assert_cost_decreased(stdout: str, name: str) -> None:
     costs = [float(c) for c in _COST_RE.findall(stdout)]
-    assert len(costs) >= 2, f"{name}: expected verbose cost lines, got {costs}"
+    assert len(costs) >= 2, f"{name}: expected scipy iteration rows, got {costs}"
     assert min(costs) < costs[0], (
         f"{name}: least-squares cost did not decrease: first {costs[0]:.6e}, "
         f"best {min(costs):.6e}")
@@ -99,6 +99,25 @@ def test_hot_restart_scan(tmp_path):
     warm = [int(m) for m in re.findall(r"^\s*[0-9.]+\s+(\d+)\s+[0-9.]+\s+warm", out, re.M)]
     assert base is not None and int(base.group(1)) > 10, "base should need many iters"
     assert len(warm) == 5 and max(warm) <= 5, f"warm restarts should be cheap: {warm}"
+
+
+def test_optimization_landscape_artifact(tmp_path):
+    """Committed equilibrium scans stay finite and can be replotted cheaply."""
+    import json
+
+    data = REPO / "benchmarks" / "optimization_landscapes.json"
+    payload = json.loads(data.read_text())
+    assert payload["points"] == 7
+    for kind in ("QI", "QA", "QH"):
+        values = np.asarray(payload["cases"][kind]["cost"])
+        assert values.shape == (7, 7)
+        assert np.all(np.isfinite(values)) and np.all(values >= 0)
+    output = tmp_path / "optimization_landscapes.png"
+    out = _run_example(
+        REPO / "benchmarks" / "optimization_landscapes.py", tmp_path,
+        args=("--plot-only", "--data", str(data), "--output", str(output)),
+    )
+    assert "Wrote" in out and output.stat().st_size > 50_000
 
 
 def test_parallel_ensemble_scan(tmp_path):

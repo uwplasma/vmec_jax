@@ -7,13 +7,14 @@ single-call alternative: release *all* the max_mode-6 boundary harmonics at
 once and let **Exponential Spectral Scaling** (``use_ess=True``) impose the
 coarse-to-fine ordering through the trust region — each dof's radius scales as
 ``exp(-alpha * max(|m|, |n|))``, so high harmonics move on exponentially
-shorter leashes and no continuation loop is needed.
+shorter leashes.  This is a direct-run alternative; it does not reproduce the
+basin selection of a continuation ladder.
 
-The objective combines the traceable Goodman constructed-QI omnigenity
-residual (:class:`vmex.core.omnigenity.QIResidual`, implicit-adjoint
-differentiable) with a weak quasi-poloidal term that plays the basin-guiding
-role of the staged version's QP stage, plus the same aspect / iota-floor /
-mirror practical targets.
+The objective combines the lightweight smooth QI surrogate
+(:class:`vmex.core.omnigenity.QIResidual`, implicit-adjoint differentiable)
+with a weak quasi-poloidal term, plus the same aspect / iota-floor / mirror
+practical targets.  It is a fast scouting comparison; use
+``QI_optimization.py`` and its fuller constructed residual for production.
 
 Physics: nfp=1 vacuum quasi-isodynamic shaping from a circular torus,
 mpol=ntor=7.  All gradients via ``jac="implicit"`` (adjoint + block-

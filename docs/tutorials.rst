@@ -88,6 +88,15 @@ restarts converge in about one iteration instead of hundreds, and because
 vmex caches one compiled executable per solver structure, the whole scan
 recompiles nothing.
 
+The public interface is simply ``initial_state=previous.state`` on
+:func:`vmex.core.multigrid.solve_multigrid` or
+:func:`vmex.core.optimize.solve_equilibrium`.  The next input may change its
+boundary, profiles, tolerance, or radial grid: VMEX adapts the boundary and
+interpolates the state to the requested ``ns``.  Carry the newly converged
+``result.state`` into each subsequent call.  Optimization problems perform
+this continuation automatically and add a first-order perturbation seed when
+exact implicit responses are available.
+
 .. literalinclude:: ../examples/hot_restart_scan.py
    :language: python
 
@@ -242,22 +251,22 @@ objective terms with implicit-differentiation gradients
 stability, turbulence proxies, scalar targets) and :doc:`optimization` for
 the differentiation machinery and the measured campaign timings.
 
-Single-call ESS optimization (recommended)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Single-call ESS optimization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The recommended pattern is **one** ``least_squares`` call with *all* the
-boundary harmonics released at once and Exponential Spectral Scaling
-(``use_ess=True``) ordering them through the trust region — no
-``max_mode`` continuation loop.  Measured: precise QA (QS 7.2e-6) in
-14.5 minutes on a CPU.
+One ``least_squares`` call with all boundary harmonics and Exponential
+Spectral Scaling (``use_ess=True``) is the quickest survey pattern.  Measured:
+QA (QS 7.2e-6) in 14.5 minutes on a CPU.  ESS improves trust-region scaling;
+it does not reproduce the basin selection of a mode ladder.
 
 .. literalinclude:: ../examples/optimization/QA_optimization_ess.py
    :language: python
 
-``QI_optimization_ess.py`` is the quasi-isodynamic analogue: the traceable
-Goodman constructed-QI residual (:class:`~vmex.core.omnigenity.QIResidual`)
-plus practical targets, one call at ``max_mode = 6`` (25x residual
-reduction in 17.3 minutes).
+``QI_optimization_ess.py`` is the quasi-isodynamic scouting analogue: the
+smooth traceable surrogate (:class:`~vmex.core.omnigenity.QIResidual`) plus
+practical targets, one call at ``max_mode = 6`` (25x surrogate reduction in
+17.3 minutes).  Use :class:`~vmex.core.qi.ConstructedQIResidual` for a
+production QI target.
 
 Staged ``max_mode`` continuation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -265,16 +274,33 @@ Staged ``max_mode`` continuation
 The classic ladder — one least-squares stage per ``max_mode``, each seeded
 with the previous stage's boundary — remains available and is what
 ``QA_optimization.py``, ``QH_optimization.py``, ``QP_optimization.py``, and
-``QI_optimization.py`` run (QI with a quasi-poloidal basin stage first).
-It reaches the same precision class as the single-call pattern at roughly
-twice the wall time; the scripts stay side by side so the comparison is
-reproducible.
+``QI_optimization.py`` run (constructed QI with a short quasi-poloidal basin
+stage first).  A ladder can reach a lower, different minimum even when the
+single-call pattern is faster; the scripts stay side by side so the comparison
+is reproducible.
 
 .. literalinclude:: ../examples/optimization/QA_optimization.py
    :language: python
 
 These are the heaviest examples (hundreds to thousands of solves) and are
 exercised in the nightly CI run.
+
+Choose the optimizer
+~~~~~~~~~~~~~~~~~~~~
+
+VMEX exposes the objective and derivatives without owning the optimizer.  The
+following three scripts import one shared QI problem and send it unchanged to
+SciPy, JAXopt, or Optax.  Install the optional JAX backends with
+``pip install -e '.[optimizers]'``.
+
+.. literalinclude:: ../examples/optimization/QI_optimization_scipy.py
+   :language: python
+
+.. literalinclude:: ../examples/optimization/QI_optimization_jaxopt.py
+   :language: python
+
+.. literalinclude:: ../examples/optimization/QI_optimization_optax.py
+   :language: python
 
 Self-consistent bootstrap current
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
