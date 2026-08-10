@@ -450,6 +450,11 @@ class VmecProblem(FunctionProblem):
         stats = imp._SOLVE_STATS.get(cfg)
         if stats is not None:
             diagnostics["solve_stats"] = dict(stats)
+        holder = self.metadata.get("holder", {})
+        diagnostics["failed_trials"] = int(holder.get("failed_trials", 0))
+        diagnostics["derivative_fallbacks"] = int(
+            holder.get("derivative_fallbacks", 0)
+        )
         error = imp._LAST_STATUS_ERROR.get(cfg)
         if error is None:
             return replace(evaluation, diagnostics=diagnostics)

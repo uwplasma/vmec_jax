@@ -76,8 +76,11 @@ def test_fd_lane_penalty_path(monkeypatch, capsys):
                             diff_step=1e-4, verbose=1)
     out = capsys.readouterr().out
     assert calls["failed"] == 1
-    assert "trial solve failed" in out  # the penalty branch executed
+    assert "Cost" in out
+    assert "VmecJacobianError" not in out
+    assert "Traceback" not in out
     assert np.isfinite(res.cost)
+    assert res.failed_trials == 1
     assert isinstance(res.input, VmecInput)
 
 
@@ -107,7 +110,7 @@ def test_implicit_lane_fun_penalty_path(monkeypatch, capsys):
                             max_nfev=4, verbose=1)
     out = capsys.readouterr().out
     assert calls["poisoned"] >= 1
-    assert "cost" in out                 # finite penalty evaluations were reported
+    assert "Cost" in out                 # scipy accepted-iteration table
     assert "VmecJacobianError" not in out
     assert "Traceback" not in out        # no exception crossed pure_callback
     assert np.isfinite(res.cost)
@@ -135,10 +138,10 @@ def test_minimize_penalty_path(monkeypatch, capsys):
         options={"maxiter": 2, "maxls": 3})
     out = capsys.readouterr().out
     assert calls["poisoned"] >= 1
-    assert "cost" in out
     assert "VmecJacobianError" not in out
     assert "Traceback" not in out
     assert np.isfinite(res.cost)
+    assert res.monitor is not None
 
 
 def test_implicit_lane_status_penalty_and_diagnostic_resolve(monkeypatch, capsys):

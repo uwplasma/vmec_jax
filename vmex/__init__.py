@@ -17,6 +17,7 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.scaling.scale_input` / :func:`~vmex.core.scaling.scale_wout`
   — dimensional similarity transforms
 - ``vmex.optimize`` — objectives + least-squares driver (module)
+- :class:`~vmex.core.monitoring.OptimizationMonitor` — accepted iterations
 - ``vmex.implicit`` — implicit differentiation of the equilibrium (module)
 - ``vmex.parallel`` — concurrent ensembles of independent solves (module)
 - ``vmex.errors`` — typed zero-crash exceptions (also exported directly)
@@ -123,6 +124,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "Evaluation": (".core.problem", "Evaluation"),
     "FunctionProblem": (".core.problem", "FunctionProblem"),
     "VmecProblem": (".core.problem", "VmecProblem"),
+    "OptimizationMonitor": (".core.monitoring", "OptimizationMonitor"),
+    "OptimizationRecord": (".core.monitoring", "OptimizationRecord"),
     # external fields
     "MgridData": (".core.mgrid", "MgridData"),
     "MgridField": (".core.mgrid", "MgridField"),
