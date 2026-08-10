@@ -1944,6 +1944,16 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
         emit(screen_header(lasym=rt.resolution.lasym, lfreeb=False), end="")
 
     printed: set[int] = set()
+    # Host mirror of the emitted trajectory rows.  A row is final once the
+    # iteration counter has advanced past it (restart passes rewrite only the
+    # CURRENT iteration's row), so each block round-trip transfers just the
+    # rows since the previous fetch — O(total iterations) device-to-host
+    # traffic instead of the O(N^2) full-prefix re-transfer per block.  The
+    # rows handed to _emit_lines are the same final values either way.
+    host_traj = (
+        np.zeros((rt.max_iterations, _TRAJ_COLS)) if verbose else None
+    )
+    fetched = 0
     max_passes = rt.max_iterations + 200
     lane = _block_lane_fft if use_fft else _block_lane
     # Prefetched-executable consumption + compile attribution.  The
@@ -1979,8 +1989,11 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
             AXIS_REGUESS_FLAG, BAD_JACOBIAN_FLAG,
         )
         if verbose and not retry_transfer:
-            trajectory = np.asarray(carry.trajectory[:max(upto, 0)])
-            _emit_lines(rt, trajectory, upto, printed, done, emit)
+            hi = min(max(upto, 0), rt.max_iterations)
+            if hi > fetched:
+                host_traj[fetched:hi] = np.asarray(carry.trajectory[fetched:hi])
+                fetched = hi
+            _emit_lines(rt, host_traj[:hi], upto, printed, done, emit)
         if done:
             break
     return carry
