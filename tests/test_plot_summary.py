@@ -15,7 +15,9 @@ check, so the module needs no golden fixtures and stays network-free:
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -169,3 +171,117 @@ def test_saved_summary_png_resolution(solved_case, tmp_path):
     width_in, height_in = 15.0, 11.5  # _summary_figure figsize
     assert pixels.shape[1] >= 0.95 * width_in * plotting._DPI
     assert pixels.shape[0] >= 0.95 * height_in * plotting._DPI
+
+
+# ==========================================================================
+# Degenerate inputs and fallback panels
+# ==========================================================================
+
+def test_d_r_guards_reject_degenerate_wouts():
+    """D_R reconstruction flags too-few-surface and vanishing-phip inputs."""
+    tiny = SimpleNamespace(lasym=False, ns=3)
+    info = plotting._glasser_d_r_from_wout(tiny)
+    assert info["valid"] is False and "too few surfaces" in info["note"]
+
+    ns = 5
+    flat = SimpleNamespace(
+        lasym=False, ns=ns, nfp=1, signgs=-1,
+        xm_nyq=np.array([0.0, 1.0]), xn_nyq=np.array([0.0, 0.0]),
+        xm=np.array([0.0, 1.0]), xn=np.array([0.0, 0.0]),
+        pres=np.zeros(ns), phips=np.zeros(ns), vp=np.ones(ns),
+        iotas=np.ones(ns), buco=np.zeros(ns), jdotb=np.zeros(ns),
+        bdotb=np.ones(ns), DMerc=np.zeros(ns),
+    )
+    info = plotting._glasser_d_r_from_wout(flat)
+    assert info["valid"] is False and "vanishing phip" in info["note"]
+
+
+def test_d_r_self_check_rejects_inconsistent_dmerc(solved_case):
+    """A stored DMerc the integrals cannot reproduce invalidates the curve."""
+    _, wout = solved_case
+    tampered = dataclasses.replace(wout, DMerc=np.zeros_like(np.asarray(wout.DMerc)))
+    info = plotting._glasser_d_r_from_wout(tampered)
+    assert info["valid"] is False
+    assert "self-check failed" in info["note"]
+    assert info["d_r"] is None
+
+
+def test_j_invariant_map_rejects_degenerate_field():
+    """A constant Boozer |B| cannot define a trapped-particle pitch."""
+    booz = {
+        "bmnc_b": np.array([[1.0]]), "bmns_b": None,
+        "xm_b": np.array([0]), "xn_b": np.array([0]),
+        "nfp": 1, "iota_b": np.array([1.0]),
+    }
+    with pytest.raises(ValueError, match="degenerate"):
+        plotting._j_invariant_map(booz)
+
+
+def test_magnetic_well_panel_handles_zero_axis_vprime():
+    """V'(0) = 0 draws the explanatory note instead of dividing by zero."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    fake = SimpleNamespace(ns=5, vp=np.array([0.0, 1.0, 3.0, 2.0, 2.0]))
+    plotting._magnetic_well_panel(ax, fake)
+    assert any("V'(0) = 0" in t.get_text() for t in ax.texts)
+    assert not ax.lines
+    plt.close(fig)
+
+
+def test_summary_survives_boozer_failure(solved_case, monkeypatch):
+    """Boozer-transform failure leaves annotated placeholder panels."""
+    import matplotlib.pyplot as plt
+
+    _, wout = solved_case
+
+    def _broken(_wout, **_kwargs):
+        raise RuntimeError("synthetic boozer failure")
+
+    monkeypatch.setattr(plotting, "_boozer_summary_data", _broken)
+    fig, meta = plotting._summary_figure(wout)
+    try:
+        for name in ("j_invariant", "boozer_mid", "boozer_lcfs"):
+            ax = meta["axes"][name]
+            assert any("Boozer transform unavailable" in t.get_text() for t in ax.texts), name
+            assert ax.get_title().strip() and ax.get_xlabel().strip()
+    finally:
+        plt.close(fig)
+
+
+def test_summary_survives_j_map_failure(solved_case, monkeypatch):
+    """J-map failure annotates its panel; Boozer |B| panels still render."""
+    import matplotlib.pyplot as plt
+
+    _, wout = solved_case
+
+    def _broken(_booz, **_kwargs):
+        raise RuntimeError("synthetic bounce failure")
+
+    monkeypatch.setattr(plotting, "_j_invariant_map", _broken)
+    fig, meta = plotting._summary_figure(wout)
+    try:
+        ax = meta["axes"]["j_invariant"]
+        assert any("J map unavailable" in t.get_text() for t in ax.texts)
+        assert ax.get_title() == "second adiabatic invariant"
+        for name in ("boozer_mid", "boozer_lcfs"):
+            assert _contour_sets(meta["axes"][name]), name
+    finally:
+        plt.close(fig)
+
+
+def test_plot_surfaces_pads_unused_axes(solved_case, tmp_path):
+    """A slice count off the grid ends with blank axes, not an IndexError."""
+    _, wout = solved_case
+    path = plotting.plot_surfaces(
+        wout, tmp_path / "surfaces.png", nzeta=5, nradii=4, ntheta=48,
+    )
+    assert path.exists() and path.stat().st_size > 0
+
+
+def test_plot_profiles_without_fsqt_history(solved_case, tmp_path):
+    """An all-zero fsqt history draws the no-history note panel."""
+    _, wout = solved_case
+    assert not np.any(np.asarray(wout.fsqt) > 0.0)  # in-memory wout: no history
+    path = plotting.plot_profiles(wout, tmp_path / "profiles.png")
+    assert path.exists() and path.stat().st_size > 0

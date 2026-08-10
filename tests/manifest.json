@@ -118,7 +118,9 @@
       "tests/test_printing.py::test_emit_flushed_writes_and_flushes",
       "tests/test_bootstrap.py",
       "tests/test_wout_golden.py",
-      "tests/test_scaling.py"
+      "tests/test_scaling.py",
+      "tests/test_plot_summary.py",
+      "tests/test_plotting_boozer.py"
     ],
     "pr-implicit-response": [
       "tests/test_implicit_multi_rhs.py::test_block_response_forward_transpose_and_fd",
