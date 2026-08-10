@@ -33,7 +33,7 @@ pytestmark = pytest.mark.skipif(
     GOLDEN_DIR is None, reason="golden VMEC2000 fixtures unavailable (offline?)"
 )
 
-MAX_FIGURE_BYTES = 400 * 1024
+MAX_FIGURE_BYTES = 2 * 1024 * 1024  # >= 200 dpi publication PNGs
 WOUT_KEYS = ("summary", "surfaces", "modB", "profiles", "3d")
 
 

@@ -67,6 +67,7 @@
     ["tests/test_parallel.py", "equilibrium", "integration", "medium", "cpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_parity_breadth.py", "equilibrium", "oracle", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-n-s"]],
     ["tests/test_performance_docs.py", "infrastructure", "unit", "fast", "cpu", "none", "golden", ["pr-parity-c2", "full-core-n-s"]],
+    ["tests/test_plot_summary.py", "diagnostics", "integration", "medium", "cpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
     ["tests/test_qi_crosscode_benchmark.py", "optimization", "oracle", "fast", "cpu", "golden", "external", ["pr-parity-d", "pr-fast", "full-core-n-s"]],
     ["tests/test_plotting_boozer.py", "diagnostics", "integration", "medium", "cpu", "golden", "external", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_postprocess_currents.py", "diagnostics", "oracle", "medium", "cpu-gpu", "golden", "vmec2000", ["pr-parity-c2", "full-core-n-s"]],
@@ -128,7 +129,9 @@
       "tests/test_wout_golden.py::test_golden_values[solovev]",
       "tests/test_scaling.py::test_input_scaling_changes_only_dimensional_quantities",
       "tests/test_scaling.py::test_scale_wout_commutes_with_finite_beta_solve",
-      "tests/test_restart.py"
+      "tests/test_restart.py",
+      "tests/test_plot_summary.py",
+      "tests/test_plotting_boozer.py"
     ],
     "pr-implicit-response": [
       "tests/test_input_profiles.py::test_change_resolution_preserves_representable_coefficients",
