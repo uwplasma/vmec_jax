@@ -15,7 +15,7 @@ Measured strong scaling (10-core host, 8 balanced ``phiedge`` solves): 1.79x
 with 2 workers, 3.29x with 8.  The scaling is deliberately sub-linear: XLA
 already multithreads *within* one solve, so as the worker count approaches
 the core count the per-solve XLA threads contend — the ensemble speedup and
-the intra-solve speedup draw from the same cores.  See :doc:`/parallelization`
+the intra-solve speedup draw from the same cores.  See :doc:`/explanation/parallelization`
 for the full mechanism study (why threading beats ``pmap`` across forced host
 devices and ``vmap`` over the callback here), the honest limits (Amdahl on
 imbalanced heterogeneous ensembles; the launch-bound implicit adjoint
@@ -129,7 +129,7 @@ def solve_ensemble(
     Best speedup comes from a *balanced* ensemble — a parameter scan at fixed
     resolution, where the members share a compiled executable and take a
     similar iteration count.  A heterogeneous ensemble is limited by its
-    slowest member (Amdahl); see :doc:`/parallelization`.
+    slowest member (Amdahl); see :doc:`/explanation/parallelization`.
     """
     # Imported lazily so importing ``vmex.parallel`` stays cheap and free of a
     # hard import cycle with the solver modules.

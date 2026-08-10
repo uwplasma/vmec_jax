@@ -1,14 +1,14 @@
 Confinement physics: quasisymmetry, omnigenity, stability
 =========================================================
 
-The pages :doc:`equations` and :doc:`algorithms` derive the *solver* physics —
+The pages :doc:`variational-problem` and :doc:`iteration` derive the *solver* physics —
 the energy functional whose stationary point is an equilibrium, and the
 numerics that find it. This page derives the **target functionals** that a
 stellarator-design campaign puts in front of that equilibrium: the confinement
 and stability metrics of :mod:`vmex.core.omnigenity`,
 :mod:`vmex.core.optimize`, :mod:`vmex.core.nyquist`,
 :mod:`vmex.core.stability` and :mod:`vmex.core.bootstrap`. It is the
-first-principles companion to :doc:`objectives`, which catalogs the same
+first-principles companion to :doc:`/reference/objectives`, which catalogs the same
 quantities as ready-to-use optimizer terms.
 
 The unifying object is the field strength :math:`|B|` expressed in **Boozer
@@ -174,7 +174,7 @@ Gauss–Newton (per-point) form, it feeds the least-squares driver as an exact
 residual vector rather than a pre-summed scalar. The metric is evaluated from
 the parity-proven wout tables (:mod:`vmex.core.nyquist`) and also exposes a
 traceable ``residuals_state`` lane, so the *same* term optimizes under both
-``jac=None`` and ``jac="implicit"`` (see :doc:`objectives`).
+``jac=None`` and ``jac="implicit"`` (see :doc:`/reference/objectives`).
 
 
 Omnigenity and quasi-isodynamicity
@@ -479,7 +479,7 @@ outward — a magnetic well, favorable for interchange stability — matching
 simsopt's ``vacuum_well``. Being a pure ``(state, runtime)`` function it carries
 exact implicit gradients and is a cheaper Mercier-adjacent target. Near-axis
 analytic context for both measures is in Landreman–Jorge (2020) and
-Kim–Jorge–Dorland (2021); see :doc:`references`.
+Kim–Jorge–Dorland (2021); see :doc:`/project/references`.
 
 Ideal ballooning
 ~~~~~~~~~~~~~~~~~
@@ -503,7 +503,7 @@ inertia; :math:`\lambda = (\gamma a_N/v_A)^2 > 0` flags instability.
 eigenvalues to a smooth ``softmax`` scalar built to be driven negative as a
 stable-by-construction constraint. The full coefficient definitions are in the
 :mod:`~vmex.core.stability` module docstring and the usage recipe in
-:doc:`objectives`.
+:doc:`/reference/objectives`.
 
 
 Bootstrap current (Redl)
@@ -545,6 +545,6 @@ stores the same full-mesh result as ``vmex_trapped_fraction``. A QI axis with
 finite :math:`B_0(\varphi)` mirror ratio therefore has a finite trapped
 fraction rather than an imposed zero. Their normalized mismatch is the residual
 :class:`~vmex.core.bootstrap.RedlBootstrapMismatch` (the exact formula and
-the finite-beta profile conventions are in :doc:`equations`); driving it to
+the finite-beta profile conventions are in :doc:`variational-problem`); driving it to
 zero, optionally with ``current_dofs`` freed, yields a current profile
 consistent with the plasma the equilibrium describes.

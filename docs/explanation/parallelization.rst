@@ -1,11 +1,13 @@
-Parallelization
-===============
+Why threading, not pmap
+=======================
 
-This page documents what runs in parallel in vmex today, the measured
-strong-scaling of concurrent **ensemble** solves, and the design sketch for
-multi-GPU work. It covers the CPU capability that ships now
-(:mod:`vmex.core.parallel`, exposed as ``vmex.parallel``) and scopes the GPU
-work honestly as future work — the development box is CPU-only, so no GPU
+VMEX parallelizes independent equilibrium solves with a plain thread pool,
+because each host solve releases the GIL while XLA executes — and the
+measured alternatives (pmap over forced host devices, vmap over the callback)
+are slower or inapplicable. This page documents what runs in parallel today,
+why the mechanism was chosen, its limits, and the multi-GPU design sketch;
+the run recipe with the measured scaling table is
+:doc:`/howto/parallel-ensembles`. The development box is CPU-only, so no GPU
 numbers are fabricated here.
 
 What already parallelizes today
@@ -37,63 +39,14 @@ lanes, so a plain :class:`concurrent.futures.ThreadPoolExecutor` over the
 solves overlaps their execution and gives real wall-clock speedup. This is what
 :func:`vmex.core.parallel.solve_ensemble` provides.
 
-Concurrent ensemble solves
---------------------------
+The recipe (``solve_ensemble``/``map_ensemble``), the correctness contract,
+and the measured 1.79x/2-worker, 3.29x/8-worker strong-scaling table are in
+:doc:`/howto/parallel-ensembles`.
 
-.. code-block:: python
+Why the scaling is sub-linear
+-----------------------------
 
-   import vmex as vj
-
-   inputs = [vj.VmecInput.from_file(f) for f in deck_files]   # N independent decks
-   results = vj.parallel.solve_ensemble(inputs, workers=4)    # list[SolveResult]
-
-``solve_ensemble`` threads :func:`vmex.core.multigrid.solve_multigrid`
-(default) or :func:`vmex.core.solver.solve` (``multigrid=False``) over the
-ensemble and returns the results in input order. The general primitive is
-:func:`vmex.core.parallel.map_ensemble`, which threads any independent
-per-item function — e.g. a ``jax.value_and_grad`` of :func:`vmex.core.implicit.run`
-for an ensemble of differentiable objectives.
-
-**Correctness contract.** Every ensemble result is *byte-identical* to solving
-that input alone: the solves share no mutable state, and the concurrency only
-overlaps their GIL-releasing XLA windows. ``tests/test_parallel.py`` asserts
-exactly zero state difference (and identical iteration counts) against the
-serial solve on a solovev / circular-tokamak / li383 ensemble and on a
-``phiedge`` scan.
-
-Measured strong scaling
------------------------
-
-A balanced ``nfp2_QA`` ``phiedge`` scan (``mpol=5, ntor=5, ns=35``, 8 solves
-~0.68 s each), reproduced by ``examples/parallel_ensemble_scan.py``, on a
-10-logical-CPU box (best-of-3):
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 20 20 20
-
-   * - workers
-     - wall (s)
-     - speedup
-     - efficiency
-   * - serial
-     - 5.46
-     - 1.00x
-     - 100 %
-   * - 2
-     - 3.05
-     - 1.79x
-     - 89 %
-   * - 4
-     - 2.15
-     - 2.54x
-     - 63 %
-   * - 8
-     - 1.66
-     - 3.29x
-     - 41 %
-
-The scaling is deliberately sub-linear. XLA already multithreads *within* each
+XLA already multithreads *within* each
 solve, so as the worker count approaches the core count the ensemble workers
 and the intra-solve XLA threads draw from the same pool of cores — the falling
 efficiency is that contention, not a defect. The absolute speedup therefore
