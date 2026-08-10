@@ -63,6 +63,15 @@ def qa_eq():
 # ---------------------------------------------------------------------------
 
 
+def test_half_mesh_midpoint_tie_selects_lower_surface():
+    """Surface snapping is stable when decimal input lies at a midpoint."""
+    s_half, rows = omn._nearest_half_mesh_rows(31, [0.1])
+    assert rows.tolist() == [3]
+    assert s_half[rows[0] - 1] == pytest.approx(1.0 / 12.0)
+    with pytest.raises(ValueError, match="surfaces must be non-empty"):
+        omn._nearest_half_mesh_rows(31, [])
+
+
 @pytest.mark.full
 def test_boozer_spectrum_matches_booz_xform(qi_eq):
     pytest.importorskip("booz_xform_jax")
