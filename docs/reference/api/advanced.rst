@@ -1,15 +1,13 @@
-API reference
-=============
+Advanced API
+============
 
-The toroidal production API is :mod:`vmex.core`; the open-field-line API
-is :mod:`vmex.mirror`. Modules are grouped as in :doc:`/architecture`;
-every docstring names the VMEC2000 counterpart it ports.
+Everything below :doc:`basic`: the solver internals of :mod:`vmex.core` and
+the open-field-line lane :mod:`vmex.mirror`, grouped as in
+:doc:`/explanation/architecture`. Every docstring names the VMEC2000
+counterpart it ports.
 
-Inputs and profiles
--------------------
-
-.. automodule:: vmex.core.input
-   :members:
+Profiles
+--------
 
 .. automodule:: vmex.core.profiles
    :members:
@@ -77,22 +75,10 @@ Free boundary
 .. automodule:: vmex.core.mgrid
    :members:
 
-Differentiation and optimization
---------------------------------
-
-.. automodule:: vmex.core.implicit
-   :members:
-
-.. automodule:: vmex.core.optimize
-   :members:
-
-.. automodule:: vmex.core.parallel
-   :members:
-
 Physics objectives
 ------------------
 
-The objective catalog with usage snippets is :doc:`/objectives`.
+The objective catalog with usage snippets is :doc:`/reference/objectives`.
 
 .. automodule:: vmex.core.omnigenity
    :members:
@@ -117,9 +103,6 @@ The objective catalog with usage snippets is :doc:`/objectives`.
 
 Outputs
 -------
-
-.. automodule:: vmex.core.wout
-   :members:
 
 .. automodule:: vmex.core.scaling
    :members:

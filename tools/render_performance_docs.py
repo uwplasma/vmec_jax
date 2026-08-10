@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the docs/performance.rst baseline table from benchmarks/baseline.json.
+"""Render the docs/reference/performance.rst baseline table from benchmarks/baseline.json.
 
 The table lives between the ``.. begin generated-baseline-table`` and
 ``.. end generated-baseline-table`` markers and is REWRITTEN by this script —
@@ -21,7 +21,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 BASELINE = REPO / "benchmarks" / "baseline.json"
-DOC = REPO / "docs" / "performance.rst"
+DOC = REPO / "docs" / "reference" / "performance.rst"
 BEGIN = ".. begin generated-baseline-table (tools/render_performance_docs.py)"
 END = ".. end generated-baseline-table"
 
@@ -107,7 +107,7 @@ def main() -> int:
     if args.check:
         if new != text:
             print(
-                "docs/performance.rst baseline table is stale; run python tools/render_performance_docs.py",
+                "docs/reference/performance.rst baseline table is stale; run python tools/render_performance_docs.py",
                 file=sys.stderr,
             )
             return 1

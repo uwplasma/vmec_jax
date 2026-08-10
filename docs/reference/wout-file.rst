@@ -5,7 +5,7 @@ wout file reference
 names, dimensions, dtypes, and unit conventions required by simsopt,
 booz_xform, and other VMEC-ecosystem tools.  A declared variable may still be
 fill-valued where its producer is not implemented; those cases are disclosed
-below and in :doc:`vmec2000_compatibility`. Use
+below and in :doc:`vmec2000-compatibility`. Use
 :func:`vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
 for IO and :func:`~vmex.core.wout.wout_from_state` to build the dataset
 from a converged solver state.
@@ -108,4 +108,4 @@ per-variable with
 combined relative + absolute tolerances (CompareWOut-style methodology from
 reference validation), with a documented looser bound for ``currumnc/currvmnc``.
 This is not a claim that fill-valued or untested modes have parity. See
-:doc:`performance` and :doc:`vmec2000_compatibility`.
+:doc:`performance` and :doc:`vmec2000-compatibility`.

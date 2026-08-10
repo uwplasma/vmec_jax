@@ -182,13 +182,13 @@ Optimization wall time
 
 Whole-campaign numbers, from a near-circular torus to a precise
 configuration on a 36-core office CPU (details and scripts in
-:doc:`optimization`): QA to QS 7.2e-6 in **14.5 min** with a single
+:doc:`/explanation/adjoint-gradients`): QA to QS 7.2e-6 in **14.5 min** with a single
 ESS-scaled ``least_squares`` call (the staged ``max_mode`` 1–5 ladder
 reaches 3.7e-7 in 25.5 min), and QI to a 25x omnigenity-residual reduction
 in **17.3 min**. Two measured gradient-stack optimizations make that
 possible — the block-tridiagonal implicit Jacobian (33x on the Jacobian
 phase) and the perturbation warm start (3.7x fewer trial-solve iterations)
-— both on by default and documented in :doc:`optimization`.
+— both on by default and documented in :doc:`/explanation/adjoint-gradients`.
 
 Parity with VMEC2000
 --------------------
@@ -268,7 +268,7 @@ The vmex trace comes from ``SolveResult.fsq_history``, the VMEC2000
 trace from its stdout iteration table run with ``NSTEP = 1``, and the
 reference trace from the ``fsqt`` array of its wout payload.
 
-.. figure:: _static/figures/readme_convergence.png
+.. figure:: /_static/figures/readme_convergence.png
    :alt: force residual vs iteration for vmex, VMEC2000, and the reference C++ implementation
    :align: center
    :width: 95%
@@ -319,7 +319,7 @@ default 1D path stays byte-identical, so parity is untouched.
      - 204
      - 9.2x
 
-.. figure:: _static/figures/readme_precond.png
+.. figure:: /_static/figures/readme_precond.png
    :alt: 2D vs 1D preconditioner iteration counts on stiff cases
    :align: center
    :width: 90%
@@ -512,7 +512,7 @@ batched-matmul transforms): the solve stays on CPU below
 calibration evidence and the full precedence rules — an explicit ``device=``
 argument always wins, ``device=None`` leaves placement to JAX, and an active
 ``jax.default_device`` context or user-pinned platform makes ``"auto"``
-stand down — are in :ref:`architecture:Device policy (CPU/GPU)`.
+stand down — are in :ref:`explanation/architecture:Device policy (CPU/GPU)`.
 
 .. code-block:: python
 
@@ -524,7 +524,7 @@ stand down — are in :ref:`architecture:Device policy (CPU/GPU)`.
 The mirror solver uses its own measured default because host SciPy repeatedly
 drives JAX callbacks: ``vmex.mirror`` solves choose CPU under ``"auto"``
 with the same explicit/``None``/active-context precedence (measurement in
-:ref:`architecture:Device policy (CPU/GPU)`).
+:ref:`explanation/architecture:Device policy (CPU/GPU)`).
 
 Persistent compilation cache
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

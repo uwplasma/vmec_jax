@@ -178,7 +178,7 @@ stated in the row is validated; ``—`` means no public path.
      - —
      - —
      - not-implemented
-     - ANIMEC-derived and open-mirror anisotropic equilibria are roadmap work. Evidence: `mirror_geometry.rst <https://github.com/uwplasma/VMEX/blob/main/docs/mirror_geometry.rst>`__.
+     - ANIMEC-derived and open-mirror anisotropic equilibria are roadmap work. Evidence: `mirror-geometry.rst <https://github.com/uwplasma/VMEX/blob/main/docs/explanation/mirror-geometry.rst>`__.
 
 Free-boundary differentiation
 -----------------------------

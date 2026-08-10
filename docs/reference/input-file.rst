@@ -13,7 +13,7 @@ parses back to the same input. Implemented VMEC2000 defaults and ``readin.f``
 normalizations are applied on construction (see the
 :mod:`vmex.core.input` docstring for the exact rules). Parsing does not imply
 solver support: the complete supported/rejected/no-op classification is in
-:doc:`vmec2000_compatibility`. Unknown names and active unsupported physics
+:doc:`vmec2000-compatibility`. Unknown names and active unsupported physics
 fail before setup.
 
 Fortran namelist assignment semantics
@@ -135,6 +135,13 @@ Multigrid ladder and stepping
      - ``F``
      - write a WOUT after ordinary NITER exhaustion; when false, the CLI
        returns ``ier_flag=2`` before the output path, matching VMEC2000
+   * - ``RESTART_WOUT``
+     - ``''``
+     - **VMEX extension** (VMEC2000 has no wout-restart INDATA control): hot
+       restart from the named ``wout_*.nc``, resolved relative to the input
+       deck when not absolute; coarse multigrid rungs at or below the file's
+       resolution are skipped.  The CLI ``--restart`` flag overrides it.
+       See :doc:`/howto/restart-from-previous-run`.
 
 Pressure profile
 ~~~~~~~~~~~~~~~~
@@ -307,5 +314,5 @@ Unsupported and output-only INDATA controls
 Active reconstruction, RFP, TRIP3D, ANIMEC, target-volume rescaling, and
 unsupported continuation/preconditioner modes fail with a typed error.
 Neutral legacy defaults remain accepted. Legacy output-only switches are
-listed individually in :doc:`vmec2000_compatibility`; they do not alter the
+listed individually in :doc:`vmec2000-compatibility`; they do not alter the
 equilibrium and VMEX does not imply that their auxiliary files are produced.

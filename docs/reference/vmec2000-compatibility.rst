@@ -130,9 +130,12 @@ Equilibrium capability matrix
        selected at every executed resolution.
    * - Hot restart
      - implemented
-     - Fixed and free boundary accept ``initial_state``.  A user free-boundary
-       restart repeats activation (reset-file semantics); continuation between
-       radial stages carries the active vacuum state.
+     - Fixed and free boundary accept ``initial_state`` and ``restart_from``
+       (any VMEC2000-compatible wout file, a ``WoutData``, a ``SolveResult``,
+       or a ``SpectralState``; CLI ``--restart`` / deck ``RESTART_WOUT``).
+       Coarse multigrid rungs below the restart resolution are skipped.  A
+       user free-boundary restart repeats activation (reset-file semantics);
+       continuation between radial stages carries the active vacuum state.
    * - Mgrid
      - implemented
      - MAKEGRID netCDF field and coil-group currents are interpolated in
@@ -309,7 +312,7 @@ Force, axis, and iteration controls
        equilibrium equations.
    * - ``OMP_NUM_THREADS``
      - accepted no-op
-     - JAX/XLA owns CPU threading; see :doc:`parallelization`.
+     - JAX/XLA owns CPU threading; see :doc:`/explanation/parallelization`.
 
 Free-boundary controls
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -435,7 +438,7 @@ rejected when ``AH`` or ``AT`` activates anisotropic physics.
 WOUT contract and limitations
 -----------------------------
 
-VMEX writes a VMEC2000-shaped netCDF WOUT; :doc:`wout_reference` lists every
+VMEX writes a VMEC2000-shaped netCDF WOUT; :doc:`wout-file` lists every
 variable.  The following distinctions are important:
 
 * ``lrecon`` and ``lrfp`` are false because active modes are rejected.
@@ -535,7 +538,9 @@ Multigrid
    Fixed and free boundary use the same normalized nondecreasing prefix.
 
 Hot restart
-   Seeding a solve with an existing spectral state.  Fixed-boundary hot restart
+   Seeding a solve with an existing spectral state — in-memory or rebuilt
+   from any VMEC2000-compatible wout file (``restart_from`` / ``--restart``
+   / ``RESTART_WOUT``).  Fixed-boundary hot restart
    adapts the edge smoothly to a changed boundary; free-boundary restart
    distinguishes user reset semantics from within-ladder vacuum continuation.
 
@@ -594,7 +599,7 @@ interior surfaces have a weak parameterization direction: the variational
 three-dimensional boundary modes only weakly remove that direction.
 
 The public :download:`NFP=3 example
-<../examples/data/input.near_degenerate_vacuum_nfp3>` reproduces this limit.
+<../../examples/data/input.near_degenerate_vacuum_nfp3>` reproduces this limit.
 With ``LFORBAL=F``, VMEX and VMEC2000 follow the same trajectory and stop just
 above ``FTOL=1e-11`` after 3,500 iterations.  With ``LFORBAL=T``, both replace
 that one variational equation by VMEC2000's flux-averaged force balance and

@@ -67,6 +67,13 @@ Options
      - Override the final-stage ``FTOL_ARRAY`` tolerance.
    * - ``--max-iter N``
      - Override the final-stage ``NITER_ARRAY`` iteration cap.
+   * - ``--restart WOUT``
+     - Hot-restart the solve from a ``wout_*.nc`` file (VMEX- or
+       VMEC2000-written): the equilibrium state is rebuilt from the file,
+       coarse multigrid rungs at or below its resolution are skipped, and
+       radial/mode-table differences are resampled. Overrides a
+       ``RESTART_WOUT`` deck entry. See
+       :doc:`/howto/restart-from-previous-run`.
    * - ``--prefetch-compile`` / ``--no-prefetch-compile``
      - Opt in to or out of overlapping the next multigrid rung's compilation.
        Sequential compilation is the default and uses less peak memory;
@@ -113,6 +120,18 @@ the preceding stage's final plasma state, carries VMEC2000's active-vacuum and a
 ``NVACSKIP`` state, and selects fresh resolution-specific NESTOR programs at
 each new grid.  A user-provided ``initial_state`` is also supported by the
 Python API for hot restarts.
+
+Hot restart (``--restart`` / ``RESTART_WOUT``)
+----------------------------------------------
+
+``vmex input.x --restart wout_y.nc`` seeds the solve (fixed or free
+boundary) from any VMEC2000-compatible wout file; the deck can request the
+same thing with the VMEX extension key ``RESTART_WOUT = 'wout_y.nc'`` inside
+``&INDATA`` (resolved relative to the input file; the CLI flag wins).  The
+full R/Z/lambda state is rebuilt exactly, radial/mode-table differences are
+resampled, and multigrid rungs at or below the restart resolution are
+skipped — see :doc:`/howto/restart-from-previous-run` for the workflow and
+:doc:`/explanation/multigrid` for the mechanism.
 
 The CLI exports the final NESTOR potential and surface fields to the wout
 ``potsin``/``xmpot``/``xnpot``/``*_sur`` variables. LASYM runs additionally

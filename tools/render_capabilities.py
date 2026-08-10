@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "benchmarks" / "capabilities.json"
-DOC = ROOT / "docs" / "capabilities.rst"
+DOC = ROOT / "docs" / "reference" / "capabilities.rst"
 FIELDS = ("cpu", "gpu", "forward", "jvp", "vjp", "optimization")
 MARK = {"validated": "validated", "limited": "limited", "not-available": "—"}
 

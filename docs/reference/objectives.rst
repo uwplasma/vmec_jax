@@ -10,7 +10,7 @@ that matters in practice: which objectives support exact implicit gradients
 (``jac="implicit"``) and which need finite differences (``jac=None``).  The
 first-principles derivations of the metrics themselves — Boozer coordinates,
 the quasisymmetry two-term residual, the constructed-QI target, Mercier and
-the magnetic well — are on :doc:`confinement`.
+the magnetic well — are on :doc:`/explanation/confinement`.
 
 .. contents:: On this page
    :local:
@@ -87,7 +87,7 @@ pre-summed scalar).  The helicity pair selects the symmetry family:
      - toroidally closed
 
 ``helicity_n`` is in units of ``nfp`` (the simsopt convention).  Measured
-campaign results from a near-circular seed are on :doc:`optimization`; the
+campaign results from a near-circular seed are on :doc:`/howto/optimize-a-boundary`; the
 runnable scripts are ``examples/optimization/QA_optimization_ess.py`` and
 friends.
 
@@ -195,7 +195,7 @@ Sanity anchors (CI-gated): an analytically QI field scores ``< 1e-24``, the
 bundled ``nfp1_QI`` deck scores 36x below a circular tokamak and 138x below
 the (QA, deliberately non-QI) Landreman–Paul configuration.  The measured
 single-call campaign — seed 4.5e-1 to 1.8e-2 (25x) in 17.3 minutes — is in
-:doc:`optimization`.  The earlier Goodman-style *wout-lane* residual
+:doc:`/howto/optimize-a-boundary`.  The earlier Goodman-style *wout-lane* residual
 (:func:`~vmex.core.optimize.quasi_isodynamic_residual`, host NumPy,
 ``jac=None``) remains available for diagnostics and cross-checks.
 
@@ -228,7 +228,7 @@ compose the QI and maximum-J terms like any other residuals:
 The two classes do not impose a shared weight. ``MaximumJResidual`` evaluates
 ``dJ/dpsi`` at common pitch using signed toroidal flux and matched wells;
 invalid topology is NaN rather than a favorable zero. See
-:doc:`confinement` for the sign and matching contract.
+:doc:`/explanation/confinement` for the sign and matching contract.
 
 Bootstrap current (Redl)
 ------------------------
@@ -423,7 +423,7 @@ map supports both symmetric and ``LASYM = T`` equilibria, but individual
 objectives can be symmetry-limited; in particular the traceable Mercier and
 Glasser objectives and quasisymmetry currently require ``LASYM = F``.
 The traceable ``jdotb`` objective supports both symmetry modes. See
-:doc:`optimization` for the gradient machinery and measured cost of each
+:doc:`/howto/optimize-a-boundary` for the gradient machinery and measured cost of each
 piece.
 
 Writing your own objective
