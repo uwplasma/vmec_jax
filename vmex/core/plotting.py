@@ -1,22 +1,29 @@
 """Publication-style diagnostic plots for new-core VMEC outputs (§5.1).
 
-Self-contained matplotlib (Agg) port of the figure set from the legacy
-``vmex.plotting`` module, reading everything from a ``wout_*.nc`` file
+Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 (or an in-memory :class:`vmex.core.wout.WoutData`):
 
-- ``summary``   3x3 overview: iota, pressure, buco/bvco, jcuru/jcurv, DMerc,
-  and ``|B|`` line contours at mid radius and at the plasma boundary;
+- ``summary``   3x3 publication diagnostic set: rotational transform (full
+  mesh), pressure, parallel (bootstrap) current ``<J.B>``, Mercier ``DMerc``
+  with the Glasser resistive-interchange ``D_R``, the magnetic-well profile,
+  a Velasco-style second-adiabatic-invariant map ``J(alpha, s)`` at fixed
+  pitch, ``|B|`` in Boozer coordinates at mid radius and on the LCFS (line
+  contours with a field line of slope iota), and an equilibrium scalar card;
 - ``surfaces``  flux-surface cross-sections at several zeta over one field
   period, with the magnetic axis marked;
 - ``modB``      ``|B|`` contours in (zeta, theta) at mid radius and boundary;
 - ``profiles``  iota / pressure / current profiles plus the ``fsqt``
   force-residual convergence trace;
-- ``3d``        3-D plasma boundary colored by ``|B|``.
+- ``3d``        3-D plasma boundary colored by ``|B|`` (jet colormap).
 
 Both stellarator-symmetric and ``lasym`` (asymmetric) equilibria are
 supported: the sine/cosine partner tables (``rmns``, ``zmnc``, ``bmns``,
-...) are included whenever present.  All figures use the Agg backend,
-dpi <= 150, and are closed after saving.
+...) are included whenever present.  ``D_R`` follows the existing lasym
+guard of :func:`vmex.core.stability.glasser_d_r_state` and is omitted (with
+a panel note) for asymmetric equilibria.  All figures use the Agg backend
+at ``dpi >= 200`` and are closed after saving.  The Boozer transform behind
+the summary panels runs in-process (``booz_xform_jax``) so ``vmex --plot``
+needs no separate ``--booz`` pass.
 
 Public API
 ----------
@@ -28,7 +35,7 @@ plus the per-figure helpers each of those dispatches to.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 
@@ -46,7 +53,18 @@ __all__ = [
     "boozer_modB_on_surface",
 ]
 
-_DPI = 110  # <=150 per plan; keeps every figure well under 400 kB.
+_DPI = 200            # publication resolution for every saved PNG
+_CMAP_3D = "jet"      # 3-D |B| surfaces (house style; STELLOPT convention)
+_CMAP_MODB = "jet"    # non-filled |B| contour panels (booz_xform convention)
+_CMAP_J = "viridis"   # J(alpha, s) invariant map (perceptually uniform)
+
+#: Okabe-Ito colorblind-considerate cycle for 1-D profile lines.
+_LINE_COLORS = (
+    "#0072B2", "#D55E00", "#009E73", "#CC79A7",
+    "#E69F00", "#56B4E9", "#000000", "#F0E442",
+)
+
+_MU0 = 4.0e-7 * np.pi
 
 
 # ==========================================================================
@@ -60,6 +78,35 @@ def _import_matplotlib():
     import matplotlib.pyplot as plt
 
     return plt
+
+
+def _publication_rc() -> dict[str, Any]:
+    """rcParams for a consistent publication figure style (>= 11 pt text)."""
+    from cycler import cycler
+
+    return {
+        "font.family": "sans-serif",
+        "font.sans-serif": ["DejaVu Sans"],
+        "font.size": 11.0,
+        "axes.titlesize": 12.0,
+        "axes.labelsize": 11.0,
+        "xtick.labelsize": 11.0,
+        "ytick.labelsize": 11.0,
+        "legend.fontsize": 11.0,
+        "axes.prop_cycle": cycler(color=list(_LINE_COLORS)),
+        "lines.linewidth": 1.8,
+        "lines.markersize": 4.0,
+        "axes.grid": True,
+        "grid.alpha": 0.25,
+        "axes.axisbelow": True,
+        "figure.facecolor": "white",
+    }
+
+
+def _rc_context():
+    import matplotlib
+
+    return matplotlib.rc_context(_publication_rc())
 
 
 def _as_wout(wout):
@@ -98,21 +145,38 @@ def _coeff_pair(wout, primary: str, secondary: str, s_index: int | None = None):
     return first[int(s_index)], second[int(s_index)]
 
 
-def _eval_modes(cos_coeff, sin_coeff, xm, xn, theta, phi):
-    """Evaluate sum_k [c_k cos(m_k*theta - n_k*phi) + s_k sin(...)].
+def _eval_modes(cos_coeff, sin_coeff, xm, xn, theta, phi, *, dtheta: int = 0, dphi: int = 0):
+    """Evaluate ``sum_k [c_k cos(m_k*theta - n_k*phi) + s_k sin(...)]``.
 
-    ``theta``/``phi`` are 1-D; the result has shape (ntheta, nphi).
+    ``theta``/``phi`` are 1-D; the result has shape (ntheta, nphi).  With
+    ``dtheta=1`` or ``dphi=1`` the corresponding first angular derivative of
+    the series is returned instead.
     """
     xm = np.asarray(xm, dtype=float)
     xn = np.asarray(xn, dtype=float)
-    # (mn, ntheta, nphi) phase table; grids here are small (<=200x260).
+    # (mn, ntheta, nphi) phase table; grids here are small (<=260x260).
     angle = (
         xm[:, None, None] * np.asarray(theta)[None, :, None]
         - xn[:, None, None] * np.asarray(phi)[None, None, :]
     )
-    return np.tensordot(np.asarray(cos_coeff, dtype=float), np.cos(angle), axes=(0, 0)) + np.tensordot(
-        np.asarray(sin_coeff, dtype=float), np.sin(angle), axes=(0, 0)
-    )
+    cos_coeff = None if cos_coeff is None else np.asarray(cos_coeff, dtype=float)
+    sin_coeff = None if sin_coeff is None else np.asarray(sin_coeff, dtype=float)
+    if dtheta == 0 and dphi == 0:
+        terms = [(cos_coeff, np.cos(angle)), (sin_coeff, np.sin(angle))]
+    else:
+        factor = xm if dtheta else -xn
+        terms = [
+            (None if cos_coeff is None else cos_coeff * factor.reshape((1,) * (cos_coeff.ndim - 1) + (-1,)), -np.sin(angle)),
+            (None if sin_coeff is None else sin_coeff * factor.reshape((1,) * (sin_coeff.ndim - 1) + (-1,)), np.cos(angle)),
+        ]
+    out = None
+    for coeff, basis in terms:
+        if coeff is None:
+            continue
+        term = np.tensordot(coeff, basis, axes=(-1, 0))
+        out = term if out is None else out + term
+    assert out is not None
+    return out
 
 
 def surface_rz(wout, *, s_index: int, theta: np.ndarray, phi: np.ndarray):
@@ -152,7 +216,7 @@ def _half_mesh_s(ns: int) -> np.ndarray:
 
 def _pi_ticks(ax, axis: str = "y") -> None:
     ticks = [0.0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi]
-    labels = ["0", "π/2", "π", "3π/2", "2π"]
+    labels = ["0", r"$\pi/2$", r"$\pi$", r"$3\pi/2$", r"$2\pi$"]
     if axis == "y":
         ax.set_yticks(ticks)
         ax.set_yticklabels(labels)
@@ -162,77 +226,544 @@ def _pi_ticks(ax, axis: str = "y") -> None:
 
 
 # ==========================================================================
-# Per-figure plotters (wout)
+# Glasser D_R reconstruction from wout tables (mercier.f integrals)
+# ==========================================================================
+
+def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None = None) -> dict[str, Any]:
+    """Glasser--Greene--Johnson ``D_R`` profile reconstructed from a wout file.
+
+    Re-evaluates the ``mercier.f`` surface integrals (``tpp/tbb/tjb/tjj``)
+    from the wout Fourier tables on a uniform angular grid and assembles
+
+        ``H   = S (tjb - tbb * mu0 <J.B>/<B.B>)``
+        ``D_R = -DMerc + (H - S^2/2)^2 / S^2``     (0 where the shear vanishes)
+
+    exactly as the traceable :func:`vmex.core.stability.glasser_d_r_state`
+    (validated against it to ~1e-7 on the bundled decks).  The reconstruction
+    is self-checking: the same integrals must reproduce the stored ``DMerc``
+    profile; on mismatch (or for ``lasym`` equilibria, which the traceable
+    Glasser lane rejects) the result is flagged invalid so callers can omit
+    the curve instead of plotting an unvalidated one.
+    """
+    if bool(getattr(wout, "lasym", False)):
+        return {"valid": False, "note": "not validated for lasym", "d_r": None}
+
+    ns = int(wout.ns)
+    if ns < 5:
+        return {"valid": False, "note": "too few surfaces for D_R", "d_r": None}
+    nfp = int(wout.nfp)
+    hs = 1.0 / (ns - 1)
+    ohs = 1.0 / hs
+    sign_jac = float(np.sign(int(wout.signgs))) if int(wout.signgs) != 0 else 1.0
+
+    xm_nyq = np.asarray(wout.xm_nyq, dtype=float)
+    xn_nyq = np.asarray(wout.xn_nyq, dtype=float)
+    xm = np.asarray(wout.xm, dtype=float)
+    xn = np.asarray(wout.xn, dtype=float)
+    if ntheta is None:
+        ntheta = int(min(256, max(64, 4 * (int(xm_nyq.max()) + 1))))
+    if nzeta is None:
+        n_over_nfp = int(np.max(np.abs(xn_nyq))) // max(nfp, 1)
+        nzeta = int(min(256, max(64, 4 * (n_over_nfp + 1))))
+    theta = 2.0 * np.pi * np.arange(ntheta) / ntheta
+    zeta = 2.0 * np.pi * np.arange(nzeta) / (nzeta * nfp)
+
+    pres = _MU0 * np.asarray(wout.pres, dtype=float)  # internal units (mu0*Pa)
+    phips = np.asarray(wout.phips, dtype=float)
+    vp = np.asarray(wout.vp, dtype=float)
+    iotas = np.asarray(wout.iotas, dtype=float)
+    buco = np.asarray(wout.buco, dtype=float)
+    jdotb = np.asarray(wout.jdotb, dtype=float)
+    bdotb = np.asarray(wout.bdotb, dtype=float)
+    dmerc_stored = np.asarray(wout.DMerc, dtype=float)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        phip_real = 2.0 * np.pi * phips * sign_jac
+        vp_real = np.zeros_like(phip_real)
+        vp_real[1:] = sign_jac * (2.0 * np.pi) ** 2 * vp[1:] / phip_real[1:]
+    torcur = sign_jac * 2.0 * np.pi * buco
+
+    shear = np.zeros(ns)
+    vpp = np.zeros(ns)
+    presp = np.zeros(ns)
+    ip = np.zeros(ns)
+    phip_full_h = 0.5 * (phip_real[2:] + phip_real[1:-1])
+    if np.any(phip_full_h == 0.0):
+        return {"valid": False, "note": "vanishing phip", "d_r": None}
+    denom = 1.0 / (hs * phip_full_h)
+    shear[1:-1] = (iotas[2:] - iotas[1:-1]) * denom
+    vpp[1:-1] = (vp_real[2:] - vp_real[1:-1]) * denom
+    presp[1:-1] = (pres[2:] - pres[1:-1]) * denom
+    ip[1:-1] = (torcur[2:] - torcur[1:-1]) * denom
+
+    # Half-mesh real-space tables from the (already jxbforce-filtered) wout
+    # Nyquist coefficients; full-mesh geometry from rmnc/zmns.
+    bmag = _eval_modes(wout.bmnc, None, xm_nyq, xn_nyq, theta, zeta)
+    b2 = bmag * bmag
+    gsqrt = _eval_modes(wout.gmnc, None, xm_nyq, xn_nyq, theta, zeta)
+    bsubu = _eval_modes(wout.bsubumnc, None, xm_nyq, xn_nyq, theta, zeta)
+    bsubv = _eval_modes(wout.bsubvmnc, None, xm_nyq, xn_nyq, theta, zeta)
+
+    # Full-mesh bsubs (sine parity) band-limited to the jxbforce force modes.
+    keep = (xm_nyq <= max(int(wout.mpol) - 1, 0)) & (np.abs(xn_nyq) <= int(wout.ntor) * nfp)
+    bsmns = np.asarray(wout.bsubsmns, dtype=float) * keep[None, :]
+    bsubsu = _eval_modes(None, bsmns, xm_nyq, xn_nyq, theta, zeta, dtheta=1)
+    bsubsv = _eval_modes(None, bsmns, xm_nyq, xn_nyq, theta, zeta, dphi=1)
+
+    itheta = np.zeros_like(bsubu)
+    izeta = np.zeros_like(bsubu)
+    itheta[1:-1] = bsubsv[1:-1] - ohs * (bsubv[2:] - bsubv[1:-1])
+    izeta[1:-1] = -bsubsu[1:-1] + ohs * (bsubu[2:] - bsubu[1:-1])
+    bdotk = np.zeros_like(bsubu)
+    bdotk[1:-1] = (
+        itheta[1:-1] * 0.5 * (bsubu[2:] + bsubu[1:-1])
+        + izeta[1:-1] * 0.5 * (bsubv[2:] + bsubv[1:-1])
+    )
+
+    R = _eval_modes(wout.rmnc, None, xm, xn, theta, zeta)
+    Rt = _eval_modes(wout.rmnc, None, xm, xn, theta, zeta, dtheta=1)
+    Rz = _eval_modes(wout.rmnc, None, xm, xn, theta, zeta, dphi=1)
+    Zt = _eval_modes(None, wout.zmns, xm, xn, theta, zeta, dtheta=1)
+    Zz = _eval_modes(None, wout.zmns, xm, xn, theta, zeta, dphi=1)
+
+    two_pi_sq = (2.0 * np.pi) ** 2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(bdotb != 0.0, _MU0 * jdotb / np.where(bdotb != 0.0, bdotb, 1.0), 0.0)
+    dmerc_recon = np.zeros(ns)
+    d_r = np.zeros(ns)
+    for i in range(1, ns - 1):
+        phip_full = 0.5 * (phip_real[i + 1] + phip_real[i])
+        gsqrt_raw = 0.5 * (gsqrt[i] + gsqrt[i + 1])
+        gsqrt_full = gsqrt_raw / phip_full
+        gtt = Rt[i] ** 2 + Zt[i] ** 2
+        gpp = gsqrt_full**2 / (gtt * R[i] ** 2 + (Rt[i] * Zz[i] - Rz[i] * Zt[i]) ** 2)
+        b2i = 0.5 * (b2[i + 1] + b2[i])
+        tpp = float(np.mean(gsqrt_full / b2i)) * two_pi_sq
+        tbb = float(np.mean(b2i * gsqrt_full * gpp)) * two_pi_sq
+        bdotj_norm = np.where(gsqrt_raw != 0.0, bdotk[i] / np.where(gsqrt_raw != 0.0, gsqrt_raw, 1.0), 0.0)
+        jdotb_i = bdotj_norm * gpp * gsqrt_full
+        tjb = float(np.mean(jdotb_i)) * two_pi_sq
+        tjj = float(np.mean(jdotb_i * bdotj_norm / b2i)) * two_pi_sq
+
+        dmerc_recon[i] = (
+            0.25 * shear[i] ** 2
+            - shear[i] * (tjb - ip[i] * tbb)
+            + presp[i] * (vpp[i] - presp[i] * tpp) * tbb
+            + tjb**2 - tbb * tjj
+        )
+        if shear[i] != 0.0:
+            h_glasser = shear[i] * (tjb - tbb * ratio[i])
+            d_r[i] = -dmerc_stored[i] + (h_glasser - 0.5 * shear[i] ** 2) ** 2 / shear[i] ** 2
+
+    # Self-check: the reconstructed integrals must reproduce the stored DMerc.
+    interior = slice(2, ns - 1)
+    scale = float(np.max(np.abs(dmerc_stored[interior])))
+    if scale == 0.0:
+        mismatch = float(np.max(np.abs(dmerc_recon[interior])))
+    else:
+        mismatch = float(np.max(np.abs(dmerc_recon[interior] - dmerc_stored[interior]))) / scale
+    if not np.isfinite(mismatch) or mismatch > 2.0e-2:
+        return {
+            "valid": False,
+            "note": f"D_R self-check failed (DMerc mismatch {mismatch:.1e})",
+            "d_r": None,
+        }
+    return {"valid": True, "note": "", "d_r": d_r, "dmerc_recon": dmerc_recon, "mismatch": mismatch}
+
+
+# ==========================================================================
+# In-process Boozer transform + second-adiabatic-invariant map
+# ==========================================================================
+
+def _boozer_summary_data(
+    wout,
+    *,
+    n_surfaces: int = 9,
+    mboz: int = 16,
+    nboz: int = 12,
+) -> dict[str, Any]:
+    """Run ``booz_xform_jax`` on a spread of half-mesh surfaces.
+
+    Returns the Boozer ``|B|`` spectra ``bmnc_b``/``bmns_b`` with shape
+    ``(ns_b, nmode)``, the per-surface ``iota``/``G``/``I`` profiles, the
+    computed-surface flux labels ``s_b``, and the indices of the surfaces
+    closest to ``s = 0.5`` and to the LCFS for the ``|B|`` contour panels.
+    """
+    from booz_xform_jax import Booz_xform
+
+    bx = Booz_xform(
+        verbose=0,
+        mboz=int(mboz),
+        nboz=int(nboz) if int(wout.ntor) > 0 else 1,
+    )
+    bx.read_wout_data(wout)
+    ns_in = int(bx.ns_in)
+    s_in = np.asarray(bx.s_in, dtype=float)
+    if s_in.size != ns_in:
+        full = np.linspace(0.0, 1.0, ns_in + 1)
+        s_in = 0.5 * (full[:-1] + full[1:])
+    targets = np.linspace(0.1, 1.0, int(n_surfaces))
+    indices = sorted(
+        {int(np.argmin(np.abs(s_in - t))) for t in targets}
+        | {int(np.argmin(np.abs(s_in - 0.5))), ns_in - 1}
+    )
+    bx.compute_surfs = indices
+    bx.run()
+
+    bmns_raw = getattr(bx, "bmns_b", None)
+    bmns_b = (
+        np.asarray(bmns_raw, dtype=float).T
+        if bmns_raw is not None and np.size(bmns_raw) else None
+    )
+    s_b = np.asarray(bx.s_b, dtype=float)
+    return {
+        "bmnc_b": np.asarray(bx.bmnc_b, dtype=float).T,
+        "bmns_b": bmns_b,
+        "xm_b": np.asarray(bx.xm_b, dtype=int),
+        "xn_b": np.asarray(bx.xn_b, dtype=int),
+        "iota_b": np.asarray(bx.iota, dtype=float)[np.asarray(indices, dtype=int)],
+        "G_b": np.asarray(bx.Boozer_G, dtype=float),
+        "I_b": np.asarray(bx.Boozer_I, dtype=float),
+        "s_b": s_b,
+        "nfp": int(bx.nfp),
+        "index_mid": int(np.argmin(np.abs(s_b - 0.5))),
+        "index_lcfs": int(s_b.size - 1),
+    }
+
+
+def _boozer_surface_modB(booz: dict[str, Any], k: int, theta: np.ndarray, zeta: np.ndarray) -> np.ndarray:
+    """Boozer ``|B|(theta_B, zeta_B)`` on computed surface ``k``."""
+    bmns = None if booz["bmns_b"] is None else booz["bmns_b"][k]
+    return _eval_modes(booz["bmnc_b"][k], bmns, booz["xm_b"], booz["xn_b"], theta, zeta)
+
+
+def _j_invariant_map(
+    booz: dict[str, Any],
+    *,
+    pitch_fraction: float = 0.5,
+    nalpha: int = 48,
+    points_per_period: int = 64,
+    quadrature_order: int = 32,
+) -> dict[str, Any]:
+    """Second adiabatic invariant ``J(alpha, s)`` at one fixed physical pitch.
+
+    Presentation follows J. L. Velasco's KNOSOS convention — maps of ``J``
+    over the flux label and the field-line label ``alpha`` at a single pitch
+    ``lambda`` intermediate between deeply trapped and barely trapped, so
+    closed (alpha-independent) contours certify omnigenity while island/open
+    structures expose classes of radially drifting orbits (Velasco et al.,
+    Nucl. Fusion 61, 116059 (2021); KNOSOS, JCP 418, 109512 (2020)).  The
+    pitch is parameterized as ``1/lambda = B* = (1-t) Bmin + t Bmax`` with
+    ``t = 1/2`` (the trapped-fraction midpoint convention of the direct-J
+    optimization literature, arXiv:2608.02418), and ``J`` is normalized to
+    ``J/(v R0)`` (dimensionless, Velasco's prompt-loss normalization).  The
+    bounce integrals reuse the differentiable Gauss-Legendre kernel of
+    :func:`vmex.core.bounce.bounce_action` (the same construction as DESC's
+    ``Bounce1D`` field-line bounce integrals).
+    """
+    from .bounce import bounce_action_from_boozer
+
+    bmnc_b = booz["bmnc_b"]
+    nsurf = int(bmnc_b.shape[0])
+    nfp = int(booz["nfp"])
+    iota_b = booz["iota_b"]
+
+    # Global trapping range from a coarse angular grid on every surface.
+    theta = np.linspace(0.0, 2.0 * np.pi, 61)
+    zeta = np.linspace(0.0, 2.0 * np.pi / nfp, 61)
+    b_all = np.stack([_boozer_surface_modB(booz, k, theta, zeta) for k in range(nsurf)])
+    b_min, b_max = float(b_all.min()), float(b_all.max())
+    if not (np.isfinite(b_min) and np.isfinite(b_max)) or b_min <= 0.0 or b_max <= b_min:
+        raise ValueError("Boozer |B| range is degenerate; cannot choose a pitch")
+    b_star = (1.0 - pitch_fraction) * b_min + pitch_fraction * b_max
+    pitch = np.array([1.0 / b_star])
+
+    # Trace enough field periods to close at least one poloidal transit even
+    # for small-iota / axisymmetric-boundary decks (well length ~ 2*pi/iota).
+    iota_typical = float(np.median(np.abs(iota_b)))
+    num_periods = int(min(40, max(2, np.ceil(1.2 * nfp * (1.0 + 1.0 / max(iota_typical, 0.2))))))
+
+    alpha = np.linspace(0.0, 2.0 * np.pi, int(nalpha), endpoint=False)
+    j_map = np.full((nsurf, alpha.size), np.nan)
+    for k in range(nsurf):  # per-surface loop keeps the phase tables small
+        out = bounce_action_from_boozer(
+            bmnc_b=bmnc_b[k : k + 1],
+            xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            iota_b=iota_b[k : k + 1],
+            G_b=booz["G_b"][k : k + 1], I_b=booz["I_b"][k : k + 1],
+            nfp=nfp, alpha=alpha, pitch=pitch,
+            points_per_period=int(points_per_period),
+            num_periods=num_periods,
+            bmns_b=None if booz["bmns_b"] is None else booz["bmns_b"][k : k + 1],
+            quadrature_order=int(quadrature_order),
+        )
+        action = np.asarray(out["action"])[0, :, 0, :]       # (nalpha, nwells)
+        usable = np.asarray(out["usable_mask"])[0, :, 0, :]
+        count = usable.sum(axis=-1)
+        total = np.where(usable, np.where(np.isfinite(action), action, 0.0), 0.0).sum(axis=-1)
+        j_map[k] = np.where(count > 0, total / np.maximum(count, 1), np.nan)
+    return {
+        "alpha": alpha,
+        "s_b": booz["s_b"],
+        "j_map": j_map,
+        "pitch": float(pitch[0]),
+        "pitch_fraction": float(pitch_fraction),
+        "b_min": b_min,
+        "b_max": b_max,
+    }
+
+
+# ==========================================================================
+# Summary figure
 # ==========================================================================
 
 _S_LABEL = r"$s = \psi/\psi_b$"
 
 
-def plot_summary(wout, out_path: str | Path, *, s_plot_ignore: float = 0.2) -> Path:
-    """3x3 overview figure (profiles + two ``|B|`` contour panels)."""
+def _profile_panel(ax, x, y, *, xlabel: str, ylabel: str, title: str, color=None) -> None:
+    ax.plot(x, y, ".-", color=color or _LINE_COLORS[0])
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+
+
+def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float) -> None:
+    """DMerc and Glasser D_R on a shared symlog axis (interior surfaces)."""
+    ns = int(wout.ns)
+    s = np.linspace(0.0, 1.0, ns)
+    dmerc = np.asarray(wout.DMerc, dtype=float)
+    lo = max(2, int(round(s_plot_ignore * ns)))
+    sl = slice(lo, ns - 1)
+    ax.plot(s[sl], dmerc[sl], ".-", color=_LINE_COLORS[0], label=r"$D_{Merc}$ ($>0$ stable)")
+    finite = dmerc[sl][np.isfinite(dmerc[sl])]
+    peak = float(np.max(np.abs(finite))) if finite.size else 1.0
+    if d_r_info.get("valid"):
+        d_r = np.asarray(d_r_info["d_r"], dtype=float)
+        ax.plot(s[sl], d_r[sl], ".-", color=_LINE_COLORS[1], label=r"$D_R$ ($\leq 0$ stable)")
+        finite_r = d_r[sl][np.isfinite(d_r[sl])]
+        if finite_r.size:
+            peak = max(peak, float(np.max(np.abs(finite_r))))
+    else:
+        ax.plot([], [], " ", label=f"$D_R$: {d_r_info.get('note', 'unavailable')}")
+    if peak > 30.0:
+        ax.set_yscale("symlog", linthresh=max(1.0e-3, 1.0e-3 * peak))
+    ax.axhline(0.0, color="0.4", linewidth=0.8, zorder=1)
+    ax.set_xlabel(_S_LABEL)
+    ax.set_ylabel(r"$D_{Merc}$, $D_R$")
+    ax.set_title("Mercier / resistive interchange")
+    ax.legend(loc="best")
+
+
+def _magnetic_well_panel(ax, wout) -> None:
+    """Radial magnetic-well profile ``W(s) = (V'(0) - V'(s)) / V'(0)``."""
+    vp = np.abs(np.asarray(wout.vp, dtype=float))[1:]
+    s_half = _half_mesh_s(int(wout.ns))
+    v0 = 1.5 * vp[0] - 0.5 * vp[1]
+    v1 = 1.5 * vp[-1] - 0.5 * vp[-2]
+    if v0 == 0.0:
+        ax.text(0.5, 0.5, "V'(0) = 0", ha="center", va="center", transform=ax.transAxes)
+        return
+    well = (v0 - vp) / v0
+    ax.plot(s_half, 100.0 * well, ".-", color=_LINE_COLORS[2])
+    ax.axhline(0.0, color="0.4", linewidth=0.8, zorder=1)
+    ax.set_xlabel(_S_LABEL)
+    ax.set_ylabel(r"$W = (V'(0)-V'(s))/V'(0)$ [%]")
+    ax.set_title(f"magnetic well  (edge: {100.0 * (v0 - v1) / v0:.2f}%)")
+
+
+def _j_map_panel(ax, fig, j_info: dict[str, Any], r_major: float) -> None:
+    """Velasco-style non-filled contour map of ``J/(v R0)`` in (alpha, s)."""
+    j_norm = j_info["j_map"] / max(float(r_major), np.finfo(float).tiny)
+    masked = np.ma.masked_invalid(j_norm)
+    if masked.count() < 4 or np.ptp(masked.compressed()) == 0.0:
+        ax.text(
+            0.5, 0.5, "no trapped-particle wells\nresolved at this pitch",
+            ha="center", va="center", transform=ax.transAxes,
+        )
+        ax.set_title("second adiabatic invariant")
+        ax.set_xlabel(r"field-line label $\alpha$")
+        ax.set_ylabel(_S_LABEL)
+        return
+    alpha2d, s2d = np.meshgrid(j_info["alpha"], j_info["s_b"])
+    cs = ax.contour(alpha2d, s2d, masked, levels=14, cmap=_CMAP_J, linewidths=1.4)
+    fig.colorbar(cs, ax=ax, pad=0.02, label=r"$J\,/\,(v R_0)$")
+    ax.set_xlim(0.0, 2.0 * np.pi)
+    _pi_ticks(ax, "x")
+    ax.set_xlabel(r"field-line label $\alpha$")
+    ax.set_ylabel(_S_LABEL)
+    ax.set_title(
+        rf"second adiabatic invariant, $\lambda = {j_info['pitch']:.2f}$ T$^{{-1}}$"
+    )
+
+
+def _boozer_modB_panel(ax, fig, booz: dict[str, Any], k: int, *, title: str) -> None:
+    """Non-filled ``|B|`` contours in Boozer angles with one field line."""
+    nfp = int(booz["nfp"])
+    theta = np.linspace(0.0, 2.0 * np.pi, 121)
+    zeta = np.linspace(0.0, 2.0 * np.pi / nfp, 181)
+    B = _boozer_surface_modB(booz, k, theta, zeta)
+    zeta2d, theta2d = np.meshgrid(zeta, theta)
+    cs = ax.contour(zeta2d, theta2d, B, levels=21, cmap=_CMAP_MODB, linewidths=1.1)
+    fig.colorbar(cs, ax=ax, pad=0.02, label=r"$|B|$ [T]")
+    iota_k = float(booz["iota_b"][k])
+    line_theta = np.mod(iota_k * zeta, 2.0 * np.pi)
+    # NaN-out the wrap discontinuities so the mod jump draws no vertical bar.
+    jump = np.abs(np.diff(line_theta)) > np.pi
+    line_theta[1:][jump] = np.nan
+    ax.plot(
+        zeta, line_theta, color="black", linewidth=1.6,
+        linestyle="--", label=rf"field line ($\iota = {iota_k:.2f}$)",
+    )
+    ax.set_xlim(0.0, 2.0 * np.pi / nfp)
+    ax.set_ylim(0.0, 2.0 * np.pi)
+    _pi_ticks(ax, "y")
+    ax.set_xlabel(r"Boozer toroidal angle $\zeta_B$")
+    ax.set_ylabel(r"Boozer poloidal angle $\theta_B$")
+    ax.set_title(title)
+    # The wrapped field line hugs the bottom-left for positive iota and the
+    # top for negative iota; park the legend in the opposite corner.
+    ax.legend(loc="upper left" if iota_k >= 0.0 else "lower left", framealpha=0.85)
+
+
+def _fmt_compact(value: float) -> str:
+    """Compact scientific format: 0 stays ``0``, exponents lose zero padding."""
+    if value == 0.0:
+        return "0"
+    text = f"{value:.2e}"
+    mantissa, exponent = text.split("e")
+    return f"{mantissa}e{int(exponent)}"
+
+
+def _scalar_card_panel(ax, wout) -> None:
+    """Equilibrium scalar card (threed1-style global quantities)."""
+    ax.set_axis_off()
+    iotaf = np.asarray(wout.iotaf, dtype=float)
+    rows = [
+        ("field periods", f"{int(wout.nfp)}"),
+        ("resolution", f"ns={int(wout.ns)}, mpol={int(wout.mpol)}, ntor={int(wout.ntor)}"),
+        ("aspect ratio", f"{float(wout.aspect):.3f}"),
+        (r"$R_0$ / $a$ [m]", f"{float(wout.Rmajor_p):.3f} / {float(wout.Aminor_p):.3f}"),
+        (r"volume [m$^3$]", f"{float(wout.volume_p):.3f}"),
+        (r"$\langle |B| \rangle$ [T]", f"{float(wout.volavgB):.3f}"),
+        (r"$\beta$ total", _fmt_compact(float(wout.betatotal))),
+        (r"$\beta$ pol / tor", f"{_fmt_compact(float(wout.betapol))} / {_fmt_compact(float(wout.betator))}"),
+        ("toroidal current [A]", _fmt_compact(float(wout.ctor))),
+        (r"$\iota$ axis / edge", f"{float(iotaf[0]):.4f} / {float(iotaf[-1]):.4f}"),
+        ("asymmetric", "yes" if bool(getattr(wout, "lasym", False)) else "no"),
+    ]
+    ax.text(
+        0.0, 0.99, "equilibrium summary", transform=ax.transAxes,
+        fontsize=12.0, fontweight="bold", va="top",
+    )
+    step = 0.86 / max(len(rows) - 1, 1)
+    for i, (key, value) in enumerate(rows):
+        y = 0.88 - step * i
+        ax.text(0.0, y, key, transform=ax.transAxes, fontsize=11.0, va="top", color="0.25")
+        ax.text(0.46, y, value, transform=ax.transAxes, fontsize=11.0, va="top")
+
+
+def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
+    """Build the 3x3 summary figure; returns ``(fig, meta)`` for inspection."""
     plt = _import_matplotlib()
     wout, _ = _as_wout(wout)
     ns = int(wout.ns)
     s = np.linspace(0.0, 1.0, ns)
-    s_half = _half_mesh_s(ns)
+    meta: dict[str, Any] = {}
 
-    fig, axes = plt.subplots(3, 3, figsize=(13, 7))
-    fig.patch.set_facecolor("white")
+    with _rc_context():
+        fig, axes = plt.subplots(3, 3, figsize=(15.0, 11.5), layout="constrained")
 
-    ax = axes[0, 0]
-    ax.plot(s, np.asarray(wout.iotaf, dtype=float), ".-")
-    ax.set_xlabel(_S_LABEL)
-    ax.set_ylabel(r"$\iota$")
-    ax.set_title("rotational transform")
+        # 1. rotational transform -- full mesh only.
+        _profile_panel(
+            axes[0, 0], s, np.asarray(wout.iotaf, dtype=float),
+            xlabel=_S_LABEL, ylabel=r"$\iota$", title="rotational transform (full mesh)",
+        )
 
-    ax = axes[0, 1]
-    ax.plot(s, np.asarray(wout.presf, dtype=float), ".-", label="presf (full)")
-    ax.plot(s_half, np.asarray(wout.pres, dtype=float)[1:], ".-", label="pres (half)")
-    ax.legend(fontsize="x-small")
-    ax.set_xlabel(_S_LABEL)
-    ax.set_title("pressure [Pa]")
+        # pressure (kept from the classic threed1 set).
+        _profile_panel(
+            axes[0, 1], s, 1.0e-3 * np.asarray(wout.presf, dtype=float),
+            xlabel=_S_LABEL, ylabel=r"$p$ [kPa]", title="pressure",
+            color=_LINE_COLORS[1],
+        )
 
-    for ax, x_vals, y_vals, title in (
-        (axes[0, 2], s_half, np.asarray(wout.buco, dtype=float)[1:], "buco"),
-        (axes[1, 0], s_half, np.asarray(wout.bvco, dtype=float)[1:], "bvco"),
-        (axes[1, 1], s, np.asarray(wout.jcuru, dtype=float), "jcuru"),
-        (axes[1, 2], s, np.asarray(wout.jcurv, dtype=float), "jcurv"),
-    ):
-        ax.plot(x_vals, y_vals, ".-")
-        ax.set_title(title)
-        ax.set_xlabel(_S_LABEL)
+        # 5. parallel (bootstrap) current profile <J.B>.
+        _profile_panel(
+            axes[0, 2], s, 1.0e-3 * np.asarray(wout.jdotb, dtype=float),
+            xlabel=_S_LABEL, ylabel=r"$\langle \mathbf{J}\cdot\mathbf{B} \rangle$ [kA T/m$^2$]",
+            title=r"parallel (bootstrap) current", color=_LINE_COLORS[2],
+        )
 
-    ax = axes[2, 0]
-    dmerc = np.asarray(wout.DMerc, dtype=float)
-    ign = int(s_plot_ignore * ns)
-    ax.plot(s[ign:-2], dmerc[ign:-2], ".-")
-    ax.set_title("DMerc")
-    ax.set_xlabel(_S_LABEL)
+        # 3. stability: DMerc + D_R, magnetic well (adjacent panels).
+        d_r_info = _glasser_d_r_from_wout(wout)
+        meta["d_r"] = d_r_info
+        _stability_panel(axes[1, 0], wout, d_r_info, s_plot_ignore=s_plot_ignore)
+        _magnetic_well_panel(axes[1, 1], wout)
 
-    theta = np.linspace(0.0, 2.0 * np.pi, 40)
-    phi = np.linspace(0.0, 2.0 * np.pi, 80)
-    iotaf = np.asarray(wout.iotaf, dtype=float)
-    for col, (irad, title) in enumerate(((ns // 2, "Mid radius |B|"), (ns - 1, "Boundary |B|"))):
-        B = surface_modB(wout, s_index=int(irad), theta=theta, phi=phi)
-        ax = axes[2, 1 + col]
-        cf = ax.contour(*np.meshgrid(phi, theta), B, 20, cmap="viridis", linewidths=0.8)
-        fig.colorbar(cf, ax=ax)
-        iota_val = float(iotaf[irad])
-        span = float(phi.max())
-        line = [0.0, span * iota_val] if iota_val > 0 else [-span * iota_val, 0.0]
-        ax.plot([0.0, span], line, "k", linewidth=0.9)
-        ax.set_xlim(0, 2 * np.pi)
-        ax.set_ylim(0, 2 * np.pi)
-        ax.set_title(title)
-        ax.set_xlabel(r"$\phi$")
-        ax.set_ylabel(r"$\theta$")
+        # 2 + 4. Boozer-based panels: J(alpha, s) map and |B| contours.
+        booz_note = ""
+        try:
+            booz = _boozer_summary_data(wout)
+        except Exception as exc:  # noqa: BLE001 - summary stays usable without booz
+            booz = None
+            booz_note = f"Boozer transform unavailable:\n{type(exc).__name__}"
+        if booz is not None:
+            try:
+                j_info = _j_invariant_map(booz)
+                meta["j_map"] = j_info
+                _j_map_panel(axes[1, 2], fig, j_info, float(wout.Rmajor_p))
+            except Exception as exc:  # noqa: BLE001
+                axes[1, 2].text(
+                    0.5, 0.5, f"J map unavailable:\n{type(exc).__name__}",
+                    ha="center", va="center", transform=axes[1, 2].transAxes,
+                )
+                axes[1, 2].set_title("second adiabatic invariant")
+                axes[1, 2].set_xlabel(r"field-line label $\alpha$")
+                axes[1, 2].set_ylabel(_S_LABEL)
+            s_mid = float(booz["s_b"][booz["index_mid"]])
+            _boozer_modB_panel(
+                axes[2, 1], fig, booz, booz["index_mid"],
+                title=rf"$|B|$ in Boozer angles, $s = {s_mid:.2f}$",
+            )
+            _boozer_modB_panel(
+                axes[2, 2], fig, booz, booz["index_lcfs"],
+                title=r"$|B|$ in Boozer angles, LCFS",
+            )
+            meta["booz"] = booz
+        else:
+            for ax, title in (
+                (axes[1, 2], "second adiabatic invariant"),
+                (axes[2, 1], r"$|B|$ in Boozer angles, $s = 0.5$"),
+                (axes[2, 2], r"$|B|$ in Boozer angles, LCFS"),
+            ):
+                ax.text(0.5, 0.5, booz_note, ha="center", va="center", transform=ax.transAxes)
+                ax.set_title(title)
+                ax.set_xlabel(r"Boozer toroidal angle $\zeta_B$")
+                ax.set_ylabel(r"Boozer poloidal angle $\theta_B$")
 
-    fig.tight_layout()
+        # 6. equilibrium scalar card (threed1-style global quantities).
+        _scalar_card_panel(axes[2, 0], wout)
+
+        meta["axes"] = {
+            "iota": axes[0, 0], "pressure": axes[0, 1], "jdotb": axes[0, 2],
+            "stability": axes[1, 0], "well": axes[1, 1], "j_invariant": axes[1, 2],
+            "card": axes[2, 0], "boozer_mid": axes[2, 1], "boozer_lcfs": axes[2, 2],
+        }
+    return fig, meta
+
+
+def plot_summary(wout, out_path: str | Path, *, s_plot_ignore: float = 0.2) -> Path:
+    """Publication summary figure (see :func:`_summary_figure` for panels)."""
+    plt = _import_matplotlib()
+    fig, _meta = _summary_figure(wout, s_plot_ignore=s_plot_ignore)
     out_path = Path(out_path)
-    fig.savefig(out_path, dpi=_DPI, bbox_inches="tight")
+    fig.savefig(out_path, dpi=_DPI)
     plt.close(fig)
     return out_path
 
+
+# ==========================================================================
+# Remaining per-figure plotters (wout)
+# ==========================================================================
 
 def plot_surfaces(
     wout,
@@ -253,25 +784,27 @@ def plot_surfaces(
 
     ncols = min(4, nzeta)
     nrows = int(np.ceil(nzeta / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 3.4 * nrows), squeeze=False)
-    fig.patch.set_facecolor("white")
-    flat = axes.ravel()
-    for iz in range(nzeta):
-        ax = flat[iz]
-        for irad in iradii:
-            R, Z = surface_rz(wout, s_index=int(irad), theta=theta, phi=phi[iz : iz + 1])
-            ax.plot(R[:, 0], Z[:, 0], "-", linewidth=0.9)
-        ax.plot(Raxis[iz], Zaxis[iz], "xr", markersize=5)
-        ax.set_aspect("equal", adjustable="box")
-        ax.set_xlabel("R [m]", fontsize=9)
-        ax.set_ylabel("Z [m]", fontsize=9)
-        ax.set_title(rf"$\phi$ = {phi[iz]:.2f}", fontsize=10)
-    for iz in range(nzeta, flat.size):
-        flat[iz].set_axis_off()
-    fig.tight_layout()
-    out_path = Path(out_path)
-    fig.savefig(out_path, dpi=_DPI, bbox_inches="tight")
-    plt.close(fig)
+    with _rc_context():
+        fig, axes = plt.subplots(
+            nrows, ncols, figsize=(3.6 * ncols, 3.6 * nrows), squeeze=False,
+            layout="constrained",
+        )
+        flat = axes.ravel()
+        for iz in range(nzeta):
+            ax = flat[iz]
+            for irad in iradii:
+                R, Z = surface_rz(wout, s_index=int(irad), theta=theta, phi=phi[iz : iz + 1])
+                ax.plot(R[:, 0], Z[:, 0], "-", linewidth=1.0)
+            ax.plot(Raxis[iz], Zaxis[iz], "x", color="black", markersize=6)
+            ax.set_aspect("equal", adjustable="box")
+            ax.set_xlabel(r"$R$ [m]")
+            ax.set_ylabel(r"$Z$ [m]")
+            ax.set_title(rf"$\phi$ = {phi[iz]:.2f}")
+        for iz in range(nzeta, flat.size):
+            flat[iz].set_axis_off()
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
     return out_path
 
 
@@ -282,7 +815,7 @@ def plot_modB(
     ntheta: int = 90,
     nphi: int = 180,
 ) -> Path:
-    """``|B|`` contours in (phi, theta) at mid radius and the plasma boundary."""
+    """``|B|`` line contours in (phi, theta) at mid radius and the boundary."""
     plt = _import_matplotlib()
     wout, _ = _as_wout(wout)
     ns = int(wout.ns)
@@ -290,23 +823,22 @@ def plot_modB(
     phi = np.linspace(0.0, 2.0 * np.pi / int(wout.nfp), nphi)
     phi2d, theta2d = np.meshgrid(phi, theta)
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.4))
-    fig.patch.set_facecolor("white")
-    for ax, irad, title in (
-        (axes[0], ns // 2, "mid radius"),
-        (axes[1], ns - 1, "plasma boundary"),
-    ):
-        B = surface_modB(wout, s_index=int(irad), theta=theta, phi=phi)
-        cf = ax.contour(phi2d, theta2d, B, levels=25, cmap="viridis", linewidths=1.0)
-        fig.colorbar(cf, ax=ax, label="|B| [T]")
-        ax.set_title(f"|B| on {title} (one field period)")
-        ax.set_xlabel(r"toroidal angle $\phi$")
-        ax.set_ylabel(r"poloidal angle $\theta$")
-        _pi_ticks(ax, "y")
-    fig.tight_layout()
-    out_path = Path(out_path)
-    fig.savefig(out_path, dpi=_DPI, bbox_inches="tight")
-    plt.close(fig)
+    with _rc_context():
+        fig, axes = plt.subplots(1, 2, figsize=(12.6, 4.6), layout="constrained")
+        for ax, irad, title in (
+            (axes[0], ns // 2, "mid radius"),
+            (axes[1], ns - 1, "plasma boundary"),
+        ):
+            B = surface_modB(wout, s_index=int(irad), theta=theta, phi=phi)
+            cf = ax.contour(phi2d, theta2d, B, levels=25, cmap=_CMAP_MODB, linewidths=1.0)
+            fig.colorbar(cf, ax=ax, label=r"$|B|$ [T]")
+            ax.set_title(f"|B| on {title} (one field period)")
+            ax.set_xlabel(r"toroidal angle $\phi$")
+            ax.set_ylabel(r"poloidal angle $\theta$")
+            _pi_ticks(ax, "y")
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
     return out_path
 
 
@@ -318,72 +850,68 @@ def plot_profiles(wout, out_path: str | Path) -> Path:
     s = np.linspace(0.0, 1.0, ns)
     s_half = _half_mesh_s(ns)
 
-    fig, axes = plt.subplots(2, 3, figsize=(12.5, 6.5))
-    fig.patch.set_facecolor("white")
+    with _rc_context():
+        fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.0), layout="constrained")
 
-    ax = axes[0, 0]
-    ax.plot(s, np.asarray(wout.iotaf, dtype=float), ".-", label=r"$\iota$ (full)")
-    ax.plot(s_half, np.asarray(wout.iotas, dtype=float)[1:], ".", ms=3, label=r"$\iota$ (half)")
-    ax.set_ylabel(r"$\iota$")
-    ax.legend(fontsize="x-small")
+        ax = axes[0, 0]
+        ax.plot(s, np.asarray(wout.iotaf, dtype=float), ".-")
+        ax.set_ylabel(r"$\iota$")
+        ax.set_title("rotational transform (full mesh)")
 
-    ax = axes[0, 1]
-    ax.plot(s, np.asarray(wout.presf, dtype=float), ".-", label="presf")
-    ax.plot(s_half, np.asarray(wout.pres, dtype=float)[1:], ".", ms=3, label="pres")
-    ax.set_ylabel("pressure [Pa]")
-    ax.legend(fontsize="x-small")
+        ax = axes[0, 1]
+        ax.plot(s, np.asarray(wout.presf, dtype=float), ".-", label="presf (full)")
+        ax.plot(s_half, np.asarray(wout.pres, dtype=float)[1:], ".", ms=3, label="pres (half)")
+        ax.set_ylabel("pressure [Pa]")
+        ax.legend()
 
-    ax = axes[0, 2]
-    ax.plot(s, np.asarray(wout.jcuru, dtype=float), ".-", label="jcuru")
-    ax.plot(s, np.asarray(wout.jcurv, dtype=float), ".-", label="jcurv")
-    ax.set_ylabel("current density [A]")
-    ax.legend(fontsize="x-small")
+        ax = axes[0, 2]
+        ax.plot(s, np.asarray(wout.jcuru, dtype=float), ".-", label="jcuru")
+        ax.plot(s, np.asarray(wout.jcurv, dtype=float), ".-", label="jcurv")
+        ax.set_ylabel("current density [A]")
+        ax.legend()
 
-    ax = axes[1, 0]
-    ax.plot(s_half, np.asarray(wout.buco, dtype=float)[1:], ".-", label="buco")
-    ax.plot(s_half, np.asarray(wout.bvco, dtype=float)[1:], ".-", label="bvco")
-    ax.set_ylabel(r"$\langle B_u \rangle$, $\langle B_v \rangle$")
-    ax.legend(fontsize="x-small")
+        ax = axes[1, 0]
+        ax.plot(s_half, np.asarray(wout.buco, dtype=float)[1:], ".-", label="buco")
+        ax.plot(s_half, np.asarray(wout.bvco, dtype=float)[1:], ".-", label="bvco")
+        ax.set_ylabel(r"$\langle B_u \rangle$, $\langle B_v \rangle$")
+        ax.legend()
 
-    ax = axes[1, 1]
-    phi_flux = np.asarray(wout.phi, dtype=float)
-    chi_flux = np.asarray(wout.chi, dtype=float)
-    ax.plot(s, phi_flux, ".-", label=r"$\phi$ (toroidal)")
-    ax.plot(s, chi_flux, ".-", label=r"$\chi$ (poloidal)")
-    ax.set_ylabel("flux [Wb]")
-    ax.legend(fontsize="x-small")
+        ax = axes[1, 1]
+        phi_flux = np.asarray(wout.phi, dtype=float)
+        chi_flux = np.asarray(wout.chi, dtype=float)
+        ax.plot(s, phi_flux, ".-", label=r"$\phi$ (toroidal)")
+        ax.plot(s, chi_flux, ".-", label=r"$\chi$ (poloidal)")
+        ax.set_ylabel("flux [Wb]")
+        ax.legend()
 
-    for ax in axes.ravel()[:5]:
-        ax.set_xlabel(_S_LABEL)
-        ax.grid(True, alpha=0.25)
+        for ax in axes.ravel()[:5]:
+            ax.set_xlabel(_S_LABEL)
 
-    # fsqt convergence trace (VMEC stores up to 100 sampled residuals).
-    ax = axes[1, 2]
-    fsqt = np.asarray(getattr(wout, "fsqt", np.zeros(0)), dtype=float).ravel()
-    wdot = np.asarray(getattr(wout, "wdot", np.zeros(0)), dtype=float).ravel()
-    mask = fsqt > 0.0
-    if np.any(mask):
-        last = int(np.max(np.nonzero(mask)[0])) + 1
-        it = np.arange(1, last + 1)
-        ax.semilogy(it, np.maximum(fsqt[:last], 1e-30), ".-", label="fsqt")
-        wmask = wdot[:last] > 0.0
-        if np.any(wmask):
-            ax.semilogy(it[wmask], wdot[:last][wmask], ".-", alpha=0.7, label="wdot")
-        ftolv = float(getattr(wout, "ftolv", 0.0) or 0.0)
-        if ftolv > 0.0:
-            ax.axhline(ftolv, color="k", ls="--", lw=0.8)
-        ax.legend(fontsize="x-small")
-    else:
-        ax.text(0.5, 0.5, "no fsqt history", ha="center", va="center", transform=ax.transAxes)
-    ax.set_xlabel("stored iteration sample")
-    ax.set_ylabel("force residual")
-    ax.set_title("convergence (fsqt)")
-    ax.grid(True, alpha=0.25)
+        # fsqt convergence trace (VMEC stores up to 100 sampled residuals).
+        ax = axes[1, 2]
+        fsqt = np.asarray(getattr(wout, "fsqt", np.zeros(0)), dtype=float).ravel()
+        wdot = np.asarray(getattr(wout, "wdot", np.zeros(0)), dtype=float).ravel()
+        mask = fsqt > 0.0
+        if np.any(mask):
+            last = int(np.max(np.nonzero(mask)[0])) + 1
+            it = np.arange(1, last + 1)
+            ax.semilogy(it, np.maximum(fsqt[:last], 1e-30), ".-", label="fsqt")
+            wmask = wdot[:last] > 0.0
+            if np.any(wmask):
+                ax.semilogy(it[wmask], wdot[:last][wmask], ".-", alpha=0.7, label="wdot")
+            ftolv = float(getattr(wout, "ftolv", 0.0) or 0.0)
+            if ftolv > 0.0:
+                ax.axhline(ftolv, color="k", ls="--", lw=0.8)
+            ax.legend()
+        else:
+            ax.text(0.5, 0.5, "no fsqt history", ha="center", va="center", transform=ax.transAxes)
+        ax.set_xlabel("stored iteration sample")
+        ax.set_ylabel("force residual")
+        ax.set_title("convergence (fsqt)")
 
-    fig.tight_layout()
-    out_path = Path(out_path)
-    fig.savefig(out_path, dpi=_DPI, bbox_inches="tight")
-    plt.close(fig)
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
     return out_path
 
 
@@ -394,11 +922,13 @@ def plot_boundary_3d(
     ntheta: int = 60,
     nzeta: int | None = None,
 ) -> Path:
-    """3-D plasma boundary colored by ``|B|`` (full torus)."""
+    """3-D plasma boundary colored by ``|B|`` (full torus, jet colormap)."""
     plt = _import_matplotlib()
+    import matplotlib
     from matplotlib import cm
     from matplotlib.colors import Normalize
 
+    cmap = matplotlib.colormaps[_CMAP_3D]
     wout, _ = _as_wout(wout)
     ns, nfp = int(wout.ns), int(wout.nfp)
     if nzeta is None:
@@ -411,23 +941,24 @@ def plot_boundary_3d(
     X, Y = R * np.cos(phi2d), R * np.sin(phi2d)
     B_scaled = (B - B.min()) / (B.max() - B.min() + 1e-30)
 
-    fig = plt.figure(figsize=(5.2, 4.4), frameon=False)
-    ax = fig.add_subplot(111, projection="3d")
-    ax.plot_surface(
-        X, Y, Z, facecolors=cm.viridis(B_scaled), rstride=1, cstride=1,
-        antialiased=False, linewidth=0.0,
-    )
-    scale = 0.7 * max(np.abs(X).max(), np.abs(Y).max())
-    ax.auto_scale_xyz([-scale, scale], [-scale, scale], [-scale, scale])
-    ax.set_box_aspect([1, 1, 1])
-    ax.set_axis_off()
-    cax = fig.add_axes([0.21, 0.86, 0.60, 0.03])
-    sm = cm.ScalarMappable(cmap=cm.viridis, norm=Normalize(float(B.min()), float(B.max())))
-    sm.set_array([])
-    fig.colorbar(sm, orientation="horizontal", cax=cax).set_label("|B| [T]")
-    out_path = Path(out_path)
-    fig.savefig(out_path, dpi=_DPI, bbox_inches="tight", pad_inches=0.05)
-    plt.close(fig)
+    with _rc_context():
+        fig = plt.figure(figsize=(5.6, 4.8), frameon=False)
+        ax = fig.add_subplot(111, projection="3d")
+        ax.plot_surface(
+            X, Y, Z, facecolors=cmap(B_scaled), rstride=1, cstride=1,
+            antialiased=False, linewidth=0.0,
+        )
+        scale = 0.7 * max(np.abs(X).max(), np.abs(Y).max())
+        ax.auto_scale_xyz([-scale, scale], [-scale, scale], [-scale, scale])
+        ax.set_box_aspect([1, 1, 1])
+        ax.set_axis_off()
+        cax = fig.add_axes([0.21, 0.86, 0.60, 0.03])
+        sm = cm.ScalarMappable(cmap=cmap, norm=Normalize(float(B.min()), float(B.max())))
+        sm.set_array([])
+        fig.colorbar(sm, orientation="horizontal", cax=cax).set_label(r"$|B|$ [T]")
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI, bbox_inches="tight", pad_inches=0.05)
+        plt.close(fig)
     return out_path
 
 
@@ -554,12 +1085,12 @@ def boozer_modB_on_surface(boozmn, *, s_index: int = -1, ntheta: int = 90, nphi:
 
 def plot_boozmn_modB(
     boozmn, out_path: str | Path, *, ntheta: int = 90, nphi: int = 180,
-    cmap: str = "viridis",
+    cmap: str = _CMAP_MODB,
 ) -> Path:
-    """Boozer-coordinate ``|B|`` contours at mid radius and the outermost surface.
+    """Boozer-coordinate ``|B|`` line contours at mid radius and the edge.
 
-    ``cmap`` selects the contour colormap (pass ``"jet"`` for the STELLOPT /
-    booz_xform convention).
+    ``cmap`` selects the contour colormap (default ``jet``, the STELLOPT /
+    booz_xform convention).  Contours are always non-filled.
     """
     plt = _import_matplotlib()
     bx = _load_boozmn(boozmn)
@@ -570,22 +1101,25 @@ def plot_boozmn_modB(
     if selected[0][1] == selected[1][1]:
         selected = selected[1:]
 
-    fig, axes = plt.subplots(1, len(selected), figsize=(6.4 * len(selected), 4.4), squeeze=False)
-    for ax, (title, js) in zip(axes[0], selected):
-        theta, phi, B = _boozer_modB_grid(bx, js=js, ntheta=ntheta, nphi=nphi)
-        phi2d, theta2d = np.meshgrid(phi, theta)
-        cs = ax.contour(phi2d, theta2d, B, levels=24, cmap=cmap, linewidths=1.0)
-        fig.colorbar(cs, ax=ax, label="|B| [T]")
-        ax.set_title(title)
-        ax.set_xlabel(r"Boozer toroidal angle $\phi_B$")
-        ax.set_ylabel(r"Boozer poloidal angle $\theta_B$")
-        _pi_ticks(ax, "y")
-        ax.set_ylim(0, 2 * np.pi)
-    fig.suptitle("Boozer-coordinate |B| contours", fontsize=12)
-    fig.tight_layout()
-    out_path = Path(out_path)
-    fig.savefig(out_path, dpi=_DPI, bbox_inches="tight")
-    plt.close(fig)
+    with _rc_context():
+        fig, axes = plt.subplots(
+            1, len(selected), figsize=(6.6 * len(selected), 4.6), squeeze=False,
+            layout="constrained",
+        )
+        for ax, (title, js) in zip(axes[0], selected):
+            theta, phi, B = _boozer_modB_grid(bx, js=js, ntheta=ntheta, nphi=nphi)
+            phi2d, theta2d = np.meshgrid(phi, theta)
+            cs = ax.contour(phi2d, theta2d, B, levels=24, cmap=cmap, linewidths=1.0)
+            fig.colorbar(cs, ax=ax, label=r"$|B|$ [T]")
+            ax.set_title(title)
+            ax.set_xlabel(r"Boozer toroidal angle $\phi_B$")
+            ax.set_ylabel(r"Boozer poloidal angle $\theta_B$")
+            _pi_ticks(ax, "y")
+            ax.set_ylim(0, 2 * np.pi)
+        fig.suptitle("Boozer-coordinate |B| contours")
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
     return out_path
 
 
@@ -600,28 +1134,27 @@ def plot_boozmn_mode_profiles(boozmn, out_path: str | Path, *, max_modes: int = 
         s_b = np.linspace(0.0, 1.0, amp.shape[1])
     order = np.argsort(-amp[:, -1])[: max(1, min(int(max_modes), amp.shape[0]))]
 
-    fig, ax = plt.subplots(1, 1, figsize=(8.2, 5.0))
-    seen: set[str] = set()
-    for idx in order:
-        group, color = _boozer_mode_group(int(xm[idx]), int(xn[idx]), nfp)
-        label = group if group not in seen else None
-        seen.add(group)
-        ax.semilogy(
-            s_b, np.maximum(amp[idx], 1e-16), color=color,
-            alpha=0.9 if label else 0.35, linewidth=1.6 if group != "Other" else 0.9,
-            label=label,
-        )
-    ax.set_xlabel("normalized toroidal flux s")
-    ax.set_ylabel(r"$|B_{mn}|$ [T]")
-    ax.set_title("Boozer |B| radial spectra by symmetry family")
-    if s_b.size > 1 and not np.isclose(s_b.min(), s_b.max()):
-        ax.set_xlim(float(s_b.min()), float(s_b.max()))
-    ax.grid(True, alpha=0.25)
-    ax.legend(fontsize=8, loc="best")
-    fig.tight_layout()
-    out_path = Path(out_path)
-    fig.savefig(out_path, dpi=_DPI, bbox_inches="tight")
-    plt.close(fig)
+    with _rc_context():
+        fig, ax = plt.subplots(1, 1, figsize=(8.4, 5.2), layout="constrained")
+        seen: set[str] = set()
+        for idx in order:
+            group, color = _boozer_mode_group(int(xm[idx]), int(xn[idx]), nfp)
+            label = group if group not in seen else None
+            seen.add(group)
+            ax.semilogy(
+                s_b, np.maximum(amp[idx], 1e-16), color=color,
+                alpha=0.9 if label else 0.35, linewidth=1.6 if group != "Other" else 0.9,
+                label=label,
+            )
+        ax.set_xlabel("normalized toroidal flux s")
+        ax.set_ylabel(r"$|B_{mn}|$ [T]")
+        ax.set_title("Boozer |B| radial spectra by symmetry family")
+        if s_b.size > 1 and not np.isclose(s_b.min(), s_b.max()):
+            ax.set_xlim(float(s_b.min()), float(s_b.max()))
+        ax.legend(loc="best")
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
     return out_path
 
 
@@ -638,28 +1171,28 @@ def plot_boozmn_spectrum(boozmn, out_path: str | Path, *, surface_index: int = -
     order = np.argsort(-amp[:, js])[: max(1, min(int(nmodes), amp.shape[0]))]
     colors = [_boozer_mode_group(int(xm[i]), int(xn[i]), nfp)[1] for i in order]
 
-    fig, ax = plt.subplots(1, 1, figsize=(max(8.0, 0.24 * len(order)), 4.8))
-    x = np.arange(len(order))
-    ax.bar(x, np.maximum(amp[order, js], 1e-16), color=colors, width=0.8)
-    ax.set_yscale("log")
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"({int(xm[i])},{int(xn[i])})" for i in order], rotation=75, ha="right", fontsize=8)
-    ax.set_xlabel("Boozer mode (m, n)")
-    ax.set_ylabel(r"$|B_{mn}|$ [T]")
-    ax.set_title(f"Boozer |B| spectrum, surface {js + 1}/{ns_b}")
-    legend = {}
-    for i in order:
-        group, color = _boozer_mode_group(int(xm[i]), int(xn[i]), nfp)
-        legend[group] = color
-    ax.legend(
-        handles=[plt.Line2D([0], [0], color=c, lw=4, label=g) for g, c in legend.items()],
-        fontsize=8, loc="best",
-    )
-    ax.grid(True, axis="y", alpha=0.25)
-    fig.tight_layout()
-    out_path = Path(out_path)
-    fig.savefig(out_path, dpi=_DPI, bbox_inches="tight")
-    plt.close(fig)
+    with _rc_context():
+        fig, ax = plt.subplots(1, 1, figsize=(max(8.2, 0.24 * len(order)), 5.0), layout="constrained")
+        x = np.arange(len(order))
+        ax.bar(x, np.maximum(amp[order, js], 1e-16), color=colors, width=0.8)
+        ax.set_yscale("log")
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"({int(xm[i])},{int(xn[i])})" for i in order], rotation=75, ha="right", fontsize=9)
+        ax.set_xlabel("Boozer mode (m, n)")
+        ax.set_ylabel(r"$|B_{mn}|$ [T]")
+        ax.set_title(f"Boozer |B| spectrum, surface {js + 1}/{ns_b}")
+        legend = {}
+        for i in order:
+            group, color = _boozer_mode_group(int(xm[i]), int(xn[i]), nfp)
+            legend[group] = color
+        ax.legend(
+            handles=[plt.Line2D([0], [0], color=c, lw=4, label=g) for g, c in legend.items()],
+            loc="best",
+        )
+        ax.grid(True, axis="y", alpha=0.25)
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
     return out_path
 
 

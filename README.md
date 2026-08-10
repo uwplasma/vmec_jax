@@ -249,7 +249,7 @@ The status of each solver, device, and differentiation lane is defined by the
 | Fixed-boundary fallback on missing mgrid | ✅ | ✅ | ❌ |
 | Spline profiles (cubic / Akima) | ✅ | ✅ | ❌ |
 | structured JSON input | ✅ | ❌ | ✅ |
-| Hot restart (VMEX: in-memory Python state; VMEC2000: WOUT reset file) | ✅ | ✅ | ✅ |
+| Hot restart from any WOUT file (`--restart`, `RESTART_WOUT`, `restart_from=`) | ✅ | ✅ | ❌ |
 | Typed zero-crash errors | ✅ | ❌ | ✅ |
 | Boozer transform built in (`--booz`) | ✅ | ❌ | ❌ |
 | Plotting built in (`--plot`) | ✅ | ❌ | ❌ |
@@ -409,6 +409,25 @@ free-boundary ladder (including vacuum continuation and hot starts);
 `implicit.run` for
 gradients (`jax.grad`-able `ImplicitSolution`); `solver.solve` as the
 low-level single-grid building block.
+
+### Hot restart from any wout
+
+```python
+import vmex
+
+hot = vmex.solve_multigrid(inp, restart_from="wout_previous.nc")  # or a SolveResult/SpectralState
+```
+
+```bash
+vmex input.cth --restart wout_cth.nc   # or RESTART_WOUT = 'wout_cth.nc' inside &INDATA
+```
+
+Any VMEC2000-compatible wout works (VMEX-, VMEC2000-, or PARVMEC-written): the
+full R/Z/λ state is rebuilt exactly by inverting the `wrout.f` output maps,
+`ns`/`MPOL`/`NTOR` differences are resampled, and multigrid rungs at or below
+the restart resolution are skipped. A converged same-deck restart re-converges
+in ~1 iteration (measured: cth ns=15 at `FTOL 1e-14`, 1 vs 435 cold — even
+from a VMEC2000-written wout).
 
 Optimization building blocks include quasisymmetry, three separate QI
 residuals, matched-well maximum-J, aspect ratio, iota, mirror ratio, magnetic
@@ -811,6 +830,8 @@ options:
                          cuda, rocm, or tpu; applies to all solve paths
   --ftol F               override the final-stage FTOL_ARRAY tolerance
   --max-iter N           override the final-stage NITER_ARRAY cap
+  --restart WOUT         hot-restart from a wout_*.nc (any VMEC2000-
+                         compatible writer; overrides RESTART_WOUT)
   --prefetch-compile     overlap next-rung compilation (higher peak memory)
   --coils PATH           ESSOS-style coils file: tabulate its Biot-Savart
                          field in memory instead of reading an mgrid file

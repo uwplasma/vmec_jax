@@ -9,6 +9,9 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.freeboundary.solve_free_boundary` — NESTOR free boundary
 - :func:`~vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
   / :func:`~vmex.core.wout.wout_from_state` / :class:`~vmex.core.wout.WoutData`
+- :func:`~vmex.core.restart.state_from_wout` /
+  :func:`~vmex.core.restart.restart_state` — hot restart from any wout
+  (also ``solve*(..., restart_from=...)``)
 - :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
 - :func:`~vmex.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
 - :func:`~vmex.core.mgrid.read_mgrid` / :func:`~vmex.core.mgrid.write_mgrid`
@@ -116,6 +119,9 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "read_wout": (".core.wout", "read_wout"),
     "write_wout": (".core.wout", "write_wout"),
     "wout_from_state": (".core.wout", "wout_from_state"),
+    # hot restart
+    "restart_state": (".core.restart", "restart_state"),
+    "state_from_wout": (".core.restart", "state_from_wout"),
     # plotting + Boozer
     "plot_wout": (".core.plotting", "plot_wout"),
     "plot_boozmn": (".core.plotting", "plot_boozmn"),

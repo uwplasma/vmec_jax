@@ -51,6 +51,7 @@ from .errors import (
 from .fourier import ModeTable, mode_table
 from .input import VmecInput, _vmec_ns_prefix
 from .preconditioner_2d import Prec2DConfig
+from .restart import restart_state, skip_ladder_rungs
 from .solver import (
     SolveResult, SpectralState, _finalize, _prefetch_block_lane,
     _release_used_lane_executables, _result_from_carry, _solve_stage,
@@ -242,6 +243,7 @@ def solve_multigrid(
     verbose: bool = False,
     emit=print,
     initial_state: SpectralState | None = None,
+    restart_from: Any = None,
     time_step: float | None = None, tcon0: float | None = None,
     gamma: float | None = None, nstep: int | None = None,
     precon_type: str | None = None,
@@ -276,6 +278,20 @@ def solve_multigrid(
     arrays repeat their last entry).  ``initial_state`` seeds the *first*
     executed stage (hot restart).  Its radial resolution may differ: VMEX
     interpolates the state before adapting its edge to the new boundary.
+
+    ``restart_from`` (mutually exclusive with ``initial_state``) seeds the
+    ladder from any restart source — a ``wout_*.nc`` path (VMEX- or
+    VMEC2000/PARVMEC-written), a :class:`~vmex.core.wout.WoutData`, a
+    previous :class:`~vmex.core.solver.SolveResult`, or a
+    :class:`~vmex.core.solver.SpectralState`
+    (:func:`vmex.core.restart.restart_state`).  Ladder policy
+    (:func:`vmex.core.restart.skip_ladder_rungs`): every leading rung whose
+    ``ns`` the seed already meets or exceeds is **skipped** — those rungs
+    exist only to build a seed the caller already has; rungs above the seed
+    resolution still run from the ``interp.f`` interpolant of the seed, and
+    a seed finer than the whole ladder runs only the final rung (resampled
+    down).  VMEC++ instead requires ``ns_array[0]`` to equal the source
+    resolution.
     ``precon_type``, ``prec2d_threshold``, and ``prec2d`` override the input's
     optional 2D-preconditioner configuration at every stage.
     ``jacobian_retries`` applies the same bounded best-checkpoint/``DELT``
@@ -355,6 +371,20 @@ def solve_multigrid(
 
     ftol_arr = _stage_values(ftol_array, inp.ftol_array, np.float64)
     niter_arr = _stage_values(niter_array, inp.niter_array, np.int64)
+
+    if restart_from is not None:
+        if initial_state is not None:
+            raise ValueError(
+                "pass either restart_from or initial_state, not both"
+            )
+        initial_state = restart_state(restart_from, inp)
+        first_rung = skip_ladder_rungs(
+            ns_arr, int(initial_state.R_cos.shape[0])
+        )
+        ns_arr = ns_arr[first_rung:]
+        ftol_arr = ftol_arr[first_rung:]
+        niter_arr = niter_arr[first_rung:]
+        n_stages = int(ns_arr.size)
 
     state: SpectralState | None = initial_state
     first_executed = True
@@ -533,6 +563,7 @@ def solve_free_boundary_multigrid(
     verbose: bool = False,
     emit=print,
     initial_state: SpectralState | None = None,
+    restart_from: Any = None,
     device: Any = AUTO,
     raise_on_max_iterations: bool = True,
     time_step: float | None = None,
@@ -572,6 +603,15 @@ def solve_free_boundary_multigrid(
     when its radial shape differs from that stage.  It follows reset-file
     semantics: the first stage repeats vacuum activation, while subsequent
     radial stages carry it.
+
+    ``restart_from`` (mutually exclusive with ``initial_state``) accepts any
+    restart source — a ``wout_*.nc`` path, :class:`~vmex.core.wout.WoutData`,
+    :class:`~vmex.core.solver.SolveResult`, or
+    :class:`~vmex.core.solver.SpectralState` — with the same ladder
+    rung-skipping policy as :func:`solve_multigrid`
+    (:func:`vmex.core.restart.skip_ladder_rungs`).  A wout written by a
+    previous free-boundary run carries its converged free edge, which this
+    path preserves (the seed is not clamped to the input boundary).
     The fixed-boundary ladder's solver controls (``time_step``, ``tcon0``,
     ``gamma``, ``nstep``, ``lconm1``, device placement, and 2D-preconditioner
     configuration) are accepted and forwarded identically, including bounded
@@ -622,6 +662,20 @@ def solve_free_boundary_multigrid(
 
     ftol_arr = _stage_values(ftol_array, inp.ftol_array, np.float64)
     niter_arr = _stage_values(niter_array, inp.niter_array, np.int64)
+
+    if restart_from is not None:
+        if initial_state is not None:
+            raise ValueError(
+                "pass either restart_from or initial_state, not both"
+            )
+        initial_state = restart_state(restart_from, inp)
+        first_rung = skip_ladder_rungs(
+            ns_arr, int(initial_state.R_cos.shape[0])
+        )
+        ns_arr = ns_arr[first_rung:]
+        ftol_arr = ftol_arr[first_rung:]
+        niter_arr = niter_arr[first_rung:]
+        n_stages = int(ns_arr.size)
 
     # Lazy import avoids a module cycle: freeboundary uses SolverRuntime while
     # this module owns the shared interp.f transfer.
