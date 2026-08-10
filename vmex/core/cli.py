@@ -117,6 +117,22 @@ def _is_boozmn_path(path: Path) -> bool:
     return path.name.lower().startswith("boozmn_") and path.suffix.lower() == ".nc"
 
 
+def _restart_source(args, inp, input_path: Path) -> Path | None:
+    """Hot-restart wout path: ``--restart`` wins over the deck's RESTART_WOUT.
+
+    The CLI flag resolves like any command-line path (relative to the working
+    directory); the deck key resolves relative to the input file, matching
+    how VMEC2000 treats MGRID_FILE-style deck references.
+    """
+    if getattr(args, "restart", None):
+        return Path(args.restart)
+    deck_value = str(getattr(inp, "restart_wout", "") or "").strip()
+    if not deck_value:
+        return None
+    deck_path = Path(deck_value)
+    return deck_path if deck_path.is_absolute() else input_path.parent / deck_path
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -220,6 +236,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--ftol", type=float, default=None, help="Override the final-stage FTOL_ARRAY tolerance.")
     p.add_argument("--max-iter", type=int, default=None, help="Override the final-stage NITER_ARRAY iteration cap.")
+    p.add_argument(
+        "--restart",
+        metavar="WOUT",
+        type=str,
+        default=None,
+        help=(
+            "Hot-restart the solve from a wout_*.nc file (VMEX- or "
+            "VMEC2000-written): the equilibrium state is rebuilt from the "
+            "file, coarse multigrid rungs at or below its resolution are "
+            "skipped, and radial/mode-table differences are resampled. "
+            "Overrides a RESTART_WOUT deck entry."
+        ),
+    )
     p.add_argument(
         "--prefetch-compile",
         action=argparse.BooleanOptionalAction,
@@ -608,6 +637,10 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
         # banner opens with one — the default print newline would stack a
         # second consecutive blank line after the COMPUTER line.
         emit(_preamble(case, time_slice=float(getattr(inp, "time_slice", 0.0))), end="")
+    restart_source = _restart_source(args, inp, input_path)
+    if restart_source is not None and verbose:
+        emit(f" RESTART : seeding from {restart_source}")
+
     freeb_plan = _free_boundary_plan(args, inp, input_path, emit=emit)
     # VMEC2000 turns off LFREEB when the requested mgrid cannot be opened.
     # Use that effective mode in setup and WOUT metadata, not merely in CLI
@@ -626,6 +659,7 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             inp, ftol=args.ftol, max_iter=args.max_iter)
         result = solve_free_boundary_multigrid(
             inp, ftol_array=ftol_array, niter_array=niter_array,
+            restart_from=restart_source,
             verbose=verbose,
             emit=emit,
             # vmec.f only forces an NITER-exhausted state through fileout
@@ -647,6 +681,7 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             effective_inp,
             ftol_array=ftol_array,
             niter_array=niter_array,
+            restart_from=restart_source,
             mode=str(args.mode),
             verbose=verbose,
             emit=emit,

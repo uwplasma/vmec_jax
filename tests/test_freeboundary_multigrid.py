@@ -13,6 +13,8 @@ jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402
 
 from vmex.core import freeboundary as FB  # noqa: E402
+from vmex.core import multigrid as MG  # noqa: E402
+from vmex.core.errors import BAD_JACOBIAN_FLAG, VmecJacobianError  # noqa: E402
 from vmex.core.input import VmecInput  # noqa: E402
 from vmex.core.fourier import mode_table  # noqa: E402
 from vmex.core.multigrid import (  # noqa: E402
@@ -120,6 +122,73 @@ def test_stage_transfer_carries_vacuum_and_interpolates_final_xc(monkeypatch) ->
     np.testing.assert_allclose(np.asarray(calls[2][1].R_cos), 12.0)
     assert calls[2][2] is vacua[1]
     assert calls[2][1].R_cos.shape[0] == 15
+
+
+def test_initial_bad_jacobian_restarts_free_ladder_through_ns3(
+    monkeypatch,
+) -> None:
+    """Free boundary gets the same one-shot coarse-axis recovery."""
+    inp = VmecInput.from_file(DECK)
+    original = solve_free_boundary_multigrid
+
+    def bad_first_stage(*_args, **_kwargs):
+        raise VmecJacobianError(
+            "INITIAL JACOBIAN CHANGED SIGN!",
+            ier_flag=BAD_JACOBIAN_FLAG,
+        )
+
+    monkeypatch.setattr(FB, "_solve_free_boundary_stage", bad_first_stage)
+    stopped = []
+    joined = []
+
+    class Stop:
+        def set(self):
+            stopped.append(True)
+
+    class Worker:
+        def join(self):
+            joined.append(True)
+
+    monkeypatch.setattr(
+        FB,
+        "_launch_free_lane_prefetch",
+        lambda *_args, **_kwargs: (Worker(), Stop()),
+    )
+    marker = object()
+    retried = {}
+
+    def record_retry(_inp, **kwargs):
+        retried.update(kwargs)
+        return marker
+
+    monkeypatch.setattr(MG, "solve_free_boundary_multigrid", record_retry)
+    result = original(
+        inp,
+        ns_array=[7, 15],
+        ftol_array=[1.0e-6, 1.0e-10],
+        niter_array=[80, 200],
+        external_field=object(),
+        verbose=True,
+        prefetch_compile=True,
+    )
+
+    assert result is marker
+    np.testing.assert_array_equal(retried["ns_array"], [3, 7, 15])
+    np.testing.assert_allclose(retried["ftol_array"], [1.0e-4, 1.0e-6, 1.0e-10])
+    np.testing.assert_array_equal(retried["niter_array"], [80, 80, 200])
+    assert retried["coarse_grid_retry"] is False
+    assert stopped == [True]
+    assert joined == [True]
+
+    with pytest.raises(VmecJacobianError):
+        original(
+            inp,
+            ns_array=[7],
+            ftol_array=[1.0e-6],
+            niter_array=[80],
+            external_field=object(),
+            coarse_grid_retry=False,
+        )
 
 
 def test_vmec2000_niter_exhaustion_is_not_converged() -> None:

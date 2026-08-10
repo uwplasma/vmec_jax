@@ -31,6 +31,28 @@ def _solovev_setup():
     return inp, cfg, p0
 
 
+def _small_solovev_setup():
+    """Same analytic equilibrium on the smallest meaningful AD grid.
+
+    Block assembly scales cubically with the modes per radial plane.  The
+    forward/transpose/finite-difference identities tested below do not need
+    the production-resolution Solovev deck, which remains covered by the
+    full gradient and equilibrium parity lanes.
+    """
+    inp = VmecInput.from_file(str(DATA / "input.solovev"))
+    inp = inp.change_resolution(
+        mpol=3, ntor=0, ntheta=12, nzeta=4,
+    )
+    inp = dataclasses.replace(
+        inp,
+        ns_array=np.asarray([5]),
+        ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([1000]),
+    )
+    cfg = im.make_config(inp, ftol=1.0e-10, max_iterations=1000)
+    return inp, cfg, im.params_from_input(inp)
+
+
 def _tree_dot(left, right):
     return sum(
         jnp.vdot(a, b).real
@@ -80,7 +102,7 @@ def test_multi_rhs_pullback_matches_scalar_vjp():
 
 def test_block_response_forward_transpose_and_fd():
     """One factorization serves tangent and transpose responses accurately."""
-    inp, cfg, p0 = _solovev_setup()
+    inp, cfg, p0 = _small_solovev_setup()
     state, mask = im.solve_implicit_with_aux(p0, cfg)
     zero = jax.tree.map(jnp.zeros_like, p0)
     tangents = (

@@ -2117,6 +2117,7 @@ def solve(
     gamma: float | None = None, nstep: int | None = None,
     lconm1: bool = True, verbose: bool = False, emit=print,
     initial_state: SpectralState | None = None,
+    restart_from: Any = None,
     device: Any = AUTO,
     precon_type: str | None = None, prec2d_threshold: float | None = None,
     prec2d: Prec2DConfig | None = None,
@@ -2155,6 +2156,16 @@ def solve(
     mode, so keeping the old row would silently re-solve the old boundary);
     the interior and lambda are kept.
 
+    ``restart_from`` is the general form: a ``wout_*.nc`` path (VMEX- or
+    VMEC2000/PARVMEC-written), a :class:`~vmex.core.wout.WoutData`, a
+    previous :class:`SolveResult`, or a :class:`SpectralState`.  The source
+    is normalized with :func:`vmex.core.restart.restart_state` — wout mode
+    tables are remapped onto this deck's ``mpol/ntor`` and the radial grid is
+    resampled to this solve's ``ns`` — and then follows the
+    ``initial_state`` path above.  Requires a :class:`VmecInput` source for
+    wout inputs (the deck supplies the mode table and flux normalization);
+    mutually exclusive with ``initial_state``.
+
     ``device`` places the jitted iteration lanes: ``"cpu"``/``"gpu"``/
     ``"cuda"``/``"tpu"`` or a ``jax.Device`` (always honored), ``"auto"``
     (default) to apply the measured small-work-to-CPU policy, or ``None`` to
@@ -2181,6 +2192,21 @@ def solve(
         resolution = resolution_from_input(source)
     if resolution is None:
         raise ValueError("solve(RunSetup) requires a Resolution")
+    if restart_from is not None:
+        if initial_state is not None:
+            raise ValueError(
+                "pass either restart_from or initial_state, not both"
+            )
+        if not isinstance(source, VmecInput):
+            raise ValueError(
+                "solve(restart_from=...) requires a VmecInput source (the "
+                "deck supplies the mode table and flux normalization)"
+            )
+        from .restart import restart_state
+
+        initial_state = restart_state(
+            restart_from, source, ns=int(resolution.ns)
+        )
     use_fft_resolved = _resolve_use_fft(use_fft, device, resolution)
     initial_state = _put_numeric_leaves(
         initial_state, _placement_device(device, resolution)

@@ -1,0 +1,29 @@
+{
+  "date": "2026-08-09",
+  "host": {
+    "model": "Mac15,11",
+    "logical_cpus": 14,
+    "architecture": "arm64"
+  },
+  "input": "examples/data/input.nfp2_QI_seed",
+  "platform": "macOS-14.4.1-arm64",
+  "max_mode": 5,
+  "dofs": 120,
+  "initial_cost": 1.2250064616354313,
+  "accepted_cost_after_one_step": 0.9176536922675804,
+  "finite_gradient": true,
+  "derivative_seconds": 31.164451333024772,
+  "one_step_least_squares_seconds": 8.206475333019625,
+  "failed_trials": 0,
+  "derivative_fallbacks": 0,
+  "versions": {
+    "python": "3.11.14",
+    "vmex": "0.4.0",
+    "numpy": "2.4.6",
+    "scipy": "1.17.1",
+    "jaxopt": "0.8.3",
+    "optax": "0.2.8",
+    "simsopt": "1.10.7.dev433+g24fa9b4b8",
+    "desc-opt": "0.17.1+11.g2471d5504.dirty"
+  }
+}

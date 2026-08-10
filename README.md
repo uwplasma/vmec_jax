@@ -249,7 +249,7 @@ The status of each solver, device, and differentiation lane is defined by the
 | Fixed-boundary fallback on missing mgrid | ✅ | ✅ | ❌ |
 | Spline profiles (cubic / Akima) | ✅ | ✅ | ❌ |
 | structured JSON input | ✅ | ❌ | ✅ |
-| Hot restart (VMEX: in-memory Python state; VMEC2000: WOUT reset file) | ✅ | ✅ | ✅ |
+| Hot restart from any WOUT file (`--restart`, `RESTART_WOUT`, `restart_from=`) | ✅ | ✅ | ❌ |
 | Typed zero-crash errors | ✅ | ❌ | ✅ |
 | Boozer transform built in (`--booz`) | ✅ | ❌ | ❌ |
 | Plotting built in (`--plot`) | ✅ | ❌ | ❌ |
@@ -382,6 +382,26 @@ write_wout("wout_nfp4_QH_warm_start.nc", eq.wout)   # wout built lazily on eq
 plot_wout(eq.wout, "figures/")
 ```
 
+For a parameter scan or a tighter final solve, pass the last converged state
+into the next call. VMEX adapts it to the new boundary and interpolates it if
+the radial resolution changes:
+
+```python
+from dataclasses import replace
+
+next_inp = replace(
+    inp, ns_array=[101], ftol_array=[1e-14], niter_array=[8000]
+)
+next_eq = opt.solve_equilibrium(next_inp, initial_state=eq.state)
+```
+
+This in-memory `initial_state=` is VMEX's hot restart. It is useful outside
+optimization as well as inside it; keep carrying `next_eq.state` through a
+scan. Optimization problems do this automatically. If a genuinely cold first
+grid still has a bad Jacobian after the magnetic-axis re-guess, the driver also
+retries once through a coarse `NS=3` equilibrium, following current VMEC++
+behavior.
+
 Choosing an entry point: `optimize.solve_equilibrium` for Python analysis and
 objectives (state + runtime + lazy `.wout`); `multigrid.solve_multigrid` for a
 fixed-boundary ladder; `multigrid.solve_free_boundary_multigrid` for a
@@ -390,27 +410,245 @@ free-boundary ladder (including vacuum continuation and hot starts);
 gradients (`jax.grad`-able `ImplicitSolution`); `solver.solve` as the
 low-level single-grid building block.
 
+### Hot restart from any wout
+
+```python
+import vmex
+
+hot = vmex.solve_multigrid(inp, restart_from="wout_previous.nc")  # or a SolveResult/SpectralState
+```
+
+```bash
+vmex input.cth --restart wout_cth.nc   # or RESTART_WOUT = 'wout_cth.nc' inside &INDATA
+```
+
+Any VMEC2000-compatible wout works (VMEX-, VMEC2000-, or PARVMEC-written): the
+full R/Z/λ state is rebuilt exactly by inverting the `wrout.f` output maps,
+`ns`/`MPOL`/`NTOR` differences are resampled, and multigrid rungs at or below
+the restart resolution are skipped. A converged same-deck restart re-converges
+in ~1 iteration (measured: cth ns=15 at `FTOL 1e-14`, 1 vs 435 cold — even
+from a VMEC2000-written wout).
+
 Optimization building blocks include quasisymmetry, three separate QI
 residuals, matched-well maximum-J, aspect ratio, iota, mirror ratio, magnetic
 well, `DMerc`, Glasser `D_R`, `<J·B>`, and ballooning-stability targets. They
-compose in the same least-squares driver over boundary Fourier coefficients,
-with implicit-differentiation gradients from
-`vmex.core.implicit` (`jac="implicit"`). `<J·B>` also supports `LASYM = T`;
+compose into an optimizer-neutral `VmecProblem`, with
+implicit-differentiation gradients from `vmex.core.implicit`. The problem
+exposes ordinary value/gradient and residual/Jacobian callables, so the user
+chooses SciPy, JAXopt, Optax, or a custom optimizer. `<J·B>` also supports `LASYM = T`;
 `DMerc` and `D_R` remain symmetry-gated pending independent DCON/JMC parity.
-The recommended pattern is **one
-`least_squares` call** — no `max_mode` continuation loop — with **Exponential
-Spectral Scaling** ordering the harmonics through the trust region:
+For a direct full-spectrum run, release all harmonics in one problem and use
+**Exponential Spectral Scaling** for the optimizer's variable scale:
 
 ```python
+from dataclasses import replace
+import jax.numpy as jnp
+from scipy.optimize import least_squares
+from vmex import OptimizationMonitor
 from vmex import optimize as opt
 
+max_mode = 5
+mpol = max(max_mode + 2, 5)
+ntor = mpol
+ntheta = 2 * mpol + 6
+nzeta = 2 * ntor + 4
+inp = replace(inp, delt=0.5)
+inp = inp.change_resolution(
+    mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta
+)
 qs = opt.QuasisymmetryRatioResidual(surfaces, helicity_m=1, helicity_n=0)
-result = opt.least_squares(
-    [(qs, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0), (opt.mean_iota, 0.42, 1.0)],
-    inp, max_mode=5, jac="implicit",
-    use_ess=True,        # exp(-alpha*max(|m|,|n|)) trust radius per dof:
-)                        # high harmonics on short leashes — no ladder needed
+
+def elongation_excess(state, runtime):
+    return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+
+problem = opt.VmecProblem.from_tuples(
+    inp,
+    [(qs, 0.0, 1.0),
+     (opt.aspect_ratio, 6.0, 1.0),
+     (opt.mean_iota, 0.42, 1.0),
+     (elongation_excess, 0.0, 1.0)],
+    max_mode=max_mode,
+    progress=True,                 # report elapsed time during construction
+)
+problem.compile_residual_and_jacobian()  # optional visible first compilation
+result = least_squares(
+    problem.residual, problem.x0, jac=problem.residual_jac,
+    x_scale=problem.scales,
+    callback=OptimizationMonitor(problem),
+)
+optimized_input = problem.input_from_x(result.x)
+optimized_equilibrium = problem.equilibrium_from_x(result.x)
 ```
+
+The script owns its resolution policy: `mpol`, `ntor`, `ntheta`, `nzeta`, and
+`delt` are ordinary visible values rather than defaults hidden in an
+optimization helper. `VmecInput.change_resolution()` only resizes the input;
+it preserves representable boundary and axis coefficients and zeroes newly
+exposed modes.
+
+`progress=True` covers seed validation and construction;
+`problem.compile_residual_and_jacobian()` optionally performs the first
+least-squares derivative call before SciPy starts. Both print a short label,
+elapsed-time heartbeats, and final wall time. If the explicit compilation call
+is removed, SciPy triggers the same compilation on its first evaluation.
+For CPU jobs in which cold compilation matters more than peak warm-kernel
+speed, set `VMEX_FAST_COMPILE=1` before importing VMEX; the persistent
+machine-local compilation cache remains enabled by default.
+The beginner defaults are exact converged-equilibrium derivatives
+(`derivative_method="implicit"`), automatic scalar/vector Jacobian assembly
+(`implicit_jacobian_method="auto"`), one-column Jacobian batches
+(`jacobian_batch_size=1`), and cost weights (`weight_semantics="cost"`). Ordinary
+QI/QS scripts should omit these arguments. On an Apple M3 Max with JAX/JAXlib
+0.9.2, isolated cold-cache tests over QI, QS, and scalar geometry/profile terms
+at `max_mode` 1, 3, and 5 reduced first Jacobian compilation by 12.9–14.2 s
+with batch size 1; full 12-evaluation mode-5 QI and QS runs were 8.2 s and
+9.9 s faster overall than `"auto"`, with matching final costs. Select
+`jacobian_batch_size="auto"` only for long, repeated same-shape campaigns in
+which its modestly lower warm stage time amortizes the larger first
+compilation. Explicit Jacobian methods are intended for numerical studies and
+diagnostics; `"auto"` is the normal choice. The reproducible driver and full
+matrix are `benchmarks/optimization_defaults.py` and
+`benchmarks/optimization_defaults.json` (the measurement platform is recorded
+inside the artifact).
+
+`problem.equilibrium_from_x(result.x)` returns the accepted equilibrium state
+already evaluated by the optimizer. Use it for reporting and as
+`initial_state=` in a high-resolution final solve; cold-solving a strongly
+shaped optimized boundary can otherwise fail before VMEC reconstructs a good
+magnetic axis. `problem.x_from_input(inp)` is the inverse mapping used to start
+a continuation stage. A mutable `inp.x` is intentionally absent because the
+decision vector depends on that problem's `max_mode` and optional profile
+degrees of freedom.
+
+Every `VmecProblem` uses hot restart by default. For exact implicit derivatives
+the seed order is the first-order equilibrium prediction, the last converged
+state, then a cold solve only if both warm seeds fail. This changes iteration
+count, not the converged equilibrium or derivative.
+
+For scalar methods, pass `problem.fun` and `problem.grad` separately to
+`scipy.optimize.minimize`. In ESS-scaled coordinates use
+`x = problem.x0 + problem.scales * y`; the examples show the short chain rule
+for the gradient. Value-only line-search trials then avoid an unnecessary
+adjoint. `problem.jax_value_and_grad` and `problem.jax_residual` provide the
+same physics to JAXopt and Optax. The existing `opt.least_squares()` and
+`opt.minimize()` functions remain concise compatibility adapters. Monitoring
+is callback-based, so it reports accepted iterations rather than every trial
+evaluation.
+
+VMEX sets JAX's logging level to `ERROR` at import time, removing repeated
+PjRt persistent-cache compatibility messages while retaining VMEX errors.
+`VMEX_JAX_LOGGING_LEVEL` takes precedence over JAX's standard
+`JAX_LOGGING_LEVEL`; set either to `WARNING` to restore JAX warnings, or set
+the VMEX option to `inherit` to leave the process setting unchanged. JAX
+versions older than 0.4.36 lack the unified Python/C++ logging control, so
+VMEX prints one actionable startup warning that PjRt messages may remain.
+
+Runnable QI examples cover SciPy least squares/BFGS/L-BFGS-B, JAXopt
+LBFGS/Levenberg–Marquardt, and Optax Adam. Opaque host objectives select
+`derivative_method="finite_difference"`; central probes use automatic workers,
+while traceable objectives retain the faster implicit adjoint.
+
+There are two geometric traceable QI targets with deliberately different roles.
+`QIResidual` is the inexpensive smooth surrogate used by short API and timing
+examples. `ConstructedQIResidual` evaluates the fuller Goodman
+squash-and-shuffle construction and is the production target. A measured nfp=2
+path uses 25 mode-1 QP evaluations to select a poloidally closed-contour basin,
+then three mode-5 constructed-QI trust-region stages with budgets 30, 20, and
+20, followed by ten evaluations of the full production residual. It reaches
+resolved all-radius QI `1.79e-3`; a direct mode-7/100 run required roughly 15
+minutes and stopped at `1.85e-3`, so larger mode is not automatically a better
+basin search. The final `NS=101`, `FTOL=1e-14` equilibrium is hot-started from
+the accepted optimization state. Relaxing the active mirror/elongation limits
+reached `1.19e-3` in VMEX but lost cold-solver portability, so it is documented
+as a tradeoff, not advertised as the default. The [optimization guide](docs/optimization.rst)
+gives the exact schedule, sampling, constraint conventions, and resolution
+checks.
+
+![Low-mode objective landscapes in RBC(1,1) and ZBS(1,1)](docs/_static/figures/readme_optimization_landscapes.png)
+
+These converged-equilibrium two-mode slices are not interchangeable convex
+bowls: QI, QA, and QH have different coupled valleys. The white circle is the
+reference equilibrium and the star is the sampled minimum. Regenerate the
+values and figure with `python benchmarks/optimization_landscapes.py`.
+
+Changing only `NFP` in the circular input is not a fair field-period search.
+The same short QP/QI workflow gave full-QI residuals 0.141, 0.00456, 0.110,
+0.0968, and 0.0923 for NFP 1–5, while an NFP-1 near-axis seed reached
+`1.86e-3`. An NFP-3 seed reached `7.47e-3` only with mirror ratio 0.461.
+The [optimization guide](docs/optimization.rst) records the scan and the
+NFP-specific seed/constraint strategy; NFP 3–5 should not reuse NFP 2's QP
+basin guide blindly.
+
+The architecture, derivative validation, performance criteria, documentation
+work, and staged pull-request plan are recorded in
+[`docs/optimization_api_plan.md`](docs/optimization_api_plan.md).
+
+### Apples-to-apples QI and QA optimization timing
+
+The comparison uses the bundled near-circular nfp=2 QI seed
+(`examples/data/input.nfp2_QI_seed`).
+Both codes optimize the same boundary coefficients at `NS=31`, with
+`mpol=ntor=max(max_mode+2, 5)`, identical angular grids and objectives, and a
+15-function-evaluation SciPy least-squares budget.  The QI matrix reproduces
+the smooth-QI, aspect-5, iota-floor, mirror-limit, and elongation-limit tuples
+in the beginner driver; the QA matrix uses QS `(M,N)=(1,0)`, iota 0.41, and
+aspect 6.  For every completed VMEX case, the state residual and independent
+wout seed reconstruction agree to better than `2e-8` relative.
+
+These are cold end-to-end times on a 14-core Apple M3 Max (10 performance + 4
+efficiency cores, 36 GB): setup, first compilation, and optimization are all
+included. SIMSOPT 1.10.7 uses 14 one-thread MPI groups and centered finite
+differences; VMEX 0.4.0/JAX 0.9.2 uses the exact implicit Jacobian and
+XLA-managed CPU threading. Persistent VMEX compilation caching was disabled,
+so each row starts from an empty process-local cache.
+
+| max mode | variables | SIMSOPT, ESS off | SIMSOPT, ESS on | VMEX, ESS off | VMEX, ESS on |
+|---------:|----------:|-----------------:|----------------:|--------------:|-------------:|
+| 1 | 8   | 55.3 s  | 55.5 s  | 97.2 s  | 96.7 s  |
+| 2 | 24  | 111.1 s | 87.3 s  | 330.2 s | 105.7 s |
+| 3 | 48  | 154.5 s | 128.9 s | 111.1 s | 92.5 s  |
+| 4 | 80  | 451.6 s | 359.7 s | 124.6 s | 122.1 s |
+| 5 | 120 | >=600 s | >=600 s | >=600 s | 129.8 s |
+| 6 | 168 | >=600 s | >=600 s | >=600 s | 135.7 s |
+| 7 | 224 | >=600 s | >=600 s | >=600 s | 187.1 s |
+| 8 | 288 | >=600 s | >=600 s | >=600 s | 220.2 s |
+
+![Cold SIMSOPT and VMEX QI optimization wall time versus maximum mode](benchmarks/optimization_crosscode/qi_optimization_time.png)
+
+`>=600 s` is an explicit right-censored lower bound, shown with an open marker;
+it is not presented as a completed runtime. Cold JIT dominates mode 1. From
+mode 3 onward, a completed VMEX/ESS run is faster than its completed SIMSOPT
+counterpart, while unscaled direct high-mode runs can spend the whole limit on
+ill-conditioned or failed trials. Runtime is not monotone in mode because the
+accepted/rejected trajectory is part of the measured work.
+
+The history comparison has exactly the three requested rows: ladder
+`[1,2,3,4,5]`, direct mode 2, and direct mode 5. The ladder has 15 evaluations
+*per stage*; a direct row has 15 total. Solid lines mean ESS on and dashed
+lines ESS off, with one color and marker per backend.
+
+![SIMSOPT and VMEX QI objective histories, with and without ESS](benchmarks/optimization_crosscode/qi_objective_history.png)
+
+![SIMSOPT and VMEX QA objective histories, with and without ESS](benchmarks/optimization_crosscode/qa_objective_history.png)
+
+ESS and a mode ladder are complementary. ESS conditions simultaneous
+high-order variables; the ladder also chooses a basin by solving smaller
+problems first. In this fixed QI benchmark, VMEX's ladder reached cost 0.0393
+without ESS and 0.0419 with ESS, whereas the best direct mode-5 completion was
+0.0472 with ESS. A stage endpoint can rise when resolution and array shapes
+change because the discretized problem changed; accepted iterations within a
+fixed stage remain monotone.
+
+Reproduce the isolated-process matrix with
+[`benchmarks/run_optimization_crosscode.py`](benchmarks/run_optimization_crosscode.py).
+It defaults to all logical CPUs; `--workers N` caps SIMSOPT's MPI groups and
+`--timeout-seconds T` changes the explicit censor. The committed consolidated
+artifacts (`benchmarks/optimization_crosscode/qi_results.json` and
+`qa_results.json`, 48 cases) record the input hash, versions, platform,
+worker policy, timing split, status, and accepted histories. This hours-long evidence run is not CI: a fast test checks
+its schema, parity, provenance, and monotonicity. Full CPU-worker and
+accelerator guidance is in the [optimization](docs/optimization.rst) and
+[parallelization](docs/parallelization.rst) documentation.
 
 Measured on a 36-core CPU from a near-circular torus (single call, all
 harmonics released at once; `examples/optimization/*_ess.py`; the staged
@@ -421,7 +659,7 @@ harmonics released at once; `examples/optimization/*_ess.py`; the staged
 | QA | 2 | QS (1, 0)  | 2.04e-01 | **7.2e-06** | 5 | **14.5 min** | precise; aspect 6.00, iota 0.42 (ladder: 3.7e-07 in 25.5 min) |
 | QH | 4 | QS (1, −1) | 6.91e-01 | **5.83e-05** | 5 | 25.5 min (ladder) | precise; aspect 8.00, iota −1.22 |
 | QP | 2 | QS (0, 1)  | 4.46e-01 | 3.3e-02 | 5 | ~3.4 h (ladder + refinement) | hardest QS class — see caption |
-| QI | 1 | omnigenity | 4.52e-01 | **1.81e-02** | 6 | **17.3 min** | 25× via the traceable Goodman constructed-QI residual |
+| QI | 1 | smooth QI surrogate | 4.52e-01 | **1.81e-02** | 6 | **17.3 min** | 25× scouting run; use the constructed residual for production |
 
 ![QA/QH/QP optimization: seed vs optimized boundary, 3-D |B| geometry, and Boozer |B| on the LCFS](docs/_static/figures/readme_optimization.png)
 
@@ -462,7 +700,11 @@ for QP. Three measured optimizations keep each campaign in the minutes range:
   converged.
 
 High-level optimization uses the measured CPU implicit-Jacobian policy by
-default; suitably sized forward solves can use the GPU. Low-level
+default; suitably sized forward solves can use the GPU. Independent
+finite-difference probes and ensembles use up to all logical CPUs by default
+(`workers=None`); set `workers=N` to cap them. A single implicit solve uses
+XLA's CPU threads, so one reported JAX CPU device is the whole host backend,
+not one core; multi-GPU single-solve sharding is not claimed yet. Low-level
 `implicit.params_from_input` and `implicit.run` follow ordinary JAX placement
 when `device` is omitted, so an accelerator installation works without
 environment variables. Pass `device="auto"` to opt into the measured implicit
@@ -501,7 +743,7 @@ This bounded-storage optimizer is opt-in because its quasi-Newton steps differ
 from `least_squares`; existing defaults and objective minima are unchanged.
 
 The first four use the implicit adjoint (`jac="implicit"`). The published
-`DMerc` showcase deliberately preserves its legacy host-side reporting lane
+`DMerc` showcase deliberately preserves its host-side diagnostic evaluation
 and finite-difference baseline at `max_mode` 2. New campaigns can instead use
 the traceable `mercier_stability_residual` with `jac="implicit"`; see the
 optimization objectives documentation. The self-consistent Redl bootstrap
@@ -588,6 +830,8 @@ options:
                          cuda, rocm, or tpu; applies to all solve paths
   --ftol F               override the final-stage FTOL_ARRAY tolerance
   --max-iter N           override the final-stage NITER_ARRAY cap
+  --restart WOUT         hot-restart from a wout_*.nc (any VMEC2000-
+                         compatible writer; overrides RESTART_WOUT)
   --prefetch-compile     overlap next-rung compilation (higher peak memory)
   --coils PATH           ESSOS-style coils file: tabulate its Biot-Savart
                          field in memory instead of reading an mgrid file

@@ -276,6 +276,57 @@ The same interpolation seam provides hot restart
 the previous point of a parameter scan) can seed the solve directly, at the
 same or a different radial resolution.
 
+If a first requested grid remains invalid after ``guess_axis``, the fixed- or
+free-boundary driver retries the ladder once with an ``ns=3``, ``ftol=1e-4``
+stage prepended.  The coarse equilibrium is then interpolated to the user's
+first grid; free-boundary vacuum activation restarts cleanly.  This narrow
+recovery follows the current VMEC++ driver; it fires only for
+``bad_jacobian_flag`` and does not hide convergence, non-finite, or input
+failures.  ``coarse_grid_retry=False`` disables it for strict failure studies.
+
+Hot restart from a wout file (``restart_from``)
+-----------------------------------------------
+
+Every solve entry point accepts ``restart_from`` — a ``wout_*.nc`` path
+(VMEX-, VMEC2000-, or PARVMEC-written), a :class:`~vmex.core.wout.WoutData`,
+a previous :class:`~vmex.core.solver.SolveResult`, or a bare
+:class:`~vmex.core.solver.SpectralState` — and the CLI/deck expose it as
+``vmex input.x --restart wout_y.nc`` and ``RESTART_WOUT = 'wout_y.nc'``
+inside ``&INDATA`` (a VMEX extension key; the CLI flag wins).  Three steps
+turn the file into the evolved state (:mod:`vmex.core.restart`):
+
+1. **Exact inversion of the wrout.f output maps.**  ``rmnc/zmns`` (and the
+   LASYM partners) are remapped by ``(m, n)`` pair onto the target
+   ``MPOL/NTOR`` table (zero-fill new modes, truncate removed ones), scaled
+   back to internal ``mscale*nscale`` normalization, and rotated into the
+   evolved m = 1-constrained basis.  The half-mesh ``lmns`` is inverted
+   surface-by-surface to the full-mesh internal lambda
+   (:func:`vmex.core.postprocess.lambda_full_mesh_from_wout`), undoing the
+   ``lamscale/phipf`` rescale with the *target* deck's flux profiles.  The
+   reconstruction is exact (R/Z at machine precision, lambda on every
+   interior surface), so a converged wout restarts at its converged
+   residual — unlike VMEC++, which zeroes lambda when restarting from a
+   Fortran wout and never seeds asymmetric geometry.
+2. **Radial resampling.**  When the file ``ns`` differs from the target
+   grid, the state passes through the same ``interp.f`` transfer as the
+   multigrid ladder (both up- and down-sampling).
+3. **Ladder rung skipping.**  ``solve_multigrid`` and
+   ``solve_free_boundary_multigrid`` drop every leading ``NS_ARRAY`` rung
+   whose resolution the seed already meets or exceeds
+   (:func:`vmex.core.restart.skip_ladder_rungs`); finer rungs still run from
+   the interpolated seed, and a seed finer than the whole ladder runs only
+   the final rung.  VMEC++ instead requires ``ns_array[0]`` to equal the
+   source resolution exactly.
+
+Fixed-boundary restarts then adapt the seed to the deck's (possibly
+perturbed) boundary through :func:`~vmex.core.solver.hot_restart_state` and
+rebind the ``rcon0/zcon0`` baselines; free-boundary restarts keep the wout's
+evolved free edge and repeat vacuum activation (reset-file semantics).
+Measured: a converged same-deck fixed-boundary restart re-converges in one
+iteration (cth ``ns=15`` at ``FTOL 1e-14``: 1 vs 435 cold, including from
+the VMEC2000-written golden wout); the free-boundary cth ladder restart
+takes 99 vs 340 final-stage iterations and skips its coarse rung.
+
 The transfer includes VMEC2000's non-geometric module state.  In particular,
 ``initialize_radial.f`` resets ``fsq``, ``iter1``, ``iter2``, ``ijacob``,
 and the time-step controller, but it does **not** reset
