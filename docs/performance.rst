@@ -550,6 +550,28 @@ sizes: the tridiagonal preconditioner solve, for instance, measures identical
 fp32/fp64 GPU times (~15 us per radial row, independent of the number of
 spectral columns).
 
+GPU decision sweep (office rig)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One command produces every CPU-vs-GPU crossover curve on a dual-GPU host —
+warm per-iteration marginals on the ``ns x mnmax`` grid (``ns`` 51/101/201,
+``mnmax`` 8/128/288) for the production CLI lane and the multigrid ladder,
+the free-boundary NS sweep (steady vacuum lane, NESTOR included), the
+537-mode probe where the GPU default switches to FFT synthesis, and the
+fixed/free/gradient workflow profiles (cold+warm+memory)::
+
+   python benchmarks/run_gpu_matrix.py --office --out benchmarks/gpu_office.json
+
+Each cell is a fresh subprocess selecting hardware through the public
+``device=`` API.  For the CUDA-graph A/B, repeat with command buffers and a
+second output file, then compare the two ``stepscan`` sections::
+
+   python benchmarks/run_gpu_matrix.py --office \
+       --xla-flags "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL" \
+       --out benchmarks/gpu_office_cmdbuf.json
+
+The applied ``XLA_FLAGS`` are recorded in the artifact's ``meta`` block.
+
 Reproducing the numbers
 -----------------------
 
