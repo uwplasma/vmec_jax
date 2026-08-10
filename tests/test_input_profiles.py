@@ -25,6 +25,34 @@ FIXTURES = Path(__file__).parent / "data"
 assert DECKS, f"no input decks found under {DATA}"
 
 
+def test_change_resolution_preserves_representable_coefficients() -> None:
+    """Resolution changes expose no optimization policy and lose no shared mode."""
+    rbc = np.arange(9.0).reshape(3, 3)
+    zbs = rbc + 20.0
+    inp = VmecInput(mpol=3, ntor=1, rbc=rbc, zbs=zbs)
+
+    enlarged = inp.change_resolution(mpol=6, ntor=6, ntheta=18, nzeta=16)
+    assert (enlarged.mpol, enlarged.ntor, enlarged.ntheta, enlarged.nzeta) == (
+        6, 6, 18, 16,
+    )
+    assert (inp.mpol, inp.ntor, inp.ntheta, inp.nzeta) == (3, 1, 0, 0)
+    for n in range(-1, 2):
+        for m in range(3):
+            assert enlarged.rbc[n + enlarged.ntor, m] == inp.rbc[n + inp.ntor, m]
+            assert enlarged.zbs[n + enlarged.ntor, m] == inp.zbs[n + inp.ntor, m]
+    assert np.count_nonzero(enlarged.rbc[:, 3:]) == 0
+
+    restored = enlarged.change_resolution(mpol=3, ntor=1)
+    np.testing.assert_array_equal(restored.rbc, inp.rbc)
+    np.testing.assert_array_equal(restored.zbs, inp.zbs)
+    assert (restored.ntheta, restored.nzeta) == (18, 16)
+
+    for keyword, value in (("mpol", 0), ("ntor", -1), ("ntheta", -1), ("nzeta", -1)):
+        arguments = {"mpol": 3, "ntor": 1, keyword: value}
+        with pytest.raises(ValueError, match=keyword):
+            inp.change_resolution(**arguments)
+
+
 @pytest.mark.parametrize("deck", DECKS, ids=lambda p: p.name)
 def test_json_round_trip(deck: Path, tmp_path: Path) -> None:
     """VmecInput -> to_json -> from_file reproduces every field exactly."""

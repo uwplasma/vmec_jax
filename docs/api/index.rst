@@ -83,6 +83,9 @@ Differentiation and optimization
 .. automodule:: vmex.core.implicit
    :members:
 
+.. automodule:: vmex.core.problem
+   :members:
+
 .. automodule:: vmex.core.optimize
    :members:
 

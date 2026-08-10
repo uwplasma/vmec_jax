@@ -8,7 +8,7 @@ Simsopt-style vocabulary for the QA/QH/QP/QI examples on the pure new core:
   legacy ``quasisymmetry_ratio_residual_from_wout``).
 - practical scalar targets — :func:`aspect_ratio`, :func:`mean_iota`,
   :func:`edge_iota`, :func:`mirror_ratio`, :func:`volume`,
-  :func:`magnetic_well` — each a pure function of
+  :func:`magnetic_well`, :func:`max_elongation` — each a pure function of
   ``(SpectralState, SolverRuntime)``.
 - :func:`quasi_isodynamic_residual` — a distilled Goodman-style QI residual
   keeping exactly the four terms the legacy minimal-seed QI examples
@@ -109,13 +109,20 @@ from .statephysics import (
     _mode_matrix,
     aspect_ratio,
     edge_iota,
+    elongation_profile,
     iota_edge,
+    max_elongation,
     mean_iota,
     volume,
 )
 from .wout import WoutData, wout_from_state
+from .problem import Evaluation, FunctionProblem, VmecProblem, _run_with_progress
 
 __all__ = [
+    "VmecProblem",
+    "FunctionProblem",
+    "Evaluation",
+    "make_problem",
     "Equilibrium",
     "solve_equilibrium",
     "QuasisymmetryRatioResidual",
@@ -126,6 +133,8 @@ __all__ = [
     "mirror_ratio",
     "volume",
     "magnetic_well",
+    "elongation_profile",
+    "max_elongation",
     "d_merc",
     "d_merc_state",
     "mercier_stability_residual",
@@ -200,17 +209,20 @@ def solve_equilibrium(
     *,
     initial_state: SpectralState | None = None,
     raise_on_max_iterations: bool = False,
+    verbose: bool = False,
     **solve_kwargs,
 ) -> Equilibrium:
     """Converge ``inp`` with the core multigrid solver -> :class:`Equilibrium`.
 
-    ``raise_on_max_iterations=False`` by default: during optimization a
+    ``verbose=True`` prints the VMEC iteration table, including the current
+    iteration count and force residuals.  ``raise_on_max_iterations=False``
+    by default: during optimization a
     NITER-exhausted trial state is still a usable (penalized) sample —
     VMEC2000 behaves the same way.  Extra keywords go to
     :func:`vmex.core.multigrid.solve_multigrid`.
     """
     result = solve_multigrid(
-        inp, verbose=False, initial_state=initial_state,
+        inp, verbose=verbose, initial_state=initial_state,
         raise_on_max_iterations=raise_on_max_iterations, **solve_kwargs,
     )
     ns = int(np.shape(result.state.R_cos)[0])
@@ -1131,6 +1143,157 @@ def _ess_scale(inp: VmecInput, max_mode: int, alpha: float) -> np.ndarray:
     return np.exp(-alpha * levels) / np.exp(-alpha)
 
 
+_IMPLICIT_JACOBIAN_METHODS = {
+    "auto": "auto",
+    "block_tridiagonal": "block",
+    "forward_gmres": "gmres",
+    "reverse_adjoint": "reverse",
+}
+
+_IMPLICIT_JACOBIAN_DESCRIPTIONS = {
+    "auto": "automatic exact method selected from the objective shape",
+    "block_tridiagonal": "block-tridiagonal equilibrium response",
+    "forward_gmres": "one forward GMRES response per decision variable",
+    "reverse_adjoint": "one reverse adjoint per residual row",
+}
+
+
+def make_problem(
+    inp: VmecInput,
+    *,
+    objective_terms: Sequence[tuple[Callable, float, float]] | None = None,
+    loss: Callable | None = None,
+    max_mode: int = 1,
+    x0: np.ndarray | None = None,
+    current_dofs: int | None = None,
+    derivative_method: str = "implicit",
+    weight_semantics: str = "cost",
+    jacobian_batch_size: int | str | None = 1,
+    implicit_jacobian_method: str = "auto",
+    hot_restart: bool = True,
+    warm_start: str | None = "perturbation",
+    use_ess: bool = True,
+    ess_alpha: float = 1.2,
+    bounds: Any = None,
+    device: Any = AUTO,
+    solve_kwargs: dict | None = None,
+    progress: bool = False,
+    report_interval: float = 10.0,
+    progress_stream: Any = None,
+    problem_class: type[VmecProblem] = VmecProblem,
+) -> VmecProblem:
+    """Build optimizer-neutral VMEC objective and derivative callables.
+
+    Exactly one of ``objective_terms`` and ``loss`` is required.  With the
+    default ``weight_semantics="cost"``, tuple weight ``w`` multiplies the
+    squared cost, so the residual row is ``sqrt(w) * (f - target)``.  Select
+    ``weight_semantics="residual"`` when ``w`` should multiply the residual
+    itself.  ``loss`` must be a traceable ``(state, runtime) -> scalar``
+    callable.
+
+    ``derivative_method="implicit"`` computes exact derivatives of the
+    converged fixed-boundary equilibrium by implicit differentiation.  It is
+    the only built-in derivative method in this factory; users with complete
+    x-level derivatives can use :meth:`FunctionProblem.from_functions`.
+
+    ``implicit_jacobian_method="auto"`` is the beginner-facing default: it
+    selects one reverse adjoint for a scalar residual and an amortized
+    block-tridiagonal factorization for vector residuals.  Advanced choices
+    are ``"block_tridiagonal"``, ``"forward_gmres"``, and
+    ``"reverse_adjoint"``; the names describe how the exact implicit
+    Jacobian is assembled.
+
+    ``jacobian_batch_size=1`` is the default for QI/QS problems through
+    ``max_mode=5``: it minimizes cold compilation complexity and peak memory.
+    ``"auto"`` batches response columns and improves warm throughput, so it is
+    preferable for long same-shape continuation campaigns that amortize the
+    larger first compilation.  This public name maps to the compatibility
+    drivers' established ``jac_chunk_size`` implementation.
+
+    Set ``progress=True`` to report elapsed-time heartbeats while validating
+    the seed equilibrium and building resolution-dependent solver data.
+    :meth:`VmecProblem.compile_residual_and_jacobian` or
+    :meth:`VmecProblem.compile_value_and_gradient` provides the same
+    visibility for the first derivative evaluation after this factory returns.
+
+    The returned object contains no optimization algorithm.  Pass
+    :meth:`VmecProblem.residual` / :meth:`VmecProblem.residual_jac` to a
+    nonlinear least-squares package, or :meth:`VmecProblem.value_and_grad` to
+    any scalar gradient optimizer.
+    """
+    if (objective_terms is None) == (loss is None):
+        raise ValueError("provide exactly one of objective_terms or loss")
+    if derivative_method != "implicit":
+        raise ValueError(
+            "derivative_method must be 'implicit' (exact derivatives of the "
+            "converged equilibrium); "
+            "use FunctionProblem.from_functions for supplied x-level derivatives"
+        )
+    if not (
+        jacobian_batch_size in ("auto", None)
+        or (
+            isinstance(jacobian_batch_size, int)
+            and not isinstance(jacobian_batch_size, bool)
+            and jacobian_batch_size > 0
+        )
+    ):
+        raise ValueError(
+            "jacobian_batch_size must be 'auto', None, or a positive integer; "
+            f"got {jacobian_batch_size!r}"
+        )
+    try:
+        jac_solver = _IMPLICIT_JACOBIAN_METHODS[implicit_jacobian_method]
+    except KeyError as exc:
+        choices = ", ".join(repr(name) for name in _IMPLICIT_JACOBIAN_METHODS)
+        raise ValueError(
+            f"implicit_jacobian_method must be one of {choices}; "
+            f"got {implicit_jacobian_method!r}"
+        ) from exc
+    max_mode = int(max_mode)
+    scales = _ess_scale(inp, max_mode, float(ess_alpha)) if use_ess else None
+    k_cur, _ = _current_dof_setup(inp, current_dofs)
+    if scales is not None and k_cur:
+        scales = np.concatenate([scales, np.ones(k_cur + 1)])
+    problem = _run_with_progress(
+        lambda: _least_squares_implicit(
+            list(objective_terms or ()),
+            inp,
+            max_mode=max_mode,
+            x0=x0,
+            current_dofs=current_dofs,
+            jac_chunk_size=jacobian_batch_size,
+            jac_solver=jac_solver,
+            recycle=False,
+            warm_start=(warm_start if hot_restart else None),
+            solve_kwargs=dict(solve_kwargs or {}),
+            device=device,
+            return_problem=True,
+            problem_class=problem_class,
+            weight_semantics=weight_semantics,
+            scalar_objective=loss,
+            problem_bounds=bounds,
+            problem_scales=scales,
+        ),
+        action="Building VMEX problem",
+        complete="VMEX problem ready",
+        progress=progress,
+        report_interval=report_interval,
+        stream=progress_stream,
+    )
+    problem.metadata["implicit_jacobian_method"] = implicit_jacobian_method
+    problem.metadata["implicit_jacobian_description"] = (
+        _IMPLICIT_JACOBIAN_DESCRIPTIONS[implicit_jacobian_method]
+    )
+    problem.metadata["input_resolution"] = {
+        "mpol": int(inp.mpol),
+        "ntor": int(inp.ntor),
+        "ntheta": int(inp.ntheta),
+        "nzeta": int(inp.nzeta),
+    }
+    problem.metadata["jacobian_batch_size"] = jacobian_batch_size
+    return problem
+
+
 def least_squares(
     objective_terms: Sequence[tuple[Callable, float, float]],
     inp: VmecInput,
@@ -1471,6 +1634,12 @@ def _least_squares_implicit(
     device: Any = AUTO,
     verbose: int = 0,
     minimize_method: str | None = None,
+    return_problem: bool = False,
+    problem_class: type[VmecProblem] = VmecProblem,
+    weight_semantics: str = "residual",
+    scalar_objective: Callable | None = None,
+    problem_bounds: Any = None,
+    problem_scales: np.ndarray | None = None,
     **scipy_kwargs,
 ):
     """Single-stage boundary least squares with implicit-gradient Jacobians.
@@ -1504,7 +1673,21 @@ def _least_squares_implicit(
     # The 4-family traceable map, the dof plumbing below, and the
     # forward+adjoint path are dimension-general; 3D lasym is FD-validated
     # end to end (tests/test_implicit_grad.py).
-    terms = [(_traceable_term(f), float(t), float(w)) for (f, t, w) in objective_terms]
+    if weight_semantics not in ("cost", "residual"):
+        raise ValueError("weight_semantics must be 'cost' or 'residual'")
+    if scalar_objective is not None and objective_terms:
+        raise ValueError("provide objective_terms or scalar_objective, not both")
+    terms = []
+    for f, t, w in objective_terms:
+        weight = float(w)
+        if weight_semantics == "cost":
+            if weight < 0.0:
+                raise ValueError("least-squares weights must be non-negative")
+            weight = float(np.sqrt(weight))
+        terms.append((_traceable_term(f), float(t), weight))
+    traceable_scalar = (
+        None if scalar_objective is None else _traceable_term(scalar_objective)
+    )
     modes = _dof_modes(inp, max_mode)
     nm = len(modes)
     nfam = _n_boundary_families(inp)
@@ -1550,6 +1733,11 @@ def _least_squares_implicit(
     params0 = imp.params_from_input(inp, device=jac_device)
     imp._template_runtime(cfg)  # host-built template: warm the per-cfg cache
     # eagerly so runtime_from_params stays traceable under jit below
+    if x0 is None:
+        x0 = pack_boundary(inp, max_mode)
+        if k_cur:
+            x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
+    x0 = np.asarray(x0, dtype=float)
 
     def params_of(x: jnp.ndarray):
         repl = dict(rbc=params0.rbc.at[row_idx, col_idx].set(x[:nm]),
@@ -1565,33 +1753,83 @@ def _least_squares_implicit(
         return params
 
     def term_rows(state, rt) -> jnp.ndarray:
+        if traceable_scalar is not None:
+            return jnp.atleast_1d(jnp.asarray(traceable_scalar(state, rt))).ravel()
         return jnp.concatenate([
             jnp.atleast_1d(w * (jnp.asarray(f(state, rt)) - t)).ravel()
             for (f, t, w) in terms])
 
+    # The initial point is strict: it must solve and define a finite residual
+    # shape before any optimizer is entered.  Later trial points use the
+    # exception-free status callback below.
+    params0_np = jax.tree.map(
+        lambda a: np.asarray(a, dtype=np.float64), params_of(_place(x0))
+    )
+    state0_np, mask_np = imp._host_solve_and_mask(cfg, params0_np)
+    state0 = jax.tree.map(_place, state0_np)
+    params_at_x0 = params_of(_place(x0))
+    runtime0 = imp.runtime_from_params(params_at_x0, cfg)
+    initial_rows = np.asarray(
+        jax.device_get(term_rows(state0, runtime0)), dtype=float
+    ).ravel()
+    if initial_rows.size == 0 or not np.all(np.isfinite(initial_rows)):
+        raise FloatingPointError("non-finite or empty objective at the initial point")
+    residual_size = int(initial_rows.size)
+    x0_device = _place(x0)
+    x_penalty_scale = jnp.maximum(jnp.abs(x0_device), 1.0e-2)
+    x_penalty_scale_host = np.maximum(np.abs(x0), 1.0e-2)
+
+    def failure_magnitude(x: jnp.ndarray) -> jnp.ndarray:
+        distance = jnp.linalg.norm((x - x0_device) / x_penalty_scale)
+        return jnp.asarray(1.0e6) * (1.0 + distance)
+
+    def failure_jacobian(x: np.ndarray) -> np.ndarray:
+        """Exact Jacobian of the fixed-shape failed-trial residual."""
+        delta = (np.asarray(x, dtype=float) - x0) / x_penalty_scale_host
+        distance = float(np.linalg.norm(delta))
+        gradient = (
+            np.zeros_like(delta)
+            if distance == 0.0
+            else 1.0e6 * delta / (distance * x_penalty_scale_host)
+        )
+        row = gradient / np.sqrt(float(residual_size))
+        return np.broadcast_to(row, (residual_size, ndof)).copy()
+
     def residual_rows(x: jnp.ndarray) -> jnp.ndarray:
         params = params_of(x)
-        state = imp.solve_implicit(params, cfg)
-        return term_rows(state, imp.runtime_from_params(params, cfg))
+        state, status = imp.solve_implicit_status(params, cfg)
+        runtime = imp.runtime_from_params(params, cfg)
+        return jax.lax.cond(
+            status == 0,
+            lambda _: term_rows(state, runtime),
+            lambda _: jnp.full(
+                (residual_size,),
+                failure_magnitude(x) / jnp.sqrt(float(residual_size)),
+                dtype=jnp.float64,
+            ),
+            operand=None,
+        )
 
     rows_jit = jax.jit(residual_rows)
 
     def scalar_loss(x: jnp.ndarray) -> jnp.ndarray:
-        rows = residual_rows(x)
-        return 0.5 * jnp.vdot(rows, rows)
+        if traceable_scalar is None:
+            rows = residual_rows(x)
+            return 0.5 * jnp.vdot(rows, rows)
+        params = params_of(x)
+        state, status = imp.solve_implicit_status(params, cfg)
+        runtime = imp.runtime_from_params(params, cfg)
+        return jax.lax.cond(
+            status == 0,
+            lambda _: jnp.asarray(traceable_scalar(state, runtime)),
+            lambda _: 0.5 * failure_magnitude(x) ** 2,
+            operand=None,
+        )
 
+    scalar_loss_jit = jax.jit(scalar_loss)
     value_grad_jit = jax.jit(jax.value_and_grad(scalar_loss))
 
-    # The evolved-dof mask is a *structural* per-config constant; fetch it
-    # once (first host solve, cached in implicit._MASK_CACHE) so the Jacobian
-    # graph below can close over it.
-    if x0 is None:
-        x0 = pack_boundary(inp, max_mode)
-        if k_cur:
-            x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
-    params0_np = jax.tree.map(lambda a: np.asarray(a, dtype=np.float64),
-                              params_of(_place(x0)))
-    _, mask_np = imp._host_solve_and_mask(cfg, params0_np)
+    # The evolved-dof mask was fetched by the strict seed preflight above.
     mask_const = jax.tree.map(_place, mask_np)
 
     # One-hot dof tangents in ImplicitParams space, stacked over dofs
@@ -1841,7 +2079,10 @@ def _least_squares_implicit(
     jac_jit = jax.jit(jac_impl)
     reverse_jit = jax.jit(jax.jacrev(residual_rows))
 
-    holder: dict[str, Any] = {"nres": None, "lin": None}
+    # The strict seed preflight above already evaluated and validated every
+    # residual row.  Carry that known shape instead of compiling ``rows_jit``
+    # eagerly while the public factory is still returning.
+    holder: dict[str, Any] = {"nres": residual_size, "lin": None}
     if recycle:
         # An all-zero pair is a cold start (gcrot's warm-start QR masks the
         # rank-deficient columns out); shapes are static so jac_jit compiles
@@ -1912,6 +2153,20 @@ def _least_squares_implicit(
         return residual
 
     def jac_fn(x: np.ndarray) -> np.ndarray:
+        # A direct residual_jac(x) call need not be preceded by residual(x).
+        # Establish the point's status through the exception-free callback
+        # unless the exact-key solve memo already proves it usable.
+        params_np = jax.tree.map(
+            lambda a: np.asarray(a, dtype=np.float64), params_of(_place(x))
+        )
+        hit = imp._LAST_SOLVE.get(cfg)
+        if hit is None or hit[0] != imp._params_key(params_np):
+            jax.device_get(rows_jit(_place(x)))
+        if imp._LAST_STATUS_ERROR.get(cfg) is not None:
+            holder["lin"] = None
+            jac = failure_jacobian(x)
+            holder["last_jac"] = jac
+            return jac
         try:
             reverse = (
                 not recycle
@@ -1951,38 +2206,145 @@ def _least_squares_implicit(
             holder["last_jac"] = jac
         return jac
 
-    # Pre-size the residual from the (converged) seed so a *first*-iteration
-    # trial failure penalizes like any later one instead of re-raising.
-    if holder["nres"] is None:
+    def value_and_grad(x: np.ndarray):
+        """Host scalar pair used by SciPy and the public problem object."""
         try:
-            holder["nres"] = int(np.asarray(jax.device_get(rows_jit(_place(x0)))).size)
-        except Exception:  # the seed itself does not converge -> fun raises clearly
-            pass
+            value, grad = value_grad_jit(_place(x))
+            value = float(jax.device_get(value))
+            grad = np.asarray(jax.device_get(grad), dtype=float)
+        except Exception as exc:
+            if holder.get("last_grad") is None:
+                raise
+            if verbose:
+                print(f"[minimize] trial solve/gradient failed: {exc}")
+            return 1.0e12, holder["last_grad"]
+        if np.isfinite(value) and np.all(np.isfinite(grad)):
+            holder["last_grad"] = grad
+            if verbose:
+                print(f"[minimize] cost = {value:.6e}")
+            return value, grad
+        if holder.get("last_grad") is None:
+            raise FloatingPointError("non-finite initial objective or gradient")
+        return 1.0e12, holder["last_grad"]
+
+    def scalar_fun_host(x: np.ndarray) -> float:
+        """Host scalar value without forcing a reverse pass."""
+        try:
+            value = float(jax.device_get(scalar_loss_jit(_place(x))))
+        except Exception:
+            if holder.get("last_grad") is None:
+                raise
+            return 1.0e12
+        return value if np.isfinite(value) else 1.0e12
+
+    def input_from_x(x: np.ndarray) -> VmecInput:
+        result_input = unpack_boundary(inp, np.asarray(x)[:nboundary], max_mode)
+        if k_cur:
+            result_input = _apply_current(
+                result_input, np.asarray(x)[nboundary:], k_cur, ac_scale
+            )
+        return result_input
+
+    def x_from_input(source: VmecInput) -> np.ndarray:
+        x = pack_boundary(source, max_mode)
+        if k_cur:
+            x = np.concatenate([x, _pack_current(source, k_cur, ac_scale)])
+        return x
+
+    def equilibrium_from_x(x: np.ndarray) -> Equilibrium:
+        """Materialize the exact accepted state already used by the objective."""
+        x = np.asarray(x, dtype=float)
+        if traceable_scalar is None:
+            fun(x)
+        else:
+            scalar_fun_host(x)
+        params_np = jax.tree.map(
+            lambda a: np.asarray(a, dtype=np.float64), params_of(_place(x))
+        )
+        hit = imp._LAST_SOLVE.get(cfg)
+        if hit is None or hit[0] != imp._params_key(params_np):
+            raise RuntimeError(
+                "decision vector did not produce a usable VMEC equilibrium"
+            )
+        result_input = input_from_x(x)
+        result = hit[1]
+        ns = int(np.shape(result.state.R_cos)[0])
+        runtime = prepare_runtime(
+            result_input,
+            resolution_from_input(result_input, ns=ns),
+        )
+        return Equilibrium(
+            inp=result_input,
+            state=result.state,
+            runtime=runtime,
+            result=result,
+        )
+
+    def jax_residual_jacobian(x: jnp.ndarray) -> jnp.ndarray:
+        reverse = (
+            jac_solver == "reverse"
+            or (jac_solver == "auto" and holder["nres"] == 1)
+        )
+        if reverse:
+            return reverse_jit(x)
+        return jac_jit(x)[0]
+
+    if return_problem:
+        if recycle:
+            # Recycling intentionally carries mutable Krylov state between
+            # calls, so it is available through the legacy driver but not
+            # advertised as a pure JAX callable.
+            jax_jac_public = None
+        else:
+            jax_jac_public = jax_residual_jacobian
+        names = list(boundary_dof_names(inp, max_mode))
+        if k_cur:
+            names.extend([f"AC({j})/{ac_scale:.6g}" for j in range(k_cur)])
+            names.append("CURTOR/1e6")
+        scales = (
+            np.ones_like(np.asarray(x0, dtype=float))
+            if problem_scales is None else np.asarray(problem_scales, dtype=float)
+        )
+        residual_fun = None if traceable_scalar is not None else fun
+        residual_jac_fun = None if traceable_scalar is not None else jac_fn
+        return problem_class(
+            np.asarray(x0, dtype=float),
+            fun=scalar_fun_host,
+            value_and_grad=value_and_grad,
+            residual=residual_fun,
+            residual_jac=residual_jac_fun,
+            jax_fun=scalar_loss_jit,
+            jax_value_and_grad=value_grad_jit,
+            jax_residual=(None if traceable_scalar is not None else rows_jit),
+            jax_residual_jac=(None if traceable_scalar is not None else jax_jac_public),
+            names=names,
+            bounds=problem_bounds,
+            scales=scales,
+            input_from_x=input_from_x,
+            x_from_input=x_from_input,
+            equilibrium_from_x=equilibrium_from_x,
+            metadata={
+                "derivative_method": "implicit",
+                "derivative_description": (
+                    "exact derivatives of the converged equilibrium by "
+                    "implicit differentiation"
+                ),
+                "weight_semantics": weight_semantics,
+                "weight_description": (
+                    "weight multiplies squared cost"
+                    if weight_semantics == "cost"
+                    else "weight multiplies residual"
+                ),
+                "max_mode": max_mode,
+                "config": cfg,
+                "holder": holder,
+            },
+        )
 
     if minimize_method is None:
         result = scipy.optimize.least_squares(
             fun, np.asarray(x0, dtype=float), jac=jac_fn, **scipy_kwargs)
     else:
-        def value_and_grad(x: np.ndarray):
-            try:
-                value, grad = value_grad_jit(_place(x))
-                value = float(jax.device_get(value))
-                grad = np.asarray(jax.device_get(grad), dtype=float)
-            except Exception as exc:
-                if holder.get("last_grad") is None:
-                    raise
-                if verbose:
-                    print(f"[minimize] trial solve/gradient failed: {exc}")
-                return 1.0e12, holder["last_grad"]
-            if np.isfinite(value) and np.all(np.isfinite(grad)):
-                holder["last_grad"] = grad
-                if verbose:
-                    print(f"[minimize] cost = {value:.6e}")
-                return value, grad
-            if holder.get("last_grad") is None:
-                raise FloatingPointError("non-finite initial objective or gradient")
-            return 1.0e12, holder["last_grad"]
-
         result = scipy.optimize.minimize(
             value_and_grad, np.asarray(x0, dtype=float), jac=True,
             method=minimize_method, **scipy_kwargs)

@@ -382,6 +382,26 @@ write_wout("wout_nfp4_QH_warm_start.nc", eq.wout)   # wout built lazily on eq
 plot_wout(eq.wout, "figures/")
 ```
 
+For a parameter scan or a tighter final solve, pass the last converged state
+into the next call. VMEX adapts it to the new boundary and interpolates it if
+the radial resolution changes:
+
+```python
+from dataclasses import replace
+
+next_inp = replace(
+    inp, ns_array=[101], ftol_array=[1e-14], niter_array=[8000]
+)
+next_eq = opt.solve_equilibrium(next_inp, initial_state=eq.state)
+```
+
+This in-memory `initial_state=` is VMEX's hot restart. It is useful outside
+optimization as well as inside it; keep carrying `next_eq.state` through a
+scan. Optimization problems do this automatically. If a genuinely cold first
+grid still has a bad Jacobian after the magnetic-axis re-guess, the driver also
+retries once through a coarse `NS=3` equilibrium, following current VMEC++
+behavior.
+
 Choosing an entry point: `optimize.solve_equilibrium` for Python analysis and
 objectives (state + runtime + lazy `.wout`); `multigrid.solve_multigrid` for a
 fixed-boundary ladder; `multigrid.solve_free_boundary_multigrid` for a
@@ -393,24 +413,111 @@ low-level single-grid building block.
 Optimization building blocks include quasisymmetry, three separate QI
 residuals, matched-well maximum-J, aspect ratio, iota, mirror ratio, magnetic
 well, `DMerc`, Glasser `D_R`, `<J·B>`, and ballooning-stability targets. They
-compose in the same least-squares driver over boundary Fourier coefficients,
-with implicit-differentiation gradients from
-`vmex.core.implicit` (`jac="implicit"`). `<J·B>` also supports `LASYM = T`;
+compose into an optimizer-neutral `VmecProblem`, with
+implicit-differentiation gradients from `vmex.core.implicit`. The problem
+exposes ordinary value/gradient and residual/Jacobian callables, so the user
+chooses SciPy, JAXopt, Optax, or a custom optimizer. `<J·B>` also supports `LASYM = T`;
 `DMerc` and `D_R` remain symmetry-gated pending independent DCON/JMC parity.
-The recommended pattern is **one
-`least_squares` call** — no `max_mode` continuation loop — with **Exponential
-Spectral Scaling** ordering the harmonics through the trust region:
+The recommended pattern releases all harmonics in one problem and uses
+**Exponential Spectral Scaling** for the optimizer's variable scale:
 
 ```python
+from dataclasses import replace
+import jax.numpy as jnp
+from scipy.optimize import least_squares
 from vmex import optimize as opt
 
+max_mode = 5
+mpol = max(max_mode + 2, 5)
+ntor = mpol
+ntheta = 2 * mpol + 6
+nzeta = 2 * ntor + 4
+inp = replace(inp, delt=0.5)
+inp = inp.change_resolution(
+    mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta
+)
 qs = opt.QuasisymmetryRatioResidual(surfaces, helicity_m=1, helicity_n=0)
-result = opt.least_squares(
-    [(qs, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0), (opt.mean_iota, 0.42, 1.0)],
-    inp, max_mode=5, jac="implicit",
-    use_ess=True,        # exp(-alpha*max(|m|,|n|)) trust radius per dof:
-)                        # high harmonics on short leashes — no ladder needed
+
+def elongation_excess(state, runtime):
+    return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+
+problem = opt.VmecProblem.from_tuples(
+    inp,
+    [(qs, 0.0, 1.0),
+     (opt.aspect_ratio, 6.0, 1.0),
+     (opt.mean_iota, 0.42, 1.0),
+     (elongation_excess, 0.0, 1.0)],
+    max_mode=max_mode,
+    progress=True,                 # report elapsed time during construction
+)
+problem.compile_residual_and_jacobian()  # optional visible first compilation
+result = least_squares(
+    problem.residual, problem.x0, jac=problem.residual_jac,
+    x_scale=problem.scales,
+)
+optimized_input = problem.input_from_x(result.x)
+optimized_equilibrium = problem.equilibrium_from_x(result.x)
 ```
+
+The script owns its resolution policy: `mpol`, `ntor`, `ntheta`, `nzeta`, and
+`delt` are ordinary visible values rather than defaults hidden in an
+optimization helper. `VmecInput.change_resolution()` only resizes the input;
+it preserves representable boundary and axis coefficients and zeroes newly
+exposed modes.
+
+`progress=True` covers seed validation and construction;
+`problem.compile_residual_and_jacobian()` optionally performs the first
+least-squares derivative call before SciPy starts. Both print a short label,
+elapsed-time heartbeats, and final wall time. If the explicit compilation call
+is removed, SciPy triggers the same compilation on its first evaluation.
+For CPU jobs in which cold compilation matters more than peak warm-kernel
+speed, set `VMEX_FAST_COMPILE=1` before importing VMEX; the persistent
+machine-local compilation cache remains enabled by default.
+The beginner defaults are exact converged-equilibrium derivatives
+(`derivative_method="implicit"`), automatic scalar/vector Jacobian assembly
+(`implicit_jacobian_method="auto"`), one-column Jacobian batches
+(`jacobian_batch_size=1`), and cost weights (`weight_semantics="cost"`). Ordinary
+QI/QS scripts should omit these arguments. On an Apple M3 Max with JAX/JAXlib
+0.9.2, isolated cold-cache tests over QI, QS, and scalar geometry/profile terms
+at `max_mode` 1, 3, and 5 reduced first Jacobian compilation by 12.9–14.2 s
+with batch size 1; full 12-evaluation mode-5 QI and QS runs were 8.2 s and
+9.9 s faster overall than `"auto"`, with matching final costs. Select
+`jacobian_batch_size="auto"` only for long, repeated same-shape campaigns in
+which its roughly 1–4 s lower warm evaluation time amortizes the larger first
+compilation. Explicit Jacobian methods are intended for numerical studies and
+diagnostics; `"auto"` is the normal choice.
+
+`problem.equilibrium_from_x(result.x)` returns the accepted equilibrium state
+already evaluated by the optimizer. Use it for reporting and as
+`initial_state=` in a high-resolution final solve; cold-solving a strongly
+shaped optimized boundary can otherwise fail before VMEC reconstructs a good
+magnetic axis. `problem.x_from_input(inp)` is the inverse mapping used to start
+a continuation stage. A mutable `inp.x` is intentionally absent because the
+decision vector depends on that problem's `max_mode` and optional profile
+degrees of freedom.
+
+Every `VmecProblem` uses hot restart by default. For exact implicit derivatives
+the seed order is the first-order equilibrium prediction, the last converged
+state, then a cold solve only if both warm seeds fail. This changes iteration
+count, not the converged equilibrium or derivative.
+
+For scalar methods, pass `problem.value_and_grad` to
+`scipy.optimize.minimize(..., jac=True)`. `problem.jax_value_and_grad` and
+`problem.jax_residual` provide the same physics to JAXopt and Optax. The
+existing `opt.least_squares()` and `opt.minimize()` functions remain concise
+compatibility adapters.
+
+VMEX sets JAX's logging level to `ERROR` at import time, removing repeated
+PjRt persistent-cache compatibility messages while retaining VMEX errors.
+`VMEX_JAX_LOGGING_LEVEL` takes precedence over JAX's standard
+`JAX_LOGGING_LEVEL`; set either to `WARNING` to restore JAX warnings, or set
+the VMEX option to `inherit` to leave the process setting unchanged. JAX
+versions older than 0.4.36 lack the unified Python/C++ logging control, so
+VMEX prints one actionable startup warning that PjRt messages may remain.
+
+The architecture, derivative validation, performance criteria, documentation
+work, and staged pull-request plan are recorded in
+[`docs/optimization_api_plan.md`](docs/optimization_api_plan.md).
 
 Measured on a 36-core CPU from a near-circular torus (single call, all
 harmonics released at once; `examples/optimization/*_ess.py`; the staged

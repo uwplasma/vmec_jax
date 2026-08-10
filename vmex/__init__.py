@@ -29,6 +29,7 @@ from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
 from importlib.metadata import version as _package_version
 import os as _os
 from pathlib import Path as _Path
+import warnings as _warnings
 
 from ._compat import _default_compilation_cache_dir as _default_jax_cache_dir
 
@@ -68,6 +69,30 @@ _os.environ.setdefault("GLOG_minloglevel", "2")
 # solve path in case this module never ran (namespace-package shadowing).
 import jax as _jax
 
+
+def _configure_jax_logging(jax_module) -> None:
+    """Quiet JAX by default, with explicit overrides and an old-JAX notice."""
+    if not hasattr(jax_module.config, "jax_logging_level"):
+        _warnings.warn(
+            f"JAX {getattr(jax_module, '__version__', 'unknown')} does not "
+            "provide jax_logging_level (available since JAX 0.4.36). VMEX "
+            "will use environment-level log suppression, but repeated "
+            "XLA/PjRt warnings may still appear. Upgrade JAX to silence them "
+            "reliably.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    level = _os.environ.get("VMEX_JAX_LOGGING_LEVEL")
+    if level is None:
+        level = _os.environ.get("JAX_LOGGING_LEVEL", "ERROR")
+    level = level.strip().upper()
+    if level not in ("", "INHERIT"):
+        jax_module.config.update("jax_logging_level", level)
+
+
+_configure_jax_logging(_jax)
+
 _jax_cache_dir = _default_jax_cache_dir()
 if _jax_cache_dir is not None:
     _os.makedirs(_jax_cache_dir, exist_ok=True)
@@ -94,6 +119,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "plot_wout": (".core.plotting", "plot_wout"),
     "plot_boozmn": (".core.plotting", "plot_boozmn"),
     "run_booz_xform": (".core.boozer", "run_booz_xform"),
+    # optimizer-neutral problem callables
+    "Evaluation": (".core.problem", "Evaluation"),
+    "FunctionProblem": (".core.problem", "FunctionProblem"),
+    "VmecProblem": (".core.problem", "VmecProblem"),
     # external fields
     "MgridData": (".core.mgrid", "MgridData"),
     "MgridField": (".core.mgrid", "MgridField"),

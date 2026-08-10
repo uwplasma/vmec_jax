@@ -535,8 +535,9 @@ Multigrid
    Fixed and free boundary use the same normalized nondecreasing prefix.
 
 Hot restart
-   Seeding a solve with an existing spectral state.  Fixed-boundary hot restart
-   adapts the edge smoothly to a changed boundary; free-boundary restart
+   Seeding a solve with an existing spectral state via ``initial_state=``.
+   Fixed-boundary hot restart adapts the edge smoothly to a changed boundary
+   and interpolates across radial resolutions; free-boundary restart
    distinguishes user reset semantics from within-ladder vacuum continuation.
 
 Raw/physical force residual
