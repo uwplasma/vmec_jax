@@ -228,7 +228,7 @@ composite = plot_axisymmetric_beta_scan_summary(
 
 # The figure stays clean (short title + panel labels only); the coil geometry,
 # vacuum field, mirror ratio, and beta observables are reported here and in
-# docs/mirror_geometry.rst.
+# docs/explanation/mirror-geometry.rst.
 print(caption)
 print(json.dumps(summary, indent=2))
 print(f"Wrote solved-state 3D, cross-section, |B|, and summary plots in {OUTPUT_DIR}")

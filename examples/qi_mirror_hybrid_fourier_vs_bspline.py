@@ -31,7 +31,7 @@ reproduction of the QI transform -- it demonstrates the geometry and the
 exactly-straight mirror cell.  A literal VMEC re-solve of a straight-axis device
 is degenerate in cylindrical ``(R, phi, Z)`` coordinates (a straight axis
 segment cannot be parameterised by the cylindrical angle), which is precisely
-why the closed-axis B-spline lane exists.  See ``docs/mirror_geometry.rst``.
+why the closed-axis B-spline lane exists.  See ``docs/explanation/mirror-geometry.rst``.
 """
 
 from __future__ import annotations

@@ -242,7 +242,7 @@ for case in CASES:
         assert zones.all_volume < STRONG_FORCE_GATE
     else:
         # Bulk (unconstrained volume) force is the physical equilibrium gate;
-        # its refinement convergence is recorded in docs/mirror_geometry.rst.
+        # its refinement convergence is recorded in docs/explanation/mirror-geometry.rst.
         assert zones.bulk < STRONG_FORCE_GATE
 
 # Standard axisymmetric mirror through the one-call entry point: the boundary
