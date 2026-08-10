@@ -90,7 +90,10 @@ Module map
        mirror, well, DMerc, ...) + least-squares driver
      - (no VMEC2000 equivalent)
    * - :mod:`~vmex.core.omnigenity`
-     - traceable Boozer ``|B|`` spectrum + Goodman constructed-QI residual
+     - traceable Boozer ``|B|`` spectrum + lightweight smooth QI surrogate
+     - (no VMEC2000 equivalent)
+   * - :mod:`~vmex.core.qi`
+     - full constructed-QI and direct bounce-action residuals
      - (no VMEC2000 equivalent)
    * - :mod:`~vmex.core.bootstrap`
      - differentiable Redl bootstrap ``<J.B>``, mismatch objective,

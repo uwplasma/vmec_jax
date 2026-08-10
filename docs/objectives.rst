@@ -20,15 +20,18 @@ How objectives plug in
 ----------------------
 
 :func:`~vmex.core.optimize.least_squares` takes simsopt-style
-``(function, target, weight)`` terms; each term contributes
-``weight * (function(eq) - target)`` rows to the stacked residual.  Two
-calling conventions are recognized automatically:
+``(function, target, weight)`` terms.  By default, ``weight`` multiplies the
+least-squares *cost*, so each term contributes
+``sqrt(weight) * (function(eq) - target)`` rows.  Two calling conventions are
+recognized automatically:
 
 - **one positional argument** — the term receives the converged
   :class:`~vmex.core.optimize.Equilibrium` (which carries ``state``,
   ``runtime``, ``wout``, and the input).  Residual-class instances
   (:class:`~vmex.core.optimize.QuasisymmetryRatioResidual`,
   :class:`~vmex.core.omnigenity.QIResidual`,
+  :class:`~vmex.core.qi.ConstructedQIResidual`,
+  :class:`~vmex.core.qi.JInvariantQIResidual`,
   :class:`~vmex.core.bootstrap.RedlBootstrapMismatch`) are callable this
   way, as is any user lambda;
 - **two positional arguments** — the term is treated as a pure traceable
@@ -78,13 +81,13 @@ pre-summed scalar).  The helicity pair selects the symmetry family:
      - contours of ``|B|`` in Boozer coordinates
    * - QA (quasi-axisymmetric)
      - ``(1, 0)``
-     - poloidally closed (tokamak-like)
+     - toroidally closed (tokamak-like)
    * - QH (quasi-helical)
      - ``(1, -1)`` or ``(1, 1)``
      - diagonal, pitch set by ``nfp``
    * - QP (quasi-poloidal)
      - ``(0, 1)``
-     - toroidally closed
+     - poloidally closed, like QI contour topology
 
 ``helicity_n`` is in units of ``nfp`` (the simsopt convention).  Measured
 campaign results from a near-circular seed are on :doc:`optimization`; the
@@ -104,7 +107,8 @@ and composable with both gradient modes:
   :func:`~vmex.core.optimize.edge_iota` — rotational-transform targets
   (a floor on ``|iota|`` avoids the rational surfaces near zero transform);
 - :func:`~vmex.core.optimize.mirror_ratio` — ``(Bmax - Bmin)/(Bmax +
-  Bmin)`` on a flux surface, the practical QI knob;
+  Bmin)`` on one half-mesh surface (outermost by default), the practical QI
+  knob;
 - :func:`~vmex.core.optimize.elongation_profile` /
   :func:`~vmex.core.optimize.max_elongation` — equivalent-ellipse boundary
   elongation from Fourier-exact area and perimeter line integrals over one
@@ -134,6 +138,24 @@ The default Fourier quadrature is resolved for optimization modes through
 ``elongation_profile`` or ``max_elongation`` for convergence studies.  The
 hard maximum and hinge are nonsmooth only at exact ties or at the threshold;
 away from those points their implicit derivatives are exact.
+
+The surface convention matters when reproducing another workflow.  Goodman's
+original SIMSOPT helper evaluates mirror ratio near the axis, while the VMEX
+default uses the outer half-mesh.  Select the former explicitly instead of
+retuning an unexplained weight:
+
+.. code-block:: python
+
+   import functools
+
+   near_axis_mirror = functools.partial(opt.mirror_ratio, s_index=1)
+
+VMEX elongation uses constant-toroidal-angle boundary sections and an
+equivalent ellipse reconstructed from exact Fourier area/perimeter
+integrals.  The legacy SIMSOPT helper intersects planes normal to the magnetic
+axis and fits the same area/perimeter ellipse.  They agree closely on modest
+shaping but are not identical; report the convention when a result sits on
+the elongation threshold.
 
 Two reporting diagnostics run on the host-side wout engine:
 :func:`~vmex.core.optimize.d_merc` (Mercier interchange criterion) and
@@ -198,46 +220,51 @@ minimum (gradient validated against the frozen-path FD to 1.7e-6):
 Omnigenity and quasi-isodynamicity
 ----------------------------------
 
-:class:`~vmex.core.omnigenity.QIResidual` is the traceable
-quasi-isodynamic objective (plan R26h.h2): the Goodman *et al.* (JPP 2023)
-constructed-QI-target distance — bounce-distance uniformity, extremum
-alignment, and squash monotonicity, each term an exact zero of an exactly
-QI field — evaluated in level space on a pure-JAX Boozer ``|B|`` spectrum
-(:func:`~vmex.core.omnigenity.boozer_bmnc_state`, parity ~1e-6 against
-``booz_xform_jax`` on the dominant modes).  Because the whole chain is
-traceable, QI optimization now runs with exact implicit gradients:
+:class:`~vmex.core.omnigenity.QIResidual` is a smooth, lightweight QI
+*surrogate*: bounce-distance uniformity, extremum alignment, and single-well
+monotonicity evaluated on a pure-JAX Boozer ``|B|`` spectrum.  It is useful
+for inexpensive scouting and exact-gradient tests, but an aggressive
+high-mode optimization can reduce it without reducing the full Goodman
+squash-and-shuffle distance.
+
+:class:`~vmex.core.qi.ConstructedQIResidual` evaluates that fuller Goodman
+construction on the same traceable spectrum.  It is the production QI target.
+Use reduced angular and bounce sampling during optimization, then evaluate the
+default resolution for reporting:
 
 .. code-block:: python
 
-   from vmex.core.omnigenity import QIResidual
+   from vmex.core.qi import ConstructedQIResidual
 
-   qi = QIResidual(np.linspace(0.15, 0.95, 6))
+   surfaces = np.linspace(0.1, 1.0, 6)
+   qi = ConstructedQIResidual(
+       surfaces, mboz=12, nboz=12, nphi=61, nalpha=13, n_bounce=15
+   )
+   qi_report = ConstructedQIResidual(surfaces)
    result = opt.least_squares(
        [(qi, 0.0, 10.0),
-        (opt.mirror_ratio, 0.20, 2.0),
-        (opt.mean_iota, 0.12, 1.0)],
-       inp, max_mode=6, jac="implicit", use_ess=True)
+        (opt.aspect_ratio, 5.0, 0.005)],
+       inp, max_mode=5, jac="implicit", use_ess=True)
+   reported_qi = qi_report.total(result.equilibrium)
 
-Sanity anchors (CI-gated): an analytically QI field scores ``< 1e-24``, the
-bundled ``nfp1_QI`` deck scores 36x below a circular tokamak and 138x below
-the (QA, deliberately non-QI) Landreman–Paul configuration.  The measured
-single-call campaign — seed 4.5e-1 to 1.8e-2 (25x) in 17.3 minutes — is in
-:doc:`optimization`.  The earlier Goodman-style *wout-lane* residual
-(:func:`~vmex.core.optimize.quasi_isodynamic_residual`, host NumPy,
-``jac=None``) remains available for diagnostics and cross-checks.
+The sampled value is part of the objective definition: always report the
+surface set and discretization with a QI total.  For example, an outer-surface
+diagnostic is not numerically interchangeable with a six-surface core-to-edge
+objective.  The independent wout/Boozer implementation
+(:func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout`) remains the
+cross-check for a finished configuration.
 
 .. note::
 
-   The traceable ``QIResidual`` is tuned for *gradient flow*, not for
-   *labeling*: driven hard it reports an optimistic absolute value.  When
-   quoting how QI a finished configuration is, use the fully-resolved
-   wout/Boozer residual
-   :func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout` —
-   optimize with the traceable form, report with the wout form.  See
+   Use ``QIResidual`` only as the explicitly named smooth surrogate.  For a
+   production result, optimize ``ConstructedQIResidual`` and cross-check its
+   resolved value against the wout/Boozer implementation.  See
    :ref:`confinement-qi-fidelity`.
 
 For a direct action-based target, supply physical pitch values explicitly and
-compose the QI and maximum-J terms like any other residuals:
+compose the QI and maximum-J terms like any other residuals.  This objective
+is a complementary orbit diagnostic, not a drop-in normalization-equivalent
+replacement for the Goodman residual:
 
 .. code-block:: python
 

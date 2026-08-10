@@ -1,150 +1,182 @@
 #!/usr/bin/env python
-"""Quasi-isodynamic (QI) optimization from a circular torus, nfp=1.
+"""QP basin selection followed by constructed-QI optimization, nfp=2.
 
-Two-stage campaign, one terms-list swap — the "QP first, then QI" route,
-now with exact implicit gradients in *both* stages (R26h.h2):
-
-1. **QP basin** (implicit gradients): drive the quasisymmetry ratio residual
-   with helicity (m, n) = (0, 1) plus aspect / iota-floor / mirror targets.
-   This forms poloidally closed ``|B|`` contours — the topological
-   prerequisite of omnigenity — from the crude circular seed.
-2. **QI refinement** (implicit gradients): swap the QP term for the
-   *traceable* omnigenity residual (:class:`vmex.core.omnigenity.
-   QIResidual` — Goodman constructed-QI-target distance on a fully
-   differentiable in-state Boozer ``|B|`` transform: bounce-distance
-   uniformity, extremum-contour closure, single-well monotonicity;
-   Goodman et al., J. Plasma Phys. 89, 905890504 (2023), arXiv:2211.09829).
-   Unlike the earlier wout/booz_xform residual this stage runs with
-   ``jac="implicit"`` too — one exact Jacobian per trust-region step instead
-   of one finite-difference equilibrium solve per boundary dof — so the
-   continuation ladder extends to max_mode 6 (168 boundary dofs).
-
-The full boundary-harmonic ladder is ``MAX_MODE_SCHEDULE = (1, 2, 3, 4, 5,
-6)``: the QP stages climb 1 -> 3 (the basin is insensitive to the deep
-harmonics), the QI stages refine at 3 and continue 4 -> 6.  The seed is
-built from scratch (mpol = ntor = 7, one harmonic above the deepest stage)
-with the same circular-torus coefficients as ``input.minimal_seed_nfp1``.
-
-Honest history: the previous revision of this script (git history) used the
-distilled 4-term wout-engine QI residual with finite differences for stage
-2 (max_mode 3 only) and reached QI total 2.139e-02 from a 2.430 seed on the
-office 36-core CPU — a > 2-order improvement but *not* precise QI, with the
-residual plateauing near the FD noise floor.  This revision replaces the
-formulation and the gradient path (the two suspects for that plateau);
-full-budget achieved numbers for the new pipeline are not yet recorded —
-expect a multi-hour CPU run at the default budget.  Stage 1 remains
-basin-sensitive: different CPU runs can land in different QP basins, and
-the implicit path is required (finite differences land in a much worse
-basin; cf. ``QP_optimization.py``).
-
-Validation of the objective itself lives in ``tests/test_omnigenity.py``:
-the traceable Boozer spectrum matches booz_xform_jax mode-by-mode, the
-residual is exactly zero on an analytic QI field, far lower on the bundled
-QI deck than on tokamak/QA states (same ordering as the wout-engine QI
-total), and composes through ``jac="implicit"``.
+The driver keeps the numerical choices visible: VMEC resolution is changed in
+the script, objective tuples are ordinary Python, and SciPy receives VMEX's
+residual and exact implicit Jacobian directly.  A short QP stage selects the
+poloidally closed-|B| basin; the fuller Goodman squash-and-shuffle residual
+then refines modes 2--5.  The final equilibrium is hot-started at NS=101.
 """
 
+from dataclasses import replace
 import os
 from pathlib import Path
 
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
+from scipy.optimize import least_squares
 
 import vmex as vj
 from vmex import optimize as opt
-from vmex.core.omnigenity import QIResidual
+from vmex.core.input import VmecInput
+from vmex.core.qi import ConstructedQIResidual
 
-# --------------------------- parameters ------------------------------------
-NFP = 1
-MPOL = NTOR = 7                            # one harmonic above max_mode 6
-R0, A_MINOR = 1.0, 0.2                     # circular-torus seed (minimal_seed_nfp1)
-PHIEDGE = 0.083
+
+DATA = Path(__file__).resolve().parents[1] / "data" / "input.alex_qi_nfp2"
 OUT_DIR = Path("output_QI_optimization")
-SURFACES = np.linspace(0.1, 1.0, 6)        # QP and QI surfaces
-ASPECT_TARGET = 6.0
-IOTA_FLOOR = 0.15
-MIRROR_TARGET = 0.20
-MAX_MODE_SCHEDULE = (1, 2, 3, 4, 5, 6)     # full boundary-harmonic ladder
-QP_SCHEDULE = MAX_MODE_SCHEDULE[:3]        # stage 1: QP basin (implicit)
-QI_SCHEDULE = MAX_MODE_SCHEDULE[2:]        # stage 2: QI refinement (implicit)
-QP_NFEV, QI_NFEV = 2000, 1000              # trial budgets per stage
-FTOL = 1e-6                                # per-stage convergence tolerance
-if os.environ.get("VMEX_EXAMPLES_CI") == "1":  # smoke-test budget
-    QP_SCHEDULE, QI_SCHEDULE, QP_NFEV, QI_NFEV = (1,), (1,), 6, 3
-    FTOL = 1e-4
+SURFACES = np.linspace(0.1, 1.0, 6)
+ASPECT_TARGET = 5.0
+IOTA_FLOOR = 0.33
+MIRROR_LIMIT = 0.21
+ELONGATION_LIMIT = 8.0
+MINIMUM_MPOL = 5
+QI_MODES = [2, 3, 4, 5, 5, 5]
+QI_BUDGETS = [10, 10, 10, 10, 15, 15]
+QP_BUDGET = 10
 
-# --------------------------- seed equilibrium -------------------------------
-rbc = np.zeros((2 * NTOR + 1, MPOL))       # dense INDATA layout [n + NTOR, m]
-zbs = np.zeros((2 * NTOR + 1, MPOL))
-rbc[NTOR, 0] = R0                          # RBC(0,0): major radius
-rbc[NTOR, 1] = A_MINOR                     # RBC(0,1) = ZBS(0,1): circular
-zbs[NTOR, 1] = A_MINOR                     # cross-section of radius a
-inp = vj.VmecInput(
-    nfp=NFP, mpol=MPOL, ntor=NTOR, rbc=rbc, zbs=zbs, phiedge=PHIEDGE,
-    lasym=False, lfreeb=False, mgrid_file="NONE",
-    ncurr=1, curtor=0.0, pres_scale=1.0,   # AM defaults to 0: vacuum, no net current
-    ns_array=[35], ftol_array=[1e-13], niter_array=[1500], delt=0.9,
+ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
+if ci_smoke:
+    QI_MODES, QI_BUDGETS, QP_BUDGET = [1], [3], 3
+
+inp = VmecInput.from_file(DATA)
+qp = opt.QuasisymmetryRatioResidual(
+    SURFACES, helicity_m=0, helicity_n=1
 )
-eq = opt.solve_equilibrium(inp)
-qp = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=0, helicity_n=1)
-qi = QIResidual(SURFACES)                  # traceable omnigenity residual
+qi_options = dict(mboz=12, nboz=12, nphi=61, nalpha=13, n_bounce=15)
+if ci_smoke:
+    qi_options = dict(mboz=8, nboz=8, nphi=31, nalpha=7, n_bounce=7)
+qi = ConstructedQIResidual(SURFACES, **qi_options)
+qi_report = ConstructedQIResidual(SURFACES)
 
 
-def iota_shortfall(state, rt):
-    return jnp.maximum(IOTA_FLOOR - jnp.abs(opt.mean_iota(state, rt)), 0.0)
+def iota_floor(state, runtime):
+    return jnp.maximum(IOTA_FLOOR - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
 
 
-def report(tag, eq):
-    qi_total = float(qi.total(eq))
-    print(f"[{tag}] QI total = {qi_total:.6e}, QP total = {float(qp.total(eq)):.6e}, "
-          f"aspect = {float(opt.aspect_ratio(eq.state, eq.runtime)):.4f}, "
-          f"mean iota = {float(opt.mean_iota(eq.state, eq.runtime)):.4f}")
-    return qi_total
+def mirror_excess(state, runtime):
+    return jnp.maximum(opt.mirror_ratio(state, runtime) - MIRROR_LIMIT, 0.0)
 
 
-qi_seed = report("seed", eq)
+def elongation_excess(state, runtime):
+    return jnp.maximum(
+        opt.max_elongation(state, runtime) - ELONGATION_LIMIT, 0.0
+    )
 
-# ------------------- objectives: one terms-list swap ------------------------
+
+def report(label, equilibrium):
+    total = float(qi.total(equilibrium))
+    print(
+        f"[{label}] constructed QI = {total:.6e}, "
+        f"aspect = {float(opt.aspect_ratio(equilibrium.state, equilibrium.runtime)):.4f}, "
+        f"mean iota = {float(opt.mean_iota(equilibrium.state, equilibrium.runtime)):.4f}, "
+        f"mirror = {float(opt.mirror_ratio(equilibrium.state, equilibrium.runtime)):.4f}, "
+        f"elongation = {float(opt.max_elongation(equilibrium.state, equilibrium.runtime)):.4f}"
+    )
+    return total
+
+
 practical_terms = [
-    (opt.aspect_ratio, ASPECT_TARGET, 0.25),
-    (iota_shortfall, 0.0, 100.0),
-    (opt.mirror_ratio, MIRROR_TARGET, 10.0),
+    (opt.aspect_ratio, ASPECT_TARGET, 0.005),
+    (iota_floor, 0.0, 10.0),
+    (mirror_excess, 0.0, 10.0),
+    (elongation_excess, 0.0, 10.0),
 ]
-qp_terms = [(qp, 0.0, 1.0)] + practical_terms             # stage 1
-qi_terms = [(qi, 0.0, 10.0)] + practical_terms            # stage 2
+qp_terms = [(qp, 0.0, 10.0), *practical_terms]
+qi_terms = [(qi, 0.0, 10.0), *practical_terms]
 
-# --------------------------- stage 1: QP basin ------------------------------
-for max_mode in QP_SCHEDULE:
-    print(f"\n===== QP stage, max_mode = {max_mode} =====")
-    result = opt.least_squares(
-        qp_terms, inp, max_mode=max_mode, jac="implicit",
-        use_ess=True, verbose=1, max_nfev=QP_NFEV, ftol=FTOL, xtol=1e-10,
-    )
-    inp = result.input
-    if result.equilibrium is not None:
-        report(f"QP stage {max_mode}", result.equilibrium)
+print("\n===== QP basin stage, max_mode = 1 =====")
+mpol = max(1 + 2, MINIMUM_MPOL)
+inp = replace(inp, delt=0.5).change_resolution(
+    mpol=mpol,
+    ntor=mpol,
+    ntheta=2 * mpol + 6,
+    nzeta=2 * mpol + 4,
+)
+problem = opt.VmecProblem.from_tuples(
+    inp, qp_terms, max_mode=1, use_ess=True, progress=not ci_smoke
+)
+seed_eq = problem.equilibrium_from_x(problem.x0)
+qi_seed = report("seed", seed_eq)
+result = least_squares(
+    problem.residual,
+    problem.x0,
+    jac=problem.residual_jac,
+    x_scale=problem.scales,
+    verbose=2,
+    max_nfev=QP_BUDGET,
+    ftol=1.0e-6,
+    xtol=1.0e-10,
+)
+inp = problem.input_from_x(result.x)
+equilibrium = problem.equilibrium_from_x(result.x)
+report("QP basin", equilibrium)
 
-# --------------------------- stage 2: QI refinement -------------------------
-# The traceable omnigenity residual differentiates end-to-end, so the QI
-# stages use the same implicit-gradient path as the QP basin stages.
-for max_mode in QI_SCHEDULE:
+compiled_mode = None
+for max_mode, max_nfev in zip(QI_MODES, QI_BUDGETS):
     print(f"\n===== QI stage, max_mode = {max_mode} =====")
-    result = opt.least_squares(
-        qi_terms, inp, max_mode=max_mode, jac="implicit",
-        use_ess=True, verbose=1, max_nfev=QI_NFEV, ftol=FTOL, xtol=1e-10,
+    mpol = max(max_mode + 2, MINIMUM_MPOL)
+    inp = replace(inp, delt=0.5).change_resolution(
+        mpol=mpol,
+        ntor=mpol,
+        ntheta=2 * mpol + 6,
+        nzeta=2 * mpol + 4,
     )
-    inp = result.input
-    if result.equilibrium is not None:
-        report(f"QI stage {max_mode}", result.equilibrium)
+    if max_mode != compiled_mode:
+        problem = opt.VmecProblem.from_tuples(
+            inp,
+            qi_terms,
+            max_mode=max_mode,
+            use_ess=True,
+            progress=not ci_smoke,
+        )
+        if not ci_smoke:
+            problem.compile_residual_and_jacobian()
+        compiled_mode = max_mode
+    x_start = problem.x_from_input(inp)
+    result = least_squares(
+        problem.residual,
+        x_start,
+        jac=problem.residual_jac,
+        x_scale=problem.scales,
+        verbose=2,
+        max_nfev=max_nfev,
+        ftol=1.0e-6,
+        xtol=1.0e-10,
+    )
+    inp = problem.input_from_x(result.x)
+    equilibrium = problem.equilibrium_from_x(result.x)
+    report(f"QI mode {max_mode}", equilibrium)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    inp.to_indata(OUT_DIR / f"input.QI_max_mode_{max_mode:03d}")
 
-# --------------------------- final results ---------------------------------
-eq = result.equilibrium or opt.solve_equilibrium(inp)
-qi_final = report("final", eq)
+resolved_qi = float(qi_report.total(equilibrium))
+print(f"Full-resolution constructed QI = {resolved_qi:.6e}")
+
+final_input = replace(
+    inp,
+    ns_array=np.array([31 if ci_smoke else 101]),
+    ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
+    niter_array=np.array([8000]),
+)
+final_equilibrium = opt.solve_equilibrium(
+    final_input,
+    initial_state=equilibrium.state,
+    verbose=not ci_smoke,
+    raise_on_max_iterations=True,
+)
+qi_final = report("final", final_equilibrium)
+print(
+    "Final full-resolution constructed QI = "
+    f"{float(qi_report.total(final_equilibrium)):.6e}"
+)
 print(f"\nQI total: seed {qi_seed:.3e} -> final {qi_final:.3e}")
 
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-inp.to_indata(OUT_DIR / "input.QI_optimized")
-wout_path = vj.write_wout(OUT_DIR / "wout_QI_optimized.nc", eq.wout)
-print(f"wrote {OUT_DIR / 'input.QI_optimized'}\nwrote {wout_path}")
-for key, path in vj.plot_wout(wout_path, OUT_DIR).items():
+input_path = final_input.to_indata(OUT_DIR / "input.QI_optimized")
+wout_path = vj.write_wout(
+    OUT_DIR / "wout_QI_optimized.nc", final_equilibrium.wout
+)
+print(f"wrote {input_path}")
+print(f"wrote {wout_path}")
+for path in vj.plot_wout(wout_path, OUT_DIR).values():
     print(f"wrote {path}")

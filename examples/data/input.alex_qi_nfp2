@@ -1,0 +1,36 @@
+&INDATA
+! Near-circular nfp=2 seed used by the QI optimization comparison.
+NFP = 2
+LASYM = F
+
+MPOL = 5
+NTOR = 5
+NS_ARRAY = 31
+NITER_ARRAY = 5500
+FTOL_ARRAY = 1e-12
+
+PHIEDGE = 0.03295687309
+PMASS_TYPE = "power_series"
+AM = 0.0
+PRES_SCALE = 1.0
+NCURR = 1
+CURTOR = 0.0
+PCURR_TYPE = "power_series"
+AC = 0.0
+
+DELT = 0.9
+NSTEP = 200
+
+RBC(0,0) = 1.0
+RBC(0,1) = 0.1
+ZBS(0,1) = 0.1
+RBC(1,1) = 0.001
+ZBS(1,1) = 0.001
+/
+
+&BOOZ_XFORM_JAX
+LBOOZ = F
+MBOOZ = 32
+NBOOZ = 32
+BOOZ_SURFACES = 'all'
+/
