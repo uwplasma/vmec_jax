@@ -71,6 +71,13 @@ def test_monitor_callback_fallbacks_and_problem_counters() -> None:
     with np.testing.assert_raises(ValueError):
         OptimizationMonitor(stream=None)({"x": np.array([1.0])})
 
+    # Legacy SciPy minimize callbacks pass the plain parameter vector: it is
+    # the iterate itself, never probed for an ``x`` attribute (which used to
+    # produce a 0-d NaN evaluation point).
+    legacy = OptimizationMonitor(problem, stream=None)
+    legacy(np.array([3.0]))
+    assert legacy.records[0].cost == 9.0
+
 
 def test_default_scipy_monitor_respects_an_explicit_callback() -> None:
     from vmex.core import optimize as opt

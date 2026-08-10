@@ -77,7 +77,14 @@ class OptimizationMonitor:
         return solves, rejected
 
     def __call__(self, intermediate_result: Any) -> None:
-        """Consume a SciPy ``OptimizeResult`` callback value."""
+        """Consume a SciPy callback value: ``OptimizeResult``, dict, or x.
+
+        Legacy SciPy ``minimize`` callbacks receive the plain parameter
+        vector; treat an array argument as that vector instead of probing
+        it for an ``x`` attribute (which silently produced a 0-d NaN).
+        """
+        if isinstance(intermediate_result, np.ndarray):
+            intermediate_result = {"x": intermediate_result}
         x = np.asarray(self._field(intermediate_result, "x"), dtype=float)
         cost = self._field(intermediate_result, "cost")
         raw_fun = self._field(intermediate_result, "fun")
