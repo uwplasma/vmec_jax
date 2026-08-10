@@ -114,6 +114,18 @@ the preceding stage's final plasma state, carries VMEC2000's active-vacuum and a
 each new grid.  A user-provided ``initial_state`` is also supported by the
 Python API for hot restarts.
 
+Hot restart (``--restart`` / ``RESTART_WOUT``)
+----------------------------------------------
+
+``vmex input.x --restart wout_y.nc`` seeds the solve (fixed or free
+boundary) from any VMEC2000-compatible wout file; the deck can request the
+same thing with the VMEX extension key ``RESTART_WOUT = 'wout_y.nc'`` inside
+``&INDATA`` (resolved relative to the input file; the CLI flag wins).  The
+full R/Z/lambda state is rebuilt exactly, radial/mode-table differences are
+resampled, and multigrid rungs at or below the restart resolution are
+skipped — see :doc:`algorithms` for the mechanism and measured iteration
+counts.
+
 The CLI exports the final NESTOR potential and surface fields to the wout
 ``potsin``/``xmpot``/``xnpot``/``*_sur`` variables. LASYM runs additionally
 write ``potcos`` and the sine ``*_sur`` partners. An NITER-exhausted

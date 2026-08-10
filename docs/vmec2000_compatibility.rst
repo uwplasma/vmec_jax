@@ -130,9 +130,12 @@ Equilibrium capability matrix
        selected at every executed resolution.
    * - Hot restart
      - implemented
-     - Fixed and free boundary accept ``initial_state``.  A user free-boundary
-       restart repeats activation (reset-file semantics); continuation between
-       radial stages carries the active vacuum state.
+     - Fixed and free boundary accept ``initial_state`` and ``restart_from``
+       (any VMEC2000-compatible wout file, a ``WoutData``, a ``SolveResult``,
+       or a ``SpectralState``; CLI ``--restart`` / deck ``RESTART_WOUT``).
+       Coarse multigrid rungs below the restart resolution are skipped.  A
+       user free-boundary restart repeats activation (reset-file semantics);
+       continuation between radial stages carries the active vacuum state.
    * - Mgrid
      - implemented
      - MAKEGRID netCDF field and coil-group currents are interpolated in
@@ -535,7 +538,9 @@ Multigrid
    Fixed and free boundary use the same normalized nondecreasing prefix.
 
 Hot restart
-   Seeding a solve with an existing spectral state.  Fixed-boundary hot restart
+   Seeding a solve with an existing spectral state — in-memory or rebuilt
+   from any VMEC2000-compatible wout file (``restart_from`` / ``--restart``
+   / ``RESTART_WOUT``).  Fixed-boundary hot restart
    adapts the edge smoothly to a changed boundary; free-boundary restart
    distinguishes user reset semantics from within-ladder vacuum continuation.
 
