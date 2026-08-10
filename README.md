@@ -506,12 +506,15 @@ the seed order is the first-order equilibrium prediction, the last converged
 state, then a cold solve only if both warm seeds fail. This changes iteration
 count, not the converged equilibrium or derivative.
 
-For scalar methods, pass `problem.value_and_grad` to
-`scipy.optimize.minimize(..., jac=True)`. `problem.jax_value_and_grad` and
-`problem.jax_residual` provide the same physics to JAXopt and Optax. The
-existing `opt.least_squares()` and `opt.minimize()` functions remain concise
-compatibility adapters. Monitoring is callback-based, so it reports accepted
-iterations rather than every trial evaluation.
+For scalar methods, pass `problem.fun` and `problem.grad` separately to
+`scipy.optimize.minimize`. In ESS-scaled coordinates use
+`x = problem.x0 + problem.scales * y`; the examples show the short chain rule
+for the gradient. Value-only line-search trials then avoid an unnecessary
+adjoint. `problem.jax_value_and_grad` and `problem.jax_residual` provide the
+same physics to JAXopt and Optax. The existing `opt.least_squares()` and
+`opt.minimize()` functions remain concise compatibility adapters. Monitoring
+is callback-based, so it reports accepted iterations rather than every trial
+evaluation.
 
 VMEX sets JAX's logging level to `ERROR` at import time, removing repeated
 PjRt persistent-cache compatibility messages while retaining VMEX errors.
@@ -530,15 +533,32 @@ There are two geometric traceable QI targets with deliberately different roles.
 `QIResidual` is the inexpensive smooth surrogate used by short API and timing
 examples. `ConstructedQIResidual` evaluates the fuller Goodman
 squash-and-shuffle construction and is the production target. A measured nfp=2
-path uses ten mode-1 QP evaluations to select a poloidally closed-contour basin,
-then constructed-QI stages at modes 2–5. It reaches resolved all-radius QI
-`2.10e-3` and the independent outer-surface Goodman diagnostic `6.24e-4`;
-the final `NS=101`, `FTOL=1e-14` equilibrium converges in VMEX, VMEC2000, and
-VMEC++. Relaxing the active mirror/elongation limits reached `1.19e-3` in
-VMEX but lost cold-solver portability, so it is documented as a tradeoff, not
-advertised as the default. The [optimization guide](docs/optimization.rst)
+path uses 25 mode-1 QP evaluations to select a poloidally closed-contour basin,
+then three mode-5 constructed-QI trust-region stages with budgets 30, 20, and
+20, followed by ten evaluations of the full production residual. It reaches
+resolved all-radius QI `1.79e-3`; a direct mode-7/100 run required roughly 15
+minutes and stopped at `1.85e-3`, so larger mode is not automatically a better
+basin search. The final `NS=101`, `FTOL=1e-14` equilibrium is hot-started from
+the accepted optimization state. Relaxing the active mirror/elongation limits
+reached `1.19e-3` in VMEX but lost cold-solver portability, so it is documented
+as a tradeoff, not advertised as the default. The [optimization guide](docs/optimization.rst)
 gives the exact schedule, sampling, constraint conventions, and resolution
 checks.
+
+![Low-mode objective landscapes in RBC(1,1) and ZBS(1,1)](docs/_static/figures/readme_optimization_landscapes.png)
+
+These converged-equilibrium two-mode slices are not interchangeable convex
+bowls: QI, QA, and QH have different coupled valleys. The white circle is the
+reference equilibrium and the star is the sampled minimum. Regenerate the
+values and figure with `python benchmarks/optimization_landscapes.py`.
+
+Changing only `NFP` in the circular input is not a fair field-period search.
+The same short QP/QI workflow gave full-QI residuals 0.141, 0.00456, 0.110,
+0.0968, and 0.0923 for NFP 1–5, while an NFP-1 near-axis seed reached
+`1.86e-3`. An NFP-3 seed reached `7.47e-3` only with mirror ratio 0.461.
+The [optimization guide](docs/optimization.rst) records the scan and the
+NFP-specific seed/constraint strategy; NFP 3–5 should not reuse NFP 2's QP
+basin guide blindly.
 
 The architecture, derivative validation, performance criteria, documentation
 work, and staged pull-request plan are recorded in

@@ -2622,8 +2622,14 @@ def _least_squares_implicit(
         monitor = _configure_scipy_monitor(
             x0, value_and_grad, cfg, holder, verbose, scipy_kwargs
         )
+        # Line searches can probe the scalar value without also solving an
+        # implicit adjoint at every rejected trial. SciPy requests the exact
+        # gradient only where the selected method needs it.
+        def gradient_host(x):
+            return value_and_grad(x)[1]
+
         result = scipy.optimize.minimize(
-            value_and_grad, np.asarray(x0, dtype=float), jac=True,
+            scalar_fun_host, np.asarray(x0, dtype=float), jac=gradient_host,
             method=minimize_method, **scipy_kwargs)
         if "jac" not in result:  # scipy may skip evaluation if every dof is fixed
             result.fun, result.jac = value_and_grad(result.x)

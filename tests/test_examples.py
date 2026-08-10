@@ -101,6 +101,25 @@ def test_hot_restart_scan(tmp_path):
     assert len(warm) == 5 and max(warm) <= 5, f"warm restarts should be cheap: {warm}"
 
 
+def test_optimization_landscape_artifact(tmp_path):
+    """Committed equilibrium scans stay finite and can be replotted cheaply."""
+    import json
+
+    data = REPO / "benchmarks" / "optimization_landscapes.json"
+    payload = json.loads(data.read_text())
+    assert payload["points"] == 7
+    for kind in ("QI", "QA", "QH"):
+        values = np.asarray(payload["cases"][kind]["cost"])
+        assert values.shape == (7, 7)
+        assert np.all(np.isfinite(values)) and np.all(values >= 0)
+    output = tmp_path / "optimization_landscapes.png"
+    out = _run_example(
+        REPO / "benchmarks" / "optimization_landscapes.py", tmp_path,
+        args=("--plot-only", "--data", str(data), "--output", str(output)),
+    )
+    assert "Wrote" in out and output.stat().st_size > 50_000
+
+
 def test_parallel_ensemble_scan(tmp_path):
     out = _run_example(EXAMPLES / "parallel_ensemble_scan.py", tmp_path, timeout=900)
     # the correctness contract: threaded ensemble is bit-identical to serial

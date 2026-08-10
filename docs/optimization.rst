@@ -245,7 +245,7 @@ Changing the optimization equilibrium tolerance from ``1e-12`` to ``1e-10``
 reduced a representative solve from 2,052 to 1,269 iterations while retaining
 a 0.99977 cosine between the exact cost gradients.  ``1e-10`` is a reasonable
 scouting tolerance; use ``1e-12`` for the final polish.  At
-``NS=101`` and ``FTOL=1e-14`` the QP-to-QI result below hot-converged in 4,146
+``NS=101`` and ``FTOL=1e-14`` the QP-to-QI result below hot-converged in 5,458
 iterations.  ``NITER_ARRAY`` is only a ceiling once convergence occurs, so
 raising it does not change the optimization direction.  ``verbose=True``
 prints the live iteration table, and ``NITER_ARRAY=8000`` leaves a useful
@@ -259,18 +259,19 @@ physics certificate.  The measured nfp=2 path from the bundled near-circular
 ``input.nfp2_QI_seed`` uses two deliberately small changes to the ordinary
 least-squares loop:
 
-1. ten evaluations of the QP ``(M, N) = (0, 1)`` residual at ``max_mode=1``
+1. 25 evaluations of the QP ``(M, N) = (0, 1)`` residual at ``max_mode=1``
    select a basin with poloidally closed ``|B|`` contours;
 2. replace only that first tuple with a reduced-sampling
-   :class:`~vmex.core.qi.ConstructedQIResidual`, then run modes 2, 3, 4, 5
-   for ten evaluations each and two 15-evaluation mode-5 polishes.
+   :class:`~vmex.core.qi.ConstructedQIResidual`, then restart the mode-5
+   trust region with budgets 30, 20, and 20 before a ten-evaluation polish
+   with the full production sampling.
 
-The full-resolution constructed diagnostic reached ``2.10e-3``; the
-independent outer-surface SIMSOPT/Goodman diagnostic reached ``6.24e-4``
-(688x below the circular seed).  The final ``NS=101``, ``FTOL=1e-14`` solve
-converged and was independently accepted by VMEC2000 and VMEC++.  The
-resolved result has aspect 6.11, mean iota 0.484, edge mirror ratio 0.223,
-and VMEX equivalent-ellipse elongation 8.00.  These metrics state the actual
+The full-resolution constructed diagnostic reached ``1.786e-3`` at ``NS=31``
+and ``1.798e-3`` after the ``NS=101`` radial refinement.  The final
+``FTOL=1e-14`` solve is hot-started from the last accepted equilibrium.
+Before that radial refinement the resolved result has aspect
+5.57, mean iota 0.526, edge mirror ratio 0.217, and VMEX equivalent-ellipse
+elongation 8.00.  These metrics state the actual
 tradeoff: the QI target improved without hiding the shaping constraints.  In
 particular, the mirror limit is exceeded slightly and elongation is active;
 hinge weights are soft penalties, not a claim of hard feasibility.
@@ -293,14 +294,13 @@ mode-5 run drove the smooth surrogate to ``6.46e-3`` while the resolved
 constructed diagnostic remained ``1.16``--``1.33``.  The field had exploited
 the surrogate's finite-sampling conditions rather than becoming QI.  A
 constructed-QI-only ladder avoided that loophole but stopped near ``3.3e-2``;
-the short QP basin stage is what made the subsequent ``2.10e-3`` path both
+the short QP basin stage is what made the subsequent ``1.79e-3`` path both
 faster and more precise.
 
 The short QP stage is a basin guide, not another claimed definition of QI.
-A mode-2 QP start exposed the required physical harmonic but did not complete
-eight evaluations within five minutes on the same workstation, while the
-mode-1 stage completed in under a minute and led to the better end-to-end
-path.  Three fixed-seed random boundary perturbations also produced worse
+A mode-2 QP start was much slower and led to a worse constructed-QI seed,
+while the mode-1 stage led to the better end-to-end path.  Three fixed-seed
+random boundary perturbations also produced worse
 constructed-QI values than the deterministic start.  Around the final
 mode-5 boundary, nine-point one-dimensional scans over +/-2 percent of an
 ESS-scaled coefficient unit placed the minimum at zero for both most-active
@@ -316,6 +316,85 @@ but choosing one does not make this residual landscape easier.  Likewise, an
 augmented-Lagrangian trial enforced aspect more tightly but produced worse QI
 and remained infeasible at the same short budget.  Use it when a hard
 constraint is the primary requirement, not as a generic basin escape.
+
+For SciPy BFGS-family methods, pass ``problem.fun`` and ``problem.grad`` as
+separate callbacks.  Line-search trial points then evaluate only the scalar
+value instead of solving an implicit adjoint for every rejected step.  At
+higher Fourier mode, optimize the scaled coordinates
+``x = problem.x0 + problem.scales * y`` as shown in
+``QI_optimization_scipy.py``.
+
+On the same accepted mode-5 basin (full constructed QI ``1.873e-3``), ten
+SciPy least-squares evaluations reached ``1.788e-3`` in 32 s.  Ten JAXopt LM
+iterations with the materialized VMEX Jacobian reached ``1.786e-3`` in 76 s
+with no failed equilibrium trial.  Fifteen ESS-scaled L-BFGS-B iterations,
+using C1 constraint hinges and separate value/gradient callbacks, reached
+``1.798e-3`` in 271 s.  Thus all three backends work on the physical problem,
+but the tuple residual structure makes Gauss--Newton the faster default.
+Fixed-step Adam was more sensitive to learning rate and did not beat that
+minimum in the short scans; the Optax example keeps it available without
+presenting it as a QI-specific recommendation.
+
+Field-period scans and seeds
+----------------------------
+
+Changing only ``NFP`` in a circular boundary does not test whether precise QI
+exists at that field period; it tests whether one basin guide happens to work
+from the same axis.  The initial full constructed-QI values of the five
+circular inputs were all about 1.26.  Applying the identical mode-1 QP/10 plus
+mode-5 QI/30 workflow gave:
+
+.. list-table:: Controlled circular-seed scan
+   :header-rows: 1
+
+   * - NFP
+     - full constructed QI
+     - diagnosis
+   * - 1
+     - 0.1413
+     - QP guide misses the low-iota NFP-1 QI basin
+   * - 2
+     - 0.00456
+     - guide and target basins are compatible
+   * - 3
+     - 0.1101
+     - low proxy score does not certify constructed QI
+   * - 4
+     - 0.0968
+     - circular axis lacks the required NFP-specific shaping
+   * - 5
+     - 0.0923
+     - same seed/guide mismatch, with stronger shaping pressure
+
+The counterexample is decisive: starting NFP 1 from the bundled
+``input.nfp1_QI`` boundary and applying only 20 full-residual mode-5
+evaluations reaches ``1.86e-3``.  Precise QI is therefore not peculiar to
+NFP 2.  For NFP 1 use an NFP-1 near-axis seed and optimize the constructed
+residual directly.  An NFP-3 stellarator seed likewise reached ``7.47e-3``
+in 30 full-residual mode-5 evaluations, but only by accepting mirror ratio
+0.461.  Restoring the normal shaping weight moved it to QI ``2.26e-2`` and
+mirror 0.319.  More iterations in that basin therefore do not resolve the
+physics tradeoff; a better NFP-3 axis seed is required.  For NFP 3--5, screen
+field-period-specific near-axis/QIC axis seeds with the full constructed
+diagnostic before spending a long
+optimization budget; do not select them by the QP proxy alone.  Higher field
+period tends to require more axis and boundary shaping, so relax aspect,
+mirror, or elongation limits only as an explicit physics tradeoff and certify
+the result at larger radial and angular resolution.
+
+This seed policy follows the construction evidence in `Goodman et al. (2023)
+<https://doi.org/10.1017/S002237782300065X>`_, the geometric axis/elongation
+controls of `Plunk & Rodríguez (2026)
+<https://doi.org/10.1017/S002237782610124X>`_, and the more than 800,000
+field-period-specific candidates in the `near-axis QI database
+<https://www.cambridge.org/core/journals/journal-of-plasma-physics/article/nearaxis-quasiisodynamic-database/CD53C544991344334EC9318A18BC88C2>`_.
+
+The reproducible low-mode slices in
+``benchmarks/optimization_landscapes.py`` vary ``RBC(1,1)`` and
+``ZBS(1,1)`` around representative QI, QA, and QH equilibria.  They are
+documentation diagnostics, not routine CI: the expensive regeneration
+performs real equilibrium solves, while fast tests only validate the plotting
+and data schema.
 
 The factory accepts ``weight_semantics="cost"`` (the default), for which a
 tuple weight ``w`` contributes ``sqrt(w) * (f - target)`` residual rows and
@@ -375,7 +454,13 @@ small smooth-QI :class:`~vmex.core.problem.VmecProblem` for API comparison.
 They demonstrate SciPy nonlinear
 least squares, BFGS and L-BFGS-B; JAXopt LBFGS and Levenberg--Marquardt; and an
 arbitrary Optax transformation chain.  VMEX contains no method registry or
-hand-written clone of those algorithms.
+hand-written clone of those algorithms.  The JAXopt LM example supplies a
+small custom-JVP wrapper because VMEX exposes a converged-equilibrium custom
+VJP, whereas LM asks for Jacobian-vector products.  It materializes VMEX's
+already-available dense residual Jacobian and uses Cholesky rather than
+nesting matrix-free CG compilations.  JAXopt 0.8.3 also still
+uses the ``jax.tree_map`` alias removed by JAX 0.9; the example keeps that
+compatibility alias local instead of modifying VMEX or global startup state.
 
 Opaque host objectives use the same public object with a different derivative
 provider:

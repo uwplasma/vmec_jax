@@ -5,7 +5,8 @@ The driver keeps the numerical choices visible: VMEC resolution is changed in
 the script, objective tuples are ordinary Python, and SciPy receives VMEX's
 residual and exact implicit Jacobian directly.  A short QP stage selects the
 poloidally closed-|B| basin; the fuller Goodman squash-and-shuffle residual
-then refines modes 2--5.  The final equilibrium is hot-started at NS=101.
+then refines mode 5 in three short trust-region stages.  The final equilibrium
+is hot-started at NS=101.
 """
 
 from dataclasses import replace
@@ -30,13 +31,14 @@ IOTA_FLOOR = 0.33
 MIRROR_LIMIT = 0.21
 ELONGATION_LIMIT = 8.0
 MINIMUM_MPOL = 5
-QI_MODES = [2, 3, 4, 5, 5, 5]
-QI_BUDGETS = [10, 10, 10, 10, 15, 15]
-QP_BUDGET = 10
+QI_MODES = [5, 5, 5]
+QI_BUDGETS = [30, 20, 20]
+QP_BUDGET = 25
+FULL_QI_BUDGET = 10
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if ci_smoke:
-    QI_MODES, QI_BUDGETS, QP_BUDGET = [1], [3], 3
+    QI_MODES, QI_BUDGETS, QP_BUDGET, FULL_QI_BUDGET = [1], [3], 3, 2
 
 inp = VmecInput.from_file(DATA)
 qp = opt.QuasisymmetryRatioResidual(
@@ -111,8 +113,7 @@ inp = problem.input_from_x(result.x)
 equilibrium = problem.equilibrium_from_x(result.x)
 report("QP basin", equilibrium)
 
-compiled_mode = None
-for max_mode, max_nfev in zip(QI_MODES, QI_BUDGETS):
+for stage, (max_mode, max_nfev) in enumerate(zip(QI_MODES, QI_BUDGETS), 1):
     print(f"\n===== QI stage, max_mode = {max_mode} =====")
     mpol = max(max_mode + 2, MINIMUM_MPOL)
     inp = replace(inp, delt=0.5).change_resolution(
@@ -121,21 +122,15 @@ for max_mode, max_nfev in zip(QI_MODES, QI_BUDGETS):
         ntheta=2 * mpol + 6,
         nzeta=2 * mpol + 4,
     )
-    if max_mode != compiled_mode:
-        problem = opt.VmecProblem.from_tuples(
-            inp,
-            qi_terms,
-            max_mode=max_mode,
-            use_ess=True,
-            progress=not ci_smoke,
-        )
-        if not ci_smoke:
-            problem.compile_residual_and_jacobian()
-        compiled_mode = max_mode
-    x_start = problem.x_from_input(inp)
+    # Restart SciPy's trust-region model; equal-shape JAX executables are reused.
+    problem = opt.VmecProblem.from_tuples(
+        inp, qi_terms, max_mode=max_mode, use_ess=True, progress=not ci_smoke,
+    )
+    if not ci_smoke:
+        problem.compile_residual_and_jacobian()
     result = least_squares(
         problem.residual,
-        x_start,
+        problem.x0,
         jac=problem.residual_jac,
         x_scale=problem.scales,
         verbose=2,
@@ -147,8 +142,22 @@ for max_mode, max_nfev in zip(QI_MODES, QI_BUDGETS):
     equilibrium = problem.equilibrium_from_x(result.x)
     report(f"QI mode {max_mode}", equilibrium)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    inp.to_indata(OUT_DIR / f"input.QI_max_mode_{max_mode:03d}")
+    inp.to_indata(OUT_DIR / f"input.QI_max_mode_{max_mode:03d}_stage_{stage:02d}")
 
+print(f"\n===== Full constructed-QI polish, max_mode = {QI_MODES[-1]} =====")
+problem = opt.VmecProblem.from_tuples(
+    inp, [(qi_report, 0.0, 10.0), *practical_terms], max_mode=QI_MODES[-1],
+    use_ess=True, progress=not ci_smoke,
+)
+if not ci_smoke:
+    problem.compile_residual_and_jacobian()
+result = least_squares(
+    problem.residual, problem.x0, jac=problem.residual_jac,
+    x_scale=problem.scales, verbose=2, max_nfev=FULL_QI_BUDGET,
+    ftol=1.0e-6, xtol=1.0e-10,
+)
+inp = problem.input_from_x(result.x)
+equilibrium = problem.equilibrium_from_x(result.x)
 resolved_qi = float(qi_report.total(equilibrium))
 print(f"Full-resolution constructed QI = {resolved_qi:.6e}")
 

@@ -283,7 +283,7 @@ def test_direct_scipy_minimize_and_least_squares_use_same_problem():
     scipy = pytest.importorskip("scipy.optimize")
     problem = _quadratic_problem()
     minimized = scipy.minimize(
-        problem.value_and_grad, problem.x0, jac=True, method="BFGS"
+        problem.fun, problem.x0, jac=problem.grad, method="BFGS"
     )
     fitted = scipy.least_squares(
         problem.residual, problem.x0, jac=problem.residual_jac
@@ -351,6 +351,25 @@ def test_direct_jaxopt_and_optax_contracts():
         maxiter=10, tol=1e-10,
     ).run(jnp.asarray(problem.x0))
     np.testing.assert_allclose(result.params, target, atol=1e-6)
+
+    if not hasattr(jax, "tree_map"):
+        jax.tree_map = jax.tree_util.tree_map
+
+    @jax.custom_jvp
+    def residual(x):
+        return x - target
+
+    @residual.defjvp
+    def residual_jvp(primals, tangents):
+        x, = primals
+        tangent, = tangents
+        return residual(x), tangent
+
+    lm = jaxopt.LevenbergMarquardt(
+        residual, maxiter=5, materialize_jac=True,
+        solver="cholesky", jit=False,
+    ).run(jnp.asarray(problem.x0))
+    np.testing.assert_allclose(lm.params, target, atol=1e-5)
 
     transform = optax.adam(0.1)
     x = jnp.asarray(problem.x0)

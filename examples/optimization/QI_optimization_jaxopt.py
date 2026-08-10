@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 
+import jax
 import jax.numpy as jnp
 import jaxopt
 
@@ -14,6 +15,11 @@ from qi_shared_problem import iteration_budget, make_qi_problem
 MAX_MODE = 1                   # boundary Fourier modes released to the optimizer
 METHOD = "LBFGS"               # or "LM"
 BUDGET = iteration_budget(20)  # optimizer iterations (1 under VMEX_EXAMPLES_CI=1)
+
+# JAX 0.9 removed this deprecated alias before JAXopt 0.8.3 stopped using it.
+# Keep the compatibility local to this external-backend example.
+if not hasattr(jax, "tree_map"):
+    jax.tree_map = jax.tree_util.tree_map
 
 problem = make_qi_problem(MAX_MODE)
 x0 = jnp.asarray(problem.x0)
@@ -31,10 +37,22 @@ if METHOD == "LBFGS":
     ).run(x0)
 else:
     problem.compile_residual_and_jacobian()
+
+    @jax.custom_jvp
+    def residual(x):
+        return problem.jax_residual(x)
+
+    @residual.defjvp
+    def residual_jvp(primals, tangents):
+        x, = primals
+        tangent, = tangents
+        return residual(x), problem.jax_residual_jac(x) @ tangent
+
     result = jaxopt.LevenbergMarquardt(
-        problem.jax_residual,
-        jac_fun=problem.jax_residual_jac,
+        residual,
         maxiter=BUDGET,
+        materialize_jac=True,
+        solver="cholesky",
         jit=False,
     ).run(x0)
 
