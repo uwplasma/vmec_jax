@@ -479,6 +479,90 @@ def test_scipy_bfgs_scalar_lane_completes_and_descends():
     np.testing.assert_array_equal(bad_gradient, np.zeros_like(problem.x0))
 
 
+def test_certified_trial_guards_reject_stale_or_missing_memo(monkeypatch):
+    """Certification refuses derivatives when the trial memo cannot vouch for x.
+
+    :func:`certified_trial` gates every scalar-lane derivative on the last
+    host solve belonging to exactly the requested ``x``.  Two failure modes
+    are forced here on both public lanes: the memo slot missing entirely
+    (writes dropped) and the memo belonging to different parameters (the
+    params key churned every call).  Either way the trial must fall onto the
+    smooth wall pair — ``max(10 * seed_cost, 1)`` with a zero gradient at
+    the seed — and count in ``holder["failed_trials"]``, never returning a
+    derivative of an uncertifiable state.  A malformed ``fun`` input takes
+    the flat 1e12 wall without solving.
+    """
+    import itertools
+
+    from vmex.core import implicit as implicit_module
+
+    jax.config.update("jax_disable_jit", False)
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    inp = inp.change_resolution(mpol=3, ntor=0, ntheta=12, nzeta=4)
+    inp = dataclasses.replace(
+        inp,
+        ns_array=np.asarray([5]),
+        ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([1000]),
+    )
+
+    class _DropWrites(implicit_module._LAST_SOLVE.__class__):
+        def __setitem__(self, key, value):  # simulate an evicted memo slot
+            pass
+
+    problem = opt.VmecProblem.from_tuples(
+        inp, [(opt.aspect_ratio, 4.0, 1.0)], max_mode=1, use_ess=False,
+    )
+    holder = problem.metadata["holder"]
+    rows0 = problem.residual(problem.x0)
+    wall = max(10.0 * (0.5 * float(rows0 @ rows0)), 1.0)
+    value0, gradient0 = problem.value_and_grad(problem.x0)
+    assert np.isfinite(value0) and np.all(np.isfinite(gradient0))
+
+    with monkeypatch.context() as m:
+        m.setattr(implicit_module, "_LAST_SOLVE", _DropWrites())
+        problem._vg_cache = None
+        failed_before = holder["failed_trials"]
+        value, gradient = problem.value_and_grad(problem.x0)
+        assert np.isclose(value, wall, rtol=1e-12, atol=0.0)
+        np.testing.assert_array_equal(gradient, np.zeros_like(problem.x0))
+        assert holder["failed_trials"] == failed_before + 1
+
+    with monkeypatch.context() as m:
+        nonce = itertools.count()
+        m.setattr(
+            implicit_module, "_params_key",
+            lambda params: f"nonce-{next(nonce)}".encode(),
+        )
+        problem._vg_cache = None
+        failed_before = holder["failed_trials"]
+        value, gradient = problem.value_and_grad(problem.x0)
+        assert np.isclose(value, wall, rtol=1e-12, atol=0.0)
+        np.testing.assert_array_equal(gradient, np.zeros_like(problem.x0))
+        assert holder["failed_trials"] == failed_before + 1
+
+    scalar = opt.VmecProblem.from_loss(
+        inp,
+        lambda state, runtime: 0.5 * (opt.aspect_ratio(state, runtime) - 4.0) ** 2,
+        max_mode=1,
+        use_ess=False,
+    )
+    sholder = scalar.metadata["holder"]
+    svalue0 = float(scalar.fun(scalar.x0))
+    swall = max(10.0 * abs(svalue0), 1.0)
+    with monkeypatch.context() as m:
+        m.setattr(implicit_module, "_LAST_SOLVE", _DropWrites())
+        scalar._vg_cache = None
+        failed_before = sholder["failed_trials"]
+        value, gradient = scalar.value_and_grad(scalar.x0)
+        assert np.isclose(value, swall, rtol=1e-12, atol=0.0)
+        np.testing.assert_array_equal(gradient, np.zeros_like(scalar.x0))
+        assert sholder["failed_trials"] == failed_before + 1
+
+    # Malformed fun input: finite wall, no solve.
+    assert scalar.fun(np.zeros(scalar.x0.size + 1)) == 1.0e12
+
+
 def test_least_squares_implicit_jac_chunking(solovev_eq):
     """The R17.1 chunked implicit Jacobian matches the unchunked one:
     ``jac_chunk_size`` only changes how the per-dof columns are batched
