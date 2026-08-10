@@ -15,6 +15,13 @@ From PyPI
 
    pip install vmex
 
+JAXopt and Optax are optional because SciPy and the public problem callables
+are part of the core install.  Install the external-optimizer examples with:
+
+.. code-block:: bash
+
+   pip install "vmex[optimizers]"
+
 The plain install includes everything needed for solving, plotting, and the
 Boozer transform — there are no user-facing extras to remember. Verify with:
 

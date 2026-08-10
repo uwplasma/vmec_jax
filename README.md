@@ -485,9 +485,12 @@ at `max_mode` 1, 3, and 5 reduced first Jacobian compilation by 12.9–14.2 s
 with batch size 1; full 12-evaluation mode-5 QI and QS runs were 8.2 s and
 9.9 s faster overall than `"auto"`, with matching final costs. Select
 `jacobian_batch_size="auto"` only for long, repeated same-shape campaigns in
-which its roughly 1–4 s lower warm evaluation time amortizes the larger first
+which its modestly lower warm stage time amortizes the larger first
 compilation. Explicit Jacobian methods are intended for numerical studies and
-diagnostics; `"auto"` is the normal choice.
+diagnostics; `"auto"` is the normal choice. The reproducible driver and full
+matrix are `benchmarks/optimization_defaults.py` and
+`benchmarks/optimization_defaults.json` (the measurement platform is recorded
+inside the artifact).
 
 `problem.equilibrium_from_x(result.x)` returns the accepted equilibrium state
 already evaluated by the optimizer. Use it for reporting and as
@@ -518,9 +521,72 @@ the VMEX option to `inherit` to leave the process setting unchanged. JAX
 versions older than 0.4.36 lack the unified Python/C++ logging control, so
 VMEX prints one actionable startup warning that PjRt messages may remain.
 
+Runnable QI examples cover SciPy least squares/BFGS/L-BFGS-B, JAXopt
+LBFGS/Levenberg–Marquardt, and Optax Adam. Opaque host objectives select
+`derivative_method="finite_difference"`; central probes use automatic workers,
+while traceable objectives retain the faster implicit adjoint.
+
 The architecture, derivative validation, performance criteria, documentation
 work, and staged pull-request plan are recorded in
 [`docs/optimization_api_plan.md`](docs/optimization_api_plan.md).
+
+### Apples-to-apples QI optimization timing
+
+The comparison below uses the bundled near-circular nfp=2 QI seed
+(`examples/data/input.nfp2_QI_seed`), not two look-alike examples.  Both codes optimize the same 8/24/48/80
+boundary coefficients, at `NS=25`, with `mpol=ntor=max(max_mode+2, 5)`, the
+same angular grids, and the same 15-function-evaluation SciPy least-squares
+budget.  The residual is also shared: identical Goodman QI, aspect, mean-iota,
+mirror-limit, and elongation-limit rows are evaluated from wout in SIMSOPT and
+through the traceable forms in VMEX.  The VMEX seed cost agrees with the
+independent wout reconstruction to `1e-13` relative.
+
+These are cold end-to-end times on a 14-core Apple M3 Max (10 performance + 4
+efficiency cores, 36 GB): construction, first compilation, and optimization
+are all included.  SIMSOPT 1.10.7 uses 14 MPI finite-difference groups with
+centered differences; VMEX 0.4.0/JAX 0.9.2 uses the exact implicit Jacobian
+and XLA-managed CPU threading.  Persistent VMEX compilation caching was
+disabled, so later rows do not inherit executables from earlier rows.
+
+| max mode | variables | SIMSOPT, ESS off | SIMSOPT, ESS on | VMEX, ESS off | VMEX, ESS on |
+|---------:|----------:|-----------------:|----------------:|--------------:|-------------:|
+| 1 | 8  | 33.6 s  | 33.4 s  | 73.4 s  | 73.3 s  |
+| 2 | 24 | 70.8 s  | 70.0 s  | 108.0 s | 84.2 s  |
+| 3 | 48 | 84.9 s  | 119.2 s | 99.7 s  | 95.4 s  |
+| 4 | 80 | 319.6 s | 176.6 s | 114.6 s | 100.7 s |
+
+![Cold SIMSOPT and VMEX QI optimization wall time versus maximum mode](benchmarks/optimization_crosscode/qi_optimization_time.png)
+
+Cold JIT cost makes VMEX slower for this short mode-1 job.  The exact
+derivative scales better: with ESS at mode 4, VMEX is 1.75x faster and reaches
+cost 0.03717 versus SIMSOPT's 0.03722.  Wall time alone does not rank the ESS
+settings—the accepted-iteration histories show that unscaled modes 3–4 often
+spend the short budget shrinking poorly conditioned steps.  Every plotted
+accepted-cost history is monotone; rejected trial equilibria remain included
+in the wall time.
+
+![SIMSOPT and VMEX QI objective histories, with and without ESS](benchmarks/optimization_crosscode/qi_objective_history.png)
+
+ESS and a mode ladder solve different problems.  In a separate equal-budget
+VMEX test, direct `max_mode=5` stopped after 47 evaluations at cost 0.03742,
+while `[1, 2, 3, 4, 5]` with up to 15 evaluations per stage reached 0.02582
+(31% lower).  ESS scales simultaneous high-order variables; the ladder also
+selects a basin by solving the low-order shape first.  Use a direct ESS run for
+quick scouting and a ladder for difficult QI campaigns.  A stage endpoint can
+rise when `mpol`, `ntor`, and array shapes change—the discretized problem has
+changed—but accepted iterations within each fixed stage remain monotone.
+
+Reproduce the timing matrix with
+[`benchmarks/qi_simsopt_vmex.py`](benchmarks/qi_simsopt_vmex.py).  Run every
+case in a fresh process; use `mpiexec -n N` for SIMSOPT, where `N` is the
+available logical CPU count, and pass `--plot benchmarks/optimization_crosscode`
+after all 16 cases exist.  The committed consolidated
+`benchmarks/optimization_crosscode/qi_results.json` records the input hash,
+versions, platform, worker policy, timing split, costs, and accepted
+histories for every case.  The
+full resolution, continuation, CPU-worker, and accelerator guidance is in the
+[optimization](docs/optimization.rst) and
+[parallelization](docs/parallelization.rst) documentation.
 
 Measured on a 36-core CPU from a near-circular torus (single call, all
 harmonics released at once; `examples/optimization/*_ess.py`; the staged
@@ -572,7 +638,11 @@ for QP. Three measured optimizations keep each campaign in the minutes range:
   converged.
 
 High-level optimization uses the measured CPU implicit-Jacobian policy by
-default; suitably sized forward solves can use the GPU. Low-level
+default; suitably sized forward solves can use the GPU. Independent
+finite-difference probes and ensembles use up to all logical CPUs by default
+(`workers=None`); set `workers=N` to cap them. A single implicit solve uses
+XLA's CPU threads, so one reported JAX CPU device is the whole host backend,
+not one core; multi-GPU single-solve sharding is not claimed yet. Low-level
 `implicit.params_from_input` and `implicit.run` follow ordinary JAX placement
 when `device` is omitted, so an accelerator installation works without
 environment variables. Pass `device="auto"` to opt into the measured implicit
@@ -611,7 +681,7 @@ This bounded-storage optimizer is opt-in because its quasi-Newton steps differ
 from `least_squares`; existing defaults and objective minima are unchanged.
 
 The first four use the implicit adjoint (`jac="implicit"`). The published
-`DMerc` showcase deliberately preserves its legacy host-side reporting lane
+`DMerc` showcase deliberately preserves its host-side diagnostic evaluation
 and finite-difference baseline at `max_mode` 2. New campaigns can instead use
 the traceable `mercier_stability_residual` with `jac="implicit"`; see the
 optimization objectives documentation. The self-consistent Redl bootstrap

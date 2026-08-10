@@ -3,7 +3,7 @@ Optimization and differentiability
 
 ``vmex`` turns VMEC into a differentiable building block: converged
 equilibria expose exact gradients with respect to boundary shape, profile,
-and coil parameters, and a simsopt-style least-squares driver uses them to
+and coil parameters, and a weighted least-squares driver uses them to
 run whole stellarator-design campaigns in minutes on a CPU.  This page
 covers the driver and the gradient machinery; the catalog of objective
 functions (quasisymmetry, omnigenity, bootstrap, stability, turbulence, …)
@@ -108,7 +108,12 @@ where its faster warm stages amortize the larger initial compilation.  The
 explicit ``"block_tridiagonal"``, ``"forward_gmres"``, and
 ``"reverse_adjoint"`` methods are advanced numerical controls rather than
 alternative beginner settings.  These timings are benchmark observations,
-not CI thresholds.
+not CI thresholds.  Reproduce individual cold rows with
+``VMEX_COMPILATION_CACHE=disabled python
+benchmarks/optimization_defaults.py --input INPUT --case qi --max-mode 5
+--batch 1``; the complete recorded matrix is
+``benchmarks/optimization_defaults.json`` (the measurement platform is
+recorded inside the artifact).
 
 The same object provides ``fun``/``grad``/``value_and_grad`` for scalar
 optimizers and ``jax_fun``/``jax_value_and_grad``/``jax_residual`` for JAX
@@ -141,6 +146,105 @@ axis:
    )
    final_input.to_indata("input.optimized_final")
    vj.write_wout("wout_optimized_final.nc", final_equilibrium.wout)
+
+Mode ladders and resolution convergence
+---------------------------------------
+
+ESS is a variable scale, not a continuation method.  Releasing all modes at
+once is useful for a fast survey because it pays one JAX compilation.  A mode
+ladder can reach another basin by first solving the low-order shape, then
+carrying that boundary into successively richer spaces.  The explicit pattern
+is deliberately ordinary Python:
+
+.. code-block:: python
+
+   for max_mode in [1, 2, 3, 4, 5]:
+       mpol = max(max_mode + 2, 5)
+       inp = inp.change_resolution(
+           mpol=mpol,
+           ntor=mpol,
+           ntheta=2 * mpol + 6,
+           nzeta=2 * mpol + 4,
+       )
+       problem = opt.VmecProblem.from_tuples(
+           inp, terms, max_mode=max_mode
+       )
+       result = scipy.optimize.least_squares(
+           problem.residual,
+           problem.x_from_input(inp),
+           jac=problem.residual_jac,
+           x_scale=problem.scales,
+           max_nfev=15,
+       )
+       inp = problem.input_from_x(result.x)
+       equilibrium = problem.equilibrium_from_x(result.x)
+       inp.to_indata(f"input.qi_max_mode_{max_mode:03d}")
+
+On the bundled ``input.nfp2_QI_seed`` case, direct ``max_mode=5`` stopped after 47
+evaluations at cost 0.03742.  The ``[1, 2, 3, 4, 5]`` ladder, capped at 15
+evaluations per stage (75 total), reached 0.02582 -- 31% lower.  This is a
+basin result, not a claim that every QS/QI problem needs a ladder.  A stage
+endpoint can be higher than the previous endpoint because changing ``mpol``,
+``ntor``, and JAX shapes changes the discretized problem.  Within each fixed
+stage, accepted least-squares costs remain monotone.
+
+Radial resolution should be treated as a convergence parameter, not a magic
+minimum.  Holding that ladder boundary fixed and resolving it at increasingly
+fine ``NS`` gave:
+
+.. list-table:: Fixed-boundary radial convergence (strict equilibrium solve)
+   :header-rows: 1
+   :widths: 15 25 25
+
+   * - ``NS``
+     - QI total
+     - total least-squares cost
+   * - 15
+     - 0.025795
+     - 0.025394
+   * - 19
+     - 0.026356
+     - 0.025714
+   * - 25
+     - 0.026463
+     - 0.025814
+   * - 35
+     - 0.026265
+     - 0.025776
+   * - 51
+     - 0.026407
+     - 0.025893
+   * - 75
+     - 0.026525
+     - 0.025983
+   * - 101
+     - 0.026479
+     - 0.025977
+
+Thus ``NS=25`` is the measured minimum suitable for inexpensive optimization
+of this smooth, vacuum, ``max_mode <= 5`` case (QI differs by 0.06% from
+``NS=101``); ``NS=35`` is the safer default when boundaries become strongly
+shaped or rejected equilibria appear.  ``NS=15`` is a coarse scouting grid,
+not a final optimization grid.  The ``NS=101`` run does not change the
+boundary variables, but it recomputes the equilibrium and objectives at a
+finer radial discretization, so it is validation/refinement rather than a
+guarantee that a coarse-grid minimum is unchanged.
+
+Likewise, ``mpol=ntor=max_mode+2`` is an efficient optimization resolution,
+not a spectral-convergence certificate.  On the same optimized mode-5
+boundary, raising both solver truncations from 7 to 9 changed the recomputed
+QI total by about 2.1%.  Validate final candidates with at least one larger
+``mpol``/``ntor`` buffer; if the target metric moves materially, polish the
+optimization at that resolution.  Keep the real-space grids above the
+spectral anti-aliasing threshold when doing so.
+
+At ``NS=101`` and ``FTOL=1e-14`` the hot solve converged in 2,656 iterations
+versus 3,046 from the automatic cold-axis path.  Both succeeded; carrying the
+accepted state saved 13% of the iterations.  Resolution and spectral-shape
+changes limit restart reuse, so the larger speedups occur between nearby
+optimization trials of the same shape.  ``verbose=True`` prints the live
+iteration table; the measured 2,656 iterations also shows why
+``NITER_ARRAY=8000`` is a conservative final-run limit here.
 
 The factory accepts ``weight_semantics="cost"`` (the default), for which a
 tuple weight ``w`` contributes ``sqrt(w) * (f - target)`` residual rows and
@@ -191,6 +295,64 @@ optimizer.  The compatibility least-squares driver uses SciPy's concise
 accepted-iteration table for ``verbose=1``; scalar ``minimize`` uses this
 same monitor.
 
+External optimizers and supplied derivatives
+--------------------------------------------
+
+The files ``QI_optimization_scipy.py``, ``QI_optimization_jaxopt.py``, and
+``QI_optimization_optax.py`` in ``examples/optimization`` construct the same
+QI :class:`~vmex.core.problem.VmecProblem`.  They demonstrate SciPy nonlinear
+least squares, BFGS and L-BFGS-B; JAXopt LBFGS and Levenberg--Marquardt; and an
+arbitrary Optax transformation chain.  VMEX contains no method registry or
+hand-written clone of those algorithms.
+
+Opaque host objectives use the same public object with a different derivative
+provider:
+
+.. code-block:: python
+
+   problem = opt.VmecProblem.from_tuples(
+       inp,
+       [(host_objective, target, weight)],
+       derivative_method="finite_difference",  # parallel equilibrium re-solves
+       fd_method="3-point",
+       workers=None,                 # automatic workstation default
+   )
+
+Central probes are independent and run through
+:func:`vmex.core.parallel.map_ensemble`; ``workers=1`` selects a serial
+reference.  Traceable objectives should keep
+``derivative_method="implicit"`` (exact converged-equilibrium derivatives): a
+scalar exact gradient uses one adjoint instead of two equilibrium solves per
+degree of freedom.  Users with complete x-level derivatives construct
+:class:`~vmex.core.problem.FunctionProblem` directly with ``value_and_grad``
+or ``residual_and_jac``.  Thus exact, finite-difference, and supplied
+derivatives all present identical optimizer-facing names.
+
+``benchmarks/optimization_derivatives.py`` records exact/parallel-FD timing,
+work count, and numerical agreement under one input and objective.
+``benchmarks/qi_optimizer_acceptance.py`` reproduces the precise-QI objective
+tuple on the bundled ``input.nfp2_QI_seed``,
+checks finite derivatives at ``max_mode=1`` or 5, and can run every documented
+backend with a fixed iteration budget.  Reports include package versions and
+failure/fallback counters.  SIMSOPT and DESC versions are recorded for
+provenance, but VMEX does not claim a cross-code speed ratio unless equation,
+resolution, variables, objective, tolerances, and warm-cache state match; a
+shorter run of different physics is not a defensible benchmark.
+
+The committed 2026-08-08 measurements (platform recorded inside each
+artifact) are in ``benchmarks/optimization_derivatives.json`` and
+``benchmarks/qi_optimizer_acceptance_mode5.json``.  On the two-variable Solovev
+gate, after both lanes were warmed, the exact Jacobian took 1.52 ms versus
+277.83 ms for four parallel central probes (183x), agreeing to 1.23e-10
+relative error.  More importantly for scaling, the exact scalar-gradient work
+does not grow to 196 equilibrium probes at the 98-variable precise-QI
+``max_mode=5`` point: its gradient was finite in 47.8 s, and one accepted
+least-squares step reduced cost from 1.225319 to 0.928739 in another 40.8 s
+with no failed trial or derivative fallback.  The recorded local SIMSOPT
+1.10.7 development build and DESC 0.17.1 development build solve different
+discretizations/objectives, so no fabricated wall-time ratio is attached to
+their names.
+
 The compatibility drivers
 -------------------------
 
@@ -198,7 +360,7 @@ The compatibility drivers
 ``scipy.optimize.least_squares`` driver over the boundary Fourier degrees
 of freedom (:func:`~vmex.core.optimize.pack_boundary` /
 :func:`~vmex.core.optimize.unpack_boundary`; ``RBC(0,0)`` stays fixed),
-taking simsopt-style ``(callable, target, weight)`` terms:
+taking weighted ``(callable, target, weight)`` terms:
 
 .. code-block:: python
 

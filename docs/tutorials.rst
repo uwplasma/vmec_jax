@@ -285,6 +285,23 @@ reproducible.
 These are the heaviest examples (hundreds to thousands of solves) and are
 exercised in the nightly CI run.
 
+Choose the optimizer
+~~~~~~~~~~~~~~~~~~~~
+
+VMEX exposes the objective and derivatives without owning the optimizer.  The
+following three scripts import one shared QI problem and send it unchanged to
+SciPy, JAXopt, or Optax.  Install the optional JAX backends with
+``pip install -e '.[optimizers]'``.
+
+.. literalinclude:: ../examples/optimization/QI_optimization_scipy.py
+   :language: python
+
+.. literalinclude:: ../examples/optimization/QI_optimization_jaxopt.py
+   :language: python
+
+.. literalinclude:: ../examples/optimization/QI_optimization_optax.py
+   :language: python
+
 Self-consistent bootstrap current
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

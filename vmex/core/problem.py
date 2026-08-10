@@ -230,15 +230,24 @@ class FunctionProblem:
 
     def residual(self, x: Array) -> np.ndarray:
         """Return the residual vector."""
-        if self._residual_and_jac is not None or self._residual_jac is not None:
+        if self._residual_and_jac is not None:
             return self.residual_and_jac(x)[0]
-        if self._residual is None:
-            raise AttributeError("this problem does not provide residuals")
-        return np.asarray(self._residual(self._x(x)), dtype=float).ravel()
+        if self._residual is not None:
+            return np.asarray(self._residual(self._x(x)), dtype=float).ravel()
+        raise AttributeError("this problem does not provide residuals")
 
     def residual_jac(self, x: Array) -> np.ndarray:
         """Return the residual Jacobian."""
-        return self.residual_and_jac(x)[1]
+        if self._residual_and_jac is not None:
+            return self.residual_and_jac(x)[1]
+        if self._residual_jac is not None:
+            jacobian = np.asarray(self._residual_jac(self._x(x)), dtype=float)
+            if jacobian.shape[1:] != (self.x0.size,):
+                raise ValueError(
+                    "residual Jacobian must have one column per decision variable"
+                )
+            return jacobian
+        raise AttributeError("this problem does not provide a residual Jacobian")
 
     def J(self, x: Array) -> float:
         """SIMSOPT-style alias for :meth:`fun`."""

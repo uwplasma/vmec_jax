@@ -136,3 +136,56 @@ def test_parallel_module_exposed_as_vmex_attribute():
     import vmex
 
     assert vmex.parallel is parallel
+
+
+def test_parallel_finite_difference_and_problem_ensemble():
+    """Automatic worker utilities are accurate, ordered, and backend-neutral."""
+    from vmex.core.problem import FunctionProblem
+
+    matrix = np.array([[2.0, -1.0], [0.5, 3.0]])
+    jacobian = parallel.finite_difference_jacobian(
+        lambda x: matrix @ x,
+        np.array([0.3, -0.7]),
+        workers=None,
+    )
+    np.testing.assert_allclose(jacobian, matrix, rtol=1e-10, atol=1e-10)
+    gradient = parallel.finite_difference_gradient(
+        lambda x: 0.5 * x @ matrix.T @ matrix @ x,
+        np.array([0.3, -0.7]),
+        workers=2,
+    )
+    np.testing.assert_allclose(gradient, matrix.T @ matrix @ [0.3, -0.7], rtol=1e-9)
+
+    problems = [
+        FunctionProblem([float(i)], fun=lambda x, i=i: float((x[0] - i) ** 2))
+        for i in range(3)
+    ]
+    evaluations = parallel.evaluate_problems(problems, workers=None, derivatives=False)
+    assert [evaluation.value for evaluation in evaluations] == [0.0, 0.0, 0.0]
+
+    forward = parallel.finite_difference_jacobian(
+        lambda x: matrix @ x,
+        np.array([0.3, -0.7]),
+        method="2-point",
+        rel_step=1e-6,
+        workers=1,
+    )
+    np.testing.assert_allclose(forward, matrix, rtol=1e-9, atol=1e-9)
+    assert parallel.finite_difference_jacobian(
+        lambda x: x, np.array([]), workers=1
+    ).shape == (0, 0)
+
+    with pytest.raises(ValueError, match="one-dimensional"):
+        parallel.finite_difference_jacobian(np.sum, np.ones((2, 2)))
+    with pytest.raises(ValueError, match="method"):
+        parallel.finite_difference_jacobian(np.sum, np.ones(2), method="bad")
+    with pytest.raises(ValueError, match="finite and positive"):
+        parallel.finite_difference_jacobian(np.sum, np.ones(2), rel_step=0.0)
+    with pytest.raises(ValueError, match="output size changed"):
+        parallel.finite_difference_jacobian(
+            lambda x: x[:1] if x[0] > 0.0 else x,
+            np.zeros(2),
+            workers=1,
+        )
+    with pytest.raises(ValueError, match="equal length"):
+        parallel.evaluate_problems(problems, [problems[0].x0])

@@ -67,6 +67,7 @@
     ["tests/test_parallel.py", "equilibrium", "integration", "medium", "cpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_parity_breadth.py", "equilibrium", "oracle", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-n-s"]],
     ["tests/test_performance_docs.py", "infrastructure", "unit", "fast", "cpu", "none", "golden", ["pr-parity-c2", "full-core-n-s"]],
+    ["tests/test_qi_crosscode_benchmark.py", "optimization", "oracle", "fast", "cpu", "golden", "external", ["pr-parity-d", "pr-fast", "full-core-n-s"]],
     ["tests/test_plotting_boozer.py", "diagnostics", "integration", "medium", "cpu", "golden", "external", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_postprocess_currents.py", "diagnostics", "oracle", "medium", "cpu-gpu", "golden", "vmec2000", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_preconditioner.py", "equilibrium", "unit", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
@@ -133,7 +134,8 @@
       "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block",
       "tests/test_optimize.py::test_public_problem_factory_validation",
       "tests/test_optimize_penalty.py",
-      "tests/test_bootstrap.py::test_least_squares_current_dofs_implicit"
+      "tests/test_bootstrap.py::test_least_squares_current_dofs_implicit",
+      "tests/test_parallel.py::test_parallel_finite_difference_and_problem_ensemble"
     ],
     "pr-physics-mirror-spline": [
       "tests/mirror/test_analytic.py",

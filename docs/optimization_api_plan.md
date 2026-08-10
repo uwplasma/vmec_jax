@@ -355,15 +355,15 @@ Documentation examples are smoke-tested so API drift fails CI.
 ## Pull-request sequence
 
 1. **Expose optimizer-agnostic VMEC problem callables.**  Add this plan, the
-   public containers/factory, tuple composition, compatibility adapters, and
-   fast API tests.  Include the status-safe callback because a public
-   optimization problem must reject invalid trial boundaries without emitting
-   a ``pure_callback`` traceback.
+   public containers/factory, tuple composition, compatibility adapters,
+   quiet-by-default JAX logging, and fast API tests.  Include the status-safe
+   callback because a public optimization problem must reject invalid trial
+   boundaries without emitting a ``pure_callback`` traceback.
 2. **Certify implicit derivatives and failure diagnostics.**  Harden QI
    adjoints, expose certified linear-solve budgets, complete the objective
    derivative matrix, and consolidate numerical and diagnostic tests.
-3. **Add backend-neutral monitoring and runtime hygiene.**  Remove noisy cache
-   warnings, separate trials from accepted iterations, and document status.
+3. **Add backend-neutral monitoring and runtime diagnostics.**  Separate trials
+   from accepted iterations, harden derivative fallbacks, and document status.
 4. **Add SciPy, JAXopt, and Optax examples and automatic parallel evaluation.**
    Add examples, optional integration tests, worker policies, precise-QI
    acceptance scripts, and reproducible comparison benchmarks.

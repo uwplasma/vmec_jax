@@ -243,6 +243,29 @@ def test_jax_fallbacks_and_jacobian_shape_validation():
     )
     with pytest.raises(ValueError, match="must have shape"):
         malformed.residual_and_jac(malformed.x0)
+    separate_malformed = FunctionProblem(
+        [1.0, 2.0], residual=lambda x: x, residual_jac=lambda x: np.ones((2, 1))
+    )
+    with pytest.raises(ValueError, match="one column"):
+        separate_malformed.residual_jac(separate_malformed.x0)
+
+
+def test_separate_residual_does_not_eagerly_compute_jacobian():
+    calls = {"residual": 0, "jacobian": 0}
+
+    def residual(x):
+        calls["residual"] += 1
+        return x - 1.0
+
+    def jacobian(x):
+        calls["jacobian"] += 1
+        return np.eye(x.size)
+
+    problem = FunctionProblem([2.0, 3.0], residual=residual, residual_jac=jacobian)
+    np.testing.assert_array_equal(problem.residual(problem.x0), [1.0, 2.0])
+    assert calls == {"residual": 1, "jacobian": 0}
+    np.testing.assert_array_equal(problem.residual_jac(problem.x0), np.eye(2))
+    assert calls == {"residual": 1, "jacobian": 1}
 
 
 def test_problem_rejects_ambiguous_metadata_shapes():
@@ -337,3 +360,129 @@ def test_direct_jaxopt_and_optax_contracts():
         updates, state = transform.update(grad, state, x)
         x = optax.apply_updates(x, updates)
     assert float(problem.jax_fun(x)) < float(problem.jax_fun(problem.x0))
+
+
+def test_vmec_finite_difference_factory_uses_parallel_provider(monkeypatch):
+    """The VMEC factory composes tuples and differentiates opaque host terms."""
+    from pathlib import Path
+
+    from vmex.core import optimize as opt
+    from vmex.core.input import VmecInput
+
+    inp = VmecInput.from_file(
+        Path(__file__).resolve().parents[1] / "examples/data/input.solovev"
+    )
+
+    def fake_solve(trial, **kwargs):
+        del kwargs
+        return SimpleNamespace(value=np.sum(opt.pack_boundary(trial, 1)))
+
+    monkeypatch.setattr(opt, "solve_equilibrium", fake_solve)
+    problem = opt.VmecProblem.from_tuples(
+        inp,
+        [(lambda equilibrium: equilibrium.value, 0.0, 4.0)],
+        max_mode=1,
+        derivative_method="finite_difference",
+        workers=2,
+    )
+    jacobian = problem.residual_jac(problem.x0)
+    np.testing.assert_allclose(jacobian, np.full((1, problem.x0.size), 2.0))
+    np.testing.assert_array_equal(problem.x_from_input(inp), problem.x0)
+    assert problem.equilibrium_from_x(problem.x0).value == np.sum(problem.x0)
+    assert problem.metadata["fd_method"] == "3-point"
+
+
+def test_vmec_finite_difference_scalar_and_validation_paths(monkeypatch):
+    """Opaque scalar losses remain open to any gradient-based optimizer."""
+    from pathlib import Path
+
+    from vmex.core import optimize as opt
+    from vmex.core.input import VmecInput
+
+    inp = VmecInput.from_file(
+        Path(__file__).resolve().parents[1] / "examples/data/input.solovev"
+    )
+
+    def fake_solve(trial, **kwargs):
+        del kwargs
+        return SimpleNamespace(value=float(np.sum(opt.pack_boundary(trial, 1))))
+
+    monkeypatch.setattr(opt, "solve_equilibrium", fake_solve)
+    term = lambda equilibrium: np.atleast_1d(equilibrium.value)  # noqa: E731
+    with pytest.raises(ValueError, match="weight_semantics"):
+        opt.make_problem(
+            inp,
+            objective_terms=[(term, 0.0, 1.0)],
+            derivative_method="finite_difference",
+            weight_semantics="bad",
+        )
+    with pytest.raises(ValueError, match="non-negative"):
+        opt.make_problem(
+            inp,
+            objective_terms=[(term, 0.0, -1.0)],
+            derivative_method="finite_difference",
+        )
+    with pytest.raises(FloatingPointError, match="non-finite objective"):
+        opt.make_problem(
+            inp,
+            loss=lambda equilibrium: np.nan,
+            derivative_method="finite_difference",
+        )
+    with pytest.raises(FloatingPointError, match="empty residual"):
+        opt.make_problem(
+            inp,
+            objective_terms=[(lambda equilibrium: np.array([]), 0.0, 1.0)],
+            derivative_method="finite_difference",
+        )
+
+    problem = opt.make_problem(
+        inp,
+        loss=lambda equilibrium: equilibrium.value**2,
+        derivative_method="finite_difference",
+        workers=1,
+        use_ess=False,
+    )
+    value, gradient = problem.value_and_grad(problem.x0)
+    assert np.isfinite(value) and np.all(np.isfinite(gradient))
+
+
+def test_vmec_finite_difference_failed_probe_penalties(monkeypatch):
+    """Failed opaque probes become finite penalties for external optimizers."""
+    from pathlib import Path
+
+    from vmex.core import optimize as opt
+    from vmex.core.input import VmecInput
+
+    inp = VmecInput.from_file(
+        Path(__file__).resolve().parents[1] / "examples/data/input.solovev"
+    )
+    seed = opt.pack_boundary(inp, 1)
+
+    def flaky_solve(trial, **kwargs):
+        del kwargs
+        x = opt.pack_boundary(trial, 1)
+        if not np.array_equal(x, seed):
+            raise RuntimeError("synthetic VMEC failure")
+        return SimpleNamespace(value=float(np.sum(x)))
+
+    monkeypatch.setattr(opt, "solve_equilibrium", flaky_solve)
+    term = lambda equilibrium: np.atleast_1d(equilibrium.value)  # noqa: E731
+    residual_problem = opt.make_problem(
+        inp,
+        objective_terms=[(term, 0.0, 1.0)],
+        derivative_method="finite_difference",
+        workers=1,
+    )
+    trial = seed.copy()
+    trial[0] += 0.1
+    assert np.all(np.isfinite(residual_problem.residual(trial)))
+    assert residual_problem.metadata["holder"]["failed_trials"] == 1
+
+    scalar_problem = opt.make_problem(
+        inp,
+        loss=lambda equilibrium: equilibrium.value,
+        derivative_method="finite_difference",
+        workers=1,
+    )
+    assert np.isfinite(scalar_problem.fun(trial))
+    assert scalar_problem.metadata["holder"]["failed_trials"] == 1
