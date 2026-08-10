@@ -68,9 +68,15 @@ plotted directly:
    vmex --plot --booz input.circular_tokamak  # solve + both plot sets
 
 This writes a set of figures next to the file (or into ``--outdir``): a
-summary panel, flux-surface cross-sections at several toroidal angles,
-``|B|`` on the boundary, radial profiles (pressure, iota, current), and a 3D
-boundary rendering.
+publication-style summary (rotational transform, pressure, the parallel
+bootstrap current :math:`\langle \mathbf{J}\cdot\mathbf{B} \rangle`, Mercier
+``DMerc`` with the Glasser resistive-interchange ``D_R``, the magnetic-well
+profile, a second-adiabatic-invariant :math:`J(\alpha, s)` map at fixed
+pitch, and non-filled ``|B|`` contours in Boozer coordinates at mid radius
+and on the LCFS — the Boozer transform runs in-process, no ``--booz``
+needed), flux-surface cross-sections at several toroidal angles, ``|B|`` on
+the boundary, radial profiles (pressure, iota, current), and a 3D boundary
+rendering.
 
 Boozer coordinates
 ------------------
