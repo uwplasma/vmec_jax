@@ -17,7 +17,7 @@ paper's QH SFINCS points are a PDF-only figure in the archive, so the SFINCS
 overlay is shown for QA only.)  Needs the Zenodo dataset on disk (default path
 as in tests/test_bootstrap.py; override with VMEX_ZENODO_2205_02914); the
 sibling ``QA_bootstrap_selfconsistent.py`` and this script assemble the
-combined two-panel ``readme_bootstrap.png`` once both have run.
+combined two-panel ``bootstrap_comparison.png`` once both have run.
 """
 
 import dataclasses
@@ -154,5 +154,5 @@ if all(p.exists() for p in paths.values()):
     # SFINCS entry that has no matching markers.
     axes[0].legend(frameon=False, fontsize=7.5, loc="upper center")
     axes[1].legend(frameon=False, fontsize=7.5, loc="upper center")
-    fig.tight_layout(); fig.savefig("readme_bootstrap.png")
-    print("wrote readme_bootstrap.png (both configurations available)")
+    fig.tight_layout(); fig.savefig("bootstrap_comparison.png")
+    print("wrote bootstrap_comparison.png (both configurations available)")

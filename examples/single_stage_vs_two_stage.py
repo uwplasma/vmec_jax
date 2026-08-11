@@ -636,7 +636,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if not FBD.have_virtual_casing_jax():
-        raise SystemExit("needs virtual_casing_jax (pip install -e /path/to/virtual_casing_jax)")
+        raise SystemExit('needs virtual_casing_jax (pip install "vmex[freeb]")')
     try:
         import essos.coils  # noqa: F401
     except ImportError as exc:  # pragma: no cover - optional heavy dependency

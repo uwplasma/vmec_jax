@@ -38,12 +38,9 @@ All runnable examples live under this single `examples/` tree.
     adjoint + virtual casing threaded through one `jax.value_and_grad`).
   - `single_stage_essos_coils_opt.py` — single-stage with ESSOS coils (vacuum
     and finite-beta cases); vmex stays coil-agnostic, coils enter as a
-    differentiable `xyz -> B` callable. Source of `readme_single_stage.png`.
-- `optimization/`: precise QA/QH/QP/QI from a circular torus — one file each,
-  plus `QA_optimization_ess.py` / `QI_optimization_ess.py`: the SINGLE-call
-  variants — all large-max_mode harmonics at once, Exponential Spectral
-  Scaling (`use_ess`) replacing the continuation ladder,
-  plus `QA_bootstrap_selfconsistent.py` / `QH_bootstrap_selfconsistent.py`:
+    differentiable `xyz -> B` callable.
+- `optimization/`: QA/QH/QP/QI from a circular torus, plus
+  `QA_bootstrap_selfconsistent.py` / `QH_bootstrap_selfconsistent.py` for
   self-consistent Redl bootstrap current reproducing arXiv:2205.02914,
   simsopt-style (`(function, target, weight)` terms + one least-squares call
   per `max_mode` continuation stage, implicit adjoint gradients).  All read

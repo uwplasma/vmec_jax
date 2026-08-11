@@ -24,7 +24,6 @@ from vmex.core.qi import ConstructedQIResidual
 
 
 DATA = Path(__file__).resolve().parents[1] / "data" / "input.nfp2_QI_seed"
-OUT_DIR = Path("output_QI_optimization")
 SURFACES = np.linspace(0.1, 1.0, 6)
 ASPECT_TARGET = 5.0
 IOTA_FLOOR = 0.33
@@ -141,8 +140,7 @@ for stage, (max_mode, max_nfev) in enumerate(zip(QI_MODES, QI_BUDGETS), 1):
     inp = problem.input_from_x(result.x)
     equilibrium = problem.equilibrium_from_x(result.x)
     report(f"QI mode {max_mode}", equilibrium)
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    inp.to_indata(OUT_DIR / f"input.QI_max_mode_{max_mode:03d}_stage_{stage:02d}")
+    inp.to_indata(f"input.QI_max_mode_{max_mode:03d}_stage_{stage:02d}")
 
 print(f"\n===== Full constructed-QI polish, max_mode = {QI_MODES[-1]} =====")
 problem = opt.VmecProblem.from_tuples(
@@ -180,12 +178,9 @@ print(
 )
 print(f"\nQI total: seed {qi_seed:.3e} -> final {qi_final:.3e}")
 
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-input_path = final_input.to_indata(OUT_DIR / "input.QI_optimized")
-wout_path = vj.write_wout(
-    OUT_DIR / "wout_QI_optimized.nc", final_equilibrium.wout
-)
+input_path = final_input.to_indata("input.QI_optimized")
+wout_path = vj.write_wout("wout_QI_optimized.nc", final_equilibrium.wout)
 print(f"wrote {input_path}")
 print(f"wrote {wout_path}")
-for path in vj.plot_wout(wout_path, OUT_DIR).values():
+for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")

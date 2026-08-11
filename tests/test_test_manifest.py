@@ -89,9 +89,9 @@ def test_workflow_selects_manifest_lanes() -> None:
         assert "tools/test_manifest.py select" in workflows[name]
     assert "name: PR gate" in workflows["ci.yml"]
     nightly = workflows["nightly.yml"]
-    assert nightly.count("max-parallel:") == 3
-    assert 'test "${#files[@]}" -eq 39' in nightly
-    assert 'coverage.full-${{ matrix.shard }}' in nightly
-    assert "--cov=vmex --cov-report=" in nightly
+    assert "campaign: [opt-qi, opt-qa, opt-qh, opt-qp]" in nightly
+    assert "tools/test_manifest.py select optional" in nightly
+    assert "--cov=vmex" not in nightly
+    assert "timeout-minutes: 45" in nightly
     for stale in ("A1_FILES=", "C2_FILES=", "core-a-c)"):
         assert stale not in "".join(workflows.values())

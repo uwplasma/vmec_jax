@@ -11,6 +11,7 @@ traceback.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -49,13 +50,36 @@ def test_status_callback_builds_safe_mask_before_seed_cache(monkeypatch):
             "_host_solve_and_mask_impl",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(_boom()),
         )
-        state, mask, status = im._host_solve_and_mask_status(cfg, params_np)
+        state, mask, status, fsq, fsq_ratio = im._host_solve_and_mask_status(cfg, params_np)
         assert int(status) == 1
+        assert np.isinf(fsq) and np.isinf(fsq_ratio)
         assert all(np.all(value == 0.0) for value in jax.tree.leaves(mask))
         assert jax.tree.structure(state) == jax.tree.structure(mask)
     finally:
         im._MASK_CACHE.clear()
         im._MASK_CACHE.update(saved)
+
+
+def test_status_callback_exposes_under_converged_fsq(monkeypatch):
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    cfg = im.make_config(inp, ftol=1.0e-14, max_iterations=1, max_fsq_ratio=1.0e-12)
+    params = im.params_from_input(inp)
+    runtime = im.runtime_from_params(params, cfg)
+    state = im._initial_state(runtime.setup)
+    mask = jax.tree.map(jax.numpy.zeros_like, state)
+    result = SimpleNamespace(converged=False, fsqr=2.0e-10, fsqz=3.0e-10, fsql=0.0)
+
+    def under_converged(config, params_np):
+        im._LAST_SOLVE[config] = (im._params_key(params_np), result)
+        return jax.tree.map(np.asarray, state), jax.tree.map(np.asarray, mask)
+
+    monkeypatch.setattr(im, "_host_solve_and_mask_impl", under_converged)
+    _, _, status, fsq, fsq_ratio = im._host_solve_and_mask_status(
+        cfg, jax.tree.map(np.asarray, params)
+    )
+    assert int(status) == 2
+    assert np.isfinite(fsq) and fsq > 0.0
+    np.testing.assert_allclose(fsq_ratio, fsq / cfg.ftol)
 
 
 def test_fd_lane_penalty_path(monkeypatch, capsys):
@@ -189,22 +213,3 @@ def test_implicit_lane_status_penalty_and_diagnostic_resolve(monkeypatch, capsys
     assert np.isfinite(res.cost)
     assert res.equilibrium is not None  # cold-solve fallback delivered it
     assert res.equilibrium.result.converged
-
-
-def test_recycled_jacobian_lane_scan_shapes() -> None:
-    """The drift-gated recycled Jacobian lane (recycle=True) must run.
-
-    Exercises optimize.jacobian_rows_recycled's lax.scan carry — the path that
-    threads and drift-gates the GCROT pair across dof chunks. A shape bug there
-    (gating against the full stacked recs leaf instead of a single lane) makes
-    lax.scan reject the carry-type mismatch; this pins that the lane completes
-    on a real (small) equilibrium and returns a usable result. The recycled
-    lane is otherwise opt-in and was previously uncovered in CI.
-    """
-    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
-    res = opt.least_squares(
-        OBJECTIVE, inp, max_mode=1, jac="implicit", recycle=True,
-        max_nfev=3, verbose=0,
-    )
-    assert isinstance(res.input, VmecInput)
-    assert np.all(np.isfinite(np.asarray(res.x)))

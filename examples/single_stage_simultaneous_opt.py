@@ -69,7 +69,7 @@ BOUNDARY_MODES = [(1, 0), (2, 0)]               # (m, n)
 
 def main() -> None:
     if not FBD.have_virtual_casing_jax():
-        raise SystemExit("needs virtual_casing_jax (pip install -e /path/to/virtual_casing_jax)")
+        raise SystemExit('needs virtual_casing_jax (pip install "vmex[freeb]")')
     for p in (INPUT, MGRID):
         if not p.exists():
             raise SystemExit(f"missing {p.name}; run tools/fetch_assets.py")

@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Iterable, Sequence, TypeVar
 
 __all__ = [
+    "available_cpus",
     "default_workers",
     "evaluate_problems",
     "finite_difference_gradient",
@@ -44,19 +45,41 @@ _T = TypeVar("_T")
 _R = TypeVar("_R")
 
 
+def available_cpus() -> int:
+    """Return CPUs available to this process, respecting scheduler limits."""
+    counts: list[int] = []
+    process_count = getattr(os, "process_cpu_count", None)
+    if process_count is not None:
+        count = process_count()
+        if count:
+            counts.append(int(count))
+    affinity = getattr(os, "sched_getaffinity", None)
+    if affinity is not None:
+        try:
+            counts.append(len(affinity(0)))
+        except OSError:
+            pass
+    for name in ("SLURM_CPUS_PER_TASK", "PBS_NP", "NSLOTS", "LSB_DJOB_NUMPROC"):
+        try:
+            count = int(os.environ.get(name, ""))
+        except ValueError:
+            continue
+        if count > 0:
+            counts.append(count)
+    counts.append(int(os.cpu_count() or 1))
+    return max(min(counts), 1)
+
+
 def default_workers(n_items: int, workers: int | None = None) -> int:
     """Resolve the worker count for an ``n_items`` ensemble.
 
-    ``None`` (default) picks ``min(n_items, os.cpu_count())`` — enough threads
-    to cover the ensemble without oversubscribing the cores that each solve's
-    XLA threads already use.  An explicit ``workers`` is honoured but clamped
-    to ``[1, n_items]`` (more threads than items cannot help, and 0/negative is
-    meaningless).
+    ``None`` uses the CPUs available to this process, including container and
+    scheduler affinity limits.  An explicit value is clamped to
+    ``[1, n_items]``.
     """
     n_items = max(int(n_items), 1)
     if workers is None:
-        cpu = os.cpu_count() or 1
-        return max(1, min(n_items, cpu))
+        return min(n_items, available_cpus())
     return max(1, min(int(workers), n_items))
 
 

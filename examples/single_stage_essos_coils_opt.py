@@ -248,7 +248,7 @@ def run_case(name: str, pres_scale: float, coil_field, base0: np.ndarray, out_di
 
 def main() -> None:
     if not FBD.have_virtual_casing_jax():
-        raise SystemExit("needs virtual_casing_jax (pip install -e /path/to/virtual_casing_jax)")
+        raise SystemExit('needs virtual_casing_jax (pip install "vmex[freeb]")')
     try:
         from essos.coils import Coils
     except ImportError as exc:  # pragma: no cover - optional heavy dependency

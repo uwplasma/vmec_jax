@@ -69,7 +69,6 @@
     ["tests/test_parity_breadth.py", "equilibrium", "oracle", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-n-s"]],
     ["tests/test_performance_docs.py", "infrastructure", "unit", "fast", "cpu", "none", "golden", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_plot_summary.py", "diagnostics", "integration", "medium", "cpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
-    ["tests/test_qi_crosscode_benchmark.py", "optimization", "oracle", "fast", "cpu", "golden", "external", ["pr-parity-d", "pr-fast", "full-core-n-s"]],
     ["tests/test_plotting_boozer.py", "diagnostics", "integration", "medium", "cpu", "golden", "external", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_postprocess_currents.py", "diagnostics", "oracle", "medium", "cpu-gpu", "golden", "vmec2000", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_preconditioner.py", "equilibrium", "unit", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
@@ -81,7 +80,6 @@
     ["tests/test_qi_residuals.py", "diagnostics", "ad", "slow", "cpu-gpu", "none", "fd", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_qi_free_boundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1", "full-core-n-s"]],
     ["tests/test_qi_sheet_gate.py", "free-boundary", "campaign", "campaign", "cpu-gpu", "generated", "vmec2000", ["pr-parity-a1"]],
-    ["tests/test_recycle_drift.py", "optimization", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_restart.py", "equilibrium", "integration", "medium", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-n-s"]],
     ["tests/test_scaling.py", "equilibrium", "oracle", "slow", "cpu-gpu", "reference-nc", "analytic", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_setup.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
@@ -207,8 +205,9 @@
     "full-qi-gate-ladder-fft": ["tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_fft_matches_dense"],
     "full-qi-gate-ladder-055": ["tests/test_qi_sheet_gate.py::test_qi_sheet_gate_ladder_delt_055_regression"],
     "full-qi-gate-fixed": ["tests/test_qi_sheet_gate.py::test_qi_fixed_238_ladder_converges"],
-    "full-opt-qa": ["tests/test_optimization_convergence.py::test_qa_reaches_precise"],
-    "full-opt-qh": ["tests/test_optimization_convergence.py::test_qh_implicit_converges"],
-    "full-opt-qp": ["tests/test_optimization_convergence.py::test_qp_implicit_descends"]
+    "full-opt-qi": ["tests/test_optimization_convergence.py::test_qi_implicit_descends"],
+    "full-opt-qa": ["tests/test_optimization_convergence.py::test_qs_implicit_descends[qa]"],
+    "full-opt-qh": ["tests/test_optimization_convergence.py::test_qs_implicit_descends[qh]"],
+    "full-opt-qp": ["tests/test_optimization_convergence.py::test_qs_implicit_descends[qp]"]
   }
 }

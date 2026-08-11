@@ -47,7 +47,7 @@ NPHI = NTHETA = 20 if CI else 32
 
 def main() -> None:
     if not FBD.have_virtual_casing_jax():
-        raise SystemExit("needs virtual_casing_jax (pip install -e /path/to/virtual_casing_jax)")
+        raise SystemExit('needs virtual_casing_jax (pip install "vmex[freeb]")')
     for path in (WOUT, MGRID):
         if not path.exists():
             raise SystemExit(f"missing {path.name}; run tools/fetch_assets.py")

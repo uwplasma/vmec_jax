@@ -21,6 +21,7 @@ pytest.importorskip("netCDF4")
 jax.config.update("jax_enable_x64", True)
 
 from vmex.core.input import VmecInput  # noqa: E402
+from vmex.core.problem import Evaluation, FunctionProblem  # noqa: E402
 from vmex.core.wout import read_wout  # noqa: E402
 from vmex.core import optimize as opt  # noqa: E402
 
@@ -192,11 +193,19 @@ def test_solve_equilibrium_forwards_verbose(monkeypatch, solovev_eq):
         initial_state=solovev_eq.state,
         raise_on_max_iterations=True,
         verbose=True,
+        forward_ftol=2.0e-11,
+        forward_max_iterations=4321,
     )
     assert solved.state is solovev_eq.state
     assert captured["initial_state"] is solovev_eq.state
     assert captured["raise_on_max_iterations"] is True
     assert captured["verbose"] is True
+    assert solved.inp.ftol_array[-1] == 2.0e-11
+    assert solved.inp.niter_array[-1] == 4321
+    with pytest.raises(ValueError, match="cannot both"):
+        opt.solve_equilibrium(
+            solovev_eq.inp, forward_ftol=1.0e-10, ftol_array=[1.0e-8]
+        )
 
 
 def test_scalar_targets_vs_golden(solovev_eq):
@@ -648,6 +657,14 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     np.testing.assert_allclose(reverse.jac, ref.jac, rtol=1e-6, atol=1e-8)
     np.testing.assert_allclose(problem.grad(problem.x0),
                                weighted_jac.T @ residual, rtol=1e-6)
+    jax_value, jax_gradient = problem.jax_value_and_grad(jax.numpy.asarray(problem.x0))
+    np.testing.assert_allclose(jax_value, 0.5 * residual @ residual, rtol=1e-10)
+    np.testing.assert_allclose(jax_gradient, weighted_jac.T @ residual, rtol=1e-6)
+    graph_value, graph_gradient = jax.value_and_grad(problem.jax_fun)(
+        jax.numpy.asarray(problem.x0)
+    )
+    np.testing.assert_allclose(graph_value, jax_value, rtol=1e-12)
+    np.testing.assert_allclose(graph_gradient, jax_gradient, rtol=1e-12)
     assert np.all(np.isfinite(np.asarray(problem.jax_residual_jac(problem.x0))))
     assert problem.input_from_x(problem.x0) == inp
     np.testing.assert_array_equal(problem.x_from_input(inp), problem.x0)
@@ -719,6 +736,16 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     problem._rj_cache = None
     np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
     assert problem.metadata["holder"]["failed_trials"] >= 1
+
+    # A scalar evaluation at a new point may not pair that point's value with
+    # the stale Jacobian retained for least-squares compatibility.
+    trial = problem.x0.copy()
+    trial[0] += 1.0e-5
+    problem._vg_cache = None
+    failed_value, failed_gradient = problem.value_and_grad(trial)
+    assert failed_value >= 1.0
+    assert np.all(np.isfinite(failed_gradient))
+    assert problem.metadata["holder"]["last_jac_key"] != FunctionProblem._key(trial)
 
     certified = problem.metadata["holder"]["last_jac"]
     problem.metadata["holder"]["last_jac"] = None
@@ -809,8 +836,6 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
 
     with pytest.raises(AttributeError, match="residuals"):
         scalar.residual(scalar.x0)
-    from vmex.core.problem import Evaluation, FunctionProblem
-
     config = problem.metadata["config"]
     implicit_module._LAST_STATUS_ERROR[config] = ValueError("rejected boundary")
 
@@ -845,11 +870,18 @@ def test_public_problem_factory_validation():
         objective_terms=term,
         derivative_method="finite_difference",
         workers=1,
+        forward_ftol=2.0e-10,
+        forward_max_iterations=765,
     )
     assert finite_difference.metadata["derivative_method"] == "finite_difference"
     assert "equilibrium re-solves" in finite_difference.metadata[
         "derivative_description"
     ]
+    assert finite_difference.metadata["forward_ftol"] == 2.0e-10
+    assert finite_difference.metadata["forward_max_iterations"] == 765
+    controlled = finite_difference.input_from_x(finite_difference.x0)
+    assert controlled.ftol_array[-1] == 2.0e-10
+    assert controlled.niter_array[-1] == 765
     with pytest.raises(ValueError, match="non-negative"):
         opt.make_problem(
             inp, objective_terms=[(opt.aspect_ratio, 4.0, -1.0)], max_mode=1
@@ -867,6 +899,12 @@ def test_public_problem_factory_validation():
         )
     with pytest.raises(ValueError, match="jacobian_batch_size"):
         opt.make_problem(inp, objective_terms=term, jacobian_batch_size=0)
+    with pytest.raises(ValueError, match="max_fsq_ratio"):
+        opt.make_problem(inp, objective_terms=term, max_fsq_ratio=0.0)
+    with pytest.raises(ValueError, match="forward_ftol"):
+        opt.make_problem(inp, objective_terms=term, forward_ftol=0.0)
+    with pytest.raises(ValueError, match="forward_max_iterations"):
+        opt.make_problem(inp, objective_terms=term, forward_max_iterations=0)
     with pytest.raises(FloatingPointError, match="initial point"):
         opt.make_problem(
             inp,

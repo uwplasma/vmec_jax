@@ -18,7 +18,7 @@ f_boot = 2.0e-06, I_p = -2.773 MA vs the published CURTOR = -2.721 MA (1.9%),
 [0.1, 0.9]).  Needs the Zenodo dataset on disk (default path as in
 tests/test_bootstrap.py; override with VMEX_ZENODO_2205_02914); run the
 sibling ``QH_bootstrap_selfconsistent.py`` too — whichever finishes second
-also assembles the combined two-panel ``readme_bootstrap.png``.
+also assembles the combined two-panel ``bootstrap_comparison.png``.
 """
 
 import dataclasses
@@ -163,5 +163,5 @@ if all(p.exists() for p in paths.values()):
     # SFINCS entry that has no matching markers.
     axes[0].legend(frameon=False, fontsize=7.5, loc="upper center")
     axes[1].legend(frameon=False, fontsize=7.5, loc="upper center")
-    fig.tight_layout(); fig.savefig("readme_bootstrap.png")
-    print("wrote readme_bootstrap.png (both configurations available)")
+    fig.tight_layout(); fig.savefig("bootstrap_comparison.png")
+    print("wrote bootstrap_comparison.png (both configurations available)")
