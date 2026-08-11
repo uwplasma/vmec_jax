@@ -289,6 +289,23 @@ def make_synth_free_deck(ns: int, dest_dir: Path, niter: int) -> Path:
 _CHILD_ENV: dict | None = None   #: orchestrator-set extra env (XLA_FLAGS)
 
 
+def _git_commit() -> str | None:
+    """Provenance: the measured checkout's commit (+ ``-dirty`` marker)."""
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "--short=9", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip() or None
+        if head and subprocess.run(
+            ["git", "-C", str(REPO), "diff", "--quiet", "HEAD"],
+            capture_output=True, timeout=10,
+        ).returncode:
+            head += "-dirty"
+        return head
+    except Exception:
+        return None
+
+
 def run_cell(device: str, worker_args: list[str], timeout: int,
              cwd: Path | None = None) -> dict:
     cmd = [sys.executable, str(Path(__file__).resolve()),
@@ -365,6 +382,7 @@ def main() -> None:
         results = {"matrix": {}, "tridiag": {}}
     results["meta"] = {"host": os.uname().nodename,
                        "date": time.strftime("%Y-%m-%d %H:%M"),
+                       "commit": _git_commit(),
                        "synth_niter": SYNTH_NITER,
                        "xla_flags": args.xla_flags or os.environ.get("XLA_FLAGS"),
                        "office": bool(args.office)}
