@@ -100,3 +100,14 @@ def test_benchmark_artifacts_disclose_redacted_provenance() -> None:
         encoded = json.dumps(provenance)
         assert "/Users/" not in encoded
         assert "/home/" not in encoded
+
+
+def test_committed_reports_do_not_expose_personal_paths() -> None:
+    """Release-facing text must remain portable between contributors."""
+    text_suffixes = {".json", ".md", ".py", ".rst", ".toml"}
+    for directory in ("benchmarks", "docs", "examples"):
+        for path in (ROOT / directory).rglob("*"):
+            if path.is_file() and path.suffix in text_suffixes and "_build" not in path.parts:
+                text = path.read_text(errors="replace")
+                assert "/Users/" not in text, path
+                assert "MacBook-Pro.local" not in text, path

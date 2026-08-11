@@ -15,8 +15,8 @@ benchmark.  Achieved 2026-07-12 (full mode: deck mpol=16/ntor=12,
 ns 13->25->51, ~2 min on CPU): 7 Picard iterations to the paper's mismatch
 f_boot = 2.0e-06, I_p = -2.773 MA vs the published CURTOR = -2.721 MA (1.9%),
 <J.B> vs the published profile 1.7% RMS, Redl vs SFINCS 3.4% RMS (s in
-[0.1, 0.9]).  Needs the Zenodo dataset on disk (default path as in
-tests/test_bootstrap.py; override with VMEX_ZENODO_2205_02914); run the
+[0.1, 0.9]).  Needs the Zenodo dataset on disk (set
+VMEX_ZENODO_2205_02914 to its root); run the
 sibling ``QH_bootstrap_selfconsistent.py`` too — whichever finishes second
 also assembles the combined two-panel ``bootstrap_comparison.png``.
 """
@@ -31,10 +31,10 @@ import vmex as vj
 from vmex.core import bootstrap as bs
 
 # --------------------------- parameters ------------------------------------
-ZENODO = Path(os.environ.get(
-    "VMEX_ZENODO_2205_02914",
-    "/Users/rogerio/local/"
-    "20220708-01-zenodo_for_QS_optimization_with_self_consistent_bootstrap_current"))
+ZENODO_PATH = os.environ.get("VMEX_ZENODO_2205_02914")
+if not ZENODO_PATH:
+    raise SystemExit("set VMEX_ZENODO_2205_02914 to the extracted Zenodo dataset")
+ZENODO = Path(ZENODO_PATH)
 CONFIG_DIR = ZENODO / "configurations" / "QA_aspect6_beta2.5"
 DECK = CONFIG_DIR / "input.QA_beta0p025_iota0p42_dreopt_HIGHERRES_2022-04-15"
 WOUT_PUB = CONFIG_DIR / "wout_QA_beta0p025_iota0p42_dreopt_HIGHERRES_2022-04-15.nc"

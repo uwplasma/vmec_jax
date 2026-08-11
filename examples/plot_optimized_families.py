@@ -11,7 +11,6 @@ four equally spaced toroidal cuts over one field period, the 3-D boundary, and
 ``|B|`` on the LCFS in Boozer coordinates.
 """
 
-import argparse
 from pathlib import Path
 import tempfile
 
@@ -43,6 +42,9 @@ QI_CASES = (
 )
 SURFACES = np.linspace(0.1, 1.0, 8)
 PLOT_DPI = 220
+QS_INPUT_DIR = Path.cwd()
+OUT_DIR = Path.cwd()
+PLOT_ONLY = "all"  # "all", "qs", or "qi"
 
 
 def _boundary(inp, theta, phi):
@@ -135,18 +137,11 @@ def _draw(cases, output, *, qi=False):
     plt.close(figure); print(f"wrote {output}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--qs-dir", type=Path, default=Path.cwd(), help="directory containing input.QA/QH/QP_optimized")
-    parser.add_argument("--outdir", type=Path, default=Path.cwd())
-    parser.add_argument("--only", choices=("all", "qs", "qi"), default="all")
-    args = parser.parse_args(); args.outdir.mkdir(parents=True, exist_ok=True)
-    if args.only in ("all", "qs"):
-        cases = [(_find_qs_input(args.qs_dir, tag), title, m, n) for tag, title, m, n in QS_CASES]
-        _draw(cases, args.outdir / "readme_optimization.png")
-    if args.only in ("all", "qi"):
-        _draw(QI_CASES, args.outdir / "readme_qi.png", qi=True)
-
-
-if __name__ == "__main__":
-    main()
+if PLOT_ONLY not in ("all", "qs", "qi"):
+    raise ValueError("PLOT_ONLY must be 'all', 'qs', or 'qi'")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+if PLOT_ONLY in ("all", "qs"):
+    cases = [(_find_qs_input(QS_INPUT_DIR, tag), title, m, n) for tag, title, m, n in QS_CASES]
+    _draw(cases, OUT_DIR / "readme_optimization.png")
+if PLOT_ONLY in ("all", "qi"):
+    _draw(QI_CASES, OUT_DIR / "readme_qi.png", qi=True)

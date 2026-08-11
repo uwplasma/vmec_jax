@@ -14,8 +14,8 @@ Achieved 2026-07-12 (full mode, deck mpol=16/ntor=12, ns 13->25->51): 4 Picard
 iterations to f_boot = 7.5e-06, I_p = -1.211 MA vs the published
 CURTOR = -1.208 MA (0.3%), <J.B> vs the published profile 0.93% RMS.  (The
 paper's QH SFINCS points are a PDF-only figure in the archive, so the SFINCS
-overlay is shown for QA only.)  Needs the Zenodo dataset on disk (default path
-as in tests/test_bootstrap.py; override with VMEX_ZENODO_2205_02914); the
+overlay is shown for QA only.)  Needs the Zenodo dataset on disk (set
+VMEX_ZENODO_2205_02914 to its root); the
 sibling ``QA_bootstrap_selfconsistent.py`` and this script assemble the
 combined two-panel ``bootstrap_comparison.png`` once both have run.
 """
@@ -30,10 +30,10 @@ import vmex as vj
 from vmex.core import bootstrap as bs
 
 # --------------------------- parameters ------------------------------------
-ZENODO = Path(os.environ.get(
-    "VMEX_ZENODO_2205_02914",
-    "/Users/rogerio/local/"
-    "20220708-01-zenodo_for_QS_optimization_with_self_consistent_bootstrap_current"))
+ZENODO_PATH = os.environ.get("VMEX_ZENODO_2205_02914")
+if not ZENODO_PATH:
+    raise SystemExit("set VMEX_ZENODO_2205_02914 to the extracted Zenodo dataset")
+ZENODO = Path(ZENODO_PATH)
 CONFIG_DIR = ZENODO / "configurations" / "QH_aspect6.5_beta2.5"
 _STEM = "20220218-01-021_QH_A6.5_n0_2.2_T0_10_highResVmecForBestFrom020"
 DECK = CONFIG_DIR / f"input.{_STEM}"

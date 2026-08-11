@@ -23,6 +23,7 @@ import os
 import platform
 import re
 import resource
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,7 +46,8 @@ from vmex.core.multigrid import solve_free_boundary_multigrid
 VMEX_MODULE = assert_repo_vmex(vmex.__file__, REPO)
 DEFAULT_DECK = REPO / "examples" / "data" / "input.cth_like_free_bdy"
 DEFAULT_MGRID = REPO / "examples" / "data" / "mgrid_cth_like.nc"
-DEFAULT_XVMEC = Path("/Users/rogerio/local/STELLOPT/VMEC2000/Release/xvmec2000")
+DEFAULT_XVMEC = Path(os.environ.get(
+    "VMEX_XVMEC2000", shutil.which("xvmec2000") or "xvmec2000"))
 
 
 def _numbers(value: str, cast):

@@ -16,6 +16,7 @@ and pasted to 8-9 significant digits, bounding fsa_* comparisons at ~1e-7.
 from __future__ import annotations
 
 import dataclasses
+import os
 from pathlib import Path
 
 import netCDF4
@@ -36,8 +37,8 @@ from vmex.core.input import VmecInput
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
-ZENODO = Path("/Users/rogerio/local/"
-              "20220708-01-zenodo_for_QS_optimization_with_self_consistent_bootstrap_current")
+ZENODO = Path(os.environ.get(
+    "VMEX_ZENODO_2205_02914", "__external_zenodo_dataset_not_configured__"))
 BENCH = ZENODO / "calculations" / "20211226-01-sfincs_for_precise_QS_for_Redl_benchmark"
 needs_zenodo = pytest.mark.skipif(not BENCH.is_dir(),
                                   reason="local Zenodo bootstrap dataset unavailable")

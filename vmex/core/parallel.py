@@ -46,7 +46,7 @@ _R = TypeVar("_R")
 
 
 def available_cpus() -> int:
-    """Return CPUs available to this process, respecting scheduler limits."""
+    """Return the number of CPUs available, respecting scheduler limits."""
     counts: list[int] = []
     process_count = getattr(os, "process_cpu_count", None)
     if process_count is not None:
