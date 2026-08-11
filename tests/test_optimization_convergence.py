@@ -45,7 +45,8 @@ def _run(problem):
     evaluation = problem.evaluate(result.x)
     assert evaluation.success
     assert evaluation.diagnostics["derivative_certified"]
-    assert evaluation.diagnostics["derivative_fallbacks"] <= result.njev
+    # evaluate() may certify one final Jacobian beyond SciPy's recorded calls.
+    assert evaluation.diagnostics["derivative_fallbacks"] <= result.njev + 1
     return problem.equilibrium_from_x(result.x)
 
 
