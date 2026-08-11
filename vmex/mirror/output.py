@@ -715,7 +715,7 @@ def plot_axisymmetric_beta_scan_summary(
     outdir: str | Path,
     *,
     display: tuple[int, ...],
-    name: str = "mirror_free_boundary_beta50_summary",
+    name: str = "mirror_free_boundary_beta_scan",
     strong_force_gate: float | None = None,
 ) -> Path:
     """Render one tight beta-scan composite: 3D states plus scan diagnostics.
@@ -769,7 +769,11 @@ def plot_axisymmetric_beta_scan_summary(
 
     bottom = outer[1].subgridspec(1, 4)
     panels = [fig.add_subplot(bottom[0, i]) for i in range(4)]
-    lcfs_axis, field_axis, pressure_axis, convergence_axis = panels
+    lcfs_axis, field_axis, scaling_axis, convergence_axis = panels
+    baseline = loaded[0][1]
+    baseline_center = int(np.argmin(np.abs(np.asarray(baseline.z))))
+    reference_field = float(np.mean(np.asarray(baseline.mod_b)[0, :, baseline_center]))
+    beta_values, field_ratios = [], []
     for order, (label, data, supported) in enumerate(loaded):
         color = _SCAN_COLORS[order % len(_SCAN_COLORS)]
         style = {"color": color, "lw": 1.7} if supported else {"color": color, "lw": 1.4, "ls": "--", "alpha": 0.85}
@@ -781,11 +785,10 @@ def plot_axisymmetric_beta_scan_summary(
         center = int(np.argmin(np.abs(z)))
         lcfs_axis.plot(z, np.mean(boundary, axis=0), label=label, **style)
         field_axis.plot(z, np.mean(mod_b[0], axis=0), **style)
-        pressure_axis.plot(
-            np.sqrt(np.asarray(data.s)),
-            np.mean(pressure[:, :, center], axis=1) / 1.0e3,
-            **style,
-        )
+        axis_pressure = float(np.mean(pressure[0, :, center]))
+        axis_field = float(np.mean(mod_b[0, :, center]))
+        beta_values.append(2.0 * MU0 * axis_pressure / reference_field**2)
+        field_ratios.append(axis_field / reference_field)
         history = np.asarray(data.history)
         if history.size:
             convergence_axis.semilogy(
@@ -796,11 +799,17 @@ def plot_axisymmetric_beta_scan_summary(
     lcfs_axis.set(title="Solved LCFS", xlabel="Axial position z [m]", ylabel="Radius [m]")
     lcfs_axis.legend(fontsize=8, ncols=2)
     field_axis.set(title="On-axis |B|", xlabel="Axial position z [m]", ylabel="|B| [T]")
-    pressure_axis.set(
-        title="Midplane pressure",
-        xlabel="Normalized radius sqrt(s)",
-        ylabel="Pressure [kPa]",
-    )
+    beta_curve = np.linspace(0.0, max(beta_values), 201)
+    scaling_axis.plot(beta_curve, np.sqrt(np.maximum(1.0 - beta_curve, 0.0)),
+                      color="0.25", ls="--", lw=1.4, label=r"$\sqrt{1-\beta}$")
+    for order, ((label, _data, supported), beta, ratio) in enumerate(
+            zip(loaded, beta_values, field_ratios, strict=True)):
+        scaling_axis.plot(beta, ratio, "o" if supported else "s", ms=5,
+                          color=_SCAN_COLORS[order % len(_SCAN_COLORS)],
+                          fillstyle="full" if supported else "none", label=label)
+    scaling_axis.set(title="Diamagnetic scaling", xlabel=r"Central $\beta$",
+                     ylabel=r"$B_\mathrm{axis}/B_\mathrm{vac}$")
+    scaling_axis.legend(fontsize=7, ncols=2)
     ftol_values = [float(data.ftol) for _, data, _ in loaded]
     convergence_axis.axhline(min(ftol_values), color="0.25", ls=":", lw=1.2, label="ftol")
     if strong_force_gate is not None:

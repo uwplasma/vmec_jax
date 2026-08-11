@@ -67,7 +67,7 @@ def render(baseline: dict) -> str:
         "     - VMEC2000",
         "     - vmex cold",
         "     - vmex warm",
-        "     - reference C++",
+        "     - VMEC++",
     ]
     for _, label, v2k_txt, cold_txt, warm_txt, ref_txt in rows:
         lines += [

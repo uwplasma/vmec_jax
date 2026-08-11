@@ -7,6 +7,9 @@ All runnable examples live under this single `examples/` tree.
   - `fixed_boundary_run.py` — read `&INDATA`, converge, write/plot the wout.
   - `plot_and_boozer.py` — every built-in `plot_wout` figure plus the Boozer
     transform (`run_booz_xform` + `plot_boozmn`) on one converged equilibrium.
+  - `plot_optimized_families.py` — README composites for optimized QA/QH/QP
+    outputs and the bundled NFP=1--4 QI inputs: four toroidal cuts, 3-D LCFS,
+    and LCFS `|B|` in Boozer coordinates.
   - `profiles_power_and_spline.py` — the same equilibrium from power-series and
     cubic-spline pressure/iota profiles (they agree); `NCURR=0` vs `NCURR=1`.
   - `run_from_json.py` — read/convert structured JSON (`to_json` /
@@ -46,6 +49,10 @@ All runnable examples live under this single `examples/` tree.
   per `max_mode` continuation stage, implicit adjoint gradients).  All read
   `VMEX_EXAMPLES_CI=1` to shrink budgets for the CI smoke tests
   (`tests/test_examples.py`).
+- `mirror_fixed_boundary_nonaxisymmetric.py` compares axisymmetric and
+  rotating-ellipse fixed-boundary mirrors; `mirror_free_boundary_beta_scan.py`
+  continues a solved ESSOS-coil free boundary through 80% central beta and
+  compares its on-axis field with `sqrt(1-beta)`.
 - `data/`: bundled input decks and small checked-in fixtures.
 - `data/single_grid/`: fixed-boundary single-grid benchmark inputs and optional
   fetched reference assets.

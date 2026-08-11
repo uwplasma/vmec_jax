@@ -70,9 +70,9 @@ def render(data: dict) -> str:
         "------------------",
         "",
         "The axisymmetric open-mirror free-boundary lane is supported through",
-        "10% requested beta. The 25% and 50% cases remain extended validation:",
-        "they converge variationally, but do not pass the independent strong-force",
-        "promotion gate recorded in the benchmark artifact.",
+        "10% requested beta. The 25%, 50%, and 80% cases remain extended validation:",
+        "the 80% example passes its force gate, but refined-grid promotion above",
+        "the current 50% campaign is incomplete.",
         "",
     ]
     return "\n".join(lines)

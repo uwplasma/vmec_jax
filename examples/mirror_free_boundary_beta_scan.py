@@ -4,8 +4,8 @@ Run from the repository root with::
 
     python examples/mirror_free_boundary_beta_scan.py
 
-The first four points are the supported 0--10% validation scan. The last two
-are continuation states whose independent force/refinement gates do not pass.
+The first four points are the supported 0--10% validation scan. The last three
+remain extended validation pending refined-grid promotion.
 Every curve and surface comes from a coupled
 plasma-boundary-vacuum equilibrium solve with residual tolerance ``FTOL``; no
 prescribed finite-beta boundary is plotted.
@@ -50,7 +50,7 @@ CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 BETAS = np.asarray(
     [0.0, 0.10, 0.25, 0.50]
     if CI
-    else [0.0, 0.01, 0.03, 0.10, 0.25, 0.50]
+    else [0.0, 0.01, 0.03, 0.10, 0.25, 0.50, 0.80]
 )
 SUPPORTED_BETA_MAX = 0.10
 STRONG_FORCE_GATE = 5.0e-2
@@ -223,6 +223,7 @@ composite = plot_axisymmetric_beta_scan_summary(
     ],
     OUTPUT_DIR,
     display=tuple(display_indices),
+    name="mirror_free_boundary_beta_scan",
     strong_force_gate=STRONG_FORCE_GATE,
 )
 

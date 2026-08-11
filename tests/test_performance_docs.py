@@ -45,7 +45,7 @@ def test_render_marks_wins_and_footnotes() -> None:
     baseline = json.loads(rpd.BASELINE.read_text())
     rendered = rpd.render(baseline)
     assert "**" in rendered, "no winning rows marked — renderer broken?"
-    assert "reference C++" in rendered
+    assert "VMEC++" in rendered
     row_count = sum(not key.startswith("_") for key in baseline)
     assert str(row_count) in rendered  # the computed row count
 

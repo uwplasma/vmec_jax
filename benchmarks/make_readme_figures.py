@@ -4,12 +4,12 @@
 Produces (into ``docs/_static/figures/``):
 
 - ``readme_runtime_compare.png``      — VMEC2000 vs vmex (cold/warm CPU,
-  GPU where comparable) vs the reference C++ implementation, from
+  GPU where comparable) vs VMEC++, from
   ``benchmarks/baseline.json`` and
   ``benchmarks/gpu_baseline.json``.  Run ``benchmarks/run_baseline.py`` first.
 - ``readme_convergence.png``          — force residual vs iteration for one
   representative case (nfp4_QH_warm_start at ns=51) in vmex, VMEC2000
-  (NSTEP=1 stdout trace), and the reference C++ implementation (wout
+  (NSTEP=1 stdout trace), and VMEC++ (wout
   ``fsqt``).  Traces are cached in
   ``benchmarks/convergence_nfp4_ns51.json``; delete it to re-run the codes.
 - ``readme_precond.png``              — 2D block vs 1D radial preconditioner
@@ -54,7 +54,7 @@ GRID = "#e1e0d9"
 BASELINE = "#c3c2b7"
 BLUE = "#2a78d6"        # vmex warm (the hero series)
 BLUE_LIGHT = "#86b6ef"  # vmex cold (same hue, lighter step)
-YELLOW = "#eda100"      # reference C++
+YELLOW = "#eda100"      # VMEC++
 VIOLET = "#4a3aa7"      # GPU
 RED = "#e34948"
 GREEN_TEXT = "#006300"
@@ -146,7 +146,7 @@ def make_runtime_figure(out: Path) -> None:
                label="vmex cold (fresh CLI process)", **mk)
     vpp_pts = [(r["vpp"], y) for y, r in zip(ys, rows) if r["vpp"]]
     ax.scatter([p[0] for p in vpp_pts], [p[1] for p in vpp_pts],
-               color=YELLOW, label="reference C++", **mk)
+               color=YELLOW, label="VMEC++", **mk)
     gpu_pts = [(r["gpu"], y) for y, r in zip(ys, rows) if r["gpu"]]
     if gpu_pts:
         ax.scatter([p[0] for p in gpu_pts], [p[1] for p in gpu_pts],
@@ -192,7 +192,7 @@ def make_runtime_figure(out: Path) -> None:
         title += f"  (all cases ns={next(iter(ns_set))})"
     ax.set_title(title, loc="left", pad=54, fontsize=14, color=INK)
     handles, labels = ax.get_legend_handles_labels()
-    order = ["VMEC2000 (Fortran)", "reference C++",
+    order = ["VMEC2000 (Fortran)", "VMEC++",
              "vmex warm (in-process)", "vmex cold (fresh CLI process)",
              "vmex warm (GPU)"]
     pairs = sorted(zip(handles, labels), key=lambda hl: order.index(hl[1]))
@@ -229,7 +229,7 @@ def collect_convergence() -> dict:
 
     - vmex: ``SolveResult.fsq_history`` (recorded every iteration).
     - VMEC2000: stdout iteration table with NSTEP=1 (one row per iteration).
-    - reference C++: ``wout.fsqt`` (stored per iteration).
+    - VMEC++: ``wout.fsqt`` (stored per iteration).
     Cached in CONV_CACHE; delete the file to re-run all three codes.
     """
     if CONV_CACHE.exists():
@@ -266,7 +266,7 @@ def collect_convergence() -> dict:
             proc.stdout, re.M)
         v2k_fsq = [float(r[1]) + float(r[2]) + float(r[3]) for r in rows]
 
-        # reference C++: fsqt array from the wout payload.
+        # VMEC++: fsqt array from the wout payload.
         proc = subprocess.run([str(VMECPP_PY), "-c", VMECPP_TRACE_SNIPPET,
                                deck.name], cwd=td, capture_output=True,
                               text=True, timeout=900)
@@ -289,16 +289,16 @@ def make_convergence_figure(out: Path) -> None:
                 alpha=0.5, solid_capstyle="round",
                 label=f"VMEC2000 (Fortran), {len(v2k_t)} iterations")
     ax.semilogy(range(1, len(vpp_t) + 1), vpp_t, color=YELLOW, lw=2.2,
-                alpha=0.9, label=f"reference C++, {len(vpp_t)} iterations")
+                alpha=0.9, label=f"VMEC++, {len(vpp_t)} iterations")
     ax.semilogy(range(1, len(jax_t) + 1), jax_t, color=BLUE, lw=1.1,
-                label=f"vmex, {len(jax_t)} iterations")
+                label=f"VMEX, {len(jax_t)} iterations")
 
     ax.axhline(3 * d["ftol"], color=BASELINE, lw=0.9, ls=(0, (5, 4)))
     ax.annotate("converged: fsqr, fsqz, fsql all < FTOL = 1e-13",
                 xy=(len(jax_t) * 0.02, 3 * d["ftol"] * 1.6), ha="left",
                 va="bottom", fontsize=8, color=MUTED)
     mid = len(jax_t) // 2
-    ax.annotate("vmex tracks VMEC2000\niteration-for-iteration\n"
+    ax.annotate("VMEX tracks VMEC2000\niteration-for-iteration\n"
                 "(curves overlap)",
                 xy=(mid, jax_t[mid]), xytext=(mid * 0.62, jax_t[mid] * 3e3),
                 fontsize=8.5, color=INK2, ha="center",
