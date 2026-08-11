@@ -89,10 +89,8 @@ pre-summed scalar).  The helicity pair selects the symmetry family:
      - ``(0, 1)``
      - poloidally closed, like QI contour topology
 
-``helicity_n`` is in units of ``nfp`` (the simsopt convention).  Measured
-campaign results from a near-circular seed are on :doc:`/howto/optimize-a-boundary`; the
-runnable scripts are ``examples/optimization/QA_optimization_ess.py`` and
-friends.
+``helicity_n`` is in units of ``nfp`` (the simsopt convention). Runnable QA,
+QH, and QP scripts are in ``examples/optimization/``.
 
 Scalar geometry and profile targets
 -----------------------------------
@@ -292,6 +290,10 @@ The two classes do not impose a shared weight. ``MaximumJResidual`` evaluates
 invalid topology is NaN rather than a favorable zero. See
 :doc:`/explanation/confinement` for the sign and matching contract.
 
+When both terms use the same surfaces and pitch,
+:class:`~vmex.core.maxj.JInvariantQIAndMaximumJResidual` concatenates their
+cost-weighted rows after one shared Boozer transform.
+
 Bootstrap current (Redl)
 ------------------------
 
@@ -432,6 +434,10 @@ Which objectives differentiate how
      - yes
      - yes
      - signed radial action slope with matched well identity
+   * - :class:`~vmex.core.maxj.JInvariantQIAndMaximumJResidual`
+     - yes
+     - yes
+     - shared-transform J-invariance and maximum-J rows
    * - :class:`~vmex.core.bootstrap.RedlBootstrapMismatch`
      - yes
      - yes

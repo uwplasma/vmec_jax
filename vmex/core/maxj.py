@@ -16,6 +16,7 @@ from .statephysics import _as_1d
 Array = Any
 
 __all__ = [
+    "JInvariantQIAndMaximumJResidual",
     "MaximumJResidual",
     "maximum_j_residual_from_boozer",
     "qi_and_maximum_j_from_boozer",
@@ -226,6 +227,65 @@ def qi_and_maximum_j_from_boozer(
         **common, psi_b=booz["psi_b"], psi_edge=booz["psi_edge"],
         **(maxj_options or {}))
     return {"boozer": booz, "qi": qi_out, "maximum_j": maxj_out}
+
+
+class JInvariantQIAndMaximumJResidual:
+    """Joint J-invariance and maximum-J rows from one Boozer transform."""
+
+    name = "j_invariant_qi_and_maximum_j"
+
+    def __init__(
+        self, surfaces, pitch, *, weights=None, qi_weight=1.0, maxj_weight=1.0,
+        mboz=16, nboz=16, oversample=2, qi_options=None, maxj_options=None,
+    ):
+        self.surfaces = np.atleast_1d(np.asarray(surfaces, dtype=float))
+        self.pitch = np.atleast_1d(np.asarray(pitch, dtype=float))
+        if (self.surfaces.size < 2 or np.any(~np.isfinite(self.surfaces))
+                or np.any(np.diff(self.surfaces) <= 0.0)
+                or self.pitch.size == 0 or np.any(~np.isfinite(self.pitch))
+                or np.any(self.pitch <= 0.0)):
+            raise ValueError(
+                "increasing finite surfaces and positive finite pitch are required")
+        self.weights = None if weights is None else np.asarray(weights, dtype=float)
+        if self.weights is not None:
+            if self.weights.shape != self.surfaces.shape:
+                raise ValueError("weights must have the same length as surfaces")
+            if np.any(~np.isfinite(self.weights)) or np.any(self.weights < 0.0):
+                raise ValueError("weights must be finite and non-negative")
+        if not np.isfinite(qi_weight) or not np.isfinite(maxj_weight):
+            raise ValueError("qi_weight and maxj_weight must be finite")
+        if qi_weight < 0.0 or maxj_weight < 0.0:
+            raise ValueError("qi_weight and maxj_weight must be non-negative")
+        self.qi_scale, self.maxj_scale = np.sqrt(qi_weight), np.sqrt(maxj_weight)
+        self.mboz, self.nboz, self.oversample = int(mboz), int(nboz), int(oversample)
+        if min(self.mboz, self.nboz, self.oversample) <= 0:
+            raise ValueError("mboz, nboz, and oversample must be positive")
+        self.qi_options = {} if qi_options is None else dict(qi_options)
+        self.maxj_options = {} if maxj_options is None else dict(maxj_options)
+
+    def compute_state(self, state, rt):
+        return qi_and_maximum_j_from_boozer(
+            state, rt, surfaces=self.surfaces, pitch=self.pitch, weights=self.weights,
+            mboz=self.mboz, nboz=self.nboz, oversample=self.oversample,
+            qi_options=self.qi_options, maxj_options=self.maxj_options,
+        )
+
+    def residuals_state(self, state, rt):
+        out = self.compute_state(state, rt)
+        return jnp.concatenate([
+            self.qi_scale * out["qi"]["residuals1d"],
+            self.maxj_scale * out["maximum_j"]["residuals1d"],
+        ])
+
+    def J(self, eq):
+        return self.residuals_state(eq.state, eq.runtime)
+
+    __call__ = J
+    residuals = J
+
+    def total(self, eq):
+        rows = self(eq)
+        return jnp.vdot(rows, rows)
 
 
 class MaximumJResidual:
