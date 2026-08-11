@@ -16,6 +16,7 @@ check, so the module needs no golden fixtures and stays network-free:
 from __future__ import annotations
 
 import dataclasses
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -141,9 +142,12 @@ def test_summary_field_line_and_j_map_present(summary_figure):
 
 
 def test_summary_style_constants():
-    """dpi and 3-D colormap style pins."""
+    """CLI plots keep publication resolution, smooth 3-D grids, and jet |B|."""
     assert plotting._DPI >= 200
     assert plotting._CMAP_3D == "jet"
+    assert plotting._CMAP_MODB == "jet"
+    signature = inspect.signature(plotting.plot_boundary_3d)
+    assert signature.parameters["ntheta"].default >= 120
 
 
 def test_d_r_reconstruction_matches_traceable(solved_case):

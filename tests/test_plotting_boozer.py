@@ -68,14 +68,24 @@ def test_plot_wout_golden(case: str, tmp_path: Path) -> None:
         assert Path(path).parent == outdir
 
 
-def test_plot_wout_accepts_woutdata_and_subset(tmp_path: Path) -> None:
+def test_plot_wout_accepts_woutdata_and_subset(tmp_path: Path, monkeypatch) -> None:
     """plot_wout takes an in-memory WoutData and honors ``which`` subsets."""
+    from matplotlib.axes import Axes
+
     from vmex.core.wout import read_wout
 
+    contour, cmaps = Axes.contour, []
+
+    def record_contour(axis, *args, **kwargs):
+        cmaps.append(kwargs.get("cmap"))
+        return contour(axis, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "contour", record_contour)
     data = read_wout(str(_golden_wout("solovev")))
     paths = plot_wout(data, tmp_path, which=("profiles", "modB"), name="solovev_mem")
     _check_figures(paths, ("profiles", "modB"))
     assert paths["profiles"].name == "solovev_mem_profiles.png"
+    assert cmaps and set(cmaps) == {"jet"}
 
 
 def test_plot_wout_rejects_unknown_figure(tmp_path: Path) -> None:

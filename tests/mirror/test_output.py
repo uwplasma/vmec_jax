@@ -229,7 +229,16 @@ def test_mout_accepts_fixed_boundary_result() -> None:
     assert np.isnan(data.normalized_divergence_rms)
 
 
-def test_command_line_plots_mout_without_toroidal_dispatch(tmp_path) -> None:
+def test_command_line_plots_mout_without_toroidal_dispatch(tmp_path, monkeypatch) -> None:
+    from matplotlib.axes import Axes
+
+    contour, cmaps = Axes.contour, []
+
+    def record_contour(axis, *args, **kwargs):
+        cmaps.append(kwargs.get("cmap"))
+        return contour(axis, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "contour", record_contour)
     path = write_mout(tmp_path / "mout_sample.nc", _sample_mout())
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -242,6 +251,7 @@ def test_command_line_plots_mout_without_toroidal_dispatch(tmp_path) -> None:
         "sample_3d.png",
     }
     assert expected == {item.name for item in tmp_path.glob("sample_*.png")}
+    assert cmaps and set(cmaps) == {"jet"}
     for name in expected:
         pixels = mpimg.imread(tmp_path / name)
         assert pixels.shape[0] > 200 and pixels.shape[1] > 300

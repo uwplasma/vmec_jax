@@ -625,7 +625,10 @@ def _draw_solved_mirror_3d(
         radius_dense * np.sin(tt),
         facecolors=plt.get_cmap(_MOD_B_CMAP)(norm(boundary_b)),
         linewidth=0,
+        rstride=1,
+        cstride=1,
         antialiased=False,
+        shade=False,
         alpha=surface_alpha,
     )
     surface.set_rasterized(True)
@@ -916,7 +919,7 @@ def plot_mout(
 
     boundary_b = _theta_samples(data, mod_b[-1], theta_dense)
     fig, axis = plt.subplots(figsize=(10.5, 4.2), constrained_layout=True)
-    contour = axis.contour(z, theta_dense, boundary_b, 18, cmap="viridis", linewidths=0.9)
+    contour = axis.contour(z, theta_dense, boundary_b, 18, cmap=_MOD_B_CMAP, linewidths=0.9)
     axis.clabel(contour, inline=True, fontsize=7, fmt="%.3g")
     fig.colorbar(contour, ax=axis, label="LCFS |B| [T]")
     axis.set(
@@ -999,7 +1002,10 @@ def plot_stellarator_mirror_hybrid(
         surface_xyz[..., 1],
         facecolors=plt.get_cmap(_MOD_B_CMAP)(color_norm(boundary_b_closed)),
         linewidth=0,
+        rstride=1,
+        cstride=1,
         antialiased=False,
+        shade=False,
         alpha=0.9,
     )
     surface.set_rasterized(True)

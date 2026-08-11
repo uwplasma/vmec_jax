@@ -919,7 +919,7 @@ def plot_boundary_3d(
     wout,
     out_path: str | Path,
     *,
-    ntheta: int = 60,
+    ntheta: int = 180,
     nzeta: int | None = None,
 ) -> Path:
     """3-D plasma boundary colored by ``|B|`` (full torus, jet colormap)."""
@@ -932,7 +932,7 @@ def plot_boundary_3d(
     wout, _ = _as_wout(wout)
     ns, nfp = int(wout.ns), int(wout.nfp)
     if nzeta is None:
-        nzeta = min(360, max(120, 60 * nfp))
+        nzeta = min(720, max(360, 120 * nfp))
     theta = np.linspace(0.0, 2.0 * np.pi, ntheta)
     phi = np.linspace(0.0, 2.0 * np.pi, int(nzeta))
     R, Z = surface_rz(wout, s_index=ns - 1, theta=theta, phi=phi)
@@ -946,7 +946,7 @@ def plot_boundary_3d(
         ax = fig.add_subplot(111, projection="3d")
         ax.plot_surface(
             X, Y, Z, facecolors=cmap(B_scaled), rstride=1, cstride=1,
-            antialiased=False, linewidth=0.0,
+            antialiased=False, linewidth=0.0, shade=False,
         )
         scale = 0.7 * max(np.abs(X).max(), np.abs(Y).max())
         ax.auto_scale_xyz([-scale, scale], [-scale, scale], [-scale, scale])

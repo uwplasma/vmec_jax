@@ -149,19 +149,30 @@ VMEX outputs are intended for existing VMEC workflows: `wout_*.nc` files load in
 
 ### Solver feature comparison
 
-This concise matrix was checked on 2026-08-11 against current [STELLOPT/VMEC2000](https://github.com/PrincetonUniversity/STELLOPT) and [VMEC++](https://github.com/proximafusion/vmecpp) sources. ✓ denotes a public path, △ a documented limitation, and — no public path; the linked VMEX capability contract above defines validation scope.
+This matrix was checked on 2026-08-11 against current [STELLOPT/VMEC2000](https://github.com/PrincetonUniversity/STELLOPT) and [VMEC++](https://github.com/proximafusion/vmecpp) sources. ✅ denotes a public path, ⚠️ a documented limitation, and ❌ no public path; the linked VMEX capability contract defines the validation scope.
 
-| Capability | VMEC2000 | VMEC++ | VMEX |
+| Capability | VMEX | VMEC2000 | VMEC++ |
 |---|:---:|:---:|:---:|
-| symmetric fixed-boundary toroidal equilibria | ✓ | ✓ | ✓ |
-| non-stellarator-symmetric (`LASYM`) fixed boundary | ✓ | — | ✓ |
-| 3-D NESTOR free boundary | ✓ | ✓ | ✓ |
-| axisymmetric NESTOR free boundary | ✓ | — | ✓ |
-| hot restart from a saved equilibrium | — | ✓ Python | ✓ Python/CLI |
-| INDATA / JSON input | ✓ / — | ✓ / ✓ | ✓ / ✓ |
-| exact equilibrium derivatives and optimizer interface | — | — | ✓ fixed; △ free |
-| accelerator execution | CPU/MPI | CPU/OpenMP | CPU/GPU |
-| open mirrors and stellarator–mirror hybrids | — | — | ✓ / △ |
+| fixed-boundary toroidal equilibria | ✅ | ✅ | ✅ |
+| 3-D NESTOR free boundary | ✅ | ✅ | ✅ |
+| free-boundary radial multigrid | ✅ | ✅ | ✅ |
+| free boundary from an in-memory field table | ✅ | ❌ | ✅ Python |
+| axisymmetric free-boundary tokamaks | ✅ | ✅ | ❌ |
+| non-stellarator-symmetric (`LASYM`) equilibria | ✅ | ✅ | ❌ |
+| fixed-boundary fallback when an mgrid file is missing | ✅ | ✅ | ❌ |
+| cubic and Akima spline profiles | ✅ | ✅ | ❌ |
+| INDATA / structured JSON input | ✅ / ✅ | ✅ / ❌ | ✅ / ✅ |
+| hot restart from a saved equilibrium | ✅ Python/CLI | ✅ CLI | ✅ Python |
+| typed zero-crash errors | ✅ | ❌ | ✅ |
+| built-in Boozer transform and plotting | ✅ | ❌ | ❌ |
+| input and WOUT dimensional scaling | ✅ | ❌ | ❌ |
+| GPU execution | ✅ | ❌ | ❌ |
+| exact fixed-boundary derivatives and optimizer interface | ✅ | ❌ | ❌ |
+| differentiable specified-boundary virtual-casing residual | ✅ | ❌ | ❌ |
+| 2-D block preconditioner | ✅ matrix-free | ✅ BCYCLIC | ❌ |
+| differentiable QI/QS, maximum-J, trapped-fraction, and stability objectives | ✅ | ❌ | ❌ |
+| self-consistent bootstrap-current workflows | ✅ | ❌ | ❌ |
+| open mirrors and stellarator–mirror hybrids | ⚠️ validated scopes | ❌ | ❌ |
 
 ### Convergence parity and implementation size
 
@@ -173,9 +184,9 @@ The following `cloc 2.11` snapshot counts implementation code and comments, excl
 
 | Solver and revision | Files | Code lines | Comment lines |
 |---|---:|---:|---:|
+| VMEX `d7347c9` | 46 | 21,189 | 7,857 |
 | VMEC2000 `aeb0261` | 115 | 24,164 | 8,451 |
 | VMEC++ `d83035b` | 146 | 38,338 | 9,661 |
-| VMEX `d7347c9` | 46 | 21,189 | 7,857 |
 
 VMEX reduces duplication by expressing spectral operators as vectorized JAX array programs and using the same equations for CPU, accelerators, and automatic differentiation. It also deliberately omits some legacy modes, so the smaller codebase reflects both architecture and narrower compatibility surface.
 

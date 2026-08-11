@@ -42,6 +42,7 @@ QI_CASES = (
     (DATA / "input.nfp4_QI_finite_beta", "QI  ·  nfp 4"),
 )
 SURFACES = np.linspace(0.1, 1.0, 8)
+PLOT_DPI = 220
 
 
 def _boundary(inp, theta, phi):
@@ -72,15 +73,15 @@ def _cross_sections(axis, inp):
 
 
 def _boundary_3d(figure, axis, wout):
-    theta = np.linspace(0.0, 2.0 * np.pi, 64)
-    phi = np.linspace(0.0, 2.0 * np.pi, min(240, 70 * int(wout.nfp)))
+    theta = np.linspace(0.0, 2.0 * np.pi, 180)
+    phi = np.linspace(0.0, 2.0 * np.pi, min(720, max(360, 120 * int(wout.nfp))))
     radius, height = surface_rz(wout, s_index=int(wout.ns) - 1, theta=theta, phi=phi)
     mod_b = surface_modB(wout, s_index=int(wout.ns) - 1, theta=theta, phi=phi)
     phi_grid = np.meshgrid(phi, theta)[0]
     x, y = radius * np.cos(phi_grid), radius * np.sin(phi_grid)
     norm = Normalize(float(np.min(mod_b)), float(np.max(mod_b)))
     axis.plot_surface(x, y, height, facecolors=cm.jet(norm(mod_b)), linewidth=0.0,
-                      antialiased=False, shade=False)
+                      antialiased=False, shade=False, rstride=1, cstride=1)
     scale = 0.55 * max(np.max(np.abs(x)), np.max(np.abs(y)))
     axis.auto_scale_xyz([-scale, scale], [-scale, scale], [-0.62 * scale, 0.62 * scale])
     axis.set_box_aspect((1, 1, 0.62), zoom=1.14); axis.view_init(elev=30, azim=-55); axis.set_axis_off()
@@ -109,7 +110,7 @@ def _find_qs_input(directory, tag):
 
 
 def _draw(cases, output, *, qi=False):
-    figure = plt.figure(figsize=(2.7 * len(cases), 7.5), dpi=150)
+    figure = plt.figure(figsize=(2.7 * len(cases), 7.5), dpi=PLOT_DPI)
     grid = figure.add_gridspec(3, len(cases), height_ratios=(1.0, 1.2, 1.05), hspace=0.38, wspace=0.42)
     for column, case in enumerate(cases):
         path, title = case[:2]
@@ -130,7 +131,7 @@ def _draw(cases, output, *, qi=False):
         boozer = figure.add_subplot(grid[2, column]); _boozer(figure, boozer, equilibrium.wout, title.replace(" ", "_"))
         if column == 0:
             boozer.set_ylabel(r"Boozer poloidal angle / $2\pi$", fontsize=8)
-    figure.savefig(output, dpi=150, bbox_inches="tight", pad_inches=0.05)
+    figure.savefig(output, dpi=PLOT_DPI, bbox_inches="tight", pad_inches=0.05)
     plt.close(figure); print(f"wrote {output}")
 
 
