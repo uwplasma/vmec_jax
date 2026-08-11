@@ -118,7 +118,7 @@ def test_implicit_lane_fun_penalty_path(monkeypatch, capsys):
 
 
 def test_minimize_penalty_path(monkeypatch, capsys):
-    """A failed scalarized trial reuses the last finite reverse gradient."""
+    """A failed scalarized trial gets the smooth consistent penalty pair."""
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     real = im._host_solve
     calls = {"new": 0, "poisoned": 0}

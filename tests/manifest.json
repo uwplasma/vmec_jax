@@ -139,6 +139,8 @@
       "tests/test_implicit_multi_rhs.py::test_block_response_forward_transpose_and_fd",
       "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block",
       "tests/test_optimize.py::test_public_problem_factory_validation",
+      "tests/test_optimize.py::test_scipy_bfgs_scalar_lane_completes_and_descends",
+      "tests/test_optimize.py::test_certified_trial_guards_reject_stale_or_missing_memo",
       "tests/test_optimize_penalty.py",
       "tests/test_bootstrap.py::test_least_squares_current_dofs_implicit",
       "tests/test_parallel.py::test_parallel_finite_difference_and_problem_ensemble"
