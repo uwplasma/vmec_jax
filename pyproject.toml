@@ -35,7 +35,7 @@ dependencies = [
   # JAX's persistent compilation cache uses file locks across processes.
   "filelock",
   "booz_xform_jax",
-  # 0.8.8 adds the checked tridiagonal fallback used by VMEX's preconditioner.
+  # vmex drives gcrot(m, k) recycling (incl. its recycle-drift certificate), block_thomas_factor/solve, tridiagonal_solve_checked, and chunk_map — all absent before solvax 0.8.8.
   "solvax>=0.8.8",
   "tomli; python_version < '3.11'",
 ]
