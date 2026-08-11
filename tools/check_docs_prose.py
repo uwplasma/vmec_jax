@@ -57,9 +57,8 @@ LINE_CAP = 250
 BUDGET_TOTAL = 500 * 1024
 BUDGET_FILE = 150 * 1024
 
-# Frozen: files consumed by the top-level README.md (embedded figures) and
-# the committed inputs of ``benchmarks/make_readme_figures.py`` /
-# ``assets/manifest.json``. The README cannot move (its image paths are pinned
+# Frozen: files consumed by the top-level README.md and fetched reference
+# inputs listed in ``assets/manifest.json``. The README cannot move (its paths are pinned
 # by GitHub rendering and by tests), so these are exempt from the docs media
 # budget. Additions are limited to reviewed, reproducible README figures.
 GRANDFATHERED_PREFIXES = (
@@ -76,7 +75,8 @@ GRANDFATHERED_FILES = {
     "figures/qi_mirror_hybrid.png",
     "figures/readme_convergence.png",
     "figures/readme_bootstrap.png",
-    "figures/readme_diagnostics_summary.png",
+    "figures/readme_diagnostics_qa_vacuum.webp",
+    "figures/readme_diagnostics_summary.webp",
     "figures/readme_equilibrium_showcase.png",
     "figures/readme_essos_beta_scan.png",
     "figures/readme_optimization.png",

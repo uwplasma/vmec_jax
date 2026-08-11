@@ -147,15 +147,19 @@ def test_summary_field_line_and_j_map_present(summary_figure):
 
 
 def test_summary_combines_stability_and_well(summary_figure):
-    """DMerc, dashed D_R, and dash-dot magnetic well share one polished panel."""
-    _, meta = summary_figure
+    """DMerc, dashed D_R, and dash-dot V'' share aligned zero levels."""
+    fig, meta = summary_figure
     stability = meta["axes"]["stability"]
     well = meta["well_axis"]
     assert {line.get_linestyle() for line in stability.lines} >= {"-", "--"}
     assert any(line.get_linestyle() == "-." for line in well.lines)
     assert well.yaxis.label.get_color() == plotting._LINE_COLORS[2]
+    assert "V''" in well.get_ylabel()
     labels = [text.get_text() for text in stability.get_legend().get_texts()]
-    assert any("magnetic well" in label for label in labels)
+    assert any("V''" in label and "magnetic well" in label for label in labels)
+    fig.canvas.draw()
+    assert stability.transData.transform((0.0, 0.0))[1] == pytest.approx(
+        well.transData.transform((0.0, 0.0))[1])
 
 
 def test_summary_style_constants():
@@ -261,19 +265,15 @@ def test_j_invariant_map_uses_surface_local_normalized_pitch(monkeypatch):
     np.testing.assert_allclose(result["pitch"], pitches)
 
 
-def test_stability_panel_handles_zero_axis_vprime():
-    """V'(0) = 0 is labeled on the combined legend without dividing by zero."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    fake = SimpleNamespace(
-        ns=5, vp=np.array([0.0, 1.0, 3.0, 2.0, 2.0]), DMerc=np.ones(5))
-    well = plotting._stability_panel(
-        ax, fake, {"valid": False, "note": "test"}, s_plot_ignore=0.2)
-    labels = [text.get_text() for text in ax.get_legend().get_texts()]
-    assert any("V'(0)=0" in label for label in labels)
-    assert not well.lines[0].get_xdata().size
-    plt.close(fig)
+def test_volume_second_derivative_of_linear_vprime():
+    """The plotted V'' recovers a linear physical V'(s) profile."""
+    ns = 7
+    s_half = plotting._half_mesh_s(ns)
+    slope, intercept = -2.5, 8.0
+    vp = np.concatenate(([0.0], (intercept + slope * s_half) / (2.0 * np.pi) ** 2))
+    s, vpp = plotting._volume_second_derivative(SimpleNamespace(ns=ns, vp=vp))
+    np.testing.assert_allclose(s, s_half)
+    np.testing.assert_allclose(vpp, slope, atol=2.0e-14)
 
 
 def test_summary_survives_boozer_failure(solved_case, monkeypatch):

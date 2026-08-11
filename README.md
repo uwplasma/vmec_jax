@@ -134,9 +134,15 @@ VMEX also solves open-ended mirrors. `examples/mirror_fixed_boundary_nonaxisymme
 
 ## Equilibrium and kinetic diagnostics
 
-`vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summary below. The summary combines Mercier `DMerc`, Glasser `DR`, and magnetic well on color-matched axes; adds a 3-D LCFS; and shows the second adiabatic invariant in the Velasco polar coordinates `x=s cos(alpha)`, `y=s sin(alpha)`. Boozer `|B|` appears automatically, while `--booz` is only needed to save a reusable `boozmn_*.nc` file. VMEX additionally provides infinite-n ballooning objectives and differentiable trapped-particle diagnostics.
+`vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summaries below. They combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
 
-![VMEX equilibrium, stability, and Boozer diagnostics](docs/_static/figures/readme_diagnostics_summary.png)
+This finite-pressure NFP=3 QI example reaches $\langle\beta\rangle=2.38\%$.
+
+![Finite-pressure NFP=3 QI diagnostics](docs/_static/figures/readme_diagnostics_summary.webp)
+
+The vacuum QA example has `pres=0` and `DWell=0` exactly: VMEX adds no pressure floor. `DMerc` can retain shear, current, and geodesic terms; for a current-free vacuum it reduces to the shear term and $D_R=0$, so these curves are not a finite-beta pressure margin.
+
+![Vacuum QA diagnostics](docs/_static/figures/readme_diagnostics_qa_vacuum.webp)
 
 `examples/optimization/QA_bootstrap_selfconsistent.py` and `QH_bootstrap_selfconsistent.py` iterate VMEC and the Redl model to a self-consistent bootstrap-current profile and compare against the published equilibrium and SFINCS data.
 

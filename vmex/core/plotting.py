@@ -5,7 +5,7 @@ Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 
 - ``summary``   3x3 publication diagnostic set: rotational transform (full
   mesh), pressure, parallel (bootstrap) current ``<J.B>``, Mercier ``DMerc``
-  and Glasser ``D_R`` with magnetic well on the right axis, a 3-D LCFS,
+  and Glasser ``D_R`` with ``V''(s)`` on the right axis, a 3-D LCFS,
   a Velasco-style polar second-adiabatic-invariant map ``J(alpha, s)``, ``|B|``
   in Boozer coordinates at mid radius and on the LCFS (line contours with a
   field line of slope iota), and an equilibrium scalar card;
@@ -212,6 +212,16 @@ def axis_rz(wout, phi: np.ndarray):
 
 def _half_mesh_s(ns: int) -> np.ndarray:
     return (np.arange(1, ns, dtype=float) - 0.5) / float(ns - 1)
+
+
+def _volume_second_derivative(wout) -> tuple[np.ndarray, np.ndarray]:
+    """Return physical ``d²V/ds²`` on VMEC's half mesh."""
+    ns = int(wout.ns)
+    if ns < 4:
+        raise ValueError("V'' requires at least four radial surfaces")
+    s_half = _half_mesh_s(ns)
+    vprime_half = (2.0 * np.pi) ** 2 * np.abs(np.asarray(wout.vp, dtype=float)[1:])
+    return s_half, np.gradient(vprime_half, s_half, edge_order=2)
 
 
 def _pi_ticks(ax, axis: str = "y") -> None:
@@ -525,7 +535,7 @@ def _profile_panel(ax, x, y, *, xlabel: str, ylabel: str, title: str, color=None
 
 
 def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float):
-    """DMerc and D_R with magnetic well on a color-matched right axis."""
+    """Plot ``DMerc`` and ``D_R`` with physical ``V''(s)`` on the right axis."""
     ns = int(wout.ns)
     s = np.linspace(0.0, 1.0, ns)
     dmerc = np.asarray(wout.DMerc, dtype=float)
@@ -547,29 +557,29 @@ def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float
     else:
         lines.append(ax.plot(
             [], [], " ", label=f"$D_R$: {d_r_info.get('note', 'unavailable')}")[0])
+    peak = max(peak, np.finfo(float).tiny)
     if peak > 30.0:
         ax.set_yscale("symlog", linthresh=max(1.0e-3, 1.0e-3 * peak))
     ax.axhline(0.0, color="0.4", linewidth=0.8, zorder=1)
+    ax.set_ylim(-1.05 * peak, 1.05 * peak)
     ax.set_xlabel(_S_LABEL)
     ax.set_ylabel(r"$D_{Merc}$, $D_R$")
     ax.set_xlim(0.0, 1.0)
 
     well_ax = ax.twinx()
-    vp = np.abs(np.asarray(wout.vp, dtype=float))[1:]
-    s_half = _half_mesh_s(int(wout.ns))
-    v0 = 1.5 * vp[0] - 0.5 * vp[1]
-    v1 = 1.5 * vp[-1] - 0.5 * vp[-2]
-    if v0 != 0.0:
-        well = 100.0 * (v0 - vp) / v0
-        lines.append(well_ax.plot(
-            s_half, well, marker="^", markersize=3.2, linestyle="-.",
-            color=_LINE_COLORS[2], label=rf"magnetic well ({100.0 * (v0 - v1) / v0:.2f}% edge)")[0])
-    else:
-        lines.append(well_ax.plot([], [], " ", label="magnetic well: $V'(0)=0$")[0])
-    well_ax.set_ylabel("magnetic well [%]", color=_LINE_COLORS[2])
+    s_vpp, vpp = _volume_second_derivative(wout)
+    finite_vpp = vpp[sl][np.isfinite(vpp[sl])]
+    peak_vpp = max(float(np.max(np.abs(finite_vpp))) if finite_vpp.size else 1.0,
+                   np.finfo(float).tiny)
+    lines.append(well_ax.plot(
+        s_vpp[sl], vpp[sl], marker="^", markersize=3.2, linestyle="-.",
+        color=_LINE_COLORS[2], label=r"$V''(s)$ ($<0$ magnetic well)")[0])
+    well_ax.axhline(0.0, color="0.4", linewidth=0.8, zorder=1)
+    well_ax.set_ylim(-1.05 * peak_vpp, 1.05 * peak_vpp)
+    well_ax.set_ylabel(r"$V''(s)$ [m$^3$] (magnetic well)", color=_LINE_COLORS[2])
     well_ax.tick_params(axis="y", colors=_LINE_COLORS[2])
     well_ax.spines["right"].set_color(_LINE_COLORS[2])
-    ax.set_title("Mercier, resistive interchange, and magnetic well")
+    ax.set_title(r"Mercier, resistive interchange, and $V''(s)$")
     ax.legend(lines, [line.get_label() for line in lines], loc="best")
     return well_ax
 

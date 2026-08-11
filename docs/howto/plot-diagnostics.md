@@ -46,7 +46,7 @@ version.
 `*_summary.png` is a publication-style diagnostic set: rotational transform
 (full mesh), pressure, the parallel bootstrap current
 $\langle \mathbf{J}\cdot\mathbf{B} \rangle$, Mercier `DMerc` and the Glasser
-resistive-interchange $D_R$ with magnetic well on a color-matched right axis,
+resistive-interchange $D_R$ with $V''(s)$ on a color-matched right axis,
 a 3-D LCFS, and the second adiabatic invariant in the polar disk
 $x=s\cos\alpha$, $y=s\sin\alpha$. Concentric $J$ contours diagnose
 alpha-independence. `|B|` in Boozer coordinates appears at mid radius and on
@@ -55,6 +55,8 @@ transform runs in-process, so `--plot` needs no separate `--booz` pass;
 `--booz` is for writing a reusable `boozmn_*.nc`. $D_R$ follows the lasym guard of
 {func}`vmex.core.stability.glasser_d_r_state` and is omitted (with a panel
 note) for asymmetric equilibria.
+The two stability indices and $V''(s)$ use separate scales whose zero levels
+are aligned; $V''(s)<0$ denotes a magnetic well.
 
 ## Boozer figures
 

@@ -408,6 +408,12 @@ surfaces but decays exponentially with the stability margin.  Both profile
 lanes retain VMEC's near-axis and edge limitations; the traceable Mercier
 lane does not yet support ``lasym = True``.
 
+For a vacuum equilibrium, :math:`p'=0` makes :math:`D_{\rm well}` exactly
+zero; VMEX does not add a pressure floor. The reported Mercier index can still
+contain shear, current, and geodesic terms. In the additional current-free
+limit it reduces to :math:`D_{\rm shear}=S^2/4`, so a positive vacuum value is
+a mathematically defined shear result, not a finite-beta interchange margin.
+
 Parallel current and resistive interchange
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -450,6 +456,12 @@ ideal-Mercier-unstable surface is never accepted based on :math:`D_R` alone.
 After optimization, use ``mercier_shear_state`` to verify
 ``abs(S) >> shear_epsilon`` on every target surface; regularization makes the
 numerics finite but cannot establish GGJ stability at zero shear.
+For a pressure-free, current-free equilibrium, :math:`H=0` and
+:math:`D_{\rm Merc}=S^2/4`, hence the expression above gives :math:`D_R=0`.
+Small reconstructed departures from zero reflect finite-resolution
+cancellation; a zero-beta force-free equilibrium with parallel current may
+retain nonzero current and geodesic contributions. Vacuum :math:`D_R` is
+therefore not a pressure-driven stability margin.
 VMEC2000 does not write ``D_R`` itself.  A live `DCON/GPEC
 <https://github.com/PrincetonUniversity/GPEC>`_ evaluation independently
 reproduces the symmetric VMEC normalization at ``ns=51`` (``D_I`` maximum
@@ -474,6 +486,9 @@ Magnetic well
 
 The dominant stabilizing ingredient of :math:`D_{\mathrm{well}}` — the sign of
 :math:`V''(s)` — is also useful on its own as a cheap, fully traceable proxy.
+The ``--plot`` summary shows this dimensional derivative directly, labeled
+:math:`V''(s)` (magnetic well), and aligns its zero with the stability-index
+axis. Negative values denote a well and positive values a hill.
 :func:`~vmex.core.optimize.magnetic_well` returns the finite-difference
 vacuum-well measure
 
