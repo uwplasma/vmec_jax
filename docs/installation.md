@@ -31,6 +31,13 @@ the packaged `input.nfp4_QH_warm_start` deck into `./vmex_test/`, solves it
 `vmex_test/figures/`. It also prints the equivalent manual commands so you
 can reproduce each step yourself.
 
+JAXopt and Optax are optional because SciPy and the public problem callables
+are part of the core install. Install the external-optimizer examples with:
+
+```console
+pip install "vmex[optimizers]"
+```
+
 ## From conda-forge
 
 ```console

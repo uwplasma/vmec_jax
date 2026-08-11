@@ -81,6 +81,7 @@ GRANDFATHERED_FILES = {
     "figures/readme_essos_beta_scan.png",
     "figures/readme_objectives.png",
     "figures/readme_optimization.png",
+    "figures/readme_optimization_landscapes.png",
     "figures/readme_precond.png",
     "figures/readme_qi.png",
     "figures/readme_runtime_compare.csv",

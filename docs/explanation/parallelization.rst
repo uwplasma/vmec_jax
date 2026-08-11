@@ -43,6 +43,67 @@ The recipe (``solve_ensemble``/``map_ensemble``), the correctness contract,
 and the measured 1.79x/2-worker, 3.29x/8-worker strong-scaling table are in
 :doc:`/howto/parallel-ensembles`.
 
+Opaque finite-difference derivatives use the same mechanism through
+:func:`vmex.core.parallel.finite_difference_jacobian`.  Central probes are
+independent, automatically use up to the available workers, and retain input
+order.  Advanced users select ``workers=1`` for a serial baseline or an
+explicit cap when XLA/BLAS threading would otherwise oversubscribe the host.
+For multistart or ensemble optimization,
+:func:`vmex.core.parallel.evaluate_problems` accepts one independent problem
+object per member so mutable equilibrium caches are never shared.
+
+Workstation defaults and explicit controls
+------------------------------------------
+
+``workers=None`` is the beginner default for independent host work.  It
+resolves to ``min(number_of_items, os.cpu_count())`` and therefore offers all
+logical CPUs when there are at least that many finite-difference probes or
+ensemble members.  ``workers=N`` is the portable override; use ``workers=1``
+for a serial reference or a smaller ``N`` when each XLA/BLAS solve is already
+large enough that multiple workers contend for memory bandwidth.
+
+A single exact implicit-gradient optimization has no independent equilibrium
+probes to distribute.  JAX normally reports one CPU *device* for the entire
+host; that device is an XLA CPU backend with its own multithreaded kernels, not
+one CPU core.  Consequently, a process monitor showing, for example, 600%
+utilization does not mean VMEX has arbitrarily capped a 14-core machine at six
+workers.  The remaining work can be sequential, launch-bound, or
+memory-bandwidth-bound, and forcing one artificial JAX device per core was
+measured slower (see `Mechanisms considered and rejected`_).  VMEX does not
+expose a misleading ``workers`` argument on this coupled path.
+
+The controls by workload are therefore:
+
+.. list-table:: Parallel and placement controls
+   :header-rows: 1
+   :widths: 30 25 45
+
+   * - workload
+     - ordinary default
+     - advanced control
+   * - one forward or implicit solve
+     - XLA CPU threading / measured automatic placement
+     - ``device="cpu"`` or ``device="gpu"`` (or a concrete ``jax.Device``)
+   * - finite-difference Jacobian
+     - ``workers=None`` (all useful host workers)
+     - ``workers=N``
+   * - parameter scan / ensemble
+     - ``workers=None``
+     - ``workers=N`` and one problem object per member
+   * - several GPUs
+     - no automatic multi-GPU claim today
+     - place independent members on explicit devices; single-solve sharding is future work
+
+For a non-default accelerator, pass a concrete device or keep
+:func:`vmex.core.device.device_scope` around parameter construction and the
+JAX transformation.  JAX's current multi-device model is explicit array and
+computation sharding; it does not turn a host callback or an unsharded solve
+into a multi-GPU program merely because several devices are present.  See the
+upstream `JAX sharding documentation
+<https://docs.jax.dev/en/latest/jax.sharding.html>`_ for the underlying device
+model.  The CPU-only benchmark in this pull request therefore documents the
+multi-GPU path as design work rather than presenting invented speedups.
+
 Why the scaling is sub-linear
 -----------------------------
 

@@ -50,7 +50,7 @@ myst_enable_extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "optimization_api_plan.md"]
 
 
 def _truthy(value: str | None) -> bool:
@@ -96,7 +96,7 @@ rediraffe_redirects = {
     "input_reference": "reference/input-file",
     "wout_reference": "reference/wout-file",
     "objectives": "reference/objectives",
-    "optimization": "howto/optimize-a-boundary",
+    "optimization": "reference/optimization",
     "vmec2000_compatibility": "reference/vmec2000-compatibility",
     "capabilities": "reference/capabilities",
     "performance": "reference/performance",

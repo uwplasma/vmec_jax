@@ -54,6 +54,9 @@ Solver
 .. automodule:: vmex.core.multigrid
    :members:
 
+.. automodule:: vmex.core.restart
+   :members:
+
 .. automodule:: vmex.core.device
    :members:
 

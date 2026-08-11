@@ -22,12 +22,12 @@ Two pieces:
    d(theta_B, zeta_B)/d(theta, zeta)>`` — the same equations booz_xform
    solves, here end-to-end differentiable.
 
-2. :func:`omnigenity_residual` / :class:`QIResidual` — a smooth omnigenity
-   distance for poloidally-closed-contour (``M = 0, N = 1``) omnigenity.
-   The formulation is the constructed-QI-target distance of
+2. :func:`omnigenity_residual` / :class:`QIResidual` — a smooth, lightweight
+   surrogate for poloidally-closed-contour (``M = 0, N = 1``) omnigenity.
+   It distills conditions used in the constructed-QI target of
    **Goodman et al., "Constructing precisely quasi-isodynamic magnetic
-   fields", J. Plasma Phys. 89, 905890504 (2023), arXiv:2211.09829**,
-   distilled to its level-set form: on each surface, ``|B|`` is sampled along
+   fields", J. Plasma Phys. 89, 905890504 (2023), arXiv:2211.09829** into a
+   level-set form: on each surface, ``|B|`` is sampled along
    Boozer field lines ``theta_B = alpha + iota * phi_B`` over one field
    period and the residual stacks, per surface,
 
@@ -48,7 +48,11 @@ Two pieces:
 
    Each piece is an exact zero of an exactly QI field, every operation is
    smooth or piecewise-smooth (sigmoid occupancies, running maxima), and the
-   full pipeline is jit/grad/jvp-transparent for the implicit lane.
+   full pipeline is jit/grad/jvp-transparent for the implicit lane.  The
+   converse does not hold at finite sampling: this inexpensive surrogate can
+   be driven low by a field that still has a large full squash-and-shuffle
+   distance.  Use :class:`vmex.core.qi.ConstructedQIResidual` for production
+   QI optimization and resolved reporting.
 
 Scope notes
 -----------
@@ -181,6 +185,27 @@ def _lambda_half_weights(ns: int) -> tuple[np.ndarray, np.ndarray]:
 # ---------------------------------------------------------------------------
 
 
+def _nearest_half_mesh_rows(ns: int, surfaces) -> tuple[np.ndarray, np.ndarray]:
+    """Return half-mesh coordinates and one-based nearest row indices.
+
+    Exact midpoint ties select the lower-flux surface, matching booz_xform's
+    ``s_in`` lookup independently of round-off in the two grid constructions.
+    """
+    s_half = (np.arange(ns - 1) + 0.5) / (ns - 1)
+    requested = np.atleast_1d(
+        np.asarray(list(np.ravel(surfaces)), dtype=float)
+    )
+    if requested.size == 0:
+        raise ValueError("surfaces must be non-empty")
+    rows = []
+    for surface in requested:
+        distance = np.abs(s_half - surface)
+        tolerance = 8.0 * np.finfo(float).eps * max(1.0, abs(float(surface)))
+        nearest = np.flatnonzero(distance <= distance.min() + tolerance)[0]
+        rows.append(int(nearest) + 1)
+    return s_half, np.asarray(rows, dtype=int)
+
+
 def boozer_bmnc_state(
     state: SpectralState,
     rt: SolverRuntime,
@@ -231,11 +256,7 @@ def boozer_bmnc_state(
     dtype = s.dtype
 
     # -- surface selection: nearest half-mesh rows (static, shape-only) -----
-    s_half_np = (np.arange(ns - 1) + 0.5) / (ns - 1)
-    surf_np = np.atleast_1d(np.asarray(list(np.ravel(surfaces)), dtype=float))
-    if surf_np.size == 0:
-        raise ValueError("surfaces must be non-empty")
-    rows = np.asarray([int(np.argmin(np.abs(s_half_np - v))) + 1 for v in surf_np])
+    s_half_np, rows = _nearest_half_mesh_rows(ns, surfaces)
 
     # -- half-mesh field tables (the QS-residual field chain) ----------------
     _, geometry = _geometry(state, rt)
@@ -503,17 +524,20 @@ def omnigenity_residual(
 
 
 class QIResidual:
-    """Traceable quasi-isodynamic omnigenity residual (module docstring).
+    """Traceable smooth quasi-isodynamic surrogate (module docstring).
 
     Composition of :func:`boozer_bmnc_state` (traceable Boozer ``|B|``
     spectrum on the requested surfaces) and :func:`omnigenity_residual`
-    (smooth Goodman constructed-QI-target distance).  The interface mirrors
+    (a smooth level-set surrogate for the Goodman construction).  The
+    interface mirrors
     :class:`~vmex.core.optimize.QuasisymmetryRatioResidual`: the instance
     is a :func:`~vmex.core.optimize.least_squares` objective term for
     both gradient modes — ``jac=None`` calls :meth:`J` on the converged
     :class:`~vmex.core.optimize.Equilibrium`, ``jac="implicit"`` picks up
     the traceable :meth:`residuals_state` vector (full pointwise
-    Gauss-Newton geometry, exact implicit gradients).
+    Gauss-Newton geometry, exact implicit gradients).  Use
+    :class:`vmex.core.qi.ConstructedQIResidual` when the optimized quantity
+    must be the full squash-and-shuffle distance.
 
     Example::
 

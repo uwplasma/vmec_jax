@@ -228,9 +228,10 @@ The constructed-QI target
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Because :math:`\mathcal J_\parallel` uniformity is awkward to differentiate,
-:class:`~vmex.core.omnigenity.QIResidual` implements the equivalent
-level-set conditions of the *constructed-QI-target* method of Goodman *et al.*
-(2023). On each surface, :math:`|B|` is sampled along Boozer field lines
+:class:`~vmex.core.omnigenity.QIResidual` implements a lightweight smooth
+surrogate distilled from level-set conditions used by the
+*constructed-QI-target* method of Goodman *et al.* (2023). On each surface,
+:math:`|B|` is sampled along Boozer field lines
 :math:`\theta_B=\alpha+\iota\phi_B` over one field period, and three families of
 residual — each an **exact zero of an exactly QI field** — are stacked:
 
@@ -254,6 +255,8 @@ residual — each an **exact zero of an exactly QI field** — are stacked:
 Every operation (sigmoid occupancies, running maxima, level-space quadrature) is
 smooth or piecewise-smooth, so the residual is jit/grad/jvp-transparent and QI
 optimization runs with the exact implicit adjoint, exactly like the QS residual.
+These are necessary conditions at finite sampling, not a converse theorem: the
+surrogate can be small while the fuller construction remains large.
 
 VMEX keeps the three QI formulations separate:
 
@@ -322,19 +325,16 @@ built into the class.
 Metric fidelity: report the wout-based residual
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The traceable :class:`~vmex.core.omnigenity.QIResidual` is built for
+The traceable :class:`~vmex.core.omnigenity.QIResidual` is built for inexpensive
 *gradient flow*, not for *labeling* a configuration. Its level-space envelopes
-and finite sampling make it an excellent descent direction but an **optimistic
-absolute scale**: driven hard, it can report values well below what an
-independent Boozer analysis confirms. When quoting "how QI is this
-equilibrium?", use the wout/Boozer-based
-:func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout` (host
-``booz_xform_jax``, finite-difference-only) — the same construction evaluated on
-the fully resolved Boozer spectrum of the written ``wout``. The recommended
-workflow is therefore: **optimize** with the traceable residual under
-``jac="implicit"``, then **report** the wout-lane residual. The two agree in
-ranking; they diverge in absolute value precisely where the traceable form is
-being pushed below its trustworthy range.
+and finite sampling can report values well below an independent construction.
+Use :class:`~vmex.core.qi.ConstructedQIResidual` for production optimization,
+with reduced sampling only when its ranking has been checked against the
+default resolution. When quoting "how QI is this equilibrium?", also evaluate
+the wout/Boozer-based
+:func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout` on the written
+``wout``. Always report the surfaces and sampling because an outer-surface
+total is not numerically interchangeable with a core-to-edge total.
 
 
 Ideal MHD stability: Mercier and the magnetic well

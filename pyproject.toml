@@ -48,6 +48,10 @@ Issues = "https://github.com/uwplasma/vmex/issues"
 Changelog = "https://github.com/uwplasma/vmex/releases"
 
 [project.optional-dependencies]
+optimizers = [
+  "jaxopt",
+  "optax",
+]
 # Differentiable virtual-casing residual on a specified boundary
 # (plan.md R15.3 + R19); this is not a NESTOR equilibrium adjoint.
 # virtual-casing-jax >= 0.0.3 (released 2026-07-28 from the canonical

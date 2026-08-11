@@ -58,7 +58,7 @@ wout-engine only.
   plus `CURTOR` in either mode — the dof set of the self-consistent
   bootstrap objective.
 
-## One call with ESS (the recommended pattern)
+## One call with ESS (the quickest survey pattern)
 
 Instead of a `max_mode = 1, 2, ...` continuation ladder, hand the optimizer
 **all** harmonics at once with Exponential Spectral Scaling (`use_ess=True`):
@@ -66,7 +66,8 @@ each dof's trust radius is scaled by
 $e^{-\alpha \max(|m|,|n|)}/e^{-\alpha}$, so at the default `ess_alpha=1.2` a
 `max_mode`-6 dof moves ~400x more cautiously than a `max_mode`-1 dof — the
 coarse-to-fine ordering the ladder enforced, with no stage boundaries for
-the objective to stall at.
+the objective to stall at. ESS improves trust-region scaling; it does not
+reproduce the basin selection of a mode ladder.
 
 Measured from a near-circular torus seed on a 36-core CPU
 (`examples/optimization/QA_optimization_ess.py`, `QI_optimization_ess.py`):
@@ -76,10 +77,12 @@ Measured from a near-circular torus seed on a 36-core CPU
 | QA | 2 | QS (1,0) | 2.04e-01 | **7.2e-06** | 5 | 120 | **14.5 min** |
 | QI | 1 | omnigenity | 4.52e-01 | **1.81e-02** (25x) | 6 | 168 | **17.3 min** |
 
-The staged ladder (`max_mode=(1, ..., 5)`) remains available and reaches the
-same precision class — QA at QS 3.7e-7 in 25.5 min, ~1.8x longer — via
-`QA_optimization.py`, `QH_optimization.py`, `QP_optimization.py`,
-`QI_optimization.py` (QI with a quasi-poloidal basin stage first).
+The staged ladder (`max_mode=(1, ..., 5)`) remains available — QA at QS
+3.7e-7 in 25.5 min, ~1.8x longer — via `QA_optimization.py`,
+`QH_optimization.py`, `QP_optimization.py`, `QI_optimization.py`
+(constructed QI with a short quasi-poloidal basin stage first). A ladder
+can reach a lower, different minimum even when the single-call pattern is
+faster; the scripts stay side by side so the comparison is reproducible.
 
 ```{figure} /_static/figures/ess_x_scale.png
 :alt: ESS trust-region scale versus harmonic level for alpha 0.7 and 1.2
@@ -109,6 +112,15 @@ result = opt.minimize(
 Opt-in because it changes the step model from Gauss-Newton trust-region to
 limited-memory quasi-Newton; the objective and its unconstrained minimizers
 are unchanged. The perturbation warm start is unavailable on this path.
+
+## Choose the optimizer
+
+VMEX exposes the objective and derivatives without owning the optimizer
+({doc}`/reference/optimization`). `examples/optimization/qi_shared_problem.py`
+builds one QI problem that `QI_optimization_scipy.py`,
+`QI_optimization_jaxopt.py`, and `QI_optimization_optax.py` send unchanged to
+SciPy, JAXopt, or Optax. Install the optional JAX backends with
+`pip install "vmex[optimizers]"`.
 
 ## Knobs that are already right by default
 

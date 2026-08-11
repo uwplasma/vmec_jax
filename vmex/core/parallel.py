@@ -31,7 +31,14 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Iterable, Sequence, TypeVar
 
-__all__ = ["default_workers", "map_ensemble", "solve_ensemble"]
+__all__ = [
+    "default_workers",
+    "evaluate_problems",
+    "finite_difference_gradient",
+    "finite_difference_jacobian",
+    "map_ensemble",
+    "solve_ensemble",
+]
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -100,6 +107,106 @@ def map_ensemble(
         # executor.map preserves input order and propagates exceptions on
         # iteration (when return_exceptions is False, _call already re-raises).
         return list(pool.map(_call, items))
+
+
+def finite_difference_jacobian(
+    fun: Callable[[Any], Any],
+    x: Any,
+    *,
+    method: str = "3-point",
+    rel_step: float | None = None,
+    workers: int | None = None,
+) -> Any:
+    """Differentiate an opaque host function with independent parallel probes.
+
+    ``method="3-point"`` (default) is central and second-order accurate;
+    ``"2-point"`` is forward and first-order accurate.  ``workers=None`` uses
+    :func:`default_workers`, while ``workers=1`` is deterministic serial
+    execution.  Every probe receives its own copy of ``x`` and ``fun`` must not
+    mutate shared state.
+    """
+    import numpy as np
+
+    x = np.asarray(x, dtype=float)
+    if x.ndim != 1:
+        raise ValueError("x must be a one-dimensional decision vector")
+    if method not in ("2-point", "3-point"):
+        raise ValueError("method must be '2-point' or '3-point'")
+    if rel_step is None:
+        rel_step = np.finfo(float).eps ** (0.5 if method == "2-point" else 1.0 / 3.0)
+    if not np.isfinite(rel_step) or rel_step <= 0.0:
+        raise ValueError("rel_step must be finite and positive")
+    step = float(rel_step) * np.maximum(1.0, np.abs(x))
+
+    points: list[np.ndarray] = []
+    if method == "2-point":
+        points.append(x.copy())
+        for j in range(x.size):
+            point = x.copy()
+            point[j] += step[j]
+            points.append(point)
+    else:
+        for j in range(x.size):
+            minus = x.copy()
+            plus = x.copy()
+            minus[j] -= step[j]
+            plus[j] += step[j]
+            points.extend((minus, plus))
+
+    values = [np.asarray(value, dtype=float).ravel() for value in map_ensemble(
+        fun, points, workers=workers
+    )]
+    if not values:
+        return np.empty((0, 0), dtype=float)
+    size = values[0].size
+    if any(value.size != size for value in values):
+        raise ValueError("fun output size changed between finite-difference probes")
+    jacobian = np.empty((size, x.size), dtype=float)
+    if method == "2-point":
+        base = values[0]
+        for j in range(x.size):
+            jacobian[:, j] = (values[j + 1] - base) / step[j]
+    else:
+        for j in range(x.size):
+            jacobian[:, j] = (values[2 * j + 1] - values[2 * j]) / (2.0 * step[j])
+    return jacobian
+
+
+def finite_difference_gradient(
+    fun: Callable[[Any], Any], x: Any, **kwargs: Any
+) -> Any:
+    """Parallel finite-difference gradient of a scalar host function."""
+    return finite_difference_jacobian(fun, x, **kwargs).reshape(-1)
+
+
+def evaluate_problems(
+    problems: Sequence[Any],
+    xs: Sequence[Any] | None = None,
+    *,
+    derivatives: bool = True,
+    workers: int | None = None,
+    return_exceptions: bool = False,
+) -> list[Any]:
+    """Evaluate independent problem objects concurrently in input order.
+
+    Use one problem per ensemble or multistart member so each equilibrium cache
+    remains local.  ``xs`` defaults to each problem's ``x0``.
+    """
+    if xs is None:
+        xs = [problem.x0 for problem in problems]
+    if len(problems) != len(xs):
+        raise ValueError("problems and xs must have equal length")
+
+    def _one(item: tuple[Any, Any]) -> Any:
+        problem, x = item
+        return problem.evaluate(x, derivatives=derivatives)
+
+    return map_ensemble(
+        _one,
+        list(zip(problems, xs)),
+        workers=workers,
+        return_exceptions=return_exceptions,
+    )
 
 
 def solve_ensemble(

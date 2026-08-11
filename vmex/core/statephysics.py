@@ -14,6 +14,8 @@ One home for the small private helpers that :mod:`~vmex.core.optimize`,
   quadrature, equal to the wout ``aspect``/``volume_p`` scalars) and
   :func:`mean_iota` / :func:`edge_iota` (wout ``iotas``/``iotaf[-1]``
   conventions), re-exported unchanged by :mod:`~vmex.core.optimize`.
+  :func:`elongation_profile` / :func:`max_elongation` evaluate the boundary
+  cross-section elongation from the same physical edge coefficients;
   :mod:`~vmex.core.implicit` keeps its historical ``aspect_ratio`` /
   ``plasma_volume`` variants (shoelace boundary area on a fresh grid /
   ``sum(vp)``) because :class:`~vmex.core.implicit.ImplicitSolution`
@@ -198,6 +200,140 @@ def volume(state: SpectralState, rt: SolverRuntime) -> Array:
     ``sum(vp)`` variant of the same scalar (see there).
     """
     return _aspect_scalars(state, rt)[3]
+
+
+def elongation_profile(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    ntheta: int | None = None,
+    nphi: int | None = None,
+) -> jnp.ndarray:
+    """Boundary elongation at equally spaced toroidal cross-sections.
+
+    Each constant-geometric-toroidal-angle cross-section is reconstructed
+    from the physical edge Fourier coefficients.  Its area ``A`` and
+    perimeter ``P`` define the equivalent ellipse, whose semi-axes are
+    recovered with Ramanujan's perimeter approximation.  The returned ratio
+    is ``a_major / a_minor`` at each toroidal sample, the same definition used
+    by DESC's elongation objective.
+
+    The default grids (at least 32 poloidal and 24 toroidal points per field
+    period) resolve optimization modes through ``max_mode <= 5`` without
+    adding user-facing sampling knobs to ordinary scripts.  Explicit positive
+    ``ntheta`` and ``nphi`` values are available for convergence studies.
+    The calculation is JAX-traceable and supports stellarator-asymmetric
+    boundaries.
+    """
+    res = rt.resolution
+    ntheta = max(4 * int(res.mpol), 32) if ntheta is None else int(ntheta)
+    nphi = max(4 * int(res.ntor) + 1, 24) if nphi is None else int(nphi)
+    if ntheta < 4 or nphi < 1:
+        raise ValueError("ntheta must be at least 4 and nphi must be positive")
+
+    R_cos, Z_sin, R_sin, Z_cos = m1_constrained_to_physical(
+        state.R_cos,
+        state.Z_sin,
+        state.R_sin,
+        state.Z_cos,
+        modes=rt.modes,
+        lthreed=bool(rt.setup.lthreed),
+        lasym=bool(rt.setup.lasym),
+        lconm1=bool(rt.setup.lconm1),
+    )
+    mode_scale = jnp.asarray(
+        1.0 / physical_to_internal_scale(rt.modes, rt.trig)
+    )
+    rc = jnp.asarray(R_cos)[-1] * mode_scale
+    zs = jnp.asarray(Z_sin)[-1] * mode_scale
+    if bool(rt.setup.lasym):
+        rs = jnp.asarray(R_sin)[-1] * mode_scale
+        zc = jnp.asarray(Z_cos)[-1] * mode_scale
+    else:
+        # These fields are inactive work arrays in a symmetric solve.  Do not
+        # let their undefined implicit tangents enter an otherwise symmetric
+        # boundary objective through a formal ``0 * NaN`` product.
+        rs = jnp.zeros_like(rc)
+        zc = jnp.zeros_like(zs)
+
+    theta = 2.0 * np.pi * np.arange(ntheta, dtype=float) / ntheta
+    zeta = 2.0 * np.pi * np.arange(nphi, dtype=float) / (nphi * int(res.nfp))
+    angle = (
+        theta[:, None, None] * np.asarray(rt.modes.m)[None, None, :]
+        - zeta[None, :, None]
+        * (int(res.nfp) * np.asarray(rt.modes.n))[None, None, :]
+    )
+    cosine = jnp.asarray(np.cos(angle))
+    sine = jnp.asarray(np.sin(angle))
+    R = jnp.einsum("k,tpk->tp", rc, cosine) + jnp.einsum(
+        "k,tpk->tp", rs, sine
+    )
+    Z = jnp.einsum("k,tpk->tp", zc, cosine) + jnp.einsum(
+        "k,tpk->tp", zs, sine
+    )
+    poloidal_mode = jnp.asarray(np.asarray(rt.modes.m, dtype=float))
+    dR_dtheta = jnp.einsum(
+        "k,tpk->tp", -rc * poloidal_mode, sine
+    ) + jnp.einsum("k,tpk->tp", rs * poloidal_mode, cosine)
+    dZ_dtheta = jnp.einsum(
+        "k,tpk->tp", -zc * poloidal_mode, sine
+    ) + jnp.einsum("k,tpk->tp", zs * poloidal_mode, cosine)
+
+    dtheta = 2.0 * np.pi / ntheta
+    perimeter = dtheta * jnp.sum(
+        jnp.sqrt(dR_dtheta**2 + dZ_dtheta**2), axis=0
+    )
+    area = 0.5 * dtheta * jnp.abs(
+        jnp.sum(R * dZ_dtheta - Z * dR_dtheta, axis=0)
+    )
+    tiny = jnp.asarray(jnp.finfo(area.dtype).tiny, dtype=area.dtype)
+    area = jnp.maximum(area, tiny)
+
+    root = jnp.sqrt(8.0 * jnp.pi * area + perimeter**2)
+    discriminant = (
+        2.0 * jnp.sqrt(3.0) * perimeter * root
+        - 40.0 * jnp.pi * area
+        + 4.0 * perimeter**2
+    )
+    # The equivalent ellipse is directionally nonsmooth at a perfect circle:
+    # the analytic discriminant is exactly zero there.  A round-off-sized
+    # smooth absolute value keeps forward implicit tangents finite without
+    # changing resolved elongations (the relative perturbation is O(sqrt(eps))).
+    discriminant_scale = jnp.maximum(perimeter**2, tiny)
+    regularization = (
+        32.0 * jnp.finfo(area.dtype).eps * discriminant_scale
+    )
+    sqrt_discriminant = jnp.sqrt(
+        jnp.sqrt(discriminant**2 + regularization**2)
+    )
+    semi_major = (
+        jnp.sqrt(3.0)
+        * (
+            root
+            + sqrt_discriminant
+        )
+        + 3.0 * perimeter
+    ) / (12.0 * jnp.pi)
+    semi_minor = area / (jnp.pi * jnp.maximum(semi_major, tiny))
+    return semi_major / jnp.maximum(semi_minor, tiny)
+
+
+def max_elongation(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    ntheta: int | None = None,
+    nphi: int | None = None,
+) -> Array:
+    """Maximum boundary elongation over one field period.
+
+    See :func:`elongation_profile`.  A hard maximum is deliberate: it matches
+    the usual engineering constraint and is differentiable except when two
+    sampled cross-sections tie exactly.
+    """
+    return jnp.max(
+        elongation_profile(state, rt, ntheta=ntheta, nphi=nphi)
+    )
 
 
 def mean_iota(state: SpectralState, rt: SolverRuntime) -> Array:

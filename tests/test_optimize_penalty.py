@@ -1,11 +1,11 @@
 """Zero-crash penalty-path tests for ``optimize.least_squares`` (plan Item
 I.2): a mid-campaign trial whose equilibrium solve fails must be penalized
 (large finite residual, trust region backs off), never crash.  All four
-except-bodies are exercised deterministically by making the host solve fail
-on chosen calls: the jac=None ``fun`` body, the jac="implicit" ``fun`` body
-(which also exercises the Item I.1 typed-error relay under jit), the
-last-valid-Jacobian fallback, and the final diagnostic cold re-solve.
-Each campaign must complete with a finite cost and the penalty prints.
+failure lanes are exercised deterministically by making the host solve fail
+on chosen calls: the jac=None ``fun`` body, the exception-free implicit
+callback status, the finite differentiated penalty, and the final diagnostic
+cold re-solve.  Each campaign must complete with a finite cost and no callback
+traceback.
 """
 
 from __future__ import annotations
@@ -35,6 +35,29 @@ def _boom() -> VmecJacobianError:
         hint="deterministic stand-in for a self-intersecting trial boundary")
 
 
+def test_status_callback_builds_safe_mask_before_seed_cache(monkeypatch):
+    """Even an unprimed failed trial returns a shape-safe zero mask."""
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    cfg = im.make_config(inp, ftol=1.0e-10, max_iterations=10)
+    params = im.params_from_input(inp)
+    params_np = jax.tree.map(np.asarray, params)
+    saved = dict(im._MASK_CACHE)
+    try:
+        im._MASK_CACHE.clear()
+        monkeypatch.setattr(
+            im,
+            "_host_solve_and_mask_impl",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(_boom()),
+        )
+        state, mask, status = im._host_solve_and_mask_status(cfg, params_np)
+        assert int(status) == 1
+        assert all(np.all(value == 0.0) for value in jax.tree.leaves(mask))
+        assert jax.tree.structure(state) == jax.tree.structure(mask)
+    finally:
+        im._MASK_CACHE.clear()
+        im._MASK_CACHE.update(saved)
+
+
 def test_fd_lane_penalty_path(monkeypatch, capsys):
     """jac=None: a failed trial solve is penalized and the campaign completes."""
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
@@ -53,8 +76,11 @@ def test_fd_lane_penalty_path(monkeypatch, capsys):
                             diff_step=1e-4, verbose=1)
     out = capsys.readouterr().out
     assert calls["failed"] == 1
-    assert "trial solve failed" in out  # the penalty branch executed
+    assert "Cost" in out
+    assert "VmecJacobianError" not in out
+    assert "Traceback" not in out
     assert np.isfinite(res.cost)
+    assert res.failed_trials == 1
     assert isinstance(res.input, VmecInput)
 
 
@@ -84,14 +110,15 @@ def test_implicit_lane_fun_penalty_path(monkeypatch, capsys):
                             max_nfev=4, verbose=1)
     out = capsys.readouterr().out
     assert calls["poisoned"] >= 1
-    assert "trial solve failed" in out  # the penalty branch executed
-    assert "VmecJacobianError" in out   # Item I.1 relay: short sentinel, typed name
+    assert "Cost" in out                 # scipy accepted-iteration table
+    assert "VmecJacobianError" not in out
+    assert "Traceback" not in out        # no exception crossed pure_callback
     assert np.isfinite(res.cost)
     np.testing.assert_allclose(res.x, opt.pack_boundary(inp, 1))  # stayed at x0
 
 
 def test_minimize_penalty_path(monkeypatch, capsys):
-    """A failed scalarized trial reuses the last finite reverse gradient."""
+    """A failed scalarized trial gets the smooth consistent penalty pair."""
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
     real = im._host_solve
     calls = {"new": 0, "poisoned": 0}
@@ -111,18 +138,19 @@ def test_minimize_penalty_path(monkeypatch, capsys):
         options={"maxiter": 2, "maxls": 3})
     out = capsys.readouterr().out
     assert calls["poisoned"] >= 1
-    assert "trial solve/gradient failed" in out
+    assert "VmecJacobianError" not in out
+    assert "Traceback" not in out
     assert np.isfinite(res.cost)
+    assert res.monitor is not None
 
 
-def test_implicit_lane_jac_fallback_and_diagnostic_resolve(monkeypatch, capsys):
-    """jac='implicit': failed Jacobian reuses the last valid one; final
-    diagnostic re-solve falls back to a cold solve when the hot seed fails.
+def test_implicit_lane_status_penalty_and_diagnostic_resolve(monkeypatch, capsys):
+    """Failed differentiated trials use a penalty; diagnostics re-solve cold.
 
     The scipy driver evaluates ``jac`` at exactly the accepted iterate
     ``fun`` just solved (a memo-hit host solve), so poisoning memo-hit
-    solves after the first ``jac(x0)`` fails every later Jacobian while all
-    trial solves stay healthy.  ``solve_equilibrium`` additionally fails
+    solves after the first ``jac(x0)`` fails later differentiated trials,
+    which follow the status-safe penalty branch. ``solve_equilibrium`` fails
     whenever hot-seeded, forcing the final diagnostic's cold-solve fallback.
     """
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
@@ -133,9 +161,9 @@ def test_implicit_lane_jac_fallback_and_diagnostic_resolve(monkeypatch, capsys):
         hit = im._LAST_SOLVE.get(cfg)
         if hit is not None and hit[0] == im._params_key(params):
             calls["repeat"] += 1
-            # repeats 1-3: residual pre-size, fun(x0), jac(x0); later repeats
-            # are the Jacobians of accepted steps -> fail those.
-            if calls["repeat"] >= 4:
+            # repeats 1-2: fun(x0), jac(x0); later repeats are the
+            # differentiated evaluations of accepted steps -> fail those.
+            if calls["repeat"] >= 3:
                 calls["poisoned"] += 1
                 raise _boom()
         return real(cfg, params)
@@ -155,7 +183,8 @@ def test_implicit_lane_jac_fallback_and_diagnostic_resolve(monkeypatch, capsys):
                             max_nfev=4, verbose=1)
     out = capsys.readouterr().out
     assert calls["poisoned"] >= 1
-    assert "trial jacobian failed" in out  # last-valid-Jacobian fallback ran
+    assert "VmecJacobianError" not in out
+    assert "Traceback" not in out
     assert seeded["n"] == 1
     assert np.isfinite(res.cost)
     assert res.equilibrium is not None  # cold-solve fallback delivered it

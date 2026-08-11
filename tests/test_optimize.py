@@ -146,6 +146,59 @@ def test_scalar_targets_match_own_wout(solovev_eq):
     assert 0.0 < mirror < 1.0
 
 
+def test_boundary_elongation_is_traceable_and_grid_converged(solovev_eq):
+    """Equivalent-ellipse elongation is physical, resolved, and JAX-ready."""
+    eq = solovev_eq
+    coarse = np.asarray(
+        opt.elongation_profile(eq.state, eq.runtime, ntheta=32, nphi=16)
+    )
+    fine = np.asarray(
+        opt.elongation_profile(eq.state, eq.runtime, ntheta=64, nphi=32)
+    )
+    assert np.all(np.isfinite(coarse)) and np.all(coarse >= 1.0)
+    np.testing.assert_allclose(np.max(coarse), 1.5602656925818226, rtol=1e-7)
+    np.testing.assert_allclose(np.max(coarse), np.max(fine), rtol=1e-7)
+    np.testing.assert_allclose(float(opt.max_elongation(eq.state, eq.runtime)),
+                               np.max(coarse), rtol=1e-7)
+
+    gradient = np.asarray(jax.grad(
+        lambda z_sin: opt.max_elongation(
+            dataclasses.replace(eq.state, Z_sin=z_sin), eq.runtime
+        )
+    )(eq.state.Z_sin))
+    assert np.all(np.isfinite(gradient))
+    assert np.max(np.abs(gradient)) > 0.0
+
+
+def test_solve_equilibrium_forwards_verbose(monkeypatch, solovev_eq):
+    """The public final-solve helper exposes the VMEC iteration table flag."""
+    captured = {}
+    result = SimpleNamespace(
+        state=solovev_eq.state,
+        fsqr=solovev_eq.result.fsqr,
+        fsqz=solovev_eq.result.fsqz,
+        fsql=solovev_eq.result.fsql,
+        iterations=solovev_eq.result.iterations,
+        converged=solovev_eq.result.converged,
+    )
+
+    def fake_solve_multigrid(inp, **kwargs):
+        captured.update(kwargs)
+        return result
+
+    monkeypatch.setattr(opt, "solve_multigrid", fake_solve_multigrid)
+    solved = opt.solve_equilibrium(
+        solovev_eq.inp,
+        initial_state=solovev_eq.state,
+        raise_on_max_iterations=True,
+        verbose=True,
+    )
+    assert solved.state is solovev_eq.state
+    assert captured["initial_state"] is solovev_eq.state
+    assert captured["raise_on_max_iterations"] is True
+    assert captured["verbose"] is True
+
+
 def test_scalar_targets_vs_golden(solovev_eq):
     """Scalars vs golden VMEC2000 wout values: the golden run is an
     independently converged state (ftol 1e-14), so tolerances carry solver
@@ -369,6 +422,147 @@ def test_minimize_scalarized_implicit_smoke(solovev_eq):
     assert isinstance(res.input, VmecInput)
 
 
+def test_scipy_bfgs_scalar_lane_completes_and_descends():
+    """SciPy BFGS and L-BFGS-B complete on the public scalar lane and descend.
+
+    Objective-term problems assemble ``value_and_grad`` from the same
+    certified residual/Jacobian lane as least squares (value ``0.5 r.r``,
+    gradient ``J^T r``), and uncertified trials get the smooth
+    objective-scale wall pair — so Wolfe line searches see consistent
+    value/slope data at every trial and terminate instead of collapsing on
+    stale gradients or 1e12-scale cliffs (the QI BFGS stall).  Measured on
+    this 2-dof problem: BFGS 3.89e-01 -> 1.55e-06 in 3 iterations (6
+    evaluations), L-BFGS-B -> 3.64e-05 in 2; bounds carry ample margin.
+    """
+    jax.config.update("jax_disable_jit", False)
+    import scipy.optimize
+
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+
+    def elongation_excess(state, runtime):
+        return jax.numpy.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+
+    problem = opt.VmecProblem.from_tuples(
+        inp,
+        [(opt.aspect_ratio, 4.0, 1.0), (elongation_excess, 0.0, 1.0)],
+        max_mode=1,
+        use_ess=True,
+    )
+    value0, gradient0 = problem.value_and_grad(problem.x0)
+    residual0, jacobian0 = problem.residual_and_jac(problem.x0)
+    np.testing.assert_allclose(
+        value0, 0.5 * float(residual0 @ residual0), rtol=1e-12)
+    np.testing.assert_allclose(gradient0, jacobian0.T @ residual0, rtol=1e-12)
+
+    bfgs = scipy.optimize.minimize(
+        problem.fun, problem.x0, jac=problem.grad, method="BFGS",
+        options={"maxiter": 3})
+    assert bfgs.nit >= 2
+    assert np.all(np.isfinite(bfgs.jac))
+    assert float(bfgs.fun) < 1.0e-3 < value0
+
+    lbfgsb = scipy.optimize.minimize(
+        problem.fun, problem.x0, jac=problem.grad, method="L-BFGS-B",
+        options={"maxiter": 2, "maxls": 8})
+    assert float(lbfgsb.fun) < 1.0e-2 < value0
+
+    # Same-budget least-squares reference on the identical problem object.
+    reference = scipy.optimize.least_squares(
+        problem.residual, problem.x0, jac=problem.residual_jac,
+        x_scale=problem.scales, max_nfev=int(bfgs.nfev))
+    assert float(reference.cost) < value0
+
+    # Malformed decision vectors stay on the finite wall instead of raising.
+    bad_value, bad_gradient = problem.value_and_grad(
+        np.zeros(problem.x0.size + 1))
+    assert bad_value == 1.0e12
+    np.testing.assert_array_equal(bad_gradient, np.zeros_like(problem.x0))
+
+
+def test_certified_trial_guards_reject_stale_or_missing_memo(monkeypatch):
+    """Certification refuses derivatives when the trial memo cannot vouch for x.
+
+    :func:`certified_trial` gates every scalar-lane derivative on the last
+    host solve belonging to exactly the requested ``x``.  Two failure modes
+    are forced here on both public lanes: the memo slot missing entirely
+    (writes dropped) and the memo belonging to different parameters (the
+    params key churned every call).  Either way the trial must fall onto the
+    smooth wall pair — ``max(10 * seed_cost, 1)`` with a zero gradient at
+    the seed — and count in ``holder["failed_trials"]``, never returning a
+    derivative of an uncertifiable state.  A malformed ``fun`` input takes
+    the flat 1e12 wall without solving.
+    """
+    import itertools
+
+    from vmex.core import implicit as implicit_module
+
+    jax.config.update("jax_disable_jit", False)
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    inp = inp.change_resolution(mpol=3, ntor=0, ntheta=12, nzeta=4)
+    inp = dataclasses.replace(
+        inp,
+        ns_array=np.asarray([5]),
+        ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([1000]),
+    )
+
+    class _DropWrites(implicit_module._LAST_SOLVE.__class__):
+        def __setitem__(self, key, value):  # simulate an evicted memo slot
+            pass
+
+    problem = opt.VmecProblem.from_tuples(
+        inp, [(opt.aspect_ratio, 4.0, 1.0)], max_mode=1, use_ess=False,
+    )
+    holder = problem.metadata["holder"]
+    rows0 = problem.residual(problem.x0)
+    wall = max(10.0 * (0.5 * float(rows0 @ rows0)), 1.0)
+    value0, gradient0 = problem.value_and_grad(problem.x0)
+    assert np.isfinite(value0) and np.all(np.isfinite(gradient0))
+
+    with monkeypatch.context() as m:
+        m.setattr(implicit_module, "_LAST_SOLVE", _DropWrites())
+        problem._vg_cache = None
+        failed_before = holder["failed_trials"]
+        value, gradient = problem.value_and_grad(problem.x0)
+        assert np.isclose(value, wall, rtol=1e-12, atol=0.0)
+        np.testing.assert_array_equal(gradient, np.zeros_like(problem.x0))
+        assert holder["failed_trials"] == failed_before + 1
+
+    with monkeypatch.context() as m:
+        nonce = itertools.count()
+        m.setattr(
+            implicit_module, "_params_key",
+            lambda params: f"nonce-{next(nonce)}".encode(),
+        )
+        problem._vg_cache = None
+        failed_before = holder["failed_trials"]
+        value, gradient = problem.value_and_grad(problem.x0)
+        assert np.isclose(value, wall, rtol=1e-12, atol=0.0)
+        np.testing.assert_array_equal(gradient, np.zeros_like(problem.x0))
+        assert holder["failed_trials"] == failed_before + 1
+
+    scalar = opt.VmecProblem.from_loss(
+        inp,
+        lambda state, runtime: 0.5 * (opt.aspect_ratio(state, runtime) - 4.0) ** 2,
+        max_mode=1,
+        use_ess=False,
+    )
+    sholder = scalar.metadata["holder"]
+    svalue0 = float(scalar.fun(scalar.x0))
+    swall = max(10.0 * abs(svalue0), 1.0)
+    with monkeypatch.context() as m:
+        m.setattr(implicit_module, "_LAST_SOLVE", _DropWrites())
+        scalar._vg_cache = None
+        failed_before = sholder["failed_trials"]
+        value, gradient = scalar.value_and_grad(scalar.x0)
+        assert np.isclose(value, swall, rtol=1e-12, atol=0.0)
+        np.testing.assert_array_equal(gradient, np.zeros_like(scalar.x0))
+        assert sholder["failed_trials"] == failed_before + 1
+
+    # Malformed fun input: finite wall, no solve.
+    assert scalar.fun(np.zeros(scalar.x0.size + 1)) == 1.0e12
+
+
 def test_least_squares_implicit_jac_chunking(solovev_eq):
     """The R17.1 chunked implicit Jacobian matches the unchunked one:
     ``jac_chunk_size`` only changes how the per-dof columns are batched
@@ -396,26 +590,293 @@ def test_auto_jac_chunk_stays_bounded_with_large_device(monkeypatch):
     assert opt._auto_jac_chunk(120) == 11
 
 
-def test_least_squares_implicit_jac_solver_block(solovev_eq):
+def test_least_squares_implicit_jac_solver_block(monkeypatch):
     """The R25.2 block-tridiagonal Jacobian (``jac_solver="block"``: colored
     jvp probes, one :func:`solvax.block_thomas_factor`, GMRES-certified
     columns) must agree with the per-dof GMRES path to the solver tolerance
     (``adjoint_tol = 1e-6``)."""
     jax.config.update("jax_disable_jit", False)
     inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    inp = inp.change_resolution(
+        mpol=3, ntor=0, ntheta=12, nzeta=4,
+    )
+    inp = dataclasses.replace(
+        inp,
+        ns_array=np.asarray([5]),
+        ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([1000]),
+    )
     obj = [(opt.aspect_ratio, 4.0, 1.0)]
+
+    def elongation_excess(state, runtime):
+        return jax.numpy.maximum(
+            opt.max_elongation(state, runtime) - 8.0, 0.0
+        )
+
     ref = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                             jac_solver="gmres", max_nfev=1)
-    got = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
-                            jac_solver="block", max_nfev=1)
+    # The public problem uses cost weights: weight=4 scales residuals and
+    # their Jacobian by sqrt(4)=2.  It exposes the same block engine the
+    # compatibility driver used to keep private.
+    problem = opt.VmecProblem.from_tuples(
+        inp,
+        [(opt.aspect_ratio, 4.0, 4.0), (elongation_excess, 0.0, 1.0)],
+        max_mode=1,
+        implicit_jacobian_method="block_tridiagonal",
+        use_ess=False,
+    )
+    residual, weighted_jac = problem.residual_and_jac(problem.x0)
+    compiled = problem.compile_residual_and_jacobian(progress=False)
+    got_jac = weighted_jac[0] / 2.0
     reverse = opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                                 jac_solver="reverse", max_nfev=1)
-    assert got.jac.shape == ref.jac.shape
-    np.testing.assert_allclose(got.jac, ref.jac, rtol=1e-6, atol=1e-8)
+    reverse_problem = opt.VmecProblem.from_tuples(
+        inp,
+        obj,
+        max_mode=1,
+        implicit_jacobian_method="reverse_adjoint",
+        use_ess=False,
+    )
+    assert np.all(np.isfinite(np.asarray(
+        reverse_problem.jax_residual_jac(reverse_problem.x0)
+    )))
+    assert got_jac.shape == ref.jac[0].shape
+    np.testing.assert_allclose(residual[0] / 2.0, ref.fun[0], rtol=1e-12)
+    np.testing.assert_allclose(got_jac, ref.jac[0], rtol=1e-6, atol=1e-8)
+    assert residual[1] == 0.0
+    assert np.all(np.isfinite(weighted_jac[1]))
     np.testing.assert_allclose(reverse.jac, ref.jac, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(problem.grad(problem.x0),
+                               weighted_jac.T @ residual, rtol=1e-6)
+    assert np.all(np.isfinite(np.asarray(problem.jax_residual_jac(problem.x0))))
+    assert problem.input_from_x(problem.x0) == inp
+    np.testing.assert_array_equal(problem.x_from_input(inp), problem.x0)
+    accepted = problem.equilibrium_from_x(problem.x0)
+    assert accepted.inp == inp
+    assert accepted.result.converged
+    with pytest.raises(RuntimeError, match="usable VMEC equilibrium"):
+        problem.equilibrium_from_x(np.full_like(problem.x0, np.nan))
+    np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
+    with pytest.raises(ValueError, match="ntheta"):
+        opt.elongation_profile(
+            accepted.state, accepted.runtime, ntheta=3, nphi=1
+        )
+    asymmetric_runtime = dataclasses.replace(
+        accepted.runtime,
+        setup=dataclasses.replace(accepted.runtime.setup, lasym=True),
+    )
+    asymmetric_elongation = opt.elongation_profile(
+        accepted.state, asymmetric_runtime, ntheta=4, nphi=1
+    )
+    assert np.all(np.isfinite(asymmetric_elongation))
+    assert problem.metadata["derivative_method"] == "implicit"
+    assert "converged equilibrium" in problem.metadata["derivative_description"]
+    assert problem.metadata["weight_semantics"] == "cost"
+    assert problem.metadata["implicit_jacobian_method"] == "block_tridiagonal"
+    assert problem.metadata["jacobian_batch_size"] == 1
+    assert problem.metadata["input_resolution"] == {
+        "mpol": inp.mpol,
+        "ntor": inp.ntor,
+        "ntheta": inp.ntheta,
+        "nzeta": inp.nzeta,
+    }
+    np.testing.assert_array_equal(compiled.residual, residual)
+    np.testing.assert_array_equal(compiled.jacobian, weighted_jac)
+    assert (
+        problem.metadata["implicit_jacobian_description"]
+        == "block-tridiagonal equilibrium response"
+    )
+    assert (
+        problem.metadata["weight_description"]
+        == "weight multiplies squared cost"
+    )
+
+    # A non-finite block result retries the independently certified GMRES
+    # implementation; if both lanes raise, the last certified Jacobian is
+    # returned and the failed-trial counter remains observable.
+    real_device_get = opt.jax.device_get
+    poisoned = {"done": False}
+
+    def nonfinite_primary(value):
+        host = real_device_get(value)
+        if not poisoned["done"] and np.shape(host) == weighted_jac.shape:
+            poisoned["done"] = True
+            return np.full(weighted_jac.shape, np.nan)
+        return host
+
+    monkeypatch.setattr(opt.jax, "device_get", nonfinite_primary)
+    problem._rj_cache = None
+    np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
+    assert problem.metadata["holder"]["derivative_fallbacks"] == 1
+
+    def reject_both(value):
+        host = real_device_get(value)
+        if np.shape(host) == weighted_jac.shape:
+            raise RuntimeError("synthetic derivative failure")
+        return host
+
+    monkeypatch.setattr(opt.jax, "device_get", reject_both)
+    problem._rj_cache = None
+    np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
+    assert problem.metadata["holder"]["failed_trials"] >= 1
+
+    certified = problem.metadata["holder"]["last_jac"]
+    problem.metadata["holder"]["last_jac"] = None
+    problem._rj_cache = None
+    with pytest.raises(RuntimeError, match="synthetic derivative failure"):
+        problem.residual_jac(problem.x0)
+
+    def reject_with_nonfinite(value):
+        host = real_device_get(value)
+        if np.shape(host) == weighted_jac.shape:
+            return np.full(weighted_jac.shape, np.nan)
+        return host
+
+    monkeypatch.setattr(opt.jax, "device_get", reject_with_nonfinite)
+    problem._rj_cache = None
+    with pytest.raises(FloatingPointError, match="non-finite initial"):
+        problem.residual_jac(problem.x0)
+    problem.metadata["holder"]["last_jac"] = certified
+
+    monkeypatch.setattr(opt.jax, "device_get", real_device_get)
+    problem.metadata["holder"]["lin"] = None
+    failed_before = problem.metadata["holder"]["failed_trials"]
+
+    def reject_residual(_value):
+        raise RuntimeError("synthetic residual failure")
+
+    monkeypatch.setattr(opt.jax, "device_get", reject_residual)
+    assert np.all(problem.residual(problem.x0) == 1.0e6)
+    assert problem.metadata["holder"]["failed_trials"] >= failed_before + 1
+    monkeypatch.setattr(opt.jax, "device_get", real_device_get)
+
+    from vmex.core import implicit as implicit_module
+
+    evaluation = problem.evaluate(problem.x0)
+    assert evaluation.success
+    assert evaluation.diagnostics["solve_stats"]["solves"] >= 1
+    scalar = opt.VmecProblem.from_loss(
+        inp,
+        lambda state, runtime: 0.5 * (opt.aspect_ratio(state, runtime) - 4.0) ** 2,
+        max_mode=1,
+        use_ess=False,
+    )
+    value, gradient = scalar.value_and_grad(scalar.x0)
+    assert np.isfinite(value) and np.all(np.isfinite(gradient))
+    assert np.isfinite(scalar.fun(scalar.x0))
+    assert scalar.fun(np.full_like(scalar.x0, np.nan)) == 1.0e12
+    assert np.isfinite(float(scalar.jax_fun(scalar.x0)))
+    assert scalar.equilibrium_from_x(scalar.x0).result.converged
+
+    holder = scalar.metadata["holder"]
+    real_device_get = opt.jax.device_get
+
+    def fail_device_get(_value):
+        raise RuntimeError("synthetic transfer failure")
+
+    # A failed evaluation returns the smooth trial-wall PAIR — a value
+    # anchored at ten seed costs (never below 1.0) and its exact gradient
+    # (zero at the reference point) — so scalar line searches always see
+    # consistent value/slope data commensurate with the objective scale,
+    # never a stale gradient from a different point.
+    wall = max(10.0 * value, 1.0)
+    monkeypatch.setattr(opt.jax, "device_get", fail_device_get)
+    scalar._vg_cache = None
+    failed_value, failed_gradient = scalar.value_and_grad(scalar.x0)
+    assert failed_value == wall
+    np.testing.assert_array_equal(failed_gradient, np.zeros_like(scalar.x0))
+    assert scalar.fun(scalar.x0) == failed_value
+    holder["scalar_certified"] = False
+    scalar._vg_cache = None
+    with pytest.raises(RuntimeError, match="synthetic transfer failure"):
+        scalar.value_and_grad(scalar.x0)
+    with pytest.raises(RuntimeError, match="synthetic transfer failure"):
+        scalar.fun(scalar.x0)
+
+    def nan_device_get(value):
+        return np.full_like(np.asarray(value), np.nan)
+
+    monkeypatch.setattr(opt.jax, "device_get", nan_device_get)
+    scalar._vg_cache = None
+    with pytest.raises(FloatingPointError, match="non-finite initial"):
+        scalar.value_and_grad(scalar.x0)
+    holder["scalar_certified"] = True
+    scalar._vg_cache = None
+    failed_value, failed_gradient = scalar.value_and_grad(scalar.x0)
+    assert failed_value == wall
+    np.testing.assert_array_equal(failed_gradient, np.zeros_like(scalar.x0))
+    monkeypatch.setattr(opt.jax, "device_get", real_device_get)
+
+    with pytest.raises(AttributeError, match="residuals"):
+        scalar.residual(scalar.x0)
+    from vmex.core.problem import Evaluation, FunctionProblem
+
+    config = problem.metadata["config"]
+    implicit_module._LAST_STATUS_ERROR[config] = ValueError("rejected boundary")
+
+    def rejected_equilibrium(_x):
+        raise RuntimeError("no converged equilibrium for this point")
+
+    monkeypatch.setattr(problem, "_equilibrium_from_x", rejected_equilibrium)
+    monkeypatch.setattr(
+        FunctionProblem,
+        "evaluate",
+        lambda self, x, derivatives=True: Evaluation(x=np.asarray(x)),
+    )
+    failed = problem.evaluate(problem.x0)
+    assert failed.status == "failed_solve"
+    assert failed.message == "rejected boundary"
+    assert failed.diagnostics["exception_type"] == "ValueError"
+    implicit_module._LAST_STATUS_ERROR.pop(config, None)
     with pytest.raises(ValueError, match="jac_solver"):
         opt.least_squares(obj, inp, max_mode=1, jac="implicit",
                           jac_solver="svd", max_nfev=1)
+
+
+def test_public_problem_factory_validation():
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    term = [(opt.aspect_ratio, 4.0, 1.0)]
+    with pytest.raises(ValueError, match="exactly one"):
+        opt.make_problem(inp)
+    with pytest.raises(ValueError, match="exactly one"):
+        opt.make_problem(inp, objective_terms=term, loss=opt.aspect_ratio)
+    finite_difference = opt.make_problem(
+        inp,
+        objective_terms=term,
+        derivative_method="finite_difference",
+        workers=1,
+    )
+    assert finite_difference.metadata["derivative_method"] == "finite_difference"
+    assert "equilibrium re-solves" in finite_difference.metadata[
+        "derivative_description"
+    ]
+    with pytest.raises(ValueError, match="non-negative"):
+        opt.make_problem(
+            inp, objective_terms=[(opt.aspect_ratio, 4.0, -1.0)], max_mode=1
+        )
+    common = dict(max_mode=1, x0=None, solve_kwargs={})
+    with pytest.raises(ValueError, match="weight_semantics"):
+        opt._least_squares_implicit(
+            term, inp, weight_semantics="unknown", **common
+        )
+    with pytest.raises(ValueError, match="implicit_jacobian_method"):
+        opt.make_problem(
+            inp,
+            objective_terms=term,
+            implicit_jacobian_method="block",
+        )
+    with pytest.raises(ValueError, match="jacobian_batch_size"):
+        opt.make_problem(inp, objective_terms=term, jacobian_batch_size=0)
+    with pytest.raises(FloatingPointError, match="initial point"):
+        opt.make_problem(
+            inp,
+            objective_terms=[(lambda _state, _runtime: jax.numpy.nan, 0.0, 1.0)],
+            max_mode=1,
+        )
+    with pytest.raises(ValueError, match="not both"):
+        opt._least_squares_implicit(
+            term, inp, scalar_objective=opt.aspect_ratio, **common
+        )
 
 
 def test_least_squares_implicit_warm_start_modes(solovev_eq):

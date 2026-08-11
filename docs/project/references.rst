@@ -79,7 +79,8 @@ Confinement objectives and optimization:
 20. A. Goodman et al., “Constructing precisely quasi-isodynamic magnetic
     fields,” *Journal of Plasma Physics* 89(5), 905890504 (2023),
     arXiv:2211.09829 — the constructed-QI target implemented by
-    :class:`~vmex.core.omnigenity.QIResidual`.
+    :class:`~vmex.core.qi.ConstructedQIResidual`; the lightweight
+    :class:`~vmex.core.omnigenity.QIResidual` is a level-set surrogate.
 
 21. J. R. Cary and S. G. Shasharina, “Omnigenity and quasihelicity in helical
     plasma confinement systems,” *Physics of Plasmas* 4, 3323 (1997) — the
@@ -132,3 +133,28 @@ Confinement objectives and optimization:
     doi:10.1017/S0022377826101688 — defines the bounce-time-weighted
     Maxwellian maximum-J fraction :math:`f_J`, which is distinct from a
     uniform resolved-orbit count.
+
+31. D. A. Spong and J. H. Harris, “New QP/QI symmetric stellarator
+    configurations,” *Plasma and Fusion Research* 5, S2039 (2010),
+    doi:10.1585/pfr.5.S2039 — motivates quasi-poloidal symmetry as a practical
+    precursor to poloidally closed-contour quasi-isodynamic configurations.
+
+32. R. Conlin, P. Kim, D. W. Dudt, D. Panici, and E. Kolemen, “Stellarator
+    Optimization with Constraints,” *Journal of Plasma Physics* 90,
+    905900501 (2024), arXiv:2403.11033 — hard shaping constraints and
+    augmented-Lagrangian methods for stellarator design.
+
+33. B. Jang, R. Conlin, and M. Landreman, “Exponential Spectral Scaling:
+    Robust and Efficient Stellarator Boundary Optimization via Mode-Dependent
+    Scaling,” arXiv:2509.16320 (2025) — the direct full-spectrum variable
+    scaling exposed by ``use_ess=True``.
+
+34. D. Panici, B. Jang, R. Conlin, D. Dudt, Y. G. Elmacioglu, and E. Kolemen,
+    “Deflation Techniques for Stellarator Equilibrium and Optimization,”
+    arXiv:2602.09957 (2026) — a systematic route to distinct minima when a
+    single deterministic continuation path is insufficient.
+
+35. H. Chen *et al.*, “Direct Optimization of Stellarator Omnigenity from the
+    Second Adiabatic Invariant,” arXiv:2608.02418 (2026) — recent direct
+    bounce-action optimization complementary to constructed geometric QI
+    targets.

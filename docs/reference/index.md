@@ -34,6 +34,7 @@ performance
 :maxdepth: 1
 
 objectives
+optimization
 api/basic
 api/advanced
 ```
