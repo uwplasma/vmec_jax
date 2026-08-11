@@ -489,6 +489,28 @@ The dominant stabilizing ingredient of :math:`D_{\mathrm{well}}` — the sign of
 The ``--plot`` summary shows this dimensional derivative directly, labeled
 :math:`V''(s)` (magnetic well), and aligns its zero with the stability-index
 axis. Negative values denote a well and positive values a hill.
+
+The separate ``*_stability.png`` figure retains the full Mercier
+decomposition and exposes the pressure-gradient dependence more directly.
+For a trial pressure derivative :math:`p'`, with geometry and current frozen,
+it evaluates
+
+.. math::
+
+   D_{\mathrm{well}}(p') = p'\left(V''-p'T_{pp}\right)T_{bb},\qquad
+   D_{\mathrm{Merc}}(p') = D_{\mathrm{Merc},0}-D_{\mathrm{well},0}
+     +D_{\mathrm{well}}(p'),
+
+and :math:`D_R(p')=D_{R,0}+D_{\mathrm{well},0}-D_{\mathrm{well}}(p')`.
+The plot reports :math:`\min_s D_{\mathrm{Merc}}` and
+:math:`-\max_s D_R`, so positive values are favorable for both criteria. It
+rescales the WOUT pressure shape to trial volume-average beta; because a
+vacuum WOUT contains no such shape, that case is explicitly labeled and uses
+:math:`p(s)\propto1-s`. This is a coefficient-level sensitivity diagnostic,
+not a finite-pressure stability certificate: geometry, Shafranov shift,
+transform, and current respond to pressure, so selected beta points must be
+re-solved before drawing a stability conclusion.
+
 :func:`~vmex.core.optimize.magnetic_well` returns the finite-difference
 vacuum-well measure
 

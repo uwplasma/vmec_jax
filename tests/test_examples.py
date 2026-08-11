@@ -64,7 +64,7 @@ def test_plot_and_boozer(tmp_path):
     outdir = tmp_path / "output_plot_and_boozer"
     assert (outdir / "wout_li383_low_res.nc").exists()
     # every plot_wout figure kind is written unconditionally
-    for suffix in ("summary", "surfaces", "modB", "profiles", "boundary3d"):
+    for suffix in ("summary", "surfaces", "modB", "profiles", "stability", "boundary3d"):
         assert (outdir / f"li383_low_res_{suffix}.png").exists()
 
 

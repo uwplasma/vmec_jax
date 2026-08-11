@@ -57,7 +57,7 @@ print(f"\nwout scalars: aspect = {float(wout.aspect):.4f}, "
 print(f"wrote {wout_path}")
 
 # --------------------------- plots ------------------------------------------
-figures = vj.plot_wout(wout_path, OUT_DIR)  # summary/surfaces/modB/profiles/3d
+figures = vj.plot_wout(wout_path, OUT_DIR)  # summary/surfaces/modB/profiles/stability/3d
 for key, path in figures.items():
     print(f"wrote {path}")
 

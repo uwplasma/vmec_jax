@@ -14,6 +14,7 @@ Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 - ``modB``      ``|B|`` contours in (zeta, theta) at mid radius and boundary;
 - ``profiles``  iota / pressure / current profiles plus the ``fsqt``
   force-residual convergence trace;
+- ``stability`` Mercier decomposition and a frozen-equilibrium pressure scan;
 - ``3d``        3-D plasma boundary colored by ``|B|`` (jet colormap).
 
 Both stellarator-symmetric and ``lasym`` (asymmetric) equilibria are
@@ -46,6 +47,7 @@ __all__ = [
     "plot_surfaces",
     "plot_modB",
     "plot_profiles",
+    "plot_stability",
     "plot_boundary_3d",
     "plot_boozmn_modB",
     "plot_boozmn_spectrum",
@@ -341,6 +343,8 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
         ratio = np.where(bdotb != 0.0, _MU0 * jdotb / np.where(bdotb != 0.0, bdotb, 1.0), 0.0)
     dmerc_recon = np.zeros(ns)
     d_r = np.zeros(ns)
+    tpp_profile = np.zeros(ns)
+    tbb_profile = np.zeros(ns)
     for i in range(1, ns - 1):
         phip_full = 0.5 * (phip_real[i + 1] + phip_real[i])
         gsqrt_raw = 0.5 * (gsqrt[i] + gsqrt[i + 1])
@@ -350,6 +354,8 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
         b2i = 0.5 * (b2[i + 1] + b2[i])
         tpp = float(np.mean(gsqrt_full / b2i)) * two_pi_sq
         tbb = float(np.mean(b2i * gsqrt_full * gpp)) * two_pi_sq
+        tpp_profile[i] = tpp
+        tbb_profile[i] = tbb
         bdotj_norm = np.where(gsqrt_raw != 0.0, bdotk[i] / np.where(gsqrt_raw != 0.0, gsqrt_raw, 1.0), 0.0)
         jdotb_i = bdotj_norm * gpp * gsqrt_full
         tjb = float(np.mean(jdotb_i)) * two_pi_sq
@@ -378,7 +384,57 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
             "note": f"D_R self-check failed (DMerc mismatch {mismatch:.1e})",
             "d_r": None,
         }
-    return {"valid": True, "note": "", "d_r": d_r, "dmerc_recon": dmerc_recon, "mismatch": mismatch}
+    return {
+        "valid": True, "note": "", "d_r": d_r,
+        "dmerc_recon": dmerc_recon, "mismatch": mismatch,
+        "vpp": vpp, "tpp": tpp_profile, "tbb": tbb_profile,
+        "phip_full_h": phip_full_h,
+    }
+
+
+def _frozen_pressure_scan_from_wout(
+    wout, d_r_info: dict[str, Any], beta: np.ndarray,
+) -> dict[str, Any]:
+    """Evaluate explicit ``p'`` stability terms without re-solving equilibrium."""
+    beta = np.asarray(beta, dtype=float)
+    if beta.ndim != 1 or beta.size < 2 or np.any(beta < 0.0):
+        raise ValueError("beta must be a nonnegative 1-D array with at least two entries")
+    if not d_r_info.get("valid"):
+        return {"valid": False, "note": d_r_info.get("note", "D_R unavailable")}
+
+    ns = int(wout.ns)
+    hs = 1.0 / (ns - 1)
+    pressure = np.asarray(wout.pres, dtype=float)
+    peak_pressure = float(np.max(np.abs(pressure[1:])))
+    if peak_pressure > 0.0:
+        shape = pressure / peak_pressure
+        profile_note = "WOUT pressure shape"
+    else:
+        shape = np.zeros(ns)
+        shape[1:] = 1.0 - _half_mesh_s(ns)
+        profile_note = r"vacuum seed $p(s)\propto1-s$"
+
+    wb = abs(float(wout.wb))
+    beta_per_pa = _MU0 * hs * float(np.sum(
+        np.abs(np.asarray(wout.vp, dtype=float)[1:]) * shape[1:])) / wb if wb else 0.0
+    if not np.isfinite(beta_per_pa) or beta_per_pa <= 0.0:
+        return {"valid": False, "note": "pressure-to-beta normalization unavailable"}
+
+    unit_presp = np.zeros(ns)
+    unit_presp[1:-1] = _MU0 * (shape[2:] - shape[1:-1]) / (
+        hs * np.asarray(d_r_info["phip_full_h"], dtype=float))
+    presp = (beta / beta_per_pa)[:, None] * unit_presp[None, :]
+    vpp = np.asarray(d_r_info["vpp"], dtype=float)[None, :]
+    tpp = np.asarray(d_r_info["tpp"], dtype=float)[None, :]
+    tbb = np.asarray(d_r_info["tbb"], dtype=float)[None, :]
+    dwell = presp * (vpp - presp * tpp) * tbb
+    original_dwell = np.asarray(wout.DWell, dtype=float)[None, :]
+    dmerc = np.asarray(wout.DMerc, dtype=float)[None, :] - original_dwell + dwell
+    d_r = np.asarray(d_r_info["d_r"], dtype=float)[None, :] + original_dwell - dwell
+    return {
+        "valid": True, "note": profile_note, "beta": beta,
+        "dwell": dwell, "dmerc": dmerc, "d_r": d_r,
+    }
 
 
 # ==========================================================================
@@ -543,14 +599,14 @@ def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float
     sl = slice(lo, ns - 1)
     lines = [ax.plot(
         s[sl], dmerc[sl], marker="o", markersize=3.5, linestyle="-",
-        color=_LINE_COLORS[0], label=r"$D_{Merc}$ ($>0$ stable)")[0]]
+        color=_LINE_COLORS[0], label=r"$D_{Merc}>0$")[0]]
     finite = dmerc[sl][np.isfinite(dmerc[sl])]
     peak = float(np.max(np.abs(finite))) if finite.size else 1.0
     if d_r_info.get("valid"):
         d_r = np.asarray(d_r_info["d_r"], dtype=float)
         lines.append(ax.plot(
             s[sl], d_r[sl], marker="s", markersize=3.2, linestyle="--",
-            color=_LINE_COLORS[1], label=r"$D_R$ ($\leq 0$ stable)")[0])
+            color=_LINE_COLORS[1], label=r"$D_R\leq0$")[0])
         finite_r = d_r[sl][np.isfinite(d_r[sl])]
         if finite_r.size:
             peak = max(peak, float(np.max(np.abs(finite_r))))
@@ -573,14 +629,19 @@ def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float
                    np.finfo(float).tiny)
     lines.append(well_ax.plot(
         s_vpp[sl], vpp[sl], marker="^", markersize=3.2, linestyle="-.",
-        color=_LINE_COLORS[2], label=r"$V''(s)$ ($<0$ magnetic well)")[0])
+        color=_LINE_COLORS[2], label=r"$V''<0$ well")[0])
     well_ax.axhline(0.0, color="0.4", linewidth=0.8, zorder=1)
     well_ax.set_ylim(-1.05 * peak_vpp, 1.05 * peak_vpp)
     well_ax.set_ylabel(r"$V''(s)$ [m$^3$] (magnetic well)", color=_LINE_COLORS[2])
     well_ax.tick_params(axis="y", colors=_LINE_COLORS[2])
     well_ax.spines["right"].set_color(_LINE_COLORS[2])
     ax.set_title(r"Mercier, resistive interchange, and $V''(s)$")
-    ax.legend(lines, [line.get_label() for line in lines], loc="best")
+    ax.legend(
+        lines, [line.get_label() for line in lines], loc="upper center",
+        bbox_to_anchor=(0.5, -0.20), ncol=3, borderaxespad=0.0,
+        framealpha=1.0, facecolor="white", edgecolor="0.7",
+        handlelength=1.8, columnspacing=0.8,
+    )
     return well_ax
 
 
@@ -827,6 +888,78 @@ def plot_summary(wout, out_path: str | Path, *, s_plot_ignore: float = 0.2) -> P
     return out_path
 
 
+def plot_stability(
+    wout, out_path: str | Path, *, beta_max: float | None = None,
+    s_plot_ignore: float = 0.2,
+) -> Path:
+    """Plot Mercier terms and frozen-equilibrium pressure stability margins."""
+    plt = _import_matplotlib()
+    wout, _ = _as_wout(wout)
+    ns = int(wout.ns)
+    s = np.linspace(0.0, 1.0, ns)
+    lo = max(2, int(round(s_plot_ignore * ns)))
+    sl = slice(lo, ns - 1)
+    if beta_max is None:
+        beta_max = max(0.05, 1.5 * float(wout.betatotal))
+    if not np.isfinite(beta_max) or beta_max <= 0.0:
+        raise ValueError("beta_max must be positive")
+
+    d_r_info = _glasser_d_r_from_wout(wout)
+    scan = _frozen_pressure_scan_from_wout(
+        wout, d_r_info, np.linspace(0.0, float(beta_max), 41))
+    with _rc_context():
+        fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.8), layout="constrained")
+        terms = (
+            ("DMerc", r"$D_{Merc}$", "black", "-", 2.0),
+            ("DShear", r"$D_{shear}$", _LINE_COLORS[0], "--", 1.4),
+            ("DWell", r"$D_{well}$", _LINE_COLORS[1], "-.", 1.4),
+            ("DCurr", r"$D_{curr}$", _LINE_COLORS[2], ":", 1.7),
+            ("DGeod", r"$D_{geod}$", _LINE_COLORS[3], (0, (5, 2)), 1.4),
+        )
+        for name, label, color, linestyle, linewidth in terms:
+            axes[0].plot(
+                s[sl], np.asarray(getattr(wout, name), dtype=float)[sl],
+                color=color, linestyle=linestyle, linewidth=linewidth, label=label)
+        axes[0].axhline(0.0, color="0.4", linewidth=0.8)
+        axes[0].set(xlabel=_S_LABEL, ylabel="Mercier contribution", title="Mercier decomposition")
+        axes[0].legend(
+            loc="upper center", bbox_to_anchor=(0.5, -0.20), ncol=3,
+            borderaxespad=0.0, framealpha=1.0, facecolor="white", edgecolor="0.7")
+
+        if scan.get("valid"):
+            beta_percent = 100.0 * np.asarray(scan["beta"])
+            dmerc_margin = np.nanmin(np.asarray(scan["dmerc"])[:, sl], axis=1)
+            d_r_margin = -np.nanmax(np.asarray(scan["d_r"])[:, sl], axis=1)
+            axes[1].plot(
+                beta_percent, dmerc_margin, color=_LINE_COLORS[0], marker="o",
+                markersize=3.0, label=r"$\min D_{Merc}$")
+            axes[1].plot(
+                beta_percent, d_r_margin, color=_LINE_COLORS[1], linestyle="--",
+                marker="s", markersize=3.0, label=r"$-\max D_R$")
+            beta_now = 100.0 * float(wout.betatotal)
+            if 0.0 < beta_now <= 100.0 * float(beta_max):
+                axes[1].axvline(
+                    beta_now, color="0.35", linestyle=":", linewidth=1.2,
+                    label=rf"WOUT $\beta={beta_now:.2f}\%$")
+            axes[1].set_title(f"Frozen pressure ramp\n{scan['note']}")
+            axes[1].legend(
+                loc="upper center", bbox_to_anchor=(0.5, -0.20), ncol=3,
+                borderaxespad=0.0, framealpha=1.0, facecolor="white", edgecolor="0.7")
+        else:
+            axes[1].text(
+                0.5, 0.5, scan.get("note", "pressure scan unavailable"),
+                ha="center", va="center", transform=axes[1].transAxes)
+            axes[1].set_title("Frozen-equilibrium pressure scan unavailable")
+        axes[1].axhline(0.0, color="0.4", linewidth=0.8)
+        axes[1].set_xlabel(r"trial $\langle\beta\rangle$ [%]")
+        axes[1].set_ylabel("worst stability margin (>0 favorable)")
+
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
+    return out_path
+
+
 # ==========================================================================
 # Remaining per-figure plotters (wout)
 # ==========================================================================
@@ -1016,6 +1149,7 @@ _WOUT_FIGURES = {
     "surfaces": ("surfaces", plot_surfaces),
     "modB": ("modB", plot_modB),
     "profiles": ("profiles", plot_profiles),
+    "stability": ("stability", plot_stability),
     "3d": ("boundary3d", plot_boundary_3d),
 }
 
@@ -1023,7 +1157,7 @@ _WOUT_FIGURES = {
 def plot_wout(
     wout,
     outdir: str | Path,
-    which: Sequence[str] = ("summary", "surfaces", "modB", "profiles", "3d"),
+    which: Sequence[str] = ("summary", "surfaces", "modB", "profiles", "stability", "3d"),
     *,
     name: str | None = None,
 ) -> dict[str, Path]:
@@ -1036,7 +1170,7 @@ def plot_wout(
     outdir:
         Output directory (created if missing).
     which:
-        Any subset of ``("summary", "surfaces", "modB", "profiles", "3d")``.
+        Any subset of ``("summary", "surfaces", "modB", "profiles", "stability", "3d")``.
     name:
         Basename prefix for the figures (default: case name from the path).
 

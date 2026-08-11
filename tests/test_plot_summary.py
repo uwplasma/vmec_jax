@@ -9,8 +9,8 @@ check, so the module needs no golden fixtures and stays network-free:
 - style invariants are pinned: every ``|B|`` contour set is non-filled and
   jet-mapped, the 3-D surface colormap constant is jet, all text is >= 11 pt,
   every drawn text artist stays inside the canvas, saved PNGs are >= 200 dpi;
-- the wout-based Glasser ``D_R`` reconstruction used by the stability panel
-  must agree with the traceable :func:`vmex.core.stability.glasser_d_r_state`.
+- the wout-based Glasser ``D_R`` reconstruction and frozen-pressure response
+  must recover the traceable equilibrium values at the stored beta.
 """
 
 from __future__ import annotations
@@ -147,7 +147,7 @@ def test_summary_field_line_and_j_map_present(summary_figure):
 
 
 def test_summary_combines_stability_and_well(summary_figure):
-    """DMerc, dashed D_R, and dash-dot V'' share aligned zero levels."""
+    """DMerc, dashed D_R, and dash-dot V'' share zeroes; legend stays below."""
     fig, meta = summary_figure
     stability = meta["axes"]["stability"]
     well = meta["well_axis"]
@@ -156,10 +156,13 @@ def test_summary_combines_stability_and_well(summary_figure):
     assert well.yaxis.label.get_color() == plotting._LINE_COLORS[2]
     assert "V''" in well.get_ylabel()
     labels = [text.get_text() for text in stability.get_legend().get_texts()]
-    assert any("V''" in label and "magnetic well" in label for label in labels)
+    assert any("V''" in label and "well" in label for label in labels)
     fig.canvas.draw()
     assert stability.transData.transform((0.0, 0.0))[1] == pytest.approx(
         well.transData.transform((0.0, 0.0))[1])
+    renderer = fig.canvas.get_renderer()
+    assert stability.get_legend().get_window_extent(renderer).y1 <= (
+        stability.get_window_extent(renderer).y0 + 2)
 
 
 def test_summary_style_constants():
@@ -184,6 +187,58 @@ def test_d_r_reconstruction_matches_traceable(solved_case):
     assert error <= 1.0e-4 * scale
 
 
+def test_frozen_pressure_scan_recovers_wout(solved_case):
+    """The frozen pressure scan exactly returns the WOUT at its stored beta."""
+    _, wout = solved_case
+    info = plotting._glasser_d_r_from_wout(wout)
+    scan = plotting._frozen_pressure_scan_from_wout(
+        wout, info, np.array([0.0, float(wout.betatotal)]))
+    interior = slice(2, -1)
+    assert scan["valid"] and scan["note"] == "WOUT pressure shape"
+    for key, reference in (
+        ("dwell", wout.DWell), ("dmerc", wout.DMerc), ("d_r", info["d_r"]),
+    ):
+        np.testing.assert_allclose(
+            scan[key][1, interior], np.asarray(reference)[interior], rtol=2.0e-7)
+    np.testing.assert_allclose(
+        scan["dmerc"][0], np.asarray(wout.DMerc) - np.asarray(wout.DWell))
+    np.testing.assert_allclose(
+        scan["d_r"][0], np.asarray(info["d_r"]) + np.asarray(wout.DWell))
+
+
+def test_frozen_pressure_scan_uses_explicit_vacuum_seed(solved_case):
+    """A vacuum WOUT uses the documented linear pressure seed, not a floor."""
+    _, wout = solved_case
+    info = plotting._glasser_d_r_from_wout(wout)
+    dwell = np.asarray(wout.DWell)
+    vacuum = dataclasses.replace(
+        wout, pres=np.zeros_like(wout.pres), presf=np.zeros_like(wout.presf),
+        DWell=np.zeros_like(dwell), DMerc=np.asarray(wout.DMerc) - dwell,
+        betatotal=0.0)
+    vacuum_info = {**info, "d_r": np.asarray(info["d_r"]) + dwell}
+    scan = plotting._frozen_pressure_scan_from_wout(
+        vacuum, vacuum_info, np.array([0.0, 0.01]))
+    assert scan["valid"] and "vacuum seed" in scan["note"]
+    np.testing.assert_allclose(scan["dmerc"][0], vacuum.DMerc)
+    np.testing.assert_allclose(scan["d_r"][0], vacuum_info["d_r"])
+    assert np.isfinite(scan["dmerc"]).all()
+    assert np.isfinite(scan["d_r"]).all()
+
+
+def test_frozen_pressure_scan_guards(solved_case, tmp_path):
+    """Malformed beta grids and unavailable beta normalization fail clearly."""
+    _, wout = solved_case
+    info = plotting._glasser_d_r_from_wout(wout)
+    with pytest.raises(ValueError, match="nonnegative 1-D"):
+        plotting._frozen_pressure_scan_from_wout(wout, info, np.array([-0.01, 0.0]))
+    unavailable = plotting._frozen_pressure_scan_from_wout(
+        dataclasses.replace(wout, wb=0.0), info, np.array([0.0, 0.01]))
+    assert unavailable == {
+        "valid": False, "note": "pressure-to-beta normalization unavailable"}
+    with pytest.raises(ValueError, match="beta_max must be positive"):
+        plotting.plot_stability(wout, tmp_path / "invalid.png", beta_max=0.0)
+
+
 def test_saved_summary_png_resolution(solved_case, tmp_path):
     """plot_wout writes the summary PNG at >= 200 dpi pixel dimensions."""
     import matplotlib.image as mpimg
@@ -196,6 +251,13 @@ def test_saved_summary_png_resolution(solved_case, tmp_path):
     width_in, height_in = 15.0, 11.5  # _summary_figure figsize
     assert pixels.shape[1] >= 0.95 * width_in * plotting._DPI
     assert pixels.shape[0] >= 0.95 * height_in * plotting._DPI
+
+
+def test_saved_stability_png(solved_case, tmp_path):
+    """The detailed stability figure renders both diagnostic panels."""
+    _, wout = solved_case
+    path = plotting.plot_stability(wout, tmp_path / "stability.png")
+    assert path.exists() and path.stat().st_size > 0
 
 
 # ==========================================================================

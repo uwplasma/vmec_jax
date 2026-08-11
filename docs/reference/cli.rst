@@ -36,7 +36,7 @@ Options
    * - ``--plot [PATH]``
      - Generate plots. With a ``wout_*.nc`` file, plot the summary (including
        automatic Boozer ``|B|`` and 3-D LCFS), cross-sections, profiles, and
-       standalone 3-D LCFS; with
+       standalone Mercier/pressure-ramp stability and 3-D LCFS figures; with
        a ``mout_*.nc`` file, plot horizontal straight-axis mirror diagnostics;
        with a ``boozmn_*.nc`` file, plot Boozer diagnostics; with an input
        file, solve first and plot the resulting WOUT.
