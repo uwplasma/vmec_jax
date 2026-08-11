@@ -140,6 +140,13 @@
       "tests/test_scaling.py::test_scale_wout_commutes_with_finite_beta_solve",
       "tests/test_stability.py::test_trial_pressure_proxy_recovers_the_prescribed_pressure",
       "tests/test_stability.py::test_mercier_data_is_zero_on_a_radially_degenerate_grid",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[empty]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[negative]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[multi]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[tangential]",
+      "tests/test_aphi_flux_normalization.py::test_sign_reversing_flux_map_raises_with_exact_interval[reversing]",
+      "tests/test_aphi_flux_normalization.py::test_sign_reversing_flux_map_raises_with_exact_interval[merged_window]",
+      "tests/test_aphi_flux_normalization.py::test_sign_reversing_deck_fails_lawfully_through_the_cli",
       "tests/test_restart.py",
       "tests/test_plot_summary.py",
       "tests/test_plotting_boozer.py"

@@ -12,21 +12,28 @@ Only two levers defeat VMEC's dimensionless force normalization (everything
 that rescales the physics cancels in bcovar.f; measured row 1 stayed
 ~4.6e3 under pressure/PHIEDGE/CURTOR/scale/TCON0/elongation/axis attempts):
 an extreme prescribed transform (``AI = 3, -300``) and an ``APHI`` flux
-remap whose derivative reverses sign in s in (0.20, 0.69) — the profil3d.f
-interior guess assumes monotone flux, so no axis recovery can remove the
-resulting force.  Combined measurement (both codes, ns=21 rung): row 1 =
-``FSQR 1.65E+07, FSQZ 2.70E+05, FSQL 5.12``, 24 resets in 40 iterations,
-DELT 0.9 -> 0.08, FSQL pinned O(1) while FSQR stays above 1e5.
+remap whose derivative reverses sign in s in (0.20, 0.69).  The APHI lever
+is an INVALID flux parameterization (the s -> Phi map folds; the
+profil3d.f-style interior guess assumes monotone flux, so no axis recovery
+can remove the resulting force) and VMEX now refuses it with a typed
+``VmecInputError`` at setup (``vmex.core.setup.validate_torflux_monotone``).
+The lawful stress deck therefore uses the AI lever alone; measurement
+(both codes print identical rows, ns=21 rung, 2026-08): row 1 =
+``FSQR 1.17E+06, FSQZ 1.41E+04, FSQL 4.22``, WMHD 1.2277E+02, 14 resets in
+40 iterations, FSQL pinned O(1) while FSQR stays above 1e3.
 
-Cross-code findings pinned here (do NOT paper over): with the sign-
-reversing APHI the row-1 energy differs (VMEX WMHD 1.4762E+03 vs VMEC2000
-1.4768E+03, ~4e-4) and seeds a one-iteration phase shift absorbed by the
-banded comparison; on the FULL 5-rung ladder the termination classes
-diverge — PARVMEC NaN-marches at ns=55 and still writes a WOUT, VMEX's
-fail-fast policy raises a typed error (``test_full_ladder_termination_
-classes`` pins the difference).  No free-boundary variant: no public mgrid
-exists for this boundary; the free-side recovery contract lives in
-``tests/test_freeboundary_stress.py``.
+Historical cross-code findings, kept for the record: WITH the sign-
+reversing APHI both codes reached row 1 ``FSQR 1.65E+07`` but the row-1
+energy differed (VMEX WMHD 1.4762E+03 vs VMEC2000 1.4768E+03, ~4e-4 at the
+bcovar-level field assembly near the phips zero crossing) and seeded a
+one-iteration phase shift; on the FULL 5-rung ladder PARVMEC NaN-marches
+at the interpolated ns=55 rung (jacobian.f's ``taumax*taumin < 0`` restart
+test is NaN-blind) and still writes a WOUT with ``fsqr = NaN``
+(``ier_flag = 16``, exit code 0).  ``test_full_ladder_termination_classes``
+pins that divergence as OUR-typed-error vs THEIR-NaN-write-through; the
+AI-only deck removed the last known bounded cross-code row divergence.
+No free-boundary variant: no public mgrid exists for this boundary; the
+free-side recovery contract lives in ``tests/test_freeboundary_stress.py``.
 """
 
 from __future__ import annotations
@@ -44,7 +51,7 @@ import pytest
 
 from tools.force_oracle import ROW as V2K_ROW
 from vmex.core.errors import (
-    MORE_ITER_FLAG, VmecJacobianError, VmecNumericalError,
+    INPUT_ERROR_FLAG, MORE_ITER_FLAG, VmecInputError,
 )
 from vmex.core.fourier import mode_table
 from vmex.core.input import VmecInput
@@ -58,9 +65,9 @@ PUBLIC_BOUNDARY = (
     / "input.serial2500170_surface_points_mpol12_ntor12"
 )
 
-#: Measured first-rung row 1 of the stress deck (VMEX, ns=21; VMEC2000
-#: prints the same leading digits).  The hard requirement is FSQR >= 1e7.
-MEASURED_ROW1 = (1.648e7, 2.706e5, 5.124)
+#: Measured first-rung row 1 of the (AI-lever) stress deck — VMEX and
+#: xvmec2000 print identical rows.  The hard requirement is FSQR >= 1e6.
+MEASURED_ROW1 = (1.17e6, 1.41e4, 4.22)
 
 STRESS_NS = (21, 34, 55, 89, 144)
 STRESS_NITER = 40
@@ -75,12 +82,18 @@ def _replace_assignment(text: str, name: str, replacement: str) -> str:
 
 
 def stress_indata_text(*, single_stage: bool = False,
-                       niter: int = STRESS_NITER) -> str:
+                       niter: int = STRESS_NITER,
+                       reversed_flux: bool = False) -> str:
     """Build the public high-force stress deck from the tracked boundary.
 
     ``single_stage=True`` restricts the ladder to the first rung (ns=21) —
     the bounded variant used for the cross-code row comparison and the
     LFULL3D1OUT WOUT contract; the deck is otherwise identical.
+
+    ``reversed_flux=True`` adds the historical sign-reversing flux remap
+    ``APHI = 5, -16, 12`` (``Phi'(s) = 5 - 32 s + 36 s**2`` < 0 on s in
+    (0.2023, 0.6866)) — an invalid parameterization VMEX rejects at setup;
+    used only by the parse test and the termination-class divergence pins.
     """
     text = PUBLIC_BOUNDARY.read_text()
     text = _replace_assignment(text, "MPOL", "  MPOL = 13")
@@ -108,10 +121,14 @@ def stress_indata_text(*, single_stage: bool = False,
     # major radius 3.5 (high aspect); the boundary shape is untouched
     text = re.sub(r"RBC\(\s*0,\s*0\)\s*=\s*[0-9.eE+-]+",
                   "RBC(   0,   0) =  3.5000000000000000e+00", text, count=1)
+    aphi_line = (
+        "  APHI(1) = 5.0, -16.0, 12.0\n"     # indexed start-element form
+        if reversed_flux else ""
+    )
     text = text.replace(
         "  NCURR   = 0",
-        "  APHI(1) = 5.0, -16.0, 12.0\n"     # indexed start-element form
-        "  AI = 3.0, -300.0\n"
+        aphi_line
+        + "  AI = 3.0, -300.0\n"
         "  LFORBAL = T\n"
         "  LFULL3D1OUT = T\n"
         "  PRECON_TYPE = 'NONE'\n"
@@ -145,8 +162,13 @@ def _v2k_first_stage_rows(text: str) -> dict[int, tuple[float, ...]]:
 
 
 def test_deck_features_parse() -> None:
-    """Every required confidential-adjacent feature survives parsing."""
-    inp = VmecInput.from_indata_text(stress_indata_text())
+    """Every required confidential-adjacent feature survives parsing.
+
+    Parsing is deliberately lawful even for the invalid ``reversed_flux``
+    variant: rejection is a SETUP-time typed error, so decks remain
+    inspectable (``VmecInput.from_indata_text`` -> diagnosis tooling).
+    """
+    inp = VmecInput.from_indata_text(stress_indata_text(reversed_flux=True))
     assert mode_table(inp.mpol, inp.ntor).mnmax == 238
     np.testing.assert_array_equal(inp.ns_array, list(STRESS_NS))
     rbc = np.asarray(inp.rbc, dtype=float)
@@ -164,14 +186,36 @@ def test_deck_features_parse() -> None:
     s = np.linspace(0.0, 1.0, 201)
     dphi = sum((k + 1) * aphi[k] * s**k for k in range(3))
     assert dphi.min() < 0.0 < dphi.max()
+    # the lawful stress deck carries the identity flux map (AI lever only)
+    lawful = VmecInput.from_indata_text(stress_indata_text())
+    np.testing.assert_array_equal(np.asarray(lawful.aphi)[:3], [1.0, 0.0, 0.0])
+
+
+def test_reversed_flux_deck_raises_typed_input_error_at_setup() -> None:
+    """The historical sign-reversing APHI deck now fails lawfully, up front.
+
+    ``solve_multigrid`` must raise ``VmecInputError`` (``ier_flag = 5``)
+    naming the exact reversal interval of ``Phi'(s) = 5 - 32 s + 36 s**2``
+    before any iteration runs — not diverge, not NaN, not JAC75-storm.
+    """
+    inp = VmecInput.from_indata_text(
+        stress_indata_text(single_stage=True, reversed_flux=True)
+    )
+    with pytest.raises(VmecInputError) as excinfo:
+        solve_multigrid(inp, raise_on_max_iterations=False, device="cpu")
+    err = excinfo.value
+    assert int(err.ier_flag) == INPUT_ERROR_FLAG
+    assert "non-monotonic toroidal-flux map" in err.message
+    assert "(0.202283, 0.686605)" in err.message
 
 
 @pytest.mark.full
-def test_initial_force_exceeds_1e7_with_reset_storm_and_fsql_pinned() -> None:
-    """Measured first-rung behavior: FSQR >= 1e7, reset storm, FSQL ~ O(1).
+def test_initial_force_exceeds_1e6_with_reset_storm_and_fsql_pinned() -> None:
+    """Measured first-rung behavior: FSQR >= 1e6, reset storm, FSQL ~ O(1).
 
     The FSQL row-1 value and the O(1) pinning on successful-step rows are
-    the public reproduction of the confidential ``FSQL ~ 0.5`` signature.
+    the public reproduction of the confidential ``FSQL ~ 0.5`` signature
+    (AI-lever deck; both codes print identical rows, measured 2026-08).
     """
     inp = VmecInput.from_indata_text(stress_indata_text(single_stage=True))
     result = solve_multigrid(
@@ -180,7 +224,7 @@ def test_initial_force_exceeds_1e7_with_reset_storm_and_fsql_pinned() -> None:
     rows = np.asarray(result.fsq_history, dtype=float)
     assert rows.shape[0] == STRESS_NITER
     fsqr1, fsqz1, fsql1 = rows[0, :3]
-    assert fsqr1 >= 1.0e7, f"initial FSQR {fsqr1:.3e} fell below 1e7"
+    assert fsqr1 >= 1.0e6, f"initial FSQR {fsqr1:.3e} fell below 1e6"
     assert fsqr1 == pytest.approx(MEASURED_ROW1[0], rel=1e-2)
     assert fsqz1 == pytest.approx(MEASURED_ROW1[1], rel=1e-2)
     assert fsql1 == pytest.approx(MEASURED_ROW1[2], rel=1e-2)
@@ -188,11 +232,11 @@ def test_initial_force_exceeds_1e7_with_reset_storm_and_fsql_pinned() -> None:
     assert int(result.jacobian_resets) >= 10
     assert int(result.ier_flag) == MORE_ITER_FLAG
     # FSQL pinned at O(1): successful-step rows dip toward ~0.5 while the
-    # R-channel stays enormous — lambda is stuck at its initial force level.
+    # R-channel stays large — lambda is stuck at its initial force level.
     fsqr, fsql = rows[:, 0], rows[:, 2]
     success = fsql < 2.0
     assert np.any(success), "no successful damped step in the first rung"
-    assert fsqr[success].min() > 1.0e5
+    assert fsqr[success].min() > 1.0e3
     assert fsql.max() < 10.0 and fsql[success].min() < 1.0
 
 
@@ -249,8 +293,9 @@ def test_fixed_termination_class_and_first_25_rows_match_vmec2000(
     """Acceptance on the bounded first-rung deck: both codes exhaust the
     budget without tolerance (neither converges nor aborts), VMEX writes a
     WOUT under ``LFULL3D1OUT=T``, and the first 25 rows agree channel-by-
-    channel within a factor-2 log band allowing the measured +-1 iteration
-    phase shift."""
+    channel within a factor-2 log band allowing a +-1 iteration phase
+    shift (the AI-lever deck measured digit-identical rows; the band keeps
+    the comparison robust to platform jitter)."""
     deck_text = stress_indata_text(single_stage=True)
     v2k_dir = tmp_path / "vmec2000"
     vmex_dir = tmp_path / "vmex"
@@ -286,7 +331,7 @@ def test_fixed_termination_class_and_first_25_rows_match_vmec2000(
     got_rows = _v2k_first_stage_rows(got.stdout)
     assert set(range(1, 26)) <= set(ref_rows), "VMEC2000 rows missing"
     assert set(range(1, 26)) <= set(got_rows), "VMEX rows missing"
-    assert ref_rows[1][0] >= 1.0e7 and got_rows[1][0] >= 1.0e7
+    assert ref_rows[1][0] >= 1.0e6 and got_rows[1][0] >= 1.0e6
     band = math.log10(2.0)
     for it in range(1, 26):
         a = got_rows[it]
@@ -305,13 +350,17 @@ def test_fixed_termination_class_and_first_25_rows_match_vmec2000(
 @pytest.mark.full
 @pytest.mark.vmec2000_live
 def test_full_ladder_termination_classes(pytestconfig, tmp_path: Path) -> None:
-    """Full 5-rung ladder: the measured (divergent) termination classes,
-    deliberately pinned — the ns=55 interpolated state has no valid axis;
-    PARVMEC re-guesses, NaN-marches to a "completed" WOUT-writing exit,
-    while VMEX's fail-fast policy raises a typed error at the same rung.
-    If a future change makes the classes MATCH, update this test — that is
-    itself a significant parity change."""
-    deck_text = stress_indata_text()
+    """Sign-reversing-APHI ladder: OUR lawful typed error vs THEIR NaN
+    write-through, deliberately pinned.
+
+    PARVMEC accepts the invalid flux map, interpolates to ns=55 where the
+    re-folded state has no valid axis, re-guesses, and NaN-marches through
+    its full budget (``jacobian.f``'s ``taumax*taumin < 0`` restart test is
+    NaN-blind and ``fsq < ftol`` never holds for NaN) to a WOUT-writing
+    exit with code 0 — the WOUT carries ``fsqr = NaN`` (measured
+    ``ier_flag = 16``, really_bad_flag).  VMEX raises ``VmecInputError``
+    naming the reversal interval before any iteration."""
+    deck_text = stress_indata_text(reversed_flux=True)
     v2k_dir = tmp_path / "vmec2000"
     v2k_dir.mkdir()
     (v2k_dir / "input.hf_stress").write_text(deck_text)
@@ -320,12 +369,13 @@ def test_full_ladder_termination_classes(pytestconfig, tmp_path: Path) -> None:
         cwd=v2k_dir, capture_output=True, text=True, timeout=3600,
     )
     ref_text = ref.stdout + "\n" + ref.stderr
-    # PARVMEC: completes its budget while carrying NaN rows, keeps a WOUT.
+    # PARVMEC: NaN rows on the printed march, exit code 0, WOUT on disk.
     assert ref.returncode == 0
     assert re.search(r"^\s*\d+\s+.*NaN", ref_text, re.M), (
         "expected the measured PARVMEC NaN-march on the full ladder")
     assert (v2k_dir / "wout_hf_stress.nc").exists()
 
     inp = VmecInput.from_indata_text(deck_text)
-    with pytest.raises((VmecJacobianError, VmecNumericalError)):
+    with pytest.raises(VmecInputError) as excinfo:
         solve_multigrid(inp, raise_on_max_iterations=False, device="cpu")
+    assert "(0.202283, 0.686605)" in excinfo.value.message

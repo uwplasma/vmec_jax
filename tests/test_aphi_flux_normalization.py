@@ -28,6 +28,22 @@ blow-up of the row-1 WMHD.  These tests pin that contract at three levels:
 the polynomial/trapezoid functions, the ``flux_profiles`` arrays, and full
 solver row-1 goldens for a public deck (plus an opt-in live comparison
 against a local ``xvmec2000``).
+
+Validity contract (the APHI sign-reversal follow-up, resolved 2026-08):
+``s`` must be a flux label, so ``Phi'(s)`` may not CHANGE SIGN inside
+``[0, 1]`` — a reversal folds the ``s -> Phi`` map (two labels enclose the
+same flux), ``phips`` crosses zero on an interior surface, and the clamped
+profile argument ``tf = MIN(1, torflux(s))`` becomes non-injective.  VMEX
+raises a typed ``VmecInputError`` at setup naming the offending interval
+(:func:`vmex.core.setup.validate_torflux_monotone`).  VMEC2000 has no such
+diagnosis: measured on the minimal deck below, ``xvmec2000`` stalls at O(1)
+forces, exhausts its budget, and still writes an ``ier_flag = 0`` "normal
+termination" WOUT whose ``phips`` carries both signs and whose ``presf``
+goes negative (on the 238-mode stress ladder it NaN-marches and writes
+``fsqr = NaN`` — pinned in ``tests/test_stress_high_force.py``).
+Tangential zeros of ``Phi'`` (no sign change) and boundary zeros at
+``s = 0``/``s = 1`` remain valid, as do everywhere-negative derivatives
+(the ``torflux(1)`` normalization absorbs the overall sign).
 """
 
 from __future__ import annotations
@@ -46,8 +62,15 @@ import pytest
 jax = pytest.importorskip("jax")
 jax.config.update("jax_enable_x64", True)
 
+from vmex.core.errors import INPUT_ERROR_FLAG, VmecInputError
 from vmex.core.input import VmecInput
-from vmex.core.setup import _torflux_functions, flux_profiles, radial_grids
+from vmex.core.setup import (
+    _torflux_functions,
+    _torflux_sign_reversal,
+    flux_profiles,
+    radial_grids,
+    validate_torflux_monotone,
+)
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 FIXED_DECK = DATA_DIR / "input.cth_like_fixed_bdy"
@@ -57,6 +80,11 @@ APHI_SCALE = (8.578,)
 #: Multi-term unnormalized set: ``Phi(x) = 2x - 1.5x^2 + x^3``
 #: (``torflux(1) = 1.5`` up to trapezoid quadrature).
 APHI_MULTI = (2.0, -1.5, 1.0)
+#: Sign-reversing set: ``Phi'(x) = 5 - 32x + 36x^2`` < 0 on the interior
+#: interval (0.202283, 0.686605) while ``torflux(1) = 1`` and the clamped
+#: profile argument never reaches 1 (max torflux ~ 0.717) — the rejection
+#: keys on the DERIVATIVE, independent of the clamp.
+APHI_REVERSING = (5.0, -16.0, 12.0)
 
 _ROW_FIELD = re.compile(r"^\d\.\d{2}E[+-]\d{2}$")
 
@@ -198,6 +226,91 @@ def test_pure_scale_aphi_leaves_flux_arrays_bit_identical() -> None:
 
 
 # ---------------------------------------------------------------------------
+# (d) validity: the flux derivative may not reverse sign inside [0, 1]
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "aphi",
+    [
+        (),                           # empty coefficient vector
+        (1.0,),                       # identity map
+        (8.578,),                     # pure scale
+        APHI_MULTI,                   # 2 - 3s + 3s^2: discriminant < 0
+        (-1.0,),                      # everywhere-negative Phi' (sign absorbed)
+        (1.0, -2.0, 4.0 / 3.0),       # Phi' = (1 - 2s)^2: tangential interior zero
+        (0.0, 0.5),                   # Phi' = s: zero exactly at s = 0
+        (1.0, -0.5),                  # Phi' = 1 - s: zero exactly at s = 1
+        (0.0, 0.5, -1.0 / 3.0),       # Phi' = s(1 - s): zeros at both endpoints
+    ],
+    ids=[
+        "empty", "identity", "scale", "multi", "negative", "tangential",
+        "zero_at_axis", "zero_at_edge", "zero_both_ends",
+    ],
+)
+def test_monotone_and_tangential_flux_maps_are_valid(aphi) -> None:
+    """No sign CHANGE -> no error; tangential/boundary zeros stay lawful."""
+    assert _torflux_sign_reversal(np.asarray(aphi)) is None
+    validate_torflux_monotone(np.asarray(aphi))  # must not raise
+    inp = _with_aphi(VmecInput.from_file(FIXED_DECK), aphi)
+    prof = flux_profiles(inp, radial_grids(15), r00=np.asarray(0.78), signgs=-1)
+    for key, value in prof.items():
+        assert bool(np.isfinite(np.asarray(value)).all()), key
+
+
+@pytest.mark.parametrize(
+    "aphi, interval",
+    [
+        (APHI_REVERSING, (0.202283, 0.686605)),
+        ((-1.0, 1.0), (0.0, 0.5)),           # Phi' = -1 + 2s
+        ((-1.0, 0.0, 1.0), (0.0, 0.577350)),  # Phi' = -1 + 3s^2
+        # Phi' = (s - 0.8)(s - 0.3)^2: the reversed window spans the interior
+        # even-multiplicity touch at 0.3, merged into one reported interval.
+        ((-0.072, 0.285, -1.4 / 3.0, 0.25), (0.0, 0.8)),
+    ],
+    ids=["reversing", "linear", "quadratic", "merged_window"],
+)
+def test_sign_reversing_flux_map_raises_with_exact_interval(aphi, interval) -> None:
+    """flux_profiles raises VmecInputError naming the offending interval.
+
+    The ``(-1, 1)`` case doubles as the precedence pin: its ``torflux(1)``
+    is 0 (zero net flux), and the sign-reversal diagnosis must win over any
+    downstream zero-effective-flux path.  ``APHI_REVERSING`` doubles as the
+    clamp-independence pin: its ``torflux`` never reaches the ``MIN(1, .)``
+    clamp, yet the deck is still rejected.
+    """
+    inp = _with_aphi(VmecInput.from_file(FIXED_DECK), aphi)
+    with pytest.raises(VmecInputError) as excinfo:
+        flux_profiles(inp, radial_grids(15), r00=np.asarray(0.78), signgs=-1)
+    err = excinfo.value
+    assert int(err.ier_flag) == INPUT_ERROR_FLAG
+    lo, hi = interval
+    assert (
+        "APHI defines a non-monotonic toroidal-flux map: the flux derivative "
+        f"Phi'(s) reverses sign on s in ({lo:.6f}, {hi:.6f})"
+    ) in err.message
+    assert "one-signed on [0, 1]" in err.hint
+
+
+def test_sign_reversing_deck_fails_lawfully_through_the_cli(tmp_path: Path) -> None:
+    """CLI contract: exit code 5 (input error) plus message and hint, fast.
+
+    The raise happens at setup, before any solver compile or iteration.
+    """
+    from vmex.core import cli
+
+    deck = _deck_with_aphi(tmp_path, "APHI = 5.0, -16.0, 12.0,", 25)
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        code = cli.main([str(deck), "--outdir", str(tmp_path)])
+    assert code == INPUT_ERROR_FLAG
+    out = buffer.getvalue()
+    assert "non-monotonic toroidal-flux map" in out
+    assert "(0.202283, 0.686605)" in out
+    assert "HINT" in out
+
+
+# ---------------------------------------------------------------------------
 # (b) row-1 goldens for the public deck with unnormalized APHI
 # ---------------------------------------------------------------------------
 
@@ -276,14 +389,7 @@ def test_row1_goldens_with_unnormalized_aphi(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.vmec2000_live
-@pytest.mark.parametrize(
-    "aphi_line",
-    ["APHI = 8.578,", "APHI = 2.0, -1.5, 1.0,"],
-    ids=["scale", "multi"],
-)
-def test_row1_parity_live_vmec2000(pytestconfig, tmp_path: Path, aphi_line) -> None:
-    """Both codes print the identical row 1 for unnormalized-APHI decks."""
+def _find_xvmec2000(pytestconfig) -> Path:
     configured = str(pytestconfig.getoption("--vmec2000-executable")).strip()
     candidates = [Path(configured)] if configured else []
     discovered = shutil.which("xvmec2000")
@@ -295,6 +401,18 @@ def test_row1_parity_live_vmec2000(pytestconfig, tmp_path: Path, aphi_line) -> N
             "--run-vmec2000 requested but xvmec2000 was not found; pass "
             "--vmec2000-executable PATH"
         )
+    return executable
+
+
+@pytest.mark.vmec2000_live
+@pytest.mark.parametrize(
+    "aphi_line",
+    ["APHI = 8.578,", "APHI = 2.0, -1.5, 1.0,"],
+    ids=["scale", "multi"],
+)
+def test_row1_parity_live_vmec2000(pytestconfig, tmp_path: Path, aphi_line) -> None:
+    """Both codes print the identical row 1 for unnormalized-APHI decks."""
+    executable = _find_xvmec2000(pytestconfig)
 
     ref_dir = tmp_path / "vmec2000"
     ref_dir.mkdir()
@@ -319,3 +437,53 @@ def test_row1_parity_live_vmec2000(pytestconfig, tmp_path: Path, aphi_line) -> N
     np.testing.assert_array_equal(
         np.asarray(actual_row[:6]), np.asarray(reference_row[:6])
     )
+
+
+@pytest.mark.vmec2000_live
+def test_sign_reversal_write_through_live_vmec2000(
+    pytestconfig, tmp_path: Path
+) -> None:
+    """Same minimal deck, divergent policies: their write-through, our error.
+
+    ``xvmec2000`` accepts the sign-reversing APHI, stalls at O(1) forces,
+    exhausts its budget, prints ``EXECUTION TERMINATED NORMALLY``, exits 0,
+    and writes an ``ier_flag = 0`` WOUT whose ``phips`` carries both signs
+    and whose ``presf`` is negative on the folded surfaces (measured
+    2026-08: FSQR ~ 1.6 at the final row, 17 Jacobian resets).  VMEX raises
+    the typed ``VmecInputError`` for the identical deck instead of
+    reproducing the stall.
+    """
+    netCDF4 = pytest.importorskip("netCDF4")
+    from vmex.core.multigrid import solve_multigrid
+
+    executable = _find_xvmec2000(pytestconfig)
+    ref_dir = tmp_path / "vmec2000"
+    ref_dir.mkdir()
+    deck = _deck_with_aphi(ref_dir, "APHI = 5.0, -16.0, 12.0,", 120)
+    completed = subprocess.run(
+        [str(executable), deck.name],
+        cwd=ref_dir,
+        text=True,
+        capture_output=True,
+        timeout=600,
+        check=False,
+    )
+    # -- their side: budget-exhausted stall, "normal" exit, WOUT on disk --
+    assert completed.returncode == 0
+    assert "Try increasing NITER" in completed.stdout
+    assert "EXECUTION TERMINATED NORMALLY" in completed.stdout
+    wout = ref_dir / "wout_aphinorm.nc"
+    assert wout.exists(), "VMEC2000 did not write through the failed run"
+    with netCDF4.Dataset(str(wout)) as ds:
+        assert int(np.asarray(ds["ier_flag"][:]).ravel()[0]) == 0
+        phips = np.asarray(ds["phips"][:])
+        assert phips.min() < 0.0 < phips.max(), "expected folded phips"
+        presf = np.asarray(ds["presf"][:])
+        assert presf.min() < 0.0, "expected negative pressure on folded surfaces"
+        assert float(np.asarray(ds["fsqr"][:]).ravel()[0]) > 1.0e-2
+
+    # -- our side: the identical deck is refused before any iteration -----
+    inp = VmecInput.from_file(deck)
+    with pytest.raises(VmecInputError) as excinfo:
+        solve_multigrid(inp, raise_on_max_iterations=False, device="cpu")
+    assert "(0.202283, 0.686605)" in excinfo.value.message

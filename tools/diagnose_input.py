@@ -25,6 +25,7 @@ import numpy as np
 from vmex.core.errors import VmecError
 from vmex.core.geometry import half_mesh_jacobian
 from vmex.core.input import UnsupportedInputModeError, VmecInput
+from vmex.core.setup import _torflux_sign_reversal
 from vmex.core.solver import (
     _geometry,
     _initial_state,
@@ -98,6 +99,23 @@ def diagnose(path: Path, *, details: bool = False) -> int:
         return 1
 
     print("input parsing: PASS")
+
+    # Validity gate the solver enforces at setup (VmecInputError): an APHI
+    # whose flux derivative reverses sign folds the s -> Phi map.  Value-free
+    # by default; the offending interval is input-derived, so --details only.
+    reversal = _torflux_sign_reversal(np.asarray(inp.aphi, dtype=float))
+    print(
+        "toroidal-flux map monotonic: "
+        f"{'PASS' if reversal is None else 'FAIL'}"
+    )
+    if reversal is not None:
+        print("assessment: D00L_NONMONOTONIC_TORFLUX_MAP")
+        if details:
+            print(
+                "local detail: Phi'(s) reverses sign on s in "
+                f"({reversal[0]:.6f}, {reversal[1]:.6f})"
+            )
+        return 1
 
     rt = prepare_runtime(inp)
     theta_floor = 2 * int(inp.mpol) + 6

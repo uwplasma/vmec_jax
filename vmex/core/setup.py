@@ -55,6 +55,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from . import profiles as prof
+from .errors import VmecInputError
 from .fourier import ModeTable, Resolution, TrigTables, mode_table, trig_tables
 from .geometry import RealSpaceGeometry, apply_lambda_axis_closure, real_space_geometry
 from .input import VmecInput
@@ -71,6 +72,7 @@ __all__ = [
     "radial_grids",
     "boundary_from_input",
     "flux_profiles",
+    "validate_torflux_monotone",
     "interior_guess",
     "guess_axis",
     "geometry_state",
@@ -433,6 +435,101 @@ def boundary_from_input(
 # ---------------------------------------------------------------------------
 
 
+def _torflux_sign_reversal(aphi: np.ndarray) -> tuple[float, float] | None:
+    """First interval of ``s`` in ``[0, 1]`` where ``Phi'(s)`` reverses sign.
+
+    ``Phi'(s) = sum_i i*aphi(i)*s**(i-1)`` (``magnetic_fluxes.f``
+    ``torflux_deriv``).  The radial coordinate ``s`` must be a flux label:
+    ``Phi`` strictly one-signed-monotonic on the plasma volume, so ``Phi'``
+    may touch zero (tangential extremum, boundary zeros at ``s = 0``/``1``)
+    but must never change sign inside ``[0, 1]``.  Returns ``None`` when the
+    map is valid (including the identically-zero derivative — that is the
+    separate zero-effective-flux diagnosis), otherwise ``(lo, hi)``: the
+    first maximal subinterval whose sign is opposite to the sign of ``Phi'``
+    on the edge-adjacent subinterval (the edge side orients ``PHIEDGE``).
+
+    Host NumPy on the concrete ``APHI`` coefficients; exact root isolation
+    via the derivative-polynomial companion matrix (degree <= 19), not a
+    sampling grid, so even-multiplicity touches are never misreported.
+    """
+    aphi = np.asarray(aphi, dtype=float).ravel()
+    if aphi.size == 0:
+        return None
+    dcoef = aphi * np.arange(1, aphi.size + 1, dtype=float)  # Phi'' ordering: low->high
+    if not np.any(dcoef):
+        return None
+    # np.roots wants highest-degree-first with a nonzero leading coefficient.
+    trimmed = np.trim_zeros(dcoef[::-1], "f")
+    if trimmed.size <= 1:
+        return None  # constant Phi' never changes sign
+    # Near-real tolerance 1e-6: an even-multiplicity (tangential) root
+    # perturbs into a conjugate pair with imag ~ sqrt(eps) under the
+    # companion-matrix solve; admitting it merely adds breakpoints, and the
+    # midpoint sign evaluation below keeps the classification exact.
+    roots = np.roots(trimmed)
+    interior = np.sort(
+        roots[(np.abs(roots.imag) < 1e-6) & (roots.real > 1e-12)
+              & (roots.real < 1.0 - 1e-12)].real
+    )
+    if interior.size == 0:
+        return None
+    # Evaluate Phi' at midpoints of the breakpoint partition {0, roots, 1}:
+    # even-multiplicity roots keep the same sign on both sides.
+    breakpoints = np.concatenate(([0.0], interior, [1.0]))
+    mids = 0.5 * (breakpoints[:-1] + breakpoints[1:])
+    signs = np.sign(np.polyval(trimmed, mids))
+    edge_sign = signs[-1]
+    offending = np.nonzero((signs != 0) & (signs != edge_sign))[0]
+    if edge_sign == 0 or offending.size == 0:
+        return None
+    first = int(offending[0])
+    last = first
+    while last + 1 < signs.size - 1 and signs[last + 1] != edge_sign:
+        last += 1
+    return float(breakpoints[first]), float(breakpoints[last + 1])
+
+
+def validate_torflux_monotone(aphi: np.ndarray) -> None:
+    """Reject an ``APHI`` whose flux derivative changes sign inside the plasma.
+
+    A sign reversal of ``Phi'(s)`` in ``s`` in ``[0, 1]`` folds the
+    ``s -> Phi`` map: two radial labels enclose the same toroidal flux, the
+    flux "surfaces" re-fold, and no nested-surface equilibrium exists with
+    that parameterization.  Concretely, ``phips`` crosses zero on an interior
+    surface, the profile argument ``tf = MIN(1, torflux(s))`` becomes
+    non-injective (pressure/iota/current evaluated at folded flux values),
+    and the ``profil3d.f``-style interior guess is invalid at every multigrid
+    rung — no axis recovery can repair it.
+
+    VMEC2000 (``xvmec2000``) accepts such decks and diverges without
+    diagnosis: measured on the public 238-mode stress ladder it NaN-marches
+    from the ns = 55 interpolated rung (``jacobian.f``'s
+    ``taumax*taumin < 0`` restart test is NaN-blind and ``fsq < ftol`` never
+    holds, so the budget runs out) and still writes a WOUT containing
+    ``fsqr = NaN``; on bounded decks it stalls at O(1) forces and writes an
+    ``ier_flag = 0`` "normal termination" WOUT with sign-reversed ``phips``
+    and negative pressure.  VMEX refuses the deck class up front instead.
+
+    Raises :class:`vmex.core.errors.VmecInputError` (``ier_flag =
+    INPUT_ERROR_FLAG``) naming the exact offending interval.
+    """
+    reversal = _torflux_sign_reversal(aphi)
+    if reversal is None:
+        return
+    lo, hi = reversal
+    raise VmecInputError(
+        "APHI defines a non-monotonic toroidal-flux map: the flux "
+        f"derivative Phi'(s) reverses sign on s in ({lo:.6f}, {hi:.6f}); "
+        "s must be a flux label, so the APHI polynomial derivative may not "
+        "change sign inside [0, 1]",
+        hint=(
+            "make the APHI flux-map derivative one-signed on [0, 1]; "
+            "VMEC2000 accepts such decks and writes a NaN/garbage WOUT "
+            "without diagnosis"
+        ),
+    )
+
+
 def _torflux_functions(aphi: np.ndarray):
     """Return ``(torflux, torflux_deriv)`` from the ``APHI`` polynomial.
 
@@ -494,7 +591,13 @@ def flux_profiles(
     ``lrfp`` (RFP mode) is not supported.  Returns a dict of ``jnp`` arrays
     keyed ``phips, chips, iotas, icurv, mass, psi_half, psi_edge, phipf,
     chipf, iotaf, lamscale``.
+
+    Raises :class:`vmex.core.errors.VmecInputError` when the ``APHI`` flux
+    derivative reverses sign inside ``s`` in ``[0, 1]`` (see
+    :func:`validate_torflux_monotone`); the check is host NumPy on the
+    concrete coefficients, so valid decks are bit-identical to before.
     """
+    validate_torflux_monotone(inp.aphi)
     dtype = grids.s_full.dtype
     ns = int(grids.s_full.shape[0])
     torflux, torflux_deriv = _torflux_functions(inp.aphi)
