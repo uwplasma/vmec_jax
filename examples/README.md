@@ -7,6 +7,9 @@ All runnable examples live under this single `examples/` tree.
   - `fixed_boundary_run.py` — read `&INDATA`, converge, write/plot the wout.
   - `plot_and_boozer.py` — every built-in `plot_wout` figure plus the Boozer
     transform (`run_booz_xform` + `plot_boozmn`) on one converged equilibrium.
+  - `plot_optimized_families.py` — README composites for optimized QA/QH/QP
+    outputs and the bundled NFP=1--4 QI inputs: four toroidal cuts, 3-D LCFS,
+    and LCFS `|B|` in Boozer coordinates.
   - `profiles_power_and_spline.py` — the same equilibrium from power-series and
     cubic-spline pressure/iota profiles (they agree); `NCURR=0` vs `NCURR=1`.
   - `run_from_json.py` — read/convert structured JSON (`to_json` /
@@ -38,17 +41,18 @@ All runnable examples live under this single `examples/` tree.
     adjoint + virtual casing threaded through one `jax.value_and_grad`).
   - `single_stage_essos_coils_opt.py` — single-stage with ESSOS coils (vacuum
     and finite-beta cases); vmex stays coil-agnostic, coils enter as a
-    differentiable `xyz -> B` callable. Source of `readme_single_stage.png`.
-- `optimization/`: precise QA/QH/QP/QI from a circular torus — one file each,
-  plus `QA_optimization_ess.py` / `QI_optimization_ess.py`: the SINGLE-call
-  variants — all large-max_mode harmonics at once, Exponential Spectral
-  Scaling (`use_ess`) replacing the continuation ladder,
-  plus `QA_bootstrap_selfconsistent.py` / `QH_bootstrap_selfconsistent.py`:
+    differentiable `xyz -> B` callable.
+- `optimization/`: QA/QH/QP/QI from a circular torus, plus
+  `QA_bootstrap_selfconsistent.py` / `QH_bootstrap_selfconsistent.py` for
   self-consistent Redl bootstrap current reproducing arXiv:2205.02914,
   simsopt-style (`(function, target, weight)` terms + one least-squares call
   per `max_mode` continuation stage, implicit adjoint gradients).  All read
   `VMEX_EXAMPLES_CI=1` to shrink budgets for the CI smoke tests
   (`tests/test_examples.py`).
+- `mirror_fixed_boundary_nonaxisymmetric.py` compares axisymmetric and
+  rotating-ellipse fixed-boundary mirrors; `mirror_free_boundary_beta_scan.py`
+  continues a solved ESSOS-coil free boundary through 80% central beta and
+  compares its on-axis field with `sqrt(1-beta)`.
 - `data/`: bundled input decks and small checked-in fixtures.
 - `data/single_grid/`: fixed-boundary single-grid benchmark inputs and optional
   fetched reference assets.

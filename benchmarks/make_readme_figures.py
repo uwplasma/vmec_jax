@@ -1,53 +1,25 @@
 #!/usr/bin/env python3
-"""Regenerate the README figures from the benchmark and golden-parity data.
+"""Regenerate the small set of benchmark figures used by the documentation.
 
 Produces (into ``docs/_static/figures/``):
 
 - ``readme_runtime_compare.png``      — VMEC2000 vs vmex (cold/warm CPU,
-  GPU where comparable) vs the reference C++ implementation, from
+  GPU where comparable) vs VMEC++, from
   ``benchmarks/baseline.json`` and
   ``benchmarks/gpu_baseline.json``.  Run ``benchmarks/run_baseline.py`` first.
 - ``readme_convergence.png``          — force residual vs iteration for one
   representative case (nfp4_QH_warm_start at ns=51) in vmex, VMEC2000
-  (NSTEP=1 stdout trace), and the reference C++ implementation (wout
+  (NSTEP=1 stdout trace), and VMEC++ (wout
   ``fsqt``).  Traces are cached in
   ``benchmarks/convergence_nfp4_ns51.json``; delete it to re-run the codes.
-- ``readme_optimization.png``         — quasisymmetry (QA/QH/QP) seed vs
-  optimized boundary cross-sections, 3-D LCFS geometry coloured by ``|B|``, and
-  ``|B|`` in Boozer coordinates on the LCFS (jet line contours), from the decks
-  in ``benchmarks/opt_decks/`` (R1 converged QA + regenerated QH/QP).  Each
-  column is labelled with its measured QS residual.
-- ``readme_qi.png``                   — quasi-isodynamic (QI) equilibria at
-  nfp 1/2/3/4: boundary cross-sections, 3-D ``|B|`` geometry, and Boozer
-  ``|B|`` (jet), from the bundled decks in ``examples/data/`` (``input.nfp1_QI``,
-  ``input.nfp2_QI``, ``input.nfp3_QI_fixed_resolution_final``,
-  ``input.nfp4_QI_finite_beta``).  Each column is labelled with its QI
-  (omnigenity) residual.
 - ``readme_precond.png``              — 2D block vs 1D radial preconditioner
   iteration counts on stiff cases (R10.2 measurements).
 - ``readme_equilibrium_showcase.png`` — flux surfaces, 3-D boundary geometry
   coloured by ``|B|``, and ``|B|`` in Boozer coordinates on the LCFS (jet),
   for the bundled quick-start case (solves it in-process).
-- ``readme_single_stage.png``         — cold-start single-stage vs two-stage
-  plasma + coil optimization (vacuum and finite-beta columns): seed vs final
-  boundaries, and each approach's final LCFS coloured by the local signed
-  ``B·n/|B|`` inside its own final coils (recomputed via the example's
-  evaluate recipe on a render-quality grid; one shared symmetric colour scale
-  per case column).  Reads the outputs of
-  ``examples/single_stage_vs_two_stage.py`` from
-  ``output_single_stage_vs_two_stage/{vacuum,beta}/``; that experiment is
-  multi-hour at full budget, so it is NEVER auto-run here — run it first.
-- ``readme_objectives.png``           — the objectives showcase: one dumbbell
-  row per refinement campaign off the precise-QA deck (L∇B, magnetic well,
-  iota, aspect, finite-beta Mercier), seed -> final for each campaign's own
-  metric with the QS/aspect/iota drift annotated.  Reads the ``metrics.json``
-  files of ``examples/optimization/objectives_showcase.py`` from
-  ``output_objectives_showcase/<campaign>/``; NEVER auto-run here — run the
-  example first.
-
 Usage:
     python benchmarks/make_readme_figures.py
-        [--only runtime,convergence,optimization,qi,precond,showcase,single_stage,objectives]
+        [--only runtime,convergence,precond,showcase]
         [--outdir docs/_static/figures]
 
 Figures are written uncompressed; compress before committing:
@@ -82,7 +54,7 @@ GRID = "#e1e0d9"
 BASELINE = "#c3c2b7"
 BLUE = "#2a78d6"        # vmex warm (the hero series)
 BLUE_LIGHT = "#86b6ef"  # vmex cold (same hue, lighter step)
-YELLOW = "#eda100"      # reference C++
+YELLOW = "#eda100"      # VMEC++
 VIOLET = "#4a3aa7"      # GPU
 RED = "#e34948"
 GREEN_TEXT = "#006300"
@@ -174,7 +146,7 @@ def make_runtime_figure(out: Path) -> None:
                label="vmex cold (fresh CLI process)", **mk)
     vpp_pts = [(r["vpp"], y) for y, r in zip(ys, rows) if r["vpp"]]
     ax.scatter([p[0] for p in vpp_pts], [p[1] for p in vpp_pts],
-               color=YELLOW, label="reference C++", **mk)
+               color=YELLOW, label="VMEC++", **mk)
     gpu_pts = [(r["gpu"], y) for y, r in zip(ys, rows) if r["gpu"]]
     if gpu_pts:
         ax.scatter([p[0] for p in gpu_pts], [p[1] for p in gpu_pts],
@@ -220,7 +192,7 @@ def make_runtime_figure(out: Path) -> None:
         title += f"  (all cases ns={next(iter(ns_set))})"
     ax.set_title(title, loc="left", pad=54, fontsize=14, color=INK)
     handles, labels = ax.get_legend_handles_labels()
-    order = ["VMEC2000 (Fortran)", "reference C++",
+    order = ["VMEC2000 (Fortran)", "VMEC++",
              "vmex warm (in-process)", "vmex cold (fresh CLI process)",
              "vmex warm (GPU)"]
     pairs = sorted(zip(handles, labels), key=lambda hl: order.index(hl[1]))
@@ -234,120 +206,7 @@ def make_runtime_figure(out: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# 2. Parity table (solves the five golden-fixture cases)
-# --------------------------------------------------------------------------
-
-PARITY_CASES = {
-    # case -> (multigrid?, README description)
-    "solovev": (False, "2D analytic tokamak"),
-    "DSHAPE": (True, "D-shaped tokamak, multigrid"),
-    "circular_tokamak": (True, "high-ns tokamak, multigrid"),
-    "li383_low_res": (False, "3D stellarator, nfp=3"),
-    "nfp4_QH_warm_start": (False, "3D quasi-helical, nfp=4"),
-}
-
-
-def _golden_final_iteration(stdout_path: Path) -> int:
-    final = None
-    for line in stdout_path.read_text().splitlines():
-        tok = line.split()
-        if len(tok) >= 6 and tok[0].isdigit() and "E" in tok[1]:
-            final = int(tok[0])
-    if final is None:
-        raise ValueError(f"no iteration rows in {stdout_path}")
-    return final
-
-
-def collect_parity() -> dict:
-    import sys
-    import netCDF4
-
-    sys.path.insert(0, str(REPO / "tests"))
-    from conftest import resolve_golden_dir
-
-    from vmex.core.input import VmecInput
-    from vmex.core import solver
-    from vmex.core.multigrid import solve_multigrid
-
-    golden = resolve_golden_dir()
-    if golden is None:
-        raise RuntimeError("golden VMEC2000 fixtures unavailable")
-
-    out = {}
-    for name, (multigrid, _desc) in PARITY_CASES.items():
-        inp = VmecInput.from_file(str(DATA / f"input.{name}"))
-        res = solve_multigrid(inp) if multigrid else solver.solve(inp)
-        with netCDF4.Dataset(golden / name / f"wout_{name}.nc") as ds:
-            wb_gold = float(ds.variables["wb"][()])
-        out[name] = dict(
-            iterations=int(res.iterations),
-            golden_iterations=_golden_final_iteration(golden / name / "stdout.txt"),
-            jacobian_resets=int(res.jacobian_resets),
-            wb_rel_err=abs(float(res.wb) - wb_gold) / abs(wb_gold),
-        )
-        print(name, out[name], flush=True)
-    return out
-
-
-def make_parity_figure(out: Path) -> None:
-    data = collect_parity()
-    rows = [(k, data[k]) for k in PARITY_CASES if k in data]
-
-    fig, ax = plt.subplots(figsize=(8.6, 0.52 * len(rows) + 1.9), dpi=160)
-    ax.set_axis_off()
-    cols = [0.02, 0.44, 0.60, 0.76, 0.99]
-    ax.text(cols[0], 1.0, "case", fontsize=9.5, color=MUTED, va="center")
-    ax.text(cols[1], 1.0, "VMEC2000\niterations", fontsize=9.5, color=MUTED,
-            va="center", ha="center", linespacing=1.2)
-    ax.text(cols[2], 1.0, "vmex\niterations", fontsize=9.5, color=MUTED,
-            va="center", ha="center", linespacing=1.2)
-    ax.text(cols[3], 1.0, "match", fontsize=9.5, color=MUTED,
-            va="center", ha="center")
-    ax.text(cols[4], 1.0, "plasma energy wb\nrel. difference", fontsize=9.5,
-            color=MUTED, va="center", ha="right", linespacing=1.2)
-
-    n = len(rows)
-    for i, (k, r) in enumerate(rows):
-        y = 0.86 - 0.86 * (i + 0.5) / n
-        if i % 2 == 0:
-            ax.axhspan(y - 0.43 * 0.86 / n * 2, y + 0.43 * 0.86 / n * 2,
-                       color="#f4f3ef", zorder=0)
-        ax.text(cols[0], y, CASE_LABELS[k], fontsize=10.5, color=INK,
-                va="center", fontweight="bold")
-        ax.text(cols[0] + 0.205, y, PARITY_CASES[k][1], fontsize=8.5,
-                color=MUTED, va="center")
-        exact = r["iterations"] == r["golden_iterations"]
-        ax.text(cols[1], y, f'{r["golden_iterations"]:,}', fontsize=11,
-                color=INK2, va="center", ha="center", fontfamily="monospace")
-        ax.text(cols[2], y, f'{r["iterations"]:,}', fontsize=11, color=BLUE,
-                va="center", ha="center", fontfamily="monospace",
-                fontweight="bold")
-        ax.text(cols[3], y, "=" if exact else "-", fontsize=13,
-                color=GREEN_TEXT if exact else RED, va="center", ha="center",
-                fontweight="bold")
-        wb_txt = "exact" if r["wb_rel_err"] == 0 else f'{r["wb_rel_err"]:.1e}'
-        ax.text(cols[4], y, wb_txt, fontsize=11, color=INK2, va="center",
-                ha="right", fontfamily="monospace")
-        if r.get("jacobian_resets"):
-            ax.text(cols[2] + 0.052, y, "*", fontsize=12, color=BLUE,
-                    va="center", ha="center")
-
-    ax.axhline(0.925, color=BASELINE, lw=0.8)
-    ax.text(0.02, -0.10,
-            "* including one mid-run jacobian reset, reproduced at the same iteration.",
-            fontsize=8.5, color=MUTED, va="center", transform=ax.transAxes)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(-0.06, 1.08)
-    ax.set_title("Iteration-for-iteration parity with VMEC2000", loc="left",
-                 fontsize=13, color=INK, pad=14)
-    fig.tight_layout()
-    fig.savefig(out, dpi=160)
-    plt.close(fig)
-    print("wrote", out)
-
-
-# --------------------------------------------------------------------------
-# 3. Convergence trace: force residual vs iteration, three codes
+# 2. Convergence trace: force residual vs iteration, three codes
 # --------------------------------------------------------------------------
 
 CONV_CASE = "nfp4_QH_warm_start"
@@ -370,7 +229,7 @@ def collect_convergence() -> dict:
 
     - vmex: ``SolveResult.fsq_history`` (recorded every iteration).
     - VMEC2000: stdout iteration table with NSTEP=1 (one row per iteration).
-    - reference C++: ``wout.fsqt`` (stored per iteration).
+    - VMEC++: ``wout.fsqt`` (stored per iteration).
     Cached in CONV_CACHE; delete the file to re-run all three codes.
     """
     if CONV_CACHE.exists():
@@ -407,7 +266,7 @@ def collect_convergence() -> dict:
             proc.stdout, re.M)
         v2k_fsq = [float(r[1]) + float(r[2]) + float(r[3]) for r in rows]
 
-        # reference C++: fsqt array from the wout payload.
+        # VMEC++: fsqt array from the wout payload.
         proc = subprocess.run([str(VMECPP_PY), "-c", VMECPP_TRACE_SNIPPET,
                                deck.name], cwd=td, capture_output=True,
                               text=True, timeout=900)
@@ -430,16 +289,16 @@ def make_convergence_figure(out: Path) -> None:
                 alpha=0.5, solid_capstyle="round",
                 label=f"VMEC2000 (Fortran), {len(v2k_t)} iterations")
     ax.semilogy(range(1, len(vpp_t) + 1), vpp_t, color=YELLOW, lw=2.2,
-                alpha=0.9, label=f"reference C++, {len(vpp_t)} iterations")
+                alpha=0.9, label=f"VMEC++, {len(vpp_t)} iterations")
     ax.semilogy(range(1, len(jax_t) + 1), jax_t, color=BLUE, lw=1.1,
-                label=f"vmex, {len(jax_t)} iterations")
+                label=f"VMEX, {len(jax_t)} iterations")
 
     ax.axhline(3 * d["ftol"], color=BASELINE, lw=0.9, ls=(0, (5, 4)))
     ax.annotate("converged: fsqr, fsqz, fsql all < FTOL = 1e-13",
                 xy=(len(jax_t) * 0.02, 3 * d["ftol"] * 1.6), ha="left",
                 va="bottom", fontsize=8, color=MUTED)
     mid = len(jax_t) // 2
-    ax.annotate("vmex tracks VMEC2000\niteration-for-iteration\n"
+    ax.annotate("VMEX tracks VMEC2000\niteration-for-iteration\n"
                 "(curves overlap)",
                 xy=(mid, jax_t[mid]), xytext=(mid * 0.62, jax_t[mid] * 3e3),
                 fontsize=8.5, color=INK2, ha="center",
@@ -465,311 +324,7 @@ def make_convergence_figure(out: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# 4. Optimization panels.  Two figures, both with three rows (boundary, 3-D
-#    LCFS coloured by |B|, and |B| in Boozer coordinates on the LCFS):
-#      readme_optimization.png — quasisymmetry (QA/QH/QP), labelled with the
-#        QS residual;
-#      readme_qi.png           — quasi-isodynamic (QI) at nfp 1/2/3/4, labelled
-#        with the QI (omnigenity) residual.
-# --------------------------------------------------------------------------
-
-# Optimized quasisymmetry decks live in benchmarks/opt_decks/ (the
-# reproducibility inputs for readme_optimization.png): the genuine R1 converged
-# QA deck fetched from the office campaign and the QH/QP decks regenerated by
-# examples/optimization on a reduced continuation budget.  Each panel is
-# labelled with the QS residual *measured here* on the shown equilibrium; the
-# README table carries the full-campaign precise values.
-OPT_DECKS = REPO / "benchmarks" / "opt_decks"
-
-# quasisymmetry class -> (title, helicity (m, n), QS-surface count, family label)
-OPT_CLASSES = [
-    ("qa", "QA  ·  nfp 2", (1, 0), 10, "$|B| = |B|(s,\\theta)$"),
-    ("qh", "QH  ·  nfp 4", (1, -1), 10, "$|B| = |B|(s,\\theta-N\\phi)$"),
-    ("qp", "QP  ·  nfp 2", (0, 1), 10, "$|B| = |B|(s,\\phi)$"),
-]
-
-# quasi-isodynamic decks (bundled in examples/data), one column per field
-# period, in nfp order.  These are the current best-available QI decks; the
-# figure single-solves each and labels it with the QI (omnigenity) residual.
-QI_CASES = [
-    ("nfp1_QI", "QI  ·  nfp 1", 1),
-    ("nfp2_QI", "QI  ·  nfp 2", 2),
-    ("nfp3_QI_fixed_resolution_final", "QI  ·  nfp 3", 3),
-    ("nfp4_QI_finite_beta", "QI  ·  nfp 4", 4),
-]
-
-QI_SURFACES = np.linspace(0.1, 1.0, 8)
-
-
-def _input_boundary_rz(inp, theta: np.ndarray, phi: np.ndarray):
-    """Boundary R, Z from a VmecInput's RBC/ZBS (no solve), shape (ntheta, nphi)."""
-    rbc = np.asarray(inp.rbc, dtype=float)
-    zbs = np.asarray(inp.zbs, dtype=float)
-    ntor, nfp, mpol = int(inp.ntor), int(inp.nfp), rbc.shape[1]
-    rbs = getattr(inp, "rbs", None)
-    zbc = getattr(inp, "zbc", None)
-    rbs = np.zeros_like(rbc) if rbs is None else np.asarray(rbs, dtype=float)
-    zbc = np.zeros_like(zbs) if zbc is None else np.asarray(zbc, dtype=float)
-    R = np.zeros((theta.size, phi.size))
-    Z = np.zeros_like(R)
-    for i in range(rbc.shape[0]):
-        n = i - ntor
-        for m in range(mpol):
-            ang = m * theta[:, None] - n * nfp * phi[None, :]
-            R += rbc[i, m] * np.cos(ang) + rbs[i, m] * np.sin(ang)
-            Z += zbs[i, m] * np.sin(ang) + zbc[i, m] * np.cos(ang)
-    return R, Z
-
-
-def _plot_boundary_slices(axb, R, Z, *, color, seed=None):
-    """Boundary cross-sections at the two phi slices in ``R``/``Z`` (ntheta, 2)."""
-    if seed is not None:
-        Rs, Zs = seed
-        for k in range(Rs.shape[1]):
-            axb.plot(Rs[:, k], Zs[:, k], color=MUTED, lw=1.0, ls=(0, (4, 3)),
-                     alpha=0.8, label="seed" if k == 0 else None)
-    for k in range(R.shape[1]):
-        if seed is not None:  # QS figure: seed vs a single "optimized" entry
-            lab = "optimized" if k == 0 else None
-        else:  # QI figure: distinguish the two phi slices
-            lab = "$\\phi=0$" if k == 0 else ("half period" if k == 1 else None)
-        axb.plot(R[:, k], Z[:, k], color=color, lw=1.7,
-                 alpha=1.0 if k == 0 else 0.55, label=lab)
-    # datalim (not box) keeps every panel the same box size — so titles and
-    # labels align across a row of wildly different boundary scales — while
-    # preserving true, undistorted equal-aspect cross-sections.
-    axb.set_aspect("equal", adjustable="datalim")
-    axb.tick_params(labelsize=8)
-    for s in ("top", "right"):
-        axb.spines[s].set_visible(False)
-
-
-def _plot_3d_modB(fig, ax3d, wout, nfp):
-    """3-D LCFS geometry coloured by |B| (same recipe as make_showcase_figure).
-
-    Returns the (min, max) of |B| over the plotted surface.
-    """
-    from matplotlib import cm
-    from matplotlib.colors import Normalize
-
-    from vmex.core.plotting import surface_modB, surface_rz
-
-    ns = int(wout.ns)
-    thg = np.linspace(0, 2 * np.pi, 64)
-    phg = np.linspace(0, 2 * np.pi, min(240, 70 * nfp))
-    Rg, Zg = surface_rz(wout, s_index=ns - 1, theta=thg, phi=phg)
-    Bg = surface_modB(wout, s_index=ns - 1, theta=thg, phi=phg)
-    phi2d = np.meshgrid(phg, thg)[0]
-    Xg, Yg = Rg * np.cos(phi2d), Rg * np.sin(phi2d)
-    Bn = (Bg - Bg.min()) / (Bg.max() - Bg.min() + 1e-30)
-    ax3d.plot_surface(Xg, Yg, Zg, facecolors=cm.jet(Bn), rstride=1, cstride=1,
-                      antialiased=False, linewidth=0.0, shade=False)
-    scale = 0.55 * max(np.abs(Xg).max(), np.abs(Yg).max())
-    try:
-        ax3d.set_box_aspect((1, 1, 0.62), zoom=1.15)
-    except TypeError:  # older matplotlib without the zoom kwarg
-        ax3d.set_box_aspect((1, 1, 0.62))
-    ax3d.auto_scale_xyz([-scale, scale], [-scale, scale],
-                        [-scale * 0.62, scale * 0.62])
-    ax3d.view_init(elev=30, azim=-55)
-    ax3d.set_axis_off()
-    sm = cm.ScalarMappable(cmap="jet",
-                           norm=Normalize(float(Bg.min()), float(Bg.max())))
-    sm.set_array([])
-    cb = fig.colorbar(sm, ax=ax3d, pad=0.0, fraction=0.045, shrink=0.62)
-    cb.ax.tick_params(labelsize=7.5, colors=MUTED)
-    cb.outline.set_visible(False)
-    return float(Bg.min()), float(Bg.max())
-
-
-def _plot_boozer_modB(fig, axm, wout, nfp, tag):
-    """|B| in Boozer coordinates on the LCFS as jet line contours.
-
-    Returns the (min, max) of |B| over the Boozer grid.
-    """
-    import tempfile
-
-    import vmex as vj
-    from vmex.core.boozer import run_booz_xform
-    from vmex.core.plotting import boozer_modB_on_surface
-
-    with tempfile.TemporaryDirectory() as td:
-        wp = vj.write_wout(Path(td) / f"wout_{tag}.nc", wout)
-        bx = run_booz_xform(wp, mbooz=24, nbooz=24)
-        tb, pb, B = boozer_modB_on_surface(bx, s_index=-1, ntheta=90, nphi=160)
-    pc = axm.contour(pb * nfp / (2 * np.pi), tb / (2 * np.pi), B,
-                     levels=22, cmap="jet", linewidths=0.8)
-    cb = fig.colorbar(pc, ax=axm, pad=0.02, fraction=0.05)
-    cb.ax.tick_params(labelsize=7.5, colors=MUTED)
-    cb.outline.set_visible(False)
-    axm.set_xlabel("$\\phi_B$ (field periods)", fontsize=9)
-    axm.tick_params(labelsize=8)
-    return float(B.min()), float(B.max())
-
-
-def _compress_png(path: Path, max_kib: int = 400) -> None:
-    """Palette-quantise to <=255 colours if oversized (like ``magick -colors 255``).
-
-    Non-fatal: on any failure the (larger) figure is kept rather than the run
-    aborted.  Dithering is disabled so text and thin contour lines stay crisp.
-    """
-    try:
-        if path.stat().st_size <= max_kib * 1024:
-            return
-        from PIL import Image
-
-        img = Image.open(path).convert("RGB").quantize(
-            colors=255, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
-        img.save(path, optimize=True)
-    except Exception as exc:  # pragma: no cover - best-effort compression
-        print(f"  (compression skipped for {path.name}: {exc})", flush=True)
-
-
-def make_optimization_figure(out: Path) -> None:
-    import vmex as vj
-    from vmex import optimize as opt
-
-    present = [c for c in OPT_CLASSES if (OPT_DECKS / f"input.{c[0]}_optimized").exists()]
-    if not present:
-        raise FileNotFoundError(
-            f"no optimized decks in {OPT_DECKS}; fetch/regenerate the R1 decks first")
-
-    ncol = len(present)
-    fig = plt.figure(figsize=(2.75 * ncol, 7.6), dpi=150)
-    gs = fig.add_gridspec(3, ncol, height_ratios=[1.0, 1.2, 1.05],
-                          hspace=0.42, wspace=0.42)
-    theta = np.linspace(0, 2 * np.pi, 241)
-
-    for col, (tag, title, (hm, hn), nsurf, family) in enumerate(present):
-        seed = vj.VmecInput.from_file(str(OPT_DECKS / f"input.{tag}_seed"))
-        opt_inp = vj.VmecInput.from_file(str(OPT_DECKS / f"input.{tag}_optimized"))
-        nfp = int(opt_inp.nfp)
-        phi_arr = np.array([0.0, np.pi / nfp])  # phi = 0 and half field period
-
-        # -- row 0: seed (grey) vs optimized (blue) boundary at two phi slices -
-        axb = fig.add_subplot(gs[0, col])
-        _plot_boundary_slices(
-            axb, *_input_boundary_rz(opt_inp, theta, phi_arr), color=BLUE,
-            seed=_input_boundary_rz(seed, theta, phi_arr))
-        axb.set_title(title, loc="left", fontsize=10.5, color=INK, pad=3)
-        if col == 0:
-            axb.set_ylabel("Z (m)", fontsize=8.5)
-            axb.legend(loc="upper right", fontsize=7, handlelength=1.5,
-                       labelspacing=0.25, borderaxespad=0.1)
-
-        # -- solve the optimized deck: measured QS + 3-D |B| + Boozer |B| ------
-        try:
-            eq = opt.solve_equilibrium(opt_inp)
-        except Exception as exc:  # skip a column gracefully, keep the figure
-            print(f"  {tag}: SOLVE FAILED ({exc}); skipping column", flush=True)
-            axb.annotate("solve failed", xy=(0.5, -0.16), xycoords="axes fraction",
-                         ha="center", va="top", fontsize=8.5, color=RED)
-            continue
-        qs_total = float(opt.QuasisymmetryRatioResidual(
-            np.linspace(0.1, 1.0, nsurf), hm, hn).total(eq))
-
-        ax3d = fig.add_subplot(gs[1, col], projection="3d")
-        b_lo, b_hi = _plot_3d_modB(fig, ax3d, eq.wout, nfp)
-
-        axm = fig.add_subplot(gs[2, col])
-        _plot_boozer_modB(fig, axm, eq.wout, nfp, tag)
-        if col == 0:
-            axm.set_ylabel("$\\theta_B / 2\\pi$", fontsize=8.5)
-
-        axb.annotate(f"QS = {qs_total:.2e}", xy=(0.5, -0.16),
-                     xycoords="axes fraction", ha="center", va="top",
-                     fontsize=8.5, color=GREEN_TEXT, fontweight="bold")
-        axm.annotate(family, xy=(0.02, 1.02), xycoords="axes fraction",
-                     ha="left", va="bottom", fontsize=7.5, color=MUTED)
-        print(f"  {tag}: QS={qs_total:.3e} nfp={nfp} "
-              f"|B|=[{b_lo:.2f},{b_hi:.2f}]T", flush=True)
-
-    fig.suptitle("Quasisymmetry optimization from a circular seed: boundary, "
-                 "3-D |B|, and Boozer |B| on the LCFS", x=0.5, ha="center",
-                 fontsize=12.5, color=INK, y=0.995)
-    fig.text(0.5, 0.945, "top: seed (grey, dashed) vs optimized (blue) boundary "
-             "at $\\phi=0$ and a half field period   ·   middle: 3-D LCFS "
-             "coloured by |B|   ·   bottom: |B| in Boozer coordinates (jet)",
-             ha="center", fontsize=8, color=MUTED)
-    fig.tight_layout(rect=(0, 0, 1, 0.925))
-    fig.savefig(out, dpi=150)
-    plt.close(fig)
-    _compress_png(out)
-    print("wrote", out)
-
-
-def make_qi_figure(out: Path) -> None:
-    """Quasi-isodynamic (QI) equilibria at nfp 1/2/3/4: boundary, 3-D |B|, and
-    Boozer |B| on the LCFS, each column labelled with the QI residual."""
-    import vmex as vj
-    from vmex import optimize as opt
-
-    ncol = len(QI_CASES)
-    fig = plt.figure(figsize=(2.6 * ncol, 7.6), dpi=150)
-    gs = fig.add_gridspec(3, ncol, height_ratios=[1.0, 1.2, 1.05],
-                          hspace=0.42, wspace=0.42)
-    theta = np.linspace(0, 2 * np.pi, 241)
-
-    for col, (deck, title, _nfp_hint) in enumerate(QI_CASES):
-        path = DATA / f"input.{deck}"
-        if not path.exists():
-            print(f"  {deck}: deck not found at {path}; skipping column", flush=True)
-            continue
-        inp = vj.VmecInput.from_file(str(path))
-        nfp = int(inp.nfp)
-        phi_arr = np.array([0.0, np.pi / nfp])  # phi = 0 and half field period
-
-        # -- row 0: boundary at two phi slices (single equilibrium, no seed) ---
-        axb = fig.add_subplot(gs[0, col])
-        _plot_boundary_slices(axb, *_input_boundary_rz(inp, theta, phi_arr),
-                              color=BLUE)
-        axb.set_title(title, loc="left", fontsize=10.5, color=INK, pad=3)
-        if col == 0:
-            axb.set_ylabel("Z (m)", fontsize=8.5)
-            axb.legend(loc="upper right", fontsize=7, handlelength=1.5,
-                       labelspacing=0.25, borderaxespad=0.1)
-
-        # -- solve the deck: QI (omnigenity) residual + 3-D |B| + Boozer |B| ---
-        try:
-            eq = opt.solve_equilibrium(inp)
-        except Exception as exc:  # skip a column gracefully, keep the figure
-            print(f"  {deck}: SOLVE FAILED ({exc}); skipping column", flush=True)
-            axb.annotate("solve failed", xy=(0.5, -0.16), xycoords="axes fraction",
-                         ha="center", va="top", fontsize=8.5, color=RED)
-            continue
-        qi_total = float(opt.quasi_isodynamic_residual_from_wout(
-            eq.wout, surfaces=QI_SURFACES)["total"])
-
-        ax3d = fig.add_subplot(gs[1, col], projection="3d")
-        b_lo, b_hi = _plot_3d_modB(fig, ax3d, eq.wout, nfp)
-
-        axm = fig.add_subplot(gs[2, col])
-        _plot_boozer_modB(fig, axm, eq.wout, nfp, deck)
-        if col == 0:
-            axm.set_ylabel("$\\theta_B / 2\\pi$", fontsize=8.5)
-
-        axb.annotate(f"QI = {qi_total:.2e}", xy=(0.5, -0.16),
-                     xycoords="axes fraction", ha="center", va="top",
-                     fontsize=8.5, color=GREEN_TEXT, fontweight="bold")
-        print(f"  {deck}: QI={qi_total:.3e} nfp={nfp} "
-              f"|B|=[{b_lo:.2f},{b_hi:.2f}]T", flush=True)
-
-    fig.suptitle("Quasi-isodynamic (QI) equilibria across field periods "
-                 "(nfp 1-4)", x=0.5, ha="center", fontsize=12.5, color=INK,
-                 y=0.995)
-    fig.text(0.5, 0.945, "top: boundary at $\\phi=0$ and a half field period "
-             "  ·   middle: 3-D LCFS coloured by |B|   ·   bottom: |B| in "
-             "Boozer coordinates (jet); label is the QI (omnigenity) residual",
-             ha="center", fontsize=8, color=MUTED)
-    fig.tight_layout(rect=(0, 0, 1, 0.925))
-    fig.savefig(out, dpi=150)
-    plt.close(fig)
-    _compress_png(out)
-    print("wrote", out)
-
-
-# --------------------------------------------------------------------------
-# 5. 2D preconditioner: iteration reduction on stiff cases (R10.2)
+# 3. 2D preconditioner: iteration reduction on stiff cases (R10.2)
 # --------------------------------------------------------------------------
 
 # Measured 2026-07-10 (R10.2, commit 2980d812): matrix-free 2D block
@@ -922,413 +477,9 @@ def make_showcase_figure(out: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# 7. Cold-start single-stage vs two-stage plasma + coil optimization.  Reads
-#    the outputs of examples/single_stage_vs_two_stage.py from
-#    output_single_stage_vs_two_stage/{vacuum,beta}/: wout_stage1.nc /
-#    wout_single.nc (the two final boundaries), input.stage1 / input.single
-#    (re-solved to colour each LCFS by its local B·n/|B| against
-#    coils_stage2.npz / coils_single.npz, reconstructed via ESSOS), and
-#    comparison.json (the honest evaluate-phase metrics).  The experiment is
-#    multi-hour at full budget, so it is NEVER auto-run here.
-# --------------------------------------------------------------------------
-
-SINGLE_STAGE_OUT = REPO / "output_single_stage_vs_two_stage"
-SINGLE_STAGE_SEED = DATA / "input.minimal_seed_nfp2"
-SINGLE_STAGE_CASES = [
-    ("vacuum", "QA  ·  vacuum"),
-    ("beta", "QA  ·  finite $\\beta$"),
-]
-# Evaluate-phase solve budget of examples/single_stage_vs_two_stage.py
-# (its load_boundary_input): one ns=31 grid, ftol 1e-12; the beta case
-# re-asserts the calibrated parabolic pressure cached in seed.json.
-SINGLE_STAGE_NS = 31
-SINGLE_STAGE_SOLVE = dict(ftol=1e-12, max_iterations=3000)
-# B·n render grid per field period (the example evaluates metrics at 16x16;
-# 48x48 resolves the per-coil ripple the coarse metric grid undersamples and
-# reproduces the 16x16 comparison.json numbers exactly when downsampled).
-SINGLE_STAGE_RENDER = dict(nphi=48, ntheta=48)
-
-
-def _single_stage_boundary_input(deck: Path, cdir: Path):
-    """A phase-written deck at the example's evaluate-phase solve budget.
-
-    Mirrors ``load_boundary_input`` of ``examples/single_stage_vs_two_stage.py``:
-    the decks round-trip the pressure, but the budget knobs (and, for the beta
-    case, the calibrated ``pres_scale`` from ``seed.json``) are re-asserted.
-    """
-    import dataclasses
-
-    import vmex as vj
-
-    inp = vj.VmecInput.from_file(str(deck))
-    kw = dict(ns_array=[SINGLE_STAGE_NS],
-              niter_array=[SINGLE_STAGE_SOLVE["max_iterations"]],
-              ftol_array=[SINGLE_STAGE_SOLVE["ftol"]], lfreeb=False)
-    seed_meta = cdir / "seed.json"
-    if seed_meta.exists():
-        ps = float(json.loads(seed_meta.read_text())["pres_scale"])
-        if ps > 0:
-            kw.update(pmass_type="power_series",
-                      am=[1.0, -1.0] + [0.0] * 19, pres_scale=ps)
-    return dataclasses.replace(inp, **kw)
-
-
-def _coil_field_and_gamma(npz_path: Path):
-    """(Biot-Savart callable ``xyz(...,3)->B(...,3)``, filaments (nc, nseg, 3)).
-
-    ``examples/single_stage_vs_two_stage.py`` saves only the base-coil curve
-    dofs + currents (keys ``cdofs``, ``currents``, ``nfp``, ``n_segments``);
-    ESSOS rebuilds the nfp / stellarator-symmetry copies.  The field is the
-    example's hand-rolled filamentary Biot-Savart (validated there ==
-    ``essos.fields.BiotSavart`` to 1e-16).
-    """
-    import jax
-    import jax.numpy as jnp
-    from essos.coils import Coils, Curves
-
-    d = np.load(npz_path)
-    coils = Coils(Curves(jnp.asarray(d["cdofs"]), int(d["n_segments"]),
-                         int(d["nfp"]), True), jnp.asarray(d["currents"]))
-    gamma, gdash = jnp.asarray(coils.gamma), jnp.asarray(coils.gamma_dash)
-    cur = jnp.asarray(coils.currents)
-
-    def B(pts):
-        def one(pt):
-            dR = pt - gamma                                       # (nc, nseg, 3)
-            norm = jnp.linalg.norm(dR, axis=-1, keepdims=True)
-            integrand = jnp.cross(gdash, dR) / norm ** 3
-            per_coil = jnp.mean(integrand, axis=1)                # (nc, 3)
-            return 1e-7 * jnp.sum(cur[:, None] * per_coil, axis=0)
-        return jax.vmap(one)(pts.reshape(-1, 3)).reshape(pts.shape)
-
-    return B, np.asarray(gamma)
-
-
-def _single_stage_bn_surface(cdir: Path, deck: str, npz: str):
-    """(boundary xyz (3, nphi, ntheta), signed B·n/|B|, coil filaments).
-
-    The exact machinery of the example's ``evaluate_one`` on a render-quality
-    grid: re-solve the deck, build the virtual-casing surface data + problem on
-    the SAME grid the surface is drawn from, and evaluate the saved coil field
-    on it — so the colour is exact per surface point, not interpolated.  The
-    grid covers one field period (theta/phi endpoint-free).
-    """
-    import jax.numpy as jnp
-
-    from vmex import optimize as opt
-    from vmex.core import freeboundary_diff as FBD
-
-    inp = _single_stage_boundary_input(cdir / deck, cdir)
-    eq = opt.solve_equilibrium(inp)
-    sd = FBD.surface_field_data_from_state(inp, eq.state, **SINGLE_STAGE_RENDER)
-    prob = FBD.FreeBoundaryDiffProblem.from_surface_data(sd, digits=4)
-    Bfn, coil_gamma = _coil_field_and_gamma(cdir / npz)
-    bn = np.asarray(prob.bnormal_residual(Bfn))       # (B_plasma + B_coil) . n
-    Bmag = np.asarray(jnp.linalg.norm(prob.total_B_out(Bfn), axis=0))
-    return np.asarray(prob.gamma), bn / Bmag, coil_gamma
-
-
-def _plot_coils_and_bn(ax3d, xyz, val, coil_gamma, nfp, norm):
-    """Final LCFS coloured by signed B·n/|B| inside the ESSOS coil filaments.
-
-    ``xyz``/``val`` cover one field period on endpoint-free grids (from
-    :func:`_single_stage_bn_surface`); the nfp rotated copies are tiled in and
-    both closures appended so the drawn torus is seamless.  ``norm`` is the
-    shared symmetric colour scale of the case column.  The view is scaled to
-    the (larger) coil bounding box, as before.
-    """
-    from matplotlib import cm
-    from scipy.ndimage import map_coordinates
-
-    x1, y1, z1 = (np.asarray(a) for a in xyz)
-    val = np.asarray(val)
-    Xs, Ys, Zs, Vs = [], [], [], []
-    for k in range(nfp):
-        a = 2.0 * np.pi * k / nfp
-        Xs.append(x1 * np.cos(a) - y1 * np.sin(a))
-        Ys.append(x1 * np.sin(a) + y1 * np.cos(a))
-        Zs.append(z1)
-        Vs.append(val)
-    X, Y, Z, V = (np.concatenate(v, axis=0) for v in (Xs, Ys, Zs, Vs))
-    X, Y, Z, V = (np.vstack([a, a[:1]]) for a in (X, Y, Z, V))      # close phi
-    X, Y, Z, V = (np.hstack([a, a[:, :1]]) for a in (X, Y, Z, V))   # close theta
-
-    # Upsample geometry + colour onto a denser render grid (3x each way) by
-    # bilinear interpolation of the tiled/closed surface.  No re-solve: this
-    # only subdivides each drawn quad so facets stay small at every viewing
-    # angle -- the large foreshortened rim/far-side quads (which don't tile and
-    # let the background bleed through, making equal B.n render at unequal
-    # brightness) become many small quads that tile cleanly.  The physics/data
-    # and the shared colour scale are untouched.
-    fac = 3
-    P, T = X.shape
-    ii = np.linspace(0.0, P - 1, fac * (P - 1) + 1)
-    jj = np.linspace(0.0, T - 1, fac * (T - 1) + 1)
-    Ig, Jg = np.meshgrid(ii, jj, indexing="ij")
-    coords = np.vstack([Ig.ravel(), Jg.ravel()])
-    X, Y, Z, V = (map_coordinates(a, coords, order=1, mode="nearest")
-                  .reshape(Ig.shape) for a in (X, Y, Z, V))
-    ax3d.plot_surface(X, Y, Z, facecolors=cm.RdBu_r(norm(V)), rstride=1,
-                      cstride=1, antialiased=False, linewidth=0.0, shade=False)
-    for k in range(coil_gamma.shape[0]):  # ESSOS filaments, closed loops (copper)
-        g = np.vstack([coil_gamma[k], coil_gamma[k, :1]])
-        ax3d.plot(g[:, 0], g[:, 1], g[:, 2], color="#b06a34", lw=1.0, alpha=0.9)
-    scale = 1.03 * float(max(np.abs(coil_gamma[:, :, 0]).max(),
-                             np.abs(coil_gamma[:, :, 1]).max()))
-    zmax = 1.05 * float(np.abs(coil_gamma[:, :, 2]).max())
-    try:
-        ax3d.set_box_aspect((1, 1, zmax / scale), zoom=1.5)
-    except TypeError:  # older matplotlib without the zoom kwarg
-        ax3d.set_box_aspect((1, 1, zmax / scale))
-    ax3d.auto_scale_xyz([-scale, scale], [-scale, scale], [-zmax, zmax])
-    ax3d.view_init(elev=32, azim=-60)
-    ax3d.set_axis_off()
-
-
-def make_single_stage_figure(out: Path) -> None:
-    from matplotlib import cm
-    from matplotlib.colors import Normalize
-
-    import vmex as vj
-    from vmex.core.plotting import surface_rz
-
-    cases = []
-    for name, title in SINGLE_STAGE_CASES:
-        cdir = SINGLE_STAGE_OUT / name
-        need = [cdir / "comparison.json", cdir / "wout_stage1.nc",
-                cdir / "wout_single.nc", cdir / "input.stage1",
-                cdir / "input.single", cdir / "coils_stage2.npz",
-                cdir / "coils_single.npz"]
-        missing = [p for p in need if not p.exists()]
-        if missing:
-            print(f"  {name}: missing {missing[0].relative_to(REPO)} -- run "
-                  f"'python examples/single_stage_vs_two_stage.py --case {name} "
-                  "--phase all' first (multi-hour at full budget); skipping "
-                  "this column", flush=True)
-            continue
-        cases.append((name, title, cdir))
-    if not cases:
-        print("  no single-stage outputs -- figure skipped")
-        return
-
-    seed_inp = vj.VmecInput.from_file(str(SINGLE_STAGE_SEED))
-    ncol = len(cases)
-    fig = plt.figure(figsize=(3.4 * ncol, 7.6), dpi=150)
-    # nested gridspecs: the 3-D axes hold their (flat) content in a middle
-    # band, so the two 3-D rows overlap slightly (negative hspace) to avoid a
-    # dead vertical gap between them
-    outer = fig.add_gridspec(2, 1, height_ratios=[1.0, 1.72], hspace=0.12,
-                             left=0.09, right=0.955, top=0.85, bottom=0.005)
-    gs_top = outer[0].subgridspec(1, ncol, wspace=0.28)
-    gs_bot = outer[1].subgridspec(2, ncol, wspace=0.28, hspace=-0.30)
-    theta = np.linspace(0, 2 * np.pi, 241)
-
-    for col, (name, title, cdir) in enumerate(cases):
-        comp = json.loads((cdir / "comparison.json").read_text())
-        w_two = vj.read_wout(cdir / "wout_stage1.nc")     # two-stage boundary
-        w_sin = vj.read_wout(cdir / "wout_single.nc")     # single-stage boundary
-        nfp = int(w_sin.nfp)
-        phi_arr = np.array([0.0, np.pi / nfp])  # phi = 0 and half field period
-
-        # -- row 0: seed vs two-stage vs single-stage boundary -----------------
-        # All three on one axes: the shared (auto-scaled, equal-aspect) limits
-        # keep the crude cold-start seed AND both finals visible together.
-        axb = fig.add_subplot(gs_top[0, col])
-        Rs, Zs = _input_boundary_rz(seed_inp, theta, phi_arr)
-        Rt, Zt = surface_rz(w_two, s_index=-1, theta=theta, phi=phi_arr)
-        Rf, Zf = surface_rz(w_sin, s_index=-1, theta=theta, phi=phi_arr)
-        for k in range(phi_arr.size):
-            axb.plot(Rs[:, k], Zs[:, k], color=MUTED, lw=1.0, ls=(0, (4, 3)),
-                     alpha=0.85, label="seed" if k == 0 else None)
-        for k in range(phi_arr.size):
-            axb.plot(Rt[:, k], Zt[:, k], color=YELLOW, lw=1.6,
-                     alpha=1.0 if k == 0 else 0.55,
-                     label="two-stage" if k == 0 else None)
-        for k in range(phi_arr.size):
-            axb.plot(Rf[:, k], Zf[:, k], color=BLUE, lw=1.6,
-                     alpha=1.0 if k == 0 else 0.55,
-                     label="single-stage" if k == 0 else None)
-        axb.set_aspect("equal", adjustable="datalim")
-        axb.set_title(title, loc="left", fontsize=11.5, color=INK, pad=4)
-        axb.tick_params(labelsize=8)
-        for s in ("top", "right"):
-            axb.spines[s].set_visible(False)
-        if col == 0:
-            axb.set_ylabel("Z (m)", fontsize=9.5)
-        axb.set_xlabel("R (m)", fontsize=9.5)
-        axb.legend(loc="upper right", fontsize=8, handlelength=1.4,
-                   labelspacing=0.3, borderaxespad=0.1)
-        if name == "beta":
-            # The case's calibrated seed <beta> (the finals' betatotal shifts
-            # with each approach's plasma volume at the fixed pres_scale).
-            seed_meta = cdir / "seed.json"
-            if seed_meta.exists():
-                beta_pct = float(json.loads(seed_meta.read_text())["beta_pct"])
-            else:
-                beta_pct = 100.0 * float(np.mean([float(w_two.betatotal),
-                                                  float(w_sin.betatotal)]))
-            axb.annotate(f"$\\langle\\beta\\rangle \\approx$ {beta_pct:.1f}%",
-                         xy=(0.98, 1.02), xycoords="axes fraction", ha="right",
-                         va="bottom", fontsize=9, color=MUTED)
-
-        # -- rows 1-2: each approach's final LCFS B·n/|B| inside its coils ----
-        # Both surfaces are computed BEFORE drawing so the two rows of a case
-        # column share one symmetric colour scale — the improvement between
-        # approaches must be visually honest, not per-panel autoscaled.
-        surf = {}
-        for lab, deck, npz in (("two-stage", "input.stage1", "coils_stage2.npz"),
-                               ("single-stage", "input.single", "coils_single.npz")):
-            surf[lab] = _single_stage_bn_surface(cdir, deck, npz)
-        vmax = max(float(np.abs(v).max()) for _xyz, v, _cg in surf.values())
-        norm = Normalize(-vmax, vmax)
-        axes3d = []
-        for row, (lab, c) in enumerate([("two-stage", YELLOW),
-                                        ("single-stage", BLUE)], start=1):
-            xyz, val, coil_gamma = surf[lab]
-            ax3d = fig.add_subplot(gs_bot[row - 1, col], projection="3d")
-            ax3d.patch.set_alpha(0.0)  # the two 3-D rows overlap slightly
-            _plot_coils_and_bn(ax3d, xyz, val, coil_gamma, nfp, norm)
-            ax3d.text2D(0.05, 0.16, lab, transform=ax3d.transAxes, ha="left",
-                        va="bottom", fontsize=11, color=c, fontweight="bold")
-            axes3d.append(ax3d)
-            print(f"  {name}/{lab}: max|B.n/B|={float(np.abs(val).max()):.3e} "
-                  f"(render {SINGLE_STAGE_RENDER['nphi']}x"
-                  f"{SINGLE_STAGE_RENDER['ntheta']})  16x16 <|B.n|>/<B>="
-                  f"{comp[lab.replace('-', '_')]['avg_Bn_over_B']:.3e}",
-                  flush=True)
-        sm = cm.ScalarMappable(cmap="RdBu_r", norm=norm)
-        sm.set_array([])
-        cb = fig.colorbar(sm, ax=axes3d, pad=0.005, fraction=0.05, shrink=0.55,
-                          format=lambda v, _: f"{100 * v:+.0f}%".replace("+0%", "0"))
-        cb.ax.set_title("$B\\cdot n/|B|$", fontsize=8.5, color=MUTED, pad=7)
-        cb.ax.tick_params(labelsize=7.5, colors=MUTED)
-        cb.outline.set_visible(False)
-
-    fig.suptitle("Cold-start single-stage vs two-stage plasma + coil "
-                 "optimization", x=0.5, ha="center", fontsize=13.5, color=INK,
-                 y=0.993)
-    fig.text(0.5, 0.945, "top: seed (grey, dashed) vs two-stage (orange) vs "
-             "single-stage (blue) boundary at $\\phi=0$ and a half field period",
-             ha="center", fontsize=9.5, color=MUTED)
-    fig.text(0.5, 0.921, "middle / bottom: each approach's final LCFS coloured "
-             "by local $B\\cdot n/|B|$ inside its own coils "
-             "(one scale per column)",
-             ha="center", fontsize=9, color=MUTED)
-    fig.savefig(out, dpi=150)
-    plt.close(fig)
-    _compress_png(out)
-    print("wrote", out)
-
-
-# --------------------------------------------------------------------------
-# 8. Objectives showcase: one dumbbell row per refinement campaign off the
-#    precise-QA deck.  Reads output_objectives_showcase/<name>/metrics.json
-#    written by examples/optimization/objectives_showcase.py (each records the
-#    campaign's own metric plus the held QS/aspect/iota, seed and final).
-#    The campaigns are minutes-to-hours at full budget, so NEVER auto-run.
-# --------------------------------------------------------------------------
-
-OBJECTIVES_OUT = REPO / "output_objectives_showcase"
-OBJECTIVES_CAMPAIGNS = [
-    ("lgradb", "raise min $L_{\\nabla B}$ (coil proxy)", "implicit adjoint"),
-    ("well", "deepen the magnetic well", "implicit adjoint"),
-    ("iota_up", "raise mean iota", "implicit adjoint"),
-    ("aspect_down", "lower the aspect ratio", "implicit adjoint"),
-    ("dmerc", "Mercier $D_{Merc}$ at finite $\\beta$", "finite differences"),
-]
-
-
-def make_objectives_figure(out: Path) -> None:
-    rows = []
-    for name, label, lane in OBJECTIVES_CAMPAIGNS:
-        path = OBJECTIVES_OUT / name / "metrics.json"
-        if not path.exists():
-            print(f"skipping objectives figure: missing {path} — run "
-                  "examples/optimization/objectives_showcase.py first")
-            return
-        rows.append((label, lane, json.loads(path.read_text())))
-
-    fig, ax = plt.subplots(figsize=(10.8, 0.92 * len(rows) + 1.55), dpi=150)
-    fig.subplots_adjust(left=0.225, right=0.645, top=0.815, bottom=0.035)
-    ys = np.arange(len(rows))[::-1].astype(float)
-    tr = ax.get_yaxis_transform()  # x in axes fraction, y in data
-
-    for y, (label, lane, m) in zip(ys, rows):
-        fmt = m.get("fmt", "{:.3g}")
-        seed, final = m["seed"], m["final"]
-        vals = (seed["metric"], final["metric"], m["target"])
-        lo, hi = min(vals), max(vals)
-        span = (hi - lo) or max(abs(hi), 1.0)
-        pad = 0.18 * span
-        pos = lambda v: (v - lo + pad) / (span + 2.0 * pad)  # noqa: E731
-        xs, xf, xt = (pos(v) for v in vals)
-
-        ax.plot([xt], [y], marker="|", ms=22, mew=2.4, color=BASELINE, zorder=1)
-        ax.annotate("target " + fmt.format(m["target"]), xy=(xt, y),
-                    xytext=(0, -19), textcoords="offset points", ha="center",
-                    fontsize=8.5, color=MUTED)
-        # nearly-unmoved metrics: no arrow (an arrowhead between two nearly
-        # coincident dots reads as clutter); split the value labels left/right
-        near = abs(xf - xs) < 0.11
-        if not near:
-            ax.annotate("", xy=(xf, y), xytext=(xs, y),
-                        arrowprops=dict(arrowstyle="-|>", color=BLUE, lw=3.2,
-                                        mutation_scale=26, shrinkA=9,
-                                        shrinkB=4), zorder=2)
-        # on nearly-unmoved rows the two dots coincide: draw the (smaller)
-        # grey seed on top of the blue final so both stay visible
-        ax.plot([xs], [y], "o", ms=12, color=BASELINE, mec="white", mew=1.8,
-                zorder=5 if near else 3)
-        ax.plot([xf], [y], "o", ms=14, color=BLUE, mec="white", mew=1.8,
-                zorder=4)
-        seed_left = xs <= xf  # label each dot on its own side of the pair
-        ax.annotate(fmt.format(seed["metric"]), xy=(xs, y),
-                    xytext=((-10 if seed_left else 10) if near else 0, 13),
-                    textcoords="offset points",
-                    ha=("right" if seed_left else "left") if near else "center",
-                    fontsize=10, color=INK2)
-        ax.annotate(fmt.format(final["metric"]), xy=(xf, y),
-                    xytext=((10 if seed_left else -10) if near else 0, 13),
-                    textcoords="offset points",
-                    ha=("left" if seed_left else "right") if near else "center",
-                    fontsize=11, color=BLUE, fontweight="bold")
-        arrow = " $\\rightarrow$ "  # mathtext: the plain glyph is missing in
-        # the mixed math/text layout of the second drift line
-        drift = (f"QS {seed['qs_total']:.0e}{arrow}{final['qs_total']:.0e}\n"
-                 f"A {seed['aspect']:.2f}{arrow}{final['aspect']:.2f}    "
-                 f"$\\iota$ {seed['mean_iota']:.3f}{arrow}{final['mean_iota']:.3f}")
-        ax.text(1.06, y, drift, transform=tr, fontsize=9, color=INK2,
-                va="center", ha="left", linespacing=1.6)
-
-    ax.set_yticks(ys)
-    ax.set_yticklabels([f"{label}\n" for label, _lane, _m in rows], fontsize=11)
-    for y, (_label, lane, m) in zip(ys, rows):
-        ax.text(-0.02, y - 0.20, f"{lane} · {m['label']}", transform=tr,
-                fontsize=8.5, color=MUTED, va="center", ha="right")
-    ax.set_ylim(-0.58, len(rows) - 0.3)
-    ax.set_xlim(0.0, 1.0)
-    ax.set_xticks([])
-    for s in ("top", "right", "left", "bottom"):
-        ax.spines[s].set_visible(False)
-    ax.tick_params(axis="y", length=0)
-    ax.set_title("Beyond quasisymmetry: one new objective per campaign, QS held",
-                 loc="left", pad=46, fontsize=14, color=INK)
-    ax.text(0.0, 1.045, "precise-QA seed (grey) $\\rightarrow$ after one short "
-            "campaign (blue); the held metrics on the right",
-            transform=ax.transAxes, fontsize=10, color=INK2, va="bottom")
-    ax.text(1.06, len(rows) - 0.36, "held-metric drift", transform=tr,
-            fontsize=9, color=MUTED, va="bottom", ha="left")
-    fig.savefig(out, dpi=150)
-    _compress_png(out)
-    plt.close(fig)
-    print("wrote", out)
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--only",
-        default="runtime,convergence,optimization,qi,precond,showcase,single_stage,objectives")
+    ap.add_argument("--only", default="runtime,convergence,precond,showcase")
     ap.add_argument("--outdir", default=str(REPO / "docs" / "_static" / "figures"))
     args = ap.parse_args()
     outdir = Path(args.outdir)
@@ -1339,18 +490,10 @@ def main() -> None:
         make_runtime_figure(outdir / "readme_runtime_compare.png")
     if "convergence" in which:
         make_convergence_figure(outdir / "readme_convergence.png")
-    if "optimization" in which:
-        make_optimization_figure(outdir / "readme_optimization.png")
-    if "qi" in which:
-        make_qi_figure(outdir / "readme_qi.png")
     if "precond" in which:
         make_precond_figure(outdir / "readme_precond.png")
     if "showcase" in which:
         make_showcase_figure(outdir / "readme_equilibrium_showcase.png")
-    if "single_stage" in which:
-        make_single_stage_figure(outdir / "readme_single_stage.png")
-    if "objectives" in which:
-        make_objectives_figure(outdir / "readme_objectives.png")
 
 
 if __name__ == "__main__":

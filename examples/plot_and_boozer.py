@@ -28,7 +28,7 @@ import vmex as vj
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = Path(__file__).resolve().parent / "data" / "input.li383_low_res"
 OUT_DIR = Path("output_plot_and_boozer")
-WHICH = ("summary", "surfaces", "modB", "profiles", "3d")  # all plot_wout kinds
+WHICH = ("summary", "surfaces", "modB", "profiles", "stability", "3d")
 RUN_BOOZER = True                                          # optional dep
 CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"         # smoke-test mode
 

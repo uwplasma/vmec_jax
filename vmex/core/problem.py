@@ -448,8 +448,9 @@ class VmecProblem(FunctionProblem):
         # converged equilibrium before consulting the process-local last-error
         # slot, otherwise that older failure would incorrectly mark this
         # successful evaluation as failed.
+        equilibrium = None
         try:
-            self.equilibrium_from_x(evaluation.x)
+            equilibrium = self.equilibrium_from_x(evaluation.x)
         except (AttributeError, RuntimeError):
             pass
         else:
@@ -464,6 +465,23 @@ class VmecProblem(FunctionProblem):
         diagnostics["derivative_fallbacks"] = int(
             holder.get("derivative_fallbacks", 0)
         )
+        if equilibrium is not None:
+            result = equilibrium.result
+            fsq = float(result.fsqr) + float(result.fsqz) + float(result.fsql)
+            ratio = fsq / float(cfg.ftol)
+            diagnostics.update(
+                fsq=fsq,
+                fsq_ratio=ratio,
+                max_fsq_ratio=float(cfg.max_fsq_ratio),
+                derivative_certified=bool(result.converged or ratio <= cfg.max_fsq_ratio),
+            )
+            if not diagnostics["derivative_certified"]:
+                return replace(
+                    evaluation,
+                    status="under_converged",
+                    message="FSQ exceeds the implicit-derivative threshold",
+                    diagnostics=diagnostics,
+                )
         error = imp._LAST_STATUS_ERROR.get(cfg)
         if error is None:
             return replace(evaluation, diagnostics=diagnostics)

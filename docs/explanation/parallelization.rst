@@ -56,9 +56,10 @@ Workstation defaults and explicit controls
 ------------------------------------------
 
 ``workers=None`` is the beginner default for independent host work.  It
-resolves to ``min(number_of_items, os.cpu_count())`` and therefore offers all
-logical CPUs when there are at least that many finite-difference probes or
-ensemble members.  ``workers=N`` is the portable override; use ``workers=1``
+resolves to the smaller of the item count and the CPUs available to the
+process, including Linux affinity and common Slurm/PBS/SGE/LSF allocations.
+It therefore uses all allocated logical CPUs when enough probes or ensemble
+members exist.  ``workers=N`` is the portable override; use ``workers=1``
 for a serial reference or a smaller ``N`` when each XLA/BLAS solve is already
 large enough that multiple workers contend for memory bandwidth.
 

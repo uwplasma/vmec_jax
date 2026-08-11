@@ -57,12 +57,10 @@ LINE_CAP = 250
 BUDGET_TOTAL = 500 * 1024
 BUDGET_FILE = 150 * 1024
 
-# Frozen: files consumed by the top-level README.md (embedded figures) and
-# the committed inputs of ``benchmarks/make_readme_figures.py`` /
-# ``assets/manifest.json``. The README cannot move (its image paths are pinned
+# Frozen: files consumed by the top-level README.md and fetched reference
+# inputs listed in ``assets/manifest.json``. The README cannot move (its paths are pinned
 # by GitHub rendering and by tests), so these are exempt from the docs media
-# budget — but the list itself must not grow: new media goes through the
-# build-time or fetched channels of plan_docs_vmex.md section 8.
+# budget. Additions are limited to reviewed, reproducible README figures.
 GRANDFATHERED_PREFIXES = (
     "qi_readme_cases/",
     "readme_best_cases/",
@@ -72,27 +70,21 @@ GRANDFATHERED_FILES = {
     "figures/freeb_lpqa_direct_coil_beta_ns101_panel_summary.csv",
     "figures/minimal_seed_showcase_summary.csv",
     "figures/mirror_fixed_boundary_3d.png",
-    "figures/mirror_free_boundary_beta50_summary.png",
+    "figures/mirror_free_boundary_beta_scan.png",
     "figures/pr20_wout_parity_summary.json",
     "figures/qi_mirror_hybrid.png",
-    "figures/readme_bootstrap.png",
     "figures/readme_convergence.png",
+    "figures/readme_bootstrap.png",
+    "figures/readme_diagnostics_qa_vacuum.webp",
+    "figures/readme_diagnostics_summary.webp",
     "figures/readme_equilibrium_showcase.png",
     "figures/readme_essos_beta_scan.png",
-    "figures/readme_objectives.png",
     "figures/readme_optimization.png",
-    "figures/readme_optimization_landscapes.png",
     "figures/readme_precond.png",
-    "figures/readme_qi.png",
     "figures/readme_runtime_compare.csv",
     "figures/readme_runtime_compare.json",
     "figures/readme_runtime_compare.png",
-    "figures/readme_runtime_compare_current_vs_main.csv",
-    "figures/readme_runtime_compare_current_vs_main.json",
-    "figures/readme_runtime_compare_lpqa_rerun.csv",
-    "figures/readme_runtime_compare_lpqa_rerun.json",
-    "figures/readme_runtime_compare_regression_classifications.json",
-    "figures/readme_single_stage.png",
+    "figures/readme_qi.png",
     "figures/stellarator_mirror_hybrid.png",
 }
 

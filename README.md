@@ -6,979 +6,241 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/uwplasma/vmex/ci.yml?branch=main&label=ci)](https://github.com/uwplasma/vmex/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/readthedocs/vmex/latest?label=docs)](https://vmex.readthedocs.io/en/latest/)
 
-> **`vmec_jax` is now `vmex`.** The package was renamed: install with
-> `pip install vmex` and `import vmex`. The `vmec` CLI command still works as an
-> alias, and `import vmec_jax` keeps working (with a deprecation warning) for
-> one release. Full documentation: **[vmex.readthedocs.io](https://vmex.readthedocs.io/en/latest/)**.
+> **Rename note:** `vmec_jax` is now `vmex`; the deprecated `import vmec_jax` compatibility shim still ships with VMEX 0.5.
 
-**VMEX** is a clean-room, JAX-native reimplementation of the
-[VMEC2000](https://princetonuniversity.github.io/STELLOPT/VMEC) ideal-MHD
-equilibrium code for stellarators and tokamaks. It reproduces VMEC2000
-iteration-for-iteration on representative benchmark decks — and, unlike the
-Fortran original, provides differentiable research paths and runs on GPUs.
-The exact support and validation matrix is documented in
-[the generated capability contract](https://vmex.readthedocs.io/en/latest/capabilities.html);
-input-flag coverage is tracked separately in
-[VMEC2000 compatibility and research scope](https://vmex.readthedocs.io/en/latest/vmec2000_compatibility.html).
+VMEX is a JAX implementation of VMEC for stellarator and tokamak ideal-MHD equilibria. It reads standard VMEC input files, solves fixed- and free-boundary problems, writes standard `wout_*.nc` files, and provides exact implicit derivatives of converged fixed-boundary equilibria for optimization.
 
-- **VMEC2000 parity.** The solver ports VMEC2000's algorithms
-  constant-for-constant (steepest-descent moment method, radial
-  preconditioner, spectral condensation, NESTOR vacuum solve). Benchmark
-  decks converge in the *same* number of iterations and reproduce the
-  plasma energy at machine precision. An optional **2D block
-  preconditioner** cuts iterations 2.5–11x on stiff cases while leaving the
-  default path byte-identical.
-- **Differentiable.** Gradients of *fixed-boundary* equilibrium outputs with
-  respect to boundary shape and profile parameters by implicit
-  differentiation of the converged fixed point — no finite differences, no
-  unrolling — validated against central finite differences to ~1e-6 relative
-  (see the gradient table in the docs), with an O(1)-memory adjoint. The
-  **free-boundary virtual-casing residual** is differentiable in coil /
-  `extcur` parameters on a specified plasma boundary and is
-  finite-difference-validated. The host-driven NESTOR equilibrium solve itself
-  is not differentiated. See the
-  [capability contract](https://vmex.readthedocs.io/en/latest/capabilities.html)
-  for the exact forward, JVP, VJP, and optimization scope.
-- **Drop-in.** Reads VMEC2000 `input.*` namelists and structured JSON,
-  prints VMEC2000-format iteration output, and writes `wout_*.nc` files
-  that load unchanged in simsopt and booz_xform.
-- **Batteries included.** Plotting (`vmex --plot`), Boozer transform
-  (`vmex --booz`), dimensional scaling for fast-particle studies
-  (`vmex --scale`), spline profiles, multigrid, hot restart, free boundary
-  from mgrid files or fields tabulated from coils,
-  typed zero-crash errors — with the shared linear/adjoint solver layer
-  factored out into [SOLVAX](https://pypi.org/project/solvax/).
-
-![Flux surfaces, 3-D geometry, and Boozer |B| of the bundled quick-start QH case](docs/_static/figures/readme_equilibrium_showcase.png)
-
-*The bundled quick-start case (`vmex --test`): flux-surface cross sections,
-the 3-D plasma boundary coloured by `|B|`, and `|B|` in **Boozer coordinates**
-on the last closed flux surface (the near-straight diagonal contours are the
-signature of quasi-helical symmetry) for a four-field-period stellarator —
-all from the built-in `vmex.core.plotting` / `core.boozer` helpers.*
+![VMEX equilibria and diagnostics](docs/_static/figures/readme_equilibrium_showcase.png)
 
 ## Install
 
-Install from PyPI:
-
-```bash
+```console
 pip install vmex
-```
-
-For NVIDIA GPUs with a current JAX-supported Python and driver 580+, install
-the CUDA 13 wheel and verify the detected devices:
-
-```bash
-pip install -U "jax[cuda13]"
 vmex --doctor
+vmex --test
 ```
 
-VMEX does not require platform-selection environment variables for hardware
-detection. Its automatic policy keeps small solves, very high-mode stages,
-and implicit gradients on CPU when that is faster; the public solve and
-implicit APIs also accept an explicit ``device=`` argument.
-GPU free-boundary ladders keep the plasma iteration on the requested
-accelerator but solve the small dense NESTOR block on CPU, reusing one LU
-factor between full vacuum updates. Non-symmetric ladders use a CPU coarse
-rung to select the VMEC2000 branch before transferring all finer work and the
-final state to GPU.
+Python 3.10+ is supported. VMEX installs CPU JAX, SciPy, plotting, NetCDF, and `booz_xform_jax`; install an accelerator-enabled JAX wheel separately using the [JAX installation guide](https://docs.jax.dev/en/latest/installation.html). Optional integrations are `vmex[optimizers]` for JAXopt/Optax, `vmex[freeb]` for differentiable virtual casing, `vmex[coils]` for ESSOS, and `vmex[turbulence]` for GKX.
 
-Development install from source:
+An editable source install remains connected to its checkout, so `pip install -e .` only needs to be repeated when packaging metadata or dependencies change—not after each `git fetch` or checkout.
 
-```bash
-git clone https://github.com/uwplasma/vmex
-cd vmex && pip install -e .
-```
-
-## Quickstart
-
-```bash
-vmex --doctor     # check the installation and JAX backend
-vmex --test       # solve the bundled QH case, write wout + plots
-vmex input.X      # run any VMEC2000 input deck (or structured JSON)
-vmex --plot --booz input.X  # solve, transform, and make both plot sets
-```
-
-`vmex input.X` writes `wout_X.nc` next to the input (`--outdir` to
-redirect). To try it on a real deck:
-
-```bash
-curl -L -O https://raw.githubusercontent.com/uwplasma/vmex/main/examples/data/input.nfp4_QH_warm_start
-vmex input.nfp4_QH_warm_start
-```
-
-Post-process any wout file, including ones written by VMEC2000:
-
-```bash
-vmex --plot wout_nfp4_QH_warm_start.nc     # surfaces, |B|, profiles, 3D
-vmex --booz wout_nfp4_QH_warm_start.nc     # Boozer transform -> boozmn_*.nc
-vmex --plot boozmn_nfp4_QH_warm_start.nc   # Boozer |B| contours + spectrum
-```
-
-Scale for fast-particle studies
--------------------------------
-
-Scale an input or WOUT to the ARIES-CS reference dimensions
-(`|b0| = 5.7 T`, `Aminor_p = 1.7 m`), or give explicit multiplicative
-magnetic-field and size factors:
-
-```bash
-vmex --scale input.X             # writes input.X_scaled at ARIES-CS scale
-vmex --scale input.X 1.2 0.8     # B_scale=1.2, R_scale=0.8
-vmex --scale wout_X.nc           # writes wout_X_scaled.nc
-vmex --plot --booz input.X_scaled
-```
-
-Input and WOUT transforms obey the same dimensional similarity law and are
-tested to commute with reconverged fixed- and free-boundary solves. This makes
-it straightforward to set the physical field and size for fixed-energy orbit
-calculations, including 3.5 MeV alpha studies.
-See the [scaling reference](https://vmex.readthedocs.io/en/latest/scaling.html)
-for the field table, the bounded input probe, and free-boundary mgrid handling.
-
-## Parity with VMEC2000
-
-VMEX is validated end-to-end against golden VMEC2000 (PARVMEC 9.0) runs:
-benchmark decks converge in **exactly** the golden iteration count — including
-DSHAPE's mid-run jacobian reset — and reproduce the plasma energy `wb` to
-1 part in 10¹⁵. Across the full benchmark suite (14 rows, all at `ns = 201`),
-the iteration count matches VMEC2000 exactly on 12 rows (including the
-deliberately NITER-bounded LASYM stress row, where both codes exhaust the same
-10,000-iteration budget); on the free-boundary CTH-like row VMEX converges in
-~8% *fewer* iterations (1518 vs 1652), and on the reactor-scale QH row it
-takes 17 more (5239 vs 5222). Per-variable wout agreement
-and the full test gates live in the
-[documentation](https://vmex.readthedocs.io/en/latest/).
-
-![Force residual vs iteration for vmex, VMEC2000 and a reference C++ implementation](docs/_static/figures/readme_convergence.png)
-
-*Parity is per-iteration, not just end-to-end: the total force residual
-(`fsqr + fsqz + fsql`) of the quick-start QH case at ns=51, per iteration.
-The vmex trajectory lies exactly on top of VMEC2000's (both converge in
-502 iterations); the reference C++ implementation follows a near-identical path (501 iterations).
-Traces: vmex `SolveResult.fsq_history`, VMEC2000 `NSTEP=1` stdout,
-reference wout `fsqt`.*
-
-### Optional 2D preconditioner: fewer iterations on stiff cases
-
-The default radial (1D) preconditioner reproduces VMEC2000 iteration-for-iteration.
-An opt-in **2D block preconditioner** (matrix-free Newton: a Jacobian-vector-product
-Hessian on SOLVAX's GMRES) cuts the iteration count **2.5–11×** at *identical*
-accuracy — the converged `wb` matches the 1D result to ~1e-10 (it changes the path,
-not the fixed point).
-
-![2D vs 1D preconditioner iteration counts on stiff cases](docs/_static/figures/readme_precond.png)
-
-**Why it is opt-in, not the default.** Fewer iterations is not the same as less
-wall-clock: each 2D Newton step (a GMRES solve of Hessian-vector products) costs far
-more than a 1D radial sweep. Measured across easy and stiff decks the wall-clock
-ranges 0.55–1.16× — a wash to *slower* (e.g. ~2× slower on a plain circular tokamak,
-a tie even on an aspect-ratio-100 stiff case) — and peak memory is ~30% higher (the
-extra GMRES/HVP compile graph). So the 1D path stays the byte-identical default, and
-the 2D preconditioner is there for cases where the 1D iteration count is the
-bottleneck or stalls.
-
-## Performance
-
-**High-mode HSX QHS deck** (`MPOL=18, NTOR=24, NZETA=100, ns→101`; 858 modes),
-sequentially on an idle Apple Silicon CPU. VMEX was measured once with an
-empty persistent compilation cache and twice in fresh processes reusing that
-cache; those recorded VMEX runs used compilation prefetch. VMEC++ was
-measured twice:
-
-| code | wall | peak RSS | outcome |
-| --- | ---: | ---: | --- |
-| VMEX, empty compilation cache | 238.8 s | 1.88 GiB | converged, 2737 iters |
-| VMEX, cache reuse (median of 2) | 225.2 s | 1.75 GiB | converged, 2737 iters |
-| VMEC++ 0.7.1, 10 threads (median of 2) | 89.0 s | 396 MiB | converged, 2913 iters |
-| VMEC2000 (1 process) | 593 s | 0.32 GB | converged |
-
-With compilation-cache reuse, VMEX is 2.53× slower and uses 4.53× the peak
-memory of ten-thread VMEC++; an empty-cache run is 2.68× slower. VMEX remains
-2.6× faster than VMEC2000. Its WOUT matches VMEC2000 at
-``5.96e-12`` relative L2 in ``rmnc``, ``3.42e-11`` in ``zmns``,
-``1.02e-11`` in ``bmnc``, and ``2.37e-11`` in core ``iota``. The runtime
-is therefore about the 2.5× target for this PR; the remaining XLA
-executable/full-radial memory gap is stated explicitly rather than treated as
-closed. The CLI compiles multigrid rungs sequentially to bound peak memory;
-``--prefetch-compile`` opts into overlapping the next rung's compilation.
-
-![Wall-clock comparison against VMEC2000 and a reference C++ implementation](docs/_static/figures/readme_runtime_compare.png)
-
-Full-solve wall-clock times on the bundled benchmark suite (Apple Silicon
-CPU, single thread; `benchmarks/baseline.json`; reproduce with
-`python benchmarks/run_baseline.py`):
-
-- **Warm** — kernels already compiled; the number that matters inside an
-  optimization loop or scan. Faster than VMEC2000 on **every** benchmark row:
-  the recorded speedups span 1.42× (Nuhrenberg–Zille QHS) to 3.35×
-  (Solov'ev), with both free-boundary rows at ~1.5× (1.55× on the converged
-  symmetric row, 1.46× on the NITER-bounded LASYM stress row) since the
-  NESTOR iteration loop was fused into jitted multi-iteration lanes. Each
-  row is one controlled sequential measurement on an idle host — not a
-  repeated-run statistic.
-- **Cold** — a fresh CLI process pays a one-time JAX/XLA compile (~2 s on the
-  small decks up to ~18 s on the largest), so a single fire-and-forget run is
-  usually slower than Fortran — though on the five biggest decks even the
-  cold run, compile included, beats VMEC2000. Executables cache per solver
-  structure, so scans, ladders, and optimizations recompile nothing — which
-  is why *warm* is the workflow number.
-- **GPU** — at these sizes a fixed per-solve dispatch cost dominates and the CPU
-  wins outright; per-iteration throughput favours the GPU ~3× on the largest
-  moderate-mode decks. The measured device policy therefore keeps small-work
-  and very-high-mode stages on CPU, while explicit placement always wins.
-- **Pure JAX, no compiled extensions** — every kernel is JAX, so installing
-  vmex never requires a C or C++ toolchain and the same code runs on CPU, GPU
-  and TPU. An experimental native CPU projection was evaluated and removed: it
-  bought only a few percent while adding a compiler dependency and a
-  platform-specific code path.
-
-## Features
-
-The status of each solver, device, and differentiation lane is defined by the
-[evidence-linked capability contract](https://vmex.readthedocs.io/en/latest/capabilities.html).
-
-| | VMEX | VMEC2000 | reference C++ |
-|---|:---:|:---:|:---:|
-| Fixed-boundary equilibria | ✅ | ✅ | ✅ |
-| Free boundary from an mgrid file | ✅ | ✅ | ✅ |
-| Free-boundary radial multigrid | ✅ | ✅ | ✅ |
-| Free boundary from an in-memory coil-field table | ✅ | ❌ | ❌ |
-| Free-boundary tokamaks (`ntor = 0`) | ✅ | ✅ | ❌ |
-| Non-stellarator-symmetric (`LASYM = T`) | ✅ | ✅ | ✅ |
-| Fixed-boundary fallback on missing mgrid | ✅ | ✅ | ❌ |
-| Spline profiles (cubic / Akima) | ✅ | ✅ | ❌ |
-| structured JSON input | ✅ | ❌ | ✅ |
-| Hot restart from any WOUT file (`--restart`, `RESTART_WOUT`, `restart_from=`) | ✅ | ✅ | ❌ |
-| Typed zero-crash errors | ✅ | ❌ | ✅ |
-| Boozer transform built in (`--booz`) | ✅ | ❌ | ❌ |
-| Plotting built in (`--plot`) | ✅ | ❌ | ❌ |
-| Input/WOUT dimensional scaling (`--scale`) | ✅ | ❌ | ❌ |
-| GPU execution | ✅ | ❌ | ❌ |
-| Differentiable fixed boundary (implicit diff, O(1) memory) | ✅ | ❌ | ❌ |
-| Differentiable virtual-casing residual on a specified boundary | ✅ | ❌ | ❌ |
-| Optional matrix-free 2D preconditioner (iteration-count reduction on stiff cases; not a general wall-time win) | ✅ | ✅ | ❌ |
-
-### Free boundary from coil-field tabulation
-
-Free-boundary solves can use a coil set directly: load the coils with
-[ESSOS](https://github.com/uwplasma/ESSOS) (`essos.coils.Coils`), evaluate
-their field with `essos.fields.BiotSavart`, and tabulate it once into an
-in-memory table via `MgridField.from_cartesian_field`, passed as
-`external_field=` — no MAKEGRID file involved (this is the route the CLI's
-`--coils` flag takes). This forward route still uses mgrid
-interpolation. Separately, the virtual-casing residual can evaluate a JAX
-Biot-Savart callable directly on a specified boundary, retaining coil
-derivatives for that residual; it is not an adjoint of the reconverged NESTOR
-solve. All coil geometry lives in ESSOS; vmex has no coil code of its own.
-
-![Free-boundary Landreman-Paul QA pressure scan from an in-memory ESSOS coil field](docs/_static/figures/readme_essos_beta_scan.png)
-
-*Free-boundary equilibria of the Landreman–Paul precise-QA configuration held
-by its 16 modular coils as optimized in
-[ESSOS](https://github.com/uwplasma/ESSOS) (3 KB coil JSON bundled in
-`examples/data/`). Pressure is ramped at fixed coil currents with each point
-warm-started from the previous boundary, and `PRES_SCALE` is calibrated per
-point so the **actual** volume-average beta of the converged wout
-(`betatotal`) — not a nominal input value — lands on 0, 1, 2, 3 % (all within
-0.08 %, force residual ~2e-10 at ns = 51). The plasma dilates and the magnetic
-axis Shafranov-shifts 14 cm outboard at the φ = 0 section (right panel) while
-the coils never move. Reproduce with
-`python examples/free_boundary_essos_coils.py`.*
-
-### Single-stage plasma + coil optimization
-
-VMEX can optimize the plasma boundary and the coils together, with one
-exact gradient. A single `jax.value_and_grad` differentiates through the
-fixed-boundary equilibrium (implicit adjoint), the virtual-casing surface
-field, and the Biot–Savart law of the ESSOS coil filaments, covering boundary
-Fourier modes, coil shapes, and coil currents at once. The benchmark below
-compares this against the classical two-stage approach — stage 1 shapes the
-boundary for quasi-axisymmetry, stage 2 fits coils to that frozen boundary —
-from the same seeds (a circular torus and four circular coils), with identical
-coil budgets, scored on the equilibrium each final coil set actually produces.
-The finite-β case runs the same joint optimization with a pressure profile;
-no published code demonstrates this in general form.
-
-The most effective use is to polish the two-stage result, the "stage 3" of
-[arXiv:2302.10622](https://arxiv.org/abs/2302.10622): warm-start the joint
-objective from the stage-1 boundary and stage-2 coils and let both adapt.
-In 10–30 minutes this lowers the normal-field error by 33% (vacuum) and 17%
-(finite β) below the two-stage result, with quasisymmetry and iota unchanged —
-stage 2 cannot make this correction because it holds the boundary frozen.
-A pure cold start (third column) shows the same joint descent from the crude
-seeds: after 50 iterations it reaches low B·n with compact coils, but its
-quasisymmetry is far from what a dedicated stage 1 delivers, which is why the
-polish pattern is recommended.
-
-![Cold-start single-stage vs two-stage plasma+coil optimization, vacuum and finite beta](docs/_static/figures/readme_single_stage.png)
-
-*Top: seed (grey, dashed) vs two-stage (orange) vs cold-start single-stage
-(blue) boundaries at φ = 0 and a half field period — the polish boundary is
-visually indistinguishable from two-stage (same aspect and iota), so it is not
-drawn. Middle/bottom: each approach's final LCFS coloured by the local signed
-field-alignment error B·n/|B| inside its own final coils (red: field leaving
-the surface, blue: entering), on one shared colour scale per column so the
-two approaches compare directly.*
-
-Vacuum (measured; identical seeds and coil budgets across columns):
-
-| metric (vacuum) | two-stage | + single-stage polish | single-stage (cold) |
-|---|---|---|---|
-| QS ratio residual | 9.3e-05 | 1.6e-04 | 2.4e-02 |
-| mean iota (target 0.42) | 0.420 | 0.420 | 0.396 |
-| ⟨\|B·n\|⟩/⟨B⟩ | 2.38e-03 | **1.60e-03** | 3.05e-03 |
-| max\|B·n\|/⟨B⟩ | 1.30e-02 | **7.84e-03** | 1.18e-02 |
-| coil lengths [m] (≤ 4.40) | 4.12–4.39 | 4.11–4.40 | 3.60–3.87 |
-
-Finite β (⟨β⟩ ≈ 1.5 %, same pressure profile in all columns):
-
-| metric (finite β) | two-stage | + single-stage polish | single-stage (cold) |
-|---|---|---|---|
-| QS ratio residual | 4.4e-05 | 2.4e-04 | 2.3e-02 |
-| mean iota (target 0.42) | 0.420 | 0.422 | 0.100 |
-| ⟨\|B·n\|⟩/⟨B⟩ | 2.80e-03 | **2.34e-03** | 6.20e-03 |
-| max\|B·n\|/⟨B⟩ | 1.37e-02 | **1.27e-02** | 1.75e-02 |
-| coil lengths [m] (≤ 4.40) | 3.91–4.18 | 3.91–4.19 | 3.25–3.28 |
-
-Reproduce with `python examples/single_stage_vs_two_stage.py --case vacuum
---phase all` (and `--case beta`). Measured on a 36-core CPU: stage 1 ≈ 7–9 min,
-stage 2 ≈ 6 min, polish ≈ 10–30 min; the optional cold-start single column is
-the long pole (≈ 1.5 h vacuum, several hours at finite β). The phases are
-resumable, so long runs can be split across sessions.
-
-## Code size
-
-VMEX delivers that superset of capabilities in little more than **half the
-code**, and is the most densely documented of the three. Solver source only (tests,
-language bindings, and vendored third-party excluded), counted with
-[`pygount`](https://pypi.org/project/pygount/) 3.2:
-
-| code base | language | files | code (SLOC) | comments / docstrings | doc-to-code |
-|---|---|---:|---:|---:|---:|
-| **VMEX** | Python | 41 | **13,326** | 6,744 | **0.51** |
-| VMEC2000 (PARVMEC) | Fortran | 115 | 24,190 | 8,425 | 0.35 |
-| reference C++ | C++ / Python | 117 | 22,824 | 7,646 | 0.34 |
-
-VMEX is little more than half the SLOC of VMEC2000 and a reference C++ implementation, while
-*adding* differentiability, GPU execution, direct-coil free boundary, and a
-built-in Boozer transform — and it carries the highest comment/docstring
-density of the three (reproduce with
-`pygount --format=summary vmex`).
-
-## Python API
+## Solve and inspect an equilibrium
 
 ```python
-from vmex.core.input import VmecInput
-from vmex.core import optimize as opt
-from vmex.core.wout import write_wout
-from vmex.core.plotting import plot_wout
+import vmex as vj
 
-inp = VmecInput.from_file("input.nfp4_QH_warm_start")
-eq = opt.solve_equilibrium(inp)        # full NS_ARRAY ladder, VMEC2000 numerics
-print(eq.result.converged, eq.result.iterations, float(eq.wout.aspect))
-
-write_wout("wout_nfp4_QH_warm_start.nc", eq.wout)   # wout built lazily on eq
-plot_wout(eq.wout, "figures/")
+inp = vj.VmecInput.from_file("input.circular_tokamak")
+result = vj.solve_multigrid(inp, verbose=True)
+wout = vj.wout_from_state(inp=inp, state=result.state,
+                           fsqr=result.fsqr, fsqz=result.fsqz, fsql=result.fsql,
+                           niter=result.iterations, converged=result.converged)
+vj.write_wout("wout_circular_tokamak.nc", wout)
+vj.plot_wout("wout_circular_tokamak.nc", "figures")
 ```
 
-For a parameter scan or a tighter final solve, pass the last converged state
-into the next call. VMEX adapts it to the new boundary and interpolates it if
-the radial resolution changes:
+The CLI provides the same workflow:
+
+```console
+vmex input.circular_tokamak
+vmex --plot wout_circular_tokamak.nc
+vmex input.nearby --restart wout_circular_tokamak.nc
+```
+
+VMEX uses the input file's `NS_ARRAY`, `FTOL_ARRAY`, and `NITER_ARRAY`. `verbose=True` prints the VMEC iteration table; typed errors distinguish invalid inputs, Jacobian failures, non-convergence, and numerical failures.
+
+The common CLI operations are:
+
+| Command | Result |
+|---|---|
+| `vmex input.X` | solve INDATA or JSON and write `wout_X.nc` |
+| `vmex input.X --plot` | solve and write the summary, cross-sections, automatic Boozer `|B|`, profiles, and 3-D LCFS |
+| `vmex --plot wout_X.nc` | write the same complete plot set from an existing equilibrium |
+| `vmex --booz wout_X.nc` | additionally save a reusable standard `boozmn_X.nc` file |
+| `vmex input.X --restart wout_Y.nc` | hot-restart a fixed- or free-boundary solve from a saved equilibrium |
+| `vmex --scale input.X [B R]` | scale field and length by optional factors; without them target 5.7 T and 1.7 m |
+| `vmex --doctor` / `vmex --test` | inspect the installation / run the bundled quick start |
+
+See the [CLI reference](https://vmex.readthedocs.io/en/latest/reference/cli.html) for resolution, device, convergence, coil, plotting, and Boozer options.
+
+## Hot restart
+
+Pass a previous state or wout to initialize a nearby run. VMEX adapts the boundary and skips completed multigrid rungs when possible.
 
 ```python
-from dataclasses import replace
-
-next_inp = replace(
-    inp, ns_array=[101], ftol_array=[1e-14], niter_array=[8000]
-)
-next_eq = opt.solve_equilibrium(next_inp, initial_state=eq.state)
+base = vj.solve_multigrid(inp)
+nearby = vj.solve_multigrid(changed_input, initial_state=base.state)
+from_file = vj.solve_multigrid(changed_input, restart_from="wout_base.nc")
 ```
 
-This in-memory `initial_state=` is VMEX's hot restart. It is useful outside
-optimization as well as inside it; keep carrying `next_eq.state` through a
-scan. Optimization problems do this automatically. If a genuinely cold first
-grid still has a bad Jacobian after the magnetic-axis re-guess, the driver also
-retries once through a coarse `NS=3` equilibrium, following current VMEC++
-behavior.
+The CLI equivalent is `vmex input.changed --restart wout_base.nc`; a deck may instead set `RESTART_WOUT`. Optimization trial solves hot-restart automatically. See the [restart guide](https://vmex.readthedocs.io/en/latest/howto/restart-from-previous-run.html) for grid changes and validation rules.
 
-Choosing an entry point: `optimize.solve_equilibrium` for Python analysis and
-objectives (state + runtime + lazy `.wout`); `multigrid.solve_multigrid` for a
-fixed-boundary ladder; `multigrid.solve_free_boundary_multigrid` for a
-free-boundary ladder (including vacuum continuation and hot starts);
-`implicit.run` for
-gradients (`jax.grad`-able `ImplicitSolution`); `solver.solve` as the
-low-level single-grid building block.
+## Optimizer-neutral problems
 
-### Hot restart from any wout
-
-```python
-import vmex
-
-hot = vmex.solve_multigrid(inp, restart_from="wout_previous.nc")  # or a SolveResult/SpectralState
-```
-
-```bash
-vmex input.cth --restart wout_cth.nc   # or RESTART_WOUT = 'wout_cth.nc' inside &INDATA
-```
-
-Any VMEC2000-compatible wout works (VMEX-, VMEC2000-, or PARVMEC-written): the
-full R/Z/λ state is rebuilt exactly by inverting the `wrout.f` output maps,
-`ns`/`MPOL`/`NTOR` differences are resampled, and multigrid rungs at or below
-the restart resolution are skipped. A converged same-deck restart re-converges
-in ~1 iteration (measured: cth ns=15 at `FTOL 1e-14`, 1 vs 435 cold — even
-from a VMEC2000-written wout).
-
-Optimization building blocks include quasisymmetry, three separate QI
-residuals, matched-well maximum-J, aspect ratio, iota, mirror ratio, magnetic
-well, `DMerc`, Glasser `D_R`, `<J·B>`, and ballooning-stability targets. They
-compose into an optimizer-neutral `VmecProblem`, with
-implicit-differentiation gradients from `vmex.core.implicit`. The problem
-exposes ordinary value/gradient and residual/Jacobian callables, so the user
-chooses SciPy, JAXopt, Optax, or a custom optimizer. `<J·B>` also supports `LASYM = T`;
-`DMerc` and `D_R` remain symmetry-gated pending independent DCON/JMC parity.
-For a direct full-spectrum run, release all harmonics in one problem and use
-**Exponential Spectral Scaling** for the optimizer's variable scale:
+Objective tuples use `(function, target, weight)`, with `weight` multiplying the squared cost by default. The resulting problem works directly with SciPy, JAXopt, Optax, or a user optimizer.
 
 ```python
 from dataclasses import replace
 import jax.numpy as jnp
+import numpy as np
 from scipy.optimize import least_squares
-from vmex import OptimizationMonitor
+
 from vmex import optimize as opt
+from vmex.core.omnigenity import QIResidual
 
 max_mode = 5
 mpol = max(max_mode + 2, 5)
-ntor = mpol
-ntheta = 2 * mpol + 6
-nzeta = 2 * ntor + 4
-inp = replace(inp, delt=0.5)
-inp = inp.change_resolution(
-    mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta
-)
-qs = opt.QuasisymmetryRatioResidual(surfaces, helicity_m=1, helicity_n=0)
+inp = replace(inp, delt=0.5).change_resolution(
+    mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
+qi = QIResidual(np.linspace(0.1, 1.0, 6))
 
-def elongation_excess(state, runtime):
-    return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+def iota_floor(state, runtime):
+    return jnp.maximum(0.33 - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
 
-problem = opt.VmecProblem.from_tuples(
-    inp,
-    [(qs, 0.0, 1.0),
-     (opt.aspect_ratio, 6.0, 1.0),
-     (opt.mean_iota, 0.42, 1.0),
-     (elongation_excess, 0.0, 1.0)],
-    max_mode=max_mode,
-    progress=True,                 # report elapsed time during construction
-)
-problem.compile_residual_and_jacobian()  # optional visible first compilation
-result = least_squares(
-    problem.residual, problem.x0, jac=problem.residual_jac,
-    x_scale=problem.scales,
-    callback=OptimizationMonitor(problem),
-)
+problem = opt.VmecProblem.from_tuples(inp, [
+    (qi, 0.0, 1.0),
+    (opt.aspect_ratio, 5.0, 0.005),
+    (iota_floor, 0.0, 10.0),
+], max_mode=max_mode, use_ess=True)
+
+result = least_squares(problem.residual, problem.x0,
+    jac=problem.residual_jac, x_scale=problem.scales, max_nfev=50, verbose=2)
 optimized_input = problem.input_from_x(result.x)
 optimized_equilibrium = problem.equilibrium_from_x(result.x)
 ```
 
-The script owns its resolution policy: `mpol`, `ntor`, `ntheta`, `nzeta`, and
-`delt` are ordinary visible values rather than defaults hidden in an
-optimization helper. `VmecInput.change_resolution()` only resizes the input;
-it preserves representable boundary and axis coefficients and zeroes newly
-exposed modes.
+The defaults are exact implicit derivatives, automatic Jacobian direction, one-column Jacobian batches, hot restarts, and cost weights. Advanced controls include:
 
-`progress=True` covers seed validation and construction;
-`problem.compile_residual_and_jacobian()` optionally performs the first
-least-squares derivative call before SciPy starts. Both print a short label,
-elapsed-time heartbeats, and final wall time. If the explicit compilation call
-is removed, SciPy triggers the same compilation on its first evaluation.
-For CPU jobs in which cold compilation matters more than peak warm-kernel
-speed, set `VMEX_FAST_COMPILE=1` before importing VMEX; the persistent
-machine-local compilation cache remains enabled by default.
-The beginner defaults are exact converged-equilibrium derivatives
-(`derivative_method="implicit"`), automatic scalar/vector Jacobian assembly
-(`implicit_jacobian_method="auto"`), one-column Jacobian batches
-(`jacobian_batch_size=1`), and cost weights (`weight_semantics="cost"`). Ordinary
-QI/QS scripts should omit these arguments. On an Apple M3 Max with JAX/JAXlib
-0.9.2, isolated cold-cache tests over QI, QS, and scalar geometry/profile terms
-at `max_mode` 1, 3, and 5 reduced first Jacobian compilation by 12.9–14.2 s
-with batch size 1; full 12-evaluation mode-5 QI and QS runs were 8.2 s and
-9.9 s faster overall than `"auto"`, with matching final costs. Select
-`jacobian_batch_size="auto"` only for long, repeated same-shape campaigns in
-which its modestly lower warm stage time amortizes the larger first
-compilation. Explicit Jacobian methods are intended for numerical studies and
-diagnostics; `"auto"` is the normal choice. The reproducible driver and full
-matrix are `benchmarks/optimization_defaults.py` and
-`benchmarks/optimization_defaults.json` (the measurement platform is recorded
-inside the artifact).
+- `derivative_method="finite_difference"` for opaque host objectives;
+- `implicit_jacobian_method` and `jacobian_batch_size` for response assembly and memory/compile tradeoffs;
+- `forward_ftol` and `forward_max_iterations` for the final forward-solve stage;
+- `max_fsq_ratio` for the largest under-converged `FSQ / ftol` that may be differentiated;
+- `workers` for parallel finite differences, scans, and ensembles. `None` uses the CPUs available to the process and respects scheduler or container limits.
 
-`problem.equilibrium_from_x(result.x)` returns the accepted equilibrium state
-already evaluated by the optimizer. Use it for reporting and as
-`initial_state=` in a high-resolution final solve; cold-solving a strongly
-shaped optimized boundary can otherwise fail before VMEC reconstructs a good
-magnetic axis. `problem.x_from_input(inp)` is the inverse mapping used to start
-a continuation stage. A mutable `inp.x` is intentionally absent because the
-decision vector depends on that problem's `max_mode` and optional profile
-degrees of freedom.
+`problem.value_and_grad` and `problem.jax_value_and_grad` expose the same scalar contract. `problem.evaluate(x)` reports solve effort, failed trials, derivative fallbacks, `fsq`, `fsq_ratio`, and whether the implicit derivative was certified. The runnable examples show SciPy least squares, BFGS/L-BFGS-B, JAXopt, Optax Adam, QI/QS objectives, high-accuracy final solves, input/wout output, and plotting.
 
-Every `VmecProblem` uses hot restart by default. For exact implicit derivatives
-the seed order is the first-order equilibrium prediction, the last converged
-state, then a cold solve only if both warm seeds fail. This changes iteration
-count, not the converged equilibrium or derivative.
+## QA, QH, QP, and QI examples
 
-For scalar methods, pass `problem.fun` and `problem.grad` separately to
-`scipy.optimize.minimize`. In ESS-scaled coordinates use
-`x = problem.x0 + problem.scales * y`; the examples show the short chain rule
-for the gradient. Value-only line-search trials then avoid an unnecessary
-adjoint. `problem.jax_value_and_grad` and `problem.jax_residual` provide the
-same physics to JAXopt and Optax. The existing `opt.least_squares()` and
-`opt.minimize()` functions remain concise compatibility adapters. Monitoring
-is callback-based, so it reports accepted iterations rather than every trial
-evaluation.
+The scripts in `examples/optimization/` optimize QA (NFP=2), QH (NFP=4), QP (NFP=2), and QI (NFP=2) from simple seeds; each writes an optimized input, WOUT, and standard plots. Run `QA_optimization.py`, `QH_optimization.py`, `QP_optimization.py`, or `QI_optimization.py`, then `python examples/plot_optimized_families.py` to reproduce the composites below. Each column shows four toroidal cuts separated by `π/(2 NFP)`, the 3-D LCFS colored by `|B|`, and LCFS `|B|` in Boozer coordinates.
 
-VMEX sets JAX's logging level to `ERROR` at import time, removing repeated
-PjRt persistent-cache compatibility messages while retaining VMEX errors.
-`VMEX_JAX_LOGGING_LEVEL` takes precedence over JAX's standard
-`JAX_LOGGING_LEVEL`; set either to `WARNING` to restore JAX warnings, or set
-the VMEX option to `inherit` to leave the process setting unchanged. JAX
-versions older than 0.4.36 lack the unified Python/C++ logging control, so
-VMEX prints one actionable startup warning that PjRt messages may remain.
+![QA, QH, and QP optimization examples](docs/_static/figures/readme_optimization.png)
 
-Runnable QI examples cover SciPy least squares/BFGS/L-BFGS-B, JAXopt
-LBFGS/Levenberg–Marquardt, and Optax Adam. Opaque host objectives select
-`derivative_method="finite_difference"`; central probes use automatic workers,
-while traceable objectives retain the faster implicit adjoint.
+Validated QI inputs spanning NFP=1–4 are bundled in `examples/data/`; the same plotting script reads them directly.
 
-There are two geometric traceable QI targets with deliberately different roles.
-`QIResidual` is the inexpensive smooth surrogate used by short API and timing
-examples. `ConstructedQIResidual` evaluates the fuller Goodman
-squash-and-shuffle construction and is the production target. A measured nfp=2
-path uses 25 mode-1 QP evaluations to select a poloidally closed-contour basin,
-then three mode-5 constructed-QI trust-region stages with budgets 30, 20, and
-20, followed by ten evaluations of the full production residual. It reaches
-resolved all-radius QI `1.79e-3`; a direct mode-7/100 run required roughly 15
-minutes and stopped at `1.85e-3`, so larger mode is not automatically a better
-basin search. The final `NS=101`, `FTOL=1e-14` equilibrium is hot-started from
-the accepted optimization state. Relaxing the active mirror/elongation limits
-reached `1.19e-3` in VMEX but lost cold-solver portability, so it is documented
-as a tradeoff, not advertised as the default. The [optimization guide](docs/reference/optimization.rst)
-gives the exact schedule, sampling, constraint conventions, and resolution
-checks.
+![QI equilibria at NFP 1 through 4](docs/_static/figures/readme_qi.png)
 
-![Low-mode objective landscapes in RBC(1,1) and ZBS(1,1)](docs/_static/figures/readme_optimization_landscapes.png)
+## Finite beta, free boundary, and mirrors
 
-These converged-equilibrium two-mode slices are not interchangeable convex
-bowls: QI, QA, and QH have different coupled valleys. The white circle is the
-reference equilibrium and the star is the sampled minimum. Regenerate the
-values and figure with `python benchmarks/optimization_landscapes.py`.
+`examples/free_boundary_essos_coils.py` holds the Landreman–Paul QA coil currents fixed while increasing beta and re-solving the NESTOR free boundary. The magnetic-axis displacement is the expected Shafranov shift.
 
-Changing only `NFP` in the circular input is not a fair field-period search.
-The same short QP/QI workflow gave full-QI residuals 0.141, 0.00456, 0.110,
-0.0968, and 0.0923 for NFP 1–5, while an NFP-1 near-axis seed reached
-`1.86e-3`. An NFP-3 seed reached `7.47e-3` only with mirror ratio 0.461.
-The [optimization guide](docs/reference/optimization.rst) records the scan and the
-NFP-specific seed/constraint strategy; NFP 3–5 should not reuse NFP 2's QP
-basin guide blindly.
+![Free-boundary beta ramp and Shafranov shift](docs/_static/figures/readme_essos_beta_scan.png)
 
-The architecture, derivative validation, performance criteria, documentation
-work, and staged pull-request plan are recorded in
-[`docs/optimization_api_plan.md`](docs/optimization_api_plan.md).
+VMEX also solves open-ended mirrors. `examples/mirror_fixed_boundary_nonaxisymmetric.py` compares an axisymmetric mirror with a non-axisymmetric rotating ellipse; `examples/mirror_free_boundary_beta_scan.py` continues an ESSOS-coil free boundary from 0% to 80% central beta. The latter plots the solved on-axis field against the MHD paraxial scaling `B/Bvac = sqrt(1-beta)` implied by `p + B²/(2 μ0) = Bvac²/(2 μ0)`. The 0–10% lane is supported; higher-beta points remain clearly marked as extended validation pending refined-grid promotion.
 
-### Apples-to-apples QI and QA optimization timing
+![Axisymmetric and rotating-ellipse fixed-boundary mirrors](docs/_static/figures/mirror_fixed_boundary_3d.png)
 
-The comparison uses the bundled near-circular nfp=2 QI seed
-(`examples/data/input.nfp2_QI_seed`).
-Both codes optimize the same boundary coefficients at `NS=31`, with
-`mpol=ntor=max(max_mode+2, 5)`, identical angular grids and objectives, and a
-15-function-evaluation SciPy least-squares budget.  The QI matrix reproduces
-the smooth-QI, aspect-5, iota-floor, mirror-limit, and elongation-limit tuples
-in the beginner driver; the QA matrix uses QS `(M,N)=(1,0)`, iota 0.41, and
-aspect 6.  For every completed VMEX case, the state residual and independent
-wout seed reconstruction agree to better than `2e-8` relative.
+![Free-boundary mirror beta scan](docs/_static/figures/mirror_free_boundary_beta_scan.png)
 
-These are cold end-to-end times on a 14-core Apple M3 Max (10 performance + 4
-efficiency cores, 36 GB): setup, first compilation, and optimization are all
-included. SIMSOPT 1.10.7 uses 14 one-thread MPI groups and centered finite
-differences; VMEX 0.4.0/JAX 0.9.2 uses the exact implicit Jacobian and
-XLA-managed CPU threading. Persistent VMEX compilation caching was disabled,
-so each row starts from an empty process-local cache.
+## Equilibrium and kinetic diagnostics
 
-| max mode | variables | SIMSOPT, ESS off | SIMSOPT, ESS on | VMEX, ESS off | VMEX, ESS on |
-|---------:|----------:|-----------------:|----------------:|--------------:|-------------:|
-| 1 | 8   | 55.3 s  | 55.5 s  | 97.2 s  | 96.7 s  |
-| 2 | 24  | 111.1 s | 87.3 s  | 330.2 s | 105.7 s |
-| 3 | 48  | 154.5 s | 128.9 s | 111.1 s | 92.5 s  |
-| 4 | 80  | 451.6 s | 359.7 s | 124.6 s | 122.1 s |
-| 5 | 120 | >=600 s | >=600 s | >=600 s | 129.8 s |
-| 6 | 168 | >=600 s | >=600 s | >=600 s | 135.7 s |
-| 7 | 224 | >=600 s | >=600 s | >=600 s | 187.1 s |
-| 8 | 288 | >=600 s | >=600 s | >=600 s | 220.2 s |
+`vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summaries below. They combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. A separate stability figure decomposes `DMerc` and shows the frozen-geometry response to a pressure ramp; finite-pressure points must be re-solved for certification. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
 
-![Cold SIMSOPT and VMEX QI optimization wall time versus maximum mode](benchmarks/optimization_crosscode/qi_optimization_time.png)
+This finite-pressure NFP=3 QI example reaches $\langle\beta\rangle=2.38\%$.
 
-`>=600 s` is an explicit right-censored lower bound, shown with an open marker;
-it is not presented as a completed runtime. Cold JIT dominates mode 1. From
-mode 3 onward, a completed VMEX/ESS run is faster than its completed SIMSOPT
-counterpart, while unscaled direct high-mode runs can spend the whole limit on
-ill-conditioned or failed trials. Runtime is not monotone in mode because the
-accepted/rejected trajectory is part of the measured work.
+![Finite-pressure NFP=3 QI diagnostics](docs/_static/figures/readme_diagnostics_summary.webp)
 
-The history comparison has exactly the three requested rows: ladder
-`[1,2,3,4,5]`, direct mode 2, and direct mode 5. The ladder has 15 evaluations
-*per stage*; a direct row has 15 total. Solid lines mean ESS on and dashed
-lines ESS off, with one color and marker per backend.
+The vacuum QA example has `pres=0` and `DWell=0` exactly: VMEX adds no pressure floor. `DMerc` can retain shear, current, and geodesic terms; for a current-free vacuum it reduces to the shear term and $D_R=0$, so these curves are not a finite-beta pressure margin.
 
-![SIMSOPT and VMEX QI objective histories, with and without ESS](benchmarks/optimization_crosscode/qi_objective_history.png)
+![Vacuum QA diagnostics](docs/_static/figures/readme_diagnostics_qa_vacuum.webp)
 
-![SIMSOPT and VMEX QA objective histories, with and without ESS](benchmarks/optimization_crosscode/qa_objective_history.png)
+`examples/optimization/QA_bootstrap_selfconsistent.py` and `QH_bootstrap_selfconsistent.py` iterate VMEC and the Redl model to a self-consistent bootstrap-current profile and compare against the published equilibrium and SFINCS data.
 
-ESS and a mode ladder are complementary. ESS conditions simultaneous
-high-order variables; the ladder also chooses a basin by solving smaller
-problems first. In this fixed QI benchmark, VMEX's ladder reached cost 0.0393
-without ESS and 0.0419 with ESS, whereas the best direct mode-5 completion was
-0.0472 with ESS. A stage endpoint can rise when resolution and array shapes
-change because the discretized problem changed; accepted iterations within a
-fixed stage remain monotone.
+![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.png)
 
-Reproduce the isolated-process matrix with
-[`benchmarks/run_optimization_crosscode.py`](benchmarks/run_optimization_crosscode.py).
-It defaults to all logical CPUs; `--workers N` caps SIMSOPT's MPI groups and
-`--timeout-seconds T` changes the explicit censor. The committed consolidated
-artifacts (`benchmarks/optimization_crosscode/qi_results.json` and
-`qa_results.json`, 48 cases) record the input hash, versions, platform,
-worker policy, timing split, status, and accepted histories. This hours-long evidence run is not CI: a fast test checks
-its schema, parity, provenance, and monotonicity. Full CPU-worker and
-accelerator guidance is in the [optimization](docs/reference/optimization.rst) and
-[parallelization](docs/explanation/parallelization.rst) documentation.
+## Physics and interoperability
 
-Measured on a 36-core CPU from a near-circular torus (single call, all
-harmonics released at once; `examples/optimization/*_ess.py`; the staged
-`max_mode`-ladder variants live alongside for comparison):
+VMEX includes VMEC pressure/current/iota profiles, multigrid continuation, NESTOR free boundary, mgrid and direct coil fields, Boozer transforms, QI/QS and maximum-J objectives, Mercier and ballooning diagnostics, bootstrap-current objectives, dimensional scaling, mirror equilibria, and standard wout/mout output. The [capability reference](https://vmex.readthedocs.io/en/latest/reference/capabilities.html) states the validation level and limitations of each path.
 
-| class | nfp | residual | seed | achieved | max_mode | wall | status |
-|-------|-----|----------|------|----------|----------|------|--------|
-| QA | 2 | QS (1, 0)  | 2.04e-01 | **7.2e-06** | 5 | **14.5 min** | precise; aspect 6.00, iota 0.42 (ladder: 3.7e-07 in 25.5 min) |
-| QH | 4 | QS (1, −1) | 6.91e-01 | **5.83e-05** | 5 | 25.5 min (ladder) | precise; aspect 8.00, iota −1.22 |
-| QP | 2 | QS (0, 1)  | 4.46e-01 | 3.3e-02 | 5 | ~3.4 h (ladder + refinement) | hardest QS class — see caption |
-| QI | 1 | smooth QI surrogate | 4.52e-01 | **1.81e-02** | 6 | **17.3 min** | 25× scouting run; use the constructed residual for production |
+VMEX outputs are intended for existing VMEC workflows: `wout_*.nc` files load in SIMSOPT, `booz_xform`, and other downstream tools. VMEC2000 compatibility and deliberate differences are documented in the [compatibility reference](https://vmex.readthedocs.io/en/latest/reference/vmec2000-compatibility.html).
 
-![QA/QH/QP optimization: seed vs optimized boundary, 3-D |B| geometry, and Boozer |B| on the LCFS](docs/_static/figures/readme_optimization.png)
+### Solver feature comparison
 
-*Each quasisymmetry class starts from a near-circular torus (grey, dashed) and
-is shaped into a quasi-symmetric stellarator (blue) by the least-squares driver
-(top row); the middle row is the optimized last-closed flux surface in 3-D
-coloured by `|B|`, and the bottom row is `|B|` in Boozer coordinates on the LCFS
-(jet line contours), whose contour geometry reads off the symmetry family —
-horizontal for QA, diagonal for QH, vertical for QP. `QS` is the quasisymmetry
-residual measured on the plotted equilibrium: QA **1.1e-6**, QH **5.8e-5**
-(note QH's near-straight diagonal contours), QP **3.3e-2**. Quasi-poloidal QP
-is the hardest class: the ladder plateaus near 5e-2, and an extended
-warm-start refinement of the shipped deck reaches 3.3e-2. Reproduce with
-`python benchmarks/make_readme_figures.py --only optimization` from the decks
-in `benchmarks/opt_decks/`.*
+This matrix was checked on 2026-08-11 against current [STELLOPT/VMEC2000](https://github.com/PrincetonUniversity/STELLOPT) and [VMEC++](https://github.com/proximafusion/vmecpp) sources. ✅ denotes a public path, ⚠️ a documented limitation, and ❌ no public path; the linked VMEX capability contract defines the validation scope.
 
-Quasi-isodynamic (QI) shaping is intrinsically harder than quasisymmetry, so it
-gets its own row across field periods:
+| Capability | VMEX | VMEC2000 | VMEC++ |
+|---|:---:|:---:|:---:|
+| fixed-boundary toroidal equilibria | ✅ | ✅ | ✅ |
+| 3-D NESTOR free boundary | ✅ | ✅ | ✅ |
+| free-boundary radial multigrid | ✅ | ✅ | ✅ |
+| free boundary from an in-memory field table | ✅ | ❌ | ✅ Python |
+| axisymmetric free-boundary tokamaks | ✅ | ✅ | ❌ |
+| non-stellarator-symmetric (`LASYM`) equilibria | ✅ | ✅ | ❌ |
+| fixed-boundary fallback when an mgrid file is missing | ✅ | ✅ | ❌ |
+| cubic and Akima spline profiles | ✅ | ✅ | ❌ |
+| INDATA / structured JSON input | ✅ / ✅ | ✅ / ❌ | ✅ / ✅ |
+| hot restart from a saved equilibrium | ✅ Python/CLI | ✅ CLI | ✅ Python |
+| typed zero-crash errors | ✅ | ❌ | ✅ |
+| built-in Boozer transform and plotting | ✅ | ❌ | ❌ |
+| input and WOUT dimensional scaling | ✅ | ❌ | ❌ |
+| GPU execution | ✅ | ❌ | ❌ |
+| exact fixed-boundary derivatives and optimizer interface | ✅ | ❌ | ❌ |
+| differentiable specified-boundary virtual-casing residual | ✅ | ❌ | ❌ |
+| 2-D block preconditioner | ✅ matrix-free | ✅ BCYCLIC | ❌ |
+| differentiable QI/QS, maximum-J, trapped-fraction, and stability objectives | ✅ | ❌ | ❌ |
+| self-consistent bootstrap-current workflows | ✅ | ❌ | ❌ |
+| open mirrors and stellarator–mirror hybrids | ⚠️ validated scopes | ❌ | ❌ |
 
-![QI equilibria at nfp 1-4: boundary, 3-D |B| geometry, and Boozer |B| on the LCFS](docs/_static/figures/readme_qi.png)
+### Convergence parity and implementation size
 
-*Quasi-isodynamic (QI) equilibria at nfp 1, 2, 3, 4 (bundled decks in
-`examples/data/`): boundary cross-sections (top), 3-D `|B|` geometry (middle),
-and `|B|` in Boozer coordinates on the LCFS (jet, bottom). The label is the QI
-(omnigenity) residual — **not** QS; QI is hard, so ~1e-3–1e-2 is expected here,
-not the ~1e-5 reachable for quasisymmetry. Reproduce with
-`python benchmarks/make_readme_figures.py --only qi`.*
+On the bundled NFP=4 QH case at `ns=51`, VMEX follows VMEC2000 and VMEC++ through the full force-residual trace (fresh local run: VMEX `d7347c9`, VMEC2000 `512375c`, VMEC++ 0.5.3). Reproduce it with `python benchmarks/make_readme_figures.py --only convergence`; the benchmark discovers local solver installations or accepts `VMEX_XVMEC2000` and `VMEX_VMECPP_PY`.
 
-These campaigns need implicit gradients. Finite differences stall at the
-axisymmetric seed of the QH target (a saddle point) and land in a worse basin
-for QP. Three measured optimizations keep each campaign in the minutes range:
+![VMEX, VMEC2000, and VMEC++ convergence trace](docs/_static/figures/readme_convergence.png)
 
-- scalar residuals use one reverse adjoint; vector residual Jacobians use a
-  block-tridiagonal factorization (33× faster than per-dof GMRES);
-- each trial equilibrium starts from a first-order perturbation prediction
-  (3.7× fewer solver iterations);
-- a converged-state memo avoids re-solving the point the residual just
-  converged.
+The following `cloc 2.11` snapshot counts implementation code and comments, excluding tests, generated code, and third-party sources. VMEX counts `vmex/core` (the toroidal solver); VMEC2000 counts `VMEC2000/Sources` but not shared STELLOPT libraries; VMEC++ counts `src/vmecpp` C++/headers/Python. These scopes make the comparison reproducible, not a claim of identical feature breadth.
 
-High-level optimization uses the measured CPU implicit-Jacobian policy by
-default; suitably sized forward solves can use the GPU. Independent
-finite-difference probes and ensembles use up to all logical CPUs by default
-(`workers=None`); set `workers=N` to cap them. A single implicit solve uses
-XLA's CPU threads, so one reported JAX CPU device is the whole host backend,
-not one core; multi-GPU single-solve sharding is not claimed yet. Low-level
-`implicit.params_from_input` and `implicit.run` follow ordinary JAX placement
-when `device` is omitted, so an accelerator installation works without
-environment variables. Pass `device="auto"` to opt into the measured implicit
-policy, or use `device="cpu"` / `"gpu"` explicitly. For a non-default
-accelerator, hold `device_scope(device)` around parameter creation and the JAX
-transformation.
+| Solver and revision | Files | Code lines | Comment lines |
+|---|---:|---:|---:|
+| VMEX `d7347c9` | 46 | 21,189 | 7,857 |
+| VMEC2000 `aeb0261` | 115 | 24,164 | 8,451 |
+| VMEC++ `d83035b` | 146 | 38,338 | 9,661 |
 
-### Beyond quasisymmetry: any objective, same gradients
+VMEX reduces duplication by expressing spectral operators as vectorized JAX array programs and using the same equations for CPU, accelerators, and automatic differentiation. It also deliberately omits some legacy modes, so the smaller codebase reflects both architecture and narrower compatibility surface.
 
-Any physics objective can drive the same machinery. Starting from the
-precise-QA deck above (QS ~1e-6, aspect 6.00, mean iota 0.42), five short
-campaigns each optimize one new objective while keeping the QA residual in the
-objective at a stiff weight:
+## Performance and parallelism
 
-- raise the coil-simplicity proxy min L∇B (`l_grad_b_state`);
-- deepen the vacuum magnetic well;
-- raise mean iota to 0.55 at fixed aspect;
-- lower the aspect ratio to 4.8 at fixed iota;
-- push the Mercier criterion `DMerc` toward stability at ⟨β⟩ ≈ 1.25%.
+JAX compilation is paid once per array structure and reused from a machine-local cache. Warm runs are the relevant measure for continuation, parameter scans, and optimization.
 
-High-resolution vector profiles can use `opt.minimize(...)` with the same
-`(objective, target, weight)` terms. It minimizes the identical squared
-residual cost with L-BFGS-B and one matrix-free reverse adjoint per gradient,
-avoiding the dense residual Jacobian used by Gauss–Newton:
+![VMEX runtime comparison](docs/_static/figures/readme_runtime_compare.png)
 
-```python
-result = opt.minimize(
-    [(opt.mercier_stability_residual, 0.0, 1.0),
-     (opt.glasser_stability_residual, 0.0, 1.0),
-     (opt.jdotb_residual, 0.0, 1e-6)],
-    inp, max_mode=5, bounds=bounds, options={"maxiter": 100},
-)
+Independent solves use `vj.parallel.solve_ensemble(inputs, workers=None)`. A single equilibrium already uses XLA's internal threading; ensemble workers are therefore bounded by both the number of cases and the CPUs made available by the host scheduler. Explicit `workers=1` gives a reproducible serial baseline, and GPU/device placement can be selected with `device=`.
+
+Reproducible performance artifacts live in `benchmarks/`; `benchmarks/optimization.py` profiles QI, QA, QH, QP, scalar objectives, SciPy/JAX contract agreement, finite differences, optimizer choices, and the `max_fsq_ratio` policy without committing machine-specific scans or decorative plots.
+
+## Documentation and development
+
+The [documentation](https://vmex.readthedocs.io/) is organized as tutorials, task-focused how-to guides, API/reference pages, and numerical explanations. Start with:
+
+- [first equilibrium](https://vmex.readthedocs.io/en/latest/tutorials/first-equilibrium.html)
+- [first gradient](https://vmex.readthedocs.io/en/latest/tutorials/first-gradient.html)
+- [first optimization](https://vmex.readthedocs.io/en/latest/tutorials/first-optimization.html)
+- [optimization reference](https://vmex.readthedocs.io/en/latest/reference/optimization.html)
+- [objectives reference](https://vmex.readthedocs.io/en/latest/reference/objectives.html)
+- [parallel and HPC usage](https://vmex.readthedocs.io/en/latest/howto/parallel-ensembles.html)
+
+For development:
+
+```console
+git clone https://github.com/uwplasma/vmex
+cd vmex
+pip install -e ".[dev]"
+pytest -q -m "not full and not weekly"
+python -m ruff check vmex tests examples benchmarks
 ```
 
-This bounded-storage optimizer is opt-in because its quasi-Newton steps differ
-from `least_squares`; existing defaults and objective minima are unchanged.
+See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.html), the [test manifest](tests/manifest.json), and the [changelog](docs/project/changelog.md). VMEX is released under the MIT license.
 
-The first four use the implicit adjoint (`jac="implicit"`). The published
-`DMerc` showcase deliberately preserves its host-side diagnostic evaluation
-and finite-difference baseline at `max_mode` 2. New campaigns can instead use
-the traceable `mercier_stability_residual` with `jac="implicit"`; see the
-optimization objectives documentation. The self-consistent Redl bootstrap
-objective has its own section below.
+## Roadmap
 
-![Objectives showcase: five one-objective campaigns off the precise-QA seed](docs/_static/figures/readme_objectives.png)
-
-| campaign | objective | seed → final | QS held? |
-|----------|-----------|--------------|----------|
-| `lgradb` | raise min L∇B to 1.3× seed (implicit adjoint) | 0.520 → 0.522 m (stiff — see note) | 9.8e-07 → 1.3e-06 |
-| `well` | deepen the vacuum magnetic well (implicit adjoint) | **−0.037 → +0.0002** (hill → well) | 9.8e-07 → 1.5e-05 |
-| `iota_up` | mean iota 0.42 → 0.55 at aspect 6 (implicit adjoint) | **0.420 → 0.535** | 9.8e-07 → 1.8e-05 |
-| `aspect_down` | aspect 6.00 → 4.8 at iota 0.42 (implicit adjoint) | **6.00 → 4.84** | 9.8e-07 → 4.2e-06 |
-| `dmerc` | interior DMerc → positive at ⟨β⟩ ≈ 1.25% (finite differences) | −16.6 → −16.5 (stiff — see note) | 6.6e-05 → 6.6e-05 |
-
-The `well`, `iota_up`, and `aspect_down` campaigns each take 2–3 minutes on a
-workstation CPU. The other two barely move, for physical reasons: with QS,
-aspect, and iota all held, the precise-QA shape is already close to its best
-attainable L∇B, and improving interior Mercier stability at fixed pressure
-requires profile or current degrees of freedom that boundary shaping alone
-does not provide.
-
-*Reproduce with `python examples/optimization/objectives_showcase.py` (an
-`--only lgradb,dmerc` flag runs subsets), then
-`python benchmarks/make_readme_figures.py --only objectives`.*
-
-### Self-consistent bootstrap current
-
-VMEX implements the **Redl** analytic bootstrap-current formula
-([Redl et al. 2021](https://doi.org/10.1063/5.0012664)) as a differentiable
-objective, and a fixed-boundary self-consistency loop that regenerates the
-toroidal current from the plasma geometry and kinetic profiles. Below,
-reproducing [Landreman, Buller & Drevlak 2022](https://arxiv.org/abs/2205.02914):
-the published precise QA and QH optima are loaded, their current profile is
-**erased**, and `self_consistent_bootstrap` recovers it from the Redl formula
-plus the paper's density/temperature profiles.
-
-![Self-consistent bootstrap current vs the published equilibria and SFINCS](docs/_static/figures/readme_bootstrap.png)
-
-*Recovered current density &#10216;J·B&#10217; (VMEC, blue) matches the analytic
-Redl profile (green), the published self-consistent equilibrium (grey), and —
-for QA — the paper's SFINCS drift-kinetic benchmark (circles). Converged in 7
-(QA) / 4 (QH) Picard iterations to bootstrap mismatch `f_boot` = 2.0e-6 / 7.5e-6;
-the recovered plasma current lands within **1.9 % (QA)** and **0.3 % (QH)** of
-the published `CURTOR`. Reproduce with
-`python examples/optimization/{QA,QH}_bootstrap_selfconsistent.py` (needs the
-paper's Zenodo dataset).*
-
-## VMEX vs DESC
-
-[DESC](https://desc-docs.readthedocs.io/) is the other JAX-native,
-differentiable, GPU-capable stellarator-equilibrium code. The key difference:
-DESC minimises the MHD force in a global Zernike–Fourier basis — its own
-equilibrium — while VMEX reproduces VMEC exactly. The two are
-complementary:
-
-| Where **VMEX** wins | Where **DESC** wins |
-|---|---|
-| **Is VMEC**: iteration-for-iteration VMEC2000 parity, standard `wout_*.nc`, VMEC-format prints | **Low-resolution accuracy**: global Zernike basis converges in fewer radial points |
-| **Drop-in**: reads VMEC2000 `input.*` and structured JSON unchanged | **Objective library**: large, mature set of built-in optimization targets |
-| **Full namelist**: non-symmetric surfaces (`LASYM = T`), NESTOR *and* virtual-casing free boundary | **Optimizers**: more built-in stochastic / constrained optimizers |
-| **O(1)-memory adjoint**: peak memory flat in the number of design variables | Adjoint gradients (both codes are differentiable) |
-
-Reach for **VMEX** to drop a differentiable code that *is* VMEC into an
-existing VMEC workflow (simsopt, `booz_xform`, near-axis tooling). Reach for
-**DESC** for its spectral accuracy at low radial resolution or its mature
-objective library.
-
-## CLI reference
-
-```text
-vmex input.X             solve (INDATA or structured JSON), write wout_X.nc
-vmex --plot wout_*.nc    diagnostic plots from a WOUT file
-vmex --booz wout_*.nc    run booz_xform_jax, write boozmn_*.nc
-vmex --plot boozmn_*.nc  Boozer contour/spectrum plots
-vmex --test              run and plot the bundled quick-start case
-vmex --doctor            installation and JAX backend diagnostics
-
-options:
-  --outdir PATH          directory for wout/boozmn/figure output
-  --mode {cli,jit}       jitted blocks with live printing (cli, default)
-                         or a single lax.while_loop (jit)
-  --device PLATFORM      auto (default), none (follow JAX), cpu, gpu,
-                         cuda, rocm, or tpu; applies to all solve paths
-  --ftol F               override the final-stage FTOL_ARRAY tolerance
-  --max-iter N           override the final-stage NITER_ARRAY cap
-  --restart WOUT         hot-restart from a wout_*.nc (any VMEC2000-
-                         compatible writer; overrides RESTART_WOUT)
-  --prefetch-compile     overlap next-rung compilation (higher peak memory)
-  --coils PATH           ESSOS-style coils file: tabulate its Biot-Savart
-                         field in memory instead of reading an mgrid file
-  --mbooz/--nbooz N      Boozer spectral resolution (default 32/32)
-  --booz-surfaces S      Boozer surfaces ('all' or a list of s values)
-  --quiet                silence the VMEC-style stdout
-```
-
-`vmec` detects the available JAX hardware without environment variables and
-uses CPU or GPU according to the measured per-stage policy. Use `--device
-cpu` or `--device gpu` to override it explicitly. High-level optimization
-defaults implicit Jacobians to CPU because they are launch-bound on the tested
-GPUs; low-level `implicit.run` follows JAX placement when `device` is omitted.
-`vmex --doctor` reports the devices and all three VMEX placement policies.
-
-## Documentation
-
-Full documentation — installation, quickstart, theory and numerics with
-equation-to-source cross-references, API reference, and
-performance/validation notes — at
-[vmex.readthedocs.io](https://vmex.readthedocs.io/en/latest/).
-
-Pull requests use short representative fixed/free-boundary, mirror, device,
-and AD checks. Exhaustive oracle, high-resolution, and trusted-GPU campaigns
-run separately; the contributor guide describes the test layers.
-
-## Mirror equilibria
-
-Alongside the toroidal VMEC core, `vmex.mirror` solves scalar-pressure
-equilibria for **open magnetic mirrors** and **closed stellarator–mirror
-hybrids** — the same differentiable, spline-native machinery applied to a
-straight (open) axis. Open mirrors use nonperiodic axial coordinates
-`(s, θ, ξ)` with fixed-flux end cuts, not thin-torus approximations. Coils and
-Biot–Savart fields stay in [ESSOS](https://github.com/uwplasma/ESSOS); VMEX
-consumes a supplied `xyz → B` field. The divergence-free field and
-scalar-pressure energy are
-
-```text
-√g B^θ = I'(s) − ∂_ξ λ,    √g B^ξ = Ψ'(s) + ∂_θ λ,    B^s = 0
-W = ∫ [ B²/(2μ₀) + p/(γ − 1) ] dV
-```
-
-Mirror fixed/free-boundary solves and beta scans use a measured CPU default
-for their SciPy-controlled JAX callbacks (35.2 s CPU versus 44.2 s RTX A4000
-on the office `15x15` case). Pass `device="gpu"` or `device="cpu"` to
-override it, or `device=None` to follow JAX placement; no platform environment
-variable is needed. If a field callable captures device arrays, wrap it with
-`jax.tree_util.Partial` so VMEX can relocate those captured leaves; an opaque
-Python closure cannot be inspected or moved.
-
-### Fixed-boundary open mirrors
-
-A fixed-boundary solve is one call:
-
-```python
-from vmex.mirror import MirrorConfig, MirrorResolution, solve_fixed_boundary_from_radius
-
-config = MirrorConfig(resolution=MirrorResolution(ns=7, mpol=4, nxi=17))
-result = solve_fixed_boundary_from_radius(0.3, config)   # radius: scalar, (nxi,), or (ntheta, nxi)
-```
-
-![Solved fixed-boundary mirrors coloured by |B|: axisymmetric circular-section mirror (left) and 90-degree rotating-ellipse mirror (right), with thin cap-to-cap field lines](docs/_static/figures/mirror_fixed_boundary_3d.png)
-
-Two solved equilibria from the same example: a standard axisymmetric mirror
-(circular sections) via the one-call entry point, and a rotating ellipse whose
-cross-section turns 90° between the end caps. Both converge at `ftol = 1e-12`
-(divergence ~1e-14) in seconds, and their boundary gradients are
-finite-difference-validated — the derivative an external optimizer needs.
-
-### Free-boundary β scan
-
-`solve_beta_scan` jointly updates the spline boundary, the plasma state, and
-the unbounded exterior vacuum, driven by an ESSOS two-coil field. The
-[capability contract](https://vmex.readthedocs.io/en/latest/capabilities.html)
-supports this lane through **10% requested β**. The 25% and 50% points are
-extended validation: they converge variationally, but the committed benchmark's
-independent strong-force promotion gate fails. The supported-lane field
-derivative is finite-difference-validated.
-
-![Free-boundary beta scan with ESSOS coils: field lines, LCFS, |B|, pressure, and residual histories](docs/_static/figures/mirror_free_boundary_beta50_summary.png)
-
-### Stellarator–mirror hybrid
-
-A closed periodic hybrid joins two straight mirror legs to two curved
-stellarator returns on a rotation-minimizing B-spline axis. A `section_turns`
-parameter turns the elliptical cross-section continuously around the circuit (a
-genuine rotating-ellipse section) while the legs keep an exactly straight axis;
-two turns lift the transform from the return-only `ι = 0.085` to `ι = 0.141` at
-`s = 0.75`. Freezing the leg-return junction as an explicit design parameter
-makes the **circular-section lane supported** (its force gate converges under
-refinement); the **rotating-elliptical-section hybrid is a research candidate**
-— the toroidal rotation passes the minor-radius bulk gate but its
-device-normalized force still plateaus on the scoped near-axis representation
-issue. The same implicit API differentiates the periodic boundary and axis
-controls.
-
-![Periodic B-spline stellarator–mirror hybrid: straight legs, rotating returns, B-spline axis, and boundary |B|](docs/_static/figures/stellarator_mirror_hybrid.png)
-
-### QI–mirror hybrid: Fourier vs B-spline
-
-A quasi-isodynamic (QI) stellarator already has poloidally closed `|B|` contours
-and near-straight (low-curvature) magnetic-axis segments at its
-field-period-symmetric planes, so cutting the axis there and inserting a straight
-mirror cell is natural. `examples/qi_mirror_hybrid_fourier_vs_bspline.py` solves
-`input.nfp2_QI` (VMEC, Fourier), reads its magnetic axis, and confirms the four
-curvature minima of an nfp=2 QI axis: `κ` drops to **0.036 1/m** at `φ = 0, π` and
-**0.088 1/m** at `φ = π/2, 3π/2` (a 70× spread over the torus). It cuts at all
-**four** symmetry planes and inserts a straight mirror leg at each **along the
-local axis tangent** — so every leg continues the axis in its own direction.
-Choosing the leg lengths so the inserted displacements cancel and reflecting one
-half about the `x` axis makes the four-legged racetrack **stellarator symmetric**,
-with each leg tangent to the axis (junction break `~0.04°`, not a corner). It then
-represents that closed hybrid axis both ways:
-
-| representation | straight mirror leg | seam behaviour |
-| --- | --- | --- |
-| **Fourier** (VMEC-native, global) | ringing floors near **2e-6 m** at 387 DOF | Gibbs-type ringing everywhere at once |
-| **B-splines** (`vmex.mirror`, local) | **machine precision** (`1.5e-12 m` once each leg spans ≳30 knots) | error confined to a few knots around the junction |
-
-Only the local B-spline reproduces the exactly-straight cell to machine
-precision; the residual maximum of both is set by the leg–return **curvature**
-break (a cubic B-spline is `C²` and also rounds a curvature step — an honest
-shared limit). The B-spline lane also solves the hybrid equilibrium
-(divergence-free to `9e-14`, `ι = 0.11`, mirror ratio 1.8; force residual
-`1.3e-2`). A literal VMEC re-solve of a straight-axis device is degenerate
-in cylindrical `(R, φ, Z)` coordinates — which is exactly why the closed-axis
-B-spline lane exists.
-
-![QI–mirror hybrid: QI axis with the curvature-minimum cut locations, the spliced straight-leg hybrid axis, hybrid |B|, and the Fourier-vs-B-spline accuracy at the seam](docs/_static/figures/qi_mirror_hybrid.png)
-
-### Run the mirror examples
-
-```bash
-python examples/mirror_fixed_boundary_nonaxisymmetric.py
-python examples/mirror_free_boundary_beta_scan.py
-python examples/stellarator_mirror_hybrid.py
-python examples/qi_mirror_hybrid_fourier_vs_bspline.py
-```
-
-Open-mirror `mout_*.nc` files plot with `vmex --plot mout_*.nc`. The
-[mirror-geometry documentation](https://vmex.readthedocs.io/en/latest/mirror_geometry.html)
-derives the coordinate and field models and records the coil geometry,
-convergence residuals, promotion-gate ladders, and derivative-validation
-numbers behind these figures.
-
-## License
-
-MIT. If you use VMEX in published work, please cite this repository and
-the original VMEC papers (Hirshman & Whitson, *Phys. Fluids* 1983;
-Hirshman, van Rij & Merkel, *Comput. Phys. Commun.* 1986).
+- Differentiate the complete reconverged NESTOR plasma–vacuum root, then promote free-boundary plasma-and-coil single-stage optimization beyond the current virtual-casing derivative lane.
+- Promote rotating-ellipse stellarator–mirror hybrids from extended validation with refinement, independent force checks, and practical optimization examples.
+- Broaden trapped-particle-fraction benchmarks against near-axis theory across QA/QH/QP/QI, retaining the physically nonzero on-axis QI trapped fraction.
+- Implement differentiable effective ripple `epsilon_eff` and `Gamma_c`, then add Eduardo Lascas Neto’s associated diagnostic plots. J-contour plotting and the max-J objective already exist and will be integrated into that common diagnostic workflow.

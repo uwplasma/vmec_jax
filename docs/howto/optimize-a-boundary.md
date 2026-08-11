@@ -1,150 +1,114 @@
 # Set up a boundary optimization
 
-{func}`vmex.core.optimize.least_squares` drives
-`scipy.optimize.least_squares` over the boundary Fourier dofs with
-simsopt-style `(function, target, weight)` terms and exact implicit
-Jacobians — measured: precise QA (QS residual 7.2e-6) in one 14.5-minute
-CPU call from a near-circular seed. This page is the campaign recipe;
-{doc}`/tutorials/first-optimization` is the lesson, and the gradient
-machinery is {doc}`/explanation/adjoint-gradients`.
+Use a visible numerical setup, ordinary objective tuples, and the external optimizer that fits the problem. The complete API is {doc}`/reference/optimization`; objective choices are {doc}`/reference/objectives`.
 
-## The driver
+## Build the problem
 
 ```python
+from dataclasses import replace
+import jax.numpy as jnp
 import numpy as np
+import scipy.optimize
 import vmex as vj
 from vmex import optimize as opt
+from vmex.core.omnigenity import QIResidual
 
-inp = vj.VmecInput.from_file("input.minimal_seed_nfp2")
-qs = opt.QuasisymmetryRatioResidual(np.linspace(0.1, 1.0, 10),
-                                    helicity_m=1, helicity_n=0)   # QA
-result = opt.least_squares(
-    [(qs, 0.0, 1.0),
-     (opt.aspect_ratio, 6.0, 1.0),
-     (opt.mean_iota, 0.42, 1.0)],
-    inp, max_mode=5,
-    jac="implicit",       # exact implicit-differentiation Jacobians
-    use_ess=True)         # spectral trust-region scaling (below)
-result.input.to_indata("input.QA_optimized")
+inp = vj.VmecInput.from_file("input.nfp2_QI_seed")
+max_mode = 5
+mpol = max(max_mode + 2, 5)
+inp = replace(inp, delt=0.5).change_resolution(
+    mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
+
+qi = QIResidual(np.linspace(0.1, 1.0, 6))
+
+def iota_floor(state, runtime):
+    return jnp.maximum(0.33 - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
+
+def elongation_excess(state, runtime):
+    return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+
+terms = [
+    (qi, 0.0, 1.0),
+    (opt.aspect_ratio, 5.0, 0.005),
+    (iota_floor, 0.0, 10.0),
+    (elongation_excess, 0.0, 10.0),
+]
+problem = opt.VmecProblem.from_tuples(inp, terms, max_mode=max_mode, use_ess=True)
 ```
 
-`RBC(0,0)` stays fixed; `max_mode` bounds the released harmonics. Repeated
-trial solves are cheap by construction: executables are cached per
-structure, every trial hot-restarts from the previous converged state
-(sharpened by the perturbation warm start), and a failed trial returns a
-large finite residual so the trust region backs off instead of crashing.
+The script—not a preparation helper—chooses `DELT`, `MPOL`, `NTOR`, `NTHETA`, and `NZETA`. `max_mode` controls the free boundary coefficients; equilibrium resolution must be converged independently.
 
-## Choose the objectives
+## Choose an optimizer
 
-Any mix of terms from {doc}`/reference/objectives`: quasisymmetry
-(`QuasisymmetryRatioResidual`), omnigenity/QI (`QIResidual`,
-`quasi_isodynamic_residual`), geometry (`aspect_ratio`, `volume`,
-`mirror_ratio`), transform (`mean_iota`, `edge_iota`), stability
-(`magnetic_well`, `mercier_stability_residual`, ballooning), bootstrap
-(`RedlBootstrapMismatch`), turbulence proxies. The catalog marks which
-objectives are traceable (usable with `jac="implicit"`) and which are
-wout-engine only.
-
-## Pick the gradient mode
-
-- `jac="implicit"` — exact residual Jacobians by implicit differentiation:
-  one amortized linear-algebra pass instead of ~2N solves. Requires
-  traceable terms and a fixed-boundary problem. On the flagship campaigns
-  implicit gradients are not merely faster — the exact-axisymmetric seed is
-  a saddle of the QS residual where finite differences stall.
-- `jac=None` — scipy `"2-point"` finite differences: one full solve per dof
-  per Jacobian, works with *every* objective.
-- `current_dofs=k` frees the first `k` current-profile (`AC`) coefficients
-  plus `CURTOR` in either mode — the dof set of the self-consistent
-  bootstrap objective.
-
-## One call with ESS (the quickest survey pattern)
-
-Instead of a `max_mode = 1, 2, ...` continuation ladder, hand the optimizer
-**all** harmonics at once with Exponential Spectral Scaling (`use_ess=True`):
-each dof's trust radius is scaled by
-$e^{-\alpha \max(|m|,|n|)}/e^{-\alpha}$, so at the default `ess_alpha=1.2` a
-`max_mode`-6 dof moves ~400x more cautiously than a `max_mode`-1 dof — the
-coarse-to-fine ordering the ladder enforced, with no stage boundaries for
-the objective to stall at. ESS improves trust-region scaling; it does not
-reproduce the basin selection of a mode ladder.
-
-Measured from a near-circular torus seed on a 36-core CPU
-(`examples/optimization/QA_optimization_ess.py`, `QI_optimization_ess.py`):
-
-| class | nfp | residual | seed | achieved | max_mode | dofs | wall |
-|-------|-----|----------|------|----------|----------|------|------|
-| QA | 2 | QS (1,0) | 2.04e-01 | **7.2e-06** | 5 | 120 | **14.5 min** |
-| QI | 1 | omnigenity | 4.52e-01 | **1.81e-02** (25x) | 6 | 168 | **17.3 min** |
-
-The staged ladder (`max_mode=(1, ..., 5)`) remains available — QA at QS
-3.7e-7 in 25.5 min, ~1.8x longer — via `QA_optimization.py`,
-`QH_optimization.py`, `QP_optimization.py`, `QI_optimization.py`
-(constructed QI with a short quasi-poloidal basin stage first). A ladder
-can reach a lower, different minimum even when the single-call pattern is
-faster; the scripts stay side by side so the comparison is reproducible.
-
-```{figure} /_static/figures/ess_x_scale.png
-:alt: ESS trust-region scale versus harmonic level for alpha 0.7 and 1.2
-:width: 78%
-
-The ESS trust-region weight per harmonic level. Regenerate with
-`python docs/_static/figures/sources/make_optimization_docs_figures.py`.
-```
-
-## Bounded-memory profile objectives (`minimize`)
-
-Vector profile objectives normally need their complete residual Jacobian for
-a Gauss-Newton step; at high resolution those radial block-tridiagonal
-factors can dominate memory. {func}`vmex.core.optimize.minimize` minimizes
-the identical scalar cost $\Phi(p) = \tfrac{1}{2}\sum_i r_i(p)^2$ with scipy
-L-BFGS-B and one matrix-free reverse adjoint per gradient — independent of
-the number of profile samples:
+For residual objectives, SciPy least squares supplies a trust region and a useful iteration table:
 
 ```python
-result = opt.minimize(
-    [(opt.mercier_stability_residual, 0.0, 1.0),
-     (opt.glasser_stability_residual, 0.0, 1.0),
-     (opt.jdotb_residual, 0.0, 1e-6)],
-    inp, max_mode=5, bounds=bounds, options={"maxiter": 100})
+result = scipy.optimize.least_squares(
+    problem.residual, problem.x0, jac=problem.residual_jac,
+    x_scale=problem.scales, max_nfev=50, verbose=2)
 ```
 
-Opt-in because it changes the step model from Gauss-Newton trust-region to
-limited-memory quasi-Newton; the objective and its unconstrained minimizers
-are unchanged. The perturbation warm start is unavailable on this path.
+For BFGS or L-BFGS-B, use the scalar pair:
 
-## Choose the optimizer
+```python
+result = scipy.optimize.minimize(
+    problem.value_and_grad, problem.x0, jac=True, method="L-BFGS-B",
+    bounds=problem.bounds, options={"maxiter": 100})
+```
 
-VMEX exposes the objective and derivatives without owning the optimizer
-({doc}`/reference/optimization`). `examples/optimization/qi_shared_problem.py`
-builds one QI problem that `QI_optimization_scipy.py`,
-`QI_optimization_jaxopt.py`, and `QI_optimization_optax.py` send unchanged to
-SciPy, JAXopt, or Optax. Install the optional JAX backends with
-`pip install "vmex[optimizers]"`.
+The same problem exposes `jax_value_and_grad` for JAXopt and Optax. See `examples/optimization/QI_optimization_scipy.py`, `QI_optimization_jaxopt.py`, and `QI_optimization_optax.py`.
 
-## Knobs that are already right by default
+## Continue in mode number when useful
 
-`jac_solver="auto"` (adjoint for scalar residuals, block-tridiagonal factor
-for vector ones — 33x on the benchmark Jacobian phase),
-`warm_start="perturbation"` (3.7x fewer forward iterations over 20 trials),
-converged-state memo, `jac_chunk_size="auto"` memory bounding. What each one
-does, with the measurements: {doc}`/explanation/adjoint-gradients`. Krylov
-recycling (`recycle=True`) is off for a measured reason — solvax v0.1's FIFO
-recycle space slows warm-started columns 1.7-3.4x; benchmark before
-enabling.
+QI and QS landscapes are non-convex. ESS improves scaling when all modes are released together, but it does not reproduce the basin selection of a mode ladder. A transparent continuation loop is:
 
-## Reproduce the flagship campaigns
+```python
+for max_mode, max_nfev in zip([1, 3, 5], [20, 30, 50]):
+    mpol = max(max_mode + 2, 5)
+    inp = inp.change_resolution(
+        mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
+    problem = opt.VmecProblem.from_tuples(inp, terms, max_mode=max_mode, use_ess=True)
+    result = scipy.optimize.least_squares(
+        problem.residual, problem.x0, jac=problem.residual_jac,
+        x_scale=problem.scales, max_nfev=max_nfev, verbose=2)
+    inp = problem.input_from_x(result.x)
+    equilibrium = problem.equilibrium_from_x(result.x)
+    inp.to_indata(f"input.QI_max_mode_{max_mode:03d}")
+```
 
-The committed decks in `benchmarks/opt_decks/`
-(`input.{qa,qh,qi,qp}_{seed,optimized}`) pin the seeds and results: QA QS
-7.2e-6 (single call) / 3.7e-7 (ladder), QH QS 5.83e-5, QP QS 3.3e-2 (an
-extended ladder plus warm-start refinement; the hardest, basin-limited
-class), QI omnigenity 1.81e-2. Figures:
-`benchmarks/make_readme_figures.py --only optimization` and `--only qi`.
+A short QP stage can select a poloidally closed-|B| basin before a constructed-QI stage; `QI_optimization.py` shows that workflow. Treat it as a basin strategy, not a universal guarantee.
 
-A different loop closes the current profile instead of the boundary:
-`examples/optimization/QA_bootstrap_selfconsistent.py` erases the deck's
-current profile and lets {func}`~vmex.core.bootstrap.self_consistent_bootstrap`
-rebuild it from the Redl formula, converging to the
-Landreman-Buller-Drevlak mismatch `f_boot = 2e-6` in a handful of
-hot-restarted iterations ({doc}`/explanation/confinement`).
+## Control convergence explicitly
+
+The input schedule applies to both implicit and finite-difference derivatives. For concise overrides use:
+
+```python
+problem = opt.VmecProblem.from_tuples(
+    inp, terms, max_mode=5,
+    forward_ftol=1e-12,
+    forward_max_iterations=5500,
+    max_fsq_ratio=1e6)
+```
+
+`max_fsq_ratio` is the largest iteration-limited `FSQ / ftol` that VMEX will differentiate. Inspect `problem.evaluate(x).diagnostics` and calibrate stricter values on the intended NFP, objective family, and resolution. `benchmarks/optimization.py` provides a reproducible profiler for QI, QA, QH, QP, SciPy/JAX agreement, and finite differences.
+
+## Refine and save the result
+
+```python
+final_input = replace(inp,
+    ns_array=np.array([101]), ftol_array=np.array([1e-14]),
+    niter_array=np.array([8000]))
+final_equilibrium = opt.solve_equilibrium(
+    final_input, initial_state=equilibrium.state,
+    verbose=True, raise_on_max_iterations=True)
+
+final_input.to_indata("input.QI_optimized")
+vj.write_wout("wout_QI_optimized.nc", final_equilibrium.wout)
+vj.plot_wout("wout_QI_optimized.nc", "figures")
+```
+
+The accepted optimization state hot-starts the high-resolution solve and avoids rebuilding a poor cold magnetic axis. `verbose=True` prints force residuals and the iteration count so the final budget can be increased deliberately.
+
+## Shared and HPC machines
+
+Leave `workers=None` to use the CPUs visible to the process; VMEX respects scheduler and container affinity. Set an explicit smaller value when sharing a node. One equilibrium already uses XLA threading, while `parallel.solve_ensemble` and finite-difference probes parallelize independent solves. Select accelerators with `device=` and follow {doc}`run-on-gpu`.

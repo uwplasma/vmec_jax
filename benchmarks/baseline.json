@@ -302,7 +302,7 @@
   "vmecpp": {
    "ok": false,
    "converged": false,
-   "error": "init__.py\", line 1915, in ensure_vmecpp_input\n    vmecpp_input_path = _util.indata_to_json(\n        input_path, output_override=output_file\n    )\n  File \"/Users/rogerio/.venvs/vmecpp/lib/python3.13/site-packages/vmecpp/_util.py\", line 142, in indata_to_json\n    result = subprocess.run(command, check=True)\n  File \"/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/lib/python3.13/subprocess.py\", line 577, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '[PosixPath('/Users/rogerio/.venvs/vmecpp/lib/python3.13/site-packages/vmecpp/cpp/third_party/indata2json/indata2json'), 'input.LandremanPaul2021_QH_reactorScale_lowres']' returned non-zero exit status 5.\n"
+   "error": "vmecpp indata2json exited with status 5"
   }
  },
  "nfp4_QH_warm_start[ns201]": {

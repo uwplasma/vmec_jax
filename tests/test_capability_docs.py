@@ -51,9 +51,5 @@ def test_supported_mirror_beta_matches_benchmark() -> None:
 
 def test_readme_links_the_capability_contract() -> None:
     readme = (ROOT / "README.md").read_text()
-    url = "https://vmex.readthedocs.io/en/latest/capabilities.html"
-    intro, features = readme.split("## Features", 1)
-    feature_section, mirror = features.split("## Mirror equilibria", 1)
-    assert url in intro
-    assert url in feature_section
-    assert url in mirror
+    url = "https://vmex.readthedocs.io/en/latest/reference/capabilities.html"
+    assert readme.count(url) == 1

@@ -34,7 +34,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 MAX_FIGURE_BYTES = 2 * 1024 * 1024  # >= 200 dpi publication PNGs
-WOUT_KEYS = ("summary", "surfaces", "modB", "profiles", "3d")
+WOUT_KEYS = ("summary", "surfaces", "modB", "profiles", "stability", "3d")
 
 
 def _golden_wout(case: str) -> Path:
@@ -59,7 +59,7 @@ def _check_figures(paths: dict[str, Path], expected_keys) -> None:
 
 @pytest.mark.parametrize("case", ["solovev", "up_down_asymmetric_tokamak"])
 def test_plot_wout_golden(case: str, tmp_path: Path) -> None:
-    """All five figures render from golden wouts (sym and lasym) under 400 kB."""
+    """All six figures render from golden wouts (sym and lasym) under 2 MB."""
     wout_path = _golden_wout(case)
     outdir = tmp_path / case
     paths = plot_wout(wout_path, outdir, which=WOUT_KEYS)
@@ -68,14 +68,24 @@ def test_plot_wout_golden(case: str, tmp_path: Path) -> None:
         assert Path(path).parent == outdir
 
 
-def test_plot_wout_accepts_woutdata_and_subset(tmp_path: Path) -> None:
+def test_plot_wout_accepts_woutdata_and_subset(tmp_path: Path, monkeypatch) -> None:
     """plot_wout takes an in-memory WoutData and honors ``which`` subsets."""
+    from matplotlib.axes import Axes
+
     from vmex.core.wout import read_wout
 
+    contour, cmaps = Axes.contour, []
+
+    def record_contour(axis, *args, **kwargs):
+        cmaps.append(kwargs.get("cmap"))
+        return contour(axis, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "contour", record_contour)
     data = read_wout(str(_golden_wout("solovev")))
     paths = plot_wout(data, tmp_path, which=("profiles", "modB"), name="solovev_mem")
     _check_figures(paths, ("profiles", "modB"))
     assert paths["profiles"].name == "solovev_mem_profiles.png"
+    assert cmaps and set(cmaps) == {"jet"}
 
 
 def test_plot_wout_rejects_unknown_figure(tmp_path: Path) -> None:

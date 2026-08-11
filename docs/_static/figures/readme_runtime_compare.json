@@ -7,7 +7,7 @@
     "figure_path": "docs/_static/figures/readme_runtime_compare.png",
     "generated_at_utc": "2026-07-07T14:00:42.825896+00:00",
     "gpu_summary_paths": [],
-    "host": "Rogerios-MacBook-Pro.local",
+    "host": "Apple Silicon workstation",
     "platform": "macOS-14.4.1-arm64-arm-64bit",
     "plot_mode": "runtime",
     "python": "3.11.14",

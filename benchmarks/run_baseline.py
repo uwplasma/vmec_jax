@@ -14,11 +14,11 @@ Usage:
         [--vmecpp-python /path/to/python] [--vmecpp-threads 10]
 
 Solvers exercised per case:
-- ``vmec2000``       — /Users/rogerio/local/STELLOPT/VMEC2000/Release/xvmec2000
+- ``vmec2000``       — ``VMEX_XVMEC2000``, ``PATH``, or a local STELLOPT checkout
 - ``vmex_cold``  — fresh ``vmec`` CLI subprocess (includes JAX/XLA setup)
 - ``vmex_warm``  — second in-process core solve (structural executable
   cache hot; same ``vmex.core`` route as the CLI)
-- ``vmecpp``         — VMEC++ python API, where the case converges cleanly
+- ``vmecpp``         — ``VMEX_VMECPP_PY`` or the active Python environment
 
 Every benchmark row runs at ``ns >= RAMP_NS`` (201): decks whose finest
 NS_ARRAY stage is below that get a generated variant with the final stage
@@ -37,6 +37,7 @@ additionally run with a generated coarse->fine NS_ARRAY ladder ending at
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -60,9 +61,13 @@ from benchmarks._provenance import (  # noqa: E402
 )
 
 DATA = REPO / "examples" / "data"
-XVMEC2000 = Path("/Users/rogerio/local/STELLOPT/VMEC2000/Release/xvmec2000")
+XVMEC2000 = Path(os.environ.get(
+    "VMEX_XVMEC2000",
+    shutil.which("xvmec2000") or Path.home() / "local/STELLOPT/VMEC2000/Release/xvmec2000"))
 VMEX_PY = Path(sys.executable)
-VMECPP_PY = Path.home() / ".venvs/vmecpp/bin/python"
+VMECPP_PY = Path(os.environ.get(
+    "VMEX_VMECPP_PY",
+    sys.executable if importlib.util.find_spec("vmecpp") else Path.home() / ".venvs/vmecpp/bin/python"))
 VMECPP_THREADS = 10
 
 # (case name, aux files to copy alongside the deck)

@@ -273,6 +273,9 @@ class ImplicitConfig:
     #: matvecs.
     adjoint_gcrot_m: int = 100
     adjoint_gcrot_k: int = 20
+    #: Largest ``(fsqr + fsqz + fsql) / ftol`` accepted for implicit
+    #: differentiation when a trial exhausts its iteration budget.
+    max_fsq_ratio: float = 1.0e6
     #: seed repeated host solves from the last converged state of this config
     #: (optimization trials; the fixed point — hence the gradient — is
     #: unchanged, only the iteration count drops).  Makes the callback
@@ -304,6 +307,7 @@ def make_config(
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
     adjoint_gcrot_k: int = 20,
+    max_fsq_ratio: float = 1.0e6,
     hot_restart: bool = False,
     device: Any = None,
 ) -> ImplicitConfig:
@@ -320,6 +324,8 @@ def make_config(
         ftol = float(np.asarray(inp.ftol_array).ravel()[-1])
     if max_iterations is None:
         max_iterations = int(np.asarray(inp.niter_array).ravel()[-1])
+    if not np.isfinite(max_fsq_ratio) or max_fsq_ratio <= 0.0:
+        raise ValueError("max_fsq_ratio must be finite and positive")
     return ImplicitConfig(
         inp=inp, resolution=resolution, ftol=float(ftol),
         max_iterations=int(max_iterations), mode=str(mode),
@@ -327,6 +333,7 @@ def make_config(
         adjoint_tol=float(adjoint_tol), adjoint_restart=int(adjoint_restart),
         adjoint_maxiter=int(adjoint_maxiter),
         adjoint_gcrot_m=int(adjoint_gcrot_m), adjoint_gcrot_k=int(adjoint_gcrot_k),
+        max_fsq_ratio=float(max_fsq_ratio),
         hot_restart=bool(hot_restart), device=device,
     )
 
@@ -334,9 +341,8 @@ def make_config(
 def _device_context(cfg: ImplicitConfig):
     """The config's placement context (a no-op when no device is carried).
 
-    ``getattr``: the Krylov helpers accept duck-typed configs (the recycle
-    tests pass a ``SimpleNamespace`` carrying only the solver knobs), for
-    which "no device carried" is the correct reading.
+    ``getattr`` keeps private linear-solver helpers compatible with minimal
+    duck-typed configs that carry only numerical solver controls.
     """
     device = getattr(cfg, "device", None)
     if device is None:
@@ -1186,11 +1192,10 @@ def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
 def _host_solve_and_mask_status(cfg: ImplicitConfig, params_np) -> tuple:
     """Status-returning host callback for optimization trial points.
 
-    A failed solve returns a parameter-consistent initial state, the structural
-    mask (already primed by the required-valid optimization seed), and status
-    ``1``.  No exception crosses :func:`jax.pure_callback`, whose contract does
-    not define callback exceptions.  The strict :func:`solve_implicit` lane is
-    unchanged and continues to raise typed VMEX errors for direct callers.
+    Status is 0 for a derivative-certified state, 1 for a failed solve, and 2
+    when the iteration budget was exhausted above ``cfg.max_fsq_ratio``.
+    The final force residual and its ratio to ``ftol`` accompany the state so
+    every optimizer interface applies the same acceptance policy.
     """
     with _device_context(cfg):
         try:
@@ -1208,9 +1213,22 @@ def _host_solve_and_mask_status(cfg: ImplicitConfig, params_np) -> tuple:
             as_np = lambda tree: jax.tree.map(  # noqa: E731
                 lambda value: np.asarray(value, dtype=np.float64), tree
             )
-            return as_np(state), as_np(mask), np.int32(1)
+            return as_np(state), as_np(mask), np.int32(1), np.float64(np.inf), np.float64(np.inf)
         _LAST_STATUS_ERROR.pop(cfg, None)
-        return state, mask, np.int32(0)
+        hit = _LAST_SOLVE.get(cfg)
+        params = _device_pin(cfg, jax.tree.map(jnp.asarray, params_np))
+        if hit is None or hit[0] != _params_key(params):
+            _LAST_STATUS_ERROR[cfg] = RuntimeError(
+                "equilibrium solve completed without a certification memo"
+            )
+            return (
+                state, mask, np.int32(1), np.float64(np.inf), np.float64(np.inf)
+            )
+        result = hit[1]
+        fsq = float(result.fsqr) + float(result.fsqz) + float(result.fsql)
+        ratio = fsq / cfg.ftol
+        status = 0 if bool(result.converged) or ratio <= cfg.max_fsq_ratio else 2
+        return state, mask, np.int32(status), np.float64(fsq), np.float64(ratio)
 
 
 def _callback_sharding(cfg: ImplicitConfig):
@@ -1256,11 +1274,12 @@ def _callback_solve(params: ImplicitParams, cfg: ImplicitConfig):
 
 
 def _callback_solve_status(params: ImplicitParams, cfg: ImplicitConfig):
-    """Pure callback returning ``(state, mask, status)`` without exceptions."""
+    """Return state, mask, status, FSQ, and FSQ/ftol without exceptions."""
     status_struct = jax.ShapeDtypeStruct((), jnp.int32)
+    scalar_struct = jax.ShapeDtypeStruct((), jnp.float64)
     return jax.pure_callback(
         functools.partial(_host_solve_and_mask_status, cfg),
-        (_state_struct(cfg), _state_struct(cfg), status_struct),
+        (_state_struct(cfg), _state_struct(cfg), status_struct, scalar_struct, scalar_struct),
         params,
         sharding=_callback_sharding(cfg),
     )
@@ -1304,25 +1323,23 @@ def solve_implicit_with_aux(params: ImplicitParams, cfg: ImplicitConfig):
 @functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
 def solve_implicit_status(
     params: ImplicitParams, cfg: ImplicitConfig
-) -> tuple[SpectralState, Array]:
+) -> tuple[SpectralState, Array, Array, Array]:
     """Differentiable equilibrium with an exception-free trial status.
 
-    Status is ``0`` for a converged/usable state and ``1`` for a recoverable
-    failed trial.  On success the derivative is identical to
-    :func:`solve_implicit`.  On failure its state cotangent is zero; callers
-    should select their own differentiable penalty as a function of the
-    decision variables.
+    Status is 0 for a derivative-certified state, 1 for a failed solve, and 2
+    for an under-converged state.  ``fsq`` and ``fsq_ratio`` expose the force
+    residual used for that decision.  Only status 0 has an implicit pullback.
     """
-    state, _, status = _callback_solve_status(params, cfg)
-    return state, status
+    state, _, status, fsq, fsq_ratio = _callback_solve_status(params, cfg)
+    return state, status, fsq, fsq_ratio
 
 
 def _solve_implicit_status_fwd(params, cfg):
     with _device_context(cfg):
         params = _device_pin(cfg, params)
-        state, mask, status = _callback_solve_status(params, cfg)
+        state, mask, status, fsq, fsq_ratio = _callback_solve_status(params, cfg)
         state, mask = _device_pin(cfg, (state, mask))
-    return (state, status), (params, state, mask, status)
+    return (state, status, fsq, fsq_ratio), (params, state, mask, status)
 
 
 # ---------------------------------------------------------------------------
@@ -1396,8 +1413,8 @@ def _pin_concrete(cfg: ImplicitConfig, tree):
     is governed by the transformation and the boundary pins the callers
     already apply; a ``device_put`` on a batch tracer is unnecessary there.
     Concrete leaves — the host-eager reverse pass — are committed to
-    ``cfg.device``.  ``getattr``: duck-typed configs without a ``device``
-    attribute (the recycle tests) mean "no device carried".
+    ``cfg.device``. Duck-typed configs without a ``device`` attribute mean
+    "no device carried".
     """
     device = getattr(cfg, "device", None)
     if device is None:
@@ -1575,64 +1592,6 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig, *, precond=None):
         )
         x = _checked_adjoint_x(sol, b_flat, cfg)
     return unravel(x), sol
-
-
-# Recycle-space width for _recycled_solve (plan R25.3).  GCROT keeps k
-# deflation directions in a fixed-shape (n, k) pair, so k trades warm-start
-# overhead (k re-orthonormalization matvecs per solve) against deflation
-# depth; 10 matches the solvax default and the GCRO-DR literature.
-_RECYCLE_K = 10
-
-# solvax >= 0.8.7 reports ``recycle_drift`` on warm-started gcrot solves: the
-# mean principal-angle sine between the incoming recycle image space and its
-# re-established span under the current operator (zero for an unchanged
-# operator, growing linearly with the operator step — the gap-free bound
-# sin(theta) <= ||dA|| ||U||). Probe once; older solvax simply lacks the field
-# and the drift-gated carry below degenerates to the previous behavior.
-try:
-    from solvax.krylov import KrylovSolution as _KrylovSolution
-
-    _GCROT_REPORTS_DRIFT = "recycle_drift" in _KrylovSolution._fields
-except ImportError:  # pragma: no cover - solvax is a hard dependency
-    _GCROT_REPORTS_DRIFT = False
-
-
-def _recycled_solve(A, b, cfg: ImplicitConfig, recycle):
-    """Linearized solve via :func:`solvax.gcrot` with subspace recycling.
-
-    Same operator wrapping, tolerance (``rtol = adjoint_tol``, ``atol = 0``),
-    cycle size and restart budget as :func:`_adjoint_solve`; check
-    ``sol.converged`` — a warm recycle pair changes the iteration path, and
-    a solve that exhausts ``adjoint_maxiter`` returns whatever residual it
-    reached.  ``recycle`` is a ``(C, U)`` pair of shape ``(n, _RECYCLE_K)``
-    (an all-zero pair degenerates to a cold start); the updated pair is
-    returned on ``sol.recycle`` so callers can thread it through a sequence
-    of solves sharing (or slowly varying) the operator — the plan R25.3
-    per-dof implicit-Jacobian loop (opt-in via
-    ``least_squares(..., recycle=True)``; see the measured caveat there).
-
-    Runs bound to ``cfg.device`` like :func:`_adjoint_solve_gcrot`
-    (RHS/recycle pair pinned, solver call inside the config's device
-    context); convergence stays the caller's contract as documented above.
-    """
-    b_flat, unravel = ravel_pytree(_pin_concrete(cfg, b))
-    b_flat = _pin_concrete(cfg, b_flat)
-    recycle = _pin_concrete(cfg, recycle)
-
-    def matvec(v):
-        return ravel_pytree(A(unravel(v)))[0]
-
-    with _device_context(cfg):
-        sol = _solvax_gcrot(
-            matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0,
-            m=cfg.adjoint_restart, k=_RECYCLE_K,
-            max_restarts=cfg.adjoint_maxiter, recycle=recycle,
-        )
-    # On solvax >= 0.8.7, ``sol.recycle_drift`` measures how far the operator
-    # has rotated the recycled space since the pair was built — the quantity
-    # callers need to decide whether carrying the pair is still worthwhile
-    # (see optimize.jacobian_rows_recycled's drift-gated carry).
-    return unravel(sol.x), sol
 
 
 @dataclass(frozen=True)
@@ -1964,7 +1923,7 @@ solve_implicit.defvjp(_solve_implicit_fwd, _solve_implicit_bwd)
 def _solve_implicit_status_bwd(cfg, res, gbar):
     """Use the ordinary adjoint on success and a zero pullback on failure."""
     params, state, mask, status = res
-    state_bar, _ = gbar  # integer status has no differentiable cotangent
+    state_bar, _, _, _ = gbar  # diagnostics have no differentiable cotangent
     zeros = jax.tree.map(jnp.zeros_like, params)
 
     def success(args):

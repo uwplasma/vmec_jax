@@ -126,7 +126,7 @@ stated in the row is validated; ``—`` means no public path.
      - —
      - —
      - extended-validation
-     - 10% < β ≤ 50%; converges variationally but the independent-force promotion gate fails. Evidence: `mirror_free_boundary_axisymmetric.json <https://github.com/uwplasma/VMEX/blob/main/benchmarks/mirror_free_boundary_axisymmetric.json>`__, `test_free_boundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_free_boundary.py>`__.
+     - 10% < β ≤ 80%; converges variationally and the example force gate passes, but refined-grid promotion above 50% is incomplete. Evidence: `mirror_free_boundary_axisymmetric.json <https://github.com/uwplasma/VMEX/blob/main/benchmarks/mirror_free_boundary_axisymmetric.json>`__, `test_free_boundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_free_boundary.py>`__.
    * - open mirror
      - nonaxisymmetric
      - free
@@ -192,6 +192,6 @@ Mirror beta labels
 ------------------
 
 The axisymmetric open-mirror free-boundary lane is supported through
-10% requested beta. The 25% and 50% cases remain extended validation:
-they converge variationally, but do not pass the independent strong-force
-promotion gate recorded in the benchmark artifact.
+10% requested beta. The 25%, 50%, and 80% cases remain extended validation:
+the 80% example passes its force gate, but refined-grid promotion above
+the current 50% campaign is incomplete.

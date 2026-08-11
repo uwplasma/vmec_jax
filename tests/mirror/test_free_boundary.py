@@ -157,7 +157,7 @@ def test_free_coefficient_operator_matches_dense_forward_and_transpose() -> None
 @pytest.mark.full
 def test_unbounded_exterior_free_boundary_beta_scan_converges(_module_jit_enabled) -> None:
     config, source_grid, discretization, plasma_grid, on_axis, center, flux, initial_boundary = _free_case(5, 7, 4, 200)
-    betas = jnp.asarray([0.0, 0.10, 0.25, 0.50])
+    betas = jnp.asarray([0.0, 0.10, 0.50, 0.80])
     results = solve_beta_scan(
         discretization.fit_boundary(initial_boundary, source_grid),
         discretization,
@@ -200,7 +200,7 @@ def test_unbounded_exterior_free_boundary_beta_scan_converges(_module_jit_enable
         discretization,
         config,
         _external_mirror_field,
-        jnp.asarray([0.50]),
+        jnp.asarray([0.80]),
         axial_flux_derivative=flux,
         reference_field=float(on_axis[center]),
         initial_restart=FreeBoundaryRestart.from_result(results[-1]),

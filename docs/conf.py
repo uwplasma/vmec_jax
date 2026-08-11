@@ -50,7 +50,7 @@ myst_enable_extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "optimization_api_plan.md"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 
 def _truthy(value: str | None) -> bool:

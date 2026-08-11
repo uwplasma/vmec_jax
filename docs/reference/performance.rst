@@ -30,7 +30,7 @@ comparison is fairest.
      - VMEC2000
      - vmex cold
      - vmex warm
-     - reference C++
+     - VMEC++
    * - li383_low_res
      - 0.86
      - 3.36
@@ -128,7 +128,7 @@ Reading the table:
   is usually slower than Fortran — except on the biggest decks, where even
   the cold run, compile included, wins.  The persistent compilation cache
   removes most of the compile cost on subsequent processes.
-- The **reference C++ implementation** (10-thread default; invoked once per
+- **VMEC++** (10-thread default; invoked once per
   deck through its Python API in a fresh process, same host, same sequential
   protocol) is faster on some converged large decks; its ``failed`` rows
   aborted during the first iterations.  ``vmex`` completes every supported
@@ -262,14 +262,14 @@ trajectory.  The trace below runs the quick-start QH case
 (``nfp4_QH_warm_start``, single grid at ``ns=51``) through all three codes
 and plots the total force residual ``fsqr + fsqz + fsql`` per iteration:
 the vmex curve lies exactly on top of VMEC2000's (both converge in 502
-iterations), and the reference C++ implementation follows a
+iterations), and VMEC++ follows a
 near-identical path (501 iterations).
 The vmex trace comes from ``SolveResult.fsq_history``, the VMEC2000
 trace from its stdout iteration table run with ``NSTEP = 1``, and the
-reference trace from the ``fsqt`` array of its wout payload.
+VMEC++ trace from the ``fsqt`` array of its wout payload.
 
 .. figure:: /_static/figures/readme_convergence.png
-   :alt: force residual vs iteration for vmex, VMEC2000, and the reference C++ implementation
+   :alt: force residual vs iteration for VMEX, VMEC2000, and VMEC++
    :align: center
    :width: 95%
 

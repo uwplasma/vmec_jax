@@ -18,8 +18,8 @@ Steps:
      coils, consumed through the plain ``xyz->B`` callable interface),
   4. finite-difference check of both.
 
-Requires the optional dependency ``virtual_casing_jax`` (``pip install -e
-/path/to/virtual_casing_jax``).  Run: ``python examples/take_free_boundary_gradients.py``.
+Requires the optional dependency ``virtual_casing_jax`` (``pip install
+"vmex[freeb]"``). Run: ``python examples/take_free_boundary_gradients.py``.
 """
 
 import os
@@ -44,7 +44,7 @@ NPHI = NTHETA = 20 if CI else 32
 
 def main() -> None:
     if not FBD.have_virtual_casing_jax():
-        raise SystemExit("this example needs virtual_casing_jax (pip install -e /path/to/virtual_casing_jax)")
+        raise SystemExit('this example needs virtual_casing_jax (pip install "vmex[freeb]")')
     if not WOUT.exists():
         raise SystemExit(f"missing wout fixture {WOUT} (run tools/fetch_assets.py)")
 

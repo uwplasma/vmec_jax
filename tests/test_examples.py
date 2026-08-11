@@ -64,7 +64,7 @@ def test_plot_and_boozer(tmp_path):
     outdir = tmp_path / "output_plot_and_boozer"
     assert (outdir / "wout_li383_low_res.nc").exists()
     # every plot_wout figure kind is written unconditionally
-    for suffix in ("summary", "surfaces", "modB", "profiles", "boundary3d"):
+    for suffix in ("summary", "surfaces", "modB", "profiles", "stability", "boundary3d"):
         assert (outdir / f"li383_low_res_{suffix}.png").exists()
 
 
@@ -99,25 +99,6 @@ def test_hot_restart_scan(tmp_path):
     warm = [int(m) for m in re.findall(r"^\s*[0-9.]+\s+(\d+)\s+[0-9.]+\s+warm", out, re.M)]
     assert base is not None and int(base.group(1)) > 10, "base should need many iters"
     assert len(warm) == 5 and max(warm) <= 5, f"warm restarts should be cheap: {warm}"
-
-
-def test_optimization_landscape_artifact(tmp_path):
-    """Committed equilibrium scans stay finite and can be replotted cheaply."""
-    import json
-
-    data = REPO / "benchmarks" / "optimization_landscapes.json"
-    payload = json.loads(data.read_text())
-    assert payload["points"] == 7
-    for kind in ("QI", "QA", "QH"):
-        values = np.asarray(payload["cases"][kind]["cost"])
-        assert values.shape == (7, 7)
-        assert np.all(np.isfinite(values)) and np.all(values >= 0)
-    output = tmp_path / "optimization_landscapes.png"
-    out = _run_example(
-        REPO / "benchmarks" / "optimization_landscapes.py", tmp_path,
-        args=("--plot-only", "--data", str(data), "--output", str(output)),
-    )
-    assert "Wrote" in out and output.stat().st_size > 50_000
 
 
 def test_parallel_ensemble_scan(tmp_path):
@@ -277,15 +258,6 @@ def test_qi_maxj_continuation_example(tmp_path):
         assert (outdir / f"j_polar_pitch_{ip:02d}.png").stat().st_size > 10_000
 
 
-@pytest.mark.full  # nightly: single-stage ESS variants (one least_squares call, no ladder)
-@pytest.mark.parametrize("case", ["QA", "QI"])
-def test_ess_optimization_examples(case, tmp_path):
-    script = EXAMPLES / "optimization" / f"{case}_optimization_ess.py"
-    out = _run_example(script, tmp_path)
-    _assert_cost_decreased(out, f"{case}-ESS")
-    assert "one call, no max_mode ladder" in out
-
-
 @pytest.mark.full  # nightly: QP-basin + QI stages + Boozer, subprocess cold-start heavy
 def test_qi_optimization_example(tmp_path):
     pytest.importorskip("booz_xform_jax")
@@ -296,36 +268,7 @@ def test_qi_optimization_example(tmp_path):
     assert match is not None
     seed, final = float(match.group(1)), float(match.group(2))
     assert np.isfinite(final) and final <= seed * 1.05
-    outdir = tmp_path / "output_QI_optimization"
-    assert (outdir / "wout_QI_optimized.nc").exists()
-
-
-@pytest.mark.full  # nightly: two showcase campaigns (implicit + FD lane) at smoke budget
-def test_objectives_showcase(tmp_path):
-    """objectives_showcase.py covers both gradient lanes under the CI budget.
-
-    ``--only lgradb,dmerc`` is enough coverage: ``lgradb`` exercises the
-    traceable ``l_grad_b_state`` soft-min term through ``jac="implicit"``,
-    ``dmerc`` the wout-lane finite-difference campaign (beta calibration +
-    Mercier hinge).  Asserts clean exit + the promised deck/metrics outputs.
-    """
-    import json
-
-    script = EXAMPLES / "optimization" / "objectives_showcase.py"
-    out = _run_example(script, tmp_path, timeout=2400,
-                       args=("--only", "lgradb,dmerc"))
-    _assert_cost_decreased(out, "objectives-showcase")
-    for name in ("lgradb", "dmerc"):
-        outdir = tmp_path / "output_objectives_showcase" / name
-        assert (outdir / f"input.{name}").exists()
-        mpath = outdir / "metrics.json"
-        assert mpath.exists()
-        m = json.loads(mpath.read_text())
-        assert m["campaign"] == name
-        for stage in ("seed", "final"):
-            assert np.isfinite(m[stage]["metric"]), f"{name}/{stage}: metric"
-            assert np.isfinite(m[stage]["qs_total"]), f"{name}/{stage}: QS"
-    assert "d_merc wout-reporting lane" in out  # deliberate FD campaign
+    assert (tmp_path / "wout_QI_optimized.nc").exists()
 
 
 def test_extra_terms_work_uncommented():

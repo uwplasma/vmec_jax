@@ -81,11 +81,11 @@ The theory: [the variational problem](explanation/variational-problem.rst),
 ::::
 
 ```{figure} /_static/figures/readme_runtime_compare.png
-:alt: Runtime comparison of vmex against VMEC2000 and a reference C++ implementation
+:alt: Runtime comparison of VMEX against VMEC2000 and VMEC++
 :width: 95%
 
 Benchmark-suite runtimes: vmex (cold and warm) versus VMEC2000 and a
-reference C++ implementation. Warm (compiled-cache) solves are the relevant
+VMEC++. Warm (compiled-cache) solves are the relevant
 number for optimization loops; the full generated table is
 {doc}`reference/performance`.
 ```

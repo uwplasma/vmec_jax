@@ -1,3 +1,4 @@
+# mypy: disable-error-code="call-overload"
 """Single-grid fixed-boundary solve loop: funct3d evaluation + eqsolve iteration.
 
 Wires the ported core modules (:mod:`geometry`, :mod:`fields`, :mod:`forces`,

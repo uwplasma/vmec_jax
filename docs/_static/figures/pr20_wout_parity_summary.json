@@ -508,7 +508,7 @@
         " LV3FITCALL  :     F",
         ""
       ],
-      "vmec_exec": "/Users/rogeriojorge/local/STELLOPT/VMEC2000/Release/xvmec2000",
+      "vmec_exec": "xvmec2000",
       "vmec_jax": {
         "aspect": 6.000007793589534,
         "fsq_rss": 9.853268670040225e-11,
@@ -1030,7 +1030,7 @@
         " LV3FITCALL  :     F",
         ""
       ],
-      "vmec_exec": "/Users/rogeriojorge/local/STELLOPT/VMEC2000/Release/xvmec2000",
+      "vmec_exec": "xvmec2000",
       "vmec_jax": {
         "aspect": 7.000345969477072,
         "fsq_rss": 9.879753505447934e-14,
@@ -1552,7 +1552,7 @@
         " LV3FITCALL  :     F",
         ""
       ],
-      "vmec_exec": "/Users/rogeriojorge/local/STELLOPT/VMEC2000/Release/xvmec2000",
+      "vmec_exec": "xvmec2000",
       "vmec_jax": {
         "aspect": 3.1179983437343184,
         "fsq_rss": 1.1348590367566785e-14,
@@ -2074,7 +2074,7 @@
         " LV3FITCALL  :     F",
         ""
       ],
-      "vmec_exec": "/Users/rogeriojorge/local/STELLOPT/VMEC2000/Release/xvmec2000",
+      "vmec_exec": "xvmec2000",
       "vmec_jax": {
         "aspect": 2.999999999999998,
         "fsq_rss": 1.453349534450799e-14,
@@ -2090,7 +2090,7 @@
     }
   ],
   "executables": [
-    "/Users/rogeriojorge/local/STELLOPT/VMEC2000/Release/xvmec2000"
+    "xvmec2000"
   ],
   "failed_cases": 0,
   "skip_vmec_jax": false

@@ -1,65 +1,59 @@
 # Optimize a boundary
 
-In this lesson you reshape the circular tokamak's boundary until its aspect
-ratio is exactly 4.0 — three cost evaluations, under a minute on a laptop
-CPU.
+This lesson builds an optimizer-neutral VMEC problem and passes its residual
+and exact Jacobian directly to SciPy. The optimization reshapes a circular
+tokamak toward aspect ratio 4.
 
-## The optimization
+## Choose the VMEC and boundary resolutions
 
 ```python
+from dataclasses import replace
+import scipy.optimize
+
 import vmex as vj
-from vmex.core import optimize as opt
+from vmex import optimize as opt
 
 inp = vj.VmecInput.from_file("input.circular_tokamak")
-result = opt.least_squares(
-    [(opt.aspect_ratio, 4.0, 1.0)],   # (function, target, weight)
-    inp,
-    max_mode=1,                        # free only the m,|n| <= 1 boundary modes
-    jac="implicit",                    # exact gradients from the adjoint
-    verbose=2,
-)
-print(float(opt.aspect_ratio(result.equilibrium.state,
-                             result.equilibrium.runtime)))
+max_mode = 1
+mpol = max(max_mode + 2, 5)
+inp = replace(inp, delt=0.5).change_resolution(
+    mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
 ```
 
-The three arguments to understand:
+The script explicitly owns `DELT`, `MPOL`, `NTOR`, and the real-space grids.
+`max_mode` separately selects which boundary coefficients the optimizer may
+change; `RBC(0,0)` remains fixed.
 
-- **Terms** are simsopt-style `(function, target, weight)` triples; the cost
-  is `sum(weight * (function - target)**2) / 2`. Any objective from
-  {doc}`/reference/objectives` slots in, and several terms combine freely.
-- **`max_mode=1`** frees the boundary Fourier coefficients with
-  `m, |n| <= 1` (`RBC(0,0)` stays fixed); higher values release finer
-  harmonics.
-- **`jac="implicit"`** uses the exact implicit-differentiation Jacobian from
-  {doc}`first-gradient` instead of finite differences.
+## Build and solve the problem
 
-## What you see
+```python
+terms = [(opt.aspect_ratio, 4.0, 1.0)]  # function, target, cost weight
+problem = opt.VmecProblem.from_tuples(
+    inp, terms, max_mode=max_mode, use_ess=True)
 
-```text
-[least_squares] cost = 5.000000e-01
-[least_squares] cost = 1.622593e+32
-[least_squares] cost = 3.355398e-30
+result = scipy.optimize.least_squares(
+    problem.residual, problem.x0, jac=problem.residual_jac,
+    x_scale=problem.scales, max_nfev=20, verbose=2)
 ```
 
-Evaluation 1 is the seed (aspect 3, so `(3-4)^2/2 = 0.5`). Evaluation 2 is a
-failed trial — the trust region proposed a boundary whose solve diverged, got
-back a large finite cost instead of a crash, and shrank the step. Evaluation
-3 lands the answer: cost 3.4e-30, aspect ratio 4.0 to 4e-16.
+Each tuple contributes `weight * (function - target)**2 / 2` to the cost.
+The first residual/Jacobian call may compile JAX executables; later calls with
+the same array structure reuse them. Failed trial equilibria receive a finite,
+consistent rejection residual so the trust region can shorten its step.
 
-## The result object
+## Inspect and save the result
 
-`result` is a scipy `OptimizeResult` augmented with three fields:
+```python
+optimized_input = problem.input_from_x(result.x)
+equilibrium = problem.equilibrium_from_x(result.x)
+aspect = float(opt.aspect_ratio(equilibrium.state, equilibrium.runtime))
+print(f"final cost = {result.cost:.6e}, aspect = {aspect:.6f}")
 
-- `result.input` — the optimized {class}`~vmex.core.input.VmecInput`; write
-  it out with `result.input.to_indata("input.optimized")`;
-- `result.equilibrium` — the final converged equilibrium (state, runtime,
-  lazy `.wout`), ready for further diagnostics;
-- `result.solve_stats` — solve/iteration counts for the whole campaign.
+optimized_input.to_indata("input.aspect_optimized")
+vj.write_wout("wout_aspect_optimized.nc", equilibrium.wout)
+```
 
-## Where to go from here
-
-A one-term, `max_mode=1` problem is the smallest possible campaign. Real
-campaigns combine quasisymmetry or QI residuals with geometric targets,
-release all harmonics at once under Exponential Spectral Scaling, and reach
-precise QA in one 14.5-minute CPU call — that recipe, with the QA/QH/QI/QP
-decks to reproduce it, is {doc}`/howto/optimize-a-boundary`.
+`problem.value_and_grad` fits SciPy BFGS/L-BFGS-B, while
+`problem.jax_value_and_grad` fits JAXopt and Optax. Add QI, QS, mirror,
+elongation, iota, or stability tuples without changing the optimizer wiring;
+the complete pattern is in {doc}`/howto/optimize-a-boundary`.

@@ -92,12 +92,14 @@ def pitch_from_field_range(bmag, depths=TRAPPING_DEPTHS) -> np.ndarray:
 
 
 def plot_j_polar_contours(shared, surfaces, out_dir: Path) -> None:
-    """Polar J(alpha, s) contours at each pitch from the bounce actions.
+    """Polar J(alpha, s) contours at each physical pitch.
 
-    ``shared`` is the :func:`qi_and_maximum_j_from_boozer` output: the total
-    usable bounce action per field line, ``J(s, alpha, pitch)``, is the
-    quantity whose alpha-independence the J-invariance residual enforces.
-    Radius is the flux label ``s``, angle the field-line label ``alpha``.
+    ``shared`` is the :func:`qi_and_maximum_j_from_boozer` output.  The mean
+    action of its complete, usable wells gives one diagnostic value per field
+    line; the objective itself continues to compare every well separately.
+    Following Rodríguez, Helander & Goodman (JPP 90, 905900212, 2024), the
+    disk coordinates are ``x=s*cos(alpha)``, ``y=s*sin(alpha)``: concentric
+    contours indicate alpha-independent J and hence omnigenity.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -108,23 +110,27 @@ def plot_j_polar_contours(shared, surfaces, out_dir: Path) -> None:
     usable = np.asarray(out["usable_mask"])
     alpha = np.asarray(out["alpha"])
     pitch = np.asarray(out["pitch"])
-    j_line = np.sum(np.where(usable, action, 0.0), axis=-1)  # (nsurf, nalpha, npitch)
+    count = np.sum(usable, axis=-1)
+    j_line = np.where(
+        count > 0, np.sum(np.where(usable, action, 0.0), axis=-1) / np.maximum(count, 1), np.nan)
 
     theta = np.concatenate([alpha, alpha[:1] + 2.0 * np.pi])
     radius = np.asarray(surfaces, dtype=float)
     theta_grid, radius_grid = np.meshgrid(theta, radius, indexing="xy")
+    x, y = radius_grid * np.cos(theta_grid), radius_grid * np.sin(theta_grid)
 
     for ip, pitch_value in enumerate(pitch):
         values = j_line[:, :, ip]
         values_periodic = np.concatenate([values, values[:, :1]], axis=1)
 
         fig = plt.figure(figsize=(12, 5))
-        ax_polar = fig.add_subplot(1, 2, 1, projection="polar")
-        contour = ax_polar.contourf(
-            theta_grid, radius_grid, values_periodic, levels=32, cmap="viridis")
+        ax_polar = fig.add_subplot(1, 2, 1)
+        contour = ax_polar.contourf(x, y, values_periodic, levels=24, cmap="viridis")
+        ax_polar.contour(x, y, values_periodic, levels=24, colors="0.25", linewidths=0.35)
+        ax_polar.axhline(0.0, color="white", lw=0.6); ax_polar.axvline(0.0, color="white", lw=0.6)
         ax_polar.set_title(f"J(alpha, s) at 1/pitch = {1.0 / pitch_value:.2f} T")
-        ax_polar.set_ylim(0.0, float(radius.max()))
-        fig.colorbar(contour, ax=ax_polar, pad=0.12, label="J")
+        ax_polar.set_aspect("equal", adjustable="box"); ax_polar.set_xlabel("s cos(alpha)")
+        ax_polar.set_ylabel("s sin(alpha)"); fig.colorbar(contour, ax=ax_polar, pad=0.03, label="J")
 
         ax_lines = fig.add_subplot(1, 2, 2)
         for isurf, surface in enumerate(radius):

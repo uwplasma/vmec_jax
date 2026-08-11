@@ -188,7 +188,11 @@ def test_plot_wout_smoke(solovev_cli, tmp_path):
     rc, _ = _run_cli(["--plot", str(wout_path), "--outdir", str(tmp_path), "--quiet"])
     assert rc == 0
     pngs = sorted(p.name for p in tmp_path.glob("*.png"))
-    assert len(pngs) == 5, pngs
+    assert pngs == [
+        "solovev_boundary3d.png", "solovev_modB.png", "solovev_profiles.png",
+        "solovev_stability.png", "solovev_summary.png", "solovev_surfaces.png",
+    ]
+    assert not list(tmp_path.glob("boozmn_*.nc"))  # in-process Boozer panels need no --booz
 
 
 def test_booz_and_plot_boozmn_smoke(solovev_cli, tmp_path):

@@ -224,6 +224,14 @@ JIT, forward AD, and reverse AD. Derivatives are defined within a fixed well
 topology; marginal and merged masks identify topology changes that an
 optimizer must exclude or resolve.
 
+The ``--plot`` polar diagnostic instead holds the normalized trapping class
+:math:`\lambda_n` fixed across radius,
+:math:`1/\lambda=B_{\min}(s)+\lambda_n[B_{\max}(s)-B_{\min}(s)]`, following
+Rodríguez, Helander & Goodman (2024). It plots
+:math:`x=s\cos\alpha`, :math:`y=s\sin\alpha`; an omnigenous field therefore
+has concentric circular contours. This display convention does not change the
+physical-pitch contract of the optimization objectives.
+
 The constructed-QI target
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -400,6 +408,12 @@ surfaces but decays exponentially with the stability margin.  Both profile
 lanes retain VMEC's near-axis and edge limitations; the traceable Mercier
 lane does not yet support ``lasym = True``.
 
+For a vacuum equilibrium, :math:`p'=0` makes :math:`D_{\rm well}` exactly
+zero; VMEX does not add a pressure floor. The reported Mercier index can still
+contain shear, current, and geodesic terms. In the additional current-free
+limit it reduces to :math:`D_{\rm shear}=S^2/4`, so a positive vacuum value is
+a mathematically defined shear result, not a finite-beta interchange margin.
+
 Parallel current and resistive interchange
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -442,6 +456,12 @@ ideal-Mercier-unstable surface is never accepted based on :math:`D_R` alone.
 After optimization, use ``mercier_shear_state`` to verify
 ``abs(S) >> shear_epsilon`` on every target surface; regularization makes the
 numerics finite but cannot establish GGJ stability at zero shear.
+For a pressure-free, current-free equilibrium, :math:`H=0` and
+:math:`D_{\rm Merc}=S^2/4`, hence the expression above gives :math:`D_R=0`.
+Small reconstructed departures from zero reflect finite-resolution
+cancellation; a zero-beta force-free equilibrium with parallel current may
+retain nonzero current and geodesic contributions. Vacuum :math:`D_R` is
+therefore not a pressure-driven stability margin.
 VMEC2000 does not write ``D_R`` itself.  A live `DCON/GPEC
 <https://github.com/PrincetonUniversity/GPEC>`_ evaluation independently
 reproduces the symmetric VMEC normalization at ``ns=51`` (``D_I`` maximum
@@ -466,6 +486,31 @@ Magnetic well
 
 The dominant stabilizing ingredient of :math:`D_{\mathrm{well}}` — the sign of
 :math:`V''(s)` — is also useful on its own as a cheap, fully traceable proxy.
+The ``--plot`` summary shows this dimensional derivative directly, labeled
+:math:`V''(s)` (magnetic well), and aligns its zero with the stability-index
+axis. Negative values denote a well and positive values a hill.
+
+The separate ``*_stability.png`` figure retains the full Mercier
+decomposition and exposes the pressure-gradient dependence more directly.
+For a trial pressure derivative :math:`p'`, with geometry and current frozen,
+it evaluates
+
+.. math::
+
+   D_{\mathrm{well}}(p') = p'\left(V''-p'T_{pp}\right)T_{bb},\qquad
+   D_{\mathrm{Merc}}(p') = D_{\mathrm{Merc},0}-D_{\mathrm{well},0}
+     +D_{\mathrm{well}}(p'),
+
+and :math:`D_R(p')=D_{R,0}+D_{\mathrm{well},0}-D_{\mathrm{well}}(p')`.
+The plot reports :math:`\min_s D_{\mathrm{Merc}}` and
+:math:`-\max_s D_R`, so positive values are favorable for both criteria. It
+rescales the WOUT pressure shape to trial volume-average beta; because a
+vacuum WOUT contains no such shape, that case is explicitly labeled and uses
+:math:`p(s)\propto1-s`. This is a coefficient-level sensitivity diagnostic,
+not a finite-pressure stability certificate: geometry, Shafranov shift,
+transform, and current respond to pressure, so selected beta points must be
+re-solved before drawing a stability conclusion.
+
 :func:`~vmex.core.optimize.magnetic_well` returns the finite-difference
 vacuum-well measure
 

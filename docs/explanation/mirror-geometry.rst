@@ -824,6 +824,13 @@ numerical gate to 50% therefore probes a scientifically relevant nonlinear
 regime, but it is an equilibrium benchmark only: it does not establish flute,
 firehose, mirror-mode, or kinetic stability.
 
+The runnable coarse-grid continuation additionally reaches 80% requested
+central beta with volume beta ``0.18755``, center-radius expansion ``15.13%``,
+field ratio ``0.62075``, variational residual ``2.73e-15``, and normalized
+pointwise force RMS ``1.25e-2``. Its plot compares the field ratio directly
+with ``sqrt(1-beta)``. This point remains extended validation until a refined
+grid campaign establishes convergence above the current 50% promotion set.
+
 MGRID and vectorized ``xyz -> B`` callables share one external-field adapter.
 MGRID interpolation tests remain in VMEX; filament sampling and
 Biot-Savart parity tests live with ESSOS.

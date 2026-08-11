@@ -5,15 +5,16 @@ Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 
 - ``summary``   3x3 publication diagnostic set: rotational transform (full
   mesh), pressure, parallel (bootstrap) current ``<J.B>``, Mercier ``DMerc``
-  with the Glasser resistive-interchange ``D_R``, the magnetic-well profile,
-  a Velasco-style second-adiabatic-invariant map ``J(alpha, s)`` at fixed
-  pitch, ``|B|`` in Boozer coordinates at mid radius and on the LCFS (line
-  contours with a field line of slope iota), and an equilibrium scalar card;
+  and Glasser ``D_R`` with ``V''(s)`` on the right axis, a 3-D LCFS,
+  a Velasco-style polar second-adiabatic-invariant map ``J(alpha, s)``, ``|B|``
+  in Boozer coordinates at mid radius and on the LCFS (line contours with a
+  field line of slope iota), and an equilibrium scalar card;
 - ``surfaces``  flux-surface cross-sections at several zeta over one field
   period, with the magnetic axis marked;
 - ``modB``      ``|B|`` contours in (zeta, theta) at mid radius and boundary;
 - ``profiles``  iota / pressure / current profiles plus the ``fsqt``
   force-residual convergence trace;
+- ``stability`` Mercier decomposition and a frozen-equilibrium pressure scan;
 - ``3d``        3-D plasma boundary colored by ``|B|`` (jet colormap).
 
 Both stellarator-symmetric and ``lasym`` (asymmetric) equilibria are
@@ -46,6 +47,7 @@ __all__ = [
     "plot_surfaces",
     "plot_modB",
     "plot_profiles",
+    "plot_stability",
     "plot_boundary_3d",
     "plot_boozmn_modB",
     "plot_boozmn_spectrum",
@@ -214,6 +216,16 @@ def _half_mesh_s(ns: int) -> np.ndarray:
     return (np.arange(1, ns, dtype=float) - 0.5) / float(ns - 1)
 
 
+def _volume_second_derivative(wout) -> tuple[np.ndarray, np.ndarray]:
+    """Return physical ``d²V/ds²`` on VMEC's half mesh."""
+    ns = int(wout.ns)
+    if ns < 4:
+        raise ValueError("V'' requires at least four radial surfaces")
+    s_half = _half_mesh_s(ns)
+    vprime_half = (2.0 * np.pi) ** 2 * np.abs(np.asarray(wout.vp, dtype=float)[1:])
+    return s_half, np.gradient(vprime_half, s_half, edge_order=2)
+
+
 def _pi_ticks(ax, axis: str = "y") -> None:
     ticks = [0.0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi]
     labels = ["0", r"$\pi/2$", r"$\pi$", r"$3\pi/2$", r"$2\pi$"]
@@ -331,6 +343,8 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
         ratio = np.where(bdotb != 0.0, _MU0 * jdotb / np.where(bdotb != 0.0, bdotb, 1.0), 0.0)
     dmerc_recon = np.zeros(ns)
     d_r = np.zeros(ns)
+    tpp_profile = np.zeros(ns)
+    tbb_profile = np.zeros(ns)
     for i in range(1, ns - 1):
         phip_full = 0.5 * (phip_real[i + 1] + phip_real[i])
         gsqrt_raw = 0.5 * (gsqrt[i] + gsqrt[i + 1])
@@ -340,6 +354,8 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
         b2i = 0.5 * (b2[i + 1] + b2[i])
         tpp = float(np.mean(gsqrt_full / b2i)) * two_pi_sq
         tbb = float(np.mean(b2i * gsqrt_full * gpp)) * two_pi_sq
+        tpp_profile[i] = tpp
+        tbb_profile[i] = tbb
         bdotj_norm = np.where(gsqrt_raw != 0.0, bdotk[i] / np.where(gsqrt_raw != 0.0, gsqrt_raw, 1.0), 0.0)
         jdotb_i = bdotj_norm * gpp * gsqrt_full
         tjb = float(np.mean(jdotb_i)) * two_pi_sq
@@ -368,7 +384,57 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
             "note": f"D_R self-check failed (DMerc mismatch {mismatch:.1e})",
             "d_r": None,
         }
-    return {"valid": True, "note": "", "d_r": d_r, "dmerc_recon": dmerc_recon, "mismatch": mismatch}
+    return {
+        "valid": True, "note": "", "d_r": d_r,
+        "dmerc_recon": dmerc_recon, "mismatch": mismatch,
+        "vpp": vpp, "tpp": tpp_profile, "tbb": tbb_profile,
+        "phip_full_h": phip_full_h,
+    }
+
+
+def _frozen_pressure_scan_from_wout(
+    wout, d_r_info: dict[str, Any], beta: np.ndarray,
+) -> dict[str, Any]:
+    """Evaluate explicit ``p'`` stability terms without re-solving equilibrium."""
+    beta = np.asarray(beta, dtype=float)
+    if beta.ndim != 1 or beta.size < 2 or np.any(beta < 0.0):
+        raise ValueError("beta must be a nonnegative 1-D array with at least two entries")
+    if not d_r_info.get("valid"):
+        return {"valid": False, "note": d_r_info.get("note", "D_R unavailable")}
+
+    ns = int(wout.ns)
+    hs = 1.0 / (ns - 1)
+    pressure = np.asarray(wout.pres, dtype=float)
+    peak_pressure = float(np.max(np.abs(pressure[1:])))
+    if peak_pressure > 0.0:
+        shape = pressure / peak_pressure
+        profile_note = "WOUT pressure shape"
+    else:
+        shape = np.zeros(ns)
+        shape[1:] = 1.0 - _half_mesh_s(ns)
+        profile_note = r"vacuum seed $p(s)\propto1-s$"
+
+    wb = abs(float(wout.wb))
+    beta_per_pa = _MU0 * hs * float(np.sum(
+        np.abs(np.asarray(wout.vp, dtype=float)[1:]) * shape[1:])) / wb if wb else 0.0
+    if not np.isfinite(beta_per_pa) or beta_per_pa <= 0.0:
+        return {"valid": False, "note": "pressure-to-beta normalization unavailable"}
+
+    unit_presp = np.zeros(ns)
+    unit_presp[1:-1] = _MU0 * (shape[2:] - shape[1:-1]) / (
+        hs * np.asarray(d_r_info["phip_full_h"], dtype=float))
+    presp = (beta / beta_per_pa)[:, None] * unit_presp[None, :]
+    vpp = np.asarray(d_r_info["vpp"], dtype=float)[None, :]
+    tpp = np.asarray(d_r_info["tpp"], dtype=float)[None, :]
+    tbb = np.asarray(d_r_info["tbb"], dtype=float)[None, :]
+    dwell = presp * (vpp - presp * tpp) * tbb
+    original_dwell = np.asarray(wout.DWell, dtype=float)[None, :]
+    dmerc = np.asarray(wout.DMerc, dtype=float)[None, :] - original_dwell + dwell
+    d_r = np.asarray(d_r_info["d_r"], dtype=float)[None, :] + original_dwell - dwell
+    return {
+        "valid": True, "note": profile_note, "beta": beta,
+        "dwell": dwell, "dmerc": dmerc, "d_r": d_r,
+    }
 
 
 # ==========================================================================
@@ -441,25 +507,21 @@ def _j_invariant_map(
     booz: dict[str, Any],
     *,
     pitch_fraction: float = 0.5,
-    nalpha: int = 48,
+    nalpha: int = 96,
     points_per_period: int = 64,
     quadrature_order: int = 32,
 ) -> dict[str, Any]:
-    """Second adiabatic invariant ``J(alpha, s)`` at one fixed physical pitch.
+    """Second adiabatic invariant ``J(alpha, s)`` at fixed trapping class.
 
-    Presentation follows J. L. Velasco's KNOSOS convention — maps of ``J``
-    over the flux label and the field-line label ``alpha`` at a single pitch
-    ``lambda`` intermediate between deeply trapped and barely trapped, so
-    closed (alpha-independent) contours certify omnigenity while island/open
-    structures expose classes of radially drifting orbits (Velasco et al.,
-    Nucl. Fusion 61, 116059 (2021); KNOSOS, JCP 418, 109512 (2020)).  The
-    pitch is parameterized as ``1/lambda = B* = (1-t) Bmin + t Bmax`` with
-    ``t = 1/2`` (the trapped-fraction midpoint convention of the direct-J
-    optimization literature, arXiv:2608.02418), and ``J`` is normalized to
-    ``J/(v R0)`` (dimensionless, Velasco's prompt-loss normalization).  The
-    bounce integrals reuse the differentiable Gauss-Legendre kernel of
-    :func:`vmex.core.bounce.bounce_action` (the same construction as DESC's
-    ``Bounce1D`` field-line bounce integrals).
+    The polar presentation and pitch convention follow Fig. 10 of Rodríguez,
+    Helander & Goodman, J. Plasma Phys. 90, 905900212 (2024): on each surface,
+    ``1/lambda = Bmin + lambda_n * (Bmax - Bmin)``.  Thus one normalized
+    trapped-particle class ``lambda_n`` is followed radially even when the
+    trapping interval changes with ``s``.  Omnigenity makes ``J`` independent
+    of ``alpha``, so its contours in ``x=s*cos(alpha)``, ``y=s*sin(alpha)``
+    become concentric circles.  ``J`` is normalized to ``J/(v R0)`` and the
+    bounce integrals reuse the differentiable sine-mapped Gauss-Legendre
+    kernel of :func:`vmex.core.bounce.bounce_action`, also used by DESC.
     """
     from .bounce import bounce_action_from_boozer
 
@@ -468,15 +530,16 @@ def _j_invariant_map(
     nfp = int(booz["nfp"])
     iota_b = booz["iota_b"]
 
-    # Global trapping range from a coarse angular grid on every surface.
+    # Surface-local trapping ranges implement the fixed-lambda_n convention.
     theta = np.linspace(0.0, 2.0 * np.pi, 61)
     zeta = np.linspace(0.0, 2.0 * np.pi / nfp, 61)
     b_all = np.stack([_boozer_surface_modB(booz, k, theta, zeta) for k in range(nsurf)])
-    b_min, b_max = float(b_all.min()), float(b_all.max())
-    if not (np.isfinite(b_min) and np.isfinite(b_max)) or b_min <= 0.0 or b_max <= b_min:
+    b_min = b_all.min(axis=(1, 2)); b_max = b_all.max(axis=(1, 2))
+    if (not np.all(np.isfinite(b_min)) or not np.all(np.isfinite(b_max))
+            or np.any(b_min <= 0.0) or np.any(b_max <= b_min)):
         raise ValueError("Boozer |B| range is degenerate; cannot choose a pitch")
-    b_star = (1.0 - pitch_fraction) * b_min + pitch_fraction * b_max
-    pitch = np.array([1.0 / b_star])
+    b_star = b_min + float(pitch_fraction) * (b_max - b_min)
+    pitch = 1.0 / b_star
 
     # Trace enough field periods to close at least one poloidal transit even
     # for small-iota / axisymmetric-boundary decks (well length ~ 2*pi/iota).
@@ -491,7 +554,7 @@ def _j_invariant_map(
             xm_b=booz["xm_b"], xn_b=booz["xn_b"],
             iota_b=iota_b[k : k + 1],
             G_b=booz["G_b"][k : k + 1], I_b=booz["I_b"][k : k + 1],
-            nfp=nfp, alpha=alpha, pitch=pitch,
+            nfp=nfp, alpha=alpha, pitch=pitch[k : k + 1],
             points_per_period=int(points_per_period),
             num_periods=num_periods,
             bmns_b=None if booz["bmns_b"] is None else booz["bmns_b"][k : k + 1],
@@ -506,7 +569,7 @@ def _j_invariant_map(
         "alpha": alpha,
         "s_b": booz["s_b"],
         "j_map": j_map,
-        "pitch": float(pitch[0]),
+        "pitch": pitch,
         "pitch_fraction": float(pitch_fraction),
         "b_min": b_min,
         "b_max": b_max,
@@ -527,53 +590,67 @@ def _profile_panel(ax, x, y, *, xlabel: str, ylabel: str, title: str, color=None
     ax.set_title(title)
 
 
-def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float) -> None:
-    """DMerc and Glasser D_R on a shared symlog axis (interior surfaces)."""
+def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float):
+    """Plot ``DMerc`` and ``D_R`` with physical ``V''(s)`` on the right axis."""
     ns = int(wout.ns)
     s = np.linspace(0.0, 1.0, ns)
     dmerc = np.asarray(wout.DMerc, dtype=float)
     lo = max(2, int(round(s_plot_ignore * ns)))
     sl = slice(lo, ns - 1)
-    ax.plot(s[sl], dmerc[sl], ".-", color=_LINE_COLORS[0], label=r"$D_{Merc}$ ($>0$ stable)")
+    lines = [ax.plot(
+        s[sl], dmerc[sl], marker="o", markersize=3.5, linestyle="-",
+        color=_LINE_COLORS[0], label=r"$D_{Merc}>0$")[0]]
     finite = dmerc[sl][np.isfinite(dmerc[sl])]
     peak = float(np.max(np.abs(finite))) if finite.size else 1.0
     if d_r_info.get("valid"):
         d_r = np.asarray(d_r_info["d_r"], dtype=float)
-        ax.plot(s[sl], d_r[sl], ".-", color=_LINE_COLORS[1], label=r"$D_R$ ($\leq 0$ stable)")
+        lines.append(ax.plot(
+            s[sl], d_r[sl], marker="s", markersize=3.2, linestyle="--",
+            color=_LINE_COLORS[1], label=r"$D_R\leq0$")[0])
         finite_r = d_r[sl][np.isfinite(d_r[sl])]
         if finite_r.size:
             peak = max(peak, float(np.max(np.abs(finite_r))))
     else:
-        ax.plot([], [], " ", label=f"$D_R$: {d_r_info.get('note', 'unavailable')}")
+        lines.append(ax.plot(
+            [], [], " ", label=f"$D_R$: {d_r_info.get('note', 'unavailable')}")[0])
+    peak = max(peak, np.finfo(float).tiny)
     if peak > 30.0:
         ax.set_yscale("symlog", linthresh=max(1.0e-3, 1.0e-3 * peak))
     ax.axhline(0.0, color="0.4", linewidth=0.8, zorder=1)
+    ax.set_ylim(-1.05 * peak, 1.05 * peak)
     ax.set_xlabel(_S_LABEL)
     ax.set_ylabel(r"$D_{Merc}$, $D_R$")
-    ax.set_title("Mercier / resistive interchange")
-    ax.legend(loc="best")
+    ax.set_xlim(0.0, 1.0)
 
-
-def _magnetic_well_panel(ax, wout) -> None:
-    """Radial magnetic-well profile ``W(s) = (V'(0) - V'(s)) / V'(0)``."""
-    vp = np.abs(np.asarray(wout.vp, dtype=float))[1:]
-    s_half = _half_mesh_s(int(wout.ns))
-    v0 = 1.5 * vp[0] - 0.5 * vp[1]
-    v1 = 1.5 * vp[-1] - 0.5 * vp[-2]
-    if v0 == 0.0:
-        ax.text(0.5, 0.5, "V'(0) = 0", ha="center", va="center", transform=ax.transAxes)
-        return
-    well = (v0 - vp) / v0
-    ax.plot(s_half, 100.0 * well, ".-", color=_LINE_COLORS[2])
-    ax.axhline(0.0, color="0.4", linewidth=0.8, zorder=1)
-    ax.set_xlabel(_S_LABEL)
-    ax.set_ylabel(r"$W = (V'(0)-V'(s))/V'(0)$ [%]")
-    ax.set_title(f"magnetic well  (edge: {100.0 * (v0 - v1) / v0:.2f}%)")
+    well_ax = ax.twinx()
+    s_vpp, vpp = _volume_second_derivative(wout)
+    finite_vpp = vpp[sl][np.isfinite(vpp[sl])]
+    peak_vpp = max(float(np.max(np.abs(finite_vpp))) if finite_vpp.size else 1.0,
+                   np.finfo(float).tiny)
+    lines.append(well_ax.plot(
+        s_vpp[sl], vpp[sl], marker="^", markersize=3.2, linestyle="-.",
+        color=_LINE_COLORS[2], label=r"$V''<0$ well")[0])
+    well_ax.axhline(0.0, color="0.4", linewidth=0.8, zorder=1)
+    well_ax.set_ylim(-1.05 * peak_vpp, 1.05 * peak_vpp)
+    well_ax.set_ylabel(r"$V''(s)$ [m$^3$] (magnetic well)", color=_LINE_COLORS[2])
+    well_ax.tick_params(axis="y", colors=_LINE_COLORS[2])
+    well_ax.spines["right"].set_color(_LINE_COLORS[2])
+    ax.set_title(r"Mercier, resistive interchange, and $V''(s)$")
+    ax.legend(
+        lines, [line.get_label() for line in lines], loc="upper center",
+        bbox_to_anchor=(0.5, -0.20), ncol=3, borderaxespad=0.0,
+        framealpha=1.0, facecolor="white", edgecolor="0.7",
+        handlelength=1.8, columnspacing=0.8,
+    )
+    return well_ax
 
 
 def _j_map_panel(ax, fig, j_info: dict[str, Any], r_major: float) -> None:
-    """Velasco-style non-filled contour map of ``J/(v R0)`` in (alpha, s)."""
-    j_norm = j_info["j_map"] / max(float(r_major), np.finfo(float).tiny)
+    """Velasco-style polar map of ``J/(v R0)`` in ``x=s cos(alpha), y=s sin(alpha)``."""
+    length_scale = abs(float(r_major))
+    if not np.isfinite(length_scale) or length_scale <= np.finfo(float).tiny:
+        length_scale = 1.0
+    j_norm = j_info["j_map"] / length_scale
     masked = np.ma.masked_invalid(j_norm)
     if masked.count() < 4 or np.ptp(masked.compressed()) == 0.0:
         ax.text(
@@ -581,19 +658,24 @@ def _j_map_panel(ax, fig, j_info: dict[str, Any], r_major: float) -> None:
             ha="center", va="center", transform=ax.transAxes,
         )
         ax.set_title("second adiabatic invariant")
-        ax.set_xlabel(r"field-line label $\alpha$")
-        ax.set_ylabel(_S_LABEL)
+        ax.set_xlabel(r"$s\cos\alpha$")
+        ax.set_ylabel(r"$s\sin\alpha$")
         return
-    alpha2d, s2d = np.meshgrid(j_info["alpha"], j_info["s_b"])
-    cs = ax.contour(alpha2d, s2d, masked, levels=14, cmap=_CMAP_J, linewidths=1.4)
-    fig.colorbar(cs, ax=ax, pad=0.02, label=r"$J\,/\,(v R_0)$")
-    ax.set_xlim(0.0, 2.0 * np.pi)
-    _pi_ticks(ax, "x")
-    ax.set_xlabel(r"field-line label $\alpha$")
-    ax.set_ylabel(_S_LABEL)
-    ax.set_title(
-        rf"second adiabatic invariant, $\lambda = {j_info['pitch']:.2f}$ T$^{{-1}}$"
-    )
+    alpha = np.concatenate([j_info["alpha"], j_info["alpha"][:1] + 2.0 * np.pi])
+    periodic = np.ma.concatenate([masked, masked[:, :1]], axis=1)
+    alpha2d, s2d = np.meshgrid(alpha, j_info["s_b"])
+    x, y = s2d * np.cos(alpha2d), s2d * np.sin(alpha2d)
+    levels = np.linspace(float(periodic.min()), float(periodic.max()), 15)
+    filled = ax.contourf(x, y, periodic, levels=levels, cmap=_CMAP_J, extend="both")
+    ax.contour(x, y, periodic, levels=levels, colors="0.25", linewidths=0.35, alpha=0.65)
+    fig.colorbar(filled, ax=ax, pad=0.02, label=r"$J\,/\,(v R_0)$")
+    radius = max(1.0, float(np.max(j_info["s_b"])))
+    ax.axhline(0.0, color="white", linewidth=0.6, alpha=0.75)
+    ax.axvline(0.0, color="white", linewidth=0.6, alpha=0.75)
+    ax.set_xlim(-radius, radius); ax.set_ylim(-radius, radius)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel(r"$s\cos\alpha$"); ax.set_ylabel(r"$s\sin\alpha$")
+    ax.set_title(rf"second adiabatic invariant, $\lambda_n={j_info['pitch_fraction']:.2f}$")
 
 
 def _boozer_modB_panel(ax, fig, booz: dict[str, Any], k: int, *, title: str) -> None:
@@ -662,6 +744,30 @@ def _scalar_card_panel(ax, wout) -> None:
         ax.text(0.46, y, value, transform=ax.transAxes, fontsize=11.0, va="top")
 
 
+def _boundary_3d_panel(ax, wout, *, ntheta: int, nzeta: int):
+    """Draw a smooth jet-mapped LCFS on an existing 3-D axis."""
+    import matplotlib
+    from matplotlib import cm
+    from matplotlib.colors import Normalize
+
+    cmap = matplotlib.colormaps[_CMAP_3D]
+    theta = np.linspace(0.0, 2.0 * np.pi, int(ntheta))
+    phi = np.linspace(0.0, 2.0 * np.pi, int(nzeta))
+    R, Z = surface_rz(wout, s_index=int(wout.ns) - 1, theta=theta, phi=phi)
+    B = surface_modB(wout, s_index=int(wout.ns) - 1, theta=theta, phi=phi)
+    phi2d = np.meshgrid(phi, theta)[0]
+    X, Y = R * np.cos(phi2d), R * np.sin(phi2d)
+    norm = Normalize(float(B.min()), float(B.max()))
+    ax.plot_surface(
+        X, Y, Z, facecolors=cmap(norm(B)), rstride=1, cstride=1,
+        antialiased=False, linewidth=0.0, shade=False,
+    )
+    scale = 0.7 * max(np.abs(X).max(), np.abs(Y).max())
+    ax.auto_scale_xyz([-scale, scale], [-scale, scale], [-scale, scale])
+    ax.set_box_aspect([1, 1, 1]); ax.set_axis_off()
+    return cm.ScalarMappable(cmap=cmap, norm=norm)
+
+
 def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
     """Build the 3x3 summary figure; returns ``(fig, meta)`` for inspection."""
     plt = _import_matplotlib()
@@ -671,7 +777,13 @@ def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
     meta: dict[str, Any] = {}
 
     with _rc_context():
-        fig, axes = plt.subplots(3, 3, figsize=(15.0, 11.5), layout="constrained")
+        fig = plt.figure(figsize=(15.0, 11.5), layout="constrained")
+        grid = fig.add_gridspec(3, 3)
+        axes = np.empty((3, 3), dtype=object)
+        for row in range(3):
+            for column in range(3):
+                projection = "3d" if (row, column) == (1, 1) else None
+                axes[row, column] = fig.add_subplot(grid[row, column], projection=projection)
 
         # 1. rotational transform -- full mesh only.
         _profile_panel(
@@ -693,11 +805,21 @@ def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
             title=r"parallel (bootstrap) current", color=_LINE_COLORS[2],
         )
 
-        # 3. stability: DMerc + D_R, magnetic well (adjacent panels).
+        # Stability profiles share one panel; right-axis color identifies W.
         d_r_info = _glasser_d_r_from_wout(wout)
         meta["d_r"] = d_r_info
-        _stability_panel(axes[1, 0], wout, d_r_info, s_plot_ignore=s_plot_ignore)
-        _magnetic_well_panel(axes[1, 1], wout)
+        meta["well_axis"] = _stability_panel(
+            axes[1, 0], wout, d_r_info, s_plot_ignore=s_plot_ignore)
+
+        # The summary includes the LCFS overview; --plot also writes it alone.
+        summary_nzeta = min(480, max(240, 80 * int(wout.nfp)))
+        boundary_map = _boundary_3d_panel(
+            axes[1, 1], wout, ntheta=120, nzeta=summary_nzeta)
+        axes[1, 1].set_title("3-D plasma boundary")
+        fig.colorbar(
+            boundary_map, ax=axes[1, 1], pad=0.0, fraction=0.045,
+            shrink=0.72, label=r"$|B|$ [T]",
+        )
 
         # 2 + 4. Boozer-based panels: J(alpha, s) map and |B| contours.
         booz_note = ""
@@ -717,8 +839,9 @@ def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
                     ha="center", va="center", transform=axes[1, 2].transAxes,
                 )
                 axes[1, 2].set_title("second adiabatic invariant")
-                axes[1, 2].set_xlabel(r"field-line label $\alpha$")
-                axes[1, 2].set_ylabel(_S_LABEL)
+                axes[1, 2].set_xlabel(r"$s\cos\alpha$")
+                axes[1, 2].set_ylabel(r"$s\sin\alpha$")
+                axes[1, 2].set_aspect("equal", adjustable="box")
             s_mid = float(booz["s_b"][booz["index_mid"]])
             _boozer_modB_panel(
                 axes[2, 1], fig, booz, booz["index_mid"],
@@ -730,8 +853,12 @@ def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
             )
             meta["booz"] = booz
         else:
+            axes[1, 2].text(
+                0.5, 0.5, booz_note, ha="center", va="center", transform=axes[1, 2].transAxes)
+            axes[1, 2].set_title("second adiabatic invariant")
+            axes[1, 2].set_xlabel(r"$s\cos\alpha$"); axes[1, 2].set_ylabel(r"$s\sin\alpha$")
+            axes[1, 2].set_aspect("equal", adjustable="box")
             for ax, title in (
-                (axes[1, 2], "second adiabatic invariant"),
                 (axes[2, 1], r"$|B|$ in Boozer angles, $s = 0.5$"),
                 (axes[2, 2], r"$|B|$ in Boozer angles, LCFS"),
             ):
@@ -745,7 +872,7 @@ def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
 
         meta["axes"] = {
             "iota": axes[0, 0], "pressure": axes[0, 1], "jdotb": axes[0, 2],
-            "stability": axes[1, 0], "well": axes[1, 1], "j_invariant": axes[1, 2],
+            "stability": axes[1, 0], "boundary_3d": axes[1, 1], "j_invariant": axes[1, 2],
             "card": axes[2, 0], "boozer_mid": axes[2, 1], "boozer_lcfs": axes[2, 2],
         }
     return fig, meta
@@ -758,6 +885,78 @@ def plot_summary(wout, out_path: str | Path, *, s_plot_ignore: float = 0.2) -> P
     out_path = Path(out_path)
     fig.savefig(out_path, dpi=_DPI)
     plt.close(fig)
+    return out_path
+
+
+def plot_stability(
+    wout, out_path: str | Path, *, beta_max: float | None = None,
+    s_plot_ignore: float = 0.2,
+) -> Path:
+    """Plot Mercier terms and frozen-equilibrium pressure stability margins."""
+    plt = _import_matplotlib()
+    wout, _ = _as_wout(wout)
+    ns = int(wout.ns)
+    s = np.linspace(0.0, 1.0, ns)
+    lo = max(2, int(round(s_plot_ignore * ns)))
+    sl = slice(lo, ns - 1)
+    if beta_max is None:
+        beta_max = max(0.05, 1.5 * float(wout.betatotal))
+    if not np.isfinite(beta_max) or beta_max <= 0.0:
+        raise ValueError("beta_max must be positive")
+
+    d_r_info = _glasser_d_r_from_wout(wout)
+    scan = _frozen_pressure_scan_from_wout(
+        wout, d_r_info, np.linspace(0.0, float(beta_max), 41))
+    with _rc_context():
+        fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.8), layout="constrained")
+        terms = (
+            ("DMerc", r"$D_{Merc}$", "black", "-", 2.0),
+            ("DShear", r"$D_{shear}$", _LINE_COLORS[0], "--", 1.4),
+            ("DWell", r"$D_{well}$", _LINE_COLORS[1], "-.", 1.4),
+            ("DCurr", r"$D_{curr}$", _LINE_COLORS[2], ":", 1.7),
+            ("DGeod", r"$D_{geod}$", _LINE_COLORS[3], (0, (5, 2)), 1.4),
+        )
+        for name, label, color, linestyle, linewidth in terms:
+            axes[0].plot(
+                s[sl], np.asarray(getattr(wout, name), dtype=float)[sl],
+                color=color, linestyle=linestyle, linewidth=linewidth, label=label)
+        axes[0].axhline(0.0, color="0.4", linewidth=0.8)
+        axes[0].set(xlabel=_S_LABEL, ylabel="Mercier contribution", title="Mercier decomposition")
+        axes[0].legend(
+            loc="upper center", bbox_to_anchor=(0.5, -0.20), ncol=3,
+            borderaxespad=0.0, framealpha=1.0, facecolor="white", edgecolor="0.7")
+
+        if scan.get("valid"):
+            beta_percent = 100.0 * np.asarray(scan["beta"])
+            dmerc_margin = np.nanmin(np.asarray(scan["dmerc"])[:, sl], axis=1)
+            d_r_margin = -np.nanmax(np.asarray(scan["d_r"])[:, sl], axis=1)
+            axes[1].plot(
+                beta_percent, dmerc_margin, color=_LINE_COLORS[0], marker="o",
+                markersize=3.0, label=r"$\min D_{Merc}$")
+            axes[1].plot(
+                beta_percent, d_r_margin, color=_LINE_COLORS[1], linestyle="--",
+                marker="s", markersize=3.0, label=r"$-\max D_R$")
+            beta_now = 100.0 * float(wout.betatotal)
+            if 0.0 < beta_now <= 100.0 * float(beta_max):
+                axes[1].axvline(
+                    beta_now, color="0.35", linestyle=":", linewidth=1.2,
+                    label=rf"WOUT $\beta={beta_now:.2f}\%$")
+            axes[1].set_title(f"Frozen pressure ramp\n{scan['note']}")
+            axes[1].legend(
+                loc="upper center", bbox_to_anchor=(0.5, -0.20), ncol=3,
+                borderaxespad=0.0, framealpha=1.0, facecolor="white", edgecolor="0.7")
+        else:
+            axes[1].text(
+                0.5, 0.5, scan.get("note", "pressure scan unavailable"),
+                ha="center", va="center", transform=axes[1].transAxes)
+            axes[1].set_title("Frozen-equilibrium pressure scan unavailable")
+        axes[1].axhline(0.0, color="0.4", linewidth=0.8)
+        axes[1].set_xlabel(r"trial $\langle\beta\rangle$ [%]")
+        axes[1].set_ylabel("worst stability margin (>0 favorable)")
+
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
     return out_path
 
 
@@ -919,42 +1118,21 @@ def plot_boundary_3d(
     wout,
     out_path: str | Path,
     *,
-    ntheta: int = 60,
+    ntheta: int = 180,
     nzeta: int | None = None,
 ) -> Path:
     """3-D plasma boundary colored by ``|B|`` (full torus, jet colormap)."""
     plt = _import_matplotlib()
-    import matplotlib
-    from matplotlib import cm
-    from matplotlib.colors import Normalize
-
-    cmap = matplotlib.colormaps[_CMAP_3D]
     wout, _ = _as_wout(wout)
-    ns, nfp = int(wout.ns), int(wout.nfp)
+    nfp = int(wout.nfp)
     if nzeta is None:
-        nzeta = min(360, max(120, 60 * nfp))
-    theta = np.linspace(0.0, 2.0 * np.pi, ntheta)
-    phi = np.linspace(0.0, 2.0 * np.pi, int(nzeta))
-    R, Z = surface_rz(wout, s_index=ns - 1, theta=theta, phi=phi)
-    B = surface_modB(wout, s_index=ns - 1, theta=theta, phi=phi)
-    phi2d = np.meshgrid(phi, theta)[0]
-    X, Y = R * np.cos(phi2d), R * np.sin(phi2d)
-    B_scaled = (B - B.min()) / (B.max() - B.min() + 1e-30)
+        nzeta = min(720, max(360, 120 * nfp))
 
     with _rc_context():
         fig = plt.figure(figsize=(5.6, 4.8), frameon=False)
         ax = fig.add_subplot(111, projection="3d")
-        ax.plot_surface(
-            X, Y, Z, facecolors=cmap(B_scaled), rstride=1, cstride=1,
-            antialiased=False, linewidth=0.0,
-        )
-        scale = 0.7 * max(np.abs(X).max(), np.abs(Y).max())
-        ax.auto_scale_xyz([-scale, scale], [-scale, scale], [-scale, scale])
-        ax.set_box_aspect([1, 1, 1])
-        ax.set_axis_off()
+        sm = _boundary_3d_panel(ax, wout, ntheta=ntheta, nzeta=int(nzeta))
         cax = fig.add_axes([0.21, 0.86, 0.60, 0.03])
-        sm = cm.ScalarMappable(cmap=cmap, norm=Normalize(float(B.min()), float(B.max())))
-        sm.set_array([])
         fig.colorbar(sm, orientation="horizontal", cax=cax).set_label(r"$|B|$ [T]")
         out_path = Path(out_path)
         fig.savefig(out_path, dpi=_DPI, bbox_inches="tight", pad_inches=0.05)
@@ -971,6 +1149,7 @@ _WOUT_FIGURES = {
     "surfaces": ("surfaces", plot_surfaces),
     "modB": ("modB", plot_modB),
     "profiles": ("profiles", plot_profiles),
+    "stability": ("stability", plot_stability),
     "3d": ("boundary3d", plot_boundary_3d),
 }
 
@@ -978,7 +1157,7 @@ _WOUT_FIGURES = {
 def plot_wout(
     wout,
     outdir: str | Path,
-    which: Sequence[str] = ("summary", "surfaces", "modB", "profiles", "3d"),
+    which: Sequence[str] = ("summary", "surfaces", "modB", "profiles", "stability", "3d"),
     *,
     name: str | None = None,
 ) -> dict[str, Path]:
@@ -991,7 +1170,7 @@ def plot_wout(
     outdir:
         Output directory (created if missing).
     which:
-        Any subset of ``("summary", "surfaces", "modB", "profiles", "3d")``.
+        Any subset of ``("summary", "surfaces", "modB", "profiles", "stability", "3d")``.
     name:
         Basename prefix for the figures (default: case name from the path).
 

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmex"
-version = "0.4.0"
+version = "0.5.0"
 description = "JAX implementation of VMEC2000 with differentiable fixed-boundary and branch-local free-boundary research paths."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,6 +32,7 @@ dependencies = [
   "matplotlib",
   "packaging",
   "booz_xform_jax",
+  # 0.8.8 adds the checked tridiagonal fallback used by VMEX's preconditioner.
   "solvax>=0.8.8",
   "tomli; python_version < '3.11'",
 ]
@@ -93,7 +94,7 @@ dev = [
   "pytest",
   "pytest-cov",
   "pytest-xdist",
-  "ruff<0.16",
+  "ruff",
   "sphinx",
   "sphinx-copybutton",
   "sphinx-design",

@@ -103,8 +103,7 @@ def test_map_ensemble_preserves_order_and_is_serial_at_one_worker():
 
 
 def test_default_workers_clamping():
-    cpu = __import__("os").cpu_count() or 1
-    # None -> min(n_items, cpu)
+    cpu = parallel.available_cpus()
     assert parallel.default_workers(3) == min(3, cpu)
     assert parallel.default_workers(10_000) == min(10_000, cpu)
     # explicit -> clamped to [1, n_items]
@@ -112,6 +111,44 @@ def test_default_workers_clamping():
     assert parallel.default_workers(4, 0) == 1
     assert parallel.default_workers(4, -5) == 1
     assert parallel.default_workers(0) == 1
+
+
+def test_available_cpus_respects_process_limits(monkeypatch):
+    monkeypatch.setattr(parallel.os, "process_cpu_count", lambda: 3, raising=False)
+    monkeypatch.setattr(parallel.os, "cpu_count", lambda: 64)
+    assert parallel.available_cpus() == 3
+
+
+def test_available_cpus_uses_affinity_fallback(monkeypatch):
+    monkeypatch.delattr(parallel.os, "process_cpu_count", raising=False)
+    monkeypatch.setattr(
+        parallel.os, "sched_getaffinity", lambda _pid: {2, 4}, raising=False
+    )
+    monkeypatch.setattr(parallel.os, "cpu_count", lambda: 64)
+    assert parallel.available_cpus() == 2
+
+
+def test_available_cpus_respects_scheduler_allocation(monkeypatch):
+    monkeypatch.delattr(parallel.os, "process_cpu_count", raising=False)
+    monkeypatch.delattr(parallel.os, "sched_getaffinity", raising=False)
+    monkeypatch.setattr(parallel.os, "cpu_count", lambda: 64)
+    for name in ("SLURM_CPUS_PER_TASK", "PBS_NP", "NSLOTS", "LSB_DJOB_NUMPROC"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "6")
+    assert parallel.available_cpus() == 6
+
+
+def test_available_cpus_ignores_unavailable_hints(monkeypatch):
+    monkeypatch.delattr(parallel.os, "process_cpu_count", raising=False)
+
+    def unavailable(_pid):
+        raise OSError("affinity unavailable")
+
+    monkeypatch.setattr(parallel.os, "sched_getaffinity", unavailable, raising=False)
+    monkeypatch.setattr(parallel.os, "cpu_count", lambda: 7)
+    for name in ("SLURM_CPUS_PER_TASK", "PBS_NP", "NSLOTS", "LSB_DJOB_NUMPROC"):
+        monkeypatch.setenv(name, "invalid")
+    assert parallel.available_cpus() == 7
 
 
 def test_map_ensemble_exception_policy():
