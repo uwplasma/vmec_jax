@@ -474,20 +474,85 @@ def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
     interior = np.asarray(profile)[2:-1]
     assert np.all(np.isfinite(interior))
     assert np.any(interior != 0.0)
-    dmerc = stab.d_merc_state(eq.state, eq.runtime)
-    np.testing.assert_allclose(dmerc, eq.wout.DMerc, rtol=1e-10, atol=1e-13)
-    np.testing.assert_allclose(opt.d_merc(eq), eq.wout.DMerc, rtol=0.0, atol=0.0)
-    d_r = stab.glasser_d_r_state(eq.state, eq.runtime, shear_epsilon=1.0e-8)
-    assert np.all(np.isfinite(np.asarray(d_r)))
 
-    _, tangent_profiles = jax.jvp(
-        lambda state: jnp.concatenate((
-            stab.d_merc_state(state, eq.runtime)[2:-1],
-            stab.glasser_d_r_state(
-                state, eq.runtime, shear_epsilon=1.0e-8)[2:-1])),
-        (eq.state,), (tangent,))
-    assert np.all(np.isfinite(np.asarray(tangent_profiles)))
-    assert np.any(np.asarray(tangent_profiles) != 0.0)
+
+def test_lasym_dmerc_matches_wout_and_vmec2000(lasym_finite_beta_eq):
+    """LASYM DMerc: wout-engine identity plus the live VMEC2000 anchor.
+
+    The pinned profile is xvmec2000 output for this exact deck (measured
+    agreement 1.6e-4 relative; regression gate 2e-3).  VMEC2000's own lasym
+    Mercier lane is a valid anchor: mercier.f integrates full-theta-grid
+    real-space fields with the uniform lasym ``wint`` (fixaray.f dnorm3)
+    and its jxbforce.f inputs carry both parity channels.
+    """
+    eq = lasym_finite_beta_eq
+    actual = np.asarray(jax.jit(stab.d_merc_state)(eq.state, eq.runtime))
+    np.testing.assert_allclose(
+        actual, np.asarray(eq.wout.DMerc), rtol=1e-10, atol=1e-13)
+    np.testing.assert_array_equal(np.asarray(opt.d_merc(eq)),
+                                  np.asarray(eq.wout.DMerc))
+    vmec2000_dmerc = np.array([
+        9.57976316e-04, 1.09389270e-03, 1.26863525e-03, 1.44998604e-03,
+        1.63397433e-03, 1.83848056e-03, 2.10415041e-03, 2.51043409e-03,
+        3.23990131e-03, 5.05740718e-03,
+    ])
+    np.testing.assert_allclose(actual[2:-1], vmec2000_dmerc, rtol=2e-3)
+    np.testing.assert_array_equal(np.sign(actual[2:-1]),
+                                  np.sign(vmec2000_dmerc))
+
+    tangent = jax.tree.map(jnp.zeros_like, eq.state)
+    tangent = dataclasses.replace(
+        tangent,
+        R_sin=jnp.ones_like(eq.state.R_sin),
+        Z_cos=jnp.ones_like(eq.state.Z_cos),
+    )
+    _, dmerc_tangent = jax.jvp(
+        lambda st: stab.d_merc_state(st, eq.runtime), (eq.state,), (tangent,))
+    interior = np.asarray(dmerc_tangent)[2:-1]
+    assert np.all(np.isfinite(interior))
+    assert np.any(interior != 0.0)
+
+
+def test_lasym_glasser_identity_residuals_and_reconstruction(
+    lasym_finite_beta_eq,
+):
+    """LASYM D_R: exact GGJ identity, smooth residuals, NumPy reference.
+
+    No external lasym D_R oracle exists (the DCON comparison is
+    symmetric-only): the validation is internal consistency on top of the
+    VMEC2000-anchored DMerc — the published relation must hold exactly, the
+    optimizer residuals must stay finite/smooth, and the independent
+    plotting-lane reconstruction of the mercier.f integrals from the wout
+    tables (both parities) must pass its stored-DMerc self-check.
+    """
+    eq = lasym_finite_beta_eq
+    state, rt = eq.state, eq.runtime
+    dmerc, _, _, shear, h_glasser = stab._mercier_profiles_state(state, rt)
+    actual = stab.glasser_d_r_state(state, rt)
+    denominator = jnp.where(shear != 0.0, shear**2, 1.0)
+    expected = -dmerc + (h_glasser - 0.5 * shear**2) ** 2 / denominator
+    expected = jnp.where(shear != 0.0, expected, 0.0)
+    np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-15)
+    assert np.all(np.isfinite(np.asarray(actual)))
+
+    for residual in (stab.mercier_stability_residual,
+                     stab.glasser_stability_residual):
+        values = np.asarray(residual(state, rt))
+        assert values.shape == (np.asarray(dmerc).size - 3,)
+        assert np.all(np.isfinite(values))
+
+    pytest.importorskip("matplotlib")
+    from vmex.core import plotting
+
+    info = plotting._glasser_d_r_from_wout(eq.wout)
+    assert info["valid"], info["note"]
+    assert float(info["mismatch"]) < 2.0e-2
+    d_r_recon = np.asarray(info["d_r"], dtype=float)
+    # D_R is a near-cancelling difference of DMerc-scale integrals, so the
+    # wout-table reconstruction class is relative to the DMerc scale
+    # (measured 1.1e-2 of it on this deck).
+    scale = float(np.max(np.abs(np.asarray(dmerc)[2:-1])))
+    assert np.max(np.abs(d_r_recon[2:-1] - np.asarray(actual)[2:-1])) < 2.0e-2 * scale
 
 
 @pytest.mark.full

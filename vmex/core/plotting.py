@@ -19,10 +19,10 @@ Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 
 Both stellarator-symmetric and ``lasym`` (asymmetric) equilibria are
 supported: the sine/cosine partner tables (``rmns``, ``zmnc``, ``bmns``,
-...) are included whenever present. The stored Mercier profile is plotted
-for both symmetry classes; the independent WOUT-only Glasser reconstruction
-is omitted for ``LASYM`` until its output-normalization proof is complete.
-All figures use the Agg backend
+...) are included whenever present — including in the ``D_R``
+reconstruction, whose ``mercier.f`` integrals carry the full parity
+content and stay guarded by their stored-``DMerc`` self-check for both
+symmetry modes.  All figures use the Agg backend
 at ``dpi >= 200`` and are closed after saving.  The Boozer transform behind
 the summary panels runs in-process (``booz_xform_jax``) so ``vmex --plot``
 needs no separate ``--booz`` pass.
@@ -450,14 +450,21 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
         ``D_R = -DMerc + (H - S^2/2)^2 / S^2``     (0 where the shear vanishes)
 
     exactly as the traceable :func:`vmex.core.stability.glasser_d_r_state`
-    (validated against it to ~1e-7 on the bundled decks).  The reconstruction
-    is self-checking: the same integrals must reproduce the stored ``DMerc``
-    profile; on mismatch (or for ``LASYM``, whose WOUT output normalization
-    needs a separate parity proof) the result is flagged invalid so callers
-    can omit the curve instead of plotting an unvalidated one.
+    (validated against it to ~1e-7 on the bundled decks).  Both symmetry
+    modes are supported: for ``lasym`` equilibria every field carries its
+    sine/cosine partner table, making this the independent lasym-complete
+    NumPy reference for the Mercier integrals.  The reconstruction is
+    self-checking: the same integrals must reproduce the stored ``DMerc``
+    profile; on mismatch the result is flagged invalid so callers can omit
+    the curve instead of plotting an unvalidated one.
     """
-    if bool(getattr(wout, "lasym", False)):
-        return {"valid": False, "note": "WOUT reconstruction not validated for LASYM", "d_r": None}
+    lasym = bool(getattr(wout, "lasym", False))
+
+    def partner(name):
+        table = getattr(wout, name, None)
+        if not lasym or table is None:
+            return None
+        return np.asarray(table, dtype=float)
 
     ns = int(wout.ns)
     if ns < 5:
@@ -508,18 +515,22 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
     ip[1:-1] = (torcur[2:] - torcur[1:-1]) * denom
 
     # Half-mesh real-space tables from the (already jxbforce-filtered) wout
-    # Nyquist coefficients; full-mesh geometry from rmnc/zmns.
-    bmag = _eval_modes(wout.bmnc, None, xm_nyq, xn_nyq, theta, zeta)
+    # Nyquist coefficients; full-mesh geometry from rmnc/zmns (+ the lasym
+    # sine/cosine partners).
+    bmag = _eval_modes(wout.bmnc, partner("bmns"), xm_nyq, xn_nyq, theta, zeta)
     b2 = bmag * bmag
-    gsqrt = _eval_modes(wout.gmnc, None, xm_nyq, xn_nyq, theta, zeta)
-    bsubu = _eval_modes(wout.bsubumnc, None, xm_nyq, xn_nyq, theta, zeta)
-    bsubv = _eval_modes(wout.bsubvmnc, None, xm_nyq, xn_nyq, theta, zeta)
+    gsqrt = _eval_modes(wout.gmnc, partner("gmns"), xm_nyq, xn_nyq, theta, zeta)
+    bsubu = _eval_modes(wout.bsubumnc, partner("bsubumns"), xm_nyq, xn_nyq, theta, zeta)
+    bsubv = _eval_modes(wout.bsubvmnc, partner("bsubvmns"), xm_nyq, xn_nyq, theta, zeta)
 
-    # Full-mesh bsubs (sine parity) band-limited to the jxbforce force modes.
+    # Full-mesh bsubs (sine parity + lasym cosine partner) band-limited to
+    # the jxbforce force modes.
     keep = (xm_nyq <= max(int(wout.mpol) - 1, 0)) & (np.abs(xn_nyq) <= int(wout.ntor) * nfp)
     bsmns = np.asarray(wout.bsubsmns, dtype=float) * keep[None, :]
-    bsubsu = _eval_modes(None, bsmns, xm_nyq, xn_nyq, theta, zeta, dtheta=1)
-    bsubsv = _eval_modes(None, bsmns, xm_nyq, xn_nyq, theta, zeta, dphi=1)
+    bsmnc = partner("bsubsmnc")
+    bsmnc = None if bsmnc is None else bsmnc * keep[None, :]
+    bsubsu = _eval_modes(bsmnc, bsmns, xm_nyq, xn_nyq, theta, zeta, dtheta=1)
+    bsubsv = _eval_modes(bsmnc, bsmns, xm_nyq, xn_nyq, theta, zeta, dphi=1)
 
     itheta = np.zeros_like(bsubu)
     izeta = np.zeros_like(bsubu)
@@ -531,11 +542,13 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
         + izeta[1:-1] * 0.5 * (bsubv[2:] + bsubv[1:-1])
     )
 
-    R = _eval_modes(wout.rmnc, None, xm, xn, theta, zeta)
-    Rt = _eval_modes(wout.rmnc, None, xm, xn, theta, zeta, dtheta=1)
-    Rz = _eval_modes(wout.rmnc, None, xm, xn, theta, zeta, dphi=1)
-    Zt = _eval_modes(None, wout.zmns, xm, xn, theta, zeta, dtheta=1)
-    Zz = _eval_modes(None, wout.zmns, xm, xn, theta, zeta, dphi=1)
+    rmns = partner("rmns")
+    zmnc = partner("zmnc")
+    R = _eval_modes(wout.rmnc, rmns, xm, xn, theta, zeta)
+    Rt = _eval_modes(wout.rmnc, rmns, xm, xn, theta, zeta, dtheta=1)
+    Rz = _eval_modes(wout.rmnc, rmns, xm, xn, theta, zeta, dphi=1)
+    Zt = _eval_modes(zmnc, wout.zmns, xm, xn, theta, zeta, dtheta=1)
+    Zz = _eval_modes(zmnc, wout.zmns, xm, xn, theta, zeta, dphi=1)
 
     two_pi_sq = (2.0 * np.pi) ** 2
     with np.errstate(divide="ignore", invalid="ignore"):

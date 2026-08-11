@@ -40,8 +40,11 @@ all requested (surface, α, ζ0) field lines.
 
 Scope notes
 -----------
-- Current, Mercier, and Glasser profiles support symmetric and ``lasym``
-  states. Ballooning stability remains stellarator-symmetric.
+- The current, Mercier and Glasser profiles support symmetric and ``lasym``
+  states (the lasym Mercier lane is validated per-term against live VMEC2000
+  output; the lasym ``D_R`` is anchored by that DMerc parity plus the exact
+  GGJ identity — no external lasym ``D_R`` oracle exists).  Ballooning
+  stability remains stellarator-symmetric.
 - Surfaces need ``ι ≠ 0`` (the field-line parameterization divides by ι).
 - :func:`d_merc_state` is the traceable counterpart of the parity-proven
   wout calculation.  As in VMEC2000, its first two surfaces and edge are not
@@ -131,7 +134,10 @@ def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: Solver
         sinmu = jnp.asarray(trig.sinmu[:nt2, : mmax + 1])
         cosnv = jnp.asarray(trig.cosnv[:, : nmax + 1])
         sinnv = jnp.asarray(trig.sinnv[:, : nmax + 1])
-        dnorm = 1.0 / (nzeta * nt3)
+        # fixaray.f half-interval analysis norm 1/(nzeta*(ntheta2-1)) — the
+        # reduced-grid parity analysis must return the *physical* field
+        # (jxbforce.f parity; see nyquist.filter_bsubuv_lasym).
+        dnorm = 1.0 / (nzeta * (nt2 - 1))
         cosmui = (dnorm * cosmu).at[0].multiply(0.5).at[-1].multiply(0.5)
         sinmui = dnorm * sinmu
         dmult = jnp.ones(
@@ -342,10 +348,6 @@ def _mercier_data_state(
     )
     bdotb = average_norm * jnp.einsum("sij,ij->s", sqgb2, wint)
     jdotb_full = jnp.zeros_like(s).at[1:-1].set(jdotb_mu0 / _MU0)
-    if bool(setup.lasym):
-        # Match WOUT's four factor-two LASYM output normalizations; see
-        # vmex.core.wout for the VMEC2000 convention and golden comparison.
-        jdotb_full = 16.0 * jdotb_full
     jdotb_full = jdotb_full.at[0].set(2.0 * jdotb_full[1] - jdotb_full[2])
     jdotb_full = jdotb_full.at[-1].set(
         2.0 * jdotb_full[-2] - jdotb_full[-3]
@@ -392,6 +394,13 @@ def d_merc_state(state: SpectralState, rt: SolverRuntime) -> Array:
     ``(state, runtime)`` pair and supports ``jit``, JVP and reverse-mode AD.
     The axis, first near-axis surface and edge retain VMEC's zero/noisy output
     convention and should be excluded from objectives (normally ``[2:-1]``).
+
+    Supports both symmetry modes: the ``lasym`` lane carries the sine-parity
+    contributions through the jxbforce.f parity-split filter and the
+    full-theta-interval surface integrals, validated per-term against live
+    VMEC2000 lasym output (``tests/test_vmec2000_live.py``) and against an
+    independent NumPy reconstruction from the wout Fourier tables
+    (:func:`vmex.core.plotting._glasser_d_r_from_wout`).
     """
     return _mercier_profiles_state(state, rt)[0]
 
@@ -429,6 +438,12 @@ def glasser_d_r_state(
     satisfy ``abs(S) >> shear_epsilon`` before interpreting the result.
     As for ``DMerc``, use only validated interior surfaces (normally
     ``[2:-1]``) as optimization targets.
+
+    Supports both symmetry modes.  The symmetric lane retains its DCON
+    comparison; the ``lasym`` lane is validated through the
+    VMEC2000-anchored ``DMerc`` parity plus the exact in-repo identity
+    ``D_R = -DMerc + (H - S²/2)²/S²`` (no external lasym ``D_R`` oracle
+    exists — the DCON comparison is symmetric-only).
     """
     if shear_epsilon < 0.0:
         raise ValueError(

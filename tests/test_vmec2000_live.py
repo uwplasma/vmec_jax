@@ -138,6 +138,106 @@ def test_live_vmec2000_fixed_boundary_parity(
     )
 
 
+def _updown_beta_input():
+    """Finite-beta up-down-asymmetric tokamak (test_stability fixture deck)."""
+    inp = VmecInput.from_file(DATA / "input.up_down_asymmetric_tokamak")
+    return replace(
+        inp,
+        ns_array=np.array([13]),
+        ftol_array=np.array([1e-10]),
+        niter_array=np.array([5000]),
+        am=np.array([1.0, -1.0]),
+        pres_scale=5000.0,
+    )
+
+
+def _li383_lasym_input():
+    """3-D lasym variant of li383: small stellarator-asymmetric boundary."""
+    inp = VmecInput.from_file(DATA / "input.li383_low_res")
+    rbs = np.zeros_like(np.asarray(inp.rbc, dtype=float))
+    zbc = np.zeros_like(rbs)
+    ntor = int(inp.ntor)
+    for tab, n, m, val in (
+        (rbs, 0, 1, 0.008), (zbc, 0, 1, 0.006),
+        (rbs, 0, 2, 0.0015), (zbc, 0, 2, -0.0012),
+        (rbs, 1, 1, 0.0010), (zbc, 1, 1, -0.0008),
+    ):
+        tab[n + ntor, m] = val
+    return replace(
+        inp,
+        lasym=True,
+        rbs=rbs,
+        zbc=zbc,
+        ns_array=np.array([16]),
+        ftol_array=np.array([1e-11]),
+        niter_array=np.array([10000]),
+    )
+
+
+@pytest.mark.parametrize(
+    "name, build",
+    [("updown_beta", _updown_beta_input), ("li383_lasym", _li383_lasym_input)],
+)
+def test_live_vmec2000_lasym_mercier_parity(pytestconfig, tmp_path, name, build):
+    """LASYM Mercier profiles agree per-term with live VMEC2000.
+
+    VMEC2000's lasym Mercier output is the anchor (mercier.f integrates
+    full-theta-grid real-space fields with the uniform lasym wint, and its
+    jxbforce.f inputs carry both parity channels), and the lasym lane is
+    held to the symmetric parity suite's tolerance class — measured
+    agreement is 1.6e-4 (updown) / 2.0e-3 (li383) scale-relative on DMerc.
+    """
+    vmec2000_dir = tmp_path / "vmec2000"
+    vmex_dir = tmp_path / "vmex"
+    vmec2000_dir.mkdir()
+    vmex_dir.mkdir()
+    inp = build()
+    for directory in (vmec2000_dir, vmex_dir):
+        inp.to_indata(directory / f"input.{name}")
+
+    _run([str(_executable(pytestconfig)), f"input.{name}"], cwd=vmec2000_dir)
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "vmex.core.cli",
+            str(vmex_dir / f"input.{name}"),
+            "--outdir",
+            str(vmex_dir),
+            "--device",
+            "cpu",
+        ],
+        cwd=ROOT,
+    )
+
+    reference = read_wout(vmec2000_dir / f"wout_{name}.nc")
+    actual = read_wout(vmex_dir / f"wout_{name}.nc")
+    assert int(actual.ier_flag) == int(reference.ier_flag) == 0
+    assert bool(actual.lasym) and bool(reference.lasym)
+    assert int(actual.ns) == int(reference.ns)
+    # Scale-relative interior bounds, >= 10x the measured agreement; DShear
+    # is profile-only (no parity content), the current-carrying DCurr/DGeod
+    # are the terms the lasym filter feeds.
+    limits = {
+        "jdotb": 2.0e-3,
+        "DMerc": 2.0e-2,
+        "DShear": 1.0e-3,
+        "DCurr": 2.0e-2,
+        "DWell": 5.0e-3,
+        "DGeod": 2.0e-2,
+    }
+    for field, limit in limits.items():
+        expected = np.asarray(getattr(reference, field))[2:-1]
+        got = np.asarray(getattr(actual, field))[2:-1]
+        scale = max(float(np.max(np.abs(expected))), np.finfo(float).tiny)
+        error = float(np.max(np.abs(got - expected))) / scale
+        assert error < limit, (field, error)
+    assert np.array_equal(
+        np.sign(np.asarray(actual.DMerc)[2:-1]),
+        np.sign(np.asarray(reference.DMerc)[2:-1]),
+    )
+
+
 def test_live_vmec2000_near_degenerate_vacuum(pytestconfig, tmp_path):
     """The LFORBAL vacuum remedy converges to the same equilibrium."""
     vmec2000_dir = tmp_path / "vmec2000_vacuum"

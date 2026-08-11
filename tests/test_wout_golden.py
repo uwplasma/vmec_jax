@@ -172,7 +172,10 @@ _DRIFT_TOL: dict[str, tuple[float, float, int, bool]] = {
     "wp": (1e-3, 1e-12, 0, False),
 }
 # Normalized force-balance/stability diagnostics of drifted states are
-# derivative-amplified beyond useful comparison: finite-only.
+# derivative-amplified beyond useful comparison: finite-only.  lasym alone
+# no longer relaxes these: with the physical-scale lasym filter
+# (fixaray.f half-interval dnorm) the up_down golden matches its
+# VMEC2000 D-profiles to 2.1e-3 scale-relative, inside the normal policy.
 _DRIFT_FINITE_ONLY = {"DMerc", "DShear", "DWell", "DCurr", "DGeod", "equif"}
 # lasym channels that stay drift-relaxed although the lasym solve matches
 # golden tightly: writer-recomputed near-axis current/bsubv harmonics
@@ -323,7 +326,7 @@ def test_golden_values(case):
                 if not np.all(np.isfinite(n)):
                     failures.append(f"{name}: non-finite value for nonconverged case")
                 continue
-            if ((drift or lasym) and name in _DRIFT_FINITE_ONLY) or (
+            if (drift and name in _DRIFT_FINITE_ONLY) or (
                 ftolv > 1e-9 and name in _LOOSE_FINITE_ONLY
             ) or (
                 lasym and name in _LASYM_CORRECTED_LEGACY_OUTPUT
