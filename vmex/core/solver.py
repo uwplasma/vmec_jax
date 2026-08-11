@@ -1,3 +1,4 @@
+# mypy: disable-error-code="call-overload"
 """Single-grid fixed-boundary solve loop: funct3d evaluation + eqsolve iteration.
 
 Wires the ported core modules (:mod:`geometry`, :mod:`fields`, :mod:`forces`,
@@ -1377,7 +1378,7 @@ def _make_body(
         fsqr_c = jnp.where(jac1, carry.fsqr, e1.residuals.fsqr)
         fsqz_c = jnp.where(jac1, carry.fsqz, e1.residuals.fsqz)
         fsql_c = jnp.where(jac1, carry.fsql, e1.residuals.fsql)
-        fsq0 = jnp.asarray(fsqr_c + fsqz_c + fsql_c)
+        fsq0 = fsqr_c + fsqz_c + fsql_c
 
         converged = (~jac1) & (fsqr_c <= ftol) & (fsqz_c <= ftol) & (fsql_c <= ftol)
         bad_init = jac1 & (it == 1)
@@ -1443,9 +1444,9 @@ def _make_body(
         nonfinite2 = restart & (~e2.jacobian_sign_changed) & (~_evaluation_is_finite(e2))
         numerical_bad = nonfinite1 | nonfinite2
 
-        fsqr_f = jnp.where(restart, e2.residuals.fsqr, jnp.asarray(fsqr_c))
-        fsqz_f = jnp.where(restart, e2.residuals.fsqz, jnp.asarray(fsqz_c))
-        fsql_f = jnp.where(restart, e2.residuals.fsql, jnp.asarray(fsql_c))
+        fsqr_f = jnp.where(restart, e2.residuals.fsqr, fsqr_c)
+        fsqz_f = jnp.where(restart, e2.residuals.fsqz, fsqz_c)
+        fsql_f = jnp.where(restart, e2.residuals.fsql, fsql_c)
         fsqr1_f = jnp.where(restart, e2.pre.fsqr1, e1.pre.fsqr1)
         fsqz1_f = jnp.where(restart, e2.pre.fsqz1, e1.pre.fsqz1)
         fsql1_f = jnp.where(restart, e2.pre.fsql1, e1.pre.fsql1)
@@ -1473,7 +1474,7 @@ def _make_body(
         # damped Newton step (state += cfg.step * (-J^{-1} gc)) with zeroed
         # velocity, mirroring evolve.f's xcdot reset on prec2d activation.
         if rt.prec2d is not None:
-            fsqz_prev_used = jnp.where(restart, jnp.asarray(fsqz_c), carry.fsqz)
+            fsqz_prev_used = jnp.where(restart, fsqz_c, carry.fsqz)
             newton_dir, prec2d_active = _newton_step(
                 rt, state_r, gc_f, cache_f, it, fsqz_prev_used,
                 fsqr_f + fsqz_f + fsql_f, stepping & (~reeval_bad),
@@ -1494,7 +1495,7 @@ def _make_body(
         )
         delt_n = delt_r * jnp.where(eq_reset, JACOBIAN_RESET_FACTOR, 1.0)
         ijacob_n = ijacob_r + eq_reset.astype(ijacob_r.dtype)
-        iter1_n = jnp.where(eq_reset, it, jnp.asarray(iter1_r))
+        iter1_n = jnp.where(eq_reset, it, iter1_r)
 
         jac75 = stepping & (ijacob_n >= 75)
         maxed = stepping & (~eq_reset) & (~jac75) & (it >= max_iter)

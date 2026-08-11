@@ -93,6 +93,24 @@ def test_vmec_problem_maps_inputs_and_reuses_equilibria():
         no_equilibrium.equilibrium_from_x([1.0])
 
 
+def test_vmec_problem_reports_under_converged_fsq():
+    class Config:
+        ftol = 1.0e-10
+        max_fsq_ratio = 10.0
+
+    equilibrium = SimpleNamespace(result=SimpleNamespace(
+        converged=False, fsqr=2.0e-8, fsqz=3.0e-8, fsql=0.0))
+    problem = VmecProblem(
+        [1.0], fun=np.sum, input_from_x=lambda x: x,
+        x_from_input=lambda inp: inp, equilibrium_from_x=lambda x: equilibrium,
+        metadata={"config": Config()},
+    )
+    evaluation = problem.evaluate(problem.x0, derivatives=False)
+    assert evaluation.status == "under_converged"
+    assert evaluation.diagnostics["fsq_ratio"] == pytest.approx(500.0)
+    assert not evaluation.diagnostics["derivative_certified"]
+
+
 def test_evaluation_contains_consistent_scalar_and_residual_forms():
     evaluation = _quadratic_problem().evaluate([3.0, 1.0])
     assert isinstance(evaluation, Evaluation) and evaluation.success

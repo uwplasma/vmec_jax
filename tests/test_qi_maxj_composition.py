@@ -125,3 +125,12 @@ def test_joint_residual_uses_one_transform_and_cost_weights(monkeypatch):
     with pytest.raises(ValueError, match="weights must be finite"):
         maxj_mod.JInvariantQIAndMaximumJResidual(
             [0.25, 0.75], [1.0], weights=[1.0, np.nan])
+    with pytest.raises(ValueError, match="same length"):
+        maxj_mod.JInvariantQIAndMaximumJResidual(
+            [0.25, 0.75], [1.0], weights=[1.0])
+    with pytest.raises(ValueError, match="must be finite"):
+        maxj_mod.JInvariantQIAndMaximumJResidual(
+            [0.25, 0.75], [1.0], maxj_weight=np.inf)
+    with pytest.raises(ValueError, match="must be positive"):
+        maxj_mod.JInvariantQIAndMaximumJResidual(
+            [0.25, 0.75], [1.0], mboz=0)

@@ -141,8 +141,13 @@
       "tests/test_optimize.py::test_scipy_bfgs_scalar_lane_completes_and_descends",
       "tests/test_optimize.py::test_certified_trial_guards_reject_stale_or_missing_memo",
       "tests/test_optimize_penalty.py",
+      "tests/test_qi_maxj_composition.py",
       "tests/test_bootstrap.py::test_least_squares_current_dofs_implicit",
-      "tests/test_parallel.py::test_parallel_finite_difference_and_problem_ensemble"
+      "tests/test_parallel.py::test_parallel_finite_difference_and_problem_ensemble",
+      "tests/test_parallel.py::test_available_cpus_respects_process_limits",
+      "tests/test_parallel.py::test_available_cpus_uses_affinity_fallback",
+      "tests/test_parallel.py::test_available_cpus_respects_scheduler_allocation",
+      "tests/test_parallel.py::test_available_cpus_ignores_unavailable_hints"
     ],
     "pr-physics-mirror-spline": [
       "tests/mirror/test_analytic.py",

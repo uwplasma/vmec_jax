@@ -536,6 +536,10 @@ def test_certified_trial_guards_reject_stale_or_missing_memo(monkeypatch):
         assert np.isclose(value, wall, rtol=1e-12, atol=0.0)
         np.testing.assert_array_equal(gradient, np.zeros_like(problem.x0))
         assert holder["failed_trials"] == failed_before + 1
+        problem._rj_cache = None
+        jacobian = problem.residual_jac(problem.x0)
+        assert np.all(np.isfinite(jacobian))
+        assert holder["last_jac_key"] == FunctionProblem._key(problem.x0)
 
     with monkeypatch.context() as m:
         nonce = itertools.count()
@@ -663,6 +667,7 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     graph_value, graph_gradient = jax.value_and_grad(problem.jax_fun)(
         jax.numpy.asarray(problem.x0)
     )
+    np.testing.assert_allclose(problem.jax_fun(problem.x0), jax_value, rtol=1e-12)
     np.testing.assert_allclose(graph_value, jax_value, rtol=1e-12)
     np.testing.assert_allclose(graph_gradient, jax_gradient, rtol=1e-12)
     assert np.all(np.isfinite(np.asarray(problem.jax_residual_jac(problem.x0))))
@@ -905,6 +910,11 @@ def test_public_problem_factory_validation():
         opt.make_problem(inp, objective_terms=term, forward_ftol=0.0)
     with pytest.raises(ValueError, match="forward_max_iterations"):
         opt.make_problem(inp, objective_terms=term, forward_max_iterations=0)
+    with pytest.raises(ValueError, match="forward_ftol and ftol_array"):
+        opt.solve_equilibrium(inp, forward_ftol=1.0e-10, ftol_array=[1.0e-10])
+    with pytest.raises(ValueError, match="forward_max_iterations and niter_array"):
+        opt.solve_equilibrium(
+            inp, forward_max_iterations=100, niter_array=[100])
     with pytest.raises(FloatingPointError, match="initial point"):
         opt.make_problem(
             inp,

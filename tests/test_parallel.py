@@ -138,6 +138,19 @@ def test_available_cpus_respects_scheduler_allocation(monkeypatch):
     assert parallel.available_cpus() == 6
 
 
+def test_available_cpus_ignores_unavailable_hints(monkeypatch):
+    monkeypatch.delattr(parallel.os, "process_cpu_count", raising=False)
+
+    def unavailable(_pid):
+        raise OSError("affinity unavailable")
+
+    monkeypatch.setattr(parallel.os, "sched_getaffinity", unavailable, raising=False)
+    monkeypatch.setattr(parallel.os, "cpu_count", lambda: 7)
+    for name in ("SLURM_CPUS_PER_TASK", "PBS_NP", "NSLOTS", "LSB_DJOB_NUMPROC"):
+        monkeypatch.setenv(name, "invalid")
+    assert parallel.available_cpus() == 7
+
+
 def test_map_ensemble_exception_policy():
     def boom(k: int) -> int:
         if k == 2:
