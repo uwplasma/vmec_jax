@@ -4,8 +4,8 @@ One in-process solve of the bundled ``cth_like_fixed_bdy`` deck feeds every
 check, so the module needs no golden fixtures and stays network-free:
 
 - the summary figure carries the full required panel set (iota full-mesh,
-  pressure, ``<J.B>``, Mercier + Glasser ``D_R``, magnetic well, ``J(alpha, s)``
-  invariant map, two Boozer ``|B|`` panels, scalar card);
+  pressure, ``<J.B>``, combined Mercier/Glasser/well profiles, 3-D LCFS,
+  polar ``J(alpha, s)``, two Boozer ``|B|`` panels, scalar card);
 - style invariants are pinned: every ``|B|`` contour set is non-filled and
   jet-mapped, the 3-D surface colormap constant is jet, all text is >= 11 pt,
   every drawn text artist stays inside the canvas, saved PNGs are >= 200 dpi;
@@ -41,7 +41,7 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 DECK = "cth_like_fixed_bdy"
 
 EXPECTED_PANELS = {
-    "iota", "pressure", "jdotb", "stability", "well",
+    "iota", "pressure", "jdotb", "stability", "boundary_3d",
     "j_invariant", "card", "boozer_mid", "boozer_lcfs",
 }
 
@@ -101,21 +101,22 @@ def test_summary_panel_inventory(summary_figure):
     assert set(meta["axes"]) == EXPECTED_PANELS
     for name, ax in meta["axes"].items():
         assert ax.lines or ax.collections or ax.texts, f"panel {name!r} is empty"
-        if name != "card":
+        if name not in ("card", "boundary_3d"):
             assert ax.get_xlabel().strip(), f"panel {name!r} lacks an x label"
             assert ax.get_ylabel().strip(), f"panel {name!r} lacks a y label"
 
 
-def test_summary_contours_nonfilled_and_jet(summary_figure):
-    """J and Boozer |B| contour sets are non-filled; |B| panels use jet."""
+def test_summary_contours_and_colormaps(summary_figure):
+    """The J disk is filled; Boozer |B| contours are unfilled and jet-mapped."""
     _, meta = summary_figure
-    for name in ("j_invariant", "boozer_mid", "boozer_lcfs"):
+    j_sets = _contour_sets(meta["axes"]["j_invariant"])
+    assert any(cs.filled for cs in j_sets)
+    for name in ("boozer_mid", "boozer_lcfs"):
         sets = _contour_sets(meta["axes"][name])
         assert sets, f"panel {name!r} has no contour set"
         for cs in sets:
             assert cs.filled is False, f"filled contour in {name!r}"
-            if name.startswith("boozer"):
-                assert cs.get_cmap().name == "jet"
+            assert cs.get_cmap().name == "jet"
 
 
 def test_summary_typography_and_no_clipping(summary_figure):
@@ -139,6 +140,22 @@ def test_summary_field_line_and_j_map_present(summary_figure):
     j_map = meta["j_map"]["j_map"]
     assert np.isfinite(j_map).any()
     assert j_map.shape[0] >= 5  # radial spread of Boozer surfaces
+    j_axis = meta["axes"]["j_invariant"]
+    assert j_axis.get_xlabel() == r"$s\cos\alpha$"
+    assert j_axis.get_ylabel() == r"$s\sin\alpha$"
+    assert j_axis.get_aspect() == 1.0
+
+
+def test_summary_combines_stability_and_well(summary_figure):
+    """DMerc, dashed D_R, and dash-dot magnetic well share one polished panel."""
+    _, meta = summary_figure
+    stability = meta["axes"]["stability"]
+    well = meta["well_axis"]
+    assert {line.get_linestyle() for line in stability.lines} >= {"-", "--"}
+    assert any(line.get_linestyle() == "-." for line in well.lines)
+    assert well.yaxis.label.get_color() == plotting._LINE_COLORS[2]
+    labels = [text.get_text() for text in stability.get_legend().get_texts()]
+    assert any("magnetic well" in label for label in labels)
 
 
 def test_summary_style_constants():
@@ -221,15 +238,41 @@ def test_j_invariant_map_rejects_degenerate_field():
         plotting._j_invariant_map(booz)
 
 
-def test_magnetic_well_panel_handles_zero_axis_vprime():
-    """V'(0) = 0 draws the explanatory note instead of dividing by zero."""
+def test_j_invariant_map_uses_surface_local_normalized_pitch(monkeypatch):
+    """Fixed lambda_n uses each surface's Bmin/Bmax, as in the polar-J reference."""
+    import vmex.core.bounce as bounce
+
+    pitches = []
+
+    def _fake_bounce(*, alpha, pitch, **_kwargs):
+        pitches.append(float(np.asarray(pitch)[0]))
+        shape = (1, len(alpha), 1, 1)
+        return {"action": np.ones(shape), "usable_mask": np.ones(shape, dtype=bool)}
+
+    monkeypatch.setattr(bounce, "bounce_action_from_boozer", _fake_bounce)
+    booz = {
+        "bmnc_b": np.array([[1.0, 0.2], [2.0, 0.4]]), "bmns_b": None,
+        "xm_b": np.array([0, 0]), "xn_b": np.array([0, 1]), "nfp": 1,
+        "iota_b": np.array([0.5, 0.5]), "G_b": np.ones(2), "I_b": np.zeros(2),
+        "s_b": np.array([0.25, 0.75]),
+    }
+    result = plotting._j_invariant_map(booz, pitch_fraction=0.5, nalpha=4)
+    np.testing.assert_allclose(pitches, [1.0, 0.5], rtol=0.0, atol=2e-4)
+    np.testing.assert_allclose(result["pitch"], pitches)
+
+
+def test_stability_panel_handles_zero_axis_vprime():
+    """V'(0) = 0 is labeled on the combined legend without dividing by zero."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    fake = SimpleNamespace(ns=5, vp=np.array([0.0, 1.0, 3.0, 2.0, 2.0]))
-    plotting._magnetic_well_panel(ax, fake)
-    assert any("V'(0) = 0" in t.get_text() for t in ax.texts)
-    assert not ax.lines
+    fake = SimpleNamespace(
+        ns=5, vp=np.array([0.0, 1.0, 3.0, 2.0, 2.0]), DMerc=np.ones(5))
+    well = plotting._stability_panel(
+        ax, fake, {"valid": False, "note": "test"}, s_plot_ignore=0.2)
+    labels = [text.get_text() for text in ax.get_legend().get_texts()]
+    assert any("V'(0)=0" in label for label in labels)
+    assert not well.lines[0].get_xdata().size
     plt.close(fig)
 
 

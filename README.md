@@ -45,8 +45,9 @@ The common CLI operations are:
 | Command | Result |
 |---|---|
 | `vmex input.X` | solve INDATA or JSON and write `wout_X.nc` |
-| `vmex input.X --plot --booz` | solve, write all WOUT plots, transform to Boozer coordinates, and plot `|B|` |
-| `vmex --plot wout_X.nc` | plot the equilibrium summary, surfaces, `|B|`, profiles, and 3-D LCFS |
+| `vmex input.X --plot` | solve and write the summary, cross-sections, automatic Boozer `|B|`, profiles, and 3-D LCFS |
+| `vmex --plot wout_X.nc` | write the same complete plot set from an existing equilibrium |
+| `vmex --booz wout_X.nc` | additionally save a reusable standard `boozmn_X.nc` file |
 | `vmex input.X --restart wout_Y.nc` | hot-restart a fixed- or free-boundary solve from a saved equilibrium |
 | `vmex --scale input.X [B R]` | scale field and length by optional factors; without them target 5.7 T and 1.7 m |
 | `vmex --doctor` / `vmex --test` | inspect the installation / run the bundled quick start |
@@ -133,7 +134,7 @@ VMEX also solves open-ended mirrors. `examples/mirror_fixed_boundary_nonaxisymme
 
 ## Equilibrium and kinetic diagnostics
 
-`vmex --plot wout_X.nc` produces the compact summary below: iota, pressure, current, Mercier `DMerc` and Glasser `DR`, magnetic well, second adiabatic-invariant contours, Boozer `|B|`, and scalar equilibrium checks. VMEX additionally provides the infinite-n ballooning eigenvalue and growth-rate objectives; positive `ballooning_lambda` is unstable. Trapped-particle fraction is differentiable and validated against analytic, DESC, and near-axis QI references, including its finite on-axis QI limit.
+`vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summary below. The summary combines Mercier `DMerc`, Glasser `DR`, and magnetic well on color-matched axes; adds a 3-D LCFS; and shows the second adiabatic invariant in the Velasco polar coordinates `x=s cos(alpha)`, `y=s sin(alpha)`. Boozer `|B|` appears automatically, while `--booz` is only needed to save a reusable `boozmn_*.nc` file. VMEX additionally provides infinite-n ballooning objectives and differentiable trapped-particle diagnostics.
 
 ![VMEX equilibrium, stability, and Boozer diagnostics](docs/_static/figures/readme_diagnostics_summary.png)
 

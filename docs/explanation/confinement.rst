@@ -224,6 +224,14 @@ JIT, forward AD, and reverse AD. Derivatives are defined within a fixed well
 topology; marginal and merged masks identify topology changes that an
 optimizer must exclude or resolve.
 
+The ``--plot`` polar diagnostic instead holds the normalized trapping class
+:math:`\lambda_n` fixed across radius,
+:math:`1/\lambda=B_{\min}(s)+\lambda_n[B_{\max}(s)-B_{\min}(s)]`, following
+Rodríguez, Helander & Goodman (2024). It plots
+:math:`x=s\cos\alpha`, :math:`y=s\sin\alpha`; an omnigenous field therefore
+has concentric circular contours. This display convention does not change the
+physical-pitch contract of the optimization objectives.
+
 The constructed-QI target
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

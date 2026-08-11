@@ -23,9 +23,11 @@ Five PNG files appear next to the file (or in `--outdir`):
 | `*_boundary3d.png` | 3-D plasma boundary colored by `\|B\|` |
 
 The summary panel is the one to look at first: rotational transform,
-pressure, parallel current, stability profiles, and `|B|` at a glance. Which
-panels it contains (and how to plot from Python, select figures, or plot
-mirror `mout_*.nc` files) is {doc}`/howto/plot-diagnostics`.
+pressure, parallel current, stability profiles, a polar second-invariant map,
+3-D LCFS, and Boozer `|B|` at a glance. The separate `*_surfaces.png` always
+contains the toroidal cross-sections. Which panels it contains (and how to
+plot from Python, select figures, or plot mirror `mout_*.nc` files) is
+{doc}`/howto/plot-diagnostics`.
 
 ## Boozer coordinates
 
@@ -37,7 +39,9 @@ vmex wout_nfp4_QH_warm_start.nc --booz        # transform an existing wout
 vmex --plot boozmn_nfp4_QH_warm_start.nc      # Boozer |B| contours + spectra
 ```
 
-`--booz` writes a standard `boozmn_*.nc` file. In Boozer coordinates field
+`--plot` already performs the in-process transform needed for its Boozer
+`|B|` panels. `--booz` is only needed when you want to write a standard
+`boozmn_*.nc` file for later analysis. In Boozer coordinates field
 strength contours reveal the symmetry class directly: for this
 quasi-helically-symmetric case the `|B|` contours run diagonally — helical
 symmetry — which is what makes the Boozer view the standard way to judge

@@ -15,11 +15,11 @@ vmex --plot mout_case.nc               # straight-axis mirror figures
 vmex --plot wout_case.nc --outdir figs/
 ```
 
-The wout set: `*_summary.png`, `*_surfaces.png` (cross-sections at several
+The wout set always includes `*_surfaces.png` (cross-sections at several
 zeta over one field period, axis marked), `*_modB.png` (`|B|` contours at
 mid radius and boundary), `*_profiles.png` (iota/pressure/current plus the
 `fsqt` force-residual trace), `*_boundary3d.png` (3-D boundary colored by
-`|B|`). Both symmetric and `lasym` equilibria are supported — the
+`|B|`), and `*_summary.png`. Both symmetric and `lasym` equilibria are supported — the
 sine/cosine partner tables are included whenever present. All figures use
 the Agg backend at dpi >= 200, so plotting works on headless machines.
 
@@ -45,13 +45,14 @@ version.
 
 `*_summary.png` is a publication-style diagnostic set: rotational transform
 (full mesh), pressure, the parallel bootstrap current
-$\langle \mathbf{J}\cdot\mathbf{B} \rangle$, Mercier `DMerc` with the
-Glasser resistive-interchange $D_R$, the magnetic-well profile, a
-second-adiabatic-invariant $J(\alpha, s)$ map at fixed pitch, `|B|` in
-Boozer coordinates at mid radius and on the LCFS (line contours with a field
-line of slope iota), and an equilibrium scalar card. The Boozer transform
-behind those panels runs in-process (`booz_xform_jax`), so `--plot` needs no
-separate `--booz` pass. $D_R$ follows the lasym guard of
+$\langle \mathbf{J}\cdot\mathbf{B} \rangle$, Mercier `DMerc` and the Glasser
+resistive-interchange $D_R$ with magnetic well on a color-matched right axis,
+a 3-D LCFS, and the second adiabatic invariant in the polar disk
+$x=s\cos\alpha$, $y=s\sin\alpha$. Concentric $J$ contours diagnose
+alpha-independence. `|B|` in Boozer coordinates appears at mid radius and on
+the LCFS as unfilled jet contours with a field line of slope iota. The Boozer
+transform runs in-process, so `--plot` needs no separate `--booz` pass;
+`--booz` is for writing a reusable `boozmn_*.nc`. $D_R$ follows the lasym guard of
 {func}`vmex.core.stability.glasser_d_r_state` and is omitted (with a panel
 note) for asymmetric equilibria.
 
