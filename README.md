@@ -560,7 +560,7 @@ minutes and stopped at `1.85e-3`, so larger mode is not automatically a better
 basin search. The final `NS=101`, `FTOL=1e-14` equilibrium is hot-started from
 the accepted optimization state. Relaxing the active mirror/elongation limits
 reached `1.19e-3` in VMEX but lost cold-solver portability, so it is documented
-as a tradeoff, not advertised as the default. The [optimization guide](docs/optimization.rst)
+as a tradeoff, not advertised as the default. The [optimization guide](docs/reference/optimization.rst)
 gives the exact schedule, sampling, constraint conventions, and resolution
 checks.
 
@@ -575,7 +575,7 @@ Changing only `NFP` in the circular input is not a fair field-period search.
 The same short QP/QI workflow gave full-QI residuals 0.141, 0.00456, 0.110,
 0.0968, and 0.0923 for NFP 1–5, while an NFP-1 near-axis seed reached
 `1.86e-3`. An NFP-3 seed reached `7.47e-3` only with mirror ratio 0.461.
-The [optimization guide](docs/optimization.rst) records the scan and the
+The [optimization guide](docs/reference/optimization.rst) records the scan and the
 NFP-specific seed/constraint strategy; NFP 3–5 should not reuse NFP 2's QP
 basin guide blindly.
 
@@ -647,8 +647,8 @@ artifacts (`benchmarks/optimization_crosscode/qi_results.json` and
 `qa_results.json`, 48 cases) record the input hash, versions, platform,
 worker policy, timing split, status, and accepted histories. This hours-long evidence run is not CI: a fast test checks
 its schema, parity, provenance, and monotonicity. Full CPU-worker and
-accelerator guidance is in the [optimization](docs/optimization.rst) and
-[parallelization](docs/parallelization.rst) documentation.
+accelerator guidance is in the [optimization](docs/reference/optimization.rst) and
+[parallelization](docs/explanation/parallelization.rst) documentation.
 
 Measured on a 36-core CPU from a near-circular torus (single call, all
 harmonics released at once; `examples/optimization/*_ess.py`; the staged

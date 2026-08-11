@@ -81,16 +81,23 @@ docs = [
   "sphinx",
   "sphinx-copybutton",
   "furo",
+  "myst-parser",
+  "sphinx-design",
+  "sphinxext-rediraffe",
 ]
 dev = [
   "build",
   "furo",
   "mypy",
+  "myst-parser",
   "pytest",
   "pytest-cov",
   "pytest-xdist",
   "ruff<0.16",
   "sphinx",
+  "sphinx-copybutton",
+  "sphinx-design",
+  "sphinxext-rediraffe",
   "types-setuptools",
 ]
 

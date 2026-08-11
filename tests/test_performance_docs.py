@@ -1,4 +1,4 @@
-"""Guard: docs/performance.rst is generated from the benchmark artifact.
+"""Guard: docs/reference/performance.rst is generated from the benchmark artifact.
 
 The baseline table between the generated-block markers must match what
 ``tools/render_performance_docs.py`` renders from
@@ -37,7 +37,7 @@ def test_performance_table_matches_baseline_artifact() -> None:
     _inner, _tail = rest.split(rpd.END, 1)
     rendered = rpd.render(baseline)
     assert rpd.BEGIN + rest.split(rpd.END, 1)[0] + rpd.END == rendered, (
-        "docs/performance.rst baseline table is stale; run python tools/render_performance_docs.py"
+        "docs/reference/performance.rst baseline table is stale; run python tools/render_performance_docs.py"
     )
 
 

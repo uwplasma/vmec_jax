@@ -819,7 +819,7 @@ def plot_axisymmetric_beta_scan_summary(
     for panel in panels:
         panel.grid(alpha=0.22)
     # A short title only -- the coil geometry, vacuum field, mirror ratio, and
-    # beta observables live in docs/mirror_geometry.rst, not on the figure.
+    # beta observables live in docs/explanation/mirror-geometry.rst, not on the figure.
     fig.suptitle("Free-boundary mirror: solved β scan with ESSOS coils")
     return _save_figure(fig, plt, outdir / f"{name}.png")
 

@@ -30,18 +30,28 @@ html_title = "VMEX documentation"
 # -- General configuration ------------------------------------------------------
 
 extensions = [
+    "myst_parser",
+    "sphinx_design",
+    "sphinx_copybutton",
+    "sphinxext.rediraffe",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.napoleon",
     "sphinx.ext.mathjax",
     "sphinx.ext.intersphinx",
     "sphinx.ext.autosectionlabel",
-    "sphinx.ext.todo",
     "sphinx.ext.duration",
 ]
 
+myst_enable_extensions = [
+    "dollarmath",
+    "amsmath",
+    "colon_fence",
+]
+
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "optimization_api_plan.md"]
+
 
 def _truthy(value: str | None) -> bool:
     if value is None:
@@ -49,18 +59,8 @@ def _truthy(value: str | None) -> bool:
     return value.strip().lower() not in ("", "0", "false", "no")
 
 
-_ENABLE_VIEWCODE = _truthy(os.environ.get("SPHINX_VIEWCODE"))
-if _ENABLE_VIEWCODE:
+if _truthy(os.environ.get("SPHINX_VIEWCODE")):
     extensions.append("sphinx.ext.viewcode")
-
-
-_FAST = _truthy(os.environ.get("SPHINX_FAST"))
-if _FAST:
-    tags.add("fast")  # noqa: F821 - provided by the Sphinx configuration runtime
-    # In fast mode build only a minimal landing page to keep CI under minutes.
-    master_doc = "index_fast"
-    include_patterns = ["index_fast.rst"]
-    suppress_warnings = ["toc.not_readable", "toc.excluded"]
 
 autosummary_generate = False
 autosummary_imported_members = False
@@ -69,7 +69,6 @@ autosectionlabel_prefix_document = True
 # docstrings (rendered by autodoc) would otherwise collide ("VMEC2000
 # counterparts" appears in most vmex.core module docstrings).
 autosectionlabel_maxdepth = 2
-todo_include_todos = False
 
 # Mock heavy runtime dependencies only when they are genuinely unavailable
 # (e.g. a docs-only CI environment). With the real packages installed,
@@ -82,18 +81,37 @@ for _mod in ("jax", "jaxlib", "netCDF4", "matplotlib", "scipy"):
         autodoc_mock_imports.append(_mod)
 autodoc_member_order = "bysource"
 
-# sphinx-copybutton is an optional nicety; enable it when installed.
-try:
-    import sphinx_copybutton  # noqa: F401
+copybutton_prompt_text = r">>> |\.\.\. |\$ "
+copybutton_prompt_is_regexp = True
 
-    extensions.append("sphinx_copybutton")
-    copybutton_prompt_text = r">>> |\.\.\. |\$ "
-    copybutton_prompt_is_regexp = True
-except Exception:
-    pass
 
-if _FAST:
-    exclude_patterns += ["api/index.rst"]
+# -- Redirects (old flat tree -> Diátaxis tree) ---------------------------------
+# One entry per pre-restructure page, so bookmarks and the README's pinned
+# https://vmex.readthedocs.io/en/latest/capabilities.html link keep working.
+
+rediraffe_redirects = {
+    "quickstart": "all-of-vmex",
+    "tutorials": "tutorials/index",
+    "cli": "reference/cli",
+    "input_reference": "reference/input-file",
+    "wout_reference": "reference/wout-file",
+    "objectives": "reference/objectives",
+    "optimization": "reference/optimization",
+    "vmec2000_compatibility": "reference/vmec2000-compatibility",
+    "capabilities": "reference/capabilities",
+    "performance": "reference/performance",
+    "equations": "explanation/variational-problem",
+    "theory": "explanation/spectral-representation",
+    "algorithms": "explanation/iteration",
+    "architecture": "explanation/architecture",
+    "confinement": "explanation/confinement",
+    "mirror_geometry": "explanation/mirror-geometry",
+    "parallelization": "explanation/parallelization",
+    "scaling": "howto/scale-a-configuration",
+    "contributing": "project/contributing",
+    "references": "project/references",
+    "api/index": "reference/api/basic",
+}
 
 
 # -- Options for HTML output ----------------------------------------------------
@@ -102,14 +120,7 @@ _theme = os.environ.get("SPHINX_THEME")
 if _theme:
     html_theme = _theme
 else:
-    try:  # Prefer furo if installed (ReadTheDocs uses extras=[docs]).
-        import furo  # noqa: F401
-
-        html_theme = "furo"
-    except Exception:
-        # Keep local/offline builds working even if optional doc deps
-        # (like furo) are not installed in the current environment.
-        html_theme = "alabaster"
+    html_theme = "furo"
 html_static_path = ["_static"]
 
 if html_theme == "furo":
@@ -136,3 +147,19 @@ if os.environ.get("READTHEDOCS") == "True":
 else:
     # Offline/local builds in restricted environments (no network).
     intersphinx_mapping = {}
+
+
+# -- Linkcheck ------------------------------------------------------------------
+# Hosts that rate-limit or require auth from CI runners; every entry states
+# its reason. The weekly linkcheck job builds with `-b linkcheck`.
+
+linkcheck_ignore = [
+    r"https://doi\.org/.*",          # DOI redirects intermittently 403 robots
+    r"https://meetings\.aps\.org/.*",  # APS blocks non-browser agents
+    r"https://downloads\.regulations\.gov/.*",  # S3 signed-URL host, 403 to bots
+    # Generated evidence links into this repository 404 on a PR whose commit
+    # is ahead of main; file existence is enforced locally by
+    # tests/test_capability_docs.py, which is stronger than a URL probe.
+    r"https://github\.com/uwplasma/VMEX/blob/main/.*",
+]
+linkcheck_timeout = 30
