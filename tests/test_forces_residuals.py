@@ -246,14 +246,17 @@ def test_cond_refresh_gate_is_bitwise_identical(case):
         for lx, ly in zip(jax.tree_util.tree_leaves(x), jax.tree_util.tree_leaves(y)):
             np.testing.assert_array_equal(np.asarray(lx), np.asarray(ly))
 
-    # Refresh iteration (iteration == iter_last_reset): gate taken.
-    gated = jax.jit(lambda: run(True, cache0, it1, it1))()
-    plain = jax.jit(lambda: run(False, cache0, it1, it1))()
+    # Jitted on purpose: the contract is about the *compiled* programs (the
+    # conftest disables jit globally, which would compare eager op-by-op
+    # evaluations and miss any fusion difference introduced by the cond).
+    with jax.disable_jit(False):
+        # Refresh iteration (iteration == iter_last_reset): gate taken.
+        gated = jax.jit(lambda: run(True, cache0, it1, it1))()
+        plain = jax.jit(lambda: run(False, cache0, it1, it1))()
+        # Non-refresh iteration: gate skipped, frozen masks carried through.
+        gated2 = jax.jit(lambda: run(True, plain.cache, it2, it1))()
+        plain2 = jax.jit(lambda: run(False, plain.cache, it2, it1))()
     assert_equal((gated.cache, gated.gc, gated.pre), (plain.cache, plain.gc, plain.pre))
-
-    # Non-refresh iteration: gate skipped, frozen masks carried through.
-    gated2 = jax.jit(lambda: run(True, plain.cache, it2, it1))()
-    plain2 = jax.jit(lambda: run(False, plain.cache, it2, it1))()
     assert_equal(
         (gated2.cache, gated2.gc, gated2.pre), (plain2.cache, plain2.gc, plain2.pre)
     )
@@ -261,3 +264,71 @@ def test_cond_refresh_gate_is_bitwise_identical(case):
         (gated2.cache.pivot_R, gated2.cache.pivot_Z),
         (plain.cache.pivot_R, plain.cache.pivot_Z),
     )
+
+
+def _function_level_while_count(module_text: str) -> tuple[int, int]:
+    """(total, function-body-level) ``stablehlo.while`` ops in an MLIR module.
+
+    A while whose nearest shallower-indented line is the ``func.func``
+    signature executes unconditionally; one whose nearest shallower line is a
+    region boundary (``}, {`` / ``({``) sits inside a branch of a multi-region
+    op (``stablehlo.case``/``if``) and only runs when that branch is taken.
+    """
+    lines = module_text.splitlines()
+    total = at_function_level = 0
+    for i, line in enumerate(lines):
+        if "stablehlo.while" not in line:
+            continue
+        total += 1
+        indent = len(line) - len(line.lstrip())
+        for j in range(i - 1, -1, -1):
+            enclosing = lines[j]
+            if not enclosing.strip():
+                continue
+            if len(enclosing) - len(enclosing.lstrip()) < indent:
+                if enclosing.lstrip().startswith("func.func"):
+                    at_function_level += 1
+                break
+    return total, at_function_level
+
+
+def test_cond_refresh_gate_stages_replay_off_the_iteration_path():
+    """CUDA-lowered, the pivot replay must sit inside the ``lax.cond`` branch.
+
+    ``cond_refresh=True`` is only worth its salt if the sequential ns-length
+    replay scans (``stablehlo.while``) end up inside the conditional's branch
+    region — executed on 1-in-25 refresh iterations — rather than in the
+    unconditional function body, where they would serialize every iteration
+    into ns kernel launches on GPU.  The ungated evaluation keeps them at
+    function level; the counts must otherwise agree.
+    """
+    from jax import export
+
+    from vmex.core import solver as _solver
+
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    resolution = _solver.resolution_from_input(inp)
+    setup = run_setup(inp, resolution, infer_axis_if_missing=True)
+    rt = prepare_runtime(inp, resolution, setup=setup)
+    state = _initial_state(rt.setup)
+    cache = _solver._zero_cache(rt)
+    args = (state, cache, jnp.asarray(2), jnp.asarray(1), jnp.asarray(1.0))
+    shapes = jax.tree_util.tree_map(
+        lambda a: jax.ShapeDtypeStruct(jnp.shape(a), jnp.result_type(a)), args
+    )
+
+    def lowered(gate):
+        def fn(state, cache, it, it0, one):
+            r = _solver._evaluate(
+                state, cache, it, it0, one, rt, one, cond_refresh=gate
+            )
+            return r.cache, r.gc, r.residuals
+
+        with jax.disable_jit(False):  # conftest disables jit; export needs it
+            return export.export(jax.jit(fn), platforms=["cuda"])(*shapes).mlir_module()
+
+    gated_total, gated_inline = _function_level_while_count(lowered(True))
+    plain_total, plain_inline = _function_level_while_count(lowered(False))
+    assert plain_total == plain_inline > 0  # ungated: replay on the hot path
+    assert gated_total == plain_total  # same scans, relocated ...
+    assert gated_inline == 0  # ... all inside the refresh branch

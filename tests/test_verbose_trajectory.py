@@ -54,7 +54,7 @@ def test_cli_verbose_lines_match_full_trajectory_replay(nstep):
         rt, np.asarray(carry_jit.trajectory)[:upto], upto, set(), True, ref_emit
     )
 
-    cli_rows = [l for l in cli_buf.getvalue().splitlines() if _ROW.match(l)]
+    cli_rows = [row for row in cli_buf.getvalue().splitlines() if _ROW.match(row)]
     ref_rows = ref_buf.getvalue().splitlines()
     assert ref_rows, "replay produced no screen lines"
     assert cli_rows == ref_rows

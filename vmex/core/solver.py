@@ -1125,7 +1125,7 @@ def _evaluate(
 
     # -- ns4-cadence refresh candidates (bcovar.f) --------------------------
     tcon_new = constraint_scaling(
-            tcon0=rt.tcon0, geometry=geometry, jacobian=jacobian,
+        tcon0=rt.tcon0, geometry=geometry, jacobian=jacobian,
         total_pressure=fields.total_pressure, trig=rt.trig, s=s,
     )
     common = dict(

@@ -376,6 +376,39 @@ def test_scalfor_pivot_data_matches_solvax_diagnostics() -> None:
         np.testing.assert_array_equal(np.asarray(scale), np.asarray(expected))
 
 
+def test_scalfor_cached_pivot_cuda_lowering_has_no_sequential_scan() -> None:
+    """The per-iteration solve must lower scan-free for GPUs.
+
+    The GPU regression this cache removes was the checked solve's sequential
+    ns-length Thomas pivot replay (``stablehlo.while``) on every call.  Pin
+    the property structurally: cross-lowered for CUDA, ``scalfor`` with
+    ``pivot_data`` contains no ``while`` at all (fused ``gtsv2`` solve plus
+    parallel-reduction residual check), whereas the per-call checked path
+    keeps its two replay scans (one per m-block; the R and Z families make
+    the diagnosed four per solver iteration).
+    """
+    from jax import export
+
+    jmax = 25
+    matrices, force = _random_scalfor_system(11, jmax=jmax)
+    pivot_data = newp.scalfor_pivot_data(matrices, jmax=jmax)
+
+    def lowered(fn, *args):
+        shapes = jax.tree_util.tree_map(
+            lambda a: jax.ShapeDtypeStruct(jnp.shape(a), jnp.result_type(a)), args
+        )
+        with jax.disable_jit(False):  # conftest disables jit; export needs it
+            return export.export(jax.jit(fn), platforms=["cuda"])(*shapes).mlir_module()
+
+    cached = lowered(
+        lambda f, m, p: newp.scalfor(f, m, jmax=jmax, pivot_data=p),
+        force, matrices, pivot_data,
+    )
+    checked = lowered(lambda f, m: newp.scalfor(f, m, jmax=jmax), force, matrices)
+    assert cached.count("stablehlo.while") == 0
+    assert checked.count("stablehlo.while") == 2
+
+
 def test_scalfor_pivot_data_degenerate_shapes() -> None:
     """mpol=1 / jmax=1 systems keep static placeholder m1 blocks."""
     matrices, force = _random_scalfor_system(9, jmax=1, mpol=1, nrange=2)
