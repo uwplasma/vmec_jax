@@ -260,3 +260,7 @@ benchmarks/output_*/
 .claude
 examples_single_grid/
 disabled/
+
+*_00*
+settings.json
+*_optimized*
