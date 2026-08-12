@@ -61,7 +61,7 @@ stated in the row is validated; ``—`` means no public path.
      - limited
      - limited
      - supported
-     - Forward NESTOR equilibrium. AD covers the virtual-casing residual on a specified boundary, not a reconverged plasma-vacuum root. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_diff.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_diff.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
+     - Forward NESTOR equilibrium and exterior-field queries. Vacuum fields use the supplied mgrid or coil field; finite-beta/current-carrying equilibria add the internal-current virtual-casing branch. AD covers coordinates, coil parameters and the live spectral boundary with a fixed refinement schedule; the open-field-line region is a field evaluation, not a separate plasma equilibrium. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_diff.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_diff.py>`__, `test_single_stage_simultaneous.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_single_stage_simultaneous.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
    * - toroidal
      - stellarator / tokamak
      - free

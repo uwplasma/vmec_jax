@@ -21,6 +21,7 @@ import jax.numpy as jnp  # noqa: E402
 jax.config.update("jax_enable_x64", True)
 
 from vmex.core import freeboundary_diff as FBD  # noqa: E402
+from vmex.core.extender import VmecExtender  # noqa: E402
 from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
 from vmex.core.wout import read_wout  # noqa: E402
 
@@ -139,6 +140,52 @@ def test_synthetic_surface_gradient_fd_validates():
     dir_ad = float(jnp.sum(g * v))
     dir_fd = _directional_fd(J, d0, v, 1e-6)
     assert abs(dir_ad - dir_fd) <= 1e-5 * abs(dir_fd) + 1e-9, f"AD {dir_ad:.6e} vs FD {dir_fd:.6e}"
+
+
+def test_finite_beta_extender_field_and_gradient_outside_lcfs(monkeypatch):
+    """The VMEX field composes coil and plasma fields beyond the LCFS."""
+    surface = _synthetic_surface(nphi=12, ntheta=12, nfp=1)
+
+    def coil_field(points):
+        return jnp.broadcast_to(jnp.array([0.0, 0.0, 0.4]), points.shape)
+
+    field = VmecExtender.from_surface_data(
+        surface,
+        external_field=coil_field,
+        digits=3,
+        levels=((13, 13), (26, 26)),
+    )
+    points = jnp.array([[1.8, 0.0, 0.1], [0.0, 1.9, -0.1]])
+    assert field.uses_virtual_casing
+
+    expected = field.plasma_field.B_plasma_xyz(points) + coil_field(points)
+    np.testing.assert_allclose(field.B(points), expected, rtol=2e-11, atol=2e-11)
+    jacobian = jax.vmap(
+        jax.jacfwd(lambda point: field.B(point[None, :])[0])
+    )(points)
+    np.testing.assert_allclose(field.gradB(points), jacobian, rtol=2e-5, atol=2e-6)
+
+    direction = jnp.array([0.3, -0.4, 0.2])
+    eps = 2.0e-5
+    finite_difference = (
+        field.B(points[:1] + eps * direction)
+        - field.B(points[:1] - eps * direction)
+    )[0] / (2.0 * eps)
+    autodiff = field.gradB(points[:1])[0] @ direction
+    np.testing.assert_allclose(autodiff, finite_difference, rtol=3e-4, atol=3e-6)
+
+    inp = type("Input", (), {"lfreeb": False})()
+    wout = type("Wout", (), {"betatotal": 0.01, "mgrid_file": ""})()
+    equilibrium = type("Equilibrium", (), {"inp": inp, "state": object(), "wout": wout})()
+    monkeypatch.setattr(FBD, "surface_field_data_from_state", lambda *_args, **_kwargs: surface)
+    live = VmecExtender.from_equilibrium(
+        equilibrium,
+        external_field=coil_field,
+        digits=3,
+        levels=((13, 13), (26, 26)),
+    )
+    assert live.uses_virtual_casing
+    np.testing.assert_allclose(live.B(points), field.B(points), rtol=2e-11, atol=2e-11)
 
 
 @pytest.mark.full

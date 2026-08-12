@@ -123,7 +123,7 @@ equals that of the surface current
 :math:`\mathbf{K} = \mathbf{n}\times\mathbf{B}/\mu_0` on
 :math:`\partial\Omega`, evaluated with an accurate on-surface singular
 quadrature (reused from the optional ``virtual_casing_jax`` package,
-released as ``virtual-casing-jax >= 0.0.3`` from the canonical
+required as ``virtual-casing-jax >= 0.0.4`` from the canonical
 ``uwplasma/virtual_casing_jax`` repository;
 :func:`~vmex.core.freeboundary_diff.surface_field_data_from_wout`
 adapts a converged boundary + field, and

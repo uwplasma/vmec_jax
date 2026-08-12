@@ -55,12 +55,12 @@ optimizers = [
 ]
 # Differentiable virtual-casing residual on a specified boundary
 # (plan.md R15.3 + R19); this is not a NESTOR equilibrium adjoint.
-# virtual-casing-jax >= 0.0.3 (released 2026-07-28 from the canonical
-# https://github.com/uwplasma/virtual_casing_jax) carries the exterior-field
-# API vmex drives; 0.0.2 and earlier predate it. Surface-data construction
+# virtual-casing-jax >= 0.0.4 from the canonical
+# https://github.com/uwplasma/virtual_casing_jax carries the batch-stable
+# exterior-field API vmex drives. Surface-data construction
 # remains available without the extra; solver tests use an explicit skip.
 freeb = [
-    "virtual-casing-jax>=0.0.3",
+    "virtual-casing-jax>=0.0.4",
 ]
 #
 # Gyrokinetic turbulence-proxy objectives (``vmex.core.turbulence``) via GKX,
@@ -119,7 +119,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-# freeboundary_diff.py requires the optional virtual-casing-jax >= 0.0.3
+# freeboundary_diff.py requires the optional virtual-casing-jax >= 0.0.4
 # extra (see [project.optional-dependencies]). Its FD-validated gradient
 # tests are importorskip-gated and skip in the dependency-minimal core CI,
 # so the module is excluded from the core >=95% coverage gate. It is

@@ -202,6 +202,12 @@ class Equilibrium:
             niter=int(r.iterations), converged=bool(r.converged),
         )
 
+    def exterior_field(self, **kwargs):
+        """Return a field that can be queried outside the plasma surface."""
+        from .extender import VmecExtender
+
+        return VmecExtender.from_equilibrium(self, **kwargs)
+
 
 def _auto_jac_chunk(dim: int) -> int:
     """Bound device-aware batching by the conservative square-root policy."""

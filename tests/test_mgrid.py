@@ -21,6 +21,7 @@ jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402
 
 from vmex.core.errors import MgridNotFoundError  # noqa: E402
+from vmex.core.extender import MagneticField, VmecExtender  # noqa: E402
 from vmex.core.mgrid import (  # noqa: E402
     MgridData,
     MgridField,
@@ -50,6 +51,66 @@ def _random_points(data: MgridData, n: int = 200, seed: int = 1234):
     z = rng.uniform(data.zmin + eps_z, data.zmax - eps_z, size=n)
     phi = rng.uniform(0.0, 2.0 * np.pi, size=n)
     return r, phi, z
+
+
+def _linear_vacuum_field(points):
+    """Curl-free, divergence-free field B = (2x, -2y, 1)."""
+    points = jnp.asarray(points)
+    return jnp.stack(
+        (2.0 * points[:, 0], -2.0 * points[:, 1], jnp.ones(points.shape[0])),
+        axis=-1,
+    )
+
+
+def test_magnetic_field_interface_and_vacuum_extender_are_exact():
+    points = jnp.array([[1.8, 0.2, -0.1], [2.0, -0.3, 0.4]])
+    expected_grad = jnp.broadcast_to(
+        jnp.diag(jnp.array([2.0, -2.0, 0.0])), (2, 3, 3)
+    )
+    field = MagneticField(_linear_vacuum_field).set_points(points)
+
+    np.testing.assert_allclose(field.B(), _linear_vacuum_field(points))
+    np.testing.assert_allclose(field.gradB(), expected_grad)
+    np.testing.assert_allclose(field.dB_by_dX(), expected_grad)
+    np.testing.assert_allclose(field.AbsB(), field.absB()[:, None])
+    expected_grad_absB = jnp.einsum(
+        "...i,...ij->...j", field.B(), expected_grad
+    ) / field.absB()[:, None]
+    np.testing.assert_allclose(field.GradAbsB(), expected_grad_absB)
+
+    vacuum_wout = type(
+        "VacuumWout",
+        (),
+        {"betatotal": 0.0, "wp": 0.0, "ctor": 0.0, "mgrid_file": ""},
+    )()
+    extender = VmecExtender.from_wout(
+        vacuum_wout, external_field=_linear_vacuum_field
+    ).set_points(points)
+    assert not extender.uses_virtual_casing
+    np.testing.assert_allclose(extender.B(), field.B())
+    np.testing.assert_allclose(extender.gradB(), expected_grad)
+
+    general = MagneticField(
+        lambda p: jnp.stack(
+            (p[:, 0] + 2 * p[:, 1], 3 * p[:, 0] - p[:, 1], p[:, 2]),
+            axis=-1,
+        )
+    )
+    component_first = jnp.array([[1.0, 2.0, 0.0], [3.0, -1.0, 0.0], [0.0, 0.0, 1.0]])
+    expected = jnp.broadcast_to(component_first, (len(points), 3, 3))
+    np.testing.assert_allclose(general.gradB(points), expected)
+    np.testing.assert_allclose(general.dB_by_dX(points), jnp.swapaxes(expected, -1, -2))
+
+
+def test_magnetic_field_cylindrical_points_round_trip():
+    field = MagneticField(_linear_vacuum_field)
+    points = jnp.array([[1.8, 0.25, -0.1]])
+
+    assert field.set_points_cyl(points) is field
+    np.testing.assert_allclose(field.get_points_cyl(), points)
+    np.testing.assert_allclose(
+        field.B_cyl(), field.B_cyl(points), rtol=1.0e-14, atol=1.0e-14
+    )
 
 
 # ---------------------------------------------------------------------------

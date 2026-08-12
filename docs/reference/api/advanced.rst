@@ -78,6 +78,9 @@ Free boundary
 .. automodule:: vmex.core.mgrid
    :members:
 
+.. automodule:: vmex.core.extender
+   :members:
+
 Physics objectives
 ------------------
 

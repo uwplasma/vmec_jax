@@ -48,6 +48,34 @@ vmex input.nearby --restart wout_circular_tokamak.nc
 
 VMEX uses the input file's `NS_ARRAY`, `FTOL_ARRAY`, and `NITER_ARRAY`. `verbose=True` prints the VMEC iteration table; typed errors distinguish invalid inputs, Jacobian failures, non-convergence, and numerical failures.
 
+## Field outside the plasma
+
+`VmecExtender` evaluates a supplied vacuum coil/MGRID field directly and adds
+the plasma-current contribution through `virtual_casing_jax` for finite-beta
+or current-carrying equilibria:
+
+```python
+field = vj.VmecExtender.from_file(
+    "wout_example.nc", external_field=coils.B, nphi=32, ntheta=32
+)
+field.set_points([[1.8, 0.0, 0.0]])
+
+B = field.B()              # (n, 3), Cartesian
+modB = field.absB()        # (n,)
+gradB = field.gradB()      # (n, B_i, x_j)
+grad_modB = field.GradAbsB()
+```
+
+Install `vmex[freeb]` for the finite-beta path. Points must be outside the
+last closed flux surface, away from the source surface and external currents.
+MGRID queries must also remain inside the tabulated R-Z domain.
+The resulting vacuum region can contain islands or stochastic field lines;
+VMEX does not assume nested surfaces there.
+
+`equilibrium.exterior_field()` builds the plasma contribution from the live
+VMEX spectral state, rather than a materialized wout, so JAX derivatives with
+respect to the equilibrium boundary are retained for single-stage objectives.
+
 The common CLI operations are:
 
 | Command | Result |

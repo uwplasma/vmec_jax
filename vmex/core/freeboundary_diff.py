@@ -124,8 +124,8 @@ def _require_vcj() -> None:
             "vmex.core.freeboundary_diff requires the optional dependency "
             "'virtual_casing_jax' (canonical repository "
             "https://github.com/uwplasma/virtual_casing_jax). Install it "
-            "with `pip install vmex[freeb]` (virtual-casing-jax>=0.0.3); "
-            "PyPI releases up to 0.0.2 predate the API vmex drives."
+            "with `pip install vmex[freeb]` (virtual-casing-jax>=0.0.4); "
+            "earlier releases predate the batch-stable exterior gradient."
         ) from _IMPORT_ERROR
 
 
