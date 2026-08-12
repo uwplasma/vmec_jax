@@ -10,6 +10,9 @@ examples, tests, and documentation.
 - Large reference WOUT, mgrid, Boozer, and JXB files are ignored by git and are
   fetched on demand with `python tools/fetch_assets.py`. The command verifies
   the release size and SHA-256 recorded in `assets/manifest.json`.
+- `single_grid/` copies that duplicate a file here are not shipped in the
+  release; `fetch_assets.py` re-creates them from this folder on extraction, so
+  the mirrored `mgrid_cth_like_lasym_small.nc` is always the tracked file.
 
 Keep new example inputs small.  Put generated output files in ignored output
 directories, not in this data folder.

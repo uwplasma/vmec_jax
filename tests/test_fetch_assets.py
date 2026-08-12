@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -144,6 +145,88 @@ def test_fetch_assets_safe_extract_rejects_special_files(tmp_path) -> None:
     with tarfile.open(fileobj=payload, mode="r:gz") as tf:
         with pytest.raises(SystemExit, match="special archive member"):
             module._safe_extract(tf, tmp_path)
+
+
+def _bundle_with(module, tmp_path, *, members: dict[str, bytes], mirrors=()):
+    """A local ``file://`` bundle carrying ``members``, sized and hashed."""
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as tf:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    blob = payload.getvalue()
+    archive = tmp_path / "bundle.tar.gz"
+    archive.write_bytes(blob)
+    return module.AssetBundle(
+        name="mirrored",
+        url=archive.as_uri(),
+        sha256=hashlib.sha256(blob).hexdigest(),
+        size_bytes=len(blob),
+        source="test",
+        license="test",
+        generator_revision="0" * 40,
+        destination="repository",
+        default=False,
+        common_paths=(),
+        mirrors=tuple(mirrors),
+    )
+
+
+def test_mirrors_recreate_the_single_grid_copies(tmp_path) -> None:
+    """Copies the bundle deliberately omits are re-created on extraction.
+
+    ``examples/data/single_grid`` was 16 byte-identical duplicates of its
+    ``examples/data`` siblings; they are mirrored instead of shipped.
+    """
+    module = _load_fetch_assets()
+    dest = tmp_path / "checkout"
+    (dest / "examples" / "data").mkdir(parents=True)
+    # stands in for the git-tracked small mgrid, which is never shipped
+    (dest / "examples" / "data" / "tracked.nc").write_bytes(b"tracked")
+
+    bundle = _bundle_with(
+        module, tmp_path,
+        members={"examples/data/shipped.nc": b"shipped"},
+        mirrors=({"source": "examples/data",
+                  "target": "examples/data/single_grid",
+                  "names": ["shipped.nc", "tracked.nc"]},),
+    )
+    module._download_and_extract_bundle(bundle, dest=dest, force=False)
+
+    mirrored = dest / "examples" / "data" / "single_grid"
+    assert (mirrored / "shipped.nc").read_bytes() == b"shipped"
+    assert (mirrored / "tracked.nc").read_bytes() == b"tracked"
+
+
+def test_mirror_reports_a_missing_source(tmp_path) -> None:
+    module = _load_fetch_assets()
+    dest = tmp_path / "checkout"
+    (dest / "examples" / "data").mkdir(parents=True)
+    bundle = _bundle_with(
+        module, tmp_path,
+        members={"examples/data/shipped.nc": b"shipped"},
+        mirrors=({"source": "examples/data",
+                  "target": "examples/data/single_grid",
+                  "names": ["absent.nc"]},),
+    )
+
+    with pytest.raises(SystemExit, match="Mirror source missing"):
+        module._download_and_extract_bundle(bundle, dest=dest, force=False)
+
+
+def test_unreachable_release_reports_the_bundle(monkeypatch) -> None:
+    """A deleted release must name itself, not raise a bare urllib traceback."""
+    module = _load_fetch_assets()
+    bundle = module.BUNDLES_BY_NAME["reference-nc"]
+
+    def _gone(_url):
+        raise module.urllib.error.HTTPError(bundle.url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _gone)
+
+    with pytest.raises(SystemExit, match="Could not download bundle 'reference-nc'"):
+        module._read_bundle(bundle)
 
 
 def test_no_tracked_file_exceeds_one_mib() -> None:
