@@ -15,10 +15,10 @@ from vmex.core.bootstrap import (ELEMENTARY_CHARGE, KineticProfiles, RedlBootstr
 
 nfp = 4
 TARGET_BETA = 0.025
-BETA_WEIGHT = 1.0 / TARGET_BETA**2  # beta residual is therefore relative
+BETA_WEIGHT = 1.0 / TARGET_BETA**2  # beta residual is relative
 SURFACES = np.linspace(0.1, 0.9, 8)
 MAX_MODES, MAX_NFEV = [2, 3], [15, 30]
-ASPECT_TARGET, IOTA_TARGET = 6.5, -1.1
+ASPECT_TARGET = 6
 CURRENT_DOFS = 6
 PARAMETER_STEP = 0.02
 MINIMUM_MPOL = 5
@@ -33,6 +33,10 @@ DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{n
 inp = vj.VmecInput.from_file(DATA)
 rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
 rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -SEED_PERTURBATION, SEED_PERTURBATION
+
+# The Landreman-Buller-Drevlak profiles: ne=n0(1-s^5), Te=Ti=T0(1-s).
+# Their product gives p=2 e ne Te; one seed solve calibrates its amplitude to
+# the requested VMEC volume-average beta for this magnetic-field scale.
 n0 = 3.0e20 * (TARGET_BETA / 0.05) ** (1 / 3)
 T0 = 15.0e3 * (TARGET_BETA / 0.05) ** (2 / 3)
 am = np.zeros(21); am[[0, 1, 5, 6]] = [1.0, -1.0, -1.0, 1.0]
@@ -51,13 +55,16 @@ picard = self_consistent_bootstrap(inp, profiles, -1, n_iter=2 if ci_smoke else 
                                    tol=1e-3, degree=CURRENT_DOFS - 1,
                                    s_eval=SURFACES, verbose=not ci_smoke)
 inp, equilibrium = picard.input, picard.equilibrium
+
+# Objective function terms
 bootstrap = RedlBootstrapMismatch(profiles, helicity_n=-1, surfaces=SURFACES,
                                   n_lambda=12 if ci_smoke else 32)
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=-1)
 objective_function_terms = [
     (qs, 0.0, 1.0), (bootstrap, 0.0, 1.0),
-    (opt.aspect_ratio, ASPECT_TARGET, 1.0), (opt.mean_iota, IOTA_TARGET, 10.0),
+    (opt.aspect_ratio, ASPECT_TARGET, 1.0),
     (opt.volume_average_beta, TARGET_BETA, BETA_WEIGHT),
+    # (opt.mean_iota, IOTA_TARGET, 10.0),
 ]
 
 def report(label, equilibrium):

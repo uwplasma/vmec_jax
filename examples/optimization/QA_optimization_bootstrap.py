@@ -15,7 +15,7 @@ from vmex.core.bootstrap import (ELEMENTARY_CHARGE, KineticProfiles, RedlBootstr
 
 nfp = 2
 TARGET_BETA = 0.025
-BETA_WEIGHT = 1.0 / TARGET_BETA**2  # beta residual is therefore relative
+BETA_WEIGHT = 1.0 / TARGET_BETA**2  # beta residual is relative
 SURFACES = np.linspace(0.1, 0.9, 8)
 MAX_MODES, MAX_NFEV = [2, 3], [15, 30]
 ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
@@ -56,12 +56,15 @@ picard = self_consistent_bootstrap(inp, profiles, 0, n_iter=2 if ci_smoke else 8
                                    tol=1e-3, degree=CURRENT_DOFS - 1,
                                    s_eval=SURFACES, verbose=not ci_smoke)
 inp, equilibrium = picard.input, picard.equilibrium
+
+# Objective function terms
 bootstrap = RedlBootstrapMismatch(profiles, helicity_n=0, surfaces=SURFACES,
                                   n_lambda=12 if ci_smoke else 32)
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 objective_function_terms = [
     (qs, 0.0, 1.0), (bootstrap, 0.0, 1.0),
-    (opt.aspect_ratio, ASPECT_TARGET, 1.0), (opt.mean_iota, IOTA_TARGET, 10.0),
+    (opt.aspect_ratio, ASPECT_TARGET, 1.0),
+    (opt.mean_iota, IOTA_TARGET, 10.0),
     (opt.volume_average_beta, TARGET_BETA, BETA_WEIGHT),
 ]
 
