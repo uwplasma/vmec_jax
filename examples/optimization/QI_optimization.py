@@ -59,16 +59,10 @@ objective_function_terms = [
 qp_terms = [(qp, 0.0, 10.0), *objective_function_terms]
 qi_terms = [(qi, 0.0, 10.0), *objective_function_terms]
 
-def report(label, equilibrium):
-    total = float(qi.total(equilibrium))
-    print(
-        f"[{label}] constructed QI = {total:.6e}, "
-        f"aspect = {float(opt.aspect_ratio(equilibrium.state, equilibrium.runtime)):.4f}, "
-        f"mean iota = {float(opt.mean_iota(equilibrium.state, equilibrium.runtime)):.4f}, "
-        f"mirror = {float(opt.mirror_ratio(equilibrium.state, equilibrium.runtime)):.4f}, "
-        f"elongation = {float(opt.max_elongation(equilibrium.state, equilibrium.runtime)):.4f}"
-    )
-    return total
+report = opt.EquilibriumReporter(
+    ("constructed QI", qi.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
+    ("mean iota", opt.mean_iota, ".4f"), ("mirror", opt.mirror_ratio, ".4f"),
+    ("elongation", opt.max_elongation, ".4f"))
 
 # Optimize for QP first
 print(f"\n===== QP basin stage, max_mode = {MAX_MODES_QP} =====")
@@ -107,8 +101,7 @@ for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV), 1):
         vary_major_radius=VARY_MAJOR_RADIUS,
     )
     print(f"dof_names = {problem.dof_names}")
-    if not ci_smoke:
-        problem.compile_residual_and_jacobian()
+    if not ci_smoke: problem.compile_residual_and_jacobian()
     result = least_squares(
         problem.residual, problem.x0, jac=problem.residual_jac,
         x_scale=problem.scales, max_nfev=max_nfev,
@@ -126,7 +119,7 @@ final_input = replace(inp,
 final_equilibrium = opt.solve_equilibrium(
     final_input, initial_state=equilibrium.state,
     verbose=not ci_smoke, raise_on_max_iterations=True)
-qi_final = report("final", final_equilibrium)
+qi_final = report("final", final_equilibrium)["constructed QI"]
 qi_validation = ConstructedQIResidual(SURFACES, **validation_options)
 print(f"\nQI total {qi_final:.3e}; independent fine-grid validation "
       f"{float(qi_validation.total(final_equilibrium)):.3e}")

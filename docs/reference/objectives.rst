@@ -350,6 +350,37 @@ reproducing the workflow of Landreman–Buller–Drevlak, arXiv:2205.02914):
        inp, max_mode=4, jac="implicit",
        current_dofs=6)          # free AC[0:6] + CURTOR with the boundary
 
+The complete runnable workflows are
+``examples/optimization/QA_optimization_bootstrap.py`` and
+``QH_optimization_bootstrap.py``.  Their setup has two distinct steps:
+
+1. ``KineticProfiles`` describes the density and temperature seen by the
+   Redl model.  Coefficients are in increasing powers of normalized toroidal
+   flux ``s``; for example ``[1, 0, 0, 0, 0, -1]`` is ``1-s**5`` and
+   ``[1, -1]`` is ``1-s``.  These profiles do not silently replace VMEC's
+   pressure profile, so the examples explicitly give VMEC the matching
+   ``p = e ne (Te + Ti)`` profile and calibrate its scale to the target beta.
+2. ``self_consistent_bootstrap`` alternates a hot-restarted equilibrium solve,
+   evaluation of the Redl ``<J.B>`` target, and a power-series refit of
+   ``I'(s)``/``CURTOR``.  ``degree`` is the fitted current-polynomial degree,
+   ``s_eval`` is the radial collocation grid, ``tol`` bounds the relative
+   current-profile mismatch, and ``relax < 1`` damps difficult high-beta
+   fixed points.  The returned input and equilibrium seed the differentiable
+   optimization; the Picard loop itself is not differentiated.
+
+During optimization, ``current_dofs=k`` adds normalized ``AC(0:k)`` and
+``CURTOR`` variables after the boundary variables.  ESS scales only boundary
+Fourier modes: radial current-polynomial coefficients are not spectral modes
+and should use a separate parameter scale.  In the examples,
+``PARAMETER_STEP`` is the characteristic low-order boundary-coefficient step,
+``CURRENT_PARAMETER_STEP`` is the characteristic normalized-current step,
+and ``MAX_PARAMETER_CHANGE`` is a broad per-stage safety box measured in
+those step units.  A safety box should not be active at the solution; exact
+hits indicate an artificial optimization floor.  Passing
+``restart_from=equilibrium`` when constructing the next
+:class:`~vmex.core.problem.VmecProblem` remaps the converged state to its new
+resolution and avoids a cold magnetic-axis guess.
+
 MHD stability
 -------------
 

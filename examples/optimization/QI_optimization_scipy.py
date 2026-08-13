@@ -82,16 +82,10 @@ problem.compile_value_and_gradient()
 x0, scales = problem.x0, BOUNDARY_STEP * problem.scales
 seed_total = float(qi.total(problem.equilibrium_from_x(x0)))
 
-def report(label, equilibrium):
-    total = float(qi.total(equilibrium))
-    print(
-        f"[{label}] constructed QI = {total:.6e}, "
-        f"aspect = {float(opt.aspect_ratio(equilibrium.state, equilibrium.runtime)):.4f}, "
-        f"mean iota = {float(opt.mean_iota(equilibrium.state, equilibrium.runtime)):.4f}, "
-        f"mirror = {float(opt.mirror_ratio(equilibrium.state, equilibrium.runtime)):.4f}, "
-        f"elongation = {float(opt.max_elongation(equilibrium.state, equilibrium.runtime)):.4f}"
-    )
-    return total
+report = opt.EquilibriumReporter(
+    ("constructed QI", qi.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
+    ("mean iota", opt.mean_iota, ".4f"), ("mirror", opt.mirror_ratio, ".4f"),
+    ("elongation", opt.max_elongation, ".4f"))
 
 def x_from_y(y):
     return x0 + scales * y
@@ -125,9 +119,9 @@ final_input = replace(inp,
 final_equilibrium = opt.solve_equilibrium(
     final_input, initial_state=equilibrium.state,
     verbose=not ci_smoke, raise_on_max_iterations=True)
-final_total = report("final", final_equilibrium)
+final_total = report("final", final_equilibrium)["constructed QI"]
 print(f"\n{METHOD}: final cost = {float(result.fun):.12e}, QI total = {final_total:.3e}")
-qi_final = report("final", final_equilibrium)
+qi_final = final_total
 qi_validation = ConstructedQIResidual(SURFACES, **validation_options)
 print(f"\nQI total {qi_final:.3e}; independent fine-grid validation "
       f"{float(qi_validation.total(final_equilibrium)):.3e}")

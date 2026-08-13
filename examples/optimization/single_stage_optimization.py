@@ -16,19 +16,20 @@ from vmex import optimize as opt
 
 from essos.coils import Coils, Curves, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
-from essos.objective_functions import loss_coil_separation
 from essos.surfaces import SurfaceRZFourier
 
 nfp = 2  # number of field periods
-SURFACES = np.linspace(0.1, 1.0, 6)
-MAX_MODE = 1
-MAXITER = 20
-ASPECT_TARGET = 5.0
+SURFACES = np.linspace(0.05, 1.0, 6)
+MAX_MODE = 3
+MAXITER = 200
+ASPECT_TARGET = 4.0
+ASPECT_WEIGHT = 1.0
 IOTA_TARGET = 0.42
+IOTA_WEIGHT = 100.0
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.10
 
-N_COILS = 3
+N_COILS = 4
 COIL_ORDER = 5
 COIL_MAJOR_RADIUS = 1.0
 COIL_MINOR_RADIUS = 0.5
@@ -37,14 +38,19 @@ N_SEGMENTS = 64
 STELLSYM = True
 
 NORMAL_FIELD_WEIGHT = 1.0e3
+NORMAL_FIELD_LIMIT = 0.01
+NORMAL_FIELD_LIMIT_WEIGHT = 1.0e5
 LENGTH_TARGET = 3.3
-LENGTH_WEIGHT = 0.1
+LENGTH_WEIGHT = 1.0
 CURVATURE_LIMIT = 7.0
-CURVATURE_WEIGHT = 1.0e-3
+CURVATURE_WEIGHT = 10.0
 COIL_DISTANCE_LIMIT = 0.08
-COIL_DISTANCE_WEIGHT = 1.0
+COIL_DISTANCE_WEIGHT = 1.0e3
+COIL_SURFACE_DISTANCE_LIMIT = 0.20
+COIL_SURFACE_DISTANCE_WEIGHT = 1.0e3
 
-NPHI = NTHETA = 16
+# A toroidal grid commensurate with the coil count can alias narrow B.n/B structure.
+NPHI, NTHETA = 37, 32
 METHOD = "BFGS"  # also accepts "L-BFGS-B"
 OPTIONS = {"maxiter": MAXITER, "gtol": 1.0e-8}
 if METHOD == "L-BFGS-B":
@@ -69,8 +75,8 @@ inp = replace(inp, delt=0.5).change_resolution(
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 plasma_terms = [
     (qs.residuals_state, 0.0, 1.0),
-    (opt.aspect_ratio, ASPECT_TARGET, 1.0),
-    (opt.mean_iota, IOTA_TARGET, 10.0),
+    (opt.aspect_ratio, ASPECT_TARGET, ASPECT_WEIGHT),
+    (opt.mean_iota, IOTA_TARGET, IOTA_WEIGHT),
 ]
 plasma_problem = opt.VmecProblem.from_tuples(
     inp, plasma_terms, max_mode=MAX_MODE, vary_major_radius=VARY_MAJOR_RADIUS,
@@ -81,12 +87,19 @@ curves0 = CreateEquallySpacedCurves(
     n_segments=N_SEGMENTS, nfp=inp.nfp, stellsym=STELLSYM)
 coils0 = Coils(curves0, np.full(N_COILS, COIL_CURRENT))
 
-def normal_field_residual(coils, surface):
+def normalized_normal_field(coils, surface):
     field = BiotSavart(coils)
     magnetic_field = jax.vmap(field.B)(surface.gamma.reshape(-1, 3)).reshape(surface.gamma.shape)
-    normal_field = jnp.sum(magnetic_field * surface.unitnormal, axis=2)
-    weights = surface.area_element / surface.area_element.size
-    return jnp.sqrt(weights) * normal_field / jnp.linalg.norm(magnetic_field, axis=2)
+    return jnp.sum(magnetic_field * surface.unitnormal, axis=2) / jnp.linalg.norm(magnetic_field, axis=2)
+
+def normal_field_residual(coils, surface):
+    weights = surface.area_element / jnp.sum(surface.area_element)
+    values = normalized_normal_field(coils, surface)
+    return (jnp.sqrt(weights) * values).ravel()
+
+def normal_field_maximum(coils, surface):
+    values = jnp.sqrt(normalized_normal_field(coils, surface)**2 + 1.0e-12)
+    return jax.scipy.special.logsumexp(2000.0 * values) / 2000.0
 
 def coil_lengths(coils, _surface):
     return coils.length[:N_COILS]
@@ -95,14 +108,23 @@ def coil_curvature_excess(coils, _surface):
     return jnp.maximum(coils.curvature[:N_COILS] - CURVATURE_LIMIT, 0.0)
 
 def coil_distance_excess(coils, _surface):
-    penalty = loss_coil_separation(coils, COIL_DISTANCE_LIMIT, block_size=16)
-    return jnp.sqrt(jnp.maximum(penalty, 0.0) + 1.0e-30)
+    first, second = jnp.triu_indices(coils.gamma.shape[0], 1)
+    pairwise = jnp.linalg.norm(
+        coils.gamma[first, :, None] - coils.gamma[second, None, :], axis=-1)
+    return jnp.maximum(COIL_DISTANCE_LIMIT - jnp.min(pairwise, axis=(1, 2)), 0.0)
+
+def coil_surface_distance_excess(coils, surface):
+    distances = jnp.linalg.norm(
+        coils.gamma[:N_COILS, :, None] - surface.gamma.reshape(1, 1, -1, 3), axis=-1)
+    return jnp.maximum(COIL_SURFACE_DISTANCE_LIMIT - jnp.min(distances, axis=2), 0.0).ravel()
 
 coil_terms = [
     (normal_field_residual, 0.0, NORMAL_FIELD_WEIGHT),
+    (normal_field_maximum, NORMAL_FIELD_LIMIT, NORMAL_FIELD_LIMIT_WEIGHT),
     (coil_lengths, LENGTH_TARGET, LENGTH_WEIGHT),
     (coil_curvature_excess, 0.0, CURVATURE_WEIGHT),
     (coil_distance_excess, 1.0e-15, COIL_DISTANCE_WEIGHT),
+    (coil_surface_distance_excess, 1.0e-15, COIL_SURFACE_DISTANCE_WEIGHT),
 ]
 
 # The public VMEX problem owns the boundary-mode convention and RBC(0,0) choice.
@@ -160,7 +182,6 @@ for name, _start, _stop in plasma_problem.metadata["term_slices"]:
 for function, _target, _weight in coil_terms:
     history[function.__name__] = []
 
-
 def scipy_objective(u):
     (value, (plasma_rows, coil_costs)), gradient = value_and_grad(jnp.asarray(u))
     history["total"].append(float(value))
@@ -188,17 +209,53 @@ final_input = replace(final_input,
     ns_array=np.array([31 if ci_smoke else 101]),
     ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
     niter_array=np.array([8000]))
-final_equilibrium = opt.solve_equilibrium(
+vjp = opt.solve_equilibrium(
     final_input, initial_state=equilibrium.state, verbose=not ci_smoke,
     raise_on_max_iterations=True)
 
+surface_final = surface_from_boundary(jnp.asarray(final_input.rbc), jnp.asarray(final_input.zbs),
+                                      nphi=61, ntheta=64)
+normal_field = np.asarray(normalized_normal_field(coils_final, surface_final))
+area_weights = np.asarray(surface_final.area_element); area_weights = area_weights / area_weights.sum()
+normal_field_rms = float(np.sqrt(np.sum(area_weights * normal_field**2)))
+normal_field_max = float(np.max(np.abs(normal_field)))
+coil_points, surface_points = np.asarray(coils_final.gamma), np.asarray(surface_final.gamma).reshape(-1, 3)
+coil_surface_distance = min(float(np.linalg.norm(points[:, None] - surface_points[None], axis=2).min())
+                            for points in coil_points)
+coil_pairs = [(i, j) for i in range(len(coil_points)) for j in range(i + 1, len(coil_points))]
+coil_distance = min(float(np.linalg.norm(coil_points[i][:, None] - coil_points[j][None], axis=2).min())
+                    for i, j in coil_pairs)
+maximum_curvature = float(np.max(np.asarray(coils_final.curvature)))
+
+# Print results
+report = opt.EquilibriumReporter(
+    ("QA total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
+    ("mean iota", opt.mean_iota, ".4f"))
+final_value = float(result.fun)
+report("final", final_equilibrium)
+print(f"\nObjective: {initial_value:.6e} -> {final_value:.6e} in {result.nit} {METHOD} iterations")
+print(f"Coil lengths = {np.asarray(coils_final.length[:N_COILS])}")
+print(f"B.n/B: area-weighted RMS = {100 * normal_field_rms:.3f}%, max = {100 * normal_field_max:.3f}% "
+      f"(target < {100 * NORMAL_FIELD_LIMIT:.1f}%)")
+print(f"Minimum coil-surface distance = {coil_surface_distance:.4f} m "
+      f"(target >= {COIL_SURFACE_DISTANCE_LIMIT:.4f} m)")
+print(f"Minimum coil-coil distance = {coil_distance:.4f} m (target >= {COIL_DISTANCE_LIMIT:.4f} m)")
+print(f"Maximum curvature = {maximum_curvature:.4f} 1/m (target <= {CURVATURE_LIMIT:.4f} 1/m)")
+
+# Save results
 input_path = final_input.to_indata("input.single_stage_optimized")
 wout_path = vj.write_wout("wout_single_stage_optimized.nc", final_equilibrium.wout)
 coils_final.to_json("coils_single_stage_optimized.json")
+# ESSOS writes |B| and B.n/B on the surface and the coil filaments for ParaView.
+field_final = BiotSavart(coils_final)
+surface_final.to_vtk("surface_single_stage_optimized", field=field_final)
+coils_final.to_vtk("coils_single_stage_optimized")
+print(f"Wrote {input_path}\nWrote {wout_path}")
+print("Wrote coils_single_stage_optimized.json")
+print("Wrote surface_single_stage_optimized.vts and coils_single_stage_optimized.vtu")
 
+# Plot results
 surface_initial = surface_from_boundary(rbc0, zbs0, nphi=60, ntheta=60)
-surface_final = surface_from_boundary(jnp.asarray(final_input.rbc), jnp.asarray(final_input.zbs),
-                                      nphi=60, ntheta=60)
 figure = plt.figure(figsize=(10, 4))
 for panel, surface, coils, title in [
     (1, surface_initial, coils0, "Initial"),
@@ -224,22 +281,7 @@ for name, values in history.items():
 axis.set(xlabel="objective evaluation", ylabel="weighted cost", title="Single-stage objective terms")
 axis.grid(True, alpha=0.3); axis.legend(fontsize=8, ncol=2); figure.tight_layout()
 figure.savefig("single_stage_objectives.png", dpi=200); plt.close(figure)
-
-# ESSOS writes |B| and B.n/B on the surface and the coil filaments for ParaView.
-field_final = BiotSavart(coils_final)
-surface_final.to_vtk("surface_single_stage_optimized", field=field_final)
-coils_final.to_vtk("coils_single_stage_optimized")
-
-final_value = float(result.fun)
-qs_final = float(qs.total(final_equilibrium))
-print(f"\nObjective: {initial_value:.6e} -> {final_value:.6e} in {result.nit} {METHOD} iterations")
-print(f"QA total = {qs_final:.6e}, aspect = {float(opt.aspect_ratio(final_equilibrium.state, final_equilibrium.runtime)):.4f}, "
-      f"mean iota = {float(opt.mean_iota(final_equilibrium.state, final_equilibrium.runtime)):.4f}")
-print(f"Coil lengths = {np.asarray(coils_final.length[:N_COILS])}")
-print(f"Wrote {input_path}\nWrote {wout_path}")
-print("Wrote coils_single_stage_optimized.json")
 print("Wrote single_stage_optimization.png")
 print("Wrote single_stage_objectives.png")
-print("Wrote surface_single_stage_optimized.vts and coils_single_stage_optimized.vtu")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"Wrote {path}")

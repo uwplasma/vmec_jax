@@ -119,12 +119,13 @@ from .statephysics import (
 )
 from .wout import WoutData, wout_from_state
 from .problem import Evaluation, FunctionProblem, VmecProblem, _run_with_progress
-from .monitoring import OptimizationMonitor, OptimizationRecord
+from .monitoring import EquilibriumReporter, OptimizationMonitor, OptimizationRecord
 
 __all__ = [
     "VmecProblem",
     "FunctionProblem",
     "Evaluation",
+    "EquilibriumReporter",
     "OptimizationMonitor",
     "OptimizationRecord",
     "make_problem",
@@ -1251,6 +1252,7 @@ def _make_finite_difference_problem(
     use_ess: bool,
     ess_alpha: float,
     solve_kwargs: dict[str, Any],
+    initial_state: SpectralState | None,
     device: Any,
     problem_class: type[VmecProblem],
 ) -> VmecProblem:
@@ -1298,7 +1300,8 @@ def _make_finite_difference_problem(
             cached = holder["cache"]
             if cached is not None and cached[0] == key:
                 return cached[1]
-        solved = solve_equilibrium(input_from_x(x), **solve_kwargs)
+        solved = solve_equilibrium(
+            input_from_x(x), initial_state=initial_state, **solve_kwargs)
         with lock:
             holder["cache"] = (key, solved)
         return solved
@@ -1480,6 +1483,7 @@ def make_problem(
     bounds: Any = None,
     device: Any = AUTO,
     solve_kwargs: dict | None = None,
+    restart_from: Any = None,
     progress: bool = False,
     report_interval: float = 10.0,
     progress_stream: Any = None,
@@ -1534,10 +1538,21 @@ def make_problem(
 
     ``adjoint_tol`` is a relative Krylov tolerance with a certified true
     residual check; ``adjoint_maxiter`` is the restart budget.
+
+    ``restart_from`` seeds the first equilibrium from a previous WOUT,
+    :class:`Equilibrium`, or solver result.  This is useful when a continuation
+    stage changes ``mpol``, ``ntor``, or radial resolution: trial hot restarts
+    then continue from the remapped converged state instead of a cold axis
+    guess.
     """
     if (objective_terms is None) == (loss is None):
         raise ValueError("provide exactly one of objective_terms or loss")
     inp = _with_forward_controls(inp, forward_ftol, forward_max_iterations)
+    initial_state = None
+    if restart_from is not None:
+        from .restart import restart_state
+        source = restart_from.wout if isinstance(restart_from, Equilibrium) else restart_from
+        initial_state = restart_state(source, inp)
     if derivative_method == "finite_difference":
         problem = _make_finite_difference_problem(
             inp,
@@ -1555,6 +1570,7 @@ def make_problem(
             use_ess=use_ess,
             ess_alpha=ess_alpha,
             solve_kwargs=dict(solve_kwargs or {}),
+            initial_state=initial_state,
             device=device,
             problem_class=problem_class,
         )
@@ -1610,6 +1626,7 @@ def make_problem(
             max_fsq_ratio=max_fsq_ratio,
             warm_start=(warm_start if hot_restart else None),
             solve_kwargs=dict(solve_kwargs or {}),
+            initial_state=initial_state,
             device=device,
             return_problem=True,
             problem_class=problem_class,
@@ -2020,6 +2037,7 @@ def _least_squares_implicit(
     scalar_objective: Callable | None = None,
     problem_bounds: Any = None,
     problem_scales: np.ndarray | None = None,
+    initial_state: SpectralState | None = None,
     **scipy_kwargs,
 ):
     """Single-stage boundary least squares with implicit-gradient Jacobians.
@@ -2105,6 +2123,8 @@ def _least_squares_implicit(
     # their own — no outer jax.default_device context needed.
     jac_device = resolve_implicit_device(device, cfg.resolution)
     cfg = dataclasses.replace(cfg, device=jac_device)
+    if initial_state is not None:
+        imp._HOT_CACHE[cfg] = initial_state
 
     def _place(x: np.ndarray) -> jnp.ndarray:
         if jac_device is None:

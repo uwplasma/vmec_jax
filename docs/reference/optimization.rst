@@ -161,6 +161,17 @@ the least-squares-derived objective. Bounds and line-search options remain
 ordinary SciPy choices. :class:`vmex.core.monitoring.OptimizationMonitor`
 records accepted iterations without changing the objective.
 
+Use :class:`vmex.core.monitoring.EquilibriumReporter` for the compact physics
+summary shared by the examples.  Each entry accepts either VMEX's
+``function(state, runtime)`` convention or a host ``function(equilibrium)``;
+the call prints one line and returns the same values by label::
+
+   report = opt.EquilibriumReporter(
+       ("QS total", qs.total, ".6e"),
+       ("aspect", opt.aspect_ratio, ".4f"),
+       ("mean iota", opt.mean_iota, ".4f"))
+   values = report("final", equilibrium)
+
 JAXopt and Optax
 ----------------
 
@@ -268,4 +279,5 @@ The main entry points are :func:`vmex.core.optimize.make_problem`,
 :class:`vmex.core.problem.FunctionProblem`,
 :class:`vmex.core.problem.VmecProblem`,
 :class:`vmex.core.problem.Evaluation`, and
-:class:`vmex.core.monitoring.OptimizationMonitor`.
+:class:`vmex.core.monitoring.OptimizationMonitor`, and
+:class:`vmex.core.monitoring.EquilibriumReporter`.

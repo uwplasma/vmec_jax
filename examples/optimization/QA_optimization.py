@@ -13,7 +13,7 @@ from vmex import optimize as opt
 
 nfp = 2  # number of field periods
 SURFACES = np.linspace(0.1, 1.0, 10)
-MAX_MODES, MAX_NFEV = [3], [20]  # mode-ladder alternative: [2, 3], [10, 40]
+MAX_MODES, MAX_NFEV = [3], [25]  # mode-ladder alternative: [2, 3], [10, 40]
 ASPECT_TARGET = 5.0
 IOTA_TARGET = 0.42
 MAGNETIC_WELL_TARGET = 0.01
@@ -22,8 +22,7 @@ VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.05
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
-if ci_smoke:
-    MAX_MODES, MAX_NFEV = [1], [4]
+if ci_smoke: MAX_MODES, MAX_NFEV = [1], [4]
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
@@ -41,13 +40,9 @@ objective_function_terms = [
          (opt.magnetic_well, MAGNETIC_WELL_TARGET, 1.0),
          ]
 
-def report(label, equilibrium):
-    total = float(qs.total(equilibrium))
-    print(f"[{label}] QS total = {total:.6e}, "
-          f"aspect = {float(opt.aspect_ratio(equilibrium.state, equilibrium.runtime)):.4f}, "
-          f"mean iota = {float(opt.mean_iota(equilibrium.state, equilibrium.runtime)):.4f}, "
-          f"magnetic well = {float(opt.magnetic_well(equilibrium.state, equilibrium.runtime)):.4f}")
-    return total
+report = opt.EquilibriumReporter(
+    ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
+    ("mean iota", opt.mean_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
 
 # Optimize for QA in stages, increasing the maximum mode number each time
 for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
@@ -58,8 +53,7 @@ for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=max_mode,
                                           vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True)
     print(f"dof_names = {problem.dof_names}")
-    if not ci_smoke:
-        problem.compile_residual_and_jacobian()
+    if not ci_smoke: problem.compile_residual_and_jacobian()
     result = least_squares(
         problem.residual, problem.x0, jac=problem.residual_jac,
         x_scale=problem.scales, max_nfev=max_nfev,
@@ -78,7 +72,7 @@ final_input = replace(inp,
 final_equilibrium = opt.solve_equilibrium(
     final_input, initial_state=equilibrium.state,
     verbose=not ci_smoke, raise_on_max_iterations=True)
-final_total = report("final", final_equilibrium)
+final_total = report("final", final_equilibrium)["QS total"]
 print(f"\nQS total {final_total:.3e}")
 
 # Save results

@@ -354,6 +354,9 @@ def test_fixed_boundary_single_stage_optimization(tmp_path):
         EXAMPLES / "optimization" / "single_stage_optimization.py", tmp_path, timeout=1800)
     match = re.search(r"Objective: ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
     assert match is not None and float(match.group(2)) < float(match.group(1))
+    for diagnostic in ("B.n/B: area-weighted RMS", "Minimum coil-surface distance",
+                       "Minimum coil-coil distance", "Maximum curvature", "Coil lengths"):
+        assert diagnostic in out
     for name in ("wout_single_stage_optimized.nc", "single_stage_objectives.png",
                  "surface_single_stage_optimized.vts", "coils_single_stage_optimized.vtu"):
         assert (tmp_path / name).exists()

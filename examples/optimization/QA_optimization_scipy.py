@@ -16,8 +16,8 @@ from vmex import optimize as opt
 nfp = 2  # number of field periods
 SURFACES = np.linspace(0.1, 1.0, 10)
 MAX_MODE = 3
-MAXITER  = 100
-METHOD   = "L-BFGS-B"        # or "L-BFGS-B"
+MAXITER  = 200
+METHOD   = "L-BFGS-B" # or "BFGS"
 BOUNDARY_STEP = 0.1   # typical change represented by one scaled variable
 ASPECT_TARGET = 5.0
 IOTA_TARGET   = 0.42
@@ -27,8 +27,7 @@ VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.05
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
-if ci_smoke:
-    MAX_MODE, MAXITER = 1, 4
+if ci_smoke: MAX_MODE, MAXITER = 1, 4
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
@@ -52,13 +51,9 @@ print(f"dof_names = {problem.dof_names}")
 problem.compile_value_and_gradient()
 x0, scales = problem.x0, BOUNDARY_STEP * problem.scales
 
-def report(label, equilibrium):
-    total = float(qs.total(equilibrium))
-    print(f"[{label}] QS total = {total:.6e}, "
-          f"aspect = {float(opt.aspect_ratio(equilibrium.state, equilibrium.runtime)):.4f}, "
-          f"mean iota = {float(opt.mean_iota(equilibrium.state, equilibrium.runtime)):.4f}, "
-          f"magnetic well = {float(opt.magnetic_well(equilibrium.state, equilibrium.runtime)):.4f}")
-    return total
+report = opt.EquilibriumReporter(
+    ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
+    ("mean iota", opt.mean_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
 
 def x_from_y(y):
     return x0 + scales * y
@@ -77,9 +72,8 @@ def monitor_y(intermediate_result):
 options = {"maxiter": MAXITER, "gtol": 1.0e-6}
 if METHOD == "L-BFGS-B":
     options.update(maxls=20, ftol=1.0e-12, maxcor=20)
-result = minimize(cost, np.zeros_like(x0),
-                  jac=gradient, method=METHOD,
-                  bounds=[(-3.0, 3.0)] * x0.size if METHOD == "L-BFGS-B" else None,
+result = minimize(cost, np.zeros_like(x0), jac=gradient, method=METHOD,
+                  bounds=[(-1.0, 1.0)] * x0.size if METHOD == "L-BFGS-B" else None,
                   callback=monitor_y, options=options)
 result.x = x_from_y(result.x)
 equilibrium = problem.equilibrium_from_x(result.x)
@@ -93,7 +87,7 @@ final_input = replace(inp,
 final_equilibrium = opt.solve_equilibrium(
     final_input, initial_state=equilibrium.state,
     verbose=not ci_smoke, raise_on_max_iterations=True)
-final_total = report("final", final_equilibrium)
+final_total = report("final", final_equilibrium)["QS total"]
 print(f"\n{METHOD}: final cost = {float(result.fun):.12e}, QS total = {final_total:.3e}")
 
 # Save results

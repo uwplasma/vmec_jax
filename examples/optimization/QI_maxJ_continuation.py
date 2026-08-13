@@ -53,11 +53,9 @@ objective_function_terms = [
     (mirror_excess, 0.0, 100.0),
 ]
 
-def report(label, equilibrium):
-    print(f"[{label}] QI = {float(qi.total(equilibrium)):.4e}, "
-          f"aspect = {float(opt.aspect_ratio(equilibrium.state, equilibrium.runtime)):.3f}, "
-          f"iota = {float(opt.mean_iota(equilibrium.state, equilibrium.runtime)):.3f}, "
-          f"mirror = {float(opt.mirror_ratio(equilibrium.state, equilibrium.runtime)):.3f}")
+report = opt.EquilibriumReporter(
+    ("QI", qi.total, ".4e"), ("aspect", opt.aspect_ratio, ".3f"),
+    ("iota", opt.mean_iota, ".3f"), ("mirror", opt.mirror_ratio, ".3f"))
 
 report("seed", equilibrium)
 for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
