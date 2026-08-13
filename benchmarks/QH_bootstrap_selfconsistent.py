@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Bootstrap-self-consistent QH (nfp=4, aspect 6.5, beta=2.5%) of arXiv:2205.02914.
+"""Benchmark bootstrap-self-consistent QH against arXiv:2205.02914.
 
 Reproduces the quasi-helically-symmetric configuration with self-consistent
 bootstrap current of Landreman, Buller & Drevlak, Phys. Plasmas 29, 082501

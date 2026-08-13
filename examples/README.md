@@ -42,13 +42,13 @@ All runnable examples live under this single `examples/` tree.
   - `single_stage_essos_coils_opt.py` — single-stage with ESSOS coils (vacuum
     and finite-beta cases); vmex stays coil-agnostic, coils enter as a
     differentiable `xyz -> B` callable.
-- `optimization/`: QA/QH/QP/QI from a circular torus, plus
-  `QA_bootstrap_selfconsistent.py` / `QH_bootstrap_selfconsistent.py` for
-  self-consistent Redl bootstrap current reproducing arXiv:2205.02914,
-  simsopt-style (`(function, target, weight)` terms + one least-squares call
-  per `max_mode` continuation stage, implicit adjoint gradients).  All read
-  `VMEX_EXAMPLES_CI=1` to shrink budgets for the CI smoke tests
-  (`tests/test_examples.py`).
+- `optimization/`: compact QA/QH/QP/QI scripts using `(function, target,
+  weight)` terms with SciPy least-squares, BFGS, or L-BFGS-B. The fixed-boundary
+  `single_stage_optimization.py` jointly varies VMEX boundary coefficients and
+  ESSOS coil Fourier coefficients; no free-boundary solve is involved.
+  `QA_optimization_bootstrap.py` and `QH_optimization_bootstrap.py` also vary
+  the VMEC current profile against a self-consistent Redl bootstrap target.
+  All read `VMEX_EXAMPLES_CI=1` for short CI smoke tests.
 - `mirror_fixed_boundary_nonaxisymmetric.py` compares axisymmetric and
   rotating-ellipse fixed-boundary mirrors; `mirror_free_boundary_beta_scan.py`
   continues a solved ESSOS-coil free boundary through 80% central beta and
@@ -60,3 +60,6 @@ All runnable examples live under this single `examples/` tree.
 Generated outputs should go to ignored `results/`, `outputs/`, or a user-chosen
 directory.  Do not commit generated WOUT, mgrid, Boozer, PDF, or plot files
 unless they are compact reviewed documentation artifacts.
+
+Published-equilibrium comparisons and reproducibility studies belong in
+`../benchmarks/`, not among the user-facing optimization examples.

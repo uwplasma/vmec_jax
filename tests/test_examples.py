@@ -225,37 +225,27 @@ def test_qs_optimization_examples(case, tmp_path):
     script = EXAMPLES / "optimization" / f"{case}_optimization.py"
     out = _run_example(script, tmp_path)
     _assert_cost_decreased(out, case)
-    outdir = tmp_path / f"output_{case}_optimization"
-    assert (outdir / f"input.{case}_optimized").exists()
-    assert (outdir / f"wout_{case}_optimized.nc").exists()
-    assert (outdir / f"{case}_optimized_summary.png").exists()
-    # the final printout carries the achieved QS total (docstring claim hook)
-    match = re.search(r"QS total: seed ([0-9.eE+-]+) -> final ([0-9.eE+-]+)", out)
-    assert match is not None and np.isfinite(float(match.group(2)))
+    assert (tmp_path / f"input.{case}_optimized").exists()
+    assert (tmp_path / f"wout_{case}_optimized.nc").exists()
+    assert (tmp_path / f"{case}_optimized_summary.png").exists()
+    match = re.search(r"\[final\] QS total = ([0-9.eE+-]+)", out)
+    assert match is not None and np.isfinite(float(match.group(1)))
 
 
+@pytest.mark.full  # nightly: shared Boozer + bounce-action Jacobian is cold-compile heavy
 def test_qi_maxj_continuation_example(tmp_path):
-    """QI+maxJ continuation ladder from the nfp=2 simsopt seed (tiny default).
-
-    The default invocation is the smoke budget (one implicit stage, coarse
-    ns/Boozer sampling): asserts decreasing cost, the machine-parseable QI
-    line, the shared-Boozer bounce-action diagnostics, and the promised
-    deck/wout/figure outputs including the polar J(alpha, s) maps.
-    """
+    """Reduced-budget QI+maximum-J continuation smoke test."""
     script = EXAMPLES / "optimization" / "QI_maxJ_continuation.py"
     out = _run_example(script, tmp_path, timeout=900)
     _assert_cost_decreased(out, "QI-maxJ")
-    match = re.search(r"QI total: seed ([0-9.eE+-]+) -> final ([0-9.eE+-]+)", out)
-    assert match is not None
-    seed, final = float(match.group(1)), float(match.group(2))
-    assert np.isfinite(final) and final <= seed * 1.05
-    match = re.search(r"maximum-J fraction = ([0-9.]+)", out)
-    assert match is not None and 0.0 <= float(match.group(1)) <= 1.0
-    outdir = tmp_path / "output_QI_maxJ_continuation"
-    assert (outdir / "input.QI_maxJ_continuation_optimized").exists()
-    assert (outdir / "wout_QI_maxJ_continuation_optimized.nc").exists()
-    for ip in range(3):
-        assert (outdir / f"j_polar_pitch_{ip:02d}.png").stat().st_size > 10_000
+    seed = re.search(r"\[seed\] QI = ([0-9.eE+-]+)", out)
+    final = re.search(r"\[final\] QI = ([0-9.eE+-]+)", out)
+    assert seed is not None and final is not None
+    assert np.isfinite(float(final.group(1))) and float(final.group(1)) <= 1.05 * float(seed.group(1))
+    assert re.search(r"J-invariance = ([0-9.eE+-]+), maximum-J = ([0-9.eE+-]+)", out)
+    assert (tmp_path / "input.QI_maxJ_optimized").exists()
+    assert (tmp_path / "wout_QI_maxJ_optimized.nc").exists()
+    assert (tmp_path / "QI_maxJ_optimized_summary.png").stat().st_size > 10_000
 
 
 @pytest.mark.full  # nightly: QP-basin + QI stages + Boozer, subprocess cold-start heavy
@@ -321,12 +311,55 @@ _ZENODO_2205 = Path(os.environ.get(
                     reason="arXiv:2205.02914 Zenodo dataset not present")
 @pytest.mark.parametrize("case", ["QA", "QH"])
 def test_bootstrap_selfconsistent_examples(case, tmp_path):
-    script = EXAMPLES / "optimization" / f"{case}_bootstrap_selfconsistent.py"
+    script = REPO / "benchmarks" / f"{case}_bootstrap_selfconsistent.py"
     out = _run_example(script, tmp_path, timeout=1200)
     m = re.search(r"final f_boot = ([0-9.eE+-]+)", out)
     assert m is not None and float(m.group(1)) < 5e-2, f"{case} f_boot: {out[-400:]}"
     assert (tmp_path / f"output_{case}_bootstrap_selfconsistent"
             / f"wout_{case}_bootstrap_selfconsistent.nc").exists()
+
+
+@pytest.mark.full  # nightly: Picard seed + one exact finite-beta optimization stage
+@pytest.mark.parametrize("case", ["QA", "QH"])
+def test_bootstrap_optimization_examples(case, tmp_path):
+    script = EXAMPLES / "optimization" / f"{case}_optimization_bootstrap.py"
+    out = _run_example(script, tmp_path, timeout=1800)
+    _assert_cost_decreased(out, f"{case}-bootstrap")
+    assert "self-consistent seed" in out and "[final] QS" in out
+    match = re.search(r"\[final\].*beta = ([0-9.]+)%", out)
+    assert match is not None and 1.0 < float(match.group(1)) < 4.0
+    assert (tmp_path / f"input.{case}_bootstrap_optimized").exists()
+    assert (tmp_path / f"wout_{case}_bootstrap_optimized.nc").exists()
+
+
+@pytest.mark.full  # nightly: optional optimizer interoperability, cold JAX compilation
+@pytest.mark.parametrize(("script_name", "dependency", "output"), [
+    ("QA_optimization_scipy.py", None, "wout_QA_scipy_BFGS.nc"),
+    ("QI_optimization_scipy.py", None, "wout_QI_scipy_BFGS.nc"),
+    ("QI_optimization_jaxopt.py", "jaxopt", "wout_QI_jaxopt_LBFGS.nc"),
+    ("QI_optimization_optax.py", "optax", "wout_QI_optax_adam.nc"),
+])
+def test_scalar_optimizer_examples(script_name, dependency, output, tmp_path):
+    if dependency is not None:
+        pytest.importorskip(dependency)
+    out = _run_example(EXAMPLES / "optimization" / script_name, tmp_path, timeout=1800)
+    assert "final cost" in out
+    assert (tmp_path / output).exists()
+
+
+@pytest.mark.full  # nightly: exact VMEX+ESSOS reverse-mode graph and ParaView output
+def test_fixed_boundary_single_stage_optimization(tmp_path):
+    pytest.importorskip("essos")
+    out = _run_example(
+        EXAMPLES / "optimization" / "single_stage_optimization.py", tmp_path, timeout=1800)
+    match = re.search(r"Objective: ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    assert match is not None and float(match.group(2)) < float(match.group(1))
+    for name in ("wout_single_stage_optimized.nc", "single_stage_objectives.png",
+                 "surface_single_stage_optimized.vts", "coils_single_stage_optimized.vtu"):
+        assert (tmp_path / name).exists()
+    surface_vtk = (tmp_path / "surface_single_stage_optimized.vts").read_bytes()
+    assert b'Name="B_BiotSavart"' in surface_vtk
+    assert b'Name="B_dot_n_over_B"' in surface_vtk
 
 
 @pytest.mark.full

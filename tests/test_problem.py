@@ -56,6 +56,7 @@ def test_problem_contract_and_exact_key_cache():
     assert problem.J(problem.x0) == value
     np.testing.assert_array_equal(problem.dJ(problem.x0), grad)
     assert problem.names == ("a", "b")
+    assert problem.dof_names == ("a", "b")
     np.testing.assert_array_equal(problem.scales, [1.0, 2.0])
     assert FunctionProblem.from_functions([1.0], fun=np.sum).fun([2.0]) == 2.0
 
@@ -71,6 +72,7 @@ def test_vmec_problem_maps_inputs_and_reuses_equilibria():
         equilibrium_from_x=lambda x: (equilibrium, np.asarray(x)),
     )
     inp = problem.input_from_x([3.0, 4.0])
+    assert problem.dof_names == ("x[0]", "x[1]")
     np.testing.assert_array_equal(problem.x_from_input(inp), [3.0, 4.0])
     accepted, x = problem.equilibrium_from_x([5.0, 6.0])
     assert accepted is equilibrium

@@ -152,7 +152,7 @@ The vacuum QA example has `pres=0` and `DWell=0` exactly: VMEX adds no pressure 
 
 ![Vacuum QA diagnostics](docs/_static/figures/readme_diagnostics_qa_vacuum.webp)
 
-`examples/optimization/QA_bootstrap_selfconsistent.py` and `QH_bootstrap_selfconsistent.py` iterate VMEC and the Redl model to a self-consistent bootstrap-current profile and compare against the published equilibrium and SFINCS data.
+`QA_optimization_bootstrap.py` and `QH_optimization_bootstrap.py` optimize finite-beta QA/QH equilibria while varying the boundary and current profile against the Redl bootstrap-current target. The published-equilibrium and SFINCS comparisons live separately in `benchmarks/`.
 
 ![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.png)
 

@@ -149,6 +149,11 @@ class FunctionProblem:
         self._vg_cache: tuple[tuple[Any, ...], tuple[float, np.ndarray]] | None = None
         self._rj_cache: tuple[tuple[Any, ...], tuple[np.ndarray, np.ndarray]] | None = None
 
+    @property
+    def dof_names(self) -> tuple[str, ...]:
+        """Ordered names corresponding one-to-one with entries of a decision vector."""
+        return self.names
+
     @classmethod
     def from_functions(cls, x0: Array, **kwargs: Any) -> "FunctionProblem":
         """Build a problem from user-supplied x-level callables."""
@@ -380,12 +385,14 @@ class VmecProblem(FunctionProblem):
         input_from_x: Callable[[Array], Any],
         x_from_input: Callable[[Any], Array],
         equilibrium_from_x: Callable[[Array], Any] | None = None,
+        boundary_from_x: Callable[[Array], Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._input_from_x = input_from_x
         self._x_from_input = x_from_input
         self._equilibrium_from_x = equilibrium_from_x
+        self._boundary_from_x = boundary_from_x
 
     @classmethod
     def from_tuples(
@@ -434,6 +441,12 @@ class VmecProblem(FunctionProblem):
         if self._equilibrium_from_x is None:
             raise AttributeError("this problem does not provide equilibria")
         return self._equilibrium_from_x(self._x(x))
+
+    def boundary_from_x(self, x: Array) -> Any:
+        """Return traceable boundary coefficient arrays for decision vector ``x``."""
+        if self._boundary_from_x is None:
+            raise AttributeError("this problem does not provide boundary arrays")
+        return self._boundary_from_x(x)
 
     def evaluate(self, x: Array, *, derivatives: bool = True) -> Evaluation:
         """Evaluate and attach VMEC solve/adjoint status diagnostics."""

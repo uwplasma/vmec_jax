@@ -66,6 +66,16 @@ The SciPy and JAX callables therefore return the same value and gradient.
 VMEX maintains one exact-key host cache to avoid repeated work when an
 optimizer requests the value and derivative separately.
 
+``problem.dof_names`` is ordered exactly like ``problem.x0`` and every
+optimizer vector passed to the problem. For example,
+``dict(zip(problem.dof_names, result.x))`` labels an optimized SciPy result.
+The older ``problem.names`` spelling remains available as the underlying
+immutable tuple.
+
+``RBC(0,0)`` is fixed by default because changing it mainly changes the major
+radius. Pass ``vary_major_radius=True`` to release that coefficient explicitly;
+VMEX does not add the identically-zero ``ZBS(0,0)`` direction.
+
 Derivative methods
 ------------------
 

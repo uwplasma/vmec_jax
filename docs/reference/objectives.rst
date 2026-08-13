@@ -227,8 +227,8 @@ squash-and-shuffle distance.
 
 :class:`~vmex.core.qi.ConstructedQIResidual` evaluates that fuller Goodman
 construction on the same traceable spectrum.  It is the production QI target.
-Use reduced angular and bounce sampling during optimization, then evaluate the
-default resolution for reporting:
+Use reduced angular and bounce sampling during optimization, then evaluate an
+independent resolved grid for reporting:
 
 .. code-block:: python
 
@@ -236,9 +236,11 @@ default resolution for reporting:
 
    surfaces = np.linspace(0.1, 1.0, 6)
    qi = ConstructedQIResidual(
-       surfaces, mboz=12, nboz=12, nphi=61, nalpha=13, n_bounce=15
+       surfaces, mboz=12, nboz=12, nphi=61, nalpha=18, n_bounce=21
    )
-   qi_report = ConstructedQIResidual(surfaces)
+   qi_report = ConstructedQIResidual(
+       surfaces, mboz=14, nboz=14, nphi=101, nalpha=29, n_bounce=31
+   )
    result = opt.least_squares(
        [(qi, 0.0, 10.0),
         (opt.aspect_ratio, 5.0, 0.005)],
@@ -259,6 +261,17 @@ diagnostic is not numerically interchangeable with a six-surface core-to-edge
 objective.  The independent wout/Boozer implementation
 (:func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout`) remains the
 cross-check for a finished configuration.
+
+The branch matching, running extrema, and interpolation in the constructed
+target are piecewise smooth. Changing ``nalpha``, ``nphi``, or ``n_bounce``
+can therefore change the local optimization path even when the value at an
+already-QI configuration is converged. For the common ``mboz=12`` optimization
+lane, ``(nphi, nalpha, n_bounce)=(61, 18, 21)`` is a useful inexpensive grid;
+the example above is the separate certification grid. At least
+``nalpha >= 2*mboz + 1`` should be used for a resolved final check. No one
+fixed grid guarantees the same basin across NFP and boundary mode number, so
+use continuation or a short QP basin stage and verify the final ranking on the
+certification grid.
 
 .. note::
 

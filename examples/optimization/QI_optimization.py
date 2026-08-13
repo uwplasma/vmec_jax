@@ -14,34 +14,32 @@ from vmex import optimize as opt
 from vmex.core.input import VmecInput
 from vmex.core.qi import ConstructedQIResidual
 
-ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
-
-DATA = Path(__file__).resolve().parents[1] / "data" / "input.minimal_seed_nfp2"
+nfp = 2  # number of field periods
 SURFACES = np.linspace(0.1, 1.0, 6)
-MAX_MODES, MAX_NFEV = [3], [25]#[1, 2], [20, 20]
+MAX_MODES, MAX_NFEV = [4,5], [100,100]  # mode-ladder alternative: [1, 2], [20, 20]
 MAX_MODES_QP, MAX_NFEV_QP = 1, 15
 ASPECT_TARGET = 5.0
-IOTA_FLOOR = 0.33
+IOTA_FLOOR = 0.51
 MIRROR_LIMIT = 0.21
 ELONGATION_LIMIT = 8.0
 MINIMUM_MPOL = 5
-# FULL_QI_BUDGET = 10
+VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
+qi_options = dict(mboz=12, nboz=12, nphi=61, nalpha=18, n_bounce=21)
+validation_options = dict(mboz=14, nboz=14, nphi=101, nalpha=29, n_bounce=31)
 
-qi_options = dict(mboz=12, nboz=12, nphi=61, nalpha=13, n_bounce=15)
-if ci_smoke: qi_options = dict(mboz=8, nboz=8, nphi=31, nalpha=7, n_bounce=7)
-
+ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if ci_smoke:
-    MAX_MODES, MAX_NFEV = [5], [5]#[1, 2], [20, 20]
+    qi_options = dict(mboz=8, nboz=8, nphi=31, nalpha=7, n_bounce=7)
+    validation_options = qi_options
+    MAX_MODES, MAX_NFEV = [2], [5]
     MAX_MODES_QP, MAX_NFEV_QP = 1, 25
-    # FULL_QI_BUDGET = 10
 
+DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = VmecInput.from_file(DATA)
 
-qp = opt.QuasisymmetryRatioResidual(
-    SURFACES, helicity_m=0, helicity_n=1
-)
+# Objective function terms
+qp = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=0, helicity_n=1)
 qi = ConstructedQIResidual(SURFACES, **qi_options)
-# qi_report = ConstructedQIResidual(SURFACES)
 
 def iota_floor(state, runtime):
     return jnp.maximum(IOTA_FLOOR - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
@@ -81,10 +79,10 @@ inp = replace(inp, delt=0.5).change_resolution(
     nzeta=2 * mpol + 4,
 )
 problem = opt.VmecProblem.from_tuples(
-    inp, qp_terms, max_mode=MAX_MODES_QP, use_ess=True, progress=not ci_smoke
+    inp, qp_terms, max_mode=MAX_MODES_QP, vary_major_radius=VARY_MAJOR_RADIUS,
+    use_ess=True, progress=not ci_smoke
 )
-seed_eq = problem.equilibrium_from_x(problem.x0)
-qi_seed = report("seed", seed_eq)
+print(f"dof_names = {problem.dof_names}")
 result = least_squares(
     problem.residual, problem.x0,
     jac=problem.residual_jac, x_scale=problem.scales,
@@ -106,8 +104,11 @@ for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV), 1):
     # Restart SciPy's trust-region model; equal-shape JAX executables are reused.
     problem = opt.VmecProblem.from_tuples(
         inp, qi_terms, max_mode=max_mode, use_ess=True, progress=not ci_smoke,
+        vary_major_radius=VARY_MAJOR_RADIUS,
     )
-    if not ci_smoke: problem.compile_residual_and_jacobian()
+    print(f"dof_names = {problem.dof_names}")
+    if not ci_smoke:
+        problem.compile_residual_and_jacobian()
     result = least_squares(
         problem.residual, problem.x0, jac=problem.residual_jac,
         x_scale=problem.scales, max_nfev=max_nfev,
@@ -117,9 +118,7 @@ for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV), 1):
     equilibrium = problem.equilibrium_from_x(result.x)
     report(f"QI mode {max_mode}", equilibrium)
 
-# Print results, save and plot
-final_total = report("final", equilibrium)
-
+# Print results
 final_input = replace(inp,
     ns_array=np.array([31 if ci_smoke else 101]),
     ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
@@ -128,13 +127,16 @@ final_equilibrium = opt.solve_equilibrium(
     final_input, initial_state=equilibrium.state,
     verbose=not ci_smoke, raise_on_max_iterations=True)
 qi_final = report("final", final_equilibrium)
-print("Final full-resolution constructed QI = "
-    f"{float(qi.total(final_equilibrium)):.6e}")
-print(f"\nQI total: seed {qi_seed:.3e} -> final {qi_final:.3e}")
+qi_validation = ConstructedQIResidual(SURFACES, **validation_options)
+print(f"\nQI total {qi_final:.3e}; independent fine-grid validation "
+      f"{float(qi_validation.total(final_equilibrium)):.3e}")
 
+# Save results
 input_path = final_input.to_indata("input.QI_optimized")
 wout_path = vj.write_wout("wout_QI_optimized.nc", final_equilibrium.wout)
 print(f"wrote {input_path}")
 print(f"wrote {wout_path}")
+
+# Plot results
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")
