@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""QI boundary optimization with a SciPy scalar-gradient method."""
+"""QP boundary optimization with a SciPy scalar-gradient method."""
 
 from dataclasses import replace
 import os
@@ -12,40 +12,36 @@ from scipy.optimize import minimize
 import vmex as vj
 from vmex import OptimizationMonitor
 from vmex import optimize as opt
-from vmex.core.input import VmecInput
-from vmex.core.qi import ConstructedQIResidual
 
 nfp = 2  # number of field periods
-SURFACES = np.linspace(0.1, 1.0, 6)
+SURFACES = np.array([0.5, 0.7, 0.9])
 MAX_MODES = [1, 2, 3, 4]
 MAXITER = 50
-METHOD = "L-BFGS-B"  # or "BFGS"
+METHOD = "BFGS"  # or "L-BFGS-B"
 BOUNDARY_STEP = 0.05  # typical change represented by one scaled variable
-ASPECT_TARGET = 5.0
-IOTA_FLOOR = 0.26
-MIRROR_LIMIT = 0.21
-ELONGATION_LIMIT = 8.0
+ASPECT_TARGET = 7.0
+IOTA_FLOOR = 0.51
+MIRROR_LIMIT = 0.35
+ELONGATION_LIMIT = 12.0
 MINIMUM_MPOL = 5
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.05
 
-qi_options = dict(mboz=12, nboz=12, nphi=61, nalpha=18, n_bounce=21)
-validation_options = dict(mboz=14, nboz=14, nphi=101, nalpha=29, n_bounce=31)
-
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if ci_smoke:
-    qi_options = dict(mboz=8, nboz=8, nphi=31, nalpha=7, n_bounce=7)
-    validation_options = qi_options
-    MAX_MODES, MAXITER = [2], 1
+    MAX_MODES, MAXITER = [1], 1
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
-inp = VmecInput.from_file(DATA)
+inp = vj.VmecInput.from_file(DATA)
 rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
 rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -SEED_PERTURBATION, SEED_PERTURBATION
-inp = replace(inp, rbc=rbc, zbs=zbs)
+inp = replace(inp, rbc=rbc, zbs=zbs, delt=0.5,
+              niter_array=np.array([300, 8000]),
+              ftol_array=np.array([1.0e-11, 1e-12]),
+              ns_array=np.array([25, 35]))
 
 # Objective function terms
-qi = ConstructedQIResidual(SURFACES, **qi_options)
+qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=0, helicity_n=1)
 
 def iota_floor(state, runtime):
     return jnp.maximum(0.3 - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
@@ -57,15 +53,15 @@ def mirror_excess(state, runtime):
     return jnp.maximum(opt.mirror_ratio(state, runtime) - 0.25, 0.0)
 
 objective_function_terms = [
+    (qs, 0.0, 1.0),
     (opt.aspect_ratio, ASPECT_TARGET, 0.005),
     (iota_floor, 0.0, 10.0),
     (mirror_excess, 0.0, 10.0),
     (elongation_excess, 0.0, 10.0),
 ]
-qi_terms = [(qi, 0.0, 10.0), *objective_function_terms]
 
 report = opt.EquilibriumReporter(
-    ("constructed QI", qi.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
+    ("constructed QP", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
     ("mean iota", opt.mean_iota, ".4f"), ("mirror", opt.mirror_ratio, ".4f"),
     ("elongation", opt.max_elongation, ".4f"))
 
@@ -83,14 +79,12 @@ if METHOD == "L-BFGS-B":
     options.update(maxls=20, ftol=1.0e-12, maxcor=20)
 
 for max_mode in MAX_MODES:
-    print(f"\n===== QI stage, max_mode = {max_mode} =====")
+    print(f"\n===== QP stage, max_mode = {max_mode} =====")
     mpol = max(max_mode + 2, MINIMUM_MPOL)
     inp = replace(inp, delt=0.5).change_resolution(
         mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
-    problem = opt.VmecProblem.from_tuples(
-        inp, qi_terms, max_mode=max_mode, use_ess=True, progress=not ci_smoke,
-        vary_major_radius=VARY_MAJOR_RADIUS,
-    )
+    problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=max_mode,
+                                          vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True)
     print(f"dof_names = {problem.dof_names}")
     if not ci_smoke:
         problem.compile_value_and_gradient()
@@ -102,8 +96,9 @@ for max_mode in MAX_MODES:
                  "jac": gradient(intermediate_result.x)})
 
     result = minimize(cost, np.zeros_like(x0), jac=gradient, method=METHOD,
-        bounds=[(-3.0, 3.0)] * x0.size if METHOD == "L-BFGS-B" else None,
-        callback=monitor_y, options=options)
+                      bounds=[(-1.0, 1.0)] * x0.size if METHOD == "L-BFGS-B" else None,
+                      callback=monitor_y,
+                      options=options)
     result.x = x_from_y(result.x)
     equilibrium = problem.equilibrium_from_x(result.x)
     inp = problem.input_from_x(result.x)
@@ -112,19 +107,16 @@ for max_mode in MAX_MODES:
 final_input = replace(inp,
     ns_array=np.array([31 if ci_smoke else 101]),
     ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
-    niter_array=np.array([8000]))
+    niter_array=np.array([20000]))
 final_equilibrium = opt.solve_equilibrium(
     final_input, initial_state=equilibrium.state,
     verbose=not ci_smoke, raise_on_max_iterations=True)
-qi_final = report("final", final_equilibrium)["constructed QI"]
-print(f"\n{METHOD}: final cost = {float(result.fun):.12e}, QI total = {qi_final:.3e}")
-qi_validation = ConstructedQIResidual(SURFACES, **validation_options)
-print(f"\nQI total {qi_final:.3e}; independent fine-grid validation "
-      f"{float(qi_validation.total(final_equilibrium)):.3e}")
+final_total = report("final", final_equilibrium)["constructed QP"]
+print(f"\n{METHOD}: final cost = {float(result.fun):.12e}, QP total = {final_total:.3e}")
 
 # Save results
-input_path = final_input.to_indata(f"input.QI_scipy_{METHOD}")
-wout_path = vj.write_wout(f"wout_QI_scipy_{METHOD}.nc", final_equilibrium.wout)
+input_path = final_input.to_indata(f"input.QP_scipy_{METHOD}")
+wout_path = vj.write_wout(f"wout_QP_scipy_{METHOD}.nc", final_equilibrium.wout)
 print(f"wrote {input_path}")
 print(f"wrote {wout_path}")
 
