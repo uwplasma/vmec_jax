@@ -14,11 +14,19 @@ from vmex import optimize as opt
 import jax
 import jax.numpy as jnp
 
-from essos.coils import Coils, Curves, CreateEquallySpacedCurves
-from essos.fields import BiotSavart
-from essos.surfaces import SurfaceRZFourier
+try:
+    from essos.coils import Coils, Curves, CreateEquallySpacedCurves
+    from essos.fields import BiotSavart
+    from essos.surfaces import SurfaceRZFourier
+except ImportError:
+    raise ImportError(
+        "The single-stage optimization example requires ESSOS. "
+        "Install with `pip install essos` or `conda install -c conda-forge essos`."
+    )
 
 nfp = 2  # number of field periods
+MAKE_MOVIE = True  # set True for a compact GIF of accepted iterates
+
 SURFACES = np.linspace(0.05, 1.0, 6)
 MAX_MODE = 3
 MAXITER = 200
@@ -36,7 +44,6 @@ COIL_MINOR_RADIUS = 0.5
 COIL_CURRENT = 2.7e5
 N_SEGMENTS = 64
 STELLSYM = True
-MAKE_MOVIE = False  # set True for a compact GIF of accepted iterates
 
 NORMAL_FIELD_WEIGHT = 1.0e3
 NORMAL_FIELD_LIMIT = 0.01
@@ -47,7 +54,7 @@ LENGTH_WEIGHT = 1.0
 CURVATURE_LIMIT = 7.0
 CURVATURE_OBJECTIVE_LIMIT = 6.9  # margin for the independent final grid
 CURVATURE_WEIGHT = 10.0
-COIL_DISTANCE_LIMIT = 0.08
+COIL_DISTANCE_LIMIT = 0.15
 COIL_DISTANCE_WEIGHT = 1.0e3
 COIL_SURFACE_DISTANCE_LIMIT = 0.20
 COIL_SURFACE_DISTANCE_WEIGHT = 1.0e3
@@ -255,14 +262,16 @@ print("Wrote coils_single_stage_optimized.json")
 print("Wrote initial and optimized surface/coils VTK files")
 
 # Plot results
+print("Plotting results...")
 vj.plot_optimization_objects("single_stage_optimization.png",
     ("Initial", surface_initial, coils0), ("Optimized", surface_final, coils_final))
 monitor.save("single_stage_objectives.csv")
 monitor.plot("single_stage_objectives.png", title="Single-stage objective terms")
-if MAKE_MOVIE:
-    monitor.movie("single_stage_optimization.gif",
-        lambda u: objects_from_x(jnp.asarray(x0 + scales * u)))
 print("Wrote single_stage_optimization.png")
 print("Wrote single_stage_objectives.csv and single_stage_objectives.png")
+if MAKE_MOVIE:
+    print("Making movie of accepted iterates...")
+    monitor.movie("single_stage_optimization.gif",
+        lambda u: objects_from_x(jnp.asarray(x0 + scales * u)))
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"Wrote {path}")

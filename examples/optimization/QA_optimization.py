@@ -13,11 +13,11 @@ from vmex import optimize as opt
 
 nfp = 2  # number of field periods
 SURFACES = np.linspace(0.1, 1.0, 10)
-MAX_MODES, MAX_NFEV = [3], [25]  # mode-ladder alternative: [2, 3], [10, 40]
+MAX_MODES, MAX_NFEV = [4], [35]  # mode-ladder alternative: [2, 3], [10, 40]
 ASPECT_TARGET = 5.0
 IOTA_TARGET = 0.42
 MAGNETIC_WELL_TARGET = 0.01
-TRIAL_BETA = None  # set to 0.025 to optimize frozen-geometry DMerc/DR pressure proxies
+TRIAL_BETA = None  # set to a value like 0.025 to optimize frozen-geometry DMerc/DR pressure proxies
 STABILITY_WEIGHT, EDGE_WEIGHT_FACTOR = 1.0e-6, 10.0
 MINIMUM_MPOL = 5
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it

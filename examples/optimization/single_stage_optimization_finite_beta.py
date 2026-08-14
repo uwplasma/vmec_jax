@@ -23,6 +23,8 @@ from essos.fields import BiotSavart
 from essos.surfaces import SurfaceRZFourier
 
 nfp = 2
+MAKE_MOVIE = True  # set True for a compact GIF of accepted iterates
+
 TARGET_BETA = 0.025
 SURFACES = np.linspace(0.1, 0.9, 8)
 MAX_MODE, MAXITER = 2, 60
@@ -43,7 +45,6 @@ COIL_SURFACE_DISTANCE_LIMIT, COIL_SURFACE_DISTANCE_WEIGHT = 0.20, 1.0e3
 NPHI, NTHETA, VC_DIGITS = 19, 24, 4
 METHOD = "L-BFGS-B"
 OPTIONS = {"maxiter": MAXITER, "maxls": 10, "ftol": 1e-12, "gtol": 1e-8, "maxcor": 20}
-MAKE_MOVIE = False  # set True for a compact GIF of accepted iterates
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if ci_smoke:
@@ -273,7 +274,10 @@ monitor.save("single_stage_finite_beta_objectives.csv")
 monitor.plot("single_stage_finite_beta_objectives.png", title="Finite-beta single-stage terms")
 vj.plot_optimization_objects("single_stage_finite_beta_optimization.png",
     ("Initial", *objects_from_x(jnp.asarray(x0))), ("Optimized", surface_final, coils_final))
+print("Wrote single_stage_optimization.png")
+print("Wrote single_stage_objectives.csv and single_stage_objectives.png")
 if MAKE_MOVIE:
+    print("Making movie of accepted iterates...")
     monitor.movie("single_stage_finite_beta_optimization.gif",
         lambda u: objects_from_x(jnp.asarray(x0 + scales * u)))
 for path in vj.plot_wout(wout_path, ".").values():

@@ -17,9 +17,9 @@ nfp = 2
 TARGET_BETA = 0.025
 BETA_WEIGHT = 1.0 / TARGET_BETA**2  # beta residual is relative
 SURFACES = np.linspace(0.1, 0.9, 8)
-MAX_MODES = [2, 3]
-MAX_NFEV = [15, 30]
-N_CURRENT_SPLINE = [6, 8]  # optimized I'(s) spline knots at each stage
+MAX_MODES = [2, 3, 4]
+MAX_NFEV = [20, 15, 30]
+N_CURRENT_SPLINE = [6, 8, 10]  # optimized I'(s) spline knots at each stage
 ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
 # VMEC's dimensional DMerc/DR values are O(1e2-1e3) for this seed.
 STABILITY_WEIGHT, EDGE_WEIGHT_FACTOR = 1.0e-6, 10.0
