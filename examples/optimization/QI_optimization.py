@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""QP basin selection followed by constructed-QI optimization, nfp=2."""
+"""Constructed-QI boundary optimization with an explicit mode ladder."""
 
 from dataclasses import replace
 import os
@@ -16,14 +16,14 @@ from vmex.core.qi import ConstructedQIResidual
 
 nfp = 2  # number of field periods
 SURFACES = np.linspace(0.1, 1.0, 6)
-MAX_MODES, MAX_NFEV = [4,5], [100,100]  # mode-ladder alternative: [1, 2], [20, 20]
-MAX_MODES_QP, MAX_NFEV_QP = 1, 15
+MAX_MODES, MAX_NFEV = [3], [250]  # mode-ladder alternative: [1, 2], [20, 20]
 ASPECT_TARGET = 5.0
 IOTA_FLOOR = 0.51
 MIRROR_LIMIT = 0.21
 ELONGATION_LIMIT = 8.0
 MINIMUM_MPOL = 5
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
+SEED_PERTURBATION = 0.05
 qi_options = dict(mboz=12, nboz=12, nphi=61, nalpha=18, n_bounce=21)
 validation_options = dict(mboz=14, nboz=14, nphi=101, nalpha=29, n_bounce=31)
 
@@ -32,13 +32,14 @@ if ci_smoke:
     qi_options = dict(mboz=8, nboz=8, nphi=31, nalpha=7, n_bounce=7)
     validation_options = qi_options
     MAX_MODES, MAX_NFEV = [2], [5]
-    MAX_MODES_QP, MAX_NFEV_QP = 1, 25
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = VmecInput.from_file(DATA)
+rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
+rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -SEED_PERTURBATION, SEED_PERTURBATION
+inp = replace(inp, rbc=rbc, zbs=zbs)
 
 # Objective function terms
-qp = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=0, helicity_n=1)
 qi = ConstructedQIResidual(SURFACES, **qi_options)
 
 def iota_floor(state, runtime):
@@ -56,7 +57,6 @@ objective_function_terms = [
     (mirror_excess, 0.0, 10.0),
     (elongation_excess, 0.0, 10.0),
 ]
-qp_terms = [(qp, 0.0, 10.0), *objective_function_terms]
 qi_terms = [(qi, 0.0, 10.0), *objective_function_terms]
 
 report = opt.EquilibriumReporter(
@@ -65,31 +65,8 @@ report = opt.EquilibriumReporter(
     ("elongation", opt.max_elongation, ".4f"))
 monitor = opt.OptimizationMonitor(stream=None)
 
-# Optimize for QP first
-print(f"\n===== QP basin stage, max_mode = {MAX_MODES_QP} =====")
-mpol = max(MAX_MODES_QP + 2, MINIMUM_MPOL)
-inp = replace(inp, delt=0.5).change_resolution(
-    mpol=mpol, ntor=mpol,
-    ntheta=2 * mpol + 6,
-    nzeta=2 * mpol + 4,
-)
-problem = opt.VmecProblem.from_tuples(
-    inp, qp_terms, max_mode=MAX_MODES_QP, vary_major_radius=VARY_MAJOR_RADIUS,
-    use_ess=True, progress=not ci_smoke
-)
-print(f"dof_names = {problem.dof_names}")
-monitor.problem = problem
-result = least_squares(
-    problem.residual, problem.x0,
-    jac=problem.residual_jac, x_scale=problem.scales,
-    verbose=2, max_nfev=MAX_NFEV_QP, ftol=1.0e-6, xtol=1.0e-10, callback=monitor,
-)
-inp = problem.input_from_x(result.x)
-equilibrium = problem.equilibrium_from_x(result.x)
-report("QP basin", equilibrium)
-
-# Now optimize for QI in stages, increasing the maximum mode number each time
-for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV), 1):
+# Optimize for QI in stages, increasing the maximum mode number each time.
+for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     print(f"\n===== QI stage, max_mode = {max_mode} =====")
     mpol = max(max_mode + 2, MINIMUM_MPOL)
     inp = replace(inp, delt=0.5).change_resolution(

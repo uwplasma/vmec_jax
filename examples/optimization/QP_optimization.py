@@ -13,8 +13,8 @@ import vmex as vj
 from vmex import optimize as opt
 
 nfp = 2  # number of field periods
-SURFACES = np.array([0.5,0.7,0.9])
-MAX_MODES, MAX_NFEV = [3], [60]  # mode-ladder alternative: [1,2,3], [20,20,20]
+SURFACES = np.array([0.5, 0.7, 0.9])
+MAX_MODES, MAX_NFEV = [3], [60]  # mode-ladder alternative: [1, 2, 3], [20, 20, 20]
 ASPECT_TARGET = 7.0
 IOTA_FLOOR = 0.51
 MIRROR_LIMIT = 0.35
@@ -29,12 +29,14 @@ if ci_smoke:
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
-inp.rbc[inp.ntor-1, 1] =-SEED_PERTURBATION
-inp.zbs[inp.ntor-1, 1] = SEED_PERTURBATION
-inp = replace(inp, delt=0.5,
+rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
+rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -SEED_PERTURBATION, SEED_PERTURBATION
+inp = replace(inp, rbc=rbc, zbs=zbs, delt=0.5,
               niter_array=np.array([300, 8000]),
               ftol_array=np.array([1.0e-11, 1e-12]),
               ns_array=np.array([25, 35]))
+
+# Objective function terms
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=0, helicity_n=1)
 
 def mirror_excess(state, runtime):
@@ -53,11 +55,9 @@ report = opt.EquilibriumReporter(
 monitor = opt.OptimizationMonitor(stream=None)
 
 objective_function_terms = [
-         (qs, 0.0, 1.0), (opt.aspect_ratio, ASPECT_TARGET, 1.0),
-         (iota_floor, 0.0, 100.0),
-         (mirror_excess, 0.0, 10.0),
-         (elongation_excess, 0.0, 10.0)
-         ]
+    (qs, 0.0, 1.0), (opt.aspect_ratio, ASPECT_TARGET, 1.0),
+    (iota_floor, 0.0, 100.0), (mirror_excess, 0.0, 10.0),
+    (elongation_excess, 0.0, 10.0)]
 
 for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     print(f"\n===== QP stage, max_mode = {max_mode} =====")
