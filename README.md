@@ -101,6 +101,8 @@ VMEX does not assume nested surfaces there.
 `equilibrium.exterior_field()` builds the plasma contribution from the live
 VMEX spectral state, rather than a materialized wout, so JAX derivatives with
 respect to the equilibrium boundary are retained for single-stage objectives.
+Run `examples/vmex_get_B_gradB.py` or its finite-beta companion for complete
+inside/outside field, spatial-derivative, flux-coordinate, and VJP examples.
 
 The common CLI operations are:
 
@@ -130,7 +132,7 @@ The CLI equivalent is `vmex input.changed --restart wout_base.nc`; a deck may in
 
 ## Optimizer-neutral problems
 
-Objective tuples use `(function, target, weight)`, with `weight` multiplying the squared cost by default. The resulting problem works directly with SciPy, JAXopt, Optax, or a user optimizer.
+Objective tuples use `(function, target, weight)`, with `weight` multiplying the squared cost by default; a one-dimensional weight applies different penalties to profile rows, such as a stronger edge penalty. The resulting problem works directly with SciPy, JAXopt, Optax, or a user optimizer.
 
 ```python
 from dataclasses import replace
@@ -207,6 +209,7 @@ The vacuum QA example has `pres=0` and `DWell=0` exactly: VMEX adds no pressure 
 ![Vacuum QA diagnostics](docs/_static/figures/readme_diagnostics_qa_vacuum.webp)
 
 `QA_optimization_bootstrap.py` and `QH_optimization_bootstrap.py` first fit a bootstrap-consistent seed, then optimize the boundary and a stage-refined current spline together against Redl, Mercier, and resistive-interchange targets. Their controls are explained in the [objective reference](https://vmex.readthedocs.io/en/latest/reference/objectives.html#bootstrap-current-redl); published-equilibrium and SFINCS comparisons live in `benchmarks/`.
+Each script also writes a direct Redl-versus-equilibrium bootstrap-current overlay. In the vacuum QA example, setting `TRIAL_BETA` enables differentiable frozen-geometry pressure proxies for `DMerc` and `DR`; a finite-pressure re-solve remains the stability certificate.
 
 ![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.png)
 

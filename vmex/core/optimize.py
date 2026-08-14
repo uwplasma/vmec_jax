@@ -93,6 +93,10 @@ from .stability import (
     jdotb_state,
     mercier_shear_state,
     mercier_stability_residual,
+    trial_pressure_d_merc_state,
+    trial_pressure_glasser_d_r_state,
+    trial_pressure_mercier_stability_residual,
+    trial_pressure_glasser_stability_residual,
 )
 
 # Shared state-physics primitives (statephysics.py, R26a).  Re-exported here
@@ -150,6 +154,10 @@ __all__ = [
     "mercier_shear_state",
     "glasser_d_r_state",
     "glasser_stability_residual",
+    "trial_pressure_d_merc_state",
+    "trial_pressure_glasser_d_r_state",
+    "trial_pressure_mercier_stability_residual",
+    "trial_pressure_glasser_stability_residual",
     "l_grad_b",
     "l_grad_b_state",
     "quasi_isodynamic_residual",
@@ -1320,6 +1328,18 @@ def _term_name(function: Callable) -> str:
     return str(getattr(owner, "name", getattr(function, "__name__", type(owner).__name__)))
 
 
+def _least_squares_weight(weight: Any, semantics: str) -> float | np.ndarray:
+    """Convert a scalar or per-residual-row tuple weight to its row scale."""
+    values = np.asarray(weight, dtype=float)
+    if values.ndim > 1 or values.size == 0 or not np.all(np.isfinite(values)):
+        raise ValueError("least-squares weight must be a finite scalar or 1-D array")
+    if semantics == "cost":
+        if np.any(values < 0.0):
+            raise ValueError("least-squares weights must be non-negative")
+        values = np.sqrt(values)
+    return float(values) if values.ndim == 0 else values
+
+
 def _ess_scale(
     inp: VmecInput, max_mode: int, alpha: float, *, vary_major_radius: bool = False,
 ) -> np.ndarray:
@@ -1360,7 +1380,7 @@ _IMPLICIT_JACOBIAN_DESCRIPTIONS = {
 def _make_finite_difference_problem(
     inp: VmecInput,
     *,
-    objective_terms: Sequence[tuple[Callable, float, float]],
+    objective_terms: Sequence[tuple[Callable, float, Any]],
     loss: Callable | None,
     max_mode: int,
     vary_major_radius: bool,
@@ -1430,11 +1450,7 @@ def _make_finite_difference_problem(
 
     weights = []
     for function, target, weight in objective_terms:
-        scale = float(weight)
-        if weight_semantics == "cost":
-            if scale < 0.0:
-                raise ValueError("least-squares weights must be non-negative")
-            scale = float(np.sqrt(scale))
+        scale = _least_squares_weight(weight, weight_semantics)
         weights.append((function, float(target), scale))
 
     def raw_residual(x: np.ndarray) -> np.ndarray:
@@ -1581,7 +1597,7 @@ def _with_forward_controls(
 def make_problem(
     inp: VmecInput,
     *,
-    objective_terms: Sequence[tuple[Callable, float, float]] | None = None,
+    objective_terms: Sequence[tuple[Callable, float, Any]] | None = None,
     loss: Callable | None = None,
     max_mode: int = 1,
     vary_major_radius: bool = False,
@@ -1782,7 +1798,7 @@ def make_problem(
 
 
 def least_squares(
-    objective_terms: Sequence[tuple[Callable, float, float]],
+    objective_terms: Sequence[tuple[Callable, float, Any]],
     inp: VmecInput,
     *,
     max_mode: int | Sequence[int] = 1,
@@ -2025,7 +2041,7 @@ def least_squares(
 
 
 def minimize(
-    objective_terms: Sequence[tuple[Callable, float, float]],
+    objective_terms: Sequence[tuple[Callable, float, Any]],
     inp: VmecInput,
     *,
     max_mode: int | Sequence[int] = 1,
@@ -2137,7 +2153,7 @@ def _traceable_term(fun: Callable) -> Callable:
 
 
 def _least_squares_implicit(
-    objective_terms: Sequence[tuple[Callable, float, float]],
+    objective_terms: Sequence[tuple[Callable, float, Any]],
     inp: VmecInput,
     *,
     max_mode: int,
@@ -2200,12 +2216,8 @@ def _least_squares_implicit(
         raise ValueError("provide objective_terms or scalar_objective, not both")
     terms = []
     for f, t, w in objective_terms:
-        weight = float(w)
-        if weight_semantics == "cost":
-            if weight < 0.0:
-                raise ValueError("least-squares weights must be non-negative")
-            weight = float(np.sqrt(weight))
-        terms.append((_traceable_term(f), float(t), weight))
+        weight = _least_squares_weight(w, weight_semantics)
+        terms.append((_traceable_term(f), float(t), jnp.asarray(weight)))
     traceable_scalar = (
         None if scalar_objective is None else _traceable_term(scalar_objective)
     )

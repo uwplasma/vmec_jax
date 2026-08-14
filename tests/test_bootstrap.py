@@ -486,6 +486,13 @@ def test_state_lane_matches_wout_lane(eq):
     np.testing.assert_allclose(np.asarray(j_state), np.asarray(j_wout), rtol=5e-2)
 
 
+def test_bootstrap_current_profiles_are_the_residual_inputs(eq):
+    boot = bs.RedlBootstrapMismatch(PAPER_PROFILES, 0, surfaces=[0.3, 0.5, 0.7])
+    surfaces, jv, jr = boot.current_profiles(eq)
+    np.testing.assert_array_equal(surfaces, boot.surfaces)
+    np.testing.assert_allclose(boot.residuals(eq), boot._residual_vector(jv, jr))
+
+
 def test_wout_lane_uses_lasym_sine_fields(eq):
     surfaces = np.array([0.3, 0.5, 0.7])
     symmetric = bs.redl_geometry_from_wout(eq.wout, surfaces)

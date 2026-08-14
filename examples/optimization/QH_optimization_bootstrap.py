@@ -21,7 +21,7 @@ MAX_MODES, MAX_NFEV = [2, 3], [15, 30]
 N_CURRENT_SPLINE = [6, 8]  # optimized I'(s) spline knots at each stage
 ASPECT_TARGET = 6
 # VMEC's dimensional DMerc/DR values are O(1e2-1e3) for this seed.
-STABILITY_WEIGHT = 1.0e-6
+STABILITY_WEIGHT, EDGE_WEIGHT_FACTOR = 1.0e-6, 10.0
 # Characteristic low-order boundary step in meters; ESS reduces higher modes.
 # Current dofs are dimensionless here, so they have their own optimizer scale.
 PARAMETER_STEP, CURRENT_PARAMETER_STEP = 0.02, 0.05
@@ -61,7 +61,12 @@ profiles = KineticProfiles(n0 * np.array([1, 0, 0, 0, 0, -1]),
 picard = self_consistent_bootstrap(inp, profiles, -1, n_iter=2 if ci_smoke else 8,
                                    tol=1e-3, degree=N_CURRENT_SPLINE[0] - 1,
                                    s_eval=SURFACES, verbose=not ci_smoke)
+# The Picard bootstrap solve leaves the prescribed pressure and boundary shape
+# unchanged, and mainly updates the current profile / equilibrium state (I'(s), CURTOR)
+# to the self-consistent bootstrap response before the optimization starts.
 inp, equilibrium = picard.input, picard.equilibrium
+stability_s = np.linspace(0.0, 1.0, int(inp.ns_array[-1]))[2:-1]
+stability_weights = STABILITY_WEIGHT * (1.0 + (EDGE_WEIGHT_FACTOR - 1.0) * stability_s**4)
 
 # Objective function terms
 bootstrap = RedlBootstrapMismatch(profiles, helicity_n=-1, surfaces=SURFACES,
@@ -71,8 +76,8 @@ objective_function_terms = [
     (qs, 0.0, 1.0), (bootstrap, 0.0, 1.0),
     (opt.aspect_ratio, ASPECT_TARGET, 1.0),
     (opt.volume_average_beta, TARGET_BETA, BETA_WEIGHT),
-    (opt.mercier_stability_residual, 0.0, STABILITY_WEIGHT),
-    (opt.glasser_stability_residual, 0.0, STABILITY_WEIGHT),
+    (opt.mercier_stability_residual, 0.0, stability_weights),
+    (opt.glasser_stability_residual, 0.0, stability_weights),
     # (opt.mean_iota, IOTA_TARGET, 10.0),
 ]
 def minimum_dmerc(state, runtime):
@@ -125,5 +130,7 @@ print(f"wrote {input_path}\nwrote {wout_path}")
 # Plot results
 monitor.save("QH_bootstrap_objectives.csv")
 monitor.plot("QH_bootstrap_objectives.png")
+vj.plot_bootstrap_current("QH_bootstrap_current.png", final_equilibrium, bootstrap)
+print("wrote QH_bootstrap_current.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")

@@ -70,6 +70,10 @@ __all__ = [
     "mercier_shear_state",
     "glasser_d_r_state",
     "glasser_stability_residual",
+    "trial_pressure_d_merc_state",
+    "trial_pressure_glasser_d_r_state",
+    "trial_pressure_mercier_stability_residual",
+    "trial_pressure_glasser_stability_residual",
     "ballooning_lambda",
     "ballooning_growth_rate",
 ]
@@ -251,11 +255,11 @@ def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: Solver
     return bsubu, bsubv, (bsubsu, bsubsv)
 
 
-def _mercier_profiles_state(
+def _mercier_data_state(
     state: SpectralState,
     rt: SolverRuntime,
-) -> tuple[Array, Array, Array, Array, Array]:
-    """Traceable ``(DMerc, <J.B>, <B.B>, shear, H)`` radial profiles.
+) -> tuple[Array, ...]:
+    """Traceable Mercier profiles plus explicit pressure-drive ingredients.
 
     The shared pure-JAX reconstruction follows VMEC2000 ``jxbforce.f`` and
     ``mercier.f``.  The returned Glasser ``H`` uses the normalization of
@@ -266,7 +270,7 @@ def _mercier_profiles_state(
     ns = int(s.shape[0])
     if ns < 3:
         zero = jnp.zeros_like(s)
-        return zero, zero, zero, zero, zero
+        return (zero,) * 12
     geometry, jacobian, _, fields, energies = _field_chain(state, rt)
     bsubs = _mercier_bsubs(geometry, jacobian, fields, s)
     bsubu, bsubv, (bsubsu, bsubsv) = _mercier_current_tables(fields.bsubu, fields.bsubv, bsubs, rt)
@@ -358,7 +362,22 @@ def _mercier_profiles_state(
     h_glasser = shear * (tjb - tbb * surface_ratio)
     shear_full = jnp.zeros_like(s).at[1:-1].set(shear)
     h_full = jnp.zeros_like(s).at[1:-1].set(h_glasser)
-    return dmerc_full, jdotb_full, bdotb_full, shear_full, h_full
+    dwell_full = jnp.zeros_like(s).at[1:-1].set(presp * (vpp - presp * tpp) * tbb)
+    vpp_full = jnp.zeros_like(s).at[1:-1].set(vpp)
+    tpp_full = jnp.zeros_like(s).at[1:-1].set(tpp)
+    tbb_full = jnp.zeros_like(s).at[1:-1].set(tbb)
+    phip_full_mesh = jnp.zeros_like(s).at[1:-1].set(phip_full)
+    return (dmerc_full, jdotb_full, bdotb_full, shear_full, h_full,
+            dwell_full, vpp_full, tpp_full, tbb_full, phip_full_mesh,
+            jnp.asarray(energies.wb), jnp.asarray(energies.vp))
+
+
+def _mercier_profiles_state(
+    state: SpectralState,
+    rt: SolverRuntime,
+) -> tuple[Array, Array, Array, Array, Array]:
+    """Traceable ``(DMerc, <J.B>, <B.B>, shear, H)`` radial profiles."""
+    return _mercier_data_state(state, rt)[:5]
 
 
 def d_merc_state(state: SpectralState, rt: SolverRuntime) -> Array:
@@ -432,6 +451,117 @@ def glasser_d_r_state(
     if shear_epsilon == 0.0:
         d_r = jnp.where(shear != 0.0, d_r, 0.0)
     return d_r
+
+
+def _trial_pressure_stability_state(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    beta: float,
+    pressure_shape: Any = None,
+    shear_epsilon: float = 0.0,
+) -> tuple[Array, Array]:
+    """Frozen-equilibrium ``(DMerc, D_R)`` response to a trial pressure."""
+    if shear_epsilon < 0.0:
+        raise ValueError(f"shear_epsilon must be non-negative, got {shear_epsilon}")
+    data = _mercier_data_state(state, rt)
+    dmerc, _, _, shear, h_glasser, dwell, vpp, tpp, tbb, phip, wb, vp = data
+    ns = int(dmerc.shape[0]); hs = jnp.asarray(1.0 / (ns - 1), dtype=dmerc.dtype)
+    s_half = (jnp.arange(1, ns, dtype=dmerc.dtype) - 0.5) / (ns - 1)
+    shape = 1.0 - s_half if pressure_shape is None else (
+        pressure_shape(s_half) if callable(pressure_shape) else jnp.asarray(pressure_shape))
+    shape = jnp.asarray(shape, dtype=dmerc.dtype).ravel()
+    if int(shape.size) == ns:
+        shape = shape[1:]
+    elif int(shape.size) != ns - 1:
+        raise ValueError(f"pressure_shape must contain {ns - 1} half-mesh values")
+    normalization = hs * jnp.sum(vp[1:] * shape)
+    amplitude = jnp.asarray(beta, dtype=dmerc.dtype) * wb / jnp.where(
+        normalization != 0.0, normalization, 1.0)
+    trial_pressure = jnp.zeros(ns, dtype=dmerc.dtype).at[1:].set(amplitude * shape)
+    trial_presp = (trial_pressure[2:] - trial_pressure[1:-1]) / (
+        hs * phip[1:-1])
+    trial_dwell = jnp.zeros_like(dmerc).at[1:-1].set(
+        trial_presp * (vpp[1:-1] - trial_presp * tpp[1:-1]) * tbb[1:-1])
+    trial_dmerc = dmerc - dwell + trial_dwell
+    epsilon = jnp.asarray(shear_epsilon, dtype=shear.dtype)
+    denominator = shear**2 + epsilon**2
+    correction = (h_glasser - 0.5 * shear**2) ** 2 / jnp.where(
+        denominator != 0.0, denominator, 1.0)
+    trial_d_r = -trial_dmerc + correction
+    if shear_epsilon == 0.0:
+        trial_d_r = jnp.where(shear != 0.0, trial_d_r, 0.0)
+    return trial_dmerc, trial_d_r
+
+
+def trial_pressure_d_merc_state(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    beta: float = 0.025,
+    pressure_shape: Any = None,
+) -> Array:
+    """Mercier profile for a trial pressure on frozen equilibrium geometry.
+
+    This inexpensive AD-transparent proxy replaces only the explicit pressure
+    drive in VMEC's Mercier expression.  It does not include the finite-beta
+    geometry, current, or Shafranov-shift response; certify a candidate with a
+    self-consistent finite-pressure equilibrium.
+    """
+    return _trial_pressure_stability_state(
+        state, rt, beta=beta, pressure_shape=pressure_shape)[0]
+
+
+def trial_pressure_glasser_d_r_state(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    beta: float = 0.025,
+    pressure_shape: Any = None,
+    shear_epsilon: float = 0.0,
+) -> Array:
+    """Glasser ``D_R`` for the same frozen-equilibrium trial pressure proxy."""
+    return _trial_pressure_stability_state(
+        state, rt, beta=beta, pressure_shape=pressure_shape,
+        shear_epsilon=shear_epsilon)[1]
+
+
+def trial_pressure_mercier_stability_residual(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    beta: float = 0.025,
+    pressure_shape: Any = None,
+    margin: float = 0.0,
+    smoothing: float = 1.0e-6,
+) -> Array:
+    """Smooth instability residual for trial-pressure ``DMerc[2:-1]``."""
+    if smoothing <= 0.0:
+        raise ValueError(f"smoothing must be positive, got {smoothing}")
+    profile = trial_pressure_d_merc_state(
+        state, rt, beta=beta, pressure_shape=pressure_shape)[2:-1]
+    scale = jnp.asarray(smoothing, dtype=profile.dtype)
+    return scale * jax.nn.softplus((jnp.asarray(margin) - profile) / scale)
+
+
+def trial_pressure_glasser_stability_residual(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    beta: float = 0.025,
+    pressure_shape: Any = None,
+    margin: float = 0.0,
+    smoothing: float = 1.0e-6,
+    shear_epsilon: float = 1.0e-8,
+) -> Array:
+    """Smooth instability residual for trial-pressure ``D_R[2:-1]``."""
+    if smoothing <= 0.0:
+        raise ValueError(f"smoothing must be positive, got {smoothing}")
+    profile = trial_pressure_glasser_d_r_state(
+        state, rt, beta=beta, pressure_shape=pressure_shape,
+        shear_epsilon=shear_epsilon)[2:-1]
+    scale = jnp.asarray(smoothing, dtype=profile.dtype)
+    return scale * jax.nn.softplus((profile + jnp.asarray(margin)) / scale)
 
 
 def mercier_stability_residual(

@@ -158,6 +158,12 @@ boundary/current DOFs. The virtual-casing path applies outside the LCFS;
 spectral field inside. Query points must stay away from the source surface and
 external coil filaments.
 
+See ``examples/vmex_get_B_gradB.py`` for the vacuum interior/exterior API and
+``examples/vmex_get_B_gradB_finite_beta.py`` for the live virtual-casing path,
+including exact boundary/current VJPs. The single-stage optimization examples
+write both initial and optimized surface/coil VTK files; setting
+``MAKE_MOVIE=True`` adds a compact animation of accepted iterates.
+
 Toward a coupled adjoint
 ------------------------
 

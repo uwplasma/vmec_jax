@@ -25,6 +25,7 @@ from vmex import _compat
 _CACHE_VARS = (
     "JAX_COMPILATION_CACHE_DIR", "VMEX_COMPILATION_CACHE_DIR",
     "VMEX_COMPILATION_CACHE", "JAX_PLATFORM_NAME", "JAX_PLATFORMS",
+    "XLA_FLAGS", "VMEX_FAST_COMPILE", "CUDA_VISIBLE_DEVICES",
 )
 
 
@@ -161,6 +162,35 @@ def test_configure_jax_environment_idempotent_and_respects_user_env(monkeypatch)
     import jax
 
     assert jax.config.read("jax_enable_x64") is True
+
+
+def test_macos_cpu_codegen_split_default_respects_backend_and_user(monkeypatch):
+    """The large-graph linker guard is macOS/CPU-only and never overrides users."""
+    import os
+
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.delenv("JAX_PLATFORM_NAME", raising=False)
+    monkeypatch.delenv("JAX_PLATFORMS", raising=False)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr(_compat.platform, "system", lambda: "Darwin")
+    _compat._configure_jax_environment()
+    assert os.environ["XLA_FLAGS"] == "--xla_cpu_parallel_codegen_split_count=128"
+
+    monkeypatch.setenv("XLA_FLAGS", "--user_set_flag")
+    _compat._configure_jax_environment()
+    assert os.environ["XLA_FLAGS"] == "--user_set_flag"
+
+    monkeypatch.delenv("XLA_FLAGS")
+    monkeypatch.setenv("VMEX_FAST_COMPILE", "1")
+    _compat._configure_jax_environment()
+    assert "--xla_cpu_parallel_codegen_split_count=128" in os.environ["XLA_FLAGS"]
+    assert "--xla_backend_optimization_level=1" in os.environ["XLA_FLAGS"]
+
+    monkeypatch.delenv("XLA_FLAGS")
+    monkeypatch.delenv("VMEX_FAST_COMPILE")
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda,cpu")
+    _compat._configure_jax_environment()
+    assert "XLA_FLAGS" not in os.environ
 
 
 def test_machine_fingerprint_is_stable_and_platform_scoped(monkeypatch):

@@ -333,6 +333,7 @@ def test_bootstrap_optimization_examples(case, tmp_path):
     assert match is not None and 1.0 < float(match.group(1)) < 4.0
     assert (tmp_path / f"input.{case}_bootstrap_optimized").exists()
     assert (tmp_path / f"wout_{case}_bootstrap_optimized.nc").exists()
+    assert (tmp_path / f"{case}_bootstrap_current.png").exists()
 
 
 @pytest.mark.full  # nightly: optional optimizer interoperability, cold JAX compilation
@@ -363,6 +364,7 @@ def test_fixed_boundary_single_stage_optimization(tmp_path):
     normal = re.search(r"B\.n/B: area-weighted RMS = ([0-9.]+)%, max = ([0-9.]+)%", out)
     assert normal is not None and all(np.isfinite(float(value)) for value in normal.groups())
     for name in ("wout_single_stage_optimized.nc", "single_stage_objectives.png",
+                 "surface_single_stage_initial.vts", "coils_single_stage_initial.vtu",
                  "surface_single_stage_optimized.vts", "coils_single_stage_optimized.vtu"):
         assert (tmp_path / name).exists()
     surface_vtk = (tmp_path / "surface_single_stage_optimized.vts").read_bytes()
@@ -384,9 +386,23 @@ def test_finite_beta_single_stage_optimization(tmp_path, monkeypatch):
         assert diagnostic in out
     for name in ("wout_single_stage_finite_beta_optimized.nc",
                  "single_stage_finite_beta_objectives.png",
+                 "surface_single_stage_finite_beta_initial.vts",
+                 "coils_single_stage_finite_beta_initial.vtu",
                  "surface_single_stage_finite_beta_optimized.vts",
                  "coils_single_stage_finite_beta_optimized.vtu"):
         assert (tmp_path / name).exists()
+
+
+def test_field_query_examples_cover_inside_outside_and_vjps() -> None:
+    """Keep the two runnable API examples explicit without another slow solve."""
+    vacuum = (EXAMPLES / "vmex_get_B_gradB.py").read_text()
+    finite = (EXAMPLES / "vmex_get_B_gradB_finite_beta.py").read_text()
+    for source in (vacuum, finite):
+        for call in ("set_points", ".B()", ".absB()", ".gradB()", ".B_vjp(",
+                     ".gradB_vjp(", ".gradgradB_vjp(", ".gradgradgradB_vjp("):
+            assert call in source
+    assert "flux_coordinates" in vacuum and 'plasma="vacuum"' in vacuum
+    assert "uses_virtual_casing" in finite and "exterior_field" in finite
 
 
 @pytest.mark.full

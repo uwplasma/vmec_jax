@@ -5,13 +5,14 @@ from dataclasses import replace
 import os
 from pathlib import Path
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import minimize
 
 import vmex as vj
 from vmex import optimize as opt
+
+import jax
+import jax.numpy as jnp
 
 from essos.coils import Coils, Curves, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
@@ -35,6 +36,7 @@ COIL_MINOR_RADIUS = 0.5
 COIL_CURRENT = 2.7e5
 N_SEGMENTS = 64
 STELLSYM = True
+MAKE_MOVIE = False  # set True for a compact GIF of accepted iterates
 
 NORMAL_FIELD_WEIGHT = 1.0e3
 NORMAL_FIELD_LIMIT = 0.01
@@ -181,7 +183,7 @@ def objective(u):
 
 monitor = opt.OptimizationMonitor()
 scipy_objective = monitor.wrap_value_and_grad(
-    jax.value_and_grad(objective, has_aux=True), coil_term_names,
+    jax.jit(jax.value_and_grad(objective, has_aux=True)), coil_term_names,
     residual_slices=plasma_problem.metadata["term_slices"])
 
 
@@ -242,19 +244,24 @@ input_path = final_input.to_indata("input.single_stage_optimized")
 wout_path = vj.write_wout("wout_single_stage_optimized.nc", final_equilibrium.wout)
 coils_final.to_json("coils_single_stage_optimized.json")
 # ESSOS writes |B| and B.n/B on the surface and the coil filaments for ParaView.
+surface_initial = surface_from_boundary(rbc0, zbs0, nphi=60, ntheta=60)
+surface_initial.to_vtk("surface_single_stage_initial", field=BiotSavart(coils0))
+coils0.to_vtk("coils_single_stage_initial")
 field_final = BiotSavart(coils_final)
 surface_final.to_vtk("surface_single_stage_optimized", field=field_final)
 coils_final.to_vtk("coils_single_stage_optimized")
 print(f"Wrote {input_path}\nWrote {wout_path}")
 print("Wrote coils_single_stage_optimized.json")
-print("Wrote surface_single_stage_optimized.vts and coils_single_stage_optimized.vtu")
+print("Wrote initial and optimized surface/coils VTK files")
 
 # Plot results
-surface_initial = surface_from_boundary(rbc0, zbs0, nphi=60, ntheta=60)
 vj.plot_optimization_objects("single_stage_optimization.png",
     ("Initial", surface_initial, coils0), ("Optimized", surface_final, coils_final))
 monitor.save("single_stage_objectives.csv")
 monitor.plot("single_stage_objectives.png", title="Single-stage objective terms")
+if MAKE_MOVIE:
+    monitor.movie("single_stage_optimization.gif",
+        lambda u: objects_from_x(jnp.asarray(x0 + scales * u)))
 print("Wrote single_stage_optimization.png")
 print("Wrote single_stage_objectives.csv and single_stage_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():

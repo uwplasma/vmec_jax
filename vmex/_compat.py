@@ -8,7 +8,7 @@ and is actually used — is:
   be set before JAX/XLA initializes — float64 (``JAX_ENABLE_X64``, VMEC
   parity), synchronous CPU dispatch, quiet XLA/PjRt C++ logging, GPU
   demand allocation, the machine-scoped persistent compilation-cache
-  directory, and the XLA:CPU fast-compile flags;
+  directory, and the XLA:CPU compiler flags/guards;
 - the compilation-cache policy helpers
   :func:`_default_compilation_cache_dir` / :func:`_cache_machine_fingerprint`
   / :func:`_configure_compilation_cache`, consumed by ``vmex/__init__``
@@ -263,7 +263,8 @@ def _configure_jax_environment() -> None:
         # skipped if the user set XLA_FLAGS, and opt-in via
         # VMEX_FAST_COMPILE=1.  Pre-import environment hints cannot reliably
         # distinguish a normally discovered GPU installation, so VMEX must
-        # not inject CPU-only XLA flags by default.
+        # not inject optional CPU tuning by default.  The macOS linker guard
+        # below is a separate correctness default for large graphs.
         _fast_compile = _env("FAST_COMPILE", "0").strip().lower()
         _accel_req = os.environ.get("JAX_PLATFORM_NAME", "").strip().lower()
         _accel_reqs = os.environ.get("JAX_PLATFORMS", "").strip().lower()
@@ -272,15 +273,21 @@ def _configure_jax_environment() -> None:
             any(a in f"{_accel_req} {_accel_reqs}" for a in ("cuda", "gpu", "tpu", "rocm"))
             or (_cuda_vis not in ("", "-1"))
         )
-        if (
-            _fast_compile not in ("0", "false", "no", "off")
-            and "XLA_FLAGS" not in os.environ
-            and not _on_accel
-        ):
-            os.environ["XLA_FLAGS"] = (
-                "--xla_backend_optimization_level=1 "
-                "--xla_llvm_disable_expensive_passes=true"
-            )
+        if "XLA_FLAGS" not in os.environ and not _on_accel:
+            _xla_flags = []
+            # Large differentiated single-stage graphs can exhaust the small
+            # macOS worker-thread stack while LLVM links its default 32 object
+            # partitions.  Finer partitioning bounds linker recursion without
+            # changing the executable's numerical operations.
+            if platform.system() == "Darwin":
+                _xla_flags.append("--xla_cpu_parallel_codegen_split_count=128")
+            if _fast_compile not in ("0", "false", "no", "off"):
+                _xla_flags.extend((
+                    "--xla_backend_optimization_level=1",
+                    "--xla_llvm_disable_expensive_passes=true",
+                ))
+            if _xla_flags:
+                os.environ["XLA_FLAGS"] = " ".join(_xla_flags)
 
         import jax
 

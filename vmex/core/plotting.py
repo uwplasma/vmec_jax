@@ -43,6 +43,8 @@ import numpy as np
 __all__ = [
     "plot_wout",
     "plot_boozmn",
+    "plot_bootstrap_current",
+    "plot_optimization_movie",
     "plot_optimization_objects",
     "plot_summary",
     "plot_surfaces",
@@ -108,6 +110,116 @@ def plot_optimization_objects(
         axis.set_title(str(title))
     path = Path(path)
     figure.tight_layout(); figure.savefig(path, dpi=int(dpi)); plt.close(figure)
+    return path
+
+
+def plot_optimization_movie(
+    path: str | Path,
+    x_history: Sequence[np.ndarray],
+    object_factory,
+    *,
+    fps: int = 10,
+    max_frames: int = 50,
+    dpi: int = 100,
+) -> Path:
+    """Animate accepted surface and coil geometries from an optimization.
+
+    ``object_factory(x)`` returns one object or a sequence of objects exposing
+    Cartesian points through ``gamma`` or ``curves.gamma``.  Histories are
+    uniformly subsampled to ``max_frames`` and always retain both endpoints.
+    GIF uses Pillow; MP4 uses ffmpeg when available.
+    """
+    if not x_history:
+        raise ValueError("x_history must contain at least one accepted point")
+    if fps < 1 or max_frames < 2 or dpi < 1:
+        raise ValueError("fps and dpi must be positive and max_frames at least 2")
+    path = Path(path)
+    if path.suffix.lower() not in (".gif", ".mp4"):
+        raise ValueError("movie path must end in .gif or .mp4")
+    import matplotlib.pyplot as plt
+    from matplotlib.animation import FFMpegWriter, FuncAnimation, PillowWriter, writers
+    if path.suffix.lower() == ".mp4" and not writers.is_available("ffmpeg"):
+        raise RuntimeError("MP4 output requires ffmpeg; use a .gif path instead")
+
+    indices = np.unique(np.linspace(
+        0, len(x_history) - 1, min(len(x_history), int(max_frames)), dtype=int))
+
+    def coordinates(x):
+        objects = object_factory(np.asarray(x, dtype=float))
+        if not isinstance(objects, (tuple, list)):
+            objects = (objects,)
+        arrays = []
+        for object_ in objects:
+            gamma = getattr(object_, "gamma", None)
+            if gamma is None and hasattr(object_, "curves"):
+                gamma = getattr(object_.curves, "gamma", None)
+            if gamma is not None:
+                kind = "surface" if hasattr(object_, "area_element") else "curves"
+                arrays.append((np.asarray(gamma, dtype=float), kind))
+        if not arrays:
+            raise TypeError("animated objects must expose gamma or curves.gamma")
+        return arrays
+
+    frame_data = [coordinates(x_history[index]) for index in indices]
+    all_points = np.concatenate([
+        array.reshape(-1, 3) for frame in frame_data for array, _kind in frame])
+    center = 0.5 * (all_points.min(axis=0) + all_points.max(axis=0))
+    span = max(float(np.ptp(all_points, axis=0).max()), np.finfo(float).eps)
+    figure = plt.figure(figsize=(5.2, 4.5)); axis = figure.add_subplot(projection="3d")
+
+    def draw(frame_index):
+        axis.clear()
+        for array, kind in frame_data[frame_index]:
+            if array.ndim == 3 and array.shape[-1] == 3:
+                if kind == "curves":
+                    for curve in array:
+                        axis.plot(*curve.T, color=_LINE_COLORS[1], linewidth=1.2)
+                else:  # surface grid
+                    stride0 = max(1, array.shape[0] // 16)
+                    stride1 = max(1, array.shape[1] // 16)
+                    for curve in array[::stride0]:
+                        axis.plot(*curve.T, color=_LINE_COLORS[0], linewidth=0.5, alpha=0.8)
+                    for curve in array[:, ::stride1].transpose(1, 0, 2):
+                        axis.plot(*curve.T, color=_LINE_COLORS[0], linewidth=0.5, alpha=0.8)
+            else:
+                axis.plot(*array.reshape(-1, 3).T, linewidth=1.2)
+        axis.set_xlim(center[0] - span / 2, center[0] + span / 2)
+        axis.set_ylim(center[1] - span / 2, center[1] + span / 2)
+        axis.set_zlim(center[2] - span / 2, center[2] + span / 2)
+        axis.set_box_aspect((1, 1, 1)); axis.set_title(f"accepted iteration {indices[frame_index]}")
+        return axis.lines
+
+    animation = FuncAnimation(figure, draw, frames=len(indices), interval=1000 / fps)
+    if path.suffix.lower() == ".gif":
+        writer = PillowWriter(fps=int(fps))
+    else:
+        writer = FFMpegWriter(fps=int(fps), bitrate=900)
+    animation.save(path, writer=writer, dpi=int(dpi)); plt.close(figure)
+    return path
+
+
+def plot_bootstrap_current(path: str | Path, equilibrium, mismatch, *, dpi: int = _DPI) -> Path:
+    """Overlay equilibrium and Redl ``<J.B>`` profiles on one polished panel."""
+    surfaces, equilibrium_current, redl_current = mismatch.current_profiles(equilibrium)
+    surfaces = np.asarray(surfaces, dtype=float)
+    equilibrium_current = np.asarray(equilibrium_current, dtype=float) / 1.0e6
+    redl_current = np.asarray(redl_current, dtype=float) / 1.0e6
+    difference = equilibrium_current - redl_current
+    rms = float(np.sqrt(np.mean(difference**2)))
+    scale = max(float(np.max(np.abs(np.r_[equilibrium_current, redl_current]))), 1.0e-30)
+    plt = _import_matplotlib()
+    with _rc_context():
+        figure, axis = plt.subplots(figsize=(6.2, 4.0))
+        axis.plot(surfaces, equilibrium_current, "o-", label="VMEX equilibrium")
+        axis.plot(surfaces, redl_current, "s--", label="Redl bootstrap")
+        axis.axhline(0.0, color="0.35", linewidth=0.8)
+        axis.set(xlabel=r"$s=\psi/\psi_{\rm edge}$",
+                 ylabel=r"$\langle\mathbf{J}\!\cdot\!\mathbf{B}\rangle$ [MA T m$^{-2}$]")
+        axis.text(0.03, 0.95, f"normalized RMS mismatch = {rms / scale:.2%}",
+                  transform=axis.transAxes, fontsize=9, va="top",
+                  bbox={"facecolor": "white", "edgecolor": "0.8", "alpha": 0.85})
+        axis.legend(frameon=True, loc="best")
+        figure.tight_layout(); path = Path(path); figure.savefig(path, dpi=int(dpi)); plt.close(figure)
     return path
 
 

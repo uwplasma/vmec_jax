@@ -129,6 +129,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     # plotting + Boozer
     "plot_wout": (".core.plotting", "plot_wout"),
     "plot_boozmn": (".core.plotting", "plot_boozmn"),
+    "plot_bootstrap_current": (".core.plotting", "plot_bootstrap_current"),
+    "plot_optimization_movie": (".core.plotting", "plot_optimization_movie"),
     "plot_optimization_objects": (".core.plotting", "plot_optimization_objects"),
     "run_booz_xform": (".core.boozer", "run_booz_xform"),
     # optimizer-neutral problem callables

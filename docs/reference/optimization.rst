@@ -28,6 +28,13 @@ cost. Negative cost weights are rejected. Set
 ``weight_semantics="residual"`` only when importing a definition in which the
 weight itself multiplies each residual row.
 
+``weight`` may also be a one-dimensional array with one entry per residual
+row. This is the general radial-weight interface: for a profile sampled on
+``s``, an edge-emphasized cost can use, for example,
+``weight = w0 * (1 + 9*s**4)``. The same mechanism applies to Mercier,
+Glasser, magnetic-well, QS/QI, and user-defined vector objectives; no
+objective-specific weighting class is needed.
+
 Use :meth:`~vmex.core.problem.VmecProblem.from_loss` for one traceable scalar
 ``loss(state, runtime)``. Use
 :meth:`~vmex.core.problem.FunctionProblem.from_functions` when the user already
@@ -172,6 +179,14 @@ history needs only the callback plus two output calls:
    monitor.save("objectives.csv")
    monitor.plot("objectives.png")
 
+Continuation stages may restart the optimizer iteration counter; the monitor
+keeps the combined saved history strictly increasing. Exact-zero terms are
+drawn at a relative numerical display floor instead of forcing a meaningless
+``1e-308`` axis. For joint surface/coil objectives, accepted vectors are also
+available as ``monitor.x_history`` and a compact movie is one optional call::
+
+   monitor.movie("optimization.gif", objects_from_x, max_frames=50)
+
 For a custom JAX scalar objective, return ``(cost, {name: term_cost})`` as
 auxiliary data. Wrap ``jax.value_and_grad(objective, has_aux=True)`` with
 ``monitor.wrap_value_and_grad``, then pass the monitor as SciPy's callback;
@@ -310,6 +325,13 @@ Points outside the LCFS return NaNs; use ``problem.exterior_field`` or
 spatial derivative orders are
 substantially more expensive and radial derivatives are piecewise smooth at
 the VMEC mesh surfaces, so converge them in ``NS_ARRAY``.
+
+Runnable vacuum and finite-beta examples, including Cartesian/cylindrical
+queries, flux-coordinate inversion, derivatives through third order, and
+parameter VJPs inside and outside the LCFS, are
+``examples/vmex_get_B_gradB.py`` and
+``examples/vmex_get_B_gradB_finite_beta.py``. Their top-level derivative-order
+controls leave costly higher-order spatial derivatives and VJPs opt-in.
 
 Resources and reproducibility
 -----------------------------

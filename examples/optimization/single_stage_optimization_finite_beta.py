@@ -5,8 +5,6 @@ from dataclasses import replace
 import os
 from pathlib import Path
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 from pyevtk.hl import gridToVTK
 from scipy.optimize import minimize, OptimizeResult
@@ -16,6 +14,9 @@ from vmex import optimize as opt
 from vmex.core import freeboundary_diff as fbd
 from vmex.core.bootstrap import (ELEMENTARY_CHARGE, KineticProfiles, RedlBootstrapMismatch,
                                  self_consistent_bootstrap)
+
+import jax
+import jax.numpy as jnp
 
 from essos.coils import Coils, Curves, CreateEquallySpacedCurves
 from essos.fields import BiotSavart
@@ -42,6 +43,7 @@ COIL_SURFACE_DISTANCE_LIMIT, COIL_SURFACE_DISTANCE_WEIGHT = 0.20, 1.0e3
 NPHI, NTHETA, VC_DIGITS = 19, 24, 4
 METHOD = "L-BFGS-B"
 OPTIONS = {"maxiter": MAXITER, "maxls": 10, "ftol": 1e-12, "gtol": 1e-8, "maxcor": 20}
+MAKE_MOVIE = False  # set True for a compact GIF of accepted iterates
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if ci_smoke:
@@ -73,6 +75,9 @@ profiles = KineticProfiles(n0 * np.array([1, 0, 0, 0, 0, -1]),
                            T0 * np.array([1, -1]), T0 * np.array([1, -1]))
 picard = self_consistent_bootstrap(inp, profiles, 0, n_iter=2 if ci_smoke else 8,
     tol=1e-3, degree=N_CURRENT_SPLINE - 1, s_eval=SURFACES, verbose=not ci_smoke)
+# The Picard bootstrap solve leaves the prescribed pressure and boundary shape
+# unchanged, and mainly updates the current profile / equilibrium state (I'(s), CURTOR)
+# to the self-consistent bootstrap response before the optimization starts.
 inp, equilibrium = opt.resample_current_profile(picard.input, N_CURRENT_SPLINE), picard.equilibrium
 
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
@@ -195,7 +200,7 @@ def objective(u):
     return jax.lax.cond(status == 0, accepted, rejected, operand=None)
 
 monitor = opt.OptimizationMonitor()
-jax_value_and_grad = jax.value_and_grad(objective, has_aux=True)
+jax_value_and_grad = jax.jit(jax.value_and_grad(objective, has_aux=True))
 scipy_objective = monitor.wrap_value_and_grad(
     lambda u: jax_value_and_grad(jnp.asarray(u)), extra_term_names,
     residual_slices=plasma_problem.metadata["term_slices"])
@@ -244,6 +249,17 @@ print(f"Maximum curvature = {float(np.max(np.asarray(coils_final.curvature))):.3
 input_path = final_input.to_indata("input.single_stage_finite_beta_optimized")
 wout_path = vj.write_wout("wout_single_stage_finite_beta_optimized.nc", final_equilibrium.wout)
 coils_final.to_json("coils_single_stage_finite_beta_optimized.json")
+vc0 = fbd.FreeBoundaryDiffProblem.from_surface_data(
+    surface_data0, digits=VC_DIGITS, precision=precision)
+Bn0 = np.asarray(vc0.bnormal_residual(coil_field(coils0)))
+Bmag0 = np.linalg.norm(np.asarray(surface_data0.B_total), axis=0)
+pressure_error0 = np.asarray(vc0.pressure_balance_residual(coil_field(coils0))) / Bmag0**2
+gamma0 = np.asarray(surface_data0.gamma)
+gridToVTK("surface_single_stage_finite_beta_initial",
+    gamma0[0][None].copy(), gamma0[1][None].copy(), gamma0[2][None].copy(),
+    pointData={"B_dot_n_over_B": (Bn0 / Bmag0)[None].copy(), "B": Bmag0[None].copy(),
+               "pressure_balance_error": pressure_error0[None].copy()})
+coils0.to_vtk("coils_single_stage_finite_beta_initial")
 gamma = np.asarray(data_f.gamma)
 gridToVTK("surface_single_stage_finite_beta_optimized",
     gamma[0][None].copy(), gamma[1][None].copy(), gamma[2][None].copy(),
@@ -256,6 +272,9 @@ print(f"Wrote {input_path}\nWrote {wout_path}")
 monitor.save("single_stage_finite_beta_objectives.csv")
 monitor.plot("single_stage_finite_beta_objectives.png", title="Finite-beta single-stage terms")
 vj.plot_optimization_objects("single_stage_finite_beta_optimization.png",
-    ("Optimized", surface_final, coils_final))
+    ("Initial", *objects_from_x(jnp.asarray(x0))), ("Optimized", surface_final, coils_final))
+if MAKE_MOVIE:
+    monitor.movie("single_stage_finite_beta_optimization.gif",
+        lambda u: objects_from_x(jnp.asarray(x0 + scales * u)))
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"Wrote {path}")

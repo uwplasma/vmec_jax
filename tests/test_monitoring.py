@@ -52,6 +52,16 @@ def test_monitor_records_scipy_and_manual_iterations() -> None:
     assert "reduction" in output
     assert "2.500000e-01" in output
 
+    # A continuation stage can restart SciPy's ``nit`` at one.  The combined
+    # history remains monotonic, and recorded vectors are defensive copies.
+    x = np.array([3.0])
+    monitor.record(x, cost=0.25, iteration=1)
+    x[0] = 99.0
+    assert [record.iteration for record in monitor.records] == [1, 2, 3]
+    assert monitor.x_history[-1].tolist() == [3.0]
+    copied = monitor.x_history[-1]; copied[0] = -1.0
+    assert monitor.x_history[-1].tolist() == [3.0]
+
 
 def test_monitor_wraps_auxiliary_term_costs_and_records_only_accepted_points() -> None:
     monitor = OptimizationMonitor(stream=None)
@@ -107,9 +117,9 @@ def test_monitor_collects_saves_and_plots_objective_terms(tmp_path) -> None:
     monitor = OptimizationMonitor(problem, stream=None)
     monitor({"x": np.array([1.0, 2.0]), "cost": 10.5, "nit": 0})
     monitor.record(np.zeros(2), cost=1.0, iteration=1,
-                   terms={"shape": 0.25, "field": 0.75})
+                   terms={"shape": 0.0, "field": 0.75})
 
-    np.testing.assert_allclose(monitor.history["shape"], [0.5, 0.25])
+    np.testing.assert_allclose(monitor.history["shape"], [0.5, 0.0])
     np.testing.assert_allclose(monitor.history["field"], [10.0, 0.75])
     csv = monitor.save(tmp_path / "history.csv")
     plot = monitor.plot(tmp_path / "history.png")
@@ -135,6 +145,63 @@ def test_plot_optimization_objects_is_dependency_neutral(tmp_path) -> None:
     assert vj.plot_optimization_objects(tmp_path / "coils.png", ("Coils", coil)).is_file()
     with np.testing.assert_raises_regex(ValueError, "at least one"):
         vj.plot_optimization_objects(tmp_path / "bad.png")
+
+
+def test_bootstrap_plot_and_small_optimization_movie(tmp_path, monkeypatch) -> None:
+    import vmex as vj
+
+    class Mismatch:
+        def current_profiles(self, _equilibrium):
+            return np.linspace(0.1, 0.9, 4), np.arange(4.0), np.arange(4.0) + 0.1
+
+    bootstrap = vj.plot_bootstrap_current(
+        tmp_path / "bootstrap.png", object(), Mismatch())
+    assert bootstrap.is_file() and bootstrap.stat().st_size > 0
+
+    class Surface:
+        area_element = np.ones((4, 5))
+
+        def __init__(self, shift):
+            phi, theta = np.meshgrid(
+                np.linspace(0, 2 * np.pi, 4, endpoint=False),
+                np.linspace(0, 2 * np.pi, 5, endpoint=False), indexing="ij")
+            radius = 1.0 + 0.1 * np.cos(theta)
+            self.gamma = np.stack((radius * np.cos(phi) + shift,
+                                   radius * np.sin(phi), 0.1 * np.sin(theta)), axis=-1)
+
+    class Coils:
+        def __init__(self, shift):
+            theta = np.linspace(0, 2 * np.pi, 12)
+            self.gamma = np.stack((np.cos(theta) + shift, np.sin(theta), 0 * theta), axis=-1)[None]
+
+    class Line:
+        def __init__(self, shift):
+            self.gamma = np.array([[shift, 0.0, 0.0], [shift, 0.0, 1.0]])
+
+    class CurvesOnly:
+        def __init__(self, shift):
+            self.curves = SimpleNamespace(gamma=Line(shift).gamma[None])
+
+    monitor = OptimizationMonitor(stream=None)
+    monitor.record([0.0], cost=1.0); monitor.record([0.1], cost=0.5)
+    movie = monitor.movie(
+        tmp_path / "optimization.gif",
+        lambda x: (Surface(x[0]), Coils(x[0]), Line(x[0]), CurvesOnly(x[0])),
+        fps=2, max_frames=4, dpi=40)
+    assert movie.is_file() and movie.stat().st_size > 0
+    with np.testing.assert_raises_regex(ValueError, "at least one"):
+        vj.plot_optimization_movie(tmp_path / "empty.gif", (), lambda x: x)
+    with np.testing.assert_raises_regex(ValueError, "max_frames"):
+        vj.plot_optimization_movie(tmp_path / "bad.gif", ([0.0],), Line, fps=0)
+    with np.testing.assert_raises_regex(TypeError, "gamma"):
+        vj.plot_optimization_movie(tmp_path / "bad.gif", ([0.0],), lambda x: object())
+    with np.testing.assert_raises_regex(ValueError, "gif or .mp4"):
+        vj.plot_optimization_movie(tmp_path / "bad.txt", ([0.0],), Line)
+    import matplotlib.animation
+    monkeypatch.setattr(matplotlib.animation.writers, "is_available", lambda name: False)
+    with np.testing.assert_raises_regex(RuntimeError, "requires ffmpeg"):
+        vj.plot_optimization_movie(
+            tmp_path / "bad.mp4", ([0.0],), lambda x: Line(float(x[0])))
 
 
 def test_monitor_empty_optional_paths_raise_or_return_empty(tmp_path) -> None:

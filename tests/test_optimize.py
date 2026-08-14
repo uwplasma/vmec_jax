@@ -920,6 +920,10 @@ def test_public_problem_factory_validation():
         opt.make_problem(
             inp, objective_terms=[(opt.aspect_ratio, 4.0, -1.0)], max_mode=1
         )
+    np.testing.assert_allclose(
+        opt._least_squares_weight(np.array([1.0, 4.0]), "cost"), [1.0, 2.0])
+    with pytest.raises(ValueError, match="scalar or 1-D"):
+        opt._least_squares_weight(np.ones((2, 2)), "cost")
     common = dict(max_mode=1, x0=None, solve_kwargs={})
     with pytest.raises(ValueError, match="weight_semantics"):
         opt._least_squares_implicit(

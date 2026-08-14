@@ -398,6 +398,22 @@ QS or beta residuals, so their weights must be calibrated explicitly. Their
 live-state derivatives are checked against independently reconverged finite
 differences in ``tests/test_implicit_grad.py``.
 
+For a vacuum design, :func:`~vmex.core.stability.trial_pressure_d_merc_state`
+and :func:`~vmex.core.stability.trial_pressure_glasser_d_r_state` replace the
+explicit pressure-gradient term in the Mercier/Glasser expressions by a
+chosen trial beta and pressure shape while freezing geometry and current.
+Their ``*_stability_residual`` forms are AD-transparent objective rows. This
+is a fast pressure-sensitivity proxy, not a finite-beta certificate: it omits
+the pressure-driven geometry, current, and Shafranov-shift response, so the
+candidate must be re-solved at finite pressure. ``QA_optimization.py`` exposes
+the workflow by setting ``TRIAL_BETA``; its one-dimensional tuple weights grow
+toward the edge, where stability is usually hardest.
+
+The QA/QH bootstrap examples write a separate
+``*_bootstrap_current.png`` overlay of the equilibrium and Redl
+``<J.B>`` profiles. :meth:`~vmex.core.bootstrap.RedlBootstrapMismatch.current_profiles`
+returns the same three arrays for custom reporting.
+
 MHD stability
 -------------
 

@@ -537,6 +537,12 @@ Persistent compilation cache
 accelerators, so the multi-second compile cost is paid once per machine, not
 once per process.
 
+On macOS CPU, VMEX also raises XLA's parallel-codegen partition count from 32
+to 128. This bounds LLVM linker recursion for large differentiated
+single-stage graphs and avoids native stack-guard failures without changing
+floating-point operations. An explicit user ``XLA_FLAGS`` value always wins;
+accelerator backends receive no CPU-only flag.
+
 .. warning::
 
    **cwd-shadowing pitfall.** Running ``python`` with a working directory

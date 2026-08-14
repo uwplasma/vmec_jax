@@ -17,6 +17,8 @@ MAX_MODES, MAX_NFEV = [3], [25]  # mode-ladder alternative: [2, 3], [10, 40]
 ASPECT_TARGET = 5.0
 IOTA_TARGET = 0.42
 MAGNETIC_WELL_TARGET = 0.01
+TRIAL_BETA = None  # set to 0.025 to optimize frozen-geometry DMerc/DR pressure proxies
+STABILITY_WEIGHT, EDGE_WEIGHT_FACTOR = 1.0e-6, 10.0
 MINIMUM_MPOL = 5
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.05
@@ -31,6 +33,11 @@ inp = vj.VmecInput.from_file(DATA)
 # explicit rotating-ellipse perturbation gives the local optimizer a QA basin.
 inp.rbc[inp.ntor-1, 1] =-SEED_PERTURBATION
 inp.zbs[inp.ntor-1, 1] = SEED_PERTURBATION
+def trial_dmerc(state, runtime):
+    return opt.trial_pressure_mercier_stability_residual(state, runtime, beta=TRIAL_BETA)
+
+def trial_dr(state, runtime):
+    return opt.trial_pressure_glasser_stability_residual(state, runtime, beta=TRIAL_BETA)
 
 # Objective function terms
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
@@ -40,6 +47,11 @@ objective_function_terms = [
          (opt.mean_iota, IOTA_TARGET, 10.0),
          (opt.magnetic_well, MAGNETIC_WELL_TARGET, 1.0),
          ]
+if TRIAL_BETA is not None:
+    stability_s = np.linspace(0.0, 1.0, int(inp.ns_array[-1]))[2:-1]
+    stability_weights = STABILITY_WEIGHT * (1.0 + (EDGE_WEIGHT_FACTOR - 1.0) * stability_s**4)
+    objective_function_terms += [(trial_dmerc, 0.0, stability_weights),
+                                 (trial_dr, 0.0, stability_weights)]
 
 report = opt.EquilibriumReporter(
     ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),

@@ -113,6 +113,7 @@ class OptimizationMonitor:
         )
         self.print_every = int(print_every)
         self.records: list[OptimizationRecord] = []
+        self._x_history: list[np.ndarray] = []
         self._evaluations: dict[bytes, tuple[float, float, dict[str, float]]] = {}
         self._last_key: bytes | None = None
 
@@ -263,6 +264,10 @@ class OptimizationMonitor:
             terms = self._term_costs(np.asarray(x, dtype=float))
         if iteration is None:
             iteration = len(self.records)
+        elif self.records and int(iteration) <= self.records[-1].iteration:
+            # Optimizers restart their iteration count at every continuation
+            # stage.  Keep one monitor's combined history strictly ordered.
+            iteration = self.records[-1].iteration + 1
         if equilibrium_solves is None or rejected_trials is None:
             solves, rejected = self._counters()
             if equilibrium_solves is None:
@@ -283,6 +288,7 @@ class OptimizationMonitor:
                 str(name): float(value) for name, value in terms.items()},
         )
         self.records.append(item)
+        self._x_history.append(np.asarray(x, dtype=float).copy())
         self._last_key = self._key(x)
         if self.stream is not None and (len(self.records) - 1) % self.print_every == 0:
             self._print(item)
@@ -299,6 +305,11 @@ class OptimizationMonitor:
                               for record in self.records])
             for name in names})
         return history
+
+    @property
+    def x_history(self) -> tuple[np.ndarray, ...]:
+        """Copies of the accepted decision vectors, including iteration zero."""
+        return tuple(x.copy() for x in self._x_history)
 
     def save(self, path: str | Path) -> Path:
         """Save the recorded iteration and cost columns as CSV."""
@@ -322,13 +333,31 @@ class OptimizationMonitor:
         path = Path(path)
         figure, axis = plt.subplots(figsize=(6.5, 4.0))
         iterations = np.asarray([record.iteration for record in self.records])
+        finite_positive = np.concatenate([
+            values[np.isfinite(values) & (values > 0.0)]
+            for values in self.history.values()
+        ])
+        largest = float(np.max(finite_positive)) if finite_positive.size else 1.0
+        display_floor = max(1.0e-16, largest * 1.0e-12)
         for name, values in self.history.items():
-            positive = np.maximum(values, np.finfo(float).tiny)
+            positive = np.where(np.isfinite(values), np.maximum(values, display_floor), np.nan)
             axis.semilogy(iterations, positive, label=name)
         axis.set(xlabel="iteration", ylabel="weighted cost", title=title)
+        axis.set_ylim(bottom=0.5 * display_floor)
         axis.grid(True, alpha=0.3); axis.legend(fontsize=8, ncol=2)
         figure.tight_layout(); figure.savefig(path, dpi=200); plt.close(figure)
         return path
+
+    def movie(
+        self,
+        path: str | Path,
+        object_factory: Callable[[np.ndarray], Any],
+        **kwargs: Any,
+    ) -> Path:
+        """Animate accepted surface/coil iterates with one geometry callback."""
+        from .plotting import plot_optimization_movie
+
+        return plot_optimization_movie(path, self.x_history, object_factory, **kwargs)
 
     @staticmethod
     def _number(value: float | int | None, *, integer: bool = False) -> str:

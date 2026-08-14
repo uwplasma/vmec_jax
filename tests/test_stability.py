@@ -192,6 +192,55 @@ def test_traceable_jdotb_and_glasser_profiles(shaped_eq):
         assert np.any(interior != 0.0)
 
 
+def test_trial_pressure_proxy_recovers_the_prescribed_pressure(shaped_eq):
+    """At the equilibrium beta/profile, replacing explicit p' is an identity."""
+    state, rt, wout = shaped_eq.state, shaped_eq.runtime, shaped_eq.wout
+    pressure = np.asarray(wout.pres, dtype=float)
+    shape = pressure[1:] / np.max(np.abs(pressure[1:]))
+    trial_dmerc, trial_dr = jax.jit(
+        lambda st: (
+            stab.trial_pressure_d_merc_state(
+                st, rt, beta=wout.betatotal, pressure_shape=shape),
+            stab.trial_pressure_glasser_d_r_state(
+                st, rt, beta=wout.betatotal, pressure_shape=shape,
+                shear_epsilon=1.0e-8),
+        )
+    )(state)
+    np.testing.assert_allclose(
+        trial_dmerc[2:-1], stab.d_merc_state(state, rt)[2:-1], rtol=2e-12, atol=1e-10)
+    np.testing.assert_allclose(
+        trial_dr[2:-1],
+        stab.glasser_d_r_state(state, rt, shear_epsilon=1.0e-8)[2:-1],
+        rtol=2e-12, atol=1e-10)
+
+    residuals = stab.trial_pressure_mercier_stability_residual(
+        state, rt, beta=0.01)
+    glasser = stab.trial_pressure_glasser_stability_residual(
+        state, rt, beta=0.01)
+    assert residuals.shape == glasser.shape == (wout.ns - 3,)
+    assert np.all(np.isfinite(np.asarray(residuals)))
+    assert np.all(np.isfinite(np.asarray(glasser)))
+    full_shape = np.r_[0.0, shape]
+    np.testing.assert_allclose(
+        stab.trial_pressure_d_merc_state(
+            state, rt, beta=wout.betatotal, pressure_shape=full_shape),
+        trial_dmerc, rtol=2e-12, atol=1e-10)
+    callable_profile = stab.trial_pressure_d_merc_state(
+        state, rt, beta=0.01, pressure_shape=lambda s: 1.0 - s)
+    assert np.all(np.isfinite(np.asarray(callable_profile)))
+    with pytest.raises(ValueError, match="pressure_shape"):
+        stab.trial_pressure_d_merc_state(state, rt, pressure_shape=np.ones(2))
+    with pytest.raises(ValueError, match="shear_epsilon"):
+        stab.trial_pressure_glasser_d_r_state(
+            state, rt, shear_epsilon=-1.0)
+    with pytest.raises(ValueError, match="smoothing"):
+        stab.trial_pressure_mercier_stability_residual(
+            state, rt, smoothing=0.0)
+    with pytest.raises(ValueError, match="smoothing"):
+        stab.trial_pressure_glasser_stability_residual(
+            state, rt, smoothing=0.0)
+
+
 def test_glasser_profiles_match_independent_dcon_reference():
     """Normalized D_I and D_R retain the independent DCON comparison."""
     eq = opt.solve_equilibrium(
