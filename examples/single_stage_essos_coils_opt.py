@@ -3,47 +3,16 @@
 
 vmex is coil-agnostic: the coils live in ESSOS (:class:`essos.coils.Coils`)
 and the differentiable free-boundary machinery consumes any ``xyz -> B`` field
-callable -- no coil code inside vmex at all.  This example runs the *full*
+callable.  This example runs the *full*
 single-stage stellarator problem: it co-optimizes the plasma boundary Fourier
 coefficients AND the ESSOS coil-group currents *simultaneously*, driven by ONE
-exact gradient that threads through
+exact gradient.
 
-  * the **implicit-differentiation adjoint** of the fixed-boundary equilibrium
-    (boundary dofs -> converged VMEC state -> both the edge rotational transform
-    and the virtual-casing plasma field on the *moving* boundary), and
-  * a **coil-agnostic Biot-Savart callable** built straight from the ESSOS coil
-    filaments (``essos.coils.Coils.gamma`` / ``gamma_dash``), differentiable in
-    the coil-group currents,
-
-at the same time.  ``jax.value_and_grad`` of the combined objective is exact and
-finite-difference validated (the ``FD-check`` lines below, printed outside the
-CI smoke budget): the boundary half comes out of the adjoint, the coil half out
-of virtual casing + Biot-Savart, and the coupling -- the coil field is evaluated
-on the boundary the plasma solve just produced -- is differentiated too.
-
-Objective (a genuine single-stage functional)::
-
+Objective::
     J(boundary, currents) = W_BN   * < (B_plasma + B_coil) . n ^2 >   # coil<->plasma
                           + W_IOTA * (iota_edge - iota_*)^2            # a plasma target
 
-Making the virtual-casing plasma field differentiable in the *boundary* (not just
-the coils) needs its adaptive quadrature/patch precision frozen to static values
-first -- :func:`~vmex.core.freeboundary_diff.plan_vc_precision` selects it
-once from the starting boundary; see that module and ``virtual_casing_jax``'s
-``PrecisionPlan``.
-
-Two cases are run from a truncated Landreman & Paul (2021) precise-QA deck held
-by its 16 ESSOS modular coils: **(A) vacuum** (``am = 0``) and **(B) finite
-beta** (parabolic pressure).  Each starts from a *detuned* base-coil current
-(+15% on one coil group, so the coil half of the gradient has real leverage) and
-asks for a shifted edge ``iota`` (so the boundary half does too); a short scaled
-L-BFGS-B descent then decreases ``J`` in both.  The converged initial/final
-wout, the boundary, and the fixed ESSOS coil geometry are written to
-``output_single_stage_essos_coils_opt/`` so ``benchmarks/make_readme_figures.py``
-can draw initial-vs-final without re-optimizing.
-
-Requires the optional ``essos`` and ``virtual_casing_jax`` dependencies.  Honors
-``VMEX_EXAMPLES_CI=1`` (tiny grid, one descent step) for the smoke test.
+Requires the optional ``essos`` and ``virtual_casing_jax`` dependencies.
 """
 
 from __future__ import annotations
@@ -69,7 +38,7 @@ from vmex.core import implicit as im
 # --------------------------- parameters ------------------------------------
 DATA = Path(__file__).resolve().parent / "data"
 COILS_JSON = DATA / "ESSOS_biot_savart_LandremanPaulQA.json"  # ESSOS coil DOFs
-INPUT_FILE = DATA / "input.LandremanPaul2021_QA_lowres"       # plasma seed deck
+INPUT_FILE = DATA / "input.minimal_seed_nfp2"       # plasma seed deck
 OUT_DIR = Path("output_single_stage_essos_coils_opt")
 
 PHIEDGE = -0.025           # toroidal flux matching the ESSOS coil field [Wb]

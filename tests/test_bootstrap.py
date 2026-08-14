@@ -716,6 +716,8 @@ def test_current_dof_packing_and_validation():
     # ampere-scale decks (self_consistent_bootstrap refits) scale by max|AC|
     amp = dataclasses.replace(inp, ac=1e6 * np.asarray(inp.ac), curtor=-2.7e6)
     assert opt._current_dof_setup(amp, 2)[1] == 1e6
+    trailing = np.asarray(inp.ac).copy(); trailing[5] = 1e12
+    assert opt._current_dof_setup(dataclasses.replace(inp, ac=trailing), 2)[1] == 1.0
     with pytest.raises(ValueError, match="ncurr = 1"):
         opt._current_dof_setup(dataclasses.replace(inp, ncurr=0), 2)
     with pytest.raises(ValueError, match="pcurr_type"):

@@ -120,6 +120,17 @@ def test_configure_compilation_cache_wiring(monkeypatch):
     assert fake3.config.updates["jax_compilation_cache_dir"] == "/tmp/x"
 
 
+def test_compilation_cache_defaults_are_bounded_and_selective(monkeypatch):
+    monkeypatch.delenv("VMEX_CACHE_MIN_COMPILE_TIME_SECS", raising=False)
+    monkeypatch.delenv("VMEC_JAX_CACHE_MIN_COMPILE_TIME_SECS", raising=False)
+    monkeypatch.delenv("VMEX_COMPILATION_CACHE_MAX_SIZE", raising=False)
+    monkeypatch.delenv("VMEC_JAX_COMPILATION_CACHE_MAX_SIZE", raising=False)
+    fake = types.SimpleNamespace(config=_FakeConfig())
+    _compat._configure_compilation_cache(fake, "/tmp/cachedir")
+    assert fake.config.updates["jax_persistent_cache_min_compile_time_secs"] == 1.0
+    assert fake.config.updates["jax_compilation_cache_max_size"] == 1 << 30
+
+
 def test_configure_compilation_cache_gpu_autotune_default(monkeypatch):
     monkeypatch.delenv("VMEX_PERSISTENT_CACHE_XLA_CACHES", raising=False)
     monkeypatch.delenv("JAX_PLATFORM_NAME", raising=False)

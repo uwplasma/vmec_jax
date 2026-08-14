@@ -56,6 +56,7 @@ def test_problem_contract_and_exact_key_cache():
     assert problem.J(problem.x0) == value
     np.testing.assert_array_equal(problem.dJ(problem.x0), grad)
     assert problem.names == ("a", "b")
+    assert problem.dof_names == ("a", "b")
     np.testing.assert_array_equal(problem.scales, [1.0, 2.0])
     assert FunctionProblem.from_functions([1.0], fun=np.sum).fun([2.0]) == 2.0
 
@@ -71,6 +72,7 @@ def test_vmec_problem_maps_inputs_and_reuses_equilibria():
         equilibrium_from_x=lambda x: (equilibrium, np.asarray(x)),
     )
     inp = problem.input_from_x([3.0, 4.0])
+    assert problem.dof_names == ("x[0]", "x[1]")
     np.testing.assert_array_equal(problem.x_from_input(inp), [3.0, 4.0])
     accepted, x = problem.equilibrium_from_x([5.0, 6.0])
     assert accepted is equilibrium
@@ -172,20 +174,26 @@ def test_compile_methods_prime_the_requested_path_and_report_progress():
 
 def test_vmec_problem_factory_reports_construction_progress(monkeypatch):
     from vmex.core import optimize as opt
+    from vmex.core import restart
     from vmex.core.input import VmecInput
 
+    captured = {}
     def fake_implicit_problem(*args, **kwargs):
-        del args, kwargs
+        del args
+        captured.update(kwargs)
         time.sleep(0.02)
         return FunctionProblem(
             [0.0], fun=np.sum, metadata={"derivative_method": "implicit"}
         )
 
     monkeypatch.setattr(opt, "_least_squares_implicit", fake_implicit_problem)
+    seed, source = object(), object()
+    monkeypatch.setattr(restart, "restart_state", lambda restart_from, inp: seed)
     stream = io.StringIO()
     problem = opt.make_problem(
         VmecInput(mpol=2, ntor=1),
         objective_terms=[(lambda equilibrium: equilibrium, 0.0, 1.0)],
+        restart_from=source,
         progress=True,
         report_interval=0.005,
         progress_stream=stream,
@@ -195,6 +203,7 @@ def test_vmec_problem_factory_reports_construction_progress(monkeypatch):
     assert "s elapsed" in output
     assert "VMEX problem ready in" in output
     assert problem.metadata["derivative_method"] == "implicit"
+    assert captured["initial_state"] is seed
 
 
 def test_residual_only_problem_derives_scalar_value_and_gradient():

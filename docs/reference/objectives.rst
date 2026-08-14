@@ -227,8 +227,8 @@ squash-and-shuffle distance.
 
 :class:`~vmex.core.qi.ConstructedQIResidual` evaluates that fuller Goodman
 construction on the same traceable spectrum.  It is the production QI target.
-Use reduced angular and bounce sampling during optimization, then evaluate the
-default resolution for reporting:
+Use reduced angular and bounce sampling during optimization, then evaluate an
+independent resolved grid for reporting:
 
 .. code-block:: python
 
@@ -236,9 +236,11 @@ default resolution for reporting:
 
    surfaces = np.linspace(0.1, 1.0, 6)
    qi = ConstructedQIResidual(
-       surfaces, mboz=12, nboz=12, nphi=61, nalpha=13, n_bounce=15
+       surfaces, mboz=12, nboz=12, nphi=61, nalpha=18, n_bounce=21
    )
-   qi_report = ConstructedQIResidual(surfaces)
+   qi_report = ConstructedQIResidual(
+       surfaces, mboz=14, nboz=14, nphi=101, nalpha=29, n_bounce=31
+   )
    result = opt.least_squares(
        [(qi, 0.0, 10.0),
         (opt.aspect_ratio, 5.0, 0.005)],
@@ -259,6 +261,17 @@ diagnostic is not numerically interchangeable with a six-surface core-to-edge
 objective.  The independent wout/Boozer implementation
 (:func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout`) remains the
 cross-check for a finished configuration.
+
+The branch matching, running extrema, and interpolation in the constructed
+target are piecewise smooth. Changing ``nalpha``, ``nphi``, or ``n_bounce``
+can therefore change the local optimization path even when the value at an
+already-QI configuration is converged. For the common ``mboz=12`` optimization
+lane, ``(nphi, nalpha, n_bounce)=(61, 18, 21)`` is a useful inexpensive grid;
+the example above is the separate certification grid. At least
+``nalpha >= 2*mboz + 1`` should be used for a resolved final check. No one
+fixed grid guarantees the same basin across NFP and boundary mode number, so
+use continuation or a short QP basin stage and verify the final ranking on the
+certification grid.
 
 .. note::
 
@@ -336,6 +349,37 @@ reproducing the workflow of Landreman–Buller–Drevlak, arXiv:2205.02914):
        [(qs, 0.0, 1.0), (boot, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0)],
        inp, max_mode=4, jac="implicit",
        current_dofs=6)          # free AC[0:6] + CURTOR with the boundary
+
+The complete runnable workflows are
+``examples/optimization/QA_optimization_bootstrap.py`` and
+``QH_optimization_bootstrap.py``.  Their setup has two distinct steps:
+
+1. ``KineticProfiles`` describes the density and temperature seen by the
+   Redl model.  Coefficients are in increasing powers of normalized toroidal
+   flux ``s``; for example ``[1, 0, 0, 0, 0, -1]`` is ``1-s**5`` and
+   ``[1, -1]`` is ``1-s``.  These profiles do not silently replace VMEC's
+   pressure profile, so the examples explicitly give VMEC the matching
+   ``p = e ne (Te + Ti)`` profile and calibrate its scale to the target beta.
+2. ``self_consistent_bootstrap`` alternates a hot-restarted equilibrium solve,
+   evaluation of the Redl ``<J.B>`` target, and a power-series refit of
+   ``I'(s)``/``CURTOR``.  ``degree`` is the fitted current-polynomial degree,
+   ``s_eval`` is the radial collocation grid, ``tol`` bounds the relative
+   current-profile mismatch, and ``relax < 1`` damps difficult high-beta
+   fixed points.  The returned input and equilibrium seed the differentiable
+   optimization; the Picard loop itself is not differentiated.
+
+During optimization, ``current_dofs=k`` adds normalized ``AC(0:k)`` and
+``CURTOR`` variables after the boundary variables.  ESS scales only boundary
+Fourier modes: radial current-polynomial coefficients are not spectral modes
+and should use a separate parameter scale.  In the examples,
+``PARAMETER_STEP`` is the characteristic low-order boundary-coefficient step,
+``CURRENT_PARAMETER_STEP`` is the characteristic normalized-current step,
+and ``MAX_PARAMETER_CHANGE`` is a broad per-stage safety box measured in
+those step units.  A safety box should not be active at the solution; exact
+hits indicate an artificial optimization floor.  Passing
+``restart_from=equilibrium`` when constructing the next
+:class:`~vmex.core.problem.VmecProblem` remaps the converged state to its new
+resolution and avoids a cold magnetic-axis guess.
 
 MHD stability
 -------------

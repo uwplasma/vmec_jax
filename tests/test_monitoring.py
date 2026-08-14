@@ -9,8 +9,28 @@ from types import SimpleNamespace
 import numpy as np
 from scipy.optimize import OptimizeResult
 
-from vmex.core.monitoring import OptimizationMonitor
+from vmex.core.monitoring import EquilibriumReporter, OptimizationMonitor
 from vmex.core.problem import FunctionProblem
+
+
+def test_equilibrium_reporter_supports_both_objective_call_styles() -> None:
+    stream = io.StringIO()
+    equilibrium = SimpleNamespace(state=np.array([2.0]), runtime=3.0)
+    reporter = EquilibriumReporter(
+        ("host", lambda eq: eq.state[0], ".2f"),
+        ("state", lambda state, runtime: state[0] + runtime, ".1f"),
+        ("fraction", lambda eq: 0.025, ".1%"), stream=stream)
+
+    values = reporter("final", equilibrium)
+
+    assert values == {"host": 2.0, "state": 5.0, "fraction": 0.025}
+    assert stream.getvalue() == "[final] host = 2.00, state = 5.0, fraction = 2.5%\n"
+    with np.testing.assert_raises_regex(ValueError, "unique"):
+        EquilibriumReporter(("x", lambda eq: 1.0, ".1f"),
+                            ("x", lambda eq: 2.0, ".1f"))
+    with np.testing.assert_raises_regex(ValueError, "scalar"):
+        EquilibriumReporter(("x", lambda eq: [1.0, 2.0], ".1f"), stream=None)(
+            "bad", equilibrium)
 
 
 def test_monitor_records_scipy_and_manual_iterations() -> None:

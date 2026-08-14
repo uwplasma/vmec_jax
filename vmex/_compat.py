@@ -27,6 +27,10 @@ import os
 import platform
 
 
+_CACHE_FORMAT_VERSION = "2"
+_DEFAULT_CACHE_MAX_SIZE = 1 << 30
+
+
 def _env(name: str, default: str = "") -> str:
     """Read ``VMEX_<name>``, falling back to the legacy ``VMEC_JAX_<name>``.
 
@@ -52,6 +56,7 @@ def _cache_machine_fingerprint() -> str:
     """
 
     parts = [
+        f"vmex-cache={_CACHE_FORMAT_VERSION}",
         platform.system(),
         platform.machine(),
         platform.processor(),
@@ -160,7 +165,9 @@ def _configure_compilation_cache(jax_module: Any, cache_dir: str | None) -> None
     except Exception:
         pass
     try:
-        min_compile = _env("CACHE_MIN_COMPILE_TIME_SECS", "0")
+        # Keep JAX's useful default: tiny elementwise kernels are cheaper to
+        # rebuild than to store and were creating tens of thousands of files.
+        min_compile = _env("CACHE_MIN_COMPILE_TIME_SECS", "1")
         jax_module.config.update("jax_persistent_cache_min_compile_time_secs", float(min_compile))
     except Exception:
         pass
@@ -186,7 +193,10 @@ def _configure_compilation_cache(jax_module: Any, cache_dir: str | None) -> None
     except Exception:
         pass
     try:
-        max_size = _env("COMPILATION_CACHE_MAX_SIZE")
+        # JAX's file cache takes its cross-process lock only when eviction is
+        # enabled.  A finite default therefore prevents concurrent VMEX runs
+        # from writing the same executable at once, as well as bounding disk.
+        max_size = _env("COMPILATION_CACHE_MAX_SIZE", str(_DEFAULT_CACHE_MAX_SIZE))
         if max_size:
             jax_module.config.update("jax_compilation_cache_max_size", int(max_size))
     except Exception:

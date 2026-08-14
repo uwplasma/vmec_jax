@@ -202,6 +202,13 @@ def volume(state: SpectralState, rt: SolverRuntime) -> Array:
     return _aspect_scalars(state, rt)[3]
 
 
+def volume_average_beta(state: SpectralState, rt: SolverRuntime) -> Array:
+    """Volume-averaged plasma beta, equal to the wout ``betatotal`` scalar."""
+    _, _, _, _, energies = _field_chain(state, rt)
+    wb = jnp.asarray(energies.wb)
+    return jnp.where(wb != 0.0, jnp.asarray(energies.wp) / wb, 0.0)
+
+
 def elongation_profile(
     state: SpectralState,
     rt: SolverRuntime,

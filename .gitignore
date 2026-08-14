@@ -91,6 +91,18 @@ examples/data/*_poloidal_plot.png
 examples/data/*reference*.nc
 examples/data/wout_*.nc
 examples/optimization/results/
+examples/optimization/output_*/
+examples/optimization/input.*
+examples/optimization/wout_*.nc
+examples/optimization/*.png
+examples/optimization/*.pdf
+examples/optimization/coils_*.json
+examples/optimization/*.vtr
+examples/optimization/*.vtp
+examples/optimization/*.vtu
+examples/optimization/*.vts
+# Local reference drivers used while translating the bootstrap examples.
+examples/optimization/simsopt_driver*.py
 examples/data/single_grid/wout_*.nc
 outputs/
 results/
@@ -260,3 +272,10 @@ benchmarks/output_*/
 .claude
 examples_single_grid/
 disabled/
+
+*_00*
+settings.json
+*_optimized*
+*parvmecinfo*
+*timings*
+*single_stage*.png

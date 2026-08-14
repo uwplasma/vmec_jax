@@ -22,7 +22,9 @@ inp = replace(inp, delt=0.5).change_resolution(
 
 The script explicitly owns `DELT`, `MPOL`, `NTOR`, and the real-space grids.
 `max_mode` separately selects which boundary coefficients the optimizer may
-change; `RBC(0,0)` remains fixed.
+change. `RBC(0,0)` remains fixed by default; pass
+`vary_major_radius=True` to release it without also introducing the null
+`ZBS(0,0)` direction. `problem.dof_names` shows the exact resulting order.
 
 ## Build and solve the problem
 

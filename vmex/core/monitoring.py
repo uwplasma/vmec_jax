@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 import sys
-from typing import Any, cast, TextIO
+from typing import Any, Callable, cast, TextIO
 
 import numpy as np
 
@@ -12,6 +13,62 @@ from .problem import FunctionProblem
 
 
 _DEFAULT_STREAM = object()
+
+
+class EquilibriumReporter:
+    """Print a compact set of scalar diagnostics for an equilibrium.
+
+    Each quantity is ``(label, callable, format_spec)``.  Callables may use
+    either the ``function(equilibrium)`` or ``function(state, runtime)``
+    convention used by VMEX objectives.  Calling the reporter prints one line
+    and returns the values by label, so scripts can also reuse a final metric.
+    """
+
+    def __init__(
+        self,
+        *quantities: tuple[str, Callable[..., Any], str],
+        stream: TextIO | None | object = _DEFAULT_STREAM,
+        separator: str = ", ",
+    ) -> None:
+        if not quantities:
+            raise ValueError("at least one equilibrium quantity is required")
+        names = [name for name, _function, _format in quantities]
+        if len(set(names)) != len(names):
+            raise ValueError("equilibrium quantity labels must be unique")
+        self.quantities = quantities
+        self.stream: TextIO | None = (
+            sys.stdout if stream is _DEFAULT_STREAM else cast(TextIO | None, stream)
+        )
+        self.separator = str(separator)
+
+    @staticmethod
+    def _value(function: Callable[..., Any], equilibrium: Any) -> float:
+        try:
+            parameters = [
+                parameter for parameter in inspect.signature(function).parameters.values()
+                if parameter.kind in (parameter.POSITIONAL_ONLY,
+                                      parameter.POSITIONAL_OR_KEYWORD)
+            ]
+            state_function = (len(parameters) >= 2 and
+                              parameters[1].default is inspect.Parameter.empty)
+        except (TypeError, ValueError):
+            state_function = False
+        value = (function(equilibrium.state, equilibrium.runtime)
+                 if state_function else function(equilibrium))
+        array = np.asarray(value, dtype=float)
+        if array.size != 1:
+            raise ValueError("equilibrium report quantities must be scalar")
+        return float(array.reshape(()))
+
+    def __call__(self, label: str, equilibrium: Any) -> dict[str, float]:
+        """Evaluate, optionally print, and return the configured quantities."""
+        values = {name: self._value(function, equilibrium)
+                  for name, function, _format in self.quantities}
+        if self.stream is not None:
+            fields = [f"{name} = {format(values[name], format_spec)}"
+                      for name, _function, format_spec in self.quantities]
+            print(f"[{label}] {self.separator.join(fields)}", file=self.stream)
+        return values
 
 
 @dataclass(frozen=True)
@@ -167,4 +224,4 @@ class OptimizationMonitor:
         )
 
 
-__all__ = ["OptimizationMonitor", "OptimizationRecord"]
+__all__ = ["EquilibriumReporter", "OptimizationMonitor", "OptimizationRecord"]

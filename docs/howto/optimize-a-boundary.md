@@ -13,7 +13,7 @@ import vmex as vj
 from vmex import optimize as opt
 from vmex.core.omnigenity import QIResidual
 
-inp = vj.VmecInput.from_file("input.nfp2_QI_seed")
+inp = vj.VmecInput.from_file("examples/data/input.minimal_seed_nfp2")
 max_mode = 5
 mpol = max(max_mode + 2, 5)
 inp = replace(inp, delt=0.5).change_resolution(

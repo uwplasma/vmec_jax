@@ -218,6 +218,8 @@ def test_scalar_targets_vs_golden(solovev_eq):
                                float(gold.aspect), rtol=1e-6)
     np.testing.assert_allclose(float(opt.volume(eq.state, eq.runtime)),
                                float(gold.volume_p), rtol=1e-6)
+    np.testing.assert_allclose(float(opt.volume_average_beta(eq.state, eq.runtime)),
+                               float(eq.wout.betatotal), rtol=1e-12)
     np.testing.assert_allclose(float(opt.mean_iota(eq.state, eq.runtime)), 1.0,
                                rtol=1e-10)
     np.testing.assert_allclose(float(opt.edge_iota(eq.state, eq.runtime)), 1.0,
@@ -355,6 +357,17 @@ def test_boundary_pack_roundtrip(deck):
         assert inp2 != inp
     # RBC(0,0) (major radius) is not a dof
     assert "RBC(0,0)" not in opt.boundary_dof_names(inp, 2)
+
+    # It can be released explicitly without adding the null ZBS(0,0) mode.
+    names = opt.boundary_dof_names(inp, 2, vary_major_radius=True)
+    x = opt.pack_boundary(inp, 2, vary_major_radius=True)
+    assert names[-1] == "RBC(0,0)" and "ZBS(0,0)" not in names
+    x[-1] *= 1.1
+    changed = opt.unpack_boundary(inp, x, 2, vary_major_radius=True)
+    assert changed.rbc[changed.ntor, 0] == pytest.approx(x[-1])
+    arrays = opt.boundary_arrays_from_x(inp, x, 2, vary_major_radius=True)
+    np.testing.assert_allclose(np.asarray(arrays[0]), changed.rbc)
+    np.testing.assert_allclose(np.asarray(arrays[1]), changed.zbs)
 
 
 def test_ess_scale():
@@ -878,6 +891,7 @@ def test_public_problem_factory_validation():
         forward_ftol=2.0e-10,
         forward_max_iterations=765,
     )
+    assert finite_difference.dof_names == tuple(opt.boundary_dof_names(inp, 1))
     assert finite_difference.metadata["derivative_method"] == "finite_difference"
     assert "equilibrium re-solves" in finite_difference.metadata[
         "derivative_description"
@@ -887,6 +901,9 @@ def test_public_problem_factory_validation():
     controlled = finite_difference.input_from_x(finite_difference.x0)
     assert controlled.ftol_array[-1] == 2.0e-10
     assert controlled.niter_array[-1] == 765
+    rbc, zbs = finite_difference.boundary_from_x(finite_difference.x0)
+    np.testing.assert_allclose(np.asarray(rbc), controlled.rbc)
+    np.testing.assert_allclose(np.asarray(zbs), controlled.zbs)
     with pytest.raises(ValueError, match="non-negative"):
         opt.make_problem(
             inp, objective_terms=[(opt.aspect_ratio, 4.0, -1.0)], max_mode=1

@@ -66,6 +66,16 @@ The SciPy and JAX callables therefore return the same value and gradient.
 VMEX maintains one exact-key host cache to avoid repeated work when an
 optimizer requests the value and derivative separately.
 
+``problem.dof_names`` is ordered exactly like ``problem.x0`` and every
+optimizer vector passed to the problem. For example,
+``dict(zip(problem.dof_names, result.x))`` labels an optimized SciPy result.
+The older ``problem.names`` spelling remains available as the underlying
+immutable tuple.
+
+``RBC(0,0)`` is fixed by default because changing it mainly changes the major
+radius. Pass ``vary_major_radius=True`` to release that coefficient explicitly;
+VMEX does not add the identically-zero ``ZBS(0,0)`` direction.
+
 Derivative methods
 ------------------
 
@@ -150,6 +160,17 @@ SciPy
 the least-squares-derived objective. Bounds and line-search options remain
 ordinary SciPy choices. :class:`vmex.core.monitoring.OptimizationMonitor`
 records accepted iterations without changing the objective.
+
+Use :class:`vmex.core.monitoring.EquilibriumReporter` for the compact physics
+summary shared by the examples.  Each entry accepts either VMEX's
+``function(state, runtime)`` convention or a host ``function(equilibrium)``;
+the call prints one line and returns the same values by label::
+
+   report = opt.EquilibriumReporter(
+       ("QS total", qs.total, ".6e"),
+       ("aspect", opt.aspect_ratio, ".4f"),
+       ("mean iota", opt.mean_iota, ".4f"))
+   values = report("final", equilibrium)
 
 JAXopt and Optax
 ----------------
@@ -258,4 +279,5 @@ The main entry points are :func:`vmex.core.optimize.make_problem`,
 :class:`vmex.core.problem.FunctionProblem`,
 :class:`vmex.core.problem.VmecProblem`,
 :class:`vmex.core.problem.Evaluation`, and
-:class:`vmex.core.monitoring.OptimizationMonitor`.
+:class:`vmex.core.monitoring.OptimizationMonitor`, and
+:class:`vmex.core.monitoring.EquilibriumReporter`.
