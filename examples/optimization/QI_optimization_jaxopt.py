@@ -13,7 +13,7 @@ import jaxopt
 import numpy as np
 
 import vmex as vj
-from vmex import optimize as opt
+from vmex import OptimizationMonitor, optimize as opt
 from vmex.core.input import VmecInput
 from vmex.core.qi import ConstructedQIResidual
 
@@ -58,16 +58,20 @@ def value_and_grad_y(y):
     value, gradient = problem.jax_value_and_grad(x_from_y(y))
     return value, scales * gradient
 
+def optimality(state):
+    gradient = getattr(state, "grad", getattr(state, "gradient", None))
+    return float(state.error if gradient is None else jnp.linalg.norm(gradient, ord=jnp.inf))
+
 if METHOD == "LBFGS":
     problem.compile_value_and_gradient()
-    result = jaxopt.LBFGS(
+    solver = jaxopt.LBFGS(
         value_and_grad_y,
         value_and_grad=True,
         maxiter=BUDGET,
         maxls=3 if ci else 10,
         stepsize=1.0e-3 if ci else 0.0,
         jit=False,  # equilibrium is a host callback; only its kernels are jitted
-    ).run(jnp.zeros_like(x0))
+    )
 else:
     problem.compile_residual_and_jacobian()
 
@@ -81,15 +85,26 @@ else:
         tangent, = tangents
         return residual(y), problem.jax_residual_jac(x_from_y(y)) @ (scales * tangent)
 
-    result = jaxopt.LevenbergMarquardt(
+    solver = jaxopt.LevenbergMarquardt(
         residual,
         maxiter=BUDGET,
         materialize_jac=True,
         solver="cholesky",
         jit=False,
-    ).run(jnp.zeros_like(x0))
+    )
 
-x = x_from_y(result.params)
+params = jnp.zeros_like(x0)
+state = solver.init_state(params)
+monitor = OptimizationMonitor(problem)
+monitor.record(x_from_y(params), cost=float(state.value), optimality=optimality(state), terms={})
+for iteration in range(1, BUDGET + 1):
+    params, state = solver.update(params, state)
+    monitor.record(x_from_y(params), cost=float(state.value), optimality=optimality(state),
+                   iteration=iteration, terms={})
+    if float(state.error) <= solver.tol:
+        break
+
+x = x_from_y(params)
 equilibrium = problem.equilibrium_from_x(x)
 final_input = replace(problem.input_from_x(x), ns_array=np.array([31 if ci else 101]),
                       ftol_array=np.array([1e-10 if ci else 1e-14]), niter_array=np.array([8000]))
@@ -100,5 +115,7 @@ wout_path = vj.write_wout(f"wout_QI_jaxopt_{METHOD}.nc", final_equilibrium.wout)
 print(f"JAXopt {METHOD}: final cost = {float(problem.jax_fun(x)):.12e}, "
       f"QI total = {float(qi.total(final_equilibrium)):.6e}")
 print(f"wrote {input_path}\nwrote {wout_path}")
+monitor.save(f"QI_jaxopt_{METHOD}_objectives.csv")
+monitor.plot(f"QI_jaxopt_{METHOD}_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")

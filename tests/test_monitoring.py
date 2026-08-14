@@ -47,6 +47,35 @@ def test_monitor_records_scipy_and_manual_iterations() -> None:
     assert "2.500000e-01" in output
 
 
+def test_monitor_wraps_auxiliary_term_costs_and_records_only_accepted_points() -> None:
+    monitor = OptimizationMonitor(stream=None)
+
+    def pair(x):
+        value = np.asarray(x) @ np.asarray(x)
+        return (value, {"shape": 0.25 * value, "field": 0.75 * value}), 2 * np.asarray(x)
+
+    wrapped = monitor.wrap_value_and_grad(pair)
+    wrapped(np.array([2.0])); wrapped(np.array([9.0]))  # rejected trial stays cached
+    monitor(np.array([2.0]))  # duplicate of the recorded initial point
+    wrapped(np.array([1.0])); monitor(np.array([1.0]))
+
+    assert [record.cost for record in monitor.records] == [4.0, 1.0]
+    assert monitor.history["shape"].tolist() == [1.0, 0.25]
+    vector = OptimizationMonitor(stream=None)
+    vector_pair = vector.wrap_value_and_grad(
+        lambda x: ((1.0, np.array([0.25, 0.75])), np.ones(1)), ("a", "b"))
+    vector_pair([0.0])
+    assert vector.history["b"].tolist() == [0.75]
+    residual = OptimizationMonitor(stream=None)
+    residual_pair = residual.wrap_value_and_grad(
+        lambda x: ((2.0, (np.array([1.0, 1.0]), np.array([1.0]))), np.ones(1)),
+        ("extra",), residual_slices=(("rows", 0, 2),))
+    residual_pair([0.0])
+    assert residual.history["rows"].tolist() == [1.0]
+    with np.testing.assert_raises_regex(TypeError, "term name"):
+        monitor.wrap_value_and_grad(lambda x: ((1.0, np.ones(1)), np.ones(1)))([0.0])
+
+
 def test_monitor_print_every_and_silent_collection() -> None:
     silent = OptimizationMonitor(stream=None)
     silent.record(np.zeros(1), cost=3.0)
@@ -59,6 +88,38 @@ def test_monitor_print_every_and_silent_collection() -> None:
     assert len(stream.getvalue().splitlines()) == 3  # header + iterations 0 and 2
     with np.testing.assert_raises(ValueError):
         OptimizationMonitor(print_every=0)
+
+
+def test_monitor_collects_saves_and_plots_objective_terms(tmp_path) -> None:
+    problem = FunctionProblem(
+        [1.0, 2.0], residual=lambda x: np.asarray([x[0], x[1], 2 * x[1]]),
+        metadata={"term_slices": (("shape", 0, 1), ("field", 1, 3))})
+    monitor = OptimizationMonitor(problem, stream=None)
+    monitor({"x": np.array([1.0, 2.0]), "cost": 10.5, "nit": 0})
+    monitor.record(np.zeros(2), cost=1.0, iteration=1,
+                   terms={"shape": 0.25, "field": 0.75})
+
+    np.testing.assert_allclose(monitor.history["shape"], [0.5, 0.25])
+    np.testing.assert_allclose(monitor.history["field"], [10.0, 0.75])
+    csv = monitor.save(tmp_path / "history.csv")
+    plot = monitor.plot(tmp_path / "history.png")
+    assert csv.is_file() and "iteration,total,shape,field" in csv.read_text().splitlines()[0]
+    assert plot.is_file() and plot.stat().st_size > 0
+
+
+def test_plot_optimization_objects_is_dependency_neutral(tmp_path) -> None:
+    import vmex as vj
+
+    class Object:
+        gamma = np.array([[[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]])
+
+        def plot(self, *, ax, show):
+            assert not show
+            ax.plot(*self.gamma.reshape(-1, 3).T)
+
+    path = vj.plot_optimization_objects(
+        tmp_path / "objects.png", ("Initial", Object()), ("Final", Object()))
+    assert path.is_file() and path.stat().st_size > 0
 
 
 def test_monitor_callback_fallbacks_and_problem_counters() -> None:

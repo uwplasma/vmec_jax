@@ -195,7 +195,9 @@ class ImplicitParams:
     ``(2*ntor + 1, mpol)`` indexed ``[n + ntor, m]`` (physical, un-processed
     — exactly :class:`~vmex.core.input.VmecInput` layout, so e.g.
     ``RBC(0, 1)`` is ``rbc[ntor, 1]``).  ``am/ai/ac`` are the dense profile
-    coefficient arrays; ``phiedge/pres_scale/curtor`` scalars.
+    coefficient arrays; ``ac_aux_f`` contains optimizable current-spline knot
+    values while the knot positions remain static in the input;
+    ``phiedge/pres_scale/curtor`` are scalars.
     """
 
     rbc: Array
@@ -208,6 +210,7 @@ class ImplicitParams:
     am: Array
     ai: Array
     ac: Array
+    ac_aux_f: Array
 
 
 _register(ImplicitParams)
@@ -231,6 +234,7 @@ def params_from_input(inp: VmecInput, *, device: Any = None) -> ImplicitParams:
         rbc=arr(inp.rbc), rbs=arr(inp.rbs), zbc=arr(inp.zbc), zbs=arr(inp.zbs),
         phiedge=arr(inp.phiedge), pres_scale=arr(inp.pres_scale),
         curtor=arr(inp.curtor), am=arr(inp.am), ai=arr(inp.ai), ac=arr(inp.ac),
+        ac_aux_f=arr([] if inp.ac_aux_f is None else inp.ac_aux_f),
     )
 
 
@@ -243,6 +247,8 @@ def input_with_params(inp: VmecInput, params: ImplicitParams) -> VmecInput:
         pres_scale=float(np.asarray(params.pres_scale)),
         curtor=float(np.asarray(params.curtor)),
         am=arr(params.am), ai=arr(params.ai), ac=arr(params.ac),
+        ac_aux_f=(None if inp.ac_aux_f is None and np.size(params.ac_aux_f) == 0
+                  else arr(params.ac_aux_f)),
     )
 
 
@@ -688,7 +694,7 @@ def _runtime_from_params_impl(params: ImplicitParams, cfg: ImplicitConfig) -> So
         piota_type=inp.piota_type, ai=params.ai,
         ai_aux_s=inp.ai_aux_s, ai_aux_f=inp.ai_aux_f,
         pcurr_type=inp.pcurr_type, ac=params.ac,
-        ac_aux_s=inp.ac_aux_s, ac_aux_f=inp.ac_aux_f,
+        ac_aux_s=inp.ac_aux_s, ac_aux_f=params.ac_aux_f,
     )
     prof = flux_profiles(shim, grids, r00=r00, signgs=setup0.signgs,
                          lflip=setup0.lflip)

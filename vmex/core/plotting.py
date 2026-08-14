@@ -43,6 +43,7 @@ import numpy as np
 __all__ = [
     "plot_wout",
     "plot_boozmn",
+    "plot_optimization_objects",
     "plot_summary",
     "plot_surfaces",
     "plot_modB",
@@ -67,6 +68,47 @@ _LINE_COLORS = (
 )
 
 _MU0 = 4.0e-7 * np.pi
+
+
+def plot_optimization_objects(
+    path: str | Path,
+    *panels: tuple[Any, ...],
+    dpi: int = _DPI,
+) -> Path:
+    """Plot before/after surfaces and coils without depending on ESSOS.
+
+    Each panel is ``(title, object, ...)``; every object must provide
+    ``plot(ax=axis, show=False)`` and may expose Cartesian points through
+    ``gamma`` or ``curves.gamma`` for equal three-dimensional limits.
+    """
+    if not panels or any(len(panel) < 2 for panel in panels):
+        raise ValueError("provide at least one (title, object, ...) panel")
+    import matplotlib.pyplot as plt
+
+    figure = plt.figure(figsize=(5.0 * len(panels), 4.0))
+    for index, panel in enumerate(panels, 1):
+        title, *objects = panel
+        axis = figure.add_subplot(1, len(panels), index, projection="3d")
+        points = []
+        for object_ in objects:
+            object_.plot(ax=axis, show=False)
+            coordinates = getattr(object_, "gamma", None)
+            if coordinates is None and hasattr(object_, "curves"):
+                coordinates = getattr(object_.curves, "gamma", None)
+            if coordinates is not None:
+                points.append(np.asarray(coordinates).reshape(-1, 3))
+        if points:
+            xyz = np.concatenate(points)
+            center = 0.5 * (xyz.min(axis=0) + xyz.max(axis=0))
+            span = max(float(np.ptp(xyz, axis=0).max()), np.finfo(float).eps)
+            axis.set_xlim(center[0] - span / 2, center[0] + span / 2)
+            axis.set_ylim(center[1] - span / 2, center[1] + span / 2)
+            axis.set_zlim(center[2] - span / 2, center[2] + span / 2)
+            axis.set_box_aspect((1, 1, 1))
+        axis.set_title(str(title))
+    path = Path(path)
+    figure.tight_layout(); figure.savefig(path, dpi=int(dpi)); plt.close(figure)
+    return path
 
 
 # ==========================================================================

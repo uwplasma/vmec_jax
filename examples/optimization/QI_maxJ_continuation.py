@@ -56,6 +56,7 @@ objective_function_terms = [
 report = opt.EquilibriumReporter(
     ("QI", qi.total, ".4e"), ("aspect", opt.aspect_ratio, ".3f"),
     ("iota", opt.mean_iota, ".3f"), ("mirror", opt.mirror_ratio, ".3f"))
+monitor = opt.OptimizationMonitor(stream=None)
 
 report("seed", equilibrium)
 for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
@@ -66,10 +67,11 @@ for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=max_mode,
         vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, progress=not ci_smoke)
     print(f"dof_names = {problem.dof_names}")
+    monitor.problem = problem
     step = BOUNDARY_STEP * problem.scales
     result = least_squares(problem.residual, problem.x0, jac=problem.residual_jac,
         x_scale=step, bounds=(problem.x0 - step, problem.x0 + step), max_nfev=max_nfev,
-        ftol=1e-6, xtol=1e-10, verbose=2)
+        ftol=1e-6, xtol=1e-10, verbose=2, callback=monitor)
     inp = problem.input_from_x(result.x)
     equilibrium = problem.equilibrium_from_x(result.x)
     report(f"mode {max_mode}", equilibrium)
@@ -85,5 +87,7 @@ print(f"J-invariance = {float(diagnostics['qi']['total']):.4e}, "
 input_path = final_input.to_indata("input.QI_maxJ_optimized")
 wout_path = vj.write_wout("wout_QI_maxJ_optimized.nc", final_equilibrium.wout)
 print(f"wrote {input_path}\nwrote {wout_path}")
+monitor.save("QI_maxJ_objectives.csv")
+monitor.plot("QI_maxJ_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")

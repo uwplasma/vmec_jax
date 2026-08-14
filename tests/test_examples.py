@@ -121,6 +121,9 @@ def test_take_free_boundary_gradients(tmp_path):
     # skips where the optional virtual_casing_jax dep is absent (core CI);
     # validates the FD-checked coil/extcur gradients where it is installed.
     pytest.importorskip("virtual_casing_jax")
+    wout = EXAMPLES / "data" / "single_grid" / "wout_cth_like_free_bdy.nc"
+    if not wout.exists():
+        pytest.skip("fetched free-boundary asset absent (tools/fetch_assets.py)")
     out = _run_example(EXAMPLES / "take_free_boundary_gradients.py", tmp_path, timeout=900)
     # each gradient row ends with its AD-vs-FD relative error in scientific notation
     rels = [float(m) for m in re.findall(r"\s([0-9.]+e[+-]\d+)\s*$", out, re.M)]
@@ -357,6 +360,8 @@ def test_fixed_boundary_single_stage_optimization(tmp_path):
     for diagnostic in ("B.n/B: area-weighted RMS", "Minimum coil-surface distance",
                        "Minimum coil-coil distance", "Maximum curvature", "Coil lengths"):
         assert diagnostic in out
+    normal = re.search(r"B\.n/B: area-weighted RMS = ([0-9.]+)%, max = ([0-9.]+)%", out)
+    assert normal is not None and all(np.isfinite(float(value)) for value in normal.groups())
     for name in ("wout_single_stage_optimized.nc", "single_stage_objectives.png",
                  "surface_single_stage_optimized.vts", "coils_single_stage_optimized.vtu"):
         assert (tmp_path / name).exists()

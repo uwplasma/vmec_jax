@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import inspect
+from pathlib import Path
 import sys
-from typing import Any, Callable, cast, TextIO
+from typing import Any, Callable, cast, Mapping, TextIO
 
 import numpy as np
 
@@ -81,6 +82,7 @@ class OptimizationRecord:
     optimality: float | None
     equilibrium_solves: int | None
     rejected_trials: int | None
+    terms: Mapping[str, float] = field(default_factory=dict)
 
 
 class OptimizationMonitor:
@@ -111,6 +113,64 @@ class OptimizationMonitor:
         )
         self.print_every = int(print_every)
         self.records: list[OptimizationRecord] = []
+        self._evaluations: dict[bytes, tuple[float, float, dict[str, float]]] = {}
+        self._last_key: bytes | None = None
+
+    @staticmethod
+    def _key(x: Any) -> bytes:
+        array = np.ascontiguousarray(np.asarray(x, dtype=float))
+        return array.shape.__repr__().encode() + array.tobytes()
+
+    def wrap_value_and_grad(
+        self,
+        function: Callable,
+        term_names: tuple[str, ...] | None = None,
+        *,
+        residual_slices: tuple[tuple[str, int, int], ...] = (),
+    ) -> Callable:
+        """Adapt a JAX ``has_aux`` value/gradient pair for SciPy.
+
+        ``function(x)`` must return ``((cost, terms), gradient)``. ``terms``
+        may be a mapping of labels to weighted scalar costs, or one compact
+        vector paired with ``term_names``. For a large residual graph, pass
+        ``residual_slices`` and return ``(residual, extra_costs...)``; costs are
+        reduced on the host to keep the compiled output small. The first
+        evaluation is recorded as iteration zero; later evaluations are cached.
+        """
+        def wrapped(x):
+            (cost, terms), gradient = function(x)
+            cost_f = float(cost)
+            gradient_np = np.asarray(gradient, dtype=float)
+            if isinstance(terms, Mapping):
+                term_values = {str(name): float(value) for name, value in terms.items()}
+            elif residual_slices:
+                residual, *extra = terms
+                residual = np.asarray(residual, dtype=float).ravel()
+                term_values = {
+                    str(name): 0.5 * float(residual[start:stop] @ residual[start:stop])
+                    for name, start, stop in residual_slices}
+                values = np.concatenate([np.asarray(value, dtype=float).ravel()
+                                         for value in extra])
+                if term_names is None or len(term_names) != values.size:
+                    raise TypeError(
+                        "residual auxiliary data requires one name per extra cost")
+                term_values.update(zip(map(str, term_names), map(float, values)))
+            else:
+                values = np.asarray(terms, dtype=float).ravel()
+                if term_names is None or len(term_names) != values.size:
+                    raise TypeError(
+                        "vector auxiliary data requires one term name per value")
+                term_values = dict(zip(map(str, term_names), map(float, values)))
+            key = self._key(x)
+            self._evaluations[key] = (
+                cost_f, float(np.linalg.norm(gradient_np)), term_values)
+            if not self.records:
+                self.record(
+                    x, cost=cost_f, optimality=self._evaluations[key][1],
+                    terms=term_values)
+            return cost_f, gradient_np
+
+        return wrapped
 
     @staticmethod
     def _field(result: Any, name: str, default: Any = None) -> Any:
@@ -133,6 +193,18 @@ class OptimizationMonitor:
         solves = None if stats is None else int(stats.get("solves", 0))
         return solves, rejected
 
+    def _term_costs(self, x: np.ndarray) -> dict[str, float]:
+        if self.problem is None or not self.problem.metadata.get("term_slices"):
+            return {}
+        try:
+            residual = self.problem.residual(x)
+        except AttributeError:
+            return {}
+        return {
+            str(name): 0.5 * float(residual[start:stop] @ residual[start:stop])
+            for name, start, stop in self.problem.metadata["term_slices"]
+        }
+
     def __call__(self, intermediate_result: Any) -> None:
         """Consume a SciPy callback value: ``OptimizeResult``, dict, or x.
 
@@ -143,8 +215,14 @@ class OptimizationMonitor:
         if isinstance(intermediate_result, np.ndarray):
             intermediate_result = {"x": intermediate_result}
         x = np.asarray(self._field(intermediate_result, "x"), dtype=float)
+        key = self._key(x)
+        cached = self._evaluations.get(key)
+        if key == self._last_key and cached is not None:
+            return
         cost = self._field(intermediate_result, "cost")
         raw_fun = self._field(intermediate_result, "fun")
+        if cost is None and cached is not None:
+            cost = cached[0]
         if cost is None and raw_fun is not None:
             values = np.asarray(raw_fun, dtype=float)
             cost = (float(values) if values.ndim == 0
@@ -155,6 +233,8 @@ class OptimizationMonitor:
             cost = self.problem.fun(x)
         iteration = self._field(intermediate_result, "nit", len(self.records))
         optimality = self._field(intermediate_result, "optimality")
+        if optimality is None and cached is not None:
+            optimality = cached[1]
         if optimality is None:
             gradient = self._field(intermediate_result, "jac")
             if gradient is not None and np.asarray(gradient).ndim == 1:
@@ -164,6 +244,7 @@ class OptimizationMonitor:
             cost=float(cost),
             optimality=None if optimality is None else float(optimality),
             iteration=int(iteration),
+            terms=(cached[2] if cached is not None else self._term_costs(x)),
         )
 
     def record(
@@ -175,9 +256,11 @@ class OptimizationMonitor:
         iteration: int | None = None,
         equilibrium_solves: int | None = None,
         rejected_trials: int | None = None,
+        terms: Mapping[str, Any] | None = None,
     ) -> OptimizationRecord:
         """Append one already-computed accepted iterate and return its record."""
-        del x  # accepted for a uniform callback/manual-loop interface
+        if terms is None:
+            terms = self._term_costs(np.asarray(x, dtype=float))
         if iteration is None:
             iteration = len(self.records)
         if equilibrium_solves is None or rejected_trials is None:
@@ -196,11 +279,56 @@ class OptimizationMonitor:
             optimality=optimality,
             equilibrium_solves=equilibrium_solves,
             rejected_trials=rejected_trials,
+            terms={} if terms is None else {
+                str(name): float(value) for name, value in terms.items()},
         )
         self.records.append(item)
+        self._last_key = self._key(x)
         if self.stream is not None and (len(self.records) - 1) % self.print_every == 0:
             self._print(item)
         return item
+
+    @property
+    def history(self) -> dict[str, np.ndarray]:
+        """Return total and per-term cost histories as one mapping."""
+        names = dict.fromkeys(
+            name for record in self.records for name in record.terms)
+        history = {"total": np.asarray([record.cost for record in self.records])}
+        history.update({
+            name: np.asarray([record.terms.get(name, np.nan)
+                              for record in self.records])
+            for name in names})
+        return history
+
+    def save(self, path: str | Path) -> Path:
+        """Save the recorded iteration and cost columns as CSV."""
+        path = Path(path)
+        history = self.history
+        names = list(history)
+        values = np.column_stack([
+            np.asarray([record.iteration for record in self.records]),
+            *(history[name] for name in names),
+        ])
+        np.savetxt(path, values, delimiter=",", header="iteration," + ",".join(names),
+                   comments="")
+        return path
+
+    def plot(self, path: str | Path, *, title: str = "Optimization objective terms") -> Path:
+        """Write a compact log-scale total and per-term cost history plot."""
+        if not self.records:
+            raise ValueError("no optimization records to plot")
+        import matplotlib.pyplot as plt
+
+        path = Path(path)
+        figure, axis = plt.subplots(figsize=(6.5, 4.0))
+        iterations = np.asarray([record.iteration for record in self.records])
+        for name, values in self.history.items():
+            positive = np.maximum(values, np.finfo(float).tiny)
+            axis.semilogy(iterations, positive, label=name)
+        axis.set(xlabel="iteration", ylabel="weighted cost", title=title)
+        axis.grid(True, alpha=0.3); axis.legend(fontsize=8, ncol=2)
+        figure.tight_layout(); figure.savefig(path, dpi=200); plt.close(figure)
+        return path
 
     @staticmethod
     def _number(value: float | int | None, *, integer: bool = False) -> str:

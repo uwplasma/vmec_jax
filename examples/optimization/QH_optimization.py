@@ -23,7 +23,8 @@ VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.12
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
-if ci_smoke: MAX_MODES, MAX_NFEV = [1], [4]
+if ci_smoke:
+    MAX_MODES, MAX_NFEV = [1], [4]
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
@@ -44,6 +45,7 @@ objective_function_terms = [
 report = opt.EquilibriumReporter(
     ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
     ("mean iota", opt.mean_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
+monitor = opt.OptimizationMonitor(stream=None)
 
 # Optimize for QH in stages, increasing the maximum mode number each time
 for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
@@ -54,11 +56,13 @@ for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=max_mode,
                                           vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True)
     print(f"dof_names = {problem.dof_names}")
-    if not ci_smoke: problem.compile_residual_and_jacobian()
+    monitor.problem = problem
+    if not ci_smoke:
+        problem.compile_residual_and_jacobian()
     result = least_squares(
         problem.residual, problem.x0, jac=problem.residual_jac,
         x_scale=problem.scales, max_nfev=max_nfev,
-        ftol=1e-6, xtol=1e-10, verbose=2
+        ftol=1e-6, xtol=1e-10, verbose=2, callback=monitor
     )
     inp = problem.input_from_x(result.x)
     equilibrium = problem.equilibrium_from_x(result.x)
@@ -82,5 +86,7 @@ wout_path = vj.write_wout("wout_QH_optimized.nc", final_equilibrium.wout)
 print(f"wrote {input_path}\nwrote {wout_path}")
 
 # Plot results
+monitor.save("QH_optimization_objectives.csv")
+monitor.plot("QH_optimization_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")

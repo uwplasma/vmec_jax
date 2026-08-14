@@ -77,5 +77,7 @@ wout_path = vj.write_wout("wout_QI_optax_adam.nc", final_equilibrium.wout)
 print(f"Optax Adam: final cost = {float(problem.jax_fun(x)):.12e}, "
       f"QI total = {float(qi.total(final_equilibrium)):.6e}")
 print(f"wrote {input_path}\nwrote {wout_path}")
+monitor.save("QI_optax_adam_objectives.csv")
+monitor.plot("QI_optax_adam_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")

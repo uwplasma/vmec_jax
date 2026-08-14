@@ -448,6 +448,56 @@ class VmecProblem(FunctionProblem):
             raise AttributeError("this problem does not provide boundary arrays")
         return self._boundary_from_x(x)
 
+    def exterior_field(
+        self,
+        x: Array,
+        *,
+        external_field: Any | None = None,
+        nphi: int = 32,
+        ntheta: int = 32,
+        digits: int = 6,
+        levels: tuple[tuple[int, int], ...] | None = None,
+    ) -> Any:
+        """Return the exterior field and exact VJPs in this problem's DOFs.
+
+        Query points must lie outside the last closed flux surface and away
+        from coil filaments.  The returned field follows the stored-point API:
+        ``field.set_points(xyz); field.B(); field.B_vjp(cotangent)``.
+        """
+        state_runtime = self.metadata.get("jax_state_runtime")
+        inp = self.metadata.get("input")
+        if state_runtime is None or inp is None:
+            raise AttributeError(
+                "this problem does not expose a differentiable equilibrium field")
+        from . import freeboundary_diff as fbd
+        from .extender import VmecExtender
+
+        parameters = self._x(x)
+
+        def surface_data(p):
+            state, runtime = state_runtime(p)
+            return fbd.surface_field_data_from_state(
+                inp, state, runtime=runtime, nphi=nphi, ntheta=ntheta)
+
+        return VmecExtender.from_parameterized_surface_data(
+            surface_data, parameters, external_field=external_field,
+            digits=digits, levels=levels, dof_names=self.dof_names)
+
+    def interior_field(
+        self, x: Array, *, newton_iterations: int = 10
+    ) -> Any:
+        """Return the interior field and exact VJPs in this problem's DOFs."""
+        state_runtime = self.metadata.get("jax_state_runtime")
+        inp = self.metadata.get("input")
+        if state_runtime is None or inp is None:
+            raise AttributeError(
+                "this problem does not expose a differentiable equilibrium field")
+        from .extender import VmecInteriorField
+
+        return VmecInteriorField.from_parameterized_state(
+            inp, state_runtime, self._x(x), dof_names=self.dof_names,
+            newton_iterations=newton_iterations)
+
     def evaluate(self, x: Array, *, derivatives: bool = True) -> Evaluation:
         """Evaluate and attach VMEC solve/adjoint status diagnostics."""
         evaluation = super().evaluate(x, derivatives=derivatives)

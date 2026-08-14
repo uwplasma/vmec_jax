@@ -159,7 +159,26 @@ SciPy
 ``BFGS`` and ``L-BFGS-B`` use the same smooth rejected-trial scalar pair as
 the least-squares-derived objective. Bounds and line-search options remain
 ordinary SciPy choices. :class:`vmex.core.monitoring.OptimizationMonitor`
-records accepted iterations without changing the objective.
+records accepted iterations without changing the objective. For a tuple
+problem it also separates the weighted cost by term; saving and plotting the
+history needs only the callback plus two output calls:
+
+.. code-block:: python
+
+   monitor = opt.OptimizationMonitor(problem, stream=None)
+   result = scipy.optimize.least_squares(
+       problem.residual, problem.x0, jac=problem.residual_jac,
+       callback=monitor)
+   monitor.save("objectives.csv")
+   monitor.plot("objectives.png")
+
+For a custom JAX scalar objective, return ``(cost, {name: term_cost})`` as
+auxiliary data. Wrap ``jax.value_and_grad(objective, has_aux=True)`` with
+``monitor.wrap_value_and_grad``, then pass the monitor as SciPy's callback;
+rejected line-search evaluations stay out of the saved iteration history.
+For larger residual graphs, return ``(residual, extra_costs...)`` and pass the
+problem's ``term_slices`` as ``residual_slices``. VMEX then reduces term costs
+on the host, minimizing compiler output bookkeeping.
 
 Use :class:`vmex.core.monitoring.EquilibriumReporter` for the compact physics
 summary shared by the examples.  Each entry accepts either VMEX's
@@ -256,6 +275,37 @@ available without another cold solve:
 ``verbose=True`` shows whether the final run needs a larger iteration budget.
 The hot seed is especially important for strongly shaped boundaries whose
 cold magnetic-axis guess may be poor.
+
+Pointwise fields and VJPs
+-------------------------
+
+An equilibrium returned by ``problem.equilibrium_from_x`` retains the
+problem's differentiable parameterization. Set Cartesian points once and
+evaluate the field inside the LCFS:
+
+.. code-block:: python
+
+   equilibrium.set_points([[1.05, 0.0, 0.03]])
+   B = equilibrium.B()
+   modB = equilibrium.absB()
+   gradB = equilibrium.gradB()
+   gradgradB = equilibrium.gradgradB()
+   gradgradgradB = equilibrium.gradgradgradB()
+
+   dBdx = equilibrium.B_vjp(jnp.ones_like(B))
+   dgradBdx = equilibrium.gradB_vjp(jnp.ones_like(gradB))
+
+VJPs are ordered like ``problem.dof_names`` and include selected current
+parameters as well as boundary modes. ``gradgradB_vjp`` and
+``gradgradgradB_vjp`` provide the higher-order counterparts. VMEX inverts
+Cartesian points to ``(s, theta, phi)`` with a differentiable Newton solve,
+evaluates angular dependence spectrally, and interpolates the radial mesh.
+Points outside the LCFS return NaNs; use ``problem.exterior_field`` or
+``equilibrium.exterior_field`` there. Equilibria returned by
+``problem.equilibrium_from_x`` retain the same exterior-field VJPs. High
+spatial derivative orders are
+substantially more expensive and radial derivatives are piecewise smooth at
+the VMEC mesh surfaces, so converge them in ``NS_ARRAY``.
 
 Resources and reproducibility
 -----------------------------

@@ -21,7 +21,7 @@ jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402
 
 from vmex.core.errors import MgridNotFoundError  # noqa: E402
-from vmex.core.extender import MagneticField, VmecExtender  # noqa: E402
+from vmex.core.extender import MagneticField, VmecExtender, VmecInteriorField  # noqa: E402
 from vmex.core.mgrid import (  # noqa: E402
     MgridData,
     MgridField,
@@ -100,6 +100,81 @@ def test_magnetic_field_interface_and_vacuum_extender_are_exact():
     expected = jnp.broadcast_to(component_first, (len(points), 3, 3))
     np.testing.assert_allclose(general.gradB(points), expected)
     np.testing.assert_allclose(general.dB_by_dX(points), jnp.swapaxes(expected, -1, -2))
+
+
+def test_high_spatial_derivatives_and_parameter_vjps_are_exact():
+    parameters = jnp.array([1.2, -0.7])
+    points = jnp.array([[0.4, -0.2, 0.3], [0.8, 0.1, -0.5]])
+
+    def parameterized_field(p, xyz):
+        x, y, z = xyz.T
+        return jnp.stack((p[0] * x**3 + p[1] * y,
+                          p[0] * x * y**2 + p[1] * z**2,
+                          p[0] * z + p[1] * x**2 * y), axis=-1)
+
+    field = MagneticField(
+        lambda xyz: parameterized_field(parameters, xyz),
+        parameters=parameters, parameterized_B_fn=parameterized_field,
+        dof_names=("p0", "p1")).set_points(points)
+    def point_field(point):
+        return parameterized_field(parameters, point[None])[0]
+    expected_second = jax.vmap(jax.jacfwd(jax.jacfwd(point_field)))(points)
+    expected_third = jax.vmap(
+        jax.jacfwd(jax.jacfwd(jax.jacfwd(point_field))))(points)
+    np.testing.assert_allclose(field.gradgradB(), expected_second)
+    np.testing.assert_allclose(field.gradgradgradB(), expected_third)
+
+    quantities = [field.B(), field.gradB(), field.gradgradB(), field.gradgradgradB()]
+    vjps = [field.B_vjp, field.gradB_vjp, field.gradgradB_vjp,
+            field.gradgradgradB_vjp]
+    for order, (value, method) in enumerate(zip(quantities, vjps)):
+        cotangent = jnp.arange(value.size, dtype=value.dtype).reshape(value.shape) / value.size
+
+        def quantity(p):
+            def one_point(point):
+                return parameterized_field(p, point[None])[0]
+            function = one_point
+            for _ in range(order):
+                function = jax.jacfwd(function)
+            return jax.vmap(function)(points)
+
+        expected = jax.vjp(quantity, parameters)[1](cotangent)[0]
+        np.testing.assert_allclose(method(cotangent), expected, rtol=2e-13, atol=2e-13)
+    assert field.dof_names == ("p0", "p1")
+
+
+def test_interior_field_inverts_flux_coordinates_and_recovers_B():
+    ns, major_radius, minor_radius = 7, 1.0, 0.3
+    s_mesh = jnp.linspace(0.0, 1.0, ns)
+    spectra = {
+        "nfp": 1, "ns": ns,
+        "xm": jnp.array([0.0, 1.0]), "xn": jnp.array([0.0, 0.0]),
+        "xmn": jnp.array([0.0]), "xnn": jnp.array([0.0]),
+        "rmnc": jnp.stack((jnp.full(ns, major_radius), minor_radius * s_mesh), axis=1),
+        "zmns": jnp.stack((jnp.zeros(ns), minor_radius * s_mesh), axis=1),
+        "rmns": None, "zmnc": None,
+        "bsupu": jnp.zeros((ns, 1)), "bsupv": jnp.ones((ns, 1)),
+        "bsupu_s": None, "bsupv_s": None, "lasym": False, "signgs": -1,
+    }
+    coordinates = jnp.array([[0.4, 0.7, 0.3], [0.8, 4.1, 1.2]])
+    s, theta, phi = coordinates.T
+    radius = major_radius + minor_radius * s * jnp.cos(theta)
+    points = jnp.stack((radius * jnp.cos(phi), radius * jnp.sin(phi),
+                        minor_radius * s * jnp.sin(theta)), axis=1)
+    field = VmecInteriorField(spectra).set_points(points)
+
+    got_coordinates = field.flux_coordinates()
+    np.testing.assert_allclose(got_coordinates[:, 0], s, rtol=0, atol=2e-12)
+    np.testing.assert_allclose(
+        jnp.mod(got_coordinates[:, 1] - theta + jnp.pi, 2 * jnp.pi) - jnp.pi,
+        0.0, rtol=0, atol=2e-12)
+    expected_B = jnp.stack((-points[:, 1], points[:, 0], jnp.zeros(2)), axis=1)
+    expected_grad = jnp.broadcast_to(
+        jnp.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+        (2, 3, 3))
+    np.testing.assert_allclose(field.B(), expected_B, rtol=2e-12, atol=2e-12)
+    np.testing.assert_allclose(field.gradB(), expected_grad, rtol=0, atol=2e-10)
+    np.testing.assert_allclose(field.gradgradB(), 0.0, rtol=0, atol=2e-8)
 
 
 def test_magnetic_field_cylindrical_points_round_trip():

@@ -7,7 +7,6 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import minimize
 
@@ -39,10 +38,12 @@ STELLSYM = True
 
 NORMAL_FIELD_WEIGHT = 1.0e3
 NORMAL_FIELD_LIMIT = 0.01
-NORMAL_FIELD_LIMIT_WEIGHT = 1.0e5
+NORMAL_FIELD_OBJECTIVE_LIMIT = 0.008  # margin for the independent final grid
+NORMAL_FIELD_LIMIT_WEIGHT = 2.0e5
 LENGTH_TARGET = 3.3
 LENGTH_WEIGHT = 1.0
 CURVATURE_LIMIT = 7.0
+CURVATURE_OBJECTIVE_LIMIT = 6.9  # margin for the independent final grid
 CURVATURE_WEIGHT = 10.0
 COIL_DISTANCE_LIMIT = 0.08
 COIL_DISTANCE_WEIGHT = 1.0e3
@@ -97,15 +98,16 @@ def normal_field_residual(coils, surface):
     values = normalized_normal_field(coils, surface)
     return (jnp.sqrt(weights) * values).ravel()
 
-def normal_field_maximum(coils, surface):
+def normal_field_excess(coils, surface):
     values = jnp.sqrt(normalized_normal_field(coils, surface)**2 + 1.0e-12)
-    return jax.scipy.special.logsumexp(2000.0 * values) / 2000.0
+    smooth_maximum = jax.scipy.special.logsumexp(2000.0 * values) / 2000.0
+    return jnp.maximum(smooth_maximum - NORMAL_FIELD_OBJECTIVE_LIMIT, 0.0)
 
 def coil_lengths(coils, _surface):
     return coils.length[:N_COILS]
 
 def coil_curvature_excess(coils, _surface):
-    return jnp.maximum(coils.curvature[:N_COILS] - CURVATURE_LIMIT, 0.0)
+    return jnp.maximum(coils.curvature[:N_COILS] - CURVATURE_OBJECTIVE_LIMIT, 0.0)
 
 def coil_distance_excess(coils, _surface):
     first, second = jnp.triu_indices(coils.gamma.shape[0], 1)
@@ -120,12 +122,13 @@ def coil_surface_distance_excess(coils, surface):
 
 coil_terms = [
     (normal_field_residual, 0.0, NORMAL_FIELD_WEIGHT),
-    (normal_field_maximum, NORMAL_FIELD_LIMIT, NORMAL_FIELD_LIMIT_WEIGHT),
+    (normal_field_excess, 0.0, NORMAL_FIELD_LIMIT_WEIGHT),
     (coil_lengths, LENGTH_TARGET, LENGTH_WEIGHT),
     (coil_curvature_excess, 0.0, CURVATURE_WEIGHT),
     (coil_distance_excess, 1.0e-15, COIL_DISTANCE_WEIGHT),
     (coil_surface_distance_excess, 1.0e-15, COIL_SURFACE_DISTANCE_WEIGHT),
 ]
+coil_term_names = tuple(function.__name__ for function, _target, _weight in coil_terms)
 
 # The public VMEX problem owns the boundary-mode convention and RBC(0,0) choice.
 x_boundary0 = plasma_problem.x0
@@ -172,34 +175,26 @@ def objective(u):
                       for function, target, weight in coil_terms]
     coil_costs = jnp.stack([0.5 * jnp.vdot(rows, rows) for rows in coil_residuals])
     plasma_rows = plasma_problem.jax_residual(x_boundary)
-    return plasma_problem.jax_fun(x_boundary) + jnp.sum(coil_costs), (plasma_rows, coil_costs)
+    return plasma_problem.jax_fun(x_boundary) + jnp.sum(coil_costs), \
+        (plasma_rows, coil_costs)
 
 
-value_and_grad = jax.value_and_grad(objective, has_aux=True)
-history = {"total": []}
-for name, _start, _stop in plasma_problem.metadata["term_slices"]:
-    history[name] = []
-for function, _target, _weight in coil_terms:
-    history[function.__name__] = []
-
-def scipy_objective(u):
-    (value, (plasma_rows, coil_costs)), gradient = value_and_grad(jnp.asarray(u))
-    history["total"].append(float(value))
-    for name, start, stop in plasma_problem.metadata["term_slices"]:
-        rows = plasma_rows[start:stop]; history[name].append(float(0.5 * jnp.vdot(rows, rows)))
-    for (function, _target, _weight), term_cost in zip(coil_terms, coil_costs):
-        history[function.__name__].append(float(term_cost))
-    print(f"{len(history['total']):4d}  J = {float(value):.6e}  |grad J| = {float(jnp.linalg.norm(gradient)):.3e}")
-    return float(value), np.asarray(gradient, dtype=float)
+monitor = opt.OptimizationMonitor()
+scipy_objective = monitor.wrap_value_and_grad(
+    jax.value_and_grad(objective, has_aux=True), coil_term_names,
+    residual_slices=plasma_problem.metadata["term_slices"])
 
 
 print("Running single_stage_optimization.py")
 print(f"Fixed-boundary VMEX + ESSOS: {x_boundary0.size} boundary and "
       f"{x_coils0.size} coil variables, exact reverse-mode derivatives")
 print(f"dof_names = {dof_names}")
-print("Evaluating the initial objective and gradient (the first call compiles JAX)...")
-result = minimize(scipy_objective, np.zeros_like(x0), jac=True, method=METHOD, options=OPTIONS)
-initial_value = history["total"][0]
+joint_problem = vj.FunctionProblem.from_functions(
+    np.zeros_like(x0), value_and_grad=scipy_objective)
+joint_problem.compile_value_and_gradient(report_interval=10.0)
+result = minimize(joint_problem.value_and_grad, joint_problem.x0,
+                  jac=True, method=METHOD, callback=monitor, options=OPTIONS)
+initial_value = monitor.records[0].cost
 
 x_final = x0 + scales * result.x
 _, coils_final = objects_from_x(jnp.asarray(x_final))
@@ -209,7 +204,7 @@ final_input = replace(final_input,
     ns_array=np.array([31 if ci_smoke else 101]),
     ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
     niter_array=np.array([8000]))
-vjp = opt.solve_equilibrium(
+final_equilibrium = opt.solve_equilibrium(
     final_input, initial_state=equilibrium.state, verbose=not ci_smoke,
     raise_on_max_iterations=True)
 
@@ -256,32 +251,11 @@ print("Wrote surface_single_stage_optimized.vts and coils_single_stage_optimized
 
 # Plot results
 surface_initial = surface_from_boundary(rbc0, zbs0, nphi=60, ntheta=60)
-figure = plt.figure(figsize=(10, 4))
-for panel, surface, coils, title in [
-    (1, surface_initial, coils0, "Initial"),
-    (2, surface_final, coils_final, "Optimized"),
-]:
-    axis = figure.add_subplot(1, 2, panel, projection="3d")
-    surface.plot(ax=axis, show=False)
-    coils.plot(ax=axis, show=False)
-    points = np.concatenate([np.asarray(surface.gamma).reshape(-1, 3),
-                             np.asarray(coils.curves.gamma).reshape(-1, 3)])
-    center = 0.5 * (points.min(axis=0) + points.max(axis=0)); span = np.ptp(points, axis=0).max()
-    axis.set_xlim(center[0] - span / 2, center[0] + span / 2)
-    axis.set_ylim(center[1] - span / 2, center[1] + span / 2)
-    axis.set_zlim(center[2] - span / 2, center[2] + span / 2); axis.set_box_aspect((1, 1, 1))
-    axis.set_title(title)
-figure.tight_layout()
-figure.savefig("single_stage_optimization.png", dpi=200)
-plt.close(figure)
-
-figure, axis = plt.subplots(figsize=(6.5, 4.0))
-for name, values in history.items():
-    axis.semilogy(values, label=name)
-axis.set(xlabel="objective evaluation", ylabel="weighted cost", title="Single-stage objective terms")
-axis.grid(True, alpha=0.3); axis.legend(fontsize=8, ncol=2); figure.tight_layout()
-figure.savefig("single_stage_objectives.png", dpi=200); plt.close(figure)
+vj.plot_optimization_objects("single_stage_optimization.png",
+    ("Initial", surface_initial, coils0), ("Optimized", surface_final, coils_final))
+monitor.save("single_stage_objectives.csv")
+monitor.plot("single_stage_objectives.png", title="Single-stage objective terms")
 print("Wrote single_stage_optimization.png")
-print("Wrote single_stage_objectives.png")
+print("Wrote single_stage_objectives.csv and single_stage_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"Wrote {path}")

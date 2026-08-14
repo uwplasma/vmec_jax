@@ -17,10 +17,12 @@ nfp = 2
 TARGET_BETA = 0.025
 BETA_WEIGHT = 1.0 / TARGET_BETA**2  # beta residual is relative
 SURFACES = np.linspace(0.1, 0.9, 8)
-MAX_MODES = [2,3]
+MAX_MODES = [2, 3]
 MAX_NFEV = [15, 30]
+N_CURRENT_SPLINE = [6, 8]  # optimized I'(s) spline knots at each stage
 ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
-CURRENT_DOFS = 6
+# VMEC's dimensional DMerc/DR values are O(1e2-1e3) for this seed.
+STABILITY_WEIGHT = 1.0e-6
 # Characteristic low-order boundary step in meters; ESS reduces higher modes.
 # Current dofs are dimensionless here, so they have their own optimizer scale.
 PARAMETER_STEP, CURRENT_PARAMETER_STEP = 0.02, 0.05
@@ -30,7 +32,8 @@ VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.10
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
-if ci_smoke: SURFACES, MAX_MODES, MAX_NFEV = np.linspace(0.2, 0.8, 4), [1], [4]
+if ci_smoke:
+    SURFACES, MAX_MODES, MAX_NFEV, N_CURRENT_SPLINE = np.linspace(0.2, 0.8, 4), [1], [4], [4]
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
@@ -58,7 +61,7 @@ inp = replace(inp, pres_scale=inp.pres_scale * profile_scale)
 profiles = KineticProfiles(n0 * np.array([1, 0, 0, 0, 0, -1]),
                            T0 * np.array([1, -1]), T0 * np.array([1, -1]))
 picard = self_consistent_bootstrap(inp, profiles, 0, n_iter=2 if ci_smoke else 8,
-                                   tol=1e-3, degree=CURRENT_DOFS - 1,
+                                   tol=1e-3, degree=N_CURRENT_SPLINE[0] - 1,
                                    s_eval=SURFACES, verbose=not ci_smoke)
 inp, equilibrium = picard.input, picard.equilibrium
 
@@ -71,27 +74,39 @@ objective_function_terms = [
     (opt.aspect_ratio, ASPECT_TARGET, 1.0),
     (opt.mean_iota, IOTA_TARGET, 10.0),
     (opt.volume_average_beta, TARGET_BETA, BETA_WEIGHT),
+    (opt.mercier_stability_residual, 0.0, STABILITY_WEIGHT),
+    (opt.glasser_stability_residual, 0.0, STABILITY_WEIGHT),
 ]
+def minimum_dmerc(state, runtime):
+    return opt.d_merc_state(state, runtime)[2:-1].min()
+
+def maximum_dr(state, runtime):
+    return opt.glasser_d_r_state(state, runtime)[2:-1].max()
+
 report = opt.EquilibriumReporter(
     ("QS", qs.total, ".4e"), ("f_boot", bootstrap.total, ".4e"),
     ("beta", opt.volume_average_beta, ".3%"), ("aspect", opt.aspect_ratio, ".3f"),
-    ("iota", opt.mean_iota, ".3f"))
+    ("iota", opt.mean_iota, ".3f"), ("min DMerc", minimum_dmerc, ".2e"),
+    ("max DR", maximum_dr, ".2e"))
+monitor = opt.OptimizationMonitor(stream=None)
 
 report("self-consistent seed", equilibrium)
-for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
+for max_mode, max_nfev, n_spline in zip(MAX_MODES, MAX_NFEV, N_CURRENT_SPLINE):
     print(f"\n===== QA bootstrap stage, max_mode = {max_mode} =====")
     mpol = max(max_mode + 2, MINIMUM_MPOL)
     inp = inp.change_resolution(mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
+    inp = opt.resample_current_profile(inp, n_spline)
     problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=max_mode,
-        current_dofs=CURRENT_DOFS, vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True,
+        current_dofs=n_spline - 1, vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True,
         restart_from=equilibrium, progress=not ci_smoke)
     print(f"dof_names = {problem.dof_names}")
+    monitor.problem = problem
     step = PARAMETER_STEP * problem.scales
-    step[-CURRENT_DOFS - 1:] = CURRENT_PARAMETER_STEP  # ESS applies only to boundary modes
+    step[-n_spline:] = CURRENT_PARAMETER_STEP  # n-1 spline shapes + CURTOR
     result = least_squares(problem.residual, problem.x0, jac=problem.residual_jac,
         x_scale=step, bounds=(problem.x0 - MAX_PARAMETER_CHANGE * step,
                              problem.x0 + MAX_PARAMETER_CHANGE * step),
-        max_nfev=max_nfev, ftol=1e-6, xtol=1e-10, verbose=2)
+        max_nfev=max_nfev, ftol=1e-6, xtol=1e-10, verbose=2, callback=monitor)
     inp = problem.input_from_x(result.x)
     equilibrium = problem.equilibrium_from_x(result.x)
     report(f"mode {max_mode}", equilibrium)
@@ -110,5 +125,7 @@ wout_path = vj.write_wout("wout_QA_bootstrap_optimized.nc", final_equilibrium.wo
 print(f"wrote {input_path}\nwrote {wout_path}")
 
 # Plot results
+monitor.save("QA_bootstrap_objectives.csv")
+monitor.plot("QA_bootstrap_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")

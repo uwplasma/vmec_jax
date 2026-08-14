@@ -159,6 +159,7 @@ __all__ = [
     "boundary_arrays_from_x",
     "pack_boundary",
     "unpack_boundary",
+    "resample_current_profile",
     "least_squares",
     "minimize",
     "RedlBootstrapMismatch",  # noqa: F822 - provided lazily by __getattr__ below
@@ -195,6 +196,10 @@ class Equilibrium:
     state: SpectralState
     runtime: SolverRuntime
     result: SolveResult
+    field_factory: Callable[[], Any] | None = dataclasses.field(
+        default=None, repr=False, compare=False)
+    exterior_field_factory: Callable[..., Any] | None = dataclasses.field(
+        default=None, repr=False, compare=False)
 
     @cached_property
     def wout(self) -> WoutData:
@@ -208,9 +213,62 @@ class Equilibrium:
 
     def exterior_field(self, **kwargs):
         """Return a field that can be queried outside the plasma surface."""
+        if self.exterior_field_factory is not None:
+            return self.exterior_field_factory(**kwargs)
         from .extender import VmecExtender
 
         return VmecExtender.from_equilibrium(self, **kwargs)
+
+    @cached_property
+    def field(self):
+        """Pointwise magnetic field inside the plasma boundary."""
+        if self.field_factory is not None:
+            return self.field_factory()
+        from .extender import VmecInteriorField
+
+        return VmecInteriorField.from_state(
+            self.inp, self.state, runtime=self.runtime)
+
+    def set_points(self, points: Array) -> "Equilibrium":
+        """Store Cartesian points for pointwise field evaluation."""
+        self.field.set_points(points)
+        return self
+
+    def B(self, points: Array | None = None) -> Array:
+        """Return Cartesian ``B`` inside the plasma."""
+        return self.field.B(points)
+
+    def absB(self, points: Array | None = None) -> Array:
+        """Return ``|B|`` inside the plasma."""
+        return self.field.absB(points)
+
+    def gradB(self, points: Array | None = None) -> Array:
+        """Return the Cartesian field gradient inside the plasma."""
+        return self.field.gradB(points)
+
+    def gradgradB(self, points: Array | None = None) -> Array:
+        """Return the second Cartesian derivative of ``B``."""
+        return self.field.gradgradB(points)
+
+    def gradgradgradB(self, points: Array | None = None) -> Array:
+        """Return the third Cartesian derivative of ``B``."""
+        return self.field.gradgradgradB(points)
+
+    def B_vjp(self, vector: Array) -> Array:
+        """Return the VJP of :meth:`B` in the originating problem's DOFs."""
+        return self.field.B_vjp(vector)
+
+    def gradB_vjp(self, vector: Array) -> Array:
+        """Return the VJP of :meth:`gradB` in the problem's DOFs."""
+        return self.field.gradB_vjp(vector)
+
+    def gradgradB_vjp(self, vector: Array) -> Array:
+        """Return the VJP of :meth:`gradgradB` in the problem's DOFs."""
+        return self.field.gradgradB_vjp(vector)
+
+    def gradgradgradB_vjp(self, vector: Array) -> Array:
+        """Return the VJP of :meth:`gradgradgradB` in the problem's DOFs."""
+        return self.field.gradgradgradB_vjp(vector)
 
 
 def _auto_jac_chunk(dim: int) -> int:
@@ -1125,14 +1183,63 @@ def unpack_boundary(
 _CURTOR_SCALE = 1.0e6
 
 
+def _current_uses_spline(inp: VmecInput) -> bool:
+    return "spline" in str(inp.pcurr_type).strip().lower()
+
+
+def _current_values(inp: VmecInput, k: int) -> np.ndarray:
+    source = inp.ac_aux_f if _current_uses_spline(inp) else inp.ac
+    return np.asarray(source, dtype=float)[:k]
+
+
+def resample_current_profile(
+    inp: VmecInput,
+    n_spline: int,
+    *,
+    kind: str = "cubic_spline_ip",
+) -> VmecInput:
+    """Represent the current shape on ``n_spline`` uniform spline knots.
+
+    The existing enclosed-current profile is differentiated and sampled at
+    the new knots, so continuation preserves ``I(s)`` before the new knot
+    values are optimized.  ``CURTOR`` remains the independent amplitude.
+    ``kind`` may be ``cubic_spline_ip`` or ``akima_spline_ip``.
+    """
+    if int(inp.ncurr) != 1:
+        raise ValueError("current-profile resampling requires ncurr = 1")
+    n_spline = int(n_spline)
+    if n_spline < 2:
+        raise ValueError("n_spline must be at least 2")
+    kind = str(kind).strip().lower()
+    if kind not in ("cubic_spline_ip", "akima_spline_ip"):
+        raise ValueError("kind must be 'cubic_spline_ip' or 'akima_spline_ip'")
+    from .profiles import current
+
+    knots = jnp.linspace(0.0, 1.0, n_spline)
+    # At exactly s=1, jnp.minimum's chosen generalized derivative averages
+    # the profile derivative with the clamp's zero derivative. Sample the
+    # physical one-sided edge derivative instead.
+    sample_knots = knots.at[-1].set(jnp.nextafter(knots[-1], knots[-2]))
+    enclosed = lambda s: current(  # noqa: E731
+        inp.pcurr_type, inp.ac, inp.ac_aux_s, inp.ac_aux_f, s,
+        bloat=inp.bloat)
+    values = jax.vmap(jax.grad(enclosed))(sample_knots)
+    return dataclasses.replace(
+        inp, pcurr_type=kind, ac_aux_s=np.asarray(knots),
+        ac_aux_f=np.asarray(values))
+
+
 def _current_dof_setup(inp: VmecInput, current_dofs: int | None) -> tuple[int, float]:
     """Validate the optional AC/CURTOR dof block of :func:`least_squares`.
 
-    Returns ``(k, ac_scale)``: ``k`` leading ``AC`` power-series coefficients
-    are freed (0 disables the block); the dof vector then gains ``k + 1``
-    trailing entries ``[ac_0/ac_scale, ..., ac_{k-1}/ac_scale,
-    curtor/1e6]``.  ``ac_scale = max|AC|`` frozen from the seed input (VMEC
-    normalizes the AC profile by its own edge integral, so the coefficient
+    Returns ``(k, current_scale)``: ``k`` leading ``AC`` coefficients or
+    current-spline values are freed (0 disables the block); the dof vector
+    then gains ``k + 1`` trailing entries followed by ``curtor/1e6``.
+    A spline must retain at least one fixed ordinate because VMEC normalizes
+    its profile by the edge integral; freeing every ordinate as well as
+    ``CURTOR`` would add an exact scale-null direction.
+    ``current_scale`` is the maximum selected coefficient magnitude frozen
+    from the seed input (VMEC normalizes the profile by its edge integral, so
     magnitude over the selected block — ampere-scale for the
     Zenodo/self_consistent_bootstrap decks, O(1) for shape-normalized decks —
     is the right trust-region unit; the
@@ -1146,19 +1253,23 @@ def _current_dof_setup(inp: VmecInput, current_dofs: int | None) -> tuple[int, f
     if int(inp.ncurr) != 1:
         raise ValueError("current_dofs requires ncurr = 1 (prescribed current)")
     kind = str(inp.pcurr_type).strip().lower()
-    if "spline" in kind or "line_segment" in kind:
+    if "line_segment" in kind:
         raise ValueError(
-            "current_dofs requires an AC-coefficient pcurr_type (e.g. "
-            f"'power_series'), got {inp.pcurr_type!r}; re-parameterize the "
-            "deck (e.g. with vmex.core.bootstrap.self_consistent_bootstrap, "
-            "whose refit emits a power_series AC) first")
-    if k > int(np.asarray(inp.ac).size):
-        raise ValueError(f"current_dofs = {k} exceeds the dense AC length "
-                         f"{int(np.asarray(inp.ac).size)}")
+            "current_dofs supports AC coefficients or spline knot values, "
+            f"not pcurr_type={inp.pcurr_type!r}")
+    source = inp.ac_aux_f if _current_uses_spline(inp) else inp.ac
+    size = int(np.asarray([] if source is None else source).size)
+    if k > size:
+        label = "current-spline knot" if _current_uses_spline(inp) else "dense AC"
+        raise ValueError(f"current_dofs = {k} exceeds the {label} length {size}")
+    if _current_uses_spline(inp) and k == size:
+        raise ValueError(
+            "current_dofs must be smaller than the number of current-spline "
+            "knots; leave one ordinate fixed because CURTOR sets the amplitude")
     # Scale only the coefficients that are actually varied. High-order
     # monomial fits can contain large cancelling coefficients outside this
     # block; letting those set the scale makes the selected dofs unusably tiny.
-    ac_scale = float(np.max(np.abs(np.asarray(inp.ac, dtype=float)[:k])))
+    ac_scale = float(np.max(np.abs(_current_values(inp, k))))
     if ac_scale == 0.0:
         ac_scale = max(abs(float(inp.curtor)), 1.0)
     return k, ac_scale
@@ -1166,7 +1277,7 @@ def _current_dof_setup(inp: VmecInput, current_dofs: int | None) -> tuple[int, f
 
 def _pack_current(inp: VmecInput, k: int, ac_scale: float) -> np.ndarray:
     """Scaled ``[ac_0..ac_{k-1}, curtor]`` dof block (see :func:`_current_dof_setup`)."""
-    return np.concatenate([np.asarray(inp.ac, dtype=float)[:k] / ac_scale,
+    return np.concatenate([_current_values(inp, k) / ac_scale,
                            [float(inp.curtor) / _CURTOR_SCALE]])
 
 
@@ -1175,9 +1286,14 @@ def _apply_current(inp: VmecInput, xc, k: int, ac_scale: float) -> VmecInput:
     xc = np.asarray(xc, dtype=float).ravel()
     if xc.size != k + 1:
         raise ValueError(f"expected {k + 1} current dofs, got {xc.size}")
-    ac = np.array(inp.ac, dtype=float, copy=True)
-    ac[:k] = xc[:k] * ac_scale
-    return dataclasses.replace(inp, ac=ac, curtor=float(xc[k]) * _CURTOR_SCALE)
+    if _current_uses_spline(inp):
+        values = np.array(inp.ac_aux_f, dtype=float, copy=True)
+        values[:k] = xc[:k] * ac_scale
+        return dataclasses.replace(
+            inp, ac_aux_f=values, curtor=float(xc[k]) * _CURTOR_SCALE)
+    values = np.array(inp.ac, dtype=float, copy=True)
+    values[:k] = xc[:k] * ac_scale
+    return dataclasses.replace(inp, ac=values, curtor=float(xc[k]) * _CURTOR_SCALE)
 
 
 def _call_term(fun: Callable, eq: Equilibrium) -> np.ndarray:
@@ -1383,7 +1499,8 @@ def _make_finite_difference_problem(
     names = list(boundary_dof_names(
         inp, max_mode, vary_major_radius=vary_major_radius))
     if k_cur:
-        names.extend([f"AC({j})/{ac_scale:.6g}" for j in range(k_cur)])
+        label = "AC_AUX_F" if _current_uses_spline(inp) else "AC"
+        names.extend([f"{label}({j})/{ac_scale:.6g}" for j in range(k_cur)])
         names.append("CURTOR/1e6")
     scales = _ess_scale(
         inp, max_mode, float(ess_alpha),
@@ -1704,20 +1821,20 @@ def least_squares(
     call's ``result.input``.
 
     ``current_dofs = k`` additionally frees the current profile: the first
-    ``k`` ``AC`` power-series coefficients (``pcurr_type="power_series"``,
-    i.e. ``I'(s)``) plus ``CURTOR``, appended to the dof vector as
-    ``[..boundary.., ac_0/ac_scale, ..., curtor/1e6]`` (``ac_scale`` frozen
-    from the seed) so the trust region sees O(1) numbers.  Requires
-    ``ncurr = 1`` and an AC-parameterized ``pcurr_type`` (splines are
-    rejected — re-fit to a power series first, e.g. via
-    :func:`vmex.core.bootstrap.self_consistent_bootstrap`).  Both gradient
+    ``k`` ``AC`` coefficients, or the first ``k`` ``AC_AUX_F`` values for a
+    spline profile, plus ``CURTOR``.  For an ``n``-knot spline, use
+    ``current_dofs=n-1``: the remaining fixed ordinate removes the profile's
+    overall-scale null direction because ``CURTOR`` already sets that scale.
+    The values are scaled by their frozen
+    seed magnitude so the trust region sees O(1) numbers.  Requires
+    ``ncurr = 1``; :func:`resample_current_profile` changes spline resolution
+    between continuation stages without changing the represented ``I(s)``.
+    Both gradient
     modes support it (finite differences re-solve per current dof;
     ``jac="implicit"`` adds ``k + 1`` one-hot tangent rows through
-    ``ImplicitParams.ac``/``curtor``).  VMEC normalizes the AC profile by
+    ``ImplicitParams.ac`` or ``ac_aux_f`` and ``curtor``).  VMEC normalizes the AC profile by
     its own edge integral (only the *shape* of ``I'`` matters; ``CURTOR``
-    sets the amplitude), so the overall-AC-scale direction is
-    objective-neutral; the trust-region solvers handle the resulting
-    Jacobian null direction.  This is the dof set of
+    sets the amplitude).  This is the dof set of
     :class:`vmex.core.bootstrap.RedlBootstrapMismatch`.
 
     ``max_mode`` may be a single int or an increasing schedule (e.g.
@@ -2156,9 +2273,15 @@ def _least_squares_implicit(
             repl["rbc"] = repl["rbc"].at[ntor, 0].set(x[nfam * nm])
         params = dataclasses.replace(params0, **repl)
         if k_cur:
-            ac = params0.ac.at[:k_cur].set(x[nboundary:nboundary + k_cur] * ac_scale)
-            params = dataclasses.replace(
-                params, ac=ac, curtor=x[nboundary + k_cur] * _CURTOR_SCALE)
+            values = x[nboundary:nboundary + k_cur] * ac_scale
+            if _current_uses_spline(inp):
+                params = dataclasses.replace(
+                    params, ac_aux_f=params0.ac_aux_f.at[:k_cur].set(values),
+                    curtor=x[nboundary + k_cur] * _CURTOR_SCALE)
+            else:
+                params = dataclasses.replace(
+                    params, ac=params0.ac.at[:k_cur].set(values),
+                    curtor=x[nboundary + k_cur] * _CURTOR_SCALE)
         return params
 
     def term_rows(state, rt) -> jnp.ndarray:
@@ -2338,6 +2461,7 @@ def _least_squares_implicit(
     t_rbs = np.zeros((ndof,) + np.shape(params0.rbs))
     t_zbc = np.zeros((ndof,) + np.shape(params0.zbc))
     t_ac = np.zeros((ndof,) + np.shape(params0.ac))
+    t_ac_aux_f = np.zeros((ndof,) + np.shape(params0.ac_aux_f))
     t_curtor = np.zeros((ndof,))
     for j in range(nm):
         t_rbc[j, row_idx[j], col_idx[j]] = 1.0
@@ -2348,16 +2472,18 @@ def _least_squares_implicit(
     if vary_major_radius:
         t_rbc[nfam * nm, ntor, 0] = 1.0
     for j in range(k_cur):
-        t_ac[nboundary + j, j] = ac_scale
+        target = t_ac_aux_f if _current_uses_spline(inp) else t_ac
+        target[nboundary + j, j] = ac_scale
     if k_cur:
         t_curtor[nboundary + k_cur] = _CURTOR_SCALE
     zerop = jax.tree.map(lambda a: _place(np.zeros(a.shape)), params0)
     if lasym:
         tangent_stack = tuple(map(
-            _place, (t_rbc, t_zbs, t_rbs, t_zbc, t_ac, t_curtor)
+            _place, (t_rbc, t_zbs, t_rbs, t_zbc, t_ac, t_ac_aux_f, t_curtor)
         ))
     else:
-        tangent_stack = tuple(map(_place, (t_rbc, t_zbs, t_ac, t_curtor)))
+        tangent_stack = tuple(map(
+            _place, (t_rbc, t_zbs, t_ac, t_ac_aux_f, t_curtor)))
 
     # R17.1 memory knob: chunk_size None == one full-width batch, while an int
     # / "auto" caps peak Jacobian memory at that many dofs at a time.  Route
@@ -2405,9 +2531,11 @@ def _least_squares_implicit(
             if lasym:
                 return dataclasses.replace(zerop, rbc=tp[0], zbs=tp[1],
                                            rbs=tp[2], zbc=tp[3],
-                                           ac=tp[4], curtor=tp[5])
+                                           ac=tp[4], ac_aux_f=tp[5],
+                                           curtor=tp[6])
             return dataclasses.replace(zerop, rbc=tp[0], zbs=tp[1],
-                                       ac=tp[2], curtor=tp[3])
+                                       ac=tp[2], ac_aux_f=tp[3],
+                                       curtor=tp[4])
 
         def rhs_of(tp):
             b = jax.jvp(lambda prm: F(z_star, prm), (params,), (tp,))[1]
@@ -2756,6 +2884,8 @@ def _least_squares_implicit(
 
     def equilibrium_from_x(x: np.ndarray) -> Equilibrium:
         """Materialize the exact accepted state already used by the objective."""
+        from .extender import VmecExtender, VmecInteriorField
+
         x = np.asarray(x, dtype=float)
         if traceable_scalar is None:
             fun(x)
@@ -2776,11 +2906,39 @@ def _least_squares_implicit(
             result_input,
             resolution_from_input(result_input, ns=ns),
         )
+
+        def exterior_field_factory(**kwargs):
+            from . import freeboundary_diff as fbd
+
+            nphi = int(kwargs.pop("nphi", 32)); ntheta = int(kwargs.pop("ntheta", 32))
+            external_field = kwargs.pop("external_field", None)
+            digits = int(kwargs.pop("digits", 6)); levels = kwargs.pop("levels", None)
+            plasma = kwargs.pop("plasma", "auto")
+            if plasma not in ("auto", "include", "vacuum"):
+                raise ValueError("plasma must be 'auto', 'include', or 'vacuum'")
+            if kwargs:
+                unexpected = ", ".join(sorted(kwargs))
+                raise TypeError(f"unexpected exterior-field options: {unexpected}")
+            if plasma == "vacuum":
+                return VmecExtender(external_field)
+
+            def surface_data(parameters):
+                state, live_runtime = jax_state_runtime(parameters)
+                return fbd.surface_field_data_from_state(
+                    inp, state, runtime=live_runtime, nphi=nphi, ntheta=ntheta)
+
+            return VmecExtender.from_parameterized_surface_data(
+                surface_data, _place(x), external_field=external_field,
+                digits=digits, levels=levels, dof_names=tuple(names))
+
         return Equilibrium(
             inp=result_input,
             state=result.state,
             runtime=runtime,
             result=result,
+            field_factory=lambda: VmecInteriorField.from_parameterized_state(
+                inp, jax_state_runtime, _place(x), dof_names=tuple(names)),
+            exterior_field_factory=exterior_field_factory,
         )
 
     def jax_residual_jacobian(x: jnp.ndarray) -> jnp.ndarray:
@@ -2810,6 +2968,17 @@ def _least_squares_implicit(
 
     residual_value_grad_jit = jax.jit(residual_value_and_gradient)
 
+    def jax_state_runtime(x: jnp.ndarray):
+        """Converged implicit state/runtime pair for differentiable field APIs."""
+        params = params_of(x)
+        return imp.solve_implicit(params, cfg), imp.runtime_from_params(params, cfg)
+
+    def jax_state_runtime_status(x: jnp.ndarray):
+        """Exception-free state/runtime/status triple for composite objectives."""
+        params = params_of(x)
+        state, status, _, _ = imp.solve_implicit_status(params, cfg)
+        return state, imp.runtime_from_params(params, cfg), status
+
     @jax.custom_vjp
     def residual_scalar_public(x: jnp.ndarray) -> jnp.ndarray:
         """Scalar residual cost with the certified ``J.T @ r`` pullback."""
@@ -2830,7 +2999,8 @@ def _least_squares_implicit(
         names = list(boundary_dof_names(
             inp, max_mode, vary_major_radius=vary_major_radius))
         if k_cur:
-            names.extend([f"AC({j})/{ac_scale:.6g}" for j in range(k_cur)])
+            label = "AC_AUX_F" if _current_uses_spline(inp) else "AC"
+            names.extend([f"{label}({j})/{ac_scale:.6g}" for j in range(k_cur)])
             names.append("CURTOR/1e6")
         scales = (
             np.ones_like(np.asarray(x0, dtype=float))
@@ -2880,6 +3050,10 @@ def _least_squares_implicit(
                 "term_slices": term_slices,
                 "config": cfg,
                 "holder": holder,
+                "input": inp,
+                "jax_state_runtime": jax_state_runtime,
+                "jax_state_runtime_status": jax_state_runtime_status,
+                "jax_residual_from_state": term_rows,
             },
         )
 

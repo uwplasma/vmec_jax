@@ -63,6 +63,7 @@ report = opt.EquilibriumReporter(
     ("constructed QI", qi.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
     ("mean iota", opt.mean_iota, ".4f"), ("mirror", opt.mirror_ratio, ".4f"),
     ("elongation", opt.max_elongation, ".4f"))
+monitor = opt.OptimizationMonitor(stream=None)
 
 # Optimize for QP first
 print(f"\n===== QP basin stage, max_mode = {MAX_MODES_QP} =====")
@@ -77,10 +78,11 @@ problem = opt.VmecProblem.from_tuples(
     use_ess=True, progress=not ci_smoke
 )
 print(f"dof_names = {problem.dof_names}")
+monitor.problem = problem
 result = least_squares(
     problem.residual, problem.x0,
     jac=problem.residual_jac, x_scale=problem.scales,
-    verbose=2, max_nfev=MAX_NFEV_QP, ftol=1.0e-6, xtol=1.0e-10,
+    verbose=2, max_nfev=MAX_NFEV_QP, ftol=1.0e-6, xtol=1.0e-10, callback=monitor,
 )
 inp = problem.input_from_x(result.x)
 equilibrium = problem.equilibrium_from_x(result.x)
@@ -101,11 +103,13 @@ for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV), 1):
         vary_major_radius=VARY_MAJOR_RADIUS,
     )
     print(f"dof_names = {problem.dof_names}")
-    if not ci_smoke: problem.compile_residual_and_jacobian()
+    monitor.problem = problem
+    if not ci_smoke:
+        problem.compile_residual_and_jacobian()
     result = least_squares(
         problem.residual, problem.x0, jac=problem.residual_jac,
         x_scale=problem.scales, max_nfev=max_nfev,
-        ftol=1.0e-6, xtol=1.0e-10, verbose=2
+        ftol=1.0e-6, xtol=1.0e-10, verbose=2, callback=monitor
     )
     inp = problem.input_from_x(result.x)
     equilibrium = problem.equilibrium_from_x(result.x)
@@ -131,5 +135,7 @@ print(f"wrote {input_path}")
 print(f"wrote {wout_path}")
 
 # Plot results
+monitor.save("QI_optimization_objectives.csv")
+monitor.plot("QI_optimization_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")

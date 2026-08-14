@@ -188,6 +188,29 @@ def test_finite_beta_extender_field_and_gradient_outside_lcfs(monkeypatch):
     np.testing.assert_allclose(live.B(points), field.B(points), rtol=2e-11, atol=2e-11)
 
 
+def test_parameterized_extender_vjp_matches_rebuilt_surface_fd():
+    """Exterior B VJP differentiates the moving virtual-casing surface."""
+    parameters = jnp.array([1.0])
+    def surface(p):
+        return _synthetic_surface(nphi=10, ntheta=10, nfp=1, R0=p[0])
+    points = jnp.array([[1.8, 0.2, 0.1]])
+    field = VmecExtender.from_parameterized_surface_data(
+        surface, parameters, digits=3, levels=((11, 11), (22, 22)),
+        dof_names=("R0",)).set_points(points)
+    cotangent = jnp.ones_like(field.B())
+    autodiff = float(field.B_vjp(cotangent)[0])
+
+    def scalar(p):
+        rebuilt = VmecExtender.from_surface_data(
+            surface(jnp.array([p])), digits=3, levels=((11, 11), (22, 22)))
+        return float(jnp.vdot(rebuilt.B(points), cotangent))
+
+    step = 2.0e-5
+    finite_difference = (scalar(1.0 + step) - scalar(1.0 - step)) / (2.0 * step)
+    np.testing.assert_allclose(autodiff, finite_difference, rtol=3e-4, atol=3e-6)
+    assert field.dof_names == ("R0",)
+
+
 @pytest.mark.full
 def test_cth_gradient_fd_validates():
     """cth-like case: free-boundary residual gradients (extcur + coil dofs) vs central FD."""

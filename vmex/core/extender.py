@@ -21,7 +21,7 @@ from .mgrid import MgridField, read_mgrid
 Array = Any
 PlasmaMode = Literal["auto", "include", "vacuum"]
 
-__all__ = ["MagneticField", "VmecExtender"]
+__all__ = ["MagneticField", "VmecInteriorField", "VmecExtender"]
 
 
 def _check_points(points: Array, name: str = "points") -> Array:
@@ -84,9 +84,23 @@ class MagneticField:
         self,
         B_fn: Callable[[Array], Array],
         gradB_fn: Callable[[Array], Array] | None = None,
+        gradgradB_fn: Callable[[Array], Array] | None = None,
+        gradgradgradB_fn: Callable[[Array], Array] | None = None,
+        *,
+        parameters: Array | None = None,
+        parameterized_B_fn: Callable[[Array, Array], Array] | None = None,
+        dof_names: tuple[str, ...] | None = None,
     ) -> None:
         self._B_fn = B_fn
         self._gradB_fn = gradB_fn
+        self._gradgradB_fn = gradgradB_fn
+        self._gradgradgradB_fn = gradgradgradB_fn
+        self._parameters = parameters
+        self._parameterized_B_fn = parameterized_B_fn
+        self.dof_names = tuple(dof_names or ())
+        if (parameters is None) != (parameterized_B_fn is None):
+            raise ValueError(
+                "parameters and parameterized_B_fn must be provided together")
         self._points_cart: Array | None = None
         self._points_cyl: Array | None = None
 
@@ -157,6 +171,72 @@ class MagneticField:
             raise ValueError(f"field gradient returned shape {value.shape}, expected {expected}")
         return value
 
+    def gradgradB(self, points: Array | None = None) -> Array:
+        """Return ``d²B_i/dx_j dx_k`` with shape ``(n, 3, 3, 3)``."""
+        xyz = self._require_points() if points is None else _check_points(points)
+        if self._gradgradB_fn is not None:
+            value = jnp.asarray(self._gradgradB_fn(xyz))
+        else:
+            value = jax.vmap(jax.jacfwd(jax.jacfwd(
+                lambda point: self._B_fn(point[None, :])[0])))(xyz)
+        expected = xyz.shape + (3, 3)
+        if value.shape != expected:
+            raise ValueError(
+                f"second field derivative returned shape {value.shape}, expected {expected}")
+        return value
+
+    def gradgradgradB(self, points: Array | None = None) -> Array:
+        """Return ``d³B_i/dx_j dx_k dx_l`` with shape ``(n, 3, 3, 3, 3)``."""
+        xyz = self._require_points() if points is None else _check_points(points)
+        if self._gradgradgradB_fn is not None:
+            value = jnp.asarray(self._gradgradgradB_fn(xyz))
+        else:
+            point_field = lambda point: self._B_fn(point[None, :])[0]  # noqa: E731
+            value = jax.vmap(
+                jax.jacfwd(jax.jacfwd(jax.jacfwd(point_field))))(xyz)
+        expected = xyz.shape + (3, 3, 3)
+        if value.shape != expected:
+            raise ValueError(
+                f"third field derivative returned shape {value.shape}, expected {expected}")
+        return value
+
+    def _parameter_vjp(self, order: int, cotangent: Array) -> Array:
+        if self._parameterized_B_fn is None:
+            raise RuntimeError(
+                "this field was not constructed with optimizable parameters")
+        points = self._require_points()
+
+        def quantity(parameters):
+            point_field = lambda point: self._parameterized_B_fn(  # noqa: E731
+                parameters, point[None, :])[0]
+            function = point_field
+            for _ in range(order):
+                function = jax.jacfwd(function)
+            return jax.vmap(function)(points)
+
+        value, pullback = jax.vjp(quantity, self._parameters)
+        vector = jnp.asarray(cotangent)
+        if vector.shape != value.shape:
+            raise ValueError(
+                f"cotangent has shape {vector.shape}, expected {value.shape}")
+        return pullback(vector)[0]
+
+    def B_vjp(self, vector: Array) -> Array:
+        """Return ``vector.T @ dB/dp`` for this field's parameters ``p``."""
+        return self._parameter_vjp(0, vector)
+
+    def gradB_vjp(self, vector: Array) -> Array:
+        """Return a VJP of :meth:`gradB` with respect to field parameters."""
+        return self._parameter_vjp(1, vector)
+
+    def gradgradB_vjp(self, vector: Array) -> Array:
+        """Return a VJP of :meth:`gradgradB` with respect to field parameters."""
+        return self._parameter_vjp(2, vector)
+
+    def gradgradgradB_vjp(self, vector: Array) -> Array:
+        """Return a VJP of :meth:`gradgradgradB` with respect to parameters."""
+        return self._parameter_vjp(3, vector)
+
     def dB_by_dX(self, points: Array | None = None) -> Array:
         """Return SIMSOPT axis order ``(point, x_j, B_i)``."""
         return jnp.swapaxes(self.gradB(points), -1, -2)
@@ -167,6 +247,161 @@ class MagneticField:
         gradB = self.gradB(points)
         scale = jnp.maximum(jnp.linalg.norm(B, axis=-1), jnp.finfo(B.dtype).tiny)
         return jnp.einsum("...i,...ij->...j", B, gradB) / scale[:, None]
+
+
+def _radial_value_and_derivative(coefficients: Array, s: Array) -> tuple[Array, Array]:
+    """Piecewise-linear full-mesh spectra and their radial derivative."""
+    coefficients = jnp.asarray(coefficients)
+    ns = coefficients.shape[0]
+    coordinate = jnp.clip(s, 0.0, 1.0) * (ns - 1)
+    index = jnp.clip(jnp.floor(coordinate).astype(int), 0, ns - 2)
+    fraction = coordinate - index
+    lower, upper = coefficients[index], coefficients[index + 1]
+    return lower + fraction * (upper - lower), (ns - 1) * (upper - lower)
+
+
+def _full_mesh_contravariant(coefficients: Array) -> Array:
+    """Interpolate half-mesh VMEC spectra to every full-mesh surface."""
+    coefficients = jnp.asarray(coefficients)
+    interior = 0.5 * (coefficients[1:-1] + coefficients[2:])
+    edge = 1.5 * coefficients[-1] - 0.5 * coefficients[-2]
+    return jnp.concatenate((coefficients[1:2], interior, edge[None]), axis=0)
+
+
+def _interior_coordinates_and_B(
+    spectra: dict[str, Array], points: Array, *, newton_iterations: int
+) -> tuple[Array, Array]:
+    """Invert VMEC coordinates and synthesize the interior Cartesian field."""
+    points = _check_points(points)
+    xm, xn = spectra["xm"], spectra["xn"]
+    xmn, xnn = spectra["xmn"], spectra["xnn"]
+    rmnc, zmns = spectra["rmnc"], spectra["zmns"]
+    bu_full = _full_mesh_contravariant(spectra["bsupu"])
+    bv_full = _full_mesh_contravariant(spectra["bsupv"])
+
+    def geometry(s, theta, phi):
+        rc, rcs = _radial_value_and_derivative(rmnc, s)
+        zs, zss = _radial_value_and_derivative(zmns, s)
+        phase = xm * theta - xn * phi
+        cosine, sine = jnp.cos(phase), jnp.sin(phase)
+        R, Z = jnp.vdot(rc, cosine), jnp.vdot(zs, sine)
+        Rs, Zs = jnp.vdot(rcs, cosine), jnp.vdot(zss, sine)
+        Rt, Zt = jnp.vdot(-xm * rc, sine), jnp.vdot(xm * zs, cosine)
+        Rp, Zp = jnp.vdot(xn * rc, sine), jnp.vdot(-xn * zs, cosine)
+        return R, Z, Rs, Zs, Rt, Zt, Rp, Zp
+
+    def one_point(point):
+        x, y, z = point
+        radius, phi = jnp.hypot(x, y), jnp.arctan2(y, x)
+        axis_R, axis_Z, *_ = geometry(0.0, 0.0, phi)
+        theta0 = jnp.arctan2(z - axis_Z, radius - axis_R)
+        edge_R, edge_Z, *_ = geometry(1.0, theta0, phi)
+        edge_distance2 = (edge_R - axis_R) ** 2 + (edge_Z - axis_Z) ** 2
+        s0 = ((radius - axis_R) ** 2 + (z - axis_Z) ** 2) / jnp.maximum(
+            edge_distance2, 1.0e-24)
+
+        def update(_, coordinates):
+            s, theta = coordinates
+            R, Z, Rs, Zs, Rt, Zt, *_ = geometry(s, theta, phi)
+            determinant = Rs * Zt - Rt * Zs
+            safe = jnp.where(jnp.abs(determinant) > 1.0e-14, determinant, 1.0e-14)
+            residual_R, residual_Z = R - radius, Z - z
+            ds = (Zt * residual_R - Rt * residual_Z) / safe
+            dt = (-Zs * residual_R + Rs * residual_Z) / safe
+            return jnp.clip(s - ds, -0.05, 1.05), jnp.mod(theta - dt, 2.0 * jnp.pi)
+
+        s, theta = jax.lax.fori_loop(
+            0, int(newton_iterations), update,
+            (jnp.clip(s0, 1.0e-8, 1.0), theta0))
+        R, Z, _Rs, _Zs, Rt, Zt, Rp, Zp = geometry(s, theta, phi)
+        bu_coeff, _ = _radial_value_and_derivative(bu_full, s)
+        bv_coeff, _ = _radial_value_and_derivative(bv_full, s)
+        nyquist_phase = xmn * theta - xnn * phi
+        bu = jnp.vdot(bu_coeff, jnp.cos(nyquist_phase))
+        bv = jnp.vdot(bv_coeff, jnp.cos(nyquist_phase))
+        cphi, sphi = jnp.cos(phi), jnp.sin(phi)
+        e_theta = jnp.array((Rt * cphi, Rt * sphi, Zt))
+        e_phi = jnp.array((Rp * cphi - R * sphi, Rp * sphi + R * cphi, Zp))
+        field = bu * e_theta + bv * e_phi
+        error = jnp.hypot(R - radius, Z - z)
+        valid = (s >= -1.0e-8) & (s <= 1.0 + 1.0e-8) & (error <= 1.0e-7)
+        return jnp.array((s, theta, phi)), jnp.where(valid, field, jnp.nan)
+
+    coordinates, field = jax.vmap(one_point)(points)
+    return coordinates, field
+
+
+class VmecInteriorField(MagneticField):
+    """VMEC magnetic field at Cartesian points inside the plasma boundary.
+
+    Cartesian points are inverted to ``(s, theta, phi)`` with a fixed-count
+    differentiable Newton solve.  Spectral angular evaluation and radial
+    interpolation then recover ``B``.  Points outside the last closed surface
+    return NaNs; use :class:`VmecExtender` there.
+    """
+
+    def __init__(
+        self,
+        spectra: dict[str, Array],
+        *,
+        newton_iterations: int = 10,
+        parameters: Array | None = None,
+        parameterized_B_fn: Callable[[Array, Array], Array] | None = None,
+        dof_names: tuple[str, ...] = (),
+    ) -> None:
+        self.spectra = spectra
+        self.newton_iterations = int(newton_iterations)
+
+        def B_fn(points):
+            return _interior_coordinates_and_B(
+                spectra, points, newton_iterations=self.newton_iterations)[1]
+
+        super().__init__(
+            B_fn, parameters=parameters, parameterized_B_fn=parameterized_B_fn,
+            dof_names=dof_names)
+
+    def flux_coordinates(self, points: Array | None = None) -> Array:
+        """Return inverted ``(s, theta, phi)`` at explicit or stored points."""
+        xyz = self._require_points() if points is None else _check_points(points)
+        return _interior_coordinates_and_B(
+            self.spectra, xyz, newton_iterations=self.newton_iterations)[0]
+
+    @classmethod
+    def from_state(cls, inp: Any, state: Any, *, runtime: Any = None,
+                   newton_iterations: int = 10) -> "VmecInteriorField":
+        """Construct a field from a live converged VMEX state."""
+        from .freeboundary_diff import _state_field_spectra
+
+        return cls(_state_field_spectra(inp, state, runtime),
+                   newton_iterations=newton_iterations)
+
+    @classmethod
+    def from_parameterized_state(
+        cls,
+        inp: Any,
+        state_runtime_fn: Callable[[Array], tuple[Any, Any]],
+        parameters: Array,
+        *,
+        dof_names: tuple[str, ...] = (),
+        newton_iterations: int = 10,
+    ) -> "VmecInteriorField":
+        """Construct an interior field with exact VJPs in problem parameters."""
+        from .freeboundary_diff import _state_field_spectra
+
+        parameters = jnp.asarray(parameters)
+
+        def spectra_of(p):
+            state, runtime = state_runtime_fn(p)
+            return _state_field_spectra(inp, state, runtime)
+
+        def parameterized_B_fn(p, points):
+            return _interior_coordinates_and_B(
+                spectra_of(p), points, newton_iterations=newton_iterations)[1]
+
+        return cls(
+            spectra_of(parameters), newton_iterations=newton_iterations,
+            parameters=parameters, parameterized_B_fn=parameterized_B_fn,
+            dof_names=dof_names)
 
 
 def _has_plasma_sources(wout: Any) -> bool:
@@ -222,21 +457,10 @@ class VmecExtender(MagneticField):
                 value = value + self.plasma_field.B_plasma_xyz(points)
             return value
 
-        def gradB_fn(points: Array) -> Array:
-            value = jnp.zeros(points.shape[:-1] + (3, 3), dtype=points.dtype)
-            if self.external_field is not None:
-                value = value + jax.vmap(
-                    jax.jacfwd(
-                        lambda point: _field_cartesian(
-                            self.external_field, point[None, :]
-                        )[0]
-                    )
-                )(points)
-            if self.plasma_field is not None:
-                value = value + self.plasma_field.gradB_plasma_xyz(points)
-            return value
-
-        super().__init__(B_fn, gradB_fn)
+        # Differentiate the same Cartesian field graph used by B().  This is
+        # both simpler and avoids the cylindrical-axis singularity in older
+        # virtual_casing_jax ``gradB_plasma_xyz`` implementations.
+        super().__init__(B_fn)
 
     @property
     def uses_virtual_casing(self) -> bool:
@@ -267,6 +491,38 @@ class VmecExtender(MagneticField):
         )
         plasma_field = fbd.VirtualCasingExteriorField(surface_data, config)
         return cls(external_field, plasma_field)
+
+    @classmethod
+    def from_parameterized_surface_data(
+        cls,
+        surface_data_fn: Callable[[Array], Any],
+        parameters: Array,
+        *,
+        external_field: Any | None = None,
+        digits: int = 6,
+        levels: tuple[tuple[int, int], ...] | None = None,
+        dof_names: tuple[str, ...] = (),
+    ) -> "VmecExtender":
+        """Construct a virtual-casing field with VJPs in ``parameters``.
+
+        ``surface_data_fn(parameters)`` must return traceable VMEX surface
+        data.  Spatial derivatives and parameter VJPs then use the same JAX
+        field graph; no finite-difference equilibrium solves are introduced.
+        """
+        parameters = jnp.asarray(parameters)
+
+        def parameterized_B_fn(p: Array, points: Array) -> Array:
+            return cls.from_surface_data(
+                surface_data_fn(p), external_field=external_field,
+                digits=digits, levels=levels).B(points)
+
+        field = cls.from_surface_data(
+            surface_data_fn(parameters), external_field=external_field,
+            digits=digits, levels=levels)
+        field._parameters = parameters
+        field._parameterized_B_fn = parameterized_B_fn
+        field.dof_names = tuple(dof_names)
+        return field
 
     @classmethod
     def from_wout(

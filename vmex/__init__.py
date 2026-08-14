@@ -13,10 +13,12 @@ Public API (lazily imported; ``import vmex as vj``):
   :func:`~vmex.core.restart.restart_state` — hot restart from any wout
   (also ``solve*(..., restart_from=...)``)
 - :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
+- :func:`~vmex.core.plotting.plot_optimization_objects` — surfaces and coils
 - :func:`~vmex.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
 - :func:`~vmex.core.mgrid.read_mgrid` / :func:`~vmex.core.mgrid.write_mgrid`
   / :func:`~vmex.core.mgrid.tabulate_cartesian_field`
   / :class:`~vmex.core.mgrid.MgridField` (mgrid or tabulated direct field)
+- :class:`~vmex.core.extender.VmecInteriorField` — field inside the plasma
 - :class:`~vmex.core.extender.VmecExtender` — field outside the plasma surface
 - :func:`~vmex.core.scaling.scale_input` / :func:`~vmex.core.scaling.scale_wout`
   — dimensional similarity transforms
@@ -127,6 +129,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     # plotting + Boozer
     "plot_wout": (".core.plotting", "plot_wout"),
     "plot_boozmn": (".core.plotting", "plot_boozmn"),
+    "plot_optimization_objects": (".core.plotting", "plot_optimization_objects"),
     "run_booz_xform": (".core.boozer", "run_booz_xform"),
     # optimizer-neutral problem callables
     "Evaluation": (".core.problem", "Evaluation"),
@@ -142,6 +145,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "tabulate_cartesian_field": (".core.mgrid", "tabulate_cartesian_field"),
     "write_mgrid": (".core.mgrid", "write_mgrid"),
     "MagneticField": (".core.extender", "MagneticField"),
+    "VmecInteriorField": (".core.extender", "VmecInteriorField"),
     "VmecExtender": (".core.extender", "VmecExtender"),
     # dimensional scaling
     "scale_input": (".core.scaling", "scale_input"),

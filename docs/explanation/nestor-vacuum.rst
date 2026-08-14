@@ -139,6 +139,18 @@ coefficients/currents of a callable ESSOS coil field via
 ``extcur``), and its ``value_and_grad_bnormal`` helper returns gradients
 validated against finite differences — no NESTOR adjoint is required.
 
+Field-query API
+---------------
+
+:class:`~vmex.core.extender.MagneticField` provides stored Cartesian points,
+``B``, ``absB``, and spatial derivatives through ``gradgradgradB``. A field
+constructed from :meth:`~vmex.core.problem.VmecProblem.exterior_field` also
+provides ``B_vjp`` and the three spatial-derivative VJPs in the problem's
+boundary/current DOFs. The virtual-casing path applies outside the LCFS;
+:class:`~vmex.core.extender.VmecInteriorField` evaluates the live VMEC
+spectral field inside. Query points must stay away from the source surface and
+external coil filaments.
+
 Toward a coupled adjoint
 ------------------------
 

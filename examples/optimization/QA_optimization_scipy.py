@@ -27,7 +27,8 @@ VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.05
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
-if ci_smoke: MAX_MODE, MAXITER = 1, 4
+if ci_smoke:
+    MAX_MODE, MAXITER = 1, 4
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
@@ -97,5 +98,7 @@ print(f"wrote {input_path}")
 print(f"wrote {wout_path}")
 
 # Plot results
+monitor.save(f"QA_scipy_{METHOD}_objectives.csv")
+monitor.plot(f"QA_scipy_{METHOD}_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")

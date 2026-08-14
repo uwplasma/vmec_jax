@@ -341,38 +341,11 @@ def _wrout_cos_coeffs_jax(f, modes, trig):
     return coeff * jnp.asarray(_wrout_dmult(modes, trig))[None, :]
 
 
-def surface_field_data_from_state(
-    inp,
-    state,
-    *,
-    nphi: int = 32,
-    ntheta: int = 32,
-    s_index: int = -1,
-    use_stellsym: bool = True,
-) -> "VmecSurfaceFieldData":
-    """Traceable :class:`VmecSurfaceFieldData` straight from a ``SpectralState``.
-
-    Unlike :func:`surface_field_data_from_wout` — which reads a materialised
-    (numpy) wout and so cannot be differentiated in the boundary — this rebuilds
-    the boundary geometry and contravariant-``B`` spectra with the *same*
-    ``jnp`` recipe the wout writer uses (:func:`m1_constrained_to_physical`,
-    :func:`real_space_geometry`, :func:`~vmex.core.nyquist.wout_field_tables`),
-    never leaving the device.  The result differentiates in ``state`` (hence in
-    the boundary DOFs through the implicit adjoint), which is what makes a
-    *simultaneous* plasma-boundary + coil single-stage objective possible:
-    ``jax.grad`` threads through both this surface field and the coil field.
-
-    ``inp`` supplies the static resolution / profile metadata; ``state`` the
-    (possibly traced) spectral geometry.  Stellarator-symmetric only for now;
-    ``lasym=True`` is rejected because this path has not been validated with
-    the asymmetric surface-field channels.
-
-    Pure vmex numerics — usable without ``virtual_casing_jax`` (the optional
-    dependency is required only by the virtual-casing solver paths).
-    """
+def _state_field_spectra(inp, state, runtime=None):
+    """Traceable geometry and contravariant-field spectra for a live state."""
     if bool(inp.lasym):
         raise NotImplementedError(
-            "surface_field_data_from_state supports lasym = False only"
+            "live-state field evaluation supports lasym = False only"
         )
     from .fields import magnetic_fields, metric_elements
     from .fourier import Resolution, mode_table, trig_tables
@@ -388,7 +361,7 @@ def surface_field_data_from_state(
     from .transforms import physical_to_internal_scale
 
     ns = int(np.shape(state.R_cos)[0])
-    res = resolution_from_input(inp, ns=ns)
+    res = resolution_from_input(inp, ns=ns) if runtime is None else runtime.resolution
     mpol, ntor, nfp, lasym = int(res.mpol), int(res.ntor), int(res.nfp), bool(res.lasym)
     nzeta = int(res.nzeta)
     modes = mode_table(mpol, ntor)
@@ -397,12 +370,18 @@ def surface_field_data_from_state(
     trig = trig_tables(Resolution(mpol=mnyq_grid + 1, ntor=nnyq_grid,
                                   ntheta=int(res.ntheta), nzeta=nzeta,
                                   nfp=nfp, lasym=lasym, ns=ns))
-    grids = radial_grids(ns)
-    ncurr = int(inp.ncurr)
-
-    boundary = boundary_from_input(inp, modes=modes, trig=trig, lconm1=True)
-    signgs = int(boundary.signgs)
-    prof = flux_profiles(inp, grids, r00=boundary.r00, signgs=signgs, lflip=boundary.lflip)
+    if runtime is None:
+        grids = radial_grids(ns)
+        boundary = boundary_from_input(inp, modes=modes, trig=trig, lconm1=True)
+        signgs = int(boundary.signgs)
+        prof = flux_profiles(
+            inp, grids, r00=boundary.r00, signgs=signgs, lflip=boundary.lflip)
+        gamma, ncurr = float(inp.gamma), int(inp.ncurr)
+    else:
+        grids, signgs = runtime.setup, int(runtime.setup.signgs)
+        prof = {name: getattr(runtime.setup, name) for name in
+                ("phips", "phipf", "chips", "mass", "icurv")}
+        gamma, ncurr = float(runtime.gamma), int(runtime.setup.ncurr)
 
     R_cos_p, Z_sin_p, R_sin_p, Z_cos_p = m1_constrained_to_physical(
         state.R_cos, state.Z_sin, state.R_sin, state.Z_cos,
@@ -417,7 +396,7 @@ def surface_field_data_from_state(
     fields = magnetic_fields(
         geometry=geometry, jacobian=jacobian, metrics=metrics, trig=trig,
         s=grids.s_full, phips=prof["phips"], phipf=prof["phipf"],
-        chips=prof["chips"], signgs=signgs, gamma=float(inp.gamma),
+        chips=prof["chips"], signgs=signgs, gamma=gamma,
         mass=prof["mass"], ncurr=ncurr, enclosed_current=prof["icurv"])
     # Contravariant-B Nyquist cosine spectra (wrout.f analysis), computed
     # traceably in the field state.  nyquist.wout_field_tables materialises
@@ -438,11 +417,34 @@ def surface_field_data_from_state(
     xm = jnp.asarray(modes.m, dtype=float)
     xn = jnp.asarray(modes.n, dtype=float) * float(nfp)
 
-    return _assemble_surface_field_data(
-        nfp=nfp, ns=ns, j=int(s_index % ns), xm=xm, xn=xn,
-        xmn=xm_nyq, xnn=xn_nyq, rmnc=rmnc, zmns=zmns, rmns=rmns, zmnc=zmnc,
+    return dict(
+        nfp=nfp, ns=ns, xm=xm, xn=xn, xmn=xm_nyq, xnn=xn_nyq,
+        rmnc=rmnc, zmns=zmns, rmns=rmns, zmnc=zmnc,
         bsupu=bsupumnc, bsupv=bsupvmnc, bsupu_s=None, bsupv_s=None,
-        lasym=lasym, use_stellsym=use_stellsym, signgs=signgs,
+        lasym=lasym, signgs=signgs)
+
+
+def surface_field_data_from_state(
+    inp,
+    state,
+    *,
+    runtime=None,
+    nphi: int = 32,
+    ntheta: int = 32,
+    s_index: int = -1,
+    use_stellsym: bool = True,
+) -> "VmecSurfaceFieldData":
+    """Traceable :class:`VmecSurfaceFieldData` straight from a ``SpectralState``.
+
+    Unlike :func:`surface_field_data_from_wout`, this rebuilds boundary
+    geometry and contravariant-``B`` spectra without leaving the device.  Pass
+    the matching ``runtime`` when profiles are differentiated so current and
+    pressure parameters remain in the graph.  Stellarator symmetry is the
+    currently validated live-state path.
+    """
+    spectra = _state_field_spectra(inp, state, runtime)
+    return _assemble_surface_field_data(
+        **spectra, j=int(s_index % spectra["ns"]), use_stellsym=use_stellsym,
         nphi=nphi, ntheta=ntheta, source_convention="vmex_state")
 
 

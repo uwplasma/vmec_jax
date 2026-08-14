@@ -133,6 +133,8 @@ print(f"wrote {input_path}")
 print(f"wrote {wout_path}")
 
 # Plot results
+monitor.save(f"QI_scipy_{METHOD}_objectives.csv")
+monitor.plot(f"QI_scipy_{METHOD}_objectives.png")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"wrote {path}")
 

@@ -47,7 +47,9 @@ All runnable examples live under this single `examples/` tree.
   `single_stage_optimization.py` jointly varies VMEX boundary coefficients and
   ESSOS coil Fourier coefficients; no free-boundary solve is involved.
   `QA_optimization_bootstrap.py` and `QH_optimization_bootstrap.py` also vary
-  the VMEC current profile against a self-consistent Redl bootstrap target.
+  a stage-refined current spline against self-consistent Redl, DMerc, and DR
+  targets. `single_stage_optimization_finite_beta.py` combines that finite-beta
+  plasma problem with exact virtual-casing and ESSOS coil derivatives.
   All read `VMEX_EXAMPLES_CI=1` for short CI smoke tests.
 - `mirror_fixed_boundary_nonaxisymmetric.py` compares axisymmetric and
   rotating-ellipse fixed-boundary mirrors; `mirror_free_boundary_beta_scan.py`

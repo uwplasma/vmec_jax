@@ -327,10 +327,13 @@ reproducing the workflow of Landreman–Buller–Drevlak, arXiv:2205.02914):
   traceable ``residuals_state`` lane for ``jac="implicit"``.  Evaluated on
   the published optima of arXiv:2205.02914, ``f_boot`` lands at 2.5e-4 (QA,
   2.5% beta), 3.5e-5 (QH 2.5%), 1.3e-4 (QH 5%);
-- ``least_squares(..., current_dofs=k)`` — frees the first ``k`` ``AC``
-  power-series coefficients plus ``CURTOR`` alongside the boundary
-  harmonics, in both gradient modes — the dof set a self-consistent
-  bootstrap optimization needs;
+- ``least_squares(..., current_dofs=k)`` — frees the first ``k`` current
+  coefficients or ``I'(s)`` spline-knot values plus ``CURTOR`` alongside the
+  boundary harmonics, in both gradient modes;
+- :func:`~vmex.core.optimize.resample_current_profile` — resamples the
+  represented enclosed-current profile onto a chosen number of spline knots,
+  so continuation stages can add radial flexibility without changing their
+  starting equilibrium;
 - :func:`~vmex.core.bootstrap.self_consistent_bootstrap` — a
   fixed-boundary Picard loop that iterates the current profile to
   bootstrap consistency (hot-restarted solves; a tokamak test case
@@ -345,10 +348,11 @@ reproducing the workflow of Landreman–Buller–Drevlak, arXiv:2205.02914):
        Te_coeffs=12.0e3 * np.array([1, -1]),               # T0 (1 - s)
        Ti_coeffs=12.0e3 * np.array([1, -1]))
    boot = RedlBootstrapMismatch(profiles, helicity_n=0)    # 0 = QA
+   inp = opt.resample_current_profile(inp, 6)
    result = opt.least_squares(
        [(qs, 0.0, 1.0), (boot, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0)],
        inp, max_mode=4, jac="implicit",
-       current_dofs=6)          # free AC[0:6] + CURTOR with the boundary
+       current_dofs=5)          # five spline shapes + CURTOR; one knot is fixed
 
 The complete runnable workflows are
 ``examples/optimization/QA_optimization_bootstrap.py`` and
@@ -368,10 +372,15 @@ The complete runnable workflows are
    fixed points.  The returned input and equilibrium seed the differentiable
    optimization; the Picard loop itself is not differentiated.
 
-During optimization, ``current_dofs=k`` adds normalized ``AC(0:k)`` and
-``CURTOR`` variables after the boundary variables.  ESS scales only boundary
-Fourier modes: radial current-polynomial coefficients are not spectral modes
-and should use a separate parameter scale.  In the examples,
+Before each continuation stage the examples call
+``resample_current_profile(inp, n_spline)`` and then use
+``current_dofs=n_spline-1``. The new uniform ``I'(s)`` knots preserve ``I(s)``
+at the stage boundary; one ordinate stays fixed while the others and
+``CURTOR`` become optimization variables. The fixed ordinate removes the
+otherwise redundant profile scale. Increasing ``N_CURRENT_SPLINE`` adds radial
+current flexibility; it does not change the VMEC boundary ``max_mode``.
+ESS scales only boundary
+Fourier modes, so current values use a separate parameter scale. In the examples,
 ``PARAMETER_STEP`` is the characteristic low-order boundary-coefficient step,
 ``CURRENT_PARAMETER_STEP`` is the characteristic normalized-current step,
 and ``MAX_PARAMETER_CHANGE`` is a broad per-stage safety box measured in
@@ -380,6 +389,14 @@ hits indicate an artificial optimization floor.  Passing
 ``restart_from=equilibrium`` when constructing the next
 :class:`~vmex.core.problem.VmecProblem` remaps the converged state to its new
 resolution and avoids a cold magnetic-axis guess.
+
+The QA/QH examples also include
+:func:`~vmex.core.stability.mercier_stability_residual` (stable ``DMerc > 0``)
+and :func:`~vmex.core.stability.glasser_stability_residual` (stable ``DR <= 0``
+where shear is nonzero). These dimensional VMEC values are much larger than
+QS or beta residuals, so their weights must be calibrated explicitly. Their
+live-state derivatives are checked against independently reconverged finite
+differences in ``tests/test_implicit_grad.py``.
 
 MHD stability
 -------------

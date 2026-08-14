@@ -48,11 +48,29 @@ vmex input.nearby --restart wout_circular_tokamak.nc
 
 VMEX uses the input file's `NS_ARRAY`, `FTOL_ARRAY`, and `NITER_ARRAY`. `verbose=True` prints the VMEC iteration table; typed errors distinguish invalid inputs, Jacobian failures, non-convergence, and numerical failures.
 
-## Field outside the plasma
+## Magnetic field and derivatives
 
-`VmecExtender` evaluates a supplied vacuum coil/MGRID field directly and adds
-the plasma-current contribution through `virtual_casing_jax` for finite-beta
-or current-carrying equilibria:
+Converged equilibria evaluate the field inside the LCFS, including spatial
+derivatives and exact VJPs in the originating optimization problem's degrees
+of freedom:
+
+```python
+import jax.numpy as jnp
+
+final_equilibrium = problem.equilibrium_from_x(result.x)
+final_equilibrium.set_points([[1.05, 0.0, 0.03]])
+B = final_equilibrium.B()
+modB = final_equilibrium.absB()
+gradB = final_equilibrium.gradB()
+d2B = final_equilibrium.gradgradB()
+d3B = final_equilibrium.gradgradgradB()
+dBdx = final_equilibrium.B_vjp(jnp.ones_like(B))
+```
+
+The corresponding `gradB_vjp`, `gradgradB_vjp`, and `gradgradgradB_vjp`
+methods use the same stored points. `VmecExtender` covers points outside the
+plasma: it evaluates a supplied vacuum coil/MGRID field and adds the
+plasma-current contribution through `virtual_casing_jax`.
 
 ```python
 field = vj.VmecExtender.from_file(
@@ -63,6 +81,8 @@ field.set_points([[1.8, 0.0, 0.0]])
 B = field.B()              # (n, 3), Cartesian
 modB = field.absB()        # (n,)
 gradB = field.gradB()      # (n, B_i, x_j)
+d2B = field.gradgradB()
+d3B = field.gradgradgradB()
 grad_modB = field.GradAbsB()
 ```
 
@@ -180,7 +200,7 @@ The vacuum QA example has `pres=0` and `DWell=0` exactly: VMEX adds no pressure 
 
 ![Vacuum QA diagnostics](docs/_static/figures/readme_diagnostics_qa_vacuum.webp)
 
-`QA_optimization_bootstrap.py` and `QH_optimization_bootstrap.py` first fit a bootstrap-consistent seed by Picard iteration, then optimize the boundary and current profile together against the Redl target. Their profile and optimizer controls are explained in the [objective reference](https://vmex.readthedocs.io/en/latest/reference/objectives.html#bootstrap-current-redl); published-equilibrium and SFINCS comparisons live in `benchmarks/`.
+`QA_optimization_bootstrap.py` and `QH_optimization_bootstrap.py` first fit a bootstrap-consistent seed, then optimize the boundary and a stage-refined current spline together against Redl, Mercier, and resistive-interchange targets. Their controls are explained in the [objective reference](https://vmex.readthedocs.io/en/latest/reference/objectives.html#bootstrap-current-redl); published-equilibrium and SFINCS comparisons live in `benchmarks/`.
 
 ![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.png)
 

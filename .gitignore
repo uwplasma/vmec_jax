@@ -279,3 +279,7 @@ settings.json
 *parvmecinfo*
 *timings*
 *single_stage*.png
+*_objectives.csv
+coils_*_optimized.json
+coils_*_optimized.vtu
+surface_*_optimized.vts
