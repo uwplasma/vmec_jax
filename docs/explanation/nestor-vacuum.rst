@@ -117,12 +117,14 @@ interface the total exterior field
    \mathbf{B}_{\mathrm{out}}\cdot\mathbf{n} = 0, \qquad
    |\mathbf{B}_{\mathrm{in}}|^2 + 2\mu_0 p = |\mathbf{B}_{\mathrm{out}}|^2.
 
-The plasma's own exterior field comes from the **virtual-casing principle**:
-the field produced outside :math:`\partial\Omega` by the plasma currents
-equals that of the surface current
-:math:`\mathbf{K} = \mathbf{n}\times\mathbf{B}/\mu_0` on
-:math:`\partial\Omega`, evaluated with an accurate on-surface singular
-quadrature (reused from the optional ``virtual_casing_jax`` package,
+The plasma's own exterior field comes from the **virtual-casing principle**.
+In the BIEST convention, its layer densities on :math:`\partial\Omega` are
+:math:`\sigma=\mathbf{B}\cdot\mathbf{n}` and
+:math:`\mathbf{J}=\mathbf{B}\times\mathbf{n}`. The exterior field of the
+enclosed plasma currents is the internal branch
+:math:`-\nabla G[\sigma]-\mathrm{BiotSavart}[\mathbf{J}]`, evaluated with an
+accurate singular quadrature (reused from the optional
+``virtual_casing_jax`` package,
 required as ``virtual-casing-jax >= 0.0.4`` from the canonical
 ``uwplasma/virtual_casing_jax`` repository;
 :func:`~vmex.core.freeboundary_diff.surface_field_data_from_wout`
@@ -138,6 +140,11 @@ coefficients/currents of a callable ESSOS coil field via
 :func:`~vmex.core.freeboundary_diff.external_B_cartesian`, or
 ``extcur``), and its ``value_and_grad_bnormal`` helper returns gradients
 validated against finite differences — no NESTOR adjoint is required.
+
+The finite-beta single-stage example uses a pressure profile that vanishes at
+the LCFS. It therefore needs no prescribed physical sheet current in the jump
+condition; nonzero edge pressure or an imposed sheet current requires an
+additional interface model.
 
 Field-query API
 ---------------

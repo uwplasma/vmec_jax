@@ -29,6 +29,7 @@ from vmex.core.mgrid import (  # noqa: E402
     tabulate_cartesian_field,
     write_mgrid,
 )
+from vmex.core.optimize import Equilibrium  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 MGRID_PATH = REPO / "examples" / "data" / "mgrid_cth_like_lasym_small.nc"
@@ -141,6 +142,20 @@ def test_high_spatial_derivatives_and_parameter_vjps_are_exact():
         expected = jax.vjp(quantity, parameters)[1](cotangent)[0]
         np.testing.assert_allclose(method(cotangent), expected, rtol=2e-13, atol=2e-13)
     assert field.dof_names == ("p0", "p1")
+
+    equilibrium = Equilibrium(
+        inp=None, state=None, runtime=None, result=None,
+        field_factory=lambda: field)
+    final_equilibrium = equilibrium.set_points(points)
+    values = [final_equilibrium.B(), final_equilibrium.gradB(),
+              final_equilibrium.gradgradB(), final_equilibrium.gradgradgradB()]
+    methods = [final_equilibrium.B_vjp, final_equilibrium.gradB_vjp,
+               final_equilibrium.gradgradB_vjp,
+               final_equilibrium.gradgradgradB_vjp]
+    np.testing.assert_allclose(final_equilibrium.absB(), jnp.linalg.norm(values[0], axis=1))
+    for value, method, expected_method in zip(values, methods, vjps):
+        cotangent = jnp.ones_like(value)
+        np.testing.assert_allclose(method(cotangent), expected_method(cotangent))
 
 
 def test_interior_field_inverts_flux_coordinates_and_recovers_B():

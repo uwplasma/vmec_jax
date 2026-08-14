@@ -58,19 +58,25 @@ of freedom:
 import jax.numpy as jnp
 
 final_equilibrium = problem.equilibrium_from_x(result.x)
-final_equilibrium.set_points([[1.05, 0.0, 0.03]])
+final_equilibrium.set_points([[x, y, z]])
+
 B = final_equilibrium.B()
-modB = final_equilibrium.absB()
+absB = final_equilibrium.absB()
 gradB = final_equilibrium.gradB()
-d2B = final_equilibrium.gradgradB()
-d3B = final_equilibrium.gradgradgradB()
+gradgradB = final_equilibrium.gradgradB()
+gradgradgradB = final_equilibrium.gradgradgradB()
+
 dBdx = final_equilibrium.B_vjp(jnp.ones_like(B))
+dgradBdx = final_equilibrium.gradB_vjp(jnp.ones_like(gradB))
+d2Bdx = final_equilibrium.gradgradB_vjp(jnp.ones_like(gradgradB))
+d3Bdx = final_equilibrium.gradgradgradB_vjp(
+    jnp.ones_like(gradgradgradB))
 ```
 
-The corresponding `gradB_vjp`, `gradgradB_vjp`, and `gradgradgradB_vjp`
-methods use the same stored points. `VmecExtender` covers points outside the
-plasma: it evaluates a supplied vacuum coil/MGRID field and adds the
-plasma-current contribution through `virtual_casing_jax`.
+The VJPs are ordered like `problem.dof_names`, including the selected boundary
+and current-profile variables. `VmecExtender` covers points outside the plasma:
+it evaluates a supplied vacuum coil/MGRID field and adds the plasma-current
+contribution through `virtual_casing_jax`.
 
 ```python
 field = vj.VmecExtender.from_file(
@@ -261,7 +267,9 @@ JAX compilation is paid once per array structure and reused from a machine-local
 
 Independent solves use `vj.parallel.solve_ensemble(inputs, workers=None)`. A single equilibrium already uses XLA's internal threading; ensemble workers are therefore bounded by both the number of cases and the CPUs made available by the host scheduler. Explicit `workers=1` gives a reproducible serial baseline, and GPU/device placement can be selected with `device=`.
 
-Reproducible performance artifacts live in `benchmarks/`; `benchmarks/optimization.py` profiles QI, QA, QH, QP, scalar objectives, SciPy/JAX contract agreement, finite differences, optimizer choices, and the `max_fsq_ratio` policy without committing machine-specific scans or decorative plots.
+`benchmarks/optimization.py` profiles QI, QA, QH, QP, scalar objectives,
+SciPy/JAX contract agreement, finite differences, optimizer choices, and the
+`max_fsq_ratio` policy.
 
 ## Documentation and development
 

@@ -370,6 +370,25 @@ def test_fixed_boundary_single_stage_optimization(tmp_path):
     assert b'Name="B_dot_n_over_B"' in surface_vtk
 
 
+@pytest.mark.full  # nightly: one finite-beta VMEX + VCJ + ESSOS graph (~1 min)
+def test_finite_beta_single_stage_optimization(tmp_path, monkeypatch):
+    pytest.importorskip("essos")
+    pytest.importorskip("virtual_casing_jax")
+    # Keep this independent compile from filling a shared developer cache.
+    monkeypatch.setenv("VMEX_COMPILATION_CACHE", "disabled")
+    out = _run_example(
+        EXAMPLES / "optimization" / "single_stage_optimization_finite_beta.py",
+        tmp_path, timeout=1800)
+    for diagnostic in ("[final] QA", "B.n/B RMS", "Pressure-balance RMS",
+                       "Coil lengths", "Maximum curvature"):
+        assert diagnostic in out
+    for name in ("wout_single_stage_finite_beta_optimized.nc",
+                 "single_stage_finite_beta_objectives.png",
+                 "surface_single_stage_finite_beta_optimized.vts",
+                 "coils_single_stage_finite_beta_optimized.vtu"):
+        assert (tmp_path / name).exists()
+
+
 @pytest.mark.full
 def test_single_stage_free_boundary_opt(tmp_path):
     pytest.importorskip("virtual_casing_jax")

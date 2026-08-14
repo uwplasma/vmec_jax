@@ -285,19 +285,23 @@ evaluate the field inside the LCFS:
 
 .. code-block:: python
 
-   equilibrium.set_points([[1.05, 0.0, 0.03]])
-   B = equilibrium.B()
-   modB = equilibrium.absB()
-   gradB = equilibrium.gradB()
-   gradgradB = equilibrium.gradgradB()
-   gradgradgradB = equilibrium.gradgradgradB()
+   final_equilibrium = problem.equilibrium_from_x(result.x)
+   final_equilibrium.set_points([[x, y, z]])
 
-   dBdx = equilibrium.B_vjp(jnp.ones_like(B))
-   dgradBdx = equilibrium.gradB_vjp(jnp.ones_like(gradB))
+   B = final_equilibrium.B()
+   absB = final_equilibrium.absB()
+   gradB = final_equilibrium.gradB()
+   gradgradB = final_equilibrium.gradgradB()
+   gradgradgradB = final_equilibrium.gradgradgradB()
+
+   dBdx = final_equilibrium.B_vjp(jnp.ones_like(B))
+   dgradBdx = final_equilibrium.gradB_vjp(jnp.ones_like(gradB))
+   d2Bdx = final_equilibrium.gradgradB_vjp(jnp.ones_like(gradgradB))
+   d3Bdx = final_equilibrium.gradgradgradB_vjp(
+       jnp.ones_like(gradgradgradB))
 
 VJPs are ordered like ``problem.dof_names`` and include selected current
-parameters as well as boundary modes. ``gradgradB_vjp`` and
-``gradgradgradB_vjp`` provide the higher-order counterparts. VMEX inverts
+parameters as well as boundary modes. VMEX inverts
 Cartesian points to ``(s, theta, phi)`` with a differentiable Newton solve,
 evaluates angular dependence spectrally, and interpolates the radial mesh.
 Points outside the LCFS return NaNs; use ``problem.exterior_field`` or
