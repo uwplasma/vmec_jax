@@ -13,13 +13,10 @@ from vmex.core.input import VmecInput
 import jax.numpy as jnp
 
 MAX_DERIVATIVE = 1  # set to 2 or 3 for the more expensive higher spatial derivatives
-MAX_VJP_DERIVATIVE = -1  # set to 0, 1, 2, or 3 for increasingly expensive VJPs
+MAX_VJP_DERIVATIVE = 0  # set to 0, 1, 2, or 3 for increasingly expensive VJPs
 DATA = Path(__file__).resolve().parent / "data" / "input.minimal_seed_nfp2"
 
 inp = VmecInput.from_file(DATA)
-inp = replace(inp, ns_array=np.array([13]), ftol_array=np.array([1e-10]),
-              niter_array=np.array([2000])).change_resolution(
-                  mpol=3, ntor=3, ntheta=10, nzeta=10)
 problem = opt.VmecProblem.from_tuples(
     inp, [(opt.aspect_ratio, 10.0, 1.0)], max_mode=1, use_ess=True)
 result = SimpleNamespace(x=problem.x0)  # replace with any optimizer result
