@@ -37,6 +37,10 @@ from vmex.core.solver import (  # noqa: E402
     _initial_state, prepare_runtime, resolution_from_input,
 )
 
+from tests.test_lasym_free_case import (  # noqa: E402
+    lasym_free_field, lasym_free_input,
+)
+
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # vacuum solves: run jitted
 
 REPO = Path(__file__).resolve().parents[1]
@@ -547,19 +551,30 @@ def test_missing_mgrid_raises(tmp_path):
 
 
 def test_jac75_retry_rebuilds_vacuum_and_converges(capsys):
-    """A recovered free-boundary stage rebuilds NESTOR at its checkpoint."""
-    if not CONV_MGRID.exists():
-        pytest.skip(
-            "converged public CTH mgrid asset unavailable; run "
-            "examples/data/fetch_assets.py"
-        )
+    """A recovered free-boundary stage rebuilds NESTOR at its checkpoint.
+
+    Runs on the generated LASYM fixture rather than the released CTH mgrid:
+    the assertions are about the recovery mechanism -- VMEC2000's ceiling of
+    75 Jacobian resets, the checkpoint restart, and NESTOR being rebuilt
+    afterwards -- none of which depend on which converging external field
+    supplies the vacuum.  ``DELT = 1e4`` is the same forcing the CTH case
+    used and reproduces the same ceiling here (a decade lower, ``1e3``,
+    never trips it).  Measured: 75 resets, recovery at ``DELT = 0.5``,
+    vacuum on at 51, converged in 958 iterations at ``fsq = 9.9e-11``.
+    """
     inp = dataclasses.replace(
-        VmecInput.from_file(CONV_DECK), delt=1.0e4,
+        lasym_free_input(REPO / "examples" / "data"),
+        delt=1.0e4,
+        ns_array=np.asarray([16]),
+        ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([2500]),
     )
+    field = lasym_free_field()
+
     with pytest.raises(VmecJacobianError) as exc:
         FB.solve_free_boundary(
             inp,
-            mgrid_path=CONV_MGRID,
+            external_field=field,
             max_iterations=2500,
             jacobian_retries=0,
         )
@@ -567,7 +582,7 @@ def test_jac75_retry_rebuilds_vacuum_and_converges(capsys):
 
     result = FB.solve_free_boundary(
         inp,
-        mgrid_path=CONV_MGRID,
+        external_field=field,
         max_iterations=2500,
         jacobian_retries=2,
         verbose=True,
