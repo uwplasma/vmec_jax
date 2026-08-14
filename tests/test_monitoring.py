@@ -13,7 +13,7 @@ from vmex.core.monitoring import EquilibriumReporter, OptimizationMonitor
 from vmex.core.problem import FunctionProblem
 
 
-def test_equilibrium_reporter_supports_both_objective_call_styles() -> None:
+def test_equilibrium_reporter_supports_both_objective_call_styles(monkeypatch) -> None:
     stream = io.StringIO()
     equilibrium = SimpleNamespace(state=np.array([2.0]), runtime=3.0)
     reporter = EquilibriumReporter(
@@ -31,6 +31,12 @@ def test_equilibrium_reporter_supports_both_objective_call_styles() -> None:
     with np.testing.assert_raises_regex(ValueError, "scalar"):
         EquilibriumReporter(("x", lambda eq: [1.0, 2.0], ".1f"), stream=None)(
             "bad", equilibrium)
+    with np.testing.assert_raises_regex(ValueError, "at least one"):
+        EquilibriumReporter()
+    from vmex.core import monitoring
+    monkeypatch.setattr(monitoring.inspect, "signature", lambda function: (_ for _ in ()).throw(ValueError))
+    assert EquilibriumReporter(("opaque", lambda eq: 1.0, ".1f"), stream=None)(
+        "final", equilibrium) == {"opaque": 1.0}
 
 
 def test_monitor_records_scipy_and_manual_iterations() -> None:
@@ -74,6 +80,10 @@ def test_monitor_wraps_auxiliary_term_costs_and_records_only_accepted_points() -
     assert residual.history["rows"].tolist() == [1.0]
     with np.testing.assert_raises_regex(TypeError, "term name"):
         monitor.wrap_value_and_grad(lambda x: ((1.0, np.ones(1)), np.ones(1)))([0.0])
+    with np.testing.assert_raises_regex(TypeError, "one name per extra"):
+        monitor.wrap_value_and_grad(
+            lambda x: ((1.0, (np.ones(1), np.ones(2))), np.ones(1)),
+            ("one",), residual_slices=(("rows", 0, 1),))([0.0])
 
 
 def test_monitor_print_every_and_silent_collection() -> None:
@@ -120,6 +130,20 @@ def test_plot_optimization_objects_is_dependency_neutral(tmp_path) -> None:
     path = vj.plot_optimization_objects(
         tmp_path / "objects.png", ("Initial", Object()), ("Final", Object()))
     assert path.is_file() and path.stat().st_size > 0
+    curves = SimpleNamespace(gamma=Object.gamma)
+    coil = SimpleNamespace(curves=curves, plot=Object().plot)
+    assert vj.plot_optimization_objects(tmp_path / "coils.png", ("Coils", coil)).is_file()
+    with np.testing.assert_raises_regex(ValueError, "at least one"):
+        vj.plot_optimization_objects(tmp_path / "bad.png")
+
+
+def test_monitor_empty_optional_paths_raise_or_return_empty(tmp_path) -> None:
+    problem = FunctionProblem([0.0], fun=np.sum, metadata={
+        "term_slices": (("missing", 0, 1),)})
+    monitor = OptimizationMonitor(problem, stream=None)
+    assert monitor._term_costs(problem.x0) == {}
+    with np.testing.assert_raises_regex(ValueError, "no optimization records"):
+        monitor.plot(tmp_path / "empty.png")
 
 
 def test_monitor_callback_fallbacks_and_problem_counters() -> None:

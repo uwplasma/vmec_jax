@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -21,6 +22,7 @@ jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402
 
 from vmex.core.errors import MgridNotFoundError  # noqa: E402
+from vmex.core import extender as ext  # noqa: E402
 from vmex.core.extender import MagneticField, VmecExtender, VmecInteriorField  # noqa: E402
 from vmex.core.mgrid import (  # noqa: E402
     MgridData,
@@ -201,6 +203,139 @@ def test_magnetic_field_cylindrical_points_round_trip():
     np.testing.assert_allclose(
         field.B_cyl(), field.B_cyl(points), rtol=1.0e-14, atol=1.0e-14
     )
+
+
+def test_field_api_validation_and_constructor_routing(monkeypatch, tmp_path):
+    points = jnp.array([[2.0, 0.0, 0.1]])
+    with pytest.raises(ValueError, match="shape"):
+        MagneticField(_linear_vacuum_field).set_points([1.0, 2.0, 3.0])
+    with pytest.raises(ValueError, match="provided together"):
+        MagneticField(_linear_vacuum_field, parameters=jnp.ones(1))
+    with pytest.raises(RuntimeError, match="set_points"):
+        MagneticField(_linear_vacuum_field).B()
+    with pytest.raises(ValueError, match="field returned shape"):
+        MagneticField(lambda xyz: xyz[:, :2]).B(points)
+    with pytest.raises(RuntimeError, match="optimizable parameters"):
+        MagneticField(_linear_vacuum_field).set_points(points).B_vjp(jnp.ones((1, 3)))
+
+    expected = (points.shape + (3,), points.shape + (3, 3), points.shape + (3, 3, 3))
+    supplied = MagneticField(
+        _linear_vacuum_field,
+        gradB_fn=lambda xyz: jnp.zeros(xyz.shape + (3,)),
+        gradgradB_fn=lambda xyz: jnp.zeros(xyz.shape + (3, 3)),
+        gradgradgradB_fn=lambda xyz: jnp.zeros(xyz.shape + (3, 3, 3)),
+    )
+    assert (supplied.gradB(points).shape, supplied.gradgradB(points).shape,
+            supplied.gradgradgradB(points).shape) == expected
+    for name, function in (
+        ("gradient", lambda xyz: jnp.zeros(xyz.shape)),
+        ("second", lambda xyz: jnp.zeros(xyz.shape + (3,))),
+        ("third", lambda xyz: jnp.zeros(xyz.shape + (3, 3))),
+    ):
+        kwargs = {"gradB_fn": function} if name == "gradient" else {
+            "gradgradB_fn" if name == "second" else "gradgradgradB_fn": function}
+        method = {"gradient": "gradB", "second": "gradgradB",
+                  "third": "gradgradgradB"}[name]
+        with pytest.raises(ValueError, match=name):
+            getattr(MagneticField(_linear_vacuum_field, **kwargs), method)(points)
+
+    parameterized = MagneticField(
+        _linear_vacuum_field, parameters=jnp.ones(1),
+        parameterized_B_fn=lambda p, xyz: p[0] * _linear_vacuum_field(xyz),
+    ).set_points(points)
+    with pytest.raises(ValueError, match="cotangent"):
+        parameterized.B_vjp(jnp.ones((2, 3)))
+
+    field = MagneticField(_linear_vacuum_field).set_points(points)
+    np.testing.assert_allclose(field.get_points_cart(), points)
+    np.testing.assert_allclose(field.get_points_cyl(), [[2.0, 0.0, 0.1]])
+
+    class CylindricalField:
+        @staticmethod
+        def b_cyl(r, phi, z):
+            return r, 2.0 * phi, z
+
+    assert VmecExtender(CylindricalField()).B(points).shape == points.shape
+    with pytest.raises(ValueError, match="external field returned shape"):
+        VmecExtender(lambda xyz: xyz[:, :2]).B(points)
+    with pytest.raises(TypeError, match="external_field"):
+        VmecExtender(object()).B(points)
+    with pytest.raises(ValueError, match="at least one"):
+        VmecExtender(None)
+
+    assert ext._has_plasma_sources(SimpleNamespace(
+        betatotal=0.0, wp=0.0, ctor=0.0, presf=np.array([0.0, 1.0])))
+    data = SimpleNamespace(nextcur=2, mgrid_mode="R", raw_coil_cur=[2.0, 4.0])
+    captured = {}
+    monkeypatch.setattr(ext, "read_mgrid", lambda path: data)
+    def from_mgrid_data(cls, source, extcur):
+        captured["extcur"] = extcur
+        return _linear_vacuum_field
+    monkeypatch.setattr(ext.MgridField, "from_mgrid_data", classmethod(from_mgrid_data))
+    wout = SimpleNamespace(betatotal=0.0, wp=0.0, ctor=0.0,
+                           mgrid_file="mgrid.nc", extcur=[10.0])
+    mgrid_field = VmecExtender.from_wout(wout, base_dir=tmp_path)
+    assert mgrid_field.B(points).shape == points.shape
+    np.testing.assert_allclose(captured["extcur"], [5.0, 0.0])
+    with pytest.raises(ValueError, match="plasma must"):
+        VmecExtender.from_wout(wout, plasma="bad")
+    with pytest.raises(ValueError, match="vacuum extension"):
+        VmecExtender.from_wout(SimpleNamespace(
+            betatotal=0.0, wp=0.0, ctor=0.0, mgrid_file=""))
+
+    from vmex.core import freeboundary_diff as fbd
+    sentinel = object()
+    spectra = {"marker": 1}
+    monkeypatch.setattr(fbd, "_state_field_spectra", lambda *a, **k: spectra)
+    assert VmecInteriorField.from_state(object(), object()).spectra is spectra
+    interior = VmecInteriorField.from_parameterized_state(
+        object(), lambda p: (object(), object()), jnp.ones(1), dof_names=("p",))
+    assert interior.spectra is spectra and interior.dof_names == ("p",)
+    monkeypatch.setattr(fbd, "surface_field_data_from_wout", lambda *a, **k: "surface")
+    monkeypatch.setattr(fbd, "surface_field_data_from_state", lambda *a, **k: "state")
+    monkeypatch.setattr(VmecExtender, "from_surface_data", classmethod(
+        lambda cls, surface, **kwargs: sentinel))
+    finite = SimpleNamespace(betatotal=0.01, wp=0.0, ctor=0.0, mgrid_file="")
+    assert VmecExtender.from_wout(finite, external_field=_linear_vacuum_field) is sentinel
+    assert VmecExtender.from_state(object(), object()) is sentinel
+
+    from vmex.core import wout as wout_module
+    monkeypatch.setattr(wout_module, "read_wout", lambda path: wout)
+    assert VmecExtender.from_file(
+        tmp_path / "wout.nc", external_field=_linear_vacuum_field).B(points).shape == points.shape
+
+    monkeypatch.setattr(VmecExtender, "from_state", classmethod(
+        lambda cls, *args, **kwargs: ("state", kwargs.get("external_field"))))
+    monkeypatch.setattr(VmecExtender, "from_wout", classmethod(
+        lambda cls, *args, **kwargs: ("wout", kwargs.get("external_field"))))
+    from vmex.core import freeboundary
+    monkeypatch.setattr(freeboundary, "_external_field_from_input", lambda inp: "coils")
+    equilibrium = SimpleNamespace(inp=SimpleNamespace(lfreeb=True), state=object(), wout=finite)
+    assert VmecExtender.from_equilibrium(equilibrium) == ("state", "coils")
+    with pytest.raises(ValueError, match="plasma must"):
+        VmecExtender.from_equilibrium(equilibrium, plasma="bad")
+    equilibrium.wout = wout
+    assert VmecExtender.from_equilibrium(equilibrium, plasma="vacuum") == ("wout", "coils")
+
+    fallback = Equilibrium(inp="input", state="state", runtime="runtime", result=None)
+    interior_field = MagneticField(_linear_vacuum_field)
+    monkeypatch.setattr(VmecInteriorField, "from_state", classmethod(
+        lambda cls, inp, state, **kwargs: interior_field))
+    monkeypatch.setattr(VmecExtender, "from_equilibrium", classmethod(
+        lambda cls, equilibrium, **kwargs: (equilibrium, kwargs)))
+    assert fallback.field is interior_field
+    assert fallback.exterior_field(plasma="vacuum") == (fallback, {"plasma": "vacuum"})
+
+
+def test_volume_average_beta_is_plasma_to_magnetic_energy_ratio(monkeypatch):
+    from vmex.core import statephysics
+
+    energies = SimpleNamespace(wp=1.0, wb=4.0)
+    monkeypatch.setattr(
+        statephysics, "_field_chain", lambda state, runtime: (None,) * 4 + (energies,))
+    assert float(statephysics.volume_average_beta(None, None)) == pytest.approx(0.25)
+    energies.wb = 0.0
+    assert float(statephysics.volume_average_beta(None, None)) == 0.0
 
 
 # ---------------------------------------------------------------------------

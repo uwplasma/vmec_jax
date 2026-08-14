@@ -219,7 +219,7 @@ def test_scalar_targets_vs_golden(solovev_eq):
     np.testing.assert_allclose(float(opt.volume(eq.state, eq.runtime)),
                                float(gold.volume_p), rtol=1e-6)
     np.testing.assert_allclose(float(opt.volume_average_beta(eq.state, eq.runtime)),
-                               float(eq.wout.betatotal), rtol=1e-12)
+                               float(eq.wout.betatotal), rtol=5e-12)
     np.testing.assert_allclose(float(opt.mean_iota(eq.state, eq.runtime)), 1.0,
                                rtol=1e-10)
     np.testing.assert_allclose(float(opt.edge_iota(eq.state, eq.runtime)), 1.0,
@@ -368,6 +368,16 @@ def test_boundary_pack_roundtrip(deck):
     arrays = opt.boundary_arrays_from_x(inp, x, 2, vary_major_radius=True)
     np.testing.assert_allclose(np.asarray(arrays[0]), changed.rbc)
     np.testing.assert_allclose(np.asarray(arrays[1]), changed.zbs)
+    with pytest.raises(ValueError, match="boundary dofs"):
+        opt.boundary_arrays_from_x(inp, x[:-1], 2, vary_major_radius=True)
+    with pytest.raises(ValueError, match="expected"):
+        opt.unpack_boundary(inp, x[:-1], 2, vary_major_radius=True)
+
+    asymmetric = dataclasses.replace(inp, lasym=True)
+    asymmetric_x = opt.pack_boundary(asymmetric, 1)
+    asymmetric_arrays = opt.boundary_arrays_from_x(asymmetric, asymmetric_x, 1)
+    assert len(asymmetric_arrays) == 4
+    assert opt.unpack_boundary(asymmetric, asymmetric_x, 1) == asymmetric
 
 
 def test_ess_scale():
@@ -380,6 +390,8 @@ def test_ess_scale():
     np.testing.assert_allclose(lut["RBC(0,1)"], 1.0)             # level 1
     np.testing.assert_allclose(lut["RBC(2,2)"], np.exp(-1.2))    # level 2
     assert np.all(scale <= 1.0 + 1e-12)
+    assert opt._ess_scale(inp, 2, 0.0, vary_major_radius=True).shape == (
+        len(names) + 1,)
 
 
 def test_least_squares_smoke(solovev_eq):

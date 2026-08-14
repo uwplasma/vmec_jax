@@ -95,6 +95,50 @@ def test_vmec_problem_maps_inputs_and_reuses_equilibria():
         no_equilibrium.equilibrium_from_x([1.0])
 
 
+def test_vmec_problem_field_facades_validate_and_route(monkeypatch):
+    problem = VmecProblem(
+        [1.0], fun=np.sum, input_from_x=lambda x: x,
+        x_from_input=lambda inp: inp)
+    with pytest.raises(AttributeError, match="boundary arrays"):
+        problem.boundary_from_x(problem.x0)
+    with pytest.raises(AttributeError, match="differentiable equilibrium field"):
+        problem.exterior_field(problem.x0)
+    with pytest.raises(AttributeError, match="differentiable equilibrium field"):
+        problem.interior_field(problem.x0)
+
+    captured = {}
+    state_runtime = lambda x: ("state", "runtime")  # noqa: E731
+    problem = VmecProblem(
+        [1.0], fun=np.sum, names=("RBC(0,1)",),
+        input_from_x=lambda x: x, x_from_input=lambda inp: inp,
+        boundary_from_x=lambda x: (2 * np.asarray(x),),
+        metadata={"input": "input", "jax_state_runtime": state_runtime})
+    np.testing.assert_array_equal(problem.boundary_from_x(problem.x0)[0], [2.0])
+
+    from vmex.core import extender, freeboundary_diff
+    monkeypatch.setattr(
+        freeboundary_diff, "surface_field_data_from_state",
+        lambda inp, state, **kwargs: (inp, state, kwargs))
+    monkeypatch.setattr(
+        extender.VmecExtender, "from_parameterized_surface_data", classmethod(
+            lambda cls, surface, parameters, **kwargs:
+            captured.setdefault("exterior", (surface(parameters), parameters, kwargs))))
+    monkeypatch.setattr(
+        extender.VmecInteriorField, "from_parameterized_state", classmethod(
+            lambda cls, inp, function, parameters, **kwargs:
+            captured.setdefault("interior", (inp, function(parameters), parameters, kwargs))))
+
+    exterior = problem.exterior_field(
+        problem.x0, external_field="coils", nphi=7, ntheta=9,
+        digits=4, levels=((7, 9),))
+    interior = problem.interior_field(problem.x0, newton_iterations=6)
+    assert exterior[0] == ("input", "state", {"runtime": "runtime", "nphi": 7, "ntheta": 9})
+    np.testing.assert_array_equal(exterior[1], problem.x0)
+    assert exterior[2]["dof_names"] == problem.dof_names
+    assert interior[0:2] == ("input", ("state", "runtime"))
+    assert interior[3] == {"dof_names": problem.dof_names, "newton_iterations": 6}
+
+
 def test_vmec_problem_reports_under_converged_fsq():
     class Config:
         ftol = 1.0e-10

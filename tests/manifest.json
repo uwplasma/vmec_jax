@@ -149,6 +149,21 @@
       "tests/test_parallel.py::test_available_cpus_respects_scheduler_allocation",
       "tests/test_parallel.py::test_available_cpus_ignores_unavailable_hints"
     ],
+    "pr-physics-field": [
+      "tests/test_mgrid.py::test_magnetic_field_interface_and_vacuum_extender_are_exact",
+      "tests/test_mgrid.py::test_high_spatial_derivatives_and_parameter_vjps_are_exact",
+      "tests/test_mgrid.py::test_interior_field_inverts_flux_coordinates_and_recovers_B",
+      "tests/test_mgrid.py::test_magnetic_field_cylindrical_points_round_trip",
+      "tests/test_mgrid.py::test_field_api_validation_and_constructor_routing",
+      "tests/test_mgrid.py::test_volume_average_beta_is_plasma_to_magnetic_energy_ratio",
+      "tests/test_freeboundary_diff.py::test_finite_beta_extender_field_and_gradient_outside_lcfs",
+      "tests/test_freeboundary_diff.py::test_parameterized_extender_vjp_matches_rebuilt_surface_fd",
+      "tests/test_problem.py::test_vmec_problem_field_facades_validate_and_route",
+      "tests/test_monitoring.py",
+      "tests/test_optimize.py::test_boundary_pack_roundtrip[solovev]",
+      "tests/test_optimize.py::test_boundary_pack_roundtrip[li383_low_res]",
+      "tests/test_optimize.py::test_ess_scale"
+    ],
     "pr-physics-mirror-spline": [
       "tests/mirror/test_analytic.py",
       "tests/mirror/test_qi_hybrid.py",

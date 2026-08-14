@@ -720,6 +720,10 @@ def test_current_dof_packing_and_validation():
     assert opt._current_dof_setup(dataclasses.replace(inp, ac=trailing), 2)[1] == 1.0
     with pytest.raises(ValueError, match="ncurr = 1"):
         opt._current_dof_setup(dataclasses.replace(inp, ncurr=0), 2)
+    with pytest.raises(ValueError, match="positive int"):
+        opt._current_dof_setup(inp, -1)
+    with pytest.raises(ValueError, match="line_segment"):
+        opt._current_dof_setup(dataclasses.replace(inp, pcurr_type="line_segment"), 2)
     with pytest.raises(ValueError, match="current-spline knot"):
         opt._current_dof_setup(
             dataclasses.replace(inp, pcurr_type="cubic_spline_ip"), 2)
@@ -736,6 +740,16 @@ def test_current_dof_packing_and_validation():
     spline_back = opt._apply_current(spline, packed, k, spline_scale)
     np.testing.assert_allclose(spline_back.ac_aux_f, spline.ac_aux_f)
     assert spline_back.curtor == spline.curtor
+    with pytest.raises(ValueError, match="expected 6 current dofs"):
+        opt._apply_current(spline, packed[:-1], k, spline_scale)
+    zero = dataclasses.replace(inp, ac=np.zeros_like(inp.ac), curtor=0.0)
+    assert opt._current_dof_setup(zero, 2)[1] == 1.0
+    with pytest.raises(ValueError, match="ncurr = 1"):
+        opt.resample_current_profile(dataclasses.replace(inp, ncurr=0), 4)
+    with pytest.raises(ValueError, match="at least 2"):
+        opt.resample_current_profile(inp, 1)
+    with pytest.raises(ValueError, match="kind must"):
+        opt.resample_current_profile(inp, 4, kind="linear")
     from vmex.core.profiles import current
     radial_grid = np.linspace(0.0, 1.0, 101)
     original = current(inp.pcurr_type, inp.ac, inp.ac_aux_s, inp.ac_aux_f, radial_grid)

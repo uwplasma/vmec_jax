@@ -81,6 +81,8 @@ jobs:
             selector: pr-physics-core
           - lane: implicit-response
             selector: pr-implicit-response
+          - lane: field-api
+            selector: pr-physics-field
           - lane: mirror-equilibrium
             selector: pr-mirror-equilibrium
           - lane: mirror-field
