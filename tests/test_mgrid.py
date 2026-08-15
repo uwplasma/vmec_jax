@@ -120,6 +120,15 @@ def test_high_spatial_derivatives_and_parameter_vjps_are_exact():
         lambda xyz: parameterized_field(parameters, xyz),
         parameters=parameters, parameterized_B_fn=parameterized_field,
         dof_names=("p0", "p1")).set_points(points)
+    with pytest.raises(ValueError, match="provided together"):
+        MagneticField(
+            lambda xyz: parameterized_field(parameters, xyz), parameters=parameters,
+            parameter_data_fn=lambda p: p)
+    with pytest.raises(ValueError, match="not both"):
+        MagneticField(
+            lambda xyz: parameterized_field(parameters, xyz), parameters=parameters,
+            parameterized_B_fn=parameterized_field, parameter_data_fn=lambda p: p,
+            B_from_data=parameterized_field)
     with pytest.raises(ValueError, match="dof_names must match"):
         MagneticField(
             lambda xyz: parameterized_field(parameters, xyz),
@@ -158,6 +167,12 @@ def test_high_spatial_derivatives_and_parameter_vjps_are_exact():
                            factored.gradgradB_vjp, factored.gradgradgradB_vjp)[order]
         np.testing.assert_allclose(
             factored_method(cotangent), expected, rtol=2e-13, atol=2e-13)
+    with pytest.raises(ValueError, match="cotangent has shape"):
+        factored.B_vjp(jnp.ones((1, 3)))
+    with pytest.raises(ValueError, match=r"shape \(3,\)"):
+        field.B_contravariant(jnp.ones(2))
+    with pytest.raises(ValueError, match=r"shape \(3,\)"):
+        field.to_xyz(jnp.ones(2))
     new_points = points[:1] + 0.15
     factored.set_points_xyz(new_points)
     new_value = factored.B()
@@ -215,6 +230,21 @@ def test_exterior_vjp_combines_plasma_and_external_dofs(monkeypatch):
     with pytest.raises(ValueError, match="external_dof_names require"):
         VmecExtender.from_parameterized_surface_data(
             surface_data, jnp.array([2.0]), external_dof_names=("current",))
+    with pytest.raises(ValueError, match="do not provide both"):
+        VmecExtender.from_parameterized_surface_data(
+            surface_data, jnp.array([2.0]), external_field=lambda xyz: xyz,
+            external_parameters=jnp.array([3.0]),
+            external_field_from_parameters=lambda current: lambda xyz: current[0] * xyz)
+    with pytest.raises(ValueError, match="must match external_parameters"):
+        VmecExtender.from_parameterized_surface_data(
+            surface_data, jnp.array([2.0]), external_parameters=jnp.array([3.0]),
+            external_field_from_parameters=lambda current: lambda xyz: current[0] * xyz,
+            external_dof_names=("one", "two"))
+    automatically_named = VmecExtender.from_parameterized_surface_data(
+        surface_data, jnp.array([2.0]), external_parameters=jnp.array([3.0]),
+        external_field_from_parameters=lambda current: lambda xyz: current[0] * xyz,
+        dof_names=("boundary",))
+    assert automatically_named.dof_names == ("boundary", "external[0]")
 
 
 def test_interior_field_inverts_flux_coordinates_and_recovers_B():
@@ -258,6 +288,19 @@ def test_interior_field_inverts_flux_coordinates_and_recovers_B():
     np.testing.assert_allclose(
         jax.vmap(tracing_field.B_contravariant)(coordinates),
         jnp.tile(jnp.array([0.0, 0.0, 1.0]), (2, 1)))
+    with pytest.raises(ValueError, match=r"shape \(3,\)"):
+        tracing_field.B_contravariant(jnp.ones(2))
+    with pytest.raises(ValueError, match=r"shape \(3,\)"):
+        tracing_field.to_xyz(jnp.ones(2))
+
+    equilibrium = Equilibrium(
+        inp=None, state=None, runtime=None, result=None,
+        field_factory=lambda: flux_field)
+    assert equilibrium.set_points(points) is equilibrium
+    cylindrical = jnp.stack((jnp.hypot(points[:, 0], points[:, 1]), phi, points[:, 2]), axis=1)
+    assert equilibrium.set_points_cyl(cylindrical) is equilibrium
+    assert equilibrium.set_points_flux(coordinates) is equilibrium
+    assert equilibrium.field_in_flux_coordinates().spectra is spectra
     np.testing.assert_allclose(
         jax.vmap(tracing_field.to_xyz)(coordinates), points, rtol=0, atol=2e-14)
     mapped_B = jax.vmap(

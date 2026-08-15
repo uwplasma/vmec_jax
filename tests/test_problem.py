@@ -112,6 +112,15 @@ def test_vmec_problem_maps_inputs_and_reuses_equilibria():
     with pytest.raises(AttributeError, match="does not provide equilibria"):
         no_equilibrium.equilibrium_from_x([1.0])
 
+    iterations = []
+    parameterized = VmecProblem(
+        [1.0], fun=np.sum, input_from_x=lambda x: x, x_from_input=lambda inp: inp,
+        equilibrium_from_x=lambda x, *, newton_iterations: (
+            iterations.append(newton_iterations), np.asarray(x))[1])
+    np.testing.assert_array_equal(
+        parameterized.equilibrium_from_x([2.0], newton_iterations=4), [2.0])
+    assert iterations == [4]
+
 
 def test_vmec_problem_state_objective_hides_failed_trial_branches():
     jax = pytest.importorskip("jax")
@@ -165,6 +174,29 @@ def test_vmec_problem_state_objective_hides_failed_trial_branches():
         accepted.jax_objective_from_state(
             jnp.asarray([2.0]), lambda _state, _runtime: jnp.asarray([]),
             n_extra_terms=0)
+    with pytest.raises(ValueError, match="positive"):
+        accepted.jax_extra_costs_from_state(
+            jnp.asarray([2.0]), lambda _state, _runtime: jnp.asarray([]),
+            n_extra_terms=0)
+    with pytest.raises(ValueError, match="returned shape"):
+        accepted.jax_objective_from_state(
+            jnp.asarray([2.0]), lambda _state, _runtime: jnp.asarray([1.0]),
+            n_extra_terms=2)
+    with pytest.raises(ValueError, match="returned shape"):
+        accepted.jax_extra_costs_from_state(
+            jnp.asarray([2.0]), lambda _state, _runtime: jnp.asarray([1.0]),
+            n_extra_terms=2)
+
+    ordinary = VmecProblem(
+        [1.0], fun=np.sum, input_from_x=lambda x: x, x_from_input=lambda inp: inp)
+    with pytest.raises(AttributeError, match="state-composed objectives"):
+        ordinary.jax_objective_from_state(
+            jnp.asarray([1.0]), lambda _state, _runtime: jnp.asarray([0.0]),
+            n_extra_terms=1)
+    with pytest.raises(AttributeError, match="state-dependent costs"):
+        ordinary.jax_extra_costs_from_state(
+            jnp.asarray([1.0]), lambda _state, _runtime: jnp.asarray([0.0]),
+            n_extra_terms=1)
 
 
 def test_vmec_problem_field_facades_validate_and_route(monkeypatch):
@@ -177,6 +209,8 @@ def test_vmec_problem_field_facades_validate_and_route(monkeypatch):
         problem.exterior_field(problem.x0)
     with pytest.raises(AttributeError, match="differentiable equilibrium field"):
         problem.interior_field(problem.x0)
+    with pytest.raises(AttributeError, match="surface fields"):
+        problem.surface_field_values(problem.x0, "absB")
 
     captured = {}
     state_runtime = lambda x: ("state", "runtime")  # noqa: E731

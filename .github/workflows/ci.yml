@@ -56,7 +56,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install -U pip
-          python -m pip install . pytest pytest-xdist
+          python -m pip install . pytest pytest-cov pytest-xdist
       - name: Check repository size
         run: |
           size_kb=$(du -sk --exclude=.git . | cut -f1)
@@ -67,7 +67,19 @@ jobs:
           JAX_ENABLE_X64: "1"
         run: |
           FILES="$(python tools/test_manifest.py select pr-fast)"
-          pytest -q -n 4 -m "not full and not weekly" $FILES --durations=20
+          if [[ "${{ matrix.python-version }}" == "3.12" ]]; then
+            pytest -q -n 4 -m "not full and not weekly" $FILES --durations=20 \
+              --cov=vmex --cov-report=term
+            mv .coverage coverage.fast
+          else
+            pytest -q -n 4 -m "not full and not weekly" $FILES --durations=20
+          fi
+      - uses: actions/upload-artifact@v7.0.1
+        if: matrix.python-version == '3.12'
+        with:
+          name: coverage-fast
+          path: coverage.fast
+          retention-days: 3
 
   physics:
     name: Representative ${{ matrix.lane }} physics
@@ -165,7 +177,7 @@ jobs:
     name: Changed executable lines (>= 95%)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [physics, device]
+    needs: [fast, physics, device]
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -181,7 +193,7 @@ jobs:
           merge-multiple: true
       - name: Combine coverage and enforce the mirror floor
         run: |
-          coverage combine coverage.device coverage.physics-*
+          coverage combine coverage.device coverage.fast coverage.physics-*
           coverage report --include='*/vmex/mirror/*' --fail-under=90
           coverage xml
       - name: Enforce changed-line coverage
