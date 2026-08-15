@@ -26,7 +26,7 @@ except ImportError:
     )
 
 nfp = 2  # number of field periods
-MAKE_MOVIE = True  # set True for a compact GIF of accepted iterates
+MAKE_MOVIE = False  # set True for a compact GIF of accepted iterates
 # Surface colors: None, "absB", "B.n/B", or a callable ``(x, objects) -> values``.
 MOVIE_SURFACE_COLOR = None
 

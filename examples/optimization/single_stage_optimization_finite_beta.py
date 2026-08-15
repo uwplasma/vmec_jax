@@ -28,7 +28,7 @@ from essos.objective_functions import loss_coil_separation, loss_coil_surface_di
 from essos.surfaces import surfacerzfourier_from_boundary
 
 nfp = 2
-MAKE_MOVIE = True  # set True for a compact GIF of accepted iterates
+MAKE_MOVIE = False  # set True for a compact GIF of accepted iterates
 # Surface colors: None, "absB", "B.n/B", or a callable ``(u, objects) -> values``.
 MOVIE_SURFACE_COLOR = None
 

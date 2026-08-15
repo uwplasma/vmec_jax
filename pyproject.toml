@@ -72,13 +72,10 @@ freeb = [
 turbulence = [
   "gkx>=1.7.1",
 ]
-# Direct-coil free-boundary support: the CLI ``--coils`` flag and the ESSOS
-# examples load ``essos.coils`` and tabulate ``essos.fields.BiotSavart`` into
-# an in-memory MgridField.  Any released ESSOS >= 0.16 suffices (0.16 ships
-# the legacy ``Coils_from_json`` loader; the callers fall back to it when the
-# ``Coils.from_json`` classmethod is absent).
+# ESSOS 0.17 adds named/functional coil DOFs, clearance objectives, and the
+# boundary-to-surface adapter used by the single-stage examples.
 coils = [
-  "essos>=0.16",
+  "essos>=0.17",
 ]
 docs = [
   "sphinx",
