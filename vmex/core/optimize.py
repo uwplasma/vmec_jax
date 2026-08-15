@@ -2920,14 +2920,23 @@ def _least_squares_implicit(
         from .extender import VmecExtender, VmecInteriorField
 
         x = np.asarray(x, dtype=float)
-        if traceable_scalar is None:
-            fun(x)
-        else:
-            scalar_fun_host(x)
         params_np = jax.tree.map(
             lambda a: np.asarray(a, dtype=np.float64), params_of(_place(x))
         )
         hit = imp._LAST_SOLVE.get(cfg)
+        if (
+            hit is None
+            or hit[0] != imp._params_key(params_np)
+            or imp._LAST_STATUS_ERROR.get(cfg) is not None
+        ):
+            # Problem construction and accepted optimizer evaluations already
+            # leave this exact equilibrium in the host cache.  Avoid compiling
+            # a second scalar graph merely to materialize that cached state.
+            if traceable_scalar is None:
+                fun(x)
+            else:
+                scalar_fun_host(x)
+            hit = imp._LAST_SOLVE.get(cfg)
         if hit is None or hit[0] != imp._params_key(params_np):
             raise RuntimeError(
                 "decision vector did not produce a usable VMEC equilibrium"

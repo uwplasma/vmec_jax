@@ -698,7 +698,14 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     assert np.all(np.isfinite(np.asarray(problem.jax_residual_jac(problem.x0))))
     assert problem.input_from_x(problem.x0) == inp
     np.testing.assert_array_equal(problem.x_from_input(inp), problem.x0)
-    accepted = problem.equilibrium_from_x(problem.x0)
+    # The exact seed solve is already cached. Materializing it must not launch
+    # a redundant JAX graph (important for field-only GPU workflows).
+    def unexpected_device_execution(_value):
+        raise AssertionError("cached equilibrium triggered device execution")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(opt.jax, "device_get", unexpected_device_execution)
+        accepted = problem.equilibrium_from_x(problem.x0)
     assert accepted.inp == inp
     assert accepted.result.converged
     with pytest.raises(RuntimeError, match="usable VMEC equilibrium"):
