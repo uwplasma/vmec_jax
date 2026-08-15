@@ -42,7 +42,7 @@ plasma field itself depends on them through a re-solve — is now supported:
 :func:`surface_field_data_from_state` rebuilds the virtual-casing surface field
 traceably from a live equilibrium state, so ``jax.grad`` threads through the
 implicit adjoint (boundary) and virtual casing (coils) at once.  See
-``examples/single_stage_simultaneous_opt.py`` and the *True single-stage*
+``examples/optimization/single_stage_optimization_finite_beta.py`` and the
 section of ``docs/explanation/nestor-vacuum.rst``.
 
 ``virtual_casing_jax`` is an optional dependency. Surface-data construction

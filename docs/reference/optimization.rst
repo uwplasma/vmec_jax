@@ -187,6 +187,11 @@ available as ``monitor.x_history`` and a compact movie is one optional call::
 
    monitor.movie("optimization.gif", objects_from_x, max_frames=50)
 
+Pass ``color_factory=`` to color the first surface by a scalar field at every
+accepted iterate. The single-stage examples expose one top-level choice:
+``None``, ``"absB"``, ``"B.n/B"``, or a user callable (for example a
+bootstrap diagnostic). The movie uses one color scale across all frames.
+
 For a custom JAX scalar objective, return ``(cost, {name: term_cost})`` as
 auxiliary data. Wrap ``jax.value_and_grad(objective, has_aux=True)`` with
 ``monitor.wrap_value_and_grad``, then pass the monitor as SciPy's callback;
@@ -194,6 +199,42 @@ rejected line-search evaluations stay out of the saved iteration history.
 For larger residual graphs, return ``(residual, extra_costs...)`` and pass the
 problem's ``term_slices`` as ``residual_slices``. VMEX then reduces term costs
 on the host, minimizing compiler output bookkeeping.
+
+``wrap_value_and_grad`` also accepts a sequence of additive value/gradient
+callables. VMEX sums their exact costs and gradients before returning to the
+optimizer. This keeps large VMEC, virtual-casing, and coil graphs in separate
+XLA executables, reducing cold-compilation memory without changing the SciPy,
+JAXopt, or Optax objective.
+
+Joint VMEX--ESSOS objectives
+----------------------------
+
+ESSOS owns coil geometry and its variable convention. ``coils.dofs`` and
+``coils.dof_names`` have identical ordering, while ``coils.with_dofs(x)``
+constructs a traceable trial set without mutation. The same package provides
+``surfacerzfourier_from_boundary(rbc, zbs, nfp, ...)``,
+``loss_coil_separation``, ``loss_coil_surface_distance``, and
+``Coils.from_simsopt``. VMEX therefore needs no duplicate coil indexing or
+distance implementation.
+
+For a finite-beta prescribed boundary, virtual casing gives the field of the
+enclosed plasma currents. The physical exterior field is that contribution
+plus the actual ESSOS coil field. The two interface residuals used by the
+example are
+
+.. math::
+
+   \mathbf B_{\rm out}\!\cdot\mathbf n,
+   \qquad
+   \frac{|\mathbf B_{\rm out}|^2-|\mathbf B_{\rm in}|^2
+   -2\mu_0p_{\rm edge}}{B_{\rm ref}^2}.
+
+The second is a normalized total-pressure jump, not a pressure-profile error.
+It supplies the tangential-field magnitude condition that ``B.n/B`` alone
+does not constrain, even when the input pressure vanishes at the LCFS. The
+fixed-boundary examples vary boundary and coil variables together; they do
+not call NESTOR. A coil-only free-boundary optimization must instead
+differentiate the fully reconverged NESTOR root.
 
 Use :class:`vmex.core.monitoring.EquilibriumReporter` for the compact physics
 summary shared by the examples.  Each entry accepts either VMEX's
@@ -294,14 +335,18 @@ cold magnetic-axis guess may be poor.
 Pointwise fields and VJPs
 -------------------------
 
-An equilibrium returned by ``problem.equilibrium_from_x`` retains the
-problem's differentiable parameterization. Set Cartesian points once and
-evaluate the field inside the LCFS:
+Use :func:`~vmex.core.optimize.solve_equilibrium` for ordinary field queries.
+When parameter VJPs are needed,
+:meth:`~vmex.core.problem.VmecProblem.from_input` supplies the boundary/current
+parameterization without inventing an optimization objective, and
+``problem.equilibrium_from_x`` retains it. Set Cartesian or VMEC flux points
+once and evaluate the field inside the LCFS:
 
 .. code-block:: python
 
    final_equilibrium = problem.equilibrium_from_x(result.x)
-   final_equilibrium.set_points([[x, y, z]])
+   final_equilibrium.set_points_xyz([[x, y, z]])
+   # Or: final_equilibrium.set_points_flux([[s, theta, phi]])
 
    B = final_equilibrium.B()
    absB = final_equilibrium.absB()
@@ -315,8 +360,11 @@ evaluate the field inside the LCFS:
    d3Bdx = final_equilibrium.gradgradgradB_vjp(
        jnp.ones_like(gradgradgradB))
 
-VJPs are ordered like ``problem.dof_names`` and include selected current
-parameters as well as boundary modes. VMEX inverts
+``B`` and all derivative components/axes are Cartesian for either point-input
+route: ``gradB[..., i, j] = d B_i / d x_j``. VJPs return one value per
+``problem.dof_names`` and include selected current parameters as well as
+boundary modes; a flux-coordinate point is first mapped to Cartesian space,
+and that physical point is held fixed during the parameter VJP. VMEX inverts
 Cartesian points to ``(s, theta, phi)`` with a differentiable Newton solve,
 evaluates angular dependence spectrally, and interpolates the radial mesh.
 Points outside the LCFS return NaNs; use ``problem.exterior_field`` or
@@ -330,8 +378,30 @@ Runnable vacuum and finite-beta examples, including Cartesian/cylindrical
 queries, flux-coordinate inversion, derivatives through third order, and
 parameter VJPs inside and outside the LCFS, are
 ``examples/vmex_get_B_gradB.py`` and
-``examples/vmex_get_B_gradB_finite_beta.py``. Their top-level derivative-order
-controls leave costly higher-order spatial derivatives and VJPs opt-in.
+``examples/vmex_get_B_outside_plasma.py``. Both print all three Cartesian
+spatial derivative orders and their VJPs; the exterior example returns VMEX
+boundary modes followed by named ESSOS coil modes. The vacuum and finite-beta
+``vmex_fieldline_tracing_*.py`` examples plot 3-D trajectories and toroidal
+Poincare sections inside and just outside the LCFS.
+
+To include coil parameters in an exterior-field VJP, pass the same functional
+ESSOS update used by an optimization:
+
+.. code-block:: python
+
+   field = problem.exterior_field(
+       result.x,
+       external_parameters=coils.dofs,
+       external_field_from_parameters=lambda x: coil_field(coils.with_dofs(x)),
+       external_dof_names=coils.dof_names,
+   )
+
+``field.dof_names`` then lists VMEX variables followed by ESSOS variables.
+The factored reverse pass differentiates the equilibrium and coil data once,
+rather than nesting the implicit equilibrium solve inside each Cartesian
+spatial derivative. Third spatial derivatives and their parameter VJPs remain
+expensive; the examples print progress before each order and use compact grids
+for a bounded cold run.
 
 Resources and reproducibility
 -----------------------------

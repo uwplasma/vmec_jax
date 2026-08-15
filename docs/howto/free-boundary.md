@@ -78,7 +78,7 @@ factor runs on CPU by design ({doc}`run-on-gpu`).
 
 The NESTOR fixed point is not differentiated. Coil/`extcur` gradients on a
 specified boundary use the virtual-casing residual
-(`examples/take_free_boundary_gradients.py`,
-`examples/single_stage_simultaneous_opt.py`); scope in
-{doc}`/reference/capabilities`, mechanism in
+(`examples/take_free_boundary_gradients.py`), while the compact fixed-boundary
+plasma-and-coil examples are under `examples/optimization/`. Scope is stated
+in {doc}`/reference/capabilities` and the mechanism in
 {doc}`/explanation/nestor-vacuum`.

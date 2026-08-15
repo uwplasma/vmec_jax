@@ -88,6 +88,25 @@ def test_monitor_wraps_auxiliary_term_costs_and_records_only_accepted_points() -
         ("extra",), residual_slices=(("rows", 0, 2),))
     residual_pair([0.0])
     assert residual.history["rows"].tolist() == [1.0]
+    split = OptimizationMonitor(stream=None)
+    split_pair = split.wrap_value_and_grad((
+        lambda x: ((2.0, np.array([1.0, 1.0])), np.array([2.0])),
+        lambda x: ((3.0, np.array([0.5, 1.5])), np.array([4.0])),
+    ), ("extra a", "extra b"), residual_slices=(("rows", 0, 2),))
+    value, gradient = split_pair([0.0])
+    assert value == 5.0; np.testing.assert_array_equal(gradient, [6.0])
+    assert split.history["rows"].tolist() == [1.0]
+    assert split.history["extra b"].tolist() == [1.5]
+    nested = OptimizationMonitor(stream=None)
+    nested_pair = nested.wrap_value_and_grad((
+        lambda x: ((2.0, (np.array([1.0, 1.0]), np.array([0.5]))), np.array([2.0])),
+        lambda x: ((3.0, np.array([1.5])), np.array([4.0])),
+    ), ("physics", "geometry"), residual_slices=(("rows", 0, 2),))
+    nested_pair([0.0])
+    assert nested.history["physics"].tolist() == [0.5]
+    assert nested.history["geometry"].tolist() == [1.5]
+    with np.testing.assert_raises_regex(ValueError, "at least one"):
+        monitor.wrap_value_and_grad(())
     with np.testing.assert_raises_regex(TypeError, "term name"):
         monitor.wrap_value_and_grad(lambda x: ((1.0, np.ones(1)), np.ones(1)))([0.0])
     with np.testing.assert_raises_regex(TypeError, "one name per extra"):
@@ -187,6 +206,8 @@ def test_bootstrap_plot_and_small_optimization_movie(tmp_path, monkeypatch) -> N
     movie = monitor.movie(
         tmp_path / "optimization.gif",
         lambda x: (Surface(x[0]), Coils(x[0]), Line(x[0]), CurvesOnly(x[0])),
+        color_factory=lambda x, objects: np.linalg.norm(objects[0].gamma, axis=-1),
+        color_label="test field", cmap="jet",
         fps=2, max_frames=4, dpi=40)
     assert movie.is_file() and movie.stat().st_size > 0
     with np.testing.assert_raises_regex(ValueError, "at least one"):
@@ -195,6 +216,10 @@ def test_bootstrap_plot_and_small_optimization_movie(tmp_path, monkeypatch) -> N
         vj.plot_optimization_movie(tmp_path / "bad.gif", ([0.0],), Line, fps=0)
     with np.testing.assert_raises_regex(TypeError, "gamma"):
         vj.plot_optimization_movie(tmp_path / "bad.gif", ([0.0],), lambda x: object())
+    with np.testing.assert_raises_regex(ValueError, "surface colors"):
+        vj.plot_optimization_movie(
+            tmp_path / "bad-colors.gif", ([0.0],), lambda x: Surface(0.0),
+            color_factory=lambda x, objects: np.ones(3))
     with np.testing.assert_raises_regex(ValueError, "gif or .mp4"):
         vj.plot_optimization_movie(tmp_path / "bad.txt", ([0.0],), Line)
     import matplotlib.animation

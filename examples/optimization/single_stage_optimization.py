@@ -15,9 +15,10 @@ import jax
 import jax.numpy as jnp
 
 try:
-    from essos.coils import Coils, Curves, CreateEquallySpacedCurves
+    from essos.coils import Coils, CreateEquallySpacedCurves
     from essos.fields import BiotSavart
-    from essos.surfaces import SurfaceRZFourier
+    from essos.objective_functions import loss_coil_separation, loss_coil_surface_distance
+    from essos.surfaces import surfacerzfourier_from_boundary
 except ImportError:
     raise ImportError(
         "The single-stage optimization example requires ESSOS. "
@@ -26,6 +27,8 @@ except ImportError:
 
 nfp = 2  # number of field periods
 MAKE_MOVIE = True  # set True for a compact GIF of accepted iterates
+# Surface colors: None, "absB", "B.n/B", or a callable ``(x, objects) -> values``.
+MOVIE_SURFACE_COLOR = None
 
 SURFACES = np.linspace(0.05, 1.0, 6)
 MAX_MODE = 3
@@ -96,6 +99,9 @@ curves0 = CreateEquallySpacedCurves(
     N_COILS, COIL_ORDER, COIL_MAJOR_RADIUS, COIL_MINOR_RADIUS,
     n_segments=N_SEGMENTS, nfp=inp.nfp, stellsym=STELLSYM)
 coils0 = Coils(curves0, np.full(N_COILS, COIL_CURRENT))
+# To start from a SIMSOPT coil file instead, use:
+# coils0 = Coils.from_simsopt("coils.json", nfp=inp.nfp, stellsym=STELLSYM)
+# curves0 = coils0.curves
 
 def normalized_normal_field(coils, surface):
     field = BiotSavart(coils)
@@ -118,79 +124,67 @@ def coil_lengths(coils, _surface):
 def coil_curvature_excess(coils, _surface):
     return jnp.maximum(coils.curvature[:N_COILS] - CURVATURE_OBJECTIVE_LIMIT, 0.0)
 
-def coil_distance_excess(coils, _surface):
-    first, second = jnp.triu_indices(coils.gamma.shape[0], 1)
-    pairwise = jnp.linalg.norm(
-        coils.gamma[first, :, None] - coils.gamma[second, None, :], axis=-1)
-    return jnp.maximum(COIL_DISTANCE_LIMIT - jnp.min(pairwise, axis=(1, 2)), 0.0)
-
-def coil_surface_distance_excess(coils, surface):
-    distances = jnp.linalg.norm(
-        coils.gamma[:N_COILS, :, None] - surface.gamma.reshape(1, 1, -1, 3), axis=-1)
-    return jnp.maximum(COIL_SURFACE_DISTANCE_LIMIT - jnp.min(distances, axis=2), 0.0).ravel()
-
 coil_terms = [
     (normal_field_residual, 0.0, NORMAL_FIELD_WEIGHT),
     (normal_field_excess, 0.0, NORMAL_FIELD_LIMIT_WEIGHT),
     (coil_lengths, LENGTH_TARGET, LENGTH_WEIGHT),
     (coil_curvature_excess, 0.0, CURVATURE_WEIGHT),
-    (coil_distance_excess, 1.0e-15, COIL_DISTANCE_WEIGHT),
-    (coil_surface_distance_excess, 1.0e-15, COIL_SURFACE_DISTANCE_WEIGHT),
 ]
-coil_term_names = tuple(function.__name__ for function, _target, _weight in coil_terms)
+coil_term_names = tuple(function.__name__ for function, _target, _weight in coil_terms) + (
+    "coil separation", "coil-surface separation")
 
 # The public VMEX problem owns the boundary-mode convention and RBC(0,0) choice.
 x_boundary0 = plasma_problem.x0
 rbc0, zbs0 = plasma_problem.boundary_from_x(x_boundary0)
 
-curve_shape = curves0.dofs.shape
 n_curve_dofs = curves0.dofs.size
 x_coils0 = np.asarray(curves0.dofs).ravel()
 x0 = np.concatenate([x_boundary0, x_coils0])
-fourier_names = ["0"] + [f"{kind}({order})" for order in range(1, COIL_ORDER + 1) for kind in ("s", "c")]
-coil_dof_names = tuple(f"coil[{coil}].{axis}{coefficient}" for coil in range(N_COILS)
-                       for axis in "xyz" for coefficient in fourier_names)
-dof_names = plasma_problem.dof_names + coil_dof_names
+dof_names = plasma_problem.dof_names + curves0.dof_names
 
 # SciPy works in dimensionless increments u, with x = x0 + scales*u.
 scales = np.concatenate([
     0.02 * plasma_problem.scales, np.full(n_curve_dofs, 0.05)])
 
 
-def surface_from_boundary(rbc, zbs, nphi=NPHI, ntheta=NTHETA, range_torus="full torus"):
-    rc = jnp.concatenate([rbc[inp.ntor:, 0], rbc[:, 1:].T.ravel()])
-    zs = jnp.concatenate([zbs[inp.ntor:, 0], zbs[:, 1:].T.ravel()])
-    return SurfaceRZFourier(rc, zs, inp.nfp, inp.mpol - 1, inp.ntor,
-                            nphi=nphi, ntheta=ntheta, close=False, range_torus=range_torus)
-
-
 def objects_from_x(x):
     x_boundary, x_coils = x[:x_boundary0.size], x[x_boundary0.size:]
     rbc, zbs = plasma_problem.boundary_from_x(x_boundary)
-    surface = surface_from_boundary(rbc, zbs)
+    surface = surfacerzfourier_from_boundary(
+        rbc, zbs, inp.nfp, nphi=NPHI, ntheta=NTHETA)
 
-    curve_dofs = x_coils.reshape(curve_shape)
-    curves = Curves(curve_dofs, N_SEGMENTS, inp.nfp, STELLSYM)
-    coils = Coils(curves, coils0.dofs_currents * coils0.currents_scale,
-                  currents_scale=coils0.currents_scale)
+    coils = coils0.with_dofs(jnp.concatenate((x_coils, coils0.dofs_currents)))
     return surface, coils
 
 
-def objective(u):
+def coil_costs(x):
+    surface, coils = objects_from_x(x)
+    rows = [jnp.sqrt(weight) * (jnp.atleast_1d(function(coils, surface)) - target).ravel()
+            for function, target, weight in coil_terms]
+    return jnp.concatenate([jnp.stack([0.5 * jnp.vdot(row, row) for row in rows]), jnp.asarray([
+        0.5 * COIL_DISTANCE_WEIGHT * loss_coil_separation(
+            coils, COIL_DISTANCE_LIMIT, block_size=32),
+        0.5 * COIL_SURFACE_DISTANCE_WEIGHT * loss_coil_surface_distance(
+            coils, surface, COIL_SURFACE_DISTANCE_LIMIT, block_size=32),
+    ])])
+
+def plasma_component(u):
     x = jnp.asarray(x0) + jnp.asarray(scales) * u
     x_boundary = x[:x_boundary0.size]
-    surface, coils = objects_from_x(x)
-    coil_residuals = [jnp.sqrt(weight) * (jnp.atleast_1d(function(coils, surface)) - target).ravel()
-                      for function, target, weight in coil_terms]
-    coil_costs = jnp.stack([0.5 * jnp.vdot(rows, rows) for rows in coil_residuals])
-    plasma_rows = plasma_problem.jax_residual(x_boundary)
-    return plasma_problem.jax_fun(x_boundary) + jnp.sum(coil_costs), \
-        (plasma_rows, coil_costs)
+    value, gradient = plasma_problem.jax_value_and_grad(x_boundary)
+    residual = plasma_problem.jax_residual(x_boundary)
+    scaled_gradient = gradient * jnp.asarray(scales[:x_boundary0.size])
+    return (value, residual), jnp.pad(scaled_gradient, (0, x0.size - x_boundary0.size))
+
+def coil_objective(u):
+    costs = coil_costs(jnp.asarray(x0) + jnp.asarray(scales) * u)
+    return jnp.sum(costs), costs
 
 
 monitor = opt.OptimizationMonitor()
 scipy_objective = monitor.wrap_value_and_grad(
-    jax.jit(jax.value_and_grad(objective, has_aux=True)), coil_term_names,
+    (jax.jit(plasma_component), jax.jit(jax.value_and_grad(coil_objective, has_aux=True))),
+    coil_term_names,
     residual_slices=plasma_problem.metadata["term_slices"])
 
 
@@ -217,8 +211,9 @@ final_equilibrium = opt.solve_equilibrium(
     final_input, initial_state=equilibrium.state, verbose=not ci_smoke,
     raise_on_max_iterations=True)
 
-surface_final = surface_from_boundary(jnp.asarray(final_input.rbc), jnp.asarray(final_input.zbs),
-                                      nphi=61, ntheta=64)
+surface_final = surfacerzfourier_from_boundary(
+    jnp.asarray(final_input.rbc), jnp.asarray(final_input.zbs), inp.nfp,
+    nphi=61, ntheta=64)
 normal_field = np.asarray(normalized_normal_field(coils_final, surface_final))
 area_weights = np.asarray(surface_final.area_element); area_weights = area_weights / area_weights.sum()
 normal_field_rms = float(np.sqrt(np.sum(area_weights * normal_field**2)))
@@ -251,7 +246,8 @@ input_path = final_input.to_indata("input.single_stage_optimized")
 wout_path = vj.write_wout("wout_single_stage_optimized.nc", final_equilibrium.wout)
 coils_final.to_json("coils_single_stage_optimized.json")
 # ESSOS writes |B| and B.n/B on the surface and the coil filaments for ParaView.
-surface_initial = surface_from_boundary(rbc0, zbs0, nphi=60, ntheta=60)
+surface_initial = surfacerzfourier_from_boundary(
+    rbc0, zbs0, inp.nfp, nphi=60, ntheta=60)
 surface_initial.to_vtk("surface_single_stage_initial", field=BiotSavart(coils0))
 coils0.to_vtk("coils_single_stage_initial")
 field_final = BiotSavart(coils_final)
@@ -272,6 +268,14 @@ print("Wrote single_stage_objectives.csv and single_stage_objectives.png")
 if MAKE_MOVIE:
     print("Making movie of accepted iterates...")
     monitor.movie("single_stage_optimization.gif",
-        lambda u: objects_from_x(jnp.asarray(x0 + scales * u)))
+        lambda u: objects_from_x(jnp.asarray(x0 + scales * u)),
+        color_factory=None if MOVIE_SURFACE_COLOR is None else lambda u, objects:
+            (MOVIE_SURFACE_COLOR(u, objects) if callable(MOVIE_SURFACE_COLOR) else
+             plasma_problem.surface_field_values(
+                 x0[:x_boundary0.size] + scales[:x_boundary0.size] * u[:x_boundary0.size],
+                 MOVIE_SURFACE_COLOR, external_field=lambda points:
+                     jax.vmap(BiotSavart(objects[1]).B)(points.reshape(-1, 3)).reshape(points.shape),
+                 nphi=NPHI, ntheta=NTHETA)),
+        color_label=str(MOVIE_SURFACE_COLOR), cmap="jet")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"Wrote {path}")

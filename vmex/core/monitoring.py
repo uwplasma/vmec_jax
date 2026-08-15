@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import inspect
 from pathlib import Path
 import sys
-from typing import Any, Callable, cast, Mapping, TextIO
+from typing import Any, Callable, cast, Mapping, Sequence, TextIO
 
 import numpy as np
 
@@ -124,28 +124,43 @@ class OptimizationMonitor:
 
     def wrap_value_and_grad(
         self,
-        function: Callable,
+        function: Callable | Sequence[Callable],
         term_names: tuple[str, ...] | None = None,
         *,
         residual_slices: tuple[tuple[str, int, int], ...] = (),
     ) -> Callable:
         """Adapt a JAX ``has_aux`` value/gradient pair for SciPy.
 
-        ``function(x)`` must return ``((cost, terms), gradient)``. ``terms``
+        Each ``function(x)`` must return ``((cost, terms), gradient)``. Pass a
+        sequence to compile large additive physics components separately;
+        their costs and gradients are summed without changing the optimizer
+        contract. ``terms``
         may be a mapping of labels to weighted scalar costs, or one compact
         vector paired with ``term_names``. For a large residual graph, pass
         ``residual_slices`` and return ``(residual, extra_costs...)``; costs are
         reduced on the host to keep the compiled output small. The first
         evaluation is recorded as iteration zero; later evaluations are cached.
         """
+        functions = (function,) if callable(function) else tuple(function)
+        if not functions:
+            raise ValueError("provide at least one value-and-gradient function")
+
         def wrapped(x):
-            (cost, terms), gradient = function(x)
-            cost_f = float(cost)
-            gradient_np = np.asarray(gradient, dtype=float)
+            outputs = [component(x) for component in functions]
+            cost_f = sum(float(output[0][0]) for output in outputs)
+            gradient_np = np.sum([
+                np.asarray(output[1], dtype=float) for output in outputs], axis=0)
+            auxiliaries = [output[0][1] for output in outputs]
+            terms = auxiliaries[0] if len(auxiliaries) == 1 else auxiliaries
             if isinstance(terms, Mapping):
                 term_values = {str(name): float(value) for name, value in terms.items()}
             elif residual_slices:
-                residual, *extra = terms
+                first, *extra = terms
+                if isinstance(first, (tuple, list)):
+                    residual, *first_extra = first
+                    extra = [*first_extra, *extra]
+                else:
+                    residual = first
                 residual = np.asarray(residual, dtype=float).ravel()
                 term_values = {
                     str(name): 0.5 * float(residual[start:stop] @ residual[start:stop])

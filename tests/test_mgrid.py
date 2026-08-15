@@ -12,6 +12,7 @@ Covers (plan.md §8):
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -119,6 +120,16 @@ def test_high_spatial_derivatives_and_parameter_vjps_are_exact():
         lambda xyz: parameterized_field(parameters, xyz),
         parameters=parameters, parameterized_B_fn=parameterized_field,
         dof_names=("p0", "p1")).set_points(points)
+    with pytest.raises(ValueError, match="dof_names must match"):
+        MagneticField(
+            lambda xyz: parameterized_field(parameters, xyz),
+            parameters=parameters, parameterized_B_fn=parameterized_field,
+            dof_names=("p0",))
+    factored = MagneticField(
+        lambda xyz: parameterized_field(parameters, xyz), parameters=parameters,
+        parameter_data_fn=lambda p: {"coefficients": p},
+        B_from_data=lambda data, xyz: parameterized_field(data["coefficients"], xyz),
+        dof_names=("p0", "p1")).set_points(points)
     def point_field(point):
         return parameterized_field(parameters, point[None])[0]
     expected_second = jax.vmap(jax.jacfwd(jax.jacfwd(point_field)))(points)
@@ -143,12 +154,25 @@ def test_high_spatial_derivatives_and_parameter_vjps_are_exact():
 
         expected = jax.vjp(quantity, parameters)[1](cotangent)[0]
         np.testing.assert_allclose(method(cotangent), expected, rtol=2e-13, atol=2e-13)
+        factored_method = (factored.B_vjp, factored.gradB_vjp,
+                           factored.gradgradB_vjp, factored.gradgradgradB_vjp)[order]
+        np.testing.assert_allclose(
+            factored_method(cotangent), expected, rtol=2e-13, atol=2e-13)
+    new_points = points[:1] + 0.15
+    factored.set_points_xyz(new_points)
+    new_value = factored.B()
+    expected_new = jax.vjp(
+        lambda p: parameterized_field(p, new_points), parameters
+    )[1](jnp.ones_like(new_value))[0]
+    np.testing.assert_allclose(
+        factored.B_vjp(jnp.ones_like(new_value)), expected_new,
+        rtol=2e-13, atol=2e-13)
     assert field.dof_names == ("p0", "p1")
 
     equilibrium = Equilibrium(
         inp=None, state=None, runtime=None, result=None,
         field_factory=lambda: field)
-    final_equilibrium = equilibrium.set_points(points)
+    final_equilibrium = equilibrium.set_points_xyz(points)
     values = [final_equilibrium.B(), final_equilibrium.gradB(),
               final_equilibrium.gradgradB(), final_equilibrium.gradgradgradB()]
     methods = [final_equilibrium.B_vjp, final_equilibrium.gradB_vjp,
@@ -158,6 +182,39 @@ def test_high_spatial_derivatives_and_parameter_vjps_are_exact():
     for value, method, expected_method in zip(values, methods, vjps):
         cotangent = jnp.ones_like(value)
         np.testing.assert_allclose(method(cotangent), expected_method(cotangent))
+
+
+def test_exterior_vjp_combines_plasma_and_external_dofs(monkeypatch):
+    @dataclass(frozen=True)
+    class SurfaceData:
+        gamma: object
+        B_total: object
+        normal: object
+        area_vector: object
+
+    def surface_data(parameters):
+        value = parameters[0] * jnp.ones((3, 2, 2))
+        return SurfaceData(value, value, value, value)
+
+    monkeypatch.setattr(
+        VmecExtender, "from_surface_data", classmethod(
+            lambda cls, data, external_field=None, **kwargs: cls(external_field)))
+    field = VmecExtender.from_parameterized_surface_data(
+        surface_data, jnp.array([2.0]), external_parameters=jnp.array([3.0]),
+        external_field_from_parameters=lambda current:
+            lambda xyz: current[0] * xyz,
+        dof_names=("boundary",), external_dof_names=("coil current",))
+    field.set_points_xyz([[1.0, 2.0, 3.0]])
+    np.testing.assert_allclose(field.B(), [[3.0, 6.0, 9.0]])
+    np.testing.assert_allclose(field.B_vjp(jnp.ones((1, 3))), [0.0, 6.0])
+    assert field.dof_names == ("boundary", "coil current")
+
+    with pytest.raises(ValueError, match="provided together"):
+        VmecExtender.from_parameterized_surface_data(
+            surface_data, jnp.array([2.0]), external_parameters=jnp.array([3.0]))
+    with pytest.raises(ValueError, match="external_dof_names require"):
+        VmecExtender.from_parameterized_surface_data(
+            surface_data, jnp.array([2.0]), external_dof_names=("current",))
 
 
 def test_interior_field_inverts_flux_coordinates_and_recovers_B():
@@ -193,6 +250,21 @@ def test_interior_field_inverts_flux_coordinates_and_recovers_B():
     np.testing.assert_allclose(field.gradB(), expected_grad, rtol=0, atol=2e-10)
     np.testing.assert_allclose(field.gradgradB(), 0.0, rtol=0, atol=2e-8)
 
+    flux_field = VmecInteriorField(spectra).set_points_flux(coordinates)
+    np.testing.assert_allclose(flux_field.get_points_cart(), points, rtol=0, atol=2e-14)
+    np.testing.assert_allclose(flux_field.get_points_flux(), coordinates, rtol=0, atol=0)
+    np.testing.assert_allclose(flux_field.B(), expected_B, rtol=2e-12, atol=2e-12)
+    tracing_field = flux_field.field_in_flux_coordinates()
+    np.testing.assert_allclose(
+        jax.vmap(tracing_field.B_contravariant)(coordinates),
+        jnp.tile(jnp.array([0.0, 0.0, 1.0]), (2, 1)))
+    np.testing.assert_allclose(
+        jax.vmap(tracing_field.to_xyz)(coordinates), points, rtol=0, atol=2e-14)
+    mapped_B = jax.vmap(
+        lambda point: jax.jacfwd(tracing_field.to_xyz)(point)
+        @ tracing_field.B_contravariant(point))(coordinates)
+    np.testing.assert_allclose(mapped_B, expected_B, rtol=2e-12, atol=2e-12)
+
 
 def test_magnetic_field_cylindrical_points_round_trip():
     field = MagneticField(_linear_vacuum_field)
@@ -203,6 +275,11 @@ def test_magnetic_field_cylindrical_points_round_trip():
     np.testing.assert_allclose(
         field.B_cyl(), field.B_cyl(points), rtol=1.0e-14, atol=1.0e-14
     )
+    xyz = jnp.array([[1.0, 2.0, 3.0]])
+    assert field.set_points_xyz(xyz) is field
+    np.testing.assert_allclose(field.get_points_cart(), xyz)
+    np.testing.assert_allclose(field.B_contravariant(xyz[0]), field.B(xyz)[0])
+    np.testing.assert_allclose(field.to_xyz(xyz[0]), xyz[0])
 
 
 def test_field_api_validation_and_constructor_routing(monkeypatch, tmp_path):

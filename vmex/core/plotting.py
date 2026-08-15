@@ -118,6 +118,9 @@ def plot_optimization_movie(
     x_history: Sequence[np.ndarray],
     object_factory,
     *,
+    color_factory=None,
+    color_label: str = "surface value",
+    cmap: str = "jet",
     fps: int = 10,
     max_frames: int = 50,
     dpi: int = 100,
@@ -125,9 +128,12 @@ def plot_optimization_movie(
     """Animate accepted surface and coil geometries from an optimization.
 
     ``object_factory(x)`` returns one object or a sequence of objects exposing
-    Cartesian points through ``gamma`` or ``curves.gamma``.  Histories are
-    uniformly subsampled to ``max_frames`` and always retain both endpoints.
-    GIF uses Pillow; MP4 uses ffmpeg when available.
+    Cartesian points through ``gamma`` or ``curves.gamma``. Optional
+    ``color_factory(x, objects)`` returns one scalar per point of the first
+    surface, enabling ``|B|``, ``B.n/B``, bootstrap, or custom colors without
+    coupling VMEX to a coil package. Histories are uniformly subsampled to
+    ``max_frames`` and always retain both endpoints. GIF uses Pillow; MP4 uses
+    ffmpeg when available.
     """
     if not x_history:
         raise ValueError("x_history must contain at least one accepted point")
@@ -149,31 +155,67 @@ def plot_optimization_movie(
         if not isinstance(objects, (tuple, list)):
             objects = (objects,)
         arrays = []
+        surface_shape = None
         for object_ in objects:
             gamma = getattr(object_, "gamma", None)
             if gamma is None and hasattr(object_, "curves"):
                 gamma = getattr(object_.curves, "gamma", None)
             if gamma is not None:
                 kind = "surface" if hasattr(object_, "area_element") else "curves"
-                arrays.append((np.asarray(gamma, dtype=float), kind))
+                array = np.asarray(gamma, dtype=float)
+                arrays.append((array, kind))
+                if kind == "surface" and surface_shape is None:
+                    surface_shape = array.shape[:-1]
         if not arrays:
             raise TypeError("animated objects must expose gamma or curves.gamma")
-        return arrays
+        colors = None
+        if color_factory is not None:
+            if surface_shape is None:
+                raise TypeError("surface colors require an object with area_element")
+            colors = np.asarray(color_factory(np.asarray(x, dtype=float), objects), dtype=float)
+            if colors.shape != surface_shape:
+                raise ValueError(
+                    f"surface colors have shape {colors.shape}, expected {surface_shape}")
+        return arrays, colors
 
     frame_data = [coordinates(x_history[index]) for index in indices]
     all_points = np.concatenate([
-        array.reshape(-1, 3) for frame in frame_data for array, _kind in frame])
+        array.reshape(-1, 3) for arrays, _colors in frame_data
+        for array, _kind in arrays])
     center = 0.5 * (all_points.min(axis=0) + all_points.max(axis=0))
     span = max(float(np.ptp(all_points, axis=0).max()), np.finfo(float).eps)
     figure = plt.figure(figsize=(5.2, 4.5)); axis = figure.add_subplot(projection="3d")
+    color_map = normalization = None
+    if color_factory is not None:
+        from matplotlib import colormaps, colors
+
+        finite = np.concatenate([values[np.isfinite(values)] for _arrays, values in frame_data])
+        if not finite.size:
+            raise ValueError("surface colors must contain at least one finite value")
+        lower, upper = float(finite.min()), float(finite.max())
+        if lower == upper:
+            margin = max(abs(lower), 1.0) * 1.0e-12
+            lower, upper = lower - margin, upper + margin
+        color_map, normalization = colormaps[cmap], colors.Normalize(lower, upper)
+        figure.colorbar(
+            plt.cm.ScalarMappable(norm=normalization, cmap=color_map), ax=axis,
+            shrink=0.65, pad=0.06, label=str(color_label))
 
     def draw(frame_index):
         axis.clear()
-        for array, kind in frame_data[frame_index]:
+        arrays, surface_colors = frame_data[frame_index]
+        colored_surface = False
+        for array, kind in arrays:
             if array.ndim == 3 and array.shape[-1] == 3:
                 if kind == "curves":
                     for curve in array:
                         axis.plot(*curve.T, color=_LINE_COLORS[1], linewidth=1.2)
+                elif surface_colors is not None and not colored_surface:
+                    axis.plot_surface(
+                        array[:, :, 0], array[:, :, 1], array[:, :, 2],
+                        facecolors=color_map(normalization(surface_colors)),
+                        linewidth=0, antialiased=True, shade=False)
+                    colored_surface = True
                 else:  # surface grid
                     stride0 = max(1, array.shape[0] // 16)
                     stride1 = max(1, array.shape[1] // 16)
@@ -187,7 +229,7 @@ def plot_optimization_movie(
         axis.set_ylim(center[1] - span / 2, center[1] + span / 2)
         axis.set_zlim(center[2] - span / 2, center[2] + span / 2)
         axis.set_box_aspect((1, 1, 1)); axis.set_title(f"accepted iteration {indices[frame_index]}")
-        return axis.lines
+        return (*axis.lines, *axis.collections)
 
     animation = FuncAnimation(figure, draw, frames=len(indices), interval=1000 / fps)
     if path.suffix.lower() == ".gif":

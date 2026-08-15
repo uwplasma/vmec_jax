@@ -34,14 +34,16 @@ All runnable examples live under this single `examples/` tree.
     *actual* wout `betatotal` hits 0/1/2/3 %.
   - `take_free_boundary_gradients.py` — differentiate a free-boundary field
     diagnostic through the virtual-casing vacuum field.
-  - `single_stage_free_boundary_opt.py` — optimize coil currents to confine a
-    target plasma by minimizing <(B.n)^2> with the exact virtual-casing gradient.
-  - `single_stage_simultaneous_opt.py` — TRUE single-stage: one exact gradient
-    over BOTH plasma-boundary Fourier modes and coil-group currents (implicit
-    adjoint + virtual casing threaded through one `jax.value_and_grad`).
-  - `single_stage_essos_coils_opt.py` — single-stage with ESSOS coils (vacuum
-    and finite-beta cases); vmex stays coil-agnostic, coils enter as a
-    differentiable `xyz -> B` callable.
+  - `vmex_get_B_gradB.py` and `vmex_get_B_outside_plasma.py` — query a
+    finite-beta field inside the LCFS or an actual ESSOS coil plus
+    virtual-casing field outside it, including three spatial derivative orders
+    and exact VJPs in named VMEX/ESSOS variables.
+  - `vmex_fieldline_tracing_vacuum.py` and
+    `vmex_fieldline_tracing_finite_beta.py` — compare VMEX, coil-only, and
+    self-consistent exterior traces in 3-D and toroidal Poincare plots.
+  - `optimization/finite_beta_coil_optimization.py` — reproduce the compact
+    finite-beta coil fixture by minimizing normal-field, total-pressure, and
+    ESSOS engineering objectives with exact reverse-mode gradients.
 - `optimization/`: compact QA/QH/QP/QI scripts using `(function, target,
   weight)` terms with SciPy least-squares, BFGS, or L-BFGS-B. The fixed-boundary
   `single_stage_optimization.py` jointly varies VMEX boundary coefficients and

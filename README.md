@@ -58,7 +58,7 @@ of freedom:
 import jax.numpy as jnp
 
 final_equilibrium = problem.equilibrium_from_x(result.x)
-final_equilibrium.set_points([[x, y, z]])
+final_equilibrium.set_points_xyz([[x, y, z]])
 
 B = final_equilibrium.B()
 absB = final_equilibrium.absB()
@@ -73,10 +73,14 @@ d3Bdx = final_equilibrium.gradgradgradB_vjp(
     jnp.ones_like(gradgradgradB))
 ```
 
-The VJPs are ordered like `problem.dof_names`, including the selected boundary
-and current-profile variables. `VmecExtender` covers points outside the plasma:
-it evaluates a supplied vacuum coil/MGRID field and adds the plasma-current
-contribution through `virtual_casing_jax`.
+All field components and spatial derivative axes above are Cartesian. Each VJP
+returns one entry per `problem.dof_names`, including selected boundary and
+current-profile variables. Use `set_points_flux([[s, theta, phi]])` instead to
+place interior points in VMEC flux coordinates; returned vectors and tensors
+remain Cartesian, and parameter VJPs hold those mapped Cartesian points fixed.
+`VmecExtender` covers points outside the plasma by adding the
+plasma-current contribution from `virtual_casing_jax` to a supplied coil or
+MGRID field. Virtual casing alone is not the total exterior field.
 
 ```python
 field = vj.VmecExtender.from_file(
@@ -101,8 +105,11 @@ VMEX does not assume nested surfaces there.
 `equilibrium.exterior_field()` builds the plasma contribution from the live
 VMEX spectral state, rather than a materialized wout, so JAX derivatives with
 respect to the equilibrium boundary are retained for single-stage objectives.
-Run `examples/vmex_get_B_gradB.py` or its finite-beta companion for complete
-inside/outside field, spatial-derivative, flux-coordinate, and VJP examples.
+Run `examples/vmex_get_B_gradB.py` for the finite-beta interior API and
+`examples/vmex_get_B_outside_plasma.py` for an actual ESSOS coil field plus
+virtual casing. The latter can include both VMEX and ESSOS variables in each
+VJP. The vacuum and finite-beta `vmex_fieldline_tracing_*.py` examples compare
+VMEX, coil-only, and self-consistent exterior traces in 3-D and Poincare plots.
 
 The common CLI operations are:
 
@@ -173,6 +180,8 @@ The defaults are exact implicit derivatives, automatic Jacobian direction, one-c
 - `workers` for parallel finite differences, scans, and ensembles. `None` uses the CPUs available to the process and respects scheduler or container limits.
 
 `problem.value_and_grad` and `problem.jax_value_and_grad` expose the same scalar contract. `problem.evaluate(x)` reports solve effort, failed trials, derivative fallbacks, `fsq`, `fsq_ratio`, and whether the implicit derivative was certified. The runnable examples show SciPy least squares, BFGS/L-BFGS-B, JAXopt, Optax Adam, QI/QS objectives, high-accuracy final solves, input/wout output, and plotting.
+
+`single_stage_optimization.py` and its finite-beta counterpart jointly vary a prescribed VMEX boundary and ESSOS coils with exact derivatives. The finite-beta pressure cost is the normalized MHD jump `(|B_out|²-|B_in|²-2μ₀p_edge)/B_ref²`; it constrains interface force balance, not the input pressure profile, and does not invoke a free-boundary NESTOR solve. ESSOS supplies coil names, functional updates, distance objectives, SIMSOPT import, and boundary-to-surface conversion.
 
 ## QA, QH, QP, and QI examples
 

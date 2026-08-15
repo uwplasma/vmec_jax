@@ -381,11 +381,12 @@ def test_finite_beta_single_stage_optimization(tmp_path, monkeypatch):
     out = _run_example(
         EXAMPLES / "optimization" / "single_stage_optimization_finite_beta.py",
         tmp_path, timeout=1800)
-    for diagnostic in ("[final] QA", "B.n/B RMS", "Pressure-balance RMS",
+    for diagnostic in ("[final] QA", "B.n/B RMS", "Normalized total-pressure jump RMS",
                        "Coil lengths", "Maximum curvature"):
         assert diagnostic in out
     for name in ("wout_single_stage_finite_beta_optimized.nc",
                  "single_stage_finite_beta_objectives.png",
+                 "single_stage_finite_beta_bootstrap_current.png",
                  "surface_single_stage_finite_beta_initial.vts",
                  "coils_single_stage_finite_beta_initial.vtu",
                  "surface_single_stage_finite_beta_optimized.vts",
@@ -395,58 +396,72 @@ def test_finite_beta_single_stage_optimization(tmp_path, monkeypatch):
 
 def test_field_query_examples_cover_inside_outside_and_vjps() -> None:
     """Keep the two runnable API examples explicit without another slow solve."""
-    vacuum = (EXAMPLES / "vmex_get_B_gradB.py").read_text()
-    finite = (EXAMPLES / "vmex_get_B_gradB_finite_beta.py").read_text()
-    for source in (vacuum, finite):
-        for call in ("set_points", ".B()", ".absB()", ".gradB()", ".B_vjp(",
+    interior = (EXAMPLES / "vmex_get_B_gradB.py").read_text()
+    exterior = (EXAMPLES / "vmex_get_B_outside_plasma.py").read_text()
+    for source in (interior, exterior):
+        for call in ("set_points_xyz", "set_points_flux", ".B()", ".absB()", ".gradB()", ".B_vjp(",
                      ".gradB_vjp(", ".gradgradB_vjp(", ".gradgradgradB_vjp("):
             assert call in source
-    assert "flux_coordinates" in vacuum and 'plasma="vacuum"' in vacuum
-    assert "uses_virtual_casing" in finite and "exterior_field" in finite
+        assert "VmecProblem.from_input" in source and "SimpleNamespace" not in source
+    assert "get_points_flux" in interior
+    assert "uses_virtual_casing" in exterior and "exterior_field" in exterior
+    assert "ESSOS_biot_savart_LandremanPaulQA_finite_beta.json" in exterior
 
 
-@pytest.mark.full
-def test_single_stage_free_boundary_opt(tmp_path):
-    pytest.importorskip("virtual_casing_jax")
-    wout = EXAMPLES / "data" / "single_grid" / "wout_cth_like_free_bdy.nc"
-    if not wout.exists() or not (EXAMPLES / "data" / "mgrid_cth_like.nc").exists():
-        pytest.skip("fetched free-boundary assets absent (tools/fetch_assets.py)")
-    out = _run_example(EXAMPLES / "single_stage_free_boundary_opt.py", tmp_path, timeout=900)
-    m = re.search(r"recovered to ([0-9.]+)% of the confining", out)
-    assert m is not None and float(m.group(1)) < 5.0, f"coil recovery: {out[-400:]}"
+@pytest.mark.full  # nightly: two bounded high-order field/VJP compilations (~3 min)
+@pytest.mark.parametrize(("script", "message"), [
+    ("vmex_get_B_gradB.py", "gradgradgradB VJP shapes"),
+    ("vmex_get_B_outside_plasma.py", "uses virtual casing = True"),
+])
+def test_field_query_examples_run(script, message, tmp_path):
+    if "outside" in script:
+        pytest.importorskip("essos")
+        pytest.importorskip("virtual_casing_jax")
+    out = _run_example(EXAMPLES / script, tmp_path, timeout=360)
+    assert message in out and "dof_names =" in out
 
 
-@pytest.mark.full  # nightly: cold-start single-stage vs two-stage, all 4 phases
-def test_single_stage_vs_two_stage(tmp_path):
-    # cold-start comparison benchmark: needs ESSOS coils + virtual_casing_jax
+def test_fieldline_example_uses_vmex_virtual_casing_and_actual_essos_coils() -> None:
+    """Keep the integration path explicit without adding a slow solve to PR CI."""
+    vacuum = (EXAMPLES / "vmex_fieldline_tracing_vacuum.py").read_text()
+    finite = (EXAMPLES / "vmex_fieldline_tracing_finite_beta.py").read_text()
+    for source in (vacuum, finite):
+        for contract in ("BiotSavart", "exterior_field", "field_in_flux_coordinates",
+                         "Tracing", "poincare_plot"):
+            assert contract in source
+    assert 'plasma="vacuum"' in vacuum
+    assert "ESSOS_biot_savart_LandremanPaulQA_finite_beta.json" in finite
+
+
+def test_single_stage_examples_use_general_surface_output_and_movie_colors() -> None:
+    vacuum = (EXAMPLES / "optimization" / "single_stage_optimization.py").read_text()
+    finite = (EXAMPLES / "optimization" / "single_stage_optimization_finite_beta.py").read_text()
+    assert "from pyevtk" not in finite
+    assert "surface_initial.to_vtk" in finite and "extra_data=" in finite
+    for source in (vacuum, finite):
+        assert "MOVIE_SURFACE_COLOR" in source and "color_factory=" in source
+
+
+@pytest.mark.full  # nightly: two bounded ESSOS tracing integrations (~40 s total)
+@pytest.mark.parametrize(("script", "message", "output"), [
+    ("vmex_fieldline_tracing_vacuum.py", "VMEX exterior API outside", "vmex_fieldline_tracing_vacuum.png"),
+    ("vmex_fieldline_tracing_finite_beta.py", "VMEX coil + virtual-casing field outside",
+     "vmex_fieldline_tracing_finite_beta.png"),
+])
+def test_vmex_fieldline_tracing_examples(script, message, output, tmp_path):
     pytest.importorskip("essos")
     pytest.importorskip("virtual_casing_jax")
-    import json
-
-    out = _run_example(EXAMPLES / "single_stage_vs_two_stage.py", tmp_path,
-                       timeout=2400, args=("--case", "vacuum", "--phase", "all"))
-    assert "COMPARISON (vacuum)" in out, f"missing comparison table:\n{out[-800:]}"
-    cmp_path = (tmp_path / "output_single_stage_vs_two_stage" / "vacuum"
-                / "comparison.json")
-    assert cmp_path.exists(), "comparison.json not written"
-    results = json.loads(cmp_path.read_text())
-    assert set(results) == {"two_stage", "single_stage", "single_stage_polish"}
-    for label, metrics in results.items():
-        assert np.isfinite(metrics["qs_total"]), f"{label}: non-finite QS"
-        assert np.isfinite(metrics["avg_Bn_over_B"]), f"{label}: non-finite B.n"
+    out = _run_example(EXAMPLES / script, tmp_path, timeout=300)
+    assert message in out
+    assert (tmp_path / output).stat().st_size > 10_000
 
 
-@pytest.mark.full  # nightly: true single-stage boundary+coil co-optimization, 2 cases
-def test_single_stage_essos_coils_opt(tmp_path):
-    # coil-agnostic single-stage: needs both the ESSOS coils and virtual_casing_jax
+@pytest.mark.full  # nightly: fixed equilibrium + one 136-DOF exact coil step (~20 s)
+def test_finite_beta_coil_optimization_example(tmp_path):
     pytest.importorskip("essos")
     pytest.importorskip("virtual_casing_jax")
-    out = _run_example(EXAMPLES / "single_stage_essos_coils_opt.py", tmp_path, timeout=1800)
-    # one machine-parseable "J <initial> -> <final>" line per case; each must drop
-    rows = re.findall(r"\[single_stage\] (\S+): J ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
-    assert len(rows) == 2, f"expected two single-stage cases, got {rows}\n{out[-800:]}"
-    for name, j0, jf in rows:
-        assert float(jf) < float(j0), f"{name}: single-stage J did not decrease ({j0} -> {jf})"
-    outdir = tmp_path / "output_single_stage_essos_coils_opt"
-    for name, _j0, _jf in rows:
-        assert (outdir / f"wout_{name}_final.nc").exists()
+    out = _run_example(
+        EXAMPLES / "optimization" / "finite_beta_coil_optimization.py", tmp_path, timeout=300)
+    assert "B.n/B RMS" in out and "Normalized total-pressure jump RMS" in out
+    assert (tmp_path / "coils_LandremanPaulQA_finite_beta_optimized.json").exists()
+    assert (tmp_path / "finite_beta_coil_objectives.png").stat().st_size > 10_000

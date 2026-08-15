@@ -146,6 +146,27 @@ the LCFS. It therefore needs no prescribed physical sheet current in the jump
 condition; nonzero edge pressure or an imposed sheet current requires an
 additional interface model.
 
+Despite using the interface equations, that example is a **fixed-boundary**
+optimization: every trial boundary is prescribed to VMEX and reconverged, and
+both boundary and coil coefficients are decision variables. Virtual casing
+separates the converged total VMEX field into plasma-current and external-coil
+parts; it does not run NESTOR or a free-boundary equilibrium. A future
+free-boundary single-stage problem instead holds the plasma boundary implicit
+and varies only coil parameters.
+
+The reported normalized total-pressure jump is
+
+.. math::
+
+   \left\langle\left[
+   (|\mathbf B_{\rm out}|^2-|\mathbf B_{\rm in}|^2-2\mu_0p_{\rm edge})
+   / B_{\rm ref}^2\right]^2\right\rangle_A^{1/2}.
+
+It is dimensionless and vanishes when the ideal-MHD pressure-balance
+condition holds. It is not an error in the prescribed volume pressure
+profile. Even when :math:`p_{\rm edge}=0`, it supplies the tangential-field
+magnitude condition that ``B.n/B`` alone does not constrain.
+
 Field-query API
 ---------------
 
@@ -158,11 +179,22 @@ boundary/current DOFs. The virtual-casing path applies outside the LCFS;
 spectral field inside. Query points must stay away from the source surface and
 external coil filaments.
 
-See ``examples/vmex_get_B_gradB.py`` for the vacuum interior/exterior API and
-``examples/vmex_get_B_gradB_finite_beta.py`` for the live virtual-casing path,
-including exact boundary/current VJPs. The single-stage optimization examples
+Virtual casing reconstructs the field produced by currents inside the plasma
+surface. It does not determine the external coil field: supply an ESSOS coil
+field or MGRID field and :class:`~vmex.core.extender.VmecExtender` adds the two.
+This distinction matters for finite-beta exterior tracing and coil design.
+
+See ``examples/vmex_get_B_gradB.py`` for the finite-beta interior API and
+``examples/vmex_get_B_outside_plasma.py`` for the live ESSOS-coil plus
+virtual-casing path, including exact equilibrium and coil VJPs. The
+``vmex_fieldline_tracing_vacuum.py`` and
+``vmex_fieldline_tracing_finite_beta.py`` examples use those same fields for
+inside/outside tracing. The single-stage optimization examples
 write both initial and optimized surface/coil VTK files; setting
-``MAKE_MOVIE=True`` adds a compact animation of accepted iterates.
+``MAKE_MOVIE=True`` adds a compact animation of accepted iterates. Set the
+examples' ``MOVIE_SURFACE_COLOR`` to ``None``, ``"absB"``, ``"B.n/B"``, or
+a scalar-field callable to control boundary coloring without storing VTK data
+for every iteration.
 
 Toward a coupled adjoint
 ------------------------
@@ -179,3 +211,25 @@ tested against the complete coupled JVP/VJP. The host-driven cadence above is
 not yet replaced by a coupled Newton solve, so this foundation is not yet a
 public implicit free-boundary adjoint (see
 :doc:`/reference/capabilities`).
+
+The coil-only free-boundary optimization will promote this foundation in four
+reviewable steps. First, define one converged residual :math:`F(y,c)=0` whose
+state :math:`y` contains the plasma variables, moving LCFS, NESTOR potential,
+and gauge constraints, and whose controls :math:`c` are ESSOS coil shapes and
+currents. Second, replace the cadence-dependent derivative with the implicit
+adjoint
+
+.. math::
+
+   F_y^T\lambda = J_y^T, \qquad
+   \frac{dJ}{dc} = J_c - \lambda^T F_c,
+
+using ``NestorBorderedOperator`` for the matrix-free transpose and block
+preconditioner. Third, add continuation/trust-region recovery for rejected
+coil steps without differentiating adaptive branch decisions. Finally,
+certify vacuum and finite-beta examples with dot-product tests, centered
+finite differences, VMEC2000/VMEC++ forward parity, LCFS ``B.n/B`` and
+pressure-jump checks, and an independently reconverged final free-boundary
+solve. Vacuum coil optimization must also fix toroidal flux or current scale
+to exclude the trivial zero-field solution; nonzero edge pressure requires
+the sheet-current jump condition.

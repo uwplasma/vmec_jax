@@ -242,6 +242,25 @@ class Equilibrium:
         self.field.set_points(points)
         return self
 
+    def set_points_xyz(self, points: Array) -> "Equilibrium":
+        """Store Cartesian ``(x, y, z)`` points for field evaluation."""
+        self.field.set_points_xyz(points)
+        return self
+
+    def set_points_cyl(self, points: Array) -> "Equilibrium":
+        """Store cylindrical ``(R, phi, Z)`` points for field evaluation."""
+        self.field.set_points_cyl(points)
+        return self
+
+    def set_points_flux(self, points: Array) -> "Equilibrium":
+        """Store VMEC ``(s, theta, phi)`` points inside the plasma."""
+        self.field.set_points_flux(points)
+        return self
+
+    def field_in_flux_coordinates(self):
+        """Return the interior field in the ``(s, theta, phi)`` basis."""
+        return self.field.field_in_flux_coordinates()
+
     def B(self, points: Array | None = None) -> Array:
         """Return Cartesian ``B`` inside the plasma."""
         return self.field.B(points)
@@ -2894,7 +2913,9 @@ def _least_squares_implicit(
             x = np.concatenate([x, _pack_current(source, k_cur, ac_scale)])
         return x
 
-    def equilibrium_from_x(x: np.ndarray) -> Equilibrium:
+    def equilibrium_from_x(
+        x: np.ndarray, *, newton_iterations: int = 10
+    ) -> Equilibrium:
         """Materialize the exact accepted state already used by the objective."""
         from .extender import VmecExtender, VmecInteriorField
 
@@ -2924,6 +2945,10 @@ def _least_squares_implicit(
 
             nphi = int(kwargs.pop("nphi", 32)); ntheta = int(kwargs.pop("ntheta", 32))
             external_field = kwargs.pop("external_field", None)
+            external_parameters = kwargs.pop("external_parameters", None)
+            external_field_from_parameters = kwargs.pop(
+                "external_field_from_parameters", None)
+            external_dof_names = tuple(kwargs.pop("external_dof_names", ()))
             digits = int(kwargs.pop("digits", 6)); levels = kwargs.pop("levels", None)
             plasma = kwargs.pop("plasma", "auto")
             if plasma not in ("auto", "include", "vacuum"):
@@ -2941,6 +2966,9 @@ def _least_squares_implicit(
 
             return VmecExtender.from_parameterized_surface_data(
                 surface_data, _place(x), external_field=external_field,
+                external_parameters=external_parameters,
+                external_field_from_parameters=external_field_from_parameters,
+                external_dof_names=external_dof_names,
                 digits=digits, levels=levels, dof_names=tuple(names))
 
         return Equilibrium(
@@ -2949,7 +2977,8 @@ def _least_squares_implicit(
             runtime=runtime,
             result=result,
             field_factory=lambda: VmecInteriorField.from_parameterized_state(
-                inp, jax_state_runtime, _place(x), dof_names=tuple(names)),
+                inp, jax_state_runtime, _place(x), dof_names=tuple(names),
+                newton_iterations=newton_iterations),
             exterior_field_factory=exterior_field_factory,
         )
 
@@ -3066,6 +3095,8 @@ def _least_squares_implicit(
                 "jax_state_runtime": jax_state_runtime,
                 "jax_state_runtime_status": jax_state_runtime_status,
                 "jax_residual_from_state": term_rows,
+                "jax_failure_value": lambda x: failure_value_and_gradient_jax(x)[0],
+                "residual_size": residual_size,
             },
         )
 

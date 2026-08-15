@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 import sys
 from threading import Event, RLock, Thread
 import time
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, cast
 
 import numpy as np
 
@@ -384,7 +384,7 @@ class VmecProblem(FunctionProblem):
         *args: Any,
         input_from_x: Callable[[Array], Any],
         x_from_input: Callable[[Any], Array],
-        equilibrium_from_x: Callable[[Array], Any] | None = None,
+        equilibrium_from_x: Callable[..., Any] | None = None,
         boundary_from_x: Callable[[Array], Any] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -411,6 +411,15 @@ class VmecProblem(FunctionProblem):
         from .optimize import make_problem
         return make_problem(inp, loss=loss, problem_class=cls, **kwargs)
 
+    @classmethod
+    def from_input(cls, inp: Any, **kwargs: Any) -> "VmecProblem":
+        """Parameterize an input for field VJPs without defining an objective."""
+        from .optimize import make_problem
+
+        return make_problem(
+            inp, loss=lambda _state, _runtime: 0.0,
+            problem_class=cls, **kwargs)
+
     def input_from_x(self, x: Array) -> Any:
         """Return a new :class:`VmecInput` containing decision vector ``x``."""
         return self._input_from_x(self._x(x))
@@ -430,7 +439,7 @@ class VmecProblem(FunctionProblem):
             )
         return x
 
-    def equilibrium_from_x(self, x: Array) -> Any:
+    def equilibrium_from_x(self, x: Array, *, newton_iterations: int = 10) -> Any:
         """Return the converged equilibrium evaluated at ``x``.
 
         Implicit problems reuse the accepted optimizer state instead of
@@ -440,7 +449,10 @@ class VmecProblem(FunctionProblem):
         """
         if self._equilibrium_from_x is None:
             raise AttributeError("this problem does not provide equilibria")
-        return self._equilibrium_from_x(self._x(x))
+        if int(newton_iterations) == 10:
+            return self._equilibrium_from_x(self._x(x))
+        return self._equilibrium_from_x(
+            self._x(x), newton_iterations=int(newton_iterations))
 
     def boundary_from_x(self, x: Array) -> Any:
         """Return traceable boundary coefficient arrays for decision vector ``x``."""
@@ -448,11 +460,110 @@ class VmecProblem(FunctionProblem):
             raise AttributeError("this problem does not provide boundary arrays")
         return self._boundary_from_x(x)
 
+    def jax_objective_from_state(
+        self,
+        x: Array,
+        extra_costs: Callable[[Array, Any], Array],
+        *,
+        n_extra_terms: int,
+    ) -> tuple[Array, tuple[Array, Array]]:
+        """Combine the VMEX least-squares cost with state-dependent costs.
+
+        ``extra_costs(state, runtime)`` returns one already-weighted scalar
+        cost per added objective term. The auxiliary result contains the VMEX
+        residual rows and those added costs, ready for
+        :meth:`OptimizationMonitor.wrap_value_and_grad`. Failed equilibrium
+        trials receive the same smooth finite rejection cost as the base
+        problem, so driver scripts do not need their own accepted/rejected
+        branches.
+        """
+        import jax
+        import jax.numpy as jnp
+
+        state_runtime_status = self.metadata.get("jax_state_runtime_status")
+        residual_from_state = self.metadata.get("jax_residual_from_state")
+        failure_value = self.metadata.get("jax_failure_value")
+        residual_size = self.metadata.get("residual_size")
+        if any(item is None for item in (
+                state_runtime_status, residual_from_state, failure_value,
+                residual_size)):
+            raise AttributeError(
+                "state-composed objectives require an implicit VMEC "
+                "least-squares problem")
+        if n_extra_terms < 1:
+            raise ValueError("n_extra_terms must be positive")
+
+        state_runtime_status = cast(Callable[..., Any], state_runtime_status)
+        residual_from_state = cast(Callable[..., Any], residual_from_state)
+        failure_value = cast(Callable[..., Any], failure_value)
+        residual_size = int(residual_size)
+
+        state, runtime, status = state_runtime_status(x)
+
+        def accepted(_):
+            residual = residual_from_state(state, runtime)
+            costs = jnp.atleast_1d(extra_costs(state, runtime))
+            if costs.shape != (n_extra_terms,):
+                raise ValueError(
+                    f"extra_costs returned shape {costs.shape}, expected "
+                    f"({n_extra_terms},)")
+            return (0.5 * jnp.vdot(residual, residual) + jnp.sum(costs),
+                    (residual, costs))
+
+        def rejected(_):
+            return (failure_value(x),
+                    (jnp.zeros(residual_size), jnp.zeros(n_extra_terms)))
+
+        return jax.lax.cond(status == 0, accepted, rejected, operand=None)
+
+    def jax_extra_costs_from_state(
+        self,
+        x: Array,
+        extra_costs: Callable[[Array, Any], Array],
+        *,
+        n_extra_terms: int,
+    ) -> tuple[Array, Array]:
+        """Evaluate additive state-dependent costs only at valid VMEC trials.
+
+        This is the split-compilation counterpart of
+        :meth:`jax_objective_from_state`. It returns zero extra cost at a
+        rejected trial, leaving the base problem to supply its certified
+        rejection wall. Splitting a large virtual-casing or coil graph from
+        the VMEC objective substantially lowers peak XLA compilation memory.
+        """
+        import jax
+        import jax.numpy as jnp
+
+        state_runtime_status = self.metadata.get("jax_state_runtime_status")
+        if state_runtime_status is None:
+            raise AttributeError(
+                "state-dependent costs require an implicit VMEC problem")
+        if n_extra_terms < 1:
+            raise ValueError("n_extra_terms must be positive")
+        state_runtime_status = cast(Callable[..., Any], state_runtime_status)
+        state, runtime, status = state_runtime_status(x)
+
+        def accepted(_):
+            costs = jnp.atleast_1d(extra_costs(state, runtime))
+            if costs.shape != (n_extra_terms,):
+                raise ValueError(
+                    f"extra_costs returned shape {costs.shape}, expected "
+                    f"({n_extra_terms},)")
+            return jnp.sum(costs), costs
+
+        return jax.lax.cond(
+            status == 0, accepted,
+            lambda _: (jnp.asarray(0.0), jnp.zeros(n_extra_terms)),
+            operand=None)
+
     def exterior_field(
         self,
         x: Array,
         *,
         external_field: Any | None = None,
+        external_parameters: Array | None = None,
+        external_field_from_parameters: Callable[[Array], Any] | None = None,
+        external_dof_names: tuple[str, ...] = (),
         nphi: int = 32,
         ntheta: int = 32,
         digits: int = 6,
@@ -481,6 +592,9 @@ class VmecProblem(FunctionProblem):
 
         return VmecExtender.from_parameterized_surface_data(
             surface_data, parameters, external_field=external_field,
+            external_parameters=external_parameters,
+            external_field_from_parameters=external_field_from_parameters,
+            external_dof_names=external_dof_names,
             digits=digits, levels=levels, dof_names=self.dof_names)
 
     def interior_field(
@@ -497,6 +611,46 @@ class VmecProblem(FunctionProblem):
         return VmecInteriorField.from_parameterized_state(
             inp, state_runtime, self._x(x), dof_names=self.dof_names,
             newton_iterations=newton_iterations)
+
+    def surface_field_values(
+        self,
+        x: Array,
+        quantity: str,
+        *,
+        external_field: Any | None = None,
+        nphi: int = 32,
+        ntheta: int = 32,
+        digits: int = 4,
+        precision: Any | None = None,
+    ) -> Array:
+        """Return ``|B|`` or ``B.n/B`` on a trial boundary for plotting.
+
+        ``B.n/B`` is evaluated on the exterior side using the supplied coil or
+        MGRID field plus the plasma-current virtual-casing field. This helper
+        keeps optional movie coloring out of optimization driver code; it is
+        not used by the objective or optimizer.
+        """
+        import jax.numpy as jnp
+
+        if quantity not in ("absB", "B.n/B"):
+            raise ValueError('quantity must be "absB" or "B.n/B"')
+        state_runtime = self.metadata.get("jax_state_runtime")
+        inp = self.metadata.get("input")
+        if state_runtime is None or inp is None:
+            raise AttributeError("surface fields require an implicit VMEC problem")
+        from . import freeboundary_diff as fbd
+
+        state, runtime = state_runtime(self._x(x))
+        data = fbd.surface_field_data_from_state(
+            inp, state, runtime=runtime, nphi=nphi, ntheta=ntheta)
+        Bmag = jnp.linalg.norm(data.B_total, axis=0)
+        if quantity == "absB":
+            return Bmag
+        if external_field is None:
+            raise ValueError("B.n/B requires external_field")
+        interface = fbd.FreeBoundaryDiffProblem.from_surface_data(
+            data, digits=digits, precision=precision)
+        return interface.bnormal_residual(external_field) / Bmag
 
     def evaluate(self, x: Array, *, derivatives: bool = True) -> Evaluation:
         """Evaluate and attach VMEC solve/adjoint status diagnostics."""

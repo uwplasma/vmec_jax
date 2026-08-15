@@ -82,6 +82,14 @@ jobs:
         run: |
           pytest -q tests/test_examples.py::test_free_boundary_essos_coils \
             --vmex-report=test-report-coils.json
+      - name: Run bounded field and single-stage examples
+        env:
+          RUN_FULL: "1"
+        run: |
+          pytest -q tests/test_examples.py -m full \
+            -k 'field_query_examples_run or vmex_fieldline_tracing_examples or finite_beta_coil_optimization_example or fixed_boundary_single_stage_optimization or finite_beta_single_stage_optimization' \
+            --durations=10 \
+            --vmex-report=test-report-field-coil.json
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
