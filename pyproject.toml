@@ -72,10 +72,10 @@ freeb = [
 turbulence = [
   "gkx>=1.7.1",
 ]
-# ESSOS 0.17 adds named/functional coil DOFs, clearance objectives, and the
-# boundary-to-surface adapter used by the single-stage examples.
+# ESSOS 0.17 adds the named/functional coil interfaces used by the new
+# single-stage examples; 0.16 remains compatible with VMEX's existing CLI.
 coils = [
-  "essos>=0.17",
+  "essos>=0.16",
 ]
 docs = [
   "sphinx",
