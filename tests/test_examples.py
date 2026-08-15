@@ -405,7 +405,7 @@ def test_field_query_examples_cover_inside_outside_and_vjps() -> None:
         assert "VmecProblem.from_input" in source and "SimpleNamespace" not in source
     assert "get_points_flux" in interior
     assert "uses_virtual_casing" in exterior and "exterior_field" in exterior
-    assert "ESSOS_biot_savart_LandremanPaulQA_finite_beta.json" in exterior
+    assert "ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json" in exterior
 
 
 @pytest.mark.full  # nightly: two bounded high-order field/VJP compilations (~3 min)
@@ -426,11 +426,12 @@ def test_fieldline_example_uses_vmex_virtual_casing_and_actual_essos_coils() -> 
     vacuum = (EXAMPLES / "vmex_fieldline_tracing_vacuum.py").read_text()
     finite = (EXAMPLES / "vmex_fieldline_tracing_finite_beta.py").read_text()
     for source in (vacuum, finite):
-        for contract in ("BiotSavart", "exterior_field", "field_in_flux_coordinates",
-                         "Tracing", "poincare_plot"):
+        for contract in ("BiotSavart", "field_in_flux_coordinates", "Tracing",
+                         "poincare_plot", "True boundary B.n/B"):
             assert contract in source
-    assert 'plasma="vacuum"' in vacuum
-    assert "ESSOS_biot_savart_LandremanPaulQA_finite_beta.json" in finite
+    assert 'plasma="vacuum"' in vacuum and "exterior_field" in vacuum
+    assert "VmecExtender" in finite and "with_near_surface_continuation" in finite
+    assert "ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json" in finite
 
 
 def test_single_stage_examples_use_general_surface_output_and_movie_colors() -> None:
@@ -454,14 +455,3 @@ def test_vmex_fieldline_tracing_examples(script, message, output, tmp_path):
     out = _run_example(EXAMPLES / script, tmp_path, timeout=300)
     assert message in out
     assert (tmp_path / output).stat().st_size > 10_000
-
-
-@pytest.mark.full  # nightly: fixed equilibrium + one 136-DOF exact coil step (~20 s)
-def test_finite_beta_coil_optimization_example(tmp_path):
-    pytest.importorskip("essos")
-    pytest.importorskip("virtual_casing_jax")
-    out = _run_example(
-        EXAMPLES / "optimization" / "finite_beta_coil_optimization.py", tmp_path, timeout=300)
-    assert "B.n/B RMS" in out and "Normalized total-pressure jump RMS" in out
-    assert (tmp_path / "coils_LandremanPaulQA_finite_beta_optimized.json").exists()
-    assert (tmp_path / "finite_beta_coil_objectives.png").stat().st_size > 10_000

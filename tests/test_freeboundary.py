@@ -201,6 +201,36 @@ def test_live_nestor_blocks_match_coupled_residual_jvp_and_vjp():
     ):
         assert float(jnp.linalg.norm(value)) > 0.0
 
+    # Coil-control lane: differentiable JAX tabulation must carry a physical
+    # uniform vertical field all the way into NESTOR's unsolved residual.
+    phi_geom = jnp.asarray(
+        (np.asarray(basis.zeta) * float(basis.onp)).reshape(boundary0.R.shape))
+
+    def controlled_residual(control):
+        def vertical_field(parameters, xyz):
+            zeros = jnp.zeros(xyz.shape[0], dtype=xyz.dtype)
+            return jnp.stack((zeros, zeros,
+                              jnp.full_like(zeros, parameters[0])), axis=1)
+
+        field = MgridField.from_parameterized_cartesian_field(
+            vertical_field, control, rmin=1.0, rmax=3.0,
+            zmin=-0.8, zmax=0.8, ir=3, jz=3, kp=4, nfp=1)
+        br, bp, bz = field.b_cyl(boundary0.R, phi_geom, boundary0.Z)
+        bexni_control = FB._external_field_channels_jax(
+            boundary0, br, bp, bz, basis=basis, signgs=-1)["bexni"]
+        matrix, rhs, *_ = solver.assemble(boundary0, bexni_control)
+        return matrix @ q0 - rhs
+
+    control = jnp.asarray([0.05])
+    derivative = jax.jacfwd(controlled_residual)(control)[:, 0]
+    step = 1.0e-5
+    finite_difference = (
+        controlled_residual(control + step)
+        - controlled_residual(control - step)) / (2.0 * step)
+    assert float(jnp.linalg.norm(derivative)) > 0.0
+    np.testing.assert_allclose(
+        derivative, finite_difference, rtol=2e-9, atol=2e-11)
+
 
 def test_vacuum_first_call_diagnostics(ab_inputs):
     """vacuum.f first-call print block values against the golden stdout."""

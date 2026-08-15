@@ -15,6 +15,8 @@ from scipy.optimize import minimize
 
 import vmex as vj
 from vmex import optimize as opt
+# ``freeboundary_diff`` supplies differentiable coil/plasma interface fields.
+# It does not move the boundary or invoke a free-boundary equilibrium solve here.
 from vmex.core import freeboundary_diff as fbd
 from vmex.core.bootstrap import (ELEMENTARY_CHARGE, KineticProfiles, RedlBootstrapMismatch,
                                  self_consistent_bootstrap)
@@ -57,6 +59,7 @@ COIL_SURFACE_DISTANCE_LIMIT, COIL_SURFACE_DISTANCE_WEIGHT = 0.20, 1.0e3
 NPHI, NTHETA, VC_DIGITS = 16, 16, 4
 FINAL_NPHI, FINAL_NTHETA = 32, 32
 METHOD = "L-BFGS-B"
+PARAMETER_BOUND = 3.0
 OPTIONS = {"maxiter": MAXITER, "maxls": 10, "ftol": 1e-12, "gtol": 1e-8, "maxcor": 20}
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
@@ -168,16 +171,18 @@ def interface_costs(x, state, runtime):
     surface, coils = objects_from_x(x)
     surface_data = fbd.surface_field_data_from_state(
         inp, state, runtime=runtime, nphi=NPHI, ntheta=NTHETA)
-    vc = fbd.FreeBoundaryDiffProblem.from_surface_data(
+    # This object evaluates the fixed trial surface's virtual-casing residuals;
+    # VMEX has already solved the volume equilibrium with that boundary prescribed.
+    interface = fbd.FreeBoundaryDiffProblem.from_surface_data(
         surface_data, digits=VC_DIGITS, precision=precision)
-    B_scale = jnp.sqrt(jnp.sum(vc.weights * jnp.sum(surface_data.B_total**2, axis=0)))
+    B_scale = jnp.sqrt(jnp.sum(interface.weights * jnp.sum(surface_data.B_total**2, axis=0)))
     external_field = coil_field(coils)
-    normal_rows = jnp.sqrt(vc.weights).ravel() * (
-        vc.bnormal_residual(external_field) / B_scale).ravel()
+    normal_rows = jnp.sqrt(interface.weights).ravel() * (
+        interface.bnormal_residual(external_field) / B_scale).ravel()
     # This dimensionless RMS measures violation of total-pressure continuity,
     # including the edge plasma pressure, rather than pressure-profile error.
-    pressure_rows = jnp.sqrt(vc.weights).ravel() * (
-        vc.pressure_balance_residual(external_field) / B_scale**2).ravel()
+    pressure_rows = jnp.sqrt(interface.weights).ravel() * (
+        interface.pressure_balance_residual(external_field) / B_scale**2).ravel()
     return jnp.asarray([
         0.5 * NORMAL_FIELD_WEIGHT * jnp.vdot(normal_rows, normal_rows),
         0.5 * PRESSURE_BALANCE_WEIGHT * jnp.vdot(pressure_rows, pressure_rows),
@@ -221,7 +226,7 @@ joint_problem = vj.FunctionProblem.from_functions(
     np.zeros_like(x0), value_and_grad=scipy_objective)
 joint_problem.compile_value_and_gradient(report_interval=10.0)
 result = minimize(joint_problem.value_and_grad, joint_problem.x0, jac=True, method=METHOD,
-    bounds=[(-3.0, 3.0)] * x0.size if METHOD == "L-BFGS-B" else None,
+    bounds=[(-PARAMETER_BOUND, PARAMETER_BOUND)] * x0.size if METHOD == "L-BFGS-B" else None,
     callback=monitor, options=OPTIONS)
 
 x_final = x0 + scales * result.x
@@ -243,19 +248,20 @@ data_f = fbd.surface_field_data_from_state(
     final_input, final_equilibrium.state, runtime=final_equilibrium.runtime,
     nphi=FINAL_NPHI, ntheta=FINAL_NTHETA)
 final_precision = fbd.plan_vc_precision(data_f, digits=VC_DIGITS)
-vc_f = fbd.FreeBoundaryDiffProblem.from_surface_data(
+interface_f = fbd.FreeBoundaryDiffProblem.from_surface_data(
     data_f, digits=VC_DIGITS, precision=final_precision)
-Bn = np.asarray(vc_f.bnormal_residual(coil_field(coils_final)))
+Bn = np.asarray(interface_f.bnormal_residual(coil_field(coils_final)))
 Bmag = np.linalg.norm(np.asarray(data_f.B_total), axis=0)
 Bn_over_B = Bn / Bmag
-pressure_error = np.asarray(vc_f.pressure_balance_residual(coil_field(coils_final))) / Bmag**2
+pressure_error = np.asarray(
+    interface_f.pressure_balance_residual(coil_field(coils_final))) / Bmag**2
 surface_final = surfacerzfourier_from_boundary(
     jnp.asarray(final_input.rbc), jnp.asarray(final_input.zbs), inp.nfp,
     nphi=FINAL_NPHI, ntheta=FINAL_NTHETA)
-print(f"B.n/B RMS = {100 * np.sqrt(np.sum(np.asarray(vc_f.weights) * Bn_over_B**2)):.3f}%, "
+print(f"B.n/B RMS = {100 * np.sqrt(np.sum(np.asarray(interface_f.weights) * Bn_over_B**2)):.3f}%, "
       f"max = {100 * np.max(np.abs(Bn_over_B)):.3f}%")
 print("Normalized total-pressure jump RMS = "
-      f"{np.sqrt(np.sum(np.asarray(vc_f.weights) * pressure_error**2)):.3e} (target 0)")
+      f"{np.sqrt(np.sum(np.asarray(interface_f.weights) * pressure_error**2)):.3e} (target 0)")
 print(f"Coil lengths = {np.asarray(coils_final.length[:N_COILS])}")
 print(f"Maximum curvature = {float(np.max(np.asarray(coils_final.curvature))):.3f} 1/m")
 
@@ -263,11 +269,11 @@ print(f"Maximum curvature = {float(np.max(np.asarray(coils_final.curvature))):.3
 input_path = final_input.to_indata("input.single_stage_finite_beta_optimized")
 wout_path = vj.write_wout("wout_single_stage_finite_beta_optimized.nc", final_equilibrium.wout)
 coils_final.to_json("coils_single_stage_finite_beta_optimized.json")
-vc0 = fbd.FreeBoundaryDiffProblem.from_surface_data(
+interface0 = fbd.FreeBoundaryDiffProblem.from_surface_data(
     surface_data0, digits=VC_DIGITS, precision=precision)
-Bn0 = np.asarray(vc0.bnormal_residual(coil_field(coils0)))
+Bn0 = np.asarray(interface0.bnormal_residual(coil_field(coils0)))
 Bmag0 = np.linalg.norm(np.asarray(surface_data0.B_total), axis=0)
-pressure_error0 = np.asarray(vc0.pressure_balance_residual(coil_field(coils0))) / Bmag0**2
+pressure_error0 = np.asarray(interface0.pressure_balance_residual(coil_field(coils0))) / Bmag0**2
 surface_initial, _ = objects_from_x(jnp.asarray(x0))
 surface_initial.to_vtk("surface_single_stage_finite_beta_initial", extra_data={
     "B_dot_n_over_B": (Bn0 / Bmag0)[None].copy(), "B": Bmag0[None].copy(),

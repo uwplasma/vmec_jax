@@ -18,6 +18,7 @@ SURFACES = np.linspace(0.1, 1.0, 10)
 MAX_MODE = 3
 MAXITER  = 200
 METHOD   = "L-BFGS-B" # or "BFGS"
+PARAMETER_BOUND = 1.0
 BOUNDARY_STEP = 0.1   # typical change represented by one scaled variable
 ASPECT_TARGET = 5.0
 IOTA_TARGET   = 0.42
@@ -74,7 +75,7 @@ options = {"maxiter": MAXITER, "gtol": 1.0e-6}
 if METHOD == "L-BFGS-B":
     options.update(maxls=20, ftol=1.0e-12, maxcor=20)
 result = minimize(cost, np.zeros_like(x0), jac=gradient, method=METHOD,
-                  bounds=[(-1.0, 1.0)] * x0.size if METHOD == "L-BFGS-B" else None,
+                  bounds=[(-PARAMETER_BOUND, PARAMETER_BOUND)] * x0.size if METHOD == "L-BFGS-B" else None,
                   callback=monitor_y, options=options)
 result.x = x_from_y(result.x)
 equilibrium = problem.equilibrium_from_x(result.x)

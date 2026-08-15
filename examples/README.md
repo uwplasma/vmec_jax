@@ -41,9 +41,11 @@ All runnable examples live under this single `examples/` tree.
   - `vmex_fieldline_tracing_vacuum.py` and
     `vmex_fieldline_tracing_finite_beta.py` — compare VMEX, coil-only, and
     self-consistent exterior traces in 3-D and toroidal Poincare plots.
-  - `optimization/finite_beta_coil_optimization.py` — reproduce the compact
-    finite-beta coil fixture by minimizing normal-field, total-pressure, and
-    ESSOS engineering objectives with exact reverse-mode gradients.
+    Seeds form one line from just off-axis through the selected exterior
+    offset; VMEX uses toroidal angle while Cartesian traces use arclength and
+    stop after leaving the LCFS neighborhood.
+    The finite-beta coil fixture is reproduced by ESSOS
+    `examples/coil_optimization/optimize_coils_finite_beta_vmex.py`.
 - `optimization/`: compact QA/QH/QP/QI scripts using `(function, target,
   weight)` terms with SciPy least-squares, BFGS, or L-BFGS-B. The fixed-boundary
   `single_stage_optimization.py` jointly varies VMEX boundary coefficients and

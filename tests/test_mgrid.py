@@ -303,6 +303,10 @@ def test_interior_field_inverts_flux_coordinates_and_recovers_B():
     assert equilibrium.field_in_flux_coordinates().spectra is spectra
     np.testing.assert_allclose(
         jax.vmap(tracing_field.to_xyz)(coordinates), points, rtol=0, atol=2e-14)
+    np.testing.assert_allclose(
+        tracing_field.to_xyz_batch(coordinates), points, rtol=0, atol=2e-14)
+    np.testing.assert_allclose(
+        tracing_field.toroidal_angle_batch(coordinates), phi, rtol=0, atol=0)
     mapped_B = jax.vmap(
         lambda point: jax.jacfwd(tracing_field.to_xyz)(point)
         @ tracing_field.B_contravariant(point))(coordinates)
@@ -382,6 +386,30 @@ def test_field_api_validation_and_constructor_routing(monkeypatch, tmp_path):
         VmecExtender(object()).B(points)
     with pytest.raises(ValueError, match="at least one"):
         VmecExtender(None)
+    with pytest.raises(ValueError, match="near_surface_plan"):
+        VmecExtender(_linear_vacuum_field, near_surface_plan=object())
+
+    class PlasmaField:
+        @staticmethod
+        def B_plasma_xyz(xyz):
+            return jnp.ones_like(xyz)
+
+        @staticmethod
+        def B_plasma_near_surface_xyz(xyz, plan):
+            assert plan == "near-plan"
+            return 2.0 * jnp.ones_like(xyz)
+
+        @staticmethod
+        def plan_near_surface(**kwargs):
+            assert kwargs == {"digits": 3, "precision": "precision", "B_surface": None}
+            return "near-plan"
+
+    direct_plasma = VmecExtender(None, PlasmaField())
+    np.testing.assert_allclose(direct_plasma.B(points), 1.0)
+    continued = direct_plasma.with_near_surface_continuation(
+        digits=3, precision="precision")
+    assert continued.uses_virtual_casing and continued.uses_near_surface_continuation
+    np.testing.assert_allclose(continued.B(points), 2.0)
 
     assert ext._has_plasma_sources(SimpleNamespace(
         betatotal=0.0, wp=0.0, ctor=0.0, presf=np.array([0.0, 1.0])))
@@ -573,6 +601,26 @@ def test_tabulate_cartesian_callable_and_cylindrical_conversion() -> None:
     np.testing.assert_allclose(br, direct[:, 0] * np.cos(phi) + direct[:, 1] * np.sin(phi))
     np.testing.assert_allclose(bp, -direct[:, 0] * np.sin(phi) + direct[:, 1] * np.cos(phi))
     np.testing.assert_allclose(bz, direct[:, 2])
+
+
+def test_parameterized_cartesian_tabulation_retains_control_derivatives() -> None:
+    def field(parameters, points):
+        return parameters[0] * jnp.stack(
+            (points[:, 0], -points[:, 1], jnp.ones(points.shape[0])), axis=1)
+
+    def diagnostic(parameters):
+        sampled = MgridField.from_parameterized_cartesian_field(
+            field, parameters, rmin=0.5, rmax=1.5, zmin=-0.4, zmax=0.4,
+            ir=4, jz=3, kp=8, nfp=2)
+        br, bp, bz = sampled.b_cyl(
+            jnp.asarray([1.0]), jnp.asarray([0.0]), jnp.asarray([0.0]))
+        return br[0] + 2.0 * bp[0] + 3.0 * bz[0]
+
+    parameters = jnp.asarray([1.7])
+    np.testing.assert_allclose(diagnostic(parameters), 4.0 * parameters[0])
+    np.testing.assert_allclose(jax.grad(diagnostic)(parameters), jnp.asarray([4.0]))
+    np.testing.assert_allclose(
+        jax.jit(jax.grad(diagnostic))(parameters), jnp.asarray([4.0]))
 
 
 def test_tabulate_simsopt_set_points_protocol() -> None:

@@ -18,6 +18,7 @@ SURFACES = np.array([0.5, 0.7, 0.9])
 MAX_MODES = [1, 2, 3, 4]
 MAXITER = 50
 METHOD = "BFGS"  # or "L-BFGS-B"
+PARAMETER_BOUND = 1.0
 BOUNDARY_STEP = 0.05  # typical change represented by one scaled variable
 ASPECT_TARGET = 7.0
 IOTA_FLOOR = 0.51
@@ -96,7 +97,7 @@ for max_mode in MAX_MODES:
                  "jac": gradient(intermediate_result.x)})
 
     result = minimize(cost, np.zeros_like(x0), jac=gradient, method=METHOD,
-                      bounds=[(-1.0, 1.0)] * x0.size if METHOD == "L-BFGS-B" else None,
+                      bounds=[(-PARAMETER_BOUND, PARAMETER_BOUND)] * x0.size if METHOD == "L-BFGS-B" else None,
                       callback=monitor_y,
                       options=options)
     result.x = x_from_y(result.x)

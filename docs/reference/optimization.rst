@@ -170,6 +170,14 @@ records accepted iterations without changing the objective. For a tuple
 problem it also separates the weighted cost by term; saving and plotting the
 history needs only the callback plus two output calls:
 
+The SciPy examples optimize normalized variables ``u`` with
+``x = x0 + step * u``. A bound of ``[-1, 1]`` therefore means one declared
+parameter step, not a universal physical limit. The QA/QP boundary examples
+use that conservative box; the QI and coil-shape examples use ``[-3, 3]``
+because the narrower box changed the line-search path or pinned necessary coil
+motion in representative scans. Keep ``PARAMETER_BOUND`` next to the other
+driver inputs and validate it for a new normalization.
+
 .. code-block:: python
 
    monitor = opt.OptimizationMonitor(problem, stream=None)
@@ -382,7 +390,10 @@ parameter VJPs inside and outside the LCFS, are
 spatial derivative orders and their VJPs; the exterior example returns VMEX
 boundary modes followed by named ESSOS coil modes. The vacuum and finite-beta
 ``vmex_fieldline_tracing_*.py`` examples plot 3-D trajectories and toroidal
-Poincare sections inside and just outside the LCFS.
+Poincare sections inside and just outside the LCFS. The seed radius is sampled
+continuously across the LCFS. VMEX flux-coordinate traces use toroidal angle,
+Cartesian coil/exterior traces use arclength, and a signed-distance event
+terminates unbounded exterior trajectories.
 
 To include coil parameters in an exterior-field VJP, pass the same functional
 ESSOS update used by an optimization:

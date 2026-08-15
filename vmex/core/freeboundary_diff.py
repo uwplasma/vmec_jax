@@ -495,6 +495,7 @@ def plasma_field_on_boundary(
     quad_nt: int | None = None,
     quad_np: int | None = None,
     precision=None,
+    virtual_casing_field=None,
 ) -> jax.Array:
     """Plasma's own Cartesian field on its boundary via on-surface virtual casing.
 
@@ -510,14 +511,18 @@ def plasma_field_on_boundary(
     """
 
     _require_vcj()
-    cfg = ExteriorFieldConfig(
-        digits=int(digits),
-        levels=_default_levels(int(surface_data.gamma.shape[1]), int(surface_data.gamma.shape[2])),
-        chunk_size=chunk_size,
-        target_chunk_size=8,
-        dtype="float64",
-    )
-    field = VirtualCasingExteriorField(surface_data, cfg)
+    field = virtual_casing_field
+    if field is None:
+        cfg = ExteriorFieldConfig(
+            digits=int(digits),
+            levels=_default_levels(int(surface_data.gamma.shape[1]), int(surface_data.gamma.shape[2])),
+            chunk_size=chunk_size,
+            target_chunk_size=8,
+            dtype="float64",
+        )
+        field = VirtualCasingExteriorField(surface_data, cfg)
+    elif getattr(field, "surface_data", None) is not surface_data:
+        raise ValueError("virtual_casing_field must be prepared from surface_data")
     kwargs: dict[str, Any] = dict(digits=int(digits), chunk_size=int(chunk_size))
     if quad_nt is not None:
         kwargs["quad_nt"] = int(quad_nt)
@@ -525,6 +530,8 @@ def plasma_field_on_boundary(
         kwargs["quad_np"] = int(quad_np)
     if precision is not None:
         kwargs["precision"] = precision
+    if hasattr(field, "B_plasma_on_surface"):
+        return field.B_plasma_on_surface(**kwargs)
     return field._vc.compute_internal_B(field.B_total, **kwargs)
 
 
@@ -627,6 +634,7 @@ class FreeBoundaryDiffProblem:
         quad_nt: int | None = None,
         quad_np: int | None = None,
         precision=None,
+        virtual_casing_field=None,
     ) -> "FreeBoundaryDiffProblem":
         """Precompute the constants (virtual-casing plasma field) from surface data.
 
@@ -646,6 +654,7 @@ class FreeBoundaryDiffProblem:
         B_plasma = plasma_field_on_boundary(
             surface_data, digits=digits, chunk_size=chunk_size,
             quad_nt=quad_nt, quad_np=quad_np, precision=precision,
+            virtual_casing_field=virtual_casing_field,
         )
         Bn_plasma = jnp.sum(B_plasma * normal, axis=0)
         Bin_mag2 = jnp.sum(jnp.asarray(surface_data.B_total) ** 2, axis=0)

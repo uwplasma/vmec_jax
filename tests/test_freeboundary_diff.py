@@ -187,6 +187,17 @@ def test_finite_beta_extender_field_and_gradient_outside_lcfs(monkeypatch):
     assert live.uses_virtual_casing
     np.testing.assert_allclose(live.B(points), field.B(points), rtol=2e-11, atol=2e-11)
 
+    plan = field.plasma_field.plan_surface_precision(digits=3)
+    interface = FBD.FreeBoundaryDiffProblem.from_surface_data(
+        surface, digits=3, precision=plan,
+        virtual_casing_field=field.plasma_field,
+    )
+    np.testing.assert_allclose(
+        interface.B_plasma,
+        field.plasma_field.B_plasma_on_surface(digits=3, precision=plan),
+        rtol=2e-11, atol=2e-11,
+    )
+
 
 def test_parameterized_extender_vjp_matches_rebuilt_surface_fd():
     """Exterior B VJP differentiates the moving virtual-casing surface."""

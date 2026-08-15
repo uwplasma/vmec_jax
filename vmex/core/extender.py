@@ -372,6 +372,15 @@ class _VmecFluxCoordinateField:
             raise ValueError(f"point must have shape (3,), got {point.shape}")
         return _flux_coordinates_to_xyz(self.spectra, point[None, :])[0]
 
+    def to_xyz_batch(self, points: Array) -> Array:
+        """Map an array of ``(s, theta, phi)`` points without nested vmaps."""
+        return _flux_coordinates_to_xyz(self.spectra, points)
+
+    @staticmethod
+    def toroidal_angle_batch(points: Array) -> Array:
+        """Return the continuous native VMEC toroidal coordinate."""
+        return _check_points(points, "flux coordinates")[:, 2]
+
 
 def _full_mesh_contravariant(coefficients: Array) -> Array:
     """Interpolate half-mesh VMEC spectra to every full-mesh surface."""
@@ -586,18 +595,28 @@ class VmecExtender(MagneticField):
     targets must not lie exactly on the source surface.
     """
 
-    def __init__(self, external_field: Any, plasma_field: Any | None = None) -> None:
+    def __init__(
+        self, external_field: Any, plasma_field: Any | None = None,
+        near_surface_plan: Any | None = None,
+    ) -> None:
         if external_field is None and plasma_field is None:
             raise ValueError("at least one external or plasma field is required")
+        if near_surface_plan is not None and plasma_field is None:
+            raise ValueError("near_surface_plan requires a plasma field")
         self.external_field = external_field
         self.plasma_field = plasma_field
+        self.near_surface_plan = near_surface_plan
 
         def B_fn(points: Array) -> Array:
             value = jnp.zeros_like(points)
             if self.external_field is not None:
                 value = value + _field_cartesian(self.external_field, points)
             if self.plasma_field is not None:
-                value = value + self.plasma_field.B_plasma_xyz(points)
+                if self.near_surface_plan is None:
+                    value = value + self.plasma_field.B_plasma_xyz(points)
+                else:
+                    value = value + self.plasma_field.B_plasma_near_surface_xyz(
+                        points, self.near_surface_plan)
             return value
 
         # Differentiate the same Cartesian field graph used by B().  This is
@@ -609,6 +628,22 @@ class VmecExtender(MagneticField):
     def uses_virtual_casing(self) -> bool:
         """Whether plasma-current virtual casing contributes to the field."""
         return self.plasma_field is not None
+
+    @property
+    def uses_near_surface_continuation(self) -> bool:
+        """Whether plasma-field targets use a prepared Taylor continuation."""
+        return self.near_surface_plan is not None
+
+    def with_near_surface_continuation(
+        self, *, digits: int | None = None, precision: Any | None = None,
+        B_surface: Any | None = None,
+    ) -> "VmecExtender":
+        """Return this exterior field with fast near-surface plasma evaluation."""
+        if self.plasma_field is None:
+            raise RuntimeError("near-surface continuation requires virtual casing")
+        plan = self.plasma_field.plan_near_surface(
+            digits=digits, precision=precision, B_surface=B_surface)
+        return type(self)(self.external_field, self.plasma_field, plan)
 
     @classmethod
     def from_surface_data(

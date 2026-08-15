@@ -65,6 +65,7 @@ COIL_SURFACE_DISTANCE_WEIGHT = 1.0e3
 # A toroidal grid commensurate with the coil count can alias narrow B.n/B structure.
 NPHI, NTHETA = 37, 32
 METHOD = "BFGS"  # also accepts "L-BFGS-B"
+PARAMETER_BOUND = 3.0
 OPTIONS = {"maxiter": MAXITER, "gtol": 1.0e-8}
 if METHOD == "L-BFGS-B":
     OPTIONS.update(maxls=20, ftol=1e-12, maxcor=20)
@@ -196,7 +197,9 @@ joint_problem = vj.FunctionProblem.from_functions(
     np.zeros_like(x0), value_and_grad=scipy_objective)
 joint_problem.compile_value_and_gradient(report_interval=10.0)
 result = minimize(joint_problem.value_and_grad, joint_problem.x0,
-                  jac=True, method=METHOD, callback=monitor, options=OPTIONS)
+                  jac=True, method=METHOD,
+                  bounds=[(-PARAMETER_BOUND, PARAMETER_BOUND)] * x0.size if METHOD == "L-BFGS-B" else None,
+                  callback=monitor, options=OPTIONS)
 initial_value = monitor.records[0].cost
 
 x_final = x0 + scales * result.x

@@ -107,6 +107,7 @@ examples/optimization/*.vts
 # Local reference drivers used while translating the bootstrap examples.
 examples/optimization/simsopt_driver*.py
 examples/data/single_grid/wout_*.nc
+vmex_fieldline_tracing_*.png
 outputs/
 results/
 tmp/

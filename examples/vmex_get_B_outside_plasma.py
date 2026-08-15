@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 """Evaluate the coil plus finite-beta plasma field outside a VMEX boundary."""
 
-from dataclasses import replace
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 import vmex as vj
 from vmex import optimize as opt
@@ -15,18 +13,15 @@ from essos.coils import Coils
 from essos.fields import BiotSavart
 
 DATA = Path(__file__).resolve().parent / "data"
-INPUT = DATA / "input.LandremanPaul2021_QA_lowres"
-COILS = DATA / "ESSOS_biot_savart_LandremanPaulQA_finite_beta.json"
+INPUT = DATA / "input.LandremanPaul2021_QA_beta2p5_bootstrap"
+COILS = DATA / "ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json"
 
-print("Building a finite-beta equilibrium and its boundary-derivative graph...")
-inp = vj.VmecInput.from_file(INPUT).change_resolution(mpol=3, ntor=3, ntheta=12, nzeta=12)
-am = np.zeros(21); am[:2] = [1.0, -1.0]  # p(s) = PRES_SCALE * (1-s)
-inp = replace(inp, phiedge=-0.025, pmass_type="power_series", am=am, pres_scale=1400.0,
-              ns_array=np.array([9]), ftol_array=np.array([1e-8]), niter_array=np.array([3000]))
+print("Building the optimized 2.5%-beta QA equilibrium and its derivative graph...")
+inp = vj.VmecInput.from_file(INPUT)
 problem = opt.VmecProblem.from_input(inp, max_mode=1, use_ess=True, progress=True)
 final_equilibrium = problem.equilibrium_from_x(problem.x0)
 
-print("Loading ESSOS coils optimized for this finite-beta equilibrium...")
+print("Loading the ESSOS coils optimized against this finite-beta equilibrium...")
 coils = Coils.from_json(str(COILS))
 
 def coil_field_from_dofs(dofs):

@@ -89,8 +89,12 @@ It may be loaded from an ``mgrid`` file (trilinear interpolation weighted by
 :meth:`~vmex.core.mgrid.MgridField.from_cartesian_field`, which tabulates an
 ESSOS/SIMSOPT Biot--Savart object or any ``xyz -> B`` callable.  The resulting
 table and its current scale remain JAX-differentiable; tabulation itself does
-not retain coil-geometry derivatives. Direct, interpolation-free ESSOS coil
-derivatives use the virtual-casing residual below. VMEX carries no coil code.
+not retain coil-geometry derivatives. For a coupled solve,
+:meth:`~vmex.core.mgrid.MgridField.from_parameterized_cartesian_field` instead
+tabulates ``field(coil_parameters, xyz)`` entirely in JAX, retaining exact
+shape/current derivatives through interpolation and NESTOR. Direct,
+interpolation-free ESSOS derivatives use the virtual-casing residual below.
+VMEX carries no coil code.
 
 On a GPU free-boundary run, the plasma iteration, mgrid interpolation, cached
 vacuum arrays, and final state remain on the accelerator. The dense NESTOR
@@ -176,8 +180,16 @@ constructed from :meth:`~vmex.core.problem.VmecProblem.exterior_field` also
 provides ``B_vjp`` and the three spatial-derivative VJPs in the problem's
 boundary/current DOFs. The virtual-casing path applies outside the LCFS;
 :class:`~vmex.core.extender.VmecInteriorField` evaluates the live VMEC
-spectral field inside. Query points must stay away from the source surface and
-external coil filaments.
+spectral field inside. Direct off-surface quadrature must stay away from the
+source surface and all targets must stay away from external coil filaments.
+For near-LCFS field-line tracing,
+:meth:`~vmex.core.extender.VmecExtender.with_near_surface_continuation`
+prepares the singular on-surface plasma field and gradient once, then uses the
+first-order continuation
+:math:`\mathbf B(\mathbf x_\Gamma+\delta\mathbf x)=\mathbf B_\Gamma+
+\nabla\mathbf B_\Gamma\delta\mathbf x+O(|\delta\mathbf x|^2)`. This removes
+the otherwise prohibitive source-grid refinement from every ODE step; direct
+quadrature remains the validation path farther from the LCFS.
 
 Virtual casing reconstructs the field produced by currents inside the plasma
 surface. It does not determine the external coil field: supply an ESSOS coil
@@ -233,3 +245,12 @@ pressure-jump checks, and an independently reconverged final free-boundary
 solve. Vacuum coil optimization must also fix toroidal flux or current scale
 to exclude the trivial zero-field solution; nonzero edge pressure requires
 the sheet-current jump condition.
+
+The differentiable mgrid constructor above now supplies the previously
+missing :math:`F_c` path from ESSOS parameters to NESTOR's boundary data. The
+remaining implementation boundary is deliberate: replace the host cadence by
+one converged coupled root before exposing a public coil-only adjoint. An
+unrolled cadence would differentiate iteration choices and retain excessive
+memory; shadowing methods target chaotic time trajectories rather than this
+steady root. The bordered implicit adjoint is therefore the production path
+on both CPU and GPU.

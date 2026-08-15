@@ -568,6 +568,53 @@ class MgridField:
         )
         return cls.from_mgrid_data(data, extcur=jnp.asarray([scale]))
 
+    @classmethod
+    def from_parameterized_cartesian_field(
+        cls,
+        field: Any,
+        parameters: Any,
+        *,
+        rmin: float,
+        rmax: float,
+        zmin: float,
+        zmax: float,
+        ir: int,
+        jz: int,
+        kp: int,
+        nfp: int,
+        scale: Any = 1.0,
+    ) -> "MgridField":
+        """Differentiably tabulate ``field(parameters, xyz)`` on an mgrid.
+
+        Unlike :meth:`from_cartesian_field`, this path stays in JAX, so a
+        free-boundary residual retains derivatives with respect to coil shape
+        and current parameters. ``field`` must return one Cartesian vector per
+        point in an ``(n, 3)`` array.
+        """
+        ir, jz, kp, nfp = int(ir), int(jz), int(kp), int(nfp)
+        if ir < 2 or jz < 2 or kp < 1 or nfp < 1:
+            raise ValueError("ir and jz must be >=2; kp and nfp must be >=1")
+        if not (float(rmax) > float(rmin) and float(zmax) > float(zmin)):
+            raise ValueError("mgrid bounds require rmax>rmin and zmax>zmin")
+
+        r = jnp.linspace(float(rmin), float(rmax), ir)
+        z = jnp.linspace(float(zmin), float(zmax), jz)
+        phi = jnp.arange(kp) * (2.0 * jnp.pi / (nfp * kp))
+        pp, zz, rr = jnp.meshgrid(phi, z, r, indexing="ij")
+        xyz = jnp.stack((rr * jnp.cos(pp), rr * jnp.sin(pp), zz), axis=-1)
+        bxyz = jnp.asarray(field(parameters, xyz.reshape((-1, 3))))
+        if bxyz.shape != (kp * jz * ir, 3):
+            raise ValueError(
+                f"Cartesian field returned shape {bxyz.shape}; expected {(kp * jz * ir, 3)}")
+        bx, by, bz = jnp.moveaxis(bxyz.reshape((kp, jz, ir, 3)), -1, 0)
+        br = bx * jnp.cos(pp) + by * jnp.sin(pp)
+        bp = -bx * jnp.sin(pp) + by * jnp.cos(pp)
+        return cls(
+            br=br[None], bp=bp[None], bz=bz[None],
+            extcur=jnp.atleast_1d(jnp.asarray(scale)),
+            rmin=float(rmin), rmax=float(rmax), zmin=float(zmin),
+            zmax=float(zmax), nfp=nfp)
+
     def b_cyl(self, r: Any, phi: Any, z: Any) -> tuple[Any, Any, Any]:
         """Return ``(B_r, B_phi, B_z)`` at cylindrical points (broadcastable)."""
 
