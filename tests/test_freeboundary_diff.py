@@ -187,14 +187,21 @@ def test_finite_beta_extender_field_and_gradient_outside_lcfs(monkeypatch):
     assert live.uses_virtual_casing
     np.testing.assert_allclose(live.B(points), field.B(points), rtol=2e-11, atol=2e-11)
 
-    plan = field.plasma_field.plan_surface_precision(digits=3)
+    if hasattr(field.plasma_field, "plan_surface_precision"):
+        plan = field.plasma_field.plan_surface_precision(digits=3)
+        expected_surface_field = field.plasma_field.B_plasma_on_surface(
+            digits=3, precision=plan)
+    else:  # released virtual-casing-jax; public plan reuse arrives in PR #5
+        plan = FBD.plan_vc_precision(surface, digits=3)
+        expected_surface_field = field.plasma_field._vc.compute_internal_B(
+            field.plasma_field.B_total, digits=3, chunk_size=64, precision=plan)
     interface = FBD.FreeBoundaryDiffProblem.from_surface_data(
         surface, digits=3, precision=plan,
         virtual_casing_field=field.plasma_field,
     )
     np.testing.assert_allclose(
         interface.B_plasma,
-        field.plasma_field.B_plasma_on_surface(digits=3, precision=plan),
+        expected_surface_field,
         rtol=2e-11, atol=2e-11,
     )
 
