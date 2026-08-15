@@ -31,6 +31,8 @@ dependencies = [
   "netCDF4",
   "matplotlib",
   "packaging",
+  # JAX's persistent compilation cache uses file locks across processes.
+  "filelock",
   "booz_xform_jax",
   # 0.8.8 adds the checked tridiagonal fallback used by VMEX's preconditioner.
   "solvax>=0.8.8",
