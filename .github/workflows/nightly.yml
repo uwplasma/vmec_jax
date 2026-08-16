@@ -65,8 +65,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install released integrations
-        run: python -m pip install ".[coils,turbulence,freeb]" pytest pytest-xdist
+      - name: Install integrations under review
+        run: |
+          python -m pip install ".[turbulence,freeb]" pytest pytest-xdist
+          # VMEX PR #123 exercises the unreleased interfaces in ESSOS PR #58.
+          # Replace this commit pin with the new ESSOS minimum after its release.
+          python -m pip install "essos @ git+https://github.com/uwplasma/ESSOS.git@8631a66f911cd29508826f6f827ec5ceaf1778e9"
       - name: Verify imports
         run: python -c "import essos, gkx, virtual_casing_jax"
       - name: Fetch reference assets
