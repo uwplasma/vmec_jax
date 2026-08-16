@@ -77,8 +77,8 @@ def make_free_boundary_config(
     actual current/coil parameters to :func:`solve_free_boundary_implicit`.
     ``external_field`` here is the concrete reference used to fix resolution.
     ``device="auto"`` uses the CPU for the coupled implicit response on an
-    accelerator host; pass an explicit device to override that measured
-    lower-memory default.
+    accelerator host unless the process already pins JAX placement; pass an
+    explicit device to override that measured lower-memory default.
     """
     if not inp.lfreeb:
         raise ValueError("free-boundary implicit differentiation requires LFREEB=T")

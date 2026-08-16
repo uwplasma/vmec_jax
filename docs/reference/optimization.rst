@@ -286,8 +286,9 @@ solve, and 2 is an under-converged solve; only status 0 enters the adjoint.
 The path remains experimental while its NESTOR-edge Schur preconditioner is
 completed. ``make_free_boundary_config(..., device="auto")`` uses the CPU
 for this response on accelerator hosts because the present coupled transpose
-is faster and substantially smaller there; an explicit ``device="gpu"``
-overrides the measured default for development studies.
+is faster and substantially smaller there. An explicit ``device="gpu"`` or
+process-wide JAX placement overrides the measured default for development
+studies.
 
 Use :class:`vmex.core.monitoring.EquilibriumReporter` for the compact physics
 summary shared by the examples.  Each entry accepts either VMEX's
