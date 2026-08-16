@@ -306,7 +306,11 @@ def solve_free_boundary_implicit(
     cfg: FreeBoundaryImplicitConfig,
 ) -> SpectralState:
     """Return a differentiable converged free-boundary spectral state."""
-    state, _, _, _ = _callback(params, field_parameters, cfg)
+    icfg = cfg.implicit
+    with im._device_context(icfg):
+        params, field_parameters = im._device_pin(
+            icfg, (params, field_parameters))
+        state, _, _, _ = _callback(params, field_parameters, cfg)
     return state
 
 
@@ -376,8 +380,12 @@ def solve_free_boundary_implicit_status(
     Status 0 is derivative-certified, 1 denotes a failed solve, and 2 an
     under-converged solve. Only status 0 evaluates the implicit pullback.
     """
-    state, _, _, _, status, fsq, ratio = _callback_status(
-        params, field_parameters, cfg)
+    icfg = cfg.implicit
+    with im._device_context(icfg):
+        params, field_parameters = im._device_pin(
+            icfg, (params, field_parameters))
+        state, _, _, _, status, fsq, ratio = _callback_status(
+            params, field_parameters, cfg)
     return state, status, fsq, ratio
 
 
