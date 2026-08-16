@@ -1225,14 +1225,21 @@ def _host_solve_and_mask_status(cfg: ImplicitConfig, params_np) -> tuple:
     every optimizer interface applies the same acceptance policy.
     """
     with _device_context(cfg):
+        _HOST_ERROR.clear()
+        error = None
         try:
             state, mask = _host_solve_and_mask_impl(cfg, params_np)
+        except VmecError as exc:
+            # Direct host calls preserve the typed exception; pure_callback
+            # wraps the same error in the relayed sentinel handled below.
+            error = exc
         except Exception:
             # Only the short sentinel paired with a relayed typed VmecError is
             # an invalid optimizer trial. Never hide a programming error.
             if not _HOST_ERROR:
                 raise
             error = _HOST_ERROR.pop()
+        if error is not None:
             _HOST_ERROR.clear()
             _LAST_STATUS_ERROR[cfg] = error
             params = _device_pin(cfg, jax.tree.map(jnp.asarray, params_np))
