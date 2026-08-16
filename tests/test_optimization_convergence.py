@@ -80,7 +80,9 @@ def test_qi_implicit_descends():
     "family,nfp,helicity,aspect,kick",
     [pytest.param("qa", 2, (1, 0), 6.0, 0.01, id="qa"),
      pytest.param("qh", 4, (1, -1), 8.0, 0.0, id="qh"),
-     pytest.param("qp", 2, (0, 1), 6.0, 0.0, id="qp")],
+     # The circular QP seed has aspect 10; keep it there to certify QP descent,
+     # rather than a short-run trade from symmetry toward an unrelated aspect.
+     pytest.param("qp", 2, (0, 1), 10.0, 0.0, id="qp")],
 )
 def test_qs_implicit_descends(family, nfp, helicity, aspect, kick):
     """Each supported QS family has finite derivatives and physical descent."""
