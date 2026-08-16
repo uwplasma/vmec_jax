@@ -37,7 +37,9 @@ def test_free_boundary_status_callback_turns_trial_error_into_status(monkeypatch
         inp, field, ns=8, ftol=1.0e-6, max_iterations=20,
         field_from_parameters=lambda current: dataclasses.replace(
             field, extcur=current),
+        device="cpu",
     )
+    assert cfg.implicit.device.platform == "cpu"
 
     def fail(*_args, **_kwargs):
         raise VmecJacobianError("invalid trial")

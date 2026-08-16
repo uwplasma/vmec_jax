@@ -239,7 +239,9 @@ examples pass the same scalar pair to SciPy.
 This path is currently limited to reverse mode. Its low-memory host Krylov
 lane peaks near 3--5 GB on the bundled coarse examples, but the first coupled
 transpose still takes about one to two minutes to compile on the reference
-CPU and is not yet a practical GPU path. The next implementation step is to
+CPU and is not yet a practical GPU path. Its ``device="auto"`` policy therefore
+uses the CPU on an accelerator host while retaining an explicit GPU override.
+The next implementation step is to
 eliminate the interior radial block with VMEX's block-tridiagonal solver and
 solve only the NESTOR edge Schur complement. Rejected coil steps also need the
 same explicit finite trial wall used by the fixed-boundary optimizer before

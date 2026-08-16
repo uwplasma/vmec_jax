@@ -24,6 +24,7 @@ from jax.flatten_util import ravel_pytree
 from scipy.sparse.linalg import LinearOperator, gcrotmk
 
 from . import implicit as im
+from .device import AUTO, resolve_implicit_device
 from .freeboundary import (
     _presf_ns_scale,
     _solve_free_boundary_stage,
@@ -67,6 +68,7 @@ def make_free_boundary_config(
     adjoint_gcrot_m: int = 30,
     adjoint_gcrot_k: int = 5,
     field_from_parameters: Callable[[Any], Any] | None = None,
+    device: Any = AUTO,
 ) -> FreeBoundaryImplicitConfig:
     """Build a coupled free-boundary derivative configuration.
 
@@ -74,14 +76,19 @@ def make_free_boundary_config(
     smaller AD graph, pass ``field_from_parameters`` and then supply only the
     actual current/coil parameters to :func:`solve_free_boundary_implicit`.
     ``external_field`` here is the concrete reference used to fix resolution.
+    ``device="auto"`` uses the CPU for the coupled implicit response on an
+    accelerator host; pass an explicit device to override that measured
+    lower-memory default.
     """
     if not inp.lfreeb:
         raise ValueError("free-boundary implicit differentiation requires LFREEB=T")
     resolution = free_boundary_resolution(inp, external_field, ns=ns)
+    solve_device = resolve_implicit_device(device, resolution)
     cfg = im.make_config(
         inp, ns=resolution.ns, ftol=ftol, max_iterations=max_iterations,
         adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
         adjoint_gcrot_m=adjoint_gcrot_m, adjoint_gcrot_k=adjoint_gcrot_k,
+        device=solve_device,
     )
     if cfg.resolution != resolution:
         cfg = dataclasses.replace(cfg, resolution=resolution)
@@ -100,8 +107,9 @@ def _vacuum_program(cfg: FreeBoundaryImplicitConfig):
     # executable only needs a non-degenerate static topology here; its actual
     # axis coordinates remain dynamic inputs to every NESTOR call.
     r00 = float(np.asarray(icfg.inp.rbc)[int(icfg.inp.ntor), 0])
-    axis_r = jnp.full((icfg.resolution.nzeta,), r00)
-    axis_z = jnp.zeros_like(axis_r)
+    axis_r = im._device_pin(
+        icfg, jnp.full((icfg.resolution.nzeta,), r00))
+    axis_z = im._device_pin(icfg, jnp.zeros_like(axis_r))
     return _vacuum_executables(
         icfg.resolution, mf=int(icfg.inp.mpol) + 1,
         nf=int(icfg.inp.ntor), signgs=int(rt.setup.signgs),
@@ -159,10 +167,22 @@ def _mask_key(cfg: FreeBoundaryImplicitConfig) -> tuple:
 def _host_solve_and_mask(
     cfg, params_np, field_parameters_np, *, error_on_no_convergence=True,
 ):
+    """Run the callback on the implicit config's explicitly selected device."""
+    with im._device_context(cfg.implicit):
+        return _host_solve_and_mask_impl(
+            cfg, params_np, field_parameters_np,
+            error_on_no_convergence=error_on_no_convergence,
+        )
+
+
+def _host_solve_and_mask_impl(
+    cfg, params_np, field_parameters_np, *, error_on_no_convergence=True,
+):
     """Opaque forward solve plus one structural free-boundary dof mask."""
     icfg = cfg.implicit
-    params = jax.tree.map(jnp.asarray, params_np)
-    field_parameters = jax.tree.map(jnp.asarray, field_parameters_np)
+    params = im._device_pin(icfg, jax.tree.map(jnp.asarray, params_np))
+    field_parameters = im._device_pin(
+        icfg, jax.tree.map(jnp.asarray, field_parameters_np))
     field = cfg.field_from_parameters(field_parameters)
     inp = im.input_with_params(icfg.inp, params)
     seed = _FREE_HOT_CACHE.get(cfg)
@@ -261,6 +281,7 @@ def _callback(params, field_parameters, cfg):
         (im._state_struct(cfg.implicit), im._state_struct(cfg.implicit),
          rcon_struct, zcon_struct),
         params, field_parameters,
+        sharding=im._callback_sharding(cfg.implicit),
     )
 
 
@@ -274,6 +295,7 @@ def _callback_status(params, field_parameters, cfg):
          rcon_struct, zcon_struct, jax.ShapeDtypeStruct((), jnp.int32),
          scalar, scalar),
         params, field_parameters,
+        sharding=im._callback_sharding(cfg.implicit),
     )
 
 
@@ -289,11 +311,25 @@ def solve_free_boundary_implicit(
 
 
 def _solve_fwd(params, field_parameters, cfg):
-    state, mask, rcon0, zcon0 = _callback(params, field_parameters, cfg)
+    icfg = cfg.implicit
+    with im._device_context(icfg):
+        params, field_parameters = im._device_pin(
+            icfg, (params, field_parameters))
+        state, mask, rcon0, zcon0 = _callback(
+            params, field_parameters, cfg)
+        state, mask, rcon0, zcon0 = im._device_pin(
+            icfg, (state, mask, rcon0, zcon0))
     return state, (params, field_parameters, state, mask, rcon0, zcon0)
 
 
 def _solve_bwd(cfg, saved, state_bar):
+    icfg = cfg.implicit
+    with im._device_context(icfg):
+        saved, state_bar = im._device_pin(icfg, (saved, state_bar))
+        return _solve_bwd_impl(cfg, saved, state_bar)
+
+
+def _solve_bwd_impl(cfg, saved, state_bar):
     params, field_parameters, state, mask, rcon0, zcon0 = saved
     frozen = jax.lax.stop_gradient(state)
     project = im._dof_projector(cfg.implicit, mask)
@@ -346,8 +382,14 @@ def solve_free_boundary_implicit_status(
 
 
 def _solve_status_fwd(params, field_parameters, cfg):
-    state, mask, rcon0, zcon0, status, fsq, ratio = _callback_status(
-        params, field_parameters, cfg)
+    icfg = cfg.implicit
+    with im._device_context(icfg):
+        params, field_parameters = im._device_pin(
+            icfg, (params, field_parameters))
+        state, mask, rcon0, zcon0, status, fsq, ratio = _callback_status(
+            params, field_parameters, cfg)
+        state, mask, rcon0, zcon0 = im._device_pin(
+            icfg, (state, mask, rcon0, zcon0))
     saved = (params, field_parameters, state, mask, rcon0, zcon0, status)
     return (state, status, fsq, ratio), saved
 
