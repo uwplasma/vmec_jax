@@ -166,10 +166,10 @@ surface_data0 = vc.surface_field_data_from_state(
     inp, state0, runtime=runtime0, nphi=NPHI, ntheta=NTHETA)
 precision = vc.plan_vc_precision(surface_data0, digits=VC_DIGITS)
 
-def interface_costs(x, state, runtime):
+def interface_costs(x, equilibrium_state, solver_context):
     surface, coils = objects_from_x(x)
     surface_data = vc.surface_field_data_from_state(
-        inp, state, runtime=runtime, nphi=NPHI, ntheta=NTHETA)
+        inp, equilibrium_state, runtime=solver_context, nphi=NPHI, ntheta=NTHETA)
     # This object evaluates the fixed trial surface's virtual-casing residuals;
     # VMEX has already solved the volume equilibrium with that boundary prescribed.
     interface = vc.PlasmaVacuumInterface.from_surface_data(
@@ -203,7 +203,8 @@ def geometry_costs(x):
 def physics_objective(u):
     x = jnp.asarray(x0) + jnp.asarray(scales) * u
     return plasma_problem.jax_objective_from_state(
-        x[:x_plasma0.size], lambda state, runtime: interface_costs(x, state, runtime),
+        x[:x_plasma0.size], lambda equilibrium_state, solver_context:
+            interface_costs(x, equilibrium_state, solver_context),
         n_extra_terms=2)
 
 def geometry_objective(u):

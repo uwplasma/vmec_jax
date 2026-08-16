@@ -172,9 +172,12 @@ CPU. Regenerate with
 `python docs/_static/figures/sources/make_optimization_docs_figures.py`.
 ```
 
-## What is out of scope
+## Free-boundary root
 
-The free-boundary NESTOR fixed point is host-driven and not differentiated;
-coil and `extcur` derivatives go through the virtual-casing residual instead
-({doc}`nestor-vacuum`). The supported scope of every AD path is one row of
+The free-boundary path differentiates the converged coupled VMEX--NESTOR root,
+including direct coil-shape/current parameters, while keeping host iterations
+off the AD tape. The default whole-state transpose is exact but cold-compile
+and memory limited. An advanced boundary-Schur transpose, its full-residual
+certificate, and its current performance limits are documented in
+{doc}`nestor-vacuum`. The supported scope of every AD path is one row of
 {doc}`/reference/capabilities`.

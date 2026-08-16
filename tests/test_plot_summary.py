@@ -204,6 +204,9 @@ def test_frozen_pressure_scan_recovers_wout(solved_case):
         scan["dmerc"][0], np.asarray(wout.DMerc) - np.asarray(wout.DWell))
     np.testing.assert_allclose(
         scan["d_r"][0], np.asarray(info["d_r"]) + np.asarray(wout.DWell))
+    # -D_R = DMerc minus a non-negative GGJ correction. Nearly coincident
+    # ideal and resistive margins are therefore physical, not duplicated data.
+    assert np.all(-scan["d_r"][:, interior] <= scan["dmerc"][:, interior] + 1e-12)
 
 
 def test_frozen_pressure_scan_uses_explicit_vacuum_seed(solved_case):
@@ -304,8 +307,8 @@ def test_j_invariant_map_rejects_degenerate_field():
         plotting._j_invariant_map(booz)
 
 
-def test_j_invariant_map_uses_surface_local_normalized_pitch(monkeypatch):
-    """Fixed lambda_n uses each surface's Bmin/Bmax, as in the polar-J reference."""
+def test_j_invariant_map_uses_one_physical_pitch_on_every_surface(monkeypatch):
+    """A radial maximum-J diagnostic holds physical pitch fixed."""
     import vmex.core.bounce as bounce
 
     pitches = []
@@ -317,14 +320,21 @@ def test_j_invariant_map_uses_surface_local_normalized_pitch(monkeypatch):
 
     monkeypatch.setattr(bounce, "bounce_action_from_boozer", _fake_bounce)
     booz = {
-        "bmnc_b": np.array([[1.0, 0.2], [2.0, 0.4]]), "bmns_b": None,
+        "bmnc_b": np.array([[1.0, 0.2], [1.1, 0.2]]), "bmns_b": None,
         "xm_b": np.array([0, 0]), "xn_b": np.array([0, 1]), "nfp": 1,
         "iota_b": np.array([0.5, 0.5]), "G_b": np.ones(2), "I_b": np.zeros(2),
         "s_b": np.array([0.25, 0.75]),
     }
     result = plotting._j_invariant_map(booz, pitch_fraction=0.5, nalpha=4)
-    np.testing.assert_allclose(pitches, [1.0, 0.5], rtol=0.0, atol=2e-4)
-    np.testing.assert_allclose(result["pitch"], pitches)
+    np.testing.assert_allclose(pitches, [1.0 / 1.05, 1.0 / 1.05], rtol=0.0, atol=2e-4)
+    np.testing.assert_allclose(result["pitch"], pitches[0])
+
+    pitches.clear()
+    result = plotting._j_invariant_map(booz, pitch=1.0 / 1.05, nalpha=4)
+    np.testing.assert_allclose(pitches, [1.0 / 1.05, 1.0 / 1.05])
+    np.testing.assert_allclose(result["pitch_inverse"], 1.05)
+    with pytest.raises(ValueError, match="not trapped"):
+        plotting._j_invariant_map(booz, pitch=0.5, nalpha=4)
 
 
 def test_volume_second_derivative_of_linear_vprime():

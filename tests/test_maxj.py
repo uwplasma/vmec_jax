@@ -60,13 +60,16 @@ def test_maximum_j_sign_and_signed_flux_convention():
     assert float(adverse["total"]) > 1.0e-3
     assert np.all(np.asarray(
         adverse["relative_slope"][adverse["matched_well_mask"]]) > 0.0)
-    assert float(reversed_flux["total"]) > 1.0e-3
+    assert float(reversed_flux["total"]) == 0.0
     assert float(favorable["maximum_j_fraction"]) == pytest.approx(1.0)
     assert float(adverse["maximum_j_fraction"]) == pytest.approx(0.0)
     assert float(favorable["excluded_pitch_fraction"]) == pytest.approx(0.0)
     np.testing.assert_allclose(
         reversed_flux["relative_slope"][reversed_flux["matched_well_mask"]],
-        -favorable["relative_slope"][favorable["matched_well_mask"]])
+        favorable["relative_slope"][favorable["matched_well_mask"]])
+    np.testing.assert_allclose(
+        reversed_flux["dJ_ds"][reversed_flux["matched_well_mask"]],
+        favorable["dJ_ds"][favorable["matched_well_mask"]])
 
     depths = _residual(1.02, pitch=(1.0 / 1.1, 1.0 / 0.85))
     assert float(jnp.min(depths["trapping_depth"])) < 0.5

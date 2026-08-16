@@ -22,7 +22,7 @@ from essos.surfaces import SurfaceRZFourier, surfacerzfourier_from_boundary
 
 TARGET_BETA = 0.025
 SURFACES = np.linspace(0.1, 0.9, 8)
-NS, MPOL, NTOR, NITER, FTOL = 31, 5, 5, 20000, 1.0e-10
+NS, MPOL, NTOR, NITER, FTOL = 31, 5, 5, 5000, 1.0e-10
 MAXITER, METHOD, PARAMETER_BOUND = 20, "L-BFGS-B", 1.0
 ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
 LENGTH_TARGET, LENGTH_WEIGHT = 3.5, 1.0
@@ -37,15 +37,18 @@ if ci_smoke:
     OPTIONS = {"maxiter": MAXITER, "maxls": 5, "ftol": 1.0e-8, "gtol": 1.0e-5}
 
 DATA = Path(__file__).resolve().parents[1] / "data"
+seed = vj.VmecInput.from_file(DATA / "input.minimal_seed_nfp2")
 inp = vj.VmecInput.from_file(DATA / "input.LandremanPaul2021_QA_beta2p5_bootstrap")
+inp = inp.change_resolution(mpol=seed.mpol, ntor=seed.ntor,
+                            ntheta=seed.ntheta, nzeta=seed.nzeta)
+inp = replace(inp, rbc=seed.rbc, zbs=seed.zbs, rbs=seed.rbs, zbc=seed.zbc,
+              raxis_c=seed.raxis_c, zaxis_s=seed.zaxis_s,
+              raxis_s=seed.raxis_s, zaxis_c=seed.zaxis_c)
 inp = inp.change_resolution(mpol=MPOL, ntor=NTOR, ntheta=2 * MPOL + 6, nzeta=16)
 inp = replace(inp, lfreeb=True, mgrid_file="direct ESSOS field",
-              phiedge=-inp.phiedge, curtor=-inp.curtor,
               ns_array=np.array([NS]), niter_array=np.array([NITER]),
               ftol_array=np.array([FTOL]))
 coils0 = Coils.from_json(str(DATA / "ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json"))
-# The stored coils use the input's opposite global field orientation. Reversing
-# PHIEDGE and CURTOR together preserves the equilibrium and bootstrap physics.
 if ci_smoke:
     coils0.n_segments = 24
 
@@ -65,7 +68,7 @@ params = im.params_from_input(inp)
 config = vj.make_free_boundary_config(
     inp, BiotSavart(coils0), ns=NS, ftol=FTOL, max_iterations=NITER,
     adjoint_tol=1.0e-8, field_from_parameters=field_from_u)
-runtime = im.runtime_from_params(params, config.implicit)
+solver_context = im.runtime_from_params(params, config.implicit)
 
 # ne=n0(1-s^5), Te=Ti=T0(1-s); rescale n0*T0 to the peak pressure in AM.
 n0, T0 = 3.0e20 * (TARGET_BETA / 0.05)**(1 / 3), 15.0e3 * (TARGET_BETA / 0.05)**(2 / 3)
@@ -81,10 +84,10 @@ tuples = [(qs.residuals_state, 0.0, 1.0), (bootstrap.residuals_state, 0.0, 1.0),
           (opt.volume_average_beta, TARGET_BETA, 1.0 / TARGET_BETA**2)]
 
 def objective(u):
-    state, status, _, _ = vj.solve_free_boundary_implicit_status(params, u, config)
+    equilibrium_state, status, _, _ = vj.solve_free_boundary_implicit_status(params, u, config)
 
     def accepted(_):
-        residual = opt.residuals_from_tuples(state, runtime, tuples)
+        residual = opt.residuals_from_tuples(equilibrium_state, solver_context, tuples)
         coils = coils_from_u(u)
         costs = jnp.asarray([
             0.5 * LENGTH_WEIGHT * jnp.sum((coils.length - LENGTH_TARGET)**2),
@@ -98,7 +101,8 @@ def objective(u):
     def rejected(_):
         # A failed trial gets an explicit smooth wall; only certified states
         # enter the physics objective and the implicit adjoint.
-        residual = jnp.zeros_like(opt.residuals_from_tuples(state, runtime, tuples))
+        residual = jnp.zeros_like(opt.residuals_from_tuples(
+            equilibrium_state, solver_context, tuples))
         wall = 1.0e3 * (1.0 + jnp.sqrt(1.0e-12 + jnp.vdot(u, u)))**2
         return wall, (residual, jnp.zeros(3), status)
 
@@ -124,11 +128,13 @@ def value_and_grad(u):
 print("Running single_stage_free_boundary_optimization_finite_beta.py")
 print(f"True finite-beta NESTOR + ESSOS: {x0.size} coil variables; no boundary dofs or mgrid file")
 print(f"dof_names = {dof_names}")
-print("The first value/gradient solves the free boundary and compiles one implicit adjoint...")
+free_problem = vj.FunctionProblem.from_functions(
+    np.zeros_like(x0), value_and_grad=value_and_grad, names=dof_names)
+first = free_problem.compile_value_and_gradient(progress=not ci_smoke, report_interval=10.0)
 if ci_smoke:
-    final_cost, _ = value_and_grad(np.zeros_like(x0)); optimized_u, iterations = np.zeros_like(x0), 0
+    final_cost, optimized_u, iterations = first.value, np.zeros_like(x0), 0
 else:
-    result = minimize(value_and_grad, np.zeros_like(x0), jac=True, method=METHOD,
+    result = minimize(free_problem.value_and_grad, np.zeros_like(x0), jac=True, method=METHOD,
         bounds=[(-PARAMETER_BOUND, PARAMETER_BOUND)] * x0.size,
         callback=monitor, options=OPTIONS)
     optimized_u, final_cost, iterations = result.x, result.fun, result.nit
@@ -142,14 +148,14 @@ wout = vj.wout_from_state(
     fsqz=free_result.fsqz, fsql=free_result.fsql,
     niter=free_result.iterations, converged=free_result.converged,
     vacuum_output=free_result.vacuum)
-equilibrium = opt.Equilibrium(inp, free_result.state, runtime, free_result)
+equilibrium = opt.Equilibrium(inp, free_result.state, solver_context, free_result)
 
 # Print results
-print(f"[final] QA = {float(qs.total_state(free_result.state, runtime)):.5e}, "
-      f"f_boot = {float(bootstrap.total_state(free_result.state, runtime)):.5e}, "
+print(f"[final] QA = {float(qs.total_state(free_result.state, solver_context)):.5e}, "
+      f"f_boot = {float(bootstrap.total_state(free_result.state, solver_context)):.5e}, "
       f"beta = {float(wout.betatotal):.3%}, "
-      f"aspect = {float(opt.aspect_ratio(free_result.state, runtime)):.3f}, "
-      f"mean iota = {float(opt.mean_iota(free_result.state, runtime)):.3f}")
+      f"aspect = {float(opt.aspect_ratio(free_result.state, solver_context)):.3f}, "
+      f"mean iota = {float(opt.mean_iota(free_result.state, solver_context)):.3f}")
 print(f"Objective = {float(final_cost):.6e} after {iterations} {METHOD} iterations")
 print(f"Coil lengths = {np.asarray(coils_final.length)}")
 print(f"Maximum curvature = {float(np.max(np.asarray(coils_final.curvature))):.3f} 1/m")

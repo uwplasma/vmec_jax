@@ -22,7 +22,7 @@ MAX_NFEV = [20, 15, 30]
 N_CURRENT_SPLINE = [6, 8, 10]  # optimized I'(s) spline knots at each stage
 ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
 # VMEC's dimensional DMerc/DR values are O(1e2-1e3) for this seed.
-STABILITY_WEIGHT, EDGE_WEIGHT_FACTOR = 1.0e-6, 10.0
+STABILITY_WEIGHT, EDGE_WEIGHT_FACTOR, STABILITY_MIN_S = 1.0e-6, 10.0, 0.2
 # Characteristic low-order boundary step in meters; ESS reduces higher modes.
 # Current dofs are dimensionless here, so they have their own optimizer scale.
 PARAMETER_STEP, CURRENT_PARAMETER_STEP = 0.02, 0.05
@@ -68,7 +68,10 @@ picard = self_consistent_bootstrap(inp, profiles, 0, n_iter=2 if ci_smoke else 8
 # to the self-consistent bootstrap response before the optimization starts.
 inp, equilibrium = picard.input, picard.equilibrium
 stability_s = np.linspace(0.0, 1.0, int(inp.ns_array[-1]))[2:-1]
-stability_weights = STABILITY_WEIGHT * (1.0 + (EDGE_WEIGHT_FACTOR - 1.0) * stability_s**4)
+# Mercier coordinates are unreliable near the axis. Zero weight below s=0.2
+# and increase it smoothly toward the edge, where stability is hardest.
+stability_weights = np.where(stability_s >= STABILITY_MIN_S,
+    STABILITY_WEIGHT * (1.0 + (EDGE_WEIGHT_FACTOR - 1.0) * stability_s**4), 0.0)
 
 # Objective function terms
 bootstrap = RedlBootstrapMismatch(profiles, helicity_n=0, surfaces=SURFACES,
@@ -82,11 +85,11 @@ objective_function_terms = [
     (opt.mercier_stability_residual, 0.0, stability_weights),
     (opt.glasser_stability_residual, 0.0, stability_weights),
 ]
-def minimum_dmerc(state, runtime):
-    return opt.d_merc_state(state, runtime)[2:-1].min()
+def minimum_dmerc(equilibrium_state, solver_context):
+    return opt.d_merc_state(equilibrium_state, solver_context)[2:-1].min()
 
-def maximum_dr(state, runtime):
-    return opt.glasser_d_r_state(state, runtime)[2:-1].max()
+def maximum_dr(equilibrium_state, solver_context):
+    return opt.glasser_d_r_state(equilibrium_state, solver_context)[2:-1].max()
 
 report = opt.EquilibriumReporter(
     ("QS", qs.total, ".4e"), ("f_boot", bootstrap.total, ".4e"),

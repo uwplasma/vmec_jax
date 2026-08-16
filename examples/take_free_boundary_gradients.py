@@ -52,11 +52,11 @@ config = make_free_boundary_config(
     inp, biot_savart, ns=NS, ftol=FTOL, max_iterations=NITER,
     adjoint_tol=1.0e-9,
     field_from_parameters=field_from_parameters)
-runtime = im.runtime_from_params(params, config.implicit)
+solver_context = im.runtime_from_params(params, config.implicit)
 
 def aspect_from_coils(parameters):
-    state = solve_free_boundary_implicit(params, parameters, config)
-    return im.aspect_ratio(state, runtime)
+    equilibrium_state = solve_free_boundary_implicit(params, parameters, config)
+    return im.aspect_ratio(equilibrium_state, solver_context)
 
 print("Solving the free boundary and its implicit adjoint...")
 parameters = jnp.zeros(base_dofs.size)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """Trace a finite-beta QA field inside and outside its VMEX boundary."""
 
+from dataclasses import replace
 import os
 from pathlib import Path
 
@@ -27,11 +28,12 @@ N_FIELDLINES, N_TOROIDAL_TURNS, TRACE_LENGTH, N_SAMPLES = 14, 400, 3000.0, 25000
 TRACE_TOLERANCE, OUTSIDE_OFFSET = 1.0e-7, 0.005
 # Virtual casing is singular on the source surface. The fast field below is a
 # local first-order continuation, so terminate it before extrapolation can
-# create false islands. Stop before leaving the resolved exterior annulus.
+# create false islands. Stop before leaving the resolved exterior region.
 MAX_SURFACE_DISTANCE = 0.055
 NPHI, NTHETA, VC_DIGITS = 24, 24, 4
 TRACE_PROGRESS = True
-if os.environ.get("VMEX_EXAMPLES_CI") == "1":
+ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
+if ci_smoke:
     N_FIELDLINES, N_TOROIDAL_TURNS, N_SAMPLES, TRACE_TOLERANCE = 3, 2, 120, 1.0e-6
     TRACE_LENGTH = 20.0
     NPHI, NTHETA, VC_DIGITS = 8, 8, 3
@@ -39,6 +41,9 @@ if os.environ.get("VMEX_EXAMPLES_CI") == "1":
 
 print("Solving the finite-beta QA equilibrium and loading its matched ESSOS coils...")
 inp = vj.VmecInput.from_file(DATA / "input.LandremanPaul2021_QA_beta0p5_bootstrap")
+inp = replace(inp, ns_array=np.array([31 if ci_smoke else 51]),
+              ftol_array=np.array([1e-10 if ci_smoke else 1e-14]),
+              niter_array=np.array([8000]))
 equilibrium = opt.solve_equilibrium(inp, verbose=True)
 coils = Coils.from_json(str(DATA / "ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json"))
 biot_savart = BiotSavart(coils)
@@ -101,15 +106,17 @@ vmex_outside = trace_field_lines(exterior, outside_xyz, length=TRACE_LENGTH,
 
 print("Plotting 3D trajectories and the phi=0 Poincare comparison...")
 surface = surfacerzfourier_from_boundary(inp.rbc, inp.zbs, inp.nfp, nphi=60, ntheta=60)
-figure = plt.figure(figsize=(10.5, 4.5)); axis3d = figure.add_subplot(121, projection="3d")
+figure = plt.figure(figsize=(8.6, 4.5)); grid = figure.add_gridspec(1, 2, width_ratios=(3, 1))
+axis3d = figure.add_subplot(grid[0], projection="3d")
 surface.plot(ax=axis3d, show=False, color="lightsteelblue", alpha=0.30)
 coils.plot(ax=axis3d, show=False, color="saddlebrown", linewidth=1.1)
 vmex_inside.plot(ax=axis3d, show=False, n_trajectories_plot=len(inside_xyz),
-                 color="#0072B2", linewidth=0.8)
+                 color="#0072B2", linewidth=0.35, alpha=0.65)
 vmex_outside.plot(ax=axis3d, show=False, n_trajectories_plot=len(outside_xyz),
-                  color="#D55E00", linewidth=1.0)
+                  color="#D55E00", linewidth=0.35, alpha=0.65)
 axis3d.set_title(f"Self-consistent field, beta={float(equilibrium.wout.betatotal):.2%}")
-axis3d.set_axis_off(); poincare = figure.add_subplot(122)
+axis3d.set_axis_off(); axis3d.set_box_aspect((1, 1, 1), zoom=1.20)
+poincare = figure.add_subplot(grid[1])
 inside_sections = vmex_inside.poincare_plot(
     shifts=[0.0], ax=poincare, show=False, color="#0072B2", s=0.01)
 coil_colors = ["#009E73" if bool(value) else "#D55E00" for value in inside]
@@ -126,15 +133,19 @@ r_values = np.concatenate([np.hypot(section[:, 0], section[:, 1])]
 z_values = np.concatenate([section[:, 2]] + [row[1] for row in all_sections])
 poincare.set_xlim(r_values.min(), r_values.max()); poincare.set_ylim(z_values.min(), z_values.max())
 poincare.set_aspect("equal", adjustable="box")
-poincare.grid(alpha=0.25); poincare.legend(handles=[
+legend_handles = [
     Line2D([], [], color="k", lw=1.0, label="VMEX LCFS"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#0072B2", label="VMEX total field, interior seeds"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#009E73", label="coils only, interior seeds"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#D55E00", label="coils only, exterior seeds"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#CC79A7", label="coils + plasma, exterior seeds"),
-], fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, frameon=False)
-figure.tight_layout(rect=(0, 0.12, 1, 1)); figure.savefig(
-    "vmex_fieldline_tracing_finite_beta.png", dpi=200); plt.close(figure)
+]
+poincare.grid(alpha=0.25)
+axis3d.legend(handles=legend_handles, fontsize=7, loc="lower center",
+              bbox_to_anchor=(0.5, -0.02), ncol=2, frameon=False)
+figure.subplots_adjust(left=0.01, right=0.98, bottom=0.05, top=0.92, wspace=0.02)
+figure.savefig("vmex_fieldline_tracing_finite_beta.png", dpi=200,
+               bbox_inches="tight", pad_inches=0.04); plt.close(figure)
 bounded = ~np.asarray(vmex_outside.boundary_hits)
 crossings = np.asarray([len(row[0]) for row in outside_sections])
 offsets = np.asarray((seed_fractions[~inside] - 1.0) * edge_radius)

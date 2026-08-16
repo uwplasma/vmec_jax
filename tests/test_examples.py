@@ -2,8 +2,8 @@
 
 Each script reads ``VMEX_EXAMPLES_CI=1``; the tests require a clean exit,
 physics progress where applicable, and the documented output artifacts.
-Commented optional objective terms are exercised separately by
-``test_extra_terms_work_uncommented``.
+Commented optional objective terms are exercised by their physics/AD unit tests;
+this module keeps their example wiring explicit.
 """
 
 from __future__ import annotations
@@ -132,9 +132,9 @@ def test_fixed_free_boundary_comparison(tmp_path):
     out = _run_example(
         EXAMPLES / "vmex_fixed_free_boundary_comparison.py", tmp_path,
         timeout=900)
-    field = re.search(r"Annulus pointwise error: median=([0-9.eE+-]+)", out)
+    field = re.search(r"Outer-region pointwise error: median=([0-9.eE+-]+)", out)
     surfaces = re.search(r"Common-surface RMS errors \[m\] = \[([^]]+)\]", out)
-    assert field is not None and float(field.group(1)) < 8.0e-2
+    assert field is not None and 5.0e-2 < float(field.group(1)) < 2.5e-1
     assert surfaces is not None and np.max(np.fromstring(surfaces.group(1), sep=" ")) < 1.5e-2
     assert (tmp_path / "vmex_fixed_free_boundary_comparison.png").stat().st_size > 10_000
 
@@ -147,7 +147,8 @@ def test_free_boundary_single_stage_examples_show_explicit_optimizer_contract():
         assert "solve_free_boundary_implicit" in text
         assert "residuals_from_tuples" in text
         assert "jax.value_and_grad" in text
-        assert "minimize(value_and_grad" in text
+        assert "FunctionProblem.from_functions" in text
+        assert "minimize(free_problem.value_and_grad" in text
         assert "pack_boundary" not in text
         assert "mgrid file" in text
 
@@ -298,6 +299,10 @@ def test_qi_maxj_continuation_example(tmp_path):
     assert seed is not None and final is not None
     assert np.isfinite(float(final.group(1))) and float(final.group(1)) <= 1.05 * float(seed.group(1))
     assert re.search(r"J-invariance = ([0-9.eE+-]+), maximum-J = ([0-9.eE+-]+)", out)
+    displacement = re.search(r"normalized boundary displacement = ([0-9.eE+-]+)", out)
+    maxj_fraction = re.search(r"maximum-J fraction = ([0-9.]+)%", out)
+    assert displacement is not None and float(displacement.group(1)) > 1.0e-3
+    assert maxj_fraction is not None and float(maxj_fraction.group(1)) >= 95.0
     assert (tmp_path / "input.QI_maxJ_optimized").exists()
     assert (tmp_path / "wout_QI_maxJ_optimized.nc").exists()
     assert (tmp_path / "QI_maxJ_optimized_summary.png").stat().st_size > 10_000
@@ -316,40 +321,14 @@ def test_qi_optimization_example(tmp_path):
     assert (tmp_path / "wout_QI_optimized.nc").exists()
 
 
-def test_extra_terms_work_uncommented():
-    """The commented-out example terms run as objectives when uncommented."""
-    import jax
-
-    from vmex.core.input import VmecInput
-    from vmex.core import optimize as opt
-
-    was_disabled = bool(jax.config.jax_disable_jit)
-    jax.config.update("jax_disable_jit", False)  # conftest disables jit globally
-    try:
-        inp = VmecInput.from_file(DATA_DIR / "input.minimal_seed_nfp2")
-        # exactly the expressions the example comments show:
-        extra_terms = [
-            (opt.magnetic_well, 0.05, 1.0),
-            (opt.mercier_stability_residual, 0.0, 100.0),
-            (lambda eq: max(1.0 / opt.l_grad_b(eq) - 1.0 / 0.35, 0.0), 0.0, 1.0),
-        ]
-        terms = [(opt.aspect_ratio, 5.0, 1.0)] + extra_terms
-        result = opt.least_squares(terms, inp, max_mode=1, jac=None,
-                                   use_ess=True, max_nfev=2)
-        assert np.all(np.isfinite(result.fun))
-        # the traceable extra term also differentiates through jac="implicit"
-        result2 = opt.least_squares(
-            [(opt.aspect_ratio, 5.0, 1.0),
-             (opt.magnetic_well, 0.05, 1.0),
-             (opt.mercier_stability_residual, 0.0, 100.0)],
-            inp, max_mode=1, jac="implicit", use_ess=True, max_nfev=2)
-        assert np.all(np.isfinite(result2.fun))
-        # host wout-engine terms are rejected with a clear error in implicit mode
-        with pytest.raises(ValueError, match="implicit-differentiable"):
-            opt.least_squares([(opt.d_merc, 0.0, 1.0)], inp, max_mode=1,
-                              jac="implicit", max_nfev=1)
-    finally:
-        jax.config.update("jax_disable_jit", was_disabled)
+def test_vacuum_qs_examples_expose_trial_pressure_terms():
+    """Vacuum QS examples expose the tested trial-pressure stability terms."""
+    for case in ("QA", "QH"):
+        source = (EXAMPLES / "optimization" / f"{case}_optimization.py").read_text()
+        assert "USE_TRIAL_STABILITY" in source
+        assert "(trial_dmerc, 0.0, stability_weights)" in source
+        assert "(trial_dr, 0.0, stability_weights)" in source
+        assert "weights rise smoothly toward the edge" in source
 
 
 # The self-consistent-bootstrap examples reproduce arXiv:2205.02914 against the

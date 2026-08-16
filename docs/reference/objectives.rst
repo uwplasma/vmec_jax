@@ -35,11 +35,11 @@ recognized automatically:
   :class:`~vmex.core.bootstrap.RedlBootstrapMismatch`) are callable this
   way, as is any user lambda;
 - **two positional arguments** — the term is treated as a pure traceable
-  ``(state, runtime)`` function (the scalar targets below).
+  ``(equilibrium_state, solver_context)`` function (the scalar targets below).
 
 For ``jac="implicit"`` every term must be traceable: either a
-two-positional ``(state, runtime)`` callable, or an object exposing a
-``residuals_state(state, runtime)`` method (the residual classes do — the
+two-positional ``(equilibrium_state, solver_context)`` callable, or an object
+exposing a ``residuals_state(equilibrium_state, solver_context)`` method (the residual classes do — the
 optimizer picks it up automatically, so the *same* term list works in both
 gradient modes).  Terms that evaluate wout tables on host NumPy
 (:func:`~vmex.core.optimize.d_merc`,
@@ -95,7 +95,9 @@ QH, and QP scripts are in ``examples/optimization/``.
 Scalar geometry and profile targets
 -----------------------------------
 
-All of these are pure ``(state, runtime)`` functions — traceable, cheap,
+Here ``equilibrium_state`` contains VMEC's spectral equilibrium coefficients;
+``solver_context`` contains the prepared grids, profiles, and transforms. It is
+not elapsed run time. All of these are pure two-argument functions — traceable, cheap,
 and composable with both gradient modes:
 
 - :func:`~vmex.core.optimize.aspect_ratio` — the VMEC/simsopt effective
@@ -124,9 +126,10 @@ remaining a pure traceable tuple term:
 
    maximum_elongation = 8.0
 
-   def elongation_excess(state, runtime):
+   def elongation_excess(equilibrium_state, solver_context):
        return jnp.maximum(
-           opt.max_elongation(state, runtime) - maximum_elongation, 0.0
+           opt.max_elongation(equilibrium_state, solver_context)
+           - maximum_elongation, 0.0
        )
 
    terms = [(elongation_excess, 0.0, 1.0)]
@@ -196,7 +199,8 @@ criterion. Then post-check
 ``abs(S) >> shear_epsilon`` on every target surface; a regularized zero-shear
 result is numerically defined but not a valid GGJ stability claim.
 
-``L_grad_B`` additionally has a fully traceable ``(state, runtime)`` lane,
+``L_grad_B`` additionally has a fully traceable
+``(equilibrium_state, solver_context)`` lane,
 :func:`~vmex.core.optimize.l_grad_b_state` — same convention
 (``L_grad_B = |B| sqrt(2 / ||grad B||_F^2)``, same sampling grid and radial
 stencils, wout-lane parity to float round-off), rebuilt from the state-field
@@ -299,7 +303,7 @@ replacement for the Goodman residual:
        inp, max_mode=6, jac="implicit")
 
 The two classes do not impose a shared weight. ``MaximumJResidual`` evaluates
-``dJ/dpsi`` at common pitch using signed toroidal flux and matched wells;
+the outward slope ``dJ/ds`` at common pitch using matched wells;
 invalid topology is NaN rather than a favorable zero. See
 :doc:`/explanation/confinement` for the sign and matching contract.
 
@@ -406,8 +410,14 @@ Their ``*_stability_residual`` forms are AD-transparent objective rows. This
 is a fast pressure-sensitivity proxy, not a finite-beta certificate: it omits
 the pressure-driven geometry, current, and Shafranov-shift response, so the
 candidate must be re-solved at finite pressure. ``QA_optimization.py`` exposes
-the workflow by setting ``TRIAL_BETA``; its one-dimensional tuple weights grow
-toward the edge, where stability is usually hardest.
+the workflow with ``TRIAL_BETA`` and ``USE_TRIAL_STABILITY``. The stability
+rows are introduced only after a QA basin exists, normalized to that stage's
+incoming values, and increased in explicit continuation stages. Their
+one-dimensional tuple weights are zero for ``s < 0.2``, where the criterion is
+singular, and grow smoothly toward the edge, where stability is usually
+hardest. The script prints this radial choice whenever it is active. A small
+positive ``STABILITY_MARGIN`` avoids accepting a roundoff-level sign change;
+a self-consistent finite-beta solve is still the physical certificate.
 
 The QA/QH bootstrap examples write a separate
 ``*_bootstrap_current.png`` overlay of the equilibrium and Redl
@@ -498,7 +508,7 @@ Which objectives differentiate how
    * - scalar targets (aspect, volume, iota, mirror, elongation, well)
      - yes
      - yes
-     - pure ``(state, runtime)`` functions
+     - pure ``(equilibrium_state, solver_context)`` functions
    * - :class:`~vmex.core.omnigenity.QIResidual`
      - yes
      - yes
@@ -582,9 +592,9 @@ finite differences, one argument is enough:
    terms = [(lambda eq: float(eq.wout.b0), 1.0, 1.0)]   # target B0 = 1 T
 
 For implicit gradients, write it as a pure two-positional
-``(state, runtime)`` JAX function — the scalar targets in
+``(equilibrium_state, solver_context)`` JAX function — the scalar targets in
 :mod:`vmex.core.optimize` (~10 lines each) are the templates to copy.
 If it returns a vector, each entry becomes a Gauss–Newton residual row;
-give a class a ``residuals_state(state, runtime)`` method and a
+give a class a ``residuals_state(equilibrium_state, solver_context)`` method and a
 ``J(eq)``/``__call__`` pair and it will work in both modes, like the
 built-in residual classes.

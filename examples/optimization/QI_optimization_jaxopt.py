@@ -38,11 +38,13 @@ qi = ConstructedQIResidual(SURFACES, mboz=8 if ci else 12, nboz=8 if ci else 12,
                            nphi=31 if ci else 61, nalpha=7 if ci else 18,
                            n_bounce=7 if ci else 21)
 
-def iota_floor(state, runtime):
-    return jnp.maximum(0.3 - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        0.3 - jnp.abs(opt.mean_iota(equilibrium_state, solver_context)), 0.0)
 
-def elongation_excess(state, runtime):
-    return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+def elongation_excess(equilibrium_state, solver_context):
+    return jnp.maximum(
+        opt.max_elongation(equilibrium_state, solver_context) - 8.0, 0.0)
 
 terms = [(qi, 0.0, 10.0), (opt.aspect_ratio, 10.0, 0.005),
          (iota_floor, 0.0, 10.0), (elongation_excess, 0.0, 1.0)]

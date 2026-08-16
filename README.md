@@ -159,8 +159,9 @@ inp = replace(inp, delt=0.5).change_resolution(
     mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
 qi = QIResidual(np.linspace(0.1, 1.0, 6))
 
-def iota_floor(state, runtime):
-    return jnp.maximum(0.33 - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        0.33 - jnp.abs(opt.mean_iota(equilibrium_state, solver_context)), 0.0)
 
 problem = opt.VmecProblem.from_tuples(inp, [
     (qi, 0.0, 1.0),

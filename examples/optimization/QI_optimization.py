@@ -42,14 +42,17 @@ inp = replace(inp, rbc=rbc, zbs=zbs)
 # Objective function terms
 qi = ConstructedQIResidual(SURFACES, **qi_options)
 
-def iota_floor(state, runtime):
-    return jnp.maximum(IOTA_FLOOR - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - jnp.abs(opt.mean_iota(equilibrium_state, solver_context)), 0.0)
 
-def mirror_excess(state, runtime):
-    return jnp.maximum(opt.mirror_ratio(state, runtime) - MIRROR_LIMIT, 0.0)
+def mirror_excess(equilibrium_state, solver_context):
+    return jnp.maximum(
+        opt.mirror_ratio(equilibrium_state, solver_context) - MIRROR_LIMIT, 0.0)
 
-def elongation_excess(state, runtime):
-    return jnp.maximum(opt.max_elongation(state, runtime) - ELONGATION_LIMIT, 0.0)
+def elongation_excess(equilibrium_state, solver_context):
+    return jnp.maximum(
+        opt.max_elongation(equilibrium_state, solver_context) - ELONGATION_LIMIT, 0.0)
 
 objective_function_terms = [
     (opt.aspect_ratio, ASPECT_TARGET, 0.005),

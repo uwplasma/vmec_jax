@@ -292,15 +292,16 @@ A maximum-J field satisfies
 
 .. math::
 
-   \left.\frac{\partial\mathcal J_\parallel}{\partial\psi}
-   \right|_{\alpha,\lambda} < 0 ,
+   \left.\frac{\partial\mathcal J_\parallel}{\partial s}
+   \right|_{\alpha,\lambda} < 0, \qquad
+   s = \frac{\psi}{\psi_{\rm edge}},
 
-where :math:`\psi` is signed toroidal flux divided by :math:`2\pi`.
+where :math:`s` increases from the magnetic axis to the boundary.
 :class:`~vmex.core.maxj.MaximumJResidual` evaluates the action at the same
 physical pitch and field-line label on adjacent surfaces, pairs complete wells
 only when they are reciprocal nearest neighbours, and forms the physical
 finite-difference derivative. The least-squares rows use the dimensionless
-slope :math:`|\psi_{\rm edge}|\,(\partial J/\partial\psi)/J`; ``target=0``
+slope :math:`\psi_{\rm edge}(\partial J/\partial\psi)/J=(\partial J/\partial s)/J`; ``target=0``
 penalizes only violations of the condition above, while a negative target
 requests a finite margin.
 
@@ -315,10 +316,11 @@ phase-space fraction :math:`f_J` defined by Rodríguez and Plunk. That
 diagnostic additionally requires radial and pitch integration weighted by the
 normalized bounce time.
 
-VMEX carries the VMEC sign convention into this diagnostic:
+VMEX carries the VMEC sign convention through the intermediate derivative:
 ``psi_edge = signgs*phiedge/(2*pi)`` and the ``APHI`` remap sets the half-mesh
-``psi_b`` values. Reversing that signed coordinate reverses ``dJ/dpsi``; the
-implementation does not silently replace it by an unsigned radial label.
+``psi_b`` values. Multiplication by ``psi_edge`` then converts ``dJ/dpsi`` to
+the outward derivative ``dJ/ds``; reversing the signed-flux convention cannot
+turn a central maximum into a minimum.
 A nonmonotone flux map, missing or ambiguous well, topology transition, or
 well displacement beyond ``match_tolerance`` returns NaN with
 ``valid_pitch_pair=False``.
@@ -326,7 +328,17 @@ well displacement beyond ``match_tolerance`` returns NaN with
 Maximum-J remains a separate objective term. Users combine it with any QI,
 aspect-ratio, iota, stability, or engineering residual through VMEX's ordinary
 composite least-squares interface; no fixed QI-plus-maximum-J weighting is
-built into the class.
+built into the class. ``QI_maxJ_continuation.py`` starts from a minimal vacuum
+seed, retains a magnetic-well target, first creates matched QI wells, and then
+ramps a negative maximum-J slope margin. It recomputes a common physical pitch
+once after the weak maximum-J stage and freezes it throughout the strong and
+sampling-fidelity stages; the script raises if the incoming wells cannot be
+matched. The final stage lengthens the field-line trace and increases the
+number of field-line labels, preventing a short trace from aliasing a visibly
+non-omnigenous result.
+The final ``plot_wout(..., j_pitch=pitch)`` call passes that same pitch to the
+polar :math:`J(\alpha,s)` panel, making it a direct visual certificate of the
+optimized trapped-particle population.
 
 .. _confinement-qi-fidelity:
 
@@ -521,7 +533,8 @@ vacuum-well measure
 with :math:`V'=dV/ds` extrapolated from the half-mesh differential volume
 :math:`vp` (VMEC ``bcovar.f``). Positive :math:`W` means :math:`V'` decreases
 outward — a magnetic well, favorable for interchange stability — matching
-simsopt's ``vacuum_well``. Being a pure ``(state, runtime)`` function it carries
+simsopt's ``vacuum_well``. Being a pure
+``(equilibrium_state, solver_context)`` function it carries
 exact implicit gradients and is a cheaper Mercier-adjacent target. Near-axis
 analytic context for both measures is in Landreman–Jorge (2020) and
 Kim–Jorge–Dorland (2021); see :doc:`/project/references`.

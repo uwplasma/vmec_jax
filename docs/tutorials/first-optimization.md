@@ -48,7 +48,8 @@ consistent rejection residual so the trust region can shorten its step.
 ```python
 optimized_input = problem.input_from_x(result.x)
 equilibrium = problem.equilibrium_from_x(result.x)
-aspect = float(opt.aspect_ratio(equilibrium.state, equilibrium.runtime))
+equilibrium_state, solver_context = equilibrium.state, equilibrium.runtime
+aspect = float(opt.aspect_ratio(equilibrium_state, solver_context))
 print(f"final cost = {result.cost:.6e}, aspect = {aspect:.6f}")
 
 optimized_input.to_indata("input.aspect_optimized")

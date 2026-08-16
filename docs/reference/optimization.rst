@@ -36,7 +36,9 @@ Glasser, magnetic-well, QS/QI, and user-defined vector objectives; no
 objective-specific weighting class is needed.
 
 Use :meth:`~vmex.core.problem.VmecProblem.from_loss` for one traceable scalar
-``loss(state, runtime)``. Use
+``loss(equilibrium_state, solver_context)``. ``equilibrium_state`` contains
+the solved VMEC spectral coefficients; ``solver_context`` contains its grids,
+profiles, and transforms (it is not elapsed run time). Use
 :meth:`~vmex.core.problem.FunctionProblem.from_functions` when the user already
 has decision-vector-level functions and derivatives.
 
@@ -87,7 +89,8 @@ Derivative methods
 ------------------
 
 ``derivative_method="implicit"`` is the default. It differentiates the
-converged fixed point, requires traceable ``(state, runtime)`` objectives, and
+converged fixed point, requires traceable
+``(equilibrium_state, solver_context)`` objectives, and
 normally costs far less than one equilibrium solve per decision variable.
 ``implicit_jacobian_method="auto"`` uses a reverse adjoint for one residual row
 and the block-tridiagonal forward response for a residual vector. Advanced
@@ -259,15 +262,20 @@ not call NESTOR. A coil-only free-boundary optimization must instead
 differentiate the fully reconverged NESTOR root. The experimental public path
 keeps the construction visible in the driver::
 
+   from vmex.core import implicit as im
+
+   params = im.params_from_input(inp)
    config = vj.make_free_boundary_config(
        inp, BiotSavart(coils0), field_from_parameters=field_from_u)
+   solver_context = im.runtime_from_params(params, config.implicit)
 
    def objective(u):
-       state, status, _, _ = vj.solve_free_boundary_implicit_status(
+       equilibrium_state, status, _, _ = vj.solve_free_boundary_implicit_status(
            params, u, config)
 
        def accepted(_):
-           residual = opt.residuals_from_tuples(state, runtime, tuples)
+           residual = opt.residuals_from_tuples(
+               equilibrium_state, solver_context, tuples)
            return 0.5 * jnp.vdot(residual, residual)
 
        # This visible wall lets a line search backtrack from an invalid trial.
@@ -283,16 +291,19 @@ Here NESTOR moves the LCFS and only the ESSOS coil vector is optimized. See
 its finite-beta counterpart for beta and Redl bootstrap terms. The current
 path is reverse-mode only. Status 0 is derivative-certified, 1 is a failed
 solve, and 2 is an under-converged solve; only status 0 enters the adjoint.
-The path remains experimental while its NESTOR-edge Schur preconditioner is
-completed. ``make_free_boundary_config(..., device="auto")`` uses the CPU
-for this response on accelerator hosts because the present coupled transpose
-is faster and substantially smaller there. An explicit ``device="gpu"`` or
-process-wide JAX placement overrides the measured default for development
-studies.
+The certified whole-state GCROT transpose remains the default.
+``adjoint_solver="boundary_schur"`` selects the advanced boundary-Schur lane, which
+eliminates the block-tridiagonal radial bulk and solves only the evolved-edge
+correction before checking the full coupled residual. Local three-surface
+rows and a pivoted sparse band solve reduce its cold cost substantially, but
+local-row compilation still keeps it opt-in. ``device="auto"`` uses the CPU
+for this response on accelerator hosts; an explicit ``device="gpu"`` or
+process-wide JAX placement overrides that measured lower-memory default.
 
 Use :class:`vmex.core.monitoring.EquilibriumReporter` for the compact physics
 summary shared by the examples.  Each entry accepts either VMEX's
-``function(state, runtime)`` convention or a host ``function(equilibrium)``;
+``function(equilibrium_state, solver_context)`` convention or a host
+``function(equilibrium)``;
 the call prints one line and returns the same values by label::
 
    report = opt.EquilibriumReporter(

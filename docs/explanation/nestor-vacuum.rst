@@ -242,8 +242,24 @@ transpose still takes about one to two minutes to compile on the reference
 CPU and is not yet a practical GPU path. Its ``device="auto"`` policy therefore
 uses the CPU on an accelerator host unless the process already pins JAX
 placement, while retaining an explicit per-call GPU override.
-The next implementation step is to
-eliminate the interior radial block with VMEX's block-tridiagonal solver and
-solve only the NESTOR edge Schur complement. Rejected coil steps also need the
-same explicit finite trial wall used by the fixed-boundary optimizer before
-this experimental path is promoted to the default workflow.
+``adjoint_solver="boundary_schur"`` enables the boundary-Schur transpose. It
+differentiates one three-surface force row at a time, retains every terminal
+radial stencil coupling in the bulk, isolates the one evolved edge row that
+contains NESTOR's response, and eliminates the radial bulk with a
+two-sided-equilibrated, globally pivoted
+sparse LU. Reverse-mode row differentiation is used because each local
+Jacobian has three times more inputs than outputs. The reduced transpose is
+solved and back-substituted, then checked against the original coupled
+residual; a failed certificate continues with coupled Krylov from the Schur
+answer. No dense full-state Jacobian is formed.
+
+The reduced lane is not yet the default. Direct local-row assembly removes
+the full radial basis sweep, the pivoted band solve removes the inaccurate
+no-pivot elimination, and the exact one-row interface avoids redundant NESTOR
+pullbacks. Local-force and vacuum-response compilation remain the cold-cost
+targets. The next measured step is to cache accepted-state local executables
+and batch the NESTOR edge pullbacks on GPU. Promotion requires lower cold time
+and memory on the bundled 3-D case
+while retaining the re-solve finite-difference, CPU/GPU, and fixed/free field
+certificates. Timings belong in the resource harness, not committed
+JSON files.

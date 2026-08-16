@@ -702,20 +702,23 @@ def _boozer_surface_modB(booz: dict[str, Any], k: int, theta: np.ndarray, zeta: 
 def _j_invariant_map(
     booz: dict[str, Any],
     *,
+    pitch: float | None = None,
     pitch_fraction: float = 0.5,
     nalpha: int = 96,
     points_per_period: int = 64,
     quadrature_order: int = 32,
 ) -> dict[str, Any]:
-    """Second adiabatic invariant ``J(alpha, s)`` at fixed trapping class.
+    """Second adiabatic invariant ``J(alpha, s)`` at one physical pitch.
 
     The polar presentation and pitch convention follow Fig. 10 of Rodríguez,
     Helander & Goodman, J. Plasma Phys. 90, 905900212 (2024): on each surface,
-    ``1/lambda = Bmin + lambda_n * (Bmax - Bmin)``.  Thus one normalized
-    trapped-particle class ``lambda_n`` is followed radially even when the
-    trapping interval changes with ``s``.  Omnigenity makes ``J`` independent
-    of ``alpha``, so its contours in ``x=s*cos(alpha)``, ``y=s*sin(alpha)``
-    become concentric circles.  ``J`` is normalized to ``J/(v R0)`` and the
+    the same physical ``lambda`` must be followed radially to diagnose
+    ``partial J / partial psi``. By default, we choose ``1/lambda`` inside the
+    trapping interval common to every plotted surface; ``pitch`` can instead
+    select the physical ``lambda`` used by an optimization. Omnigenity makes ``J``
+    independent of ``alpha``, so its contours in ``x=s*cos(alpha)``,
+    ``y=s*sin(alpha)`` become concentric circles; maximum-J additionally makes
+    ``J`` decrease radially. ``J`` is normalized to ``J/(v R0)`` and the
     bounce integrals reuse the differentiable sine-mapped Gauss-Legendre
     kernel of :func:`vmex.core.bounce.bounce_action`, also used by DESC.
     """
@@ -726,7 +729,9 @@ def _j_invariant_map(
     nfp = int(booz["nfp"])
     iota_b = booz["iota_b"]
 
-    # Surface-local trapping ranges implement the fixed-lambda_n convention.
+    # A surface-local normalized pitch changes the physical particle while
+    # moving radially and cannot diagnose maximum-J. Select one physical pitch
+    # from the overlap of every surface's trapping interval instead.
     theta = np.linspace(0.0, 2.0 * np.pi, 61)
     zeta = np.linspace(0.0, 2.0 * np.pi / nfp, 61)
     b_all = np.stack([_boozer_surface_modB(booz, k, theta, zeta) for k in range(nsurf)])
@@ -734,13 +739,28 @@ def _j_invariant_map(
     if (not np.all(np.isfinite(b_min)) or not np.all(np.isfinite(b_max))
             or np.any(b_min <= 0.0) or np.any(b_max <= b_min)):
         raise ValueError("Boozer |B| range is degenerate; cannot choose a pitch")
-    b_star = b_min + float(pitch_fraction) * (b_max - b_min)
-    pitch = 1.0 / b_star
+    common_min, common_max = float(np.max(b_min)), float(np.min(b_max))
+    if not common_max > common_min:
+        raise ValueError("Boozer surfaces have no common trapped-particle pitch")
+    if pitch is None:
+        b_star = common_min + float(pitch_fraction) * (common_max - common_min)
+        pitch_array = np.array([1.0 / b_star])
+    else:
+        pitch_array = np.array([float(pitch)])
+        if not np.isfinite(pitch_array[0]) or pitch_array[0] <= 0.0:
+            raise ValueError("pitch must be finite and positive")
+        b_star = 1.0 / pitch_array[0]
+        if not common_min < b_star < common_max:
+            raise ValueError("pitch is not trapped on every plotted Boozer surface")
 
     # Trace enough field periods to close at least one poloidal transit even
     # for small-iota / axisymmetric-boundary decks (well length ~ 2*pi/iota).
     iota_typical = float(np.median(np.abs(iota_b)))
     num_periods = int(min(40, max(2, np.ceil(1.2 * nfp * (1.0 + 1.0 / max(iota_typical, 0.2))))))
+    # The interval can contain roughly one well per field period.  An
+    # undersized static buffer marks otherwise valid wells as overflow and
+    # would make the complete polar map appear empty.
+    max_wells = max(8, 2 * num_periods)
 
     alpha = np.linspace(0.0, 2.0 * np.pi, int(nalpha), endpoint=False)
     j_map = np.full((nsurf, alpha.size), np.nan)
@@ -750,9 +770,10 @@ def _j_invariant_map(
             xm_b=booz["xm_b"], xn_b=booz["xn_b"],
             iota_b=iota_b[k : k + 1],
             G_b=booz["G_b"][k : k + 1], I_b=booz["I_b"][k : k + 1],
-            nfp=nfp, alpha=alpha, pitch=pitch[k : k + 1],
+            nfp=nfp, alpha=alpha, pitch=pitch_array,
             points_per_period=int(points_per_period),
             num_periods=num_periods,
+            max_wells=max_wells,
             bmns_b=None if booz["bmns_b"] is None else booz["bmns_b"][k : k + 1],
             quadrature_order=int(quadrature_order),
         )
@@ -765,7 +786,8 @@ def _j_invariant_map(
         "alpha": alpha,
         "s_b": booz["s_b"],
         "j_map": j_map,
-        "pitch": pitch,
+        "pitch": float(pitch_array[0]),
+        "pitch_inverse": float(b_star),
         "pitch_fraction": float(pitch_fraction),
         "b_min": b_min,
         "b_max": b_max,
@@ -871,7 +893,9 @@ def _j_map_panel(ax, fig, j_info: dict[str, Any], r_major: float) -> None:
     ax.set_xlim(-radius, radius); ax.set_ylim(-radius, radius)
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel(r"$s\cos\alpha$"); ax.set_ylabel(r"$s\sin\alpha$")
-    ax.set_title(rf"second adiabatic invariant, $\lambda_n={j_info['pitch_fraction']:.2f}$")
+    ax.set_title(
+        "second adiabatic invariant\n"
+        rf"$1/\lambda={j_info['pitch_inverse']:.3g}$ T")
 
 
 def _boozer_modB_panel(ax, fig, booz: dict[str, Any], k: int, *, title: str) -> None:
@@ -925,7 +949,7 @@ def _scalar_card_panel(ax, wout) -> None:
         (r"$\langle |B| \rangle$ [T]", f"{float(wout.volavgB):.3f}"),
         (r"$\beta$ total", _fmt_compact(float(wout.betatotal))),
         (r"$\beta$ pol / tor", f"{_fmt_compact(float(wout.betapol))} / {_fmt_compact(float(wout.betator))}"),
-        ("toroidal current [A]", _fmt_compact(float(wout.ctor))),
+        (r"$I_{tor}$ [A]", _fmt_compact(float(wout.ctor))),
         (r"$\iota$ axis / edge", f"{float(iotaf[0]):.4f} / {float(iotaf[-1]):.4f}"),
         ("asymmetric", "yes" if bool(getattr(wout, "lasym", False)) else "no"),
     ]
@@ -964,7 +988,9 @@ def _boundary_3d_panel(ax, wout, *, ntheta: int, nzeta: int):
     return cm.ScalarMappable(cmap=cmap, norm=norm)
 
 
-def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
+def _summary_figure(
+    wout, *, s_plot_ignore: float = 0.2, j_pitch: float | None = None,
+):
     """Build the 3x3 summary figure; returns ``(fig, meta)`` for inspection."""
     plt = _import_matplotlib()
     wout, _ = _as_wout(wout)
@@ -1026,7 +1052,7 @@ def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
             booz_note = f"Boozer transform unavailable:\n{type(exc).__name__}"
         if booz is not None:
             try:
-                j_info = _j_invariant_map(booz)
+                j_info = _j_invariant_map(booz, pitch=j_pitch)
                 meta["j_map"] = j_info
                 _j_map_panel(axes[1, 2], fig, j_info, float(wout.Rmajor_p))
             except Exception as exc:  # noqa: BLE001
@@ -1074,10 +1100,13 @@ def _summary_figure(wout, *, s_plot_ignore: float = 0.2):
     return fig, meta
 
 
-def plot_summary(wout, out_path: str | Path, *, s_plot_ignore: float = 0.2) -> Path:
-    """Publication summary figure (see :func:`_summary_figure` for panels)."""
+def plot_summary(
+    wout, out_path: str | Path, *, s_plot_ignore: float = 0.2,
+    j_pitch: float | None = None,
+) -> Path:
+    """Publication summary figure, optionally at a specified physical J pitch."""
     plt = _import_matplotlib()
-    fig, _meta = _summary_figure(wout, s_plot_ignore=s_plot_ignore)
+    fig, _meta = _summary_figure(wout, s_plot_ignore=s_plot_ignore, j_pitch=j_pitch)
     out_path = Path(out_path)
     fig.savefig(out_path, dpi=_DPI)
     plt.close(fig)
@@ -1124,22 +1153,30 @@ def plot_stability(
 
         if scan.get("valid"):
             beta_percent = 100.0 * np.asarray(scan["beta"])
-            dmerc_margin = np.nanmin(np.asarray(scan["dmerc"])[:, sl], axis=1)
-            d_r_margin = -np.nanmax(np.asarray(scan["d_r"])[:, sl], axis=1)
+            dmerc = np.asarray(scan["dmerc"]); minus_d_r = -np.asarray(scan["d_r"])
+            dmerc_margin = np.nanmin(dmerc[:, sl], axis=1)
+            d_r_margin = np.nanmin(minus_d_r[:, sl], axis=1)
+            mid = int(np.argmin(np.abs(s - 0.5)))
             axes[1].plot(
                 beta_percent, dmerc_margin, color=_LINE_COLORS[0], marker="o",
-                markersize=3.0, label=r"$\min D_{Merc}$")
+                markersize=3.0, label=r"ideal: $\min_s D_{Merc}$")
             axes[1].plot(
                 beta_percent, d_r_margin, color=_LINE_COLORS[1], linestyle="--",
-                marker="s", markersize=3.0, label=r"$-\max D_R$")
+                marker="s", markersize=3.0, label=r"resistive: $\min_s(-D_R)$")
+            axes[1].plot(
+                beta_percent, dmerc[:, mid], color=_LINE_COLORS[0], linestyle=":",
+                linewidth=1.5, label=rf"$D_{{Merc}}(s={s[mid]:.2f})$")
+            axes[1].plot(
+                beta_percent, minus_d_r[:, mid], color=_LINE_COLORS[1],
+                linestyle="-.", linewidth=1.5, label=rf"$-D_R(s={s[mid]:.2f})$")
             beta_now = 100.0 * float(wout.betatotal)
             if 0.0 < beta_now <= 100.0 * float(beta_max):
                 axes[1].axvline(
                     beta_now, color="0.35", linestyle=":", linewidth=1.2,
                     label=rf"WOUT $\beta={beta_now:.2f}\%$")
-            axes[1].set_title(f"Frozen pressure ramp\n{scan['note']}")
+            axes[1].set_title(f"Frozen-pressure stability margins\n{scan['note']}")
             axes[1].legend(
-                loc="upper center", bbox_to_anchor=(0.5, -0.20), ncol=3,
+                loc="upper center", bbox_to_anchor=(0.5, -0.20), ncol=2,
                 borderaxespad=0.0, framealpha=1.0, facecolor="white", edgecolor="0.7")
         else:
             axes[1].text(
@@ -1148,7 +1185,7 @@ def plot_stability(
             axes[1].set_title("Frozen-equilibrium pressure scan unavailable")
         axes[1].axhline(0.0, color="0.4", linewidth=0.8)
         axes[1].set_xlabel(r"trial $\langle\beta\rangle$ [%]")
-        axes[1].set_ylabel("worst stability margin (>0 favorable)")
+        axes[1].set_ylabel("stability margin (>0 favorable)")
 
         out_path = Path(out_path)
         fig.savefig(out_path, dpi=_DPI)
@@ -1356,6 +1393,7 @@ def plot_wout(
     which: Sequence[str] = ("summary", "surfaces", "modB", "profiles", "stability", "3d"),
     *,
     name: str | None = None,
+    j_pitch: float | None = None,
 ) -> dict[str, Path]:
     """Write the requested diagnostic figures for a WOUT file.
 
@@ -1369,6 +1407,10 @@ def plot_wout(
         Any subset of ``("summary", "surfaces", "modB", "profiles", "stability", "3d")``.
     name:
         Basename prefix for the figures (default: case name from the path).
+    j_pitch:
+        Optional physical pitch ``lambda`` for the summary's ``J(alpha, s)``
+        panel. This is useful for certifying a maximum-J optimization at the
+        same pitch; by default a common trapped pitch is selected automatically.
 
     Returns a mapping from figure key to the written PNG path.
     """
@@ -1381,7 +1423,8 @@ def plot_wout(
     results: dict[str, Path] = {}
     for key in which:
         suffix, fn = _WOUT_FIGURES[key]
-        results[key] = fn(data, outdir / f"{label}_{suffix}.png")
+        kwargs = {"j_pitch": j_pitch} if key == "summary" else {}
+        results[key] = fn(data, outdir / f"{label}_{suffix}.png", **kwargs)
     return results
 
 

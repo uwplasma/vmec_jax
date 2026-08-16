@@ -11,7 +11,7 @@ fixed-boundary-plus-virtual-casing field with the larger free solution.
 
 The exterior fields need not agree exactly: the larger equilibrium contains
 plasma current in ``0.5 < s_free <= 1``, whereas the restricted problem treats
-that annulus as vacuum. Boundary-normal matching on one interface also does
+that region as vacuum. Boundary-normal matching on one interface also does
 not uniquely reconstruct those removed volume currents. The comparison makes
 that physical limitation measurable instead of treating the two problems as
 mathematically identical.
@@ -41,7 +41,8 @@ from essos.coils import Coils
 from essos.fields import BiotSavart
 
 DATA = Path(__file__).resolve().parent / "data"
-S_FIXED, NS, MPOL, NTOR, NITER, FTOL = 0.5, 31, 5, 5, 12000, 1.0e-10
+BETA_SCALE = 2.0  # scale the 2.5% pressure/current target to about 5% beta
+S_FIXED, NS, MPOL, NTOR, NITER, FTOL = 0.5, 31, 5, 5, 8000, 1.0e-10
 NPHI, NTHETA, VC_DIGITS, COIL_MAXITER = 24, 24, 4, 20
 CHECK_LEVELS = ((128, 128), (256, 256), (512, 512))
 NORMAL_WEIGHT, PRESSURE_WEIGHT, CURRENT_REGULARIZATION = 2.0e4, 5.0e3, 1.0e-3
@@ -51,8 +52,8 @@ if os.environ.get("VMEX_EXAMPLES_CI") == "1":
     NPHI, NTHETA, VC_DIGITS, COIL_MAXITER = 8, 8, 3, 1
     CHECK_LEVELS = ((64, 64), (128, 128), (256, 256))
 
-print("Loading the beta=0.5% QA target and its matched ESSOS coils...")
-coils0 = Coils.from_json(str(DATA / "ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json"))
+print(f"Loading the QA target at about {2.5 * BETA_SCALE:.1f}% beta and its matched ESSOS coils...")
+coils0 = Coils.from_json(str(DATA / "ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json"))
 
 def coil_field(coils):
     biot_savart = BiotSavart(coils)
@@ -70,9 +71,10 @@ mgrid = vj.MgridField.from_cartesian_field(
     coil_B_numpy, rmin=0.45, rmax=1.55, zmin=-0.6, zmax=0.6,
     ir=48, jz=48, kp=16, nfp=coils0.nfp)
 free_input = vj.VmecInput.from_file(
-    DATA / "input.LandremanPaul2021_QA_beta0p5_bootstrap").change_resolution(
+    DATA / "input.LandremanPaul2021_QA_beta2p5_bootstrap").change_resolution(
         mpol=MPOL, ntor=NTOR, ntheta=2 * MPOL + 6, nzeta=16)
-free_input = replace(free_input, lfreeb=True, mgrid_file="ESSOS field (in memory)",
+free_input = replace(free_input, pres_scale=BETA_SCALE * free_input.pres_scale,
+    curtor=BETA_SCALE * free_input.curtor, lfreeb=True, mgrid_file="ESSOS field (in memory)",
     ns_array=np.array([NS]), niter_array=np.array([NITER]), ftol_array=np.array([FTOL]))
 free_result = vj.solve_free_boundary_multigrid(free_input, external_field=mgrid, verbose=True)
 free_wout = vj.wout_from_state(inp=free_input, state=free_result.state,
@@ -150,74 +152,88 @@ print(f"Coil-current cost {initial_coil_cost:.3e} -> {float(coil_result.fun):.3e
       f"B.n/B RMS={100 * float(jnp.sqrt(jnp.sum(interface.weights * Bn_over_B**2))):.3f}%, "
       f"max={100 * float(jnp.max(jnp.abs(Bn_over_B))):.3f}%")
 
-# The parent solution is the total field in the plasma-filled annulus. The
-# restricted solution is plasma-current virtual casing plus the refitted coils.
+# The parent solution is the total field in the outer plasma-filled region. The
+# restricted solution is its fixed interior plus virtual casing and refitted coils.
 free_runtime = prepare_runtime(free_input, resolution_from_input(free_input, ns=NS))
 free_field = VmecInteriorField.from_state(free_input, free_result.state, runtime=free_runtime)
-sample_s = jnp.linspace(S_FIXED + 0.05, 0.95, 9)
+sample_s = jnp.linspace(0.0, 1.0, 21)
 sample_theta = jnp.linspace(0.0, 2 * jnp.pi, 13)[:-1]
 sample_phi = jnp.array([0.0, jnp.pi / (2 * free_input.nfp)])
 flux_points = jnp.array([[s, theta, phi] for s in sample_s
                          for phi in sample_phi for theta in sample_theta])
 free_field.set_points_flux(flux_points); xyz = free_field.get_points_cart(); B_free = free_field.B()
+points_per_surface = len(sample_theta) * len(sample_phi)
+inner_s = sample_s[sample_s <= S_FIXED]
+fixed_flux_points = jnp.array([[s / S_FIXED, theta, phi] for s in inner_s
+                               for phi in sample_phi for theta in sample_theta])
+fixed_equilibrium.set_points_flux(fixed_flux_points)
+B_fixed_inside = fixed_equilibrium.B()
 fixed_exterior = fixed_equilibrium.exterior_field(external_field=external_field,
     nphi=NPHI, ntheta=NTHETA, digits=VC_DIGITS)
 fixed_exterior = fixed_exterior.with_near_surface_continuation(
     digits=VC_DIGITS, precision=precision, B_surface=interface.B_plasma)
-print("Evaluating the virtual-casing continuation through the outer annulus...")
-B_fixed_exterior = fixed_exterior.B(xyz)
+outer_xyz = xyz[len(inner_s) * points_per_surface:]
+print("Evaluating the virtual-casing continuation through the outer region...")
+B_fixed_exterior = fixed_exterior.B(outer_xyz)
+B_comparison = jnp.concatenate((B_fixed_inside, B_fixed_exterior))
 direct_check = fixed_equilibrium.exterior_field(external_field=external_field,
     nphi=NPHI, ntheta=NTHETA, digits=VC_DIGITS, levels=CHECK_LEVELS)
-B_direct_check = direct_check.B(xyz[-1:])
+B_direct_check = direct_check.B(outer_xyz[-1:])
 continuation_check = B_fixed_exterior[-1:]
 continuation_error = (jnp.linalg.norm(continuation_check - B_direct_check)
                       / jnp.linalg.norm(B_direct_check))
-finite = jnp.all(jnp.isfinite(B_free) & jnp.isfinite(B_fixed_exterior), axis=1)
-point_error = (jnp.linalg.norm(B_fixed_exterior - B_free, axis=1)
+finite = jnp.all(jnp.isfinite(B_free) & jnp.isfinite(B_comparison), axis=1)
+point_error = (jnp.linalg.norm(B_comparison - B_free, axis=1)
                / jnp.linalg.norm(B_free, axis=1))
 point_error = jnp.where(finite, point_error, jnp.nan).reshape(len(sample_s), -1)
 radial_field_error = jnp.sqrt(jnp.nanmean(point_error**2, axis=1))
 print(f"Median |B| [T]: parent={float(jnp.nanmedian(jnp.linalg.norm(B_free, axis=1))):.3f}, "
-      f"fixed+VC={float(jnp.nanmedian(jnp.linalg.norm(B_fixed_exterior, axis=1))):.3f}, "
+      f"restricted={float(jnp.nanmedian(jnp.linalg.norm(B_comparison, axis=1))):.3f}, "
       f"coils={float(jnp.nanmedian(jnp.linalg.norm(external_field(xyz), axis=1))):.3f}")
-print(f"Radial annulus RMS errors = {np.asarray(radial_field_error)}")
+print(f"Radial field-comparison RMS errors = {np.asarray(radial_field_error)}")
 print(f"Continuation/direct-VC difference at the far check point = "
       f"{100 * float(continuation_error):.2f}%")
 
-# Plot eleven parent surfaces from axis to LCFS and the six corresponding
-# restricted surfaces through s_free=0.5, followed by the annulus field error.
+# Plot eleven parent surfaces and the corresponding restricted surfaces through
+# s_free=0.5. The two black dash patterns keep coincident comparisons visible;
+# outer contours mark a field-comparison region, not extra equilibrium surfaces.
 theta = np.linspace(0.0, 2 * np.pi, 361); free_surfaces = np.linspace(0.0, 1.0, 11)
 figure, axes = plt.subplots(1, 2, figsize=(10.2, 4.6), width_ratios=(0.85, 1.15),
                            constrained_layout=True)
-colors = plt.cm.viridis(np.linspace(0.08, 0.92, len(free_surfaces)))
-surface_errors = []
-for s_free, color in zip(free_surfaces, colors):
+surface_errors = []; surface_curves = []
+for s_free in free_surfaces:
     j_free = int(round(s_free * (NS - 1)))
     R_free, Z_free = surface_rz(free_wout, s_index=j_free, theta=theta, phi=np.array([0.0]))
-    axes[0].plot(R_free[:, 0], Z_free[:, 0], color=color, lw=1.0)
+    surface_curves.append((s_free, R_free, Z_free))
+for s_free, R_free, Z_free in surface_curves:
+    if s_free > S_FIXED:
+        axes[0].plot(R_free[:, 0], Z_free[:, 0], color="k", ls=(0, (1.5, 1.2)),
+                     lw=2.8, alpha=0.72)
+    axes[0].plot(R_free[:, 0], Z_free[:, 0], color="#D62728", lw=1.1)
     if s_free <= S_FIXED + 1.0e-12:
         s_fixed = s_free / S_FIXED; j_fixed = int(round(s_fixed * (NS - 1)))
         R_fixed, Z_fixed = surface_rz(
             fixed_equilibrium.wout, s_index=j_fixed, theta=theta, phi=np.array([0.0]))
-        axes[0].plot(R_fixed[:, 0], Z_fixed[:, 0], "--", color=color, lw=1.2)
+        axes[0].plot(R_fixed[:, 0], Z_fixed[:, 0], color="k", ls="--", lw=2.0)
         surface_errors.append(float(np.sqrt(np.mean(
             (R_fixed - R_free) ** 2 + (Z_fixed - Z_free) ** 2))))
-axes[0].set(xlabel="R [m]", ylabel="Z [m]", title=r"Parent free and restricted $s=0.5$ plasma")
+axes[0].set(xlabel="R [m]", ylabel="Z [m]", title=r"Free solution and restricted $s=0.5$ plasma")
 axes[0].set_aspect("equal"); axes[0].grid(alpha=0.25)
 axes[0].legend(handles=[
-    Line2D([], [], color="0.2", lw=1.2, label="free: 11 surfaces, axis to LCFS"),
-    Line2D([], [], color="0.2", lw=1.2, ls="--", label="restricted fixed: common surfaces"),
+    Line2D([], [], color="#D62728", lw=1.2, label=r"free: $0\leq s\leq1$"),
+    Line2D([], [], color="k", lw=2.0, ls="--", label=r"fixed: $0\leq s_{free}\leq0.5$"),
+    Line2D([], [], color="k", lw=2.8, ls=(0, (1.5, 1.2)),
+           label="fixed+VC comparison region"),
 ], fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.14), frameon=False)
 axes[1].semilogy(np.asarray(sample_s), np.asarray(radial_field_error), "o-", color="#0072B2")
 axes[1].set(xlabel=r"parent $s_{free}$", ylabel=r"RMS $|B_{fixed+VC}-B_{free}|/|B_{free}|$",
-            title="Plasma-filled versus vacuum annulus")
+            title="Fixed interior and fixed+VC region", xlim=(0.0, 1.0))
+axes[1].axvline(S_FIXED, color="0.35", linestyle="--", linewidth=1.0)
 axes[1].grid(alpha=0.25, which="both")
-axes[1].text(0.48, 0.96, "Outer annular plasma current is absent\nfrom the restricted VC model",
-             transform=axes[1].transAxes, ha="center", va="top", fontsize=8,
-             bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8})
 figure.savefig("vmex_fixed_free_boundary_comparison.png", dpi=200)
 plt.close(figure)
 print(f"Common-surface RMS errors [m] = {np.asarray(surface_errors)}")
-print(f"Annulus pointwise error: median={float(jnp.nanmedian(point_error)):.3e}, "
-      f"95th percentile={float(np.nanpercentile(np.asarray(point_error), 95)):.3e}")
+outer_error = point_error[np.asarray(sample_s) > S_FIXED]
+print(f"Outer-region pointwise error: median={float(jnp.nanmedian(outer_error)):.3e}, "
+      f"95th percentile={float(np.nanpercentile(np.asarray(outer_error), 95)):.3e}")
 print("Wrote vmex_fixed_free_boundary_comparison.png")

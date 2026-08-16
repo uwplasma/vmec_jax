@@ -14,7 +14,7 @@ from vmex import optimize as opt
 
 nfp = 2  # number of field periods
 SURFACES = np.array([0.5, 0.7, 0.9])
-MAX_MODES, MAX_NFEV = [3], [60]  # mode-ladder alternative: [1, 2, 3], [20, 20, 20]
+MAX_MODES, MAX_NFEV = [3,4,5], [15,15,30]  # mode-ladder alternative: [1, 2, 3], [20, 20, 20]
 ASPECT_TARGET = 7.0
 IOTA_FLOOR = 0.51
 MIRROR_LIMIT = 0.35
@@ -39,14 +39,17 @@ inp = replace(inp, rbc=rbc, zbs=zbs, delt=0.5,
 # Objective function terms
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=0, helicity_n=1)
 
-def mirror_excess(state, runtime):
-    return jnp.maximum(opt.mirror_ratio(state, runtime) - MIRROR_LIMIT, 0.0)
+def mirror_excess(equilibrium_state, solver_context):
+    return jnp.maximum(
+        opt.mirror_ratio(equilibrium_state, solver_context) - MIRROR_LIMIT, 0.0)
 
-def iota_floor(state, runtime):
-    return jnp.maximum(IOTA_FLOOR - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - jnp.abs(opt.mean_iota(equilibrium_state, solver_context)), 0.0)
 
-def elongation_excess(state, runtime):
-    return jnp.maximum(opt.max_elongation(state, runtime) - ELONGATION_LIMIT, 0.0)
+def elongation_excess(equilibrium_state, solver_context):
+    return jnp.maximum(
+        opt.max_elongation(equilibrium_state, solver_context) - ELONGATION_LIMIT, 0.0)
 
 report = opt.EquilibriumReporter(
     ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
@@ -55,8 +58,10 @@ report = opt.EquilibriumReporter(
 monitor = opt.OptimizationMonitor(stream=None)
 
 objective_function_terms = [
-    (qs, 0.0, 1.0), (opt.aspect_ratio, ASPECT_TARGET, 1.0),
-    (iota_floor, 0.0, 100.0), (mirror_excess, 0.0, 10.0),
+    (qs, 0.0, 1.0),
+    (opt.aspect_ratio, ASPECT_TARGET, 1.0),
+    (iota_floor, 0.0, 100.0),
+    (mirror_excess, 0.0, 10.0),
     (elongation_excess, 0.0, 10.0)]
 
 for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):

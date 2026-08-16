@@ -44,14 +44,17 @@ inp = replace(inp, rbc=rbc, zbs=zbs, delt=0.5,
 # Objective function terms
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=0, helicity_n=1)
 
-def iota_floor(state, runtime):
-    return jnp.maximum(0.3 - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        0.3 - jnp.abs(opt.mean_iota(equilibrium_state, solver_context)), 0.0)
 
-def elongation_excess(state, runtime):
-    return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+def elongation_excess(equilibrium_state, solver_context):
+    return jnp.maximum(
+        opt.max_elongation(equilibrium_state, solver_context) - 8.0, 0.0)
 
-def mirror_excess(state, runtime):
-    return jnp.maximum(opt.mirror_ratio(state, runtime) - 0.25, 0.0)
+def mirror_excess(equilibrium_state, solver_context):
+    return jnp.maximum(
+        opt.mirror_ratio(equilibrium_state, solver_context) - 0.25, 0.0)
 
 objective_function_terms = [
     (qs, 0.0, 1.0),

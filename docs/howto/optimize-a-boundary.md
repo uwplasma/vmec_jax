@@ -21,11 +21,13 @@ inp = replace(inp, delt=0.5).change_resolution(
 
 qi = QIResidual(np.linspace(0.1, 1.0, 6))
 
-def iota_floor(state, runtime):
-    return jnp.maximum(0.33 - jnp.abs(opt.mean_iota(state, runtime)), 0.0)
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        0.33 - jnp.abs(opt.mean_iota(equilibrium_state, solver_context)), 0.0)
 
-def elongation_excess(state, runtime):
-    return jnp.maximum(opt.max_elongation(state, runtime) - 8.0, 0.0)
+def elongation_excess(equilibrium_state, solver_context):
+    return jnp.maximum(
+        opt.max_elongation(equilibrium_state, solver_context) - 8.0, 0.0)
 
 terms = [
     (qi, 0.0, 1.0),

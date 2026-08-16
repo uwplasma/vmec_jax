@@ -47,9 +47,9 @@ Four solve entry points share the same numerics; pick by what you need back:
   - returns
   - use when
 * - {func}`vmex.core.optimize.solve_equilibrium`
-  - `Equilibrium` (state + runtime + lazy `.wout`)
+  - `Equilibrium` (spectral coefficients + solver context + lazy `.wout`)
   - **Default for Python work**: analysis, objectives, anything that reads
-    wout tables or the `(state, runtime)` scalar targets
+    wout tables or the `(equilibrium_state, solver_context)` scalar targets
 * - {func}`vmex.core.multigrid.solve_multigrid`
   - `SolveResult` (state + convergence data)
   - you only need the converged state / iteration diagnostics — the engine
@@ -98,7 +98,9 @@ fixed point itself is not differentiated. The per-configuration contract is
 
 ## Where objectives plug in
 
-Objectives are plain functions of `(state, runtime)` — quasisymmetry,
+Objectives are plain functions of `(equilibrium_state, solver_context)` —
+the solved spectral coefficients and the grids/profile data used to evaluate
+them — including quasisymmetry,
 omnigenity/QI, aspect ratio, iota, Mercier, bootstrap, turbulence proxies
 ({doc}`reference/objectives`). The driver
 {func}`vmex.core.optimize.least_squares` takes simsopt-style

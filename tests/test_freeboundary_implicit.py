@@ -64,6 +64,12 @@ def test_free_boundary_config_rejects_fixed_boundary_input():
         make_free_boundary_config(inp, lasym_free_field())
 
 
+def test_free_boundary_config_validates_adjoint_solver():
+    inp, field = lasym_free_input(DATA), lasym_free_field()
+    with pytest.raises(ValueError, match="'boundary_schur' or 'coupled_gcrot'"):
+        make_free_boundary_config(inp, field, adjoint_solver="dense")
+
+
 def test_free_boundary_warm_failure_retries_once_from_cold(monkeypatch):
     """A bad cached state is discarded, but implementation errors are not."""
     inp = dataclasses.replace(
@@ -101,6 +107,12 @@ def test_free_boundary_host_adjoint_rejects_a_false_solver_success(monkeypatch):
     def residual(z, *_args):
         return z
 
+    with pytest.raises(AdjointSolveError, match="host GCROT"):
+        fbi._host_adjoint(residual, jnp.zeros(2), None, None, None, None, None,
+                          jnp.ones(2), cfg)
+
+    monkeypatch.setattr(
+        fbi, "gcrotmk", lambda *_args, **_kwargs: (np.full(2, np.nan), 0))
     with pytest.raises(AdjointSolveError, match="host GCROT"):
         fbi._host_adjoint(residual, jnp.zeros(2), None, None, None, None, None,
                           jnp.ones(2), cfg)
@@ -145,3 +157,42 @@ def test_free_boundary_current_gradient_matches_resolve_finite_difference():
     np.testing.assert_allclose(
         derivative, finite_difference, rtol=2.0e-2, atol=2.0e-4
     )
+
+
+@pytest.mark.full
+def test_boundary_schur_current_gradient_matches_resolve_finite_difference():
+    """The reduced adjoint retains a nontrivial external-field derivative."""
+    base = lasym_free_field()
+    zeros = np.zeros_like(base.br)
+    field = dataclasses.replace(
+        base, br=np.concatenate((zeros, base.br)),
+        bp=np.concatenate((base.bp, zeros)),
+        bz=np.concatenate((base.bz, zeros)), extcur=np.ones(2))
+    inp = dataclasses.replace(
+        lasym_free_input(DATA), extcur=np.ones(2), ns_array=np.array([8]),
+        ftol_array=np.array([1.0e-8]), niter_array=np.array([6000]))
+    params = im.params_from_input(inp)
+    cfg = make_free_boundary_config(
+        inp, field, ns=8, ftol=1.0e-8, max_iterations=6000,
+        adjoint_tol=1.0e-7, adjoint_maxiter=100,
+        adjoint_solver="boundary_schur", schur_probe_chunk_size=4,
+        field_from_parameters=lambda current: dataclasses.replace(
+            field, extcur=current), device="cpu")
+
+    def objective(current):
+        state, _, _, _ = solve_free_boundary_implicit_status(
+            params, current, cfg)
+        return jnp.mean(state.R_cos[-1]**2 + state.Z_sin[-1]**2)
+
+    derivative = jax.grad(objective)(field.extcur)[1]
+    step = 1.0e-3
+    direction = jnp.array([0.0, 1.0])
+    values = []
+    for sign in (-1.0, 1.0):
+        # Independent cold re-solves avoid continuation-history hysteresis in
+        # this deliberately coarse nonlinear free-boundary certificate.
+        fbi._FREE_HOT_CACHE.pop(cfg, None)
+        values.append(objective(field.extcur + sign * step * direction))
+    finite_difference = (values[1] - values[0]) / (2.0 * step)
+    np.testing.assert_allclose(
+        derivative, finite_difference, rtol=5.0e-2, atol=3.0e-4)

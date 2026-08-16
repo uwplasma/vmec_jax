@@ -46,7 +46,7 @@ def maximum_j_residual_from_boozer(
     quadrature_order: int = 64,
     match_tolerance: float | None = None,
 ) -> dict[str, Array]:
-    """Penalize positive ``dJ/dpsi`` at common physical pitch.
+    """Penalize outward-increasing ``J`` at common physical pitch.
 
     Wells on adjacent surfaces are paired only when they are reciprocal
     nearest neighbours in Boozer toroidal angle. Every line must retain the
@@ -55,8 +55,10 @@ def maximum_j_residual_from_boozer(
     displacement invalidates the pitch block with NaN.
 
     ``target`` is the upper bound on the dimensionless logarithmic slope
-    ``abs(psi_edge) / J * dJ/dpsi``. The default enforces the maximum-J
-    condition ``dJ/dpsi <= 0`` without changing its physical sign. Reported
+    ``psi_edge / J * dJ/dpsi = (1/J) dJ/ds``, where
+    ``s = psi / psi_edge`` increases from axis to boundary. The default
+    enforces the maximum-J condition ``dJ/ds <= 0`` independently of VMEC's
+    signed toroidal-flux convention. Reported
     fractions use uniform pitch-sample weights unless ``pitch_weights``
     supplies user quadrature weights. They are resolved-orbit summaries, not
     the bounce-time-weighted Maxwellian phase-space fraction.
@@ -136,7 +138,8 @@ def maximum_j_residual_from_boozer(
     hi_action = jnp.where(matched, hi_action, 1.0)
     dJ_dpsi = (hi_action - lo_action) / dpsi[:, None, None, None]
     mean_action = 0.5 * (jnp.abs(lo_action) + jnp.abs(hi_action))
-    relative_slope = dJ_dpsi * jnp.abs(psi_edge) / jnp.maximum(
+    dJ_ds = dJ_dpsi * psi_edge
+    relative_slope = dJ_ds / jnp.maximum(
         mean_action, eps)
     violation = jnp.maximum(relative_slope - float(target), 0.0)
     count = jnp.sum(matched, axis=(1, 3))
@@ -155,7 +158,7 @@ def maximum_j_residual_from_boozer(
         numerator = jnp.sum(jnp.where(matched & group & select, sample_weight, 0.0))
         return jnp.where(denominator > 0.0, numerator / denominator, jnp.nan)
 
-    maximum_j = dJ_dpsi < 0.0
+    maximum_j = dJ_ds < 0.0
     bmin = jnp.min(out["bmag"], axis=-1)
     bmax = jnp.max(out["bmag"], axis=-1)
     trapping_depth = jnp.clip(
@@ -169,6 +172,7 @@ def maximum_j_residual_from_boozer(
         "residuals1d": residuals1d,
         "total": jnp.sum(residuals1d * residuals1d),
         "dJ_dpsi": jnp.where(matched, dJ_dpsi, jnp.nan),
+        "dJ_ds": jnp.where(matched, dJ_ds, jnp.nan),
         "relative_slope": jnp.where(matched, relative_slope, jnp.nan),
         "matched_well_mask": matched,
         "matched_well_index": hi_index,
