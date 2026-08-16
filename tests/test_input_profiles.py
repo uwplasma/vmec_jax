@@ -10,6 +10,7 @@ accompanied the port and retired with the legacy tree.)
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,18 @@ DECKS = sorted(DATA.glob("input.*"))
 FIXTURES = Path(__file__).parent / "data"
 
 assert DECKS, f"no input decks found under {DATA}"
+
+
+def test_input_arrays_are_owned_read_only_values() -> None:
+    """Input value semantics prevent in-place cache-invalidating changes."""
+    source = np.ones((3, 2)); inp = VmecInput(mpol=2, ntor=1, rbc=source)
+    source[0, 0] = 7.0
+    assert inp.rbc[0, 0] == 1.0
+    with pytest.raises(ValueError, match="read-only"):
+        inp.rbc[0, 0] = 2.0
+    rbc = inp.rbc.copy(); rbc[0, 0] = 2.0
+    changed = replace(inp, rbc=rbc)
+    assert changed.rbc[0, 0] == 2.0 and inp.rbc[0, 0] == 1.0
 
 
 def test_change_resolution_preserves_representable_coefficients() -> None:

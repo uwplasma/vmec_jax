@@ -30,8 +30,9 @@ DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{n
 inp = vj.VmecInput.from_file(DATA)
 # A circular torus cannot acquire iota to first order. Seed a rotating ellipse
 # explicitly so the local optimization starts in the QH basin.
-inp.rbc[inp.ntor-1, 1] =-SEED_PERTURBATION
-inp.zbs[inp.ntor-1, 1] = SEED_PERTURBATION
+rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
+rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -SEED_PERTURBATION, SEED_PERTURBATION
+inp = replace(inp, rbc=rbc, zbs=zbs)
 
 # Objective function terms
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=-1)

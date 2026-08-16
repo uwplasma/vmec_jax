@@ -316,24 +316,53 @@ class MagneticField:
         return jnp.einsum("...i,...ij->...j", B, gradB) / scale[:, None]
 
 
-def _radial_value_and_derivative(coefficients: Array, s: Array) -> tuple[Array, Array]:
-    """Piecewise-linear full-mesh spectra and their radial derivative."""
+def _radial_value_and_derivative(
+    coefficients: Array, s: Array, modes: Array | None = None,
+) -> tuple[Array, Array]:
+    """Interpolate full-mesh spectra while preserving VMEC radial parity.
+
+    A regular scalar Fourier coefficient with poloidal mode ``m`` behaves as
+    ``rho**|m|`` near the magnetic axis, where ``rho=sqrt(s)``. Interpolating
+    the physical coefficient directly would incorrectly make an ``m=1`` mode
+    linear in ``s``. Instead interpolate the regularized coefficient and
+    restore its radial power afterwards.
+    """
     coefficients = jnp.asarray(coefficients)
     ns = coefficients.shape[0]
     coordinate = jnp.clip(s, 0.0, 1.0) * (ns - 1)
     index = jnp.clip(jnp.floor(coordinate).astype(int), 0, ns - 2)
     fraction = coordinate - index
-    lower, upper = coefficients[index], coefficients[index + 1]
-    return lower + fraction * (upper - lower), (ns - 1) * (upper - lower)
+    if modes is None:
+        regular = coefficients
+    else:
+        modes = jnp.asarray(modes)
+        powers = jnp.abs(modes) / 2.0
+        s_mesh = jnp.arange(ns, dtype=coefficients.dtype) / (ns - 1)
+        scale = s_mesh[:, None] ** powers[None, :]
+        safe_scale = jnp.where(scale == 0.0, 1.0, scale)
+        regular = coefficients / safe_scale
+        regular = regular.at[0].set(jnp.where(powers > 0, regular[1], regular[0]))
+    lower, upper = regular[index], regular[index + 1]
+    value = lower + fraction * (upper - lower)
+    derivative = (ns - 1) * (upper - lower)
+    if modes is not None:
+        safe_s = jnp.maximum(s, jnp.finfo(coefficients.dtype).tiny)
+        powers = jnp.abs(modes) / 2.0
+        physical_scale = safe_s ** powers
+        scale_derivative = jnp.where(
+            powers > 0, powers * safe_s ** (powers - 1.0), 0.0)
+        derivative = physical_scale * derivative + scale_derivative * value
+        value = physical_scale * value
+    return value, derivative
 
 
 def _flux_coordinates_to_xyz(spectra: dict[str, Array], points: Array) -> Array:
     """Map VMEC ``(s, theta, phi)`` coordinates to Cartesian points."""
     s, theta, phi = _check_points(points, "flux coordinates").T
     radial_r = jax.vmap(lambda value: _radial_value_and_derivative(
-        spectra["rmnc"], value)[0])(s)
+        spectra["rmnc"], value, spectra["xm"])[0])(s)
     radial_z = jax.vmap(lambda value: _radial_value_and_derivative(
-        spectra["zmns"], value)[0])(s)
+        spectra["zmns"], value, spectra["xm"])[0])(s)
     phase = spectra["xm"][None, :] * theta[:, None] - spectra["xn"][None, :] * phi[:, None]
     radius = jnp.sum(radial_r * jnp.cos(phase), axis=1)
     z = jnp.sum(radial_z * jnp.sin(phase), axis=1)
@@ -343,12 +372,12 @@ def _flux_coordinates_to_xyz(spectra: dict[str, Array], points: Array) -> Array:
 def _B_contravariant_flux(spectra: dict[str, Array], points: Array) -> Array:
     """Return ``(B^s, B^theta, B^phi)`` at VMEC flux coordinates."""
     s, theta, phi = _check_points(points, "flux coordinates").T
-    bu_full = _full_mesh_contravariant(spectra["bsupu"])
-    bv_full = _full_mesh_contravariant(spectra["bsupv"])
+    bu_full = _full_mesh_contravariant(spectra["bsupu"], spectra["xmn"])
+    bv_full = _full_mesh_contravariant(spectra["bsupv"], spectra["xmn"])
     bu_coeff = jax.vmap(lambda value: _radial_value_and_derivative(
-        bu_full, value)[0])(s)
+        bu_full, value, spectra["xmn"])[0])(s)
     bv_coeff = jax.vmap(lambda value: _radial_value_and_derivative(
-        bv_full, value)[0])(s)
+        bv_full, value, spectra["xmn"])[0])(s)
     phase = spectra["xmn"][None, :] * theta[:, None] - spectra["xnn"][None, :] * phi[:, None]
     return jnp.stack((jnp.zeros_like(s), jnp.sum(bu_coeff * jnp.cos(phase), axis=1),
                       jnp.sum(bv_coeff * jnp.cos(phase), axis=1)), axis=1)
@@ -382,12 +411,14 @@ class _VmecFluxCoordinateField:
         return _check_points(points, "flux coordinates")[:, 2]
 
 
-def _full_mesh_contravariant(coefficients: Array) -> Array:
-    """Interpolate half-mesh VMEC spectra to every full-mesh surface."""
+def _full_mesh_contravariant(coefficients: Array, modes: Array) -> Array:
+    """Interpolate half-mesh VMEC spectra with a regular magnetic-axis row."""
     coefficients = jnp.asarray(coefficients)
     interior = 0.5 * (coefficients[1:-1] + coefficients[2:])
     edge = 1.5 * coefficients[-1] - 0.5 * coefficients[-2]
-    return jnp.concatenate((coefficients[1:2], interior, edge[None]), axis=0)
+    axis = jnp.where(jnp.asarray(modes) == 0,
+                     1.5 * coefficients[1] - 0.5 * coefficients[2], 0.0)
+    return jnp.concatenate((axis[None], interior, edge[None]), axis=0)
 
 
 def _interior_coordinates_and_B(
@@ -398,12 +429,12 @@ def _interior_coordinates_and_B(
     xm, xn = spectra["xm"], spectra["xn"]
     xmn, xnn = spectra["xmn"], spectra["xnn"]
     rmnc, zmns = spectra["rmnc"], spectra["zmns"]
-    bu_full = _full_mesh_contravariant(spectra["bsupu"])
-    bv_full = _full_mesh_contravariant(spectra["bsupv"])
+    bu_full = _full_mesh_contravariant(spectra["bsupu"], xmn)
+    bv_full = _full_mesh_contravariant(spectra["bsupv"], xmn)
 
     def geometry(s, theta, phi):
-        rc, rcs = _radial_value_and_derivative(rmnc, s)
-        zs, zss = _radial_value_and_derivative(zmns, s)
+        rc, rcs = _radial_value_and_derivative(rmnc, s, xm)
+        zs, zss = _radial_value_and_derivative(zmns, s, xm)
         phase = xm * theta - xn * phi
         cosine, sine = jnp.cos(phase), jnp.sin(phase)
         R, Z = jnp.vdot(rc, cosine), jnp.vdot(zs, sine)
@@ -416,28 +447,45 @@ def _interior_coordinates_and_B(
         x, y, z = point
         radius, phi = jnp.hypot(x, y), jnp.arctan2(y, x)
         axis_R, axis_Z, *_ = geometry(0.0, 0.0, phi)
+        # VMEC's (s, theta) chart collapses at the magnetic axis although B is
+        # regular there. Evaluate an infinitesimal off-axis representative;
+        # stop_gradient keeps Cartesian derivatives equal to their limiting
+        # off-axis values instead of differentiating the coordinate choice.
+        axis_rho = jnp.asarray(1.0e-6, dtype=point.dtype)
+        sample_R, sample_Z, *_ = geometry(axis_rho**2, 0.0, phi)
+        sample = jnp.array((sample_R * jnp.cos(phi), sample_R * jnp.sin(phi), sample_Z))
+        axis_distance2 = (radius - axis_R) ** 2 + (z - axis_Z) ** 2
+        on_axis = axis_distance2 <= (16.0 * jnp.finfo(point.dtype).eps) ** 2
+        point = point + jax.lax.stop_gradient(jnp.where(on_axis, sample - point, 0.0))
+        x, y, z = point
+        radius, phi = jnp.hypot(x, y), jnp.arctan2(y, x)
+        axis_R, axis_Z, *_ = geometry(0.0, 0.0, phi)
         theta0 = jnp.arctan2(z - axis_Z, radius - axis_R)
         edge_R, edge_Z, *_ = geometry(1.0, theta0, phi)
         edge_distance2 = (edge_R - axis_R) ** 2 + (edge_Z - axis_Z) ** 2
-        s0 = ((radius - axis_R) ** 2 + (z - axis_Z) ** 2) / jnp.maximum(
-            edge_distance2, 1.0e-24)
+        rho0 = jnp.sqrt(((radius - axis_R) ** 2 + (z - axis_Z) ** 2)
+                        / jnp.maximum(edge_distance2, 1.0e-24))
 
         def update(_, coordinates):
-            s, theta = coordinates
+            rho, theta = coordinates
+            s = rho**2
             R, Z, Rs, Zs, Rt, Zt, *_ = geometry(s, theta, phi)
-            determinant = Rs * Zt - Rt * Zs
+            Rrho, Zrho = 2.0 * rho * Rs, 2.0 * rho * Zs
+            determinant = Rrho * Zt - Rt * Zrho
             safe = jnp.where(jnp.abs(determinant) > 1.0e-14, determinant, 1.0e-14)
             residual_R, residual_Z = R - radius, Z - z
-            ds = (Zt * residual_R - Rt * residual_Z) / safe
-            dt = (-Zs * residual_R + Rs * residual_Z) / safe
-            return jnp.clip(s - ds, -0.05, 1.05), jnp.mod(theta - dt, 2.0 * jnp.pi)
+            drho = (Zt * residual_R - Rt * residual_Z) / safe
+            dt = (-Zrho * residual_R + Rrho * residual_Z) / safe
+            return jnp.clip(rho - drho, 1.0e-12, jnp.sqrt(1.05)), jnp.mod(
+                theta - dt, 2.0 * jnp.pi)
 
-        s, theta = jax.lax.fori_loop(
+        rho, theta = jax.lax.fori_loop(
             0, int(newton_iterations), update,
-            (jnp.clip(s0, 1.0e-8, 1.0), theta0))
+            (jnp.clip(rho0, 1.0e-12, 1.0), theta0))
+        s = rho**2
         R, Z, _Rs, _Zs, Rt, Zt, Rp, Zp = geometry(s, theta, phi)
-        bu_coeff, _ = _radial_value_and_derivative(bu_full, s)
-        bv_coeff, _ = _radial_value_and_derivative(bv_full, s)
+        bu_coeff, _ = _radial_value_and_derivative(bu_full, s, xmn)
+        bv_coeff, _ = _radial_value_and_derivative(bv_full, s, xmn)
         nyquist_phase = xmn * theta - xnn * phi
         bu = jnp.vdot(bu_coeff, jnp.cos(nyquist_phase))
         bv = jnp.vdot(bv_coeff, jnp.cos(nyquist_phase))
@@ -521,7 +569,7 @@ class VmecInteriorField(MagneticField):
     def from_state(cls, inp: Any, state: Any, *, runtime: Any = None,
                    newton_iterations: int = 10) -> "VmecInteriorField":
         """Construct a field from a live converged VMEX state."""
-        from .freeboundary_diff import _state_field_spectra
+        from .virtual_casing import _state_field_spectra
 
         return cls(_state_field_spectra(inp, state, runtime),
                    newton_iterations=newton_iterations)
@@ -537,7 +585,7 @@ class VmecInteriorField(MagneticField):
         newton_iterations: int = 10,
     ) -> "VmecInteriorField":
         """Construct an interior field with exact VJPs in problem parameters."""
-        from .freeboundary_diff import _state_field_spectra
+        from .virtual_casing import _state_field_spectra
 
         parameters = jnp.ravel(jnp.asarray(parameters))
 
@@ -638,7 +686,12 @@ class VmecExtender(MagneticField):
         self, *, digits: int | None = None, precision: Any | None = None,
         B_surface: Any | None = None,
     ) -> "VmecExtender":
-        """Return this exterior field with fast near-surface plasma evaluation."""
+        """Return a fast first-order local continuation from the LCFS.
+
+        The Taylor field is intended for nearby point queries. Long field-line
+        traces must use a distance stopping criterion or a separately validated
+        volume representation; unrestricted extrapolation can change topology.
+        """
         if self.plasma_field is None:
             raise RuntimeError("near-surface continuation requires virtual casing")
         plan = self.plasma_field.plan_near_surface(
@@ -655,19 +708,19 @@ class VmecExtender(MagneticField):
         levels: tuple[tuple[int, int], ...] | None = None,
     ) -> "VmecExtender":
         """Construct the finite-beta path from traceable VMEX surface data."""
-        from . import freeboundary_diff as fbd
+        from . import virtual_casing as vc
 
-        fbd._require_vcj()
+        vc._require_vcj()
         nphi, ntheta = map(int, surface_data.gamma.shape[1:])
         schedule = levels or ((nphi, ntheta), (2 * nphi, 2 * ntheta))
-        config = fbd.ExteriorFieldConfig(
+        config = vc.ExteriorFieldConfig(
             digits=digits,
             src_nphi=nphi,
             src_ntheta=ntheta,
             levels=schedule,
             branch="internal",
         )
-        plasma_field = fbd.VirtualCasingExteriorField(surface_data, config)
+        plasma_field = vc.VirtualCasingExteriorField(surface_data, config)
         return cls(external_field, plasma_field)
 
     @classmethod
@@ -780,9 +833,9 @@ class VmecExtender(MagneticField):
         )
         plasma_field = None
         if include_plasma:
-            from . import freeboundary_diff as fbd
+            from . import virtual_casing as vc
 
-            surface = fbd.surface_field_data_from_wout(
+            surface = vc.surface_field_data_from_wout(
                 wout, nphi=nphi, ntheta=ntheta
             )
             return cls.from_surface_data(
@@ -819,9 +872,9 @@ class VmecExtender(MagneticField):
         levels: tuple[tuple[int, int], ...] | None = None,
     ) -> "VmecExtender":
         """Construct the differentiable finite-beta path from a live VMEX state."""
-        from . import freeboundary_diff as fbd
+        from . import virtual_casing as vc
 
-        surface = fbd.surface_field_data_from_state(
+        surface = vc.surface_field_data_from_state(
             inp, state, nphi=nphi, ntheta=ntheta
         )
         return cls.from_surface_data(

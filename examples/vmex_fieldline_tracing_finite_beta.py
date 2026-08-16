@@ -3,105 +3,103 @@
 
 import os
 from pathlib import Path
-from time import perf_counter
 
 import jax
 import jax.numpy as jnp
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+import numpy as np
 import vmex as vj
 from vmex import optimize as opt
-from vmex.core import freeboundary_diff as fbd
+from vmex.core import virtual_casing as vc
 from vmex.core.extender import VmecExtender
 
 from essos.coils import Coils
-from essos.dynamics import LevelsetStoppingCriterion, Tracing
+from essos.dynamics import LevelsetStoppingCriterion, trace_field_lines
 from essos.fields import BiotSavart
 from essos.surfaces import SurfaceClassifier, surfacerzfourier_from_boundary
 
 DATA = Path(__file__).resolve().parent / "data"
 N_FIELDLINES, N_TOROIDAL_TURNS, TRACE_LENGTH, N_SAMPLES = 14, 400, 3000.0, 25000
 # Cartesian coil/exterior traces use arclength, so rescaling B does not change coverage.
-TRACE_TOLERANCE, OUTSIDE_OFFSET = 1.0e-7, 0.070
-# At this seed angle, 0.072 m stayed bounded for 650 turns; 0.074 m escaped.
-MAX_SURFACE_DISTANCE = 0.15  # terminate a wandering coil-field line this far from the LCFS
+TRACE_TOLERANCE, OUTSIDE_OFFSET = 1.0e-7, 0.005
+# Virtual casing is singular on the source surface. The fast field below is a
+# local first-order continuation, so terminate it before extrapolation can
+# create false islands. Stop before leaving the resolved exterior annulus.
+MAX_SURFACE_DISTANCE = 0.055
 NPHI, NTHETA, VC_DIGITS = 24, 24, 4
+TRACE_PROGRESS = True
 if os.environ.get("VMEX_EXAMPLES_CI") == "1":
     N_FIELDLINES, N_TOROIDAL_TURNS, N_SAMPLES, TRACE_TOLERANCE = 3, 2, 120, 1.0e-6
     TRACE_LENGTH = 20.0
     NPHI, NTHETA, VC_DIGITS = 8, 8, 3
+    TRACE_PROGRESS = False
 
 print("Solving the finite-beta QA equilibrium and loading its matched ESSOS coils...")
-inp = vj.VmecInput.from_file(DATA / "input.LandremanPaul2021_QA_beta2p5_bootstrap")
-equilibrium = opt.solve_equilibrium(inp)
-coils = Coils.from_json(str(DATA / "ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json"))
+inp = vj.VmecInput.from_file(DATA / "input.LandremanPaul2021_QA_beta0p5_bootstrap")
+equilibrium = opt.solve_equilibrium(inp, verbose=True)
+coils = Coils.from_json(str(DATA / "ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json"))
 biot_savart = BiotSavart(coils)
 coil_field = jax.jit(lambda points: jax.vmap(biot_savart.B)(
     points.reshape(-1, 3)).reshape(points.shape))
 
 print("Building the self-consistent coil + plasma-current exterior field...")
-surface_data = fbd.surface_field_data_from_state(
+# A prescribed-interface virtual-casing calculation separates the converged
+# total field into plasma-current and coil parts; no free boundary is solved.
+surface_data = vc.surface_field_data_from_state(
     inp, equilibrium.state, runtime=equilibrium.runtime, nphi=NPHI, ntheta=NTHETA)
 exterior = VmecExtender.from_surface_data(
     surface_data, external_field=coil_field, digits=VC_DIGITS)
 equilibrium.set_points_flux([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
 axis, edge = equilibrium.field.get_points_cart()
-# The exact magnetic axis is a coordinate singularity. These physical-space
-# seeds form one uninterrupted line from just off-axis to OUTSIDE_OFFSET.
+# VMEX regularizes the physical field at the coordinate-degenerate axis. Sample
+# the whole minor radius, then resolve the shorter exterior interval densely.
 edge_radius = jnp.linalg.norm(edge - axis)
-seed_fractions = jnp.linspace(0.02, 1.0 + OUTSIDE_OFFSET / edge_radius, N_FIELDLINES)
+n_outside = max(1, N_FIELDLINES // 4); n_inside = N_FIELDLINES - n_outside
+seed_fractions = jnp.concatenate((jnp.linspace(0.0, 1.0, n_inside),
+    1.0 + jnp.linspace(1.0 / n_outside, 1.0, n_outside) * OUTSIDE_OFFSET / edge_radius))
 xyz_seeds = axis + seed_fractions[:, None] * (edge - axis)
-inside = seed_fractions < 1.0
+inside = seed_fractions <= 1.0
 inside_xyz, outside_xyz = xyz_seeds[inside], xyz_seeds[~inside]
 equilibrium.set_points_xyz(inside_xyz); flux_seeds = equilibrium.field.get_points_flux()
 
 precision = exterior.plasma_field.plan_surface_precision(digits=VC_DIGITS)
-interface = fbd.FreeBoundaryDiffProblem.from_surface_data(
+interface = vc.PlasmaVacuumInterface.from_surface_data(
     surface_data, digits=VC_DIGITS, precision=precision,
     virtual_casing_field=exterior.plasma_field)
 B_surface = interface.total_B_out(coil_field); Bmag_surface = jnp.linalg.norm(B_surface, axis=0)
 Bn_over_B = jnp.abs(interface.bnormal_residual(coil_field)) / Bmag_surface
+alignment = (jnp.sum(interface.weights * jnp.sum(B_surface * surface_data.B_total, axis=0))
+             / jnp.sqrt(jnp.sum(interface.weights * Bmag_surface**2)
+                        * jnp.sum(interface.weights * jnp.sum(surface_data.B_total**2, axis=0))))
 print(f"True boundary B.n/B: mean = {100 * float(jnp.sum(interface.weights * Bn_over_B)):.3f}%, "
       f"max = {100 * float(jnp.max(Bn_over_B)):.3f}%")
+print(f"Boundary field alignment = {float(alignment):.6f}")
 print("Preparing the near-surface virtual-casing continuation...")
 exterior = exterior.with_near_surface_continuation(
     digits=VC_DIGITS, precision=precision, B_surface=interface.B_plasma)
 del interface, precision, B_surface, Bmag_surface, Bn_over_B
 jax.clear_caches()  # the equilibrium and on-surface diagnostic are not evaluated again
 escape = None
-
-def trace(label, field, seeds, *, cartesian=False, stop_outside=False):
-    print(f"Tracing {label} (the first call compiles ESSOS)...")
-    started = perf_counter()
-    duration = TRACE_LENGTH if cartesian else 2.0 * jnp.pi * N_TOROIDAL_TURNS
-    model = "FieldLineArclength" if cartesian else "FieldLineToroidal"
-    result = Tracing(field=field, model=model, initial_conditions=seeds,
-        maxtime=duration, timestep=duration / (N_SAMPLES - 1), times_to_trace=N_SAMPLES,
-        atol=TRACE_TOLERANCE, rtol=TRACE_TOLERANCE,
-        stopping_criteria=escape if stop_outside else None)
-    jax.block_until_ready(result.trajectories_xyz)
-    message = f"{label} ready in {perf_counter() - started:.1f} s"
-    if stop_outside:
-        message += f"; {int(jnp.sum(result.boundary_hits))}/{len(seeds)} lines reached the distance limit"
-    print(message)
-    return result
-
-vmex_inside = trace("VMEX total field inside", equilibrium.field_in_flux_coordinates(),
-                    flux_seeds)
+vmex_inside = trace_field_lines(equilibrium.field_in_flux_coordinates(), flux_seeds,
+    toroidal_turns=N_TOROIDAL_TURNS, samples=N_SAMPLES, tolerance=TRACE_TOLERANCE,
+    progress=TRACE_PROGRESS, label="VMEX total field inside")
 jax.clear_caches()
 classifier_surface = surfacerzfourier_from_boundary(
     inp.rbc, inp.zbs, inp.nfp, nphi=32, ntheta=32)
 classifier = SurfaceClassifier(
     classifier_surface, h=0.08, padding=MAX_SURFACE_DISTANCE + 0.03)
 escape = LevelsetStoppingCriterion(classifier, maximum_distance=MAX_SURFACE_DISTANCE)
-coil_trace = trace("ESSOS coil-only field from the same seed line", biot_savart,
-                   xyz_seeds, cartesian=True, stop_outside=True)
-vmex_outside = trace("VMEX coil + virtual-casing field outside", exterior,
-                     outside_xyz, cartesian=True, stop_outside=True)
+coil_trace = trace_field_lines(biot_savart, xyz_seeds, length=TRACE_LENGTH,
+    samples=N_SAMPLES, tolerance=TRACE_TOLERANCE, stopping_criteria=escape,
+    progress=TRACE_PROGRESS, label="ESSOS coil-only field from the same seed line")
+vmex_outside = trace_field_lines(exterior, outside_xyz, length=TRACE_LENGTH,
+    samples=N_SAMPLES, tolerance=TRACE_TOLERANCE, stopping_criteria=escape,
+    progress=TRACE_PROGRESS, label="VMEX coil + virtual-casing field outside")
 
 print("Plotting 3D trajectories and the phi=0 Poincare comparison...")
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
 surface = surfacerzfourier_from_boundary(inp.rbc, inp.zbs, inp.nfp, nphi=60, ntheta=60)
 figure = plt.figure(figsize=(10.5, 4.5)); axis3d = figure.add_subplot(121, projection="3d")
 surface.plot(ax=axis3d, show=False, color="lightsteelblue", alpha=0.30)
@@ -112,17 +110,36 @@ vmex_outside.plot(ax=axis3d, show=False, n_trajectories_plot=len(outside_xyz),
                   color="#D55E00", linewidth=1.0)
 axis3d.set_title(f"Self-consistent field, beta={float(equilibrium.wout.betatotal):.2%}")
 axis3d.set_axis_off(); poincare = figure.add_subplot(122)
-vmex_inside.poincare_plot(shifts=[0.0], ax=poincare, show=False, color="#0072B2", s=0.01)
+inside_sections = vmex_inside.poincare_plot(
+    shifts=[0.0], ax=poincare, show=False, color="#0072B2", s=0.01)
 coil_colors = ["#009E73" if bool(value) else "#D55E00" for value in inside]
-coil_trace.poincare_plot(shifts=[0.0], ax=poincare, show=False, color=coil_colors, s=0.01)
-vmex_outside.poincare_plot(shifts=[0.0], ax=poincare, show=False, color="#CC79A7", s=0.01)
+coil_sections = coil_trace.poincare_plot(
+    shifts=[0.0], ax=poincare, show=False, color=coil_colors, s=0.01)
+outside_sections = vmex_outside.poincare_plot(
+    shifts=[0.0], ax=poincare, show=False, color="#CC79A7", s=0.01)
+section = np.asarray(surface.gamma[0]); poincare.plot(
+    np.hypot(section[:, 0], section[:, 1]), section[:, 2], "k-", lw=1.0)
 poincare.set(xlabel="R [m]", ylabel="Z [m]", title=r"Finite beta: $\phi=0$ Poincare")
-from matplotlib.lines import Line2D
+all_sections = inside_sections + coil_sections + outside_sections
+r_values = np.concatenate([np.hypot(section[:, 0], section[:, 1])]
+                          + [row[0] for row in all_sections])
+z_values = np.concatenate([section[:, 2]] + [row[1] for row in all_sections])
+poincare.set_xlim(r_values.min(), r_values.max()); poincare.set_ylim(z_values.min(), z_values.max())
+poincare.set_aspect("equal", adjustable="box")
 poincare.grid(alpha=0.25); poincare.legend(handles=[
+    Line2D([], [], color="k", lw=1.0, label="VMEX LCFS"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#0072B2", label="VMEX total field, interior seeds"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#009E73", label="coils only, interior seeds"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#D55E00", label="coils only, exterior seeds"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#CC79A7", label="coils + plasma, exterior seeds"),
-], fontsize=8, loc="best")
-figure.tight_layout(); figure.savefig("vmex_fieldline_tracing_finite_beta.png", dpi=200); plt.close(figure)
+], fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, frameon=False)
+figure.tight_layout(rect=(0, 0.12, 1, 1)); figure.savefig(
+    "vmex_fieldline_tracing_finite_beta.png", dpi=200); plt.close(figure)
+bounded = ~np.asarray(vmex_outside.boundary_hits)
+crossings = np.asarray([len(row[0]) for row in outside_sections])
+offsets = np.asarray((seed_fractions[~inside] - 1.0) * edge_radius)
+print(f"Exterior trace QA: {bounded.sum()}/{len(bounded)} lines remained in the LCFS neighborhood; "
+      f"offsets [m] = {offsets.round(5).tolist()}, crossings = {crossings.tolist()}")
+if not np.any(bounded):
+    print("No closed exterior flux surface was verified for this finite-beta coil set.")
 print("Wrote vmex_fieldline_tracing_finite_beta.png")

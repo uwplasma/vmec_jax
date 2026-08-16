@@ -471,11 +471,10 @@ class VmecProblem(FunctionProblem):
 
         ``extra_costs(state, runtime)`` returns one already-weighted scalar
         cost per added objective term. The auxiliary result contains the VMEX
-        residual rows and those added costs, ready for
-        :meth:`OptimizationMonitor.wrap_value_and_grad`. Failed equilibrium
-        trials receive the same smooth finite rejection cost as the base
-        problem, so driver scripts do not need their own accepted/rejected
-        branches.
+        residual rows and those added costs, ready to pass as auxiliary data to
+        :func:`jax.value_and_grad`. Failed equilibrium trials receive the same
+        smooth finite rejection cost as the base problem, so driver scripts do
+        not need their own accepted/rejected branches.
         """
         import jax
         import jax.numpy as jnp
@@ -580,14 +579,14 @@ class VmecProblem(FunctionProblem):
         if state_runtime is None or inp is None:
             raise AttributeError(
                 "this problem does not expose a differentiable equilibrium field")
-        from . import freeboundary_diff as fbd
+        from . import virtual_casing as vc
         from .extender import VmecExtender
 
         parameters = self._x(x)
 
         def surface_data(p):
             state, runtime = state_runtime(p)
-            return fbd.surface_field_data_from_state(
+            return vc.surface_field_data_from_state(
                 inp, state, runtime=runtime, nphi=nphi, ntheta=ntheta)
 
         return VmecExtender.from_parameterized_surface_data(
@@ -638,17 +637,17 @@ class VmecProblem(FunctionProblem):
         inp = self.metadata.get("input")
         if state_runtime is None or inp is None:
             raise AttributeError("surface fields require an implicit VMEC problem")
-        from . import freeboundary_diff as fbd
+        from . import virtual_casing as vc
 
         state, runtime = state_runtime(self._x(x))
-        data = fbd.surface_field_data_from_state(
+        data = vc.surface_field_data_from_state(
             inp, state, runtime=runtime, nphi=nphi, ntheta=ntheta)
         Bmag = jnp.linalg.norm(data.B_total, axis=0)
         if quantity == "absB":
             return Bmag
         if external_field is None:
             raise ValueError("B.n/B requires external_field")
-        interface = fbd.FreeBoundaryDiffProblem.from_surface_data(
+        interface = vc.PlasmaVacuumInterface.from_surface_data(
             data, digits=digits, precision=precision)
         return interface.bnormal_residual(external_field) / Bmag
 

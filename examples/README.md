@@ -29,11 +29,11 @@ All runnable examples live under this single `examples/` tree.
   - `free_boundary_beta_scan.py` — ramp the pressure of the free-boundary case
     (coil currents fixed); the LCFS is re-solved by NESTOR at each beta.
   - `free_boundary_essos_coils.py` — free-boundary beta scan directly from
-    ESSOS coils (tabulated to a temporary mgrid; requires ESSOS branch
-    `feature/mgrid-from-coils`); `PRES_SCALE` is calibrated per point so the
+    ESSOS coils (tabulated to a temporary mgrid); `PRES_SCALE` is calibrated per point so the
     *actual* wout `betatotal` hits 0/1/2/3 %.
-  - `take_free_boundary_gradients.py` — differentiate a free-boundary field
-    diagnostic through the virtual-casing vacuum field.
+  - `take_free_boundary_gradients.py` — differentiate the reconverged coupled
+    NESTOR--VMEX root with respect to a direct ESSOS coil field, and compare
+    the adjoint with independent re-solves.
   - `vmex_get_B_gradB.py` and `vmex_get_B_outside_plasma.py` — query a
     finite-beta field inside the LCFS or an actual ESSOS coil plus
     virtual-casing field outside it, including three spatial derivative orders
@@ -41,11 +41,16 @@ All runnable examples live under this single `examples/` tree.
   - `vmex_fieldline_tracing_vacuum.py` and
     `vmex_fieldline_tracing_finite_beta.py` — compare VMEX, coil-only, and
     self-consistent exterior traces in 3-D and toroidal Poincare plots.
-    Seeds form one line from just off-axis through the selected exterior
-    offset; VMEX uses toroidal angle while Cartesian traces use arclength and
+    Seeds form one line from the regularized magnetic axis through the
+    selected exterior offset; VMEX uses toroidal angle while Cartesian traces use arclength and
     stop after leaving the LCFS neighborhood.
     The finite-beta coil fixture is reproduced by ESSOS
     `examples/coil_optimization/optimize_coils_finite_beta_vmex.py`.
+  - `vmex_fixed_free_boundary_comparison.py` — solve a larger coil-driven free
+    boundary, restrict its exact `s=0.5` surface and profiles to a fixed solve,
+    refit the four ESSOS coil currents with virtual casing, and compare eleven
+    parent surfaces plus the exterior field. The plot also exposes the physical
+    difference caused by removing the parent equilibrium's outer plasma current.
 - `optimization/`: compact QA/QH/QP/QI scripts using `(function, target,
   weight)` terms with SciPy least-squares, BFGS, or L-BFGS-B. The fixed-boundary
   `single_stage_optimization.py` jointly varies VMEX boundary coefficients and
@@ -54,9 +59,12 @@ All runnable examples live under this single `examples/` tree.
   a stage-refined current spline against self-consistent Redl, DMerc, and DR
   targets. `single_stage_optimization_finite_beta.py` combines that finite-beta
   plasma problem with exact virtual-casing and ESSOS coil derivatives.
+  `single_stage_free_boundary_optimization.py` and its finite-beta counterpart
+  instead leave the LCFS implicit and vary only ESSOS coil shape/current dofs
+  through the experimental coupled NESTOR adjoint, without an mgrid file.
   All read `VMEX_EXAMPLES_CI=1` for short CI smoke tests.
-- `mirror_fixed_boundary_nonaxisymmetric.py` compares axisymmetric and
-  rotating-ellipse fixed-boundary mirrors; `mirror_free_boundary_beta_scan.py`
+- `mirror/mirror_fixed_boundary_nonaxisymmetric.py` compares axisymmetric and
+  rotating-ellipse fixed-boundary mirrors; `mirror/mirror_free_boundary_beta_scan.py`
   continues a solved ESSOS-coil free boundary through 80% central beta and
   compares its on-axis field with `sqrt(1-beta)`.
 - `data/`: bundled input decks and small checked-in fixtures.

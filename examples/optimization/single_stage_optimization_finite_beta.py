@@ -15,9 +15,9 @@ from scipy.optimize import minimize
 
 import vmex as vj
 from vmex import optimize as opt
-# ``freeboundary_diff`` supplies differentiable coil/plasma interface fields.
-# It does not move the boundary or invoke a free-boundary equilibrium solve here.
-from vmex.core import freeboundary_diff as fbd
+# This prescribed-interface API separates plasma and coil fields on each trial
+# boundary. It does not move the boundary or run a free-boundary equilibrium.
+from vmex.core import virtual_casing as vc
 from vmex.core.bootstrap import (ELEMENTARY_CHARGE, KineticProfiles, RedlBootstrapMismatch,
                                  self_consistent_bootstrap)
 
@@ -40,7 +40,7 @@ MAX_MODE, MAXITER = 2, 15
 N_CURRENT_SPLINE = 6
 ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
 VARY_MAJOR_RADIUS = False
-SEED_PERTURBATION = 0.10
+SEED_PERTURBATION = 0.02
 
 N_COILS, COIL_ORDER = 4, 4
 COIL_MAJOR_RADIUS, COIL_MINOR_RADIUS = 1.0, 0.5
@@ -73,8 +73,9 @@ if ci_smoke:
 print("Running single_stage_optimization_finite_beta.py", flush=True)
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
+# VmecInput is frozen, so copy its arrays before adding the 3-D perturbation.
+# The circular RBC(0,1)=ZBS(0,1)=0.1 seed is already explicit in the input file.
 rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
-rbc[inp.ntor, 1] = zbs[inp.ntor, 1] = 0.20
 rbc[inp.ntor + 1, 1], zbs[inp.ntor + 1, 1] = SEED_PERTURBATION, -SEED_PERTURBATION
 
 # ne=n0(1-s^5), Te=Ti=T0(1-s), with p=e ne(Te+Ti) calibrated to TARGET_BETA.
@@ -90,10 +91,8 @@ inp = replace(inp, rbc=rbc, zbs=zbs, delt=0.5, pmass_type="power_series", am=am,
               pcurr_type="power_series", ac=ac, curtor=0.0).change_resolution(
                   mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
 print("Calibrating the finite-beta seed...", flush=True)
-# CI uses the same mpol=ntor=5 seed, so reuse its measured scale and avoid one
-# expensive smoke-only equilibrium; ordinary runs calibrate the requested case.
-profile_scale = (0.003456363937178298 if ci_smoke else
-                 TARGET_BETA / float(opt.solve_equilibrium(inp).wout.betatotal))
+# Measure this seed instead of carrying a geometry-dependent fitted constant.
+profile_scale = TARGET_BETA / float(opt.solve_equilibrium(inp).wout.betatotal)
 n0 *= profile_scale ** (1 / 3); T0 *= profile_scale ** (2 / 3)
 inp = replace(inp, pres_scale=inp.pres_scale * profile_scale)
 profiles = KineticProfiles(n0 * np.array([1, 0, 0, 0, 0, -1]),
@@ -163,17 +162,17 @@ def objects_from_x(x):
 
 print("Preparing virtual casing on the initial surface...", flush=True)
 state0, runtime0 = plasma_problem.metadata["jax_state_runtime"](jnp.asarray(x_plasma0))
-surface_data0 = fbd.surface_field_data_from_state(
+surface_data0 = vc.surface_field_data_from_state(
     inp, state0, runtime=runtime0, nphi=NPHI, ntheta=NTHETA)
-precision = fbd.plan_vc_precision(surface_data0, digits=VC_DIGITS)
+precision = vc.plan_vc_precision(surface_data0, digits=VC_DIGITS)
 
 def interface_costs(x, state, runtime):
     surface, coils = objects_from_x(x)
-    surface_data = fbd.surface_field_data_from_state(
+    surface_data = vc.surface_field_data_from_state(
         inp, state, runtime=runtime, nphi=NPHI, ntheta=NTHETA)
     # This object evaluates the fixed trial surface's virtual-casing residuals;
     # VMEX has already solved the volume equilibrium with that boundary prescribed.
-    interface = fbd.FreeBoundaryDiffProblem.from_surface_data(
+    interface = vc.PlasmaVacuumInterface.from_surface_data(
         surface_data, digits=VC_DIGITS, precision=precision)
     B_scale = jnp.sqrt(jnp.sum(interface.weights * jnp.sum(surface_data.B_total**2, axis=0)))
     external_field = coil_field(coils)
@@ -212,18 +211,27 @@ def geometry_objective(u):
     return jnp.sum(costs), costs
 
 monitor = opt.OptimizationMonitor()
-components = (
-    jax.jit(jax.value_and_grad(physics_objective, has_aux=True)),
-    jax.jit(jax.value_and_grad(geometry_objective, has_aux=True)),
-)
-scipy_objective = monitor.wrap_value_and_grad(
-    components, extra_term_names, residual_slices=plasma_problem.metadata["term_slices"])
+physics_value_and_grad = jax.jit(jax.value_and_grad(physics_objective, has_aux=True))
+geometry_value_and_grad = jax.jit(jax.value_and_grad(geometry_objective, has_aux=True))
+
+# JAX differentiates the fixed-boundary VMEX/virtual-casing physics and ESSOS
+# geometry graphs separately to limit memory; their scalar gradients simply add.
+def value_and_grad(u):
+    (physics_value, (residual, interface_values)), physics_gradient = physics_value_and_grad(u)
+    (geometry_value, geometry_values), geometry_gradient = geometry_value_and_grad(u)
+    residual = np.asarray(residual)
+    terms = {name: 0.5 * float(residual[start:stop] @ residual[start:stop])
+             for name, start, stop in plasma_problem.metadata["term_slices"]}
+    extra_values = np.concatenate((np.asarray(interface_values), np.asarray(geometry_values)))
+    terms.update(zip(extra_term_names, map(float, extra_values)))
+    return monitor.cache_evaluation(
+        u, physics_value + geometry_value, physics_gradient + geometry_gradient, terms)
 
 print(f"Finite-beta VMEX + virtual casing + ESSOS: {x_plasma0.size} plasma, "
       f"{n_curve_dofs} coil-shape, and {coils0.dofs_currents.size} coil-current variables")
 print(f"dof_names = {dof_names}")
 joint_problem = vj.FunctionProblem.from_functions(
-    np.zeros_like(x0), value_and_grad=scipy_objective)
+    np.zeros_like(x0), value_and_grad=value_and_grad)
 joint_problem.compile_value_and_gradient(report_interval=10.0)
 result = minimize(joint_problem.value_and_grad, joint_problem.x0, jac=True, method=METHOD,
     bounds=[(-PARAMETER_BOUND, PARAMETER_BOUND)] * x0.size if METHOD == "L-BFGS-B" else None,
@@ -232,11 +240,14 @@ result = minimize(joint_problem.value_and_grad, joint_problem.x0, jac=True, meth
 x_final = x0 + scales * result.x
 _, coils_final = objects_from_x(jnp.asarray(x_final))
 equilibrium = plasma_problem.equilibrium_from_x(x_final[:x_plasma0.size])
-final_input = replace(plasma_problem.input_from_x(x_final[:x_plasma0.size]),
-    ns_array=np.array([31 if ci_smoke else 101]),
-    ftol_array=np.array([1e-10 if ci_smoke else 1e-14]), niter_array=np.array([8000]))
-final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.state,
-    verbose=not ci_smoke, raise_on_max_iterations=True)
+final_input = plasma_problem.input_from_x(x_final[:x_plasma0.size])
+if ci_smoke:
+    final_equilibrium = equilibrium
+else:
+    final_input = replace(final_input, ns_array=np.array([31, 51, 101]),
+        ftol_array=np.array([1e-10, 1e-12, 1e-14]), niter_array=np.full(3, 20000))
+    final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.state,
+        verbose=True, raise_on_max_iterations=True)
 
 # Print results
 report = opt.EquilibriumReporter(
@@ -244,11 +255,11 @@ report = opt.EquilibriumReporter(
     ("beta", opt.volume_average_beta, ".3%"), ("aspect", opt.aspect_ratio, ".3f"),
     ("iota", opt.mean_iota, ".3f"))
 report("final", final_equilibrium)
-data_f = fbd.surface_field_data_from_state(
+data_f = vc.surface_field_data_from_state(
     final_input, final_equilibrium.state, runtime=final_equilibrium.runtime,
     nphi=FINAL_NPHI, ntheta=FINAL_NTHETA)
-final_precision = fbd.plan_vc_precision(data_f, digits=VC_DIGITS)
-interface_f = fbd.FreeBoundaryDiffProblem.from_surface_data(
+final_precision = vc.plan_vc_precision(data_f, digits=VC_DIGITS)
+interface_f = vc.PlasmaVacuumInterface.from_surface_data(
     data_f, digits=VC_DIGITS, precision=final_precision)
 Bn = np.asarray(interface_f.bnormal_residual(coil_field(coils_final)))
 Bmag = np.linalg.norm(np.asarray(data_f.B_total), axis=0)
@@ -269,7 +280,7 @@ print(f"Maximum curvature = {float(np.max(np.asarray(coils_final.curvature))):.3
 input_path = final_input.to_indata("input.single_stage_finite_beta_optimized")
 wout_path = vj.write_wout("wout_single_stage_finite_beta_optimized.nc", final_equilibrium.wout)
 coils_final.to_json("coils_single_stage_finite_beta_optimized.json")
-interface0 = fbd.FreeBoundaryDiffProblem.from_surface_data(
+interface0 = vc.PlasmaVacuumInterface.from_surface_data(
     surface_data0, digits=VC_DIGITS, precision=precision)
 Bn0 = np.asarray(interface0.bnormal_residual(coil_field(coils0)))
 Bmag0 = np.linalg.norm(np.asarray(surface_data0.B_total), axis=0)
@@ -297,15 +308,10 @@ print("Wrote single_stage_finite_beta_objectives.csv and single_stage_finite_bet
 print("Wrote single_stage_finite_beta_bootstrap_current.png")
 if MAKE_MOVIE:
     print("Making movie of accepted iterates...")
-    monitor.movie("single_stage_finite_beta_optimization.gif",
-        lambda u: objects_from_x(jnp.asarray(x0 + scales * u)),
-        color_factory=None if MOVIE_SURFACE_COLOR is None else lambda u, objects:
-            (MOVIE_SURFACE_COLOR(u, objects) if callable(MOVIE_SURFACE_COLOR) else
-             plasma_problem.surface_field_values(
-                 x0[:x_plasma0.size] + scales[:x_plasma0.size] * u[:x_plasma0.size],
-                 MOVIE_SURFACE_COLOR, external_field=coil_field(objects[1]),
-                 nphi=NPHI, ntheta=NTHETA, digits=VC_DIGITS, precision=precision)),
-        color_label=str(MOVIE_SURFACE_COLOR), cmap="jet")
+    monitor.movie_surface_coils("single_stage_finite_beta_optimization.gif", objects_from_x,
+        x0=x0, scales=scales, surface_color=MOVIE_SURFACE_COLOR, plasma_problem=plasma_problem,
+        external_field=lambda objects: coil_field(objects[1]), nphi=NPHI, ntheta=NTHETA,
+        digits=VC_DIGITS, precision=precision, cmap="jet")
 if not ci_smoke:
     for path in vj.plot_wout(wout_path, ".").values():
         print(f"Wrote {path}")

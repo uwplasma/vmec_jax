@@ -7,6 +7,8 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.multigrid.solve_multigrid` — NS_ARRAY ladder (runvmec.f)
 - :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` — free-boundary ladder
 - :func:`~vmex.core.freeboundary.solve_free_boundary` — NESTOR free boundary
+- :func:`~vmex.core.freeboundary_implicit.solve_free_boundary_implicit` —
+  coupled NESTOR/VMEC implicit derivative
 - :func:`~vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
   / :func:`~vmex.core.wout.wout_from_state` / :class:`~vmex.core.wout.WoutData`
 - :func:`~vmex.core.restart.state_from_wout` /
@@ -20,6 +22,8 @@ Public API (lazily imported; ``import vmex as vj``):
   / :class:`~vmex.core.mgrid.MgridField` (mgrid or tabulated direct field)
 - :class:`~vmex.core.extender.VmecInteriorField` — field inside the plasma
 - :class:`~vmex.core.extender.VmecExtender` — field outside the plasma surface
+- :class:`~vmex.core.virtual_casing.PlasmaVacuumInterface` — virtual-casing
+  diagnostics on a prescribed plasma-vacuum interface
 - :func:`~vmex.core.scaling.scale_input` / :func:`~vmex.core.scaling.scale_wout`
   — dimensional similarity transforms
 - ``vmex.optimize`` — objectives + least-squares driver (module)
@@ -118,6 +122,12 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "solve_free_boundary_multigrid": (
         ".core.multigrid", "solve_free_boundary_multigrid"),
     "solve_free_boundary": (".core.freeboundary", "solve_free_boundary"),
+    "make_free_boundary_config": (
+        ".core.freeboundary_implicit", "make_free_boundary_config"),
+    "solve_free_boundary_implicit": (
+        ".core.freeboundary_implicit", "solve_free_boundary_implicit"),
+    "solve_free_boundary_implicit_status": (
+        ".core.freeboundary_implicit", "solve_free_boundary_implicit_status"),
     # wout IO
     "WoutData": (".core.wout", "WoutData"),
     "read_wout": (".core.wout", "read_wout"),
@@ -149,6 +159,12 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "MagneticField": (".core.extender", "MagneticField"),
     "VmecInteriorField": (".core.extender", "VmecInteriorField"),
     "VmecExtender": (".core.extender", "VmecExtender"),
+    "PlasmaVacuumInterface": (
+        ".core.virtual_casing", "PlasmaVacuumInterface"),
+    "surface_field_data_from_state": (
+        ".core.virtual_casing", "surface_field_data_from_state"),
+    "surface_field_data_from_wout": (
+        ".core.virtual_casing", "surface_field_data_from_wout"),
     # dimensional scaling
     "scale_input": (".core.scaling", "scale_input"),
     "scale_mgrid": (".core.scaling", "scale_mgrid"),

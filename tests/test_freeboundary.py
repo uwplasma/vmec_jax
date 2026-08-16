@@ -315,12 +315,14 @@ def test_fused_vacuum_matches_reference(ab_inputs):
         axis_r0=axis_r, axis_z0=axis_z,
     )
     out = fused.full(state, rt_freeb, field)
+    bsq_only = fused.bsq(state, rt_freeb, field)
 
     def _rel(a, b):
         a = np.asarray(a); b = np.asarray(b)
         return np.abs(a - b).max() / max(np.abs(b).max(), 1e-300)
 
     assert _rel(out["bsqvac"], bsqvac_r) < 1e-10
+    assert _rel(bsq_only, out["bsqvac"]) < 1e-12
     assert _rel(out["potvac"], potvac_r) < 1e-10
     assert _rel(out["mode_matrix"], mm_r) < 1e-10
     assert _rel(out["bvec_nonsing"], bv_r) < 1e-10
@@ -749,7 +751,7 @@ def test_cached_vacuum_executable_rechecks_dynamic_axis(monkeypatch):
     device = next(iter(axis_r.devices()))
     monkeypatch.setitem(
         FB._VACUUM_EXECUTABLE_CACHE,
-        (resolution, 1, 2, 3, False, str(device), "None"),
+        (resolution, 1, 2, 3, False, False, str(device), "None"),
         cached,
     )
     seen = []

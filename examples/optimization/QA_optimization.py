@@ -31,8 +31,9 @@ DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{n
 inp = vj.VmecInput.from_file(DATA)
 # The exactly circular torus has zero first-order iota sensitivity. This
 # explicit rotating-ellipse perturbation gives the local optimizer a QA basin.
-inp.rbc[inp.ntor-1, 1] =-SEED_PERTURBATION
-inp.zbs[inp.ntor-1, 1] = SEED_PERTURBATION
+rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
+rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -SEED_PERTURBATION, SEED_PERTURBATION
+inp = replace(inp, rbc=rbc, zbs=zbs)
 def trial_dmerc(state, runtime):
     return opt.trial_pressure_mercier_stability_residual(state, runtime, beta=TRIAL_BETA)
 

@@ -8,8 +8,12 @@ examples, tests, and documentation.
   Landreman--Paul QA boundary.
 - `input.LandremanPaul2021_QA_beta2p5_bootstrap` and the matching
   `ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json`: a 2.5%-beta QA
-  equilibrium with self-consistent bootstrap current and coils reproduced by
-  the finite-beta optimization example in ESSOS.
+  equilibrium with self-consistent bootstrap current for the coupled
+  free-boundary optimization example.
+- The corresponding `beta0p5` pair is the low-beta, current-oriented fixture
+  used for exterior field-line tracing and fixed/free comparison. Its coils
+  are reproduced by ESSOS `optimize_coils_finite_beta_vmex.py` from an
+  independent vacuum seed and align with the VMEX toroidal-field direction.
 - `single_grid/`: fixed-boundary single-grid runtime inputs used by the README,
   docs, and optional cross-implementation comparisons. README runtime inputs are
   normalized to `NS_ARRAY=151`, `FTOL_ARRAY=1e-14`, and `NITER_ARRAY=5000`.

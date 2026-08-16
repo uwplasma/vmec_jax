@@ -115,6 +115,18 @@ def test_monitor_wraps_auxiliary_term_costs_and_records_only_accepted_points() -
             ("one",), residual_slices=(("rows", 0, 1),))([0.0])
 
 
+def test_monitor_caches_an_explicit_value_and_gradient() -> None:
+    monitor = OptimizationMonitor(stream=None)
+    value, gradient = monitor.cache_evaluation(
+        [2.0], 4.0, [4.0], {"physics": 3.0, "coils": 1.0})
+    monitor(np.array([2.0]))
+
+    assert value == 4.0
+    np.testing.assert_array_equal(gradient, [4.0])
+    assert len(monitor.records) == 1
+    assert monitor.history["physics"].tolist() == [3.0]
+
+
 def test_monitor_print_every_and_silent_collection() -> None:
     silent = OptimizationMonitor(stream=None)
     silent.record(np.zeros(1), cost=3.0)
@@ -227,6 +239,45 @@ def test_bootstrap_plot_and_small_optimization_movie(tmp_path, monkeypatch) -> N
     with np.testing.assert_raises_regex(RuntimeError, "requires ffmpeg"):
         vj.plot_optimization_movie(
             tmp_path / "bad.mp4", ([0.0],), lambda x: Line(float(x[0])))
+
+
+def test_monitor_surface_coil_movie_maps_normalized_variables(monkeypatch, tmp_path) -> None:
+    monitor = OptimizationMonitor(stream=None)
+    monitor.record([0.0, 1.0], cost=1.0)
+    captured = {}
+
+    def fake_movie(path, object_factory, **kwargs):
+        captured["objects"] = object_factory(np.array([0.0, 1.0]))
+        captured["colors"] = kwargs["color_factory"](
+            np.array([0.0, 1.0]), captured["objects"])
+        return Path(path)
+
+    class Problem:
+        x0 = np.zeros(1)
+
+        def surface_field_values(self, x, name, **kwargs):
+            assert name == "B.n/B"
+            np.testing.assert_allclose(x, [1.0])
+            assert kwargs["external_field"] == "coil field"
+            return np.array([[0.25]])
+
+    monkeypatch.setattr(monitor, "movie", fake_movie)
+    path = monitor.movie_surface_coils(
+        tmp_path / "movie.gif", lambda x: tuple(x), x0=[1.0, 2.0], scales=[0.5, 2.0],
+        surface_color="B.n/B", plasma_problem=Problem(),
+        external_field=lambda objects: "coil field")
+
+    assert path == tmp_path / "movie.gif"
+    assert captured["objects"] == (1.0, 4.0)
+    np.testing.assert_allclose(captured["colors"], [[0.25]])
+    with np.testing.assert_raises_regex(ValueError, "same shape"):
+        monitor.movie_surface_coils("x.gif", lambda x: x, x0=[1.0], scales=[1.0, 2.0])
+    with np.testing.assert_raises_regex(ValueError, "surface_color"):
+        monitor.movie_surface_coils("x.gif", lambda x: x, x0=[1.0], scales=[1.0],
+                                    surface_color="pressure")
+    with np.testing.assert_raises_regex(ValueError, "plasma_problem"):
+        monitor.movie_surface_coils("x.gif", lambda x: x, x0=[1.0], scales=[1.0],
+                                    surface_color="absB")
 
 
 def test_monitor_empty_optional_paths_raise_or_return_empty(tmp_path) -> None:

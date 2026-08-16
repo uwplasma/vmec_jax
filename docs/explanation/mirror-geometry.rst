@@ -421,7 +421,7 @@ QI-mirror hybrid: Fourier vs B-spline
 A quasi-isodynamic (QI) stellarator has poloidally closed ``|B|`` contours and
 near-straight magnetic-axis segments at its field-period-symmetric planes, so
 the QI axis is the natural place to cut and insert a straight mirror cell.
-``examples/qi_mirror_hybrid_fourier_vs_bspline.py`` makes that construction
+``examples/mirror/qi_mirror_hybrid_fourier_vs_bspline.py`` makes that construction
 concrete and compares the two ways of representing the resulting axis.
 
 Cut locations.  The example solves ``input.nfp2_QI`` with the VMEC (Fourier)
@@ -707,7 +707,7 @@ the converged coefficient residual. Boundary and periodic-axis spline
 coefficients, flux, conserved mass, and current remain differentiable. The transpose Hessian
 action uses exact JAX reverse AD and the nonlinear iteration history is never
 differentiated or stored. The root example
-(``examples/mirror_fixed_boundary_nonaxisymmetric.py``) differentiates
+(``examples/mirror/mirror_fixed_boundary_nonaxisymmetric.py``) differentiates
 rotating-ellipse volume with respect to a native boundary coefficient and
 checks it against two fully reconverged equilibria.
 For the corrected-cut rotating ellipse, the volume adjoint agrees with two

@@ -191,28 +191,42 @@ Continuation stages may restart the optimizer iteration counter; the monitor
 keeps the combined saved history strictly increasing. Exact-zero terms are
 drawn at a relative numerical display floor instead of forcing a meaningless
 ``1e-308`` axis. For joint surface/coil objectives, accepted vectors are also
-available as ``monitor.x_history`` and a compact movie is one optional call::
+available as ``monitor.x_history``. For a joint normalized surface/coil driver,
+the optional movie call applies ``x = x0 + step*u`` and can color the surface::
 
-   monitor.movie("optimization.gif", objects_from_x, max_frames=50)
+   monitor.movie_surface_coils(
+       "optimization.gif", objects_from_x, x0=x0, scales=step,
+       surface_color="B.n/B", plasma_problem=problem,
+       external_field=lambda objects: coil_field(objects[1]), max_frames=50)
 
 Pass ``color_factory=`` to color the first surface by a scalar field at every
 accepted iterate. The single-stage examples expose one top-level choice:
 ``None``, ``"absB"``, ``"B.n/B"``, or a user callable (for example a
 bootstrap diagnostic). The movie uses one color scale across all frames.
 
-For a custom JAX scalar objective, return ``(cost, {name: term_cost})`` as
-auxiliary data. Wrap ``jax.value_and_grad(objective, has_aux=True)`` with
-``monitor.wrap_value_and_grad``, then pass the monitor as SciPy's callback;
-rejected line-search evaluations stay out of the saved iteration history.
-For larger residual graphs, return ``(residual, extra_costs...)`` and pass the
-problem's ``term_slices`` as ``residual_slices``. VMEX then reduces term costs
-on the host, minimizing compiler output bookkeeping.
+For a custom JAX scalar objective, keep differentiation visible in the driver.
+Return ``(cost, {name: term_cost})`` as auxiliary data, call
+``jax.value_and_grad`` directly, and cache that already-computed evaluation for
+the plotting callback:
 
-``wrap_value_and_grad`` also accepts a sequence of additive value/gradient
-callables. VMEX sums their exact costs and gradients before returning to the
-optimizer. This keeps large VMEC, virtual-casing, and coil graphs in separate
-XLA executables, reducing cold-compilation memory without changing the SciPy,
-JAXopt, or Optax objective.
+.. code-block:: python
+
+   value_and_grad = jax.value_and_grad(objective, has_aux=True)
+
+   def scipy_value_and_grad(x):
+       (value, terms), gradient = value_and_grad(jnp.asarray(x))
+       monitor.cache_evaluation(x, value, gradient, terms)
+       return float(value), np.asarray(gradient)
+
+   result = scipy.optimize.minimize(
+       scipy_value_and_grad, x0, jac=True, method="BFGS", callback=monitor)
+
+The objective, its exact derivative, and SciPy's ``jac=True`` contract are all
+explicit. Rejected line-search evaluations remain outside the accepted-iterate
+history because only SciPy calls ``monitor`` as the callback. Large VMEC,
+virtual-casing, and coil terms may likewise be differentiated separately and
+their values and gradients added before ``cache_evaluation``; this produces
+smaller XLA executables without changing the optimizer contract.
 
 Joint VMEX--ESSOS objectives
 ----------------------------
@@ -242,7 +256,35 @@ It supplies the tangential-field magnitude condition that ``B.n/B`` alone
 does not constrain, even when the input pressure vanishes at the LCFS. The
 fixed-boundary examples vary boundary and coil variables together; they do
 not call NESTOR. A coil-only free-boundary optimization must instead
-differentiate the fully reconverged NESTOR root.
+differentiate the fully reconverged NESTOR root. The experimental public path
+keeps the construction visible in the driver::
+
+   config = vj.make_free_boundary_config(
+       inp, BiotSavart(coils0), field_from_parameters=field_from_u)
+
+   def objective(u):
+       state, status, _, _ = vj.solve_free_boundary_implicit_status(
+           params, u, config)
+
+       def accepted(_):
+           residual = opt.residuals_from_tuples(state, runtime, tuples)
+           return 0.5 * jnp.vdot(residual, residual)
+
+       # This visible wall lets a line search backtrack from an invalid trial.
+       rejected = lambda _: 1e3 * (1 + jnp.linalg.norm(u))**2
+       return jax.lax.cond(status == 0, accepted, rejected, None)
+
+   value_and_grad = jax.value_and_grad(objective)
+   result = scipy.optimize.minimize(
+       value_and_grad, u0, jac=True, method="L-BFGS-B")
+
+Here NESTOR moves the LCFS and only the ESSOS coil vector is optimized. See
+``single_stage_free_boundary_optimization.py`` for coil geometry terms and
+its finite-beta counterpart for beta and Redl bootstrap terms. The current
+path is reverse-mode only. Status 0 is derivative-certified, 1 is a failed
+solve, and 2 is an under-converged solve; only status 0 enters the adjoint.
+The path remains experimental while its NESTOR-edge Schur preconditioner is
+completed.
 
 Use :class:`vmex.core.monitoring.EquilibriumReporter` for the compact physics
 summary shared by the examples.  Each entry accepts either VMEX's

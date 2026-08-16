@@ -1,4 +1,4 @@
-"""Implicit-differentiation gradient tests (``vmex.core.implicit``, plan.md §6).
+"""Implicit-differentiation gradient tests for ``vmex.core.implicit``.
 
 Self-referential against central finite differences through the full host
 solver: the traceable parameter map reproduces ``prepare_runtime`` exactly;

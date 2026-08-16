@@ -284,6 +284,7 @@ examples/data/single_grid/*.nc
 /surface_*_optimized.vts
 /surface_*_initial.vts
 /vmex_fieldline_tracing.png
+/vmex_fixed_free_boundary_comparison.png
 # Example scripts write into the caller's directory; also ignore outputs when
 # they are run from inside examples/ during development.
 examples/**/*.png

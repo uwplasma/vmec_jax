@@ -83,12 +83,12 @@ short typed error.  Under ``jax.jit`` the sentinel surfaces at the jit
 boundary instead (where the ``optimize.least_squares`` zero-crash penalty
 lanes catch it).
 
-Optimization uses :func:`solve_implicit_status` instead.  Its callback never
-raises: a failed trial returns a fixed-shape fallback state and status code,
-after which the objective selects a finite differentiable penalty.  This lane
-therefore obeys the pure-callback contract under JIT and does not emit a host
-traceback.  An invalid initial point is still rejected by a strict host
-preflight before an optimizer starts.
+Optimization uses :func:`solve_implicit_status` instead.  A typed equilibrium
+failure returns a fixed-shape fallback state and status code, after which the
+objective selects a finite differentiable penalty.  Unexpected programming
+errors still propagate rather than masquerading as rejected trial points.  An
+invalid initial point is rejected by a strict host preflight before an
+optimizer starts.
 
 Parameter map
 -------------
@@ -955,15 +955,20 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
 
 
 def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
-              cfg: ImplicitConfig, seed: int = 0) -> SpectralState:
+              cfg: ImplicitConfig, seed: int = 0, *,
+              evaluator: Callable[[SpectralState], SpectralState] | None = None,
+              fixed_edge: bool = True) -> SpectralState:
     """Evolved-dof mask from the structural zero patterns of ``gc``.
 
     Host-side, once per forward solve.  A dof is an entry where (a) the
     residual can respond (row support: ``gc`` nonzero at a generically
     perturbed state — structural zeros stay exactly ``0.0`` in floating
     point) and (b) the residual depends on the entry (column support: one
-    VJP of ``gc`` with a random cotangent).  This excludes, exactly: the
-    fixed R/Z edge row (``include_edge=False``), the structurally zero
+    VJP of ``gc`` with a random cotangent).  ``evaluator`` defaults to the
+    fixed-boundary force map.  The free-boundary implicit path supplies its
+    NESTOR-coupled map and sets ``fixed_edge=False`` so the R/Z edge joins
+    the evolved state.  This excludes, exactly: the fixed R/Z edge row when
+    requested, the structurally zero
     families of symmetric runs, the released m=1 constrained Z combinations
     (zeroed force at convergence) and the lambda axis row (overwritten by the
     ``totzsp`` axis closure, so no equation depends on it).
@@ -972,9 +977,25 @@ def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
     scale = max(float(max(np.max(np.abs(np.asarray(getattr(x_star, f))), initial=0.0)
                           for f in _STATE_FIELDS)), 1.0)
 
-    def evaluate(x):
-        gc, _, diag = evaluate_forces(x, rt)
-        return gc, bool(np.asarray(diag.jacobian_sign_changed))
+    if evaluator is None:
+        def force_map(x):
+            return evaluate_forces(x, rt)[0]
+
+        def evaluate(x):
+            gc, _, diag = evaluate_forces(x, rt)
+            return gc, bool(np.asarray(diag.jacobian_sign_changed))
+    else:
+        force_map = evaluator
+
+        def evaluate(x):
+            gc = force_map(x)
+            # A custom coupled map may not expose geometry diagnostics;
+            # non-finiteness is the conservative invalid-geometry gate.
+            invalid = not all(
+                bool(np.all(np.isfinite(np.asarray(leaf))))
+                for leaf in jax.tree.leaves(gc)
+            )
+            return gc, invalid
 
     def perturbed(k, eps):
         r = np.random.default_rng(seed + k)
@@ -982,7 +1003,7 @@ def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
             lambda a: jnp.asarray(np.asarray(a) + eps * scale
                                   * r.standard_normal(np.shape(a))), x_star)
 
-    gc_fn = lambda x: evaluate_forces(x, rt)[0]  # noqa: E731
+    gc_fn = force_map
 
     rows = jax.tree.map(lambda a: np.zeros(np.shape(a), dtype=bool), x_star)
     cols = jax.tree.map(lambda a: np.zeros(np.shape(a), dtype=bool), x_star)
@@ -1004,7 +1025,7 @@ def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
         g = vjp(ct)[0]
         cols = jax.tree.map(lambda c, gg: c | (np.asarray(gg) != 0.0), cols, g)
 
-    edge = _edge_mask(cfg)
+    edge = _edge_mask(cfg) if fixed_edge else jax.tree.map(jnp.zeros_like, x_star)
     mask_np = jax.tree.map(
         lambda r, c, e: (r & c & (np.asarray(e) == 0.0)).astype(np.float64),
         rows, cols, edge)
@@ -1109,7 +1130,7 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
         try:
             result = run(init)
             break
-        except Exception:
+        except VmecError:
             if k == len(attempts) - 1:
                 raise
     if cfg.hot_restart and bool(result.converged):
@@ -1206,8 +1227,12 @@ def _host_solve_and_mask_status(cfg: ImplicitConfig, params_np) -> tuple:
     with _device_context(cfg):
         try:
             state, mask = _host_solve_and_mask_impl(cfg, params_np)
-        except Exception as exc:  # optimizer trial: status, never callback raise
-            error = _HOST_ERROR.pop() if _HOST_ERROR else exc
+        except Exception:
+            # Only the short sentinel paired with a relayed typed VmecError is
+            # an invalid optimizer trial. Never hide a programming error.
+            if not _HOST_ERROR:
+                raise
+            error = _HOST_ERROR.pop()
             _HOST_ERROR.clear()
             _LAST_STATUS_ERROR[cfg] = error
             params = _device_pin(cfg, jax.tree.map(jnp.asarray, params_np))

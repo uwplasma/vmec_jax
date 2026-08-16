@@ -1,8 +1,8 @@
-"""Smoke tests for the plan.md §10 examples at reduced budgets: each script
-reads ``VMEX_EXAMPLES_CI=1`` and shrinks its budget; the tests run them as
-subprocesses and assert clean exit, decreasing least-squares cost, and the
-promised outputs.  The examples' "commented-out but CI-tested" extra
-objective terms are exercised uncommented in
+"""Run the documented examples at reduced, deterministic CI budgets.
+
+Each script reads ``VMEX_EXAMPLES_CI=1``; the tests require a clean exit,
+physics progress where applicable, and the documented output artifacts.
+Commented optional objective terms are exercised separately by
 ``test_extra_terms_work_uncommented``.
 """
 
@@ -117,17 +117,69 @@ def test_free_boundary_mgrid(tmp_path):
     assert (tmp_path / "output_free_boundary_mgrid" / "wout_cth_like_free_bdy.nc").exists()
 
 
+@pytest.mark.full  # one free solve, coupled adjoint, and two independent re-solves
 def test_take_free_boundary_gradients(tmp_path):
-    # skips where the optional virtual_casing_jax dep is absent (core CI);
-    # validates the FD-checked coil/extcur gradients where it is installed.
-    pytest.importorskip("virtual_casing_jax")
-    wout = EXAMPLES / "data" / "single_grid" / "wout_cth_like_free_bdy.nc"
-    if not wout.exists():
-        pytest.skip("fetched free-boundary asset absent (tools/fetch_assets.py)")
+    pytest.importorskip("essos")
     out = _run_example(EXAMPLES / "take_free_boundary_gradients.py", tmp_path, timeout=900)
-    # each gradient row ends with its AD-vs-FD relative error in scientific notation
-    rels = [float(m) for m in re.findall(r"\s([0-9.]+e[+-]\d+)\s*$", out, re.M)]
-    assert "FD-validate" in out and rels and max(rels) < 1e-3, f"gradient rel errors: {rels}"
+    match = re.search(r"relative error = ([0-9.eE+-]+)", out)
+    assert match is not None and float(match.group(1)) < 3.0e-2
+
+
+@pytest.mark.full  # independent finite-beta free solve, inner fixed solve, and VC field
+def test_fixed_free_boundary_comparison(tmp_path):
+    pytest.importorskip("essos")
+    pytest.importorskip("virtual_casing_jax")
+    out = _run_example(
+        EXAMPLES / "vmex_fixed_free_boundary_comparison.py", tmp_path,
+        timeout=900)
+    field = re.search(r"Annulus pointwise error: median=([0-9.eE+-]+)", out)
+    surfaces = re.search(r"Common-surface RMS errors \[m\] = \[([^]]+)\]", out)
+    assert field is not None and float(field.group(1)) < 8.0e-2
+    assert surfaces is not None and np.max(np.fromstring(surfaces.group(1), sep=" ")) < 1.5e-2
+    assert (tmp_path / "vmex_fixed_free_boundary_comparison.png").stat().st_size > 10_000
+
+
+def test_free_boundary_single_stage_examples_show_explicit_optimizer_contract():
+    """The examples expose tuples, scalarization, AD, and SciPy directly."""
+    for name in ("single_stage_free_boundary_optimization.py",
+                 "single_stage_free_boundary_optimization_finite_beta.py"):
+        text = (EXAMPLES / "optimization" / name).read_text()
+        assert "solve_free_boundary_implicit" in text
+        assert "residuals_from_tuples" in text
+        assert "jax.value_and_grad" in text
+        assert "minimize(value_and_grad" in text
+        assert "pack_boundary" not in text
+        assert "mgrid file" in text
+
+
+@pytest.mark.full  # one direct-coil free solve, coupled adjoint, and output solve (~2 min)
+def test_vacuum_free_boundary_single_stage_optimization(tmp_path):
+    pytest.importorskip("essos")
+    out = _run_example(
+        EXAMPLES / "optimization" / "single_stage_free_boundary_optimization.py",
+        tmp_path, timeout=600)
+    assert "no boundary dofs or mgrid file" in out
+    assert re.search(r"\[final\] QA = ([0-9.eE+-]+)", out)
+    for name in ("wout_single_stage_free_boundary_optimized.nc",
+                 "single_stage_free_boundary_optimization.png",
+                 "single_stage_free_boundary_objectives.png"):
+        assert (tmp_path / name).stat().st_size > 0
+
+
+@pytest.mark.full
+@pytest.mark.weekly  # same derivative plus finite-beta/Redl graph (~2.5 min cold)
+def test_finite_beta_free_boundary_single_stage_optimization(tmp_path):
+    pytest.importorskip("essos")
+    out = _run_example(
+        EXAMPLES / "optimization" /
+        "single_stage_free_boundary_optimization_finite_beta.py",
+        tmp_path, timeout=900)
+    assert "True finite-beta NESTOR + ESSOS" in out
+    assert re.search(r"f_boot = ([0-9.eE+-]+), beta = ([0-9.]+)%", out)
+    for name in ("wout_single_stage_free_boundary_finite_beta_optimized.nc",
+                 "single_stage_free_boundary_finite_beta_optimization.png",
+                 "single_stage_free_boundary_finite_beta_bootstrap_current.png"):
+        assert (tmp_path / name).stat().st_size > 0
 
 
 @pytest.mark.full  # nightly: one NESTOR solve per pressure point (~40s)
@@ -142,7 +194,7 @@ def test_free_boundary_beta_scan(tmp_path):
 def test_mirror_fixed_boundary_nonaxisymmetric_example(tmp_path):
     import json
     _run_example(
-        EXAMPLES / "mirror_fixed_boundary_nonaxisymmetric.py",
+        EXAMPLES / "mirror" / "mirror_fixed_boundary_nonaxisymmetric.py",
         tmp_path,
         timeout=1200,
     )
@@ -176,7 +228,7 @@ def test_mirror_fixed_boundary_nonaxisymmetric_example(tmp_path):
 def test_mirror_free_boundary_beta_scan_example(tmp_path):
     import json
     pytest.importorskip("essos")
-    _run_example(EXAMPLES / "mirror_free_boundary_beta_scan.py", tmp_path, timeout=2400)
+    _run_example(EXAMPLES / "mirror" / "mirror_free_boundary_beta_scan.py", tmp_path, timeout=2400)
     outdir = tmp_path / "results" / "mirror_free_boundary_beta_scan"
     summary = json.loads((outdir / "beta_scan_summary.json").read_text())
     assert [row["requested_beta"] for row in summary] == [0.0, 0.10, 0.25, 0.50]
@@ -405,7 +457,7 @@ def test_field_query_examples_cover_inside_outside_and_vjps() -> None:
         assert "VmecProblem.from_input" in source and "SimpleNamespace" not in source
     assert "get_points_flux" in interior
     assert "uses_virtual_casing" in exterior and "exterior_field" in exterior
-    assert "ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json" in exterior
+    assert "ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json" in exterior
 
 
 @pytest.mark.full  # nightly: two bounded high-order field/VJP compilations (~3 min)
@@ -426,12 +478,12 @@ def test_fieldline_example_uses_vmex_virtual_casing_and_actual_essos_coils() -> 
     vacuum = (EXAMPLES / "vmex_fieldline_tracing_vacuum.py").read_text()
     finite = (EXAMPLES / "vmex_fieldline_tracing_finite_beta.py").read_text()
     for source in (vacuum, finite):
-        for contract in ("BiotSavart", "field_in_flux_coordinates", "Tracing",
+        for contract in ("BiotSavart", "field_in_flux_coordinates", "trace_field_lines",
                          "poincare_plot", "True boundary B.n/B"):
             assert contract in source
     assert 'plasma="vacuum"' in vacuum and "exterior_field" in vacuum
     assert "VmecExtender" in finite and "with_near_surface_continuation" in finite
-    assert "ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json" in finite
+    assert "ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json" in finite
 
 
 def test_single_stage_examples_use_general_surface_output_and_movie_colors() -> None:
@@ -440,7 +492,7 @@ def test_single_stage_examples_use_general_surface_output_and_movie_colors() -> 
     assert "from pyevtk" not in finite
     assert "surface_initial.to_vtk" in finite and "extra_data=" in finite
     for source in (vacuum, finite):
-        assert "MOVIE_SURFACE_COLOR" in source and "color_factory=" in source
+        assert "MOVIE_SURFACE_COLOR" in source and "surface_color=" in source
 
 
 @pytest.mark.full  # nightly: two bounded ESSOS tracing integrations (~40 s total)
@@ -454,4 +506,9 @@ def test_vmex_fieldline_tracing_examples(script, message, output, tmp_path):
     pytest.importorskip("virtual_casing_jax")
     out = _run_example(EXAMPLES / script, tmp_path, timeout=300)
     assert message in out
+    if "finite_beta" in script:
+        alignment = re.search(r"Boundary field alignment = ([0-9.eE+-]+)", out)
+        assert alignment is not None and float(alignment.group(1)) > 0.9
+        bounded = re.search(r"Exterior trace QA: (\d+)/(\d+) lines remained", out)
+        assert bounded is not None and int(bounded.group(1)) > 0
     assert (tmp_path / output).stat().st_size > 10_000

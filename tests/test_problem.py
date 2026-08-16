@@ -57,6 +57,29 @@ def test_vmec_problem_from_input_builds_objective_free_parameterization(monkeypa
     assert captured["loss"](None, None) == 0.0
 
 
+def test_residuals_from_tuples_exposes_weighted_jax_contract():
+    """Users can build a scalar value/gradient without a VMEX optimizer."""
+    jax = pytest.importorskip("jax")
+    jnp = pytest.importorskip("jax.numpy")
+    from vmex.core import optimize as opt
+
+    terms = [
+        (lambda state, runtime: state + runtime, 1.0, 4.0),
+        (lambda state, runtime: state - runtime, 0.0, 0.25),
+    ]
+
+    def cost(state):
+        rows = opt.residuals_from_tuples(state, jnp.asarray(2.0), terms)
+        return 0.5 * jnp.vdot(rows, rows)
+
+    rows = opt.residuals_from_tuples(jnp.asarray(3.0), jnp.asarray(2.0), terms)
+    np.testing.assert_allclose(rows, [8.0, 0.5])
+    assert float(cost(jnp.asarray(3.0))) == pytest.approx(32.125)
+    assert float(jax.grad(cost)(jnp.asarray(3.0))) == pytest.approx(16.25)
+    with pytest.raises(ValueError, match="at least one"):
+        opt.residuals_from_tuples(1.0, 2.0, [])
+
+
 def test_problem_contract_and_exact_key_cache():
     calls = {"value_and_grad": 0, "residual_and_jac": 0}
     problem = _quadratic_problem(calls)
@@ -221,9 +244,9 @@ def test_vmec_problem_field_facades_validate_and_route(monkeypatch):
         metadata={"input": "input", "jax_state_runtime": state_runtime})
     np.testing.assert_array_equal(problem.boundary_from_x(problem.x0)[0], [2.0])
 
-    from vmex.core import extender, freeboundary_diff
+    from vmex.core import extender, virtual_casing
     monkeypatch.setattr(
-        freeboundary_diff, "surface_field_data_from_state",
+        virtual_casing, "surface_field_data_from_state",
         lambda inp, state, **kwargs: (inp, state, kwargs))
     monkeypatch.setattr(
         extender.VmecExtender, "from_parameterized_surface_data", classmethod(
@@ -250,12 +273,12 @@ def test_vmec_problem_field_facades_validate_and_route(monkeypatch):
 
     surface = SimpleNamespace(B_total=np.ones((3, 2, 3)))
     monkeypatch.setattr(
-        freeboundary_diff, "surface_field_data_from_state",
+        virtual_casing, "surface_field_data_from_state",
         lambda *_args, **_kwargs: surface)
     interface = SimpleNamespace(
         bnormal_residual=lambda external: 2.0 * np.ones((2, 3)))
     monkeypatch.setattr(
-        freeboundary_diff.FreeBoundaryDiffProblem, "from_surface_data",
+        virtual_casing.PlasmaVacuumInterface, "from_surface_data",
         classmethod(lambda cls, data, **kwargs: interface))
     np.testing.assert_allclose(
         problem.surface_field_values(problem.x0, "absB", nphi=2, ntheta=3),

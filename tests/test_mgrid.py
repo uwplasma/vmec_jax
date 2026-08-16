@@ -1,12 +1,10 @@
-"""Tests for ``vmex.core.mgrid`` (netCDF IO + interpolated field).
-
-Covers (plan.md §8):
+"""Tests for mgrid I/O and differentiable interpolated magnetic fields.
 
 - netCDF round-trip (read -> write -> read) equality on the bundled
   ``mgrid_cth_like_lasym_small.nc`` fixture,
 - extcur-scaling linearity of the interpolated field,
 - jit equivalence and grad of ``|B|^2`` w.r.t. extcur,
-- cross-read consistency with ESSOS's unmerged ``feature/mgrid-from-coils``.
+- cross-read consistency with ESSOS-generated mgrid data.
 """
 
 from __future__ import annotations
@@ -254,17 +252,18 @@ def test_interior_field_inverts_flux_coordinates_and_recovers_B():
         "nfp": 1, "ns": ns,
         "xm": jnp.array([0.0, 1.0]), "xn": jnp.array([0.0, 0.0]),
         "xmn": jnp.array([0.0]), "xnn": jnp.array([0.0]),
-        "rmnc": jnp.stack((jnp.full(ns, major_radius), minor_radius * s_mesh), axis=1),
-        "zmns": jnp.stack((jnp.zeros(ns), minor_radius * s_mesh), axis=1),
+        "rmnc": jnp.stack((jnp.full(ns, major_radius), minor_radius * jnp.sqrt(s_mesh)), axis=1),
+        "zmns": jnp.stack((jnp.zeros(ns), minor_radius * jnp.sqrt(s_mesh)), axis=1),
         "rmns": None, "zmnc": None,
         "bsupu": jnp.zeros((ns, 1)), "bsupv": jnp.ones((ns, 1)),
         "bsupu_s": None, "bsupv_s": None, "lasym": False, "signgs": -1,
     }
     coordinates = jnp.array([[0.4, 0.7, 0.3], [0.8, 4.1, 1.2]])
     s, theta, phi = coordinates.T
-    radius = major_radius + minor_radius * s * jnp.cos(theta)
+    rho = jnp.sqrt(s)
+    radius = major_radius + minor_radius * rho * jnp.cos(theta)
     points = jnp.stack((radius * jnp.cos(phi), radius * jnp.sin(phi),
-                        minor_radius * s * jnp.sin(theta)), axis=1)
+                        minor_radius * rho * jnp.sin(theta)), axis=1)
     field = VmecInteriorField(spectra).set_points(points)
 
     got_coordinates = field.flux_coordinates()
@@ -279,6 +278,13 @@ def test_interior_field_inverts_flux_coordinates_and_recovers_B():
     np.testing.assert_allclose(field.B(), expected_B, rtol=2e-12, atol=2e-12)
     np.testing.assert_allclose(field.gradB(), expected_grad, rtol=0, atol=2e-10)
     np.testing.assert_allclose(field.gradgradB(), 0.0, rtol=0, atol=2e-8)
+
+    axis_points = jnp.array([[major_radius, 0.0, 0.0]])
+    field.set_points(axis_points)
+    np.testing.assert_allclose(
+        field.B(), [[0.0, major_radius, 0.0]], rtol=0, atol=4e-7)
+    np.testing.assert_allclose(field.gradB(), expected_grad[:1], rtol=0, atol=2e-10)
+    assert jnp.all(jnp.isfinite(field.gradgradgradB()))
 
     flux_field = VmecInteriorField(spectra).set_points_flux(coordinates)
     np.testing.assert_allclose(flux_field.get_points_cart(), points, rtol=0, atol=2e-14)
@@ -311,6 +317,17 @@ def test_interior_field_inverts_flux_coordinates_and_recovers_B():
         lambda point: jax.jacfwd(tracing_field.to_xyz)(point)
         @ tracing_field.B_contravariant(point))(coordinates)
     np.testing.assert_allclose(mapped_B, expected_B, rtol=2e-12, atol=2e-12)
+
+    # A non-axisymmetric contravariant mode exercises the same radial-parity
+    # interpolation in Cartesian queries and the flux-coordinate tracer.
+    shaped_spectra = dict(spectra, xmn=jnp.array([0.0, 1.0]),
+        xnn=jnp.array([0.0, 0.0]), bsupu=jnp.zeros((ns, 2)),
+        bsupv=jnp.stack((jnp.ones(ns), 0.2 * jnp.sqrt(s_mesh)), axis=1))
+    shaped_field = VmecInteriorField(shaped_spectra).set_points(points)
+    shaped_tracer = shaped_field.field_in_flux_coordinates()
+    shaped_mapped_B = jax.vmap(lambda point: jax.jacfwd(shaped_tracer.to_xyz)(point)
+        @ shaped_tracer.B_contravariant(point))(coordinates)
+    np.testing.assert_allclose(shaped_mapped_B, shaped_field.B(), rtol=2e-11, atol=2e-11)
 
 
 def test_magnetic_field_cylindrical_points_round_trip():
@@ -431,16 +448,16 @@ def test_field_api_validation_and_constructor_routing(monkeypatch, tmp_path):
         VmecExtender.from_wout(SimpleNamespace(
             betatotal=0.0, wp=0.0, ctor=0.0, mgrid_file=""))
 
-    from vmex.core import freeboundary_diff as fbd
+    from vmex.core import virtual_casing as vc
     sentinel = object()
     spectra = {"marker": 1}
-    monkeypatch.setattr(fbd, "_state_field_spectra", lambda *a, **k: spectra)
+    monkeypatch.setattr(vc, "_state_field_spectra", lambda *a, **k: spectra)
     assert VmecInteriorField.from_state(object(), object()).spectra is spectra
     interior = VmecInteriorField.from_parameterized_state(
         object(), lambda p: (object(), object()), jnp.ones(1), dof_names=("p",))
     assert interior.spectra is spectra and interior.dof_names == ("p",)
-    monkeypatch.setattr(fbd, "surface_field_data_from_wout", lambda *a, **k: "surface")
-    monkeypatch.setattr(fbd, "surface_field_data_from_state", lambda *a, **k: "state")
+    monkeypatch.setattr(vc, "surface_field_data_from_wout", lambda *a, **k: "surface")
+    monkeypatch.setattr(vc, "surface_field_data_from_state", lambda *a, **k: "state")
     monkeypatch.setattr(VmecExtender, "from_surface_data", classmethod(
         lambda cls, surface, **kwargs: sentinel))
     finite = SimpleNamespace(betatotal=0.01, wp=0.0, ctor=0.0, mgrid_file="")

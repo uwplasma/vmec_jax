@@ -16,6 +16,10 @@ solver support: the complete supported/rejected/no-op classification is in
 :doc:`vmec2000-compatibility`. Unknown names and active unsupported physics
 fail before setup.
 
+``VmecInput`` has value semantics: its arrays are owned and read-only so an
+in-place edit cannot invalidate a compiled solve. Copy the coefficient array,
+edit it, and construct the new deck explicitly with ``dataclasses.replace``.
+
 Fortran namelist assignment semantics
 --------------------------------------
 

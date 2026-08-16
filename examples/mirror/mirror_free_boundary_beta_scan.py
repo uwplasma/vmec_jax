@@ -2,7 +2,7 @@
 
 Run from the repository root with::
 
-    python examples/mirror_free_boundary_beta_scan.py
+    python examples/mirror/mirror_free_boundary_beta_scan.py
 
 The first four points are the supported 0--10% validation scan. The last three
 remain extended validation pending refined-grid promotion.
@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

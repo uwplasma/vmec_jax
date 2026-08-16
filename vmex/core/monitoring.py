@@ -177,16 +177,37 @@ class OptimizationMonitor:
                     raise TypeError(
                         "vector auxiliary data requires one term name per value")
                 term_values = dict(zip(map(str, term_names), map(float, values)))
-            key = self._key(x)
-            self._evaluations[key] = (
-                cost_f, float(np.linalg.norm(gradient_np)), term_values)
-            if not self.records:
-                self.record(
-                    x, cost=cost_f, optimality=self._evaluations[key][1],
-                    terms=term_values)
-            return cost_f, gradient_np
+            return self.cache_evaluation(x, cost_f, gradient_np, term_values)
 
         return wrapped
+
+    def cache_evaluation(
+        self,
+        x: Any,
+        cost: Any,
+        gradient: Any,
+        terms: Mapping[str, Any] | None = None,
+    ) -> tuple[float, np.ndarray]:
+        """Cache an already-computed objective pair for a SciPy callback.
+
+        This method does no differentiation and does not alter the objective.
+        Driver scripts can show their explicit ``jax.value_and_grad`` calls,
+        sum independently compiled physics components themselves, and use this
+        one host conversion to avoid recomputing per-term costs when SciPy later
+        reports an accepted iterate.
+        """
+        cost_f = float(cost)
+        gradient_np = np.asarray(gradient, dtype=float)
+        term_values = ({} if terms is None else
+                       {str(name): float(value) for name, value in terms.items()})
+        key = self._key(x)
+        self._evaluations[key] = (
+            cost_f, float(np.linalg.norm(gradient_np)), term_values)
+        if not self.records:
+            self.record(
+                x, cost=cost_f, optimality=self._evaluations[key][1],
+                terms=term_values)
+        return cost_f, gradient_np
 
     @staticmethod
     def _field(result: Any, name: str, default: Any = None) -> Any:
@@ -373,6 +394,59 @@ class OptimizationMonitor:
         from .plotting import plot_optimization_movie
 
         return plot_optimization_movie(path, self.x_history, object_factory, **kwargs)
+
+    def movie_surface_coils(
+        self,
+        path: str | Path,
+        object_factory: Callable[[np.ndarray], Any],
+        *,
+        x0: Any,
+        scales: Any,
+        surface_color: str | Callable | None = None,
+        plasma_problem: Any | None = None,
+        external_field: Callable[[Any], Any] | None = None,
+        nphi: int = 32,
+        ntheta: int = 32,
+        digits: int = 4,
+        precision: Any | None = None,
+        **kwargs: Any,
+    ) -> Path:
+        """Animate normalized surface/coil iterates with optional field color.
+
+        ``object_factory`` receives physical variables ``x0 + scales*u``.
+        ``surface_color`` may be ``None``, ``"absB"``, ``"B.n/B"``, or a
+        callable ``(u, objects) -> values``. For the two named field colors,
+        provide ``plasma_problem``; ``B.n/B`` additionally needs
+        ``external_field(objects)``. These plotting helpers never enter the
+        objective or gradient graph.
+        """
+        x0, scales = np.asarray(x0, dtype=float), np.asarray(scales, dtype=float)
+        if x0.shape != scales.shape:
+            raise ValueError("x0 and scales must have the same shape")
+
+        def objects_from_u(u):
+            return object_factory(x0 + scales * np.asarray(u, dtype=float))
+
+        color_factory = None
+        if callable(surface_color):
+            color_factory = surface_color
+        elif surface_color is not None:
+            if surface_color not in ("absB", "B.n/B"):
+                raise ValueError('surface_color must be None, "absB", "B.n/B", or callable')
+            if plasma_problem is None:
+                raise ValueError("named surface colors require plasma_problem")
+            nplasma = int(np.asarray(plasma_problem.x0).size)
+
+            def color_factory(u, objects):
+                field = None if external_field is None else external_field(objects)
+                return plasma_problem.surface_field_values(
+                    x0[:nplasma] + scales[:nplasma] * np.asarray(u)[:nplasma],
+                    surface_color, external_field=field, nphi=nphi,
+                    ntheta=ntheta, digits=digits, precision=precision)
+
+        return self.movie(
+            path, objects_from_u, color_factory=color_factory,
+            color_label=str(surface_color), **kwargs)
 
     @staticmethod
     def _number(value: float | int | None, *, integer: bool = False) -> str:

@@ -167,6 +167,7 @@ __all__ = [
     "boundary_arrays_from_x",
     "pack_boundary",
     "unpack_boundary",
+    "residuals_from_tuples",
     "resample_current_profile",
     "least_squares",
     "minimize",
@@ -2171,6 +2172,36 @@ def _traceable_term(fun: Callable) -> Callable:
         "l_grad_b_state alternatives.")
 
 
+def residuals_from_tuples(
+    state: SpectralState,
+    runtime: SolverRuntime,
+    objective_terms: Sequence[tuple[Callable, float, Any]],
+    *,
+    weight_semantics: str = "cost",
+) -> jnp.ndarray:
+    """Stack traceable ``(function, target, weight)`` objective rows.
+
+    With the default ``weight_semantics="cost"``, each tuple contributes
+    ``sqrt(weight) * (function(state, runtime) - target)`` so the usual scalar
+    objective is simply ``0.5 * residuals @ residuals``.  This small public
+    building block is useful when a user owns the equilibrium map, such as a
+    differentiable free-boundary solve, and wants to pass the resulting value
+    and gradient to SciPy, JAXopt, Optax, or a custom optimizer directly.
+    """
+    if weight_semantics not in ("cost", "residual"):
+        raise ValueError("weight_semantics must be 'cost' or 'residual'")
+    rows = []
+    for function, target, weight in objective_terms:
+        scale = _least_squares_weight(weight, weight_semantics)
+        traceable = _traceable_term(function)
+        rows.append(jnp.atleast_1d(
+            jnp.asarray(scale) * (jnp.asarray(traceable(state, runtime)) - target)
+        ).ravel())
+    if not rows:
+        raise ValueError("provide at least one objective tuple")
+    return jnp.concatenate(rows)
+
+
 def _least_squares_implicit(
     objective_terms: Sequence[tuple[Callable, float, Any]],
     inp: VmecInput,
@@ -2950,7 +2981,7 @@ def _least_squares_implicit(
         )
 
         def exterior_field_factory(**kwargs):
-            from . import freeboundary_diff as fbd
+            from . import virtual_casing as vc
 
             nphi = int(kwargs.pop("nphi", 32)); ntheta = int(kwargs.pop("ntheta", 32))
             external_field = kwargs.pop("external_field", None)
@@ -2970,7 +3001,7 @@ def _least_squares_implicit(
 
             def surface_data(parameters):
                 state, live_runtime = jax_state_runtime(parameters)
-                return fbd.surface_field_data_from_state(
+                return vc.surface_field_data_from_state(
                     inp, state, runtime=live_runtime, nphi=nphi, ntheta=ntheta)
 
             return VmecExtender.from_parameterized_surface_data(

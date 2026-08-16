@@ -21,8 +21,10 @@ Module map (each header docstring names its VMEC2000 counterpart):
 - ``qi``              constructed and bounce-action quasi-isodynamic residuals
 - ``maxj``            matched-well maximum-J residuals
 - ``implicit``        implicit differentiation of the equilibrium (custom VJP + adjoint GMRES)
+- ``freeboundary_implicit`` coupled NESTOR/VMEC implicit differentiation
 - ``stability``       differentiable ideal-MHD stability (Mercier and infinite-n ballooning)
-- ``freeboundary_diff`` differentiable free-boundary residual via virtual casing (R15.3/R19)
+- ``virtual_casing`` plasma-current fields and residuals on a prescribed interface
+- ``freeboundary_diff`` compatibility name for the original virtual-casing API
 - ``device``          CPU/GPU placement policy (measured: benchmarks/gpu_baseline.json)
 
 Every module is validated by A/B equivalence tests against the legacy

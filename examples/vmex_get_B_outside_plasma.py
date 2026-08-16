@@ -13,10 +13,10 @@ from essos.coils import Coils
 from essos.fields import BiotSavart
 
 DATA = Path(__file__).resolve().parent / "data"
-INPUT = DATA / "input.LandremanPaul2021_QA_beta2p5_bootstrap"
-COILS = DATA / "ESSOS_biot_savart_LandremanPaulQA_beta2p5_bootstrap.json"
+INPUT = DATA / "input.LandremanPaul2021_QA_beta0p5_bootstrap"
+COILS = DATA / "ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json"
 
-print("Building the optimized 2.5%-beta QA equilibrium and its derivative graph...")
+print("Building the optimized 0.5%-beta QA equilibrium and its derivative graph...")
 inp = vj.VmecInput.from_file(INPUT)
 problem = opt.VmecProblem.from_input(inp, max_mode=1, use_ess=True, progress=True)
 final_equilibrium = problem.equilibrium_from_x(problem.x0)

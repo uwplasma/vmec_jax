@@ -57,11 +57,11 @@ stated in the row is validated; ``—`` means no public path.
      - validated
      - validated
      - validated
-     - limited
+     - —
      - limited
      - limited
      - supported
-     - Forward NESTOR equilibrium and exterior-field queries. Vacuum fields use the supplied mgrid or coil field; finite-beta/current-carrying equilibria add the internal-current virtual-casing branch. AD covers coordinates, coil parameters and the live spectral boundary with a fixed refinement schedule; the open-field-line region is a field evaluation, not a separate plasma equilibrium. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_diff.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_diff.py>`__, `test_single_stage_simultaneous.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_single_stage_simultaneous.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
+     - Forward NESTOR and exterior fields are supported. An experimental CPU reverse-mode path differentiates the reconverged VMEC--NESTOR root with direct ESSOS coil parameters; cold compile time, GPU memory, and failed-trial recovery are not yet production-ready. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit.py>`__, `test_virtual_casing_physics.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_virtual_casing_physics.py>`__, `test_examples.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_examples.py>`__.
    * - toroidal
      - stellarator / tokamak
      - free
@@ -71,10 +71,10 @@ stated in the row is validated; ``—`` means no public path.
      - validated
      - validated
      - —
-     - —
-     - —
+     - limited
+     - limited
      - supported
-     - Forward solve and NESTOR WOUT fields only. Evidence: `test_lasym_free_convergence.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_lasym_free_convergence.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
+     - Forward solve and NESTOR WOUT fields are supported; the experimental CPU current/field VJP is reconverged-FD certified, with the same performance limitations as the symmetric path. Evidence: `test_lasym_free_convergence.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_lasym_free_convergence.py>`__, `test_freeboundary_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
    * - open mirror
      - axisymmetric
      - fixed
@@ -183,10 +183,12 @@ stated in the row is validated; ``—`` means no public path.
 Free-boundary differentiation
 -----------------------------
 
-A supported forward free-boundary solve does not imply differentiation
-through the reconverged plasma-vacuum equilibrium. The toroidal
-specified-boundary virtual-casing residual is differentiable, but the
-fully coupled NESTOR root is not yet a public AD path.
+A supported forward free-boundary solve does not imply that every derivative
+mode is production-ready. VMEX exposes an experimental reverse derivative
+of the reconverged plasma-vacuum root on CPU, certified against independent
+free-boundary re-solves. Forward JVPs, low-memory GPU compilation, and robust
+failed-trial walls remain open promotion gates. The prescribed-boundary
+virtual-casing derivative is the mature path for fixed-LCFS coil objectives.
 
 Mirror beta labels
 ------------------

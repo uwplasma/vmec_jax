@@ -74,8 +74,9 @@ Module map
      - free-boundary iteration, ``ivac``/``nvacskip`` cadence, external-field
        protocol
      - ``funct3d.f`` (free-boundary block)
-   * - :mod:`~vmex.core.freeboundary_diff`
-     - differentiable free-boundary residual via virtual casing
+   * - :mod:`~vmex.core.virtual_casing`
+     - plasma-current fields and differentiable residuals on a prescribed
+       plasma-vacuum interface
      - (no VMEC2000 equivalent)
    * - :mod:`~vmex.core.mgrid`
      - mgrid netCDF read/write, differentiable interpolated field, and

@@ -38,7 +38,7 @@ ASPECT_WEIGHT = 1.0
 IOTA_TARGET = 0.42
 IOTA_WEIGHT = 100.0
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
-SEED_PERTURBATION = 0.10
+SEED_PERTURBATION = 0.02
 
 N_COILS = 4
 COIL_ORDER = 5
@@ -78,8 +78,9 @@ if ci_smoke:
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
+# VmecInput is frozen, so copy its arrays before adding the 3-D perturbation.
+# The circular RBC(0,1)=ZBS(0,1)=0.1 seed is already explicit in the input file.
 rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
-rbc[inp.ntor, 1] = zbs[inp.ntor, 1] = 0.20
 rbc[inp.ntor + 1, 1], zbs[inp.ntor + 1, 1] = SEED_PERTURBATION, -SEED_PERTURBATION
 inp = replace(inp, rbc=rbc, zbs=zbs)
 mpol = max(MAX_MODE + 2, 5)
@@ -108,6 +109,10 @@ def normalized_normal_field(coils, surface):
     field = BiotSavart(coils)
     magnetic_field = jax.vmap(field.B)(surface.gamma.reshape(-1, 3)).reshape(surface.gamma.shape)
     return jnp.sum(magnetic_field * surface.unitnormal, axis=2) / jnp.linalg.norm(magnetic_field, axis=2)
+
+def coil_field(coils):
+    field = BiotSavart(coils)
+    return lambda points: jax.vmap(field.B)(points.reshape(-1, 3)).reshape(points.shape)
 
 def normal_field_residual(coils, surface):
     weights = surface.area_element / jnp.sum(surface.area_element)
@@ -183,10 +188,20 @@ def coil_objective(u):
 
 
 monitor = opt.OptimizationMonitor()
-scipy_objective = monitor.wrap_value_and_grad(
-    (jax.jit(plasma_component), jax.jit(jax.value_and_grad(coil_objective, has_aux=True))),
-    coil_term_names,
-    residual_slices=plasma_problem.metadata["term_slices"])
+plasma_value_and_grad = jax.jit(plasma_component)
+coil_value_and_grad = jax.jit(jax.value_and_grad(coil_objective, has_aux=True))
+
+# VMEX supplies the exact equilibrium derivative; JAX differentiates the coil
+# objective. Their values and gradients add directly for any SciPy optimizer.
+def value_and_grad(u):
+    (plasma_value, residual), plasma_gradient = plasma_value_and_grad(u)
+    (coil_value, coil_cost_values), coil_gradient = coil_value_and_grad(u)
+    residual = np.asarray(residual)
+    terms = {name: 0.5 * float(residual[start:stop] @ residual[start:stop])
+             for name, start, stop in plasma_problem.metadata["term_slices"]}
+    terms.update(zip(coil_term_names, map(float, np.asarray(coil_cost_values))))
+    return monitor.cache_evaluation(
+        u, plasma_value + coil_value, plasma_gradient + coil_gradient, terms)
 
 
 print("Running single_stage_optimization.py")
@@ -194,7 +209,7 @@ print(f"Fixed-boundary VMEX + ESSOS: {x_boundary0.size} boundary and "
       f"{x_coils0.size} coil variables, exact reverse-mode derivatives")
 print(f"dof_names = {dof_names}")
 joint_problem = vj.FunctionProblem.from_functions(
-    np.zeros_like(x0), value_and_grad=scipy_objective)
+    np.zeros_like(x0), value_and_grad=value_and_grad)
 joint_problem.compile_value_and_gradient(report_interval=10.0)
 result = minimize(joint_problem.value_and_grad, joint_problem.x0,
                   jac=True, method=METHOD,
@@ -270,15 +285,8 @@ print("Wrote single_stage_optimization.png")
 print("Wrote single_stage_objectives.csv and single_stage_objectives.png")
 if MAKE_MOVIE:
     print("Making movie of accepted iterates...")
-    monitor.movie("single_stage_optimization.gif",
-        lambda u: objects_from_x(jnp.asarray(x0 + scales * u)),
-        color_factory=None if MOVIE_SURFACE_COLOR is None else lambda u, objects:
-            (MOVIE_SURFACE_COLOR(u, objects) if callable(MOVIE_SURFACE_COLOR) else
-             plasma_problem.surface_field_values(
-                 x0[:x_boundary0.size] + scales[:x_boundary0.size] * u[:x_boundary0.size],
-                 MOVIE_SURFACE_COLOR, external_field=lambda points:
-                     jax.vmap(BiotSavart(objects[1]).B)(points.reshape(-1, 3)).reshape(points.shape),
-                 nphi=NPHI, ntheta=NTHETA)),
-        color_label=str(MOVIE_SURFACE_COLOR), cmap="jet")
+    monitor.movie_surface_coils("single_stage_optimization.gif", objects_from_x,
+        x0=x0, scales=scales, surface_color=MOVIE_SURFACE_COLOR, plasma_problem=plasma_problem,
+        external_field=lambda objects: coil_field(objects[1]), nphi=NPHI, ntheta=NTHETA, cmap="jet")
 for path in vj.plot_wout(wout_path, ".").values():
     print(f"Wrote {path}")

@@ -837,6 +837,16 @@ class VmecInput:
         if self.nvacskip <= 0:
             set_(self, "nvacskip", self.nfp)
 
+        # ``frozen=True`` protects attributes but not NumPy array contents.
+        # Own and lock every array so an in-place edit cannot silently stale a
+        # compiled solver/configuration cache; use ``dataclasses.replace`` with
+        # an explicitly copied array to construct a modified input.
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if isinstance(value, np.ndarray):
+                value = np.array(value, copy=True); value.setflags(write=False)
+                set_(self, field.name, value)
+
     # -- equality -----------------------------------------------------------
 
     def __eq__(self, other: object) -> bool:

@@ -369,7 +369,7 @@ def tabulate_cartesian_field(
     solve.  The returned :class:`MgridField` is JAX differentiable with
     respect to its table values and scale, but the sampling operation itself
     does not retain derivatives with respect to coil geometry.  Use
-    :mod:`vmex.core.freeboundary_diff` with a direct JAX field for coil-shape
+    :mod:`vmex.core.virtual_casing` with a direct JAX field for coil-shape
     derivatives of the virtual-casing residual.
     """
     ir, jz, kp, nfp = int(ir), int(jz), int(kp), int(nfp)

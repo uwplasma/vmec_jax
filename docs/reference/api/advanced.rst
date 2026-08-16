@@ -69,11 +69,18 @@ Free boundary
 .. automodule:: vmex.core.freeboundary
    :members:
 
+.. automodule:: vmex.core.freeboundary_implicit
+   :members:
+
 .. automodule:: vmex.core.freeboundary_linear
    :members:
 
-.. automodule:: vmex.core.freeboundary_diff
+.. automodule:: vmex.core.virtual_casing
    :members:
+
+``vmex.core.freeboundary_diff`` remains as a compatibility name for this
+prescribed-interface API. It does not differentiate through a moving-boundary
+NESTOR equilibrium solve.
 
 .. automodule:: vmex.core.mgrid
    :members:

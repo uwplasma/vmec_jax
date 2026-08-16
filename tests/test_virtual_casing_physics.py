@@ -1,7 +1,8 @@
-"""Differentiable free boundary via virtual casing (plan.md R15.3 + R19):
-:mod:`vmex.core.freeboundary_diff` writes ``B_out . n = 0`` as a smooth
-objective with ``B_plasma`` from the virtual-casing principle
-(``uwplasma/virtual_casing_jax``); the NESTOR forward solve is untouched.
+"""Physics and derivative certificates for prescribed-interface virtual casing.
+
+:mod:`vmex.core.virtual_casing` writes ``B_out . n = 0`` as a smooth objective
+with ``B_plasma`` from the virtual-casing principle. The NESTOR free-boundary
+solve is intentionally separate.
 Lanes: the wout->surface-data adapter reproduces ``B_total . n / |B|`` ~
 1e-16 on a converged equilibrium; asset-free synthetic-torus ``jax.grad``
 vs central FD; and the real cth-like ``extcur``/coil-dof gradients vs FD
@@ -20,7 +21,7 @@ import jax.numpy as jnp  # noqa: E402
 
 jax.config.update("jax_enable_x64", True)
 
-from vmex.core import freeboundary_diff as FBD  # noqa: E402
+from vmex.core import virtual_casing as VC  # noqa: E402
 from vmex.core.extender import VmecExtender  # noqa: E402
 from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
 from vmex.core.wout import read_wout  # noqa: E402
@@ -29,11 +30,11 @@ from vmex.core.wout import read_wout  # noqa: E402
 pytestmark = [
     pytest.mark.usefixtures("_module_jit_enabled"),
     pytest.mark.skipif(
-        not FBD.have_virtual_casing_jax(),
+        not VC.have_virtual_casing_jax(),
         reason="requires virtual_casing_jax",
     ),
 ]
-VmecSurfaceFieldData = FBD.VmecSurfaceFieldData
+VmecSurfaceFieldData = VC.VmecSurfaceFieldData
 
 REPO = Path(__file__).resolve().parents[1]
 WOUT = REPO / "examples" / "data" / "single_grid" / "wout_cth_like_free_bdy.nc"
@@ -109,7 +110,7 @@ def test_surface_data_reproduces_equilibrium_bnormal():
     if not WOUT.exists():
         pytest.skip(f"wout fixture unavailable: {WOUT}")
     wout = read_wout(WOUT)
-    sd = FBD.surface_field_data_from_wout(wout, nphi=24, ntheta=24)
+    sd = VC.surface_field_data_from_wout(wout, nphi=24, ntheta=24)
     assert sd.gamma.shape == (3, 24, 24)
     Bn = jnp.sum(sd.B_total * sd.normal, axis=0)
     absB = jnp.linalg.norm(sd.B_total, axis=0)
@@ -124,7 +125,7 @@ def test_synthetic_surface_gradient_fd_validates():
     Bn = jnp.sum(sd.B_total * sd.normal, axis=0)
     assert float(jnp.max(jnp.abs(Bn))) < 1e-12
 
-    prob = FBD.FreeBoundaryDiffProblem.from_surface_data(sd, digits=3)
+    prob = VC.PlasmaVacuumInterface.from_surface_data(sd, digits=3)
     assert prob.Bn_plasma.shape == (12, 12)
     assert bool(jnp.all(jnp.isfinite(prob.Bn_plasma)))
 
@@ -177,7 +178,7 @@ def test_finite_beta_extender_field_and_gradient_outside_lcfs(monkeypatch):
     inp = type("Input", (), {"lfreeb": False})()
     wout = type("Wout", (), {"betatotal": 0.01, "mgrid_file": ""})()
     equilibrium = type("Equilibrium", (), {"inp": inp, "state": object(), "wout": wout})()
-    monkeypatch.setattr(FBD, "surface_field_data_from_state", lambda *_args, **_kwargs: surface)
+    monkeypatch.setattr(VC, "surface_field_data_from_state", lambda *_args, **_kwargs: surface)
     live = VmecExtender.from_equilibrium(
         equilibrium,
         external_field=coil_field,
@@ -192,10 +193,10 @@ def test_finite_beta_extender_field_and_gradient_outside_lcfs(monkeypatch):
         expected_surface_field = field.plasma_field.B_plasma_on_surface(
             digits=3, precision=plan)
     else:  # released virtual-casing-jax; public plan reuse arrives in PR #5
-        plan = FBD.plan_vc_precision(surface, digits=3)
+        plan = VC.plan_vc_precision(surface, digits=3)
         expected_surface_field = field.plasma_field._vc.compute_internal_B(
             field.plasma_field.B_total, digits=3, chunk_size=64, precision=plan)
-    interface = FBD.FreeBoundaryDiffProblem.from_surface_data(
+    interface = VC.PlasmaVacuumInterface.from_surface_data(
         surface, digits=3, precision=plan,
         virtual_casing_field=field.plasma_field,
     )
@@ -235,7 +236,7 @@ def test_cth_gradient_fd_validates():
     if not WOUT.exists():
         pytest.skip(f"wout fixture unavailable: {WOUT}")
     wout = read_wout(WOUT)
-    prob = FBD.FreeBoundaryDiffProblem.from_wout(wout, nphi=24, ntheta=24, digits=4)
+    prob = VC.PlasmaVacuumInterface.from_wout(wout, nphi=24, ntheta=24, digits=4)
 
     # (a) extcur via the cth mgrid (2 coil-group currents) — exact full gradient.
     if MGRID.exists():

@@ -33,8 +33,9 @@ if ci_smoke:
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
-inp.rbc[inp.ntor-1, 1] =-SEED_PERTURBATION
-inp.zbs[inp.ntor-1, 1] = SEED_PERTURBATION
+rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
+rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -SEED_PERTURBATION, SEED_PERTURBATION
+inp = replace(inp, rbc=rbc, zbs=zbs)
 mpol = max(MAX_MODE + 2, MINIMUM_MPOL)
 inp = replace(inp, delt=0.5).change_resolution(
     mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)

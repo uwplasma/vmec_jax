@@ -118,16 +118,16 @@ markers = [
 ]
 
 [tool.coverage.run]
-# freeboundary_diff.py requires the optional virtual-casing-jax >= 0.0.4
+# virtual_casing.py requires the optional virtual-casing-jax >= 0.0.4
 # extra (see [project.optional-dependencies]). Its FD-validated gradient
 # tests are importorskip-gated and skip in the dependency-minimal core CI,
 # so the module is excluded from the core >=95% coverage gate. It is
 # exercised by the optional-integrations CI lane. turbulence.py is
 # likewise gated on the optional ``turbulence`` extra (gkx).
-omit = ["*/freeboundary_diff.py", "*/turbulence.py"]
+omit = ["*/virtual_casing.py", "*/turbulence.py"]
 
 [tool.coverage.report]
-omit = ["*/freeboundary_diff.py", "*/turbulence.py"]
+omit = ["*/virtual_casing.py", "*/turbulence.py"]
 
 [tool.ruff]
 line-length = 120

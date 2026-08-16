@@ -78,6 +78,9 @@ returns one entry per `problem.dof_names`, including selected boundary and
 current-profile variables. Use `set_points_flux([[s, theta, phi]])` instead to
 place interior points in VMEC flux coordinates; returned vectors and tensors
 remain Cartesian, and parameter VJPs hold those mapped Cartesian points fixed.
+The poloidal coordinate degenerates at `s=0`, but the physical field does not:
+VMEX applies the regular spectral axis limit, so `B` and its first three
+Cartesian spatial derivatives can be queried on the magnetic axis.
 `VmecExtender` covers points outside the plasma by adding the
 plasma-current contribution from `virtual_casing_jax` to a supplied coil or
 MGRID field. Virtual casing alone is not the total exterior field.
@@ -183,6 +186,8 @@ The defaults are exact implicit derivatives, automatic Jacobian direction, one-c
 
 `single_stage_optimization.py` and its finite-beta counterpart jointly vary a prescribed VMEX boundary and ESSOS coils with exact derivatives. The finite-beta pressure cost is the normalized MHD jump `(|B_out|²-|B_in|²-2μ₀p_edge)/B_ref²`; it constrains interface force balance, not the input pressure profile, and does not invoke a free-boundary NESTOR solve. ESSOS supplies coil names, functional updates, distance objectives, SIMSOPT import, and boundary-to-surface conversion.
 
+The two `single_stage_free_boundary_optimization*.py` examples instead vary only ESSOS coils and differentiate the reconverged NESTOR–VMEX root. This coupled reverse-mode path is experimental: CPU derivatives are finite-difference certified, while reducing its cold XLA compile time and GPU memory remains roadmap work.
+
 ## QA, QH, QP, and QI examples
 
 The scripts in `examples/optimization/` optimize QA (NFP=2), QH (NFP=4), QP (NFP=2), and QI (NFP=2) from simple seeds; each writes an optimized input, WOUT, and standard plots. Run `QA_optimization.py`, `QH_optimization.py`, `QP_optimization.py`, or `QI_optimization.py`, then `python examples/plot_optimized_families.py` to reproduce the composites below. Each column shows four toroidal cuts separated by `π/(2 NFP)`, the 3-D LCFS colored by `|B|`, and LCFS `|B|` in Boozer coordinates.
@@ -199,7 +204,7 @@ Validated QI inputs spanning NFP=1–4 are bundled in `examples/data/`; the same
 
 ![Free-boundary beta ramp and Shafranov shift](docs/_static/figures/readme_essos_beta_scan.png)
 
-VMEX also solves open-ended mirrors. `examples/mirror_fixed_boundary_nonaxisymmetric.py` compares an axisymmetric mirror with a non-axisymmetric rotating ellipse; `examples/mirror_free_boundary_beta_scan.py` continues an ESSOS-coil free boundary from 0% to 80% central beta. The latter plots the solved on-axis field against the MHD paraxial scaling `B/Bvac = sqrt(1-beta)` implied by `p + B²/(2 μ0) = Bvac²/(2 μ0)`. The 0–10% lane is supported; higher-beta points remain clearly marked as extended validation pending refined-grid promotion.
+VMEX also solves open-ended mirrors. `examples/mirror/mirror_fixed_boundary_nonaxisymmetric.py` compares an axisymmetric mirror with a non-axisymmetric rotating ellipse; `examples/mirror/mirror_free_boundary_beta_scan.py` continues an ESSOS-coil free boundary from 0% to 80% central beta. The latter plots the solved on-axis field against the MHD paraxial scaling `B/Bvac = sqrt(1-beta)` implied by `p + B²/(2 μ0) = Bvac²/(2 μ0)`. The 0–10% lane is supported; higher-beta points remain clearly marked as extended validation pending refined-grid promotion.
 
 ![Axisymmetric and rotating-ellipse fixed-boundary mirrors](docs/_static/figures/mirror_fixed_boundary_3d.png)
 
@@ -308,7 +313,7 @@ See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.ht
 
 ## Roadmap
 
-- Differentiate the complete reconverged NESTOR plasma–vacuum root, then promote free-boundary plasma-and-coil single-stage optimization beyond the current virtual-casing derivative lane.
+- Replace the experimental coupled NESTOR transpose with a boundary-Schur adjoint to reduce cold compile time and GPU memory, then promote coil-only free-boundary single-stage optimization.
 - Promote rotating-ellipse stellarator–mirror hybrids from extended validation with refinement, independent force checks, and practical optimization examples.
 - Broaden trapped-particle-fraction benchmarks against near-axis theory across QA/QH/QP/QI, retaining the physically nonzero on-axis QI trapped fraction.
 - Implement differentiable effective ripple `epsilon_eff` and `Gamma_c`, then add Eduardo Lascas Neto’s associated diagnostic plots. J-contour plotting and the max-J objective already exist and will be integrated into that common diagnostic workflow.

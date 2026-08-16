@@ -35,7 +35,9 @@
     ["tests/test_forces_residuals.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f0"]],
     ["tests/test_fourier_transforms.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "pr-fast", "full-core-d-f0"]],
     ["tests/test_freeboundary.py", "free-boundary", "integration", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a1", "full-core-fb-a"]],
-    ["tests/test_freeboundary_diff.py", "free-boundary", "ad", "medium", "cpu-gpu", "reference-nc", "fd", ["pr-parity-a1", "optional", "full-core-fb-a"]],
+    ["tests/test_freeboundary_implicit.py", "free-boundary", "ad", "slow", "cpu-gpu", "none", "fd", ["pr-parity-a1", "full-core-fb-a"]],
+    ["tests/test_virtual_casing_api.py", "virtual-casing", "unit", "fast", "cpu", "none", "none", ["pr-parity-a1", "full-core-fb-a"]],
+    ["tests/test_virtual_casing_physics.py", "virtual-casing", "ad", "medium", "cpu-gpu", "reference-nc", "fd", ["pr-parity-a1", "optional", "full-core-fb-a"]],
     ["tests/test_freeboundary_linear.py", "free-boundary", "ad", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-a1", "full-core-fb-a"]],
     ["tests/test_freeboundary_multigrid.py", "free-boundary", "integration", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a1", "full-core-fb-b"]],
     ["tests/test_freeboundary_stress.py", "free-boundary", "integration", "medium", "cpu-gpu", "generated", "analytic", ["pr-parity-a1"]],
@@ -114,11 +116,16 @@
       "tests/test_freeboundary.py::test_nestor_skip_branch_matches_full_solve",
       "tests/test_freeboundary.py::test_jac75_retry_rebuilds_vacuum_and_converges",
       "tests/test_freeboundary.py::test_call_lane_emits_notice_once_before_compile",
+      "tests/test_freeboundary_implicit.py::test_free_boundary_status_callback_turns_trial_error_into_status",
+      "tests/test_freeboundary_implicit.py::test_free_boundary_config_rejects_fixed_boundary_input",
+      "tests/test_freeboundary_implicit.py::test_free_boundary_warm_failure_retries_once_from_cold",
+      "tests/test_freeboundary_implicit.py::test_free_boundary_host_adjoint_rejects_a_false_solver_success",
+      "tests/test_freeboundary_implicit.py::test_free_boundary_current_gradient_matches_resolve_finite_difference",
       "tests/test_freeboundary_multigrid.py::test_stage_transfer_carries_vacuum_and_interpolates_final_xc",
       "tests/test_freeboundary_multigrid.py::test_initial_bad_jacobian_restarts_free_ladder_through_ns3",
       "tests/test_freeboundary_multigrid.py::test_single_grid_hot_restart_preserves_free_edge",
       "tests/test_freeboundary_linear.py",
-      "tests/test_freeboundary_diff.py::test_synthetic_surface_gradient_fd_validates",
+      "tests/test_virtual_casing_physics.py::test_synthetic_surface_gradient_fd_validates",
       "tests/test_printing.py::test_compile_notice_variants",
       "tests/test_printing.py::test_emit_flushed_writes_and_flushes",
       "tests/test_bootstrap.py::test_mismatch_lanes_agree",
@@ -158,8 +165,8 @@
       "tests/test_mgrid.py::test_magnetic_field_cylindrical_points_round_trip",
       "tests/test_mgrid.py::test_field_api_validation_and_constructor_routing",
       "tests/test_mgrid.py::test_volume_average_beta_is_plasma_to_magnetic_energy_ratio",
-      "tests/test_freeboundary_diff.py::test_finite_beta_extender_field_and_gradient_outside_lcfs",
-      "tests/test_freeboundary_diff.py::test_parameterized_extender_vjp_matches_rebuilt_surface_fd",
+      "tests/test_virtual_casing_physics.py::test_finite_beta_extender_field_and_gradient_outside_lcfs",
+      "tests/test_virtual_casing_physics.py::test_parameterized_extender_vjp_matches_rebuilt_surface_fd",
       "tests/test_problem.py::test_vmec_problem_field_facades_validate_and_route",
       "tests/test_monitoring.py",
       "tests/test_optimize.py::test_boundary_pack_roundtrip[solovev]",
@@ -194,6 +201,10 @@
     ],
     "weekly-mirror": [
       "tests/mirror/test_free_boundary.py::test_unbounded_exterior_beta_observables_converge_with_resolution"
+    ],
+    "weekly-single-stage-free": [
+      "tests/test_examples.py::test_finite_beta_free_boundary_single_stage_optimization",
+      "tests/test_freeboundary_implicit.py::test_free_boundary_current_gradient_matches_resolve_finite_difference"
     ]
   },
   "campaigns": {
