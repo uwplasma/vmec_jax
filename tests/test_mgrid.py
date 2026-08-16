@@ -284,6 +284,7 @@ def test_interior_field_inverts_flux_coordinates_and_recovers_B():
     np.testing.assert_allclose(
         field.B(), [[0.0, major_radius, 0.0]], rtol=0, atol=4e-7)
     np.testing.assert_allclose(field.gradB(), expected_grad[:1], rtol=0, atol=2e-10)
+    assert jnp.all(jnp.isfinite(field.gradgradB()))
     assert jnp.all(jnp.isfinite(field.gradgradgradB()))
 
     flux_field = VmecInteriorField(spectra).set_points_flux(coordinates)
