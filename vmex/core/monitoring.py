@@ -373,13 +373,16 @@ class OptimizationMonitor:
             values[np.isfinite(values) & (values > 0.0)]
             for values in self.history.values()
         ])
-        largest = float(np.max(finite_positive)) if finite_positive.size else 1.0
-        display_floor = max(1.0e-16, largest * 1.0e-12)
+        display_floor = max(
+            1.0e-8,
+            float(np.min(finite_positive)) if finite_positive.size else 1.0e-8,
+        )
         for name, values in self.history.items():
             positive = np.where(np.isfinite(values), np.maximum(values, display_floor), np.nan)
-            axis.semilogy(iterations, positive, label=name)
+            axis.semilogy(
+                iterations, positive, marker="o", markersize=3.0, label=name)
         axis.set(xlabel="iteration", ylabel="weighted cost", title=title)
-        axis.set_ylim(bottom=0.5 * display_floor)
+        axis.set_ylim(bottom=display_floor)
         axis.grid(True, alpha=0.3); axis.legend(fontsize=8, ncol=2)
         figure.tight_layout(); figure.savefig(path, dpi=200); plt.close(figure)
         return path

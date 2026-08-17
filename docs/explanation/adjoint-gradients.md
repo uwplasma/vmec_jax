@@ -5,7 +5,7 @@ implicit function theorem at the converged fixed point — one linear solve per
 scalar objective, O(1) memory in the iteration count, no unrolling, no
 finite-difference step size. All of that linear algebra runs on
 [SOLVAX](https://pypi.org/project/solvax/), the linear/adjoint solver layer
-factored out of this code base; this page states the formulation and the five
+factored out of this code base; this page states the formulation and the six
 SOLVAX solve classes exactly as the code uses them.
 
 ## The implicit function theorem on the fixed point
@@ -62,7 +62,7 @@ independent of how many Richardson steps, restarts, or multigrid stages the
 forward solve needed. Multigrid stages act purely as an initializer and are
 stop-gradient by construction.
 
-## The five SOLVAX solve classes
+## The six SOLVAX solve classes
 
 Every linear solve in the gradient stack goes through SOLVAX. The complete
 inventory, with the call site each class serves:
@@ -89,6 +89,11 @@ inventory, with the call site each class serves:
    `v -> jvp(g, state, v)`; the `precon2d.f` analogue).
 5. `solvax.chunk_map` / `auto_chunk_size` bound memory for Jacobian columns
    and multi-RHS batches (`vmex/core/optimize.py`).
+6. `solvax.SpluFactorization` owns the pivoted sparse factorization used to
+   eliminate the radial bulk in the experimental free-boundary Schur
+   transpose (`vmex/core/freeboundary_implicit.py`). VMEX supplies the
+   physics-specific radial blocks and NESTOR edge response; SOLVAX owns the
+   reusable factorization and transposed solves.
 
 The mirror lane keeps its own adjoint solver (`vmex/mirror/implicit.py`).
 

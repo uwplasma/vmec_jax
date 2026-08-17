@@ -1,5 +1,9 @@
 #!/usr/bin/env python
-"""Trace a finite-beta QA field inside and outside its VMEX boundary."""
+"""Trace a finite-beta QA field inside and outside its VMEX boundary.
+
+The commented ``Coils.from_simsopt`` line accepts a SIMSOPT coil JSON without
+changing the VMEX virtual-casing or ESSOS tracing workflow.
+"""
 
 from dataclasses import replace
 import os
@@ -46,6 +50,8 @@ inp = replace(inp, ns_array=np.array([31 if ci_smoke else 51]),
               niter_array=np.array([8000]))
 equilibrium = opt.solve_equilibrium(inp, verbose=True)
 coils = Coils.from_json(str(DATA / "ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json"))
+# A SIMSOPT coil JSON can be used without changing virtual casing or tracing:
+# coils = Coils.from_simsopt("coils.json", nfp=inp.nfp, stellsym=True)
 biot_savart = BiotSavart(coils)
 coil_field = jax.jit(lambda points: jax.vmap(biot_savart.B)(
     points.reshape(-1, 3)).reshape(points.shape))
@@ -54,7 +60,7 @@ print("Building the self-consistent coil + plasma-current exterior field...")
 # A prescribed-interface virtual-casing calculation separates the converged
 # total field into plasma-current and coil parts; no free boundary is solved.
 surface_data = vc.surface_field_data_from_state(
-    inp, equilibrium.state, runtime=equilibrium.runtime, nphi=NPHI, ntheta=NTHETA)
+    inp, equilibrium.solution, runtime=equilibrium.solver_context, nphi=NPHI, ntheta=NTHETA)
 exterior = VmecExtender.from_surface_data(
     surface_data, external_field=coil_field, digits=VC_DIGITS)
 equilibrium.set_points_flux([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
@@ -85,6 +91,15 @@ print(f"Boundary field alignment = {float(alignment):.6f}")
 print("Preparing the near-surface virtual-casing continuation...")
 exterior = exterior.with_near_surface_continuation(
     digits=VC_DIGITS, precision=precision, B_surface=interface.B_plasma)
+coil_B_outside = coil_field(outside_xyz); total_B_outside = exterior.B(outside_xyz)
+plasma_fraction = jnp.linalg.norm(total_B_outside - coil_B_outside, axis=1) / jnp.linalg.norm(total_B_outside, axis=1)
+direction_difference = jnp.rad2deg(jnp.arccos(jnp.clip(jnp.sum(
+    coil_B_outside * total_B_outside, axis=1) /
+    (jnp.linalg.norm(coil_B_outside, axis=1) * jnp.linalg.norm(total_B_outside, axis=1)), -1.0, 1.0)))
+print(f"Near-LCFS plasma-field fraction: median = {100 * float(jnp.median(plasma_fraction)):.2f}%, "
+      f"max = {100 * float(jnp.max(plasma_fraction)):.2f}%; direction change: "
+      f"median = {float(jnp.median(direction_difference)):.3f} deg, "
+      f"max = {float(jnp.max(direction_difference)):.3f} deg")
 del interface, precision, B_surface, Bmag_surface, Bn_over_B
 jax.clear_caches()  # the equilibrium and on-surface diagnostic are not evaluated again
 escape = None
@@ -106,7 +121,7 @@ vmex_outside = trace_field_lines(exterior, outside_xyz, length=TRACE_LENGTH,
 
 print("Plotting 3D trajectories and the phi=0 Poincare comparison...")
 surface = surfacerzfourier_from_boundary(inp.rbc, inp.zbs, inp.nfp, nphi=60, ntheta=60)
-figure = plt.figure(figsize=(8.6, 4.5)); grid = figure.add_gridspec(1, 2, width_ratios=(3, 1))
+figure = plt.figure(figsize=(10.6, 4.5)); grid = figure.add_gridspec(1, 3, width_ratios=(3, 1, 1))
 axis3d = figure.add_subplot(grid[0], projection="3d")
 surface.plot(ax=axis3d, show=False, color="lightsteelblue", alpha=0.30)
 coils.plot(ax=axis3d, show=False, color="saddlebrown", linewidth=1.1)
@@ -116,23 +131,39 @@ vmex_outside.plot(ax=axis3d, show=False, n_trajectories_plot=len(outside_xyz),
                   color="#D55E00", linewidth=0.35, alpha=0.65)
 axis3d.set_title(f"Self-consistent field, beta={float(equilibrium.wout.betatotal):.2%}")
 axis3d.set_axis_off(); axis3d.set_box_aspect((1, 1, 1), zoom=1.20)
-poincare = figure.add_subplot(grid[1])
+poincare_coils = figure.add_subplot(grid[1]); poincare_total = figure.add_subplot(grid[2])
 inside_sections = vmex_inside.poincare_plot(
-    shifts=[0.0], ax=poincare, show=False, color="#0072B2", s=0.01)
+    shifts=[0.0], ax=poincare_coils, show=False, color="#0072B2", s=0.01)
 coil_colors = ["#009E73" if bool(value) else "#D55E00" for value in inside]
 coil_sections = coil_trace.poincare_plot(
-    shifts=[0.0], ax=poincare, show=False, color=coil_colors, s=0.01)
+    shifts=[0.0], ax=poincare_coils, show=False, color=coil_colors, s=0.01)
+vmex_inside.poincare_plot(
+    shifts=[0.0], ax=poincare_total, show=False, color="#0072B2", s=0.01)
 outside_sections = vmex_outside.poincare_plot(
-    shifts=[0.0], ax=poincare, show=False, color="#CC79A7", s=0.01)
-section = np.asarray(surface.gamma[0]); poincare.plot(
-    np.hypot(section[:, 0], section[:, 1]), section[:, 2], "k-", lw=1.0)
-poincare.set(xlabel="R [m]", ylabel="Z [m]", title=r"Finite beta: $\phi=0$ Poincare")
+    shifts=[0.0], ax=poincare_total, show=False, color="#CC79A7", s=0.01)
+# Overlay the coil-only exterior sections on the same axes as coil + plasma;
+# their separation is the virtual-casing plasma-current contribution.
+for is_inside, (radius, height, _time) in zip(np.asarray(inside), coil_sections):
+    if not is_inside:
+        poincare_total.scatter(radius, height, color="#D55E00", marker="x", s=3.0, linewidths=0.35)
+coil_exterior_crossings = [len(section[0]) for is_inside, section in zip(np.asarray(inside), coil_sections)
+                           if not is_inside]
+if not any(coil_exterior_crossings):
+    poincare_total.text(0.03, 0.97, "coil-only exterior:\n" r"no $\phi=0$ return",
+        color="#D55E00", fontsize=6.5, va="top", transform=poincare_total.transAxes)
+section = np.asarray(surface.gamma[0])
+for panel, title in ((poincare_coils, "coils only"),
+                     (poincare_total, "exterior: coils vs coils + plasma")):
+    panel.plot(np.hypot(section[:, 0], section[:, 1]), section[:, 2], "k-", lw=1.0)
+    panel.set(xlabel="R [m]", title=title); panel.grid(alpha=0.25)
+poincare_coils.set_ylabel("Z [m]"); poincare_total.tick_params(labelleft=False)
 all_sections = inside_sections + coil_sections + outside_sections
 r_values = np.concatenate([np.hypot(section[:, 0], section[:, 1])]
                           + [row[0] for row in all_sections])
 z_values = np.concatenate([section[:, 2]] + [row[1] for row in all_sections])
-poincare.set_xlim(r_values.min(), r_values.max()); poincare.set_ylim(z_values.min(), z_values.max())
-poincare.set_aspect("equal", adjustable="box")
+for panel in (poincare_coils, poincare_total):
+    panel.set_xlim(r_values.min(), r_values.max()); panel.set_ylim(z_values.min(), z_values.max())
+    panel.set_aspect("equal", adjustable="box")
 legend_handles = [
     Line2D([], [], color="k", lw=1.0, label="VMEX LCFS"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#0072B2", label="VMEX total field, interior seeds"),
@@ -140,17 +171,18 @@ legend_handles = [
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#D55E00", label="coils only, exterior seeds"),
     Line2D([], [], marker="o", markersize=2, linestyle="none", color="#CC79A7", label="coils + plasma, exterior seeds"),
 ]
-poincare.grid(alpha=0.25)
 axis3d.legend(handles=legend_handles, fontsize=7, loc="lower center",
               bbox_to_anchor=(0.5, -0.02), ncol=2, frameon=False)
-figure.subplots_adjust(left=0.01, right=0.98, bottom=0.05, top=0.92, wspace=0.02)
+figure.suptitle(r"Finite-beta field lines at $\phi=0$", y=0.98)
+figure.subplots_adjust(left=0.01, right=0.99, bottom=0.05, top=0.90, wspace=0.08)
 figure.savefig("vmex_fieldline_tracing_finite_beta.png", dpi=200,
                bbox_inches="tight", pad_inches=0.04); plt.close(figure)
 bounded = ~np.asarray(vmex_outside.boundary_hits)
 crossings = np.asarray([len(row[0]) for row in outside_sections])
 offsets = np.asarray((seed_fractions[~inside] - 1.0) * edge_radius)
 print(f"Exterior trace QA: {bounded.sum()}/{len(bounded)} lines remained in the LCFS neighborhood; "
-      f"offsets [m] = {offsets.round(5).tolist()}, crossings = {crossings.tolist()}")
+      f"offsets [m] = {offsets.round(5).tolist()}, total-field crossings = {crossings.tolist()}, "
+      f"coil-only crossings = {coil_exterior_crossings}")
 if not np.any(bounded):
     print("No closed exterior flux surface was verified for this finite-beta coil set.")
 print("Wrote vmex_fieldline_tracing_finite_beta.png")

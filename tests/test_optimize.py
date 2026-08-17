@@ -96,6 +96,12 @@ def test_qs_solovev_axisymmetric_sanity():
     assert qa < 1e-8 * qh                 # and negligible vs a wrong helicity
 
 
+def test_equilibrium_clear_solution_aliases(solovev_eq):
+    """Beginner-facing names expose the same immutable solver objects."""
+    assert solovev_eq.solution is solovev_eq.state
+    assert solovev_eq.solver_context is solovev_eq.runtime
+
+
 def test_qs_helicity_sign_convention_qh():
     """nfp4_QH minimizes the (1, -1) helicity residual — pins the sign.
 

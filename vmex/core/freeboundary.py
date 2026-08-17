@@ -58,6 +58,7 @@ from .errors import (
     AXIS_REGUESS_FLAG,
     JAC75_FLAG,
     MORE_ITER_FLAG,
+    NORM_TERM_FLAG,
     SUCCESSFUL_TERM_FLAG,
     VmecInputError,
 )
@@ -100,6 +101,17 @@ MU0 = 4.0e-7 * np.pi
 
 #: funct3d.f vacuum activation threshold on fsqr + fsqz.
 ACTIVATION_FSQ = 1.0e-3
+
+
+def _resume_for_vacuum(carry, ivac: int):
+    """Prevent a converged fixed-boundary hot start from skipping NESTOR."""
+    if ivac != -1 or not bool(carry.done) or int(carry.ier) != SUCCESSFUL_TERM_FLAG:
+        return carry
+    return replace(
+        carry, done=jnp.asarray(False),
+        ier=jnp.asarray(NORM_TERM_FLAG, dtype=carry.ier.dtype),
+        iteration=carry.iteration + jnp.asarray(1, dtype=carry.iteration.dtype),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1924,6 +1936,12 @@ def _solve_free_boundary_stage(
                                (carry, rt_initial), {"use_fft": use_fft},
                                notice=_lane_notice("free-iteration"))
         _emit_due(final=False)
+
+        # A hot restart may already satisfy the fixed-boundary tolerance on
+        # its first pass.  Free-boundary convergence is not defined until the
+        # vacuum field has been applied, so advance to the activation check
+        # instead of accepting that fixed-boundary state as the final result.
+        carry = _resume_for_vacuum(carry, fb.ivac)
 
         int_dtype = carry.iteration.dtype
         max_passes = rt.max_iterations + 400

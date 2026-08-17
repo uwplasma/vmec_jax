@@ -119,7 +119,7 @@ for max_mode, max_nfev, n_spline in zip(MAX_MODES, MAX_NFEV, N_CURRENT_SPLINE):
 
 final_input = replace(inp, ns_array=np.array([31 if ci_smoke else 101]),
     ftol_array=np.array([1e-10 if ci_smoke else 1e-14]), niter_array=np.array([8000]))
-final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.state,
+final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.solution,
     verbose=not ci_smoke, raise_on_max_iterations=True)
 
 # Print results

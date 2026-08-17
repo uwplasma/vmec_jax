@@ -20,7 +20,7 @@ vmex --doctor
 vmex --test
 ```
 
-Python 3.10+ is supported. VMEX installs CPU JAX, SciPy, plotting, NetCDF, and `booz_xform_jax`; install an accelerator-enabled JAX wheel separately using the [JAX installation guide](https://docs.jax.dev/en/latest/installation.html). Optional integrations are `vmex[optimizers]` for JAXopt/Optax, `vmex[freeb]` for differentiable virtual casing, `vmex[coils]` for ESSOS, and `vmex[turbulence]` for GKX.
+Python 3.10+ is supported. VMEX installs CPU JAX, SciPy, plotting, NetCDF, and `booz_xform_jax`; install an accelerator-enabled JAX wheel separately using the [JAX installation guide](https://docs.jax.dev/en/latest/installation.html). Optional integrations are `vmex[optimizers]` for JAXopt/Optax, `vmex[neoclassical]` for NEO_JAX effective ripple, `vmex[freeb]` for differentiable virtual casing, `vmex[coils]` for ESSOS, and `vmex[turbulence]` for GKX.
 
 An editable source install remains connected to its checkout, so `pip install -e .` only needs to be repeated when packaging metadata or dependencies change—not after each `git fetch` or checkout.
 
@@ -84,6 +84,11 @@ Cartesian spatial derivatives can be queried on the magnetic axis.
 `VmecExtender` covers points outside the plasma by adding the
 plasma-current contribution from `virtual_casing_jax` to a supplied coil or
 MGRID field. Virtual casing alone is not the total exterior field.
+
+Effective ripple is an optional in-memory diagnostic—no `boozmn` file is
+needed. `examples/epsilon_effective.py` computes and plots the conventional
+NEO transport quantity $\epsilon_{\rm eff}^{3/2}$; `--plot` adds the same
+bounded-resolution radial trend to the pressure panel when NEO_JAX is installed.
 
 ```python
 field = vj.VmecExtender.from_file(
@@ -192,6 +197,8 @@ The two `single_stage_free_boundary_optimization*.py` examples instead vary only
 ## QA, QH, QP, and QI examples
 
 The scripts in `examples/optimization/` optimize QA (NFP=2), QH (NFP=4), QP (NFP=2), and QI (NFP=2) from simple seeds; each writes an optimized input, WOUT, and standard plots. Run `QA_optimization.py`, `QH_optimization.py`, `QP_optimization.py`, or `QI_optimization.py`, then `python examples/plot_optimized_families.py` to reproduce the composites below. Each column shows four toroidal cuts separated by `π/(2 NFP)`, the 3-D LCFS colored by `|B|`, and LCFS `|B|` in Boozer coordinates.
+
+`examples/optimization/stellarator_asymmetry/` contains matching vacuum and finite-beta examples with `LASYM=True`; each visibly seeds and optimizes the additional `RBS` and `ZBC` boundary families.
 
 ![QA, QH, and QP optimization examples](docs/_static/figures/readme_optimization.png)
 
@@ -314,7 +321,7 @@ See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.ht
 
 ## Roadmap
 
-- Replace the experimental coupled NESTOR transpose with a boundary-Schur adjoint to reduce cold compile time and GPU memory, then promote coil-only free-boundary single-stage optimization.
+- Promote the experimental boundary-Schur free-boundary adjoint after reducing its remaining local-force/NESTOR cold compile and GPU memory costs, then promote coil-only free-boundary single-stage optimization.
 - Promote rotating-ellipse stellarator–mirror hybrids from extended validation with refinement, independent force checks, and practical optimization examples.
 - Broaden trapped-particle-fraction benchmarks against near-axis theory across QA/QH/QP/QI, retaining the physically nonzero on-axis QI trapped fraction.
-- Implement differentiable effective ripple `epsilon_eff` and `Gamma_c`, then add Eduardo Lascas Neto’s associated diagnostic plots. J-contour plotting and the max-J objective already exist and will be integrated into that common diagnostic workflow.
+- Complete the VMEX-state-to-NEO differentiable lane for effective ripple, validate its forward sensitivities against finite differences and STELLOPT NEO, then add `Gamma_c` and the associated trapped-particle diagnostics.

@@ -22,7 +22,8 @@ import jax.numpy as jnp
 import numpy as np
 from jax.flatten_util import ravel_pytree
 from scipy.sparse import bsr_matrix
-from scipy.sparse.linalg import LinearOperator, gcrotmk, splu
+from scipy.sparse.linalg import LinearOperator, gcrotmk
+from solvax import SpluFactorization
 
 from . import implicit as im
 from .device import AUTO, resolve_implicit_device
@@ -536,7 +537,7 @@ def _host_boundary_schur_adjoint(
     sparse_bulk = bsr_matrix(
         (np.asarray(blocks), np.asarray(indices), np.asarray(indptr)),
         shape=(ns * block_size, ns * block_size)).tocsc()
-    bulk_lu = splu(sparse_bulk)
+    bulk_lu = SpluFactorization(sparse_bulk)
 
     def sparse_inverse_packed(packed, *, transpose):
         values = np.asarray(packed)
@@ -546,8 +547,8 @@ def _host_boundary_schur_adjoint(
         scale_solution = bulk_row_scale if transpose else bulk_column_scale
         flat_rhs = np.moveaxis(values * scale_rhs[None], 0, -1).reshape(
             ns * block_size, -1)
-        flat_solution = bulk_lu.solve(
-            flat_rhs, trans="T" if transpose else "N")
+        flat_solution = np.asarray(bulk_lu.solve(
+            flat_rhs, trans="T" if transpose else "N"))
         solution = np.moveaxis(
             flat_solution.reshape(ns, block_size, -1), -1, 0)
         solution = solution * scale_solution[None]
@@ -599,6 +600,7 @@ def _host_boundary_schur_adjoint(
     nedge = int(edge_rhs.size)
     matrix = LinearOperator((nedge, nedge), matvec=apply,
                             dtype=edge_rhs_np.dtype)
+
     if nedge <= 512:
         eye = jnp.eye(nedge, dtype=edge_rhs.dtype)
         packed_corrections = im.chunk_map(

@@ -55,6 +55,11 @@ optimizers = [
   "jaxopt",
   "optax",
 ]
+# Effective ripple through the independently validated NEO_JAX backend. It is
+# optional so the equilibrium solver and default installation remain slim.
+neoclassical = [
+  "neo-jax>=1.0.2",
+]
 # Differentiable virtual casing on a specified boundary; this is not a NESTOR
 # equilibrium adjoint. Version 0.0.5 provides the reusable surface-precision
 # and near-surface plans used by exterior tracing.

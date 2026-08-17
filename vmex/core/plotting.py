@@ -19,9 +19,10 @@ Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 
 Both stellarator-symmetric and ``lasym`` (asymmetric) equilibria are
 supported: the sine/cosine partner tables (``rmns``, ``zmnc``, ``bmns``,
-...) are included whenever present.  ``D_R`` follows the existing lasym
-guard of :func:`vmex.core.stability.glasser_d_r_state` and is omitted (with
-a panel note) for asymmetric equilibria.  All figures use the Agg backend
+...) are included whenever present. The stored Mercier profile is plotted
+for both symmetry classes; the independent WOUT-only Glasser reconstruction
+is omitted for ``LASYM`` until its output-normalization proof is complete.
+All figures use the Agg backend
 at ``dpi >= 200`` and are closed after saving.  The Boozer transform behind
 the summary panels runs in-process (``booz_xform_jax``) so ``vmex --plot``
 needs no separate ``--booz`` pass.
@@ -37,6 +38,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+import weakref
 
 import numpy as np
 
@@ -70,6 +72,7 @@ _LINE_COLORS = (
 )
 
 _MU0 = 4.0e-7 * np.pi
+_EPSILON_EFFECTIVE_CACHE: dict[int, tuple[weakref.ReferenceType, dict[str, Any]]] = {}
 
 
 def plot_optimization_objects(
@@ -449,12 +452,12 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
     exactly as the traceable :func:`vmex.core.stability.glasser_d_r_state`
     (validated against it to ~1e-7 on the bundled decks).  The reconstruction
     is self-checking: the same integrals must reproduce the stored ``DMerc``
-    profile; on mismatch (or for ``lasym`` equilibria, which the traceable
-    Glasser lane rejects) the result is flagged invalid so callers can omit
-    the curve instead of plotting an unvalidated one.
+    profile; on mismatch (or for ``LASYM``, whose WOUT output normalization
+    needs a separate parity proof) the result is flagged invalid so callers
+    can omit the curve instead of plotting an unvalidated one.
     """
     if bool(getattr(wout, "lasym", False)):
-        return {"valid": False, "note": "not validated for lasym", "d_r": None}
+        return {"valid": False, "note": "WOUT reconstruction not validated for LASYM", "d_r": None}
 
     ns = int(wout.ns)
     if ns < 5:
@@ -745,13 +748,15 @@ def _j_invariant_map(
     if pitch is None:
         b_star = common_min + float(pitch_fraction) * (common_max - common_min)
         pitch_array = np.array([1.0 / b_star])
+        trapped_surface = np.ones(nsurf, dtype=bool)
     else:
         pitch_array = np.array([float(pitch)])
         if not np.isfinite(pitch_array[0]) or pitch_array[0] <= 0.0:
             raise ValueError("pitch must be finite and positive")
         b_star = 1.0 / pitch_array[0]
-        if not common_min < b_star < common_max:
-            raise ValueError("pitch is not trapped on every plotted Boozer surface")
+        trapped_surface = (b_min < b_star) & (b_star < b_max)
+        if not np.any(trapped_surface):
+            raise ValueError("pitch is not trapped on any plotted Boozer surface")
 
     # Trace enough field periods to close at least one poloidal transit even
     # for small-iota / axisymmetric-boundary decks (well length ~ 2*pi/iota).
@@ -765,6 +770,8 @@ def _j_invariant_map(
     alpha = np.linspace(0.0, 2.0 * np.pi, int(nalpha), endpoint=False)
     j_map = np.full((nsurf, alpha.size), np.nan)
     for k in range(nsurf):  # per-surface loop keeps the phase tables small
+        if not trapped_surface[k]:
+            continue
         out = bounce_action_from_boozer(
             bmnc_b=bmnc_b[k : k + 1],
             xm_b=booz["xm_b"], xn_b=booz["xn_b"],
@@ -789,6 +796,7 @@ def _j_invariant_map(
         "pitch": float(pitch_array[0]),
         "pitch_inverse": float(b_star),
         "pitch_fraction": float(pitch_fraction),
+        "trapped_surface": trapped_surface,
         "b_min": b_min,
         "b_max": b_max,
     }
@@ -808,6 +816,33 @@ def _profile_panel(ax, x, y, *, xlabel: str, ylabel: str, title: str, color=None
     ax.set_title(title)
 
 
+def _epsilon_effective_summary(wout) -> dict[str, Any]:
+    """Return a cached, bounded-resolution NEO profile for one wout object."""
+    key = id(wout)
+    cached = _EPSILON_EFFECTIVE_CACHE.get(key)
+    if cached is not None and cached[0]() is wout:
+        return cached[1]
+    try:
+        from .neoclassical import diagnostic_neo_config, epsilon_effective_from_wout
+
+        s, values = epsilon_effective_from_wout(
+            wout, surfaces=np.linspace(0.15, 0.95, 5), mboz=12, nboz=10,
+            config=diagnostic_neo_config())
+        result = {
+            "valid": True, "s": np.asarray(s, dtype=float),
+            "values": np.asarray(values, dtype=float), "note": "diagnostic resolution"}
+    except Exception as exc:  # noqa: BLE001 - plotting remains useful without optional NEO
+        result = {"valid": False, "note": f"{type(exc).__name__}: {exc}"}
+    try:
+        reference = weakref.ref(
+            wout, lambda _reference, cache_key=key: _EPSILON_EFFECTIVE_CACHE.pop(
+                cache_key, None))
+    except TypeError:
+        return result
+    _EPSILON_EFFECTIVE_CACHE[key] = (reference, result)
+    return result
+
+
 def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float):
     """Plot ``DMerc`` and ``D_R`` with physical ``V''(s)`` on the right axis."""
     ns = int(wout.ns)
@@ -815,9 +850,11 @@ def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float
     dmerc = np.asarray(wout.DMerc, dtype=float)
     lo = max(2, int(round(s_plot_ignore * ns)))
     sl = slice(lo, ns - 1)
+    vacuum = abs(float(getattr(wout, "betatotal", 0.0))) < 1.0e-10
     lines = [ax.plot(
         s[sl], dmerc[sl], marker="o", markersize=3.5, linestyle="-",
-        color=_LINE_COLORS[0], label=r"$D_{Merc}>0$")[0]]
+        color=_LINE_COLORS[0],
+        label=(r"vacuum-limit $D_{Merc}$" if vacuum else r"$D_{Merc}>0$"))[0]]
     finite = dmerc[sl][np.isfinite(dmerc[sl])]
     peak = float(np.max(np.abs(finite))) if finite.size else 1.0
     if d_r_info.get("valid"):
@@ -829,8 +866,7 @@ def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float
         if finite_r.size:
             peak = max(peak, float(np.max(np.abs(finite_r))))
     else:
-        lines.append(ax.plot(
-            [], [], " ", label=f"$D_R$: {d_r_info.get('note', 'unavailable')}")[0])
+        note = d_r_info.get("note", "unavailable")
     peak = max(peak, np.finfo(float).tiny)
     if peak > 30.0:
         ax.set_yscale("symlog", linthresh=max(1.0e-3, 1.0e-3 * peak))
@@ -853,10 +889,16 @@ def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float
     well_ax.set_ylabel(r"$V''(s)$ [m$^3$] (magnetic well)", color=_LINE_COLORS[2])
     well_ax.tick_params(axis="y", colors=_LINE_COLORS[2])
     well_ax.spines["right"].set_color(_LINE_COLORS[2])
-    ax.set_title(r"Mercier, resistive interchange, and $V''(s)$")
+    title = r"Mercier, resistive interchange, and $V''(s)$"
+    if vacuum:
+        title += "\n(vacuum limits are not finite-pressure stability certificates)"
+    if not d_r_info.get("valid"):
+        title += ("\n($D_R$ unavailable for LASYM WOUT)" if "LASYM" in note
+                  else f"\n($D_R$ unavailable: {note})")
+    ax.set_title(title)
     ax.legend(
         lines, [line.get_label() for line in lines], loc="upper center",
-        bbox_to_anchor=(0.5, -0.20), ncol=3, borderaxespad=0.0,
+        bbox_to_anchor=(0.5, -0.20), ncol=min(3, len(lines)), borderaxespad=0.0,
         framealpha=1.0, facecolor="white", edgecolor="0.7",
         handlelength=1.8, columnspacing=0.8,
     )
@@ -1019,6 +1061,24 @@ def _summary_figure(
             xlabel=_S_LABEL, ylabel=r"$p$ [kPa]", title="pressure",
             color=_LINE_COLORS[1],
         )
+        axes[0, 1].lines[0].set_label(r"$p$")
+        epsilon_info = _epsilon_effective_summary(wout)
+        meta["epsilon_effective"] = epsilon_info
+        epsilon_axis = axes[0, 1].twinx(); meta["epsilon_axis"] = epsilon_axis
+        if epsilon_info["valid"]:
+            epsilon_line = epsilon_axis.semilogy(
+                epsilon_info["s"], epsilon_info["values"], "s--",
+                color=_LINE_COLORS[0], markersize=3.2,
+                label=r"$\epsilon_{\rm eff}^{3/2}$ (diagnostic)")[0]
+            epsilon_axis.set_ylabel(r"$\epsilon_{\rm eff}^{3/2}$", color=_LINE_COLORS[0])
+            epsilon_axis.tick_params(axis="y", colors=_LINE_COLORS[0])
+            axes[0, 1].legend(
+                [axes[0, 1].lines[0], epsilon_line],
+                [axes[0, 1].lines[0].get_label(), epsilon_line.get_label()],
+                loc="best", fontsize=11)
+        else:
+            epsilon_axis.set_yticks([])
+            epsilon_axis.set_ylabel(r"$\epsilon_{\rm eff}^{3/2}$ unavailable", color="0.4")
 
         # 5. parallel (bootstrap) current profile <J.B>.
         _profile_panel(

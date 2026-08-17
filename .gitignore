@@ -108,6 +108,16 @@ examples/optimization/*.vts
 examples/optimization/simsopt_driver*.py
 examples/data/single_grid/wout_*.nc
 vmex_fieldline_tracing_*.png
+/input.*
+/wout_*.nc
+/*_objectives.csv
+/*_objectives.png
+/*_summary.png
+/*_stability.png
+/*_surfaces.png
+/*_profiles.png
+/*_modB.png
+/*_boundary3d.png
 outputs/
 results/
 tmp/
@@ -285,6 +295,7 @@ examples/data/single_grid/*.nc
 /surface_*_initial.vts
 /vmex_fieldline_tracing.png
 /vmex_fixed_free_boundary_comparison.png
+/epsilon_effective.png
 # Example scripts write into the caller's directory; also ignore outputs when
 # they are run from inside examples/ during development.
 examples/**/*.png

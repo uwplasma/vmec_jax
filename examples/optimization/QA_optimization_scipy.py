@@ -88,7 +88,7 @@ final_input = replace(inp,
     ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
     niter_array=np.array([8000]))
 final_equilibrium = opt.solve_equilibrium(
-    final_input, initial_state=equilibrium.state,
+    final_input, initial_state=equilibrium.solution,
     verbose=not ci_smoke, raise_on_max_iterations=True)
 final_total = report("final", final_equilibrium)["QS total"]
 print(f"\n{METHOD}: final cost = {float(result.fun):.12e}, QS total = {final_total:.3e}")

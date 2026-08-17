@@ -366,6 +366,15 @@ basin because every stage solves a different restricted problem. Carry a
 stage forward with ``inp = problem.input_from_x(result.x)`` and construct the
 next problem from that input.
 
+``ess_alpha`` controls that separation explicitly. A mode of level
+``k=max(|m|, |n|)`` is scaled by ``exp(-ess_alpha*(k-1))``. The default
+``ess_alpha=1.2`` is a conservative starting point for crude seeds; values near
+``0.7``--``0.9`` allow modes 3--5 to move more during basin exploration, while
+larger values suppress them more strongly. There is no configuration-independent
+best value: compare candidates at equal solve budgets and recheck the winner at
+the final VMEC resolution. ``QA_optimization_global.py`` shows bounded basin
+hopping with ``ess_alpha=0.7`` followed by exact least-squares polishing.
+
 Hot restart and final output
 ----------------------------
 

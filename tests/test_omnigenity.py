@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ import numpy as np
 import pytest
 
 import jax
+import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
@@ -57,6 +59,18 @@ def qa_eq():
     """Landreman-Paul QA (low res): quasi-axisymmetric, i.e. not QI."""
     return opt.solve_equilibrium(
         VmecInput.from_file(DATA_DIR / "input.LandremanPaul2021_QA_lowres"))
+
+
+@pytest.fixture(scope="module")
+def lasym_eq():
+    """Small genuinely 3-D LASYM equilibrium for spectrum/derivative gates."""
+    inp = VmecInput.from_file(DATA_DIR / "input.basic_non_stellsym_simsopt")
+    inp = dataclasses.replace(
+        inp, ns_array=np.array([11]), ftol_array=np.array([1e-12]),
+        niter_array=np.array([4000]))
+    eq = opt.solve_equilibrium(inp)
+    assert eq.result.converged
+    return eq
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +133,38 @@ def test_boozer_spectrum_matches_booz_xform(qi_eq):
             assert bt[j] == pytest.approx(bw, rel=5e-3), (m, n)
         checked += 1
     assert checked >= 50  # the comparison actually covered the spectrum
+
+
+@pytest.mark.full
+def test_lasym_boozer_spectra_and_qi_derivative(lasym_eq):
+    """LASYM cosine/sine spectra retain host parity and an FD-checked JVP."""
+    host = opt.boozer_modes_from_wout(
+        lasym_eq, surfaces=[0.53], mboz=6, nboz=6)
+    trace = omn.boozer_bmnc_state(
+        lasym_eq.state, lasym_eq.runtime, surfaces=[0.53], mboz=6, nboz=6)
+    for name, tolerance in (("bmnc_b", 0.02), ("bmns_b", 0.03)):
+        actual, expected = np.asarray(trace[name]), np.asarray(host[name])
+        error = np.linalg.norm(actual - expected) / np.linalg.norm(expected)
+        assert error < tolerance
+
+    qi = omn.QIResidual(
+        (0.3, 0.7), mboz=6, nboz=6, nphi=31, nalpha=7, n_levels=5)
+    tangent = jax.tree.map(jnp.zeros_like, lasym_eq.state)
+    tangent = dataclasses.replace(
+        tangent, R_sin=tangent.R_sin.at[5, 1].set(1.0))
+    # Keep the state fixed here to isolate the LASYM objective graph; the
+    # implicit parameter map is independently boundary-FD checked.
+    _, ad = jax.jvp(
+        lambda state: qi.total_state(state, lasym_eq.runtime),
+        (lasym_eq.state,), (tangent,))
+    h = 1.0e-6
+    plus = jax.tree.map(lambda value, direction: value + h * direction,
+                        lasym_eq.state, tangent)
+    minus = jax.tree.map(lambda value, direction: value - h * direction,
+                         lasym_eq.state, tangent)
+    fd = (qi.total_state(plus, lasym_eq.runtime)
+          - qi.total_state(minus, lasym_eq.runtime)) / (2.0 * h)
+    assert float(ad) == pytest.approx(float(fd), rel=2e-4, abs=1e-8)
 
 
 # ---------------------------------------------------------------------------

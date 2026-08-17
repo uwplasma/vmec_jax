@@ -64,6 +64,8 @@ Array = Any
 
 
 def _as_1d(values, dtype=np.float64) -> jnp.ndarray:
+    if hasattr(values, "shape") or np.isscalar(values):
+        return jnp.atleast_1d(jnp.asarray(values, dtype=dtype))
     try:
         seq = list(values)  # type: ignore[arg-type]
     except TypeError:

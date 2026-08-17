@@ -422,10 +422,15 @@ def _full_mesh_contravariant(coefficients: Array, modes: Array) -> Array:
 
 
 def _interior_coordinates_and_B(
-    spectra: dict[str, Array], points: Array, *, newton_iterations: int
+    spectra: dict[str, Array], points: Array, *, newton_iterations: int,
+    initial_flux: Array | None = None,
 ) -> tuple[Array, Array]:
     """Invert VMEC coordinates and synthesize the interior Cartesian field."""
     points = _check_points(points)
+    if initial_flux is not None:
+        initial_flux = _check_points(initial_flux, "initial flux coordinates")
+        if initial_flux.shape != points.shape:
+            raise ValueError("initial_flux and points must have the same shape")
     xm, xn = spectra["xm"], spectra["xn"]
     xmn, xnn = spectra["xmn"], spectra["xnn"]
     rmnc, zmns = spectra["rmnc"], spectra["zmns"]
@@ -443,7 +448,7 @@ def _interior_coordinates_and_B(
         Rp, Zp = jnp.vdot(xn * rc, sine), jnp.vdot(-xn * zs, cosine)
         return R, Z, Rs, Zs, Rt, Zt, Rp, Zp
 
-    def one_point(point):
+    def one_point(point, initial):
         x, y, z = point
         radius, phi = jnp.hypot(x, y), jnp.arctan2(y, x)
         axis_R, axis_Z, *_ = geometry(0.0, 0.0, phi)
@@ -460,11 +465,13 @@ def _interior_coordinates_and_B(
         x, y, z = point
         radius, phi = jnp.hypot(x, y), jnp.arctan2(y, x)
         axis_R, axis_Z, *_ = geometry(0.0, 0.0, phi)
-        theta0 = jnp.arctan2(z - axis_Z, radius - axis_R)
-        edge_R, edge_Z, *_ = geometry(1.0, theta0, phi)
+        geometric_theta = jnp.arctan2(z - axis_Z, radius - axis_R)
+        edge_R, edge_Z, *_ = geometry(1.0, geometric_theta, phi)
         edge_distance2 = (edge_R - axis_R) ** 2 + (edge_Z - axis_Z) ** 2
-        rho0 = jnp.sqrt(((radius - axis_R) ** 2 + (z - axis_Z) ** 2)
-                        / jnp.maximum(edge_distance2, 1.0e-24))
+        geometric_rho = jnp.sqrt(((radius - axis_R) ** 2 + (z - axis_Z) ** 2)
+                                 / jnp.maximum(edge_distance2, 1.0e-24))
+        rho0 = jnp.where(jnp.isfinite(initial[0]), jnp.sqrt(initial[0]), geometric_rho)
+        theta0 = jnp.where(jnp.isfinite(initial[1]), initial[1], geometric_theta)
 
         def update(_, coordinates):
             rho, theta = coordinates
@@ -497,7 +504,9 @@ def _interior_coordinates_and_B(
         valid = (s >= -1.0e-8) & (s <= 1.0 + 1.0e-8) & (error <= 1.0e-7)
         return jnp.array((s, theta, phi)), jnp.where(valid, field, jnp.nan)
 
-    coordinates, field = jax.vmap(one_point)(points)
+    if initial_flux is None:
+        initial_flux = jnp.full_like(points, jnp.nan)
+    coordinates, field = jax.vmap(one_point)(points, initial_flux)
     return coordinates, field
 
 
@@ -548,6 +557,88 @@ class VmecInteriorField(MagneticField):
         self._points_flux = _check_points(points, "flux coordinates")
         super().set_points(_flux_coordinates_to_xyz(self.spectra, self._points_flux))
         return self
+
+    def _stored_flux_quantity(self, order: int) -> Array:
+        """Evaluate a Cartesian field derivative from known flux seeds."""
+        xyz, seeds = self._require_points(), cast(Array, self._points_flux)
+
+        def point_field(point, seed):
+            return _interior_coordinates_and_B(
+                self.spectra, point[None, :], newton_iterations=self.newton_iterations,
+                initial_flux=seed[None, :])[1][0]
+
+        function = point_field
+        for _ in range(order):
+            previous = function
+            function = lambda point, seed, previous=previous: jax.jacfwd(  # noqa: E731
+                lambda value: previous(value, seed))(point)
+        return jax.vmap(function)(xyz, seeds)
+
+    def _parameter_vjp(self, order: int, cotangent: Array) -> Array:
+        """Differentiate at fixed Cartesian points using known flux seeds."""
+        if self._points_flux is None or self._parameter_data_fn is None:
+            return super()._parameter_vjp(order, cotangent)
+        if self._parameters is None:
+            raise RuntimeError(
+                "this field was not constructed with optimizable parameters")
+        points, seeds = self._require_points(), self._points_flux
+        if self._parameter_data_vjp is None:
+            self._parameter_data_vjp = jax.vjp(
+                self._parameter_data_fn, self._parameters)
+        data, pullback = cast(tuple[Any, Callable[[Any], Any]],
+                              self._parameter_data_vjp)
+
+        def quantity_from_data(field_data):
+            def point_field(point, seed):
+                return _interior_coordinates_and_B(
+                    field_data, point[None, :],
+                    newton_iterations=self.newton_iterations,
+                    initial_flux=seed[None, :])[1][0]
+
+            function = point_field
+            for _ in range(order):
+                previous = function
+                function = lambda point, seed, previous=previous: jax.jacfwd(  # noqa: E731
+                    lambda value: previous(value, seed))(point)
+            return jax.vmap(function)(points, seeds)
+
+        value = quantity_from_data(data)
+        vector = jnp.asarray(cotangent)
+        if vector.shape != value.shape:
+            raise ValueError(
+                f"cotangent has shape {vector.shape}, expected {value.shape}")
+        cache_key = order + 4
+        if cache_key not in self._data_pullbacks:
+            self._data_pullbacks[cache_key] = jax.jit(jax.grad(
+                lambda field_data, weight: jnp.vdot(
+                    quantity_from_data(field_data), weight),
+                argnums=0, allow_int=True))
+        data_bar = self._data_pullbacks[cache_key](data, vector)
+        return pullback(data_bar)[0]
+
+    def B(self, points: Array | None = None) -> Array:
+        """Return Cartesian ``B``, reusing known flux coordinates when set."""
+        if points is not None or self._points_flux is None:
+            return super().B(points)
+        return self._stored_flux_quantity(0)
+
+    def gradB(self, points: Array | None = None) -> Array:
+        """Return ``dB_i/dx_j``, seeded by stored flux coordinates when known."""
+        if points is not None or self._points_flux is None:
+            return super().gradB(points)
+        return self._stored_flux_quantity(1)
+
+    def gradgradB(self, points: Array | None = None) -> Array:
+        """Return the second Cartesian derivative of ``B`` at stored points."""
+        if points is not None or self._points_flux is None:
+            return super().gradgradB(points)
+        return self._stored_flux_quantity(2)
+
+    def gradgradgradB(self, points: Array | None = None) -> Array:
+        """Return the third Cartesian derivative of ``B`` at stored points."""
+        if points is not None or self._points_flux is None:
+            return super().gradgradgradB(points)
+        return self._stored_flux_quantity(3)
 
     def get_points_flux(self) -> Array:
         """Return stored points as VMEC ``(s, theta, phi)`` coordinates."""

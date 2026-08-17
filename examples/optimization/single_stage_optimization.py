@@ -1,5 +1,9 @@
 #!/usr/bin/env python
-"""Single-stage fixed-boundary plasma and ESSOS coil optimization."""
+"""Single-stage fixed-boundary plasma and ESSOS coil optimization.
+
+Use the commented ``Coils.from_simsopt`` line to replace the generated coils
+with a SIMSOPT coil JSON while keeping the objective and derivative code.
+"""
 
 from dataclasses import replace
 import os
@@ -26,9 +30,9 @@ except ImportError:
     )
 
 nfp = 2  # number of field periods
-MAKE_MOVIE = False  # set True for a compact GIF of accepted iterates
+MAKE_MOVIE = True  # set True for a compact GIF of accepted iterates
 # Surface colors: None, "absB", "B.n/B", or a callable ``(x, objects) -> values``.
-MOVIE_SURFACE_COLOR = None
+MOVIE_SURFACE_COLOR = "absB"
 
 SURFACES = np.linspace(0.05, 1.0, 6)
 MAX_MODE = 3
@@ -226,7 +230,7 @@ final_input = replace(final_input,
     ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
     niter_array=np.array([8000]))
 final_equilibrium = opt.solve_equilibrium(
-    final_input, initial_state=equilibrium.state, verbose=not ci_smoke,
+    final_input, initial_state=equilibrium.solution, verbose=not ci_smoke,
     raise_on_max_iterations=True)
 
 surface_final = surfacerzfourier_from_boundary(

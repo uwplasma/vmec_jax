@@ -196,9 +196,10 @@ class Equilibrium:
     """A converged fixed-boundary equilibrium plus its evaluation contexts.
 
     Objective callables in :func:`least_squares` receive one of these.  The
-    solver-native pieces (``state``, ``runtime``) feed the differentiable
-    scalar targets; ``wout`` (built lazily, host NumPy) feeds the wout-table
-    objectives (QS ratio residual, Boozer-based QI residual).
+    ``solution`` and ``solver_context`` are the clear public names for the
+    solver-native ``state`` and ``runtime`` attributes. They feed the
+    differentiable scalar targets; ``wout`` (built lazily, host NumPy) feeds
+    wout-table objectives (QS ratio residual, Boozer-based QI residual).
     """
 
     inp: VmecInput
@@ -209,6 +210,16 @@ class Equilibrium:
         default=None, repr=False, compare=False)
     exterior_field_factory: Callable[..., Any] | None = dataclasses.field(
         default=None, repr=False, compare=False)
+
+    @property
+    def solution(self) -> SpectralState:
+        """Converged spectral equilibrium coefficients and force arrays."""
+        return self.state
+
+    @property
+    def solver_context(self) -> SolverRuntime:
+        """Read-only grids, profiles, and constants used to evaluate the solution."""
+        return self.runtime
 
     @cached_property
     def wout(self) -> WoutData:
@@ -508,13 +519,10 @@ class QuasisymmetryRatioResidual:
         ``(ns - 1, ntheta1, nzeta)`` normalized so ``sum_angles r3d[i]**2``
         is the surface-averaged QS ratio ``<f^2>`` of half-mesh surface
         ``i`` — same quantity as the wout-table :meth:`profile`, agreeing at
-        discretization level, not bitwise.  ``lasym = False`` only.
+        discretization level, not bitwise.  Symmetric runs mirror VMEC's
+        reduced poloidal grid; ``lasym`` runs use the stored full grid.
         """
         setup = rt.setup
-        if bool(setup.lasym):
-            raise NotImplementedError(
-                "QuasisymmetryRatioResidual traceable evaluation supports "
-                "lasym = False only")
         s = jnp.asarray(setup.s_full)
         nfp = int(rt.resolution.nfp)
         _, jacobian, _, fields, _ = _field_chain(state, rt)
@@ -522,19 +530,24 @@ class QuasisymmetryRatioResidual:
         # Mirror the reduced [0, pi] grid to the full theta circle.
         ntheta2 = int(np.shape(fields.total_pressure)[1])
         nzeta = int(np.shape(fields.total_pressure)[2])
-        ntheta1 = max(2 * (ntheta2 - 1), 1)
-        i_full = np.arange(ntheta1)
-        i_src = np.where(i_full < ntheta2, i_full, ntheta1 - i_full)
-        k = np.arange(nzeta)
-        k_src = np.where(i_full[:, None] < ntheta2, k[None, :],
-                         (nzeta - k[None, :]) % nzeta)
-        i_src = np.broadcast_to(i_src[:, None], (ntheta1, nzeta))
+        if bool(setup.lasym):
+            ntheta1 = ntheta2
 
-        def full(a):
-            # Drop the zeroed axis row (js = 0) *before* the singular
-            # divisions below: keeping it poisons reverse-mode AD with
-            # 0 * inf = nan even though the row never enters the result.
-            return jnp.asarray(a)[1:, i_src, k_src]
+            def full(a):
+                return jnp.asarray(a)[1:]
+        else:
+            ntheta1 = max(2 * (ntheta2 - 1), 1)
+            i_full = np.arange(ntheta1)
+            i_src = np.where(i_full < ntheta2, i_full, ntheta1 - i_full)
+            k = np.arange(nzeta)
+            k_src = np.where(i_full[:, None] < ntheta2, k[None, :],
+                             (nzeta - k[None, :]) % nzeta)
+            i_src = np.broadcast_to(i_src[:, None], (ntheta1, nzeta))
+
+            def full(a):
+                # Drop the zeroed axis row before singular divisions: keeping
+                # it poisons reverse AD with 0 * inf although it is unused.
+                return jnp.asarray(a)[1:, i_src, k_src]
 
         # |B| on the half-mesh internal grid (bcovar.f: bsq = |B|^2/2 + p).
         bsq2 = 2.0 * (jnp.asarray(fields.total_pressure)
@@ -679,14 +692,10 @@ def d_merc(eq) -> jnp.ndarray:
     two surfaces and the edge carry the usual near-axis noise, so practical
     targets should penalize e.g. ``min(DMerc[2:-1], 0)``).  Accepts an
     :class:`Equilibrium` or any wout-like object.  Use traceable
-    :func:`mercier_stability_residual` with ``jac="implicit"``.  ``lasym``
-    equilibria are rejected pending independent DCON/JMC validation.
+    :func:`mercier_stability_residual` with ``jac="implicit"``. Symmetric and
+    ``lasym`` WOUT profiles are supported.
     """
     wout = eq.wout if isinstance(eq, Equilibrium) else eq
-    if bool(getattr(wout, "lasym", False)):
-        raise NotImplementedError(
-            "DMerc is not independently validated for lasym equilibria"
-        )
     return jnp.asarray(np.asarray(wout.DMerc, dtype=float))
 
 
@@ -771,7 +780,7 @@ def l_grad_b_state(
 # ===========================================================================
 
 
-def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, nfp: int, weights, nphi: int,
+def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, bmns_b=None, nfp: int, weights, nphi: int,
              nalpha: int, n_bounce: int, include_bounce_endpoints: bool,
              softness: float, phimin: float):
     """Normalized ``|B|`` along field lines + bounce levels (legacy `_qi_boozer_surface_grid`).
@@ -780,11 +789,15 @@ def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, nfp: int, weights, nphi: int,
     one field period; ``bnorm`` rescales ``|B|`` to [0, 1] per surface.
     """
     bmnc_b = jnp.asarray(bmnc_b, dtype=jnp.float64)
+    bmns_b = (jnp.zeros_like(bmnc_b) if bmns_b is None
+              else jnp.asarray(bmns_b, dtype=bmnc_b.dtype))
     xm_b = jnp.asarray(xm_b, dtype=jnp.float64)
     xn_b = jnp.asarray(xn_b, dtype=jnp.float64)
     iota_b = jnp.asarray(iota_b, dtype=jnp.float64)
     if bmnc_b.ndim != 2:
         raise ValueError(f"bmnc_b must have shape (nsurf, nmodes), got {bmnc_b.shape}")
+    if bmns_b.shape != bmnc_b.shape:
+        raise ValueError("bmns_b must have the same shape as bmnc_b")
     if nphi < 4 or nalpha < 2 or n_bounce < 2:
         raise ValueError("QI residual requires nphi >= 4, nalpha >= 2, n_bounce >= 2")
     nsurf = int(bmnc_b.shape[0])
@@ -798,7 +811,9 @@ def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, nfp: int, weights, nphi: int,
     theta = alpha[None, None, :] + iota_b[:, None, None] * phi[None, :, None]
     angle = (theta[:, :, :, None] * xm_b[None, None, None, :]
              - phi[None, :, None, None] * xn_b[None, None, None, :])
-    bmag = jnp.sum(bmnc_b[:, None, None, :] * jnp.cos(angle), axis=-1)
+    bmag = jnp.sum(
+        bmnc_b[:, None, None, :] * jnp.cos(angle)
+        + bmns_b[:, None, None, :] * jnp.sin(angle), axis=-1)
 
     bmin = jnp.min(bmag, axis=(1, 2), keepdims=True)
     bmax = jnp.max(bmag, axis=(1, 2), keepdims=True)
@@ -817,6 +832,7 @@ def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, nfp: int, weights, nphi: int,
 def quasi_isodynamic_residual(
     *,
     bmnc_b,
+    bmns_b=None,
     xm_b,
     xn_b,
     iota_b,
@@ -871,7 +887,8 @@ def quasi_isodynamic_residual(
     (least-squares vector) and ``total`` (its squared norm).
     """
     (weights_arr, phi0, phi1, phi, alpha, bmag, bnorm, levels, eps) = _qi_grid(
-        bmnc_b, xm_b, xn_b, iota_b, nfp=int(nfp), weights=weights, nphi=int(nphi),
+        bmnc_b, xm_b, xn_b, iota_b, bmns_b=bmns_b,
+        nfp=int(nfp), weights=weights, nphi=int(nphi),
         nalpha=int(nalpha), n_bounce=int(n_bounce),
         include_bounce_endpoints=bool(include_bounce_endpoints),
         softness=float(softness), phimin=float(phimin))
@@ -881,6 +898,7 @@ def quasi_isodynamic_residual(
     sqrt_w = jnp.sqrt(weights_arr)[:, None, None]
     tiny = jnp.asarray(jnp.finfo(dtype).tiny, dtype=dtype)
     pieces: list[jnp.ndarray] = []
+    constructed_bnorm = jnp.swapaxes(bnorm, 1, 2)
 
     # -- level-set occupancy width variance + profile consistency ----------
     occupancy = jax.nn.sigmoid((levels[None, None, None, :] - bnorm[:, :, :, None]) / eps)
@@ -974,16 +992,22 @@ def quasi_isodynamic_residual(
 
         shuffled = jax.vmap(jax.vmap(interp_one, in_axes=(0, 0)), in_axes=(0, 0))(
             x_target, signed_phi)
+        constructed_bnorm = shuffled
         shuffle_res = (shuffled - b_alpha) * sqrt_w * shuffle_profile_weight
         pieces.append(jnp.ravel(shuffle_res)
                       / jnp.sqrt(jnp.asarray(nalpha_ * nphi_, dtype=dtype)))
 
     residuals1d = jnp.concatenate(pieces)
+    bmin_physical = jnp.min(bmag, axis=(1, 2), keepdims=True)
+    bmax_physical = jnp.max(bmag, axis=(1, 2), keepdims=True)
     return {
         "residuals1d": residuals1d,
         "total": jnp.sum(residuals1d * residuals1d),
         "bnorm": bnorm,
         "bmag": bmag,
+        "constructed_bmag": (
+            bmin_physical + jnp.swapaxes(constructed_bnorm, 1, 2)
+            * (bmax_physical - bmin_physical)),
         "levels": levels,
         "phi": phi,
         "alpha": alpha,
@@ -1003,8 +1027,9 @@ def boozer_modes_from_wout(
     ``wout`` is a :class:`~vmex.core.wout.WoutData` (or any wout-like
     object accepted by ``Booz_xform.read_wout_data``); ``surfaces`` are
     normalized-flux values matched to the nearest half-mesh surfaces.
-    Returns ``{bmnc_b, xm_b, xn_b, iota_b, nfp, s_b}`` with ``bmnc_b`` shaped
-    ``(nsurf, nmodes)`` — the inputs of :func:`quasi_isodynamic_residual`.
+    Returns ``{bmnc_b, bmns_b, xm_b, xn_b, iota_b, nfp, s_b}`` with the
+    spectra shaped ``(nsurf, nmodes)``. ``bmns_b`` is zero for symmetric
+    equilibria and contains the independent sine spectrum for ``lasym``.
 
     ``booz_xform_jax`` is an optional dependency (soft import).
     """
@@ -1024,11 +1049,17 @@ def boozer_modes_from_wout(
     bx.compute_surfs = indices
     bx.run(jit=bool(jit))
     bmnc_b = np.asarray(bx.bmnc_b, dtype=float)
+    bmns_raw = getattr(bx, "bmns_b", None)
+    bmns_b = (np.zeros_like(bmnc_b) if bmns_raw is None
+              else np.asarray(bmns_raw, dtype=float))
     xm_b = np.asarray(bx.xm_b, dtype=float)
     if bmnc_b.shape[0] == xm_b.shape[0]:      # (nmodes, nsurf) -> (nsurf, nmodes)
         bmnc_b = bmnc_b.T
+    if bmns_b.shape[0] == xm_b.shape[0]:
+        bmns_b = bmns_b.T
     return {
         "bmnc_b": bmnc_b,
+        "bmns_b": bmns_b,
         "xm_b": xm_b,
         "xn_b": np.asarray(bx.xn_b, dtype=float),
         "iota_b": np.asarray(bx.iota, dtype=float)[indices],
@@ -1057,7 +1088,8 @@ def quasi_isodynamic_residual_from_wout(
     booz = boozer_modes_from_wout(wout, surfaces=surfaces, mboz=mboz, nboz=nboz,
                                   jit=jit_booz)
     return quasi_isodynamic_residual(
-        bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+        bmnc_b=booz["bmnc_b"], bmns_b=booz["bmns_b"],
+        xm_b=booz["xm_b"], xn_b=booz["xn_b"],
         iota_b=booz["iota_b"], nfp=booz["nfp"], **qi_kwargs)
 
 

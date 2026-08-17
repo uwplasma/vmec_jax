@@ -333,6 +333,13 @@ def test_j_invariant_map_uses_one_physical_pitch_on_every_surface(monkeypatch):
     result = plotting._j_invariant_map(booz, pitch=1.0 / 1.05, nalpha=4)
     np.testing.assert_allclose(pitches, [1.0 / 1.05, 1.0 / 1.05])
     np.testing.assert_allclose(result["pitch_inverse"], 1.05)
+
+    pitches.clear()
+    result = plotting._j_invariant_map(booz, pitch=1.0 / 0.85, nalpha=4)
+    np.testing.assert_allclose(pitches, [1.0 / 0.85])
+    np.testing.assert_array_equal(result["trapped_surface"], [True, False])
+    assert np.all(np.isfinite(result["j_map"][0]))
+    assert np.all(np.isnan(result["j_map"][1]))
     with pytest.raises(ValueError, match="not trapped"):
         plotting._j_invariant_map(booz, pitch=0.5, nalpha=4)
 
@@ -346,6 +353,20 @@ def test_volume_second_derivative_of_linear_vprime():
     s, vpp = plotting._volume_second_derivative(SimpleNamespace(ns=ns, vp=vp))
     np.testing.assert_allclose(s, s_half)
     np.testing.assert_allclose(vpp, slope, atol=2.0e-14)
+
+
+def test_vacuum_stability_panel_is_labeled_as_a_limit():
+    """A vacuum curve must not be presented as a pressure-stability certificate."""
+    import matplotlib.pyplot as plt
+
+    wout = SimpleNamespace(
+        ns=7, DMerc=np.ones(7), betatotal=0.0, vp=np.arange(7, dtype=float))
+    figure, axis = plt.subplots()
+    plotting._stability_panel(
+        axis, wout, {"valid": False, "note": "not sampled"}, s_plot_ignore=0.0)
+    assert "vacuum-limit" in axis.lines[0].get_label()
+    assert "not finite-pressure" in axis.get_title()
+    plt.close(figure)
 
 
 def test_summary_survives_boozer_failure(solved_case, monkeypatch):

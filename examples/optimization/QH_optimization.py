@@ -23,6 +23,7 @@ USE_TRIAL_STABILITY = False
 STABILITY_COST_PER_SURFACE, EDGE_WEIGHT_FACTOR = 1.0e-2, 10.0
 STABILITY_MIN_S, STABILITY_MARGIN = 0.2, 1.0e-3
 PARAMETER_STEP, MAX_PARAMETER_CHANGE = 0.02, 5.0
+ESS_ALPHA = 1.2  # smaller values let high Fourier modes move more
 MINIMUM_MPOL = 5
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.12
@@ -79,8 +80,8 @@ for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV)):
         mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
     stage_terms = objective_function_terms
     if USE_TRIAL_STABILITY and stage > 0:
-        dmerc0 = np.asarray(trial_dmerc(equilibrium.state, equilibrium.runtime))
-        dr0 = np.asarray(trial_dr(equilibrium.state, equilibrium.runtime))
+        dmerc0 = np.asarray(trial_dmerc(equilibrium.solution, equilibrium.solver_context))
+        dr0 = np.asarray(trial_dr(equilibrium.solution, equilibrium.solver_context))
         stability_scale = np.maximum.reduce((np.abs(dmerc0), np.abs(dr0), np.ones_like(dmerc0)))
         stability_weights = STABILITY_COST_PER_SURFACE * stability_shape / stability_scale**2
         stage_terms = [*objective_function_terms,
@@ -88,7 +89,8 @@ for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV)):
         print(f"Adding trial-pressure stability on s >= {STABILITY_MIN_S:.1f}; "
               "weights rise smoothly toward the edge.")
     problem = opt.VmecProblem.from_tuples(inp, stage_terms, max_mode=max_mode,
-        vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, restart_from=equilibrium)
+        vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, ess_alpha=ESS_ALPHA,
+        restart_from=equilibrium)
     print(f"dof_names = {problem.dof_names}")
     monitor.problem = problem
     if not ci_smoke:
@@ -111,7 +113,7 @@ final_input = replace(inp,
     ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
     niter_array=np.array([8000]))
 final_equilibrium = opt.solve_equilibrium(
-    final_input, initial_state=equilibrium.state,
+    final_input, initial_state=equilibrium.solution,
     verbose=not ci_smoke, raise_on_max_iterations=True)
 final_total = report("final", final_equilibrium)["QS total"]
 print(f"\nQS total {final_total:.3e}")
@@ -119,9 +121,9 @@ if USE_TRIAL_STABILITY:
     final_s = np.linspace(0.0, 1.0, int(final_input.ns_array[-1]))[2:-1]
     keep = final_s >= STABILITY_MIN_S
     final_dmerc = np.asarray(opt.trial_pressure_d_merc_state(
-        final_equilibrium.state, final_equilibrium.runtime, beta=TRIAL_BETA))[2:-1]
+        final_equilibrium.solution, final_equilibrium.solver_context, beta=TRIAL_BETA))[2:-1]
     final_dr = np.asarray(opt.trial_pressure_glasser_d_r_state(
-        final_equilibrium.state, final_equilibrium.runtime, beta=TRIAL_BETA,
+        final_equilibrium.solution, final_equilibrium.solver_context, beta=TRIAL_BETA,
         shear_epsilon=1.0e-8))[2:-1]
     print(f"Trial-pressure proxy on s >= {STABILITY_MIN_S:.1f}: "
           f"min DMerc = {final_dmerc[keep].min():.3e}, max DR = {final_dr[keep].max():.3e}")

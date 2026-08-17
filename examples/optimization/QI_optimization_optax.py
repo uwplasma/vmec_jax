@@ -72,7 +72,7 @@ x = x0 + scales * y
 equilibrium = problem.equilibrium_from_x(x)
 final_input = replace(problem.input_from_x(x), ns_array=np.array([31 if ci_smoke else 101]),
                       ftol_array=np.array([1e-10 if ci_smoke else 1e-14]), niter_array=np.array([8000]))
-final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.state,
+final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.solution,
                                           verbose=not ci_smoke, raise_on_max_iterations=True)
 input_path = final_input.to_indata("input.QI_optax_adam")
 wout_path = vj.write_wout("wout_QI_optax_adam.nc", final_equilibrium.wout)

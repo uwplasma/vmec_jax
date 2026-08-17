@@ -328,13 +328,21 @@ well displacement beyond ``match_tolerance`` returns NaN with
 Maximum-J remains a separate objective term. Users combine it with any QI,
 aspect-ratio, iota, stability, or engineering residual through VMEX's ordinary
 composite least-squares interface; no fixed QI-plus-maximum-J weighting is
-built into the class. ``QI_maxJ_continuation.py`` starts from a minimal vacuum
-seed, retains a magnetic-well target, first creates matched QI wells, and then
-ramps a negative maximum-J slope margin. It recomputes a common physical pitch
-once after the weak maximum-J stage and freezes it throughout the strong and
-sampling-fidelity stages; the script raises if the incoming wells cannot be
-matched. The final stage lengthens the field-line trace and increases the
-number of field-line labels, preventing a short trace from aliasing a visibly
+built into the class. :class:`~vmex.core.maxj.ConstructedMaximumJResidual`
+evaluates the same radial action condition after Goodman's smooth
+squash-and-shuffle construction. It is the continuation target analogous to
+the published :math:`g_J`: it establishes a favorable direction without
+asking a local optimizer to cross actual-well topology changes. The final
+:class:`~vmex.core.maxj.MaximumJResidual` remains the physical certificate.
+
+``QI_maxJ_continuation.py`` starts from a minimal vacuum seed, retains a
+magnetic-well target, first creates matched QI wells, uses the constructed
+field to establish the maximum-J direction, and only then ramps a negative
+slope margin in the actual field. It recomputes a common physical pitch once
+after the weak stage and freezes it throughout the remaining stages; the
+script raises if the incoming wells cannot be resolved at that pitch. The
+final stage lengthens the field-line trace and increases the number of
+field-line labels, preventing a short trace from aliasing a visibly
 non-omnigenous result.
 The final ``plot_wout(..., j_pitch=pitch)`` call passes that same pitch to the
 polar :math:`J(\alpha,s)` panel, making it a direct visual certificate of the
@@ -482,16 +490,13 @@ poloidal flux ``[0.1, 1)``).  The same test on an
 up-down-asymmetric tokamak exposed unresolved sensitivity in :math:`H`:
 at ``ns=201`` the candidate reconstruction's normalized ``D_I`` differs by
 at most ``1.85e-2`` over normalized poloidal flux ``[0.2, 0.9]``, but
-``D_R`` differs by ``1.49e-2`` and can change sign near marginality.
-On that same input, all four geometry families agree with VMEC2000 to
-``2.49e-10`` relative or better, while the interior VMEX/VMEC2000 ``DMerc``
-relative difference is ``18.6`` with sign disagreements.  This isolates the
-problem to the LASYM Mercier reconstruction rather than the equilibrium.
-Consequently :func:`~vmex.core.stability.d_merc_state` and
-:func:`~vmex.core.stability.glasser_d_r_state` still reject ``lasym = True``;
-the independently validated ``jdotb`` lane is available.  A 3-D LASYM
-extension additionally requires JMC or an equivalent nonaxisymmetric
-reference.
+``D_R`` differs by ``1.49e-2`` and can change sign near marginality. The live
+state implementation now retains all four LASYM geometry families and its
+boundary JVPs are checked against independently reconverged finite
+differences, so it is available for optimization. Publication use near
+marginality still requires a nonaxisymmetric JMC/DCON benchmark. The summary
+plot omits WOUT-only ``D_R`` for LASYM because that host reconstruction does
+not have the live solver state needed to certify the asymmetric normalization.
 
 Magnetic well
 ~~~~~~~~~~~~~~
@@ -606,3 +611,34 @@ fraction rather than an imposed zero. Their normalized mismatch is the residual
 the finite-beta profile conventions are in :doc:`variational-problem`); driving it to
 zero, optionally with ``current_dofs`` freed, yields a current profile
 consistent with the plasma the equilibrium describes.
+
+Effective ripple
+----------------
+
+The Nemov effective ripple is the geometric coefficient that sets the
+low-collisionality :math:`1/\nu` transport scale,
+:math:`D_{11}\propto\epsilon_{\mathrm{eff}}^{3/2}/\nu`.  NEO conventionally
+reports :math:`\epsilon_{\mathrm{eff}}^{3/2}` (``epstot``), not
+:math:`\epsilon_{\mathrm{eff}}` itself.  VMEX keeps the validated NEO
+algorithm in the optional NEO_JAX package rather than duplicating a second
+neoclassical solver:
+
+.. code-block:: python
+
+   from neo_jax import NeoConfig
+   import vmex as vj
+
+   config = NeoConfig(theta_n=64, phi_n=64, npart=40)
+   s, epsilon_eff_3_2 = vj.epsilon_effective_from_wout(
+       equilibrium.wout, surfaces=[0.2, 0.5, 0.8, 0.95], config=config)
+
+The in-memory adapter performs BOOZ_XFORM without an intermediate file and
+then uses NEO_JAX's batched JAX surface scan.  The smaller configuration used
+by ``--plot`` is a trend diagnostic; converged work must refine NEO controls
+and verify radial convergence.  The current WOUT entry point is diagnostic,
+not an optimization objective.  The planned objective lane will connect the
+traceable VMEX state transform directly to NEO_JAX, use its supported
+forward-mode sensitivities, and certify them against reconverged finite
+differences and STELLOPT NEO before exposing the result in objective tuples.
+LASYM is rejected until NEO_JAX carries the asymmetric Boozer harmonics rather
+than silently dropping them.

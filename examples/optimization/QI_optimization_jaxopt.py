@@ -110,7 +110,7 @@ x = x_from_y(params)
 equilibrium = problem.equilibrium_from_x(x)
 final_input = replace(problem.input_from_x(x), ns_array=np.array([31 if ci else 101]),
                       ftol_array=np.array([1e-10 if ci else 1e-14]), niter_array=np.array([8000]))
-final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.state,
+final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.solution,
                                           verbose=not ci, raise_on_max_iterations=True)
 input_path = final_input.to_indata(f"input.QI_jaxopt_{METHOD}")
 wout_path = vj.write_wout(f"wout_QI_jaxopt_{METHOD}.nc", final_equilibrium.wout)

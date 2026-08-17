@@ -56,8 +56,8 @@ Two pieces:
 
 Scope notes
 -----------
-- Stellarator-symmetric states only (``lasym = False``), like the other
-  traceable objectives.
+- Symmetric and non-stellarator-symmetric (``lasym``) states are supported;
+  the latter retain both cosine and sine Boozer ``|B|`` harmonics.
 - Requested surfaces are snapped to the *nearest half-mesh surface* (the
   Boozer transform is a per-surface construction — same convention as
   :func:`vmex.core.optimize.boozer_modes_from_wout`), not interpolated.
@@ -206,6 +206,50 @@ def _nearest_half_mesh_rows(ns: int, surfaces) -> tuple[np.ndarray, np.ndarray]:
     return s_half, np.asarray(rows, dtype=int)
 
 
+def _boozer_lasym_state(state, rt, *, rows, s_half, mboz, nboz):
+    """LASYM state tables through booz_xform_jax's validated full transform."""
+    from booz_xform_jax.jax_api import (
+        booz_xform_jax_impl,
+        prepare_booz_xform_constants,
+    )
+
+    from .boozer_tables import boozer_input_tables
+
+    tables = [boozer_input_tables(state, rt, int(row)) for row in rows]
+    stack = lambda name: jnp.stack([table[name] for table in tables])  # noqa: E731
+    first = tables[0]
+    xm, xn = np.asarray(first["xm"]), np.asarray(first["xn"])
+    # booz_xform's convenience wrapper prepares shape constants with Python
+    # integer conversions. Do that work at trace time, then call its fully
+    # jittable kernel so LASYM objectives remain differentiable under JVP.
+    with jax.ensure_compile_time_eval():
+        constants, grids = prepare_booz_xform_constants(
+            nfp=int(rt.resolution.nfp), mboz=int(mboz), nboz=int(nboz),
+            asym=True, xm=xm, xn=xn, xm_nyq=xm, xn_nyq=xn)
+        xm_b = np.asarray(grids.xm_b, dtype=float)
+        xn_b = np.asarray(grids.xn_b, dtype=float)
+    out = booz_xform_jax_impl(
+        rmnc=stack("rmnc"), zmns=stack("zmns"), lmns=stack("lmns"),
+        bmnc=stack("bmnc"), bsubumnc=stack("bsubumnc"),
+        bsubvmnc=stack("bsubvmnc"), iota=stack("iota"),
+        xm=jnp.asarray(xm), xn=jnp.asarray(xn), xm_nyq=jnp.asarray(xm),
+        xn_nyq=jnp.asarray(xn), constants=constants, grids=grids,
+        rmns=stack("rmns"), zmnc=stack("zmnc"), lmnc=stack("lmnc"),
+        bmns=stack("bmns"), bsubumns=stack("bsubumns"),
+        bsubvmns=stack("bsubvmns"),
+    )
+    setup = rt.setup
+    return {
+        "bmnc_b": out["bmnc_b"], "bmns_b": out["bmns_b"],
+        "xm_b": xm_b, "xn_b": xn_b,
+        "iota_b": stack("iota"), "G_b": stack("G"), "I_b": stack("I"),
+        "nfp": int(rt.resolution.nfp),
+        "s_b": jnp.asarray(s_half, dtype=jnp.asarray(setup.s_full).dtype)[rows - 1],
+        "psi_b": jnp.asarray(setup.psi_half)[rows],
+        "psi_edge": jnp.asarray(setup.psi_edge),
+    }
+
+
 def boozer_bmnc_state(
     state: SpectralState,
     rt: SolverRuntime,
@@ -242,10 +286,6 @@ def boozer_bmnc_state(
     :func:`vmex.core.optimize.quasi_isodynamic_residual`.
     """
     setup = rt.setup
-    if bool(setup.lasym):
-        raise NotImplementedError(
-            "boozer_bmnc_state supports stellarator-symmetric states only "
-            "(lasym = False)")
     if int(oversample) < 1:
         raise ValueError("oversample must be >= 1")
     s = jnp.asarray(setup.s_full)
@@ -257,6 +297,9 @@ def boozer_bmnc_state(
 
     # -- surface selection: nearest half-mesh rows (static, shape-only) -----
     s_half_np, rows = _nearest_half_mesh_rows(ns, surfaces)
+    if bool(setup.lasym):
+        return _boozer_lasym_state(
+            state, rt, rows=rows, s_half=s_half_np, mboz=mboz, nboz=nboz)
 
     # -- half-mesh field tables (the QS-residual field chain) ----------------
     _, geometry = _geometry(state, rt)
@@ -281,10 +324,16 @@ def boozer_bmnc_state(
     # -- select rows, mirror the reduced theta grid to the full circle -------
     ntheta2 = int(np.shape(fields.total_pressure)[1])
     nzeta = int(np.shape(fields.total_pressure)[2])
-    ntheta1, i_src, k_src = _mirror_maps(ntheta2, nzeta)
+    if bool(setup.lasym):
+        ntheta1 = ntheta2
 
-    def full(a):
-        return jnp.asarray(a)[rows][:, i_src, k_src]
+        def full(a):
+            return jnp.asarray(a)[rows]
+    else:
+        ntheta1, i_src, k_src = _mirror_maps(ntheta2, nzeta)
+
+        def full(a):
+            return jnp.asarray(a)[rows][:, i_src, k_src]
 
     bmag = jnp.sqrt(jnp.maximum(full(bsq2), tiny))          # (nsurf, nt1, nz)
     bsubu = full(fields.bsubu)
@@ -303,14 +352,20 @@ def boozer_bmnc_state(
     mode_scale = jnp.asarray(1.0 / physical_to_internal_scale(rt.modes, rt.trig))
     phipf = jnp.asarray(setup.phipf)
     safe_phipf = jnp.where(phipf != 0.0, phipf, 1.0)
-    lam_full = (jnp.asarray(state.L_sin) * mode_scale[None, :]
-                * (jnp.asarray(setup.lamscale) / safe_phipf)[:, None])
+    lambda_scale = mode_scale[None, :] * (
+        jnp.asarray(setup.lamscale) / safe_phipf)[:, None]
+    lam_sin_full = jnp.asarray(state.L_sin) * lambda_scale
+    lam_cos_full = jnp.asarray(state.L_cos) * lambda_scale
     smw_np, spw_np = _lambda_half_weights(ns)
     even = (m_modes % 2 == 0)
     hi_w = np.where(even[None, :], 1.0, smw_np[rows][:, None])
     lo_w = np.where(even[None, :], 1.0, spw_np[rows][:, None])
-    lam_mn = 0.5 * (jnp.asarray(hi_w) * lam_full[rows]
-                    + jnp.asarray(lo_w) * lam_full[rows - 1])   # (nsurf, mn)
+    def half_lambda(table):
+        return 0.5 * (jnp.asarray(hi_w) * table[rows]
+                      + jnp.asarray(lo_w) * table[rows - 1])
+
+    lam_sin_mn = half_lambda(lam_sin_full)
+    lam_cos_mn = half_lambda(lam_cos_full) if bool(setup.lasym) else jnp.zeros_like(lam_sin_mn)
 
     # -- generating potential w (periodic part) by spectral integration ------
     # dw/dtheta = B_theta, dw/dzeta = B_zeta (physical toroidal angle; the
@@ -342,9 +397,14 @@ def boozer_bmnc_state(
     ang = (theta_f[:, None, None] * jnp.asarray(m_modes, dtype=dtype)
            - zeta_f[None, :, None] * jnp.asarray(xn_modes, dtype=dtype))
     sin_tab, cos_tab = jnp.sin(ang), jnp.cos(ang)           # (nt_f, nz_f, mn)
-    lam = jnp.einsum("sm,tzm->stz", lam_mn, sin_tab)
-    dlam_dth = jnp.einsum("sm,tzm->stz", lam_mn * jnp.asarray(m_modes, dtype=dtype), cos_tab)
-    dlam_dze = -jnp.einsum("sm,tzm->stz", lam_mn * jnp.asarray(xn_modes, dtype=dtype), cos_tab)
+    m_arr = jnp.asarray(m_modes, dtype=dtype)
+    n_arr = jnp.asarray(xn_modes, dtype=dtype)
+    lam = (jnp.einsum("sm,tzm->stz", lam_sin_mn, sin_tab)
+           + jnp.einsum("sm,tzm->stz", lam_cos_mn, cos_tab))
+    dlam_dth = (jnp.einsum("sm,tzm->stz", lam_sin_mn * m_arr, cos_tab)
+                  - jnp.einsum("sm,tzm->stz", lam_cos_mn * m_arr, sin_tab))
+    dlam_dze = (-jnp.einsum("sm,tzm->stz", lam_sin_mn * n_arr, cos_tab)
+                 + jnp.einsum("sm,tzm->stz", lam_cos_mn * n_arr, sin_tab))
 
     # -- Boozer angles + transform Jacobian (booz_xform eqs. (3), (10), (12))
     GI = G + iota * I
@@ -376,6 +436,8 @@ def boozer_bmnc_state(
     F = bmod * jac_fac
     Xc = jnp.einsum("stzm,stz,stzk->smk", cosm, F, cosn)
     Xs = jnp.einsum("stzm,stz,stzk->smk", sinm, F, sinn)
+    Ys = jnp.einsum("stzm,stz,stzk->smk", sinm, F, cosn)
+    Yc = jnp.einsum("stzm,stz,stzk->smk", cosm, F, sinn)
     m_idx = np.asarray(m_list, dtype=int)
     k_idx = np.abs(np.asarray(n_list, dtype=int))
     sgn = jnp.asarray(np.where(np.asarray(n_list) < 0, -1.0, 1.0), dtype=dtype)
@@ -383,9 +445,11 @@ def boozer_bmnc_state(
     ff[0] = 1.0 / (nt_f * nz_f)                             # the (0, 0) mode
     # cos(m th_B - n ze_B) = cos(m th_B) cos(|n| ze_B) + sgn(n) sin(m th_B) sin(|n| ze_B)
     bmnc_b = jnp.asarray(ff) * (Xc[:, m_idx, k_idx] + sgn[None, :] * Xs[:, m_idx, k_idx])
+    bmns_b = jnp.asarray(ff) * (Ys[:, m_idx, k_idx] - sgn[None, :] * Yc[:, m_idx, k_idx])
 
     return {
         "bmnc_b": bmnc_b,
+        "bmns_b": bmns_b,
         "xm_b": xm_b,
         "xn_b": xn_b,
         "iota_b": iota,
@@ -406,6 +470,7 @@ def boozer_bmnc_state(
 def omnigenity_residual(
     *,
     bmnc_b,
+    bmns_b=None,
     xm_b,
     xn_b,
     iota_b,
@@ -442,11 +507,15 @@ def omnigenity_residual(
     least-squares vector), ``total = sum(residuals1d**2)`` and diagnostics.
     """
     bmnc_b = jnp.asarray(bmnc_b, dtype=jnp.float64)
+    bmns_b = (jnp.zeros_like(bmnc_b) if bmns_b is None
+              else jnp.asarray(bmns_b, dtype=bmnc_b.dtype))
     xm_b = jnp.asarray(np.asarray(xm_b, dtype=float))
     xn_b = jnp.asarray(np.asarray(xn_b, dtype=float))
     iota_b = jnp.atleast_1d(jnp.asarray(iota_b, dtype=jnp.float64))
     if bmnc_b.ndim != 2:
         raise ValueError(f"bmnc_b must have shape (nsurf, nmodes), got {bmnc_b.shape}")
+    if bmns_b.shape != bmnc_b.shape:
+        raise ValueError("bmns_b must have the same shape as bmnc_b")
     if nphi < 8 or nalpha < 2 or n_levels < 2:
         raise ValueError("omnigenity residual needs nphi >= 8, nalpha >= 2, n_levels >= 2")
     nsurf = int(bmnc_b.shape[0])
@@ -464,7 +533,8 @@ def omnigenity_residual(
     alpha = jnp.asarray(2.0 * np.pi * np.arange(nalpha) / nalpha, dtype=dtype)
     theta = alpha[None, :, None] + iota_b[:, None, None] * phi[None, None, :]
     angle = (theta[..., None] * xm_b - phi[None, None, :, None] * xn_b)
-    b = jnp.einsum("sapm,sm->sap", jnp.cos(angle), bmnc_b)   # (nsurf, nalpha, nphi)
+    b = (jnp.einsum("sapm,sm->sap", jnp.cos(angle), bmnc_b)
+         + jnp.einsum("sapm,sm->sap", jnp.sin(angle), bmns_b))
 
     bmin = jnp.min(b, axis=(1, 2), keepdims=True)
     bmax = jnp.max(b, axis=(1, 2), keepdims=True)
@@ -586,7 +656,8 @@ class QIResidual:
             state, rt, surfaces=self.surfaces, mboz=self.mboz, nboz=self.nboz,
             oversample=self.oversample)
         out = omnigenity_residual(
-            bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            bmnc_b=booz["bmnc_b"], bmns_b=booz.get("bmns_b"),
+            xm_b=booz["xm_b"], xn_b=booz["xn_b"],
             iota_b=booz["iota_b"], nfp=booz["nfp"], weights=self.weights,
             nphi=self.nphi, nalpha=self.nalpha, n_levels=self.n_levels,
             softness=self.softness, well_weight=self.well_weight,

@@ -4,6 +4,7 @@
 The boundary is varied but each VMEX evaluation is a fixed-boundary solve.
 Virtual casing only separates the converged total field into its plasma and
 required external-coil parts; no free-boundary equilibrium is solved here.
+Use the commented ``Coils.from_simsopt`` line to load a SIMSOPT coil JSON.
 """
 
 from dataclasses import replace
@@ -29,10 +30,10 @@ from essos.fields import BiotSavart
 from essos.objective_functions import loss_coil_separation, loss_coil_surface_distance
 from essos.surfaces import surfacerzfourier_from_boundary
 
-nfp = 2
-MAKE_MOVIE = False  # set True for a compact GIF of accepted iterates
-# Surface colors: None, "absB", "B.n/B", or a callable ``(u, objects) -> values``.
-MOVIE_SURFACE_COLOR = None
+nfp = 2  # number of field periods
+MAKE_MOVIE = True  # set True for a compact GIF of accepted iterates
+# Surface colors: None, "absB", "B.n/B", or a callable ``(x, objects) -> values``.
+MOVIE_SURFACE_COLOR = "absB"
 
 TARGET_BETA = 0.025
 SURFACES = np.linspace(0.1, 0.9, 8)
@@ -247,7 +248,7 @@ if ci_smoke:
 else:
     final_input = replace(final_input, ns_array=np.array([31, 51, 101]),
         ftol_array=np.array([1e-10, 1e-12, 1e-14]), niter_array=np.full(3, 20000))
-    final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.state,
+    final_equilibrium = opt.solve_equilibrium(final_input, initial_state=equilibrium.solution,
         verbose=True, raise_on_max_iterations=True)
 
 # Print results
@@ -257,7 +258,7 @@ report = opt.EquilibriumReporter(
     ("iota", opt.mean_iota, ".3f"))
 report("final", final_equilibrium)
 data_f = vc.surface_field_data_from_state(
-    final_input, final_equilibrium.state, runtime=final_equilibrium.runtime,
+    final_input, final_equilibrium.solution, runtime=final_equilibrium.solver_context,
     nphi=FINAL_NPHI, ntheta=FINAL_NTHETA)
 final_precision = vc.plan_vc_precision(data_f, digits=VC_DIGITS)
 interface_f = vc.PlasmaVacuumInterface.from_surface_data(

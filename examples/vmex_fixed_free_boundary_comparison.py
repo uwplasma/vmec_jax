@@ -41,8 +41,11 @@ from essos.coils import Coils
 from essos.fields import BiotSavart
 
 DATA = Path(__file__).resolve().parent / "data"
-BETA_SCALE = 2.0  # scale the 2.5% pressure/current target to about 5% beta
-S_FIXED, NS, MPOL, NTOR, NITER, FTOL = 0.5, 31, 5, 5, 8000, 1.0e-10
+# The bundled coils were optimized at 2.5% beta. A short continuation reaches
+# 2.625% while retaining a converged parent free boundary at full resolution;
+# larger beta requires reoptimizing the coil field, not only scaling profiles.
+BETA_SCALE = 1.05
+S_FIXED, NS, MPOL, NTOR, NITER, FTOL = 0.5, 31, 5, 5, 5000, 1.0e-6
 NPHI, NTHETA, VC_DIGITS, COIL_MAXITER = 24, 24, 4, 20
 CHECK_LEVELS = ((128, 128), (256, 256), (512, 512))
 NORMAL_WEIGHT, PRESSURE_WEIGHT, CURRENT_REGULARIZATION = 2.0e4, 5.0e3, 1.0e-3
@@ -70,13 +73,29 @@ print("Tabulating the coil field in memory and solving the larger free boundary.
 mgrid = vj.MgridField.from_cartesian_field(
     coil_B_numpy, rmin=0.45, rmax=1.55, zmin=-0.6, zmax=0.6,
     ir=48, jz=48, kp=16, nfp=coils0.nfp)
-free_input = vj.VmecInput.from_file(
+base_input = vj.VmecInput.from_file(
     DATA / "input.LandremanPaul2021_QA_beta2p5_bootstrap").change_resolution(
         mpol=MPOL, ntor=NTOR, ntheta=2 * MPOL + 6, nzeta=16)
-free_input = replace(free_input, pres_scale=BETA_SCALE * free_input.pres_scale,
-    curtor=BETA_SCALE * free_input.curtor, lfreeb=True, mgrid_file="ESSOS field (in memory)",
-    ns_array=np.array([NS]), niter_array=np.array([NITER]), ftol_array=np.array([FTOL]))
-free_result = vj.solve_free_boundary_multigrid(free_input, external_field=mgrid, verbose=True)
+base_input = replace(base_input, delt=0.35, ns_array=np.array([NS]),
+    niter_array=np.array([NITER]), ftol_array=np.array([FTOL]))
+
+def scaled_parent(scale, *, free):
+    return replace(base_input, pres_scale=scale * base_input.pres_scale,
+        curtor=scale * base_input.curtor, lfreeb=free,
+        mgrid_file="ESSOS field (in memory)" if free else "NONE")
+
+# A converged fixed-boundary state is a useful initial interior, but VMEX must
+# still turn on NESTOR before accepting it as a free-boundary equilibrium.
+fixed_parent = opt.solve_equilibrium(scaled_parent(1.0, free=False))
+free_input = scaled_parent(1.0, free=True)
+free_result = vj.solve_free_boundary_multigrid(
+    free_input, external_field=mgrid, initial_state=fixed_parent.state, verbose=True)
+if BETA_SCALE != 1.0:
+    free_input = scaled_parent(BETA_SCALE, free=True)
+    free_result = vj.solve_free_boundary_multigrid(
+        free_input, external_field=mgrid, initial_state=free_result.state, verbose=True)
+if not free_result.converged:
+    raise RuntimeError("the parent free-boundary continuation did not converge")
 free_wout = vj.wout_from_state(inp=free_input, state=free_result.state,
     fsqr=float(free_result.fsqr), fsqz=float(free_result.fsqz), fsql=float(free_result.fsql),
     niter=int(free_result.iterations), converged=bool(free_result.converged),
@@ -118,8 +137,8 @@ print(f"Solving the restricted fixed boundary at s_free={S_FIXED:.2f}...")
 fixed_equilibrium = opt.solve_equilibrium(fixed_input, verbose=True)
 
 print("Refitting the four independent ESSOS coil currents with virtual casing...")
-surface_data = vc.surface_field_data_from_state(fixed_input, fixed_equilibrium.state,
-    runtime=fixed_equilibrium.runtime, nphi=NPHI, ntheta=NTHETA)
+surface_data = vc.surface_field_data_from_state(fixed_input, fixed_equilibrium.solution,
+    runtime=fixed_equilibrium.solver_context, nphi=NPHI, ntheta=NTHETA)
 precision = vc.plan_vc_precision(surface_data, digits=VC_DIGITS)
 interface = vc.PlasmaVacuumInterface.from_surface_data(
     surface_data, digits=VC_DIGITS, precision=precision)

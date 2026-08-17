@@ -135,7 +135,8 @@ class ConstructedQIResidual(_QIResidualTerm):
             state, rt, surfaces=self.surfaces, mboz=self.mboz,
             nboz=self.nboz, oversample=self.oversample)
         out = quasi_isodynamic_residual(
-            bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            bmnc_b=booz["bmnc_b"], bmns_b=booz.get("bmns_b"),
+            xm_b=booz["xm_b"], xn_b=booz["xn_b"],
             iota_b=booz["iota_b"], nfp=booz["nfp"], weights=self.weights,
             **self.residual_options)
         out.update(booz)
@@ -173,7 +174,8 @@ class JInvariantQIResidual(_QIResidualTerm):
             state, rt, surfaces=self.surfaces, mboz=self.mboz,
             nboz=self.nboz, oversample=self.oversample)
         out = j_invariant_qi_residual_from_boozer(
-            bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            bmnc_b=booz["bmnc_b"], bmns_b=booz.get("bmns_b"),
+            xm_b=booz["xm_b"], xn_b=booz["xn_b"],
             iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
             nfp=booz["nfp"], pitch=self.pitch, weights=self.weights,
             nalpha=self.nalpha, points_per_period=self.points_per_period,

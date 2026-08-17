@@ -12,6 +12,7 @@ methods and the axisymmetric QA degeneracy.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,17 @@ SURFACES = [0.25, 0.5, 0.75, 1.0]
 @pytest.fixture(scope="module")
 def eq():
     equilibrium = opt.solve_equilibrium(VmecInput.from_file(DATA_DIR / "input.solovev"))
+    assert equilibrium.result.converged
+    return equilibrium
+
+
+@pytest.fixture(scope="module")
+def lasym_eq():
+    inp = VmecInput.from_file(DATA_DIR / "input.basic_non_stellsym_simsopt")
+    inp = dataclasses.replace(
+        inp, ns_array=np.array([11]), ftol_array=np.array([1e-12]),
+        niter_array=np.array([4000]))
+    equilibrium = opt.solve_equilibrium(inp)
     assert equilibrium.result.converged
     return equilibrium
 
@@ -95,3 +107,22 @@ def test_pointwise_state_grad_is_finite(eq):
     leaves = jax.tree.leaves(grad)
     assert leaves
     assert all(np.all(np.isfinite(np.asarray(leaf))) for leaf in leaves)
+
+
+def test_lasym_state_derivative_matches_finite_difference(lasym_eq):
+    """QS includes asymmetric R-sine/Z-cosine state families."""
+    qs = opt.QuasisymmetryRatioResidual([0.3, 0.7], 1, 0)
+    tangent = jax.tree.map(jnp.zeros_like, lasym_eq.state)
+    tangent = dataclasses.replace(
+        tangent, Z_cos=tangent.Z_cos.at[5, 1].set(1.0))
+    _, ad = jax.jvp(
+        lambda state: qs.total_state(state, lasym_eq.runtime),
+        (lasym_eq.state,), (tangent,))
+    h = 1.0e-6
+    plus = jax.tree.map(lambda value, direction: value + h * direction,
+                        lasym_eq.state, tangent)
+    minus = jax.tree.map(lambda value, direction: value - h * direction,
+                         lasym_eq.state, tangent)
+    fd = (qs.total_state(plus, lasym_eq.runtime)
+          - qs.total_state(minus, lasym_eq.runtime)) / (2.0 * h)
+    assert float(ad) == pytest.approx(float(fd), rel=2e-5, abs=1e-8)

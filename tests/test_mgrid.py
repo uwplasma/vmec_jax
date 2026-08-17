@@ -291,6 +291,7 @@ def test_interior_field_inverts_flux_coordinates_and_recovers_B():
     np.testing.assert_allclose(flux_field.get_points_cart(), points, rtol=0, atol=2e-14)
     np.testing.assert_allclose(flux_field.get_points_flux(), coordinates, rtol=0, atol=0)
     np.testing.assert_allclose(flux_field.B(), expected_B, rtol=2e-12, atol=2e-12)
+    np.testing.assert_allclose(flux_field.gradB(), expected_grad, rtol=0, atol=2e-10)
     tracing_field = flux_field.field_in_flux_coordinates()
     np.testing.assert_allclose(
         jax.vmap(tracing_field.B_contravariant)(coordinates),
@@ -329,6 +330,46 @@ def test_interior_field_inverts_flux_coordinates_and_recovers_B():
     shaped_mapped_B = jax.vmap(lambda point: jax.jacfwd(shaped_tracer.to_xyz)(point)
         @ shaped_tracer.B_contravariant(point))(coordinates)
     np.testing.assert_allclose(shaped_mapped_B, shaped_field.B(), rtol=2e-11, atol=2e-11)
+
+    # Known flux coordinates avoid a fragile generic inverse-map guess for
+    # strongly shaped cross-sections while Cartesian derivatives stay fixed
+    # at the mapped physical points.
+    many_coordinates = jnp.stack((
+        jnp.linspace(0.05, 0.95, 6),
+        jnp.mod(jnp.arange(6) * 1.7, 2 * jnp.pi),
+        jnp.mod(jnp.arange(6) * 0.31, 2 * jnp.pi)), axis=1)
+    seeded = VmecInteriorField(shaped_spectra).set_points_flux(many_coordinates)
+    seeded_tracer = seeded.field_in_flux_coordinates()
+    direct_B = jax.vmap(lambda point: jax.jacfwd(seeded_tracer.to_xyz)(point)
+        @ seeded_tracer.B_contravariant(point))(many_coordinates)
+    np.testing.assert_allclose(seeded.B(), direct_B, rtol=3e-11, atol=3e-11)
+    assert jnp.all(jnp.isfinite(seeded.gradB()))
+
+    # Parameter VJPs use the same seeds but hold the mapped Cartesian points
+    # fixed, matching the convention of B_vjp and its spatial derivatives.
+    parameters = jnp.array([0.2])
+
+    def spectra_of(p):
+        return dict(shaped_spectra,
+            rmnc=shaped_spectra["rmnc"].at[:, 0].add(p[0]))
+
+    parameterized = VmecInteriorField(
+        spectra_of(parameters), parameters=parameters,
+        parameter_data_fn=spectra_of,
+        B_from_data=lambda data, xyz: ext._interior_coordinates_and_B(
+            data, xyz, newton_iterations=10)[1],
+        dof_names=("R00",)).set_points_flux(coordinates)
+    fixed_xyz = parameterized.get_points_cart()
+
+    def seeded_B(p):
+        return ext._interior_coordinates_and_B(
+            spectra_of(p), fixed_xyz, newton_iterations=10,
+            initial_flux=coordinates)[1]
+
+    weight = jnp.ones_like(parameterized.B())
+    expected_vjp = jax.grad(lambda p: jnp.vdot(seeded_B(p), weight))(parameters)
+    np.testing.assert_allclose(
+        parameterized.B_vjp(weight), expected_vjp, rtol=2e-10, atol=2e-10)
 
 
 def test_magnetic_field_cylindrical_points_round_trip():

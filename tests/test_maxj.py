@@ -49,6 +49,16 @@ def _residual(
         psi_edge=booz["psi_edge"], pitch=pitch, **settings)
 
 
+def _constructed_residual(outer_mean=1.02, *, weights=None):
+    booz = _boozer(outer_mean)
+    return maxj.constructed_maximum_j_residual_from_boozer(
+        bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+        iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
+        nfp=booz["nfp"], psi_b=booz["psi_b"], psi_edge=booz["psi_edge"],
+        pitch=[1.0 / 1.1], weights=weights, max_wells=2, quadrature_order=32,
+        qi_options={"nphi": 65, "nalpha": 5, "n_bounce": 7})
+
+
 def test_maximum_j_sign_and_signed_flux_convention():
     favorable = _residual(1.02)
     adverse = _residual(0.98)
@@ -76,6 +86,30 @@ def test_maximum_j_sign_and_signed_flux_convention():
     assert float(jnp.max(depths["trapping_depth"])) > 0.5
     assert float(depths["shallow_maximum_j_fraction"]) == pytest.approx(1.0)
     assert float(depths["deep_maximum_j_fraction"]) == pytest.approx(1.0)
+
+
+def test_constructed_maximum_j_sign_and_ad_match_finite_difference():
+    """Goodman's smoother continuation target keeps the physical J sign."""
+    favorable = _constructed_residual(1.02)
+    adverse = _constructed_residual(0.98)
+    assert float(favorable["total"]) == pytest.approx(0.0, abs=1e-13)
+    assert float(favorable["maximum_j_fraction"]) == pytest.approx(1.0)
+    assert float(adverse["total"]) > 1.0e-3
+    assert float(adverse["maximum_j_fraction"]) == pytest.approx(0.0)
+
+    def objective(mean):
+        return _constructed_residual(mean)["total"]
+    mean, step = jnp.asarray(0.98), 1.0e-5
+    derivative = jax.grad(objective)(mean)
+    finite_difference = (objective(mean + step) - objective(mean - step)) / (2.0 * step)
+    np.testing.assert_allclose(derivative, finite_difference, rtol=3.0e-4)
+
+    # Implicit-Jacobian assembly may make objective weights traced values.
+    weights = jnp.ones(2)
+    _, tangent = jax.jvp(
+        lambda value: _constructed_residual(0.98, weights=value)["total"],
+        (weights,), (jnp.array([0.1, -0.1]),))
+    assert jnp.isfinite(tangent)
 
 
 def test_maximum_j_slope_matches_adaptive_quadrature():
@@ -176,6 +210,29 @@ def test_maximum_j_input_guards():
         _residual(match_tolerance=0.0)
     with pytest.raises(ValueError, match="pitch_weights"):
         _residual(pitch_weights=[1.0, 1.0])
+
+
+def test_common_trapped_pitches_use_one_field_strength_on_all_lines():
+    bmag = jnp.array([
+        [[0.8, 0.9], [1.2, 1.3]],
+        [[0.7, 0.85], [1.25, 1.4]],
+    ])
+    pitch = np.asarray(maxj.common_trapped_pitches(bmag, [0.25, 0.75]))
+    np.testing.assert_allclose(1.0 / pitch, [1.125, 0.975])
+    with pytest.raises(ValueError, match="strictly between"):
+        maxj.common_trapped_pitches(bmag, [0.0])
+    with pytest.raises(ValueError, match="no common"):
+        maxj.common_trapped_pitches(bmag.at[0, 1].set([0.86, 0.86]))
+
+
+def test_common_trapped_pitches_state_samples_boozer_lines(monkeypatch):
+    booz = _boozer(1.02)
+    monkeypatch.setattr(maxj, "boozer_bmnc_state", lambda *args, **kwargs: booz)
+    pitch = maxj.common_trapped_pitches_state(
+        object(), object(), [0.25, 0.75], [0.5],
+        nalpha=5, points_per_period=32, num_periods=2)
+    assert pitch.shape == (1,)
+    assert np.isfinite(float(pitch[0])) and float(pitch[0]) > 0.0
 
 
 @pytest.mark.full

@@ -457,12 +457,20 @@ def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
     interior = np.asarray(profile)[2:-1]
     assert np.all(np.isfinite(interior))
     assert np.any(interior != 0.0)
-    with pytest.raises(NotImplementedError, match="independently validated"):
-        stab.d_merc_state(eq.state, eq.runtime)
-    with pytest.raises(NotImplementedError, match="independently validated"):
-        stab.glasser_d_r_state(eq.state, eq.runtime)
-    with pytest.raises(NotImplementedError, match="independently validated"):
-        opt.d_merc(eq)
+    dmerc = stab.d_merc_state(eq.state, eq.runtime)
+    np.testing.assert_allclose(dmerc, eq.wout.DMerc, rtol=1e-10, atol=1e-13)
+    np.testing.assert_allclose(opt.d_merc(eq), eq.wout.DMerc, rtol=0.0, atol=0.0)
+    d_r = stab.glasser_d_r_state(eq.state, eq.runtime, shear_epsilon=1.0e-8)
+    assert np.all(np.isfinite(np.asarray(d_r)))
+
+    _, tangent_profiles = jax.jvp(
+        lambda state: jnp.concatenate((
+            stab.d_merc_state(state, eq.runtime)[2:-1],
+            stab.glasser_d_r_state(
+                state, eq.runtime, shear_epsilon=1.0e-8)[2:-1])),
+        (eq.state,), (tangent,))
+    assert np.all(np.isfinite(np.asarray(tangent_profiles)))
+    assert np.any(np.asarray(tangent_profiles) != 0.0)
 
 
 @pytest.mark.full

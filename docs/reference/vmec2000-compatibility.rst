@@ -495,10 +495,13 @@ difference; it does not mean the method itself uses FD.
      - Differentiable in table values/current scale, not in the coil geometry
        used to generate a frozen table.
    * - Mercier WOUT diagnostic
-     - implemented; host/FD-only
-     - VMEC2000-style WOUT engine.  The traceable Mercier objective is
-       stellarator-symmetric.
-   * - Ballooning, traceable Boozer/QI/omnigenity, turbulence geometry
+     - implemented; host and traceable lanes
+     - VMEC2000-style WOUT engine and FD-validated implicit objective for
+       symmetric and ``LASYM`` equilibria.
+   * - Traceable Boozer/QI/omnigenity
+     - implemented; FD-validated
+     - Symmetric and ``LASYM`` cosine/sine spectra and objectives.
+   * - Ballooning and turbulence geometry
      - partial
      - Current traceable implementations require ``LASYM=F`` and raise
        otherwise.

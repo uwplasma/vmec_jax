@@ -40,8 +40,8 @@ all requested (surface, α, ζ0) field lines.
 
 Scope notes
 -----------
-- The current profile supports symmetric and ``lasym`` states. Mercier,
-  Glasser and ballooning stability remain stellarator-symmetric.
+- Current, Mercier, and Glasser profiles support symmetric and ``lasym``
+  states. Ballooning stability remains stellarator-symmetric.
 - Surfaces need ``ι ≠ 0`` (the field-line parameterization divides by ι).
 - :func:`d_merc_state` is the traceable counterpart of the parity-proven
   wout calculation.  As in VMEC2000, its first two surfaces and edge are not
@@ -187,6 +187,9 @@ def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: Solver
                 analyze_lasym(asymmetric, cosmui, sinnv), cosmu, sinnv)
             return extend(symmetric, asymmetric)
 
+        # jxbforce applies two successive LASYM projections; each carries the
+        # full-grid factor-of-two convention.  Both are required for WOUT and
+        # VMEC2000 <J.B>/Mercier normalization (one pass is a factor four off).
         bsubu, bsubv = filter_lasym(bsubu), filter_lasym(bsubv)
         bsubu, bsubv = filter_lasym(bsubu), filter_lasym(bsubv)
         bsubs_full = bsubs.at[1:-1].set(
@@ -390,11 +393,6 @@ def d_merc_state(state: SpectralState, rt: SolverRuntime) -> Array:
     The axis, first near-axis surface and edge retain VMEC's zero/noisy output
     convention and should be excluded from objectives (normally ``[2:-1]``).
     """
-    if bool(rt.setup.lasym):
-        raise NotImplementedError(
-            "traceable Mercier profiles are not independently validated "
-            "for lasym equilibria"
-        )
     return _mercier_profiles_state(state, rt)[0]
 
 
@@ -432,11 +430,6 @@ def glasser_d_r_state(
     As for ``DMerc``, use only validated interior surfaces (normally
     ``[2:-1]``) as optimization targets.
     """
-    if bool(rt.setup.lasym):
-        raise NotImplementedError(
-            "traceable Glasser profiles are not independently validated "
-            "for lasym equilibria"
-        )
     if shear_epsilon < 0.0:
         raise ValueError(
             f"shear_epsilon must be non-negative, got {shear_epsilon}"

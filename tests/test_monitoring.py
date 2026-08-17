@@ -158,6 +158,29 @@ def test_monitor_collects_saves_and_plots_objective_terms(tmp_path) -> None:
     assert plot.is_file() and plot.stat().st_size > 0
 
 
+def test_monitor_plot_uses_readable_objective_floor(tmp_path, monkeypatch) -> None:
+    """Tiny or zero terms stay visible without inventing sub-1e-8 decades."""
+    import matplotlib.axes
+
+    limits = []
+    original = matplotlib.axes.Axes.set_ylim
+
+    def capture(self, *args, **kwargs):
+        limits.append(kwargs.get("bottom", args[0] if args else None))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(matplotlib.axes.Axes, "set_ylim", capture)
+    monitor = OptimizationMonitor(stream=None)
+    monitor.record([0.0], cost=2.0e-12, terms={"tiny": 0.0})
+    monitor.plot(tmp_path / "tiny.png")
+    assert 1.0e-8 in limits
+
+    limits.clear(); monitor = OptimizationMonitor(stream=None)
+    monitor.record([0.0], cost=4.0e-5, terms={"resolved": 2.0e-5})
+    monitor.plot(tmp_path / "resolved.png")
+    assert 2.0e-5 in limits
+
+
 def test_plot_optimization_objects_is_dependency_neutral(tmp_path) -> None:
     import vmex as vj
 

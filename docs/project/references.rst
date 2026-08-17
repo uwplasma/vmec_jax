@@ -160,14 +160,20 @@ Confinement objectives and optimization:
     bounce-action optimization complementary to constructed geometric QI
     targets.
 
+36. V. V. Nemov, S. V. Kasilov, W. Kernbichler, and M. F. Heyn,
+    “Evaluation of :math:`1/\nu` neoclassical transport in stellarators,”
+    *Physics of Plasmas* 6, 4622–4632 (1999), doi:10.1063/1.873749 — defines
+    the effective-ripple transport measure reported by NEO as
+    :math:`\epsilon_{\mathrm{eff}}^{3/2}`.
+
 Numerical implementation:
 
-36. JAX documentation, “Forward- and reverse-mode autodiff in JAX” — the
+37. JAX documentation, “Forward- and reverse-mode autodiff in JAX” — the
     wide-Jacobian cost model used to select ``jacrev`` for the local
     three-surface raw-force blocks,
     https://docs.jax.dev/en/latest/advanced-autodiff.html.
 
-37. X. S. Li, “An Overview of SuperLU: Algorithms, Implementation, and User
+38. X. S. Li, “An Overview of SuperLU: Algorithms, Implementation, and User
     Interface,” *ACM Transactions on Mathematical Software* 31, 302–325
     (2005) — globally pivoted sparse factorization used for the equilibrated
     block-banded radial solve, doi:10.1145/1089014.1089017.

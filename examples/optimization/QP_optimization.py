@@ -19,6 +19,7 @@ ASPECT_TARGET = 7.0
 IOTA_FLOOR = 0.51
 MIRROR_LIMIT = 0.35
 ELONGATION_LIMIT = 12.0
+ESS_ALPHA = 1.2  # smaller values let high Fourier modes move more
 MINIMUM_MPOL = 5
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.05
@@ -70,7 +71,7 @@ for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     inp = replace(inp, delt=0.5).change_resolution(
         mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
     problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=max_mode,
-                                          vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True)
+        vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, ess_alpha=ESS_ALPHA)
     print(f"dof_names = {problem.dof_names}")
     monitor.problem = problem
     if not ci_smoke:
@@ -89,7 +90,7 @@ final_input = replace(inp,
     ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
     niter_array=np.array([35000]))
 final_equilibrium = opt.solve_equilibrium(
-    final_input, initial_state=equilibrium.state,
+    final_input, initial_state=equilibrium.solution,
     verbose=not ci_smoke, raise_on_max_iterations=True)
 final_total = report("final", final_equilibrium)["QS total"]
 print(f"\nQS total {final_total:.3e}")

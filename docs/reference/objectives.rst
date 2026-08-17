@@ -307,6 +307,12 @@ the outward slope ``dJ/ds`` at common pitch using matched wells;
 invalid topology is NaN rather than a favorable zero. See
 :doc:`/explanation/confinement` for the sign and matching contract.
 
+For continuation from a rough QI seed, use
+:class:`~vmex.core.maxj.ConstructedMaximumJResidual` first. It evaluates the
+radial action slope in Goodman's differentiable squash-and-shuffle field;
+finish with ``MaximumJResidual`` so the optimized, unmodified field supplies
+the reported certificate.
+
 When both terms use the same surfaces and pitch,
 :class:`~vmex.core.maxj.JInvariantQIAndMaximumJResidual` concatenates their
 cost-weighted rows after one shared Boozer transform.
@@ -416,8 +422,11 @@ incoming values, and increased in explicit continuation stages. Their
 one-dimensional tuple weights are zero for ``s < 0.2``, where the criterion is
 singular, and grow smoothly toward the edge, where stability is usually
 hardest. The script prints this radial choice whenever it is active. A small
-positive ``STABILITY_MARGIN`` avoids accepting a roundoff-level sign change;
-a self-consistent finite-beta solve is still the physical certificate.
+positive ``STABILITY_MARGIN`` avoids accepting a roundoff-level sign change.
+The example then adds 0.1% pressure and polishes the *actual* finite-beta
+``DMerc`` and ``DR`` on radial grids ending at ``NS=101``.  Only this resolved
+finite-pressure equilibrium is reported as the physical stability certificate;
+the vacuum and frozen-geometry curves remain useful screening diagnostics.
 
 The QA/QH bootstrap examples write a separate
 ``*_bootstrap_current.png`` overlay of the equilibrium and Redl
@@ -546,7 +555,6 @@ Which objectives differentiate how
      - yes
      - yes
      - traceable Mercier profile / smooth interior instability hinge
-       (stellarator-symmetric states only)
    * - :func:`~vmex.core.optimize.jdotb_state`,
        :func:`~vmex.core.optimize.jdotb_residual`,
        :func:`~vmex.core.optimize.mercier_shear_state`,
@@ -555,7 +563,7 @@ Which objectives differentiate how
      - yes
      - yes
      - traceable VMEC ``<J.B>`` and GGJ resistive-interchange profile /
-       smooth upper-bound residual (stellarator-symmetric states only)
+       smooth upper-bound residual
    * - :func:`~vmex.core.optimize.d_merc`,
        :func:`~vmex.core.optimize.l_grad_b`
      - yes
@@ -574,10 +582,16 @@ Which objectives differentiate how
      - eigenvector weights have no nonsymmetric-eig derivative
 
 ``jac="implicit"`` requires a fixed-boundary problem. Its boundary parameter
-map supports both symmetric and ``LASYM = T`` equilibria, but individual
-objectives can be symmetry-limited; in particular the traceable Mercier and
-Glasser objectives and quasisymmetry currently require ``LASYM = F``.
-The traceable ``jdotb`` objective supports both symmetry modes. See
+map supports both symmetric and ``LASYM = T`` equilibria. Traceable
+quasisymmetry, quasi-isodynamicity, Mercier, Glasser and ``jdotb`` objectives
+support both symmetry modes; individual objectives document any narrower
+scope. The eight scripts in ``examples/optimization/stellarator_asymmetry``
+pair QA/QH/QP/QI with vacuum/finite-beta runs. They copy the immutable input
+arrays, set ``LASYM=True``, and add finite ``RBS(1,1)`` and ``ZBC(1,1)`` seed
+coefficients so a local optimizer is not trapped in the symmetric subspace.
+Twice as many boundary families enlarge the search space but do not by
+themselves guarantee a lower minimum; compare equal solve budgets and inspect
+the reported asymmetric norm. See
 :doc:`/howto/optimize-a-boundary` for the gradient machinery and measured cost of each
 piece.
 
