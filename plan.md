@@ -72,7 +72,7 @@ Smallest possible diff to green; everything else moves to the new branch off `ma
 
 Acceptance: PR CI fully green (quality, coverage gate, linkcheck), PR merged.
 
-## Phase 1 — Examples run honestly (the "stall" fix)  [PARTIAL: 1,3,6 DONE; 1.a open]
+## Phase 1 — Examples run honestly (the "stall" fix)  [DONE: 1.a root-caused and fixed]
 
 Diagnosis (instrumented reproduction, `profile_stall.py`, uncontended): the examples descend
 (overnight log: 18 iterations, cost 25.0 -> 2.64) and healthy iterations cost ~10-12 s
@@ -721,3 +721,32 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   tolerance is the fix and 1e-4 is defensible on the measured accuracy. If it does not, the time
   is in `_raw_block_system`'s probe assembly and factorization, and the Schur/preconditioner
   work of Phase 3 is the lever instead.
+- 2026-08-19 rogeriojorge: P1.a SOLVED, with the full chain measured. The instrumented run of the
+  real stalling stage (LASYM QA, ns=21, mpol=5, 48 dofs) reads:
+  `jac #1 77 s, certifier iters=542, unconverged=0` then
+  `jac #2 3456 s, certifier iters=9000, unconverged=47`. So at the second accepted iterate the
+  per-column certifier runs to its ceiling (adjoint_maxiter 300 x 30 restarts) and still fails
+  on 47 of 48 columns; those come back NaN, the whole Jacobian is discarded for the previous
+  one, and the stage spends 58 minutes making no progress with nothing on screen. That is the
+  stall, end to end.
+  Fix shipped: `ImplicitConfig.jacobian_adjoint_tol` (default 1e-4), applied by the two Jacobian
+  lanes through a `jac_cfg = dataclasses.replace(cfg, adjoint_tol=cfg.jacobian_adjoint_tol)`;
+  uncertified columns now raise a RuntimeWarning naming the knob. Measured at the seed iterate,
+  warm (compile excluded by calling twice in one process): **13.3 s -> 2.8 s, certifier 542 -> 0
+  iterations, relative Jacobian change 3.2e-5**. The rationale is that the two tolerances have
+  different consumers — a scalar gradient feeds quasi-Newton curvature accumulation, a
+  least-squares Jacobian only points a trust-region step.
+  IMPORTANT scoping lesson: relaxing the tolerance inside the shared
+  `_implicit_evolved_tangent_multi_rhs` helper broke
+  `test_block_response_forward_transpose_and_fd` (a genuine transpose/FD identity at rtol 2e-8,
+  measured error 5.2e-5). The helper keeps `adjoint_tol` for its public callers; only the
+  Jacobian lanes relax. Do not push the relaxation down into the helper.
+- 2026-08-19 rogeriojorge: P8 warning about the office box — do NOT trust remote numbers without
+  pinning the import. `~/local/vmex` is NOT what `import vmex` resolves to there: an editable
+  install points at a second checkout, `/home/rjorge/vmex_profile/vmex`, and a script invoked as
+  `python3 /tmp/bench.py` puts `/tmp` (not the cwd) on `sys.path[0]`, so the stale tree wins.
+  Two rounds of benchmark numbers were silently produced from it, including a bogus
+  `NotImplementedError: QuasisymmetryRatioResidual traceable evaluation supports lasym = False
+  only` that exists in no current source, and a 575 s symmetric Jacobian. Always run remote work
+  as `cd <checkout> && PYTHONPATH=<checkout> python3 ...` and assert `vmex.__file__` in the
+  output. Clearing `__pycache__` does not help — it was never the cache.
