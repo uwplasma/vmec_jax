@@ -1231,6 +1231,37 @@ n=0 m=1 in both channels, since no existing test would have caught this.
    whether a smaller seed matches or beats symmetric, and whether amplitude zero
    really is stationary. If a small amplitude recovers symmetric-quality QS, the
    fix is a one-line change to every asymmetry example and the phase is closed.
+
+   **The sweep ran, and it refutes the seed hypothesis.** Amplitudes 1e-3, 1e-4
+   and 0 all land on essentially the same final QS (3.423e-2, 3.434e-2,
+   3.355e-2) and the same cost (~0.2947), regardless of where they start:
+
+   | run | seed QS | final QS |
+   |---|---|---|
+   | symmetric | 1.209e-2 | **4.523e-4** |
+   | LASYM amp=1e-2 | 4.608e-1 | 3.432e-2 |
+   | LASYM amp=1e-3 | 1.638e-2 | 3.423e-2 |
+   | LASYM amp=1e-4 | 1.213e-2 | 3.434e-2 |
+   | LASYM amp=0 | 1.209e-2 | 3.355e-2 |
+
+   At amplitude zero the LASYM run starts from *exactly* the symmetric seed
+   (1.209067e-2 against 1.209283e-2) and still ends 74x worse, having made
+   quasisymmetry 2.8x worse than where it began. Shrinking the seed does not
+   help, so the seed is not the cause.
+
+   Two things were ruled out along the way. The QS objective's two lanes agree
+   exactly — `sum(residuals_state^2)` equals `total_state` to the last digit,
+   and LASYM at zero asymmetry reproduces the symmetric values bit for bit — so
+   the optimizer is not minimizing a different quantity from the one reported.
+   And the harness was itself partly at fault: with an aspect-ratio row present
+   the LASYM run was trading quasisymmetry for aspect (7.36 against 7.78) and
+   reaching a *lower* total cost, so "final QS" was never the objective. The
+   comparison is being redone with quasisymmetry as the only term, which makes
+   cost and final QS the same number.
+
+   What still stands as the anomaly: from an identical configuration, with the
+   symmetric optimum inside its search space, the LASYM lane moves away from
+   quasisymmetry. That is the thing to explain.
 2. **booz_xform_jax under LASYM: audited 2026-08-19, clean — but it is not in
    the loop for the QA/QH/QP asymmetry examples anyway.** The `bmns(i,i)`
    repeated-index bug was not copied in; the package has no per-mode scalar
@@ -1408,3 +1439,4 @@ every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — corrected the overclaim: the delta fix is proven as a derivative fix but did NOT improve a bounded QA stage; payoff still unmeasured.
 - 2026-08-19 claude: P17 — QS-isolated run shows the fix improves final QS 4.10e-2 -> 3.43e-2 and halves wall time; like-for-like sym vs LASYM now running.
 - 2026-08-19 claude: P17 — like-for-like shows LASYM starts 38x worse in QS because of the 0.01 seed perturbation, not that the lane is broken; amplitude sweep running.
+- 2026-08-19 claude: P17 — seed hypothesis refuted: LASYM at amp=0 starts from the symmetric seed and still ends 74x worse; QS lane consistency ruled out; QS-only rerun in flight.
