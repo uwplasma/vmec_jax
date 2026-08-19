@@ -13,9 +13,9 @@ from vmex import optimize as opt
 
 nfp = 4
 SURFACES = np.linspace(0.1, 1.0, 10)
-MAX_MODES, MAX_NFEV = [2, 3], [20, 35]
+MAX_MODES, MAX_NFEV = [2], [5]#[2, 3], [20, 35]
 ASPECT_TARGET = 6.0
-MINIMUM_MPOL, SEED_PERTURBATION, ASYMMETRY_PERTURBATION = 5, 0.12, 0.01
+MINIMUM_MPOL, SEED_PERTURBATION, ASYMMETRY_PERTURBATION = 3, 0.12, 0.01
 PARAMETER_STEP, MAX_PARAMETER_CHANGE = 0.01, 3.0
 ESS_ALPHA = 1.2  # smaller values let high Fourier modes move more
 
@@ -34,7 +34,10 @@ rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -SEED_PERTURBATION, SEED_PERTURBATI
 # A finite RBS(1,1)/ZBC(1,1) seed lets LASYM explore configurations that are
 # inaccessible to the original stellarator-symmetric optimization.
 rbs[inp.ntor + 1, 1], zbc[inp.ntor + 1, 1] = ASYMMETRY_PERTURBATION, -ASYMMETRY_PERTURBATION
-inp = replace(inp, lasym=True, rbc=rbc, zbs=zbs, rbs=rbs, zbc=zbc)
+inp = replace(inp, lasym=True, rbc=rbc, zbs=zbs, rbs=rbs, zbc=zbc,
+              niter_array=np.array([3000]),
+              ftol_array=np.array([1.0e-11]),
+              ns_array=np.array([21]))
 
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=-1)
 objective_function_terms = [(qs, 0.0, 1.0), (opt.aspect_ratio, ASPECT_TARGET, 1.0)]
@@ -51,8 +54,8 @@ for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
         mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
     problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=max_mode,
         use_ess=True, ess_alpha=ESS_ALPHA, restart_from=equilibrium,
-        forward_max_iterations=100 if ci_smoke else 2000, progress=True,
-        evaluation_progress=not ci_smoke, vary_major_radius=False)
+        forward_max_iterations=100 if ci_smoke else 2000, progress=True, evaluation_progress=True,
+        vary_major_radius=False)
     print(f"dof_names = {problem.dof_names}")
     problem.compile_residual_and_jacobian()
     monitor.problem = problem
