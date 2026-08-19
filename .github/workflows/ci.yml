@@ -64,8 +64,8 @@ jobs:
           test "$size_kb" -lt 40960
       - name: Load the docs configuration
         # The `quality` job builds the docs on 3.12 only, so a 3.11+ construct
-        # in docs/conf.py (tomllib) used to reach main unnoticed and break the
-        # docs build on the declared floor. Executing conf.py needs no Sphinx.
+        # in docs/conf.py (tomllib, say) would break the docs build on the
+        # declared floor with no job noticing. Executing conf.py needs no Sphinx.
         run: python -c "import runpy; runpy.run_path('docs/conf.py')"
       - name: Run fast tests
         env:
