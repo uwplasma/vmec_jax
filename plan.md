@@ -977,3 +977,29 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   principled fix is to route the Jacobian's bulk solve through the pivoted `SpluFactorization`
   the Schur lane already builds; the columns would then be fast *and* certified, and the budget
   knob would go back to being a safety net rather than the mechanism.
+- 2026-08-19 rogeriojorge: P1.a — the pivoted-factorization diagnosis I logged earlier is WRONG;
+  do not implement it. Two measurements retire it and reframe the problem.
+  **Budget sweep** at a degraded iterate: restart budget 10 / 30 / 100 costs 107 / 226 / 675 s,
+  runs the full 300 / 900 / 3000 Krylov iterations, leaves exactly **40** columns uncertified in
+  all three, and moves the Jacobian by **2.3e-8** between the smallest and largest. Tenfold work,
+  no additional column certified, no change in the answer. That is stagnation, not slow
+  convergence — and it makes `jacobian_adjoint_maxiter = 10` a measured default.
+  **Band-versus-exact discriminator**, same direct block solve, residual against each operator:
+  healthy iterate 3.958e-09 (band) / 3.955e-09 (exact); degraded iterate 3.002e-09 / 3.016e-09.
+  So (a) the no-pivot block-Thomas factorization is accurate even where the certifier fails — a
+  pivoted `SpluFactorization` would buy nothing — and (b) the raw Jacobian really is banded, the
+  exact operator agreeing with the band one to nine digits. Both of my candidate causes are dead.
+  What is left: the direct solve is already accurate to 3e-9, yet the corrector cannot certify it.
+  The corrector runs on the *preconditioned* residual (`residual_fn`) while the block system
+  solves the *raw* one; they share a solution but not a norm, so the certificate is being
+  measured in a badly scaled space. The likely conclusion is that the columns were always
+  accurate and only the certificate was failing — being confirmed against the independent
+  per-dof forward-GMRES lane (`cross_lane.py`), which shares no solver machinery with the block
+  path. If they agree, then the 98x speedup costs nothing in Jacobian quality and the real
+  defect is the certificate measure, not the solver.
+  Independently worth doing either way: the certifier still uses plain restarted GMRES, while
+  `ImplicitConfig` documents (right above the knobs) that at high mode number restarted GMRES
+  stalls where GCROT converges, which is exactly the stagnation measured here — and the
+  reverse-adjoint lane already uses GCROT for that reason. `_adjoint_solve_gcrot` now accepts a
+  tolerance, a bounded budget, and a non-enforcing mode, and it takes a `precond`, so the block
+  inverse can precondition it rather than merely warm-start it (Phase 3's original proposal).
