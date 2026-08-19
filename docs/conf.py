@@ -164,10 +164,8 @@ linkcheck_ignore = [
 ]
 linkcheck_timeout = 30
 # github.com aborts a share of a runner's concurrent probes outright
-# ("RemoteDisconnected"), not with 429, so `linkcheck_rate_limit_timeout` never
-# engages. Two consecutive 2026-08-12 runs broke on a *different* subset each
-# time (conda-forge/vmex-feedstock, uwplasma/GKX, uwplasma/vmex/releases) while
-# all three answered 200 outside CI. Fewer parallel probes and a retry turn
-# that into a pass without hiding a genuinely dead link.
+# ("RemoteDisconnected") rather than answering 429, so
+# linkcheck_rate_limit_timeout never engages. Fewer parallel probes and a retry
+# clear that without hiding a genuinely dead link.
 linkcheck_workers = 2
 linkcheck_retries = 3
