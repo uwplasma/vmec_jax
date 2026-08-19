@@ -72,7 +72,7 @@ Smallest possible diff to green; everything else moves to the new branch off `ma
 
 Acceptance: PR CI fully green (quality, coverage gate, linkcheck), PR merged.
 
-## Phase 1 — Examples run honestly (the "stall" fix)  [DONE: 1.a root-caused and fixed]
+## Phase 1 — Examples run honestly (the "stall" fix)  [1.a fixed; one open decision, see log]
 
 Diagnosis (instrumented reproduction, `profile_stall.py`, uncontended): the examples descend
 (overnight log: 18 iterations, cost 25.0 -> 2.64) and healthy iterations cost ~10-12 s
@@ -750,3 +750,26 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   only` that exists in no current source, and a 575 s symmetric Jacobian. Always run remote work
   as `cd <checkout> && PYTHONPATH=<checkout> python3 ...` and assert `vmex.__file__` in the
   output. Clearing `__pycache__` does not help — it was never the cache.
+- 2026-08-19 rogeriojorge: P1.a OPEN DECISION for whoever picks this up. The
+  `jacobian_adjoint_tol = 1e-4` default is committed and the speedup is real and large — at the
+  degraded iterate the warm Jacobian goes 395 s -> 28 s (certifier 9000 iterations and 47/48
+  columns uncertified, versus 207 iterations and all certified). But two things must be settled
+  before calling it finished:
+  (1) `tests/test_optimize.py::test_least_squares_implicit_jac_solver_block` now FAILS. It pins
+  the block lane against the per-dof GMRES lane at `rtol=1e-6`, and that guarantee genuinely
+  weakens when both lanes certify to 1e-4 (each is within 1e-4 of exact, so they may differ by
+  2e-4). This is the trade-off surfacing honestly, not a flaky test. Do NOT relax the assertion
+  just to make it green — decide the policy first, then update the test AND its docstring to
+  state the new contract.
+  (2) The loose-vs-tight difference is 3.2e-5 at a clean iterate but 1.4e-1 at the degraded one.
+  That large number is almost certainly comparing against a broken reference: at that iterate the
+  tight solve fails its certificate, returns NaN columns, and the caller falls back to the
+  previous Jacobian — so "tight" there is not a Jacobian at all. `jac_accuracy.py` in the session
+  scratchpad settles it by comparing BOTH against a central finite-difference column and printing
+  the uncertified/NaN counts for each; it was still running at hand-off. If loose matches FD and
+  tight does not, the default is not merely faster but more correct, and the block-vs-GMRES test
+  should be re-pinned at the Jacobian tolerance. If loose does NOT match FD, reconsider: keep the
+  tight default and make the fix adaptive instead (start tight, relax only when the certifier
+  reports uncertified columns), which the new `holder["jac_certifier_unconverged"]` counter makes
+  straightforward.
+  Everything else in Phase 1 (flush, heartbeat, monitor double-solve, examples) is done and green.
