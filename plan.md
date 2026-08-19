@@ -1640,7 +1640,7 @@ on the command line, and alpha-particle loss fraction as an optimizable that a
 boundary optimization can actually descend. **#122 does not merge as it
 stands** — the script is the specification, not the deliverable.
 
-### 21.1 ESSOS prerequisites [DOING]
+### 21.1 ESSOS prerequisites [DONE — uwplasma/ESSOS#61]
 
 Two things block a differentiable loss fraction, both on the ESSOS side, both
 verified by reading the source:
@@ -1657,12 +1657,37 @@ verified by reading the source:
   `loss_lost_fraction` (essos/objective_functions.py:252) is identically zero.
   It is a correct diagnostic and a useless objective for a gradient method.
 
-The ESSOS pull request adds an array constructor and a smooth surrogate
-alongside the exact diagnostic, which stays exact. Shape of the surrogate: a
-sigmoid on how far past `r_max` each particle's radial coordinate ever gets,
-averaged over particles, with the smoothing width an explicit argument. A hard
-`jnp.max` over time passes gradient through one sample per particle, so a soft
-maximum is the better choice; the ESSOS PR settles that with numbers.
+ESSOS#61 adds `Vmec.from_arrays(...)` and `Tracing.soft_loss_fraction(r_max,
+width)` with the matching `loss_soft_lost_fraction` objective. The surrogate is
+`mean_i sigmoid((r_soft_i - r_max)/width)` with
+`r_soft_i = sum_t r_i(t) * softmax_t(r_i(t)/width)`. The softmax-weighted mean
+beats `width*logsumexp(r/width)` because the latter carries a
+`width*log(n_times)` offset set by the save grid rather than the orbit.
+
+Measured: the exact `loss_fraction` gradient is 0.0 as predicted; the surrogate
+gradient is -1.34e-1 at width 0.02, and the surrogate converges on the exact
+value as the width shrinks — 0.2510 at width 0.002 and 0.250049 at 0.001
+against an exact 0.25. `from_arrays` reproduces the file route bit-for-bit on
+`B`, `AbsB`, the surface and a traced trajectory. The exact diagnostic is
+untouched.
+
+**Two findings from that work change the vmex design below.**
+
+*`rmnc`/`zmns` do not affect guiding-centre trajectories.* The flux-coordinate
+orbit equations use `bsub*`, `bsup*`, `gmnc` and `bmnc` only; the geometry
+coefficients enter just `to_xyz` and the Cartesian `B`. A gradient probe that
+scales `rmnc`/`zmns` returns zero for both the exact and the soft loss. So
+21.2 must route the boundary dependence through the *recomputed equilibrium's
+field coefficients* — the whole point of having vmex in the loop — and a test
+that perturbs geometry alone would look like a broken gradient when it is
+physically correct.
+
+*ESSOS `main` and `rj/coils_from_nearaxis` have diverged* (common ancestor
+`4df878f`). No loss-fraction objective exists on `main` at all, and `main`'s
+`Vmec.__init__` differs — no `raxis_cc`/`zaxis_cs`, no `s` argument. ESSOS#61
+targets `main` with a `(field, particles, ...)` signature, which is the right
+shape for a boundary optimization; reconciling it with the coil-dof signature
+on the working branch is a separate job.
 
 ### 21.2 `vmex/core/tracing.py` [TODO]
 
@@ -1726,3 +1751,4 @@ the ARIES-CS baseline for a case with substantial losses. Compare the ordering
 of loss fractions between two such configurations rather than an absolute
 number, which depends on the tracing model and particle count.
 - 2026-08-19 claude: P21 — planned the tracing feature; ESSOS PR for the array constructor and smooth surrogate in flight; #122 stays open as the specification.
+- 2026-08-19 claude: P21.1 done — ESSOS#61 adds Vmec.from_arrays and a soft loss fraction (exact grad 0.0 -> surrogate -1.34e-1, converging to 0.250049 at width 1e-3); geometry coefficients carry no orbit gradient, so 21.2 must go through the field coefficients.
