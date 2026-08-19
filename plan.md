@@ -916,7 +916,8 @@ Append-only; newest last; one line per contribution (see "How to use this file")
 - 2026-08-19 rogeriojorge: P8 — thread oversubscription is RULED OUT as the explanation for the
   office box's slow Jacobian. Same symmetric case pinned to 8 cores with `taskset -c 0-7`:
   Jacobian 469.1 s and compile 711.5 s, against 516.2 s and 754.5 s on all 36 — a 9% improvement,
-  i.e. noise on this scale, not the 90-280x factor. Restricting cores if anything helps slightly,
+  i.e. noise on this scale, not the 90-280x factor. The LASYM row agrees: 819.3 s on 8 cores
+  against 869.4 s on 36, again ~6%. Both cases, both directions, same answer. Restricting cores if anything helps slightly,
   which is the opposite of a thread-thrashing signature. That leaves **jax 0.6.2 versus 0.9.2**
   as the standing hypothesis (and the laptop, which is 90-280x faster here, is the one on the
   newer JAX). Next step is to upgrade jax on that host and re-measure — it changes someone's
