@@ -1311,7 +1311,7 @@ n=0 m=1 in both channels, since no existing test would have caught this.
    error. Not yet verified: the JVP/gradient of the asymmetric kernel, the
    `streamed` Fourier mode, and free-boundary LASYM.
 
-2a. **[TODO] Real defect found next door: `boozer_tables.py:124` truncates the
+2a. **[DONE] Real defect found next door: `boozer_tables.py:124` truncates the
    VMEC Nyquist band.** `m_max, n_max = ntheta1 // 2 - 1, max(nzeta // 2 - 1, 0)`
    builds 41 modes (m<=4, |n|<=4) where the wout Nyquist set has 61 (m<=5,
    |n|<=5), dropping a band carrying 2.49% of `bmnc` and 2.77% of `bmns` on
@@ -1327,6 +1327,34 @@ n=0 m=1 in both channels, since no existing test would have caught this.
    `QIResidual` -> `boozer_bmnc_state` -> booz_xform_jax. It does **not** affect
    the QA/QH/QP asymmetry examples, which use `QuasisymmetryRatioResidual`, a
    real-space wout-table residual with booz_xform nowhere in the loop.
+
+   **Fixed on `fix/boozer-nyquist-band` (rebased onto main).** `m_max, n_max =
+   ntheta1 // 2, nzeta // 2`, matching how `wrout.f` sizes the wout Nyquist
+   table from the grid (`mnyq = ntheta1/2`, `nnyq = nzeta/2`). The weights
+   needed care: the closing row and column are self-conjugate on an even grid,
+   so they carry `2/(ntheta1*nzeta) * h_m * h_n` with `h = 0.5` on a fold, which
+   is what `wrout.f`'s `cosmui(:,mnyq) *= 0.5` amounts to; odd grids keep the
+   plain factor of two.
+
+   One correction to my own brief, worth recording because acting on it would
+   have reintroduced the error: the sine projection is *not* identically zero
+   across the whole Nyquist row. It vanishes only at the four self-conjugate
+   corners. At `m = ntheta1/2` with `n != 0, +-nzeta/2` the sine is genuinely
+   nonzero and the wout carries it — `bmns(5, 1..4) = 2.029e-4, -3.026e-5,
+   4.107e-5, -4.606e-5`, reproduced to all digits. Only the corners are zeroed.
+
+   Result: the projection now reaches the wout Nyquist mode set exactly on four
+   decks (symmetric and LASYM, even and odd `nzeta`, nfp=1 and 3), agreeing on
+   every mode including the new band — worst case 2.87e-14, typically ~1e-16.
+   The `test_omnigenity.py` gate tightened from 2e-2/3e-2 to 1.1e-4/1.1e-3
+   against a measured 1.055e-5/1.025e-4, and a new
+   `test_projection_closes_at_the_grid_nyquist_band` asserts the mode set equals
+   the wout table, that the dropped band was non-negligible, and that the corner
+   sines are exactly zero. `_boozer_lasym_state` now honours `oversample`.
+
+   Blast radius, for the record: the symmetric `boozer_bmnc_state` lane builds
+   its tables inline and never calls `boozer_input_tables`, so this only ever
+   affected LASYM Boozer spectra and direct `boozer_input_tables` callers.
 
 3. Audit the LASYM paths in vmex, booz_xform_jax, neo_jax, and
    virtual_casing_jax against the literature for sign and parity errors: the
@@ -1475,3 +1503,4 @@ every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — like-for-like shows LASYM starts 38x worse in QS because of the 0.01 seed perturbation, not that the lane is broken; amplitude sweep running.
 - 2026-08-19 claude: P17 — seed hypothesis refuted: LASYM at amp=0 starts from the symmetric seed and still ends 74x worse; QS lane consistency ruled out; QS-only rerun in flight.
 - 2026-08-19 claude: P17 — RESOLVED. QS-only: LASYM went from matching symmetric pre-fix (2.436e-4 vs 2.445e-4) to beating it post-fix (1.599e-4). Remainder is example objective weighting, not a code defect.
+- 2026-08-19 claude: P17.2a — Nyquist-band projection fixed and gated (2-3% -> ~1e-16 on the band); branch fix/boozer-nyquist-band rebased onto main.
