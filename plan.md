@@ -52,7 +52,7 @@ the session scratchpad: `profile_lasym.py`, `fb_isolate.py`, `fb_forward_anatomy
 
 ---
 
-## Phase 0 — Unblock and merge PR #123 (`rj/vmec-extender-field`)  [DONE except the merge]
+## Phase 0 — Unblock and merge PR #123 (`rj/vmec-extender-field`)  [DONE: CI fully green; merge is the human's call]
 
 Smallest possible diff to green; everything else moves to the new branch off `main`.
 
@@ -908,3 +908,17 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   `rmns/zmnc/lmnc/bmns`, which `READ_BOOZ_IN` allocates but nothing releases. Both leak once per
   `neo_dealloc`, which compounds in an optimization loop that reinitializes NEO each iteration.
   P5d is now complete: both upstream PRs are open and Phase 5 can proceed on the NEO_JAX side.
+- 2026-08-19 rogeriojorge: P0 CI is **fully green** on PR #123 — all thirteen jobs including
+  `Changed executable lines (>= 95%)` and the PR gate, plus Docs linkcheck. The branch arrived
+  red (ruff, manifest, trial-pressure test, dead link, changed-line coverage at 78%) and is now
+  clean. `MERGEABLE / BLOCKED` remains only because the PR still wants its review approval; the
+  merge itself is deliberately left to a human.
+- 2026-08-19 rogeriojorge: P8 — thread oversubscription is RULED OUT as the explanation for the
+  office box's slow Jacobian. Same symmetric case pinned to 8 cores with `taskset -c 0-7`:
+  Jacobian 469.1 s and compile 711.5 s, against 516.2 s and 754.5 s on all 36 — a 9% improvement,
+  i.e. noise on this scale, not the 90-280x factor. Restricting cores if anything helps slightly,
+  which is the opposite of a thread-thrashing signature. That leaves **jax 0.6.2 versus 0.9.2**
+  as the standing hypothesis (and the laptop, which is 90-280x faster here, is the one on the
+  newer JAX). Next step is to upgrade jax on that host and re-measure — it changes someone's
+  environment, so ask first. If the version turns out not to explain it, profile XLA:CPU on that
+  host directly rather than guessing at a third hypothesis.
