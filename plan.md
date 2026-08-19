@@ -72,7 +72,7 @@ Smallest possible diff to green; everything else moves to the new branch off `ma
 
 Acceptance: PR CI fully green (quality, coverage gate, linkcheck), PR merged.
 
-## Phase 1 — Examples run honestly (the "stall" fix)  [1.a fixed; one open decision, see log]
+## Phase 1 — Examples run honestly (the "stall" fix)  [DONE]
 
 Diagnosis (instrumented reproduction, `profile_stall.py`, uncontended): the examples descend
 (overnight log: 18 iterations, cost 25.0 -> 2.64) and healthy iterations cost ~10-12 s
@@ -810,3 +810,38 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   need a solve-backed `VmecProblem`, a `freeboundary_implicit.py` m=1 edge-pairing branch
   unreachable on the only free-boundary deck available (DIII-D, `ntor=0`), extender parameter-VJP
   fallbacks, `FFMpegWriter`, and the successful `import neo_jax` line.
+- 2026-08-19 rogeriojorge: P1 [DONE]. The open decision is closed by measurement, and the
+  earlier worry about it was based on two of my own mistakes, both now fixed.
+  Final sweep at the LASYM QA iterate (warm, compile excluded by calling twice in one process),
+  `jacobian_adjoint_tol` against a 1e-7 reference:
+
+  | tol | warm jac | certifier iters | uncertified | relative vs 1e-7 |
+  |---|---|---|---|---|
+  | 1e-7 | 23.1 s | 962 | 0 | reference |
+  | 1e-6 (old behaviour) | 6.6 s | 542 | 0 | 1.8e-5 |
+  | **1e-4 (new default)** | **1.2 s** | **0** | 0 | **4.4e-5** |
+  | 1e-3 | 1.2 s | 0 | 0 | 4.4e-5 |
+
+  So the default is 19x faster than a 1e-7 Jacobian and 5.5x faster than the old 1e-6 one, for
+  4.4e-5 relative error — and the error *plateaus* there, because at 1e-4 the certifier accepts
+  the block backsolve unchanged (0 iterations) and 1e-3 buys nothing further. At the degraded
+  iterate the same change is the difference between converging in 207 iterations and running to
+  9000 with 47 of 48 columns uncertified over 58 minutes.
+  MISTAKE 1 (retracted): I believed the failing
+  `test_least_squares_implicit_jac_solver_block` showed the tolerance legitimately weakening
+  block-vs-GMRES agreement, and nearly relaxed its assertion. Measured in that test's own case
+  the two lanes agree to **1.1e-16**. The failure was unrelated.
+  MISTAKE 2 (the real bug, fixed): carrying the tolerance as
+  `dataclasses.replace(cfg, adjoint_tol=...)` gave the Jacobian lanes a second config identity,
+  which misses every cache keyed on the original and rebuilt the runtime *inside* the traced
+  Jacobian — a TracerArrayConversionError out of `setup.radial_grids`, and the CI
+  implicit-response lane. A tolerance is a number: it is now threaded as `rtol=` through
+  `_adjoint_solve`, `_adjoint_acceptance`, and the multi-RHS certifier. General lesson for this
+  codebase: never manufacture a new `ImplicitConfig` on a traced path.
+- 2026-08-19 rogeriojorge: P8 first verified remote row (office box, 36-core CPU, jax 0.6.2,
+  import asserted as /home/rjorge/local/vmex): symmetric ns=31/mpol=5/max_mode=2, solve 2.9 s,
+  build 56.7 s, compile 754.5 s, residual 0.52 s, **Jacobian 516.2 s**. That checkout predates
+  the Jacobian-tolerance fix, so it is a pre-fix baseline — but a Jacobian that costs ~2-10 s on
+  an Apple laptop costing ~500 s on a 36-core Linux box is a real finding for the performance
+  program, and the first thing to re-measure there after the fix lands. Compile at 754 s on that
+  machine also dwarfs the laptop's ~40 s.
