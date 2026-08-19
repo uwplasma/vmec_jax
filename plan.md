@@ -78,10 +78,13 @@ Diagnosis (instrumented reproduction, `profile_stall.py`, uncontended): the exam
 (overnight log: 18 iterations, cost 25.0 -> 2.64) and healthy iterations cost ~10-12 s
 (residual re-solve 8-10 s, Jacobian 1.8-3.9 s). The stall is real and has FOUR components, now
 measured:
-(a) **Pathological Jacobian evaluations.** At some iterates one jitted Jacobian execution runs
-    10+ minutes vs 2-4 s normally — stack sample shows the main thread blocked in a single XLA
-    `Execute` (`BlockUntilReady`), i.e. the per-dof implicit linear solves inside `jac_jit` hit
-    their iteration caps at a badly conditioned trial (near the stage bounds). All 48 dof solves
+(a) **Pathological Jacobian evaluations — the dominant cost, and it is systematic.** Full-stage
+    measurement (LASYM QA, max_mode=2, 48 dofs): jac #1-2 take 1.8-3.9 s, then EVERY Jacobian
+    from iterate ~3 on takes ~2000-2240 s (~35 min; ~42 s per dof column vs ~0.2 s early) while
+    residual re-solves stay at 3.5 s. Stack sample: main thread blocked in a single XLA
+    `Execute` (`BlockUntilReady`) — the per-dof implicit linear solves inside `jac_jit` grind
+    once the iterate moves away from the reference/compile point (frozen preconditioner/tcon
+    quality? hot-restart seed distance?), i.e. degradation is persistent, not an unlucky trial. All 48 dof solves
     share one operator `dF/dz(z*)`: make the factor-once amortized block-Thomas path
     (`solvax.block_thomas_factor/solve`, already documented in `optimize.py`) the default for
     ndof over a small threshold, keep per-dof GMRES as fallback, cap inner iterations with a
@@ -611,3 +614,7 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   audits distilled into P5-P7, P10). Added P11-P14 (virtual-casing memory, min-|iota| floor,
   QA/QI single-stage matrix, Kappel L_gradB/L_gradgradB). Plan committed as its own PR; all
   implementation PRs branch from main after PR #123 merges (P0).
+- 2026-08-18 rogeriojorge: P1.a quantified with the completed instrumented stage
+  (`profile_stall.py`): jac #1-2 = 1.8-3.9 s, every later Jacobian ~2000-2240 s (~42 s/dof
+  column) with residuals steady at 3.5 s — the degradation is systematic once x leaves the
+  reference state, so the amortized factor-once Jacobian path is priority one of Phase 1.
