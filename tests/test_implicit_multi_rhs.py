@@ -242,3 +242,21 @@ def test_jacobian_certification_tolerance_is_separate_from_the_gradient_one():
     assert cfg.jacobian_adjoint_tol == 1.0e-4
     default = im.make_config(inp, ftol=1.0e-10, max_iterations=1000)
     assert default.jacobian_adjoint_tol > default.adjoint_tol
+
+
+def test_raw_block_apply_requires_stored_factors():
+    """Applying a stored block inverse without factors is a caller error.
+
+    ``_raw_block_system(..., factor=False)`` builds the exact operators but
+    keeps no factorization, so the precondition has to be stated rather than
+    surfacing later as an attribute error deep inside the solve.
+    """
+    identity = lambda value: value  # noqa: E731
+    system = im._RawBlockSystem(
+        factors=None, pack=identity, unpack=identity, project=identity,
+        operator=identity, operator_t=identity, band_operator=identity,
+        band_operator_t=identity, lower=jnp.zeros((1, 1, 1)),
+        diagonal=jnp.zeros((1, 1, 1)), upper=jnp.zeros((1, 1, 1)),
+        row_scale=jnp.ones((1, 1)), column_scale=jnp.ones((1, 1)))
+    with pytest.raises(ValueError, match="raw block factors"):
+        im._raw_block_apply(system, jnp.zeros((1, 1)))

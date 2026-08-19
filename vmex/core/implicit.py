@@ -1905,7 +1905,6 @@ def _raw_block_apply(
     rhs: SpectralState,
     *,
     transpose: bool = False,
-    refinements: int = 0,
 ) -> SpectralState:
     """Apply one stored raw block inverse without rebuilding its factors."""
     if system.factors is None:
@@ -1921,13 +1920,7 @@ def _raw_block_apply(
                                else system.column_scale)
         return system.project(system.unpack(solution))
 
-    solution = solve(rhs)
-    operator = system.band_operator_t if transpose else system.band_operator
-    for _ in range(int(refinements)):
-        defect = jax.tree.map(jnp.subtract, rhs, operator(solution))
-        correction = solve(defect)
-        solution = jax.tree.map(jnp.add, solution, correction)
-    return solution
+    return solve(rhs)
 
 
 def _implicit_evolved_tangent_multi_rhs(

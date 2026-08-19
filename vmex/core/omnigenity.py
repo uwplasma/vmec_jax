@@ -324,16 +324,12 @@ def boozer_bmnc_state(
     # -- select rows, mirror the reduced theta grid to the full circle -------
     ntheta2 = int(np.shape(fields.total_pressure)[1])
     nzeta = int(np.shape(fields.total_pressure)[2])
-    if bool(setup.lasym):
-        ntheta1 = ntheta2
+    # Asymmetric states returned through _boozer_lasym_state above, so only
+    # the reduced [0, pi] grid reaches here and always needs mirroring.
+    ntheta1, i_src, k_src = _mirror_maps(ntheta2, nzeta)
 
-        def full(a):
-            return jnp.asarray(a)[rows]
-    else:
-        ntheta1, i_src, k_src = _mirror_maps(ntheta2, nzeta)
-
-        def full(a):
-            return jnp.asarray(a)[rows][:, i_src, k_src]
+    def full(a):
+        return jnp.asarray(a)[rows][:, i_src, k_src]
 
     bmag = jnp.sqrt(jnp.maximum(full(bsq2), tiny))          # (nsurf, nt1, nz)
     bsubu = full(fields.bsubu)
