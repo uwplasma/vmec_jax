@@ -855,3 +855,16 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   for systems built with `factor=False`, so it stays and now has a three-line test rather than
   being deleted for the coverage number. Do not treat "uncovered" as a synonym for "dead" when
   working the remaining items.
+- 2026-08-19 rogeriojorge: P6.8 plot fix done (`74cafb91`) — the eps_eff panel now picks its
+  scale from the data. Measured on `wout_QA_optimized.nc`: the profile spans 1.64e-3 to 4.37e-3,
+  a factor of 2.67, i.e. well under one decade, which is the normal case for an *optimized*
+  configuration. Matplotlib's log autoscale snapped that to a single decade tick, flattening the
+  curve against a limit and hiding the radial minimum — precisely what the panel is read for.
+  The rule is now: keep the logarithm only when the profile actually spans a decade or more,
+  otherwise linear with scientific tick labels, and pad the limits by 8% of the range so the
+  extrema sit inside. After the change the same case gives 7 tick labels with the minimum
+  comfortably inside the axis. Both branches are pinned by tests (the pre-existing test uses a
+  3-decade `geomspace` and still asserts log; the new one uses a 2.7x span and asserts linear,
+  the minimum inside the limits, and at least four tick labels).
+  Still open in this area: more surfaces in the summary panel, which is gated on the eps_eff lane
+  being fast (P6), not on plotting.
