@@ -64,6 +64,28 @@ source, license, generator revision, and installed paths to
 ``python tools/fetch_assets.py --bundle golden-v1``. CI rejects any tracked
 file larger than 1 MiB.
 
+**Pull-request lanes must not depend on a released bundle.** A release can be
+deleted, and when ``assets-20260316-nc`` was, every pull request went red on
+the download step while the lane it fed lost exactly one test. PR selectors run
+on git-tracked decks, generated fixtures, and ``tests/golden_digests.json``;
+only the nightly and weekly lanes fetch ``reference-nc``. Prefer a generated
+fixture to a released one whenever the assertion is about solver behaviour
+rather than a specific machine: ``tests/test_lasym_free_case.py`` (a converged
+free-boundary case as 90 Chebyshev coefficients) and
+``tests/test_qi_free_boundary_case.py`` (analytic modular coils tabulated with
+``tabulate_cartesian_field``) are the two that PR lanes build on, and modules
+that need neither declare ``"asset": "generated"`` in ``tests/manifest.json``.
+
+Cut a new bundle with ``python tools/pack_reference_assets.py``, which packs
+the git-ignored netCDF files under each bundle's roots into a byte-reproducible
+tarball and prints the manifest fields. It applies two slimming rules, both
+measured lossless: MAKEGRID's ``ar_``/``ap_``/``az_`` vector potential is
+dropped (neither VMEX nor ``xvmec2000`` reads it back — half of
+``mgrid_cth_like.nc``), and duplicate ``single_grid/`` copies are re-created on
+extraction from the manifest's ``mirrors`` rule instead of shipped. Mirroring
+is also what keeps the tracked ``mgrid_cth_like_lasym_small.nc`` and its
+``single_grid/`` copy in step.
+
 Documentation builds must pass strict mode::
 
   python -m sphinx -W -j auto -b html docs docs/_build/html

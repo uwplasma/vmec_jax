@@ -35,10 +35,10 @@ Four runnable examples ship with the package and need no command-line
 arguments (each has editable inputs at its top):
 
 ```console
-python examples/mirror_fixed_boundary_nonaxisymmetric.py   # rotating-ellipse fixed boundary
-python examples/mirror_free_boundary_beta_scan.py          # axisymmetric free-boundary beta scan
-python examples/stellarator_mirror_hybrid.py               # periodic B-spline racetrack hybrid
-python examples/qi_mirror_hybrid_fourier_vs_bspline.py     # QI-mirror hybrid: Fourier vs B-spline
+python examples/mirror/mirror_fixed_boundary_nonaxisymmetric.py   # rotating-ellipse fixed boundary
+python examples/mirror/mirror_free_boundary_beta_scan.py          # axisymmetric free-boundary beta scan
+python examples/mirror/stellarator_mirror_hybrid.py               # periodic B-spline racetrack hybrid
+python examples/mirror/qi_mirror_hybrid_fourier_vs_bspline.py     # QI-mirror hybrid: Fourier vs B-spline
 ```
 
 The first checks every convergence gate for the rotating ellipse and the
@@ -60,7 +60,7 @@ cross-section, and residual figures.
 ## Run a free-boundary beta scan
 
 ```console
-python examples/mirror_free_boundary_beta_scan.py
+python examples/mirror/mirror_free_boundary_beta_scan.py
 ```
 
 The script solves every beta point from 0 through 50% and writes one MOUT per
@@ -105,7 +105,7 @@ result = solve_fixed_boundary(setup.discretization, setup.state)
 solve basis — the contract under which the circular-section lane converges
 monotonically ({doc}`/explanation/mirror-geometry`). `build_qi_mirror_hybrid`
 splices straight legs into a QI stellarator axis instead;
-`examples/qi_mirror_hybrid_fourier_vs_bspline.py` runs that construction end
+`examples/mirror/qi_mirror_hybrid_fourier_vs_bspline.py` runs that construction end
 to end.
 
 ## Pick the device

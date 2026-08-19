@@ -35,11 +35,11 @@ recognized automatically:
   :class:`~vmex.core.bootstrap.RedlBootstrapMismatch`) are callable this
   way, as is any user lambda;
 - **two positional arguments** — the term is treated as a pure traceable
-  ``(state, runtime)`` function (the scalar targets below).
+  ``(equilibrium_state, solver_context)`` function (the scalar targets below).
 
 For ``jac="implicit"`` every term must be traceable: either a
-two-positional ``(state, runtime)`` callable, or an object exposing a
-``residuals_state(state, runtime)`` method (the residual classes do — the
+two-positional ``(equilibrium_state, solver_context)`` callable, or an object
+exposing a ``residuals_state(equilibrium_state, solver_context)`` method (the residual classes do — the
 optimizer picks it up automatically, so the *same* term list works in both
 gradient modes).  Terms that evaluate wout tables on host NumPy
 (:func:`~vmex.core.optimize.d_merc`,
@@ -95,15 +95,26 @@ QH, and QP scripts are in ``examples/optimization/``.
 Scalar geometry and profile targets
 -----------------------------------
 
-All of these are pure ``(state, runtime)`` functions — traceable, cheap,
+Here ``equilibrium_state`` contains VMEC's spectral equilibrium coefficients;
+``solver_context`` contains the prepared grids, profiles, and transforms. It is
+not elapsed run time. All of these are pure two-argument functions — traceable, cheap,
 and composable with both gradient modes:
 
 - :func:`~vmex.core.optimize.aspect_ratio` — the VMEC/simsopt effective
   aspect ratio;
 - :func:`~vmex.core.optimize.volume` — plasma volume;
+- :func:`~vmex.core.optimize.min_abs_iota` — the smallest ``|iota|`` over the
+  half-mesh surfaces, and the default transform floor in the shipped
+  optimization examples.  A floor on the profile *minimum* is what keeps the
+  transform coming from shaping: a mean target is satisfiable while an
+  interior surface sits near zero transform, which is exactly what a
+  current-carried finite-beta profile does.
+  :func:`~vmex.core.optimize.soft_min_abs_iota` is the smooth variant
+  (``softmax``-weighted, so it stays within ``[min, max]``) for optimizers
+  that stall on the ties of a hard minimum;
 - :func:`~vmex.core.optimize.mean_iota` /
-  :func:`~vmex.core.optimize.edge_iota` — rotational-transform targets
-  (a floor on ``|iota|`` avoids the rational surfaces near zero transform);
+  :func:`~vmex.core.optimize.edge_iota` — profile-average and boundary
+  transform, for decks that genuinely want a target rather than a floor;
 - :func:`~vmex.core.optimize.mirror_ratio` — ``(Bmax - Bmin)/(Bmax +
   Bmin)`` on one half-mesh surface (outermost by default), the practical QI
   knob;
@@ -124,9 +135,10 @@ remaining a pure traceable tuple term:
 
    maximum_elongation = 8.0
 
-   def elongation_excess(state, runtime):
+   def elongation_excess(equilibrium_state, solver_context):
        return jnp.maximum(
-           opt.max_elongation(state, runtime) - maximum_elongation, 0.0
+           opt.max_elongation(equilibrium_state, solver_context)
+           - maximum_elongation, 0.0
        )
 
    terms = [(elongation_excess, 0.0, 1.0)]
@@ -158,8 +170,8 @@ the elongation threshold.
 Two reporting diagnostics run on the host-side wout engine:
 :func:`~vmex.core.optimize.d_merc` (Mercier interchange criterion) and
 :func:`~vmex.core.optimize.l_grad_b` (the ``L_grad_B`` coil-complexity proxy).
-Their live-state counterparts :func:`~vmex.core.stability.d_merc_state`
-(``lasym = False``), :func:`~vmex.core.stability.jdotb_state`,
+Their live-state counterparts :func:`~vmex.core.stability.d_merc_state`,
+:func:`~vmex.core.stability.jdotb_state`,
 :func:`~vmex.core.stability.jdotb_residual`,
 :func:`~vmex.core.stability.glasser_d_r_state`, and
 :func:`~vmex.core.optimize.l_grad_b_state` are pure JAX and can be composed
@@ -196,7 +208,8 @@ criterion. Then post-check
 ``abs(S) >> shear_epsilon`` on every target surface; a regularized zero-shear
 result is numerically defined but not a valid GGJ stability claim.
 
-``L_grad_B`` additionally has a fully traceable ``(state, runtime)`` lane,
+``L_grad_B`` additionally has a fully traceable
+``(equilibrium_state, solver_context)`` lane,
 :func:`~vmex.core.optimize.l_grad_b_state` — same convention
 (``L_grad_B = |B| sqrt(2 / ||grad B||_F^2)``, same sampling grid and radial
 stencils, wout-lane parity to float round-off), rebuilt from the state-field
@@ -227,8 +240,8 @@ squash-and-shuffle distance.
 
 :class:`~vmex.core.qi.ConstructedQIResidual` evaluates that fuller Goodman
 construction on the same traceable spectrum.  It is the production QI target.
-Use reduced angular and bounce sampling during optimization, then evaluate the
-default resolution for reporting:
+Use reduced angular and bounce sampling during optimization, then evaluate an
+independent resolved grid for reporting:
 
 .. code-block:: python
 
@@ -236,9 +249,11 @@ default resolution for reporting:
 
    surfaces = np.linspace(0.1, 1.0, 6)
    qi = ConstructedQIResidual(
-       surfaces, mboz=12, nboz=12, nphi=61, nalpha=13, n_bounce=15
+       surfaces, mboz=12, nboz=12, nphi=61, nalpha=18, n_bounce=21
    )
-   qi_report = ConstructedQIResidual(surfaces)
+   qi_report = ConstructedQIResidual(
+       surfaces, mboz=14, nboz=14, nphi=101, nalpha=29, n_bounce=31
+   )
    result = opt.least_squares(
        [(qi, 0.0, 10.0),
         (opt.aspect_ratio, 5.0, 0.005)],
@@ -259,6 +274,17 @@ diagnostic is not numerically interchangeable with a six-surface core-to-edge
 objective.  The independent wout/Boozer implementation
 (:func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout`) remains the
 cross-check for a finished configuration.
+
+The branch matching, running extrema, and interpolation in the constructed
+target are piecewise smooth. Changing ``nalpha``, ``nphi``, or ``n_bounce``
+can therefore change the local optimization path even when the value at an
+already-QI configuration is converged. For the common ``mboz=12`` optimization
+lane, ``(nphi, nalpha, n_bounce)=(61, 18, 21)`` is a useful inexpensive grid;
+the example above is the separate certification grid. At least
+``nalpha >= 2*mboz + 1`` should be used for a resolved final check. No one
+fixed grid guarantees the same basin across NFP and boundary mode number, so
+use continuation or a short QP basin stage and verify the final ranking on the
+certification grid.
 
 .. note::
 
@@ -286,9 +312,15 @@ replacement for the Goodman residual:
        inp, max_mode=6, jac="implicit")
 
 The two classes do not impose a shared weight. ``MaximumJResidual`` evaluates
-``dJ/dpsi`` at common pitch using signed toroidal flux and matched wells;
+the outward slope ``dJ/ds`` at common pitch using matched wells;
 invalid topology is NaN rather than a favorable zero. See
 :doc:`/explanation/confinement` for the sign and matching contract.
+
+For continuation from a rough QI seed, use
+:class:`~vmex.core.maxj.ConstructedMaximumJResidual` first. It evaluates the
+radial action slope in Goodman's differentiable squash-and-shuffle field;
+finish with ``MaximumJResidual`` so the optimized, unmodified field supplies
+the reported certificate.
 
 When both terms use the same surfaces and pitch,
 :class:`~vmex.core.maxj.JInvariantQIAndMaximumJResidual` concatenates their
@@ -314,10 +346,13 @@ reproducing the workflow of Landreman–Buller–Drevlak, arXiv:2205.02914):
   traceable ``residuals_state`` lane for ``jac="implicit"``.  Evaluated on
   the published optima of arXiv:2205.02914, ``f_boot`` lands at 2.5e-4 (QA,
   2.5% beta), 3.5e-5 (QH 2.5%), 1.3e-4 (QH 5%);
-- ``least_squares(..., current_dofs=k)`` — frees the first ``k`` ``AC``
-  power-series coefficients plus ``CURTOR`` alongside the boundary
-  harmonics, in both gradient modes — the dof set a self-consistent
-  bootstrap optimization needs;
+- ``least_squares(..., current_dofs=k)`` — frees the first ``k`` current
+  coefficients or ``I'(s)`` spline-knot values plus ``CURTOR`` alongside the
+  boundary harmonics, in both gradient modes;
+- :func:`~vmex.core.optimize.resample_current_profile` — resamples the
+  represented enclosed-current profile onto a chosen number of spline knots,
+  so continuation stages can add radial flexibility without changing their
+  starting equilibrium;
 - :func:`~vmex.core.bootstrap.self_consistent_bootstrap` — a
   fixed-boundary Picard loop that iterates the current profile to
   bootstrap consistency (hot-restarted solves; a tokamak test case
@@ -332,10 +367,82 @@ reproducing the workflow of Landreman–Buller–Drevlak, arXiv:2205.02914):
        Te_coeffs=12.0e3 * np.array([1, -1]),               # T0 (1 - s)
        Ti_coeffs=12.0e3 * np.array([1, -1]))
    boot = RedlBootstrapMismatch(profiles, helicity_n=0)    # 0 = QA
+   inp = opt.resample_current_profile(inp, 6)
    result = opt.least_squares(
        [(qs, 0.0, 1.0), (boot, 0.0, 1.0), (opt.aspect_ratio, 6.0, 1.0)],
        inp, max_mode=4, jac="implicit",
-       current_dofs=6)          # free AC[0:6] + CURTOR with the boundary
+       current_dofs=5)          # five spline shapes + CURTOR; one knot is fixed
+
+The complete runnable workflows are
+``examples/optimization/QA_optimization_bootstrap.py`` and
+``QH_optimization_bootstrap.py``.  Their setup has two distinct steps:
+
+1. ``KineticProfiles`` describes the density and temperature seen by the
+   Redl model.  Coefficients are in increasing powers of normalized toroidal
+   flux ``s``; for example ``[1, 0, 0, 0, 0, -1]`` is ``1-s**5`` and
+   ``[1, -1]`` is ``1-s``.  These profiles do not silently replace VMEC's
+   pressure profile, so the examples explicitly give VMEC the matching
+   ``p = e ne (Te + Ti)`` profile and calibrate its scale to the target beta.
+2. ``self_consistent_bootstrap`` alternates a hot-restarted equilibrium solve,
+   evaluation of the Redl ``<J.B>`` target, and a power-series refit of
+   ``I'(s)``/``CURTOR``.  ``degree`` is the fitted current-polynomial degree,
+   ``s_eval`` is the radial collocation grid, ``tol`` bounds the relative
+   current-profile mismatch, and ``relax < 1`` damps difficult high-beta
+   fixed points.  The returned input and equilibrium seed the differentiable
+   optimization; the Picard loop itself is not differentiated.
+
+Before each continuation stage the examples call
+``resample_current_profile(inp, n_spline)`` and then use
+``current_dofs=n_spline-1``. The new uniform ``I'(s)`` knots preserve ``I(s)``
+at the stage boundary; one ordinate stays fixed while the others and
+``CURTOR`` become optimization variables. The fixed ordinate removes the
+otherwise redundant profile scale. Increasing ``N_CURRENT_SPLINE`` adds radial
+current flexibility; it does not change the VMEC boundary ``max_mode``.
+ESS scales only boundary
+Fourier modes, so current values use a separate parameter scale. In the examples,
+``PARAMETER_STEP`` is the characteristic low-order boundary-coefficient step,
+``CURRENT_PARAMETER_STEP`` is the characteristic normalized-current step,
+and ``MAX_PARAMETER_CHANGE`` is a broad per-stage safety box measured in
+those step units.  A safety box should not be active at the solution; exact
+hits indicate an artificial optimization floor.  Passing
+``restart_from=equilibrium`` when constructing the next
+:class:`~vmex.core.problem.VmecProblem` remaps the converged state to its new
+resolution and avoids a cold magnetic-axis guess.
+
+The QA/QH examples also include
+:func:`~vmex.core.stability.mercier_stability_residual` (stable ``DMerc > 0``)
+and :func:`~vmex.core.stability.glasser_stability_residual` (stable ``DR <= 0``
+where shear is nonzero). These dimensional VMEC values are much larger than
+QS or beta residuals, so their weights must be calibrated explicitly. Their
+live-state derivatives are checked against independently reconverged finite
+differences in ``tests/test_implicit_grad.py``.
+
+For a vacuum design, :func:`~vmex.core.stability.trial_pressure_d_merc_state`
+and :func:`~vmex.core.stability.trial_pressure_glasser_d_r_state` replace the
+explicit pressure-gradient term in the Mercier/Glasser expressions by a
+chosen trial beta and pressure shape while freezing geometry and current.
+Their ``*_stability_residual`` forms are AD-transparent objective rows. This
+is a fast pressure-sensitivity proxy, not a finite-beta certificate: it omits
+the pressure-driven geometry, current, and Shafranov-shift response, so the
+candidate must be re-solved at finite pressure.
+``QA_optimization_DMerc_vacuum.py`` exposes the workflow with ``TRIAL_BETA``
+and ``USE_TRIAL_STABILITY = True``; ``QH_optimization.py`` carries the same
+controls with the lane disabled by default. The stability
+rows are introduced only after a QA basin exists, normalized to that stage's
+incoming values, and increased in explicit continuation stages. Their
+one-dimensional tuple weights are zero for ``s < 0.2``, where the criterion is
+singular, and grow smoothly toward the edge, where stability is usually
+hardest. The script prints this radial choice whenever it is active. A small
+positive ``STABILITY_MARGIN`` avoids accepting a roundoff-level sign change.
+The example then adds 0.1% pressure and polishes the *actual* finite-beta
+``DMerc`` and ``DR`` on radial grids ending at ``NS=101``.  Only this resolved
+finite-pressure equilibrium is reported as the physical stability certificate;
+the vacuum and frozen-geometry curves remain useful screening diagnostics.
+
+The QA/QH bootstrap examples write a separate
+``*_bootstrap_current.png`` overlay of the equilibrium and Redl
+``<J.B>`` profiles. :meth:`~vmex.core.bootstrap.RedlBootstrapMismatch.current_profiles`
+returns the same three arrays for custom reporting.
 
 MHD stability
 -------------
@@ -421,7 +528,7 @@ Which objectives differentiate how
    * - scalar targets (aspect, volume, iota, mirror, elongation, well)
      - yes
      - yes
-     - pure ``(state, runtime)`` functions
+     - pure ``(equilibrium_state, solver_context)`` functions
    * - :class:`~vmex.core.omnigenity.QIResidual`
      - yes
      - yes
@@ -459,7 +566,6 @@ Which objectives differentiate how
      - yes
      - yes
      - traceable Mercier profile / smooth interior instability hinge
-       (stellarator-symmetric states only)
    * - :func:`~vmex.core.optimize.jdotb_state`,
        :func:`~vmex.core.optimize.jdotb_residual`,
        :func:`~vmex.core.optimize.mercier_shear_state`,
@@ -468,7 +574,7 @@ Which objectives differentiate how
      - yes
      - yes
      - traceable VMEC ``<J.B>`` and GGJ resistive-interchange profile /
-       smooth upper-bound residual (stellarator-symmetric states only)
+       smooth upper-bound residual
    * - :func:`~vmex.core.optimize.d_merc`,
        :func:`~vmex.core.optimize.l_grad_b`
      - yes
@@ -487,10 +593,16 @@ Which objectives differentiate how
      - eigenvector weights have no nonsymmetric-eig derivative
 
 ``jac="implicit"`` requires a fixed-boundary problem. Its boundary parameter
-map supports both symmetric and ``LASYM = T`` equilibria, but individual
-objectives can be symmetry-limited; in particular the traceable Mercier and
-Glasser objectives and quasisymmetry currently require ``LASYM = F``.
-The traceable ``jdotb`` objective supports both symmetry modes. See
+map supports both symmetric and ``LASYM = T`` equilibria. Traceable
+quasisymmetry, quasi-isodynamicity, Mercier, Glasser and ``jdotb`` objectives
+support both symmetry modes; individual objectives document any narrower
+scope. The eight scripts in ``examples/optimization/stellarator_asymmetry``
+pair QA/QH/QP/QI with vacuum/finite-beta runs. They copy the immutable input
+arrays, set ``LASYM=True``, and add finite ``RBS(1,1)`` and ``ZBC(1,1)`` seed
+coefficients so a local optimizer is not trapped in the symmetric subspace.
+Twice as many boundary families enlarge the search space but do not by
+themselves guarantee a lower minimum; compare equal solve budgets and inspect
+the reported asymmetric norm. See
 :doc:`/howto/optimize-a-boundary` for the gradient machinery and measured cost of each
 piece.
 
@@ -505,9 +617,9 @@ finite differences, one argument is enough:
    terms = [(lambda eq: float(eq.wout.b0), 1.0, 1.0)]   # target B0 = 1 T
 
 For implicit gradients, write it as a pure two-positional
-``(state, runtime)`` JAX function — the scalar targets in
+``(equilibrium_state, solver_context)`` JAX function — the scalar targets in
 :mod:`vmex.core.optimize` (~10 lines each) are the templates to copy.
 If it returns a vector, each entry becomes a Gauss–Newton residual row;
-give a class a ``residuals_state(state, runtime)`` method and a
+give a class a ``residuals_state(equilibrium_state, solver_context)`` method and a
 ``J(eq)``/``__call__`` pair and it will work in both modes, like the
 built-in residual classes.

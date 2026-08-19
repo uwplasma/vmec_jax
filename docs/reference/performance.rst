@@ -397,6 +397,10 @@ unaffected.  Library :func:`~vmex.core.multigrid.solve_multigrid` and
 :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` retain warm stage
 executables by default (the right policy for scans and repeated solves) and
 accept ``release_stage_cache=True`` to opt into the one-shot behaviour.
+The machine-scoped disk cache is bounded to 1 GiB. If a nearly full filesystem
+causes XLA to terminate with ``SIGBUS`` while mapping a new executable, free
+disk space or run with ``VMEX_COMPILATION_CACHE=disabled``; VMEX does not
+delete caches owned by other applications.
 The CLI and library compile solver lanes sequentially by default.
 ``--prefetch-compile`` (or ``prefetch_compile=True`` in the library) overlaps
 the next rung's compilation.  This can reduce cold-start latency on a
@@ -532,6 +536,12 @@ Persistent compilation cache
 ``vmex`` enables JAX's persistent XLA compilation cache on CPUs and
 accelerators, so the multi-second compile cost is paid once per machine, not
 once per process.
+
+On macOS CPU, VMEX also raises XLA's parallel-codegen partition count from 32
+to 128. This bounds LLVM linker recursion for large differentiated
+single-stage graphs and avoids native stack-guard failures without changing
+floating-point operations. An explicit user ``XLA_FLAGS`` value always wins;
+accelerator backends receive no CPU-only flag.
 
 .. warning::
 

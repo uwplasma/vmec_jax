@@ -1,7 +1,8 @@
-"""Differentiable free boundary via virtual casing (plan.md R15.3 + R19):
-:mod:`vmex.core.freeboundary_diff` writes ``B_out . n = 0`` as a smooth
-objective with ``B_plasma`` from the virtual-casing principle
-(``uwplasma/virtual_casing_jax``); the NESTOR forward solve is untouched.
+"""Physics and derivative certificates for prescribed-interface virtual casing.
+
+:mod:`vmex.core.virtual_casing` writes ``B_out . n = 0`` as a smooth objective
+with ``B_plasma`` from the virtual-casing principle. The NESTOR free-boundary
+solve is intentionally separate.
 Lanes: the wout->surface-data adapter reproduces ``B_total . n / |B|`` ~
 1e-16 on a converged equilibrium; asset-free synthetic-torus ``jax.grad``
 vs central FD; and the real cth-like ``extcur``/coil-dof gradients vs FD
@@ -20,7 +21,8 @@ import jax.numpy as jnp  # noqa: E402
 
 jax.config.update("jax_enable_x64", True)
 
-from vmex.core import freeboundary_diff as FBD  # noqa: E402
+from vmex.core import virtual_casing as VC  # noqa: E402
+from vmex.core.extender import VmecExtender  # noqa: E402
 from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
 from vmex.core.wout import read_wout  # noqa: E402
 
@@ -28,11 +30,11 @@ from vmex.core.wout import read_wout  # noqa: E402
 pytestmark = [
     pytest.mark.usefixtures("_module_jit_enabled"),
     pytest.mark.skipif(
-        not FBD.have_virtual_casing_jax(),
+        not VC.have_virtual_casing_jax(),
         reason="requires virtual_casing_jax",
     ),
 ]
-VmecSurfaceFieldData = FBD.VmecSurfaceFieldData
+VmecSurfaceFieldData = VC.VmecSurfaceFieldData
 
 REPO = Path(__file__).resolve().parents[1]
 WOUT = REPO / "examples" / "data" / "single_grid" / "wout_cth_like_free_bdy.nc"
@@ -108,7 +110,7 @@ def test_surface_data_reproduces_equilibrium_bnormal():
     if not WOUT.exists():
         pytest.skip(f"wout fixture unavailable: {WOUT}")
     wout = read_wout(WOUT)
-    sd = FBD.surface_field_data_from_wout(wout, nphi=24, ntheta=24)
+    sd = VC.surface_field_data_from_wout(wout, nphi=24, ntheta=24)
     assert sd.gamma.shape == (3, 24, 24)
     Bn = jnp.sum(sd.B_total * sd.normal, axis=0)
     absB = jnp.linalg.norm(sd.B_total, axis=0)
@@ -123,7 +125,7 @@ def test_synthetic_surface_gradient_fd_validates():
     Bn = jnp.sum(sd.B_total * sd.normal, axis=0)
     assert float(jnp.max(jnp.abs(Bn))) < 1e-12
 
-    prob = FBD.FreeBoundaryDiffProblem.from_surface_data(sd, digits=3)
+    prob = VC.PlasmaVacuumInterface.from_surface_data(sd, digits=3)
     assert prob.Bn_plasma.shape == (12, 12)
     assert bool(jnp.all(jnp.isfinite(prob.Bn_plasma)))
 
@@ -141,13 +143,100 @@ def test_synthetic_surface_gradient_fd_validates():
     assert abs(dir_ad - dir_fd) <= 1e-5 * abs(dir_fd) + 1e-9, f"AD {dir_ad:.6e} vs FD {dir_fd:.6e}"
 
 
+def test_finite_beta_extender_field_and_gradient_outside_lcfs(monkeypatch):
+    """The VMEX field composes coil and plasma fields beyond the LCFS."""
+    surface = _synthetic_surface(nphi=12, ntheta=12, nfp=1)
+
+    def coil_field(points):
+        return jnp.broadcast_to(jnp.array([0.0, 0.0, 0.4]), points.shape)
+
+    field = VmecExtender.from_surface_data(
+        surface,
+        external_field=coil_field,
+        digits=3,
+        levels=((13, 13), (26, 26)),
+    )
+    points = jnp.array([[1.8, 0.0, 0.1], [0.0, 1.9, -0.1]])
+    assert field.uses_virtual_casing
+
+    expected = field.plasma_field.B_plasma_xyz(points) + coil_field(points)
+    np.testing.assert_allclose(field.B(points), expected, rtol=2e-11, atol=2e-11)
+    jacobian = jax.vmap(
+        jax.jacfwd(lambda point: field.B(point[None, :])[0])
+    )(points)
+    np.testing.assert_allclose(field.gradB(points), jacobian, rtol=2e-5, atol=2e-6)
+
+    direction = jnp.array([0.3, -0.4, 0.2])
+    eps = 2.0e-5
+    finite_difference = (
+        field.B(points[:1] + eps * direction)
+        - field.B(points[:1] - eps * direction)
+    )[0] / (2.0 * eps)
+    autodiff = field.gradB(points[:1])[0] @ direction
+    np.testing.assert_allclose(autodiff, finite_difference, rtol=3e-4, atol=3e-6)
+
+    inp = type("Input", (), {"lfreeb": False})()
+    wout = type("Wout", (), {"betatotal": 0.01, "mgrid_file": ""})()
+    equilibrium = type("Equilibrium", (), {"inp": inp, "state": object(), "wout": wout})()
+    monkeypatch.setattr(VC, "surface_field_data_from_state", lambda *_args, **_kwargs: surface)
+    live = VmecExtender.from_equilibrium(
+        equilibrium,
+        external_field=coil_field,
+        digits=3,
+        levels=((13, 13), (26, 26)),
+    )
+    assert live.uses_virtual_casing
+    np.testing.assert_allclose(live.B(points), field.B(points), rtol=2e-11, atol=2e-11)
+
+    if hasattr(field.plasma_field, "plan_surface_precision"):
+        plan = field.plasma_field.plan_surface_precision(digits=3)
+        expected_surface_field = field.plasma_field.B_plasma_on_surface(
+            digits=3, precision=plan)
+    else:  # released virtual-casing-jax; public plan reuse arrives in PR #5
+        plan = VC.plan_vc_precision(surface, digits=3)
+        expected_surface_field = field.plasma_field._vc.compute_internal_B(
+            field.plasma_field.B_total, digits=3, chunk_size=64, precision=plan)
+    interface = VC.PlasmaVacuumInterface.from_surface_data(
+        surface, digits=3, precision=plan,
+        virtual_casing_field=field.plasma_field,
+    )
+    np.testing.assert_allclose(
+        interface.B_plasma,
+        expected_surface_field,
+        rtol=2e-11, atol=2e-11,
+    )
+
+
+def test_parameterized_extender_vjp_matches_rebuilt_surface_fd():
+    """Exterior B VJP differentiates the moving virtual-casing surface."""
+    parameters = jnp.array([1.0])
+    def surface(p):
+        return _synthetic_surface(nphi=10, ntheta=10, nfp=1, R0=p[0])
+    points = jnp.array([[1.8, 0.2, 0.1]])
+    field = VmecExtender.from_parameterized_surface_data(
+        surface, parameters, digits=3, levels=((11, 11), (22, 22)),
+        dof_names=("R0",)).set_points(points)
+    cotangent = jnp.ones_like(field.B())
+    autodiff = float(field.B_vjp(cotangent)[0])
+
+    def scalar(p):
+        rebuilt = VmecExtender.from_surface_data(
+            surface(jnp.array([p])), digits=3, levels=((11, 11), (22, 22)))
+        return float(jnp.vdot(rebuilt.B(points), cotangent))
+
+    step = 2.0e-5
+    finite_difference = (scalar(1.0 + step) - scalar(1.0 - step)) / (2.0 * step)
+    np.testing.assert_allclose(autodiff, finite_difference, rtol=3e-4, atol=3e-6)
+    assert field.dof_names == ("R0",)
+
+
 @pytest.mark.full
 def test_cth_gradient_fd_validates():
     """cth-like case: free-boundary residual gradients (extcur + coil dofs) vs central FD."""
     if not WOUT.exists():
         pytest.skip(f"wout fixture unavailable: {WOUT}")
     wout = read_wout(WOUT)
-    prob = FBD.FreeBoundaryDiffProblem.from_wout(wout, nphi=24, ntheta=24, digits=4)
+    prob = VC.PlasmaVacuumInterface.from_wout(wout, nphi=24, ntheta=24, digits=4)
 
     # (a) extcur via the cth mgrid (2 coil-group currents) — exact full gradient.
     if MGRID.exists():

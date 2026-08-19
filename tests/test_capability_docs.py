@@ -28,13 +28,16 @@ def test_capability_table_is_current_and_evidence_exists() -> None:
         assert all((ROOT / path).is_file() for path in row["evidence"])
 
 
-def test_contract_does_not_overclaim_free_boundary_ad() -> None:
+def test_contract_scopes_experimental_free_boundary_ad() -> None:
     free_toroidal = [
         row for row in _data()["rows"]
         if row["topology"] == "toroidal" and row["boundary"] == "free"
     ]
     assert free_toroidal
-    assert not any(row["coupled_ad"] for row in free_toroidal)
+    assert all(row["coupled_ad"] for row in free_toroidal)
+    assert all(row["jvp"] == "not-available" for row in free_toroidal)
+    assert all(row["vjp"] == "limited" for row in free_toroidal)
+    assert all("experimental CPU" in row["scope"] for row in free_toroidal)
 
 
 def test_supported_mirror_beta_matches_benchmark() -> None:

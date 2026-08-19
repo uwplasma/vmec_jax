@@ -39,6 +39,47 @@ def _quadratic_problem(calls=None):
     )
 
 
+def test_vmec_problem_from_input_builds_objective_free_parameterization(monkeypatch):
+    """Field VJPs do not require an artificial user objective."""
+    from vmex.core import optimize as opt
+
+    sentinel = object()
+    captured = {}
+
+    def fake_make_problem(inp, **kwargs):
+        captured.update(inp=inp, **kwargs)
+        return sentinel
+
+    monkeypatch.setattr(opt, "make_problem", fake_make_problem)
+    assert VmecProblem.from_input("input", max_mode=2) is sentinel
+    assert captured["inp"] == "input" and captured["max_mode"] == 2
+    assert captured["problem_class"] is VmecProblem
+    assert captured["loss"](None, None) == 0.0
+
+
+def test_residuals_from_tuples_exposes_weighted_jax_contract():
+    """Users can build a scalar value/gradient without a VMEX optimizer."""
+    jax = pytest.importorskip("jax")
+    jnp = pytest.importorskip("jax.numpy")
+    from vmex.core import optimize as opt
+
+    terms = [
+        (lambda state, runtime: state + runtime, 1.0, 4.0),
+        (lambda state, runtime: state - runtime, 0.0, 0.25),
+    ]
+
+    def cost(state):
+        rows = opt.residuals_from_tuples(state, jnp.asarray(2.0), terms)
+        return 0.5 * jnp.vdot(rows, rows)
+
+    rows = opt.residuals_from_tuples(jnp.asarray(3.0), jnp.asarray(2.0), terms)
+    np.testing.assert_allclose(rows, [8.0, 0.5])
+    assert float(cost(jnp.asarray(3.0))) == pytest.approx(32.125)
+    assert float(jax.grad(cost)(jnp.asarray(3.0))) == pytest.approx(16.25)
+    with pytest.raises(ValueError, match="at least one"):
+        opt.residuals_from_tuples(1.0, 2.0, [])
+
+
 def test_problem_contract_and_exact_key_cache():
     calls = {"value_and_grad": 0, "residual_and_jac": 0}
     problem = _quadratic_problem(calls)
@@ -56,6 +97,7 @@ def test_problem_contract_and_exact_key_cache():
     assert problem.J(problem.x0) == value
     np.testing.assert_array_equal(problem.dJ(problem.x0), grad)
     assert problem.names == ("a", "b")
+    assert problem.dof_names == ("a", "b")
     np.testing.assert_array_equal(problem.scales, [1.0, 2.0])
     assert FunctionProblem.from_functions([1.0], fun=np.sum).fun([2.0]) == 2.0
 
@@ -71,6 +113,7 @@ def test_vmec_problem_maps_inputs_and_reuses_equilibria():
         equilibrium_from_x=lambda x: (equilibrium, np.asarray(x)),
     )
     inp = problem.input_from_x([3.0, 4.0])
+    assert problem.dof_names == ("x[0]", "x[1]")
     np.testing.assert_array_equal(problem.x_from_input(inp), [3.0, 4.0])
     accepted, x = problem.equilibrium_from_x([5.0, 6.0])
     assert accepted is equilibrium
@@ -91,6 +134,163 @@ def test_vmec_problem_maps_inputs_and_reuses_equilibria():
     )
     with pytest.raises(AttributeError, match="does not provide equilibria"):
         no_equilibrium.equilibrium_from_x([1.0])
+
+    iterations = []
+    parameterized = VmecProblem(
+        [1.0], fun=np.sum, input_from_x=lambda x: x, x_from_input=lambda inp: inp,
+        equilibrium_from_x=lambda x, *, newton_iterations: (
+            iterations.append(newton_iterations), np.asarray(x))[1])
+    np.testing.assert_array_equal(
+        parameterized.equilibrium_from_x([2.0], newton_iterations=4), [2.0])
+    assert iterations == [4]
+
+
+def test_vmec_problem_state_objective_hides_failed_trial_branches():
+    jax = pytest.importorskip("jax")
+    jnp = pytest.importorskip("jax.numpy")
+
+    def make_problem(status):
+        return VmecProblem(
+            [2.0], fun=np.sum, input_from_x=lambda x: x,
+            x_from_input=lambda inp: inp,
+            metadata={
+                "jax_state_runtime_status": lambda x: (
+                    2.0 * x, x + 1.0, jnp.asarray(status)),
+                "jax_residual_from_state": lambda state, runtime: state - runtime,
+                "jax_failure_value": lambda x: 10.0 + jnp.vdot(x, x),
+                "residual_size": 1,
+            })
+
+    def objective(problem, x):
+        return problem.jax_objective_from_state(
+            x, lambda state, runtime: jnp.asarray([state[0] ** 2, runtime[0]]),
+            n_extra_terms=2)
+
+    accepted = make_problem(0)
+    value, (rows, costs) = objective(accepted, jnp.asarray([2.0]))
+    assert float(value) == pytest.approx(19.5)
+    np.testing.assert_allclose(rows, [1.0]); np.testing.assert_allclose(costs, [16.0, 3.0])
+    np.testing.assert_allclose(jax.grad(lambda x: objective(accepted, x)[0])(
+        jnp.asarray([2.0])), [18.0])
+
+    rejected = make_problem(1)
+    value, (rows, costs) = objective(rejected, jnp.asarray([2.0]))
+    assert float(value) == pytest.approx(14.0)
+    np.testing.assert_array_equal(rows, [0.0]); np.testing.assert_array_equal(costs, [0.0, 0.0])
+    np.testing.assert_allclose(jax.grad(lambda x: objective(rejected, x)[0])(
+        jnp.asarray([2.0])), [4.0])
+
+    extra_value, extra_terms = accepted.jax_extra_costs_from_state(
+        jnp.asarray([2.0]),
+        lambda state, runtime: jnp.asarray([state[0] ** 2, runtime[0]]),
+        n_extra_terms=2)
+    assert float(extra_value) == pytest.approx(19.0)
+    np.testing.assert_allclose(extra_terms, [16.0, 3.0])
+    rejected_value, rejected_terms = rejected.jax_extra_costs_from_state(
+        jnp.asarray([2.0]),
+        lambda state, runtime: jnp.asarray([state[0] ** 2, runtime[0]]),
+        n_extra_terms=2)
+    assert float(rejected_value) == 0.0
+    np.testing.assert_array_equal(rejected_terms, [0.0, 0.0])
+
+    with pytest.raises(ValueError, match="positive"):
+        accepted.jax_objective_from_state(
+            jnp.asarray([2.0]), lambda _state, _runtime: jnp.asarray([]),
+            n_extra_terms=0)
+    with pytest.raises(ValueError, match="positive"):
+        accepted.jax_extra_costs_from_state(
+            jnp.asarray([2.0]), lambda _state, _runtime: jnp.asarray([]),
+            n_extra_terms=0)
+    with pytest.raises(ValueError, match="returned shape"):
+        accepted.jax_objective_from_state(
+            jnp.asarray([2.0]), lambda _state, _runtime: jnp.asarray([1.0]),
+            n_extra_terms=2)
+    with pytest.raises(ValueError, match="returned shape"):
+        accepted.jax_extra_costs_from_state(
+            jnp.asarray([2.0]), lambda _state, _runtime: jnp.asarray([1.0]),
+            n_extra_terms=2)
+
+    ordinary = VmecProblem(
+        [1.0], fun=np.sum, input_from_x=lambda x: x, x_from_input=lambda inp: inp)
+    with pytest.raises(AttributeError, match="state-composed objectives"):
+        ordinary.jax_objective_from_state(
+            jnp.asarray([1.0]), lambda _state, _runtime: jnp.asarray([0.0]),
+            n_extra_terms=1)
+    with pytest.raises(AttributeError, match="state-dependent costs"):
+        ordinary.jax_extra_costs_from_state(
+            jnp.asarray([1.0]), lambda _state, _runtime: jnp.asarray([0.0]),
+            n_extra_terms=1)
+
+
+def test_vmec_problem_field_facades_validate_and_route(monkeypatch):
+    problem = VmecProblem(
+        [1.0], fun=np.sum, input_from_x=lambda x: x,
+        x_from_input=lambda inp: inp)
+    with pytest.raises(AttributeError, match="boundary arrays"):
+        problem.boundary_from_x(problem.x0)
+    with pytest.raises(AttributeError, match="differentiable equilibrium field"):
+        problem.exterior_field(problem.x0)
+    with pytest.raises(AttributeError, match="differentiable equilibrium field"):
+        problem.interior_field(problem.x0)
+    with pytest.raises(AttributeError, match="surface fields"):
+        problem.surface_field_values(problem.x0, "absB")
+
+    captured = {}
+    state_runtime = lambda x: ("state", "runtime")  # noqa: E731
+    problem = VmecProblem(
+        [1.0], fun=np.sum, names=("RBC(0,1)",),
+        input_from_x=lambda x: x, x_from_input=lambda inp: inp,
+        boundary_from_x=lambda x: (2 * np.asarray(x),),
+        metadata={"input": "input", "jax_state_runtime": state_runtime})
+    np.testing.assert_array_equal(problem.boundary_from_x(problem.x0)[0], [2.0])
+
+    from vmex.core import extender, virtual_casing
+    monkeypatch.setattr(
+        virtual_casing, "surface_field_data_from_state",
+        lambda inp, state, **kwargs: (inp, state, kwargs))
+    monkeypatch.setattr(
+        extender.VmecExtender, "from_parameterized_surface_data", classmethod(
+            lambda cls, surface, parameters, **kwargs:
+            captured.setdefault("exterior", (surface(parameters), parameters, kwargs))))
+    monkeypatch.setattr(
+        extender.VmecInteriorField, "from_parameterized_state", classmethod(
+            lambda cls, inp, function, parameters, **kwargs:
+            captured.setdefault("interior", (inp, function(parameters), parameters, kwargs))))
+
+    exterior = problem.exterior_field(
+        problem.x0, external_parameters=np.array([2.0]),
+        external_field_from_parameters=lambda p: p,
+        external_dof_names=("coil current",), nphi=7, ntheta=9,
+        digits=4, levels=((7, 9),))
+    interior = problem.interior_field(problem.x0, newton_iterations=6)
+    assert exterior[0] == ("input", "state", {"runtime": "runtime", "nphi": 7, "ntheta": 9})
+    np.testing.assert_array_equal(exterior[1], problem.x0)
+    assert exterior[2]["dof_names"] == problem.dof_names
+    np.testing.assert_array_equal(exterior[2]["external_parameters"], [2.0])
+    assert exterior[2]["external_dof_names"] == ("coil current",)
+    assert interior[0:2] == ("input", ("state", "runtime"))
+    assert interior[3] == {"dof_names": problem.dof_names, "newton_iterations": 6}
+
+    surface = SimpleNamespace(B_total=np.ones((3, 2, 3)))
+    monkeypatch.setattr(
+        virtual_casing, "surface_field_data_from_state",
+        lambda *_args, **_kwargs: surface)
+    interface = SimpleNamespace(
+        bnormal_residual=lambda external: 2.0 * np.ones((2, 3)))
+    monkeypatch.setattr(
+        virtual_casing.PlasmaVacuumInterface, "from_surface_data",
+        classmethod(lambda cls, data, **kwargs: interface))
+    np.testing.assert_allclose(
+        problem.surface_field_values(problem.x0, "absB", nphi=2, ntheta=3),
+        np.sqrt(3.0))
+    np.testing.assert_allclose(
+        problem.surface_field_values(
+            problem.x0, "B.n/B", external_field="coils", nphi=2, ntheta=3),
+        2.0 / np.sqrt(3.0))
+    with pytest.raises(ValueError, match="requires external_field"):
+        problem.surface_field_values(problem.x0, "B.n/B")
+    with pytest.raises(ValueError, match="quantity"):
+        problem.surface_field_values(problem.x0, "bootstrap")
 
 
 def test_vmec_problem_reports_under_converged_fsq():
@@ -172,20 +372,26 @@ def test_compile_methods_prime_the_requested_path_and_report_progress():
 
 def test_vmec_problem_factory_reports_construction_progress(monkeypatch):
     from vmex.core import optimize as opt
+    from vmex.core import restart
     from vmex.core.input import VmecInput
 
+    captured = {}
     def fake_implicit_problem(*args, **kwargs):
-        del args, kwargs
+        del args
+        captured.update(kwargs)
         time.sleep(0.02)
         return FunctionProblem(
             [0.0], fun=np.sum, metadata={"derivative_method": "implicit"}
         )
 
     monkeypatch.setattr(opt, "_least_squares_implicit", fake_implicit_problem)
+    seed, source = object(), object()
+    monkeypatch.setattr(restart, "restart_state", lambda restart_from, inp: seed)
     stream = io.StringIO()
     problem = opt.make_problem(
         VmecInput(mpol=2, ntor=1),
         objective_terms=[(lambda equilibrium: equilibrium, 0.0, 1.0)],
+        restart_from=source,
         progress=True,
         report_interval=0.005,
         progress_stream=stream,
@@ -195,6 +401,7 @@ def test_vmec_problem_factory_reports_construction_progress(monkeypatch):
     assert "s elapsed" in output
     assert "VMEX problem ready in" in output
     assert problem.metadata["derivative_method"] == "implicit"
+    assert captured["initial_state"] is seed
 
 
 def test_residual_only_problem_derives_scalar_value_and_gradient():
@@ -523,3 +730,32 @@ def test_vmec_finite_difference_failed_probe_penalties(monkeypatch):
     )
     assert np.isfinite(scalar_problem.fun(trial))
     assert scalar_problem.metadata["holder"]["failed_trials"] == 1
+
+
+def test_evaluation_progress_reports_slow_calls_and_stays_quiet_otherwise(capsys):
+    """A long evaluation reports elapsed time; a fast one prints nothing.
+
+    Without output a user cannot tell a slow linear solve from a hang, but
+    announcing every evaluation buries the optimizer's own table under
+    "done in 0.4 s" lines, which is how this started.
+    """
+    def slow_residual(x):
+        time.sleep(0.08)
+        return np.asarray([x[0] - 1.0])
+
+    problem = FunctionProblem(
+        [0.0], residual=slow_residual,
+        residual_jac=lambda _x: np.ones((1, 1)),
+        evaluation_progress=True, report_interval=0.02)
+    problem.residual(np.array([0.0]))
+    out = capsys.readouterr().out
+    assert "residual..." in out and "residual done in" in out
+    assert "s elapsed." in out          # the heartbeat fired mid-residual
+
+    problem.residual_jac(np.array([0.0]))   # returns immediately
+    assert capsys.readouterr().out == ""
+
+    quiet = FunctionProblem([0.0], residual=slow_residual,
+                            residual_jac=lambda _x: np.ones((1, 1)))
+    quiet.residual(np.array([0.0]))
+    assert capsys.readouterr().out == ""

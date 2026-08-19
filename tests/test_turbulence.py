@@ -1,4 +1,4 @@
-"""Validation gates for the GKX turbulence proxies (plan.md R26h.h4).
+"""Validation gates for the optional GKX turbulence objectives.
 
 Lanes: geometry adapter parity (gkx-free — the flux-tube arrays reproduce
 :mod:`vmex.core.stability`'s field-line assembly at machine precision,

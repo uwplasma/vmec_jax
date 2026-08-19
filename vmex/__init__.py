@@ -7,20 +7,30 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.multigrid.solve_multigrid` — NS_ARRAY ladder (runvmec.f)
 - :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` — free-boundary ladder
 - :func:`~vmex.core.freeboundary.solve_free_boundary` — NESTOR free boundary
+- :func:`~vmex.core.freeboundary_implicit.solve_free_boundary_implicit` —
+  coupled NESTOR/VMEC implicit derivative
 - :func:`~vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
   / :func:`~vmex.core.wout.wout_from_state` / :class:`~vmex.core.wout.WoutData`
 - :func:`~vmex.core.restart.state_from_wout` /
   :func:`~vmex.core.restart.restart_state` — hot restart from any wout
   (also ``solve*(..., restart_from=...)``)
 - :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
+- :func:`~vmex.core.plotting.plot_optimization_objects` — surfaces and coils
 - :func:`~vmex.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
+- :func:`~vmex.core.neoclassical.epsilon_effective_from_wout` — optional
+  NEO_JAX effective-ripple profile
 - :func:`~vmex.core.mgrid.read_mgrid` / :func:`~vmex.core.mgrid.write_mgrid`
   / :func:`~vmex.core.mgrid.tabulate_cartesian_field`
   / :class:`~vmex.core.mgrid.MgridField` (mgrid or tabulated direct field)
+- :class:`~vmex.core.extender.VmecInteriorField` — field inside the plasma
+- :class:`~vmex.core.extender.VmecExtender` — field outside the plasma surface
+- :class:`~vmex.core.virtual_casing.PlasmaVacuumInterface` — virtual-casing
+  diagnostics on a prescribed plasma-vacuum interface
 - :func:`~vmex.core.scaling.scale_input` / :func:`~vmex.core.scaling.scale_wout`
   — dimensional similarity transforms
 - ``vmex.optimize`` — objectives + least-squares driver (module)
 - :class:`~vmex.core.monitoring.OptimizationMonitor` — accepted iterations
+- :class:`~vmex.core.monitoring.EquilibriumReporter` — compact diagnostics
 - ``vmex.implicit`` — implicit differentiation of the equilibrium (module)
 - ``vmex.parallel`` — concurrent ensembles of independent solves (module)
 - ``vmex.errors`` — typed zero-crash exceptions (also exported directly)
@@ -114,6 +124,12 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "solve_free_boundary_multigrid": (
         ".core.multigrid", "solve_free_boundary_multigrid"),
     "solve_free_boundary": (".core.freeboundary", "solve_free_boundary"),
+    "make_free_boundary_config": (
+        ".core.freeboundary_implicit", "make_free_boundary_config"),
+    "solve_free_boundary_implicit": (
+        ".core.freeboundary_implicit", "solve_free_boundary_implicit"),
+    "solve_free_boundary_implicit_status": (
+        ".core.freeboundary_implicit", "solve_free_boundary_implicit_status"),
     # wout IO
     "WoutData": (".core.wout", "WoutData"),
     "read_wout": (".core.wout", "read_wout"),
@@ -125,11 +141,19 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     # plotting + Boozer
     "plot_wout": (".core.plotting", "plot_wout"),
     "plot_boozmn": (".core.plotting", "plot_boozmn"),
+    "plot_bootstrap_current": (".core.plotting", "plot_bootstrap_current"),
+    "plot_optimization_movie": (".core.plotting", "plot_optimization_movie"),
+    "plot_optimization_objects": (".core.plotting", "plot_optimization_objects"),
     "run_booz_xform": (".core.boozer", "run_booz_xform"),
+    "epsilon_effective_from_boozer": (
+        ".core.neoclassical", "epsilon_effective_from_boozer"),
+    "epsilon_effective_from_wout": (
+        ".core.neoclassical", "epsilon_effective_from_wout"),
     # optimizer-neutral problem callables
     "Evaluation": (".core.problem", "Evaluation"),
     "FunctionProblem": (".core.problem", "FunctionProblem"),
     "VmecProblem": (".core.problem", "VmecProblem"),
+    "EquilibriumReporter": (".core.monitoring", "EquilibriumReporter"),
     "OptimizationMonitor": (".core.monitoring", "OptimizationMonitor"),
     "OptimizationRecord": (".core.monitoring", "OptimizationRecord"),
     # external fields
@@ -138,6 +162,15 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "read_mgrid": (".core.mgrid", "read_mgrid"),
     "tabulate_cartesian_field": (".core.mgrid", "tabulate_cartesian_field"),
     "write_mgrid": (".core.mgrid", "write_mgrid"),
+    "MagneticField": (".core.extender", "MagneticField"),
+    "VmecInteriorField": (".core.extender", "VmecInteriorField"),
+    "VmecExtender": (".core.extender", "VmecExtender"),
+    "PlasmaVacuumInterface": (
+        ".core.virtual_casing", "PlasmaVacuumInterface"),
+    "surface_field_data_from_state": (
+        ".core.virtual_casing", "surface_field_data_from_state"),
+    "surface_field_data_from_wout": (
+        ".core.virtual_casing", "surface_field_data_from_wout"),
     # dimensional scaling
     "scale_input": (".core.scaling", "scale_input"),
     "scale_mgrid": (".core.scaling", "scale_mgrid"),

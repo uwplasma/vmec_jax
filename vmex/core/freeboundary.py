@@ -58,6 +58,7 @@ from .errors import (
     AXIS_REGUESS_FLAG,
     JAC75_FLAG,
     MORE_ITER_FLAG,
+    NORM_TERM_FLAG,
     SUCCESSFUL_TERM_FLAG,
     VmecInputError,
 )
@@ -68,6 +69,7 @@ from .input import VmecInput
 from .mgrid import MgridField
 from .preconditioner_2d import Prec2DConfig
 from .printing import (
+    emit_flushed,
     FORCE_ITERATIONS_BANNER, compile_notice, improved_axis_block,
     screen_header, screen_line,
     stage_banner,
@@ -100,6 +102,17 @@ MU0 = 4.0e-7 * np.pi
 
 #: funct3d.f vacuum activation threshold on fsqr + fsqz.
 ACTIVATION_FSQ = 1.0e-3
+
+
+def _resume_for_vacuum(carry, ivac: int):
+    """Prevent a converged fixed-boundary hot start from skipping NESTOR."""
+    if ivac != -1 or not bool(carry.done) or int(carry.ier) != SUCCESSFUL_TERM_FLAG:
+        return carry
+    return replace(
+        carry, done=jnp.asarray(False),
+        ier=jnp.asarray(NORM_TERM_FLAG, dtype=carry.ier.dtype),
+        iteration=carry.iteration + jnp.asarray(1, dtype=carry.iteration.dtype),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +772,7 @@ class FusedVacuum:
 
     full: Any
     skip: Any
+    bsq: Any
     cache_key: Any = None
     solve_device: Any = None
 
@@ -881,8 +895,23 @@ def _make_fused_vacuum(basis: VacuumBasis, *, modes: ModeTable, signgs: int,
             "bsubuvac": bsubuvac, "bsubvvac": bsubvvac,
         }
 
+    def _bsq(state: SpectralState, rt: SolverRuntime, field: MgridField):
+        """Only the converged edge ``0.5|B|²`` needed by implicit AD."""
+        ctor, _, axis_r, axis_z, _, _ = _vacuum_scalars(state, rt)
+        rmnc, zmns, rmns, zmnc = _edge_fourier_jax(state, rt)
+        boundary = _boundary_from_coefficients_jax(
+            rmnc, zmns, rmns, zmnc, modes=modes, basis=basis
+        )
+        ext = _pipeline(field, boundary, ctor, axis_r, axis_z)
+        potvac = _solve_full(boundary, ext["bexni"])[0]
+        return vacuum_channels(
+            basis=basis, potvac=potvac, bexu=ext["bexu"], bexv=ext["bexv"],
+            guu=ext["guu"], guv=ext["guv"], gvv=ext["gvv"],
+        )[0]
+
     return FusedVacuum(
-        full=jax.jit(_full), skip=jax.jit(_skip), solve_device=solve_device,
+        full=jax.jit(_full), skip=jax.jit(_skip), bsq=jax.jit(_bsq),
+        solve_device=solve_device,
     )
 
 
@@ -944,7 +973,9 @@ _VACUUM_EXECUTABLE_CACHE: dict[
 
 def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
                         modes: ModeTable, axis_r0, axis_z0,
-                        use_fft: bool = False) -> tuple[VacuumBasis, FusedVacuum, Any]:
+                        use_fft: bool = False,
+                        solve_on_plasma_device: bool = False,
+                        ) -> tuple[VacuumBasis, FusedVacuum, Any]:
     """Return the cached ``(basis, fused vacuum, steady lane)`` for one resolution/signgs.
 
     ``wint``/``modes`` are resolution-determined build inputs consumed only on
@@ -954,11 +985,12 @@ def _vacuum_executables(resolution, *, mf: int, nf: int, signgs: int, wint,
     executable.
     """
     plasma_device = next(iter(jnp.asarray(axis_r0).devices()))
-    solve_device = (
+    solve_device = None if solve_on_plasma_device else (
         jax.devices("cpu")[0] if plasma_device.platform == "gpu" else None
     )
     key = (
         resolution, int(signgs), int(mf), int(nf), bool(use_fft),
+        bool(solve_on_plasma_device),
         str(plasma_device), str(solve_device),
     )
     cached = _VACUUM_EXECUTABLE_CACHE.get(key)
@@ -1534,7 +1566,7 @@ def _solve_free_boundary_stage(
     ftol: float | None = None,
     max_iterations: int | None = None,
     verbose: bool = False,
-    emit=print,
+    emit=emit_flushed,
     error_on_no_convergence: bool = True,
     initial_state: SpectralState | None = None,
     vacuum_continuation: FreeBoundaryState | None = None,
@@ -1906,6 +1938,12 @@ def _solve_free_boundary_stage(
                                notice=_lane_notice("free-iteration"))
         _emit_due(final=False)
 
+        # A hot restart may already satisfy the fixed-boundary tolerance on
+        # its first pass.  Free-boundary convergence is not defined until the
+        # vacuum field has been applied, so advance to the activation check
+        # instead of accepting that fixed-boundary state as the final result.
+        carry = _resume_for_vacuum(carry, fb.ivac)
+
         int_dtype = carry.iteration.dtype
         max_passes = rt.max_iterations + 400
         for _ in range(max_passes):
@@ -2154,7 +2192,7 @@ def solve_free_boundary(
     ftol: float | None = None,
     max_iterations: int | None = None,
     verbose: bool = False,
-    emit=print,
+    emit=emit_flushed,
     error_on_no_convergence: bool = True,
     initial_state: SpectralState | None = None,
     device: Any = AUTO,

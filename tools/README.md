@@ -12,6 +12,20 @@ This directory contains developer-facing tools, not end-user examples.
   python tools/fetch_assets.py --bundle golden-v1
   ```
 
+- `pack_reference_assets.py`: the other half of that contract — packs the
+  release tarballs `fetch_assets.py` downloads. A bundle is exactly the
+  git-ignored netCDF files under its roots, so a new reference fixture joins
+  the next release by being added and ignored. Tarballs are byte-reproducible
+  (sorted members, zeroed mtime/uid/gid, fixed gzip header), so the recorded
+  SHA-256 can be re-derived rather than trusted. Vector-potential arrays and
+  duplicate `single_grid/` copies are dropped; the latter come back from the
+  manifest's `mirrors` rule on extraction. Run it against a checkout that
+  already has the assets installed:
+
+  ```console
+  python tools/pack_reference_assets.py --outdir dist/assets
+  ```
+
 - `profile_hotpaths.py`: cold-vs-warm wall-time + peak-RSS profile of the
   production hot paths (fixed-boundary solve and the differentiable
   `value_and_grad` adjoint). Backend-agnostic — the same script produces the

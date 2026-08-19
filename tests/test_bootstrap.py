@@ -486,6 +486,13 @@ def test_state_lane_matches_wout_lane(eq):
     np.testing.assert_allclose(np.asarray(j_state), np.asarray(j_wout), rtol=5e-2)
 
 
+def test_bootstrap_current_profiles_are_the_residual_inputs(eq):
+    boot = bs.RedlBootstrapMismatch(PAPER_PROFILES, 0, surfaces=[0.3, 0.5, 0.7])
+    surfaces, jv, jr = boot.current_profiles(eq)
+    np.testing.assert_array_equal(surfaces, boot.surfaces)
+    np.testing.assert_allclose(boot.residuals(eq), boot._residual_vector(jv, jr))
+
+
 def test_wout_lane_uses_lasym_sine_fields(eq):
     surfaces = np.array([0.3, 0.5, 0.7])
     symmetric = bs.redl_geometry_from_wout(eq.wout, surfaces)
@@ -716,20 +723,53 @@ def test_current_dof_packing_and_validation():
     # ampere-scale decks (self_consistent_bootstrap refits) scale by max|AC|
     amp = dataclasses.replace(inp, ac=1e6 * np.asarray(inp.ac), curtor=-2.7e6)
     assert opt._current_dof_setup(amp, 2)[1] == 1e6
+    trailing = np.asarray(inp.ac).copy(); trailing[5] = 1e12
+    assert opt._current_dof_setup(dataclasses.replace(inp, ac=trailing), 2)[1] == 1.0
     with pytest.raises(ValueError, match="ncurr = 1"):
         opt._current_dof_setup(dataclasses.replace(inp, ncurr=0), 2)
-    with pytest.raises(ValueError, match="pcurr_type"):
+    with pytest.raises(ValueError, match="positive int"):
+        opt._current_dof_setup(inp, -1)
+    with pytest.raises(ValueError, match="line_segment"):
+        opt._current_dof_setup(dataclasses.replace(inp, pcurr_type="line_segment"), 2)
+    with pytest.raises(ValueError, match="current-spline knot"):
         opt._current_dof_setup(
             dataclasses.replace(inp, pcurr_type="cubic_spline_ip"), 2)
     with pytest.raises(ValueError, match="dense AC length"):
         opt._current_dof_setup(inp, 22)
 
+    spline = opt.resample_current_profile(inp, 6)
+    assert spline.pcurr_type == "cubic_spline_ip"
+    assert np.asarray(spline.ac_aux_s).size == np.asarray(spline.ac_aux_f).size == 6
+    with pytest.raises(ValueError, match="leave one ordinate fixed"):
+        opt._current_dof_setup(spline, 6)
+    k, spline_scale = opt._current_dof_setup(spline, 5)
+    packed = opt._pack_current(spline, k, spline_scale)
+    spline_back = opt._apply_current(spline, packed, k, spline_scale)
+    np.testing.assert_allclose(spline_back.ac_aux_f, spline.ac_aux_f)
+    assert spline_back.curtor == spline.curtor
+    with pytest.raises(ValueError, match="expected 6 current dofs"):
+        opt._apply_current(spline, packed[:-1], k, spline_scale)
+    zero = dataclasses.replace(inp, ac=np.zeros_like(inp.ac), curtor=0.0)
+    assert opt._current_dof_setup(zero, 2)[1] == 1.0
+    with pytest.raises(ValueError, match="ncurr = 1"):
+        opt.resample_current_profile(dataclasses.replace(inp, ncurr=0), 4)
+    with pytest.raises(ValueError, match="at least 2"):
+        opt.resample_current_profile(inp, 1)
+    with pytest.raises(ValueError, match="kind must"):
+        opt.resample_current_profile(inp, 4, kind="linear")
+    from vmex.core.profiles import current
+    radial_grid = np.linspace(0.0, 1.0, 101)
+    original = current(inp.pcurr_type, inp.ac, inp.ac_aux_s, inp.ac_aux_f, radial_grid)
+    resampled = current(spline.pcurr_type, spline.ac, spline.ac_aux_s,
+                        spline.ac_aux_f, radial_grid)
+    np.testing.assert_allclose(resampled, original, rtol=2e-13, atol=2e-13)
+
 
 def test_least_squares_current_dofs_implicit():
     """Driver gate: a 2-nfev implicit least squares with the mismatch term and
-    current_dofs=2 runs, and the AC/CURTOR Jacobian columns of the implicit
+    current_dofs=2 runs, and spline/CURTOR Jacobian columns of the implicit
     path match central finite differences of re-solved equilibria."""
-    inp = _tokamak_ncurr1()
+    inp = opt.resample_current_profile(_tokamak_ncurr1(), 4)
     boot = bs.RedlBootstrapMismatch(TOKAMAK_PROFILES, 0,
                                     surfaces=np.linspace(0.2, 0.9, 6),
                                     n_lambda=32)
@@ -743,7 +783,7 @@ def test_least_squares_current_dofs_implicit():
     assert np.all(np.isfinite(jac))
     # round trip of the optimized current dofs into the returned input
     k, ac_scale = opt._current_dof_setup(inp, 2)
-    np.testing.assert_allclose(np.asarray(res.input.ac)[:2],
+    np.testing.assert_allclose(np.asarray(res.input.ac_aux_f)[:2],
                                res.x[nb:nb + 2] * ac_scale)
     np.testing.assert_allclose(res.input.curtor, res.x[nb + 2] * opt._CURTOR_SCALE)
 
@@ -757,7 +797,7 @@ def test_least_squares_current_dofs_implicit():
             [w * (opt._call_term(f, eq_t) - t) for (f, t, w) in terms])
 
     x_star = np.asarray(res.x, dtype=float)
-    for col in (nb, nb + 2):  # one AC coefficient + curtor
+    for col in (nb, nb + 2):  # one spline value + curtor
         h = 1e-4
         xp = x_star.copy(); xp[col] += h
         xm = x_star.copy(); xm[col] -= h

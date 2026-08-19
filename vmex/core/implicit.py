@@ -83,12 +83,12 @@ short typed error.  Under ``jax.jit`` the sentinel surfaces at the jit
 boundary instead (where the ``optimize.least_squares`` zero-crash penalty
 lanes catch it).
 
-Optimization uses :func:`solve_implicit_status` instead.  Its callback never
-raises: a failed trial returns a fixed-shape fallback state and status code,
-after which the objective selects a finite differentiable penalty.  This lane
-therefore obeys the pure-callback contract under JIT and does not emit a host
-traceback.  An invalid initial point is still rejected by a strict host
-preflight before an optimizer starts.
+Optimization uses :func:`solve_implicit_status` instead.  A typed equilibrium
+failure returns a fixed-shape fallback state and status code, after which the
+objective selects a finite differentiable penalty.  Unexpected programming
+errors still propagate rather than masquerading as rejected trial points.  An
+invalid initial point is rejected by a strict host preflight before an
+optimizer starts.
 
 Parameter map
 -------------
@@ -121,6 +121,7 @@ import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
 from solvax import (
+    block_tridiag_matvec,
     block_thomas_factor,
     block_thomas_solve,
     chunk_map,
@@ -195,7 +196,9 @@ class ImplicitParams:
     ``(2*ntor + 1, mpol)`` indexed ``[n + ntor, m]`` (physical, un-processed
     — exactly :class:`~vmex.core.input.VmecInput` layout, so e.g.
     ``RBC(0, 1)`` is ``rbc[ntor, 1]``).  ``am/ai/ac`` are the dense profile
-    coefficient arrays; ``phiedge/pres_scale/curtor`` scalars.
+    coefficient arrays; ``ac_aux_f`` contains optimizable current-spline knot
+    values while the knot positions remain static in the input;
+    ``phiedge/pres_scale/curtor`` are scalars.
     """
 
     rbc: Array
@@ -208,6 +211,7 @@ class ImplicitParams:
     am: Array
     ai: Array
     ac: Array
+    ac_aux_f: Array
 
 
 _register(ImplicitParams)
@@ -231,6 +235,7 @@ def params_from_input(inp: VmecInput, *, device: Any = None) -> ImplicitParams:
         rbc=arr(inp.rbc), rbs=arr(inp.rbs), zbc=arr(inp.zbc), zbs=arr(inp.zbs),
         phiedge=arr(inp.phiedge), pres_scale=arr(inp.pres_scale),
         curtor=arr(inp.curtor), am=arr(inp.am), ai=arr(inp.ai), ac=arr(inp.ac),
+        ac_aux_f=arr([] if inp.ac_aux_f is None else inp.ac_aux_f),
     )
 
 
@@ -243,6 +248,8 @@ def input_with_params(inp: VmecInput, params: ImplicitParams) -> VmecInput:
         pres_scale=float(np.asarray(params.pres_scale)),
         curtor=float(np.asarray(params.curtor)),
         am=arr(params.am), ai=arr(params.ai), ac=arr(params.ac),
+        ac_aux_f=(None if inp.ac_aux_f is None and np.size(params.ac_aux_f) == 0
+                  else arr(params.ac_aux_f)),
     )
 
 
@@ -263,6 +270,22 @@ class ImplicitConfig:
     multigrid: bool = False
     lconm1: bool = True
     adjoint_tol: float = 1e-11
+    #: Tolerance for certifying the *columns* of an implicit residual
+    #: Jacobian, kept separate from ``adjoint_tol`` because the two feed
+    #: different consumers.  A scalar gradient goes to a quasi-Newton method
+    #: that accumulates curvature from it and wants every digit; a
+    #: least-squares Jacobian only has to point a trust-region step, and the
+    #: block factorization already backsolves every column before the
+    #: certifier runs.  Measured on the asymmetric quasi-axisymmetric stage:
+    #: the certifier needs 542 iterations to reach 1e-6 and none to reach
+    #: 1e-4, for a relative change in the Jacobian of 3.2e-5.
+    jacobian_adjoint_tol: float = 1e-4
+    #: Restart budget for the Jacobian column certifier.  It corrects a
+    #: direct block-tridiagonal solve, so a handful of cycles either lands it
+    #: or says the factorization has stopped being a good preconditioner at
+    #: this iterate; spending the full ``adjoint_maxiter`` there buys nothing
+    #: and costs half an hour per Jacobian on an asymmetric stage.
+    jacobian_adjoint_maxiter: int = 10
     adjoint_restart: int = 30
     adjoint_maxiter: int = 300
     #: reverse-adjoint GCROT(m, k) recycling solve (``_adjoint_solve_gcrot``):
@@ -303,6 +326,8 @@ def make_config(
     multigrid: bool = False,
     lconm1: bool = True,
     adjoint_tol: float = 1e-11,
+    jacobian_adjoint_tol: float = 1e-4,
+    jacobian_adjoint_maxiter: int = 10,
     adjoint_restart: int = 30,
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
@@ -330,7 +355,10 @@ def make_config(
         inp=inp, resolution=resolution, ftol=float(ftol),
         max_iterations=int(max_iterations), mode=str(mode),
         multigrid=bool(multigrid), lconm1=bool(lconm1),
-        adjoint_tol=float(adjoint_tol), adjoint_restart=int(adjoint_restart),
+        adjoint_tol=float(adjoint_tol),
+        jacobian_adjoint_tol=float(jacobian_adjoint_tol),
+        jacobian_adjoint_maxiter=int(jacobian_adjoint_maxiter),
+        adjoint_restart=int(adjoint_restart),
         adjoint_maxiter=int(adjoint_maxiter),
         adjoint_gcrot_m=int(adjoint_gcrot_m), adjoint_gcrot_k=int(adjoint_gcrot_k),
         max_fsq_ratio=float(max_fsq_ratio),
@@ -688,7 +716,7 @@ def _runtime_from_params_impl(params: ImplicitParams, cfg: ImplicitConfig) -> So
         piota_type=inp.piota_type, ai=params.ai,
         ai_aux_s=inp.ai_aux_s, ai_aux_f=inp.ai_aux_f,
         pcurr_type=inp.pcurr_type, ac=params.ac,
-        ac_aux_s=inp.ac_aux_s, ac_aux_f=inp.ac_aux_f,
+        ac_aux_s=inp.ac_aux_s, ac_aux_f=params.ac_aux_f,
     )
     prof = flux_profiles(shim, grids, r00=r00, signgs=setup0.signgs,
                          lflip=setup0.lflip)
@@ -821,8 +849,9 @@ def _raw_force_state(
     scalxc: Array | None = None,
     ns_total: int | None = None,
     axis_closure: bool = True,
+    include_edge: bool = False,
 ) -> SpectralState:
-    """Raw fixed-boundary force for a full grid or a radial segment."""
+    """Raw force for a full grid or radial segment, optionally keeping the edge."""
     setup = rt.setup
     s = setup.s_full if s is None else s
     phips = setup.phips if phips is None else phips
@@ -867,9 +896,29 @@ def _raw_force_state(
         modes=rt.modes, trig=rt.trig, s=s, phipf=phipf, tcon=tcon,
         signgs=setup.signgs, rcon0=rcon0, zcon0=zcon0,
     )
+    if include_edge and rt.lfreeb:
+        # Match solver._force_pipeline's free-boundary forces.f edge term.
+        # ``include_edge`` alone only keeps the terminal spectral row; it does
+        # not add the NESTOR total-pressure force that makes coils observable.
+        presf_ns = jnp.asarray(rt.presf_ns_scale) * fields.pressure[-1]
+        gcon_edge = jnp.asarray(rt.bsqvac_edge) + presf_ns
+        r1_edge = geometry.R_even[-1] + geometry.R_odd[-1]
+        rbsq = gcon_edge * r1_edge / setup.hs
+        ru0, zu0 = geometry.theta_derivatives_full(s)
+        forces = dataclasses.replace(
+            forces,
+            force_R_even=jnp.asarray(forces.force_R_even).at[-1].add(
+                zu0[-1] * rbsq),
+            force_R_odd=jnp.asarray(forces.force_R_odd).at[-1].add(
+                zu0[-1] * rbsq),
+            force_Z_even=jnp.asarray(forces.force_Z_even).at[-1].add(
+                -ru0[-1] * rbsq),
+            force_Z_odd=jnp.asarray(forces.force_Z_odd).at[-1].add(
+                -ru0[-1] * rbsq),
+        )
     spectral = spectral_mhd_forces(
         forces, mpol=rt.resolution.mpol, ntor=rt.resolution.ntor,
-        trig=rt.trig, include_edge=False,
+        trig=rt.trig, include_edge=include_edge,
     )
     released = zero_m1_z_force(
         m1_residue_rotation(spectral, lconm1=setup.lconm1),
@@ -886,6 +935,7 @@ def _raw_residual_segment(
     start: Array,
     *,
     axis_closure: bool = False,
+    include_edge: bool = False,
 ) -> SpectralState:
     """Evaluate the nonlinear raw-force chain on exactly three surfaces.
 
@@ -903,6 +953,7 @@ def _raw_residual_segment(
         rcon0=take(rt.rcon0), zcon0=take(rt.zcon0),
         lamscale=setup.lamscale, scalxc=take(setup.scalxc),
         ns_total=rt.resolution.ns, axis_closure=axis_closure,
+        include_edge=include_edge,
     )
 
 
@@ -949,15 +1000,20 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
 
 
 def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
-              cfg: ImplicitConfig, seed: int = 0) -> SpectralState:
+              cfg: ImplicitConfig, seed: int = 0, *,
+              evaluator: Callable[[SpectralState], SpectralState] | None = None,
+              fixed_edge: bool = True) -> SpectralState:
     """Evolved-dof mask from the structural zero patterns of ``gc``.
 
     Host-side, once per forward solve.  A dof is an entry where (a) the
     residual can respond (row support: ``gc`` nonzero at a generically
     perturbed state — structural zeros stay exactly ``0.0`` in floating
     point) and (b) the residual depends on the entry (column support: one
-    VJP of ``gc`` with a random cotangent).  This excludes, exactly: the
-    fixed R/Z edge row (``include_edge=False``), the structurally zero
+    VJP of ``gc`` with a random cotangent).  ``evaluator`` defaults to the
+    fixed-boundary force map.  The free-boundary implicit path supplies its
+    NESTOR-coupled map and sets ``fixed_edge=False`` so the R/Z edge joins
+    the evolved state.  This excludes, exactly: the fixed R/Z edge row when
+    requested, the structurally zero
     families of symmetric runs, the released m=1 constrained Z combinations
     (zeroed force at convergence) and the lambda axis row (overwritten by the
     ``totzsp`` axis closure, so no equation depends on it).
@@ -966,9 +1022,25 @@ def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
     scale = max(float(max(np.max(np.abs(np.asarray(getattr(x_star, f))), initial=0.0)
                           for f in _STATE_FIELDS)), 1.0)
 
-    def evaluate(x):
-        gc, _, diag = evaluate_forces(x, rt)
-        return gc, bool(np.asarray(diag.jacobian_sign_changed))
+    if evaluator is None:
+        def force_map(x):
+            return evaluate_forces(x, rt)[0]
+
+        def evaluate(x):
+            gc, _, diag = evaluate_forces(x, rt)
+            return gc, bool(np.asarray(diag.jacobian_sign_changed))
+    else:
+        force_map = evaluator
+
+        def evaluate(x):
+            gc = force_map(x)
+            # A custom coupled map may not expose geometry diagnostics;
+            # non-finiteness is the conservative invalid-geometry gate.
+            invalid = not all(
+                bool(np.all(np.isfinite(np.asarray(leaf))))
+                for leaf in jax.tree.leaves(gc)
+            )
+            return gc, invalid
 
     def perturbed(k, eps):
         r = np.random.default_rng(seed + k)
@@ -976,7 +1048,7 @@ def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
             lambda a: jnp.asarray(np.asarray(a) + eps * scale
                                   * r.standard_normal(np.shape(a))), x_star)
 
-    gc_fn = lambda x: evaluate_forces(x, rt)[0]  # noqa: E731
+    gc_fn = force_map
 
     rows = jax.tree.map(lambda a: np.zeros(np.shape(a), dtype=bool), x_star)
     cols = jax.tree.map(lambda a: np.zeros(np.shape(a), dtype=bool), x_star)
@@ -998,7 +1070,7 @@ def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
         g = vjp(ct)[0]
         cols = jax.tree.map(lambda c, gg: c | (np.asarray(gg) != 0.0), cols, g)
 
-    edge = _edge_mask(cfg)
+    edge = _edge_mask(cfg) if fixed_edge else jax.tree.map(jnp.zeros_like, x_star)
     mask_np = jax.tree.map(
         lambda r, c, e: (r & c & (np.asarray(e) == 0.0)).astype(np.float64),
         rows, cols, edge)
@@ -1103,7 +1175,7 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
         try:
             result = run(init)
             break
-        except Exception:
+        except VmecError:
             if k == len(attempts) - 1:
                 raise
     if cfg.hot_restart and bool(result.converged):
@@ -1198,10 +1270,21 @@ def _host_solve_and_mask_status(cfg: ImplicitConfig, params_np) -> tuple:
     every optimizer interface applies the same acceptance policy.
     """
     with _device_context(cfg):
+        _HOST_ERROR.clear()
+        error = None
         try:
             state, mask = _host_solve_and_mask_impl(cfg, params_np)
-        except Exception as exc:  # optimizer trial: status, never callback raise
-            error = _HOST_ERROR.pop() if _HOST_ERROR else exc
+        except VmecError as exc:
+            # Direct host calls preserve the typed exception; pure_callback
+            # wraps the same error in the relayed sentinel handled below.
+            error = exc
+        except Exception:
+            # Only the short sentinel paired with a relayed typed VmecError is
+            # an invalid optimizer trial. Never hide a programming error.
+            if not _HOST_ERROR:
+                raise
+            error = _HOST_ERROR.pop()
+        if error is not None:
             _HOST_ERROR.clear()
             _LAST_STATUS_ERROR[cfg] = error
             params = _device_pin(cfg, jax.tree.map(jnp.asarray, params_np))
@@ -1435,9 +1518,10 @@ def _pin_concrete(cfg: ImplicitConfig, tree):
 _ADJOINT_RESIDUAL_SLACK = 10.0
 
 
-def _adjoint_acceptance(cfg: ImplicitConfig, b_norm):
+def _adjoint_acceptance(cfg: ImplicitConfig, b_norm, rtol=None):
     """Largest acceptable true residual for an adjoint solve of RHS norm."""
-    return _ADJOINT_RESIDUAL_SLACK * cfg.adjoint_tol * b_norm
+    tol = cfg.adjoint_tol if rtol is None else float(rtol)
+    return _ADJOINT_RESIDUAL_SLACK * tol * b_norm
 
 
 def _raise_adjoint_unconverged(cfg: ImplicitConfig, *, iterations: int,
@@ -1469,9 +1553,15 @@ def _tree_norm(tree):
     ))
 
 
-def _linear_response_report(sol, rhs, cfg: ImplicitConfig):
+def _raw_certified_report(report: LinearResponseReport, raw_ok):
+    """Mark a column converged when the raw-operator residual accepts it."""
+    return report._replace(
+        converged=jnp.logical_or(report.converged, raw_ok))
+
+
+def _linear_response_report(sol, rhs, cfg: ImplicitConfig, rtol=None):
     b_norm = _tree_norm(rhs)
-    tolerance = _adjoint_acceptance(cfg, b_norm)
+    tolerance = _adjoint_acceptance(cfg, b_norm, rtol)
     return LinearResponseReport(
         residual_norm=sol.residual_norm,
         tolerance=tolerance,
@@ -1507,7 +1597,8 @@ def _checked_adjoint_x(sol, b_flat, cfg: ImplicitConfig):
     return jnp.where(ok, sol.x, jnp.full_like(sol.x, jnp.nan))
 
 
-def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None):
+def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None,
+                   rtol=None):
     """Adjoint linear solve ``(dF/dz)^T lambda = b`` via ``solvax.gmres``.
 
     ``solvax.gmres`` operates on flat ``(n,)`` vectors, so the pytree ``b``
@@ -1539,14 +1630,16 @@ def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None):
         sol = _solvax_gmres(
             matvec, b_flat,
             x0=x0_flat,
-            rtol=cfg.adjoint_tol, atol=0.0, restart=cfg.adjoint_restart,
+            rtol=(cfg.adjoint_tol if rtol is None else float(rtol)),
+            atol=0.0, restart=cfg.adjoint_restart,
             max_restarts=(cfg.adjoint_maxiter if max_restarts is None
                           else int(max_restarts)),
         )
     return unravel(sol.x), sol
 
 
-def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig, *, precond=None):
+def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig, *, precond=None,
+                         rtol=None, max_restarts=None, enforce=True):
     """Adjoint linear solve ``(dF/dz)^T lambda = b`` via ``solvax.gcrot(m, k)``.
 
     The reverse-pass default (:func:`_solve_implicit_bwd`,
@@ -1587,16 +1680,21 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig, *, precond=None):
         sol = _solvax_gcrot(
             matvec, b_flat,
             precond=None if precond is None else precond_flat,
-            rtol=cfg.adjoint_tol, atol=0.0, m=m, k=k,
-            max_restarts=cfg.adjoint_maxiter,
+            rtol=(cfg.adjoint_tol if rtol is None else float(rtol)),
+            atol=0.0, m=m, k=k,
+            max_restarts=(cfg.adjoint_maxiter if max_restarts is None
+                          else int(max_restarts)),
         )
-        x = _checked_adjoint_x(sol, b_flat, cfg)
+        # The Jacobian certifier reports rather than raises: a column that
+        # misses tolerance still carries the preconditioned solve's answer,
+        # which beats reverting to a stale Jacobian.
+        x = _checked_adjoint_x(sol, b_flat, cfg) if enforce else sol.x
     return unravel(x), sol
 
 
 @dataclass(frozen=True)
 class _RawBlockSystem:
-    """One factored raw-force linearization and its exact transpose."""
+    """One factored raw-force bulk linearization and exact full operators."""
 
     factors: Any
     pack: Callable
@@ -1604,6 +1702,13 @@ class _RawBlockSystem:
     project: Callable
     operator: Callable
     operator_t: Callable
+    band_operator: Callable
+    band_operator_t: Callable
+    lower: Array
+    diagonal: Array
+    upper: Array
+    row_scale: Array
+    column_scale: Array
 
 
 def _active_state_fields(cfg: ImplicitConfig) -> tuple[str, ...]:
@@ -1619,8 +1724,23 @@ def _raw_block_system(
     dof_mask: SpectralState,
     active_fields: tuple[str, ...],
     probe_chunk_size: int,
+    *,
+    residual: Callable | None = None,
+    z_star: SpectralState | None = None,
+    runtime: SolverRuntime | None = None,
+    physical_state: SpectralState | None = None,
+    include_edge: bool = False,
+    factor: bool = True,
 ) -> _RawBlockSystem:
-    """Factor the exactly nearest-neighbor raw-force Jacobian once."""
+    """Factor an exactly nearest-neighbor raw-force Jacobian once.
+
+    Each block row is differentiated through the three-surface local force
+    kernel, so compilation and temporary storage are independent of the full
+    radial extent. ``residual`` remains the exact full operator used to
+    certify the blocks. The optional runtime/state arguments let free boundary
+    freeze only NESTOR's converged edge pressure while retaining its evolved
+    edge row. The default remains the fixed-boundary raw residual.
+    """
     if not active_fields:
         raise ValueError("implicit response has no active state fields")
     ns = int(cfg.resolution.ns)
@@ -1628,8 +1748,9 @@ def _raw_block_system(
     n_active = len(active_fields)
     block_size = n_active * mn
     project = _dof_projector(cfg, dof_mask)
-    z_star = project(frozen)
-    residual = residual_fn(cfg, frozen, dof_mask, formulation="raw")
+    z_star = project(frozen) if z_star is None else project(z_star)
+    residual = (residual_fn(cfg, frozen, dof_mask, formulation="raw")
+                if residual is None else residual)
 
     def pack(tree):
         return jnp.concatenate(
@@ -1652,50 +1773,114 @@ def _raw_block_system(
 
     _, pullback = jax.vjp(lambda z: residual(z, params), z_star)
     operator_t = lambda cotangent: pullback(cotangent)[0]  # noqa: E731
-
-    colors = jnp.asarray(np.repeat(np.arange(3), block_size))
-    fields = jnp.asarray(np.tile(
-        np.repeat(np.arange(n_active), mn), 3
-    ))
-    columns = jnp.asarray(np.tile(
-        np.tile(np.arange(mn), n_active), 3
-    ))
     dtype = frozen.R_cos.dtype
+    rt = runtime_from_params(params, cfg) if runtime is None else runtime
+    if physical_state is None:
+        physical_state = _assemble(
+            z_star, rt, frozen, project, _edge_mask(cfg))
+    zeros = jnp.zeros((3, block_size), dtype=dtype)
 
-    def probe(spec):
-        color, field, column = spec
-        rows = jnp.arange(ns) % 3 == color
-        values = jnp.where(
-            rows[:, None],
-            jax.nn.one_hot(column, mn, dtype=dtype)[None, :],
-            0.0,
+    def local_unpack(matrix):
+        parts = dict(zip(active_fields, jnp.split(matrix, n_active, axis=1)))
+        return SpectralState(**{
+            name: parts.get(name, jnp.zeros((3, mn), matrix.dtype))
+            for name in _STATE_FIELDS
+        })
+
+    def local_pack(tree):
+        return jnp.concatenate(
+            [getattr(tree, name) for name in active_fields], axis=1)
+
+    def row_jacobian(row, *, axis_closure):
+        start = jnp.clip(row - 1, 0, ns - 3)
+        base = jax.tree.map(
+            lambda value: jax.lax.dynamic_slice_in_dim(value, start, 3),
+            physical_state,
         )
-        stack = (
-            jax.nn.one_hot(field, n_active, dtype=dtype)[:, None, None]
-            * values[None]
+        local_mask = jax.tree.map(
+            lambda value: jax.lax.dynamic_slice_in_dim(value, start, 3),
+            dof_mask,
         )
-        tangent = unpack(jnp.concatenate(
-            [stack[i] for i in range(n_active)], axis=1
-        ))
-        response = jax.tree.map(
-            lambda a, b, p: a + b - p,
-            operator(tangent), tangent, project(tangent),
-        )
-        return pack(response)
+        local_project = _dof_projector(cfg, local_mask)
 
-    probes = chunk_map(
-        probe, (colors, fields, columns),
-        chunk_size=max(1, int(probe_chunk_size)),
-    ).reshape((3, block_size, ns, block_size))
-    rows = jnp.arange(ns)
+        def row_residual(delta):
+            unpacked = local_unpack(delta)
+            tangent = local_project(unpacked)
+            trial = jax.tree.map(jnp.add, base, tangent)
+            force = _raw_residual_segment(
+                trial, rt, start, axis_closure=axis_closure,
+                include_edge=include_edge,
+            )
+            # Inactive columns receive an identity equation so every radial
+            # block remains nonsingular; projected callers never excite them.
+            regularized = jax.tree.map(
+                lambda value, raw, active: value + raw - active,
+                local_project(force), unpacked, tangent,
+            )
+            return local_pack(regularized)[row - start]
 
-    def band(offset):
-        values = probes[(rows + offset) % 3, :, rows, :]
-        return jnp.swapaxes(values, 1, 2)
+        # This local Jacobian is wide (block_size outputs, three block_size
+        # inputs), so reverse mode needs one third as many linear sweeps as
+        # forward mode while retaining only a three-surface tape.
+        return jax.jacrev(row_residual)(zeros)
 
-    factors = block_thomas_factor(band(-1), band(0), band(1))
+    # Rows 0 and 1 depend on VMEC's lambda-axis closure. All later rows share
+    # one ordinary local kernel; lax.map keeps the compile graph bounded in ns.
+    axis_rows = jnp.arange(min(2, ns))
+    axis_jacobians = jax.lax.map(
+        lambda row: row_jacobian(row, axis_closure=True), axis_rows)
+    ordinary_rows = jnp.arange(2, ns)
+    ordinary_jacobians = jax.lax.map(
+        lambda row: row_jacobian(row, axis_closure=False), ordinary_rows)
+    jacobians = jnp.concatenate((axis_jacobians, ordinary_jacobians), axis=0)
+    rows = jnp.arange(ns); starts = jnp.clip(rows - 1, 0, ns - 3)
+
+    def select(jacobian, local_column):
+        return jax.lax.dynamic_index_in_dim(
+            jacobian, local_column, axis=1, keepdims=False)
+
+    diagonal = jax.vmap(select)(jacobians, rows - starts)
+    lower = jnp.zeros_like(diagonal).at[1:].set(jax.vmap(select)(
+        jacobians[1:], rows[1:] - 1 - starts[1:]))
+    upper = jnp.zeros_like(diagonal).at[:-1].set(jax.vmap(select)(
+        jacobians[:-1], rows[:-1] + 1 - starts[:-1]))
+    lower = lower.at[0].set(jnp.zeros_like(lower[0]))
+    upper = upper.at[-1].set(jnp.zeros_like(upper[-1]))
+    tiny = jnp.finfo(dtype).tiny
+    row_norm = jnp.maximum(
+        jnp.max(jnp.abs(diagonal), axis=-1),
+        jnp.maximum(jnp.max(jnp.abs(lower), axis=-1),
+                    jnp.max(jnp.abs(upper), axis=-1)))
+    row_scale = 1.0 / jnp.maximum(row_norm, tiny)
+    lower_r = row_scale[:, :, None] * lower
+    diagonal_r = row_scale[:, :, None] * diagonal
+    upper_r = row_scale[:, :, None] * upper
+    column_norm = jnp.max(jnp.abs(diagonal_r), axis=-2)
+    column_norm = column_norm.at[:-1].max(
+        jnp.max(jnp.abs(lower_r[1:]), axis=-2))
+    column_norm = column_norm.at[1:].max(
+        jnp.max(jnp.abs(upper_r[:-1]), axis=-2))
+    column_scale = 1.0 / jnp.maximum(column_norm, tiny)
+    lower_scaled = lower_r * column_scale[jnp.maximum(
+        jnp.arange(ns) - 1, 0)][:, None, :]
+    diagonal_scaled = diagonal_r * column_scale[:, None, :]
+    upper_scaled = upper_r * column_scale[jnp.minimum(
+        jnp.arange(ns) + 1, ns - 1)][:, None, :]
+    factors = (block_thomas_factor(lower_scaled, diagonal_scaled, upper_scaled)
+               if factor else None)
+
+    def band_operator(tangent):
+        response = block_tridiag_matvec(
+            lower, diagonal, upper, pack(project(tangent)))
+        return project(unpack(response))
+
+    _, band_pullback = jax.vjp(
+        band_operator, jax.tree.map(jnp.zeros_like, frozen))
+    band_operator_t = lambda cotangent: band_pullback(cotangent)[0]  # noqa: E731
     return _RawBlockSystem(
-        factors, pack, unpack, project, operator, operator_t
+        factors, pack, unpack, project, operator, operator_t,
+        band_operator, band_operator_t, lower, diagonal, upper,
+        row_scale, column_scale,
     )
 
 
@@ -1709,9 +1894,13 @@ def _raw_block_solve(
     """Solve all raw-force right-hand sides with one stored factorization."""
     rhs_batch = jax.vmap(system.project)(rhs_batch)
     packed = jax.vmap(system.pack)(rhs_batch)
+    packed = packed * (system.column_scale if transpose
+                       else system.row_scale)[None]
     solution = block_thomas_solve(
         system.factors, jnp.moveaxis(packed, 0, -1), transpose=transpose
     )
+    solution = solution * (system.row_scale if transpose
+                           else system.column_scale)[..., None]
     solution = jax.vmap(
         lambda matrix: system.project(system.unpack(matrix))
     )(jnp.moveaxis(solution, -1, 0))
@@ -1738,11 +1927,20 @@ def _raw_block_apply(
     transpose: bool = False,
 ) -> SpectralState:
     """Apply one stored raw block inverse without rebuilding its factors."""
-    packed = system.pack(system.project(rhs))[..., None]
-    solution = block_thomas_solve(
-        system.factors, packed, transpose=transpose
-    )[..., 0]
-    return system.project(system.unpack(solution))
+    if system.factors is None:
+        raise ValueError("raw block factors were not requested")
+    def solve(value):
+        packed = system.pack(system.project(value))
+        packed = packed * (system.column_scale if transpose
+                           else system.row_scale)
+        solution = block_thomas_solve(
+            system.factors, packed[..., None], transpose=transpose
+        )[..., 0]
+        solution = solution * (system.row_scale if transpose
+                               else system.column_scale)
+        return system.project(system.unpack(solution))
+
+    return solve(rhs)
 
 
 def _implicit_evolved_tangent_multi_rhs(
@@ -1755,6 +1953,8 @@ def _implicit_evolved_tangent_multi_rhs(
     active_fields: tuple[str, ...],
     probe_chunk_size: int,
     response_chunk_size: int,
+    certify_rtol: float | None = None,
+    certify_maxiter: int | None = None,
 ) -> tuple[SpectralState, LinearResponseReport]:
     frozen = jax.lax.stop_gradient(x_star)
     system = _raw_block_system(
@@ -1790,24 +1990,32 @@ def _implicit_evolved_tangent_multi_rhs(
                 lambda z: residual(z, params),
                 (z_star,), (value,),
             )[1],
-            rhs, cfg, x0=x0,
+            rhs, cfg, x0=x0, rtol=certify_rtol,
+            max_restarts=certify_maxiter,
         )
-        return solution, _linear_response_report(krylov, rhs, cfg)
+        # Certify on the raw operator the columns are consumed through.  The
+        # corrector iterates on the preconditioned system; the two share a
+        # solution but not a norm, so measuring there reported 40 of 48
+        # columns uncertified while their residual on the exact operator was
+        # 3e-9.  A certificate that fires on correct answers stops carrying
+        # information.
+        raw_defect = jax.tree.map(
+            jnp.subtract, raw_rhs(tangent), system.operator(solution))
+        raw_norm = _tree_norm(raw_rhs(tangent))
+        raw_ok = _tree_norm(raw_defect) <= _adjoint_acceptance(
+            cfg, raw_norm, certify_rtol)
+        return solution, _raw_certified_report(_linear_response_report(
+            krylov, rhs, cfg, rtol=certify_rtol), raw_ok)
 
     solution, report = chunk_map(
         correct, (tangent_batch, initial),
         chunk_size=max(1, int(response_chunk_size)),
     )
-    solution = jax.tree.map(
-        lambda value: jnp.where(
-            report.converged.reshape(
-                (report.converged.shape[0],)
-                + (1,) * (value.ndim - 1)
-            ),
-            value, jnp.full_like(value, jnp.nan),
-        ),
-        solution,
-    )
+    # A column that misses its tolerance still carries a usable response.
+    # GMRES starts from the direct block solve and decreases the residual
+    # monotonically, so its output is at least as accurate as that solve
+    # however far it got, while discarding it as NaN left the caller re-using
+    # the previous Jacobian.  Return it and let the report record the margin.
     return solution, report
 
 

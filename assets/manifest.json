@@ -3,36 +3,57 @@
   "bundles": [
     {
       "name": "reference-nc",
-      "url": "https://github.com/uwplasma/vmex/releases/download/assets-20260316-nc/vmec_jax_assets_20260316_nc_only.tar.gz",
-      "sha256": "3344fc2401fffed240ee57ae741ec521594c592627c76dae203503f485e4c0d8",
-      "size_bytes": 81559426,
+      "url": "https://github.com/uwplasma/vmex/releases/download/assets-20260812-nc/vmex_assets_reference_nc.tar.gz",
+      "sha256": "68d6237846ab07be9af703be9b081413c444fa283ea733be2dc497dcbd0da46d",
+      "size_bytes": 35846671,
       "source": "VMEX reference NetCDF and mgrid release assets",
       "license": "MIT; see repository LICENSE",
-      "generator_revision": "4ead9b814f8333d4dfbc3034d127085667743fd8",
+      "generator_revision": "5d6ceffaa1c003b32ce98000f444e9072c1eb811",
       "destination": "repository",
       "default": true,
       "common_paths": [
         "examples/data/mgrid_cth_like.nc",
         "examples/data/mgrid_d3d_ef.nc",
-        "examples/data/wout_*_reference.nc",
-        "examples/data/single_grid/mgrid_cth_like.nc",
-        "examples/data/single_grid/mgrid_d3d_ef.nc",
-        "examples/data/single_grid/wout_*_reference.nc"
+        "examples/data/wout_*.nc",
+        "examples/data/single_grid/mgrid_*.nc",
+        "examples/data/single_grid/wout_*.nc"
+      ],
+      "mirrors": [
+        {
+          "source": "examples/data",
+          "target": "examples/data/single_grid",
+          "names": [
+            "mgrid_cth_like.nc",
+            "mgrid_cth_like_lasym_small.nc",
+            "mgrid_d3d_ef.nc",
+            "wout_ITERModel_reference.nc",
+            "wout_LandremanPaul2021_QA_lowres_reference.nc",
+            "wout_LandremanPaul2021_QA_reactorScale_lowres_reference.nc",
+            "wout_LandremanPaul2021_QH_reactorScale_lowres_reference.nc",
+            "wout_LandremanSengupta2019_section5.4_B2_A80_reference.nc",
+            "wout_LandremanSenguptaPlunk_section5p3_low_res_reference.nc",
+            "wout_basic_non_stellsym_pressure_reference.nc",
+            "wout_circular_tokamak_aspect_100_reference.nc",
+            "wout_circular_tokamak_reference.nc",
+            "wout_purely_toroidal_field_reference.nc",
+            "wout_shaped_tokamak_pressure_reference.nc",
+            "wout_solovev_reference.nc",
+            "wout_up_down_asymmetric_tokamak_reference.nc"
+          ]
+        }
       ]
     },
     {
       "name": "wout-fixtures",
-      "url": "https://github.com/uwplasma/vmex/releases/download/assets-20260526-wout-fixtures/vmec_jax_wout_fixtures_20260526.tar.gz",
-      "sha256": "e9fd844a4ebed043576eec8ac2b17f7ff3e2a0e0a1b5adfc89742139101e00f9",
-      "size_bytes": 9801091,
-      "source": "VMEX generated and reference WOUT fixtures",
+      "url": "https://github.com/uwplasma/vmex/releases/download/assets-20260812-wout-fixtures/vmex_assets_wout_fixtures.tar.gz",
+      "sha256": "27a0ef9fc5eaf11b2ea02623dc9918799ab1258886e865c1e0ca98af057c1adc",
+      "size_bytes": 5051094,
+      "source": "VMEX generated and reference WOUT fixtures for the documentation galleries",
       "license": "MIT; see repository LICENSE",
-      "generator_revision": "3d839e4fd8cfa66d19752bbaa4a6d526b51995b6",
+      "generator_revision": "5d6ceffaa1c003b32ce98000f444e9072c1eb811",
       "destination": "repository",
       "default": true,
       "common_paths": [
-        "examples/data/wout_*.nc",
-        "examples/data/single_grid/wout_*.nc",
         "docs/_static/readme_best_cases/*/wout_*.nc",
         "docs/_static/qi_readme_cases/*/wout_*.nc"
       ]

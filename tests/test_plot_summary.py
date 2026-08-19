@@ -204,6 +204,9 @@ def test_frozen_pressure_scan_recovers_wout(solved_case):
         scan["dmerc"][0], np.asarray(wout.DMerc) - np.asarray(wout.DWell))
     np.testing.assert_allclose(
         scan["d_r"][0], np.asarray(info["d_r"]) + np.asarray(wout.DWell))
+    # -D_R = DMerc minus a non-negative GGJ correction. Nearly coincident
+    # ideal and resistive margins are therefore physical, not duplicated data.
+    assert np.all(-scan["d_r"][:, interior] <= scan["dmerc"][:, interior] + 1e-12)
 
 
 def test_frozen_pressure_scan_uses_explicit_vacuum_seed(solved_case):
@@ -304,8 +307,8 @@ def test_j_invariant_map_rejects_degenerate_field():
         plotting._j_invariant_map(booz)
 
 
-def test_j_invariant_map_uses_surface_local_normalized_pitch(monkeypatch):
-    """Fixed lambda_n uses each surface's Bmin/Bmax, as in the polar-J reference."""
+def test_j_invariant_map_uses_one_physical_pitch_on_every_surface(monkeypatch):
+    """A radial maximum-J diagnostic holds physical pitch fixed."""
     import vmex.core.bounce as bounce
 
     pitches = []
@@ -317,14 +320,28 @@ def test_j_invariant_map_uses_surface_local_normalized_pitch(monkeypatch):
 
     monkeypatch.setattr(bounce, "bounce_action_from_boozer", _fake_bounce)
     booz = {
-        "bmnc_b": np.array([[1.0, 0.2], [2.0, 0.4]]), "bmns_b": None,
+        "bmnc_b": np.array([[1.0, 0.2], [1.1, 0.2]]), "bmns_b": None,
         "xm_b": np.array([0, 0]), "xn_b": np.array([0, 1]), "nfp": 1,
         "iota_b": np.array([0.5, 0.5]), "G_b": np.ones(2), "I_b": np.zeros(2),
         "s_b": np.array([0.25, 0.75]),
     }
     result = plotting._j_invariant_map(booz, pitch_fraction=0.5, nalpha=4)
-    np.testing.assert_allclose(pitches, [1.0, 0.5], rtol=0.0, atol=2e-4)
-    np.testing.assert_allclose(result["pitch"], pitches)
+    np.testing.assert_allclose(pitches, [1.0 / 1.05, 1.0 / 1.05], rtol=0.0, atol=2e-4)
+    np.testing.assert_allclose(result["pitch"], pitches[0])
+
+    pitches.clear()
+    result = plotting._j_invariant_map(booz, pitch=1.0 / 1.05, nalpha=4)
+    np.testing.assert_allclose(pitches, [1.0 / 1.05, 1.0 / 1.05])
+    np.testing.assert_allclose(result["pitch_inverse"], 1.05)
+
+    pitches.clear()
+    result = plotting._j_invariant_map(booz, pitch=1.0 / 0.85, nalpha=4)
+    np.testing.assert_allclose(pitches, [1.0 / 0.85])
+    np.testing.assert_array_equal(result["trapped_surface"], [True, False])
+    assert np.all(np.isfinite(result["j_map"][0]))
+    assert np.all(np.isnan(result["j_map"][1]))
+    with pytest.raises(ValueError, match="not trapped"):
+        plotting._j_invariant_map(booz, pitch=0.5, nalpha=4)
 
 
 def test_volume_second_derivative_of_linear_vprime():
@@ -336,6 +353,20 @@ def test_volume_second_derivative_of_linear_vprime():
     s, vpp = plotting._volume_second_derivative(SimpleNamespace(ns=ns, vp=vp))
     np.testing.assert_allclose(s, s_half)
     np.testing.assert_allclose(vpp, slope, atol=2.0e-14)
+
+
+def test_vacuum_stability_panel_is_labeled_as_a_limit():
+    """A vacuum curve must not be presented as a pressure-stability certificate."""
+    import matplotlib.pyplot as plt
+
+    wout = SimpleNamespace(
+        ns=7, DMerc=np.ones(7), betatotal=0.0, vp=np.arange(7, dtype=float))
+    figure, axis = plt.subplots()
+    plotting._stability_panel(
+        axis, wout, {"valid": False, "note": "not sampled"}, s_plot_ignore=0.0)
+    assert "vacuum-limit" in axis.lines[0].get_label()
+    assert "not finite-pressure" in axis.get_title()
+    plt.close(figure)
 
 
 def test_summary_survives_boozer_failure(solved_case, monkeypatch):
@@ -356,6 +387,97 @@ def test_summary_survives_boozer_failure(solved_case, monkeypatch):
             assert ax.get_title().strip() and ax.get_xlabel().strip()
     finally:
         plt.close(fig)
+
+
+def test_summary_plots_the_effective_ripple_profile_when_neo_is_available(
+    solved_case, monkeypatch,
+):
+    """With NEO_JAX present the pressure panel gains an eps_eff^(3/2) twin axis.
+
+    ``epsilon_eff^(3/2)`` (Nemov PoP 6, 4622 (1999)) spans decades across the
+    minor radius, so the diagnostic overlay must be logarithmic and share the
+    pressure panel's legend rather than replace the pressure curve.
+    """
+    import matplotlib.pyplot as plt
+
+    from vmex.core import neoclassical
+
+    _, wout = solved_case
+    surfaces = np.linspace(0.15, 0.95, 5)
+    values = np.geomspace(1.0e-6, 1.0e-3, 5)
+    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
+    monkeypatch.setattr(
+        neoclassical, "epsilon_effective_from_wout",
+        lambda _wout, **_kwargs: (surfaces, values))
+    saved = dict(plotting._EPSILON_EFFECTIVE_CACHE)
+    plotting._EPSILON_EFFECTIVE_CACHE.clear()
+
+    fig, meta = plotting._summary_figure(wout)
+    try:
+        info = meta["epsilon_effective"]
+        assert info["valid"] and info["note"] == "diagnostic resolution"
+        axis = meta["epsilon_axis"]
+        assert axis.get_yscale() == "log"
+        np.testing.assert_allclose(axis.lines[0].get_ydata(), values)
+        labels = [t.get_text() for t in meta["axes"]["pressure"].get_legend().get_texts()]
+        assert len(labels) == 2 and any("epsilon" in t or r"\epsilon" in t for t in labels)
+    finally:
+        plt.close(fig)
+        plotting._EPSILON_EFFECTIVE_CACHE.clear()
+        plotting._EPSILON_EFFECTIVE_CACHE.update(saved)
+
+
+def test_epsilon_effective_panel_resolves_a_sub_decade_profile(
+    solved_case, monkeypatch,
+):
+    """A ripple profile flatter than one decade gets a readable linear axis.
+
+    An optimized configuration is exactly the case where eps_eff^(3/2) varies
+    by a factor of a few rather than by decades, and there the log autoscale
+    snaps to powers of ten: the curve flattens against a limit, the radial
+    minimum stops being visible, and the axis carries a single tick label.
+    The minimum is the feature the panel exists to show.
+    """
+    import matplotlib.pyplot as plt
+
+    from vmex.core import neoclassical
+
+    _, wout = solved_case
+    surfaces = np.linspace(0.15, 0.95, 5)
+    values = np.array([4.4e-3, 2.6e-3, 1.6e-3, 2.1e-3, 3.9e-3])  # 2.7x span
+    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
+    monkeypatch.setattr(
+        neoclassical, "epsilon_effective_from_wout",
+        lambda _wout, **_kwargs: (surfaces, values))
+    saved = dict(plotting._EPSILON_EFFECTIVE_CACHE)
+    plotting._EPSILON_EFFECTIVE_CACHE.clear()
+
+    fig, meta = plotting._summary_figure(wout)
+    try:
+        axis = meta["epsilon_axis"]
+        assert axis.get_yscale() == "linear"
+        low, high = axis.get_ylim()
+        assert low < values.min() and values.max() < high
+        assert len([t for t in axis.get_yticks() if low <= t <= high]) >= 4
+    finally:
+        plt.close(fig)
+        plotting._EPSILON_EFFECTIVE_CACHE.clear()
+        plotting._EPSILON_EFFECTIVE_CACHE.update(saved)
+
+
+def test_epsilon_effective_summary_tolerates_an_unreferenceable_wout(monkeypatch):
+    """A missing backend or an unhashable wout never breaks the summary."""
+    from vmex.core import neoclassical
+
+    def unavailable(_wout, **_kwargs):
+        raise ImportError("effective ripple requires NEO_JAX")
+
+    monkeypatch.setattr(neoclassical, "epsilon_effective_from_wout", unavailable)
+    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
+    before = dict(plotting._EPSILON_EFFECTIVE_CACHE)
+    info = plotting._epsilon_effective_summary({"ns": 3})  # dict: no weak reference
+    assert info["valid"] is False and "ImportError" in info["note"]
+    assert plotting._EPSILON_EFFECTIVE_CACHE == before
 
 
 def test_summary_survives_j_map_failure(solved_case, monkeypatch):

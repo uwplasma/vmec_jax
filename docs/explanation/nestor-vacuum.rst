@@ -89,8 +89,12 @@ It may be loaded from an ``mgrid`` file (trilinear interpolation weighted by
 :meth:`~vmex.core.mgrid.MgridField.from_cartesian_field`, which tabulates an
 ESSOS/SIMSOPT Biot--Savart object or any ``xyz -> B`` callable.  The resulting
 table and its current scale remain JAX-differentiable; tabulation itself does
-not retain coil-geometry derivatives. Direct, interpolation-free ESSOS coil
-derivatives use the virtual-casing residual below. VMEX carries no coil code.
+not retain coil-geometry derivatives. For a coupled solve,
+:meth:`~vmex.core.mgrid.MgridField.from_parameterized_cartesian_field` instead
+tabulates ``field(coil_parameters, xyz)`` entirely in JAX, retaining exact
+shape/current derivatives through interpolation and NESTOR. Direct,
+interpolation-free ESSOS derivatives use the virtual-casing residual below.
+VMEX carries no coil code.
 
 On a GPU free-boundary run, the plasma iteration, mgrid interpolation, cached
 vacuum arrays, and final state remain on the accelerator. The dense NESTOR
@@ -106,8 +110,8 @@ What is (and is not) differentiated
 
 The NESTOR iteration above is a host-driven fixed point and is not
 differentiated. For coil/current optimization,
-:mod:`vmex.core.freeboundary_diff` instead expresses the free-boundary
-condition as a smooth objective on a given boundary. At the plasma-vacuum
+:mod:`vmex.core.virtual_casing` instead expresses the interface conditions as
+smooth objectives on a prescribed boundary. At the plasma-vacuum
 interface the total exterior field
 :math:`\mathbf{B}_{\mathrm{out}} = \mathbf{B}_{\mathrm{coil}} +
 \mathbf{B}_{\mathrm{plasma}}` must be tangent, and pressure balance holds:
@@ -117,40 +121,145 @@ interface the total exterior field
    \mathbf{B}_{\mathrm{out}}\cdot\mathbf{n} = 0, \qquad
    |\mathbf{B}_{\mathrm{in}}|^2 + 2\mu_0 p = |\mathbf{B}_{\mathrm{out}}|^2.
 
-The plasma's own exterior field comes from the **virtual-casing principle**:
-the field produced outside :math:`\partial\Omega` by the plasma currents
-equals that of the surface current
-:math:`\mathbf{K} = \mathbf{n}\times\mathbf{B}/\mu_0` on
-:math:`\partial\Omega`, evaluated with an accurate on-surface singular
-quadrature (reused from the optional ``virtual_casing_jax`` package,
-released as ``virtual-casing-jax >= 0.0.3`` from the canonical
+The plasma's own exterior field comes from the **virtual-casing principle**.
+In the BIEST convention, its layer densities on :math:`\partial\Omega` are
+:math:`\sigma=\mathbf{B}\cdot\mathbf{n}` and
+:math:`\mathbf{J}=\mathbf{B}\times\mathbf{n}`. The exterior field of the
+enclosed plasma currents is the internal branch
+:math:`-\nabla G[\sigma]-\mathrm{BiotSavart}[\mathbf{J}]`, evaluated with an
+accurate singular quadrature (reused from the optional
+``virtual_casing_jax`` package,
+required as ``virtual-casing-jax >= 0.0.4`` from the canonical
 ``uwplasma/virtual_casing_jax`` repository;
-:func:`~vmex.core.freeboundary_diff.surface_field_data_from_wout`
+:func:`~vmex.core.virtual_casing.surface_field_data_from_wout`
 adapts a converged boundary + field, and
-:func:`~vmex.core.freeboundary_diff.plasma_field_on_boundary` evaluates
+:func:`~vmex.core.virtual_casing.plasma_field_on_boundary` evaluates
 the integral). The key structural fact: for a *fixed* trial boundary,
 :math:`\mathbf{B}_{\mathrm{plasma}}` on that boundary does not depend on the
 coil degrees of freedom, so it is precomputed once and frozen. The residual
 assembled by
-:class:`~vmex.core.freeboundary_diff.FreeBoundaryDiffProblem` is then a
+:class:`~vmex.core.virtual_casing.PlasmaVacuumInterface` is then a
 smooth JAX function of the external-field dofs alone (coil Fourier
 coefficients/currents of a callable ESSOS coil field via
-:func:`~vmex.core.freeboundary_diff.external_B_cartesian`, or
+:func:`~vmex.core.virtual_casing.external_B_cartesian`, or
 ``extcur``), and its ``value_and_grad_bnormal`` helper returns gradients
 validated against finite differences — no NESTOR adjoint is required.
 
-Toward a coupled adjoint
-------------------------
+The finite-beta single-stage example uses a pressure profile that vanishes at
+the LCFS. It therefore needs no prescribed physical sheet current in the jump
+condition; nonzero edge pressure or an imposed sheet current requires an
+additional interface model.
 
-:class:`vmex.core.freeboundary_linear.NestorBorderedOperator` represents its
-linearization as ``[[A, B], [C, D]]`` with matrix-free plasma, vacuum, and
-edge-coupling actions. :func:`~vmex.core.freeboundary_linear.linearize_nestor_coupling`
-builds those four actions directly from a live plasma residual and NESTOR's
-unsolved ``A(x) q - b(x)`` equation; :class:`~vmex.core.vacuum.VacuumSolver`
-exposes that equation through ``assemble`` without nesting a potential solve.
-The operator supplies the exact generated transpose, the Schur action
-:math:`D-C A^{-1}B`, and a block inverse. The live LASYM NESTOR blocks are
-tested against the complete coupled JVP/VJP. The host-driven cadence above is
-not yet replaced by a coupled Newton solve, so this foundation is not yet a
-public implicit free-boundary adjoint (see
-:doc:`/reference/capabilities`).
+Despite using the interface equations, that example is a **fixed-boundary**
+optimization: every trial boundary is prescribed to VMEX and reconverged, and
+both boundary and coil coefficients are decision variables. Virtual casing
+separates the converged total VMEX field into plasma-current and external-coil
+parts; it does not run NESTOR or a free-boundary equilibrium. The experimental
+``single_stage_free_boundary_optimization*.py`` examples instead hold the
+plasma boundary implicit and vary only coil parameters through the coupled
+NESTOR derivative described below.
+
+The reported normalized total-pressure jump is
+
+.. math::
+
+   \left\langle\left[
+   (|\mathbf B_{\rm out}|^2-|\mathbf B_{\rm in}|^2-2\mu_0p_{\rm edge})
+   / B_{\rm ref}^2\right]^2\right\rangle_A^{1/2}.
+
+It is dimensionless and vanishes when the ideal-MHD pressure-balance
+condition holds. It is not an error in the prescribed volume pressure
+profile. Even when :math:`p_{\rm edge}=0`, it supplies the tangential-field
+magnitude condition that ``B.n/B`` alone does not constrain.
+
+Field-query API
+---------------
+
+:class:`~vmex.core.extender.MagneticField` provides stored Cartesian points,
+``B``, ``absB``, and spatial derivatives through ``gradgradgradB``. A field
+constructed from :meth:`~vmex.core.problem.VmecProblem.exterior_field` also
+provides ``B_vjp`` and the three spatial-derivative VJPs in the problem's
+boundary/current DOFs. The virtual-casing path applies outside the LCFS;
+:class:`~vmex.core.extender.VmecInteriorField` evaluates the live VMEC
+spectral field inside. Direct off-surface quadrature must stay away from the
+source surface and all targets must stay away from external coil filaments.
+For near-LCFS field-line tracing,
+:meth:`~vmex.core.extender.VmecExtender.with_near_surface_continuation`
+prepares the singular on-surface plasma field and gradient once, then uses the
+first-order continuation
+:math:`\mathbf B(\mathbf x_\Gamma+\delta\mathbf x)=\mathbf B_\Gamma+
+\nabla\mathbf B_\Gamma\delta\mathbf x+O(|\delta\mathbf x|^2)`. This removes
+the otherwise prohibitive source-grid refinement from every ODE step; direct
+quadrature remains the validation path farther from the LCFS.
+
+Virtual casing reconstructs the field produced by currents inside the plasma
+surface. It does not determine the external coil field: supply an ESSOS coil
+field or MGRID field and :class:`~vmex.core.extender.VmecExtender` adds the two.
+This distinction matters for finite-beta exterior tracing and coil design.
+
+See ``examples/vmex_get_B_gradB.py`` for the finite-beta interior API and
+``examples/vmex_get_B_outside_plasma.py`` for the live ESSOS-coil plus
+virtual-casing path, including exact equilibrium and coil VJPs. The
+``vmex_fieldline_tracing_vacuum.py`` and
+``vmex_fieldline_tracing_finite_beta.py`` examples use those same fields for
+inside/outside tracing. The single-stage optimization examples
+write both initial and optimized surface/coil VTK files; setting
+``MAKE_MOVIE=True`` adds a compact animation of accepted iterates. Set the
+examples' ``MOVIE_SURFACE_COLOR`` to ``None``, ``"absB"``, ``"B.n/B"``, or
+a scalar-field callable to control boundary coloring without storing VTK data
+for every iteration.
+
+Coupled free-boundary adjoint
+-----------------------------
+
+Let :math:`F(z,c)=0` be the converged VMEC force residual after NESTOR has
+computed the vacuum pressure on the moving edge, with equilibrium state
+:math:`z` and coil parameters :math:`c`. For a scalar objective :math:`J`,
+VMEX solves
+
+.. math::
+
+   F_z^T\lambda = J_z^T, \qquad
+   \frac{dJ}{dc} = J_c - \lambda^T F_c,
+
+:func:`~vmex.core.freeboundary_implicit.solve_free_boundary_implicit` keeps
+the host-driven forward iterations off the AD tape, re-evaluates the complete
+VMEC--NESTOR residual at the converged state, and solves this transpose system
+with one matrix-free GCROT adjoint. A direct ESSOS ``BiotSavart.b_cyl`` field
+retains coil shape/current derivatives without writing an mgrid file.
+
+The public construction is explicit: create
+:func:`~vmex.core.freeboundary_implicit.make_free_boundary_config`, map the
+coil vector to a field with ``field_from_parameters``, call the implicit solve,
+stack physics rows with :func:`vmex.core.optimize.residuals_from_tuples`, and
+apply ``jax.value_and_grad``. ``take_free_boundary_gradients.py`` validates a
+direction against independent re-solves; the two free-boundary single-stage
+examples pass the same scalar pair to SciPy.
+
+This path is currently limited to reverse mode. Its low-memory host Krylov
+lane peaks near 3--5 GB on the bundled coarse examples, but the first coupled
+transpose still takes about one to two minutes to compile on the reference
+CPU and is not yet a practical GPU path. Its ``device="auto"`` policy therefore
+uses the CPU on an accelerator host unless the process already pins JAX
+placement, while retaining an explicit per-call GPU override.
+``adjoint_solver="boundary_schur"`` enables the boundary-Schur transpose. It
+differentiates one three-surface force row at a time, retains every terminal
+radial stencil coupling in the bulk, isolates the one evolved edge row that
+contains NESTOR's response, and eliminates the radial bulk with a
+two-sided-equilibrated, globally pivoted
+sparse LU. Reverse-mode row differentiation is used because each local
+Jacobian has three times more inputs than outputs. The reduced transpose is
+solved and back-substituted, then checked against the original coupled
+residual; a failed certificate continues with coupled Krylov from the Schur
+answer. No dense full-state Jacobian is formed.
+
+The reduced lane is not yet the default. Direct local-row assembly removes
+the full radial basis sweep, the pivoted band solve removes the inaccurate
+no-pivot elimination, and the exact one-row interface avoids redundant NESTOR
+pullbacks. Local-force and vacuum-response compilation remain the cold-cost
+targets. The next measured step is to cache accepted-state local executables
+and batch the NESTOR edge pullbacks on GPU. Promotion requires lower cold time
+and memory on the bundled 3-D case
+while retaining the re-solve finite-difference, CPU/GPU, and fixed/free field
+certificates. Timings belong in the resource harness, not committed
+JSON files.

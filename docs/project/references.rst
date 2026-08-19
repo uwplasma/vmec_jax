@@ -98,7 +98,8 @@ Confinement objectives and optimization:
     stellarators with self-consistent bootstrap current and energetic particle
     confinement,” *Physics of Plasmas* 29, 082501 (2022), arXiv:2205.02914 —
     the self-consistent bootstrap iteration reproduced in
-    ``examples/optimization/*_bootstrap_selfconsistent.py``.
+    ``benchmarks/*_bootstrap_selfconsistent.py``; the compact finite-beta
+    optimization workflows are ``examples/optimization/*_optimization_bootstrap.py``.
 
 25. R. Jorge, A. Goodman, M. Landreman, J. Rodrigues, and F. Wechsung,
     “Single-stage stellarator optimization: combining coils with fixed
@@ -125,7 +126,7 @@ Confinement objectives and optimization:
 29. E. Rodríguez, P. Helander, and A. G. Goodman, “The maximum-J property
     in quasi-isodynamic stellarators,” *Journal of Plasma Physics* 90,
     905900212 (2024), doi:10.1017/S0022377824000345 — the signed
-    :math:`\partial\mathcal J_\parallel/\partial\psi<0` condition implemented
+    outward :math:`\partial\mathcal J_\parallel/\partial s<0` condition implemented
     by :class:`~vmex.core.maxj.MaximumJResidual`.
 
 30. E. Rodríguez and G. G. Plunk, “Near-axis quasi-isodynamic database,”
@@ -158,3 +159,21 @@ Confinement objectives and optimization:
     Second Adiabatic Invariant,” arXiv:2608.02418 (2026) — recent direct
     bounce-action optimization complementary to constructed geometric QI
     targets.
+
+36. V. V. Nemov, S. V. Kasilov, W. Kernbichler, and M. F. Heyn,
+    “Evaluation of :math:`1/\nu` neoclassical transport in stellarators,”
+    *Physics of Plasmas* 6, 4622–4632 (1999), doi:10.1063/1.873749 — defines
+    the effective-ripple transport measure reported by NEO as
+    :math:`\epsilon_{\mathrm{eff}}^{3/2}`.
+
+Numerical implementation:
+
+37. JAX documentation, “The Autodiff Cookbook” — the wide-Jacobian cost model
+    (``jacfwd`` versus ``jacrev``) used to select ``jacrev`` for the local
+    three-surface raw-force blocks,
+    https://docs.jax.dev/en/latest/notebooks/autodiff_cookbook.html.
+
+38. X. S. Li, “An Overview of SuperLU: Algorithms, Implementation, and User
+    Interface,” *ACM Transactions on Mathematical Software* 31, 302–325
+    (2005) — globally pivoted sparse factorization used for the equilibrated
+    block-banded radial solve, doi:10.1145/1089014.1089017.

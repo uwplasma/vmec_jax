@@ -5,7 +5,7 @@ implicit function theorem at the converged fixed point — one linear solve per
 scalar objective, O(1) memory in the iteration count, no unrolling, no
 finite-difference step size. All of that linear algebra runs on
 [SOLVAX](https://pypi.org/project/solvax/), the linear/adjoint solver layer
-factored out of this code base; this page states the formulation and the five
+factored out of this code base; this page states the formulation and the six
 SOLVAX solve classes exactly as the code uses them.
 
 ## The implicit function theorem on the fixed point
@@ -62,15 +62,14 @@ independent of how many Richardson steps, restarts, or multigrid stages the
 forward solve needed. Multigrid stages act purely as an initializer and are
 stop-gradient by construction.
 
-## The five SOLVAX solve classes
+## The six SOLVAX solve classes
 
 Every linear solve in the gradient stack goes through SOLVAX. The complete
 inventory, with the call site each class serves:
 
 1. `solvax.gmres` / `solvax.gcrot` solve the implicit-function-theorem
    systems in `vmex/core/implicit.py`: adjoint $(dF/dz)^T \lambda = b$
-   (warm-started GMRES; GCROT(m,k) with subspace recycling and, on
-   solvax >= 0.8.7, a `recycle_drift` certificate) and tangent
+   (warm-started GMRES; GCROT(m,k) with subspace recycling) and tangent
    $(dF/dz)\, dz = -(dF/dp)\, t$ via the multi-RHS drivers
    {func}`~vmex.core.implicit.implicit_state_tangent_multi_rhs` /
    {func}`~vmex.core.implicit.implicit_state_pullback_multi_rhs`;
@@ -89,6 +88,11 @@ inventory, with the call site each class serves:
    `v -> jvp(g, state, v)`; the `precon2d.f` analogue).
 5. `solvax.chunk_map` / `auto_chunk_size` bound memory for Jacobian columns
    and multi-RHS batches (`vmex/core/optimize.py`).
+6. `solvax.SpluFactorization` owns the pivoted sparse factorization used to
+   eliminate the radial bulk in the experimental free-boundary Schur
+   transpose (`vmex/core/freeboundary_implicit.py`). VMEX supplies the
+   physics-specific radial blocks and NESTOR edge response; SOLVAX owns the
+   reusable factorization and transposed solves.
 
 The mirror lane keeps its own adjoint solver (`vmex/mirror/implicit.py`).
 
@@ -99,9 +103,10 @@ No solve is trusted silently. Each adjoint/tangent solve returns a
 norm, the requested tolerance, the iteration count, and a converged flag; the
 block-Thomas Jacobian path certifies every column with one warm-started GMRES
 pass against the preconditioned system to the same `adjoint_tol` as the
-per-column path. Warm-started GCROT solves on solvax >= 0.8.7 additionally
-report `recycle_drift` — how far the operator moved under the recycled
-deflation space.
+per-column path. SOLVAX's own GCROT result additionally carries a
+`recycle_drift` monitor — how far the operator has drifted since the recycle
+pair was built — but VMEX neither reads nor surfaces it, so those four fields
+are the whole certificate.
 
 ## Validating the gradients: the frozen path
 
@@ -172,9 +177,12 @@ CPU. Regenerate with
 `python docs/_static/figures/sources/make_optimization_docs_figures.py`.
 ```
 
-## What is out of scope
+## Free-boundary root
 
-The free-boundary NESTOR fixed point is host-driven and not differentiated;
-coil and `extcur` derivatives go through the virtual-casing residual instead
-({doc}`nestor-vacuum`). The supported scope of every AD path is one row of
+The free-boundary path differentiates the converged coupled VMEX--NESTOR root,
+including direct coil-shape/current parameters, while keeping host iterations
+off the AD tape. The default whole-state transpose is exact but cold-compile
+and memory limited. An advanced boundary-Schur transpose, its full-residual
+certificate, and its current performance limits are documented in
+{doc}`nestor-vacuum`. The supported scope of every AD path is one row of
 {doc}`/reference/capabilities`.

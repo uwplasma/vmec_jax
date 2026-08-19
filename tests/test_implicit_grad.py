@@ -1,4 +1,4 @@
-"""Implicit-differentiation gradient tests (``vmex.core.implicit``, plan.md §6).
+"""Implicit-differentiation gradient tests for ``vmex.core.implicit``.
 
 Self-referential against central finite differences through the full host
 solver: the traceable parameter map reproduces ``prepare_runtime`` exactly;
@@ -567,6 +567,13 @@ def _assert_stability_gradients(
         ("ZBS(0,1)", dataclasses.replace(
             zero, zbs=zero.zbs.at[ntor, 1].set(1.0))),
     ]
+    if bool(inp.lasym):
+        directions += [
+            ("RBS(1,1)", dataclasses.replace(
+                zero, rbs=zero.rbs.at[ntor + 1, 1].set(1.0))),
+            ("ZBC(1,1)", dataclasses.replace(
+                zero, zbc=zero.zbc.at[ntor + 1, 1].set(1.0))),
+        ]
     if include_profiles == "pressure":
         directions += [
             ("RBC(0,2)", dataclasses.replace(
@@ -995,3 +1002,11 @@ def test_lasym_3d_gradient_vs_frozen_path_fd(lasym_3d):
         assert rel <= tol, (
             f"{out}/{field}[n={idx[0] - ntor},m={idx[1]}]: 3D lasym adjoint vs "
             f"frozen-path FD rel {rel:.2e} > {tol:.0e}")
+
+
+@pytest.mark.full
+def test_lasym_3d_stability_gradients_vs_frozen_path_fd(lasym_3d):
+    """LASYM Mercier/Glasser derivatives include the RBS/ZBC families."""
+    _assert_stability_gradients(
+        lasym_3d, include_profiles=False, metric_names=("DMerc", "D_R"),
+        direction_labels={"RBS(1,1)", "ZBC(1,1)"})

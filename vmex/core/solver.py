@@ -157,7 +157,7 @@ from .preconditioner import (
 )
 from .preconditioner_2d import Prec2DConfig, newton_direction
 from .printing import (
-    FORCE_ITERATIONS_BANNER, compile_notice, improved_axis_block,
+    FORCE_ITERATIONS_BANNER, compile_notice, emit_flushed, improved_axis_block,
     screen_header, screen_line, stage_banner,
 )
 from .residuals import (
@@ -2116,7 +2116,7 @@ def solve(
     mode: str = "cli",
     time_step: float | None = None, tcon0: float | None = None,
     gamma: float | None = None, nstep: int | None = None,
-    lconm1: bool = True, verbose: bool = False, emit=print,
+    lconm1: bool = True, verbose: bool = False, emit=emit_flushed,
     initial_state: SpectralState | None = None,
     restart_from: Any = None,
     device: Any = AUTO,

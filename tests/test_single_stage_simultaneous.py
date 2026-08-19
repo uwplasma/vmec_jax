@@ -19,7 +19,7 @@ import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 
 import vmex as vj  # noqa: E402
-from vmex.core import freeboundary_diff as FBD  # noqa: E402
+from vmex.core import virtual_casing as FBD  # noqa: E402
 from vmex.core import implicit as im  # noqa: E402
 from vmex.core.mgrid import MgridField, read_mgrid  # noqa: E402
 from vmex.core.wout import wout_from_state  # noqa: E402

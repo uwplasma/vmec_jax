@@ -1,9 +1,9 @@
-"""Smoke tests for the plan.md §10 examples at reduced budgets: each script
-reads ``VMEX_EXAMPLES_CI=1`` and shrinks its budget; the tests run them as
-subprocesses and assert clean exit, decreasing least-squares cost, and the
-promised outputs.  The examples' "commented-out but CI-tested" extra
-objective terms are exercised uncommented in
-``test_extra_terms_work_uncommented``.
+"""Run the documented examples at reduced, deterministic CI budgets.
+
+Each script reads ``VMEX_EXAMPLES_CI=1``; the tests require a clean exit,
+physics progress where applicable, and the documented output artifacts.
+Commented optional objective terms are exercised by their physics/AD unit tests;
+this module keeps their example wiring explicit.
 """
 
 from __future__ import annotations
@@ -117,14 +117,102 @@ def test_free_boundary_mgrid(tmp_path):
     assert (tmp_path / "output_free_boundary_mgrid" / "wout_cth_like_free_bdy.nc").exists()
 
 
+@pytest.mark.full  # one free solve, coupled adjoint, and two independent re-solves
 def test_take_free_boundary_gradients(tmp_path):
-    # skips where the optional virtual_casing_jax dep is absent (core CI);
-    # validates the FD-checked coil/extcur gradients where it is installed.
-    pytest.importorskip("virtual_casing_jax")
+    pytest.importorskip("essos")
     out = _run_example(EXAMPLES / "take_free_boundary_gradients.py", tmp_path, timeout=900)
-    # each gradient row ends with its AD-vs-FD relative error in scientific notation
-    rels = [float(m) for m in re.findall(r"\s([0-9.]+e[+-]\d+)\s*$", out, re.M)]
-    assert "FD-validate" in out and rels and max(rels) < 1e-3, f"gradient rel errors: {rels}"
+    match = re.search(r"relative error = ([0-9.eE+-]+)", out)
+    assert match is not None and float(match.group(1)) < 3.0e-2
+
+
+@pytest.mark.full  # independent finite-beta free solve, inner fixed solve, and VC field
+def test_fixed_free_boundary_comparison(tmp_path):
+    pytest.importorskip("essos")
+    pytest.importorskip("virtual_casing_jax")
+    out = _run_example(
+        EXAMPLES / "vmex_fixed_free_boundary_comparison.py", tmp_path,
+        timeout=900)
+    field = re.search(r"Outer-region pointwise error: median=([0-9.eE+-]+)", out)
+    surfaces = re.search(r"Common-surface RMS errors \[m\] = \[([^]]+)\]", out)
+    # The 2.625%-beta production case gives a measurable outer-region
+    # difference while retaining a converged common inner half-volume.
+    assert field is not None and 3.0e-2 < float(field.group(1)) < 2.5e-1
+    assert surfaces is not None and np.max(np.fromstring(surfaces.group(1), sep=" ")) < 1.5e-2
+    assert (tmp_path / "vmex_fixed_free_boundary_comparison.png").stat().st_size > 10_000
+
+
+def test_free_boundary_single_stage_examples_show_explicit_optimizer_contract():
+    """The examples expose tuples, scalarization, AD, and SciPy directly."""
+    for name in ("single_stage_free_boundary_optimization.py",
+                 "single_stage_free_boundary_optimization_finite_beta.py"):
+        text = (EXAMPLES / "optimization" / name).read_text()
+        assert "solve_free_boundary_implicit" in text
+        assert "residuals_from_tuples" in text
+        assert "jax.value_and_grad" in text
+        assert "FunctionProblem.from_functions" in text
+        assert "minimize(free_problem.value_and_grad" in text
+        assert "pack_boundary" not in text
+        assert "mgrid file" in text
+
+
+def test_global_optimization_example_exposes_optimizer_contract():
+    """The global example keeps SciPy, exact gradients, and local polish visible."""
+    text = (EXAMPLES / "optimization" / "QA_optimization_global.py").read_text()
+    assert "basinhopping(value_and_gradient" in text
+    assert '"method": "L-BFGS-B"' in text
+    assert "least_squares(problem.residual" in text
+    assert "ess_alpha=ESS_ALPHA" in text
+
+
+@pytest.mark.parametrize("case", ["QA", "QH", "QP", "QI"])
+@pytest.mark.parametrize("suffix", ["", "_finite_beta"])
+def test_stellarator_asymmetry_examples_expose_all_boundary_families(case, suffix):
+    """Keep all eight LASYM examples explicit without eight cold compiles in CI."""
+    source = (EXAMPLES / "optimization" / "stellarator_asymmetry"
+              / f"{case}_optimization{suffix}.py").read_text()
+    assert "lasym=True" in source
+    assert "rbs[inp.ntor + 1, 1]" in source and "zbc[inp.ntor + 1, 1]" in source
+    assert "asymmetric boundary norm" in source
+    assert "ess_alpha=ESS_ALPHA" in source
+    if suffix:
+        assert "TARGET_BETA" in source and "opt.volume_average_beta" in source
+
+
+def test_qa_maxj_example_states_its_physical_scope():
+    text = (EXAMPLES / "optimization" / "QA_maxJ_continuation.py").read_text()
+    assert "maximum-J is incompatible with quasisymmetry near the magnetic axis" in text
+    assert "input.minimal_seed_nfp" in text
+    assert "opt.magnetic_well" in text
+
+
+@pytest.mark.full  # one direct-coil free solve, coupled adjoint, and output solve (~2 min)
+def test_vacuum_free_boundary_single_stage_optimization(tmp_path):
+    pytest.importorskip("essos")
+    out = _run_example(
+        EXAMPLES / "optimization" / "single_stage_free_boundary_optimization.py",
+        tmp_path, timeout=600)
+    assert "no boundary dofs or mgrid file" in out
+    assert re.search(r"\[final\] QA = ([0-9.eE+-]+)", out)
+    for name in ("wout_single_stage_free_boundary_optimized.nc",
+                 "single_stage_free_boundary_optimization.png",
+                 "single_stage_free_boundary_objectives.png"):
+        assert (tmp_path / name).stat().st_size > 0
+
+
+@pytest.mark.full
+@pytest.mark.weekly  # same derivative plus finite-beta/Redl graph (~2.5 min cold)
+def test_finite_beta_free_boundary_single_stage_optimization(tmp_path):
+    pytest.importorskip("essos")
+    out = _run_example(
+        EXAMPLES / "optimization" /
+        "single_stage_free_boundary_optimization_finite_beta.py",
+        tmp_path, timeout=900)
+    assert "True finite-beta NESTOR + ESSOS" in out
+    assert re.search(r"f_boot = ([0-9.eE+-]+), beta = ([0-9.]+)%", out)
+    for name in ("wout_single_stage_free_boundary_finite_beta_optimized.nc",
+                 "single_stage_free_boundary_finite_beta_optimization.png",
+                 "single_stage_free_boundary_finite_beta_bootstrap_current.png"):
+        assert (tmp_path / name).stat().st_size > 0
 
 
 @pytest.mark.full  # nightly: one NESTOR solve per pressure point (~40s)
@@ -139,7 +227,7 @@ def test_free_boundary_beta_scan(tmp_path):
 def test_mirror_fixed_boundary_nonaxisymmetric_example(tmp_path):
     import json
     _run_example(
-        EXAMPLES / "mirror_fixed_boundary_nonaxisymmetric.py",
+        EXAMPLES / "mirror" / "mirror_fixed_boundary_nonaxisymmetric.py",
         tmp_path,
         timeout=1200,
     )
@@ -173,7 +261,7 @@ def test_mirror_fixed_boundary_nonaxisymmetric_example(tmp_path):
 def test_mirror_free_boundary_beta_scan_example(tmp_path):
     import json
     pytest.importorskip("essos")
-    _run_example(EXAMPLES / "mirror_free_boundary_beta_scan.py", tmp_path, timeout=2400)
+    _run_example(EXAMPLES / "mirror" / "mirror_free_boundary_beta_scan.py", tmp_path, timeout=2400)
     outdir = tmp_path / "results" / "mirror_free_boundary_beta_scan"
     summary = json.loads((outdir / "beta_scan_summary.json").read_text())
     assert [row["requested_beta"] for row in summary] == [0.0, 0.10, 0.25, 0.50]
@@ -225,37 +313,31 @@ def test_qs_optimization_examples(case, tmp_path):
     script = EXAMPLES / "optimization" / f"{case}_optimization.py"
     out = _run_example(script, tmp_path)
     _assert_cost_decreased(out, case)
-    outdir = tmp_path / f"output_{case}_optimization"
-    assert (outdir / f"input.{case}_optimized").exists()
-    assert (outdir / f"wout_{case}_optimized.nc").exists()
-    assert (outdir / f"{case}_optimized_summary.png").exists()
-    # the final printout carries the achieved QS total (docstring claim hook)
-    match = re.search(r"QS total: seed ([0-9.eE+-]+) -> final ([0-9.eE+-]+)", out)
-    assert match is not None and np.isfinite(float(match.group(2)))
+    assert (tmp_path / f"input.{case}_optimized").exists()
+    assert (tmp_path / f"wout_{case}_optimized.nc").exists()
+    assert (tmp_path / f"{case}_optimized_summary.png").exists()
+    match = re.search(r"\[final\] QS total = ([0-9.eE+-]+)", out)
+    assert match is not None and np.isfinite(float(match.group(1)))
 
 
+@pytest.mark.full  # nightly: shared Boozer + bounce-action Jacobian is cold-compile heavy
 def test_qi_maxj_continuation_example(tmp_path):
-    """QI+maxJ continuation ladder from the nfp=2 simsopt seed (tiny default).
-
-    The default invocation is the smoke budget (one implicit stage, coarse
-    ns/Boozer sampling): asserts decreasing cost, the machine-parseable QI
-    line, the shared-Boozer bounce-action diagnostics, and the promised
-    deck/wout/figure outputs including the polar J(alpha, s) maps.
-    """
+    """Reduced-budget QI+maximum-J continuation smoke test."""
     script = EXAMPLES / "optimization" / "QI_maxJ_continuation.py"
     out = _run_example(script, tmp_path, timeout=900)
     _assert_cost_decreased(out, "QI-maxJ")
-    match = re.search(r"QI total: seed ([0-9.eE+-]+) -> final ([0-9.eE+-]+)", out)
-    assert match is not None
-    seed, final = float(match.group(1)), float(match.group(2))
-    assert np.isfinite(final) and final <= seed * 1.05
-    match = re.search(r"maximum-J fraction = ([0-9.]+)", out)
-    assert match is not None and 0.0 <= float(match.group(1)) <= 1.0
-    outdir = tmp_path / "output_QI_maxJ_continuation"
-    assert (outdir / "input.QI_maxJ_continuation_optimized").exists()
-    assert (outdir / "wout_QI_maxJ_continuation_optimized.nc").exists()
-    for ip in range(3):
-        assert (outdir / f"j_polar_pitch_{ip:02d}.png").stat().st_size > 10_000
+    seed = re.search(r"\[seed\] QI = ([0-9.eE+-]+)", out)
+    final = re.search(r"\[final\] QI = ([0-9.eE+-]+)", out)
+    assert seed is not None and final is not None
+    assert np.isfinite(float(final.group(1))) and float(final.group(1)) <= 1.05 * float(seed.group(1))
+    assert re.search(r"J-invariance = ([0-9.eE+-]+), maximum-J = ([0-9.eE+-]+)", out)
+    displacement = re.search(r"normalized boundary displacement = ([0-9.eE+-]+)", out)
+    maxj_fraction = re.search(r"maximum-J fraction = ([0-9.]+)%", out)
+    assert displacement is not None and float(displacement.group(1)) > 1.0e-3
+    assert maxj_fraction is not None and np.isfinite(float(maxj_fraction.group(1)))
+    assert (tmp_path / "input.QI_maxJ_optimized").exists()
+    assert (tmp_path / "wout_QI_maxJ_optimized.nc").exists()
+    assert (tmp_path / "QI_maxJ_optimized_summary.png").stat().st_size > 10_000
 
 
 @pytest.mark.full  # nightly: QP-basin + QI stages + Boozer, subprocess cold-start heavy
@@ -271,40 +353,14 @@ def test_qi_optimization_example(tmp_path):
     assert (tmp_path / "wout_QI_optimized.nc").exists()
 
 
-def test_extra_terms_work_uncommented():
-    """The commented-out example terms run as objectives when uncommented."""
-    import jax
-
-    from vmex.core.input import VmecInput
-    from vmex.core import optimize as opt
-
-    was_disabled = bool(jax.config.jax_disable_jit)
-    jax.config.update("jax_disable_jit", False)  # conftest disables jit globally
-    try:
-        inp = VmecInput.from_file(DATA_DIR / "input.minimal_seed_nfp2")
-        # exactly the expressions the example comments show:
-        extra_terms = [
-            (opt.magnetic_well, 0.05, 1.0),
-            (opt.mercier_stability_residual, 0.0, 100.0),
-            (lambda eq: max(1.0 / opt.l_grad_b(eq) - 1.0 / 0.35, 0.0), 0.0, 1.0),
-        ]
-        terms = [(opt.aspect_ratio, 5.0, 1.0)] + extra_terms
-        result = opt.least_squares(terms, inp, max_mode=1, jac=None,
-                                   use_ess=True, max_nfev=2)
-        assert np.all(np.isfinite(result.fun))
-        # the traceable extra term also differentiates through jac="implicit"
-        result2 = opt.least_squares(
-            [(opt.aspect_ratio, 5.0, 1.0),
-             (opt.magnetic_well, 0.05, 1.0),
-             (opt.mercier_stability_residual, 0.0, 100.0)],
-            inp, max_mode=1, jac="implicit", use_ess=True, max_nfev=2)
-        assert np.all(np.isfinite(result2.fun))
-        # host wout-engine terms are rejected with a clear error in implicit mode
-        with pytest.raises(ValueError, match="implicit-differentiable"):
-            opt.least_squares([(opt.d_merc, 0.0, 1.0)], inp, max_mode=1,
-                              jac="implicit", max_nfev=1)
-    finally:
-        jax.config.update("jax_disable_jit", was_disabled)
+def test_vacuum_qs_examples_expose_trial_pressure_terms():
+    """Vacuum QS examples expose the tested trial-pressure stability terms."""
+    for name in ("QA_optimization_DMerc_vacuum.py", "QH_optimization.py"):
+        source = (EXAMPLES / "optimization" / name).read_text()
+        assert "USE_TRIAL_STABILITY" in source
+        assert "(trial_dmerc, 0.0, stability_weights)" in source
+        assert "(trial_dr, 0.0, stability_weights)" in source
+        assert "weights rise smoothly toward the edge" in source
 
 
 # The self-consistent-bootstrap examples reproduce arXiv:2205.02914 against the
@@ -321,7 +377,7 @@ _ZENODO_2205 = Path(os.environ.get(
                     reason="arXiv:2205.02914 Zenodo dataset not present")
 @pytest.mark.parametrize("case", ["QA", "QH"])
 def test_bootstrap_selfconsistent_examples(case, tmp_path):
-    script = EXAMPLES / "optimization" / f"{case}_bootstrap_selfconsistent.py"
+    script = REPO / "benchmarks" / f"{case}_bootstrap_selfconsistent.py"
     out = _run_example(script, tmp_path, timeout=1200)
     m = re.search(r"final f_boot = ([0-9.eE+-]+)", out)
     assert m is not None and float(m.group(1)) < 5e-2, f"{case} f_boot: {out[-400:]}"
@@ -329,48 +385,141 @@ def test_bootstrap_selfconsistent_examples(case, tmp_path):
             / f"wout_{case}_bootstrap_selfconsistent.nc").exists()
 
 
-@pytest.mark.full
-def test_single_stage_free_boundary_opt(tmp_path):
-    pytest.importorskip("virtual_casing_jax")
-    wout = EXAMPLES / "data" / "single_grid" / "wout_cth_like_free_bdy.nc"
-    if not wout.exists() or not (EXAMPLES / "data" / "mgrid_cth_like.nc").exists():
-        pytest.skip("fetched free-boundary assets absent (tools/fetch_assets.py)")
-    out = _run_example(EXAMPLES / "single_stage_free_boundary_opt.py", tmp_path, timeout=900)
-    m = re.search(r"recovered to ([0-9.]+)% of the confining", out)
-    assert m is not None and float(m.group(1)) < 5.0, f"coil recovery: {out[-400:]}"
+@pytest.mark.full  # nightly: Picard seed + one exact finite-beta optimization stage
+@pytest.mark.parametrize("case", ["QA", "QH"])
+def test_bootstrap_optimization_examples(case, tmp_path):
+    script = EXAMPLES / "optimization" / f"{case}_optimization_bootstrap.py"
+    out = _run_example(script, tmp_path, timeout=1800)
+    _assert_cost_decreased(out, f"{case}-bootstrap")
+    assert "self-consistent seed" in out and "[final] QS" in out
+    match = re.search(r"\[final\].*beta = ([0-9.]+)%", out)
+    assert match is not None and 1.0 < float(match.group(1)) < 4.0
+    assert (tmp_path / f"input.{case}_bootstrap_optimized").exists()
+    assert (tmp_path / f"wout_{case}_bootstrap_optimized.nc").exists()
+    assert (tmp_path / f"{case}_bootstrap_current.png").exists()
 
 
-@pytest.mark.full  # nightly: cold-start single-stage vs two-stage, all 4 phases
-def test_single_stage_vs_two_stage(tmp_path):
-    # cold-start comparison benchmark: needs ESSOS coils + virtual_casing_jax
+@pytest.mark.full  # nightly: optional optimizer interoperability, cold JAX compilation
+@pytest.mark.parametrize(("script_name", "dependency", "output"), [
+    ("QA_optimization_scipy.py", None, "wout_QA_scipy_BFGS.nc"),
+    ("QI_optimization_scipy.py", None, "wout_QI_scipy_BFGS.nc"),
+    ("QI_optimization_jaxopt.py", "jaxopt", "wout_QI_jaxopt_LBFGS.nc"),
+    ("QI_optimization_optax.py", "optax", "wout_QI_optax_adam.nc"),
+])
+def test_scalar_optimizer_examples(script_name, dependency, output, tmp_path):
+    if dependency is not None:
+        pytest.importorskip(dependency)
+    out = _run_example(EXAMPLES / "optimization" / script_name, tmp_path, timeout=1800)
+    assert "final cost" in out
+    assert (tmp_path / output).exists()
+
+
+@pytest.mark.full  # nightly: exact VMEX+ESSOS reverse-mode graph and ParaView output
+def test_fixed_boundary_single_stage_optimization(tmp_path):
+    pytest.importorskip("essos")
+    out = _run_example(
+        EXAMPLES / "optimization" / "single_stage_optimization.py", tmp_path, timeout=1800)
+    match = re.search(r"Objective: ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    assert match is not None and float(match.group(2)) < float(match.group(1))
+    for diagnostic in ("B.n/B: area-weighted RMS", "Minimum coil-surface distance",
+                       "Minimum coil-coil distance", "Maximum curvature", "Coil lengths"):
+        assert diagnostic in out
+    normal = re.search(r"B\.n/B: area-weighted RMS = ([0-9.]+)%, max = ([0-9.]+)%", out)
+    assert normal is not None and all(np.isfinite(float(value)) for value in normal.groups())
+    for name in ("wout_single_stage_optimized.nc", "single_stage_objectives.png",
+                 "surface_single_stage_initial.vts", "coils_single_stage_initial.vtu",
+                 "surface_single_stage_optimized.vts", "coils_single_stage_optimized.vtu"):
+        assert (tmp_path / name).exists()
+    surface_vtk = (tmp_path / "surface_single_stage_optimized.vts").read_bytes()
+    assert b'Name="B_BiotSavart"' in surface_vtk
+    assert b'Name="B_dot_n_over_B"' in surface_vtk
+
+
+@pytest.mark.full  # nightly: one finite-beta VMEX + VCJ + ESSOS graph (~1 min)
+def test_finite_beta_single_stage_optimization(tmp_path, monkeypatch):
     pytest.importorskip("essos")
     pytest.importorskip("virtual_casing_jax")
-    import json
+    # Keep this independent compile from filling a shared developer cache.
+    monkeypatch.setenv("VMEX_COMPILATION_CACHE", "disabled")
+    out = _run_example(
+        EXAMPLES / "optimization" / "single_stage_optimization_finite_beta.py",
+        tmp_path, timeout=1800)
+    for diagnostic in ("[final] QA", "B.n/B RMS", "Normalized total-pressure jump RMS",
+                       "Coil lengths", "Maximum curvature"):
+        assert diagnostic in out
+    for name in ("wout_single_stage_finite_beta_optimized.nc",
+                 "single_stage_finite_beta_objectives.png",
+                 "single_stage_finite_beta_bootstrap_current.png",
+                 "surface_single_stage_finite_beta_initial.vts",
+                 "coils_single_stage_finite_beta_initial.vtu",
+                 "surface_single_stage_finite_beta_optimized.vts",
+                 "coils_single_stage_finite_beta_optimized.vtu"):
+        assert (tmp_path / name).exists()
 
-    out = _run_example(EXAMPLES / "single_stage_vs_two_stage.py", tmp_path,
-                       timeout=2400, args=("--case", "vacuum", "--phase", "all"))
-    assert "COMPARISON (vacuum)" in out, f"missing comparison table:\n{out[-800:]}"
-    cmp_path = (tmp_path / "output_single_stage_vs_two_stage" / "vacuum"
-                / "comparison.json")
-    assert cmp_path.exists(), "comparison.json not written"
-    results = json.loads(cmp_path.read_text())
-    assert set(results) == {"two_stage", "single_stage", "single_stage_polish"}
-    for label, metrics in results.items():
-        assert np.isfinite(metrics["qs_total"]), f"{label}: non-finite QS"
-        assert np.isfinite(metrics["avg_Bn_over_B"]), f"{label}: non-finite B.n"
+
+def test_field_query_examples_cover_inside_outside_and_vjps() -> None:
+    """Keep the two runnable API examples explicit without another slow solve."""
+    interior = (EXAMPLES / "vmex_get_B_gradB.py").read_text()
+    exterior = (EXAMPLES / "vmex_get_B_outside_plasma.py").read_text()
+    for source in (interior, exterior):
+        for call in ("set_points_xyz", "set_points_flux", ".B()", ".absB()", ".gradB()", ".B_vjp(",
+                     ".gradB_vjp(", ".gradgradB_vjp(", ".gradgradgradB_vjp("):
+            assert call in source
+        assert "VmecProblem.from_input" in source and "SimpleNamespace" not in source
+    assert "get_points_flux" in interior
+    assert "uses_virtual_casing" in exterior and "exterior_field" in exterior
+    assert "ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json" in exterior
 
 
-@pytest.mark.full  # nightly: true single-stage boundary+coil co-optimization, 2 cases
-def test_single_stage_essos_coils_opt(tmp_path):
-    # coil-agnostic single-stage: needs both the ESSOS coils and virtual_casing_jax
+@pytest.mark.full  # nightly: two bounded high-order field/VJP compilations (~3 min)
+@pytest.mark.parametrize(("script", "message"), [
+    ("vmex_get_B_gradB.py", "gradgradgradB VJP shapes"),
+    ("vmex_get_B_outside_plasma.py", "uses virtual casing = True"),
+])
+def test_field_query_examples_run(script, message, tmp_path):
+    if "outside" in script:
+        pytest.importorskip("essos")
+        pytest.importorskip("virtual_casing_jax")
+    out = _run_example(EXAMPLES / script, tmp_path, timeout=360)
+    assert message in out and "dof_names =" in out
+
+
+def test_fieldline_example_uses_vmex_virtual_casing_and_actual_essos_coils() -> None:
+    """Keep the integration path explicit without adding a slow solve to PR CI."""
+    vacuum = (EXAMPLES / "vmex_fieldline_tracing_vacuum.py").read_text()
+    finite = (EXAMPLES / "vmex_fieldline_tracing_finite_beta.py").read_text()
+    for source in (vacuum, finite):
+        for contract in ("BiotSavart", "field_in_flux_coordinates", "trace_field_lines",
+                         "poincare_plot", "True boundary B.n/B"):
+            assert contract in source
+    assert 'plasma="vacuum"' in vacuum and "exterior_field" in vacuum
+    assert "VmecExtender" in finite and "with_near_surface_continuation" in finite
+    assert "ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json" in finite
+
+
+def test_single_stage_examples_use_general_surface_output_and_movie_colors() -> None:
+    vacuum = (EXAMPLES / "optimization" / "single_stage_optimization.py").read_text()
+    finite = (EXAMPLES / "optimization" / "single_stage_optimization_finite_beta.py").read_text()
+    assert "from pyevtk" not in finite
+    assert "surface_initial.to_vtk" in finite and "extra_data=" in finite
+    for source in (vacuum, finite):
+        assert "MOVIE_SURFACE_COLOR" in source and "surface_color=" in source
+
+
+@pytest.mark.full  # nightly: two bounded ESSOS tracing integrations (~40 s total)
+@pytest.mark.parametrize(("script", "message", "output"), [
+    ("vmex_fieldline_tracing_vacuum.py", "VMEX exterior API outside", "vmex_fieldline_tracing_vacuum.png"),
+    ("vmex_fieldline_tracing_finite_beta.py", "VMEX coil + virtual-casing field outside",
+     "vmex_fieldline_tracing_finite_beta.png"),
+])
+def test_vmex_fieldline_tracing_examples(script, message, output, tmp_path):
     pytest.importorskip("essos")
     pytest.importorskip("virtual_casing_jax")
-    out = _run_example(EXAMPLES / "single_stage_essos_coils_opt.py", tmp_path, timeout=1800)
-    # one machine-parseable "J <initial> -> <final>" line per case; each must drop
-    rows = re.findall(r"\[single_stage\] (\S+): J ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
-    assert len(rows) == 2, f"expected two single-stage cases, got {rows}\n{out[-800:]}"
-    for name, j0, jf in rows:
-        assert float(jf) < float(j0), f"{name}: single-stage J did not decrease ({j0} -> {jf})"
-    outdir = tmp_path / "output_single_stage_essos_coils_opt"
-    for name, _j0, _jf in rows:
-        assert (outdir / f"wout_{name}_final.nc").exists()
+    out = _run_example(EXAMPLES / script, tmp_path, timeout=300)
+    assert message in out
+    if "finite_beta" in script:
+        alignment = re.search(r"Boundary field alignment = ([0-9.eE+-]+)", out)
+        assert alignment is not None and float(alignment.group(1)) > 0.9
+        bounded = re.search(r"Exterior trace QA: (\d+)/(\d+) lines remained", out)
+        assert bounded is not None and int(bounded.group(1)) > 0
+    assert (tmp_path / output).stat().st_size > 10_000

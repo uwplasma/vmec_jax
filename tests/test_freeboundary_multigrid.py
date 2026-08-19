@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +14,10 @@ import jax.numpy as jnp  # noqa: E402
 
 from vmex.core import freeboundary as FB  # noqa: E402
 from vmex.core import multigrid as MG  # noqa: E402
-from vmex.core.errors import BAD_JACOBIAN_FLAG, VmecJacobianError  # noqa: E402
+from vmex.core.errors import (  # noqa: E402
+    BAD_JACOBIAN_FLAG, NORM_TERM_FLAG, SUCCESSFUL_TERM_FLAG,
+    VmecJacobianError,
+)
 from vmex.core.input import VmecInput  # noqa: E402
 from vmex.core.fourier import mode_table  # noqa: E402
 from vmex.core.multigrid import (  # noqa: E402
@@ -323,6 +326,26 @@ def test_single_grid_hot_restart_preserves_free_edge() -> None:
         np.asarray(restarted.state.Z_sin[-1]),
         np.asarray(seed.Z_sin[-1]), rtol=0.0, atol=0.0,
     )
+
+
+def test_converged_hot_start_still_enters_vacuum_lane() -> None:
+    """A fixed-boundary tolerance hit is not free-boundary convergence."""
+    @dataclass(frozen=True)
+    class Carry:
+        done: object
+        ier: object
+        iteration: object
+
+    carry = Carry(
+        done=jnp.asarray(True),
+        ier=jnp.asarray(SUCCESSFUL_TERM_FLAG, dtype=jnp.int64),
+        iteration=jnp.asarray(1, dtype=jnp.int64),
+    )
+    resumed = FB._resume_for_vacuum(carry, -1)
+    assert not bool(resumed.done)
+    assert int(resumed.ier) == NORM_TERM_FLAG
+    assert int(resumed.iteration) == 2
+    assert FB._resume_for_vacuum(carry, 1) is carry
 
 
 def test_rejects_fixed_boundary_input() -> None:

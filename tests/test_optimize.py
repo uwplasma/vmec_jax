@@ -19,6 +19,7 @@ import pytest
 jax = pytest.importorskip("jax")
 pytest.importorskip("netCDF4")
 jax.config.update("jax_enable_x64", True)
+jnp = jax.numpy
 
 from vmex.core.input import VmecInput  # noqa: E402
 from vmex.core.problem import Evaluation, FunctionProblem  # noqa: E402
@@ -96,6 +97,12 @@ def test_qs_solovev_axisymmetric_sanity():
     assert qa < 1e-8 * qh                 # and negligible vs a wrong helicity
 
 
+def test_equilibrium_clear_solution_aliases(solovev_eq):
+    """Beginner-facing names expose the same immutable solver objects."""
+    assert solovev_eq.solution is solovev_eq.state
+    assert solovev_eq.solver_context is solovev_eq.runtime
+
+
 def test_qs_helicity_sign_convention_qh():
     """nfp4_QH minimizes the (1, -1) helicity residual — pins the sign.
 
@@ -135,6 +142,9 @@ def test_scalar_targets_match_own_wout(solovev_eq):
                                float(w.volume_p), rtol=1e-8)
     np.testing.assert_allclose(float(opt.mean_iota(eq.state, eq.runtime)),
                                float(np.mean(np.asarray(w.iotas)[1:])), rtol=1e-8)
+    np.testing.assert_allclose(float(opt.min_abs_iota(eq.state, eq.runtime)),
+                               float(np.min(np.abs(np.asarray(w.iotas)[1:]))),
+                               rtol=1e-8)
     np.testing.assert_allclose(float(opt.edge_iota(eq.state, eq.runtime)),
                                float(np.asarray(w.iotaf)[-1]), rtol=1e-8)
     # magnetic well against the same endpoint-extrapolation formula on wout vp
@@ -208,6 +218,56 @@ def test_solve_equilibrium_forwards_verbose(monkeypatch, solovev_eq):
         )
 
 
+def test_min_abs_iota_floors_the_profile_not_its_average(solovev_eq):
+    """The floor metric reads the profile minimum and ignores the iota sign.
+
+    The distinction is the physical point: a mean target is satisfiable while
+    an interior surface sits near zero transform, which is what a
+    current-carried finite-beta profile does.  ``solovev`` has a prescribed
+    flat ``iota = 1``, so the two agree there and the separation is checked on
+    a synthetic profile threaded through the same reducer.
+    """
+    eq = solovev_eq
+    iotas = np.abs(np.asarray(eq.wout.iotas)[1:])
+    assert float(opt.min_abs_iota(eq.state, eq.runtime)) == pytest.approx(
+        float(iotas.min()), rel=1e-10)
+    assert (float(opt.soft_min_abs_iota(eq.state, eq.runtime))
+            >= float(iotas.min()) - 1.0e-12)
+
+    # Reducer separation on a profile with a genuine interior minimum, and on
+    # its negation: a magnitude floor must not see the transform sign.
+    for profile in (jnp.asarray([0.9, 0.5, 0.2, 0.6, 0.8]),
+                    jnp.asarray([-0.9, -0.5, -0.2, -0.6, -0.8])):
+        magnitude = jnp.abs(profile)
+        hard = jnp.min(magnitude)
+        soft = jnp.sum(magnitude * jax.nn.softmax(-magnitude / 0.02))
+        assert float(hard) == pytest.approx(0.2)
+        assert float(jnp.mean(magnitude)) > float(hard)  # mean would not floor
+        assert float(hard) <= float(soft) <= float(jnp.max(magnitude))
+        assert float(soft) == pytest.approx(0.2, abs=2.0e-2)
+
+    # tau carries the units of iota; a non-positive width has no softmin.
+    with pytest.raises(ValueError, match="tau must be positive"):
+        opt.soft_min_abs_iota(eq.state, eq.runtime, tau=0.0)
+
+
+def test_min_abs_iota_gradient_is_finite_and_matches_fd(solovev_eq):
+    """``min_abs_iota`` is traceable and its state derivative matches FD."""
+    eq = solovev_eq
+    tangent = jax.tree.map(jnp.zeros_like, eq.state)
+    tangent = dataclasses.replace(
+        tangent, R_cos=tangent.R_cos.at[-1, 0].set(1.0))
+    value, jvp = jax.jvp(lambda s: opt.min_abs_iota(s, eq.runtime),
+                         (eq.state,), (tangent,))
+    assert np.isfinite(float(value)) and np.isfinite(float(jvp))
+    h = 1.0e-6
+    plus = jax.tree.map(lambda a, t: a + h * t, eq.state, tangent)
+    minus = jax.tree.map(lambda a, t: a - h * t, eq.state, tangent)
+    fd = (opt.min_abs_iota(plus, eq.runtime)
+          - opt.min_abs_iota(minus, eq.runtime)) / (2.0 * h)
+    np.testing.assert_allclose(float(jvp), float(fd), rtol=2e-5, atol=1e-10)
+
+
 def test_scalar_targets_vs_golden(solovev_eq):
     """Scalars vs golden VMEC2000 wout values: the golden run is an
     independently converged state (ftol 1e-14), so tolerances carry solver
@@ -218,6 +278,8 @@ def test_scalar_targets_vs_golden(solovev_eq):
                                float(gold.aspect), rtol=1e-6)
     np.testing.assert_allclose(float(opt.volume(eq.state, eq.runtime)),
                                float(gold.volume_p), rtol=1e-6)
+    np.testing.assert_allclose(float(opt.volume_average_beta(eq.state, eq.runtime)),
+                               float(eq.wout.betatotal), rtol=5e-12)
     np.testing.assert_allclose(float(opt.mean_iota(eq.state, eq.runtime)), 1.0,
                                rtol=1e-10)
     np.testing.assert_allclose(float(opt.edge_iota(eq.state, eq.runtime)), 1.0,
@@ -356,6 +418,27 @@ def test_boundary_pack_roundtrip(deck):
     # RBC(0,0) (major radius) is not a dof
     assert "RBC(0,0)" not in opt.boundary_dof_names(inp, 2)
 
+    # It can be released explicitly without adding the null ZBS(0,0) mode.
+    names = opt.boundary_dof_names(inp, 2, vary_major_radius=True)
+    x = opt.pack_boundary(inp, 2, vary_major_radius=True)
+    assert names[-1] == "RBC(0,0)" and "ZBS(0,0)" not in names
+    x[-1] *= 1.1
+    changed = opt.unpack_boundary(inp, x, 2, vary_major_radius=True)
+    assert changed.rbc[changed.ntor, 0] == pytest.approx(x[-1])
+    arrays = opt.boundary_arrays_from_x(inp, x, 2, vary_major_radius=True)
+    np.testing.assert_allclose(np.asarray(arrays[0]), changed.rbc)
+    np.testing.assert_allclose(np.asarray(arrays[1]), changed.zbs)
+    with pytest.raises(ValueError, match="boundary dofs"):
+        opt.boundary_arrays_from_x(inp, x[:-1], 2, vary_major_radius=True)
+    with pytest.raises(ValueError, match="expected"):
+        opt.unpack_boundary(inp, x[:-1], 2, vary_major_radius=True)
+
+    asymmetric = dataclasses.replace(inp, lasym=True)
+    asymmetric_x = opt.pack_boundary(asymmetric, 1)
+    asymmetric_arrays = opt.boundary_arrays_from_x(asymmetric, asymmetric_x, 1)
+    assert len(asymmetric_arrays) == 4
+    assert opt.unpack_boundary(asymmetric, asymmetric_x, 1) == asymmetric
+
 
 def test_ess_scale():
     """ESS trust-region scaling: exp(-alpha*level), normalized at level 1."""
@@ -367,6 +450,8 @@ def test_ess_scale():
     np.testing.assert_allclose(lut["RBC(0,1)"], 1.0)             # level 1
     np.testing.assert_allclose(lut["RBC(2,2)"], np.exp(-1.2))    # level 2
     assert np.all(scale <= 1.0 + 1e-12)
+    assert opt._ess_scale(inp, 2, 0.0, vary_major_radius=True).shape == (
+        len(names) + 1,)
 
 
 def test_least_squares_smoke(solovev_eq):
@@ -673,7 +758,14 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     assert np.all(np.isfinite(np.asarray(problem.jax_residual_jac(problem.x0))))
     assert problem.input_from_x(problem.x0) == inp
     np.testing.assert_array_equal(problem.x_from_input(inp), problem.x0)
-    accepted = problem.equilibrium_from_x(problem.x0)
+    # The exact seed solve is already cached. Materializing it must not launch
+    # a redundant JAX graph (important for field-only GPU workflows).
+    def unexpected_device_execution(_value):
+        raise AssertionError("cached equilibrium triggered device execution")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(opt.jax, "device_get", unexpected_device_execution)
+        accepted = problem.equilibrium_from_x(problem.x0)
     assert accepted.inp == inp
     assert accepted.result.converged
     with pytest.raises(RuntimeError, match="usable VMEC equilibrium"):
@@ -878,6 +970,7 @@ def test_public_problem_factory_validation():
         forward_ftol=2.0e-10,
         forward_max_iterations=765,
     )
+    assert finite_difference.dof_names == tuple(opt.boundary_dof_names(inp, 1))
     assert finite_difference.metadata["derivative_method"] == "finite_difference"
     assert "equilibrium re-solves" in finite_difference.metadata[
         "derivative_description"
@@ -887,10 +980,17 @@ def test_public_problem_factory_validation():
     controlled = finite_difference.input_from_x(finite_difference.x0)
     assert controlled.ftol_array[-1] == 2.0e-10
     assert controlled.niter_array[-1] == 765
+    rbc, zbs = finite_difference.boundary_from_x(finite_difference.x0)
+    np.testing.assert_allclose(np.asarray(rbc), controlled.rbc)
+    np.testing.assert_allclose(np.asarray(zbs), controlled.zbs)
     with pytest.raises(ValueError, match="non-negative"):
         opt.make_problem(
             inp, objective_terms=[(opt.aspect_ratio, 4.0, -1.0)], max_mode=1
         )
+    np.testing.assert_allclose(
+        opt._least_squares_weight(np.array([1.0, 4.0]), "cost"), [1.0, 2.0])
+    with pytest.raises(ValueError, match="scalar or 1-D"):
+        opt._least_squares_weight(np.ones((2, 2)), "cost")
     common = dict(max_mode=1, x0=None, solve_kwargs={})
     with pytest.raises(ValueError, match="weight_semantics"):
         opt._least_squares_implicit(

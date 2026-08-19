@@ -488,17 +488,20 @@ difference; it does not mean the method itself uses FD.
      - Traceable state-to-surface data is vmex-native and needs no optional
        dependency; ``LASYM=T`` is rejected as unvalidated.  The virtual-casing
        solver paths built on it require the optional ``virtual_casing_jax``
-       package, released as ``virtual-casing-jax >= 0.0.3`` from the canonical
+       package, required as ``virtual-casing-jax >= 0.0.4`` from the canonical
        ``uwplasma/virtual_casing_jax`` repository.
    * - Mgrid tabulation
      - partial derivative contract
      - Differentiable in table values/current scale, not in the coil geometry
        used to generate a frozen table.
    * - Mercier WOUT diagnostic
-     - implemented; host/FD-only
-     - VMEC2000-style WOUT engine.  The traceable Mercier objective is
-       stellarator-symmetric.
-   * - Ballooning, traceable Boozer/QI/omnigenity, turbulence geometry
+     - implemented; host and traceable lanes
+     - VMEC2000-style WOUT engine and FD-validated implicit objective for
+       symmetric and ``LASYM`` equilibria.
+   * - Traceable Boozer/QI/omnigenity
+     - implemented; FD-validated
+     - Symmetric and ``LASYM`` cosine/sine spectra and objectives.
+   * - Ballooning and turbulence geometry
      - partial
      - Current traceable implementations require ``LASYM=F`` and raise
        otherwise.

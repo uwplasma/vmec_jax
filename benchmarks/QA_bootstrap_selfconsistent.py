@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Bootstrap-self-consistent QA (nfp=2, aspect 6, beta=2.5%) of arXiv:2205.02914.
+"""Benchmark bootstrap-self-consistent QA against arXiv:2205.02914.
 
 Reproduces the quasi-axisymmetric configuration with self-consistent bootstrap
 current of Landreman, Buller & Drevlak, Phys. Plasmas 29, 082501 (2022),

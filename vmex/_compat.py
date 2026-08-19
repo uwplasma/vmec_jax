@@ -8,7 +8,7 @@ and is actually used — is:
   be set before JAX/XLA initializes — float64 (``JAX_ENABLE_X64``, VMEC
   parity), synchronous CPU dispatch, quiet XLA/PjRt C++ logging, GPU
   demand allocation, the machine-scoped persistent compilation-cache
-  directory, and the XLA:CPU fast-compile flags;
+  directory, and the XLA:CPU compiler flags/guards;
 - the compilation-cache policy helpers
   :func:`_default_compilation_cache_dir` / :func:`_cache_machine_fingerprint`
   / :func:`_configure_compilation_cache`, consumed by ``vmex/__init__``
@@ -25,6 +25,35 @@ import sys
 
 import os
 import platform
+
+
+_CACHE_FORMAT_VERSION = "2"
+_CACHE_SIZE_FLOOR = 2 << 30          # 2 GiB
+_CACHE_SIZE_CEILING = 20 << 30       # 20 GiB
+_CACHE_DISK_FRACTION = 0.10
+
+
+def _default_cache_max_size(path: str | None = None) -> int:
+    """Bytes to retain in the persistent compilation cache.
+
+    The bound has to be finite: JAX takes its cross-process cache lock only
+    when eviction is enabled, so an unbounded cache lets concurrent VMEX runs
+    race writing the same executable.  It also has to be large.  One
+    free-boundary or single-stage executable is tens of megabytes and a single
+    optimization walks a whole family of them, so the historical 1 GiB bound
+    sat permanently at its cap and evicted the executables the next stage
+    asked for -- every run paid a cold compile that the cache existed to
+    avoid.  Scale with the filesystem that holds the cache and cap at a size
+    any current workstation can spare.
+    """
+    try:
+        import shutil
+
+        free = shutil.disk_usage(path or os.path.expanduser("~")).free
+    except Exception:  # unreadable path, exotic filesystem
+        return _CACHE_SIZE_FLOOR
+    scaled = int(_CACHE_DISK_FRACTION * float(free))
+    return int(min(_CACHE_SIZE_CEILING, max(_CACHE_SIZE_FLOOR, scaled)))
 
 
 def _env(name: str, default: str = "") -> str:
@@ -52,6 +81,7 @@ def _cache_machine_fingerprint() -> str:
     """
 
     parts = [
+        f"vmex-cache={_CACHE_FORMAT_VERSION}",
         platform.system(),
         platform.machine(),
         platform.processor(),
@@ -160,7 +190,9 @@ def _configure_compilation_cache(jax_module: Any, cache_dir: str | None) -> None
     except Exception:
         pass
     try:
-        min_compile = _env("CACHE_MIN_COMPILE_TIME_SECS", "0")
+        # Keep JAX's useful default: tiny elementwise kernels are cheaper to
+        # rebuild than to store and were creating tens of thousands of files.
+        min_compile = _env("CACHE_MIN_COMPILE_TIME_SECS", "1")
         jax_module.config.update("jax_persistent_cache_min_compile_time_secs", float(min_compile))
     except Exception:
         pass
@@ -186,7 +218,11 @@ def _configure_compilation_cache(jax_module: Any, cache_dir: str | None) -> None
     except Exception:
         pass
     try:
-        max_size = _env("COMPILATION_CACHE_MAX_SIZE")
+        # JAX's file cache takes its cross-process lock only when eviction is
+        # enabled.  A finite default therefore prevents concurrent VMEX runs
+        # from writing the same executable at once, as well as bounding disk.
+        max_size = _env("COMPILATION_CACHE_MAX_SIZE",
+                        str(_default_cache_max_size(cache_dir)))
         if max_size:
             jax_module.config.update("jax_compilation_cache_max_size", int(max_size))
     except Exception:
@@ -253,7 +289,8 @@ def _configure_jax_environment() -> None:
         # skipped if the user set XLA_FLAGS, and opt-in via
         # VMEX_FAST_COMPILE=1.  Pre-import environment hints cannot reliably
         # distinguish a normally discovered GPU installation, so VMEX must
-        # not inject CPU-only XLA flags by default.
+        # not inject optional CPU tuning by default.  The macOS linker guard
+        # below is a separate correctness default for large graphs.
         _fast_compile = _env("FAST_COMPILE", "0").strip().lower()
         _accel_req = os.environ.get("JAX_PLATFORM_NAME", "").strip().lower()
         _accel_reqs = os.environ.get("JAX_PLATFORMS", "").strip().lower()
@@ -262,15 +299,21 @@ def _configure_jax_environment() -> None:
             any(a in f"{_accel_req} {_accel_reqs}" for a in ("cuda", "gpu", "tpu", "rocm"))
             or (_cuda_vis not in ("", "-1"))
         )
-        if (
-            _fast_compile not in ("0", "false", "no", "off")
-            and "XLA_FLAGS" not in os.environ
-            and not _on_accel
-        ):
-            os.environ["XLA_FLAGS"] = (
-                "--xla_backend_optimization_level=1 "
-                "--xla_llvm_disable_expensive_passes=true"
-            )
+        if "XLA_FLAGS" not in os.environ and not _on_accel:
+            _xla_flags = []
+            # Large differentiated single-stage graphs can exhaust the small
+            # macOS worker-thread stack while LLVM links its default 32 object
+            # partitions.  Finer partitioning bounds linker recursion without
+            # changing the executable's numerical operations.
+            if platform.system() == "Darwin":
+                _xla_flags.append("--xla_cpu_parallel_codegen_split_count=128")
+            if _fast_compile not in ("0", "false", "no", "off"):
+                _xla_flags.extend((
+                    "--xla_backend_optimization_level=1",
+                    "--xla_llvm_disable_expensive_passes=true",
+                ))
+            if _xla_flags:
+                os.environ["XLA_FLAGS"] = " ".join(_xla_flags)
 
         import jax
 

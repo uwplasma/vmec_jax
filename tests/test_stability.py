@@ -192,6 +192,55 @@ def test_traceable_jdotb_and_glasser_profiles(shaped_eq):
         assert np.any(interior != 0.0)
 
 
+def test_trial_pressure_proxy_recovers_the_prescribed_pressure(shaped_eq):
+    """At the equilibrium beta/profile, replacing explicit p' is an identity."""
+    state, rt, wout = shaped_eq.state, shaped_eq.runtime, shaped_eq.wout
+    pressure = np.asarray(wout.pres, dtype=float)
+    shape = pressure[1:] / np.max(np.abs(pressure[1:]))
+    trial_dmerc, trial_dr = jax.jit(
+        lambda st: (
+            stab.trial_pressure_d_merc_state(
+                st, rt, beta=wout.betatotal, pressure_shape=shape),
+            stab.trial_pressure_glasser_d_r_state(
+                st, rt, beta=wout.betatotal, pressure_shape=shape,
+                shear_epsilon=1.0e-8),
+        )
+    )(state)
+    np.testing.assert_allclose(
+        trial_dmerc[2:-1], stab.d_merc_state(state, rt)[2:-1], rtol=2e-12, atol=1e-10)
+    np.testing.assert_allclose(
+        trial_dr[2:-1],
+        stab.glasser_d_r_state(state, rt, shear_epsilon=1.0e-8)[2:-1],
+        rtol=2e-12, atol=1e-10)
+
+    residuals = stab.trial_pressure_mercier_stability_residual(
+        state, rt, beta=0.01)
+    glasser = stab.trial_pressure_glasser_stability_residual(
+        state, rt, beta=0.01)
+    assert residuals.shape == glasser.shape == (wout.ns - 3,)
+    assert np.all(np.isfinite(np.asarray(residuals)))
+    assert np.all(np.isfinite(np.asarray(glasser)))
+    full_shape = np.r_[0.0, shape]
+    np.testing.assert_allclose(
+        stab.trial_pressure_d_merc_state(
+            state, rt, beta=wout.betatotal, pressure_shape=full_shape),
+        trial_dmerc, rtol=2e-12, atol=1e-10)
+    callable_profile = stab.trial_pressure_d_merc_state(
+        state, rt, beta=0.01, pressure_shape=lambda s: 1.0 - s)
+    assert np.all(np.isfinite(np.asarray(callable_profile)))
+    with pytest.raises(ValueError, match="pressure_shape"):
+        stab.trial_pressure_d_merc_state(state, rt, pressure_shape=np.ones(2))
+    with pytest.raises(ValueError, match="shear_epsilon"):
+        stab.trial_pressure_glasser_d_r_state(
+            state, rt, shear_epsilon=-1.0)
+    with pytest.raises(ValueError, match="smoothing"):
+        stab.trial_pressure_mercier_stability_residual(
+            state, rt, smoothing=0.0)
+    with pytest.raises(ValueError, match="smoothing"):
+        stab.trial_pressure_glasser_stability_residual(
+            state, rt, smoothing=0.0)
+
+
 def test_glasser_profiles_match_independent_dcon_reference():
     """Normalized D_I and D_R retain the independent DCON comparison."""
     eq = opt.solve_equilibrium(
@@ -212,6 +261,23 @@ def test_glasser_profiles_match_independent_dcon_reference():
                       -0.00358343, -0.003687],
         atol=1e-4,
     )
+
+
+def test_mercier_data_is_zero_on_a_radially_degenerate_grid():
+    """Mercier needs radial second derivatives: ns < 3 has none to report.
+
+    ``mercier.f`` differences the half mesh twice, so a two-surface grid
+    carries no interior surface at all.  The traceable reconstruction returns
+    an all-zero profile set instead of differencing off the end of the array.
+    """
+    from types import SimpleNamespace
+
+    runtime = SimpleNamespace(
+        setup=SimpleNamespace(s_full=np.linspace(0.0, 1.0, 2)))
+    profiles = stab._mercier_data_state(object(), runtime)
+    assert len(profiles) == 12
+    assert all(np.asarray(p).shape == (2,) and not np.any(np.asarray(p))
+               for p in profiles)
 
 
 def test_mercier_stability_residual_is_smooth_interior_hinge(shaped_eq):
@@ -408,12 +474,20 @@ def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
     interior = np.asarray(profile)[2:-1]
     assert np.all(np.isfinite(interior))
     assert np.any(interior != 0.0)
-    with pytest.raises(NotImplementedError, match="independently validated"):
-        stab.d_merc_state(eq.state, eq.runtime)
-    with pytest.raises(NotImplementedError, match="independently validated"):
-        stab.glasser_d_r_state(eq.state, eq.runtime)
-    with pytest.raises(NotImplementedError, match="independently validated"):
-        opt.d_merc(eq)
+    dmerc = stab.d_merc_state(eq.state, eq.runtime)
+    np.testing.assert_allclose(dmerc, eq.wout.DMerc, rtol=1e-10, atol=1e-13)
+    np.testing.assert_allclose(opt.d_merc(eq), eq.wout.DMerc, rtol=0.0, atol=0.0)
+    d_r = stab.glasser_d_r_state(eq.state, eq.runtime, shear_epsilon=1.0e-8)
+    assert np.all(np.isfinite(np.asarray(d_r)))
+
+    _, tangent_profiles = jax.jvp(
+        lambda state: jnp.concatenate((
+            stab.d_merc_state(state, eq.runtime)[2:-1],
+            stab.glasser_d_r_state(
+                state, eq.runtime, shear_epsilon=1.0e-8)[2:-1])),
+        (eq.state,), (tangent,))
+    assert np.all(np.isfinite(np.asarray(tangent_profiles)))
+    assert np.any(np.asarray(tangent_profiles) != 0.0)
 
 
 @pytest.mark.full

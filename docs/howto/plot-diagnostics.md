@@ -53,9 +53,23 @@ $x=s\cos\alpha$, $y=s\sin\alpha$. Concentric $J$ contours diagnose
 alpha-independence. `|B|` in Boozer coordinates appears at mid radius and on
 the LCFS as unfilled jet contours with a field line of slope iota. The Boozer
 transform runs in-process, so `--plot` needs no separate `--booz` pass;
-`--booz` is for writing a reusable `boozmn_*.nc`. $D_R$ follows the lasym guard of
-{func}`vmex.core.stability.glasser_d_r_state` and is omitted (with a panel
-note) for asymmetric equilibria.
+`--booz` is for writing a reusable `boozmn_*.nc`. The plotted $D_R$ comes from
+a host-side reconstruction of the WOUT file, which is not certified for LASYM
+output normalization, so the curve is omitted (with a panel note) for
+asymmetric equilibria. This is a plotting limit, not an optimization one:
+{func}`vmex.core.stability.glasser_d_r_state` has no lasym guard and stays
+available for asymmetric equilibria, since it reads the live solver state.
+With `vmex[neoclassical]` installed, the pressure panel also shows the
+conventional NEO quantity $\epsilon_{\rm eff}^{3/2}$ at bounded diagnostic
+resolution. If NEO_JAX is unavailable, the right axis says so instead of
+silently omitting the diagnostic. Use
+{func}`vmex.core.neoclassical.epsilon_effective_from_wout` with an explicit
+`neo_jax.NeoConfig` for a converged transport calculation; the summary curve
+is intended only to show radial trends.
+The WOUT adapter releases completed JAX executables before its first NEO
+compile, avoiding the large cold-start time and memory observed when VMEX and
+NEO executables coexist. This is appropriate for an end-of-run plot; pass
+`clear_jax_caches=False` when preserving warm executables for subsequent solves.
 The two stability indices and $V''(s)$ use separate scales whose zero levels
 are aligned; $V''(s)<0$ denotes a magnetic well. Their legend sits below the
 panel so it cannot hide a curve.

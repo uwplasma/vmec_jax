@@ -825,8 +825,8 @@ class RedlBootstrapMismatch:
 
     # -- wout-table evaluation (simsopt parity; FD lane) -----------------------
 
-    def residuals(self, wout) -> jnp.ndarray:
-        """Residual vector from a wout-like object / path / ``Equilibrium``."""
+    def current_profiles(self, wout) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """Return ``(s, <J.B>_VMEX, <J.B>_Redl)`` for reporting and plots."""
         wout = getattr(wout, "wout", wout)
         if isinstance(wout, (str, Path)):
             wout = read_wout(wout)
@@ -837,6 +837,11 @@ class RedlBootstrapMismatch:
         s_full = jnp.linspace(0.0, 1.0, int(wout.ns))
         jv = jnp.interp(surfaces, s_full,
                         _as_1d(np.asarray(wout.jdotb, dtype=float)))
+        return surfaces, jv, jr
+
+    def residuals(self, wout) -> jnp.ndarray:
+        """Residual vector from a wout-like object / path / ``Equilibrium``."""
+        _surfaces, jv, jr = self.current_profiles(wout)
         return self._residual_vector(jv, jr)
 
     def profile(self, wout) -> jnp.ndarray:
@@ -1032,7 +1037,7 @@ def self_consistent_bootstrap(
         history.append(dict(curtor=float(inp.curtor), delta=delta, f_boot=f_boot))
         if verbose:
             print(f"[self_consistent_bootstrap] it {it}: curtor={inp.curtor:.6e} "
-                  f"delta={delta:.3e} f_boot={f_boot:.3e}")
+                  f"delta={delta:.3e} f_boot={f_boot:.3e}", flush=True)
         if delta <= float(tol):
             converged = True
             break

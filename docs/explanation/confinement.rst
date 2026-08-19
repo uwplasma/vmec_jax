@@ -282,8 +282,13 @@ the bounded trace. A pitch block with no complete well on even one sampled field
 line, a marginal or merged level, or more wells than ``max_wells`` returns NaN
 with a false ``valid_pitch`` flag. This makes a topology error visible instead
 of turning it into a favorable zero. The low-level Boozer-spectrum function
-accepts cosine and sine harmonics; the equilibrium objective retains the
-traceable Boozer transform's current explicit ``lasym=False`` guard.
+accepts cosine and sine harmonics, and so does the equilibrium objective:
+:func:`~vmex.core.omnigenity.boozer_bmnc_state` dispatches ``lasym`` states to
+the full booz_xform transform and returns ``bmns_b`` alongside ``bmnc_b``,
+which every QI residual above passes through. On an up-down-asymmetric deck
+the traceable cosine and sine spectra are gated against the host
+booz_xform_jax reconstruction at ``2e-2`` and ``3e-2`` relative, and the QI
+state derivative is checked against a finite difference of the same objective.
 
 Maximum-J
 ~~~~~~~~~~~~~
@@ -292,15 +297,16 @@ A maximum-J field satisfies
 
 .. math::
 
-   \left.\frac{\partial\mathcal J_\parallel}{\partial\psi}
-   \right|_{\alpha,\lambda} < 0 ,
+   \left.\frac{\partial\mathcal J_\parallel}{\partial s}
+   \right|_{\alpha,\lambda} < 0, \qquad
+   s = \frac{\psi}{\psi_{\rm edge}},
 
-where :math:`\psi` is signed toroidal flux divided by :math:`2\pi`.
+where :math:`s` increases from the magnetic axis to the boundary.
 :class:`~vmex.core.maxj.MaximumJResidual` evaluates the action at the same
 physical pitch and field-line label on adjacent surfaces, pairs complete wells
 only when they are reciprocal nearest neighbours, and forms the physical
 finite-difference derivative. The least-squares rows use the dimensionless
-slope :math:`|\psi_{\rm edge}|\,(\partial J/\partial\psi)/J`; ``target=0``
+slope :math:`\psi_{\rm edge}(\partial J/\partial\psi)/J=(\partial J/\partial s)/J`; ``target=0``
 penalizes only violations of the condition above, while a negative target
 requests a finite margin.
 
@@ -315,10 +321,11 @@ phase-space fraction :math:`f_J` defined by Rodríguez and Plunk. That
 diagnostic additionally requires radial and pitch integration weighted by the
 normalized bounce time.
 
-VMEX carries the VMEC sign convention into this diagnostic:
+VMEX carries the VMEC sign convention through the intermediate derivative:
 ``psi_edge = signgs*phiedge/(2*pi)`` and the ``APHI`` remap sets the half-mesh
-``psi_b`` values. Reversing that signed coordinate reverses ``dJ/dpsi``; the
-implementation does not silently replace it by an unsigned radial label.
+``psi_b`` values. Multiplication by ``psi_edge`` then converts ``dJ/dpsi`` to
+the outward derivative ``dJ/ds``; reversing the signed-flux convention cannot
+turn a central maximum into a minimum.
 A nonmonotone flux map, missing or ambiguous well, topology transition, or
 well displacement beyond ``match_tolerance`` returns NaN with
 ``valid_pitch_pair=False``.
@@ -326,7 +333,25 @@ well displacement beyond ``match_tolerance`` returns NaN with
 Maximum-J remains a separate objective term. Users combine it with any QI,
 aspect-ratio, iota, stability, or engineering residual through VMEX's ordinary
 composite least-squares interface; no fixed QI-plus-maximum-J weighting is
-built into the class.
+built into the class. :class:`~vmex.core.maxj.ConstructedMaximumJResidual`
+evaluates the same radial action condition after Goodman's smooth
+squash-and-shuffle construction. It is the continuation target analogous to
+the published :math:`g_J`: it establishes a favorable direction without
+asking a local optimizer to cross actual-well topology changes. The final
+:class:`~vmex.core.maxj.MaximumJResidual` remains the physical certificate.
+
+``QI_maxJ_continuation.py`` starts from a minimal vacuum seed, retains a
+magnetic-well target, first creates matched QI wells, uses the constructed
+field to establish the maximum-J direction, and only then ramps a negative
+slope margin in the actual field. It recomputes a common physical pitch once
+after the weak stage and freezes it throughout the remaining stages; the
+script raises if the incoming wells cannot be resolved at that pitch. The
+final stage lengthens the field-line trace and increases the number of
+field-line labels, preventing a short trace from aliasing a visibly
+non-omnigenous result.
+The final ``plot_wout(..., j_pitch=pitch)`` call passes that same pitch to the
+polar :math:`J(\alpha,s)` panel, making it a direct visual certificate of the
+optimized trapped-particle population.
 
 .. _confinement-qi-fidelity:
 
@@ -395,7 +420,7 @@ the individual pieces involve radial derivatives of surface averages, the two
 surfaces nearest the axis and the edge carry the usual numerical noise; a
 practical objective penalizes ``min(DMerc[2:-1], 0)``. ``vmex`` exposes the
 reporting profile as :func:`~vmex.core.optimize.d_merc`, evaluated through the
-parity-proven wout engine.  The symmetric live-state counterpart
+parity-proven wout engine.  The live-state counterpart
 :func:`~vmex.core.stability.d_merc_state` is a pure-JAX port of the same
 ``jxbforce.f``/``mercier.f`` path for ``jit``/AD use and agrees with the wout
 profile to floating-point round-off.  For optimization,
@@ -405,8 +430,11 @@ and the edge and returns
 penalizes unstable (negative) ``DMerc`` with a smooth gradient.  At finite
 ``smoothing`` the residual is positive, rather than exactly zero, on stable
 surfaces but decays exponentially with the stability margin.  Both profile
-lanes retain VMEC's near-axis and edge limitations; the traceable Mercier
-lane does not yet support ``lasym = True``.
+lanes retain VMEC's near-axis and edge limitations.  The traceable lane
+supports ``lasym = True``: the ``jxbforce.f`` mode filter keeps the four
+asymmetric geometry families, and on a converged finite-pressure,
+up-down-asymmetric tokamak ``d_merc_state`` reproduces the WOUT ``DMerc``
+profile to round-off with finite state derivatives.
 
 For a vacuum equilibrium, :math:`p'=0` makes :math:`D_{\rm well}` exactly
 zero; VMEX does not add a pressure floor. The reported Mercier index can still
@@ -470,16 +498,13 @@ poloidal flux ``[0.1, 1)``).  The same test on an
 up-down-asymmetric tokamak exposed unresolved sensitivity in :math:`H`:
 at ``ns=201`` the candidate reconstruction's normalized ``D_I`` differs by
 at most ``1.85e-2`` over normalized poloidal flux ``[0.2, 0.9]``, but
-``D_R`` differs by ``1.49e-2`` and can change sign near marginality.
-On that same input, all four geometry families agree with VMEC2000 to
-``2.49e-10`` relative or better, while the interior VMEX/VMEC2000 ``DMerc``
-relative difference is ``18.6`` with sign disagreements.  This isolates the
-problem to the LASYM Mercier reconstruction rather than the equilibrium.
-Consequently :func:`~vmex.core.stability.d_merc_state` and
-:func:`~vmex.core.stability.glasser_d_r_state` still reject ``lasym = True``;
-the independently validated ``jdotb`` lane is available.  A 3-D LASYM
-extension additionally requires JMC or an equivalent nonaxisymmetric
-reference.
+``D_R`` differs by ``1.49e-2`` and can change sign near marginality. The live
+state implementation now retains all four LASYM geometry families and its
+boundary JVPs are checked against independently reconverged finite
+differences, so it is available for optimization. Publication use near
+marginality still requires a nonaxisymmetric JMC/DCON benchmark. The summary
+plot omits WOUT-only ``D_R`` for LASYM because that host reconstruction does
+not have the live solver state needed to certify the asymmetric normalization.
 
 Magnetic well
 ~~~~~~~~~~~~~~
@@ -521,7 +546,8 @@ vacuum-well measure
 with :math:`V'=dV/ds` extrapolated from the half-mesh differential volume
 :math:`vp` (VMEC ``bcovar.f``). Positive :math:`W` means :math:`V'` decreases
 outward — a magnetic well, favorable for interchange stability — matching
-simsopt's ``vacuum_well``. Being a pure ``(state, runtime)`` function it carries
+simsopt's ``vacuum_well``. Being a pure
+``(equilibrium_state, solver_context)`` function it carries
 exact implicit gradients and is a cheaper Mercier-adjacent target. Near-axis
 analytic context for both measures is in Landreman–Jorge (2020) and
 Kim–Jorge–Dorland (2021); see :doc:`/project/references`.
@@ -593,3 +619,34 @@ fraction rather than an imposed zero. Their normalized mismatch is the residual
 the finite-beta profile conventions are in :doc:`variational-problem`); driving it to
 zero, optionally with ``current_dofs`` freed, yields a current profile
 consistent with the plasma the equilibrium describes.
+
+Effective ripple
+----------------
+
+The Nemov effective ripple is the geometric coefficient that sets the
+low-collisionality :math:`1/\nu` transport scale,
+:math:`D_{11}\propto\epsilon_{\mathrm{eff}}^{3/2}/\nu`.  NEO conventionally
+reports :math:`\epsilon_{\mathrm{eff}}^{3/2}` (``epstot``), not
+:math:`\epsilon_{\mathrm{eff}}` itself.  VMEX keeps the validated NEO
+algorithm in the optional NEO_JAX package rather than duplicating a second
+neoclassical solver:
+
+.. code-block:: python
+
+   from neo_jax import NeoConfig
+   import vmex as vj
+
+   config = NeoConfig(theta_n=64, phi_n=64, npart=40)
+   s, epsilon_eff_3_2 = vj.epsilon_effective_from_wout(
+       equilibrium.wout, surfaces=[0.2, 0.5, 0.8, 0.95], config=config)
+
+The in-memory adapter performs BOOZ_XFORM without an intermediate file and
+then uses NEO_JAX's batched JAX surface scan.  The smaller configuration used
+by ``--plot`` is a trend diagnostic; converged work must refine NEO controls
+and verify radial convergence.  The current WOUT entry point is diagnostic,
+not an optimization objective.  The planned objective lane will connect the
+traceable VMEX state transform directly to NEO_JAX, use its supported
+forward-mode sensitivities, and certify them against reconverged finite
+differences and STELLOPT NEO before exposing the result in objective tuples.
+LASYM is rejected until NEO_JAX carries the asymmetric Boozer harmonics rather
+than silently dropping them.

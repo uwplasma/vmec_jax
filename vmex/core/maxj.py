@@ -8,19 +8,183 @@ import numpy as np
 
 import jax.numpy as jnp
 
-from .bounce import bounce_action_from_boozer
+from .bounce import bounce_action, bounce_action_from_boozer
 from .omnigenity import boozer_bmnc_state
+from .optimize import quasi_isodynamic_residual
 from .qi import j_invariant_qi_residual_from_boozer
 from .statephysics import _as_1d
 
 Array = Any
 
 __all__ = [
+    "common_trapped_pitches",
+    "common_trapped_pitches_state",
+    "ConstructedMaximumJResidual",
     "JInvariantQIAndMaximumJResidual",
     "MaximumJResidual",
+    "constructed_maximum_j_residual_from_boozer",
     "maximum_j_residual_from_boozer",
     "qi_and_maximum_j_from_boozer",
 ]
+
+
+def constructed_maximum_j_residual_from_boozer(
+    *,
+    bmnc_b,
+    xm_b,
+    xn_b,
+    iota_b,
+    G_b,
+    I_b,
+    nfp: int,
+    psi_b,
+    psi_edge,
+    pitch,
+    bmns_b=None,
+    weights: Iterable[float] | None = None,
+    pitch_weights: Iterable[float] | None = None,
+    target: float = 0.0,
+    max_wells: int | None = None,
+    quadrature_order: int = 64,
+    qi_options: dict[str, Any] | None = None,
+) -> dict[str, Array]:
+    """Penalize outward-increasing action in Goodman's constructed QI field.
+
+    The squash-and-shuffle construction first gives every field-line label
+    the mean well width at each field strength. Bounce actions are then
+    evaluated in that smoother, approximately omnigenous field at one
+    physical pitch shared by all radii. This is the differentiable ``g_J``
+    continuation target used to establish a maximum-J direction before the
+    resolved :func:`maximum_j_residual_from_boozer` certificate pairs wells
+    in the actual field.
+    """
+    bmnc_b = jnp.asarray(bmnc_b, dtype=jnp.float64)
+    nsurface = int(bmnc_b.shape[0])
+    if bmnc_b.ndim != 2 or nsurface < 2:
+        raise ValueError("bmnc_b needs at least two surfaces")
+    weight = (jnp.ones(nsurface, dtype=bmnc_b.dtype) if weights is None
+              else _as_1d(weights))
+    if weight.shape != (nsurface,):
+        raise ValueError("weights must have the same length as surfaces")
+    pitch = jnp.atleast_1d(jnp.asarray(pitch, dtype=bmnc_b.dtype))
+    pitch_weight = (jnp.ones_like(pitch) if pitch_weights is None
+                    else _as_1d(pitch_weights))
+    if pitch_weight.shape != pitch.shape:
+        raise ValueError("pitch_weights must have the same length as pitch")
+
+    qi = quasi_isodynamic_residual(
+        bmnc_b=bmnc_b, bmns_b=bmns_b, xm_b=xm_b, xn_b=xn_b,
+        iota_b=iota_b, nfp=nfp, weights=weight, **(qi_options or {}))
+    # quasi_isodynamic_residual retains the duplicate field-period endpoint;
+    # bounce_action receives the corresponding periodic grid without it.
+    constructed_b = jnp.swapaxes(qi["constructed_bmag"][:, :-1, :], 1, 2)
+    iota = jnp.asarray(iota_b, dtype=bmnc_b.dtype)
+    current_factor = jnp.abs(
+        jnp.asarray(G_b, dtype=bmnc_b.dtype)
+        + iota * jnp.asarray(I_b, dtype=bmnc_b.dtype))
+    bounce = bounce_action(
+        constructed_b, pitch,
+        dl_dphi=current_factor[:, None, None] / constructed_b,
+        length=2.0 * np.pi / int(nfp), periodic=True,
+        max_wells=max_wells, quadrature_order=quadrature_order)
+    action, usable = bounce["action"], bounce["usable_mask"]
+    count = jnp.sum(usable, axis=(1, 3))
+    action_mean = jnp.sum(jnp.where(usable, action, 0.0), axis=(1, 3)) / jnp.maximum(count, 1)
+    hard_invalid = bounce["marginal"] | bounce["merged"] | bounce["overflow"]
+    valid_pitch = (jnp.all(jnp.sum(usable, axis=-1) > 0, axis=1)
+                   & ~jnp.any(hard_invalid, axis=1))
+
+    psi = jnp.asarray(psi_b, dtype=bmnc_b.dtype)
+    psi_edge = jnp.asarray(psi_edge, dtype=bmnc_b.dtype)
+    if psi.shape != (nsurface,):
+        raise ValueError("psi_b must have the same length as surfaces")
+    dpsi = jnp.diff(psi)
+    eps = jnp.finfo(bmnc_b.dtype).eps
+    valid_flux = (jnp.all(dpsi * psi_edge > 0.0) & jnp.isfinite(psi_edge)
+                  & (jnp.abs(psi_edge) > eps) & jnp.all(jnp.isfinite(dpsi))
+                  & jnp.all(jnp.abs(dpsi) > eps))
+    valid_pair = valid_pitch[:-1] & valid_pitch[1:] & valid_flux
+    dJ_ds = jnp.diff(action_mean, axis=0) / dpsi[:, None] * psi_edge
+    mean_action = 0.5 * (jnp.abs(action_mean[:-1]) + jnp.abs(action_mean[1:]))
+    relative_slope = dJ_ds / jnp.maximum(mean_action, eps)
+    violation = jnp.maximum(relative_slope - float(target), 0.0)
+    pair_weight = 0.5 * (weight[:-1] + weight[1:])
+    normalized_pitch_weight = pitch_weight / jnp.maximum(jnp.sum(pitch_weight), eps)
+    scale = jnp.sqrt(pair_weight[:, None] * normalized_pitch_weight[None, :])
+    residual = jnp.where(valid_pair, violation * scale, jnp.nan)
+    sample_weight = pair_weight[:, None] * pitch_weight[None, :]
+    denominator = jnp.sum(jnp.where(valid_pair, sample_weight, 0.0))
+    maximum_j_fraction = jnp.where(
+        denominator > 0.0,
+        jnp.sum(jnp.where(valid_pair & (dJ_ds < 0.0), sample_weight, 0.0))
+        / denominator,
+        jnp.nan)
+    return {
+        "residuals1d": jnp.ravel(residual),
+        "total": jnp.sum(residual * residual),
+        "dJ_ds": jnp.where(valid_pair, dJ_ds, jnp.nan),
+        "relative_slope": jnp.where(valid_pair, relative_slope, jnp.nan),
+        "maximum_j_fraction": maximum_j_fraction,
+        "valid_pitch_pair": valid_pair,
+        "action_mean": action_mean,
+        "constructed_bmag": constructed_b,
+        "qi": qi,
+        **bounce,
+    }
+
+
+def common_trapped_pitches(bmag, trapping_depths=(0.35, 0.55, 0.75)):
+    """Choose physical pitches trapped on every sampled field line.
+
+    ``bmag`` has shape ``(surface, distance_along_line, field_line)``. Each
+    returned ``lambda=1/B_*`` uses the same field strength ``B_*`` on every
+    surface and field-line label, so adjacent radial actions describe the
+    same trapped-particle population. ``trapping_depths`` runs from zero at
+    the shallow common trapping threshold to one at the deepest threshold.
+    """
+    bmag = jnp.asarray(bmag)
+    depths = jnp.atleast_1d(jnp.asarray(trapping_depths, dtype=bmag.dtype))
+    if bmag.ndim != 3 or min(bmag.shape) < 1:
+        raise ValueError("bmag must have shape (surface, distance, field_line)")
+    if bool(jnp.any(~jnp.isfinite(depths)) | jnp.any((depths <= 0.0) | (depths >= 1.0))):
+        raise ValueError("trapping_depths must be finite and strictly between zero and one")
+    common_min = jnp.max(jnp.min(bmag, axis=1))
+    common_max = jnp.min(jnp.max(bmag, axis=1))
+    if bool(~jnp.isfinite(common_min) | ~jnp.isfinite(common_max)
+            | (common_min >= common_max)):
+        raise ValueError("the sampled field lines have no common trapped-particle pitch")
+    b_star = common_max - depths * (common_max - common_min)
+    return 1.0 / b_star
+
+
+def common_trapped_pitches_state(
+    state, rt, surfaces, trapping_depths=(0.35, 0.55, 0.75), *,
+    mboz=12, nboz=12, nalpha=9, points_per_period=64, num_periods=4,
+):
+    """Choose common physical pitches directly from a converged equilibrium.
+
+    The sampled field lines use ``theta=alpha+iota*phi`` in Boozer angles.
+    A single ``1/lambda`` is selected from the trapping interval shared by
+    every surface and field-line label; this prevents radial maximum-J
+    comparisons from silently changing the particle population.
+    """
+    booz = boozer_bmnc_state(
+        state, rt, surfaces=surfaces, mboz=mboz, nboz=nboz)
+    dtype = jnp.asarray(booz["bmnc_b"]).dtype
+    alpha = jnp.asarray(2.0 * np.pi * np.arange(int(nalpha)) / int(nalpha), dtype=dtype)
+    nphi = int(points_per_period) * int(num_periods)
+    phi = jnp.asarray(
+        2.0 * np.pi * np.arange(nphi) / (int(booz["nfp"]) * int(points_per_period)),
+        dtype=dtype)
+    theta = alpha[None, :, None] + booz["iota_b"][:, None, None] * phi[None, None, :]
+    angle = (theta[..., None] * booz["xm_b"]
+             - phi[None, None, :, None] * booz["xn_b"])
+    bmns = booz.get("bmns_b")
+    if bmns is None:
+        bmns = jnp.zeros_like(booz["bmnc_b"])
+    bmag = (jnp.einsum("sapm,sm->sap", jnp.cos(angle), booz["bmnc_b"])
+            + jnp.einsum("sapm,sm->sap", jnp.sin(angle), bmns))
+    return common_trapped_pitches(jnp.swapaxes(bmag, 1, 2), trapping_depths)
 
 
 def maximum_j_residual_from_boozer(
@@ -46,7 +210,7 @@ def maximum_j_residual_from_boozer(
     quadrature_order: int = 64,
     match_tolerance: float | None = None,
 ) -> dict[str, Array]:
-    """Penalize positive ``dJ/dpsi`` at common physical pitch.
+    """Penalize outward-increasing ``J`` at common physical pitch.
 
     Wells on adjacent surfaces are paired only when they are reciprocal
     nearest neighbours in Boozer toroidal angle. Every line must retain the
@@ -55,8 +219,10 @@ def maximum_j_residual_from_boozer(
     displacement invalidates the pitch block with NaN.
 
     ``target`` is the upper bound on the dimensionless logarithmic slope
-    ``abs(psi_edge) / J * dJ/dpsi``. The default enforces the maximum-J
-    condition ``dJ/dpsi <= 0`` without changing its physical sign. Reported
+    ``psi_edge / J * dJ/dpsi = (1/J) dJ/ds``, where
+    ``s = psi / psi_edge`` increases from axis to boundary. The default
+    enforces the maximum-J condition ``dJ/ds <= 0`` independently of VMEC's
+    signed toroidal-flux convention. Reported
     fractions use uniform pitch-sample weights unless ``pitch_weights``
     supplies user quadrature weights. They are resolved-orbit summaries, not
     the bounce-time-weighted Maxwellian phase-space fraction.
@@ -136,7 +302,8 @@ def maximum_j_residual_from_boozer(
     hi_action = jnp.where(matched, hi_action, 1.0)
     dJ_dpsi = (hi_action - lo_action) / dpsi[:, None, None, None]
     mean_action = 0.5 * (jnp.abs(lo_action) + jnp.abs(hi_action))
-    relative_slope = dJ_dpsi * jnp.abs(psi_edge) / jnp.maximum(
+    dJ_ds = dJ_dpsi * psi_edge
+    relative_slope = dJ_ds / jnp.maximum(
         mean_action, eps)
     violation = jnp.maximum(relative_slope - float(target), 0.0)
     count = jnp.sum(matched, axis=(1, 3))
@@ -155,7 +322,7 @@ def maximum_j_residual_from_boozer(
         numerator = jnp.sum(jnp.where(matched & group & select, sample_weight, 0.0))
         return jnp.where(denominator > 0.0, numerator / denominator, jnp.nan)
 
-    maximum_j = dJ_dpsi < 0.0
+    maximum_j = dJ_ds < 0.0
     bmin = jnp.min(out["bmag"], axis=-1)
     bmax = jnp.max(out["bmag"], axis=-1)
     trapping_depth = jnp.clip(
@@ -169,6 +336,7 @@ def maximum_j_residual_from_boozer(
         "residuals1d": residuals1d,
         "total": jnp.sum(residuals1d * residuals1d),
         "dJ_dpsi": jnp.where(matched, dJ_dpsi, jnp.nan),
+        "dJ_ds": jnp.where(matched, dJ_ds, jnp.nan),
         "relative_slope": jnp.where(matched, relative_slope, jnp.nan),
         "matched_well_mask": matched,
         "matched_well_index": hi_index,
@@ -218,7 +386,8 @@ def qi_and_maximum_j_from_boozer(
         state, rt, surfaces=surfaces, mboz=int(mboz), nboz=int(nboz),
         oversample=int(oversample))
     common = dict(
-        bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+        bmnc_b=booz["bmnc_b"], bmns_b=booz.get("bmns_b"),
+        xm_b=booz["xm_b"], xn_b=booz["xn_b"],
         iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
         nfp=booz["nfp"], pitch=pitch, weights=weights)
     qi_out = j_invariant_qi_residual_from_boozer(
@@ -288,6 +457,62 @@ class JInvariantQIAndMaximumJResidual:
         return jnp.vdot(rows, rows)
 
 
+class ConstructedMaximumJResidual:
+    """Goodman constructed-field maximum-J continuation objective.
+
+    Use this smooth target to establish a favorable radial-action direction,
+    then certify the resulting actual field with :class:`MaximumJResidual`.
+    """
+
+    name = "constructed_maximum_j"
+
+    def __init__(
+        self, surfaces, pitch, *, weights=None, mboz=16, nboz=16,
+        oversample=2, **residual_options,
+    ):
+        self.surfaces = np.atleast_1d(np.asarray(surfaces, dtype=float))
+        self.pitch = np.atleast_1d(np.asarray(pitch, dtype=float))
+        if (self.surfaces.size < 2 or np.any(np.diff(self.surfaces) <= 0.0)
+                or self.pitch.size == 0 or not np.all(np.isfinite(self.pitch))
+                or np.any(self.pitch <= 0.0)):
+            raise ValueError(
+                "increasing surfaces and positive finite physical pitch are required")
+        self.weights = None if weights is None else np.asarray(weights, dtype=float)
+        if self.weights is not None and self.weights.shape != self.surfaces.shape:
+            raise ValueError("weights must have the same length as surfaces")
+        self.mboz, self.nboz, self.oversample = int(mboz), int(nboz), int(oversample)
+        self.residual_options = residual_options
+
+    def compute_state(self, state, rt):
+        """Return constructed-field actions and radial-slope diagnostics."""
+        booz = boozer_bmnc_state(
+            state, rt, surfaces=self.surfaces, mboz=self.mboz,
+            nboz=self.nboz, oversample=self.oversample)
+        out = constructed_maximum_j_residual_from_boozer(
+            bmnc_b=booz["bmnc_b"], bmns_b=booz.get("bmns_b"),
+            xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
+            nfp=booz["nfp"], psi_b=booz["psi_b"], psi_edge=booz["psi_edge"],
+            pitch=self.pitch, weights=self.weights, **self.residual_options)
+        out.update(booz)
+        return out
+
+    def residuals_state(self, state, rt):
+        return self.compute_state(state, rt)["residuals1d"]
+
+    def total_state(self, state, rt):
+        return self.compute_state(state, rt)["total"]
+
+    def J(self, eq):
+        return self.residuals_state(eq.state, eq.runtime)
+
+    __call__ = J
+    residuals = J
+
+    def total(self, eq):
+        return self.total_state(eq.state, eq.runtime)
+
+
 class MaximumJResidual:
     """Composable maximum-J objective at fixed physical pitch."""
 
@@ -317,7 +542,8 @@ class MaximumJResidual:
             state, rt, surfaces=self.surfaces, mboz=self.mboz,
             nboz=self.nboz, oversample=self.oversample)
         out = maximum_j_residual_from_boozer(
-            bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            bmnc_b=booz["bmnc_b"], bmns_b=booz.get("bmns_b"),
+            xm_b=booz["xm_b"], xn_b=booz["xn_b"],
             iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
             nfp=booz["nfp"], psi_b=booz["psi_b"],
             psi_edge=booz["psi_edge"], pitch=self.pitch,

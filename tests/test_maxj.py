@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from vmex.core import maxj
+from vmex.core import qi
 from vmex.core import implicit as im
 from vmex.core.input import VmecInput
 
@@ -49,6 +50,16 @@ def _residual(
         psi_edge=booz["psi_edge"], pitch=pitch, **settings)
 
 
+def _constructed_residual(outer_mean=1.02, *, weights=None):
+    booz = _boozer(outer_mean)
+    return maxj.constructed_maximum_j_residual_from_boozer(
+        bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+        iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
+        nfp=booz["nfp"], psi_b=booz["psi_b"], psi_edge=booz["psi_edge"],
+        pitch=[1.0 / 1.1], weights=weights, max_wells=2, quadrature_order=32,
+        qi_options={"nphi": 65, "nalpha": 5, "n_bounce": 7})
+
+
 def test_maximum_j_sign_and_signed_flux_convention():
     favorable = _residual(1.02)
     adverse = _residual(0.98)
@@ -60,19 +71,93 @@ def test_maximum_j_sign_and_signed_flux_convention():
     assert float(adverse["total"]) > 1.0e-3
     assert np.all(np.asarray(
         adverse["relative_slope"][adverse["matched_well_mask"]]) > 0.0)
-    assert float(reversed_flux["total"]) > 1.0e-3
+    assert float(reversed_flux["total"]) == 0.0
     assert float(favorable["maximum_j_fraction"]) == pytest.approx(1.0)
     assert float(adverse["maximum_j_fraction"]) == pytest.approx(0.0)
     assert float(favorable["excluded_pitch_fraction"]) == pytest.approx(0.0)
     np.testing.assert_allclose(
         reversed_flux["relative_slope"][reversed_flux["matched_well_mask"]],
-        -favorable["relative_slope"][favorable["matched_well_mask"]])
+        favorable["relative_slope"][favorable["matched_well_mask"]])
+    np.testing.assert_allclose(
+        reversed_flux["dJ_ds"][reversed_flux["matched_well_mask"]],
+        favorable["dJ_ds"][favorable["matched_well_mask"]])
 
     depths = _residual(1.02, pitch=(1.0 / 1.1, 1.0 / 0.85))
     assert float(jnp.min(depths["trapping_depth"])) < 0.5
     assert float(jnp.max(depths["trapping_depth"])) > 0.5
     assert float(depths["shallow_maximum_j_fraction"]) == pytest.approx(1.0)
     assert float(depths["deep_maximum_j_fraction"]) == pytest.approx(1.0)
+
+
+def test_constructed_maximum_j_sign_and_ad_match_finite_difference():
+    """Goodman's smoother continuation target keeps the physical J sign."""
+    favorable = _constructed_residual(1.02)
+    adverse = _constructed_residual(0.98)
+    assert float(favorable["total"]) == pytest.approx(0.0, abs=1e-13)
+    assert float(favorable["maximum_j_fraction"]) == pytest.approx(1.0)
+    assert float(adverse["total"]) > 1.0e-3
+    assert float(adverse["maximum_j_fraction"]) == pytest.approx(0.0)
+
+    def objective(mean):
+        return _constructed_residual(mean)["total"]
+    mean, step = jnp.asarray(0.98), 1.0e-5
+    derivative = jax.grad(objective)(mean)
+    finite_difference = (objective(mean + step) - objective(mean - step)) / (2.0 * step)
+    np.testing.assert_allclose(derivative, finite_difference, rtol=3.0e-4)
+
+    # Implicit-Jacobian assembly may make objective weights traced values.
+    weights = jnp.ones(2)
+    _, tangent = jax.jvp(
+        lambda value: _constructed_residual(0.98, weights=value)["total"],
+        (weights,), (jnp.array([0.1, -0.1]),))
+    assert jnp.isfinite(tangent)
+
+
+def test_constructed_class_matches_the_functional_form_and_guards_inputs(monkeypatch):
+    """The objective class is a thin binding of the functional continuation.
+
+    ``ConstructedMaximumJResidual`` must reproduce
+    :func:`constructed_maximum_j_residual_from_boozer` element for element on
+    the same Boozer tables (the class only supplies the transform), and reject
+    the same degenerate surface/pitch/weight inputs as its resolved
+    counterpart :class:`MaximumJResidual`.
+    """
+    booz = _boozer(0.98)
+    options = dict(max_wells=2, quadrature_order=32,
+                   qi_options={"nphi": 65, "nalpha": 5, "n_bounce": 7})
+    monkeypatch.setattr(maxj, "boozer_bmnc_state", lambda *args, **kwargs: booz)
+    term = maxj.ConstructedMaximumJResidual(
+        [0.25, 0.75], [1.0 / 1.1], mboz=2, nboz=2, **options)
+    eq = SimpleNamespace(state=object(), runtime=object())
+    rows = term(eq)
+    expected = _constructed_residual(0.98)
+    np.testing.assert_array_equal(
+        np.asarray(rows), np.asarray(expected["residuals1d"]))
+    assert float(term.total(eq)) == pytest.approx(float(expected["total"]))
+    assert term.compute_state(eq.state, eq.runtime)["nfp"] == booz["nfp"]
+
+    with pytest.raises(ValueError, match="increasing surfaces"):
+        maxj.ConstructedMaximumJResidual([0.5], [1.0])
+    with pytest.raises(ValueError, match="positive finite"):
+        maxj.ConstructedMaximumJResidual([0.25, 0.75], [-1.0])
+    with pytest.raises(ValueError, match="weights"):
+        maxj.ConstructedMaximumJResidual([0.25, 0.75], [1.0], weights=[1.0])
+    with pytest.raises(ValueError, match="at least two surfaces"):
+        maxj.constructed_maximum_j_residual_from_boozer(
+            bmnc_b=[[1.0, 0.2]], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            iota_b=[0.4], G_b=[2.0], I_b=[0.0], nfp=2, psi_b=[0.5],
+            psi_edge=1.0, pitch=[1.0])
+    for bad, message in (({"pitch_weights": [1.0, 1.0]}, "pitch_weights"),
+                         ({"weights": [1.0]}, "weights must have"),
+                         ({"psi_b": [0.25, 0.5, 0.75]}, "psi_b must have")):
+        arguments = dict(
+            bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
+            nfp=booz["nfp"], psi_b=booz["psi_b"], psi_edge=booz["psi_edge"],
+            pitch=[1.0 / 1.1], **options)
+        arguments.update(bad)
+        with pytest.raises(ValueError, match=message):
+            maxj.constructed_maximum_j_residual_from_boozer(**arguments)
 
 
 def test_maximum_j_slope_matches_adaptive_quadrature():
@@ -157,6 +242,72 @@ def test_maximum_j_composable_interface(monkeypatch):
     assert float(term.total(eq)) == pytest.approx(float(jnp.sum(rows**2)))
 
 
+def _asymmetric_boozer(sine):
+    """Two-harmonic Boozer field with an asymmetric ``|B|`` sine spectrum.
+
+    A single non-constant harmonic makes every well along a line identical,
+    which hides the sine spectrum from the action-invariance residuals (a
+    sine partner of one harmonic is only a rigid phase shift). The extra
+    helical mode breaks that degeneracy, so each objective below responds to
+    ``bmns_b`` exactly when it actually consumes it.
+    """
+    booz = dict(_boozer(0.98))
+    booz.update(
+        bmnc_b=jnp.array([[1.0, 0.2, 0.05], [0.98, 0.2, 0.05]]),
+        bmns_b=jnp.array([[0.0, 0.0, 0.0], [0.0, sine, 0.5 * sine]]),
+        xm_b=jnp.array([0.0, 0.0, 1.0]),
+        xn_b=jnp.array([0.0, 2.0, 2.0]))
+    return booz
+
+
+_BOUNCE_OPTIONS = dict(
+    nalpha=3, points_per_period=32, num_periods=2, max_wells=4)
+_CONSTRUCTED_OPTIONS = dict(nphi=33, nalpha=3, n_bounce=5)
+_LASYM_TERMS = {
+    "constructed_maximum_j": (maxj, lambda: maxj.ConstructedMaximumJResidual(
+        [0.25, 0.75], [1.0 / 1.1], max_wells=2, quadrature_order=32,
+        qi_options=_CONSTRUCTED_OPTIONS)),
+    "constructed_qi": (
+        qi, lambda: qi.ConstructedQIResidual([0.25, 0.75], **_CONSTRUCTED_OPTIONS)),
+    "j_invariant_qi": (qi, lambda: qi.JInvariantQIResidual(
+        [0.25, 0.75], [1.0 / 1.1], **_BOUNCE_OPTIONS)),
+    "j_invariant_qi_and_maximum_j": (
+        maxj, lambda: maxj.JInvariantQIAndMaximumJResidual(
+            [0.25, 0.75], [1.0 / 1.1], qi_options=_BOUNCE_OPTIONS,
+            maxj_options=_BOUNCE_OPTIONS)),
+    "maximum_j": (maxj, lambda: maxj.MaximumJResidual(
+        [0.25, 0.75], [1.0 / 1.1], **_BOUNCE_OPTIONS)),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_LASYM_TERMS))
+def test_bounce_objectives_consume_the_boozer_sine_spectrum(name, monkeypatch):
+    """Every bounce objective must certify the field the equilibrium has.
+
+    ``boozer_bmnc_state`` returns ``bmns_b`` for LASYM states; a class that
+    drops it silently evaluates the stellarator-symmetrized field, so its
+    maximum-J or omnigenity certificate does not describe the asymmetric
+    equilibrium being optimized. The symmetric limit must stay exact:
+    omitting ``bmns_b`` and passing zeros are the same evaluation.
+    """
+    module, build = _LASYM_TERMS[name]
+    term = build()
+    eq = SimpleNamespace(state=object(), runtime=object())
+
+    def rows(booz):
+        monkeypatch.setattr(module, "boozer_bmnc_state", lambda *a, **k: booz)
+        return np.asarray(term(eq))
+
+    symmetric = rows(_asymmetric_boozer(0.0))
+    asymmetric = rows(_asymmetric_boozer(0.05))
+    assert np.all(np.isfinite(symmetric)) and np.all(np.isfinite(asymmetric))
+    assert np.max(np.abs(asymmetric - symmetric)) > 1.0e-3
+    zeros = _asymmetric_boozer(0.0)
+    np.testing.assert_array_equal(
+        rows({key: value for key, value in zeros.items() if key != "bmns_b"}),
+        symmetric)
+
+
 def test_maximum_j_input_guards():
     with pytest.raises(ValueError, match="increasing surfaces"):
         maxj.MaximumJResidual([0.5], [1.0])
@@ -173,6 +324,31 @@ def test_maximum_j_input_guards():
         _residual(match_tolerance=0.0)
     with pytest.raises(ValueError, match="pitch_weights"):
         _residual(pitch_weights=[1.0, 1.0])
+
+
+def test_common_trapped_pitches_use_one_field_strength_on_all_lines():
+    bmag = jnp.array([
+        [[0.8, 0.9], [1.2, 1.3]],
+        [[0.7, 0.85], [1.25, 1.4]],
+    ])
+    pitch = np.asarray(maxj.common_trapped_pitches(bmag, [0.25, 0.75]))
+    np.testing.assert_allclose(1.0 / pitch, [1.125, 0.975])
+    with pytest.raises(ValueError, match="strictly between"):
+        maxj.common_trapped_pitches(bmag, [0.0])
+    with pytest.raises(ValueError, match="no common"):
+        maxj.common_trapped_pitches(bmag.at[0, 1].set([0.86, 0.86]))
+    with pytest.raises(ValueError, match="surface, distance, field_line"):
+        maxj.common_trapped_pitches(bmag[0], [0.5])
+
+
+def test_common_trapped_pitches_state_samples_boozer_lines(monkeypatch):
+    booz = _boozer(1.02)
+    monkeypatch.setattr(maxj, "boozer_bmnc_state", lambda *args, **kwargs: booz)
+    pitch = maxj.common_trapped_pitches_state(
+        object(), object(), [0.25, 0.75], [0.5],
+        nalpha=5, points_per_period=32, num_periods=2)
+    assert pitch.shape == (1,)
+    assert np.isfinite(float(pitch[0])) and float(pitch[0]) > 0.0
 
 
 @pytest.mark.full

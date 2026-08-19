@@ -25,6 +25,7 @@ from vmex import _compat
 _CACHE_VARS = (
     "JAX_COMPILATION_CACHE_DIR", "VMEX_COMPILATION_CACHE_DIR",
     "VMEX_COMPILATION_CACHE", "JAX_PLATFORM_NAME", "JAX_PLATFORMS",
+    "XLA_FLAGS", "VMEX_FAST_COMPILE", "CUDA_VISIBLE_DEVICES",
 )
 
 
@@ -120,6 +121,24 @@ def test_configure_compilation_cache_wiring(monkeypatch):
     assert fake3.config.updates["jax_compilation_cache_dir"] == "/tmp/x"
 
 
+def test_compilation_cache_defaults_are_bounded_and_selective(monkeypatch):
+    monkeypatch.delenv("VMEX_CACHE_MIN_COMPILE_TIME_SECS", raising=False)
+    monkeypatch.delenv("VMEC_JAX_CACHE_MIN_COMPILE_TIME_SECS", raising=False)
+    monkeypatch.delenv("VMEX_COMPILATION_CACHE_MAX_SIZE", raising=False)
+    monkeypatch.delenv("VMEC_JAX_COMPILATION_CACHE_MAX_SIZE", raising=False)
+    fake = types.SimpleNamespace(config=_FakeConfig())
+    _compat._configure_compilation_cache(fake, "/tmp/cachedir")
+    assert fake.config.updates["jax_persistent_cache_min_compile_time_secs"] == 1.0
+    # The bound stays finite (JAX only locks the cache when eviction is on)
+    # but scales with the disk: the old fixed 1 GiB sat at its cap and evicted
+    # the executables the next optimization stage asked for.
+    bound = fake.config.updates["jax_compilation_cache_max_size"]
+    assert _compat._CACHE_SIZE_FLOOR <= bound <= _compat._CACHE_SIZE_CEILING
+    assert bound == _compat._default_cache_max_size("/tmp/cachedir")
+    assert _compat._default_cache_max_size("/no/such/path") == \
+        _compat._CACHE_SIZE_FLOOR
+
+
 def test_configure_compilation_cache_gpu_autotune_default(monkeypatch):
     monkeypatch.delenv("VMEX_PERSISTENT_CACHE_XLA_CACHES", raising=False)
     monkeypatch.delenv("JAX_PLATFORM_NAME", raising=False)
@@ -150,6 +169,35 @@ def test_configure_jax_environment_idempotent_and_respects_user_env(monkeypatch)
     import jax
 
     assert jax.config.read("jax_enable_x64") is True
+
+
+def test_macos_cpu_codegen_split_default_respects_backend_and_user(monkeypatch):
+    """The large-graph linker guard is macOS/CPU-only and never overrides users."""
+    import os
+
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.delenv("JAX_PLATFORM_NAME", raising=False)
+    monkeypatch.delenv("JAX_PLATFORMS", raising=False)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr(_compat.platform, "system", lambda: "Darwin")
+    _compat._configure_jax_environment()
+    assert os.environ["XLA_FLAGS"] == "--xla_cpu_parallel_codegen_split_count=128"
+
+    monkeypatch.setenv("XLA_FLAGS", "--user_set_flag")
+    _compat._configure_jax_environment()
+    assert os.environ["XLA_FLAGS"] == "--user_set_flag"
+
+    monkeypatch.delenv("XLA_FLAGS")
+    monkeypatch.setenv("VMEX_FAST_COMPILE", "1")
+    _compat._configure_jax_environment()
+    assert "--xla_cpu_parallel_codegen_split_count=128" in os.environ["XLA_FLAGS"]
+    assert "--xla_backend_optimization_level=1" in os.environ["XLA_FLAGS"]
+
+    monkeypatch.delenv("XLA_FLAGS")
+    monkeypatch.delenv("VMEX_FAST_COMPILE")
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda,cpu")
+    _compat._configure_jax_environment()
+    assert "XLA_FLAGS" not in os.environ
 
 
 def test_machine_fingerprint_is_stable_and_platform_scoped(monkeypatch):

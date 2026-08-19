@@ -51,14 +51,16 @@ finite-difference-only; under ``jac="implicit"`` use :func:`d_merc_state` /
 :func:`mercier_stability_residual`, :func:`jdotb_residual`, and
 :func:`l_grad_b_state` instead.  The implicit parameter map supports lasym
 via the four RBC/ZBS/RBS/ZBC boundary families and a traceable ``readin.f``
-delta rotation (FD-validated); the QS-ratio traceable term is
-symmetric-only.
+delta rotation (FD-validated); the traceable QS-ratio term follows, using the
+stored full poloidal grid for ``lasym`` states instead of mirroring VMEC's
+reduced ``[0, pi]`` grid.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import inspect
+import warnings
 from dataclasses import dataclass
 from functools import cached_property
 from threading import RLock
@@ -93,6 +95,10 @@ from .stability import (
     jdotb_state,
     mercier_shear_state,
     mercier_stability_residual,
+    trial_pressure_d_merc_state,
+    trial_pressure_glasser_d_r_state,
+    trial_pressure_mercier_stability_residual,
+    trial_pressure_glasser_stability_residual,
 )
 
 # Shared state-physics primitives (statephysics.py, R26a).  Re-exported here
@@ -114,16 +120,20 @@ from .statephysics import (
     iota_edge,
     max_elongation,
     mean_iota,
+    min_abs_iota,
+    soft_min_abs_iota,
     volume,
+    volume_average_beta,
 )
 from .wout import WoutData, wout_from_state
 from .problem import Evaluation, FunctionProblem, VmecProblem, _run_with_progress
-from .monitoring import OptimizationMonitor, OptimizationRecord
+from .monitoring import EquilibriumReporter, OptimizationMonitor, OptimizationRecord
 
 __all__ = [
     "VmecProblem",
     "FunctionProblem",
     "Evaluation",
+    "EquilibriumReporter",
     "OptimizationMonitor",
     "OptimizationRecord",
     "make_problem",
@@ -132,10 +142,13 @@ __all__ = [
     "QuasisymmetryRatioResidual",
     "aspect_ratio",
     "mean_iota",
+    "min_abs_iota",
+    "soft_min_abs_iota",
     "edge_iota",
     "iota_edge",
     "mirror_ratio",
     "volume",
+    "volume_average_beta",
     "magnetic_well",
     "elongation_profile",
     "max_elongation",
@@ -147,14 +160,21 @@ __all__ = [
     "mercier_shear_state",
     "glasser_d_r_state",
     "glasser_stability_residual",
+    "trial_pressure_d_merc_state",
+    "trial_pressure_glasser_d_r_state",
+    "trial_pressure_mercier_stability_residual",
+    "trial_pressure_glasser_stability_residual",
     "l_grad_b",
     "l_grad_b_state",
     "quasi_isodynamic_residual",
     "boozer_modes_from_wout",
     "quasi_isodynamic_residual_from_wout",
     "boundary_dof_names",
+    "boundary_arrays_from_x",
     "pack_boundary",
     "unpack_boundary",
+    "residuals_from_tuples",
+    "resample_current_profile",
     "least_squares",
     "minimize",
     "RedlBootstrapMismatch",  # noqa: F822 - provided lazily by __getattr__ below
@@ -182,15 +202,30 @@ class Equilibrium:
     """A converged fixed-boundary equilibrium plus its evaluation contexts.
 
     Objective callables in :func:`least_squares` receive one of these.  The
-    solver-native pieces (``state``, ``runtime``) feed the differentiable
-    scalar targets; ``wout`` (built lazily, host NumPy) feeds the wout-table
-    objectives (QS ratio residual, Boozer-based QI residual).
+    ``solution`` and ``solver_context`` are the clear public names for the
+    solver-native ``state`` and ``runtime`` attributes. They feed the
+    differentiable scalar targets; ``wout`` (built lazily, host NumPy) feeds
+    wout-table objectives (QS ratio residual, Boozer-based QI residual).
     """
 
     inp: VmecInput
     state: SpectralState
     runtime: SolverRuntime
     result: SolveResult
+    field_factory: Callable[[], Any] | None = dataclasses.field(
+        default=None, repr=False, compare=False)
+    exterior_field_factory: Callable[..., Any] | None = dataclasses.field(
+        default=None, repr=False, compare=False)
+
+    @property
+    def solution(self) -> SpectralState:
+        """Converged spectral equilibrium coefficients and force arrays."""
+        return self.state
+
+    @property
+    def solver_context(self) -> SolverRuntime:
+        """Read-only grids, profiles, and constants used to evaluate the solution."""
+        return self.runtime
 
     @cached_property
     def wout(self) -> WoutData:
@@ -202,10 +237,142 @@ class Equilibrium:
             niter=int(r.iterations), converged=bool(r.converged),
         )
 
+    def exterior_field(self, **kwargs):
+        """Return a field that can be queried outside the plasma surface."""
+        if self.exterior_field_factory is not None:
+            return self.exterior_field_factory(**kwargs)
+        from .extender import VmecExtender
+
+        return VmecExtender.from_equilibrium(self, **kwargs)
+
+    @cached_property
+    def field(self):
+        """Pointwise magnetic field inside the plasma boundary."""
+        if self.field_factory is not None:
+            return self.field_factory()
+        from .extender import VmecInteriorField
+
+        return VmecInteriorField.from_state(
+            self.inp, self.state, runtime=self.runtime)
+
+    def set_points(self, points: Array) -> "Equilibrium":
+        """Store Cartesian points for pointwise field evaluation."""
+        self.field.set_points(points)
+        return self
+
+    def set_points_xyz(self, points: Array) -> "Equilibrium":
+        """Store Cartesian ``(x, y, z)`` points for field evaluation."""
+        self.field.set_points_xyz(points)
+        return self
+
+    def set_points_cyl(self, points: Array) -> "Equilibrium":
+        """Store cylindrical ``(R, phi, Z)`` points for field evaluation."""
+        self.field.set_points_cyl(points)
+        return self
+
+    def set_points_flux(self, points: Array) -> "Equilibrium":
+        """Store VMEC ``(s, theta, phi)`` points inside the plasma."""
+        self.field.set_points_flux(points)
+        return self
+
+    def field_in_flux_coordinates(self):
+        """Return the interior field in the ``(s, theta, phi)`` basis."""
+        return self.field.field_in_flux_coordinates()
+
+    def B(self, points: Array | None = None) -> Array:
+        """Return Cartesian ``B`` inside the plasma."""
+        return self.field.B(points)
+
+    def absB(self, points: Array | None = None) -> Array:
+        """Return ``|B|`` inside the plasma."""
+        return self.field.absB(points)
+
+    def gradB(self, points: Array | None = None) -> Array:
+        """Return the Cartesian field gradient inside the plasma."""
+        return self.field.gradB(points)
+
+    def gradgradB(self, points: Array | None = None) -> Array:
+        """Return the second Cartesian derivative of ``B``."""
+        return self.field.gradgradB(points)
+
+    def gradgradgradB(self, points: Array | None = None) -> Array:
+        """Return the third Cartesian derivative of ``B``."""
+        return self.field.gradgradgradB(points)
+
+    def B_vjp(self, vector: Array) -> Array:
+        """Return the VJP of :meth:`B` in the originating problem's DOFs."""
+        return self.field.B_vjp(vector)
+
+    def gradB_vjp(self, vector: Array) -> Array:
+        """Return the VJP of :meth:`gradB` in the problem's DOFs."""
+        return self.field.gradB_vjp(vector)
+
+    def gradgradB_vjp(self, vector: Array) -> Array:
+        """Return the VJP of :meth:`gradgradB` in the problem's DOFs."""
+        return self.field.gradgradB_vjp(vector)
+
+    def gradgradgradB_vjp(self, vector: Array) -> Array:
+        """Return the VJP of :meth:`gradgradgradB` in the problem's DOFs."""
+        return self.field.gradgradgradB_vjp(vector)
+
 
 def _auto_jac_chunk(dim: int) -> int:
     """Bound device-aware batching by the conservative square-root policy."""
     return min(int(auto_chunk_size(dim)), int(np.ceil(np.sqrt(dim))))
+
+
+def _certifier_summary(report: Any) -> jnp.ndarray:
+    """``[max iterations, columns not certified]`` for one Jacobian call.
+
+    Both implicit-Jacobian lanes certify every column against
+    ``cfg.adjoint_tol``, and how hard that is depends on the iterate: the
+    block factorization is an excellent preconditioner at the point it was
+    built for and a progressively worse one as the optimizer moves.  When it
+    degrades the certifier silently absorbs the whole cost of a Jacobian, so
+    the counts have to come back out with the rows.
+    """
+    iterations = jnp.asarray(getattr(report, "iterations", 0)).ravel()
+    converged = jnp.asarray(getattr(report, "converged", True)).ravel()
+    return jnp.stack((
+        jnp.max(iterations).astype(jnp.float64),
+        jnp.sum(jnp.logical_not(converged)).astype(jnp.float64),
+    ))
+
+
+def _record_certifier(holder: dict, summary: Any, cfg: Any = None) -> None:
+    """Record the worst certifier cost, and say so when columns miss.
+
+    An uncertified column is returned as NaN and the Jacobian then falls back
+    to the previous one, so a stage can spend an hour per Jacobian and make no
+    real progress with nothing on screen to say why.  Warn once per problem.
+    """
+    values = np.asarray(jax.device_get(summary), dtype=float).ravel()
+    if values.size < 2 or not np.all(np.isfinite(values)):
+        return
+    iterations, unconverged = int(values[0]), int(values[1])
+    holder["jac_certifier_iterations"] = iterations
+    holder["jac_certifier_unconverged"] = unconverged
+    holder["jac_certifier_worst"] = max(
+        int(holder.get("jac_certifier_worst", 0)), iterations)
+    if unconverged and not holder.get("jac_certifier_warned"):
+        holder["jac_certifier_warned"] = True
+        tol = "unknown" if cfg is None else f"{cfg.jacobian_adjoint_tol:g}"
+        budget = "unknown" if cfg is None else f"{cfg.jacobian_adjoint_maxiter:d}"
+        warnings.warn(
+            f"{unconverged} of the implicit-Jacobian columns did not reach "
+            f"jacobian_adjoint_tol={tol} within jacobian_adjoint_maxiter="
+            f"{budget} restarts ({iterations} Krylov iterations). Those "
+            "columns carry the direct block-tridiagonal solve corrected as "
+            "far as the budget allowed, which is the usual outcome on an "
+            "asymmetric boundary once the optimizer leaves the seed and is "
+            "normally accurate enough to optimize with. The shipped settings "
+            "are already the measured optimum: raising the budget by ten "
+            "times moved the Jacobian by 2e-8 and certified no extra column, "
+            "so no action is needed unless the optimizer stops making "
+            "progress. If it does, pass jacobian_adjoint_tol=1e-3 to accept "
+            "sooner, or implicit_jacobian_method='reverse_adjoint' for a "
+            "slower but independently certified Jacobian.",
+            RuntimeWarning, stacklevel=2)
 
 
 def solve_equilibrium(
@@ -412,13 +579,10 @@ class QuasisymmetryRatioResidual:
         ``(ns - 1, ntheta1, nzeta)`` normalized so ``sum_angles r3d[i]**2``
         is the surface-averaged QS ratio ``<f^2>`` of half-mesh surface
         ``i`` — same quantity as the wout-table :meth:`profile`, agreeing at
-        discretization level, not bitwise.  ``lasym = False`` only.
+        discretization level, not bitwise.  Symmetric runs mirror VMEC's
+        reduced poloidal grid; ``lasym`` runs use the stored full grid.
         """
         setup = rt.setup
-        if bool(setup.lasym):
-            raise NotImplementedError(
-                "QuasisymmetryRatioResidual traceable evaluation supports "
-                "lasym = False only")
         s = jnp.asarray(setup.s_full)
         nfp = int(rt.resolution.nfp)
         _, jacobian, _, fields, _ = _field_chain(state, rt)
@@ -426,19 +590,24 @@ class QuasisymmetryRatioResidual:
         # Mirror the reduced [0, pi] grid to the full theta circle.
         ntheta2 = int(np.shape(fields.total_pressure)[1])
         nzeta = int(np.shape(fields.total_pressure)[2])
-        ntheta1 = max(2 * (ntheta2 - 1), 1)
-        i_full = np.arange(ntheta1)
-        i_src = np.where(i_full < ntheta2, i_full, ntheta1 - i_full)
-        k = np.arange(nzeta)
-        k_src = np.where(i_full[:, None] < ntheta2, k[None, :],
-                         (nzeta - k[None, :]) % nzeta)
-        i_src = np.broadcast_to(i_src[:, None], (ntheta1, nzeta))
+        if bool(setup.lasym):
+            ntheta1 = ntheta2
 
-        def full(a):
-            # Drop the zeroed axis row (js = 0) *before* the singular
-            # divisions below: keeping it poisons reverse-mode AD with
-            # 0 * inf = nan even though the row never enters the result.
-            return jnp.asarray(a)[1:, i_src, k_src]
+            def full(a):
+                return jnp.asarray(a)[1:]
+        else:
+            ntheta1 = max(2 * (ntheta2 - 1), 1)
+            i_full = np.arange(ntheta1)
+            i_src = np.where(i_full < ntheta2, i_full, ntheta1 - i_full)
+            k = np.arange(nzeta)
+            k_src = np.where(i_full[:, None] < ntheta2, k[None, :],
+                             (nzeta - k[None, :]) % nzeta)
+            i_src = np.broadcast_to(i_src[:, None], (ntheta1, nzeta))
+
+            def full(a):
+                # Drop the zeroed axis row before singular divisions: keeping
+                # it poisons reverse AD with 0 * inf although it is unused.
+                return jnp.asarray(a)[1:, i_src, k_src]
 
         # |B| on the half-mesh internal grid (bcovar.f: bsq = |B|^2/2 + p).
         bsq2 = 2.0 * (jnp.asarray(fields.total_pressure)
@@ -583,14 +752,10 @@ def d_merc(eq) -> jnp.ndarray:
     two surfaces and the edge carry the usual near-axis noise, so practical
     targets should penalize e.g. ``min(DMerc[2:-1], 0)``).  Accepts an
     :class:`Equilibrium` or any wout-like object.  Use traceable
-    :func:`mercier_stability_residual` with ``jac="implicit"``.  ``lasym``
-    equilibria are rejected pending independent DCON/JMC validation.
+    :func:`mercier_stability_residual` with ``jac="implicit"``. Symmetric and
+    ``lasym`` WOUT profiles are supported.
     """
     wout = eq.wout if isinstance(eq, Equilibrium) else eq
-    if bool(getattr(wout, "lasym", False)):
-        raise NotImplementedError(
-            "DMerc is not independently validated for lasym equilibria"
-        )
     return jnp.asarray(np.asarray(wout.DMerc, dtype=float))
 
 
@@ -675,7 +840,7 @@ def l_grad_b_state(
 # ===========================================================================
 
 
-def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, nfp: int, weights, nphi: int,
+def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, bmns_b=None, nfp: int, weights, nphi: int,
              nalpha: int, n_bounce: int, include_bounce_endpoints: bool,
              softness: float, phimin: float):
     """Normalized ``|B|`` along field lines + bounce levels (legacy `_qi_boozer_surface_grid`).
@@ -684,11 +849,15 @@ def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, nfp: int, weights, nphi: int,
     one field period; ``bnorm`` rescales ``|B|`` to [0, 1] per surface.
     """
     bmnc_b = jnp.asarray(bmnc_b, dtype=jnp.float64)
+    bmns_b = (jnp.zeros_like(bmnc_b) if bmns_b is None
+              else jnp.asarray(bmns_b, dtype=bmnc_b.dtype))
     xm_b = jnp.asarray(xm_b, dtype=jnp.float64)
     xn_b = jnp.asarray(xn_b, dtype=jnp.float64)
     iota_b = jnp.asarray(iota_b, dtype=jnp.float64)
     if bmnc_b.ndim != 2:
         raise ValueError(f"bmnc_b must have shape (nsurf, nmodes), got {bmnc_b.shape}")
+    if bmns_b.shape != bmnc_b.shape:
+        raise ValueError("bmns_b must have the same shape as bmnc_b")
     if nphi < 4 or nalpha < 2 or n_bounce < 2:
         raise ValueError("QI residual requires nphi >= 4, nalpha >= 2, n_bounce >= 2")
     nsurf = int(bmnc_b.shape[0])
@@ -702,7 +871,9 @@ def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, nfp: int, weights, nphi: int,
     theta = alpha[None, None, :] + iota_b[:, None, None] * phi[None, :, None]
     angle = (theta[:, :, :, None] * xm_b[None, None, None, :]
              - phi[None, :, None, None] * xn_b[None, None, None, :])
-    bmag = jnp.sum(bmnc_b[:, None, None, :] * jnp.cos(angle), axis=-1)
+    bmag = jnp.sum(
+        bmnc_b[:, None, None, :] * jnp.cos(angle)
+        + bmns_b[:, None, None, :] * jnp.sin(angle), axis=-1)
 
     bmin = jnp.min(bmag, axis=(1, 2), keepdims=True)
     bmax = jnp.max(bmag, axis=(1, 2), keepdims=True)
@@ -721,6 +892,7 @@ def _qi_grid(bmnc_b, xm_b, xn_b, iota_b, *, nfp: int, weights, nphi: int,
 def quasi_isodynamic_residual(
     *,
     bmnc_b,
+    bmns_b=None,
     xm_b,
     xn_b,
     iota_b,
@@ -775,7 +947,8 @@ def quasi_isodynamic_residual(
     (least-squares vector) and ``total`` (its squared norm).
     """
     (weights_arr, phi0, phi1, phi, alpha, bmag, bnorm, levels, eps) = _qi_grid(
-        bmnc_b, xm_b, xn_b, iota_b, nfp=int(nfp), weights=weights, nphi=int(nphi),
+        bmnc_b, xm_b, xn_b, iota_b, bmns_b=bmns_b,
+        nfp=int(nfp), weights=weights, nphi=int(nphi),
         nalpha=int(nalpha), n_bounce=int(n_bounce),
         include_bounce_endpoints=bool(include_bounce_endpoints),
         softness=float(softness), phimin=float(phimin))
@@ -785,6 +958,7 @@ def quasi_isodynamic_residual(
     sqrt_w = jnp.sqrt(weights_arr)[:, None, None]
     tiny = jnp.asarray(jnp.finfo(dtype).tiny, dtype=dtype)
     pieces: list[jnp.ndarray] = []
+    constructed_bnorm = jnp.swapaxes(bnorm, 1, 2)
 
     # -- level-set occupancy width variance + profile consistency ----------
     occupancy = jax.nn.sigmoid((levels[None, None, None, :] - bnorm[:, :, :, None]) / eps)
@@ -878,16 +1052,22 @@ def quasi_isodynamic_residual(
 
         shuffled = jax.vmap(jax.vmap(interp_one, in_axes=(0, 0)), in_axes=(0, 0))(
             x_target, signed_phi)
+        constructed_bnorm = shuffled
         shuffle_res = (shuffled - b_alpha) * sqrt_w * shuffle_profile_weight
         pieces.append(jnp.ravel(shuffle_res)
                       / jnp.sqrt(jnp.asarray(nalpha_ * nphi_, dtype=dtype)))
 
     residuals1d = jnp.concatenate(pieces)
+    bmin_physical = jnp.min(bmag, axis=(1, 2), keepdims=True)
+    bmax_physical = jnp.max(bmag, axis=(1, 2), keepdims=True)
     return {
         "residuals1d": residuals1d,
         "total": jnp.sum(residuals1d * residuals1d),
         "bnorm": bnorm,
         "bmag": bmag,
+        "constructed_bmag": (
+            bmin_physical + jnp.swapaxes(constructed_bnorm, 1, 2)
+            * (bmax_physical - bmin_physical)),
         "levels": levels,
         "phi": phi,
         "alpha": alpha,
@@ -907,8 +1087,9 @@ def boozer_modes_from_wout(
     ``wout`` is a :class:`~vmex.core.wout.WoutData` (or any wout-like
     object accepted by ``Booz_xform.read_wout_data``); ``surfaces`` are
     normalized-flux values matched to the nearest half-mesh surfaces.
-    Returns ``{bmnc_b, xm_b, xn_b, iota_b, nfp, s_b}`` with ``bmnc_b`` shaped
-    ``(nsurf, nmodes)`` — the inputs of :func:`quasi_isodynamic_residual`.
+    Returns ``{bmnc_b, bmns_b, xm_b, xn_b, iota_b, nfp, s_b}`` with the
+    spectra shaped ``(nsurf, nmodes)``. ``bmns_b`` is zero for symmetric
+    equilibria and contains the independent sine spectrum for ``lasym``.
 
     ``booz_xform_jax`` is an optional dependency (soft import).
     """
@@ -928,11 +1109,17 @@ def boozer_modes_from_wout(
     bx.compute_surfs = indices
     bx.run(jit=bool(jit))
     bmnc_b = np.asarray(bx.bmnc_b, dtype=float)
+    bmns_raw = getattr(bx, "bmns_b", None)
+    bmns_b = (np.zeros_like(bmnc_b) if bmns_raw is None
+              else np.asarray(bmns_raw, dtype=float))
     xm_b = np.asarray(bx.xm_b, dtype=float)
     if bmnc_b.shape[0] == xm_b.shape[0]:      # (nmodes, nsurf) -> (nsurf, nmodes)
         bmnc_b = bmnc_b.T
+    if bmns_b.shape[0] == xm_b.shape[0]:
+        bmns_b = bmns_b.T
     return {
         "bmnc_b": bmnc_b,
+        "bmns_b": bmns_b,
         "xm_b": xm_b,
         "xn_b": np.asarray(bx.xn_b, dtype=float),
         "iota_b": np.asarray(bx.iota, dtype=float)[indices],
@@ -961,7 +1148,8 @@ def quasi_isodynamic_residual_from_wout(
     booz = boozer_modes_from_wout(wout, surfaces=surfaces, mboz=mboz, nboz=nboz,
                                   jit=jit_booz)
     return quasi_isodynamic_residual(
-        bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+        bmnc_b=booz["bmnc_b"], bmns_b=booz["bmns_b"],
+        xm_b=booz["xm_b"], xn_b=booz["xn_b"],
         iota_b=booz["iota_b"], nfp=booz["nfp"], **qi_kwargs)
 
 
@@ -998,7 +1186,9 @@ def _n_boundary_families(inp: VmecInput) -> int:
     return 4 if bool(inp.lasym) else 2
 
 
-def boundary_dof_names(inp: VmecInput, max_mode: int) -> list[str]:
+def boundary_dof_names(
+    inp: VmecInput, max_mode: int, *, vary_major_radius: bool = False,
+) -> list[str]:
     """Human-readable labels ("RBC(n,m)" / "ZBS(n,m)", INDATA index order).
 
     For ``lasym`` boundaries the non-symmetric ``RBS(n,m)`` / ``ZBC(n,m)``
@@ -1010,14 +1200,19 @@ def boundary_dof_names(inp: VmecInput, max_mode: int) -> list[str]:
     if bool(inp.lasym):
         names += ([f"RBS({n},{m})" for (m, n) in modes]
                   + [f"ZBC({n},{m})" for (m, n) in modes])
+    if vary_major_radius:
+        names.append("RBC(0,0)")
     return names
 
 
-def pack_boundary(inp: VmecInput, max_mode: int) -> np.ndarray:
+def pack_boundary(
+    inp: VmecInput, max_mode: int, *, vary_major_radius: bool = False,
+) -> np.ndarray:
     """Flat boundary-dof vector (see :func:`_dof_modes`).
 
-    Inverse of :func:`unpack_boundary`; ``RBC(0,0)`` is excluded (fixed major
-    radius).  For a stellarator-symmetric boundary the layout is
+    Inverse of :func:`unpack_boundary`; ``RBC(0,0)`` is excluded by default
+    (fixed major radius) and appended when ``vary_major_radius=True``. For a
+    stellarator-symmetric boundary the layout is
     ``[rbc..., zbs...]``; for ``lasym`` the non-symmetric families are appended
     as ``[rbc..., zbs..., rbs..., zbc...]`` (four families — the same
     ``m = 0 / RBC(0,0)`` fixing convention applies to every family, so the
@@ -1035,10 +1230,44 @@ def pack_boundary(inp: VmecInput, max_mode: int) -> np.ndarray:
         zbc = np.asarray(inp.zbc, dtype=float)
         vals += ([rbs[n + ntor, m] for (m, n) in modes]
                  + [zbc[n + ntor, m] for (m, n) in modes])
+    if vary_major_radius:
+        vals.append(rbc[ntor, 0])
     return np.asarray(vals, dtype=float)
 
 
-def unpack_boundary(inp: VmecInput, x, max_mode: int) -> VmecInput:
+def boundary_arrays_from_x(
+    inp: VmecInput, x, max_mode: int, *, vary_major_radius: bool = False,
+) -> tuple[Array, ...]:
+    """Traceable boundary coefficient arrays reconstructed from ``x``.
+
+    The default returns ``(rbc, zbs)``; an asymmetric input additionally
+    returns ``(rbs, zbc)``. ``vary_major_radius=True`` appends ``RBC(0,0)``
+    to the decision vector without introducing the identically-zero
+    ``ZBS(0,0)`` direction.
+    """
+    modes = _dof_modes(inp, max_mode)
+    nm, ntor = len(modes), int(inp.ntor)
+    nfam = _n_boundary_families(inp)
+    expected = nfam * nm + int(vary_major_radius)
+    x = jnp.asarray(x).ravel()
+    if x.shape[0] != expected:
+        raise ValueError(f"expected {expected} boundary dofs, got {x.shape[0]}")
+    rows = jnp.asarray([n + ntor for m, n in modes])
+    columns = jnp.asarray([m for m, n in modes])
+    rbc = jnp.asarray(inp.rbc).at[rows, columns].set(x[:nm])
+    zbs = jnp.asarray(inp.zbs).at[rows, columns].set(x[nm:2 * nm])
+    if vary_major_radius:
+        rbc = rbc.at[ntor, 0].set(x[nfam * nm])
+    if not bool(inp.lasym):
+        return rbc, zbs
+    rbs = jnp.asarray(inp.rbs).at[rows, columns].set(x[2 * nm:3 * nm])
+    zbc = jnp.asarray(inp.zbc).at[rows, columns].set(x[3 * nm:4 * nm])
+    return rbc, zbs, rbs, zbc
+
+
+def unpack_boundary(
+    inp: VmecInput, x, max_mode: int, *, vary_major_radius: bool = False,
+) -> VmecInput:
     """New :class:`VmecInput` with the boundary dofs ``x`` applied.
 
     Handles both the 2-family symmetric layout and the 4-family ``lasym``
@@ -1048,14 +1277,17 @@ def unpack_boundary(inp: VmecInput, x, max_mode: int) -> VmecInput:
     nm = len(modes)
     x = np.asarray(x, dtype=float).ravel()
     nfam = _n_boundary_families(inp)
-    if x.size != nfam * nm:
-        raise ValueError(f"expected {nfam * nm} dofs, got {x.size}")
+    expected = nfam * nm + int(vary_major_radius)
+    if x.size != expected:
+        raise ValueError(f"expected {expected} dofs, got {x.size}")
     ntor = int(inp.ntor)
     rbc = np.array(inp.rbc, dtype=float, copy=True)
     zbs = np.array(inp.zbs, dtype=float, copy=True)
     for k, (m, n) in enumerate(modes):
         rbc[n + ntor, m] = x[k]
         zbs[n + ntor, m] = x[nm + k]
+    if vary_major_radius:
+        rbc[ntor, 0] = x[nfam * nm]
     if not bool(inp.lasym):
         return dataclasses.replace(inp, rbc=rbc, zbs=zbs)
     rbs = np.array(inp.rbs, dtype=float, copy=True)
@@ -1071,16 +1303,66 @@ def unpack_boundary(inp: VmecInput, x, max_mode: int) -> VmecInput:
 _CURTOR_SCALE = 1.0e6
 
 
+def _current_uses_spline(inp: VmecInput) -> bool:
+    return "spline" in str(inp.pcurr_type).strip().lower()
+
+
+def _current_values(inp: VmecInput, k: int) -> np.ndarray:
+    source = inp.ac_aux_f if _current_uses_spline(inp) else inp.ac
+    return np.asarray(source, dtype=float)[:k]
+
+
+def resample_current_profile(
+    inp: VmecInput,
+    n_spline: int,
+    *,
+    kind: str = "cubic_spline_ip",
+) -> VmecInput:
+    """Represent the current shape on ``n_spline`` uniform spline knots.
+
+    The existing enclosed-current profile is differentiated and sampled at
+    the new knots, so continuation preserves ``I(s)`` before the new knot
+    values are optimized.  ``CURTOR`` remains the independent amplitude.
+    ``kind`` may be ``cubic_spline_ip`` or ``akima_spline_ip``.
+    """
+    if int(inp.ncurr) != 1:
+        raise ValueError("current-profile resampling requires ncurr = 1")
+    n_spline = int(n_spline)
+    if n_spline < 2:
+        raise ValueError("n_spline must be at least 2")
+    kind = str(kind).strip().lower()
+    if kind not in ("cubic_spline_ip", "akima_spline_ip"):
+        raise ValueError("kind must be 'cubic_spline_ip' or 'akima_spline_ip'")
+    from .profiles import current
+
+    knots = jnp.linspace(0.0, 1.0, n_spline)
+    # At exactly s=1, jnp.minimum's chosen generalized derivative averages
+    # the profile derivative with the clamp's zero derivative. Sample the
+    # physical one-sided edge derivative instead.
+    sample_knots = knots.at[-1].set(jnp.nextafter(knots[-1], knots[-2]))
+    enclosed = lambda s: current(  # noqa: E731
+        inp.pcurr_type, inp.ac, inp.ac_aux_s, inp.ac_aux_f, s,
+        bloat=inp.bloat)
+    values = jax.vmap(jax.grad(enclosed))(sample_knots)
+    return dataclasses.replace(
+        inp, pcurr_type=kind, ac_aux_s=np.asarray(knots),
+        ac_aux_f=np.asarray(values))
+
+
 def _current_dof_setup(inp: VmecInput, current_dofs: int | None) -> tuple[int, float]:
     """Validate the optional AC/CURTOR dof block of :func:`least_squares`.
 
-    Returns ``(k, ac_scale)``: ``k`` leading ``AC`` power-series coefficients
-    are freed (0 disables the block); the dof vector then gains ``k + 1``
-    trailing entries ``[ac_0/ac_scale, ..., ac_{k-1}/ac_scale,
-    curtor/1e6]``.  ``ac_scale = max|AC|`` frozen from the seed input (VMEC
-    normalizes the AC profile by its own edge integral, so the coefficient
-    magnitude — ampere-scale for the Zenodo/self_consistent_bootstrap decks,
-    O(1) for shape-normalized decks — is the right trust-region unit; the
+    Returns ``(k, current_scale)``: ``k`` leading ``AC`` coefficients or
+    current-spline values are freed (0 disables the block); the dof vector
+    then gains ``k + 1`` trailing entries followed by ``curtor/1e6``.
+    A spline must retain at least one fixed ordinate because VMEC normalizes
+    its profile by the edge integral; freeing every ordinate as well as
+    ``CURTOR`` would add an exact scale-null direction.
+    ``current_scale`` is the maximum selected coefficient magnitude frozen
+    from the seed input (VMEC normalizes the profile by its edge integral, so
+    magnitude over the selected block — ampere-scale for the
+    Zenodo/self_consistent_bootstrap decks, O(1) for shape-normalized decks —
+    is the right trust-region unit; the
     spec's ``|curtor|`` is the fallback when the seed AC block is all zero).
     """
     if not current_dofs:
@@ -1091,16 +1373,23 @@ def _current_dof_setup(inp: VmecInput, current_dofs: int | None) -> tuple[int, f
     if int(inp.ncurr) != 1:
         raise ValueError("current_dofs requires ncurr = 1 (prescribed current)")
     kind = str(inp.pcurr_type).strip().lower()
-    if "spline" in kind or "line_segment" in kind:
+    if "line_segment" in kind:
         raise ValueError(
-            "current_dofs requires an AC-coefficient pcurr_type (e.g. "
-            f"'power_series'), got {inp.pcurr_type!r}; re-parameterize the "
-            "deck (e.g. with vmex.core.bootstrap.self_consistent_bootstrap, "
-            "whose refit emits a power_series AC) first")
-    if k > int(np.asarray(inp.ac).size):
-        raise ValueError(f"current_dofs = {k} exceeds the dense AC length "
-                         f"{int(np.asarray(inp.ac).size)}")
-    ac_scale = float(np.max(np.abs(np.asarray(inp.ac, dtype=float))))
+            "current_dofs supports AC coefficients or spline knot values, "
+            f"not pcurr_type={inp.pcurr_type!r}")
+    source = inp.ac_aux_f if _current_uses_spline(inp) else inp.ac
+    size = int(np.asarray([] if source is None else source).size)
+    if k > size:
+        label = "current-spline knot" if _current_uses_spline(inp) else "dense AC"
+        raise ValueError(f"current_dofs = {k} exceeds the {label} length {size}")
+    if _current_uses_spline(inp) and k == size:
+        raise ValueError(
+            "current_dofs must be smaller than the number of current-spline "
+            "knots; leave one ordinate fixed because CURTOR sets the amplitude")
+    # Scale only the coefficients that are actually varied. High-order
+    # monomial fits can contain large cancelling coefficients outside this
+    # block; letting those set the scale makes the selected dofs unusably tiny.
+    ac_scale = float(np.max(np.abs(_current_values(inp, k))))
     if ac_scale == 0.0:
         ac_scale = max(abs(float(inp.curtor)), 1.0)
     return k, ac_scale
@@ -1108,7 +1397,7 @@ def _current_dof_setup(inp: VmecInput, current_dofs: int | None) -> tuple[int, f
 
 def _pack_current(inp: VmecInput, k: int, ac_scale: float) -> np.ndarray:
     """Scaled ``[ac_0..ac_{k-1}, curtor]`` dof block (see :func:`_current_dof_setup`)."""
-    return np.concatenate([np.asarray(inp.ac, dtype=float)[:k] / ac_scale,
+    return np.concatenate([_current_values(inp, k) / ac_scale,
                            [float(inp.curtor) / _CURTOR_SCALE]])
 
 
@@ -1117,9 +1406,14 @@ def _apply_current(inp: VmecInput, xc, k: int, ac_scale: float) -> VmecInput:
     xc = np.asarray(xc, dtype=float).ravel()
     if xc.size != k + 1:
         raise ValueError(f"expected {k + 1} current dofs, got {xc.size}")
-    ac = np.array(inp.ac, dtype=float, copy=True)
-    ac[:k] = xc[:k] * ac_scale
-    return dataclasses.replace(inp, ac=ac, curtor=float(xc[k]) * _CURTOR_SCALE)
+    if _current_uses_spline(inp):
+        values = np.array(inp.ac_aux_f, dtype=float, copy=True)
+        values[:k] = xc[:k] * ac_scale
+        return dataclasses.replace(
+            inp, ac_aux_f=values, curtor=float(xc[k]) * _CURTOR_SCALE)
+    values = np.array(inp.ac, dtype=float, copy=True)
+    values[:k] = xc[:k] * ac_scale
+    return dataclasses.replace(inp, ac=values, curtor=float(xc[k]) * _CURTOR_SCALE)
 
 
 def _call_term(fun: Callable, eq: Equilibrium) -> np.ndarray:
@@ -1140,7 +1434,27 @@ def _call_term(fun: Callable, eq: Equilibrium) -> np.ndarray:
     return np.atleast_1d(np.asarray(jax.device_get(value), dtype=float)).ravel()
 
 
-def _ess_scale(inp: VmecInput, max_mode: int, alpha: float) -> np.ndarray:
+def _term_name(function: Callable) -> str:
+    """Concise stable label for one objective tuple callable."""
+    owner = getattr(function, "__self__", function)
+    return str(getattr(owner, "name", getattr(function, "__name__", type(owner).__name__)))
+
+
+def _least_squares_weight(weight: Any, semantics: str) -> float | np.ndarray:
+    """Convert a scalar or per-residual-row tuple weight to its row scale."""
+    values = np.asarray(weight, dtype=float)
+    if values.ndim > 1 or values.size == 0 or not np.all(np.isfinite(values)):
+        raise ValueError("least-squares weight must be a finite scalar or 1-D array")
+    if semantics == "cost":
+        if np.any(values < 0.0):
+            raise ValueError("least-squares weights must be non-negative")
+        values = np.sqrt(values)
+    return float(values) if values.ndim == 0 else values
+
+
+def _ess_scale(
+    inp: VmecInput, max_mode: int, alpha: float, *, vary_major_radius: bool = False,
+) -> np.ndarray:
     """Exponential Spectral Scaling (ESS) trust-region weights per dof.
 
     ``x_scale[i] = exp(-alpha * max(|m_i|, |n_i|)) / exp(-alpha)`` — higher
@@ -1153,6 +1467,8 @@ def _ess_scale(inp: VmecInput, max_mode: int, alpha: float) -> np.ndarray:
     modes = _dof_modes(inp, max_mode)
     levels = np.asarray([max(abs(m), abs(n)) for (m, n) in modes]
                         * _n_boundary_families(inp), dtype=float)
+    if vary_major_radius:
+        levels = np.concatenate([levels, [1.0]])
     if alpha <= 0.0:
         return np.ones_like(levels)
     return np.exp(-alpha * levels) / np.exp(-alpha)
@@ -1176,9 +1492,10 @@ _IMPLICIT_JACOBIAN_DESCRIPTIONS = {
 def _make_finite_difference_problem(
     inp: VmecInput,
     *,
-    objective_terms: Sequence[tuple[Callable, float, float]],
+    objective_terms: Sequence[tuple[Callable, float, Any]],
     loss: Callable | None,
     max_mode: int,
+    vary_major_radius: bool,
     x0: np.ndarray | None,
     current_dofs: int | None,
     weight_semantics: str,
@@ -1189,6 +1506,7 @@ def _make_finite_difference_problem(
     use_ess: bool,
     ess_alpha: float,
     solve_kwargs: dict[str, Any],
+    initial_state: SpectralState | None,
     device: Any,
     problem_class: type[VmecProblem],
 ) -> VmecProblem:
@@ -1198,16 +1516,19 @@ def _make_finite_difference_problem(
     if weight_semantics not in ("cost", "residual"):
         raise ValueError("weight_semantics must be 'cost' or 'residual'")
     k_cur, ac_scale = _current_dof_setup(inp, current_dofs)
-    nboundary = _n_boundary_families(inp) * len(_dof_modes(inp, max_mode))
+    nboundary = (_n_boundary_families(inp) * len(_dof_modes(inp, max_mode))
+                 + int(vary_major_radius))
     if x0 is None:
-        x0 = pack_boundary(inp, max_mode)
+        x0 = pack_boundary(inp, max_mode, vary_major_radius=vary_major_radius)
         if k_cur:
             x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
     x0 = np.asarray(x0, dtype=float)
     solve_kwargs.setdefault("device", device)
 
     def input_from_x(x: np.ndarray) -> VmecInput:
-        result = unpack_boundary(inp, np.asarray(x)[:nboundary], max_mode)
+        result = unpack_boundary(
+            inp, np.asarray(x)[:nboundary], max_mode,
+            vary_major_radius=vary_major_radius)
         if k_cur:
             result = _apply_current(
                 result, np.asarray(x)[nboundary:], k_cur, ac_scale
@@ -1215,7 +1536,7 @@ def _make_finite_difference_problem(
         return result
 
     def x_from_input(source: VmecInput) -> np.ndarray:
-        x = pack_boundary(source, max_mode)
+        x = pack_boundary(source, max_mode, vary_major_radius=vary_major_radius)
         if k_cur:
             x = np.concatenate([x, _pack_current(source, k_cur, ac_scale)])
         return x
@@ -1233,18 +1554,15 @@ def _make_finite_difference_problem(
             cached = holder["cache"]
             if cached is not None and cached[0] == key:
                 return cached[1]
-        solved = solve_equilibrium(input_from_x(x), **solve_kwargs)
+        solved = solve_equilibrium(
+            input_from_x(x), initial_state=initial_state, **solve_kwargs)
         with lock:
             holder["cache"] = (key, solved)
         return solved
 
     weights = []
     for function, target, weight in objective_terms:
-        scale = float(weight)
-        if weight_semantics == "cost":
-            if scale < 0.0:
-                raise ValueError("least-squares weights must be non-negative")
-            scale = float(np.sqrt(scale))
+        scale = _least_squares_weight(weight, weight_semantics)
         weights.append((function, float(target), scale))
 
     def raw_residual(x: np.ndarray) -> np.ndarray:
@@ -1263,7 +1581,11 @@ def _make_finite_difference_problem(
 
     # The seed is strict and establishes output shape.  Subsequent failed
     # probes receive a deterministic finite penalty so parallel FD completes.
-    initial_rows = None if loss is not None else raw_residual(x0)
+    initial_parts = None if loss is not None else [
+        scale * (_call_term(function, equilibrium(x0)) - target)
+        for function, target, scale in weights
+    ]
+    initial_rows = None if initial_parts is None else np.concatenate(initial_parts)
     initial_value = raw_scalar(x0)
     if not np.isfinite(initial_value):
         raise FloatingPointError("non-finite objective at the initial point")
@@ -1302,13 +1624,22 @@ def _make_finite_difference_problem(
         "rel_step": fd_rel_step,
         "workers": workers,
     }
-    names = list(boundary_dof_names(inp, max_mode))
+    names = list(boundary_dof_names(
+        inp, max_mode, vary_major_radius=vary_major_radius))
     if k_cur:
-        names.extend([f"AC({j})/{ac_scale:.6g}" for j in range(k_cur)])
+        label = "AC_AUX_F" if _current_uses_spline(inp) else "AC"
+        names.extend([f"{label}({j})/{ac_scale:.6g}" for j in range(k_cur)])
         names.append("CURTOR/1e6")
-    scales = _ess_scale(inp, max_mode, float(ess_alpha)) if use_ess else None
+    scales = _ess_scale(
+        inp, max_mode, float(ess_alpha),
+        vary_major_radius=vary_major_radius) if use_ess else None
     if scales is not None and k_cur:
         scales = np.concatenate([scales, np.ones(k_cur + 1)])
+    starts = np.cumsum([0] + ([] if initial_parts is None else [p.size for p in initial_parts]))
+    term_slices = tuple(
+        (_term_name(function), int(starts[j]), int(starts[j + 1]))
+        for j, (function, _target, _weight) in enumerate(objective_terms)
+    )
     common = dict(
         names=names,
         bounds=bounds,
@@ -1316,6 +1647,9 @@ def _make_finite_difference_problem(
         input_from_x=input_from_x,
         x_from_input=x_from_input,
         equilibrium_from_x=equilibrium,
+        boundary_from_x=lambda x: boundary_arrays_from_x(
+            inp, np.asarray(x)[:nboundary], max_mode,
+            vary_major_radius=vary_major_radius),
         metadata={
             "derivative_method": "finite_difference",
             "derivative_description": (
@@ -1330,6 +1664,8 @@ def _make_finite_difference_problem(
                 else "weight multiplies residual"
             ),
             "max_mode": max_mode,
+            "vary_major_radius": vary_major_radius,
+            "term_slices": term_slices,
             "holder": holder,
         },
     )
@@ -1373,9 +1709,10 @@ def _with_forward_controls(
 def make_problem(
     inp: VmecInput,
     *,
-    objective_terms: Sequence[tuple[Callable, float, float]] | None = None,
+    objective_terms: Sequence[tuple[Callable, float, Any]] | None = None,
     loss: Callable | None = None,
     max_mode: int = 1,
+    vary_major_radius: bool = False,
     x0: np.ndarray | None = None,
     current_dofs: int | None = None,
     derivative_method: str = "implicit",
@@ -1386,6 +1723,8 @@ def make_problem(
     jacobian_batch_size: int | str | None = 1,
     implicit_jacobian_method: str = "auto",
     adjoint_tol: float = 1e-6,
+    jacobian_adjoint_tol: float = 1e-4,
+    jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
     forward_ftol: float | None = None,
@@ -1394,9 +1733,11 @@ def make_problem(
     warm_start: str | None = "perturbation",
     use_ess: bool = True,
     ess_alpha: float = 1.2,
+    evaluation_progress: bool = False,
     bounds: Any = None,
     device: Any = AUTO,
     solve_kwargs: dict | None = None,
+    restart_from: Any = None,
     progress: bool = False,
     report_interval: float = 10.0,
     progress_stream: Any = None,
@@ -1451,16 +1792,28 @@ def make_problem(
 
     ``adjoint_tol`` is a relative Krylov tolerance with a certified true
     residual check; ``adjoint_maxiter`` is the restart budget.
+
+    ``restart_from`` seeds the first equilibrium from a previous WOUT,
+    :class:`Equilibrium`, or solver result.  This is useful when a continuation
+    stage changes ``mpol``, ``ntor``, or radial resolution: trial hot restarts
+    then continue from the remapped converged state instead of a cold axis
+    guess.
     """
     if (objective_terms is None) == (loss is None):
         raise ValueError("provide exactly one of objective_terms or loss")
     inp = _with_forward_controls(inp, forward_ftol, forward_max_iterations)
+    initial_state = None
+    if restart_from is not None:
+        from .restart import restart_state
+        source = restart_from.wout if isinstance(restart_from, Equilibrium) else restart_from
+        initial_state = restart_state(source, inp)
     if derivative_method == "finite_difference":
         problem = _make_finite_difference_problem(
             inp,
             objective_terms=list(objective_terms or ()),
             loss=loss,
             max_mode=int(max_mode),
+            vary_major_radius=bool(vary_major_radius),
             x0=x0,
             current_dofs=current_dofs,
             weight_semantics=weight_semantics,
@@ -1471,6 +1824,7 @@ def make_problem(
             use_ess=use_ess,
             ess_alpha=ess_alpha,
             solve_kwargs=dict(solve_kwargs or {}),
+            initial_state=initial_state,
             device=device,
             problem_class=problem_class,
         )
@@ -1505,7 +1859,9 @@ def make_problem(
             f"got {implicit_jacobian_method!r}"
         ) from exc
     max_mode = int(max_mode)
-    scales = _ess_scale(inp, max_mode, float(ess_alpha)) if use_ess else None
+    scales = _ess_scale(
+        inp, max_mode, float(ess_alpha),
+        vary_major_radius=vary_major_radius) if use_ess else None
     k_cur, _ = _current_dof_setup(inp, current_dofs)
     if scales is not None and k_cur:
         scales = np.concatenate([scales, np.ones(k_cur + 1)])
@@ -1514,15 +1870,20 @@ def make_problem(
             list(objective_terms or ()),
             inp,
             max_mode=max_mode,
+            vary_major_radius=bool(vary_major_radius),
             x0=x0,
             current_dofs=current_dofs,
+            evaluation_progress=evaluation_progress,
             jac_chunk_size=jacobian_batch_size,
             jac_solver=jac_solver,
             adjoint_tol=adjoint_tol,
+            jacobian_adjoint_tol=jacobian_adjoint_tol,
+            jacobian_adjoint_maxiter=jacobian_adjoint_maxiter,
             adjoint_maxiter=adjoint_maxiter,
             max_fsq_ratio=max_fsq_ratio,
             warm_start=(warm_start if hot_restart else None),
             solve_kwargs=dict(solve_kwargs or {}),
+            initial_state=initial_state,
             device=device,
             return_problem=True,
             problem_class=problem_class,
@@ -1555,16 +1916,19 @@ def make_problem(
 
 
 def least_squares(
-    objective_terms: Sequence[tuple[Callable, float, float]],
+    objective_terms: Sequence[tuple[Callable, float, Any]],
     inp: VmecInput,
     *,
     max_mode: int | Sequence[int] = 1,
+    vary_major_radius: bool = False,
     x0: np.ndarray | None = None,
     current_dofs: int | None = None,
     jac: str | None = None,
     jac_chunk_size: int | str | None = "auto",
     jac_solver: str = "auto",
     adjoint_tol: float = 1e-6,
+    jacobian_adjoint_tol: float = 1e-4,
+    jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
     forward_ftol: float | None = None,
@@ -1593,20 +1957,20 @@ def least_squares(
     call's ``result.input``.
 
     ``current_dofs = k`` additionally frees the current profile: the first
-    ``k`` ``AC`` power-series coefficients (``pcurr_type="power_series"``,
-    i.e. ``I'(s)``) plus ``CURTOR``, appended to the dof vector as
-    ``[..boundary.., ac_0/ac_scale, ..., curtor/1e6]`` (``ac_scale`` frozen
-    from the seed) so the trust region sees O(1) numbers.  Requires
-    ``ncurr = 1`` and an AC-parameterized ``pcurr_type`` (splines are
-    rejected — re-fit to a power series first, e.g. via
-    :func:`vmex.core.bootstrap.self_consistent_bootstrap`).  Both gradient
+    ``k`` ``AC`` coefficients, or the first ``k`` ``AC_AUX_F`` values for a
+    spline profile, plus ``CURTOR``.  For an ``n``-knot spline, use
+    ``current_dofs=n-1``: the remaining fixed ordinate removes the profile's
+    overall-scale null direction because ``CURTOR`` already sets that scale.
+    The values are scaled by their frozen
+    seed magnitude so the trust region sees O(1) numbers.  Requires
+    ``ncurr = 1``; :func:`resample_current_profile` changes spline resolution
+    between continuation stages without changing the represented ``I(s)``.
+    Both gradient
     modes support it (finite differences re-solve per current dof;
     ``jac="implicit"`` adds ``k + 1`` one-hot tangent rows through
-    ``ImplicitParams.ac``/``curtor``).  VMEC normalizes the AC profile by
+    ``ImplicitParams.ac`` or ``ac_aux_f`` and ``curtor``).  VMEC normalizes the AC profile by
     its own edge integral (only the *shape* of ``I'`` matters; ``CURTOR``
-    sets the amplitude), so the overall-AC-scale direction is
-    objective-neutral; the trust-region solvers handle the resulting
-    Jacobian null direction.  This is the dof set of
+    sets the amplitude).  This is the dof set of
     :class:`vmex.core.bootstrap.RedlBootstrapMismatch`.
 
     ``max_mode`` may be a single int or an increasing schedule (e.g.
@@ -1700,6 +2064,7 @@ def least_squares(
         for mm in modes_schedule:
             result = least_squares(
                 objective_terms, current, max_mode=mm,
+                vary_major_radius=vary_major_radius,
                 current_dofs=current_dofs, jac=jac,
                 jac_chunk_size=jac_chunk_size, jac_solver=jac_solver,
                 adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
@@ -1715,7 +2080,9 @@ def least_squares(
     k_cur, ac_scale = _current_dof_setup(inp, current_dofs)
 
     def _ess_scale_full() -> np.ndarray:
-        scale = _ess_scale(inp, max_mode, float(ess_alpha))
+        scale = _ess_scale(
+            inp, max_mode, float(ess_alpha),
+            vary_major_radius=vary_major_radius)
         if k_cur:  # current dofs are already O(1) by construction
             scale = np.concatenate([scale, np.ones(k_cur + 1)])
         return scale
@@ -1725,6 +2092,7 @@ def least_squares(
             scipy_kwargs.setdefault("x_scale", _ess_scale_full())
         return _least_squares_implicit(
             objective_terms, inp, max_mode=max_mode, x0=x0,
+            vary_major_radius=vary_major_radius,
             current_dofs=current_dofs,
             jac_chunk_size=jac_chunk_size, jac_solver=jac_solver,
             adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
@@ -1740,13 +2108,16 @@ def least_squares(
     if use_ess:
         scipy_kwargs.setdefault("x_scale", _ess_scale_full())
     if x0 is None:
-        x0 = pack_boundary(inp, max_mode)
+        x0 = pack_boundary(inp, max_mode, vary_major_radius=vary_major_radius)
         if k_cur:
             x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
-    nb = _n_boundary_families(inp) * len(_dof_modes(inp, max_mode))
+    nb = (_n_boundary_families(inp) * len(_dof_modes(inp, max_mode))
+          + int(vary_major_radius))
 
     def unpack_full(x: np.ndarray) -> VmecInput:
-        trial = unpack_boundary(inp, np.asarray(x, dtype=float)[:nb], max_mode)
+        trial = unpack_boundary(
+            inp, np.asarray(x, dtype=float)[:nb], max_mode,
+            vary_major_radius=vary_major_radius)
         if k_cur:
             trial = _apply_current(trial, np.asarray(x, dtype=float)[nb:],
                                    k_cur, ac_scale)
@@ -1790,10 +2161,11 @@ def least_squares(
 
 
 def minimize(
-    objective_terms: Sequence[tuple[Callable, float, float]],
+    objective_terms: Sequence[tuple[Callable, float, Any]],
     inp: VmecInput,
     *,
     max_mode: int | Sequence[int] = 1,
+    vary_major_radius: bool = False,
     x0: np.ndarray | None = None,
     current_dofs: int | None = None,
     hot_restart: bool = True,
@@ -1842,6 +2214,7 @@ def minimize(
         for mm in modes_schedule:
             result = minimize(
                 objective_terms, current, max_mode=mm,
+                vary_major_radius=vary_major_radius,
                 current_dofs=current_dofs, hot_restart=hot_restart,
                 device=device, solve_kwargs=solve_kwargs, verbose=verbose,
                 method=method, adjoint_tol=adjoint_tol,
@@ -1853,6 +2226,7 @@ def minimize(
         return result
     return _least_squares_implicit(
         objective_terms, inp, max_mode=modes_schedule[0], x0=x0,
+        vary_major_radius=vary_major_radius,
         current_dofs=current_dofs, jac_solver="reverse",
         warm_start=("state" if hot_restart else None),
         adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
@@ -1898,16 +2272,50 @@ def _traceable_term(fun: Callable) -> Callable:
         "l_grad_b_state alternatives.")
 
 
+def residuals_from_tuples(
+    state: SpectralState,
+    runtime: SolverRuntime,
+    objective_terms: Sequence[tuple[Callable, float, Any]],
+    *,
+    weight_semantics: str = "cost",
+) -> jnp.ndarray:
+    """Stack traceable ``(function, target, weight)`` objective rows.
+
+    With the default ``weight_semantics="cost"``, each tuple contributes
+    ``sqrt(weight) * (function(state, runtime) - target)`` so the usual scalar
+    objective is simply ``0.5 * residuals @ residuals``.  This small public
+    building block is useful when a user owns the equilibrium map, such as a
+    differentiable free-boundary solve, and wants to pass the resulting value
+    and gradient to SciPy, JAXopt, Optax, or a custom optimizer directly.
+    """
+    if weight_semantics not in ("cost", "residual"):
+        raise ValueError("weight_semantics must be 'cost' or 'residual'")
+    rows = []
+    for function, target, weight in objective_terms:
+        scale = _least_squares_weight(weight, weight_semantics)
+        traceable = _traceable_term(function)
+        rows.append(jnp.atleast_1d(
+            jnp.asarray(scale) * (jnp.asarray(traceable(state, runtime)) - target)
+        ).ravel())
+    if not rows:
+        raise ValueError("provide at least one objective tuple")
+    return jnp.concatenate(rows)
+
+
 def _least_squares_implicit(
-    objective_terms: Sequence[tuple[Callable, float, float]],
+    objective_terms: Sequence[tuple[Callable, float, Any]],
     inp: VmecInput,
     *,
     max_mode: int,
+    vary_major_radius: bool = False,
     x0: np.ndarray | None,
     current_dofs: int | None = None,
+    evaluation_progress: bool = False,
     jac_chunk_size: int | str | None = "auto",
     jac_solver: str = "auto",
     adjoint_tol: float = 1e-6,
+    jacobian_adjoint_tol: float = 1e-4,
+    jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
     warm_start: str | None = "perturbation",
@@ -1921,6 +2329,7 @@ def _least_squares_implicit(
     scalar_objective: Callable | None = None,
     problem_bounds: Any = None,
     problem_scales: np.ndarray | None = None,
+    initial_state: SpectralState | None = None,
     **scipy_kwargs,
 ):
     """Single-stage boundary least squares with implicit-gradient Jacobians.
@@ -1960,12 +2369,8 @@ def _least_squares_implicit(
         raise ValueError("provide objective_terms or scalar_objective, not both")
     terms = []
     for f, t, w in objective_terms:
-        weight = float(w)
-        if weight_semantics == "cost":
-            if weight < 0.0:
-                raise ValueError("least-squares weights must be non-negative")
-            weight = float(np.sqrt(weight))
-        terms.append((_traceable_term(f), float(t), weight))
+        weight = _least_squares_weight(w, weight_semantics)
+        terms.append((_traceable_term(f), float(t), jnp.asarray(weight)))
     traceable_scalar = (
         None if scalar_objective is None else _traceable_term(scalar_objective)
     )
@@ -1979,7 +2384,7 @@ def _least_squares_implicit(
     # tangents through ImplicitParams.ac / .curtor (runtime_from_params
     # already traces both).
     k_cur, ac_scale = _current_dof_setup(inp, current_dofs)
-    nboundary = nfam * nm
+    nboundary = nfam * nm + int(vary_major_radius)
     ndof = nboundary + (k_cur + 1 if k_cur else 0)
     # multigrid=True routes the host solve through solve_multigrid so
     # NITER-exhausted trials are penalized instead of raising (same trial
@@ -1995,6 +2400,8 @@ def _least_squares_implicit(
         multigrid=True,
         hot_restart=(warm_start is not None),
         adjoint_tol=adjoint_tol,
+        jacobian_adjoint_tol=jacobian_adjoint_tol,
+        jacobian_adjoint_maxiter=jacobian_adjoint_maxiter,
         adjoint_maxiter=adjoint_maxiter,
         max_fsq_ratio=max_fsq_ratio,
     )
@@ -2006,6 +2413,8 @@ def _least_squares_implicit(
     # their own — no outer jax.default_device context needed.
     jac_device = resolve_implicit_device(device, cfg.resolution)
     cfg = dataclasses.replace(cfg, device=jac_device)
+    if initial_state is not None:
+        imp._HOT_CACHE[cfg] = initial_state
 
     def _place(x: np.ndarray) -> jnp.ndarray:
         if jac_device is None:
@@ -2016,7 +2425,7 @@ def _least_squares_implicit(
     imp._template_runtime(cfg)  # host-built template: warm the per-cfg cache
     # eagerly so runtime_from_params stays traceable under jit below
     if x0 is None:
-        x0 = pack_boundary(inp, max_mode)
+        x0 = pack_boundary(inp, max_mode, vary_major_radius=vary_major_radius)
         if k_cur:
             x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
     x0 = np.asarray(x0, dtype=float)
@@ -2027,11 +2436,19 @@ def _least_squares_implicit(
         if lasym:  # non-symmetric families [rbs..., zbc...] (see pack_boundary)
             repl["rbs"] = params0.rbs.at[row_idx, col_idx].set(x[2 * nm:3 * nm])
             repl["zbc"] = params0.zbc.at[row_idx, col_idx].set(x[3 * nm:4 * nm])
+        if vary_major_radius:
+            repl["rbc"] = repl["rbc"].at[ntor, 0].set(x[nfam * nm])
         params = dataclasses.replace(params0, **repl)
         if k_cur:
-            ac = params0.ac.at[:k_cur].set(x[nboundary:nboundary + k_cur] * ac_scale)
-            params = dataclasses.replace(
-                params, ac=ac, curtor=x[nboundary + k_cur] * _CURTOR_SCALE)
+            values = x[nboundary:nboundary + k_cur] * ac_scale
+            if _current_uses_spline(inp):
+                params = dataclasses.replace(
+                    params, ac_aux_f=params0.ac_aux_f.at[:k_cur].set(values),
+                    curtor=x[nboundary + k_cur] * _CURTOR_SCALE)
+            else:
+                params = dataclasses.replace(
+                    params, ac=params0.ac.at[:k_cur].set(values),
+                    curtor=x[nboundary + k_cur] * _CURTOR_SCALE)
         return params
 
     def term_rows(state, rt) -> jnp.ndarray:
@@ -2057,6 +2474,17 @@ def _least_squares_implicit(
     if initial_rows.size == 0 or not np.all(np.isfinite(initial_rows)):
         raise FloatingPointError("non-finite or empty objective at the initial point")
     residual_size = int(initial_rows.size)
+    if traceable_scalar is None:
+        sizes = [int(np.asarray(jax.device_get(
+            jnp.atleast_1d(w * (jnp.asarray(f(state0, runtime0)) - t)).ravel()
+        )).size) for f, t, w in terms]
+        starts = np.cumsum([0] + sizes)
+        term_slices = tuple(
+            (_term_name(function), int(starts[j]), int(starts[j + 1]))
+            for j, (function, _target, _weight) in enumerate(objective_terms)
+        )
+    else:
+        term_slices = ()
     x0_device = _place(x0)
     x_penalty_scale = jnp.maximum(jnp.abs(x0_device), 1.0e-2)
     x_penalty_scale_host = np.maximum(np.abs(x0), 1.0e-2)
@@ -2200,6 +2628,7 @@ def _least_squares_implicit(
     t_rbs = np.zeros((ndof,) + np.shape(params0.rbs))
     t_zbc = np.zeros((ndof,) + np.shape(params0.zbc))
     t_ac = np.zeros((ndof,) + np.shape(params0.ac))
+    t_ac_aux_f = np.zeros((ndof,) + np.shape(params0.ac_aux_f))
     t_curtor = np.zeros((ndof,))
     for j in range(nm):
         t_rbc[j, row_idx[j], col_idx[j]] = 1.0
@@ -2207,17 +2636,21 @@ def _least_squares_implicit(
         if lasym:
             t_rbs[2 * nm + j, row_idx[j], col_idx[j]] = 1.0
             t_zbc[3 * nm + j, row_idx[j], col_idx[j]] = 1.0
+    if vary_major_radius:
+        t_rbc[nfam * nm, ntor, 0] = 1.0
     for j in range(k_cur):
-        t_ac[nboundary + j, j] = ac_scale
+        target = t_ac_aux_f if _current_uses_spline(inp) else t_ac
+        target[nboundary + j, j] = ac_scale
     if k_cur:
         t_curtor[nboundary + k_cur] = _CURTOR_SCALE
     zerop = jax.tree.map(lambda a: _place(np.zeros(a.shape)), params0)
     if lasym:
         tangent_stack = tuple(map(
-            _place, (t_rbc, t_zbs, t_rbs, t_zbc, t_ac, t_curtor)
+            _place, (t_rbc, t_zbs, t_rbs, t_zbc, t_ac, t_ac_aux_f, t_curtor)
         ))
     else:
-        tangent_stack = tuple(map(_place, (t_rbc, t_zbs, t_ac, t_curtor)))
+        tangent_stack = tuple(map(
+            _place, (t_rbc, t_zbs, t_ac, t_ac_aux_f, t_curtor)))
 
     # R17.1 memory knob: chunk_size None == one full-width batch, while an int
     # / "auto" caps peak Jacobian memory at that many dofs at a time.  Route
@@ -2265,9 +2698,11 @@ def _least_squares_implicit(
             if lasym:
                 return dataclasses.replace(zerop, rbc=tp[0], zbs=tp[1],
                                            rbs=tp[2], zbc=tp[3],
-                                           ac=tp[4], curtor=tp[5])
+                                           ac=tp[4], ac_aux_f=tp[5],
+                                           curtor=tp[6])
             return dataclasses.replace(zerop, rbc=tp[0], zbs=tp[1],
-                                       ac=tp[2], curtor=tp[3])
+                                       ac=tp[2], ac_aux_f=tp[3],
+                                       curtor=tp[4])
 
         def rhs_of(tp):
             b = jax.jvp(lambda prm: F(z_star, prm), (params,), (tp,))[1]
@@ -2277,6 +2712,15 @@ def _least_squares_implicit(
             return jax.jvp(G, (z_star, params), (P(dz), tp))[1]
 
         return Fz, tangent_of, rhs_of, column_of, (params, frozen, P, z_star)
+
+    # The Jacobian certifies its columns against its own tolerance: a
+    # least-squares Jacobian only has to point a trust-region step, while the
+    # scalar-gradient lane keeps cfg.adjoint_tol for the quasi-Newton curvature
+    # it accumulates.  Passed as a value, never as a replacement config: a
+    # second config identity misses the caches keyed on this one and forces a
+    # runtime rebuild inside the traced Jacobian.
+    certify_rtol = float(cfg.jacobian_adjoint_tol)
+    certify_maxiter = int(cfg.jacobian_adjoint_maxiter)
 
     def jacobian_rows(x: jnp.ndarray):
         """Exact residual Jacobian by *forward* implicit differentiation.
@@ -2294,14 +2738,16 @@ def _least_squares_implicit(
 
         def column(tp_stack):
             tp = tangent_of(tp_stack)
-            dz, _ = imp._adjoint_solve(Fz, rhs_of(tp), cfg)
-            return column_of(dz, tp), dz
+            dz, krylov = imp._adjoint_solve(
+                Fz, rhs_of(tp), cfg, rtol=certify_rtol,
+                max_restarts=certify_maxiter)
+            return column_of(dz, tp), dz, krylov
 
         tangent_chunk = ndof if chunk is None else chunk
-        cols, dz_cols = chunk_map(
+        cols, dz_cols, krylov = chunk_map(
             column, tangent_stack, chunk_size=tangent_chunk
         )
-        return jnp.transpose(cols), dz_cols
+        return jnp.transpose(cols), dz_cols, _certifier_summary(krylov)
 
     # Amortized block-tridiagonal variant.  The *raw* residual formulation
     # (un-preconditioned scalxc-scaled spectral force; implicit.residual_fn)
@@ -2338,10 +2784,11 @@ def _least_squares_implicit(
             _jac_parts(x)
         tangent_batch = jax.vmap(tangent_of)(tangent_stack)
         tangent_chunk = ndof if chunk is None else chunk
-        dz0, _ = imp._implicit_evolved_tangent_multi_rhs(
+        dz0, report = imp._implicit_evolved_tangent_multi_rhs(
             params, cfg, frozen, mask_const, tangent_batch,
             active_fields=active_fields, probe_chunk_size=probe_chunk,
-            response_chunk_size=tangent_chunk,
+            response_chunk_size=tangent_chunk, certify_rtol=certify_rtol,
+            certify_maxiter=certify_maxiter,
         )
 
         def column(args):
@@ -2352,7 +2799,7 @@ def _least_squares_implicit(
         cols, dz_cols = chunk_map(
             column, (tangent_stack, dz0), chunk_size=tangent_chunk
         )
-        return jnp.transpose(cols), dz_cols
+        return jnp.transpose(cols), dz_cols, _certifier_summary(report)
 
     if jac_solver not in ("auto", "block", "gmres", "reverse"):
         raise ValueError(
@@ -2376,6 +2823,9 @@ def _least_squares_implicit(
         "last_jac_key": None,
         "failed_trials": 0,
         "derivative_fallbacks": 0,
+        "jac_certifier_iterations": 0,
+        "jac_certifier_unconverged": 0,
+        "jac_certifier_worst": 0,
     }
     # R25.4 perturbation warm start (DESC arXiv:2203.15927 ``eq.perturb``
     # before ``eq.solve``): each jac(x_ref) call stashes its linearization —
@@ -2476,10 +2926,11 @@ def _least_squares_implicit(
                 )
                 holder["lin"] = None
             else:
-                rows, dz_cols = jac_jit(_place(x))
+                rows, dz_cols, summary = jac_jit(_place(x))
                 if warm_start == "perturbation":
                     _stash_linearization(np.asarray(x, dtype=float), dz_cols)
                 jac = np.asarray(jax.device_get(rows), dtype=float)
+                _record_certifier(holder, summary, cfg)
         except Exception as exc:
             primary_error = exc
             jac = None
@@ -2491,8 +2942,9 @@ def _least_squares_implicit(
         if jac is None or not np.all(np.isfinite(jac)):
             if jac_solver in ("auto", "block"):
                 try:
-                    rows, dz_cols = gmres_jit(_place(x))
+                    rows, dz_cols, summary = gmres_jit(_place(x))
                     candidate = np.asarray(jax.device_get(rows), dtype=float)
+                    _record_certifier(holder, summary, cfg)
                     if np.all(np.isfinite(candidate)):
                         holder["derivative_fallbacks"] += 1
                         if warm_start == "perturbation":
@@ -2598,7 +3050,9 @@ def _least_squares_implicit(
         return value
 
     def input_from_x(x: np.ndarray) -> VmecInput:
-        result_input = unpack_boundary(inp, np.asarray(x)[:nboundary], max_mode)
+        result_input = unpack_boundary(
+            inp, np.asarray(x)[:nboundary], max_mode,
+            vary_major_radius=vary_major_radius)
         if k_cur:
             result_input = _apply_current(
                 result_input, np.asarray(x)[nboundary:], k_cur, ac_scale
@@ -2606,22 +3060,36 @@ def _least_squares_implicit(
         return result_input
 
     def x_from_input(source: VmecInput) -> np.ndarray:
-        x = pack_boundary(source, max_mode)
+        x = pack_boundary(
+            source, max_mode, vary_major_radius=vary_major_radius)
         if k_cur:
             x = np.concatenate([x, _pack_current(source, k_cur, ac_scale)])
         return x
 
-    def equilibrium_from_x(x: np.ndarray) -> Equilibrium:
+    def equilibrium_from_x(
+        x: np.ndarray, *, newton_iterations: int = 10
+    ) -> Equilibrium:
         """Materialize the exact accepted state already used by the objective."""
+        from .extender import VmecExtender, VmecInteriorField
+
         x = np.asarray(x, dtype=float)
-        if traceable_scalar is None:
-            fun(x)
-        else:
-            scalar_fun_host(x)
         params_np = jax.tree.map(
             lambda a: np.asarray(a, dtype=np.float64), params_of(_place(x))
         )
         hit = imp._LAST_SOLVE.get(cfg)
+        if (
+            hit is None
+            or hit[0] != imp._params_key(params_np)
+            or imp._LAST_STATUS_ERROR.get(cfg) is not None
+        ):
+            # Problem construction and accepted optimizer evaluations already
+            # leave this exact equilibrium in the host cache.  Avoid compiling
+            # a second scalar graph merely to materialize that cached state.
+            if traceable_scalar is None:
+                fun(x)
+            else:
+                scalar_fun_host(x)
+            hit = imp._LAST_SOLVE.get(cfg)
         if hit is None or hit[0] != imp._params_key(params_np):
             raise RuntimeError(
                 "decision vector did not produce a usable VMEC equilibrium"
@@ -2633,11 +3101,47 @@ def _least_squares_implicit(
             result_input,
             resolution_from_input(result_input, ns=ns),
         )
+
+        def exterior_field_factory(**kwargs):
+            from . import virtual_casing as vc
+
+            nphi = int(kwargs.pop("nphi", 32)); ntheta = int(kwargs.pop("ntheta", 32))
+            external_field = kwargs.pop("external_field", None)
+            external_parameters = kwargs.pop("external_parameters", None)
+            external_field_from_parameters = kwargs.pop(
+                "external_field_from_parameters", None)
+            external_dof_names = tuple(kwargs.pop("external_dof_names", ()))
+            digits = int(kwargs.pop("digits", 6)); levels = kwargs.pop("levels", None)
+            plasma = kwargs.pop("plasma", "auto")
+            if plasma not in ("auto", "include", "vacuum"):
+                raise ValueError("plasma must be 'auto', 'include', or 'vacuum'")
+            if kwargs:
+                unexpected = ", ".join(sorted(kwargs))
+                raise TypeError(f"unexpected exterior-field options: {unexpected}")
+            if plasma == "vacuum":
+                return VmecExtender(external_field)
+
+            def surface_data(parameters):
+                state, live_runtime = jax_state_runtime(parameters)
+                return vc.surface_field_data_from_state(
+                    inp, state, runtime=live_runtime, nphi=nphi, ntheta=ntheta)
+
+            return VmecExtender.from_parameterized_surface_data(
+                surface_data, _place(x), external_field=external_field,
+                external_parameters=external_parameters,
+                external_field_from_parameters=external_field_from_parameters,
+                external_dof_names=external_dof_names,
+                digits=digits, levels=levels, dof_names=tuple(names))
+
         return Equilibrium(
             inp=result_input,
             state=result.state,
             runtime=runtime,
             result=result,
+            field_factory=lambda: VmecInteriorField.from_parameterized_state(
+                inp, jax_state_runtime, _place(x), dof_names=tuple(names),
+                newton_iterations=newton_iterations),
+            exterior_field_factory=exterior_field_factory,
         )
 
     def jax_residual_jacobian(x: jnp.ndarray) -> jnp.ndarray:
@@ -2667,6 +3171,17 @@ def _least_squares_implicit(
 
     residual_value_grad_jit = jax.jit(residual_value_and_gradient)
 
+    def jax_state_runtime(x: jnp.ndarray):
+        """Converged implicit state/runtime pair for differentiable field APIs."""
+        params = params_of(x)
+        return imp.solve_implicit(params, cfg), imp.runtime_from_params(params, cfg)
+
+    def jax_state_runtime_status(x: jnp.ndarray):
+        """Exception-free state/runtime/status triple for composite objectives."""
+        params = params_of(x)
+        state, status, _, _ = imp.solve_implicit_status(params, cfg)
+        return state, imp.runtime_from_params(params, cfg), status
+
     @jax.custom_vjp
     def residual_scalar_public(x: jnp.ndarray) -> jnp.ndarray:
         """Scalar residual cost with the certified ``J.T @ r`` pullback."""
@@ -2684,9 +3199,11 @@ def _least_squares_implicit(
 
     if return_problem:
         jax_jac_public = jax_residual_jacobian
-        names = list(boundary_dof_names(inp, max_mode))
+        names = list(boundary_dof_names(
+            inp, max_mode, vary_major_radius=vary_major_radius))
         if k_cur:
-            names.extend([f"AC({j})/{ac_scale:.6g}" for j in range(k_cur)])
+            label = "AC_AUX_F" if _current_uses_spline(inp) else "AC"
+            names.extend([f"{label}({j})/{ac_scale:.6g}" for j in range(k_cur)])
             names.append("CURTOR/1e6")
         scales = (
             np.ones_like(np.asarray(x0, dtype=float))
@@ -2713,9 +3230,13 @@ def _least_squares_implicit(
             names=names,
             bounds=problem_bounds,
             scales=scales,
+            evaluation_progress=evaluation_progress,
             input_from_x=input_from_x,
             x_from_input=x_from_input,
             equilibrium_from_x=equilibrium_from_x,
+            boundary_from_x=lambda x: boundary_arrays_from_x(
+                inp, x[:nboundary], max_mode,
+                vary_major_radius=vary_major_radius),
             metadata={
                 "derivative_method": "implicit",
                 "derivative_description": (
@@ -2729,8 +3250,16 @@ def _least_squares_implicit(
                     else "weight multiplies residual"
                 ),
                 "max_mode": max_mode,
+                "vary_major_radius": vary_major_radius,
+                "term_slices": term_slices,
                 "config": cfg,
                 "holder": holder,
+                "input": inp,
+                "jax_state_runtime": jax_state_runtime,
+                "jax_state_runtime_status": jax_state_runtime_status,
+                "jax_residual_from_state": term_rows,
+                "jax_failure_value": lambda x: failure_value_and_gradient_jax(x)[0],
+                "residual_size": residual_size,
             },
         )
 
@@ -2757,7 +3286,9 @@ def _least_squares_implicit(
         result.cost = float(result.fun)
         result.optimality = float(np.linalg.norm(result.jac, ord=np.inf))
         result.monitor = monitor
-    result.input = unpack_boundary(inp, result.x[:nboundary], max_mode)
+    result.input = unpack_boundary(
+        inp, result.x[:nboundary], max_mode,
+        vary_major_radius=vary_major_radius)
     if k_cur:
         result.input = _apply_current(result.input, result.x[nboundary:],
                                       k_cur, ac_scale)

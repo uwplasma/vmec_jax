@@ -27,10 +27,13 @@ dependencies = [
   "numpy",
   "jax",
   "jaxlib",
-  "scipy",
+  # 1.15 added least_squares(callback=), used by the optimization examples.
+  "scipy>=1.15",
   "netCDF4",
   "matplotlib",
   "packaging",
+  # JAX's persistent compilation cache uses file locks across processes.
+  "filelock",
   "booz_xform_jax",
   # 0.8.8 adds the checked tridiagonal fallback used by VMEX's preconditioner.
   "solvax>=0.8.8",
@@ -53,14 +56,16 @@ optimizers = [
   "jaxopt",
   "optax",
 ]
-# Differentiable virtual-casing residual on a specified boundary
-# (plan.md R15.3 + R19); this is not a NESTOR equilibrium adjoint.
-# virtual-casing-jax >= 0.0.3 (released 2026-07-28 from the canonical
-# https://github.com/uwplasma/virtual_casing_jax) carries the exterior-field
-# API vmex drives; 0.0.2 and earlier predate it. Surface-data construction
-# remains available without the extra; solver tests use an explicit skip.
+# Effective ripple through the independently validated NEO_JAX backend. It is
+# optional so the equilibrium solver and default installation remain slim.
+neoclassical = [
+  "neo-jax>=1.0.2",
+]
+# Differentiable virtual casing on a specified boundary; this is not a NESTOR
+# equilibrium adjoint. Version 0.0.5 provides the reusable surface-precision
+# and near-surface plans used by exterior tracing.
 freeb = [
-    "virtual-casing-jax>=0.0.3",
+    "virtual-casing-jax>=0.0.5",
 ]
 #
 # Gyrokinetic turbulence-proxy objectives (``vmex.core.turbulence``) via GKX,
@@ -70,11 +75,8 @@ freeb = [
 turbulence = [
   "gkx>=1.7.1",
 ]
-# Direct-coil free-boundary support: the CLI ``--coils`` flag and the ESSOS
-# examples load ``essos.coils`` and tabulate ``essos.fields.BiotSavart`` into
-# an in-memory MgridField.  Any released ESSOS >= 0.16 suffices (0.16 ships
-# the legacy ``Coils_from_json`` loader; the callers fall back to it when the
-# ``Coils.from_json`` classmethod is absent).
+# ESSOS 0.17 adds the named/functional coil interfaces used by the new
+# single-stage examples; 0.16 remains compatible with VMEX's existing CLI.
 coils = [
   "essos>=0.16",
 ]
@@ -119,16 +121,16 @@ markers = [
 ]
 
 [tool.coverage.run]
-# freeboundary_diff.py requires the optional virtual-casing-jax >= 0.0.3
+# virtual_casing.py requires the optional virtual-casing-jax >= 0.0.5
 # extra (see [project.optional-dependencies]). Its FD-validated gradient
 # tests are importorskip-gated and skip in the dependency-minimal core CI,
 # so the module is excluded from the core >=95% coverage gate. It is
 # exercised by the optional-integrations CI lane. turbulence.py is
 # likewise gated on the optional ``turbulence`` extra (gkx).
-omit = ["*/freeboundary_diff.py", "*/turbulence.py"]
+omit = ["*/virtual_casing.py", "*/turbulence.py"]
 
 [tool.coverage.report]
-omit = ["*/freeboundary_diff.py", "*/turbulence.py"]
+omit = ["*/virtual_casing.py", "*/turbulence.py"]
 
 [tool.ruff]
 line-length = 120

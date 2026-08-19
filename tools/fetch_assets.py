@@ -13,6 +13,7 @@ import io
 import json
 import shutil
 import tarfile
+import urllib.error
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -36,6 +37,11 @@ class AssetBundle:
     destination: str
     default: bool
     common_paths: tuple[str, ...]
+    #: Copies re-created on extraction instead of shipped as duplicate archive
+    #: members; each rule is ``{"source", "target", "names"}`` relative to the
+    #: destination.  ``examples/data/single_grid`` was 16 byte-identical copies
+    #: of its ``examples/data`` siblings (59 of the bundle's 118 MB).
+    mirrors: tuple[dict, ...] = ()
 
     @property
     def marker_name(self) -> str:
@@ -47,7 +53,12 @@ def _load_bundles() -> tuple[AssetBundle, ...]:
     if data.get("schema") != "vmex.release-assets/1":
         raise RuntimeError(f"unsupported asset manifest schema in {MANIFEST_PATH}")
     bundles = tuple(
-        AssetBundle(**{**record, "common_paths": tuple(record["common_paths"])}) for record in data["bundles"]
+        AssetBundle(**{
+            **record,
+            "common_paths": tuple(record["common_paths"]),
+            "mirrors": tuple(record.get("mirrors", ())),
+        })
+        for record in data["bundles"]
     )
     if any(bundle.destination not in {"cache", "repository"} for bundle in bundles):
         raise RuntimeError(f"invalid asset destination in {MANIFEST_PATH}")
@@ -119,6 +130,42 @@ def _migrate_release_asset_paths(dest: Path) -> None:
                 shutil.copy2(old_path, new_path)
 
 
+def _apply_mirrors(bundle: AssetBundle, dest: Path) -> None:
+    """Re-create the copies the bundle deliberately does not ship.
+
+    Mirroring rather than shipping also fixes the direction of a past bug: the
+    mirrored ``mgrid_cth_like_lasym_small.nc`` is now always the git-tracked
+    file, never a release copy that can drift from it.
+    """
+    for rule in bundle.mirrors:
+        source, target = dest / rule["source"], dest / rule["target"]
+        missing = [name for name in rule["names"] if not (source / name).is_file()]
+        if missing:
+            raise SystemExit(f"Mirror source missing for {bundle.name!r}: {sorted(missing)}")
+        target.mkdir(parents=True, exist_ok=True)
+        for name in rule["names"]:
+            if not (target / name).exists():
+                shutil.copy2(source / name, target / name)
+
+
+def _read_bundle(bundle: AssetBundle) -> bytes:
+    """Download ``bundle``, reporting an unreachable release as a clear error.
+
+    A deleted release otherwise surfaces as a bare ``urllib`` traceback, which
+    is what a CI log showed when ``assets-20260316-nc`` disappeared.
+    """
+    try:
+        with urllib.request.urlopen(bundle.url) as resp:
+            return resp.read()
+    except (urllib.error.URLError, OSError) as exc:
+        raise SystemExit(
+            f"Could not download bundle {bundle.name!r} from {bundle.url}\n"
+            f"  {type(exc).__name__}: {exc}\n"
+            f"  The release asset recorded in {MANIFEST_PATH.relative_to(REPO_ROOT)} "
+            f"is unreachable; check that its release still exists."
+        ) from exc
+
+
 def _selected_default_bundles(names: Sequence[str] | None) -> tuple[AssetBundle, ...]:
     if not names or "all" in names:
         return DEFAULT_BUNDLES
@@ -139,12 +186,12 @@ def _download_and_extract_bundle(bundle: AssetBundle, *, dest: Path, force: bool
         if marker.read_text().splitlines() == [bundle.url, bundle.sha256]:
             print(f"Assets already installed for bundle {bundle.name!r} at {dest}. Use --force to re-download.")
             _migrate_release_asset_paths(dest)
+            _apply_mirrors(bundle, dest)
             return
         print(f"Replacing stale marker for bundle {bundle.name!r}")
 
     print(f"Downloading {bundle.name} assets from: {bundle.url}")
-    with urllib.request.urlopen(bundle.url) as resp:
-        data = resp.read()
+    data = _read_bundle(bundle)
 
     if bundle.size_bytes and len(data) != bundle.size_bytes:
         raise SystemExit(f"Size mismatch for {bundle.name}: expected {bundle.size_bytes}, got {len(data)}")
@@ -170,6 +217,7 @@ def _download_and_extract_bundle(bundle: AssetBundle, *, dest: Path, force: bool
             _safe_extract(tf, dest)
 
     _migrate_release_asset_paths(dest)
+    _apply_mirrors(bundle, dest)
     marker.write_text(f"{bundle.url}\n{digest}\n")
 
 

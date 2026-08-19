@@ -55,6 +55,12 @@ def test_status_callback_builds_safe_mask_before_seed_cache(monkeypatch):
         assert np.isinf(fsq) and np.isinf(fsq_ratio)
         assert all(np.all(value == 0.0) for value in jax.tree.leaves(mask))
         assert jax.tree.structure(state) == jax.tree.structure(mask)
+        monkeypatch.setattr(
+            im, "_host_solve_and_mask_impl",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bug")),
+        )
+        with pytest.raises(RuntimeError, match="bug"):
+            im._host_solve_and_mask_status(cfg, params_np)
     finally:
         im._MASK_CACHE.clear()
         im._MASK_CACHE.update(saved)

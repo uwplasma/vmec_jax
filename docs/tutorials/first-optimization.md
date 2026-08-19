@@ -22,7 +22,9 @@ inp = replace(inp, delt=0.5).change_resolution(
 
 The script explicitly owns `DELT`, `MPOL`, `NTOR`, and the real-space grids.
 `max_mode` separately selects which boundary coefficients the optimizer may
-change; `RBC(0,0)` remains fixed.
+change. `RBC(0,0)` remains fixed by default; pass
+`vary_major_radius=True` to release it without also introducing the null
+`ZBS(0,0)` direction. `problem.dof_names` shows the exact resulting order.
 
 ## Build and solve the problem
 
@@ -46,7 +48,8 @@ consistent rejection residual so the trust region can shorten its step.
 ```python
 optimized_input = problem.input_from_x(result.x)
 equilibrium = problem.equilibrium_from_x(result.x)
-aspect = float(opt.aspect_ratio(equilibrium.state, equilibrium.runtime))
+equilibrium_state, solver_context = equilibrium.state, equilibrium.runtime
+aspect = float(opt.aspect_ratio(equilibrium_state, solver_context))
 print(f"final cost = {result.cost:.6e}, aspect = {aspect:.6f}")
 
 optimized_input.to_indata("input.aspect_optimized")
