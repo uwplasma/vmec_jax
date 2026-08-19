@@ -1632,3 +1632,97 @@ also hides state leaking between them. Worth an explicit check that module-level
 caches (`_FREE_MASK_CACHE`, `_FREE_HOT_CACHE`, `_PACK_TABLE_CACHE`,
 `_FREE_LAST_RESULT`) are empty at teardown, rather than relying on the split.
 - 2026-08-19 claude: P17 addendum — found a module-cache leak in test_freeboundary_implicit.py that PR CI cannot see because the two tests are in different selectors; fixed on fix/free-mask-cache-test-leak.
+
+## Phase 21 — Alpha-particle tracing and a differentiable loss fraction
+
+Turn #122 from a single script into a feature of vmex: `vmex --trace wout_XXX.nc`
+on the command line, and alpha-particle loss fraction as an optimizable that a
+boundary optimization can actually descend. **#122 does not merge as it
+stands** — the script is the specification, not the deliverable.
+
+### 21.1 ESSOS prerequisites [DOING]
+
+Two things block a differentiable loss fraction, both on the ESSOS side, both
+verified by reading the source:
+
+- `essos.fields.Vmec.__init__` (essos/fields.py:191) only accepts a
+  `wout_filename` and opens it with `Dataset(...)`. A caller holding the
+  spectral arrays in memory as traced JAX arrays — which is exactly what vmex
+  has — cannot reach the field without writing a file, and the file write
+  severs the gradient. Needs an array-based constructor that stores what it is
+  given without a NumPy round trip.
+- `Tracing.loss_fraction` (essos/dynamics.py:929) builds the answer from
+  `trajectories_r >= r_max`, `argmax`, `bincount`, `cumsum`. Every step is
+  piecewise constant in the trajectories, so `jax.grad` of
+  `loss_lost_fraction` (essos/objective_functions.py:252) is identically zero.
+  It is a correct diagnostic and a useless objective for a gradient method.
+
+The ESSOS pull request adds an array constructor and a smooth surrogate
+alongside the exact diagnostic, which stays exact. Shape of the surrogate: a
+sigmoid on how far past `r_max` each particle's radial coordinate ever gets,
+averaged over particles, with the smoothing width an explicit argument. A hard
+`jnp.max` over time passes gradient through one sample per particle, so a soft
+maximum is the better choice; the ESSOS PR settles that with numbers.
+
+### 21.2 `vmex/core/tracing.py` [TODO]
+
+A new module is justified here on the same grounds as `bootstrap.py`,
+`neoclassical.py` and `turbulence.py`: one physics concern, one file. It is a
+thin adapter over ESSOS, not a reimplementation — vmex owns the equilibrium and
+the parameter plumbing, ESSOS owns the orbit integration.
+
+    trace_alphas(source, *, tmax=3e-4, nparticles=200, s=0.25, seed=42,
+                 timestep=5e-7, times_to_trace=200, model="GuidingCenter")
+
+accepting either a wout path or a solved equilibrium, returning a small frozen
+result carrying `loss_fraction`, `lost_times`, `trajectories` and the
+lost/unresolved/failed counts. Keep the ESSOS import local to the call so vmex
+still imports without ESSOS installed, matching how the ESSOS-dependent
+examples already behave.
+
+The optimizable follows the established `(state, runtime)` signature so it
+drops into `VmecProblem.from_tuples` next to `aspect_ratio` and
+`magnetic_well`:
+
+    alpha_loss_fraction(state, rt, *, tmax, nparticles, s, width, seed)
+
+built on the ESSOS array constructor and the smooth surrogate, so it is
+traceable end to end from the boundary coefficients.
+
+### 21.3 `vmex --trace` [TODO]
+
+One flag, dispatched like `--plot` and `--booz` in `vmex/core/cli.py`
+(`_dispatch`, around line 1060). `vmex --trace wout_XXX.nc` prints the loss
+fraction, the lost/unresolved/failed counts and the wall time, then writes the
+figures the #122 script draws — trajectories, parallel velocity, loss fraction
+against time, energy error — into `--outdir` using the existing figure-writing
+convention. Accept the tracing knobs as optional flags with the defaults above.
+
+### 21.4 `examples/optimization/loss_fraction_optimization.py` [TODO]
+
+Minimize alpha losses over boundary coefficients. Deliberately small so it
+runs: `tmax = 3e-4`, `nparticles_per_core = 25`, the smooth surrogate as the
+objective, the exact loss fraction reported each stage so the user sees the
+quantity they care about rather than the surrogate. Include an aspect-ratio row
+and the min-|iota| floor, as the other optimization examples do, and honour
+`VMEX_EXAMPLES_CI=1` with a short smoke configuration.
+
+### 21.5 Coverage and cost [TODO]
+
+Tracing is expensive, so the test lane must not trace anything large. Gate the
+adapter with a handful of particles over a very short `tmax` and assert the
+surrogate tracks the exact loss fraction as the width shrinks, plus a
+`jax.grad` that is finite and nonzero — the property that the whole phase
+exists to provide. Register it in `tests/manifest.json` under a physics
+selector, and keep it off `pr-fast`.
+
+### 21.6 Literature anchors [TODO]
+
+Alpha confinement claims need a reference point, not just self-consistency.
+Anchor against a published configuration with known loss behaviour and cite it
+in the test: the standard candidates are Landreman & Paul's precise QA and QH
+(PRL 128, 035001, 2022), whose alpha losses at reactor scale are documented, and
+the ARIES-CS baseline for a case with substantial losses. Compare the ordering
+of loss fractions between two such configurations rather than an absolute
+number, which depends on the tracing model and particle count.
+- 2026-08-19 claude: P21 — planned the tracing feature; ESSOS PR for the array constructor and smooth surrogate in flight; #122 stays open as the specification.
