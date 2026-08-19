@@ -868,3 +868,25 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   the minimum inside the limits, and at least four tick labels).
   Still open in this area: more surfaces in the summary panel, which is gated on the eps_eff lane
   being fast (P6), not on plotting.
+- 2026-08-19 rogeriojorge: P8 first complete verified CPU rows, office box (36-core, jax 0.6.2,
+  import asserted, single process, ns=31/mpol=5/max_mode=2, checkout at 1edffddc so PRE the
+  Jacobian-tolerance fix):
+
+  | case | ndof | solve | build | compile | residual | Jacobian |
+  |---|---|---|---|---|---|---|
+  | symmetric | 24 | 2.9 s | 56.7 s | 754.5 s | 0.52 s | 516.2 s |
+  | LASYM | 48 | 7.6 s | 32.5 s | 1055.9 s | 0.69 s | 869.4 s |
+
+  Two readings. (1) The LASYM/symmetric Jacobian ratio is **1.68x**, which independently
+  reproduces the 1.8x per-nfev ratio measured on the laptop — the asymmetric cost model holds
+  across machines, so LASYM is genuinely not the problem. (2) The absolute numbers are the
+  problem: the same Jacobian takes 1.8 s (symmetric) and 9.8 s (LASYM) on an Apple laptop and
+  516 s / 869 s here, and compile is 754-1056 s against roughly 40 s. That is a 90-280x machine
+  gap on identical code, and it is what a cluster user would actually experience.
+  Hypotheses, cheapest first: **jax 0.6.2 versus 0.9.2** (three minor versions of XLA:CPU work,
+  and the laptop is the newer one — most likely explanation, test by upgrading jax on that host
+  and re-measuring, but that changes someone's environment so ask first); thread oversubscription
+  on 36 cores for a memory-bound blocked solve (probe running now under `taskset -c 0-7`, which
+  is non-invasive); and Apple Silicon's unified memory favouring this access pattern. Settle
+  which before drawing any CPU-vs-GPU conclusion from that machine, and re-measure after the
+  Jacobian-tolerance fix propagates there.
