@@ -700,3 +700,24 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   matrix rows (fixed-boundary solve, problem build, compile, residual, Jacobian; symmetric and
   LASYM at ns=31/mpol=5) are scripted at /tmp/gpu_bench.py on that host and write
   /tmp/bench_cpu.json and /tmp/bench_gpu.json.
+- 2026-08-19 rogeriojorge: P1.a measured, and one earlier conclusion RETRACTED. The shipped
+  Jacobian lanes now carry their certifier statistics out with the rows (`_certifier_summary` /
+  `_record_certifier` in optimize.py; `holder["jac_certifier_iterations"]`,
+  `["jac_certifier_unconverged"]`, `["jac_certifier_worst"]`), which turns this from a
+  multi-hour timing hunt into one observable run. First numbers, LASYM QA vs the symmetric case
+  of the same shape: **542 certifier iterations vs 23**, zero uncertified columns in both. So
+  the certifier genuinely works much harder on the asymmetric problem.
+  BUT the tolerance sweep at that same iterate shows the iteration count is NOT the wall-time
+  driver there: adjoint_tol 1e-6/1e-5/1e-4/1e-3 gives iterations 542/66/0/0 while the Jacobian
+  takes 85.4/103.8/93.8/68.6 s — flat inside compile noise, since each build recompiles. The
+  accuracy price of relaxing is negligible and plateaus immediately (relative Jacobian
+  difference 3.07e-5 at 1e-5, 3.24e-5 at 1e-4 and 1e-3). Do not conclude "the certifier is the
+  stall" from the iteration count alone — that was my error; the count and the cost have to be
+  measured separately. `jac_split.py` (two calls in one process, so the second carries no
+  compilation) isolates compile from the block assembly/factorization and the certifier, and the
+  instrumented run of the real stalling iterate (`jac_real.py`, jac #2 is the 2000 s one) will
+  say whether the count explodes there. Both were in flight at hand-off. If the warm cost at
+  1e-6 turns out to dwarf the warm cost at 1e-4, a separate looser Jacobian-certification
+  tolerance is the fix and 1e-4 is defensible on the measured accuracy. If it does not, the time
+  is in `_raw_block_system`'s probe assembly and factorization, and the Schur/preconditioner
+  work of Phase 3 is the lever instead.
