@@ -1262,6 +1262,40 @@ n=0 m=1 in both channels, since no existing test would have caught this.
    What still stands as the anomaly: from an identical configuration, with the
    symmetric optimum inside its search space, the LASYM lane moves away from
    quasisymmetry. That is the thing to explain.
+
+   **Resolved. With quasisymmetry as the only term, the anomaly disappears and
+   the fix's payoff is visible.** Same seed (1.209e-2), same budget:
+
+   | run | dofs | final QS | reduction |
+   |---|---|---|---|
+   | symmetric | 8 | 2.445e-4 | 49.5x |
+   | LASYM amp=0, pre-fix | 16 | 2.436e-4 | 49.6x |
+   | LASYM amp=0, post-fix | 16 | **1.599e-4** | **75.6x** |
+
+   Before the fix the LASYM lane could only *match* symmetric: its eight extra
+   asymmetric degrees of freedom bought nothing, which is exactly what a
+   Jacobian that is wrong in the asymmetric m=1 channel predicts. After the fix
+   it beats symmetric by 1.52x, which is what the extra freedom should buy given
+   that the symmetric optimum is inside its search space. This is the
+   end-to-end confirmation the derivative evidence could not supply on its own.
+
+   So the reported underperformance was two separate things, neither of which
+   is "the asymmetric lane does not work":
+
+   - the frozen `delta == 0` branch, which silently neutralized the asymmetric
+     m=1 freedom (fixed, #126); and
+   - objective weighting in the examples themselves. With aspect, iota-floor and
+     magnetic-well rows present, the extra asymmetric dofs get spent satisfying
+     *those* terms — the LASYM run reached aspect 7.36 against symmetric's 7.78
+     and a lower total cost while its quasisymmetry got worse. Add the
+     `ASYMMETRY_PERTURBATION = 0.01` seed, which by itself degrades QS 38x
+     before the first evaluation, and a run judged on final QS looks broken
+     when it is merely optimizing what it was told to.
+
+   Follow-up for the examples (not a vmex defect): revisit the weights and the
+   seed amplitude in `examples/optimization/stellarator_asymmetry/`, and report
+   quasisymmetry alongside the terms actually being minimized so the tradeoff
+   is visible rather than looking like a failure.
 2. **booz_xform_jax under LASYM: audited 2026-08-19, clean — but it is not in
    the loop for the QA/QH/QP asymmetry examples anyway.** The `bmns(i,i)`
    repeated-index bug was not copied in; the package has no per-mode scalar
@@ -1440,3 +1474,4 @@ every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — QS-isolated run shows the fix improves final QS 4.10e-2 -> 3.43e-2 and halves wall time; like-for-like sym vs LASYM now running.
 - 2026-08-19 claude: P17 — like-for-like shows LASYM starts 38x worse in QS because of the 0.01 seed perturbation, not that the lane is broken; amplitude sweep running.
 - 2026-08-19 claude: P17 — seed hypothesis refuted: LASYM at amp=0 starts from the symmetric seed and still ends 74x worse; QS lane consistency ruled out; QS-only rerun in flight.
+- 2026-08-19 claude: P17 — RESOLVED. QS-only: LASYM went from matching symmetric pre-fix (2.436e-4 vs 2.445e-4) to beating it post-fix (1.599e-4). Remainder is example objective weighting, not a code defect.
