@@ -1205,11 +1205,32 @@ comparison in item 1 is the measurement that actually answers the phase.
 Add a LASYM Jacobian-versus-finite-difference gate to the test suite covering
 n=0 m=1 in both channels, since no existing test would have caught this.
 
-1. Profile and compare like-for-like: same seed, same targets, same stages,
-   symmetric versus LASYM, tracking QS residual per stage and which dof
-   families move. An asymmetric run has twice the dofs and should do at least
-   as well as symmetric, since the symmetric configuration is inside its search
-   space — if it does worse, something is wrong, not merely slow.
+1. **Done 2026-08-19, and it reframes the phase: the two runs were never
+   starting from the same place.** Identical targets, stages, resolution and
+   budget, QS-isolated, on the fixed tree:
+
+   | | dofs | seed QS | final QS | reduction |
+   |---|---|---|---|---|
+   | symmetric | 8 | 1.209e-2 | 4.523e-4 | 26.7x |
+   | LASYM | 16 | 4.608e-1 | 3.432e-2 | 13.4x |
+
+   The LASYM run ends 76x worse — but it *starts* 38x worse. The examples'
+   `ASYMMETRY_PERTURBATION = 0.01` on `RBS(1,1)`/`ZBC(1,1)`, added to keep the
+   optimizer off the symmetric stationary subspace, degrades quasisymmetry by a
+   factor of 38 before a single evaluation, and 30 evaluations at max_mode 1 do
+   not climb back. The per-evaluation reduction factor is within 2x of
+   symmetric, which is a very different picture from "the asymmetric lane does
+   not work".
+
+   So the seed, not the optimizer, is the leading suspect for the reported
+   underperformance. The perturbation exists for a real reason — scalar targets
+   have zero derivative with respect to the asymmetric families at exactly zero
+   asymmetry, so the optimizer would never leave — but it only has to break the
+   symmetry, not wreck the configuration. Sweeping the amplitude (1e-3, 1e-4, 0)
+   against the symmetric baseline is the measurement that settles both halves:
+   whether a smaller seed matches or beats symmetric, and whether amplitude zero
+   really is stationary. If a small amplitude recovers symmetric-quality QS, the
+   fix is a one-line change to every asymmetry example and the phase is closed.
 2. **booz_xform_jax under LASYM: audited 2026-08-19, clean — but it is not in
    the loop for the QA/QH/QP asymmetry examples anyway.** The `bmns(i,i)`
    repeated-index bug was not copied in; the package has no per-mode scalar
@@ -1386,3 +1407,4 @@ every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — opened vmex #126 with the delta-rotation fix and its regression gate; #119 is green and queued for merge.
 - 2026-08-19 claude: P17 — corrected the overclaim: the delta fix is proven as a derivative fix but did NOT improve a bounded QA stage; payoff still unmeasured.
 - 2026-08-19 claude: P17 — QS-isolated run shows the fix improves final QS 4.10e-2 -> 3.43e-2 and halves wall time; like-for-like sym vs LASYM now running.
+- 2026-08-19 claude: P17 — like-for-like shows LASYM starts 38x worse in QS because of the 0.01 seed perturbation, not that the lane is broken; amplitude sweep running.
