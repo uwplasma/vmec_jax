@@ -72,7 +72,7 @@ Smallest possible diff to green; everything else moves to the new branch off `ma
 
 Acceptance: PR CI fully green (quality, coverage gate, linkcheck), PR merged.
 
-## Phase 1 — Examples run honestly (the "stall" fix)  [DONE]
+## Phase 1 — Examples run honestly (the "stall" fix)  [1.a NOT done — see the 08-19 end-to-end entry]
 
 Diagnosis (instrumented reproduction, `profile_stall.py`, uncontended): the examples descend
 (overnight log: 18 iterations, cost 25.0 -> 2.64) and healthy iterations cost ~10-12 s
@@ -923,3 +923,34 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   newer JAX). Next step is to upgrade jax on that host and re-measure — it changes someone's
   environment, so ask first. If the version turns out not to explain it, profile XLA:CPU on that
   host directly rather than guessing at a third hypothesis.
+- 2026-08-19 rogeriojorge: **P1.a REOPENED — the tolerance fix does not solve the stall.** I
+  called it done on per-Jacobian microbenchmarks; the end-to-end stage says otherwise, and the
+  end-to-end number is the one that matters. Both runs are the same LASYM QA stage, 20 nfev:
+
+  | Jacobian | before | after `jacobian_adjoint_tol=1e-4` |
+  |---|---|---|
+  | #1 | 3.94 s | 1.48 s |
+  | #2 | 1.75 s | 1.49 s |
+  | #3 | 3848 s | 1557 s |
+  | #4 | 1995 s | 1899 s |
+  | #5 | 2237 s | 2000 s |
+  | #6 | 2024 s | 2038 s |
+
+  The pre-fix stage completed in **54,940 s (15.3 hours)** for 20 nfev, with residuals steady at
+  3.5 s — so about 99.9% of it was the certifier. The tolerance change is a real ~2.5x win at
+  iterates where the certifier already converges, and buys nothing on the plateau. Config was
+  verified live (`cfg.jacobian_adjoint_tol = 0.0001`), so this is not a wiring problem.
+  What the plateau actually is: ~2000 s = the 9000-iteration ceiling
+  (`adjoint_maxiter` 300 x `adjoint_restart` 30) at ~0.22 s per iteration. Beyond iterate ~3 the
+  no-pivot block-Thomas factorization stops being a good preconditioner and **no tolerance in a
+  sane range is reachable** — the Schur lane's own comment already says a globally pivoted sparse
+  LU is materially more accurate than block-Thomas near the axis, which is the same observation
+  from the other side. Then the uncertified columns were NaN-ed, the caller fell back to the
+  *previous* Jacobian, and the whole 2000 s was discarded: work spent and then wasted.
+  Fix now under measurement: bound the certifier (`jacobian_adjoint_maxiter`, default 10 restarts
+  = 300 Krylov iterations) and **keep its output instead of NaN-ing it**. GMRES starts from the
+  direct block solve and decreases the residual monotonically, so a bounded corrector is at least
+  as good as that solve however far it got — strictly better than reverting to a stale Jacobian.
+  If that lands the stage in minutes, P1.a closes; if the resulting Jacobian is too inaccurate to
+  optimize with, the real fix is Phase 3's pivoted factorization / preconditioner, and the
+  tolerance and budget knobs are only damage control.
