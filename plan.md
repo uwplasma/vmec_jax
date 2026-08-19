@@ -1025,3 +1025,153 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   does not help (budget sweep: 10x work, 2.3e-8 change). OPEN: measure the raw residual for the
   actual tangents rather than a random vector, and retry preconditioned GCROT on those; the
   random-vector probe was misleading and is the reason this took three wrong turns.
+
+## Phase 15 — Ecosystem ownership: stop reimplementing sibling packages
+
+From the PR #123 review. VMEX has grown modules that duplicate what a uwplasma
+sibling already owns or should own. Every one of these makes VMEX heavier and
+splits the physics across two implementations that can drift. The rule: the
+package that owns the physics owns the code; VMEX keeps only the thin adapter
+its own scripts need.
+
+1. **`virtual_casing.py` -> `virtual_casing_jax`.** Highest priority, because
+   ESSOS already uses virtual_casing_jax for finite-beta coil optimization,
+   other codes do too, and simsopt is expected to. Move the API and the
+   functionality there — fast, differentiable, complete — and keep in VMEX only
+   what VMEX-specific scripts need (state-to-surface-data adaptation, the
+   `PlasmaVacuumInterface` convenience). Decide explicitly whether
+   `virtual_casing.py` survives at all. Pairs with Phase 11 (its memory work
+   should land in virtual_casing_jax, not here).
+2. **`boozer_tables.py` -> `booz_xform_jax`.** A Boozer transform belongs to the
+   Boozer package. Check whether anything in it is VMEX-specific before moving.
+3. **`omnigenity.py`**: the traceable Boozer spectrum (`boozer_bmnc_state`,
+   `_boozer_lasym_state`) is booz_xform_jax's job; the QI residuals are
+   objectives and stay. Also resolve why `omnigenity.py` and `qi.py` are
+   separate files with overlapping content — one of them should absorb the
+   other.
+4. **`neoclassical.py` -> `neo_jax`.** neo_jax should do more than legacy NEO:
+   effective ripple straight from a wout, the diagnostics, fast, accurate, and
+   differentiable. VMEX then calls it instead of adapting it. Supersedes the
+   adapter-shaped part of Phase 6.
+5. **`freeboundary_diff.py`**: delete. Already agreed; fix the one real caller
+   (`tools/build_qi_sheet_mgrid.py`).
+6. **`extender.py` reorganization.** It holds several things that are not the
+   extender: the magnetic-field class, xyz/cylindrical coordinate handling,
+   interior and exterior field evaluation. Proposal from the review: a
+   `magnetic_field_class.py` owning the field class and coordinate machinery;
+   the wout-to-mgrid path belongs with the existing `mgrid.py`. Then decide the
+   ESSOS boundary: ESSOS already owns fields that expose B and grad B and does
+   the field-line tracing, so some of this is arguably its code — but VMEX must
+   still deliver B, grad B, and their VJPs with no coils and no ESSOS. Draw
+   that line deliberately across the ecosystem rather than per-file.
+7. **`statephysics.py` -> `diagnostics.py`**, and pull the simple diagnostics
+   scattered in other modules into it.
+8. **`core/` -> `optimizables/`** for the modules that are objectives or
+   diagnostics rather than solver core: `bootstrap`, `maxj`, `qi`, `omnigenity`,
+   `stability`, and the diagnostics module above.
+
+Sequencing note: 5 and 7 are cheap and can land immediately; 1-4 are
+cross-repo and need the sibling PR first, then a VMEX PR that deletes code.
+Do not start 6 or 8 until 1-4 have settled, or the files will move twice.
+
+## Phase 16 — Review items on physics, examples, and documentation
+
+1. **Infinite-n ideal-ballooning growth rate.** Test it, then add
+   `examples/optimization/QA_optimization_ballooning.py`. Value and gradient
+   both need to be accurate and fast. Study DESC's formulation and improve on
+   it with SOLVAX's primitives rather than porting it.
+2. **`take_fixed_boundary_gradients.py`** [DONE, `ff613b27`] — companion to the
+   free-boundary example, no ESSOS, certified at 3.8e-6.
+3. **Drop `examples/epsilon_effective.py`.** Replace with per-optimizable
+   documentation pages: one page each, with the equations, the model, the
+   variants, how to compute it and how to differentiate it. That page set is
+   the deliverable, not a script per diagnostic.
+4. **Prose sweep** [PARTIAL, `ff613b27`] — the "not X, it's Y" construction and
+   words like "grinding" removed from the code touched in this pass. The README
+   and docs still need the same read-through.
+5. **Certifier warning and progress output** [DONE, `ff613b27`] — the warning
+   now names its live settings and the consequence of changing them; the
+   heartbeat is silent for fast calls; every optimization script documents the
+   knobs; asymmetric examples write their staged boundary.
+6. **`pressure_balance_residual` and the normal-field terms** [PARTIAL,
+   `ff613b27`] — docstrings explain why finite beta needs pressure continuity
+   where a zero-beta single stage does not, and what the residual and the
+   excess hinge each measure. Still owed: the full documentation page with the
+   derivation.
+
+## Phase 17 — Why asymmetric quasisymmetry optimization underperforms
+
+The open physics question from the review, and the most important item here:
+stellarator-symmetric runs reach good quasisymmetry at max_mode 1, while the
+LASYM runs do not get close. Established so far: the cost per evaluation is
+only 1.8x symmetric, and the stall was a solver artifact now fixed, so slowness
+is not the explanation. Work the correctness question directly.
+
+1. Profile and compare like-for-like: same seed, same targets, same stages,
+   symmetric versus LASYM, tracking QS residual per stage and which dof
+   families move. An asymmetric run has twice the dofs and should do at least
+   as well as symmetric, since the symmetric configuration is inside its search
+   space — if it does worse, something is wrong, not merely slow.
+2. **Verify booz_xform_jax under LASYM.** Does the `bmns(i,i)` class of bug
+   exist there too? The STELLOPT fix (#501) was in NEO's reader, but check
+   whether the same indexing pattern was copied into booz_xform_jax, and
+   whether recent booz_xform changes affect it. The LASYM Boozer spectrum is
+   validated only at mboz=nboz=6 to 2-3% (`test_omnigenity.py:139`), which is
+   far looser than the symmetric gate and would not catch a moderate error —
+   the asymmetry examples use larger mboz.
+3. Audit the LASYM paths in vmex, booz_xform_jax, neo_jax, and
+   virtual_casing_jax against the literature for sign and parity errors: the
+   sine-parity conventions, the full-theta versus reduced-grid handling, and
+   the m=1 constraint under `lconm1`. Check papers, other codes, and
+   documentation rather than reasoning from the source alone.
+4. Only after 1-3: ask whether the asymmetric optimum is genuinely worse, i.e.
+   whether the extra families buy nothing for QA. That is a real possible
+   answer, but it is the last hypothesis, not the first.
+
+## Phase 18 — Multigrid restart transient
+
+Each new radial resolution in `ns_array = [31, 51, 101]` restarts with very
+large FSQR/FSQZ/FSQL at ITER 1. Analyze whether the interpolation onto the
+finer grid is losing force balance that a better prolongation would keep, what
+it costs in iterations, and whether VMEC++ (github.com/proximafusion/vmecpp)
+solved it — read their restart/prolongation code. Report the implications and
+the trade-offs before changing anything: a large initial residual is not by
+itself wrong if the ladder still converges faster than a cold fine solve, which
+is the comparison that matters.
+
+## Phase 19 — Finite-beta single stage converging to a poor optimum
+
+From the review: the finite-beta single stage flattens out around cost 2.89
+with mediocre quasisymmetry and aspect ratio, and the suspected mechanism is
+that a large plasma current satisfies the transform target cheaply, so the
+shaping never has to. Phase 12's minimum-|iota| floor addresses the transform
+part of this and needs re-measuring here now that it is in. Beyond that:
+1. Diagnose first — log the vacuum versus current-carried share of the
+   transform along the optimization (the P12.5 check), plus the bootstrap
+   fraction and the current profile, and confirm the mechanism before
+   redesigning the objective.
+2. Candidate remedies, to weigh once the diagnosis is in: constrain or penalize
+   the enclosed current directly; target vacuum-field transform rather than
+   total; enforce the QS residual on the vacuum field as well; or stage the
+   optimization so shaping is established at low beta before the pressure and
+   current are ramped.
+
+## Log (continued)
+
+- 2026-08-19 rogeriojorge: PR #123 review captured as Phases 15-19. Applied to the PR in
+  `ff613b27`: the evaluation heartbeat is silent unless a call outlives its interval (it was
+  printing "residual done in 0.4 s" over the optimizer's own table); the uncertified-column
+  warning reports its live `jacobian_adjoint_tol`/`jacobian_adjoint_maxiter`, states that those
+  are the measured optimum and that no action is normally needed, and gives the two alternatives
+  with consequences; the word "grinding" and the "not X, it's Y" phrasing are gone from the code
+  touched here; all 19 optimization scripts document the knobs; the seven remaining asymmetric
+  examples write their staged boundary each stage, matching the convention added by hand to
+  `stellarator_asymmetry/QA_optimization.py`; `take_fixed_boundary_gradients.py` added; and
+  `normal_field_residual`, `normal_field_excess` and `pressure_balance_residual` now carry
+  docstrings explaining what each measures and why finite beta needs the pressure rows.
+  Deferred with reasons: the ecosystem moves (Phase 15) need the sibling-package PRs first, and
+  moving files before that would move them twice; the per-optimizable documentation pages
+  (16.3), the ballooning metric and example (16.1), and the three investigations (17, 18, 19)
+  are each their own piece of work. Phase 17 is the one to start with — an asymmetric run
+  contains the symmetric configuration in its search space, so doing worse than symmetric points
+  at a bug rather than at cost.
