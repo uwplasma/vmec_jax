@@ -138,7 +138,7 @@ Then fix all of the following:
 Acceptance: interactive stage-1 run shows a flushed, timestamped line at least every ~30 s;
 profile shows zero mid-stage recompiles; nightly smoke lane green.
 
-## Phase 2 — Compilation cache policy
+## Phase 2 — Compilation cache policy  [PARTIAL: sizing + doctor DONE; the real cost is elsewhere]
 
 Today: machine-scoped persistent cache (`_compat.py`) capped at 1 GiB; the cache sits exactly at
 the cap and an identical rerun recompiles everything — the cap forces eviction churn, and
@@ -649,3 +649,32 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   scripted in the session scratchpad as `jac_probe.py` and was still running at hand-off — run
   it first. Note the certifier's iteration counts cannot be read with a host-side spy (they are
   traced); expose them through the existing `LinearResponseReport` instead.
+- 2026-08-19 rogeriojorge: P2 [PARTIAL] — the cache bound now scales with the filesystem
+  (`min(20 GiB, max(2 GiB, 10% free))`, floor on unreadable paths) instead of a fixed 1 GiB that
+  both machine-fingerprint directories sat pegged at, and `--doctor` prints the directory, its
+  occupancy and the bound, flagging a cache within 5% of its cap. But the measurement corrects
+  this phase's premise: with a *fresh* cache directory, one `compile_residual_and_jacobian`
+  wrote only **2 entries / 768 KB** and the second process was no faster. The config is applied
+  correctly (verified: cache dir, enable flag, `min_compile_time_secs=1.0`, new bound), so
+  eviction was never the main story — almost nothing in this workload is cacheable XLA
+  compilation above the 1 s floor. The remaining "compile" wall is sub-second XLA modules
+  (filtered by `jax_persistent_cache_min_compile_time_secs=1.0`) plus Python-side tracing and
+  jaxpr->MLIR lowering, which the persistent cache cannot serve at all. Next steps for this
+  phase, in order: (1) re-measure on a quiet machine with `jax_log_compiles` captured from
+  *stdout* (the logging handler writes there, not stderr) and split total vs summed XLA vs
+  summed lowering; (2) try `VMEX_CACHE_MIN_COMPILE_TIME_SECS=0.1` and see whether entry count
+  and second-run time move; (3) if lowering dominates, the lever is graph size/count in
+  `_least_squares_implicit`, not the cache. Raising the bound stays correct regardless.
+- 2026-08-19 rogeriojorge: P0 follow-up — the changed-line coverage gate is still red at **78%**
+  and this is NOT what the plan assumed. Adding `tests/test_neoclassical.py` to the manifest does
+  not help, because the coverage job combines artifacts only from the `fast`, `physics-*` and
+  `device` jobs, and those run curated `selectors` (`pr-physics-core`, `pr-implicit-response`,
+  ...) plus the `pr-fast` lane — the `pr-parity-*` lanes never execute on a pull request. Most of
+  PR #123's new physics is reachable only from `full`-marked or optional-dependency tests, so it
+  contributes zero coverage: `boozer_tables.py 0%`, `omnigenity.py 4.8%`, `maxj.py 18%`,
+  `neoclassical.py 27.5%`, `freeboundary_implicit.py 57.2%`, `optimize.py 78.7%` (456 changed
+  lines missing). The gate was already failing this way before this session's commits. Two ways
+  forward, both Phase 9 work rather than Phase 0: add fast unit tests for those lines, or add the
+  relevant test ids to the CI selectors (done for the two new `min_abs_iota` certificates, which
+  had the same problem — they lived in `pr-parity-d` and never ran on PRs). Until one of those
+  lands, #123 merges only with an explicit exception.
