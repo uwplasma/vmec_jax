@@ -773,3 +773,17 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   reports uncertified columns), which the new `holder["jac_certifier_unconverged"]` counter makes
   straightforward.
   Everything else in Phase 1 (flush, heartbeat, monitor double-solve, examples) is done and green.
+- 2026-08-19 rogeriojorge: P1.a — a central finite difference is NOT a usable arbiter for this
+  Jacobian, do not spend time on it. Measured: at the degraded iterate, column 0 against a
+  central FD came out 8.3e-1 relative for the tight Jacobian and 2.6e0 for the loose one. Both
+  being of order one says the FD is wrong, not the Jacobians: each probe re-solves the
+  equilibrium through the perturbation warm start, so the difference is dominated by solver
+  endpoint noise rather than by the derivative (the same endpoint-noise effect already
+  documented for the coupled free-boundary certificate in P3b). Same run also showed the tight
+  solve reaching 9000 iterations with 9 uncertified columns and taking a derivative fallback,
+  while 1e-4 certified everything in 207 iterations — i.e. at that iterate the tight result is
+  the one that is not trustworthy. The arbiter that does work is a tight solve given enough
+  iteration budget to actually certify every column (`jac_arbiter.py`: tol=1e-8,
+  adjoint_maxiter=4000, and it checks `unconverged == 0 and derivative_fallbacks == 0` before
+  accepting itself as ground truth), then comparing 1e-6/1e-4/1e-3 against it. That was running
+  at hand-off; its result decides the open question above.
