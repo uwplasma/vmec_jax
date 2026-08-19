@@ -129,7 +129,14 @@ def test_compilation_cache_defaults_are_bounded_and_selective(monkeypatch):
     fake = types.SimpleNamespace(config=_FakeConfig())
     _compat._configure_compilation_cache(fake, "/tmp/cachedir")
     assert fake.config.updates["jax_persistent_cache_min_compile_time_secs"] == 1.0
-    assert fake.config.updates["jax_compilation_cache_max_size"] == 1 << 30
+    # The bound stays finite (JAX only locks the cache when eviction is on)
+    # but scales with the disk: the old fixed 1 GiB sat at its cap and evicted
+    # the executables the next optimization stage asked for.
+    bound = fake.config.updates["jax_compilation_cache_max_size"]
+    assert _compat._CACHE_SIZE_FLOOR <= bound <= _compat._CACHE_SIZE_CEILING
+    assert bound == _compat._default_cache_max_size("/tmp/cachedir")
+    assert _compat._default_cache_max_size("/no/such/path") == \
+        _compat._CACHE_SIZE_FLOOR
 
 
 def test_configure_compilation_cache_gpu_autotune_default(monkeypatch):

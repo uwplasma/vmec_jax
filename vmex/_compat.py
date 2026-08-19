@@ -28,7 +28,32 @@ import platform
 
 
 _CACHE_FORMAT_VERSION = "2"
-_DEFAULT_CACHE_MAX_SIZE = 1 << 30
+_CACHE_SIZE_FLOOR = 2 << 30          # 2 GiB
+_CACHE_SIZE_CEILING = 20 << 30       # 20 GiB
+_CACHE_DISK_FRACTION = 0.10
+
+
+def _default_cache_max_size(path: str | None = None) -> int:
+    """Bytes to retain in the persistent compilation cache.
+
+    The bound has to be finite: JAX takes its cross-process cache lock only
+    when eviction is enabled, so an unbounded cache lets concurrent VMEX runs
+    race writing the same executable.  It also has to be large.  One
+    free-boundary or single-stage executable is tens of megabytes and a single
+    optimization walks a whole family of them, so the historical 1 GiB bound
+    sat permanently at its cap and evicted the executables the next stage
+    asked for -- every run paid a cold compile that the cache existed to
+    avoid.  Scale with the filesystem that holds the cache and cap at a size
+    any current workstation can spare.
+    """
+    try:
+        import shutil
+
+        free = shutil.disk_usage(path or os.path.expanduser("~")).free
+    except Exception:  # unreadable path, exotic filesystem
+        return _CACHE_SIZE_FLOOR
+    scaled = int(_CACHE_DISK_FRACTION * float(free))
+    return int(min(_CACHE_SIZE_CEILING, max(_CACHE_SIZE_FLOOR, scaled)))
 
 
 def _env(name: str, default: str = "") -> str:
@@ -196,7 +221,8 @@ def _configure_compilation_cache(jax_module: Any, cache_dir: str | None) -> None
         # JAX's file cache takes its cross-process lock only when eviction is
         # enabled.  A finite default therefore prevents concurrent VMEX runs
         # from writing the same executable at once, as well as bounding disk.
-        max_size = _env("COMPILATION_CACHE_MAX_SIZE", str(_DEFAULT_CACHE_MAX_SIZE))
+        max_size = _env("COMPILATION_CACHE_MAX_SIZE",
+                        str(_default_cache_max_size(cache_dir)))
         if max_size:
             jax_module.config.update("jax_compilation_cache_max_size", int(max_size))
     except Exception:

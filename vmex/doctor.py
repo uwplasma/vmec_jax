@@ -49,6 +49,30 @@ class DoctorReport:
     warnings: tuple[str, ...]
 
 
+def _compilation_cache_line() -> str:
+    """Report the persistent compilation cache's directory, size, and bound.
+
+    A cache sitting at its bound is the visible symptom of eviction churn:
+    every run then recompiles what the previous one stored.
+    """
+    from ._compat import _default_cache_max_size, _default_compilation_cache_dir
+
+    directory = os.environ.get(
+        "JAX_COMPILATION_CACHE_DIR") or _default_compilation_cache_dir()
+    if not directory:
+        return "VMEX compile cache:    disabled"
+    try:
+        used = sum(entry.stat().st_size for entry in os.scandir(directory)
+                   if entry.is_file())
+    except OSError:
+        return f"VMEX compile cache:    {directory} (not yet created)"
+    cap = _default_cache_max_size(directory)
+    note = "  [at the bound: raise VMEX_COMPILATION_CACHE_MAX_SIZE]" if (
+        used >= 0.95 * cap) else ""
+    return (f"VMEX compile cache:    {used / 2**30:.2f} of "
+            f"{cap / 2**30:.2f} GiB in {directory}{note}")
+
+
 def _package_version(name: str) -> str:
     try:
         return metadata.version(name)
@@ -201,6 +225,7 @@ def format_report(report: DoctorReport) -> str:
             "VMEX mirror default:   CPU for host-SciPy/JAX callback solves",
         ]
     )
+    lines.append(_compilation_cache_line())
     lines.append("")
     if report.warnings:
         lines.append("Warnings:")
