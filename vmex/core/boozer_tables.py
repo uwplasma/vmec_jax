@@ -122,7 +122,11 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
     # uniform-grid Fourier projection onto the grid-representable modes
     theta = 2.0 * np.pi * np.arange(ntheta1) / ntheta1
     zeta = 2.0 * np.pi * np.arange(nzeta) / (nfp * nzeta)
-    m_max, n_max = ntheta1 // 2 - 1, max(nzeta // 2 - 1, 0)
+    # VMEC sizes the wout Nyquist table from the grid itself (wrout.f:
+    # mnyq = ntheta1/2, nnyq = nzeta/2), so the closing row/column belongs to
+    # the projection.  Dropping it left a few percent of bmnc/bmns on coarse
+    # decks (ntheta = nzeta = 10) unrepresented.
+    m_max, n_max = ntheta1 // 2, nzeta // 2
     ml, nl = [], []
     for m in range(0, m_max + 1):
         for n in range(-n_max, n_max + 1):
@@ -133,9 +137,24 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
     xm, xn = np.asarray(ml), np.asarray(nl)
     ang = theta[:, None, None] * xm[None, None, :] - zeta[None, :, None] * xn[None, None, :]
     cos_t, sin_t = jnp.asarray(np.cos(ang)), jnp.asarray(np.sin(ang))
-    w = 2.0 / (ntheta1 * nzeta) * np.ones(xm.shape)
+    # The factor of two is the real-basis DFT norm for modes strictly inside
+    # the band.  On an even grid the closing m = ntheta1/2 row and the
+    # n = nzeta/2 column are self-conjugate — exp(i*(ntheta1/2)*theta_i)
+    # equals its own reflection — so (m, n) and (m, -n) share a single grid
+    # basis function and each carries half the amplitude.  That is wrout.f's
+    # ``cosmui(:,mnyq) *= 0.5`` / ``cosnv(:,nnyq) *= 0.5`` half-weight; odd
+    # ntheta1/nzeta have no exact Nyquist mode and keep the plain factor.
+    m_folds = (ntheta1 % 2 == 0) & (xm == ntheta1 // 2)
+    n_folds = (nzeta % 2 == 0) & (np.abs(xn) == (nzeta // 2) * nfp)
+    w = 2.0 / (ntheta1 * nzeta) * np.where(m_folds, 0.5, 1.0) * np.where(n_folds, 0.5, 1.0)
     w[(xm == 0) & (xn == 0)] = 1.0 / (ntheta1 * nzeta)
     w = jnp.asarray(w)
+    # Where both angles fold — m in {0, ntheta1/2} and |n| in {0, nzeta/2} —
+    # the mode is real on the grid and has no sine partner at all.  Zero those
+    # columns so round-off in sin(pi*i) cannot emit a spurious sine table
+    # entry where VMEC writes an exact zero.
+    sine_free = ((xm == 0) | m_folds) & ((xn == 0) | n_folds)
+    sin_t = jnp.where(jnp.asarray(sine_free)[None, None, :], 0.0, sin_t)
 
     def project(f, parity):
         return w * jnp.einsum("tz,tzm->m", f, cos_t if parity == "cos" else sin_t)
