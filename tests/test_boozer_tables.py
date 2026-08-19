@@ -354,3 +354,20 @@ def test_tables_are_jittable(solved):
     # jit-vs-eager reassociation noise only
     np.testing.assert_allclose(got, np.asarray(tables["bmnc"]), rtol=1e-6,
                                atol=1e-14)
+
+
+def test_refine_booz_grids_is_the_identity_at_oversample_one():
+    """``oversample = 1`` returns the transform's own grid untouched.
+
+    The refinement multiplies ``booz_xform_jax``'s pinned
+    ``2*(2*mboz+1)`` by ``2*(2*nboz+1)`` quadrature, so asking for no
+    refinement has to hand back the very same constants and grids rather than
+    rebuild an equivalent pair -- the transform reads its Fourier
+    normalization back off those counts.
+    """
+    from vmex.core.omnigenity import _refine_booz_grids
+
+    constants, grids = object(), object()
+    same_constants, same_grids = _refine_booz_grids(constants, grids, 1, 3)
+    assert same_constants is constants
+    assert same_grids is grids
