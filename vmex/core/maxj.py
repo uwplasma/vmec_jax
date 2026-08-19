@@ -386,7 +386,8 @@ def qi_and_maximum_j_from_boozer(
         state, rt, surfaces=surfaces, mboz=int(mboz), nboz=int(nboz),
         oversample=int(oversample))
     common = dict(
-        bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+        bmnc_b=booz["bmnc_b"], bmns_b=booz.get("bmns_b"),
+        xm_b=booz["xm_b"], xn_b=booz["xn_b"],
         iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
         nfp=booz["nfp"], pitch=pitch, weights=weights)
     qi_out = j_invariant_qi_residual_from_boozer(
@@ -541,7 +542,8 @@ class MaximumJResidual:
             state, rt, surfaces=self.surfaces, mboz=self.mboz,
             nboz=self.nboz, oversample=self.oversample)
         out = maximum_j_residual_from_boozer(
-            bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            bmnc_b=booz["bmnc_b"], bmns_b=booz.get("bmns_b"),
+            xm_b=booz["xm_b"], xn_b=booz["xn_b"],
             iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
             nfp=booz["nfp"], psi_b=booz["psi_b"],
             psi_edge=booz["psi_edge"], pitch=self.pitch,
