@@ -242,6 +242,10 @@ def test_jacobian_certification_tolerance_is_separate_from_the_gradient_one():
     assert cfg.jacobian_adjoint_tol == 1.0e-4
     default = im.make_config(inp, ftol=1.0e-10, max_iterations=1000)
     assert default.jacobian_adjoint_tol > default.adjoint_tol
+    # The certifier corrects a direct block solve, so its budget is bounded
+    # well below the reverse-adjoint one: past the point where the
+    # factorization stops preconditioning, more cycles only buy wall time.
+    assert default.jacobian_adjoint_maxiter < default.adjoint_maxiter
 
 
 def test_raw_block_apply_requires_stored_factors():

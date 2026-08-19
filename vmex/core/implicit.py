@@ -280,6 +280,12 @@ class ImplicitConfig:
     #: the certifier needs 542 iterations to reach 1e-6 and none to reach
     #: 1e-4, for a relative change in the Jacobian of 3.2e-5.
     jacobian_adjoint_tol: float = 1e-4
+    #: Restart budget for the Jacobian column certifier.  It corrects a
+    #: direct block-tridiagonal solve, so a handful of cycles either lands it
+    #: or says the factorization has stopped being a good preconditioner at
+    #: this iterate; spending the full ``adjoint_maxiter`` there buys nothing
+    #: and costs half an hour per Jacobian on an asymmetric stage.
+    jacobian_adjoint_maxiter: int = 10
     adjoint_restart: int = 30
     adjoint_maxiter: int = 300
     #: reverse-adjoint GCROT(m, k) recycling solve (``_adjoint_solve_gcrot``):
@@ -321,6 +327,7 @@ def make_config(
     lconm1: bool = True,
     adjoint_tol: float = 1e-11,
     jacobian_adjoint_tol: float = 1e-4,
+    jacobian_adjoint_maxiter: int = 10,
     adjoint_restart: int = 30,
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
@@ -350,6 +357,7 @@ def make_config(
         multigrid=bool(multigrid), lconm1=bool(lconm1),
         adjoint_tol=float(adjoint_tol),
         jacobian_adjoint_tol=float(jacobian_adjoint_tol),
+        jacobian_adjoint_maxiter=int(jacobian_adjoint_maxiter),
         adjoint_restart=int(adjoint_restart),
         adjoint_maxiter=int(adjoint_maxiter),
         adjoint_gcrot_m=int(adjoint_gcrot_m), adjoint_gcrot_k=int(adjoint_gcrot_k),
@@ -1934,6 +1942,7 @@ def _implicit_evolved_tangent_multi_rhs(
     probe_chunk_size: int,
     response_chunk_size: int,
     certify_rtol: float | None = None,
+    certify_maxiter: int | None = None,
 ) -> tuple[SpectralState, LinearResponseReport]:
     frozen = jax.lax.stop_gradient(x_star)
     system = _raw_block_system(
@@ -1970,6 +1979,7 @@ def _implicit_evolved_tangent_multi_rhs(
                 (z_star,), (value,),
             )[1],
             rhs, cfg, x0=x0, rtol=certify_rtol,
+            max_restarts=certify_maxiter,
         )
         return solution, _linear_response_report(
             krylov, rhs, cfg, rtol=certify_rtol)
@@ -1978,16 +1988,12 @@ def _implicit_evolved_tangent_multi_rhs(
         correct, (tangent_batch, initial),
         chunk_size=max(1, int(response_chunk_size)),
     )
-    solution = jax.tree.map(
-        lambda value: jnp.where(
-            report.converged.reshape(
-                (report.converged.shape[0],)
-                + (1,) * (value.ndim - 1)
-            ),
-            value, jnp.full_like(value, jnp.nan),
-        ),
-        solution,
-    )
+    # A column that misses its tolerance is not garbage: GMRES starts from the
+    # direct block solve and decreases the residual monotonically, so its
+    # output is at least as good as that solve however far it got.  Discarding
+    # it as NaN threw away the whole Jacobian and left the caller re-using the
+    # previous one -- the work was spent and then wasted.  Hand it back and let
+    # the report say how far it got.
     return solution, report
 
 

@@ -1714,6 +1714,7 @@ def make_problem(
     implicit_jacobian_method: str = "auto",
     adjoint_tol: float = 1e-6,
     jacobian_adjoint_tol: float = 1e-4,
+    jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
     forward_ftol: float | None = None,
@@ -1867,6 +1868,7 @@ def make_problem(
             jac_solver=jac_solver,
             adjoint_tol=adjoint_tol,
             jacobian_adjoint_tol=jacobian_adjoint_tol,
+            jacobian_adjoint_maxiter=jacobian_adjoint_maxiter,
             adjoint_maxiter=adjoint_maxiter,
             max_fsq_ratio=max_fsq_ratio,
             warm_start=(warm_start if hot_restart else None),
@@ -1916,6 +1918,7 @@ def least_squares(
     jac_solver: str = "auto",
     adjoint_tol: float = 1e-6,
     jacobian_adjoint_tol: float = 1e-4,
+    jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
     forward_ftol: float | None = None,
@@ -2302,6 +2305,7 @@ def _least_squares_implicit(
     jac_solver: str = "auto",
     adjoint_tol: float = 1e-6,
     jacobian_adjoint_tol: float = 1e-4,
+    jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
     warm_start: str | None = "perturbation",
@@ -2387,6 +2391,7 @@ def _least_squares_implicit(
         hot_restart=(warm_start is not None),
         adjoint_tol=adjoint_tol,
         jacobian_adjoint_tol=jacobian_adjoint_tol,
+        jacobian_adjoint_maxiter=jacobian_adjoint_maxiter,
         adjoint_maxiter=adjoint_maxiter,
         max_fsq_ratio=max_fsq_ratio,
     )
@@ -2705,6 +2710,7 @@ def _least_squares_implicit(
     # second config identity misses the caches keyed on this one and forces a
     # runtime rebuild inside the traced Jacobian.
     certify_rtol = float(cfg.jacobian_adjoint_tol)
+    certify_maxiter = int(cfg.jacobian_adjoint_maxiter)
 
     def jacobian_rows(x: jnp.ndarray):
         """Exact residual Jacobian by *forward* implicit differentiation.
@@ -2723,7 +2729,8 @@ def _least_squares_implicit(
         def column(tp_stack):
             tp = tangent_of(tp_stack)
             dz, krylov = imp._adjoint_solve(
-                Fz, rhs_of(tp), cfg, rtol=certify_rtol)
+                Fz, rhs_of(tp), cfg, rtol=certify_rtol,
+                max_restarts=certify_maxiter)
             return column_of(dz, tp), dz, krylov
 
         tangent_chunk = ndof if chunk is None else chunk
@@ -2771,6 +2778,7 @@ def _least_squares_implicit(
             params, cfg, frozen, mask_const, tangent_batch,
             active_fields=active_fields, probe_chunk_size=probe_chunk,
             response_chunk_size=tangent_chunk, certify_rtol=certify_rtol,
+            certify_maxiter=certify_maxiter,
         )
 
         def column(args):
