@@ -1688,30 +1688,62 @@ targets `main` with a `(field, particles, ...)` signature, which is the right
 shape for a boundary optimization; reconciling it with the coil-dof signature
 on the working branch is a separate job.
 
-### 21.2 `vmex/core/tracing.py` [TODO]
+### 21.2 The traceable field-coefficient gap [TODO]
 
-A new module is justified here on the same grounds as `bootstrap.py`,
-`neoclassical.py` and `turbulence.py`: one physics concern, one file. It is a
-thin adapter over ESSOS, not a reimplementation — vmex owns the equilibrium and
-the parameter plumbing, ESSOS owns the orbit integration.
+The adapter is the easy half. The real work is that **no traceable path in vmex
+produces the coefficients ESSOS needs.** Measured, not assumed:
+
+| builder | jnp calls | np calls | gradient |
+|---|---|---|---|
+| `nyquist.wout_field_tables` | 0 | 23 | none — pure host NumPy |
+| `boozer_tables.boozer_input_tables` | 43 | 21 | traceable |
+
+`Vmec.from_arrays` wants `bmnc, rmnc, zmns, bsubsmns, bsubumnc, bsubvmnc,
+bsupumnc, bsupvmnc, gmnc` plus the mode tables and `Aminor_p`.
+`boozer_input_tables` already delivers `bmnc`, `bsubumnc`, `bsubvmnc`, `rmnc`,
+`zmns` and the LASYM partners, traceably, on a single half-mesh surface. It
+does **not** deliver `bsupumnc`, `bsupvmnc`, `gmnc` or `bsubsmns`, and the only
+code that does — `wout_field_tables` — is host NumPy end to end.
+
+So the deliverable is a traceable Nyquist projection of `bsupu`, `bsupv`,
+`sqrt(g)` and `bsubs`. The real-space quantities are already traceable in the
+solver core (`fields.py` builds `bsupu`/`bsupv` from `phipog` and the lambda
+derivatives; `geometry.half_mesh_jacobian` gives `sqrt(g)`), so what is missing
+is only the analysis step, and `boozer_input_tables` is the worked example of
+how to do that in JAX with the same trig tables. Extending that function, or a
+sibling beside it in `boozer_tables.py`, is the smaller change than making
+`wout_field_tables` traceable — that one also carries the jxbforce filtering
+and the 1D diagnostics, none of which tracing needs.
+
+Scope this honestly before starting: it is a real piece of numerics with a
+correctness bar (the traceable projection must reproduce the NumPy one to
+round-off on both symmetry modes), not a wrapper.
+
+*Geometry alone carries no orbit gradient.* Guiding-centre motion in flux
+coordinates uses `bsub*`, `bsup*`, `gmnc` and `bmnc`; `rmnc`/`zmns` enter only
+`to_xyz` and the Cartesian `B`. A probe that perturbs `rmnc`/`zmns` returns
+exactly zero for both the exact and the soft loss — correct physics, and it
+would read as a broken gradient to anyone testing the obvious thing. The gate
+must perturb the boundary and check the gradient arrives through the
+recomputed field coefficients.
+
+### 21.2b `vmex/core/tracing.py` [TODO]
+
+Once 21.2 lands, the adapter is thin and a new module is justified on the same
+one-concern-per-file grounds as `bootstrap.py` and `neoclassical.py`:
 
     trace_alphas(source, *, tmax=3e-4, nparticles=200, s=0.25, seed=42,
                  timestep=5e-7, times_to_trace=200, model="GuidingCenter")
 
-accepting either a wout path or a solved equilibrium, returning a small frozen
-result carrying `loss_fraction`, `lost_times`, `trajectories` and the
-lost/unresolved/failed counts. Keep the ESSOS import local to the call so vmex
-still imports without ESSOS installed, matching how the ESSOS-dependent
-examples already behave.
-
-The optimizable follows the established `(state, runtime)` signature so it
-drops into `VmecProblem.from_tuples` next to `aspect_ratio` and
-`magnetic_well`:
+taking a wout path or a solved equilibrium and returning `loss_fraction`,
+`lost_times`, `trajectories` and the lost/unresolved/failed counts. The
+optimizable keeps the established signature so it drops into
+`VmecProblem.from_tuples`:
 
     alpha_loss_fraction(state, rt, *, tmax, nparticles, s, width, seed)
 
-built on the ESSOS array constructor and the smooth surrogate, so it is
-traceable end to end from the boundary coefficients.
+Keep the ESSOS import inside the call so vmex still imports without ESSOS,
+matching the existing ESSOS-dependent examples.
 
 ### 21.3 `vmex --trace` [TODO]
 
@@ -1768,3 +1800,4 @@ it with `--run-vmec2000 --vmec2000-executable=.../STELLOPT_new/bin/xvmec2000`,
 and record which tree produced any golden array that gets pinned — the two
 trees are two and a half years apart and disagree on LASYM.
 - 2026-08-19 claude: built STELLOPT_new (9177f58c) with xvmec2000/xbooz_xform/xneo; confirmed #501 merged, so the old 2024 tree's bmns(i,i) bug no longer constrains LASYM NEO references.
+- 2026-08-19 claude: P21.2 corrected — measured that wout_field_tables is host NumPy (0 jnp) so it carries no gradient; the deliverable is a traceable Nyquist projection of bsup/gmnc/bsubs beside boozer_input_tables, not a wrapper.
