@@ -954,3 +954,26 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   If that lands the stage in minutes, P1.a closes; if the resulting Jacobian is too inaccurate to
   optimize with, the real fix is Phase 3's pivoted factorization / preconditioner, and the
   tolerance and budget knobs are only damage control.
+- 2026-08-19 rogeriojorge: P1.a — bounding the certifier and keeping its answer takes the same
+  20-nfev LASYM QA stage from **54,940 s to 560.9 s, a 98x speedup**. Per Jacobian on the
+  plateau: 2038 s -> 44.6 s. The change is two things together, and both are needed:
+  `jacobian_adjoint_maxiter` (10 restarts = 300 Krylov iterations), and *not* NaN-ing the
+  columns that miss tolerance. GMRES warm-starts from the direct block solve and decreases the
+  residual monotonically, so its bounded output is at least as good as that solve; NaN-ing it
+  made the caller fall back to the previous Jacobian, so the 2000 s was spent and then thrown
+  away.
+  The cost is real and must be stated: 40-47 of 48 columns finish uncertified, and after 20 nfev
+  the stage reaches cost 3.088 where the exact-Jacobian run reached 2.625 (17.6% worse), with
+  njev=13 against 20. So this is an approximate-Jacobian Gauss-Newton, not the same algorithm
+  running faster. Whether it is the right default rests on whether it wins *per unit wall clock*
+  — 98x more iterations per hour against ~18% worse progress per iteration — which is being
+  measured rather than assumed.
+  DIAGNOSIS for Phase 3, and it is the important part: that so many columns need large
+  corrections contradicts the documented claim that the raw residual Jacobian is exactly block
+  tridiagonal. If it were, the direct block solve would be near-exact and the certifier would
+  converge in about one iteration, as it does at the first two iterates. It stops converging from
+  iterate ~3 on, which matches `_host_boundary_schur_adjoint`'s own comment that a globally
+  pivoted sparse LU is materially more accurate than no-pivot block-Thomas near the axis. So the
+  principled fix is to route the Jacobian's bulk solve through the pivoted `SpluFactorization`
+  the Schur lane already builds; the columns would then be fast *and* certified, and the budget
+  knob would go back to being a safety net rather than the mechanism.
