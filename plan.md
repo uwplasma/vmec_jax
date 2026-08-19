@@ -1340,8 +1340,10 @@ the three JAX-sibling moves instead of behind ESSOS.
 ### Ordering that respects the dependencies
 
 ```
-now        vmex #118  (restores docs/evidence consistency)   [IN PROGRESS]
-           vmex #117, #116, #121+#119, then #122, then #125
+now        vmex #126  (LASYM delta-rotation Jacobian — unblocks Phase 17)
+           vmex #118  (restores docs/evidence consistency)
+           vmex #119  [GREEN, awaiting merge], #121, #116, #117
+           then #122 (draft), #125 (this plan)
 next       Phase 17  (asymmetric quasisymmetry: correctness before anything else)
            Phase 15.1  virtual_casing_jax owns virtual casing   -> vmex deletes
            Phase 15.2  booz_xform_jax owns the Boozer transform -> vmex deletes
@@ -1357,3 +1359,4 @@ physics into the package that owns it, and only then reorganize files —
 every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — localized the LASYM underperformance to a wrong analytic Jacobian in the n=0 asymmetric m=1 difference channel (16% error); forward map verified correct.
 - 2026-08-19 claude: P17 — root cause is the frozen `delta == 0` branch in `implicit.py::_lasym_delta_rotation_traceable`; fixed, gated, verified end-to-end (1.6e-1 -> 1.6e-7).
+- 2026-08-19 claude: P17 — opened vmex #126 with the delta-rotation fix and its regression gate; #119 is green and queued for merge.
