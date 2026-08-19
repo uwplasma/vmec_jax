@@ -1115,11 +1115,10 @@ def _presf_ns_scale(inp: VmecInput, ns: int) -> float:
 def _presf_ns_scale_traceable(params, inp: VmecInput, ns: int):
     """:func:`_presf_ns_scale` as a function of the differentiated parameters.
 
-    The ratio is a smooth function of ``am`` and ``pres_scale``, both of which
-    are :class:`~vmex.core.implicit.ImplicitParams` fields, so the adjoint lanes
-    cannot take the host float computed from the reference input: the value
-    would be right at the reference point and the derivative silently absent.
-    Only ``pmass_type``, the spline knots and ``bloat`` are static here.
+    The ratio is smooth in ``am`` and ``pres_scale``, both
+    :class:`~vmex.core.implicit.ImplicitParams` fields, so the adjoint lanes
+    need it traced; only ``pmass_type``, the spline knots and ``bloat`` are
+    static.
     """
     hs = 1.0 / float(ns - 1)
     sedge = hs * (float(ns) - 1.5)
@@ -1130,8 +1129,8 @@ def _presf_ns_scale_traceable(params, inp: VmecInput, ns: int):
     p_one = _profiles.pressure(inp.pmass_type, params.am, inp.am_aux_s,
                                inp.am_aux_f, 1.0, **kwargs)
     # A vanishing edge pressure is the two_power family's p(1) = 0, where the
-    # scale is defined to be zero; the safe denominator keeps the derivative
-    # finite instead of propagating a nan back through the ratio.
+    # scale is zero by definition; the safe denominator keeps the derivative
+    # finite there.
     nonzero = p_edge != 0.0
     return jnp.where(nonzero, p_one / jnp.where(nonzero, p_edge, 1.0), 0.0)
 
