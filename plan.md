@@ -1296,6 +1296,18 @@ n=0 m=1 in both channels, since no existing test would have caught this.
    seed amplitude in `examples/optimization/stellarator_asymmetry/`, and report
    quasisymmetry alongside the terms actually being minimized so the tradeoff
    is visible rather than looking like a failure.
+
+   On the seed specifically, the examples' stated rationale does not survive
+   measurement. `ASYMMETRY_PERTURBATION` exists to keep the optimizer "away from
+   the symmetric stationary subspace", but the amp=0 run above started at
+   *exactly* zero asymmetry and still reached 1.599e-4, beating symmetric's
+   2.445e-4 — which is only possible if the asymmetric families moved. The
+   subspace is stationary for the scalar total but not for the residual
+   *vector*, and least squares sees the vector. So the perturbation is not
+   needed to break the symmetry, while at 0.01 it costs a factor of 38 in
+   starting quasisymmetry. Caveat on scope: this is one nfp=2 QA case at
+   max_mode 1, mpol 3, with quasisymmetry as the only term. Confirm on a second
+   family and with the full objective before changing all four examples.
 2. **booz_xform_jax under LASYM: audited 2026-08-19, clean — but it is not in
    the loop for the QA/QH/QP asymmetry examples anyway.** The `bmns(i,i)`
    repeated-index bug was not copied in; the package has no per-mode scalar
@@ -1504,3 +1516,4 @@ every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — seed hypothesis refuted: LASYM at amp=0 starts from the symmetric seed and still ends 74x worse; QS lane consistency ruled out; QS-only rerun in flight.
 - 2026-08-19 claude: P17 — RESOLVED. QS-only: LASYM went from matching symmetric pre-fix (2.436e-4 vs 2.445e-4) to beating it post-fix (1.599e-4). Remainder is example objective weighting, not a code defect.
 - 2026-08-19 claude: P17.2a — Nyquist-band projection fixed and gated (2-3% -> ~1e-16 on the band); branch fix/boozer-nyquist-band rebased onto main.
+- 2026-08-19 claude: P17 — measured that the asymmetry seed perturbation is unnecessary (amp=0 still beats symmetric) and costly (38x worse start); needs confirming on a second family.
