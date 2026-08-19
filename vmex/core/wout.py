@@ -859,12 +859,9 @@ def wout_from_state(
         phipf=phipf_out, chipf=chipf_out, pres=pres_pa, vp=vp,
         signgs=signgs)
 
-    # jxbforce.f jdotb: the lasym filter lane now carries the fixaray.f
-    # half-interval analysis norm (physical-scale contract of
+    # jxbforce.f jdotb: the lasym filter returns physical-scale fields (see
     # nyquist.filter_bsubuv_lasym), so <J.B> lands in WOUT units for both
-    # symmetry modes — the former empirical lasym 16x (an approximation
-    # that held only because the bsubs-derivative terms nearly cancel in
-    # the flux average) is gone.
+    # symmetry modes.
     jdotb = np.asarray(tabs.jdotb, dtype=float)
 
     # -- eqfor.f / spectrum.f / Compute_Currents ports -------------------

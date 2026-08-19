@@ -139,16 +139,10 @@ def test_live_vmec2000_fixed_boundary_parity(
 
 
 def _updown_beta_input():
-    """Finite-beta up-down-asymmetric tokamak (test_stability fixture deck)."""
-    inp = VmecInput.from_file(DATA / "input.up_down_asymmetric_tokamak")
-    return replace(
-        inp,
-        ns_array=np.array([13]),
-        ftol_array=np.array([1e-10]),
-        niter_array=np.array([5000]),
-        am=np.array([1.0, -1.0]),
-        pres_scale=5000.0,
-    )
+    """Finite-beta up-down-asymmetric tokamak; one definition, shared."""
+    from tests.test_stability import _lasym_finite_beta_input
+
+    return _lasym_finite_beta_input()
 
 
 def _li383_lasym_input():

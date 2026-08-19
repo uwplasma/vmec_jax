@@ -134,12 +134,12 @@ def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: Solver
         sinmu = jnp.asarray(trig.sinmu[:nt2, : mmax + 1])
         cosnv = jnp.asarray(trig.cosnv[:, : nmax + 1])
         sinnv = jnp.asarray(trig.sinnv[:, : nmax + 1])
-        # fixaray.f half-interval analysis norm 1/(nzeta*(ntheta2-1)) — the
-        # reduced-grid parity analysis must return the *physical* field
-        # (jxbforce.f parity; see nyquist.filter_bsubuv_lasym).
-        dnorm = 1.0 / (nzeta * (nt2 - 1))
-        cosmui = (dnorm * cosmu).at[0].multiply(0.5).at[-1].multiply(0.5)
-        sinmui = dnorm * sinmu
+        # fixaray.f sets the lasym weights to the full-interval
+        # 1/(nzeta*ntheta1); jxbforce.f doubles them for the half-interval
+        # reduced-grid sum (SPH012314), giving 1/(nzeta*(ntheta2-1)) and a
+        # physical-scale field.
+        cosmui = jnp.asarray(trig.cosmui[:nt2, : mmax + 1])
+        sinmui = jnp.asarray(trig.sinmui[:nt2, : mmax + 1])
         dmult = jnp.ones(
             (mmax + 1, nmax + 1), dtype=jnp.asarray(bsubu).dtype)
         mnyq, nnyq = nt2 - 1, nzeta // 2
@@ -193,10 +193,7 @@ def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: Solver
                 analyze_lasym(asymmetric, cosmui, sinnv), cosmu, sinnv)
             return extend(symmetric, asymmetric)
 
-        # jxbforce applies two successive LASYM projections; each carries the
-        # full-grid factor-of-two convention.  Both are required for WOUT and
-        # VMEC2000 <J.B>/Mercier normalization (one pass is a factor four off).
-        bsubu, bsubv = filter_lasym(bsubu), filter_lasym(bsubv)
+        # Band-limit to the solver spectrum; the projection is idempotent.
         bsubu, bsubv = filter_lasym(bsubu), filter_lasym(bsubv)
         bsubs_full = bsubs.at[1:-1].set(
             0.5 * (bsubs[1:-1] + bsubs[2:])).at[0].set(0.0)

@@ -479,11 +479,11 @@ def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
 def test_lasym_dmerc_matches_wout_and_vmec2000(lasym_finite_beta_eq):
     """LASYM DMerc: wout-engine identity plus the live VMEC2000 anchor.
 
-    The pinned profile is xvmec2000 output for this exact deck (measured
-    agreement 1.6e-4 relative; regression gate 2e-3).  VMEC2000's own lasym
-    Mercier lane is a valid anchor: mercier.f integrates full-theta-grid
-    real-space fields with the uniform lasym ``wint`` (fixaray.f dnorm3)
-    and its jxbforce.f inputs carry both parity channels.
+    The pinned profile is xvmec2000 output for this exact deck: 6.3e-4
+    per-element relative against the 2e-3 gate, 1.6e-4 scale-relative.
+    mercier.f integrates full-theta-grid real-space fields with the uniform
+    lasym ``wint`` and its jxbforce.f inputs carry both parity channels, so
+    VMEC2000 anchors the asymmetric lane.
     """
     eq = lasym_finite_beta_eq
     actual = np.asarray(jax.jit(stab.d_merc_state)(eq.state, eq.runtime))
@@ -546,7 +546,7 @@ def test_lasym_glasser_identity_residuals_and_reconstruction(
 
     info = plotting._glasser_d_r_from_wout(eq.wout)
     assert info["valid"], info["note"]
-    assert float(info["mismatch"]) < 2.0e-2
+    assert float(info["mismatch"]) < 1.0e-2
     d_r_recon = np.asarray(info["d_r"], dtype=float)
     # D_R is a near-cancelling difference of DMerc-scale integrals, so the
     # wout-table reconstruction class is relative to the DMerc scale

@@ -450,7 +450,9 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
         ``D_R = -DMerc + (H - S^2/2)^2 / S^2``     (0 where the shear vanishes)
 
     exactly as the traceable :func:`vmex.core.stability.glasser_d_r_state`
-    (validated against it to ~1e-7 on the bundled decks).  Both symmetry
+    (validated against it to ~1e-7 on the bundled symmetric decks, and to a
+    few percent of ``D_R`` for ``lasym``, where ``D_R`` is a near-cancelling
+    difference of ``DMerc``-scale integrals).  Both symmetry
     modes are supported: for ``lasym`` equilibria every field carries its
     sine/cosine partner table, making this the independent lasym-complete
     NumPy reference for the Mercier integrals.  The reconstruction is

@@ -289,15 +289,11 @@ def filter_bsubuv_lasym(
     accumulation (the sums are cancellation-limited near the edge).
     Returns full-grid ``(ns, ntheta3, nzeta)`` arrays.
 
-    Scale contract: one pass is an idempotent band-limited projection — the
-    output is the *physical* field, exactly as in VMEC2000, whose jxbforce.f
-    analysis weights ``cosmui/sinmui`` carry the fixaray.f half-interval
-    ``dnorm = 1/(nzeta*(ntheta2-1))``.  The
-    :func:`_analysis_theta_tables` weights used here carry the lasym *output*
-    ``dnorm = 1/(nzeta*ntheta1)`` instead, so the per-mode ``dnorm1`` below
-    doubles them back.  (Before this correction each pass halved the field,
-    which silently broke every lasym consumer of the real-space output:
-    the Mercier ``tjb/tjj`` integrals, ``itheta/izeta`` and ``<J.B>``.)
+    Scale contract: one pass is an idempotent band-limited projection
+    returning the *physical* field.  ``fixaray.f`` gives the lasym tables the
+    full-interval ``dnorm = 1/(nzeta*ntheta1)``; ``jxbforce.f`` doubles it for
+    the half-interval reduced-grid sum (``SPH012314``), which is the
+    ``dnorm1`` factor below.
     """
     acc = np.longdouble
     bsubu = np.asarray(bsubu, dtype=acc)

@@ -495,22 +495,16 @@ reproduces the symmetric VMEC normalization at ``ns=51`` (``D_I`` maximum
 absolute difference ``9.10e-4`` and ``D_R`` ``8.63e-5`` over normalized
 poloidal flux ``[0.1, 1)``).
 
-LASYM scope.  VMEC2000's own Mercier output is LASYM-complete —
-``mercier.f`` integrates real-space fields over the full theta interval
-with the uniform lasym weights (``fixaray.f`` ``dnorm3``), and the
-``jxbforce.f`` inputs carry both parity channels — so it anchors the
-asymmetric lane.  An earlier VMEX comparison found interior LASYM ``DMerc``
-relative differences of ``18.6`` with sign disagreements while all geometry
-families matched to ``2.49e-10``; the root cause was normalization, not
-physics: the ported lasym filter analyzed the parity-split reduced-grid
-fields with the *output* norm ``1/(nzeta*ntheta1)`` instead of
-``fixaray.f``'s half-interval ``1/(nzeta*(ntheta2-1))``, halving every
-filtered field per pass and feeding the Mercier current integrals an
-inconsistent mixture (it also produced the former empirical lasym
-``16x`` on ``<J.B>``).  With the physical-scale filter,
-:func:`~vmex.core.stability.d_merc_state` matches live VMEC2000 LASYM
-``DMerc`` per-term to ``1.6e-4`` (finite-beta up-down-asymmetric tokamak)
-and ``2.0e-3`` (asymmetric 3-D li383 variant) relative with full interior
+LASYM scope.  ``mercier.f`` integrates real-space fields over the full
+theta interval with the uniform lasym weights and the ``jxbforce.f`` inputs
+carry both parity channels, so VMEC2000 anchors the asymmetric lane.
+``fixaray.f`` sets those weights to the full-interval
+``1/(nzeta*ntheta1)`` and ``jxbforce.f`` doubles them for the half-interval
+reduced-grid sum (``SPH012314``), giving the physical-scale norm
+``1/(nzeta*(ntheta2-1))`` VMEX uses.  On the bundled finite-beta
+up-down-asymmetric deck :func:`~vmex.core.stability.d_merc_state` reproduces
+the golden VMEC2000 ``DMerc`` profile to ``1.2e-4`` scale-relative
+(``DGeod`` ``2.1e-3``, ``<J.B>`` ``1.0e-4``) with full interior
 sign agreement — inside the ``5e-2`` tolerance class of the symmetric live
 gate — and an independent NumPy reconstruction of the ``mercier.f``
 integrals from the wout Fourier tables (both parities) reproduces the same
