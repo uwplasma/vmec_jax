@@ -456,6 +456,9 @@ def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
         -2445074.81564557, -1869459.08846507, -1317836.93988867,
         -658744.51123515,
     ])
+    # 1.5e-3 per-element against this 2e-3 gate, so the margin is only 1.3x;
+    # the worst point is the outermost interior surface, where |<J.B>| is an
+    # order of magnitude below the profile maximum.  Scale-relative is 1.5e-4.
     np.testing.assert_allclose(
         np.asarray(jdotb)[2:-1], vmec2000, rtol=2e-3
     )
@@ -616,3 +619,52 @@ def test_surface_index_validation(highbeta_eq):
     ns = int(np.shape(highbeta_eq.state.R_cos)[0])
     with pytest.raises(ValueError, match="out of range"):
         stab.ballooning_lambda(highbeta_eq.state, highbeta_eq.runtime, s_indices=(ns - 1,))
+
+
+def test_lasym_mercier_decomposition_matches_vmec2000(lasym_finite_beta_eq):
+    """Every LASYM Mercier term against xvmec2000, pressure-driven one included.
+
+    ``DMerc`` alone can agree while its parts cancel, so pin the four terms of
+    the ``mercier.f`` sum (``Dshear``/``Dcurr``/``Dwell``/``Dgeod``)
+    separately.  ``DWell`` needs pressure: the shipped deck has ``AM = 0`` and
+    the fixture raises it to ``am = [1, -1]``, ``pres_scale = 5000``, which is
+    the state these numbers come from.  Reference: STELLOPT
+    ``v6.5.0-42-g9177f58``, same deck, converged to ``fsqr`` 4.59e-11.
+    """
+    eq = lasym_finite_beta_eq
+    vmec2000 = {
+        "DWell": np.array([
+            -2.22718998e-05, -1.51031785e-05, -1.16397303e-05,
+            -9.21471107e-06, -6.80857520e-06, -3.67996680e-06,
+            1.08919314e-06, 8.99038455e-06, 2.26388466e-05,
+            4.57963823e-05,
+        ]),
+        "DShear": np.array([
+            2.93402778e-03, 2.93402778e-03, 2.93402778e-03,
+            2.93402778e-03, 2.93402778e-03, 2.93402778e-03,
+            2.93402778e-03, 2.93402778e-03, 2.93402778e-03,
+            2.93402778e-03,
+        ]),
+        "DCurr": np.array([
+            -8.60603463e-04, -9.78895020e-04, -9.95338687e-04,
+            -9.53790255e-04, -8.73352958e-04, -7.51384654e-04,
+            -5.59906561e-04, -2.25290780e-04, 4.55938293e-04,
+            2.45104164e-03,
+        ]),
+        "DGeod": np.array([
+            -1.09317610e-03, -8.46136880e-04, -6.58414111e-04,
+            -5.21036775e-04, -4.19891910e-04, -3.40482600e-04,
+            -2.71060005e-04, -2.07293295e-04, -1.72703606e-04,
+            -3.73458619e-04,
+        ]),
+    }
+    # Measured per element: DWell 1.5e-7, DShear 7.6e-10 (the floor is the
+    # nine significant figures pinned above, not a disagreement), DCurr
+    # 2.2e-3, DGeod 3.2e-3.  The two current terms are the loosest.
+    tolerance = {"DWell": 1e-6, "DShear": 1e-8, "DCurr": 5e-3, "DGeod": 5e-3}
+    for name, reference in vmec2000.items():
+        actual = np.asarray(getattr(eq.wout, name), dtype=float)[2:-1]
+        np.testing.assert_allclose(actual, reference, rtol=tolerance[name],
+                                   err_msg=f"{name} against xvmec2000")
+    # The pressure term must actually be exercised, not incidentally zero.
+    assert np.max(np.abs(vmec2000["DWell"])) > 1e-6

@@ -29,11 +29,12 @@ geometry channels, :class:`vmex.core.fields.MagneticFields` the half-mesh
 field state, and :class:`vmex.core.fourier.TrigTables` (built at the
 Nyquist resolution) the trig/weight tables.
 
-Normalization note (parity-critical): VMEC2000's *output* transforms
-normalize lasym integrals on the full theta grid (``dnorm = 1/(nzeta *
-ntheta1)``, fixaray.f SPH012314), while the core solver trig tables carry the
-reduced-interval ``dnorm`` for both symmetry modes (see
-:mod:`vmex.core.fourier`).  :func:`_analysis_theta_tables` therefore
+Normalization note (parity-critical): the *output* transforms normalize lasym
+integrals on the full theta grid (``1/(nzeta*ntheta1)``, paired with the
+per-mode doubling below), while the core solver trig tables carry the
+reduced-interval ``dnorm = 1/(nzeta*(ntheta2-1))`` for both symmetry modes
+(see :mod:`vmex.core.fourier`).  Both routes land on the same analysis
+weight.  :func:`_analysis_theta_tables` therefore
 rebuilds the integration-weighted theta tables with the output convention.
 
 Host NumPy throughout: this is one-shot output post-processing, not solver
@@ -83,10 +84,10 @@ def nyquist_limits(trig: TrigTables) -> tuple[int, int]:
 def _analysis_theta_tables(trig: TrigTables) -> tuple[np.ndarray, np.ndarray]:
     """Integration-weighted theta tables in the *output* dnorm convention.
 
-    ``fixaray.f``: ``dnorm = 1/(nzeta*ntheta1)`` on the full grid for lasym
-    runs (SPH012314), ``1/(nzeta*(ntheta2-1))`` on the endpoint-half-weighted
-    reduced grid otherwise; ``cosmui`` rows 0 and ``ntheta2-1`` carry the
-    half-weights in both modes.  Returns ``(cosmui, sinmui)`` restricted to
+    ``1/(nzeta*ntheta1)`` on the full grid for lasym runs,
+    ``1/(nzeta*(ntheta2-1))`` on the endpoint-half-weighted reduced grid
+    otherwise; ``cosmui`` rows 0 and ``ntheta2-1`` carry the half-weights in
+    both modes.  The lasym factor of two returns in the per-mode ``dnorm1``.  Returns ``(cosmui, sinmui)`` restricted to
     the reduced grid, shape ``(ntheta2, mnyq+1)``.
     """
     nt2 = int(trig.ntheta2)
@@ -290,10 +291,10 @@ def filter_bsubuv_lasym(
     Returns full-grid ``(ns, ntheta3, nzeta)`` arrays.
 
     Scale contract: one pass is an idempotent band-limited projection
-    returning the *physical* field.  ``fixaray.f`` gives the lasym tables the
-    full-interval ``dnorm = 1/(nzeta*ntheta1)``; ``jxbforce.f`` doubles it for
-    the half-interval reduced-grid sum (``SPH012314``), which is the
-    ``dnorm1`` factor below.
+    returning the *physical* field.  The lasym analysis tables carry the
+    full-interval ``1/(nzeta*ntheta1)`` and the per-mode ``dnorm1`` below
+    doubles it, giving the ``1/(nzeta*(ntheta2-1))`` weight the reduced-grid
+    parity sum needs.
     """
     acc = np.longdouble
     bsubu = np.asarray(bsubu, dtype=acc)

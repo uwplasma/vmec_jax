@@ -134,10 +134,9 @@ def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: Solver
         sinmu = jnp.asarray(trig.sinmu[:nt2, : mmax + 1])
         cosnv = jnp.asarray(trig.cosnv[:, : nmax + 1])
         sinnv = jnp.asarray(trig.sinnv[:, : nmax + 1])
-        # fixaray.f sets the lasym weights to the full-interval
-        # 1/(nzeta*ntheta1); jxbforce.f doubles them for the half-interval
-        # reduced-grid sum (SPH012314), giving 1/(nzeta*(ntheta2-1)) and a
-        # physical-scale field.
+        # jxbforce.f analysis weights: 1/(nzeta*(ntheta2-1)) over the
+        # half-interval reduced grid, which is the physical-scale contract of
+        # nyquist.filter_bsubuv_lasym.
         cosmui = jnp.asarray(trig.cosmui[:nt2, : mmax + 1])
         sinmui = jnp.asarray(trig.sinmui[:nt2, : mmax + 1])
         dmult = jnp.ones(

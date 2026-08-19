@@ -498,12 +498,12 @@ poloidal flux ``[0.1, 1)``).
 LASYM scope.  ``mercier.f`` integrates real-space fields over the full
 theta interval with the uniform lasym weights and the ``jxbforce.f`` inputs
 carry both parity channels, so VMEC2000 anchors the asymmetric lane.
-``fixaray.f`` sets those weights to the full-interval
-``1/(nzeta*ntheta1)`` and ``jxbforce.f`` doubles them for the half-interval
-reduced-grid sum (``SPH012314``), giving the physical-scale norm
-``1/(nzeta*(ntheta2-1))`` VMEX uses.  On the bundled finite-beta
-up-down-asymmetric deck :func:`~vmex.core.stability.d_merc_state` reproduces
-the golden VMEC2000 ``DMerc`` profile to ``1.2e-4`` scale-relative
+The analysis weight is ``1/(nzeta*(ntheta2-1))`` over the half-interval
+reduced grid in both symmetry modes, which is the physical-scale norm VMEX
+uses.  On the bundled up-down-asymmetric deck, raised to finite pressure by
+the stability fixture (the shipped deck has ``AM = 0``, so ``DWell`` vanishes
+identically on it), :func:`~vmex.core.stability.d_merc_state` reproduces the
+golden VMEC2000 ``DMerc`` profile to ``1.2e-4`` scale-relative
 (``DGeod`` ``2.1e-3``, ``<J.B>`` ``1.0e-4``) with full interior
 sign agreement — inside the ``5e-2`` tolerance class of the symmetric live
 gate — and an independent NumPy reconstruction of the ``mercier.f``
