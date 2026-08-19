@@ -110,6 +110,8 @@
       "tests/test_near_degenerate_vacuum.py::test_current_free_vacuum_nonconvergence_suggests_lforbal",
       "tests/test_multigrid_ladder.py::test_initial_bad_jacobian_retries_once_through_ns3",
       "tests/test_implicit_grad.py::test_solovev_gradients_vs_fd",
+      "tests/test_optimize.py::test_min_abs_iota_floors_the_profile_not_its_average",
+      "tests/test_optimize.py::test_min_abs_iota_gradient_is_finite_and_matches_fd",
       "tests/test_bounce.py::test_jit_jvp_vjp_and_finite_difference_agree",
       "tests/test_qi_residuals.py::test_action_residual_ad_matches_finite_difference",
       "tests/test_qi_residuals.py::test_objective_terms_share_the_composable_interface",
