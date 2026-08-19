@@ -995,9 +995,8 @@ def wout_field_tables(
         bsubsmnc = wrout_cos_coeffs(f=pairs["bsubs"][1], modes=nyq_modes, trig=trig)
 
         # wrout.f lasym conventions: covariant tables restricted to the
-        # solver band.  The former explicit doubling moved into the filter
-        # itself (physical-scale contract of :func:`filter_bsubuv_lasym`),
-        # so the analyzed tables land in file convention directly.
+        # solver band.  filter_bsubuv_lasym returns physical-scale fields, so
+        # the analyzed tables land in file convention directly.
         m_arr = np.asarray(nyq_modes.m, dtype=int)
         n_arr = np.asarray(nyq_modes.n, dtype=int)
         mask_bsub = (m_arr >= int(mpol)) | (np.abs(n_arr) > int(ntor))
