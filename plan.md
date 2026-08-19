@@ -1128,6 +1128,51 @@ other dof agrees to ~1e-8. Evidence, in order of strength:
   zeroed reproduces the symmetric run to 4.4e-9 on QS residual, aspect,
   magnetic well, iota and volume. Value right, derivative wrong.
 
+**ROOT CAUSE AND FIX (2026-08-19).** Not the m=1 constraint in
+`residuals.py` — that was audited and exonerated (`_m1_rotate_asym` is exactly
+invertible at n=0, round trip 2.2e-16; the n=0 block is `[[1,1],[1,-1]]` at
+alpha=1 and its exact inverse at alpha=0.5; matches `readin.f:678-692`, which
+applies the constraint over the whole n range including n=0). No
+`custom_vjp`/`stop_gradient`/`pure_callback` sits on that path, and the m=1
+force masks are built from static NumPy mode tables, so they are fully traced.
+
+The defect was a frozen discrete branch in `vmex/core/implicit.py`
+(`_lasym_delta_rotation_traceable`):
+
+    if float(np.arctan((s0[ntor, 1] - c0[ntor, 1]) / denom0)) == 0.0:
+        return rbc, rbs, zbc, zbs
+
+`readin.f:548-567` normalizes the LASYM boundary by a poloidal-angle shift
+`delta` chosen so `RBS(0,1) = ZBC(0,1)`, guarded by `IF (delta .ne. zero)`.
+That Fortran guard is a pure runtime shortcut with no semantic content —
+`cos(0)=1`, `sin(0)=0` make the loop the identity — but vmex froze it from the
+reference input as if it were a discrete decision like `lflip`. `delta == 0` is
+not a discontinuity; it is where the map is the identity **in value but not in
+derivative**. The true Jacobian still carries `d(coef)/dp += m*(partner)*
+d(delta)/dp` for every `(m,n)`, and `d(delta)/d(RBS(0,1)) = +1/denom`,
+`d(delta)/d(ZBC(0,1)) = -1/denom` — exactly equal and opposite, hence a rank-one
+error confined to the antisymmetric channel, which is precisely the measured
+signature. `d(delta)/d(RBC(0,1))` vanishes when `rbs01 = zbc01`, so the
+symmetric dofs stayed exact.
+
+Fix: delete the two lines; keep the `mpol < 2` and `denom0 == 0.0` guards, which
+are structural (the latter is a division by zero, not a choice). Verified
+end-to-end on the patched tree: the n=0 antisymmetric channel drops from
+1.599e-1 to 2.98e-5 (h=1e-5) / 1.58e-7 (h=1e-6), and the per-dof sweep for
+`RBS(0,1)`/`ZBC(0,1)` now *converges* with h (3.9e-5 -> 2.0e-5 -> 2.7e-8)
+instead of sitting flat at 3.0e-2. Secondary consequence now also fixed: once an
+optimizer moved `RBS(0,1) != ZBC(0,1)` away from a `delta0 == 0` reference, the
+frozen guard made the **value** wrong too, so the AD and FD lanes were solving
+different boundaries.
+
+Why nothing caught it: both shipped LASYM decks have `delta0 != 0`
+(`up_down_asymmetric_tokamak` 0.4636, `cth_like_free_bdy_lasym_small` 0.00236),
+and `tests/test_implicit_grad.py:711` asserted values plus `isfinite` on the
+gradient. Gate added — `test_lasym_delta_rotation_jacobian_at_zero_delta` puts
+the reference exactly on `delta == 0` and compares the JVP along
+`RBS(0,1) - ZBC(0,1)` against central differences of the `setup` reference; it
+fails at 2.5 without the fix and passes at <=1e-7 with it, in 0.6 s.
+
 Consequence: the optimizer receives a systematically wrong descent direction in
 half of the n=0 asymmetric m=1 subspace — the dominant asymmetric shaping
 family — which is a sufficient explanation for LASYM runs not reaching the
@@ -1311,3 +1356,4 @@ The rule behind that order: make `main` self-consistent first, then move
 physics into the package that owns it, and only then reorganize files —
 every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — localized the LASYM underperformance to a wrong analytic Jacobian in the n=0 asymmetric m=1 difference channel (16% error); forward map verified correct.
+- 2026-08-19 claude: P17 — root cause is the frozen `delta == 0` branch in `implicit.py::_lasym_delta_rotation_traceable`; fixed, gated, verified end-to-end (1.6e-1 -> 1.6e-7).
