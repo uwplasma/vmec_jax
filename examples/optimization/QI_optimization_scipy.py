@@ -93,6 +93,7 @@ for max_mode in MAX_MODES:
         mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
     problem = opt.VmecProblem.from_tuples(
         inp, qi_terms, max_mode=max_mode, use_ess=True, progress=not ci_smoke,
+        evaluation_progress=not ci_smoke,
         vary_major_radius=VARY_MAJOR_RADIUS,
     )
     print(f"dof_names = {problem.dof_names}")

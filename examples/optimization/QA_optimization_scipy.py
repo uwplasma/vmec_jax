@@ -59,7 +59,7 @@ objective_function_terms = [
     # (opt.magnetic_well, MAGNETIC_WELL_TARGET, 1.0),
 ]
 problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=MAX_MODE,
-                                      vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, progress=True)
+                                      vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, progress=True, evaluation_progress=True)
 print(f"dof_names = {problem.dof_names}")
 problem.compile_value_and_gradient()
 x0, scales = problem.x0, BOUNDARY_STEP * problem.scales

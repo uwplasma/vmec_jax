@@ -192,7 +192,7 @@ if not ci_smoke:
             (finite_beta_dr, 0.0, 5.0 * shape / scale**2)]
         certificate_problem = opt.VmecProblem.from_tuples(certificate_input, certificate_terms,
             max_mode=MAX_MODES[-1], use_ess=True, ess_alpha=ESS_ALPHA,
-            restart_from=certificate, progress=True)
+            restart_from=certificate, progress=True, evaluation_progress=True)
         step = 0.01 * certificate_problem.scales
         certificate_result = least_squares(certificate_problem.residual, certificate_problem.x0,
             jac=certificate_problem.residual_jac, x_scale=step,

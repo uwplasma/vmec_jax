@@ -51,6 +51,7 @@ from .errors import (
 from .fourier import ModeTable, mode_table
 from .input import VmecInput, _vmec_ns_prefix
 from .preconditioner_2d import Prec2DConfig
+from .printing import emit_flushed
 from .restart import restart_state, skip_ladder_rungs
 from .solver import (
     SolveResult, SpectralState, _finalize, _prefetch_block_lane,
@@ -241,7 +242,7 @@ def solve_multigrid(
     mode: str = "cli",
     lconm1: bool = True,
     verbose: bool = False,
-    emit=print,
+    emit=emit_flushed,
     initial_state: SpectralState | None = None,
     restart_from: Any = None,
     time_step: float | None = None, tcon0: float | None = None,
@@ -561,7 +562,7 @@ def solve_free_boundary_multigrid(
     mgrid_path=None,
     external_field: Any = None,
     verbose: bool = False,
-    emit=print,
+    emit=emit_flushed,
     initial_state: SpectralState | None = None,
     restart_from: Any = None,
     device: Any = AUTO,

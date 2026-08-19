@@ -119,6 +119,8 @@ class FunctionProblem:
         bounds: Any = None,
         scales: Array | None = None,
         metadata: Mapping[str, Any] | None = None,
+        evaluation_progress: bool = False,
+        report_interval: float = 10.0,
     ) -> None:
         self.x0 = np.asarray(x0, dtype=float).copy()
         self.names = tuple(names or (f"x[{i}]" for i in range(self.x0.size)))
@@ -131,6 +133,11 @@ class FunctionProblem:
         if np.any(~np.isfinite(self.scales)) or np.any(self.scales <= 0.0):
             raise ValueError("scales must be finite and positive")
         self.metadata = dict(metadata or {})
+        # A single residual or Jacobian evaluation is minutes of silence on a
+        # production deck; the heartbeat says which one is running and for how
+        # long, so a slow linear solve is distinguishable from a hang.
+        self.evaluation_progress = bool(evaluation_progress)
+        self.report_interval = float(report_interval)
 
         self._fun = fun
         self._grad = grad
@@ -233,20 +240,34 @@ class FunctionProblem:
             self._rj_cache = key, pair
             return pair[0].copy(), pair[1].copy()
 
+    def _timed(self, action: str, function: Callable[[], Any]) -> Any:
+        """Run one optimizer evaluation under the elapsed-time heartbeat."""
+        if not self.evaluation_progress:
+            return function()
+        return _run_with_progress(
+            function, action=action, complete=f"{action} done",
+            progress=True, report_interval=self.report_interval)
+
     def residual(self, x: Array) -> np.ndarray:
         """Return the residual vector."""
         if self._residual_and_jac is not None:
             return self.residual_and_jac(x)[0]
-        if self._residual is not None:
-            return np.asarray(self._residual(self._x(x)), dtype=float).ravel()
+        function = self._residual
+        if function is not None:
+            return self._timed(
+                "residual",
+                lambda: np.asarray(function(self._x(x)), dtype=float).ravel())
         raise AttributeError("this problem does not provide residuals")
 
     def residual_jac(self, x: Array) -> np.ndarray:
         """Return the residual Jacobian."""
         if self._residual_and_jac is not None:
             return self.residual_and_jac(x)[1]
-        if self._residual_jac is not None:
-            jacobian = np.asarray(self._residual_jac(self._x(x)), dtype=float)
+        function = self._residual_jac
+        if function is not None:
+            jacobian = np.asarray(
+                self._timed("Jacobian", lambda: function(self._x(x))),
+                dtype=float)
             if jacobian.shape[1:] != (self.x0.size,):
                 raise ValueError(
                     "residual Jacobian must have one column per decision variable"

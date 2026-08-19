@@ -50,7 +50,7 @@ objective_function_terms = [
     (iota_floor, 0.0, 100.0),
     ]
 problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=MAX_MODE,
-    vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, ess_alpha=ESS_ALPHA, progress=True)
+    vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, ess_alpha=ESS_ALPHA, progress=True, evaluation_progress=True)
 print(f"dof_names = {problem.dof_names}")
 problem.compile_value_and_gradient()
 x0, scales = problem.x0, BOUNDARY_STEP * problem.scales

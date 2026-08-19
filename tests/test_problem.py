@@ -730,3 +730,29 @@ def test_vmec_finite_difference_failed_probe_penalties(monkeypatch):
     )
     assert np.isfinite(scalar_problem.fun(trial))
     assert scalar_problem.metadata["holder"]["failed_trials"] == 1
+
+
+def test_evaluation_progress_marks_slow_residuals_and_jacobians(capsys):
+    """A long evaluation reports elapsed time instead of going silent.
+
+    A production Jacobian is minutes of work, and with no output a user
+    cannot tell a slow linear solve from a hang.
+    """
+    def residual(x):
+        time.sleep(0.05)
+        return np.asarray([x[0] - 1.0])
+
+    problem = FunctionProblem(
+        [0.0], residual=residual, residual_jac=lambda _x: np.ones((1, 1)),
+        evaluation_progress=True, report_interval=0.02)
+    problem.residual(np.array([0.0]))
+    problem.residual_jac(np.array([0.0]))
+    out = capsys.readouterr().out
+    assert "residual..." in out and "residual done in" in out
+    assert "Jacobian..." in out and "Jacobian done in" in out
+    assert "s elapsed." in out          # the heartbeat fired mid-residual
+
+    quiet = FunctionProblem([0.0], residual=residual,
+                            residual_jac=lambda _x: np.ones((1, 1)))
+    quiet.residual(np.array([0.0]))
+    assert capsys.readouterr().out == ""

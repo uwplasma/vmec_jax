@@ -68,7 +68,8 @@ class EquilibriumReporter:
         if self.stream is not None:
             fields = [f"{name} = {format(values[name], format_spec)}"
                       for name, _function, format_spec in self.quantities]
-            print(f"[{label}] {self.separator.join(fields)}", file=self.stream)
+            print(f"[{label}] {self.separator.join(fields)}", file=self.stream,
+                  flush=True)
         return values
 
 
@@ -230,16 +231,28 @@ class OptimizationMonitor:
         solves = None if stats is None else int(stats.get("solves", 0))
         return solves, rejected
 
-    def _term_costs(self, x: np.ndarray) -> dict[str, float]:
-        if self.problem is None or not self.problem.metadata.get("term_slices"):
+    def _term_costs(self, x: np.ndarray, residual: Any = None) -> dict[str, float]:
+        """Per-term costs, reusing the optimizer's own residual when it has one.
+
+        SciPy hands ``least_squares`` callbacks the residual vector of the
+        accepted iterate, so splitting that is free.  Re-solving the
+        equilibrium merely to label a row already cost the optimizer one
+        forward solve per accepted iteration.
+        """
+        slices = None if self.problem is None else self.problem.metadata.get(
+            "term_slices")
+        if not slices:
             return {}
-        try:
-            residual = self.problem.residual(x)
-        except AttributeError:
-            return {}
+        rows = None if residual is None else np.asarray(residual, dtype=float)
+        if rows is None or rows.ndim != 1 or rows.size < max(
+                stop for _name, _start, stop in slices):
+            try:
+                rows = np.asarray(self.problem.residual(x), dtype=float)
+            except AttributeError:
+                return {}
         return {
-            str(name): 0.5 * float(residual[start:stop] @ residual[start:stop])
-            for name, start, stop in self.problem.metadata["term_slices"]
+            str(name): 0.5 * float(rows[start:stop] @ rows[start:stop])
+            for name, start, stop in slices
         }
 
     def __call__(self, intermediate_result: Any) -> None:
@@ -281,7 +294,8 @@ class OptimizationMonitor:
             cost=float(cost),
             optimality=None if optimality is None else float(optimality),
             iteration=int(iteration),
-            terms=(cached[2] if cached is not None else self._term_costs(x)),
+            terms=(cached[2] if cached is not None
+                   else self._term_costs(x, raw_fun)),
         )
 
     def record(
@@ -461,7 +475,7 @@ class OptimizationMonitor:
         if len(self.records) == 1:
             print(
                 " iter          cost     reduction   optimality  eq solves  rejected",
-                file=self.stream,
+                file=self.stream, flush=True,
             )
         print(
             f"{item.iteration:5d}  {item.cost:12.6e}  "
@@ -469,7 +483,7 @@ class OptimizationMonitor:
             f"{self._number(item.optimality):>11}  "
             f"{self._number(item.equilibrium_solves, integer=True):>9}  "
             f"{self._number(item.rejected_trials, integer=True):>8}",
-            file=self.stream,
+            file=self.stream, flush=True,
         )
 
 

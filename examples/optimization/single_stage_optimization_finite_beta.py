@@ -37,13 +37,13 @@ MOVIE_SURFACE_COLOR = "absB"
 
 TARGET_BETA = 0.025
 SURFACES = np.linspace(0.1, 0.9, 8)
-MAX_MODE, MAXITER = 2, 15
+MAX_MODE, MAXITER = 2, 25
 N_CURRENT_SPLINE = 6
 ASPECT_TARGET, IOTA_FLOOR = 6.0, 0.42
 VARY_MAJOR_RADIUS = False
 SEED_PERTURBATION = 0.02
 
-N_COILS, COIL_ORDER = 4, 4
+N_COILS, COIL_ORDER = 3, 4
 COIL_MAJOR_RADIUS, COIL_MINOR_RADIUS = 1.0, 0.5
 COIL_CURRENT, N_SEGMENTS = 2.7e5, 64
 NORMAL_FIELD_WEIGHT = 1.0e3
@@ -264,7 +264,7 @@ else:
 report = opt.EquilibriumReporter(
     ("QA", qs.total, ".5e"), ("f_boot", bootstrap.total, ".5e"),
     ("beta", opt.volume_average_beta, ".3%"), ("aspect", opt.aspect_ratio, ".3f"),
-    ("min |iota|", opt.min_abs_iota, ".3f"))
+    ("iota", opt.mean_iota, ".3f"))
 report("final", final_equilibrium)
 data_f = vc.surface_field_data_from_state(
     final_input, final_equilibrium.solution, runtime=final_equilibrium.solver_context,

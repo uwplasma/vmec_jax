@@ -52,7 +52,7 @@ for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=max_mode,
         use_ess=True, ess_alpha=ESS_ALPHA, restart_from=equilibrium,
         forward_max_iterations=100 if ci_smoke else 2000, progress=True,
-        vary_major_radius=False)
+        evaluation_progress=not ci_smoke, vary_major_radius=False)
     print(f"dof_names = {problem.dof_names}")
     problem.compile_residual_and_jacobian()
     monitor.problem = problem

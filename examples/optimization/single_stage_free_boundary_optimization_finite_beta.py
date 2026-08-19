@@ -138,7 +138,8 @@ print("Running single_stage_free_boundary_optimization_finite_beta.py")
 print(f"True finite-beta NESTOR + ESSOS: {x0.size} coil variables; no boundary dofs or mgrid file")
 print(f"dof_names = {dof_names}")
 free_problem = vj.FunctionProblem.from_functions(
-    np.zeros_like(x0), value_and_grad=value_and_grad, names=dof_names)
+    np.zeros_like(x0), value_and_grad=value_and_grad, names=dof_names,
+    evaluation_progress=not ci_smoke)
 first = free_problem.compile_value_and_gradient(progress=not ci_smoke, report_interval=10.0)
 if ci_smoke:
     final_cost, optimized_u, iterations = first.value, np.zeros_like(x0), 0

@@ -35,8 +35,8 @@ MAKE_MOVIE = True  # set True for a compact GIF of accepted iterates
 MOVIE_SURFACE_COLOR = "absB"
 
 SURFACES = np.linspace(0.05, 1.0, 6)
-MAX_MODE = 3
-MAXITER = 200
+MAX_MODE = 2
+MAXITER = 100
 ASPECT_TARGET = 4.0
 ASPECT_WEIGHT = 1.0
 IOTA_FLOOR = 0.42
@@ -44,7 +44,7 @@ IOTA_WEIGHT = 100.0
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.02
 
-N_COILS = 4
+N_COILS = 3
 COIL_ORDER = 5
 COIL_MAJOR_RADIUS = 1.0
 COIL_MINOR_RADIUS = 0.5
@@ -260,7 +260,7 @@ maximum_curvature = float(np.max(np.asarray(coils_final.curvature)))
 # Print results
 report = opt.EquilibriumReporter(
     ("QA total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
-    ("min |iota|", opt.min_abs_iota, ".4f"))
+    ("mean iota", opt.mean_iota, ".4f"))
 final_value = float(result.fun)
 report("final", final_equilibrium)
 print(f"\nObjective: {initial_value:.6e} -> {final_value:.6e} in {result.nit} {METHOD} iterations")

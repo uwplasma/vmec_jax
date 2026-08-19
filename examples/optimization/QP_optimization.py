@@ -58,7 +58,7 @@ def elongation_excess(equilibrium_state, solver_context):
 
 report = opt.EquilibriumReporter(
     ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
-    ("min |iota|", opt.min_abs_iota, ".4f"), ("elongation", opt.max_elongation, ".4f"),
+    ("mean iota", opt.mean_iota, ".4f"), ("elongation", opt.max_elongation, ".4f"),
     ("mirror", opt.mirror_ratio, ".4f"))
 monitor = opt.OptimizationMonitor(stream=None)
 
@@ -94,7 +94,7 @@ final_input = replace(inp,
     ftol_array=np.array([1.0e-10 if ci_smoke else 1.0e-14]),
     niter_array=np.array([35000]))
 final_equilibrium = opt.solve_equilibrium(
-    final_input, initial_state=equilibrium.solution,
+    final_input, initial_state=equilibrium.state,
     verbose=not ci_smoke, raise_on_max_iterations=True)
 final_total = report("final", final_equilibrium)["QS total"]
 print(f"\nQS total {final_total:.3e}")

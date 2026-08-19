@@ -1037,7 +1037,7 @@ def self_consistent_bootstrap(
         history.append(dict(curtor=float(inp.curtor), delta=delta, f_boot=f_boot))
         if verbose:
             print(f"[self_consistent_bootstrap] it {it}: curtor={inp.curtor:.6e} "
-                  f"delta={delta:.3e} f_boot={f_boot:.3e}")
+                  f"delta={delta:.3e} f_boot={f_boot:.3e}", flush=True)
         if delta <= float(tol):
             converged = True
             break

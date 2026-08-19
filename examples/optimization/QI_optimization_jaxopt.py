@@ -49,7 +49,7 @@ def elongation_excess(equilibrium_state, solver_context):
 terms = [(qi, 0.0, 10.0), (opt.aspect_ratio, 10.0, 0.005),
          (iota_floor, 0.0, 10.0), (elongation_excess, 0.0, 1.0)]
 problem = opt.VmecProblem.from_tuples(inp, terms, max_mode=MAX_MODE,
-    vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, progress=True)
+    vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, progress=True, evaluation_progress=True)
 print(f"dof_names = {problem.dof_names}")
 x0, scales = jnp.asarray(problem.x0), 0.02 * jnp.asarray(problem.scales)
 

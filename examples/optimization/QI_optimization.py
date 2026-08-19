@@ -85,6 +85,7 @@ for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     # Restart SciPy's trust-region model; equal-shape JAX executables are reused.
     problem = opt.VmecProblem.from_tuples(
         inp, qi_terms, max_mode=max_mode, use_ess=True, progress=not ci_smoke,
+        evaluation_progress=not ci_smoke,
         ess_alpha=ESS_ALPHA, vary_major_radius=VARY_MAJOR_RADIUS,
     )
     print(f"dof_names = {problem.dof_names}")

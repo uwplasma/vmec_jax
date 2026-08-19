@@ -69,6 +69,7 @@ from .input import VmecInput
 from .mgrid import MgridField
 from .preconditioner_2d import Prec2DConfig
 from .printing import (
+    emit_flushed,
     FORCE_ITERATIONS_BANNER, compile_notice, improved_axis_block,
     screen_header, screen_line,
     stage_banner,
@@ -1565,7 +1566,7 @@ def _solve_free_boundary_stage(
     ftol: float | None = None,
     max_iterations: int | None = None,
     verbose: bool = False,
-    emit=print,
+    emit=emit_flushed,
     error_on_no_convergence: bool = True,
     initial_state: SpectralState | None = None,
     vacuum_continuation: FreeBoundaryState | None = None,
@@ -2191,7 +2192,7 @@ def solve_free_boundary(
     ftol: float | None = None,
     max_iterations: int | None = None,
     verbose: bool = False,
-    emit=print,
+    emit=emit_flushed,
     error_on_no_convergence: bool = True,
     initial_state: SpectralState | None = None,
     device: Any = AUTO,

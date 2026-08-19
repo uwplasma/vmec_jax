@@ -80,7 +80,7 @@ for max_mode, max_nfev in zip(QA_MAX_MODES, QA_MAX_NFEV):
     problem = opt.VmecProblem.from_tuples(inp, shape_terms, max_mode=max_mode,
         use_ess=True, restart_from=equilibrium,
         forward_max_iterations=100 if ci_smoke else 3000,
-        progress=True)
+        progress=True, evaluation_progress=True)
     problem.compile_residual_and_jacobian()
     monitor.problem = problem
     step = (0.001 if ci_smoke else PARAMETER_STEP) * problem.scales
