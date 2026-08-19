@@ -52,7 +52,7 @@ the session scratchpad: `profile_lasym.py`, `fb_isolate.py`, `fb_forward_anatomy
 
 ---
 
-## Phase 0 — Unblock and merge PR #123 (`rj/vmec-extender-field`)
+## Phase 0 — Unblock and merge PR #123 (`rj/vmec-extender-field`)  [DONE except the merge]
 
 Smallest possible diff to green; everything else moves to the new branch off `main`.
 
@@ -72,7 +72,7 @@ Smallest possible diff to green; everything else moves to the new branch off `ma
 
 Acceptance: PR CI fully green (quality, coverage gate, linkcheck), PR merged.
 
-## Phase 1 — Examples run honestly (the "stall" fix)
+## Phase 1 — Examples run honestly (the "stall" fix)  [PARTIAL: 1,3,6 DONE; 1.a open]
 
 Diagnosis (instrumented reproduction, `profile_stall.py`, uncontended): the examples descend
 (overnight log: 18 iterations, cost 25.0 -> 2.64) and healthy iterations cost ~10-12 s
@@ -491,7 +491,7 @@ whole graph is differentiated with plain reverse-mode, so memory grows with ever
 7. Acceptance: value+grad at max_mode=6, 16 coils, 128 curve dofs runs in < 8 GB and the
    gradient certificate stays green; memory scaling documented in the benchmark matrix (P8.1).
 
-## Phase 12 — Minimum-|iota| objective as the default iota floor
+## Phase 12 — Minimum-|iota| objective as the default iota floor  [DONE]
 
 Physics: with finite beta the bootstrap/driven current can carry the transform, so a mean-iota
 target is satisfiable with tiny vacuum (shaping) iota — observed as the finite-beta single-stage
@@ -618,3 +618,34 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   (`profile_stall.py`): jac #1-2 = 1.8-3.9 s, every later Jacobian ~2000-2240 s (~42 s/dof
   column) with residuals steady at 3.5 s — the degradation is systematic once x leaves the
   reference state, so the amortized factor-once Jacobian path is priority one of Phase 1.
+- 2026-08-19 rogeriojorge: P0 [DONE except merge] — ruff E701/F541, manifest entry for
+  tests/test_neoclassical.py, trial-pressure test + docs pointer, JAX autodiff URL, scipy>=1.15
+  pin. Two further blockers surfaced only once ruff stopped short-circuiting the job: the quality
+  lane installs mypy unpinned (2.3.1) and rejects two inferred lambdas, so
+  `plotting._epsilon_effective_summary` and `extender._stored_flux_quantity` now use named
+  functions. Quality and docs-linkcheck jobs are green; PR #123 is ready to merge. Dev-tool
+  version pinning is unresolved and belongs in P9/P10 (an unpinned major broke a gate silently).
+- 2026-08-19 rogeriojorge: P12 [DONE] — `min_abs_iota` / `soft_min_abs_iota` in statephysics,
+  exported through optimize, rolled out as the default floor across 20 optimization examples
+  (9 existing hinges converted, 11 mean-iota targets turned into floors, reporters now print
+  min |iota|), docs updated, tests added (wout-convention parity, reducer separation and
+  sign-freedom, JVP-vs-FD). Design change from the plan text: the softmin uses a
+  softmax-weighted mean, not log-sum-exp — the latter sits `tau log(ns)` *below* the true
+  minimum (measured -0.068 where the minimum was 1e-12), which is wrong for a non-negative
+  floor. P12.5 (vacuum-iota-fraction check in the finite-beta examples) is NOT done.
+- 2026-08-19 rogeriojorge: P1 [PARTIAL] — items 1, 3 and 6 landed: the five `emit=print`
+  defaults now flush, `monitoring` flushes its reporter/table rows, `OptimizationMonitor`
+  splits the residual SciPy already hands its callback instead of re-solving the equilibrium
+  per accepted iterate, and `FunctionProblem` gained `evaluation_progress` (+ `report_interval`)
+  so residual and Jacobian evaluations run under the existing elapsed-time heartbeat; enabled
+  in 20 examples. P1.a (the real stall) is still open and now better measured: a full
+  instrumented LASYM QA stage shows jac #1-2 at 1.8-3.9 s and every later Jacobian at
+  2000-2240 s with residuals steady at 3.5 s. Mechanism located: `jacobian_rows_block`
+  (optimize.py:2693) factors the raw block-tridiagonal system once and then runs a
+  warm-started certifying GMRES per column via `_implicit_evolved_tangent_multi_rhs`
+  (implicit.py:1944-1965) against `cfg.adjoint_tol`; that certifier is the suspect, since the
+  factorization stops being a good preconditioner as the iterate moves. The decisive experiment
+  (same iterate, `adjoint_tol` 1e-6/1e-4 and `implicit_jacobian_method="forward_gmres"`) is
+  scripted in the session scratchpad as `jac_probe.py` and was still running at hand-off — run
+  it first. Note the certifier's iteration counts cannot be read with a host-side spy (they are
+  traced); expose them through the existing `LinearResponseReport` instead.
