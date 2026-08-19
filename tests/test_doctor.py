@@ -112,3 +112,27 @@ def test_main_prints_report_and_returns_zero(capsys):
     assert doctor.main() == 0
     out = capsys.readouterr().out
     assert "vmex installation doctor" in out
+
+
+def test_compilation_cache_line_reports_each_cache_state(monkeypatch, tmp_path):
+    """The cache line distinguishes disabled, not-yet-created, and in-use.
+
+    A cache sitting at its bound is the visible symptom of eviction churn, so
+    the line must name the bound and flag it, and it must never raise when the
+    directory is absent or the feature is switched off.
+    """
+    from vmex import _compat
+
+    monkeypatch.delenv("JAX_COMPILATION_CACHE_DIR", raising=False)
+    monkeypatch.setattr(_compat, "_default_compilation_cache_dir", lambda: "")
+    assert doctor._compilation_cache_line().endswith("disabled")
+
+    missing = tmp_path / "absent"
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(missing))
+    assert "not yet created" in doctor._compilation_cache_line()
+
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(tmp_path))
+    (tmp_path / "entry.bin").write_bytes(b"x" * 4096)
+    monkeypatch.setattr(_compat, "_default_cache_max_size", lambda _dir: 4096.0)
+    line = doctor._compilation_cache_line()
+    assert "GiB" in line and "at the bound" in line

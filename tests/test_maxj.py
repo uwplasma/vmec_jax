@@ -113,6 +113,53 @@ def test_constructed_maximum_j_sign_and_ad_match_finite_difference():
     assert jnp.isfinite(tangent)
 
 
+def test_constructed_class_matches_the_functional_form_and_guards_inputs(monkeypatch):
+    """The objective class is a thin binding of the functional continuation.
+
+    ``ConstructedMaximumJResidual`` must reproduce
+    :func:`constructed_maximum_j_residual_from_boozer` element for element on
+    the same Boozer tables (the class only supplies the transform), and reject
+    the same degenerate surface/pitch/weight inputs as its resolved
+    counterpart :class:`MaximumJResidual`.
+    """
+    booz = _boozer(0.98)
+    options = dict(max_wells=2, quadrature_order=32,
+                   qi_options={"nphi": 65, "nalpha": 5, "n_bounce": 7})
+    monkeypatch.setattr(maxj, "boozer_bmnc_state", lambda *args, **kwargs: booz)
+    term = maxj.ConstructedMaximumJResidual(
+        [0.25, 0.75], [1.0 / 1.1], mboz=2, nboz=2, **options)
+    eq = SimpleNamespace(state=object(), runtime=object())
+    rows = term(eq)
+    expected = _constructed_residual(0.98)
+    np.testing.assert_array_equal(
+        np.asarray(rows), np.asarray(expected["residuals1d"]))
+    assert float(term.total(eq)) == pytest.approx(float(expected["total"]))
+    assert term.compute_state(eq.state, eq.runtime)["nfp"] == booz["nfp"]
+
+    with pytest.raises(ValueError, match="increasing surfaces"):
+        maxj.ConstructedMaximumJResidual([0.5], [1.0])
+    with pytest.raises(ValueError, match="positive finite"):
+        maxj.ConstructedMaximumJResidual([0.25, 0.75], [-1.0])
+    with pytest.raises(ValueError, match="weights"):
+        maxj.ConstructedMaximumJResidual([0.25, 0.75], [1.0], weights=[1.0])
+    with pytest.raises(ValueError, match="at least two surfaces"):
+        maxj.constructed_maximum_j_residual_from_boozer(
+            bmnc_b=[[1.0, 0.2]], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            iota_b=[0.4], G_b=[2.0], I_b=[0.0], nfp=2, psi_b=[0.5],
+            psi_edge=1.0, pitch=[1.0])
+    for bad, message in (({"pitch_weights": [1.0, 1.0]}, "pitch_weights"),
+                         ({"weights": [1.0]}, "weights must have"),
+                         ({"psi_b": [0.25, 0.5, 0.75]}, "psi_b must have")):
+        arguments = dict(
+            bmnc_b=booz["bmnc_b"], xm_b=booz["xm_b"], xn_b=booz["xn_b"],
+            iota_b=booz["iota_b"], G_b=booz["G_b"], I_b=booz["I_b"],
+            nfp=booz["nfp"], psi_b=booz["psi_b"], psi_edge=booz["psi_edge"],
+            pitch=[1.0 / 1.1], **options)
+        arguments.update(bad)
+        with pytest.raises(ValueError, match=message):
+            maxj.constructed_maximum_j_residual_from_boozer(**arguments)
+
+
 def test_maximum_j_slope_matches_adaptive_quadrature():
     pitch = 1.0 / 1.1
 
@@ -290,6 +337,8 @@ def test_common_trapped_pitches_use_one_field_strength_on_all_lines():
         maxj.common_trapped_pitches(bmag, [0.0])
     with pytest.raises(ValueError, match="no common"):
         maxj.common_trapped_pitches(bmag.at[0, 1].set([0.86, 0.86]))
+    with pytest.raises(ValueError, match="surface, distance, field_line"):
+        maxj.common_trapped_pitches(bmag[0], [0.5])
 
 
 def test_common_trapped_pitches_state_samples_boozer_lines(monkeypatch):

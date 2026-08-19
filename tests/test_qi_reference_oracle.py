@@ -452,6 +452,27 @@ def test_constant_field_is_a_documented_degenerate_regime():
     assert total < 0.1
 
 
+def test_asymmetric_spectrum_must_be_shaped_like_its_cosine_partner():
+    """A ``bmns_b`` table of the wrong shape silently drops harmonics.
+
+    Both the constructed QI residual and the traceable omnigenity residual
+    accept the LASYM sine family; a mismatched table means the caller paired
+    spectra from different transforms, which must fail loudly.
+    """
+    from vmex.core import omnigenity as omn
+
+    field = dict(FIELD_QI)
+    with pytest.raises(ValueError, match="bmns_b must have the same shape"):
+        quasi_isodynamic_residual(
+            **field, bmns_b=jnp.zeros((1, 1)), nphi=NPHI, nalpha=NALPHA,
+            n_bounce=NBOUNCE)
+    with pytest.raises(ValueError, match="bmns_b must have the same shape"):
+        omn.omnigenity_residual(
+            bmnc_b=field["bmnc_b"], bmns_b=jnp.zeros((1, 1)),
+            xm_b=field["xm_b"], xn_b=field["xn_b"], iota_b=field["iota_b"],
+            nfp=NFP, nphi=61, nalpha=13, n_levels=8)
+
+
 def test_subwell_envelopes_differ_by_design():
     """Interior sub-wells: flood-fill vs running-maximum monotonization.
 

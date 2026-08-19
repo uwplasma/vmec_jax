@@ -263,6 +263,23 @@ def test_glasser_profiles_match_independent_dcon_reference():
     )
 
 
+def test_mercier_data_is_zero_on_a_radially_degenerate_grid():
+    """Mercier needs radial second derivatives: ns < 3 has none to report.
+
+    ``mercier.f`` differences the half mesh twice, so a two-surface grid
+    carries no interior surface at all.  The traceable reconstruction returns
+    an all-zero profile set instead of differencing off the end of the array.
+    """
+    from types import SimpleNamespace
+
+    runtime = SimpleNamespace(
+        setup=SimpleNamespace(s_full=np.linspace(0.0, 1.0, 2)))
+    profiles = stab._mercier_data_state(object(), runtime)
+    assert len(profiles) == 12
+    assert all(np.asarray(p).shape == (2,) and not np.any(np.asarray(p))
+               for p in profiles)
+
+
 def test_mercier_stability_residual_is_smooth_interior_hinge(shaped_eq):
     """The optimizer residual excludes noisy surfaces and follows its formula."""
     state, rt = shaped_eq.state, shaped_eq.runtime

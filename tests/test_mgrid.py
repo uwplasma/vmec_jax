@@ -197,6 +197,49 @@ def test_high_spatial_derivatives_and_parameter_vjps_are_exact():
         np.testing.assert_allclose(method(cotangent), expected_method(cotangent))
 
 
+def test_extender_helper_contracts_and_public_equilibrium_aliases():
+    """Radial parity, seeded inversion, and the equilibrium field entry points.
+
+    ``_radial_value_and_derivative`` regularizes ``rho**|m|`` spectra before
+    interpolating; without modes it must reduce to plain linear interpolation
+    in ``s``.  The seeded interior inversion requires one flux seed per point,
+    and near-surface continuation is only defined when the plasma current is
+    represented (virtual casing).
+    """
+    coefficients = jnp.asarray([[0.0], [1.0], [4.0], [9.0]])
+    s = jnp.asarray([0.25, 0.5])
+    evaluate = lambda modes: jax.vmap(  # noqa: E731
+        lambda value: ext._radial_value_and_derivative(
+            coefficients, value, modes))(s)
+    plain, derivative = evaluate(None)
+    mesh = np.linspace(0.0, 1.0, 4)
+    np.testing.assert_allclose(
+        np.asarray(plain)[:, 0], np.interp(np.asarray(s), mesh, [0.0, 1.0, 4.0, 9.0]))
+    assert np.all(np.asarray(derivative) > 0.0)
+    # m = 1 coefficients carry the sqrt(s) parity: the same table is no longer
+    # linear in s once the radial power is restored.
+    parity, _ = evaluate(jnp.asarray([1.0]))
+    assert not np.allclose(np.asarray(parity), np.asarray(plain))
+
+    with pytest.raises(ValueError, match="initial_flux and points"):
+        ext._interior_coordinates_and_B(
+            {}, jnp.zeros((2, 3)), newton_iterations=1,
+            initial_flux=jnp.zeros((1, 3)))
+
+    field = MagneticField(lambda xyz: jnp.zeros_like(xyz))
+    with pytest.raises(RuntimeError, match="virtual casing"):
+        VmecExtender(field).with_near_surface_continuation()
+
+    # ``solution``/``solver_context`` are the public names of the solver-native
+    # attributes, and a problem-supplied exterior factory wins over the default.
+    state, runtime, sentinel = object(), object(), object()
+    equilibrium = Equilibrium(
+        inp=None, state=state, runtime=runtime, result=None,
+        exterior_field_factory=lambda **kwargs: (sentinel, kwargs))
+    assert equilibrium.solution is state and equilibrium.solver_context is runtime
+    assert equilibrium.exterior_field(nphi=8) == (sentinel, {"nphi": 8})
+
+
 def test_exterior_vjp_combines_plasma_and_external_dofs(monkeypatch):
     @dataclass(frozen=True)
     class SurfaceData:
@@ -680,6 +723,18 @@ def test_parameterized_cartesian_tabulation_retains_control_derivatives() -> Non
     np.testing.assert_allclose(jax.grad(diagnostic)(parameters), jnp.asarray([4.0]))
     np.testing.assert_allclose(
         jax.jit(jax.grad(diagnostic))(parameters), jnp.asarray([4.0]))
+
+    # A silently degenerate grid would tabulate a field VMEC cannot use.
+    bounds = dict(rmin=0.5, rmax=1.5, zmin=-0.4, zmax=0.4, ir=4, jz=3, kp=8, nfp=2)
+    with pytest.raises(ValueError, match="ir and jz must be"):
+        MgridField.from_parameterized_cartesian_field(
+            field, parameters, **{**bounds, "jz": 1})
+    with pytest.raises(ValueError, match="rmax>rmin"):
+        MgridField.from_parameterized_cartesian_field(
+            field, parameters, **{**bounds, "rmax": 0.5})
+    with pytest.raises(ValueError, match="expected"):
+        MgridField.from_parameterized_cartesian_field(
+            lambda p, points: jnp.zeros((points.shape[0], 2)), parameters, **bounds)
 
 
 def test_tabulate_simsopt_set_points_protocol() -> None:

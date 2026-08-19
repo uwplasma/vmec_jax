@@ -255,6 +255,25 @@ def test_bootstrap_plot_and_small_optimization_movie(tmp_path, monkeypatch) -> N
         vj.plot_optimization_movie(
             tmp_path / "bad-colors.gif", ([0.0],), lambda x: Surface(0.0),
             color_factory=lambda x, objects: np.ones(3))
+    with np.testing.assert_raises_regex(TypeError, "area_element"):
+        vj.plot_optimization_movie(
+            tmp_path / "no-surface.gif", ([0.0],), lambda x: Coils(0.0),
+            color_factory=lambda x, objects: np.ones(3))
+    with np.testing.assert_raises_regex(ValueError, "at least one finite"):
+        vj.plot_optimization_movie(
+            tmp_path / "nan-colors.gif", ([0.0],), lambda x: Surface(0.0),
+            color_factory=lambda x, objects: np.full((4, 5), np.nan))
+    # A constant field must still normalize: an empty color range would make
+    # the colormap (and the colorbar) degenerate.
+    flat = vj.plot_optimization_movie(
+        tmp_path / "flat-colors.gif", ([0.0], [0.1]), lambda x: Surface(x[0]),
+        color_factory=lambda x, objects: np.ones((4, 5)), fps=2, dpi=40)
+    assert flat.is_file() and flat.stat().st_size > 0
+    # Uncolored surfaces fall back to a strided wireframe.
+    wireframe = vj.plot_optimization_movie(
+        tmp_path / "wireframe.gif", ([0.0], [0.1]),
+        lambda x: (Surface(x[0]), Coils(x[0])), fps=2, dpi=40)
+    assert wireframe.is_file() and wireframe.stat().st_size > 0
     with np.testing.assert_raises_regex(ValueError, "gif or .mp4"):
         vj.plot_optimization_movie(tmp_path / "bad.txt", ([0.0],), Line)
     import matplotlib.animation
@@ -301,6 +320,13 @@ def test_monitor_surface_coil_movie_maps_normalized_variables(monkeypatch, tmp_p
     with np.testing.assert_raises_regex(ValueError, "plasma_problem"):
         monitor.movie_surface_coils("x.gif", lambda x: x, x0=[1.0], scales=[1.0],
                                     surface_color="absB")
+
+    # A caller-supplied color callable receives the normalized variables and
+    # the physical objects, with no plasma problem in the loop.
+    monitor.movie_surface_coils(
+        tmp_path / "callable.gif", lambda x: tuple(x), x0=[1.0, 2.0],
+        scales=[0.5, 2.0], surface_color=lambda u, objects: np.asarray(objects))
+    np.testing.assert_allclose(captured["colors"], [1.0, 4.0])
 
 
 def test_monitor_empty_optional_paths_raise_or_return_empty(tmp_path) -> None:
