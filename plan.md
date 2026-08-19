@@ -1478,10 +1478,9 @@ Not planned or sequenced in this program. Recorded so the dependencies are
 visible when the scope widens: ESSOS #58 (reusable coil optimization geometry)
 is what Phase 4's `FreeBoundaryProblem.from_tuples` would build on, and ESSOS
 #33 (mgrid export) and #25 (interpolated fields) overlap the Phase 15.6
-ownership question about mgrid and the magnetic-field class. STELLOPT #501 and
-#502 remain open upstream; until #501 merges, generate LASYM effective-ripple
-references from a locally patched `xneo` or the STELLOPT optimizer path rather
-than waiting on it.
+ownership question about mgrid and the magnetic-field class. **STELLOPT #501 has merged upstream** (`03b2e228`, "Fix the mode index of bmns
+in the NEO boozmn reader"), so LASYM effective-ripple references no longer need
+a local patch. #502 remains open.
 
 Consequence for sequencing: Phase 4 proceeds against the ESSOS API as it exists
 on `main` today rather than waiting for #58, and Phase 15.6 is deferred behind
@@ -1752,3 +1751,20 @@ of loss fractions between two such configurations rather than an absolute
 number, which depends on the tracing model and particle count.
 - 2026-08-19 claude: P21 — planned the tracing feature; ESSOS PR for the array constructor and smooth surrogate in flight; #122 stays open as the specification.
 - 2026-08-19 claude: P21.1 done — ESSOS#61 adds Vmec.from_arrays and a soft loss fraction (exact grad 0.0 -> surrogate -1.34e-1, converging to 0.250049 at width 1e-3); geometry coefficients carry no orbit gradient, so 21.2 must go through the field coefficients.
+
+### Reference toolchain (2026-08-19)
+
+`/Users/rogeriojorge/local/STELLOPT` is pinned at `512375ce` (2024-01-31) and
+**carries the NEO reader bug**: `read_booz_in.f90:143` reads `bmns(i,i)`. Any
+LASYM effective-ripple reference generated from that tree is wrong.
+
+A current tree is built at `/Users/rogeriojorge/local/STELLOPT_new`
+(`9177f58c`, `v6.5.0-42-g9177f58`), which has `bmns(i,k)` — the merged #501 fix.
+Binaries in `STELLOPT_new/bin`: `xvmec2000`, `xbooz_xform`, `xneo`, built with
+`MACHINE=macports`, gfortran 13.4.0, `-O2 -march=native`, NETCDF/FFTW/HDF5/MPI.
+
+Use `STELLOPT_new` for every reference run from here. Point the live tests at
+it with `--run-vmec2000 --vmec2000-executable=.../STELLOPT_new/bin/xvmec2000`,
+and record which tree produced any golden array that gets pinned — the two
+trees are two and a half years apart and disagree on LASYM.
+- 2026-08-19 claude: built STELLOPT_new (9177f58c) with xvmec2000/xbooz_xform/xneo; confirmed #501 merged, so the old 2024 tree's bmns(i,i) bug no longer constrains LASYM NEO references.
