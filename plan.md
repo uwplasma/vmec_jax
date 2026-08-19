@@ -283,7 +283,7 @@ booz_xform_jax side of the comparison uses the corrected/fixed xbooz reference. 
 guard in `vmex/core/neoclassical.py:86` and add a LASYM eps_eff panel test.
 
 ### 5d. STELLOPT upstream PRs (fork `rogeriojorge/STELLOPT`, small and separate)
-1. PR 1 — NEO boozmn reader: `NEO/Sources/read_booz_in.f90:143` `bmns(i,i)` -> `bmns(i,k)`
+1. PR 1 [DONE: PrincetonUniversity/STELLOPT#501] — NEO boozmn reader: `NEO/Sources/read_booz_in.f90:143` `bmns(i,i)` -> `bmns(i,k)`
    (corrupts the asymmetric |B| spectrum; the in-memory `stellopt_neo.f90:226` copy is correct,
    proving the typo). Body: 3-4 sentences, the diff speaks.
 2. PR 2 — NEO deallocation bugs: `neo_dealloc.f90:49-50` frees `pixn`/`i_n` while testing
@@ -890,3 +890,15 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   is non-invasive); and Apple Silicon's unified memory favouring this access pattern. Settle
   which before drawing any CPU-vs-GPU conclusion from that machine, and re-measure after the
   Jacobian-tolerance fix propagates there.
+- 2026-08-19 rogeriojorge: P5d PR 1 opened — **PrincetonUniversity/STELLOPT#501**, from the new
+  fork `rogeriojorge/STELLOPT`, branch `fix/neo-boozmn-bmns-index`, one line. Verified against
+  *current* upstream `develop` (1065c80b) rather than the local checkout, which is ~2280 commits
+  behind: the bug is live there. `bmns(i,i)` -> `bmns(i,k)` in
+  `NEO/Sources/read_booz_in.f90`; the three neighbouring assignments and the in-memory
+  equivalent at `STELLOPTV2/Sources/General/stellopt_neo.f90` all use `(i,k)`, so only the
+  standalone reader is affected. Practical consequence for us: until this merges, generate LASYM
+  effective-ripple references either from a locally patched `xneo` or through the STELLOPT
+  optimizer path, never from stock standalone `xneo` (P5c validation, P6 parity ladder).
+  PR 2 (the `neo_dealloc.f90` mismatches, `DEALLOCATE(pixn)` guarded on `pixm` and
+  `DEALLOCATE(i_n)` guarded on `i_m`, plus the LASYM arrays never being freed) is still to open;
+  keep it separate as planned.
