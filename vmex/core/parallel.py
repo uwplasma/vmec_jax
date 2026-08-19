@@ -73,9 +73,8 @@ def available_cpus() -> int:
 def default_workers(n_items: int, workers: int | None = None) -> int:
     """Resolve the worker count for an ``n_items`` ensemble.
 
-    ``None`` uses the CPUs available to this process, including
-    scheduler affinity limits.  An explicit value is clamped to
-    ``[1, n_items]``.
+    ``None`` uses the CPUs available to this process, including scheduler
+    affinity limits.  An explicit value is clamped to ``[1, n_items]``.
     """
     n_items = max(int(n_items), 1)
     if workers is None:
