@@ -678,3 +678,25 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   relevant test ids to the CI selectors (done for the two new `min_abs_iota` certificates, which
   had the same problem — they lived in `pr-parity-d` and never ran on PRs). Until one of those
   lands, #123 merges only with an explicit exception.
+- 2026-08-19 rogeriojorge: P1.a methodology note — do NOT diagnose this by timing the Jacobian
+  to completion; each data point costs ~35 min and a four-way comparison runs for hours. Bound
+  the work instead. An uncertified column falls back to the block-factorization solution rather
+  than raising (`_implicit_evolved_tangent_multi_rhs` masks on `report.converged`), so capping
+  `adjoint_maxiter` through the public `make_problem` knob is safe and makes the cost bounded by
+  construction. Then the *signature* is what to read, not the wall time: at a well-conditioned
+  iterate the Jacobian time is flat in the cap because the certifier converges in a couple of
+  matvecs, and where it is grinding the time grows roughly linearly with the cap. Run it on a
+  deliberately small deck (ns=11, mpol=4, max_mode=1, ndof=16) — the question is how convergence
+  degrades with the iterate, not how cost scales with resolution. Script:
+  `jac_bounded.py` in the session scratchpad. Two dead ends recorded so nobody repeats them: a
+  host-side spy on `_linear_response_report` cannot read the iteration counts (they are traced
+  inside jit — expose them through `LinearResponseReport` instead), and passing `jac_solver=` to
+  `from_tuples` raises (the public knob is `implicit_jacobian_method`, values
+  auto/block_tridiagonal/forward_gmres/reverse_adjoint).
+- 2026-08-19 rogeriojorge: P8 groundwork — the office box (`ssh office`, pop-os, 2x RTX A4000
+  16 GB, 36 cores, 62 GB RAM) now has the PR branch checked out at ~/local/vmex and imports it
+  cleanly on CUDA. Note the version skew against this laptop: office runs jax 0.6.2, laptop jax
+  0.9.2, both with solvax 0.13.0 — any CPU/GPU comparison has to say which jax produced it. First
+  matrix rows (fixed-boundary solve, problem build, compile, residual, Jacobian; symmetric and
+  LASYM at ns=31/mpol=5) are scripted at /tmp/gpu_bench.py on that host and write
+  /tmp/bench_cpu.json and /tmp/bench_gpu.json.
