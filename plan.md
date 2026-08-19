@@ -1801,3 +1801,43 @@ and record which tree produced any golden array that gets pinned — the two
 trees are two and a half years apart and disagree on LASYM.
 - 2026-08-19 claude: built STELLOPT_new (9177f58c) with xvmec2000/xbooz_xform/xneo; confirmed #501 merged, so the old 2024 tree's bmns(i,i) bug no longer constrains LASYM NEO references.
 - 2026-08-19 claude: P21.2 corrected — measured that wout_field_tables is host NumPy (0 jnp) so it carries no gradient; the deliverable is a traceable Nyquist projection of bsup/gmnc/bsubs beside boozer_input_tables, not a wrapper.
+
+### LASYM verification against the current reference (2026-08-19)
+
+Every LASYM claim in #118 re-checked against freshly built STELLOPT_new
+binaries rather than the 2024 tree. All hold:
+
+| claim | measured | verdict |
+|---|---|---|
+| pinned `DMerc` array is genuine xvmec2000 output | 2.67e-9 per-element vs a fresh run | holds |
+| `d_merc_state` vs xvmec2000 | 6.302e-4 per-element, 1.581e-4 scale-relative | holds |
+| pinned `<J.B>` array is genuine | 2.12e-15 per-element | holds |
+| `jdotb_state` vs xvmec2000 | 1.519e-3 per-element, 1.512e-4 scale-relative | holds, 1.3x margin |
+| shipped golden wout is current | zero difference on all 121 variables | not stale |
+| booz_xform_jax vs `xbooz_xform`, lasym | 1.8e-14 / 2.3e-14 (nfp=1), 1.0e-15 / 8.0e-16 (nfp=5) | holds |
+
+The live `--run-vmec2000` LASYM parity tests **pass** on this build (3 passed).
+An earlier report of them failing came from the 2024 tree; those failures were
+the reference, not vmex.
+
+**Upstream moved the normalization and every citation of it was stale.**
+STELLOPT_new's `fixaray.f:105` sets `dnorm = 1/(nzeta*(ntheta2-1))`
+unconditionally — no lasym branch — and `jxbforce.f:233` has
+`dnorm1 = 2*dnorm1` **commented out**. The 2024 tree had the lasym branch and
+the active doubling. The two routes give the same number
+(`2 * 1/(nzeta*2*(ntheta2-1))` = `1/(nzeta*(ntheta2-1))`), so vmex's value was
+always right, and `fourier.py:282-283` already matches the current tree
+exactly. Six prose sites cited the old mechanism as present-tense fact and now
+describe the net weight instead; `SPH012314` no longer appears anywhere in
+vmex. Worth remembering: `fourier.py`'s module docstring had been contradicting
+its own code 250 lines below.
+
+Two gaps worth closing later, neither blocking:
+- Both LASYM goldens are non-converged runs. `up_down` NITER-exhausts
+  (fsqz 1.11e-13 against ftol 1e-14), and `cth_like_free_bdy_lasym_small` sits
+  at fsqr 0.129. A fresh run reproduces both faithfully, so they are valid
+  bit-reproducibility fixtures, but neither is a physics anchor.
+- `confinement.rst` calls the bundled deck "finite-beta"; it ships `AM = 0.0`,
+  so `presf` and `DWell` are identically zero and finite beta exists only as a
+  test-fixture override. No LASYM golden exercises `DWell` against VMEC2000.
+- 2026-08-19 claude: verified every #118 LASYM claim against STELLOPT_new; all hold, goldens are current, live tests pass. Upstream refactored the dnorm mechanism, so six citations were rewritten to the net weight.
