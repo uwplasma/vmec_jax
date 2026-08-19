@@ -52,7 +52,7 @@ the session scratchpad: `profile_lasym.py`, `fb_isolate.py`, `fb_forward_anatomy
 
 ---
 
-## Phase 0 — Unblock and merge PR #123 (`rj/vmec-extender-field`)  [DONE: CI fully green; merge is the human's call]
+## Phase 0 — Unblock and merge PR #123 (`rj/vmec-extender-field`)  [DONE — merged 2026-08-19 as 84af4918]
 
 Smallest possible diff to green; everything else moves to the new branch off `main`.
 
@@ -1175,3 +1175,95 @@ part of this and needs re-measuring here now that it is in. Beyond that:
   are each their own piece of work. Phase 17 is the one to start with — an asymmetric run
   contains the symmetric configuration in its search space, so doing worse than symmetric points
   at a bug rather than at cost.
+
+## Phase 20 — Open pull requests: state, order, and how each serves the goals
+
+PR #123 merged on 2026-08-19 (`84af4918`, merge commit, branch history kept).
+Everything below is open as of that date. The six older VMEX pull requests all
+predate the merge, so each needs a rebase onto the new `main` before its checks
+mean anything — their current red CI is staleness, not failure.
+
+### VMEX, in the order to take them
+
+1. **#118 — Validate and enable LASYM Mercier and Glasser stability lanes**
+   (+313/-83). **Do this first.** It is not superseded by #123, and there is a
+   consistency problem until it lands: #123 merged documentation stating that
+   the traceable Mercier lane supports `lasym = True`, but `main` contains no
+   LASYM `DMerc` test — `tests/test_stability.py` on `main` covers LASYM only
+   for `jdotb`. The evidence for a claim already published lives in this
+   branch (`test_lasym_dmerc_matches_wout_and_vmec`,
+   `test_lasym_glasser_identity_residuals_and_reconstruction`). Either merge it
+   or soften the docs; merging is correct, because the capability is real.
+   Serves: Phase 5 (full LASYM), Phase 9 (coverage of physics that is claimed).
+   Watch for conflicts in `vmex/core/stability.py`, `optimize.py`, `plotting.py`
+   and `docs/explanation/confinement.rst`, all of which #123 touched.
+2. **#117 — Reject non-monotonic APHI flux maps with a typed input error**
+   (+445/-54). Real input-validation work in the typed-error style the codebase
+   already uses. Serves: research-grade robustness; no phase dependency.
+3. **#116 — Post-0.5 hygiene: solvax pin rationale, worker-count docstring**
+   (+7/-7). Trivial. Note it touches the solvax pin, which Phase 10 also wants
+   raised from the stale `>=0.8.8` floor — fold that in here rather than twice.
+4. **#121 — Stop linkcheck flaking on github.com connection aborts** (+8/-0)
+   and **#119 — Build the docs on the declared Python floor** (+10/-1). Both
+   trivial CI hygiene. Serves Phase 9's under-30-minute, non-flaky CI goal.
+   Take them together.
+5. **#122 — Add QP particle tracing example** (+98/-0), draft. Finish or close.
+   If kept, it should follow the example conventions this program settled:
+   `VMEX_EXAMPLES_CI=1` smoke mode, executed in a nightly lane rather than
+   text-grepped, and results written to `results/`.
+6. **#125 — the plan itself.** Merge once this program is underway so
+   contributors see it on `main`; keep appending to the Log afterwards. It is
+   the coordination document for everything here.
+
+### ESSOS
+
+7. **ESSOS #58 — Add reusable coil optimization geometry interfaces.** Pairs
+   with the merged #123: the free-boundary single-stage examples drive ESSOS
+   coil dofs, and #123's own review order named #58 first. Now that #123 is in,
+   this is the blocking dependency for the free-boundary API work.
+   Serves: Phase 4 (`FreeBoundaryProblem.from_tuples`), Phase 11 (coil-side
+   scaling in the virtual-casing memory work).
+8. **ESSOS #33 — VMEC mgrid export from ESSOS coils** and **#25 — interpolated
+   fields**. Both land squarely in the Phase 15.6 ownership question: who owns
+   mgrid, the magnetic-field class, and interpolated field evaluation across
+   VMEX and ESSOS. Do not reorganize `extender.py` until these two are settled,
+   or the same code moves twice. Review them as ecosystem design decisions
+   rather than as isolated features.
+9. ESSOS #59, #49, #32, #27 and the `rogeriojorge` drafts (#57, #56, #55, #54,
+   #53, #52, #51, #48, #46) are outside this program. The drafts are a separate
+   VMEC-events/tracing thread; triage them as a batch and close what is stale.
+
+### STELLOPT (upstream, from the rogeriojorge fork)
+
+10. **#501 — NEO boozmn reader `bmns(i,i)` -> `bmns(i,k)`.** Blocks trustworthy
+    LASYM effective-ripple references: until it merges, generate them from a
+    locally patched `xneo` or the STELLOPT optimizer path. Serves Phase 5c
+    (NEO_JAX LASYM validation) and Phase 6's parity ladder.
+11. **#502 — `neo_dealloc` frees the arrays it tests, plus the LASYM spectra.**
+    Independent of #501; no downstream dependency.
+
+### Ordering that respects the dependencies
+
+```
+now        #118 (restores docs/evidence consistency), then #117, #116, #121+#119
+next       ESSOS #58  ->  Phase 4 (FreeBoundaryProblem.from_tuples)
+           STELLOPT #501 merged or patched locally -> Phase 5c -> Phase 6
+then       ESSOS #33 + #25 settled  ->  Phase 15.6 (extender/mgrid/field ownership)
+           Phase 15.1-15.4 sibling PRs (virtual_casing_jax, booz_xform_jax, neo_jax)
+                                     ->  VMEX PRs that delete the duplicated code
+last       Phase 15.6-15.8 file moves, Phase 10 slimming, the git history rewrite
+```
+
+The rule behind that order: land the things that make `main` self-consistent
+first, then the cross-repo dependencies, and only then move files — every
+reorganization done before its sibling PR settles has to be redone.
+
+- 2026-08-19 rogeriojorge: PR #123 **merged** as `84af4918` (merge commit, branch history kept
+  deliberately — the individual messages record the measurements behind each decision). All
+  thirteen CI jobs green on the merged head, including the changed-line coverage gate that began
+  this program at 78% and finished at 96%. Phase 20 now inventories every other open pull request
+  across vmex, ESSOS and STELLOPT with its state, what it serves, and the order to take them.
+  One finding from that survey needs acting on soon: **#123 published documentation asserting
+  that the traceable Mercier lane supports `lasym = True`, and `main` has no LASYM `DMerc` test
+  to back it** — the tests live in unmerged #118. The capability is real, so the fix is to merge
+  #118 rather than weaken the claim, and it is first in the queue for that reason.
