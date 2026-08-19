@@ -46,6 +46,7 @@ from typing import Any
 
 import numpy as np
 
+import jax
 import jax.numpy as jnp
 
 from .fields import energies_and_force_norms, magnetic_fields, metric_elements
@@ -353,6 +354,38 @@ def mean_iota(state: SpectralState, rt: SolverRuntime) -> Array:
     """
     iotas = _iotas_half(state, rt)
     return jnp.mean(iotas[1:])
+
+
+def min_abs_iota(state: SpectralState, rt: SolverRuntime) -> Array:
+    """Smallest ``|iota|`` over the half-mesh surfaces (axis excluded).
+
+    The transform floor that matters for a stellarator is the profile
+    minimum, not its average: a mean target is satisfiable while a shear
+    reversal or a current-carried profile leaves an interior surface near
+    zero transform.  The absolute value keeps the metric sign-free, since
+    only the magnitude of the transform is physical here.
+    """
+    iotas = _iotas_half(state, rt)
+    return jnp.min(jnp.abs(iotas[1:]))
+
+
+def soft_min_abs_iota(
+    state: SpectralState, rt: SolverRuntime, *, tau: float = 0.02
+) -> Array:
+    """Smooth stand-in for :func:`min_abs_iota`.
+
+    The hard minimum is differentiable except where two surfaces tie, which
+    a least-squares step can sit on.  This variant weights the profile by
+    ``softmax(-|iota| / tau)``, so it stays inside ``[min, max]`` and reduces
+    to the minimum as ``tau -> 0``; ``tau`` carries the units of iota, so
+    ``0.02`` resolves a minimum to a few percent.  The ``log-sum-exp`` softmin
+    is deliberately avoided: it sits ``tau log(ns)`` *below* the true minimum,
+    which turns a floor on a non-negative quantity into a negative number.
+    """
+    if not tau > 0.0:
+        raise ValueError("tau must be positive")
+    magnitude = jnp.abs(_iotas_half(state, rt)[1:])
+    return jnp.sum(magnitude * jax.nn.softmax(-magnitude / tau))
 
 
 def edge_iota(state: SpectralState, rt: SolverRuntime) -> Array:

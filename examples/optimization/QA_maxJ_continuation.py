@@ -10,6 +10,7 @@ from dataclasses import replace
 import os
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import least_squares
 
@@ -24,7 +25,7 @@ SURFACES = np.array([0.6, 0.7, 0.8, 0.9])
 QA_SURFACES = np.linspace(0.1, 0.9, 8)
 QA_MAX_MODES, QA_MAX_NFEV = [2, 3, 4], [25, 40, 50]
 MAXJ_MAX_MODES, MAXJ_MAX_NFEV = [3, 4], [40, 60]
-ASPECT_TARGET, IOTA_TARGET, MAGNETIC_WELL_TARGET = 5.0, 0.42, 0.01
+ASPECT_TARGET, IOTA_FLOOR, MAGNETIC_WELL_TARGET = 5.0, 0.42, 0.01
 TARGET_BETA, TRAPPING_DEPTHS, MAXJ_TARGET = 0.025, (0.4, 0.8), -0.01
 BETA_WEIGHT = 1.0 / TARGET_BETA**2
 MAXJ_WEIGHT, QA_WEIGHT, BOOTSTRAP_WEIGHT, WELL_WEIGHT = 100.0, 10.0, 1.0, 10.0
@@ -52,13 +53,22 @@ rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -SEED_PERTURBATION, SEED_PERTURBATI
 inp = replace(inp, rbc=rbc, zbs=zbs)
 equilibrium = opt.solve_equilibrium(inp)
 
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+
+
 qs = opt.QuasisymmetryRatioResidual(QA_SURFACES, helicity_m=1, helicity_n=0)
 shape_terms = [(qs, 0.0, QA_WEIGHT), (opt.aspect_ratio, ASPECT_TARGET, 1.0),
-    (opt.mean_iota, IOTA_TARGET, 10.0), (opt.magnetic_well, MAGNETIC_WELL_TARGET, WELL_WEIGHT),
+    (iota_floor, 0.0, 10.0), (opt.magnetic_well, MAGNETIC_WELL_TARGET, WELL_WEIGHT),
 ]
 report = opt.EquilibriumReporter(
     ("QS", qs.total, ".4e"), ("aspect", opt.aspect_ratio, ".3f"),
-    ("iota", opt.mean_iota, ".3f"),
+    ("min |iota|", opt.min_abs_iota, ".3f"),
     ("magnetic well", opt.magnetic_well, ".3f"))
 monitor = opt.OptimizationMonitor(stream=None)
 
@@ -115,7 +125,7 @@ if not ci_smoke:
 bootstrap = RedlBootstrapMismatch(
     profiles, helicity_n=0, surfaces=QA_SURFACES, n_lambda=12 if ci_smoke else 32)
 finite_beta_terms = [(qs, 0.0, QA_WEIGHT), (bootstrap, 0.0, BOOTSTRAP_WEIGHT),
-    (opt.aspect_ratio, ASPECT_TARGET, 1.0), (opt.mean_iota, IOTA_TARGET, 10.0),
+    (opt.aspect_ratio, ASPECT_TARGET, 1.0), (iota_floor, 0.0, 10.0),
     (opt.volume_average_beta, TARGET_BETA, BETA_WEIGHT),
     (opt.magnetic_well, MAGNETIC_WELL_TARGET, WELL_WEIGHT)]
 

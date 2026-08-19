@@ -118,6 +118,8 @@ from .statephysics import (
     iota_edge,
     max_elongation,
     mean_iota,
+    min_abs_iota,
+    soft_min_abs_iota,
     volume,
     volume_average_beta,
 )
@@ -138,6 +140,8 @@ __all__ = [
     "QuasisymmetryRatioResidual",
     "aspect_ratio",
     "mean_iota",
+    "min_abs_iota",
+    "soft_min_abs_iota",
     "edge_iota",
     "iota_edge",
     "mirror_ratio",

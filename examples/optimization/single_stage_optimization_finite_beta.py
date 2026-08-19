@@ -39,7 +39,7 @@ TARGET_BETA = 0.025
 SURFACES = np.linspace(0.1, 0.9, 8)
 MAX_MODE, MAXITER = 2, 15
 N_CURRENT_SPLINE = 6
-ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
+ASPECT_TARGET, IOTA_FLOOR = 6.0, 0.42
 VARY_MAJOR_RADIUS = False
 SEED_PERTURBATION = 0.02
 
@@ -106,13 +106,22 @@ picard = self_consistent_bootstrap(inp, profiles, 0, n_iter=1 if ci_smoke else 8
 # to the self-consistent bootstrap response before the optimization starts.
 inp, equilibrium = opt.resample_current_profile(picard.input, N_CURRENT_SPLINE), picard.equilibrium
 
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+
+
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 bootstrap = RedlBootstrapMismatch(profiles, helicity_n=0, surfaces=SURFACES,
                                   n_lambda=12 if ci_smoke else 32)
 plasma_terms = [
     (qs, 0.0, 1.0), (bootstrap, 0.0, 1.0),
     (opt.aspect_ratio, ASPECT_TARGET, 1.0),
-    (opt.mean_iota, IOTA_TARGET, 10.0),
+    (iota_floor, 0.0, 10.0),
     (opt.volume_average_beta, TARGET_BETA, 1.0 / TARGET_BETA**2),
     # (opt.mercier_stability_residual, 0.0, 1.0e-6),
     # (opt.glasser_stability_residual, 0.0, 1.0e-6),
@@ -255,7 +264,7 @@ else:
 report = opt.EquilibriumReporter(
     ("QA", qs.total, ".5e"), ("f_boot", bootstrap.total, ".5e"),
     ("beta", opt.volume_average_beta, ".3%"), ("aspect", opt.aspect_ratio, ".3f"),
-    ("iota", opt.mean_iota, ".3f"))
+    ("min |iota|", opt.min_abs_iota, ".3f"))
 report("final", final_equilibrium)
 data_f = vc.surface_field_data_from_state(
     final_input, final_equilibrium.solution, runtime=final_equilibrium.solver_context,

@@ -567,11 +567,15 @@ class VmecInteriorField(MagneticField):
                 self.spectra, point[None, :], newton_iterations=self.newton_iterations,
                 initial_flux=seed[None, :])[1][0]
 
+        def differentiated(previous):
+            """One more Cartesian derivative of ``previous`` at fixed seed."""
+            def stepped(point, seed):
+                return jax.jacfwd(lambda value: previous(value, seed))(point)
+            return stepped
+
         function = point_field
         for _ in range(order):
-            previous = function
-            function = lambda point, seed, previous=previous: jax.jacfwd(  # noqa: E731
-                lambda value: previous(value, seed))(point)
+            function = differentiated(function)
         return jax.vmap(function)(xyz, seeds)
 
     def _parameter_vjp(self, order: int, cotangent: Array) -> Array:

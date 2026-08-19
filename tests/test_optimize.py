@@ -19,6 +19,7 @@ import pytest
 jax = pytest.importorskip("jax")
 pytest.importorskip("netCDF4")
 jax.config.update("jax_enable_x64", True)
+jnp = jax.numpy
 
 from vmex.core.input import VmecInput  # noqa: E402
 from vmex.core.problem import Evaluation, FunctionProblem  # noqa: E402
@@ -141,6 +142,9 @@ def test_scalar_targets_match_own_wout(solovev_eq):
                                float(w.volume_p), rtol=1e-8)
     np.testing.assert_allclose(float(opt.mean_iota(eq.state, eq.runtime)),
                                float(np.mean(np.asarray(w.iotas)[1:])), rtol=1e-8)
+    np.testing.assert_allclose(float(opt.min_abs_iota(eq.state, eq.runtime)),
+                               float(np.min(np.abs(np.asarray(w.iotas)[1:]))),
+                               rtol=1e-8)
     np.testing.assert_allclose(float(opt.edge_iota(eq.state, eq.runtime)),
                                float(np.asarray(w.iotaf)[-1]), rtol=1e-8)
     # magnetic well against the same endpoint-extrapolation formula on wout vp
@@ -212,6 +216,52 @@ def test_solve_equilibrium_forwards_verbose(monkeypatch, solovev_eq):
         opt.solve_equilibrium(
             solovev_eq.inp, forward_ftol=1.0e-10, ftol_array=[1.0e-8]
         )
+
+
+def test_min_abs_iota_floors_the_profile_not_its_average(solovev_eq):
+    """The floor metric reads the profile minimum and ignores the iota sign.
+
+    The distinction is the physical point: a mean target is satisfiable while
+    an interior surface sits near zero transform, which is what a
+    current-carried finite-beta profile does.  ``solovev`` has a prescribed
+    flat ``iota = 1``, so the two agree there and the separation is checked on
+    a synthetic profile threaded through the same reducer.
+    """
+    eq = solovev_eq
+    iotas = np.abs(np.asarray(eq.wout.iotas)[1:])
+    assert float(opt.min_abs_iota(eq.state, eq.runtime)) == pytest.approx(
+        float(iotas.min()), rel=1e-10)
+    assert (float(opt.soft_min_abs_iota(eq.state, eq.runtime))
+            >= float(iotas.min()) - 1.0e-12)
+
+    # Reducer separation on a profile with a genuine interior minimum, and on
+    # its negation: a magnitude floor must not see the transform sign.
+    for profile in (jnp.asarray([0.9, 0.5, 0.2, 0.6, 0.8]),
+                    jnp.asarray([-0.9, -0.5, -0.2, -0.6, -0.8])):
+        magnitude = jnp.abs(profile)
+        hard = jnp.min(magnitude)
+        soft = jnp.sum(magnitude * jax.nn.softmax(-magnitude / 0.02))
+        assert float(hard) == pytest.approx(0.2)
+        assert float(jnp.mean(magnitude)) > float(hard)  # mean would not floor
+        assert float(hard) <= float(soft) <= float(jnp.max(magnitude))
+        assert float(soft) == pytest.approx(0.2, abs=2.0e-2)
+
+
+def test_min_abs_iota_gradient_is_finite_and_matches_fd(solovev_eq):
+    """``min_abs_iota`` is traceable and its state derivative matches FD."""
+    eq = solovev_eq
+    tangent = jax.tree.map(jnp.zeros_like, eq.state)
+    tangent = dataclasses.replace(
+        tangent, R_cos=tangent.R_cos.at[-1, 0].set(1.0))
+    value, jvp = jax.jvp(lambda s: opt.min_abs_iota(s, eq.runtime),
+                         (eq.state,), (tangent,))
+    assert np.isfinite(float(value)) and np.isfinite(float(jvp))
+    h = 1.0e-6
+    plus = jax.tree.map(lambda a, t: a + h * t, eq.state, tangent)
+    minus = jax.tree.map(lambda a, t: a - h * t, eq.state, tangent)
+    fd = (opt.min_abs_iota(plus, eq.runtime)
+          - opt.min_abs_iota(minus, eq.runtime)) / (2.0 * h)
+    np.testing.assert_allclose(float(jvp), float(fd), rtol=2e-5, atol=1e-10)
 
 
 def test_scalar_targets_vs_golden(solovev_eq):

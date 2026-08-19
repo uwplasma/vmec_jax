@@ -5,6 +5,7 @@ from dataclasses import replace
 import os
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import least_squares
 
@@ -15,7 +16,7 @@ nfp = 2  # number of field periods
 SURFACES = np.linspace(0.1, 1.0, 10)
 MAX_MODES, MAX_NFEV = [2, 4, 4, 4], [15, 35, 25, 60]
 ASPECT_TARGET = 5.0
-IOTA_TARGET = 0.42
+IOTA_FLOOR = 0.42
 MAGNETIC_WELL_TARGET = 0.01
 TRIAL_BETA = 0.001  # optimize a 0.1%-beta p(s) proportional to 1-s stability proxy
 USE_TRIAL_STABILITY = True
@@ -60,17 +61,26 @@ stability_shape = np.where(stability_s >= STABILITY_MIN_S,
     1.0 + (EDGE_WEIGHT_FACTOR - 1.0) * stability_s**4, 0.0)
 
 # Objective function terms
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+
+
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 objective_function_terms = [
          (qs, 0.0, 1.0),
          (opt.aspect_ratio, ASPECT_TARGET, 1.0),
-         (opt.mean_iota, IOTA_TARGET, 10.0),
+         (iota_floor, 0.0, 10.0),
          (opt.magnetic_well, MAGNETIC_WELL_TARGET, 1.0),
          ]
 
 report = opt.EquilibriumReporter(
     ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
-    ("mean iota", opt.mean_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
+    ("min |iota|", opt.min_abs_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
 monitor = opt.OptimizationMonitor(stream=None)
 
 # Optimize for QA first, then add the pressure-stability proxy locally.

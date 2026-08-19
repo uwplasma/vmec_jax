@@ -76,9 +76,13 @@ def mirror_excess(equilibrium_state, solver_context):
     return jnp.maximum(
         opt.mirror_ratio(equilibrium_state, solver_context) - MIRROR_LIMIT, 0.0)
 
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
 def iota_floor(equilibrium_state, solver_context):
     return jnp.maximum(
-        IOTA_FLOOR - jnp.abs(opt.mean_iota(equilibrium_state, solver_context)), 0.0)
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
 
 def magnetic_well_floor(equilibrium_state, solver_context):
     return jnp.maximum(

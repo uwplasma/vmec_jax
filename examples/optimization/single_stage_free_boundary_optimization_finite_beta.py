@@ -24,7 +24,7 @@ TARGET_BETA = 0.025
 SURFACES = np.linspace(0.1, 0.9, 8)
 NS, MPOL, NTOR, NITER, FTOL = 31, 5, 5, 5000, 1.0e-10
 MAXITER, METHOD, PARAMETER_BOUND = 20, "L-BFGS-B", 1.0
-ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
+ASPECT_TARGET, IOTA_FLOOR = 6.0, 0.42
 LENGTH_TARGET, LENGTH_WEIGHT = 3.5, 1.0
 CURVATURE_LIMIT, CURVATURE_WEIGHT = 7.0, 10.0
 COIL_DISTANCE_LIMIT, COIL_DISTANCE_WEIGHT = 0.08, 1.0e3
@@ -76,11 +76,20 @@ profile_scale = inp.pres_scale * inp.am[0] / (2 * ELEMENTARY_CHARGE * n0 * T0)
 n0 *= profile_scale**(1 / 3); T0 *= profile_scale**(2 / 3)
 profiles = KineticProfiles(n0 * np.array([1, 0, 0, 0, 0, -1]),
                            T0 * np.array([1, -1]), T0 * np.array([1, -1]))
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+
+
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 bootstrap = RedlBootstrapMismatch(
     profiles, helicity_n=0, surfaces=SURFACES, n_lambda=12 if ci_smoke else 32)
 tuples = [(qs.residuals_state, 0.0, 1.0), (bootstrap.residuals_state, 0.0, 1.0),
-          (opt.aspect_ratio, ASPECT_TARGET, 1.0), (opt.mean_iota, IOTA_TARGET, 10.0),
+          (opt.aspect_ratio, ASPECT_TARGET, 1.0), (iota_floor, 0.0, 10.0),
           (opt.volume_average_beta, TARGET_BETA, 1.0 / TARGET_BETA**2)]
 
 def objective(u):
@@ -155,7 +164,7 @@ print(f"[final] QA = {float(qs.total_state(free_result.state, solver_context)):.
       f"f_boot = {float(bootstrap.total_state(free_result.state, solver_context)):.5e}, "
       f"beta = {float(wout.betatotal):.3%}, "
       f"aspect = {float(opt.aspect_ratio(free_result.state, solver_context)):.3f}, "
-      f"mean iota = {float(opt.mean_iota(free_result.state, solver_context)):.3f}")
+      f"min |iota| = {float(opt.min_abs_iota(free_result.state, solver_context)):.3f}")
 print(f"Objective = {float(final_cost):.6e} after {iterations} {METHOD} iterations")
 print(f"Coil lengths = {np.asarray(coils_final.length)}")
 print(f"Maximum curvature = {float(np.max(np.asarray(coils_final.curvature))):.3f} 1/m")

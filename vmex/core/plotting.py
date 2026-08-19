@@ -833,10 +833,11 @@ def _epsilon_effective_summary(wout) -> dict[str, Any]:
             "values": np.asarray(values, dtype=float), "note": "diagnostic resolution"}
     except Exception as exc:  # noqa: BLE001 - plotting remains useful without optional NEO
         result = {"valid": False, "note": f"{type(exc).__name__}: {exc}"}
+    def drop_entry(_reference: Any, cache_key: int = key) -> None:
+        _EPSILON_EFFECTIVE_CACHE.pop(cache_key, None)
+
     try:
-        reference = weakref.ref(
-            wout, lambda _reference, cache_key=key: _EPSILON_EFFECTIVE_CACHE.pop(
-                cache_key, None))
+        reference = weakref.ref(wout, drop_entry)
     except TypeError:
         return result
     _EPSILON_EFFECTIVE_CACHE[key] = (reference, result)

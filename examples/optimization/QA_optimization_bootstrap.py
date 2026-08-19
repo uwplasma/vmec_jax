@@ -5,6 +5,7 @@ from dataclasses import replace
 import os
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import least_squares
 
@@ -20,7 +21,7 @@ SURFACES = np.linspace(0.1, 0.9, 8)
 MAX_MODES = [2, 3, 4]
 MAX_NFEV = [20, 15, 30]
 N_CURRENT_SPLINE = [6, 8, 10]  # optimized I'(s) spline knots at each stage
-ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
+ASPECT_TARGET, IOTA_FLOOR = 6.0, 0.42
 # VMEC's dimensional DMerc/DR values are O(1e2-1e3) for this seed.
 STABILITY_WEIGHT, EDGE_WEIGHT_FACTOR, STABILITY_MIN_S = 1.0e-6, 10.0, 0.2
 # Characteristic low-order boundary step in meters; ESS reduces higher modes.
@@ -76,11 +77,20 @@ stability_weights = np.where(stability_s >= STABILITY_MIN_S,
 # Objective function terms
 bootstrap = RedlBootstrapMismatch(profiles, helicity_n=0, surfaces=SURFACES,
                                   n_lambda=12 if ci_smoke else 32)
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+
+
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 objective_function_terms = [
     (qs, 0.0, 1.0), (bootstrap, 0.0, 1.0),
     (opt.aspect_ratio, ASPECT_TARGET, 1.0),
-    (opt.mean_iota, IOTA_TARGET, 10.0),
+    (iota_floor, 0.0, 10.0),
     (opt.volume_average_beta, TARGET_BETA, BETA_WEIGHT),
     (opt.mercier_stability_residual, 0.0, stability_weights),
     (opt.glasser_stability_residual, 0.0, stability_weights),
@@ -94,7 +104,7 @@ def maximum_dr(equilibrium_state, solver_context):
 report = opt.EquilibriumReporter(
     ("QS", qs.total, ".4e"), ("f_boot", bootstrap.total, ".4e"),
     ("beta", opt.volume_average_beta, ".3%"), ("aspect", opt.aspect_ratio, ".3f"),
-    ("iota", opt.mean_iota, ".3f"), ("min DMerc", minimum_dmerc, ".2e"),
+    ("min |iota|", opt.min_abs_iota, ".3f"), ("min DMerc", minimum_dmerc, ".2e"),
     ("max DR", maximum_dr, ".2e"))
 monitor = opt.OptimizationMonitor(stream=None)
 

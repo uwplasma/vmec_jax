@@ -39,7 +39,7 @@ MAX_MODE = 3
 MAXITER = 200
 ASPECT_TARGET = 4.0
 ASPECT_WEIGHT = 1.0
-IOTA_TARGET = 0.42
+IOTA_FLOOR = 0.42
 IOTA_WEIGHT = 100.0
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
 SEED_PERTURBATION = 0.02
@@ -91,11 +91,20 @@ mpol = max(MAX_MODE + 2, 5)
 inp = replace(inp, delt=0.5).change_resolution(
     mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
 
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+
+
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 plasma_terms = [
     (qs.residuals_state, 0.0, 1.0),
     (opt.aspect_ratio, ASPECT_TARGET, ASPECT_WEIGHT),
-    (opt.mean_iota, IOTA_TARGET, IOTA_WEIGHT),
+    (iota_floor, 0.0, IOTA_WEIGHT),
 ]
 plasma_problem = opt.VmecProblem.from_tuples(
     inp, plasma_terms, max_mode=MAX_MODE, vary_major_radius=VARY_MAJOR_RADIUS,
@@ -251,7 +260,7 @@ maximum_curvature = float(np.max(np.asarray(coils_final.curvature)))
 # Print results
 report = opt.EquilibriumReporter(
     ("QA total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
-    ("mean iota", opt.mean_iota, ".4f"))
+    ("min |iota|", opt.min_abs_iota, ".4f"))
 final_value = float(result.fun)
 report("final", final_equilibrium)
 print(f"\nObjective: {initial_value:.6e} -> {final_value:.6e} in {result.nit} {METHOD} iterations")

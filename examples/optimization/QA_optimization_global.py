@@ -35,16 +35,19 @@ mpol = max(MAX_MODE + 2, MINIMUM_MPOL)
 inp = replace(inp, rbc=rbc, zbs=zbs, delt=0.5).change_resolution(
     mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
 
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
 def iota_floor(equilibrium_state, solver_context):
     return jnp.maximum(
-        IOTA_FLOOR - jnp.abs(opt.mean_iota(equilibrium_state, solver_context)), 0.0)
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
 
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 objective_function_terms = [
     (qs, 0.0, 1.0),
     (opt.aspect_ratio, ASPECT_TARGET, 1.0),
     (iota_floor, 0.0, 100.0),
-    # (opt.mean_iota, IOTA_TARGET, 10.0)
     ]
 problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=MAX_MODE,
     vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, ess_alpha=ESS_ALPHA, progress=True)

@@ -22,7 +22,7 @@ from essos.surfaces import SurfaceRZFourier, surfacerzfourier_from_boundary
 SURFACES = np.linspace(0.1, 1.0, 6)
 NS, MPOL, NTOR, NITER, FTOL = 25, 5, 5, 4000, 1.0e-10
 MAXITER, METHOD, PARAMETER_BOUND = 20, "L-BFGS-B", 1.0
-ASPECT_TARGET, IOTA_TARGET = 6.0, 0.42
+ASPECT_TARGET, IOTA_FLOOR = 6.0, 0.42
 LENGTH_TARGET, LENGTH_WEIGHT = 3.5, 1.0
 CURVATURE_LIMIT, CURVATURE_WEIGHT = 7.0, 10.0
 COIL_DISTANCE_LIMIT, COIL_DISTANCE_WEIGHT = 0.08, 1.0e3
@@ -60,10 +60,19 @@ config = vj.make_free_boundary_config(
     inp, BiotSavart(coils0), ns=NS, ftol=FTOL, max_iterations=NITER,
     adjoint_tol=1.0e-8, field_from_parameters=field_from_u)
 solver_context = im.runtime_from_params(params, config.implicit)
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+
+
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 tuples = [(qs.residuals_state, 0.0, 1.0),
           (opt.aspect_ratio, ASPECT_TARGET, 1.0),
-          (opt.mean_iota, IOTA_TARGET, 10.0)]
+          (iota_floor, 0.0, 10.0)]
 
 def objective(u):
     equilibrium_state, status, _, _ = vj.solve_free_boundary_implicit_status(params, u, config)
@@ -131,7 +140,7 @@ wout = vj.wout_from_state(
 # Print results
 print(f"[final] QA = {float(qs.total_state(free_result.state, solver_context)):.5e}, "
       f"aspect = {float(opt.aspect_ratio(free_result.state, solver_context)):.3f}, "
-      f"mean iota = {float(opt.mean_iota(free_result.state, solver_context)):.3f}")
+      f"min |iota| = {float(opt.min_abs_iota(free_result.state, solver_context)):.3f}")
 print(f"Objective = {float(final_cost):.6e} after {iterations} {METHOD} iterations")
 print(f"Coil lengths = {np.asarray(coils_final.length)}")
 print(f"Maximum curvature = {float(np.max(np.asarray(coils_final.curvature))):.3f} 1/m")

@@ -5,6 +5,7 @@ from dataclasses import replace
 import os
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import minimize
 
@@ -21,7 +22,7 @@ METHOD   = "L-BFGS-B" # or "BFGS"
 PARAMETER_BOUND = 1.0
 BOUNDARY_STEP = 0.1   # typical change represented by one scaled variable
 ASPECT_TARGET = 5.0
-IOTA_TARGET   = 0.42
+IOTA_FLOOR    = 0.42
 # MAGNETIC_WELL_TARGET = 0.01
 MINIMUM_MPOL = 5
 VARY_MAJOR_RADIUS = False  # set True to optimize RBC(0,0) instead of fixing it
@@ -41,11 +42,20 @@ inp = replace(inp, delt=0.5).change_resolution(
     mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
 
 # For QH use helicity_n=-1.
+# Floor the profile minimum, not its average: a mean target is satisfiable while
+# an interior surface sits near zero transform, which is what a current-carried
+# finite-beta profile does. opt.mean_iota targets the average instead, and
+# opt.soft_min_abs_iota is the smooth-minimum variant.
+def iota_floor(equilibrium_state, solver_context):
+    return jnp.maximum(
+        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+
+
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
 objective_function_terms = [
     (qs, 0.0, 1.0),
     (opt.aspect_ratio, ASPECT_TARGET, 1.0),
-    (opt.mean_iota, IOTA_TARGET, 10.0),
+    (iota_floor, 0.0, 10.0),
     # (opt.magnetic_well, MAGNETIC_WELL_TARGET, 1.0),
 ]
 problem = opt.VmecProblem.from_tuples(inp, objective_function_terms, max_mode=MAX_MODE,
@@ -56,7 +66,7 @@ x0, scales = problem.x0, BOUNDARY_STEP * problem.scales
 
 report = opt.EquilibriumReporter(
     ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
-    ("mean iota", opt.mean_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
+    ("min |iota|", opt.min_abs_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
 
 def x_from_y(y):
     return x0 + scales * y

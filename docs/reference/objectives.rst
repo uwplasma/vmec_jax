@@ -103,9 +103,18 @@ and composable with both gradient modes:
 - :func:`~vmex.core.optimize.aspect_ratio` — the VMEC/simsopt effective
   aspect ratio;
 - :func:`~vmex.core.optimize.volume` — plasma volume;
+- :func:`~vmex.core.optimize.min_abs_iota` — the smallest ``|iota|`` over the
+  half-mesh surfaces, and the default transform floor in the shipped
+  optimization examples.  A floor on the profile *minimum* is what keeps the
+  transform coming from shaping: a mean target is satisfiable while an
+  interior surface sits near zero transform, which is exactly what a
+  current-carried finite-beta profile does.
+  :func:`~vmex.core.optimize.soft_min_abs_iota` is the smooth variant
+  (``softmax``-weighted, so it stays within ``[min, max]``) for optimizers
+  that stall on the ties of a hard minimum;
 - :func:`~vmex.core.optimize.mean_iota` /
-  :func:`~vmex.core.optimize.edge_iota` — rotational-transform targets
-  (a floor on ``|iota|`` avoids the rational surfaces near zero transform);
+  :func:`~vmex.core.optimize.edge_iota` — profile-average and boundary
+  transform, for decks that genuinely want a target rather than a floor;
 - :func:`~vmex.core.optimize.mirror_ratio` — ``(Bmax - Bmin)/(Bmax +
   Bmin)`` on one half-mesh surface (outermost by default), the practical QI
   knob;
