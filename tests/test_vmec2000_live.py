@@ -1,4 +1,10 @@
-"""Opt-in end-to-end comparison against a locally installed VMEC2000."""
+"""Opt-in end-to-end comparison against a locally installed VMEC2000.
+
+The pinned arrays here and in ``test_stability.py`` were measured against
+STELLOPT ``v6.5.0-42-g9177f58`` (gfortran 13.4.0, ``-O2 -march=native``).
+LASYM sine harmonics move by ~1e-2 between VMEC2000 builds years apart, well
+above these tolerances, so record the build whenever a golden is re-pinned.
+"""
 
 from __future__ import annotations
 
