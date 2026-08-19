@@ -170,8 +170,8 @@ the elongation threshold.
 Two reporting diagnostics run on the host-side wout engine:
 :func:`~vmex.core.optimize.d_merc` (Mercier interchange criterion) and
 :func:`~vmex.core.optimize.l_grad_b` (the ``L_grad_B`` coil-complexity proxy).
-Their live-state counterparts :func:`~vmex.core.stability.d_merc_state`
-(``lasym = False``), :func:`~vmex.core.stability.jdotb_state`,
+Their live-state counterparts :func:`~vmex.core.stability.d_merc_state`,
+:func:`~vmex.core.stability.jdotb_state`,
 :func:`~vmex.core.stability.jdotb_residual`,
 :func:`~vmex.core.stability.glasser_d_r_state`, and
 :func:`~vmex.core.optimize.l_grad_b_state` are pure JAX and can be composed

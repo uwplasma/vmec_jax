@@ -282,8 +282,13 @@ the bounded trace. A pitch block with no complete well on even one sampled field
 line, a marginal or merged level, or more wells than ``max_wells`` returns NaN
 with a false ``valid_pitch`` flag. This makes a topology error visible instead
 of turning it into a favorable zero. The low-level Boozer-spectrum function
-accepts cosine and sine harmonics; the equilibrium objective retains the
-traceable Boozer transform's current explicit ``lasym=False`` guard.
+accepts cosine and sine harmonics, and so does the equilibrium objective:
+:func:`~vmex.core.omnigenity.boozer_bmnc_state` dispatches ``lasym`` states to
+the full booz_xform transform and returns ``bmns_b`` alongside ``bmnc_b``,
+which every QI residual above passes through. On an up-down-asymmetric deck
+the traceable cosine and sine spectra are gated against the host
+booz_xform_jax reconstruction at ``2e-2`` and ``3e-2`` relative, and the QI
+state derivative is checked against a finite difference of the same objective.
 
 Maximum-J
 ~~~~~~~~~~~~~
@@ -415,7 +420,7 @@ the individual pieces involve radial derivatives of surface averages, the two
 surfaces nearest the axis and the edge carry the usual numerical noise; a
 practical objective penalizes ``min(DMerc[2:-1], 0)``. ``vmex`` exposes the
 reporting profile as :func:`~vmex.core.optimize.d_merc`, evaluated through the
-parity-proven wout engine.  The symmetric live-state counterpart
+parity-proven wout engine.  The live-state counterpart
 :func:`~vmex.core.stability.d_merc_state` is a pure-JAX port of the same
 ``jxbforce.f``/``mercier.f`` path for ``jit``/AD use and agrees with the wout
 profile to floating-point round-off.  For optimization,
@@ -425,8 +430,11 @@ and the edge and returns
 penalizes unstable (negative) ``DMerc`` with a smooth gradient.  At finite
 ``smoothing`` the residual is positive, rather than exactly zero, on stable
 surfaces but decays exponentially with the stability margin.  Both profile
-lanes retain VMEC's near-axis and edge limitations; the traceable Mercier
-lane does not yet support ``lasym = True``.
+lanes retain VMEC's near-axis and edge limitations.  The traceable lane
+supports ``lasym = True``: the ``jxbforce.f`` mode filter keeps the four
+asymmetric geometry families, and on a converged finite-pressure,
+up-down-asymmetric tokamak ``d_merc_state`` reproduces the WOUT ``DMerc``
+profile to round-off with finite state derivatives.
 
 For a vacuum equilibrium, :math:`p'=0` makes :math:`D_{\rm well}` exactly
 zero; VMEX does not add a pressure floor. The reported Mercier index can still

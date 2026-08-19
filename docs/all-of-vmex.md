@@ -91,8 +91,18 @@ coefficients, profiles, `phiedge`, `pres_scale`, and `curtor` through the
 implicit function theorem on the converged fixed point — validated against
 finite differences at 2e-9 relative on the bundled Solovev case
 (`examples/take_gradients.py`). Coil/`extcur` derivatives on a specified
-boundary go through the virtual-casing residual; the NESTOR free-boundary
-fixed point itself is not differentiated. The per-configuration contract is
+boundary go through the virtual-casing residual — the mature single-stage
+lane. VMEX also differentiates the reconverged
+VMEC--NESTOR free-boundary root itself:
+{func}`vmex.core.freeboundary_implicit.solve_free_boundary_implicit` takes the
+reverse-mode derivative of the coupled fixed point with respect to plasma
+profiles and direct coil shape/current dofs, with a whole-state transpose by
+default (`adjoint_solver="coupled_gcrot"`) and an opt-in boundary-Schur
+transpose (`examples/take_free_boundary_gradients.py`,
+`examples/optimization/single_stage_free_boundary_optimization.py`). That path
+is experimental and CPU-only; cold compile time, GPU memory, and failed-trial
+recovery keep it at `vjp = limited`. The per-configuration contract, including
+what each grade means and what the free-boundary rows still need, is
 {doc}`reference/capabilities`; the machinery is
 {doc}`explanation/adjoint-gradients`.
 
