@@ -1178,6 +1178,14 @@ part of this and needs re-measuring here now that it is in. Beyond that:
 
 ## Phase 20 — Open pull requests: state, order, and how each serves the goals
 
+**Scope.** This program covers **vmex, NEO_JAX, booz_xform_jax and
+virtual_casing_jax** only. ESSOS and STELLOPT work is explicitly out of scope
+for now: the two STELLOPT pull requests stay open upstream and are not waited
+on (patch `xneo` locally when a LASYM ripple reference is needed), and the
+ESSOS pull requests are neither planned nor sequenced here. Where a phase below
+previously treated one of them as a blocker, the dependency is recorded but the
+phase proceeds without it.
+
 PR #123 merged on 2026-08-19 (`84af4918`, merge commit, branch history kept).
 Everything below is open as of that date. The six older VMEX pull requests all
 predate the merge, so each needs a rebase onto the new `main` before its checks
@@ -1215,55 +1223,36 @@ mean anything — their current red CI is staleness, not failure.
    contributors see it on `main`; keep appending to the Log afterwards. It is
    the coordination document for everything here.
 
-### ESSOS
+### ESSOS and STELLOPT — out of scope, recorded only
 
-7. **ESSOS #58 — Add reusable coil optimization geometry interfaces.** Pairs
-   with the merged #123: the free-boundary single-stage examples drive ESSOS
-   coil dofs, and #123's own review order named #58 first. Now that #123 is in,
-   this is the blocking dependency for the free-boundary API work.
-   Serves: Phase 4 (`FreeBoundaryProblem.from_tuples`), Phase 11 (coil-side
-   scaling in the virtual-casing memory work).
-8. **ESSOS #33 — VMEC mgrid export from ESSOS coils** and **#25 — interpolated
-   fields**. Both land squarely in the Phase 15.6 ownership question: who owns
-   mgrid, the magnetic-field class, and interpolated field evaluation across
-   VMEX and ESSOS. Do not reorganize `extender.py` until these two are settled,
-   or the same code moves twice. Review them as ecosystem design decisions
-   rather than as isolated features.
-9. ESSOS #59, #49, #32, #27 and the `rogeriojorge` drafts (#57, #56, #55, #54,
-   #53, #52, #51, #48, #46) are outside this program. The drafts are a separate
-   VMEC-events/tracing thread; triage them as a batch and close what is stale.
+Not planned or sequenced in this program. Recorded so the dependencies are
+visible when the scope widens: ESSOS #58 (reusable coil optimization geometry)
+is what Phase 4's `FreeBoundaryProblem.from_tuples` would build on, and ESSOS
+#33 (mgrid export) and #25 (interpolated fields) overlap the Phase 15.6
+ownership question about mgrid and the magnetic-field class. STELLOPT #501 and
+#502 remain open upstream; until #501 merges, generate LASYM effective-ripple
+references from a locally patched `xneo` or the STELLOPT optimizer path rather
+than waiting on it.
 
-### STELLOPT (upstream, from the rogeriojorge fork)
-
-10. **#501 — NEO boozmn reader `bmns(i,i)` -> `bmns(i,k)`.** Blocks trustworthy
-    LASYM effective-ripple references: until it merges, generate them from a
-    locally patched `xneo` or the STELLOPT optimizer path. Serves Phase 5c
-    (NEO_JAX LASYM validation) and Phase 6's parity ladder.
-11. **#502 — `neo_dealloc` frees the arrays it tests, plus the LASYM spectra.**
-    Independent of #501; no downstream dependency.
+Consequence for sequencing: Phase 4 proceeds against the ESSOS API as it exists
+on `main` today rather than waiting for #58, and Phase 15.6 is deferred behind
+the three JAX-sibling moves instead of behind ESSOS.
 
 ### Ordering that respects the dependencies
 
 ```
-now        #118 (restores docs/evidence consistency), then #117, #116, #121+#119
-next       ESSOS #58  ->  Phase 4 (FreeBoundaryProblem.from_tuples)
-           STELLOPT #501 merged or patched locally -> Phase 5c -> Phase 6
-then       ESSOS #33 + #25 settled  ->  Phase 15.6 (extender/mgrid/field ownership)
-           Phase 15.1-15.4 sibling PRs (virtual_casing_jax, booz_xform_jax, neo_jax)
-                                     ->  VMEX PRs that delete the duplicated code
-last       Phase 15.6-15.8 file moves, Phase 10 slimming, the git history rewrite
+now        vmex #118  (restores docs/evidence consistency)   [IN PROGRESS]
+           vmex #117, #116, #121+#119, then #122, then #125
+next       Phase 17  (asymmetric quasisymmetry: correctness before anything else)
+           Phase 15.1  virtual_casing_jax owns virtual casing   -> vmex deletes
+           Phase 15.2  booz_xform_jax owns the Boozer transform -> vmex deletes
+           Phase 15.4  neo_jax owns effective ripple            -> vmex deletes
+then       Phase 6   epsilon-effective objective lane, on top of the neo_jax move
+           Phase 4   FreeBoundaryProblem.from_tuples, against today's ESSOS API
+           Phase 3   free-boundary speed, now that the Jacobian work is settled
+last       Phase 15.6-15.8 file moves, Phase 10 slimming, the history rewrite
 ```
 
-The rule behind that order: land the things that make `main` self-consistent
-first, then the cross-repo dependencies, and only then move files — every
-reorganization done before its sibling PR settles has to be redone.
-
-- 2026-08-19 rogeriojorge: PR #123 **merged** as `84af4918` (merge commit, branch history kept
-  deliberately — the individual messages record the measurements behind each decision). All
-  thirteen CI jobs green on the merged head, including the changed-line coverage gate that began
-  this program at 78% and finished at 96%. Phase 20 now inventories every other open pull request
-  across vmex, ESSOS and STELLOPT with its state, what it serves, and the order to take them.
-  One finding from that survey needs acting on soon: **#123 published documentation asserting
-  that the traceable Mercier lane supports `lasym = True`, and `main` has no LASYM `DMerc` test
-  to back it** — the tests live in unmerged #118. The capability is real, so the fix is to merge
-  #118 rather than weaken the claim, and it is first in the queue for that reason.
+The rule behind that order: make `main` self-consistent first, then move
+physics into the package that owns it, and only then reorganize files —
+every reorganization done before its owning package settles has to be redone.
