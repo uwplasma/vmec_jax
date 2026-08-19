@@ -246,6 +246,10 @@ def test_min_abs_iota_floors_the_profile_not_its_average(solovev_eq):
         assert float(hard) <= float(soft) <= float(jnp.max(magnitude))
         assert float(soft) == pytest.approx(0.2, abs=2.0e-2)
 
+    # tau carries the units of iota; a non-positive width has no softmin.
+    with pytest.raises(ValueError, match="tau must be positive"):
+        opt.soft_min_abs_iota(eq.state, eq.runtime, tau=0.0)
+
 
 def test_min_abs_iota_gradient_is_finite_and_matches_fd(solovev_eq):
     """``min_abs_iota`` is traceable and its state derivative matches FD."""

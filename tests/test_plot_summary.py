@@ -389,6 +389,59 @@ def test_summary_survives_boozer_failure(solved_case, monkeypatch):
         plt.close(fig)
 
 
+def test_summary_plots_the_effective_ripple_profile_when_neo_is_available(
+    solved_case, monkeypatch,
+):
+    """With NEO_JAX present the pressure panel gains an eps_eff^(3/2) twin axis.
+
+    ``epsilon_eff^(3/2)`` (Nemov PoP 6, 4622 (1999)) spans decades across the
+    minor radius, so the diagnostic overlay must be logarithmic and share the
+    pressure panel's legend rather than replace the pressure curve.
+    """
+    import matplotlib.pyplot as plt
+
+    from vmex.core import neoclassical
+
+    _, wout = solved_case
+    surfaces = np.linspace(0.15, 0.95, 5)
+    values = np.geomspace(1.0e-6, 1.0e-3, 5)
+    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
+    monkeypatch.setattr(
+        neoclassical, "epsilon_effective_from_wout",
+        lambda _wout, **_kwargs: (surfaces, values))
+    saved = dict(plotting._EPSILON_EFFECTIVE_CACHE)
+    plotting._EPSILON_EFFECTIVE_CACHE.clear()
+
+    fig, meta = plotting._summary_figure(wout)
+    try:
+        info = meta["epsilon_effective"]
+        assert info["valid"] and info["note"] == "diagnostic resolution"
+        axis = meta["epsilon_axis"]
+        assert axis.get_yscale() == "log"
+        np.testing.assert_allclose(axis.lines[0].get_ydata(), values)
+        labels = [t.get_text() for t in meta["axes"]["pressure"].get_legend().get_texts()]
+        assert len(labels) == 2 and any("epsilon" in t or r"\epsilon" in t for t in labels)
+    finally:
+        plt.close(fig)
+        plotting._EPSILON_EFFECTIVE_CACHE.clear()
+        plotting._EPSILON_EFFECTIVE_CACHE.update(saved)
+
+
+def test_epsilon_effective_summary_tolerates_an_unreferenceable_wout(monkeypatch):
+    """A missing backend or an unhashable wout never breaks the summary."""
+    from vmex.core import neoclassical
+
+    def unavailable(_wout, **_kwargs):
+        raise ImportError("effective ripple requires NEO_JAX")
+
+    monkeypatch.setattr(neoclassical, "epsilon_effective_from_wout", unavailable)
+    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
+    before = dict(plotting._EPSILON_EFFECTIVE_CACHE)
+    info = plotting._epsilon_effective_summary({"ns": 3})  # dict: no weak reference
+    assert info["valid"] is False and "ImportError" in info["note"]
+    assert plotting._EPSILON_EFFECTIVE_CACHE == before
+
+
 def test_summary_survives_j_map_failure(solved_case, monkeypatch):
     """J-map failure annotates its panel; Boozer |B| panels still render."""
     import matplotlib.pyplot as plt

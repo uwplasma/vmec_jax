@@ -159,6 +159,54 @@ def test_free_boundary_current_gradient_matches_resolve_finite_difference():
     )
 
 
+def test_boundary_schur_adjoint_reproduces_the_coupled_gcrot_gradient():
+    """Both adjoint solvers invert the same converged plasma-vacuum Jacobian.
+
+    ``coupled_gcrot`` is matrix-free on the full coupled transpose;
+    ``boundary_schur`` eliminates the block-tridiagonal bulk exactly and
+    solves only NESTOR's edge response (``(I + U.T A.T^-1 E.T U) mu = ...``).
+    Agreement between them on one converged root certifies the radial
+    elimination itself; the nightly ``full`` test below anchors both against
+    an independent re-solve finite difference.
+
+    Both lanes are certified only to ``10 x adjoint_tol x ||rhs||``, so they
+    are compared at the percent level, which a wrong Schur complement (rather
+    than a differently converged Krylov solve) would miss by far more.
+    """
+    inp = dataclasses.replace(
+        lasym_free_input(DATA), ns_array=np.array([8]),
+        ftol_array=np.array([1.0e-8]), niter_array=np.array([2500]))
+    field = lasym_free_field()
+    params = im.params_from_input(inp)
+
+    def configure(solver):
+        return make_free_boundary_config(
+            inp, field, ns=8, ftol=1.0e-8, max_iterations=2500,
+            adjoint_tol=1.0e-5, adjoint_maxiter=100, adjoint_solver=solver,
+            schur_probe_chunk_size=4,
+            field_from_parameters=lambda current: dataclasses.replace(
+                field, extcur=current),
+            device="cpu")
+
+    def gradient(cfg):
+        def objective(current):
+            state, _, _, _ = solve_free_boundary_implicit_status(
+                params, current, cfg)
+            return jnp.mean(state.R_cos[-1] ** 2 + state.Z_sin[-1] ** 2)
+
+        return np.asarray(jax.grad(objective)(field.extcur))
+
+    coupled_cfg, schur_cfg = configure("coupled_gcrot"), configure("boundary_schur")
+    coupled = gradient(coupled_cfg)
+    # Re-enter the same root warm: the comparison is about the adjoint, and a
+    # second cold ladder would only add solver noise to it.
+    fbi._FREE_HOT_CACHE[schur_cfg] = fbi._FREE_HOT_CACHE[coupled_cfg]
+    schur = gradient(schur_cfg)
+
+    assert np.all(np.isfinite(coupled)) and np.max(np.abs(coupled)) > 0.0
+    np.testing.assert_allclose(schur, coupled, rtol=2.0e-2, atol=1.0e-8)
+
+
 @pytest.mark.full
 def test_boundary_schur_current_gradient_matches_resolve_finite_difference():
     """The reduced adjoint retains a nontrivial external-field derivative."""
