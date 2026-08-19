@@ -2698,6 +2698,14 @@ def _least_squares_implicit(
 
         return Fz, tangent_of, rhs_of, column_of, (params, frozen, P, z_star)
 
+    # The Jacobian certifies its columns against its own tolerance: a
+    # least-squares Jacobian only has to point a trust-region step, while the
+    # scalar-gradient lane keeps cfg.adjoint_tol for the quasi-Newton curvature
+    # it accumulates.  Passed as a value, never as a replacement config: a
+    # second config identity misses the caches keyed on this one and forces a
+    # runtime rebuild inside the traced Jacobian.
+    certify_rtol = float(cfg.jacobian_adjoint_tol)
+
     def jacobian_rows(x: jnp.ndarray):
         """Exact residual Jacobian by *forward* implicit differentiation.
 
@@ -2714,7 +2722,8 @@ def _least_squares_implicit(
 
         def column(tp_stack):
             tp = tangent_of(tp_stack)
-            dz, krylov = imp._adjoint_solve(Fz, rhs_of(tp), jac_cfg)
+            dz, krylov = imp._adjoint_solve(
+                Fz, rhs_of(tp), cfg, rtol=certify_rtol)
             return column_of(dz, tp), dz, krylov
 
         tangent_chunk = ndof if chunk is None else chunk
@@ -2735,12 +2744,6 @@ def _least_squares_implicit(
     # block Thomas), backsolve every dof RHS, then one warm-started GMRES pass
     # per column certifies cfg.adjoint_tol (solvax checks the initial residual
     # first, so columns already at tolerance cost one matvec).
-    # The Jacobian certifies its columns against its own tolerance: a
-    # least-squares Jacobian only has to point a trust-region step, while the
-    # scalar-gradient lane keeps cfg.adjoint_tol for the quasi-Newton curvature
-    # it accumulates.  The shared multi-RHS helper stays on adjoint_tol for its
-    # public callers.
-    jac_cfg = dataclasses.replace(cfg, adjoint_tol=cfg.jacobian_adjoint_tol)
     active_fields = imp._active_state_fields(cfg)
     m_block = len(active_fields) * int(np.asarray(mask_np.R_cos).shape[1])
     if jac_chunk_size == "auto":
@@ -2765,9 +2768,9 @@ def _least_squares_implicit(
         tangent_batch = jax.vmap(tangent_of)(tangent_stack)
         tangent_chunk = ndof if chunk is None else chunk
         dz0, report = imp._implicit_evolved_tangent_multi_rhs(
-            params, jac_cfg, frozen, mask_const, tangent_batch,
+            params, cfg, frozen, mask_const, tangent_batch,
             active_fields=active_fields, probe_chunk_size=probe_chunk,
-            response_chunk_size=tangent_chunk,
+            response_chunk_size=tangent_chunk, certify_rtol=certify_rtol,
         )
 
         def column(args):

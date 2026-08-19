@@ -1510,9 +1510,10 @@ def _pin_concrete(cfg: ImplicitConfig, tree):
 _ADJOINT_RESIDUAL_SLACK = 10.0
 
 
-def _adjoint_acceptance(cfg: ImplicitConfig, b_norm):
+def _adjoint_acceptance(cfg: ImplicitConfig, b_norm, rtol=None):
     """Largest acceptable true residual for an adjoint solve of RHS norm."""
-    return _ADJOINT_RESIDUAL_SLACK * cfg.adjoint_tol * b_norm
+    tol = cfg.adjoint_tol if rtol is None else float(rtol)
+    return _ADJOINT_RESIDUAL_SLACK * tol * b_norm
 
 
 def _raise_adjoint_unconverged(cfg: ImplicitConfig, *, iterations: int,
@@ -1544,9 +1545,9 @@ def _tree_norm(tree):
     ))
 
 
-def _linear_response_report(sol, rhs, cfg: ImplicitConfig):
+def _linear_response_report(sol, rhs, cfg: ImplicitConfig, rtol=None):
     b_norm = _tree_norm(rhs)
-    tolerance = _adjoint_acceptance(cfg, b_norm)
+    tolerance = _adjoint_acceptance(cfg, b_norm, rtol)
     return LinearResponseReport(
         residual_norm=sol.residual_norm,
         tolerance=tolerance,
@@ -1582,7 +1583,8 @@ def _checked_adjoint_x(sol, b_flat, cfg: ImplicitConfig):
     return jnp.where(ok, sol.x, jnp.full_like(sol.x, jnp.nan))
 
 
-def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None):
+def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None,
+                   rtol=None):
     """Adjoint linear solve ``(dF/dz)^T lambda = b`` via ``solvax.gmres``.
 
     ``solvax.gmres`` operates on flat ``(n,)`` vectors, so the pytree ``b``
@@ -1614,7 +1616,8 @@ def _adjoint_solve(A, b, cfg: ImplicitConfig, *, x0=None, max_restarts=None):
         sol = _solvax_gmres(
             matvec, b_flat,
             x0=x0_flat,
-            rtol=cfg.adjoint_tol, atol=0.0, restart=cfg.adjoint_restart,
+            rtol=(cfg.adjoint_tol if rtol is None else float(rtol)),
+            atol=0.0, restart=cfg.adjoint_restart,
             max_restarts=(cfg.adjoint_maxiter if max_restarts is None
                           else int(max_restarts)),
         )
@@ -1937,6 +1940,7 @@ def _implicit_evolved_tangent_multi_rhs(
     active_fields: tuple[str, ...],
     probe_chunk_size: int,
     response_chunk_size: int,
+    certify_rtol: float | None = None,
 ) -> tuple[SpectralState, LinearResponseReport]:
     frozen = jax.lax.stop_gradient(x_star)
     system = _raw_block_system(
@@ -1972,9 +1976,10 @@ def _implicit_evolved_tangent_multi_rhs(
                 lambda z: residual(z, params),
                 (z_star,), (value,),
             )[1],
-            rhs, cfg, x0=x0,
+            rhs, cfg, x0=x0, rtol=certify_rtol,
         )
-        return solution, _linear_response_report(krylov, rhs, cfg)
+        return solution, _linear_response_report(
+            krylov, rhs, cfg, rtol=certify_rtol)
 
     solution, report = chunk_map(
         correct, (tangent_batch, initial),
