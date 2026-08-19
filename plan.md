@@ -1173,11 +1173,22 @@ the reference exactly on `delta == 0` and compares the JVP along
 `RBS(0,1) - ZBC(0,1)` against central differences of the `setup` reference; it
 fails at 2.5 without the fix and passes at <=1e-7 with it, in 0.6 s.
 
-Consequence: the optimizer receives a systematically wrong descent direction in
-half of the n=0 asymmetric m=1 subspace — the dominant asymmetric shaping
-family — which is a sufficient explanation for LASYM runs not reaching the
-quasisymmetry the symmetric runs reach. Fix this before re-running any
-comparison; the like-for-like profiling below is only meaningful afterwards.
+Consequence: the optimizer received a wrong descent direction in half of the
+n=0 asymmetric m=1 subspace, and past the reference point the exact and
+finite-difference lanes were solving different boundaries. Every shipped
+asymmetry family (nfp=1..4) was on that branch.
+
+**Not yet shown to resolve the underperformance, however.** A bounded
+12-evaluation LASYM QA stage before and after the fix reached QS 3.92e-1 and
+4.64e-1 — no improvement. That harness was dominated by its iota-floor term
+(`min|iota|` ~ 0.01 against a 0.42 target at weight 10), so quasisymmetry barely
+moved in either lane and the test cannot discriminate. The Jacobian defect and
+its fix rest on the finite-difference evidence, which is unambiguous; the
+optimization payoff is a separate open question. Next measurement: a
+QS-isolated stage (drop the iota and well rows, 30 evaluations) to get a signal
+that is actually about quasisymmetry, and if that is still flat, treat the
+underperformance as a second, independent cause and keep going down items 1-4
+below rather than assuming this fix closed it.
 Add a LASYM Jacobian-versus-finite-difference gate to the test suite covering
 n=0 m=1 in both channels, since no existing test would have caught this.
 
@@ -1360,3 +1371,4 @@ every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — localized the LASYM underperformance to a wrong analytic Jacobian in the n=0 asymmetric m=1 difference channel (16% error); forward map verified correct.
 - 2026-08-19 claude: P17 — root cause is the frozen `delta == 0` branch in `implicit.py::_lasym_delta_rotation_traceable`; fixed, gated, verified end-to-end (1.6e-1 -> 1.6e-7).
 - 2026-08-19 claude: P17 — opened vmex #126 with the delta-rotation fix and its regression gate; #119 is green and queued for merge.
+- 2026-08-19 claude: P17 — corrected the overclaim: the delta fix is proven as a derivative fix but did NOT improve a bounded QA stage; payoff still unmeasured.
