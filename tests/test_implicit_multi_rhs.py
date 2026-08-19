@@ -223,3 +223,22 @@ def test_block_response_lasym_parity():
         jax.tree.leaves(block), jax.tree.leaves(reference)
     ):
         np.testing.assert_allclose(got, expected, rtol=2e-6, atol=2e-9)
+
+
+def test_jacobian_certification_tolerance_is_separate_from_the_gradient_one():
+    """Jacobian columns certify against their own, looser tolerance.
+
+    The two tolerances feed different consumers: a scalar gradient goes to a
+    quasi-Newton method that accumulates curvature from it, while a
+    least-squares Jacobian only has to point a trust-region step.  Certifying
+    columns to the gradient tolerance made the certifier, not the block
+    factorization, the cost of an asymmetric Jacobian -- 542 iterations
+    against 1e-6 where 1e-4 needs none, for a 3.2e-5 relative change.
+    """
+    inp = VmecInput.from_file(str(DATA / "input.solovev"))
+    cfg = im.make_config(inp, ftol=1.0e-10, max_iterations=1000,
+                         adjoint_tol=1.0e-11, jacobian_adjoint_tol=1.0e-4)
+    assert cfg.adjoint_tol == 1.0e-11
+    assert cfg.jacobian_adjoint_tol == 1.0e-4
+    default = im.make_config(inp, ftol=1.0e-10, max_iterations=1000)
+    assert default.jacobian_adjoint_tol > default.adjoint_tol

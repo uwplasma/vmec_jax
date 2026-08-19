@@ -270,6 +270,16 @@ class ImplicitConfig:
     multigrid: bool = False
     lconm1: bool = True
     adjoint_tol: float = 1e-11
+    #: Tolerance for certifying the *columns* of an implicit residual
+    #: Jacobian, kept separate from ``adjoint_tol`` because the two feed
+    #: different consumers.  A scalar gradient goes to a quasi-Newton method
+    #: that accumulates curvature from it and wants every digit; a
+    #: least-squares Jacobian only has to point a trust-region step, and the
+    #: block factorization already backsolves every column before the
+    #: certifier runs.  Measured on the asymmetric quasi-axisymmetric stage:
+    #: the certifier needs 542 iterations to reach 1e-6 and none to reach
+    #: 1e-4, for a relative change in the Jacobian of 3.2e-5.
+    jacobian_adjoint_tol: float = 1e-4
     adjoint_restart: int = 30
     adjoint_maxiter: int = 300
     #: reverse-adjoint GCROT(m, k) recycling solve (``_adjoint_solve_gcrot``):
@@ -310,6 +320,7 @@ def make_config(
     multigrid: bool = False,
     lconm1: bool = True,
     adjoint_tol: float = 1e-11,
+    jacobian_adjoint_tol: float = 1e-4,
     adjoint_restart: int = 30,
     adjoint_maxiter: int = 300,
     adjoint_gcrot_m: int = 100,
@@ -337,7 +348,9 @@ def make_config(
         inp=inp, resolution=resolution, ftol=float(ftol),
         max_iterations=int(max_iterations), mode=str(mode),
         multigrid=bool(multigrid), lconm1=bool(lconm1),
-        adjoint_tol=float(adjoint_tol), adjoint_restart=int(adjoint_restart),
+        adjoint_tol=float(adjoint_tol),
+        jacobian_adjoint_tol=float(jacobian_adjoint_tol),
+        adjoint_restart=int(adjoint_restart),
         adjoint_maxiter=int(adjoint_maxiter),
         adjoint_gcrot_m=int(adjoint_gcrot_m), adjoint_gcrot_k=int(adjoint_gcrot_k),
         max_fsq_ratio=float(max_fsq_ratio),

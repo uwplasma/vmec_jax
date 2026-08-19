@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import warnings
 from dataclasses import dataclass
 from functools import cached_property
 from threading import RLock
@@ -339,14 +340,29 @@ def _certifier_summary(report: Any) -> jnp.ndarray:
 
 
 def _record_certifier(holder: dict, summary: Any) -> None:
-    """Record the worst certifier cost seen so far on this problem."""
+    """Record the worst certifier cost, and say so when columns miss.
+
+    An uncertified column is returned as NaN and the Jacobian then falls back
+    to the previous one, so a stage can spend an hour per Jacobian and make no
+    real progress with nothing on screen to say why.  Warn once per problem.
+    """
     values = np.asarray(jax.device_get(summary), dtype=float).ravel()
     if values.size < 2 or not np.all(np.isfinite(values)):
         return
-    holder["jac_certifier_iterations"] = int(values[0])
-    holder["jac_certifier_unconverged"] = int(values[1])
+    iterations, unconverged = int(values[0]), int(values[1])
+    holder["jac_certifier_iterations"] = iterations
+    holder["jac_certifier_unconverged"] = unconverged
     holder["jac_certifier_worst"] = max(
-        int(holder.get("jac_certifier_worst", 0)), int(values[0]))
+        int(holder.get("jac_certifier_worst", 0)), iterations)
+    if unconverged and not holder.get("jac_certifier_warned"):
+        holder["jac_certifier_warned"] = True
+        warnings.warn(
+            f"{unconverged} implicit-Jacobian column(s) did not reach "
+            f"jacobian_adjoint_tol in {iterations} iterations; the block "
+            "factorization has stopped preconditioning this iterate well. "
+            "Raise jacobian_adjoint_tol, or lower adjoint_maxiter to fail "
+            "fast instead of grinding.",
+            RuntimeWarning, stacklevel=2)
 
 
 def solve_equilibrium(
@@ -1697,6 +1713,7 @@ def make_problem(
     jacobian_batch_size: int | str | None = 1,
     implicit_jacobian_method: str = "auto",
     adjoint_tol: float = 1e-6,
+    jacobian_adjoint_tol: float = 1e-4,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
     forward_ftol: float | None = None,
@@ -1849,6 +1866,7 @@ def make_problem(
             jac_chunk_size=jacobian_batch_size,
             jac_solver=jac_solver,
             adjoint_tol=adjoint_tol,
+            jacobian_adjoint_tol=jacobian_adjoint_tol,
             adjoint_maxiter=adjoint_maxiter,
             max_fsq_ratio=max_fsq_ratio,
             warm_start=(warm_start if hot_restart else None),
@@ -1897,6 +1915,7 @@ def least_squares(
     jac_chunk_size: int | str | None = "auto",
     jac_solver: str = "auto",
     adjoint_tol: float = 1e-6,
+    jacobian_adjoint_tol: float = 1e-4,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
     forward_ftol: float | None = None,
@@ -2282,6 +2301,7 @@ def _least_squares_implicit(
     jac_chunk_size: int | str | None = "auto",
     jac_solver: str = "auto",
     adjoint_tol: float = 1e-6,
+    jacobian_adjoint_tol: float = 1e-4,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
     warm_start: str | None = "perturbation",
@@ -2366,6 +2386,7 @@ def _least_squares_implicit(
         multigrid=True,
         hot_restart=(warm_start is not None),
         adjoint_tol=adjoint_tol,
+        jacobian_adjoint_tol=jacobian_adjoint_tol,
         adjoint_maxiter=adjoint_maxiter,
         max_fsq_ratio=max_fsq_ratio,
     )
@@ -2693,7 +2714,7 @@ def _least_squares_implicit(
 
         def column(tp_stack):
             tp = tangent_of(tp_stack)
-            dz, krylov = imp._adjoint_solve(Fz, rhs_of(tp), cfg)
+            dz, krylov = imp._adjoint_solve(Fz, rhs_of(tp), jac_cfg)
             return column_of(dz, tp), dz, krylov
 
         tangent_chunk = ndof if chunk is None else chunk
@@ -2714,6 +2735,12 @@ def _least_squares_implicit(
     # block Thomas), backsolve every dof RHS, then one warm-started GMRES pass
     # per column certifies cfg.adjoint_tol (solvax checks the initial residual
     # first, so columns already at tolerance cost one matvec).
+    # The Jacobian certifies its columns against its own tolerance: a
+    # least-squares Jacobian only has to point a trust-region step, while the
+    # scalar-gradient lane keeps cfg.adjoint_tol for the quasi-Newton curvature
+    # it accumulates.  The shared multi-RHS helper stays on adjoint_tol for its
+    # public callers.
+    jac_cfg = dataclasses.replace(cfg, adjoint_tol=cfg.jacobian_adjoint_tol)
     active_fields = imp._active_state_fields(cfg)
     m_block = len(active_fields) * int(np.asarray(mask_np.R_cos).shape[1])
     if jac_chunk_size == "auto":
@@ -2738,7 +2765,7 @@ def _least_squares_implicit(
         tangent_batch = jax.vmap(tangent_of)(tangent_stack)
         tangent_chunk = ndof if chunk is None else chunk
         dz0, report = imp._implicit_evolved_tangent_multi_rhs(
-            params, cfg, frozen, mask_const, tangent_batch,
+            params, jac_cfg, frozen, mask_const, tangent_batch,
             active_fields=active_fields, probe_chunk_size=probe_chunk,
             response_chunk_size=tangent_chunk,
         )
