@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from vmex.core import maxj
+from vmex.core import qi
 from vmex.core import implicit as im
 from vmex.core.input import VmecInput
 
@@ -192,6 +193,72 @@ def test_maximum_j_composable_interface(monkeypatch):
     rows = term(eq)
     assert np.all(np.isfinite(np.asarray(rows)))
     assert float(term.total(eq)) == pytest.approx(float(jnp.sum(rows**2)))
+
+
+def _asymmetric_boozer(sine):
+    """Two-harmonic Boozer field with an asymmetric ``|B|`` sine spectrum.
+
+    A single non-constant harmonic makes every well along a line identical,
+    which hides the sine spectrum from the action-invariance residuals (a
+    sine partner of one harmonic is only a rigid phase shift). The extra
+    helical mode breaks that degeneracy, so each objective below responds to
+    ``bmns_b`` exactly when it actually consumes it.
+    """
+    booz = dict(_boozer(0.98))
+    booz.update(
+        bmnc_b=jnp.array([[1.0, 0.2, 0.05], [0.98, 0.2, 0.05]]),
+        bmns_b=jnp.array([[0.0, 0.0, 0.0], [0.0, sine, 0.5 * sine]]),
+        xm_b=jnp.array([0.0, 0.0, 1.0]),
+        xn_b=jnp.array([0.0, 2.0, 2.0]))
+    return booz
+
+
+_BOUNCE_OPTIONS = dict(
+    nalpha=3, points_per_period=32, num_periods=2, max_wells=4)
+_CONSTRUCTED_OPTIONS = dict(nphi=33, nalpha=3, n_bounce=5)
+_LASYM_TERMS = {
+    "constructed_maximum_j": (maxj, lambda: maxj.ConstructedMaximumJResidual(
+        [0.25, 0.75], [1.0 / 1.1], max_wells=2, quadrature_order=32,
+        qi_options=_CONSTRUCTED_OPTIONS)),
+    "constructed_qi": (
+        qi, lambda: qi.ConstructedQIResidual([0.25, 0.75], **_CONSTRUCTED_OPTIONS)),
+    "j_invariant_qi": (qi, lambda: qi.JInvariantQIResidual(
+        [0.25, 0.75], [1.0 / 1.1], **_BOUNCE_OPTIONS)),
+    "j_invariant_qi_and_maximum_j": (
+        maxj, lambda: maxj.JInvariantQIAndMaximumJResidual(
+            [0.25, 0.75], [1.0 / 1.1], qi_options=_BOUNCE_OPTIONS,
+            maxj_options=_BOUNCE_OPTIONS)),
+    "maximum_j": (maxj, lambda: maxj.MaximumJResidual(
+        [0.25, 0.75], [1.0 / 1.1], **_BOUNCE_OPTIONS)),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_LASYM_TERMS))
+def test_bounce_objectives_consume_the_boozer_sine_spectrum(name, monkeypatch):
+    """Every bounce objective must certify the field the equilibrium has.
+
+    ``boozer_bmnc_state`` returns ``bmns_b`` for LASYM states; a class that
+    drops it silently evaluates the stellarator-symmetrized field, so its
+    maximum-J or omnigenity certificate does not describe the asymmetric
+    equilibrium being optimized. The symmetric limit must stay exact:
+    omitting ``bmns_b`` and passing zeros are the same evaluation.
+    """
+    module, build = _LASYM_TERMS[name]
+    term = build()
+    eq = SimpleNamespace(state=object(), runtime=object())
+
+    def rows(booz):
+        monkeypatch.setattr(module, "boozer_bmnc_state", lambda *a, **k: booz)
+        return np.asarray(term(eq))
+
+    symmetric = rows(_asymmetric_boozer(0.0))
+    asymmetric = rows(_asymmetric_boozer(0.05))
+    assert np.all(np.isfinite(symmetric)) and np.all(np.isfinite(asymmetric))
+    assert np.max(np.abs(asymmetric - symmetric)) > 1.0e-3
+    zeros = _asymmetric_boozer(0.0)
+    np.testing.assert_array_equal(
+        rows({key: value for key, value in zeros.items() if key != "bmns_b"}),
+        symmetric)
 
 
 def test_maximum_j_input_guards():
