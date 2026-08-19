@@ -1107,6 +1107,35 @@ LASYM runs do not get close. Established so far: the cost per evaluation is
 only 1.8x symmetric, and the stall was a solver artifact now fixed, so slowness
 is not the explanation. Work the correctness question directly.
 
+**FOUND (2026-08-19): the asymmetric m=1 Jacobian is wrong.** The implicit
+Jacobian disagrees with central finite differences by ~3% on exactly two dofs,
+`RBS(0,1)` and `ZBC(0,1)` — the n=0, m=1 sine-R and cosine-Z modes — while every
+other dof agrees to ~1e-8. Evidence, in order of strength:
+
+- A step sweep h = 1e-4/1e-5/1e-6/1e-7 gives 3.042e-2 / 3.050e-2 / 3.047e-2 /
+  3.729e-2. It plateaus, so this is an analytic-derivative error, not
+  finite-difference noise; symmetric dofs converge to ~1e-8 in the same sweep.
+- Resolving the pair into channels localizes it exactly: along `RBS+ZBC` the
+  Jacobian is right to 2.9e-9, along `RBS-ZBC` it is wrong by 1.6e-1, and a
+  symmetric control dof is right to 8.2e-10 (4th-order stencil). The per-dof 3%
+  is a 16% error in one channel, diluted. This is the `zcc -> alpha*(rsc - zcc)`
+  output of the asymmetric m=1 rotation in `vmex/core/residuals.py`
+  (`_m1_rotate_asym`), whose n=0 branch is special-cased (`has_partner=False`,
+  so `w_partner=0` and `half=1.0`).
+- It is structural, not amplitude-dependent: the same error appears with the
+  asymmetry amplitude set to exactly zero.
+- The forward map is *correct*: a LASYM run with all sine-parity coefficients
+  zeroed reproduces the symmetric run to 4.4e-9 on QS residual, aspect,
+  magnetic well, iota and volume. Value right, derivative wrong.
+
+Consequence: the optimizer receives a systematically wrong descent direction in
+half of the n=0 asymmetric m=1 subspace — the dominant asymmetric shaping
+family — which is a sufficient explanation for LASYM runs not reaching the
+quasisymmetry the symmetric runs reach. Fix this before re-running any
+comparison; the like-for-like profiling below is only meaningful afterwards.
+Add a LASYM Jacobian-versus-finite-difference gate to the test suite covering
+n=0 m=1 in both channels, since no existing test would have caught this.
+
 1. Profile and compare like-for-like: same seed, same targets, same stages,
    symmetric versus LASYM, tracking QS residual per stage and which dof
    families move. An asymmetric run has twice the dofs and should do at least
@@ -1256,3 +1285,4 @@ last       Phase 15.6-15.8 file moves, Phase 10 slimming, the history rewrite
 The rule behind that order: make `main` self-consistent first, then move
 physics into the package that owns it, and only then reorganize files —
 every reorganization done before its owning package settles has to be redone.
+- 2026-08-19 claude: P17 — localized the LASYM underperformance to a wrong analytic Jacobian in the n=0 asymmetric m=1 difference channel (16% error); forward map verified correct.
