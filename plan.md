@@ -246,7 +246,7 @@ forward stalls above the requested ftol instead of silently passing.
 Acceptance: an end-user drives a free-boundary coil optimization in <= 40 lines; class fully
 tested; capability table says supported (CPU), GPU status stated honestly.
 
-## Phase 5 — Full LASYM
+## Phase 5 — Full LASYM  [5a and 5d DONE; 5b, 5c open]
 
 ### 5a. vmex bugs (immediate, ship with Phase 0 follow-up)
 - `MaximumJResidual.compute_state` (`maxj.py:543-549`) and the shared dict in
@@ -295,7 +295,7 @@ Acceptance: all four vmex boundary families first-class in virtual casing/extend
 explicitly gated in the capability table); NEO_JAX LASYM merged with Fortran parity at documented
 tolerance; both STELLOPT PRs open.
 
-## Phase 6 — Epsilon effective: surface-integral objective lane
+## Phase 6 — Epsilon effective: surface-integral objective lane  [6.8 plot fix DONE; the lane itself open]
 
 Adopt the surface-integral reformulation (Paul et al. JPP 2020 Eq. 6.1; DESC and KNOSOS are both
 instances): many short field-line transits x pitch grid, all independent, all fixed-shape.
@@ -363,7 +363,7 @@ New solvax primitives (own PRs, in value order): bounded `scan_while` with rever
 Acceptance: NCSX 200x200 case >= 5x faster than today at unchanged parity tolerances; memory
 < 500 MB; discrepancy explained and pinned.
 
-## Phase 8 — Performance program across all lanes + VMEC2000/VMEC++ comparisons
+## Phase 8 — Performance program across all lanes + VMEC2000/VMEC++ comparisons  [first CPU rows measured; see the machine-gap log entry]
 
 1. **Benchmark matrix** (one JSON, one nightly job): {fixed, free} x {lasym on/off} x
    {tokamak, stellarator} x {vacuum, finite beta} x {CPU, GPU office A4000}: wall time, its,
@@ -417,7 +417,7 @@ curve (ensembles) and honest statements elsewhere.
 
 Acceptance: coverage >= 95% enforced; fast CI wall < 30 min; every physics test names its anchor.
 
-## Phase 10 — Slim code, docs, and repository
+## Phase 10 — Slim code, docs, and repository  [PARTIAL: stale claims, dead code, examples index DONE]
 
 1. **Scaffold disposition (execute the verdicts):** wire in `freeboundary_linear.py` (Phase 3);
    delete `freeboundary_diff.py` shim after fixing its one real caller
