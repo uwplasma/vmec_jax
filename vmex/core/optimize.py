@@ -320,6 +320,35 @@ def _auto_jac_chunk(dim: int) -> int:
     return min(int(auto_chunk_size(dim)), int(np.ceil(np.sqrt(dim))))
 
 
+def _certifier_summary(report: Any) -> jnp.ndarray:
+    """``[max iterations, columns not certified]`` for one Jacobian call.
+
+    Both implicit-Jacobian lanes certify every column against
+    ``cfg.adjoint_tol``, and how hard that is depends on the iterate: the
+    block factorization is an excellent preconditioner at the point it was
+    built for and a progressively worse one as the optimizer moves.  When it
+    degrades the certifier silently absorbs the whole cost of a Jacobian, so
+    the counts have to come back out with the rows.
+    """
+    iterations = jnp.asarray(getattr(report, "iterations", 0)).ravel()
+    converged = jnp.asarray(getattr(report, "converged", True)).ravel()
+    return jnp.stack((
+        jnp.max(iterations).astype(jnp.float64),
+        jnp.sum(jnp.logical_not(converged)).astype(jnp.float64),
+    ))
+
+
+def _record_certifier(holder: dict, summary: Any) -> None:
+    """Record the worst certifier cost seen so far on this problem."""
+    values = np.asarray(jax.device_get(summary), dtype=float).ravel()
+    if values.size < 2 or not np.all(np.isfinite(values)):
+        return
+    holder["jac_certifier_iterations"] = int(values[0])
+    holder["jac_certifier_unconverged"] = int(values[1])
+    holder["jac_certifier_worst"] = max(
+        int(holder.get("jac_certifier_worst", 0)), int(values[0]))
+
+
 def solve_equilibrium(
     inp: VmecInput,
     *,
@@ -2664,14 +2693,14 @@ def _least_squares_implicit(
 
         def column(tp_stack):
             tp = tangent_of(tp_stack)
-            dz, _ = imp._adjoint_solve(Fz, rhs_of(tp), cfg)
-            return column_of(dz, tp), dz
+            dz, krylov = imp._adjoint_solve(Fz, rhs_of(tp), cfg)
+            return column_of(dz, tp), dz, krylov
 
         tangent_chunk = ndof if chunk is None else chunk
-        cols, dz_cols = chunk_map(
+        cols, dz_cols, krylov = chunk_map(
             column, tangent_stack, chunk_size=tangent_chunk
         )
-        return jnp.transpose(cols), dz_cols
+        return jnp.transpose(cols), dz_cols, _certifier_summary(krylov)
 
     # Amortized block-tridiagonal variant.  The *raw* residual formulation
     # (un-preconditioned scalxc-scaled spectral force; implicit.residual_fn)
@@ -2708,7 +2737,7 @@ def _least_squares_implicit(
             _jac_parts(x)
         tangent_batch = jax.vmap(tangent_of)(tangent_stack)
         tangent_chunk = ndof if chunk is None else chunk
-        dz0, _ = imp._implicit_evolved_tangent_multi_rhs(
+        dz0, report = imp._implicit_evolved_tangent_multi_rhs(
             params, cfg, frozen, mask_const, tangent_batch,
             active_fields=active_fields, probe_chunk_size=probe_chunk,
             response_chunk_size=tangent_chunk,
@@ -2722,7 +2751,7 @@ def _least_squares_implicit(
         cols, dz_cols = chunk_map(
             column, (tangent_stack, dz0), chunk_size=tangent_chunk
         )
-        return jnp.transpose(cols), dz_cols
+        return jnp.transpose(cols), dz_cols, _certifier_summary(report)
 
     if jac_solver not in ("auto", "block", "gmres", "reverse"):
         raise ValueError(
@@ -2746,6 +2775,9 @@ def _least_squares_implicit(
         "last_jac_key": None,
         "failed_trials": 0,
         "derivative_fallbacks": 0,
+        "jac_certifier_iterations": 0,
+        "jac_certifier_unconverged": 0,
+        "jac_certifier_worst": 0,
     }
     # R25.4 perturbation warm start (DESC arXiv:2203.15927 ``eq.perturb``
     # before ``eq.solve``): each jac(x_ref) call stashes its linearization —
@@ -2846,10 +2878,11 @@ def _least_squares_implicit(
                 )
                 holder["lin"] = None
             else:
-                rows, dz_cols = jac_jit(_place(x))
+                rows, dz_cols, summary = jac_jit(_place(x))
                 if warm_start == "perturbation":
                     _stash_linearization(np.asarray(x, dtype=float), dz_cols)
                 jac = np.asarray(jax.device_get(rows), dtype=float)
+                _record_certifier(holder, summary)
         except Exception as exc:
             primary_error = exc
             jac = None
@@ -2861,8 +2894,9 @@ def _least_squares_implicit(
         if jac is None or not np.all(np.isfinite(jac)):
             if jac_solver in ("auto", "block"):
                 try:
-                    rows, dz_cols = gmres_jit(_place(x))
+                    rows, dz_cols, summary = gmres_jit(_place(x))
                     candidate = np.asarray(jax.device_get(rows), dtype=float)
+                    _record_certifier(holder, summary)
                     if np.all(np.isfinite(candidate)):
                         holder["derivative_fallbacks"] += 1
                         if warm_start == "perturbation":
