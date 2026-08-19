@@ -51,8 +51,9 @@ finite-difference-only; under ``jac="implicit"`` use :func:`d_merc_state` /
 :func:`mercier_stability_residual`, :func:`jdotb_residual`, and
 :func:`l_grad_b_state` instead.  The implicit parameter map supports lasym
 via the four RBC/ZBS/RBS/ZBC boundary families and a traceable ``readin.f``
-delta rotation (FD-validated); the QS-ratio traceable term is
-symmetric-only.
+delta rotation (FD-validated); the traceable QS-ratio term follows, using the
+stored full poloidal grid for ``lasym`` states instead of mirroring VMEC's
+reduced ``[0, pi]`` grid.
 """
 
 from __future__ import annotations

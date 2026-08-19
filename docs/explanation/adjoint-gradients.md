@@ -69,8 +69,7 @@ inventory, with the call site each class serves:
 
 1. `solvax.gmres` / `solvax.gcrot` solve the implicit-function-theorem
    systems in `vmex/core/implicit.py`: adjoint $(dF/dz)^T \lambda = b$
-   (warm-started GMRES; GCROT(m,k) with subspace recycling and, on
-   solvax >= 0.8.7, a `recycle_drift` certificate) and tangent
+   (warm-started GMRES; GCROT(m,k) with subspace recycling) and tangent
    $(dF/dz)\, dz = -(dF/dp)\, t$ via the multi-RHS drivers
    {func}`~vmex.core.implicit.implicit_state_tangent_multi_rhs` /
    {func}`~vmex.core.implicit.implicit_state_pullback_multi_rhs`;
@@ -104,9 +103,10 @@ No solve is trusted silently. Each adjoint/tangent solve returns a
 norm, the requested tolerance, the iteration count, and a converged flag; the
 block-Thomas Jacobian path certifies every column with one warm-started GMRES
 pass against the preconditioned system to the same `adjoint_tol` as the
-per-column path. Warm-started GCROT solves on solvax >= 0.8.7 additionally
-report `recycle_drift` — how far the operator moved under the recycled
-deflation space.
+per-column path. SOLVAX's own GCROT result additionally carries a
+`recycle_drift` monitor — how far the operator has drifted since the recycle
+pair was built — but VMEX neither reads nor surfaces it, so those four fields
+are the whole certificate.
 
 ## Validating the gradients: the frozen path
 
