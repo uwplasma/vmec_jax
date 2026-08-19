@@ -470,23 +470,14 @@ def _lasym_delta_rotation_traceable(rbc, rbs, zbc, zbs, cfg: ImplicitConfig,
     """Traceable ``readin.f`` lasym theta-normalization.
 
     Reproduces :func:`vmex.core.setup._lasym_delta_rotation`: rotate theta so
-    ``RBS(0, 1) = ZBC(0, 1)``, every ``(n, m)`` pair mixed by ``m*delta``.  Only
-    the genuinely structural cases are frozen from the reference input
-    ``cfg.inp`` (``mpol < 2``, and a zero denominator, which is a division by
-    zero rather than a choice); the ``delta`` value and the
-    ``cos(m*delta)/sin(m*delta)`` family mixing are smooth functions of the
-    ``(0, 1)`` coefficients and are traced.
+    ``RBS(0, 1) = ZBC(0, 1)``, mixing every ``(n, m)`` pair by ``m*delta``.
 
-    ``readin.f``'s ``IF (delta .ne. zero)`` is *not* frozen with them.  It is a
-    runtime shortcut with no semantic content — ``cos(0) = 1``, ``sin(0) = 0``
-    make the loop the identity — so skipping the body at ``delta == 0``
-    reproduces the value but silently drops the derivative.  The rotation is
-    the identity there in value only: ``d(delta)/d(RBS(0, 1))`` and
-    ``d(delta)/d(ZBC(0, 1))`` are ``+-1/denom``, so the true Jacobian carries a
-    rank-one ``m*(partner coefficient)*d(delta)`` term along
-    ``RBS(0, 1) - ZBC(0, 1)``.  Freezing it cost ~16% on that channel for a
-    reference deck with ``RBS(0, 1) == ZBC(0, 1)`` while leaving every other
-    dof exact.
+    ``delta`` and the ``cos(m*delta)/sin(m*delta)`` mixing are smooth in the
+    ``(0, 1)`` coefficients, so both are traced; only the structural ``mpol <
+    2`` and zero-denominator cases come from ``cfg.inp``.  At ``delta == 0``
+    the rotation is the identity in value while its derivative is not, since
+    ``d(delta)/d(RBS(0, 1)) = -d(delta)/d(ZBC(0, 1)) = 1/denom`` carries a
+    rank-one term along ``RBS(0, 1) - ZBC(0, 1)``, so the body runs there too.
     """
     r0 = np.asarray(cfg.inp.rbc, dtype=float)
     z0 = np.asarray(cfg.inp.zbs, dtype=float)

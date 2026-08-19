@@ -745,16 +745,12 @@ def test_lasym_delta_rotation_traceable():
 def test_lasym_delta_rotation_jacobian_at_zero_delta():
     """The rotation Jacobian is exact where ``delta == 0``.
 
-    ``readin.f`` skips the rotation loop when ``delta`` vanishes, which is a
-    runtime shortcut only: ``cos(0)/sin(0)`` make the loop the identity, so
-    reproducing the *value* there says nothing about the derivative.  A deck
-    with ``RBS(0, 1) == ZBC(0, 1)`` sits exactly on that point, and the true
-    Jacobian still carries a rank-one ``m*(partner)*d(delta)`` term along
-    ``RBS(0, 1) - ZBC(0, 1)`` because ``d(delta)/d(RBS(0, 1))`` and
-    ``d(delta)/d(ZBC(0, 1))`` are ``+-1/denom``.  Treating the skip as a frozen
-    discrete branch cost ~16% on that channel and left every other dof exact,
-    which is why the value checks above and the shipped LASYM decks (both
-    ``delta != 0``) never saw it.
+    ``readin.f`` skips the rotation loop when ``delta`` vanishes, where
+    ``cos(0)/sin(0)`` already make it the identity, so matching the value
+    there says nothing about the derivative.  A deck with
+    ``RBS(0, 1) == ZBC(0, 1)`` sits on that point and still carries a rank-one
+    ``m*(partner)*d(delta)`` term along ``RBS(0, 1) - ZBC(0, 1)``.  Both
+    shipped LASYM decks have ``delta != 0``, so this one is built on the spot.
     """
     from vmex.core import setup as setup_mod
 
@@ -783,8 +779,8 @@ def test_lasym_delta_rotation_jacobian_at_zero_delta():
             rbc, np.asarray(rbs_a), np.asarray(zbc_a), zbs, mpol=mpol, ntor=ntor)
         return np.concatenate([np.ravel(np.asarray(a)) for a in out])
 
-    # Value agreement is necessary but not sufficient; assert it, then the
-    # derivative along the channel the frozen branch used to drop.
+    # Value agreement is necessary but not sufficient, so check it and then
+    # the derivative along the antisymmetric channel.
     np.testing.assert_allclose(
         np.asarray(traceable(jnp.asarray(rbs), jnp.asarray(zbc))),
         reference(rbs, zbc), rtol=0.0, atol=1e-12)
