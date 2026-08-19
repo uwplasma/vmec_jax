@@ -62,7 +62,23 @@ All runnable examples live under this single `examples/` tree.
   `single_stage_free_boundary_optimization.py` and its finite-beta counterpart
   instead leave the LCFS implicit and vary only ESSOS coil shape/current dofs
   through the experimental coupled NESTOR adjoint, without an mgrid file.
+  `QA_optimization_DMerc_vacuum.py` screens a vacuum candidate with the
+  frozen-geometry pressure proxies before re-solving at finite pressure, and
+  `QA_optimization_global.py` explores basins with SciPy basin hopping before
+  the exact least-squares finish.
   All read `VMEX_EXAMPLES_CI=1` for short CI smoke tests.
+- `optimization/stellarator_asymmetry/`: the same four families with
+  `lasym = True`, seeding `RBS(1,1)`/`ZBC(1,1)` so the optimizer starts off the
+  stellarator-symmetric stationary subspace. Each has a finite-beta companion
+  that adds Mercier and resistive-interchange rows on a radially graded weight.
+  The asymmetric boundary doubles the decision variables, so a stage costs
+  roughly twice its symmetric equivalent.
+- `optimization/QA_maxJ_continuation.py` and `QI_maxJ_continuation.py` walk the
+  constructed maximum-J target into the resolved certificate; the QA script
+  states where maximum-J and quasisymmetry conflict near the axis.
+- `epsilon_effective.py` computes the NEO_JAX effective ripple from a solved
+  equilibrium without writing a `boozmn` file; raise its `NeoConfig` controls
+  for anything beyond a radial trend.
 - `mirror/mirror_fixed_boundary_nonaxisymmetric.py` compares axisymmetric and
   rotating-ellipse fixed-boundary mirrors; `mirror/mirror_free_boundary_beta_scan.py`
   continues a solved ESSOS-coil free boundary through 80% central beta and
