@@ -188,8 +188,16 @@ def interface_costs(x, equilibrium_state, solver_context):
     external_field = coil_field(coils)
     normal_rows = jnp.sqrt(interface.weights).ravel() * (
         interface.bnormal_residual(external_field) / B_scale).ravel()
-    # This dimensionless RMS measures violation of total-pressure continuity,
-    # including the edge plasma pressure, rather than pressure-profile error.
+    # Why this term exists, when the SIMSOPT single stage carries only the
+    # normal-field one: at zero beta the plasma exerts no pressure, so a
+    # boundary with B.n = 0 is already a force-free interface and matching the
+    # normal field is the whole condition. At finite beta the jump condition
+    # is total-pressure continuity, p + |B_in|^2/2mu0 = |B_out|^2/2mu0, and
+    # B.n = 0 does not imply it: the coils must also supply the field strength
+    # that holds the edge pressure. Optimizing the normal field alone yields
+    # coils whose surface is the right shape and the wrong pressure, so the
+    # free-boundary solve relaxes away from the boundary that was optimized.
+    # These rows are the dimensionless RMS of that jump, not a profile error.
     pressure_rows = jnp.sqrt(interface.weights).ravel() * (
         interface.pressure_balance_residual(external_field) / B_scale**2).ravel()
     return jnp.asarray([

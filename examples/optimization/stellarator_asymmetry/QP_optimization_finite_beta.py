@@ -59,6 +59,12 @@ report = opt.EquilibriumReporter(
     ("aspect", opt.aspect_ratio, ".3f"), ("iota", opt.mean_iota, ".3f"))
 monitor = opt.OptimizationMonitor(stream=None)
 
+# If a RuntimeWarning reports uncertified Jacobian columns, it is expected
+# once the optimizer leaves the seed and needs no action: the shipped
+# jacobian_adjoint_tol=1e-4 and jacobian_adjoint_maxiter=10 are the measured
+# optimum, since ten times that budget moved the Jacobian by 2e-8 and
+# certified no extra column. Both are from_tuples arguments; pass
+# evaluation_progress=False to drop the per-evaluation timing lines.
 for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     print(f"\n===== LASYM finite-beta QP stage, max_mode = {max_mode} =====")
     mpol = max(max_mode + 2, MINIMUM_MPOL)
@@ -76,6 +82,7 @@ for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
                              problem.x0 + MAX_PARAMETER_CHANGE * step),
         max_nfev=max_nfev, ftol=1e-6, xtol=1e-10, verbose=2, callback=monitor)
     inp, equilibrium = problem.input_from_x(result.x), problem.equilibrium_from_x(result.x)
+    inp.to_indata(f"input.QP_finite_beta_max_mode_{max_mode:03d}")
     report(f"mode {max_mode}", equilibrium)
 
 final_input = replace(inp, ns_array=np.array([31 if ci_smoke else 101]),

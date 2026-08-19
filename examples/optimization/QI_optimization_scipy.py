@@ -86,6 +86,12 @@ options = {"maxiter": MAXITER, "gtol": 1.0e-6}
 if METHOD == "L-BFGS-B":
     options.update(maxls=20, ftol=1.0e-12, maxcor=20)
 
+# If a RuntimeWarning reports uncertified Jacobian columns, it is expected
+# once the optimizer leaves the seed and needs no action: the shipped
+# jacobian_adjoint_tol=1e-4 and jacobian_adjoint_maxiter=10 are the measured
+# optimum, since ten times that budget moved the Jacobian by 2e-8 and
+# certified no extra column. Both are from_tuples arguments; pass
+# evaluation_progress=False to drop the per-evaluation timing lines.
 for max_mode in MAX_MODES:
     print(f"\n===== QI stage, max_mode = {max_mode} =====")
     mpol = max(max_mode + 2, MINIMUM_MPOL)

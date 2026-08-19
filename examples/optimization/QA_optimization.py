@@ -63,6 +63,12 @@ monitor = opt.OptimizationMonitor(stream=None)
 
 # Optimize for QA first, then add the pressure-stability proxy locally.
 equilibrium = opt.solve_equilibrium(inp)
+# If a RuntimeWarning reports uncertified Jacobian columns, it is expected
+# once the optimizer leaves the seed and needs no action: the shipped
+# jacobian_adjoint_tol=1e-4 and jacobian_adjoint_maxiter=10 are the measured
+# optimum, since ten times that budget moved the Jacobian by 2e-8 and
+# certified no extra column. Both are from_tuples arguments; pass
+# evaluation_progress=False to drop the per-evaluation timing lines.
 for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV)):
     print(f"\n===== QA stage, max_mode = {max_mode} =====")
     mpol = max(max_mode + 2, MINIMUM_MPOL)

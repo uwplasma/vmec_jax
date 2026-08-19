@@ -30,20 +30,35 @@ def _run_with_progress(
     progress: bool,
     report_interval: float,
     stream: Any = None,
+    announce: bool = True,
 ) -> Any:
-    """Run one operation with a low-overhead elapsed-time heartbeat."""
+    """Run one operation with a low-overhead elapsed-time heartbeat.
+
+    With ``announce=False`` nothing is printed unless the call outlives the
+    first interval, so a per-evaluation heartbeat stays silent through the
+    fast calls and speaks up only for the slow ones.
+    """
     interval = float(report_interval)
     if interval <= 0.0:
         raise ValueError("report_interval must be positive")
     if not progress:
         return function()
     stream = sys.stdout if stream is None else stream
-    print(f"{action}...", file=stream, flush=True)
+    spoke = [False]
+
+    def announce_once() -> None:
+        if not spoke[0]:
+            spoke[0] = True
+            print(f"{action}...", file=stream, flush=True)
+
+    if announce:
+        announce_once()
     started = time.perf_counter()
     finished = Event()
 
     def heartbeat() -> None:
         while not finished.wait(interval):
+            announce_once()
             elapsed = time.perf_counter() - started
             print(f"  {elapsed:.1f} s elapsed.", file=stream, flush=True)
 
@@ -58,8 +73,9 @@ def _run_with_progress(
     finally:
         finished.set()
         reporter.join()
-    elapsed = time.perf_counter() - started
-    print(f"{complete} in {elapsed:.1f} s.", file=stream, flush=True)
+    if spoke[0]:
+        elapsed = time.perf_counter() - started
+        print(f"{complete} in {elapsed:.1f} s.", file=stream, flush=True)
     return result
 
 
@@ -246,7 +262,8 @@ class FunctionProblem:
             return function()
         return _run_with_progress(
             function, action=action, complete=f"{action} done",
-            progress=True, report_interval=self.report_interval)
+            progress=True, report_interval=self.report_interval,
+            announce=False)
 
     def residual(self, x: Array) -> np.ndarray:
         """Return the residual vector."""

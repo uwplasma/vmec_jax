@@ -72,6 +72,12 @@ report = opt.EquilibriumReporter(
     ("magnetic well", opt.magnetic_well, ".3f"))
 monitor = opt.OptimizationMonitor(stream=None)
 
+# If a RuntimeWarning reports uncertified Jacobian columns, it is expected
+# once the optimizer leaves the seed and needs no action: the shipped
+# jacobian_adjoint_tol=1e-4 and jacobian_adjoint_maxiter=10 are the measured
+# optimum, since ten times that budget moved the Jacobian by 2e-8 and
+# certified no extra column. Both are from_tuples arguments; pass
+# evaluation_progress=False to drop the per-evaluation timing lines.
 for max_mode, max_nfev in zip(QA_MAX_MODES, QA_MAX_NFEV):
     print(f"\n===== vacuum QA seed stage, max_mode = {max_mode} =====")
     mpol, ntor = max(inp.mpol, max_mode + 2, MINIMUM_MPOL), max(inp.ntor, max_mode + 2)

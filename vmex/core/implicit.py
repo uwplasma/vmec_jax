@@ -1993,12 +1993,12 @@ def _implicit_evolved_tangent_multi_rhs(
             rhs, cfg, x0=x0, rtol=certify_rtol,
             max_restarts=certify_maxiter,
         )
-        # Certify on the raw operator the columns are actually used through,
-        # not on the preconditioned system the corrector happens to iterate
-        # on.  The two share a solution but not a norm, and measuring in the
-        # preconditioned one reported 40-of-48 columns "uncertified" while
-        # their residual on the exact operator was 3e-9 -- a warning that
-        # cries wolf is worse than none.
+        # Certify on the raw operator the columns are consumed through.  The
+        # corrector iterates on the preconditioned system; the two share a
+        # solution but not a norm, so measuring there reported 40 of 48
+        # columns uncertified while their residual on the exact operator was
+        # 3e-9.  A certificate that fires on correct answers stops carrying
+        # information.
         raw_defect = jax.tree.map(
             jnp.subtract, raw_rhs(tangent), system.operator(solution))
         raw_norm = _tree_norm(raw_rhs(tangent))
@@ -2011,12 +2011,11 @@ def _implicit_evolved_tangent_multi_rhs(
         correct, (tangent_batch, initial),
         chunk_size=max(1, int(response_chunk_size)),
     )
-    # A column that misses its tolerance is not garbage: GMRES starts from the
-    # direct block solve and decreases the residual monotonically, so its
-    # output is at least as good as that solve however far it got.  Discarding
-    # it as NaN threw away the whole Jacobian and left the caller re-using the
-    # previous one -- the work was spent and then wasted.  Hand it back and let
-    # the report say how far it got.
+    # A column that misses its tolerance still carries a usable response.
+    # GMRES starts from the direct block solve and decreases the residual
+    # monotonically, so its output is at least as accurate as that solve
+    # however far it got, while discarding it as NaN left the caller re-using
+    # the previous Jacobian.  Return it and let the report record the margin.
     return solution, report
 
 

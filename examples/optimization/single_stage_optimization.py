@@ -128,11 +128,29 @@ def coil_field(coils):
     return lambda points: jax.vmap(field.B)(points.reshape(-1, 3)).reshape(points.shape)
 
 def normal_field_residual(coils, surface):
+    """Area-weighted rows of B.n/|B| over the target boundary.
+
+    A flux surface requires B.n = 0 on it, so these rows are the quadrature
+    of the surface-averaged square error the coils leave behind, normalized
+    by |B| to make it dimensionless and by the area element so refining the
+    grid does not change the objective. Driving them to zero is what makes
+    the coil set reproduce the plasma boundary.
+    """
     weights = surface.area_element / jnp.sum(surface.area_element)
     values = normalized_normal_field(coils, surface)
     return (jnp.sqrt(weights) * values).ravel()
 
 def normal_field_excess(coils, surface):
+    """Hinge on the largest local B.n/|B|, zero until the limit is exceeded.
+
+    The residual above is an average, and an average tolerates one bad patch
+    by trading it against a well-matched remainder; an island forms where the
+    error is locally worst, not where it is worst on average. This term reads
+    the maximum instead (through a logsumexp so it stays differentiable) and
+    contributes nothing until that maximum passes
+    NORMAL_FIELD_OBJECTIVE_LIMIT, which keeps it from competing with the
+    average term over shapes that already satisfy the bound.
+    """
     values = jnp.sqrt(normalized_normal_field(coils, surface)**2 + 1.0e-12)
     smooth_maximum = jax.scipy.special.logsumexp(2000.0 * values) / 2000.0
     return jnp.maximum(smooth_maximum - NORMAL_FIELD_OBJECTIVE_LIMIT, 0.0)
