@@ -1189,6 +1189,19 @@ QS-isolated stage (drop the iota and well rows, 30 evaluations) to get a signal
 that is actually about quasisymmetry, and if that is still flat, treat the
 underperformance as a second, independent cause and keep going down items 1-4
 below rather than assuming this fix closed it.
+
+**QS-isolated measurement (2026-08-19): the fix helps, modestly.** Dropping the
+iota and well rows and running 30 evaluations, final QS is 4.097e-2 before the
+fix and 3.432e-2 after (11.25x versus 13.43x reduction from the same seed), and
+wall time halves, 149 s to 74 s. Both lanes now optimize quasisymmetry properly
+once the iota floor is not eating the residual, so the earlier flat result was
+a harness artifact, not evidence against the fix. Note also that after the fix
+the optimizer drives `RBS(0,1)` and `ZBC(0,1)` to `-3.0e-2`/`+3.0e-2`, both on
+the trust-region bound in the antisymmetric direction, where before only
+`RBS(0,1)` reached it — the channel that was being mis-differentiated is
+precisely the one the optimizer now uses. A 16% better final QS on one small
+run is suggestive, not conclusive; the like-for-like symmetric-versus-LASYM
+comparison in item 1 is the measurement that actually answers the phase.
 Add a LASYM Jacobian-versus-finite-difference gate to the test suite covering
 n=0 m=1 in both channels, since no existing test would have caught this.
 
@@ -1372,3 +1385,4 @@ every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — root cause is the frozen `delta == 0` branch in `implicit.py::_lasym_delta_rotation_traceable`; fixed, gated, verified end-to-end (1.6e-1 -> 1.6e-7).
 - 2026-08-19 claude: P17 — opened vmex #126 with the delta-rotation fix and its regression gate; #119 is green and queued for merge.
 - 2026-08-19 claude: P17 — corrected the overclaim: the delta fix is proven as a derivative fix but did NOT improve a bounded QA stage; payoff still unmeasured.
+- 2026-08-19 claude: P17 — QS-isolated run shows the fix improves final QS 4.10e-2 -> 3.43e-2 and halves wall time; like-for-like sym vs LASYM now running.
