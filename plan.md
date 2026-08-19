@@ -1841,3 +1841,20 @@ Two gaps worth closing later, neither blocking:
   so `presf` and `DWell` are identically zero and finite beta exists only as a
   test-fixture override. No LASYM golden exercises `DWell` against VMEC2000.
 - 2026-08-19 claude: verified every #118 LASYM claim against STELLOPT_new; all hold, goldens are current, live tests pass. Upstream refactored the dnorm mechanism, so six citations were rewritten to the net weight.
+
+### Two judgment calls left for the maintainer
+
+**"Experimental" labels.** `examples/README.md:64` and
+`docs/explanation/adjoint-gradients.md:92` describe the coupled NESTOR adjoint
+and the free-boundary Schur lane as experimental, and `docs/all-of-vmex.md:103`
+says the same of GPU support. The no-experimental-lanes rule is about scaffolds
+and dead alternatives in the source, and there are none — `vmex/` has no TODO,
+FIXME, HACK, testbed or experimental marker anywhere. These three are honest
+maturity caveats on shipped lanes, and the free-boundary one has earned it: a
+real derivative defect turned up there today (#128). Deleting the word would
+overstate readiness, so they stay until the lane is anchored end to end.
+(`docs/project/changelog.md` is exempt by definition.)
+
+**Repo size** is fine: `docs/_build` is 30 MB locally but untracked and
+gitignored, and no PR in the queue adds a data file.
+- 2026-08-19 claude: added a LASYM Mercier decomposition anchor (DWell 1.5e-7, DShear 7.6e-10, DCurr 2.2e-3, DGeod 3.2e-3 vs fresh xvmec2000); corrected the finite-beta doc claim; repo-wide scaffold scan clean.
