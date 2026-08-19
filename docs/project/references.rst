@@ -168,10 +168,10 @@ Confinement objectives and optimization:
 
 Numerical implementation:
 
-37. JAX documentation, “Forward- and reverse-mode autodiff in JAX” — the
-    wide-Jacobian cost model used to select ``jacrev`` for the local
+37. JAX documentation, “The Autodiff Cookbook” — the wide-Jacobian cost model
+    (``jacfwd`` versus ``jacrev``) used to select ``jacrev`` for the local
     three-surface raw-force blocks,
-    https://docs.jax.dev/en/latest/advanced-autodiff.html.
+    https://docs.jax.dev/en/latest/notebooks/autodiff_cookbook.html.
 
 38. X. S. Li, “An Overview of SuperLU: Algorithms, Implementation, and User
     Interface,” *ACM Transactions on Mathematical Software* 31, 302–325

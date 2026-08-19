@@ -355,8 +355,8 @@ def test_qi_optimization_example(tmp_path):
 
 def test_vacuum_qs_examples_expose_trial_pressure_terms():
     """Vacuum QS examples expose the tested trial-pressure stability terms."""
-    for case in ("QA", "QH"):
-        source = (EXAMPLES / "optimization" / f"{case}_optimization.py").read_text()
+    for name in ("QA_optimization_DMerc_vacuum.py", "QH_optimization.py"):
+        source = (EXAMPLES / "optimization" / name).read_text()
         assert "USE_TRIAL_STABILITY" in source
         assert "(trial_dmerc, 0.0, stability_weights)" in source
         assert "(trial_dr, 0.0, stability_weights)" in source

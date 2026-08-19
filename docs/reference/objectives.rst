@@ -415,8 +415,10 @@ chosen trial beta and pressure shape while freezing geometry and current.
 Their ``*_stability_residual`` forms are AD-transparent objective rows. This
 is a fast pressure-sensitivity proxy, not a finite-beta certificate: it omits
 the pressure-driven geometry, current, and Shafranov-shift response, so the
-candidate must be re-solved at finite pressure. ``QA_optimization.py`` exposes
-the workflow with ``TRIAL_BETA`` and ``USE_TRIAL_STABILITY``. The stability
+candidate must be re-solved at finite pressure.
+``QA_optimization_DMerc_vacuum.py`` exposes the workflow with ``TRIAL_BETA``
+and ``USE_TRIAL_STABILITY = True``; ``QH_optimization.py`` carries the same
+controls with the lane disabled by default. The stability
 rows are introduced only after a QA basin exists, normalized to that stage's
 incoming values, and increased in explicit continuation stages. Their
 one-dimensional tuple weights are zero for ``s < 0.2``, where the criterion is

@@ -58,6 +58,7 @@
     ["tests/test_multigrid_interp.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-j-m"]],
     ["tests/test_multigrid_ladder.py", "equilibrium", "oracle", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-j-m"]],
     ["tests/test_near_degenerate_vacuum.py", "equilibrium", "oracle", "slow", "cpu-gpu", "none", "vmec2000", ["pr-full-only", "full-core-n-s"]],
+    ["tests/test_neoclassical.py", "diagnostics", "oracle", "slow", "cpu", "reference-nc", "external", ["pr-parity-c2", "optional", "full-core-n-s"]],
     ["tests/test_nonfinite_failfast.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-n-s"]],
     ["tests/test_omnigenity.py", "diagnostics", "ad", "slow", "cpu-gpu", "golden", "fd", ["pr-parity-c2", "full-core-n-s"]],
     ["tests/test_optimization_convergence.py", "optimization", "campaign", "campaign", "cpu-gpu", "golden", "external", ["pr-parity-c2"]],

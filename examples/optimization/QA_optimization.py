@@ -62,7 +62,8 @@ for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV)):
         restart_from=equilibrium)
     print(f"dof_names = {problem.dof_names}")
     monitor.problem = problem
-    if not ci_smoke: problem.compile_residual_and_jacobian()
+    if not ci_smoke:
+        problem.compile_residual_and_jacobian()
     step = PARAMETER_STEP * problem.scales
     result = least_squares(
         problem.residual, problem.x0, jac=problem.residual_jac,

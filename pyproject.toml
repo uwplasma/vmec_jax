@@ -27,7 +27,8 @@ dependencies = [
   "numpy",
   "jax",
   "jaxlib",
-  "scipy",
+  # 1.15 added least_squares(callback=), used by the optimization examples.
+  "scipy>=1.15",
   "netCDF4",
   "matplotlib",
   "packaging",

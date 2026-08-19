@@ -68,7 +68,7 @@ def basin_report(y, value, accepted):
         best.update(y=np.asarray(y).copy(), value=float(value))
     print(f"basin cost = {value:.6e}, accepted = {accepted}")
 
-print(f"First print can take more than ten minutes")
+print("First print can take more than ten minutes")
 bounds = [(-PARAMETER_BOUND, PARAMETER_BOUND)] * x0.size
 basinhopping(value_and_gradient, np.zeros_like(x0), niter=N_BASINS,
     T=0.05, stepsize=0.25, minimizer_kwargs={"method": "L-BFGS-B", "jac": True,
