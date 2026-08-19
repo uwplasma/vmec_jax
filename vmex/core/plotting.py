@@ -1067,10 +1067,30 @@ def _summary_figure(
         meta["epsilon_effective"] = epsilon_info
         epsilon_axis = axes[0, 1].twinx(); meta["epsilon_axis"] = epsilon_axis
         if epsilon_info["valid"]:
-            epsilon_line = epsilon_axis.semilogy(
+            # The reader is looking for where the ripple is worst and where it
+            # dips, so the axis has to resolve the profile rather than the
+            # decade it lives in: log autoscale snaps to powers of ten, and a
+            # ripple profile usually spans well under one, which flattens the
+            # curve against a limit and leaves a single tick label.
+            finite = np.asarray(epsilon_info["values"], dtype=float)
+            finite = finite[np.isfinite(finite) & (finite > 0.0)]
+            decades = (float(finite.max() / finite.min()) if finite.size else 1.0)
+            epsilon_line = epsilon_axis.plot(
                 epsilon_info["s"], epsilon_info["values"], "s--",
                 color=_LINE_COLORS[0], markersize=3.2,
                 label=r"$\epsilon_{\rm eff}^{3/2}$ (diagnostic)")[0]
+            if decades >= 10.0:
+                epsilon_axis.set_yscale("log")
+                if finite.size:
+                    epsilon_axis.set_ylim(0.5 * float(finite.min()),
+                                          2.0 * float(finite.max()))
+            else:
+                epsilon_axis.ticklabel_format(
+                    axis="y", style="sci", scilimits=(0, 0), useMathText=True)
+                if finite.size:
+                    low, high = float(finite.min()), float(finite.max())
+                    pad = 0.08 * (high - low) or 0.1 * high
+                    epsilon_axis.set_ylim(max(0.0, low - pad), high + pad)
             epsilon_axis.set_ylabel(r"$\epsilon_{\rm eff}^{3/2}$", color=_LINE_COLORS[0])
             epsilon_axis.tick_params(axis="y", colors=_LINE_COLORS[0])
             axes[0, 1].legend(

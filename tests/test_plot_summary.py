@@ -427,6 +427,44 @@ def test_summary_plots_the_effective_ripple_profile_when_neo_is_available(
         plotting._EPSILON_EFFECTIVE_CACHE.update(saved)
 
 
+def test_epsilon_effective_panel_resolves_a_sub_decade_profile(
+    solved_case, monkeypatch,
+):
+    """A ripple profile flatter than one decade gets a readable linear axis.
+
+    An optimized configuration is exactly the case where eps_eff^(3/2) varies
+    by a factor of a few rather than by decades, and there the log autoscale
+    snaps to powers of ten: the curve flattens against a limit, the radial
+    minimum stops being visible, and the axis carries a single tick label.
+    The minimum is the feature the panel exists to show.
+    """
+    import matplotlib.pyplot as plt
+
+    from vmex.core import neoclassical
+
+    _, wout = solved_case
+    surfaces = np.linspace(0.15, 0.95, 5)
+    values = np.array([4.4e-3, 2.6e-3, 1.6e-3, 2.1e-3, 3.9e-3])  # 2.7x span
+    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
+    monkeypatch.setattr(
+        neoclassical, "epsilon_effective_from_wout",
+        lambda _wout, **_kwargs: (surfaces, values))
+    saved = dict(plotting._EPSILON_EFFECTIVE_CACHE)
+    plotting._EPSILON_EFFECTIVE_CACHE.clear()
+
+    fig, meta = plotting._summary_figure(wout)
+    try:
+        axis = meta["epsilon_axis"]
+        assert axis.get_yscale() == "linear"
+        low, high = axis.get_ylim()
+        assert low < values.min() and values.max() < high
+        assert len([t for t in axis.get_yticks() if low <= t <= high]) >= 4
+    finally:
+        plt.close(fig)
+        plotting._EPSILON_EFFECTIVE_CACHE.clear()
+        plotting._EPSILON_EFFECTIVE_CACHE.update(saved)
+
+
 def test_epsilon_effective_summary_tolerates_an_unreferenceable_wout(monkeypatch):
     """A missing backend or an unhashable wout never breaks the summary."""
     from vmex.core import neoclassical
