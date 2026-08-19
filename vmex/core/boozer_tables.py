@@ -123,9 +123,9 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
     theta = 2.0 * np.pi * np.arange(ntheta1) / ntheta1
     zeta = 2.0 * np.pi * np.arange(nzeta) / (nfp * nzeta)
     # VMEC sizes the wout Nyquist table from the grid itself (wrout.f:
-    # mnyq = ntheta1/2, nnyq = nzeta/2), so the closing row/column belongs to
-    # the projection.  Dropping it left a few percent of bmnc/bmns on coarse
-    # decks (ntheta = nzeta = 10) unrepresented.
+    # mnyq = ntheta1/2, nnyq = nzeta/2), so the closing row and column belong
+    # to the projection; on a coarse deck they carry a few percent of
+    # bmnc/bmns.
     m_max, n_max = ntheta1 // 2, nzeta // 2
     ml, nl = [], []
     for m in range(0, m_max + 1):

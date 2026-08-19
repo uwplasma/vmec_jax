@@ -144,8 +144,7 @@ def test_lasym_boozer_spectra_and_qi_derivative(lasym_eq):
     # 2*(2*mboz+1) x 2*(2*nboz+1) grid, so compare at oversample=1.  With the
     # full Nyquist projection in boozer_input_tables the two routes agree to a
     # measured 1.06e-5 (bmnc_b) / 1.03e-4 (bmns_b) relative L2; the tolerances
-    # below keep ~10x margin.  Truncating the projection one mode short of the
-    # grid Nyquist used to leave 1.6e-2 / 2.9e-2 here.
+    # below keep ~10x margin.
     trace = omn.boozer_bmnc_state(
         lasym_eq.state, lasym_eq.runtime, surfaces=[0.53], mboz=6, nboz=6,
         oversample=1)

@@ -204,10 +204,10 @@ def test_projection_closes_at_the_grid_nyquist_band(deck, request):
     (``mnyq = ntheta1/2``, ``nnyq = nzeta/2``) and halves the closing
     ``cosmui``/``cosnv`` column, because on an even grid that row and column
     are self-conjugate: ``(m, n)`` and ``(m, -n)`` share a single grid basis
-    function.  Stopping one mode short of it is silent — every surviving mode
-    stays exact — but on ``input.basic_non_stellsym_simsopt``
-    (ntheta = nzeta = 10) it drops 2.5% of ``bmnc`` and 2.6% of ``bmns`` in
-    relative L2, which is what the LASYM Boozer gate used to absorb.
+    function.  Stopping one mode short of it leaves every surviving mode
+    exact, so the loss is silent: on ``input.basic_non_stellsym_simsopt``
+    (ntheta = nzeta = 10) it is 2.5% of ``bmnc`` and 2.6% of ``bmns`` in
+    relative L2.
     """
     eq = request.getfixturevalue(deck)
     wout, res = eq.wout, eq.runtime.resolution
