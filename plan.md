@@ -1594,3 +1594,41 @@ demonstrated at the residual-Jacobian level, which is the object the backward
 pass pulls back, but not through a full coupled solve), and the objective-term
 modules, which got a read rather than a numerical sweep.
 - 2026-08-19 claude: P17 addendum — swept the frozen-branch defect class; found and fixed presf_ns_scale in both free-boundary adjoint lanes; fixed-boundary setup map verified clean to ~1e-9.
+
+### Phase 17 addendum 2 — a test leak that PR CI structurally cannot catch
+
+Found while validating the `presf_ns_scale` fix.
+`tests/test_freeboundary_implicit.py::test_boundary_schur_adjoint_reproduces_the_coupled_gcrot_gradient`
+fails with `ValueError: need at least one array to stack` when the file runs as
+a whole and passes in isolation. It reproduces identically on a clean
+`origin/main` worktree, so it is not caused by any of the fixes here.
+
+Cause: `test_free_boundary_warm_failure_retries_once_from_cold` writes an
+all-zero mask straight into the module-level caches —
+
+    fbi._FREE_HOT_CACHE[cfg] = seed
+    fbi._FREE_MASK_CACHE[fbi._mask_key(cfg)] = jax.tree.map(jnp.zeros_like, state)
+
+— and never removes it. `monkeypatch` restores the patched function but knows
+nothing about the dict mutation. `_mask_key` is
+`(resolution, lconm1, ncurr, "free")`, which the later Schur test shares, so it
+picks up the poisoned all-zero mask, finds no active edge dofs, and reaches
+`freeboundary_implicit.py:496` with an empty column list. Fixed on
+`fix/free-mask-cache-test-leak` by switching both writes to
+`monkeypatch.setitem`, which restores them at teardown.
+
+Worth recording that the cache key itself is **not** at fault — my first
+reading was that it was too coarse for production use, and that is wrong. The
+leak is purely test hygiene.
+
+Why PR CI is green anyway: the two tests sit in *different* manifest selectors
+(`pr-physics-core` and `pr-physics-field`), so they never share a process on a
+pull request. `weekly-single-stage-free` runs the whole file and would hit it,
+as does anyone running the file locally. `pytest-randomly` is not installed, so
+the ordering is deterministic and this is a reliable failure, not a flake.
+
+The general lesson for P11/CI work: a selector split that keeps two tests apart
+also hides state leaking between them. Worth an explicit check that module-level
+caches (`_FREE_MASK_CACHE`, `_FREE_HOT_CACHE`, `_PACK_TABLE_CACHE`,
+`_FREE_LAST_RESULT`) are empty at teardown, rather than relying on the split.
+- 2026-08-19 claude: P17 addendum — found a module-cache leak in test_freeboundary_implicit.py that PR CI cannot see because the two tests are in different selectors; fixed on fix/free-mask-cache-test-leak.
