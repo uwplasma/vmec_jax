@@ -286,7 +286,7 @@ guard in `vmex/core/neoclassical.py:86` and add a LASYM eps_eff panel test.
 1. PR 1 [DONE: PrincetonUniversity/STELLOPT#501] — NEO boozmn reader: `NEO/Sources/read_booz_in.f90:143` `bmns(i,i)` -> `bmns(i,k)`
    (corrupts the asymmetric |B| spectrum; the in-memory `stellopt_neo.f90:226` copy is correct,
    proving the typo). Body: 3-4 sentences, the diff speaks.
-2. PR 2 — NEO deallocation bugs: `neo_dealloc.f90:49-50` frees `pixn`/`i_n` while testing
+2. PR 2 [DONE: PrincetonUniversity/STELLOPT#502] — NEO deallocation bugs: `neo_dealloc.f90:49-50` frees `pixn`/`i_n` while testing
    `pixm`/`i_m` (leaks both), and the LASYM arrays `rmns/zmnc/lmnc/bmns` are never freed.
 3. Keep local patches in the fork until merged; generate all LASYM reference data with the
    patched reader only.
@@ -902,3 +902,9 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   PR 2 (the `neo_dealloc.f90` mismatches, `DEALLOCATE(pixn)` guarded on `pixm` and
   `DEALLOCATE(i_n)` guarded on `i_m`, plus the LASYM arrays never being freed) is still to open;
   keep it separate as planned.
+- 2026-08-19 rogeriojorge: P5d PR 2 opened — **PrincetonUniversity/STELLOPT#502**, branch
+  `fix/neo-dealloc-mismatched-arrays`, also verified against current upstream. Frees `pixm` and
+  `i_m` (whose guards previously freed `pixn`/`i_n` instead) and adds the four LASYM spectra
+  `rmns/zmnc/lmnc/bmns`, which `READ_BOOZ_IN` allocates but nothing releases. Both leak once per
+  `neo_dealloc`, which compounds in an optimization loop that reinitializes NEO each iteration.
+  P5d is now complete: both upstream PRs are open and Phase 5 can proceed on the NEO_JAX side.
