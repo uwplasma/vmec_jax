@@ -845,3 +845,13 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   an Apple laptop costing ~500 s on a 36-core Linux box is a real finding for the performance
   program, and the first thing to re-measure there after the fix lands. Compile at 754 s on that
   machine also dwarfs the laptop's ~40 s.
+- 2026-08-19 rogeriojorge: P10 partial — the two unreachable paths found during the coverage work
+  are deleted (`58166f57`): `_raw_block_apply`'s iterative-refinement loop, whose `refinements`
+  count no caller has ever passed, and the poloidal-mirror branch for asymmetric states in
+  `boozer_bmnc_state`, unreachable because those states return through `_boozer_lasym_state`
+  about thirty lines earlier. Note the distinction that matters when clearing the rest of the
+  Phase 10 list: an unused *feature* is dead and goes, but a *precondition guard* is not the same
+  thing even when uncovered. `_raw_block_apply`'s `factors is None` raise states a real contract
+  for systems built with `factor=False`, so it stays and now has a three-line test rather than
+  being deleted for the coverage number. Do not treat "uncovered" as a synonym for "dead" when
+  working the remaining items.
