@@ -1141,13 +1141,38 @@ n=0 m=1 in both channels, since no existing test would have caught this.
    families move. An asymmetric run has twice the dofs and should do at least
    as well as symmetric, since the symmetric configuration is inside its search
    space — if it does worse, something is wrong, not merely slow.
-2. **Verify booz_xform_jax under LASYM.** Does the `bmns(i,i)` class of bug
-   exist there too? The STELLOPT fix (#501) was in NEO's reader, but check
-   whether the same indexing pattern was copied into booz_xform_jax, and
-   whether recent booz_xform changes affect it. The LASYM Boozer spectrum is
-   validated only at mboz=nboz=6 to 2-3% (`test_omnigenity.py:139`), which is
-   far looser than the symmetric gate and would not catch a moderate error —
-   the asymmetry examples use larger mboz.
+2. **booz_xform_jax under LASYM: audited 2026-08-19, clean — but it is not in
+   the loop for the QA/QH/QP asymmetry examples anyway.** The `bmns(i,i)`
+   repeated-index bug was not copied in; the package has no per-mode scalar
+   index loops, so the sine-parity arrays go through the same vectorized
+   expressions as the cosine-parity ones. Verified against the reference C++
+   `booz_xform` and the STELLOPT Fortran (`surface_solve.cpp`, `boozer.f`,
+   `setup_booz.f`, `foranl.f`): every asymmetric sign matches, the full-theta
+   grid is used with the half-weights correctly restricted to the symmetric
+   branch and the normalization switched to match (no stale factor of two).
+   Zero-asymmetry consistency on li383 at mboz=nboz=16 is 3.9e-15 worst case,
+   and genuinely asymmetric cases agree with the C++ to 4.5e-14 (mboz=6) through
+   3.7e-13 (mboz=32) — so the loose gate was never hiding a resolution-dependent
+   error. Not yet verified: the JVP/gradient of the asymmetric kernel, the
+   `streamed` Fourier mode, and free-boundary LASYM.
+
+2a. **[TODO] Real defect found next door: `boozer_tables.py:124` truncates the
+   VMEC Nyquist band.** `m_max, n_max = ntheta1 // 2 - 1, max(nzeta // 2 - 1, 0)`
+   builds 41 modes (m<=4, |n|<=4) where the wout Nyquist set has 61 (m<=5,
+   |n|<=5), dropping a band carrying 2.49% of `bmnc` and 2.77% of `bmns` on
+   `input.basic_non_stellsym_simsopt`. That is the *entire* 2-3% discrepancy in
+   the `test_omnigenity.py:139` gate: truncating the host reference to vmex's 41
+   modes drops the difference from 1.60e-2/2.89e-2 to 1.06e-5/1.03e-4. Fix the
+   mode set, then tighten that gate to the machine-precision level the kernel
+   actually delivers. Two related asymmetries to fix with it, both in
+   `omnigenity.py`: `_boozer_lasym_state` (line 209) ignores the `oversample`
+   argument the symmetric branch honours, and the symmetric branch works from
+   real-space `bmag` with FFT zero-padding so it never loses the band at all.
+   Scope: this affects the QI asymmetric examples, which route through
+   `QIResidual` -> `boozer_bmnc_state` -> booz_xform_jax. It does **not** affect
+   the QA/QH/QP asymmetry examples, which use `QuasisymmetryRatioResidual`, a
+   real-space wout-table residual with booz_xform nowhere in the loop.
+
 3. Audit the LASYM paths in vmex, booz_xform_jax, neo_jax, and
    virtual_casing_jax against the literature for sign and parity errors: the
    sine-parity conventions, the full-theta versus reduced-grid handling, and
