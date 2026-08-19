@@ -1517,3 +1517,80 @@ every reorganization done before its owning package settles has to be redone.
 - 2026-08-19 claude: P17 — RESOLVED. QS-only: LASYM went from matching symmetric pre-fix (2.436e-4 vs 2.445e-4) to beating it post-fix (1.599e-4). Remainder is example objective weighting, not a code defect.
 - 2026-08-19 claude: P17.2a — Nyquist-band projection fixed and gated (2-3% -> ~1e-16 on the band); branch fix/boozer-nyquist-band rebased onto main.
 - 2026-08-19 claude: P17 — measured that the asymmetry seed perturbation is unnecessary (amp=0 still beats symmetric) and costly (38x worse start); needs confirming on a second family.
+
+### Phase 17 addendum — the frozen-branch defect class, swept
+
+The `delta == 0` bug in #126 is an instance of a general antipattern: a Python
+`if` evaluated eagerly on reference values, sitting on a path that is later
+differentiated with respect to those same values, where the condition is a
+*smooth* function being treated as a discrete choice. The whole differentiated
+surface was swept for siblings on 2026-08-19.
+
+**Why the existing coverage could not see it.**
+`tests/test_implicit_grad.py::test_lasym_boundary_map_derivative_vs_fd` finite-
+differences the traceable map *against itself*. Both lanes freeze the same
+branch, so the check is structurally blind to this entire class. The audit built
+the missing comparison — `jax.jvp` of `implicit.runtime_from_params` against
+central differences of the host `solver.prepare_runtime` — over every RunSetup
+field plus `rcon0/zcon0`, no solve, ~10 s for four decks. That harness
+reproduces the known delta bug exactly (rel 1.00, flat in h, rank-one
+antisymmetric) and should replace the self-FD test.
+
+**One new defect [DONE, branch `fix/free-boundary-presf-scale`].**
+`freeboundary_implicit.py` took `presf_ns_scale` as a host float from the
+*reference* input at both adjoint call sites (`_projected_residual`, the default
+`coupled_gcrot` lane, and `_host_boundary_schur_adjoint`) while
+`runtime_from_params` traced `am` alongside it. The ratio
+`pmass(1)/pmass(hs*(ns-1.5))` is smooth in `am`, which is an `ImplicitParams`
+field the backward pass pulls through, and it enters the residual linearly via
+the `funct3d.f` edge force `bsqvac + presf_ns_scale * pressure[-1]`. Value exact
+at the reference point, derivative absent — the same signature as `delta`.
+Measured on the preconditioned lane: relative error against the true residual
+1.13, 0.855, 0.814 for `am[0..2]`, while agreeing with the frozen lane to ~1e-6,
+which is exactly why nothing caught it. On the raw Schur lane the kept and
+dropped terms nearly cancel and the column points the wrong way entirely
+(rel 63.4, 4.13, 3.01).
+
+Fixed with a traceable `_presf_ns_scale_traceable(params, inp, ns)` taking `am`
+and `pres_scale` from the parameters, the `p_edge == 0` guard rewritten as a
+safe-denominator `jnp.where` so the two_power family's `p(1) = 0` keeps a finite
+derivative. The `_dof_mask` call site deliberately keeps the host float — it
+only discovers discrete structural support — and now says so in a comment.
+
+Note the shipped LASYM free-boundary test deck **is** affected, contrary to the
+first reading: it is `power_series` with `d(presf)/d(am)` up to 2.35e-4. Only
+`two_power` decks (`p(1) = 0` identically) were immune. Gate added,
+`test_presf_ns_scale_is_differentiated_in_the_adjoint_lanes`, which fails 11/11
+against the frozen behaviour and passes at rtol 1e-3 with the fix; the tolerance
+is set by host finite-difference noise on `am` coefficients reaching 5e7, and
+only has to separate a live derivative from a missing one.
+
+**Minor, left open.** `freeboundary_implicit.py:170` overrides the traceably
+rebuilt `rcon0/zcon0` with host-solve constants, dropping
+`d(rcon0)/d(params.rbc)`, where the fixed-boundary lane traces it. Low impact —
+`rcon0` depends only on edge geometry and the free-boundary input boundary is an
+initial guess, not a dof — but it should either be traced for consistency or
+carry a comment saying the omission is deliberate.
+
+**Everything else came back clean**, and not merely by reading. Full
+AD-versus-host-FD sweeps over all four boundary families, `phiedge`,
+`pres_scale`, `curtor`, `am/ai/ac[0:3]` against every setup field: worst
+relative error 1.2e-11 (solovev), 2.5e-9 (li383, 3D symmetric), 5.2e-11
+(up_down asymmetric), 2.8e-9 (cth-like 3D lasym). `lflip` was confirmed
+*genuinely* discontinuous and correctly frozen — engineered to sit on the
+branch, it gives AD 0 against FD 1.0e4, which is `iotas/h`, a real value jump.
+The remaining frozen conditions are integers, logical flags, or `m`/`n` parity.
+
+One degenerate guard worth a follow-up: the frozen `denom == 0` in the delta
+rotation is a genuine discontinuity, but VMEC's `readin.f:551` has **no** such
+guard — it divides by zero and takes `ATAN(Inf) = pi/2`. If a reference deck ever
+landed exactly there, vmex would return the unrotated boundary for every nearby
+parameter while the host rotates by ~pi/2 — a value divergence, not just a
+derivative one. Only reachable at `RBC(0,1) = ZBS(0,1) = 0` (no m=1 content).
+Prefer a documented raise over the silent identity.
+
+Not covered: an end-to-end free-boundary gradient check of the presf fix (it is
+demonstrated at the residual-Jacobian level, which is the object the backward
+pass pulls back, but not through a full coupled solve), and the objective-term
+modules, which got a read rather than a numerical sweep.
+- 2026-08-19 claude: P17 addendum — swept the frozen-branch defect class; found and fixed presf_ns_scale in both free-boundary adjoint lanes; fixed-boundary setup map verified clean to ~1e-9.
