@@ -29,7 +29,7 @@ the polynomial/trapezoid functions, the ``flux_profiles`` arrays, and full
 solver row-1 goldens for a public deck (plus an opt-in live comparison
 against a local ``xvmec2000``).
 
-Validity contract (the APHI sign-reversal follow-up, resolved 2026-08):
+Validity contract:
 ``s`` must be a flux label, so ``Phi'(s)`` may not CHANGE SIGN inside
 ``[0, 1]`` — a reversal folds the ``s -> Phi`` map (two labels enclose the
 same flux), ``phips`` crosses zero on an interior surface, and the clamped

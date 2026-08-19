@@ -455,7 +455,7 @@ def _torflux_sign_reversal(aphi: np.ndarray) -> tuple[float, float] | None:
     aphi = np.asarray(aphi, dtype=float).ravel()
     if aphi.size == 0:
         return None
-    dcoef = aphi * np.arange(1, aphi.size + 1, dtype=float)  # Phi'' ordering: low->high
+    dcoef = aphi * np.arange(1, aphi.size + 1, dtype=float)  # Phi' ordering: low->high
     if not np.any(dcoef):
         return None
     # np.roots wants highest-degree-first with a nonzero leading coefficient.
@@ -501,14 +501,9 @@ def validate_torflux_monotone(aphi: np.ndarray) -> None:
     and the ``profil3d.f``-style interior guess is invalid at every multigrid
     rung — no axis recovery can repair it.
 
-    VMEC2000 (``xvmec2000``) accepts such decks and diverges without
-    diagnosis: measured on the public 238-mode stress ladder it NaN-marches
-    from the ns = 55 interpolated rung (``jacobian.f``'s
-    ``taumax*taumin < 0`` restart test is NaN-blind and ``fsq < ftol`` never
-    holds, so the budget runs out) and still writes a WOUT containing
-    ``fsqr = NaN``; on bounded decks it stalls at O(1) forces and writes an
-    ``ier_flag = 0`` "normal termination" WOUT with sign-reversed ``phips``
-    and negative pressure.  VMEX refuses the deck class up front instead.
+    VMEC2000 accepts such decks and marches to a written WOUT with no
+    diagnosis; see :doc:`/reference/vmec2000-compatibility` for the measured
+    behaviour.
 
     Raises :class:`vmex.core.errors.VmecInputError` (``ier_flag =
     INPUT_ERROR_FLAG``) naming the exact offending interval.
@@ -595,7 +590,7 @@ def flux_profiles(
     Raises :class:`vmex.core.errors.VmecInputError` when the ``APHI`` flux
     derivative reverses sign inside ``s`` in ``[0, 1]`` (see
     :func:`validate_torflux_monotone`); the check is host NumPy on the
-    concrete coefficients, so valid decks are bit-identical to before.
+    concrete coefficients, so valid decks pay nothing for the check.
     """
     validate_torflux_monotone(inp.aphi)
     dtype = grids.s_full.dtype

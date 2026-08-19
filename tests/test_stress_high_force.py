@@ -13,25 +13,20 @@ that rescales the physics cancels in bcovar.f; measured row 1 stayed
 ~4.6e3 under pressure/PHIEDGE/CURTOR/scale/TCON0/elongation/axis attempts):
 an extreme prescribed transform (``AI = 3, -300``) and an ``APHI`` flux
 remap whose derivative reverses sign in s in (0.20, 0.69).  The APHI lever
-is an INVALID flux parameterization (the s -> Phi map folds; the
+is an invalid flux parameterization (the s -> Phi map folds; the
 profil3d.f-style interior guess assumes monotone flux, so no axis recovery
-can remove the resulting force) and VMEX now refuses it with a typed
+can remove the resulting force) and VMEX refuses it with a typed
 ``VmecInputError`` at setup (``vmex.core.setup.validate_torflux_monotone``).
 The lawful stress deck therefore uses the AI lever alone; measurement
 (both codes print identical rows, ns=21 rung, 2026-08): row 1 =
 ``FSQR 1.17E+06, FSQZ 1.41E+04, FSQL 4.22``, WMHD 1.2277E+02, 14 resets in
 40 iterations, FSQL pinned O(1) while FSQR stays above 1e3.
 
-Historical cross-code findings, kept for the record: WITH the sign-
-reversing APHI both codes reached row 1 ``FSQR 1.65E+07`` but the row-1
-energy differed (VMEX WMHD 1.4762E+03 vs VMEC2000 1.4768E+03, ~4e-4 at the
-bcovar-level field assembly near the phips zero crossing) and seeded a
-one-iteration phase shift; on the FULL 5-rung ladder PARVMEC NaN-marches
-at the interpolated ns=55 rung (jacobian.f's ``taumax*taumin < 0`` restart
-test is NaN-blind) and still writes a WOUT with ``fsqr = NaN``
-(``ier_flag = 16``, exit code 0).  ``test_full_ladder_termination_classes``
-pins that divergence as OUR-typed-error vs THEIR-NaN-write-through; the
-AI-only deck removed the last known bounded cross-code row divergence.
+On the full 5-rung ladder PARVMEC NaN-marches at the interpolated ns=55 rung
+(jacobian.f's ``taumax*taumin < 0`` restart test is NaN-blind) and still
+writes a WOUT with ``fsqr = NaN`` (``ier_flag = 16``, exit code 0);
+``test_full_ladder_termination_classes`` pins that divergence as a typed
+error here against a NaN write-through there.
 No free-boundary variant: no public mgrid exists for this boundary; the
 free-side recovery contract lives in ``tests/test_freeboundary_stress.py``.
 """
@@ -90,7 +85,7 @@ def stress_indata_text(*, single_stage: bool = False,
     the bounded variant used for the cross-code row comparison and the
     LFULL3D1OUT WOUT contract; the deck is otherwise identical.
 
-    ``reversed_flux=True`` adds the historical sign-reversing flux remap
+    ``reversed_flux=True`` adds the sign-reversing flux remap
     ``APHI = 5, -16, 12`` (``Phi'(s) = 5 - 32 s + 36 s**2`` < 0 on s in
     (0.2023, 0.6866)) — an invalid parameterization VMEX rejects at setup;
     used only by the parse test and the termination-class divergence pins.
@@ -192,7 +187,7 @@ def test_deck_features_parse() -> None:
 
 
 def test_reversed_flux_deck_raises_typed_input_error_at_setup() -> None:
-    """The historical sign-reversing APHI deck now fails lawfully, up front.
+    """The sign-reversing APHI deck fails lawfully, up front.
 
     ``solve_multigrid`` must raise ``VmecInputError`` (``ier_flag = 5``)
     naming the exact reversal interval of ``Phi'(s) = 5 - 32 s + 36 s**2``
