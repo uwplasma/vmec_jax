@@ -1003,3 +1003,25 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   reverse-adjoint lane already uses GCROT for that reason. `_adjoint_solve_gcrot` now accepts a
   tolerance, a bounded budget, and a non-enforcing mode, and it takes a `precond`, so the block
   inverse can precondition it rather than merely warm-start it (Phase 3's original proposal).
+- 2026-08-19 rogeriojorge: P1.a final state for this pass. Scored by residual on the EXACT
+  operator at a degraded iterate (random right-hand side): direct block solve 2.663e-09,
+  warm-started corrector 2.663e-09, **corrector from zero 5.746e-01**, GCROT with the block
+  inverse as preconditioner 4.356e-09. Three conclusions. (1) The corrector adds nothing to an
+  already-accurate direct solve — it starts at the answer and stagnates there. (2) The
+  `forward_gmres` lane, which starts from zero, leaves a **57% residual**: it is not solving the
+  system when it stagnates, and before the NaN change an uncertified block Jacobian fell back to
+  exactly that lane, so the old path could hand the optimizer a badly wrong Jacobian at the
+  hardest iterates. That makes the bounded-certifier change a correctness fix, not only a speed
+  one. (3) Preconditioned GCROT works but is unnecessary at 4.4e-9 against the direct solve's
+  2.7e-9 — Phase 3's preconditioning proposal is sound but buys nothing here, so it is NOT
+  implemented. `_adjoint_solve_gcrot` keeps its new `rtol`/`max_restarts`/`enforce` parameters,
+  which are useful regardless.
+  Certificate retargeted to the raw operator the columns are consumed through (commit
+  `d7bd1776`): stage 561 s -> 440 s, and the first degraded Jacobian now certifies cleanly
+  (`unconv` 40 -> 0). **But iterates 4+ still report 38-46 uncertified in the raw norm**, so for
+  the REAL parameter tangents — as opposed to the random right-hand side probed above — the block
+  solve genuinely is not accurate at those points. The Jacobian there is approximate, the ~18%
+  worse stage cost (3.088 against 2.625) is real and attributable, and more Krylov work provably
+  does not help (budget sweep: 10x work, 2.3e-8 change). OPEN: measure the raw residual for the
+  actual tangents rather than a random vector, and retry preconditioned GCROT on those; the
+  random-vector probe was misleading and is the reason this took three wrong turns.
