@@ -394,7 +394,7 @@ Acceptance: benchmark matrix in CI nightly with regression gates; a docs page wi
 VMEX vs VMEC2000 vs VMEC++ parity + runtime tables; at least one demonstrated strong-scaling
 curve (ensembles) and honest statements elsewhere.
 
-## Phase 9 — CI: >= 95% coverage, < 30 min, literature-anchored
+## Phase 9 — CI: >= 95% coverage, < 30 min, literature-anchored  [changed-line gate DONE at 96%]
 
 1. Coverage gate moves from changed-lines to whole-repo >= 95% (line + branch on `vmex/core`),
    with per-module floors so physics modules cannot hide behind plotting.
@@ -787,3 +787,26 @@ Append-only; newest last; one line per contribution (see "How to use this file")
   adjoint_maxiter=4000, and it checks `unconverged == 0 and derivative_fallbacks == 0` before
   accepting itself as ground truth), then comparing 1e-6/1e-4/1e-3 against it. That was running
   at hand-off; its result decides the open question above.
+- 2026-08-19 rogeriojorge: P9/P0 changed-line coverage gate **78% -> 96%** (464 -> 84 missing of
+  2144 changed lines), merged. The cheap wins dominated exactly as hoped: most of it came from
+  running modules the pull-request lanes never selected (`test_boozer_tables`, `test_maxj`,
+  `test_optimize_traceable_qs`, `test_virtual_casing_api` into `pr-physics-field`; `test_doctor`
+  and `test_neoclassical` into `pr-fast`), not from new tests. Zero `full` markers were demoted —
+  none of the candidates ran in under 20 s. One genuinely new certificate was worth its cost: a
+  percent-level cross-check of the boundary-Schur adjoint against the certified coupled GCROT
+  adjoint on a shared converged root (202 s, the two gradients agree to 0.53%), which is the
+  first fast-lane coverage of that path; note it needs `adjoint_tol=1e-5`, because at 1e-9 the
+  Schur lane's own certification does not converge within 3017 Krylov iterations. Estimated CI
+  wall goes ~17.5 -> ~22 min, inside the 30-minute budget. When merging, the per-node maximum-J
+  entries in `pr-physics-core` were dropped: the whole module now runs in `pr-physics-field`, so
+  listing individual ids only duplicated it.
+  Two DEAD-CODE findings for Phase 10, both confirmed unreachable rather than merely untested:
+  `implicit.py` `_raw_block_apply`'s `factors is None` guard and its iterative-refinement loop
+  (`refinements` is never passed non-zero anywhere in the tree), and `omnigenity.py:328,330-331`
+  (the in-body LASYM mirror branch, unreachable because `boozer_bmnc_state` returns early through
+  `_boozer_lasym_state` for asymmetric states — the maximum-J agent independently found the same
+  thing). Delete both rather than write tests for them.
+  Of the 84 lines still missing, the honest reasons are recorded: `optimize.py` closures that
+  need a solve-backed `VmecProblem`, a `freeboundary_implicit.py` m=1 edge-pairing branch
+  unreachable on the only free-boundary deck available (DIII-D, `ntor=0`), extender parameter-VJP
+  fallbacks, `FFMpegWriter`, and the successful `import neo_jax` line.
