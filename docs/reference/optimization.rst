@@ -484,8 +484,8 @@ Resources and reproducibility
 -----------------------------
 
 A single equilibrium uses XLA threading. Parallel finite differences and
-ensembles use process-available CPUs by default, respecting scheduler and
-container affinity; set ``workers`` explicitly when sharing a node. Device
+ensembles use process-available CPUs by default, respecting scheduler
+affinity; set ``workers`` explicitly when sharing a node. Device
 selection is controlled by ``device=`` and the policies in
 :doc:`/howto/run-on-gpu`.
 
