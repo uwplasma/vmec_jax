@@ -29,6 +29,7 @@ from . import implicit as im
 from .device import AUTO, resolve_implicit_device
 from .freeboundary import (
     _presf_ns_scale,
+    _presf_ns_scale_traceable,
     _solve_free_boundary_stage,
     _vacuum_executables,
     free_boundary_resolution,
@@ -155,9 +156,6 @@ def _projected_residual(
     # The executable/topology was fixed concretely when the config was built;
     # all equilibrium and coil values below remain dynamic traced arrays.
     fused = cfg.vacuum_program
-    pres_scale = jnp.asarray(
-        _presf_ns_scale(icfg.inp, int(icfg.resolution.ns)), dtype=jnp.float64
-    )
 
     @jax.jit
     def residual(z, params, field_parameters, frozen, rcon0, zcon0):
@@ -168,7 +166,8 @@ def _projected_residual(
         rt = dataclasses.replace(
             im.runtime_from_params(params, icfg), rcon0=rcon0, zcon0=zcon0,
             lfreeb=True, jmax=int(icfg.resolution.ns),
-            presf_ns_scale=pres_scale,
+            presf_ns_scale=_presf_ns_scale_traceable(
+                params, icfg.inp, int(icfg.resolution.ns)),
         )
         if fixed_bsqvac is None:
             external_field = cfg.field_from_parameters(field_parameters)
@@ -251,6 +250,10 @@ def _host_solve_and_mask_impl(
             rt, rcon0=rcon0, zcon0=zcon0, lfreeb=True,
             jmax=int(icfg.resolution.ns),
             bsqvac_edge=jax.lax.stop_gradient(stage.vacuum.bsqvac),
+            # Host value on purpose: this runtime only discovers which dofs
+            # have structural force support, a discrete answer that no
+            # derivative is taken through.  The adjoint lanes above use the
+            # traceable ratio instead.
             presf_ns_scale=jnp.asarray(
                 _presf_ns_scale(inp, int(icfg.resolution.ns))
             ),
@@ -429,12 +432,11 @@ def _host_boundary_schur_adjoint(
     icfg = cfg.implicit
     project = im._dof_projector(icfg, mask)
     field = cfg.field_from_parameters(field_parameters)
-    pres_scale = jnp.asarray(
-        _presf_ns_scale(icfg.inp, int(icfg.resolution.ns)), dtype=jnp.float64
-    )
     rt = dataclasses.replace(
         im.runtime_from_params(params, icfg), rcon0=rcon0, zcon0=zcon0,
-        lfreeb=True, jmax=int(icfg.resolution.ns), presf_ns_scale=pres_scale,
+        lfreeb=True, jmax=int(icfg.resolution.ns),
+        presf_ns_scale=_presf_ns_scale_traceable(
+            params, icfg.inp, int(icfg.resolution.ns)),
     )
     bsqvac = jax.lax.stop_gradient(cfg.vacuum_program.bsq(frozen, rt, field))
     frozen_residual = _projected_residual(
