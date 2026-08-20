@@ -456,6 +456,9 @@ def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
         -2445074.81564557, -1869459.08846507, -1317836.93988867,
         -658744.51123515,
     ])
+    # 1.5e-3 per-element against this 2e-3 gate, so the margin is only 1.3x;
+    # the worst point is the outermost interior surface, where |<J.B>| is an
+    # order of magnitude below the profile maximum.  Scale-relative is 1.5e-4.
     np.testing.assert_allclose(
         np.asarray(jdotb)[2:-1], vmec2000, rtol=2e-3
     )
@@ -474,20 +477,85 @@ def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
     interior = np.asarray(profile)[2:-1]
     assert np.all(np.isfinite(interior))
     assert np.any(interior != 0.0)
-    dmerc = stab.d_merc_state(eq.state, eq.runtime)
-    np.testing.assert_allclose(dmerc, eq.wout.DMerc, rtol=1e-10, atol=1e-13)
-    np.testing.assert_allclose(opt.d_merc(eq), eq.wout.DMerc, rtol=0.0, atol=0.0)
-    d_r = stab.glasser_d_r_state(eq.state, eq.runtime, shear_epsilon=1.0e-8)
-    assert np.all(np.isfinite(np.asarray(d_r)))
 
-    _, tangent_profiles = jax.jvp(
-        lambda state: jnp.concatenate((
-            stab.d_merc_state(state, eq.runtime)[2:-1],
-            stab.glasser_d_r_state(
-                state, eq.runtime, shear_epsilon=1.0e-8)[2:-1])),
-        (eq.state,), (tangent,))
-    assert np.all(np.isfinite(np.asarray(tangent_profiles)))
-    assert np.any(np.asarray(tangent_profiles) != 0.0)
+
+def test_lasym_dmerc_matches_wout_and_vmec2000(lasym_finite_beta_eq):
+    """LASYM DMerc: wout-engine identity plus the live VMEC2000 anchor.
+
+    The pinned profile is xvmec2000 output for this exact deck: 6.3e-4
+    per-element relative against the 2e-3 gate, 1.6e-4 scale-relative.
+    mercier.f integrates full-theta-grid real-space fields with the uniform
+    lasym ``wint`` and its jxbforce.f inputs carry both parity channels, so
+    VMEC2000 anchors the asymmetric lane.
+    """
+    eq = lasym_finite_beta_eq
+    actual = np.asarray(jax.jit(stab.d_merc_state)(eq.state, eq.runtime))
+    np.testing.assert_allclose(
+        actual, np.asarray(eq.wout.DMerc), rtol=1e-10, atol=1e-13)
+    np.testing.assert_array_equal(np.asarray(opt.d_merc(eq)),
+                                  np.asarray(eq.wout.DMerc))
+    vmec2000_dmerc = np.array([
+        9.57976316e-04, 1.09389270e-03, 1.26863525e-03, 1.44998604e-03,
+        1.63397433e-03, 1.83848056e-03, 2.10415041e-03, 2.51043409e-03,
+        3.23990131e-03, 5.05740718e-03,
+    ])
+    np.testing.assert_allclose(actual[2:-1], vmec2000_dmerc, rtol=2e-3)
+    np.testing.assert_array_equal(np.sign(actual[2:-1]),
+                                  np.sign(vmec2000_dmerc))
+
+    tangent = jax.tree.map(jnp.zeros_like, eq.state)
+    tangent = dataclasses.replace(
+        tangent,
+        R_sin=jnp.ones_like(eq.state.R_sin),
+        Z_cos=jnp.ones_like(eq.state.Z_cos),
+    )
+    _, dmerc_tangent = jax.jvp(
+        lambda st: stab.d_merc_state(st, eq.runtime), (eq.state,), (tangent,))
+    interior = np.asarray(dmerc_tangent)[2:-1]
+    assert np.all(np.isfinite(interior))
+    assert np.any(interior != 0.0)
+
+
+def test_lasym_glasser_identity_residuals_and_reconstruction(
+    lasym_finite_beta_eq,
+):
+    """LASYM D_R: exact GGJ identity, smooth residuals, NumPy reference.
+
+    No external lasym D_R oracle exists (the DCON comparison is
+    symmetric-only): the validation is internal consistency on top of the
+    VMEC2000-anchored DMerc — the published relation must hold exactly, the
+    optimizer residuals must stay finite/smooth, and the independent
+    plotting-lane reconstruction of the mercier.f integrals from the wout
+    tables (both parities) must pass its stored-DMerc self-check.
+    """
+    eq = lasym_finite_beta_eq
+    state, rt = eq.state, eq.runtime
+    dmerc, _, _, shear, h_glasser = stab._mercier_profiles_state(state, rt)
+    actual = stab.glasser_d_r_state(state, rt)
+    denominator = jnp.where(shear != 0.0, shear**2, 1.0)
+    expected = -dmerc + (h_glasser - 0.5 * shear**2) ** 2 / denominator
+    expected = jnp.where(shear != 0.0, expected, 0.0)
+    np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-15)
+    assert np.all(np.isfinite(np.asarray(actual)))
+
+    for residual in (stab.mercier_stability_residual,
+                     stab.glasser_stability_residual):
+        values = np.asarray(residual(state, rt))
+        assert values.shape == (np.asarray(dmerc).size - 3,)
+        assert np.all(np.isfinite(values))
+
+    pytest.importorskip("matplotlib")
+    from vmex.core import plotting
+
+    info = plotting._glasser_d_r_from_wout(eq.wout)
+    assert info["valid"], info["note"]
+    assert float(info["mismatch"]) < 1.0e-2
+    d_r_recon = np.asarray(info["d_r"], dtype=float)
+    # D_R is a near-cancelling difference of DMerc-scale integrals, so the
+    # wout-table reconstruction class is relative to the DMerc scale
+    # (measured 1.1e-2 of it on this deck).
+    scale = float(np.max(np.abs(np.asarray(dmerc)[2:-1])))
+    assert np.max(np.abs(d_r_recon[2:-1] - np.asarray(actual)[2:-1])) < 2.0e-2 * scale
 
 
 @pytest.mark.full
@@ -551,3 +619,75 @@ def test_surface_index_validation(highbeta_eq):
     ns = int(np.shape(highbeta_eq.state.R_cos)[0])
     with pytest.raises(ValueError, match="out of range"):
         stab.ballooning_lambda(highbeta_eq.state, highbeta_eq.runtime, s_indices=(ns - 1,))
+
+
+def test_lasym_mercier_decomposition_matches_vmec2000(lasym_finite_beta_eq):
+    """Every LASYM Mercier term against xvmec2000, pressure-driven one included.
+
+    ``DMerc`` alone can agree while its parts cancel, so pin the four terms of
+    the ``mercier.f`` sum (``Dshear``/``Dcurr``/``Dwell``/``Dgeod``)
+    separately.  ``DWell`` needs pressure: the shipped deck has ``AM = 0`` and
+    the fixture raises it to ``am = [1, -1]``, ``pres_scale = 5000``, which is
+    the state these numbers come from.  Reference: STELLOPT
+    ``v6.5.0-42-g9177f58``, same deck, converged to ``fsqr`` 4.59e-11.
+    """
+    eq = lasym_finite_beta_eq
+    vmec2000 = {
+        "DWell": np.array([
+            -2.22718998e-05, -1.51031785e-05, -1.16397303e-05,
+            -9.21471107e-06, -6.80857520e-06, -3.67996680e-06,
+            1.08919314e-06, 8.99038455e-06, 2.26388466e-05,
+            4.57963823e-05,
+        ]),
+        "DShear": np.array([
+            2.93402778e-03, 2.93402778e-03, 2.93402778e-03,
+            2.93402778e-03, 2.93402778e-03, 2.93402778e-03,
+            2.93402778e-03, 2.93402778e-03, 2.93402778e-03,
+            2.93402778e-03,
+        ]),
+        "DCurr": np.array([
+            -8.60603463e-04, -9.78895020e-04, -9.95338687e-04,
+            -9.53790255e-04, -8.73352958e-04, -7.51384654e-04,
+            -5.59906561e-04, -2.25290780e-04, 4.55938293e-04,
+            2.45104164e-03,
+        ]),
+        "DGeod": np.array([
+            -1.09317610e-03, -8.46136880e-04, -6.58414111e-04,
+            -5.21036775e-04, -4.19891910e-04, -3.40482600e-04,
+            -2.71060005e-04, -2.07293295e-04, -1.72703606e-04,
+            -3.73458619e-04,
+        ]),
+    }
+    # Measured per element: DWell 1.5e-7, DShear 7.6e-10 (the floor is the
+    # nine significant figures pinned above, not a disagreement), DCurr
+    # 2.2e-3, DGeod 3.2e-3.  The two current terms are the loosest.
+    tolerance = {"DWell": 1e-6, "DShear": 1e-8, "DCurr": 5e-3, "DGeod": 5e-3}
+    for name, reference in vmec2000.items():
+        actual = np.asarray(getattr(eq.wout, name), dtype=float)[2:-1]
+        np.testing.assert_allclose(actual, reference, rtol=tolerance[name],
+                                   err_msg=f"{name} against xvmec2000")
+    # The pressure term must actually be exercised, not incidentally zero.
+    assert np.max(np.abs(vmec2000["DWell"])) > 1e-6
+
+
+def test_lasym_mercier_current_tables_are_exercised():
+    """The LASYM branch of the Mercier current tables, cheaply.
+
+    ``_mercier_current_tables`` splits on symmetry, and the asymmetric side
+    reads the jxbforce.f analysis weights off the shared trig tables.  Small
+    enough (ns=9, mpol=4, axisymmetric) to sit in a pull-request lane while
+    still solving a real asymmetric equilibrium.
+    """
+    inp = dataclasses.replace(
+        _lasym_finite_beta_input(),
+        ns_array=np.array([9]), ftol_array=np.array([1e-9]),
+        niter_array=np.array([2000]),
+    ).change_resolution(mpol=4, ntor=0, ntheta=16, nzeta=1)
+    eq = opt.solve_equilibrium(inp, verbose=False)
+    assert bool(eq.runtime.setup.lasym)
+    d_merc = np.asarray(jax.jit(stab.d_merc_state)(eq.state, eq.runtime))
+    assert np.all(np.isfinite(d_merc))
+    np.testing.assert_allclose(d_merc, np.asarray(eq.wout.DMerc),
+                               rtol=1e-10, atol=1e-13)
+    # A degenerate profile would pass the checks above and cover nothing.
+    assert np.max(np.abs(d_merc[2:-1])) > 1e-6

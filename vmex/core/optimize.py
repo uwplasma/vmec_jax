@@ -752,8 +752,9 @@ def d_merc(eq) -> jnp.ndarray:
     two surfaces and the edge carry the usual near-axis noise, so practical
     targets should penalize e.g. ``min(DMerc[2:-1], 0)``).  Accepts an
     :class:`Equilibrium` or any wout-like object.  Use traceable
-    :func:`mercier_stability_residual` with ``jac="implicit"``. Symmetric and
-    ``lasym`` WOUT profiles are supported.
+    :func:`mercier_stability_residual` with ``jac="implicit"``.  Both
+    symmetry modes are supported; the ``lasym`` lane is validated per-term
+    against live VMEC2000 output (``tests/test_vmec2000_live.py``).
     """
     wout = eq.wout if isinstance(eq, Equilibrium) else eq
     return jnp.asarray(np.asarray(wout.DMerc, dtype=float))

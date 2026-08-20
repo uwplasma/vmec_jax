@@ -430,11 +430,10 @@ and the edge and returns
 penalizes unstable (negative) ``DMerc`` with a smooth gradient.  At finite
 ``smoothing`` the residual is positive, rather than exactly zero, on stable
 surfaces but decays exponentially with the stability margin.  Both profile
-lanes retain VMEC's near-axis and edge limitations.  The traceable lane
-supports ``lasym = True``: the ``jxbforce.f`` mode filter keeps the four
-asymmetric geometry families, and on a converged finite-pressure,
-up-down-asymmetric tokamak ``d_merc_state`` reproduces the WOUT ``DMerc``
-profile to round-off with finite state derivatives.
+lanes retain VMEC's near-axis and edge limitations.  Both support
+``lasym = True``: the asymmetric lane carries the sine-parity content through
+the ``jxbforce.f`` parity-split filter and the full-theta surface integrals,
+and is validated per-term against live VMEC2000 (below).
 
 For a vacuum equilibrium, :math:`p'=0` makes :math:`D_{\rm well}` exactly
 zero; VMEX does not add a pressure floor. The reported Mercier index can still
@@ -494,17 +493,30 @@ VMEC2000 does not write ``D_R`` itself.  A live `DCON/GPEC
 <https://github.com/PrincetonUniversity/GPEC>`_ evaluation independently
 reproduces the symmetric VMEC normalization at ``ns=51`` (``D_I`` maximum
 absolute difference ``9.10e-4`` and ``D_R`` ``8.63e-5`` over normalized
-poloidal flux ``[0.1, 1)``).  The same test on an
-up-down-asymmetric tokamak exposed unresolved sensitivity in :math:`H`:
-at ``ns=201`` the candidate reconstruction's normalized ``D_I`` differs by
-at most ``1.85e-2`` over normalized poloidal flux ``[0.2, 0.9]``, but
-``D_R`` differs by ``1.49e-2`` and can change sign near marginality. The live
-state implementation now retains all four LASYM geometry families and its
-boundary JVPs are checked against independently reconverged finite
-differences, so it is available for optimization. Publication use near
-marginality still requires a nonaxisymmetric JMC/DCON benchmark. The summary
-plot omits WOUT-only ``D_R`` for LASYM because that host reconstruction does
-not have the live solver state needed to certify the asymmetric normalization.
+poloidal flux ``[0.1, 1)``).
+
+LASYM scope.  ``mercier.f`` integrates real-space fields over the full
+theta interval with the uniform lasym weights and the ``jxbforce.f`` inputs
+carry both parity channels, so VMEC2000 anchors the asymmetric lane.
+The analysis weight is ``1/(nzeta*(ntheta2-1))`` over the half-interval
+reduced grid in both symmetry modes, which is the physical-scale norm VMEX
+uses.  On the bundled up-down-asymmetric deck, raised to finite pressure by
+the stability fixture (the shipped deck has ``AM = 0``, so ``DWell`` vanishes
+identically on it), :func:`~vmex.core.stability.d_merc_state` reproduces the
+golden VMEC2000 ``DMerc`` profile to ``1.2e-4`` scale-relative
+(``DGeod`` ``2.1e-3``, ``<J.B>`` ``1.0e-4``) with full interior
+sign agreement — inside the ``5e-2`` tolerance class of the symmetric live
+gate — and an independent NumPy reconstruction of the ``mercier.f``
+integrals from the wout Fourier tables (both parities) reproduces the same
+profiles at the few-percent reconstruction class for VMEX and VMEC2000
+alike.  For LASYM :math:`D_R` no external oracle exists (the DCON
+comparison above is symmetric-only, and its asymmetric ``H`` remained
+sensitive near marginality): the asymmetric
+:func:`~vmex.core.stability.glasser_d_r_state` is validated by
+internal consistency — the exact GGJ identity applied to the
+VMEC2000-anchored LASYM ``DMerc`` and the independently validated
+``jdotb``/``bdotb`` averages — not by a DCON anchor, and near-marginal
+asymmetric :math:`D_R` values inherit the corresponding sensitivity.
 
 Magnetic well
 ~~~~~~~~~~~~~~

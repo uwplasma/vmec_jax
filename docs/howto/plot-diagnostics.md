@@ -54,11 +54,11 @@ alpha-independence. `|B|` in Boozer coordinates appears at mid radius and on
 the LCFS as unfilled jet contours with a field line of slope iota. The Boozer
 transform runs in-process, so `--plot` needs no separate `--booz` pass;
 `--booz` is for writing a reusable `boozmn_*.nc`. The plotted $D_R$ comes from
-a host-side reconstruction of the WOUT file, which is not certified for LASYM
-output normalization, so the curve is omitted (with a panel note) for
-asymmetric equilibria. This is a plotting limit, not an optimization one:
-{func}`vmex.core.stability.glasser_d_r_state` has no lasym guard and stays
-available for asymmetric equilibria, since it reads the live solver state.
+a host-side reconstruction of the WOUT file, which carries the sine-parity
+partner tables and so covers both symmetry classes. The reconstruction checks
+itself by reproducing the stored `DMerc` profile from the same integrals; on
+mismatch the curve is omitted with a panel note rather than drawn
+unvalidated.
 With `vmex[neoclassical]` installed, the pressure panel also shows the
 conventional NEO quantity $\epsilon_{\rm eff}^{3/2}$ at bounded diagnostic
 resolution. If NEO_JAX is unavailable, the right axis says so instead of

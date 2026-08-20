@@ -174,6 +174,7 @@
       "tests/test_parallel.py::test_available_cpus_ignores_unavailable_hints"
     ],
     "pr-physics-field": [
+      "tests/test_stability.py::test_lasym_mercier_current_tables_are_exercised",
       "tests/test_freeboundary_implicit.py::test_boundary_schur_adjoint_reproduces_the_coupled_gcrot_gradient",
       "tests/test_boozer_tables.py",
       "tests/test_maxj.py",

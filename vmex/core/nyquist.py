@@ -29,11 +29,12 @@ geometry channels, :class:`vmex.core.fields.MagneticFields` the half-mesh
 field state, and :class:`vmex.core.fourier.TrigTables` (built at the
 Nyquist resolution) the trig/weight tables.
 
-Normalization note (parity-critical): VMEC2000's *output* transforms
-normalize lasym integrals on the full theta grid (``dnorm = 1/(nzeta *
-ntheta1)``, fixaray.f SPH012314), while the core solver trig tables carry the
-reduced-interval ``dnorm`` for both symmetry modes (see
-:mod:`vmex.core.fourier`).  :func:`_analysis_theta_tables` therefore
+Normalization note (parity-critical): the *output* transforms normalize lasym
+integrals on the full theta grid (``1/(nzeta*ntheta1)``, paired with the
+per-mode doubling below), while the core solver trig tables carry the
+reduced-interval ``dnorm = 1/(nzeta*(ntheta2-1))`` for both symmetry modes
+(see :mod:`vmex.core.fourier`).  Both routes land on the same analysis
+weight.  :func:`_analysis_theta_tables` therefore
 rebuilds the integration-weighted theta tables with the output convention.
 
 Host NumPy throughout: this is one-shot output post-processing, not solver
@@ -83,10 +84,10 @@ def nyquist_limits(trig: TrigTables) -> tuple[int, int]:
 def _analysis_theta_tables(trig: TrigTables) -> tuple[np.ndarray, np.ndarray]:
     """Integration-weighted theta tables in the *output* dnorm convention.
 
-    ``fixaray.f``: ``dnorm = 1/(nzeta*ntheta1)`` on the full grid for lasym
-    runs (SPH012314), ``1/(nzeta*(ntheta2-1))`` on the endpoint-half-weighted
-    reduced grid otherwise; ``cosmui`` rows 0 and ``ntheta2-1`` carry the
-    half-weights in both modes.  Returns ``(cosmui, sinmui)`` restricted to
+    ``1/(nzeta*ntheta1)`` on the full grid for lasym runs,
+    ``1/(nzeta*(ntheta2-1))`` on the endpoint-half-weighted reduced grid
+    otherwise; ``cosmui`` rows 0 and ``ntheta2-1`` carry the half-weights in
+    both modes.  The lasym factor of two returns in the per-mode ``dnorm1``.  Returns ``(cosmui, sinmui)`` restricted to
     the reduced grid, shape ``(ntheta2, mnyq+1)``.
     """
     nt2 = int(trig.ntheta2)
@@ -288,6 +289,12 @@ def filter_bsubuv_lasym(
     ``fext_fft`` extension back to the full theta grid.  Long-double
     accumulation (the sums are cancellation-limited near the edge).
     Returns full-grid ``(ns, ntheta3, nzeta)`` arrays.
+
+    Scale contract: one pass is an idempotent band-limited projection
+    returning the *physical* field.  The lasym analysis tables carry the
+    full-interval ``1/(nzeta*ntheta1)`` and the per-mode ``dnorm1`` below
+    doubles it, giving the ``1/(nzeta*(ntheta2-1))`` weight the reduced-grid
+    parity sum needs.
     """
     acc = np.longdouble
     bsubu = np.asarray(bsubu, dtype=acc)
@@ -335,7 +342,10 @@ def filter_bsubuv_lasym(
         for m in range(mmax + 1):
             mparity = m & 1
             for n in range(nmax + 1):
-                dnorm1 = acc(1.0)
+                # fixaray.f half-interval analysis norm: the tables carry
+                # 1/(nzeta*ntheta1); the reduced-grid parity analysis needs
+                # 1/(nzeta*(ntheta2-1)) = 2/(nzeta*ntheta1).
+                dnorm1 = acc(2.0)
                 if mnyq > 0 and m == mnyq:
                     dnorm1 *= 0.5
                 if nnyq > 0 and n == nnyq and n != 0:
@@ -581,6 +591,13 @@ def _bsubs_angle_derivatives(
         dmult[mnyq, :] *= 0.5
     if nnyq > 0 and nnyq <= nmax:
         dmult[:, nnyq] *= 0.5
+    if bool(lasym):
+        # The lasym output tables carry dnorm = 1/(nzeta*ntheta1); the
+        # reduced-grid parity analysis below needs the fixaray.f
+        # half-interval dnorm = 1/(nzeta*(ntheta2-1)) = 2/(nzeta*ntheta1),
+        # so the reconstructed derivatives come out at physical scale
+        # (jxbforce.f parity; see :func:`filter_bsubuv_lasym`).
+        dmult = 2.0 * dmult
 
     def _sin_analysis(f: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         c1 = np.einsum(
@@ -714,7 +731,9 @@ def mercier_and_jxb(
 
     if bool(lasym):
         # jxbforce.f filters the (already output-filtered) covariant fields
-        # again inside the lasym force loop; replicated for golden parity.
+        # again inside the lasym force loop; replicated for golden parity
+        # (the physical-scale filter is an idempotent projection, so the
+        # second pass changes nothing beyond the Fortran sequence).
         bsubu, bsubv = filter_bsubuv_lasym(
             bsubu=bsubu, bsubv=bsubv, trig=trig,
             mmax_force=mmax_force, nmax_force=nmax_force, s=s,
@@ -976,17 +995,14 @@ def wout_field_tables(
         bsupvmns = wrout_sin_coeffs(f=pairs["bsupv"][1], modes=nyq_modes, trig=trig)
         bsubsmnc = wrout_cos_coeffs(f=pairs["bsubs"][1], modes=nyq_modes, trig=trig)
 
-        # wrout.f lasym conventions: covariant tables restricted to the solver
-        # band and doubled (the reduced-grid analysis halves them).
+        # wrout.f lasym conventions: covariant tables restricted to the
+        # solver band.  filter_bsubuv_lasym returns physical-scale fields, so
+        # the analyzed tables land in file convention directly.
         m_arr = np.asarray(nyq_modes.m, dtype=int)
         n_arr = np.asarray(nyq_modes.n, dtype=int)
         mask_bsub = (m_arr >= int(mpol)) | (np.abs(n_arr) > int(ntor))
         for arr in (bsubumnc, bsubumns, bsubvmnc, bsubvmns):
             arr[:, mask_bsub] = 0.0
-        bsubumnc *= 2.0
-        bsubvmnc *= 2.0
-        bsubumns *= 2.0
-        bsubvmns *= 2.0
         _zero_first_surface(gmnc, bmnc, bsubumnc, bsubvmnc, bsupumnc, bsupvmnc,
                             gmns, bmns, bsubumns, bsubvmns, bsupumns, bsupvmns)
         if ns > 2:
