@@ -668,3 +668,26 @@ def test_lasym_mercier_decomposition_matches_vmec2000(lasym_finite_beta_eq):
                                    err_msg=f"{name} against xvmec2000")
     # The pressure term must actually be exercised, not incidentally zero.
     assert np.max(np.abs(vmec2000["DWell"])) > 1e-6
+
+
+def test_lasym_mercier_current_tables_are_exercised():
+    """The LASYM branch of the Mercier current tables, cheaply.
+
+    ``_mercier_current_tables`` splits on symmetry, and the asymmetric side
+    reads the jxbforce.f analysis weights off the shared trig tables.  Small
+    enough (ns=9, mpol=4, axisymmetric) to sit in a pull-request lane while
+    still solving a real asymmetric equilibrium.
+    """
+    inp = dataclasses.replace(
+        _lasym_finite_beta_input(),
+        ns_array=np.array([9]), ftol_array=np.array([1e-9]),
+        niter_array=np.array([2000]),
+    ).change_resolution(mpol=4, ntor=0, ntheta=16, nzeta=1)
+    eq = opt.solve_equilibrium(inp, verbose=False)
+    assert bool(eq.runtime.setup.lasym)
+    d_merc = np.asarray(jax.jit(stab.d_merc_state)(eq.state, eq.runtime))
+    assert np.all(np.isfinite(d_merc))
+    np.testing.assert_allclose(d_merc, np.asarray(eq.wout.DMerc),
+                               rtol=1e-10, atol=1e-13)
+    # A degenerate profile would pass the checks above and cover nothing.
+    assert np.max(np.abs(d_merc[2:-1])) > 1e-6
