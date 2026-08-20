@@ -1112,6 +1112,29 @@ def _presf_ns_scale(inp: VmecInput, ns: int) -> float:
     return p_one / p_edge
 
 
+def _presf_ns_scale_traceable(params, inp: VmecInput, ns: int):
+    """:func:`_presf_ns_scale` as a function of the differentiated parameters.
+
+    The ratio is smooth in ``am`` and ``pres_scale``, both
+    :class:`~vmex.core.implicit.ImplicitParams` fields, so the adjoint lanes
+    need it traced; only ``pmass_type``, the spline knots and ``bloat`` are
+    static.
+    """
+    hs = 1.0 / float(ns - 1)
+    sedge = hs * (float(ns) - 1.5)
+    kwargs = dict(pres_scale=params.pres_scale, bloat=float(inp.bloat),
+                  spres_ped=1.0)
+    p_edge = _profiles.pressure(inp.pmass_type, params.am, inp.am_aux_s,
+                                inp.am_aux_f, sedge, **kwargs)
+    p_one = _profiles.pressure(inp.pmass_type, params.am, inp.am_aux_s,
+                               inp.am_aux_f, 1.0, **kwargs)
+    # A vanishing edge pressure is the two_power family's p(1) = 0, where the
+    # scale is zero by definition; the safe denominator keeps the derivative
+    # finite there.
+    nonzero = p_edge != 0.0
+    return jnp.where(nonzero, p_one / jnp.where(nonzero, p_edge, 1.0), 0.0)
+
+
 # ---------------------------------------------------------------------------
 # Overlapped lane compilation (free-boundary compile scheduling)
 # ---------------------------------------------------------------------------
