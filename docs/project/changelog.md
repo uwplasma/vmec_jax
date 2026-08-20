@@ -19,7 +19,7 @@ VMEX 0.5 makes converged equilibria optimizer-neutral building blocks:
 - `VmecExtender` provides SIMSOPT-style field queries beyond the LCFS, using
   direct vacuum fields or the finite-beta plasma-current virtual-casing branch.
 - Automatic ensemble and finite-difference worker counts respect process CPU
-  limits on shared, containerized, and scheduler-managed machines.
+  limits on shared and scheduler-managed machines.
 
 Upgrade notes:
 
