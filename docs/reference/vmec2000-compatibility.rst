@@ -232,9 +232,13 @@ Core grid, profiles, and geometry
        ``jacobian_retries=0``/``--jacobian-retries 0`` for exact VMEC2000
        termination behavior.
    * - ``APHI, PHIEDGE``
-     - implemented
+     - implemented, with a validity gate
      - Toroidal-flux map and edge flux.  Indexed and section assignments use
-       Fortran lower bounds and column-major order.
+       Fortran lower bounds and column-major order.  An ``APHI`` whose flux
+       derivative changes sign inside ``s`` in ``[0, 1]`` (a folded
+       ``s -> Phi`` map) raises a typed input error at setup; VMEC2000
+       accepts such decks and terminates through a written WOUT that can
+       carry NaN residuals or negative pressure.
    * - ``GAMMA, BLOAT, SPRES_PED, PRES_SCALE``
      - implemented
      - Profile/equation-of-state controls used by setup.

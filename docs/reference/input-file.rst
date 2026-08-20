@@ -118,7 +118,15 @@ Multigrid ladder and stepping
      - constraint-force multiplier (spectral condensation)
    * - ``APHI``
      - ``[1, 0, ...]``
-     - radial-flux remap polynomial
+     - radial-flux remap polynomial: ``Phi(x) = sum_i APHI(i)*x**i`` up to
+       the ``torflux(1)`` normalization (``PHIEDGE`` always sets the
+       physical edge flux).  Validity requirement: the derivative
+       ``Phi'(s)`` must not change sign inside ``s`` in ``[0, 1]`` — ``s``
+       is a flux label, and a sign reversal folds the ``s -> Phi`` map.
+       VMEX rejects such decks with a typed input error naming the
+       offending interval (VMEC2000 accepts them and stalls or NaN-marches
+       into a written WOUT without diagnosis).  Tangential zeros and zeros
+       exactly at ``s = 0``/``s = 1`` remain valid.
    * - ``PHIEDGE``
      - 1.0
      - total enclosed toroidal flux [Wb]

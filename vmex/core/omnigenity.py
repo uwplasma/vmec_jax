@@ -68,6 +68,7 @@ Scope notes
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Iterable
 
 import numpy as np
@@ -206,7 +207,32 @@ def _nearest_half_mesh_rows(ns: int, surfaces) -> tuple[np.ndarray, np.ndarray]:
     return s_half, np.asarray(rows, dtype=int)
 
 
-def _boozer_lasym_state(state, rt, *, rows, s_half, mboz, nboz):
+def _refine_booz_grids(constants, grids, oversample, nfp):
+    """booz_xform_jax constants/grids on an ``oversample``-times finer grid.
+
+    ``prepare_booz_xform_constants`` pins the angle-transform quadrature at
+    ``2*(2*mboz+1)`` by ``2*(2*nboz+1)`` points, but the transform reads the
+    counts back off ``constants`` for its Fourier normalization, so an integer
+    refinement of the flattened ``(theta, zeta)`` grid is a drop-in — the same
+    aliasing control the symmetric lane gets from its zero-padded FFT grid.
+    """
+    factor = int(oversample)
+    if factor == 1:
+        return constants, grids
+    ntheta = factor * int(constants.ntheta)
+    nzeta = factor * int(constants.nzeta) if int(constants.nzeta) > 1 else 1
+    theta = 2.0 * np.pi * np.arange(ntheta) / ntheta
+    zeta = 2.0 * np.pi * np.arange(nzeta) / (nzeta * int(nfp))
+    return (
+        dataclasses.replace(constants, ntheta=ntheta, nzeta=nzeta,
+                            nu2_b=ntheta // 2 + 1),
+        dataclasses.replace(grids,
+                            theta_grid=jnp.asarray(np.repeat(theta, nzeta)),
+                            zeta_grid=jnp.asarray(np.tile(zeta, ntheta))),
+    )
+
+
+def _boozer_lasym_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
     """LASYM state tables through booz_xform_jax's validated full transform."""
     from booz_xform_jax.jax_api import (
         booz_xform_jax_impl,
@@ -226,6 +252,8 @@ def _boozer_lasym_state(state, rt, *, rows, s_half, mboz, nboz):
         constants, grids = prepare_booz_xform_constants(
             nfp=int(rt.resolution.nfp), mboz=int(mboz), nboz=int(nboz),
             asym=True, xm=xm, xn=xn, xm_nyq=xm, xn_nyq=xn)
+        constants, grids = _refine_booz_grids(
+            constants, grids, oversample, rt.resolution.nfp)
         xm_b = np.asarray(grids.xm_b, dtype=float)
         xn_b = np.asarray(grids.xn_b, dtype=float)
     out = booz_xform_jax_impl(
@@ -276,7 +304,9 @@ def boozer_bmnc_state(
     outputs align with ``surfaces``).  ``oversample`` refines the quadrature
     grid by trigonometric (FFT zero-pad) interpolation before the Boozer
     angle transform, reducing the aliasing of ``cos(m theta_B - n zeta_B)``
-    products; ``mboz``/``nboz`` are capped at the fine grid's Nyquist.
+    products; ``mboz``/``nboz`` are capped at the fine grid's Nyquist.  LASYM
+    states run through booz_xform_jax's full transform, where the same factor
+    refines that code's own ``(theta, zeta)`` quadrature grid.
 
     Returns ``{bmnc_b (nsurf, nmodes), xm_b, xn_b (physical), iota_b, G_b,
     I_b, nfp, s_b, psi_b, psi_edge}``; ``psi_b`` and ``psi_edge`` are the
@@ -299,7 +329,8 @@ def boozer_bmnc_state(
     s_half_np, rows = _nearest_half_mesh_rows(ns, surfaces)
     if bool(setup.lasym):
         return _boozer_lasym_state(
-            state, rt, rows=rows, s_half=s_half_np, mboz=mboz, nboz=nboz)
+            state, rt, rows=rows, s_half=s_half_np, mboz=mboz, nboz=nboz,
+            oversample=oversample)
 
     # -- half-mesh field tables (the QS-residual field chain) ----------------
     _, geometry = _geometry(state, rt)
