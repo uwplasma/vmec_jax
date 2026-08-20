@@ -186,7 +186,7 @@ The defaults are exact implicit derivatives, automatic Jacobian direction, one-c
 - `implicit_jacobian_method` and `jacobian_batch_size` for response assembly and memory/compile tradeoffs;
 - `forward_ftol` and `forward_max_iterations` for the final forward-solve stage;
 - `max_fsq_ratio` for the largest under-converged `FSQ / ftol` that may be differentiated;
-- `workers` for parallel finite differences, scans, and ensembles. `None` uses the CPUs available to the process and respects scheduler or container limits.
+- `workers` for parallel finite differences, scans, and ensembles. `None` uses the CPUs available to the process and respects scheduler limits.
 
 `problem.value_and_grad` and `problem.jax_value_and_grad` expose the same scalar contract. `problem.evaluate(x)` reports solve effort, failed trials, derivative fallbacks, `fsq`, `fsq_ratio`, and whether the implicit derivative was certified. The runnable examples show SciPy least squares, BFGS/L-BFGS-B, JAXopt, Optax Adam, QI/QS objectives, high-accuracy final solves, input/wout output, and plotting.
 
