@@ -742,6 +742,62 @@ def test_lasym_delta_rotation_traceable():
     assert np.all(np.isfinite(np.asarray(g)))
 
 
+def test_lasym_delta_rotation_jacobian_at_zero_delta():
+    """The rotation Jacobian is exact where ``delta == 0``.
+
+    ``readin.f`` skips the rotation loop when ``delta`` vanishes, where
+    ``cos(0)/sin(0)`` already make it the identity, so matching the value
+    there says nothing about the derivative.  A deck with
+    ``RBS(0, 1) == ZBC(0, 1)`` sits on that point and still carries a rank-one
+    ``m*(partner)*d(delta)`` term along ``RBS(0, 1) - ZBC(0, 1)``.  Both
+    shipped LASYM decks have ``delta != 0``, so this one is built on the spot.
+    """
+    from vmex.core import setup as setup_mod
+
+    inp = VmecInput.from_file(str(DATA_DIR / "input.up_down_asymmetric_tokamak"))
+    cfg = im.make_config(inp, ftol=1e-12, max_iterations=10)
+    mpol, ntor = int(inp.mpol), int(inp.ntor)
+    rbc = np.asarray(inp.rbc, dtype=float)
+    zbc = np.asarray(inp.zbc, dtype=float)
+    zbs = np.asarray(inp.zbs, dtype=float)
+    rbs = np.asarray(inp.rbs, dtype=float).copy()
+    rbs[ntor, 1] = zbc[ntor, 1]  # put the reference exactly on delta == 0
+    denom0 = abs(rbc[ntor, 1]) + abs(zbs[ntor, 1])
+    assert denom0 > 0.0
+    assert float(np.arctan((rbs[ntor, 1] - zbc[ntor, 1]) / denom0)) == 0.0
+    inp = dataclasses.replace(inp, rbs=rbs)
+    cfg = dataclasses.replace(cfg, inp=inp)
+
+    def traceable(rbs_a, zbc_a):
+        out = im._lasym_delta_rotation_traceable(
+            jnp.asarray(rbc), rbs_a, zbc_a, jnp.asarray(zbs),
+            cfg, mpol=mpol, ntor=ntor)
+        return jnp.concatenate([jnp.ravel(a) for a in out])
+
+    def reference(rbs_a, zbc_a):
+        out = setup_mod._lasym_delta_rotation(
+            rbc, np.asarray(rbs_a), np.asarray(zbc_a), zbs, mpol=mpol, ntor=ntor)
+        return np.concatenate([np.ravel(np.asarray(a)) for a in out])
+
+    # Value agreement is necessary but not sufficient, so check it and then
+    # the derivative along the antisymmetric channel.
+    np.testing.assert_allclose(
+        np.asarray(traceable(jnp.asarray(rbs), jnp.asarray(zbc))),
+        reference(rbs, zbc), rtol=0.0, atol=1e-12)
+
+    direction = np.zeros_like(rbs)
+    direction[ntor, 1] = 1.0
+    _, jvp = jax.jvp(traceable, (jnp.asarray(rbs), jnp.asarray(zbc)),
+                     (jnp.asarray(direction), jnp.asarray(-direction)))
+    h = 1e-6
+    fd = (reference(rbs + h * direction, zbc - h * direction)
+          - reference(rbs - h * direction, zbc + h * direction)) / (2.0 * h)
+    scale = max(float(np.max(np.abs(fd))), 1e-30)
+    err = float(np.max(np.abs(np.asarray(jvp) - fd))) / scale
+    assert scale > 1e-3, f"the probe direction must move the rotation: {scale:.2e}"
+    assert err <= 1e-7, f"delta-rotation Jacobian on RBS(0,1)-ZBC(0,1): {err:.2e}"
+
+
 def test_lasym_runtime_from_params_matches_run_setup(lasym):
     """The lasym traceable map reproduces ``prepare_runtime`` at the base
     parameters (all four boundary families, rcon0/zcon0)."""

@@ -113,4 +113,4 @@ The accepted optimization state hot-starts the high-resolution solve and avoids 
 
 ## Shared and HPC machines
 
-Leave `workers=None` to use the CPUs visible to the process; VMEX respects scheduler and container affinity. Set an explicit smaller value when sharing a node. One equilibrium already uses XLA threading, while `parallel.solve_ensemble` and finite-difference probes parallelize independent solves. Select accelerators with `device=` and follow {doc}`run-on-gpu`.
+Leave `workers=None` to use the CPUs visible to the process; VMEX respects scheduler affinity. Set an explicit smaller value when sharing a node. One equilibrium already uses XLA threading, while `parallel.solve_ensemble` and finite-difference probes parallelize independent solves. Select accelerators with `device=` and follow {doc}`run-on-gpu`.
