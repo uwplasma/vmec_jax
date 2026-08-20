@@ -140,9 +140,15 @@ def test_lasym_boozer_spectra_and_qi_derivative(lasym_eq):
     """LASYM cosine/sine spectra retain host parity and an FD-checked JVP."""
     host = opt.boozer_modes_from_wout(
         lasym_eq, surfaces=[0.53], mboz=6, nboz=6)
+    # Matched quadrature: the host runs booz_xform on its own unrefined
+    # 2*(2*mboz+1) x 2*(2*nboz+1) grid, so compare at oversample=1.  With the
+    # full Nyquist projection in boozer_input_tables the two routes agree to a
+    # measured 1.06e-5 (bmnc_b) / 1.03e-4 (bmns_b) relative L2; the tolerances
+    # below keep ~10x margin.
     trace = omn.boozer_bmnc_state(
-        lasym_eq.state, lasym_eq.runtime, surfaces=[0.53], mboz=6, nboz=6)
-    for name, tolerance in (("bmnc_b", 0.02), ("bmns_b", 0.03)):
+        lasym_eq.state, lasym_eq.runtime, surfaces=[0.53], mboz=6, nboz=6,
+        oversample=1)
+    for name, tolerance in (("bmnc_b", 1.1e-4), ("bmns_b", 1.1e-3)):
         actual, expected = np.asarray(trace[name]), np.asarray(host[name])
         error = np.linalg.norm(actual - expected) / np.linalg.norm(expected)
         assert error < tolerance
