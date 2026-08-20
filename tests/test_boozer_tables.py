@@ -196,6 +196,53 @@ def test_lasym_tables_match_the_wout_asymmetric_families(lasym_solved):
                                    err_msg=key)
 
 
+@pytest.mark.parametrize("deck", ["symmetric_eq", "lasym_solved"])
+def test_projection_closes_at_the_grid_nyquist_band(deck, request):
+    """The mode set reaches the grid Nyquist, with the self-conjugate weight.
+
+    ``wrout.f`` sizes the wout Nyquist table from the grid itself
+    (``mnyq = ntheta1/2``, ``nnyq = nzeta/2``) and halves the closing
+    ``cosmui``/``cosnv`` column, because on an even grid that row and column
+    are self-conjugate: ``(m, n)`` and ``(m, -n)`` share a single grid basis
+    function.  Stopping one mode short of it leaves every surviving mode
+    exact, so the loss is silent: on ``input.basic_non_stellsym_simsopt``
+    (ntheta = nzeta = 10) it is 2.5% of ``bmnc`` and 2.6% of ``bmns`` in
+    relative L2.
+    """
+    eq = request.getfixturevalue(deck)
+    wout, res = eq.wout, eq.runtime.resolution
+    nfp, mnyq, nnyq = int(res.nfp), res.ntheta1 // 2, res.nzeta // 2
+    j = int(np.asarray(wout.iotas).shape[0]) // 2
+    tables = boozer_input_tables(eq.state, eq.runtime, j)
+    xm = np.asarray(tables["xm"], dtype=int)
+    xn = np.asarray(tables["xn"], dtype=int)
+
+    # the projection carries exactly the wout Nyquist mode table
+    assert (xm.max(), np.abs(xn).max()) == (mnyq, nnyq * nfp)
+    assert set(zip(xm.tolist(), xn.tolist())) == set(
+        zip(np.asarray(wout.xm_nyq, dtype=int).tolist(),
+            np.asarray(wout.xn_nyq, dtype=int).tolist()))
+
+    # ... and the band the old m/n limits dropped matches the wout row exactly
+    band = (xm > mnyq - 1) | (np.abs(xn) > max(nnyq - 1, 0) * nfp)
+    assert band.any()
+    for key, wout_arr in (("bmnc", wout.bmnc), ("bmns", wout.bmns)):
+        if wout_arr is None:
+            continue
+        ref, mask = _match_wout_row(wout.xm_nyq, wout.xn_nyq, wout_arr, j, xm, xn)
+        atol = 1e-13 * float(np.max(np.abs(ref[mask])))
+        assert np.max(np.abs(ref[band])) > 1e3 * atol   # the band is not noise
+        np.testing.assert_allclose(np.asarray(tables[key])[band], ref[band],
+                                   rtol=0.0, atol=atol, err_msg=key)
+
+    # Both angles fold on the self-conjugate corners, which are real on the
+    # grid: their sine partners must be exact zeros, not sin(pi*i) round-off.
+    if wout.bmns is not None:
+        corner = np.isin(xm, [0, mnyq]) & np.isin(np.abs(xn), [0, nnyq * nfp])
+        assert corner.sum() >= 4
+        np.testing.assert_array_equal(np.asarray(tables["bmns"])[corner], 0.0)
+
+
 def _synthesize(cos_table, sin_table, xm, xn, nfp, n_angles=64):
     """Field on a periodic (theta, zeta) grid from a cos/sin mode table."""
     angles = np.linspace(0.0, 2.0 * np.pi, n_angles, endpoint=False)
@@ -307,3 +354,20 @@ def test_tables_are_jittable(solved):
     # jit-vs-eager reassociation noise only
     np.testing.assert_allclose(got, np.asarray(tables["bmnc"]), rtol=1e-6,
                                atol=1e-14)
+
+
+def test_refine_booz_grids_is_the_identity_at_oversample_one():
+    """``oversample = 1`` returns the transform's own grid untouched.
+
+    The refinement multiplies ``booz_xform_jax``'s pinned
+    ``2*(2*mboz+1)`` by ``2*(2*nboz+1)`` quadrature, so asking for no
+    refinement has to hand back the very same constants and grids rather than
+    rebuild an equivalent pair -- the transform reads its Fourier
+    normalization back off those counts.
+    """
+    from vmex.core.omnigenity import _refine_booz_grids
+
+    constants, grids = object(), object()
+    same_constants, same_grids = _refine_booz_grids(constants, grids, 1, 3)
+    assert same_constants is constants
+    assert same_grids is grids
