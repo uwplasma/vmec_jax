@@ -250,3 +250,53 @@ def test_boundary_schur_current_gradient_matches_resolve_finite_difference():
     finite_difference = (values[1] - values[0]) / (2.0 * step)
     np.testing.assert_allclose(
         derivative, finite_difference, rtol=5.0e-2, atol=3.0e-4)
+
+
+def test_presf_ns_scale_is_differentiated_in_the_adjoint_lanes():
+    """``presf_ns_scale`` tracks ``am``; the adjoint lanes may not freeze it.
+
+    ``funct3d.f``'s edge force carries ``presf_ns_scale * pressure[-1]``, and
+    the ratio ``pmass(1)/pmass(hs*(ns-1.5))`` is a smooth function of ``am``,
+    which is a differentiated parameter.  Taking the host float computed from
+    the reference input gives the right value at the reference point and no
+    derivative at all -- the same failure mode as the frozen lasym ``delta``
+    branch, and invisible to any check that compares the traceable lane with
+    itself.  This deck is ``power_series`` with a live derivative; a
+    ``two_power`` deck has ``p(1) = 0`` and could not show it.
+    """
+    from vmex.core.freeboundary import (
+        _presf_ns_scale, _presf_ns_scale_traceable,
+    )
+
+    inp, ns = lasym_free_input(DATA), 9
+    assert inp.pmass_type == "power_series"
+    params = im.params_from_input(inp)
+    host = _presf_ns_scale(inp, ns)
+    np.testing.assert_allclose(
+        float(_presf_ns_scale_traceable(params, inp, ns)), host,
+        rtol=1e-14, atol=0.0)
+
+    am = np.asarray(inp.am, dtype=float)
+    active = int(np.max(np.nonzero(am)[0])) + 1
+    grad = jax.grad(lambda p: _presf_ns_scale_traceable(p, inp, ns))(params)
+    analytic = np.asarray(grad.am, dtype=float)[:active]
+
+    def shifted(k, delta):
+        return dataclasses.replace(
+            inp, am=np.where(np.arange(am.size) == k, am + delta, am))
+
+    finite = np.empty(active)
+    for k in range(active):
+        step = 1.0e-6 * max(abs(am[k]), 1.0)
+        finite[k] = (_presf_ns_scale(shifted(k, step), ns)
+                     - _presf_ns_scale(shifted(k, -step), ns)) / (2.0 * step)
+
+    # The frozen host float reported exactly zero for all of these, so the
+    # tolerance only has to separate a live derivative from a missing one.
+    # This deck's am coefficients reach 5e7 against a ratio of 0.32, which
+    # caps central differences on the host float at a few times 1e-4.
+    assert np.max(np.abs(finite)) > 1e-6, f"probe is degenerate: {finite}"
+    np.testing.assert_allclose(analytic, finite, rtol=1e-3, atol=0.0)
+
+    # pres_scale cancels in the ratio, so its derivative is genuinely zero.
+    assert float(np.asarray(grad.pres_scale)) == 0.0
