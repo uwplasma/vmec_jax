@@ -22,9 +22,10 @@ from typing import Any
 import jax
 import numpy as np
 
-from vmex.core.errors import VmecError
+from vmex.core.errors import VmecError, VmecInputError
 from vmex.core.geometry import half_mesh_jacobian
 from vmex.core.input import UnsupportedInputModeError, VmecInput
+from vmex.core.setup import validate_torflux_monotone
 from vmex.core.solver import (
     _geometry,
     _initial_state,
@@ -98,6 +99,19 @@ def diagnose(path: Path, *, details: bool = False) -> int:
         return 1
 
     print("input parsing: PASS")
+
+    # Validity gate the solver enforces at setup (VmecInputError): an APHI
+    # whose flux derivative reverses sign folds the s -> Phi map.  Value-free
+    # by default; the offending interval is input-derived, so --details only.
+    try:
+        validate_torflux_monotone(np.asarray(inp.aphi, dtype=float))
+    except VmecInputError as exc:
+        print("toroidal-flux map monotonic: FAIL")
+        print("assessment: D00L_NONMONOTONIC_TORFLUX_MAP")
+        if details:
+            print(f"local detail: {exc.message}")
+        return 1
+    print("toroidal-flux map monotonic: PASS")
 
     rt = prepare_runtime(inp)
     theta_floor = 2 * int(inp.mpol) + 6
