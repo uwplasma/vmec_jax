@@ -167,3 +167,9 @@ linkcheck_ignore = [
     r"https://github\.com/uwplasma/VMEX/blob/main/.*",
 ]
 linkcheck_timeout = 30
+# github.com aborts a share of a runner's concurrent probes outright
+# ("RemoteDisconnected") rather than answering 429, so
+# linkcheck_rate_limit_timeout never engages. Fewer parallel probes and a retry
+# clear that without hiding a genuinely dead link.
+linkcheck_workers = 2
+linkcheck_retries = 3
