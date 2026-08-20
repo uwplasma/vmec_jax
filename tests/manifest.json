@@ -106,6 +106,18 @@
   },
   "selectors": {
     "pr-physics-core": [
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[empty]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[negative]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[multi]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[identity]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[scale]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[zero_at_axis]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[zero_at_edge]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[zero_both_ends]",
+      "tests/test_aphi_flux_normalization.py::test_monotone_and_tangential_flux_maps_are_valid[tangential]",
+      "tests/test_aphi_flux_normalization.py::test_sign_reversing_flux_map_raises_with_exact_interval[reversing]",
+      "tests/test_aphi_flux_normalization.py::test_sign_reversing_flux_map_raises_with_exact_interval[merged_window]",
+      "tests/test_aphi_flux_normalization.py::test_sign_reversing_deck_fails_lawfully_through_the_cli",
       "tests/test_solver_end_to_end.py::test_converges_with_golden_iteration_count[solovev]",
       "tests/test_near_degenerate_vacuum.py::test_current_free_vacuum_nonconvergence_suggests_lforbal",
       "tests/test_multigrid_ladder.py::test_initial_bad_jacobian_retries_once_through_ns3",
