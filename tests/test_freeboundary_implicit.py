@@ -80,8 +80,14 @@ def test_free_boundary_warm_failure_retries_once_from_cold(monkeypatch):
                                     max_iterations=20)
     runtime = im._template_runtime(cfg.implicit)
     state = im._initial_state(runtime.setup)
-    seed = object(); fbi._FREE_HOT_CACHE[cfg] = seed
-    fbi._FREE_MASK_CACHE[fbi._mask_key(cfg)] = jax.tree.map(jnp.zeros_like, state)
+    # These are module-level caches keyed on (resolution, lconm1, ncurr), so
+    # monkeypatch.setitem restores both entries at teardown; a bare assignment
+    # would hand the all-zero mask to the next free-boundary case sharing that
+    # key, which reaches the Schur lane as an edge basis with no columns.
+    seed = object()
+    monkeypatch.setitem(fbi._FREE_HOT_CACHE, cfg, seed)
+    monkeypatch.setitem(fbi._FREE_MASK_CACHE, fbi._mask_key(cfg),
+                        jax.tree.map(jnp.zeros_like, state))
     calls = []
 
     def solve(*_args, initial_state=None, **_kwargs):
