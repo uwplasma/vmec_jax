@@ -76,7 +76,9 @@ one dated log entry; do not rely on chat history.
   next software release and the latest release without deleting provenance assets.
 - Current dependency releases: ESSOS 0.16, virtual_casing_jax 0.0.5, NEO_JAX 1.0.2,
   SOLVAX 0.12.0, and booz_xform_jax 0.1.1. ESSOS #58 and #61 are green but open, so their code
-  is not a released dependency and must not be described as complete.
+  is not a released dependency and must not be described as complete. They require independent
+  ESSOS maintainer review and merge; VMEX contributors do not merge them, and they are scheduled
+  last rather than blocking VMEX 0.6.0.
 
 Resume in this order: read this checkpoint and the newest log entry; inspect both worktrees;
 run the focused Phase 22 tests; complete the degraded-LASYM exactness gate; publish the focused
@@ -645,12 +647,13 @@ and traceable `l_grad_b_state` (`statephysics.py`), both symmetric-only.
 ```
 DONE: P0, most of P1, P5a/P5d, P12, and the ten post-#123 merges
 NOW:  P22 exact contract -> P25 CI runtime -> P24 release-blocking audit debts
-      -> ESSOS #58/#61 review + 0.17 release -> P23 VMEX 0.6.0
+      -> P23 VMEX 0.6.0 against released dependencies
 NEXT: P3/P3b boundary-Schur speed + exact certificates -> P4 public free-boundary API
       P11 virtual-casing memory (sibling first) -> P13 single-stage matrix
       P5b/P5c LASYM completion -> P6/P7 ripple + NEO speed -> P21 loss fraction
 THEN: P8 performance/parity matrix, P14/P16-P19 physics, P15/P26 ownership moves
 LAST: P10 slimming/history only after ownership settles; P27 final capability audit
+      -> independent ESSOS maintainer review/merge of #58/#61 and ESSOS 0.17
 
 P2 cache policy informs graph-size work but is not the Jacobian-stall fix.
 P9 coverage/runtime ratchets continuously through P25; do not postpone test design.
@@ -1504,18 +1507,20 @@ exception to the usual “finish or close” policy:
 ### Sibling PRs are in scope only at explicit ownership seams
 
 - ESSOS #58 (reusable coil interfaces) and #61 (in-memory VMEC field plus differentiable loss)
-  are green, open, and unreleased. They are required by P4/P21; review and release them as an
-  ESSOS 0.17 dependency before VMEX 0.6.0 claims those interfaces. Do not vendor their code into
-  VMEX and do not pin a release to a mutable branch.
+  are green, open, and unreleased. They require independent ESSOS maintainer review and merge;
+  VMEX contributors do not perform either action. Keep them last in the merge order. VMEX 0.6.0
+  must remain usable against released ESSOS 0.16 and must not claim the new interfaces. Do not
+  vendor their code into VMEX or pin a software release to a mutable branch.
 - virtual_casing_jax, NEO_JAX, booz_xform_jax and SOLVAX own the generic algorithms listed in
   Phase 26. VMEX PRs should contain only equilibrium-specific adapters and physics.
 - STELLOPT #501 is merged and the current `STELLOPT_new` build is the reference. #502 remains an
   upstream hygiene item, not a VMEX release blocker.
 
-Current order: Phase 22 exactness -> Phase 25 CI hardening -> ESSOS #58/#61 review and 0.17
-release -> Phase 23 VMEX 0.6.0 -> Phase 3 boundary-Schur performance -> P4/P21 APIs -> P6/P7
-neoclassical work -> Phase 15/26 code moves -> Phase 10 final slimming. PR #122 and #125 remain
-open throughout.
+Current order: Phase 22 exactness -> Phase 25 CI hardening -> Phase 23 VMEX 0.6.0 -> Phase 3
+boundary-Schur performance -> P4/P21 preparatory APIs -> P6/P7 neoclassical work -> Phase 15/26
+code moves -> Phase 10 final slimming -> independent ESSOS maintainer review/merge of #58/#61
+and ESSOS 0.17. PR #122 and #125 remain open throughout. Any VMEX slice that requires the new
+ESSOS API waits unmerged or stays explicitly development-only until that external release exists.
 - 2026-08-19 claude: P17 — localized the LASYM underperformance to a wrong analytic Jacobian in the n=0 asymmetric m=1 difference channel (16% error); forward map verified correct.
 - 2026-08-19 claude: P17 — root cause is the frozen `delta == 0` branch in `implicit.py::_lasym_delta_rotation_traceable`; fixed, gated, verified end-to-end (1.6e-1 -> 1.6e-7).
 - 2026-08-19 claude: P17 — opened vmex #126 with the delta-rotation fix and its regression gate; #119 is green and queued for merge.
@@ -1698,10 +1703,11 @@ targets `main` with a `(field, particles, ...)` signature, which is the right
 shape for a boundary optimization; reconciling it with the coil-dof signature
 on the working branch is a separate job.
 
-Before marking this item done: independently review #61 against current ESSOS `main`, merge it,
-release it together with the compatible #58 interfaces as ESSOS 0.17, install that release in a
-clean environment, and replace VMEX's nightly git pin with the released version. Green checks on
-an open branch are implementation evidence, not a completed dependency.
+Before marking this item done: an independent ESSOS maintainer reviews and merges #61 against
+current ESSOS `main`, does the same for compatible #58, and publishes ESSOS 0.17. VMEX then
+installs that release in a clean environment and replaces any development-only nightly git pin
+with the released version. VMEX contributors do not self-merge those PRs. Green checks on an open
+branch are implementation evidence, not a completed dependency.
 
 ### 21.2 The traceable field-coefficient gap [TODO]
 
@@ -1874,9 +1880,10 @@ Release gates, in order:
 
 1. Merge the focused Phase 22/25 hardening PR after full CI. Resolve the three audit debts in
    Phase 24 or explicitly list a narrowly justified deferral in the changelog.
-2. Independently review and merge compatible ESSOS #58/#61, release ESSOS 0.17, test it from a
-   clean install, update VMEX's optional dependency floor, and remove the nightly git pin. If
-   either PR is not release-ready, VMEX 0.6 must not advertise or require that unreleased API.
+2. Audit VMEX against released ESSOS 0.16. Remove, defer or clearly development-gate any code,
+   example or documentation that requires open ESSOS #58/#61; VMEX 0.6 must neither advertise
+   nor require those unreleased APIs. Their independent review, merge and ESSOS 0.17 release are
+   deliberately last and are not VMEX 0.6 release gates.
 3. Manually dispatch and pass current Nightly, Weekly and GPU campaigns at the candidate SHA.
    The previous Weekly failed only because of an obsolete asset URL; confirm the current asset
    manifest, do not waive the campaign. Record run URLs and elapsed times in the release log.
@@ -1979,7 +1986,8 @@ coupled certificate in VMEX. Profile CPU correctness before GPU memory/kernel wo
 
 Acceptance: each generic algorithm has one owner and one released implementation; VMEX optional
 dependencies use releases, not mutable branches; cross-repo parity tests protect adapters; moves
-delete more VMEX code than they add.
+delete more VMEX code than they add. ESSOS PR merges are performed only by an independent ESSOS
+maintainer and remain last in the program order.
 
 ## Phase 27 — Final research-grade capability audit [PLANNED, CONTINUOUS]
 
@@ -2102,3 +2110,8 @@ gitignored, and no PR in the queue adds a data file.
   bottlenecks and bounded parallelization, P26's ecosystem ownership, and P27's final capability
   matrix. The implementation remains uncommitted in `rj/release-0.6-hardening`; resume with the
   focused contract tests and degraded-LASYM end-to-end gate before publishing it.
+- 2026-08-21 rogeriojorge: corrected the ESSOS authority and ordering. ESSOS #58/#61 require
+  independent ESSOS maintainer review and merge, remain last in the program order, and do not
+  block VMEX 0.6.0. VMEX 0.6 must work against released ESSOS 0.16 and defer or explicitly
+  development-gate the new interfaces; after an external ESSOS 0.17 release, VMEX can replace
+  any nightly branch pin and publish the compatibility follow-up.
