@@ -94,9 +94,8 @@ one dated log entry; do not rely on chat history.
 
 Resume in this order: read this checkpoint and the newest log entry; inspect PR #131/#132/#133
 checks; require two qualifying remote runs and review before merging #131; retarget and review
-#132, then #133; close the remaining #118 audit debt; and execute the remaining 0.6.0 gates in
-Phase 23. Never infer completion from a local diff, an open sibling PR, or a green
-microbenchmark.
+#132, then #133; and execute the remaining 0.6.0 gates in Phase 23. Never infer completion from
+a local diff, an open sibling PR, or a green microbenchmark.
 
 ## Research-grade completion map
 
@@ -1949,9 +1948,12 @@ All ten PRs had green CI but no GitHub review; green checks are not independent 
   from `8.98e-2` to `5.75e-5`; the independent `ns=101`, `ftol=1e-14` final solve converged in
   3,873 iterations with QS `6.12e-5`, aspect 3.5000, mean iota -0.4340 and magnetic well 0.0687.
   Wall time was 2,299 s (38.3 min). This is manual release evidence, not a CI candidate.
-- #118 needs a genuinely finite-beta LASYM VMEC2000 oracle for `DWell`/Mercier. The vacuum
-  golden validates decomposition and symmetry plumbing but cannot certify pressure-dependent
-  `DWell` physics.
+- #118 is accepted. The merged fixture is not vacuum: it solves at total beta `2.24e-4` with a
+  4.79 kPa peak pressure and `max(abs(DWell)) = 4.58e-5`. Its pinned `DWell`, `DShear`, `DCurr`
+  and `DGeod` arrays come from STELLOPT `v6.5.0-42-g9177f58c`; the live VMEC2000 parity test was
+  rerun against that build in 8.5 seconds, and both pinned decomposition/DMerc gates pass. The
+  earlier vacuum-only assessment had overlooked the fixture's explicit pressure override, so
+  no redundant oracle or data file is needed.
 
 Acceptance: the three named debts have literature/reference-anchored tests or recorded bounded
 campaign evidence; no published history rewrite; Phase 23 explicitly accounts for each.
@@ -2205,5 +2207,10 @@ gitignored, and no PR in the queue adds a data file.
   PR #133 at `31dd34b2`. Its independent cold-resolve certificate is 4.2% from the corrected
   adjoint and fails the former frozen normalization by over 4,000x. Accepted #130 after a fresh
   max-mode-9 QA campaign: final high-resolution QS `6.12e-5`, aspect 3.5000, iota -0.4340,
-  magnetic well 0.0687, 3,873 final iterations and 38.3 minutes wall time. The only remaining
-  named Phase-24 evidence debt is #118's genuinely finite-beta LASYM VMEC2000 DWell oracle.
+  magnetic well 0.0687, 3,873 final iterations and 38.3 minutes wall time.
+- 2026-08-21 rogeriojorge: P24 #118 re-audit — the supposed vacuum-only gap was stale. The
+  merged LASYM fixture explicitly sets pressure and has beta `2.24e-4`, peak pressure 4.79 kPa
+  and `max(abs(DWell)) = 4.58e-5`. The live per-term test passes against current local STELLOPT
+  `v6.5.0-42-g9177f58c` in 8.5 seconds; the pinned decomposition and DMerc tests pass in 8.7
+  seconds. No new asset or proxy is justified. All three named Phase-24 debts now have evidence;
+  #128 remains in review as PR #133.
