@@ -65,17 +65,21 @@ one dated log entry; do not rely on chat history.
   and 28 direct commits. The independent disposition is recorded in Phase 24.
 - The first release worktree is
   `/Users/rogeriojorge/local/vmex-release-0.6-hardening`, branch
-  `rj/release-0.6-hardening`, based on `0362f701`. Commit `0e991596` is published for review as
+  `rj/release-0.6-hardening`, based on `0362f701`. Commit `326ba760` is published for review as
   draft PR #131. It contains the exact implicit-Jacobian contract, CI runtime, 0.6.0 changelog,
-  and release-workflow changes. Its first remote run showed that two-worker JAX contention made
-  the implicit-response lane regress to 16:45, so that lane is serial again; inspect the new PR
-  checks before continuing.
+  and release-workflow changes. Two-worker JAX contention made the original implicit-response
+  lane slower; one serial lane was still too variable, so the unchanged certification set is
+  now split by JAX shape into two serial implicit lanes plus one isolated free-boundary-adjoint
+  lane. The new remote checks are running and are not yet acceptance evidence.
 - `/Users/rogeriojorge/local/vmex-release-0.6-essos-audit`, branch
-  `rj/release-0.6-essos-audit`, is stacked on #131 at `292bcdac` and published as draft PR #132.
+  `rj/release-0.6-essos-audit`, is stacked on #131 at `e977eb20` and published as draft PR #132.
   It preserves the released ESSOS 0.16 contract, explicitly guards nine ESSOS 0.17 previews,
-  removes the unreleased CI pin, and restores the stable coil-fixture schema. Both worktrees are
-  clean. Review and merge #131 first, then retarget #132 to `main`; do not squash the two review
-  scopes together.
+  removes the unreleased CI pin, and restores the stable coil-fixture schema.
+- `/Users/rogeriojorge/local/vmex-release-0.6-presf-audit`, branch
+  `rj/release-0.6-presf-audit`, is stacked on #132 at `31dd34b2` and published as draft PR #133.
+  It adds the missing solved free-boundary pressure-gradient certificate as one approximately
+  79-second weekly test. Review and merge #131 first, retarget/review #132, then retarget/review
+  #133; keep the three scopes separate and do not squash them together.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
   copy of this file is authoritative.
@@ -88,10 +92,11 @@ one dated log entry; do not rely on chat history.
   ESSOS maintainer review and merge; VMEX contributors do not merge them, and they are scheduled
   last rather than blocking VMEX 0.6.0.
 
-Resume in this order: read this checkpoint and the newest log entry; inspect PR #131 and its
-checks; require two qualifying remote runs and review before merge; retarget and review #132,
-then execute the remaining 0.6.0 gates in Phase 23. Never infer completion from a local diff, an
-open sibling PR, or a green microbenchmark.
+Resume in this order: read this checkpoint and the newest log entry; inspect PR #131/#132/#133
+checks; require two qualifying remote runs and review before merging #131; retarget and review
+#132, then #133; close the remaining #118 audit debt; and execute the remaining 0.6.0 gates in
+Phase 23. Never infer completion from a local diff, an open sibling PR, or a green
+microbenchmark.
 
 ## Research-grade completion map
 
@@ -1936,12 +1941,14 @@ All ten PRs had green CI but no GitHub review; green checks are not independent 
 - Accepted as merged after source/diff review: #116, #117, #119, #121, #126 and #127.
 - #129 is acceptable; optionally centralize its cache cleanup in one scoped fixture if another
   cache leak appears. Do not add a broad autouse reset that hides production cache semantics.
-- #128 needs one full end-to-end free-boundary objective gradient with `presf_ns_scale` active.
-  The existing residual-level certificate proves the missing term but not the complete solved
-  objective path.
-- #130's higher-resolution/example schedule needs one bounded full campaign with its output,
-  convergence, wall time and scientific metrics recorded; a configuration change is not itself
-  validation.
+- #128 follow-up is in review as stacked draft PR #133. Its solved free-boundary objective
+  gradient is `1.776e-5` versus `1.705e-5` from independent centered cold resolves (4.2%); the
+  former frozen normalization gives `7.579e-2`, over 4,000 times the resolved derivative. The
+  test passes twice in about 79 seconds and belongs to the bounded weekly adjoint campaign.
+- #130 is accepted after a fresh, bounded full campaign. The max-mode 1--9 QA ladder reduced QS
+  from `8.98e-2` to `5.75e-5`; the independent `ns=101`, `ftol=1e-14` final solve converged in
+  3,873 iterations with QS `6.12e-5`, aspect 3.5000, mean iota -0.4340 and magnetic well 0.0687.
+  Wall time was 2,299 s (38.3 min). This is manual release evidence, not a CI candidate.
 - #118 needs a genuinely finite-beta LASYM VMEC2000 oracle for `DWell`/Mercier. The vacuum
   golden validates decomposition and symmetry plumbing but cannot certify pressure-dependent
   `DWell` physics.
@@ -1959,22 +1966,32 @@ Nightly run 32448443577 completed successfully; its bounded example job took 17:
 outside-field (278 s), gradB (262 s), finite-beta single stage (217 s), fixed single stage
 (190 s), finite-beta tracing (74 s) and vacuum tracing (58 s).
 
-Local changes use `pytest -n 2` for core and field-API lanes while keeping implicit-response and
-the mirror lanes serial; six independent nightly examples also use two workers. The PR-lane
+Local changes use `pytest -n 2` for core and field-API lanes while keeping JAX-heavy implicit
+and mirror lanes serial; six independent nightly examples also use two workers. The PR-lane
 Schur/coupled test uses a real LASYM DIII-D case at `mpol=10, ntheta=30`; local scans showed
 `mpol=4` invalid and `mpol=8` missed the 2% physics gate by 2.896%, while `mpol=10` passed and
 reduced this test from the remote 791 s baseline to 127.6 s. The full high-resolution FD
 certificate remains nightly. No assertion or tolerance was removed.
 
-Local full-lane results on PR #131 are core 3:57 (96 tests), implicit response 6:43 (59 tests),
-and field API 2:29 (64 tests, run against released ESSOS 0.16). These are evidence for the
-scheduling change, not completion: the acceptance criterion still requires two consecutive
-remote runs within budget.
+The final manifest preserves every selected physics test while separating incompatible compile
+shapes: core is 95 tests in 2:57 locally, implicit-A is 9 in 3:22, implicit-B is 15 in 3:53, and
+the isolated free-boundary adjoint is 1 in 1:19. Field API remains 64 tests in 2:29 against
+released ESSOS 0.16. Two fast certificate-policy tests were added to implicit-B so changed-line
+coverage is exercised by a selected physics job. These are evidence for the scheduling change,
+not completion: the acceptance criterion still requires two consecutive remote runs within
+budget.
 
 The first remote run at `b4a68570` was diagnostic, not qualifying: field API improved to 8:54,
 but implicit response regressed from the 12:46 baseline to 16:45 because two GitHub-runner
 workers contended while compiling JAX programs. Commit `0e991596` therefore restores that lane
 to serial execution. Do not count the diagnostic run toward the two-run acceptance criterion.
+
+The serial replacement at `0e991596` measured core 15:03, field 8:50 and implicit 14:55, but its
+changed-line gate failed because four already-passing certificate-policy lines were absent from
+the selected physics manifest. The stacked #132 run measured core 13:48 and implicit 19:16,
+showing that one large serial JAX lane still had unacceptable variance. Commit `326ba760`
+therefore adds the two policy tests to the selected set and shards the unchanged long contract
+by compile shape; its fresh remote runs are pending. Neither prior run qualifies.
 
 Required before merge:
 
@@ -2178,3 +2195,15 @@ gitignored, and no PR in the queue adds a data file.
   loaders in about 21 s. Nine 0.17-only examples are now explicit previews, and release CI no
   longer installs an unreleased ESSOS commit. #58/#61 remain external, independently reviewed,
   and last.
+- 2026-08-21 rogeriojorge: P25 — replaced the variable 14:55--19:16 monolithic implicit lane
+  with two serial compile-shape lanes and an isolated free-boundary-adjoint lane in `326ba760`.
+  The exact selected contract is preserved and two fast policy tests now cover the previously
+  missed changed lines. Local timings are core 2:57, implicit-A 3:22, implicit-B 3:53 and the
+  free-boundary adjoint 1:19; the new remote runs are pending and two qualifying runs remain
+  mandatory.
+- 2026-08-21 rogeriojorge: P24 — published the #128 solved-gradient follow-up as stacked draft
+  PR #133 at `31dd34b2`. Its independent cold-resolve certificate is 4.2% from the corrected
+  adjoint and fails the former frozen normalization by over 4,000x. Accepted #130 after a fresh
+  max-mode-9 QA campaign: final high-resolution QS `6.12e-5`, aspect 3.5000, iota -0.4340,
+  magnetic well 0.0687, 3,873 final iterations and 38.3 minutes wall time. The only remaining
+  named Phase-24 evidence debt is #118's genuinely finite-beta LASYM VMEC2000 DWell oracle.
