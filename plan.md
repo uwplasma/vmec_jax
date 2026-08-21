@@ -1891,7 +1891,17 @@ Release gates, in order:
 2. Audit VMEX against released ESSOS 0.16. Remove, defer or clearly development-gate any code,
    example or documentation that requires open ESSOS #58/#61; VMEX 0.6 must neither advertise
    nor require those unreleased APIs. Their independent review, merge and ESSOS 0.17 release are
-   deliberately last and are not VMEX 0.6 release gates.
+   deliberately last and are not VMEX 0.6 release gates. The 2026-08-21 audit found nine
+   development-only scripts: both `vmex_fieldline_tracing_*` examples; the fixed- and
+   free-boundary `single_stage_optimization*` vacuum/finite-beta examples;
+   `vmex_get_B_outside_plasma.py`, `vmex_fixed_free_boundary_comparison.py`, and
+   `take_free_boundary_gradients.py`. They use `Coils.from_json/with_dofs/dof_names`, ESSOS
+   distance objectives, `surfacerzfourier_from_boundary`, or the new tracing helpers, none of
+   which is in released 0.16. Keep the release-compatible `free_boundary_essos_coils.py`, mirror
+   construction, CLI tabulation and VMEX/VC contracts. In the release follow-up, give the nine
+   scripts an explicit development guard, remove their stable README/API claims, and stop using
+   the unreleased ESSOS commit in the release-candidate Nightly. Do not duplicate these helpers
+   in VMEX. Restore the stable examples after an independent ESSOS 0.17 release.
 3. Manually dispatch and pass current Nightly, Weekly and GPU campaigns at the candidate SHA.
    The previous Weekly failed only because of an obsolete asset URL; confirm the current asset
    manifest, do not waive the campaign. Record run URLs and elapsed times in the release log.
@@ -2136,3 +2146,9 @@ gitignored, and no PR in the queue adds a data file.
   Released ESSOS 0.16 passes VMEX's core coil/CLI/VC contracts. PR #131 remote CI/review and the
   Phase 23 ESSOS-facing example audit are next; #122/#125 stay open, and ESSOS #58/#61 stay last
   for independent ESSOS maintainer action.
+- 2026-08-21 rogeriojorge: P23.2 audit — released ESSOS 0.16 passes the VMEX core coil/CLI/VC
+  contracts, but nine shipped examples use APIs available only in open ESSOS #58. The exact
+  inventory and release treatment are now in P23.2: development-gate those scripts, remove them
+  from stable 0.6 claims/Nightly, retain the released 0.16 examples, and never vendor the missing
+  ESSOS functionality into VMEX. This is the next small PR after #131; ESSOS review/merge remains
+  external and last.
