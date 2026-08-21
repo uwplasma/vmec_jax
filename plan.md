@@ -65,9 +65,9 @@ one dated log entry; do not rely on chat history.
   and 28 direct commits. The independent disposition is recorded in Phase 24.
 - The next implementation worktree is
   `/Users/rogeriojorge/local/vmex-release-0.6-hardening`, branch
-  `rj/release-0.6-hardening`, based on `0362f701`. It contains **uncommitted, unpushed** changes
-  for the exact implicit-Jacobian contract, CI runtime, 0.6.0 changelog, and release workflow;
-  inspect its status and diff before continuing. Phase 22 is the exact file/test inventory.
+  `rj/release-0.6-hardening`, based on `0362f701`. Commit `b4a68570` is published for review as
+  draft PR #131. It contains the exact implicit-Jacobian contract, CI runtime, 0.6.0 changelog,
+  and release-workflow changes. The worktree is clean; inspect PR checks before continuing.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
   copy of this file is authoritative.
@@ -80,10 +80,10 @@ one dated log entry; do not rely on chat history.
   ESSOS maintainer review and merge; VMEX contributors do not merge them, and they are scheduled
   last rather than blocking VMEX 0.6.0.
 
-Resume in this order: read this checkpoint and the newest log entry; inspect both worktrees;
-run the focused Phase 22 tests; complete the degraded-LASYM exactness gate; publish the focused
-hardening PR; then execute the 0.6.0 gates in Phase 23. Never infer completion from a local diff,
-an open sibling PR, or a green microbenchmark.
+Resume in this order: read this checkpoint and the newest log entry; inspect PR #131 and its
+checks; obtain review and merge only after full remote CI; audit every shipped ESSOS-facing
+example against released ESSOS 0.16; then execute the remaining 0.6.0 gates in Phase 23. Never
+infer completion from a local diff, an open sibling PR, or a green microbenchmark.
 
 ## Research-grade completion map
 
@@ -1803,7 +1803,7 @@ the ARIES-CS baseline for a case with substantial losses. Compare the ordering
 of loss fractions between two such configurations rather than an absolute
 number, which depends on the tracing model and particle count.
 
-## Phase 22 — Exact implicit-Jacobian contract [DOING; local, uncommitted]
+## Phase 22 — Exact implicit-Jacobian contract [IN REVIEW — draft PR #131]
 
 **Contract.** “Exact implicit derivatives” means VMEX returns a derivative certified at the
 current parameter point against the true linearized equilibrium residual. A fast response that
@@ -1828,12 +1828,12 @@ The worktree named in the current checkpoint contains these deliberate changes:
   `docs/explanation/adjoint-gradients.md` say “certified,” document automatic fallback and
   distinguish forced advanced lanes.
 - Touched implementation/tests: `vmex/core/{optimize,implicit}.py` and
-  `tests/test_optimize.py`. These changes are not complete or published until 22.2 passes.
+  `tests/test_optimize.py`. The implementation is published in draft PR #131 and is not complete
+  until remote CI and review pass.
 
-One remaining code-level gap must be closed before publication: the generic exception branch in
-`jac_fn` may return `holder["last_jac"]` from a different `x`. Restrict reuse to an identical
-`last_jac_key` (memoization) or raise the original typed error; never call a stale derivative
-exact. Preserve `failure_jacobian(x)` only for the explicit rejected-trial penalty contract.
+The stale-key gap is closed in `b4a68570`: generic derivative failures reuse a memoized Jacobian
+only when `last_jac_key` is the identical decision vector; a new point raises the original error.
+Rejected equilibrium trials retain only the exact derivative of their documented smooth penalty.
 
 ### 22.2 Required tests and decisions
 
@@ -1847,7 +1847,12 @@ exact. Preserve `failure_jacobian(x)` only for the explicit rejected-trial penal
 3. Add the decisive end-to-end degraded LASYM QA gate at the captured hard iterate: compare
    automatic fallback against explicit reverse for the matrix and one optimizer step; assert
    no uncertified/stale derivative is returned, the cost descends, and the bounded test finishes
-   within the documented budget. This is the evidence the earlier microbenchmarks lacked.
+   within the documented budget. The production LASYM case now completes six evaluations in
+   125 s (cost 21.70 -> 2.03; warm Jacobians 1.3-2.5 s) and all responses certify directly. An
+   intentionally impossible `1e-16`, one-restart stress did trigger all 48 columns and the
+   correct reverse-fallback warning, but its reverse graph exceeded the 4:53 diagnostic budget
+   and was terminated. Do not add that artificial long case to PR CI. If a naturally degraded
+   iterate recurs, retain it as the bounded same-point matrix/step comparison described here.
 4. Test the scalar contracts across a compact matrix: symmetric/LASYM, vacuum/finite beta,
    fixed/free boundary, scalar objective and residual-vector objective. Compare
    `jax_value_and_grad`, `0.5*r@r` with `J.T@r`, directional central differences at a converged
@@ -1857,11 +1862,14 @@ exact. Preserve `failure_jacobian(x)` only for the explicit rejected-trial penal
    linear algebra when their complexity differs. A single API is desirable; forcing every
    optimizer through one computational graph is not a goal.
 
-Focused tests already run on the local diff: Schur/coupled comparison passed in 127.6 s,
-block-response transpose/FD passed in 147.4 s, least-squares block comparison passed in 113.8 s,
-and the certifier-evidence unit test passed in 0.42 s. Ruff, mypy (66 source files), docs prose,
-package build, manifest validation (97 modules, 1332 tests, 14 campaigns), and `git diff --check`
-passed. A raw-operator, block-preconditioned GCROT replacement was tried and reverted because its
+Current PR #131 evidence: Schur/coupled comparison passed in 87.49 s; block-response
+transpose/FD passed in 159.45 s; least-squares policy/physics comparison passed; and the normal
+48-variable LASYM optimization completed as described above. Full local lanes passed: core 96
+tests in 3:57, implicit response 59 in 6:43, and field API 64 in 2:29. Changed executable-line
+coverage is 97.6%. Ruff, mypy (66 source files), docs prose, Sphinx `-W`, package build, workflow
+YAML, manifest validation (97 modules, 1334 tests, 14 campaigns), and `git diff --check` passed.
+Released ESSOS 0.16 passed the core coil/CLI and virtual-casing contracts (5 passed, one optional
+skip). A raw-operator, block-preconditioned GCROT replacement was tried and reverted because its
 internal success status still left a 5.16e-5 transpose-identity error; any future Krylov change
 must certify the explicit true raw residual rather than trust solver status.
 
@@ -1921,7 +1929,7 @@ All ten PRs had green CI but no GitHub review; green checks are not independent 
 Acceptance: the three named debts have literature/reference-anchored tests or recorded bounded
 campaign evidence; no published history rewrite; Phase 23 explicitly accounts for each.
 
-## Phase 25 — CI and example-integration runtime [DOING; local, uncommitted]
+## Phase 25 — CI and example-integration runtime [IN REVIEW — draft PR #131]
 
 Measured on `main` CI run 32340328989: core 19:42, field API 19:53,
 implicit-response 12:46 and mirror-spline 9:14. Dominant individual tests were the Schur/coupled
@@ -1937,6 +1945,11 @@ Schur/coupled test uses a real LASYM DIII-D case at `mpol=10, ntheta=30`; local 
 `mpol=4` invalid and `mpol=8` missed the 2% physics gate by 2.896%, while `mpol=10` passed and
 reduced this test from the remote 791 s baseline to 127.6 s. The full high-resolution FD
 certificate remains nightly. No assertion or tolerance was removed.
+
+Local full-lane results on PR #131 are core 3:57 (96 tests), implicit response 6:43 (59 tests),
+and field API 2:29 (64 tests, run against released ESSOS 0.16). These are evidence for the
+scheduling change, not completion: the acceptance criterion still requires two consecutive
+remote runs within budget.
 
 Required before merge:
 
@@ -2115,3 +2128,11 @@ gitignored, and no PR in the queue adds a data file.
   block VMEX 0.6.0. VMEX 0.6 must work against released ESSOS 0.16 and defer or explicitly
   development-gate the new interfaces; after an external ESSOS 0.17 release, VMEX can replace
   any nightly branch pin and publish the compatibility follow-up.
+- 2026-08-21 rogeriojorge: P22/P25 — published draft PR #131 at `b4a68570`. Closed the stale-key
+  Jacobian gap, added fail-closed certificate evidence and host/JAX policy tests, fixed the
+  forward-GMRES certificate report, and retained exact rejected-trial penalty derivatives.
+  Numerical derivative gates passed; normal LASYM cost fell 21.70 -> 2.03 in 125 s; local core,
+  implicit and field lanes passed in 3:57, 6:43 and 2:29; changed-line coverage is 97.6%.
+  Released ESSOS 0.16 passes VMEX's core coil/CLI/VC contracts. PR #131 remote CI/review and the
+  Phase 23 ESSOS-facing example audit are next; #122/#125 stay open, and ESSOS #58/#61 stay last
+  for independent ESSOS maintainer action.
