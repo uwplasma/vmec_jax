@@ -63,11 +63,19 @@ one dated log entry; do not rely on chat history.
 - `main` is current at `0362f701`. The 54 commits after PR #123 comprise ten first-parent PR
   merges (#116, #129, #128, #126, #127, #117, #119, #121, #130, #118), 16 branch-sync merges,
   and 28 direct commits. The independent disposition is recorded in Phase 24.
-- The next implementation worktree is
+- The first release worktree is
   `/Users/rogeriojorge/local/vmex-release-0.6-hardening`, branch
-  `rj/release-0.6-hardening`, based on `0362f701`. Commit `b4a68570` is published for review as
+  `rj/release-0.6-hardening`, based on `0362f701`. Commit `0e991596` is published for review as
   draft PR #131. It contains the exact implicit-Jacobian contract, CI runtime, 0.6.0 changelog,
-  and release-workflow changes. The worktree is clean; inspect PR checks before continuing.
+  and release-workflow changes. Its first remote run showed that two-worker JAX contention made
+  the implicit-response lane regress to 16:45, so that lane is serial again; inspect the new PR
+  checks before continuing.
+- `/Users/rogeriojorge/local/vmex-release-0.6-essos-audit`, branch
+  `rj/release-0.6-essos-audit`, is stacked on #131 at `292bcdac` and published as draft PR #132.
+  It preserves the released ESSOS 0.16 contract, explicitly guards nine ESSOS 0.17 previews,
+  removes the unreleased CI pin, and restores the stable coil-fixture schema. Both worktrees are
+  clean. Review and merge #131 first, then retarget #132 to `main`; do not squash the two review
+  scopes together.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
   copy of this file is authoritative.
@@ -81,9 +89,9 @@ one dated log entry; do not rely on chat history.
   last rather than blocking VMEX 0.6.0.
 
 Resume in this order: read this checkpoint and the newest log entry; inspect PR #131 and its
-checks; obtain review and merge only after full remote CI; audit every shipped ESSOS-facing
-example against released ESSOS 0.16; then execute the remaining 0.6.0 gates in Phase 23. Never
-infer completion from a local diff, an open sibling PR, or a green microbenchmark.
+checks; require two qualifying remote runs and review before merge; retarget and review #132,
+then execute the remaining 0.6.0 gates in Phase 23. Never infer completion from a local diff, an
+open sibling PR, or a green microbenchmark.
 
 ## Research-grade completion map
 
@@ -1877,7 +1885,7 @@ Acceptance: every public derivative at a converged point is current-point certif
 typed error; rejected-trial penalties are value/derivative consistent; the degraded LASYM case
 descends with no stale fallback; focused tests and full remote CI pass.
 
-## Phase 23 — VMEX 0.6.0 release [PLANNED]
+## Phase 23 — VMEX 0.6.0 release [IN REVIEW — draft PRs #131/#132]
 
 Scope freeze: 0.6.0 contains the already merged post-#123 features plus the small Phase 22/25
 hardening work. Alpha loss, the larger boundary-Schur performance rewrite, epsilon-effective
@@ -1898,10 +1906,12 @@ Release gates, in order:
    `take_free_boundary_gradients.py`. They use `Coils.from_json/with_dofs/dof_names`, ESSOS
    distance objectives, `surfacerzfourier_from_boundary`, or the new tracing helpers, none of
    which is in released 0.16. Keep the release-compatible `free_boundary_essos_coils.py`, mirror
-   construction, CLI tabulation and VMEX/VC contracts. In the release follow-up, give the nine
-   scripts an explicit development guard, remove their stable README/API claims, and stop using
-   the unreleased ESSOS commit in the release-candidate Nightly. Do not duplicate these helpers
-   in VMEX. Restore the stable examples after an independent ESSOS 0.17 release.
+   construction, CLI tabulation and VMEX/VC contracts. Draft PR #132 implements this boundary:
+   the nine scripts fail immediately with one explicit development-preview message on 0.16,
+   stable documentation claims and the unreleased Nightly pin are removed, and the three compact
+   coil fixtures retain the public `dofs_curves` / `dofs_currents` schema read by 0.16 and the
+   development loader. Do not duplicate these helpers in VMEX. Restore the stable examples only
+   after an independent ESSOS 0.17 release.
 3. Manually dispatch and pass current Nightly, Weekly and GPU campaigns at the candidate SHA.
    The previous Weekly failed only because of an obsolete asset URL; confirm the current asset
    manifest, do not waive the campaign. Record run URLs and elapsed times in the release log.
@@ -1949,8 +1959,8 @@ Nightly run 32448443577 completed successfully; its bounded example job took 17:
 outside-field (278 s), gradB (262 s), finite-beta single stage (217 s), fixed single stage
 (190 s), finite-beta tracing (74 s) and vacuum tracing (58 s).
 
-Local changes use `pytest -n 2` for core, implicit-response and field-API lanes while keeping the
-mirror lanes serial; six independent nightly examples also use two workers. The PR-lane
+Local changes use `pytest -n 2` for core and field-API lanes while keeping implicit-response and
+the mirror lanes serial; six independent nightly examples also use two workers. The PR-lane
 Schur/coupled test uses a real LASYM DIII-D case at `mpol=10, ntheta=30`; local scans showed
 `mpol=4` invalid and `mpol=8` missed the 2% physics gate by 2.896%, while `mpol=10` passed and
 reduced this test from the remote 791 s baseline to 127.6 s. The full high-resolution FD
@@ -1960,6 +1970,11 @@ Local full-lane results on PR #131 are core 3:57 (96 tests), implicit response 6
 and field API 2:29 (64 tests, run against released ESSOS 0.16). These are evidence for the
 scheduling change, not completion: the acceptance criterion still requires two consecutive
 remote runs within budget.
+
+The first remote run at `b4a68570` was diagnostic, not qualifying: field API improved to 8:54,
+but implicit response regressed from the 12:46 baseline to 16:45 because two GitHub-runner
+workers contended while compiling JAX programs. Commit `0e991596` therefore restores that lane
+to serial execution. Do not count the diagnostic run toward the two-run acceptance criterion.
 
 Required before merge:
 
@@ -2152,3 +2167,14 @@ gitignored, and no PR in the queue adds a data file.
   from stable 0.6 claims/Nightly, retain the released 0.16 examples, and never vendor the missing
   ESSOS functionality into VMEX. This is the next small PR after #131; ESSOS review/merge remains
   external and last.
+- 2026-08-21 rogeriojorge: P25 — PR #131's first remote run measured field API 8:54 but
+  implicit response 16:45, worse than its 12:46 serial baseline and outside the 15-minute gate.
+  Restored only the implicit-response lane to serial in `0e991596`; its replacement run and a
+  second consecutive qualifying run are required before review/merge.
+- 2026-08-21 rogeriojorge: P23.2 — published stacked draft PR #132 at `292bcdac`. The audit found
+  and fixed a real ESSOS 0.16 blocker: all three bundled coil JSONs used only unreleased loader
+  keys. The key-only compatibility change preserves geometry to 6.7e-16 and currents to
+  floating-point reconstruction precision; the real free-boundary example passes with both
+  loaders in about 21 s. Nine 0.17-only examples are now explicit previews, and release CI no
+  longer installs an unreleased ESSOS commit. #58/#61 remain external, independently reviewed,
+  and last.
