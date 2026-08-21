@@ -2,11 +2,12 @@
 
 ## How to use this file (humans and agents)
 
-This plan is self-contained: an agent (Claude, Codex, or a person) should be able to pick any
-item and implement it with only this file plus the referenced repos. Conventions:
+This plan is self-contained: a contributor should be able to pick any item and implement it
+with only this file plus the referenced repos. Conventions:
 
-- **Context.** Main repo `github.com/uwplasma/vmex`, local checkout `~/local/vmex`. This plan
-  targets the state after PR #123 (`rj/vmec-extender-field`) merges (Phase 0). Companion repos,
+- **Context.** Main repo `github.com/uwplasma/vmex`, local checkout `~/local/vmex`. PR #123
+  (`rj/vmec-extender-field`) merged as `84af4918`; the current audited `main` checkpoint is
+  `0362f701` (2026-08-21). Companion repos,
   all local under `~/local/` and on github.com/uwplasma unless noted: `solvax` (=`SOLVAX`,
   case-insensitive FS, installed editable), `NEO_JAX`, `booz_xform_jax`, `virtual_casing_jax`
   (branch `rj/release-0.0.5`), `ESSOS` (PR #58 pairs with vmex #123), `DESC` (PlasmaControl,
@@ -52,6 +53,57 @@ the session scratchpad: `profile_lasym.py`, `fb_isolate.py`, `fb_forward_anatomy
 
 ---
 
+## Current checkpoint and interruption-safe handoff (2026-08-21)
+
+This is the authoritative plan in PR #125. **Do not merge or close PR #125**: it is the live
+program ledger. **Do not close PR #122**: it is the open alpha-tracing/loss-fraction
+specification and implementation branch. Update the phase body when intent changes and append
+one dated log entry; do not rely on chat history.
+
+- `main` is current at `0362f701`. The 54 commits after PR #123 comprise ten first-parent PR
+  merges (#116, #129, #128, #126, #127, #117, #119, #121, #130, #118), 16 branch-sync merges,
+  and 28 direct commits. The independent disposition is recorded in Phase 24.
+- The next implementation worktree is
+  `/Users/rogeriojorge/local/vmex-release-0.6-hardening`, branch
+  `rj/release-0.6-hardening`, based on `0362f701`. It contains **uncommitted, unpushed** changes
+  for the exact implicit-Jacobian contract, CI runtime, 0.6.0 changelog, and release workflow;
+  inspect its status and diff before continuing. Phase 22 is the exact file/test inventory.
+- `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
+  beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
+  copy of this file is authoritative.
+- Current public software release: VMEX 0.5.0. GitHub incorrectly points `/releases/latest` at
+  the documentation-assets release `assets-20260812-wout-fixtures`. Phase 23 makes 0.6.0 the
+  next software release and the latest release without deleting provenance assets.
+- Current dependency releases: ESSOS 0.16, virtual_casing_jax 0.0.5, NEO_JAX 1.0.2,
+  SOLVAX 0.12.0, and booz_xform_jax 0.1.1. ESSOS #58 and #61 are green but open, so their code
+  is not a released dependency and must not be described as complete.
+
+Resume in this order: read this checkpoint and the newest log entry; inspect both worktrees;
+run the focused Phase 22 tests; complete the degraded-LASYM exactness gate; publish the focused
+hardening PR; then execute the 0.6.0 gates in Phase 23. Never infer completion from a local diff,
+an open sibling PR, or a green microbenchmark.
+
+## Research-grade completion map
+
+The detailed phases below remain the source of truth. This map prevents an earlier requirement
+from being lost when work moves between repositories.
+
+| Goal | Owning phases | Completion evidence |
+|---|---|---|
+| Fixed/free-boundary VMEC parity, convergence, restart, axis and mirror robustness | P3, P3b, P8, P18, P23 | VMEC2000/VMEC++ parity, typed failures, converged vacuum/finite-beta symmetric/LASYM and mirror cases |
+| Exact, composable derivatives for residual and scalar optimizers | P1, P22, P24 | fail-closed certificates, JVP/VJP identity, independent FD/reference checks, SciPy/JAX scalar and residual contracts |
+| QA/QH/QP/QI, max-J, bootstrap, well, Mercier/Glasser and gradient-scale objectives | P5, P6, P12-P14, P16-P19, P27 | physics-oracle tests plus short descending examples using the common tuple API |
+| Effective ripple, trapped fraction, gamma-c, J contours and alpha loss | P6, P7, P21, P26, P27 | independent NEO/DESC/STELLOPT/literature parity and differentiable objective gates |
+| Interior/exterior field API, virtual casing, tracing and fixed/free single-stage coils | P3-P4, P11, P13, P15, P21, P26 | B/gradB/VJP and tracing certificates, ESSOS/VC ownership, end-to-end coil examples |
+| CPU/GPU/HPC performance with bounded memory | P2-P3, P7-P9, P11, P25 | checked-in benchmark records, profiled kernels, CI budgets and GPU memory/runtime gates |
+| Clear examples, CLI, README and full documentation | P4, P10, P13-P16, P21, P23, P27 | executable examples, concise README, equations/tutorials/reference pages and link checks |
+| Slim, maintainable ecosystem and reproducible releases | P9-P10, P15, P23, P26-P27 | ownership boundaries, net-LOC discipline, >=95% coverage, clean artifacts and release checklist |
+
+No row is complete merely because one representative example passes. Research-grade completion
+means the stated symmetry, pressure, boundary-condition, device, and reference-code matrix is
+covered at the cheapest resolution that still exercises the real physics; production-scale
+campaigns belong in bounded nightly/weekly jobs, not every pull request.
+
 ## Phase 0 — Unblock and merge PR #123 (`rj/vmec-extender-field`)  [DONE — merged 2026-08-19 as 84af4918]
 
 Smallest possible diff to green; everything else moves to the new branch off `main`.
@@ -72,7 +124,13 @@ Smallest possible diff to green; everything else moves to the new branch off `ma
 
 Acceptance: PR CI fully green (quality, coverage gate, linkcheck), PR merged.
 
-## Phase 1 — Examples run honestly (the "stall" fix)  [1.a NOT done — see the 08-19 end-to-end entry]
+## Phase 1 — Examples run honestly (the "stall" fix)  [PARTIAL; exactness continues in P22]
+
+Current disposition: flushed progress, monitor de-duplication, bounded diagnostics and the
+measured stall investigation are merged. The temporary policy that returned a bounded but
+uncertified response is not an acceptable final “exact derivative” contract; Phase 22 supersedes
+that policy with certified fallback or a typed error. Keep the measurements below as diagnosis,
+not as permission to expose an approximate Jacobian.
 
 Diagnosis (instrumented reproduction, `profile_stall.py`, uncontended): the examples descend
 (overnight log: 18 iterations, cost 25.0 -> 2.64) and healthy iterations cost ~10-12 s
@@ -398,7 +456,9 @@ curve (ensembles) and honest statements elsewhere.
 
 1. Coverage gate moves from changed-lines to whole-repo >= 95% (line + branch on `vmex/core`),
    with per-module floors so physics modules cannot hide behind plotting.
-2. Time budget: pr-fast lanes parallelized (`-n 4`) and capped at 30 min wall total. Levers:
+2. Time budget: pull-request critical path <= 15 min and scheduled nightly <= 30 min. Start
+   selected heavy lanes at measured `-n 2`, keep memory/cache-sensitive mirror lanes serial,
+   and raise worker count only after RSS and wall-time evidence. Levers:
    the Phase 2 cache (compile time dominates test wall), smaller `full`-equivalent decks (the
    FD certificates at ns=8-16 are minutes, not tens of minutes), manifest-driven sharding across
    jobs, and pruning duplicate-coverage tests when slimming (Phase 10) — fewer, sharper tests.
@@ -415,7 +475,8 @@ curve (ensembles) and honest statements elsewhere.
 5. Soften the eps_eff test docstring's "NEO/STELLOPT-parity" claim until Phase 6's independent
    comparisons exist; then reinstate it with the parity table as evidence.
 
-Acceptance: coverage >= 95% enforced; fast CI wall < 30 min; every physics test names its anchor.
+Acceptance: coverage >= 95% enforced; pull-request critical path <= 15 min; nightly <= 30 min;
+every physics test names its anchor. Phase 25 carries the current timing evidence and changes.
 
 ## Phase 10 — Slim code, docs, and repository  [PARTIAL: stale claims, dead code, examples index DONE]
 
@@ -582,20 +643,18 @@ and traceable `l_grad_b_state` (`statephysics.py`), both symmetric-only.
 ## Sequencing and dependencies
 
 ```
-Phase 0 (unblock+merge #123)
-  -> Phase 1 (examples honest)  -> Phase 2 (cache)          [independent, land early]
-  -> Phase 3 (FB speed) -> 3b (certificates) -> Phase 4 (from_tuples API)
-  -> Phase 5a (maxJ bugs) -> 5b (vmex LASYM) -> 5c (NEO_JAX LASYM) ; 5d (STELLOPT PRs) anytime
-  -> Phase 6 (eps_eff lane; needs 5c only for the LASYM parity row)
-  -> Phase 7 (NEO_JAX speed; parallel to 6)
-  -> Phase 8 (perf program + VMEC2000/VMEC++; benchmarks start immediately, deep work after 3)
-  -> Phase 9 (CI coverage; ratchets up as each phase lands)
-  -> Phase 10 (slim/docs/history; final polish + rewrite last)
+DONE: P0, most of P1, P5a/P5d, P12, and the ten post-#123 merges
+NOW:  P22 exact contract -> P25 CI runtime -> P24 release-blocking audit debts
+      -> ESSOS #58/#61 review + 0.17 release -> P23 VMEX 0.6.0
+NEXT: P3/P3b boundary-Schur speed + exact certificates -> P4 public free-boundary API
+      P11 virtual-casing memory (sibling first) -> P13 single-stage matrix
+      P5b/P5c LASYM completion -> P6/P7 ripple + NEO speed -> P21 loss fraction
+THEN: P8 performance/parity matrix, P14/P16-P19 physics, P15/P26 ownership moves
+LAST: P10 slimming/history only after ownership settles; P27 final capability audit
 
-Phase 12 (min-|iota|)  -> land with Phase 1 (small, unblocks the finite-beta stall physics)
-Phase 11 (VC memory)   -> after Phase 2; virtual_casing_jax custom_vjp PR can start immediately
-Phase 13 (QA/QI matrix)-> needs P12 (+P11 for finite-beta comfort); before Phase 4 examples rewrite
-Phase 14 (L_gradB/ggB) -> convention+oracle anytime; LASYM part rides Phase 5b; example wiring last
+P2 cache policy informs graph-size work but is not the Jacobian-stall fix.
+P9 coverage/runtime ratchets continuously through P25; do not postpone test design.
+PR #122 and #125 remain open bookkeeping/specification PRs throughout.
 ```
 
 Profiling infrastructure (keep, do not commit as-is): session scratchpad scripts
@@ -1425,87 +1484,38 @@ part of this and needs re-measuring here now that it is in. Beyond that:
   contains the symmetric configuration in its search space, so doing worse than symmetric points
   at a bug rather than at cost.
 
-## Phase 20 — Open pull requests: state, order, and how each serves the goals
+## Phase 20 — Standing pull-request ledger (updated 2026-08-21)
 
-**Scope.** This program covers **vmex, NEO_JAX, booz_xform_jax and
-virtual_casing_jax** only. ESSOS and STELLOPT work is explicitly out of scope
-for now: the two STELLOPT pull requests stay open upstream and are not waited
-on (patch `xneo` locally when a LASYM ripple reference is needed), and the
-ESSOS pull requests are neither planned nor sequenced here. Where a phase below
-previously treated one of them as a blocker, the dependency is recorded but the
-phase proceeds without it.
+Only VMEX #122 and #125 remain open. The implementation PRs listed in the earlier version of
+this phase have merged; their independent post-merge audit is Phase 24. This phase is a standing
+exception to the usual “finish or close” policy:
 
-PR #123 merged on 2026-08-19 (`84af4918`, merge commit, branch history kept).
-Everything below is open as of that date. The six older VMEX pull requests all
-predate the merge, so each needs a rebase onto the new `main` before its checks
-mean anything — their current red CI is staleness, not failure.
+1. **VMEX #125 — research-grade plan.** Keep open and keep current. Do not merge or close it.
+   It is the authoritative, interruption-safe ledger; implementation work lands through small
+   branches and is recorded here only after its evidence exists.
+2. **VMEX #122 — alpha-particle tracing/loss fraction.** Keep open and do not close it. It is
+   both a specification and an in-progress integration branch. Its current base
+   `rj/simplify_examples` is historical; rebase only when Phase 21 has a dependency-clean slice,
+   and preserve the design record even if the final implementation is split into smaller PRs.
+3. **New VMEX work.** The next PR is the focused Phase 22/25 hardening branch. It must not absorb
+   alpha tracing, epsilon effective, ecosystem file moves, or the larger boundary-Schur
+   performance work. Small diffs keep derivative and CI regressions reviewable.
 
-### VMEX, in the order to take them
+### Sibling PRs are in scope only at explicit ownership seams
 
-1. **#118 — Validate and enable LASYM Mercier and Glasser stability lanes**
-   (+313/-83). **Do this first.** It is not superseded by #123, and there is a
-   consistency problem until it lands: #123 merged documentation stating that
-   the traceable Mercier lane supports `lasym = True`, but `main` contains no
-   LASYM `DMerc` test — `tests/test_stability.py` on `main` covers LASYM only
-   for `jdotb`. The evidence for a claim already published lives in this
-   branch (`test_lasym_dmerc_matches_wout_and_vmec`,
-   `test_lasym_glasser_identity_residuals_and_reconstruction`). Either merge it
-   or soften the docs; merging is correct, because the capability is real.
-   Serves: Phase 5 (full LASYM), Phase 9 (coverage of physics that is claimed).
-   Watch for conflicts in `vmex/core/stability.py`, `optimize.py`, `plotting.py`
-   and `docs/explanation/confinement.rst`, all of which #123 touched.
-2. **#117 — Reject non-monotonic APHI flux maps with a typed input error**
-   (+445/-54). Real input-validation work in the typed-error style the codebase
-   already uses. Serves: research-grade robustness; no phase dependency.
-3. **#116 — Post-0.5 hygiene: solvax pin rationale, worker-count docstring**
-   (+7/-7). Trivial. Note it touches the solvax pin, which Phase 10 also wants
-   raised from the stale `>=0.8.8` floor — fold that in here rather than twice.
-4. **#121 — Stop linkcheck flaking on github.com connection aborts** (+8/-0)
-   and **#119 — Build the docs on the declared Python floor** (+10/-1). Both
-   trivial CI hygiene. Serves Phase 9's under-30-minute, non-flaky CI goal.
-   Take them together.
-5. **#122 — Add QP particle tracing example** (+98/-0), draft. Finish or close.
-   If kept, it should follow the example conventions this program settled:
-   `VMEX_EXAMPLES_CI=1` smoke mode, executed in a nightly lane rather than
-   text-grepped, and results written to `results/`.
-6. **#125 — the plan itself.** Merge once this program is underway so
-   contributors see it on `main`; keep appending to the Log afterwards. It is
-   the coordination document for everything here.
+- ESSOS #58 (reusable coil interfaces) and #61 (in-memory VMEC field plus differentiable loss)
+  are green, open, and unreleased. They are required by P4/P21; review and release them as an
+  ESSOS 0.17 dependency before VMEX 0.6.0 claims those interfaces. Do not vendor their code into
+  VMEX and do not pin a release to a mutable branch.
+- virtual_casing_jax, NEO_JAX, booz_xform_jax and SOLVAX own the generic algorithms listed in
+  Phase 26. VMEX PRs should contain only equilibrium-specific adapters and physics.
+- STELLOPT #501 is merged and the current `STELLOPT_new` build is the reference. #502 remains an
+  upstream hygiene item, not a VMEX release blocker.
 
-### ESSOS and STELLOPT — out of scope, recorded only
-
-Not planned or sequenced in this program. Recorded so the dependencies are
-visible when the scope widens: ESSOS #58 (reusable coil optimization geometry)
-is what Phase 4's `FreeBoundaryProblem.from_tuples` would build on, and ESSOS
-#33 (mgrid export) and #25 (interpolated fields) overlap the Phase 15.6
-ownership question about mgrid and the magnetic-field class. **STELLOPT #501 has merged upstream** (`03b2e228`, "Fix the mode index of bmns
-in the NEO boozmn reader"), so LASYM effective-ripple references no longer need
-a local patch. #502 remains open.
-
-Consequence for sequencing: Phase 4 proceeds against the ESSOS API as it exists
-on `main` today rather than waiting for #58, and Phase 15.6 is deferred behind
-the three JAX-sibling moves instead of behind ESSOS.
-
-### Ordering that respects the dependencies
-
-```
-now        vmex #126  (LASYM delta-rotation Jacobian — unblocks Phase 17)
-           vmex #118  (restores docs/evidence consistency)
-           vmex #119  [GREEN, awaiting merge], #121, #116, #117
-           then #122 (draft), #125 (this plan)
-next       Phase 17  (asymmetric quasisymmetry: correctness before anything else)
-           Phase 15.1  virtual_casing_jax owns virtual casing   -> vmex deletes
-           Phase 15.2  booz_xform_jax owns the Boozer transform -> vmex deletes
-           Phase 15.4  neo_jax owns effective ripple            -> vmex deletes
-then       Phase 6   epsilon-effective objective lane, on top of the neo_jax move
-           Phase 4   FreeBoundaryProblem.from_tuples, against today's ESSOS API
-           Phase 3   free-boundary speed, now that the Jacobian work is settled
-last       Phase 15.6-15.8 file moves, Phase 10 slimming, the history rewrite
-```
-
-The rule behind that order: make `main` self-consistent first, then move
-physics into the package that owns it, and only then reorganize files —
-every reorganization done before its owning package settles has to be redone.
+Current order: Phase 22 exactness -> Phase 25 CI hardening -> ESSOS #58/#61 review and 0.17
+release -> Phase 23 VMEX 0.6.0 -> Phase 3 boundary-Schur performance -> P4/P21 APIs -> P6/P7
+neoclassical work -> Phase 15/26 code moves -> Phase 10 final slimming. PR #122 and #125 remain
+open throughout.
 - 2026-08-19 claude: P17 — localized the LASYM underperformance to a wrong analytic Jacobian in the n=0 asymmetric m=1 difference channel (16% error); forward map verified correct.
 - 2026-08-19 claude: P17 — root cause is the frozen `delta == 0` branch in `implicit.py::_lasym_delta_rotation_traceable`; fixed, gated, verified end-to-end (1.6e-1 -> 1.6e-7).
 - 2026-08-19 claude: P17 — opened vmex #126 with the delta-rotation fix and its regression gate; #119 is green and queued for merge.
@@ -1639,7 +1649,7 @@ on the command line, and alpha-particle loss fraction as an optimizable that a
 boundary optimization can actually descend. **#122 does not merge as it
 stands** — the script is the specification, not the deliverable.
 
-### 21.1 ESSOS prerequisites [DONE — uwplasma/ESSOS#61]
+### 21.1 ESSOS prerequisites [IMPLEMENTED IN OPEN PR — uwplasma/ESSOS#61; NOT RELEASED]
 
 Two things block a differentiable loss fraction, both on the ESSOS side, both
 verified by reading the source:
@@ -1656,7 +1666,7 @@ verified by reading the source:
   `loss_lost_fraction` (essos/objective_functions.py:252) is identically zero.
   It is a correct diagnostic and a useless objective for a gradient method.
 
-ESSOS#61 adds `Vmec.from_arrays(...)` and `Tracing.soft_loss_fraction(r_max,
+ESSOS#61 proposes `Vmec.from_arrays(...)` and `Tracing.soft_loss_fraction(r_max,
 width)` with the matching `loss_soft_lost_fraction` objective. The surrogate is
 `mean_i sigmoid((r_soft_i - r_max)/width)` with
 `r_soft_i = sum_t r_i(t) * softmax_t(r_i(t)/width)`. The softmax-weighted mean
@@ -1687,6 +1697,11 @@ physically correct.
 targets `main` with a `(field, particles, ...)` signature, which is the right
 shape for a boundary optimization; reconciling it with the coil-dof signature
 on the working branch is a separate job.
+
+Before marking this item done: independently review #61 against current ESSOS `main`, merge it,
+release it together with the compatible #58 interfaces as ESSOS 0.17, install that release in a
+clean environment, and replace VMEX's nightly git pin with the released version. Green checks on
+an open branch are implementation evidence, not a completed dependency.
 
 ### 21.2 The traceable field-coefficient gap [TODO]
 
@@ -1781,6 +1796,227 @@ in the test: the standard candidates are Landreman & Paul's precise QA and QH
 the ARIES-CS baseline for a case with substantial losses. Compare the ordering
 of loss fractions between two such configurations rather than an absolute
 number, which depends on the tracing model and particle count.
+
+## Phase 22 — Exact implicit-Jacobian contract [DOING; local, uncommitted]
+
+**Contract.** “Exact implicit derivatives” means VMEX returns a derivative certified at the
+current parameter point against the true linearized equilibrium residual. A fast response that
+misses tolerance is diagnostic evidence, not a Jacobian. A Jacobian certified at a previous
+point is also not exact at the current point. Failed equilibrium trials may use the documented,
+differentiable penalty pair, but converged trials never silently receive an approximate or stale
+derivative.
+
+### 22.1 Local implementation inventory
+
+The worktree named in the current checkpoint contains these deliberate changes:
+
+- `_certifier_summary` retains maximum iterations, uncertified-column count, the worst residual
+  norm and its requested tolerance. Typed failures therefore carry evidence rather than a bare
+  boolean.
+- `implicit_jacobian_method="auto"` tries the amortized block/forward response and recomputes the
+  same point through the independent reverse-adjoint graph if any column misses its certificate.
+- Explicit `"block_tridiagonal"` or `"forward_gmres"` raises `AdjointSolveError` with the evidence
+  instead of presenting an approximate matrix as exact. Uncertified responses are not used for
+  perturbation warm starts.
+- `README.md`, `docs/reference/optimization.rst` and
+  `docs/explanation/adjoint-gradients.md` say “certified,” document automatic fallback and
+  distinguish forced advanced lanes.
+- Touched implementation/tests: `vmex/core/{optimize,implicit}.py` and
+  `tests/test_optimize.py`. These changes are not complete or published until 22.2 passes.
+
+One remaining code-level gap must be closed before publication: the generic exception branch in
+`jac_fn` may return `holder["last_jac"]` from a different `x`. Restrict reuse to an identical
+`last_jac_key` (memoization) or raise the original typed error; never call a stale derivative
+exact. Preserve `failure_jacobian(x)` only for the explicit rejected-trial penalty contract.
+
+### 22.2 Required tests and decisions
+
+1. Cheap mocked contract tests: an uncertified block result makes `auto` call reverse at the
+   same `x`; forced block/forward raises with iterations/residual/tolerance; reverse failure
+   raises; no uncertified `dz` is stashed; a cached Jacobian is reused only at the identical key.
+2. Existing numerical gates remain unchanged:
+   `test_block_response_forward_transpose_and_fd`,
+   `test_least_squares_implicit_jac_solver_block`, and the free-boundary Schur/coupled adjoint
+   comparison. No tolerance is loosened to accommodate the policy.
+3. Add the decisive end-to-end degraded LASYM QA gate at the captured hard iterate: compare
+   automatic fallback against explicit reverse for the matrix and one optimizer step; assert
+   no uncertified/stale derivative is returned, the cost descends, and the bounded test finishes
+   within the documented budget. This is the evidence the earlier microbenchmarks lacked.
+4. Test the scalar contracts across a compact matrix: symmetric/LASYM, vacuum/finite beta,
+   fixed/free boundary, scalar objective and residual-vector objective. Compare
+   `jax_value_and_grad`, `0.5*r@r` with `J.T@r`, directional central differences at a converged
+   root, and JVP/VJP transpose identities. Record solves, wall time and peak RSS.
+5. Unify only when the evidence permits it. Objective tuples should share value/residual term
+   assembly and one certification policy; retain separate scalar reverse and residual-Jacobian
+   linear algebra when their complexity differs. A single API is desirable; forcing every
+   optimizer through one computational graph is not a goal.
+
+Focused tests already run on the local diff: Schur/coupled comparison passed in 127.6 s,
+block-response transpose/FD passed in 147.4 s, least-squares block comparison passed in 113.8 s,
+and the certifier-evidence unit test passed in 0.42 s. Ruff, mypy (66 source files), docs prose,
+package build, manifest validation (97 modules, 1332 tests, 14 campaigns), and `git diff --check`
+passed. A raw-operator, block-preconditioned GCROT replacement was tried and reverted because its
+internal success status still left a 5.16e-5 transpose-identity error; any future Krylov change
+must certify the explicit true raw residual rather than trust solver status.
+
+Acceptance: every public derivative at a converged point is current-point certified or raises a
+typed error; rejected-trial penalties are value/derivative consistent; the degraded LASYM case
+descends with no stale fallback; focused tests and full remote CI pass.
+
+## Phase 23 — VMEX 0.6.0 release [PLANNED]
+
+Scope freeze: 0.6.0 contains the already merged post-#123 features plus the small Phase 22/25
+hardening work. Alpha loss, the larger boundary-Schur performance rewrite, epsilon-effective
+objective work, broad ecosystem file moves and history rewriting are post-0.6 unless already
+merged and independently certified. A release is a verified artifact, not merely a tag.
+
+Release gates, in order:
+
+1. Merge the focused Phase 22/25 hardening PR after full CI. Resolve the three audit debts in
+   Phase 24 or explicitly list a narrowly justified deferral in the changelog.
+2. Independently review and merge compatible ESSOS #58/#61, release ESSOS 0.17, test it from a
+   clean install, update VMEX's optional dependency floor, and remove the nightly git pin. If
+   either PR is not release-ready, VMEX 0.6 must not advertise or require that unreleased API.
+3. Manually dispatch and pass current Nightly, Weekly and GPU campaigns at the candidate SHA.
+   The previous Weekly failed only because of an obsolete asset URL; confirm the current asset
+   manifest, do not waive the campaign. Record run URLs and elapsed times in the release log.
+4. Update `pyproject.toml` to 0.6.0 and finalize `docs/project/changelog.md`. Build wheel and
+   sdist, install each into clean Python 3.10 and 3.12 environments, import VMEX without optional
+   packages, run a minimal solve, and verify package contents/size (current baseline: wheel
+   576 KiB, sdist 896 KiB).
+5. Tag `v0.6.0`, publish through the trusted PyPI workflow, and make the software release
+   GitHub's latest. The local workflow change adds a post-publish `make_latest=true` step so an
+   assets release no longer owns `/releases/latest`; preserve asset releases and provenance.
+6. Verify PyPI metadata/install, GitHub release assets, docs links, badge versions, CLI version,
+   and `/releases/latest`. Only then mark Phase 23 done.
+
+PR #122 and #125 stay open throughout and after this release. Never merge either merely to empty
+the pull-request queue.
+
+## Phase 24 — Independent audit of the ten post-#123 merges [PARTIAL]
+
+All ten PRs had green CI but no GitHub review; green checks are not independent review. The
+54-commit history is not rewritten. Preserve it and close debts with small follow-up PRs.
+
+- Accepted as merged after source/diff review: #116, #117, #119, #121, #126 and #127.
+- #129 is acceptable; optionally centralize its cache cleanup in one scoped fixture if another
+  cache leak appears. Do not add a broad autouse reset that hides production cache semantics.
+- #128 needs one full end-to-end free-boundary objective gradient with `presf_ns_scale` active.
+  The existing residual-level certificate proves the missing term but not the complete solved
+  objective path.
+- #130's higher-resolution/example schedule needs one bounded full campaign with its output,
+  convergence, wall time and scientific metrics recorded; a configuration change is not itself
+  validation.
+- #118 needs a genuinely finite-beta LASYM VMEC2000 oracle for `DWell`/Mercier. The vacuum
+  golden validates decomposition and symmetry plumbing but cannot certify pressure-dependent
+  `DWell` physics.
+
+Acceptance: the three named debts have literature/reference-anchored tests or recorded bounded
+campaign evidence; no published history rewrite; Phase 23 explicitly accounts for each.
+
+## Phase 25 — CI and example-integration runtime [DOING; local, uncommitted]
+
+Measured on `main` CI run 32340328989: core 19:42, field API 19:53,
+implicit-response 12:46 and mirror-spline 9:14. Dominant individual tests were the Schur/coupled
+comparison (791 s), free-boundary current FD (347 s), block response (256 s), free-boundary
+restart (217 s), least-squares implicit block (193 s) and bootstrap-current dofs (117 s).
+Nightly run 32448443577 completed successfully; its bounded example job took 17:58, dominated by
+outside-field (278 s), gradB (262 s), finite-beta single stage (217 s), fixed single stage
+(190 s), finite-beta tracing (74 s) and vacuum tracing (58 s).
+
+Local changes use `pytest -n 2` for core, implicit-response and field-API lanes while keeping the
+mirror lanes serial; six independent nightly examples also use two workers. The PR-lane
+Schur/coupled test uses a real LASYM DIII-D case at `mpol=10, ntheta=30`; local scans showed
+`mpol=4` invalid and `mpol=8` missed the 2% physics gate by 2.896%, while `mpol=10` passed and
+reduced this test from the remote 791 s baseline to 127.6 s. The full high-resolution FD
+certificate remains nightly. No assertion or tolerance was removed.
+
+Required before merge:
+
+1. Run the entire workflow remotely. Reject `-n 2` in a lane if RSS, JAX cache interactions or
+   wall time regress; parallelism is a measured policy, not a universal default.
+2. Keep pull-request critical path <= 15 minutes and scheduled nightly <= 30 minutes on GitHub
+   runners, with no individual silent test over 10 minutes. Use manifest sharding and shared
+   compiled shapes before further resolution reductions.
+3. Preserve one process-order cache-leak campaign because selector sharding previously hid a
+   module-cache leak. Randomize/order-check cheaply rather than duplicating all physics solves.
+4. Report per-test timing artifacts and fail on missing manifest coverage. Production-size
+   parity, GPU and memory campaigns run nightly/weekly; pull requests retain the cheapest real
+   physics case that distinguishes a wrong implementation.
+
+Acceptance: two consecutive remote runs meet the budgets without weakened physics, coverage or
+numerical tolerances; all changed lanes stay below memory limits; timings are retained for the
+next audit.
+
+## Phase 26 — Ecosystem ownership and dependency releases [ACTIVE POLICY]
+
+Ownership follows the physics, with thin VMEX adapters and no vendored copies:
+
+- **VMEX:** fixed/free equilibrium physics, VMEC inputs/state/parameter maps, NESTOR coupling,
+  equilibrium diagnostics/objectives, implicit derivative policy and VMEC-specific adapters.
+- **ESSOS:** coil geometry/current dofs, Biot-Savart fields, particle/field-line tracing,
+  termination events and loss diagnostics/surrogates. VMEX examples consume its public release.
+- **virtual_casing_jax:** boundary-integral kernels, singular quadrature plans, batching/sharding
+  and custom VJPs. VMEX keeps only state/wout-to-surface adaptation and pressure interpretation.
+- **NEO_JAX:** effective-ripple and generic neoclassical kernels. VMEX keeps a thin equilibrium
+  adapter and objective composition; no second NEO implementation.
+- **SOLVAX:** generic Krylov, block-tridiagonal, sparse, bordered/Schur and nonlinear-solve
+  algebra. VMEX retains NESTOR edge physics, Fourier constraints, operator construction and the
+  true-residual certificate.
+- **booz_xform_jax:** generic Boozer transform/projection and derivatives. VMEX retains
+  equilibrium-to-Boozer adapters and QI/max-J physics objectives.
+
+After 0.6.0, the highest-value deletion target is VMEX's 781-line virtual-casing implementation
+once virtual_casing_jax provides the complete API; generic Boozer projection is next. Do not move
+`statephysics.py` or reorganize `core/` until cross-repo moves settle, or files will move twice.
+The local NEO_JAX checkout is heavily diverged (ahead 72/behind 76); reconcile it against origin
+before treating it as an authority.
+
+For Phase 3 boundary-Schur work: instrument true coupled matvec count/time first; precondition
+the transpose with the bulk `A^-T` block solve and a boundary Schur correction; put generic
+bordered/low-rank/recycling algebra in SOLVAX; keep `E=J-A`, edge mode pairing and the true
+coupled certificate in VMEX. Profile CPU correctness before GPU memory/kernel work.
+
+Acceptance: each generic algorithm has one owner and one released implementation; VMEX optional
+dependencies use releases, not mutable branches; cross-repo parity tests protect adapters; moves
+delete more VMEX code than they add.
+
+## Phase 27 — Final research-grade capability audit [PLANNED, CONTINUOUS]
+
+Before declaring the program complete, run one final matrix and close every unsupported cell
+explicitly. This phase collects goals that span several implementation phases:
+
+1. Solver: fixed/free, vacuum/finite beta, axisymmetric/3-D, symmetric/LASYM, stellarator and
+   axisymmetric/non-axisymmetric mirror equilibria; hot restart and single-resolution versus
+   multigrid behavior; robust magnetic axis; VMEC2000/VMEC++ parity and typed non-convergence.
+   Make forward controls (`ns_array`, `ftol_array`, `niter_array`, `delt`, force-residual/FSQ
+   thresholds and verbosity) consistent across Python/CLI, user-adjustable and documented;
+   state the immutable `VmecInput` copy/`replace` contract explicitly.
+2. Optimization: tuple residual composition plus scalar `value_and_grad` with least squares,
+   BFGS/L-BFGS-B, Adam/Optax and JAXopt examples; QA/QH/QP/QI at representative NFP/modes;
+   finite-beta self-consistent bootstrap/current splines; fixed/free single stage; honest term
+   histories and dof names. Examples teach the public gradients rather than hide them.
+3. Physics: QI and QA max-J verified from second-adiabatic-invariant contours and radial trend;
+   magnetic well, Mercier and Glasser with meaningful finite pressure; edge-weighted residuals
+   documented wherever the axis/edge is excluded or emphasized; L_gradB/L_gradgradB; trapped
+   fraction, effective ripple, gamma-c and J contours; alpha confinement ordering.
+4. Fields/coils: Cartesian and flux-coordinate `set_points`, B/absB/gradB through third
+   derivative and all VJPs inside/outside; coils plus virtual casing at finite beta; B.n/B and
+   field-line agreement; progress/stopping; fixed/free comparison; publication-ready plots,
+   VTK and optional compact movies. Define and test the magnetic-axis limit/extrapolation rather
+   than leaving an unexplained singular point in the public API.
+5. Product: concise README with only key figures and commands; full equations, algorithms,
+   tutorials, CLI/restart/parallel controls in docs; all example scripts follow the agreed
+   top-input/no-argparse template unless explicitly classified as tools; outputs ignored; no
+   personal paths, stale hosts, scaffolds or oversized obsolete assets.
+6. Quality/performance: >=95% source and branch coverage with per-physics floors; analytic,
+   literature and independent-code anchors; PR/nightly budgets from P25; CPU/GPU peak-memory and
+   throughput records; clean Python 3.10/3.12 artifacts; release/latest verification.
+
+Every cell receives `[DONE evidence]`, `[DEFERRED reason/release]`, or `[UNSUPPORTED documented]`
+before the final roadmap is called complete. “Example ran once” and text-grep tests are not
+evidence. Add new requirements here and route them to an owning phase rather than creating an
+untracked side plan.
 - 2026-08-19 claude: P21 — planned the tracing feature; ESSOS PR for the array constructor and smooth surrogate in flight; #122 stays open as the specification.
 - 2026-08-19 claude: P21.1 done — ESSOS#61 adds Vmec.from_arrays and a soft loss fraction (exact grad 0.0 -> surrogate -1.34e-1, converging to 0.250049 at width 1e-3); geometry coefficients carry no orbit gradient, so 21.2 must go through the field coefficients.
 
@@ -1858,3 +2094,11 @@ overstate readiness, so they stay until the lane is anchored end to end.
 **Repo size** is fine: `docs/_build` is 30 MB locally but untracked and
 gitignored, and no PR in the queue adds a data file.
 - 2026-08-19 claude: added a LASYM Mercier decomposition anchor (DWell 1.5e-7, DShear 7.6e-10, DCurr 2.2e-3, DGeod 3.2e-3 vs fresh xvmec2000); corrected the finite-beta doc claim; repo-wide scaffold scan clean.
+- 2026-08-21 rogeriojorge: reconciled the full plan against `main` at `0362f701` and the
+  post-#123 audit. Added the interruption-safe checkpoint and research-grade completion map;
+  made #122/#125 persistent open specification/ledger PRs; corrected ESSOS #61 from “done” to
+  open/unreleased; recorded P22's exact fail-closed Jacobian contract and remaining stale-key
+  gap, P23's 0.6.0 release gates, P24's three post-merge evidence debts, P25's measured CI
+  bottlenecks and bounded parallelization, P26's ecosystem ownership, and P27's final capability
+  matrix. The implementation remains uncommitted in `rj/release-0.6-hardening`; resume with the
+  focused contract tests and degraded-LASYM end-to-end gate before publishing it.
