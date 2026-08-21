@@ -233,6 +233,9 @@
     ],
     "weekly-mirror": [
       "tests/mirror/test_free_boundary.py::test_unbounded_exterior_beta_observables_converge_with_resolution"
+    ],
+    "weekly-free-boundary-adjoint": [
+      "tests/test_freeboundary_implicit.py::test_free_boundary_pressure_gradient_matches_resolve_finite_difference"
     ]
   },
   "campaigns": {

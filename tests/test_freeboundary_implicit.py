@@ -165,6 +165,44 @@ def test_free_boundary_current_gradient_matches_resolve_finite_difference():
     )
 
 
+@pytest.mark.full
+def test_free_boundary_pressure_gradient_matches_resolve_finite_difference():
+    """The solved objective retains the edge-pressure normalization response."""
+    inp = dataclasses.replace(
+        lasym_free_input(DATA), ns_array=np.array([8]),
+        ftol_array=np.array([1.0e-9]), niter_array=np.array([4000]))
+    field = lasym_free_field()
+    params = im.params_from_input(inp)
+    cfg = make_free_boundary_config(
+        inp, field, ns=8, ftol=1.0e-9, max_iterations=4000,
+        adjoint_tol=1.0e-7, adjoint_maxiter=150,
+        field_from_parameters=lambda current: dataclasses.replace(
+            field, extcur=current), device="cpu")
+
+    def objective(relative_am0):
+        trial = dataclasses.replace(
+            params, am=params.am.at[0].set(params.am[0] * (1.0 + relative_am0)))
+        state, _, _, _ = solve_free_boundary_implicit_status(
+            trial, field.extcur, cfg)
+        return jnp.mean(state.R_cos[-1]**2 + state.Z_sin[-1]**2)
+
+    derivative = jax.grad(objective)(0.0)
+    step = 1.0e-2
+    values = []
+    for sign in (-1.0, 1.0):
+        # Independent cold re-solves prevent continuation history from
+        # manufacturing agreement with the implicit derivative.
+        fbi._FREE_HOT_CACHE.pop(cfg, None)
+        values.append(objective(sign * step))
+    finite_difference = (values[1] - values[0]) / (2.0 * step)
+
+    assert abs(float(finite_difference)) > 1.0e-7
+    # This ns=8 campaign is limited by the independently reconverged nonlinear
+    # roots. The missing presf_ns_scale term changes the response by O(1).
+    np.testing.assert_allclose(
+        derivative, finite_difference, rtol=1.0e-1, atol=1.0e-7)
+
+
 def test_boundary_schur_adjoint_reproduces_the_coupled_gcrot_gradient():
     """Both adjoint solvers invert the same converged plasma-vacuum Jacobian.
 
