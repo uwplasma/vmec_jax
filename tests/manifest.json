@@ -180,6 +180,8 @@
       "tests/test_qi_maxj_composition.py"
     ],
     "pr-physics-field": [
+      "tests/test_examples.py::test_released_essos_reads_bundled_coil_fixtures",
+      "tests/test_examples.py::test_essos_examples_name_the_required_branch",
       "tests/test_stability.py::test_lasym_mercier_current_tables_are_exercised",
       "tests/test_freeboundary_implicit.py::test_boundary_schur_adjoint_reproduces_the_coupled_gcrot_gradient",
       "tests/test_boozer_tables.py",
@@ -231,10 +233,6 @@
     ],
     "weekly-mirror": [
       "tests/mirror/test_free_boundary.py::test_unbounded_exterior_beta_observables_converge_with_resolution"
-    ],
-    "weekly-single-stage-free": [
-      "tests/test_examples.py::test_finite_beta_free_boundary_single_stage_optimization",
-      "tests/test_freeboundary_implicit.py::test_free_boundary_current_gradient_matches_resolve_finite_difference"
     ]
   },
   "campaigns": {

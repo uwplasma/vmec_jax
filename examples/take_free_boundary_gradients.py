@@ -1,5 +1,8 @@
 #!/usr/bin/env python
-"""Differentiate a true NESTOR free-boundary solve through its coupled root."""
+"""Differentiate a true NESTOR free-boundary solve through its coupled root.
+
+Preview: this script needs ESSOS branch ``rj/vmex-optimization-interfaces``.
+"""
 
 from dataclasses import replace
 import os
@@ -18,6 +21,12 @@ from vmex.core.freeboundary_implicit import (
 
 from essos.coils import Coils
 from essos.fields import BiotSavart
+
+if not all(hasattr(Coils, name) for name in ("from_json", "with_dofs")):
+    raise ImportError(
+        "This example needs ESSOS branch rj/vmex-optimization-interfaces "
+        "(uwplasma/ESSOS#58)."
+    )
 
 DATA = Path(__file__).resolve().parent / "data"
 NS, MPOL, NTOR, NITER, FTOL = 25, 5, 5, 12000, 1.0e-10

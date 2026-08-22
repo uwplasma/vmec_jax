@@ -96,15 +96,12 @@ lane. VMEX also differentiates the reconverged
 VMEC--NESTOR free-boundary root itself:
 {func}`vmex.core.freeboundary_implicit.solve_free_boundary_implicit` takes the
 reverse-mode derivative of the coupled fixed point with respect to plasma
-profiles and direct coil shape/current dofs, with a whole-state transpose by
-default (`adjoint_solver="coupled_gcrot"`) and an opt-in boundary-Schur
-transpose (`examples/take_free_boundary_gradients.py`,
-`examples/optimization/single_stage_free_boundary_optimization.py`). That path
-is experimental and CPU-only; cold compile time, GPU memory, and failed-trial
-recovery keep it at `vjp = limited`. The per-configuration contract, including
-what each grade means and what the free-boundary rows still need, is
-{doc}`reference/capabilities`; the machinery is
-{doc}`explanation/adjoint-gradients`.
+profiles and direct coil shape/current dofs. The default transpose is
+`coupled_gcrot`; `boundary_schur` is opt-in. The example needs ESSOS branch
+`rj/vmex-optimization-interfaces` (PR #58). This CPU-only path remains experimental because its
+cold compile, memory use, and failed-trial recovery are not yet bounded. See
+{doc}`reference/capabilities` for its validation grade and
+{doc}`explanation/adjoint-gradients` for the method.
 
 ## Where objectives plug in
 

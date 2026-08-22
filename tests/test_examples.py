@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +26,68 @@ EXAMPLES = REPO / "examples"
 DATA_DIR = EXAMPLES / "data"
 
 _COST_RE = re.compile(r"^\s*\d+\s+\d+\s+([0-9.eE+-]+)", re.MULTILINE)
+
+ESSOS_BRANCH_EXAMPLES = (
+    EXAMPLES / "take_free_boundary_gradients.py",
+    EXAMPLES / "vmex_fixed_free_boundary_comparison.py",
+    EXAMPLES / "vmex_get_B_outside_plasma.py",
+    EXAMPLES / "vmex_fieldline_tracing_vacuum.py",
+    EXAMPLES / "vmex_fieldline_tracing_finite_beta.py",
+    EXAMPLES / "optimization" / "single_stage_optimization.py",
+    EXAMPLES / "optimization" / "single_stage_optimization_finite_beta.py",
+    EXAMPLES / "optimization" / "single_stage_free_boundary_optimization.py",
+    EXAMPLES / "optimization" / "single_stage_free_boundary_optimization_finite_beta.py",
+)
+
+
+def test_released_essos_reads_bundled_coil_fixtures() -> None:
+    """The compact coil files retain the schema supported by ESSOS 0.16."""
+    pytest.importorskip("essos")
+    from essos.coils import Coils
+
+    if hasattr(Coils, "from_json"):
+        load = Coils.from_json
+    else:
+        from essos.coils import Coils_from_json
+
+        load = Coils_from_json
+    for path in sorted(DATA_DIR.glob("ESSOS_biot_savart_*.json")):
+        coils = load(str(path))
+        assert np.all(np.isfinite(np.asarray(coils.gamma)))
+        assert np.all(np.isfinite(np.asarray(coils.currents)))
+
+
+def test_essos_examples_name_the_required_branch() -> None:
+    """ESSOS 0.16 reports the branch to install, not a missing symbol."""
+    pytest.importorskip("essos")
+    from essos.coils import Coils
+
+    try:
+        from essos.dynamics import LevelsetStoppingCriterion, trace_field_lines
+        from essos.objective_functions import (
+            loss_coil_separation,
+            loss_coil_surface_distance,
+        )
+        from essos.surfaces import surfacerzfourier_from_boundary
+    except ImportError:
+        has_branch_api = False
+    else:
+        del (LevelsetStoppingCriterion, trace_field_lines,
+             loss_coil_separation, loss_coil_surface_distance,
+             surfacerzfourier_from_boundary)
+        has_branch_api = all(
+            hasattr(Coils, name)
+            for name in ("from_json", "with_dofs", "dof_names")
+        )
+    if has_branch_api:
+        pytest.skip("the required ESSOS branch API is installed")
+
+    for script in ESSOS_BRANCH_EXAMPLES:
+        with pytest.raises(
+            ImportError,
+            match="needs ESSOS branch rj/vmex-optimization-interfaces",
+        ):
+            runpy.run_path(str(script))
 
 
 def _run_example(script: Path, cwd: Path, timeout: int = 2400,

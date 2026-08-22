@@ -1,5 +1,8 @@
 #!/usr/bin/env python
-"""True free-boundary QA optimization with ESSOS coils as the only dofs."""
+"""True free-boundary QA optimization with ESSOS coils as the only dofs.
+
+Preview: this script needs ESSOS branch ``rj/vmex-optimization-interfaces``.
+"""
 
 from dataclasses import replace
 import os
@@ -14,10 +17,16 @@ import vmex as vj
 from vmex import optimize as opt
 from vmex.core import implicit as im
 
-from essos.coils import Coils
-from essos.fields import BiotSavart
-from essos.objective_functions import loss_coil_separation
-from essos.surfaces import SurfaceRZFourier, surfacerzfourier_from_boundary
+try:
+    from essos.coils import Coils
+    from essos.fields import BiotSavart
+    from essos.objective_functions import loss_coil_separation
+    from essos.surfaces import SurfaceRZFourier, surfacerzfourier_from_boundary
+except ImportError as error:
+    raise ImportError(
+        "This example needs ESSOS branch rj/vmex-optimization-interfaces "
+        "(uwplasma/ESSOS#58)."
+    ) from error
 
 SURFACES = np.linspace(0.1, 1.0, 6)
 NS, MPOL, NTOR, NITER, FTOL = 25, 5, 5, 4000, 1.0e-10
