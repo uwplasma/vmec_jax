@@ -16,13 +16,13 @@ jobs:
   campaign:
     name: Weekly ${{ matrix.campaign }}
     runs-on: ubuntu-latest
-    # The 238-mode free-boundary activation test measured 124 minutes and
-    # its five-test campaign 164 minutes cold. Keep bounded variance headroom.
-    timeout-minutes: 210
+    # Each campaign retains its converged physics contract while staying
+    # bounded to one hour on a cold hosted runner.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        campaign: [hmfb, mirror, free-boundary-adjoint]
+        campaign: [hmfb-fixed, hmfb-free, mirror, free-boundary-adjoint]
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v7.0.0
