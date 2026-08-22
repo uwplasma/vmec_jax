@@ -81,11 +81,19 @@ one dated log entry; do not rely on chat history.
   It adds the missing solved free-boundary pressure-gradient certificate as one approximately
   79-second weekly test. Its review CI is fully green.
 - `/Users/rogeriojorge/local/vmex-release-0.6-final`, branch `rj/release-0.6-final`, is stacked
-  on #133 at `51528de6` and published as draft PR #134. It contains only the 0.6.0
+  on #133 at `14553796` and published as draft PR #134. It contains only the 0.6.0
   version/changelog finalization and the source-free wheel/sdist verification matrix. Manual
-  dispatch now builds and verifies without publishing; PyPI remains release-event-only. Review
-  and merge #131 first, then retarget/review #132, #133 and #134 in order; keep all four scopes
-  separate and do not squash them together.
+  dispatch now builds and verifies without publishing; PyPI remains release-event-only. The
+  corrected four-way Python 3.10/3.12 wheel/sdist matrix passed in run 32542322776, and PR CI
+  plus docs linkcheck are green at this SHA.
+- `/Users/rogeriojorge/local/vmex-release-0.6-weekly-ci`, branch
+  `rj/release-0.6-weekly-ci`, is stacked on #134 at `1e944bed` and published as draft PR #135.
+  It replaces the redundant two-hour free-boundary survival stress with the stronger converged
+  238-mode VMEC2000 parity contract, splits fixed/free high-mode jobs, preserves the mirror
+  refinement tolerances using only the two grids that enter the comparison, and bounds every
+  Weekly job to 60 minutes. Local cold/relevant timings pass; hosted Weekly run 32546262891 is
+  the pending acceptance. Review and merge #131 first, then retarget/review #132, #133, #134
+  and #135 in order; keep all five scopes separate and do not squash them together.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
   copy of this file is authoritative.
@@ -98,9 +106,9 @@ one dated log entry; do not rely on chat history.
   ESSOS maintainer review and merge; VMEX contributors do not merge them, and they are scheduled
   last rather than blocking VMEX 0.6.0.
 
-Resume in this order: read this checkpoint and the newest log entry; review #131; retarget and
-review #132, #133 and #134 in order; dispatch and record the #134 artifact matrix plus the
-candidate Nightly/Weekly/GPU workflows; and execute the remaining 0.6.0 gates in Phase 23.
+Resume in this order: read this checkpoint and the newest log entry; finish and record Weekly
+run 32546262891 and GPU run 32543384593; review #131; retarget and review #132, #133, #134 and
+#135 in order; then execute the remaining tag/publish/latest verification gates in Phase 23.
 Never infer completion from a local diff, an open sibling PR, or a green microbenchmark.
 
 ## Research-grade completion map
@@ -1895,7 +1903,7 @@ Acceptance: every public derivative at a converged point is current-point certif
 typed error; rejected-trial penalties are value/derivative consistent; the degraded LASYM case
 descends with no stale fallback; focused tests and full remote CI pass.
 
-## Phase 23 — VMEX 0.6.0 release [IN REVIEW — draft PRs #131/#132]
+## Phase 23 — VMEX 0.6.0 release [IN REVIEW — draft PRs #131--#135]
 
 Scope freeze: 0.6.0 contains the already merged post-#123 features plus the small Phase 22/25
 hardening work. Alpha loss, the larger boundary-Schur performance rewrite, epsilon-effective
@@ -1923,15 +1931,22 @@ Release gates, in order:
    development loader. Do not duplicate these helpers in VMEX. Restore the stable examples only
    after an independent ESSOS 0.17 release.
 3. Manually dispatch and pass current Nightly, Weekly and GPU campaigns at the candidate SHA.
-   The previous Weekly failed only because of an obsolete asset URL; confirm the current asset
-   manifest, do not waive the campaign. Record run URLs and elapsed times in the release log.
+   Nightly run 32543383359 is fully green: optional integrations 5:40, QA 2:36, QI 2:35,
+   QP 3:01 and QH 4:04. The former Weekly design was not acceptable release evidence even when
+   green: run 31236274932 took 2:42:53 for high-mode free boundary and 1:29:27 for mirrors.
+   Draft PR #135 keeps the physical oracles but bounds and shards them; hosted run 32546262891
+   must pass before release. Trusted GPU run 32543384593 is queued for the self-hosted runner.
+   Record final URLs and elapsed times in the release log; do not waive either pending campaign.
 4. Draft PR #134 updates `pyproject.toml` to 0.6.0 and finalizes
    `docs/project/changelog.md`. Its release workflow installs both wheel and sdist into clean
    Python 3.10 and 3.12 jobs, imports VMEX outside the source tree and runs a converged 7-surface
    solve from the packaged seed. Manual dispatch is build/verify-only; only a published release
    may enter the PyPI job. Local Python 3.12 wheel/sdist installs pass, and the artifacts are
    573 KiB / 894 KiB versus the 576 KiB / 896 KiB baseline. Dispatch the four-job remote matrix
-   and record it before merging.
+   and record it before merging. The first dispatch exposed that `setup-python` cannot use pip
+   caching without a checked-out dependency file in the intentionally source-free verifier;
+   removing only that cache option fixed the workflow. Corrected run 32542322776 passed build
+   plus wheel/sdist installs on Python 3.10 and 3.12, with publish and make-latest skipped.
 5. Tag `v0.6.0`, publish through the trusted PyPI workflow, and make the software release
    GitHub's latest. The local workflow change adds a post-publish `make_latest=true` step so an
    assets release no longer owns `/releases/latest`; preserve asset releases and provenance.
@@ -2018,9 +2033,10 @@ Retained policy:
 
 1. Run the entire workflow remotely. Reject `-n 2` in a lane if RSS, JAX cache interactions or
    wall time regress; parallelism is a measured policy, not a universal default.
-2. Keep pull-request critical path <= 15 minutes and scheduled nightly <= 30 minutes on GitHub
-   runners, with no individual silent test over 10 minutes. Use manifest sharding and shared
-   compiled shapes before further resolution reductions.
+2. Keep pull-request critical path <= 15 minutes and scheduled Nightly <= 30 minutes on GitHub
+   runners, with no individual Nightly test over 10 minutes. Weekly production-resolution
+   contracts may be longer only when isolated in <=60-minute jobs with measured local/remote
+   evidence. Use manifest sharding and shared compiled shapes before resolution reductions.
 3. Preserve one process-order cache-leak campaign because selector sharding previously hid a
    module-cache leak. Randomize/order-check cheaply rather than duplicating all physics solves.
 4. Report per-test timing artifacts and fail on missing manifest coverage. Production-size
@@ -2241,9 +2257,20 @@ gitignored, and no PR in the queue adds a data file.
   PR was merged. PR #133's own review CI was then started separately.
 - 2026-08-21 rogeriojorge: P24/P23 — PR #133 review CI is fully green; its longest jobs were
   core 11:21, implicit-B 10:54 and mirror spline 10:00. Published stacked draft PR #134 at
-  `51528de6` for the final 0.6.0 artifacts. It also closes a release-safety hole: manual dispatch
+  `14553796` for the final 0.6.0 artifacts. It also closes a release-safety hole: manual dispatch
   previously entered the PyPI publish job, while the new workflow makes manual runs
   build/verify-only and requires a published GitHub release for PyPI. Local wheel/sdist builds
   are 573/894 KiB; both clean Python 3.12 installs report 0.6.0 and converge the smoke solve.
-  PR #134 review CI and its Python 3.10/3.12 artifact matrix remain to be recorded. No PR was
-  merged and no tag, release or package publication was performed.
+  PR #134 review CI and docs linkcheck are green. Corrected manual run 32542322776 passed the
+  source-free wheel/sdist verification on Python 3.10 and 3.12; publish/latest jobs were skipped.
+  No PR was merged and no tag, release or package publication was performed.
+- 2026-08-21 rogeriojorge: P23/P25 — candidate Nightly run 32543383359 is fully green; its
+  longest optimization job was QH at 4:04 and optional integrations took 5:40. The trusted GPU
+  run 32543384593 remains queued for the self-hosted runner. Audited the old Weekly success
+  31236274932: the high-mode campaign took 2:41:53 (including a 7,550 s nonconvergent generated-
+  coil test) and mirror refinement 1:29:27. Published stacked draft PR #135 at `1e944bed`.
+  It replaces that weaker survival test with the converged 238-mode free-boundary VMEC2000
+  parity/radial-restart certificate, shards fixed/free high-mode jobs, retains the mirror
+  0--80% continuation and original fine-grid tolerances, and caps each job at 60 minutes.
+  Local fixed/free high-mode tests passed in 4:39/16:27; the coarse mirror continuation passed
+  in 36 s and a fresh-cache fine-grid scan in 19:16. Hosted Weekly run 32546262891 is pending.
