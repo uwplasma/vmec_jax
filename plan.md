@@ -53,41 +53,42 @@ the session scratchpad: `profile_lasym.py`, `fb_isolate.py`, `fb_forward_anatomy
 
 ---
 
-## Current checkpoint and interruption-safe handoff (2026-08-21)
+## Current checkpoint and interruption-safe handoff (2026-08-22)
 
 This is the authoritative plan in PR #125. **Do not merge or close PR #125**: it is the live
 program ledger. **Do not close PR #122**: it is the open alpha-tracing/loss-fraction
 specification and implementation branch. Update the phase body when intent changes and append
 one dated log entry; do not rely on chat history.
 
-- `main` is current at `0362f701`. The 54 commits after PR #123 comprise ten first-parent PR
-  merges (#116, #129, #128, #126, #127, #117, #119, #121, #130, #118), 16 branch-sync merges,
-  and 28 direct commits. The independent disposition is recorded in Phase 24.
+- `main` is current at `26419313` after PR #131. The 54 commits after PR #123 and before #131
+  comprise ten first-parent PR merges (#116, #129, #128, #126, #127, #117, #119, #121,
+  #130, #118), 16 branch-sync merges, and 28 direct commits. Their independent disposition is
+  recorded in Phase 24.
 - The first release worktree is
   `/Users/rogeriojorge/local/vmex-release-0.6-hardening`, branch
-  `rj/release-0.6-hardening`, based on `0362f701`. Commit `326ba760` is published for review as
-  draft PR #131. It contains the exact implicit-Jacobian contract, CI runtime, 0.6.0 changelog,
+  `rj/release-0.6-hardening`, head `ef8388f0`. PR #131 is merged at `26419313`. It contains
+  the exact implicit-Jacobian contract, CI runtime, changelog removal,
   and release-workflow changes. Two-worker JAX contention made the original implicit-response
   lane slower; one serial lane was still too variable, so the unchanged certification set is
   now split by JAX shape into two serial implicit lanes plus one isolated free-boundary-adjoint
-  lane. Two consecutive remote runs are fully green with every job below 12 minutes, satisfying
-  Phase 25's runtime gate; PR #131 still requires the user's review before merge.
+  lane. The final run passed every gate; its longest direct job took 12:08. The audit also
+  shortened the derivative documentation, named the Jacobian policy helpers by their role,
+  removed the changelog from the branch history and tested independent-GMRES recovery.
 - `/Users/rogeriojorge/local/vmex-release-0.6-essos-audit`, branch
-  `rj/release-0.6-essos-audit`, is stacked on #131 at `e977eb20` and published as draft PR #132.
-  It preserves the released ESSOS 0.16 contract, explicitly guards nine ESSOS 0.17 previews,
-  removes the unreleased CI pin, and restores the stable coil-fixture schema.
+  `rj/release-0.6-essos-audit`, is based on `main` at `90a920c1` and published as ready PR #132.
+  It preserves the released ESSOS 0.16 contract, guards nine examples that need the unreleased
+  functional-coil API, removes the unreleased CI pin, and restores the stable coil-fixture schema.
 - `/Users/rogeriojorge/local/vmex-release-0.6-presf-audit`, branch
-  `rj/release-0.6-presf-audit`, is stacked on #132 at `31dd34b2` and published as draft PR #133.
+  `rj/release-0.6-presf-audit`, is stacked on #132 at `57a9a2e1` and published as draft PR #133.
   It adds the missing solved free-boundary pressure-gradient certificate as one approximately
-  79-second weekly test. Its review CI is fully green.
+  79-second weekly test. The content-identical pre-restack review CI is fully green.
 - `/Users/rogeriojorge/local/vmex-release-0.6-final`, branch `rj/release-0.6-final`, is stacked
-  on #133 at `14553796` and published as draft PR #134. It contains only the 0.6.0
-  version/changelog finalization and the source-free wheel/sdist verification matrix. Manual
+  on #133 at `b12b5d7b` and published as draft PR #134. It contains only the 0.6.0
+  version finalization and the source-free wheel/sdist verification matrix. Manual
   dispatch now builds and verifies without publishing; PyPI remains release-event-only. The
-  corrected four-way Python 3.10/3.12 wheel/sdist matrix passed in run 32542322776, and PR CI
-  plus docs linkcheck are green at this SHA.
+  corrected four-way Python 3.10/3.12 wheel/sdist matrix passed in run 32542322776.
 - `/Users/rogeriojorge/local/vmex-release-0.6-weekly-ci`, branch
-  `rj/release-0.6-weekly-ci`, is stacked on #134 at `a4e4b37f` and published as draft PR #135.
+  `rj/release-0.6-weekly-ci`, is stacked on #134 at `097e9271` and published as draft PR #135.
   It replaces the redundant two-hour free-boundary survival stress with the stronger converged
   238-mode VMEC2000 parity contract, splits fixed/free high-mode jobs, preserves the mirror
   refinement tolerances using only the two grids that enter the comparison, and bounds every
@@ -95,12 +96,12 @@ one dated log entry; do not rely on chat history.
   fit that bound, so it remains in the 0--80% coarse continuation while the fine-grid
   certificate covers the promoted 0--10% range. The second hosted run passed that mirror job
   in 55:01 but proved the 15->25 high-mode free-boundary ladder too variable for the same bound.
-  Head `a4e4b37f` changes only the radial ladder to 11->19; the local VMEX run and independent
+  Head `097e9271` changes only the radial ladder to 11->19; the local VMEX run and independent
   VMEC2000 oracle both converge with the same 238 modes, vacuum activation, restart and 1e-8
   tolerance. PR run 32554820509 is fully green (longest direct job 10:50), and final Weekly run
   32554856698 passed adjoint/fixed/mirror/free in 4:45/16:17/47:54/56:43, all below the
-  60-minute per-job bound. Review and merge #131 first, then retarget/review #132, #133, #134
-  and #135 in order; keep all five scopes separate and do not squash them together.
+  60-minute per-job bound. PR #131 is merged. Review #132 next, then #133, #134 and #135 after
+  each parent merges; keep the PR scopes separate.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
   copy of this file is authoritative.
@@ -113,11 +114,23 @@ one dated log entry; do not rely on chat history.
   ESSOS maintainer review and merge; VMEX contributors do not merge them, and they are scheduled
   last rather than blocking VMEX 0.6.0.
 
-Resume in this order: read this checkpoint and the newest log entry; dispatch an uncontended
-replacement for cancelled GPU run 32543384593 once both office GPUs are free;
-review #131; retarget and review #132, #133, #134 and #135 in order; then execute the remaining
-tag/publish/latest verification gates in Phase 23.
+GPU work is deferred by user decision on 2026-08-22. The uncontended replacement for cancelled
+run 32543384593 is no longer a VMEX 0.6 gate. This is an explicit evidence debt, not a passing
+GPU result: 0.6 adds no new free-boundary GPU support or performance claim, and later GPU/HPC
+promotion remains blocked until the trusted campaign passes on an idle host.
+
+Resume in this order: read this checkpoint and the newest log entry; review and merge #132,
+#133, #134 and #135 in order; execute the tag, publish and latest-release
+checks in Phase 23; then continue the CPU boundary-Schur work. Return to the deferred GPU matrix
+only when the office host is uncontended and GPU evidence is again in scope.
 Never infer completion from a local diff, an open sibling PR, or a green microbenchmark.
+
+Immediate maintainer actions:
+
+1. Take no GPU action for this release.
+2. Review one VMEX release PR at a time in the order #132, #133, #134, #135.
+3. Keep #122 and #125 open. They are the loss-fraction specification and this program ledger.
+4. Leave ESSOS #58 and #61 to independent ESSOS maintainers; they are last and do not block 0.6.
 
 ## Research-grade completion map
 
@@ -687,7 +700,7 @@ NEXT: P3/P3b boundary-Schur speed + exact certificates -> P4 public free-boundar
       P5b/P5c LASYM completion -> P6/P7 ripple + NEO speed -> P21 loss fraction
 THEN: P8 performance/parity matrix, P14/P16-P19 physics, P15/P26 ownership moves
 LAST: P10 slimming/history only after ownership settles; P27 final capability audit
-      -> independent ESSOS maintainer review/merge of #58/#61 and ESSOS 0.17
+      -> independent ESSOS maintainer review/merge of #58/#61 and a compatible ESSOS release
 
 P2 cache policy informs graph-size work but is not the Jacobian-stall fix.
 P9 coverage/runtime ratchets continuously through P25; do not postpone test design.
@@ -1553,7 +1566,7 @@ exception to the usual “finish or close” policy:
 Current order: Phase 22 exactness -> Phase 25 CI hardening -> Phase 23 VMEX 0.6.0 -> Phase 3
 boundary-Schur performance -> P4/P21 preparatory APIs -> P6/P7 neoclassical work -> Phase 15/26
 code moves -> Phase 10 final slimming -> independent ESSOS maintainer review/merge of #58/#61
-and ESSOS 0.17. PR #122 and #125 remain open throughout. Any VMEX slice that requires the new
+and a compatible ESSOS release. PR #122 and #125 remain open throughout. Any VMEX slice that requires the new
 ESSOS API waits unmerged or stays explicitly development-only until that external release exists.
 - 2026-08-19 claude: P17 — localized the LASYM underperformance to a wrong analytic Jacobian in the n=0 asymmetric m=1 difference channel (16% error); forward map verified correct.
 - 2026-08-19 claude: P17 — root cause is the frozen `delta == 0` branch in `implicit.py::_lasym_delta_rotation_traceable`; fixed, gated, verified end-to-end (1.6e-1 -> 1.6e-7).
@@ -1837,7 +1850,7 @@ the ARIES-CS baseline for a case with substantial losses. Compare the ordering
 of loss fractions between two such configurations rather than an absolute
 number, which depends on the tracing model and particle count.
 
-## Phase 22 — Exact implicit-Jacobian contract [IN REVIEW — draft PR #131]
+## Phase 22 — Exact implicit-Jacobian contract [COMPLETE — PR #131]
 
 **Contract.** “Exact implicit derivatives” means VMEX returns a derivative certified at the
 current parameter point against the true linearized equilibrium residual. A fast response that
@@ -1846,11 +1859,11 @@ point is also not exact at the current point. Failed equilibrium trials may use 
 differentiable penalty pair, but converged trials never silently receive an approximate or stale
 derivative.
 
-### 22.1 Local implementation inventory
+### 22.1 Implementation inventory
 
-The worktree named in the current checkpoint contains these deliberate changes:
+PR #131 contains these deliberate changes:
 
-- `_certifier_summary` retains maximum iterations, uncertified-column count, the worst residual
+- `_linear_response_summary` retains maximum iterations, uncertified-column count, the worst residual
   norm and its requested tolerance. Typed failures therefore carry evidence rather than a bare
   boolean.
 - `implicit_jacobian_method="auto"` tries the amortized block/forward response and recomputes the
@@ -1862,10 +1875,10 @@ The worktree named in the current checkpoint contains these deliberate changes:
   `docs/explanation/adjoint-gradients.md` say “certified,” document automatic fallback and
   distinguish forced advanced lanes.
 - Touched implementation/tests: `vmex/core/{optimize,implicit}.py` and
-  `tests/test_optimize.py`. The implementation is published in draft PR #131 and is not complete
-  until remote CI and review pass.
+  `tests/test_optimize.py`. The host and JAX policies have direct tests; the independent-GMRES
+  recovery is exercised through the public problem.
 
-The stale-key gap is closed in `b4a68570`: generic derivative failures reuse a memoized Jacobian
+The stale-key gap is closed: generic derivative failures reuse a memoized Jacobian
 only when `last_jac_key` is the identical decision vector; a new point raises the original error.
 Rejected equilibrium trials retain only the exact derivative of their documented smooth penalty.
 
@@ -1896,7 +1909,7 @@ Rejected equilibrium trials retain only the exact derivative of their documented
    linear algebra when their complexity differs. A single API is desirable; forcing every
    optimizer through one computational graph is not a goal.
 
-Current PR #131 evidence: Schur/coupled comparison passed in 87.49 s; block-response
+PR #131 evidence: Schur/coupled comparison passed in 87.49 s; block-response
 transpose/FD passed in 159.45 s; least-squares policy/physics comparison passed; and the normal
 48-variable LASYM optimization completed as described above. Full local lanes passed: core 96
 tests in 3:57, implicit response 59 in 6:43, and field API 64 in 2:29. Changed executable-line
@@ -1911,7 +1924,7 @@ Acceptance: every public derivative at a converged point is current-point certif
 typed error; rejected-trial penalties are value/derivative consistent; the degraded LASYM case
 descends with no stale fallback; focused tests and full remote CI pass.
 
-## Phase 23 — VMEX 0.6.0 release [IN REVIEW — draft PRs #131--#135]
+## Phase 23 — VMEX 0.6.0 release [IN REVIEW — PRs #132--#135]
 
 Scope freeze: 0.6.0 contains the already merged post-#123 features plus the small Phase 22/25
 hardening work. Alpha loss, the larger boundary-Schur performance rewrite, epsilon-effective
@@ -1921,7 +1934,7 @@ merged and independently certified. A release is a verified artifact, not merely
 Release gates, in order:
 
 1. Merge the focused Phase 22/25 hardening PR after full CI. Resolve the three audit debts in
-   Phase 24 or explicitly list a narrowly justified deferral in the changelog.
+   Phase 24 or list a narrowly justified deferral in the GitHub release notes.
 2. Audit VMEX against released ESSOS 0.16. Remove, defer or clearly development-gate any code,
    example or documentation that requires open ESSOS #58/#61; VMEX 0.6 must neither advertise
    nor require those unreleased APIs. Their independent review, merge and ESSOS 0.17 release are
@@ -1938,7 +1951,7 @@ Release gates, in order:
    coil fixtures retain the public `dofs_curves` / `dofs_currents` schema read by 0.16 and the
    development loader. Do not duplicate these helpers in VMEX. Restore the stable examples only
    after an independent ESSOS 0.17 release.
-3. Manually dispatch and pass current Nightly, Weekly and GPU campaigns at the candidate SHA.
+3. Manually dispatch and pass current Nightly and Weekly campaigns at the candidate SHA.
    Nightly run 32543383359 is fully green: optional integrations 5:40, QA 2:36, QI 2:35,
    QP 3:01 and QH 4:04. The former Weekly design was not acceptable release evidence even when
    green: run 31236274932 took 2:42:53 for high-mode free boundary and 1:29:27 for mirrors.
@@ -1953,15 +1966,13 @@ Release gates, in order:
    PR run 32554820509 is fully green, including changed-line coverage and the aggregate gate;
    final Weekly run 32554856698 passed adjoint/fixed/mirror/free in 4:45/16:17/47:54/56:43,
    all below the one-hour per-job bound. GPU run 32543384593 was cancelled as nonqualifying
-   after read-only
-   inspection found two unrelated nonlinear campaigns occupying both office GPUs. Dispatch a
-   fresh ephemeral runner only after those processes finish. Record its final URL and elapsed
-   time in the release log; do not waive the pending GPU campaign.
-4. Draft PR #134 updates `pyproject.toml` to 0.6.0 and finalizes
-   `docs/project/changelog.md`. Its release workflow installs both wheel and sdist into clean
-   Python 3.10 and 3.12 jobs, imports VMEX outside the source tree and runs a converged 7-surface
-   solve from the packaged seed. Manual dispatch is build/verify-only; only a published release
-   may enter the PyPI job. Local Python 3.12 wheel/sdist installs pass, and the artifacts are
+   because unrelated nonlinear campaigns occupied both office GPUs. By user decision on
+   2026-08-22, its replacement is deferred until after 0.6. CPU correctness, Nightly and Weekly
+   qualify this release; no new GPU claim may rely on the cancelled run.
+4. Draft PR #134 updates `pyproject.toml` to 0.6.0. Its release workflow installs both wheel and
+   sdist into clean Python 3.10 and 3.12 jobs. Each imports VMEX outside the source tree and runs
+   a converged 7-surface solve from the packaged seed. Manual dispatch is build/verify-only;
+   only a published release may enter the PyPI job. Local Python 3.12 wheel/sdist installs pass, and the artifacts are
    573 KiB / 894 KiB versus the 576 KiB / 896 KiB baseline. Dispatch the four-job remote matrix
    and record it before merging. The first dispatch exposed that `setup-python` cannot use pip
    caching without a checked-out dependency file in the intentionally source-free verifier;
@@ -1972,6 +1983,15 @@ Release gates, in order:
    assets release no longer owns `/releases/latest`; preserve asset releases and provenance.
 6. Verify PyPI metadata/install, GitHub release assets, docs links, badge versions, CLI version,
    and `/releases/latest`. Only then mark Phase 23 done.
+
+Deferred GPU evidence is tracked after the release:
+
+- Do not dispatch GPU campaigns while GPU work is out of scope.
+- Before any new GPU/HPC claim or free-boundary GPU promotion, record an idle host, JAX/CUDA
+  versions, peak memory, cold and warm time, and the trusted campaign URL.
+- A failed, cancelled or contended run is evidence to investigate, never a passing result.
+- CPU correctness and the bounded Nightly/Weekly campaigns remain unchanged while this debt is
+  open.
 
 PR #122 and #125 stay open throughout and after this release. Never merge either merely to empty
 the pull-request queue.
@@ -2002,7 +2022,7 @@ All ten PRs had green CI but no GitHub review; green checks are not independent 
 Acceptance: the three named debts have literature/reference-anchored tests or recorded bounded
 campaign evidence; no published history rewrite; Phase 23 explicitly accounts for each.
 
-## Phase 25 — CI and example-integration runtime [COMPLETE IN DRAFT PR #131 — AWAITING REVIEW]
+## Phase 25 — CI and example-integration runtime [COMPLETE — PR #131]
 
 Measured on `main` CI run 32340328989: core 19:42, field API 19:53,
 implicit-response 12:46 and mirror-spline 9:14. Dominant individual tests were the Schur/coupled
@@ -2048,6 +2068,9 @@ implicit-A 9:19, implicit-B 11:12, free-boundary adjoint 6:31, field API 6:47 an
 implicit-A 9:34, implicit-B 11:20, free-boundary adjoint 7:10, field API 9:05 and mirror spline
 10:04. Every job was below 12 minutes; no physics assertion, resolution or tolerance was
 weakened. Phase 25's acceptance criterion is met.
+
+This phase certifies CPU/host CI scheduling. The deferred accelerator campaign is governed by
+Phase 23's evidence-debt rules and does not reopen the measured PR/runtime acceptance above.
 
 Retained policy:
 
@@ -2209,7 +2232,6 @@ FIXME, HACK, testbed or experimental marker anywhere. These three are honest
 maturity caveats on shipped lanes, and the free-boundary one has earned it: a
 real derivative defect turned up there today (#128). Deleting the word would
 overstate readiness, so they stay until the lane is anchored end to end.
-(`docs/project/changelog.md` is exempt by definition.)
 
 **Repo size** is fine: `docs/_build` is 30 MB locally but untracked and
 gitignored, and no PR in the queue adds a data file.
@@ -2309,3 +2331,17 @@ gitignored, and no PR in the queue adds a data file.
   sole remaining campaign gate is an uncontended trusted-GPU run after the user's unrelated
   office campaigns release both GPUs. ESSOS #58/#61 remain external, independently reviewed,
   and last; no VMEX PR, tag or release was merged or published.
+- 2026-08-22 rogeriojorge: P22/P23/P25 — deferred GPU work by explicit user decision. The
+  cancelled trusted-GPU run remains nonqualifying evidence, but its replacement is no longer a
+  0.6 release gate. CPU correctness, Nightly and bounded Weekly campaigns qualify the release;
+  no new GPU/free-boundary performance claim is added. Before any later GPU/HPC promotion,
+  rerun the trusted campaign on an idle host and record software versions, peak memory and cold/
+  warm timing. Began the final #131 audit: removed the repository changelog, rewrote the
+  unmerged branch history, simplified the derivative contract prose, renamed the certificate
+  policy helpers for clarity, and added the missing host non-finite-matrix check.
+- 2026-08-22 rogeriojorge: P22/P25 — merged PR #131 as `26419313` after final CI run
+  32595918128 passed every gate. Changed-line coverage and the aggregate gate passed; the longest
+  direct lane was implicit-response B at 12:08. The release stack was rewritten without the
+  changelog: #132 `90a920c1` is ready on `main`; #133 `57a9a2e1`, #134 `b12b5d7b`, and #135
+  `097e9271` remain stacked drafts. Their source, tests, documentation and PR descriptions were
+  audited for concise scope. GPU work remains deferred under the evidence rules above.
