@@ -79,9 +79,13 @@ one dated log entry; do not rely on chat history.
 - `/Users/rogeriojorge/local/vmex-release-0.6-presf-audit`, branch
   `rj/release-0.6-presf-audit`, is stacked on #132 at `31dd34b2` and published as draft PR #133.
   It adds the missing solved free-boundary pressure-gradient certificate as one approximately
-  79-second weekly test. Its own review CI is running. Review and merge #131 first,
-  retarget/review #132, then retarget/review #133; keep the three scopes separate and do not
-  squash them together.
+  79-second weekly test. Its review CI is fully green.
+- `/Users/rogeriojorge/local/vmex-release-0.6-final`, branch `rj/release-0.6-final`, is stacked
+  on #133 at `51528de6` and published as draft PR #134. It contains only the 0.6.0
+  version/changelog finalization and the source-free wheel/sdist verification matrix. Manual
+  dispatch now builds and verifies without publishing; PyPI remains release-event-only. Review
+  and merge #131 first, then retarget/review #132, #133 and #134 in order; keep all four scopes
+  separate and do not squash them together.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
   copy of this file is authoritative.
@@ -94,10 +98,10 @@ one dated log entry; do not rely on chat history.
   ESSOS maintainer review and merge; VMEX contributors do not merge them, and they are scheduled
   last rather than blocking VMEX 0.6.0.
 
-Resume in this order: read this checkpoint and the newest log entry; inspect PR #131/#132/#133
-checks; require two qualifying remote runs and review before merging #131; retarget and review
-#132, then #133; and execute the remaining 0.6.0 gates in Phase 23. Never infer completion from
-a local diff, an open sibling PR, or a green microbenchmark.
+Resume in this order: read this checkpoint and the newest log entry; review #131; retarget and
+review #132, #133 and #134 in order; dispatch and record the #134 artifact matrix plus the
+candidate Nightly/Weekly/GPU workflows; and execute the remaining 0.6.0 gates in Phase 23.
+Never infer completion from a local diff, an open sibling PR, or a green microbenchmark.
 
 ## Research-grade completion map
 
@@ -1921,10 +1925,13 @@ Release gates, in order:
 3. Manually dispatch and pass current Nightly, Weekly and GPU campaigns at the candidate SHA.
    The previous Weekly failed only because of an obsolete asset URL; confirm the current asset
    manifest, do not waive the campaign. Record run URLs and elapsed times in the release log.
-4. Update `pyproject.toml` to 0.6.0 and finalize `docs/project/changelog.md`. Build wheel and
-   sdist, install each into clean Python 3.10 and 3.12 environments, import VMEX without optional
-   packages, run a minimal solve, and verify package contents/size (current baseline: wheel
-   576 KiB, sdist 896 KiB).
+4. Draft PR #134 updates `pyproject.toml` to 0.6.0 and finalizes
+   `docs/project/changelog.md`. Its release workflow installs both wheel and sdist into clean
+   Python 3.10 and 3.12 jobs, imports VMEX outside the source tree and runs a converged 7-surface
+   solve from the packaged seed. Manual dispatch is build/verify-only; only a published release
+   may enter the PyPI job. Local Python 3.12 wheel/sdist installs pass, and the artifacts are
+   573 KiB / 894 KiB versus the 576 KiB / 896 KiB baseline. Dispatch the four-job remote matrix
+   and record it before merging.
 5. Tag `v0.6.0`, publish through the trusted PyPI workflow, and make the software release
    GitHub's latest. The local workflow change adds a post-publish `make_latest=true` step so an
    assets release no longer owns `/releases/latest`; preserve asset releases and provenance.
@@ -2232,3 +2239,11 @@ gitignored, and no PR in the queue adds a data file.
   core 10:53 and mirror spline 10:04. Every lane stayed below 12 minutes without weaker physics,
   resolutions or tolerances. P25 is complete in draft PR #131 and awaits user review; no VMEX
   PR was merged. PR #133's own review CI was then started separately.
+- 2026-08-21 rogeriojorge: P24/P23 — PR #133 review CI is fully green; its longest jobs were
+  core 11:21, implicit-B 10:54 and mirror spline 10:00. Published stacked draft PR #134 at
+  `51528de6` for the final 0.6.0 artifacts. It also closes a release-safety hole: manual dispatch
+  previously entered the PyPI publish job, while the new workflow makes manual runs
+  build/verify-only and requires a published GitHub release for PyPI. Local wheel/sdist builds
+  are 573/894 KiB; both clean Python 3.12 installs report 0.6.0 and converge the smoke solve.
+  PR #134 review CI and its Python 3.10/3.12 artifact matrix remain to be recorded. No PR was
+  merged and no tag, release or package publication was performed.
