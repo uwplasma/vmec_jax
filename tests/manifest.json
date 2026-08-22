@@ -134,7 +134,6 @@
       "tests/test_freeboundary_implicit.py::test_free_boundary_config_rejects_fixed_boundary_input",
       "tests/test_freeboundary_implicit.py::test_free_boundary_warm_failure_retries_once_from_cold",
       "tests/test_freeboundary_implicit.py::test_free_boundary_host_adjoint_rejects_a_false_solver_success",
-      "tests/test_freeboundary_implicit.py::test_free_boundary_current_gradient_matches_resolve_finite_difference",
       "tests/test_freeboundary_multigrid.py::test_stage_transfer_carries_vacuum_and_interpolates_final_xc",
       "tests/test_freeboundary_multigrid.py::test_initial_bad_jacobian_restarts_free_ladder_through_ns3",
       "tests/test_freeboundary_multigrid.py::test_single_grid_hot_restart_preserves_free_edge",
@@ -156,22 +155,29 @@
       "tests/test_plot_summary.py",
       "tests/test_plotting_boozer.py"
     ],
-    "pr-implicit-response": [
+    "pr-free-boundary-adjoint": [
+      "tests/test_freeboundary_implicit.py::test_free_boundary_current_gradient_matches_resolve_finite_difference"
+    ],
+    "pr-implicit-response-a": [
       "tests/test_input_profiles.py::test_change_resolution_preserves_representable_coefficients",
       "tests/test_omnigenity.py::test_half_mesh_midpoint_tie_selects_lower_surface",
       "tests/test_implicit_multi_rhs.py::test_block_response_forward_transpose_and_fd",
-      "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block",
-      "tests/test_optimize.py::test_public_problem_factory_validation",
-      "tests/test_optimize.py::test_scipy_bfgs_scalar_lane_completes_and_descends",
-      "tests/test_optimize.py::test_certified_trial_guards_reject_stale_or_missing_memo",
-      "tests/test_optimize_penalty.py",
-      "tests/test_qi_maxj_composition.py",
       "tests/test_bootstrap.py::test_least_squares_current_dofs_implicit",
       "tests/test_parallel.py::test_parallel_finite_difference_and_problem_ensemble",
       "tests/test_parallel.py::test_available_cpus_respects_process_limits",
       "tests/test_parallel.py::test_available_cpus_uses_affinity_fallback",
       "tests/test_parallel.py::test_available_cpus_respects_scheduler_allocation",
       "tests/test_parallel.py::test_available_cpus_ignores_unavailable_hints"
+    ],
+    "pr-implicit-response-b": [
+      "tests/test_optimize.py::test_least_squares_implicit_jac_solver_block",
+      "tests/test_optimize.py::test_public_problem_factory_validation",
+      "tests/test_optimize.py::test_scipy_bfgs_scalar_lane_completes_and_descends",
+      "tests/test_optimize.py::test_certified_trial_guards_reject_stale_or_missing_memo",
+      "tests/test_optimize.py::test_jacobian_certificate_retains_the_worst_residual_evidence",
+      "tests/test_optimize.py::test_uncertified_jacobian_falls_back_or_raises_with_evidence",
+      "tests/test_optimize_penalty.py",
+      "tests/test_qi_maxj_composition.py"
     ],
     "pr-physics-field": [
       "tests/test_stability.py::test_lasym_mercier_current_tables_are_exercised",

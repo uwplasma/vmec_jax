@@ -98,15 +98,15 @@ The mirror lane keeps its own adjoint solver (`vmex/mirror/implicit.py`).
 
 ## Certificates
 
-No solve is trusted silently. Each adjoint/tangent solve returns a
-{class}`~vmex.core.implicit.LinearResponseReport` with the achieved residual
-norm, the requested tolerance, the iteration count, and a converged flag; the
-block-Thomas Jacobian path certifies every column with one warm-started GMRES
-pass against the preconditioned system to the same `adjoint_tol` as the
-per-column path. SOLVAX's own GCROT result additionally carries a
-`recycle_drift` monitor — how far the operator has drifted since the recycle
-pair was built — but VMEX neither reads nor surfaces it, so those four fields
-are the whole certificate.
+Each tangent or adjoint solve reports its residual norm, tolerance, iteration
+count, and convergence. VMEX then checks every block-response column against
+the exact linearized operator.
+
+- ``auto`` retries a failed block response with the reverse adjoint.
+- An explicitly selected host solver raises
+  {class}`~vmex.core.errors.AdjointSolveError` when the check fails.
+- The JAX API selects the reverse branch inside the compiled graph, where a
+  Python exception is unavailable.
 
 ## Validating the gradients: the frozen path
 

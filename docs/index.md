@@ -132,5 +132,4 @@ explanation/index
 
 project/contributing
 project/references
-project/changelog
 ```

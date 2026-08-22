@@ -180,13 +180,19 @@ optimized_input = problem.input_from_x(result.x)
 optimized_equilibrium = problem.equilibrium_from_x(result.x)
 ```
 
-The defaults are exact implicit derivatives, automatic Jacobian direction, one-column Jacobian batches, hot restarts, and cost weights. Advanced controls include:
+VMEX implicitly differentiates the converged equilibrium by default. For a
+residual vector, `auto` checks each block-response column against the linearized
+VMEC equations. If any column fails, it recomputes the Jacobian with the reverse
+adjoint. Cost weights, hot restarts, and one-column batches are defaults.
 
-- `derivative_method="finite_difference"` for opaque host objectives;
-- `implicit_jacobian_method` and `jacobian_batch_size` for response assembly and memory/compile tradeoffs;
-- `forward_ftol` and `forward_max_iterations` for the final forward-solve stage;
-- `max_fsq_ratio` for the largest under-converged `FSQ / ftol` that may be differentiated;
-- `workers` for parallel finite differences, scans, and ensembles. `None` uses the CPUs available to the process and respects scheduler limits.
+| Control | Purpose |
+|---|---|
+| `derivative_method="finite_difference"` | accept opaque host objectives |
+| `implicit_jacobian_method` | choose automatic, block, forward, or reverse response assembly |
+| `jacobian_batch_size` | trade first-compile memory for warm throughput |
+| `forward_ftol`, `forward_max_iterations` | set the final equilibrium solve controls |
+| `max_fsq_ratio` | bound `FSQ / ftol` before differentiation |
+| `workers` | parallelize finite differences, scans, and ensembles; `None` respects scheduler CPU limits |
 
 `problem.value_and_grad` and `problem.jax_value_and_grad` expose the same scalar contract. `problem.evaluate(x)` reports solve effort, failed trials, derivative fallbacks, `fsq`, `fsq_ratio`, and whether the implicit derivative was certified. The runnable examples show SciPy least squares, BFGS/L-BFGS-B, JAXopt, Optax Adam, QI/QS objectives, high-accuracy final solves, input/wout output, and plotting.
 
@@ -317,7 +323,7 @@ pytest -q -m "not full and not weekly"
 python -m ruff check vmex tests examples benchmarks
 ```
 
-See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.html), the [test manifest](tests/manifest.json), and the [changelog](docs/project/changelog.md). VMEX is released under the MIT license.
+See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.html) and the [test manifest](tests/manifest.json). Release notes are on [GitHub](https://github.com/uwplasma/vmex/releases). VMEX uses the MIT license.
 
 ## Roadmap
 
