@@ -87,12 +87,14 @@ one dated log entry; do not rely on chat history.
   corrected four-way Python 3.10/3.12 wheel/sdist matrix passed in run 32542322776, and PR CI
   plus docs linkcheck are green at this SHA.
 - `/Users/rogeriojorge/local/vmex-release-0.6-weekly-ci`, branch
-  `rj/release-0.6-weekly-ci`, is stacked on #134 at `1e944bed` and published as draft PR #135.
+  `rj/release-0.6-weekly-ci`, is stacked on #134 at `07b0181a` and published as draft PR #135.
   It replaces the redundant two-hour free-boundary survival stress with the stronger converged
   238-mode VMEC2000 parity contract, splits fixed/free high-mode jobs, preserves the mirror
   refinement tolerances using only the two grids that enter the comparison, and bounds every
-  Weekly job to 60 minutes. Local cold/relevant timings pass; hosted Weekly run 32546262891 is
-  the pending acceptance. Review and merge #131 first, then retarget/review #132, #133, #134
+  Weekly job to 60 minutes. The first hosted run proved the 50% fine-grid mirror point did not
+  fit that bound, so head `07b0181a` retains it in the 0--80% coarse continuation and limits the
+  fine-grid certificate to the promoted 0--10% range. Hosted run 32549286300 is the pending
+  acceptance. Review and merge #131 first, then retarget/review #132, #133, #134
   and #135 in order; keep all five scopes separate and do not squash them together.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
@@ -107,7 +109,7 @@ one dated log entry; do not rely on chat history.
   last rather than blocking VMEX 0.6.0.
 
 Resume in this order: read this checkpoint and the newest log entry; finish and record Weekly
-run 32546262891, then dispatch an uncontended replacement for cancelled GPU run 32543384593;
+run 32549286300, then dispatch an uncontended replacement for cancelled GPU run 32543384593;
 review #131; retarget and review #132, #133, #134 and #135 in order; then execute the remaining
 tag/publish/latest verification gates in Phase 23.
 Never infer completion from a local diff, an open sibling PR, or a green microbenchmark.
@@ -1935,8 +1937,11 @@ Release gates, in order:
    Nightly run 32543383359 is fully green: optional integrations 5:40, QA 2:36, QI 2:35,
    QP 3:01 and QH 4:04. The former Weekly design was not acceptable release evidence even when
    green: run 31236274932 took 2:42:53 for high-mode free boundary and 1:29:27 for mirrors.
-   Draft PR #135 keeps the physical oracles but bounds and shards them; hosted run 32546262891
-   must pass before release. GPU run 32543384593 was cancelled as nonqualifying after read-only
+   Draft PR #135 keeps the physical oracles but bounds and shards them. Its first run
+   32546262891 passed adjoint/fixed/free in 5:55/16:21/48:45, while the three-beta mirror
+   refinement reached the enforced one-hour boundary. Head `07b0181a` keeps the full 0--80%
+   coarse continuation and the fine-grid 0--10% convergence gate; run 32549286300 must pass
+   before release. GPU run 32543384593 was cancelled as nonqualifying after read-only
    inspection found two unrelated nonlinear campaigns occupying both office GPUs. Dispatch a
    fresh ephemeral runner only after those processes finish. Record final URLs and elapsed times
    in the release log; do not waive either pending campaign.
@@ -2272,9 +2277,12 @@ gitignored, and no PR in the queue adds a data file.
   32543384593 was cancelled after both office GPUs were found occupied by unrelated nonlinear
   campaigns; it is nonqualifying and must be rerun uncontended. Audited the old Weekly success
   31236274932: the high-mode campaign took 2:41:53 (including a 7,550 s nonconvergent generated-
-  coil test) and mirror refinement 1:29:27. Published stacked draft PR #135 at `1e944bed`.
+  coil test) and mirror refinement 1:29:27. Published stacked draft PR #135, now at `07b0181a`.
   It replaces that weaker survival test with the converged 238-mode free-boundary VMEC2000
   parity/radial-restart certificate, shards fixed/free high-mode jobs, retains the mirror
   0--80% continuation and original fine-grid tolerances, and caps each job at 60 minutes.
-  Local fixed/free high-mode tests passed in 4:39/16:27; the coarse mirror continuation passed
-  in 36 s and a fresh-cache fine-grid scan in 19:16. Hosted Weekly run 32546262891 is pending.
+  Local fixed/free high-mode tests passed in 4:39/16:27. The first hosted run passed those jobs
+  in 16:21/48:45 and the adjoint in 5:55, but its three-beta mirror refinement hit the one-hour
+  cap. The exact fallback passed locally in 13:46: it keeps the 0--80% continuation/restart and
+  fine-grid 0--10% convergence, without repeating the non-promoted 50% point. Hosted run
+  32549286300 is pending.
