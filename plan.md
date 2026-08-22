@@ -82,7 +82,8 @@ one dated log entry; do not rely on chat history.
 - `/Users/rogeriojorge/local/vmex-release-0.6-presf-audit`, branch
   `rj/release-0.6-presf-audit`, is based on `main` at `461aa172` and published as ready PR #133.
   It adds the missing solved free-boundary pressure-gradient certificate as one approximately
-  79-second weekly test. The content-identical pre-restack review CI is fully green.
+  79-second weekly test. Its post-restack review CI is fully green; the longest direct job took
+  11:17.
 - `/Users/rogeriojorge/local/vmex-release-0.6-final`, branch `rj/release-0.6-final`, is stacked
   on #133 at `32af8386` and published as draft PR #134. It contains only the 0.6.0
   version finalization and the source-free wheel/sdist verification matrix. Manual
@@ -2355,3 +2356,6 @@ gitignored, and no PR in the queue adds a data file.
   at `461aa172` and marked it ready for review; #134 `32af8386` and #135 `6560ac8f` remain
   stacked drafts. ESSOS #58 remains an external, independently reviewed prerequisite for the
   nine development-preview examples; ESSOS #61 remains separate and neither was merged.
+- 2026-08-22 rogeriojorge: P23/P24 — PR #133 post-restack run 32598842209 passed all 13 direct
+  jobs, changed-line coverage and the aggregate gate. The longest direct jobs were implicit-B
+  11:17 and core 11:15. #133 is the sole ready review target; #134/#135 remain drafts.
