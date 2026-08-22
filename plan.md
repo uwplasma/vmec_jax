@@ -87,14 +87,19 @@ one dated log entry; do not rely on chat history.
   corrected four-way Python 3.10/3.12 wheel/sdist matrix passed in run 32542322776, and PR CI
   plus docs linkcheck are green at this SHA.
 - `/Users/rogeriojorge/local/vmex-release-0.6-weekly-ci`, branch
-  `rj/release-0.6-weekly-ci`, is stacked on #134 at `07b0181a` and published as draft PR #135.
+  `rj/release-0.6-weekly-ci`, is stacked on #134 at `a4e4b37f` and published as draft PR #135.
   It replaces the redundant two-hour free-boundary survival stress with the stronger converged
   238-mode VMEC2000 parity contract, splits fixed/free high-mode jobs, preserves the mirror
   refinement tolerances using only the two grids that enter the comparison, and bounds every
   Weekly job to 60 minutes. The first hosted run proved the 50% fine-grid mirror point did not
-  fit that bound, so head `07b0181a` retains it in the 0--80% coarse continuation and limits the
-  fine-grid certificate to the promoted 0--10% range. Hosted run 32549286300 is the pending
-  acceptance. Review and merge #131 first, then retarget/review #132, #133, #134
+  fit that bound, so it remains in the 0--80% coarse continuation while the fine-grid
+  certificate covers the promoted 0--10% range. The second hosted run passed that mirror job
+  in 55:01 but proved the 15->25 high-mode free-boundary ladder too variable for the same bound.
+  Head `a4e4b37f` changes only the radial ladder to 11->19; the local VMEX run and independent
+  VMEC2000 oracle both converge with the same 238 modes, vacuum activation, restart and 1e-8
+  tolerance. PR run 32554820509 is fully green (longest direct job 10:50), and final Weekly run
+  32554856698 passed adjoint/fixed/mirror/free in 4:45/16:17/47:54/56:43, all below the
+  60-minute per-job bound. Review and merge #131 first, then retarget/review #132, #133, #134
   and #135 in order; keep all five scopes separate and do not squash them together.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
@@ -108,8 +113,8 @@ one dated log entry; do not rely on chat history.
   ESSOS maintainer review and merge; VMEX contributors do not merge them, and they are scheduled
   last rather than blocking VMEX 0.6.0.
 
-Resume in this order: read this checkpoint and the newest log entry; finish and record Weekly
-run 32549286300, then dispatch an uncontended replacement for cancelled GPU run 32543384593;
+Resume in this order: read this checkpoint and the newest log entry; dispatch an uncontended
+replacement for cancelled GPU run 32543384593 once both office GPUs are free;
 review #131; retarget and review #132, #133, #134 and #135 in order; then execute the remaining
 tag/publish/latest verification gates in Phase 23.
 Never infer completion from a local diff, an open sibling PR, or a green microbenchmark.
@@ -1939,12 +1944,19 @@ Release gates, in order:
    green: run 31236274932 took 2:42:53 for high-mode free boundary and 1:29:27 for mirrors.
    Draft PR #135 keeps the physical oracles but bounds and shards them. Its first run
    32546262891 passed adjoint/fixed/free in 5:55/16:21/48:45, while the three-beta mirror
-   refinement reached the enforced one-hour boundary. Head `07b0181a` keeps the full 0--80%
-   coarse continuation and the fine-grid 0--10% convergence gate; run 32549286300 must pass
-   before release. GPU run 32543384593 was cancelled as nonqualifying after read-only
+   refinement reached the enforced one-hour boundary. Run 32549286300 then passed adjoint,
+   fixed and the revised mirror jobs in 2:55/9:37/55:01; the former 15->25 radial free-boundary
+   ladder reached the same cap. Head `a4e4b37f` changes only that ladder to 11->19 while keeping
+   all 238 Fourier modes, vacuum activation, the real restart, 1e-8 convergence and VMEC2000
+   parity. It passed locally in 17:45; an independent VMEC2000 solve converged both rungs,
+   activated vacuum at iteration 39 and supplies the checked `r00`, `wb` and edge-iota oracle.
+   PR run 32554820509 is fully green, including changed-line coverage and the aggregate gate;
+   final Weekly run 32554856698 passed adjoint/fixed/mirror/free in 4:45/16:17/47:54/56:43,
+   all below the one-hour per-job bound. GPU run 32543384593 was cancelled as nonqualifying
+   after read-only
    inspection found two unrelated nonlinear campaigns occupying both office GPUs. Dispatch a
-   fresh ephemeral runner only after those processes finish. Record final URLs and elapsed times
-   in the release log; do not waive either pending campaign.
+   fresh ephemeral runner only after those processes finish. Record its final URL and elapsed
+   time in the release log; do not waive the pending GPU campaign.
 4. Draft PR #134 updates `pyproject.toml` to 0.6.0 and finalizes
    `docs/project/changelog.md`. Its release workflow installs both wheel and sdist into clean
    Python 3.10 and 3.12 jobs, imports VMEX outside the source tree and runs a converged 7-surface
@@ -2286,3 +2298,14 @@ gitignored, and no PR in the queue adds a data file.
   cap. The exact fallback passed locally in 13:46: it keeps the 0--80% continuation/restart and
   fine-grid 0--10% convergence, without repeating the non-promoted 50% point. Hosted run
   32549286300 is pending.
+- 2026-08-22 rogeriojorge: P23/P25 — finalized draft PR #135 at `a4e4b37f`. The second hosted
+  run passed the revised mirror lane in 55:01 but showed that the 15->25 free-boundary radial
+  ladder could still reach the one-hour boundary. Reduced only that ladder to 11->19 while
+  retaining all 238 Fourier modes, vacuum activation, active-vacuum restart, 1e-8 convergence
+  and VMEC2000 parity. The exact local test passed in 17:45; independent VMEC2000 goldens
+  converged both rungs and agree in `r00`, `wb` and edge iota. PR run 32554820509 is fully green
+  with its longest direct job at 10:50. Final Weekly run 32554856698 is fully green:
+  adjoint/fixed/mirror/free 4:45/16:17/47:54/56:43. Nightly and all CPU gates now qualify; the
+  sole remaining campaign gate is an uncontended trusted-GPU run after the user's unrelated
+  office campaigns release both GPUs. ESSOS #58/#61 remain external, independently reviewed,
+  and last; no VMEX PR, tag or release was merged or published.
