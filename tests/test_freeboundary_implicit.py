@@ -179,8 +179,13 @@ def test_boundary_schur_adjoint_reproduces_the_coupled_gcrot_gradient():
     are compared at the percent level, which a wrong Schur complement (rather
     than a differently converged Krylov solve) would miss by far more.
     """
+    # The nightly FD anchor retains mpol=12. This cross-solver identity uses
+    # the same DIII-D equilibrium at mpol=10, which preserves the 2% agreement
+    # while reducing the measured call from 791 s to 128 s.
+    base = lasym_free_input(DATA).change_resolution(
+        mpol=10, ntor=0, ntheta=30, nzeta=4)
     inp = dataclasses.replace(
-        lasym_free_input(DATA), ns_array=np.array([8]),
+        base, ns_array=np.array([8]),
         ftol_array=np.array([1.0e-8]), niter_array=np.array([2500]))
     field = lasym_free_field()
     params = im.params_from_input(inp)

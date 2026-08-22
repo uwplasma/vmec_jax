@@ -1683,9 +1683,8 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig, *, precond=None,
             max_restarts=(cfg.adjoint_maxiter if max_restarts is None
                           else int(max_restarts)),
         )
-        # The Jacobian certifier reports rather than raises: a column that
-        # misses tolerance still carries the preconditioned solve's answer,
-        # which beats reverting to a stale Jacobian.
+        # Jacobian assembly applies its fallback policy from the returned
+        # report. Reverse-mode gradients enforce convergence here.
         x = _checked_adjoint_x(sol, b_flat, cfg) if enforce else sol.x
     return unravel(x), sol
 
@@ -1963,7 +1962,6 @@ def _implicit_evolved_tangent_multi_rhs(
         cfg, frozen, dof_mask, formulation="raw"
     )
     residual = residual_fn(cfg, frozen, dof_mask)
-
     def raw_rhs(tangent):
         value = jax.jvp(
             lambda prm: raw_residual(z_star, prm), (params,), (tangent,)
@@ -1993,10 +1991,8 @@ def _implicit_evolved_tangent_multi_rhs(
         )
         # Certify on the raw operator the columns are consumed through.  The
         # corrector iterates on the preconditioned system; the two share a
-        # solution but not a norm, so measuring there reported 40 of 48
-        # columns uncertified while their residual on the exact operator was
-        # 3e-9.  A certificate that fires on correct answers stops carrying
-        # information.
+        # solution but not a norm, so measuring there can reject an accurate
+        # response or accept an inaccurate one.
         raw_defect = jax.tree.map(
             jnp.subtract, raw_rhs(tangent), system.operator(solution))
         raw_norm = _tree_norm(raw_rhs(tangent))
@@ -2009,11 +2005,8 @@ def _implicit_evolved_tangent_multi_rhs(
         correct, (tangent_batch, initial),
         chunk_size=max(1, int(response_chunk_size)),
     )
-    # A column that misses its tolerance still carries a usable response.
-    # GMRES starts from the direct block solve and decreases the residual
-    # monotonically, so its output is at least as accurate as that solve
-    # however far it got, while discarding it as NaN left the caller re-using
-    # the previous Jacobian.  Return it and let the report record the margin.
+    # The caller decides how to handle a missed certificate. Public optimizer
+    # lanes never expose such a response as an exact derivative.
     return solution, report
 
 
