@@ -75,20 +75,21 @@ one dated log entry; do not rely on chat history.
   shortened the derivative documentation, named the Jacobian policy helpers by their role,
   removed the changelog from the branch history and tested independent-GMRES recovery.
 - `/Users/rogeriojorge/local/vmex-release-0.6-essos-audit`, branch
-  `rj/release-0.6-essos-audit`, is based on `main` at `90a920c1` and published as ready PR #132.
-  It preserves the released ESSOS 0.16 contract, guards nine examples that need the unreleased
-  functional-coil API, removes the unreleased CI pin, and restores the stable coil-fixture schema.
+  `rj/release-0.6-essos-audit`, is based on `main` at `08d53c35` and published as ready PR #132.
+  It preserves the released ESSOS 0.16 contract and names branch
+  `rj/vmex-optimization-interfaces` (ESSOS #58) in the nine examples that need its coil/tracing
+  API. It removes the branch from release CI and restores the stable coil-fixture schema.
 - `/Users/rogeriojorge/local/vmex-release-0.6-presf-audit`, branch
-  `rj/release-0.6-presf-audit`, is stacked on #132 at `57a9a2e1` and published as draft PR #133.
+  `rj/release-0.6-presf-audit`, is stacked on #132 at `e7c9f3b7` and published as draft PR #133.
   It adds the missing solved free-boundary pressure-gradient certificate as one approximately
   79-second weekly test. The content-identical pre-restack review CI is fully green.
 - `/Users/rogeriojorge/local/vmex-release-0.6-final`, branch `rj/release-0.6-final`, is stacked
-  on #133 at `b12b5d7b` and published as draft PR #134. It contains only the 0.6.0
+  on #133 at `67d5e25b` and published as draft PR #134. It contains only the 0.6.0
   version finalization and the source-free wheel/sdist verification matrix. Manual
   dispatch now builds and verifies without publishing; PyPI remains release-event-only. The
   corrected four-way Python 3.10/3.12 wheel/sdist matrix passed in run 32542322776.
 - `/Users/rogeriojorge/local/vmex-release-0.6-weekly-ci`, branch
-  `rj/release-0.6-weekly-ci`, is stacked on #134 at `097e9271` and published as draft PR #135.
+  `rj/release-0.6-weekly-ci`, is stacked on #134 at `2dae833b` and published as draft PR #135.
   It replaces the redundant two-hour free-boundary survival stress with the stronger converged
   238-mode VMEC2000 parity contract, splits fixed/free high-mode jobs, preserves the mirror
   refinement tolerances using only the two grids that enter the comparison, and bounds every
@@ -96,7 +97,7 @@ one dated log entry; do not rely on chat history.
   fit that bound, so it remains in the 0--80% coarse continuation while the fine-grid
   certificate covers the promoted 0--10% range. The second hosted run passed that mirror job
   in 55:01 but proved the 15->25 high-mode free-boundary ladder too variable for the same bound.
-  Head `097e9271` changes only the radial ladder to 11->19; the local VMEX run and independent
+  Head `2dae833b` changes only the radial ladder to 11->19; the local VMEX run and independent
   VMEC2000 oracle both converge with the same 238 modes, vacuum activation, restart and 1e-8
   tolerance. PR run 32554820509 is fully green (longest direct job 10:50), and final Weekly run
   32554856698 passed adjoint/fixed/mirror/free in 4:45/16:17/47:54/56:43, all below the
@@ -2345,3 +2346,7 @@ gitignored, and no PR in the queue adds a data file.
   changelog: #132 `90a920c1` is ready on `main`; #133 `57a9a2e1`, #134 `b12b5d7b`, and #135
   `097e9271` remain stacked drafts. Their source, tests, documentation and PR descriptions were
   audited for concise scope. GPU work remains deferred under the evidence rules above.
+- 2026-08-22 rogeriojorge: P23 — named ESSOS branch `rj/vmex-optimization-interfaces` and PR #58
+  in every #132 preview, error, README and detailed documentation site; added the exact git pip
+  command. Both released ESSOS 0.16 behavior and the branch API imports pass. Restacked heads are
+  #132 `08d53c35`, #133 `e7c9f3b7`, #134 `67d5e25b`, and #135 `2dae833b`.
