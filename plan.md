@@ -60,7 +60,7 @@ program ledger. **Do not close PR #122**: it is the open alpha-tracing/loss-frac
 specification and implementation branch. Update the phase body when intent changes and append
 one dated log entry; do not rely on chat history.
 
-- `main` is current at `26419313` after PR #131. The 54 commits after PR #123 and before #131
+- `main` is current at `fe26e746` after PR #132. The 54 commits after PR #123 and before #131
   comprise ten first-parent PR merges (#116, #129, #128, #126, #127, #117, #119, #121,
   #130, #118), 16 branch-sync merges, and 28 direct commits. Their independent disposition is
   recorded in Phase 24.
@@ -75,21 +75,21 @@ one dated log entry; do not rely on chat history.
   shortened the derivative documentation, named the Jacobian policy helpers by their role,
   removed the changelog from the branch history and tested independent-GMRES recovery.
 - `/Users/rogeriojorge/local/vmex-release-0.6-essos-audit`, branch
-  `rj/release-0.6-essos-audit`, is based on `main` at `08d53c35` and published as ready PR #132.
+  `rj/release-0.6-essos-audit`, merged as PR #132 at `fe26e746`.
   It preserves the released ESSOS 0.16 contract and names branch
   `rj/vmex-optimization-interfaces` (ESSOS #58) in the nine examples that need its coil/tracing
   API. It removes the branch from release CI and restores the stable coil-fixture schema.
 - `/Users/rogeriojorge/local/vmex-release-0.6-presf-audit`, branch
-  `rj/release-0.6-presf-audit`, is stacked on #132 at `e7c9f3b7` and published as draft PR #133.
+  `rj/release-0.6-presf-audit`, is based on `main` at `461aa172` and published as ready PR #133.
   It adds the missing solved free-boundary pressure-gradient certificate as one approximately
   79-second weekly test. The content-identical pre-restack review CI is fully green.
 - `/Users/rogeriojorge/local/vmex-release-0.6-final`, branch `rj/release-0.6-final`, is stacked
-  on #133 at `67d5e25b` and published as draft PR #134. It contains only the 0.6.0
+  on #133 at `32af8386` and published as draft PR #134. It contains only the 0.6.0
   version finalization and the source-free wheel/sdist verification matrix. Manual
   dispatch now builds and verifies without publishing; PyPI remains release-event-only. The
   corrected four-way Python 3.10/3.12 wheel/sdist matrix passed in run 32542322776.
 - `/Users/rogeriojorge/local/vmex-release-0.6-weekly-ci`, branch
-  `rj/release-0.6-weekly-ci`, is stacked on #134 at `2dae833b` and published as draft PR #135.
+  `rj/release-0.6-weekly-ci`, is stacked on #134 at `6560ac8f` and published as draft PR #135.
   It replaces the redundant two-hour free-boundary survival stress with the stronger converged
   238-mode VMEC2000 parity contract, splits fixed/free high-mode jobs, preserves the mirror
   refinement tolerances using only the two grids that enter the comparison, and bounds every
@@ -101,7 +101,7 @@ one dated log entry; do not rely on chat history.
   VMEC2000 oracle both converge with the same 238 modes, vacuum activation, restart and 1e-8
   tolerance. PR run 32554820509 is fully green (longest direct job 10:50), and final Weekly run
   32554856698 passed adjoint/fixed/mirror/free in 4:45/16:17/47:54/56:43, all below the
-  60-minute per-job bound. PR #131 is merged. Review #132 next, then #133, #134 and #135 after
+  60-minute per-job bound. PRs #131 and #132 are merged. Review #133 next, then #134 and #135 after
   each parent merges; keep the PR scopes separate.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
@@ -120,8 +120,8 @@ run 32543384593 is no longer a VMEX 0.6 gate. This is an explicit evidence debt,
 GPU result: 0.6 adds no new free-boundary GPU support or performance claim, and later GPU/HPC
 promotion remains blocked until the trusted campaign passes on an idle host.
 
-Resume in this order: read this checkpoint and the newest log entry; review and merge #132,
-#133, #134 and #135 in order; execute the tag, publish and latest-release
+Resume in this order: read this checkpoint and the newest log entry; review and merge #133,
+#134 and #135 in order; execute the tag, publish and latest-release
 checks in Phase 23; then continue the CPU boundary-Schur work. Return to the deferred GPU matrix
 only when the office host is uncontended and GPU evidence is again in scope.
 Never infer completion from a local diff, an open sibling PR, or a green microbenchmark.
@@ -129,7 +129,7 @@ Never infer completion from a local diff, an open sibling PR, or a green microbe
 Immediate maintainer actions:
 
 1. Take no GPU action for this release.
-2. Review one VMEX release PR at a time in the order #132, #133, #134, #135.
+2. Review one VMEX release PR at a time in the order #133, #134, #135.
 3. Keep #122 and #125 open. They are the loss-fraction specification and this program ledger.
 4. Leave ESSOS #58 and #61 to independent ESSOS maintainers; they are last and do not block 0.6.
 
@@ -1946,7 +1946,7 @@ Release gates, in order:
    `take_free_boundary_gradients.py`. They use `Coils.from_json/with_dofs/dof_names`, ESSOS
    distance objectives, `surfacerzfourier_from_boundary`, or the new tracing helpers, none of
    which is in released 0.16. Keep the release-compatible `free_boundary_essos_coils.py`, mirror
-   construction, CLI tabulation and VMEX/VC contracts. Draft PR #132 implements this boundary:
+   construction, CLI tabulation and VMEX/VC contracts. Merged PR #132 implements this boundary:
    the nine scripts fail immediately with one explicit development-preview message on 0.16,
    stable documentation claims and the unreleased Nightly pin are removed, and the three compact
    coil fixtures retain the public `dofs_curves` / `dofs_currents` schema read by 0.16 and the
@@ -2350,3 +2350,8 @@ gitignored, and no PR in the queue adds a data file.
   in every #132 preview, error, README and detailed documentation site; added the exact git pip
   command. Both released ESSOS 0.16 behavior and the branch API imports pass. Restacked heads are
   #132 `08d53c35`, #133 `e7c9f3b7`, #134 `67d5e25b`, and #135 `2dae833b`.
+- 2026-08-22 rogeriojorge: P23 — merged PR #132 as `fe26e746` after all 13 direct jobs,
+  changed-line coverage, docs linkcheck and the aggregate gate passed. Restacked #133 on `main`
+  at `461aa172` and marked it ready for review; #134 `32af8386` and #135 `6560ac8f` remain
+  stacked drafts. ESSOS #58 remains an external, independently reviewed prerequisite for the
+  nine development-preview examples; ESSOS #61 remains separate and neither was merged.
