@@ -70,7 +70,8 @@ one dated log entry; do not rely on chat history.
   and release-workflow changes. Two-worker JAX contention made the original implicit-response
   lane slower; one serial lane was still too variable, so the unchanged certification set is
   now split by JAX shape into two serial implicit lanes plus one isolated free-boundary-adjoint
-  lane. The new remote checks are running and are not yet acceptance evidence.
+  lane. Two consecutive remote runs are fully green with every job below 12 minutes, satisfying
+  Phase 25's runtime gate; PR #131 still requires the user's review before merge.
 - `/Users/rogeriojorge/local/vmex-release-0.6-essos-audit`, branch
   `rj/release-0.6-essos-audit`, is stacked on #131 at `e977eb20` and published as draft PR #132.
   It preserves the released ESSOS 0.16 contract, explicitly guards nine ESSOS 0.17 previews,
@@ -78,8 +79,9 @@ one dated log entry; do not rely on chat history.
 - `/Users/rogeriojorge/local/vmex-release-0.6-presf-audit`, branch
   `rj/release-0.6-presf-audit`, is stacked on #132 at `31dd34b2` and published as draft PR #133.
   It adds the missing solved free-boundary pressure-gradient certificate as one approximately
-  79-second weekly test. Review and merge #131 first, retarget/review #132, then retarget/review
-  #133; keep the three scopes separate and do not squash them together.
+  79-second weekly test. Its own review CI is running. Review and merge #131 first,
+  retarget/review #132, then retarget/review #133; keep the three scopes separate and do not
+  squash them together.
 - `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
   beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
   copy of this file is authoritative.
@@ -1958,7 +1960,7 @@ All ten PRs had green CI but no GitHub review; green checks are not independent 
 Acceptance: the three named debts have literature/reference-anchored tests or recorded bounded
 campaign evidence; no published history rewrite; Phase 23 explicitly accounts for each.
 
-## Phase 25 — CI and example-integration runtime [IN REVIEW — draft PR #131]
+## Phase 25 — CI and example-integration runtime [COMPLETE IN DRAFT PR #131 — AWAITING REVIEW]
 
 Measured on `main` CI run 32340328989: core 19:42, field API 19:53,
 implicit-response 12:46 and mirror-spline 9:14. Dominant individual tests were the Schur/coupled
@@ -1993,9 +1995,19 @@ changed-line gate failed because four already-passing certificate-policy lines w
 the selected physics manifest. The stacked #132 run measured core 13:48 and implicit 19:16,
 showing that one large serial JAX lane still had unacceptable variance. Commit `326ba760`
 therefore adds the two policy tests to the selected set and shards the unchanged long contract
-by compile shape; its fresh remote runs are pending. Neither prior run qualifies.
+by compile shape. The fresh run results are recorded below; neither prior run qualifies.
 
-Required before merge:
+The final design has now passed two consecutive remote measurements with changed-line coverage
+and the aggregate PR gate green. Run
+[`32536701497`](https://github.com/uwplasma/vmex/actions/runs/32536701497) measured core 11:00,
+implicit-A 9:19, implicit-B 11:12, free-boundary adjoint 6:31, field API 6:47 and mirror spline
+10:04. Stacked run
+[`32536709789`](https://github.com/uwplasma/vmex/actions/runs/32536709789) measured core 10:53,
+implicit-A 9:34, implicit-B 11:20, free-boundary adjoint 7:10, field API 9:05 and mirror spline
+10:04. Every job was below 12 minutes; no physics assertion, resolution or tolerance was
+weakened. Phase 25's acceptance criterion is met.
+
+Retained policy:
 
 1. Run the entire workflow remotely. Reject `-n 2` in a lane if RSS, JAX cache interactions or
    wall time regress; parallelism is a measured policy, not a universal default.
@@ -2214,3 +2226,9 @@ gitignored, and no PR in the queue adds a data file.
   `v6.5.0-42-g9177f58c` in 8.5 seconds; the pinned decomposition and DMerc tests pass in 8.7
   seconds. No new asset or proxy is justified. All three named Phase-24 debts now have evidence;
   #128 remains in review as PR #133.
+- 2026-08-21 rogeriojorge: P25 acceptance — two consecutive remote runs are fully green,
+  including changed-line coverage and the PR gate. Run 32536701497's longest jobs were
+  implicit-B 11:12, core 11:00 and mirror spline 10:04; run 32536709789's were implicit-B 11:20,
+  core 10:53 and mirror spline 10:04. Every lane stayed below 12 minutes without weaker physics,
+  resolutions or tolerances. P25 is complete in draft PR #131 and awaits user review; no VMEX
+  PR was merged. PR #133's own review CI was then started separately.
