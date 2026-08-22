@@ -3,6 +3,7 @@
 
 The commented ``Coils.from_simsopt`` line accepts a SIMSOPT coil JSON without
 changing the VMEX exterior-field or ESSOS tracing workflow.
+Preview: this script needs ESSOS branch ``rj/vmex-optimization-interfaces``.
 """
 
 from dataclasses import replace
@@ -21,10 +22,16 @@ import vmex as vj
 from vmex import optimize as opt
 from vmex.core import virtual_casing as vc
 
-from essos.coils import Coils
-from essos.dynamics import LevelsetStoppingCriterion, trace_field_lines
-from essos.fields import BiotSavart
-from essos.surfaces import SurfaceClassifier, surfacerzfourier_from_boundary
+try:
+    from essos.coils import Coils
+    from essos.dynamics import LevelsetStoppingCriterion, trace_field_lines
+    from essos.fields import BiotSavart
+    from essos.surfaces import SurfaceClassifier, surfacerzfourier_from_boundary
+except ImportError as error:
+    raise ImportError(
+        "This example needs ESSOS branch rj/vmex-optimization-interfaces "
+        "(uwplasma/ESSOS#58)."
+    ) from error
 
 DATA = Path(__file__).resolve().parent / "data"
 N_FIELDLINES, N_TOROIDAL_TURNS, TRACE_LENGTH, N_SAMPLES = 14, 400, 3000.0, 25000

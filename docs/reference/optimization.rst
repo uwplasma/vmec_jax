@@ -252,6 +252,13 @@ constructs a traceable trial set without mutation. The same package provides
 ``Coils.from_simsopt``. VMEX therefore needs no duplicate coil indexing or
 distance implementation.
 
+.. warning::
+
+   The joint coil, exterior VJP, and field-line tracing examples need ESSOS
+   branch ``rj/vmex-optimization-interfaces`` (PR #58). VMEX 0.6 supports ESSOS 0.16 for CLI
+   coil tabulation, direct Biot--Savart fields, and free-boundary coil solves.
+   VMEX does not vendor or pin the pending ESSOS code.
+
 For a finite-beta prescribed boundary, virtual casing gives the field of the
 enclosed plasma currents. The physical exterior field is that contribution
 plus the actual ESSOS coil field. The two interface residuals used by the
@@ -296,11 +303,10 @@ keeps the construction visible in the driver::
    result = scipy.optimize.minimize(
        value_and_grad, u0, jac=True, method="L-BFGS-B")
 
-Here NESTOR moves the LCFS and only the ESSOS coil vector is optimized. See
-``single_stage_free_boundary_optimization.py`` for coil geometry terms and
-its finite-beta counterpart for beta and Redl bootstrap terms. The current
-path is reverse-mode only. Status 0 is derivative-certified, 1 is a failed
-solve, and 2 is an under-converged solve; only status 0 enters the adjoint.
+NESTOR moves the LCFS and only the coil vector is optimized. The vacuum example
+adds coil geometry terms; the finite-beta example adds beta and Redl bootstrap
+terms. This path is reverse-mode only. Status 0 enters the adjoint; status 1
+means a failed solve and status 2 means an under-converged solve.
 The certified whole-state GCROT transpose remains the default.
 ``adjoint_solver="boundary_schur"`` selects the advanced boundary-Schur lane, which
 eliminates the block-tridiagonal radial bulk and solves only the evolved-edge
@@ -458,18 +464,10 @@ spatial derivative orders are
 substantially more expensive and radial derivatives are piecewise smooth at
 the VMEC mesh surfaces, so converge them in ``NS_ARRAY``.
 
-Runnable vacuum and finite-beta examples, including Cartesian/cylindrical
-queries, flux-coordinate inversion, derivatives through third order, and
-parameter VJPs inside and outside the LCFS, are
-``examples/vmex_get_B_gradB.py`` and
-``examples/vmex_get_B_outside_plasma.py``. Both print all three Cartesian
-spatial derivative orders and their VJPs; the exterior example returns VMEX
-boundary modes followed by named ESSOS coil modes. The vacuum and finite-beta
-``vmex_fieldline_tracing_*.py`` examples plot 3-D trajectories and toroidal
-Poincare sections inside and just outside the LCFS. The seed radius is sampled
-continuously across the LCFS. VMEX flux-coordinate traces use toroidal angle,
-Cartesian coil/exterior traces use arclength, and a signed-distance event
-terminates unbounded exterior trajectories.
+``examples/vmex_get_B_gradB.py`` demonstrates the stable interior field API,
+including Cartesian and flux-coordinate queries, three spatial derivatives,
+and parameter VJPs. The exterior VJP and field-line tracing scripts need the
+ESSOS branch noted above.
 
 To include coil parameters in an exterior-field VJP, pass the same functional
 ESSOS update used by an optimization:

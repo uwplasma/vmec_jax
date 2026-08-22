@@ -3,7 +3,7 @@
   "stellsym": true,
   "order": 5,
   "n_segments": 75,
-  "dofs_curves_raw": [
+  "dofs_curves": [
     [
       [
         1.186105814179041,
@@ -172,7 +172,7 @@
   "scaling_type": 2,
   "scaling_factor": 0.0,
   "scale_fixed": 1.0,
-  "dofs_currents_raw": [
+  "dofs_currents": [
     -1895492.5508802987,
     -1910499.5833779017,
     -1950066.470004915,

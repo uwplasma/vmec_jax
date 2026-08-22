@@ -1,5 +1,8 @@
 #!/usr/bin/env python
-"""Evaluate the coil plus finite-beta plasma field outside a VMEX boundary."""
+"""Evaluate the coil plus finite-beta plasma field outside a VMEX boundary.
+
+Preview: this script needs ESSOS branch ``rj/vmex-optimization-interfaces``.
+"""
 
 from pathlib import Path
 
@@ -11,6 +14,12 @@ from vmex import optimize as opt
 
 from essos.coils import Coils
 from essos.fields import BiotSavart
+
+if not all(hasattr(Coils, name) for name in ("from_json", "with_dofs", "dof_names")):
+    raise ImportError(
+        "This example needs ESSOS branch rj/vmex-optimization-interfaces "
+        "(uwplasma/ESSOS#58)."
+    )
 
 DATA = Path(__file__).resolve().parent / "data"
 INPUT = DATA / "input.LandremanPaul2021_QA_beta0p5_bootstrap"

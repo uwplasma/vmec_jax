@@ -114,10 +114,10 @@ VMEX does not assume nested surfaces there.
 VMEX spectral state, rather than a materialized wout, so JAX derivatives with
 respect to the equilibrium boundary are retained for single-stage objectives.
 Run `examples/vmex_get_B_gradB.py` for the finite-beta interior API and
-`examples/vmex_get_B_outside_plasma.py` for an actual ESSOS coil field plus
-virtual casing. The latter can include both VMEX and ESSOS variables in each
-VJP. The vacuum and finite-beta `vmex_fieldline_tracing_*.py` examples compare
-VMEX, coil-only, and self-consistent exterior traces in 3-D and Poincare plots.
+`examples/free_boundary_essos_coils.py` for the released ESSOS 0.16 coil
+interface. Exterior coil VJPs and field-line tracing need ESSOS branch
+[`rj/vmex-optimization-interfaces`](https://github.com/uwplasma/ESSOS/tree/rj/vmex-optimization-interfaces):
+`pip install "essos @ git+https://github.com/uwplasma/ESSOS.git@rj/vmex-optimization-interfaces"`.
 
 The common CLI operations are:
 
@@ -196,9 +196,8 @@ adjoint. Cost weights, hot restarts, and one-column batches are defaults.
 
 `problem.value_and_grad` and `problem.jax_value_and_grad` expose the same scalar contract. `problem.evaluate(x)` reports solve effort, failed trials, derivative fallbacks, `fsq`, `fsq_ratio`, and whether the implicit derivative was certified. The runnable examples show SciPy least squares, BFGS/L-BFGS-B, JAXopt, Optax Adam, QI/QS objectives, high-accuracy final solves, input/wout output, and plotting.
 
-`single_stage_optimization.py` and its finite-beta counterpart jointly vary a prescribed VMEX boundary and ESSOS coils with exact derivatives. The finite-beta pressure cost is the normalized MHD jump `(|B_out|²-|B_in|²-2μ₀p_edge)/B_ref²`; it constrains interface force balance, not the input pressure profile, and does not invoke a free-boundary NESTOR solve. ESSOS supplies coil names, functional updates, distance objectives, SIMSOPT import, and boundary-to-surface conversion.
-
-The two `single_stage_free_boundary_optimization*.py` examples instead vary only ESSOS coils and differentiate the reconverged NESTOR–VMEX root. This coupled reverse-mode path is experimental: CPU derivatives are finite-difference certified, while reducing its cold XLA compile time and GPU memory remains roadmap work.
+Joint boundary/coil and coil-only free-boundary scripts are previews for the
+same ESSOS branch.
 
 ## QA, QH, QP, and QI examples
 

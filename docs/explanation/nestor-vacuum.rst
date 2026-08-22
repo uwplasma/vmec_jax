@@ -154,10 +154,11 @@ Despite using the interface equations, that example is a **fixed-boundary**
 optimization: every trial boundary is prescribed to VMEX and reconverged, and
 both boundary and coil coefficients are decision variables. Virtual casing
 separates the converged total VMEX field into plasma-current and external-coil
-parts; it does not run NESTOR or a free-boundary equilibrium. The experimental
+parts; it does not run NESTOR or a free-boundary equilibrium. The preview
 ``single_stage_free_boundary_optimization*.py`` examples instead hold the
 plasma boundary implicit and vary only coil parameters through the coupled
-NESTOR derivative described below.
+NESTOR derivative below. They need ESSOS branch
+``rj/vmex-optimization-interfaces`` (PR #58).
 
 The reported normalized total-pressure jump is
 
@@ -197,13 +198,10 @@ surface. It does not determine the external coil field: supply an ESSOS coil
 field or MGRID field and :class:`~vmex.core.extender.VmecExtender` adds the two.
 This distinction matters for finite-beta exterior tracing and coil design.
 
-See ``examples/vmex_get_B_gradB.py`` for the finite-beta interior API and
-``examples/vmex_get_B_outside_plasma.py`` for the live ESSOS-coil plus
-virtual-casing path, including exact equilibrium and coil VJPs. The
-``vmex_fieldline_tracing_vacuum.py`` and
-``vmex_fieldline_tracing_finite_beta.py`` examples use those same fields for
-inside/outside tracing. The single-stage optimization examples
-write both initial and optimized surface/coil VTK files; setting
+``vmex_get_B_gradB.py`` demonstrates the stable interior API. The exterior
+field and tracing previews need ESSOS branch ``rj/vmex-optimization-interfaces``. The
+single-stage previews write initial and optimized surface/coil VTK files;
+setting
 ``MAKE_MOVIE=True`` adds a compact animation of accepted iterates. Set the
 examples' ``MOVIE_SURFACE_COLOR`` to ``None``, ``"absB"``, ``"B.n/B"``, or
 a scalar-field callable to control boundary coloring without storing VTK data
@@ -232,9 +230,10 @@ The public construction is explicit: create
 :func:`~vmex.core.freeboundary_implicit.make_free_boundary_config`, map the
 coil vector to a field with ``field_from_parameters``, call the implicit solve,
 stack physics rows with :func:`vmex.core.optimize.residuals_from_tuples`, and
-apply ``jax.value_and_grad``. ``take_free_boundary_gradients.py`` validates a
-direction against independent re-solves; the two free-boundary single-stage
-examples pass the same scalar pair to SciPy.
+apply ``jax.value_and_grad``. ``take_free_boundary_gradients.py`` checks one
+direction against independent re-solves. The free-boundary single-stage
+previews pass the same scalar pair to SciPy. These examples need the unreleased
+ESSOS branch ``rj/vmex-optimization-interfaces``.
 
 This path is currently limited to reverse mode. Its low-memory host Krylov
 lane peaks near 3--5 GB on the bundled coarse examples, but the first coupled
