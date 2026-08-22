@@ -107,8 +107,9 @@ one dated log entry; do not rely on chat history.
   last rather than blocking VMEX 0.6.0.
 
 Resume in this order: read this checkpoint and the newest log entry; finish and record Weekly
-run 32546262891 and GPU run 32543384593; review #131; retarget and review #132, #133, #134 and
-#135 in order; then execute the remaining tag/publish/latest verification gates in Phase 23.
+run 32546262891, then dispatch an uncontended replacement for cancelled GPU run 32543384593;
+review #131; retarget and review #132, #133, #134 and #135 in order; then execute the remaining
+tag/publish/latest verification gates in Phase 23.
 Never infer completion from a local diff, an open sibling PR, or a green microbenchmark.
 
 ## Research-grade completion map
@@ -1935,8 +1936,10 @@ Release gates, in order:
    QP 3:01 and QH 4:04. The former Weekly design was not acceptable release evidence even when
    green: run 31236274932 took 2:42:53 for high-mode free boundary and 1:29:27 for mirrors.
    Draft PR #135 keeps the physical oracles but bounds and shards them; hosted run 32546262891
-   must pass before release. Trusted GPU run 32543384593 is queued for the self-hosted runner.
-   Record final URLs and elapsed times in the release log; do not waive either pending campaign.
+   must pass before release. GPU run 32543384593 was cancelled as nonqualifying after read-only
+   inspection found two unrelated nonlinear campaigns occupying both office GPUs. Dispatch a
+   fresh ephemeral runner only after those processes finish. Record final URLs and elapsed times
+   in the release log; do not waive either pending campaign.
 4. Draft PR #134 updates `pyproject.toml` to 0.6.0 and finalizes
    `docs/project/changelog.md`. Its release workflow installs both wheel and sdist into clean
    Python 3.10 and 3.12 jobs, imports VMEX outside the source tree and runs a converged 7-surface
@@ -2265,8 +2268,9 @@ gitignored, and no PR in the queue adds a data file.
   source-free wheel/sdist verification on Python 3.10 and 3.12; publish/latest jobs were skipped.
   No PR was merged and no tag, release or package publication was performed.
 - 2026-08-21 rogeriojorge: P23/P25 — candidate Nightly run 32543383359 is fully green; its
-  longest optimization job was QH at 4:04 and optional integrations took 5:40. The trusted GPU
-  run 32543384593 remains queued for the self-hosted runner. Audited the old Weekly success
+  longest optimization job was QH at 4:04 and optional integrations took 5:40. GPU run
+  32543384593 was cancelled after both office GPUs were found occupied by unrelated nonlinear
+  campaigns; it is nonqualifying and must be rerun uncontended. Audited the old Weekly success
   31236274932: the high-mode campaign took 2:41:53 (including a 7,550 s nonconvergent generated-
   coil test) and mirror refinement 1:29:27. Published stacked draft PR #135 at `1e944bed`.
   It replaces that weaker survival test with the converged 238-mode free-boundary VMEC2000
