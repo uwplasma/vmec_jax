@@ -1865,20 +1865,12 @@ def plot_tracing(
 ) -> dict[str, Path]:
     """Write the four alpha-tracing figures for one tracing result.
 
-    Parameters
-    ----------
-    wout:
-        The traced equilibrium — path to ``wout_*.nc`` or a
-        :class:`~vmex.core.wout.WoutData` (LCFS backdrop of the 3-D figure).
-    result:
-        An :class:`~vmex.core.tracing.AlphaTracingResult` from
-        :func:`~vmex.core.tracing.trace_alphas`.
-    outdir, name:
-        Output directory (created if missing) and basename prefix
-        (default: case name from the wout path).
-    n_trajectories:
-        Number of evenly sampled orbits in the per-particle figures.
-
+    ``wout`` is the traced equilibrium — a ``wout_*.nc`` path or a
+    :class:`~vmex.core.wout.WoutData` — used as the LCFS backdrop of the 3-D
+    figure; ``result`` is an :class:`~vmex.core.tracing.AlphaTracingResult`
+    from :func:`~vmex.core.tracing.trace_alphas`.  Figures land in ``outdir``
+    (created if missing) under ``name`` (default: the wout case name), with
+    ``n_trajectories`` evenly sampled orbits in the per-particle panels.
     Returns a mapping from figure key (``trajectories``, ``vparallel``,
     ``loss_fraction``, ``energy_error``) to the written PNG path.
     """
