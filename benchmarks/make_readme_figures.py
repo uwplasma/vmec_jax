@@ -3,18 +3,18 @@
 
 Produces (into ``docs/_static/figures/``):
 
-- ``readme_runtime_compare.png``      — VMEC2000 vs vmex (cold/warm CPU,
+- ``readme_runtime_compare.webp``      — VMEC2000 vs vmex (cold/warm CPU,
   GPU where comparable) vs VMEC++, from
   ``benchmarks/baseline.json`` and
   ``benchmarks/gpu_baseline.json``.  Run ``benchmarks/run_baseline.py`` first.
-- ``readme_convergence.png``          — force residual vs iteration for one
+- ``readme_convergence.webp``          — force residual vs iteration for one
   representative case (nfp4_QH_warm_start at ns=51) in vmex, VMEC2000
   (NSTEP=1 stdout trace), and VMEC++ (wout
   ``fsqt``).  Traces are cached in
   ``benchmarks/convergence_nfp4_ns51.json``; delete it to re-run the codes.
-- ``readme_precond.png``              — 2D block vs 1D radial preconditioner
+- ``readme_precond.webp``              — 2D block vs 1D radial preconditioner
   iteration counts on stiff cases (R10.2 measurements).
-- ``readme_equilibrium_showcase.png`` — flux surfaces, 3-D boundary geometry
+- ``readme_equilibrium_showcase.webp`` — flux surfaces, 3-D boundary geometry
   coloured by ``|B|``, and ``|B|`` in Boozer coordinates on the LCFS (jet),
   for the bundled quick-start case (solves it in-process).
 Usage:
@@ -22,8 +22,9 @@ Usage:
         [--only runtime,convergence,precond,showcase]
         [--outdir docs/_static/figures]
 
-Figures are written uncompressed; compress before committing:
-    magick <fig>.png -colors 255 png8:<fig>.png
+Figures are written uncompressed; convert to lossless WebP before committing,
+which is pixel-identical and roughly a third smaller:
+    cwebp -lossless <fig>.png -o <fig>.webp && rm <fig>.png
 """
 
 from __future__ import annotations
@@ -487,13 +488,13 @@ def main() -> None:
     apply_style()
     which = set(args.only.split(","))
     if "runtime" in which:
-        make_runtime_figure(outdir / "readme_runtime_compare.png")
+        make_runtime_figure(outdir / "readme_runtime_compare.webp")
     if "convergence" in which:
-        make_convergence_figure(outdir / "readme_convergence.png")
+        make_convergence_figure(outdir / "readme_convergence.webp")
     if "precond" in which:
-        make_precond_figure(outdir / "readme_precond.png")
+        make_precond_figure(outdir / "readme_precond.webp")
     if "showcase" in which:
-        make_showcase_figure(outdir / "readme_equilibrium_showcase.png")
+        make_showcase_figure(outdir / "readme_equilibrium_showcase.webp")
 
 
 if __name__ == "__main__":

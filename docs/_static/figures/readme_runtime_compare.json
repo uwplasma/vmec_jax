@@ -4,7 +4,7 @@
       "outputs/readme_runtime_single_grid_151_20260706/summary.json"
     ],
     "figure_kind": "fixed",
-    "figure_path": "docs/_static/figures/readme_runtime_compare.png",
+    "figure_path": "docs/_static/figures/readme_runtime_compare.webp",
     "generated_at_utc": "2026-07-07T14:00:42.825896+00:00",
     "gpu_summary_paths": [],
     "host": "Apple Silicon workstation",

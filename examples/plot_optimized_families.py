@@ -142,6 +142,6 @@ if PLOT_ONLY not in ("all", "qs", "qi"):
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 if PLOT_ONLY in ("all", "qs"):
     cases = [(_find_qs_input(QS_INPUT_DIR, tag), title, m, n) for tag, title, m, n in QS_CASES]
-    _draw(cases, OUT_DIR / "readme_optimization.png")
+    _draw(cases, OUT_DIR / "readme_optimization.webp")
 if PLOT_ONLY in ("all", "qi"):
-    _draw(QI_CASES, OUT_DIR / "readme_qi.png", qi=True)
+    _draw(QI_CASES, OUT_DIR / "readme_qi.webp", qi=True)
