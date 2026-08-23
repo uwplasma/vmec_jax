@@ -374,8 +374,9 @@ reproducing the workflow of Landreman–Buller–Drevlak, arXiv:2205.02914):
        current_dofs=5)          # five spline shapes + CURTOR; one knot is fixed
 
 The complete runnable workflows are
-``examples/optimization/QA_optimization_bootstrap.py`` and
-``QH_optimization_bootstrap.py``.  Their setup has two distinct steps:
+``examples/optimization/QA_optimization_bootstrap.py``,
+``QH_optimization_bootstrap.py`` and ``QI_optimization_bootstrap.py``.  Their
+setup has two distinct steps:
 
 1. ``KineticProfiles`` describes the density and temperature seen by the
    Redl model.  Coefficients are in increasing powers of normalized toroidal
