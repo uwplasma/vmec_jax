@@ -224,15 +224,20 @@
       "tests/test_gpu_ci.py::test_device_scope_second_host_device_gradient_equality",
       "tests/test_gpu_ci.py::test_second_host_device_unconverged_adjoint_raises_typed_error"
     ],
-    "weekly-hmfb": [
+    "weekly-hmfb-fixed": [
       "tests/test_high_mode_free_boundary_parity.py::test_all_reported_features_parse_together",
-      "tests/test_high_mode_free_boundary_parity.py::test_fixed_boundary_238_mode_ladder_converges",
-      "tests/test_high_mode_free_boundary_parity.py::test_free_boundary_238_mode_ladder_survives_activation",
-      "tests/test_high_mode_free_boundary_parity.py::test_vacuum_survives_a_radial_transition",
+      "tests/test_high_mode_free_boundary_parity.py::test_fixed_boundary_238_mode_ladder_converges"
+    ],
+    "weekly-hmfb-free": [
+      "tests/test_high_mode_free_boundary_parity.py::test_combined_238_mode_cth_free_ladder_matches_vmec2000",
       "tests/test_high_mode_free_boundary_parity.py::test_mgrid_nzeta_policy_matches_vmec2000"
     ],
     "weekly-mirror": [
+      "tests/mirror/test_free_boundary.py::test_unbounded_exterior_free_boundary_beta_scan_converges",
       "tests/mirror/test_free_boundary.py::test_unbounded_exterior_beta_observables_converge_with_resolution"
+    ],
+    "weekly-free-boundary-adjoint": [
+      "tests/test_freeboundary_implicit.py::test_free_boundary_pressure_gradient_matches_resolve_finite_difference"
     ]
   },
   "campaigns": {
