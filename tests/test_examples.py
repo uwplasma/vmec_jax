@@ -449,12 +449,15 @@ def test_bootstrap_selfconsistent_examples(case, tmp_path):
 
 
 @pytest.mark.full  # nightly: Picard seed + one exact finite-beta optimization stage
-@pytest.mark.parametrize("case", ["QA", "QH"])
-def test_bootstrap_optimization_examples(case, tmp_path):
+@pytest.mark.parametrize(("case", "figure_of_merit"),
+                         [("QA", "QS"), ("QH", "QS"), ("QI", "constructed QI")])
+def test_bootstrap_optimization_examples(case, figure_of_merit, tmp_path):
+    if case == "QI":
+        pytest.importorskip("booz_xform_jax")
     script = EXAMPLES / "optimization" / f"{case}_optimization_bootstrap.py"
     out = _run_example(script, tmp_path, timeout=1800)
     _assert_cost_decreased(out, f"{case}-bootstrap")
-    assert "self-consistent seed" in out and "[final] QS" in out
+    assert "self-consistent seed" in out and f"[final] {figure_of_merit}" in out
     match = re.search(r"\[final\].*beta = ([0-9.]+)%", out)
     assert match is not None and 1.0 < float(match.group(1)) < 4.0
     assert (tmp_path / f"input.{case}_bootstrap_optimized").exists()

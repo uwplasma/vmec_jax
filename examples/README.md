@@ -53,7 +53,8 @@ All runnable examples live under this single `examples/` tree. Examples marked
   weight)` terms with SciPy least-squares, BFGS, or L-BFGS-B.
   `single_stage_optimization.py` *(preview)* varies a prescribed boundary and
   coil Fourier coefficients; it does not call a free-boundary solve.
-  `QA_optimization_bootstrap.py` and `QH_optimization_bootstrap.py` also vary
+  `QA_optimization_bootstrap.py`, `QH_optimization_bootstrap.py` and
+  `QI_optimization_bootstrap.py` also vary
   a stage-refined current spline against self-consistent Redl, DMerc, and DR
   targets. `single_stage_optimization_finite_beta.py` *(preview)* adds virtual
   casing and coil derivatives. The free-boundary single-stage previews leave
