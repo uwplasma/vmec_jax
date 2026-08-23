@@ -38,6 +38,9 @@ def clean_cache_env(monkeypatch):
 
 def test_cache_dir_env_precedence(clean_cache_env):
     mp = clean_cache_env
+    # pin the host-dependent deserialize gate open so the precedence table
+    # is exercised identically on every platform/jaxlib combination
+    mp.setattr(_compat, "_cache_deserialize_unsafe", lambda: False)
     # default on every backend now (R26c cold-start fix): CPU gets a
     # machine-scoped cache under ~/.cache with no env var required.
     path = _compat._default_compilation_cache_dir()
@@ -71,6 +74,66 @@ def test_cache_dir_env_precedence(clean_cache_env):
     mp.delenv("JAX_PLATFORMS")
     mp.setenv("JAX_PLATFORM_NAME", "tpu")
     assert _compat._default_compilation_cache_dir() is not None
+
+
+def test_cache_default_off_when_deserialize_unsafe(clean_cache_env):
+    """macOS + jaxlib < 0.10 kills the process reading big cache entries
+    (LLVM ORC materializes per-kernel objects recursively and overflows a
+    worker-thread stack inside PyClient::DeserializeExecutable), so the
+    cache defaults off there — but explicit user choices always win."""
+    mp = clean_cache_env
+    mp.setattr(_compat, "_cache_deserialize_unsafe", lambda: True)
+    assert _compat._default_compilation_cache_dir() is None
+
+    mp.setenv("VMEX_COMPILATION_CACHE", "1")
+    assert _compat._default_compilation_cache_dir() is not None
+    mp.delenv("VMEX_COMPILATION_CACHE")
+
+    mp.setenv("JAX_COMPILATION_CACHE_DIR", "/tmp/jaxcache")
+    assert _compat._default_compilation_cache_dir() == "/tmp/jaxcache"
+    mp.delenv("JAX_COMPILATION_CACHE_DIR")
+
+    mp.setenv("VMEX_COMPILATION_CACHE_DIR", "/tmp/vmexcache")
+    assert _compat._default_compilation_cache_dir() == "/tmp/vmexcache"
+
+
+def test_cache_deserialize_unsafe_is_darwin_and_jaxlib_scoped(monkeypatch):
+    monkeypatch.setattr(_compat, "_jaxlib_version_tuple", lambda: (0, 9, 2))
+    monkeypatch.setattr(_compat.platform, "system", lambda: "Linux")
+    assert _compat._cache_deserialize_unsafe() is False  # macOS-only crash
+
+    monkeypatch.setattr(_compat.platform, "system", lambda: "Darwin")
+    assert _compat._cache_deserialize_unsafe() is True   # affected jaxlib
+    monkeypatch.setattr(_compat, "_jaxlib_version_tuple", lambda: (0, 10, 0))
+    assert _compat._cache_deserialize_unsafe() is False  # fixed in 0.10.0
+    monkeypatch.setattr(_compat, "_jaxlib_version_tuple", lambda: None)
+    assert _compat._cache_deserialize_unsafe() is True   # unknown = unsafe
+
+
+def test_jaxlib_version_tuple_parses_release_and_dev(monkeypatch):
+    recorded = {}
+
+    def fake_version(package):
+        recorded["package"] = package
+        return fake_version.value  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(_compat.importlib_metadata, "version", fake_version)
+    for raw, expected in [
+        ("0.9.2", (0, 9, 2)),
+        ("0.10.0", (0, 10, 0)),
+        ("0.10.0.dev20260801", (0, 10, 0)),
+        ("0.10.0rc1", (0, 10, 0)),
+        ("nightly", None),
+    ]:
+        fake_version.value = raw  # type: ignore[attr-defined]
+        assert _compat._jaxlib_version_tuple() == expected, raw
+    assert recorded["package"] == "jaxlib"
+
+    def missing(package):
+        raise _compat.importlib_metadata.PackageNotFoundError(package)
+
+    monkeypatch.setattr(_compat.importlib_metadata, "version", missing)
+    assert _compat._jaxlib_version_tuple() is None
 
 
 def test_cache_machine_fingerprint_shape_and_stability():

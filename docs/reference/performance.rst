@@ -397,10 +397,15 @@ unaffected.  Library :func:`~vmex.core.multigrid.solve_multigrid` and
 :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` retain warm stage
 executables by default (the right policy for scans and repeated solves) and
 accept ``release_stage_cache=True`` to opt into the one-shot behaviour.
-The machine-scoped disk cache is bounded to 1 GiB. If a nearly full filesystem
-causes XLA to terminate with ``SIGBUS`` while mapping a new executable, free
-disk space or run with ``VMEX_COMPILATION_CACHE=disabled``; VMEX does not
-delete caches owned by other applications.
+The machine-scoped disk cache is bounded to 10% of the free disk (2 GiB
+floor, 20 GiB ceiling).  On macOS with jaxlib < 0.10 the cache defaults to
+off: those jaxlib releases crash with ``SIGBUS``/``SIGILL`` inside
+``PyClient::DeserializeExecutable`` when loading a cached CPU executable
+holding more than a few hundred kernels (LLVM ORC materializes the
+per-kernel objects recursively on one fixed-size worker-thread stack), and
+every solve-scale executable exceeds that.  Upgrading jaxlib re-enables the
+cache automatically; ``VMEX_COMPILATION_CACHE=1`` forces it on for small
+workloads.  VMEX does not delete caches owned by other applications.
 The CLI and library compile solver lanes sequentially by default.
 ``--prefetch-compile`` (or ``prefetch_compile=True`` in the library) overlaps
 the next rung's compilation.  This can reduce cold-start latency on a
