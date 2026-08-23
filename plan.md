@@ -2743,3 +2743,41 @@ unchanged, and vmex's call collapses to one line built from
 the explicit form underneath if anyone wants it. Raised as a review comment
 rather than a change, since #61 is under external review.
 - 2026-08-23 claude: corrected the #143 saving (0.58 MB, tree 7.93->7.34) after finding the first measurement was taken mid-conversion; merged #143 and #144; recorded the from_wout ergonomics suggestion for ESSOS#61's reviewers.
+
+## Production sweep result (2026-08-23, main at v0.6.0 + merges)
+
+Run on a pristine GitHub clone, which also proves the repo is self-contained
+(fetch-assets included). More than any workflow runs.
+
+| phase | result |
+|---|---|
+| 16-job CI matrix | **16/16 pass** |
+| `-m "full and not weekly"`, whole suite, `-n 2` | 9 failed, 100 passed, 3 skipped, 4h14m |
+| weekly-hmfb-fixed | pass, 11 min |
+| weekly-hmfb-free | pass, **38 min** |
+| weekly-mirror | pass, 17 min |
+| weekly-free-boundary-adjoint | pass, 8 min |
+| `vmex --trace`, reactor-scale Landreman-Paul QA, 200 alphas | pass — 0.00% loss, 0 solver failures, four figures written |
+
+The trace result is physically sensible: precise QA at reactor scale should
+confine alphas well, and it does.
+
+**A flakiness finding worth acting on.**
+`test_ncsx_free_boundary_current_gradient_matches_resolve_finite_difference`
+**failed** in the full sweep under `pytest -n 2` and **passed** minutes later,
+serially, inside `weekly-free-boundary-adjoint` (both adjoint certificates in
+8 min). Same commit, same machine. So it is sensitive to parallel execution,
+most plausibly the JAX compilation-cache contention already recorded for this
+lane (the #140 work needed `VMEX_COMPILATION_CACHE=disabled`, and there is an
+open task chip for the at-cap SIGILL). The weekly lane runs serially so it is
+green there, but anyone running that file with `-n` will see a spurious
+failure. Either pin the test to serial execution (an xdist group) or resolve
+the cache interaction. Fold this into the Phase 32 triage rather than treating
+it as a separate defect.
+
+**Timing headroom.** `weekly-hmfb-free` takes 38 minutes here against the
+60-minute timeout #135 set — 1.6x, on hardware likely faster than a hosted
+runner. That lane may sit close to its budget when Actions returns. The other
+three are comfortable (11, 17, 8 min). Worth re-measuring on a hosted runner
+before assuming the 60-minute bound holds.
+- 2026-08-23 claude: production sweep complete — matrix 16/16, all four weekly campaigns pass, reactor-scale --trace passes at 0.00% loss; the NCSX adjoint certificate is xdist-sensitive (fails -n 2, passes serially) and weekly-hmfb-free uses 38 of its 60 minutes.
