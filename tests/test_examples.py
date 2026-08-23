@@ -91,8 +91,8 @@ def test_essos_examples_name_the_required_branch() -> None:
 
 
 def _run_example(script: Path, cwd: Path, timeout: int = 2400,
-                 args: tuple[str, ...] = ()) -> str:
-    env = dict(os.environ, VMEX_EXAMPLES_CI="1")
+                 args: tuple[str, ...] = (), **extra_env: str) -> str:
+    env = dict(os.environ, VMEX_EXAMPLES_CI="1", **extra_env)
     env.pop("JAX_DISABLE_JIT", None)
     proc = subprocess.run(
         [sys.executable, str(script), *args], cwd=cwd, env=env,
@@ -441,7 +441,10 @@ _ZENODO_2205 = Path(os.environ.get(
 @pytest.mark.parametrize("case", ["QA", "QH"])
 def test_bootstrap_selfconsistent_examples(case, tmp_path):
     script = REPO / "benchmarks" / f"{case}_bootstrap_selfconsistent.py"
-    out = _run_example(script, tmp_path, timeout=1200)
+    # The guard above accepts the dataset at its default location, but the
+    # script only reads the environment variable, so pass the resolved path.
+    out = _run_example(script, tmp_path, timeout=1200,
+                       VMEX_ZENODO_2205_02914=str(_ZENODO_2205))
     m = re.search(r"final f_boot = ([0-9.eE+-]+)", out)
     assert m is not None and float(m.group(1)) < 5e-2, f"{case} f_boot: {out[-400:]}"
     assert (tmp_path / f"output_{case}_bootstrap_selfconsistent"
