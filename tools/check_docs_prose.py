@@ -47,6 +47,7 @@ HOWTO_VERBS = {
     "run", "restart", "scan", "set", "scale", "optimize", "solve", "use",
     "diagnose", "plot", "troubleshoot", "build", "read", "write", "pick",
     "choose", "configure", "convert", "profile", "differentiate", "resume",
+    "trace",
 }
 
 TODO_RE = re.compile(r"\b(TODO|FIXME|XXX)\b")
