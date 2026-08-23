@@ -1696,7 +1696,7 @@ caches (`_FREE_MASK_CACHE`, `_FREE_HOT_CACHE`, `_PACK_TABLE_CACHE`,
 `_FREE_LAST_RESULT`) are empty at teardown, rather than relying on the split.
 - 2026-08-19 claude: P17 addendum — found a module-cache leak in test_freeboundary_implicit.py that PR CI cannot see because the two tests are in different selectors; fixed on fix/free-mask-cache-test-leak.
 
-## Phase 21 — Alpha-particle tracing and a differentiable loss fraction
+## Phase 21 — Alpha-particle tracing and a differentiable loss fraction [MOSTLY SHIPPED — remainder blocked on ESSOS#61]
 
 Turn #122 from a single script into a feature of vmex: `vmex --trace wout_XXX.nc`
 on the command line, and alpha-particle loss fraction as an optimizable that a
@@ -1758,7 +1758,14 @@ installs that release in a clean environment and replaces any development-only n
 with the released version. VMEX contributors do not self-merge those PRs. Green checks on an open
 branch are implementation evidence, not a completed dependency.
 
-### 21.2 The traceable field-coefficient gap [TODO]
+### 21.2 The traceable field-coefficient gap [DONE — PR #137]
+
+Closed: `boozer_input_tables` now also projects `gmnc`, `bsupumnc`, `bsupvmnc`,
+`bsubsmns` and their LASYM partners, traceably, agreeing with the wout rows to
+1.1e-15 (symmetric) and 7.8e-15 (LASYM) with a live boundary jvp. The analysis
+below records why the gap existed; the measured NumPy-versus-traceable counts
+are what motivated extending `boozer_tables.py` rather than making
+`wout_field_tables` traceable.
 
 The adapter is the easy half. The real work is that **no traceable path in vmex
 produces the coefficients ESSOS needs.** Measured, not assumed:
@@ -1797,7 +1804,7 @@ would read as a broken gradient to anyone testing the obvious thing. The gate
 must perturb the boundary and check the gradient arrives through the
 recomputed field coefficients.
 
-### 21.2b `vmex/core/tracing.py` [TODO]
+### 21.2b `vmex/core/tracing.py` [DONE — PR #138]
 
 Once 21.2 lands, the adapter is thin and a new module is justified on the same
 one-concern-per-file grounds as `bootstrap.py` and `neoclassical.py`:
@@ -1815,7 +1822,7 @@ optimizable keeps the established signature so it drops into
 Keep the ESSOS import inside the call so vmex still imports without ESSOS,
 matching the existing ESSOS-dependent examples.
 
-### 21.3 `vmex --trace` [TODO]
+### 21.3 `vmex --trace` [DONE — PR #138]
 
 One flag, dispatched like `--plot` and `--booz` in `vmex/core/cli.py`
 (`_dispatch`, around line 1060). `vmex --trace wout_XXX.nc` prints the loss
@@ -1824,7 +1831,7 @@ figures the #122 script draws — trajectories, parallel velocity, loss fraction
 against time, energy error — into `--outdir` using the existing figure-writing
 convention. Accept the tracing knobs as optional flags with the defaults above.
 
-### 21.4 `examples/optimization/loss_fraction_optimization.py` [TODO]
+### 21.4 `examples/optimization/loss_fraction_optimization.py` [BLOCKED — needs ESSOS#61 released]
 
 Minimize alpha losses over boundary coefficients. Deliberately small so it
 runs: `tmax = 3e-4`, `nparticles_per_core = 25`, the smooth surrogate as the
@@ -1833,7 +1840,7 @@ quantity they care about rather than the surrogate. Include an aspect-ratio row
 and the min-|iota| floor, as the other optimization examples do, and honour
 `VMEX_EXAMPLES_CI=1` with a short smoke configuration.
 
-### 21.5 Coverage and cost [TODO]
+### 21.5 Coverage and cost [PARTIAL — shipped lanes gated; surrogate suite blocked on ESSOS#61]
 
 Tracing is expensive, so the test lane must not trace anything large. Gate the
 adapter with a handful of particles over a very short `tmax` and assert the
@@ -2640,3 +2647,4 @@ published history, so the standing answer is: leave it, and point
 size-sensitive users at `--depth 1`. Revisit only if a rewrite is sanctioned
 for another reason.
 - 2026-08-23 claude: recorded the ESSOS reviewer ledger (#61 verified bit-for-bit, merge order, four enforcement conditions) and the measured clone sizes (tree 9 MB, shallow 13 MB, full 39 MB).
+- 2026-08-23 claude: corrected stale Phase 21 markers — 21.2 (#137), 21.2b and 21.3 (#138) shipped; 21.4 and the surrogate half of 21.5 are BLOCKED on ESSOS#61 being reviewed and released, not TODO. Only 21.6 (literature anchors) is genuinely open and unblocked.
