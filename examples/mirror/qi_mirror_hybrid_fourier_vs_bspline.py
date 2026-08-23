@@ -67,7 +67,7 @@ from vmex.mirror.geometry import magnetic_field_squared
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = REPO_ROOT / "examples" / "data" / "input.nfp2_QI"
-FIGURE_PATH = REPO_ROOT / "docs" / "_static" / "figures" / "qi_mirror_hybrid.png"
+FIGURE_PATH = REPO_ROOT / "docs" / "_static" / "figures" / "qi_mirror_hybrid.webp"
 OUTPUT_DIR = Path("results/qi_mirror_hybrid")
 
 N_AXIS = 512                    # magnetic-axis samples over the full torus
@@ -291,7 +291,7 @@ def main() -> None:  # noqa: PLR0915 - a single linear example script
     }
     (OUTPUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
-    figure_path = FIGURE_PATH if not CI else OUTPUT_DIR / "qi_mirror_hybrid.png"
+    figure_path = FIGURE_PATH if not CI else OUTPUT_DIR / "qi_mirror_hybrid.webp"
     make_figure(figure_path, phi, axis_points, curvature, cut, splice, target, dense_arc,
                 interior, fourier_rows, bspline_rows, setup, mod_b, summary)
     print(f"\nwrote {figure_path}")

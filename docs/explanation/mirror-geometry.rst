@@ -411,7 +411,7 @@ initialization, solve dispatch, and tracing are in ``splines.py``; the shared
 energy and force diagnostics are in ``forces.py``; and the reviewed figure is
 produced by ``output.plot_stellarator_mirror_hybrid``.
 
-.. image:: /_static/figures/stellarator_mirror_hybrid.png
+.. image:: /_static/figures/stellarator_mirror_hybrid.webp
    :alt: Solved periodic B-spline stellarator-mirror hybrid with its axis, boundary magnetic field, cross-sections, transform, and residuals
    :width: 100%
 
@@ -514,7 +514,7 @@ B-spline lane exists. The VMEC solve therefore serves as the QI *reference*
 (axis, ``iota``, ``|B|``, ``B_0``), and the Fourier side of the comparison is the
 axis-representation accuracy above.
 
-.. image:: /_static/figures/qi_mirror_hybrid.png
+.. image:: /_static/figures/qi_mirror_hybrid.webp
    :alt: QI-mirror hybrid comparison: QI axis coloured by curvature with cut locations, the spliced straight-leg hybrid axis, hybrid boundary magnetic field, and Fourier-versus-B-spline representation accuracy at the seam
    :width: 100%
 
@@ -695,7 +695,7 @@ and ``1.69e-2``, so every zone converges under refinement; it therefore ships
 as a validated paraxial benchmark, distinct from the release-candidate rotating
 ellipse, whose section is an exact discrete flux surface.
 
-.. image:: /_static/figures/mirror_fixed_boundary_3d.png
+.. image:: /_static/figures/mirror_fixed_boundary_3d.webp
    :alt: Solved axisymmetric and 90-degree rotating-ellipse fixed-boundary mirrors coloured by LCFS field strength
    :width: 100%
 

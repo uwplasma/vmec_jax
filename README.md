@@ -10,7 +10,7 @@
 
 VMEX is a JAX implementation of VMEC for stellarator and tokamak ideal-MHD equilibria. It reads standard VMEC input files, solves fixed- and free-boundary problems, writes standard `wout_*.nc` files, and provides exact implicit derivatives of converged fixed-boundary equilibria for optimization.
 
-![VMEX equilibria and diagnostics](docs/_static/figures/readme_equilibrium_showcase.png)
+![VMEX equilibria and diagnostics](docs/_static/figures/readme_equilibrium_showcase.webp)
 
 ## Install
 
@@ -205,23 +205,23 @@ The scripts in `examples/optimization/` optimize QA (NFP=2), QH (NFP=4), QP (NFP
 
 `examples/optimization/stellarator_asymmetry/` contains matching vacuum and finite-beta examples with `LASYM=True`; each visibly seeds and optimizes the additional `RBS` and `ZBC` boundary families.
 
-![QA, QH, and QP optimization examples](docs/_static/figures/readme_optimization.png)
+![QA, QH, and QP optimization examples](docs/_static/figures/readme_optimization.webp)
 
 Validated QI inputs spanning NFP=1–4 are bundled in `examples/data/`; the same plotting script reads them directly.
 
-![QI equilibria at NFP 1 through 4](docs/_static/figures/readme_qi.png)
+![QI equilibria at NFP 1 through 4](docs/_static/figures/readme_qi.webp)
 
 ## Finite beta, free boundary, and mirrors
 
 `examples/free_boundary_essos_coils.py` holds the Landreman–Paul QA coil currents fixed while increasing beta and re-solving the NESTOR free boundary. The magnetic-axis displacement is the expected Shafranov shift.
 
-![Free-boundary beta ramp and Shafranov shift](docs/_static/figures/readme_essos_beta_scan.png)
+![Free-boundary beta ramp and Shafranov shift](docs/_static/figures/readme_essos_beta_scan.webp)
 
 VMEX also solves open-ended mirrors. `examples/mirror/mirror_fixed_boundary_nonaxisymmetric.py` compares an axisymmetric mirror with a non-axisymmetric rotating ellipse; `examples/mirror/mirror_free_boundary_beta_scan.py` continues an ESSOS-coil free boundary from 0% to 80% central beta. The latter plots the solved on-axis field against the MHD paraxial scaling `B/Bvac = sqrt(1-beta)` implied by `p + B²/(2 μ0) = Bvac²/(2 μ0)`. The 0–10% lane is supported; higher-beta points remain clearly marked as extended validation pending refined-grid promotion.
 
-![Axisymmetric and rotating-ellipse fixed-boundary mirrors](docs/_static/figures/mirror_fixed_boundary_3d.png)
+![Axisymmetric and rotating-ellipse fixed-boundary mirrors](docs/_static/figures/mirror_fixed_boundary_3d.webp)
 
-![Free-boundary mirror beta scan](docs/_static/figures/mirror_free_boundary_beta_scan.png)
+![Free-boundary mirror beta scan](docs/_static/figures/mirror_free_boundary_beta_scan.webp)
 
 ## Equilibrium and kinetic diagnostics
 
@@ -238,7 +238,7 @@ The vacuum QA example has `pres=0` and `DWell=0` exactly: VMEX adds no pressure 
 `QA_optimization_bootstrap.py`, `QH_optimization_bootstrap.py` and `QI_optimization_bootstrap.py` first fit a bootstrap-consistent seed, then optimize the boundary and a stage-refined current spline together against Redl, Mercier, and resistive-interchange targets. The QI variant uses `helicity_n=0`, since a quasi-isodynamic field carries no helical symmetry for the Redl isomorphism to shift; Redl is a fit to quasisymmetric calculations, so there it is an analytic estimate rather than a converged kinetic answer. Their controls are explained in the [objective reference](https://vmex.readthedocs.io/en/latest/reference/objectives.html#bootstrap-current-redl); published-equilibrium and SFINCS comparisons live in `benchmarks/`.
 Each script also writes a direct Redl-versus-equilibrium bootstrap-current overlay. In the vacuum QA example, setting `TRIAL_BETA` enables differentiable frozen-geometry pressure proxies for `DMerc` and `DR`; a finite-pressure re-solve remains the stability certificate.
 
-![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.png)
+![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.webp)
 
 ## Physics and interoperability
 
@@ -277,7 +277,7 @@ This matrix was checked on 2026-08-11 against current [STELLOPT/VMEC2000](https:
 
 On the bundled NFP=4 QH case at `ns=51`, VMEX follows VMEC2000 and VMEC++ through the full force-residual trace (fresh local run: VMEX `d7347c9`, VMEC2000 `512375c`, VMEC++ 0.5.3). Reproduce it with `python benchmarks/make_readme_figures.py --only convergence`; the benchmark discovers local solver installations or accepts `VMEX_XVMEC2000` and `VMEX_VMECPP_PY`.
 
-![VMEX, VMEC2000, and VMEC++ convergence trace](docs/_static/figures/readme_convergence.png)
+![VMEX, VMEC2000, and VMEC++ convergence trace](docs/_static/figures/readme_convergence.webp)
 
 The following `cloc 2.11` snapshot counts implementation code and comments, excluding tests, generated code, and third-party sources. VMEX counts `vmex/core` (the toroidal solver); VMEC2000 counts `VMEC2000/Sources` but not shared STELLOPT libraries; VMEC++ counts `src/vmecpp` C++/headers/Python. These scopes make the comparison reproducible, not a claim of identical feature breadth.
 
@@ -293,7 +293,7 @@ VMEX reduces duplication by expressing spectral operators as vectorized JAX arra
 
 JAX compilation is paid once per array structure and reused from a machine-local cache. Warm runs are the relevant measure for continuation, parameter scans, and optimization.
 
-![VMEX runtime comparison](docs/_static/figures/readme_runtime_compare.png)
+![VMEX runtime comparison](docs/_static/figures/readme_runtime_compare.webp)
 
 Independent solves use `vj.parallel.solve_ensemble(inputs, workers=None)`. A single equilibrium already uses XLA's internal threading; ensemble workers are therefore bounded by both the number of cases and the CPUs made available by the host scheduler. Explicit `workers=1` gives a reproducible serial baseline, and GPU/device placement can be selected with `device=`.
 

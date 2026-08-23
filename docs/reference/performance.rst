@@ -268,7 +268,7 @@ The vmex trace comes from ``SolveResult.fsq_history``, the VMEC2000
 trace from its stdout iteration table run with ``NSTEP = 1``, and the
 VMEC++ trace from the ``fsqt`` array of its wout payload.
 
-.. figure:: /_static/figures/readme_convergence.png
+.. figure:: /_static/figures/readme_convergence.webp
    :alt: force residual vs iteration for VMEX, VMEC2000, and VMEC++
    :align: center
    :width: 95%
@@ -319,7 +319,7 @@ default 1D path stays byte-identical, so parity is untouched.
      - 204
      - 9.2x
 
-.. figure:: /_static/figures/readme_precond.png
+.. figure:: /_static/figures/readme_precond.webp
    :alt: 2D vs 1D preconditioner iteration counts on stiff cases
    :align: center
    :width: 90%
