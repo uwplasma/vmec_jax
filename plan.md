@@ -2781,3 +2781,64 @@ runner. That lane may sit close to its budget when Actions returns. The other
 three are comfortable (11, 17, 8 min). Worth re-measuring on a hosted runner
 before assuming the 60-minute bound holds.
 - 2026-08-23 claude: production sweep complete — matrix 16/16, all four weekly campaigns pass, reactor-scale --trace passes at 0.00% loss; the NCSX adjoint certificate is xdist-sensitive (fails -n 2, passes serially) and weekly-hmfb-free uses 38 of its 60 minutes.
+
+## Phase 32 triage result (2026-08-23) — three corrections
+
+**My xdist hypothesis was wrong.** I proposed the LASYM gradient gate might be
+a `-n 2` artifact like the NCSX certificate. It is not: every triage run was
+single-process and `rel = 4.222865896823202e-03` reproduces bit-identically on
+main. The NCSX case remains genuinely xdist-sensitive; this one never was.
+
+**My triage misread the failing line for the two scipy examples.** I recorded
+them as failing `assert "final cost" in out`. That assertion passes. The
+failure is the next line: both scripts ship `METHOD = "L-BFGS-B"` and write
+`wout_Q{A,I}_scipy_L-BFGS-B.nc`, while the parametrization asked for
+`..._BFGS.nc`. `METHOD` was already `L-BFGS-B` in `109dcf00`, the commit that
+added those rows, so **those two rows have never passed** — born red, and
+nothing ran them. Table corrected in #147.
+
+**#118, not #126, moved the gradient gate.** Bisected, one serial process per
+point:
+
+| commit | AD | frozen FD | rel |
+|---|---|---|---|
+| `a9ea8ffd` (#126 first parent) | -1.8824350460e-05 | -1.8814282477e-05 | 5.35e-04 pass |
+| `88b005f7` (#126 merge) | identical | identical | 5.35e-04 pass |
+| `0362f701` (#118 merge) | -2.7839366520e-05 | -2.7957426985e-05 | 4.22e-03 fail |
+
+Bit-identical across #126 in all four (metric, direction) pairs — the deck's
+`delta = 7.98e-02`, so the branch #126 deleted never fired for it. #118
+corrected the LASYM Mercier normalization, which moved both sides.
+
+**Not a Jacobian bug.** Reverse mode equals the forward JVP to 1e-9 at adjoint
+tolerances 1e-11 and 1e-14, and a gap of the same size appears in the
+*symmetric* `RBC(0,1)` channel (1.36e-3) — nothing specific to m=1 asymmetry.
+
+**Root cause: the linearization point.** `|F(P(x*), p0)| = 2.673e-07`, the
+known LASYM m=1 frozen-residual floor. Newton-polishing onto the true root
+moves `sum DMerc[2:-1]` by 9.4e-9 — **1.7x the entire h=1e-4 FD numerator**
+(5.6e-9). The analytic derivative at the polished root (`-2.795741214890e-05`,
+reproduced to 11 digits four independent ways) is what the frozen-path FD
+measures, to rel 5.3e-07. So the **FD is the accurate side and `jax.grad` at
+`x*` is the outlier** — a real, bounded accuracy limit of differentiating a
+second-derivative-heavy metric at an under-converged fixed point, not a defect
+in the adjoint algebra.
+
+Shipped as `xfail(strict=True)` carrying those numbers, **tolerance
+untouched**. Two closes were tried and rejected on evidence: `ftol=1e-14`
+reaches rel 1.64e-3, an 18% margin too thin to gate on; anchoring at a refined
+fixed point gives the right analytic value but its own FD returns
+`-1.8312348878e-05` on the -h branch alone, reproducibly, unexplained. Closing
+this properly means anchoring the **adjoint** at a refined fixed point — a
+gradient-lane change, not a test change.
+
+**Open, and worth its own investigation:** that refined-anchor FD anomaly.
+
+**NCSX xdist marker deliberately not shipped.** The repo has no xdist-group
+convention, and under pytest-xdist's default `--dist load` an `xdist_group`
+marker is inert — a no-op scaffold. No workflow runs `full`-marked tests under
+xdist anyway (`ci.yml -n 4` and `nightly.yml -n 2` both carry
+`-m "not full and not weekly"`; the campaigns run without `-n`). The contention
+exists only in ad-hoc sweeps, so the fix belongs at the sweep invocation and
+with action (4), wiring the orphaned lanes in as serial lanes.
+- 2026-08-23 claude: Phase 32 triaged in #147 — gate moved at #118 not #126, a linearization-point limit not a Jacobian bug (the FD is the accurate side), xfail'd with numbers and tolerance untouched; two scipy rows were born red in 109dcf00; my xdist hypothesis and my reading of the failing assertion were both wrong.
