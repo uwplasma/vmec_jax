@@ -2706,3 +2706,40 @@ Main fails that gate today (`docs/howto/trace-alpha-particles.md`, from #138,
 uses a verb absent from the allow-list; fix in #144). The runner now matches
 the workflow exactly.
 - 2026-08-23 claude: Phase 32 opened — full-marked sweep on main gave 9 failed/100 passed in 4h14m; ~108 of 112 full-marked tests are run by no workflow. Triage recorded; the LASYM RBS(1,1) gradient gate (rel 4.22e-3 vs 2e-3) needs a bisect across #126, not a wider tolerance.
+
+## Size, corrected (2026-08-23)
+
+The WebP conversion (#143) saves **0.58 MB**, not the ~2 MB first reported:
+`docs/_static` 3.17 -> 2.59 MB, tracked tree 7.93 -> 7.34 MB. The larger figure
+came from a measurement taken mid-conversion, with the deleted PNGs still in
+the index and the new WebP files not yet added, so it counted only untouched
+files. The per-file conversion log (2019.6 KB -> 1421.4 KB over 14 files) was
+right all along.
+
+Revised arithmetic for the 25 MB target: tree 7.34 MB + a blob-stripped pack of
+~13.6 MB puts a full clone near **21 MB**, inside 25 but with less headroom
+than stated. Two figures were already WebP and untouched —
+`readme_diagnostics_summary.webp` (518 KB) and
+`readme_diagnostics_qa_vacuum.webp` (278 KB) — worth a re-encode pass if more
+is needed.
+
+## ESSOS#61 API ergonomics — recommendation for the reviewers
+
+`Vmec.from_arrays` takes sixteen named arrays plus four options. It is
+**internal plumbing**: no vmex user calls it. The user-facing surface is
+`vmex --trace`, `trace_alphas(equilibrium)`, and the `alpha_loss_fraction`
+optimizable, each of which calls it once inside the adapter.
+
+Even so, sixteen positional arguments is a poor seam. The suggestion to put to
+the reviewers is a single-argument constructor that reads the wout names off
+whatever it is handed — a mapping or any object exposing them:
+
+    Vmec.from_wout(source, *, ntheta=50, nphi=50, close=True,
+                   range_torus='full torus')
+
+Duck-typing keeps ESSOS free of any vmex import, so the dependency direction is
+unchanged, and vmex's call collapses to one line built from
+`boozer_input_tables` plus `nfp`, `ns` and `Aminor_p`. Keep `from_arrays` as
+the explicit form underneath if anyone wants it. Raised as a review comment
+rather than a change, since #61 is under external review.
+- 2026-08-23 claude: corrected the #143 saving (0.58 MB, tree 7.93->7.34) after finding the first measurement was taken mid-conversion; merged #143 and #144; recorded the from_wout ergonomics suggestion for ESSOS#61's reviewers.
