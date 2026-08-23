@@ -38,8 +38,12 @@ def test_manifest_routes_short_pr_and_weekly_selectors() -> None:
     assert test_manifest.select("pr-physics-mirror-output") == [
         "tests/mirror/test_output.py"
     ]
+    assert len(test_manifest.select("weekly-hmfb-fixed")) == 2
+    assert len(test_manifest.select("weekly-hmfb-free")) == 2
     weekly = test_manifest.select("weekly-mirror")
     assert weekly == [
+        "tests/mirror/test_free_boundary.py::"
+        "test_unbounded_exterior_free_boundary_beta_scan_converges",
         "tests/mirror/test_free_boundary.py::"
         "test_unbounded_exterior_beta_observables_converge_with_resolution"
     ]

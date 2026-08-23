@@ -198,14 +198,14 @@ def combined_cth_indata_text() -> str:
     ``MPOL=13/NTOR=9`` (mnmax = 238) with every reported feature — LFORBAL,
     PRECON NONE, PREC2D 1e-30, APHI, axis removed (recovery path), indexed
     m=0 sections, ``NZETA=0`` (policy selects the table's 36 planes), and a
-    15->25 ladder crossing vacuum activation."""
+    11->19 ladder crossing vacuum activation."""
     import re
 
     text = (DATA / "input.cth_like_free_bdy").read_text().split("&END")[0]
     text = text.replace("  MPOL = 5,", "  MPOL = 13,")
     text = text.replace("  NTOR = 4,", "  NTOR = 9,")
     text = text.replace("  NZETA = 36,", "  NZETA = 0,")
-    text = text.replace("  NS_ARRAY    = 15,", "  NS_ARRAY    = 15, 25,")
+    text = text.replace("  NS_ARRAY    = 15,", "  NS_ARRAY    = 11, 19,")
     text = text.replace("  FTOL_ARRAY  = 1.0E-10,",
                         "  FTOL_ARRAY  = 1.0E-8, 1.0E-8,")
     text = text.replace("  NITER_ARRAY = 2500,", "  NITER_ARRAY = 2500, 2500,")
@@ -230,17 +230,17 @@ def combined_cth_indata_text() -> str:
     return text + "&END\n"
 
 
-@pytest.mark.full  # ~15 min: the full claimed path in ONE deck, vs VMEC2000
+@pytest.mark.full  # ~16 min: the full claimed path in ONE deck, vs VMEC2000
 def test_combined_238_mode_cth_free_ladder_matches_vmec2000(tmp_path) -> None:
     """All reported ingredients at once, on a CONVERGENT deck, vs VMEC2000.
 
     VMEC2000 goldens (recorded 2026-07-27, explicit ``NZETA = 36``): vacuum
-    on at iteration 38 (rung 1); rung 1 (ns=15) converges at 260 iterations
-    (fsqr 9.73e-9); rung 2 (ns=25) at 156 (fsqr 9.84e-9); wout
-    ``wb = 1.283590394747e-3``, ``sum raxis_cc = 0.74414896``,
-    ``iotaf(edge) = 0.8690375``, ``aspect = 5.4332138``.  Measured VMEX
-    (automatic ``NZETA = 0`` -> 36): vacuum on at 38, rung 2 in 156
-    iterations (fsqr 9.74e-9), ``r00 = 0.74416249``.
+    on at iteration 39 (rung 1); rung 1 (ns=11) converges at 250 iterations
+    (fsqr 9.88e-9); rung 2 (ns=19) at 157 (fsqr 9.98e-9); wout
+    ``wb = 1.2835875910061e-3``, ``sum raxis_cc = 0.744063700468``,
+    ``iotaf(edge) = 0.866867560232``, ``aspect = 5.433108135``.  Measured
+    VMEX (automatic ``NZETA = 0`` -> 36): rung 2 in 152 iterations
+    (fsqr 9.88e-9), ``r00 = 0.744082554655``.
     """
     mgrid = DATA / "mgrid_cth_like.nc"
     if not mgrid.exists():
@@ -248,7 +248,7 @@ def test_combined_238_mode_cth_free_ladder_matches_vmec2000(tmp_path) -> None:
     path = tmp_path / "input.combined_238"
     path.write_text(combined_cth_indata_text())
     inp = VmecInput.from_file(str(path))
-    res = resolution_from_input(inp, ns=15)
+    res = resolution_from_input(inp, ns=11)
     assert int(res.mnmax) == 238
     assert bool(inp.lforbal) and not np.any(np.asarray(inp.raxis_c))
 
@@ -272,19 +272,19 @@ def test_combined_238_mode_cth_free_ladder_matches_vmec2000(tmp_path) -> None:
         f"combined 238-mode ladder failed to converge "
         f"(fsqr={float(result.fsqr):.2e})")
 
-    # activation iteration: VMEC2000 and VMEX both print 38 on this deck;
-    # a small band absorbs cross-platform float jitter in the 1e-3 crossing
+    # VMEC2000 activates at 39; a small band absorbs cross-platform float
+    # jitter in the 1e-3 activation crossing.
     m = re.search(r"VACUUM PRESSURE TURNED ON AT\s+(\d+)", output)
     assert m is not None
-    assert 36 <= int(m.group(1)) <= 40, (
-        f"vacuum activated at {m.group(1)}; both codes activate at 38")
+    assert 37 <= int(m.group(1)) <= 40, (
+        f"vacuum activated at {m.group(1)}; VMEC2000 activates at 39")
 
-    # carried-vacuum rung: both codes converge it in 156 iterations; the
-    # band rejects a silent fall-back to fresh reactivation (~260) while
+    # Carried-vacuum rung: VMEX/VMEC2000 need 152/157 iterations.  The band
+    # rejects a silent fall-back to fresh reactivation (~250 iterations) while
     # absorbing chaotic cross-platform drift
     assert 130 <= int(result.iterations) <= 200, (
         f"carried-vacuum rung took {int(result.iterations)} iterations; "
-        "both codes need 156")
+        "VMEX/VMEC2000 need 152/157")
 
     # residual triplet at the recorded VMEC2000 magnitudes (converged just
     # under ftol, with fsqz/fsql well below fsqr)
@@ -292,10 +292,10 @@ def test_combined_238_mode_cth_free_ladder_matches_vmec2000(tmp_path) -> None:
     assert float(result.fsqz) <= 2.0e-8 and float(result.fsql) <= 2.0e-8
 
     # same equilibrium as the recorded VMEC2000 wout (goldens in docstring)
-    assert float(result.r00) == pytest.approx(0.7441489627, rel=1e-4)
-    assert float(result.wb) == pytest.approx(1.283590394747e-3, rel=2e-4)
+    assert float(result.r00) == pytest.approx(0.744063700468048, rel=1e-4)
+    assert float(result.wb) == pytest.approx(1.2835875910061e-3, rel=2e-4)
     assert float(np.asarray(result.iotaf)[-1]) == pytest.approx(
-        0.869037528260457, rel=2e-4)
+        0.866867560231905, rel=2e-4)
 
 
 @pytest.mark.full
