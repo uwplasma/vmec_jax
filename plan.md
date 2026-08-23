@@ -2359,3 +2359,46 @@ gitignored, and no PR in the queue adds a data file.
 - 2026-08-22 rogeriojorge: P23/P24 — PR #133 post-restack run 32598842209 passed all 13 direct
   jobs, changed-line coverage and the aggregate gate. The longest direct jobs were implicit-B
   11:17 and core 11:15. #133 is the sole ready review target; #134/#135 remain drafts.
+
+## Standing policy updates (2026-08-22, maintainer decisions)
+
+**Version: 0.6.0 confirmed.** The maintainer approved the minor bump over
+0.5.1; PR #134's number stands. Rationale on record: #117 rejects decks that
+previously ran, #127 shifts LASYM Boozer spectra on coarse grids, #126/#128
+change gradients, #118 enables a lane that returned invalid.
+
+**All verification is local until further notice.** GitHub Actions minutes are
+exhausted. Every PR must pass, locally and on a branch current with main, the
+same matrix CI ran: ruff + mypy + `python -m build` + `sphinx -W`, the
+`pr-fast` selector under `-n 4`, all nine physics selectors, `pr-device`, the
+mirror coverage floor (>=90%), and the changed-line gate (>=95% via
+diff-cover). The runner lives at the session scratchpad
+(`localci/run_ci.sh`); it writes per-job logs and a PASS/FAIL summary. Record
+the summary in the PR body in place of the green checks. Merges use the
+existing admin path once the local matrix is clean.
+
+**ESSOS merges are decoupled from vmex merges.** ESSOS pull requests need a
+second reviewer, so nothing on the vmex side may hard-depend on unmerged ESSOS
+API. Consequences for Phase 21:
+- `vmex --trace` and `trace_alphas` build on **released** ESSOS only — the
+  file-based `essos.fields.Vmec` and the exact `Tracing.loss_fraction`, both
+  in the installed 0.17 line.
+- The differentiable objective (`alpha_loss_fraction`) additionally needs
+  `Vmec.from_arrays` and the smooth surrogate from uwplasma/ESSOS#61
+  (open, awaiting review). It must feature-gate on
+  `hasattr(essos.fields.Vmec, "from_arrays")` and raise a clear
+  `NotImplementedError` naming the required ESSOS version otherwise — no
+  vendored copy of the surrogate in vmex, no waiting on the merge to land the
+  rest of the phase.
+
+**PR #122 base fixed.** It sat on `rj/simplify_examples` (long merged, 58
+commits stale), inflating its diff to +13,937/-3,073; retargeted to main it is
++98/-0 in one file, the original example. The scope confusion was the base,
+never the content.
+
+**Phase 21 next increment [DOING]:** `feat/traceable-field-tables` — extend
+`boozer_input_tables` with wout-convention `bsupumnc/bsupvmnc/gmnc/bsubsmns`
+(+ LASYM partners), gated against vmex's own wout rows at ~1e-13*scale on a
+symmetric and a LASYM deck, with a finite nonzero boundary jvp. This is the
+vmex-side prerequisite that depends on no ESSOS API at all.
+- 2026-08-22 claude: policies recorded — 0.6.0 confirmed, local-CI matrix mandated (Actions exhausted), ESSOS decoupling for P21, #122 base fixed to main; traceable field tables in flight.
