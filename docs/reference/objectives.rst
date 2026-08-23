@@ -326,6 +326,30 @@ When both terms use the same surfaces and pitch,
 :class:`~vmex.core.maxj.JInvariantQIAndMaximumJResidual` concatenates their
 cost-weighted rows after one shared Boozer transform.
 
+Fast-ion confinement (Gamma_c)
+------------------------------
+
+:class:`~vmex.core.gammac.GammaC` returns one ``Gamma_c`` row per flux
+surface — the Nemov fast-ion proxy (Nemov et al. 2008, eq. 61, in the
+organization of Velasco et al. 2021, eq. 16; the sibling of DESC's
+``GammaC``), so the least-squares cost is the weighted sum of
+``Gamma_c**2``, the prompt-loss scaling.  Physics, formula, and the
+numerical policy are on :doc:`/explanation/confinement`:
+
+.. code-block:: python
+
+   from vmex.core.gammac import GammaC
+
+   gamma_c = GammaC([0.35, 0.6, 0.85], nalpha=9, num_transit=4)
+   result = opt.least_squares(
+       [(qs, 0.0, 1.0), (gamma_c, 0.0, 1.0)],
+       inp, max_mode=6, jac="implicit")
+
+Stellarator-symmetric states with ``iota != 0`` on the target surfaces
+(surfaces through ``iota ~ 0`` return NaN rather than a plausible number).
+Superbanana layers make the objective demanding on ``nalpha``/``num_pitch``;
+check ``excluded_fraction`` in ``compute_state`` before trusting a value.
+
 Bootstrap current (Redl)
 ------------------------
 
@@ -546,6 +570,10 @@ Which objectives differentiate how
      - yes
      - yes
      - shared-transform J-invariance and maximum-J rows
+   * - :class:`~vmex.core.gammac.GammaC`
+     - yes
+     - yes
+     - traceable field-line drift kernels on tapered bounded traces
    * - :class:`~vmex.core.bootstrap.RedlBootstrapMismatch`
      - yes
      - yes
