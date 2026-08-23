@@ -19,6 +19,9 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
 - :func:`~vmex.core.neoclassical.epsilon_effective_from_wout` — optional
   NEO_JAX effective-ripple profile
+- :func:`~vmex.core.tracing.trace_alphas` /
+  :func:`~vmex.core.plotting.plot_tracing` — optional ESSOS alpha-particle
+  tracing (exact loss fraction; also ``vmex --trace``)
 - :func:`~vmex.core.mgrid.read_mgrid` / :func:`~vmex.core.mgrid.write_mgrid`
   / :func:`~vmex.core.mgrid.tabulate_cartesian_field`
   / :class:`~vmex.core.mgrid.MgridField` (mgrid or tabulated direct field)
@@ -149,6 +152,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".core.neoclassical", "epsilon_effective_from_boozer"),
     "epsilon_effective_from_wout": (
         ".core.neoclassical", "epsilon_effective_from_wout"),
+    # alpha-particle tracing (ESSOS)
+    "AlphaTracingResult": (".core.tracing", "AlphaTracingResult"),
+    "trace_alphas": (".core.tracing", "trace_alphas"),
+    "plot_tracing": (".core.plotting", "plot_tracing"),
     # optimizer-neutral problem callables
     "Evaluation": (".core.problem", "Evaluation"),
     "FunctionProblem": (".core.problem", "FunctionProblem"),

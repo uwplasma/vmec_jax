@@ -31,6 +31,8 @@ Public API
 ----------
 ``plot_wout(path_or_WoutData, outdir, which=(...)) -> dict[str, Path]``
 ``plot_boozmn(path, outdir) -> dict[str, Path]``
+``plot_tracing(wout, result, outdir) -> dict[str, Path]`` — the four
+alpha-tracing figures for a :class:`~vmex.core.tracing.AlphaTracingResult`
 plus the per-figure helpers each of those dispatches to.
 """
 
@@ -58,6 +60,7 @@ __all__ = [
     "plot_boozmn_spectrum",
     "plot_boozmn_mode_profiles",
     "boozer_modB_on_surface",
+    "plot_tracing",
 ]
 
 _DPI = 200            # publication resolution for every saved PNG
@@ -1738,3 +1741,152 @@ def plot_boozmn(
         fn, filename = plotters[key]
         results[key] = fn(bx, outdir / filename)
     return results
+
+
+# ==========================================================================
+# Alpha-particle tracing figures (vmex --trace; see vmex.core.tracing)
+# ==========================================================================
+
+def _trace_indices(nparticles: int, n_trajectories: int) -> np.ndarray:
+    """Evenly spaced particle indices — deterministic figure content."""
+    count = max(1, min(int(n_trajectories), int(nparticles)))
+    return np.unique(np.linspace(0, nparticles - 1, count).astype(int))
+
+
+def _finite_or_nan(values: np.ndarray) -> np.ndarray:
+    """Replace non-finite samples (post-loss event fill) with NaN gaps."""
+    return np.where(np.isfinite(values), values, np.nan)
+
+
+def plot_trace_trajectories(
+    wout, result, out_path: str | Path, *, n_trajectories: int = 4,
+) -> Path:
+    """Sampled guiding-centre orbits in 3-D over a translucent LCFS."""
+    plt = _import_matplotlib()
+    wout, _ = _as_wout(wout)
+    with _rc_context():
+        fig = plt.figure(figsize=(6.4, 5.6), frameon=False)
+        ax = fig.add_subplot(111, projection="3d")
+        theta = np.linspace(0.0, 2.0 * np.pi, 60)
+        phi = np.linspace(0.0, 2.0 * np.pi, 180)
+        R, Z = surface_rz(wout, s_index=int(wout.ns) - 1, theta=theta, phi=phi)
+        phi2d = np.meshgrid(phi, theta)[0]
+        X, Y = R * np.cos(phi2d), R * np.sin(phi2d)
+        ax.plot_surface(
+            X, Y, Z, color="0.6", alpha=0.2, rstride=2, cstride=2,
+            linewidth=0.0, antialiased=False, shade=False,
+        )
+        for i in _trace_indices(result.nparticles, n_trajectories):
+            xyz = result.trajectories_xyz[i]
+            finite = np.isfinite(xyz).all(axis=1)
+            ax.plot(
+                xyz[finite, 0], xyz[finite, 1], xyz[finite, 2],
+                lw=1.2, label=f"particle {i + 1}",
+            )
+        scale = 0.7 * max(np.abs(X).max(), np.abs(Y).max())
+        ax.auto_scale_xyz([-scale, scale], [-scale, scale], [-scale, scale])
+        ax.set_box_aspect([1, 1, 1]); ax.set_axis_off()
+        ax.legend(loc="upper right")
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI, bbox_inches="tight", pad_inches=0.05)
+        plt.close(fig)
+    return out_path
+
+
+def plot_trace_vparallel(
+    result, out_path: str | Path, *, n_trajectories: int = 4,
+) -> Path:
+    """Normalized parallel velocity ``v_par/v`` of the sampled orbits."""
+    plt = _import_matplotlib()
+    with _rc_context():
+        fig, ax = plt.subplots(figsize=(6.4, 4.2), layout="constrained")
+        for i in _trace_indices(result.nparticles, n_trajectories):
+            vpar = result.trajectories[i, :, 3] / result.total_speed
+            ax.plot(result.times, _finite_or_nan(vpar), label=f"particle {i + 1}")
+        ax.set_ylim(-1.0, 1.0)
+        ax.set_xlabel("time [s]")
+        ax.set_ylabel(r"$v_{\parallel}/v$")
+        ax.legend()
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
+    return out_path
+
+
+def plot_trace_loss_fraction(result, out_path: str | Path) -> Path:
+    """Cumulative loss fraction against time."""
+    plt = _import_matplotlib()
+    with _rc_context():
+        fig, ax = plt.subplots(figsize=(6.4, 4.2), layout="constrained")
+        ax.plot(result.times, result.loss_fractions, "-")
+        ax.set_ylim(0.0, 1.0)
+        ax.set_xlabel("time [s]")
+        ax.set_ylabel("loss fraction")
+        ax.set_title(
+            f"final loss fraction {100.0 * result.loss_fraction:.2f}% "
+            f"({result.particles_lost} of {result.nparticles})"
+        )
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
+    return out_path
+
+
+def plot_trace_energy_error(
+    result, out_path: str | Path, *, n_trajectories: int = 4,
+) -> Path:
+    """Relative energy error of the sampled orbits (integrator quality)."""
+    plt = _import_matplotlib()
+    with _rc_context():
+        fig, ax = plt.subplots(figsize=(6.4, 4.2), layout="constrained")
+        # Skip the first samples, exact by construction of mu (t = 0).
+        times = result.times[2:]
+        indices = _trace_indices(result.nparticles, n_trajectories)
+        errors = np.abs(
+            result.energies[indices, 2:] / result.particle_energy - 1.0)
+        for i, error in zip(indices, errors):
+            ax.plot(times, _finite_or_nan(error), label=f"particle {i + 1}")
+        # Promptly lost ensembles can leave no positive finite error samples;
+        # a log axis cannot autoscale on that, so keep linear axes then.
+        if np.any(np.isfinite(errors) & (errors > 0.0)):
+            ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_xlabel("time [s]")
+        ax.set_ylabel("relative energy error")
+        ax.legend()
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
+    return out_path
+
+
+def plot_tracing(
+    wout, result, outdir: str | Path, *,
+    name: str | None = None, n_trajectories: int = 4,
+) -> dict[str, Path]:
+    """Write the four alpha-tracing figures for one tracing result.
+
+    ``wout`` is the traced equilibrium — a ``wout_*.nc`` path or a
+    :class:`~vmex.core.wout.WoutData` — used as the LCFS backdrop of the 3-D
+    figure; ``result`` is an :class:`~vmex.core.tracing.AlphaTracingResult`
+    from :func:`~vmex.core.tracing.trace_alphas`.  Figures land in ``outdir``
+    (created if missing) under ``name`` (default: the wout case name), with
+    ``n_trajectories`` evenly sampled orbits in the per-particle panels.
+    Returns a mapping from figure key (``trajectories``, ``vparallel``,
+    ``loss_fraction``, ``energy_error``) to the written PNG path.
+    """
+    data, default_name = _as_wout(wout)
+    label = name or default_name
+    outdir = _ensure_outdir(outdir)
+    return {
+        "trajectories": plot_trace_trajectories(
+            data, result, outdir / f"{label}_trace_trajectories.png",
+            n_trajectories=n_trajectories),
+        "vparallel": plot_trace_vparallel(
+            result, outdir / f"{label}_trace_vparallel.png",
+            n_trajectories=n_trajectories),
+        "loss_fraction": plot_trace_loss_fraction(
+            result, outdir / f"{label}_trace_loss_fraction.png"),
+        "energy_error": plot_trace_energy_error(
+            result, outdir / f"{label}_trace_energy_error.png",
+            n_trajectories=n_trajectories),
+    }
