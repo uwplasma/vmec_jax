@@ -2648,3 +2648,61 @@ size-sensitive users at `--depth 1`. Revisit only if a rewrite is sanctioned
 for another reason.
 - 2026-08-23 claude: recorded the ESSOS reviewer ledger (#61 verified bit-for-bit, merge order, four enforcement conditions) and the measured clone sizes (tree 9 MB, shallow 13 MB, full 39 MB).
 - 2026-08-23 claude: corrected stale Phase 21 markers — 21.2 (#137), 21.2b and 21.3 (#138) shipped; 21.4 and the surrogate half of 21.5 are BLOCKED on ESSOS#61 being reviewed and released, not TODO. Only 21.6 (literature anchors) is genuinely open and unblocked.
+
+## Phase 32 — The full-marked tests almost nothing runs [NEW, URGENT]
+
+A local sweep of `-m "full and not weekly"` across the whole suite on current
+main — more than any workflow runs — gave **9 failed, 100 passed, 3 skipped in
+4h14m**. The failures had gone unnoticed because **nothing executes them**:
+
+- 112 full-marked non-weekly tests exist.
+- Nightly runs four named campaigns (`full-opt-qi/qa/qh/qp`) resolving to
+  **4 test node ids**.
+- Weekly runs the four `weekly-*` campaigns.
+- Pull-request CI runs `-m "not full and not weekly"`, excluding them by
+  construction.
+
+So roughly **108 full-marked tests belong to no scheduled job**. The
+`full-core-*` lanes resolve correctly through `tools/test_manifest.py` — they
+are simply never selected by a workflow. Phase 25 called CI runtime complete;
+that was true for what CI runs, and this is the part it does not.
+
+**Triage of the nine.**
+
+*Environmental, fix by skipping (2):* `test_bootstrap_selfconsistent_examples`
+[QA] and [QH] exit 1 with "set VMEX_ZENODO_2205_02914 to the extracted Zenodo
+dataset". A test needing an optional external dataset must skip, not fail.
+
+*Needs investigation (3):* `test_qi_optimization_example`,
+`test_scalar_optimizer_examples[QI_optimization_scipy.py]` and
+`[QA_optimization_scipy.py]` fail on stdout-regex assertions ("final cost",
+`QI total: seed ... -> final ...`). Either the examples stopped producing those
+lines or they stopped converging; scraping stdout with regexes is brittle
+either way.
+
+*Real numerical gate (1):* `_assert_stability_gradients` on
+`basic_non_stellsym_simsopt`, direction `RBS(1,1)`:
+`AD=-2.7839366520e-05`, frozen-path FD `-2.7957426985e-05`, **rel 4.22e-3
+against a 2.0e-3 gate**, Newton residual 1e-14 (so the frozen solve converged).
+`RBS(1,1)` is an asymmetric m=1 mode — the channel #126 corrected — so the
+first hypothesis to test is whether the gate was calibrated before that fix and
+now compares a corrected AD against a reference that moved. Bisect across the
+#126 merge (88b005f7) before touching the tolerance. **Do not widen the gate to
+make it pass.**
+
+*Known, documented (2):* the NCSX free-boundary current gradient (#140 recorded
+the weak-channel FD floor, and the JAX cache SIGILL forces
+`VMEX_COMPILATION_CACHE=disabled`) and `test_free_boundary_537_modes_fft_auto_smoke`
+(~15 min, above the 512-mode automatic-FFT threshold).
+
+**Actions:** (1) skip-guard the Zenodo-dependent examples; (2) diagnose the
+three example assertions; (3) bisect the LASYM gradient gate; (4) wire the
+orphaned lanes into a scheduled workflow, budgeted — the sweep took 4h14m
+serially, so it belongs in weekly campaigns split by lane, not nightly.
+
+**Local-runner gap found the same way:** the CI quality job runs five commands
+and the local matrix replicated four, omitting `tools/check_docs_prose.py`.
+Main fails that gate today (`docs/howto/trace-alpha-particles.md`, from #138,
+uses a verb absent from the allow-list; fix in #144). The runner now matches
+the workflow exactly.
+- 2026-08-23 claude: Phase 32 opened — full-marked sweep on main gave 9 failed/100 passed in 4h14m; ~108 of 112 full-marked tests are run by no workflow. Triage recorded; the LASYM RBS(1,1) gradient gate (rel 4.22e-3 vs 2e-3) needs a bisect across #126, not a wider tolerance.
