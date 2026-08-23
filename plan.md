@@ -2842,3 +2842,115 @@ xdist anyway (`ci.yml -n 4` and `nightly.yml -n 2` both carry
 exists only in ad-hoc sweeps, so the fix belongs at the sweep invocation and
 with action (4), wiring the orphaned lanes in as serial lanes.
 - 2026-08-23 claude: Phase 32 triaged in #147 — gate moved at #118 not #126, a linearization-point limit not a Jacobian bug (the FD is the accurate side), xfail'd with numbers and tolerance untouched; two scipy rows were born red in 109dcf00; my xdist hypothesis and my reading of the failing assertion were both wrong.
+
+## Phase 33 — Gap audit findings [NEW, from two measured sweeps 2026-08-23]
+
+Two independent audits (four-axis gap audit; objective-by-objective
+differentiability sweep). Everything below is measured on this machine, not
+inferred. Ranked by return on investment.
+
+**Broken right now, in descending severity.**
+
+1. **The turbulence objective lane is dead at value level, and its tests are
+   red on main.** `pytest tests/test_turbulence.py` → **3 failed, 9 passed**.
+   Root cause is external: GKX `src/gkx/objectives/core.py:352` passes
+   `enable_eigvec_derivs=True` into `lax_linalg.eig`, which jax 0.9.2 rejects
+   (`TypeError`), reached from `vmex/core/turbulence.py:472`. So
+   `turbulence_objective_vector`, `quasilinear_flux_proxy` and
+   `nonlinear_heat_flux_proxy` do not merely lack gradients — they do not
+   evaluate. `docs/reference/objectives.rst:617-620` advertises a `jac=None`
+   lane that does not exist. Unnoticed because that file's lanes
+   (`pr-parity-c2`, `optional`, `full-core-t-z`) are orphaned. **Fix belongs in
+   GKX**, not here; vmex should keep reporting red until it lands.
+
+2. **`bootstrap.vmec_j_dot_B_from_wout` silently symmetrizes a LASYM wout.**
+   With the default `geom=None` it builds `modB`/`sqrtg` from `bmnc`/`gmnc`
+   only — no `bmns`/`gmns`, no guard (`vmex/core/bootstrap.py:736-752`).
+   Reproduced: on the bundled up-down-asymmetric reference the default path
+   differs from `redl_geometry_from_wout` by up to 3.0e-3 across s=0.2..0.8,
+   violating the repo's own `rtol=1e-3` gate (`tests/test_bootstrap.py:601`),
+   which only ever runs on symmetric solovev. Public API. **Effort S.**
+
+3. **v0.6.0 ships the known macOS SIGILL; the fix is an open PR.** #142
+   (`rj/darwin-cache-deserialize-guard`) defaults the compilation cache off on
+   macOS with jaxlib < 0.10, where LLVM ORC materializes per-kernel objects
+   recursively and overflows a worker-thread stack in
+   `PyClient::DeserializeExecutable`. Verified on this host: jaxlib 0.9.2,
+   `_cache_deserialize_unsafe() == True`, guard correctly returns no cache dir.
+   This is the same fault that forced `VMEX_COMPILATION_CACHE=disabled` in the
+   #140 NCSX work and produced the xdist-only failure in the production sweep.
+   **Merge it.**
+
+4. **NaN values paired with finite gradients.** `qi.py:83`, `maxj.py:114`,
+   `maxj.py:314` use `jnp.where(valid, residual, jnp.nan)`; the `where` VJP
+   drops the NaN branch, so `total_state` is `nan` while `jax.grad` returns a
+   plausible finite vector (JInvariantQI, 292/2400 nonzero) or a clean zero
+   (MaximumJ). An optimizer guarding on `isfinite(value)` and the AD gradient
+   disagree about the same point.
+
+5. **The implicit least-squares driver clamps NaN residuals but not the
+   Jacobian.** `optimize.py:2940` rewrites the value to 1e6 while `jac_fn`
+   returns the AD Jacobian of the unclamped graph and accepts it for being
+   finite (`optimize.py:3011`). Value and Jacobian go mutually inconsistent
+   after a topology change. The pure-FD lane (`optimize.py:2198`) clamps both
+   and is fine.
+
+6. **A vacuous gradient gate.** `tests/test_optimize.py:255`
+   (`test_min_abs_iota_gradient_is_finite_and_matches_fd`) runs on the
+   `ncurr=0` solovev fixture where iota is prescribed, so the state gradient is
+   identically zero: the assertion compares `AD_jvp = 0.0` to `FD = 0.0`. The
+   same zero applies to `mean_iota`, `soft_min_abs_iota` and `edge_iota` at
+   ncurr=0 — physically correct, but nowhere stated, and the docs objective
+   table lists iota targets as implicit-differentiable without the caveat.
+
+**Large measured performance factors.**
+
+7. `nyquist.filter_bsubuv_lasym` is a five-deep Python scalar loop where its
+   symmetric twin sixty lines above uses `np.einsum`: **282x (mpol4), 5,923x
+   (mpol8), 18,441x (mpol12)**. Bites LASYM **and** ntor>0 — every 3-D
+   asymmetric deck here. Called up to three times per wout write.
+8. `gammac.py` carries **zero `jax.jit`** and loops eagerly over flux surfaces
+   (`:318`): wrapping the unmodified `gamma_c_state` in one `jax.jit` measured
+   2.284 s -> 0.0897 s (**25x**) at defaults, 66x coarse. One decorator.
+9. Cold start is 63% compilation, of which **2.72 s of 3.52 s is 251 tiny
+   single-op compiles** from op-by-op host setup (`core/setup.py` has zero
+   `jax.jit` in 1099 lines). Below JAX's 1.0 s cache threshold, so every fresh
+   process re-pays it.
+
+**Free-boundary certification is materially weaker than fixed boundary.**
+
+10. Every free-boundary adjoint certificate is a coarse nonlinear re-solve FD
+    at 2%-10%, on the **ntor=0** DIII-D deck plus one NCSX channel. Fixed
+    boundary has a transpose/dot-product identity and residual-level FD at
+    1e-8 (`tests/test_implicit_multi_rhs.py:103`). **This is the real answer to
+    the NCSX weak-channel question: the ModA floor is a property of the FD
+    reference, and the present certificate design cannot distinguish that from
+    an adjoint error.** Add the dot-product identity and residual-level FD and
+    all ten channels certify at ~1e-6 without touching the re-solve floor.
+11. The **coil-shape** free-boundary gradient — Phase 28's headline claim — has
+    no FD certificate anywhere. Every existing certificate perturbs
+    `extcur`, which is linear in the parameter and does not stand in for shape.
+12. `boundary_schur` is certified only at ntor=0, so the m=1 paired-column edge
+    basis a 3-D stellarator needs is dead in every test
+    (`freeboundary_implicit.py:472`). And under `jax.jit` the
+    `adjoint_solver="boundary_schur"` choice is **silently ignored** — the
+    `traced` branch wins at `:385-393` — which no doc mentions and no test
+    covers, since nothing jits a solve.
+
+**Correct a plan claim rather than build it.** Phase 30.3's multi-GPU
+`vmap`/`shard_map` ensembles are architecturally blocked, not merely
+unimplemented: `jax.vmap(solve_implicit)` raises, because the equilibrium is a
+host `pure_callback` and all four callbacks omit `vmap_method`
+(`implicit.py:1346,1361`; `freeboundary_implicit.py:313,326`). The repo's own
+docs already say so; only this plan claimed otherwise. `parallel.solve_ensemble`
+already gives a measured 3.29x. Fix the plan, drop the feature.
+
+**Explicitly clean, leave alone.** The `pure_callback` + `custom_vjp`
+architecture loses no gradient (jit-vs-eager `jax.grad` differ by exactly 0.0
+on solovev); every `stop_gradient` in the package is a justified linearization
+freeze; `bounce.py` holds up at all four dangerous pitches; `argmin`/`argmax`
+use is uniformly gather-only, giving the correct a.e. derivative rather than a
+silent zero; `_traceable_term` correctly rejects host-NumPy wout terms; scipy
+never sits on a differentiable path. Fixed-boundary differentiability is in
+good shape.
+- 2026-08-23 claude: Phase 33 opened from two measured sweeps — turbulence lane dead at value level via a GKX/jax-0.9.2 TypeError (3 tests red on main), bootstrap LASYM silent symmetrization, #142 unmerged with the shipped macOS SIGILL, NaN-value/finite-gradient pairs, 282x-18,441x lasym filter, 25-66x gammac jit, and a free-boundary certificate design that cannot distinguish an FD floor from an adjoint error.
