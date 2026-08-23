@@ -2542,8 +2542,17 @@ already has `jacobian_batch_size`; close the rest:
 
 ### Phase 31 — Ecosystem positioning [NEW]
 
-31.1 Gamma_c objective (also serves Phase 21) — last major physics-objective
-     gap against DESC's library.
+31.1 [DONE — #141] Gamma_c objective. Nemov PoP 15 (2008) eq. 61 in the
+     transit-stable rewrite, per Velasco NF 61 (2021); the literal Velasco
+     line-integral form was implemented first and measured to invert the
+     QA-vs-CTH ordering through its secular shear term, matching DESC's
+     recorded caveat. Anchors: exact axisymmetric limit 9.8e-7, DESC parity
+     2.8% on a shared li383 wout, ripple ray co-moves with eps_eff. Known
+     limitation, documented not hidden: the boundary-gradient magnitude
+     carries ~4.6x superbanana-layer sampling scatter (sign stable) — the
+     objective is for fixed-resolution optimization, as its docstring says.
+     Two candidate gates were removed because refinement showed they could
+     not hold.
 31.2 `ExternalObjective` escape hatch (FD or user-VJP wrapping of non-JAX
      codes, TERPSICHORE/GX-style). DESC's v0.16-0.17 arc shows the demand;
      GX/GKX integration is the local use case.
@@ -2562,3 +2571,4 @@ already has `jacobian_batch_size`; close the rest:
 - 2026-08-23 claude: P28 first deliverable — PR #140 adds the NCSX c09r00 free-boundary family (nfp=3, beta 4.1%, public coils, 4.3 MiB mgrid at kp=NZETA). VMEC2000 v6.5.0-42-g9177f58 converged first try; vmex parity 100-1000x inside the CTH gates with vacuum activation at the identical iteration; PF5 adjoint-vs-FD 3.6e-3. Caveat recorded: weak channels (ModA, 7.4e-10/A) sit at the solver-endpoint FD floor — certificate uses the conditioned channel. Environmental: a 1.6 GiB at-cap JAX compile cache reproducibly SIGILLs in PyClient::DeserializeExecutable; all runs verified with VMEX_COMPILATION_CACHE=disabled. Follow-up: reproduce and either cap-with-evict-verify or report upstream.
 - 2026-08-23 claude: P21 — PR #138 ships trace_alphas + vmex --trace against released ESSOS only (0.16 wheel surface verified; energies reconstructed locally where 0.16/dev disagree); differentiable objective stays gated on ESSOS#61 + #137. #122 superseded. PR #139 fixes the full-lane smoke figure count (plot_wout writes six since #118). #136 merged after a 16/16 matrix.
 - 2026-08-23 claude: merged #138 (vmex --trace; matrix 15/16, docs docstring fixed, docs rebuilt clean), #139 (smoke figure count; direct-run evidence, matrix would exercise zero changed lines), #140 (NCSX family; mgrid moved to the fetch-assets flow after the 1 MiB tracked-file gate caught the 4.3 MiB commit — release assets-20260823-ncsx, byte-identical round trip; fast selector 443 passed). #122 closed as superseded by #138. Phase 28's second geometry family is on main. Gamma_c agent resumed after a session-limit cutoff with instructions to set tolerances from measured pitch-grid convergence, not to fit the gates.
+- 2026-08-23 claude: merged #141 (Gamma_c) after a 16/16 matrix and an independent 4-test spot-check; P31.1 done. Queue empty: only #125 (this plan) open. Phase 21's remainder is gated on ESSOS#61 external review.
