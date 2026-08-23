@@ -13,7 +13,8 @@ Provenance (2026-08-23):
   ``v6.5.0-42-g9177f58``), sha256
   ``3c429da06f4c062887a497a16e2d2bd10f0ecb0b8858c252698631f3853da428``:
   ten groups (ModA-C, PF1-6, TF) carrying the c09r00 currents.
-- ``examples/data/mgrid_ncsx_c09r00_small.nc``: MAKEGRID ``xgrid`` from that
+- ``examples/data/mgrid_ncsx_c09r00_small.nc`` (fetched asset, see
+  ``assets/manifest.json``): MAKEGRID ``xgrid`` from that
   file (same STELLOPT tree, gfortran 13.4.0; scaled mode ``S``, stellarator
   symmetric, R [0.75, 2.0] x Z [-0.8, 0.8] m, ir=jz=28, kp=24), 4.5 MB —
   committed like the CTH fixture.  ``kp`` equals the deck's ``NZETA`` so
@@ -55,6 +56,11 @@ DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
 DECK = DATA / "input.ncsx_c09r00_free_lowres"
 MGRID = DATA / "mgrid_ncsx_c09r00_small.nc"
 
+pytestmark = pytest.mark.skipif(
+    not MGRID.exists(),
+    reason="mgrid_ncsx_c09r00_small.nc not fetched (tools/fetch_assets.py)",
+)
+
 #: wout scalars from the reference xvmec2000 run described in the module
 #: docstring (deck FTOL reached, ier_flag 0).
 VMEC2000_DIGEST = {
@@ -76,7 +82,7 @@ RTOL = {
 }
 
 
-def test_committed_mgrid_matches_the_published_c09r00_currents():
+def test_mgrid_matches_the_published_c09r00_currents():
     """PR smoke: the committed fixture is self-consistent, no solve needed.
 
     The mgrid was generated in scaled mode from coils that bake in the

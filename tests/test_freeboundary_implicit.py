@@ -189,7 +189,10 @@ def test_ncsx_free_boundary_current_gradient_matches_resolve_finite_difference()
         ns_array=np.array([15]), ftol_array=np.array([1.0e-9]),
         niter_array=np.array([4000]),
     )
-    data = read_mgrid(DATA / "mgrid_ncsx_c09r00_small.nc")
+    mgrid_path = DATA / "mgrid_ncsx_c09r00_small.nc"
+    if not mgrid_path.exists():
+        pytest.skip("mgrid_ncsx_c09r00_small.nc not fetched (tools/fetch_assets.py)")
+    data = read_mgrid(mgrid_path)
     field = MgridField.from_mgrid_data(
         data, extcur=np.asarray(inp.extcur, dtype=float)[: data.nextcur])
     params = im.params_from_input(inp)

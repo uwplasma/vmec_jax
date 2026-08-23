@@ -71,6 +71,20 @@
       "common_paths": [
         "~/.cache/vmex/golden-v1/golden"
       ]
+    },
+    {
+      "name": "ncsx-mgrid",
+      "url": "https://github.com/uwplasma/vmex/releases/download/assets-20260823-ncsx/vmex_assets_ncsx_mgrid.tar.gz",
+      "sha256": "bbfa34415953d0263c1ec87d928d6369bb598b16b47f56567e9e1dea9044c40f",
+      "size_bytes": 2999834,
+      "source": "MAKEGRID (STELLOPT v6.5.0-42-g9177f58) on public BENCHMARKS coils.NCSX (c09r00)",
+      "license": "MIT; see repository LICENSE",
+      "generator_revision": "e4ec0bf3afdc16cda28c892f12cd25dccfa0b8b7",
+      "destination": "repository",
+      "default": true,
+      "common_paths": [
+        "examples/data/mgrid_ncsx_c09r00_small.nc"
+      ]
     }
   ]
 }
