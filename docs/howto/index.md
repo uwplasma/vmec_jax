@@ -33,6 +33,7 @@ parallel-ensembles
 :maxdepth: 1
 
 plot-diagnostics
+trace-alpha-particles
 use-wout-downstream
 troubleshoot
 ```

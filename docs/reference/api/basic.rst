@@ -47,3 +47,9 @@ Optional neoclassical diagnostics
 
 .. automodule:: vmex.core.neoclassical
    :members:
+
+Optional alpha-particle tracing
+-------------------------------
+
+.. automodule:: vmex.core.tracing
+   :members:
