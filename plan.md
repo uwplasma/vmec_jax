@@ -2572,3 +2572,16 @@ already has `jacobian_batch_size`; close the rest:
 - 2026-08-23 claude: P21 — PR #138 ships trace_alphas + vmex --trace against released ESSOS only (0.16 wheel surface verified; energies reconstructed locally where 0.16/dev disagree); differentiable objective stays gated on ESSOS#61 + #137. #122 superseded. PR #139 fixes the full-lane smoke figure count (plot_wout writes six since #118). #136 merged after a 16/16 matrix.
 - 2026-08-23 claude: merged #138 (vmex --trace; matrix 15/16, docs docstring fixed, docs rebuilt clean), #139 (smoke figure count; direct-run evidence, matrix would exercise zero changed lines), #140 (NCSX family; mgrid moved to the fetch-assets flow after the 1 MiB tracked-file gate caught the 4.3 MiB commit — release assets-20260823-ncsx, byte-identical round trip; fast selector 443 passed). #122 closed as superseded by #138. Phase 28's second geometry family is on main. Gamma_c agent resumed after a session-limit cutoff with instructions to set tolerances from measured pitch-grid convergence, not to fit the gates.
 - 2026-08-23 claude: merged #141 (Gamma_c) after a 16/16 matrix and an independent 4-test spot-check; P31.1 done. Queue empty: only #125 (this plan) open. Phase 21's remainder is gated on ESSOS#61 external review.
+- 2026-08-23 claude: the "at-cap compile cache SIGILL" (P28 follow-up) root-caused and fixed —
+  PR #142. Not eviction or corruption: all 7440 entries of the 1.61 GiB cache are adler32-intact,
+  and the crash reproduces from a single intact entry in an unbounded fresh cache. Real cause:
+  jaxlib < 0.10 on macOS overflows a fixed-size worker-thread stack inside
+  PyClient::DeserializeExecutable (LLVM ORC materializes per-kernel Mach-O objects recursively;
+  synthetic boundary 200 kernels pass / 300 crash; jit_matvec 2107 kernels is the entry that
+  killed the 05:24 run; the split_count=128 flag is innocent). Verified fixed in jaxlib
+  0.10.0/0.10.2 (silent upstream fix, no changelog entry, no public issue). #142 defaults the
+  cache off on Darwin+jaxlib<0.10 only (explicit VMEX_COMPILATION_CACHE=1 / *_CACHE_DIR still
+  win; re-enables automatically on jaxlib upgrade), corrects the stale full-filesystem SIGBUS
+  docs paragraph, adds 3 policy units. Upstream report drafted, not filed (already fixed
+  upstream). Free-boundary runs on this Mac no longer need VMEX_COMPILATION_CACHE=disabled once
+  #142 lands; consider a jax/jaxlib >= 0.10 upgrade to get warm starts back.
