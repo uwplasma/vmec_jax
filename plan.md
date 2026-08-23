@@ -2402,3 +2402,159 @@ never the content.
 symmetric and a LASYM deck, with a finite nonzero boundary jvp. This is the
 vmex-side prerequisite that depends on no ESSOS API at all.
 - 2026-08-22 claude: policies recorded — 0.6.0 confirmed, local-CI matrix mandated (Actions exhausted), ESSOS decoupling for P21, #122 base fixed to main; traceable field tables in flight.
+
+## Literature and ecosystem review (2026-08-22) — corrections and new phases
+
+Two independent sweeps: the 2025-2026 literature against every physics
+commitment in this plan, and deep dives into DESC v0.17.3, MRX, GVEC, the
+mirror landscape, and VMEC++. Verdicts and what changes.
+
+### Corrections to standing phases
+
+**Phase 6 (eps_eff): current; citations refreshed.** The bounce-averaging
+reference is published — Unalmis, Gaur, Conlin, Panici, Kolemen, JPP 92(3),
+2026, DOI 10.1017/S0022377826101652 — cite that, not the preprint. DESC ships
+`EffectiveRipple` and `GammaC` on that kernel; SIMSOPT still has no
+differentiable eps_eff, so VMEX would be the second AD implementation. Add
+positioning context so the docs never imply eps_eff differentiability is the
+frontier: yancc (Conlin & Landreman, arXiv:2607.20861, 2026) differentiates
+the full 4-D drift-kinetic problem, and MONKES (Escoto et al., NF 64, 076030,
+2024) is the reference-grade monoenergetic ladder rung.
+
+**Phase 16.1 (ballooning): attribution fixed.** The growth-rate-as-target
+formulation is Gaur, Buller, Ruth, Landreman, Abel, Dorland, JPP 89 (2023),
+DOI 10.1017/S0022377823000995, extended in Gaur et al., PPCF 67, 125015
+(2025); Kappel-Landreman-Malhotra PPCF 66 (2024) is the L_gradB paper only
+(Phase 14 cites it correctly). Current mechanism is AD through the solver, not
+the adjoint identity; finite-n is arriving (AGNI, arXiv:2608.01750). A VMEX
+ballooning objective is parity work and should say so.
+
+**Mercier near-axis policy (applies to Phase 27.3 and the DMerc anchors).**
+VMEC's DMerc is unreliable near the axis (radial finite differencing, worst in
+DGeod); Landreman et al. 2026 gate on `min_{s>0.2}` for exactly this reason,
+citing Panici et al. JPP 89 (2023). Default Mercier/Glasser objectives to
+exclude s <= 0.2 (documented, overridable), and validate near-axis behaviour
+against near-axis theory — Landreman & Jorge JPP 86 (2020); Kim, Jorge,
+Dorland JPP (2021) — not against VMEC2000 parity, which near the axis is
+agreement with a known-inaccurate number. Name Glasser PoP 30, 052502 (2023)
+as the generalized non-axisymmetric criterion in the docs.
+
+**QI targets (Phases 13/27): add a second, independent residual.** The field
+diversified in 2026 — Dudt et al. JPP 90 (2024) omnigenity maps (DESC
+`Omnigenity`), OOPS unified-symmetry residuals (Liu et al., arXiv:2502.09350),
+J-action residuals (Chen et al., arXiv:2608.02418), iso-action (Sengupta et
+al., arXiv:2608.20042). `ConstructedQIResidual` alone is self-consistent;
+cross-check QI quality with one independent formulation (omnigenity-map or
+J-action).
+
+### Phase 21 restructured — the fast-ion objective, at the 2026 evidence bar
+
+The mechanism survives review; the emphasis and the evidence standard change.
+
+- **Primary differentiable objective: Gamma_c**, not the smoothed loss
+  fraction. VMEX has the bounce machinery; DESC validates the approach
+  (`GammaC` on the Unalmis kernel); the direct-loss literature itself
+  motivates proxies. Velasco NF 61 (2021) is the model reference.
+- **`soft_loss_fraction` stays as the secondary/verification target and the
+  novelty claim.** Nothing published smooths the loss fraction itself — the
+  2026 state of the art for direct loss optimization is gradient-FREE
+  (Bindel-Landreman-Padidar PPCF 65 (2023); Landreman et al. Bayesian,
+  arXiv:2606.19523, tracing via CATAPULT arXiv:2604.07617), and their stated
+  reason is not the zero gradient but chaos: the objective is not a smooth
+  function of shape. So the claim to defend is not "the gradient exists" but
+  "descending the surrogate descends the exact loss".
+- **Evidence bar for the paper/tests:** (a) surrogate gradient stability under
+  seed and particle-count resampling — the current single-seed, 200-particle
+  demonstration shows value convergence only; (b) a smoothness scan of exact
+  and surrogate loss along one boundary-coefficient ray; (c) one full
+  optimization where the exact loss fraction, re-measured with an independent
+  seed, decreases; (d) consider the Landreman-2026 time-to-threshold form
+  `f = -log10(t_M)` as a smoother measured quantity than the loss fraction.
+  Anchors to add to 21.6: Bader NF 61 (2021), Paul NF 62 (2022) — proxies are
+  imperfectly correlated with EP confinement, which is the whole case for a
+  direct differentiable target.
+- **`vmex --trace` is parity, not a differentiator** — DESC v0.17.0 ships
+  `desc.particles.trace_particles`. Say so in the docs.
+- Deck-inventory correction from review: the free-boundary evidence base is
+  two nfp=5, ntor=4 CTH-like decks (one LASYM) plus the ntor=0 DIII-D deck;
+  the publication gap is an independent geometry family, not 3-D coverage.
+
+### Phase 28 — Publish the free-boundary adjoint [NEW, HIGHEST VALUE]
+
+No published implementation differentiates through a coupled VMEC-NESTOR
+free-boundary root; VMEC++ has no AD and none planned; SIMSOPT is
+finite-difference; DESC's free boundary is differentiable but by a different
+mechanism (proximal linearization over virtual casing, arXiv:2412.05680).
+Priority is perishable — Fu, Panici, Paul, Kaptanoglu, Bhattacharjee PoP 33
+(2026) already publish an adjoint of a coil-proxy subproblem.
+
+What the paper needs: (1) the coupled certificate (adjoint vs central FD
+through full re-solves) on at least two geometry families — add one
+non-CTH free-boundary deck with mgrid; (2) cost scaling vs finite differences
+in dofs x solves; (3) a head-to-head with DESC's ProximalProjection on a
+shared problem, framed as mechanism comparison, never as "no one else can";
+(4) positioning against the analytic free-boundary adjoint relation of
+Antonsen, Paul, Landreman JPP 85 (2019) — reviewers will ask why the IFT
+through the discrete solver is preferable; the answer is exactness to the
+discretization and composability with JAX, and it must be stated. Verify the
+plan's "Paul et al. JPP 2020 Eq. 6.1" pointer resolves to Paul, Antonsen,
+Landreman, Cooper JPP 86 (2020), the free-boundary applications paper.
+
+### Phase 29 — Research-grade mirror program [NEW]
+
+The mirror branch is the clearest first-mover territory: nobody has a
+differentiable mirror equilibrium, and non-axisymmetric mirrors are unique to
+VMEX. The reference tool to beat is Pleiades as evolved by Frank et al., PoP
+33, 032504 (2026): anisotropic p_par/p_perp with self-consistent sloshing-ion
+peaking and Bayesian reconstruction with UQ, applied to WHAM.
+
+29.1 Anisotropic pressure closure (ANIMEC-class bi-Maxwellian force balance;
+     `input.py:598` currently rejects it). DESC has
+     `ForceBalanceAnisotropic`; VMEX needs it most in the mirror branch.
+29.2 Sloshing-ion pressure models: parametric turning-point-peaked profiles
+     first, CQL3D-m-informed tables later (Harvey, IAEA 2026).
+29.3 Differentiable mirror stability metrics: m=1 rigid ballooning
+     (Kotelnikov JPP 2025, arXiv:2406.10488), FLR and conducting-wall
+     criteria (NF 2023), toward the first gradient-based mirror shape
+     optimization — no published equivalent exists.
+29.4 Reconstruction mode: profile-basis fit to synthetic WHAM-class
+     diagnostics with gradients replacing the black-box loop of Frank 2026.
+     High-beta anchors: Chernoshtanov arXiv:2512.01780 (diamagnetic-bubble
+     equilibria to beta ~ 1), Khristo-Beklemishev arXiv:2408.06792.
+
+### Phase 30 — Performance and memory ergonomics [NEW]
+
+DESC's most user-visible documented advantage is not physics, it is memory
+ergonomics: `jac_chunk_size` with an explicit `m0 + m1*chunk` memory model,
+per-objective forward/reverse `deriv_mode`, documented cache workflow. VMEX
+already has `jacobian_batch_size`; close the rest:
+30.1 Documented memory model for the implicit-Jacobian assembly (measure the
+     two coefficients, put them in the performance docs).
+30.2 Per-objective fwd/rev derivative mode where the residual shape warrants.
+30.3 Multi-device batched ensembles: `vmap` + `shard_map` beta/boundary scans
+     on multi-GPU. DESC is single-device and VMEC++ CPU-only — this is an
+     open headline claim, and `parallel.solve_ensemble` is the seed.
+30.4 Persistent-compilation-cache + hot-restart workflow doc — the JAX answer
+     to VMEC++ hot restart (whose free-boundary variant remains a roadmap
+     item on their side). Mixed-precision inner linear solves (fp32 Krylov
+     under fp64 residuals) is unpublished territory for equilibria: worth one
+     bounded experiment, not a commitment.
+
+### Phase 31 — Ecosystem positioning [NEW]
+
+31.1 Gamma_c objective (also serves Phase 21) — last major physics-objective
+     gap against DESC's library.
+31.2 `ExternalObjective` escape hatch (FD or user-VJP wrapping of non-JAX
+     codes, TERPSICHORE/GX-style). DESC's v0.16-0.17 arc shows the demand;
+     GX/GKX integration is the local use case.
+31.3 Golden parity extended to VMEC++ alongside VMEC2000, and a
+     ConStellaration-style benchmark entry (arXiv:2506.19583) — no public
+     benchmark yet includes a differentiable code.
+31.4 Watch list, no action: MRX (arXiv:2510.26986) — differentiable FEEC
+     non-nested-surface relaxation, the complementary lane, revisit if islands
+     matter; GVEC (JOSS 2026) — fixed-boundary, no AD; its radial-B-spline
+     axis treatment and generalized frame (Hindenlang PPCF 2025) are the two
+     adoptable ideas if axis conditioning ever becomes the binding constraint.
+31.5 Redl-consistency-as-objective and fusion-power/ISS04 scalarizers, small
+     additions users coming from DESC expect.
+- 2026-08-22 claude: literature+ecosystem review baked in — Phase 21 restructured (Gamma_c primary, surrogate as novelty claim with the 2026 evidence bar), Mercier near-axis policy, ballooning attribution fixed, Phases 28-31 added (free-boundary publication, mirror program, performance ergonomics, positioning).
