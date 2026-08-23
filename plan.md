@@ -2585,3 +2585,58 @@ already has `jacobian_batch_size`; close the rest:
   docs paragraph, adds 3 policy units. Upstream report drafted, not filed (already fixed
   upstream). Free-boundary runs on this Mac no longer need VMEX_COMPILATION_CACHE=disabled once
   #142 lands; consider a jax/jaxlib >= 0.10 upgrade to get warm starts back.
+
+## ESSOS review ledger (2026-08-23) — for the external reviewer
+
+ESSOS merges need a second human reviewer, so this is a brief, not a queue we
+drive. 17 open PRs; every claim in #61 was re-verified independently here.
+
+**#61 (differentiable loss fraction) — merge first, gates vmex Phase 21.**
+`Vmec.from_arrays` reproduces the file route bit-for-bit (B, AbsB,
+`surface.gamma`, a 4-alpha trajectory); the exact `loss_fraction` gradient is
+0.0; every surrogate value *and gradient* in the PR body reproduces to the last
+printed digit (w=0.02: 0.306422 / -1.341416e-01; w=0.001: 0.250049). 38 tests
+in 43 s. The exact diagnostic is untouched.
+
+**Merge order for the reviewer:** #61, #51 (doc trim), #59 (frozen dofs, 25
+passed), then the #52-#57 stack, then #58, then #49/#46 (retarget off the stale
+`eg/analysis` base), then #33.
+
+**Conditions worth enforcing:**
+- The #52-#57 stack adds ~290 lines of event machinery with **zero tests**.
+  Require an event-vs-sampled equivalence test and a batching-equivalence test.
+- The stack breaks two of #61's tests when both land (verified on a merged
+  tree: 22/24). One-line fix, in the stack:
+  `getattr(self, "_has_event_metadata", False)` at `dynamics.py:1504` and
+  `:1561`.
+- #58 and #57 both add a progress story (`progress`/`devices` versus
+  `progress`/`particle_batch_size`); one should survive.
+- **#32 must not merge as it stands**: ~31 MB of `.focus`/`.npz` data
+  (`zot80.focus` alone is 11 MB) would enter history permanently.
+- #48 is mostly superseded, but carries a real bug worth salvaging: main's
+  `dynamics.py:749` assigns `self.rejected_steps = 100` in *both* branches of
+  its `if`.
+
+**Compatibility:** no open ESSOS PR removes or renames anything
+`vmex --trace` uses. The stack changes what `loss_fractions`/`lost_times`
+*mean* for VMEC guiding-centre traces (root-refined event at s=1.0 rather than
+sampled r>=0.99); the two agree exactly on the 8-alpha reference case, but
+published loss numbers can move on lossy cases.
+
+**`rj/coils_from_nearaxis`** is 151 commits behind and already conflicts with
+plain main. #61 moves the `Vmec.__init__` block it edits into `_set_state`;
+port its `raxis_cc`/`zaxis_cs` reads and the `s=` kwarg on rebase. Note the
+branch swaps the QA reactor-scale wout (548 KB -> 3.1 MB), so #61's documented
+loss table will not reproduce against it.
+
+## Distribution size (2026-08-23)
+
+Fresh clone from GitHub: **working tree 9 MB** (inside the 10 MB target),
+`--depth 1` clone 13 MB, full clone 39 MB of which 30 MB is the history pack.
+The pack is dominated by generated artifacts that predate this program plus
+#140's 4.4 MB mgrid, which was committed and then moved to the fetch-asset flow
+within the same PR — the blob stays in history. Phase 24 rules out rewriting
+published history, so the standing answer is: leave it, and point
+size-sensitive users at `--depth 1`. Revisit only if a rewrite is sanctioned
+for another reason.
+- 2026-08-23 claude: recorded the ESSOS reviewer ledger (#61 verified bit-for-bit, merge order, four enforcement conditions) and the measured clone sizes (tree 9 MB, shallow 13 MB, full 39 MB).
