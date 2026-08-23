@@ -662,3 +662,55 @@ forward-mode sensitivities, and certify them against reconverged finite
 differences and STELLOPT NEO before exposing the result in objective tuples.
 LASYM is rejected until NEO_JAX carries the asymmetric Boozer harmonics rather
 than silently dropping them.
+
+Fast-ion confinement proxy
+--------------------------
+
+Ripple wells let trapped energetic particles drift radially: where the
+contours of the second adiabatic invariant :math:`J` cross flux surfaces,
+ions born on a superbanana leave the device within a few bounce times.
+Nemov's :math:`\Gamma_c` (Nemov, Kasilov, Kernbichler, Leitold, Phys.
+Plasmas 15, 052501 (2008), eq. 61) measures the angle between the
+bounce-averaged drift and the flux surface,
+
+.. math::
+
+   \gamma_c = \frac{2}{\pi}\arctan\frac{v_r}{v_p}, \qquad
+   \Gamma_c = \frac{\pi}{4\sqrt 2}\left\langle
+     \int_{1/B_{\max}}^{1/B}\!\mathrm d\lambda\,
+     \frac{B}{\sqrt{1-\lambda B}}\,\gamma_c^{2}\right\rangle,
+
+with :math:`v_r` and :math:`v_p` the bounce-averaged radial and
+poloidal-tangential magnetic drifts and :math:`\Gamma_c^{2}` the
+prompt-loss scaling used in optimization (Velasco et al., Nucl. Fusion 61,
+116059 (2021), eqs. 14-16, the KNOSOS/CIEMAT-QI form; Bader et al. and
+Paul et al. document that such proxies correlate imperfectly with measured
+energetic-particle losses, which bounds what any :math:`\Gamma_c` value
+claims). :class:`~vmex.core.gammac.GammaC` evaluates the drift ratio in
+Nemov's own form — DESC's rewrite into single-valued periodic maps
+(``desc.compute._fast_ion`` on the bounce kernel of Unalmis et al., J.
+Plasma Phys. 92(3), 2026, doi:10.1017/S0022377826101652, DESC's sibling
+``GammaC`` objective) — because the literal line-integral form of the
+poloidal drift carries a secular shear term that drives the proxy to zero
+as the sampled line lengthens. The ingredients are exact spectral point
+evaluations on PEST field lines (the :mod:`vmex.core.stability` machinery)
+and the drift kernels of :func:`vmex.core.bounce.bounce_action`; each was
+validated against finite differences of the drift-kinetic identities
+:math:`\partial_\alpha J \propto \tau_b\,\overline{\mathbf v_M\cdot\nabla s}`
+and :math:`\partial_s J \propto -\tau_b\,\overline{\mathbf v_M\cdot\nabla\alpha}`
+and against the equilibrium's own ``wout`` tables.
+
+The pitch integral samples the reflecting level :math:`1/\lambda`
+uniformly with an open midpoint rule (the Unalmis et al. pitch-sampling
+guidance), and wells sliding across the ends of the bounded trace are
+faded by a half-transit taper applied to the normalizing
+:math:`\int\mathrm dl/B` as well — an unbiased window on the ergodic
+limit that removes end-of-trace discontinuities. Superbanana layers —
+where the tangential drift :math:`v_p` reverses and
+:math:`\gamma_c \to \pm 1` — are physical and are kept; resolving them
+sets the ``nalpha``/``num_pitch`` budget, they dominate the residual
+resolution noise of boundary gradients, and ``excluded_fraction`` reports
+any well-slot overflow so an under-provisioned evaluation is visible.
+Axisymmetry sends
+:math:`\Gamma_c \to 0` exactly (:math:`\partial_\alpha J = 0`), which the
+tests anchor together with the QA-versus-unoptimized ordering.

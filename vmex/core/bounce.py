@@ -49,6 +49,9 @@ def bounce_action(
     max_wells: int | None = None,
     quadrature_order: int = 64,
     topology_tolerance: float = 1.0e-6,
+    drift_integrands: dict[str, Any] | None = None,
+    parallel_integrands: dict[str, Any] | None = None,
+    argmin_integrands: dict[str, Any] | None = None,
 ) -> dict[str, Array]:
     """Compute ``J = 2 int sqrt(1 - pitch * B) dl`` in every magnetic well.
 
@@ -67,6 +70,16 @@ def bounce_action(
     (``marginal``) or maximum (``merged``). ``truncated`` marks a bounded
     trace that cuts a well. At most eight wells are retained by default;
     ``overflow`` requests a larger explicit ``max_wells``.
+
+    The three optional integrand mappings take names to along-line arrays
+    broadcastable to ``bmag`` and add the per-well bounce kernels of Nemov
+    et al. (2008): ``drift_<name>`` is
+    ``int f (1 - pitch B / 2) / sqrt(1 - pitch B) dl``, ``parallel_<name>``
+    is ``int f sqrt(1 - pitch B) dl``, and ``argmin_<name>`` is ``f`` at the
+    field minimum of the well (a differentiable softmin average over the
+    quadrature nodes). Any of them also adds ``bounce_time``,
+    ``v tau = 2 int dl / sqrt(1 - pitch B)``. The sine-map Jacobian cancels
+    the inverse-square-root bounce-point singularity.
     """
     bmag = jnp.asarray(bmag)
     pitch = jnp.atleast_1d(jnp.asarray(pitch, dtype=bmag.dtype))
@@ -150,6 +163,45 @@ def bounce_action(
         axis=-1,
     )
 
+    extras: dict[str, Array] = {}
+    if (drift_integrands is not None or parallel_integrands is not None
+            or argmin_integrands is not None):
+        def line_values(values):
+            return _interp_uniform(
+                jnp.broadcast_to(
+                    jnp.asarray(values, dtype=b.dtype), bmag.shape,
+                ).reshape((n_lines, n)),
+                x, length=length_arr, periodic=periodic)
+
+        # Inside a well the piecewise-linear interpolant stays below the
+        # crossing level, so parallel_speed vanishes only at roundoff;
+        # dropped nodes there mimic the exact zero of the mapped integrand.
+        inverse_speed = jnp.where(
+            parallel_speed > 0.0,
+            1.0 / jnp.maximum(parallel_speed, jnp.finfo(b.dtype).tiny), 0.0)
+        measure = weight * dlq * half_width[..., None] * jnp.cos(angle)
+        extras["bounce_time"] = 2.0 * jnp.sum(inverse_speed * measure, axis=-1)
+        drift_weight = (
+            1.0 - 0.5 * pitch[None, :, None, None] * bq) * inverse_speed
+        for name, values in (drift_integrands or {}).items():
+            extras[f"drift_{name}"] = jnp.sum(
+                line_values(values) * drift_weight * measure, axis=-1)
+        for name, values in (parallel_integrands or {}).items():
+            extras[f"parallel_{name}"] = jnp.sum(
+                line_values(values) * parallel_speed * measure, axis=-1)
+        if argmin_integrands is not None:
+            # A hard node argmin jumps between quadrature nodes as parameters
+            # move; the softmin weight keeps the selection differentiable and
+            # concentrated on the field minimum of the well.
+            b_floor = jnp.min(bq, axis=-1, keepdims=True)
+            spread = jnp.max(bq, axis=-1, keepdims=True) - b_floor
+            temperature = 0.01 * spread + jnp.finfo(b.dtype).eps
+            softmin = jnp.exp((b_floor - bq) / temperature)
+            softmin = softmin / jnp.sum(softmin, axis=-1, keepdims=True)
+            for name, values in argmin_integrands.items():
+                extras[f"argmin_{name}"] = jnp.sum(
+                    line_values(values) * softmin, axis=-1)
+
     scale = jnp.maximum(jnp.max(b, axis=-1) - jnp.min(b, axis=-1),
                         jnp.finfo(b.dtype).eps)
     previous = jnp.roll(b, 1, axis=-1)
@@ -180,6 +232,8 @@ def bounce_action(
     out_shape = lead_shape + (int(pitch.shape[0]), max_wells)
     status_shape = lead_shape + (int(pitch.shape[0]),)
     return {
+        **{name: jnp.where(well_mask, value, jnp.nan).reshape(out_shape)
+           for name, value in extras.items()},
         "action": action.reshape(out_shape),
         "well_left": well_left.reshape(out_shape),
         "well_right": well_right.reshape(out_shape),

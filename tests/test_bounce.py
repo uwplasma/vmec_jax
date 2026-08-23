@@ -228,3 +228,82 @@ def test_matches_desc_bounce1d_when_available():
         jnp.asarray(bmag), 1.0 / pitch_inv[0, 0], length=4.0 * np.pi,
         periodic=False, max_wells=2)
     np.testing.assert_allclose(jnp.nansum(ours["action"]), oracle, rtol=1e-6)
+
+
+def test_nemov_drift_kernels_match_adaptive_quadrature():
+    """The optional per-well kernels reproduce mapped adaptive quadrature.
+
+    Sinusoidal well ``B = 1 + 0.2 cos(phi)`` at ``pitch = 1``, integrand
+    ``f = 0.3 + sin(phi)^2``, line element ``1 + 0.1 cos(phi)``. References
+    use the same singularity-removing sine map with scipy adaptive
+    quadrature; measured kernel agreement at ``n = 1024``, order 48 is
+    1.9e-6 (bounce time), 1.1e-6 (drift), 1.6e-6 (parallel), asserted at
+    1e-5. The softmin ``argmin_f`` averages ``f`` around the field minimum
+    (measured offset 0.010 from ``f(pi)`` for this rapidly varying ``f``,
+    asserted at 0.05).
+    """
+    amplitude, pitch, n = 0.2, 1.0, 1024
+    phi = jnp.arange(n, dtype=jnp.float64) * (2.0 * jnp.pi / n)
+    field = 1.0 + amplitude * jnp.cos(phi)
+    integrand = 0.3 + jnp.sin(phi) ** 2
+    dl_dphi = 1.0 + 0.1 * jnp.cos(phi)
+    out = bounce_action(
+        field, pitch, dl_dphi=dl_dphi, quadrature_order=48,
+        drift_integrands={"f": integrand},
+        parallel_integrands={"f": integrand},
+        argmin_integrands={"f": integrand})
+
+    mid, half = np.pi, 0.5 * np.pi
+
+    def mapped(g):
+        return quad(
+            lambda t: g(mid + half * np.sin(t)) * half * np.cos(t),
+            -np.pi / 2, np.pi / 2, epsabs=1e-13, limit=200)[0]
+
+    def u(p):
+        return max(1.0 - pitch * (1.0 + amplitude * np.cos(p)), 1e-300)
+
+    def line(p):
+        return 1.0 + 0.1 * np.cos(p)
+
+    def f(p):
+        return 0.3 + np.sin(p) ** 2
+
+    def weight(p):
+        return 1.0 - 0.5 * pitch * (1.0 + amplitude * np.cos(p))
+    np.testing.assert_allclose(
+        out["bounce_time"][0, 0], mapped(lambda p: 2.0 * line(p) / np.sqrt(u(p))),
+        rtol=1e-5)
+    np.testing.assert_allclose(
+        out["drift_f"][0, 0],
+        mapped(lambda p: f(p) * weight(p) / np.sqrt(u(p)) * line(p)), rtol=1e-5)
+    np.testing.assert_allclose(
+        out["parallel_f"][0, 0],
+        mapped(lambda p: f(p) * np.sqrt(u(p)) * line(p)), rtol=1e-5)
+    assert abs(float(out["argmin_f"][0, 0]) - f(np.pi)) < 0.05
+
+
+def test_drift_kernels_are_nan_outside_wells_and_differentiable():
+    """Kernel extensions keep the NaN-for-invalid contract and stay traceable."""
+    field = _sinusoidal_field(n=512)
+    out = bounce_action(
+        field, jnp.array([0.5, 1.0]), drift_integrands={"one": jnp.ones(512)})
+    assert np.all(np.isnan(np.asarray(out["bounce_time"][0])))  # untrapped pitch
+    assert np.isfinite(float(out["drift_one"][1, 0]))
+
+    def total(amplitude):
+        result = bounce_action(
+            _sinusoidal_field(amplitude, n=512), 1.0, quadrature_order=32,
+            drift_integrands={"f": jnp.ones(512)},
+            parallel_integrands={"f": jnp.ones(512)},
+            argmin_integrands={"f": _sinusoidal_field(amplitude, n=512)})
+        return (result["bounce_time"][0, 0] + result["drift_f"][0, 0]
+                + result["parallel_f"][0, 0] + result["argmin_f"][0, 0])
+
+    amplitude = jnp.asarray(0.2, dtype=jnp.float64)
+    primal, tangent = jax.jvp(total, (amplitude,), (jnp.ones_like(amplitude),))
+    step = 1.0e-5
+    finite_difference = (
+        total(amplitude + step) - total(amplitude - step)) / (2.0 * step)
+    assert np.isfinite(float(primal)) and np.isfinite(float(tangent))
+    np.testing.assert_allclose(tangent, finite_difference, rtol=2e-4)
