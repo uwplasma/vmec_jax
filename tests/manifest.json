@@ -57,6 +57,7 @@
     ["tests/test_monitoring.py", "optimization", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-d", "pr-fast", "pr-implicit-response", "full-core-n-s"]],
     ["tests/test_multigrid_interp.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-j-m"]],
     ["tests/test_multigrid_ladder.py", "equilibrium", "oracle", "slow", "cpu-gpu", "golden", "vmec2000", ["pr-parity-a2", "full-core-j-m"]],
+    ["tests/test_ncsx_free_boundary_parity.py", "free-boundary", "oracle", "slow", "cpu-gpu", "none", "vmec2000", ["pr-parity-a1", "full-core-fb-b"]],
     ["tests/test_near_degenerate_vacuum.py", "equilibrium", "oracle", "slow", "cpu-gpu", "none", "vmec2000", ["pr-full-only", "full-core-n-s"]],
     ["tests/test_neoclassical.py", "diagnostics", "oracle", "slow", "cpu", "reference-nc", "external", ["pr-parity-c2", "pr-fast", "optional", "full-core-n-s"]],
     ["tests/test_nonfinite_failfast.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-n-s"]],
@@ -237,7 +238,8 @@
       "tests/mirror/test_free_boundary.py::test_unbounded_exterior_beta_observables_converge_with_resolution"
     ],
     "weekly-free-boundary-adjoint": [
-      "tests/test_freeboundary_implicit.py::test_free_boundary_pressure_gradient_matches_resolve_finite_difference"
+      "tests/test_freeboundary_implicit.py::test_free_boundary_pressure_gradient_matches_resolve_finite_difference",
+      "tests/test_freeboundary_implicit.py::test_ncsx_free_boundary_current_gradient_matches_resolve_finite_difference"
     ]
   },
   "campaigns": {

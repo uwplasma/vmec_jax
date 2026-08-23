@@ -13,6 +13,8 @@ import pytest
 
 from tests.test_lasym_free_case import lasym_free_field, lasym_free_input
 from vmex.core import implicit as im
+from vmex.core.input import VmecInput
+from vmex.core.mgrid import MgridField, read_mgrid
 from vmex.core.freeboundary_implicit import (
     make_free_boundary_config,
     solve_free_boundary_implicit,
@@ -163,6 +165,61 @@ def test_free_boundary_current_gradient_matches_resolve_finite_difference():
     np.testing.assert_allclose(
         derivative, finite_difference, rtol=2.0e-2, atol=2.0e-4
     )
+
+
+@pytest.mark.full
+def test_ncsx_free_boundary_current_gradient_matches_resolve_finite_difference():
+    """PF5 coil-current response on the NCSX c09r00 family vs cold re-solves.
+
+    Second-family spot certificate for the coil-current adjoint: the
+    CTH-like case above is nfp=5 with a generated single-channel field;
+    this is the committed nfp=3 NCSX c09r00 mgrid with ten coil groups
+    (``tests/test_ncsx_free_boundary_parity.py`` documents the family).
+    PF5 carries the largest boundary response of the ten channels
+    (|dJ/dI| ~ 3e-8 per A); central-differencing it with a 300 A step
+    keeps the FD signal well above the deterministic solver-endpoint
+    floor that dominates the weaker channels.  Measured (Apple Silicon
+    CPU): adjoint -3.0101e-8 vs central FD -2.9994e-8, relative
+    difference 3.6e-3; 280 s wall for the whole certificate cold with
+    compilation (the adjoint dominates), 4-5 s per warm-compiled FD
+    re-solve.
+    """
+    inp = dataclasses.replace(
+        VmecInput.from_file(DATA / "input.ncsx_c09r00_free_lowres"),
+        ns_array=np.array([15]), ftol_array=np.array([1.0e-9]),
+        niter_array=np.array([4000]),
+    )
+    data = read_mgrid(DATA / "mgrid_ncsx_c09r00_small.nc")
+    field = MgridField.from_mgrid_data(
+        data, extcur=np.asarray(inp.extcur, dtype=float)[: data.nextcur])
+    params = im.params_from_input(inp)
+    cfg = make_free_boundary_config(
+        inp, field, ns=15, ftol=1.0e-9, max_iterations=4000,
+        adjoint_tol=1.0e-8, adjoint_maxiter=200,
+        field_from_parameters=lambda current: dataclasses.replace(
+            field, extcur=current),
+    )
+
+    def objective(current):
+        state, _, _, _ = solve_free_boundary_implicit_status(params, current, cfg)
+        return jnp.mean(state.R_cos[-1] ** 2 + state.Z_sin[-1] ** 2)
+
+    current = np.asarray(field.extcur, dtype=float)
+    pf5 = 7  # EXTCUR(8), the PF5 ring pair at 3.01e4 A
+    derivative = float(jax.grad(objective)(jnp.asarray(current))[pf5])
+    step = 300.0
+    values = []
+    for sign in (1.0, -1.0):
+        # Independent cold re-solves prevent continuation history from
+        # manufacturing agreement with the implicit derivative.
+        fbi._FREE_HOT_CACHE.pop(cfg, None)
+        perturbed = current.copy()
+        perturbed[pf5] += sign * step
+        values.append(float(objective(jnp.asarray(perturbed))))
+    finite_difference = (values[0] - values[1]) / (2.0 * step)
+
+    assert abs(finite_difference) > 1.0e-9
+    np.testing.assert_allclose(derivative, finite_difference, rtol=2.0e-2)
 
 
 @pytest.mark.full
