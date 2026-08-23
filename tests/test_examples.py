@@ -355,6 +355,36 @@ def test_free_boundary_essos_coils(tmp_path):
     assert fsq < 1e-7, f"free-boundary point should converge, fsq={fsq}"
 
 
+@pytest.mark.full  # nightly: fixed + free-boundary solve either side of the seam (~100s)
+def test_vmex_essos_workflow(tmp_path):
+    # Both interop seams in one script: vj.essos_vmec_field (equilibrium ->
+    # essos.fields.Vmec) and vj.MgridField.from_coils (ESSOS coils -> external
+    # field).  Released-ESSOS surface only, so this runs against any ESSOS.
+    pytest.importorskip("essos.coils")
+    pytest.importorskip("essos.dynamics")
+    pytest.importorskip("essos.fields")
+    out = _run_example(EXAMPLES / "vmex_essos_workflow.py", tmp_path, timeout=900)
+    assert out.count("converged = True") == 2, out
+
+    # The wout tables cross unchanged: ESSOS' to_xyz rebuilds the LCFS vmex
+    # wrote, so this is a machine-precision identity, not a tolerance.
+    transfers = [float(v) for v in re.findall(r"LCFS transfer error ([0-9.eE+-]+) m", out)]
+    assert len(transfers) == 2 and max(transfers) < 1e-12, out
+
+    # iota measured by ESSOS from a field-line trace against the iota vmex
+    # computed from force balance: an independent check of the same handoff.
+    traced = re.findall(
+        r"iota traced ([0-9.eE+-]+) .* vs wout ([0-9.eE+-]+)", out)
+    assert len(traced) == 2, out
+    for got, expected in traced:
+        assert abs(float(got) / float(expected) - 1.0) < 1e-3, out
+
+    # Coming back the other way, the tabulated coil field must reproduce
+    # direct Biot-Savart on the surface NESTOR evaluates it on.
+    tabulation = re.search(r"on the LCFS: ([0-9.eE+-]+) median", out)
+    assert tabulation is not None and float(tabulation.group(1)) < 1e-3, out
+
+
 def test_finite_beta_scan(tmp_path):
     out = _run_example(EXAMPLES / "finite_beta_scan.py", tmp_path, timeout=900)
     # rows: pres_scale  beta_tot  R_axis  Shafranov  minDMerc

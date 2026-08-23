@@ -34,6 +34,12 @@ All runnable examples live under this single `examples/` tree. Examples marked
   - `free_boundary_essos_coils.py` — free-boundary beta scan directly from
     ESSOS coils (tabulated to a temporary mgrid); `PRES_SCALE` is calibrated per point so the
     *actual* wout `betatotal` hits 0/1/2/3 %.
+  - `vmex_essos_workflow.py` — both Python seams in one round trip: a solved
+    equilibrium becomes an `essos.fields.Vmec` (`vj.essos_vmec_field`) that
+    ESSOS traces field lines through, and an ESSOS coil set becomes the
+    external field of a free-boundary solve (`vj.MgridField.from_coils`).
+    Runs against any released ESSOS; the seams are written up in
+    `docs/howto/use-essos-fields-and-coils.md`.
   - `take_free_boundary_gradients.py` *(preview)* — compare the coupled
     NESTOR--VMEX adjoint with independent coil-field re-solves.
   - `vmex_get_B_gradB.py` queries the stable finite-beta interior API.

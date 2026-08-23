@@ -14,6 +14,7 @@ restart-from-previous-run
 parameter-scans
 run-on-gpu
 free-boundary
+use-essos-fields-and-coils
 profiles
 scale-a-configuration
 ```
