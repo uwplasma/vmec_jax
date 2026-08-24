@@ -44,16 +44,25 @@ def test_implicit_least_squares_honors_multigrid_solve_kwargs():
         "device": "cpu",
     }
 
-    got = opt.least_squares(
-        [(qh, 0.0, 1.0), (opt.aspect_ratio, 4.0, 1.0)],
-        inp,
-        max_mode=1,
-        jac="implicit",
-        hot_restart=False,
-        warm_start=None,
-        solve_kwargs=strict,
-        max_nfev=1,
-    )
+    def run(solve_kwargs):
+        return opt.least_squares(
+            [(qh, 0.0, 1.0), (opt.aspect_ratio, 4.0, 1.0)],
+            inp,
+            max_mode=1,
+            jac="implicit",
+            hot_restart=False,
+            warm_start=None,
+            solve_kwargs=solve_kwargs,
+            max_nfev=1,
+        )
+
+    got = run(strict)
+    alternate = run({
+        "ns_array": [5],
+        "ftol_array": [1.0e-6],
+        "niter_array": [5],
+        "device": "cpu",
+    })
     expected_eq = opt.solve_equilibrium(inp, **strict)
     expected = np.concatenate([
         np.asarray(qh.residuals_state(
@@ -75,3 +84,14 @@ def test_implicit_least_squares_honors_multigrid_solve_kwargs():
     assert np.asarray(got.input.ns_array).tolist() == [7]
     assert np.asarray(got.input.ftol_array).tolist() == [1.0e-11]
     assert np.asarray(got.input.niter_array).tolist() == [1200]
+    # Behavioral check: changing the requested ladder changes the computed
+    # residual, rather than merely rewriting an input object. Before the fix,
+    # both calls silently used the deck's [5], 1e-10, 1000 ladder and produced
+    # the same implicit residual.
+    assert alternate.fun.shape != got.fun.shape
+    assert not np.isclose(
+        np.linalg.norm(np.asarray(alternate.fun, dtype=float)),
+        np.linalg.norm(np.asarray(got.fun, dtype=float)),
+        rtol=1.0e-7,
+        atol=1.0e-10,
+    )
