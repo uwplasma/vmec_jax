@@ -196,15 +196,14 @@ Parity with VMEC2000
 Free-boundary multigrid has a dedicated reproducible artifact,
 ``benchmarks/freeboundary_multigrid.json``.  On the public converged CTH-like
 ``NS_ARRAY = 7, 15`` ladder (Apple Silicon CPU, 2026-07-21), VMEC2000 takes
-239 + 340 iterations in 0.98 s; vmex takes 250 + 340 iterations, 10.07 s cold
-and 1.98 s warm.  Both activate vacuum exactly once.  Against an ns=15
+239 + 340 iterations in 0.92 s; vmex takes 250 + 340 iterations, 8.61 s cold
+and 1.20 s warm.  Both activate vacuum exactly once.  Against an ns=15
 VMEC2000 wout, vmex's final scale-relative maximum errors are
-``6.10e-5`` (R), ``3.59e-4`` (Z), ``1.52e-6`` (iota), and ``5.94e-8``
-(relative ``wb``).  The first fine-grid raw residual remains a transient
-ordering difference (``FSQR=2.01e-3`` versus VMEC2000's ``1.73``), but both
-then take exactly 340 fine-grid iterations to the same fixed point.  Warm
-execution is within 2.1x of Fortran on this small case; the one-time XLA
-compile dominates the cold result.
+``6.08e-5`` (R), ``3.59e-4`` (Z), ``1.99e-6`` (iota), and ``6.07e-8``
+(relative ``wb``).  Both codes enter the fine grid at the same raw residual,
+``FSQR = 1.73``, and take exactly 340 fine-grid iterations to the same fixed
+point.  Warm execution is within 1.31x of Fortran on this small case; the
+one-time XLA compile dominates the cold result.
 
 Per-iteration algorithmic parity (same step control, preconditioner cadence,
 constants) means the solver does not just reach the same answer — it takes
@@ -354,9 +353,12 @@ Peak resident memory is 0.6–1.5 GB on most bundled rows and about 3.3 GB on
 the largest bundled multigrid deck, but those figures are not a
 high-resolution upper bound. The spectral state is small; compiled transform
 graphs and implicit block factors are not. On high-mode decks the separable
-toroidal FFT synthesis substantially reduces both wall time and peak memory
-relative to the full mode-stacked contraction, and the stage-cache release
-keeps peak RSS at the largest single rung. A residual memory gap to
+toroidal FFT synthesis reduces peak memory relative to the full mode-stacked
+contraction -- 8.21 GB against 9.63 GB on the 537-mode CTH-like case in
+``benchmarks/high_mode_fft.json`` -- while wall time is not improved there
+(983 s against 826 s cold, and a tie warm at 335 s); both runs in that record
+stop at the iteration cap, so they are compared on cost, not on a converged
+answer.  The stage-cache release keeps peak RSS at the largest single rung. A residual memory gap to
 single-purpose compiled implementations remains, dominated by XLA compiled
 executables and the runtime floor rather than by the physics working set.
 Current-head numbers for the reference high-mode deck are produced by the
