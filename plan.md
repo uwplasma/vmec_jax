@@ -3483,3 +3483,77 @@ first.
   `VMEX_JAX_LOGGING_LEVEL=WARNING` in the measurement environment, vmex's own
   documented override, plus `VMEX_COMPILATION_CACHE=disabled` so "cold" means
   cold. Both tests now pass and measure what their docstrings claim.
+
+## Phase 35 addendum — what the lanes caught, and what they cost (2026-08-24)
+
+**Two genuine defects in 256 previously-unrun tests, both now closed in #153.**
+Everything else passed on arrival: after the first fix, lanes a, c1 and misc
+all came back green and only c2 was red.
+
+1. `test_multigrid_ladder`'s two compile-count tests were failing wherever
+   they ran, reading **zero** XLA compilations. The measurement prelude
+   installs its logging handler on the `jax` logger at WARNING and *then*
+   imports vmex, whose `_configure_jax_logging` sets
+   `jax_logging_level = "ERROR"` by default — raising the logger from 30 to 40
+   and filtering exactly the WARNING-level `"Compiling ..."` records the
+   counter reads. Fixed with `VMEX_JAX_LOGGING_LEVEL=WARNING` in the
+   measurement environment plus `VMEX_COMPILATION_CACHE=disabled`.
+2. **Phase 37's units defect, closed in the same PR.** `turbulence.py` set
+   GKX's deprecated `R_over_LTi`/`R_over_Ln`; the operator consumes `a/L`.
+   Now divided by the equilibrium's own aspect ratio. On the shaped tokamak
+   deck (aspect 2.643) the Cyclone drive lands at `tprim = 2.611` next to
+   GKX's default 2.49, and the subcritical case at 0.378 instead of 1.0.
+
+**And a third hole that explains why (2) survived.** `_require_gkx` skipped
+*every* gkx test on jax < 0.10.1, but only the eigenvector-weighted lanes need
+`enable_eigvec_derivs` — `turbulent_growth_rate` reduces with
+`jnp.linalg.eigvals`. Measured rather than assumed: exactly two tests fail on
+the missing kwarg. Narrowing the guard takes `tests/test_turbulence.py` from
+13 skipped to **11 passed, 2 skipped** on this host, which makes the units fix
+verifiable locally: `gamma_lo` **0.0215 -> 8.9e-15** against `< 1e-6`, and
+`gamma_hi` 0.184 against `0.05 < g < 5.0`. Two independent holes had to line
+up for the defect to live: the lane was dark in CI, and the test was skipped
+on every developer machine below the floor.
+
+**Cost, from the runner rather than a guess.** The four lanes measured 30m00s,
+27m40s, 26m54s and 21m22s at `-n 2`, against a slowest-physics-job 14m04s —
+so the wiring roughly doubled CI wall clock to 30 minutes, at the stated
+ceiling. Widened to `-n 4` on the same 4-vCPU runner the fast lane already
+uses. Fallback recorded in the workflow: if a lane runs out of memory instead
+of getting faster, return to `-n 2` and split `pr-parity-c1` and
+`pr-parity-c2` in the manifest — `test_optimize` is ~20 min of the c1 group,
+`test_gammac` plus `test_scaling` ~12 min of c2.
+
+- 2026-08-24 rogeriojorge: approved and merged #149 (gkx jax floor) and #150
+  (performance docs against artifacts). #153 approved, merging once its
+  rebalanced run reports.
+- 2026-08-24 claude: #152's production run finished — `input.nfp2_QA_finite_beta`
+  at beta 2.698%, two stages, 32 evaluations: **lambda_max 4.421e-3 ->
+  9.124e-4 (4.8x)** with Mercier staying stable (5.371e-6 -> 1.175e-5) and QS
+  degrading ~4x, which is the `BALLOONING_WEIGHT = 200` trade. Worth reading
+  off it: the optimizer's NS = 25 grid reports 2.24e-4 where the resolved
+  NS = 45 solve says 9.12e-4, a **4x under-report in the flattering
+  direction**, which is why the example ends on a resolved certificate rather
+  than quoting the optimizer's own number. The configuration is still
+  ballooning-unstable at the end and the example says so.
+
+## Phase 38 — `step.py`'s restart helpers are a second implementation [OPEN]
+
+`restart_decision` and `apply_restart` (`vmex/core/step.py:116,142`) port
+`restart.f`'s back-off rules, and **nothing but `tests/test_step_control.py`
+calls them**: `solver.py` imports only `damping_coefficients` and
+`momentum_update` from that module and carries its own inline copy of the
+restart arithmetic in the `lax.while_loop` body (`solver.py:1417-1430`). So
+the tested rule is not the shipped rule.
+
+The duplication is known and undefended — `apply_restart`'s own docstring
+says *"The production loop in solver.py implements the same caller-level
+semantics ...; this helper must agree with it, not with restart.f in
+isolation"* — an obligation no test enforces.
+
+The right fix is to make `solver.py` call the helpers, so the tested rule
+becomes the shipped one. That is a change to the solver's hot path inside a
+`while_loop` and needs a full golden-parity campaign behind it, which is why
+it is its own phase rather than a cleanup folded into a review PR. Deleting
+the helpers instead would remove the encoded `restart.f` parity knowledge and
+is the worse trade.
