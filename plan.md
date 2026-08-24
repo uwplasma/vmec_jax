@@ -3274,7 +3274,71 @@ and the LASYM lanes exercised on a 3-D asymmetric deck. These belong in the
 weekly campaigns being wired up in Phase 32, with measured wall times
 recorded, not in a pull-request lane.
 
-### 34.5 Gamma_c to production [IN PROGRESS]
+### 34.5 Gamma_c: two symmetry defects fixed, the gradient is not convergent [MEASURED]
+
+**Two real defects, both found with one exact identity.** Gamma_c is even under
+the stellarator reflection and the sine-parity spectra are odd, so on a
+stellarator-symmetric state `d(Gamma_c)/d(sine)` must be *identically* zero.
+It was **55 % of the physical gradient**.
+
+1. The trace window ran `x in [0, L]` instead of centred on the field-line
+   label. The reflection maps `(alpha, x) -> (-alpha, -x)` and the alpha set is
+   closed under negation, so only a window symmetric in `x` makes the sampled
+   point set reflection-closed. Centring makes the per-line estimator exactly
+   mirror-invariant — `Gamma_c(+alpha)` against `Gamma_c(-alpha)` to
+   **1.8e-14**, against 1.1e-1 before — and takes the identity to 13 %.
+2. The rest was the pitch grid. `b_min`/`b_max` are `jnp.min`/`jnp.max` over
+   the sampled |B| of a reflection-closed line set, so the extrema sit at
+   mirror-image **pairs** of points and the cotangent goes entirely to one
+   member of each pair. Holding the grid fixed under differentiation takes the
+   identity to **6.6e-11** while moving the physical gradient by 1.8e-4. It is
+   not a discretization term that refines away: over
+   `num_pitch = 12/24/48/96` the violation ran 1.7e-1, 1.8e-1, 6.0e-3, 1.6e-1
+   — an erratic subgradient with no limit.
+
+The sampled geometry itself is exactly reflection-symmetric to machine zero
+(seven quantities even, `B x grad|B| . grad s` odd, all at 0.0e+00), which is
+what allowed the defect to be localized to the estimator rather than the
+spectra.
+
+**The jit is real.** Module-level, resolution arguments static: 7.42 s cold to
+**0.050 s** warm on a three-surface li383 case, values bit-identical; the
+gradient 17.25 s cold to **1.07 s**.
+
+**But the boundary gradient does not converge, and that is not new.** li383,
+`ns = 13`, `d(Gamma_c)/d rbc(n=0, m=1)` over a field-line/pitch ladder:
+
+| nalpha, transits, points/transit, pitch | fixed | main |
+| --- | --- | --- |
+| 7, 3, 64, 24 | -1.254 | -0.403 |
+| 7, 4, 96, 48 | +3.518 | +0.582 |
+| 9, 5, 128, 48 | -0.387 | -0.554 |
+| 13, 6, 192, 64 | -0.988 | -0.562 |
+| 17, 8, 256, 96 | +0.180 | -0.111 |
+
+Three sign changes on each side. Radial resolution does not rescue it: at
+fixed sampling, `ns = 13/25/49` gives **-0.387, +0.175, -2.167**. The value is
+comparatively well behaved — 2.17e-3 to 2.82e-3 over the sampling ladder
+(~25 %) and 2.82/2.66/2.91e-3 over `ns` (~9 %).
+
+That is what a piecewise functional looks like. Hard well detection and hard
+argmin selection make the *discretized* Gamma_c piecewise in the boundary
+coefficients, with breakpoints that move when the grid moves, so its exact
+derivative is the derivative of a different piecewise function at every
+resolution. Refining cannot fix it; softening the well weights would be a
+redesign, not a polish.
+
+**Disposition.** Ship the correctness and performance work: the two symmetry
+fixes, the jit, the shared spectral closures, and the docstring corrections
+(the pitch nodes are open-midpoint, not the Gauss-Legendre the docstring
+claimed). Do **not** ship a gradient-based Gamma_c optimization example — it
+would not work. `test_boundary_gradient_liveness` asserting sign stability
+under one refinement step was passing on a lucky pair of configurations, not
+on a property; replace it with the measured ladder. Gamma_c stands as a
+value-level comparative proxy with roughly 10-25 % numerical scatter, and the
+resolution belongs in any number quoted from it.
+
+### 34.5b Gamma_c, superseded text [HISTORICAL]
 
 Same phase because it shares 34.1. Measured on a realistic configuration
 (nfp=2 seed, ns=15, mpol=ntor=5, three surfaces): the objective is **0.96 s
@@ -3287,3 +3351,77 @@ measurement; do not tune them to pass.
 - 2026-08-23 claude: Phase 34 opened — one guard (stability.py:640) gates ballooning, turbulence and Gamma_c; LASYM support is physics work with a sine-zero-equals-symmetric hard gate, ballooning needs promoting from half-built to a first-class optimizable with a COBRAVMEC oracle, and Gamma_c needs its 33x jit.
 - 2026-08-23 claude: **correction.** I wrote 34.2 on a false premise — that `ballooning_growth_rate` is unusable through `from_tuples` because it is not re-exported from `vmex.optimize`. It is usable: `from_tuples` takes bare `(callable, target, weight)` tuples and `docs/reference/objectives.rst:490` documents that exact import. No re-export will be added; 34.2 is now the missing example plus the defaults decision.
 - 2026-08-23 claude: 34.3 formulation audit done. The operator is correct and current — line-for-line identical to Gaur's released solver, algebraically identical to DESC and COBRAVMEC, and *more* correct than DESC on two counts (exact grad-alpha instead of the shear decomposition, and Hudson-2006 domain recentring, which DESC omits). Three real gaps, all biasing toward false-stable: `zeta0s=(0.0,)` against DESC's 15, `nturns=3` against Gaur's 5pi, `npoints=121` against DESC's 600. One attribution defect: the cited JCP 161, 589 (2000) paper does not exist. And the 2023 JPP Eq. (14) as printed is dimensionally inconsistent — vmex follows the corrected 2025 form, not the typo. COBRAVMEC parity is reachable today with an existing binary and an analytic eigenvalue conversion; no build needed.
+
+## Phase 35 — Twelve of fourteen primary CI lanes ran nothing [SHIPPED — PR #153]
+
+`tests/manifest.json` makes every module declare exactly one primary PR lane
+and `tools/test_manifest.py validate` enforces it, so the union of those lanes
+is the whole pull-request suite. The other half of the contract was never
+checked. **Twelve of the fourteen primary lanes were invoked by no workflow**
+— `pr-parity-a1/a2/b/c1/c2/c3/d`, `pr-examples`, `pr-external`,
+`pr-full-only`, `pr-gradient`, `pr-mirror-spline` — which put **36 modules and
+256 non-full tests outside pull-request CI entirely**. All 256 pass; they were
+simply never run (6m45s locally at `-n 4`).
+
+Among the 36 is `tests/test_test_manifest.py`, the module that validates the
+manifest. That is why it persisted, and it is the whole argument for the guard
+test rather than another round of hand-patched selectors.
+
+**This is a recurrence, not a discovery.** The 2026-08-19 P9/P0 entry above
+records the changed-line gate going 78 % -> 96 % and says outright that "most
+of it came from running modules the pull-request lanes never selected", listing
+four modules moved into `pr-physics-field` and two into `pr-fast`. That fix
+treated the symptom: it named individual modules and left the primary lanes
+dead. The stale `A1_FILES=`, `C2_FILES=` and `core-a-c)` markers still asserted
+against in `test_workflow_selects_manifest_lanes` are the fossil of the
+refactor that orphaned them.
+
+The visible symptom both times is the changed-line coverage gate failing on
+code that *is* tested. It blocked #151 (`vmex/core/bootstrap.py` at 0.0 % — the
+whole `geom=None` branch, covered only from `tests/test_bootstrap.py`, primary
+lane `pr-parity-b`) and #152 (`vmex/core/stability.py` at 26.8 %, covered only
+from `tests/test_stability.py`, primary lane `pr-parity-c2`).
+
+Four sharded jobs cover the twelve lanes — 194, 540, 351 and 104 non-full
+tests, deduped per job because the lanes overlap. The whole non-full suite is
+45m11s at `-n 4` on a contended laptop, so the shards are the right order for
+a runner. `test_every_primary_pr_lane_is_invoked_by_a_workflow` closes the
+loop; it fails on main naming all twelve.
+
+**Newly enabled and worth watching:** `tests/test_multigrid_ladder.py`
+(`pr-parity-a2`) carries hard wall-clock assertions — `t2 < 1.0 s`,
+`t_warm < t_cold/3`, `t_warm < direct_cold`. Both of its timing tests failed in
+my contended local full-suite run and pass unloaded. On a shared runner they
+are the flake candidates; the first CI run here is the evidence.
+
+## Phase 36 — Free-boundary certificate: factor it, do not average it [IN PROGRESS]
+
+The existing certificates central-difference two cold forward solves, so their
+percent-level gates are set by where the solver stops, not by the adjoint, and
+a disagreement cannot be attributed: an FD floor and a wrong adjoint look the
+same. The redesign factors the implicit gradient at a frozen root,
+
+    dJ/dp = -(dF/dp)^T (dF/dz)^-T (dJ/dz)
+
+and certifies each factor separately with no cold re-solve:
+
+1. `dF/dp` against a central difference **of the residual itself** — nothing is
+   solved, so the only error is FD truncation. **Passes** at 1e-6 relative.
+2. `(dF/dz)^T` by the transpose identity `<v, J u> == <J^T v, u>` on random
+   tangents. **Passes** at 1e-11.
+3. The adjoint solve by its own transpose residual `||J^T lam - rhs||/||rhs||`
+   against the configured tolerance. **Passes**.
+4. The assembly: `jax.grad` against the product rebuilt from the three
+   certified pieces.
+
+Step 4 **does not pass, and that is the point of the redesign**: `jax.grad`
+gives -0.2272080 where the certified assembly gives -0.2267719, a relative
+difference of **1.9e-3**. The old FD certificate's 2e-2 gate could never have
+seen it. The two paths differ in one place — the shipped default
+`adjoint_solver="coupled_gcrot"` routes through `fbi._host_adjoint` (SciPy
+GCROT on the host) while the certified assembly used `im._adjoint_solve_gcrot`
+(the JAX lane), and the certified lambda is the one whose transpose residual
+was measured. Whether the shipped lambda is simply less converged, or the two
+lanes disagree structurally, is the open question; the comparison at three
+adjoint tolerances is running.
+
