@@ -93,6 +93,12 @@ vmex implements every parameterization VMEC2000 offers: ten for
 `PMASS_TYPE`, seven for `PIOTA_TYPE`, seventeen for `PCURR_TYPE`. A name
 outside those raises rather than falling back to a default.
 
+One deliberate departure from the Fortran: in `two_power_gs`, a Gaussian peak
+slot with zero amplitude is skipped. VMEC evaluates `exp(-((x-0)/0)**2)` for an
+unset slot, which is harmless away from the axis but `0/0` at `s = 0`, so a
+deck using one or two of the six peaks gets NaN there. Every peak that is
+actually set is bit-identical to VMEC.
+
 Every profile key, default, and accepted `*_TYPE` string:
 {doc}`/reference/input-file` (Pressure profile / Current and iota sections).
 The evaluation code is {mod}`vmex.core.profiles`.
