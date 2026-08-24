@@ -5,7 +5,8 @@ Zeff > 1; V2/V3 Zenodo QA/QH cross-check (<= 1% vs simsopt Redl curves,
 <= 10% RMS vs SFINCS interior, trapped-fraction parity; skips without the
 local dataset); differentiability of the double-where guards; traceable vs
 wout lane agreement; V4 ``<J.B>`` identity vs wout ``jdotb`` (<= 2% Zenodo,
-<= 1% solovev); V5 ``f_boot <= 1e-3`` on the published optima; V6 Picard
+<= 1% solovev and the LASYM up-down-asymmetric tokamak); V5
+``f_boot <= 1e-3`` on the published optima; V6 Picard
 convergence in <= 10 iterations; and the ``current_dofs`` driver with
 FD-checked AC/CURTOR Jacobian columns.
 
@@ -466,6 +467,20 @@ def eq():
     return equilibrium
 
 
+@pytest.fixture(scope="module")
+def lasym_eq():
+    """Up-down-asymmetric tokamak (LASYM = T, ntor = 0).
+
+    The deck exhausts NITER before FTOL — as its VMEC2000 golden does — but
+    the wout tables are what the wout lanes read, so convergence is not the
+    fixture's contract; carrying ``bmns``/``gmns`` is.
+    """
+    equilibrium = opt.solve_equilibrium(
+        VmecInput.from_file(DATA_DIR / "input.up_down_asymmetric_tokamak"))
+    assert bool(equilibrium.wout.lasym)
+    return equilibrium
+
+
 def test_state_lane_matches_wout_lane(eq):
     """redl_geometry_from_state agrees with redl_geometry_from_wout at
     discretization level (solver internal grid vs 64x65 wout synthesis)."""
@@ -585,9 +600,15 @@ def _interp_full(wout, surfaces, values):
                      np.asarray(values, dtype=float))
 
 
-def test_vmec_j_dot_B_state_lane_matches_wout_jdotb(eq):
-    """Traceable identity <J.B> vs the wout-engine jdotb (jxbforce.f) on the
-    solovev equilibrium: <= 1% (observed ~5e-5); wout-table identity ditto."""
+@pytest.mark.parametrize("fixture", ["eq", "lasym_eq"])
+def test_vmec_j_dot_B_state_lane_matches_wout_jdotb(request, fixture):
+    """Traceable identity <J.B> vs the wout-engine jdotb (jxbforce.f): <= 1%
+    (observed ~5e-5 solovev, ~9e-4 up_down); wout-table identity ditto.
+
+    The LASYM row is the regression gate on the ``geom=None`` synthesis: with
+    the sine families dropped the last assertion missed by 2.8e-3.
+    """
+    eq = request.getfixturevalue(fixture)
     surfaces = np.linspace(0.2, 0.9, 8)
     jv = np.asarray(bs.vmec_j_dot_B(eq.state, eq.runtime, surfaces=surfaces))
     jw = _interp_full(eq.wout, surfaces, eq.wout.jdotb)
