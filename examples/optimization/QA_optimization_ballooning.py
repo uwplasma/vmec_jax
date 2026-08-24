@@ -97,7 +97,12 @@ for max_mode, max_nfev in zip(MAX_MODES, MAX_NFEV):
     report(f"mode {max_mode}", equilibrium)
     print(f"max lambda = {worst_lambda(equilibrium):+.4e}")
 
-# The physics certificate is the resolved solve, not the optimizer's grid.
+# The physics certificate is the resolved solve, not the optimizer's grid, and
+# the difference is not small: a full run of this example reaches
+# max lambda = 2.2e-4 on the NS = 25 stage grid and 9.1e-4 when the same
+# boundary is re-solved at NS = 45.  The optimizer's number is optimistic by
+# a factor of four -- ballooning is radially stiff, so quote the resolved one
+# and add a stage at the certificate resolution if you need the margin.
 final_input = replace(inp, ns_array=np.array([FINAL_NS]),
                       ftol_array=np.array([1.0e-11 if ci_smoke else 1.0e-13]),
                       niter_array=np.array([8000]))
