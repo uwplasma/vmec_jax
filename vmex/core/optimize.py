@@ -2410,6 +2410,26 @@ def _least_squares_implicit(
     from . import implicit as imp
     from .device import resolve_implicit_device
 
+    # ``jac=None`` forwards the complete ``solve_kwargs`` dictionary to
+    # ``solve_equilibrium``.  The implicit lane has a static solver config,
+    # so historically it silently ignored the three multigrid ladder
+    # controls in that dictionary and fell back to the input deck.  That
+    # makes a supposedly matched FD/implicit comparison use different
+    # equilibria whenever the caller supplies ``ns_array``, ``ftol_array``
+    # or ``niter_array``.  Materialize those controls in the immutable input
+    # before constructing the config; ``_host_solve`` then uses exactly the
+    # same ladder as the finite-difference lane.  ``device`` is intentionally
+    # left to the public implicit ``device`` argument, since it controls the
+    # traced residual/Jacobian placement as well as the host callback.
+    solve_kwargs = dict(solve_kwargs or {})
+    ladder_fields = {
+        name: solve_kwargs.pop(name)
+        for name in ("ns_array", "ftol_array", "niter_array")
+        if name in solve_kwargs
+    }
+    if ladder_fields:
+        inp = dataclasses.replace(inp, **ladder_fields)
+
     lasym = bool(inp.lasym)
     # The 4-family traceable map, the dof plumbing below, and the
     # forward+adjoint path are dimension-general; 3D lasym is FD-validated
