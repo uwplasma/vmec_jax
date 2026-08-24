@@ -161,7 +161,7 @@ def _make_gk_point_fn(m: Array, xn: Array, tabs: dict, iota: Array,
     ``(|B|, B^phi, |grad alpha|^2, grad alpha . grad s, |grad s|^2,
     B x grad|B| . grad alpha, B x grad|B| . grad s, B . grad|B|)``.
     """
-    pos_fn, lam_fn, _, modb_fn, _ = _surface_closures(
+    pos_fn, lam_fn, _, modb_fn = _surface_closures(
         m, xn, tabs, iota, diota, phipf_j)
 
     def point(q: Array, phi_rel: Array):
