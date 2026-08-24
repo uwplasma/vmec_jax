@@ -79,8 +79,8 @@ import jax.numpy as jnp
 from .solver import SolverRuntime, SpectralState
 from .statephysics import aspect_ratio
 from .stability import (
-    _ballooning_context, _parabola, _require_symmetric,
-    _theta_vmec_from_pest,
+    _ballooning_context, _pest_lambda, _require_symmetric, _surface_closures,
+    _surface_tables, _theta_vmec_from_pest,
     _validate_surface_index,
 )
 
@@ -141,49 +141,24 @@ def _gkx():
 # ---------------------------------------------------------------------------
 
 
-def _make_gk_point_fn(m: Array, xn: Array, rtab: Array, ztab: Array,
-                      ltab: Array, iota: Array, diota: Array, phipf_j: Array):
+def _make_gk_point_fn(m: Array, xn: Array, tabs: dict, iota: Array,
+                      diota: Array, phipf_j: Array):
     """Point-evaluation closure for one flux surface (GK geometry set).
 
-    Same spectral machinery as :func:`vmex.core.stability._make_point_fn`
-    (radial parabola tables, cylindrical position via trig sums, covariant/
-    dual bases and ``nabla |B|`` from JAX AD), returning the extended tuple
+    Built on :func:`vmex.core.stability._surface_closures`, so the sine-parity
+    spectra of an asymmetric state reach this lane from one implementation.
+    Returns at ``q = (t, theta, phi)`` with ``t = s - s_j`` (evaluated at
+    ``t = 0``), and ``phi_rel = phi - zeta0`` carrying the secular shear term
+    of ``grad alpha``, the tuple
 
     ``(|B|, B^phi, |grad alpha|^2, grad alpha . grad s, |grad s|^2,
-    B x grad|B| . grad alpha, B x grad|B| . grad s, B . grad|B|)``
-
-    at ``q = (t, theta, phi)`` with ``t = s - s_j`` (evaluated at ``t = 0``)
-    and ``phi_rel = phi - zeta0`` carrying the secular shear term of
-    ``grad alpha``.
+    B x grad|B| . grad alpha, B x grad|B| . grad s, B . grad|B|)``.
     """
-
-    def coeffs(tab: Array, t: Array) -> Array:
-        return tab[0] + t * tab[1] + (t * t) * tab[2]
-
-    def lam_fn(q: Array) -> Array:
-        t, th, ph = q[0], q[1], q[2]
-        return coeffs(ltab, t) @ jnp.sin(th * m - ph * xn)
-
-    def pos_fn(q: Array) -> Array:
-        t, th, ph = q[0], q[1], q[2]
-        ang = th * m - ph * xn
-        R = coeffs(rtab, t) @ jnp.cos(ang)
-        Z = coeffs(ztab, t) @ jnp.sin(ang)
-        return jnp.array([R * jnp.cos(ph), R * jnp.sin(ph), Z])
-
-    def b_vector(q: Array) -> Array:
-        J = jax.jacfwd(pos_fn)(q)                     # columns: e_s, e_th, e_ph
-        sqrt_g = jnp.linalg.det(J)
-        lam_g = jax.grad(lam_fn)(q)                   # (lam_s, lam_th, lam_ph)
-        iota_t = iota + diota * q[0]
-        return phipf_j * ((iota_t - lam_g[2]) * J[:, 1]
-                          + (1.0 + lam_g[1]) * J[:, 2]) / sqrt_g
-
-    def modb_fn(q: Array) -> Array:
-        return jnp.linalg.norm(b_vector(q))
+    pos_fn, lam_fn, _, modb_fn, _ = _surface_closures(
+        m, xn, tabs, iota, diota, phipf_j)
 
     def point(q: Array, phi_rel: Array):
-        J = jax.jacfwd(pos_fn)(q)
+        J = jax.jacfwd(pos_fn)(q)                     # columns: e_s, e_th, e_ph
         sqrt_g = jnp.linalg.det(J)
         dual = jnp.linalg.inv(J)                      # rows: grad s, grad th, grad ph
         lam_g = jax.grad(lam_fn)(q)
@@ -221,17 +196,13 @@ def _line_arrays(ctx: dict, j: int, alpha: float, zeta0: float, x: Array):
     hs = ctx["hs"]
     iotas = ctx["iotas"]
     iota = 0.5 * (iotas[j] + iotas[j + 1])
-    point = _make_gk_point_fn(
-        ctx["m"], ctx["xn"],
-        _parabola(ctx["rmnc"], j, hs),
-        _parabola(ctx["zmns"], j, hs),
-        _parabola(ctx["lmns"], j, hs),
-        iota, (iotas[j + 1] - iotas[j]) / hs, ctx["phipf"][j],
-    )
+    tabs = _surface_tables(ctx, j)
+    point = _make_gk_point_fn(ctx["m"], ctx["xn"], tabs, iota,
+                              (iotas[j + 1] - iotas[j]) / hs, ctx["phipf"][j])
     theta_star = alpha + x
     phi = zeta0 + x / iota                 # field line: theta* = alpha + iota (phi - zeta0)
-    lmns0 = _parabola(ctx["lmns"], j, hs)[0]
-    theta_v = _theta_vmec_from_pest(theta_star, phi, lmns0, ctx["m"], ctx["xn"])
+    lmns0, lmnc0 = _pest_lambda(tabs)
+    theta_v = _theta_vmec_from_pest(theta_star, phi, lmns0, ctx["m"], ctx["xn"], lmnc0)
     q = jnp.stack([jnp.zeros_like(theta_v), theta_v, phi], axis=-1)
     return jax.vmap(point)(q, phi - zeta0)
 
