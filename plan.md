@@ -2999,3 +2999,86 @@ main), bootstrap LASYM silent symmetrization, `filter_bsubuv_lasym`
 redesign — the one that would let Phase 28's publication claim be defended,
 since the present design cannot distinguish an FD floor from an adjoint error.
 - 2026-08-23 claude: merged #142, #146, #147, #148 — four Phase 33 items closed. Queue empty but for #125.
+
+## Phase 34 — Symmetry-complete stability: ballooning, turbulence, Gamma_c [NEW]
+
+One restriction gates three lanes. `_ballooning_context`
+(`vmex/core/stability.py:640`) raises `NotImplementedError` for `lasym=True`,
+and it is the shared entry to the ballooning solver, the turbulence proxies
+(`turbulence.py:290`) and Gamma_c (`gammac.py:296`). Lifting it correctly is
+physics work — the sine-parity families have to be carried through the PEST
+angle map and the field-line geometry — not a guard removal.
+
+### 34.1 LASYM field-line geometry [IN PROGRESS]
+
+Extend `_ballooning_context` and `_theta_vmec_from_pest` to asymmetric
+equilibria: `rmns`/`zmnc`/`lmnc` through the PEST map, `bmns` in |B| and its
+derivatives. Models already parity-complete in this repo: `omnigenity.py`,
+`qi.py`, `maxj.py`, `bounce.py`, `boozer_tables.py`.
+
+**Hard gate:** a LASYM run with every sine coefficient set to zero must
+reproduce the symmetric result to round-off. That is the trick that exposed
+the frozen delta-rotation defect (#126); it is not optional here.
+
+**Do not open the door wider than the evidence.** Lifting the shared guard
+unblocks ballooning and turbulence too. Each lane keeps its own guard until it
+has its own LASYM verification — an unblocked-but-unverified objective is the
+silent-wrong class this program exists to remove.
+
+### 34.2 Ballooning as a first-class optimizable [TODO]
+
+The solver exists: `ballooning_lambda` and `ballooning_growth_rate` are in
+`stability.py.__all__`. But **neither is re-exported from `vmex.optimize`**, so
+neither can be used through `VmecProblem.from_tuples` the way every other
+objective is, and there is no example. Its only tests are two qualitative
+cases (`tests/test_stability.py:90,97`: zero-pressure stable, high-pressure
+unstable). That is a half-built feature by the standard in Phase 32.
+
+Close it: re-export, add the `(function, target, weight)` surface, and write
+`examples/optimization/QA_optimization_ballooning.py` — a QA optimization with
+a ballooning-stability term alongside the usual shaping, following the
+neighbouring examples exactly. Phase 16 already listed this example; it was
+never written.
+
+### 34.3 Physics verification, not liveness [TODO]
+
+The current tests establish that the sign is right in two extreme cases. A
+research-grade lane needs an oracle. Candidates, in order of value:
+
+1. **COBRAVMEC parity.** The classic VMEC ballooning code is available locally
+   at `STELLOPT_new/COBRAVMEC` and takes a wout directly, which makes it the
+   natural external oracle for a VMEC-based implementation — the same role
+   `xvmec2000` plays for Mercier and `xbooz_xform` for Boozer. Establish
+   whether a bundled deck can be run through both and compared.
+2. **Analytic limits** — the s-alpha / circular-tokamak limit where one applies.
+3. **Ordering against published behaviour** on configurations whose ballooning
+   character is documented.
+4. **Convergence** in field-line extent, resolution, and the ballooning
+   parameter zeta0.
+
+Attribution to fix while doing this: the formulation is Gaur, Buller, Ruth,
+Landreman, Abel, Dorland, JPP 89 (2023), DOI 10.1017/S0022377823000995,
+extended in Gaur et al., PPCF 67, 125015 (2025). Kappel-Landreman-Malhotra
+PPCF 66 (2024) is the L_gradB paper and belongs only in Phase 14. Compare the
+operator, the zeta0 treatment and the growth-rate normalisation against DESC's
+`BallooningStability` (v0.15+), and record where the two differ.
+
+### 34.4 Production runs [TODO]
+
+Physics claims need converged runs, not smoke tests: a QA ballooning
+optimization carried to convergence with the growth rate reported per stage,
+and the LASYM lanes exercised on a 3-D asymmetric deck. These belong in the
+weekly campaigns being wired up in Phase 32, with measured wall times
+recorded, not in a pull-request lane.
+
+### 34.5 Gamma_c to production [IN PROGRESS]
+
+Same phase because it shares 34.1. Measured on a realistic configuration
+(nfp=2 seed, ns=15, mpol=ntor=5, three surfaces): the objective is **0.96 s
+eager and 0.03 s under one `jax.jit`, values bit-identical** — a 33x factor
+that is the difference between the example running and stalling. Also open:
+whether the recorded ~4.6x gradient-magnitude scatter is genuine superbanana
+sensitivity (document the converged resolution and gate there) or a
+quadrature artefact that a better pitch grid fixes. Set tolerances from
+measurement; do not tune them to pass.
+- 2026-08-23 claude: Phase 34 opened — one guard (stability.py:640) gates ballooning, turbulence and Gamma_c; LASYM support is physics work with a sine-zero-equals-symmetric hard gate, ballooning needs promoting from half-built to a first-class optimizable with a COBRAVMEC oracle, and Gamma_c needs its 33x jit.
