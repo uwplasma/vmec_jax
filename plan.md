@@ -2999,6 +2999,7 @@ main), bootstrap LASYM silent symmetrization, `filter_bsubuv_lasym`
 redesign — the one that would let Phase 28's publication claim be defended,
 since the present design cannot distinguish an FD floor from an adjoint error.
 - 2026-08-23 claude: merged #142, #146, #147, #148 — four Phase 33 items closed. Queue empty but for #125.
+- 2026-08-23 claude: PR #151 closes the two remaining Phase 33 code items. bootstrap LASYM: `vmec_j_dot_B_from_wout` with `geom=None` was dropping the `bmns`/`gmns` partners, so the default lane disagreed with the `geom=` lane it is asserted to match at rtol=1e-3 by 5.5e-4 to 2.8e-3 across s=0.2..0.8 on `input.up_down_asymmetric_tokamak`; after the fix the two lanes agree bit-for-bit and the test is parametrized `[eq]`/`[lasym_eq]`. The symmetric path was **not** also wrong — Solovev is identical to the last digit before and after. `filter_bsubuv_lasym` vectorized: 211x-2393x, closing the gap to the symmetric twin from 388x-12312x down to 2.5x-5.1x, bit-parity 1-7 ulp on the arguments the wout writer actually passes. `longdouble` kept — a float64 clone is only 1.07x faster and lands the same 1-2 ulp, so there was nothing to buy; note that on macOS arm64 `np.longdouble` *is* float64 (eps 2.22e-16), so the docstring's extended-precision claim is inert on this host and only engages on x86-64.
 
 ## Phase 34 — Symmetry-complete stability: ballooning, turbulence, Gamma_c [NEW]
 
@@ -3025,43 +3026,214 @@ unblocks ballooning and turbulence too. Each lane keeps its own guard until it
 has its own LASYM verification — an unblocked-but-unverified objective is the
 silent-wrong class this program exists to remove.
 
+**Specification, from COBRAVMEC v4.1 rather than the literature.** There is no
+published paper on ideal ballooning in non-stellarator-symmetric equilibria —
+searched and not found. The near-misses do not cover it: Hammond, Lazerson &
+Volpe, Phys. Plasmas 24, 042510 (2017) assume symmetry for CNT despite its
+known coil misalignments, and the up-down-asymmetric tokamak literature treats
+asymmetry purely as a geometry input. The usable specification is COBRAVMEC
+itself, whose banner reads "THIS IS THE ASYMMETRIC COBRA BALLOONING CODE" —
+R. Sanchez added `lasym` in 2011 and never documented it.
+
+**The eigenproblem does not change form.** Correa-Restrepo (1978) and Dewar &
+Glasser, Phys. Fluids 26, 3038 (1983) derive it for general 3-D toroidal
+systems with no symmetry assumption, and COBRA confirms it operationally:
+`coeffs.f`, `getmatrix.f`, `geteigm.f` and `variat_eig_full.f` contain **zero**
+`lasym` branches. Every `lasym` branch in COBRA is a Fourier-series term. So
+the work is entirely in the two spectral closures:
+
+1. `_ballooning_context` already computes `R_sin` and `Z_cos` and throws them
+   away into `_R_sin, _Z_cos`. Keep them, apply the same `mode_scale`, add
+   `lmnc = state.L_cos * mode_scale * lam_factor`, return `rmns/zmnc/lmnc`.
+2. `_make_point_fn`: `R = rmnc cos + rmns sin`, `Z = zmns sin + zmnc cos`,
+   `lambda = lmns sin + lmnc cos`. Everything downstream — sqrt(g), the dual
+   basis, `B`, `grad|B|`, `grad alpha` — is AD of those two closures and
+   generalizes for free. That is why the change is small.
+3. `_theta_vmec_from_pest` needs the cos-parity lambda in both the residual and
+   the derivative. `1 + lambda_theta > 0` still holds on nested surfaces, so the
+   fixed unrolled Newton is structurally unchanged (same as `obtain_theta.f`).
+4. `L_ref`/`B_ref` need **no** change: `geometry.R_even`/`dZ_dtheta_even` come
+   from `real_space_geometry`, which follows `totzsps` + `totzspa` and already
+   sums both parities, and `rt.trig.wint` already switches to the full [0, 2pi)
+   uniform-weight grid for lasym (`transforms.py:502-508`).
+5. **The one real algorithmic consequence: parity of the eigenvalue in
+   `(alpha, zeta0)` is lost.** COBRA encodes exactly this at
+   `get_ballooning_grate.f:180-201` — the half-domain shortcut `tsymm = 0` is
+   permitted only when `.NOT.lasym_v` *and* the line starts at
+   `alpha = zeta_k = 0`, and is unconditionally disabled for `lasym=T`. For
+   vmex: the default `alphas = linspace(0, pi, 4)` becomes **invalid** under
+   lasym (alpha must span [0, 2pi)), `zeta0s` must be scanned over both signs,
+   and the docstring's "stellarator symmetry maps alpha -> -alpha" has to be
+   conditioned on `lasym`. Nothing else changes — not
+   `_max_eigenvalue_tridiag`, not the normalizations, not the reductions.
+
+Unlike the lasym `D_R` lane, this one lands with an external oracle available
+on day one: COBRAVMEC accepts asymmetric wouts, and
+`tests/test_stability.py:70-86` already carries a converged lasym fixture
+(`input.up_down_asymmetric_tokamak`, `am=[1,-1]`, `pres_scale=5000`).
+
 ### 34.2 Ballooning as a first-class optimizable [TODO]
 
-The solver exists: `ballooning_lambda` and `ballooning_growth_rate` are in
-`stability.py.__all__`. But **neither is re-exported from `vmex.optimize`**, so
-neither can be used through `VmecProblem.from_tuples` the way every other
-objective is, and there is no example. Its only tests are two qualitative
-cases (`tests/test_stability.py:90,97`: zero-pressure stable, high-pressure
-unstable). That is a half-built feature by the standard in Phase 32.
+**Correction to this phase as first written.** I claimed `ballooning_lambda`
+and `ballooning_growth_rate` "cannot be used through `VmecProblem.from_tuples`"
+because neither is re-exported from `vmex.optimize`. That is wrong.
+`from_tuples` (`problem.py:436`) takes bare `(callable, target, weight)`
+tuples, and `docs/reference/objectives.rst:490` already documents
+`from vmex.core.stability import ballooning_growth_rate` used exactly that way
+in a `least_squares` term list — the same idiom the QI and max-J examples use.
+Ballooning is reachable, documented, and gated by real physics tests
+(vacuum-stable, high-pressure-unstable, hard-vs-soft max, and an AD-vs-FD
+gradient check). No re-export is needed and none will be added.
 
-Close it: re-export, add the `(function, target, weight)` surface, and write
+The one real gap is that there is no example. Write
 `examples/optimization/QA_optimization_ballooning.py` — a QA optimization with
-a ballooning-stability term alongside the usual shaping, following the
-neighbouring examples exactly. Phase 16 already listed this example; it was
-never written.
+a ballooning term alongside the usual shaping, following the neighbouring
+examples exactly. Phase 16 listed it; it was never written.
 
-### 34.3 Physics verification, not liveness [TODO]
+**Defaults to decide alongside the example.** Verification (34.3) found that
+three defaults bias the answer in the dangerous direction for a stability
+constraint — they report "stable" when the configuration is not:
 
-The current tests establish that the sign is right in two extreme cases. A
-research-grade lane needs an oracle. Candidates, in order of value:
+| default | vmex | Gaur 2023 / 2025 | DESC | consequence |
+| --- | --- | --- | --- | --- |
+| `zeta0s` | `(0.0,)` | 21 / 15 values | 15 in [-pi/2, pi/2] | under-reports lambda_max on 3-D decks |
+| `nturns` | 3 poloidal turns (theta_b = 3pi) | theta_b = 5pi (code uses 4pi) | 3 *toroidal* turns | lambda is monotone non-decreasing in theta_b (nested Dirichlet trial space), so truncation can only under-report |
+| `npoints` | 121 | - | 600 | 2nd-order FD; ~40 points per poloidal turn |
+| `alphas` | 4 in [0, pi] | 42 / 14 | 8-16 | under-samples the (alpha, zeta0) landscape |
 
-1. **COBRAVMEC parity.** The classic VMEC ballooning code is available locally
-   at `STELLOPT_new/COBRAVMEC` and takes a wout directly, which makes it the
-   natural external oracle for a VMEC-based implementation — the same role
-   `xvmec2000` plays for Mercier and `xbooz_xform` for Boozer. Establish
-   whether a bundled deck can be run through both and compared.
-2. **Analytic limits** — the s-alpha / circular-tokamak limit where one applies.
-3. **Ordering against published behaviour** on configurations whose ballooning
-   character is documented.
-4. **Convergence** in field-line extent, resolution, and the ballooning
-   parameter zeta0.
+Gaur 2023 footnote 2 is explicit that theta_0 must be scanned because there is
+a value at which the mode is least stable. Do not change these blind: measure
+`max over (4 alpha x 15 zeta0)` against `max over (4 alpha x 1 zeta0)` on
+`input.li383_low_res` first, and let the measured gap set the default.
 
-Attribution to fix while doing this: the formulation is Gaur, Buller, Ruth,
-Landreman, Abel, Dorland, JPP 89 (2023), DOI 10.1017/S0022377823000995,
-extended in Gaur et al., PPCF 67, 125015 (2025). Kappel-Landreman-Malhotra
-PPCF 66 (2024) is the L_gradB paper and belongs only in Phase 14. Compare the
-operator, the zeta0 treatment and the growth-rate normalisation against DESC's
-`BallooningStability` (v0.15+), and record where the two differ.
+Two further items, both recorded rather than assumed:
+
+- **Softmax bias.** `ballooning_growth_rate` returns `T logsumexp(lambda/T)`,
+  biased above the true max by at most `T log N`. With production defaults
+  (`T = 0.05`, `N = 3 x 4 x 1 = 12`) that is **+0.124** — the same order as the
+  published lambda_max of NCSX/DIII-D/Henneberg-QA in Gaur 2023 Fig. 6
+  (0.008-0.02). The bias is conservative (over-reports instability) and the
+  existing test pins the bound, but the docs suggest a target of -0.01, which
+  in truth targets lambda = -0.13. Document it, or lower `T`.
+- **No variational refinement.** Gaur 2023 Eq. (18) and COBRA
+  (`variat_eig_full.f:59`) both refine the raw finite-difference eigenvalue
+  with the 4th-order Rayleigh quotient, and COBRA adds Richardson
+  extrapolation. vmex (like DESC) reports the raw 2nd-order value. The
+  refinement is a cheap, fully AD-friendly quotient; whether it is worth
+  adding is an outcome of the resolution scan in 34.3, not a decision to take
+  in advance.
+
+### 34.3 Physics verification, not liveness [VERIFIED 2026-08-23; oracles TODO]
+
+The formulation was audited line by line against Gaur's own released solver,
+DESC master, and COBRAVMEC source. **Verdict: the operator vmex solves is
+correct and current.** Recording it because the audit is the evidence, not the
+absence of a failure:
+
+- `stability.py:869-874` matches `gamma_ball_full` in Gaur's
+  ideal-ballooning-solver (`utils.py:1550-1562`) term for term: bending
+  `g = gradpar gds2/B`, drive `c = -dPdrho cvdrift/(gradpar B)`, inertia
+  `f = gds2/(B^3 gradpar)`. vmex's `dp_drho` equals Gaur's `dPdrho` identically
+  once `B_ref = 2|psi_b|/a_N^2` is substituted.
+- Same three coefficients confirmed against DESC master
+  (`desc/compute/_stability.py:320-373`) and COBRAVMEC (`coeffs.f:44-47`).
+  vmex uses `eta = iota (phi - zeta0)` where DESC uses `zeta`; under
+  `eta = iota zeta` the map is exactly `(g, c, f) -> (iota g, c/iota, f/iota)`,
+  which leaves lambda invariant. Because iota is constant on a surface, a
+  uniform eta grid *is* a uniform zeta grid: at matched extent and point count
+  the two codes solve the *same discrete problem*.
+- The secular term `alpha_cov = [lambda_s - (phi - zeta0) iota', 1 + lambda_th,
+  lambda_ph - iota]` (`stability.py:781-783`) is Gaur 2023 Sec. 2.2's
+  stellarator field-line label verbatim. vmex builds grad-alpha directly rather
+  than through the shear decomposition, which is exact and avoids the
+  `sign(iota)` inconsistency DESC carries between its `gds2` and its `c`.
+- `_max_eigenvalue_tridiag` reproduces Gaur 2023 Eq. (16) and DESC's
+  `_ideal_ballooning_lambda` exactly, index by index.
+- **vmex is more correct than DESC on domain centring.** vmex's grid is
+  `phi in zeta0 +- theta_b/iota`, centred where the secular term vanishes.
+  Hudson, Phys. Plasmas 13, 042511 (2006), Eq. 23 states the exact symmetry
+  `lambda(psi, alpha - 2pi q, theta_k + 2pi) = lambda(psi, alpha, theta_k)` is
+  broken at finite domain unless the grid is centred on `theta_k`. vmex
+  centres; COBRAVMEC centres (`summodosd.f:60`); DESC does not.
+
+**Currency.** Nothing 2025-2026 supersedes or corrects the infinite-n
+formulation; no erratum or critique exists. arXiv:2608.01750 (Gaur et al.,
+Aug 2026, "AGNI") extends to *finite*-n via the energy principle and states
+that it keeps `lambda = gamma^2 (a_N/v_A)^2` for consistency with the
+infinite-n solver. arXiv:2602.07329 (Bhattacharjee, May 2026) reinterprets 3-D
+ballooning as Anderson-localized — a caveat on how `lambda(psi, alpha, zeta0)`
+should be *aggregated*, not a correction to the local eigenproblem.
+
+**Attribution to fix (docstring defect, not physics).** `stability.py:5-7`
+cites "Sanchez, Hirshman, Ware, Berry & Batchelor, J. Comput. Phys. 161, 589
+(2000)". No such paper. The real ones, confirmed from `COBRAVMEC/Sources/cobra.f`
+and Crossref, are **Sanchez, Hirshman, Whitson & Ware, JCP 161, 576 (2000)**
+(COBRA) and **Sanchez, Hirshman & Wong, CPC 135, 82 (2001)** (the
+VMEC-coordinate variant; p. 589 belongs to this one). Berry/Batchelor/Spong
+belong to PPCF 42, 641 (2000). The primary differentiable reference should be
+**Gaur et al., PPCF 67, 125015 (2025)** (arXiv:2410.04576), not the 2023 JPP
+paper: the 2023 paper's printed Eq. (14) gives `f = |grad alpha|^2/(B/B_N)^2`,
+which is dimensionally inconsistent (lambda would not scale as gamma^2) — a
+typesetting error. Gaur's own code, the 2025 paper, DESC and COBRA all use the
+`B^3/(b.grad)` form, and **vmex follows the corrected form, not the typo.**
+
+**Oracles, in order of value — all still TODO.**
+
+1. **COBRAVMEC parity.** Feasible today with no build: a working arm64 binary
+   is at `STELLOPT/COBRAVMEC/Release/xcobravmec` (symlinked `~/bin/`), sources
+   byte-identical to `STELLOPT_new/COBRAVMEC/Sources`. The eigenvalue converts
+   analytically, with no fudge factor: COBRA's third column is a *signed*
+   gamma (`get_ballooning_grate.f:313`), so
+   `lambda_vmex = sign(grate) grate^2 (a_N B_0 / (R_0 B_N))^2`
+   with `R_0 = (rmax_surf + rmin_surf)/2` and
+   `B_0 = sqrt((2/beta_axis)(1.5 mu0 p_2 - 0.5 mu0 p_3))`; rho and COBRA's
+   `amin` cancel. Every input is in the wout vmex already writes — `wout.py`
+   carries all 25 fields `order_input.f:61-199` reads; no mgrid, no boozmn.
+   Drive it with the 9-record `in_cobra.ball` in the `l_geom_input=F,
+   l_tokamak_input=F` branch, whose `(alpha_st, zeta_k)` is exactly vmex's
+   `(alphas, zeta0s)`. Match the domain with
+   `nturns_vmex = (2 k_w - 1)/(2 nfp)`. Compare two ways: the marginal-stability
+   radius (what DESC's own `test_ballooning_compare_with_COBRAVMEC` does, to
+   `rtol=2e-3`) and the converted lambda at high `npoints` (expect 10-20%:
+   COBRA is 4th-order variational with Richardson extrapolation, vmex is raw
+   2nd order). Run an `ns` scan before blaming physics. Stored oracles that
+   need no run at all: `DESC/tests/inputs/cobra_grate.HELIOTRON_L24_M16_N12`
+   and Gaur's `tests/comparn_w_COBRAVMEC/` (`wout_NCSX_og.nc` +
+   `cobra_grate.NCSX_og`).
+2. **simsopt `vmec_fieldlines` geometry parity** — cheaper and exact, and it
+   closes a real hole: `tests/test_turbulence.py:69-110` claims to check the
+   `vmec_fieldlines` conventions but only compares `stability.py` to itself.
+   simsopt 1.10.7 is installed at `simsopt_test`. Comparing `bmag`,
+   `gradpar_theta_pest`, `gds2`, `gds21`, `gds22`, `gbdrift`, `gbdrift0`,
+   `cvdrift`, `cvdrift0` on a vmex-written wout is exact to machine precision
+   (same VMEC data, same conventions) and pins the `sign_psi`/`signgs`
+   convention, where vmex derives the sign from its own sqrt(g) and simsopt
+   hard-codes `-phiedge/2pi`.
+3. **Analytic limit** — `input.circular_tokamak_aspect_100` with `am=[1,-1]`
+   and a `pres_scale` sweep is the Connor-Hastie-Taylor shifted-circle limit;
+   compare the marginal locus in `(s_hat, alpha_MHD)` against the first-stability
+   boundary printed in Hudson & Hegna, Phys. Plasmas 10, 4716 (2003) Sec. 4
+   (CHT itself does not print the curve).
+4. **Oracle-free invariance** — cheap enough for the PR lane, and the sharpest
+   test of the secular term: `lambda(-alpha, -zeta0) = lambda(alpha, zeta0)`
+   (stellarator symmetry, symmetric decks only), `lambda(alpha + 2pi) =
+   lambda(alpha)`, and the field-period shift `lambda(alpha + iota 2pi/nfp,
+   zeta0 + 2pi/nfp) = lambda(alpha, zeta0)`, which exercises the `xn = n nfp`
+   sums and the zeta0 recentring together (the Hudson 2006 Eq. 23 family).
+5. **Convergence** — `nturns` in {1..6} must be *monotone non-decreasing* (a
+   theorem, so a strict assertion, not a tolerance) and converged by 5pi;
+   `npoints` in {81, 121, 241, 481, 961} must show clean O(h^2), with the fitted
+   exponent recorded; `ns` in {16, 31, 61}; and the `(alpha, zeta0)` sampling
+   gap that decides 34.2's defaults.
+
+**DESC differences that matter for any comparison, recorded so the next
+attempt does not lose a day to them:** DESC's `zeta0` kwarg is `iota * zeta0`,
+not `zeta0`; DESC's `nturns` counts *toroidal* turns while vmex's counts
+poloidal (for iota = 0.4 vmex's domain is 2.5x longer under the same number);
+DESC does not recentre, so only `zeta0 = 0` is comparable; and DESC's
+ballooning code was rewritten in PR #1763 (2025-07-01) with a v0.15.0
+changelog entry fixing a bug "where the computation mixed data between field
+lines", which makes any stored pre-v0.15 DESC ballooning reference unusable.
 
 ### 34.4 Production runs [TODO]
 
@@ -3082,3 +3254,5 @@ sensitivity (document the converged resolution and gate there) or a
 quadrature artefact that a better pitch grid fixes. Set tolerances from
 measurement; do not tune them to pass.
 - 2026-08-23 claude: Phase 34 opened — one guard (stability.py:640) gates ballooning, turbulence and Gamma_c; LASYM support is physics work with a sine-zero-equals-symmetric hard gate, ballooning needs promoting from half-built to a first-class optimizable with a COBRAVMEC oracle, and Gamma_c needs its 33x jit.
+- 2026-08-23 claude: **correction.** I wrote 34.2 on a false premise — that `ballooning_growth_rate` is unusable through `from_tuples` because it is not re-exported from `vmex.optimize`. It is usable: `from_tuples` takes bare `(callable, target, weight)` tuples and `docs/reference/objectives.rst:490` documents that exact import. No re-export will be added; 34.2 is now the missing example plus the defaults decision.
+- 2026-08-23 claude: 34.3 formulation audit done. The operator is correct and current — line-for-line identical to Gaur's released solver, algebraically identical to DESC and COBRAVMEC, and *more* correct than DESC on two counts (exact grad-alpha instead of the shear decomposition, and Hudson-2006 domain recentring, which DESC omits). Three real gaps, all biasing toward false-stable: `zeta0s=(0.0,)` against DESC's 15, `nturns=3` against Gaur's 5pi, `npoints=121` against DESC's 600. One attribution defect: the cited JCP 161, 589 (2000) paper does not exist. And the 2023 JPP Eq. (14) as printed is dimensionally inconsistent — vmex follows the corrected 2025 form, not the typo. COBRAVMEC parity is reachable today with an existing binary and an analytic eigenvalue conversion; no build needed.
