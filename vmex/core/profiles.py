@@ -31,6 +31,9 @@ power_series         ``sum_i c[i] x**i``
 two_power            ``c[0] (1 - x**c[1])**c[2]``
 gauss_trunc          ``c[0]/(1-E) * (exp(-(x/c[1])**2) - E)``,
                      ``E = exp(-(1/c[1])**2)`` (normalized so f(0)=c[0])
+sum_atan             ``c[0] + (2/pi) sum_{k=0..4} c[1+4k]
+                     atan(c[2+4k] x**c[3+4k] / (1-x)**c[4+4k])`` -- iota and
+                     current only, and it parameterizes ``I``, not ``I'``
 pedestal             VMEC2000 ``pmass`` pedestal: degree-15 power series in
                      ``c[0:16]`` plus a tanh pedestal shaped by ``c[16:21]``
 cubic_spline         VMEC ``spline_cubic`` through (aux_s, aux_f) knots
@@ -57,6 +60,9 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 import numpy as np
+
+#: Denominator floor for 'sum_atan'; see :func:`_sum_atan`.
+_SUM_ATAN_FLOOR = 1.0e-300
 
 __all__ = [
     "MU0",
@@ -145,6 +151,56 @@ def _gauss_trunc(coefficients, x):
     x = jnp.asarray(x)
     edge = jnp.exp(-((1.0 / c[1]) ** 2))
     return c[0] / (1.0 - edge) * (jnp.exp(-((x / c[1]) ** 2)) - edge)
+
+
+def _pow_at_zero(x, exponent):
+    """``x ** exponent`` with the Fortran value, and no NaN gradient, at x = 0.
+
+    ``jnp.power`` with a non-integer exponent goes through ``exp(e log x)``,
+    so at ``x = 0`` both the value and its derivative come back NaN, where
+    Fortran gives ``0`` (``e > 0``), ``1`` (``e = 0``) or ``+inf``
+    (``e < 0``).  Evaluating at a stand-in and selecting afterwards keeps the
+    value exact for every ``x > 0`` and keeps ``log(0)`` out of the tape.
+    """
+    x = jnp.asarray(x)
+    positive = x > 0.0
+    powered = jnp.where(positive, x, 1.0) ** exponent
+    at_zero = jnp.where(exponent == 0.0, 1.0,
+                        jnp.where(exponent > 0.0, 0.0, jnp.inf))
+    return jnp.where(positive, powered, at_zero)
+
+
+def _sum_atan(coefficients, x):
+    """Sum of five arctangents (``profile_functions.f`` 'sum_atan').
+
+    ``f(x) = c0 + (2/pi) sum_k c[1+4k] atan(c[2+4k] x**c[3+4k] /
+    (1-x)**c[4+4k])`` over ``k = 0..4``, using ``c[0:21]``.
+
+    VMEC hardcodes the edge rather than taking the limit: at ``x >= 1`` it
+    returns ``c0 + c1 + c5 + c9 + c13 + c17``, which is that limit only when
+    every ``c[2+4k]`` and ``c[4+4k]`` is positive.  Reproduced as written,
+    because parity with ``pcurr``/``piota`` is the contract.
+
+    Only the denominator is guarded.  An untaken ``jnp.where`` branch is still
+    evaluated, so ``1 - x`` is floored away from zero to keep the ``x >= 1``
+    branch from putting a NaN into the gradient of the taken one; the floor is
+    far below any representable ``1 - x``, so interior values are exact and
+    the guarded expression still tends to ``atan(inf) = pi/2``.  ``x`` itself
+    is handled by :func:`_pow_at_zero` instead, because clamping it low would
+    move ``f(0)`` whenever an exponent ``c[3+4k]`` is fractional (at
+    ``eps = 1e-12`` and ``c = 0.5``, by 2e-7).
+    """
+    c = _coeffs_padded(coefficients, 21)
+    x = jnp.asarray(x)
+    interior = x < 1.0
+    one_minus = jnp.maximum(jnp.where(interior, 1.0 - x, 1.0), _SUM_ATAN_FLOOR)
+    total = jnp.zeros_like(x)
+    for k in range(5):
+        total = total + c[1 + 4 * k] * jnp.arctan(
+            c[2 + 4 * k] * _pow_at_zero(x, c[3 + 4 * k])
+            / one_minus ** c[4 + 4 * k])
+    edge = c[0] + c[1] + c[5] + c[9] + c[13] + c[17]
+    return jnp.where(interior, c[0] + (2.0 / jnp.pi) * total, edge)
 
 
 def _pedestal(coefficients, x):
@@ -490,6 +546,7 @@ _PARAMETERIZED = {
     "power_series": _power_series,
     "two_power": _two_power,
     "gauss_trunc": _gauss_trunc,
+    "sum_atan": _sum_atan,
     "pedestal": _pedestal,
     "power_series_ip": _pcurr_power_series_ip,
     "power_series_i": _pcurr_power_series_i,
@@ -591,7 +648,8 @@ def iota(piota_type: str, ai, ai_aux_s, ai_aux_f, s, *, bloat=1.0, lrfp=False):
     this port applies it uniformly (identical for the default ``bloat = 1``).
     """
     kind = str(piota_type).strip().lower()
-    if kind not in ("power_series", "cubic_spline", "akima_spline", "line_segment"):
+    if kind not in ("power_series", "sum_atan", "cubic_spline", "akima_spline",
+                    "line_segment"):
         raise NotImplementedError(f"piota_type={piota_type!r} not implemented")
     x = _bloated(s, bloat)
     value = evaluate_profile(kind, ai, ai_aux_s, ai_aux_f, x)
@@ -604,6 +662,7 @@ def iota(piota_type: str, ai, ai_aux_s, ai_aux_f, s, *, bloat=1.0, lrfp=False):
 _PCURR_KINDS = {
     "power_series": "power_series_ip",
     "power_series_i": "power_series_i",
+    "sum_atan": "sum_atan",
     "two_power": "two_power_ip",
     "gauss_trunc": "gauss_trunc_ip",
     "pedestal": "pedestal_i",

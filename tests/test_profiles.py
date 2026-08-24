@@ -281,3 +281,111 @@ def test_grad_through_two_power_current_coefficients():
         lambda c: jnp.sum(profiles.current("two_power", c, None, None, 0.5))
     )(ac)
     assert float(d[0]) == pytest.approx(0.5 - 0.5**3 / 3.0, rel=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# sum_atan (profile_functions.f pcurr/piota)
+# ---------------------------------------------------------------------------
+
+
+def _sum_atan_fortran(ac, x):
+    """``profile_functions.f`` lines 375-384, transcribed literally.
+
+    The reference is the Fortran itself rather than a simplification of it,
+    including the hardcoded ``x >= 1`` branch, so a divergence in either shows
+    up as a mismatch instead of being defined away.
+    """
+    a = np.zeros(21)
+    ac = np.asarray(ac, dtype=float)
+    a[: min(21, ac.size)] = ac[:21]
+    if x >= 1.0:
+        return a[0] + a[1] + a[5] + a[9] + a[13] + a[17]
+    return a[0] + (2.0 / np.pi) * (
+        a[1] * np.arctan(a[2] * x ** a[3] / (1 - x) ** a[4])
+        + a[5] * np.arctan(a[6] * x ** a[7] / (1 - x) ** a[8])
+        + a[9] * np.arctan(a[10] * x ** a[11] / (1 - x) ** a[12])
+        + a[13] * np.arctan(a[14] * x ** a[15] / (1 - x) ** a[16])
+        + a[17] * np.arctan(a[18] * x ** a[19] / (1 - x) ** a[20])
+    )
+
+
+#: (0) the HSX benchmark deck's own AC, (1) two groups with a negative
+#: amplitude, (2) all five groups with fractional exponents, (3) a short array
+#: that must pad, (4) a zero-exponent group, since ``0**0`` is 1 in Fortran.
+_SUM_ATAN_CASES = {
+    "hsx_deck": [0.0, 1.0, 1.00423652381532e01, 1.50747420899044e00, 1.0]
+    + [0.0] * 16,
+    "two_groups": [0.3, 0.8, 4.0, 2.0, 1.0, -0.25, 7.5, 1.25, 0.5] + [0.0] * 12,
+    "five_groups": [0.1, 0.5, 3.0, 1.0, 1.0, 0.2, 2.0, 1.5, 0.5, -0.1, 5.0,
+                    2.0, 1.5, 0.3, 1.0, 0.5, 1.0, -0.2, 8.0, 3.0, 2.0],
+    "short_array": [0.5, 2.0, 3.0],
+    "zero_exponent": [0.0, 1.0, 2.0, 0.0, 1.0] + [0.0] * 16,
+}
+
+
+@pytest.mark.parametrize("case", sorted(_SUM_ATAN_CASES))
+def test_sum_atan_matches_profile_functions_f(case):
+    """Values against the transcribed Fortran, endpoints included.
+
+    The grid deliberately includes ``x = 0`` and ``x = 1`` and the points just
+    inside them: those are the two places the expression is singular, and both
+    are real grid points for a VMEC profile.
+    """
+    ac = _SUM_ATAN_CASES[case]
+    x = np.concatenate([[0.0, 1e-12, 1e-6],
+                        np.linspace(0.001, 0.999, 40),
+                        [1.0 - 1e-9, 1.0]])
+    got = np.asarray(profiles.evaluate_profile("sum_atan", ac, None, None, x))
+    expected = np.array([_sum_atan_fortran(ac, xi) for xi in x])
+    assert np.all(np.isfinite(got))
+    scale = max(float(np.max(np.abs(expected))), 1e-300)
+    assert float(np.max(np.abs(got - expected))) / scale < 1e-13
+    # The hardcoded edge, exactly as Fortran writes it.
+    a = np.zeros(21)
+    a[: min(21, len(ac))] = np.asarray(ac, dtype=float)[:21]
+    assert float(got[-1]) == pytest.approx(
+        a[0] + a[1] + a[5] + a[9] + a[13] + a[17], rel=1e-14)
+
+
+def test_sum_atan_is_differentiable_at_both_endpoints():
+    """No NaN in the gradient at ``x = 0`` or ``x = 1``.
+
+    ``jnp.power`` with a non-integer exponent goes through ``exp(e log x)``,
+    so a naive ``x ** c`` puts ``log(0)`` on the tape and returns a NaN
+    derivative at the axis; the ``x >= 1`` branch of a ``jnp.where`` is
+    evaluated too, so an unguarded ``1/(1-x)`` poisons the other branch.  Both
+    are real grid points, so both matter.
+    """
+    ac = jnp.asarray(_SUM_ATAN_CASES["five_groups"])
+    for x in (0.0, 1e-14, 0.5, 1.0 - 1e-14, 1.0):
+        d = jax.grad(
+            lambda xx: profiles.evaluate_profile("sum_atan", ac, None, None, xx)
+        )(x)
+        assert np.isfinite(float(d)), f"d/dx at x={x}"
+    grad_c = jax.grad(
+        lambda c: jnp.sum(profiles.evaluate_profile(
+            "sum_atan", c, None, None, jnp.linspace(0.0, 1.0, 17)))
+    )(ac)
+    assert bool(jnp.all(jnp.isfinite(grad_c)))
+    assert float(jnp.max(jnp.abs(grad_c))) > 0.0
+
+
+def test_sum_atan_reaches_the_current_and_iota_wrappers():
+    """``sum_atan`` is selectable as ``pcurr_type`` and ``piota_type``.
+
+    VMEC2000 offers it for those two and not for ``pmass``
+    (``profile_functions.f`` has a ``CASE('sum_atan')`` in ``pcurr`` and
+    ``piota`` only), so the pressure wrapper must keep rejecting it.
+    """
+    ac = _SUM_ATAN_CASES["hsx_deck"]
+    x = np.linspace(0.0, 1.0, 9)
+    expected = np.array([_sum_atan_fortran(ac, xi) for xi in x])
+    # pcurr: sum_atan parameterizes I(s) itself, so no integration.
+    np.testing.assert_allclose(
+        np.asarray(profiles.current("sum_atan", ac, None, None, x)),
+        expected, rtol=1e-13, atol=1e-300)
+    np.testing.assert_allclose(
+        np.asarray(profiles.iota("sum_atan", ac, None, None, x)),
+        expected, rtol=1e-13, atol=1e-300)
+    with pytest.raises(NotImplementedError, match="pmass_type"):
+        profiles.pressure("sum_atan", ac, None, None, x)

@@ -202,7 +202,11 @@ Current and iota profiles
    * - ``PCURR_TYPE``
      - ``power_series``
      - current profile type; ``*_i`` forms prescribe :math:`I(s)`, ``*_ip``
-       forms prescribe :math:`I'(s)`
+       forms prescribe :math:`I'(s)`.  One of ``power_series``,
+       ``power_series_i``, ``two_power``, ``gauss_trunc``, ``sum_atan``,
+       ``pedestal``, and the ``cubic_spline``/``akima_spline``/
+       ``line_segment`` ``_i`` and ``_ip`` forms.  ``sum_atan`` and
+       ``pedestal`` prescribe :math:`I(s)`
    * - ``AC`` / ``AC_AUX_S`` / ``AC_AUX_F``
      - zeros / —
      - current profile coefficients / spline knots and values
@@ -211,7 +215,8 @@ Current and iota profiles
      - total toroidal current [A]
    * - ``PIOTA_TYPE``
      - ``power_series``
-     - iota profile type
+     - iota profile type; one of ``power_series``, ``sum_atan``,
+       ``cubic_spline``, ``akima_spline``, ``line_segment``
    * - ``AI`` / ``AI_AUX_S`` / ``AI_AUX_F``
      - zeros / —
      - iota profile coefficients / spline knots and values
