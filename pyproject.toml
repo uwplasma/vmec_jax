@@ -76,6 +76,13 @@ freeb = [
 # published as ``spectraxgk``; vmex requires the post-rename >= 1.7.1 API).
 turbulence = [
   "gkx>=1.7.1",
+  # gkx opts into reverse-mode eigenvector derivatives through
+  # lax_linalg.eig(enable_eigvec_derivs=...), which first exists in
+  # jax 0.10.1.  Below that the proxies raise TypeError at call time,
+  # so carry gkx's own floor here rather than resolving to a jax that
+  # imports but cannot run them.
+  "jax>=0.10.1",
+  "jaxlib>=0.10.1",
 ]
 # ESSOS 0.16 is VMEX's stable coil/CLI interface. Examples that need branch
 # rj/vmex-optimization-interfaces (PR #58) fail early with a clear message.

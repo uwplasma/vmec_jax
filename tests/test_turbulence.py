@@ -18,6 +18,7 @@ name is not supported) — dependent lanes skip cleanly without it.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -175,9 +176,26 @@ def test_surface_index_validation(shaped_eq):
 # ---------------------------------------------------------------------------
 
 
+def _require_gkx():
+    """Skip unless gkx is importable *and* its jax floor is satisfied.
+
+    gkx reaches reverse-mode eigenvector derivatives through
+    ``lax_linalg.eig(enable_eigvec_derivs=...)``, which first exists in jax
+    0.10.1 and which gkx declares accordingly.  gkx still imports against an
+    older jax, so importorskip alone lets these reach a call-time TypeError
+    that is an unsatisfied dependency contract, not a defect.
+    """
+    pytest.importorskip("gkx")
+    from jax._src.lax import linalg as lax_linalg
+
+    if "enable_eigvec_derivs" not in inspect.signature(lax_linalg.eig).parameters:
+        pytest.skip("gkx needs jax >= 0.10.1 for enable_eigvec_derivs "
+                    f"(installed: {jax.__version__}); install vmex[turbulence]")
+
+
 def test_contract_passes_gkx_validation(shaped_eq):
     """The mapping satisfies gkx's validated flux-tube contract."""
-    pytest.importorskip("gkx")
+    _require_gkx()
     geom = turb.flux_tube_geometry(shaped_eq.state, shaped_eq.runtime,
                                    validate=True, ntheta=32, **LINE)
     assert type(geom).__name__ == "FluxTubeGeometryData"
@@ -188,7 +206,7 @@ def test_contract_passes_gkx_validation(shaped_eq):
 
 def test_growth_rate_is_itg_critical_gradient_monotone(shaped_eq):
     """Strong ITG drive unstable, weak drive marginal; proxies positive."""
-    pytest.importorskip("gkx")
+    _require_gkx()
     state, rt = shaped_eq.state, shaped_eq.runtime
     gamma_hi = float(turb.turbulent_growth_rate(state, rt, r_over_lt=6.9, **GK))
     gamma_lo = float(turb.turbulent_growth_rate(state, rt, r_over_lt=1.0, **GK))
@@ -199,7 +217,7 @@ def test_growth_rate_is_itg_critical_gradient_monotone(shaped_eq):
 
 def test_objective_vector_and_scalar_proxies_consistent(shaped_eq):
     """Vector entries reproduce the documented saturation-rule proxies."""
-    pytest.importorskip("gkx")
+    _require_gkx()
     state, rt = shaped_eq.state, shaped_eq.runtime
     vec = np.asarray(turb.turbulence_objective_vector(state, rt, **GK))
     named = dict(zip(turb.TURBULENCE_OBJECTIVE_NAMES, vec))
@@ -229,7 +247,7 @@ def test_growth_rate_gradient_matches_finite_differences(shaped_eq):
     and forward (``jax.jacfwd`` — what ``jac="implicit"``'s forward implicit
     Jacobian traces through the objective rows).
     """
-    pytest.importorskip("gkx")
+    _require_gkx()
     state, rt = shaped_eq.state, shaped_eq.runtime
 
     def gamma(scale):
@@ -252,7 +270,7 @@ def test_eigenvector_weighted_proxies_are_value_level(shaped_eq):
     GK operator, whose derivatives JAX declines unless
     ``enable_eigvec_derivs``); reverse AD must either refuse with that
     error or agree with the FD lane that ``jac=None`` actually uses."""
-    pytest.importorskip("gkx")
+    _require_gkx()
     state, rt = shaped_eq.state, shaped_eq.runtime
 
     def ql(scale):
@@ -278,7 +296,7 @@ def test_eigenvector_weighted_proxies_are_value_level(shaped_eq):
 
 def test_grad_wrt_state_is_finite(shaped_eq):
     """The state gradient the implicit-gradient lane composes with is finite."""
-    pytest.importorskip("gkx")
+    _require_gkx()
     rt = shaped_eq.runtime
     grad = jax.grad(lambda st: turb.turbulent_growth_rate(st, rt, **GK))(shaped_eq.state)
     leaves = jax.tree.leaves(grad)
