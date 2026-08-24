@@ -3010,7 +3010,7 @@ and it is the shared entry to the ballooning solver, the turbulence proxies
 physics work — the sine-parity families have to be carried through the PEST
 angle map and the field-line geometry — not a guard removal.
 
-### 34.1 LASYM field-line geometry [IN PROGRESS]
+### 34.1 LASYM field-line geometry [SHIPPED — PR #152]
 
 Extend `_ballooning_context` and `_theta_vmec_from_pest` to asymmetric
 equilibria: `rmns`/`zmnc`/`lmnc` through the PEST map, `bmns` in |B| and its
@@ -3072,7 +3072,7 @@ on day one: COBRAVMEC accepts asymmetric wouts, and
 `tests/test_stability.py:70-86` already carries a converged lasym fixture
 (`input.up_down_asymmetric_tokamak`, `am=[1,-1]`, `pres_scale=5000`).
 
-### 34.2 Ballooning as a first-class optimizable [TODO]
+### 34.2 Ballooning as a first-class optimizable [EXAMPLE SHIPPED — PR #152; defaults open]
 
 **Correction to this phase as first written.** I claimed `ballooning_lambda`
 and `ballooning_growth_rate` "cannot be used through `VmecProblem.from_tuples`"
@@ -3123,7 +3123,7 @@ Two further items, both recorded rather than assumed:
   adding is an outcome of the resolution scan in 34.3, not a decision to take
   in advance.
 
-### 34.3 Physics verification, not liveness [VERIFIED 2026-08-23; oracles TODO]
+### 34.3 Physics verification, not liveness [VERIFIED; COBRAVMEC ORACLE SHIPPED — PR #152]
 
 The formulation was audited line by line against Gaur's own released solver,
 DESC master, and COBRAVMEC source. **Verdict: the operator vmex solves is
@@ -3234,6 +3234,37 @@ DESC does not recentre, so only `zeta0 = 0` is comparable; and DESC's
 ballooning code was rewritten in PR #1763 (2025-07-01) with a v0.15.0
 changelog entry fixing a bug "where the computation mixed data between field
 lines", which makes any stored pre-v0.15 DESC ballooning reference unusable.
+
+- 2026-08-23 claude: **34.1 shipped.** The eigenproblem does not change form for
+  an asymmetric state — COBRAVMEC's `coeffs.f`, `getmatrix.f`, `geteigm.f` and
+  `variat_eig_full.f` carry no `lasym` branches at all — so the work was two
+  spectral closures with everything downstream following by AD. The three lanes
+  each held five byte-identical closures; they are now one `_surface_closures`
+  factory, so parity lives in one place and the change is a net simplification.
+  Hard gates all met: zero sine spectra through the asymmetric branch are
+  **bit-identical**; the same deck solved with `LASYM = T` lands within
+  **2.8e-13**; the alpha parity holds to **7.4e-14** symmetric and is violated
+  at **2.9e-3** asymmetric, which is what justifies the `[0, 2pi)` default
+  rather than cosmetics. Turbulence and Gamma_c keep guards that name
+  themselves — the geometry reaches them, the verification does not.
+- 2026-08-23 claude: **34.3's first oracle shipped, and it needed no build.**
+  `xcobravmec` reads a vmex-written wout directly (every field
+  `order_input.f` asks for is already in `wout.py`) and the eigenvalue converts
+  analytically: `lambda_vmex = sign(grate) grate^2 (a_N B0/(R0 B_N))^2`.
+  **Predicted factor 9.4416e-02 against measured 9.4475e-02 — 6e-4.** That
+  agreement is the content: the normalizations were derived, not tuned. On
+  solovev at `pres_scale=3e4` the outer four surfaces agree to 6e-4 at both
+  ns=49 and ns=99; the innermost is COBRA's near-axis radial differencing and
+  falls sixfold when ns doubles. On `li383_low_res` (nfp=3, beta=4.3%) the
+  signs agree on all five surfaces including which one is unstable.
+- 2026-08-23 claude: **34.2's example shipped, and it made the defaults
+  question concrete.** On its seed the single-point `zeta0s=(0.0,)` reports
+  **3.27e-3** where a five-point scan reports **4.42e-3** — a 26% under-report,
+  in the false-stable direction. The softmax bias at production defaults is
+  **+0.12**, larger than the published lambda_max values it would be compared
+  against. Both are now documented and the example scans; **changing the
+  library defaults is still open** and belongs to a measurement, not to this
+  example.
 
 ### 34.4 Production runs [TODO]
 
