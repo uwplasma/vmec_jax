@@ -2955,3 +2955,47 @@ never sits on a differentiable path. Fixed-boundary differentiability is in
 good shape.
 - 2026-08-23 claude: Phase 33 opened from two measured sweeps — turbulence lane dead at value level via a GKX/jax-0.9.2 TypeError (3 tests red on main), bootstrap LASYM silent symmetrization, #142 unmerged with the shipped macOS SIGILL, NaN-value/finite-gradient pairs, 282x-18,441x lasym filter, 25-66x gammac jit, and a free-boundary certificate design that cannot distinguish an FD floor from an adjoint error.
 - 2026-08-23 claude: merged #146 (vmex-ESSOS Python seams + the 270x --coils loop-vs-vmap fix; matrix 17/17) and #142 (macOS jaxlib<0.10 compilation-cache guard; matrix 17/17, guard verified firing on this host). Phase 33 item 3 closed. #147 reworked to drop the superseded xfail — it is now three example test-bug fixes only, +16/-7. #148 (refined-anchor gradient fix) verified not to disturb VMEC2000 parity: DMerc per-element 6.302e-04, bit-identical to pre-anchor.
+
+## Phase 33 progress (2026-08-23) — four items closed
+
+Merged, each behind a 17-job local matrix (the runner now includes the
+`check_docs_prose` gate it had been missing):
+
+- **#142** — macOS jaxlib<10 compilation-cache guard. Closes the SIGILL that
+  v0.6.0 shipped, and retroactively explains two earlier mysteries: why the
+  NCSX free-boundary work needed `VMEX_COMPILATION_CACHE=disabled`, and why
+  the NCSX adjoint certificate failed only under `pytest -n 2`.
+- **#146** — the two vmex-ESSOS Python seams (`essos_vmec_field`,
+  `MgridField.from_coils`), plus the 270x loop-vs-vmap fix on the `--coils`
+  path that the seam audit turned up.
+- **#147** — three example test-bugs, including two parametrization rows that
+  had never passed since the commit that added them. The `xfail` an earlier
+  revision carried was dropped, superseded by #148.
+- **#148 — the anchoring fix, and the most consequential of the four.** `ftol`
+  gates the sum of squares, so every solve the host calls converged returns
+  with `|F| ~ sqrt(ftol)`; where `dF/dz` has a small singular value that is a
+  real state displacement. Refining the returned state moved the LASYM
+  RBS(1,1) DMerc channel from 4.22e-3 to 5.29e-7 and every symmetric channel
+  with it, so the shared gate went **2.0e-3 -> 2.0e-5** rather than merely
+  being restored. Two channels had been over the gate, not one. Cost +14-26%
+  on the forward solve, gated on measured `|F|`.
+
+  Verified here, because it was the real risk: refining the state could have
+  drifted vmex off the pinned VMEC2000 goldens, since VMEC2000 also stops at
+  its own ftol. It does not — DMerc parity is **6.302e-04 per element,
+  bit-identical to pre-anchor**.
+
+  Two findings inside it worth keeping: anchoring *only* the adjoint's
+  linearization makes the error **worse** (5.65e-3 vs 4.22e-3), because at the
+  host state the cotangent and linearization errors partially cancel; and the
+  long-unexplained -h FD anomaly was a stagnating GMRES(30) in the FD's own
+  Newton solve, fixed by gcrot, always detectable from `newton_res` against
+  the lane's own assertion.
+
+**Remaining Phase 33 items, ROI order:** the GKX `eig`/jax-0.9.2 break (owner
+to relay; vmex's turbulence lane is dead at value level and 3 tests are red on
+main), bootstrap LASYM silent symmetrization, `filter_bsubuv_lasym`
+(282x-18,441x), `gammac` jit (25-66x), and the free-boundary certificate
+redesign — the one that would let Phase 28's publication claim be defended,
+since the present design cannot distinguish an FD floor from an adjoint error.
+- 2026-08-23 claude: merged #142, #146, #147, #148 — four Phase 33 items closed. Queue empty but for #125.
