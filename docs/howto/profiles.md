@@ -72,6 +72,23 @@ spline profiles and shows they agree:
   mis-ordered knot silently shortens the profile — check the parsed
   {class}`~vmex.core.input.VmecInput` if a spline looks truncated.
 
+`sum_atan` is available for `PCURR_TYPE` and `PIOTA_TYPE` (VMEC2000 offers it
+for those two and not for pressure). It prescribes the profile itself, not its
+derivative:
+
+$$
+f(x) = c_0 + \frac{2}{\pi}\sum_{k=0}^{4} c_{1+4k}
+  \arctan\left(\frac{c_{2+4k}\, x^{c_{3+4k}}}{(1-x)^{c_{4+4k}}}\right)
+$$
+
+using `AC[0:21]` or `AI[0:21]`. Each group of four is an amplitude, a scale,
+and the two exponents, so one group already gives a tunable edge-localized
+step — the shape used for tokamak-like current profiles that rise sharply
+near the boundary. At `x >= 1` VMEC2000 substitutes the hardcoded sum
+$c_0 + c_1 + c_5 + c_9 + c_{13} + c_{17}$, which is the limit only when the
+scales and the $(1-x)$ exponents are positive; vmex reproduces that as
+written.
+
 Every profile key, default, and accepted `*_TYPE` string:
 {doc}`/reference/input-file` (Pressure profile / Current and iota sections).
 The evaluation code is {mod}`vmex.core.profiles`.

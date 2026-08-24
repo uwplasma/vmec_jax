@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import dataclasses
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -431,3 +432,87 @@ def test_live_vmec2000_exact_jvp_gmres_robustness(pytestconfig, tmp_path):
     np.testing.assert_allclose(actual.iotaf, reference.iotaf, atol=2e-14)
 
 
+
+
+#: The HSX benchmark deck's own AC (STELLOPT BENCHMARKS/DIAGNO_TEST/input.hsx):
+#: one arctangent group, the shape 'sum_atan' exists for.
+_SUM_ATAN_AC = np.array(
+    [0.0, 1.0, 1.00423652381532e01, 1.50747420899044e00, 1.0] + [0.0] * 16
+)
+
+
+def _sum_atan_current_input():
+    """li383 with its current profile replaced by ``pcurr_type='sum_atan'``."""
+    inp = VmecInput.from_file(DATA / "input.li383_low_res")
+    assert int(inp.ncurr) == 1, "the current profile only sets iota at NCURR = 1"
+    return dataclasses.replace(inp, pcurr_type="sum_atan", ac=_SUM_ATAN_AC)
+
+
+def _sum_atan_iota_input():
+    """The same deck with a prescribed ``piota_type='sum_atan'`` (NCURR = 0)."""
+    inp = VmecInput.from_file(DATA / "input.li383_low_res")
+    ai = np.array([0.3, 0.6, 5.0, 1.0, 1.0] + [0.0] * 16)
+    return dataclasses.replace(inp, ncurr=0, piota_type="sum_atan", ai=ai)
+
+
+@pytest.mark.parametrize(
+    "name, build, fields",
+    [
+        ("sum_atan_current", _sum_atan_current_input,
+         ("iotaf", "jcurv", "buco", "presf")),
+        ("sum_atan_iota", _sum_atan_iota_input, ("iotaf", "buco", "presf")),
+    ],
+)
+def test_live_vmec2000_sum_atan_parity(pytestconfig, tmp_path, name, build,
+                                       fields):
+    """``pcurr_type='sum_atan'`` against live VMEC2000, end to end.
+
+    The unit test in ``tests/test_profiles.py`` pins the formula against a
+    transcription of ``profile_functions.f``.  This one closes the loop
+    through the solver: with ``NCURR = 1`` the current profile sets ``iota``,
+    so a wrong ``I(s)`` moves ``iotaf`` and ``jcurv`` rather than staying
+    hidden in an unused array.
+
+    Both lanes VMEC2000 offers it for are covered: ``pcurr_type`` with
+    ``NCURR = 1``, where the current profile sets ``iota``, and ``piota_type``
+    with ``NCURR = 0``, where it is prescribed directly.  A wrong ``f(s)``
+    moves ``iotaf`` and ``jcurv`` in the first and ``iotaf`` in the second,
+    rather than staying hidden in an unused array.
+
+    Measured on li383_low_res: current lane ``iotaf`` 2.8e-14, ``jcurv``
+    1.2e-14, ``buco`` 2.2e-15, ``presf`` 1.9e-15, with
+    ``aspect``/``betatotal``/``volume_p``/``b0`` at 1e-15 or below; iota lane
+    ``iotaf`` 1.2e-16, ``buco`` 2.0e-14.  The bounds below are three orders
+    above that, so they gate a real divergence and not float64 noise.
+    """
+    vmec2000_dir = tmp_path / "vmec2000"
+    vmex_dir = tmp_path / "vmex"
+    vmec2000_dir.mkdir()
+    vmex_dir.mkdir()
+    inp = build()
+    for directory in (vmec2000_dir, vmex_dir):
+        inp.to_indata(directory / f"input.{name}")
+
+    _run([str(_executable(pytestconfig)), f"input.{name}"], cwd=vmec2000_dir)
+    _run(
+        [sys.executable, "-m", "vmex.core.cli", str(vmex_dir / f"input.{name}"),
+         "--outdir", str(vmex_dir), "--device", "cpu"],
+        cwd=ROOT,
+    )
+
+    reference = read_wout(vmec2000_dir / f"wout_{name}.nc")
+    actual = read_wout(vmex_dir / f"wout_{name}.nc")
+    assert int(actual.ier_flag) == int(reference.ier_flag) == 0
+    assert int(actual.ns) == int(reference.ns)
+    profile_type = (reference.pcurr_type if name.endswith("current")
+                    else reference.piota_type)
+    assert str(profile_type).strip().lower().startswith("sum_atan")
+    for field in fields:
+        limit = 1.0e-11
+        expected = np.asarray(getattr(reference, field), dtype=float)[1:-1]
+        got = np.asarray(getattr(actual, field), dtype=float)[1:-1]
+        scale = max(float(np.max(np.abs(expected))), np.finfo(float).tiny)
+        error = float(np.max(np.abs(got - expected))) / scale
+        assert error < limit, (field, error)
+    # A degenerate iota would satisfy the bounds above and prove nothing.
+    assert float(np.max(np.abs(np.asarray(actual.iotaf)))) > 0.1
