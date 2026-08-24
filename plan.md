@@ -3557,3 +3557,92 @@ becomes the shipped one. That is a change to the solver's hot path inside a
 it is its own phase rather than a cleanup folded into a review PR. Deleting
 the helpers instead would remove the encoded `restart.f` parity knowledge and
 is the worse trade.
+
+## Phase 39 — v0.7.0 shipped, and complete VMEC2000 profile coverage [SHIPPED]
+
+**v0.7.0 is on PyPI** (`vmex-0.7.0-py3-none-any.whl`, `vmex-0.7.0.tar.gz`),
+cut from `main` at the release commit with all seven publish jobs green.
+
+**The publish would have failed silently.** `publish-pypi.yml`'s wheel and
+sdist smoke test carried `assert vmex.__version__ == "0.6.0"` as a literal.
+The `verify` job would have failed on a v0.7.0 tag and `publish` is gated on
+it, so the GitHub Release and the tag would have existed with nothing on PyPI
+— a release that looks cut and did not ship. It now reads the tag minus its
+leading `v`; the `validate` job already checks that tag against `pyproject`,
+so the installed artifact is pinned without a second source of truth.
+
+**Every VMEC2000 profile parameterization is implemented** — enumerated from
+`profile_functions.f`'s `SELECT CASE` labels rather than from memory:
+
+| | vmex before | now | VMEC2000 |
+| --- | --- | --- | --- |
+| `PMASS_TYPE` | 7 | **10** | 10 |
+| `PIOTA_TYPE` | 5 | **7** | 7 |
+| `PCURR_TYPE` | 12 | **17** | 17 |
+
+The seven added: `sum_atan` (#158), then `two_power_gs`, `two_Lorentz`,
+`rational`, `nice_quadratic` and the three `sum_cossq_*` current forms (#159).
+Bit-exact against literal transcriptions — 0.0 relative for six of seven,
+7.4e-17 for `two_Lorentz`, 2.6e-16 for `sum_atan` — plus four live
+`xvmec2000` rows (`sum_atan` current `iotaf` 2.8e-14, `sum_atan` iota 1.2e-16,
+`two_Lorentz` pressure `presf` 1.4e-16, `rational` iota).
+
+**Three Fortran behaviours reproduced rather than tidied.** `rational` returns
+`HUGE(real64)` on a zero denominator, not NaN or infinity, and that value
+reaches a wout. `sum_atan` substitutes a hardcoded edge sum at `x >= 1` that is
+the true limit only when the scales and `(1-x)` exponents are positive. The
+`sum_cossq_*` window test is a strict `>`, so `I(0)` sits *above* `I` of the
+next sample — found by adding an `I(0) = 0` assertion that failed.
+
+**One deliberate deviation, in `two_power_gs` (#161).** An unset peak slot is
+all zeros, so its width is zero and `functions.f` evaluates
+`exp(-((x-0)/0)**2)`: harmless away from the axis, `0/0` at `x = 0`. VMEX
+reproduced VMEC exactly, NaN included — both give
+`[nan, 2.42590877, 1.33134598, 0.0]` — so it was faithful parity with a
+Fortran landmine, not a defect of the port. It fires for any deck filling
+fewer than six peaks, which is the ordinary way to use one or two, so a zero
+amplitude now skips the term. Fortran applies the same guard itself in
+`sum_cossq_s_free`. Every peak actually set stays bit-identical.
+
+**Numerics that only matter because vmex differentiates.** `jnp.power` with a
+non-integer exponent goes through `exp(e log x)`, so a plain `x ** c` puts
+`log(0)` on the tape and returns NaN for value *and* derivative at the axis,
+which is a real grid point. An earlier revision of `sum_atan` clamped `x` low
+to dodge that and moved `f(0)` by 2e-7 whenever an exponent was fractional;
+only the denominator needed guarding, and `_pow_at_zero` handles the base.
+
+- 2026-08-24 claude: the merge order that actually worked. `strict: true` plus
+  a ~30-minute `PR gate` means every merge invalidates every other open PR, so
+  running several merge monitors concurrently starved the slowest one: #153
+  passed CI **three separate times** (17:08, 17:39, 18:12) and was rebased back
+  to zero each time by my own automation. The lesson is to serialize merges
+  deliberately, slowest first, rather than sweeping in parallel.
+
+## Phase 40 — Reviewer pass on the open PRs [IN PROGRESS]
+
+- **#151** — reviewing rather than rebasing found a defect its own gate was
+  passing on. The two `<J.B>` lanes agree bit-for-bit across s = 0.2..0.9 after
+  the sine-family fix but were **4.0e-4 apart at s = 0**: every `m != 0`
+  harmonic vanishes at the magnetic axis where the surface degenerates to a
+  point, `redl_geometry_from_wout` zeroes them there and the `geom=None`
+  synthesis did not. The `rtol=1e-3` gate between the lanes had been passing on
+  it. Both now agree exactly and the test asserts array equality, since two
+  evaluations of one identity have no reason to differ at all.
+- **#152** — the turbulence lane opened to asymmetric states, earned against
+  simsopt's `vmec_fieldlines` rather than by deleting a guard. It also settled
+  a claim the module had asserted and never checked: vmex and simsopt differ by
+  **~3% in the drifts permanently**, and neither is wrong. vmex evaluates the
+  exact spectral |B|; `vmec_fieldlines` reads the band-limited wout `bmnc`
+  Nyquist table, and the drifts take a radial derivative of it. Measured, not
+  asserted: simsopt's own `gbdrift` moves 6.9e-3 between ns = 101 and 201 and
+  vmex's moves 5.9e-3 while the gap between them **plateaus at 3.1e-2**.
+  Local: 44 passed.
+- **#155** — `_require_symmetric` deleted; with turbulence opened in #152 and
+  Gamma_c here, nothing calls it. Local: 45 passed. The gradient finding stands
+  unchanged and the PR body now opens with an explicit claims / does-not-claim
+  box, because merging it must not read as endorsing Gamma_c for optimization.
+- **#156** (krystophny) — its CI had **never run**: a fork PR sitting in
+  `action_required`. Approved after reading the whole diff. Review points
+  stand: no `tests/manifest.json` record for the new test module, the 131-line
+  reproducer script should not ship, and its key assertion checks the
+  implementation (`got.input.ns_array == [7]`) where the behaviour is available.
