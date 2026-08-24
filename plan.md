@@ -2871,7 +2871,7 @@ inferred. Ranked by return on investment.
    violating the repo's own `rtol=1e-3` gate (`tests/test_bootstrap.py:601`),
    which only ever runs on symmetric solovev. Public API. **Effort S.**
 
-3. **v0.6.0 ships the known macOS SIGILL; the fix is an open PR.** #142
+3. **[FIXED — #142 merged 2026-08-23]** v0.6.0 shipped the macOS SIGILL. #142
    (`rj/darwin-cache-deserialize-guard`) defaults the compilation cache off on
    macOS with jaxlib < 0.10, where LLVM ORC materializes per-kernel objects
    recursively and overflows a worker-thread stack in
@@ -2954,3 +2954,4 @@ silent zero; `_traceable_term` correctly rejects host-NumPy wout terms; scipy
 never sits on a differentiable path. Fixed-boundary differentiability is in
 good shape.
 - 2026-08-23 claude: Phase 33 opened from two measured sweeps — turbulence lane dead at value level via a GKX/jax-0.9.2 TypeError (3 tests red on main), bootstrap LASYM silent symmetrization, #142 unmerged with the shipped macOS SIGILL, NaN-value/finite-gradient pairs, 282x-18,441x lasym filter, 25-66x gammac jit, and a free-boundary certificate design that cannot distinguish an FD floor from an adjoint error.
+- 2026-08-23 claude: merged #146 (vmex-ESSOS Python seams + the 270x --coils loop-vs-vmap fix; matrix 17/17) and #142 (macOS jaxlib<0.10 compilation-cache guard; matrix 17/17, guard verified firing on this host). Phase 33 item 3 closed. #147 reworked to drop the superseded xfail — it is now three example test-bug fixes only, +16/-7. #148 (refined-anchor gradient fix) verified not to disturb VMEC2000 parity: DMerc per-element 6.302e-04, bit-identical to pre-anchor.
