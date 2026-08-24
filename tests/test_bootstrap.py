@@ -621,6 +621,18 @@ def test_vmec_j_dot_B_state_lane_matches_wout_jdotb(request, fixture):
     geom = bs.redl_geometry_from_wout(eq.wout, surfaces)
     jv_geom = np.asarray(bs.vmec_j_dot_B_from_wout(eq.wout, surfaces, geom=geom))
     np.testing.assert_allclose(jv_geom, jv_wout, rtol=1e-3)
+    # The two lanes are the same identity, so they must agree exactly, not
+    # merely within the gate above -- and at the axis too.  Every m != 0
+    # harmonic vanishes where the surface degenerates to a point;
+    # redl_geometry_from_wout zeroes them there and the geom=None lane did
+    # not, which put the two 4.0e-4 apart at s = 0 while they matched
+    # bit-for-bit everywhere else.
+    with_axis = np.concatenate([[0.0], surfaces])
+    axis_geom = bs.redl_geometry_from_wout(eq.wout, with_axis)
+    np.testing.assert_array_equal(
+        np.asarray(bs.vmec_j_dot_B_from_wout(eq.wout, with_axis)),
+        np.asarray(bs.vmec_j_dot_B_from_wout(eq.wout, with_axis,
+                                             geom=axis_geom)))
 
 
 @needs_zenodo

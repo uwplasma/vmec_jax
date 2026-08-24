@@ -738,9 +738,16 @@ def vmec_j_dot_B_from_wout(wout, surfaces, *, geom: RedlGeometry | None = None,
         xn = _as_1d(np.asarray(wout.xn_nyq, dtype=float))
         mn = int(xm.shape[0])
 
+        # Every m != 0 harmonic vanishes at the magnetic axis, where the
+        # surface degenerates to a point.  redl_geometry_from_wout zeroes them
+        # there; without the same treatment the two lanes disagreed by 4.0e-4
+        # at s = 0 while matching bit-for-bit everywhere else.
+        axis_modes = (np.asarray(surfaces) == 0.0)[:, None] & (xm != 0.0)[None, :]
+
         def half(name):
-            return _interp_half_grid(_mode_matrix(wout, name, ns=ns, mn=mn)[1:],
-                                     surfaces, s_half)
+            values = _interp_half_grid(
+                _mode_matrix(wout, name, ns=ns, mn=mn)[1:], surfaces, s_half)
+            return jnp.where(axis_modes, 0.0, values)
 
         theta1d = jnp.linspace(0.0, 2.0 * jnp.pi, int(ntheta), endpoint=False)
         phi1d = jnp.linspace(0.0, 2.0 * jnp.pi / int(wout.nfp), int(nphi),
