@@ -1,5 +1,10 @@
-"""Alpha-particle guiding-centre tracing through released ESSOS.
+"""The vmex-to-ESSOS field handoff, and alpha tracing on top of it.
 
+- :func:`essos_vmec_field` — hand a solved equilibrium (or a wout file) to
+  ESSOS as an ``essos.fields.Vmec``, ready for ESSOS tracing, surfaces and
+  field queries.  The seam runs one way, ESSOS reading a VMEC equilibrium;
+  an ESSOS coil field entering a vmex free-boundary solve goes the other way
+  through :meth:`~vmex.core.mgrid.MgridField.from_coils`.
 - :func:`trace_alphas` — trace fusion-born alpha particles launched from one
   flux surface of an equilibrium and return the exact loss-fraction
   diagnostics as an :class:`AlphaTracingResult`.
@@ -77,6 +82,50 @@ class AlphaTracingResult:
     energies: np.ndarray = dataclasses.field(repr=False)
 
 
+def essos_vmec_field(source: Any, **kwargs: Any) -> Any:
+    """Return the ``essos.fields.Vmec`` field for an equilibrium or wout file.
+
+    ``source`` is a path to a ``wout_*.nc`` file or an in-memory
+    :class:`~vmex.core.wout.WoutData`.  Released ESSOS reads a wout *file*,
+    so an in-memory equilibrium is written to a temporary wout; ESSOS loads
+    every table eagerly in its constructor, so the file is gone by the time
+    the field is returned.  That write severs the gradient — this seam is
+    for diagnostics, not for differentiating through ESSOS.
+
+    ``kwargs`` reach ``essos.fields.Vmec`` unchanged (``ntheta``, ``nphi``,
+    ``close`` and ``range_torus`` on the released constructor, which set the
+    resolution of the ``field.surface`` ESSOS builds alongside the field).
+
+    Released ESSOS reads the stellarator-symmetric wout tables only, so an
+    ``lasym`` equilibrium is rejected rather than silently half-transferred.
+    """
+    _, _, fields = _essos_imports()
+
+    if hasattr(source, "rmnc") and hasattr(source, "xm"):  # WoutData
+        if bool(source.lasym):
+            raise ValueError(
+                "released ESSOS reads stellarator-symmetric wout tables only; "
+                "the lasym partner tables would be silently dropped"
+            )
+        from .wout import write_wout
+
+        with tempfile.TemporaryDirectory(prefix="vmex_essos_") as tmp:
+            wout_path = Path(tmp) / "wout_equilibrium.nc"
+            write_wout(wout_path, source)
+            return fields.Vmec(str(wout_path), **kwargs)
+
+    wout_path = Path(source)
+    import netCDF4
+
+    with netCDF4.Dataset(str(wout_path)) as ds:
+        if bool(int(ds.variables["lasym__logical__"][()])):
+            raise ValueError(
+                "released ESSOS reads stellarator-symmetric wout tables only; "
+                f"{wout_path.name} is an lasym equilibrium"
+            )
+    return fields.Vmec(str(wout_path), **kwargs)
+
+
 def trace_alphas(
     source: Any,
     *,
@@ -94,8 +143,8 @@ def trace_alphas(
     ----------
     source:
         Path to a ``wout_*.nc`` file, or an in-memory
-        :class:`~vmex.core.wout.WoutData` (written to a temporary wout —
-        the released-ESSOS route into ``essos.fields.Vmec``).
+        :class:`~vmex.core.wout.WoutData`; handed to ESSOS by
+        :func:`essos_vmec_field`.
     tmax, timestep, times_to_trace:
         Integration horizon [s], integrator step [s], and number of saved
         samples (uniform in time, including ``t = 0``).
@@ -105,49 +154,20 @@ def trace_alphas(
         ESSOS tracing model (``"GuidingCenter"`` by default).
     """
     essos = _essos_imports()
-
-    if hasattr(source, "rmnc") and hasattr(source, "xm"):  # WoutData
-        if bool(source.lasym):
-            raise ValueError(
-                "released ESSOS traces stellarator-symmetric fields only; "
-                "the lasym partner tables would be silently dropped"
-            )
-        from .wout import write_wout
-
-        with tempfile.TemporaryDirectory(prefix="vmex_trace_") as tmp:
-            wout_path = Path(tmp) / "wout_equilibrium.nc"
-            write_wout(wout_path, source)
-            return _trace_wout_file(
-                wout_path, essos, tmax=tmax, nparticles=nparticles,
-                s=s, seed=seed, timestep=timestep,
-                times_to_trace=times_to_trace, model=model,
-            )
-
-    wout_path = Path(source)
-    import netCDF4
-
-    with netCDF4.Dataset(str(wout_path)) as ds:
-        if bool(int(ds.variables["lasym__logical__"][()])):
-            raise ValueError(
-                "released ESSOS traces stellarator-symmetric fields only; "
-                f"{wout_path.name} is an lasym equilibrium"
-            )
-    return _trace_wout_file(
-        wout_path, essos, tmax=tmax, nparticles=nparticles, s=s,
-        seed=seed, timestep=timestep, times_to_trace=times_to_trace,
+    return _trace_vmec_field(
+        essos_vmec_field(source), essos, tmax=tmax, nparticles=nparticles,
+        s=s, seed=seed, timestep=timestep, times_to_trace=times_to_trace,
         model=model,
     )
 
 
-def _trace_wout_file(
-    wout_path: Path, essos, *, tmax: float, nparticles: int,
+def _trace_vmec_field(
+    vmec, essos, *, tmax: float, nparticles: int,
     s: float, seed: int, timestep: float, times_to_trace: int, model: str,
 ) -> AlphaTracingResult:
-    constants, dynamics, fields = essos
+    constants, dynamics, _fields = essos
     import jax
     import jax.numpy as jnp
-
-    vmec = fields.Vmec(str(wout_path))
 
     theta_key, phi_key, pitch_key = jax.random.split(
         jax.random.PRNGKey(int(seed)), 3)
