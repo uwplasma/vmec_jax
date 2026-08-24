@@ -47,6 +47,11 @@ the route released ESSOS reads) and returns an
 series, per-particle loss times, trajectories in flux and Cartesian
 coordinates, energies, and the counts.
 
+For anything else ESSOS does with an equilibrium — field lines, surfaces,
+`|B|` queries — {func}`~vmex.core.tracing.essos_vmec_field` returns the bare
+`essos.fields.Vmec` this tracer is built on
+({doc}`use-essos-fields-and-coils`).
+
 ## Scope
 
 This is the exact loss-fraction *diagnostic*; it is parity with the rest of

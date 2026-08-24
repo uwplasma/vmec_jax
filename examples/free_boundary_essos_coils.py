@@ -7,11 +7,10 @@ Landreman & Paul (2021) precise-QA coil set as optimized in ESSOS
 (github.com/uwplasma/ESSOS, bundled as a 3 KB JSON), build its Biot-Savart
 field (``essos.fields.BiotSavart``), and tabulate it once onto a cylindrical
 grid bracketing the plasma, straight into an in-memory
-:class:`vmex.core.mgrid.MgridField`
-(``MgridField.from_cartesian_field`` -- the same direct-tabulation route as
-the CLI's ``--coils`` flag): no mgrid file on disk, no ESSOS import inside
-the solve.  That ``MgridField`` supplies the external field for every NESTOR
-vacuum iteration.
+:class:`vmex.core.mgrid.MgridField` (``MgridField.from_coils`` -- the same
+direct-tabulation route as the CLI's ``--coils`` flag): no mgrid file on
+disk, no ESSOS import inside the solve.  That ``MgridField`` supplies the
+external field for every NESTOR vacuum iteration.
 
 Holding the coil currents fixed, we ramp a parabolic pressure
 ``p(s) = PRES_SCALE(1-s)`` and *calibrate* PRES_SCALE at each step so the
@@ -52,9 +51,7 @@ if CI:  # smoke budget: one finite-beta point on a coarse grid
     TARGET_BETAS, NS, NITER, FTOL = [1.0], 16, 4000, 1e-8
 
 # --------------------------- coils -> external field ------------------------
-import jax  # noqa: E402
 from essos.coils import Coils  # noqa: E402 (optional heavy import)
-from essos.fields import BiotSavart  # noqa: E402
 
 if hasattr(Coils, "from_json"):
     coils = Coils.from_json(str(COILS_JSON))
@@ -67,28 +64,15 @@ mean_current = float(np.mean(np.abs(currents)))
 print(f"ESSOS coils: {currents.shape[0]} filaments after nfp={coils.nfp}/stellsym "
       f"expansion, I ~ {mean_current:,.0f} A")
 
-# ESSOS evaluates the Biot-Savart field of the full (symmetry-expanded) coil
-# set at one Cartesian point; vmap it so the mgrid tabulation below sweeps a
-# whole batch of grid points in one vectorized JAX call, chunked to keep the
-# (points x coil-segments) pairwise-distance intermediate small.
-_bs_batch = jax.jit(jax.vmap(BiotSavart(coils).B))
-
-
-def coil_field_B(points):
-    """Cartesian B [T] at an (N, 3) block of tabulation points."""
-    return np.concatenate([np.asarray(_bs_batch(chunk))
-                           for chunk in np.array_split(np.asarray(points), 64)])
-
-
 # Tabulate the coil field once onto a cylindrical grid bracketing the plasma
 # (R in [0.45, 1.55], Z in [-0.6, 0.6]), directly into an in-memory
 # MgridField -- the external field vmex's free-boundary solver consumes.
-# This mirrors the CLI's --coils route (vmex.core.cli._coils_mgrid_field):
-# grid resolution and physics are identical to writing a MAKEGRID file with
-# nr=96, nphi=32, nz=96, minus the file.
-coil_field = vj.MgridField.from_cartesian_field(
-    coil_field_B, rmin=0.45, rmax=1.55, zmin=-0.6, zmax=0.6,
-    ir=96, jz=96, kp=32, nfp=int(coils.nfp))
+# from_coils is the same route the CLI's --coils flag takes: physics and grid
+# resolution are identical to writing a MAKEGRID file with nr=96, nphi=32,
+# nz=96, minus the file.  Bounds default to the coil bounding box; here they
+# are given explicitly to bracket the plasma more tightly than the coils do.
+coil_field = vj.MgridField.from_coils(
+    coils, rmin=0.45, rmax=1.55, zmin=-0.6, zmax=0.6, ir=96, jz=96, kp=32)
 
 # --------------------------- plasma deck ------------------------------------
 # The fixed-boundary LP-QA deck only seeds the initial guess; truncate it to

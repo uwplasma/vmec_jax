@@ -30,7 +30,7 @@ Free-boundary routing (``LFREEB = T``):
 - ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
   field from an ESSOS coils file (``essos.coils.Coils``): the Biot-Savart field
   is tabulated directly into an in-memory
-  :class:`vmex.core.mgrid.MgridField` via ``MgridField.from_cartesian_field``
+  :class:`vmex.core.mgrid.MgridField` via ``MgridField.from_coils``
   (``solve_free_boundary(inp, external_field=mgrid_field)``); requires ESSOS.
 
 Both symmetric and LASYM NESTOR potential and surface-field arrays are
@@ -464,10 +464,11 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
     Accepts the ``Coils.to_json`` layout (``.json``) or the same keys in an
     ``.npz`` archive (``dofs_curves`` of shape ``(n_base_coils, 3,
     2*order + 1)``, ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``,
-    optional ``currents_scale``).  Builds a cylindrical grid spanning the coil
-    bounding box and tabulates the Biot-Savart field into an in-memory
-    :class:`~vmex.core.mgrid.MgridField` — the same field type the mgrid-file
-    lane produces, with no temporary file.  Requires ESSOS
+    optional ``currents_scale``).  File loading is all this adds over the
+    library seam :meth:`~vmex.core.mgrid.MgridField.from_coils`, which spans
+    the coil bounding box and tabulates the Biot-Savart field into an
+    in-memory :class:`~vmex.core.mgrid.MgridField` — the same field type the
+    mgrid-file lane produces, with no temporary file.  Requires ESSOS
     (``pip install essos``).
     """
     import numpy as np
@@ -509,31 +510,7 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
             ),
         ) from exc
 
-    # Cylindrical grid spanning the coil bounding box (10% margin); the plasma
-    # boundary sits well inside the coils, so this grid brackets it.
-    gamma = np.asarray(coils.gamma).reshape(-1, 3)
-    r = np.hypot(gamma[:, 0], gamma[:, 1])
-    z = gamma[:, 2]
-    rpad = 0.1 * (float(r.max()) - float(r.min())) + 1.0e-9
-    zpad = 0.1 * (float(z.max()) - float(z.min())) + 1.0e-9
-    rmin, rmax = max(1.0e-2, float(r.min()) - rpad), float(r.max()) + rpad
-    zmin, zmax = float(z.min()) - zpad, float(z.max()) + zpad
-
-    # Tabulate the Biot-Savart field directly into an in-memory MgridField
-    # via ``fields.BiotSavart`` (present in every released ESSOS); do not
-    # switch to a ``Coils.to_mgrid`` export — ESSOS main does not provide one.
-    from essos.fields import BiotSavart
-
-    bs = BiotSavart(coils)
-
-    def cartesian_field(points):
-        return bs.B(points)
-
-    return MgridField.from_cartesian_field(
-        cartesian_field, rmin=rmin, rmax=rmax, zmin=zmin, zmax=zmax,
-        ir=int(nr), jz=int(nz), kp=int(nphi), nfp=int(coils.nfp),
-        label="essos_coils",
-    )
+    return MgridField.from_coils(coils, ir=int(nr), jz=int(nz), kp=int(nphi))
 
 
 def _free_boundary_plan(args, inp, input_path: Path, *, emit):
