@@ -3646,3 +3646,98 @@ only the denominator needed guarding, and `_pow_at_zero` handles the base.
   stand: no `tests/manifest.json` record for the new test module, the 131-line
   reproducer script should not ship, and its key assertion checks the
   implementation (`got.input.ns_array == [7]`) where the behaviour is available.
+
+## Phase 41 — Reassessment after the v0.7.0 round [2026-08-24]
+
+Everything except this plan is merged. `main` carries v0.7.0 plus #151, #152,
+#153, #154, #155, #156, #158, #159, #160, #161, #162, and its own CI is green
+across all sixteen jobs including the parity lanes.
+
+### What changed, in order of how much it matters
+
+**Five wrong answers, now right.** Each was silent, and none had a failing
+test before it was found:
+
+1. The GKX bridge handed the operator an `R/L` where it consumes `a/L`, so
+   every turbulence evaluation ran at a drive `R/a` — **2.77x** — too strong.
+2. `vmec_j_dot_B_from_wout` dropped the `bmns`/`gmns` partners, symmetrizing
+   `<B^2>` on lasym decks (5.5e-4 to 2.8e-3 across s = 0.2..0.8), and
+   separately carried `m != 0` harmonics at the axis where the surface is a
+   point (4.0e-4).
+3. `two_power_gs` returned NaN at the axis for any deck filling fewer than six
+   Gaussian peaks — faithful parity with a Fortran landmine, which is why it
+   survived.
+4. The implicit gradient linearized about an under-converged state; refining
+   first moved the LASYM Mercier channel 4.2e-3 -> 5.3e-7 (#148, earlier).
+5. Two Gamma_c symmetry defects worth 55 % of the physical gradient.
+
+**Coverage that did not exist.** Twelve of fourteen primary CI lanes were
+invoked by no workflow — 36 modules, 256 tests, including the module that
+validates the manifest. Closed, with a guard test that fails if a declared
+lane is ever orphaned again. It found two real defects on arrival.
+
+**Users gained something.** Complete VMEC2000 profile parity (10/7/17, from
+7/5/12) on PyPI, verified bit-exact against literal Fortran transcriptions and
+against live `xvmec2000`.
+
+**Two lanes gained external oracles they never had.** Ballooning against
+COBRAVMEC (predicted conversion factor 9.4416e-02 against measured 9.4475e-02
+— derived, not fitted) and turbulence against simsopt's `vmec_fieldlines` on
+an asymmetric deck.
+
+### What is open, ranked
+
+1. **Gamma_c's gradient — the only genuine research problem left.** Diagnosed
+   to the line: `bounce_action` finds bounce points by testing whether
+   `1/lambda` falls between two adjacent grid samples, so a well contained
+   inside one interval is invisible and appears only when the grid refines.
+   DESC solves the cubic exactly per interval (`_bounce_utils.py:42`,
+   `polyroot_vec`, classified by `sign(dB/dz)`, Newton-polished). Measured
+   consequence: refining the along-line grid alone moves the gradient
+   +1.70, -0.69, -0.19, -0.41, -0.33 while the value converges to 4e-4 — the
+   gradient is ~750x less converged. On an *optimized* QA deck the value does
+   not converge either (34x between settings). The fix is a scoped port into
+   `vmex/core/bounce.py`, shared with max-J, behind the existing DESC
+   `bounce1d` parity test.
+2. **Phase 38** — `step.py`'s restart helpers are a second implementation of
+   `restart.f` that only tests call; the tested rule is not the shipped rule.
+   Needs `solver.py` to use them plus a golden-parity campaign.
+3. **Ballooning defaults** — `zeta0s=(0.0,)` under-reports `max lambda` by
+   26 % on the example's own seed, in the false-stable direction. The
+   measurement to justify a change exists; the change does not.
+4. **Phase 34.4** — production runs for the stability lanes, in the weekly
+   campaigns rather than a pull-request lane.
+5. **CI wall clock** ~30 min, parity lanes the long pole. `test_optimize` is
+   ~20 min of the c1 group; splitting it is the obvious lever.
+6. **Repo size** 26.70 MiB against the relaxed 28 MB ceiling, so the
+   blob-strip rewrite is no longer urgent.
+
+### Carried risk, documented rather than hidden
+
+- vmex and simsopt differ **~3 %** in the drifts permanently: vmex uses the
+  exact spectral |B|, `vmec_fieldlines` the band-limited wout `bmnc` table,
+  and the drifts take a radial derivative. Measured to be the band limit, not
+  an error — simsopt's own `gbdrift` moves 6.9e-3 per ns doubling while the
+  gap plateaus at 3.1e-2.
+- `filter_bsubuv_lasym` is idempotent to 3.8e-16 only while the force band
+  sits inside the grid Nyquist; a deck *can* leave that regime
+  (`MPOL = 8, NTHETA = 10`) and a second pass then moves the field by 1.7.
+- `rational` returns Fortran `HUGE` on a zero denominator, and that value
+  reaches a wout.
+
+### Process lessons, which cost real time tonight
+
+- **Merge automation must assert on positive evidence.** Twice it raced CI:
+  first repeated rebases starved #153, which passed three separate times
+  without merging; then a `settle` helper treated "no pending checks" as
+  "checks finished", when it is equally true *before* they start — #156 and
+  #151 merged with `ok=0`. `main`'s own run later confirmed both, but the gate
+  should have held. `strict: true` plus a 30-minute gate means every merge
+  invalidates every other open PR, so merges must be serialized deliberately,
+  slowest first.
+- **A release can look cut and ship nothing.** `publish-pypi.yml` asserted
+  `vmex.__version__ == "0.6.0"` as a literal; the tag and Release would have
+  existed with PyPI untouched.
+- **Static tools do not check tuple arity across a stacked pair.** Splitting
+  `_surface_closures` left `gammac.py` unpacking five values from a
+  four-value function; neither ruff nor mypy caught it, only the test did.
