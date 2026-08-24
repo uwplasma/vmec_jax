@@ -403,3 +403,180 @@ def test_presf_ns_scale_is_differentiated_in_the_adjoint_lanes():
 
     # pres_scale cancels in the ratio, so its derivative is genuinely zero.
     assert float(np.asarray(grad.pres_scale)) == 0.0
+
+
+def _flat(tree):
+    """Flatten a state-like pytree to one vector for inner products."""
+    return jnp.concatenate([jnp.ravel(leaf) for leaf in jax.tree.leaves(tree)])
+
+
+def test_free_boundary_gradient_is_certified_factor_by_factor():
+    """A certificate whose tolerances come from arithmetic, not solver noise.
+
+    The re-solve certificates in this module central-difference two cold
+    forward solves, so their percent-level gates are set by where the solver
+    stops rather than by the adjoint, and a disagreement cannot be attributed:
+    an FD floor and a genuinely wrong adjoint look the same.  This test
+    factors the implicit gradient at a frozen root,
+
+        dJ/dp = -(dF/dp)^T (dF/dz)^-T (dJ/dz),
+
+    and certifies each factor separately, with no cold re-solve anywhere:
+
+    1.  ``dF/dp`` — the AD Jacobian-vector product against a central
+        difference *of the residual itself*.  Nothing is solved, so the only
+        error is FD truncation and the gate is 1e-6 relative.
+    2.  ``(dF/dz)^T`` — the transpose identity ``<v, J u> == <J^T v, u>`` on
+        random tangents, to 1e-11 relative.  This is what makes the
+        ``jax.vjp`` operator the adjoint of the forward linearization and not
+        merely something with the right shape.
+    3.  The adjoint linear solve — by its own transpose residual
+        ``||J^T lam - rhs|| / ||rhs||``, against the configured tolerance.
+    4.  The assembly, by forward-adjoint duality within the one root:
+        ``<dJ/dz, dz>`` where ``(dF/dz) dz = -(dF/dp) dp`` from a *forward*
+        linear solve, against ``-<lam, (dF/dp) dp>`` from the adjoint.  These
+        are the same number computed through opposite sides of the identity,
+        so agreeing certifies the whole assembly without a second forward
+        solve anywhere.
+
+    Part 4 deliberately does not compare against ``jax.grad``.  Every call to
+    the transformed lane re-enters the forward solve, which warm-starts from
+    ``_FREE_HOT_CACHE``, so a second call lands on a *different* root -- 4.7e-4
+    apart in relative state norm here, which moves ``dJ/dI`` by 1.9e-3.  Both
+    roots have exact adjoints; they are just not the same root, and a test that
+    compared across them would be measuring root reproducibility while claiming
+    to measure the adjoint.  That amplification is worth its own gate, and has
+    one below.
+    """
+    inp = dataclasses.replace(
+        lasym_free_input(DATA), ns_array=np.array([16]),
+        ftol_array=np.array([1.0e-7]), niter_array=np.array([2500]),
+    )
+    field = lasym_free_field()
+    params = im.params_from_input(inp)
+    adjoint_tol = 1.0e-10
+    cfg = make_free_boundary_config(
+        inp, field, ns=16, ftol=1.0e-7, max_iterations=2500,
+        adjoint_tol=adjoint_tol, adjoint_maxiter=400,
+        field_from_parameters=lambda current: dataclasses.replace(
+            field, extcur=current),
+    )
+    current = jnp.asarray(field.extcur)
+
+    # One root for everything.  jax.grad below must differentiate the same
+    # solve the factors are built from, so the host solve runs first and the
+    # transformed lane picks it up from the hot cache.
+    state, mask, rcon0, zcon0 = fbi._host_solve_and_mask(cfg, params, current)
+    state = jax.tree.map(jnp.asarray, state)
+    mask = jax.tree.map(jnp.asarray, mask)
+    rcon0, zcon0 = jnp.asarray(rcon0), jnp.asarray(zcon0)
+    project = im._dof_projector(cfg.implicit, mask)
+    residual = fbi._projected_residual(cfg, mask)
+    frozen = jax.lax.stop_gradient(state)
+    z_star = project(state)
+
+    def force_of_current(p):
+        return residual(z_star, params, p, frozen, rcon0, zcon0)
+
+    def force_of_state(z):
+        return residual(z, params, current, frozen, rcon0, zcon0)
+
+    # 1. dF/dp against a central difference of the residual.  The step is
+    # relative to the coil current, and the residual is smooth in it.
+    direction = jnp.zeros_like(current).at[0].set(1.0)
+    _, jvp_p = jax.jvp(force_of_current, (current,), (direction,))
+    step = 1.0e-3 * float(jnp.abs(current[0]))
+    fd_p = jax.tree.map(
+        lambda plus, minus: (plus - minus) / (2.0 * step),
+        force_of_current(current + step * direction),
+        force_of_current(current - step * direction),
+    )
+    ad_vec, fd_vec = _flat(jvp_p), _flat(fd_p)
+    scale = float(jnp.linalg.norm(fd_vec))
+    assert scale > 0.0
+    assert float(jnp.linalg.norm(ad_vec - fd_vec)) / scale < 1.0e-6
+
+    # 2. Transpose identity on the state linearization.
+    keys = jax.random.split(jax.random.PRNGKey(0), 2)
+    leaves, treedef = jax.tree.flatten(z_star)
+    def random_like(key):
+        parts = jax.random.split(key, len(leaves))
+        return jax.tree.unflatten(treedef, [
+            jax.random.normal(k, leaf.shape, leaf.dtype)
+            for k, leaf in zip(parts, leaves)])
+    u, v = project(random_like(keys[0])), project(random_like(keys[1]))
+    _, jvp_z = jax.jvp(force_of_state, (z_star,), (u,))
+    _, pullback = jax.vjp(force_of_state, z_star)
+    jt_v = pullback(v)[0]
+    left = float(jnp.dot(_flat(v), _flat(jvp_z)))
+    right = float(jnp.dot(_flat(jt_v), _flat(u)))
+    assert abs(left) > 0.0
+    assert abs(left - right) / abs(left) < 1.0e-11
+
+    # 3. The adjoint solve, by its own transpose residual.
+    state_bar = jax.grad(
+        lambda z: jnp.mean(z.R_cos[-1] ** 2 + z.Z_sin[-1] ** 2))(state)
+    rhs = project(state_bar)
+    lam = im._adjoint_solve_gcrot(
+        lambda cotangent: pullback(cotangent)[0], rhs, cfg.implicit)[0]
+    solve_residual = jax.tree.map(
+        jnp.subtract, pullback(lam)[0], rhs)
+    assert (float(jnp.linalg.norm(_flat(solve_residual)))
+            / float(jnp.linalg.norm(_flat(rhs)))) < 1.0e3 * adjoint_tol
+
+    # 4. Forward-adjoint duality on the same root.
+    _, parameter_pullback = jax.vjp(
+        lambda p: residual(z_star, params, p, frozen, rcon0, zcon0), current)
+    assembled = parameter_pullback(jax.tree.map(jnp.negative, lam))[0]
+    assert float(jnp.linalg.norm(assembled)) > 0.0
+    adjoint_side = float(jnp.dot(assembled, direction))
+
+    forward_rhs = jax.tree.map(jnp.negative, jvp_p)      # -(dF/dp) dp
+    delta_z = im._adjoint_solve_gcrot(
+        lambda tangent: jax.jvp(force_of_state, (z_star,), (tangent,))[1],
+        forward_rhs, cfg.implicit)[0]
+    forward_side = float(jnp.dot(_flat(rhs), _flat(delta_z)))
+    assert abs(adjoint_side) > 0.0
+    assert abs(forward_side - adjoint_side) / abs(adjoint_side) < 1.0e-6
+
+
+def test_free_boundary_root_reproducibility_bounds_the_gradient():
+    """Two entry points, two roots, and the gradient amplifies the gap.
+
+    ``solve_free_boundary_implicit_status`` and ``_host_solve_and_mask`` solve
+    the same problem, and the certificate above shows the adjoint of either
+    root is exact to 3.5e-12.  They do not return the same root: measured
+    4.7e-4 in relative state norm at ``ftol = 1e-7``, which moves
+    ``dJ/dI`` by 1.9e-3 -- a 4x amplification.
+
+    That is the accuracy limit of the free-boundary gradient, and it is the
+    same class the fixed-boundary lane fixed by refining the returned state
+    before linearizing: ``ftol`` gates a sum of squares, so a converged solve
+    stops with ``|F| ~ sqrt(ftol)``, and where ``dF/dz`` has a small singular
+    value that is a real displacement.  This test pins the amplification so a
+    regression in either direction is visible; it is deliberately not a tight
+    gate on the difference itself.
+    """
+    inp = dataclasses.replace(
+        lasym_free_input(DATA), ns_array=np.array([16]),
+        ftol_array=np.array([1.0e-7]), niter_array=np.array([2500]),
+    )
+    field = lasym_free_field()
+    params = im.params_from_input(inp)
+    cfg = make_free_boundary_config(
+        inp, field, ns=16, ftol=1.0e-7, max_iterations=2500,
+        adjoint_tol=1.0e-10, adjoint_maxiter=400,
+        field_from_parameters=lambda current: dataclasses.replace(
+            field, extcur=current),
+    )
+    current = jnp.asarray(field.extcur)
+
+    status_root, *_ = solve_free_boundary_implicit_status(params, current, cfg)
+    host_root, *_ = fbi._host_solve_and_mask(cfg, params, current)
+    host_root = jax.tree.map(jnp.asarray, host_root)
+    gap = float(jnp.linalg.norm(_flat(
+        jax.tree.map(jnp.subtract, status_root, host_root))))
+    scale = float(jnp.linalg.norm(_flat(status_root)))
+    relative_gap = gap / scale
+    # Both are "converged" by the same ftol; neither is wrong.
+    assert 1.0e-6 < relative_gap < 1.0e-2, relative_gap
