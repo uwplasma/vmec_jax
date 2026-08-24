@@ -433,16 +433,24 @@ def test_qi_maxj_continuation_example(tmp_path):
     assert (tmp_path / "QI_maxJ_optimized_summary.png").stat().st_size > 10_000
 
 
-@pytest.mark.full  # nightly: QP-basin + QI stages + Boozer, subprocess cold-start heavy
+@pytest.mark.full  # nightly: QI mode ladder + Boozer, subprocess cold-start heavy
 def test_qi_optimization_example(tmp_path):
     pytest.importorskip("booz_xform_jax")
     script = EXAMPLES / "optimization" / "QI_optimization.py"
     out = _run_example(script, tmp_path)
     _assert_cost_decreased(out, "QI")
-    match = re.search(r"QI total: seed ([0-9.eE+-]+) -> final ([0-9.eE+-]+)", out)
-    assert match is not None
-    seed, final = float(match.group(1)), float(match.group(2))
-    assert np.isfinite(final) and final <= seed * 1.05
+    stage = re.search(r"\[QI mode \d+\] constructed QI = ([0-9.eE+-]+)", out)
+    final = re.search(r"\[final\] constructed QI = ([0-9.eE+-]+)", out)
+    assert stage is not None and final is not None
+    # the finer re-solve the example ends on must not undo the optimization
+    assert np.isfinite(float(final.group(1)))
+    assert float(final.group(1)) <= 1.05 * float(stage.group(1))
+    # the headline line carries the optimized total and its independent
+    # recomputation (equal grids under the CI budget, finer otherwise)
+    totals = re.search(r"QI total ([0-9.eE+-]+); independent fine-grid "
+                       r"validation ([0-9.eE+-]+)", out)
+    assert totals is not None
+    assert all(np.isfinite(float(value)) for value in totals.groups())
     assert (tmp_path / "wout_QI_optimized.nc").exists()
 
 
@@ -499,9 +507,10 @@ def test_bootstrap_optimization_examples(case, figure_of_merit, tmp_path):
 
 
 @pytest.mark.full  # nightly: optional optimizer interoperability, cold JAX compilation
+# each wout name carries the script's own METHOD constant
 @pytest.mark.parametrize(("script_name", "dependency", "output"), [
-    ("QA_optimization_scipy.py", None, "wout_QA_scipy_BFGS.nc"),
-    ("QI_optimization_scipy.py", None, "wout_QI_scipy_BFGS.nc"),
+    ("QA_optimization_scipy.py", None, "wout_QA_scipy_L-BFGS-B.nc"),
+    ("QI_optimization_scipy.py", None, "wout_QI_scipy_L-BFGS-B.nc"),
     ("QI_optimization_jaxopt.py", "jaxopt", "wout_QI_jaxopt_LBFGS.nc"),
     ("QI_optimization_optax.py", "optax", "wout_QI_optax_adam.nc"),
 ])
