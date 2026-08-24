@@ -175,12 +175,26 @@ def _two_power_gs(coefficients, x):
     (amplitude, centre, width) triples.  The narrative comment in
     ``profile_functions.f`` writes the exponent ambiguously; ``functions.f``
     line 66 is the implementation and squares the whole ratio.
+
+    **One deliberate deviation from the Fortran.**  A peak slot left unset is
+    all zeros, so its width is zero, and ``functions.f`` evaluates
+    ``exp(-((x - 0)/0)**2)`` for it.  Away from the axis that is
+    ``exp(-inf) = 0`` and harmless, but at ``x = 0`` it is ``0/0``, and VMEC
+    returns NaN there for any deck that fills fewer than six peaks -- which is
+    the ordinary way to use one or two.  A zero amplitude means no peak, so
+    that term is skipped here and contributes exactly zero.  Fortran applies
+    the same guard itself in 'sum_cossq_s_free'
+    (``if(ac(3*(i-1)) .ne. 0.0)``); it simply omits it here.  Every nonzero
+    peak is bit-identical to the Fortran.
     """
     c = _coeffs_padded(coefficients, 21)
     x = jnp.asarray(x)
     peaks = jnp.ones_like(x)
     for i in range(3, 19, 3):
-        peaks = peaks + c[i] * jnp.exp(-(((x - c[i + 1]) / c[i + 2]) ** 2))
+        amplitude, width = c[i], c[i + 2]
+        safe_width = jnp.where(width != 0.0, width, 1.0)
+        term = amplitude * jnp.exp(-(((x - c[i + 1]) / safe_width) ** 2))
+        peaks = peaks + jnp.where(amplitude != 0.0, term, 0.0)
     return _two_power(c, x) * peaks
 
 

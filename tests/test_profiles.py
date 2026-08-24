@@ -669,3 +669,40 @@ def test_sum_cossq_rejects_an_out_of_range_wave_count():
         with pytest.raises(ValueError, match="1..20"):
             profiles.current("sum_cossq_s", _pad21([bad, 1.0]), None, None,
                              np.array([0.5]))
+
+
+def test_two_power_gs_survives_unset_peak_slots():
+    """A deck that fills fewer than six peaks must not produce NaN at the axis.
+
+    This is the one place vmex deliberately departs from
+    ``profile_functions.f``.  An unset peak slot is all zeros, so its width is
+    zero, and ``functions.f`` evaluates ``exp(-((x - 0)/0)**2)`` for it: away
+    from the axis that is ``exp(-inf) = 0``, but at ``x = 0`` it is ``0/0``,
+    and VMEC hands back NaN for any deck using one or two peaks -- the
+    ordinary case.  A zero amplitude means no peak, so the term is skipped.
+    Fortran applies exactly this guard itself in 'sum_cossq_s_free'.
+
+    The second half of the test is the part that matters: skipping unset
+    slots must not perturb a peak that is set.
+    """
+    partial = _pad21([2.0, 2.0, 1.5, 0.4, 0.3, 0.12])   # one peak, five unset
+    x = np.array([0.0, 0.1, 0.25, 0.5, 1.0])
+    got = np.asarray(profiles.pressure("two_power_gs", partial, None, None, x))
+    assert np.all(np.isfinite(got)), got
+    assert float(got[0]) > 0.0
+
+    # Bit-identical to the Fortran wherever every slot carries a width.
+    full = _REMAINING_KINDS["two_power_gs"][0]
+    np.testing.assert_array_equal(
+        np.asarray(profiles.evaluate_profile("two_power_gs", full, None, None, x)),
+        np.array([_f_two_power_gs(full, xi) for xi in x]))
+
+    # And a set peak is unchanged by the presence of unset neighbours: adding
+    # the zero slots back must reproduce the one-peak result exactly.
+    one_peak_only = _pad21([2.0, 2.0, 1.5, 0.4, 0.3, 0.12,
+                            0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                            0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
+    np.testing.assert_allclose(
+        got,
+        np.asarray(profiles.pressure("two_power_gs", one_peak_only, None, None, x)),
+        rtol=0.0, atol=0.0)
