@@ -33,6 +33,7 @@ import jax.numpy as jnp  # noqa: E402
 from vmex.core import optimize as opt  # noqa: E402
 from vmex.core import stability as stab  # noqa: E402
 from vmex.core import turbulence as turb  # noqa: E402
+from vmex.core.statephysics import aspect_ratio  # noqa: E402
 from vmex.core.input import VmecInput  # noqa: E402
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solves: run jitted
@@ -177,15 +178,25 @@ def test_surface_index_validation(shaped_eq):
 
 
 def _require_gkx():
-    """Skip unless gkx is importable *and* its jax floor is satisfied.
+    """Skip unless gkx is importable."""
+    pytest.importorskip("gkx")
+
+
+def _require_gkx_eigenvectors():
+    """Additionally require the jax floor gkx's *eigenvector* path declares.
 
     gkx reaches reverse-mode eigenvector derivatives through
     ``lax_linalg.eig(enable_eigvec_derivs=...)``, which first exists in jax
     0.10.1 and which gkx declares accordingly.  gkx still imports against an
-    older jax, so importorskip alone lets these reach a call-time TypeError
+    older jax, so importorskip alone lets those reach a call-time TypeError
     that is an unsatisfied dependency contract, not a defect.
+
+    Only the eigenvector-weighted lanes need it.  ``turbulent_growth_rate``
+    reduces the operator with ``jnp.linalg.eigvals`` and works on any
+    supported jax, so gating it too left the whole ITG lane dark on every host
+    below the floor -- which is how the R/L-into-a/L units defect survived.
     """
-    pytest.importorskip("gkx")
+    _require_gkx()
     from jax._src.lax import linalg as lax_linalg
 
     if "enable_eigvec_derivs" not in inspect.signature(lax_linalg.eig).parameters:
@@ -204,6 +215,36 @@ def test_contract_passes_gkx_validation(shaped_eq):
     assert int(np.asarray(geom.theta).shape[0]) == 32
 
 
+def test_drive_gradients_reach_gkx_as_a_over_l(shaped_eq):
+    """``r_over_lt`` is R/L; GKX's operator consumes a/L.  Pin the conversion.
+
+    GKX's ``LinearParams`` defaults are ``tprim = 2.49``, ``fprim = 0.8`` --
+    the Cyclone base case ``R/L_T = 6.9``, ``R/L_n = 2.2`` divided by that
+    case's ``R/a = 2.77``.  vmex used to set the deprecated ``R_over_LTi``
+    instead, which applied no normalization at all, so ``r_over_lt = 6.9``
+    reached the operator as ``tprim = 6.9`` -- R/a times too strongly driven,
+    on every turbulence evaluation.  This deck's aspect ratio is 2.643, so the
+    Cyclone drive lands at 2.611, next to GKX's own default.
+
+    No solver call: the defect was entirely in how the parameters were built,
+    and this runs wherever gkx imports.
+    """
+    pytest.importorskip("gkx")
+    state, rt = shaped_eq.state, shaped_eq.runtime
+    aspect = float(aspect_ratio(state, rt))
+    assert aspect == pytest.approx(2.6427, rel=1e-3)
+    params = turb._linear_params(None, 6.9, 2.2, aspect)
+    assert float(params.tprim) == pytest.approx(6.9 / aspect, rel=1e-12)
+    assert float(params.fprim) == pytest.approx(2.2 / aspect, rel=1e-12)
+    assert float(params.tprim) == pytest.approx(2.611, rel=1e-3)
+    # The subcritical case the growth-rate test relies on is well below GKX's
+    # Cyclone default, which is the whole point of the conversion.
+    assert float(turb._linear_params(None, 1.0, None, aspect).tprim) < 0.4
+    # params_linear is the escape hatch and must pass through untouched.
+    explicit = turb._linear_params(params, None, None, aspect)
+    assert explicit is params
+
+
 def test_growth_rate_is_itg_critical_gradient_monotone(shaped_eq):
     """Strong ITG drive unstable, weak drive marginal; proxies positive."""
     _require_gkx()
@@ -217,7 +258,7 @@ def test_growth_rate_is_itg_critical_gradient_monotone(shaped_eq):
 
 def test_objective_vector_and_scalar_proxies_consistent(shaped_eq):
     """Vector entries reproduce the documented saturation-rule proxies."""
-    _require_gkx()
+    _require_gkx_eigenvectors()
     state, rt = shaped_eq.state, shaped_eq.runtime
     vec = np.asarray(turb.turbulence_objective_vector(state, rt, **GK))
     named = dict(zip(turb.TURBULENCE_OBJECTIVE_NAMES, vec))
@@ -270,7 +311,7 @@ def test_eigenvector_weighted_proxies_are_value_level(shaped_eq):
     GK operator, whose derivatives JAX declines unless
     ``enable_eigvec_derivs``); reverse AD must either refuse with that
     error or agree with the FD lane that ``jac=None`` actually uses."""
-    _require_gkx()
+    _require_gkx_eigenvectors()
     state, rt = shaped_eq.state, shaped_eq.runtime
 
     def ql(scale):

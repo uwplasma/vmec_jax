@@ -115,8 +115,26 @@ def measure(fn):
 
 
 def _run_measurement(body: str) -> dict:
-    """Run ``_MEASURE_PRELUDE + body`` in a cold subprocess; parse JSON tail."""
-    env = dict(os.environ, JAX_PLATFORMS="cpu")
+    """Run ``_MEASURE_PRELUDE + body`` in a cold subprocess; parse JSON tail.
+
+    Two environment settings the measurement cannot do without.
+
+    ``VMEX_JAX_LOGGING_LEVEL=WARNING`` is the one that matters: importing vmex
+    sets ``jax_logging_level = "ERROR"`` by default (``vmex/__init__.py``,
+    ``_configure_jax_logging``), which raises the ``jax`` logger from 30 to 40
+    and filters exactly the WARNING-level ``"Compiling ..."`` records the
+    counter below is built on.  The prelude installs its handler *before*
+    importing vmex, so the level it sets is overwritten and every counter reads
+    zero -- which is what these assertions were seeing.  Use vmex's own
+    override rather than fighting it.
+
+    ``VMEX_COMPILATION_CACHE=disabled`` makes "cold" mean cold: a persistent
+    cache shared with whatever ran earlier turns a compile into a cache load,
+    which emits no record either.
+    """
+    env = dict(os.environ, JAX_PLATFORMS="cpu",
+               VMEX_JAX_LOGGING_LEVEL="WARNING",
+               VMEX_COMPILATION_CACHE="disabled")
     proc = subprocess.run(
         [sys.executable, "-c", _MEASURE_PRELUDE + body],
         capture_output=True, text=True, env=env,

@@ -75,6 +75,7 @@ import jax
 import jax.numpy as jnp
 
 from .solver import SolverRuntime, SpectralState
+from .statephysics import aspect_ratio
 from .stability import (
     _ballooning_context, _parabola, _theta_vmec_from_pest,
     _validate_surface_index,
@@ -417,7 +418,7 @@ def _split_kwargs(kwargs: dict) -> tuple[dict, dict]:
     return geometry, kwargs
 
 
-def _linear_params(params_linear, r_over_lt, r_over_ln):
+def _linear_params(params_linear, r_over_lt, r_over_ln, aspect):
     """GKX LinearParams: explicit object, or its collisionless
     optimization defaults with optionally overridden drive gradients."""
     if params_linear is not None:
@@ -428,10 +429,19 @@ def _linear_params(params_linear, r_over_lt, r_over_ln):
     params = _default_gradient_linear_params()
     import dataclasses
     updates = {}
+    # GKX's operator consumes a/L gradients -- its ``tprim``/``fprim``, the
+    # TOML convention -- never R/L.  Its own defaults, ``tprim = 2.49`` and
+    # ``fprim = 0.8``, are the Cyclone base case ``R/L_T = 6.9``,
+    # ``R/L_n = 2.2`` divided by that case's ``R/a = 2.77``.  vmex's arguments
+    # are R/L, so divide by *this* equilibrium's aspect ratio: matching R/L is
+    # what carries the ITG drive across devices, and a/L is then a consequence
+    # of the shape.  Setting the deprecated ``R_over_LTi``/``R_over_Ln``
+    # instead, as this did, applied no normalization at all and made every
+    # evaluation R/a times too strongly driven.
     if r_over_lt is not None:
-        updates["R_over_LTi"] = float(r_over_lt)
+        updates["tprim"] = r_over_lt / aspect
     if r_over_ln is not None:
-        updates["R_over_Ln"] = float(r_over_ln)
+        updates["fprim"] = r_over_ln / aspect
     return dataclasses.replace(params, **updates) if updates else params
 
 
@@ -462,10 +472,13 @@ def turbulence_objective_vector(
     :data:`TURBULENCE_OBJECTIVE_NAMES`
     (``gkx.solver_objective_vector_from_geometry``).
 
-    The drive gradients live in GKX's ``LinearParams``
-    (``params_linear``; default: its collisionless optimization defaults
-    ``R/L_n = 2.2``, ``R/L_Ti = 6.9`` — the Cyclone-base ITG drive —
-    optionally overridden via ``r_over_lt``/``r_over_ln``).
+    The drive gradients live in GKX's ``LinearParams`` (``params_linear``;
+    default: its collisionless optimization defaults ``a/L_n = 0.8``,
+    ``a/L_Ti = 2.49`` — the Cyclone-base ITG drive at that case's
+    ``R/a = 2.77``).  ``r_over_lt``/``r_over_ln`` override them in ``R/L``,
+    divided by this equilibrium's aspect ratio on the way in, since GKX's
+    operator consumes ``a/L``; pass ``params_linear`` to supply ``a/L``
+    directly.
     """
     gkx = _gkx()
     geom = flux_tube_geometry(state, rt, **geometry_kwargs)
@@ -474,7 +487,8 @@ def turbulence_objective_vector(
         selected_ky_index=int(selected_ky_index),
         n_laguerre=int(n_laguerre), n_hermite=int(n_hermite),
         nx=int(nx), ny=int(ny), lx=float(lx), ly=float(ly),
-        params_linear=_linear_params(params_linear, r_over_lt, r_over_ln),
+        params_linear=_linear_params(params_linear, r_over_lt, r_over_ln,
+                                    aspect_ratio(state, rt)),
         terms=terms,
     )
 
@@ -503,7 +517,8 @@ def turbulent_growth_rate(state: SpectralState, rt: SolverRuntime, **kwargs) -> 
     gkx = _gkx()
     params_linear = _linear_params(
         solver_kwargs.pop("params_linear", None),
-        solver_kwargs.pop("r_over_lt", None), solver_kwargs.pop("r_over_ln", None))
+        solver_kwargs.pop("r_over_lt", None), solver_kwargs.pop("r_over_ln", None),
+        aspect_ratio(state, rt))
     geom = flux_tube_geometry(state, rt, **geometry_kwargs)
     matrix = gkx.solver_linear_operator_matrix_from_geometry(
         geom, params_linear=params_linear, **solver_kwargs)
