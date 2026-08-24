@@ -62,6 +62,28 @@ independent of how many Richardson steps, restarts, or multigrid stages the
 forward solve needed. Multigrid stages act purely as an initializer and are
 stop-gradient by construction.
 
+## Where the derivative is taken
+
+The theorem holds at a *root* of $F$, and the host solver does not stop at
+one: `ftol` gates the sum of squares of the force, so a solve it reports
+converged still returns with $|F| \sim \sqrt{\mathrm{ftol}}$ — 2.7e-07 at
+`ftol = 1e-12` on the non-stellarator-symmetric `basic_non_stellsym_simsopt`
+deck. Where $\partial F/\partial x$ carries a small singular value (the lasym
+$m = 1$ families: 1.5e-04) that residual is a 1.8e-03 displacement of the
+state — enough to move a solver-sensitive metric by more than the derivative
+being measured.
+
+VMEX therefore Newton-refines the state onto the root inside the host
+callback, before any lane reads it (`ImplicitConfig.refine_tol`, default
+1e-10; `inf` disables it, and a refinement that fails to improve the residual
+leaves the host state in place). Value, cotangent and linearization then all
+sit at the same point — which is also where the frozen-path finite-difference
+reference measures, its own Newton endpoints being roots as well. Both have
+to move together: on $d(\sum D_\mathrm{Merc})/d(\mathrm{RBS}(1,1))$ the
+gradient agrees with that reference to rel 5.4e-07 when they do, against
+4.2e-03 at the host stopping point and 5.7e-03 with the linearization alone
+refined.
+
 ## The six SOLVAX solve classes
 
 Every linear solve in the gradient stack goes through SOLVAX. The complete

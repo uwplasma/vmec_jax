@@ -629,7 +629,12 @@ def _assert_stability_gradients(
                 f"rel={relative_error:.2e} (Newton res {residual:.0e})"
             )
             assert residual < 1.0e-8
-            assert relative_error <= 2.0e-3
+            # ~10x the worst channel these decks measure with the value and
+            # the gradient both anchored at the frozen residual's root
+            # (li383 DMerc/RBC(0,1): 1.7e-06).
+            assert relative_error <= 2.0e-5, (
+                f"{name} {metric_name}/{label}: adjoint vs frozen-path FD "
+                f"rel {relative_error:.2e}")
 
 
 @pytest.mark.parametrize("case", ["solovev"], indirect=True)
@@ -1058,6 +1063,32 @@ def test_lasym_3d_gradient_vs_frozen_path_fd(lasym_3d):
         assert rel <= tol, (
             f"{out}/{field}[n={idx[0] - ntor},m={idx[1]}]: 3D lasym adjoint vs "
             f"frozen-path FD rel {rel:.2e} > {tol:.0e}")
+
+
+@pytest.mark.full
+def test_lasym_3d_state_is_anchored_at_the_frozen_root(lasym_3d):
+    """The lane returns a root of the residual it differentiates.
+
+    ``ftol`` gates the sum of SQUARES of the force, so the host solve stops
+    at ``|F| ~ sqrt(ftol)`` — and on this deck the near-null lasym m=1
+    direction turns that into a 1.8e-03 state displacement.  ``refine_tol``
+    Newton-refines onto the root before any lane reads the state; the
+    stability gradients below are only as good as this anchor.
+    """
+    _, inp, cfg, p0, _, _, _ = lasym_3d
+    unanchored = im.make_config(inp, ftol=cfg.ftol, refine_tol=np.inf,
+                                max_iterations=cfg.max_iterations)
+    host, mask = im.solve_implicit_with_aux(p0, unanchored)
+    anchored, _ = im.solve_implicit_with_aux(p0, cfg)
+    P = im._dof_projector(cfg, mask)
+    F = im.residual_fn(cfg, jax.lax.stop_gradient(host), mask)
+    r_host, r_anchored = _tnorm(F(P(host), p0)), _tnorm(F(P(anchored), p0))
+    moved = _tnorm(jax.tree.map(lambda a, b: a - b, anchored, host))
+    print(f"\n[basic_non_stellsym_simsopt] frozen residual: host stop "
+          f"{r_host:.2e} -> anchored {r_anchored:.2e} (state moved {moved:.2e}, "
+          f"|x| = {_tnorm(host):.2e})")
+    assert r_host > 1.0e-8, "the host stopping point already sits at the root"
+    assert r_anchored <= cfg.refine_tol
 
 
 @pytest.mark.full
