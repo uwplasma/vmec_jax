@@ -34,6 +34,12 @@ gauss_trunc          ``c[0]/(1-E) * (exp(-(x/c[1])**2) - E)``,
 sum_atan             ``c[0] + (2/pi) sum_{k=0..4} c[1+4k]
                      atan(c[2+4k] x**c[3+4k] / (1-x)**c[4+4k])`` -- iota and
                      current only, and it parameterizes ``I``, not ``I'``
+two_power_gs         ``two_power`` times ``1 + sum_i c[i]
+                     exp(-((x-c[i+1])/c[i+2])**2)``, ``i = 3, 6, ..., 18``
+two_lorentz          two Lorentz terms mapped to [0, 1] (pressure only)
+rational             ``c[0:10]`` polynomial over ``c[10:21]`` polynomial;
+                     returns Fortran ``HUGE`` where the denominator is zero
+nice_quadratic       ``c0 (1-x) + c1 x + 4 c2 x (1-x)`` (iota only)
 pedestal             VMEC2000 ``pmass`` pedestal: degree-15 power series in
                      ``c[0:16]`` plus a tanh pedestal shaped by ``c[16:21]``
 cubic_spline         VMEC ``spline_cubic`` through (aux_s, aux_f) knots
@@ -63,6 +69,9 @@ import numpy as np
 
 #: Denominator floor for 'sum_atan'; see :func:`_sum_atan`.
 _SUM_ATAN_FLOOR = 1.0e-300
+
+#: Fortran ``HUGE(real64)``; 'rational' returns it on a zero denominator.
+_FORTRAN_HUGE = 1.7976931348623157e308
 
 __all__ = [
     "MU0",
@@ -151,6 +160,81 @@ def _gauss_trunc(coefficients, x):
     x = jnp.asarray(x)
     edge = jnp.exp(-((1.0 / c[1]) ** 2))
     return c[0] / (1.0 - edge) * (jnp.exp(-((x / c[1]) ** 2)) - edge)
+
+
+def _two_power_gs(coefficients, x):
+    """``two_power`` times six Gaussian peaks (``functions.f`` two_power_gs).
+
+    ``f(x) = c0 (1 - x**c1)**c2 (1 + sum_i c[i] exp(-((x - c[i+1])/c[i+2])**2))``
+    with ``i`` stepping 3, 6, ..., 18, so the peaks live in ``c[3:21]`` as
+    (amplitude, centre, width) triples.  The narrative comment in
+    ``profile_functions.f`` writes the exponent ambiguously; ``functions.f``
+    line 66 is the implementation and squares the whole ratio.
+    """
+    c = _coeffs_padded(coefficients, 21)
+    x = jnp.asarray(x)
+    peaks = jnp.ones_like(x)
+    for i in range(3, 19, 3):
+        peaks = peaks + c[i] * jnp.exp(-(((x - c[i + 1]) / c[i + 2]) ** 2))
+    return _two_power(c, x) * peaks
+
+
+def _two_lorentz(coefficients, x):
+    """Two Lorentz-type terms mapped to [0, 1] (pmass 'two_Lorentz').
+
+    ``c[0:8]``: an overall scale, a mixing fraction ``c1`` between the two
+    terms, then ``(c2, c3, c4)`` and ``(c5, c6, c7)`` shaping each.  Both
+    terms are shifted and normalized so that each is 1 at ``x = 0`` and 0 at
+    ``x = 1``, which is what the edge subtraction and the denominator do.
+    """
+    c = _coeffs_padded(coefficients, 8)
+    x = jnp.asarray(x)
+
+    def term(width, power, exponent):
+        shape = 1.0 / (1.0 + (x / width ** 2) ** power) ** exponent
+        edge = 1.0 / (1.0 + (1.0 / width ** 2) ** power) ** exponent
+        return (shape - edge) / (1.0 - edge)
+
+    return c[0] * (c[1] * term(c[2], c[3], c[4])
+                   + (1.0 - c[1]) * term(c[5], c[6], c[7]))
+
+
+def _rational(coefficients, x):
+    """Ratio of two polynomials (pmass/piota/pcurr 'rational').
+
+    Numerator ``c[0:10]``, denominator ``c[10:21]``, both by Horner exactly as
+    the Fortran loops run.  VMEC returns ``HUGE`` where the denominator is
+    zero rather than a NaN or an infinity, and that value is observable in a
+    wout, so it is reproduced.
+    """
+    c = _coeffs_padded(coefficients, 21)
+    x = jnp.asarray(x)
+    numerator = jnp.zeros_like(x)
+    for i in range(9, -1, -1):
+        numerator = x * numerator + c[i]
+    denominator = jnp.zeros_like(x)
+    for i in range(20, 9, -1):
+        denominator = x * denominator + c[i]
+    nonzero = denominator != 0.0
+    safe = jnp.where(nonzero, denominator, 1.0)
+    return jnp.where(nonzero, numerator / safe, _FORTRAN_HUGE)
+
+
+def _nice_quadratic(coefficients, x):
+    """``c0 (1-x) + c1 x + 4 c2 x (1-x)`` (piota 'nice_quadratic').
+
+    ``c0`` and ``c1`` are the values at the axis and the edge and ``c2`` is
+    the departure of the midpoint from the straight line between them, so
+    ``c2 = 0`` is a linear iota.
+    """
+    c = _coeffs_padded(coefficients, 3)
+    x = jnp.asarray(x)
+    return c[0] * (1.0 - x) + c[1] * x + 4.0 * c[2] * x * (1.0 - x)
+
+
+def _pcurr_two_power_gs_ip(coefficients, x):
+    """pcurr 'two_power_gs': ``I'`` is two_power_gs, integrated numerically."""
+    return _integrate_0_to_x(_two_power_gs, coefficients, x)
 
 
 def _pow_at_zero(x, exponent):
@@ -547,6 +631,11 @@ _PARAMETERIZED = {
     "two_power": _two_power,
     "gauss_trunc": _gauss_trunc,
     "sum_atan": _sum_atan,
+    "two_power_gs": _two_power_gs,
+    "two_lorentz": _two_lorentz,
+    "rational": _rational,
+    "nice_quadratic": _nice_quadratic,
+    "two_power_gs_ip": _pcurr_two_power_gs_ip,
     "pedestal": _pedestal,
     "power_series_ip": _pcurr_power_series_ip,
     "power_series_i": _pcurr_power_series_i,
@@ -609,6 +698,20 @@ def _bloated(s, bloat):
     return jnp.minimum(jnp.abs(jnp.asarray(s) * bloat), 1.0)
 
 
+#: ``pmass_type`` strings VMEC2000 accepts (``profile_functions.f`` pmass;
+#: ``power_series`` is its ``CASE DEFAULT``).
+_PMASS_KINDS = frozenset({
+    "power_series", "two_power", "two_power_gs", "two_lorentz", "gauss_trunc",
+    "pedestal", "rational", "cubic_spline", "akima_spline", "line_segment",
+})
+
+#: ``piota_type`` strings VMEC2000 accepts (``profile_functions.f`` piota).
+_PIOTA_KINDS = frozenset({
+    "power_series", "sum_atan", "nice_quadratic", "rational", "cubic_spline",
+    "akima_spline", "line_segment",
+})
+
+
 def pressure(pmass_type: str, am, am_aux_s, am_aux_f, s, *,
              pres_scale=1.0, bloat=1.0, spres_ped=1.0):
     """Pressure profile p(s) in **Pascals** (VMEC2000 ``pmass`` x ``1/mu0``).
@@ -624,9 +727,10 @@ def pressure(pmass_type: str, am, am_aux_s, am_aux_f, s, *,
     coefficients may be traced.
     """
     kind = str(pmass_type).strip().lower()
-    if kind not in ("power_series", "two_power", "gauss_trunc", "pedestal",
-                    "cubic_spline", "akima_spline", "line_segment"):
-        raise NotImplementedError(f"pmass_type={pmass_type!r} not implemented")
+    if kind not in _PMASS_KINDS:
+        raise NotImplementedError(
+            f"pmass_type={pmass_type!r} not implemented "
+            f"(supported: {sorted(_PMASS_KINDS)})")
     x = _bloated(s, bloat)
     p = pres_scale * evaluate_profile(kind, am, am_aux_s, am_aux_f, x)
     spres_ped = abs(float(spres_ped))
@@ -648,9 +752,10 @@ def iota(piota_type: str, ai, ai_aux_s, ai_aux_f, s, *, bloat=1.0, lrfp=False):
     this port applies it uniformly (identical for the default ``bloat = 1``).
     """
     kind = str(piota_type).strip().lower()
-    if kind not in ("power_series", "sum_atan", "cubic_spline", "akima_spline",
-                    "line_segment"):
-        raise NotImplementedError(f"piota_type={piota_type!r} not implemented")
+    if kind not in _PIOTA_KINDS:
+        raise NotImplementedError(
+            f"piota_type={piota_type!r} not implemented "
+            f"(supported: {sorted(_PIOTA_KINDS)})")
     x = _bloated(s, bloat)
     value = evaluate_profile(kind, ai, ai_aux_s, ai_aux_f, x)
     if lrfp:
@@ -663,7 +768,9 @@ _PCURR_KINDS = {
     "power_series": "power_series_ip",
     "power_series_i": "power_series_i",
     "sum_atan": "sum_atan",
+    "rational": "rational",
     "two_power": "two_power_ip",
+    "two_power_gs": "two_power_gs_ip",
     "gauss_trunc": "gauss_trunc_ip",
     "pedestal": "pedestal_i",
     "cubic_spline_i": "cubic_spline_i",

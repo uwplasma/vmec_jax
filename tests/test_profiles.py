@@ -389,3 +389,154 @@ def test_sum_atan_reaches_the_current_and_iota_wrappers():
         expected, rtol=1e-13, atol=1e-300)
     with pytest.raises(NotImplementedError, match="pmass_type"):
         profiles.pressure("sum_atan", ac, None, None, x)
+
+
+# ---------------------------------------------------------------------------
+# The remaining VMEC2000 parameterizations
+# ---------------------------------------------------------------------------
+
+
+def _pad21(c):
+    a = np.zeros(21)
+    c = np.asarray(c, dtype=float)
+    a[: min(21, c.size)] = c[:21]
+    return a
+
+
+def _f_two_power(b, x):
+    """``functions.f`` two_power."""
+    return b[0] * max(1.0 - x ** b[1], 0.0) ** b[2]
+
+
+def _f_two_power_gs(b, x):
+    """``functions.f`` lines 63-69: two_power times six Gaussian peaks."""
+    gaussians = 1.0
+    for i in range(3, 19, 3):
+        gaussians += b[i] * np.exp(-(((x - b[i + 1]) / b[i + 2]) ** 2))
+    return gaussians * _f_two_power(b, x)
+
+
+def _f_two_lorentz(am, x):
+    """``profile_functions.f`` pmass 'two_Lorentz', transcribed literally."""
+    one = 1.0
+    return am[0] * (
+        am[1] * (one / (one + (x / am[2] ** 2) ** am[3]) ** am[4]
+                 - one / (one + (one / am[2] ** 2) ** am[3]) ** am[4])
+        / (one - one / (one + (one / am[2] ** 2) ** am[3]) ** am[4])
+        + (one - am[1]) * (one / (one + (x / am[5] ** 2) ** am[6]) ** am[7]
+                           - one / (one + (one / am[5] ** 2) ** am[6]) ** am[7])
+        / (one - one / (one + (one / am[5] ** 2) ** am[6]) ** am[7]))
+
+
+def _f_rational(a, x):
+    """``profile_functions.f`` 'rational': c[0:10] over c[10:21], Horner."""
+    numerator = 0.0
+    for i in range(9, -1, -1):
+        numerator = x * numerator + a[i]
+    denominator = 0.0
+    for i in range(20, 9, -1):
+        denominator = x * denominator + a[i]
+    return (numerator / denominator if denominator != 0.0
+            else np.finfo(np.float64).max)
+
+
+def _f_nice_quadratic(ai, x):
+    """``profile_functions.f`` piota 'nice_quadratic'."""
+    return ai[0] * (1.0 - x) + ai[1] * x + 4.0 * ai[2] * x * (1.0 - x)
+
+
+_REMAINING_KINDS = {
+    "two_power_gs": (
+        _pad21([2.0, 2.0, 1.5, 0.4, 0.3, 0.12, -0.2, 0.7, 0.09, 0.15, 0.5,
+                0.2, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+        _f_two_power_gs),
+    "two_lorentz": (_pad21([1.5, 0.6, 0.8, 2.0, 1.5, 0.4, 3.0, 1.0]),
+                    _f_two_lorentz),
+    "rational": (_pad21([1.0, -0.5, 0.25] + [0.0] * 7 + [2.0, 0.5, -0.3]),
+                 _f_rational),
+    "nice_quadratic": (_pad21([0.9, 0.45, 0.12]), _f_nice_quadratic),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_REMAINING_KINDS))
+def test_remaining_kinds_match_profile_functions_f(kind):
+    """Each against a literal transcription, endpoints included."""
+    coefficients, reference = _REMAINING_KINDS[kind]
+    x = np.concatenate([[0.0], np.linspace(0.01, 0.99, 40), [1.0]])
+    got = np.asarray(profiles.evaluate_profile(kind, coefficients, None, None, x))
+    expected = np.array([reference(coefficients, xi) for xi in x])
+    assert np.all(np.isfinite(got))
+    scale = max(float(np.max(np.abs(expected))), 1e-300)
+    assert float(np.max(np.abs(got - expected))) / scale < 1e-14
+
+
+def test_rational_returns_the_fortran_huge_on_a_zero_denominator():
+    """VMEC returns ``HUGE`` there, not a NaN or an infinity.
+
+    That value reaches a wout and a caller can see it, so reproducing it is
+    part of the parity rather than an implementation detail.  All-zero
+    denominator coefficients are the way to hit it.
+    """
+    got = profiles.evaluate_profile("rational", _pad21([1.0]), None, None,
+                                    np.array([0.0, 0.5, 1.0]))
+    assert np.all(np.asarray(got) == np.finfo(np.float64).max)
+
+
+def test_two_power_gs_reduces_to_two_power_without_peaks():
+    """Zero Gaussian amplitudes must leave ``two_power`` untouched.
+
+    The peak block multiplies rather than adds, so a sign or an offset error
+    in it would survive a comparison that only ever exercised nonzero peaks.
+    """
+    c = _pad21([2.0, 2.0, 1.5] + [0.0, 0.5, 1.0] * 6)
+    x = np.linspace(0.0, 1.0, 21)
+    np.testing.assert_allclose(
+        np.asarray(profiles.evaluate_profile("two_power_gs", c, None, None, x)),
+        np.asarray(profiles.evaluate_profile("two_power", c[:3], None, None, x)),
+        rtol=1e-14, atol=0.0)
+
+
+def test_every_vmec2000_profile_type_is_selectable():
+    """The three wrappers accept exactly what ``profile_functions.f`` does.
+
+    Enumerated from its ``SELECT CASE`` labels: ``pmass`` has nine explicit
+    cases plus ``power_series`` as ``CASE DEFAULT``, ``piota`` six plus the
+    default.  ``pcurr`` has sixteen plus the default, of which the three
+    ``sum_cossq_*`` forms are not implemented here and must still raise --
+    a wrong answer is worse than a refusal.
+    """
+    x = np.linspace(0.0, 1.0, 5)
+    generic = _pad21([1.0, 2.0, 1.5])
+    # Shape parameters that are widths or exponents cannot be zero: 'two_power_gs'
+    # divides by its Gaussian widths and 'two_Lorentz' by 1 - f(1), both of which
+    # are 0/0 for an all-zero tail in Fortran as well.  A generic coefficient
+    # vector would be testing the input, not the code.
+    per_kind = {
+        "two_lorentz": _pad21([1.5, 0.6, 0.8, 2.0, 1.5, 0.4, 3.0, 1.0]),
+        "two_power_gs": _REMAINING_KINDS["two_power_gs"][0],
+        "rational": _REMAINING_KINDS["rational"][0],
+        "pedestal": _pad21([1.0, -0.5]),
+    }
+    tabulated = ("spline", "line_segment")
+
+    def coefficients_for(kind):
+        return per_kind.get(kind, generic)
+
+    for kind in sorted(profiles._PMASS_KINDS):
+        if any(marker in kind for marker in tabulated):
+            continue                      # tabulated: need knots, covered above
+        assert np.all(np.isfinite(profiles.pressure(
+            kind, coefficients_for(kind), None, None, x))), kind
+    for kind in sorted(profiles._PIOTA_KINDS):
+        if any(marker in kind for marker in tabulated):
+            continue
+        assert np.all(np.isfinite(profiles.iota(
+            kind, coefficients_for(kind), None, None, x))), kind
+    for kind in sorted(profiles._PCURR_KINDS):
+        if any(marker in kind for marker in tabulated):
+            continue
+        assert np.all(np.isfinite(profiles.current(
+            kind, coefficients_for(kind), None, None, x))), kind
+    for unimplemented in ("sum_cossq_s", "sum_cossq_s_free", "sum_cossq_sqrts"):
+        with pytest.raises(NotImplementedError, match="pcurr_type"):
+            profiles.current(unimplemented, generic, None, None, x)
