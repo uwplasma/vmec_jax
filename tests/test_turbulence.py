@@ -80,10 +80,8 @@ def test_geometry_matches_stability_conventions(shaped_eq):
     iota = 0.5 * (ctx["iotas"][j] + ctx["iotas"][j + 1])
     diota = (ctx["iotas"][j + 1] - ctx["iotas"][j]) / hs
     dpres = (ctx["pres"][j + 1] - ctx["pres"][j]) / hs
-    point = stab._make_point_fn(
-        ctx["m"], ctx["xn"],
-        stab._parabola(ctx["rmnc"], j, hs), stab._parabola(ctx["zmns"], j, hs),
-        stab._parabola(ctx["lmns"], j, hs), iota, diota, ctx["phipf"][j])
+    point = stab._make_point_fn(ctx["m"], ctx["xn"], stab._surface_tables(ctx, j),
+                                iota, diota, ctx["phipf"][j])
     x = jnp.asarray(mapping["theta"])
     phi = x / iota
     lmns0 = stab._parabola(ctx["lmns"], j, hs)[0]
@@ -351,3 +349,101 @@ def test_wrappers_satisfy_least_squares_term_contract():
     for fun in (turb.turbulent_growth_rate, turb.quasilinear_flux_proxy,
                 turb.nonlinear_heat_flux_proxy, turb.turbulence_objective_vector):
         assert opt._traceable_term(fun) is fun
+
+
+# ---------------------------------------------------------------------------
+# External oracle: simsopt vmec_fieldlines, both symmetries
+# ---------------------------------------------------------------------------
+
+
+_SIMSOPT_GEOMETRY = ("bmag", "gradpar_theta_pest", "gds2", "gds21", "gds22",
+                     "gbdrift", "gbdrift0", "cvdrift", "cvdrift0")
+
+
+def _simsopt_fieldline(wout_path, s_value, alpha, theta):
+    """``vmec_fieldlines`` on a vmex-written wout at the same field line.
+
+    vmex returns the field-line coordinate ``x = theta* - alpha``; simsopt's
+    ``theta1d`` is ``theta*``, so the grids differ by ``alpha``.
+    """
+    from simsopt.mhd import Vmec
+    from simsopt.mhd.vmec_diagnostics import vmec_fieldlines
+    return vmec_fieldlines(Vmec(str(wout_path)), s_value, alpha,
+                           theta1d=theta + alpha, plot=False)
+
+
+@pytest.mark.parametrize("deck,overrides,ns", [
+    ("input.li383_low_res", {}, 51),
+    ("input.up_down_asymmetric_tokamak",
+     dict(am=np.array([1.0, -1.0]), pres_scale=5000.0), 33),
+])
+def test_gk_geometry_matches_simsopt_vmec_fieldlines(deck, overrides, ns, tmp_path):
+    """The GK geometry against an independent implementation, both symmetries.
+
+    ``test_geometry_matches_stability_conventions`` compares this module to
+    ``stability.py``, which is self-consistency: both are vmex.  simsopt's
+    ``vmec_fieldlines`` is the implementation whose conventions this module
+    claims, it reads a wout rather than vmex's state, and it carries the
+    sine-parity families independently -- so the asymmetric row is a real
+    external check of the parity handling, not a restatement.
+
+    **Two accuracies, and the split is physics, not slack.**  ``gradpar`` and
+    the pressure term ``cvdrift - gbdrift`` are convention-sensitive and agree
+    to ~3e-3.  ``|B|`` does not: vmex evaluates the exact spectral field of the
+    geometry while ``vmec_fieldlines`` reads the wout ``bmnc`` Nyquist table,
+    which is band-limited (on ``li383_low_res``, ``xm_nyq`` reaches 7 against a
+    geometry ``xm`` of 3, and the top two ``m`` bands hold 0.34% of the table).
+    The drifts take a radial derivative of ``|B|``, which amplifies that by
+    ``1/hs``, so they sit a few percent apart.
+
+    That it is the band limit and not an error in either code is measured:
+    simsopt's own ``gbdrift`` moves 6.9e-3 between ns = 101 and 201 and vmex's
+    moves 5.9e-3, while the gap between them *plateaus* at 3.1e-2 -- it does
+    not converge away, and it does not grow.  The asymmetric deck behaves
+    identically (5.8e-2, 4.4e-2, 3.9e-2 at ns = 17, 33, 65), which is the
+    point: parity handling adds no error of its own.
+    """
+    pytest.importorskip("simsopt")
+    import vmex as vj
+
+    inp = dataclasses.replace(
+        VmecInput.from_file(DATA_DIR / deck), ns_array=np.array([ns]),
+        ftol_array=np.array([1e-13]), niter_array=np.array([20000]), **overrides)
+    eq = opt.solve_equilibrium(inp, verbose=False)
+    assert eq.result.converged
+    wout_path = vj.write_wout(str(tmp_path / "wout_parity.nc"), eq.wout)
+
+    alpha, s_index = 0.7, int(round(0.4 * (ns - 1)))
+    geom = turb.gk_fieldline_geometry(eq.state, eq.runtime, s_index=s_index,
+                                      alpha=alpha, ntheta=16, equal_arc=False)
+    s_value = float(np.asarray(stab._ballooning_context(
+        eq.state, eq.runtime)["s"])[s_index])
+    theta = np.asarray(geom["theta"])
+    reference = _simsopt_fieldline(wout_path, s_value, alpha, theta)
+
+    def pair(name):
+        got = np.asarray(geom["gradpar" if name == "gradpar_theta_pest" else name])
+        return got.ravel(), np.asarray(getattr(reference, name)).ravel()
+
+    for name in _SIMSOPT_GEOMETRY:
+        got, ref = pair(name)
+        assert np.all(np.isfinite(got))
+        scale = float(np.max(np.abs(ref)))
+        assert scale > 0.0
+        relative = float(np.max(np.abs(got - ref))) / scale
+        # Ceilings, not targets: measured 6e-4..3.2e-2 symmetric and
+        # 2.6e-3..5.8e-2 asymmetric, with the split explained above.
+        ceiling = 1.0e-2 if name == "gradpar_theta_pest" else 1.0e-1
+        assert relative < ceiling, f"{name}: {relative:.3e}"
+        # Shape, not just magnitude: a sign or ordering error would pass a
+        # loose bound on the drifts but not this.
+        assert np.corrcoef(got, ref)[0, 1] > 0.99, name
+
+    # The convention-sensitive combination, held tight.  Normalized against
+    # the drift it contributes to rather than against itself: the pressure
+    # term is 8.7e-2 of the drift on li383 but only 6.7e-4 on the low-beta
+    # asymmetric deck, where a self-relative gate would be measuring noise.
+    got_p = pair("cvdrift")[0] - pair("gbdrift")[0]
+    ref_p = pair("cvdrift")[1] - pair("gbdrift")[1]
+    drift_scale = float(np.max(np.abs(pair("gbdrift")[1])))
+    assert float(np.max(np.abs(got_p - ref_p))) < 1.0e-3 * drift_scale

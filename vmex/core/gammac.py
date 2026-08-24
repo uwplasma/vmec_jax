@@ -79,7 +79,9 @@ import jax.numpy as jnp
 
 from .bounce import bounce_action
 from .solver import SolverRuntime, SpectralState
-from .stability import _ballooning_context, _parabola, _theta_vmec_from_pest
+from .stability import (
+    _ballooning_context, _parabola, _require_symmetric, _theta_vmec_from_pest,
+)
 
 Array = Any
 
@@ -294,6 +296,7 @@ def gamma_c_state(
     if num_pitch < 2:
         raise ValueError("num_pitch must be >= 2")
     ctx = _ballooning_context(state, rt)
+    _require_symmetric(ctx, "Gamma_c")
     rows = _surface_rows(surfaces, ctx["ns"])
     dtype = ctx["s"].dtype
     if max_wells is None:

@@ -454,6 +454,37 @@ def test_qi_optimization_example(tmp_path):
     assert (tmp_path / "wout_QI_optimized.nc").exists()
 
 
+@pytest.mark.full  # nightly: every residual evaluation is a finite-beta solve
+def test_qa_ballooning_optimization_example(tmp_path):
+    """Reduced-budget QA + infinite-n ballooning optimization smoke test."""
+    script = EXAMPLES / "optimization" / "QA_optimization_ballooning.py"
+    out = _run_example(script, tmp_path, timeout=1800)
+    _assert_cost_decreased(out, "QA-ballooning")
+    seed = re.search(r"max lambda = ([0-9.eE+-]+) \(unstable\)", out)
+    final = re.search(r"max lambda ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    assert seed is not None and final is not None
+    # The seed must be the case the objective is for: ballooning-unstable while
+    # Mercier says nothing is wrong.  Otherwise the example proves nothing.
+    assert float(seed.group(1)) > 0.0
+    assert re.search(r"min DMerc = \+[0-9.eE+-]+ \(Mercier-stable\)", out)
+    assert float(final.group(2)) < float(final.group(1))
+    assert (tmp_path / "input.QA_ballooning_optimized").exists()
+    assert (tmp_path / "wout_QA_ballooning_optimized.nc").exists()
+    assert (tmp_path / "QA_ballooning_optimized_stability.png").stat().st_size > 10_000
+
+
+def test_ballooning_example_scans_the_ballooning_parameter():
+    """The example must not optimize a bound taken at a single zeta0.
+
+    ``lambda`` peaks at a configuration-dependent ``zeta0``; on this seed the
+    single-point default reports 3.27e-3 where the scan reports 4.42e-3, so a
+    ``zeta0 = 0`` objective would drive the wrong quantity to zero.
+    """
+    source = (EXAMPLES / "optimization" / "QA_optimization_ballooning.py").read_text()
+    assert "ZETA0S = np.linspace(-0.5 * np.pi, 0.5 * np.pi, 5)" in source
+    assert "zeta0s=ZETA0S" in source
+
+
 def test_vacuum_qs_examples_expose_trial_pressure_terms():
     """Vacuum QS examples expose the tested trial-pressure stability terms."""
     for name in ("QA_optimization_DMerc_vacuum.py", "QH_optimization.py"):

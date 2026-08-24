@@ -474,8 +474,9 @@ MHD stability
 
 :mod:`vmex.core.stability` provides the infinite-n ideal-ballooning
 objective (plan R26h.h1) — a JAX port of the COBRA eigenproblem in the Gaur
-*et al.* (arXiv:2302.07673) formulation, with field-line coefficients per
-simsopt's COBRA-validated ``vmec_fieldlines`` conventions and a batched
+*et al.* formulation (*Plasma Phys. Control. Fusion* **67**, 125015 (2025),
+arXiv:2410.04576), with field-line coefficients per simsopt's
+COBRA-validated ``vmec_fieldlines`` conventions and a batched
 symmetric-tridiagonal ``eigvalsh`` solve:
 
 - :func:`~vmex.core.stability.ballooning_lambda` — the most-unstable
@@ -493,10 +494,36 @@ symmetric-tridiagonal ``eigvalsh`` solve:
             (ballooning_growth_rate, -0.01, 5.0)]   # keep λ_max below zero
    result = opt.least_squares(terms, inp, max_mode=4, jac="implicit")
 
+``examples/optimization/QA_optimization_ballooning.py`` runs this end to end
+on a seed that is Mercier-stable and ballooning-unstable — the case the
+objective exists for, since the interchange criteria see nothing to fix.
+
+Two defaults are worth setting deliberately rather than inheriting:
+
+- **Scan** ``zeta0``.  ``λ`` peaks at a configuration-dependent ballooning
+  parameter (Gaur *et al.* 2023, footnote 2), and the single-point default
+  ``zeta0s=(0.0,)`` under-reports it — by 26 % on that example's seed
+  (3.27e-3 at ``zeta0 = 0`` against 4.42e-3 over a five-point scan).  A
+  ``zeta0``-blind objective drives the wrong quantity to zero.
+- **Read the softmax as the bound it is.**  ``ballooning_growth_rate`` sits
+  above ``max λ`` by up to ``temperature × log(n_lines)``, which at the
+  default ``temperature=0.05`` over 12 lines is 0.12 — larger than published
+  ``λ_max`` values.  Target the bound (below zero is then sufficient for
+  stability) and report
+  :func:`~vmex.core.stability.ballooning_lambda`'s hard maximum, or lower the
+  temperature and accept a sharper gradient.
+
+Asymmetric (``lasym``) states are supported: the sine-parity ``R``/``Z``/``λ``
+spectra carry through the PEST angle map and the field-line geometry.  An
+asymmetric equilibrium has no ``α -> -α`` parity, so the default field lines
+span the full ``[0, 2π)`` there and ``zeta0`` should be scanned over both
+signs.
+
 Everything inside is JAX AD (geometry derivatives included), so it composes
-with both gradient modes; ``d(growth)/d(pres_scale)`` matches finite
-differences to 4.7e-9 in CI, and the objective destabilizes monotonically
-with pressure on the solovev family, in sign agreement with Mercier.  For
+with both gradient modes; ``d(growth)/d(pres_scale)`` matches a central
+difference at ``h = 1e-4`` to 4.7e-9 relative, and the objective destabilizes
+monotonically with pressure on the solovev family, in sign agreement with
+Mercier.  For
 interchange stability, combine with
 :func:`~vmex.core.optimize.magnetic_well` (traceable) or
 :func:`~vmex.core.optimize.mercier_stability_residual` (traceable); retain
