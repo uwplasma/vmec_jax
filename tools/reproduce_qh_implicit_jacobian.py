@@ -28,6 +28,10 @@ def main() -> int:
     parser.add_argument("--max-nfev", type=int, default=1)
     parser.add_argument("--max-mode", type=int, default=1)
     parser.add_argument(
+        "--jac-solver", choices=("auto", "block", "gmres", "reverse"),
+        default="auto",
+    )
+    parser.add_argument(
         "--input", type=Path,
         default=Path(__file__).resolve().parents[1]
         / "vmex" / "resources" / "input.nfp4_QH_warm_start",
@@ -52,6 +56,7 @@ def main() -> int:
         inp,
         max_mode=args.max_mode,
         jac=None if args.mode == "fd" else "implicit",
+        jac_solver=args.jac_solver,
         jac_chunk_size=1 if args.mode == "fd" else "auto",
         hot_restart=False,
         warm_start=None,
