@@ -711,21 +711,6 @@ def _ballooning_context(state: SpectralState, rt: SolverRuntime) -> dict:
     )
 
 
-def _require_symmetric(ctx: dict, lane: str) -> None:
-    """Guard a field-line lane that has no asymmetric verification yet.
-
-    The geometry in :func:`_ballooning_context` is parity-complete, so an
-    asymmetric state reaches every lane that shares it.  A lane keeps this
-    guard until it has its own ``lasym`` oracle: unblocked-but-unverified is
-    the silent-wrong-answer class, not a feature.
-    """
-    if ctx["lasym"]:
-        raise NotImplementedError(
-            f"{lane} supports stellarator-symmetric states only (lasym = False); "
-            "the shared field-line geometry is parity-complete, but this lane "
-            "has no asymmetric verification yet")
-
-
 def _parabola(table: Array, j: int, hs: Array) -> Array:
     """Local radial parabola of a full-mesh coefficient table at surface j.
 
@@ -803,9 +788,11 @@ def _surface_closures(m: Array, xn: Array, tabs: dict, iota: Array,
 
     ``q = (t, θ, φ)`` with ``t = s - s_j``; the radial parabola tables of
     :func:`_surface_tables` make every quantity differentiable in ``t``.
-    Returns ``(pos_fn, lam_fn, b_vector, modb_fn)`` — the cylindrical
-    position, ``λ``, ``B = ψ'[(ι - λ_φ) e_θ + (1 + λ_θ) e_φ]/√g`` and
-    ``|B|``.  The ballooning, turbulence and Gamma_c lanes build
+    Returns ``(pos_fn, lam_fn, b_vector, modb_fn, bsupphi_fn)`` — the
+    cylindrical position, ``λ``, ``B = ψ'[(ι - λ_φ) e_θ + (1 + λ_θ) e_φ]/√g``,
+    ``|B|`` and ``B^φ``.  Gamma_c is the consumer of the last one; it needs
+    ``dB^φ/ds`` at fixed PEST angle, which the ballooning and turbulence
+    point tuples do not.  The ballooning, turbulence and Gamma_c lanes build
     their point tuples on these by automatic differentiation, so a state's
     sine-parity spectra reach all three from one implementation.
     """
@@ -845,7 +832,12 @@ def _surface_closures(m: Array, xn: Array, tabs: dict, iota: Array,
     def modb_fn(q: Array) -> Array:
         return jnp.linalg.norm(b_vector(q))
 
-    return pos_fn, lam_fn, b_vector, modb_fn
+    def bsupphi_fn(q: Array) -> Array:
+        J = jax.jacfwd(pos_fn)(q)
+        lam_g = jax.grad(lam_fn)(q)
+        return phipf_j * (1.0 + lam_g[1]) / jnp.linalg.det(J)
+
+    return pos_fn, lam_fn, b_vector, modb_fn, bsupphi_fn
 
 
 def _make_point_fn(m: Array, xn: Array, tabs: dict, iota: Array,
@@ -857,7 +849,7 @@ def _make_point_fn(m: Array, xn: Array, tabs: dict, iota: Array,
     covariant basis ``e_s, e_θ, e_φ``, the dual basis and ``∇|B|`` come from
     JAX differentiation of the :func:`_surface_closures` sums.
     """
-    pos_fn, lam_fn, _, modb_fn = _surface_closures(
+    pos_fn, lam_fn, _, modb_fn, _ = _surface_closures(
         m, xn, tabs, iota, diota, phipf_j)
 
     def point(q: Array, phi_rel: Array):
