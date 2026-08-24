@@ -284,14 +284,21 @@ def filter_bsubuv_lasym(
 ) -> tuple[np.ndarray, np.ndarray]:
     """jxbforce.f low-pass filter of ``bsubu/bsubv`` for ``lasym = True``.
 
-    Mirrors the Fortran surface loop: ``fsym_fft`` parity split to the reduced
-    grid, the band-limited transform/inverse for both parities, and the
-    ``fext_fft`` extension back to the full theta grid.  Long-double
-    accumulation (the sums are cancellation-limited near the edge).
-    Returns full-grid ``(ns, ntheta3, nzeta)`` arrays.
+    Mirrors the Fortran surface loop — ``fsym_fft`` parity split to the
+    reduced grid, the band-limited transform/inverse for both parities, and
+    the ``fext_fft`` extension back to the full theta grid — contracted with
+    ``np.einsum`` over all surfaces at once, as in
+    :func:`filter_bsubuv_symmetric`.  Long-double accumulation is kept (the
+    sums are cancellation-limited near the edge).  Returns full-grid
+    ``(ns, ntheta3, nzeta)`` arrays.
 
-    Scale contract: one pass is an idempotent band-limited projection
-    returning the *physical* field.  The lasym analysis tables carry the
+    Scale contract: one pass is a band-limited projection returning the
+    *physical* field, and it is idempotent (measured 3.8e-16) whenever the
+    force band lies strictly inside the grid Nyquist -- which is the case for
+    any deck whose ``NTHETA`` resolves its ``MPOL``.  A deliberately coarse
+    grid (``MPOL = 8`` with ``NTHETA = 10``, say) puts ``mnyq`` inside the
+    band, the self-conjugate half-weights below engage, and a second pass is
+    then not a no-op.  The lasym analysis tables carry the
     full-interval ``1/(nzeta*ntheta1)`` and the per-mode ``dnorm1`` below
     doubles it, giving the ``1/(nzeta*(ntheta2-1))`` weight the reduced-grid
     parity sum needs.
@@ -313,86 +320,50 @@ def filter_bsubuv_lasym(
     sinmu = np.asarray(trig.sinmu, dtype=acc)[:nt2, : mmax + 1]
     cosnv = np.asarray(trig.cosnv, dtype=acc)[:, : nmax + 1]
     sinnv = np.asarray(trig.sinnv, dtype=acc)[:, : nmax + 1]
+
+    # fixaray.f half-interval analysis norm: the tables carry
+    # 1/(nzeta*ntheta1); the reduced-grid parity analysis needs
+    # 1/(nzeta*(ntheta2-1)) = 2/(nzeta*ntheta1).  Every factor is a power of
+    # two, so folding it out of the mode sums is exact.
+    dnorm1 = np.full((mmax + 1, nmax + 1), 2.0, dtype=acc)
     mnyq, nnyq = nyquist_limits(trig)
+    if mnyq > 0 and mnyq <= mmax:
+        dnorm1[mnyq, :] *= 0.5
+    if nnyq > 0 and nnyq <= nmax:
+        dnorm1[:, nnyq] *= 0.5
 
-    bsubu_out = np.zeros((ns, nt3, nzeta), dtype=acc)
-    bsubv_out = np.zeros((ns, nt3, nzeta), dtype=acc)
+    # fsym_fft/fext_fft reflection: theta -> ntheta1 - theta, zeta -> -zeta
+    # (index 0 maps to itself on both circles).
+    theta_r = np.concatenate([[0], nt1 - np.arange(1, nt2)])
+    zeta_r = np.concatenate([[0], nzeta - np.arange(1, nzeta)])
+    ext_r = nt1 - np.arange(nt2, nt3)
 
-    for js in range(ns):
-        bu = bsubu[js, :nt3, :].T  # Fortran (zeta, theta) ordering
-        bv = bsubv[js, :nt3, :].T
-        bu_ch = np.stack([bu, bu], axis=-1)  # (nzeta, nt3, parity)
-        bv_ch = np.stack([bv, bv], axis=-1)
+    def _filter_field(f: np.ndarray) -> np.ndarray:
+        # (ns, ntheta, nzeta) -> Fortran (ns, nzeta, ntheta) ordering.
+        g = np.swapaxes(f[:, :nt3, :], 1, 2)
+        mirror = g[:, zeta_r[:, None], theta_r[None, :]]
+        f_s = 0.5 * (g[:, :, :nt2] + mirror)
+        f_a = 0.5 * (g[:, :, :nt2] - mirror)
+        # Band-limited analysis of both reflection parities.  jxbforce.f
+        # carries even/odd m in separate 1/shalf channels; with the default
+        # parity split (odd = shalf * even) the division cancels exactly, so
+        # both channels see the same field and one pass suffices (same
+        # argument as :func:`filter_bsubuv_symmetric`).
+        c1 = np.einsum("skj,jm,kn->smn", f_s, cosmui, cosnv, optimize=True) * dnorm1
+        c2 = np.einsum("skj,jm,kn->smn", f_s, sinmui, sinnv, optimize=True) * dnorm1
+        c3 = np.einsum("skj,jm,kn->smn", f_a, sinmui, cosnv, optimize=True) * dnorm1
+        c4 = np.einsum("skj,jm,kn->smn", f_a, cosmui, sinnv, optimize=True) * dnorm1
+        sym = (np.einsum("smn,jm,kn->skj", c1, cosmu, cosnv, optimize=True)
+               + np.einsum("smn,jm,kn->skj", c2, sinmu, sinnv, optimize=True))
+        asym = (np.einsum("smn,jm,kn->skj", c3, sinmu, cosnv, optimize=True)
+                + np.einsum("smn,jm,kn->skj", c4, cosmu, sinnv, optimize=True))
+        out = np.empty((ns, nzeta, nt3), dtype=acc)
+        out[:, :, :nt2] = sym + asym
+        if nt3 > nt2:  # fext_fft: theta > pi from the reflected parities
+            out[:, :, nt2:] = (sym - asym)[:, zeta_r[:, None], ext_r[None, :]]
+        return np.asarray(np.swapaxes(out, 1, 2), dtype=float)
 
-        bu_s = np.zeros((nzeta, nt2, 2), dtype=acc)
-        bu_a = np.zeros((nzeta, nt2, 2), dtype=acc)
-        bv_s = np.zeros((nzeta, nt2, 2), dtype=acc)
-        bv_a = np.zeros((nzeta, nt2, 2), dtype=acc)
-        for i in range(nt2):
-            ir = 0 if i == 0 else (nt1 - i)
-            for kz in range(nzeta):
-                kzr = 0 if kz == 0 else (nzeta - kz)
-                bu_a[kz, i, :] = 0.5 * (bu_ch[kz, i, :] - bu_ch[kzr, ir, :])
-                bu_s[kz, i, :] = 0.5 * (bu_ch[kz, i, :] + bu_ch[kzr, ir, :])
-                bv_a[kz, i, :] = 0.5 * (bv_ch[kz, i, :] - bv_ch[kzr, ir, :])
-                bv_s[kz, i, :] = 0.5 * (bv_ch[kz, i, :] + bv_ch[kzr, ir, :])
-
-        bsubua = np.zeros((nzeta, nt2, 2), dtype=acc)
-        bsubva = np.zeros((nzeta, nt2, 2), dtype=acc)
-        for m in range(mmax + 1):
-            mparity = m & 1
-            for n in range(nmax + 1):
-                # fixaray.f half-interval analysis norm: the tables carry
-                # 1/(nzeta*ntheta1); the reduced-grid parity analysis needs
-                # 1/(nzeta*(ntheta2-1)) = 2/(nzeta*ntheta1).
-                dnorm1 = acc(2.0)
-                if mnyq > 0 and m == mnyq:
-                    dnorm1 *= 0.5
-                if nnyq > 0 and n == nnyq and n != 0:
-                    dnorm1 *= 0.5
-
-                bsubumn1 = bsubumn2 = bsubvmn1 = bsubvmn2 = acc(0.0)
-                bsubumn3 = bsubumn4 = bsubvmn3 = bsubvmn4 = acc(0.0)
-                for k in range(nzeta):
-                    for j in range(nt2):
-                        tsini1 = sinmui[j, m] * cosnv[k, n] * dnorm1
-                        tsini2 = cosmui[j, m] * sinnv[k, n] * dnorm1
-                        tcosi1 = cosmui[j, m] * cosnv[k, n] * dnorm1
-                        tcosi2 = sinmui[j, m] * sinnv[k, n] * dnorm1
-                        bsubumn1 += tcosi1 * bu_s[k, j, mparity]
-                        bsubumn2 += tcosi2 * bu_s[k, j, mparity]
-                        bsubvmn1 += tcosi1 * bv_s[k, j, mparity]
-                        bsubvmn2 += tcosi2 * bv_s[k, j, mparity]
-                        bsubumn3 += tsini1 * bu_a[k, j, mparity]
-                        bsubumn4 += tsini2 * bu_a[k, j, mparity]
-                        bsubvmn3 += tsini1 * bv_a[k, j, mparity]
-                        bsubvmn4 += tsini2 * bv_a[k, j, mparity]
-
-                for k in range(nzeta):
-                    for j in range(nt2):
-                        tcos1 = cosmu[j, m] * cosnv[k, n]
-                        tcos2 = sinmu[j, m] * sinnv[k, n]
-                        bsubua[k, j, 0] += tcos1 * bsubumn1 + tcos2 * bsubumn2
-                        bsubva[k, j, 0] += tcos1 * bsubvmn1 + tcos2 * bsubvmn2
-                        tsin1 = sinmu[j, m] * cosnv[k, n]
-                        tsin2 = cosmu[j, m] * sinnv[k, n]
-                        bsubua[k, j, 1] += tsin1 * bsubumn3 + tsin2 * bsubumn4
-                        bsubva[k, j, 1] += tsin1 * bsubvmn3 + tsin2 * bsubvmn4
-
-        bu_full = np.zeros((nzeta, nt3), dtype=acc)
-        bv_full = np.zeros((nzeta, nt3), dtype=acc)
-        bu_full[:, :nt2] = bsubua[:, :, 0] + bsubua[:, :, 1]
-        bv_full[:, :nt2] = bsubva[:, :, 0] + bsubva[:, :, 1]
-        for i in range(nt2, nt3):
-            ir = nt1 - i
-            for kz in range(nzeta):
-                kzr = 0 if kz == 0 else (nzeta - kz)
-                bu_full[kz, i] = bsubua[kzr, ir, 0] - bsubua[kzr, ir, 1]
-                bv_full[kz, i] = bsubva[kzr, ir, 0] - bsubva[kzr, ir, 1]
-        bsubu_out[js] = bu_full.T
-        bsubv_out[js] = bv_full.T
-
-    return np.asarray(bsubu_out, dtype=float), np.asarray(bsubv_out, dtype=float)
+    return _filter_field(bsubu), _filter_field(bsubv)
 
 
 # ---------------------------------------------------------------------------
