@@ -137,20 +137,34 @@ def test_gamma_c_tracks_effective_ripple_on_a_ripple_ray(qa_eq):
 def test_boundary_gradient_liveness():
     """jax.grad through the implicit solve is finite, nonzero, FD-consistent.
 
-    li383 at ns=13, GammaC([0.5]). Measured for this commit: at the base
-    sampling (nalpha=7, 3 transits, 64 points/transit, 24 pitch) the
-    objective is 2.13e-3 and the reverse boundary gradient
-    d/d rbc[n=0, m=1] is -0.541 against central FD -0.427 (step 1e-4)
-    and -0.385 (step 2e-5): sign agreement, magnitude ratio 1.41. One
-    refinement step (13, 4, 96, 48) keeps the sign and moves the
-    magnitude to -0.119, while the Gamma_c value itself is
-    sampling-stable to 2 percent (anchor test) — the gradient of the
-    discretized objective is exact, but its magnitude at PR-lane
-    sampling carries superbanana-layer discretization scatter of up to
-    ~4.6x (convergence ladder in the PR record). The assertions encode
-    exactly that: finite nonzero gradients, FD consistency within a
-    factor 3 at fixed resolution, and sign stability under refinement;
-    optimize at one fixed resolution.
+    li383 at ns=13, GammaC([0.5]). What this test can honestly assert is
+    narrower than it once claimed. The gradient of the discretized objective
+    is exact — it agrees with a central difference of the same discretization
+    at fixed resolution — but it is **not a convergent quantity**. Measured
+    ladder of d/d rbc[n=0, m=1] over (nalpha, transits, points/transit,
+    pitch):
+
+        (7, 3, 64, 24)    -1.254
+        (7, 4, 96, 48)    +3.518
+        (9, 5, 128, 48)   -0.387
+        (13, 6, 192, 64)  -0.988
+        (17, 8, 256, 96)  +0.180
+
+    Three sign changes. Radial resolution does not help either: at fixed
+    sampling, ns = 13/25/49 gives -0.387, +0.175, -2.167. The same instability
+    is present before the symmetry fixes in this commit (-0.403, +0.582,
+    -0.554, -0.562, -0.111), so it is not a regression — an earlier revision
+    of this test asserted sign stability under one refinement step and was
+    passing on a lucky pair of configurations, not on a property.
+
+    The cause is structural: hard well detection and hard argmin selection
+    make the discretized Gamma_c piecewise in the boundary coefficients, with
+    breakpoints that move when the grid moves, so refinement changes which
+    function is being differentiated. Gamma_c is a value-level comparative
+    proxy; do not drive a boundary optimization with this gradient.
+
+    So: finite, nonzero, and FD-consistent at fixed resolution. No claim of
+    magnitude stability, and none of sign stability.
     """
     inp = VmecInput.from_file(DATA_DIR / "input.li383_low_res")
     params = im.params_from_input(inp, device=None)
@@ -180,8 +194,10 @@ def test_boundary_gradient_liveness():
     refined = float(np.asarray(jax.grad(
         lambda p: objective(p, 13, 4, 96, 48))(params).rbc)[index])
     assert np.isfinite(refined) and refined != 0.0
-    assert np.sign(refined) == np.sign(base)
-    assert 0.03 < abs(refined) < 1.5 and 0.03 < abs(base) < 1.5
+    # Deliberately no sign or magnitude-ratio assertion against `base`: the
+    # ladder in the docstring shows neither holds.  Only that both refinements
+    # produce a live number of a physically plausible order.
+    assert 1.0e-3 < abs(refined) < 1.0e2 and 1.0e-3 < abs(base) < 1.0e2
 
 
 def test_class_contract_and_validation():
@@ -232,3 +248,50 @@ def test_class_contract_and_validation():
             bmag=jnp.ones(8), radial_drift=0.0, radial_gradient=0.0,
             drift_correction=0.0, tangency=1.0, dl_dx=1.0, length=1.0,
             pitch=jnp.ones(3), pitch_weights=jnp.ones(3))
+
+
+def test_gamma_c_respects_the_stellarator_reflection():
+    """The exact identity that caught two defects.
+
+    Gamma_c is even under the stellarator reflection and the sine-parity
+    spectra are odd, so on a stellarator-symmetric equilibrium
+    ``d(Gamma_c)/d(sine)`` must be *identically* zero.  Run on a symmetric
+    deck solved with ``LASYM = T``, so the sine coefficients are real degrees
+    of freedom whose converged content is round-off — which makes the identity
+    exact rather than approximate.
+
+    It was violated at 55 % of the physical gradient.  Two causes:
+
+    * the trace window ran ``x in [0, L]`` instead of centred on the
+      field-line label, so the sampled ``(alpha, x)`` set was not closed under
+      ``(alpha, x) -> (-alpha, -x)``.  Centring alone took it to 13 %, and
+      makes the per-line estimator mirror-invariant to 1.8e-14;
+    * ``b_min``/``b_max`` are ``jnp.min``/``jnp.max`` over the |B| of a
+      reflection-closed line set, so the extrema sit at mirror-image *pairs*
+      and the cotangent went entirely to one member of each pair.  Holding the
+      pitch grid fixed under differentiation took the violation to 6.6e-11 and
+      moved the physical gradient by 1.8e-4.
+
+    Measured here: ratio 5.8e-11 against a physical ``d/dR_cos`` of 2.6e+03.
+    """
+    inp = dataclasses.replace(
+        VmecInput.from_file(DATA_DIR / "input.li383_low_res"), lasym=True)
+    eq = opt.solve_equilibrium(inp)
+    assert eq.result.converged and bool(eq.runtime.setup.lasym)
+    state, rt = eq.state, eq.runtime
+    # The identity is only exact where the sine content is: check that first.
+    cos_scale = float(jnp.max(jnp.abs(state.R_cos)))
+    assert float(jnp.max(jnp.abs(state.R_sin))) < 1.0e-12 * cos_scale
+
+    def total(spectral):
+        return gammac.gamma_c_state(
+            spectral, rt, surfaces=(0.5,), nalpha=6, num_transit=3,
+            points_per_transit=32, num_pitch=12,
+            quadrature_order=16)["gamma_c"][0]
+
+    gradient = jax.grad(total)(state)
+    physical = float(jnp.max(jnp.abs(gradient.R_cos)))
+    spurious = float(jnp.max(jnp.abs(gradient.R_sin)))
+    assert physical > 1.0        # the comparison is not against zero
+    assert spurious / physical < 1.0e-8
+

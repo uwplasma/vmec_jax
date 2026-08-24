@@ -70,6 +70,7 @@ field-line parameterization.
 
 from __future__ import annotations
 
+import functools
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -80,7 +81,8 @@ import jax.numpy as jnp
 from .bounce import bounce_action
 from .solver import SolverRuntime, SpectralState
 from .stability import (
-    _ballooning_context, _parabola, _require_symmetric, _theta_vmec_from_pest,
+    _ballooning_context, _pest_lambda, _surface_closures, _surface_tables,
+    _theta_vmec_from_pest,
 )
 
 Array = Any
@@ -177,13 +179,14 @@ def gamma_c_from_fieldlines(
     return out
 
 
-def _make_gamma_point_fn(m: Array, xn: Array, rtab: Array, ztab: Array,
-                         ltab: Array, iota: Array, diota: Array, phipf_j: Array):
+def _make_gamma_point_fn(m: Array, xn: Array, tabs: dict, iota: Array,
+                         diota: Array, phipf_j: Array):
     """Point-evaluation closure for one flux surface (Nemov drift set).
 
-    The spectral machinery of
-    :func:`vmex.core.turbulence._make_gk_point_fn`, returning at
-    ``q = (t, theta, phi)`` (evaluated at ``t = s - s_j = 0``) the tuple
+    Built on :func:`vmex.core.stability._surface_closures`, so the sine-parity
+    spectra of an asymmetric state are carried without a second
+    implementation.  Returns at ``q = (t, theta, phi)`` (evaluated at
+    ``t = s - s_j = 0``) the tuple
 
     ``(|B|, B^phi, B x grad|B| . grad s, d|B|/ds|PEST, dB^phi/ds|PEST,
     (grad s x b) . grad phi, |grad s|, ||e_theta|| / (1 + lambda_theta))``
@@ -192,36 +195,8 @@ def _make_gamma_point_fn(m: Array, xn: Array, rtab: Array, ztab: Array,
     ``dtheta/ds = -lambda_s / (1 + lambda_theta)`` and the last entry is
     ``||e_alpha||`` at fixed ``(rho, phi)``.
     """
-
-    def coeffs(tab: Array, t: Array) -> Array:
-        return tab[0] + t * tab[1] + (t * t) * tab[2]
-
-    def lam_fn(q: Array) -> Array:
-        t, th, ph = q[0], q[1], q[2]
-        return coeffs(ltab, t) @ jnp.sin(th * m - ph * xn)
-
-    def pos_fn(q: Array) -> Array:
-        t, th, ph = q[0], q[1], q[2]
-        ang = th * m - ph * xn
-        R = coeffs(rtab, t) @ jnp.cos(ang)
-        Z = coeffs(ztab, t) @ jnp.sin(ang)
-        return jnp.array([R * jnp.cos(ph), R * jnp.sin(ph), Z])
-
-    def b_vector(q: Array) -> Array:
-        J = jax.jacfwd(pos_fn)(q)                     # columns: e_s, e_th, e_ph
-        sqrt_g = jnp.linalg.det(J)
-        lam_g = jax.grad(lam_fn)(q)
-        iota_t = iota + diota * q[0]
-        return phipf_j * ((iota_t - lam_g[2]) * J[:, 1]
-                          + (1.0 + lam_g[1]) * J[:, 2]) / sqrt_g
-
-    def modb_fn(q: Array) -> Array:
-        return jnp.linalg.norm(b_vector(q))
-
-    def bsupphi_fn(q: Array) -> Array:
-        J = jax.jacfwd(pos_fn)(q)
-        lam_g = jax.grad(lam_fn)(q)
-        return phipf_j * (1.0 + lam_g[1]) / jnp.linalg.det(J)
+    pos_fn, lam_fn, b_vector, modb_fn, bsupphi_fn = _surface_closures(
+        m, xn, tabs, iota, diota, phipf_j)
 
     def point(q: Array):
         J = jax.jacfwd(pos_fn)(q)
@@ -264,6 +239,127 @@ def _surface_rows(surfaces, ns: int) -> tuple[int, ...]:
     return rows
 
 
+#: Per-surface outputs of :func:`_gamma_c_rows`.  Everything else the bounce
+#: kernel builds stays inside the jit and is eliminated as dead code.
+_ROW_FIELDS = ("gamma_c", "excluded_fraction", "overflow_fraction",
+               "line_length", "pitch")
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=("rows", "nalpha", "num_transit", "points_per_transit",
+                     "num_pitch", "quadrature_order", "max_wells"))
+def _gamma_c_rows(
+    state: SpectralState,
+    rt: SolverRuntime,
+    zeta0: Array,
+    *,
+    rows: tuple[int, ...],
+    nalpha: int,
+    num_transit: int,
+    points_per_transit: int,
+    num_pitch: int,
+    quadrature_order: int,
+    max_wells: int,
+) -> dict[str, Array]:
+    """``Gamma_c`` of the full-mesh rows ``rows``, as one XLA executable.
+
+    Module-level rather than a ``jax.jit`` at the call site, so every boundary
+    iterate of an optimization stage reuses one compilation instead of
+    re-tracing the spectral field-line machinery.  Measured on a three-surface
+    nfp = 2 case: 0.96 s eager against 0.03 s here, values bit-identical.
+    Everything that sets an array shape is static.
+    """
+
+    ctx = _ballooning_context(state, rt)
+    dtype = ctx["s"].dtype
+    alpha = jnp.asarray(
+        2.0 * np.pi * np.arange(int(nalpha)) / int(nalpha), dtype=dtype)
+    length = 2.0 * np.pi * int(num_transit)
+    # Centred on the field-line label, not [0, L].  The stellarator
+    # reflection maps (alpha, x) -> (-alpha, -x) and the alpha set is closed
+    # under negation, so a window symmetric in x makes the estimator exactly
+    # invariant under it -- and Gamma_c is even while the sine-parity spectra
+    # are odd, so d(Gamma_c)/d(sine) then vanishes on a symmetric state as it
+    # must.  A one-sided window does not: measured, it left a spurious
+    # symmetry-breaking gradient at 55% of the physical one.
+    x = jnp.linspace(
+        -0.5 * length, 0.5 * length,
+        int(points_per_transit) * int(num_transit) + 1, dtype=dtype)
+    # Open midpoint rule, uniform in the reflecting level 1/lambda rather
+    # than lambda (the Unalmis et al. pitch-sampling guidance); the open
+    # ends avoid the incomputable bounce integral at the global maximum.
+    level_nodes = jnp.asarray(
+        (np.arange(int(num_pitch)) + 0.5) / int(num_pitch), dtype=dtype)
+    zeta0_c = jnp.asarray(zeta0, dtype=dtype)
+    hs, psi_edge = ctx["hs"], ctx["psi_edge"]
+
+    results = []
+    iotas = []
+    for j in rows:
+        iota = 0.5 * (ctx["iotas"][j] + ctx["iotas"][j + 1])
+        diota = (ctx["iotas"][j + 1] - ctx["iotas"][j]) / hs
+        iotas.append(iota)
+        tabs = _surface_tables(ctx, j)
+        point = _make_gamma_point_fn(
+            ctx["m"], ctx["xn"], tabs, iota, diota, ctx["phipf"][j])
+        lmns0, lmnc0 = _pest_lambda(tabs)
+
+        def line(a, point=point, lmns0=lmns0, lmnc0=lmnc0, iota=iota):
+            theta_star = a + x
+            phi = zeta0_c + x / iota
+            theta_v = _theta_vmec_from_pest(
+                theta_star, phi, lmns0, ctx["m"], ctx["xn"], lmnc0)
+            q = jnp.stack([jnp.zeros_like(theta_v), theta_v, phi], axis=-1)
+            return jax.vmap(point)(q)
+
+        (modB, b_sup_phi, bxgb_gs, modb_s_pest, bsupphi_s_pest,
+         gs_cross_b_gphi, grad_s_norm, e_alpha_norm) = jax.vmap(line)(alpha)
+
+        two_rho = 2.0 * jnp.sqrt(ctx["s"][j])
+        modb_r = two_rho * modb_s_pest                # d|B|/drho at fixed PEST angles
+        correction = (
+            two_rho * diota * psi_edge * gs_cross_b_gphi
+            - 2.0 * modb_r + modB * (two_rho * bsupphi_s_pest) / b_sup_phi)
+        dl_dx = modB / jnp.abs(iota * b_sup_phi)
+        # The pitch nodes are a quadrature grid, not an observable, and the
+        # |B| extrema over a reflection-closed set of lines are attained at
+        # mirror-image PAIRS of points.  Differentiating through jnp.min/max
+        # sends the whole cotangent to one member of each pair, which breaks a
+        # symmetry Gamma_c has exactly: on a stellarator-symmetric state
+        # d(Gamma_c)/d(sine spectra) must vanish, and it came out at 17% of
+        # the physical gradient.  Worse, that term does not converge -- over
+        # num_pitch = 12/24/48/96 the violation ran 1.7e-1, 1.8e-1, 6.0e-3,
+        # 1.6e-1, so it is an erratic subgradient with no limit, not a
+        # discretization term.  Holding the grid fixed under differentiation
+        # restores the identity to 1e-10 and moves the physical gradient by
+        # 2e-4.
+        b_min = jax.lax.stop_gradient(jnp.min(modB))
+        b_max = jax.lax.stop_gradient(jnp.max(modB))
+        level = b_min + (b_max - b_min) * level_nodes
+        results.append(gamma_c_from_fieldlines(
+            bmag=modB,
+            radial_drift=psi_edge * bxgb_gs / modB**3,
+            radial_gradient=modb_r / modB,
+            drift_correction=correction / modB,
+            tangency=grad_s_norm / two_rho * e_alpha_norm,
+            dl_dx=dl_dx, length=length, pitch=1.0 / level,
+            pitch_weights=(b_max - b_min) / int(num_pitch) / level**2,
+            max_wells=max_wells, quadrature_order=quadrature_order))
+
+    stacked: dict[str, Array] = {
+        name: jnp.stack([out[name] for out in results]) for name in _ROW_FIELDS
+    }
+    # The field-line map phi = x / iota is meaningless through iota ~ 0;
+    # poison the result instead of returning a plausible number.
+    iota_row = jnp.stack(iotas)
+    stacked["gamma_c"] = jnp.where(
+        jnp.abs(iota_row) > 1.0e-6, stacked["gamma_c"], jnp.nan)
+    stacked["s"] = ctx["s"][jnp.asarray(rows)]
+    stacked["iota"] = iota_row
+    return stacked
+
+
 def gamma_c_state(
     state: SpectralState,
     rt: SolverRuntime,
@@ -282,12 +378,20 @@ def gamma_c_state(
     ``surfaces`` are normalized-flux values mapped to the nearest interior
     full-mesh rows (the surface-selection convention of
     :func:`vmex.core.neoclassical.epsilon_effective_from_wout`).  Each
-    surface samples ``nalpha`` field lines over ``num_transit`` poloidal
-    turns at ``points_per_transit`` points per turn; the lambda integral
-    uses ``num_pitch`` Gauss-Legendre nodes across the trapped range
-    ``[1/B_max, 1/B_min]`` of the sampled lines.  ``max_wells`` defaults to
-    ``16 * num_transit`` slots per pitch level; ``overflow_fraction``
-    reports any spill.  Returns per-surface arrays led by ``gamma_c``.
+    surface samples ``nalpha`` field lines over ``num_transit`` poloidal turns
+    at ``points_per_transit`` points per turn, centred on the field-line label
+    so the stellarator reflection is an exact invariance of the estimator; the
+    lambda integral uses ``num_pitch`` open-midpoint nodes across the trapped
+    range ``[1/B_max, 1/B_min]`` of the sampled lines, held fixed under
+    differentiation (see the note at the node construction).  ``max_wells``
+    defaults to ``16 * num_transit`` slots per pitch level;
+    ``overflow_fraction`` reports any spill.  Returns per-surface arrays led
+    by ``gamma_c``.
+
+    The absolute value carries roughly 10-20 % scatter at these resolutions --
+    it is a comparative proxy, and the resolution belongs in any quoted
+    number.  The numerics live in the jitted :func:`_gamma_c_rows`; only the
+    validation and the row selection happen here, because those set shapes.
     """
     if nalpha < 2:
         raise ValueError("nalpha must be >= 2")
@@ -295,84 +399,14 @@ def gamma_c_state(
         raise ValueError("num_transit must be >= 1 and points_per_transit >= 16")
     if num_pitch < 2:
         raise ValueError("num_pitch must be >= 2")
-    ctx = _ballooning_context(state, rt)
-    _require_symmetric(ctx, "Gamma_c")
-    rows = _surface_rows(surfaces, ctx["ns"])
-    dtype = ctx["s"].dtype
-    if max_wells is None:
-        max_wells = 16 * int(num_transit)
-
-    alpha = jnp.asarray(
-        2.0 * np.pi * np.arange(int(nalpha)) / int(nalpha), dtype=dtype)
-    length = 2.0 * np.pi * int(num_transit)
-    x = jnp.linspace(
-        0.0, length, int(points_per_transit) * int(num_transit) + 1,
-        dtype=dtype)
-    # Open midpoint rule, uniform in the reflecting level 1/lambda rather
-    # than lambda (the Unalmis et al. pitch-sampling guidance); the open
-    # ends avoid the incomputable bounce integral at the global maximum.
-    level_nodes = jnp.asarray(
-        (np.arange(int(num_pitch)) + 0.5) / int(num_pitch), dtype=dtype)
-    zeta0_c = jnp.asarray(zeta0, dtype=dtype)
-    hs, psi_edge = ctx["hs"], ctx["psi_edge"]
-
-    results = []
-    iotas = []
-    for j in rows:
-        iota = 0.5 * (ctx["iotas"][j] + ctx["iotas"][j + 1])
-        diota = (ctx["iotas"][j + 1] - ctx["iotas"][j]) / hs
-        iotas.append(iota)
-        point = _make_gamma_point_fn(
-            ctx["m"], ctx["xn"],
-            _parabola(ctx["rmnc"], j, hs), _parabola(ctx["zmns"], j, hs),
-            _parabola(ctx["lmns"], j, hs), iota, diota, ctx["phipf"][j])
-        lmns0 = _parabola(ctx["lmns"], j, hs)[0]
-
-        def line(a, point=point, lmns0=lmns0, iota=iota):
-            theta_star = a + x
-            phi = zeta0_c + x / iota
-            theta_v = _theta_vmec_from_pest(
-                theta_star, phi, lmns0, ctx["m"], ctx["xn"])
-            q = jnp.stack([jnp.zeros_like(theta_v), theta_v, phi], axis=-1)
-            return jax.vmap(point)(q)
-
-        (modB, b_sup_phi, bxgb_gs, modb_s_pest, bsupphi_s_pest,
-         gs_cross_b_gphi, grad_s_norm, e_alpha_norm) = jax.vmap(line)(alpha)
-
-        two_rho = 2.0 * jnp.sqrt(ctx["s"][j])
-        modb_r = two_rho * modb_s_pest                # d|B|/drho at fixed PEST angles
-        correction = (
-            two_rho * diota * psi_edge * gs_cross_b_gphi
-            - 2.0 * modb_r + modB * (two_rho * bsupphi_s_pest) / b_sup_phi)
-        dl_dx = modB / jnp.abs(iota * b_sup_phi)
-        b_min, b_max = jnp.min(modB), jnp.max(modB)
-        level = b_min + (b_max - b_min) * level_nodes
-        results.append(gamma_c_from_fieldlines(
-            bmag=modB,
-            radial_drift=psi_edge * bxgb_gs / modB**3,
-            radial_gradient=modb_r / modB,
-            drift_correction=correction / modB,
-            tangency=grad_s_norm / two_rho * e_alpha_norm,
-            dl_dx=dl_dx, length=length, pitch=1.0 / level,
-            pitch_weights=(b_max - b_min) / int(num_pitch) / level**2,
-            max_wells=max_wells, quadrature_order=quadrature_order))
-
-    stacked: dict[str, Array] = {
-        name: jnp.stack([out[name] for out in results])
-        for name in ("gamma_c", "excluded_fraction", "overflow_fraction",
-                     "line_length", "pitch")
-    }
-    # The field-line map phi = x / iota is meaningless through iota ~ 0;
-    # poison the result instead of returning a plausible number.
-    iota_row = jnp.stack(iotas)
-    stacked["gamma_c"] = jnp.where(
-        jnp.abs(iota_row) > 1.0e-6, stacked["gamma_c"], jnp.nan)
-    stacked.update({
-        "surface_rows": rows,
-        "s": ctx["s"][jnp.asarray(rows)],
-        "iota": iota_row,
-    })
-    return stacked
+    rows = _surface_rows(surfaces, int(np.shape(rt.setup.s_full)[0]))
+    out = _gamma_c_rows(
+        state, rt, jnp.asarray(float(zeta0)), rows=rows, nalpha=int(nalpha),
+        num_transit=int(num_transit),
+        points_per_transit=int(points_per_transit), num_pitch=int(num_pitch),
+        quadrature_order=int(quadrature_order),
+        max_wells=16 * int(num_transit) if max_wells is None else int(max_wells))
+    return {**out, "surface_rows": rows}
 
 
 class GammaC:

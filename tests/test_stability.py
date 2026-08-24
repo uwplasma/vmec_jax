@@ -803,24 +803,27 @@ def test_lasym_growth_rate_gradient_matches_finite_differences(lasym_finite_beta
     assert abs(float(grad)) > 0.0
 
 
-def test_gamma_c_stays_guarded_until_it_has_its_own_lasym_evidence(
-        lasym_finite_beta_eq):
-    """Gamma_c keeps its guard; turbulence has dropped its and must not raise.
+def test_every_field_line_lane_reaches_an_asymmetric_state(lasym_finite_beta_eq):
+    """Ballooning, turbulence and Gamma_c all run on a lasym equilibrium.
 
-    The shared field-line geometry is parity-complete, so both lanes *reach*
-    an asymmetric state.  Turbulence earns its access here by matching
-    simsopt's ``vmec_fieldlines`` on an asymmetric deck
-    (``test_gk_geometry_matches_simsopt_vmec_fieldlines``); Gamma_c's own
-    asymmetric evidence is the exact reflection identity, which lands with the
-    Gamma_c work, so it stays guarded on this branch.
+    All three share one parity-complete field-line geometry, and each now has
+    its own asymmetric evidence rather than a guard: ballooning through the
+    zero-sine and LASYM-of-a-symmetric-deck gates above, turbulence against
+    simsopt's ``vmec_fieldlines`` on an asymmetric deck, and Gamma_c through
+    the exact reflection identity.  Nothing here should raise, and nothing
+    should come back non-finite.
     """
     from vmex.core import gammac, turbulence
     eq = lasym_finite_beta_eq
-    with pytest.raises(NotImplementedError, match="lasym = False"):
-        gammac.gamma_c_state(eq.state, eq.runtime)
+    lam = np.asarray(stab.ballooning_lambda(eq.state, eq.runtime, **FAST))
+    assert np.all(np.isfinite(lam))
     geom = turbulence.gk_fieldline_geometry(eq.state, eq.runtime, ntheta=16)
     assert np.all(np.isfinite(np.asarray(geom["bmag"])))
     assert float(np.min(np.asarray(geom["bmag"]))) > 0.0
+    out = gammac.gamma_c_state(eq.state, eq.runtime, surfaces=(0.5,), nalpha=4,
+                               num_transit=2, points_per_transit=32,
+                               num_pitch=8, quadrature_order=16)
+    assert np.all(np.isfinite(np.asarray(out["gamma_c"])))
 
 
 # ---------------------------------------------------------------------------
