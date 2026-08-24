@@ -10,6 +10,8 @@ gradient).
 from __future__ import annotations
 
 import dataclasses
+import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +22,7 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
+import vmex as vj
 from vmex.core import optimize as opt
 from vmex.core import stability as stab
 from vmex.core.input import VmecInput
@@ -808,3 +811,82 @@ def test_symmetric_only_lanes_name_themselves(lasym_finite_beta_eq):
                  lambda: gammac.gamma_c_state(eq.state, eq.runtime)):
         with pytest.raises(NotImplementedError, match="lasym = False"):
             call()
+
+
+# ---------------------------------------------------------------------------
+# External oracle: COBRAVMEC (Phase 34.3)
+# ---------------------------------------------------------------------------
+
+_XCOBRA = shutil.which("xcobravmec")
+
+
+def _cobra_growth_rates(wout_path: Path, rows, *, k_w: int, alpha_deg: float):
+    """Run COBRAVMEC on a vmex-written wout; return its signed growth rates.
+
+    The nine-record ``in_cobra`` file is ``cobra.f:104-116``.  ``l_geom_input =
+    l_tokamak_input = F`` selects the ``(alpha_st, zeta_k)`` branch, whose
+    field-line label ``alpha = theta + lambda - iota zeta``
+    (``obtain_field_line.f:31``) is exactly the one vmex uses; both angles are
+    in degrees (``summodosd.f:52``).  A nonzero ``alpha_st`` keeps COBRA on its
+    full domain (``tsymm = 1``), matching vmex's.
+    """
+    tag = wout_path.stem.removeprefix("wout_")
+    directory = wout_path.parent
+    (directory / f"in_cobra.{tag}").write_text(
+        f"{tag}\n{k_w} 1\nF F\n1\n0.0\n1\n{alpha_deg}\n{len(rows)}\n"
+        + " ".join(str(j + 1) for j in rows) + "\n")     # COBRA rows are 1-based
+    subprocess.run([_XCOBRA, f"in_cobra.{tag}"], cwd=directory, check=True,
+                   capture_output=True, timeout=600)
+    records = (directory / f"cobra_grate.{tag}").read_text().splitlines()
+    grate = np.array([float(line.split()[2]) for line in records[1:1 + len(rows)]])
+    assert not np.any(grate == 100.0), "COBRAVMEC failure sentinel"
+    return grate
+
+
+@pytest.mark.full  # external binary; solves at ns = 49
+@pytest.mark.skipif(_XCOBRA is None, reason="xcobravmec not on PATH")
+def test_ballooning_matches_cobravmec(tmp_path):
+    """Eigenvalue parity with COBRAVMEC through an analytic conversion.
+
+    COBRA's third column is a *signed* growth rate, ``+sqrt(-eigf)`` when
+    unstable and ``-sqrt(eigf)`` when stable (``get_ballooning_grate.f:313``),
+    so ``sign(grate) grate**2`` is its eigenvalue in COBRA's normalization
+    ``lambda = gamma**2 mu0 rho R0**2 / B0**2``.  vmex normalizes to
+    ``a_N`` and ``B_N``, so the two differ by ``(a_N B0 / (R0 B_N))**2`` --
+    a constant per equilibrium, with the density and COBRA's own ``amin``
+    cancelling.  Nothing here is fitted.
+    """
+    inp = dataclasses.replace(
+        VmecInput.from_file(DATA_DIR / "input.solovev"), pres_scale=3.0e4,
+        ns_array=np.array([49]), ftol_array=np.array([1e-13]),
+        niter_array=np.array([10000]))
+    eq = opt.solve_equilibrium(inp, verbose=False)
+    assert eq.result.converged
+    wout_path = Path(vj.write_wout(str(tmp_path / "wout_sol.nc"), eq.wout))
+
+    rows = [int(round(f * 48)) for f in (0.2, 0.35, 0.5, 0.65, 0.8)]
+    k_w, alpha_deg = 4, 60.0
+    grate = _cobra_growth_rates(wout_path, rows, k_w=k_w, alpha_deg=alpha_deg)
+
+    # COBRA's half-width is pi(2 k_w - 1)/(2 nfp iota) in zeta, i.e. this many
+    # poloidal turns for vmex, whose domain is in theta*.
+    nturns = (2 * k_w - 1) / (2 * int(eq.wout.nfp))
+    lam = np.asarray(stab.ballooning_lambda(
+        eq.state, eq.runtime, s_indices=rows, alphas=[np.deg2rad(alpha_deg)],
+        zeta0s=[0.0], npoints=769, nturns=nturns)).ravel()
+
+    ctx = stab._ballooning_context(eq.state, eq.runtime)
+    r0 = 0.5 * (float(eq.wout.rmax_surf) + float(eq.wout.rmin_surf))
+    hpres = 4.0e-7 * np.pi * np.asarray(eq.wout.pres)      # order_input.f:88
+    b0 = np.sqrt((2.0 / float(eq.wout.betaxis))
+                 * (1.5 * hpres[1] - 0.5 * hpres[2]))      # order_input.f:103
+    factor = (float(ctx["L_ref"]) * b0 / (r0 * float(ctx["B_ref"]))) ** 2
+    expected = np.sign(grate) * grate ** 2 * factor
+
+    assert np.all(expected > 0.0)                          # the deck is unstable
+    np.testing.assert_array_equal(np.sign(lam), np.sign(expected))
+    # The innermost surface carries COBRA's near-axis radial differencing: it
+    # is 4.3e-2 here and falls to 6.9e-3 at ns = 99, so it is discretization,
+    # not formulation.  Outside it the two codes agree to 6e-4.
+    np.testing.assert_allclose(lam[1:], expected[1:], rtol=3e-3)
+    np.testing.assert_allclose(lam[0], expected[0], rtol=6e-2)
