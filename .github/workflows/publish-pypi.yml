@@ -81,6 +81,10 @@ jobs:
       - name: Install and solve outside the source tree
         env:
           ARTIFACT: ${{ matrix.artifact }}
+          # The tag, minus its leading v.  The validate job above has already
+          # checked it against pyproject, so this pins the *installed*
+          # artifact to the same version without a second source of truth.
+          EXPECTED_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
           if [[ "$ARTIFACT" == "wheel" ]]; then
             package=(dist/*.whl)
@@ -100,7 +104,10 @@ jobs:
           from vmex import optimize
           from vmex.core.input import VmecInput
 
-          assert vmex.__version__ == "0.6.0"
+          import os
+
+          expected = os.environ["EXPECTED_VERSION"].lstrip("v")
+          assert vmex.__version__ == expected, (vmex.__version__, expected)
           path = Path(vmex.__file__).parent / "resources/input.nfp4_QH_warm_start"
           inp = replace(
               VmecInput.from_file(path),
