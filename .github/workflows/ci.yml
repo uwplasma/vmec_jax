@@ -164,8 +164,15 @@ jobs:
     name: Manifest parity lane (${{ matrix.lane }})
     runs-on: ubuntu-latest
     # The primary-lane partition is the whole pull-request suite; these four
-    # jobs are the part no other job was running.  Durations come from the
-    # runner, not a guess -- rebalance the grouping from the reported times.
+    # jobs are the part no other job was running.  Measured on the runner at
+    # -n 2: 30m00s, 27m40s, 26m54s, 21m22s, which put total CI wall clock at
+    # 30 minutes against a ~14-minute budget before.  The four run in parallel
+    # with the nine physics jobs, so the fix is per-job width, not fewer tests:
+    # -n 4 on the same 4-vCPU runner, which the fast lane already uses.  If a
+    # lane runs out of memory instead of getting faster, go back to -n 2 and
+    # split pr-parity-c1 and pr-parity-c2 in the manifest -- test_optimize
+    # (~20 min of the c1 group) and test_gammac plus test_scaling (~12 min of
+    # c2) are what would need separating.
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -209,7 +216,7 @@ jobs:
           done
           # Lanes overlap, and a module selected twice would run twice.
           FILES="$(printf '%s\n' $FILES | sort -u | tr '\n' ' ')"
-          pytest -q -n 2 -m "not full and not weekly" \
+          pytest -q -n 4 -m "not full and not weekly" \
             $FILES --durations=20 --cov=vmex --cov-report=term
       - name: Stash coverage
         run: mv .coverage coverage.parity-${{ matrix.lane }}
