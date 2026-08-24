@@ -40,6 +40,11 @@ two_lorentz          two Lorentz terms mapped to [0, 1] (pressure only)
 rational             ``c[0:10]`` polynomial over ``c[10:21]`` polynomial;
                      returns Fortran ``HUGE`` where the denominator is zero
 nice_quadratic       ``c0 (1-x) + c1 x + 4 c2 x (1-x)`` (iota only)
+sum_cossq_s          current: ``I(x)`` of ``c[0]`` cos-squared windows evenly
+                     placed in ``s``, integrated in closed form
+sum_cossq_sqrts      idem, with the windows placed in ``sqrt(s)``
+sum_cossq_s_free     idem, seven freely placed windows; ``c[3i:3i+3]`` is the
+                     amplitude, location and half width of wave ``i``
 pedestal             VMEC2000 ``pmass`` pedestal: degree-15 power series in
                      ``c[0:16]`` plus a tanh pedestal shaped by ``c[16:21]``
 cubic_spline         VMEC ``spline_cubic`` through (aux_s, aux_f) knots
@@ -230,6 +235,138 @@ def _nice_quadratic(coefficients, x):
     c = _coeffs_padded(coefficients, 3)
     x = jnp.asarray(x)
     return c[0] * (1.0 - x) + c[1] * x + 4.0 * c[2] * x * (1.0 - x)
+
+
+def _sum_cossq_count(coefficients) -> int:
+    """Static wave count ``int(c[0])``, validated as ``profile_functions.f`` does.
+
+    The count sets how many terms exist, so it fixes the shape of the sum and
+    has to be a Python integer rather than a traced value.  It is a count and
+    never an optimized coefficient, so requiring that costs nothing real; a
+    tracer here gets a message saying so instead of a shape error from deeper
+    in the trace.
+    """
+    try:
+        values = np.asarray(coefficients, dtype=float).ravel()
+    except Exception as error:      # a tracer, under jit or grad
+        raise NotImplementedError(
+            "the 'sum_cossq_*' wave count c[0] must be a concrete value, not "
+            "a traced one: it sets how many terms the sum has"
+        ) from error
+    count = int(values[0]) if values.size else 0
+    if not 1 <= count <= 20:
+        raise ValueError(
+            f"sum_cossq wave count c[0] = {count} outside VMEC's 1..20 "
+            "(profile_functions.f stops on this)")
+    return count
+
+
+def _sum_cossq_s(coefficients, x):
+    """Cos-squared current windows in ``s``, integrated analytically.
+
+    ``profile_functions.f`` 'sum_cossq_s' (J. Geiger, 2018).  ``c[0]`` is the
+    number of waves; wave ``i`` peaks at ``x_i = (i-1) dx`` with
+    ``dx = 1/(n-1)`` and is windowed to ``(x_i - dx, x_i + dx]`` clipped to
+    ``[0, 1]``.  ``I(x)`` is the closed-form integral of that density, so a
+    wave already passed contributes its full area and at most the current one
+    is partial.  The first wave is a half window and carries no linear term.
+    """
+    n = _sum_cossq_count(coefficients)
+    c = _coeffs_padded(coefficients, max(21, n + 1))
+    x = jnp.asarray(x)
+    dx = 1.0 / (n - 1.0) if n > 1 else jnp.inf
+    total = jnp.zeros_like(x)
+    reached = jnp.ones_like(x)      # index of the window x sits in (Fortran ni)
+    inside = []
+    for i in range(1, n + 1):
+        xi = (i - 1) * dx
+        start, end = max(0.0, xi - dx), min(xi + dx, 1.0)
+        within = (x > start) & (x <= end)
+        inside.append((within, xi, start))
+        reached = jnp.where(within, float(i), reached)
+    for i in range(1, n + 1):
+        within, xi, _start = inside[i - 1]
+        wave = jnp.sin(jnp.pi * (x - xi) / dx) * dx / jnp.pi
+        partial = (0.5 * c[i] * (x + wave) if i == 1
+                   else 0.5 * c[i] * (x - xi + dx + wave))
+        complete = 0.5 * c[i] * dx if i == 1 else c[i] * dx
+        total = total + jnp.where(
+            float(i) <= reached, jnp.where(within, partial, complete), 0.0)
+    return total
+
+
+def _sum_cossq_sqrts(coefficients, x):
+    """The same windows placed in ``sqrt(s)`` ('sum_cossq_sqrts').
+
+    Identical construction to :func:`_sum_cossq_s` with ``sqrt(x)`` as the
+    coordinate, which makes the analytic integral pick up the extra ``x``
+    weight and so a different closed form.
+    """
+    n = _sum_cossq_count(coefficients)
+    c = _coeffs_padded(coefficients, max(21, n + 1))
+    x = jnp.asarray(x)
+    root = jnp.sqrt(x)
+    dx = 1.0 / (n - 1.0) if n > 1 else jnp.inf
+    dx2, pi2 = dx * dx, jnp.pi * jnp.pi
+    total = jnp.zeros_like(x)
+    reached = jnp.ones_like(x)
+    inside = []
+    for i in range(1, n + 1):
+        xi = (i - 1) * dx
+        start, end = max(0.0, xi - dx), min(xi + dx, 1.0)
+        within = (root > start) & (root <= end)
+        inside.append((within, xi, start))
+        reached = jnp.where(within, float(i), reached)
+    for i in range(1, n + 1):
+        within, xi, start = inside[i - 1]
+        phase = jnp.pi * (root - xi) / dx
+        if i == 1:
+            partial = c[i] * (0.25 * x + dx / (2.0 * jnp.pi) * root
+                              * jnp.sin(phase)
+                              + dx2 / (2.0 * pi2) * (jnp.cos(phase) - 1.0))
+            complete = c[i] * (0.25 - 1.0 / pi2) * dx2
+        else:
+            partial = c[i] * (0.25 * x
+                              + dx / (2.0 * jnp.pi) * root * jnp.sin(phase)
+                              + dx2 / (2.0 * pi2) * jnp.cos(phase)
+                              - 0.25 * start ** 2 + dx2 / (2.0 * pi2))
+            complete = c[i] * dx * xi
+        total = total + jnp.where(
+            float(i) <= reached, jnp.where(within, partial, complete), 0.0)
+    return total
+
+
+def _sum_cossq_s_free(coefficients, x):
+    """Seven freely placed cos-squared windows ('sum_cossq_s_free').
+
+    ``c[3i]``, ``c[3i+1]``, ``c[3i+2]`` are the amplitude, the peak location
+    and the half width of wave ``i`` for ``i = 0..6``, so broad and narrow
+    windows can be mixed and need not tile ``[0, 1]``.  A zero amplitude
+    switches a wave off entirely, which is also what keeps a zero half width
+    from dividing by zero -- Fortran guards it the same way.
+    """
+    c = _coeffs_padded(coefficients, 21)
+    x = jnp.asarray(x)
+    total = jnp.zeros_like(x)
+    for i in range(7):
+        amplitude, xi, width = c[3 * i], c[3 * i + 1], c[3 * i + 2]
+        live = amplitude != 0.0
+        safe_width = jnp.where(width != 0.0, width, 1.0)
+        start = jnp.maximum(0.0, xi - width)
+        end = jnp.minimum(xi + width, 1.0)
+        at_start = jnp.sin(jnp.pi * (start - xi) / safe_width)
+        partial = amplitude * 0.5 * (
+            (x - start)
+            + safe_width / jnp.pi * (jnp.sin(jnp.pi * (x - xi) / safe_width)
+                                     - at_start))
+        complete = amplitude * 0.5 * (
+            (end - start)
+            + safe_width / jnp.pi * (jnp.sin(jnp.pi * (end - xi) / safe_width)
+                                     - at_start))
+        contribution = jnp.where(
+            (x > start) & (x <= end), partial, jnp.where(x > end, complete, 0.0))
+        total = total + jnp.where(live, contribution, 0.0)
+    return total
 
 
 def _pcurr_two_power_gs_ip(coefficients, x):
@@ -636,6 +773,9 @@ _PARAMETERIZED = {
     "rational": _rational,
     "nice_quadratic": _nice_quadratic,
     "two_power_gs_ip": _pcurr_two_power_gs_ip,
+    "sum_cossq_s": _sum_cossq_s,
+    "sum_cossq_sqrts": _sum_cossq_sqrts,
+    "sum_cossq_s_free": _sum_cossq_s_free,
     "pedestal": _pedestal,
     "power_series_ip": _pcurr_power_series_ip,
     "power_series_i": _pcurr_power_series_i,
@@ -771,6 +911,9 @@ _PCURR_KINDS = {
     "rational": "rational",
     "two_power": "two_power_ip",
     "two_power_gs": "two_power_gs_ip",
+    "sum_cossq_s": "sum_cossq_s",
+    "sum_cossq_sqrts": "sum_cossq_sqrts",
+    "sum_cossq_s_free": "sum_cossq_s_free",
     "gauss_trunc": "gauss_trunc_ip",
     "pedestal": "pedestal_i",
     "cubic_spline_i": "cubic_spline_i",

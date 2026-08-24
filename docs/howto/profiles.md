@@ -89,6 +89,10 @@ $c_0 + c_1 + c_5 + c_9 + c_{13} + c_{17}$, which is the limit only when the
 scales and the $(1-x)$ exponents are positive; vmex reproduces that as
 written.
 
+vmex implements every parameterization VMEC2000 offers: ten for
+`PMASS_TYPE`, seven for `PIOTA_TYPE`, seventeen for `PCURR_TYPE`. A name
+outside those raises rather than falling back to a default.
+
 Every profile key, default, and accepted `*_TYPE` string:
 {doc}`/reference/input-file` (Pressure profile / Current and iota sections).
 The evaluation code is {mod}`vmex.core.profiles`.

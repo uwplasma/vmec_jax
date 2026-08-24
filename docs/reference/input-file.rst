@@ -205,11 +205,11 @@ Current and iota profiles
      - current profile type; ``*_i`` forms prescribe :math:`I(s)`, ``*_ip``
        forms prescribe :math:`I'(s)`.  One of ``power_series``,
        ``power_series_i``, ``two_power``, ``two_power_gs``,
-       ``gauss_trunc``, ``sum_atan``, ``rational``, ``pedestal``, and the
+       ``gauss_trunc``, ``sum_atan``, ``rational``, ``pedestal``,
+       ``sum_cossq_s``, ``sum_cossq_sqrts``, ``sum_cossq_s_free``, and the
        ``cubic_spline``/``akima_spline``/``line_segment`` ``_i`` and ``_ip``
-       forms.  ``sum_atan``, ``rational`` and ``pedestal`` prescribe
-       :math:`I(s)`.  VMEC2000's three ``sum_cossq_*`` forms are not
-       implemented and are rejected rather than silently substituted
+       forms.  ``sum_atan``, ``rational``, ``pedestal`` and the
+       ``sum_cossq_*`` forms prescribe :math:`I(s)`
    * - ``AC`` / ``AC_AUX_S`` / ``AC_AUX_F``
      - zeros / —
      - current profile coefficients / spline knots and values
