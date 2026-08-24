@@ -518,9 +518,13 @@ JAX-native Hermite–Laguerre flux-tube solver, formerly SPECTRAX-GK;
   pure JAX, no gkx import needed;
 - :func:`~vmex.core.turbulence.turbulent_growth_rate` — the dominant
   linear ITG/TEM growth rate on that flux tube.  Fully differentiable in
-  *both* gradient modes (validated 0.44 ``v_th/L`` at the Cyclone-base
-  drive ``R/L_Ti = 6.9`` versus ~0 below the critical gradient; AD vs FD
-  2.9e-8);
+  *both* gradient modes.  ``r_over_lt``/``r_over_ln`` are ``R/L`` and are
+  divided by the equilibrium's aspect ratio on the way in, since GKX's
+  operator consumes ``a/L``; pass ``params_linear`` to give it ``a/L``
+  directly.  Measured on the shaped tokamak deck at the Cyclone-base drive
+  ``R/L_Ti = 6.9`` (aspect 2.643, so ``a/L_Ti = 2.611``): 0.184 ``v_th/L``
+  against 8.9e-15 below the critical gradient, with reverse and forward AD
+  gated against finite differences to 1e-5 relative;
 - :func:`~vmex.core.turbulence.quasilinear_flux_proxy` and
   :func:`~vmex.core.turbulence.nonlinear_heat_flux_proxy` — the
   mixing-length and saturation-rule heat-flux surrogates.  These weight the
