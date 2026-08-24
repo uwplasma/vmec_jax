@@ -178,15 +178,25 @@ def test_surface_index_validation(shaped_eq):
 
 
 def _require_gkx():
-    """Skip unless gkx is importable *and* its jax floor is satisfied.
+    """Skip unless gkx is importable."""
+    pytest.importorskip("gkx")
+
+
+def _require_gkx_eigenvectors():
+    """Additionally require the jax floor gkx's *eigenvector* path declares.
 
     gkx reaches reverse-mode eigenvector derivatives through
     ``lax_linalg.eig(enable_eigvec_derivs=...)``, which first exists in jax
     0.10.1 and which gkx declares accordingly.  gkx still imports against an
-    older jax, so importorskip alone lets these reach a call-time TypeError
+    older jax, so importorskip alone lets those reach a call-time TypeError
     that is an unsatisfied dependency contract, not a defect.
+
+    Only the eigenvector-weighted lanes need it.  ``turbulent_growth_rate``
+    reduces the operator with ``jnp.linalg.eigvals`` and works on any
+    supported jax, so gating it too left the whole ITG lane dark on every host
+    below the floor -- which is how the R/L-into-a/L units defect survived.
     """
-    pytest.importorskip("gkx")
+    _require_gkx()
     from jax._src.lax import linalg as lax_linalg
 
     if "enable_eigvec_derivs" not in inspect.signature(lax_linalg.eig).parameters:
@@ -248,7 +258,7 @@ def test_growth_rate_is_itg_critical_gradient_monotone(shaped_eq):
 
 def test_objective_vector_and_scalar_proxies_consistent(shaped_eq):
     """Vector entries reproduce the documented saturation-rule proxies."""
-    _require_gkx()
+    _require_gkx_eigenvectors()
     state, rt = shaped_eq.state, shaped_eq.runtime
     vec = np.asarray(turb.turbulence_objective_vector(state, rt, **GK))
     named = dict(zip(turb.TURBULENCE_OBJECTIVE_NAMES, vec))
@@ -301,7 +311,7 @@ def test_eigenvector_weighted_proxies_are_value_level(shaped_eq):
     GK operator, whose derivatives JAX declines unless
     ``enable_eigvec_derivs``); reverse AD must either refuse with that
     error or agree with the FD lane that ``jac=None`` actually uses."""
-    _require_gkx()
+    _require_gkx_eigenvectors()
     state, rt = shaped_eq.state, shaped_eq.runtime
 
     def ql(scale):
