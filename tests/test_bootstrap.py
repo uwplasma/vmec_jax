@@ -838,3 +838,71 @@ def test_least_squares_current_dofs_implicit():
         np.testing.assert_allclose(jac[:, col], fd,
                                    atol=1e-3 * max(np.max(np.abs(fd)), 1e-12),
                                    err_msg=f"implicit Jacobian column {col}")
+
+
+# ---------------------------------------------------------------------------
+# nyquist.filter_bsubuv_lasym, directly
+# ---------------------------------------------------------------------------
+
+
+def _filter_inputs(*, mpol, ntor, ntheta, nzeta, ns=7, seed=0):
+    """A trig table and a random covariant pair on its full theta grid."""
+    from vmex.core.fourier import Resolution, trig_tables
+
+    trig = trig_tables(Resolution(mpol=mpol, ntor=ntor, ntheta=ntheta,
+                                  nzeta=nzeta, nfp=3, ns=ns, lasym=True))
+    rng = np.random.default_rng(seed)
+    shape = (ns, int(trig.ntheta3), nzeta)
+    return (trig, rng.standard_normal(shape), rng.standard_normal(shape),
+            np.linspace(0.0, 1.0, ns))
+
+
+def test_filter_bsubuv_lasym_is_an_idempotent_projection():
+    """The scale contract the vectorized filter is written against.
+
+    ``filter_bsubuv_lasym`` had no direct test — its only coverage was
+    incidental, through the wout writer — so the property its docstring
+    claims was never actually gated.  One pass is a band-limited projection
+    returning the physical field, so a second pass must change nothing.
+    """
+    from vmex.core.nyquist import filter_bsubuv_lasym, nyquist_limits
+
+    trig, bsubu, bsubv, s = _filter_inputs(mpol=4, ntor=2, ntheta=16, nzeta=8)
+    mmax, nmax = 3, 2
+    assert min(nyquist_limits(trig)) > max(mmax, nmax)   # band inside Nyquist
+    once = filter_bsubuv_lasym(bsubu=bsubu, bsubv=bsubv, trig=trig,
+                               mmax_force=mmax, nmax_force=nmax, s=s)
+    twice = filter_bsubuv_lasym(bsubu=once[0], bsubv=once[1], trig=trig,
+                                mmax_force=mmax, nmax_force=nmax, s=s)
+    for first, second in zip(once, twice):
+        scale = max(float(np.max(np.abs(first))), 1e-300)
+        assert float(np.max(np.abs(second - first))) / scale < 1e-14
+    # A projection that returned its input unchanged would pass the above and
+    # test nothing.
+    assert float(np.max(np.abs(once[0] - bsubu))) > 1e-3
+
+
+def test_filter_bsubuv_lasym_halves_the_self_conjugate_nyquist_modes():
+    """The ``dnorm1`` half-weights, on a grid coarse enough to reach them.
+
+    ``mmax_force`` is ``mpol - 1`` and ``mnyq`` is ``ntheta2 - 1``, so the
+    self-conjugate half-weight only engages when the grid under-resolves the
+    retained modes.  ``VmecInput`` does not forbid that — ``MPOL = 8`` with
+    ``NTHETA = 10`` is accepted — so the branch is reachable from a deck and
+    is not dead code, which is what a first look at it suggests.
+
+    Idempotence is deliberately *not* asserted here: with the half-weights
+    engaged a second pass is not a no-op, and the docstring says so.  What is
+    asserted is that the filter runs, stays finite, and actually acts.
+    """
+    from vmex.core.nyquist import filter_bsubuv_lasym, nyquist_limits
+
+    trig, bsubu, bsubv, s = _filter_inputs(mpol=8, ntor=4, ntheta=10, nzeta=6)
+    mmax, nmax = 7, 4
+    mnyq, nnyq = nyquist_limits(trig)
+    assert mnyq <= mmax and nnyq <= nmax          # both half-weights engage
+    out_u, out_v = filter_bsubuv_lasym(bsubu=bsubu, bsubv=bsubv, trig=trig,
+                                       mmax_force=mmax, nmax_force=nmax, s=s)
+    assert out_u.shape == bsubu.shape and out_v.shape == bsubv.shape
+    assert np.all(np.isfinite(out_u)) and np.all(np.isfinite(out_v))
+    assert float(np.max(np.abs(out_u - bsubu))) > 1e-3

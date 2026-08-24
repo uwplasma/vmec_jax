@@ -292,8 +292,13 @@ def filter_bsubuv_lasym(
     sums are cancellation-limited near the edge).  Returns full-grid
     ``(ns, ntheta3, nzeta)`` arrays.
 
-    Scale contract: one pass is an idempotent band-limited projection
-    returning the *physical* field.  The lasym analysis tables carry the
+    Scale contract: one pass is a band-limited projection returning the
+    *physical* field, and it is idempotent (measured 3.8e-16) whenever the
+    force band lies strictly inside the grid Nyquist -- which is the case for
+    any deck whose ``NTHETA`` resolves its ``MPOL``.  A deliberately coarse
+    grid (``MPOL = 8`` with ``NTHETA = 10``, say) puts ``mnyq`` inside the
+    band, the self-conjugate half-weights below engage, and a second pass is
+    then not a no-op.  The lasym analysis tables carry the
     full-interval ``1/(nzeta*ntheta1)`` and the per-mode ``dnorm1`` below
     doubles it, giving the ``1/(nzeta*(ntheta2-1))`` weight the reduced-grid
     parity sum needs.
