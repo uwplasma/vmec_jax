@@ -160,6 +160,65 @@ jobs:
           path: coverage.physics-${{ matrix.lane }}
           retention-days: 3
 
+  parity:
+    name: Manifest parity lane (${{ matrix.lane }})
+    runs-on: ubuntu-latest
+    # The primary-lane partition is the whole pull-request suite; these four
+    # jobs are the part no other job was running.  Durations come from the
+    # runner, not a guess -- rebalance the grouping from the reported times.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: a
+            selector: pr-parity-a1 pr-parity-a2 pr-parity-b
+          - lane: c1
+            selector: pr-parity-c1 pr-parity-c3 pr-parity-d
+          - lane: c2
+            selector: pr-parity-c2
+          - lane: misc
+            selector: pr-examples pr-external pr-full-only pr-gradient pr-mirror-spline
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install ".[coils,turbulence,freeb]" pytest pytest-cov pytest-xdist
+      - name: Add XLA compile headroom
+        run: |
+          sudo fallocate -l 12G /mnt/vmex-swap
+          sudo chmod 600 /mnt/vmex-swap
+          sudo mkswap /mnt/vmex-swap
+          sudo swapon /mnt/vmex-swap
+      - name: Fetch the golden digests
+        run: python tools/fetch_assets.py --bundle golden-v1
+      - name: Run the manifest lanes
+        env:
+          JAX_ENABLE_X64: "1"
+        run: |
+          FILES=""
+          for LANE in ${{ matrix.selector }}; do
+            FILES="$FILES $(python tools/test_manifest.py select "$LANE")"
+          done
+          # Lanes overlap, and a module selected twice would run twice.
+          FILES="$(printf '%s\n' $FILES | sort -u | tr '\n' ' ')"
+          pytest -q -n 2 -m "not full and not weekly" \
+            $FILES --durations=20 --cov=vmex --cov-report=term
+      - name: Stash coverage
+        run: mv .coverage coverage.parity-${{ matrix.lane }}
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: coverage-parity-${{ matrix.lane }}
+          path: coverage.parity-${{ matrix.lane }}
+          retention-days: 3
+
   device:
     name: Two-device placement and AD
     runs-on: ubuntu-latest
@@ -195,7 +254,7 @@ jobs:
     name: Changed executable lines (>= 95%)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [fast, physics, device]
+    needs: [fast, physics, parity, device]
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -211,7 +270,7 @@ jobs:
           merge-multiple: true
       - name: Combine coverage and enforce the mirror floor
         run: |
-          coverage combine coverage.device coverage.fast coverage.physics-*
+          coverage combine coverage.device coverage.fast coverage.physics-* coverage.parity-*
           coverage report --include='*/vmex/mirror/*' --fail-under=90
           coverage xml
       - name: Enforce changed-line coverage
@@ -223,7 +282,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    needs: [quality, fast, physics, device, changed-coverage]
+    needs: [quality, fast, physics, parity, device, changed-coverage]
     steps:
       - name: Require every review gate
         env:
