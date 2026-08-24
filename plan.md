@@ -3425,3 +3425,61 @@ was measured. Whether the shipped lambda is simply less converged, or the two
 lanes disagree structurally, is the open question; the comparison at three
 adjoint tolerances is running.
 
+
+## Phase 37 — The turbulence bridge hands GKX an R/L where it wants a/L [NEW]
+
+Turning the dead CI lanes on (Phase 35) immediately produced this. On the
+runner `test_growth_rate_is_itg_critical_gradient_monotone` fails with
+`gamma_lo = 0.0215` against an assertion of `< 1e-6` — the "below the ITG
+critical gradient" case comes out unstable. Locally the same test dies earlier,
+on the GKX `eig(enable_eigvec_derivs=)` kwarg against the installed jax 0.9.2,
+which is exactly what #149 declares a floor for, so the lane has been dead at
+value level here and never reached the assertion.
+
+The cause does not need a GKX run to establish. `vmex/core/turbulence.py:432`
+sets `updates["R_over_LTi"] = float(r_over_lt)`, and GKX's own deprecation
+message on that field reads: *"The operator consumes a/L gradients (the TOML
+'tprim'/'fprim'), never R/L, so the old name asserted a normalization that was
+never applied — a value passed as R/L needs dividing by R/a."*
+
+The arithmetic confirms it exactly. `_default_gradient_linear_params()` ships
+`tprim = 2.49`, `fprim = 0.8`. The Cyclone base case is `R/L_T = 6.9`,
+`R/L_n = 2.2` at `R/a = 2.77`, and `6.9/2.77 = 2.49`, `2.2/2.77 = 0.79`. GKX's
+defaults *are* the CBC in `a/L`. So passing `r_over_lt = 6.9` sets
+`tprim = 6.9` where the intended value is 2.49 — the drive is **2.77x too
+strong**, and every turbulence objective evaluation in this repo has been made
+at the wrong gradient. The test's `r_over_lt = 1.0` becomes `tprim = 1.0`
+instead of 0.36, which puts a nominally subcritical case above marginal and
+gives the 0.0215 the runner reports.
+
+Fixing it is an API decision, not a patch, which is why it is its own phase:
+either convert (`tprim = r_over_lt * a/R`, and then choose which `R` — the
+wout `Rmajor_p`, or `L_ref * aspect`) or follow GKX and take `tprim`/`fprim`
+directly, deprecating `r_over_lt`/`r_over_ln`. The second matches the operator
+and removes the ambiguity, at the cost of a public rename. Verifying either
+needs jax >= 0.10.1 locally, which this host does not have — so #149 lands
+first.
+
+- 2026-08-24 claude: **PR #154** — the free-boundary certificate redesign of
+  Phase 36, all four factors passing (1e-6, 1e-11, 9.5e-11, 1e-6). It settled
+  the open question in Phase 36 the other way: the two adjoint solvers agree to
+  4.1e-10 and 2.6e-12, and the 1.9e-3 was the *root*, not the adjoint —
+  `_FREE_HOT_CACHE` warm-starts every forward call, so two entries into the
+  lane land 4.7e-4 apart and the gradient amplifies that 4x. Assembling from
+  the root `jax.grad` actually used agrees to **3.5e-12**. Follow-up: the
+  free-boundary lane has no refined-anchor step, and this is the measurement
+  that says #148's treatment belongs there too.
+- 2026-08-24 claude: **PR #155** — Gamma_c, stacked on #152. Both symmetry
+  defects fixed, the jit landed (0.050 s warm value, 1.07 s warm gradient), and
+  the gradient's non-convergence documented rather than papered over. No
+  optimization example: it would not work.
+- 2026-08-24 claude: #153 also caught `test_multigrid_ladder`'s two
+  compile-count tests failing wherever they ran. The prelude installs its
+  logging handler at WARNING and *then* imports vmex, whose
+  `_configure_jax_logging` sets `jax_logging_level = "ERROR"` by default and
+  raises the `jax` logger from 30 to 40 — filtering exactly the WARNING-level
+  `"Compiling ..."` records the counter is built on. Measured 0 records
+  counted, so `assert c1 > 0` could not pass. Fixed with
+  `VMEX_JAX_LOGGING_LEVEL=WARNING` in the measurement environment, vmex's own
+  documented override, plus `VMEX_COMPILATION_CACHE=disabled` so "cold" means
+  cold. Both tests now pass and measure what their docstrings claim.
