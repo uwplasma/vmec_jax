@@ -691,3 +691,120 @@ def test_lasym_mercier_current_tables_are_exercised():
                                rtol=1e-10, atol=1e-13)
     # A degenerate profile would pass the checks above and cover nothing.
     assert np.max(np.abs(d_merc[2:-1])) > 1e-6
+
+
+# ---------------------------------------------------------------------------
+# LASYM field-line geometry (Phase 34.1)
+# ---------------------------------------------------------------------------
+
+
+def test_lasym_zero_sine_spectra_reproduce_the_symmetric_lane(highbeta_eq):
+    """The hard gate: the asymmetric branch with zero sine spectra is a no-op.
+
+    Drives ``_surface_lambda`` through the ``lasym`` path with identically
+    zero ``rmns``/``zmnc``/``lmnc`` and requires the eigenvalues to be
+    unchanged bit for bit — the same trick that exposed the frozen
+    delta-rotation defect, and the only way to prove the extra spectral sums
+    were added and not substituted.
+    """
+    ctx = stab._ballooning_context(highbeta_eq.state, highbeta_eq.runtime)
+    assert ctx["lasym"] is False and ctx["rmns"] is None
+    lasym_ctx = dict(
+        ctx, lasym=True,
+        rmns=jnp.zeros_like(ctx["rmnc"]), zmnc=jnp.zeros_like(ctx["zmns"]),
+        lmnc=jnp.zeros_like(ctx["lmns"]),
+    )
+    alphas = jnp.asarray(np.linspace(0.0, np.pi, 4))
+    zeta0s = jnp.asarray([0.0])
+    for j in (4, 8):
+        symmetric = np.asarray(stab._surface_lambda(ctx, j, alphas, zeta0s, 81, 3.0))
+        asymmetric = np.asarray(stab._surface_lambda(lasym_ctx, j, alphas, zeta0s, 81, 3.0))
+        assert np.max(np.abs(symmetric)) > 1e-3   # not a degenerate comparison
+        np.testing.assert_array_equal(asymmetric, symmetric)
+
+
+def test_lasym_solve_of_a_symmetric_deck_matches_the_symmetric_lane():
+    """End-to-end: the same deck run with LASYM = T lands on the same growth rates.
+
+    Exercises the whole asymmetric machinery — full-theta trig tables, the
+    sine-parity spectra through the PEST inversion and the field-line
+    geometry — on an equilibrium whose sine content converges to round-off.
+    """
+    deck = VmecInput.from_file(DATA_DIR / "input.circular_tokamak")
+    symmetric = opt.solve_equilibrium(deck, verbose=False)
+    asymmetric = opt.solve_equilibrium(dataclasses.replace(deck, lasym=True),
+                                       verbose=False)
+    assert symmetric.result.converged and asymmetric.result.converged
+    assert bool(asymmetric.runtime.setup.lasym)
+    # The asymmetric solve really did drive its sine spectra to nothing.
+    scale = float(jnp.max(jnp.abs(asymmetric.state.R_cos)))
+    assert float(jnp.max(jnp.abs(asymmetric.state.R_sin))) < 1e-12 * scale
+
+    lines = dict(alphas=np.linspace(0.0, 2.0 * np.pi, 6, endpoint=False), **FAST)
+    expected = np.asarray(stab.ballooning_lambda(symmetric.state, symmetric.runtime, **lines))
+    actual = np.asarray(stab.ballooning_lambda(asymmetric.state, asymmetric.runtime, **lines))
+    np.testing.assert_allclose(actual, expected, rtol=1e-10)
+
+
+def test_lasym_ballooning_is_finite_and_agrees_with_mercier(lasym_finite_beta_eq):
+    """Real asymmetric physics: stable deck, stable sign, asymmetry visible."""
+    eq = lasym_finite_beta_eq
+    lam = np.asarray(stab.ballooning_lambda(eq.state, eq.runtime, **FAST))
+    assert lam.shape == (3, 4, 1)
+    assert np.all(np.isfinite(lam))
+    assert np.all(lam < 0.0)
+    assert np.all(np.asarray(eq.wout.DMerc)[2:-1] > 0.0)   # Mercier agrees
+    # Up-down asymmetry makes field lines at different alpha inequivalent.  On
+    # the axisymmetric symmetric decks that spread is truncation-level (see
+    # test_high_pressure_case_is_ballooning_unstable); here it is physical, so
+    # a lane that silently symmetrized would show a far smaller spread.
+    spread = np.max(lam, axis=(1, 2)) - np.min(lam, axis=(1, 2))
+    assert np.all(spread > 1e-2 * np.abs(np.max(lam, axis=(1, 2))))
+
+
+def test_lasym_breaks_the_alpha_parity(lasym_finite_beta_eq, shaped_eq):
+    """``λ(-α, -ζ0) = λ(α, ζ0)`` is a stellarator-symmetry identity only.
+
+    This is why the default field lines span ``[0, 2π)`` for an asymmetric
+    state, and why COBRAVMEC disables its half-domain shortcut there
+    (``get_ballooning_grate.f:180``).
+    """
+    def parity_violation(eq):
+        line = dict(s_indices=[6], zeta0s=[0.0], **FAST)
+        plus = np.asarray(stab.ballooning_lambda(eq.state, eq.runtime, alphas=[0.7], **line))
+        minus = np.asarray(stab.ballooning_lambda(eq.state, eq.runtime, alphas=[-0.7], **line))
+        return float(np.max(np.abs(plus - minus)) / np.max(np.abs(plus)))
+
+    assert parity_violation(shaped_eq) < 1e-10          # symmetric: identity holds
+    assert parity_violation(lasym_finite_beta_eq) > 1e-4  # asymmetric: it does not
+
+    ctx = stab._ballooning_context(lasym_finite_beta_eq.state,
+                                   lasym_finite_beta_eq.runtime)
+    assert ctx["lasym"] is True and ctx["rmns"] is not None
+
+
+def test_lasym_growth_rate_gradient_matches_finite_differences(lasym_finite_beta_eq):
+    """AD through the asymmetric lane, against a central difference."""
+    state, rt = lasym_finite_beta_eq.state, lasym_finite_beta_eq.runtime
+
+    def growth(scale):
+        setup = dataclasses.replace(rt.setup, mass=rt.setup.mass * scale)
+        return stab.ballooning_growth_rate(state, dataclasses.replace(rt, setup=setup),
+                                           temperature=0.01, **FAST)
+
+    value, grad = jax.value_and_grad(growth)(1.0)
+    step = 1e-4
+    fd = float(growth(1.0 + step) - growth(1.0 - step)) / (2.0 * step)
+    assert np.isfinite(float(value))
+    assert float(grad) == pytest.approx(fd, rel=2e-4)
+    assert abs(float(grad)) > 0.0
+
+
+def test_symmetric_only_lanes_name_themselves(lasym_finite_beta_eq):
+    """Turbulence and Gamma_c stay guarded until each has its own lasym oracle."""
+    from vmex.core import gammac, turbulence
+    eq = lasym_finite_beta_eq
+    for call in (lambda: turbulence.gk_fieldline_geometry(eq.state, eq.runtime),
+                 lambda: gammac.gamma_c_state(eq.state, eq.runtime)):
+        with pytest.raises(NotImplementedError, match="lasym = False"):
+            call()

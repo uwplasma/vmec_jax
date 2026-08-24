@@ -54,8 +54,10 @@ The geometry adapter works without it.
 
 Scope notes
 -----------
-- Stellarator-symmetric states only (``lasym = False``), inherited from
-  :func:`vmex.core.stability._ballooning_context`.
+- Stellarator-symmetric states only (``lasym = False``).  The shared
+  field-line geometry (:func:`vmex.core.stability._ballooning_context`) is
+  parity-complete, so this is a lane guard, not a missing capability: it
+  lifts once the GK geometry set has an asymmetric oracle of its own.
 - Surfaces need ``iota != 0`` (field-line parameterization divides by iota).
 - The flux tube covers one poloidal turn ``theta in [-pi, pi)`` (the solver
   z-grid convention of ``gkx.core.grid.build_spectral_grid``); the
@@ -77,7 +79,8 @@ import jax.numpy as jnp
 from .solver import SolverRuntime, SpectralState
 from .statephysics import aspect_ratio
 from .stability import (
-    _ballooning_context, _parabola, _theta_vmec_from_pest,
+    _ballooning_context, _parabola, _require_symmetric,
+    _theta_vmec_from_pest,
     _validate_surface_index,
 )
 
@@ -289,6 +292,7 @@ def gk_fieldline_geometry(
     if int(ntheta) < 8:
         raise ValueError("ntheta must be >= 8")
     ctx = _ballooning_context(state, rt)
+    _require_symmetric(ctx, "turbulence geometry")
     j = _resolve_surface(s_index, ctx["ns"])
     dtype = ctx["s"].dtype
 

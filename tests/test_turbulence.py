@@ -80,10 +80,8 @@ def test_geometry_matches_stability_conventions(shaped_eq):
     iota = 0.5 * (ctx["iotas"][j] + ctx["iotas"][j + 1])
     diota = (ctx["iotas"][j + 1] - ctx["iotas"][j]) / hs
     dpres = (ctx["pres"][j + 1] - ctx["pres"][j]) / hs
-    point = stab._make_point_fn(
-        ctx["m"], ctx["xn"],
-        stab._parabola(ctx["rmnc"], j, hs), stab._parabola(ctx["zmns"], j, hs),
-        stab._parabola(ctx["lmns"], j, hs), iota, diota, ctx["phipf"][j])
+    point = stab._make_point_fn(ctx["m"], ctx["xn"], stab._surface_tables(ctx, j),
+                                iota, diota, ctx["phipf"][j])
     x = jnp.asarray(mapping["theta"])
     phi = x / iota
     lmns0 = stab._parabola(ctx["lmns"], j, hs)[0]
