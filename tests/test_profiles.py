@@ -389,3 +389,283 @@ def test_sum_atan_reaches_the_current_and_iota_wrappers():
         expected, rtol=1e-13, atol=1e-300)
     with pytest.raises(NotImplementedError, match="pmass_type"):
         profiles.pressure("sum_atan", ac, None, None, x)
+
+
+# ---------------------------------------------------------------------------
+# The remaining VMEC2000 parameterizations
+# ---------------------------------------------------------------------------
+
+
+def _pad21(c):
+    a = np.zeros(21)
+    c = np.asarray(c, dtype=float)
+    a[: min(21, c.size)] = c[:21]
+    return a
+
+
+def _f_two_power(b, x):
+    """``functions.f`` two_power."""
+    return b[0] * max(1.0 - x ** b[1], 0.0) ** b[2]
+
+
+def _f_two_power_gs(b, x):
+    """``functions.f`` lines 63-69: two_power times six Gaussian peaks."""
+    gaussians = 1.0
+    for i in range(3, 19, 3):
+        gaussians += b[i] * np.exp(-(((x - b[i + 1]) / b[i + 2]) ** 2))
+    return gaussians * _f_two_power(b, x)
+
+
+def _f_two_lorentz(am, x):
+    """``profile_functions.f`` pmass 'two_Lorentz', transcribed literally."""
+    one = 1.0
+    return am[0] * (
+        am[1] * (one / (one + (x / am[2] ** 2) ** am[3]) ** am[4]
+                 - one / (one + (one / am[2] ** 2) ** am[3]) ** am[4])
+        / (one - one / (one + (one / am[2] ** 2) ** am[3]) ** am[4])
+        + (one - am[1]) * (one / (one + (x / am[5] ** 2) ** am[6]) ** am[7]
+                           - one / (one + (one / am[5] ** 2) ** am[6]) ** am[7])
+        / (one - one / (one + (one / am[5] ** 2) ** am[6]) ** am[7]))
+
+
+def _f_rational(a, x):
+    """``profile_functions.f`` 'rational': c[0:10] over c[10:21], Horner."""
+    numerator = 0.0
+    for i in range(9, -1, -1):
+        numerator = x * numerator + a[i]
+    denominator = 0.0
+    for i in range(20, 9, -1):
+        denominator = x * denominator + a[i]
+    return (numerator / denominator if denominator != 0.0
+            else np.finfo(np.float64).max)
+
+
+def _f_nice_quadratic(ai, x):
+    """``profile_functions.f`` piota 'nice_quadratic'."""
+    return ai[0] * (1.0 - x) + ai[1] * x + 4.0 * ai[2] * x * (1.0 - x)
+
+
+_REMAINING_KINDS = {
+    "two_power_gs": (
+        _pad21([2.0, 2.0, 1.5, 0.4, 0.3, 0.12, -0.2, 0.7, 0.09, 0.15, 0.5,
+                0.2, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+        _f_two_power_gs),
+    "two_lorentz": (_pad21([1.5, 0.6, 0.8, 2.0, 1.5, 0.4, 3.0, 1.0]),
+                    _f_two_lorentz),
+    "rational": (_pad21([1.0, -0.5, 0.25] + [0.0] * 7 + [2.0, 0.5, -0.3]),
+                 _f_rational),
+    "nice_quadratic": (_pad21([0.9, 0.45, 0.12]), _f_nice_quadratic),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_REMAINING_KINDS))
+def test_remaining_kinds_match_profile_functions_f(kind):
+    """Each against a literal transcription, endpoints included."""
+    coefficients, reference = _REMAINING_KINDS[kind]
+    x = np.concatenate([[0.0], np.linspace(0.01, 0.99, 40), [1.0]])
+    got = np.asarray(profiles.evaluate_profile(kind, coefficients, None, None, x))
+    expected = np.array([reference(coefficients, xi) for xi in x])
+    assert np.all(np.isfinite(got))
+    scale = max(float(np.max(np.abs(expected))), 1e-300)
+    assert float(np.max(np.abs(got - expected))) / scale < 1e-14
+
+
+def test_rational_returns_the_fortran_huge_on_a_zero_denominator():
+    """VMEC returns ``HUGE`` there, not a NaN or an infinity.
+
+    That value reaches a wout and a caller can see it, so reproducing it is
+    part of the parity rather than an implementation detail.  All-zero
+    denominator coefficients are the way to hit it.
+    """
+    got = profiles.evaluate_profile("rational", _pad21([1.0]), None, None,
+                                    np.array([0.0, 0.5, 1.0]))
+    assert np.all(np.asarray(got) == np.finfo(np.float64).max)
+
+
+def test_two_power_gs_reduces_to_two_power_without_peaks():
+    """Zero Gaussian amplitudes must leave ``two_power`` untouched.
+
+    The peak block multiplies rather than adds, so a sign or an offset error
+    in it would survive a comparison that only ever exercised nonzero peaks.
+    """
+    c = _pad21([2.0, 2.0, 1.5] + [0.0, 0.5, 1.0] * 6)
+    x = np.linspace(0.0, 1.0, 21)
+    np.testing.assert_allclose(
+        np.asarray(profiles.evaluate_profile("two_power_gs", c, None, None, x)),
+        np.asarray(profiles.evaluate_profile("two_power", c[:3], None, None, x)),
+        rtol=1e-14, atol=0.0)
+
+
+def test_every_vmec2000_profile_type_is_selectable():
+    """The three wrappers accept exactly what ``profile_functions.f`` does.
+
+    Enumerated from its ``SELECT CASE`` labels: ``pmass`` has nine explicit
+    cases plus ``power_series`` as ``CASE DEFAULT``, ``piota`` six plus the
+    default, ``pcurr`` sixteen plus the default.  All of them are implemented,
+    so the counts below are the contract: if VMEC2000 gains a case, this test
+    is what notices.
+    """
+    x = np.linspace(0.0, 1.0, 5)
+    generic = _pad21([1.0, 2.0, 1.5])
+    # Shape parameters that are widths or exponents cannot be zero: 'two_power_gs'
+    # divides by its Gaussian widths and 'two_Lorentz' by 1 - f(1), both of which
+    # are 0/0 for an all-zero tail in Fortran as well.  A generic coefficient
+    # vector would be testing the input, not the code.
+    per_kind = {
+        "sum_cossq_s": _pad21([5.0, 1.0, 0.8, 0.5, 0.3, 0.1]),
+        "sum_cossq_sqrts": _pad21([5.0, 1.0, 0.8, 0.5, 0.3, 0.1]),
+        "sum_cossq_s_free": _pad21([1.0, 0.2, 0.15, 0.6, 0.55, 0.2]),
+        "two_lorentz": _pad21([1.5, 0.6, 0.8, 2.0, 1.5, 0.4, 3.0, 1.0]),
+        "two_power_gs": _REMAINING_KINDS["two_power_gs"][0],
+        "rational": _REMAINING_KINDS["rational"][0],
+        "pedestal": _pad21([1.0, -0.5]),
+    }
+    tabulated = ("spline", "line_segment")
+
+    def coefficients_for(kind):
+        return per_kind.get(kind, generic)
+
+    for kind in sorted(profiles._PMASS_KINDS):
+        if any(marker in kind for marker in tabulated):
+            continue                      # tabulated: need knots, covered above
+        assert np.all(np.isfinite(profiles.pressure(
+            kind, coefficients_for(kind), None, None, x))), kind
+    for kind in sorted(profiles._PIOTA_KINDS):
+        if any(marker in kind for marker in tabulated):
+            continue
+        assert np.all(np.isfinite(profiles.iota(
+            kind, coefficients_for(kind), None, None, x))), kind
+    for kind in sorted(profiles._PCURR_KINDS):
+        if any(marker in kind for marker in tabulated):
+            continue
+        assert np.all(np.isfinite(profiles.current(
+            kind, coefficients_for(kind), None, None, x))), kind
+    assert len(profiles._PMASS_KINDS) == 10
+    assert len(profiles._PIOTA_KINDS) == 7
+    assert len(profiles._PCURR_KINDS) == 17
+    # A name VMEC2000 does not have must still be refused, not guessed at.
+    for unknown in ("sum_cossq", "two_power_g", "quadratic"):
+        with pytest.raises(NotImplementedError):
+            profiles.current(unknown, generic, None, None, x)
+
+
+def _f_sum_cossq_s(ac, x):
+    """``profile_functions.f`` 'sum_cossq_s', transcribed literally."""
+    n = int(ac[0])
+    dx = 1.0 / (n - 1.0)
+    xi = [(i - 1) * dx for i in range(0, n + 1)]
+    start = {i: max(0.0, xi[i] - dx) for i in range(1, n + 1)}
+    end = {i: min(xi[i] + dx, 1.0) for i in range(1, n + 1)}
+    reached = 1
+    for i in range(1, n + 1):
+        if start[i] < x <= end[i]:
+            reached = i
+    total = 0.0
+    for i in range(1, reached + 1):
+        if start[i] < x <= end[i]:
+            wave = dx * np.sin(np.pi * (x - xi[i]) / dx) / np.pi
+            total += (0.5 * ac[i] * (x + wave) if i == 1
+                      else 0.5 * ac[i] * (x - xi[i] + dx + wave))
+        else:
+            total += 0.5 * ac[i] * dx if i == 1 else ac[i] * dx
+    return total
+
+
+def _f_sum_cossq_sqrts(ac, x):
+    """``profile_functions.f`` 'sum_cossq_sqrts', transcribed literally."""
+    n = int(ac[0])
+    root = np.sqrt(x)
+    dx = 1.0 / (n - 1.0)
+    dx2, pi2 = dx * dx, np.pi * np.pi
+    xi = [(i - 1) * dx for i in range(0, n + 1)]
+    start = {i: max(0.0, xi[i] - dx) for i in range(1, n + 1)}
+    end = {i: min(xi[i] + dx, 1.0) for i in range(1, n + 1)}
+    reached = 1
+    for i in range(1, n + 1):
+        if start[i] < root <= end[i]:
+            reached = i
+    total = 0.0
+    for i in range(1, reached + 1):
+        if start[i] < root <= end[i]:
+            phase = np.pi * (root - xi[i]) / dx
+            if i == 1:
+                total += ac[i] * (0.25 * x
+                                  + dx / (2 * np.pi) * root * np.sin(phase)
+                                  + dx2 / (2 * pi2) * (np.cos(phase) - 1.0))
+            else:
+                total += ac[i] * (0.25 * x
+                                  + dx / (2 * np.pi) * root * np.sin(phase)
+                                  + dx2 / (2 * pi2) * np.cos(phase)
+                                  - 0.25 * start[i] ** 2 + dx2 / (2 * pi2))
+        else:
+            total += (ac[i] * (0.25 - 1 / pi2) * dx2 if i == 1
+                      else ac[i] * dx * xi[i])
+    return total
+
+
+def _f_sum_cossq_s_free(ac, x):
+    """``profile_functions.f`` 'sum_cossq_s_free', transcribed literally."""
+    total = 0.0
+    for i in range(1, 8):
+        xi, width = ac[1 + 3 * (i - 1)], ac[2 + 3 * (i - 1)]
+        amplitude = ac[3 * (i - 1)]
+        start, end = max(0.0, xi - width), min(xi + width, 1.0)
+        if amplitude == 0.0:
+            continue
+        at_start = np.sin(np.pi * (start - xi) / width)
+        if start < x <= end:
+            total += amplitude * 0.5 * (
+                (x - start) + width / np.pi
+                * (np.sin(np.pi * (x - xi) / width) - at_start))
+        elif x > end:
+            total += amplitude * 0.5 * (
+                (end - start) + width / np.pi
+                * (np.sin(np.pi * (end - xi) / width) - at_start))
+    return total
+
+
+@pytest.mark.parametrize("kind, coefficients", [
+    ("sum_cossq_s", [5.0, 1.0, 0.8, 0.5, 0.3, 0.1]),
+    ("sum_cossq_s", [3.0, 2.0, -0.5, 1.2]),
+    ("sum_cossq_sqrts", [5.0, 1.0, 0.8, 0.5, 0.3, 0.1]),
+    ("sum_cossq_sqrts", [4.0, 0.7, 1.1, -0.4, 0.6]),
+    ("sum_cossq_s_free", [1.0, 0.2, 0.15, 0.6, 0.55, 0.2, -0.3, 0.85, 0.1]),
+])
+def test_sum_cossq_matches_profile_functions_f(kind, coefficients):
+    """The three cos-squared current forms, against literal transcriptions.
+
+    These are ``I(s)`` in closed form: the density is a sum of cos-squared
+    windows and the integral is done analytically, so a wave the argument has
+    already passed contributes its whole area and at most one is partial.
+    That bookkeeping is where an error would hide, which is why the grid runs
+    across several window boundaries.
+    """
+    reference = {"sum_cossq_s": _f_sum_cossq_s,
+                 "sum_cossq_sqrts": _f_sum_cossq_sqrts,
+                 "sum_cossq_s_free": _f_sum_cossq_s_free}[kind]
+    c = _pad21(coefficients)
+    x = np.concatenate([[0.0], np.linspace(0.005, 0.995, 60), [1.0]])
+    got = np.asarray(profiles.current(kind, c, None, None, x))
+    expected = np.array([reference(c, xi) for xi in x])
+    assert np.all(np.isfinite(got))
+    scale = max(float(np.max(np.abs(expected))), 1e-300)
+    assert float(np.max(np.abs(got - expected))) / scale < 1e-14
+    # I is the integral of a sum of cos-squared windows, so it is
+    # non-decreasing whenever every amplitude is non-negative.  That is a
+    # property of the result rather than of the transcription, so it catches a
+    # sign or an interval-pairing error that a matching transcription would
+    # not.  (Note I(0) is not 0 here: the window test is a strict ``>``, so at
+    # x = 0 the first window already counts as fully integrated, so I(0) sits
+    # *above* I of the next point.  That is a real quirk of the Fortran, the
+    # comparison above pins it, and it is why the monotonicity check starts at
+    # the second sample rather than the first.)
+    if float(np.min(c[1:])) >= 0.0:
+        assert np.all(np.diff(got[1:]) >= -1e-12)
+
+
+def test_sum_cossq_rejects_an_out_of_range_wave_count():
+    """VMEC stops on a count outside 1..20; vmex raises instead of guessing."""
+    for bad in (0.0, 21.0, -3.0):
+        with pytest.raises(ValueError, match="1..20"):
+            profiles.current("sum_cossq_s", _pad21([bad, 1.0]), None, None,
+                             np.array([0.5]))

@@ -167,8 +167,9 @@ Pressure profile
      - Meaning
    * - ``PMASS_TYPE``
      - ``power_series``
-     - one of ``power_series``, ``two_power``, ``gauss_trunc``,
-       ``cubic_spline``, ``akima_spline``, ``line_segment``, ``pedestal``,
+     - one of ``power_series``, ``two_power``, ``two_power_gs``,
+       ``two_Lorentz``, ``gauss_trunc``, ``rational``, ``cubic_spline``,
+       ``akima_spline``, ``line_segment``, ``pedestal``,
        ... (see :mod:`vmex.core.profiles`)
    * - ``AM``
      - zeros
@@ -203,10 +204,12 @@ Current and iota profiles
      - ``power_series``
      - current profile type; ``*_i`` forms prescribe :math:`I(s)`, ``*_ip``
        forms prescribe :math:`I'(s)`.  One of ``power_series``,
-       ``power_series_i``, ``two_power``, ``gauss_trunc``, ``sum_atan``,
-       ``pedestal``, and the ``cubic_spline``/``akima_spline``/
-       ``line_segment`` ``_i`` and ``_ip`` forms.  ``sum_atan`` and
-       ``pedestal`` prescribe :math:`I(s)`
+       ``power_series_i``, ``two_power``, ``two_power_gs``,
+       ``gauss_trunc``, ``sum_atan``, ``rational``, ``pedestal``,
+       ``sum_cossq_s``, ``sum_cossq_sqrts``, ``sum_cossq_s_free``, and the
+       ``cubic_spline``/``akima_spline``/``line_segment`` ``_i`` and ``_ip``
+       forms.  ``sum_atan``, ``rational``, ``pedestal`` and the
+       ``sum_cossq_*`` forms prescribe :math:`I(s)`
    * - ``AC`` / ``AC_AUX_S`` / ``AC_AUX_F``
      - zeros / —
      - current profile coefficients / spline knots and values
@@ -216,7 +219,8 @@ Current and iota profiles
    * - ``PIOTA_TYPE``
      - ``power_series``
      - iota profile type; one of ``power_series``, ``sum_atan``,
-       ``cubic_spline``, ``akima_spline``, ``line_segment``
+       ``nice_quadratic``, ``rational``, ``cubic_spline``, ``akima_spline``,
+       ``line_segment``
    * - ``AI`` / ``AI_AUX_S`` / ``AI_AUX_F``
      - zeros / —
      - iota profile coefficients / spline knots and values

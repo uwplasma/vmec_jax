@@ -455,17 +455,36 @@ def _sum_atan_iota_input():
     return dataclasses.replace(inp, ncurr=0, piota_type="sum_atan", ai=ai)
 
 
+def _two_lorentz_pressure_input():
+    """The same deck with ``pmass_type='two_Lorentz'``."""
+    inp = VmecInput.from_file(DATA / "input.li383_low_res")
+    am = np.array([1.5, 0.6, 0.8, 2.0, 1.5, 0.4, 3.0, 1.0] + [0.0] * 13)
+    return dataclasses.replace(inp, pmass_type="two_Lorentz", am=am)
+
+
+def _rational_iota_input():
+    """The same deck with a prescribed ``piota_type='rational'`` (NCURR = 0)."""
+    inp = VmecInput.from_file(DATA / "input.li383_low_res")
+    ai = np.zeros(21)
+    ai[:3] = [0.9, -0.2, 0.1]      # numerator c[0:10]
+    ai[10:13] = [1.0, 0.3, -0.15]  # denominator c[10:21]
+    return dataclasses.replace(inp, ncurr=0, piota_type="rational", ai=ai)
+
+
 @pytest.mark.parametrize(
     "name, build, fields",
     [
         ("sum_atan_current", _sum_atan_current_input,
          ("iotaf", "jcurv", "buco", "presf")),
         ("sum_atan_iota", _sum_atan_iota_input, ("iotaf", "buco", "presf")),
+        ("two_lorentz_pressure", _two_lorentz_pressure_input,
+         ("presf", "iotaf", "buco")),
+        ("rational_iota", _rational_iota_input, ("iotaf", "buco", "presf")),
     ],
 )
-def test_live_vmec2000_sum_atan_parity(pytestconfig, tmp_path, name, build,
-                                       fields):
-    """``pcurr_type='sum_atan'`` against live VMEC2000, end to end.
+def test_live_vmec2000_profile_type_parity(pytestconfig, tmp_path, name, build,
+                                           fields):
+    """Each profile parameterization against live VMEC2000, end to end.
 
     The unit test in ``tests/test_profiles.py`` pins the formula against a
     transcription of ``profile_functions.f``.  This one closes the loop
@@ -473,17 +492,18 @@ def test_live_vmec2000_sum_atan_parity(pytestconfig, tmp_path, name, build,
     so a wrong ``I(s)`` moves ``iotaf`` and ``jcurv`` rather than staying
     hidden in an unused array.
 
-    Both lanes VMEC2000 offers it for are covered: ``pcurr_type`` with
-    ``NCURR = 1``, where the current profile sets ``iota``, and ``piota_type``
-    with ``NCURR = 0``, where it is prescribed directly.  A wrong ``f(s)``
-    moves ``iotaf`` and ``jcurv`` in the first and ``iotaf`` in the second,
-    rather than staying hidden in an unused array.
+    The unit tests in ``tests/test_profiles.py`` pin each formula against a
+    transcription of ``profile_functions.f``.  These close the loop through
+    the solver, on the lane where each type is actually consumed, so a wrong
+    ``f(s)`` moves a solved profile instead of sitting in an unused array:
+    ``pcurr_type`` at ``NCURR = 1`` (the current profile sets ``iota``),
+    ``piota_type`` at ``NCURR = 0``, and ``pmass_type`` through the pressure.
 
-    Measured on li383_low_res: current lane ``iotaf`` 2.8e-14, ``jcurv``
-    1.2e-14, ``buco`` 2.2e-15, ``presf`` 1.9e-15, with
-    ``aspect``/``betatotal``/``volume_p``/``b0`` at 1e-15 or below; iota lane
-    ``iotaf`` 1.2e-16, ``buco`` 2.0e-14.  The bounds below are three orders
-    above that, so they gate a real divergence and not float64 noise.
+    Measured on li383_low_res: ``sum_atan`` current ``iotaf`` 2.8e-14,
+    ``jcurv`` 1.2e-14, ``buco`` 2.2e-15, ``presf`` 1.9e-15; ``sum_atan`` iota
+    ``iotaf`` 1.2e-16, ``buco`` 2.0e-14; ``two_Lorentz`` pressure ``presf``
+    1.4e-16, ``iotaf`` 2.9e-13, ``betatotal`` 6.8e-14.  The bounds below are
+    orders above that, so they gate a real divergence and not float64 noise.
     """
     vmec2000_dir = tmp_path / "vmec2000"
     vmex_dir = tmp_path / "vmex"
@@ -504,9 +524,16 @@ def test_live_vmec2000_sum_atan_parity(pytestconfig, tmp_path, name, build,
     actual = read_wout(vmex_dir / f"wout_{name}.nc")
     assert int(actual.ier_flag) == int(reference.ier_flag) == 0
     assert int(actual.ns) == int(reference.ns)
-    profile_type = (reference.pcurr_type if name.endswith("current")
-                    else reference.piota_type)
-    assert str(profile_type).strip().lower().startswith("sum_atan")
+    expected_type, attribute = {
+        "sum_atan_current": ("sum_atan", "pcurr_type"),
+        "sum_atan_iota": ("sum_atan", "piota_type"),
+        "two_lorentz_pressure": ("two_lorentz", "pmass_type"),
+        "rational_iota": ("rational", "piota_type"),
+    }[name]
+    # VMEC echoes the type it actually used; if it had fallen back to its
+    # power_series default the comparison below would be vacuous.
+    assert str(getattr(reference, attribute)).strip().lower().startswith(
+        expected_type)
     for field in fields:
         limit = 1.0e-11
         expected = np.asarray(getattr(reference, field), dtype=float)[1:-1]
