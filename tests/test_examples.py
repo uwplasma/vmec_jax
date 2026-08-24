@@ -91,8 +91,8 @@ def test_essos_examples_name_the_required_branch() -> None:
 
 
 def _run_example(script: Path, cwd: Path, timeout: int = 2400,
-                 args: tuple[str, ...] = ()) -> str:
-    env = dict(os.environ, VMEX_EXAMPLES_CI="1")
+                 args: tuple[str, ...] = (), **extra_env: str) -> str:
+    env = dict(os.environ, VMEX_EXAMPLES_CI="1", **extra_env)
     env.pop("JAX_DISABLE_JIT", None)
     proc = subprocess.run(
         [sys.executable, str(script), *args], cwd=cwd, env=env,
@@ -355,6 +355,36 @@ def test_free_boundary_essos_coils(tmp_path):
     assert fsq < 1e-7, f"free-boundary point should converge, fsq={fsq}"
 
 
+@pytest.mark.full  # nightly: fixed + free-boundary solve either side of the seam (~100s)
+def test_vmex_essos_workflow(tmp_path):
+    # Both interop seams in one script: vj.essos_vmec_field (equilibrium ->
+    # essos.fields.Vmec) and vj.MgridField.from_coils (ESSOS coils -> external
+    # field).  Released-ESSOS surface only, so this runs against any ESSOS.
+    pytest.importorskip("essos.coils")
+    pytest.importorskip("essos.dynamics")
+    pytest.importorskip("essos.fields")
+    out = _run_example(EXAMPLES / "vmex_essos_workflow.py", tmp_path, timeout=900)
+    assert out.count("converged = True") == 2, out
+
+    # The wout tables cross unchanged: ESSOS' to_xyz rebuilds the LCFS vmex
+    # wrote, so this is a machine-precision identity, not a tolerance.
+    transfers = [float(v) for v in re.findall(r"LCFS transfer error ([0-9.eE+-]+) m", out)]
+    assert len(transfers) == 2 and max(transfers) < 1e-12, out
+
+    # iota measured by ESSOS from a field-line trace against the iota vmex
+    # computed from force balance: an independent check of the same handoff.
+    traced = re.findall(
+        r"iota traced ([0-9.eE+-]+) .* vs wout ([0-9.eE+-]+)", out)
+    assert len(traced) == 2, out
+    for got, expected in traced:
+        assert abs(float(got) / float(expected) - 1.0) < 1e-3, out
+
+    # Coming back the other way, the tabulated coil field must reproduce
+    # direct Biot-Savart on the surface NESTOR evaluates it on.
+    tabulation = re.search(r"on the LCFS: ([0-9.eE+-]+) median", out)
+    assert tabulation is not None and float(tabulation.group(1)) < 1e-3, out
+
+
 def test_finite_beta_scan(tmp_path):
     out = _run_example(EXAMPLES / "finite_beta_scan.py", tmp_path, timeout=900)
     # rows: pres_scale  beta_tot  R_axis  Shafranov  minDMerc
@@ -441,7 +471,10 @@ _ZENODO_2205 = Path(os.environ.get(
 @pytest.mark.parametrize("case", ["QA", "QH"])
 def test_bootstrap_selfconsistent_examples(case, tmp_path):
     script = REPO / "benchmarks" / f"{case}_bootstrap_selfconsistent.py"
-    out = _run_example(script, tmp_path, timeout=1200)
+    # The guard above accepts the dataset at its default location, but the
+    # script only reads the environment variable, so pass the resolved path.
+    out = _run_example(script, tmp_path, timeout=1200,
+                       VMEX_ZENODO_2205_02914=str(_ZENODO_2205))
     m = re.search(r"final f_boot = ([0-9.eE+-]+)", out)
     assert m is not None and float(m.group(1)) < 5e-2, f"{case} f_boot: {out[-400:]}"
     assert (tmp_path / f"output_{case}_bootstrap_selfconsistent"

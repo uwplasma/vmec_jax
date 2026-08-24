@@ -159,7 +159,7 @@ $\partial F/\partial z$ is exactly nearest-neighbor, so the operator is
 (The preconditioned formulation used by the adjoint is dense in radius,
 because the 1D preconditioner's inverse is.) Measured: the warm Jacobian
 phase of the benchmark optimization step drops from 20.35 s to 0.61 s (33x;
-`docs/_static/figures/gradient_stack_speedup.png`, reproduced by
+`docs/_static/figures/gradient_stack_speedup.webp`, reproduced by
 `docs/_static/figures/sources/make_optimization_docs_figures.py`). The same
 per-dof responses $dz_j$ double as a first-order perturbation warm start for
 the optimizer's next trial solves — the DESC-style `eq.perturb` pattern —
@@ -167,7 +167,7 @@ measured 3.7x fewer total forward iterations over 20 trials (23,685 to
 6,364). How these plug into an optimization campaign is
 {doc}`/howto/optimize-a-boundary`.
 
-```{figure} /_static/figures/gradient_stack_speedup.png
+```{figure} /_static/figures/gradient_stack_speedup.webp
 :alt: measured before/after of the three gradient-stack optimizations
 :width: 100%
 
