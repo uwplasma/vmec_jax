@@ -54,10 +54,17 @@ The geometry adapter works without it.
 
 Scope notes
 -----------
-- Stellarator-symmetric states only (``lasym = False``).  The shared
-  field-line geometry (:func:`vmex.core.stability._ballooning_context`) is
-  parity-complete, so this is a lane guard, not a missing capability: it
-  lifts once the GK geometry set has an asymmetric oracle of its own.
+- Symmetric and ``lasym`` states both, through the shared parity-complete
+  field-line geometry (:func:`vmex.core.stability._surface_closures`).  Both
+  are checked against simsopt's ``vmec_fieldlines``, which carries the same
+  sine-parity families.
+- ``|B|`` here is the exact spectral field of the equilibrium geometry, while
+  ``vmec_fieldlines`` reads the wout ``bmnc`` Nyquist table.  Those differ by
+  the ``|B|`` content above the Nyquist band -- on ``li383_low_res`` the top
+  two ``m`` bands alone carry 0.34% of the table -- and the drifts take a
+  radial derivative of it, so ``gbdrift``/``cvdrift`` sit ~3% apart while
+  ``gradpar`` and the pressure term agree to 1e-3.  Neither is wrong; they are
+  different quantities, and the parity test encodes exactly that split.
 - Surfaces need ``iota != 0`` (field-line parameterization divides by iota).
 - The flux tube covers one poloidal turn ``theta in [-pi, pi)`` (the solver
   z-grid convention of ``gkx.core.grid.build_spectral_grid``); the
@@ -79,7 +86,7 @@ import jax.numpy as jnp
 from .solver import SolverRuntime, SpectralState
 from .statephysics import aspect_ratio
 from .stability import (
-    _ballooning_context, _pest_lambda, _require_symmetric, _surface_closures,
+    _ballooning_context, _pest_lambda, _surface_closures,
     _surface_tables, _theta_vmec_from_pest,
     _validate_surface_index,
 )
@@ -263,7 +270,6 @@ def gk_fieldline_geometry(
     if int(ntheta) < 8:
         raise ValueError("ntheta must be >= 8")
     ctx = _ballooning_context(state, rt)
-    _require_symmetric(ctx, "turbulence geometry")
     j = _resolve_surface(s_index, ctx["ns"])
     dtype = ctx["s"].dtype
 

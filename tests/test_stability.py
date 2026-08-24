@@ -803,14 +803,24 @@ def test_lasym_growth_rate_gradient_matches_finite_differences(lasym_finite_beta
     assert abs(float(grad)) > 0.0
 
 
-def test_symmetric_only_lanes_name_themselves(lasym_finite_beta_eq):
-    """Turbulence and Gamma_c stay guarded until each has its own lasym oracle."""
+def test_gamma_c_stays_guarded_until_it_has_its_own_lasym_evidence(
+        lasym_finite_beta_eq):
+    """Gamma_c keeps its guard; turbulence has dropped its and must not raise.
+
+    The shared field-line geometry is parity-complete, so both lanes *reach*
+    an asymmetric state.  Turbulence earns its access here by matching
+    simsopt's ``vmec_fieldlines`` on an asymmetric deck
+    (``test_gk_geometry_matches_simsopt_vmec_fieldlines``); Gamma_c's own
+    asymmetric evidence is the exact reflection identity, which lands with the
+    Gamma_c work, so it stays guarded on this branch.
+    """
     from vmex.core import gammac, turbulence
     eq = lasym_finite_beta_eq
-    for call in (lambda: turbulence.gk_fieldline_geometry(eq.state, eq.runtime),
-                 lambda: gammac.gamma_c_state(eq.state, eq.runtime)):
-        with pytest.raises(NotImplementedError, match="lasym = False"):
-            call()
+    with pytest.raises(NotImplementedError, match="lasym = False"):
+        gammac.gamma_c_state(eq.state, eq.runtime)
+    geom = turbulence.gk_fieldline_geometry(eq.state, eq.runtime, ntheta=16)
+    assert np.all(np.isfinite(np.asarray(geom["bmag"])))
+    assert float(np.min(np.asarray(geom["bmag"]))) > 0.0
 
 
 # ---------------------------------------------------------------------------
