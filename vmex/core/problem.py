@@ -593,6 +593,35 @@ class VmecProblem(FunctionProblem):
             lambda _: (jnp.asarray(0.0), jnp.zeros(n_extra_terms)),
             operand=None)
 
+    def jax_quantity_from_state(
+        self,
+        x: Array,
+        quantity: Callable[[Array, Any], Array],
+    ) -> tuple[Array, Array]:
+        """Evaluate a differentiable state quantity and return solve status.
+
+        This low-level public composition hook is intended for vector-valued
+        diagnostics whose reverse contraction is formed by the caller with
+        :func:`jax.vjp` or :func:`jax.value_and_grad`. It uses the same
+        implicit accepted-trial state as :meth:`jax_objective_from_state`, so
+        a value and its VJP cannot silently come from different equilibrium
+        materialization paths.
+
+        ``quantity(state, runtime)`` may return any fixed-shape JAX array. The
+        returned status is zero for an accepted equilibrium. Callers must not
+        use the quantity when status is nonzero; unlike scalar objectives,
+        this generic method cannot manufacture a shape-independent rejection
+        value.
+        """
+        state_runtime_status = self.metadata.get("jax_state_runtime_status")
+        if state_runtime_status is None:
+            raise AttributeError(
+                "state quantities require an implicit VMEC problem"
+            )
+        state_runtime_status = cast(Callable[..., Any], state_runtime_status)
+        state, runtime, status = state_runtime_status(x)
+        return quantity(state, runtime), status
+
     def exterior_field(
         self,
         x: Array,
@@ -605,6 +634,8 @@ class VmecProblem(FunctionProblem):
         ntheta: int = 32,
         digits: int = 6,
         levels: tuple[tuple[int, int], ...] | None = None,
+        chunk_size: int | str = "auto",
+        target_chunk_size: int | str = "auto",
     ) -> Any:
         """Return the exterior field and exact VJPs in this problem's DOFs.
 
@@ -632,7 +663,8 @@ class VmecProblem(FunctionProblem):
             external_parameters=external_parameters,
             external_field_from_parameters=external_field_from_parameters,
             external_dof_names=external_dof_names,
-            digits=digits, levels=levels, dof_names=self.dof_names)
+            digits=digits, levels=levels, chunk_size=chunk_size,
+            target_chunk_size=target_chunk_size, dof_names=self.dof_names)
 
     def interior_field(
         self, x: Array, *, newton_iterations: int = 10
