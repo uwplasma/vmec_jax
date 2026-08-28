@@ -60,6 +60,7 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
         "run_baseline.py",
         "run_freeboundary_multigrid.py",
         "run_high_mode_fft.py",
+        "polish_preconditioner.py",
         "profile_resources.py",
     ):
         proc = subprocess.run(
