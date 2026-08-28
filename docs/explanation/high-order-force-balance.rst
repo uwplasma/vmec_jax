@@ -107,9 +107,12 @@ high/low map produce ``N_R`` radial-force, ``N_Z`` coordinate, and
 ``N_\lambda`` helical-force equations.  Thus the nonlinear Jacobian is square,
 while the lambda gauge remains eliminated structurally.
 
-The low endpoint is the actual nonlinear legacy raw-force residual evaluated
-at the corrected legacy coordinates.  The stored block system's fixed row
-scales make its channels dimensionless without changing its root.  With
+The low endpoint is the nonlinear legacy raw-force defect
+``F_low(base+c)-F_low(base)`` evaluated at the corrected legacy coordinates.
+This anchors the continuation exactly at the converged discrete VMEX state
+without asking a high-order correction to remove the accepted finite legacy
+stopping defect.  The stored block system's fixed row scales make its channels
+dimensionless without changing its Jacobian.  With
 ``R_low`` and the normalized three-channel strong residual ``R_strong``, the
 implemented homotopy is exactly
 
@@ -118,11 +121,17 @@ implemented homotopy is exactly
    H(c,\alpha) = R_{low}(c)
        + \alpha\,[R_{strong}(c)-R_{low}(c)].
 
-The refined legacy state makes ``H(0,0)`` small; the continuation driver first
-solves that consistency endpoint and then advances ``alpha``.  At ``alpha=1``
+The anchored endpoint makes ``H(0,0)=0`` exactly; the continuation driver
+checks that consistency endpoint and then advances ``alpha``.  At ``alpha=1``
 the residual is independent strong force plus the coordinate equation.  This
 is a defect-correction continuation between equations, not an interpolation
 of equilibrium states and not minimization.
+
+The physical helical-force row is multiplied by ``-1`` to match the equation
+orientation of VMEC's lambda/raw-current row.  This fixed nonsingular row
+scaling cannot change the strong root.  It prevents an artificial early fold
+in the low-to-strong matrix pencil; the orientation and the remaining operator
+balance are deterministic runtime metadata.
 
 Small-problem tests explicitly assemble the Jacobian and reject unexplained
 nullspaces.  The five-surface Solovev structural gate has 24 independent

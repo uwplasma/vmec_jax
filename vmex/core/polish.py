@@ -355,7 +355,9 @@ class StrongRootRuntime:
     radial_fit: Array
     normalization_denominator: Array
     gauge_length: Array
+    strong_row_sign: Array
     strong_scale: Array
+    operator_balance: Array
     force_floor: float
 
 
@@ -366,6 +368,7 @@ class LowOrderPreconditioner:
     transfer: HighLowTransfer
     system: Any
     legacy_coordinates: SpectralState
+    legacy_defect: SpectralState
     legacy_residual: Callable[[SpectralState], SpectralState]
     factor_build_seconds: float
 
@@ -392,9 +395,21 @@ class LowOrderPreconditioner:
         candidate = self.system.project(
             jax.tree.map(jnp.add, self.legacy_coordinates, tangent)
         )
-        force = self.legacy_residual(candidate)
+        force = jax.tree.map(
+            jnp.subtract,
+            self.legacy_residual(candidate),
+            self.legacy_defect,
+        )
         scaled = self.system.pack(force) * jnp.asarray(self.system.row_scale)
         return self.system.project(self.system.unpack(scaled))
+
+    def solve_scaled(self, rhs: SpectralState) -> SpectralState:
+        """Invert a row-scaled legacy residual with the stored raw factors."""
+
+        from .implicit import _raw_block_apply
+
+        raw_packed = self.system.pack(rhs) / jnp.asarray(self.system.row_scale)
+        return _raw_block_apply(self.system, self.system.unpack(raw_packed))
 
 
 def _mode_table(m: np.ndarray, n: np.ndarray):
@@ -589,7 +604,8 @@ def _strong_residual_unscaled(vector: Array, runtime: StrongRootRuntime) -> Arra
         L_cos=zero,
         L_sin=helical_coefficients.T,
     )
-    return runtime.layout.pack(runtime.transfer.restrict(force_coefficients))
+    packed = runtime.layout.pack(runtime.transfer.restrict(force_coefficients))
+    return packed * jnp.asarray(runtime.strong_row_sign)
 
 
 @partial(jax.jit, static_argnames=("runtime",))
@@ -614,11 +630,14 @@ def make_strong_root_runtime(
     dof_mask: SpectralState,
     *,
     force_floor: float = 1.0e-30,
+    balance_iterations: int = 4,
 ) -> StrongRootRuntime:
     """Build distinct collocation/projection data and balance the strong residual."""
 
     if force_floor <= 0.0:
         raise ValueError("force_floor must be positive")
+    if balance_iterations < 1:
+        raise ValueError("balance_iterations must be positive")
     transfer = low_preconditioner.transfer
     layout = make_strong_root_layout(
         dof_mask,
@@ -675,6 +694,14 @@ def make_strong_root_runtime(
         return jnp.vdot(tangent, tangent).real
 
     gauge_length = jnp.sqrt(jnp.mean(jax.vmap(base_tangent_norm)(base_points)))
+    nr = int(layout.r_indices.size)
+    nz = int(layout.z_indices.shape[0])
+    strong_row_sign = np.ones((layout.size,), dtype=float)
+    # VMEC's lambda/raw-current row has the opposite equation orientation to
+    # the physical helical-force projection.  Orienting the row consistently
+    # leaves the strong root unchanged and avoids a spurious early fold in the
+    # low-to-strong matrix pencil.
+    strong_row_sign[nr + nz :] = -1.0
     provisional = StrongRootRuntime(
         native=native,
         transfer=transfer,
@@ -688,13 +715,41 @@ def make_strong_root_runtime(
         radial_fit=jnp.asarray(radial_fit),
         normalization_denominator=normalization_denominator,
         gauge_length=gauge_length,
+        strong_row_sign=jnp.asarray(strong_row_sign),
         strong_scale=jnp.asarray(1.0),
+        operator_balance=jnp.asarray(1.0),
         force_floor=float(force_floor),
     )
     initial = _strong_residual_unscaled(jnp.zeros((layout.size,)), provisional)
     rms = jnp.linalg.norm(initial) / np.sqrt(float(layout.size))
-    scale = jnp.maximum(rms, jnp.asarray(1.0e-12, dtype=rms.dtype))
-    return replace(provisional, strong_scale=scale)
+    base_scale = jnp.maximum(rms, jnp.asarray(1.0e-12, dtype=rms.dtype))
+    scaled = replace(provisional, strong_scale=base_scale)
+    zero = jnp.zeros((layout.size,), dtype=rms.dtype)
+
+    def preconditioned_strong(value: Array) -> Array:
+        _, response = jax.jvp(
+            lambda vector: _strong_residual_unscaled(vector, scaled) / base_scale,
+            (zero,),
+            (value,),
+        )
+        low_response = layout.unpack(response)
+        return layout.pack(low_preconditioner.solve_scaled(low_response))
+
+    direction = jnp.linspace(-0.5, 0.7, layout.size, dtype=rms.dtype)
+    direction = direction / jnp.linalg.norm(direction)
+    estimate = jnp.asarray(1.0, dtype=rms.dtype)
+    for _ in range(int(balance_iterations)):
+        response = preconditioned_strong(direction)
+        response_norm = jnp.linalg.norm(response)
+        estimate = jnp.maximum(estimate, response_norm)
+        direction = response / jnp.maximum(
+            response_norm, jnp.finfo(response_norm.dtype).tiny
+        )
+    return replace(
+        scaled,
+        strong_scale=base_scale * estimate,
+        operator_balance=estimate,
+    )
 
 
 def strong_root_rank(
@@ -741,6 +796,8 @@ def build_low_order_preconditioner(
     def legacy_residual(coordinates: SpectralState) -> SpectralState:
         return raw_residual(coordinates, params)
 
+    legacy_defect = legacy_residual(legacy_coordinates)
+
     started = perf_counter()
     system = implicit._raw_block_system(
         params,
@@ -755,6 +812,7 @@ def build_low_order_preconditioner(
         transfer,
         system,
         legacy_coordinates,
+        legacy_defect,
         legacy_residual,
         elapsed,
     )

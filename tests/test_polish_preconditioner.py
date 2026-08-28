@@ -280,15 +280,20 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
     zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
     low_endpoint = strong_root_residual(zero, runtime, 0.0)
     strong_endpoint = strong_root_residual(zero, runtime, 1.0)
-    assert float(jnp.linalg.norm(low_endpoint)) < 1.0e-8
+    np.testing.assert_array_equal(low_endpoint, 0.0)
     assert strong_endpoint.shape == zero.shape
     assert np.all(np.isfinite(np.asarray(strong_endpoint)))
-    # make_strong_root_runtime balances the initial strong residual to unit RMS.
+    # The initial force RMS is divided by the measured low-inverse stiffness.
     np.testing.assert_allclose(
         jnp.linalg.norm(strong_endpoint),
-        np.sqrt(runtime.layout.size),
+        np.sqrt(runtime.layout.size) / runtime.operator_balance,
         rtol=3.0e-13,
     )
+    assert float(runtime.operator_balance) >= 1.0
+    nr = int(runtime.layout.r_indices.size)
+    nz = int(runtime.layout.z_indices.shape[0])
+    np.testing.assert_array_equal(runtime.strong_row_sign[: nr + nz], 1.0)
+    np.testing.assert_array_equal(runtime.strong_row_sign[nr + nz :], -1.0)
 
     probe = jnp.linspace(-0.01, 0.015, runtime.layout.size)
     low_probe = strong_root_residual(probe, runtime, 0.0)
@@ -335,6 +340,8 @@ def test_strong_root_validation_branches(small_adapter, small_strong_root):
         layout.unpack(jnp.zeros((layout.size + 1,)))
     with pytest.raises(ValueError, match="force_floor"):
         make_strong_root_runtime(native, adapter, mask, force_floor=0.0)
+    with pytest.raises(ValueError, match="balance_iterations"):
+        make_strong_root_runtime(native, adapter, mask, balance_iterations=0)
     zero_mask = jax.tree.map(jnp.zeros_like, mask)
     with pytest.raises(ValueError, match="no free physical displacement"):
         make_strong_root_runtime(native, adapter, zero_mask)

@@ -141,6 +141,8 @@ def main() -> None:
         "jvp_peak_rss_increase_mib": rss_after_jvp - rss_after_residual,
         "initial_scaled_residual_norm": float(jnp.linalg.norm(initial)),
         "initial_low_residual_norm": initial_low_norm,
+        "operator_balance": float(runtime.operator_balance),
+        "strong_row_sign": np.asarray(runtime.strong_row_sign).tolist(),
         "jvp_relative_error": jvp_relative_error,
         "rank": rank,
         "rank_seconds": rank_seconds,
