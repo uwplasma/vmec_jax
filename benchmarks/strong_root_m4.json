@@ -1,0 +1,41 @@
+{
+  "case": "solovev",
+  "cold_jvp_seconds": 1.8948359999340028,
+  "cold_residual_seconds": 1.1243192499969155,
+  "condition_number": 352206.47655179485,
+  "degree": 3,
+  "free_dofs": 24,
+  "initial_low_residual_norm": 1.7169982258377784e-11,
+  "initial_scaled_residual_norm": 4.898979485566356,
+  "input_data_embedded": false,
+  "jvp_peak_rss_increase_mib": 98.75,
+  "jvp_relative_error": 1.0120249563868457e-09,
+  "largest_singular_value": 3457.202840345429,
+  "measurement_commit": "073cf54b9527630fd52144a148d0372e6c3853f3",
+  "measurement_dirty": false,
+  "mpol": 3,
+  "ns": 5,
+  "platform": "macOS-26.5.1-arm64-arm-64bit",
+  "rank": 24,
+  "rank_seconds": 2.673133875010535,
+  "repeats": 20,
+  "residual_peak_rss_increase_mib": 138.828125,
+  "runtime_build_seconds": 4.359913207939826,
+  "runtime_peak_rss_increase_mib": 232.875,
+  "smallest_singular_value": 0.009815841191202568,
+  "solve_grid": [
+    5,
+    7,
+    3
+  ],
+  "versions": {
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1",
+    "numpy": "2.5.2",
+    "python": "3.12.13",
+    "vmex": "0.7.0"
+  },
+  "vmex_module": "vmex/__init__.py",
+  "warm_jvp_median_seconds": 0.0003602084470912814,
+  "warm_residual_median_seconds": 0.00026162504218518734
+}

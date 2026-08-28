@@ -134,6 +134,13 @@ coarse case is a layout/rank test, not a polished-equilibrium accuracy claim.
 A failed rank test is a hard error; the implementation does not regularize an
 accidentally underdetermined system with a merit-function penalty.
 
+The clean-commit Apple M4 record in ``benchmarks/strong_root_m4.json`` reports
+0.262 ms median warm residual and 0.360 ms median warm JVP time over 20 repeats;
+cold compile-plus-execute times are 1.12 s and 1.89 s.  The recorded JVP error
+is ``1.0e-9`` and the runtime-build, residual, and JVP peak-RSS increments are
+reported separately.  These figures describe the structural five-surface gate
+only and are not extrapolated into a production-resolution solve claim.
+
 Low-order physics preconditioner
 --------------------------------
 
