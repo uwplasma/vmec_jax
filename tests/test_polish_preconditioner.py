@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from vmex.core import implicit
+from vmex.core import solver
 from vmex.core.input import VmecInput
 from vmex.core.polish import (
     HighOrderCorrection,
@@ -112,6 +113,49 @@ def test_transfer_forward_and_transpose_are_exact_duals(small_adapter):
     rhs_prolong = _tree_dot(low, transfer.prolong_transpose(high_bar))
     np.testing.assert_allclose(lhs_restrict, rhs_restrict, rtol=2.0e-13, atol=2.0e-13)
     np.testing.assert_allclose(lhs_prolong, rhs_prolong, rtol=2.0e-13, atol=2.0e-13)
+
+
+def test_three_dimensional_m1_projector_transposes_without_scatter_failure():
+    inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
+        mpol=3,
+        ntor=1,
+        ntheta=12,
+        nzeta=4,
+    )
+    inp = dataclasses.replace(inp, ns_array=np.asarray([5]))
+    config = implicit.make_config(inp, ftol=1.0e-8, max_iterations=1)
+    params = implicit.params_from_input(inp)
+    runtime = implicit.runtime_from_params(params, config)
+    state = solver._initial_state(runtime.setup)
+    one = jnp.ones_like(state.R_cos)
+    zero = jnp.zeros_like(one)
+    edge_free = one.at[-1].set(0.0)
+    lambda_free = one.at[0].set(0.0)
+    mask = solver.SpectralState(
+        R_cos=edge_free,
+        R_sin=zero,
+        Z_cos=zero,
+        Z_sin=edge_free,
+        L_cos=zero,
+        L_sin=lambda_free,
+    )
+    native = lift_high_order_state(state, runtime, degree=3)
+    transfer = make_high_low_transfer(
+        native,
+        runtime,
+        low_project=implicit._dof_projector(config, mask),
+    )
+    high = _random_like(transfer.zeros_high(jnp.float64), 31)
+    low_bar = _random_like(transfer.restrict(high), 32)
+    lhs = _tree_dot(transfer.restrict(high), low_bar)
+    rhs = _tree_dot(high, transfer.restrict_transpose(low_bar))
+    np.testing.assert_allclose(lhs, rhs, rtol=3.0e-13, atol=3.0e-13)
+
+    low = _random_like(low_bar, 33)
+    high_bar = _random_like(high, 34)
+    lhs = _tree_dot(transfer.prolong(low), high_bar)
+    rhs = _tree_dot(low, transfer.prolong_transpose(high_bar))
+    np.testing.assert_allclose(lhs, rhs, rtol=3.0e-13, atol=3.0e-13)
 
 
 def test_stored_block_preconditioner_reuses_factors_and_transposes(small_adapter):

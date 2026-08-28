@@ -128,9 +128,7 @@ class HighLowTransfer:
             precision=jax.lax.Precision.HIGHEST,
         )
 
-    def restrict(self, correction: HighOrderCorrection) -> SpectralState:
-        """Sample a high-order correction in internal constrained VMEX packing."""
-
+    def _restrict_unprojected(self, correction: HighOrderCorrection) -> SpectralState:
         correction = self.project_high(correction)
         scale = jnp.asarray(self.mode_scale)
         R_cos = self._sample(correction.R_cos) * scale[None, :]
@@ -150,7 +148,7 @@ class HighLowTransfer:
         lambda_scale = (
             scale[None, :] * jnp.asarray(self.phipf)[:, None] / jnp.asarray(self.lamscale)
         )
-        low = SpectralState(
+        return SpectralState(
             R_cos=R_cos,
             R_sin=R_sin,
             Z_cos=Z_cos,
@@ -158,7 +156,11 @@ class HighLowTransfer:
             L_cos=self._sample(correction.L_cos) * lambda_scale,
             L_sin=self._sample(correction.L_sin) * lambda_scale,
         )
-        return self.low_project(low)
+
+    def restrict(self, correction: HighOrderCorrection) -> SpectralState:
+        """Sample a high-order correction in internal constrained VMEX packing."""
+
+        return self.low_project(self._restrict_unprojected(correction))
 
     def _fit(self, samples: Array, inverse: Array) -> Array:
         return jnp.einsum(
@@ -168,10 +170,7 @@ class HighLowTransfer:
             precision=jax.lax.Precision.HIGHEST,
         )
 
-    def prolong(self, tangent: SpectralState) -> HighOrderCorrection:
-        """Fit a projected legacy correction in regularized spline space."""
-
-        tangent = self.low_project(tangent)
+    def _prolong_projected(self, tangent: SpectralState) -> HighOrderCorrection:
         R_cos, Z_sin, R_sin, Z_cos = m1_constrained_to_physical(
             tangent.R_cos,
             tangent.Z_sin,
@@ -197,17 +196,31 @@ class HighLowTransfer:
         )
         return self.project_high(correction)
 
+    def prolong(self, tangent: SpectralState) -> HighOrderCorrection:
+        """Fit a projected legacy correction in regularized spline space."""
+
+        return self._prolong_projected(self.low_project(tangent))
+
     def restrict_transpose(self, cotangent: SpectralState) -> HighOrderCorrection:
         """Apply the exact transpose of :meth:`restrict`."""
 
         dtype = jax.tree.leaves(cotangent)[0].dtype
-        return jax.linear_transpose(self.restrict, self.zeros_high(dtype))(cotangent)[0]
+        # The evolved-DOF projector is symmetric.  Applying it explicitly
+        # avoids transposing the m=1 indexed-update implementation, which JAX
+        # cannot lower when positive/negative mode index arrays may alias.
+        projected = self.low_project(cotangent)
+        return jax.linear_transpose(
+            self._restrict_unprojected, self.zeros_high(dtype)
+        )(projected)[0]
 
     def prolong_transpose(self, cotangent: HighOrderCorrection) -> SpectralState:
         """Apply the exact transpose of :meth:`prolong`."""
 
         dtype = jax.tree.leaves(cotangent)[0].dtype
-        return jax.linear_transpose(self.prolong, self.zeros_low(dtype))(cotangent)[0]
+        low_cotangent = jax.linear_transpose(
+            self._prolong_projected, self.zeros_low(dtype)
+        )(cotangent)[0]
+        return self.low_project(low_cotangent)
 
 
 class PreconditionerQuality(NamedTuple):
