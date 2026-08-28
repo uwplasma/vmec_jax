@@ -631,6 +631,7 @@ def make_strong_root_runtime(
     *,
     force_floor: float = 1.0e-30,
     balance_iterations: int = 4,
+    orientation_eigenpairs: int = 6,
 ) -> StrongRootRuntime:
     """Build distinct collocation/projection data and balance the strong residual."""
 
@@ -638,6 +639,8 @@ def make_strong_root_runtime(
         raise ValueError("force_floor must be positive")
     if balance_iterations < 1:
         raise ValueError("balance_iterations must be positive")
+    if orientation_eigenpairs < 1:
+        raise ValueError("orientation_eigenpairs must be positive")
     transfer = low_preconditioner.transfer
     layout = make_strong_root_layout(
         dof_mask,
@@ -694,14 +697,6 @@ def make_strong_root_runtime(
         return jnp.vdot(tangent, tangent).real
 
     gauge_length = jnp.sqrt(jnp.mean(jax.vmap(base_tangent_norm)(base_points)))
-    nr = int(layout.r_indices.size)
-    nz = int(layout.z_indices.shape[0])
-    strong_row_sign = np.ones((layout.size,), dtype=float)
-    # VMEC's lambda/raw-current row has the opposite equation orientation to
-    # the physical helical-force projection.  Orienting the row consistently
-    # leaves the strong root unchanged and avoids a spurious early fold in the
-    # low-to-strong matrix pencil.
-    strong_row_sign[nr + nz :] = -1.0
     provisional = StrongRootRuntime(
         native=native,
         transfer=transfer,
@@ -715,7 +710,7 @@ def make_strong_root_runtime(
         radial_fit=jnp.asarray(radial_fit),
         normalization_denominator=normalization_denominator,
         gauge_length=gauge_length,
-        strong_row_sign=jnp.asarray(strong_row_sign),
+        strong_row_sign=jnp.ones((layout.size,)),
         strong_scale=jnp.asarray(1.0),
         operator_balance=jnp.asarray(1.0),
         force_floor=float(force_floor),
@@ -725,6 +720,87 @@ def make_strong_root_runtime(
     base_scale = jnp.maximum(rms, jnp.asarray(1.0e-12, dtype=rms.dtype))
     scaled = replace(provisional, strong_scale=base_scale)
     zero = jnp.zeros((layout.size,), dtype=rms.dtype)
+
+    block_edges = (
+        0,
+        int(layout.r_indices.size),
+        int(layout.r_indices.size + layout.z_indices.shape[0]),
+        layout.size,
+    )
+
+    @jax.jit
+    def strong_linearized(value: Array) -> Array:
+        _, response = jax.jvp(
+            lambda vector: _strong_residual_unscaled(vector, scaled) / base_scale,
+            (zero,),
+            (value,),
+        )
+        return response
+
+    @jax.jit
+    def low_solve(value: Array) -> Array:
+        tangent = layout.unpack(value)
+        return layout.pack(low_preconditioner.solve_scaled(tangent))
+
+    # A sign change cannot alter the strong root, but it changes the real
+    # generalized spectrum of the low-to-strong pencil.  Select the three
+    # block signs that maximize its leftmost Ritz value, thereby moving folds
+    # caused only by equation orientation as close to alpha=1 as possible.
+    from itertools import product
+
+    from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, eigs
+
+    strong_linearized(zero).block_until_ready()
+    low_solve(zero).block_until_ready()
+    eigenpairs = min(int(orientation_eigenpairs), max(1, layout.size - 2))
+    dense_strong = None
+    if layout.size <= 64:
+        dense_strong = jax.jacfwd(strong_linearized)(zero)
+    initial_arnoldi = np.linspace(-0.5, 0.7, layout.size, dtype=float)
+    initial_arnoldi /= np.linalg.norm(initial_arnoldi)
+    best_score = -np.inf
+    best_row_sign = np.ones((layout.size,), dtype=float)
+    for signs in product((-1.0, 1.0), repeat=3):
+        row_sign = np.concatenate(
+            [
+                np.full((stop - start,), signs[index], dtype=float)
+                for index, (start, stop) in enumerate(
+                    zip(block_edges[:-1], block_edges[1:])
+                )
+            ]
+        )
+
+        def matvec(value: np.ndarray) -> np.ndarray:
+            response = strong_linearized(jnp.asarray(value)) * jnp.asarray(row_sign)
+            return np.asarray(jax.device_get(low_solve(response)))
+
+        if dense_strong is not None:
+            oriented = dense_strong * jnp.asarray(row_sign)[:, None]
+            matrix = jax.vmap(low_solve, in_axes=1, out_axes=1)(oriented)
+            values = np.linalg.eigvals(np.asarray(jax.device_get(matrix)))
+        else:
+            operator = LinearOperator(
+                (layout.size, layout.size), matvec=matvec, dtype=np.float64
+            )
+            try:
+                values = eigs(
+                    operator,
+                    k=eigenpairs,
+                    which="SR",
+                    v0=initial_arnoldi,
+                    maxiter=max(100, 2 * layout.size),
+                    tol=1.0e-7,
+                    return_eigenvectors=False,
+                )
+            except ArpackNoConvergence as error:
+                values = error.eigenvalues
+        if values.size:
+            score = float(np.min(np.real(values)))
+            if score > best_score:
+                best_score = score
+                best_row_sign = row_sign
+    strong_row_sign = jnp.asarray(best_row_sign, dtype=rms.dtype)
+    scaled = replace(scaled, strong_row_sign=strong_row_sign)
 
     def preconditioned_strong(value: Array) -> Array:
         _, response = jax.jvp(

@@ -292,8 +292,13 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
     assert float(runtime.operator_balance) >= 1.0
     nr = int(runtime.layout.r_indices.size)
     nz = int(runtime.layout.z_indices.shape[0])
-    np.testing.assert_array_equal(runtime.strong_row_sign[: nr + nz], 1.0)
-    np.testing.assert_array_equal(runtime.strong_row_sign[nr + nz :], -1.0)
+    for block in (
+        runtime.strong_row_sign[:nr],
+        runtime.strong_row_sign[nr : nr + nz],
+        runtime.strong_row_sign[nr + nz :],
+    ):
+        assert np.unique(np.asarray(block)).size == 1
+        np.testing.assert_array_equal(jnp.abs(block), 1.0)
 
     probe = jnp.linspace(-0.01, 0.015, runtime.layout.size)
     low_probe = strong_root_residual(probe, runtime, 0.0)
@@ -342,6 +347,8 @@ def test_strong_root_validation_branches(small_adapter, small_strong_root):
         make_strong_root_runtime(native, adapter, mask, force_floor=0.0)
     with pytest.raises(ValueError, match="balance_iterations"):
         make_strong_root_runtime(native, adapter, mask, balance_iterations=0)
+    with pytest.raises(ValueError, match="orientation_eigenpairs"):
+        make_strong_root_runtime(native, adapter, mask, orientation_eigenpairs=0)
     zero_mask = jax.tree.map(jnp.zeros_like, mask)
     with pytest.raises(ValueError, match="no free physical displacement"):
         make_strong_root_runtime(native, adapter, zero_mask)

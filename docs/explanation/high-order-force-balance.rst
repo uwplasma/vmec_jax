@@ -127,11 +127,13 @@ the residual is independent strong force plus the coordinate equation.  This
 is a defect-correction continuation between equations, not an interpolation
 of equilibrium states and not minimization.
 
-The physical helical-force row is multiplied by ``-1`` to match the equation
-orientation of VMEC's lambda/raw-current row.  This fixed nonsingular row
-scaling cannot change the strong root.  It prevents an artificial early fold
-in the low-to-strong matrix pencil; the orientation and the remaining operator
-balance are deterministic runtime metadata.
+The signs of the radial, coordinate, and helical equation blocks are selected
+from the eight possibilities using a bounded matrix-free Arnoldi diagnostic of
+the low-preconditioned strong Jacobian at the lifted state.  The deterministic
+choice maximizes the leftmost Ritz value.  This fixed nonsingular row scaling
+cannot change the strong root, but prevents artificial early folds caused only
+by inconsistent equation orientation.  The selected signs and remaining
+operator balance are runtime metadata.
 
 Small-problem tests explicitly assemble the Jacobian and reject unexplained
 nullspaces.  The five-surface Solovev structural gate has 24 independent
