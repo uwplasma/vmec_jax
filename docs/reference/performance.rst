@@ -9,6 +9,53 @@ matrix, ``benchmarks/run_gpu_matrix.py``; 2x NVIDIA RTX A4000, jax 0.6.2
 cuda12) — and from the end-to-end parity suite in
 ``tests/test_parity_breadth.py``.
 
+High-order strong-force kernel
+------------------------------
+
+The independent continuum oracle is fused and cached by radial basis and
+validation-grid shape.  ``benchmarks/strong_force.py`` measures pointwise
+``J x B - grad(p)`` and its reverse-mode coefficient gradient.  The checked-in
+``benchmarks/strong_force_m4.json`` run disabled the persistent compilation
+cache, used float64, five Fourier modes, eight radial elements, 64 points, and
+20 warm repeats on an Apple M4:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 9 14 14 14 14 14
+
+   * - degree
+     - cold force [s]
+     - warm force [ms]
+     - cold grad [s]
+     - warm grad [ms]
+     - second-radial-derivative L2 error
+   * - 3
+     - 1.43
+     - 0.290
+     - 1.84
+     - 0.552
+     - 2.87e-3
+   * - **5**
+     - 2.12
+     - 0.458
+     - 2.63
+     - 0.853
+     - **7.73e-7**
+   * - 7
+     - 2.90
+     - 0.720
+     - 3.43
+     - 1.23
+     - 6.09e-10
+
+The accuracy column reconstructs ``rho^2 exp(s)`` and compares its second
+``rho`` derivative at 2001 points.  Degree 5 reduces that error by about 3700x
+relative to degree 3 while retaining sub-millisecond warm force and gradient
+evaluation.  Degree 7 is available for p-refinement and certification, but its
+clean cold compilation used about 142 MiB more incremental peak RSS than
+degree 5.  This measured accuracy/runtime/memory compromise is why degree 5 is
+the production default.
+
 Benchmark suite (CPU, ns = 201)
 -------------------------------
 

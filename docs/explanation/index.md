@@ -10,6 +10,7 @@ in any order; each page opens with what it covers.
 
 variational-problem
 spectral-representation
+high-order-force-balance
 iteration
 preconditioners
 multigrid
