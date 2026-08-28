@@ -12,6 +12,12 @@ Profiles
 .. automodule:: vmex.core.profiles
    :members:
 
+Radial basis and axis regularity
+--------------------------------
+
+.. automodule:: vmex.core.radial_basis
+   :members:
+
 Spectral representation and physics kernels
 -------------------------------------------
 
