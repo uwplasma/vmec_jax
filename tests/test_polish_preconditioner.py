@@ -17,10 +17,15 @@ from vmex.core.polish import (
     HighOrderCorrection,
     PreconditionerRefreshPolicy,
     PreconditionerSnapshot,
+    apply_high_order_correction,
     build_low_order_preconditioner,
     make_high_low_transfer,
+    make_strong_root_layout,
+    make_strong_root_runtime,
     preconditioner_quality,
     preconditioner_refresh_decision,
+    strong_root_rank,
+    strong_root_residual,
 )
 from vmex.core.strong_force import lift_high_order_state
 
@@ -77,6 +82,12 @@ def small_adapter():
         probe_chunk_size=4,
     )
     return native, runtime, state, mask, adapter
+
+
+@pytest.fixture(scope="module")
+def small_strong_root(small_adapter):
+    native, _, _, mask, adapter = small_adapter
+    return make_strong_root_runtime(native, adapter, mask)
 
 
 def test_transfer_preserves_constraints_and_roundtrips_range(small_adapter):
@@ -150,6 +161,17 @@ def test_three_dimensional_m1_projector_transposes_without_scatter_failure():
     lhs = _tree_dot(transfer.restrict(high), low_bar)
     rhs = _tree_dot(high, transfer.restrict_transpose(low_bar))
     np.testing.assert_allclose(lhs, rhs, rtol=3.0e-13, atol=3.0e-13)
+
+    layout = make_strong_root_layout(mask, native, lconm1=True)
+    # Every active constrained +/-n pair contributes one, not two, Z dofs.
+    active_z = int(np.count_nonzero(np.asarray(mask.Z_sin)))
+    active_l = int(np.count_nonzero(np.asarray(mask.L_sin)))
+    assert layout.size < (
+        int(np.count_nonzero(np.asarray(mask.R_cos))) + active_z + active_l
+    )
+    vector = jax.random.normal(jax.random.PRNGKey(35), (layout.size,))
+    tangent = layout.unpack(vector)
+    np.testing.assert_allclose(layout.pack(tangent), vector, rtol=2.0e-15, atol=2.0e-15)
 
     low = _random_like(low_bar, 33)
     high_bar = _random_like(high, 34)
@@ -251,3 +273,80 @@ def test_factor_refresh_policy_reports_every_trigger():
 def test_factor_refresh_policy_rejects_invalid_thresholds(field, value, message):
     with pytest.raises(ValueError, match=message):
         PreconditionerRefreshPolicy(**{field: value})
+
+
+def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
+    runtime = small_strong_root
+    zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
+    low_endpoint = strong_root_residual(zero, runtime, 0.0)
+    strong_endpoint = strong_root_residual(zero, runtime, 1.0)
+    assert float(jnp.linalg.norm(low_endpoint)) < 1.0e-8
+    assert strong_endpoint.shape == zero.shape
+    assert np.all(np.isfinite(np.asarray(strong_endpoint)))
+    # make_strong_root_runtime balances the initial strong residual to unit RMS.
+    np.testing.assert_allclose(
+        jnp.linalg.norm(strong_endpoint),
+        np.sqrt(runtime.layout.size),
+        rtol=3.0e-13,
+    )
+
+    probe = jnp.linspace(-0.01, 0.015, runtime.layout.size)
+    low_probe = strong_root_residual(probe, runtime, 0.0)
+    strong_probe = strong_root_residual(probe, runtime, 1.0)
+    alpha = 0.37
+    np.testing.assert_allclose(
+        strong_root_residual(probe, runtime, alpha),
+        low_probe + alpha * (strong_probe - low_probe),
+        rtol=2.0e-13,
+        atol=2.0e-13,
+    )
+
+    direction = jnp.linspace(-0.2, 0.3, runtime.layout.size)
+    _, tangent = jax.jvp(
+        lambda value: strong_root_residual(value, runtime, 1.0),
+        (zero,),
+        (direction,),
+    )
+    step = 2.0e-5
+    finite_difference = (
+        strong_root_residual(step * direction, runtime, 1.0)
+        - strong_root_residual(-step * direction, runtime, 1.0)
+    ) / (2.0 * step)
+    np.testing.assert_allclose(tangent, finite_difference, rtol=2.0e-6, atol=2.0e-7)
+
+    correction = runtime.transfer.prolong(runtime.layout.unpack(0.01 * direction))
+    corrected = apply_high_order_correction(runtime.native, correction)
+    for name in ("R_cos", "R_sin", "Z_cos", "Z_sin"):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(corrected, name)[:, -1]),
+            np.asarray(getattr(runtime.native, name)[:, -1]),
+        )
+    assert corrected.source.endswith("strong-root correction")
+
+    rank, singular_values = strong_root_rank(runtime, relative_tolerance=1.0e-8)
+    assert rank == runtime.layout.size
+    assert float(singular_values[-1]) > 0.0
+
+
+def test_strong_root_validation_branches(small_adapter, small_strong_root):
+    native, _, _, mask, adapter = small_adapter
+    layout = small_strong_root.layout
+    with pytest.raises(ValueError, match="free vector"):
+        layout.unpack(jnp.zeros((layout.size + 1,)))
+    with pytest.raises(ValueError, match="force_floor"):
+        make_strong_root_runtime(native, adapter, mask, force_floor=0.0)
+    zero_mask = jax.tree.map(jnp.zeros_like, mask)
+    with pytest.raises(ValueError, match="no free physical displacement"):
+        make_strong_root_runtime(native, adapter, zero_mask)
+    mismatched = dataclasses.replace(mask, Z_sin=mask.Z_sin[:, :-1])
+    with pytest.raises(ValueError, match="layout must match"):
+        make_strong_root_layout(mismatched, native)
+    with pytest.raises(ValueError, match="relative_tolerance"):
+        strong_root_rank(small_strong_root, relative_tolerance=0.0)
+    rank, values = strong_root_rank(
+        small_strong_root,
+        jnp.zeros((layout.size,)),
+        relative_tolerance=1.0e-8,
+    )
+    assert rank == layout.size
+    assert values.shape == (layout.size,)
