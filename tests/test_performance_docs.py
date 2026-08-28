@@ -60,6 +60,7 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
         "run_baseline.py",
         "run_freeboundary_multigrid.py",
         "run_high_mode_fft.py",
+        "polish_preconditioner.py",
         "profile_resources.py",
     ):
         proc = subprocess.run(
@@ -100,6 +101,23 @@ def test_benchmark_artifacts_disclose_redacted_provenance() -> None:
         encoded = json.dumps(provenance)
         assert "/Users/" not in encoded
         assert "/home/" not in encoded
+
+
+def test_polish_preconditioner_artifact_is_clean_and_certified() -> None:
+    artifact = json.loads(
+        (ROOT / "benchmarks" / "polish_preconditioner_m4.json").read_text()
+    )
+    assert artifact["schema"] == "vmex.polish-preconditioner-benchmark/1"
+    assert re.fullmatch(r"[0-9a-f]{40}", artifact["measurement_commit"])
+    assert artifact["measurement_dirty"] is False
+    assert artifact["persistent_compilation_cache"] is False
+    assert len(artifact["cases"]) == 3
+    for case in artifact["cases"]:
+        assert case["warm_forward_median_seconds"] < 1.0e-3
+        assert case["warm_transpose_median_seconds"] < 1.0e-3
+        assert case["transfer_roundtrip_relative_residual"] < 2.0e-12
+        assert case["preconditioner_duality_relative_error"] < 2.0e-12
+        assert case["low_block_relative_residual"] < 1.0e-10
 
 
 def test_committed_reports_do_not_expose_personal_paths() -> None:

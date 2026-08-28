@@ -24,6 +24,12 @@ High-order reconstruction and force certificate
 .. automodule:: vmex.core.strong_force
    :members:
 
+High-order correction transfer and preconditioner
+-------------------------------------------------
+
+.. automodule:: vmex.core.polish
+   :members:
+
 Spectral representation and physics kernels
 -------------------------------------------
 

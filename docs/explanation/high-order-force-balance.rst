@@ -104,3 +104,36 @@ penalty.
 Continuation then connects the converged legacy root to this square strong
 root.  The low-order operator remains the preconditioner/coarse model, and the
 independent certificate above is never used as the solve residual.
+
+Low-order physics preconditioner
+--------------------------------
+
+The first high-order preconditioner reuses the exact nearest-neighbour
+raw-force block linearization from the implicit tangent/adjoint path.  For a
+high-order residual ``r_H``, :mod:`vmex.core.polish` applies
+
+.. math::
+
+   P_H r_H = T_{LH} A_L^{-1} T_{HL} r_H,
+
+where ``T_HL`` samples every regularized spline mode on the VMEX full mesh,
+restores VMEX Fourier normalization and the internal ``m=1`` packing, and
+projects onto the evolved legacy degrees of freedom.  ``T_LH`` fits the
+regularized coefficients back to the high-order basis.  Its R/Z fit has a
+structurally zero terminal coefficient, so a correction cannot move the fixed
+boundary.  Symmetry zeros and the lambda gauge are also eliminated rather
+than penalized.
+
+The raw-force factors are built once and stored.  Forward and transpose
+applications use the same SOLVAX block-Thomas factors; the transpose path is
+the algebraic transpose of the entire transfer--solve--transfer composition,
+not merely a second approximate inverse.  Tests certify both transfer
+dualities and the complete preconditioner duality.  A quality monitor reports
+the true relative residual ``||A P r-r||/||r||`` on fixed probes, allowing the
+nonlinear driver to refresh factors only after measured degradation.
+
+This level contains the dominant legacy radial physics but not the full
+high-order angular coupling.  It is a right preconditioner, not the polishing
+operator, and it never assembles a dense high-order Jacobian.  The subsequent
+p-level hierarchy may wrap it as the coarse solve without changing this
+contract.
