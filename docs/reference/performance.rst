@@ -56,6 +56,60 @@ clean cold compilation used about 142 MiB more incremental peak RSS than
 degree 5.  This measured accuracy/runtime/memory compromise is why degree 5 is
 the production default.
 
+High-order low-physics preconditioner
+-------------------------------------
+
+``benchmarks/polish_preconditioner.py`` measures the high-to-low transfer,
+one stored exact raw-force block factor, and forward/transpose high-order
+applications.  The committed ``benchmarks/polish_preconditioner_m4.json``
+disabled the persistent compilation cache, used float64 and 20 warm repeats,
+and records both accuracy and peak process RSS:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 10 10 14 14 14 14 14
+
+   * - ns
+     - mpol
+     - ntor
+     - factor [s]
+     - cold forward [ms]
+     - warm forward [ms]
+     - warm transpose [ms]
+     - factor peak RSS [MiB]
+   * - 5
+     - 3
+     - 0
+     - 4.61
+     - 98.1
+     - 0.0274
+     - 0.0269
+     - 193
+   * - 7
+     - 4
+     - 0
+     - 4.44
+     - 121
+     - 0.0289
+     - 0.0291
+     - 201
+   * - 5
+     - 3
+     - 1
+     - 5.58
+     - 159
+     - 0.0306
+     - 0.0336
+     - 217
+
+Across these small structural cases, the transfer round trip is below
+``1.2e-15``, forward/transpose duality below ``2.6e-15``, and the factored
+low-block residual below ``4.8e-12``.  Factor construction includes JAX
+assembly/compilation and dominates a first use; its factors are therefore
+retained across Krylov steps and continuation stages until the documented
+quality policy requests a refresh.  The table is a reproducibility and
+overhead gate, not a production-resolution scaling claim.
+
 Benchmark suite (CPU, ns = 201)
 -------------------------------
 
