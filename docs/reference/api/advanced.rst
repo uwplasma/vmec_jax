@@ -18,6 +18,12 @@ Radial basis and axis regularity
 .. automodule:: vmex.core.radial_basis
    :members:
 
+High-order reconstruction and force certificate
+------------------------------------------------
+
+.. automodule:: vmex.core.strong_force
+   :members:
+
 Spectral representation and physics kernels
 -------------------------------------------
 

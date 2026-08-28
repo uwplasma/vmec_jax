@@ -14,6 +14,9 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.restart.state_from_wout` /
   :func:`~vmex.core.restart.restart_state` — hot restart from any wout
   (also ``solve*(..., restart_from=...)``)
+- :class:`~vmex.core.strong_force.HighOrderEquilibriumState` /
+  :func:`~vmex.core.strong_force.certify_strong_force` — axis-regular
+  continuous reconstruction and independent strong-force certificate
 - :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
 - :func:`~vmex.core.plotting.plot_optimization_objects` — surfaces and coils
 - :func:`~vmex.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
@@ -144,6 +147,18 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     # hot restart
     "restart_state": (".core.restart", "restart_state"),
     "state_from_wout": (".core.restart", "state_from_wout"),
+    # high-order reconstruction and independent strong-force certificate
+    "HighOrderEquilibriumState": (
+        ".core.strong_force", "HighOrderEquilibriumState"),
+    "StrongForceReport": (".core.strong_force", "StrongForceReport"),
+    "StrongForceSamples": (".core.strong_force", "StrongForceSamples"),
+    "certify_strong_force": (".core.strong_force", "certify_strong_force"),
+    "evaluate_strong_force": (".core.strong_force", "evaluate_strong_force"),
+    "high_order_state_from_wout": (
+        ".core.strong_force", "high_order_state_from_wout"),
+    "lift_high_order_state": (".core.strong_force", "lift_high_order_state"),
+    "plot_strong_force_report": (
+        ".core.strong_force", "plot_strong_force_report"),
     # plotting + Boozer
     "plot_wout": (".core.plotting", "plot_wout"),
     "plot_boozmn": (".core.plotting", "plot_boozmn"),
