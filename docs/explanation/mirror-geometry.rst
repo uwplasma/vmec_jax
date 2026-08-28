@@ -589,13 +589,17 @@ finite-beta solution or ellipticity prediction.
 Native spline basis status
 --------------------------
 
-``vmex.mirror.splines.CubicBSplineBasis`` supplies the longitudinal
-basis. Open mirrors use clamped knots, exact endpoint values, Gauss-Legendre
-quadrature on every nonzero span, and exact Boehm knot insertion. Closed
-hybrids use folded uniform periodic cubic splines and exact dyadic refinement.
-Evaluation and two derivatives are JAX operations. Tests match SciPy,
-reproduce cubics, preserve open and periodic curves under refinement, verify
-partition of unity and C2 closure, and check JVP/VJP actions.
+``vmex.mirror.splines.CubicBSplineBasis`` is the compatibility name for the
+shared :class:`vmex.core.radial_basis.BSplineBasis`. Open mirrors use clamped
+knots, exact endpoint values, Gauss-Legendre quadrature on every nonzero span,
+and exact Boehm knot insertion. Closed hybrids use folded uniform periodic
+splines and exact dyadic refinement. The default remains cubic, so existing
+mirror results and coefficient conventions are unchanged; the shared basis
+also supports odd degrees 5 and 7 for high-order radial force-balance work.
+Evaluation, two derivatives, coefficient transfer, and its transpose are JAX
+operations. Tests match SciPy, reproduce polynomials through the active
+degree, preserve open and periodic curves under refinement, verify partition
+of unity and periodic closure, and check JVP/VJP actions.
 
 ``SplineMirrorState`` and ``SplineMirrorBoundary`` store geometry and stream
 function coefficients rather than sampled values. ``SplineMirrorDiscretization``
