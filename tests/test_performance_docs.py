@@ -165,6 +165,34 @@ def test_strong_projection_artifacts_pin_resolution_and_blocking_diagnosis() -> 
     ]["normalized_l2"]
 
 
+def test_collocation_polish_artifact_is_independently_certified() -> None:
+    artifact = json.loads(
+        (
+            ROOT
+            / "benchmarks"
+            / "strong_polish_solovev_collocation_d3_m5_m4.json"
+        ).read_text()
+    )
+    report = artifact["polish_report"]
+    final = artifact["final_certificate"]
+    assert artifact["measurement_dirty"] is False
+    assert artifact["collocation_least_squares"] is True
+    assert artifact["degree"] == 3
+    assert report["converged"] is True
+    assert report["termination_reason"] == "independently-certified"
+    assert final["normalized_l2"] <= artifact["validation_tolerance"]
+    assert final["radial_refinement"] <= artifact[
+        "radial_refinement_tolerance"
+    ]
+    assert report["minimum_signed_jacobian"] > 0.0
+    assert report["nonlinear_iterations"] == report["residual_evaluations"]
+    assert len(final["radial_profile"]["rho"]) == len(
+        final["radial_profile"]["flux_surface_average_force_density"]
+    )
+    assert artifact["total_seconds"] < 60.0
+    assert artifact["total_peak_rss_increase_mib"] < 3072.0
+
+
 def test_committed_reports_do_not_expose_personal_paths() -> None:
     """Release-facing text must remain portable between contributors."""
     text_suffixes = {".json", ".md", ".py", ".rst", ".toml"}
