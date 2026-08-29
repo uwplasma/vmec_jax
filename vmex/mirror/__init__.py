@@ -29,6 +29,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "splice_straight_legs": (".splines", "splice_straight_legs"),
     "QIMirrorSplice": (".splines", "QIMirrorSplice"),
     "trace_closed_field_line": (".splines", "trace_closed_field_line"),
+    "gk_closed_fieldline_geometry": (
+        ".turbulence",
+        "gk_closed_fieldline_geometry",
+    ),
     "solve_fixed_boundary": (".splines", "solve_fixed_boundary"),
     "solve_fixed_boundary_from_radius": (
         ".splines",

@@ -1,0 +1,112 @@
+"""Closed-mirror geometry contract for local gyrokinetic solvers."""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+jax = pytest.importorskip("jax")
+jax.config.update("jax_enable_x64", True)
+import jax.numpy as jnp  # noqa: E402
+
+from vmex.mirror import (  # noqa: E402
+    MirrorResolution,
+    build_stellarator_mirror_hybrid,
+    gk_closed_fieldline_geometry,
+)
+from vmex.mirror.model import MirrorState  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def closed_mirror():
+    resolution = MirrorResolution(ns=5, mpol=4, nxi=4)
+    setup = build_stellarator_mirror_hybrid(
+        resolution,
+        coefficient_count=16,
+        straight_length=4.0,
+        return_radius=2.0,
+        semi_major=0.4,
+        semi_minor=0.3,
+        section_turns=0,
+        axial_flux_derivative=0.02,
+        quadrature_order=3,
+    )
+    return setup, setup.discretization.evaluate_state(setup.initial_state)
+
+
+def test_closed_mirror_contract_is_periodic_equal_arc_and_positive(closed_mirror) -> None:
+    setup, state = closed_mirror
+    mapping = gk_closed_fieldline_geometry(
+        state,
+        setup.discretization,
+        setup.axis,
+        axial_flux_derivative=0.02,
+        ntheta=32,
+        arc_oversample=8,
+    )
+
+    for name in (
+        "theta",
+        "gradpar",
+        "bmag",
+        "bgrad",
+        "gds2",
+        "gds21",
+        "gds22",
+        "cvdrift",
+        "gbdrift",
+        "cvdrift0",
+        "gbdrift0",
+    ):
+        values = np.asarray(mapping[name])
+        assert values.shape == (32,)
+        assert np.all(np.isfinite(values))
+
+    np.testing.assert_allclose(mapping["gradpar"], mapping["gradpar"][0], rtol=0.0, atol=0.0)
+    metric_determinant = np.asarray(mapping["gds2"]) * np.asarray(mapping["gds22"]) - np.asarray(mapping["gds21"]) ** 2
+    assert np.min(metric_determinant) > 0.0
+    assert np.max(mapping["bmag"]) / np.min(mapping["bmag"]) > 1.5
+    assert abs(float(mapping["vmex_mirror"]["closure_residual"])) < 1.0e-12
+    assert mapping["s_hat"] == 0.0
+
+    # Independent periodic spectral derivative of the emitted field strength.
+    modes = jnp.fft.fftfreq(32, d=1.0 / 32)
+    d_log_b_dz = jnp.fft.ifft(1j * modes * jnp.fft.fft(jnp.log(mapping["bmag"]))).real
+    reconstructed = mapping["gradpar"] * d_log_b_dz
+    np.testing.assert_allclose(mapping["bgrad"], reconstructed, rtol=6.0e-2, atol=2.0e-3)
+
+
+def test_geometry_directional_derivative_matches_centered_difference(closed_mirror) -> None:
+    setup, state = closed_mirror
+
+    def objective(scale):
+        scaled = MirrorState(state.radius_scale * scale, state.lambda_stream)
+        mapping = gk_closed_fieldline_geometry(
+            scaled,
+            setup.discretization,
+            setup.axis,
+            axial_flux_derivative=0.02,
+            ntheta=8,
+            arc_oversample=2,
+        )
+        return jnp.mean(mapping["bmag"] ** 2)
+
+    derivative = jax.grad(objective)(1.0)
+    step = 1.0e-4
+    finite_difference = (objective(1.0 + step) - objective(1.0 - step)) / (2.0 * step)
+    assert np.isfinite(float(derivative))
+    np.testing.assert_allclose(derivative, finite_difference, rtol=2.0e-5, atol=2.0e-8)
+
+
+def test_nonclosing_field_line_is_rejected(closed_mirror) -> None:
+    setup, state = closed_mirror
+    with pytest.raises(ValueError, match="does not close"):
+        gk_closed_fieldline_geometry(
+            state,
+            setup.discretization,
+            setup.axis,
+            axial_flux_derivative=0.02,
+            current_derivative=0.002,
+            ntheta=8,
+            arc_oversample=2,
+        )
