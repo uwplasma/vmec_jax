@@ -54,8 +54,17 @@ The geometry adapter works without it.
 
 Scope notes
 -----------
-- Stellarator-symmetric states only (``lasym = False``), inherited from
-  :func:`vmex.core.stability._ballooning_context`.
+- Symmetric and ``lasym`` states both, through the shared parity-complete
+  field-line geometry (:func:`vmex.core.stability._surface_closures`).  Both
+  are checked against simsopt's ``vmec_fieldlines``, which carries the same
+  sine-parity families.
+- ``|B|`` here is the exact spectral field of the equilibrium geometry, while
+  ``vmec_fieldlines`` reads the wout ``bmnc`` Nyquist table.  Those differ by
+  the ``|B|`` content above the Nyquist band -- on ``li383_low_res`` the top
+  two ``m`` bands alone carry 0.34% of the table -- and the drifts take a
+  radial derivative of it, so ``gbdrift``/``cvdrift`` sit ~3% apart while
+  ``gradpar`` and the pressure term agree to 1e-3.  Neither is wrong; they are
+  different quantities, and the parity test encodes exactly that split.
 - Surfaces need ``iota != 0`` (field-line parameterization divides by iota).
 - The flux tube covers one poloidal turn ``theta in [-pi, pi)`` (the solver
   z-grid convention of ``gkx.core.grid.build_spectral_grid``); the
@@ -75,8 +84,10 @@ import jax
 import jax.numpy as jnp
 
 from .solver import SolverRuntime, SpectralState
+from .statephysics import aspect_ratio
 from .stability import (
-    _ballooning_context, _parabola, _theta_vmec_from_pest,
+    _ballooning_context, _pest_lambda, _surface_closures,
+    _surface_tables, _theta_vmec_from_pest,
     _validate_surface_index,
 )
 
@@ -137,49 +148,24 @@ def _gkx():
 # ---------------------------------------------------------------------------
 
 
-def _make_gk_point_fn(m: Array, xn: Array, rtab: Array, ztab: Array,
-                      ltab: Array, iota: Array, diota: Array, phipf_j: Array):
+def _make_gk_point_fn(m: Array, xn: Array, tabs: dict, iota: Array,
+                      diota: Array, phipf_j: Array):
     """Point-evaluation closure for one flux surface (GK geometry set).
 
-    Same spectral machinery as :func:`vmex.core.stability._make_point_fn`
-    (radial parabola tables, cylindrical position via trig sums, covariant/
-    dual bases and ``nabla |B|`` from JAX AD), returning the extended tuple
+    Built on :func:`vmex.core.stability._surface_closures`, so the sine-parity
+    spectra of an asymmetric state reach this lane from one implementation.
+    Returns at ``q = (t, theta, phi)`` with ``t = s - s_j`` (evaluated at
+    ``t = 0``), and ``phi_rel = phi - zeta0`` carrying the secular shear term
+    of ``grad alpha``, the tuple
 
     ``(|B|, B^phi, |grad alpha|^2, grad alpha . grad s, |grad s|^2,
-    B x grad|B| . grad alpha, B x grad|B| . grad s, B . grad|B|)``
-
-    at ``q = (t, theta, phi)`` with ``t = s - s_j`` (evaluated at ``t = 0``)
-    and ``phi_rel = phi - zeta0`` carrying the secular shear term of
-    ``grad alpha``.
+    B x grad|B| . grad alpha, B x grad|B| . grad s, B . grad|B|)``.
     """
-
-    def coeffs(tab: Array, t: Array) -> Array:
-        return tab[0] + t * tab[1] + (t * t) * tab[2]
-
-    def lam_fn(q: Array) -> Array:
-        t, th, ph = q[0], q[1], q[2]
-        return coeffs(ltab, t) @ jnp.sin(th * m - ph * xn)
-
-    def pos_fn(q: Array) -> Array:
-        t, th, ph = q[0], q[1], q[2]
-        ang = th * m - ph * xn
-        R = coeffs(rtab, t) @ jnp.cos(ang)
-        Z = coeffs(ztab, t) @ jnp.sin(ang)
-        return jnp.array([R * jnp.cos(ph), R * jnp.sin(ph), Z])
-
-    def b_vector(q: Array) -> Array:
-        J = jax.jacfwd(pos_fn)(q)                     # columns: e_s, e_th, e_ph
-        sqrt_g = jnp.linalg.det(J)
-        lam_g = jax.grad(lam_fn)(q)                   # (lam_s, lam_th, lam_ph)
-        iota_t = iota + diota * q[0]
-        return phipf_j * ((iota_t - lam_g[2]) * J[:, 1]
-                          + (1.0 + lam_g[1]) * J[:, 2]) / sqrt_g
-
-    def modb_fn(q: Array) -> Array:
-        return jnp.linalg.norm(b_vector(q))
+    pos_fn, lam_fn, _, modb_fn, _ = _surface_closures(
+        m, xn, tabs, iota, diota, phipf_j)
 
     def point(q: Array, phi_rel: Array):
-        J = jax.jacfwd(pos_fn)(q)
+        J = jax.jacfwd(pos_fn)(q)                     # columns: e_s, e_th, e_ph
         sqrt_g = jnp.linalg.det(J)
         dual = jnp.linalg.inv(J)                      # rows: grad s, grad th, grad ph
         lam_g = jax.grad(lam_fn)(q)
@@ -217,17 +203,13 @@ def _line_arrays(ctx: dict, j: int, alpha: float, zeta0: float, x: Array):
     hs = ctx["hs"]
     iotas = ctx["iotas"]
     iota = 0.5 * (iotas[j] + iotas[j + 1])
-    point = _make_gk_point_fn(
-        ctx["m"], ctx["xn"],
-        _parabola(ctx["rmnc"], j, hs),
-        _parabola(ctx["zmns"], j, hs),
-        _parabola(ctx["lmns"], j, hs),
-        iota, (iotas[j + 1] - iotas[j]) / hs, ctx["phipf"][j],
-    )
+    tabs = _surface_tables(ctx, j)
+    point = _make_gk_point_fn(ctx["m"], ctx["xn"], tabs, iota,
+                              (iotas[j + 1] - iotas[j]) / hs, ctx["phipf"][j])
     theta_star = alpha + x
     phi = zeta0 + x / iota                 # field line: theta* = alpha + iota (phi - zeta0)
-    lmns0 = _parabola(ctx["lmns"], j, hs)[0]
-    theta_v = _theta_vmec_from_pest(theta_star, phi, lmns0, ctx["m"], ctx["xn"])
+    lmns0, lmnc0 = _pest_lambda(tabs)
+    theta_v = _theta_vmec_from_pest(theta_star, phi, lmns0, ctx["m"], ctx["xn"], lmnc0)
     q = jnp.stack([jnp.zeros_like(theta_v), theta_v, phi], axis=-1)
     return jax.vmap(point)(q, phi - zeta0)
 
@@ -417,7 +399,7 @@ def _split_kwargs(kwargs: dict) -> tuple[dict, dict]:
     return geometry, kwargs
 
 
-def _linear_params(params_linear, r_over_lt, r_over_ln):
+def _linear_params(params_linear, r_over_lt, r_over_ln, aspect):
     """GKX LinearParams: explicit object, or its collisionless
     optimization defaults with optionally overridden drive gradients."""
     if params_linear is not None:
@@ -428,10 +410,19 @@ def _linear_params(params_linear, r_over_lt, r_over_ln):
     params = _default_gradient_linear_params()
     import dataclasses
     updates = {}
+    # GKX's operator consumes a/L gradients -- its ``tprim``/``fprim``, the
+    # TOML convention -- never R/L.  Its own defaults, ``tprim = 2.49`` and
+    # ``fprim = 0.8``, are the Cyclone base case ``R/L_T = 6.9``,
+    # ``R/L_n = 2.2`` divided by that case's ``R/a = 2.77``.  vmex's arguments
+    # are R/L, so divide by *this* equilibrium's aspect ratio: matching R/L is
+    # what carries the ITG drive across devices, and a/L is then a consequence
+    # of the shape.  Setting the deprecated ``R_over_LTi``/``R_over_Ln``
+    # instead, as this did, applied no normalization at all and made every
+    # evaluation R/a times too strongly driven.
     if r_over_lt is not None:
-        updates["R_over_LTi"] = float(r_over_lt)
+        updates["tprim"] = r_over_lt / aspect
     if r_over_ln is not None:
-        updates["R_over_Ln"] = float(r_over_ln)
+        updates["fprim"] = r_over_ln / aspect
     return dataclasses.replace(params, **updates) if updates else params
 
 
@@ -462,10 +453,13 @@ def turbulence_objective_vector(
     :data:`TURBULENCE_OBJECTIVE_NAMES`
     (``gkx.solver_objective_vector_from_geometry``).
 
-    The drive gradients live in GKX's ``LinearParams``
-    (``params_linear``; default: its collisionless optimization defaults
-    ``R/L_n = 2.2``, ``R/L_Ti = 6.9`` — the Cyclone-base ITG drive —
-    optionally overridden via ``r_over_lt``/``r_over_ln``).
+    The drive gradients live in GKX's ``LinearParams`` (``params_linear``;
+    default: its collisionless optimization defaults ``a/L_n = 0.8``,
+    ``a/L_Ti = 2.49`` — the Cyclone-base ITG drive at that case's
+    ``R/a = 2.77``).  ``r_over_lt``/``r_over_ln`` override them in ``R/L``,
+    divided by this equilibrium's aspect ratio on the way in, since GKX's
+    operator consumes ``a/L``; pass ``params_linear`` to supply ``a/L``
+    directly.
     """
     gkx = _gkx()
     geom = flux_tube_geometry(state, rt, **geometry_kwargs)
@@ -474,7 +468,8 @@ def turbulence_objective_vector(
         selected_ky_index=int(selected_ky_index),
         n_laguerre=int(n_laguerre), n_hermite=int(n_hermite),
         nx=int(nx), ny=int(ny), lx=float(lx), ly=float(ly),
-        params_linear=_linear_params(params_linear, r_over_lt, r_over_ln),
+        params_linear=_linear_params(params_linear, r_over_lt, r_over_ln,
+                                    aspect_ratio(state, rt)),
         terms=terms,
     )
 
@@ -503,7 +498,8 @@ def turbulent_growth_rate(state: SpectralState, rt: SolverRuntime, **kwargs) -> 
     gkx = _gkx()
     params_linear = _linear_params(
         solver_kwargs.pop("params_linear", None),
-        solver_kwargs.pop("r_over_lt", None), solver_kwargs.pop("r_over_ln", None))
+        solver_kwargs.pop("r_over_lt", None), solver_kwargs.pop("r_over_ln", None),
+        aspect_ratio(state, rt))
     geom = flux_tube_geometry(state, rt, **geometry_kwargs)
     matrix = gkx.solver_linear_operator_matrix_from_geometry(
         geom, params_linear=params_linear, **solver_kwargs)

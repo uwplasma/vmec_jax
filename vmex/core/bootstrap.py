@@ -710,8 +710,9 @@ def vmec_j_dot_B_from_wout(wout, surfaces, *, geom: RedlGeometry | None = None,
     """The section-6.2 identity evaluated from wout tables (parity lane).
 
     Same formula as :func:`vmec_j_dot_B` with ``buco``/``pres``/``phi`` read
-    from the wout dataset and ``<B^2>`` synthesized from ``bmnc``/``gmnc`` at
-    the requested ``surfaces``; pass ``geom`` (a :class:`RedlGeometry` from
+    from the wout dataset and ``<B^2>`` synthesized from ``bmnc``/``gmnc``
+    (plus the ``bmns``/``gmns`` partners when ``lasym``) at the requested
+    ``surfaces``; pass ``geom`` (a :class:`RedlGeometry` from
     :func:`redl_geometry_from_wout` at the *same* surfaces) to reuse its
     ``fsa_B2`` instead.  This is the validation lane — the wout ``jdotb``
     itself (jxbforce.f) is what :class:`RedlBootstrapMismatch` consumes.
@@ -736,18 +737,34 @@ def vmec_j_dot_B_from_wout(wout, surfaces, *, geom: RedlGeometry | None = None,
         xm = _as_1d(np.asarray(wout.xm_nyq, dtype=float))
         xn = _as_1d(np.asarray(wout.xn_nyq, dtype=float))
         mn = int(xm.shape[0])
-        bmnc = _interp_half_grid(_mode_matrix(wout, "bmnc", ns=ns, mn=mn)[1:],
-                                 surfaces, s_half)
-        gmnc = _interp_half_grid(_mode_matrix(wout, "gmnc", ns=ns, mn=mn)[1:],
-                                 surfaces, s_half)
+
+        # Every m != 0 harmonic vanishes at the magnetic axis, where the
+        # surface degenerates to a point.  redl_geometry_from_wout zeroes them
+        # there; without the same treatment the two lanes disagreed by 4.0e-4
+        # at s = 0 while matching bit-for-bit everywhere else.
+        axis_modes = (np.asarray(surfaces) == 0.0)[:, None] & (xm != 0.0)[None, :]
+
+        def half(name):
+            values = _interp_half_grid(
+                _mode_matrix(wout, name, ns=ns, mn=mn)[1:], surfaces, s_half)
+            return jnp.where(axis_modes, 0.0, values)
+
         theta1d = jnp.linspace(0.0, 2.0 * jnp.pi, int(ntheta), endpoint=False)
         phi1d = jnp.linspace(0.0, 2.0 * jnp.pi / int(wout.nfp), int(nphi),
                              endpoint=False)
         angle = (theta1d[:, None, None] * xm[None, None, :]
                  - phi1d[None, :, None] * xn[None, None, :])
         cosangle = jnp.cos(angle)
-        modB = jnp.einsum("sm,tpm->stp", bmnc, cosangle)
-        sqrtg = jnp.abs(jnp.einsum("sm,tpm->stp", gmnc, cosangle))
+        modB = jnp.einsum("sm,tpm->stp", half("bmnc"), cosangle)
+        sqrtg = jnp.einsum("sm,tpm->stp", half("gmnc"), cosangle)
+        if bool(getattr(wout, "lasym", False)):
+            # On a LASYM wout the sine families carry the up-down-asymmetric
+            # half of |B| and sqrt(g); dropping them symmetrizes <B^2> (same
+            # synthesis as :func:`redl_geometry_from_wout`).
+            sinangle = jnp.sin(angle)
+            modB += jnp.einsum("sm,tpm->stp", half("bmns"), sinangle)
+            sqrtg += jnp.einsum("sm,tpm->stp", half("gmns"), sinangle)
+        sqrtg = jnp.abs(sqrtg)
         fsa_B2 = (jnp.mean(modB * modB * sqrtg, axis=(1, 2))
                   / jnp.mean(sqrtg, axis=(1, 2)))
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,24 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import test_manifest  # noqa: E402
+import ci_scope  # noqa: E402
+
+
+def test_ci_scope_skips_only_documentation_and_rendered_media() -> None:
+    assert ci_scope.classify(
+        ["docs/howto/gpu.rst", "README.md", "docs/figure.webp"]
+    ) == (False, False)
+    assert ci_scope.classify(["docs/howto/gpu.rst", "vmex/doctor.py"]) == (
+        True,
+        True,
+    )
+    assert ci_scope.classify(["tests/test_doctor.py"]) == (True, False)
+    assert ci_scope.classify([".github/workflows/ci.yml"]) == (True, False)
+
+
+def test_ci_scope_keeps_empty_and_main_branch_changes_conservative() -> None:
+    assert ci_scope.classify([]) == (True, True)
+    assert ci_scope.classify(["README.md"], force_all=True) == (True, True)
 
 
 def test_collected_suite_has_exact_manifest_ownership() -> None:
@@ -38,8 +57,12 @@ def test_manifest_routes_short_pr_and_weekly_selectors() -> None:
     assert test_manifest.select("pr-physics-mirror-output") == [
         "tests/mirror/test_output.py"
     ]
+    assert len(test_manifest.select("weekly-hmfb-fixed")) == 2
+    assert len(test_manifest.select("weekly-hmfb-free")) == 2
     weekly = test_manifest.select("weekly-mirror")
     assert weekly == [
+        "tests/mirror/test_free_boundary.py::"
+        "test_unbounded_exterior_free_boundary_beta_scan_converges",
         "tests/mirror/test_free_boundary.py::"
         "test_unbounded_exterior_beta_observables_converge_with_resolution"
     ]
@@ -78,6 +101,48 @@ def test_manifest_report_lists_timings_and_every_skip(tmp_path: Path) -> None:
         assert {
             "owner", "primary", "duration", "device", "asset", "oracle"
         } <= record.keys()
+
+
+def _invoked_lanes() -> set[str]:
+    """Lane names the workflows actually hand to ``test_manifest.py select``.
+
+    Both spellings: a literal ``select <lane>`` and a matrix ``selector:``
+    value interpolated into one.
+    """
+    text = "\n".join(
+        path.read_text() for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")))
+    invoked: set[str] = set()
+    for value in re.findall(r"^\s*selector:\s*(.+?)\s*$", text, re.M):
+        invoked.update(value.split())          # a matrix value may list several
+    invoked |= set(re.findall(r"test_manifest\.py select ([a-z][A-Za-z0-9-]*)", text))
+    return invoked
+
+
+def test_every_primary_pr_lane_is_invoked_by_a_workflow() -> None:
+    """A primary lane no job runs is a module no job runs.
+
+    ``validate`` already makes every record declare exactly one primary PR
+    lane, so the union of those lanes is the whole pull-request suite.  What
+    was missing is the other half of the contract: the workflows have to
+    invoke all of them.  Twelve of fourteen once did not, which took 94 of
+    100 modules out of pull-request CI and made the changed-line coverage
+    gate fail on code that was in fact tested.
+    """
+    _, records = test_manifest.load()
+    primary = {
+        lane
+        for record in records
+        for lane in record["lanes"]
+        if lane != "pr-fast"
+        and any(lane.startswith(prefix) for prefix in test_manifest.PRIMARY_LANES)
+    }
+    assert primary
+    missing = sorted(primary - _invoked_lanes())
+    assert not missing, (
+        "primary PR lanes that no workflow invokes, so their modules never "
+        f"run in CI: {missing}. Add a matrix entry in .github/workflows/ci.yml "
+        "or move the modules to a lane that has one."
+    )
 
 
 def test_workflow_selects_manifest_lanes() -> None:

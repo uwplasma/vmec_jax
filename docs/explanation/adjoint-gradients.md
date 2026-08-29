@@ -62,6 +62,28 @@ independent of how many Richardson steps, restarts, or multigrid stages the
 forward solve needed. Multigrid stages act purely as an initializer and are
 stop-gradient by construction.
 
+## Where the derivative is taken
+
+The theorem holds at a *root* of $F$, and the host solver does not stop at
+one: `ftol` gates the sum of squares of the force, so a solve it reports
+converged still returns with $|F| \sim \sqrt{\mathrm{ftol}}$ — 2.7e-07 at
+`ftol = 1e-12` on the non-stellarator-symmetric `basic_non_stellsym_simsopt`
+deck. Where $\partial F/\partial x$ carries a small singular value (the lasym
+$m = 1$ families: 1.5e-04) that residual is a 1.8e-03 displacement of the
+state — enough to move a solver-sensitive metric by more than the derivative
+being measured.
+
+VMEX therefore Newton-refines the state onto the root inside the host
+callback, before any lane reads it (`ImplicitConfig.refine_tol`, default
+1e-10; `inf` disables it, and a refinement that fails to improve the residual
+leaves the host state in place). Value, cotangent and linearization then all
+sit at the same point — which is also where the frozen-path finite-difference
+reference measures, its own Newton endpoints being roots as well. Both have
+to move together: on $d(\sum D_\mathrm{Merc})/d(\mathrm{RBS}(1,1))$ the
+gradient agrees with that reference to rel 5.4e-07 when they do, against
+4.2e-03 at the host stopping point and 5.7e-03 with the linearization alone
+refined.
+
 ## The six SOLVAX solve classes
 
 Every linear solve in the gradient stack goes through SOLVAX. The complete
@@ -98,15 +120,15 @@ The mirror lane keeps its own adjoint solver (`vmex/mirror/implicit.py`).
 
 ## Certificates
 
-No solve is trusted silently. Each adjoint/tangent solve returns a
-{class}`~vmex.core.implicit.LinearResponseReport` with the achieved residual
-norm, the requested tolerance, the iteration count, and a converged flag; the
-block-Thomas Jacobian path certifies every column with one warm-started GMRES
-pass against the preconditioned system to the same `adjoint_tol` as the
-per-column path. SOLVAX's own GCROT result additionally carries a
-`recycle_drift` monitor — how far the operator has drifted since the recycle
-pair was built — but VMEX neither reads nor surfaces it, so those four fields
-are the whole certificate.
+Each tangent or adjoint solve reports its residual norm, tolerance, iteration
+count, and convergence. VMEX then checks every block-response column against
+the exact linearized operator.
+
+- ``auto`` retries a failed block response with the reverse adjoint.
+- An explicitly selected host solver raises
+  {class}`~vmex.core.errors.AdjointSolveError` when the check fails.
+- The JAX API selects the reverse branch inside the compiled graph, where a
+  Python exception is unavailable.
 
 ## Validating the gradients: the frozen path
 
@@ -159,7 +181,7 @@ $\partial F/\partial z$ is exactly nearest-neighbor, so the operator is
 (The preconditioned formulation used by the adjoint is dense in radius,
 because the 1D preconditioner's inverse is.) Measured: the warm Jacobian
 phase of the benchmark optimization step drops from 20.35 s to 0.61 s (33x;
-`docs/_static/figures/gradient_stack_speedup.png`, reproduced by
+`docs/_static/figures/gradient_stack_speedup.webp`, reproduced by
 `docs/_static/figures/sources/make_optimization_docs_figures.py`). The same
 per-dof responses $dz_j$ double as a first-order perturbation warm start for
 the optimizer's next trial solves — the DESC-style `eq.perturb` pattern —
@@ -167,7 +189,7 @@ measured 3.7x fewer total forward iterations over 20 trials (23,685 to
 6,364). How these plug into an optimization campaign is
 {doc}`/howto/optimize-a-boundary`.
 
-```{figure} /_static/figures/gradient_stack_speedup.png
+```{figure} /_static/figures/gradient_stack_speedup.webp
 :alt: measured before/after of the three gradient-stack optimizations
 :width: 100%
 

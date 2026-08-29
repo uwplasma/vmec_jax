@@ -1,0 +1,54 @@
+{
+  "schema": "vmex.strong-force-benchmark/1",
+  "measurement_commit": "9481f64afb9bc5578558aef39e730887ffaaa8ea",
+  "measurement_dirty": false,
+  "persistent_compilation_cache": false,
+  "command": "VMEX_COMPILATION_CACHE=disabled JAX_ENABLE_X64=1 python benchmarks/strong_force.py --degree DEGREE --elements 8 --points 64 --repeats 20",
+  "platform": "macOS-26.5.1-arm64-arm-64bit",
+  "versions": {
+    "python": "3.12.13",
+    "vmex": "0.7.0",
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1",
+    "numpy": "2.5.2"
+  },
+  "problem": {
+    "elements": 8,
+    "fourier_modes": 5,
+    "points": 64,
+    "repeats": 20,
+    "accuracy_case": "second rho derivative of rho^2 exp(s), 2001 points"
+  },
+  "degrees": {
+    "3": {
+      "radial_coefficients": 11,
+      "cold_evaluate_seconds": 1.4333037909818813,
+      "warm_evaluate_median_seconds": 0.00029024999821558595,
+      "cold_gradient_seconds": 1.8446033750660717,
+      "warm_gradient_median_seconds": 0.0005515000084415078,
+      "evaluate_peak_rss_increase_mib": 210.8125,
+      "gradient_peak_rss_increase_mib": 153.84375,
+      "radial_second_derivative_l2_error": 0.0028716606616844185
+    },
+    "5": {
+      "radial_coefficients": 13,
+      "cold_evaluate_seconds": 2.115733959013596,
+      "warm_evaluate_median_seconds": 0.0004582914989441633,
+      "cold_gradient_seconds": 2.634266166947782,
+      "warm_gradient_median_seconds": 0.0008531459607183933,
+      "evaluate_peak_rss_increase_mib": 283.703125,
+      "gradient_peak_rss_increase_mib": 150.1875,
+      "radial_second_derivative_l2_error": 7.729935150060968e-07
+    },
+    "7": {
+      "radial_coefficients": 15,
+      "cold_evaluate_seconds": 2.8958204579539597,
+      "warm_evaluate_median_seconds": 0.0007199585088528693,
+      "cold_gradient_seconds": 3.4332602079957724,
+      "warm_gradient_median_seconds": 0.0012250625295564532,
+      "evaluate_peak_rss_increase_mib": 342.53125,
+      "gradient_peak_rss_increase_mib": 232.84375,
+      "radial_second_derivative_l2_error": 6.093501596238707e-10
+    }
+  }
+}

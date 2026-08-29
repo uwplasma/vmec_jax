@@ -859,13 +859,10 @@ def wout_from_state(
         phipf=phipf_out, chipf=chipf_out, pres=pres_pa, vp=vp,
         signgs=signgs)
 
-    # jxbforce.f jdotb: the ported lasym lane predates VMEC2000's 2013 output
-    # integration-norm change (four factor-2 normalizations: wint doubling
-    # plus the (u,v) current pair on both J and B legs); measured exactly 16
-    # against golden VMEC2000 lasym output. Symmetric runs are unaffected.
+    # jxbforce.f jdotb: the lasym filter returns physical-scale fields (see
+    # nyquist.filter_bsubuv_lasym), so <J.B> lands in WOUT units for both
+    # symmetry modes.
     jdotb = np.asarray(tabs.jdotb, dtype=float)
-    if lasym:
-        jdotb = 16.0 * jdotb
 
     # -- eqfor.f / spectrum.f / Compute_Currents ports -------------------
     currumnc, currvmnc, currumns, currvmns = _pp.compute_currents(

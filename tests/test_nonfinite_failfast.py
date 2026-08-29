@@ -116,6 +116,39 @@ def test_shareable_diagnostic_uses_production_mode_classification(
     assert "private_field_name" not in output
 
 
+def test_shareable_diagnostic_flags_nonmonotonic_flux_map(
+    tmp_path: Path, capsys,
+) -> None:
+    """A sign-reversing APHI gets a stable value-free diagnostic code.
+
+    Default output must stay shareable: the offending interval is
+    input-derived, so it appears only under ``--details``.
+    """
+    path = tmp_path / "input.private_folded_flux"
+    path.write_text(
+        """&INDATA
+        MPOL = 3
+        NTOR = 0
+        APHI = 5.0, -16.0, 12.0
+        RBC(0,0) = 1.0
+        RBC(0,1) = 0.1
+        ZBS(0,1) = 0.1
+        /
+        """
+    )
+    assert diagnose(path) == 1
+    output = capsys.readouterr().out
+    assert "input parsing: PASS" in output
+    assert "toroidal-flux map monotonic: FAIL" in output
+    assert "D00L_NONMONOTONIC_TORFLUX_MAP" in output
+    assert "private_folded_flux" not in output
+    assert "0.202283" not in output
+
+    assert diagnose(path, details=True) == 1
+    detailed = capsys.readouterr().out
+    assert "(0.202283, 0.686605)" in detailed
+
+
 def test_shareable_diagnostic_supports_lforbal(
     tmp_path: Path, capsys
 ) -> None:

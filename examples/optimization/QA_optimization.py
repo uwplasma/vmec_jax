@@ -1,5 +1,12 @@
 #!/usr/bin/env python
-"""Quasi-axisymmetric boundary optimization with a magnetic well."""
+"""Fast-start quasi-axisymmetric optimization with a magnetic well.
+
+The scalar objective uses one reverse implicit solve per gradient, avoiding
+the large pointwise residual Jacobian that made the former staged
+least-squares example spend minutes compiling before its first optimizer
+iteration.  The objective value and gradient are exactly the scalarization of
+the same weighted residual tuples.
+"""
 
 from dataclasses import replace
 import os
@@ -7,17 +14,17 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
-from scipy.optimize import least_squares
+from scipy.optimize import minimize
 
 import vmex as vj
 from vmex import optimize as opt
 
 nfp = 2  # number of field periods
 SURFACES = np.linspace(0.1, 1.0, 10)
-MAX_MODES, MAX_NFEV = [1,2,3], [10, 10, 15]
+MAX_MODE, MAXITER = 3, 30
 MAGNETIC_WELL_TARGET = 0.01
 ASPECT_TARGET = 5.0
-# MAX_MODES, MAX_NFEV = [1,2,3,4,5,6,7,8,9], [10, 10, 15, 20, 20, 25, 30, 30, 40]
+# For a larger design space use MAX_MODE, MAXITER = 9, 60.
 # MAGNETIC_WELL_TARGET = 0.07
 # ASPECT_TARGET = 3.5
 IOTA_FLOOR = 0.42
@@ -29,7 +36,7 @@ SEED_PERTURBATION = 0.05
 
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if ci_smoke:
-    MAX_MODES, MAX_NFEV = [1], [4]
+    MAX_MODE, MAXITER = 1, 4
 
 DATA = Path(__file__).resolve().parents[1] / "data" / f"input.minimal_seed_nfp{nfp}"
 inp = vj.VmecInput.from_file(DATA)
@@ -61,39 +68,59 @@ report = opt.EquilibriumReporter(
     ("mean iota", opt.mean_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
 monitor = opt.OptimizationMonitor(stream=None)
 
-# Optimize for QA first, then add the pressure-stability proxy locally.
-equilibrium = opt.solve_equilibrium(inp)
-# If a RuntimeWarning reports uncertified Jacobian columns, it is expected
-# once the optimizer leaves the seed and needs no action: the shipped
-# jacobian_adjoint_tol=1e-4 and jacobian_adjoint_maxiter=10 are the measured
-# optimum, since ten times that budget moved the Jacobian by 2e-8 and
-# certified no extra column. Both are from_tuples arguments; pass
-# evaluation_progress=False to drop the per-evaluation timing lines.
-for stage, (max_mode, max_nfev) in enumerate(zip(MAX_MODES, MAX_NFEV)):
-    print(f"\n===== QA stage, max_mode = {max_mode} =====")
-    mpol = max(max_mode + 2, MINIMUM_MPOL)
-    inp = replace(inp, delt=0.5).change_resolution(
-        mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
-    stage_terms = objective_function_terms
-    problem = opt.VmecProblem.from_tuples(inp, stage_terms, max_mode=max_mode,
-        vary_major_radius=VARY_MAJOR_RADIUS, use_ess=True, ess_alpha=ESS_ALPHA,
-        restart_from=equilibrium)
-    print(f"dof_names = {problem.dof_names}")
-    monitor.problem = problem
-    if not ci_smoke:
-        problem.compile_residual_and_jacobian()
-    step = PARAMETER_STEP * problem.scales
-    result = least_squares(
-        problem.residual, problem.x0, jac=problem.residual_jac,
-        x_scale=step,max_nfev=max_nfev, bounds=(
-                problem.x0 - MAX_PARAMETER_CHANGE * step,
-                problem.x0 + MAX_PARAMETER_CHANGE * step),
-        ftol=1e-6, xtol=1e-10, verbose=2, callback=monitor
-    )
-    inp = problem.input_from_x(result.x)
-    equilibrium = problem.equilibrium_from_x(result.x)
-    report(f"mode {max_mode}", equilibrium)
-    # inp.to_indata(f"input.QA_max_mode_{max_mode:03d}")
+# Scalarize the exact least-squares rows before differentiating. Reverse-mode
+# implicit differentiation then needs one adjoint regardless of boundary dof
+# count, instead of materializing the 6723 x 48 pointwise Jacobian.
+def loss(equilibrium_state, solver_context):
+    rows = opt.residuals_from_tuples(
+        equilibrium_state, solver_context, objective_function_terms)
+    return 0.5 * jnp.vdot(rows, rows)
+
+
+mpol = max(MAX_MODE + 2, MINIMUM_MPOL)
+inp = replace(inp, delt=0.5).change_resolution(
+    mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
+problem = opt.VmecProblem.from_loss(
+    inp, loss, max_mode=MAX_MODE, vary_major_radius=VARY_MAJOR_RADIUS,
+    use_ess=True, ess_alpha=ESS_ALPHA)
+print(f"dof_names = {problem.dof_names}")
+monitor.problem = problem
+problem.compile_value_and_gradient()
+
+x0 = problem.x0
+step = PARAMETER_STEP * problem.scales
+
+def x_from_y(y):
+    return x0 + step * y
+
+
+def value_and_gradient(y):
+    value, gradient = problem.value_and_grad(x_from_y(y))
+    evaluation_costs.append(float(value))
+    return value, step * gradient
+
+
+def monitor_y(intermediate_result):
+    x = x_from_y(intermediate_result.x)
+    monitor({"x": x, "fun": intermediate_result.fun,
+             "jac": value_and_gradient(intermediate_result.x)[1]})
+
+
+evaluation_costs = []
+result = minimize(
+    value_and_gradient, np.zeros_like(x0), jac=True, method="L-BFGS-B",
+    bounds=[(-MAX_PARAMETER_CHANGE, MAX_PARAMETER_CHANGE)] * x0.size,
+    callback=monitor_y,
+    options={"maxiter": MAXITER, "gtol": 1.0e-6, "ftol": 1.0e-12,
+             "maxls": 20, "maxcor": 20})
+print(
+    "optimizer scalar cost: "
+    f"{evaluation_costs[0]:.16e} -> {float(result.fun):.16e}"
+)
+result.x = x_from_y(result.x)
+inp = problem.input_from_x(result.x)
+equilibrium = problem.equilibrium_from_x(result.x)
+report(f"mode {MAX_MODE}", equilibrium)
 
 # Print results
 final_input = replace(inp,

@@ -10,6 +10,8 @@ gradient).
 from __future__ import annotations
 
 import dataclasses
+import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +22,7 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
+import vmex as vj
 from vmex.core import optimize as opt
 from vmex.core import stability as stab
 from vmex.core.input import VmecInput
@@ -456,6 +459,9 @@ def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
         -2445074.81564557, -1869459.08846507, -1317836.93988867,
         -658744.51123515,
     ])
+    # 1.5e-3 per-element against this 2e-3 gate, so the margin is only 1.3x;
+    # the worst point is the outermost interior surface, where |<J.B>| is an
+    # order of magnitude below the profile maximum.  Scale-relative is 1.5e-4.
     np.testing.assert_allclose(
         np.asarray(jdotb)[2:-1], vmec2000, rtol=2e-3
     )
@@ -474,20 +480,85 @@ def test_lasym_jdotb_profile_and_derivative(lasym_finite_beta_eq):
     interior = np.asarray(profile)[2:-1]
     assert np.all(np.isfinite(interior))
     assert np.any(interior != 0.0)
-    dmerc = stab.d_merc_state(eq.state, eq.runtime)
-    np.testing.assert_allclose(dmerc, eq.wout.DMerc, rtol=1e-10, atol=1e-13)
-    np.testing.assert_allclose(opt.d_merc(eq), eq.wout.DMerc, rtol=0.0, atol=0.0)
-    d_r = stab.glasser_d_r_state(eq.state, eq.runtime, shear_epsilon=1.0e-8)
-    assert np.all(np.isfinite(np.asarray(d_r)))
 
-    _, tangent_profiles = jax.jvp(
-        lambda state: jnp.concatenate((
-            stab.d_merc_state(state, eq.runtime)[2:-1],
-            stab.glasser_d_r_state(
-                state, eq.runtime, shear_epsilon=1.0e-8)[2:-1])),
-        (eq.state,), (tangent,))
-    assert np.all(np.isfinite(np.asarray(tangent_profiles)))
-    assert np.any(np.asarray(tangent_profiles) != 0.0)
+
+def test_lasym_dmerc_matches_wout_and_vmec2000(lasym_finite_beta_eq):
+    """LASYM DMerc: wout-engine identity plus the live VMEC2000 anchor.
+
+    The pinned profile is xvmec2000 output for this exact deck: 6.3e-4
+    per-element relative against the 2e-3 gate, 1.6e-4 scale-relative.
+    mercier.f integrates full-theta-grid real-space fields with the uniform
+    lasym ``wint`` and its jxbforce.f inputs carry both parity channels, so
+    VMEC2000 anchors the asymmetric lane.
+    """
+    eq = lasym_finite_beta_eq
+    actual = np.asarray(jax.jit(stab.d_merc_state)(eq.state, eq.runtime))
+    np.testing.assert_allclose(
+        actual, np.asarray(eq.wout.DMerc), rtol=1e-10, atol=1e-13)
+    np.testing.assert_array_equal(np.asarray(opt.d_merc(eq)),
+                                  np.asarray(eq.wout.DMerc))
+    vmec2000_dmerc = np.array([
+        9.57976316e-04, 1.09389270e-03, 1.26863525e-03, 1.44998604e-03,
+        1.63397433e-03, 1.83848056e-03, 2.10415041e-03, 2.51043409e-03,
+        3.23990131e-03, 5.05740718e-03,
+    ])
+    np.testing.assert_allclose(actual[2:-1], vmec2000_dmerc, rtol=2e-3)
+    np.testing.assert_array_equal(np.sign(actual[2:-1]),
+                                  np.sign(vmec2000_dmerc))
+
+    tangent = jax.tree.map(jnp.zeros_like, eq.state)
+    tangent = dataclasses.replace(
+        tangent,
+        R_sin=jnp.ones_like(eq.state.R_sin),
+        Z_cos=jnp.ones_like(eq.state.Z_cos),
+    )
+    _, dmerc_tangent = jax.jvp(
+        lambda st: stab.d_merc_state(st, eq.runtime), (eq.state,), (tangent,))
+    interior = np.asarray(dmerc_tangent)[2:-1]
+    assert np.all(np.isfinite(interior))
+    assert np.any(interior != 0.0)
+
+
+def test_lasym_glasser_identity_residuals_and_reconstruction(
+    lasym_finite_beta_eq,
+):
+    """LASYM D_R: exact GGJ identity, smooth residuals, NumPy reference.
+
+    No external lasym D_R oracle exists (the DCON comparison is
+    symmetric-only): the validation is internal consistency on top of the
+    VMEC2000-anchored DMerc — the published relation must hold exactly, the
+    optimizer residuals must stay finite/smooth, and the independent
+    plotting-lane reconstruction of the mercier.f integrals from the wout
+    tables (both parities) must pass its stored-DMerc self-check.
+    """
+    eq = lasym_finite_beta_eq
+    state, rt = eq.state, eq.runtime
+    dmerc, _, _, shear, h_glasser = stab._mercier_profiles_state(state, rt)
+    actual = stab.glasser_d_r_state(state, rt)
+    denominator = jnp.where(shear != 0.0, shear**2, 1.0)
+    expected = -dmerc + (h_glasser - 0.5 * shear**2) ** 2 / denominator
+    expected = jnp.where(shear != 0.0, expected, 0.0)
+    np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-15)
+    assert np.all(np.isfinite(np.asarray(actual)))
+
+    for residual in (stab.mercier_stability_residual,
+                     stab.glasser_stability_residual):
+        values = np.asarray(residual(state, rt))
+        assert values.shape == (np.asarray(dmerc).size - 3,)
+        assert np.all(np.isfinite(values))
+
+    pytest.importorskip("matplotlib")
+    from vmex.core import plotting
+
+    info = plotting._glasser_d_r_from_wout(eq.wout)
+    assert info["valid"], info["note"]
+    assert float(info["mismatch"]) < 1.0e-2
+    d_r_recon = np.asarray(info["d_r"], dtype=float)
+    # D_R is a near-cancelling difference of DMerc-scale integrals, so the
+    # wout-table reconstruction class is relative to the DMerc scale
+    # (measured 1.1e-2 of it on this deck).
+    scale = float(np.max(np.abs(np.asarray(dmerc)[2:-1])))
+    assert np.max(np.abs(d_r_recon[2:-1] - np.asarray(actual)[2:-1])) < 2.0e-2 * scale
 
 
 @pytest.mark.full
@@ -551,3 +622,284 @@ def test_surface_index_validation(highbeta_eq):
     ns = int(np.shape(highbeta_eq.state.R_cos)[0])
     with pytest.raises(ValueError, match="out of range"):
         stab.ballooning_lambda(highbeta_eq.state, highbeta_eq.runtime, s_indices=(ns - 1,))
+
+
+def test_lasym_mercier_decomposition_matches_vmec2000(lasym_finite_beta_eq):
+    """Every LASYM Mercier term against xvmec2000, pressure-driven one included.
+
+    ``DMerc`` alone can agree while its parts cancel, so pin the four terms of
+    the ``mercier.f`` sum (``Dshear``/``Dcurr``/``Dwell``/``Dgeod``)
+    separately.  ``DWell`` needs pressure: the shipped deck has ``AM = 0`` and
+    the fixture raises it to ``am = [1, -1]``, ``pres_scale = 5000``, which is
+    the state these numbers come from.  Reference: STELLOPT
+    ``v6.5.0-42-g9177f58``, same deck, converged to ``fsqr`` 4.59e-11.
+    """
+    eq = lasym_finite_beta_eq
+    vmec2000 = {
+        "DWell": np.array([
+            -2.22718998e-05, -1.51031785e-05, -1.16397303e-05,
+            -9.21471107e-06, -6.80857520e-06, -3.67996680e-06,
+            1.08919314e-06, 8.99038455e-06, 2.26388466e-05,
+            4.57963823e-05,
+        ]),
+        "DShear": np.array([
+            2.93402778e-03, 2.93402778e-03, 2.93402778e-03,
+            2.93402778e-03, 2.93402778e-03, 2.93402778e-03,
+            2.93402778e-03, 2.93402778e-03, 2.93402778e-03,
+            2.93402778e-03,
+        ]),
+        "DCurr": np.array([
+            -8.60603463e-04, -9.78895020e-04, -9.95338687e-04,
+            -9.53790255e-04, -8.73352958e-04, -7.51384654e-04,
+            -5.59906561e-04, -2.25290780e-04, 4.55938293e-04,
+            2.45104164e-03,
+        ]),
+        "DGeod": np.array([
+            -1.09317610e-03, -8.46136880e-04, -6.58414111e-04,
+            -5.21036775e-04, -4.19891910e-04, -3.40482600e-04,
+            -2.71060005e-04, -2.07293295e-04, -1.72703606e-04,
+            -3.73458619e-04,
+        ]),
+    }
+    # Measured per element: DWell 1.5e-7, DShear 7.6e-10 (the floor is the
+    # nine significant figures pinned above, not a disagreement), DCurr
+    # 2.2e-3, DGeod 3.2e-3.  The two current terms are the loosest.
+    tolerance = {"DWell": 1e-6, "DShear": 1e-8, "DCurr": 5e-3, "DGeod": 5e-3}
+    for name, reference in vmec2000.items():
+        actual = np.asarray(getattr(eq.wout, name), dtype=float)[2:-1]
+        np.testing.assert_allclose(actual, reference, rtol=tolerance[name],
+                                   err_msg=f"{name} against xvmec2000")
+    # The pressure term must actually be exercised, not incidentally zero.
+    assert np.max(np.abs(vmec2000["DWell"])) > 1e-6
+
+
+def test_lasym_mercier_current_tables_are_exercised():
+    """The LASYM branch of the Mercier current tables, cheaply.
+
+    ``_mercier_current_tables`` splits on symmetry, and the asymmetric side
+    reads the jxbforce.f analysis weights off the shared trig tables.  Small
+    enough (ns=9, mpol=4, axisymmetric) to sit in a pull-request lane while
+    still solving a real asymmetric equilibrium.
+    """
+    inp = dataclasses.replace(
+        _lasym_finite_beta_input(),
+        ns_array=np.array([9]), ftol_array=np.array([1e-9]),
+        niter_array=np.array([2000]),
+    ).change_resolution(mpol=4, ntor=0, ntheta=16, nzeta=1)
+    eq = opt.solve_equilibrium(inp, verbose=False)
+    assert bool(eq.runtime.setup.lasym)
+    d_merc = np.asarray(jax.jit(stab.d_merc_state)(eq.state, eq.runtime))
+    assert np.all(np.isfinite(d_merc))
+    np.testing.assert_allclose(d_merc, np.asarray(eq.wout.DMerc),
+                               rtol=1e-10, atol=1e-13)
+    # A degenerate profile would pass the checks above and cover nothing.
+    assert np.max(np.abs(d_merc[2:-1])) > 1e-6
+
+
+# ---------------------------------------------------------------------------
+# LASYM field-line geometry (Phase 34.1)
+# ---------------------------------------------------------------------------
+
+
+def test_lasym_zero_sine_spectra_reproduce_the_symmetric_lane(highbeta_eq):
+    """The hard gate: the asymmetric branch with zero sine spectra is a no-op.
+
+    Drives ``_surface_lambda`` through the ``lasym`` path with identically
+    zero ``rmns``/``zmnc``/``lmnc`` and requires the eigenvalues to be
+    unchanged bit for bit — the same trick that exposed the frozen
+    delta-rotation defect, and the only way to prove the extra spectral sums
+    were added and not substituted.
+    """
+    ctx = stab._ballooning_context(highbeta_eq.state, highbeta_eq.runtime)
+    assert ctx["lasym"] is False and ctx["rmns"] is None
+    lasym_ctx = dict(
+        ctx, lasym=True,
+        rmns=jnp.zeros_like(ctx["rmnc"]), zmnc=jnp.zeros_like(ctx["zmns"]),
+        lmnc=jnp.zeros_like(ctx["lmns"]),
+    )
+    alphas = jnp.asarray(np.linspace(0.0, np.pi, 4))
+    zeta0s = jnp.asarray([0.0])
+    for j in (4, 8):
+        symmetric = np.asarray(stab._surface_lambda(ctx, j, alphas, zeta0s, 81, 3.0))
+        asymmetric = np.asarray(stab._surface_lambda(lasym_ctx, j, alphas, zeta0s, 81, 3.0))
+        assert np.max(np.abs(symmetric)) > 1e-3   # not a degenerate comparison
+        np.testing.assert_array_equal(asymmetric, symmetric)
+
+
+def test_lasym_solve_of_a_symmetric_deck_matches_the_symmetric_lane():
+    """End-to-end: the same deck run with LASYM = T lands on the same growth rates.
+
+    Exercises the whole asymmetric machinery — full-theta trig tables, the
+    sine-parity spectra through the PEST inversion and the field-line
+    geometry — on an equilibrium whose sine content converges to round-off.
+    """
+    deck = VmecInput.from_file(DATA_DIR / "input.circular_tokamak")
+    symmetric = opt.solve_equilibrium(deck, verbose=False)
+    asymmetric = opt.solve_equilibrium(dataclasses.replace(deck, lasym=True),
+                                       verbose=False)
+    assert symmetric.result.converged and asymmetric.result.converged
+    assert bool(asymmetric.runtime.setup.lasym)
+    # The asymmetric solve really did drive its sine spectra to nothing.
+    scale = float(jnp.max(jnp.abs(asymmetric.state.R_cos)))
+    assert float(jnp.max(jnp.abs(asymmetric.state.R_sin))) < 1e-12 * scale
+
+    lines = dict(alphas=np.linspace(0.0, 2.0 * np.pi, 6, endpoint=False), **FAST)
+    expected = np.asarray(stab.ballooning_lambda(symmetric.state, symmetric.runtime, **lines))
+    actual = np.asarray(stab.ballooning_lambda(asymmetric.state, asymmetric.runtime, **lines))
+    np.testing.assert_allclose(actual, expected, rtol=1e-10)
+
+
+def test_lasym_ballooning_is_finite_and_agrees_with_mercier(lasym_finite_beta_eq):
+    """Real asymmetric physics: stable deck, stable sign, asymmetry visible."""
+    eq = lasym_finite_beta_eq
+    lam = np.asarray(stab.ballooning_lambda(eq.state, eq.runtime, **FAST))
+    assert lam.shape == (3, 4, 1)
+    assert np.all(np.isfinite(lam))
+    assert np.all(lam < 0.0)
+    assert np.all(np.asarray(eq.wout.DMerc)[2:-1] > 0.0)   # Mercier agrees
+    # Up-down asymmetry makes field lines at different alpha inequivalent.  On
+    # the axisymmetric symmetric decks that spread is truncation-level (see
+    # test_high_pressure_case_is_ballooning_unstable); here it is physical, so
+    # a lane that silently symmetrized would show a far smaller spread.
+    spread = np.max(lam, axis=(1, 2)) - np.min(lam, axis=(1, 2))
+    assert np.all(spread > 1e-2 * np.abs(np.max(lam, axis=(1, 2))))
+
+
+def test_lasym_breaks_the_alpha_parity(lasym_finite_beta_eq, shaped_eq):
+    """``λ(-α, -ζ0) = λ(α, ζ0)`` is a stellarator-symmetry identity only.
+
+    This is why the default field lines span ``[0, 2π)`` for an asymmetric
+    state, and why COBRAVMEC disables its half-domain shortcut there
+    (``get_ballooning_grate.f:180``).
+    """
+    def parity_violation(eq):
+        line = dict(s_indices=[6], zeta0s=[0.0], **FAST)
+        plus = np.asarray(stab.ballooning_lambda(eq.state, eq.runtime, alphas=[0.7], **line))
+        minus = np.asarray(stab.ballooning_lambda(eq.state, eq.runtime, alphas=[-0.7], **line))
+        return float(np.max(np.abs(plus - minus)) / np.max(np.abs(plus)))
+
+    assert parity_violation(shaped_eq) < 1e-10          # symmetric: identity holds
+    assert parity_violation(lasym_finite_beta_eq) > 1e-4  # asymmetric: it does not
+
+    ctx = stab._ballooning_context(lasym_finite_beta_eq.state,
+                                   lasym_finite_beta_eq.runtime)
+    assert ctx["lasym"] is True and ctx["rmns"] is not None
+
+
+def test_lasym_growth_rate_gradient_matches_finite_differences(lasym_finite_beta_eq):
+    """AD through the asymmetric lane, against a central difference."""
+    state, rt = lasym_finite_beta_eq.state, lasym_finite_beta_eq.runtime
+
+    def growth(scale):
+        setup = dataclasses.replace(rt.setup, mass=rt.setup.mass * scale)
+        return stab.ballooning_growth_rate(state, dataclasses.replace(rt, setup=setup),
+                                           temperature=0.01, **FAST)
+
+    value, grad = jax.value_and_grad(growth)(1.0)
+    step = 1e-4
+    fd = float(growth(1.0 + step) - growth(1.0 - step)) / (2.0 * step)
+    assert np.isfinite(float(value))
+    assert float(grad) == pytest.approx(fd, rel=2e-4)
+    assert abs(float(grad)) > 0.0
+
+
+def test_every_field_line_lane_reaches_an_asymmetric_state(lasym_finite_beta_eq):
+    """Ballooning, turbulence and Gamma_c all run on a lasym equilibrium.
+
+    All three share one parity-complete field-line geometry, and each now has
+    its own asymmetric evidence rather than a guard: ballooning through the
+    zero-sine and LASYM-of-a-symmetric-deck gates above, turbulence against
+    simsopt's ``vmec_fieldlines`` on an asymmetric deck, and Gamma_c through
+    the exact reflection identity.  Nothing here should raise, and nothing
+    should come back non-finite.
+    """
+    from vmex.core import gammac, turbulence
+    eq = lasym_finite_beta_eq
+    lam = np.asarray(stab.ballooning_lambda(eq.state, eq.runtime, **FAST))
+    assert np.all(np.isfinite(lam))
+    geom = turbulence.gk_fieldline_geometry(eq.state, eq.runtime, ntheta=16)
+    assert np.all(np.isfinite(np.asarray(geom["bmag"])))
+    assert float(np.min(np.asarray(geom["bmag"]))) > 0.0
+    out = gammac.gamma_c_state(eq.state, eq.runtime, surfaces=(0.5,), nalpha=4,
+                               num_transit=2, points_per_transit=32,
+                               num_pitch=8, quadrature_order=16)
+    assert np.all(np.isfinite(np.asarray(out["gamma_c"])))
+
+
+# ---------------------------------------------------------------------------
+# External oracle: COBRAVMEC (Phase 34.3)
+# ---------------------------------------------------------------------------
+
+_XCOBRA = shutil.which("xcobravmec")
+
+
+def _cobra_growth_rates(wout_path: Path, rows, *, k_w: int, alpha_deg: float):
+    """Run COBRAVMEC on a vmex-written wout; return its signed growth rates.
+
+    The nine-record ``in_cobra`` file is ``cobra.f:104-116``.  ``l_geom_input =
+    l_tokamak_input = F`` selects the ``(alpha_st, zeta_k)`` branch, whose
+    field-line label ``alpha = theta + lambda - iota zeta``
+    (``obtain_field_line.f:31``) is exactly the one vmex uses; both angles are
+    in degrees (``summodosd.f:52``).  A nonzero ``alpha_st`` keeps COBRA on its
+    full domain (``tsymm = 1``), matching vmex's.
+    """
+    tag = wout_path.stem.removeprefix("wout_")
+    directory = wout_path.parent
+    (directory / f"in_cobra.{tag}").write_text(
+        f"{tag}\n{k_w} 1\nF F\n1\n0.0\n1\n{alpha_deg}\n{len(rows)}\n"
+        + " ".join(str(j + 1) for j in rows) + "\n")     # COBRA rows are 1-based
+    subprocess.run([_XCOBRA, f"in_cobra.{tag}"], cwd=directory, check=True,
+                   capture_output=True, timeout=600)
+    records = (directory / f"cobra_grate.{tag}").read_text().splitlines()
+    grate = np.array([float(line.split()[2]) for line in records[1:1 + len(rows)]])
+    assert not np.any(grate == 100.0), "COBRAVMEC failure sentinel"
+    return grate
+
+
+@pytest.mark.full  # external binary; solves at ns = 49
+@pytest.mark.skipif(_XCOBRA is None, reason="xcobravmec not on PATH")
+def test_ballooning_matches_cobravmec(tmp_path):
+    """Eigenvalue parity with COBRAVMEC through an analytic conversion.
+
+    COBRA's third column is a *signed* growth rate, ``+sqrt(-eigf)`` when
+    unstable and ``-sqrt(eigf)`` when stable (``get_ballooning_grate.f:313``),
+    so ``sign(grate) grate**2`` is its eigenvalue in COBRA's normalization
+    ``lambda = gamma**2 mu0 rho R0**2 / B0**2``.  vmex normalizes to
+    ``a_N`` and ``B_N``, so the two differ by ``(a_N B0 / (R0 B_N))**2`` --
+    a constant per equilibrium, with the density and COBRA's own ``amin``
+    cancelling.  Nothing here is fitted.
+    """
+    inp = dataclasses.replace(
+        VmecInput.from_file(DATA_DIR / "input.solovev"), pres_scale=3.0e4,
+        ns_array=np.array([49]), ftol_array=np.array([1e-13]),
+        niter_array=np.array([10000]))
+    eq = opt.solve_equilibrium(inp, verbose=False)
+    assert eq.result.converged
+    wout_path = Path(vj.write_wout(str(tmp_path / "wout_sol.nc"), eq.wout))
+
+    rows = [int(round(f * 48)) for f in (0.2, 0.35, 0.5, 0.65, 0.8)]
+    k_w, alpha_deg = 4, 60.0
+    grate = _cobra_growth_rates(wout_path, rows, k_w=k_w, alpha_deg=alpha_deg)
+
+    # COBRA's half-width is pi(2 k_w - 1)/(2 nfp iota) in zeta, i.e. this many
+    # poloidal turns for vmex, whose domain is in theta*.
+    nturns = (2 * k_w - 1) / (2 * int(eq.wout.nfp))
+    lam = np.asarray(stab.ballooning_lambda(
+        eq.state, eq.runtime, s_indices=rows, alphas=[np.deg2rad(alpha_deg)],
+        zeta0s=[0.0], npoints=769, nturns=nturns)).ravel()
+
+    ctx = stab._ballooning_context(eq.state, eq.runtime)
+    r0 = 0.5 * (float(eq.wout.rmax_surf) + float(eq.wout.rmin_surf))
+    hpres = 4.0e-7 * np.pi * np.asarray(eq.wout.pres)      # order_input.f:88
+    b0 = np.sqrt((2.0 / float(eq.wout.betaxis))
+                 * (1.5 * hpres[1] - 0.5 * hpres[2]))      # order_input.f:103
+    factor = (float(ctx["L_ref"]) * b0 / (r0 * float(ctx["B_ref"]))) ** 2
+    expected = np.sign(grate) * grate ** 2 * factor
+
+    assert np.all(expected > 0.0)                          # the deck is unstable
+    np.testing.assert_array_equal(np.sign(lam), np.sign(expected))
+    # The innermost surface carries COBRA's near-axis radial differencing: it
+    # is 4.3e-2 here and falls to 6.9e-3 at ns = 99, so it is discretization,
+    # not formulation.  Outside it the two codes agree to 6e-4.
+    np.testing.assert_allclose(lam[1:], expected[1:], rtol=3e-3)
+    np.testing.assert_allclose(lam[0], expected[0], rtol=6e-2)

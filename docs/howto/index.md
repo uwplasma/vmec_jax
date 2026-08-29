@@ -14,6 +14,7 @@ restart-from-previous-run
 parameter-scans
 run-on-gpu
 free-boundary
+use-essos-fields-and-coils
 profiles
 scale-a-configuration
 ```
@@ -33,6 +34,7 @@ parallel-ensembles
 :maxdepth: 1
 
 plot-diagnostics
+trace-alpha-particles
 use-wout-downstream
 troubleshoot
 ```

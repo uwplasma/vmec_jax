@@ -10,7 +10,8 @@ The solve path is the clean-room core end to end:
 :func:`vmex.core.multigrid.solve_multigrid` (fixed boundary) or
 :func:`vmex.core.multigrid.solve_free_boundary_multigrid` (free boundary) ->
 :func:`vmex.core.wout.wout_from_state` -> :func:`vmex.core.wout.write_wout`,
-plus the core plotting (``--plot``) and Boozer (``--booz``) drivers.
+plus the core plotting (``--plot``), Boozer (``--booz``) and alpha-particle
+tracing (``--trace``, ESSOS) drivers.
 
 Zero-crash policy: every failure maps to a typed
 :class:`vmex.core.errors.VmecError`; the CLI prints the VMEC2000
@@ -29,7 +30,7 @@ Free-boundary routing (``LFREEB = T``):
 - ``MGRID_FILE = 'DIRECT_COILS'`` (or the ``--coils`` flag) builds the external
   field from an ESSOS coils file (``essos.coils.Coils``): the Biot-Savart field
   is tabulated directly into an in-memory
-  :class:`vmex.core.mgrid.MgridField` via ``MgridField.from_cartesian_field``
+  :class:`vmex.core.mgrid.MgridField` via ``MgridField.from_coils``
   (``solve_free_boundary(inp, external_field=mgrid_field)``); requires ESSOS.
 
 Both symmetric and LASYM NESTOR potential and surface-field arrays are
@@ -149,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  vmex --plot mout_*.nc  — straight-axis mirror diagnostics\n"
             "  vmex --booz wout_*.nc  — run booz_xform_jax, write boozmn_*.nc\n"
             "  vmex --plot boozmn_*.nc— Boozer contour/spectrum plots\n"
+            "  vmex --trace wout_*.nc — trace alpha particles (ESSOS), plot losses\n"
             "  vmex --scale input.X [B R] — scale an input or WOUT\n"
             "  vmex --doctor          — installation and JAX backend diagnostics\n"
             "  vmex --test            — run and plot the bundled quick-start case\n"
@@ -211,6 +213,40 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Boozer surfaces: comma/space-separated normalized s values, or 'all' (default).",
+    )
+    p.add_argument(
+        "--trace",
+        action="store_true",
+        help=(
+            "Trace fusion alpha particles through the equilibrium with ESSOS "
+            "(guiding centre): print the loss fraction and counts, and write "
+            "the orbit/loss/energy figures. Works on a wout_*.nc input or "
+            "after solving an input file (requires ESSOS)."
+        ),
+    )
+    p.add_argument(
+        "--trace-tmax", type=float, default=3e-4,
+        help="Tracing horizon in seconds (default: 3e-4).",
+    )
+    p.add_argument(
+        "--trace-particles", type=int, default=200,
+        help="Number of alpha particles (default: 200).",
+    )
+    p.add_argument(
+        "--trace-s", type=float, default=0.25,
+        help="Launch surface s = psi/psi_b (default: 0.25).",
+    )
+    p.add_argument(
+        "--trace-seed", type=int, default=42,
+        help="Sampling seed for angles and pitch (default: 42).",
+    )
+    p.add_argument(
+        "--trace-timestep", type=float, default=5e-7,
+        help="Integrator timestep in seconds (default: 5e-7).",
+    )
+    p.add_argument(
+        "--trace-times", type=int, default=200,
+        help="Number of saved samples per orbit (default: 200).",
     )
     p.add_argument("--outdir", type=str, default=None, help="Directory for wout/boozmn/figure output (default: alongside the input).")
     p.add_argument("--quiet", action="store_true", help="Silence the VMEC-style stdout.")
@@ -428,10 +464,11 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
     Accepts the ``Coils.to_json`` layout (``.json``) or the same keys in an
     ``.npz`` archive (``dofs_curves`` of shape ``(n_base_coils, 3,
     2*order + 1)``, ``dofs_currents``, ``n_segments``, ``nfp``, ``stellsym``,
-    optional ``currents_scale``).  Builds a cylindrical grid spanning the coil
-    bounding box and tabulates the Biot-Savart field into an in-memory
-    :class:`~vmex.core.mgrid.MgridField` — the same field type the mgrid-file
-    lane produces, with no temporary file.  Requires ESSOS
+    optional ``currents_scale``).  File loading is all this adds over the
+    library seam :meth:`~vmex.core.mgrid.MgridField.from_coils`, which spans
+    the coil bounding box and tabulates the Biot-Savart field into an
+    in-memory :class:`~vmex.core.mgrid.MgridField` — the same field type the
+    mgrid-file lane produces, with no temporary file.  Requires ESSOS
     (``pip install essos``).
     """
     import numpy as np
@@ -473,31 +510,7 @@ def _coils_mgrid_field(path: Path, *, nr: int = 96, nphi: int = 32,
             ),
         ) from exc
 
-    # Cylindrical grid spanning the coil bounding box (10% margin); the plasma
-    # boundary sits well inside the coils, so this grid brackets it.
-    gamma = np.asarray(coils.gamma).reshape(-1, 3)
-    r = np.hypot(gamma[:, 0], gamma[:, 1])
-    z = gamma[:, 2]
-    rpad = 0.1 * (float(r.max()) - float(r.min())) + 1.0e-9
-    zpad = 0.1 * (float(z.max()) - float(z.min())) + 1.0e-9
-    rmin, rmax = max(1.0e-2, float(r.min()) - rpad), float(r.max()) + rpad
-    zmin, zmax = float(z.min()) - zpad, float(z.max()) + zpad
-
-    # Tabulate the Biot-Savart field directly into an in-memory MgridField
-    # via ``fields.BiotSavart`` (present in every released ESSOS); do not
-    # switch to a ``Coils.to_mgrid`` export — ESSOS main does not provide one.
-    from essos.fields import BiotSavart
-
-    bs = BiotSavart(coils)
-
-    def cartesian_field(points):
-        return bs.B(points)
-
-    return MgridField.from_cartesian_field(
-        cartesian_field, rmin=rmin, rmax=rmax, zmin=zmin, zmax=zmax,
-        ir=int(nr), jz=int(nz), kp=int(nphi), nfp=int(coils.nfp),
-        label="essos_coils",
-    )
+    return MgridField.from_coils(coils, ir=int(nr), jz=int(nz), kp=int(nphi))
 
 
 def _free_boundary_plan(args, inp, input_path: Path, *, emit):
@@ -727,6 +740,8 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             wout_path, args, plot_dir,
             plot=args.plot is not None, emit=emit, quiet=bool(args.quiet),
         )
+    if bool(args.trace):
+        _run_trace(wout_path, args, plot_dir, emit=emit, quiet=bool(args.quiet))
     if not bool(result.converged):  # NITER exhaustion: wout kept, distinct code
         return int(result.ier_flag) or 1
     return 0
@@ -790,6 +805,49 @@ def _run_booz(wout_path: Path, args, outdir: Path, *, plot: bool, emit, quiet: b
     if plot:
         _plot_boozmn_file(boozmn_path, outdir, emit=emit, quiet=quiet)
     return boozmn_path
+
+
+def _run_trace(wout_path: Path, args, outdir: Path, *, emit, quiet: bool) -> None:
+    """Alpha-particle tracing driver for ``--trace`` (requires ESSOS)."""
+    from .plotting import plot_tracing
+    from .tracing import trace_alphas
+
+    if not quiet:
+        emit(
+            f" Tracing {int(args.trace_particles)} alpha particles from "
+            f"s={float(args.trace_s):g} (ESSOS GuidingCenter, "
+            f"tmax={float(args.trace_tmax):.3g} s)"
+        )
+    try:
+        result = trace_alphas(
+            wout_path,
+            tmax=float(args.trace_tmax),
+            nparticles=int(args.trace_particles),
+            s=float(args.trace_s),
+            seed=int(args.trace_seed),
+            timestep=float(args.trace_timestep),
+            times_to_trace=int(args.trace_times),
+        )
+    except ImportError as exc:
+        raise VmecInputError(
+            WERROR_MESSAGES[INPUT_ERROR_FLAG],
+            hint="--trace requires essos (pip install essos)",
+        ) from exc
+    except ValueError as exc:  # e.g. lasym equilibria (released-ESSOS limit)
+        raise VmecInputError(
+            WERROR_MESSAGES[INPUT_ERROR_FLAG], hint=str(exc)
+        ) from exc
+    if not quiet:
+        emit(f" ESSOS tracing took {result.wall_time_s:.2f} s")
+        emit(
+            f" Loss fraction: {100.0 * result.loss_fraction:.2f}% "
+            f"({result.particles_lost} of {result.nparticles} particles lost)"
+        )
+        emit(f" Axis terminations: {result.particles_unresolved}")
+        emit(f" Solver failures: {result.particles_failed}")
+    for key, path in plot_tracing(wout_path, result, outdir).items():
+        if not quiet:
+            emit(f"   Saved {key}: {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -1015,11 +1073,13 @@ def _dispatch(args, parser: argparse.ArgumentParser, *, emit) -> int:
     quiet = bool(args.quiet)
 
     if bool(args.scale):
-        if plot_requested or bool(args.booz) or bool(args.test):
-            parser.error("--scale cannot be combined with --plot, --booz, or --test")
+        if plot_requested or bool(args.booz) or bool(args.trace) or bool(args.test):
+            parser.error("--scale cannot be combined with --plot, --booz, --trace, or --test")
         return _scale_file(args, input_path, outdir, emit=emit)
 
     if _is_boozmn_path(input_path):
+        if bool(args.trace):
+            parser.error("particle tracing requires toroidal wout_*.nc inputs")
         if not plot_requested:
             parser.error("boozmn_*.nc inputs are plot-only; use --plot boozmn_*.nc")
         _plot_boozmn_file(input_path, plot_outdir, emit=emit, quiet=quiet)
@@ -1030,16 +1090,20 @@ def _dispatch(args, parser: argparse.ArgumentParser, *, emit) -> int:
             parser.error("mout_*.nc inputs are plot-only; use --plot mout_*.nc")
         if bool(args.booz):
             parser.error("Boozer transforms require toroidal wout_*.nc inputs")
+        if bool(args.trace):
+            parser.error("particle tracing requires toroidal wout_*.nc inputs")
         _plot_mout_file(input_path, plot_outdir, emit=emit, quiet=quiet)
         return 0
 
     if _is_wout_path(input_path):
-        if not plot_requested and not bool(args.booz):
-            parser.error("wout_*.nc inputs require --plot and/or --booz")
+        if not plot_requested and not bool(args.booz) and not bool(args.trace):
+            parser.error("wout_*.nc inputs require --plot, --booz, and/or --trace")
         if plot_requested:
             _plot_wout_file(input_path, plot_outdir, emit=emit, quiet=quiet)
         if bool(args.booz):
             _run_booz(input_path, args, plot_outdir, plot=plot_requested, emit=emit, quiet=quiet)
+        if bool(args.trace):
+            _run_trace(input_path, args, plot_outdir, emit=emit, quiet=quiet)
         return 0
 
     return _solve_input_file(args, input_path, outdir, emit=emit)

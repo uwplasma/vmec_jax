@@ -1,0 +1,33 @@
+{
+  "build_seconds": 30.264485792000414,
+  "cold_startup_seconds": 55.92575025100086,
+  "command": "JAX_ENABLE_X64=1 python benchmarks/qa_optimization_startup.py --lane least-squares --max-mode 3 --repeats 1",
+  "compile_seconds": 21.426515458999347,
+  "dofs": 48,
+  "initial_gradient_norm": 800.2186786618643,
+  "initial_solve_seconds": 4.234749000001102,
+  "initial_value": 21.448752427232517,
+  "input_data_embedded": false,
+  "input_sha256": "d76efbd4d584c91a985b147a07302660f7bb515f23dfdebc721bc35b703c9bbb",
+  "lane": "least-squares",
+  "max_mode": 3,
+  "measurement_commit": "980b602a4af987d745caf90b10e22ba37b6aaf9d",
+  "measurement_dirty": false,
+  "peak_rss_mib": 3705.59375,
+  "persistent_compilation_cache": false,
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "repeats": 1,
+  "residual_rows": 6723,
+  "schema": "vmex.qa-optimization-startup/1",
+  "versions": {
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1",
+    "numpy": "2.5.2",
+    "python": "3.12.13",
+    "vmex": "0.7.0"
+  },
+  "vmex_module": "vmex/__init__.py",
+  "warm_distinct_points": true,
+  "warm_relative_step": 1e-05,
+  "warm_value_gradient_median_seconds": 15.02162695899824
+}

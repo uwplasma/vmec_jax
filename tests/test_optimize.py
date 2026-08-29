@@ -22,6 +22,7 @@ jax.config.update("jax_enable_x64", True)
 jnp = jax.numpy
 
 from vmex.core.input import VmecInput  # noqa: E402
+from vmex.core.errors import AdjointSolveError  # noqa: E402
 from vmex.core.problem import Evaluation, FunctionProblem  # noqa: E402
 from vmex.core.wout import read_wout  # noqa: E402
 from vmex.core import optimize as opt  # noqa: E402
@@ -688,6 +689,98 @@ def test_auto_jac_chunk_stays_bounded_with_large_device(monkeypatch):
     assert opt._auto_jac_chunk(120) == 11
 
 
+def test_jacobian_certificate_retains_the_worst_residual_evidence():
+    """A failed column carries enough evidence for the typed public error."""
+    report = SimpleNamespace(
+        iterations=jnp.array([3, 5]), converged=jnp.array([True, False]),
+        residual_norm=jnp.array([1.0e-8, 2.0e-3]),
+        tolerance=jnp.array([1.0e-6, 1.0e-4]),
+    )
+    np.testing.assert_allclose(
+        opt._linear_response_summary(report), [5, 1, 2.0e-3, 1.0e-4]
+    )
+
+
+def test_uncertified_jacobian_falls_back_or_raises_with_evidence():
+    """Automatic lanes retry reverse; forced lanes fail with the certificate."""
+    candidate = np.zeros((2, 3))
+    reverse = np.ones_like(candidate)
+    missed = jnp.asarray([5.0, 1.0, 2.0e-3, 1.0e-4])
+    calls = []
+
+    def reverse_candidate():
+        calls.append(True)
+        return reverse
+
+    got, used_reverse = opt._select_host_jacobian(
+        candidate, missed, jac_solver="auto",
+        reverse_candidate=reverse_candidate,
+    )
+    np.testing.assert_array_equal(got, reverse)
+    assert used_reverse and len(calls) == 1
+
+    for method in ("block", "gmres"):
+        with pytest.raises(AdjointSolveError) as caught:
+            opt._select_host_jacobian(
+                candidate, missed, jac_solver=method,
+                reverse_candidate=reverse_candidate,
+            )
+        assert caught.value.iterations == 5
+        assert caught.value.residual_norm == 2.0e-3
+        assert caught.value.tolerance == 1.0e-4
+    assert len(calls) == 1
+
+    certified = missed.at[1].set(0.0)
+    got, used_reverse = opt._select_host_jacobian(
+        candidate, certified, jac_solver="block",
+        reverse_candidate=reverse_candidate,
+    )
+    np.testing.assert_array_equal(got, candidate)
+    assert not used_reverse and len(calls) == 1
+
+    def reverse_failure():
+        raise RuntimeError("reverse failed")
+
+    with pytest.raises(RuntimeError, match="reverse failed"):
+        opt._select_host_jacobian(
+            candidate, missed, jac_solver="auto",
+            reverse_candidate=reverse_failure,
+        )
+    with pytest.raises(FloatingPointError, match="invalid.*certificate"):
+        opt._select_host_jacobian(
+            candidate, jnp.asarray([1.0, jnp.nan]), jac_solver="auto",
+            reverse_candidate=reverse_candidate,
+        )
+
+    jax_fallback = jax.jit(
+        lambda matrix, summary: opt._select_jax_jacobian(
+            matrix, summary, lambda: jnp.ones((2, 3))
+        )
+    )
+    np.testing.assert_array_equal(jax_fallback(candidate, missed), reverse)
+    np.testing.assert_array_equal(jax_fallback(candidate, certified), candidate)
+    np.testing.assert_array_equal(
+        jax_fallback(
+            candidate, jnp.asarray([1.0, jnp.nan, 0.0, 1.0])), reverse
+    )
+
+    nonfinite = np.full_like(candidate, np.nan)
+    got, used_reverse = opt._select_host_jacobian(
+        nonfinite, certified, jac_solver="auto",
+        reverse_candidate=reverse_candidate,
+    )
+    np.testing.assert_array_equal(got, reverse)
+    assert used_reverse
+    with pytest.raises(AdjointSolveError, match="non-finite"):
+        opt._select_host_jacobian(
+            nonfinite, certified, jac_solver="block",
+            reverse_candidate=reverse_candidate,
+        )
+    np.testing.assert_array_equal(
+        jax_fallback(nonfinite, certified), reverse
+    )
+
+
 def test_least_squares_implicit_jac_solver_block(monkeypatch):
     """The R25.2 block-tridiagonal Jacobian (``jac_solver="block"``: colored
     jvp probes, one :func:`solvax.block_thomas_factor`, GMRES-certified
@@ -805,10 +898,77 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
         == "weight multiplies squared cost"
     )
 
-    # A non-finite block result retries the independently certified GMRES
-    # implementation; if both lanes raise, the last certified Jacobian is
-    # returned and the failed-trial counter remains observable.
+    from vmex.core import implicit as implicit_module
+
+    # A rejected equilibrium gets the exact derivative of its smooth penalty
+    # residual, never a Jacobian cached for a different physical point.
+    config = problem.metadata["config"]
+    rejected_trial = problem.x0.copy()
+    rejected_trial[0] += 1.0e-5
     real_device_get = opt.jax.device_get
+
+    def retain_rejected_status(value):
+        host = real_device_get(value)
+        implicit_module._LAST_STATUS_ERROR[config] = ValueError("rejected boundary")
+        return host
+
+    implicit_module._LAST_STATUS_ERROR[config] = ValueError("rejected boundary")
+    with monkeypatch.context() as patch:
+        patch.setattr(opt.jax, "device_get", retain_rejected_status)
+        problem._rj_cache = None
+        rejected_jacobian = problem.residual_jac(rejected_trial)
+    assert rejected_jacobian.shape == weighted_jac.shape
+    assert np.all(np.isfinite(rejected_jacobian))
+    assert np.linalg.norm(rejected_jacobian) > 0.0
+    implicit_module._LAST_STATUS_ERROR.pop(config, None)
+
+    # Reverse failure is typed and fail-closed. The automatic-fallback flag is
+    # recorded when the policy helper selects a certified reverse candidate.
+    def nonfinite_reverse(value):
+        host = real_device_get(value)
+        if np.shape(host) == reverse.jac.shape:
+            return np.full(reverse.jac.shape, np.nan)
+        return host
+
+    with monkeypatch.context() as patch:
+        patch.setattr(opt.jax, "device_get", nonfinite_reverse)
+        reverse_problem._rj_cache = None
+        with pytest.raises(AdjointSolveError, match="reverse Jacobian"):
+            reverse_problem.residual_jac(reverse_problem.x0)
+
+    fallback_before = problem.metadata["holder"]["derivative_fallbacks"]
+
+    def select_reverse(candidate, summary, *, jac_solver, reverse_candidate):
+        del summary, jac_solver, reverse_candidate
+        return candidate, True
+
+    with monkeypatch.context() as patch:
+        patch.setattr(opt, "_select_host_jacobian", select_reverse)
+        problem._rj_cache = None
+        np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
+    assert problem.metadata["holder"]["derivative_fallbacks"] == fallback_before + 1
+    fallback_after_policy = problem.metadata["holder"]["derivative_fallbacks"]
+
+    # If the block graph itself fails, the independent column solve is still
+    # certified before it is returned.
+    failed_once = {"done": False}
+
+    def fail_block_once(value):
+        host = real_device_get(value)
+        if not failed_once["done"] and np.shape(host) == weighted_jac.shape:
+            failed_once["done"] = True
+            raise RuntimeError("synthetic block failure")
+        return host
+
+    monkeypatch.setattr(opt.jax, "device_get", fail_block_once)
+    problem._rj_cache = None
+    np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
+    assert problem.metadata["holder"]["derivative_fallbacks"] == fallback_after_policy + 1
+    monkeypatch.setattr(opt.jax, "device_get", real_device_get)
+    fallback_after_gmres = problem.metadata["holder"]["derivative_fallbacks"]
+
+    # A forced block lane fails closed. Automatic method changes are reserved
+    # for jac_solver="auto"; a derivative from another point is never reused.
     poisoned = {"done": False}
 
     def nonfinite_primary(value):
@@ -820,8 +980,9 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
 
     monkeypatch.setattr(opt.jax, "device_get", nonfinite_primary)
     problem._rj_cache = None
-    np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
-    assert problem.metadata["holder"]["derivative_fallbacks"] == 1
+    with pytest.raises(AdjointSolveError, match="non-finite"):
+        problem.residual_jac(problem.x0)
+    assert problem.metadata["holder"]["derivative_fallbacks"] == fallback_after_gmres
 
     def reject_both(value):
         host = real_device_get(value)
@@ -834,15 +995,17 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     np.testing.assert_allclose(problem.residual_jac(problem.x0), weighted_jac)
     assert problem.metadata["holder"]["failed_trials"] >= 1
 
-    # A scalar evaluation at a new point may not pair that point's value with
-    # the stale Jacobian retained for least-squares compatibility.
+    # A converged new point whose derivative machinery fails raises instead
+    # of pairing its value with a stale Jacobian from another point.
     trial = problem.x0.copy()
     trial[0] += 1.0e-5
     problem._vg_cache = None
-    failed_value, failed_gradient = problem.value_and_grad(trial)
-    assert failed_value >= 1.0
-    assert np.all(np.isfinite(failed_gradient))
+    with pytest.raises(RuntimeError, match="synthetic derivative failure"):
+        problem.value_and_grad(trial)
     assert problem.metadata["holder"]["last_jac_key"] != FunctionProblem._key(trial)
+    problem._rj_cache = None
+    with pytest.raises(RuntimeError, match="synthetic derivative failure"):
+        problem.residual_jac(trial)
 
     certified = problem.metadata["holder"]["last_jac"]
     problem.metadata["holder"]["last_jac"] = None
@@ -858,7 +1021,7 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
 
     monkeypatch.setattr(opt.jax, "device_get", reject_with_nonfinite)
     problem._rj_cache = None
-    with pytest.raises(FloatingPointError, match="non-finite initial"):
+    with pytest.raises(AdjointSolveError, match="non-finite"):
         problem.residual_jac(problem.x0)
     problem.metadata["holder"]["last_jac"] = certified
 
@@ -873,8 +1036,6 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
     assert np.all(problem.residual(problem.x0) == 1.0e6)
     assert problem.metadata["holder"]["failed_trials"] >= failed_before + 1
     monkeypatch.setattr(opt.jax, "device_get", real_device_get)
-
-    from vmex.core import implicit as implicit_module
 
     evaluation = problem.evaluate(problem.x0)
     assert evaluation.success
@@ -933,7 +1094,6 @@ def test_least_squares_implicit_jac_solver_block(monkeypatch):
 
     with pytest.raises(AttributeError, match="residuals"):
         scalar.residual(scalar.x0)
-    config = problem.metadata["config"]
     implicit_module._LAST_STATUS_ERROR[config] = ValueError("rejected boundary")
 
     def rejected_equilibrium(_x):

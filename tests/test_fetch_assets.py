@@ -60,6 +60,7 @@ def test_asset_manifest_has_complete_provenance() -> None:
     bundles = data["bundles"]
     assert {bundle["name"] for bundle in bundles} == {
         "golden-v1",
+        "ncsx-mgrid",
         "reference-nc",
         "wout-fixtures",
     }

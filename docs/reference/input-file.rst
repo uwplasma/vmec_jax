@@ -118,7 +118,15 @@ Multigrid ladder and stepping
      - constraint-force multiplier (spectral condensation)
    * - ``APHI``
      - ``[1, 0, ...]``
-     - radial-flux remap polynomial
+     - radial-flux remap polynomial: ``Phi(x) = sum_i APHI(i)*x**i`` up to
+       the ``torflux(1)`` normalization (``PHIEDGE`` always sets the
+       physical edge flux).  Validity requirement: the derivative
+       ``Phi'(s)`` must not change sign inside ``s`` in ``[0, 1]`` — ``s``
+       is a flux label, and a sign reversal folds the ``s -> Phi`` map.
+       VMEX rejects such decks with a typed input error naming the
+       offending interval (VMEC2000 accepts them and stalls or NaN-marches
+       into a written WOUT without diagnosis).  Tangential zeros and zeros
+       exactly at ``s = 0``/``s = 1`` remain valid.
    * - ``PHIEDGE``
      - 1.0
      - total enclosed toroidal flux [Wb]
@@ -159,8 +167,9 @@ Pressure profile
      - Meaning
    * - ``PMASS_TYPE``
      - ``power_series``
-     - one of ``power_series``, ``two_power``, ``gauss_trunc``,
-       ``cubic_spline``, ``akima_spline``, ``line_segment``, ``pedestal``,
+     - one of ``power_series``, ``two_power``, ``two_power_gs``,
+       ``two_Lorentz``, ``gauss_trunc``, ``rational``, ``cubic_spline``,
+       ``akima_spline``, ``line_segment``, ``pedestal``,
        ... (see :mod:`vmex.core.profiles`)
    * - ``AM``
      - zeros
@@ -194,7 +203,13 @@ Current and iota profiles
    * - ``PCURR_TYPE``
      - ``power_series``
      - current profile type; ``*_i`` forms prescribe :math:`I(s)`, ``*_ip``
-       forms prescribe :math:`I'(s)`
+       forms prescribe :math:`I'(s)`.  One of ``power_series``,
+       ``power_series_i``, ``two_power``, ``two_power_gs``,
+       ``gauss_trunc``, ``sum_atan``, ``rational``, ``pedestal``,
+       ``sum_cossq_s``, ``sum_cossq_sqrts``, ``sum_cossq_s_free``, and the
+       ``cubic_spline``/``akima_spline``/``line_segment`` ``_i`` and ``_ip``
+       forms.  ``sum_atan``, ``rational``, ``pedestal`` and the
+       ``sum_cossq_*`` forms prescribe :math:`I(s)`
    * - ``AC`` / ``AC_AUX_S`` / ``AC_AUX_F``
      - zeros / —
      - current profile coefficients / spline knots and values
@@ -203,7 +218,9 @@ Current and iota profiles
      - total toroidal current [A]
    * - ``PIOTA_TYPE``
      - ``power_series``
-     - iota profile type
+     - iota profile type; one of ``power_series``, ``sum_atan``,
+       ``nice_quadratic``, ``rational``, ``cubic_spline``, ``akima_spline``,
+       ``line_segment``
    * - ``AI`` / ``AI_AUX_S`` / ``AI_AUX_F``
      - zeros / —
      - iota profile coefficients / spline knots and values

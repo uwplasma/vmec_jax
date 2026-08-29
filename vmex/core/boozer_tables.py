@@ -48,6 +48,16 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
     - ``bmnc``, ``bsubumnc``, ``bsubvmnc``: |B| and the covariant field
       components, native to the half mesh (``bcovar.f``), projected on the
       grid-representable ``cos(m*theta - n*zeta)`` modes;
+    - ``gmnc``, ``bsupumnc``, ``bsupvmnc``: ``sqrt(g)`` and the contravariant
+      field components, which ``wrout.f`` writes unfiltered on the full
+      Nyquist set;
+    - ``bsubsmns``: the covariant radial field ``B_s = B^u g_su + B^v g_sv``
+      from the ``bss.f`` metric cross terms, native to the half mesh.  For
+      stellarator-symmetric equilibria ``B_s`` is odd under the reflection
+      ``(theta, zeta) -> (-theta, -zeta)``, so its symmetric table is the
+      *sine* family — parity opposite to ``bmnc``/``bsubumnc``.  The wout
+      file stores the full-mesh average of consecutive half-mesh rows
+      (``wrout.f``); this table stays on half-mesh row ``j``;
     - ``rmnc``, ``zmns``: R/Z tables from the full-mesh rows ``j-1``/``j``
       with the VMEC odd-m ``sqrt(s)`` parity interpolation to the half mesh;
     - ``lmns``: the wout lambda sine table, reconstructed from the
@@ -58,12 +68,13 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
       ``nfp`` factor, wout convention).
 
     Validation (tests/test_boozer_tables.py, and the sfincs_jax
-    flagship-example tests where this function originated): ``bmnc`` and the
-    parity-interpolated ``rmnc/zmns`` match the host wout engine to
-    ~1e-15..1e-10 relative (identical quadrature); ``bsubumnc/bsubvmnc`` and
-    ``lmns`` agree at the ~1e-3 half-mesh finite-difference level (looser at
-    very small ``ns``), which is the wout engine's own grid discrepancy, not
-    an error of this projection.
+    flagship-example tests where this function originated): ``bmnc``, the
+    parity-interpolated ``rmnc/zmns``, and the ``gmnc/bsupumnc/bsupvmnc/
+    bsubsmns`` families match the host wout engine to ~1e-15..1e-10 relative
+    (identical quadrature); ``bsubumnc/bsubvmnc`` and ``lmns`` agree at the
+    ~1e-3 half-mesh finite-difference level (looser at very small ``ns``),
+    which is the wout engine's own grid discrepancy, not an error of this
+    projection.
 
     Parameters
     ----------
@@ -122,7 +133,11 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
     # uniform-grid Fourier projection onto the grid-representable modes
     theta = 2.0 * np.pi * np.arange(ntheta1) / ntheta1
     zeta = 2.0 * np.pi * np.arange(nzeta) / (nfp * nzeta)
-    m_max, n_max = ntheta1 // 2 - 1, max(nzeta // 2 - 1, 0)
+    # VMEC sizes the wout Nyquist table from the grid itself (wrout.f:
+    # mnyq = ntheta1/2, nnyq = nzeta/2), so the closing row and column belong
+    # to the projection; on a coarse deck they carry a few percent of
+    # bmnc/bmns.
+    m_max, n_max = ntheta1 // 2, nzeta // 2
     ml, nl = [], []
     for m in range(0, m_max + 1):
         for n in range(-n_max, n_max + 1):
@@ -133,9 +148,24 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
     xm, xn = np.asarray(ml), np.asarray(nl)
     ang = theta[:, None, None] * xm[None, None, :] - zeta[None, :, None] * xn[None, None, :]
     cos_t, sin_t = jnp.asarray(np.cos(ang)), jnp.asarray(np.sin(ang))
-    w = 2.0 / (ntheta1 * nzeta) * np.ones(xm.shape)
+    # The factor of two is the real-basis DFT norm for modes strictly inside
+    # the band.  On an even grid the closing m = ntheta1/2 row and the
+    # n = nzeta/2 column are self-conjugate — exp(i*(ntheta1/2)*theta_i)
+    # equals its own reflection — so (m, n) and (m, -n) share a single grid
+    # basis function and each carries half the amplitude.  That is wrout.f's
+    # ``cosmui(:,mnyq) *= 0.5`` / ``cosnv(:,nnyq) *= 0.5`` half-weight; odd
+    # ntheta1/nzeta have no exact Nyquist mode and keep the plain factor.
+    m_folds = (ntheta1 % 2 == 0) & (xm == ntheta1 // 2)
+    n_folds = (nzeta % 2 == 0) & (np.abs(xn) == (nzeta // 2) * nfp)
+    w = 2.0 / (ntheta1 * nzeta) * np.where(m_folds, 0.5, 1.0) * np.where(n_folds, 0.5, 1.0)
     w[(xm == 0) & (xn == 0)] = 1.0 / (ntheta1 * nzeta)
     w = jnp.asarray(w)
+    # Where both angles fold — m in {0, ntheta1/2} and |n| in {0, nzeta/2} —
+    # the mode is real on the grid and has no sine partner at all.  Zero those
+    # columns so round-off in sin(pi*i) cannot emit a spurious sine table
+    # entry where VMEC writes an exact zero.
+    sine_free = ((xm == 0) | m_folds) & ((xn == 0) | n_folds)
+    sin_t = jnp.where(jnp.asarray(sine_free)[None, None, :], 0.0, sin_t)
 
     def project(f, parity):
         return w * jnp.einsum("tz,tzm->m", f, cos_t if parity == "cos" else sin_t)
@@ -157,6 +187,38 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
                           for a in (bsubumnc, bsubumns))
     bsubvmnc, bsubvmns = (jnp.where(covariant_modes, a, 0.0)
                           for a in (bsubvmnc, bsubvmns))
+
+    # sqrt(g), B^u, B^v: half-mesh natives that wrout.f writes unfiltered on
+    # the full Nyquist set (no jxbforce band limit, unlike bsubu/bsubv).
+    sqrt_g = mirror(jnp.asarray(jacobian.sqrt_g)[j], "even")
+    bsupu = mirror(jnp.asarray(fields.bsupu)[j], "even")
+    bsupv = mirror(jnp.asarray(fields.bsupv)[j], "even")
+    gmnc, bsupumnc, bsupvmnc = (project(a, "cos") for a in (sqrt_g, bsupu, bsupv))
+    gmns, bsupumns, bsupvmns = (project(a, "sin") for a in (sqrt_g, bsupu, bsupv))
+
+    # B_s = B^u g_su + B^v g_sv on the half mesh (bss.f): rv12/zv12 average
+    # the toroidal derivatives to the half mesh, rs12/zs12 add the
+    # d(shalf)/ds odd-m chain-rule terms (dphids = 0.25).  B_s is odd under
+    # the stellarator reflection, so the mirror flips sign and the symmetric
+    # table is the sine family.
+    sqrt_s_half = jnp.sqrt(s_half_j)
+
+    def zeta_derivative_half(even, odd):
+        return 0.5 * (jnp.asarray(even)[j] + jnp.asarray(even)[j - 1]
+                      + sqrt_s_half * (jnp.asarray(odd)[j] + jnp.asarray(odd)[j - 1]))
+
+    rv12 = zeta_derivative_half(geometry.dR_dzeta_even, geometry.dR_dzeta_odd)
+    zv12 = zeta_derivative_half(geometry.dZ_dzeta_even, geometry.dZ_dzeta_odd)
+    dphids = 0.25
+    rs12 = jnp.asarray(jacobian.dR_ds)[j] + dphids * (
+        jnp.asarray(geometry.R_odd)[j] + jnp.asarray(geometry.R_odd)[j - 1]) / sqrt_s_half
+    zs12 = jnp.asarray(jacobian.dZ_ds)[j] + dphids * (
+        jnp.asarray(geometry.Z_odd)[j] + jnp.asarray(geometry.Z_odd)[j - 1]) / sqrt_s_half
+    g_su = rs12 * jnp.asarray(jacobian.ru12)[j] + zs12 * jnp.asarray(jacobian.zu12)[j]
+    g_sv = rs12 * rv12 + zs12 * zv12
+    bsubs = mirror(jnp.asarray(fields.bsupu)[j] * g_su
+                   + jnp.asarray(fields.bsupv)[j] * g_sv, "odd")
+    bsubsmns, bsubsmnc = project(bsubs, "sin"), project(bsubs, "cos")
 
     # R, Z: full-mesh rows j-1, j -> spectral -> VMEC parity interpolation
     def phys_row(even, odd, row):
@@ -203,6 +265,10 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
                            s=s, signgs=setup.signgs)
     return dict(xm=xm, xn=xn, rmnc=rmnc, zmns=zmns, lmns=lmns, bmnc=bmnc,
                 bsubumnc=bsubumnc, bsubvmnc=bsubvmnc,
+                gmnc=gmnc, bsupumnc=bsupumnc, bsupvmnc=bsupvmnc,
+                bsubsmns=bsubsmns,
                 rmns=rmns, zmnc=zmnc, lmnc=lmnc, bmns=bmns,
-                bsubumns=bsubumns, bsubvmns=bsubvmns, iota=iota,
+                bsubumns=bsubumns, bsubvmns=bsubvmns,
+                gmns=gmns, bsupumns=bsupumns, bsupvmns=bsupvmns,
+                bsubsmnc=bsubsmnc, iota=iota,
                 G=jnp.asarray(cur.bvco)[j], I=jnp.asarray(cur.buco)[j])

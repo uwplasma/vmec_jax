@@ -14,14 +14,23 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.restart.state_from_wout` /
   :func:`~vmex.core.restart.restart_state` — hot restart from any wout
   (also ``solve*(..., restart_from=...)``)
+- :class:`~vmex.core.strong_force.HighOrderEquilibriumState` /
+  :func:`~vmex.core.strong_force.certify_strong_force` — axis-regular
+  continuous reconstruction and independent strong-force certificate
 - :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
 - :func:`~vmex.core.plotting.plot_optimization_objects` — surfaces and coils
 - :func:`~vmex.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
 - :func:`~vmex.core.neoclassical.epsilon_effective_from_wout` — optional
   NEO_JAX effective-ripple profile
+- :func:`~vmex.core.tracing.essos_vmec_field` — hand a solved equilibrium to
+  ESSOS as an ``essos.fields.Vmec`` (optional ESSOS dependency)
+- :func:`~vmex.core.tracing.trace_alphas` /
+  :func:`~vmex.core.plotting.plot_tracing` — optional ESSOS alpha-particle
+  tracing (exact loss fraction; also ``vmex --trace``)
 - :func:`~vmex.core.mgrid.read_mgrid` / :func:`~vmex.core.mgrid.write_mgrid`
   / :func:`~vmex.core.mgrid.tabulate_cartesian_field`
-  / :class:`~vmex.core.mgrid.MgridField` (mgrid or tabulated direct field)
+  / :class:`~vmex.core.mgrid.MgridField` (mgrid or tabulated direct field;
+  ``MgridField.from_coils`` tabulates an ESSOS coil set)
 - :class:`~vmex.core.extender.VmecInteriorField` — field inside the plasma
 - :class:`~vmex.core.extender.VmecExtender` — field outside the plasma surface
 - :class:`~vmex.core.virtual_casing.PlasmaVacuumInterface` — virtual-casing
@@ -138,6 +147,18 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     # hot restart
     "restart_state": (".core.restart", "restart_state"),
     "state_from_wout": (".core.restart", "state_from_wout"),
+    # high-order reconstruction and independent strong-force certificate
+    "HighOrderEquilibriumState": (
+        ".core.strong_force", "HighOrderEquilibriumState"),
+    "StrongForceReport": (".core.strong_force", "StrongForceReport"),
+    "StrongForceSamples": (".core.strong_force", "StrongForceSamples"),
+    "certify_strong_force": (".core.strong_force", "certify_strong_force"),
+    "evaluate_strong_force": (".core.strong_force", "evaluate_strong_force"),
+    "high_order_state_from_wout": (
+        ".core.strong_force", "high_order_state_from_wout"),
+    "lift_high_order_state": (".core.strong_force", "lift_high_order_state"),
+    "plot_strong_force_report": (
+        ".core.strong_force", "plot_strong_force_report"),
     # plotting + Boozer
     "plot_wout": (".core.plotting", "plot_wout"),
     "plot_boozmn": (".core.plotting", "plot_boozmn"),
@@ -149,6 +170,11 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".core.neoclassical", "epsilon_effective_from_boozer"),
     "epsilon_effective_from_wout": (
         ".core.neoclassical", "epsilon_effective_from_wout"),
+    # alpha-particle tracing (ESSOS)
+    "AlphaTracingResult": (".core.tracing", "AlphaTracingResult"),
+    "essos_vmec_field": (".core.tracing", "essos_vmec_field"),
+    "trace_alphas": (".core.tracing", "trace_alphas"),
+    "plot_tracing": (".core.plotting", "plot_tracing"),
     # optimizer-neutral problem callables
     "Evaluation": (".core.problem", "Evaluation"),
     "FunctionProblem": (".core.problem", "FunctionProblem"),

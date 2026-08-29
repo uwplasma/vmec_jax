@@ -57,11 +57,74 @@ jobs:
           name: python-package-distributions
           path: dist/
 
+  verify:
+    name: Verify ${{ matrix.artifact }} on Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+        artifact: [wheel, sdist]
+    steps:
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download distributions
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Install and solve outside the source tree
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+          # The tag, minus its leading v.  The validate job above has already
+          # checked it against pyproject, so this pins the *installed*
+          # artifact to the same version without a second source of truth.
+          EXPECTED_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          if [[ "$ARTIFACT" == "wheel" ]]; then
+            package=(dist/*.whl)
+          else
+            package=(dist/*.tar.gz)
+          fi
+          python -m pip install "${package[0]}"
+          mkdir -p "${RUNNER_TEMP}/vmex-wheel-smoke"
+          cd "${RUNNER_TEMP}/vmex-wheel-smoke"
+          python - <<'PY'
+          from dataclasses import replace
+          from pathlib import Path
+
+          import numpy as np
+
+          import vmex
+          from vmex import optimize
+          from vmex.core.input import VmecInput
+
+          import os
+
+          expected = os.environ["EXPECTED_VERSION"].lstrip("v")
+          assert vmex.__version__ == expected, (vmex.__version__, expected)
+          path = Path(vmex.__file__).parent / "resources/input.nfp4_QH_warm_start"
+          inp = replace(
+              VmecInput.from_file(path),
+              ns_array=np.array([7]),
+              ftol_array=np.array([1e-8]),
+              niter_array=np.array([1500]),
+          )
+          equilibrium = optimize.solve_equilibrium(inp)
+          assert equilibrium.result.converged
+          PY
+
   publish:
     name: Publish release distributions to PyPI
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: build
+    needs: [build, verify]
     environment:
       name: pypi
       url: https://pypi.org/p/vmex
@@ -76,3 +139,21 @@ jobs:
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  mark-latest:
+    name: Mark the software release as latest
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: publish
+    permissions:
+      contents: write
+    steps:
+      - name: Keep data-asset releases from owning /releases/latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ github.event.release.id }}
+        run: |
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -f make_latest=true

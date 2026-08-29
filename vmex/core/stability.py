@@ -2,9 +2,13 @@
 
 Infinite-n ideal-ballooning growth rate as a pure, traceable function of a
 converged ``(SpectralState, SolverRuntime)`` pair — the JAX analogue of the
-COBRA solve (Sanchez, Hirshman, Ware, Berry & Batchelor, J. Comput. Phys.
-161, 589 (2000)) in the modern differentiable formulation of Gaur et al.,
-J. Plasma Phys. 89, 905890518 (2023) (arXiv:2302.07673):
+COBRA solve (Sanchez, Hirshman, Whitson & Ware, J. Comput. Phys. 161, 576
+(2000); VMEC-coordinate variant Sanchez, Hirshman & Wong, Comput. Phys.
+Commun. 135, 82 (2001)) in the differentiable formulation of Gaur et al.,
+Plasma Phys. Control. Fusion 67, 125015 (2025) (arXiv:2410.04576).  That
+paper's ``f`` is the one implemented here; the ``f`` printed in Gaur et al.,
+J. Plasma Phys. 89, 905890518 (2023) Eq. (14) is dimensionally inconsistent
+(``λ`` would not scale as ``γ²``) and does not match the authors' own code:
 
     d/dη ( g dX/dη ) + c X = λ f X ,   X(±η_b) = 0 ,   g, f > 0,
 
@@ -40,8 +44,17 @@ all requested (surface, α, ζ0) field lines.
 
 Scope notes
 -----------
-- Current, Mercier, and Glasser profiles support symmetric and ``lasym``
-  states. Ballooning stability remains stellarator-symmetric.
+- The current, Mercier and Glasser profiles support symmetric and ``lasym``
+  states (the lasym Mercier lane is validated per-term against live VMEC2000
+  output; the lasym ``D_R`` is anchored by that DMerc parity plus the exact
+  GGJ identity — no external lasym ``D_R`` oracle exists).  Ballooning
+  supports ``lasym`` through the sine-parity ``R``/``Z``/``λ`` spectra; note
+  that an asymmetric state has no ``α -> -α`` parity, so the field-line
+  defaults span the full ``[0, 2π)`` and ``ζ0`` must be scanned over both
+  signs (COBRAVMEC disables its own half-domain shortcut for ``lasym``).
+- The turbulence and Gamma_c lanes share this field-line geometry but keep
+  their own symmetric-only guards until each has its own asymmetric
+  verification.
 - Surfaces need ``ι ≠ 0`` (the field-line parameterization divides by ι).
 - :func:`d_merc_state` is the traceable counterpart of the parity-proven
   wout calculation.  As in VMEC2000, its first two surfaces and edge are not
@@ -131,9 +144,11 @@ def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: Solver
         sinmu = jnp.asarray(trig.sinmu[:nt2, : mmax + 1])
         cosnv = jnp.asarray(trig.cosnv[:, : nmax + 1])
         sinnv = jnp.asarray(trig.sinnv[:, : nmax + 1])
-        dnorm = 1.0 / (nzeta * nt3)
-        cosmui = (dnorm * cosmu).at[0].multiply(0.5).at[-1].multiply(0.5)
-        sinmui = dnorm * sinmu
+        # jxbforce.f analysis weights: 1/(nzeta*(ntheta2-1)) over the
+        # half-interval reduced grid, which is the physical-scale contract of
+        # nyquist.filter_bsubuv_lasym.
+        cosmui = jnp.asarray(trig.cosmui[:nt2, : mmax + 1])
+        sinmui = jnp.asarray(trig.sinmui[:nt2, : mmax + 1])
         dmult = jnp.ones(
             (mmax + 1, nmax + 1), dtype=jnp.asarray(bsubu).dtype)
         mnyq, nnyq = nt2 - 1, nzeta // 2
@@ -187,10 +202,7 @@ def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: Solver
                 analyze_lasym(asymmetric, cosmui, sinnv), cosmu, sinnv)
             return extend(symmetric, asymmetric)
 
-        # jxbforce applies two successive LASYM projections; each carries the
-        # full-grid factor-of-two convention.  Both are required for WOUT and
-        # VMEC2000 <J.B>/Mercier normalization (one pass is a factor four off).
-        bsubu, bsubv = filter_lasym(bsubu), filter_lasym(bsubv)
+        # Band-limit to the solver spectrum; the projection is idempotent.
         bsubu, bsubv = filter_lasym(bsubu), filter_lasym(bsubv)
         bsubs_full = bsubs.at[1:-1].set(
             0.5 * (bsubs[1:-1] + bsubs[2:])).at[0].set(0.0)
@@ -342,10 +354,6 @@ def _mercier_data_state(
     )
     bdotb = average_norm * jnp.einsum("sij,ij->s", sqgb2, wint)
     jdotb_full = jnp.zeros_like(s).at[1:-1].set(jdotb_mu0 / _MU0)
-    if bool(setup.lasym):
-        # Match WOUT's four factor-two LASYM output normalizations; see
-        # vmex.core.wout for the VMEC2000 convention and golden comparison.
-        jdotb_full = 16.0 * jdotb_full
     jdotb_full = jdotb_full.at[0].set(2.0 * jdotb_full[1] - jdotb_full[2])
     jdotb_full = jdotb_full.at[-1].set(
         2.0 * jdotb_full[-2] - jdotb_full[-3]
@@ -392,6 +400,13 @@ def d_merc_state(state: SpectralState, rt: SolverRuntime) -> Array:
     ``(state, runtime)`` pair and supports ``jit``, JVP and reverse-mode AD.
     The axis, first near-axis surface and edge retain VMEC's zero/noisy output
     convention and should be excluded from objectives (normally ``[2:-1]``).
+
+    Supports both symmetry modes: the ``lasym`` lane carries the sine-parity
+    contributions through the jxbforce.f parity-split filter and the
+    full-theta-interval surface integrals, validated per-term against live
+    VMEC2000 lasym output (``tests/test_vmec2000_live.py``) and against an
+    independent NumPy reconstruction from the wout Fourier tables
+    (:func:`vmex.core.plotting._glasser_d_r_from_wout`).
     """
     return _mercier_profiles_state(state, rt)[0]
 
@@ -429,6 +444,12 @@ def glasser_d_r_state(
     satisfy ``abs(S) >> shear_epsilon`` before interpreting the result.
     As for ``DMerc``, use only validated interior surfaces (normally
     ``[2:-1]``) as optimization targets.
+
+    Supports both symmetry modes.  The symmetric lane retains its DCON
+    comparison; the ``lasym`` lane is validated through the
+    VMEC2000-anchored ``DMerc`` parity plus the exact in-repo identity
+    ``D_R = -DMerc + (H - S²/2)²/S²`` (no external lasym ``D_R`` oracle
+    exists — the DCON comparison is symmetric-only).
     """
     if shear_epsilon < 0.0:
         raise ValueError(
@@ -624,12 +645,13 @@ def _ballooning_context(state: SpectralState, rt: SolverRuntime) -> dict:
     ``add_fluxes.f90``), and the GX/GS2-style normalizations ``L_ref``
     (effective minor radius, ``aspectratio.f`` quadrature) and
     ``B_ref = 2|ψ_edge|/L_ref²``.
+
+    Asymmetric (``lasym``) states additionally carry the sine-parity partners
+    ``rmns``/``zmnc``/``lmnc``; they are ``None`` for symmetric states, which
+    keeps the extra spectral sums out of the symmetric trace entirely.
     """
     setup = rt.setup
-    if bool(setup.lasym):
-        raise NotImplementedError(
-            "ballooning stability supports stellarator-symmetric states only "
-            "(lasym = False)")
+    lasym = bool(setup.lasym)
     s = jnp.asarray(setup.s_full)
     ns = int(s.shape[0])
     if ns < 5:
@@ -639,7 +661,7 @@ def _ballooning_context(state: SpectralState, rt: SolverRuntime) -> dict:
     # current-constrained chips feed the ncurr = 1 iota) from the shared
     # geometry->fields chain (statephysics.py); the physical coefficient
     # tables come straight from the m=1-constraint inverse (cheap, spectral).
-    R_cos, _R_sin, _Z_cos, Z_sin = _physical_coefficients(
+    R_cos, R_sin, Z_cos, Z_sin = _physical_coefficients(
         state, modes=rt.modes, lthreed=setup.lthreed, lasym=setup.lasym,
         lconm1=setup.lconm1,
     )
@@ -656,6 +678,11 @@ def _ballooning_context(state: SpectralState, rt: SolverRuntime) -> dict:
     rmnc = jnp.asarray(R_cos) * mode_scale[None, :]
     zmns = jnp.asarray(Z_sin) * mode_scale[None, :]
     lmns = jnp.asarray(state.L_sin) * mode_scale[None, :] * lam_factor[:, None]
+    rmns = zmnc = lmnc = None
+    if lasym:
+        rmns = jnp.asarray(R_sin) * mode_scale[None, :]
+        zmnc = jnp.asarray(Z_cos) * mode_scale[None, :]
+        lmnc = jnp.asarray(state.L_cos) * mode_scale[None, :] * lam_factor[:, None]
 
     # Normalizations: L_ref = Aminor_p (aspectratio.f boundary quadrature,
     # same math as the wout ``Aminor_p``), B_ref = 2|psi_edge|/L_ref^2.
@@ -677,6 +704,7 @@ def _ballooning_context(state: SpectralState, rt: SolverRuntime) -> dict:
         m=jnp.asarray(np.asarray(rt.modes.m, dtype=float)),
         xn=jnp.asarray(np.asarray(rt.modes.n, dtype=float) * float(rt.resolution.nfp)),
         rmnc=rmnc, zmns=zmns, lmns=lmns,
+        rmns=rmns, zmnc=zmnc, lmnc=lmnc, lasym=lasym,
         iotas=iotas, pres=jnp.asarray(fields.pressure),
         phipf=phipf, psi_edge=psi_edge, sign_psi=sign_psi,
         L_ref=L_ref, B_ref=B_ref,
@@ -696,20 +724,55 @@ def _parabola(table: Array, j: int, hs: Array) -> Array:
     return jnp.stack([c0, c1, c2])
 
 
+def _surface_tables(ctx: dict, j: int) -> dict:
+    """Radial parabola tables of the geometry spectra at full-mesh surface ``j``.
+
+    Cosine-parity ``R``/``Z``/``λ`` always; their sine-parity partners as
+    ``rtab_sin``/``ztab_cos``/``ltab_cos`` when the state is asymmetric.
+    Consumed by :func:`_surface_closures` and by the PEST angle inversion, so
+    that ``lasym`` enters the field-line geometry in exactly one place.
+    """
+    hs = ctx["hs"]
+    tabs = {
+        "rtab": _parabola(ctx["rmnc"], j, hs),
+        "ztab": _parabola(ctx["zmns"], j, hs),
+        "ltab": _parabola(ctx["lmns"], j, hs),
+    }
+    if ctx["lasym"]:
+        tabs["rtab_sin"] = _parabola(ctx["rmns"], j, hs)
+        tabs["ztab_cos"] = _parabola(ctx["zmnc"], j, hs)
+        tabs["ltab_cos"] = _parabola(ctx["lmnc"], j, hs)
+    return tabs
+
+
+def _pest_lambda(tabs: dict) -> tuple[Array, Array | None]:
+    """Surface-value ``λ`` spectra ``(lmns0, lmnc0)`` for the PEST inversion."""
+    ltab_cos = tabs.get("ltab_cos")
+    return tabs["ltab"][0], None if ltab_cos is None else ltab_cos[0]
+
+
 def _theta_vmec_from_pest(theta_star: Array, phi: Array, lmns0: Array,
-                          m: Array, xn: Array) -> Array:
+                          m: Array, xn: Array,
+                          lmnc0: Array | None = None) -> Array:
     """Invert ``θ* = θ + λ(θ, φ)`` for the VMEC poloidal angle (Newton).
 
     The straight-field-line (PEST) angle map of ``vmec_fieldlines``; a fixed
-    unrolled Newton iteration (``1 + λ_θ > 0`` on nested surfaces) keeps the
-    solve reverse-mode differentiable.
+    unrolled Newton iteration (``1 + λ_θ > 0`` on nested surfaces, which holds
+    for asymmetric states too) keeps the solve reverse-mode differentiable.
+    ``lmnc0`` adds the cos-parity ``λ`` of an asymmetric state, as in
+    COBRAVMEC's ``obtain_theta.f``.
     """
     ml = m * lmns0
+    mc = None if lmnc0 is None else m * lmnc0
     theta = theta_star
     for _ in range(_NEWTON_ITERATIONS):
         ang = theta[..., None] * m - phi[..., None] * xn
-        lam = jnp.sin(ang) @ lmns0
-        dlam = jnp.cos(ang) @ ml
+        sin_ang, cos_ang = jnp.sin(ang), jnp.cos(ang)
+        lam = sin_ang @ lmns0
+        dlam = cos_ang @ ml
+        if mc is not None:
+            lam = lam + cos_ang @ lmnc0
+            dlam = dlam - sin_ang @ mc
         theta = theta - (theta + lam - theta_star) / (1.0 + dlam)
     return theta
 
@@ -719,42 +782,75 @@ def _theta_vmec_from_pest(theta_star: Array, phi: Array, lmns0: Array,
 # ---------------------------------------------------------------------------
 
 
-def _make_point_fn(m: Array, xn: Array, rtab: Array, ztab: Array, ltab: Array,
-                   iota: Array, diota: Array, phipf_j: Array):
-    """Point-evaluation closure for one flux surface.
+def _surface_closures(m: Array, xn: Array, tabs: dict, iota: Array,
+                      diota: Array, phipf_j: Array):
+    """Spectral closures for one flux surface, shared by every field-line lane.
 
-    Given ``q = (t, θ, φ)`` with ``t = s - s_j`` (evaluated at ``t = 0``;
-    the radial parabola makes every quantity differentiable in ``t``),
-    returns ``(|B|, B^φ, |∇α|², B×∇|B|·∇α)`` at the point.  The cylindrical
-    position, its Jacobian (covariant basis ``e_s, e_θ, e_φ``), the dual
-    basis, ``B = ψ'[(ι - λ_φ) e_θ + (1 + λ_θ) e_φ]/√g`` and ``∇|B|`` are all
-    obtained by automatic differentiation of the spectral sums.
+    ``q = (t, θ, φ)`` with ``t = s - s_j``; the radial parabola tables of
+    :func:`_surface_tables` make every quantity differentiable in ``t``.
+    Returns ``(pos_fn, lam_fn, b_vector, modb_fn, bsupphi_fn)`` — the
+    cylindrical position, ``λ``, ``B = ψ'[(ι - λ_φ) e_θ + (1 + λ_θ) e_φ]/√g``,
+    ``|B|`` and ``B^φ``.  Gamma_c is the consumer of the last one; it needs
+    ``dB^φ/ds`` at fixed PEST angle, which the ballooning and turbulence
+    point tuples do not.  The ballooning, turbulence and Gamma_c lanes build
+    their point tuples on these by automatic differentiation, so a state's
+    sine-parity spectra reach all three from one implementation.
     """
+    rtab, ztab, ltab = tabs["rtab"], tabs["ztab"], tabs["ltab"]
+    rtab_sin, ztab_cos = tabs.get("rtab_sin"), tabs.get("ztab_cos")
+    ltab_cos = tabs.get("ltab_cos")
 
     def coeffs(tab: Array, t: Array) -> Array:
         return tab[0] + t * tab[1] + (t * t) * tab[2]
 
     def lam_fn(q: Array) -> Array:
         t, th, ph = q[0], q[1], q[2]
-        return coeffs(ltab, t) @ jnp.sin(th * m - ph * xn)
+        ang = th * m - ph * xn
+        lam = coeffs(ltab, t) @ jnp.sin(ang)
+        if ltab_cos is not None:
+            lam = lam + coeffs(ltab_cos, t) @ jnp.cos(ang)
+        return lam
 
     def pos_fn(q: Array) -> Array:
         t, th, ph = q[0], q[1], q[2]
         ang = th * m - ph * xn
-        R = coeffs(rtab, t) @ jnp.cos(ang)
-        Z = coeffs(ztab, t) @ jnp.sin(ang)
+        cos_ang, sin_ang = jnp.cos(ang), jnp.sin(ang)
+        R = coeffs(rtab, t) @ cos_ang
+        Z = coeffs(ztab, t) @ sin_ang
+        if rtab_sin is not None:
+            R = R + coeffs(rtab_sin, t) @ sin_ang
+            Z = Z + coeffs(ztab_cos, t) @ cos_ang
         return jnp.array([R * jnp.cos(ph), R * jnp.sin(ph), Z])
 
     def b_vector(q: Array) -> Array:
         J = jax.jacfwd(pos_fn)(q)                     # columns: e_s, e_θ, e_φ
-        sqrt_g = jnp.linalg.det(J)
         lam_g = jax.grad(lam_fn)(q)                   # (λ_s, λ_θ, λ_φ)
         iota_t = iota + diota * q[0]
         return phipf_j * ((iota_t - lam_g[2]) * J[:, 1]
-                          + (1.0 + lam_g[1]) * J[:, 2]) / sqrt_g
+                          + (1.0 + lam_g[1]) * J[:, 2]) / jnp.linalg.det(J)
 
     def modb_fn(q: Array) -> Array:
         return jnp.linalg.norm(b_vector(q))
+
+    def bsupphi_fn(q: Array) -> Array:
+        J = jax.jacfwd(pos_fn)(q)
+        lam_g = jax.grad(lam_fn)(q)
+        return phipf_j * (1.0 + lam_g[1]) / jnp.linalg.det(J)
+
+    return pos_fn, lam_fn, b_vector, modb_fn, bsupphi_fn
+
+
+def _make_point_fn(m: Array, xn: Array, tabs: dict, iota: Array,
+                   diota: Array, phipf_j: Array):
+    """Point-evaluation closure for one flux surface (ballooning set).
+
+    Returns ``(|B|, B^φ, |∇α|², B×∇|B|·∇α)`` at ``q = (t, θ, φ)``, with
+    ``phi_rel = φ - ζ0`` carrying the secular shear term of ``∇α``.  The
+    covariant basis ``e_s, e_θ, e_φ``, the dual basis and ``∇|B|`` come from
+    JAX differentiation of the :func:`_surface_closures` sums.
+    """
+    pos_fn, lam_fn, _, modb_fn, _ = _surface_closures(
+        m, xn, tabs, iota, diota, phipf_j)
 
     def point(q: Array, phi_rel: Array):
         J = jax.jacfwd(pos_fn)(q)
@@ -818,13 +914,8 @@ def _surface_lambda(ctx: dict, j: int, alphas: Array, zeta0s: Array,
     diota = (iotas[j + 1] - iotas[j]) / hs
     dpres = (pres[j + 1] - pres[j]) / hs           # internal units: mu0 dp/ds
 
-    point = _make_point_fn(
-        ctx["m"], ctx["xn"],
-        _parabola(ctx["rmnc"], j, hs),
-        _parabola(ctx["zmns"], j, hs),
-        _parabola(ctx["lmns"], j, hs),
-        iota, diota, ctx["phipf"][j],
-    )
+    tabs = _surface_tables(ctx, j)
+    point = _make_point_fn(ctx["m"], ctx["xn"], tabs, iota, diota, ctx["phipf"][j])
 
     theta_b = jnp.pi * float(nturns)
     x = jnp.linspace(-theta_b, theta_b, int(npoints))
@@ -832,8 +923,8 @@ def _surface_lambda(ctx: dict, j: int, alphas: Array, zeta0s: Array,
     alpha_grid, zeta0_grid = [a.ravel() for a in jnp.meshgrid(alphas, zeta0s, indexing="ij")]
     theta_star = alpha_grid[:, None] + x[None, :]           # (nlines, npoints)
     phi = zeta0_grid[:, None] + x[None, :] / iota           # field line: θ* = α + ι(φ - ζ0)
-    lmns0 = _parabola(ctx["lmns"], j, hs)[0]
-    theta_v = _theta_vmec_from_pest(theta_star, phi, lmns0, ctx["m"], ctx["xn"])
+    lmns0, lmnc0 = _pest_lambda(tabs)
+    theta_v = _theta_vmec_from_pest(theta_star, phi, lmns0, ctx["m"], ctx["xn"], lmnc0)
     q = jnp.stack([jnp.zeros_like(theta_v), theta_v, phi], axis=-1)
     phi_rel = phi - zeta0_grid[:, None]
 
@@ -904,10 +995,15 @@ def ballooning_lambda(
         surfaces at ~35/60/85 % of the radius.
     alphas:
         Field-line labels ``α = θ* - ι (φ - ζ0)``.  Default: four lines
-        uniform in ``[0, π]`` (stellarator symmetry maps ``α -> -α``).
+        uniform in ``[0, π]``, since stellarator symmetry maps ``α -> -α``.
+        An asymmetric state has no such parity, so the default there spans
+        the full ``[0, 2π)`` instead.
     zeta0s:
         Ballooning parameters (the toroidal angle where the secular radial
-        wavenumber vanishes).  Default ``(0,)``.
+        wavenumber vanishes).  Default ``(0,)``.  ``λ`` is least stable at a
+        configuration-dependent ``ζ0`` (Gaur et al. 2023, footnote 2), so a
+        single value under-reports ``max λ`` on three-dimensional states; scan
+        it, and over both signs when the state is asymmetric.
     npoints, nturns:
         Field-line grid: ``npoints`` points over ``θ* ∈ α ± nturns·π``
         (COBRA-style domain; Gaur et al. use ``5π``, 3 turns is adequate for
@@ -917,7 +1013,12 @@ def ballooning_lambda(
     js = _resolve_surfaces(s_indices, ctx["ns"])
     dtype = ctx["s"].dtype
     if alphas is None:
-        alphas_arr = jnp.asarray(np.linspace(0.0, np.pi, 4), dtype=dtype)
+        # Stellarator symmetry maps α -> -α, so [0, π] covers the family; an
+        # asymmetric state has no such parity, exactly as COBRAVMEC disables
+        # its half-domain shortcut for lasym (get_ballooning_grate.f:180).
+        default = (np.linspace(0.0, 2.0 * np.pi, 4, endpoint=False)
+                   if ctx["lasym"] else np.linspace(0.0, np.pi, 4))
+        alphas_arr = jnp.asarray(default, dtype=dtype)
     else:
         alphas_arr = jnp.atleast_1d(jnp.asarray(alphas, dtype=dtype))
     zeta0_arr = jnp.atleast_1d(jnp.asarray(zeta0s, dtype=dtype))

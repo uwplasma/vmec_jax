@@ -850,3 +850,63 @@ def test_essos_reads_our_written_file(data: MgridData, tmp_path: Path) -> None:
         np.testing.assert_array_equal(np.asarray(eg.br_arr[i]), data.br[i])
         np.testing.assert_array_equal(np.asarray(eg.bp_arr[i]), data.bp[i])
         np.testing.assert_array_equal(np.asarray(eg.bz_arr[i]), data.bz[i])
+
+
+def _essos_lp_qa_coils():
+    """The bundled Landreman-Paul QA coil set, loaded through released ESSOS."""
+    coils_mod = pytest.importorskip("essos.coils")
+    pytest.importorskip("essos.fields")
+    path = REPO / "examples" / "data" / "ESSOS_biot_savart_LandremanPaulQA.json"
+    if hasattr(coils_mod.Coils, "from_json"):
+        return coils_mod.Coils.from_json(str(path))
+    return coils_mod.Coils_from_json(str(path))
+
+
+def test_from_coils_defaults_bracket_the_coil_set() -> None:
+    coils = _essos_lp_qa_coils()
+    field = MgridField.from_coils(coils, ir=8, jz=8, kp=4)
+
+    gamma = np.asarray(coils.gamma).reshape(-1, 3)
+    radius, height = np.hypot(gamma[:, 0], gamma[:, 1]), gamma[:, 2]
+    assert field.nfp == int(coils.nfp)
+    # Bounding box grown by the 10% default margin, with R kept positive.
+    assert 0.0 < field.rmin < radius.min() and field.rmax > radius.max()
+    assert field.zmin < height.min() and field.zmax > height.max()
+    assert np.all(np.isfinite(np.asarray(field.br)))
+
+
+def test_from_coils_batches_the_essos_single_point_biot_savart() -> None:
+    """The vmapped ESSOS branch must agree with the pointwise protocol.
+
+    ``essos.fields.BiotSavart.B`` takes one point, so the tabulator vmaps it
+    in chunks rather than looping in Python.  A 4x4x2 grid is small enough to
+    check the batched values against explicit per-point calls.
+    """
+    coils = _essos_lp_qa_coils()
+    from essos.fields import BiotSavart
+
+    bounds = dict(rmin=0.6, rmax=1.4, zmin=-0.3, zmax=0.3, ir=4, jz=4, kp=2)
+    batched = MgridField.from_coils(coils, **bounds)
+    biot_savart = BiotSavart(coils)
+
+    phi = np.arange(bounds["kp"]) * (2.0 * np.pi / (int(coils.nfp) * bounds["kp"]))
+    r = np.linspace(bounds["rmin"], bounds["rmax"], bounds["ir"])
+    z = np.linspace(bounds["zmin"], bounds["zmax"], bounds["jz"])
+    pp, zz, rr = np.meshgrid(phi, z, r, indexing="ij")
+    pointwise = np.stack([
+        np.asarray(biot_savart.B(jnp.asarray(point)), dtype=float)
+        for point in np.stack(
+            (rr * np.cos(pp), rr * np.sin(pp), zz), axis=-1).reshape(-1, 3)
+    ]).reshape(pp.shape + (3,))
+    bx, by, bz = np.moveaxis(pointwise, -1, 0)
+    np.testing.assert_allclose(
+        np.asarray(batched.br[0]), bx * np.cos(pp) + by * np.sin(pp), rtol=1e-12)
+    np.testing.assert_allclose(
+        np.asarray(batched.bp[0]), -bx * np.sin(pp) + by * np.cos(pp), rtol=1e-12)
+    np.testing.assert_allclose(np.asarray(batched.bz[0]), bz, rtol=1e-12)
+
+    # Same field object through the generic adapter: same table, since the
+    # ESSOS branch of ``_cartesian_field_values`` is what both paths take.
+    generic = MgridField.from_cartesian_field(
+        biot_savart, nfp=int(coils.nfp), **bounds)
+    np.testing.assert_array_equal(np.asarray(generic.br), np.asarray(batched.br))

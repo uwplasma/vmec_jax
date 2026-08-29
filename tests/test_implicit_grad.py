@@ -261,6 +261,9 @@ def test_three_surface_raw_kernel_matches_global_nonlinear_rows(case):
 
 def test_residual_zero_at_fixed_point(case):
     name, inp, cfg, p0, x_star, rt, mask = case
+    assert _mask_bit_ident(mask, im._fixed_boundary_dof_mask(cfg)), (
+        f"{name}: analytic fixed-boundary support differs from the VJP oracle"
+    )
     P = im._dof_projector(cfg, mask)
     F = im.residual_fn(cfg, jax.lax.stop_gradient(x_star), mask)
     r0 = _tnorm(F(P(x_star), p0))
@@ -306,6 +309,7 @@ def test_dof_mask_structural_invariance_and_cache(solovev):
     mask_pert = im._dof_mask(x_star, rt1, cfg, seed=0)
     assert _mask_bit_ident(mask, mask_seed), f"{name}: mask not seed-invariant"
     assert _mask_bit_ident(mask, mask_pert), f"{name}: mask not parameter-invariant"
+    assert _mask_bit_ident(mask, im._fixed_boundary_dof_mask(cfg))
 
     # end-to-end: the module cache hits across two fresh configs (one entry).
     saved = dict(im._MASK_CACHE)
@@ -629,7 +633,12 @@ def _assert_stability_gradients(
                 f"rel={relative_error:.2e} (Newton res {residual:.0e})"
             )
             assert residual < 1.0e-8
-            assert relative_error <= 2.0e-3
+            # ~10x the worst channel these decks measure with the value and
+            # the gradient both anchored at the frozen residual's root
+            # (li383 DMerc/RBC(0,1): 1.7e-06).
+            assert relative_error <= 2.0e-5, (
+                f"{name} {metric_name}/{label}: adjoint vs frozen-path FD "
+                f"rel {relative_error:.2e}")
 
 
 @pytest.mark.parametrize("case", ["solovev"], indirect=True)
@@ -708,6 +717,13 @@ def lasym():
     return "up_down_asymmetric_tokamak", inp, cfg, p0, result.state, rt, mask
 
 
+def test_lasym_fixed_boundary_mask_matches_vjp_oracle(lasym):
+    """Exact 2-D asymmetric support retains both parity families."""
+
+    name, _inp, cfg, _p0, _state, _rt, mask = lasym
+    assert _mask_bit_ident(mask, im._fixed_boundary_dof_mask(cfg)), name
+
+
 def test_lasym_delta_rotation_traceable():
     """The traceable delta rotation reproduces ``setup._lasym_delta_rotation``
     to ~1e-12 and stays differentiable in the (0,1) coefficients."""
@@ -740,6 +756,62 @@ def test_lasym_delta_rotation_traceable():
         return jnp.sum(out[1])  # rotated rbs block
     g = jax.grad(rot_scalar)(jnp.asarray(rbs))
     assert np.all(np.isfinite(np.asarray(g)))
+
+
+def test_lasym_delta_rotation_jacobian_at_zero_delta():
+    """The rotation Jacobian is exact where ``delta == 0``.
+
+    ``readin.f`` skips the rotation loop when ``delta`` vanishes, where
+    ``cos(0)/sin(0)`` already make it the identity, so matching the value
+    there says nothing about the derivative.  A deck with
+    ``RBS(0, 1) == ZBC(0, 1)`` sits on that point and still carries a rank-one
+    ``m*(partner)*d(delta)`` term along ``RBS(0, 1) - ZBC(0, 1)``.  Both
+    shipped LASYM decks have ``delta != 0``, so this one is built on the spot.
+    """
+    from vmex.core import setup as setup_mod
+
+    inp = VmecInput.from_file(str(DATA_DIR / "input.up_down_asymmetric_tokamak"))
+    cfg = im.make_config(inp, ftol=1e-12, max_iterations=10)
+    mpol, ntor = int(inp.mpol), int(inp.ntor)
+    rbc = np.asarray(inp.rbc, dtype=float)
+    zbc = np.asarray(inp.zbc, dtype=float)
+    zbs = np.asarray(inp.zbs, dtype=float)
+    rbs = np.asarray(inp.rbs, dtype=float).copy()
+    rbs[ntor, 1] = zbc[ntor, 1]  # put the reference exactly on delta == 0
+    denom0 = abs(rbc[ntor, 1]) + abs(zbs[ntor, 1])
+    assert denom0 > 0.0
+    assert float(np.arctan((rbs[ntor, 1] - zbc[ntor, 1]) / denom0)) == 0.0
+    inp = dataclasses.replace(inp, rbs=rbs)
+    cfg = dataclasses.replace(cfg, inp=inp)
+
+    def traceable(rbs_a, zbc_a):
+        out = im._lasym_delta_rotation_traceable(
+            jnp.asarray(rbc), rbs_a, zbc_a, jnp.asarray(zbs),
+            cfg, mpol=mpol, ntor=ntor)
+        return jnp.concatenate([jnp.ravel(a) for a in out])
+
+    def reference(rbs_a, zbc_a):
+        out = setup_mod._lasym_delta_rotation(
+            rbc, np.asarray(rbs_a), np.asarray(zbc_a), zbs, mpol=mpol, ntor=ntor)
+        return np.concatenate([np.ravel(np.asarray(a)) for a in out])
+
+    # Value agreement is necessary but not sufficient, so check it and then
+    # the derivative along the antisymmetric channel.
+    np.testing.assert_allclose(
+        np.asarray(traceable(jnp.asarray(rbs), jnp.asarray(zbc))),
+        reference(rbs, zbc), rtol=0.0, atol=1e-12)
+
+    direction = np.zeros_like(rbs)
+    direction[ntor, 1] = 1.0
+    _, jvp = jax.jvp(traceable, (jnp.asarray(rbs), jnp.asarray(zbc)),
+                     (jnp.asarray(direction), jnp.asarray(-direction)))
+    h = 1e-6
+    fd = (reference(rbs + h * direction, zbc - h * direction)
+          - reference(rbs - h * direction, zbc + h * direction)) / (2.0 * h)
+    scale = max(float(np.max(np.abs(fd))), 1e-30)
+    err = float(np.max(np.abs(np.asarray(jvp) - fd))) / scale
+    assert scale > 1e-3, f"the probe direction must move the rotation: {scale:.2e}"
+    assert err <= 1e-7, f"delta-rotation Jacobian on RBS(0,1)-ZBC(0,1): {err:.2e}"
 
 
 def test_lasym_runtime_from_params_matches_run_setup(lasym):
@@ -965,7 +1037,8 @@ def test_lasym_3d_gradient_vs_frozen_path_fd(lasym_3d):
     """``jax.grad`` through ``im.run`` on a 3D lasym boundary vs frozen-path
     central FD: toroidal (n = 1) rbs/zbc dofs plus the symmetric rbc family
     as a regression guard; measured agreement ~1e-6..1e-8 (printed)."""
-    name, inp, cfg, p0, _, _, _ = lasym_3d
+    name, inp, cfg, p0, _, _, mask = lasym_3d
+    assert _mask_bit_ident(mask, im._fixed_boundary_dof_mask(cfg)), name
     ntor = int(inp.ntor)
 
     def outs(p):
@@ -1002,6 +1075,32 @@ def test_lasym_3d_gradient_vs_frozen_path_fd(lasym_3d):
         assert rel <= tol, (
             f"{out}/{field}[n={idx[0] - ntor},m={idx[1]}]: 3D lasym adjoint vs "
             f"frozen-path FD rel {rel:.2e} > {tol:.0e}")
+
+
+@pytest.mark.full
+def test_lasym_3d_state_is_anchored_at_the_frozen_root(lasym_3d):
+    """The lane returns a root of the residual it differentiates.
+
+    ``ftol`` gates the sum of SQUARES of the force, so the host solve stops
+    at ``|F| ~ sqrt(ftol)`` — and on this deck the near-null lasym m=1
+    direction turns that into a 1.8e-03 state displacement.  ``refine_tol``
+    Newton-refines onto the root before any lane reads the state; the
+    stability gradients below are only as good as this anchor.
+    """
+    _, inp, cfg, p0, _, _, _ = lasym_3d
+    unanchored = im.make_config(inp, ftol=cfg.ftol, refine_tol=np.inf,
+                                max_iterations=cfg.max_iterations)
+    host, mask = im.solve_implicit_with_aux(p0, unanchored)
+    anchored, _ = im.solve_implicit_with_aux(p0, cfg)
+    P = im._dof_projector(cfg, mask)
+    F = im.residual_fn(cfg, jax.lax.stop_gradient(host), mask)
+    r_host, r_anchored = _tnorm(F(P(host), p0)), _tnorm(F(P(anchored), p0))
+    moved = _tnorm(jax.tree.map(lambda a, b: a - b, anchored, host))
+    print(f"\n[basic_non_stellsym_simsopt] frozen residual: host stop "
+          f"{r_host:.2e} -> anchored {r_anchored:.2e} (state moved {moved:.2e}, "
+          f"|x| = {_tnorm(host):.2e})")
+    assert r_host > 1.0e-8, "the host stopping point already sits at the root"
+    assert r_anchored <= cfg.refine_tol
 
 
 @pytest.mark.full

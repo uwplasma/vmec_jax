@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import os
 import sys
-import tomllib
 from datetime import date
 from pathlib import Path
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - Python 3.10 fallback, matches tests/test_packaging_metadata.py
+    import tomli as tomllib
 
 
 # -- Path setup ----------------------------------------------------------------
@@ -163,3 +167,9 @@ linkcheck_ignore = [
     r"https://github\.com/uwplasma/VMEX/blob/main/.*",
 ]
 linkcheck_timeout = 30
+# github.com aborts a share of a runner's concurrent probes outright
+# ("RemoteDisconnected") rather than answering 429, so
+# linkcheck_rate_limit_timeout never engages. Fewer parallel probes and a retry
+# clear that without hiding a genuinely dead link.
+linkcheck_workers = 2
+linkcheck_retries = 3

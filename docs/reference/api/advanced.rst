@@ -12,6 +12,24 @@ Profiles
 .. automodule:: vmex.core.profiles
    :members:
 
+Radial basis and axis regularity
+--------------------------------
+
+.. automodule:: vmex.core.radial_basis
+   :members:
+
+High-order reconstruction and force certificate
+------------------------------------------------
+
+.. automodule:: vmex.core.strong_force
+   :members:
+
+High-order correction transfer and preconditioner
+-------------------------------------------------
+
+.. automodule:: vmex.core.polish
+   :members:
+
 Spectral representation and physics kernels
 -------------------------------------------
 
@@ -103,6 +121,9 @@ The objective catalog with usage snippets is :doc:`/reference/objectives`.
    :members:
 
 .. automodule:: vmex.core.maxj
+   :members:
+
+.. automodule:: vmex.core.gammac
    :members:
 
 .. automodule:: vmex.core.bootstrap

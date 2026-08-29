@@ -16,6 +16,7 @@ Usage
    vmex --plot mout_*.nc       — straight-axis mirror diagnostics
    vmex --booz wout_*.nc       — run booz_xform_jax, write boozmn_*.nc
    vmex --plot boozmn_*.nc     — Boozer contour/spectrum plots
+   vmex --trace wout_*.nc      — trace alpha particles (ESSOS), plot losses
    vmex --scale PATH [B R]     — dimensionally scale an input or WOUT
    vmex --doctor               — installation and JAX backend diagnostics
    vmex --test                 — run and plot the bundled quick-start case
@@ -53,6 +54,21 @@ Options
    * - ``--booz-surfaces S``
      - Boozer surfaces: comma/space-separated normalized ``s`` values, or
        ``all`` (default).
+   * - ``--trace``
+     - Trace fusion alpha particles through the equilibrium with ESSOS
+       (guiding centre, exact loss fraction): print the loss fraction and
+       the lost/axis-termination/failure counts, and write the four tracing
+       figures (3-D orbits, ``v_par/v``, loss fraction vs time, energy
+       error). Works on a ``wout_*.nc`` input or after solving an input
+       file (requires ESSOS, ``pip install essos``). See
+       :doc:`/howto/trace-alpha-particles`.
+   * - ``--trace-tmax X`` / ``--trace-timestep X``
+     - Tracing horizon / integrator step in seconds (defaults ``3e-4`` /
+       ``5e-7``).
+   * - ``--trace-particles N`` / ``--trace-times N``
+     - Ensemble size / saved samples per orbit (defaults 200 / 200).
+   * - ``--trace-s X`` / ``--trace-seed N``
+     - Launch surface ``s`` (default 0.25) and sampling seed (default 42).
    * - ``--outdir DIR``
      - Directory for wout/boozmn/figure output (default: alongside the
        input).

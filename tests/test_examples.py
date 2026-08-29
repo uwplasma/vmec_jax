@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -25,11 +26,75 @@ EXAMPLES = REPO / "examples"
 DATA_DIR = EXAMPLES / "data"
 
 _COST_RE = re.compile(r"^\s*\d+\s+\d+\s+([0-9.eE+-]+)", re.MULTILINE)
+_SCALAR_COST_RE = re.compile(
+    r"optimizer scalar cost:\s*([0-9.eE+-]+)\s*->\s*([0-9.eE+-]+)")
+
+ESSOS_BRANCH_EXAMPLES = (
+    EXAMPLES / "take_free_boundary_gradients.py",
+    EXAMPLES / "vmex_fixed_free_boundary_comparison.py",
+    EXAMPLES / "vmex_get_B_outside_plasma.py",
+    EXAMPLES / "vmex_fieldline_tracing_vacuum.py",
+    EXAMPLES / "vmex_fieldline_tracing_finite_beta.py",
+    EXAMPLES / "optimization" / "single_stage_optimization.py",
+    EXAMPLES / "optimization" / "single_stage_optimization_finite_beta.py",
+    EXAMPLES / "optimization" / "single_stage_free_boundary_optimization.py",
+    EXAMPLES / "optimization" / "single_stage_free_boundary_optimization_finite_beta.py",
+)
+
+
+def test_released_essos_reads_bundled_coil_fixtures() -> None:
+    """The compact coil files retain the schema supported by ESSOS 0.16."""
+    pytest.importorskip("essos")
+    from essos.coils import Coils
+
+    if hasattr(Coils, "from_json"):
+        load = Coils.from_json
+    else:
+        from essos.coils import Coils_from_json
+
+        load = Coils_from_json
+    for path in sorted(DATA_DIR.glob("ESSOS_biot_savart_*.json")):
+        coils = load(str(path))
+        assert np.all(np.isfinite(np.asarray(coils.gamma)))
+        assert np.all(np.isfinite(np.asarray(coils.currents)))
+
+
+def test_essos_examples_name_the_required_branch() -> None:
+    """ESSOS 0.16 reports the branch to install, not a missing symbol."""
+    pytest.importorskip("essos")
+    from essos.coils import Coils
+
+    try:
+        from essos.dynamics import LevelsetStoppingCriterion, trace_field_lines
+        from essos.objective_functions import (
+            loss_coil_separation,
+            loss_coil_surface_distance,
+        )
+        from essos.surfaces import surfacerzfourier_from_boundary
+    except ImportError:
+        has_branch_api = False
+    else:
+        del (LevelsetStoppingCriterion, trace_field_lines,
+             loss_coil_separation, loss_coil_surface_distance,
+             surfacerzfourier_from_boundary)
+        has_branch_api = all(
+            hasattr(Coils, name)
+            for name in ("from_json", "with_dofs", "dof_names")
+        )
+    if has_branch_api:
+        pytest.skip("the required ESSOS branch API is installed")
+
+    for script in ESSOS_BRANCH_EXAMPLES:
+        with pytest.raises(
+            ImportError,
+            match="needs ESSOS branch rj/vmex-optimization-interfaces",
+        ):
+            runpy.run_path(str(script))
 
 
 def _run_example(script: Path, cwd: Path, timeout: int = 2400,
-                 args: tuple[str, ...] = ()) -> str:
-    env = dict(os.environ, VMEX_EXAMPLES_CI="1")
+                 args: tuple[str, ...] = (), **extra_env: str) -> str:
+    env = dict(os.environ, VMEX_EXAMPLES_CI="1", **extra_env)
     env.pop("JAX_DISABLE_JIT", None)
     proc = subprocess.run(
         [sys.executable, str(script), *args], cwd=cwd, env=env,
@@ -44,9 +109,13 @@ def _run_example(script: Path, cwd: Path, timeout: int = 2400,
 
 def _assert_cost_decreased(stdout: str, name: str) -> None:
     costs = [float(c) for c in _COST_RE.findall(stdout)]
-    assert len(costs) >= 2, f"{name}: expected scipy iteration rows, got {costs}"
+    if len(costs) < 2:
+        scalar_costs = _SCALAR_COST_RE.search(stdout)
+        costs = [] if scalar_costs is None else [
+            float(scalar_costs.group(1)), float(scalar_costs.group(2))]
+    assert len(costs) >= 2, f"{name}: expected optimizer cost evidence, got {costs}"
     assert min(costs) < costs[0], (
-        f"{name}: least-squares cost did not decrease: first {costs[0]:.6e}, "
+        f"{name}: optimizer cost did not decrease: first {costs[0]:.6e}, "
         f"best {min(costs):.6e}")
 
 
@@ -161,6 +230,18 @@ def test_global_optimization_example_exposes_optimizer_contract():
     assert "basinhopping(value_and_gradient" in text
     assert '"method": "L-BFGS-B"' in text
     assert "least_squares(problem.residual" in text
+    assert "ess_alpha=ESS_ALPHA" in text
+
+
+def test_qa_optimization_uses_fast_scalar_adjoint_lane():
+    """The canonical QA example must not rebuild a pointwise Jacobian."""
+
+    text = (EXAMPLES / "optimization" / "QA_optimization.py").read_text()
+    assert "VmecProblem.from_loss" in text
+    assert "residuals_from_tuples" in text
+    assert "compile_value_and_gradient" in text
+    assert "compile_residual_and_jacobian" not in text
+    assert "minimize(" in text
     assert "ess_alpha=ESS_ALPHA" in text
 
 
@@ -292,6 +373,36 @@ def test_free_boundary_essos_coils(tmp_path):
     assert fsq < 1e-7, f"free-boundary point should converge, fsq={fsq}"
 
 
+@pytest.mark.full  # nightly: fixed + free-boundary solve either side of the seam (~100s)
+def test_vmex_essos_workflow(tmp_path):
+    # Both interop seams in one script: vj.essos_vmec_field (equilibrium ->
+    # essos.fields.Vmec) and vj.MgridField.from_coils (ESSOS coils -> external
+    # field).  Released-ESSOS surface only, so this runs against any ESSOS.
+    pytest.importorskip("essos.coils")
+    pytest.importorskip("essos.dynamics")
+    pytest.importorskip("essos.fields")
+    out = _run_example(EXAMPLES / "vmex_essos_workflow.py", tmp_path, timeout=900)
+    assert out.count("converged = True") == 2, out
+
+    # The wout tables cross unchanged: ESSOS' to_xyz rebuilds the LCFS vmex
+    # wrote, so this is a machine-precision identity, not a tolerance.
+    transfers = [float(v) for v in re.findall(r"LCFS transfer error ([0-9.eE+-]+) m", out)]
+    assert len(transfers) == 2 and max(transfers) < 1e-12, out
+
+    # iota measured by ESSOS from a field-line trace against the iota vmex
+    # computed from force balance: an independent check of the same handoff.
+    traced = re.findall(
+        r"iota traced ([0-9.eE+-]+) .* vs wout ([0-9.eE+-]+)", out)
+    assert len(traced) == 2, out
+    for got, expected in traced:
+        assert abs(float(got) / float(expected) - 1.0) < 1e-3, out
+
+    # Coming back the other way, the tabulated coil field must reproduce
+    # direct Biot-Savart on the surface NESTOR evaluates it on.
+    tabulation = re.search(r"on the LCFS: ([0-9.eE+-]+) median", out)
+    assert tabulation is not None and float(tabulation.group(1)) < 1e-3, out
+
+
 def test_finite_beta_scan(tmp_path):
     out = _run_example(EXAMPLES / "finite_beta_scan.py", tmp_path, timeout=900)
     # rows: pres_scale  beta_tot  R_axis  Shafranov  minDMerc
@@ -340,17 +451,56 @@ def test_qi_maxj_continuation_example(tmp_path):
     assert (tmp_path / "QI_maxJ_optimized_summary.png").stat().st_size > 10_000
 
 
-@pytest.mark.full  # nightly: QP-basin + QI stages + Boozer, subprocess cold-start heavy
+@pytest.mark.full  # nightly: QI mode ladder + Boozer, subprocess cold-start heavy
 def test_qi_optimization_example(tmp_path):
     pytest.importorskip("booz_xform_jax")
     script = EXAMPLES / "optimization" / "QI_optimization.py"
     out = _run_example(script, tmp_path)
     _assert_cost_decreased(out, "QI")
-    match = re.search(r"QI total: seed ([0-9.eE+-]+) -> final ([0-9.eE+-]+)", out)
-    assert match is not None
-    seed, final = float(match.group(1)), float(match.group(2))
-    assert np.isfinite(final) and final <= seed * 1.05
+    stage = re.search(r"\[QI mode \d+\] constructed QI = ([0-9.eE+-]+)", out)
+    final = re.search(r"\[final\] constructed QI = ([0-9.eE+-]+)", out)
+    assert stage is not None and final is not None
+    # the finer re-solve the example ends on must not undo the optimization
+    assert np.isfinite(float(final.group(1)))
+    assert float(final.group(1)) <= 1.05 * float(stage.group(1))
+    # the headline line carries the optimized total and its independent
+    # recomputation (equal grids under the CI budget, finer otherwise)
+    totals = re.search(r"QI total ([0-9.eE+-]+); independent fine-grid "
+                       r"validation ([0-9.eE+-]+)", out)
+    assert totals is not None
+    assert all(np.isfinite(float(value)) for value in totals.groups())
     assert (tmp_path / "wout_QI_optimized.nc").exists()
+
+
+@pytest.mark.full  # nightly: every residual evaluation is a finite-beta solve
+def test_qa_ballooning_optimization_example(tmp_path):
+    """Reduced-budget QA + infinite-n ballooning optimization smoke test."""
+    script = EXAMPLES / "optimization" / "QA_optimization_ballooning.py"
+    out = _run_example(script, tmp_path, timeout=1800)
+    _assert_cost_decreased(out, "QA-ballooning")
+    seed = re.search(r"max lambda = ([0-9.eE+-]+) \(unstable\)", out)
+    final = re.search(r"max lambda ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    assert seed is not None and final is not None
+    # The seed must be the case the objective is for: ballooning-unstable while
+    # Mercier says nothing is wrong.  Otherwise the example proves nothing.
+    assert float(seed.group(1)) > 0.0
+    assert re.search(r"min DMerc = \+[0-9.eE+-]+ \(Mercier-stable\)", out)
+    assert float(final.group(2)) < float(final.group(1))
+    assert (tmp_path / "input.QA_ballooning_optimized").exists()
+    assert (tmp_path / "wout_QA_ballooning_optimized.nc").exists()
+    assert (tmp_path / "QA_ballooning_optimized_stability.png").stat().st_size > 10_000
+
+
+def test_ballooning_example_scans_the_ballooning_parameter():
+    """The example must not optimize a bound taken at a single zeta0.
+
+    ``lambda`` peaks at a configuration-dependent ``zeta0``; on this seed the
+    single-point default reports 3.27e-3 where the scan reports 4.42e-3, so a
+    ``zeta0 = 0`` objective would drive the wrong quantity to zero.
+    """
+    source = (EXAMPLES / "optimization" / "QA_optimization_ballooning.py").read_text()
+    assert "ZETA0S = np.linspace(-0.5 * np.pi, 0.5 * np.pi, 5)" in source
+    assert "zeta0s=ZETA0S" in source
 
 
 def test_vacuum_qs_examples_expose_trial_pressure_terms():
@@ -378,7 +528,10 @@ _ZENODO_2205 = Path(os.environ.get(
 @pytest.mark.parametrize("case", ["QA", "QH"])
 def test_bootstrap_selfconsistent_examples(case, tmp_path):
     script = REPO / "benchmarks" / f"{case}_bootstrap_selfconsistent.py"
-    out = _run_example(script, tmp_path, timeout=1200)
+    # The guard above accepts the dataset at its default location, but the
+    # script only reads the environment variable, so pass the resolved path.
+    out = _run_example(script, tmp_path, timeout=1200,
+                       VMEX_ZENODO_2205_02914=str(_ZENODO_2205))
     m = re.search(r"final f_boot = ([0-9.eE+-]+)", out)
     assert m is not None and float(m.group(1)) < 5e-2, f"{case} f_boot: {out[-400:]}"
     assert (tmp_path / f"output_{case}_bootstrap_selfconsistent"
@@ -386,12 +539,15 @@ def test_bootstrap_selfconsistent_examples(case, tmp_path):
 
 
 @pytest.mark.full  # nightly: Picard seed + one exact finite-beta optimization stage
-@pytest.mark.parametrize("case", ["QA", "QH"])
-def test_bootstrap_optimization_examples(case, tmp_path):
+@pytest.mark.parametrize(("case", "figure_of_merit"),
+                         [("QA", "QS"), ("QH", "QS"), ("QI", "constructed QI")])
+def test_bootstrap_optimization_examples(case, figure_of_merit, tmp_path):
+    if case == "QI":
+        pytest.importorskip("booz_xform_jax")
     script = EXAMPLES / "optimization" / f"{case}_optimization_bootstrap.py"
     out = _run_example(script, tmp_path, timeout=1800)
     _assert_cost_decreased(out, f"{case}-bootstrap")
-    assert "self-consistent seed" in out and "[final] QS" in out
+    assert "self-consistent seed" in out and f"[final] {figure_of_merit}" in out
     match = re.search(r"\[final\].*beta = ([0-9.]+)%", out)
     assert match is not None and 1.0 < float(match.group(1)) < 4.0
     assert (tmp_path / f"input.{case}_bootstrap_optimized").exists()
@@ -400,9 +556,10 @@ def test_bootstrap_optimization_examples(case, tmp_path):
 
 
 @pytest.mark.full  # nightly: optional optimizer interoperability, cold JAX compilation
+# each wout name carries the script's own METHOD constant
 @pytest.mark.parametrize(("script_name", "dependency", "output"), [
-    ("QA_optimization_scipy.py", None, "wout_QA_scipy_BFGS.nc"),
-    ("QI_optimization_scipy.py", None, "wout_QI_scipy_BFGS.nc"),
+    ("QA_optimization_scipy.py", None, "wout_QA_scipy_L-BFGS-B.nc"),
+    ("QI_optimization_scipy.py", None, "wout_QI_scipy_L-BFGS-B.nc"),
     ("QI_optimization_jaxopt.py", "jaxopt", "wout_QI_jaxopt_LBFGS.nc"),
     ("QI_optimization_optax.py", "optax", "wout_QI_optax_adam.nc"),
 ])

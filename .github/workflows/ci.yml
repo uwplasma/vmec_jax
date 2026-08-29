@@ -17,8 +17,31 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Select required CI scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      run_tests: ${{ steps.scope.outputs.run_tests }}
+      run_coverage: ${{ steps.scope.outputs.run_coverage }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - id: scope
+        name: Classify changed paths
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git diff --name-only -z "origin/${GITHUB_BASE_REF}...HEAD" |
+              python tools/ci_scope.py --null >> "$GITHUB_OUTPUT"
+          else
+            python tools/ci_scope.py --all </dev/null >> "$GITHUB_OUTPUT"
+          fi
+
   quality:
     name: Quality, package, and docs
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -41,6 +64,8 @@ jobs:
 
   fast:
     name: Fast API tests (py${{ matrix.python-version }})
+    needs: changes
+    if: needs.changes.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
@@ -62,6 +87,11 @@ jobs:
           size_kb=$(du -sk --exclude=.git . | cut -f1)
           echo "working tree: ${size_kb} KiB"
           test "$size_kb" -lt 40960
+      - name: Load the docs configuration
+        # The `quality` job builds the docs on 3.12 only, so a 3.11+ construct
+        # in docs/conf.py (tomllib, say) would break the docs build on the
+        # declared floor with no job noticing. Executing conf.py needs no Sphinx.
+        run: python -c "import runpy; runpy.run_path('docs/conf.py')"
       - name: Run fast tests
         env:
           JAX_ENABLE_X64: "1"
@@ -83,6 +113,8 @@ jobs:
 
   physics:
     name: Representative ${{ matrix.lane }} physics
+    needs: changes
+    if: needs.changes.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -91,18 +123,31 @@ jobs:
         include:
           - lane: core
             selector: pr-physics-core
-          - lane: implicit-response
-            selector: pr-implicit-response
+            parallel: "-n 2"
+          - lane: implicit-response-a
+            selector: pr-implicit-response-a
+            parallel: ""
+          - lane: implicit-response-b
+            selector: pr-implicit-response-b
+            parallel: ""
+          - lane: free-boundary-adjoint
+            selector: pr-free-boundary-adjoint
+            parallel: ""
           - lane: field-api
             selector: pr-physics-field
+            parallel: "-n 2"
           - lane: mirror-equilibrium
             selector: pr-mirror-equilibrium
+            parallel: ""
           - lane: mirror-field
             selector: pr-mirror-field
+            parallel: ""
           - lane: mirror-spline
             selector: pr-physics-mirror-spline
+            parallel: ""
           - lane: mirror-output
             selector: pr-physics-mirror-output
+            parallel: ""
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -132,7 +177,7 @@ jobs:
           JAX_ENABLE_X64: "1"
         run: |
           FILES="$(python tools/test_manifest.py select ${{ matrix.selector }})"
-          pytest -q -m "not full and not weekly" \
+          pytest -q ${{ matrix.parallel }} -m "not full and not weekly" \
             $FILES --durations=20 --cov=vmex --cov-report=term
       - name: Stash coverage
         run: mv .coverage coverage.physics-${{ matrix.lane }}
@@ -142,8 +187,87 @@ jobs:
           path: coverage.physics-${{ matrix.lane }}
           retention-days: 3
 
+  parity:
+    name: Manifest parity lane (${{ matrix.lane }})
+    needs: changes
+    if: needs.changes.outputs.run_tests == 'true'
+    runs-on: ubuntu-latest
+    # The primary-lane partition is the whole pull-request suite; these four
+    # jobs are the part no other job was running.  Measured on the runner at
+    # -n 2: 30m00s, 27m40s, 26m54s, 21m22s, which put total CI wall clock at
+    # 30 minutes against a ~14-minute budget before.  The four run in parallel
+    # with the nine physics jobs, so the fix is per-job width, not fewer tests.
+    # Measured at -n 4: c1 25m36s (from 27m40s), c2 15m07s (from 21m22s),
+    # misc 24m43s (from 26m54s) -- and lane a killed outright.  So the width
+    # is per-lane: a stays at -n 2, the rest keep the gain.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: a
+            selector: pr-parity-a1 pr-parity-a2 pr-parity-b
+            # -n 2, not 4: this lane carries the free-boundary modules
+            # (test_freeboundary_implicit alone has two ~8-minute tests), and
+            # four concurrent free-boundary solves exhaust the runner.  At -n 4
+            # it was killed mid-run at 73% with no test failure -- "The
+            # operation was canceled" at 32m10s, twice, on two different pull
+            # requests.  The other three lanes keep -n 4, which measurably
+            # helps them.
+            parallel: "-n 2"
+          - lane: c1
+            selector: pr-parity-c1 pr-parity-c3 pr-parity-d
+            parallel: "-n 4"
+          - lane: c2
+            selector: pr-parity-c2
+            parallel: "-n 4"
+          - lane: misc
+            selector: pr-examples pr-external pr-full-only pr-gradient pr-mirror-spline
+            parallel: "-n 4"
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install ".[coils,turbulence,freeb]" pytest pytest-cov pytest-xdist
+      - name: Add XLA compile headroom
+        run: |
+          sudo fallocate -l 12G /mnt/vmex-swap
+          sudo chmod 600 /mnt/vmex-swap
+          sudo mkswap /mnt/vmex-swap
+          sudo swapon /mnt/vmex-swap
+      - name: Fetch the golden digests
+        run: python tools/fetch_assets.py --bundle golden-v1
+      - name: Run the manifest lanes
+        env:
+          JAX_ENABLE_X64: "1"
+        run: |
+          FILES=""
+          for LANE in ${{ matrix.selector }}; do
+            FILES="$FILES $(python tools/test_manifest.py select "$LANE")"
+          done
+          # Lanes overlap, and a module selected twice would run twice.
+          FILES="$(printf '%s\n' $FILES | sort -u | tr '\n' ' ')"
+          pytest -q ${{ matrix.parallel }} -m "not full and not weekly" \
+            $FILES --durations=20 --cov=vmex --cov-report=term
+      - name: Stash coverage
+        run: mv .coverage coverage.parity-${{ matrix.lane }}
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: coverage-parity-${{ matrix.lane }}
+          path: coverage.parity-${{ matrix.lane }}
+          retention-days: 3
+
   device:
     name: Two-device placement and AD
+    needs: changes
+    if: needs.changes.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -177,7 +301,14 @@ jobs:
     name: Changed executable lines (>= 95%)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [fast, physics, device]
+    needs: [changes, fast, physics, parity, device]
+    if: >-
+      always() &&
+      needs.changes.outputs.run_coverage == 'true' &&
+      needs.fast.result == 'success' &&
+      needs.physics.result == 'success' &&
+      needs.parity.result == 'success' &&
+      needs.device.result == 'success'
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -193,7 +324,7 @@ jobs:
           merge-multiple: true
       - name: Combine coverage and enforce the mirror floor
         run: |
-          coverage combine coverage.device coverage.fast coverage.physics-*
+          coverage combine coverage.device coverage.fast coverage.physics-* coverage.parity-*
           coverage report --include='*/vmex/mirror/*' --fail-under=90
           coverage xml
       - name: Enforce changed-line coverage
@@ -205,10 +336,10 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    needs: [quality, fast, physics, device, changed-coverage]
+    needs: [changes, quality, fast, physics, parity, device, changed-coverage]
     steps:
       - name: Require every review gate
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")'

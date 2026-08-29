@@ -3,6 +3,7 @@
 
 Use the commented ``Coils.from_simsopt`` line to replace the generated coils
 with a SIMSOPT coil JSON while keeping the objective and derivative code.
+Preview: this script needs ESSOS branch ``rj/vmex-optimization-interfaces``.
 """
 
 from dataclasses import replace
@@ -23,11 +24,11 @@ try:
     from essos.fields import BiotSavart
     from essos.objective_functions import loss_coil_separation, loss_coil_surface_distance
     from essos.surfaces import surfacerzfourier_from_boundary
-except ImportError:
+except ImportError as error:
     raise ImportError(
-        "The single-stage optimization example requires ESSOS. "
-        "Install with `pip install essos` or `conda install -c conda-forge essos`."
-    )
+        "This example needs ESSOS branch rj/vmex-optimization-interfaces "
+        "(uwplasma/ESSOS#58)."
+    ) from error
 
 nfp = 2  # number of field periods
 MAKE_MOVIE = True  # set True for a compact GIF of accepted iterates

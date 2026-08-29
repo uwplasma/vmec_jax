@@ -5,7 +5,8 @@ Zeff > 1; V2/V3 Zenodo QA/QH cross-check (<= 1% vs simsopt Redl curves,
 <= 10% RMS vs SFINCS interior, trapped-fraction parity; skips without the
 local dataset); differentiability of the double-where guards; traceable vs
 wout lane agreement; V4 ``<J.B>`` identity vs wout ``jdotb`` (<= 2% Zenodo,
-<= 1% solovev); V5 ``f_boot <= 1e-3`` on the published optima; V6 Picard
+<= 1% solovev and the LASYM up-down-asymmetric tokamak); V5
+``f_boot <= 1e-3`` on the published optima; V6 Picard
 convergence in <= 10 iterations; and the ``current_dofs`` driver with
 FD-checked AC/CURTOR Jacobian columns.
 
@@ -466,6 +467,20 @@ def eq():
     return equilibrium
 
 
+@pytest.fixture(scope="module")
+def lasym_eq():
+    """Up-down-asymmetric tokamak (LASYM = T, ntor = 0).
+
+    The deck exhausts NITER before FTOL — as its VMEC2000 golden does — but
+    the wout tables are what the wout lanes read, so convergence is not the
+    fixture's contract; carrying ``bmns``/``gmns`` is.
+    """
+    equilibrium = opt.solve_equilibrium(
+        VmecInput.from_file(DATA_DIR / "input.up_down_asymmetric_tokamak"))
+    assert bool(equilibrium.wout.lasym)
+    return equilibrium
+
+
 def test_state_lane_matches_wout_lane(eq):
     """redl_geometry_from_state agrees with redl_geometry_from_wout at
     discretization level (solver internal grid vs 64x65 wout synthesis)."""
@@ -585,9 +600,15 @@ def _interp_full(wout, surfaces, values):
                      np.asarray(values, dtype=float))
 
 
-def test_vmec_j_dot_B_state_lane_matches_wout_jdotb(eq):
-    """Traceable identity <J.B> vs the wout-engine jdotb (jxbforce.f) on the
-    solovev equilibrium: <= 1% (observed ~5e-5); wout-table identity ditto."""
+@pytest.mark.parametrize("fixture", ["eq", "lasym_eq"])
+def test_vmec_j_dot_B_state_lane_matches_wout_jdotb(request, fixture):
+    """Traceable identity <J.B> vs the wout-engine jdotb (jxbforce.f): <= 1%
+    (observed ~5e-5 solovev, ~9e-4 up_down); wout-table identity ditto.
+
+    The LASYM row is the regression gate on the ``geom=None`` synthesis: with
+    the sine families dropped the last assertion missed by 2.8e-3.
+    """
+    eq = request.getfixturevalue(fixture)
     surfaces = np.linspace(0.2, 0.9, 8)
     jv = np.asarray(bs.vmec_j_dot_B(eq.state, eq.runtime, surfaces=surfaces))
     jw = _interp_full(eq.wout, surfaces, eq.wout.jdotb)
@@ -600,6 +621,18 @@ def test_vmec_j_dot_B_state_lane_matches_wout_jdotb(eq):
     geom = bs.redl_geometry_from_wout(eq.wout, surfaces)
     jv_geom = np.asarray(bs.vmec_j_dot_B_from_wout(eq.wout, surfaces, geom=geom))
     np.testing.assert_allclose(jv_geom, jv_wout, rtol=1e-3)
+    # The two lanes are the same identity, so they must agree exactly, not
+    # merely within the gate above -- and at the axis too.  Every m != 0
+    # harmonic vanishes where the surface degenerates to a point;
+    # redl_geometry_from_wout zeroes them there and the geom=None lane did
+    # not, which put the two 4.0e-4 apart at s = 0 while they matched
+    # bit-for-bit everywhere else.
+    with_axis = np.concatenate([[0.0], surfaces])
+    axis_geom = bs.redl_geometry_from_wout(eq.wout, with_axis)
+    np.testing.assert_array_equal(
+        np.asarray(bs.vmec_j_dot_B_from_wout(eq.wout, with_axis)),
+        np.asarray(bs.vmec_j_dot_B_from_wout(eq.wout, with_axis,
+                                             geom=axis_geom)))
 
 
 @needs_zenodo
@@ -805,3 +838,71 @@ def test_least_squares_current_dofs_implicit():
         np.testing.assert_allclose(jac[:, col], fd,
                                    atol=1e-3 * max(np.max(np.abs(fd)), 1e-12),
                                    err_msg=f"implicit Jacobian column {col}")
+
+
+# ---------------------------------------------------------------------------
+# nyquist.filter_bsubuv_lasym, directly
+# ---------------------------------------------------------------------------
+
+
+def _filter_inputs(*, mpol, ntor, ntheta, nzeta, ns=7, seed=0):
+    """A trig table and a random covariant pair on its full theta grid."""
+    from vmex.core.fourier import Resolution, trig_tables
+
+    trig = trig_tables(Resolution(mpol=mpol, ntor=ntor, ntheta=ntheta,
+                                  nzeta=nzeta, nfp=3, ns=ns, lasym=True))
+    rng = np.random.default_rng(seed)
+    shape = (ns, int(trig.ntheta3), nzeta)
+    return (trig, rng.standard_normal(shape), rng.standard_normal(shape),
+            np.linspace(0.0, 1.0, ns))
+
+
+def test_filter_bsubuv_lasym_is_an_idempotent_projection():
+    """The scale contract the vectorized filter is written against.
+
+    ``filter_bsubuv_lasym`` had no direct test — its only coverage was
+    incidental, through the wout writer — so the property its docstring
+    claims was never actually gated.  One pass is a band-limited projection
+    returning the physical field, so a second pass must change nothing.
+    """
+    from vmex.core.nyquist import filter_bsubuv_lasym, nyquist_limits
+
+    trig, bsubu, bsubv, s = _filter_inputs(mpol=4, ntor=2, ntheta=16, nzeta=8)
+    mmax, nmax = 3, 2
+    assert min(nyquist_limits(trig)) > max(mmax, nmax)   # band inside Nyquist
+    once = filter_bsubuv_lasym(bsubu=bsubu, bsubv=bsubv, trig=trig,
+                               mmax_force=mmax, nmax_force=nmax, s=s)
+    twice = filter_bsubuv_lasym(bsubu=once[0], bsubv=once[1], trig=trig,
+                                mmax_force=mmax, nmax_force=nmax, s=s)
+    for first, second in zip(once, twice):
+        scale = max(float(np.max(np.abs(first))), 1e-300)
+        assert float(np.max(np.abs(second - first))) / scale < 1e-14
+    # A projection that returned its input unchanged would pass the above and
+    # test nothing.
+    assert float(np.max(np.abs(once[0] - bsubu))) > 1e-3
+
+
+def test_filter_bsubuv_lasym_halves_the_self_conjugate_nyquist_modes():
+    """The ``dnorm1`` half-weights, on a grid coarse enough to reach them.
+
+    ``mmax_force`` is ``mpol - 1`` and ``mnyq`` is ``ntheta2 - 1``, so the
+    self-conjugate half-weight only engages when the grid under-resolves the
+    retained modes.  ``VmecInput`` does not forbid that — ``MPOL = 8`` with
+    ``NTHETA = 10`` is accepted — so the branch is reachable from a deck and
+    is not dead code, which is what a first look at it suggests.
+
+    Idempotence is deliberately *not* asserted here: with the half-weights
+    engaged a second pass is not a no-op, and the docstring says so.  What is
+    asserted is that the filter runs, stays finite, and actually acts.
+    """
+    from vmex.core.nyquist import filter_bsubuv_lasym, nyquist_limits
+
+    trig, bsubu, bsubv, s = _filter_inputs(mpol=8, ntor=4, ntheta=10, nzeta=6)
+    mmax, nmax = 7, 4
+    mnyq, nnyq = nyquist_limits(trig)
+    assert mnyq <= mmax and nnyq <= nmax          # both half-weights engage
+    out_u, out_v = filter_bsubuv_lasym(bsubu=bsubu, bsubv=bsubv, trig=trig,
+                                       mmax_force=mmax, nmax_force=nmax, s=s)
+    assert out_u.shape == bsubu.shape and out_v.shape == bsubv.shape
+    assert np.all(np.isfinite(out_u)) and np.all(np.isfinite(out_v))
+    assert float(np.max(np.abs(out_u - bsubu))) > 1e-3

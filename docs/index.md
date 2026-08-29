@@ -80,7 +80,7 @@ The theory: [the variational problem](explanation/variational-problem.rst),
 
 ::::
 
-```{figure} /_static/figures/readme_runtime_compare.png
+```{figure} /_static/figures/readme_runtime_compare.webp
 :alt: Runtime comparison of VMEX against VMEC2000 and VMEC++
 :width: 95%
 
@@ -132,5 +132,4 @@ explanation/index
 
 project/contributing
 project/references
-project/changelog
 ```

@@ -430,11 +430,10 @@ and the edge and returns
 penalizes unstable (negative) ``DMerc`` with a smooth gradient.  At finite
 ``smoothing`` the residual is positive, rather than exactly zero, on stable
 surfaces but decays exponentially with the stability margin.  Both profile
-lanes retain VMEC's near-axis and edge limitations.  The traceable lane
-supports ``lasym = True``: the ``jxbforce.f`` mode filter keeps the four
-asymmetric geometry families, and on a converged finite-pressure,
-up-down-asymmetric tokamak ``d_merc_state`` reproduces the WOUT ``DMerc``
-profile to round-off with finite state derivatives.
+lanes retain VMEC's near-axis and edge limitations.  Both support
+``lasym = True``: the asymmetric lane carries the sine-parity content through
+the ``jxbforce.f`` parity-split filter and the full-theta surface integrals,
+and is validated per-term against live VMEC2000 (below).
 
 For a vacuum equilibrium, :math:`p'=0` makes :math:`D_{\rm well}` exactly
 zero; VMEX does not add a pressure floor. The reported Mercier index can still
@@ -494,17 +493,30 @@ VMEC2000 does not write ``D_R`` itself.  A live `DCON/GPEC
 <https://github.com/PrincetonUniversity/GPEC>`_ evaluation independently
 reproduces the symmetric VMEC normalization at ``ns=51`` (``D_I`` maximum
 absolute difference ``9.10e-4`` and ``D_R`` ``8.63e-5`` over normalized
-poloidal flux ``[0.1, 1)``).  The same test on an
-up-down-asymmetric tokamak exposed unresolved sensitivity in :math:`H`:
-at ``ns=201`` the candidate reconstruction's normalized ``D_I`` differs by
-at most ``1.85e-2`` over normalized poloidal flux ``[0.2, 0.9]``, but
-``D_R`` differs by ``1.49e-2`` and can change sign near marginality. The live
-state implementation now retains all four LASYM geometry families and its
-boundary JVPs are checked against independently reconverged finite
-differences, so it is available for optimization. Publication use near
-marginality still requires a nonaxisymmetric JMC/DCON benchmark. The summary
-plot omits WOUT-only ``D_R`` for LASYM because that host reconstruction does
-not have the live solver state needed to certify the asymmetric normalization.
+poloidal flux ``[0.1, 1)``).
+
+LASYM scope.  ``mercier.f`` integrates real-space fields over the full
+theta interval with the uniform lasym weights and the ``jxbforce.f`` inputs
+carry both parity channels, so VMEC2000 anchors the asymmetric lane.
+The analysis weight is ``1/(nzeta*(ntheta2-1))`` over the half-interval
+reduced grid in both symmetry modes, which is the physical-scale norm VMEX
+uses.  On the bundled up-down-asymmetric deck, raised to finite pressure by
+the stability fixture (the shipped deck has ``AM = 0``, so ``DWell`` vanishes
+identically on it), :func:`~vmex.core.stability.d_merc_state` reproduces the
+golden VMEC2000 ``DMerc`` profile to ``1.2e-4`` scale-relative
+(``DGeod`` ``2.1e-3``, ``<J.B>`` ``1.0e-4``) with full interior
+sign agreement — inside the ``5e-2`` tolerance class of the symmetric live
+gate — and an independent NumPy reconstruction of the ``mercier.f``
+integrals from the wout Fourier tables (both parities) reproduces the same
+profiles at the few-percent reconstruction class for VMEX and VMEC2000
+alike.  For LASYM :math:`D_R` no external oracle exists (the DCON
+comparison above is symmetric-only, and its asymmetric ``H`` remained
+sensitive near marginality): the asymmetric
+:func:`~vmex.core.stability.glasser_d_r_state` is validated by
+internal consistency — the exact GGJ identity applied to the
+VMEC2000-anchored LASYM ``DMerc`` and the independently validated
+``jdotb``/``bdotb`` averages — not by a DCON anchor, and near-marginal
+asymmetric :math:`D_R` values inherit the corresponding sensitivity.
 
 Magnetic well
 ~~~~~~~~~~~~~~
@@ -650,3 +662,55 @@ forward-mode sensitivities, and certify them against reconverged finite
 differences and STELLOPT NEO before exposing the result in objective tuples.
 LASYM is rejected until NEO_JAX carries the asymmetric Boozer harmonics rather
 than silently dropping them.
+
+Fast-ion confinement proxy
+--------------------------
+
+Ripple wells let trapped energetic particles drift radially: where the
+contours of the second adiabatic invariant :math:`J` cross flux surfaces,
+ions born on a superbanana leave the device within a few bounce times.
+Nemov's :math:`\Gamma_c` (Nemov, Kasilov, Kernbichler, Leitold, Phys.
+Plasmas 15, 052501 (2008), eq. 61) measures the angle between the
+bounce-averaged drift and the flux surface,
+
+.. math::
+
+   \gamma_c = \frac{2}{\pi}\arctan\frac{v_r}{v_p}, \qquad
+   \Gamma_c = \frac{\pi}{4\sqrt 2}\left\langle
+     \int_{1/B_{\max}}^{1/B}\!\mathrm d\lambda\,
+     \frac{B}{\sqrt{1-\lambda B}}\,\gamma_c^{2}\right\rangle,
+
+with :math:`v_r` and :math:`v_p` the bounce-averaged radial and
+poloidal-tangential magnetic drifts and :math:`\Gamma_c^{2}` the
+prompt-loss scaling used in optimization (Velasco et al., Nucl. Fusion 61,
+116059 (2021), eqs. 14-16, the KNOSOS/CIEMAT-QI form; Bader et al. and
+Paul et al. document that such proxies correlate imperfectly with measured
+energetic-particle losses, which bounds what any :math:`\Gamma_c` value
+claims). :class:`~vmex.core.gammac.GammaC` evaluates the drift ratio in
+Nemov's own form — DESC's rewrite into single-valued periodic maps
+(``desc.compute._fast_ion`` on the bounce kernel of Unalmis et al., J.
+Plasma Phys. 92(3), 2026, doi:10.1017/S0022377826101652, DESC's sibling
+``GammaC`` objective) — because the literal line-integral form of the
+poloidal drift carries a secular shear term that drives the proxy to zero
+as the sampled line lengthens. The ingredients are exact spectral point
+evaluations on PEST field lines (the :mod:`vmex.core.stability` machinery)
+and the drift kernels of :func:`vmex.core.bounce.bounce_action`; each was
+validated against finite differences of the drift-kinetic identities
+:math:`\partial_\alpha J \propto \tau_b\,\overline{\mathbf v_M\cdot\nabla s}`
+and :math:`\partial_s J \propto -\tau_b\,\overline{\mathbf v_M\cdot\nabla\alpha}`
+and against the equilibrium's own ``wout`` tables.
+
+The pitch integral samples the reflecting level :math:`1/\lambda`
+uniformly with an open midpoint rule (the Unalmis et al. pitch-sampling
+guidance), and wells sliding across the ends of the bounded trace are
+faded by a half-transit taper applied to the normalizing
+:math:`\int\mathrm dl/B` as well — an unbiased window on the ergodic
+limit that removes end-of-trace discontinuities. Superbanana layers —
+where the tangential drift :math:`v_p` reverses and
+:math:`\gamma_c \to \pm 1` — are physical and are kept; resolving them
+sets the ``nalpha``/``num_pitch`` budget, they dominate the residual
+resolution noise of boundary gradients, and ``excluded_fraction`` reports
+any well-slot overflow so an under-provisioned evaluation is visible.
+Axisymmetry sends
+:math:`\Gamma_c \to 0` exactly (:math:`\partial_\alpha J = 0`), which the
+tests anchor together with the QA-versus-unoptimized ordering.

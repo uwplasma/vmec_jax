@@ -9,6 +9,107 @@ matrix, ``benchmarks/run_gpu_matrix.py``; 2x NVIDIA RTX A4000, jax 0.6.2
 cuda12) — and from the end-to-end parity suite in
 ``tests/test_parity_breadth.py``.
 
+High-order strong-force kernel
+------------------------------
+
+The independent continuum oracle is fused and cached by radial basis and
+validation-grid shape.  ``benchmarks/strong_force.py`` measures pointwise
+``J x B - grad(p)`` and its reverse-mode coefficient gradient.  The checked-in
+``benchmarks/strong_force_m4.json`` run disabled the persistent compilation
+cache, used float64, five Fourier modes, eight radial elements, 64 points, and
+20 warm repeats on an Apple M4:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 9 14 14 14 14 14
+
+   * - degree
+     - cold force [s]
+     - warm force [ms]
+     - cold grad [s]
+     - warm grad [ms]
+     - second-radial-derivative L2 error
+   * - 3
+     - 1.43
+     - 0.290
+     - 1.84
+     - 0.552
+     - 2.87e-3
+   * - **5**
+     - 2.12
+     - 0.458
+     - 2.63
+     - 0.853
+     - **7.73e-7**
+   * - 7
+     - 2.90
+     - 0.720
+     - 3.43
+     - 1.23
+     - 6.09e-10
+
+The accuracy column reconstructs ``rho^2 exp(s)`` and compares its second
+``rho`` derivative at 2001 points.  Degree 5 reduces that error by about 3700x
+relative to degree 3 while retaining sub-millisecond warm force and gradient
+evaluation.  Degree 7 is available for p-refinement and certification, but its
+clean cold compilation used about 142 MiB more incremental peak RSS than
+degree 5.  This measured accuracy/runtime/memory compromise is why degree 5 is
+the production default.
+
+High-order low-physics preconditioner
+-------------------------------------
+
+``benchmarks/polish_preconditioner.py`` measures the high-to-low transfer,
+one stored exact raw-force block factor, and forward/transpose high-order
+applications.  The committed ``benchmarks/polish_preconditioner_m4.json``
+disabled the persistent compilation cache, used float64 and 20 warm repeats,
+and records both accuracy and peak process RSS:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 10 10 14 14 14 14 14
+
+   * - ns
+     - mpol
+     - ntor
+     - factor [s]
+     - cold forward [ms]
+     - warm forward [ms]
+     - warm transpose [ms]
+     - factor peak RSS [MiB]
+   * - 5
+     - 3
+     - 0
+     - 4.61
+     - 98.1
+     - 0.0274
+     - 0.0269
+     - 193
+   * - 7
+     - 4
+     - 0
+     - 4.44
+     - 121
+     - 0.0289
+     - 0.0291
+     - 201
+   * - 5
+     - 3
+     - 1
+     - 5.58
+     - 159
+     - 0.0306
+     - 0.0336
+     - 217
+
+Across these small structural cases, the transfer round trip is below
+``1.2e-15``, forward/transpose duality below ``2.6e-15``, and the factored
+low-block residual below ``4.8e-12``.  Factor construction includes JAX
+assembly/compilation and dominates a first use; its factors are therefore
+retained across Krylov steps and continuation stages until the documented
+quality policy requests a refresh.  The table is a reproducibility and
+overhead gate, not a production-resolution scaling claim.
+
 Benchmark suite (CPU, ns = 201)
 -------------------------------
 
@@ -196,15 +297,14 @@ Parity with VMEC2000
 Free-boundary multigrid has a dedicated reproducible artifact,
 ``benchmarks/freeboundary_multigrid.json``.  On the public converged CTH-like
 ``NS_ARRAY = 7, 15`` ladder (Apple Silicon CPU, 2026-07-21), VMEC2000 takes
-239 + 340 iterations in 0.98 s; vmex takes 250 + 340 iterations, 10.07 s cold
-and 1.98 s warm.  Both activate vacuum exactly once.  Against an ns=15
+239 + 340 iterations in 0.92 s; vmex takes 250 + 340 iterations, 8.61 s cold
+and 1.20 s warm.  Both activate vacuum exactly once.  Against an ns=15
 VMEC2000 wout, vmex's final scale-relative maximum errors are
-``6.10e-5`` (R), ``3.59e-4`` (Z), ``1.52e-6`` (iota), and ``5.94e-8``
-(relative ``wb``).  The first fine-grid raw residual remains a transient
-ordering difference (``FSQR=2.01e-3`` versus VMEC2000's ``1.73``), but both
-then take exactly 340 fine-grid iterations to the same fixed point.  Warm
-execution is within 2.1x of Fortran on this small case; the one-time XLA
-compile dominates the cold result.
+``6.08e-5`` (R), ``3.59e-4`` (Z), ``1.99e-6`` (iota), and ``6.07e-8``
+(relative ``wb``).  Both codes enter the fine grid at the same raw residual,
+``FSQR = 1.73``, and take exactly 340 fine-grid iterations to the same fixed
+point.  Warm execution is within 1.31x of Fortran on this small case; the
+one-time XLA compile dominates the cold result.
 
 Per-iteration algorithmic parity (same step control, preconditioner cadence,
 constants) means the solver does not just reach the same answer — it takes
@@ -268,7 +368,7 @@ The vmex trace comes from ``SolveResult.fsq_history``, the VMEC2000
 trace from its stdout iteration table run with ``NSTEP = 1``, and the
 VMEC++ trace from the ``fsqt`` array of its wout payload.
 
-.. figure:: /_static/figures/readme_convergence.png
+.. figure:: /_static/figures/readme_convergence.webp
    :alt: force residual vs iteration for VMEX, VMEC2000, and VMEC++
    :align: center
    :width: 95%
@@ -319,7 +419,7 @@ default 1D path stays byte-identical, so parity is untouched.
      - 204
      - 9.2x
 
-.. figure:: /_static/figures/readme_precond.png
+.. figure:: /_static/figures/readme_precond.webp
    :alt: 2D vs 1D preconditioner iteration counts on stiff cases
    :align: center
    :width: 90%
@@ -354,9 +454,12 @@ Peak resident memory is 0.6–1.5 GB on most bundled rows and about 3.3 GB on
 the largest bundled multigrid deck, but those figures are not a
 high-resolution upper bound. The spectral state is small; compiled transform
 graphs and implicit block factors are not. On high-mode decks the separable
-toroidal FFT synthesis substantially reduces both wall time and peak memory
-relative to the full mode-stacked contraction, and the stage-cache release
-keeps peak RSS at the largest single rung. A residual memory gap to
+toroidal FFT synthesis reduces peak memory relative to the full mode-stacked
+contraction -- 8.21 GB against 9.63 GB on the 537-mode CTH-like case in
+``benchmarks/high_mode_fft.json`` -- while wall time is not improved there
+(983 s against 826 s cold, and a tie warm at 335 s); both runs in that record
+stop at the iteration cap, so they are compared on cost, not on a converged
+answer.  The stage-cache release keeps peak RSS at the largest single rung. A residual memory gap to
 single-purpose compiled implementations remains, dominated by XLA compiled
 executables and the runtime floor rather than by the physics working set.
 Current-head numbers for the reference high-mode deck are produced by the
@@ -397,10 +500,15 @@ unaffected.  Library :func:`~vmex.core.multigrid.solve_multigrid` and
 :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` retain warm stage
 executables by default (the right policy for scans and repeated solves) and
 accept ``release_stage_cache=True`` to opt into the one-shot behaviour.
-The machine-scoped disk cache is bounded to 1 GiB. If a nearly full filesystem
-causes XLA to terminate with ``SIGBUS`` while mapping a new executable, free
-disk space or run with ``VMEX_COMPILATION_CACHE=disabled``; VMEX does not
-delete caches owned by other applications.
+The machine-scoped disk cache is bounded to 10% of the free disk (2 GiB
+floor, 20 GiB ceiling).  On macOS with jaxlib < 0.10 the cache defaults to
+off: those jaxlib releases crash with ``SIGBUS``/``SIGILL`` inside
+``PyClient::DeserializeExecutable`` when loading a cached CPU executable
+holding more than a few hundred kernels (LLVM ORC materializes the
+per-kernel objects recursively on one fixed-size worker-thread stack), and
+every solve-scale executable exceeds that.  Upgrading jaxlib re-enables the
+cache automatically; ``VMEX_COMPILATION_CACHE=1`` forces it on for small
+workloads.  VMEX does not delete caches owned by other applications.
 The CLI and library compile solver lanes sequentially by default.
 ``--prefetch-compile`` (or ``prefetch_compile=True`` in the library) overlaps
 the next rung's compilation.  This can reduce cold-start latency on a

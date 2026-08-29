@@ -326,6 +326,30 @@ When both terms use the same surfaces and pitch,
 :class:`~vmex.core.maxj.JInvariantQIAndMaximumJResidual` concatenates their
 cost-weighted rows after one shared Boozer transform.
 
+Fast-ion confinement (Gamma_c)
+------------------------------
+
+:class:`~vmex.core.gammac.GammaC` returns one ``Gamma_c`` row per flux
+surface — the Nemov fast-ion proxy (Nemov et al. 2008, eq. 61, in the
+organization of Velasco et al. 2021, eq. 16; the sibling of DESC's
+``GammaC``), so the least-squares cost is the weighted sum of
+``Gamma_c**2``, the prompt-loss scaling.  Physics, formula, and the
+numerical policy are on :doc:`/explanation/confinement`:
+
+.. code-block:: python
+
+   from vmex.core.gammac import GammaC
+
+   gamma_c = GammaC([0.35, 0.6, 0.85], nalpha=9, num_transit=4)
+   result = opt.least_squares(
+       [(qs, 0.0, 1.0), (gamma_c, 0.0, 1.0)],
+       inp, max_mode=6, jac="implicit")
+
+Stellarator-symmetric states with ``iota != 0`` on the target surfaces
+(surfaces through ``iota ~ 0`` return NaN rather than a plausible number).
+Superbanana layers make the objective demanding on ``nalpha``/``num_pitch``;
+check ``excluded_fraction`` in ``compute_state`` before trusting a value.
+
 Bootstrap current (Redl)
 ------------------------
 
@@ -374,8 +398,9 @@ reproducing the workflow of Landreman–Buller–Drevlak, arXiv:2205.02914):
        current_dofs=5)          # five spline shapes + CURTOR; one knot is fixed
 
 The complete runnable workflows are
-``examples/optimization/QA_optimization_bootstrap.py`` and
-``QH_optimization_bootstrap.py``.  Their setup has two distinct steps:
+``examples/optimization/QA_optimization_bootstrap.py``,
+``QH_optimization_bootstrap.py`` and ``QI_optimization_bootstrap.py``.  Their
+setup has two distinct steps:
 
 1. ``KineticProfiles`` describes the density and temperature seen by the
    Redl model.  Coefficients are in increasing powers of normalized toroidal
@@ -449,8 +474,9 @@ MHD stability
 
 :mod:`vmex.core.stability` provides the infinite-n ideal-ballooning
 objective (plan R26h.h1) — a JAX port of the COBRA eigenproblem in the Gaur
-*et al.* (arXiv:2302.07673) formulation, with field-line coefficients per
-simsopt's COBRA-validated ``vmec_fieldlines`` conventions and a batched
+*et al.* formulation (*Plasma Phys. Control. Fusion* **67**, 125015 (2025),
+arXiv:2410.04576), with field-line coefficients per simsopt's
+COBRA-validated ``vmec_fieldlines`` conventions and a batched
 symmetric-tridiagonal ``eigvalsh`` solve:
 
 - :func:`~vmex.core.stability.ballooning_lambda` — the most-unstable
@@ -468,10 +494,36 @@ symmetric-tridiagonal ``eigvalsh`` solve:
             (ballooning_growth_rate, -0.01, 5.0)]   # keep λ_max below zero
    result = opt.least_squares(terms, inp, max_mode=4, jac="implicit")
 
+``examples/optimization/QA_optimization_ballooning.py`` runs this end to end
+on a seed that is Mercier-stable and ballooning-unstable — the case the
+objective exists for, since the interchange criteria see nothing to fix.
+
+Two defaults are worth setting deliberately rather than inheriting:
+
+- **Scan** ``zeta0``.  ``λ`` peaks at a configuration-dependent ballooning
+  parameter (Gaur *et al.* 2023, footnote 2), and the single-point default
+  ``zeta0s=(0.0,)`` under-reports it — by 26 % on that example's seed
+  (3.27e-3 at ``zeta0 = 0`` against 4.42e-3 over a five-point scan).  A
+  ``zeta0``-blind objective drives the wrong quantity to zero.
+- **Read the softmax as the bound it is.**  ``ballooning_growth_rate`` sits
+  above ``max λ`` by up to ``temperature × log(n_lines)``, which at the
+  default ``temperature=0.05`` over 12 lines is 0.12 — larger than published
+  ``λ_max`` values.  Target the bound (below zero is then sufficient for
+  stability) and report
+  :func:`~vmex.core.stability.ballooning_lambda`'s hard maximum, or lower the
+  temperature and accept a sharper gradient.
+
+Asymmetric (``lasym``) states are supported: the sine-parity ``R``/``Z``/``λ``
+spectra carry through the PEST angle map and the field-line geometry.  An
+asymmetric equilibrium has no ``α -> -α`` parity, so the default field lines
+span the full ``[0, 2π)`` there and ``zeta0`` should be scanned over both
+signs.
+
 Everything inside is JAX AD (geometry derivatives included), so it composes
-with both gradient modes; ``d(growth)/d(pres_scale)`` matches finite
-differences to 4.7e-9 in CI, and the objective destabilizes monotonically
-with pressure on the solovev family, in sign agreement with Mercier.  For
+with both gradient modes; ``d(growth)/d(pres_scale)`` matches a central
+difference at ``h = 1e-4`` to 4.7e-9 relative, and the objective destabilizes
+monotonically with pressure on the solovev family, in sign agreement with
+Mercier.  For
 interchange stability, combine with
 :func:`~vmex.core.optimize.magnetic_well` (traceable) or
 :func:`~vmex.core.optimize.mercier_stability_residual` (traceable); retain
@@ -493,9 +545,13 @@ JAX-native Hermite–Laguerre flux-tube solver, formerly SPECTRAX-GK;
   pure JAX, no gkx import needed;
 - :func:`~vmex.core.turbulence.turbulent_growth_rate` — the dominant
   linear ITG/TEM growth rate on that flux tube.  Fully differentiable in
-  *both* gradient modes (validated 0.44 ``v_th/L`` at the Cyclone-base
-  drive ``R/L_Ti = 6.9`` versus ~0 below the critical gradient; AD vs FD
-  2.9e-8);
+  *both* gradient modes.  ``r_over_lt``/``r_over_ln`` are ``R/L`` and are
+  divided by the equilibrium's aspect ratio on the way in, since GKX's
+  operator consumes ``a/L``; pass ``params_linear`` to give it ``a/L``
+  directly.  Measured on the shaped tokamak deck at the Cyclone-base drive
+  ``R/L_Ti = 6.9`` (aspect 2.643, so ``a/L_Ti = 2.611``): 0.184 ``v_th/L``
+  against 8.9e-15 below the critical gradient, with reverse and forward AD
+  gated against finite differences to 1e-5 relative;
 - :func:`~vmex.core.turbulence.quasilinear_flux_proxy` and
   :func:`~vmex.core.turbulence.nonlinear_heat_flux_proxy` — the
   mixing-length and saturation-rule heat-flux surrogates.  These weight the
@@ -545,6 +601,10 @@ Which objectives differentiate how
      - yes
      - yes
      - shared-transform J-invariance and maximum-J rows
+   * - :class:`~vmex.core.gammac.GammaC`
+     - yes
+     - yes
+     - traceable field-line drift kernels on tapered bounded traces
    * - :class:`~vmex.core.bootstrap.RedlBootstrapMismatch`
      - yes
      - yes

@@ -19,10 +19,10 @@ Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 
 Both stellarator-symmetric and ``lasym`` (asymmetric) equilibria are
 supported: the sine/cosine partner tables (``rmns``, ``zmnc``, ``bmns``,
-...) are included whenever present. The stored Mercier profile is plotted
-for both symmetry classes; the independent WOUT-only Glasser reconstruction
-is omitted for ``LASYM`` until its output-normalization proof is complete.
-All figures use the Agg backend
+...) are included whenever present — including in the ``D_R``
+reconstruction, whose ``mercier.f`` integrals carry the full parity
+content and stay guarded by their stored-``DMerc`` self-check for both
+symmetry modes.  All figures use the Agg backend
 at ``dpi >= 200`` and are closed after saving.  The Boozer transform behind
 the summary panels runs in-process (``booz_xform_jax``) so ``vmex --plot``
 needs no separate ``--booz`` pass.
@@ -31,6 +31,8 @@ Public API
 ----------
 ``plot_wout(path_or_WoutData, outdir, which=(...)) -> dict[str, Path]``
 ``plot_boozmn(path, outdir) -> dict[str, Path]``
+``plot_tracing(wout, result, outdir) -> dict[str, Path]`` — the four
+alpha-tracing figures for a :class:`~vmex.core.tracing.AlphaTracingResult`
 plus the per-figure helpers each of those dispatches to.
 """
 
@@ -58,6 +60,7 @@ __all__ = [
     "plot_boozmn_spectrum",
     "plot_boozmn_mode_profiles",
     "boozer_modB_on_surface",
+    "plot_tracing",
 ]
 
 _DPI = 200            # publication resolution for every saved PNG
@@ -450,14 +453,23 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
         ``D_R = -DMerc + (H - S^2/2)^2 / S^2``     (0 where the shear vanishes)
 
     exactly as the traceable :func:`vmex.core.stability.glasser_d_r_state`
-    (validated against it to ~1e-7 on the bundled decks).  The reconstruction
-    is self-checking: the same integrals must reproduce the stored ``DMerc``
-    profile; on mismatch (or for ``LASYM``, whose WOUT output normalization
-    needs a separate parity proof) the result is flagged invalid so callers
-    can omit the curve instead of plotting an unvalidated one.
+    (validated against it to ~1e-7 on the bundled symmetric decks, and to a
+    few percent of ``D_R`` for ``lasym``, where ``D_R`` is a near-cancelling
+    difference of ``DMerc``-scale integrals).  Both symmetry
+    modes are supported: for ``lasym`` equilibria every field carries its
+    sine/cosine partner table, making this the independent lasym-complete
+    NumPy reference for the Mercier integrals.  The reconstruction is
+    self-checking: the same integrals must reproduce the stored ``DMerc``
+    profile; on mismatch the result is flagged invalid so callers can omit
+    the curve instead of plotting an unvalidated one.
     """
-    if bool(getattr(wout, "lasym", False)):
-        return {"valid": False, "note": "WOUT reconstruction not validated for LASYM", "d_r": None}
+    lasym = bool(getattr(wout, "lasym", False))
+
+    def partner(name):
+        table = getattr(wout, name, None)
+        if not lasym or table is None:
+            return None
+        return np.asarray(table, dtype=float)
 
     ns = int(wout.ns)
     if ns < 5:
@@ -508,18 +520,22 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
     ip[1:-1] = (torcur[2:] - torcur[1:-1]) * denom
 
     # Half-mesh real-space tables from the (already jxbforce-filtered) wout
-    # Nyquist coefficients; full-mesh geometry from rmnc/zmns.
-    bmag = _eval_modes(wout.bmnc, None, xm_nyq, xn_nyq, theta, zeta)
+    # Nyquist coefficients; full-mesh geometry from rmnc/zmns (+ the lasym
+    # sine/cosine partners).
+    bmag = _eval_modes(wout.bmnc, partner("bmns"), xm_nyq, xn_nyq, theta, zeta)
     b2 = bmag * bmag
-    gsqrt = _eval_modes(wout.gmnc, None, xm_nyq, xn_nyq, theta, zeta)
-    bsubu = _eval_modes(wout.bsubumnc, None, xm_nyq, xn_nyq, theta, zeta)
-    bsubv = _eval_modes(wout.bsubvmnc, None, xm_nyq, xn_nyq, theta, zeta)
+    gsqrt = _eval_modes(wout.gmnc, partner("gmns"), xm_nyq, xn_nyq, theta, zeta)
+    bsubu = _eval_modes(wout.bsubumnc, partner("bsubumns"), xm_nyq, xn_nyq, theta, zeta)
+    bsubv = _eval_modes(wout.bsubvmnc, partner("bsubvmns"), xm_nyq, xn_nyq, theta, zeta)
 
-    # Full-mesh bsubs (sine parity) band-limited to the jxbforce force modes.
+    # Full-mesh bsubs (sine parity + lasym cosine partner) band-limited to
+    # the jxbforce force modes.
     keep = (xm_nyq <= max(int(wout.mpol) - 1, 0)) & (np.abs(xn_nyq) <= int(wout.ntor) * nfp)
     bsmns = np.asarray(wout.bsubsmns, dtype=float) * keep[None, :]
-    bsubsu = _eval_modes(None, bsmns, xm_nyq, xn_nyq, theta, zeta, dtheta=1)
-    bsubsv = _eval_modes(None, bsmns, xm_nyq, xn_nyq, theta, zeta, dphi=1)
+    bsmnc = partner("bsubsmnc")
+    bsmnc = None if bsmnc is None else bsmnc * keep[None, :]
+    bsubsu = _eval_modes(bsmnc, bsmns, xm_nyq, xn_nyq, theta, zeta, dtheta=1)
+    bsubsv = _eval_modes(bsmnc, bsmns, xm_nyq, xn_nyq, theta, zeta, dphi=1)
 
     itheta = np.zeros_like(bsubu)
     izeta = np.zeros_like(bsubu)
@@ -531,11 +547,13 @@ def _glasser_d_r_from_wout(wout, *, ntheta: int | None = None, nzeta: int | None
         + izeta[1:-1] * 0.5 * (bsubv[2:] + bsubv[1:-1])
     )
 
-    R = _eval_modes(wout.rmnc, None, xm, xn, theta, zeta)
-    Rt = _eval_modes(wout.rmnc, None, xm, xn, theta, zeta, dtheta=1)
-    Rz = _eval_modes(wout.rmnc, None, xm, xn, theta, zeta, dphi=1)
-    Zt = _eval_modes(None, wout.zmns, xm, xn, theta, zeta, dtheta=1)
-    Zz = _eval_modes(None, wout.zmns, xm, xn, theta, zeta, dphi=1)
+    rmns = partner("rmns")
+    zmnc = partner("zmnc")
+    R = _eval_modes(wout.rmnc, rmns, xm, xn, theta, zeta)
+    Rt = _eval_modes(wout.rmnc, rmns, xm, xn, theta, zeta, dtheta=1)
+    Rz = _eval_modes(wout.rmnc, rmns, xm, xn, theta, zeta, dphi=1)
+    Zt = _eval_modes(zmnc, wout.zmns, xm, xn, theta, zeta, dtheta=1)
+    Zz = _eval_modes(zmnc, wout.zmns, xm, xn, theta, zeta, dphi=1)
 
     two_pi_sq = (2.0 * np.pi) ** 2
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -1723,3 +1741,152 @@ def plot_boozmn(
         fn, filename = plotters[key]
         results[key] = fn(bx, outdir / filename)
     return results
+
+
+# ==========================================================================
+# Alpha-particle tracing figures (vmex --trace; see vmex.core.tracing)
+# ==========================================================================
+
+def _trace_indices(nparticles: int, n_trajectories: int) -> np.ndarray:
+    """Evenly spaced particle indices — deterministic figure content."""
+    count = max(1, min(int(n_trajectories), int(nparticles)))
+    return np.unique(np.linspace(0, nparticles - 1, count).astype(int))
+
+
+def _finite_or_nan(values: np.ndarray) -> np.ndarray:
+    """Replace non-finite samples (post-loss event fill) with NaN gaps."""
+    return np.where(np.isfinite(values), values, np.nan)
+
+
+def plot_trace_trajectories(
+    wout, result, out_path: str | Path, *, n_trajectories: int = 4,
+) -> Path:
+    """Sampled guiding-centre orbits in 3-D over a translucent LCFS."""
+    plt = _import_matplotlib()
+    wout, _ = _as_wout(wout)
+    with _rc_context():
+        fig = plt.figure(figsize=(6.4, 5.6), frameon=False)
+        ax = fig.add_subplot(111, projection="3d")
+        theta = np.linspace(0.0, 2.0 * np.pi, 60)
+        phi = np.linspace(0.0, 2.0 * np.pi, 180)
+        R, Z = surface_rz(wout, s_index=int(wout.ns) - 1, theta=theta, phi=phi)
+        phi2d = np.meshgrid(phi, theta)[0]
+        X, Y = R * np.cos(phi2d), R * np.sin(phi2d)
+        ax.plot_surface(
+            X, Y, Z, color="0.6", alpha=0.2, rstride=2, cstride=2,
+            linewidth=0.0, antialiased=False, shade=False,
+        )
+        for i in _trace_indices(result.nparticles, n_trajectories):
+            xyz = result.trajectories_xyz[i]
+            finite = np.isfinite(xyz).all(axis=1)
+            ax.plot(
+                xyz[finite, 0], xyz[finite, 1], xyz[finite, 2],
+                lw=1.2, label=f"particle {i + 1}",
+            )
+        scale = 0.7 * max(np.abs(X).max(), np.abs(Y).max())
+        ax.auto_scale_xyz([-scale, scale], [-scale, scale], [-scale, scale])
+        ax.set_box_aspect([1, 1, 1]); ax.set_axis_off()
+        ax.legend(loc="upper right")
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI, bbox_inches="tight", pad_inches=0.05)
+        plt.close(fig)
+    return out_path
+
+
+def plot_trace_vparallel(
+    result, out_path: str | Path, *, n_trajectories: int = 4,
+) -> Path:
+    """Normalized parallel velocity ``v_par/v`` of the sampled orbits."""
+    plt = _import_matplotlib()
+    with _rc_context():
+        fig, ax = plt.subplots(figsize=(6.4, 4.2), layout="constrained")
+        for i in _trace_indices(result.nparticles, n_trajectories):
+            vpar = result.trajectories[i, :, 3] / result.total_speed
+            ax.plot(result.times, _finite_or_nan(vpar), label=f"particle {i + 1}")
+        ax.set_ylim(-1.0, 1.0)
+        ax.set_xlabel("time [s]")
+        ax.set_ylabel(r"$v_{\parallel}/v$")
+        ax.legend()
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
+    return out_path
+
+
+def plot_trace_loss_fraction(result, out_path: str | Path) -> Path:
+    """Cumulative loss fraction against time."""
+    plt = _import_matplotlib()
+    with _rc_context():
+        fig, ax = plt.subplots(figsize=(6.4, 4.2), layout="constrained")
+        ax.plot(result.times, result.loss_fractions, "-")
+        ax.set_ylim(0.0, 1.0)
+        ax.set_xlabel("time [s]")
+        ax.set_ylabel("loss fraction")
+        ax.set_title(
+            f"final loss fraction {100.0 * result.loss_fraction:.2f}% "
+            f"({result.particles_lost} of {result.nparticles})"
+        )
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
+    return out_path
+
+
+def plot_trace_energy_error(
+    result, out_path: str | Path, *, n_trajectories: int = 4,
+) -> Path:
+    """Relative energy error of the sampled orbits (integrator quality)."""
+    plt = _import_matplotlib()
+    with _rc_context():
+        fig, ax = plt.subplots(figsize=(6.4, 4.2), layout="constrained")
+        # Skip the first samples, exact by construction of mu (t = 0).
+        times = result.times[2:]
+        indices = _trace_indices(result.nparticles, n_trajectories)
+        errors = np.abs(
+            result.energies[indices, 2:] / result.particle_energy - 1.0)
+        for i, error in zip(indices, errors):
+            ax.plot(times, _finite_or_nan(error), label=f"particle {i + 1}")
+        # Promptly lost ensembles can leave no positive finite error samples;
+        # a log axis cannot autoscale on that, so keep linear axes then.
+        if np.any(np.isfinite(errors) & (errors > 0.0)):
+            ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_xlabel("time [s]")
+        ax.set_ylabel("relative energy error")
+        ax.legend()
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
+    return out_path
+
+
+def plot_tracing(
+    wout, result, outdir: str | Path, *,
+    name: str | None = None, n_trajectories: int = 4,
+) -> dict[str, Path]:
+    """Write the four alpha-tracing figures for one tracing result.
+
+    ``wout`` is the traced equilibrium — a ``wout_*.nc`` path or a
+    :class:`~vmex.core.wout.WoutData` — used as the LCFS backdrop of the 3-D
+    figure; ``result`` is an :class:`~vmex.core.tracing.AlphaTracingResult`
+    from :func:`~vmex.core.tracing.trace_alphas`.  Figures land in ``outdir``
+    (created if missing) under ``name`` (default: the wout case name), with
+    ``n_trajectories`` evenly sampled orbits in the per-particle panels.
+    Returns a mapping from figure key (``trajectories``, ``vparallel``,
+    ``loss_fraction``, ``energy_error``) to the written PNG path.
+    """
+    data, default_name = _as_wout(wout)
+    label = name or default_name
+    outdir = _ensure_outdir(outdir)
+    return {
+        "trajectories": plot_trace_trajectories(
+            data, result, outdir / f"{label}_trace_trajectories.png",
+            n_trajectories=n_trajectories),
+        "vparallel": plot_trace_vparallel(
+            result, outdir / f"{label}_trace_vparallel.png",
+            n_trajectories=n_trajectories),
+        "loss_fraction": plot_trace_loss_fraction(
+            result, outdir / f"{label}_trace_loss_fraction.png"),
+        "energy_error": plot_trace_energy_error(
+            result, outdir / f"{label}_trace_energy_error.png",
+            n_trajectories=n_trajectories),
+    }

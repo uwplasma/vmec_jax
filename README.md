@@ -10,7 +10,7 @@
 
 VMEX is a JAX implementation of VMEC for stellarator and tokamak ideal-MHD equilibria. It reads standard VMEC input files, solves fixed- and free-boundary problems, writes standard `wout_*.nc` files, and provides exact implicit derivatives of converged fixed-boundary equilibria for optimization.
 
-![VMEX equilibria and diagnostics](docs/_static/figures/readme_equilibrium_showcase.png)
+![VMEX equilibria and diagnostics](docs/_static/figures/readme_equilibrium_showcase.webp)
 
 ## Install
 
@@ -114,10 +114,10 @@ VMEX does not assume nested surfaces there.
 VMEX spectral state, rather than a materialized wout, so JAX derivatives with
 respect to the equilibrium boundary are retained for single-stage objectives.
 Run `examples/vmex_get_B_gradB.py` for the finite-beta interior API and
-`examples/vmex_get_B_outside_plasma.py` for an actual ESSOS coil field plus
-virtual casing. The latter can include both VMEX and ESSOS variables in each
-VJP. The vacuum and finite-beta `vmex_fieldline_tracing_*.py` examples compare
-VMEX, coil-only, and self-consistent exterior traces in 3-D and Poincare plots.
+`examples/free_boundary_essos_coils.py` for the released ESSOS 0.16 coil
+interface. Exterior coil VJPs and field-line tracing need ESSOS branch
+[`rj/vmex-optimization-interfaces`](https://github.com/uwplasma/ESSOS/tree/rj/vmex-optimization-interfaces):
+`pip install "essos @ git+https://github.com/uwplasma/ESSOS.git@rj/vmex-optimization-interfaces"`.
 
 The common CLI operations are:
 
@@ -180,19 +180,24 @@ optimized_input = problem.input_from_x(result.x)
 optimized_equilibrium = problem.equilibrium_from_x(result.x)
 ```
 
-The defaults are exact implicit derivatives, automatic Jacobian direction, one-column Jacobian batches, hot restarts, and cost weights. Advanced controls include:
+VMEX implicitly differentiates the converged equilibrium by default. For a
+residual vector, `auto` checks each block-response column against the linearized
+VMEC equations. If any column fails, it recomputes the Jacobian with the reverse
+adjoint. Cost weights, hot restarts, and one-column batches are defaults.
 
-- `derivative_method="finite_difference"` for opaque host objectives;
-- `implicit_jacobian_method` and `jacobian_batch_size` for response assembly and memory/compile tradeoffs;
-- `forward_ftol` and `forward_max_iterations` for the final forward-solve stage;
-- `max_fsq_ratio` for the largest under-converged `FSQ / ftol` that may be differentiated;
-- `workers` for parallel finite differences, scans, and ensembles. `None` uses the CPUs available to the process and respects scheduler or container limits.
+| Control | Purpose |
+|---|---|
+| `derivative_method="finite_difference"` | accept opaque host objectives |
+| `implicit_jacobian_method` | choose automatic, block, forward, or reverse response assembly |
+| `jacobian_batch_size` | trade first-compile memory for warm throughput |
+| `forward_ftol`, `forward_max_iterations` | set the final equilibrium solve controls |
+| `max_fsq_ratio` | bound `FSQ / ftol` before differentiation |
+| `workers` | parallelize finite differences, scans, and ensembles; `None` respects scheduler CPU limits |
 
 `problem.value_and_grad` and `problem.jax_value_and_grad` expose the same scalar contract. `problem.evaluate(x)` reports solve effort, failed trials, derivative fallbacks, `fsq`, `fsq_ratio`, and whether the implicit derivative was certified. The runnable examples show SciPy least squares, BFGS/L-BFGS-B, JAXopt, Optax Adam, QI/QS objectives, high-accuracy final solves, input/wout output, and plotting.
 
-`single_stage_optimization.py` and its finite-beta counterpart jointly vary a prescribed VMEX boundary and ESSOS coils with exact derivatives. The finite-beta pressure cost is the normalized MHD jump `(|B_out|²-|B_in|²-2μ₀p_edge)/B_ref²`; it constrains interface force balance, not the input pressure profile, and does not invoke a free-boundary NESTOR solve. ESSOS supplies coil names, functional updates, distance objectives, SIMSOPT import, and boundary-to-surface conversion.
-
-The two `single_stage_free_boundary_optimization*.py` examples instead vary only ESSOS coils and differentiate the reconverged NESTOR–VMEX root. This coupled reverse-mode path is experimental: CPU derivatives are finite-difference certified, while reducing its cold XLA compile time and GPU memory remains roadmap work.
+Joint boundary/coil and coil-only free-boundary scripts are previews for the
+same ESSOS branch.
 
 ## QA, QH, QP, and QI examples
 
@@ -200,23 +205,23 @@ The scripts in `examples/optimization/` optimize QA (NFP=2), QH (NFP=4), QP (NFP
 
 `examples/optimization/stellarator_asymmetry/` contains matching vacuum and finite-beta examples with `LASYM=True`; each visibly seeds and optimizes the additional `RBS` and `ZBC` boundary families.
 
-![QA, QH, and QP optimization examples](docs/_static/figures/readme_optimization.png)
+![QA, QH, and QP optimization examples](docs/_static/figures/readme_optimization.webp)
 
 Validated QI inputs spanning NFP=1–4 are bundled in `examples/data/`; the same plotting script reads them directly.
 
-![QI equilibria at NFP 1 through 4](docs/_static/figures/readme_qi.png)
+![QI equilibria at NFP 1 through 4](docs/_static/figures/readme_qi.webp)
 
 ## Finite beta, free boundary, and mirrors
 
 `examples/free_boundary_essos_coils.py` holds the Landreman–Paul QA coil currents fixed while increasing beta and re-solving the NESTOR free boundary. The magnetic-axis displacement is the expected Shafranov shift.
 
-![Free-boundary beta ramp and Shafranov shift](docs/_static/figures/readme_essos_beta_scan.png)
+![Free-boundary beta ramp and Shafranov shift](docs/_static/figures/readme_essos_beta_scan.webp)
 
 VMEX also solves open-ended mirrors. `examples/mirror/mirror_fixed_boundary_nonaxisymmetric.py` compares an axisymmetric mirror with a non-axisymmetric rotating ellipse; `examples/mirror/mirror_free_boundary_beta_scan.py` continues an ESSOS-coil free boundary from 0% to 80% central beta. The latter plots the solved on-axis field against the MHD paraxial scaling `B/Bvac = sqrt(1-beta)` implied by `p + B²/(2 μ0) = Bvac²/(2 μ0)`. The 0–10% lane is supported; higher-beta points remain clearly marked as extended validation pending refined-grid promotion.
 
-![Axisymmetric and rotating-ellipse fixed-boundary mirrors](docs/_static/figures/mirror_fixed_boundary_3d.png)
+![Axisymmetric and rotating-ellipse fixed-boundary mirrors](docs/_static/figures/mirror_fixed_boundary_3d.webp)
 
-![Free-boundary mirror beta scan](docs/_static/figures/mirror_free_boundary_beta_scan.png)
+![Free-boundary mirror beta scan](docs/_static/figures/mirror_free_boundary_beta_scan.webp)
 
 ## Equilibrium and kinetic diagnostics
 
@@ -230,10 +235,10 @@ The vacuum QA example has `pres=0` and `DWell=0` exactly: VMEX adds no pressure 
 
 ![Vacuum QA diagnostics](docs/_static/figures/readme_diagnostics_qa_vacuum.webp)
 
-`QA_optimization_bootstrap.py` and `QH_optimization_bootstrap.py` first fit a bootstrap-consistent seed, then optimize the boundary and a stage-refined current spline together against Redl, Mercier, and resistive-interchange targets. Their controls are explained in the [objective reference](https://vmex.readthedocs.io/en/latest/reference/objectives.html#bootstrap-current-redl); published-equilibrium and SFINCS comparisons live in `benchmarks/`.
+`QA_optimization_bootstrap.py`, `QH_optimization_bootstrap.py` and `QI_optimization_bootstrap.py` first fit a bootstrap-consistent seed, then optimize the boundary and a stage-refined current spline together against Redl, Mercier, and resistive-interchange targets. The QI variant uses `helicity_n=0`, since a quasi-isodynamic field carries no helical symmetry for the Redl isomorphism to shift; Redl is a fit to quasisymmetric calculations, so there it is an analytic estimate rather than a converged kinetic answer. Their controls are explained in the [objective reference](https://vmex.readthedocs.io/en/latest/reference/objectives.html#bootstrap-current-redl); published-equilibrium and SFINCS comparisons live in `benchmarks/`.
 Each script also writes a direct Redl-versus-equilibrium bootstrap-current overlay. In the vacuum QA example, setting `TRIAL_BETA` enables differentiable frozen-geometry pressure proxies for `DMerc` and `DR`; a finite-pressure re-solve remains the stability certificate.
 
-![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.png)
+![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.webp)
 
 ## Physics and interoperability
 
@@ -272,7 +277,7 @@ This matrix was checked on 2026-08-11 against current [STELLOPT/VMEC2000](https:
 
 On the bundled NFP=4 QH case at `ns=51`, VMEX follows VMEC2000 and VMEC++ through the full force-residual trace (fresh local run: VMEX `d7347c9`, VMEC2000 `512375c`, VMEC++ 0.5.3). Reproduce it with `python benchmarks/make_readme_figures.py --only convergence`; the benchmark discovers local solver installations or accepts `VMEX_XVMEC2000` and `VMEX_VMECPP_PY`.
 
-![VMEX, VMEC2000, and VMEC++ convergence trace](docs/_static/figures/readme_convergence.png)
+![VMEX, VMEC2000, and VMEC++ convergence trace](docs/_static/figures/readme_convergence.webp)
 
 The following `cloc 2.11` snapshot counts implementation code and comments, excluding tests, generated code, and third-party sources. VMEX counts `vmex/core` (the toroidal solver); VMEC2000 counts `VMEC2000/Sources` but not shared STELLOPT libraries; VMEC++ counts `src/vmecpp` C++/headers/Python. These scopes make the comparison reproducible, not a claim of identical feature breadth.
 
@@ -288,7 +293,7 @@ VMEX reduces duplication by expressing spectral operators as vectorized JAX arra
 
 JAX compilation is paid once per array structure and reused from a machine-local cache. Warm runs are the relevant measure for continuation, parameter scans, and optimization.
 
-![VMEX runtime comparison](docs/_static/figures/readme_runtime_compare.png)
+![VMEX runtime comparison](docs/_static/figures/readme_runtime_compare.webp)
 
 Independent solves use `vj.parallel.solve_ensemble(inputs, workers=None)`. A single equilibrium already uses XLA's internal threading; ensemble workers are therefore bounded by both the number of cases and the CPUs made available by the host scheduler. Explicit `workers=1` gives a reproducible serial baseline, and GPU/device placement can be selected with `device=`.
 
@@ -317,7 +322,7 @@ pytest -q -m "not full and not weekly"
 python -m ruff check vmex tests examples benchmarks
 ```
 
-See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.html), the [test manifest](tests/manifest.json), and the [changelog](docs/project/changelog.md). VMEX is released under the MIT license.
+See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.html) and the [test manifest](tests/manifest.json). Release notes are on [GitHub](https://github.com/uwplasma/vmex/releases). VMEX uses the MIT license.
 
 ## Roadmap
 

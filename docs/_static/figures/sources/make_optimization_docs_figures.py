@@ -3,11 +3,11 @@
 
 Outputs (both < 100 KB, light-theme PNGs matching the README figures):
 
-- ``docs/_static/figures/ess_x_scale.png`` — the Exponential Spectral
+- ``docs/_static/figures/ess_x_scale.webp`` — the Exponential Spectral
   Scaling trust-region weights ``x_scale = exp(-alpha*max(|m|,|n|)) /
   exp(-alpha)`` per harmonic level, for the example alpha = 0.7 and the
   default alpha = 1.2 (pure formula, no solves).
-- ``docs/_static/figures/gradient_stack_speedup.png`` — measured
+- ``docs/_static/figures/gradient_stack_speedup.webp`` — measured
   before/after of the R25 gradient stack (block-tridiagonal Jacobian,
   perturbation warm start, single-call ESS campaign), numbers from the
   R25/R26k measurements quoted in docs/optimization.rst.
@@ -74,7 +74,7 @@ def ess_figure() -> None:
                 textcoords="offset points", xytext=(-86, 6),
                 color=INK2, fontsize=8)
     fig.tight_layout()
-    fig.savefig(OUT / "ess_x_scale.png")
+    fig.savefig(OUT / "ess_x_scale.webp")
     plt.close(fig)
 
 
@@ -127,12 +127,12 @@ def stack_figure() -> None:
     fig.suptitle("The measured gradient stack (2026-07-12, CPU)",
                  fontsize=10, x=0.02, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.92))
-    fig.savefig(OUT / "gradient_stack_speedup.png")
+    fig.savefig(OUT / "gradient_stack_speedup.webp")
     plt.close(fig)
 
 
 if __name__ == "__main__":
     ess_figure()
     stack_figure()
-    for name in ("ess_x_scale.png", "gradient_stack_speedup.png"):
+    for name in ("ess_x_scale.webp", "gradient_stack_speedup.webp"):
         print(name, (OUT / name).stat().st_size, "bytes")

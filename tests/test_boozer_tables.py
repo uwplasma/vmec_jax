@@ -1,12 +1,15 @@
 """A/B tests for :mod:`vmex.core.boozer_tables` vs the host wout engine.
 
 ``boozer_input_tables`` promises (see its docstring) wout-convention
-single-surface tables computed entirely in JAX: ``bmnc`` matching the host
-wout engine at ~1e-10 relative (identical quadrature), ``lmns``/``bsub*``
-at the wout engine's own half-mesh finite-difference level, and traced
-``iota``/``G``/``I`` equal to the wout ``iotas``/``bvco``/``buco`` rows.
-This module checks exactly those claims on the solovev deck, plus
-jit-compatibility of the whole table construction.
+single-surface tables computed entirely in JAX: ``bmnc`` and the
+``gmnc``/``bsupumnc``/``bsupvmnc``/``bsubsmns`` families matching the host
+wout engine at quadrature level (identical grid and mode weights),
+``lmns``/``bsub*`` at the wout engine's own half-mesh finite-difference
+level, and traced ``iota``/``G``/``I`` equal to the wout
+``iotas``/``bvco``/``buco`` rows.  This module checks exactly those claims
+on the solovev deck (plus a finite-pressure LASYM deck for the field
+tables), jit-compatibility of the whole table construction, and the forward
+boundary tangent of the field tables.
 """
 
 from __future__ import annotations
@@ -70,6 +73,23 @@ def lasym_solved():
     inp = dataclasses.replace(
         inp, ns_array=np.array([11]), ftol_array=np.array([1e-12]),
         niter_array=np.array([4000]))
+    eq = opt.solve_equilibrium(inp)
+    assert eq.result.converged
+    return eq
+
+
+@pytest.fixture(scope="module")
+def lasym_beta_eq():
+    """Finite-pressure up-down-asymmetric tokamak (test_stability deck, ns=13)."""
+    import dataclasses
+
+    from vmex.core import optimize as opt
+
+    inp = VmecInput.from_file(str(DATA_DIR / "input.up_down_asymmetric_tokamak"))
+    inp = dataclasses.replace(
+        inp, ns_array=np.array([13]), ftol_array=np.array([1e-10]),
+        niter_array=np.array([5000]), am=np.array([1.0, -1.0]),
+        pres_scale=5000.0)
     eq = opt.solve_equilibrium(inp)
     assert eq.result.converged
     return eq
@@ -196,6 +216,106 @@ def test_lasym_tables_match_the_wout_asymmetric_families(lasym_solved):
                                    err_msg=key)
 
 
+@pytest.mark.parametrize("deck", ["symmetric_eq", "lasym_beta_eq"])
+def test_field_tables_match_wout_rows_at_quadrature_level(deck, request):
+    """``gmnc``/``bsup*``/``bsubs*`` equal the wout engine rows exactly.
+
+    ``wrout.f`` writes ``sqrt(g)`` and ``B^u``/``B^v`` unfiltered on the full
+    Nyquist set and ``B_s`` (``bss.f``) as the full-mesh average of
+    consecutive half-mesh rows, so — unlike the jxbforce-filtered
+    ``bsubumnc``/``lmns`` — these tables share the engine's quadrature and
+    must match every mode of every interior row at round-off level
+    (measured <= 7.8e-15 relative on both decks).
+    """
+    eq = request.getfixturevalue(deck)
+    wout = eq.wout
+    ns = int(np.asarray(wout.iotas).shape[0])
+    lasym = wout.gmns is not None
+    tables = {j: boozer_input_tables(eq.state, eq.runtime, j)
+              for j in range(1, ns)}
+    xm, xn = tables[1]["xm"], tables[1]["xn"]
+
+    half_mesh = [("gmnc", wout.gmnc), ("bsupumnc", wout.bsupumnc),
+                 ("bsupvmnc", wout.bsupvmnc)]
+    full_mesh = [("bsubsmns", wout.bsubsmns)]
+    if lasym:
+        half_mesh += [("gmns", wout.gmns), ("bsupumns", wout.bsupumns),
+                      ("bsupvmns", wout.bsupvmns)]
+        full_mesh += [("bsubsmnc", wout.bsubsmnc)]
+
+    for key, wout_arr in half_mesh:
+        scale = float(np.max(np.abs(np.asarray(wout_arr)[1:])))
+        assert scale > 0.0, key                        # the family is populated
+        for j in range(1, ns):
+            ref, mask = _match_wout_row(wout.xm_nyq, wout.xn_nyq, wout_arr, j,
+                                        xm, xn)
+            np.testing.assert_allclose(
+                np.asarray(tables[j][key])[mask], ref[mask], rtol=0.0,
+                atol=1e-13 * scale, err_msg=f"{key} row {j}")
+
+    # B_s is half-mesh native here; the wout file stores the wrout.f full-mesh
+    # convention (row i = mean of half-mesh rows i and i+1), and the
+    # projection is linear, so the averaged tables must land on the wout rows.
+    for key, wout_arr in full_mesh:
+        scale = float(np.max(np.abs(np.asarray(wout_arr)[1:-1])))
+        assert scale > 0.0, key
+        for i in range(1, ns - 1):
+            ref, mask = _match_wout_row(wout.xm_nyq, wout.xn_nyq, wout_arr, i,
+                                        xm, xn)
+            got = 0.5 * (np.asarray(tables[i][key])
+                         + np.asarray(tables[i + 1][key]))
+            np.testing.assert_allclose(got[mask], ref[mask], rtol=0.0,
+                                       atol=1e-13 * scale,
+                                       err_msg=f"{key} row {i}")
+
+
+@pytest.mark.parametrize("deck", ["symmetric_eq", "lasym_solved"])
+def test_projection_closes_at_the_grid_nyquist_band(deck, request):
+    """The mode set reaches the grid Nyquist, with the self-conjugate weight.
+
+    ``wrout.f`` sizes the wout Nyquist table from the grid itself
+    (``mnyq = ntheta1/2``, ``nnyq = nzeta/2``) and halves the closing
+    ``cosmui``/``cosnv`` column, because on an even grid that row and column
+    are self-conjugate: ``(m, n)`` and ``(m, -n)`` share a single grid basis
+    function.  Stopping one mode short of it leaves every surviving mode
+    exact, so the loss is silent: on ``input.basic_non_stellsym_simsopt``
+    (ntheta = nzeta = 10) it is 2.5% of ``bmnc`` and 2.6% of ``bmns`` in
+    relative L2.
+    """
+    eq = request.getfixturevalue(deck)
+    wout, res = eq.wout, eq.runtime.resolution
+    nfp, mnyq, nnyq = int(res.nfp), res.ntheta1 // 2, res.nzeta // 2
+    j = int(np.asarray(wout.iotas).shape[0]) // 2
+    tables = boozer_input_tables(eq.state, eq.runtime, j)
+    xm = np.asarray(tables["xm"], dtype=int)
+    xn = np.asarray(tables["xn"], dtype=int)
+
+    # the projection carries exactly the wout Nyquist mode table
+    assert (xm.max(), np.abs(xn).max()) == (mnyq, nnyq * nfp)
+    assert set(zip(xm.tolist(), xn.tolist())) == set(
+        zip(np.asarray(wout.xm_nyq, dtype=int).tolist(),
+            np.asarray(wout.xn_nyq, dtype=int).tolist()))
+
+    # ... and the band the old m/n limits dropped matches the wout row exactly
+    band = (xm > mnyq - 1) | (np.abs(xn) > max(nnyq - 1, 0) * nfp)
+    assert band.any()
+    for key, wout_arr in (("bmnc", wout.bmnc), ("bmns", wout.bmns)):
+        if wout_arr is None:
+            continue
+        ref, mask = _match_wout_row(wout.xm_nyq, wout.xn_nyq, wout_arr, j, xm, xn)
+        atol = 1e-13 * float(np.max(np.abs(ref[mask])))
+        assert np.max(np.abs(ref[band])) > 1e3 * atol   # the band is not noise
+        np.testing.assert_allclose(np.asarray(tables[key])[band], ref[band],
+                                   rtol=0.0, atol=atol, err_msg=key)
+
+    # Both angles fold on the self-conjugate corners, which are real on the
+    # grid: their sine partners must be exact zeros, not sin(pi*i) round-off.
+    if wout.bmns is not None:
+        corner = np.isin(xm, [0, mnyq]) & np.isin(np.abs(xn), [0, nnyq * nfp])
+        assert corner.sum() >= 4
+        np.testing.assert_array_equal(np.asarray(tables["bmns"])[corner], 0.0)
+
+
 def _synthesize(cos_table, sin_table, xm, xn, nfp, n_angles=64):
     """Field on a periodic (theta, zeta) grid from a cos/sin mode table."""
     angles = np.linspace(0.0, 2.0 * np.pi, n_angles, endpoint=False)
@@ -307,3 +427,83 @@ def test_tables_are_jittable(solved):
     # jit-vs-eager reassociation noise only
     np.testing.assert_allclose(got, np.asarray(tables["bmnc"]), rtol=1e-6,
                                atol=1e-14)
+
+
+def test_field_tables_jit_matches_eager(symmetric_eq):
+    """jit of the field-table construction returns the eager values."""
+    eq = symmetric_eq
+    j = int(np.asarray(eq.runtime.setup.s_full).shape[0]) // 2
+    eager = boozer_input_tables(eq.state, eq.runtime, j)
+    jitted = jax.jit(lambda s: boozer_input_tables(s, eq.runtime, j))(eq.state)
+    for key in ("gmnc", "bsupumnc", "bsupvmnc", "bsubsmns"):
+        scale = float(np.max(np.abs(np.asarray(eager[key]))))
+        assert scale > 0.0, key
+        np.testing.assert_allclose(np.asarray(jitted[key]),
+                                   np.asarray(eager[key]), rtol=1e-9,
+                                   atol=1e-13 * scale, err_msg=key)
+
+
+def test_bsupvmnc_jvp_from_boundary_tangent_is_live(symmetric_eq):
+    """A boundary-coefficient tangent drives the traceable ``bsupvmnc``.
+
+    Downstream loss-fraction objectives differentiate the field tables in the
+    boundary dofs, so the forward tangent must be live: push the ``RBC(0,1)``
+    direction through the implicit-function-theorem tangent system
+    ``dz = -(dF/dz)^{-1} dF/dp t`` at the solved solovev state, then one
+    ``jax.jvp`` of the table construction.  Measured max ``|d(bsupvmnc)|``
+    = 4.8e-2 against a table scale of 5.1e-2 (2026-08-22, x64 CPU).
+    """
+    import dataclasses
+
+    import jax.numpy as jnp
+
+    from vmex.core import implicit as im
+
+    eq = symmetric_eq
+    inp = eq.inp
+    cfg = im.make_config(inp, ftol=1e-14, max_iterations=3000)
+    p0 = im.params_from_input(inp)
+    j = int(np.asarray(eq.runtime.setup.s_full).shape[0]) // 2
+
+    rt0 = im.runtime_from_params(p0, cfg)
+    mask = im._dof_mask(eq.state, rt0, cfg)
+    P = im._dof_projector(cfg, mask)
+    edge_mask = im._edge_mask(cfg)
+    frozen = jax.lax.stop_gradient(eq.state)
+    F = im.residual_fn(cfg, frozen, mask)
+    z0 = P(frozen)
+
+    zero = jax.tree.map(jnp.zeros_like, p0)
+    tangent = dataclasses.replace(
+        zero, rbc=zero.rbc.at[int(inp.ntor), 1].set(1.0))
+    b = jax.jvp(lambda prm: F(z0, prm), (p0,), (tangent,))[1]
+    dz, _ = im._adjoint_solve(
+        lambda t: jax.jvp(lambda zz: F(zz, p0), (z0,), (t,))[1],
+        jax.tree.map(jnp.negative, b), cfg)
+
+    def table(zz, prm):
+        rt = im.runtime_from_params(prm, cfg)
+        state = im._assemble(zz, rt, frozen, P, edge_mask)
+        return boozer_input_tables(state, rt, j)["bsupvmnc"]
+
+    _, dot = jax.jvp(table, (z0, p0), (P(dz), tangent))
+    dot = np.asarray(dot)
+    assert np.all(np.isfinite(dot))
+    assert float(np.max(np.abs(dot))) > 1e-3
+
+
+def test_refine_booz_grids_is_the_identity_at_oversample_one():
+    """``oversample = 1`` returns the transform's own grid untouched.
+
+    The refinement multiplies ``booz_xform_jax``'s pinned
+    ``2*(2*mboz+1)`` by ``2*(2*nboz+1)`` quadrature, so asking for no
+    refinement has to hand back the very same constants and grids rather than
+    rebuild an equivalent pair -- the transform reads its Fourier
+    normalization back off those counts.
+    """
+    from vmex.core.omnigenity import _refine_booz_grids
+
+    constants, grids = object(), object()
+    same_constants, same_grids = _refine_booz_grids(constants, grids, 1, 3)
+    assert same_constants is constants
+    assert same_grids is grids

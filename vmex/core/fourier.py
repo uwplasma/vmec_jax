@@ -29,8 +29,9 @@ VMEC does *not* use a plain unweighted DFT.  Its transforms rely on:
    grid), and VMEC's internal spectral coefficients are the physical (wout)
    coefficients divided by ``mscale(m)*nscale(|n|)``.
 
-3. **Integration normalization** ``dnorm``: ``1/(nzeta*(ntheta2-1))`` for
-   symmetric runs and ``1/(nzeta*ntheta3)`` for ``lasym=True`` (SPH012314).
+3. **Integration normalization**: ``dnorm = 1/(nzeta*(ntheta2-1))`` weights
+   the Fourier analysis in both symmetry modes, while the surface-average
+   weight ``dnorm3`` is ``1/(nzeta*ntheta3)`` for ``lasym=True``.
 
 All tables are built once per resolution with NumPy float64 (they are static,
 trace-time constants for the jitted transforms in

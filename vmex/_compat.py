@@ -69,6 +69,49 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(f"VMEC_JAX_{name}", default)
 
 
+_CACHE_DESERIALIZE_SAFE_JAXLIB = (0, 10)
+
+
+def _jaxlib_version_tuple() -> tuple[int, ...] | None:
+    """Leading numeric components of the installed jaxlib version, or None."""
+    try:
+        raw = importlib_metadata.version("jaxlib")
+    except Exception:
+        return None
+    parts: list[int] = []
+    for token in raw.split(".")[:3]:
+        digits = ""
+        for char in token:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts) or None
+
+
+def _cache_deserialize_unsafe() -> bool:
+    """True when *reading* the persistent cache can kill this process.
+
+    jaxlib < 0.10 on macOS dies with SIGBUS/SIGILL inside
+    ``PyClient::DeserializeExecutable`` when loading a cached XLA:CPU
+    executable holding more than a few hundred kernels: LLVM ORC
+    materializes the per-kernel Mach-O objects recursively on one
+    fixed-size worker-thread stack (RTDyldObjectLinkingLayer::emit ->
+    ExecutionSession::lookup -> dispatchOutstandingMUs -> emit -> ...),
+    and every vmex solve/adjoint executable is large enough to overflow
+    it deterministically on the first warm rerun.  Reproduced on jaxlib
+    0.9.2 with a 300-kernel jit program; verified fixed in jaxlib 0.10.0.
+    An unknown jaxlib version counts as unsafe: losing the cache costs a
+    recompile, trusting it can cost the process.
+    """
+    if platform.system() != "Darwin":
+        return False
+    version = _jaxlib_version_tuple()
+    return version is None or version < _CACHE_DESERIALIZE_SAFE_JAXLIB
+
+
 def _cache_machine_fingerprint() -> str:
     """Return a short cache key for host-specific XLA CPU executables.
 
@@ -136,7 +179,12 @@ def _default_compilation_cache_dir() -> str | None:
 
     The persistent cache is enabled **by default on every backend** (CPU too)
     so repeated cold-process CLI/API runs reuse compiled kernels instead of
-    recompiling (a solovev CLI rerun drops 4.3 s -> 1.2 s).  The XLA:CPU
+    recompiling (a solovev CLI rerun drops 4.3 s -> 1.2 s) — except on
+    macOS with jaxlib < 0.10, where deserializing a large cached CPU
+    executable crashes the process (see :func:`_cache_deserialize_unsafe`)
+    and the default is therefore off until jaxlib is upgraded;
+    ``VMEX_COMPILATION_CACHE=1`` or an explicit cache-dir variable still
+    forces it on.  The XLA:CPU
     host-feature-mismatch hazard (AOT executables tied to a specific
     instruction set, dangerous on shared home filesystems) is handled by
     :func:`_cache_machine_fingerprint`, so heterogeneous machines never share
@@ -160,6 +208,14 @@ def _default_compilation_cache_dir() -> str | None:
 
     cache_flag = _env("COMPILATION_CACHE").strip().lower()
     if cache_flag in ("disabled", "0", "false", "no", "off"):
+        return None
+
+    # macOS + jaxlib < 0.10 crashes deserializing large cached CPU
+    # executables (see _cache_deserialize_unsafe): default the cache off
+    # there.  An explicit VMEX_COMPILATION_CACHE=1 (or a *_CACHE_DIR path
+    # above) still turns it on.
+    if (cache_flag not in ("1", "true", "yes", "on", "enabled")
+            and _cache_deserialize_unsafe()):
         return None
 
     # Default: ~/.cache/vmex/jax_cache/<machine-fingerprint> (see

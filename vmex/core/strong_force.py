@@ -1,0 +1,755 @@
+"""High-order toroidal reconstruction and an independent strong-force oracle.
+
+This module deliberately does not call VMEX's legacy half-mesh force kernels.
+It reconstructs smooth, axis-regular Fourier amplitudes with local splines,
+forms the curvilinear metric at arbitrary points, and evaluates
+``curl(B) / mu0 x B - grad(p)`` from the continuous representation.
+
+Coordinates are ``(rho, theta, zeta)`` with ``s = rho**2`` and ``zeta`` the
+field-period angle.  The physical cylindrical angle is ``zeta / nfp``.
+Every Fourier amplitude is represented as ``rho**abs(m) q(s)``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from .profiles import MU0
+from .radial_basis import BSplineBasis
+
+Array = Any
+
+_NORMALIZATION = "2*|JxB-grad(p)|/(|JxB|+|grad(p)|+force_floor), evaluated pointwise"
+
+
+@dataclass(frozen=True, eq=False)
+class HighOrderEquilibriumState:
+    """Axis-regular continuous equilibrium reconstructed from a VMEX state.
+
+    The six Fourier tables have shape ``(mnmax, radial_basis.size)`` and hold
+    the spline coefficients of ``q(s)`` in ``rho**abs(m) q(s)``.  Lambda is
+    the external straight-field-line angle displacement (the convention in a
+    wout file), not VMEX's internally rescaled lambda unknown.  ``phipf`` and
+    ``chipf`` are derivatives with respect to normalized toroidal flux ``s``;
+    pressure is in Pa.
+    """
+
+    radial_basis: BSplineBasis
+    m: np.ndarray
+    n: np.ndarray
+    nfp: int
+    R_cos: Array
+    R_sin: Array
+    Z_cos: Array
+    Z_sin: Array
+    L_cos: Array
+    L_sin: Array
+    phipf: Array
+    chipf: Array
+    pressure: Array
+    jacobian_sign: int = 1
+    source: str = "continuous"
+    boundary_R_cos: Array | None = None
+    boundary_R_sin: Array | None = None
+    boundary_Z_cos: Array | None = None
+    boundary_Z_sin: Array | None = None
+
+    def __post_init__(self) -> None:
+        if self.radial_basis.periodic:
+            raise ValueError("toroidal strong-force reconstruction requires a clamped radial basis")
+        if int(self.nfp) < 1:
+            raise ValueError("nfp must be positive")
+        m = np.asarray(self.m, dtype=int)
+        n = np.asarray(self.n, dtype=int)
+        if m.ndim != 1 or n.shape != m.shape:
+            raise ValueError("m and n must be one-dimensional arrays with matching shape")
+        expected = (m.size, self.radial_basis.size)
+        for name in ("R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin"):
+            if np.shape(getattr(self, name)) != expected:
+                raise ValueError(f"{name} has shape {np.shape(getattr(self, name))}; expected {expected}")
+        for name in ("phipf", "chipf", "pressure"):
+            if np.shape(getattr(self, name)) != (self.radial_basis.size,):
+                raise ValueError(f"{name} must have shape {(self.radial_basis.size,)}")
+
+    def tree_flatten(self):
+        """Expose every continuous coefficient as differentiable JAX data."""
+
+        children = (
+            self.R_cos,
+            self.R_sin,
+            self.Z_cos,
+            self.Z_sin,
+            self.L_cos,
+            self.L_sin,
+            self.phipf,
+            self.chipf,
+            self.pressure,
+            self.boundary_R_cos,
+            self.boundary_R_sin,
+            self.boundary_Z_cos,
+            self.boundary_Z_sin,
+        )
+        metadata = (
+            self.radial_basis,
+            tuple(np.asarray(self.m, dtype=int)),
+            tuple(np.asarray(self.n, dtype=int)),
+            int(self.nfp),
+            int(self.jacobian_sign),
+            self.source,
+        )
+        return children, metadata
+
+    @classmethod
+    def tree_unflatten(cls, metadata, children):
+        """Rebuild a state without placing NumPy mode arrays in JAX metadata."""
+
+        radial_basis, m, n, nfp, jacobian_sign, source = metadata
+        (
+            R_cos,
+            R_sin,
+            Z_cos,
+            Z_sin,
+            L_cos,
+            L_sin,
+            phipf,
+            chipf,
+            pressure,
+            boundary_R_cos,
+            boundary_R_sin,
+            boundary_Z_cos,
+            boundary_Z_sin,
+        ) = children
+        return cls(
+            radial_basis=radial_basis,
+            m=np.asarray(m, dtype=int),
+            n=np.asarray(n, dtype=int),
+            nfp=nfp,
+            R_cos=R_cos,
+            R_sin=R_sin,
+            Z_cos=Z_cos,
+            Z_sin=Z_sin,
+            L_cos=L_cos,
+            L_sin=L_sin,
+            phipf=phipf,
+            chipf=chipf,
+            pressure=pressure,
+            jacobian_sign=jacobian_sign,
+            source=source,
+            boundary_R_cos=boundary_R_cos,
+            boundary_R_sin=boundary_R_sin,
+            boundary_Z_cos=boundary_Z_cos,
+            boundary_Z_sin=boundary_Z_sin,
+        )
+
+
+@dataclass(frozen=True)
+class StrongForceSamples:
+    """Pointwise, dimensional output of :func:`evaluate_strong_force`."""
+
+    rho: Array
+    theta: Array
+    zeta: Array
+    sqrt_g: Array
+    B: Array
+    J: Array
+    force: Array
+    force_rho: Array
+    force_helical: Array
+    radial_force_density: Array
+    helical_force_density: Array
+    signed_radial_force_density: Array
+    signed_helical_force_density: Array
+    lorentz_norm: Array
+    grad_pressure_norm: Array
+
+
+@dataclass(frozen=True)
+class StrongForceReport:
+    """Independent overintegrated certificate for one continuous state."""
+
+    absolute_l2: Array
+    absolute_p99: Array
+    absolute_linf: Array
+    normalized_l2: Array
+    normalized_p99: Array
+    normalized_linf: Array
+    radial_l2: Array
+    helical_l2: Array
+    radial_normalized_l2: Array
+    helical_normalized_l2: Array
+    near_axis_l2: Array
+    bulk_l2: Array
+    edge_l2: Array
+    radial_nodes: Array
+    flux_surface_average: Array
+    angular_spectral_tail: Array
+    radial_refinement_difference: Array
+    minimum_signed_jacobian: Array
+    nestedness_margin: Array
+    boundary_residual: Array
+    gauge_residual: Array
+    force_floor: float
+    normalization: str = _NORMALIZATION
+    coordinate_convention: str = "rho=sqrt(s), theta poloidal, zeta field-period; physical phi=zeta/nfp"
+
+
+jax.tree_util.register_pytree_node_class(HighOrderEquilibriumState)
+
+for _cls in (StrongForceSamples,):
+    jax.tree_util.register_dataclass(
+        _cls,
+        data_fields=[field for field in _cls.__dataclass_fields__],
+        meta_fields=[],
+    )
+
+
+def _series(state: HighOrderEquilibriumState, coefficients: Array, x: Array) -> Array:
+    rho, theta, zeta = x
+    s = rho * rho
+    q = state.radial_basis.evaluate(jnp.asarray(coefficients), s, axis=-1)
+    amplitudes = q * rho ** jnp.asarray(state.m, dtype=q.dtype)
+    phase = jnp.asarray(state.m, dtype=q.dtype) * theta - jnp.asarray(state.n, dtype=q.dtype) * zeta
+    return jnp.sum(amplitudes * jnp.cos(phase))
+
+
+def _sine_series(state: HighOrderEquilibriumState, coefficients: Array, x: Array) -> Array:
+    rho, theta, zeta = x
+    s = rho * rho
+    q = state.radial_basis.evaluate(jnp.asarray(coefficients), s, axis=-1)
+    amplitudes = q * rho ** jnp.asarray(state.m, dtype=q.dtype)
+    phase = jnp.asarray(state.m, dtype=q.dtype) * theta - jnp.asarray(state.n, dtype=q.dtype) * zeta
+    return jnp.sum(amplitudes * jnp.sin(phase))
+
+
+def _RZL(state: HighOrderEquilibriumState, x: Array) -> tuple[Array, Array, Array]:
+    R = _series(state, state.R_cos, x) + _sine_series(state, state.R_sin, x)
+    Z = _series(state, state.Z_cos, x) + _sine_series(state, state.Z_sin, x)
+    lam = _series(state, state.L_cos, x) + _sine_series(state, state.L_sin, x)
+    return R, Z, lam
+
+
+def _position(state: HighOrderEquilibriumState, x: Array) -> Array:
+    R, Z, _ = _RZL(state, x)
+    phi = x[2] / float(state.nfp)
+    return jnp.asarray([R * jnp.cos(phi), R * jnp.sin(phi), Z])
+
+
+def _profile(state: HighOrderEquilibriumState, coefficients: Array, rho: Array) -> Array:
+    return state.radial_basis.evaluate(jnp.asarray(coefficients), rho * rho)
+
+
+def _basic_fields(state: HighOrderEquilibriumState, x: Array) -> tuple[Array, Array, Array, Array, Array, Array]:
+    """Return basis, Jacobian, B components/vector, and pressure at one point."""
+
+    basis_vectors = jax.jacfwd(lambda y: _position(state, y))(x)
+    sqrt_g = jnp.linalg.det(basis_vectors)
+    lam_gradient = jax.grad(lambda y: _RZL(state, y)[2])(x)
+    phip = _profile(state, state.phipf, x[0])
+    chip = _profile(state, state.chipf, x[0])
+    # Convert the s-coordinate Clebsch representation to rho.  Lambda's
+    # zeta derivative acquires nfp because VMEC differentiates in physical phi.
+    flux_factor = 2.0 * x[0] / sqrt_g
+    B_sup = jnp.asarray(
+        [
+            0.0,
+            flux_factor * (chip - phip * float(state.nfp) * lam_gradient[2]),
+            flux_factor * phip * (1.0 + lam_gradient[1]),
+        ]
+    )
+    B = basis_vectors @ B_sup
+    B_cov = basis_vectors.T @ B
+    pressure = _profile(state, state.pressure, x[0])
+    return basis_vectors, sqrt_g, B_sup, B_cov, B, pressure
+
+
+def _point_force(state: HighOrderEquilibriumState, x: Array) -> tuple[Array, ...]:
+    basis_vectors, sqrt_g, B_sup, B_cov, B, pressure = _basic_fields(state, x)
+
+    def covariant_and_pressure(y: Array) -> Array:
+        _, _, _, covariant, _, p = _basic_fields(state, y)
+        return jnp.concatenate((covariant, jnp.atleast_1d(p)))
+
+    derivatives = jax.jacfwd(covariant_and_pressure)(x)
+    dB = derivatives[:3]
+    dp = derivatives[3]
+    curl_numerator = jnp.asarray(
+        [
+            dB[2, 1] - dB[1, 2],
+            dB[0, 2] - dB[2, 0],
+            dB[1, 0] - dB[0, 1],
+        ]
+    )
+    J_sup = curl_numerator / (MU0 * sqrt_g)
+    J = basis_vectors @ J_sup
+    grad_pressure = jnp.linalg.solve(basis_vectors.T, dp)
+    lorentz = jnp.cross(J, B)
+    force = lorentz - grad_pressure
+    force_cov = basis_vectors.T @ force
+    force_helical = curl_numerator[0] / MU0
+    reciprocal = jnp.linalg.inv(basis_vectors).T
+    radial_force = force_cov[0] * reciprocal[:, 0]
+    helical_direction = -B_sup[2] * reciprocal[:, 1] + B_sup[1] * reciprocal[:, 2]
+    helical_force = force_helical * helical_direction
+    signed_radial_force_density = force_cov[0] * jnp.linalg.norm(reciprocal[:, 0])
+    signed_helical_force_density = force_helical * jnp.linalg.norm(helical_direction)
+    return (
+        sqrt_g,
+        B,
+        J,
+        force,
+        force_cov[0],
+        force_helical,
+        jnp.linalg.norm(radial_force),
+        jnp.linalg.norm(helical_force),
+        signed_radial_force_density,
+        signed_helical_force_density,
+        jnp.linalg.norm(lorentz),
+        jnp.linalg.norm(grad_pressure),
+    )
+
+
+@jax.jit
+def evaluate_strong_force(
+    state: HighOrderEquilibriumState,
+    rho: Array,
+    theta: Array,
+    zeta: Array,
+) -> StrongForceSamples:
+    """Evaluate the independent continuum force on broadcast-compatible points.
+
+    Points on the coordinate-singular magnetic axis are intentionally excluded;
+    use a shifted radial quadrature as :func:`certify_strong_force` does.
+    Compilation is cached by basis metadata and broadcast point shape.
+    """
+
+    rho, theta, zeta = jnp.broadcast_arrays(rho, theta, zeta)
+    shape = rho.shape
+    points = jnp.stack((rho.reshape(-1), theta.reshape(-1), zeta.reshape(-1)), axis=-1)
+    values = jax.vmap(lambda point: _point_force(state, point))(points)
+
+    def reshape_scalar(value: Array) -> Array:
+        return value.reshape(shape)
+
+    def reshape_vector(value: Array) -> Array:
+        return value.reshape(shape + (3,))
+
+    return StrongForceSamples(
+        rho=rho,
+        theta=theta,
+        zeta=zeta,
+        sqrt_g=reshape_scalar(values[0]),
+        B=reshape_vector(values[1]),
+        J=reshape_vector(values[2]),
+        force=reshape_vector(values[3]),
+        force_rho=reshape_scalar(values[4]),
+        force_helical=reshape_scalar(values[5]),
+        radial_force_density=reshape_scalar(values[6]),
+        helical_force_density=reshape_scalar(values[7]),
+        signed_radial_force_density=reshape_scalar(values[8]),
+        signed_helical_force_density=reshape_scalar(values[9]),
+        lorentz_norm=reshape_scalar(values[10]),
+        grad_pressure_norm=reshape_scalar(values[11]),
+    )
+
+
+def _constrained_spline_fit(
+    basis: BSplineBasis,
+    samples: np.ndarray,
+    s: np.ndarray,
+    *,
+    mode_m: int | None = None,
+    fix_axis: bool = False,
+    fix_edge: bool = False,
+) -> np.ndarray:
+    """Host-side least-squares lift with exact clamped endpoint values."""
+
+    values = np.asarray(samples, dtype=float)
+    s = np.asarray(s, dtype=float)
+    if mode_m is not None:
+        radial = np.power(np.sqrt(np.maximum(s, 0.0)), abs(int(mode_m)))
+        keep = radial > 1.0e-10
+        values = values[keep] / radial[keep]
+        nodes = s[keep]
+    else:
+        nodes = s
+    matrix = np.asarray(basis.basis_matrix(nodes), dtype=float)
+    coefficients = np.zeros((basis.size,), dtype=float)
+    fixed: dict[int, float] = {}
+    if fix_axis:
+        fixed[0] = float(samples[0])
+    if fix_edge:
+        fixed[basis.size - 1] = float(samples[-1])
+    free = np.asarray([index for index in range(basis.size) if index not in fixed], dtype=int)
+    rhs = values.copy()
+    for index, value in fixed.items():
+        coefficients[index] = value
+        rhs -= matrix[:, index] * value
+    if free.size:
+        coefficients[free] = np.linalg.lstsq(matrix[:, free], rhs, rcond=1.0e-12)[0]
+    return coefficients
+
+
+def lift_high_order_state(
+    state: Any,
+    runtime: Any,
+    *,
+    radial_basis: BSplineBasis | None = None,
+    degree: int = 5,
+    max_spans: int = 32,
+    source: str = "VMEX legacy equilibrium",
+) -> HighOrderEquilibriumState:
+    """Lift a converged legacy :class:`SpectralState` into the smooth basis.
+
+    The lift is a one-time host operation.  It undoes VMEX's m=1 constrained
+    variables and Fourier normalization, converts internal lambda to the wout
+    convention, enforces ``rho**abs(m)`` regularity, preserves the magnetic
+    axis for m=0 and the fixed R/Z boundary exactly, and removes the lambda
+    ``(m,n)=(0,0)`` gauge mode structurally.
+    """
+
+    from . import postprocess as _pp
+    from .geometry import apply_lambda_axis_closure
+    from .residuals import m1_constrained_to_physical
+    from .statephysics import _field_chain
+    from .transforms import physical_to_internal_scale
+
+    setup = runtime.setup
+    modes = runtime.modes
+    s = np.asarray(setup.s_full, dtype=float)
+    if radial_basis is None:
+        spans = max(1, min(int(max_spans), max(1, s.size - int(degree))))
+        radial_basis = BSplineBasis.clamped(
+            np.linspace(0.0, 1.0, spans + 1),
+            degree=degree,
+            quadrature_order=degree + 3,
+        )
+
+    R_cos, Z_sin, R_sin, Z_cos = m1_constrained_to_physical(
+        state.R_cos,
+        state.Z_sin,
+        state.R_sin,
+        state.Z_cos,
+        modes=modes,
+        lthreed=setup.lthreed,
+        lasym=setup.lasym,
+        lconm1=setup.lconm1,
+    )
+    mode_scale = 1.0 / physical_to_internal_scale(modes, runtime.trig)
+    physical = [np.asarray(block, dtype=float) * mode_scale[None, :] for block in (R_cos, R_sin, Z_cos, Z_sin)]
+
+    _, _, _, fields, _ = _field_chain(state, runtime)
+    phipf = np.asarray(setup.phipf, dtype=float)
+    chipf = _pp.chipf_from_chips(np.asarray(fields.chips, dtype=float))
+    pressure = _pp.full_mesh_from_half(np.asarray(fields.pressure, dtype=float)) / MU0
+
+    lambda_sin = apply_lambda_axis_closure(state.L_sin, modes=modes, ntor=runtime.resolution.ntor)
+    lambda_internal = (np.asarray(state.L_cos, dtype=float), np.asarray(lambda_sin, dtype=float))
+    safe_phip = np.where(phipf != 0.0, phipf, 1.0)
+    lambda_physical = [
+        block * mode_scale[None, :] * float(np.asarray(setup.lamscale)) / safe_phip[:, None]
+        for block in lambda_internal
+    ]
+
+    m_values = np.asarray(modes.m, dtype=int)
+
+    def fit_modes(table: np.ndarray, *, fixed_boundary: bool) -> np.ndarray:
+        fitted = np.stack(
+            [
+                _constrained_spline_fit(
+                    radial_basis,
+                    table[:, column],
+                    s,
+                    mode_m=int(m_values[column]),
+                    fix_axis=int(m_values[column]) == 0,
+                    fix_edge=fixed_boundary,
+                )
+                for column in range(table.shape[1])
+            ],
+            axis=0,
+        )
+        return fitted
+
+    R_cos_q, R_sin_q, Z_cos_q, Z_sin_q = (fit_modes(table, fixed_boundary=True) for table in physical)
+    L_cos_q = fit_modes(lambda_physical[0], fixed_boundary=False)
+    L_sin_q = fit_modes(lambda_physical[1], fixed_boundary=False)
+    gauge = (m_values == 0) & (np.asarray(modes.n, dtype=int) == 0)
+    L_cos_q[gauge] = 0.0
+    L_sin_q[gauge] = 0.0
+
+    fit_profile = lambda values: _constrained_spline_fit(  # noqa: E731
+        radial_basis, np.asarray(values), s, fix_axis=True, fix_edge=True
+    )
+    return HighOrderEquilibriumState(
+        radial_basis=radial_basis,
+        m=m_values,
+        n=np.asarray(modes.n, dtype=int),
+        nfp=int(runtime.resolution.nfp),
+        R_cos=jnp.asarray(R_cos_q),
+        R_sin=jnp.asarray(R_sin_q),
+        Z_cos=jnp.asarray(Z_cos_q),
+        Z_sin=jnp.asarray(Z_sin_q),
+        L_cos=jnp.asarray(L_cos_q),
+        L_sin=jnp.asarray(L_sin_q),
+        phipf=jnp.asarray(fit_profile(phipf)),
+        chipf=jnp.asarray(fit_profile(chipf)),
+        pressure=jnp.asarray(fit_profile(pressure)),
+        jacobian_sign=int(setup.signgs),
+        source=source,
+        boundary_R_cos=jnp.asarray(physical[0][-1]),
+        boundary_R_sin=jnp.asarray(physical[1][-1]),
+        boundary_Z_cos=jnp.asarray(physical[2][-1]),
+        boundary_Z_sin=jnp.asarray(physical[3][-1]),
+    )
+
+
+def high_order_state_from_wout(
+    wout: Any,
+    *,
+    inp: Any,
+    radial_basis: BSplineBasis | None = None,
+    degree: int = 5,
+    max_spans: int = 32,
+) -> HighOrderEquilibriumState:
+    """Import a VMEX-, VMEC2000-, or VMEC++-compatible wout continuously.
+
+    ``inp`` supplies the source equilibrium's flux/profile conventions.  Mode
+    remapping and lambda half/full-mesh inversion are delegated to the tested
+    hot-restart path, after which :func:`lift_high_order_state` performs the
+    axis-regular constrained lift.  No external equilibrium code is a runtime
+    dependency.
+    """
+
+    from .restart import state_from_wout
+    from .solver import prepare_runtime, resolution_from_input
+    from .wout import read_wout
+
+    source_wout = read_wout(wout) if isinstance(wout, (str, Path)) else wout
+    ns = int(source_wout.ns)
+    state = state_from_wout(source_wout, inp=inp, ns=ns)
+    runtime = prepare_runtime(inp, resolution_from_input(inp, ns=ns))
+    source_name = getattr(source_wout, "input_extension", "") or "VMEC-compatible wout"
+    return lift_high_order_state(
+        state,
+        runtime,
+        radial_basis=radial_basis,
+        degree=degree,
+        max_spans=max_spans,
+        source=str(source_name),
+    )
+
+
+def _weighted_l2(values: Array, weights: Array) -> Array:
+    return jnp.sqrt(jnp.sum(weights * values * values) / jnp.sum(weights))
+
+
+def _weighted_quantile(values: Array, weights: Array, quantile: float) -> Array:
+    """Deterministic volume-weighted quantile for a fixed validation grid."""
+
+    weights = jnp.broadcast_to(weights, jnp.shape(values)).reshape(-1)
+    values = jnp.ravel(values)
+    order = jnp.argsort(values)
+    sorted_values = values[order]
+    cumulative = jnp.cumsum(weights[order])
+    threshold = float(quantile) * cumulative[-1]
+    index = jnp.clip(jnp.searchsorted(cumulative, threshold), 0, sorted_values.size - 1)
+    return sorted_values[index]
+
+
+def certify_strong_force(
+    state: HighOrderEquilibriumState,
+    *,
+    angular_multiplier: int = 2,
+    radial_order_increment: int = 2,
+    force_floor: float = 1.0e-12,
+) -> StrongForceReport:
+    """Evaluate a shifted, overintegrated certificate distinct from solve nodes."""
+
+    breaks = state.radial_basis.breakpoints
+
+    def radial_quadrature(quadrature_order: int) -> tuple[np.ndarray, np.ndarray]:
+        gauss_nodes, gauss_weights = np.polynomial.legendre.leggauss(quadrature_order)
+        nodes = (
+            0.5 * (breaks[:-1, None] + breaks[1:, None]) + 0.5 * np.diff(breaks)[:, None] * gauss_nodes[None, :]
+        ).reshape(-1)
+        weights = (0.5 * np.diff(breaks)[:, None] * gauss_weights[None, :]).reshape(-1)
+        return nodes, weights
+
+    order = state.radial_basis.degree + int(radial_order_increment) + 1
+    s_nodes, s_weights = radial_quadrature(order)
+    rho_nodes = np.sqrt(s_nodes)
+    rho_weights = s_weights / (2.0 * rho_nodes)
+    max_m = int(np.max(np.asarray(state.m), initial=0))
+    max_n = int(np.max(np.abs(np.asarray(state.n)), initial=0))
+    ntheta = max(8, int(angular_multiplier) * 2 * (max_m + 1))
+    nzeta = max(4, int(angular_multiplier) * 2 * (max_n + 1))
+    theta = (np.arange(ntheta) + 0.5) * (2.0 * np.pi / ntheta)
+    zeta = (np.arange(nzeta) + 0.375) * (2.0 * np.pi / nzeta)
+    rr, tt, zz = jnp.meshgrid(jnp.asarray(rho_nodes), jnp.asarray(theta), jnp.asarray(zeta), indexing="ij")
+    samples = evaluate_strong_force(state, rr, tt, zz)
+    magnitude = jnp.linalg.norm(samples.force, axis=-1)
+    weights = (
+        jnp.asarray(rho_weights)[:, None, None]
+        * (2.0 * jnp.pi / ntheta)
+        * (2.0 * jnp.pi / nzeta)
+        * jnp.abs(samples.sqrt_g)
+    )
+    normalized = 2.0 * magnitude / (samples.lorentz_norm + samples.grad_pressure_norm + float(force_floor))
+    radial_normalized = (
+        2.0 * samples.radial_force_density / (samples.lorentz_norm + samples.grad_pressure_norm + float(force_floor))
+    )
+    helical_normalized = (
+        2.0 * samples.helical_force_density / (samples.lorentz_norm + samples.grad_pressure_norm + float(force_floor))
+    )
+    surface_weights = jnp.abs(samples.sqrt_g)
+    fsa = jnp.sum(surface_weights * magnitude, axis=(1, 2)) / jnp.sum(surface_weights, axis=(1, 2))
+
+    def region_l2(mask: Array) -> Array:
+        region_weights = weights * mask[:, None, None]
+        denominator = jnp.sum(region_weights)
+        return jnp.where(
+            denominator > 0.0,
+            jnp.sqrt(jnp.sum(region_weights * magnitude * magnitude) / denominator),
+            0.0,
+        )
+
+    angular_fft = jnp.fft.rfftn(magnitude, axes=(1, 2))
+    angular_power = jnp.abs(angular_fft) ** 2
+    theta_cut = max(1, angular_power.shape[1] * 2 // 3)
+    zeta_cut = max(1, angular_power.shape[2] * 2 // 3)
+    tail = jnp.sum(angular_power[:, theta_cut:, :]) + jnp.sum(angular_power[:, :, zeta_cut:])
+    tail = jnp.sqrt(tail / jnp.maximum(jnp.sum(angular_power), 1.0e-300))
+    coarse_order = max(state.radial_basis.degree + 1, order - 2)
+    coarse_s, coarse_s_weights = radial_quadrature(coarse_order)
+    coarse_rho = np.sqrt(coarse_s)
+    coarse_rho_weights = coarse_s_weights / (2.0 * coarse_rho)
+    coarse_rr, coarse_tt, coarse_zz = jnp.meshgrid(
+        jnp.asarray(coarse_rho), jnp.asarray(theta), jnp.asarray(zeta), indexing="ij"
+    )
+    coarse_samples = evaluate_strong_force(state, coarse_rr, coarse_tt, coarse_zz)
+    coarse_magnitude = jnp.linalg.norm(coarse_samples.force, axis=-1)
+    coarse_weights = (
+        jnp.asarray(coarse_rho_weights)[:, None, None]
+        * (2.0 * jnp.pi / ntheta)
+        * (2.0 * jnp.pi / nzeta)
+        * jnp.abs(coarse_samples.sqrt_g)
+    )
+    fine_l2 = _weighted_l2(magnitude, weights)
+    coarse_l2 = _weighted_l2(coarse_magnitude, coarse_weights)
+    refinement = jnp.abs(fine_l2 - coarse_l2) / jnp.maximum(fine_l2, float(force_floor))
+    signed_jacobian = float(state.jacobian_sign) * samples.sqrt_g / jnp.maximum(rr, 1.0e-14)
+
+    edge = jnp.asarray(1.0)
+    edge_factor = edge ** jnp.asarray(state.m)
+    boundary_residual = jnp.asarray(0.0)
+    for coefficients, target in (
+        (state.R_cos, state.boundary_R_cos),
+        (state.R_sin, state.boundary_R_sin),
+        (state.Z_cos, state.boundary_Z_cos),
+        (state.Z_sin, state.boundary_Z_sin),
+    ):
+        if target is not None:
+            value = state.radial_basis.evaluate(coefficients, edge, axis=-1) * edge_factor
+            boundary_residual = jnp.maximum(boundary_residual, jnp.max(jnp.abs(value - jnp.asarray(target))))
+    gauge_mask = (np.asarray(state.m) == 0) & (np.asarray(state.n) == 0)
+    gauge_residual = jnp.asarray(0.0)
+    if np.any(gauge_mask):
+        gauge_residual = jnp.maximum(
+            jnp.max(jnp.abs(jnp.asarray(state.L_cos)[gauge_mask])),
+            jnp.max(jnp.abs(jnp.asarray(state.L_sin)[gauge_mask])),
+        )
+
+    return StrongForceReport(
+        absolute_l2=fine_l2,
+        absolute_p99=_weighted_quantile(magnitude, weights, 0.99),
+        absolute_linf=jnp.max(magnitude),
+        normalized_l2=_weighted_l2(normalized, weights),
+        normalized_p99=_weighted_quantile(normalized, weights, 0.99),
+        normalized_linf=jnp.max(normalized),
+        radial_l2=_weighted_l2(samples.radial_force_density, weights),
+        helical_l2=_weighted_l2(samples.helical_force_density, weights),
+        radial_normalized_l2=_weighted_l2(radial_normalized, weights),
+        helical_normalized_l2=_weighted_l2(helical_normalized, weights),
+        near_axis_l2=region_l2(jnp.asarray(rho_nodes) < 0.2),
+        bulk_l2=region_l2((jnp.asarray(rho_nodes) >= 0.2) & (jnp.asarray(rho_nodes) <= 0.8)),
+        edge_l2=region_l2(jnp.asarray(rho_nodes) > 0.8),
+        radial_nodes=jnp.asarray(rho_nodes),
+        flux_surface_average=fsa,
+        angular_spectral_tail=tail,
+        radial_refinement_difference=refinement,
+        minimum_signed_jacobian=jnp.min(signed_jacobian),
+        nestedness_margin=jnp.min(signed_jacobian),
+        boundary_residual=boundary_residual,
+        gauge_residual=gauge_residual,
+        force_floor=float(force_floor),
+    )
+
+
+def plot_strong_force_report(
+    reports: StrongForceReport | dict[str, StrongForceReport],
+    *,
+    title: str = "Independent strong-force certificate",
+):
+    """Plot force profiles and compact absolute/normalized comparisons.
+
+    A mapping produces an overlaid, reviewer-facing comparison; passing one
+    report is shorthand for ``{"equilibrium": report}``.  Matplotlib is
+    imported lazily so force evaluation itself stays a lightweight core API.
+    """
+
+    import matplotlib.pyplot as plt
+
+    report_map = {"equilibrium": reports} if isinstance(reports, StrongForceReport) else reports
+    if not report_map:
+        raise ValueError("at least one strong-force report is required")
+    figure, axes = plt.subplots(1, 2, figsize=(10.5, 4.0), constrained_layout=True)
+    for label, report in report_map.items():
+        axes[0].semilogy(
+            np.asarray(report.radial_nodes),
+            np.asarray(report.flux_surface_average),
+            marker=".",
+            linewidth=1.5,
+            label=label,
+        )
+    axes[0].set(xlabel=r"$\rho=\sqrt{s}$", ylabel=r"$\langle|J\times B-\nabla p|\rangle$ [N m$^{-3}$]")
+    axes[0].grid(True, which="both", alpha=0.25)
+    axes[0].legend(frameon=False)
+
+    labels = list(report_map)
+    positions = np.arange(len(labels), dtype=float)
+    width = 0.22
+    for offset, field, legend in (
+        (-width, "absolute_l2", "volume L2"),
+        (0.0, "absolute_p99", "volume P99"),
+        (width, "absolute_linf", "Linf"),
+    ):
+        axes[1].bar(
+            positions + offset,
+            [float(np.asarray(getattr(report_map[label], field))) for label in labels],
+            width=width,
+            label=legend,
+        )
+    axes[1].set_yscale("log")
+    axes[1].set_xticks(positions, labels, rotation=15, ha="right")
+    axes[1].set_ylabel(r"force density [N m$^{-3}$]")
+    axes[1].grid(True, axis="y", which="both", alpha=0.25)
+    axes[1].legend(frameon=False)
+    figure.suptitle(title)
+    return figure, axes
+
+
+__all__ = [
+    "HighOrderEquilibriumState",
+    "StrongForceReport",
+    "StrongForceSamples",
+    "certify_strong_force",
+    "evaluate_strong_force",
+    "high_order_state_from_wout",
+    "lift_high_order_state",
+    "plot_strong_force_report",
+]

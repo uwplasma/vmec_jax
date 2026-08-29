@@ -411,7 +411,7 @@ initialization, solve dispatch, and tracing are in ``splines.py``; the shared
 energy and force diagnostics are in ``forces.py``; and the reviewed figure is
 produced by ``output.plot_stellarator_mirror_hybrid``.
 
-.. image:: /_static/figures/stellarator_mirror_hybrid.png
+.. image:: /_static/figures/stellarator_mirror_hybrid.webp
    :alt: Solved periodic B-spline stellarator-mirror hybrid with its axis, boundary magnetic field, cross-sections, transform, and residuals
    :width: 100%
 
@@ -514,7 +514,7 @@ B-spline lane exists. The VMEC solve therefore serves as the QI *reference*
 (axis, ``iota``, ``|B|``, ``B_0``), and the Fourier side of the comparison is the
 axis-representation accuracy above.
 
-.. image:: /_static/figures/qi_mirror_hybrid.png
+.. image:: /_static/figures/qi_mirror_hybrid.webp
    :alt: QI-mirror hybrid comparison: QI axis coloured by curvature with cut locations, the spliced straight-leg hybrid axis, hybrid boundary magnetic field, and Fourier-versus-B-spline representation accuracy at the seam
    :width: 100%
 
@@ -589,13 +589,17 @@ finite-beta solution or ellipticity prediction.
 Native spline basis status
 --------------------------
 
-``vmex.mirror.splines.CubicBSplineBasis`` supplies the longitudinal
-basis. Open mirrors use clamped knots, exact endpoint values, Gauss-Legendre
-quadrature on every nonzero span, and exact Boehm knot insertion. Closed
-hybrids use folded uniform periodic cubic splines and exact dyadic refinement.
-Evaluation and two derivatives are JAX operations. Tests match SciPy,
-reproduce cubics, preserve open and periodic curves under refinement, verify
-partition of unity and C2 closure, and check JVP/VJP actions.
+``vmex.mirror.splines.CubicBSplineBasis`` is the compatibility name for the
+shared :class:`vmex.core.radial_basis.BSplineBasis`. Open mirrors use clamped
+knots, exact endpoint values, Gauss-Legendre quadrature on every nonzero span,
+and exact Boehm knot insertion. Closed hybrids use folded uniform periodic
+splines and exact dyadic refinement. The default remains cubic, so existing
+mirror results and coefficient conventions are unchanged; the shared basis
+also supports odd degrees 5 and 7 for high-order radial force-balance work.
+Evaluation, two derivatives, coefficient transfer, and its transpose are JAX
+operations. Tests match SciPy, reproduce polynomials through the active
+degree, preserve open and periodic curves under refinement, verify partition
+of unity and periodic closure, and check JVP/VJP actions.
 
 ``SplineMirrorState`` and ``SplineMirrorBoundary`` store geometry and stream
 function coefficients rather than sampled values. ``SplineMirrorDiscretization``
@@ -695,7 +699,7 @@ and ``1.69e-2``, so every zone converges under refinement; it therefore ships
 as a validated paraxial benchmark, distinct from the release-candidate rotating
 ellipse, whose section is an exact discrete flux surface.
 
-.. image:: /_static/figures/mirror_fixed_boundary_3d.png
+.. image:: /_static/figures/mirror_fixed_boundary_3d.webp
    :alt: Solved axisymmetric and 90-degree rotating-ellipse fixed-boundary mirrors coloured by LCFS field strength
    :width: 100%
 

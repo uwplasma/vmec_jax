@@ -44,10 +44,13 @@ vmex input.case --coils coils.json
 
 The coils' Biot-Savart field is tabulated once into an in-memory
 {class}`~vmex.core.mgrid.MgridField` via
-{meth}`~vmex.core.mgrid.MgridField.from_cartesian_field` — no temporary
-mgrid file. The same adapter accepts ESSOS' `B(points)` protocol, SIMSOPT's
-`set_points(points); B()` protocol, or any plain Cartesian callable, and the
-tabulated field is reused across every radial stage and hot restart.
+{meth}`~vmex.core.mgrid.MgridField.from_coils` — no temporary mgrid file.
+In Python the same call takes an `essos.coils.Coils` object directly
+({doc}`use-essos-fields-and-coils`). The underlying
+{meth}`~vmex.core.mgrid.MgridField.from_cartesian_field` adapter also accepts
+ESSOS' `B(points)` protocol, SIMSOPT's `set_points(points); B()` protocol, or
+any plain Cartesian callable, and the tabulated field is reused across every
+radial stage and hot restart.
 `examples/free_boundary_essos_coils.py` runs a beta scan against the
 Landreman-Paul precise-QA coil set this way:
 
@@ -77,13 +80,10 @@ factor runs on CPU by design ({doc}`run-on-gpu`).
 ## Differentiability scope
 
 Coil/`extcur` gradients on a specified boundary use the virtual-casing
-residual (`examples/optimization/single_stage_optimization_finite_beta.py`);
-that lane is the mature one. The coupled NESTOR fixed point is also
-differentiated, by
+residual. The coupled NESTOR fixed point is differentiated by
 {func}`vmex.core.freeboundary_implicit.solve_free_boundary_implicit`, which
 reverse-differentiates the reconverged plasma--vacuum root against plasma
-profiles and direct coil dofs (`examples/take_free_boundary_gradients.py`,
-`examples/optimization/single_stage_free_boundary_optimization.py`). It is
-experimental and CPU-only. Scope is stated in
+profiles and direct coil variables. This path is experimental and CPU-only.
+Its coil examples need ESSOS branch `rj/vmex-optimization-interfaces` (PR #58). Scope is in
 {doc}`/reference/capabilities` and the mechanism in
 {doc}`/explanation/nestor-vacuum`.

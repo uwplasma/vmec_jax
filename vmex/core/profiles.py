@@ -31,6 +31,20 @@ power_series         ``sum_i c[i] x**i``
 two_power            ``c[0] (1 - x**c[1])**c[2]``
 gauss_trunc          ``c[0]/(1-E) * (exp(-(x/c[1])**2) - E)``,
                      ``E = exp(-(1/c[1])**2)`` (normalized so f(0)=c[0])
+sum_atan             ``c[0] + (2/pi) sum_{k=0..4} c[1+4k]
+                     atan(c[2+4k] x**c[3+4k] / (1-x)**c[4+4k])`` -- iota and
+                     current only, and it parameterizes ``I``, not ``I'``
+two_power_gs         ``two_power`` times ``1 + sum_i c[i]
+                     exp(-((x-c[i+1])/c[i+2])**2)``, ``i = 3, 6, ..., 18``
+two_lorentz          two Lorentz terms mapped to [0, 1] (pressure only)
+rational             ``c[0:10]`` polynomial over ``c[10:21]`` polynomial;
+                     returns Fortran ``HUGE`` where the denominator is zero
+nice_quadratic       ``c0 (1-x) + c1 x + 4 c2 x (1-x)`` (iota only)
+sum_cossq_s          current: ``I(x)`` of ``c[0]`` cos-squared windows evenly
+                     placed in ``s``, integrated in closed form
+sum_cossq_sqrts      idem, with the windows placed in ``sqrt(s)``
+sum_cossq_s_free     idem, seven freely placed windows; ``c[3i:3i+3]`` is the
+                     amplitude, location and half width of wave ``i``
 pedestal             VMEC2000 ``pmass`` pedestal: degree-15 power series in
                      ``c[0:16]`` plus a tanh pedestal shaped by ``c[16:21]``
 cubic_spline         VMEC ``spline_cubic`` through (aux_s, aux_f) knots
@@ -57,6 +71,12 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 import numpy as np
+
+#: Denominator floor for 'sum_atan'; see :func:`_sum_atan`.
+_SUM_ATAN_FLOOR = 1.0e-300
+
+#: Fortran ``HUGE(real64)``; 'rational' returns it on a zero denominator.
+_FORTRAN_HUGE = 1.7976931348623157e308
 
 __all__ = [
     "MU0",
@@ -145,6 +165,277 @@ def _gauss_trunc(coefficients, x):
     x = jnp.asarray(x)
     edge = jnp.exp(-((1.0 / c[1]) ** 2))
     return c[0] / (1.0 - edge) * (jnp.exp(-((x / c[1]) ** 2)) - edge)
+
+
+def _two_power_gs(coefficients, x):
+    """``two_power`` times six Gaussian peaks (``functions.f`` two_power_gs).
+
+    ``f(x) = c0 (1 - x**c1)**c2 (1 + sum_i c[i] exp(-((x - c[i+1])/c[i+2])**2))``
+    with ``i`` stepping 3, 6, ..., 18, so the peaks live in ``c[3:21]`` as
+    (amplitude, centre, width) triples.  The narrative comment in
+    ``profile_functions.f`` writes the exponent ambiguously; ``functions.f``
+    line 66 is the implementation and squares the whole ratio.
+
+    **One deliberate deviation from the Fortran.**  A peak slot left unset is
+    all zeros, so its width is zero, and ``functions.f`` evaluates
+    ``exp(-((x - 0)/0)**2)`` for it.  Away from the axis that is
+    ``exp(-inf) = 0`` and harmless, but at ``x = 0`` it is ``0/0``, and VMEC
+    returns NaN there for any deck that fills fewer than six peaks -- which is
+    the ordinary way to use one or two.  A zero amplitude means no peak, so
+    that term is skipped here and contributes exactly zero.  Fortran applies
+    the same guard itself in 'sum_cossq_s_free'
+    (``if(ac(3*(i-1)) .ne. 0.0)``); it simply omits it here.  Every nonzero
+    peak is bit-identical to the Fortran.
+    """
+    c = _coeffs_padded(coefficients, 21)
+    x = jnp.asarray(x)
+    peaks = jnp.ones_like(x)
+    for i in range(3, 19, 3):
+        amplitude, width = c[i], c[i + 2]
+        safe_width = jnp.where(width != 0.0, width, 1.0)
+        term = amplitude * jnp.exp(-(((x - c[i + 1]) / safe_width) ** 2))
+        peaks = peaks + jnp.where(amplitude != 0.0, term, 0.0)
+    return _two_power(c, x) * peaks
+
+
+def _two_lorentz(coefficients, x):
+    """Two Lorentz-type terms mapped to [0, 1] (pmass 'two_Lorentz').
+
+    ``c[0:8]``: an overall scale, a mixing fraction ``c1`` between the two
+    terms, then ``(c2, c3, c4)`` and ``(c5, c6, c7)`` shaping each.  Both
+    terms are shifted and normalized so that each is 1 at ``x = 0`` and 0 at
+    ``x = 1``, which is what the edge subtraction and the denominator do.
+    """
+    c = _coeffs_padded(coefficients, 8)
+    x = jnp.asarray(x)
+
+    def term(width, power, exponent):
+        shape = 1.0 / (1.0 + (x / width ** 2) ** power) ** exponent
+        edge = 1.0 / (1.0 + (1.0 / width ** 2) ** power) ** exponent
+        return (shape - edge) / (1.0 - edge)
+
+    return c[0] * (c[1] * term(c[2], c[3], c[4])
+                   + (1.0 - c[1]) * term(c[5], c[6], c[7]))
+
+
+def _rational(coefficients, x):
+    """Ratio of two polynomials (pmass/piota/pcurr 'rational').
+
+    Numerator ``c[0:10]``, denominator ``c[10:21]``, both by Horner exactly as
+    the Fortran loops run.  VMEC returns ``HUGE`` where the denominator is
+    zero rather than a NaN or an infinity, and that value is observable in a
+    wout, so it is reproduced.
+    """
+    c = _coeffs_padded(coefficients, 21)
+    x = jnp.asarray(x)
+    numerator = jnp.zeros_like(x)
+    for i in range(9, -1, -1):
+        numerator = x * numerator + c[i]
+    denominator = jnp.zeros_like(x)
+    for i in range(20, 9, -1):
+        denominator = x * denominator + c[i]
+    nonzero = denominator != 0.0
+    safe = jnp.where(nonzero, denominator, 1.0)
+    return jnp.where(nonzero, numerator / safe, _FORTRAN_HUGE)
+
+
+def _nice_quadratic(coefficients, x):
+    """``c0 (1-x) + c1 x + 4 c2 x (1-x)`` (piota 'nice_quadratic').
+
+    ``c0`` and ``c1`` are the values at the axis and the edge and ``c2`` is
+    the departure of the midpoint from the straight line between them, so
+    ``c2 = 0`` is a linear iota.
+    """
+    c = _coeffs_padded(coefficients, 3)
+    x = jnp.asarray(x)
+    return c[0] * (1.0 - x) + c[1] * x + 4.0 * c[2] * x * (1.0 - x)
+
+
+def _sum_cossq_count(coefficients) -> int:
+    """Static wave count ``int(c[0])``, validated as ``profile_functions.f`` does.
+
+    The count sets how many terms exist, so it fixes the shape of the sum and
+    has to be a Python integer rather than a traced value.  It is a count and
+    never an optimized coefficient, so requiring that costs nothing real; a
+    tracer here gets a message saying so instead of a shape error from deeper
+    in the trace.
+    """
+    try:
+        values = np.asarray(coefficients, dtype=float).ravel()
+    except Exception as error:      # a tracer, under jit or grad
+        raise NotImplementedError(
+            "the 'sum_cossq_*' wave count c[0] must be a concrete value, not "
+            "a traced one: it sets how many terms the sum has"
+        ) from error
+    count = int(values[0]) if values.size else 0
+    if not 1 <= count <= 20:
+        raise ValueError(
+            f"sum_cossq wave count c[0] = {count} outside VMEC's 1..20 "
+            "(profile_functions.f stops on this)")
+    return count
+
+
+def _sum_cossq_s(coefficients, x):
+    """Cos-squared current windows in ``s``, integrated analytically.
+
+    ``profile_functions.f`` 'sum_cossq_s' (J. Geiger, 2018).  ``c[0]`` is the
+    number of waves; wave ``i`` peaks at ``x_i = (i-1) dx`` with
+    ``dx = 1/(n-1)`` and is windowed to ``(x_i - dx, x_i + dx]`` clipped to
+    ``[0, 1]``.  ``I(x)`` is the closed-form integral of that density, so a
+    wave already passed contributes its full area and at most the current one
+    is partial.  The first wave is a half window and carries no linear term.
+    """
+    n = _sum_cossq_count(coefficients)
+    c = _coeffs_padded(coefficients, max(21, n + 1))
+    x = jnp.asarray(x)
+    dx = 1.0 / (n - 1.0) if n > 1 else jnp.inf
+    total = jnp.zeros_like(x)
+    reached = jnp.ones_like(x)      # index of the window x sits in (Fortran ni)
+    inside = []
+    for i in range(1, n + 1):
+        xi = (i - 1) * dx
+        start, end = max(0.0, xi - dx), min(xi + dx, 1.0)
+        within = (x > start) & (x <= end)
+        inside.append((within, xi, start))
+        reached = jnp.where(within, float(i), reached)
+    for i in range(1, n + 1):
+        within, xi, _start = inside[i - 1]
+        wave = jnp.sin(jnp.pi * (x - xi) / dx) * dx / jnp.pi
+        partial = (0.5 * c[i] * (x + wave) if i == 1
+                   else 0.5 * c[i] * (x - xi + dx + wave))
+        complete = 0.5 * c[i] * dx if i == 1 else c[i] * dx
+        total = total + jnp.where(
+            float(i) <= reached, jnp.where(within, partial, complete), 0.0)
+    return total
+
+
+def _sum_cossq_sqrts(coefficients, x):
+    """The same windows placed in ``sqrt(s)`` ('sum_cossq_sqrts').
+
+    Identical construction to :func:`_sum_cossq_s` with ``sqrt(x)`` as the
+    coordinate, which makes the analytic integral pick up the extra ``x``
+    weight and so a different closed form.
+    """
+    n = _sum_cossq_count(coefficients)
+    c = _coeffs_padded(coefficients, max(21, n + 1))
+    x = jnp.asarray(x)
+    root = jnp.sqrt(x)
+    dx = 1.0 / (n - 1.0) if n > 1 else jnp.inf
+    dx2, pi2 = dx * dx, jnp.pi * jnp.pi
+    total = jnp.zeros_like(x)
+    reached = jnp.ones_like(x)
+    inside = []
+    for i in range(1, n + 1):
+        xi = (i - 1) * dx
+        start, end = max(0.0, xi - dx), min(xi + dx, 1.0)
+        within = (root > start) & (root <= end)
+        inside.append((within, xi, start))
+        reached = jnp.where(within, float(i), reached)
+    for i in range(1, n + 1):
+        within, xi, start = inside[i - 1]
+        phase = jnp.pi * (root - xi) / dx
+        if i == 1:
+            partial = c[i] * (0.25 * x + dx / (2.0 * jnp.pi) * root
+                              * jnp.sin(phase)
+                              + dx2 / (2.0 * pi2) * (jnp.cos(phase) - 1.0))
+            complete = c[i] * (0.25 - 1.0 / pi2) * dx2
+        else:
+            partial = c[i] * (0.25 * x
+                              + dx / (2.0 * jnp.pi) * root * jnp.sin(phase)
+                              + dx2 / (2.0 * pi2) * jnp.cos(phase)
+                              - 0.25 * start ** 2 + dx2 / (2.0 * pi2))
+            complete = c[i] * dx * xi
+        total = total + jnp.where(
+            float(i) <= reached, jnp.where(within, partial, complete), 0.0)
+    return total
+
+
+def _sum_cossq_s_free(coefficients, x):
+    """Seven freely placed cos-squared windows ('sum_cossq_s_free').
+
+    ``c[3i]``, ``c[3i+1]``, ``c[3i+2]`` are the amplitude, the peak location
+    and the half width of wave ``i`` for ``i = 0..6``, so broad and narrow
+    windows can be mixed and need not tile ``[0, 1]``.  A zero amplitude
+    switches a wave off entirely, which is also what keeps a zero half width
+    from dividing by zero -- Fortran guards it the same way.
+    """
+    c = _coeffs_padded(coefficients, 21)
+    x = jnp.asarray(x)
+    total = jnp.zeros_like(x)
+    for i in range(7):
+        amplitude, xi, width = c[3 * i], c[3 * i + 1], c[3 * i + 2]
+        live = amplitude != 0.0
+        safe_width = jnp.where(width != 0.0, width, 1.0)
+        start = jnp.maximum(0.0, xi - width)
+        end = jnp.minimum(xi + width, 1.0)
+        at_start = jnp.sin(jnp.pi * (start - xi) / safe_width)
+        partial = amplitude * 0.5 * (
+            (x - start)
+            + safe_width / jnp.pi * (jnp.sin(jnp.pi * (x - xi) / safe_width)
+                                     - at_start))
+        complete = amplitude * 0.5 * (
+            (end - start)
+            + safe_width / jnp.pi * (jnp.sin(jnp.pi * (end - xi) / safe_width)
+                                     - at_start))
+        contribution = jnp.where(
+            (x > start) & (x <= end), partial, jnp.where(x > end, complete, 0.0))
+        total = total + jnp.where(live, contribution, 0.0)
+    return total
+
+
+def _pcurr_two_power_gs_ip(coefficients, x):
+    """pcurr 'two_power_gs': ``I'`` is two_power_gs, integrated numerically."""
+    return _integrate_0_to_x(_two_power_gs, coefficients, x)
+
+
+def _pow_at_zero(x, exponent):
+    """``x ** exponent`` with the Fortran value, and no NaN gradient, at x = 0.
+
+    ``jnp.power`` with a non-integer exponent goes through ``exp(e log x)``,
+    so at ``x = 0`` both the value and its derivative come back NaN, where
+    Fortran gives ``0`` (``e > 0``), ``1`` (``e = 0``) or ``+inf``
+    (``e < 0``).  Evaluating at a stand-in and selecting afterwards keeps the
+    value exact for every ``x > 0`` and keeps ``log(0)`` out of the tape.
+    """
+    x = jnp.asarray(x)
+    positive = x > 0.0
+    powered = jnp.where(positive, x, 1.0) ** exponent
+    at_zero = jnp.where(exponent == 0.0, 1.0,
+                        jnp.where(exponent > 0.0, 0.0, jnp.inf))
+    return jnp.where(positive, powered, at_zero)
+
+
+def _sum_atan(coefficients, x):
+    """Sum of five arctangents (``profile_functions.f`` 'sum_atan').
+
+    ``f(x) = c0 + (2/pi) sum_k c[1+4k] atan(c[2+4k] x**c[3+4k] /
+    (1-x)**c[4+4k])`` over ``k = 0..4``, using ``c[0:21]``.
+
+    VMEC hardcodes the edge rather than taking the limit: at ``x >= 1`` it
+    returns ``c0 + c1 + c5 + c9 + c13 + c17``, which is that limit only when
+    every ``c[2+4k]`` and ``c[4+4k]`` is positive.  Reproduced as written,
+    because parity with ``pcurr``/``piota`` is the contract.
+
+    Only the denominator is guarded.  An untaken ``jnp.where`` branch is still
+    evaluated, so ``1 - x`` is floored away from zero to keep the ``x >= 1``
+    branch from putting a NaN into the gradient of the taken one; the floor is
+    far below any representable ``1 - x``, so interior values are exact and
+    the guarded expression still tends to ``atan(inf) = pi/2``.  ``x`` itself
+    is handled by :func:`_pow_at_zero` instead, because clamping it low would
+    move ``f(0)`` whenever an exponent ``c[3+4k]`` is fractional (at
+    ``eps = 1e-12`` and ``c = 0.5``, by 2e-7).
+    """
+    c = _coeffs_padded(coefficients, 21)
+    x = jnp.asarray(x)
+    interior = x < 1.0
+    one_minus = jnp.maximum(jnp.where(interior, 1.0 - x, 1.0), _SUM_ATAN_FLOOR)
+    total = jnp.zeros_like(x)
+    for k in range(5):
+        total = total + c[1 + 4 * k] * jnp.arctan(
+            c[2 + 4 * k] * _pow_at_zero(x, c[3 + 4 * k])
+            / one_minus ** c[4 + 4 * k])
+    edge = c[0] + c[1] + c[5] + c[9] + c[13] + c[17]
+    return jnp.where(interior, c[0] + (2.0 / jnp.pi) * total, edge)
 
 
 def _pedestal(coefficients, x):
@@ -490,6 +781,15 @@ _PARAMETERIZED = {
     "power_series": _power_series,
     "two_power": _two_power,
     "gauss_trunc": _gauss_trunc,
+    "sum_atan": _sum_atan,
+    "two_power_gs": _two_power_gs,
+    "two_lorentz": _two_lorentz,
+    "rational": _rational,
+    "nice_quadratic": _nice_quadratic,
+    "two_power_gs_ip": _pcurr_two_power_gs_ip,
+    "sum_cossq_s": _sum_cossq_s,
+    "sum_cossq_sqrts": _sum_cossq_sqrts,
+    "sum_cossq_s_free": _sum_cossq_s_free,
     "pedestal": _pedestal,
     "power_series_ip": _pcurr_power_series_ip,
     "power_series_i": _pcurr_power_series_i,
@@ -552,6 +852,20 @@ def _bloated(s, bloat):
     return jnp.minimum(jnp.abs(jnp.asarray(s) * bloat), 1.0)
 
 
+#: ``pmass_type`` strings VMEC2000 accepts (``profile_functions.f`` pmass;
+#: ``power_series`` is its ``CASE DEFAULT``).
+_PMASS_KINDS = frozenset({
+    "power_series", "two_power", "two_power_gs", "two_lorentz", "gauss_trunc",
+    "pedestal", "rational", "cubic_spline", "akima_spline", "line_segment",
+})
+
+#: ``piota_type`` strings VMEC2000 accepts (``profile_functions.f`` piota).
+_PIOTA_KINDS = frozenset({
+    "power_series", "sum_atan", "nice_quadratic", "rational", "cubic_spline",
+    "akima_spline", "line_segment",
+})
+
+
 def pressure(pmass_type: str, am, am_aux_s, am_aux_f, s, *,
              pres_scale=1.0, bloat=1.0, spres_ped=1.0):
     """Pressure profile p(s) in **Pascals** (VMEC2000 ``pmass`` x ``1/mu0``).
@@ -567,9 +881,10 @@ def pressure(pmass_type: str, am, am_aux_s, am_aux_f, s, *,
     coefficients may be traced.
     """
     kind = str(pmass_type).strip().lower()
-    if kind not in ("power_series", "two_power", "gauss_trunc", "pedestal",
-                    "cubic_spline", "akima_spline", "line_segment"):
-        raise NotImplementedError(f"pmass_type={pmass_type!r} not implemented")
+    if kind not in _PMASS_KINDS:
+        raise NotImplementedError(
+            f"pmass_type={pmass_type!r} not implemented "
+            f"(supported: {sorted(_PMASS_KINDS)})")
     x = _bloated(s, bloat)
     p = pres_scale * evaluate_profile(kind, am, am_aux_s, am_aux_f, x)
     spres_ped = abs(float(spres_ped))
@@ -591,8 +906,10 @@ def iota(piota_type: str, ai, ai_aux_s, ai_aux_f, s, *, bloat=1.0, lrfp=False):
     this port applies it uniformly (identical for the default ``bloat = 1``).
     """
     kind = str(piota_type).strip().lower()
-    if kind not in ("power_series", "cubic_spline", "akima_spline", "line_segment"):
-        raise NotImplementedError(f"piota_type={piota_type!r} not implemented")
+    if kind not in _PIOTA_KINDS:
+        raise NotImplementedError(
+            f"piota_type={piota_type!r} not implemented "
+            f"(supported: {sorted(_PIOTA_KINDS)})")
     x = _bloated(s, bloat)
     value = evaluate_profile(kind, ai, ai_aux_s, ai_aux_f, x)
     if lrfp:
@@ -604,7 +921,13 @@ def iota(piota_type: str, ai, ai_aux_s, ai_aux_f, s, *, bloat=1.0, lrfp=False):
 _PCURR_KINDS = {
     "power_series": "power_series_ip",
     "power_series_i": "power_series_i",
+    "sum_atan": "sum_atan",
+    "rational": "rational",
     "two_power": "two_power_ip",
+    "two_power_gs": "two_power_gs_ip",
+    "sum_cossq_s": "sum_cossq_s",
+    "sum_cossq_sqrts": "sum_cossq_sqrts",
+    "sum_cossq_s_free": "sum_cossq_s_free",
     "gauss_trunc": "gauss_trunc_ip",
     "pedestal": "pedestal_i",
     "cubic_spline_i": "cubic_spline_i",
