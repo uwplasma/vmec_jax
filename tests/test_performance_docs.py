@@ -192,6 +192,30 @@ def test_collocation_polish_artifact_is_independently_certified() -> None:
     assert artifact["total_seconds"] < 60.0
     assert artifact["total_peak_rss_increase_mib"] < 3072.0
 
+    native = json.loads(
+        (
+            ROOT
+            / "benchmarks"
+            / "strong_polish_solovev_solvax_d3_m5_m4.json"
+        ).read_text()
+    )
+    native_report = native["polish_report"]
+    native_final = native["final_certificate"]
+    assert native["measurement_dirty"] is False
+    assert native["solvax_source"]["dirty"] is False
+    assert re.fullmatch(r"[0-9a-f]{40}", native["solvax_source"]["commit"])
+    assert native["solvax_least_squares"] is True
+    assert native_report["converged"] is True
+    assert native_report["least_squares_success"] is True
+    assert native_report["least_squares_relative_optimality"] <= 1.0e-3
+    assert native_final["normalized_l2"] <= native["validation_tolerance"]
+    assert native_final["radial_refinement"] <= native[
+        "radial_refinement_tolerance"
+    ]
+    assert native_report["minimum_signed_jacobian"] > 0.0
+    assert native["total_seconds"] < 60.0
+    assert native["total_peak_rss_increase_mib"] < 3072.0
+
 
 def test_committed_reports_do_not_expose_personal_paths() -> None:
     """Release-facing text must remain portable between contributors."""
