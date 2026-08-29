@@ -218,6 +218,14 @@ uses ``4*mmax + 5`` points: the production ``mmax=5`` chart gains one numerical
 direction at 25 points and remains unchanged at 37.  Two directions and the
 added angular cost remain explicit gates.
 
+The clean-commit Apple M4 record
+``benchmarks/strong_root_m6_angular_converged_m4.json`` measures that tradeoff.
+The full and gauge-free ranks rise to 114/117 and 80/82, respectively, while
+runtime construction takes 20.0 s, median warm residual/JVP costs rise to
+5.83/9.40 ms, and peak runtime construction reaches 1.42 GiB in this process.
+The converged angular rule is therefore useful diagnostic evidence but fails
+the rank, runtime, and memory gates for a production default.
+
 Low-order physics preconditioner
 --------------------------------
 
