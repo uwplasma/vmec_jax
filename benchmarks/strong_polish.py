@@ -19,6 +19,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+import solvax
 import vmex
 from solvax import pseudo_transient_continuation
 from vmex.core import implicit
@@ -528,6 +529,17 @@ def main() -> None:
     final_projection = strong_projection_diagnostics(
         final_vector, runtime, chart
     )
+    solvax_source = None
+    if args.solvax_least_squares:
+        solvax_module = Path(solvax.__file__).resolve()
+        solvax_repo = solvax_module.parents[2]
+        if (solvax_repo / ".git").exists():
+            source_state = git_state(solvax_repo)
+            solvax_source = {
+                "commit": source_state["measurement_commit"],
+                "dirty": source_state["measurement_dirty"],
+                "module": solvax_module.relative_to(solvax_repo).as_posix(),
+            }
     report = {
         "schema": "vmex.strong-polish-benchmark/1",
         "case": args.input.name.removeprefix("input."),
@@ -596,7 +608,9 @@ def main() -> None:
             "vmex": vmex.__version__,
             "jax": jax.__version__,
             "numpy": np.__version__,
+            "solvax": solvax.__version__,
         },
+        "solvax_source": solvax_source,
         **git_state(REPO),
         "vmex_module": assert_repo_vmex(vmex.__file__, REPO),
     }
