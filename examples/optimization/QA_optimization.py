@@ -96,6 +96,7 @@ def x_from_y(y):
 
 def value_and_gradient(y):
     value, gradient = problem.value_and_grad(x_from_y(y))
+    evaluation_costs.append(float(value))
     return value, step * gradient
 
 
@@ -105,12 +106,17 @@ def monitor_y(intermediate_result):
              "jac": value_and_gradient(intermediate_result.x)[1]})
 
 
+evaluation_costs = []
 result = minimize(
     value_and_gradient, np.zeros_like(x0), jac=True, method="L-BFGS-B",
     bounds=[(-MAX_PARAMETER_CHANGE, MAX_PARAMETER_CHANGE)] * x0.size,
     callback=monitor_y,
     options={"maxiter": MAXITER, "gtol": 1.0e-6, "ftol": 1.0e-12,
              "maxls": 20, "maxcor": 20})
+print(
+    "optimizer scalar cost: "
+    f"{evaluation_costs[0]:.16e} -> {float(result.fun):.16e}"
+)
 result.x = x_from_y(result.x)
 inp = problem.input_from_x(result.x)
 equilibrium = problem.equilibrium_from_x(result.x)

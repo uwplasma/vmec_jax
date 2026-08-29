@@ -26,6 +26,8 @@ EXAMPLES = REPO / "examples"
 DATA_DIR = EXAMPLES / "data"
 
 _COST_RE = re.compile(r"^\s*\d+\s+\d+\s+([0-9.eE+-]+)", re.MULTILINE)
+_SCALAR_COST_RE = re.compile(
+    r"optimizer scalar cost:\s*([0-9.eE+-]+)\s*->\s*([0-9.eE+-]+)")
 
 ESSOS_BRANCH_EXAMPLES = (
     EXAMPLES / "take_free_boundary_gradients.py",
@@ -107,9 +109,13 @@ def _run_example(script: Path, cwd: Path, timeout: int = 2400,
 
 def _assert_cost_decreased(stdout: str, name: str) -> None:
     costs = [float(c) for c in _COST_RE.findall(stdout)]
-    assert len(costs) >= 2, f"{name}: expected scipy iteration rows, got {costs}"
+    if len(costs) < 2:
+        scalar_costs = _SCALAR_COST_RE.search(stdout)
+        costs = [] if scalar_costs is None else [
+            float(scalar_costs.group(1)), float(scalar_costs.group(2))]
+    assert len(costs) >= 2, f"{name}: expected optimizer cost evidence, got {costs}"
     assert min(costs) < costs[0], (
-        f"{name}: least-squares cost did not decrease: first {costs[0]:.6e}, "
+        f"{name}: optimizer cost did not decrease: first {costs[0]:.6e}, "
         f"best {min(costs):.6e}")
 
 
