@@ -426,6 +426,21 @@ class StrongPhysicalChart:
         )
 
 
+class StrongProjectionDiagnostics(NamedTuple):
+    """How much solve-grid force content survives the square projection."""
+
+    sampled_rms: Array
+    reconstructed_rms: Array
+    unresolved_rms: Array
+    unresolved_fraction: Array
+    angular_unresolved_fraction: Array
+    radial_fit_unresolved_fraction: Array
+    radial_unresolved_fraction: Array
+    helical_unresolved_fraction: Array
+    equation_discarded_fraction: Array
+    projected_residual_rms: Array
+
+
 @dataclass(frozen=True, eq=False)
 class StrongRootRuntime:
     """Reusable grids, transforms, constraints, and scaling for a square root."""
@@ -853,15 +868,19 @@ def _fit_regularized_channel(
     radial: Array,
     runtime: StrongRootRuntime,
 ) -> Array:
-    """Fourier project and remove analytic axis powers before radial fitting."""
+    """Fourier project and fit the regularized radial basis stably.
+
+    Each stored mode fit acts on ``rho**abs(m) * B(s)`` directly. Dividing
+    samples by ``rho**abs(m)`` first is algebraically tempting but amplifies
+    near-axis roundoff catastrophically for the higher modes needed by the
+    nonlinear force operator.
+    """
 
     samples = jnp.asarray(samples).reshape((radial.size, -1))
     modes = jnp.einsum(
         "ra,ma->rm", samples, jnp.asarray(angular_projection)
     )
-    powers = radial[:, None] ** jnp.asarray(np.abs(runtime.native.m))[None, :]
-    safe_powers = jnp.maximum(powers, jnp.finfo(radial.dtype).tiny)
-    return jnp.asarray(runtime.radial_fit) @ (modes / safe_powers)
+    return jnp.einsum("mbr,rm->bm", jnp.asarray(runtime.radial_fit), modes)
 
 
 def _coordinate_gauge_residual_unscaled(
@@ -971,6 +990,136 @@ def _strong_residual_unscaled(
         L_sin=force_coefficients.L_sin * signs[2],
     )
     return jnp.asarray(runtime.equation_scale) * runtime.layout.pack(oriented)
+
+
+def strong_projection_diagnostics(
+    vector: Array,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
+) -> StrongProjectionDiagnostics:
+    """Compare the square strong residual with its solve-grid force samples.
+
+    The independent certificate deliberately uses shifted, overintegrated
+    nodes. This diagnostic instead stays on the *solve* nodes and reports the
+    content lost by the angular/radial fit and by the final square equation
+    chart. It therefore distinguishes a projection mismatch from nonlinear
+    solver failure without weakening or replacing the independent certificate.
+    """
+
+    from .strong_force import evaluate_strong_force
+
+    full = chart.lift(vector)
+    correction = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * full
+    )
+    state = apply_high_order_correction(runtime.native, correction)
+    radial = jnp.asarray(runtime.radial_nodes)
+    theta = jnp.asarray(runtime.theta)
+    zeta = jnp.asarray(runtime.zeta)
+    rr, tt, zz = jnp.meshgrid(radial, theta, zeta, indexing="ij")
+    samples = evaluate_strong_force(state, rr, tt, zz)
+    denominator = jnp.asarray(runtime.normalization_denominator)
+    volume_weight = jnp.abs(samples.sqrt_g)
+    radial_force = (
+        2.0 * samples.signed_radial_force_density * volume_weight / denominator
+    )
+    helical_force = (
+        2.0 * samples.signed_helical_force_density * volume_weight / denominator
+    )
+    radial_coefficients = _fit_regularized_channel(
+        radial_force, runtime.cosine_projection, radial, runtime
+    )
+    helical_coefficients = _fit_regularized_channel(
+        helical_force, runtime.sine_projection, radial, runtime
+    )
+
+    radial_basis = jnp.asarray(
+        state.radial_basis.basis_matrix(radial * radial)
+    )
+    regularity = radial[:, None] ** jnp.abs(jnp.asarray(state.m))[None, :]
+    radial_modes = (radial_basis @ radial_coefficients) * regularity
+    helical_modes = (radial_basis @ helical_coefficients) * regularity
+    phase = (
+        jnp.asarray(state.m)[:, None]
+        * theta.reshape(1, -1)
+        - jnp.asarray(state.n)[:, None] * zeta.reshape(1, -1)
+    )
+    radial_angular_modes = jnp.einsum(
+        "ra,ma->rm",
+        radial_force.reshape((radial.size, -1)),
+        jnp.asarray(runtime.cosine_projection),
+    )
+    helical_angular_modes = jnp.einsum(
+        "ra,ma->rm",
+        helical_force.reshape((radial.size, -1)),
+        jnp.asarray(runtime.sine_projection),
+    )
+    radial_angular_reconstructed = jnp.einsum(
+        "rm,ma->ra", radial_angular_modes, jnp.cos(phase)
+    ).reshape(radial_force.shape)
+    helical_angular_reconstructed = jnp.einsum(
+        "rm,ma->ra", helical_angular_modes, jnp.sin(phase)
+    ).reshape(helical_force.shape)
+    radial_reconstructed = jnp.einsum(
+        "rm,ma->ra", radial_modes, jnp.cos(phase)
+    ).reshape(radial_force.shape)
+    helical_reconstructed = jnp.einsum(
+        "rm,ma->ra", helical_modes, jnp.sin(phase)
+    ).reshape(helical_force.shape)
+
+    def pair_rms(first: Array, second: Array) -> Array:
+        return jnp.sqrt(jnp.mean(first * first + second * second))
+
+    def relative(error: Array, reference: Array) -> Array:
+        return jnp.linalg.norm(error) / jnp.maximum(
+            jnp.linalg.norm(reference), jnp.finfo(reference.dtype).tiny
+        )
+
+    sampled_rms = pair_rms(radial_force, helical_force)
+    reconstructed_rms = pair_rms(
+        radial_reconstructed, helical_reconstructed
+    )
+    radial_error = radial_force - radial_reconstructed
+    helical_error = helical_force - helical_reconstructed
+    angular_error_r = radial_force - radial_angular_reconstructed
+    angular_error_h = helical_force - helical_angular_reconstructed
+    radial_fit_error_r = radial_angular_reconstructed - radial_reconstructed
+    radial_fit_error_h = helical_angular_reconstructed - helical_reconstructed
+    unresolved_rms = pair_rms(radial_error, helical_error)
+    full_coefficients = (
+        _strong_residual_unscaled(
+            full,
+            runtime,
+            include_coordinate_gauge=False,
+        )
+        / jnp.asarray(runtime.strong_scale)
+    )
+    retained_coefficients = jnp.asarray(chart.equation_basis) @ (
+        jnp.asarray(chart.equation_basis).T @ full_coefficients
+    )
+    projected = chart.project(full_coefficients)
+    return StrongProjectionDiagnostics(
+        sampled_rms=sampled_rms,
+        reconstructed_rms=reconstructed_rms,
+        unresolved_rms=unresolved_rms,
+        unresolved_fraction=unresolved_rms
+        / jnp.maximum(sampled_rms, jnp.finfo(sampled_rms.dtype).tiny),
+        angular_unresolved_fraction=pair_rms(
+            angular_error_r, angular_error_h
+        )
+        / jnp.maximum(sampled_rms, jnp.finfo(sampled_rms.dtype).tiny),
+        radial_fit_unresolved_fraction=pair_rms(
+            radial_fit_error_r, radial_fit_error_h
+        )
+        / jnp.maximum(sampled_rms, jnp.finfo(sampled_rms.dtype).tiny),
+        radial_unresolved_fraction=relative(radial_error, radial_force),
+        helical_unresolved_fraction=relative(helical_error, helical_force),
+        equation_discarded_fraction=relative(
+            full_coefficients - retained_coefficients, full_coefficients
+        ),
+        projected_residual_rms=jnp.linalg.norm(projected)
+        / jnp.sqrt(float(chart.size)),
+    )
 
 
 @jax.jit
@@ -1340,10 +1489,20 @@ def make_strong_root_runtime(
         native.radial_basis.basis_matrix(radial_s_nodes), dtype=float
     )
     sqrt_weights = np.sqrt(radial_weights)
-    weighted_matrix = sqrt_weights[:, None] * radial_matrix
-    radial_fit = np.linalg.pinv(weighted_matrix, rcond=1.0e-12) * sqrt_weights[None, :]
     m = np.asarray(native.m, dtype=int)
     n = np.asarray(native.n, dtype=int)
+    radial_fit = np.stack([
+        np.linalg.pinv(
+            sqrt_weights[:, None]
+            * (
+                radial_nodes[:, None] ** abs(int(mode_m))
+                * radial_matrix
+            ),
+            rcond=1.0e-12,
+        )
+        * sqrt_weights[None, :]
+        for mode_m in m
+    ])
     # The nonlinear force contains metric inverses and is not band-limited at
     # the retained geometry order.  The former ``2*mmax + 3`` grid resolves
     # the requested output modes but aliases their nonlinear source.  The

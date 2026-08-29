@@ -22,6 +22,7 @@ from vmex.core.polish import (
     build_low_order_preconditioner,
     make_strong_root_runtime,
     make_strong_structured_chart,
+    strong_projection_diagnostics,
     strong_physical_residual,
 )
 from vmex.core.polish_driver import (
@@ -67,6 +68,11 @@ def main() -> None:
     parser.add_argument("--linear-max-restarts", type=int, default=20)
     parser.add_argument("--no-arclength", action="store_true")
     parser.add_argument("--direct-endpoint", action="store_true")
+    parser.add_argument(
+        "--diagnostics-only",
+        action="store_true",
+        help="build and certify the initial state without running a correction",
+    )
     args = parser.parse_args()
     if not args.input.is_file():
         parser.error(f"input does not exist: {args.input}")
@@ -130,6 +136,8 @@ def main() -> None:
         balance_full_root=False,
     )
     chart = make_strong_structured_chart(runtime)
+    zero = np.zeros((chart.size,), dtype=float)
+    initial_projection = strong_projection_diagnostics(zero, runtime, chart)
     setup_seconds = time.perf_counter() - started
     rss_after_setup = _peak_rss_mib()
     polish_config = PolishConfig(
@@ -144,8 +152,29 @@ def main() -> None:
         use_pseudo_arclength=not args.no_arclength,
         fail_policy="return_unpolished",
     )
-    if args.direct_endpoint:
-        zero = np.zeros((chart.size,), dtype=float)
+    if args.diagnostics_only:
+        state = native
+        final_vector = zero
+        final_certificate = initial_certificate
+        polish_report = {
+            "converged": False,
+            "termination_reason": "diagnostics-only",
+            "final_alpha": 0.0,
+            "initial_normalized_l2": float(initial_certificate.normalized_l2),
+            "final_normalized_l2": float(initial_certificate.normalized_l2),
+            "continuation_accepted": 0,
+            "continuation_rejected": 0,
+            "nonlinear_iterations": 0,
+            "linear_iterations": 0,
+            "residual_evaluations": 0,
+            "arclength_steps": 0,
+            "minimum_signed_jacobian": float(
+                initial_certificate.minimum_signed_jacobian
+            ),
+            "factor_build_seconds": low_preconditioner.factor_build_seconds,
+            "solve_seconds": 0.0,
+        }
+    elif args.direct_endpoint:
         margin = float(_minimum_signed_jacobian(zero, runtime, chart))
         direct = pseudo_transient_continuation(
             lambda value: strong_physical_residual(value, runtime, chart, 1.0),
@@ -159,6 +188,7 @@ def main() -> None:
             ),
         )
         state = _corrected_state(direct.x, runtime, chart)
+        final_vector = direct.x
         final_certificate = certify_strong_force(state)
         polish_report = {
             "converged": bool(direct.converged and direct.linear_converged),
@@ -187,7 +217,13 @@ def main() -> None:
         )
         jax.block_until_ready(result.native_equilibrium)
         final_certificate = result.strong_force
+        final_vector = (
+            chart.coordinate_basis.T @ result.correction
+        ) / chart.coordinate_scale
         polish_report = dataclasses.asdict(result.polish_report)
+    final_projection = strong_projection_diagnostics(
+        final_vector, runtime, chart
+    )
     report = {
         "schema": "vmex.strong-polish-benchmark/1",
         "case": args.input.name.removeprefix("input."),
@@ -198,6 +234,7 @@ def main() -> None:
         "full_dofs": runtime.layout.size,
         "physical_dofs": chart.size,
         "direct_endpoint": args.direct_endpoint,
+        "diagnostics_only": args.diagnostics_only,
         "solve_grid": [
             int(runtime.radial_nodes.size),
             int(runtime.theta.size),
@@ -220,6 +257,16 @@ def main() -> None:
                 final_certificate.radial_refinement_difference
             ),
             "angular_tail": float(final_certificate.angular_spectral_tail),
+        },
+        "projection_consistency": {
+            "initial": {
+                field: float(value)
+                for field, value in initial_projection._asdict().items()
+            },
+            "final": {
+                field: float(value)
+                for field, value in final_projection._asdict().items()
+            },
         },
         "polish_report": polish_report,
         "platform": platform.platform(),

@@ -32,6 +32,7 @@ from vmex.core.polish import (
     preconditioner_refresh_decision,
     _strong_residual_unscaled,
     _streaming_ruiz_scales,
+    strong_projection_diagnostics,
     strong_physical_residual,
     strong_root_rank,
     strong_root_residual,
@@ -520,12 +521,16 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
     assert runtime.radial_nodes.size > runtime.native.radial_basis.size
     assert runtime.theta.size >= 4 * int(np.max(np.abs(runtime.native.m))) + 5
     assert runtime.zeta.size == 1
-    np.testing.assert_allclose(
-        runtime.radial_fit @ radial_matrix,
-        np.eye(runtime.native.radial_basis.size),
-        rtol=2.0e-13,
-        atol=2.0e-13,
-    )
+    for mode, mode_m in enumerate(np.asarray(runtime.native.m)):
+        regularized_matrix = (
+            runtime.radial_nodes[:, None] ** abs(int(mode_m)) * radial_matrix
+        )
+        np.testing.assert_allclose(
+            runtime.radial_fit[mode] @ regularized_matrix,
+            np.eye(runtime.native.radial_basis.size),
+            rtol=5.0e-10,
+            atol=5.0e-10,
+        )
     low_endpoint = strong_root_residual(zero, runtime, 0.0)
     strong_endpoint = strong_root_residual(zero, runtime, 1.0)
     np.testing.assert_array_equal(low_endpoint, 0.0)
@@ -677,6 +682,18 @@ def test_structured_chart_uses_only_physical_layout_channels(small_strong_root):
     singular_values = jnp.linalg.svd(jacobian, compute_uv=False)
     rank = int(jnp.sum(singular_values > 1.0e-8 * singular_values[0]))
     assert rank == chart.size
+
+    diagnostics = strong_projection_diagnostics(zero, runtime, chart)
+    values = np.asarray(tuple(diagnostics))
+    assert np.all(np.isfinite(values))
+    assert diagnostics.sampled_rms > 0.0
+    assert diagnostics.unresolved_rms >= 0.0
+    assert diagnostics.unresolved_fraction >= 0.0
+    assert diagnostics.angular_unresolved_fraction >= 0.0
+    assert diagnostics.radial_fit_unresolved_fraction >= 0.0
+    assert diagnostics.radial_unresolved_fraction >= 0.0
+    assert diagnostics.helical_unresolved_fraction >= 0.0
+    assert diagnostics.equation_discarded_fraction < 1.0e-12
 
 
 def test_structured_chart_mode_blocks_recover_local_jacobian(small_strong_root):
