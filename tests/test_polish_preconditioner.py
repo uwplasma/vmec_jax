@@ -31,9 +31,11 @@ from vmex.core.polish import (
 )
 from vmex.core.polish_driver import (
     PolishConfig,
+    _arclength_to_target,
     _bordered_preconditioner,
     _branch_tangent,
     _build_mode_block_preconditioner,
+    _continuation_precondition,
     _low_inverse,
     _residual_evaluations,
     _supports_keyword,
@@ -57,11 +59,153 @@ def test_solvax_continuation_api_compatibility_helpers():
 
     assert not _supports_keyword(legacy_preconditioner, "parameter")
     assert _supports_keyword(parameterized_preconditioner, "parameter")
+    np.testing.assert_array_equal(
+        legacy_preconditioner(None, jnp.ones((2,)), None), jnp.ones((2,))
+    )
+    np.testing.assert_array_equal(
+        parameterized_preconditioner(None, jnp.ones((2,)), None, None),
+        jnp.ones((2,)),
+    )
     assert _residual_evaluations(
         SimpleNamespace(nonlinear_steps=3, residual_evaluations=9)
     ) == 9
     assert _residual_evaluations(SimpleNamespace(nonlinear_steps=3)) == 4
     assert _residual_evaluations(SimpleNamespace(steps=2)) == 3
+    assert not _supports_keyword(1, "parameter")
+
+
+def test_parameterized_continuation_preconditioner_switches_at_half(monkeypatch):
+    rhs = jnp.asarray([1.0, -2.0])
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._low_inverse", lambda value, runtime: 2.0 * value
+    )
+    block = SimpleNamespace(apply=lambda value, alpha, dtau: 3.0 * value)
+    np.testing.assert_array_equal(
+        _continuation_precondition(rhs, 0.25, 1.0, SimpleNamespace(), block),
+        2.0 * rhs,
+    )
+    np.testing.assert_array_equal(
+        _continuation_precondition(rhs, 0.75, 1.0, SimpleNamespace(), block),
+        3.0 * rhs,
+    )
+
+
+def test_arclength_crossing_runs_target_correction_and_counts_work(monkeypatch):
+    zero = jnp.zeros((2,))
+    target_vector = jnp.asarray([0.25, -0.5])
+
+    def corrector(
+        residual,
+        initial,
+        *,
+        tangent,
+        predictor,
+        config,
+        admissible,
+        precond,
+    ):
+        del residual, initial, tangent, config, precond
+        assert bool(admissible(*predictor))
+        return SimpleNamespace(
+            x=predictor,
+            steps=2,
+            linear_iterations=3,
+            residual_evaluations=4,
+            converged=True,
+            linear_converged=True,
+        )
+
+    def target(residual, initial, *, precond, admissible, config):
+        del residual, initial, config
+        assert bool(admissible(target_vector))
+        np.testing.assert_array_equal(precond(target_vector, target_vector, 1.0), target_vector)
+        return SimpleNamespace(
+            x=target_vector,
+            steps=5,
+            linear_iterations=6,
+            residual_evaluations=7,
+            converged=True,
+            linear_converged=True,
+        )
+
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._solvax_continuation_api",
+        lambda: (None, None, None, corrector, target),
+    )
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._ptc_config", lambda config: object()
+    )
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._branch_tangent",
+        lambda *args, **kwargs: (jnp.zeros_like(zero), jnp.asarray(1.0)),
+    )
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._bordered_preconditioner",
+        lambda *args, **kwargs: lambda state, rhs, dtau: rhs,
+    )
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._low_inverse", lambda rhs, runtime: rhs
+    )
+    monkeypatch.setattr(
+        "vmex.core.polish_driver.strong_root_residual",
+        lambda vector, runtime, alpha: vector + alpha,
+    )
+    result = _arclength_to_target(
+        zero,
+        0.95,
+        SimpleNamespace(),
+        PolishConfig(max_arclength_steps=1, arclength_step=0.1),
+        lambda vector, alpha: jnp.all(jnp.isfinite(vector)) & jnp.isfinite(alpha),
+        None,
+        None,
+    )
+    np.testing.assert_array_equal(result[0], target_vector)
+    assert result[1:] == (1.0, 1, 7, 9, 11)
+
+
+def test_bordered_tangent_uses_previous_orientation(monkeypatch):
+    zero = jnp.zeros((2,))
+    previous = (jnp.asarray([-1.0, -1.0]), jnp.asarray(-1.0))
+
+    def fake_gmres(operator, rhs, *, precond, **kwargs):
+        del kwargs
+        physical, normalization = operator(rhs)
+        assert physical.shape == zero.shape
+        assert np.isfinite(float(normalization))
+        for actual, expected in zip(
+            jax.tree.leaves(precond(rhs)), jax.tree.leaves(rhs), strict=True
+        ):
+            np.testing.assert_array_equal(actual, expected)
+        return SimpleNamespace(
+            x=(jnp.asarray([0.5, 0.25]), jnp.asarray(0.5)),
+            converged=True,
+            residual_norm=jnp.asarray(0.0),
+            iterations=1,
+        )
+
+    monkeypatch.setattr("vmex.core.polish_driver.gmres", fake_gmres)
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._bordered_preconditioner",
+        lambda *args, **kwargs: lambda state, rhs, dtau: rhs,
+    )
+    monkeypatch.setattr(
+        "vmex.core.polish_driver.strong_root_residual",
+        lambda vector, runtime, alpha: vector + alpha * jnp.ones_like(vector),
+    )
+    tangent = _branch_tangent(
+        zero,
+        0.5,
+        SimpleNamespace(),
+        PolishConfig(),
+        previous,
+        None,
+    )
+    np.testing.assert_allclose(
+        jnp.vdot(tangent[0], tangent[0]).real + tangent[1] ** 2,
+        1.0,
+        rtol=2.0e-13,
+    )
+    assert float(jnp.vdot(tangent[0], previous[0]) + tangent[1] * previous[1]) > 0.0
 
 
 def _tree_dot(left, right):
