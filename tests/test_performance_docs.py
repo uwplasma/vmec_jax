@@ -121,6 +121,44 @@ def test_polish_preconditioner_artifact_is_clean_and_certified() -> None:
         assert case["low_block_relative_residual"] < 1.0e-10
 
 
+def test_solovev_cross_code_certificates_are_clean_and_comparable() -> None:
+    names = ("vmex", "vmec2000", "vmecpp", "desc")
+    artifacts = {
+        name: json.loads(
+            (
+                ROOT
+                / "benchmarks"
+                / f"strong_certificate_solovev_{name}_m4.json"
+            ).read_text()
+        )
+        for name in names
+    }
+    reference_rho = artifacts["vmex"]["radial_profile"]["rho"]
+    for name, artifact in artifacts.items():
+        assert artifact["schema"] == "vmex.strong-certificate-benchmark/1"
+        assert artifact["measurement_dirty"] is False
+        assert len(artifact["radial_profile"]["rho"]) == 128
+        assert artifact["radial_profile"]["rho"] == reference_rho
+        assert len(
+            artifact["radial_profile"]["flux_surface_average_force_density"]
+        ) == len(reference_rho)
+        assert artifact["metrics"]["radial_refinement_difference"] < 1.0e-3
+        if name in ("vmec2000", "desc"):
+            assert artifact["external_source"]["success"] is True
+
+    normalized = {
+        name: artifact["metrics"]["normalized_l2"]
+        for name, artifact in artifacts.items()
+    }
+    assert normalized["vmex"] == pytest.approx(
+        normalized["vmecpp"], rel=2.0e-4
+    )
+    assert normalized["vmec2000"] == pytest.approx(
+        normalized["vmecpp"], rel=2.0e-7
+    )
+    assert normalized["desc"] < 0.2 * normalized["vmecpp"]
+
+
 def test_committed_reports_do_not_expose_personal_paths() -> None:
     """Release-facing text must remain portable between contributors."""
     text_suffixes = {".json", ".md", ".py", ".rst", ".toml"}
