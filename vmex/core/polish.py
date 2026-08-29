@@ -277,66 +277,71 @@ class PreconditionerRefreshDecision(NamedTuple):
 
 
 @dataclass(frozen=True, eq=False)
-class StrongRootLayout:
-    """Independent R/Z/lambda coordinates for the square strong root.
+class StrongRootGroup:
+    """One small independent ``(m, |n|)`` native-spline coordinate block."""
 
-    The R channel stores every active ``R_cos`` legacy degree of freedom.
-    The Z channel stores active ``Z_sin`` entries, with each constrained 3D
-    ``m=1,+/-n`` pair represented once as ``(z_+ + z_-)/sqrt(2)``.  Hence
-    packing and unpacking are exact transposes and no coordinate duplicate is
-    present in the square root system.  Lambda gauge/axis entries come from
-    the existing evolved-DOF mask and are absent structurally.
+    high_indices: np.ndarray
+    basis: Array
+    start: int
+    stop: int
+    m: int
+    abs_n: int
+
+
+def _flatten_high(correction: HighOrderCorrection) -> Array:
+    return jnp.concatenate(
+        tuple(jnp.ravel(jnp.asarray(getattr(correction, name))) for name in _FIELDS)
+    )
+
+
+def _unflatten_high(vector: Array, mnmax: int, nbasis: int) -> HighOrderCorrection:
+    vector = jnp.asarray(vector)
+    block = int(mnmax) * int(nbasis)
+    values = [
+        vector[index * block : (index + 1) * block].reshape((mnmax, nbasis))
+        for index in range(len(_FIELDS))
+    ]
+    return HighOrderCorrection(*values)
+
+
+@dataclass(frozen=True, eq=False)
+class StrongRootLayout:
+    """Independent native-spline coordinates for the square strong root.
+
+    Each small ``(m, |n|)`` block is the numerical image of the tested
+    ``prolong(restrict(.))`` map.  This removes fixed-edge, symmetry, gauge,
+    inactive-axis, and coupled 3-D ``m=1,+/-n`` coordinates without building
+    a global dense projector.  Packing and unpacking use orthonormal local SVD
+    bases and are therefore exact transposes.
     """
 
-    ns: int
     mnmax: int
-    r_indices: np.ndarray
-    z_indices: np.ndarray
-    z_weights: np.ndarray
-    l_indices: np.ndarray
+    nbasis: int
+    groups: tuple[StrongRootGroup, ...]
 
     @property
     def size(self) -> int:
-        return int(self.r_indices.size + self.z_indices.shape[0] + self.l_indices.size)
+        return 0 if not self.groups else int(self.groups[-1].stop)
 
-    def pack(self, tangent: SpectralState) -> Array:
-        """Project a legacy R/Z tangent onto independent reduced coordinates."""
-
-        r = jnp.ravel(jnp.asarray(tangent.R_cos))[jnp.asarray(self.r_indices)]
-        z_flat = jnp.ravel(jnp.asarray(tangent.Z_sin))
-        z = jnp.sum(
-            z_flat[jnp.asarray(self.z_indices)] * jnp.asarray(self.z_weights),
-            axis=1,
+    def pack(self, correction: HighOrderCorrection) -> Array:
+        flat = _flatten_high(correction)
+        return jnp.concatenate(
+            tuple(
+                jnp.asarray(group.basis).T
+                @ flat[jnp.asarray(group.high_indices)]
+                for group in self.groups
+            )
         )
-        lam = jnp.ravel(jnp.asarray(tangent.L_sin))[jnp.asarray(self.l_indices)]
-        return jnp.concatenate((r, z, lam))
 
-    def unpack(self, vector: Array) -> SpectralState:
-        """Lift independent reduced coordinates to a projected legacy tangent."""
-
+    def unpack(self, vector: Array) -> HighOrderCorrection:
         vector = jnp.asarray(vector)
         if vector.shape != (self.size,):
             raise ValueError(f"free vector has shape {vector.shape}; expected {(self.size,)}")
-        nr = int(self.r_indices.size)
-        r = jnp.zeros((self.ns * self.mnmax,), dtype=vector.dtype)
-        r = r.at[jnp.asarray(self.r_indices)].set(vector[:nr])
-        z = jnp.zeros_like(r)
-        nz = int(self.z_indices.shape[0])
-        z_values = vector[nr : nr + nz, None] * jnp.asarray(
-            self.z_weights, dtype=vector.dtype
-        )
-        z = z.at[jnp.asarray(self.z_indices).reshape(-1)].add(z_values.reshape(-1))
-        lam = jnp.zeros_like(r)
-        lam = lam.at[jnp.asarray(self.l_indices)].set(vector[nr + nz :])
-        zero = jnp.zeros((self.ns, self.mnmax), dtype=vector.dtype)
-        return SpectralState(
-            R_cos=r.reshape((self.ns, self.mnmax)),
-            R_sin=zero,
-            Z_cos=zero,
-            Z_sin=z.reshape((self.ns, self.mnmax)),
-            L_cos=zero,
-            L_sin=lam.reshape((self.ns, self.mnmax)),
-        )
+        flat = jnp.zeros((len(_FIELDS) * self.mnmax * self.nbasis,), dtype=vector.dtype)
+        for group in self.groups:
+            values = jnp.asarray(group.basis) @ vector[group.start : group.stop]
+            flat = flat.at[jnp.asarray(group.high_indices)].add(values)
+        return _unflatten_high(flat, self.mnmax, self.nbasis)
 
 
 @dataclass(frozen=True, eq=False)
@@ -355,7 +360,7 @@ class StrongRootRuntime:
     radial_fit: Array
     normalization_denominator: Array
     gauge_length: Array
-    strong_row_sign: Array
+    strong_block_sign: Array
     strong_scale: Array
     operator_balance: Array
     force_floor: float
@@ -483,57 +488,96 @@ def make_strong_root_layout(
     dof_mask: SpectralState,
     native: HighOrderEquilibriumState,
     *,
+    transfer: HighLowTransfer | None = None,
     lconm1: bool = True,
 ) -> StrongRootLayout:
-    """Eliminate inactive entries and constrained m=1 duplicate coordinates."""
+    """Build independent local native-spline coordinates.
 
-    r_mask = np.asarray(dof_mask.R_cos, dtype=bool)
-    z_mask = np.asarray(dof_mask.Z_sin, dtype=bool)
-    l_mask = np.asarray(dof_mask.L_sin, dtype=bool)
+    ``lconm1`` is retained for source compatibility; the supplied transfer is
+    the source of truth for that constraint and all other structural masks.
+    """
+
+    masks = {
+        name: np.asarray(getattr(dof_mask, name), dtype=bool)
+        for name in _FIELDS
+    }
+    expected_low_shape = masks["R_cos"].shape
     if (
-        r_mask.shape != z_mask.shape
-        or r_mask.shape != l_mask.shape
-        or r_mask.shape[1] != np.asarray(native.m).size
+        any(mask.shape != expected_low_shape for mask in masks.values())
+        or expected_low_shape[1] != np.asarray(native.m).size
     ):
         raise ValueError("dof mask and native mode layout must match")
-    ns, mnmax = r_mask.shape
-    r_indices = np.flatnonzero(r_mask.reshape(-1)).astype(np.int32)
+    del lconm1
+    if transfer is None:
+        raise ValueError("native strong-root layout requires a high/low transfer")
+    _, mnmax = expected_low_shape
+    nbasis = int(native.radial_basis.size)
     m = np.asarray(native.m, dtype=int)
     n = np.asarray(native.n, dtype=int)
-    mode_index = {(int(mm), int(nn)): index for index, (mm, nn) in enumerate(zip(m, n))}
-    groups: list[tuple[int, int]] = []
-    weights: list[tuple[float, float]] = []
-    paired: set[tuple[int, int]] = set()
-    root_two = np.sqrt(2.0)
-    for radial in range(ns):
-        for mode in range(mnmax):
-            if not z_mask[radial, mode] or (radial, mode) in paired:
-                continue
-            partner = mode_index.get((int(m[mode]), -int(n[mode])))
-            if (
-                lconm1
-                and int(m[mode]) == 1
-                and int(n[mode]) != 0
-                and partner is not None
-                and z_mask[radial, partner]
-            ):
-                first, second = sorted((mode, partner))
-                groups.append((radial * mnmax + first, radial * mnmax + second))
-                weights.append((1.0 / root_two, 1.0 / root_two))
-                paired.add((radial, first))
-                paired.add((radial, second))
-            else:
-                index = radial * mnmax + mode
-                groups.append((index, index))
-                weights.append((1.0, 0.0))
-                paired.add((radial, mode))
+    structurally_active = np.asarray(
+        _flatten_high(transfer.project_high(
+            HighOrderCorrection(*(
+                jnp.ones((mnmax, nbasis), dtype=jnp.float64)
+                for _ in _FIELDS
+            ))
+        )),
+        dtype=bool,
+    )
+    # The transfer owns the production low projector, while ``dof_mask`` is
+    # also an explicit validation input.  Retain only field/mode blocks with
+    # at least one evolved legacy sample so a stale or zero mask cannot create
+    # apparently free native coordinates.
+    low_active = np.stack(
+        tuple(np.any(masks[name], axis=0) for name in _FIELDS)
+    )
+    active = structurally_active & np.repeat(low_active.reshape(-1), nbasis)
+    block = mnmax * nbasis
+    groups: list[StrongRootGroup] = []
+    start = 0
+    for mode_key in sorted({(int(mm), abs(int(nn))) for mm, nn in zip(m, n)}):
+        mode_indices = np.flatnonzero(
+            (m == mode_key[0]) & (np.abs(n) == mode_key[1])
+        )
+        candidates = []
+        for field in range(len(_FIELDS)):
+            for mode in mode_indices:
+                base = field * block + int(mode) * nbasis
+                candidates.extend(base + np.arange(nbasis, dtype=np.int32))
+        candidates = np.asarray(candidates, dtype=np.int32)
+        candidates = candidates[active[candidates]]
+        if candidates.size == 0:
+            continue
+
+        def local_project(values):
+            flat = jnp.zeros((len(_FIELDS) * block,), dtype=values.dtype)
+            flat = flat.at[jnp.asarray(candidates)].set(values)
+            high = _unflatten_high(flat, mnmax, nbasis)
+            feasible = transfer.prolong(transfer.restrict(high))
+            return _flatten_high(feasible)[jnp.asarray(candidates)]
+
+        identity = jnp.eye(candidates.size, dtype=jnp.float64)
+        # vmap rows are input probes; transpose so columns are image vectors.
+        image = np.asarray(jax.vmap(local_project)(identity)).T
+        left, singular, _ = np.linalg.svd(image, full_matrices=False)
+        if singular.size == 0:
+            continue
+        rank = int(np.sum(singular > 1.0e-10 * singular[0]))
+        if rank == 0:
+            continue
+        stop = start + rank
+        groups.append(StrongRootGroup(
+            high_indices=candidates,
+            basis=jnp.asarray(left[:, :rank]),
+            start=start,
+            stop=stop,
+            m=mode_key[0],
+            abs_n=mode_key[1],
+        ))
+        start = stop
     return StrongRootLayout(
-        ns=ns,
         mnmax=mnmax,
-        r_indices=r_indices,
-        z_indices=np.asarray(groups, dtype=np.int32).reshape((-1, 2)),
-        z_weights=np.asarray(weights, dtype=float).reshape((-1, 2)),
-        l_indices=np.flatnonzero(l_mask.reshape(-1)).astype(np.int32),
+        nbasis=nbasis,
+        groups=tuple(groups),
     )
 
 
@@ -565,8 +609,7 @@ def _strong_residual_unscaled(
     from .strong_force import _RZL, evaluate_strong_force
 
     native = runtime.native if native is None else native
-    low_tangent = runtime.layout.unpack(vector)
-    correction = runtime.transfer.prolong(low_tangent)
+    correction = runtime.layout.unpack(vector)
     state = apply_high_order_correction(native, correction)
     radial = jnp.asarray(runtime.radial_nodes)
     theta = jnp.asarray(runtime.theta)
@@ -624,8 +667,17 @@ def _strong_residual_unscaled(
         L_cos=zero,
         L_sin=helical_coefficients.T,
     )
-    packed = runtime.layout.pack(runtime.transfer.restrict(force_coefficients))
-    return packed * jnp.asarray(runtime.strong_row_sign)
+    signs = jnp.asarray(runtime.strong_block_sign)
+    oriented = replace(
+        force_coefficients,
+        R_cos=force_coefficients.R_cos * signs[0],
+        R_sin=force_coefficients.R_sin * signs[0],
+        Z_cos=force_coefficients.Z_cos * signs[1],
+        Z_sin=force_coefficients.Z_sin * signs[1],
+        L_cos=force_coefficients.L_cos * signs[2],
+        L_sin=force_coefficients.L_sin * signs[2],
+    )
+    return runtime.layout.pack(oriented)
 
 
 @partial(jax.jit, static_argnames=("runtime",))
@@ -637,8 +689,10 @@ def strong_root_residual(
     """Square residual homotopy from legacy raw force to strong force."""
 
     vector = jnp.asarray(vector)
-    low_tangent = runtime.layout.unpack(vector)
-    low = runtime.layout.pack(runtime.low_preconditioner.residual(low_tangent))
+    high_tangent = runtime.layout.unpack(vector)
+    low_tangent = runtime.transfer.restrict(high_tangent)
+    low_force = runtime.low_preconditioner.residual(low_tangent)
+    low = runtime.layout.pack(runtime.transfer.prolong(low_force))
     strong = _strong_residual_unscaled(vector, runtime) / jnp.asarray(runtime.strong_scale)
     alpha = jnp.asarray(alpha, dtype=vector.dtype)
     return low + alpha * (strong - low)
@@ -684,6 +738,7 @@ def make_strong_root_runtime(
     layout = make_strong_root_layout(
         dof_mask,
         native,
+        transfer=transfer,
         lconm1=transfer.lconm1,
     )
     if layout.size == 0:
@@ -757,7 +812,7 @@ def make_strong_root_runtime(
         radial_fit=jnp.asarray(radial_fit),
         normalization_denominator=normalization_denominator,
         gauge_length=gauge_length,
-        strong_row_sign=jnp.ones((layout.size,)),
+        strong_block_sign=jnp.ones((3,)),
         strong_scale=jnp.asarray(1.0),
         operator_balance=jnp.asarray(1.0),
         force_floor=float(force_floor),
@@ -768,26 +823,12 @@ def make_strong_root_runtime(
     scaled = replace(provisional, strong_scale=base_scale)
     zero = jnp.zeros((layout.size,), dtype=rms.dtype)
 
-    block_edges = (
-        0,
-        int(layout.r_indices.size),
-        int(layout.r_indices.size + layout.z_indices.shape[0]),
-        layout.size,
-    )
-
-    @jax.jit
-    def strong_linearized(value: Array) -> Array:
-        _, response = jax.jvp(
-            lambda vector: _strong_residual_unscaled(vector, scaled) / base_scale,
-            (zero,),
-            (value,),
-        )
-        return response
-
     @jax.jit
     def low_solve(value: Array) -> Array:
-        tangent = layout.unpack(value)
-        return layout.pack(low_preconditioner.solve_scaled(tangent))
+        high = layout.unpack(value)
+        low = transfer.restrict(high)
+        solved = low_preconditioner.solve_scaled(low)
+        return layout.pack(transfer.prolong(solved))
 
     # A sign change cannot alter the strong root, but it changes the real
     # generalized spectrum of the low-to-strong pencil.  Select the three
@@ -797,32 +838,50 @@ def make_strong_root_runtime(
 
     from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, eigs
 
-    strong_linearized(zero).block_until_ready()
+    component_runtimes = tuple(
+        replace(
+            scaled,
+            strong_block_sign=jnp.eye(3, dtype=rms.dtype)[index],
+        )
+        for index in range(3)
+    )
+
+    @jax.jit
+    def strong_components(value: Array) -> Array:
+        return jnp.stack(tuple(
+            jax.jvp(
+                lambda vector: _strong_residual_unscaled(
+                    vector, component_runtime
+                ) / base_scale,
+                (zero,),
+                (value,),
+            )[1]
+            for component_runtime in component_runtimes
+        ))
+
+    strong_components(zero).block_until_ready()
     low_solve(zero).block_until_ready()
     eigenpairs = min(int(orientation_eigenpairs), max(1, layout.size - 2))
-    dense_strong = None
+    dense_components = None
     if layout.size <= 64:
-        dense_strong = jax.jacfwd(strong_linearized)(zero)
+        dense_components = jax.jacfwd(strong_components)(zero)
     initial_arnoldi = np.linspace(-0.5, 0.7, layout.size, dtype=float)
     initial_arnoldi /= np.linalg.norm(initial_arnoldi)
     best_score = -np.inf
-    best_row_sign = np.ones((layout.size,), dtype=float)
+    best_block_sign = np.ones((3,), dtype=float)
     for signs in product((-1.0, 1.0), repeat=3):
-        row_sign = np.concatenate(
-            [
-                np.full((stop - start,), signs[index], dtype=float)
-                for index, (start, stop) in enumerate(
-                    zip(block_edges[:-1], block_edges[1:])
-                )
-            ]
-        )
+        block_sign = jnp.asarray(signs, dtype=rms.dtype)
 
         def matvec(value: np.ndarray) -> np.ndarray:
-            response = strong_linearized(jnp.asarray(value)) * jnp.asarray(row_sign)
+            response = jnp.tensordot(
+                block_sign,
+                strong_components(jnp.asarray(value)),
+                axes=1,
+            )
             return np.asarray(jax.device_get(low_solve(response)))
 
-        if dense_strong is not None:
-            oriented = dense_strong * jnp.asarray(row_sign)[:, None]
+        if dense_components is not None:
+            oriented = jnp.tensordot(block_sign, dense_components, axes=1)
             matrix = jax.vmap(low_solve, in_axes=1, out_axes=1)(oriented)
             values = np.linalg.eigvals(np.asarray(jax.device_get(matrix)))
         else:
@@ -845,9 +904,11 @@ def make_strong_root_runtime(
             score = float(np.min(np.real(values)))
             if score > best_score:
                 best_score = score
-                best_row_sign = row_sign
-    strong_row_sign = jnp.asarray(best_row_sign, dtype=rms.dtype)
-    scaled = replace(scaled, strong_row_sign=strong_row_sign)
+                best_block_sign = np.asarray(signs, dtype=float)
+    scaled = replace(
+        scaled,
+        strong_block_sign=jnp.asarray(best_block_sign, dtype=rms.dtype),
+    )
 
     def preconditioned_strong(value: Array) -> Array:
         _, response = jax.jvp(
@@ -855,8 +916,7 @@ def make_strong_root_runtime(
             (zero,),
             (value,),
         )
-        low_response = layout.unpack(response)
-        return layout.pack(low_preconditioner.solve_scaled(low_response))
+        return low_solve(response)
 
     direction = jnp.linspace(-0.5, 0.7, layout.size, dtype=rms.dtype)
     direction = direction / jnp.linalg.norm(direction)

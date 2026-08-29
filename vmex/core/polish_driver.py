@@ -231,19 +231,10 @@ def _mode_block_indices(
 ) -> tuple[jax.Array, ...]:
     """Group reduced coordinates into bounded neighboring-mode bands."""
 
-    layout = runtime.layout
-    m = np.asarray(runtime.native.m, dtype=int)
-    n = np.asarray(runtime.native.n, dtype=int)
-    mnmax = int(layout.mnmax)
-    mode_columns = [
-        *(np.asarray(layout.r_indices, dtype=int) % mnmax),
-        *(np.asarray(layout.z_indices, dtype=int)[:, 0] % mnmax),
-        *(np.asarray(layout.l_indices, dtype=int) % mnmax),
-    ]
     groups: dict[tuple[int, int], list[int]] = {}
-    for position, mode in enumerate(mode_columns):
-        key = (abs(int(n[mode])), int(m[mode]) // int(poloidal_bandwidth))
-        groups.setdefault(key, []).append(position)
+    for group in runtime.layout.groups:
+        key = (int(group.abs_n), int(group.m) // int(poloidal_bandwidth))
+        groups.setdefault(key, []).extend(range(group.start, group.stop))
     return tuple(
         jnp.asarray(groups[key], dtype=jnp.int32)
         for key in sorted(groups)
@@ -302,8 +293,7 @@ def _continuation_precondition(
 
 
 def _corrected_state(vector: jax.Array, runtime: StrongRootRuntime):
-    low = runtime.layout.unpack(vector)
-    correction = runtime.transfer.prolong(low)
+    correction = runtime.layout.unpack(vector)
     return apply_high_order_correction(runtime.native, correction)
 
 
@@ -323,9 +313,10 @@ def _minimum_signed_jacobian(vector: jax.Array, runtime: StrongRootRuntime) -> j
 def _low_inverse(rhs: jax.Array, runtime: StrongRootRuntime) -> jax.Array:
     """Invert the row-scaled low endpoint in reduced vector coordinates."""
 
-    low_rhs = runtime.layout.unpack(rhs)
+    high_rhs = runtime.layout.unpack(rhs)
+    low_rhs = runtime.transfer.restrict(high_rhs)
     solution = runtime.low_preconditioner.solve_scaled(low_rhs)
-    return runtime.layout.pack(solution)
+    return runtime.layout.pack(runtime.transfer.prolong(solution))
 
 
 def _ptc_config(config: PolishConfig, *, residual_scale: float) -> Any:
@@ -814,7 +805,6 @@ def polish_legacy_solution(
     started = perf_counter()
     from . import implicit
     from .input import VmecInput
-    from .radial_basis import BSplineBasis
     from .strong_force import certify_strong_force, lift_high_order_state
 
     if not isinstance(source, VmecInput):
@@ -869,22 +859,7 @@ def polish_legacy_solution(
             report,
             jnp.zeros((0,), dtype=jnp.asarray(refined_state.R_cos).dtype),
         )
-    # The current square system is expressed in every legacy radial degree of
-    # freedom. Keep an equal-size spline chart here until the native-spline
-    # coordinate reduction lands; the independent oracle/import path uses the
-    # overdetermined default fit and must not inherit this compatibility chart.
-    spans = max(1, int(resolution.ns) - int(config.radial_degree))
-    polish_basis = BSplineBasis.clamped(
-        np.linspace(0.0, 1.0, spans + 1),
-        degree=config.radial_degree,
-        quadrature_order=config.radial_degree + 3,
-    )
-    native = lift_high_order_state(
-        refined_state,
-        legacy_runtime,
-        radial_basis=polish_basis,
-        degree=config.radial_degree,
-    )
+    native = certified_native
     low_preconditioner = build_low_order_preconditioner(
         native,
         params,
@@ -893,7 +868,11 @@ def polish_legacy_solution(
         dof_mask,
     )
     runtime = make_strong_root_runtime(native, low_preconditioner, dof_mask)
-    return polish_strong_root(runtime, config=config)
+    return polish_strong_root(
+        runtime,
+        config=config,
+        initial_certificate=initial_certificate,
+    )
 
 
 __all__ = [

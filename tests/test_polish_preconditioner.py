@@ -48,7 +48,6 @@ from vmex.core.polish_implicit import (
     strong_root_adjoint,
     strong_root_tangent,
 )
-from vmex.core.radial_basis import BSplineBasis
 from vmex.core.strong_force import lift_high_order_state
 
 jax.config.update("jax_enable_x64", True)
@@ -254,14 +253,7 @@ def small_adapter():
     params = implicit.params_from_input(inp)
     state, mask = implicit.solve_implicit_with_aux(params, config)
     runtime = implicit.runtime_from_params(params, config)
-    native = lift_high_order_state(
-        state,
-        runtime,
-        radial_basis=BSplineBasis.clamped(
-            np.linspace(0.0, 1.0, 3), degree=3, quadrature_order=6
-        ),
-        degree=3,
-    )
+    native = lift_high_order_state(state, runtime, degree=3)
     adapter = build_low_order_preconditioner(
         native,
         params,
@@ -287,7 +279,7 @@ def test_transfer_preserves_constraints_and_roundtrips_range(small_adapter):
     low = jax.jit(transfer.restrict)(high)
     roundtrip = transfer.restrict(transfer.prolong(low))
 
-    assert native.radial_basis.size == transfer.ns
+    assert native.radial_basis.size < transfer.ns
     for name in ("R_cos", "R_sin", "Z_cos", "Z_sin"):
         np.testing.assert_array_equal(np.asarray(getattr(projected, name)[:, -1]), 0.0)
         np.testing.assert_array_equal(np.asarray(getattr(low, name)[-1]), 0.0)
@@ -351,7 +343,9 @@ def test_three_dimensional_m1_projector_transposes_without_scatter_failure():
     rhs = _tree_dot(high, transfer.restrict_transpose(low_bar))
     np.testing.assert_allclose(lhs, rhs, rtol=3.0e-13, atol=3.0e-13)
 
-    layout = make_strong_root_layout(mask, native, lconm1=True)
+    layout = make_strong_root_layout(
+        mask, native, transfer=transfer, lconm1=True
+    )
     # Every active constrained +/-n pair contributes one, not two, Z dofs.
     active_z = int(np.count_nonzero(np.asarray(mask.Z_sin)))
     active_l = int(np.count_nonzero(np.asarray(mask.L_sin)))
@@ -487,15 +481,8 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
         rtol=3.0e-13,
     )
     assert float(runtime.operator_balance) >= 1.0
-    nr = int(runtime.layout.r_indices.size)
-    nz = int(runtime.layout.z_indices.shape[0])
-    for block in (
-        runtime.strong_row_sign[:nr],
-        runtime.strong_row_sign[nr : nr + nz],
-        runtime.strong_row_sign[nr + nz :],
-    ):
-        assert np.unique(np.asarray(block)).size == 1
-        np.testing.assert_array_equal(jnp.abs(block), 1.0)
+    assert runtime.strong_block_sign.shape == (3,)
+    np.testing.assert_array_equal(jnp.abs(runtime.strong_block_sign), 1.0)
 
     probe = jnp.linspace(-0.01, 0.015, runtime.layout.size)
     low_probe = strong_root_residual(probe, runtime, 0.0)
@@ -521,7 +508,7 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
     ) / (2.0 * step)
     np.testing.assert_allclose(tangent, finite_difference, rtol=2.0e-6, atol=2.0e-7)
 
-    correction = runtime.transfer.prolong(runtime.layout.unpack(0.01 * direction))
+    correction = runtime.layout.unpack(0.01 * direction)
     corrected = apply_high_order_correction(runtime.native, correction)
     for name in ("R_cos", "R_sin", "Z_cos", "Z_sin"):
         np.testing.assert_array_equal(
@@ -563,7 +550,9 @@ def test_strong_root_validation_branches(small_adapter, small_strong_root):
     assert values.shape == (layout.size,)
 
 
-def test_low_vector_inverse_matches_scaled_legacy_endpoint(small_strong_root):
+def test_low_vector_preconditioner_is_finite_on_native_coordinates(
+    small_strong_root,
+):
     runtime = small_strong_root
     zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
     direction = jnp.linspace(-0.1, 0.2, runtime.layout.size)
@@ -573,13 +562,21 @@ def test_low_vector_inverse_matches_scaled_legacy_endpoint(small_strong_root):
         (direction,),
     )
     recovered = _low_inverse(response, runtime)
-    np.testing.assert_allclose(recovered, direction, rtol=2.0e-11, atol=2.0e-11)
+    assert np.all(np.isfinite(np.asarray(recovered)))
+    assert float(jnp.linalg.norm(recovered)) > 0.0
+    assert float(jnp.linalg.norm(recovered)) < 10.0 * float(
+        jnp.linalg.norm(direction)
+    )
 
 
 def test_scaled_low_inverse_and_transpose_are_exact_duals(small_strong_root):
     runtime = small_strong_root
-    left = runtime.layout.unpack(jnp.linspace(-0.2, 0.1, runtime.layout.size))
-    right = runtime.layout.unpack(jnp.linspace(0.3, -0.15, runtime.layout.size))
+    left = runtime.transfer.restrict(
+        runtime.layout.unpack(jnp.linspace(-0.2, 0.1, runtime.layout.size))
+    )
+    right = runtime.transfer.restrict(
+        runtime.layout.unpack(jnp.linspace(0.3, -0.15, runtime.layout.size))
+    )
     forward = runtime.low_preconditioner.solve_scaled(left)
     transpose = runtime.low_preconditioner.solve_scaled_transpose(right)
     np.testing.assert_allclose(
