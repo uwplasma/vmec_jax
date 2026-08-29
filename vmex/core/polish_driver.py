@@ -9,6 +9,7 @@ certificate.  No optimizer or residual-norm minimization is used.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from inspect import signature
 from time import perf_counter
 from typing import Any, Literal, NamedTuple
 
@@ -57,6 +58,22 @@ def _solvax_continuation_api() -> tuple[Any, ...]:
         pseudo_arclength_corrector,
         pseudo_transient_continuation,
     )
+
+
+def _supports_keyword(function: Any, keyword: str) -> bool:
+    """Return whether an installed SOLVAX callable exposes a new keyword."""
+
+    try:
+        return keyword in signature(function).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _residual_evaluations(result: Any) -> int:
+    """Read exact work accounting, with a conservative pre-0.19 fallback."""
+
+    nonlinear_steps = getattr(result, "nonlinear_steps", getattr(result, "steps", 0))
+    return int(getattr(result, "residual_evaluations", nonlinear_steps + 1))
 
 
 @dataclass(frozen=True)
@@ -468,6 +485,15 @@ def _arclength_to_target(
             vector + config.arclength_step * tangent[0],
             jnp.asarray(alpha) + config.arclength_step * tangent[1],
         )
+        corrector_kwargs = (
+            {
+                "precond": _bordered_preconditioner(
+                    runtime, tangent, block_preconditioner
+                )
+            }
+            if _supports_keyword(pseudo_arclength_corrector, "precond")
+            else {}
+        )
         corrected = pseudo_arclength_corrector(
             lambda value, parameter: strong_root_residual(
                 value, runtime, parameter
@@ -477,13 +503,11 @@ def _arclength_to_target(
             predictor=predictor,
             config=nonlinear,
             admissible=lambda value, parameter: admissible(value, parameter),
-            precond=_bordered_preconditioner(
-                runtime, tangent, block_preconditioner
-            ),
+            **corrector_kwargs,
         )
         total_nonlinear += int(corrected.steps)
         total_linear += int(corrected.linear_iterations)
-        total_evaluations += int(corrected.residual_evaluations)
+        total_evaluations += _residual_evaluations(corrected)
         if not bool(corrected.converged) or not bool(corrected.linear_converged):
             return vector, alpha, step, total_nonlinear, total_linear, total_evaluations
         previous_alpha = alpha
@@ -505,7 +529,7 @@ def _arclength_to_target(
             )
             total_nonlinear += int(target.steps)
             total_linear += int(target.linear_iterations)
-            total_evaluations += int(target.residual_evaluations)
+            total_evaluations += _residual_evaluations(target)
             if bool(target.converged) and bool(target.linear_converged):
                 return (
                     target.x,
@@ -605,7 +629,7 @@ def polish_strong_root(
     )
     nonlinear_iterations = int(endpoint.steps)
     linear_iterations = int(endpoint.linear_iterations)
-    residual_evaluations = int(endpoint.residual_evaluations)
+    residual_evaluations = _residual_evaluations(endpoint)
     steps: tuple[Any, ...] = ()
     arclength_steps = 0
     vector = endpoint.x
@@ -623,6 +647,9 @@ def polish_strong_root(
         continuation_preconditioners = (
             {"precond": precondition}
             if block_preconditioner is None
+            or not _supports_keyword(
+                adaptive_continuation, "parameterized_precond"
+            )
             else {
                 "parameterized_precond": (
                     lambda state, rhs, dtau, parameter: _continuation_precondition(
@@ -651,7 +678,7 @@ def polish_strong_root(
         vector, alpha = continuation.x, continuation.alpha
         nonlinear_iterations += sum(stage.nonlinear_steps for stage in steps)
         linear_iterations += sum(stage.linear_iterations for stage in steps)
-        residual_evaluations += sum(stage.residual_evaluations for stage in steps)
+        residual_evaluations += sum(_residual_evaluations(stage) for stage in steps)
         converged = continuation.converged
         reason = "strong-root" if converged else "continuation-stalled"
         if not converged and config.use_pseudo_arclength:
