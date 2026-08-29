@@ -103,21 +103,27 @@ def _add_correction(
 
 
 def _reduced_low_inverse(rhs: jax.Array, runtime: StrongRootRuntime) -> jax.Array:
-    high_rhs = runtime.layout.unpack(rhs)
+    high_rhs = runtime.layout.unpack(
+        jnp.asarray(rhs) / jnp.asarray(runtime.equation_scale)
+    )
     low_rhs = runtime.transfer.restrict(high_rhs)
     solved = runtime.low_preconditioner.solve_scaled(low_rhs)
-    return runtime.layout.pack(runtime.transfer.prolong(solved))
+    return runtime.layout.pack(runtime.transfer.prolong(solved)) / jnp.asarray(
+        runtime.coordinate_scale
+    )
 
 
 def _reduced_low_inverse_transpose(
     rhs: jax.Array,
     runtime: StrongRootRuntime,
 ) -> jax.Array:
-    high_rhs = runtime.layout.unpack(rhs)
+    high_rhs = runtime.layout.unpack(
+        jnp.asarray(rhs) / jnp.asarray(runtime.coordinate_scale)
+    )
     low_rhs = runtime.transfer.prolong_transpose(high_rhs)
     solved = runtime.low_preconditioner.solve_scaled_transpose(low_rhs)
     high = runtime.transfer.restrict_transpose(solved)
-    return runtime.layout.pack(high)
+    return runtime.layout.pack(high) / jnp.asarray(runtime.equation_scale)
 
 
 def _linear_report(operator, rhs, solution, config: PolishLinearConfig):
@@ -222,7 +228,9 @@ def strong_root_tangent(
         config,
         "tangent",
     )
-    high_response = runtime.layout.unpack(response)
+    high_response = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * response
+    )
     return PolishTangentResult(
         native_tangent=_add_correction(native_tangent, high_response),
         correction_tangent=response,
@@ -258,7 +266,9 @@ def strong_root_adjoint(
             for name in ("R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin")
         }
     )
-    reduced_cotangent = runtime.layout.pack(high_cotangent)
+    reduced_cotangent = jnp.asarray(runtime.coordinate_scale) * runtime.layout.pack(
+        high_cotangent
+    )
     equation_adjoint, report = _solve_linear(
         transpose_operator,
         reduced_cotangent,
@@ -292,7 +302,9 @@ def _implicit_polished_leaves(
     del config, preconditioner
     native = jax.tree.unflatten(jax.tree.structure(runtime.native), native_leaves)
     correction = jax.lax.stop_gradient(jnp.asarray(correction))
-    high = runtime.layout.unpack(correction)
+    high = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * correction
+    )
     return tuple(jax.tree.leaves(_add_correction(native, high)))
 
 

@@ -214,7 +214,9 @@ def _continuation_precondition(
 
 
 def _corrected_state(vector: jax.Array, runtime: StrongRootRuntime):
-    correction = runtime.layout.unpack(vector)
+    correction = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * jnp.asarray(vector)
+    )
     return apply_high_order_correction(runtime.native, correction)
 
 
@@ -234,10 +236,14 @@ def _minimum_signed_jacobian(vector: jax.Array, runtime: StrongRootRuntime) -> j
 def _low_inverse(rhs: jax.Array, runtime: StrongRootRuntime) -> jax.Array:
     """Invert the row-scaled low endpoint in reduced vector coordinates."""
 
-    high_rhs = runtime.layout.unpack(rhs)
+    high_rhs = runtime.layout.unpack(
+        jnp.asarray(rhs) / jnp.asarray(runtime.equation_scale)
+    )
     low_rhs = runtime.transfer.restrict(high_rhs)
     solution = runtime.low_preconditioner.solve_scaled(low_rhs)
-    return runtime.layout.pack(runtime.transfer.prolong(solution))
+    return runtime.layout.pack(runtime.transfer.prolong(solution)) / jnp.asarray(
+        runtime.coordinate_scale
+    )
 
 
 def _ptc_config(config: PolishConfig, *, residual_scale: float) -> Any:

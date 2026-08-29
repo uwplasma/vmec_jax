@@ -27,6 +27,7 @@ from vmex.core.polish import (
     make_strong_root_runtime,
     preconditioner_quality,
     preconditioner_refresh_decision,
+    _streaming_ruiz_scales,
     strong_root_rank,
     strong_root_residual,
 )
@@ -225,6 +226,19 @@ def _tree_dot(left, right):
 
 def _tree_norm(value) -> float:
     return float(jnp.sqrt(_tree_dot(value, value)))
+
+
+def test_streaming_equilibration_improves_conditioning_without_dropping_dofs():
+    matrix = jnp.asarray([[1.0e-8, 0.0], [0.0, 2.0]])
+    rows, columns = _streaming_ruiz_scales(
+        lambda vector: matrix @ vector,
+        jnp.zeros((2,)),
+    )
+    balanced = rows[:, None] * np.asarray(matrix) * columns[None, :]
+    assert np.all(rows > 0.0)
+    assert np.all(columns > 0.0)
+    assert np.linalg.matrix_rank(balanced) == 2
+    assert np.linalg.cond(balanced) < 1.01
 
 
 def _random_like(value, seed: int):
@@ -482,6 +496,10 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
         rtol=3.0e-13,
     )
     assert float(runtime.operator_balance) >= 1.0
+    assert runtime.coordinate_scale.shape == zero.shape
+    assert runtime.equation_scale.shape == zero.shape
+    assert np.all(np.asarray(runtime.coordinate_scale) > 0.0)
+    assert np.all(np.asarray(runtime.equation_scale) > 0.0)
     assert runtime.strong_block_sign.shape == (3,)
     np.testing.assert_array_equal(jnp.abs(runtime.strong_block_sign), 1.0)
 

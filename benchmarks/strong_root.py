@@ -96,7 +96,8 @@ def main() -> None:
     rss_after_runtime = _peak_rss_mib()
     zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
     initial_low_norm = float(jnp.linalg.norm(strong_root_residual(zero, runtime, 0.0)))
-    direction = jnp.linspace(-0.2, 0.3, runtime.layout.size)
+    physical_direction = jnp.linspace(-0.2, 0.3, runtime.layout.size)
+    direction = physical_direction / jnp.asarray(runtime.coordinate_scale)
     residual = jax.jit(lambda value: strong_root_residual(value, runtime, 1.0))
     jvp = jax.jit(
         lambda value: jax.jvp(residual, (value,), (direction,))[1]
@@ -142,6 +143,14 @@ def main() -> None:
         "initial_scaled_residual_norm": float(jnp.linalg.norm(initial)),
         "initial_low_residual_norm": initial_low_norm,
         "operator_balance": float(runtime.operator_balance),
+        "coordinate_scale_range": [
+            float(jnp.min(runtime.coordinate_scale)),
+            float(jnp.max(runtime.coordinate_scale)),
+        ],
+        "equation_scale_range": [
+            float(jnp.min(runtime.equation_scale)),
+            float(jnp.max(runtime.equation_scale)),
+        ],
         "strong_block_sign": np.asarray(runtime.strong_block_sign).tolist(),
         "jvp_relative_error": jvp_relative_error,
         "rank": rank,

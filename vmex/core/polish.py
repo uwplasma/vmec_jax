@@ -352,6 +352,8 @@ class StrongRootRuntime:
     transfer: HighLowTransfer
     low_preconditioner: LowOrderPreconditioner
     layout: StrongRootLayout
+    coordinate_scale: Array
+    equation_scale: Array
     radial_nodes: Array
     theta: Array
     zeta: Array
@@ -418,7 +420,11 @@ class StrongModeBlockPreconditioner:
             if transpose:
                 matrix = matrix.T
             scale = jnp.maximum(jnp.linalg.norm(matrix, ord=jnp.inf), 1.0)
-            regularization = 32.0 * jnp.finfo(rhs.dtype).eps * scale
+            regularization = jnp.where(
+                inverse_dtau > 0.0,
+                32.0 * jnp.finfo(rhs.dtype).eps * scale,
+                0.0,
+            )
             shifted = matrix + (
                 inverse_dtau + regularization
             ) * jnp.eye(matrix.shape[0], dtype=rhs.dtype)
@@ -669,7 +675,9 @@ def _strong_residual_unscaled(
     from .strong_force import _RZL, evaluate_strong_force
 
     native = runtime.native if native is None else native
-    correction = runtime.layout.unpack(vector)
+    correction = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * jnp.asarray(vector)
+    )
     state = apply_high_order_correction(native, correction)
     radial = jnp.asarray(runtime.radial_nodes)
     theta = jnp.asarray(runtime.theta)
@@ -737,7 +745,7 @@ def _strong_residual_unscaled(
         L_cos=force_coefficients.L_cos * signs[2],
         L_sin=force_coefficients.L_sin * signs[2],
     )
-    return runtime.layout.pack(oriented)
+    return jnp.asarray(runtime.equation_scale) * runtime.layout.pack(oriented)
 
 
 @partial(jax.jit, static_argnames=("runtime",))
@@ -749,10 +757,14 @@ def strong_root_residual(
     """Square residual homotopy from legacy raw force to strong force."""
 
     vector = jnp.asarray(vector)
-    high_tangent = runtime.layout.unpack(vector)
+    high_tangent = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * vector
+    )
     low_tangent = runtime.transfer.restrict(high_tangent)
     low_force = runtime.low_preconditioner.residual(low_tangent)
-    low = runtime.layout.pack(runtime.transfer.prolong(low_force))
+    low = jnp.asarray(runtime.equation_scale) * runtime.layout.pack(
+        runtime.transfer.prolong(low_force)
+    )
     strong = _strong_residual_unscaled(vector, runtime) / jnp.asarray(runtime.strong_scale)
     alpha = jnp.asarray(alpha, dtype=vector.dtype)
     return low + alpha * (strong - low)
@@ -775,6 +787,46 @@ def strong_root_residual_at_native(
     vector = jnp.asarray(vector)
     strong = _strong_residual_unscaled(vector, runtime, native)
     return strong / jnp.asarray(runtime.strong_scale)
+
+
+def _streaming_ruiz_scales(
+    residual: Callable[[Array], Array],
+    zero: Array,
+    *,
+    iterations: int = 6,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Equilibrate global row/column 2-norms without retaining a Jacobian."""
+
+    _, jvp = jax.linearize(residual, zero)
+    apply_jvp = jax.jit(jvp)
+
+    size = int(np.asarray(zero).size)
+    dtype = np.asarray(zero).dtype
+    rows = np.ones((size,), dtype=float)
+    columns = np.ones((size,), dtype=float)
+    tiny = np.finfo(float).tiny
+    limit = 1.0e12
+    for _ in range(int(iterations)):
+        row_squared = np.zeros((size,), dtype=float)
+        column_norm = np.zeros((size,), dtype=float)
+        for index in range(size):
+            direction = np.zeros((size,), dtype=dtype)
+            direction[index] = columns[index]
+            response = rows * np.asarray(apply_jvp(jnp.asarray(direction)))
+            row_squared += response**2
+            column_norm[index] = np.linalg.norm(response)
+        row_norm = np.sqrt(row_squared)
+        row_floor = max(
+            1.0e-14 * float(np.max(row_norm, initial=0.0)), tiny
+        )
+        column_floor = max(
+            1.0e-14 * float(np.max(column_norm, initial=0.0)), tiny
+        )
+        rows *= 1.0 / np.sqrt(np.maximum(row_norm, row_floor))
+        columns *= 1.0 / np.sqrt(np.maximum(column_norm, column_floor))
+        rows = np.clip(rows, 1.0 / limit, limit)
+        columns = np.clip(columns, 1.0 / limit, limit)
+    return np.clip(rows, 1.0 / limit, limit), np.clip(columns, 1.0 / limit, limit)
 
 
 def make_strong_root_runtime(
@@ -864,6 +916,8 @@ def make_strong_root_runtime(
         transfer=transfer,
         low_preconditioner=low_preconditioner,
         layout=layout,
+        coordinate_scale=jnp.ones((layout.size,)),
+        equation_scale=jnp.ones((layout.size,)),
         radial_nodes=jnp.asarray(radial_nodes),
         theta=jnp.asarray(theta_grid),
         zeta=jnp.asarray(zeta_grid),
@@ -877,18 +931,41 @@ def make_strong_root_runtime(
         operator_balance=jnp.asarray(1.0),
         force_floor=float(force_floor),
     )
-    initial = _strong_residual_unscaled(jnp.zeros((layout.size,)), provisional)
+    # Stream exact global row/column 2-norms through one compiled forward JVP.
+    # This captures cross-mode coupling with O(n) memory: no production-scale
+    # dense Jacobian is retained, no direction is dropped, and no second
+    # transpose program is compiled.  The positive row scale multiplies both
+    # homotopy endpoints, leaving every root and branch fixed.
+    base_vector = jnp.zeros(
+        (layout.size,), dtype=jnp.asarray(native.R_cos).dtype
+    )
+    initial = _strong_residual_unscaled(base_vector, provisional)
     rms = jnp.linalg.norm(initial) / np.sqrt(float(layout.size))
     base_scale = jnp.maximum(rms, jnp.asarray(1.0e-12, dtype=rms.dtype))
+    equation_scale, coordinate_scale = _streaming_ruiz_scales(
+        lambda value: _strong_residual_unscaled(value, provisional),
+        base_vector,
+    )
+    provisional = replace(
+        provisional,
+        coordinate_scale=jnp.asarray(coordinate_scale),
+        equation_scale=jnp.asarray(equation_scale),
+    )
+    equilibrated_initial = _strong_residual_unscaled(base_vector, provisional)
+    equilibrated_rms = jnp.linalg.norm(equilibrated_initial) / np.sqrt(
+        float(layout.size)
+    )
     scaled = replace(provisional, strong_scale=base_scale)
     zero = jnp.zeros((layout.size,), dtype=rms.dtype)
 
     @jax.jit
     def low_solve(value: Array) -> Array:
-        high = layout.unpack(value)
+        high = layout.unpack(value / jnp.asarray(provisional.equation_scale))
         low = transfer.restrict(high)
         solved = low_preconditioner.solve_scaled(low)
-        return layout.pack(transfer.prolong(solved))
+        return layout.pack(transfer.prolong(solved)) / jnp.asarray(
+            provisional.coordinate_scale
+        )
 
     # A sign change cannot alter the strong root, but it changes the real
     # generalized spectrum of the low-to-strong pencil.  Select the three
@@ -988,10 +1065,14 @@ def make_strong_root_runtime(
         direction = response / jnp.maximum(
             response_norm, jnp.finfo(response_norm.dtype).tiny
         )
+    effective_balance = base_scale * estimate / jnp.maximum(
+        equilibrated_rms,
+        jnp.finfo(equilibrated_rms.dtype).tiny,
+    )
     return replace(
         scaled,
         strong_scale=base_scale * estimate,
-        operator_balance=estimate,
+        operator_balance=effective_balance,
     )
 
 
