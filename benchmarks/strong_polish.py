@@ -19,9 +19,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import solvax
 import vmex
-from solvax import pseudo_transient_continuation
 from vmex.core import implicit
 from vmex.core.input import VmecInput
 from vmex.core.polish import (
@@ -148,6 +146,12 @@ def main() -> None:
         parser.error("radial-refinement-tolerance must be positive")
     if args.least_squares_initial_damping <= 0.0:
         parser.error("least-squares-initial-damping must be positive")
+
+    # Keep ``--help`` usable when this experimental benchmark's SOLVAX
+    # dependency is absent or older than the requested algorithm.  Runtime
+    # execution still imports and validates the dependency before any solve.
+    import solvax
+    from solvax import pseudo_transient_continuation
 
     started = time.perf_counter()
     rss_initial = _peak_rss_mib()

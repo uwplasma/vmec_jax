@@ -1,33 +1,33 @@
 {
   "case": "solovev_analytical",
   "figure": "docs/_static/figures/readme_strong_force_comparison.webp",
-  "figure_sha256": "61139dc3412a74a3e22178cdc75717c853b0e0779c2b9cfb77fa63efc643a74c",
-  "schema": "vmex.strong-force-readme-figure/1",
+  "figure_sha256": "f997a93d2987aca766633c42cd3cd10d942c856aee0bd24b586a7bb5103b75ad",
+  "schema": "vmex.strong-force-readme-figure/2",
   "sources": {
     "DESC": {
-      "normalized_l2": 0.014404983402931752,
+      "normalized_l2": 0.01440482087874163,
       "path": "benchmarks/strong_certificate_solovev_desc_m4.json",
-      "sha256": "206a877958c83e7e3d2338a00971cdd51c7ec22324834ec336410a3c5e25e614"
+      "sha256": "2a11e8c5f30a82ac53592f12b917f037bf574292ab037b336c9c2d3b351e4030"
     },
     "VMEC++": {
-      "normalized_l2": 0.1223990329089878,
+      "normalized_l2": 0.12239903290898604,
       "path": "benchmarks/strong_certificate_solovev_vmecpp_m4.json",
-      "sha256": "36dbcdc2ea965ca2cf360a867546e3c3c116ebe6de30959535bc72f929bb04b8"
+      "sha256": "9efcbf2e3d29a846e228cb511a5a269082ec853d093254a69541133476c996a2"
     },
     "VMEC2000": {
-      "normalized_l2": 0.12239901752615495,
+      "normalized_l2": 0.12239901752615623,
       "path": "benchmarks/strong_certificate_solovev_vmec2000_m4.json",
-      "sha256": "ebd94b764c970c3107a16832b1737b379053373baf8bef4c9fe4ac3e77de26fa"
+      "sha256": "3606e0314acfd73da6e32d64283983d7645d50da054877e1cc6b1287d608ea0a"
     },
     "VMEX legacy": {
-      "normalized_l2": 0.12238125994199069,
+      "normalized_l2": 0.12238126078525399,
       "path": "benchmarks/strong_certificate_solovev_vmex_m4.json",
-      "sha256": "5528f5aec9f08f8294a58da5a2db54d5c517987fdb3a955df10772873ebb1fe6"
+      "sha256": "abeeff3becd72cacb3ea3e5b9ffcf8324e9d80d4fee5bae31191466f941c42b5"
     },
     "VMEX polished": {
-      "normalized_l2": 0.002712036498031008,
+      "normalized_l2": 0.002758982753904465,
       "path": "benchmarks/strong_polish_solovev_solvax_d3_m5_m4.json",
-      "sha256": "f3b3cfe6a85c888f529ef20850dd76525414252d1aa8d99eeeeb137ea513d579"
+      "sha256": "b1402e79df147670599b9782a408aae137fc73796cfac47799015955bd9eae18"
     }
   },
   "timing_note": "Cold measured pipelines on one Apple host; boundaries differ by implementation and are not a warm-JIT speed claim."
