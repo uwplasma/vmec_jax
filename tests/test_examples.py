@@ -227,6 +227,18 @@ def test_global_optimization_example_exposes_optimizer_contract():
     assert "ess_alpha=ESS_ALPHA" in text
 
 
+def test_qa_optimization_uses_fast_scalar_adjoint_lane():
+    """The canonical QA example must not rebuild a pointwise Jacobian."""
+
+    text = (EXAMPLES / "optimization" / "QA_optimization.py").read_text()
+    assert "VmecProblem.from_loss" in text
+    assert "residuals_from_tuples" in text
+    assert "compile_value_and_gradient" in text
+    assert "compile_residual_and_jacobian" not in text
+    assert "minimize(" in text
+    assert "ess_alpha=ESS_ALPHA" in text
+
+
 @pytest.mark.parametrize("case", ["QA", "QH", "QP", "QI"])
 @pytest.mark.parametrize("suffix", ["", "_finite_beta"])
 def test_stellarator_asymmetry_examples_expose_all_boundary_families(case, suffix):
