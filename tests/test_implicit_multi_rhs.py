@@ -159,6 +159,28 @@ def test_block_response_forward_transpose_and_fd():
         )
 
 
+def test_raw_block_probe_chunking_preserves_exact_factors():
+    """Bounded VJP batches assemble the same local block Jacobian."""
+
+    _, cfg, params = _small_solovev_setup()
+    state, mask = im.solve_implicit_with_aux(params, cfg)
+    active = im._active_state_fields(cfg)
+    scalar = im._raw_block_system(
+        params, cfg, state, mask, active, probe_chunk_size=1
+    )
+    chunked = im._raw_block_system(
+        params, cfg, state, mask, active, probe_chunk_size=4
+    )
+    for name in ("lower", "diagonal", "upper", "row_scale", "column_scale"):
+        np.testing.assert_allclose(
+            getattr(chunked, name), getattr(scalar, name), rtol=2e-13, atol=2e-13
+        )
+    with pytest.raises(ValueError, match="probe_chunk_size"):
+        im._raw_block_system(
+            params, cfg, state, mask, active, probe_chunk_size=0
+        )
+
+
 @pytest.mark.full
 def test_block_pullback_rejects_unconverged_response():
     """The opt-in transpose path cannot return an uncertified gradient."""

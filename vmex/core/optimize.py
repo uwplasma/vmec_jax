@@ -2058,8 +2058,8 @@ def least_squares(
     solve per residual row.  ``"block"`` amortizes one block-tridiagonal
     factorization of the *raw* force Jacobian — whose radial coupling is
     exactly nearest-neighbor, so ns dense ``(3*mn, 3*mn)`` blocks assembled
-    by 3-colored ``jax.jvp`` probes capture it completely at a cost
-    independent of the dof count — then backsolves every dof right-hand side
+    by chunked three-surface VJPs capture it completely at a cost independent
+    of the dof count — then backsolves every dof right-hand side
     (:func:`solvax.block_thomas_factor` / :func:`solvax.block_thomas_solve`)
     and certifies each column with a warm-started GMRES pass against the
     preconditioned system (same ``adjoint_tol`` and configured iteration
@@ -2830,17 +2830,17 @@ def _least_squares_implicit(
     # *preconditioned* formulation is dense in radius because the 1D
     # preconditioner applies per-mode radial tridiagonal *solves*.  Both
     # share the fixed point, so dz_j = -(dF/dz)^{-1} dF/dp t_j is the same
-    # through either: assemble the raw blocks with 3-colored jvp probes
-    # (~3*(3*mn) linearizations, dof-count independent), factor once (solvax
+    # through either: assemble the raw blocks with chunked three-surface VJPs
+    # (~3*mn reverse linearizations, dof-count independent), factor once (solvax
     # block Thomas), backsolve every dof RHS, then one warm-started GMRES pass
     # per column certifies cfg.adjoint_tol (solvax checks the initial residual
     # first, so columns already at tolerance cost one matvec).
     active_fields = imp._active_state_fields(cfg)
     m_block = len(active_fields) * int(np.asarray(mask_np.R_cos).shape[1])
     if jac_chunk_size == "auto":
-        probe_chunk = _auto_jac_chunk(3 * m_block)
+        probe_chunk = _auto_jac_chunk(m_block)
     elif jac_chunk_size is None:
-        probe_chunk = 3 * m_block
+        probe_chunk = m_block
     else:
         probe_chunk = chunk
 

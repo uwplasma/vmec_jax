@@ -69,10 +69,9 @@ state is assembled as ``x = mask*z + edge_mask*boundary(p) + frozen`` where
 ``z`` are the evolved dofs, the edge row comes (differentiably) from the
 boundary parameters, and the remaining entries (structurally zero families,
 released m=1 combinations, the lambda axis row overwritten by the ``totzsp``
-closure) are frozen constants.  The dof mask is computed once per forward
-solve from the *exact structural zero patterns* of ``gc`` (row support) and
-of the ``x``-dependence of ``gc`` (column support, one VJP with a random
-cotangent) at a generically perturbed state — see ``_dof_mask``.
+closure) are frozen constants.  The fixed-boundary dof mask is constructed
+directly from those mode-table invariants; :func:`_dof_mask` remains the
+independent structural-zero oracle and handles coupled free-boundary maps.
 
 Gradient checking solver-sensitive metrics
 ------------------------------------------
@@ -805,6 +804,53 @@ def _m1_pair_columns(cfg: ImplicitConfig) -> tuple[np.ndarray, np.ndarray]:
     return pos, neg
 
 
+def _fixed_boundary_dof_mask(cfg: ImplicitConfig) -> SpectralState:
+    """Exact evolved-dof mask for the fixed-boundary force equations.
+
+    Unlike the coupled free-boundary problem, this support is known from the
+    signed mode table alone.  Constructing it avoids two full force passes and
+    two reverse sweeps during the first implicit solve at a new resolution.
+    ``_dof_mask`` is kept as an independent numerical oracle in the tests.
+    """
+
+    res = cfg.resolution
+    modes = _static_tables(res)[0]
+    m = np.asarray(modes.m, dtype=int)
+    n = np.asarray(modes.n, dtype=int)
+    shape = (int(res.ns), int(m.size))
+    constant = (m == 0) & (n == 0)
+    nonconstant = ~constant
+    symmetric = not bool(res.lasym)
+
+    def rz(allowed: np.ndarray) -> jax.Array:
+        mask = np.broadcast_to(allowed, shape).copy()
+        mask[0, :] = allowed & (m == 0)
+        mask[-1, :] = False
+        return jnp.asarray(mask, dtype=jnp.float64)
+
+    def lam(allowed: np.ndarray) -> jax.Array:
+        mask = np.broadcast_to(allowed, shape).copy()
+        mask[0, :] = False
+        return jnp.asarray(mask, dtype=jnp.float64)
+
+    all_modes = np.ones(m.shape, dtype=bool)
+    z_cos = all_modes.copy() if not symmetric else np.zeros_like(all_modes)
+    # In the converged lconm1 branch force_Z_cc(m=1,n=0) is released.  The
+    # 3-D +/-n combinations are handled by the symmetric projector below;
+    # their individual support remains active.
+    if cfg.lconm1 and not symmetric:
+        z_cos &= ~((m == 1) & (n == 0))
+    asymmetric = nonconstant if not symmetric else np.zeros_like(all_modes)
+    return SpectralState(
+        R_cos=rz(all_modes),
+        R_sin=rz(asymmetric),
+        Z_cos=rz(z_cos),
+        Z_sin=rz(nonconstant),
+        L_cos=lam(asymmetric),
+        L_sin=lam(nonconstant),
+    )
+
+
 def _dof_projector(cfg: ImplicitConfig, dof_mask: SpectralState) -> Callable:
     """Symmetric idempotent projector onto the evolved-dof subspace.
 
@@ -1316,7 +1362,9 @@ def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
 # NOT on parameter values or ``ImplicitConfig`` object identity.  It must be
 # keyed by structural signature, not identity: ``make_config`` mints a fresh
 # ``eq=False`` object per call, so identity keying would recompute the
-# expensive mask (eager ``evaluate_forces`` x2 + VJP) on every ``im.run``.
+# mask on every ``im.run``.  Fixed-boundary support is now constructed
+# analytically; caching still avoids repeated device allocation and also
+# preserves the original cross-config contract.
 _MASK_CACHE: dict[tuple, SpectralState] = {}
 
 
@@ -1371,16 +1419,19 @@ def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
     # callback runs outside any trace): the jitted residual ``F`` later calls
     # ``runtime_from_params`` -> ``_template_runtime(cfg)`` under a jax.jit
     # trace, where the host-side ``run_setup`` cannot run, so the lru_cache
-    # must be filled by a concrete call first — even when the structural mask
-    # cache hits and skips the runtime rebuild below.
+    # must be filled by a concrete call first.  Prime the structural boundary
+    # tables for the same reason: letting the first residual trace populate
+    # their ordinary Python cache would leak tracers into later calls.
     _template_runtime(cfg)
+    _boundary_pack_tables(cfg)
     # Structural dof mask, shared across parameter values and config objects
-    # at one resolution — see _MASK_CACHE.
+    # at one resolution — see _MASK_CACHE.  Fixed-boundary support is an exact
+    # mode-table invariant, so do not pay for force evaluations and VJPs to
+    # rediscover it at first use.
     cache_key = _mask_cache_key(cfg)
     mask = _MASK_CACHE.get(cache_key)
     if mask is None:
-        rt = runtime_from_params(params, cfg)
-        mask = as_np(_dof_mask(result.state, rt, cfg))
+        mask = as_np(_fixed_boundary_dof_mask(cfg))
         _MASK_CACHE[cache_key] = mask
     # Anchor the state at the root of the residual the adjoint linearizes, so
     # every consumer — value, cotangent and linearization — reads the same
@@ -1874,6 +1925,8 @@ def _raw_block_system(
     """
     if not active_fields:
         raise ValueError("implicit response has no active state fields")
+    if int(probe_chunk_size) < 1:
+        raise ValueError("probe_chunk_size must be positive")
     ns = int(cfg.resolution.ns)
     mn = int(dof_mask.R_cos.shape[1])
     n_active = len(active_fields)
@@ -1952,8 +2005,17 @@ def _raw_block_system(
 
         # This local Jacobian is wide (block_size outputs, three block_size
         # inputs), so reverse mode needs one third as many linear sweeps as
-        # forward mode while retaining only a three-surface tape.
-        return jax.jacrev(row_residual)(zeros)
+        # forward mode while retaining only a three-surface tape.  Apply the
+        # output cotangent basis in bounded chunks: a bare jacrev vmaps all
+        # block_size rows and made the QA startup graph retain gigabytes of
+        # batched intermediates despite this otherwise-local construction.
+        _, pullback = jax.vjp(row_residual, zeros)
+        basis = jnp.eye(block_size, dtype=dtype)
+        return chunk_map(
+            lambda cotangent: pullback(cotangent)[0],
+            basis,
+            chunk_size=min(int(probe_chunk_size), block_size),
+        )
 
     # Rows 0 and 1 depend on VMEC's lambda-axis closure. All later rows share
     # one ordinary local kernel; lax.map keeps the compile graph bounded in ns.

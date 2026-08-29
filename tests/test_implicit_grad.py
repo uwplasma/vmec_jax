@@ -261,6 +261,9 @@ def test_three_surface_raw_kernel_matches_global_nonlinear_rows(case):
 
 def test_residual_zero_at_fixed_point(case):
     name, inp, cfg, p0, x_star, rt, mask = case
+    assert _mask_bit_ident(mask, im._fixed_boundary_dof_mask(cfg)), (
+        f"{name}: analytic fixed-boundary support differs from the VJP oracle"
+    )
     P = im._dof_projector(cfg, mask)
     F = im.residual_fn(cfg, jax.lax.stop_gradient(x_star), mask)
     r0 = _tnorm(F(P(x_star), p0))
@@ -306,6 +309,7 @@ def test_dof_mask_structural_invariance_and_cache(solovev):
     mask_pert = im._dof_mask(x_star, rt1, cfg, seed=0)
     assert _mask_bit_ident(mask, mask_seed), f"{name}: mask not seed-invariant"
     assert _mask_bit_ident(mask, mask_pert), f"{name}: mask not parameter-invariant"
+    assert _mask_bit_ident(mask, im._fixed_boundary_dof_mask(cfg))
 
     # end-to-end: the module cache hits across two fresh configs (one entry).
     saved = dict(im._MASK_CACHE)
@@ -713,6 +717,13 @@ def lasym():
     return "up_down_asymmetric_tokamak", inp, cfg, p0, result.state, rt, mask
 
 
+def test_lasym_fixed_boundary_mask_matches_vjp_oracle(lasym):
+    """Exact 2-D asymmetric support retains both parity families."""
+
+    name, _inp, cfg, _p0, _state, _rt, mask = lasym
+    assert _mask_bit_ident(mask, im._fixed_boundary_dof_mask(cfg)), name
+
+
 def test_lasym_delta_rotation_traceable():
     """The traceable delta rotation reproduces ``setup._lasym_delta_rotation``
     to ~1e-12 and stays differentiable in the (0,1) coefficients."""
@@ -1026,7 +1037,8 @@ def test_lasym_3d_gradient_vs_frozen_path_fd(lasym_3d):
     """``jax.grad`` through ``im.run`` on a 3D lasym boundary vs frozen-path
     central FD: toroidal (n = 1) rbs/zbc dofs plus the symmetric rbc family
     as a regression guard; measured agreement ~1e-6..1e-8 (printed)."""
-    name, inp, cfg, p0, _, _, _ = lasym_3d
+    name, inp, cfg, p0, _, _, mask = lasym_3d
+    assert _mask_bit_ident(mask, im._fixed_boundary_dof_mask(cfg)), name
     ntor = int(inp.ntor)
 
     def outs(p):
