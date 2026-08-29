@@ -84,6 +84,37 @@ prints the JAX backend, visible devices, the active default device, and
 VMEX's forward/implicit placement policies. It also executes a small float64
 JIT calculation on the selected JAX device; on WSL2 it reports the NVIDIA GPU
 and Windows driver visible through `nvidia-smi`. See {doc}`/installation` for
-the JAX 0.9.2 PJRT/cache and two-component WSL driver-version fixes. Per-deck
-CPU-vs-GPU timings and the decision sweep for a new machine are in
-{doc}`/reference/performance`.
+the upstream fixes to the warnings seen with JAX 0.9.2 and the required
+JAX/jaxlib upgrade. Per-deck CPU-vs-GPU timings and the decision sweep for a
+new machine are in {doc}`/reference/performance`.
+
+## Separate cold compile, cache reload, and warm execution
+
+For a new GPU or a slow installation, run the cache-reload audit from a VMEX
+source checkout:
+
+```console
+python benchmarks/device_cache_reload.py --devices cpu,gpu \
+    --output vmex-device-cache-reload.json
+```
+
+The default bounded case records, independently for CPU and GPU:
+
+- a fresh process with an empty compilation cache;
+- a second fresh process reloading exactly that cache;
+- an in-process warm repeat in each process;
+- one implicit MHD-energy gradient;
+- actual state/value/gradient placement;
+- peak host RSS and device memory.
+
+Each device gets a separate temporary cache, which is removed after the
+measurements. `--cache-dir PATH` preserves entries for inspection but accepts
+only an empty directory; the benchmark never deletes or mixes with a user's
+normal VMEX cache. Use `--full` for the larger parity case and `--devices gpu`
+for the shortest WSL2 report. Compare `forward_cache_reload_speedup` and
+`gradient_cache_reload_speedup` with the two `reload_*_warm_speedup` values:
+the former isolates persistent-cache value across processes, while the latter
+shows tracing/cache-load/dispatch overhead still paid above a true warm call.
+The committed M4 CPU control is
+`benchmarks/device_cache_reload_m4.json`; retain the generated JSON from a
+WSL2 GPU run as the hardware-specific comparison artifact.
