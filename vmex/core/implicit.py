@@ -1283,6 +1283,13 @@ _LAST_STATUS_ERROR: weakref.WeakKeyDictionary[ImplicitConfig, Exception] = \
 _LAST_REFINED: weakref.WeakKeyDictionary[
     ImplicitConfig, tuple[bytes, SpectralState]] = weakref.WeakKeyDictionary()
 
+# Last accepted refinement displacement for a guarded nearby-point warm start.
+# Unlike _LAST_REFINED this is never returned directly: the displacement is
+# applied only when it lowers the new point's exact frozen residual, and the
+# ordinary final tolerance/fallback policy remains in force.
+_LAST_REFINEMENT_CORRECTION: weakref.WeakKeyDictionary[
+    ImplicitConfig, tuple[bytes, SpectralState]] = weakref.WeakKeyDictionary()
+
 # Private, inactive-by-default instrumentation used by performance diagnostics.
 # The hook executes only in host-eager solve/refinement code and must never be
 # used to alter numerical behavior.
@@ -1362,6 +1369,10 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
                 error_type=type(exc).__name__,
             )
             if k == len(attempts) - 1:
+                # A failed equilibrium breaks the nearby-point continuation
+                # chain.  Do not carry a pre-failure refinement displacement
+                # into a later recovery attempt.
+                _LAST_REFINEMENT_CORRECTION.pop(cfg, None)
                 raise
     if cfg.hot_restart and bool(result.converged):
         _HOT_CACHE[cfg] = result.state
@@ -1390,6 +1401,16 @@ _REFINE_FORCING = 1.0e-6
 #: the worst landing measured across the gradient decks.
 _REFINE_MAX_RESTARTS = 20
 
+# A prior accepted displacement is only an initial guess: it is used when it
+# lowers the next point's exact frozen residual and still must meet refine_tol.
+_REFINE_CROSS_POINT_WARM_START = True
+
+
+@dataclass(frozen=True)
+class _RefinementOutcome:
+    state: SpectralState
+    met_tolerance: bool
+
 
 def _refine_fixed_point(cfg: ImplicitConfig, params: ImplicitParams,
                         state: SpectralState,
@@ -1399,7 +1420,27 @@ def _refine_fixed_point(cfg: ImplicitConfig, params: ImplicitParams,
     hit = _LAST_REFINED.get(cfg)
     if hit is None or hit[0] != key:
         _emit_diagnostic("refine_cache_miss")
-        hit = (key, _refined_state(cfg, params, state, dof_mask))
+        correction_hit = _LAST_REFINEMENT_CORRECTION.get(cfg)
+        correction = (
+            correction_hit[1]
+            if (_REFINE_CROSS_POINT_WARM_START
+                and correction_hit is not None and correction_hit[0] != key)
+            else None
+        )
+        outcome = _refined_state_with_status(
+            cfg, params, state, dof_mask, initial_correction=correction
+        )
+        refined = outcome.state
+        delta = jax.tree.map(jnp.subtract, refined, state)
+        delta_norm = float(_tree_norm(delta))
+        if (outcome.met_tolerance
+                and np.isfinite(delta_norm) and delta_norm > 0.0
+                and all(np.all(np.isfinite(np.asarray(value)))
+                        for value in jax.tree.leaves(delta))):
+            _LAST_REFINEMENT_CORRECTION[cfg] = (key, delta)
+        else:
+            _LAST_REFINEMENT_CORRECTION.pop(cfg, None)
+        hit = (key, refined)
         _LAST_REFINED[cfg] = hit
     else:
         _emit_diagnostic("refine_cache_hit")
@@ -1408,7 +1449,23 @@ def _refine_fixed_point(cfg: ImplicitConfig, params: ImplicitParams,
 
 def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
                    state: SpectralState,
-                   dof_mask: SpectralState) -> SpectralState:
+                   dof_mask: SpectralState,
+                   *, initial_correction: SpectralState | None = None
+                   ) -> SpectralState:
+    return _refined_state_with_status(
+        cfg, params, state, dof_mask,
+        initial_correction=initial_correction,
+    ).state
+
+
+def _refined_state_with_status(
+    cfg: ImplicitConfig,
+    params: ImplicitParams,
+    state: SpectralState,
+    dof_mask: SpectralState,
+    *,
+    initial_correction: SpectralState | None = None,
+) -> _RefinementOutcome:
     """Newton-refine ``state`` onto the root of the frozen residual ``F``.
 
     The implicit function theorem defines the derivative of the equilibrium
@@ -1436,7 +1493,7 @@ def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
             best_residual=None, steps=0, accepted=False, reason="disabled",
             seconds=(time.perf_counter() - started if started else 0.0),
         )
-        return state
+        return _RefinementOutcome(state, False)
     P = _dof_projector(cfg, dof_mask)
     F = residual_fn(cfg, state, dof_mask)
     z0 = P(state)
@@ -1450,59 +1507,133 @@ def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
                     else "already_converged"),
             seconds=(time.perf_counter() - started if started else 0.0),
         )
-        return state
-    best_z, best = z0, base
-    current = base
-    steps = 0
-    reason = "step_budget"
-    for step in range(_REFINE_MAX_STEPS):
-        step_started = time.perf_counter() if _DIAGNOSTIC_HOOK is not None else 0.0
-        input_residual = current
-        _, jvp = jax.linearize(lambda t: F(t, params), z)
-        # Best-effort by contract: GCROT, not the plain restarted GMRES of
-        # _adjoint_solve, because a truncated cycle stagnates on exactly the
-        # small eigendirection this refinement exists to walk down.
-        delta, solve_report = _adjoint_solve_gcrot(
-            jvp, fz, cfg, rtol=_REFINE_FORCING, enforce=False,
-            max_restarts=_REFINE_MAX_RESTARTS)
-        z = jax.tree.map(lambda a, b: a - b, z, delta)
-        fz = F(z, params)
-        residual = float(_tree_norm(fz))
-        steps = step + 1
+        return _RefinementOutcome(state, np.isfinite(base) and base <= tol)
+
+    def run_path(z_start, fz_start, residual_start, path):
+        best_z, best = z_start, residual_start
+        z, fz, current = z_start, fz_start, residual_start
+        reason = "step_budget"
+        steps = 0
+        for step in range(_REFINE_MAX_STEPS):
+            step_started = (
+                time.perf_counter() if _DIAGNOSTIC_HOOK is not None else 0.0
+            )
+            input_residual = current
+            _, jvp = jax.linearize(lambda t: F(t, params), z)
+            # Best-effort by contract: GCROT, not the plain restarted GMRES of
+            # _adjoint_solve, because a truncated cycle stagnates on exactly
+            # the small eigendirection this refinement exists to walk down.
+            delta, solve_report = _adjoint_solve_gcrot(
+                jvp, fz, cfg, rtol=_REFINE_FORCING, enforce=False,
+                max_restarts=_REFINE_MAX_RESTARTS)
+            z = jax.tree.map(lambda a, b: a - b, z, delta)
+            fz = F(z, params)
+            residual = float(_tree_norm(fz))
+            steps = step + 1
+            _emit_diagnostic(
+                "refine_step",
+                path=path,
+                step=steps,
+                input_residual=input_residual,
+                output_residual=residual,
+                krylov_iterations=int(np.max(np.asarray(
+                    solve_report.iterations))),
+                krylov_converged=bool(np.all(np.asarray(
+                    solve_report.converged))),
+                krylov_residual=float(np.max(np.asarray(
+                    solve_report.residual_norm))),
+                seconds=(time.perf_counter() - step_started
+                         if step_started else 0.0),
+            )
+            current = residual
+            if not np.isfinite(residual):
+                reason = "nonfinite_residual"
+                break
+            # Newton is not monotone here (one deck rises 1.3e-07 -> 4.4e-07
+            # before falling to 3.9e-13), so iterate from the latest point but
+            # return the best one seen.
+            if residual < best:
+                best_z, best = z, residual
+            if best <= tol:
+                reason = "converged"
+                break
+        return best_z, best, steps, reason
+
+    def finish(best_z, best, steps, reason, *, warm_fallback=False):
+        accepted = best < base
+        met_tolerance = np.isfinite(best) and best <= tol
         _emit_diagnostic(
-            "refine_step",
-            step=steps,
-            input_residual=input_residual,
-            output_residual=residual,
-            krylov_iterations=int(np.max(np.asarray(solve_report.iterations))),
-            krylov_converged=bool(np.all(np.asarray(solve_report.converged))),
-            krylov_residual=float(np.max(np.asarray(
-                solve_report.residual_norm))),
-            seconds=(time.perf_counter() - step_started
-                     if step_started else 0.0),
+            "refine_complete", tolerance=tol, base_residual=base,
+            best_residual=best, steps=steps, accepted=accepted,
+            met_tolerance=met_tolerance, reason=reason,
+            warm_start_fallback=warm_fallback,
+            seconds=(time.perf_counter() - started if started else 0.0),
         )
-        current = residual
-        if not np.isfinite(residual):
-            reason = "nonfinite_residual"
-            break
-        # Newton is not monotone here (one deck rises 1.3e-07 -> 4.4e-07
-        # before falling to 3.9e-13), so iterate from the latest point but
-        # return the best one seen.
-        if residual < best:
-            best_z, best = z, residual
-        if best <= tol:
-            reason = "converged"
-            break
-    accepted = best < base
+        if not accepted:
+            return _RefinementOutcome(state, met_tolerance)
+        correction = P(jax.tree.map(lambda a, b: a - b, best_z, z0))
+        refined = jax.tree.map(jnp.add, state, correction)
+        return _RefinementOutcome(refined, met_tolerance)
+
+    warm_start_accepted = False
+    warm_start_residual = None
+    candidate = None
+    candidate_fz = None
+    if initial_correction is not None:
+        candidate = jax.tree.map(
+            jnp.add, z0, P(initial_correction)
+        )
+        candidate_fz = F(candidate, params)
+        warm_start_residual = float(_tree_norm(candidate_fz))
+        warm_start_accepted = (
+            np.isfinite(warm_start_residual) and warm_start_residual < base
+        )
+        if warm_start_accepted:
+            warm_best_z, warm_best = candidate, warm_start_residual
     _emit_diagnostic(
-        "refine_complete", tolerance=tol, base_residual=base,
-        best_residual=best, steps=steps, accepted=accepted, reason=reason,
-        seconds=(time.perf_counter() - started if started else 0.0),
+        "refine_warm_start",
+        available=initial_correction is not None,
+        accepted=warm_start_accepted,
+        base_residual=base,
+        candidate_residual=warm_start_residual,
     )
-    if not accepted:
-        return state
-    correction = P(jax.tree.map(lambda a, b: a - b, best_z, z0))
-    return jax.tree.map(jnp.add, state, correction)
+    if warm_start_accepted and warm_best <= tol:
+        _emit_diagnostic(
+            "refine_complete", tolerance=tol, base_residual=base,
+            best_residual=warm_best, steps=0, accepted=True,
+            met_tolerance=True, reason="warm_start_converged",
+            warm_start_fallback=False,
+            seconds=(time.perf_counter() - started if started else 0.0),
+        )
+        correction = P(jax.tree.map(lambda a, b: a - b, warm_best_z, z0))
+        refined = jax.tree.map(jnp.add, state, correction)
+        return _RefinementOutcome(refined, True)
+
+    warm_steps = 0
+    if warm_start_accepted:
+        warm_best_z, warm_best, warm_steps, warm_reason = run_path(
+            candidate, candidate_fz, warm_start_residual, "warm_start"
+        )
+        if warm_best <= tol:
+            return finish(
+                warm_best_z, warm_best, warm_steps, warm_reason,
+                warm_fallback=False,
+            )
+        _emit_diagnostic(
+            "refine_warm_start_fallback",
+            reason=warm_reason,
+            best_residual=warm_best,
+            steps=warm_steps,
+            tolerance=tol,
+        )
+
+    # Preserve the pre-warm-start fallback exactly: if the warm path does not
+    # reach tolerance, discard it and rerun the original path from z0.
+    best_z, best, legacy_steps, reason = run_path(z0, fz, base, "legacy")
+    return finish(
+        best_z, best, warm_steps + legacy_steps, reason,
+        warm_fallback=warm_start_accepted,
+    )
 
 
 # structural-signature -> host dof mask.  The mask depends only on the

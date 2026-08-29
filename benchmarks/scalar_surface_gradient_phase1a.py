@@ -60,7 +60,8 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _points(x0: np.ndarray, relative_step: float, pattern: str):
+def _points(x0: np.ndarray, relative_step: float, pattern: str,
+            nearby_order: str = "plus-minus"):
     if pattern == "exact":
         return [("seed", x0.copy()), ("seed_repeat_1", x0.copy()),
                 ("seed_repeat_2", x0.copy())]
@@ -68,13 +69,16 @@ def _points(x0: np.ndarray, relative_step: float, pattern: str):
     direction = np.where((index.astype(int) % 2) == 0, 1.0, -1.0)
     direction /= np.linalg.norm(direction)
     delta = relative_step * np.maximum(np.abs(x0), 1.0e-2) * direction
-    return [
+    points = [
         ("seed", x0.copy()),
         ("plus", x0 + delta),
         ("plus_repeat", x0 + delta),
         ("minus", x0 - delta),
         ("minus_repeat", x0 - delta),
     ]
+    if nearby_order == "minus-plus":
+        points = [points[0], points[3], points[4], points[1], points[2]]
+    return points
 
 
 def _event_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -94,6 +98,9 @@ def _event_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         if entry["event"] == "host_callback_complete" and entry["succeeded"]
     ]
     steps = [entry for entry in events if entry["event"] == "refine_step"]
+    warm_starts = [
+        entry for entry in events if entry["event"] == "refine_warm_start"
+    ]
     return {
         "event_counts": {
             name: names.count(name) for name in sorted(set(names))
@@ -118,6 +125,12 @@ def _event_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "refinement_krylov_iterations": int(sum(
             int(entry["krylov_iterations"]) for entry in steps
         )),
+        "refinement_warm_starts_available": sum(
+            bool(entry["available"]) for entry in warm_starts
+        ),
+        "refinement_warm_starts_accepted": sum(
+            bool(entry["accepted"]) for entry in warm_starts
+        ),
         "refinement_results": refinement,
     }
 
@@ -142,6 +155,11 @@ def main() -> None:
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--refine-tol", type=float, default=1.0e-10)
+    parser.add_argument("--refine-cross-point-warm-start", action="store_true")
+    parser.add_argument(
+        "--nearby-order", choices=("plus-minus", "minus-plus"),
+        default="plus-minus",
+    )
     parser.add_argument("--batch-size", type=_parse_batch, default="auto")
     parser.add_argument("--jacobian-adjoint-tol", type=float, default=1.0e-4)
     parser.add_argument("--jacobian-adjoint-maxiter", type=int, default=10)
@@ -169,6 +187,7 @@ def main() -> None:
         })
 
     imp._DIAGNOSTIC_HOOK = diagnostic_hook
+    imp._REFINE_CROSS_POINT_WARM_START = args.refine_cross_point_warm_start
 
     original_make_config = imp.make_config
 
@@ -224,7 +243,8 @@ def main() -> None:
 
     calls = []
     for label, point in _points(
-        np.asarray(problem.x0, dtype=float), args.relative_step, args.pattern
+        np.asarray(problem.x0, dtype=float), args.relative_step, args.pattern,
+        args.nearby_order,
     ):
         current_stage[0] = label
         _clear_problem_cache(problem)
@@ -252,9 +272,11 @@ def main() -> None:
     central_fd = None
     if args.pattern == "nearby" and args.method in ("jacobian", "scalar"):
         by_name = {entry["point"]: entry for entry in calls}
-        delta = _points(
-            np.asarray(problem.x0, dtype=float), args.relative_step, "nearby"
-        )[1][1] - np.asarray(problem.x0, dtype=float)
+        nearby = dict(_points(
+            np.asarray(problem.x0, dtype=float), args.relative_step, "nearby",
+            args.nearby_order,
+        ))
+        delta = nearby["plus"] - np.asarray(problem.x0, dtype=float)
         gradient = np.asarray(by_name["seed"]["gradient"], dtype=float)
         fd_delta = 0.5 * (
             by_name["plus"]["objective"] - by_name["minus"]["objective"])
@@ -277,6 +299,8 @@ def main() -> None:
         "input_sha256": _sha256(input_path),
         "configuration": {
             "refine_tol": _json_safe(float(args.refine_tol)),
+            "refine_cross_point_warm_start": args.refine_cross_point_warm_start,
+            "nearby_order": args.nearby_order,
             "requested_batch_size": args.batch_size,
             "effective_auto_dof_chunk": (
                 int(opt._auto_jac_chunk(problem.x0.size))

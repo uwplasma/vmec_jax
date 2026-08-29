@@ -1230,12 +1230,13 @@ def test_refinement_diagnostic_events_preserve_numerics(monkeypatch):
 
     np.testing.assert_array_equal(refined, np.zeros(1))
     assert [event for event, _ in events] == [
-        "refine_start", "refine_step", "refine_complete"
+        "refine_start", "refine_warm_start", "refine_step",
+        "refine_complete",
     ]
-    assert events[1][1]["input_residual"] == 1.0
-    assert events[1][1]["output_residual"] == 0.0
-    assert events[2][1]["accepted"] is True
-    assert events[2][1]["reason"] == "converged"
+    assert events[2][1]["input_residual"] == 1.0
+    assert events[2][1]["output_residual"] == 0.0
+    assert events[3][1]["accepted"] is True
+    assert events[3][1]["reason"] == "converged"
 
 
 def test_host_solve_diagnostic_reports_exact_cache_hit(monkeypatch):
@@ -1256,6 +1257,164 @@ def test_host_solve_diagnostic_reports_exact_cache_hit(monkeypatch):
 
     assert im._host_solve(cfg, params) is result
     assert events == [("host_solve_cache_hit", {})]
+
+
+def test_refinement_cache_invalidates_at_distinct_parameter_point(monkeypatch):
+    """Exact keys reuse refinement; a distinct point invokes it again."""
+    calls = []
+
+    class Config:
+        pass
+
+    cfg = Config()
+    monkeypatch.setattr(im, "_LAST_REFINED", {})
+    monkeypatch.setattr(
+        im, "_refined_state_with_status",
+        lambda config, params, state, mask, **kwargs: calls.append(
+            np.asarray(params).copy()) or im._RefinementOutcome(state, False),
+    )
+    state = jnp.asarray([0.0])
+    p0 = jnp.asarray([1.0])
+    p1 = jnp.asarray([1.0 + 1.0e-7])
+
+    im._refine_fixed_point(cfg, p0, state, state)
+    im._refine_fixed_point(cfg, p0, state, state)
+    im._refine_fixed_point(cfg, p1, state, state)
+
+    assert len(calls) == 2
+    np.testing.assert_array_equal(calls[0], p0)
+    np.testing.assert_array_equal(calls[1], p1)
+
+
+def test_refinement_cross_point_seed_requires_exact_residual_improvement(
+        monkeypatch):
+    """A prior displacement is accepted only when the new frozen F improves."""
+    events = []
+    cfg = SimpleNamespace(refine_tol=1.0e-10)
+    state = jnp.asarray([1.0])
+    monkeypatch.setattr(im, "_DIAGNOSTIC_HOOK",
+                        lambda event, payload: events.append((event, payload)))
+    monkeypatch.setattr(im, "_dof_projector", lambda *_: lambda value: value)
+    monkeypatch.setattr(im, "residual_fn", lambda *_: lambda z, params: z)
+
+    refined = im._refined_state(
+        cfg, jnp.asarray([0.0]), state, state,
+        initial_correction=jnp.asarray([-1.0]),
+    )
+
+    np.testing.assert_array_equal(refined, jnp.asarray([0.0]))
+    warm = next(payload for event, payload in events
+                if event == "refine_warm_start")
+    assert warm["available"] is True
+    assert warm["accepted"] is True
+    complete = next(payload for event, payload in events
+                    if event == "refine_complete")
+    assert complete["steps"] == 0
+    assert complete["reason"] == "warm_start_converged"
+
+
+def test_refinement_cross_point_seed_rejects_worse_candidate(monkeypatch):
+    """A worse previous displacement cannot change the established path."""
+    events = []
+    cfg = SimpleNamespace(refine_tol=1.0e-10)
+    state = jnp.asarray([1.0])
+    monkeypatch.setattr(im, "_DIAGNOSTIC_HOOK",
+                        lambda event, payload: events.append((event, payload)))
+    monkeypatch.setattr(im, "_dof_projector", lambda *_: lambda value: value)
+    monkeypatch.setattr(im, "residual_fn", lambda *_: lambda z, params: z)
+    report = SimpleNamespace(
+        iterations=jnp.asarray(1), converged=jnp.asarray(True),
+        residual_norm=jnp.asarray(0.0),
+    )
+    monkeypatch.setattr(
+        im, "_adjoint_solve_gcrot",
+        lambda operator, rhs, config, **kwargs: (rhs, report),
+    )
+
+    refined = im._refined_state(
+        cfg, jnp.asarray([0.0]), state, state,
+        initial_correction=jnp.asarray([1.0]),
+    )
+
+    np.testing.assert_array_equal(refined, jnp.asarray([0.0]))
+    warm = next(payload for event, payload in events
+                if event == "refine_warm_start")
+    assert warm["available"] is True
+    assert warm["accepted"] is False
+    step = next(payload for event, payload in events if event == "refine_step")
+    assert step["input_residual"] == 1.0
+
+
+def test_failed_host_solve_invalidates_refinement_cross_point_seed(monkeypatch):
+    """A failed continuation cannot seed a later recovered equilibrium."""
+    from vmex.core.errors import VmecConvergenceError
+
+    inp = VmecInput.from_file(str(DATA_DIR / "input.solovev"))
+    cfg = im.make_config(inp, hot_restart=False)
+    params = im.params_from_input(inp)
+    correction = jax.tree.map(jnp.zeros_like, params)
+    monkeypatch.setattr(im, "_LAST_REFINEMENT_CORRECTION", {})
+    im._LAST_REFINEMENT_CORRECTION[cfg] = (b"previous", correction)
+
+    def fail(*args, **kwargs):
+        raise VmecConvergenceError("forced failure")
+
+    monkeypatch.setattr(im, "solve", fail)
+    with pytest.raises(VmecConvergenceError, match="forced failure"):
+        im._host_solve(cfg, params)
+
+    assert cfg not in im._LAST_REFINEMENT_CORRECTION
+
+
+def test_unconverged_warm_path_replays_legacy_fallback(monkeypatch):
+    """An improving warm path cannot replace or seed a failed legacy path."""
+    events = []
+
+    class Config:
+        refine_tol = 0.1
+
+    cfg = Config()
+    state = jnp.asarray([10.0])
+    params = jnp.asarray([0.0])
+    report = SimpleNamespace(
+        iterations=jnp.asarray(1), converged=jnp.asarray(True),
+        residual_norm=jnp.asarray(0.0),
+    )
+
+    monkeypatch.setattr(im, "_DIAGNOSTIC_HOOK",
+                        lambda event, payload: events.append((event, payload)))
+    monkeypatch.setattr(im, "_dof_projector", lambda *_: lambda value: value)
+    monkeypatch.setattr(im, "residual_fn", lambda *_: lambda z, p: z)
+    monkeypatch.setattr(im, "_REFINE_MAX_STEPS", 1)
+
+    def incomplete_step(operator, rhs, config, **kwargs):
+        # Warm candidate 5 -> 4; legacy state 10 -> 8. Both improve but
+        # deliberately remain above tolerance after the one-step budget.
+        delta = 1.0 if float(np.asarray(rhs)[0]) < 7.0 else 2.0
+        return jnp.asarray([delta]), report
+
+    monkeypatch.setattr(im, "_adjoint_solve_gcrot", incomplete_step)
+    legacy = im._refined_state(cfg, params, state, state)
+    events.clear()
+
+    monkeypatch.setattr(im, "_LAST_REFINED", {})
+    monkeypatch.setattr(im, "_LAST_REFINEMENT_CORRECTION", {})
+    im._LAST_REFINEMENT_CORRECTION[cfg] = (
+        b"previous", jnp.asarray([-5.0])
+    )
+    refined = im._refine_fixed_point(cfg, params, state, state)
+
+    np.testing.assert_array_equal(legacy, jnp.asarray([8.0]))
+    np.testing.assert_array_equal(refined, legacy)
+    assert cfg not in im._LAST_REFINEMENT_CORRECTION
+    paths = [payload["path"] for event, payload in events
+             if event == "refine_step"]
+    assert paths == ["warm_start", "legacy"]
+    assert any(event == "refine_warm_start_fallback" for event, _ in events)
+    complete = next(payload for event, payload in events
+                    if event == "refine_complete")
+    assert complete["met_tolerance"] is False
+    assert complete["warm_start_fallback"] is True
 
 
 @pytest.mark.full
