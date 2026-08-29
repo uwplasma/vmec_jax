@@ -47,6 +47,22 @@ def _peak_rss_mib() -> float:
     return value / divisor
 
 
+def _portable_argument(value: str) -> str:
+    """Remove host-specific prefixes from recorded reproduction commands."""
+
+    path = Path(value)
+    return path.name if path.is_absolute() else value
+
+
+def _portable_path(path: Path) -> str:
+    """Return a repository-relative path or a basename for external data."""
+
+    try:
+        return str(path.resolve().relative_to(REPO))
+    except ValueError:
+        return path.name
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
@@ -59,6 +75,11 @@ def main() -> None:
         "--wout",
         type=Path,
         help="optional VMEX/VMEC2000/VMEC++/DESC-exported compatible wout",
+    )
+    parser.add_argument(
+        "--source-provenance",
+        type=Path,
+        help="optional JSON metadata emitted by the external equilibrium run",
     )
     parser.add_argument("--degree", type=int, choices=(3, 5, 7), default=5)
     parser.add_argument(
@@ -75,6 +96,8 @@ def main() -> None:
         parser.error(f"input does not exist: {args.input}")
     if args.wout is not None and not args.wout.is_file():
         parser.error(f"wout does not exist: {args.wout}")
+    if args.source_provenance is not None and not args.source_provenance.is_file():
+        parser.error(f"source provenance does not exist: {args.source_provenance}")
     if args.radial_spans is not None and args.radial_spans < 1:
         parser.error("radial-spans must be positive")
     if args.angular_multiplier < 1 or args.radial_order_increment < 0:
@@ -119,7 +142,7 @@ def main() -> None:
             radial_basis=basis,
             degree=args.degree,
         )
-        source = str(args.wout)
+        source = args.wout.name
         ns = None
     lift_seconds = time.perf_counter() - started - (solve_seconds or 0.0)
     certificate_started = time.perf_counter()
@@ -151,10 +174,17 @@ def main() -> None:
     )
     result = {
         "schema": "vmex.strong-certificate-benchmark/1",
-        "command": " ".join(shlex.quote(value) for value in sys.argv),
+        "command": " ".join(
+            shlex.quote(_portable_argument(value)) for value in sys.argv
+        ),
         "case": args.input.name.removeprefix("input."),
         "source": source,
-        "input": str(args.input),
+        "external_source": (
+            None
+            if args.source_provenance is None
+            else json.loads(args.source_provenance.read_text())
+        ),
+        "input": _portable_path(args.input),
         "ns": ns,
         "mpol": int(inp.mpol),
         "ntor": int(inp.ntor),
