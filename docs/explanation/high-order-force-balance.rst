@@ -103,7 +103,12 @@ vector is therefore
        \in \mathbb{R}^{N_R+N_Z+N_\lambda}.
 
 At shifted radial collocation points, the independent oracle forms signed
-physical radial and helical force densities.  Their symmetric normalization
+physical radial and helical force densities.  Following DESC's force-balance
+objective, both root channels include the coordinate-volume factor
+``abs(sqrt(g))`` before Fourier projection.  This leaves the off-axis physical
+zero set unchanged and gives the projected equations the regular near-axis
+measure; it is part of the residual definition rather than a post-fit row
+scale.  Their symmetric normalization
 uses smooth ``sqrt(|v|^2 + force_floor^2)`` norms, so the root is differentiable
 even when one physical contribution vanishes.  The normalization scale is
 frozen from the lifted branch root for the solve, so it conditions but cannot

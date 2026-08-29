@@ -746,6 +746,41 @@ def test_polish_driver_records_bounded_unpolished_return(
         del args, kwargs
         raise StrongForceContinuationError("test tangent failure")
 
+    def endpoint(residual, initial, **kwargs):
+        del residual, kwargs
+        return SimpleNamespace(
+            x=initial,
+            steps=2,
+            linear_iterations=3,
+            residual_evaluations=4,
+            converged=True,
+            linear_converged=True,
+        )
+
+    def continuation(residual, initial, *, accept_stage, **kwargs):
+        del residual, kwargs
+        alpha = 1.0e-3
+        accept_stage(initial, alpha, None)
+        stage = SimpleNamespace(
+            nonlinear_steps=5,
+            linear_iterations=6,
+            residual_evaluations=7,
+            accepted=True,
+        )
+        return SimpleNamespace(
+            x=initial,
+            alpha=alpha,
+            steps=(stage,),
+            converged=False,
+        )
+
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._solvax_continuation_api",
+        lambda: (lambda **kwargs: object(), None, continuation, None, endpoint),
+    )
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._ptc_config", lambda config, **kwargs: object()
+    )
     monkeypatch.setattr(
         "vmex.core.polish_driver._arclength_to_target", fail_tangent
     )

@@ -685,8 +685,17 @@ def _strong_residual_unscaled(
     rr, tt, zz = jnp.meshgrid(radial, theta, zeta, indexing="ij")
     samples = evaluate_strong_force(state, rr, tt, zz)
     denominator = jnp.asarray(runtime.normalization_denominator)
-    radial_force = 2.0 * samples.signed_radial_force_density / denominator
-    helical_force = 2.0 * samples.signed_helical_force_density / denominator
+    # DESC's two-component force objective uses the coordinate-volume factor
+    # on both physical channels.  This preserves the off-axis zero set while
+    # giving the projected equations their regular near-axis measure.  Apply
+    # it before Fourier/radial fitting; post-fit row scaling is not equivalent.
+    volume_weight = jnp.abs(samples.sqrt_g)
+    radial_force = (
+        2.0 * samples.signed_radial_force_density * volume_weight / denominator
+    )
+    helical_force = (
+        2.0 * samples.signed_helical_force_density * volume_weight / denominator
+    )
     points = jnp.stack((rr.reshape(-1), tt.reshape(-1), zz.reshape(-1)), axis=-1)
 
     def coordinate_gauge(point):
