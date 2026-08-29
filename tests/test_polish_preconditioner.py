@@ -37,6 +37,7 @@ from vmex.core.polish_driver import (
     _build_mode_block_preconditioner,
     _continuation_precondition,
     _low_inverse,
+    _ptc_config,
     _residual_evaluations,
     _supports_keyword,
     polish_strong_root,
@@ -458,6 +459,14 @@ def test_factor_refresh_policy_rejects_invalid_thresholds(field, value, message)
 def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
     runtime = small_strong_root
     zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
+    radial_matrix = runtime.native.radial_basis.basis_matrix(runtime.radial_nodes)
+    assert runtime.radial_nodes.size > runtime.native.radial_basis.size
+    np.testing.assert_allclose(
+        runtime.radial_fit @ radial_matrix,
+        np.eye(runtime.native.radial_basis.size),
+        rtol=2.0e-13,
+        atol=2.0e-13,
+    )
     low_endpoint = strong_root_residual(zero, runtime, 0.0)
     strong_endpoint = strong_root_residual(zero, runtime, 1.0)
     np.testing.assert_array_equal(low_endpoint, 0.0)
@@ -735,6 +744,17 @@ def test_polish_driver_skips_an_already_certified_state(small_strong_root):
 def test_polish_config_validation(updates, message):
     with pytest.raises(ValueError, match=message):
         PolishConfig(**updates)
+
+
+def test_polish_ptc_stopping_is_invariant_to_positive_residual_scaling():
+    tolerance = 2.0e-7
+    config = _ptc_config(PolishConfig(tolerance=tolerance), residual_scale=3.0e-4)
+    rescaled = _ptc_config(
+        PolishConfig(tolerance=tolerance), residual_scale=7.0 * 3.0e-4
+    )
+    assert config.rtol == tolerance
+    assert config.atol == pytest.approx(tolerance * 3.0e-4)
+    assert rescaled.atol == pytest.approx(7.0 * config.atol)
 
 
 def test_public_solver_rejects_unknown_polish_mode_before_solving():

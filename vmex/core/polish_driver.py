@@ -328,11 +328,16 @@ def _low_inverse(rhs: jax.Array, runtime: StrongRootRuntime) -> jax.Array:
     return runtime.layout.pack(solution)
 
 
-def _ptc_config(config: PolishConfig) -> Any:
+def _ptc_config(config: PolishConfig, *, residual_scale: float) -> Any:
     _, PseudoTransientConfig, _, _, _ = _solvax_continuation_api()
     return PseudoTransientConfig(
         rtol=config.tolerance,
-        atol=config.tolerance,
+        # Couple the roundoff floor to a representative residual norm.  Both
+        # tolerances then transform with a harmless positive equation scaling:
+        # unlike a fixed absolute tolerance this cannot accept an unsolved
+        # stage, while unlike ``atol=0`` it does not chase alpha-zero roundoff.
+        # The independent dimensional certificate remains the final gate.
+        atol=config.tolerance * float(residual_scale),
         max_steps=config.max_nonlinear_iterations,
         initial_dt=config.ptc_initial_dtau,
         max_dt=config.ptc_max_dtau,
@@ -483,7 +488,10 @@ def _arclength_to_target(
         if initial_tangent is None
         else initial_tangent
     )
-    nonlinear = _ptc_config(config)
+    residual_scale = np.sqrt(float(runtime.layout.size)) / float(
+        runtime.operator_balance
+    )
+    nonlinear = _ptc_config(config, residual_scale=residual_scale)
     total_nonlinear = total_linear = total_evaluations = 0
     for step in range(config.max_arclength_steps):
         predictor = (
@@ -623,7 +631,10 @@ def polish_strong_root(
             & (_minimum_signed_jacobian(vector, runtime) >= margin_floor)
         )
 
-    nonlinear = _ptc_config(config)
+    residual_scale = np.sqrt(float(runtime.layout.size)) / float(
+        runtime.operator_balance
+    )
+    nonlinear = _ptc_config(config, residual_scale=residual_scale)
     precondition = lambda state, rhs, dtau: _low_inverse(rhs, runtime)  # noqa: E731
     endpoint = pseudo_transient_continuation(
         lambda vector: strong_root_residual(vector, runtime, 0.0),

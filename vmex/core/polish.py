@@ -688,11 +688,19 @@ def make_strong_root_runtime(
     )
     if layout.size == 0:
         raise ValueError("strong-root layout contains no free physical displacement")
-    radial_nodes = np.asarray(native.radial_basis.collocation_nodes, dtype=float).copy()
-    if radial_nodes[0] <= 0.0:
-        radial_nodes[0] = float(native.radial_basis.quadrature_nodes[0])
+    # The force contains nonlinear products of first and second radial
+    # derivatives, so sampling it at exactly ``nbasis`` collocation points can
+    # alias unresolved radial content into the square residual.  Evaluate on
+    # the basis' higher-order Gauss rule and project back to the same
+    # ``nbasis`` coefficients.  The residual remains square after the
+    # projection, while trial states that only improve the solve nodes can no
+    # longer hide large between-node force.
+    radial_nodes = np.asarray(native.radial_basis.quadrature_nodes, dtype=float)
+    radial_weights = np.asarray(native.radial_basis.quadrature_weights, dtype=float)
     radial_matrix = np.asarray(native.radial_basis.basis_matrix(radial_nodes), dtype=float)
-    radial_fit = np.linalg.inv(radial_matrix)
+    sqrt_weights = np.sqrt(radial_weights)
+    weighted_matrix = sqrt_weights[:, None] * radial_matrix
+    radial_fit = np.linalg.pinv(weighted_matrix, rcond=1.0e-12) * sqrt_weights[None, :]
     m = np.asarray(native.m, dtype=int)
     n = np.asarray(native.n, dtype=int)
     ntheta = max(2 * int(np.max(np.abs(m), initial=0)) + 3, 4)
