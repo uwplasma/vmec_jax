@@ -64,7 +64,8 @@ wout = vj.wout_from_state(inp=inp, state=result.state,
                            fsqr=result.fsqr, fsqz=result.fsqz, fsql=result.fsql,
                            niter=result.iterations, converged=result.converged)
 vj.write_wout("wout_circular_tokamak.nc", wout)
-vj.plot_wout("wout_circular_tokamak.nc", "figures")
+figures = vj.plot_wout("wout_circular_tokamak.nc", "figures")
+# figures["force_balance"] is the normalized radial force-error profile.
 ```
 
 The CLI provides the same workflow:
@@ -153,7 +154,7 @@ The common CLI operations are:
 | Command | Result |
 |---|---|
 | `vmex input.X` | solve INDATA or JSON and write `wout_X.nc` |
-| `vmex input.X --plot` | solve and write the summary, cross-sections, automatic Boozer `|B|`, profiles, and 3-D LCFS |
+| `vmex input.X --plot` | solve and write the summary, cross-sections, automatic Boozer `|B|`, profiles, normalized force balance, and 3-D LCFS |
 | `vmex --plot wout_X.nc` | write the same complete plot set from an existing equilibrium |
 | `vmex --booz wout_X.nc` | additionally save a reusable standard `boozmn_X.nc` file |
 | `vmex input.X --restart wout_Y.nc` | hot-restart a fixed- or free-boundary solve from a saved equilibrium |
@@ -254,7 +255,7 @@ VMEX also solves open-ended mirrors. `examples/mirror/mirror_fixed_boundary_nona
 
 ## Equilibrium and kinetic diagnostics
 
-`vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summaries below. They combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. A separate stability figure decomposes `DMerc` and shows the frozen-geometry response to a pressure ramp; finite-pressure points must be re-solved for certification. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
+`vmex --plot wout_X.nc` produces cross-sections, profiles, a normalized radial force-balance plot, a full-resolution 3-D LCFS, and the compact summaries below. The force error is the absolute WOUT `equif` residual normalized by the magnetic and pressure-gradient terms, and works for vacuum and finite-beta equilibria. The summaries combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. A separate stability figure decomposes `DMerc` and shows the frozen-geometry response to a pressure ramp; finite-pressure points must be re-solved for certification. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
 
 This finite-pressure NFP=3 QI example reaches $\langle\beta\rangle=2.38\%$.
 

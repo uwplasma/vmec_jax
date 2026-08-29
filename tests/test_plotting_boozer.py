@@ -34,7 +34,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 MAX_FIGURE_BYTES = 2 * 1024 * 1024  # >= 200 dpi publication PNGs
-WOUT_KEYS = ("summary", "surfaces", "modB", "profiles", "stability", "3d")
+WOUT_KEYS = (
+    "summary", "surfaces", "modB", "profiles", "force_balance", "stability", "3d",
+)
 
 
 def _golden_wout(case: str) -> Path:
@@ -59,7 +61,7 @@ def _check_figures(paths: dict[str, Path], expected_keys) -> None:
 
 @pytest.mark.parametrize("case", ["solovev", "up_down_asymmetric_tokamak"])
 def test_plot_wout_golden(case: str, tmp_path: Path) -> None:
-    """All six figures render from golden wouts (sym and lasym) under 2 MB."""
+    """All seven figures render from golden wouts (sym and lasym) under 2 MB."""
     wout_path = _golden_wout(case)
     outdir = tmp_path / case
     paths = plot_wout(wout_path, outdir, which=WOUT_KEYS)
@@ -86,6 +88,30 @@ def test_plot_wout_accepts_woutdata_and_subset(tmp_path: Path, monkeypatch) -> N
     _check_figures(paths, ("profiles", "modB"))
     assert paths["profiles"].name == "solovev_mem_profiles.png"
     assert cmaps and set(cmaps) == {"jet"}
+
+
+@pytest.mark.parametrize("pressure_scale", [0.0, 1.0])
+def test_force_balance_plot_handles_vacuum_and_finite_beta(
+    pressure_scale: float, tmp_path: Path,
+) -> None:
+    """The normalized WOUT diagnostic is valid with or without pressure."""
+    from dataclasses import replace
+
+    from vmex.core.wout import read_wout
+
+    data = read_wout(str(_golden_wout("solovev")))
+    data = replace(
+        data,
+        pres=pressure_scale * np.asarray(data.pres),
+        presf=pressure_scale * np.asarray(data.presf),
+    )
+    paths = plot_wout(
+        data,
+        tmp_path / f"force_{pressure_scale:g}",
+        which=("force_balance",),
+        name="solovev",
+    )
+    _check_figures(paths, ("force_balance",))
 
 
 def test_plot_wout_rejects_unknown_figure(tmp_path: Path) -> None:

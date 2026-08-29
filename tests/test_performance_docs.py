@@ -240,6 +240,12 @@ def test_solovev_cross_code_certificates_are_clean_and_comparable() -> None:
         assert len(
             artifact["radial_profile"]["flux_surface_average_force_density"]
         ) == len(reference_rho)
+        assert len(
+            artifact["radial_profile"]["flux_surface_normalized_l2"]
+        ) == len(reference_rho)
+        assert np.all(
+            np.isfinite(artifact["radial_profile"]["flux_surface_normalized_l2"])
+        )
         assert artifact["metrics"]["radial_refinement_difference"] < 1.0e-3
         if name in ("vmec2000", "desc"):
             assert artifact["external_source"]["success"] is True
@@ -261,7 +267,7 @@ def test_readme_strong_force_figure_matches_committed_sources() -> None:
     metadata = json.loads(
         (ROOT / "benchmarks" / "strong_force_comparison_m4.json").read_text()
     )
-    assert metadata["schema"] == "vmex.strong-force-readme-figure/1"
+    assert metadata["schema"] == "vmex.strong-force-readme-figure/2"
     figure = ROOT / metadata["figure"]
     assert figure.is_file()
     assert hashlib.sha256(figure.read_bytes()).hexdigest() == metadata[

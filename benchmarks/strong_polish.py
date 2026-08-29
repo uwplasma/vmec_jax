@@ -574,6 +574,9 @@ def main() -> None:
                 "flux_surface_average_force_density": np.asarray(
                     initial_certificate.flux_surface_average
                 ).tolist(),
+                "flux_surface_normalized_l2": np.asarray(
+                    initial_certificate.flux_surface_normalized_l2
+                ).tolist(),
             },
         },
         "final_certificate": {
@@ -586,6 +589,9 @@ def main() -> None:
                 "rho": np.asarray(final_certificate.radial_nodes).tolist(),
                 "flux_surface_average_force_density": np.asarray(
                     final_certificate.flux_surface_average
+                ).tolist(),
+                "flux_surface_normalized_l2": np.asarray(
+                    final_certificate.flux_surface_normalized_l2
                 ).tolist(),
             },
         },

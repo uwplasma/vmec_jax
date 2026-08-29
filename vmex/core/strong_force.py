@@ -188,6 +188,7 @@ class StrongForceReport:
     edge_l2: Array
     radial_nodes: Array
     flux_surface_average: Array
+    flux_surface_normalized_l2: Array
     angular_spectral_tail: Array
     radial_refinement_difference: Array
     minimum_signed_jacobian: Array
@@ -621,6 +622,10 @@ def certify_strong_force(
     )
     surface_weights = jnp.abs(samples.sqrt_g)
     fsa = jnp.sum(surface_weights * magnitude, axis=(1, 2)) / jnp.sum(surface_weights, axis=(1, 2))
+    surface_normalized_l2 = jnp.sqrt(
+        jnp.sum(surface_weights * normalized * normalized, axis=(1, 2))
+        / jnp.sum(surface_weights, axis=(1, 2))
+    )
 
     def region_l2(mask: Array) -> Array:
         region_weights = weights * mask[:, None, None]
@@ -693,6 +698,7 @@ def certify_strong_force(
         edge_l2=region_l2(jnp.asarray(rho_nodes) > 0.8),
         radial_nodes=jnp.asarray(rho_nodes),
         flux_surface_average=fsa,
+        flux_surface_normalized_l2=surface_normalized_l2,
         angular_spectral_tail=tail,
         radial_refinement_difference=refinement,
         minimum_signed_jacobian=jnp.min(signed_jacobian),
@@ -724,12 +730,15 @@ def plot_strong_force_report(
     for label, report in report_map.items():
         axes[0].semilogy(
             np.asarray(report.radial_nodes),
-            np.asarray(report.flux_surface_average),
+            np.asarray(report.flux_surface_normalized_l2),
             marker=".",
             linewidth=1.5,
             label=label,
         )
-    axes[0].set(xlabel=r"$\rho=\sqrt{s}$", ylabel=r"$\langle|J\times B-\nabla p|\rangle$ [N m$^{-3}$]")
+    axes[0].set(
+        xlabel=r"$\rho=\sqrt{s}$",
+        ylabel=r"normalized force error",
+    )
     axes[0].grid(True, which="both", alpha=0.25)
     axes[0].legend(frameon=False)
 

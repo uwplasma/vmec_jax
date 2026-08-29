@@ -14,6 +14,7 @@ Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 - ``modB``      ``|B|`` contours in (zeta, theta) at mid radius and boundary;
 - ``profiles``  iota / pressure / current profiles plus the ``fsqt``
   force-residual convergence trace;
+- ``force_balance`` normalized radial force-balance error from ``equif``;
 - ``stability`` Mercier decomposition and a frozen-equilibrium pressure scan;
 - ``3d``        3-D plasma boundary colored by ``|B|`` (jet colormap).
 
@@ -54,6 +55,7 @@ __all__ = [
     "plot_surfaces",
     "plot_modB",
     "plot_profiles",
+    "plot_force_balance",
     "plot_stability",
     "plot_boundary_3d",
     "plot_boozmn_modB",
@@ -1446,6 +1448,38 @@ def plot_profiles(wout, out_path: str | Path) -> Path:
     return out_path
 
 
+def plot_force_balance(wout, out_path: str | Path) -> Path:
+    """Plot the normalized radial force-balance error stored in ``equif``.
+
+    VMEC normalizes the flux-surface radial residual by the sum of the
+    magnitudes of the magnetic and pressure-gradient terms.  The same
+    definition is meaningful for finite-pressure and vacuum equilibria; in
+    vacuum the pressure term is simply zero.
+    """
+    plt = _import_matplotlib()
+    wout, _ = _as_wout(wout)
+    rho = np.sqrt(np.linspace(0.0, 1.0, int(wout.ns)))
+    error = np.abs(np.asarray(wout.equif, dtype=float))
+    finite = np.isfinite(error)
+    positive = error[finite & (error > 0.0)]
+    floor = max(
+        float(np.min(positive)) * 0.1 if positive.size else 1.0e-16,
+        np.finfo(float).tiny,
+    )
+
+    with _rc_context():
+        fig, ax = plt.subplots(figsize=(6.2, 4.2), layout="constrained")
+        ax.semilogy(rho[finite], np.maximum(error[finite], floor), ".-")
+        ax.set_xlabel(r"normalized radius $\rho=\sqrt{s}$")
+        ax.set_ylabel(r"normalized force error $|f_{\rm eq}|$")
+        ax.set_title("Radial force balance")
+        ax.set_xlim(0.0, 1.0)
+        out_path = Path(out_path)
+        fig.savefig(out_path, dpi=_DPI)
+        plt.close(fig)
+    return out_path
+
+
 def plot_boundary_3d(
     wout,
     out_path: str | Path,
@@ -1481,6 +1515,7 @@ _WOUT_FIGURES = {
     "surfaces": ("surfaces", plot_surfaces),
     "modB": ("modB", plot_modB),
     "profiles": ("profiles", plot_profiles),
+    "force_balance": ("force_balance", plot_force_balance),
     "stability": ("stability", plot_stability),
     "3d": ("boundary3d", plot_boundary_3d),
 }
@@ -1489,7 +1524,10 @@ _WOUT_FIGURES = {
 def plot_wout(
     wout,
     outdir: str | Path,
-    which: Sequence[str] = ("summary", "surfaces", "modB", "profiles", "stability", "3d"),
+    which: Sequence[str] = (
+        "summary", "surfaces", "modB", "profiles", "force_balance",
+        "stability", "3d",
+    ),
     *,
     name: str | None = None,
     j_pitch: float | None = None,
@@ -1503,7 +1541,8 @@ def plot_wout(
     outdir:
         Output directory (created if missing).
     which:
-        Any subset of ``("summary", "surfaces", "modB", "profiles", "stability", "3d")``.
+        Any subset of ``("summary", "surfaces", "modB", "profiles",
+        "force_balance", "stability", "3d")``.
     name:
         Basename prefix for the figures (default: case name from the path).
     j_pitch:

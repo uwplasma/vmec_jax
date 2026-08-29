@@ -206,6 +206,9 @@ def main() -> None:
             "flux_surface_average_force_density": np.asarray(
                 report.flux_surface_average
             ).tolist(),
+            "flux_surface_normalized_l2": np.asarray(
+                report.flux_surface_normalized_l2
+            ).tolist(),
             "units": "N m^-3",
         },
         "platform": platform.platform(),

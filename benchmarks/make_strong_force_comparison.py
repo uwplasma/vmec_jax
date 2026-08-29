@@ -66,7 +66,7 @@ def _profile(name: str, artifact: dict) -> tuple[np.ndarray, np.ndarray]:
     )
     return (
         np.asarray(profile["rho"], dtype=float),
-        np.asarray(profile["flux_surface_average_force_density"], dtype=float),
+        np.asarray(profile["flux_surface_normalized_l2"], dtype=float),
     )
 
 
@@ -109,22 +109,14 @@ def render(artifacts: dict[str, dict], output: Path) -> None:
         gridspec_kw={"width_ratios": (1.55, 1.0, 1.0)},
         dpi=180,
     )
-    fig.subplots_adjust(left=0.065, right=0.985, bottom=0.28, top=0.76, wspace=0.34)
+    fig.subplots_adjust(left=0.065, right=0.985, bottom=0.25, top=0.84, wspace=0.34)
     fig.suptitle(
-        "Solov'ev force balance — one independent oracle, clean source states",
+        "Solov'ev force-balance comparison",
         x=0.065,
-        y=0.955,
+        y=0.96,
         ha="left",
-        fontsize=15,
+        fontsize=14,
         fontweight="bold",
-    )
-    fig.text(
-        0.065,
-        0.895,
-        "Lower is better. VMEX polishing clears the DESC accuracy gate; the measured cold pipeline is not yet faster.",
-        ha="left",
-        color=MUTED,
-        fontsize=10,
     )
 
     line_styles = {
@@ -149,10 +141,10 @@ def render(artifacts: dict[str, dict], output: Path) -> None:
     ax.set_yscale("log")
     ax.set_xlim(0.0, 1.0)
     ax.set_xlabel(r"normalized radius $\rho$")
-    ax.set_ylabel(r"$\langle|\mathbf{J}\!\times\!\mathbf{B}-\nabla p|\rangle$  [N m$^{-3}$]")
+    ax.set_ylabel("normalized force error")
     ax.grid(True, which="both", color=GRID, linewidth=0.65)
     ax.legend(loc="upper center", bbox_to_anchor=(0.52, -0.30), ncols=3)
-    ax.set_title("(a) Radial force profile", loc="left", fontsize=11, fontweight="bold")
+    ax.set_title("(a) Radial profile", loc="left", fontsize=11, fontweight="bold")
 
     ax = axes[1]
     names = list(artifacts)
@@ -183,18 +175,7 @@ def render(artifacts: dict[str, dict], output: Path) -> None:
             va="bottom",
             fontsize=7.5,
         )
-    ratio = values[names.index("DESC")] / values[names.index("VMEX polished")]
-    ax.text(
-        3.5,
-        3.0e-2,
-        f"DESC / polished = {ratio:.1f}×",
-        ha="center",
-        va="center",
-        color=COLORS["VMEX polished"],
-        fontsize=9,
-        fontweight="bold",
-    )
-    ax.set_title("(b) Common force certificate", loc="left", fontsize=11, fontweight="bold")
+    ax.set_title("(b) Volume L2 error", loc="left", fontsize=11, fontweight="bold")
 
     desc = artifacts["DESC"]
     polished = artifacts["VMEX polished"]
@@ -206,10 +187,6 @@ def render(artifacts: dict[str, dict], output: Path) -> None:
     total = (
         float(desc["external_source"]["total_seconds"]),
         float(polished["total_seconds"]),
-    )
-    memory = (
-        float(desc["external_source"]["peak_rss_mib"]) / 1024.0,
-        float(polished["total_peak_rss_increase_mib"]) / 1024.0,
     )
     ax = axes[2]
     x = np.arange(2)
@@ -245,20 +222,11 @@ def render(artifacts: dict[str, dict], output: Path) -> None:
                 fontsize=8,
             )
     ax.legend(loc="upper left")
-    ax.text(
-        0.5,
-        0.73,
-        f"peak RSS\n{memory[0]:.2f} / {memory[1]:.2f} GiB",
-        transform=ax.transAxes,
-        ha="center",
-        color=MUTED,
-        fontsize=9,
-    )
-    ax.set_title("(c) Measured cold pipeline", loc="left", fontsize=11, fontweight="bold")
+    ax.set_title("(c) Cold runtime", loc="left", fontsize=11, fontweight="bold")
     ax.text(
         0.0,
-        -0.35,
-        "Same Apple host; disclosed pipeline boundaries.\nNot a warm-JIT speed claim.",
+        -0.27,
+        "Same Apple host; pipeline boundaries differ.",
         transform=ax.transAxes,
         ha="left",
         va="top",
@@ -279,7 +247,7 @@ def main() -> None:
     artifacts = _load()
     render(artifacts, args.output)
     metadata = {
-        "schema": "vmex.strong-force-readme-figure/1",
+        "schema": "vmex.strong-force-readme-figure/2",
         "case": "solovev_analytical",
         "figure": args.output.relative_to(REPO).as_posix(),
         "figure_sha256": file_sha256(args.output),
