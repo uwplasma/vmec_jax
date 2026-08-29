@@ -60,14 +60,33 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _parse_step_sequence(value: str) -> tuple[float, ...]:
+    try:
+        steps = tuple(float(item) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "step sequence must be comma-separated floats"
+        ) from exc
+    if not steps or any(not np.isfinite(step) or step <= 0.0 for step in steps):
+        raise argparse.ArgumentTypeError("step sequence must be finite and positive")
+    return steps
+
+
 def _points(x0: np.ndarray, relative_step: float, pattern: str,
-            nearby_order: str = "plus-minus"):
+            nearby_order: str = "plus-minus",
+            step_sequence: tuple[float, ...] = ()):
     if pattern == "exact":
         return [("seed", x0.copy()), ("seed_repeat_1", x0.copy()),
                 ("seed_repeat_2", x0.copy())]
     index = np.arange(x0.size, dtype=float)
     direction = np.where((index.astype(int) % 2) == 0, 1.0, -1.0)
     direction /= np.linalg.norm(direction)
+    if pattern == "sweep":
+        scale = np.maximum(np.abs(x0), 1.0e-2) * direction
+        return [("seed", x0.copy())] + [
+            (f"step_{position:02d}_{step:.1e}", x0 + step * scale)
+            for position, step in enumerate(step_sequence)
+        ]
     delta = relative_step * np.maximum(np.abs(x0), 1.0e-2) * direction
     points = [
         ("seed", x0.copy()),
@@ -101,6 +120,25 @@ def _event_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     warm_starts = [
         entry for entry in events if entry["event"] == "refine_warm_start"
     ]
+    warm_fallbacks = [
+        entry for entry in events
+        if entry["event"] == "refine_warm_start_fallback"
+    ]
+    path_names = sorted({entry.get("path", "unknown") for entry in steps})
+    path_work = {
+        path: {
+            "steps": sum(entry.get("path", "unknown") == path for entry in steps),
+            "seconds": float(sum(
+                float(entry["seconds"]) for entry in steps
+                if entry.get("path", "unknown") == path
+            )),
+            "krylov_iterations": int(sum(
+                int(entry["krylov_iterations"]) for entry in steps
+                if entry.get("path", "unknown") == path
+            )),
+        }
+        for path in path_names
+    }
     return {
         "event_counts": {
             name: names.count(name) for name in sorted(set(names))
@@ -131,6 +169,9 @@ def _event_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "refinement_warm_starts_accepted": sum(
             bool(entry["accepted"]) for entry in warm_starts
         ),
+        "refinement_warm_start_fallbacks": len(warm_fallbacks),
+        "refinement_warm_start_records": warm_starts,
+        "refinement_path_work": path_work,
         "refinement_results": refinement,
     }
 
@@ -146,7 +187,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--method", choices=("residual", "jacobian", "scalar"), required=True)
-    parser.add_argument("--pattern", choices=("exact", "nearby"), required=True)
+    parser.add_argument(
+        "--pattern", choices=("exact", "nearby", "sweep"), required=True)
     parser.add_argument(
         "--objective-profile", choices=("run71", "aspect", "iota"),
         default="run71",
@@ -166,6 +208,11 @@ def main() -> None:
     parser.add_argument("--adjoint-tol", type=float, default=1.0e-11)
     parser.add_argument("--adjoint-maxiter", type=int, default=300)
     parser.add_argument("--relative-step", type=float, default=1.0e-7)
+    parser.add_argument(
+        "--relative-step-sequence", type=_parse_step_sequence,
+        default=(1.0e-7, 1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2),
+        help="absolute relative offsets from x0 for pattern=sweep",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -244,7 +291,7 @@ def main() -> None:
     calls = []
     for label, point in _points(
         np.asarray(problem.x0, dtype=float), args.relative_step, args.pattern,
-        args.nearby_order,
+        args.nearby_order, args.relative_step_sequence,
     ):
         current_stage[0] = label
         _clear_problem_cache(problem)
@@ -274,7 +321,7 @@ def main() -> None:
         by_name = {entry["point"]: entry for entry in calls}
         nearby = dict(_points(
             np.asarray(problem.x0, dtype=float), args.relative_step, "nearby",
-            args.nearby_order,
+            args.nearby_order, args.relative_step_sequence,
         ))
         delta = nearby["plus"] - np.asarray(problem.x0, dtype=float)
         gradient = np.asarray(by_name["seed"]["gradient"], dtype=float)
@@ -311,6 +358,7 @@ def main() -> None:
             "adjoint_tol": args.adjoint_tol,
             "adjoint_maxiter": args.adjoint_maxiter,
             "relative_step": args.relative_step,
+            "relative_step_sequence": list(args.relative_step_sequence),
         },
         "dimensions": {
             "active_dofs": int(problem.x0.size),
