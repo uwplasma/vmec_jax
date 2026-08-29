@@ -115,20 +115,22 @@ Polished-root derivative gate
 
 ``benchmarks/polish_implicit.py`` measures matrix-free IFT tangents,
 adjoints, and the optimization-facing custom VJP.  The clean Apple M4 record
-in ``benchmarks/polish_implicit_m4.json`` uses the full-rank 24-unknown
-structural Solovev gate.  Median warm times over ten repeats are 3.94 ms for
-the tangent, 5.78 ms for the adjoint, and 5.72 ms for the custom VJP.  With
+in ``benchmarks/polish_implicit_m4.json`` uses the full-rank 23-unknown
+native-spline Solovev gate.  Median warm times over ten repeats are 3.51 ms for
+the tangent, 16.06 ms for the adjoint, and 16.66 ms for the custom VJP.  With
 the persistent compilation cache disabled, cold compile-plus-execute times
-are 4.04 s, 4.99 s, and 5.46 s, respectively.
+are 4.65 s, 5.83 s, and 6.41 s, respectively.
 
-The same record reports incremental process peak RSS of 260 MiB for the first
-tangent executable, 213 MiB for the separately compiled adjoint, and 278 MiB
+The same record reports incremental process peak RSS of 215 MiB for the first
+tangent executable, 330 MiB for the separately compiled adjoint, and 219 MiB
 for the separately compiled custom-VJP executable.  These increments include
 XLA compilation and are intentionally not described as live solve buffers.
-The complete tangent/adjoint dot-product mismatch is ``1.77e-11`` and the
-custom VJP equals the explicit adjoint to recorded precision.  As with the
-strong-root benchmark, this is a structural correctness and overhead gate,
-not a certified production-equilibrium scaling claim.
+The complete tangent/adjoint dot-product mismatch is ``3.82e-10`` and the
+custom VJP agrees with the explicit adjoint to ``3.54e-20`` relative squared
+error.  The native chart reduces the tangent work but currently increases
+transpose iterations; bounded mode-block transpose factors remain a promotion
+gate.  As with the strong-root benchmark, this is a structural correctness and
+overhead gate, not a certified production-equilibrium scaling claim.
 
 Benchmark suite (CPU, ns = 201)
 -------------------------------
