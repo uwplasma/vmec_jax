@@ -240,6 +240,34 @@ def test_legacy_lift_preserves_axis_boundary_and_lambda_gauge():
     np.testing.assert_allclose(imported.boundary_R_cos, high_order.boundary_R_cos, rtol=0.0, atol=2e-13)
 
 
+def test_legacy_lift_is_overdetermined_for_stable_second_derivatives():
+    """The default must smooth first-order mesh noise, not interpolate it."""
+
+    inp = VmecInput.from_file("examples/data/input.solovev").change_resolution(
+        mpol=3, ntor=0, ntheta=12, nzeta=4
+    )
+    resolution = replace(resolution_from_input(inp), ns=11)
+    runtime = prepare_runtime(inp, resolution)
+    lifted = lift_high_order_state(
+        _initial_state(runtime.setup), runtime, degree=5
+    )
+    interpolating = lift_high_order_state(
+        _initial_state(runtime.setup),
+        runtime,
+        radial_basis=BSplineBasis.clamped(np.linspace(0.0, 1.0, 7), degree=5),
+        degree=5,
+    )
+    stable = certify_strong_force(lifted)
+    unstable = certify_strong_force(interpolating)
+    assert lifted.radial_basis.size == 8
+    assert lifted.radial_basis.size < resolution.ns
+    assert float(stable.absolute_l2) < 1.0e-2 * float(unstable.absolute_l2)
+    assert float(stable.radial_refinement_difference) < 1.0e-8
+    assert float(stable.minimum_signed_jacobian) > 10.0 * float(
+        unstable.minimum_signed_jacobian
+    )
+
+
 @pytest.mark.parametrize("name", ["R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin"])
 def test_state_rejects_malformed_fourier_tables(name):
     state = _constant_toroidal_field_state()

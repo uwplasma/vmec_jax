@@ -48,6 +48,7 @@ from vmex.core.polish_implicit import (
     strong_root_adjoint,
     strong_root_tangent,
 )
+from vmex.core.radial_basis import BSplineBasis
 from vmex.core.strong_force import lift_high_order_state
 
 jax.config.update("jax_enable_x64", True)
@@ -253,7 +254,14 @@ def small_adapter():
     params = implicit.params_from_input(inp)
     state, mask = implicit.solve_implicit_with_aux(params, config)
     runtime = implicit.runtime_from_params(params, config)
-    native = lift_high_order_state(state, runtime, degree=3)
+    native = lift_high_order_state(
+        state,
+        runtime,
+        radial_basis=BSplineBasis.clamped(
+            np.linspace(0.0, 1.0, 3), degree=3, quadrature_order=6
+        ),
+        degree=3,
+    )
     adapter = build_low_order_preconditioner(
         native,
         params,
@@ -792,4 +800,4 @@ def test_public_solver_auto_attaches_an_already_certified_native_state():
     assert result.polish_report.converged
     assert result.polish_report.termination_reason == "already-certified"
     assert result.state.R_cos.shape == (5, 3)
-    assert result.native_equilibrium.R_cos.shape == (3, 5)
+    assert result.native_equilibrium.R_cos.shape == (3, 4)

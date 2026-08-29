@@ -811,9 +811,11 @@ def polish_legacy_solution(
 ) -> PolishResult:
     """Refine and lift one converged legacy solve, then run the strong driver."""
 
+    started = perf_counter()
     from . import implicit
     from .input import VmecInput
-    from .strong_force import lift_high_order_state
+    from .radial_basis import BSplineBasis
+    from .strong_force import certify_strong_force, lift_high_order_state
 
     if not isinstance(source, VmecInput):
         raise TypeError("strong-force polishing requires a VmecInput source")
@@ -833,9 +835,54 @@ def polish_legacy_solution(
         legacy_state,
         dof_mask,
     )
+    # Certification is a reconstruction problem, not a requirement to retain
+    # one spline coefficient per legacy sample. Evaluate the stable,
+    # overdetermined lift first; an already-certified result needs neither the
+    # compatibility chart nor a factorization. The empty correction records
+    # that no root coordinates were constructed or applied.
+    certified_native = lift_high_order_state(
+        refined_state,
+        legacy_runtime,
+        degree=config.radial_degree,
+    )
+    initial_certificate = certify_strong_force(certified_native)
+    if float(initial_certificate.normalized_l2) <= config.certificate_tolerance:
+        report = PolishReport(
+            converged=True,
+            termination_reason="already-certified",
+            final_alpha=1.0,
+            initial_normalized_l2=float(initial_certificate.normalized_l2),
+            final_normalized_l2=float(initial_certificate.normalized_l2),
+            continuation_accepted=0,
+            continuation_rejected=0,
+            nonlinear_iterations=0,
+            linear_iterations=0,
+            residual_evaluations=0,
+            arclength_steps=0,
+            minimum_signed_jacobian=float(initial_certificate.minimum_signed_jacobian),
+            factor_build_seconds=0.0,
+            solve_seconds=perf_counter() - started,
+        )
+        return PolishResult(
+            certified_native,
+            initial_certificate,
+            report,
+            jnp.zeros((0,), dtype=jnp.asarray(refined_state.R_cos).dtype),
+        )
+    # The current square system is expressed in every legacy radial degree of
+    # freedom. Keep an equal-size spline chart here until the native-spline
+    # coordinate reduction lands; the independent oracle/import path uses the
+    # overdetermined default fit and must not inherit this compatibility chart.
+    spans = max(1, int(resolution.ns) - int(config.radial_degree))
+    polish_basis = BSplineBasis.clamped(
+        np.linspace(0.0, 1.0, spans + 1),
+        degree=config.radial_degree,
+        quadrature_order=config.radial_degree + 3,
+    )
     native = lift_high_order_state(
         refined_state,
         legacy_runtime,
+        radial_basis=polish_basis,
         degree=config.radial_degree,
     )
     low_preconditioner = build_low_order_preconditioner(

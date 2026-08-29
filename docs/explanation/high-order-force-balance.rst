@@ -40,6 +40,16 @@ from VMEX, VMEC2000, or VMEC++ enters through the same tested mode-remapping and
 lambda inversion used by hot restart.  DESC is used only as an external oracle;
 VMEX does not import or depend on DESC.
 
+The legacy radial mesh is first order, so the default reconstruction is an
+overdetermined fit with roughly two mesh samples per free spline span.  An
+equal-size interpolant reproduces mesh-scale noise exactly and can turn that
+noise into very large second derivatives in ``curl(B)`` even when the sampled
+surface coordinates look accurate.  Callers with a genuinely high-order
+source may supply an explicit ``radial_basis``.  The current legacy-coordinate
+polishing chart temporarily retains an equal-size basis after the independent
+certificate has failed; replacing those redundant legacy coordinates with
+native spline coefficients is tracked separately and rank tests remain strict.
+
 Independent continuum oracle
 ----------------------------
 

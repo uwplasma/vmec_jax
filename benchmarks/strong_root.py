@@ -26,6 +26,7 @@ from vmex.core.polish import (
     strong_root_rank,
     strong_root_residual,
 )
+from vmex.core.radial_basis import BSplineBasis
 from vmex.core.strong_force import lift_high_order_state
 
 from _provenance import assert_repo_vmex, git_state
@@ -79,7 +80,16 @@ def main() -> None:
     params = implicit.params_from_input(inp)
     state, mask = implicit.solve_implicit_with_aux(params, config)
     legacy_runtime = implicit.runtime_from_params(params, config)
-    native = lift_high_order_state(state, legacy_runtime, degree=args.degree)
+    native = lift_high_order_state(
+        state,
+        legacy_runtime,
+        radial_basis=BSplineBasis.clamped(
+            np.linspace(0.0, 1.0, args.ns - args.degree + 1),
+            degree=args.degree,
+            quadrature_order=args.degree + 3,
+        ),
+        degree=args.degree,
+    )
     adapter = build_low_order_preconditioner(
         native,
         params,

@@ -423,7 +423,20 @@ def lift_high_order_state(
     modes = runtime.modes
     s = np.asarray(setup.s_full, dtype=float)
     if radial_basis is None:
-        spans = max(1, min(int(max_spans), max(1, s.size - int(degree))))
+        # The legacy full mesh is only a first-order radial representation.
+        # Giving a degree-p spline one coefficient per sample interpolates
+        # that mesh noise exactly; its second derivatives then oscillate even
+        # though R/Z/lambda values look innocuous.  This is catastrophic for
+        # curl(B): on the ns=11 Solovev regression the interpolating degree-5
+        # lift reports |JxB-grad(p)|_L2 = 4.97e7 N/m^3 and a 0.81 quadrature
+        # change, whereas the overdetermined eight-coefficient fit reports
+        # 9.73e1 N/m^3 and 3.8e-5.  Start with roughly two mesh samples per
+        # free span.  Explicit ``radial_basis=`` remains the seam for a caller
+        # that has a genuinely high-order source or has selected knots by a
+        # refinement certificate.
+        available_spans = max(1, s.size - int(degree))
+        regularized_spans = max(1, (available_spans + 1) // 2)
+        spans = max(1, min(int(max_spans), regularized_spans))
         radial_basis = BSplineBasis.clamped(
             np.linspace(0.0, 1.0, spans + 1),
             degree=degree,
