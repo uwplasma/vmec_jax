@@ -485,6 +485,7 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
     zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
     radial_matrix = runtime.native.radial_basis.basis_matrix(runtime.radial_nodes)
     assert runtime.radial_nodes.size > runtime.native.radial_basis.size
+    assert runtime.theta.size >= 4 * int(np.max(np.abs(runtime.native.m))) + 5
     np.testing.assert_allclose(
         runtime.radial_fit @ radial_matrix,
         np.eye(runtime.native.radial_basis.size),

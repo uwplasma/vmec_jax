@@ -211,6 +211,13 @@ residual is 3.08 ms.  This independently confirms that three weak directions
 remain after exact gauge elimination.  It is a failed full-rank gate, not a
 production solver promotion.
 
+The nonlinear force contains metric inverses and is not band-limited at the
+retained geometry order.  A grid with ``2*mmax + 3`` poloidal points resolves
+the projected output modes but not their nonlinear source.  The next diagnostic
+uses ``4*mmax + 5`` points: the production ``mmax=5`` chart gains one numerical
+direction at 25 points and remains unchanged at 37.  Two directions and the
+added angular cost remain explicit gates.
+
 Low-order physics preconditioner
 --------------------------------
 

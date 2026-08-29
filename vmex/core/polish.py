@@ -1035,7 +1035,12 @@ def make_strong_root_runtime(
     radial_fit = np.linalg.pinv(weighted_matrix, rcond=1.0e-12) * sqrt_weights[None, :]
     m = np.asarray(native.m, dtype=int)
     n = np.asarray(native.n, dtype=int)
-    ntheta = max(2 * int(np.max(np.abs(m), initial=0)) + 3, 4)
+    # The nonlinear force contains metric inverses and is not band-limited at
+    # the retained geometry order.  The former ``2*mmax + 3`` grid resolves
+    # the requested output modes but aliases their nonlinear source.  The
+    # production m=5 rank gate gains one physical direction at 25 points and
+    # is unchanged at 37, so retain that converged ``4*mmax + 5`` rule.
+    ntheta = max(4 * int(np.max(np.abs(m), initial=0)) + 5, 4)
     nzeta = max(2 * int(np.max(np.abs(n), initial=0)) + 3, 1)
     theta_grid = 2.0 * np.pi * np.arange(ntheta) / ntheta
     zeta_grid = 2.0 * np.pi * np.arange(nzeta) / nzeta
