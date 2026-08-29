@@ -110,6 +110,25 @@ retained across Krylov steps and continuation stages until the documented
 quality policy requests a refresh.  The table is a reproducibility and
 overhead gate, not a production-resolution scaling claim.
 
+Polished-root derivative gate
+-----------------------------
+
+``benchmarks/polish_implicit.py`` measures matrix-free IFT tangents,
+adjoints, and the optimization-facing custom VJP.  The clean Apple M4 record
+in ``benchmarks/polish_implicit_m4.json`` uses the full-rank 24-unknown
+structural Solovev gate.  Median warm times over ten repeats are 3.63 ms for
+the tangent, 5.75 ms for the adjoint, and 5.69 ms for the custom VJP.  Cold
+compile-plus-execute times are 4.25 s, 5.15 s, and 5.61 s, respectively.
+
+The same record reports incremental process peak RSS of 267 MiB for the first
+tangent executable, 277 MiB for the separately compiled adjoint, and 175 MiB
+for the separately compiled custom-VJP executable.  These increments include
+XLA compilation and are intentionally not described as live solve buffers.
+The complete tangent/adjoint dot-product mismatch is ``1.77e-11`` and the
+custom VJP equals the explicit adjoint to recorded precision.  As with the
+strong-root benchmark, this is a structural correctness and overhead gate,
+not a certified production-equilibrium scaling claim.
+
 Benchmark suite (CPU, ns = 201)
 -------------------------------
 
