@@ -13,6 +13,24 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import test_manifest  # noqa: E402
+import ci_scope  # noqa: E402
+
+
+def test_ci_scope_skips_only_documentation_and_rendered_media() -> None:
+    assert ci_scope.classify(
+        ["docs/howto/gpu.rst", "README.md", "docs/figure.webp"]
+    ) == (False, False)
+    assert ci_scope.classify(["docs/howto/gpu.rst", "vmex/doctor.py"]) == (
+        True,
+        True,
+    )
+    assert ci_scope.classify(["tests/test_doctor.py"]) == (True, False)
+    assert ci_scope.classify([".github/workflows/ci.yml"]) == (True, False)
+
+
+def test_ci_scope_keeps_empty_and_main_branch_changes_conservative() -> None:
+    assert ci_scope.classify([]) == (True, True)
+    assert ci_scope.classify(["README.md"], force_all=True) == (True, True)
 
 
 def test_collected_suite_has_exact_manifest_ownership() -> None:
