@@ -190,15 +190,6 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "PolishConfig": (".core.polish_driver", "PolishConfig"),
     "PolishReport": (".core.polish_driver", "PolishReport"),
     "PolishResult": (".core.polish_driver", "PolishResult"),
-    "polish_strong_root": (".core.polish_driver", "polish_strong_root"),
-    "PolishAdjointResult": (".core.polish_implicit", "PolishAdjointResult"),
-    "PolishLinearConfig": (".core.polish_implicit", "PolishLinearConfig"),
-    "PolishLinearReport": (".core.polish_implicit", "PolishLinearReport"),
-    "PolishTangentResult": (".core.polish_implicit", "PolishTangentResult"),
-    "implicit_polished_state": (
-        ".core.polish_implicit", "implicit_polished_state"),
-    "strong_root_adjoint": (".core.polish_implicit", "strong_root_adjoint"),
-    "strong_root_tangent": (".core.polish_implicit", "strong_root_tangent"),
     # external fields
     "MgridData": (".core.mgrid", "MgridData"),
     "MgridField": (".core.mgrid", "MgridField"),

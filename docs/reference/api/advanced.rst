@@ -42,13 +42,14 @@ The single-grid :func:`vmex.solve` entry point accepts ``polish=False``
 to the result without replacing its legacy sampled state or wout-compatible
 arrays.
 
-After the alpha=1 correction has passed the independent certificate,
-:func:`vmex.implicit_polished_state` supplies an optimization-facing reverse
-pass.  It differentiates the converged root with one matrix-free transposed
-Krylov solve, rather than replaying continuation.  Explicit
-:func:`vmex.strong_root_tangent` and :func:`vmex.strong_root_adjoint` calls
-return true-residual convergence reports for forward and reverse sensitivity
-work.
+The public primal path solves the overdetermined physical collocation residual
+with SOLVAX Gauss--Newton and accepts it only after independent force,
+radial-refinement, and nestedness checks.  The existing
+:mod:`vmex.core.polish_implicit` entry points describe the earlier square-root
+diagnostic and are deliberately not exported from the top-level API as the
+optimization interface for that rectangular production solve.  The production
+derivative will use implicit least-squares-stationarity rather than replaying
+nonlinear iterations.
 
 Spectral representation and physics kernels
 -------------------------------------------

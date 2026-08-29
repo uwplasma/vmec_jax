@@ -30,7 +30,32 @@ same Apple host with each code's stated pipeline boundary, not warm-JIT claims.
 
 ![Independent Solov'ev and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 
-Reproduce the JIT-native benchmark with:
+Use the certified path from Python (the explicit controls below reproduce the
+documented Solov'ev case):
+
+```python
+import vmex as vj
+
+inp = vj.VmecInput.from_file("examples/data/input.solovev_analytical")
+inp = inp.change_resolution(mpol=5, ntor=0, ntheta=14, nzeta=4)
+result = vj.solve(
+    inp,
+    ftol=1e-10,
+    max_iterations=1000,
+    polish=True,
+    polish_config=vj.PolishConfig(
+        tolerance=1e-3,
+        validation_tolerance=0.0144049834,
+        radial_degree=3,
+        radial_spans=16,
+        radial_refinement_tolerance=1e-3,
+    ),
+)
+print(result.polish_report.termination_reason)
+print(result.strong_force.normalized_l2)
+```
+
+Reproduce the measured JIT-native benchmark with:
 
 ```console
 python benchmarks/strong_polish.py \
@@ -40,11 +65,12 @@ python benchmarks/strong_polish.py \
   --radial-refinement-tolerance 1e-3
 ```
 
-The experimental flag uses the matrix-free least-squares API merged in
+The public call and benchmark use the same matrix-free least-squares API merged in
 [SOLVAX PR 98](https://github.com/uwplasma/SOLVAX/pull/98). The committed raw
 artifacts, exact source revisions, figure generator, and timing boundaries live
-in `benchmarks/`; the default public equilibrium solve remains unchanged while
-the differentiable polishing API and warm-performance work are finalized.
+in `benchmarks/`; the default equilibrium solve remains unchanged. The primal
+polishing API is experimental while its least-squares-stationarity gradient and
+native downstream gates are finalized.
 
 ## Install
 

@@ -51,6 +51,7 @@ from vmex.core.polish_driver import (
     _ptc_config,
     _residual_evaluations,
     _supports_keyword,
+    polish_collocation_least_squares,
     polish_strong_root,
 )
 from vmex.core.polish_implicit import (
@@ -1029,12 +1030,38 @@ def test_polish_driver_skips_an_already_certified_state(small_strong_root):
     np.testing.assert_array_equal(result.correction, 0.0)
 
 
+def test_collocation_polish_returns_full_layout_correction(small_strong_root):
+    chart = make_strong_structured_chart(
+        small_strong_root, balance_iterations=1, balance_probes=2
+    )
+    result = polish_collocation_least_squares(
+        small_strong_root,
+        chart=chart,
+        config=PolishConfig(
+            tolerance=2.0,
+            validation_tolerance=10.0,
+            radial_refinement_tolerance=10.0,
+            collocation_scale_probes=2,
+            max_nonlinear_iterations=1,
+            fail_policy="return_unpolished",
+        ),
+    )
+    assert result.correction.shape == (small_strong_root.layout.size,)
+    assert result.polish_report.least_squares_success is not None
+    assert result.polish_report.variable_scale_probes == 2
+
+
 @pytest.mark.parametrize(
     ("updates", "message"),
     [
         ({"tolerance": 0.0}, "tolerances"),
         ({"validation_tolerance": 0.0}, "tolerances"),
         ({"radial_degree": 4}, "radial_degree"),
+        ({"radial_spans": 0}, "radial_spans"),
+        ({"radial_quadrature_order": 1}, "radial_quadrature_order"),
+        ({"radial_refinement_tolerance": 0.0}, "radial_refinement_tolerance"),
+        ({"collocation_scale_probes": -1}, "collocation_scale_probes"),
+        ({"least_squares_initial_damping": 0.0}, "least_squares_initial_damping"),
         ({"alpha_min_step": 0.1}, "alpha_min_step"),
         ({"ptc_initial_dtau": 0.0}, "ptc_initial_dtau"),
         ({"max_continuation_stages": 0}, "iteration limits"),

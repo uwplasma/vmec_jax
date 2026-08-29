@@ -1,9 +1,9 @@
-"""Branch-preserving fixed-boundary strong-force polishing.
+"""Fixed-boundary strong-force polishing and independent certification.
 
-This host orchestrator follows the square residual defined in
-``vmex.core.polish``.  Each nonlinear stage remains JIT-compatible in SOLVAX;
-host code records continuation decisions and evaluates the independent final
-certificate.  No optimizer or residual-norm minimization is used.
+The production path solves the overdetermined physical collocation residual
+with SOLVAX's matrix-free Gauss--Newton method.  The earlier square
+continuation driver remains available for rank and branch diagnostics, but is
+not the public polishing route.
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ from .polish import (
     build_strong_physical_block_preconditioner,
     build_strong_mode_block_preconditioner,
     make_strong_root_runtime,
+    make_strong_structured_chart,
+    strong_collocation_residual,
     strong_physical_residual,
     strong_root_residual,
 )
@@ -90,6 +92,11 @@ class PolishConfig:
     tolerance: float = 1.0e-8
     validation_tolerance: float | None = None
     radial_degree: int = 5
+    radial_spans: int | None = None
+    radial_quadrature_order: int | None = None
+    radial_refinement_tolerance: float = 1.0e-3
+    collocation_scale_probes: int = 8
+    least_squares_initial_damping: float = 1.0e-3
     max_continuation_stages: int = 32
     alpha_initial_step: float = 1.0e-3
     alpha_min_step: float = 1.0e-5
@@ -122,6 +129,8 @@ class PolishConfig:
             self.minimum_jacobian_ratio,
             self.minimum_jacobian_floor,
             self.arclength_step,
+            self.radial_refinement_tolerance,
+            self.least_squares_initial_damping,
         )
         if not all(np.isfinite(value) for value in finite):
             raise ValueError("polish controls must be finite")
@@ -132,6 +141,19 @@ class PolishConfig:
             raise ValueError("polish tolerances must be positive")
         if self.radial_degree not in (3, 5, 7):
             raise ValueError("radial_degree must be 3, 5, or 7")
+        if self.radial_spans is not None and self.radial_spans < 1:
+            raise ValueError("radial_spans must be positive")
+        if (
+            self.radial_quadrature_order is not None
+            and self.radial_quadrature_order < 2
+        ):
+            raise ValueError("radial_quadrature_order must be at least 2")
+        if self.radial_refinement_tolerance <= 0.0:
+            raise ValueError("radial_refinement_tolerance must be positive")
+        if self.collocation_scale_probes < 0:
+            raise ValueError("collocation_scale_probes must be nonnegative")
+        if self.least_squares_initial_damping <= 0.0:
+            raise ValueError("least_squares_initial_damping must be positive")
         if not 0.0 < self.alpha_min_step <= self.alpha_initial_step <= self.alpha_max_step:
             raise ValueError("require alpha_min_step <= alpha_initial_step <= alpha_max_step")
         if not 0.0 < self.ptc_initial_dtau <= self.ptc_max_dtau:
@@ -182,6 +204,16 @@ class PolishReport:
     minimum_signed_jacobian: float
     factor_build_seconds: float
     solve_seconds: float
+    least_squares_cost: float | None = None
+    least_squares_optimality: float | None = None
+    least_squares_initial_optimality: float | None = None
+    least_squares_relative_optimality: float | None = None
+    least_squares_success: bool | None = None
+    least_squares_damping: float | None = None
+    radial_refinement_tolerance: float | None = None
+    variable_scale_min: float | None = None
+    variable_scale_max: float | None = None
+    variable_scale_probes: int = 0
 
 
 class PolishResult(NamedTuple):
@@ -906,6 +938,154 @@ def polish_strong_root(
     )
 
 
+def _collocation_variable_scale(
+    residual,
+    zero: jax.Array,
+    row_count: int,
+    probes: int,
+) -> np.ndarray:
+    """Estimate inverse column norms with deterministic transpose probes."""
+
+    if probes == 0:
+        return np.ones(np.asarray(zero).shape, dtype=float)
+    _, jvp = jax.linearize(residual, jnp.asarray(zero))
+    transpose = jax.linear_transpose(jvp, jnp.asarray(zero))
+    generator = np.random.default_rng(0)
+    column_squared = np.zeros(np.asarray(zero).shape, dtype=float)
+    for _ in range(probes):
+        probe = generator.choice(np.asarray([-1.0, 1.0]), size=row_count)
+        response = np.asarray(transpose(jnp.asarray(probe))[0])
+        column_squared += response * response
+    column_norm = np.sqrt(column_squared / float(probes))
+    column_floor = max(1.0e-8 * float(np.max(column_norm)), 1.0e-12)
+    return 1.0 / np.maximum(column_norm, column_floor)
+
+
+def polish_collocation_least_squares(
+    runtime: StrongRootRuntime,
+    *,
+    config: PolishConfig | None = None,
+    chart: StrongPhysicalChart | None = None,
+    initial_certificate: StrongForceReport | None = None,
+) -> PolishResult:
+    """Solve and certify the overdetermined physical force residual.
+
+    The residual exposes both independent force channels at every collocation
+    point. SOLVAX applies matrix-free JVP/VJP normal products; no dense
+    Jacobian is formed. The returned correction uses the full constrained
+    layout so it composes with the existing native-state utilities.
+    """
+
+    from solvax import LeastSquaresConfig, gauss_newton_least_squares
+
+    config = PolishConfig() if config is None else config
+    chart = make_strong_structured_chart(runtime) if chart is None else chart
+    initial_certificate = (
+        certify_strong_force(runtime.native)
+        if initial_certificate is None
+        else initial_certificate
+    )
+    zero = jnp.zeros((chart.size,), dtype=jnp.asarray(runtime.native.R_cos).dtype)
+    initial_collocation = strong_collocation_residual(zero, runtime, chart)
+    collocation_scale = max(
+        float(jnp.linalg.norm(initial_collocation))
+        / np.sqrt(float(initial_collocation.size)),
+        1.0e-12,
+    )
+    physical_residual = jax.jit(
+        lambda value: (
+            strong_collocation_residual(value, runtime, chart) / collocation_scale
+        )
+    )
+    variable_scale = _collocation_variable_scale(
+        physical_residual,
+        zero,
+        int(initial_collocation.size),
+        config.collocation_scale_probes,
+    )
+    variable_scale_array = jnp.asarray(variable_scale)
+    transformed_residual = jax.jit(
+        lambda value: physical_residual(variable_scale_array * value)
+    )
+    least_squares_config = LeastSquaresConfig(
+        rtol=config.tolerance,
+        max_steps=config.max_nonlinear_iterations,
+        initial_damping=config.least_squares_initial_damping,
+        linear_rtol=1.0e-3,
+        linear_max_steps=max(
+            config.linear_restart * config.linear_max_restarts,
+            1,
+        ),
+    )
+    started = perf_counter()
+    solution = jax.jit(
+        lambda value: gauss_newton_least_squares(
+            transformed_residual,
+            value,
+            config=least_squares_config,
+        )
+    )(zero)
+    jax.block_until_ready(solution)
+    vector = variable_scale_array * solution.x
+    state = _corrected_state(vector, runtime, chart)
+    certificate = certify_strong_force(state)
+    independently_certified = bool(
+        float(certificate.normalized_l2) <= config.certificate_tolerance
+        and float(certificate.radial_refinement_difference)
+        <= config.radial_refinement_tolerance
+        and float(certificate.minimum_signed_jacobian) > 0.0
+    )
+    converged = bool(solution.converged) and independently_certified
+    report = PolishReport(
+        converged=converged,
+        termination_reason=(
+            "independently-certified"
+            if converged
+            else "solvax-collocation-least-squares"
+        ),
+        final_alpha=1.0,
+        initial_normalized_l2=float(initial_certificate.normalized_l2),
+        final_normalized_l2=float(certificate.normalized_l2),
+        continuation_accepted=int(solution.accepted_steps),
+        continuation_rejected=int(solution.rejected_steps),
+        nonlinear_iterations=int(solution.steps),
+        linear_iterations=int(solution.linear_iterations),
+        residual_evaluations=int(solution.steps) + 1,
+        arclength_steps=0,
+        minimum_signed_jacobian=float(certificate.minimum_signed_jacobian),
+        factor_build_seconds=runtime.low_preconditioner.factor_build_seconds,
+        solve_seconds=perf_counter() - started,
+        least_squares_cost=float(solution.cost),
+        least_squares_optimality=float(solution.gradient_norm),
+        least_squares_initial_optimality=float(solution.history.gradient_norm[0]),
+        least_squares_relative_optimality=float(
+            solution.gradient_norm
+            / jnp.maximum(solution.history.gradient_norm[0], 1.0e-300)
+        ),
+        least_squares_success=bool(solution.converged),
+        least_squares_damping=float(solution.damping),
+        radial_refinement_tolerance=config.radial_refinement_tolerance,
+        variable_scale_min=float(np.min(variable_scale)),
+        variable_scale_max=float(np.max(variable_scale)),
+        variable_scale_probes=config.collocation_scale_probes,
+    )
+    if converged:
+        return PolishResult(state, certificate, report, chart.lift(vector))
+    if config.fail_policy == "raise":
+        raise StrongForceCertificationError(
+            "collocation polish failed its stationarity or force certificate",
+            hint="inspect the polish report and refine the radial representation",
+            solver_converged=bool(solution.converged),
+            normalized_l2=float(certificate.normalized_l2),
+            validation_tolerance=config.certificate_tolerance,
+            radial_refinement=float(certificate.radial_refinement_difference),
+            radial_refinement_tolerance=config.radial_refinement_tolerance,
+        )
+    return PolishResult(
+        runtime.native, initial_certificate, report, jnp.zeros_like(chart.lift(zero))
+    )
+
+
 def polish_legacy_solution(
     source,
     resolution,
@@ -919,6 +1099,7 @@ def polish_legacy_solution(
     started = perf_counter()
     from . import implicit
     from .input import VmecInput
+    from .radial_basis import BSplineBasis
     from .strong_force import certify_strong_force, lift_high_order_state
 
     if not isinstance(source, VmecInput):
@@ -944,9 +1125,23 @@ def polish_legacy_solution(
     # overdetermined lift first; an already-certified result needs neither the
     # compatibility chart nor a factorization. The empty correction records
     # that no root coordinates were constructed or applied.
+    radial_basis = (
+        None
+        if config.radial_spans is None
+        else BSplineBasis.clamped(
+            np.linspace(0.0, 1.0, config.radial_spans + 1),
+            degree=config.radial_degree,
+            quadrature_order=(
+                config.radial_degree + 3
+                if config.radial_quadrature_order is None
+                else config.radial_quadrature_order
+            ),
+        )
+    )
     certified_native = lift_high_order_state(
         refined_state,
         legacy_runtime,
+        radial_basis=radial_basis,
         degree=config.radial_degree,
     )
     initial_certificate = certify_strong_force(certified_native)
@@ -980,9 +1175,16 @@ def polish_legacy_solution(
         implicit_config,
         refined_state,
         dof_mask,
+        probe_chunk_size=4,
     )
-    runtime = make_strong_root_runtime(native, low_preconditioner, dof_mask)
-    return polish_strong_root(
+    runtime = make_strong_root_runtime(
+        native,
+        low_preconditioner,
+        dof_mask,
+        balance_full_root=False,
+        radial_quadrature_order=config.radial_quadrature_order,
+    )
+    return polish_collocation_least_squares(
         runtime,
         config=config,
         initial_certificate=initial_certificate,
@@ -993,6 +1195,7 @@ __all__ = [
     "PolishConfig",
     "PolishReport",
     "PolishResult",
+    "polish_collocation_least_squares",
     "polish_legacy_solution",
     "polish_strong_root",
 ]
