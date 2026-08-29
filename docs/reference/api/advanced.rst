@@ -30,6 +30,9 @@ High-order correction transfer and preconditioner
 .. automodule:: vmex.core.polish
    :members:
 
+.. automodule:: vmex.core.polish_driver
+   :members:
+
 Spectral representation and physics kernels
 -------------------------------------------
 

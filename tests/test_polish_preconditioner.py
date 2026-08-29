@@ -12,6 +12,7 @@ import pytest
 
 from vmex.core import implicit
 from vmex.core import solver
+from vmex.core.errors import StrongForceContinuationError
 from vmex.core.input import VmecInput
 from vmex.core.polish import (
     HighOrderCorrection,
@@ -26,6 +27,14 @@ from vmex.core.polish import (
     preconditioner_refresh_decision,
     strong_root_rank,
     strong_root_residual,
+)
+from vmex.core.polish_driver import (
+    PolishConfig,
+    _bordered_preconditioner,
+    _branch_tangent,
+    _build_mode_block_preconditioner,
+    _low_inverse,
+    polish_strong_root,
 )
 from vmex.core.strong_force import lift_high_order_state
 
@@ -364,3 +373,135 @@ def test_strong_root_validation_branches(small_adapter, small_strong_root):
     )
     assert rank == layout.size
     assert values.shape == (layout.size,)
+
+
+def test_low_vector_inverse_matches_scaled_legacy_endpoint(small_strong_root):
+    runtime = small_strong_root
+    zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
+    direction = jnp.linspace(-0.1, 0.2, runtime.layout.size)
+    _, response = jax.jvp(
+        lambda value: strong_root_residual(value, runtime, 0.0),
+        (zero,),
+        (direction,),
+    )
+    recovered = _low_inverse(response, runtime)
+    np.testing.assert_allclose(recovered, direction, rtol=2.0e-11, atol=2.0e-11)
+
+
+def test_arclength_tangent_and_bordered_preconditioner_are_finite(
+    small_strong_root,
+):
+    runtime = small_strong_root
+    zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
+    block_preconditioner = _build_mode_block_preconditioner(runtime)
+    direction = jnp.linspace(-0.15, 0.25, runtime.layout.size)
+    _, response = jax.jvp(
+        lambda value: strong_root_residual(value, runtime, 1.0),
+        (zero,),
+        (direction,),
+    )
+    recovered = block_preconditioner.apply(response, 1.0)
+    np.testing.assert_allclose(recovered, direction, rtol=3.0e-8, atol=3.0e-8)
+    tangent = _branch_tangent(
+        zero,
+        0.0,
+        runtime,
+        PolishConfig(),
+        None,
+        block_preconditioner,
+    )
+    np.testing.assert_allclose(
+        jnp.vdot(tangent[0], tangent[0]).real + tangent[1] ** 2,
+        1.0,
+        rtol=2.0e-13,
+    )
+    assert float(tangent[1]) > 0.0
+    rhs = (jnp.linspace(-0.2, 0.3, runtime.layout.size), jnp.asarray(0.4))
+    corrected = _bordered_preconditioner(
+        runtime, tangent, block_preconditioner
+    )((zero, 0.0), rhs, 1.0e6)
+    assert corrected[0].shape == zero.shape
+    assert np.all(np.isfinite(np.asarray(corrected[0])))
+    assert np.isfinite(float(corrected[1]))
+
+
+def test_polish_driver_records_bounded_unpolished_return(
+    small_strong_root, monkeypatch
+):
+    class InitialCertificate:
+        normalized_l2 = jnp.asarray(2.0)
+
+    config = PolishConfig(
+        max_continuation_stages=1,
+        alpha_initial_step=1.0e-3,
+        alpha_min_step=1.0e-3,
+        alpha_max_step=1.0e-3,
+        max_nonlinear_iterations=12,
+        use_pseudo_arclength=True,
+        fail_policy="return_unpolished",
+    )
+
+    def fail_tangent(*args, **kwargs):
+        del args, kwargs
+        raise StrongForceContinuationError("test tangent failure")
+
+    monkeypatch.setattr(
+        "vmex.core.polish_driver._arclength_to_target", fail_tangent
+    )
+    result = polish_strong_root(
+        small_strong_root,
+        config=config,
+        initial_certificate=InitialCertificate(),
+    )
+    report = result.polish_report
+    assert not report.converged
+    assert report.termination_reason == "pseudo-arclength-tangent-failed"
+    assert report.final_alpha == pytest.approx(1.0e-3)
+    assert report.continuation_accepted == 1
+    assert report.continuation_rejected == 0
+    assert report.nonlinear_iterations > 0
+    assert report.linear_iterations > 0
+    assert report.minimum_signed_jacobian > 0.0
+    np.testing.assert_array_equal(result.correction, 0.0)
+    assert result.native_equilibrium is small_strong_root.native
+
+
+def test_polish_driver_skips_an_already_certified_state(small_strong_root):
+    class InitialCertificate:
+        normalized_l2 = jnp.asarray(1.0e-9)
+        minimum_signed_jacobian = jnp.asarray(0.5)
+
+    result = polish_strong_root(
+        small_strong_root,
+        config=PolishConfig(validation_tolerance=1.0e-8),
+        initial_certificate=InitialCertificate(),
+    )
+    report = result.polish_report
+    assert report.converged
+    assert report.termination_reason == "already-certified"
+    assert report.nonlinear_iterations == 0
+    assert report.linear_iterations == 0
+    assert report.residual_evaluations == 0
+    np.testing.assert_array_equal(result.correction, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"tolerance": 0.0}, "tolerances"),
+        ({"validation_tolerance": 0.0}, "tolerances"),
+        ({"alpha_min_step": 0.1}, "alpha_min_step"),
+        ({"ptc_initial_dtau": 0.0}, "ptc_initial_dtau"),
+        ({"max_continuation_stages": 0}, "iteration limits"),
+        ({"linear_restart": 0}, "linear/backtracking"),
+        ({"preconditioner": "bad"}, "preconditioner"),
+        ({"minimum_jacobian_ratio": 0.0}, "minimum_jacobian_ratio"),
+        ({"minimum_jacobian_floor": 0.0}, "minimum_jacobian_floor"),
+        ({"arclength_step": 0.0}, "pseudo-arclength"),
+        ({"fail_policy": "bad"}, "fail_policy"),
+        ({"tolerance": float("nan")}, "finite"),
+    ],
+)
+def test_polish_config_validation(updates, message):
+    with pytest.raises(ValueError, match=message):
+        PolishConfig(**updates)
