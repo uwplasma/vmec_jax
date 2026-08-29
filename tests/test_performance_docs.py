@@ -9,6 +9,7 @@ measurement artifact.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -60,10 +61,11 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
         "run_baseline.py",
         "run_freeboundary_multigrid.py",
         "run_high_mode_fft.py",
-            "polish_preconditioner.py",
-            "strong_certificate.py",
-            "strong_polish.py",
-            "strong_root.py",
+        "make_strong_force_comparison.py",
+        "polish_preconditioner.py",
+        "strong_certificate.py",
+        "strong_polish.py",
+        "strong_root.py",
         "profile_resources.py",
     ):
         proc = subprocess.run(
@@ -253,6 +255,29 @@ def test_solovev_cross_code_certificates_are_clean_and_comparable() -> None:
         normalized["vmecpp"], rel=2.0e-7
     )
     assert normalized["desc"] < 0.2 * normalized["vmecpp"]
+
+
+def test_readme_strong_force_figure_matches_committed_sources() -> None:
+    metadata = json.loads(
+        (ROOT / "benchmarks" / "strong_force_comparison_m4.json").read_text()
+    )
+    assert metadata["schema"] == "vmex.strong-force-readme-figure/1"
+    figure = ROOT / metadata["figure"]
+    assert figure.is_file()
+    assert hashlib.sha256(figure.read_bytes()).hexdigest() == metadata[
+        "figure_sha256"
+    ]
+    for source in metadata["sources"].values():
+        path = ROOT / source["path"]
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == source["sha256"]
+    normalized = {
+        name: source["normalized_l2"]
+        for name, source in metadata["sources"].items()
+    }
+    assert normalized["VMEX polished"] < normalized["DESC"]
+    readme = (ROOT / "README.md").read_text()
+    assert metadata["figure"] in readme
+    assert "--solvax-least-squares" in readme
 
 
 def test_committed_reports_do_not_expose_personal_paths() -> None:

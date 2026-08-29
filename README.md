@@ -12,6 +12,35 @@ VMEX is a JAX implementation of VMEC for stellarator and tokamak ideal-MHD equil
 
 ![VMEX equilibria and diagnostics](docs/_static/figures/readme_equilibrium_showcase.webp)
 
+## Strong-force polishing (experimental)
+
+The fixed-boundary polishing prototype evaluates both physical MHD-force
+channels on an overdetermined collocation grid and uses matrix-free JAX
+Jacobian/transpose products. On the canonical analytical Solov'ev case, the
+same independent oracle gives normalized L2 force `0.122381` for legacy VMEX,
+`0.122399` for VMEC2000 and VMEC++, `0.014405` for DESC, and `0.002712` for the
+certified polished VMEX state. Radial refinement is `2.15e-4` and nestedness is
+preserved. The accuracy gate passes; the current cold pipeline remains slower
+and slightly higher-memory than DESC, so no warm-cost advantage is claimed.
+
+![Independent Solov'ev strong-force comparison](docs/_static/figures/readme_strong_force_comparison.webp)
+
+Reproduce the JIT-native benchmark with:
+
+```console
+python benchmarks/strong_polish.py \
+  --input examples/data/input.solovev_analytical --ns 31 --mpol 5 \
+  --degree 3 --radial-spans 16 --solvax-least-squares \
+  --solve-tolerance 1e-3 --validation-tolerance 0.0144049834 \
+  --radial-refinement-tolerance 1e-3
+```
+
+The experimental flag currently requires the matrix-free least-squares API in
+[SOLVAX PR 98](https://github.com/uwplasma/SOLVAX/pull/98). The committed raw
+artifacts, exact source revisions, figure generator, and timing boundaries live
+in `benchmarks/`; the default public equilibrium solve remains unchanged while
+the differentiable polishing API and warm-performance work are finalized.
+
 ## Install
 
 ```console
