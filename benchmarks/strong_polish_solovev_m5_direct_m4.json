@@ -1,0 +1,57 @@
+{
+  "case": "solovev_analytical",
+  "degree": 5,
+  "direct_endpoint": true,
+  "final_certificate": {
+    "angular_tail": 0.535521026538766,
+    "normalized_l2": 0.5918641616736336,
+    "radial_refinement": 0.022653240057239003
+  },
+  "full_dofs": 264,
+  "initial_certificate": {
+    "angular_tail": 0.22870016115835554,
+    "normalized_l2": 0.11475032466581055,
+    "radial_refinement": 7.621075212167915e-05
+  },
+  "input_data_embedded": false,
+  "measurement_commit": "60a245ebc2041404982ec55f7f0b716263f801cc",
+  "measurement_dirty": false,
+  "mpol": 5,
+  "ns": 31,
+  "physical_dofs": 184,
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "polish_report": {
+    "arclength_steps": 0,
+    "continuation_accepted": 0,
+    "continuation_rejected": 0,
+    "converged": false,
+    "factor_build_seconds": 5.632759584004816,
+    "final_alpha": 1.0,
+    "final_normalized_l2": 0.5918641616736336,
+    "initial_normalized_l2": 0.11475032466581055,
+    "linear_iterations": 4336,
+    "minimum_signed_jacobian": 3.7750239395330416,
+    "nonlinear_iterations": 30,
+    "residual_evaluations": 94,
+    "solve_seconds": 62.33072362499661,
+    "termination_reason": "direct-endpoint"
+  },
+  "radial_spans": 16,
+  "schema": "vmex.strong-polish-benchmark/1",
+  "setup_peak_rss_increase_mib": 1948.84375,
+  "setup_seconds": 34.16598312499991,
+  "solve_grid": [
+    48,
+    21,
+    1
+  ],
+  "total_peak_rss_increase_mib": 3301.90625,
+  "total_seconds": 96.49671862499963,
+  "versions": {
+    "jax": "0.11.1",
+    "numpy": "2.5.2",
+    "python": "3.12.13",
+    "vmex": "0.7.0"
+  },
+  "vmex_module": "vmex/__init__.py"
+}
