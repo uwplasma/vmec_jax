@@ -163,6 +163,8 @@ class StrongForceSamples:
     force_helical: Array
     radial_force_density: Array
     helical_force_density: Array
+    signed_radial_force_density: Array
+    signed_helical_force_density: Array
     lorentz_norm: Array
     grad_pressure_norm: Array
 
@@ -292,7 +294,10 @@ def _point_force(state: HighOrderEquilibriumState, x: Array) -> tuple[Array, ...
     force_helical = curl_numerator[0] / MU0
     reciprocal = jnp.linalg.inv(basis_vectors).T
     radial_force = force_cov[0] * reciprocal[:, 0]
-    helical_force = -B_sup[2] * force_helical * reciprocal[:, 1] + B_sup[1] * force_helical * reciprocal[:, 2]
+    helical_direction = -B_sup[2] * reciprocal[:, 1] + B_sup[1] * reciprocal[:, 2]
+    helical_force = force_helical * helical_direction
+    signed_radial_force_density = force_cov[0] * jnp.linalg.norm(reciprocal[:, 0])
+    signed_helical_force_density = force_helical * jnp.linalg.norm(helical_direction)
     return (
         sqrt_g,
         B,
@@ -302,6 +307,8 @@ def _point_force(state: HighOrderEquilibriumState, x: Array) -> tuple[Array, ...
         force_helical,
         jnp.linalg.norm(radial_force),
         jnp.linalg.norm(helical_force),
+        signed_radial_force_density,
+        signed_helical_force_density,
         jnp.linalg.norm(lorentz),
         jnp.linalg.norm(grad_pressure),
     )
@@ -344,8 +351,10 @@ def evaluate_strong_force(
         force_helical=reshape_scalar(values[5]),
         radial_force_density=reshape_scalar(values[6]),
         helical_force_density=reshape_scalar(values[7]),
-        lorentz_norm=reshape_scalar(values[8]),
-        grad_pressure_norm=reshape_scalar(values[9]),
+        signed_radial_force_density=reshape_scalar(values[8]),
+        signed_helical_force_density=reshape_scalar(values[9]),
+        lorentz_norm=reshape_scalar(values[10]),
+        grad_pressure_norm=reshape_scalar(values[11]),
     )
 
 

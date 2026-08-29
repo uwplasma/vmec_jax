@@ -79,31 +79,78 @@ difference, signed-Jacobian margin, boundary residual, and gauge residual.
 Square system and nullspace policy
 ----------------------------------
 
-The polishing solve uses the reduced physical-displacement formulation.  Let
-``N`` be the number of free, regularized scalar coefficients after the axis,
-boundary, symmetry, and gauge maps above.  Pure surface relabeling is removed
-before a nonlinear system is formed.  The unknown is two physical displacement
-fields,
+The polishing solve uses the explicit three-channel formulation.  In the
+stellarator-symmetric chart, active ``R_cos``, ``Z_sin``, and ``L_sin``
+corrections are sampled through the tested high/low transfer.  Fixed-edge,
+structural-zero, axis-closure, and lambda-gauge entries are absent.  Each
+constrained three-dimensional ``m=1,+/-n`` Z pair is one orthonormal
+coordinate ``(z_+ + z_-)/sqrt(2)``, not two duplicate unknowns.  The reduced
+vector is therefore
 
 .. math::
 
-   c = (c_\perp, c_\mathrm{binormal}) \in \mathbb{R}^{2N},
+   c = (c_R, c_Z, c_\lambda)
+       \in \mathbb{R}^{N_R+N_Z+N_\lambda}.
 
-and the residual contains the same ``N`` independent tests of radial force and
-``N`` independent tests of helical force.  Thus the nonlinear Jacobian is
-``2N x 2N``.  Lambda and the straight-field-line map are recovered through the
-same affine condensation, rather than added as a third unconstrained field.
+At shifted radial collocation points, the independent oracle forms signed
+physical radial and helical force densities.  Their symmetric normalization
+uses smooth ``sqrt(|v|^2 + force_floor^2)`` norms, so the root is differentiable
+even when one physical contribution vanishes.  The normalization scale is
+frozen from the lifted branch root for the solve, so it conditions but cannot
+create a state-dependent near-null direction; the final certificate recomputes
+the symmetric normalization independently.  A third, force-free coordinate
+equation projects the corrected displacement onto the lifted state's normalized
+poloidal tangent and sets that tangential displacement to zero.  It fixes the
+surface chart without adding physical-force content.  Full-period Fourier
+projection, analytic removal of ``rho**abs(m)``, radial spline fitting, and the
+high/low map produce ``N_R`` radial-force, ``N_Z`` coordinate, and
+``N_\lambda`` helical-force equations.  Thus the nonlinear Jacobian is square,
+while the lambda gauge remains eliminated structurally.
 
-Before this reduced operator is enabled for production, small-problem tests
-must explicitly assemble its Jacobian, verify numerical rank ``2N``, and show
-that the discarded coordinate tangent lies in the full formulation's
-nullspace.  A failed rank test is a hard error; the implementation must not
-regularize an accidentally underdetermined system with a merit-function
-penalty.
+The low endpoint is the nonlinear legacy raw-force defect
+``F_low(base+c)-F_low(base)`` evaluated at the corrected legacy coordinates.
+This anchors the continuation exactly at the converged discrete VMEX state
+without asking a high-order correction to remove the accepted finite legacy
+stopping defect.  The stored block system's fixed row scales make its channels
+dimensionless without changing its Jacobian.  With
+``R_low`` and the normalized three-channel strong residual ``R_strong``, the
+implemented homotopy is exactly
 
-Continuation then connects the converged legacy root to this square strong
-root.  The low-order operator remains the preconditioner/coarse model, and the
-independent certificate above is never used as the solve residual.
+.. math::
+
+   H(c,\alpha) = R_{low}(c)
+       + \alpha\,[R_{strong}(c)-R_{low}(c)].
+
+The anchored endpoint makes ``H(0,0)=0`` exactly; the continuation driver
+checks that consistency endpoint and then advances ``alpha``.  At ``alpha=1``
+the residual is independent strong force plus the coordinate equation.  This
+is a defect-correction continuation between equations, not an interpolation
+of equilibrium states and not minimization.
+
+The signs of the radial, coordinate, and helical equation blocks are selected
+from the eight possibilities using a bounded matrix-free Arnoldi diagnostic of
+the low-preconditioned strong Jacobian at the lifted state.  The deterministic
+choice maximizes the leftmost Ritz value.  This fixed nonsingular row scaling
+cannot change the strong root, but prevents artificial early folds caused only
+by inconsistent equation orientation.  The selected signs and remaining
+operator balance are runtime metadata.
+
+Small-problem tests explicitly assemble the Jacobian and reject unexplained
+nullspaces.  The five-surface Solovev structural gate has 24 independent
+unknowns and 24 equations, numerical rank 24 at relative SVD tolerance
+``1e-8``, and a finite JVP that agrees with centered finite differences.  Its
+measured condition number is about ``3.5e5`` before nonlinear-solver
+preconditioning, which is recorded rather than hidden.  This deliberately
+coarse case is a layout/rank test, not a polished-equilibrium accuracy claim.
+A failed rank test is a hard error; the implementation does not regularize an
+accidentally underdetermined system with a merit-function penalty.
+
+The clean-commit Apple M4 record in ``benchmarks/strong_root_m4.json`` reports
+0.262 ms median warm residual and 0.360 ms median warm JVP time over 20 repeats;
+cold compile-plus-execute times are 1.12 s and 1.89 s.  The recorded JVP error
+is ``1.0e-9`` and the runtime-build, residual, and JVP peak-RSS increments are
+reported separately.  These figures describe the structural five-surface gate
+only and are not extrapolated into a production-resolution solve claim.
 
 Low-order physics preconditioner
 --------------------------------

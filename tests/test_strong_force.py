@@ -123,18 +123,27 @@ def test_independent_oracle_agrees_with_desc_pointwise_current_and_force():
 
     np.testing.assert_allclose(result.sqrt_g, oracle["sqrt_g"], rtol=3e-13, atol=3e-13)
     np.testing.assert_allclose(cylindrical(result.B), oracle["B"], rtol=3e-13, atol=3e-13)
-    # Radial/azimuthal current vanishes analytically in this case and is the
-    # cancellation of nested coordinate derivatives.  Bound its cross-device
-    # roundoff against the nonzero current scale rather than with an absolute
-    # CPU-specific threshold (Linux x64 reaches about 2.2e-8 here).
+    # Radial/azimuthal current and the orthogonal force components vanish
+    # analytically in this case and are cancellations of nested coordinate
+    # derivatives. Bound their cross-device roundoff against the corresponding
+    # nonzero physical scale rather than with CPU-specific absolute thresholds
+    # (Linux x64 reaches about 2.2e-8 here).
     oracle_J = np.asarray(oracle["J"])
     current_roundoff = float(5.0e-13 * np.max(np.abs(oracle_J)))
+    oracle_force = np.asarray(oracle["F"])
+    force_roundoff = float(5.0e-13 * np.max(np.abs(oracle_force)))
     np.testing.assert_allclose(
         cylindrical(result.J), oracle_J, rtol=3e-10, atol=current_roundoff
     )
-    np.testing.assert_allclose(cylindrical(result.force), oracle["F"], rtol=3e-10, atol=2e-8)
-    np.testing.assert_allclose(result.force_rho, oracle["F_rho"], rtol=3e-10, atol=2e-8)
-    np.testing.assert_allclose(result.force_helical, oracle["F_helical"], rtol=3e-10, atol=2e-8)
+    np.testing.assert_allclose(
+        cylindrical(result.force), oracle_force, rtol=3e-10, atol=force_roundoff
+    )
+    np.testing.assert_allclose(
+        result.force_rho, oracle["F_rho"], rtol=3e-10, atol=force_roundoff
+    )
+    np.testing.assert_allclose(
+        result.force_helical, oracle["F_helical"], rtol=3e-10, atol=force_roundoff
+    )
 
 
 def test_point_evaluation_is_jittable_and_finite_near_axis():
