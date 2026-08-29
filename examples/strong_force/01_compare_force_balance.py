@@ -7,7 +7,7 @@ continuous reconstruction and validation grid.
 Example
 -------
 python examples/strong_force/01_compare_force_balance.py \
-  --input examples/data/input.DSHAPE \
+  --input examples/data/input.solovev_analytical \
   --wout VMEX=output/wout_vmex.nc VMEC2000=reference/wout_vmec.nc \
   --output force_balance_comparison.png
 """
@@ -22,6 +22,7 @@ import jax
 import numpy as np
 
 from vmex.core.input import VmecInput
+from vmex.core.radial_basis import BSplineBasis
 from vmex.core.strong_force import (
     certify_strong_force,
     high_order_state_from_wout,
@@ -53,35 +54,65 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path, default=Path("strong_force_comparison.png"))
     parser.add_argument("--degree", type=int, choices=(3, 5, 7), default=5)
+    parser.add_argument(
+        "--radial-spans",
+        type=int,
+        help="explicit uniform reconstruction spans; use the same value for every code",
+    )
     parser.add_argument("--angular-multiplier", type=int, default=2)
     args = parser.parse_args()
+    if args.radial_spans is not None and args.radial_spans < 1:
+        parser.error("radial-spans must be positive")
 
     inp = VmecInput.from_file(str(args.input))
+    radial_basis = (
+        None
+        if args.radial_spans is None
+        else BSplineBasis.clamped(
+            np.linspace(0.0, 1.0, args.radial_spans + 1),
+            degree=args.degree,
+            quadrature_order=args.degree + 3,
+        )
+    )
     reports = {}
     summary = {}
     for label, path in args.wout:
-        continuous = high_order_state_from_wout(path, inp=inp, degree=args.degree)
+        continuous = high_order_state_from_wout(
+            path,
+            inp=inp,
+            radial_basis=radial_basis,
+            degree=args.degree,
+        )
         report = certify_strong_force(continuous, angular_multiplier=args.angular_multiplier)
         reports[label] = report
         summary[label] = {
-            name: float(np.asarray(getattr(report, name)))
-            for name in (
-                "absolute_l2",
-                "absolute_p99",
-                "absolute_linf",
-                "normalized_l2",
-                "normalized_p99",
-                "normalized_linf",
-                "near_axis_l2",
-                "bulk_l2",
-                "edge_l2",
-                "angular_spectral_tail",
-                "radial_refinement_difference",
-                "minimum_signed_jacobian",
-                "boundary_residual",
-                "gauge_residual",
-            )
+            "radial_degree": int(continuous.radial_basis.degree),
+            "radial_spans": int(continuous.radial_basis.breakpoints.size - 1),
+            "radial_coefficients": int(continuous.radial_basis.size),
+            "normalization": report.normalization,
+            "coordinate_convention": report.coordinate_convention,
         }
+        summary[label].update(
+            {
+                name: float(np.asarray(getattr(report, name)))
+                for name in (
+                    "absolute_l2",
+                    "absolute_p99",
+                    "absolute_linf",
+                    "normalized_l2",
+                    "normalized_p99",
+                    "normalized_linf",
+                    "near_axis_l2",
+                    "bulk_l2",
+                    "edge_l2",
+                    "angular_spectral_tail",
+                    "radial_refinement_difference",
+                    "minimum_signed_jacobian",
+                    "boundary_residual",
+                    "gauge_residual",
+                )
+            }
+        )
 
     figure, _ = plot_strong_force_report(reports)
     args.output.parent.mkdir(parents=True, exist_ok=True)
