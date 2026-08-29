@@ -1,0 +1,69 @@
+{
+  "case": "solovev",
+  "cold_jvp_seconds": 2.7183557499956805,
+  "cold_residual_seconds": 1.7298190419969615,
+  "compilation_cache": "disabled",
+  "condition_number": 4871246.047640218,
+  "coordinate_scale_range": [
+    4.061863631513496e-05,
+    0.007934178826405819
+  ],
+  "degree": 5,
+  "equation_scale_range": [
+    7.266217182431619e-05,
+    1400.3026537345252
+  ],
+  "free_dofs": 117,
+  "initial_low_residual_norm": 1.4972216879705128e-12,
+  "initial_scaled_residual_norm": 1.2195492304733608e-08,
+  "input_data_embedded": false,
+  "jvp_peak_rss_increase_mib": 110.59375,
+  "jvp_relative_error": 9.535997508907029e-09,
+  "largest_singular_value": 1.1948999366025793e-08,
+  "measurement_commit": "45d81a9d05749106bc469e87a2d7ef4b5b8eb991",
+  "measurement_dirty": false,
+  "mpol": 6,
+  "ns": 11,
+  "operator_balance": 886938678.3339187,
+  "physical_chart": {
+    "chart_build_seconds": 3.055037165999238,
+    "chart_peak_rss_increase_mib": 156.75,
+    "cold_residual_seconds": 2.171842541996739,
+    "condition_number": 4308253.401224336,
+    "free_dofs": 82,
+    "gauge_rank": 35,
+    "largest_singular_value": 1.0626615563390728e-08,
+    "rank": 82,
+    "rank_seconds": 5.075352583997301,
+    "smallest_singular_value": 2.466571618180773e-15,
+    "warm_residual_median_seconds": 0.00615250000191736
+  },
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "rank": 117,
+  "rank_seconds": 4.778523792003398,
+  "repeats": 20,
+  "residual_peak_rss_increase_mib": 47.953125,
+  "runtime_build_seconds": 25.84157525000046,
+  "runtime_peak_rss_increase_mib": 1381.421875,
+  "smallest_singular_value": 2.4529656784251856e-15,
+  "solve_grid": [
+    24,
+    25,
+    3
+  ],
+  "strong_block_sign": [
+    -1.0,
+    1.0,
+    1.0
+  ],
+  "versions": {
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "numpy": "2.5.1",
+    "python": "3.13.7",
+    "vmex": "0.7.0"
+  },
+  "vmex_module": "vmex/__init__.py",
+  "warm_jvp_median_seconds": 0.00999893700281973,
+  "warm_residual_median_seconds": 0.005976041498797713
+}
