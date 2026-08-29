@@ -41,6 +41,12 @@ from vmex.core.polish_driver import (
     _supports_keyword,
     polish_strong_root,
 )
+from vmex.core.polish_implicit import (
+    PolishLinearConfig,
+    implicit_polished_state,
+    strong_root_adjoint,
+    strong_root_tangent,
+)
 from vmex.core.strong_force import lift_high_order_state
 
 jax.config.update("jax_enable_x64", True)
@@ -551,6 +557,64 @@ def test_low_vector_inverse_matches_scaled_legacy_endpoint(small_strong_root):
     )
     recovered = _low_inverse(response, runtime)
     np.testing.assert_allclose(recovered, direction, rtol=2.0e-11, atol=2.0e-11)
+
+
+def test_scaled_low_inverse_and_transpose_are_exact_duals(small_strong_root):
+    runtime = small_strong_root
+    left = runtime.layout.unpack(jnp.linspace(-0.2, 0.1, runtime.layout.size))
+    right = runtime.layout.unpack(jnp.linspace(0.3, -0.15, runtime.layout.size))
+    forward = runtime.low_preconditioner.solve_scaled(left)
+    transpose = runtime.low_preconditioner.solve_scaled_transpose(right)
+    np.testing.assert_allclose(
+        _tree_dot(forward, right),
+        _tree_dot(left, transpose),
+        rtol=3.0e-12,
+        atol=3.0e-12,
+    )
+
+
+def test_strong_root_tangent_adjoint_and_custom_vjp_are_consistent(
+    small_strong_root,
+):
+    runtime = small_strong_root
+    correction = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
+    native_tangent = _random_like(runtime.native, 21)
+    output_cotangent = _random_like(runtime.native, 22)
+    linear_config = PolishLinearConfig(
+        rtol=2.0e-10,
+        atol=2.0e-11,
+        restart=runtime.layout.size,
+        max_restarts=3,
+    )
+
+    tangent = strong_root_tangent(
+        runtime, correction, native_tangent, config=linear_config
+    )
+    adjoint = strong_root_adjoint(
+        runtime, correction, output_cotangent, config=linear_config
+    )
+    assert bool(tangent.report.converged)
+    assert bool(adjoint.report.converged)
+    np.testing.assert_allclose(
+        _tree_dot(output_cotangent, tangent.native_tangent),
+        _tree_dot(adjoint.native_cotangent, native_tangent),
+        rtol=2.0e-8,
+        atol=2.0e-8,
+    )
+
+    def objective(native):
+        polished = implicit_polished_state(
+            native, correction, runtime, linear_config
+        )
+        return _tree_dot(polished, output_cotangent)
+
+    custom_gradient = jax.grad(objective)(runtime.native)
+    difference = jax.tree.map(
+        jnp.subtract, custom_gradient, adjoint.native_cotangent
+    )
+    assert _tree_norm(difference) <= 2.0e-8 * max(
+        _tree_norm(adjoint.native_cotangent), 1.0
+    )
 
 
 def test_arclength_tangent_and_bordered_preconditioner_are_finite(

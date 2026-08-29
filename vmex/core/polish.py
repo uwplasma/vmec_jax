@@ -411,6 +411,21 @@ class LowOrderPreconditioner:
         raw_packed = self.system.pack(rhs) / jnp.asarray(self.system.row_scale)
         return _raw_block_apply(self.system, self.system.unpack(raw_packed))
 
+    def solve_scaled_transpose(self, rhs: SpectralState) -> SpectralState:
+        """Invert the transpose of the row-scaled legacy residual.
+
+        If the raw block operator is ``A`` and ``D`` is its stored row
+        scaling, :meth:`residual` linearizes to ``D A``.  Its transpose
+        inverse is therefore ``D^-1 A^-T``; the order differs from the
+        forward :meth:`solve_scaled` path and is kept explicit here.
+        """
+
+        from .implicit import _raw_block_apply
+
+        raw_solution = _raw_block_apply(self.system, rhs, transpose=True)
+        scaled = self.system.pack(raw_solution) / jnp.asarray(self.system.row_scale)
+        return self.system.project(self.system.unpack(scaled))
+
 
 def _mode_table(m: np.ndarray, n: np.ndarray):
     """Construct only the mode metadata needed by the m=1 linear maps."""
@@ -540,14 +555,19 @@ def apply_high_order_correction(
     )
 
 
-def _strong_residual_unscaled(vector: Array, runtime: StrongRootRuntime) -> Array:
+def _strong_residual_unscaled(
+    vector: Array,
+    runtime: StrongRootRuntime,
+    native: HighOrderEquilibriumState | None = None,
+) -> Array:
     """Project normalized physical force onto the reduced solve space."""
 
     from .strong_force import _RZL, evaluate_strong_force
 
+    native = runtime.native if native is None else native
     low_tangent = runtime.layout.unpack(vector)
     correction = runtime.transfer.prolong(low_tangent)
-    state = apply_high_order_correction(runtime.native, correction)
+    state = apply_high_order_correction(native, correction)
     radial = jnp.asarray(runtime.radial_nodes)
     theta = jnp.asarray(runtime.theta)
     zeta = jnp.asarray(runtime.zeta)
@@ -559,7 +579,7 @@ def _strong_residual_unscaled(vector: Array, runtime: StrongRootRuntime) -> Arra
     points = jnp.stack((rr.reshape(-1), tt.reshape(-1), zz.reshape(-1)), axis=-1)
 
     def coordinate_gauge(point):
-        base_rz = jnp.asarray(_RZL(runtime.native, point)[:2])
+        base_rz = jnp.asarray(_RZL(native, point)[:2])
         current_rz = jnp.asarray(_RZL(state, point)[:2])
         theta_direction = jnp.asarray([0.0, 1.0, 0.0], dtype=point.dtype)
         _, tangent = jax.jvp(
@@ -622,6 +642,25 @@ def strong_root_residual(
     strong = _strong_residual_unscaled(vector, runtime) / jnp.asarray(runtime.strong_scale)
     alpha = jnp.asarray(alpha, dtype=vector.dtype)
     return low + alpha * (strong - low)
+
+
+@partial(jax.jit, static_argnames=("runtime",))
+def strong_root_residual_at_native(
+    vector: Array,
+    native: HighOrderEquilibriumState,
+    runtime: StrongRootRuntime,
+) -> Array:
+    """Evaluate the frozen-chart strong endpoint at a dynamic native state.
+
+    The collocation grid, normalization, row scaling, transfer, and gauge
+    length remain fixed in ``runtime``.  This is the local residual required
+    by implicit tangents and adjoints; at a converged root, derivatives of
+    any positive residual scaling do not change the implicit derivative.
+    """
+
+    vector = jnp.asarray(vector)
+    strong = _strong_residual_unscaled(vector, runtime, native)
+    return strong / jnp.asarray(runtime.strong_scale)
 
 
 def make_strong_root_runtime(
@@ -967,4 +1006,5 @@ __all__ = [
     "preconditioner_refresh_decision",
     "strong_root_rank",
     "strong_root_residual",
+    "strong_root_residual_at_native",
 ]
