@@ -1,8 +1,8 @@
 {
   "angular_multiplier": 2,
   "case": "solovev_analytical",
-  "certificate_seconds": 3.5808422910049558,
-  "command": "benchmarks/strong_certificate.py --input examples/data/input.solovev_analytical --wout /tmp/wout_solovev_analytical_desc_crosscode.nc --radial-spans 16 --source-provenance /tmp/desc_solovev_crosscode_run.json --output benchmarks/strong_certificate_solovev_desc_m4.json",
+  "certificate_seconds": 4.249609792001138,
+  "command": "benchmarks/strong_certificate.py --input examples/data/input.solovev_analytical --wout wout_solovev_analytical_desc_crosscode_redacted.nc --radial-spans 16 --source-provenance desc_solovev_crosscode_run_redacted.json --output benchmarks/strong_certificate_solovev_desc_m4.json",
   "coordinate_convention": "rho=sqrt(s), theta poloidal, zeta field-period; physical phi=zeta/nfp",
   "degree": 5,
   "external_source": {
@@ -19,11 +19,11 @@
       "TFRT_CPU_0"
     ],
     "iterations": 157,
-    "load_seconds": 5.268345791002503,
+    "load_seconds": 5.58024112500425,
     "message": "`gtol` condition satisfied. (gtol=1.00e-12)",
     "optimality": 4.745838646194046e-13,
-    "output_wout": "/tmp/wout_solovev_analytical_desc_crosscode.nc",
-    "peak_rss_mib": 2384.25,
+    "output_wout": "wout_solovev_analytical_desc_crosscode_redacted.nc",
+    "peak_rss_mib": 2390.078125,
     "platform": "macOS-26.6.2-arm64-arm-64bit",
     "representation": {
       "L": 24,
@@ -33,12 +33,12 @@
       "spectral_indexing": "fringe",
       "surfaces": 129
     },
-    "save_seconds": 11.311980583006516,
+    "save_seconds": 12.469953792002343,
     "schema": "vmex.desc-solovev-run/1",
-    "solve_seconds": 6.487281415997131,
-    "source_wout": "/Users/rogerio/local/vmex_project_forcebalance/vmecpp/src/vmecpp/cpp/vmecpp/test_data/wout_solovev_analytical.nc",
+    "solve_seconds": 7.691729291997035,
+    "source_wout": "wout_solovev_analytical.nc",
     "success": true,
-    "total_seconds": 23.067649374999746,
+    "total_seconds": 25.74196791600116,
     "versions": {
       "desc": "0.17.3+11.g3d01c2b4c",
       "jax": "0.9.2",
@@ -47,8 +47,8 @@
   },
   "input": "examples/data/input.solovev_analytical",
   "input_data_embedded": false,
-  "lift_seconds": 4.784528042000602,
-  "measurement_commit": "a97917ee9dd637c50a586bb43498c29f4a08b6e5",
+  "lift_seconds": 5.5743272910040105,
+  "measurement_commit": "4ade1de3743844040fa516bd4eea00c96dade807",
   "measurement_dirty": false,
   "metrics": {
     "absolute_l2": 2409.834701866106,
@@ -73,7 +73,7 @@
   "normalization": "2*|JxB-grad(p)|/(|JxB|+|grad(p)|+force_floor), evaluated pointwise",
   "ns": null,
   "ntor": 0,
-  "peak_rss_increase_mib": 1827.265625,
+  "peak_rss_increase_mib": 1633.9375,
   "platform": "macOS-26.6.2-arm64-arm-64bit",
   "radial_coefficients": 21,
   "radial_order_increment": 2,
@@ -343,8 +343,8 @@
   "radial_spans": 16,
   "schema": "vmex.strong-certificate-benchmark/1",
   "solve_seconds": null,
-  "source": "/tmp/wout_solovev_analytical_desc_crosscode.nc",
-  "total_seconds": 8.36549245799688,
+  "source": "wout_solovev_analytical_desc_crosscode_redacted.nc",
+  "total_seconds": 9.824194666005496,
   "versions": {
     "jax": "0.11.1",
     "jaxlib": "0.11.1",
