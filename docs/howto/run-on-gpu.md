@@ -115,3 +115,6 @@ for the shortest WSL2 report. Compare `forward_cache_reload_speedup` and
 `gradient_cache_reload_speedup` with the two `reload_*_warm_speedup` values:
 the former isolates persistent-cache value across processes, while the latter
 shows tracing/cache-load/dispatch overhead still paid above a true warm call.
+The committed M4 CPU control is
+`benchmarks/device_cache_reload_m4.json`; retain the generated JSON from a
+WSL2 GPU run as the hardware-specific comparison artifact.

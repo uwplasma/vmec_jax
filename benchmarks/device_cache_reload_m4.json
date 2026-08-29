@@ -1,0 +1,288 @@
+{
+  "configuration": {
+    "cache": "temporary",
+    "cache_min_compile_time_s": 0,
+    "cache_min_entry_size_bytes": -1,
+    "devices": [
+      "cpu"
+    ],
+    "metrics": "mhd_energy",
+    "quick": true
+  },
+  "created_utc": "2026-08-29T02:45:46Z",
+  "lanes": {
+    "cpu": {
+      "cache_reload_process": {
+        "cache_after": {
+          "bytes": 7359156,
+          "file_count": 787
+        },
+        "cache_before": {
+          "bytes": 7359156,
+          "file_count": 787
+        },
+        "child": {
+          "comparison": {
+            "reason": "CPU/GPU comparison requires both lanes",
+            "status": "skipped"
+          },
+          "configuration": {
+            "boundary_parameter": {
+              "field": "rbc",
+              "index": [
+                6,
+                1
+              ],
+              "mode": {
+                "m": 1,
+                "n": 1
+              }
+            },
+            "ftol": 1e-09,
+            "input": "examples/data/input.minimal_seed_nfp2",
+            "iota_profile": [
+              0.4,
+              0.1,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max_iterations": 1200,
+            "metrics": [
+              "mhd_energy"
+            ],
+            "ns": 7,
+            "quick": true
+          },
+          "created_utc": "2026-08-29T02:46:26Z",
+          "host": {
+            "machine": "arm64",
+            "platform": "macOS-26.5.1-arm64-arm-64bit"
+          },
+          "jax": {
+            "default_backend": "cpu",
+            "devices": {
+              "cpu": [
+                "cpu:0"
+              ]
+            },
+            "platform_environment": {
+              "JAX_PLATFORMS": null,
+              "JAX_PLATFORM_NAME": null
+            }
+          },
+          "lanes": {
+            "cpu": {
+              "forward": {
+                "all_finite": true,
+                "cold_wall_s": 4.159723416902125,
+                "device_peak_memory_mib": null,
+                "host_peak_rss_mib": 1418.578125,
+                "scalars": {
+                  "aspect": 9.940043432828858,
+                  "iota_axis": 0.4,
+                  "iota_edge": 0.5,
+                  "volume": 0.19978052974387148,
+                  "wb": 0.0027814201142859715,
+                  "wp": 0.0
+                },
+                "state_device": "cpu:0",
+                "state_l2_norm": 2.6654934505659176,
+                "state_max_abs": 1.001009006075246,
+                "state_size": 2100,
+                "warm_wall_s": 3.130750915966928
+              },
+              "gradients": {
+                "mhd_energy": {
+                  "cold_wall_s": 7.4779920829460025,
+                  "d_d_rbc": 0.0031329944299337527,
+                  "device_peak_memory_mib": null,
+                  "gradient_device": "cpu:0",
+                  "host_peak_rss_mib": 2705.265625,
+                  "value": 0.0027814201142859715,
+                  "value_device": "cpu:0",
+                  "warm_wall_s": 6.946089999983087
+                }
+              },
+              "parameter_device": "cpu:0",
+              "requested_device": "cpu",
+              "resolved_device": "cpu:0",
+              "status": "ok"
+            }
+          },
+          "schema_version": 1,
+          "skipped_devices": {},
+          "versions": {
+            "jax": "0.11.1",
+            "jaxlib": "0.11.1",
+            "python": "3.12.13",
+            "vmex": "0.7.0"
+          }
+        },
+        "returncode": 0,
+        "status": "ok",
+        "stderr": "running cpu lane (mhd_energy)\n",
+        "subprocess_wall_s": 22.515122583019547
+      },
+      "cold_cache_process": {
+        "cache_after": {
+          "bytes": 7359156,
+          "file_count": 787
+        },
+        "cache_before": {
+          "bytes": 0,
+          "file_count": 0
+        },
+        "child": {
+          "comparison": {
+            "reason": "CPU/GPU comparison requires both lanes",
+            "status": "skipped"
+          },
+          "configuration": {
+            "boundary_parameter": {
+              "field": "rbc",
+              "index": [
+                6,
+                1
+              ],
+              "mode": {
+                "m": 1,
+                "n": 1
+              }
+            },
+            "ftol": 1e-09,
+            "input": "examples/data/input.minimal_seed_nfp2",
+            "iota_profile": [
+              0.4,
+              0.1,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max_iterations": 1200,
+            "metrics": [
+              "mhd_energy"
+            ],
+            "ns": 7,
+            "quick": true
+          },
+          "created_utc": "2026-08-29T02:45:46Z",
+          "host": {
+            "machine": "arm64",
+            "platform": "macOS-26.5.1-arm64-arm-64bit"
+          },
+          "jax": {
+            "default_backend": "cpu",
+            "devices": {
+              "cpu": [
+                "cpu:0"
+              ]
+            },
+            "platform_environment": {
+              "JAX_PLATFORMS": null,
+              "JAX_PLATFORM_NAME": null
+            }
+          },
+          "lanes": {
+            "cpu": {
+              "forward": {
+                "all_finite": true,
+                "cold_wall_s": 13.176461959024891,
+                "device_peak_memory_mib": null,
+                "host_peak_rss_mib": 1592.34375,
+                "scalars": {
+                  "aspect": 9.940043432828858,
+                  "iota_axis": 0.4,
+                  "iota_edge": 0.5,
+                  "volume": 0.19978052974387148,
+                  "wb": 0.0027814201142859715,
+                  "wp": 0.0
+                },
+                "state_device": "cpu:0",
+                "state_l2_norm": 2.6654934505659176,
+                "state_max_abs": 1.001009006075246,
+                "state_size": 2100,
+                "warm_wall_s": 3.1213594160508364
+              },
+              "gradients": {
+                "mhd_energy": {
+                  "cold_wall_s": 16.17210329102818,
+                  "d_d_rbc": 0.0031329944299337527,
+                  "device_peak_memory_mib": null,
+                  "gradient_device": "cpu:0",
+                  "host_peak_rss_mib": 2799.90625,
+                  "value": 0.0027814201142859715,
+                  "value_device": "cpu:0",
+                  "warm_wall_s": 7.037038250011392
+                }
+              },
+              "parameter_device": "cpu:0",
+              "requested_device": "cpu",
+              "resolved_device": "cpu:0",
+              "status": "ok"
+            }
+          },
+          "schema_version": 1,
+          "skipped_devices": {},
+          "versions": {
+            "jax": "0.11.1",
+            "jaxlib": "0.11.1",
+            "python": "3.12.13",
+            "vmex": "0.7.0"
+          }
+        },
+        "returncode": 0,
+        "status": "ok",
+        "stderr": "running cpu lane (mhd_energy)\n",
+        "subprocess_wall_s": 40.364936999976635
+      },
+      "speedups": {
+        "forward_cache_reload_speedup": 3.1676293441735153,
+        "gradient_cache_reload_speedup": 2.1626264258703354,
+        "process_cache_reload_speedup": 1.7927922378010528,
+        "reload_forward_warm_speedup": 1.3286663578655857,
+        "reload_gradient_warm_speedup": 1.0765757545560466
+      },
+      "status": "ok"
+    }
+  },
+  "provenance": {
+    "input_data_embedded": false,
+    "measurement_commit": "a9a11a3b22e9c38f49b786092a02293bb31b68d3",
+    "measurement_dirty": false
+  },
+  "schema_version": 1,
+  "status": "ok"
+}
