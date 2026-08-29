@@ -1,0 +1,84 @@
+{
+  "case": "solovev_analytical",
+  "degree": 5,
+  "diagnostics_only": true,
+  "direct_endpoint": false,
+  "final_certificate": {
+    "angular_tail": 0.18394099940156108,
+    "normalized_l2": 0.12237749333086703,
+    "radial_refinement": 2.271234749493071e-05
+  },
+  "full_dofs": 752,
+  "initial_certificate": {
+    "angular_tail": 0.18394099940156108,
+    "normalized_l2": 0.12237749333086703,
+    "radial_refinement": 2.271234749493071e-05
+  },
+  "input_data_embedded": false,
+  "measurement_commit": "212933606913829ef9c2bcae1524baad560d6104",
+  "measurement_dirty": false,
+  "mpol": 13,
+  "ns": 31,
+  "physical_dofs": 512,
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "polish_report": {
+    "arclength_steps": 0,
+    "continuation_accepted": 0,
+    "continuation_rejected": 0,
+    "converged": false,
+    "factor_build_seconds": 3.350112000000081,
+    "final_alpha": 0.0,
+    "final_normalized_l2": 0.12237749333086703,
+    "initial_normalized_l2": 0.12237749333086703,
+    "linear_iterations": 0,
+    "minimum_signed_jacobian": 6.29028304032492,
+    "nonlinear_iterations": 0,
+    "residual_evaluations": 0,
+    "solve_seconds": 0.0,
+    "termination_reason": "diagnostics-only"
+  },
+  "projection_consistency": {
+    "final": {
+      "angular_unresolved_fraction": 0.12066294181577486,
+      "equation_discarded_fraction": 2.342233180661211e-16,
+      "helical_unresolved_fraction": 0.1841951251814573,
+      "projected_residual_rms": 0.006964974301034779,
+      "radial_fit_unresolved_fraction": 0.06942745566990353,
+      "radial_unresolved_fraction": 0.1364993099669874,
+      "reconstructed_rms": 0.18323105648580887,
+      "sampled_rms": 0.1850279503876347,
+      "unresolved_fraction": 0.13921105246507362,
+      "unresolved_rms": 0.025757935708918052
+    },
+    "initial": {
+      "angular_unresolved_fraction": 0.12066294181577486,
+      "equation_discarded_fraction": 2.342233180661211e-16,
+      "helical_unresolved_fraction": 0.1841951251814573,
+      "projected_residual_rms": 0.006964974301034779,
+      "radial_fit_unresolved_fraction": 0.06942745566990353,
+      "radial_unresolved_fraction": 0.1364993099669874,
+      "reconstructed_rms": 0.18323105648580887,
+      "sampled_rms": 0.1850279503876347,
+      "unresolved_fraction": 0.13921105246507362,
+      "unresolved_rms": 0.025757935708918052
+    }
+  },
+  "radial_spans": 16,
+  "schema": "vmex.strong-polish-benchmark/1",
+  "setup_peak_rss_increase_mib": 2973.640625,
+  "setup_seconds": 27.97865620799712,
+  "solve_grid": [
+    48,
+    53,
+    1
+  ],
+  "total_peak_rss_increase_mib": 2973.640625,
+  "total_seconds": 28.01967400000285,
+  "versions": {
+    "jax": "0.11.1",
+    "numpy": "2.5.2",
+    "python": "3.12.13",
+    "vmex": "0.7.0"
+  },
+  "vmex_module": "vmex/__init__.py"
+}
