@@ -184,3 +184,46 @@ high-order angular coupling.  It is a right preconditioner, not the polishing
 operator, and it never assembles a dense high-order Jacobian.  The subsequent
 p-level hierarchy may wrap it as the coarse solve without changing this
 contract.
+
+The strong endpoint is first normalized by its frozen initial RMS and then by
+a deterministic matrix-free estimate of the low-inverse/strong-Jacobian
+stiffness.  This positive scalar leaves the target root unchanged while making
+the continuation endpoints comparable.  The estimate uses a fixed probe and a
+bounded number of JVP/low-inverse applications; it is stored as
+``operator_balance`` for provenance.
+
+Branch-preserving driver
+------------------------
+
+The fixed-boundary host driver first solves the ``alpha=0`` legacy consistency
+endpoint, then calls SOLVAX adaptive continuation with state-dependent JVPs,
+Eisenstat--Walker forcing, and the stored low-order inverse.  The measured
+initial pseudo-time scale is large because the legacy endpoint has already
+been row equilibrated; ``dtau=1e6`` reaches the Newton regime on the structural
+Solovev gate while retaining PTC backtracking and adaptive shrink safeguards.
+
+Every proposed state must remain finite and retain a signed-Jacobian margin
+above both an absolute floor and a fixed fraction of the lifted branch margin.
+The fixed boundary, profile data, parity, and lambda gauge cannot drift because
+they are absent from the free coordinate map.  Rejected states never replace
+the accepted branch point.
+
+If ordinary parameter continuation exhausts its minimum step, the driver can
+form a matrix-free branch tangent and invoke SOLVAX's bordered
+pseudo-arclength corrector.  Its block-elimination preconditioner reuses the
+same low-order inverse and an explicit scalar Schur complement; no dense
+high-order Jacobian is formed.  A compact report retains accepted/rejected
+stages, nonlinear and linear work, residual evaluations, arclength work,
+minimum Jacobian margin, factor time, and wall time.  Failure to reach
+``alpha=1`` or to pass the independent overintegrated certificate is typed and
+never reported as a polished equilibrium.  ``return_unpolished`` is an
+explicit opt-in policy that returns the original native state with
+``report.converged=False``.
+
+``PolishConfig.preconditioner="legacy"`` is the measured default.  An
+experimental ``"mode-block"`` variant probes only bounded bands of neighboring
+Fourier modes, retaining all radial and R/Z/lambda couplings inside each band,
+and blends the low and strong blocks with ``alpha``.  It never assembles a
+global Jacobian.  The variant remains opt-in because the hard coarse Solovev
+stress case did not reduce total Krylov work; future p/h hierarchy benchmarks,
+not API preference, decide whether it can become the default.

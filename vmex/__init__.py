@@ -182,6 +182,11 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "EquilibriumReporter": (".core.monitoring", "EquilibriumReporter"),
     "OptimizationMonitor": (".core.monitoring", "OptimizationMonitor"),
     "OptimizationRecord": (".core.monitoring", "OptimizationRecord"),
+    # high-order strong-force polishing
+    "PolishConfig": (".core.polish_driver", "PolishConfig"),
+    "PolishReport": (".core.polish_driver", "PolishReport"),
+    "PolishResult": (".core.polish_driver", "PolishResult"),
+    "polish_strong_root": (".core.polish_driver", "polish_strong_root"),
     # external fields
     "MgridData": (".core.mgrid", "MgridData"),
     "MgridField": (".core.mgrid", "MgridField"),
@@ -207,6 +212,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "VmecJacobianError": (".core.errors", "VmecJacobianError"),
     "VmecConvergenceError": (".core.errors", "VmecConvergenceError"),
     "VmecNumericalError": (".core.errors", "VmecNumericalError"),
+    "StrongForceContinuationError": (
+        ".core.errors", "StrongForceContinuationError"),
+    "StrongForceCertificationError": (
+        ".core.errors", "StrongForceCertificationError"),
     "MgridNotFoundError": (".core.errors", "MgridNotFoundError"),
     # modules
     "core": (".core", None),

@@ -168,6 +168,26 @@ class AdjointSolveError(VmecNumericalError):
 
 
 @dataclass
+class StrongForceContinuationError(VmecNumericalError):
+    """The branch-preserving strong-force correction did not reach alpha=1."""
+
+    alpha: float = 0.0
+    residual_norm: float = 0.0
+    nonlinear_iterations: int = 0
+    linear_iterations: int = 0
+    accepted_stages: int = 0
+    rejected_stages: int = 0
+
+
+@dataclass
+class StrongForceCertificationError(VmecNumericalError):
+    """A converged strong root failed the independent overintegrated gate."""
+
+    normalized_l2: float = float("inf")
+    tolerance: float = 0.0
+
+
+@dataclass
 class MgridNotFoundError(VmecError):
     """A free-boundary run referenced an mgrid file that cannot be read.
 
