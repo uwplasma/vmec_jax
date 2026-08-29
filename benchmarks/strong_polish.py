@@ -52,6 +52,27 @@ def _peak_rss_mib() -> float:
     return value / divisor
 
 
+def _collocation_variable_scale(
+    residual,
+    zero,
+    row_count: int,
+    probes: int,
+) -> np.ndarray:
+    if probes == 0:
+        return np.ones(np.asarray(zero).shape, dtype=float)
+    _, jvp = jax.linearize(residual, jnp.asarray(zero))
+    transpose = jax.linear_transpose(jvp, jnp.asarray(zero))
+    generator = np.random.default_rng(0)
+    column_squared = np.zeros(np.asarray(zero).shape, dtype=float)
+    for _ in range(probes):
+        probe = generator.choice(np.asarray([-1.0, 1.0]), size=row_count)
+        response = np.asarray(transpose(jnp.asarray(probe))[0])
+        column_squared += response * response
+    column_norm = np.sqrt(column_squared / float(probes))
+    column_floor = max(1.0e-8 * float(np.max(column_norm)), 1.0e-12)
+    return 1.0 / np.maximum(column_norm, column_floor)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=DATA)
@@ -88,6 +109,14 @@ def main() -> None:
         action="store_true",
         help="diagnose the rectangular physical collocation residual with LSMR",
     )
+    parser.add_argument(
+        "--solvax-least-squares",
+        action="store_true",
+        help="solve rectangular collocation with JIT-native SOLVAX",
+    )
+    parser.add_argument(
+        "--least-squares-initial-damping", type=float, default=1.0e-3
+    )
     args = parser.parse_args()
     if not args.input.is_file():
         parser.error(f"input does not exist: {args.input}")
@@ -101,16 +130,23 @@ def main() -> None:
     ):
         parser.error("radial-quadrature-order must be at least 2")
     if sum(
-        (args.direct_endpoint, args.diagnostics_only, args.collocation_least_squares)
+        (
+            args.direct_endpoint,
+            args.diagnostics_only,
+            args.collocation_least_squares,
+            args.solvax_least_squares,
+        )
     ) > 1:
         parser.error(
-            "direct-endpoint, diagnostics-only, and collocation-least-squares "
-            "are mutually exclusive"
+            "direct-endpoint, diagnostics-only, collocation-least-squares, "
+            "and solvax-least-squares are mutually exclusive"
         )
     if args.collocation_scale_probes < 0:
         parser.error("collocation-scale-probes must be nonnegative")
     if args.radial_refinement_tolerance <= 0.0:
         parser.error("radial-refinement-tolerance must be positive")
+    if args.least_squares_initial_damping <= 0.0:
+        parser.error("least-squares-initial-damping must be positive")
 
     started = time.perf_counter()
     rss_initial = _peak_rss_mib()
@@ -206,6 +242,105 @@ def main() -> None:
             "factor_build_seconds": low_preconditioner.factor_build_seconds,
             "solve_seconds": 0.0,
         }
+    elif args.solvax_least_squares:
+        try:
+            from solvax import (
+                LeastSquaresConfig,
+                gauss_newton_least_squares,
+            )
+        except ImportError as error:
+            raise RuntimeError(
+                "--solvax-least-squares requires the matrix-free least-squares "
+                "API from uwplasma/SOLVAX#98"
+            ) from error
+        initial_collocation = strong_collocation_residual(zero, runtime, chart)
+        collocation_scale = max(
+            float(jnp.linalg.norm(initial_collocation))
+            / np.sqrt(float(initial_collocation.size)),
+            1.0e-12,
+        )
+        physical_residual = jax.jit(
+            lambda value: strong_collocation_residual(
+                value, runtime, chart
+            )
+            / collocation_scale
+        )
+        variable_scale = _collocation_variable_scale(
+            physical_residual,
+            zero,
+            int(initial_collocation.size),
+            args.collocation_scale_probes,
+        )
+        transformed_residual = jax.jit(
+            lambda value: physical_residual(jnp.asarray(variable_scale) * value)
+        )
+        least_squares_config = LeastSquaresConfig(
+            rtol=args.solve_tolerance,
+            max_steps=args.max_nonlinear_iterations,
+            initial_damping=args.least_squares_initial_damping,
+            linear_rtol=1.0e-3,
+            linear_max_steps=max(
+                args.linear_restart * args.linear_max_restarts,
+                1,
+            ),
+        )
+        solve_started = time.perf_counter()
+        native_result = jax.jit(
+            lambda value: gauss_newton_least_squares(
+                transformed_residual,
+                value,
+                config=least_squares_config,
+            )
+        )(zero)
+        jax.block_until_ready(native_result)
+        final_vector = jnp.asarray(variable_scale) * native_result.x
+        state = _corrected_state(final_vector, runtime, chart)
+        final_certificate = certify_strong_force(state)
+        independently_certified = bool(
+            float(final_certificate.normalized_l2)
+            <= args.validation_tolerance
+            and float(final_certificate.radial_refinement_difference)
+            <= args.radial_refinement_tolerance
+            and float(final_certificate.minimum_signed_jacobian) > 0.0
+        )
+        polish_report = {
+            "converged": bool(native_result.converged)
+            and independently_certified,
+            "termination_reason": (
+                "independently-certified"
+                if bool(native_result.converged) and independently_certified
+                else "solvax-collocation-least-squares"
+            ),
+            "final_alpha": 1.0,
+            "initial_normalized_l2": float(initial_certificate.normalized_l2),
+            "final_normalized_l2": float(final_certificate.normalized_l2),
+            "continuation_accepted": int(native_result.accepted_steps),
+            "continuation_rejected": int(native_result.rejected_steps),
+            "nonlinear_iterations": int(native_result.steps),
+            "linear_iterations": int(native_result.linear_iterations),
+            "residual_evaluations": int(native_result.steps) + 1,
+            "arclength_steps": 0,
+            "minimum_signed_jacobian": float(
+                final_certificate.minimum_signed_jacobian
+            ),
+            "factor_build_seconds": low_preconditioner.factor_build_seconds,
+            "solve_seconds": time.perf_counter() - solve_started,
+            "least_squares_cost": float(native_result.cost),
+            "least_squares_optimality": float(native_result.gradient_norm),
+            "least_squares_initial_optimality": float(
+                native_result.history.gradient_norm[0]
+            ),
+            "least_squares_relative_optimality": float(
+                native_result.gradient_norm
+                / jnp.maximum(native_result.history.gradient_norm[0], 1.0e-300)
+            ),
+            "least_squares_success": bool(native_result.converged),
+            "least_squares_damping": float(native_result.damping),
+            "radial_refinement_tolerance": args.radial_refinement_tolerance,
+            "variable_scale_min": float(np.min(variable_scale)),
+            "variable_scale_max": float(np.max(variable_scale)),
+            "variable_scale_probes": args.collocation_scale_probes,
+        }
     elif args.collocation_least_squares:
         from scipy.optimize import least_squares
         from scipy.sparse.linalg import LinearOperator
@@ -263,27 +398,12 @@ def main() -> None:
                 dtype=np.asarray(zero).dtype,
             )
 
-        if args.collocation_scale_probes:
-            initial_linearization = linearize(zero)
-            initial_transpose = initial_linearization["transpose"]
-            generator = np.random.default_rng(0)
-            column_squared = np.zeros((chart.size,), dtype=float)
-            for _ in range(args.collocation_scale_probes):
-                probe = generator.choice(
-                    np.asarray([-1.0, 1.0]),
-                    size=initial_collocation.size,
-                )
-                response = np.asarray(
-                    initial_transpose(jnp.asarray(probe))[0]
-                )
-                column_squared += response * response
-            column_norm = np.sqrt(
-                column_squared / float(args.collocation_scale_probes)
-            )
-            column_floor = max(1.0e-8 * float(np.max(column_norm)), 1.0e-12)
-            variable_scale = 1.0 / np.maximum(column_norm, column_floor)
-        else:
-            variable_scale = np.ones((chart.size,), dtype=float)
+        variable_scale = _collocation_variable_scale(
+            residual,
+            zero,
+            int(initial_collocation.size),
+            args.collocation_scale_probes,
+        )
 
         callback_certificates = []
 
@@ -421,6 +541,7 @@ def main() -> None:
         "direct_endpoint": args.direct_endpoint,
         "diagnostics_only": args.diagnostics_only,
         "collocation_least_squares": args.collocation_least_squares,
+        "solvax_least_squares": args.solvax_least_squares,
         "solve_grid": [
             int(runtime.radial_nodes.size),
             int(runtime.theta.size),
