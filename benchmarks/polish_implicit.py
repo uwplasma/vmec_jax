@@ -24,7 +24,11 @@ import numpy as np
 import vmex
 from vmex.core import implicit
 from vmex.core.input import VmecInput
-from vmex.core.polish import build_low_order_preconditioner, make_strong_root_runtime
+from vmex.core.polish import (
+    build_low_order_preconditioner,
+    build_strong_mode_block_preconditioner,
+    make_strong_root_runtime,
+)
 from vmex.core.polish_implicit import (
     PolishLinearConfig,
     implicit_polished_state,
@@ -113,6 +117,9 @@ def main() -> None:
     )
     runtime = make_strong_root_runtime(native, adapter, mask)
     correction = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
+    block_preconditioner = build_strong_mode_block_preconditioner(
+        runtime, correction
+    )
     native_tangent = _random_like(native, 41)
     output_cotangent = _random_like(native, 42)
     linear_config = PolishLinearConfig(
@@ -124,18 +131,30 @@ def main() -> None:
 
     tangent = jax.jit(
         lambda value: strong_root_tangent(
-            runtime, correction, value, config=linear_config
+            runtime,
+            correction,
+            value,
+            config=linear_config,
+            preconditioner=block_preconditioner,
         )
     )
     adjoint = jax.jit(
         lambda value: strong_root_adjoint(
-            runtime, correction, value, config=linear_config
+            runtime,
+            correction,
+            value,
+            config=linear_config,
+            preconditioner=block_preconditioner,
         )
     )
 
     def objective(value):
         polished = implicit_polished_state(
-            value, correction, runtime, linear_config
+            value,
+            correction,
+            runtime,
+            linear_config,
+            block_preconditioner,
         )
         return sum(
             jnp.vdot(a, b).real
@@ -182,6 +201,8 @@ def main() -> None:
         "mpol": args.mpol,
         "degree": args.degree,
         "free_dofs": runtime.layout.size,
+        "mode_blocks": len(block_preconditioner.indices),
+        "mode_block_build_seconds": block_preconditioner.build_seconds,
         "repeats": args.repeats,
         "cold_tangent_seconds": cold_tangent,
         "warm_tangent_median_seconds": statistics.median(warm_tangent),

@@ -20,9 +20,11 @@ from solvax import gmres
 
 from .errors import StrongForceCertificationError, StrongForceContinuationError
 from .polish import (
+    StrongModeBlockPreconditioner,
     StrongRootRuntime,
     apply_high_order_correction,
     build_low_order_preconditioner,
+    build_strong_mode_block_preconditioner,
     make_strong_root_runtime,
     strong_root_residual,
 )
@@ -95,7 +97,7 @@ class PolishConfig:
     max_backtracks: int = 12
     linear_restart: int = 30
     linear_max_restarts: int = 20
-    preconditioner: Literal["legacy", "mode-block"] = "legacy"
+    preconditioner: Literal["legacy", "mode-block"] = "mode-block"
     minimum_jacobian_ratio: float = 0.1
     minimum_jacobian_floor: float = 1.0e-8
     use_pseudo_arclength: bool = True
@@ -186,93 +188,12 @@ class PolishResult(NamedTuple):
     correction: jax.Array
 
 
-@dataclass(frozen=True, eq=False)
-class _ModeBlockPreconditioner:
-    """Independent Fourier-mode blocks for the low/strong Jacobian pencil."""
-
-    indices: tuple[jax.Array, ...]
-    low_blocks: tuple[jax.Array, ...]
-    strong_blocks: tuple[jax.Array, ...]
-    build_seconds: float
-
-    def apply(
-        self,
-        rhs: jax.Array,
-        alpha: jax.Array,
-        dtau: jax.Array | float = jnp.inf,
-    ) -> jax.Array:
-        """Apply regularized block solves without forming a global Jacobian."""
-
-        rhs = jnp.asarray(rhs)
-        alpha = jnp.asarray(alpha, dtype=rhs.dtype)
-        inverse_dtau = jnp.where(
-            jnp.isfinite(jnp.asarray(dtau)),
-            1.0 / jnp.asarray(dtau, dtype=rhs.dtype),
-            jnp.asarray(0.0, dtype=rhs.dtype),
-        )
-        result = jnp.zeros_like(rhs)
-        for indices, low, strong in zip(
-            self.indices, self.low_blocks, self.strong_blocks, strict=True
-        ):
-            matrix = (1.0 - alpha) * low + alpha * strong
-            scale = jnp.maximum(jnp.linalg.norm(matrix, ord=jnp.inf), 1.0)
-            regularization = 32.0 * jnp.finfo(rhs.dtype).eps * scale
-            shifted = matrix + (
-                inverse_dtau + regularization
-            ) * jnp.eye(matrix.shape[0], dtype=rhs.dtype)
-            result = result.at[indices].set(jnp.linalg.solve(shifted, rhs[indices]))
-        return result
-
-
-def _mode_block_indices(
-    runtime: StrongRootRuntime,
-    *,
-    poloidal_bandwidth: int = 3,
-) -> tuple[jax.Array, ...]:
-    """Group reduced coordinates into bounded neighboring-mode bands."""
-
-    groups: dict[tuple[int, int], list[int]] = {}
-    for group in runtime.layout.groups:
-        key = (int(group.abs_n), int(group.m) // int(poloidal_bandwidth))
-        groups.setdefault(key, []).extend(range(group.start, group.stop))
-    return tuple(
-        jnp.asarray(groups[key], dtype=jnp.int32)
-        for key in sorted(groups)
-    )
-
-
 def _build_mode_block_preconditioner(
     runtime: StrongRootRuntime,
-) -> _ModeBlockPreconditioner:
-    """Probe only same-mode Jacobian blocks at the lifted branch point."""
+) -> StrongModeBlockPreconditioner:
+    """Backward-compatible private seam for the shared block builder."""
 
-    started = perf_counter()
-    zero = jnp.zeros(
-        (runtime.layout.size,), dtype=jnp.asarray(runtime.native.R_cos).dtype
-    )
-    indices = _mode_block_indices(runtime)
-    low_blocks: list[jax.Array] = []
-    strong_blocks: list[jax.Array] = []
-    for block_indices in indices:
-        local_zero = jnp.zeros((block_indices.size,), dtype=zero.dtype)
-
-        def block_residual(local, alpha):
-            vector = zero.at[block_indices].set(local)
-            return strong_root_residual(vector, runtime, alpha)[block_indices]
-
-        low_blocks.append(
-            jax.jacfwd(lambda local: block_residual(local, 0.0))(local_zero)
-        )
-        strong_blocks.append(
-            jax.jacfwd(lambda local: block_residual(local, 1.0))(local_zero)
-        )
-    jax.block_until_ready((low_blocks, strong_blocks))
-    return _ModeBlockPreconditioner(
-        indices,
-        tuple(low_blocks),
-        tuple(strong_blocks),
-        perf_counter() - started,
-    )
+    return build_strong_mode_block_preconditioner(runtime)
 
 
 def _continuation_precondition(
@@ -280,7 +201,7 @@ def _continuation_precondition(
     alpha: jax.Array,
     dtau: jax.Array,
     runtime: StrongRootRuntime,
-    block_preconditioner: _ModeBlockPreconditioner,
+    block_preconditioner: StrongModeBlockPreconditioner,
 ) -> jax.Array:
     """Use the exact legacy inverse early and mode bands near strong force."""
 
@@ -355,7 +276,7 @@ def _branch_tangent(
     runtime: StrongRootRuntime,
     config: PolishConfig,
     previous: tuple[jax.Array, jax.Array] | None,
-    block_preconditioner: _ModeBlockPreconditioner | None = None,
+    block_preconditioner: StrongModeBlockPreconditioner | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     residual = lambda value: strong_root_residual(value, runtime, alpha)  # noqa: E731
     _, jvp = jax.linearize(residual, vector)
@@ -428,7 +349,7 @@ def _branch_tangent(
 def _bordered_preconditioner(
     runtime: StrongRootRuntime,
     tangent: tuple[jax.Array, jax.Array],
-    block_preconditioner: _ModeBlockPreconditioner | None = None,
+    block_preconditioner: StrongModeBlockPreconditioner | None = None,
 ):
     """Return a low-order block-elimination preconditioner for a bordered root."""
 
@@ -468,7 +389,7 @@ def _arclength_to_target(
     runtime: StrongRootRuntime,
     config: PolishConfig,
     admissible,
-    block_preconditioner: _ModeBlockPreconditioner | None,
+    block_preconditioner: StrongModeBlockPreconditioner | None,
     initial_tangent: tuple[jax.Array, jax.Array] | None,
 ):
     _, _, _, pseudo_arclength_corrector, pseudo_transient_continuation = (

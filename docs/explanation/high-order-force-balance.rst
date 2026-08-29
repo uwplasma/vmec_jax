@@ -207,7 +207,7 @@ Branch-preserving driver
 
 The fixed-boundary host driver first solves the ``alpha=0`` legacy consistency
 endpoint, then calls SOLVAX adaptive continuation with state-dependent JVPs,
-Eisenstat--Walker forcing, and the stored low-order inverse.  The measured
+Eisenstat--Walker forcing, and stored bounded mode-block factors.  The measured
 initial pseudo-time scale is large because the legacy endpoint has already
 been row equilibrated; ``dtau=1e6`` reaches the Newton regime on the structural
 Solovev gate while retaining PTC backtracking and adaptive shrink safeguards.
@@ -221,22 +221,25 @@ the accepted branch point.
 If ordinary parameter continuation exhausts its minimum step, the driver can
 form a matrix-free branch tangent and invoke SOLVAX's bordered
 pseudo-arclength corrector.  Its block-elimination preconditioner reuses the
-same low-order inverse and an explicit scalar Schur complement; no dense
-high-order Jacobian is formed.  A compact report retains accepted/rejected
-stages, nonlinear and linear work, residual evaluations, arclength work,
-minimum Jacobian margin, factor time, and wall time.  Failure to reach
+same Fourier-band factors and an explicit scalar Schur complement; no
+production-scale dense high-order Jacobian is formed.  A compact report
+retains accepted/rejected stages, nonlinear and linear work, residual
+evaluations, arclength work, minimum Jacobian margin, factor time, and wall
+time.  Failure to reach
 ``alpha=1`` or to pass the independent overintegrated certificate is typed and
 never reported as a polished equilibrium.  ``return_unpolished`` is an
 explicit opt-in policy that returns the original native state with
 ``report.converged=False``.
 
-``PolishConfig.preconditioner="legacy"`` is the measured default.  An
-experimental ``"mode-block"`` variant probes only bounded bands of neighboring
-Fourier modes, retaining all radial and R/Z/lambda couplings inside each band,
-and blends the low and strong blocks with ``alpha``.  It never assembles a
-global Jacobian.  The variant remains opt-in because the hard coarse Solovev
-stress case did not reduce total Krylov work; future p/h hierarchy benchmarks,
-not API preference, decide whether it can become the default.
+``PolishConfig.preconditioner="mode-block"`` is the measured default.  It
+probes bounded bands of neighboring Fourier modes, retains all radial and
+R/Z/lambda couplings inside each band, and blends the low and strong blocks
+with ``alpha``.  On the clean 23-coordinate structural derivative gate it
+reduces tangent/adjoint iterations from 23/41 to 1/2 and warm costs from
+3.51/16.06 ms to 0.93/2.48 ms.  Factor construction costs 3.01 s once and is
+reused by primal and transpose solves.  ``"legacy"`` remains an explicit
+fallback, but its inherited inverse is not exact after regularized spline
+reduction and is therefore no longer the default.
 
 Implicit derivatives of the polished root
 -------------------------------------------

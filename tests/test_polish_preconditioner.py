@@ -21,6 +21,7 @@ from vmex.core.polish import (
     PreconditionerSnapshot,
     apply_high_order_correction,
     build_low_order_preconditioner,
+    build_strong_mode_block_preconditioner,
     make_high_low_transfer,
     make_strong_root_layout,
     make_strong_root_runtime,
@@ -536,6 +537,15 @@ def test_strong_root_validation_branches(small_adapter, small_strong_root):
     zero_mask = jax.tree.map(jnp.zeros_like, mask)
     with pytest.raises(ValueError, match="no free physical displacement"):
         make_strong_root_runtime(native, adapter, zero_mask)
+    with pytest.raises(ValueError, match="poloidal_bandwidth"):
+        build_strong_mode_block_preconditioner(
+            small_strong_root, poloidal_bandwidth=0
+        )
+    with pytest.raises(ValueError, match="block linearization"):
+        build_strong_mode_block_preconditioner(
+            small_strong_root,
+            jnp.zeros((small_strong_root.layout.size + 1,)),
+        )
     mismatched = dataclasses.replace(mask, Z_sin=mask.Z_sin[:, :-1])
     with pytest.raises(ValueError, match="layout must match"):
         make_strong_root_layout(mismatched, native)
@@ -600,12 +610,23 @@ def test_strong_root_tangent_adjoint_and_custom_vjp_are_consistent(
         restart=runtime.layout.size,
         max_restarts=3,
     )
+    block_preconditioner = build_strong_mode_block_preconditioner(
+        runtime, correction
+    )
 
     tangent = strong_root_tangent(
-        runtime, correction, native_tangent, config=linear_config
+        runtime,
+        correction,
+        native_tangent,
+        config=linear_config,
+        preconditioner=block_preconditioner,
     )
     adjoint = strong_root_adjoint(
-        runtime, correction, output_cotangent, config=linear_config
+        runtime,
+        correction,
+        output_cotangent,
+        config=linear_config,
+        preconditioner=block_preconditioner,
     )
     assert bool(tangent.report.converged)
     assert bool(adjoint.report.converged)
@@ -618,7 +639,11 @@ def test_strong_root_tangent_adjoint_and_custom_vjp_are_consistent(
 
     def objective(native):
         polished = implicit_polished_state(
-            native, correction, runtime, linear_config
+            native,
+            correction,
+            runtime,
+            linear_config,
+            block_preconditioner,
         )
         return _tree_dot(polished, output_cotangent)
 
@@ -645,6 +670,16 @@ def test_arclength_tangent_and_bordered_preconditioner_are_finite(
     )
     recovered = block_preconditioner.apply(response, 1.0)
     np.testing.assert_allclose(recovered, direction, rtol=3.0e-8, atol=3.0e-8)
+    _, pullback = jax.vjp(
+        lambda value: strong_root_residual(value, runtime, 1.0), zero
+    )
+    transpose_response = pullback(direction)[0]
+    transpose_recovered = block_preconditioner.apply_transpose(
+        transpose_response, 1.0
+    )
+    np.testing.assert_allclose(
+        transpose_recovered, direction, rtol=3.0e-8, atol=3.0e-8
+    )
     tangent = _branch_tangent(
         zero,
         0.0,

@@ -367,6 +367,66 @@ class StrongRootRuntime:
 
 
 @dataclass(frozen=True, eq=False)
+class StrongModeBlockPreconditioner:
+    """Bounded Fourier-mode factors for a strong-root Jacobian pencil."""
+
+    indices: tuple[Array, ...]
+    low_blocks: tuple[Array, ...]
+    strong_blocks: tuple[Array, ...]
+    build_seconds: float
+
+    def apply(
+        self,
+        rhs: Array,
+        alpha: Array = 1.0,
+        dtau: Array | float = jnp.inf,
+    ) -> Array:
+        """Apply regularized block solves without a dense global Jacobian."""
+
+        return self._apply(rhs, alpha, dtau, transpose=False)
+
+    def apply_transpose(
+        self,
+        rhs: Array,
+        alpha: Array = 1.0,
+        dtau: Array | float = jnp.inf,
+    ) -> Array:
+        """Apply the exact transpose factors used by implicit adjoints."""
+
+        return self._apply(rhs, alpha, dtau, transpose=True)
+
+    def _apply(
+        self,
+        rhs: Array,
+        alpha: Array,
+        dtau: Array | float,
+        *,
+        transpose: bool,
+    ) -> Array:
+        rhs = jnp.asarray(rhs)
+        alpha = jnp.asarray(alpha, dtype=rhs.dtype)
+        inverse_dtau = jnp.where(
+            jnp.isfinite(jnp.asarray(dtau)),
+            1.0 / jnp.asarray(dtau, dtype=rhs.dtype),
+            jnp.asarray(0.0, dtype=rhs.dtype),
+        )
+        result = jnp.zeros_like(rhs)
+        for indices, low, strong in zip(
+            self.indices, self.low_blocks, self.strong_blocks, strict=True
+        ):
+            matrix = (1.0 - alpha) * low + alpha * strong
+            if transpose:
+                matrix = matrix.T
+            scale = jnp.maximum(jnp.linalg.norm(matrix, ord=jnp.inf), 1.0)
+            regularization = 32.0 * jnp.finfo(rhs.dtype).eps * scale
+            shifted = matrix + (
+                inverse_dtau + regularization
+            ) * jnp.eye(matrix.shape[0], dtype=rhs.dtype)
+            result = result.at[indices].set(jnp.linalg.solve(shifted, rhs[indices]))
+        return result
+
+
+@dataclass(frozen=True, eq=False)
 class LowOrderPreconditioner:
     """Stored raw-force block inverse lifted to high-order coefficient space."""
 
@@ -952,6 +1012,65 @@ def strong_root_rank(
     return int(jnp.sum(singular_values > threshold)), singular_values
 
 
+def build_strong_mode_block_preconditioner(
+    runtime: StrongRootRuntime,
+    vector: Array | None = None,
+    *,
+    poloidal_bandwidth: int = 3,
+) -> StrongModeBlockPreconditioner:
+    """Probe bounded same-mode blocks at one reusable linearization point."""
+
+    if poloidal_bandwidth < 1:
+        raise ValueError("poloidal_bandwidth must be positive")
+    started = perf_counter()
+    base = (
+        jnp.zeros(
+            (runtime.layout.size,),
+            dtype=jnp.asarray(runtime.native.R_cos).dtype,
+        )
+        if vector is None
+        else jnp.asarray(vector)
+    )
+    if base.shape != (runtime.layout.size,):
+        raise ValueError(
+            f"block linearization has shape {base.shape}; "
+            f"expected {(runtime.layout.size,)}"
+        )
+    grouped: dict[tuple[int, int], list[int]] = {}
+    for group in runtime.layout.groups:
+        key = (
+            int(group.abs_n),
+            int(group.m) // int(poloidal_bandwidth),
+        )
+        grouped.setdefault(key, []).extend(range(group.start, group.stop))
+    indices = tuple(
+        jnp.asarray(grouped[key], dtype=jnp.int32)
+        for key in sorted(grouped)
+    )
+    low_blocks: list[Array] = []
+    strong_blocks: list[Array] = []
+    for block_indices in indices:
+        local_zero = jnp.zeros((block_indices.size,), dtype=base.dtype)
+
+        def block_residual(local: Array, alpha: float) -> Array:
+            candidate = base.at[block_indices].add(local)
+            return strong_root_residual(candidate, runtime, alpha)[block_indices]
+
+        low_blocks.append(
+            jax.jacfwd(lambda local: block_residual(local, 0.0))(local_zero)
+        )
+        strong_blocks.append(
+            jax.jacfwd(lambda local: block_residual(local, 1.0))(local_zero)
+        )
+    jax.block_until_ready((low_blocks, strong_blocks))
+    return StrongModeBlockPreconditioner(
+        indices,
+        tuple(low_blocks),
+        tuple(strong_blocks),
+        perf_counter() - started,
+    )
+
+
 def build_low_order_preconditioner(
     native: HighOrderEquilibriumState,
     params: Any,
@@ -1063,10 +1182,12 @@ __all__ = [
     "PreconditionerRefreshDecision",
     "PreconditionerRefreshPolicy",
     "PreconditionerSnapshot",
+    "StrongModeBlockPreconditioner",
     "StrongRootLayout",
     "StrongRootRuntime",
     "apply_high_order_correction",
     "build_low_order_preconditioner",
+    "build_strong_mode_block_preconditioner",
     "make_high_low_transfer",
     "make_strong_root_layout",
     "make_strong_root_runtime",

@@ -21,6 +21,7 @@ from solvax import gmres
 from .errors import StrongForceLinearSolveError
 from .polish import (
     HighOrderCorrection,
+    StrongModeBlockPreconditioner,
     StrongRootRuntime,
     strong_root_residual_at_native,
 )
@@ -184,6 +185,7 @@ def strong_root_tangent(
     native_tangent: HighOrderEquilibriumState,
     *,
     config: PolishLinearConfig = PolishLinearConfig(),
+    preconditioner: StrongModeBlockPreconditioner | None = None,
 ) -> PolishTangentResult:
     """Apply the IFT tangent of a converged alpha=1 strong root.
 
@@ -212,7 +214,11 @@ def strong_root_tangent(
     response, report = _solve_linear(
         operator,
         -parameter_direction,
-        lambda rhs: _reduced_low_inverse(rhs, runtime),
+        (
+            (lambda rhs: _reduced_low_inverse(rhs, runtime))
+            if preconditioner is None
+            else preconditioner.apply
+        ),
         config,
         "tangent",
     )
@@ -230,6 +236,7 @@ def strong_root_adjoint(
     polished_cotangent: HighOrderEquilibriumState,
     *,
     config: PolishLinearConfig = PolishLinearConfig(),
+    preconditioner: StrongModeBlockPreconditioner | None = None,
 ) -> PolishAdjointResult:
     """Apply the IFT pullback of a converged alpha=1 strong root."""
 
@@ -255,7 +262,11 @@ def strong_root_adjoint(
     equation_adjoint, report = _solve_linear(
         transpose_operator,
         reduced_cotangent,
-        lambda rhs: _reduced_low_inverse_transpose(rhs, runtime),
+        (
+            (lambda rhs: _reduced_low_inverse_transpose(rhs, runtime))
+            if preconditioner is None
+            else preconditioner.apply_transpose
+        ),
         config,
         "adjoint",
     )
@@ -270,14 +281,15 @@ def strong_root_adjoint(
     return PolishAdjointResult(native_cotangent, equation_adjoint, report)
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(2, 3))
+@partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4))
 def _implicit_polished_leaves(
     native_leaves: tuple[jax.Array, ...],
     correction: jax.Array,
     runtime: StrongRootRuntime,
     config: PolishLinearConfig,
+    preconditioner: StrongModeBlockPreconditioner | None,
 ) -> tuple[jax.Array, ...]:
-    del config
+    del config, preconditioner
     native = jax.tree.unflatten(jax.tree.structure(runtime.native), native_leaves)
     correction = jax.lax.stop_gradient(jnp.asarray(correction))
     high = runtime.layout.unpack(correction)
@@ -285,22 +297,26 @@ def _implicit_polished_leaves(
 
 
 def _implicit_polished_leaves_fwd(
-    native_leaves, correction, runtime, config
+    native_leaves, correction, runtime, config, preconditioner
 ):
     output = _implicit_polished_leaves(
-        native_leaves, correction, runtime, config
+        native_leaves, correction, runtime, config, preconditioner
     )
     return output, correction
 
 
 def _implicit_polished_leaves_bwd(
-    runtime, config, correction, output_cotangent_leaves
+    runtime, config, preconditioner, correction, output_cotangent_leaves
 ):
     output_cotangent = jax.tree.unflatten(
         jax.tree.structure(runtime.native), output_cotangent_leaves
     )
     result = strong_root_adjoint(
-        runtime, correction, output_cotangent, config=config
+        runtime,
+        correction,
+        output_cotangent,
+        config=config,
+        preconditioner=preconditioner,
     )
     return (
         tuple(jax.tree.leaves(result.native_cotangent)),
@@ -319,6 +335,7 @@ def implicit_polished_state(
     correction: jax.Array,
     runtime: StrongRootRuntime,
     config: PolishLinearConfig = PolishLinearConfig(),
+    preconditioner: StrongModeBlockPreconditioner | None = None,
 ) -> HighOrderEquilibriumState:
     """Return a polished state whose reverse pass uses one implicit solve.
 
@@ -336,7 +353,7 @@ def implicit_polished_state(
         raise ValueError("native must have the runtime native-state structure")
     leaves = tuple(jax.tree.leaves(native))
     polished_leaves = _implicit_polished_leaves(
-        leaves, correction, runtime, config
+        leaves, correction, runtime, config, preconditioner
     )
     return jax.tree.unflatten(jax.tree.structure(native), polished_leaves)
 
