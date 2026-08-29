@@ -89,8 +89,8 @@ def main() -> None:
     save_seconds = time.perf_counter() - save_started
     report = {
         "schema": "vmex.desc-solovev-run/1",
-        "source_wout": str(args.wout),
-        "output_wout": str(args.output_wout),
+        "source_wout": args.wout.name,
+        "output_wout": args.output_wout.name,
         "representation": {
             "L": 24,
             "M": 12,

@@ -99,9 +99,9 @@ def main() -> None:
     )
     report = {
         "schema": "vmex.vmec2000-solovev-run/1",
-        "executable": str(args.executable),
-        "input": str(args.input),
-        "output_wout": str(wout_path),
+        "executable": args.executable.name,
+        "input": args.input.name,
+        "output_wout": wout_path.name,
         "success": success,
         "returncode": completed.returncode,
         "version": None if version is None else version.group(1),
