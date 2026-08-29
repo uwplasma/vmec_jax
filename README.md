@@ -23,7 +23,10 @@ certified polished VMEX state. Radial refinement is `1.55e-4` and nestedness is
 preserved. The second row uses the finite-beta, two-field-period QA stellarator
 at higher DESC resolution (`L=16`, `M=N=10`) and shows why representative 3-D
 cold runtime should be reported alongside the axisymmetric accuracy stress case.
-No warm-cost advantage is inferred from either cold measurement.
+On that case, VMEX and DESC give common volume-L2 errors of `0.874` and `0.965`;
+their cold solves take `14.5 s` and `157.7 s`, respectively. The full measured
+pipelines take `14.5 s` and `186.3 s`. These are cold CPU measurements on the
+same Apple host with each code's stated pipeline boundary, not warm-JIT claims.
 
 ![Independent Solov'ev and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 

@@ -608,7 +608,7 @@
     "radial_refinement": 0.0038552116661592986
   },
   "input_data_embedded": false,
-  "measurement_commit": "54e73300c975672c7b8937e3af8071ab3925c563",
+  "measurement_commit": "79ea2ab9970044cc086f855e8e844aced3f38d63",
   "measurement_dirty": false,
   "mpol": 5,
   "ns": 31,
@@ -619,7 +619,7 @@
     "continuation_accepted": 3,
     "continuation_rejected": 0,
     "converged": true,
-    "factor_build_seconds": 3.0076956670018262,
+    "factor_build_seconds": 5.979070542001864,
     "final_alpha": 1.0,
     "final_normalized_l2": 0.002758982753904465,
     "initial_normalized_l2": 0.03994742616554715,
@@ -634,7 +634,7 @@
     "nonlinear_iterations": 3,
     "radial_refinement_tolerance": 0.001,
     "residual_evaluations": 4,
-    "solve_seconds": 20.78359758300212,
+    "solve_seconds": 25.461860458002775,
     "termination_reason": "independently-certified",
     "variable_scale_max": 0.042489700063708745,
     "variable_scale_min": 2.7042089148587506e-06,
@@ -670,11 +670,11 @@
   "radial_refinement_tolerance": 0.001,
   "radial_spans": 16,
   "schema": "vmex.strong-polish-benchmark/1",
-  "setup_peak_rss_increase_mib": 1969.171875,
-  "setup_seconds": 25.78512204200524,
+  "setup_peak_rss_increase_mib": 2035.34375,
+  "setup_seconds": 51.51763741699688,
   "solvax_least_squares": true,
   "solvax_source": {
-    "commit": "ce8f19d006ba01ada9c85cdb96ee1bd076798ab7",
+    "commit": "7465cf4acabe7b11e51add030925b389ebd83de2",
     "dirty": false,
     "module": "src/solvax/__init__.py"
   },
@@ -683,14 +683,14 @@
     21,
     1
   ],
-  "total_peak_rss_increase_mib": 2998.875,
-  "total_seconds": 49.89598862500134,
+  "total_peak_rss_increase_mib": 2816.390625,
+  "total_seconds": 84.02066270899377,
   "validation_tolerance": 0.0144049834,
   "versions": {
     "jax": "0.11.1",
     "numpy": "2.5.2",
     "python": "3.12.13",
-    "solvax": "0.18.0",
+    "solvax": "0.19.0",
     "vmex": "0.7.0"
   },
   "vmex_module": "vmex/__init__.py"

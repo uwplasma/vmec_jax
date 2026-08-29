@@ -316,6 +316,10 @@ def main() -> None:
         "solovev_analytical": (SOLOVEV_FILES, solovev),
         "nfp2_QA_finite_beta": (STELLARATOR_FILES, stellarator),
     }
+    try:
+        figure_path = args.output.relative_to(REPO).as_posix()
+    except ValueError:
+        figure_path = str(args.output)
     metadata = {
         "schema": "vmex.strong-force-readme-figure/3",
         "cases": {
@@ -331,7 +335,7 @@ def main() -> None:
             }
             for case, (files, artifacts) in cases.items()
         },
-        "figure": args.output.relative_to(REPO).as_posix(),
+        "figure": figure_path,
         "figure_sha256": file_sha256(args.output),
         "timing_note": (
             "Cold measured pipelines on one Apple host; boundaries differ by "
@@ -339,7 +343,7 @@ def main() -> None:
         ),
     }
     args.metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
-    print(args.output.relative_to(REPO))
+    print(figure_path)
 
 
 if __name__ == "__main__":

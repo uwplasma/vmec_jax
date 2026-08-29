@@ -1,34 +1,51 @@
 {
-  "case": "solovev_analytical",
-  "figure": "docs/_static/figures/readme_strong_force_comparison.webp",
-  "figure_sha256": "f997a93d2987aca766633c42cd3cd10d942c856aee0bd24b586a7bb5103b75ad",
-  "schema": "vmex.strong-force-readme-figure/2",
-  "sources": {
-    "DESC": {
-      "normalized_l2": 0.01440482087874163,
-      "path": "benchmarks/strong_certificate_solovev_desc_m4.json",
-      "sha256": "2a11e8c5f30a82ac53592f12b917f037bf574292ab037b336c9c2d3b351e4030"
+  "cases": {
+    "nfp2_QA_finite_beta": {
+      "sources": {
+        "DESC": {
+          "normalized_l2": 0.9649752800267988,
+          "path": "benchmarks/strong_certificate_nfp2_QA_finite_beta_desc_m4.json",
+          "sha256": "6967c5abe6aa2131328bcb128de0dc57f542204d757ca8a599e38ff196f7d106"
+        },
+        "VMEX": {
+          "normalized_l2": 0.8739270443547336,
+          "path": "benchmarks/strong_certificate_nfp2_QA_finite_beta_vmex_m4.json",
+          "sha256": "776ffb216a5c67c3252a46b2f6f4a1c2f99364641401eb12348a45361485e726"
+        }
+      }
     },
-    "VMEC++": {
-      "normalized_l2": 0.12239903290898604,
-      "path": "benchmarks/strong_certificate_solovev_vmecpp_m4.json",
-      "sha256": "9efcbf2e3d29a846e228cb511a5a269082ec853d093254a69541133476c996a2"
-    },
-    "VMEC2000": {
-      "normalized_l2": 0.12239901752615623,
-      "path": "benchmarks/strong_certificate_solovev_vmec2000_m4.json",
-      "sha256": "3606e0314acfd73da6e32d64283983d7645d50da054877e1cc6b1287d608ea0a"
-    },
-    "VMEX legacy": {
-      "normalized_l2": 0.12238126078525399,
-      "path": "benchmarks/strong_certificate_solovev_vmex_m4.json",
-      "sha256": "abeeff3becd72cacb3ea3e5b9ffcf8324e9d80d4fee5bae31191466f941c42b5"
-    },
-    "VMEX polished": {
-      "normalized_l2": 0.002758982753904465,
-      "path": "benchmarks/strong_polish_solovev_solvax_d3_m5_m4.json",
-      "sha256": "b1402e79df147670599b9782a408aae137fc73796cfac47799015955bd9eae18"
+    "solovev_analytical": {
+      "sources": {
+        "DESC": {
+          "normalized_l2": 0.01440482087874163,
+          "path": "benchmarks/strong_certificate_solovev_desc_m4.json",
+          "sha256": "2a11e8c5f30a82ac53592f12b917f037bf574292ab037b336c9c2d3b351e4030"
+        },
+        "VMEC++": {
+          "normalized_l2": 0.12239903290898604,
+          "path": "benchmarks/strong_certificate_solovev_vmecpp_m4.json",
+          "sha256": "9efcbf2e3d29a846e228cb511a5a269082ec853d093254a69541133476c996a2"
+        },
+        "VMEC2000": {
+          "normalized_l2": 0.12239901752615623,
+          "path": "benchmarks/strong_certificate_solovev_vmec2000_m4.json",
+          "sha256": "3606e0314acfd73da6e32d64283983d7645d50da054877e1cc6b1287d608ea0a"
+        },
+        "VMEX legacy": {
+          "normalized_l2": 0.12238126078525399,
+          "path": "benchmarks/strong_certificate_solovev_vmex_m4.json",
+          "sha256": "abeeff3becd72cacb3ea3e5b9ffcf8324e9d80d4fee5bae31191466f941c42b5"
+        },
+        "VMEX polished": {
+          "normalized_l2": 0.002758982753904465,
+          "path": "benchmarks/strong_polish_solovev_solvax_d3_m5_m4.json",
+          "sha256": "21c5238b58d975533d27d70b4a2062420e333c3badabdc6e14509a03ef31913c"
+        }
+      }
     }
   },
+  "figure": "docs/_static/figures/readme_strong_force_comparison.webp",
+  "figure_sha256": "01c000bc246e8c41e9eca73c1dc32ac4304cbb63550ff58d75adfd4c63ddd70c",
+  "schema": "vmex.strong-force-readme-figure/3",
   "timing_note": "Cold measured pipelines on one Apple host; boundaries differ by implementation and are not a warm-JIT speed claim."
 }
