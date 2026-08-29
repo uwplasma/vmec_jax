@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -34,6 +35,8 @@ from vmex.core.polish_driver import (
     _branch_tangent,
     _build_mode_block_preconditioner,
     _low_inverse,
+    _residual_evaluations,
+    _supports_keyword,
     polish_strong_root,
 )
 from vmex.core.strong_force import lift_high_order_state
@@ -41,6 +44,24 @@ from vmex.core.strong_force import lift_high_order_state
 jax.config.update("jax_enable_x64", True)
 
 DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
+
+
+def test_solvax_continuation_api_compatibility_helpers():
+    def legacy_preconditioner(state, rhs, dtau):
+        del state, dtau
+        return rhs
+
+    def parameterized_preconditioner(state, rhs, dtau, parameter):
+        del state, dtau, parameter
+        return rhs
+
+    assert not _supports_keyword(legacy_preconditioner, "parameter")
+    assert _supports_keyword(parameterized_preconditioner, "parameter")
+    assert _residual_evaluations(
+        SimpleNamespace(nonlinear_steps=3, residual_evaluations=9)
+    ) == 9
+    assert _residual_evaluations(SimpleNamespace(nonlinear_steps=3)) == 4
+    assert _residual_evaluations(SimpleNamespace(steps=2)) == 3
 
 
 def _tree_dot(left, right):
