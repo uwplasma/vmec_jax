@@ -226,6 +226,13 @@ runtime construction takes 20.0 s, median warm residual/JVP costs rise to
 The converged angular rule is therefore useful diagnostic evidence but fails
 the rank, runtime, and memory gates for a production default.
 
+The radial spline quadrature is defined in normalized flux ``s``, whereas the
+strong-force oracle accepts ``rho = sqrt(s)``.  The root therefore evaluates
+physics at ``sqrt(s_quadrature)`` and fits the regularized amplitudes against
+the spline basis at ``s_quadrature``.  Passing the flux nodes directly as rho
+samples over-resolves the edge and under-resolves the magnetic axis; a
+regression fixes the coordinate identity ``rho_nodes**2 == s_quadrature``.
+
 Low-order physics preconditioner
 --------------------------------
 

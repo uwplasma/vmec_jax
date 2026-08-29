@@ -483,8 +483,14 @@ def test_factor_refresh_policy_rejects_invalid_thresholds(field, value, message)
 def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
     runtime = small_strong_root
     zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
-    radial_matrix = runtime.native.radial_basis.basis_matrix(runtime.radial_nodes)
+    radial_matrix = runtime.native.radial_basis.basis_matrix(runtime.radial_nodes**2)
     assert runtime.radial_nodes.size > runtime.native.radial_basis.size
+    np.testing.assert_allclose(
+        runtime.radial_nodes**2,
+        runtime.native.radial_basis.quadrature_nodes,
+        rtol=2.0e-15,
+        atol=2.0e-15,
+    )
     assert runtime.theta.size >= 4 * int(np.max(np.abs(runtime.native.m))) + 5
     np.testing.assert_allclose(
         runtime.radial_fit @ radial_matrix,

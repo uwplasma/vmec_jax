@@ -1027,9 +1027,14 @@ def make_strong_root_runtime(
     # ``nbasis`` coefficients.  The residual remains square after the
     # projection, while trial states that only improve the solve nodes can no
     # longer hide large between-node force.
-    radial_nodes = np.asarray(native.radial_basis.quadrature_nodes, dtype=float)
+    radial_s_nodes = np.asarray(
+        native.radial_basis.quadrature_nodes, dtype=float
+    )
+    radial_nodes = np.sqrt(radial_s_nodes)
     radial_weights = np.asarray(native.radial_basis.quadrature_weights, dtype=float)
-    radial_matrix = np.asarray(native.radial_basis.basis_matrix(radial_nodes), dtype=float)
+    radial_matrix = np.asarray(
+        native.radial_basis.basis_matrix(radial_s_nodes), dtype=float
+    )
     sqrt_weights = np.sqrt(radial_weights)
     weighted_matrix = sqrt_weights[:, None] * radial_matrix
     radial_fit = np.linalg.pinv(weighted_matrix, rcond=1.0e-12) * sqrt_weights[None, :]
