@@ -39,6 +39,7 @@ confinement
 :maxdepth: 1
 
 mirror-geometry
+mirror-gyrokinetics
 architecture
 parallelization
 ```

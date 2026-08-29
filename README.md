@@ -223,6 +223,27 @@ VMEX also solves open-ended mirrors. `examples/mirror/mirror_fixed_boundary_nona
 
 ![Free-boundary mirror beta scan](docs/_static/figures/mirror_free_boundary_beta_scan.webp)
 
+Closed stellarator–mirror hybrids also expose a differentiable, equal-arc
+field-line contract for GKX. VMEX owns the Cartesian metric and drift
+calculation; GKX converts the returned mapping to its generic flux-tube type.
+The interface accepts only a field line that closes on the periodic racetrack,
+and makes no open-end, sheath, source, or loss-cone claim. The
+[model and equations](https://vmex.readthedocs.io/en/latest/explanation/mirror-gyrokinetics.html)
+spell out that boundary explicitly.
+
+```python
+from vmex.mirror import gk_closed_fieldline_geometry
+
+geometry = gk_closed_fieldline_geometry(
+    result.evaluated.state,
+    setup.discretization,
+    setup.axis,
+    axial_flux_derivative=AXIAL_FLUX_DERIVATIVE,
+    current_derivative=0.0,
+    ntheta=32,
+)
+```
+
 ## Equilibrium and kinetic diagnostics
 
 `vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summaries below. They combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. A separate stability figure decomposes `DMerc` and shows the frozen-geometry response to a pressure ramp; finite-pressure points must be re-solved for certification. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
