@@ -233,6 +233,15 @@ the spline basis at ``s_quadrature``.  Passing the flux nodes directly as rho
 samples over-resolves the edge and under-resolves the magnetic axis; a
 regression fixes the coordinate identity ``rho_nodes**2 == s_quadrature``.
 
+The clean-commit Apple M4 record
+``benchmarks/strong_root_m6_flux_consistent_m4.json`` clears the structural
+rank gate: the complete and gauge-free operators have ranks 117/117 and 82/82,
+with condition estimates ``4.87e6`` and ``4.31e6`` at relative tolerance
+``1e-8``.  JVP finite-difference error is ``9.54e-9``.  Runtime construction is
+32.0 s with a 1.50 GiB peak-RSS increase, and median warm residual/JVP costs are
+10.1/15.8 ms.  Rank is therefore solved, while construction time and memory
+remain explicit production gates.
+
 Low-order physics preconditioner
 --------------------------------
 
