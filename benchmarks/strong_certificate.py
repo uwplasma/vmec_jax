@@ -13,6 +13,9 @@ import shlex
 import sys
 import time
 
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+
 import jax
 import numpy as np
 
@@ -28,7 +31,6 @@ from vmex.core.strong_force import (
 
 from _provenance import assert_repo_vmex, git_state
 
-REPO = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = REPO / "examples" / "data" / "input.solovev_analytical"
 
 

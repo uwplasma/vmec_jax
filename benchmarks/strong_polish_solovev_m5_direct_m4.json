@@ -1,11 +1,12 @@
 {
   "case": "solovev_analytical",
   "degree": 5,
+  "diagnostics_only": false,
   "direct_endpoint": true,
   "final_certificate": {
-    "angular_tail": 0.535521026538766,
-    "normalized_l2": 0.5918641616736336,
-    "radial_refinement": 0.022653240057239003
+    "angular_tail": 0.37096507448648464,
+    "normalized_l2": 0.33684042995828717,
+    "radial_refinement": 1.9807626634898376e-07
   },
   "full_dofs": 264,
   "initial_certificate": {
@@ -14,7 +15,7 @@
     "radial_refinement": 7.621075212167915e-05
   },
   "input_data_embedded": false,
-  "measurement_commit": "60a245ebc2041404982ec55f7f0b716263f801cc",
+  "measurement_commit": "e6c61da953981919f0dc953b849f915a82e04c68",
   "measurement_dirty": false,
   "mpol": 5,
   "ns": 31,
@@ -25,28 +26,54 @@
     "continuation_accepted": 0,
     "continuation_rejected": 0,
     "converged": false,
-    "factor_build_seconds": 5.632759584004816,
+    "factor_build_seconds": 3.0453112499963026,
     "final_alpha": 1.0,
-    "final_normalized_l2": 0.5918641616736336,
+    "final_normalized_l2": 0.33684042995828717,
     "initial_normalized_l2": 0.11475032466581055,
-    "linear_iterations": 4336,
-    "minimum_signed_jacobian": 3.7750239395330416,
+    "linear_iterations": 12180,
+    "minimum_signed_jacobian": 6.194061288091619,
     "nonlinear_iterations": 30,
-    "residual_evaluations": 94,
-    "solve_seconds": 62.33072362499661,
+    "residual_evaluations": 125,
+    "solve_seconds": 124.95066670899541,
     "termination_reason": "direct-endpoint"
+  },
+  "projection_consistency": {
+    "final": {
+      "angular_unresolved_fraction": 0.68308272006611,
+      "equation_discarded_fraction": 2.330732309733489e-16,
+      "helical_unresolved_fraction": 0.8688688936969036,
+      "projected_residual_rms": 0.001420087639101762,
+      "radial_fit_unresolved_fraction": 0.05036759702206866,
+      "radial_unresolved_fraction": 0.6833529753058477,
+      "reconstructed_rms": 1.3539124536330327,
+      "sampled_rms": 1.8571344087422144,
+      "unresolved_fraction": 0.6849371484177894,
+      "unresolved_rms": 1.2720203461524497
+    },
+    "initial": {
+      "angular_unresolved_fraction": 0.28026205996034076,
+      "equation_discarded_fraction": 2.1383704082424068e-16,
+      "helical_unresolved_fraction": 0.3334205064198197,
+      "projected_residual_rms": 0.012764531963123393,
+      "radial_fit_unresolved_fraction": 0.12294822562081612,
+      "radial_unresolved_fraction": 0.276376687441075,
+      "reconstructed_rms": 0.05451867892812684,
+      "sampled_rms": 0.057192860985449505,
+      "unresolved_fraction": 0.3060442589504347,
+      "unresolved_rms": 0.01750354675754712
+    }
   },
   "radial_spans": 16,
   "schema": "vmex.strong-polish-benchmark/1",
-  "setup_peak_rss_increase_mib": 1948.84375,
-  "setup_seconds": 34.16598312499991,
+  "setup_peak_rss_increase_mib": 2400.84375,
+  "setup_seconds": 27.490300708006544,
   "solve_grid": [
     48,
     21,
     1
   ],
-  "total_peak_rss_increase_mib": 3301.90625,
-  "total_seconds": 96.49671862499963,
+  "total_peak_rss_increase_mib": 3390.328125,
+  "total_seconds": 152.45969250000053,
   "versions": {
     "jax": "0.11.1",
     "numpy": "2.5.2",

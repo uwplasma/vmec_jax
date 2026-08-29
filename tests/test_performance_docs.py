@@ -60,8 +60,10 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
         "run_baseline.py",
         "run_freeboundary_multigrid.py",
         "run_high_mode_fft.py",
-        "polish_preconditioner.py",
-        "strong_root.py",
+            "polish_preconditioner.py",
+            "strong_certificate.py",
+            "strong_polish.py",
+            "strong_root.py",
         "profile_resources.py",
     ):
         proc = subprocess.run(
@@ -119,6 +121,48 @@ def test_polish_preconditioner_artifact_is_clean_and_certified() -> None:
         assert case["transfer_roundtrip_relative_residual"] < 2.0e-12
         assert case["preconditioner_duality_relative_error"] < 2.0e-12
         assert case["low_block_relative_residual"] < 1.0e-10
+
+
+def test_strong_projection_artifacts_pin_resolution_and_blocking_diagnosis() -> None:
+    artifacts = [
+        json.loads(
+            (
+                ROOT
+                / "benchmarks"
+                / f"strong_projection_solovev_m{mpol}_m4.json"
+            ).read_text()
+        )
+        for mpol in (5, 8, 13)
+    ]
+    unresolved = []
+    for expected_mpol, artifact in zip((5, 8, 13), artifacts, strict=True):
+        assert artifact["schema"] == "vmex.strong-polish-benchmark/1"
+        assert artifact["measurement_dirty"] is False
+        assert artifact["diagnostics_only"] is True
+        assert artifact["mpol"] == expected_mpol
+        assert artifact["total_seconds"] < 60.0
+        assert artifact["total_peak_rss_increase_mib"] < 4096.0
+        projection = artifact["projection_consistency"]["initial"]
+        assert projection["radial_fit_unresolved_fraction"] < 0.25
+        assert projection["equation_discarded_fraction"] < 1.0e-12
+        unresolved.append(projection["unresolved_fraction"])
+    assert unresolved[0] > unresolved[1] > unresolved[2]
+
+    endpoint = json.loads(
+        (
+            ROOT / "benchmarks" / "strong_polish_solovev_m5_direct_m4.json"
+        ).read_text()
+    )
+    assert endpoint["measurement_dirty"] is False
+    initial = endpoint["projection_consistency"]["initial"]
+    final = endpoint["projection_consistency"]["final"]
+    assert final["projected_residual_rms"] < initial["projected_residual_rms"]
+    assert final["angular_unresolved_fraction"] > 2.0 * initial[
+        "angular_unresolved_fraction"
+    ]
+    assert endpoint["final_certificate"]["normalized_l2"] > endpoint[
+        "initial_certificate"
+    ]["normalized_l2"]
 
 
 def test_committed_reports_do_not_expose_personal_paths() -> None:

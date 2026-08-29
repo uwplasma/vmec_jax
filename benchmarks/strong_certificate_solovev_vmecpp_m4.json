@@ -2,7 +2,7 @@
   "angular_multiplier": 2,
   "case": "solovev_analytical",
   "certificate_seconds": 3.702970792000997,
-  "command": "benchmarks/strong_certificate.py --input examples/data/input.solovev_analytical --wout /Users/rogerio/local/vmex_project_forcebalance/vmecpp/src/vmecpp/cpp/vmecpp/test_data/wout_solovev_analytical.nc --radial-spans 16",
+  "command": "benchmarks/strong_certificate.py --input examples/data/input.solovev_analytical --wout <vmecpp-repository>/src/vmecpp/cpp/vmecpp/test_data/wout_solovev_analytical.nc --radial-spans 16",
   "coordinate_convention": "rho=sqrt(s), theta poloidal, zeta field-period; physical phi=zeta/nfp",
   "degree": 5,
   "input": "examples/data/input.solovev_analytical",
@@ -39,7 +39,7 @@
   "radial_spans": 16,
   "schema": "vmex.strong-certificate-benchmark/1",
   "solve_seconds": null,
-  "source": "/Users/rogerio/local/vmex_project_forcebalance/vmecpp/src/vmecpp/cpp/vmecpp/test_data/wout_solovev_analytical.nc",
+  "source": "<vmecpp-repository>/src/vmecpp/cpp/vmecpp/test_data/wout_solovev_analytical.nc",
   "total_seconds": 7.561996457996429,
   "versions": {
     "jax": "0.11.0",
