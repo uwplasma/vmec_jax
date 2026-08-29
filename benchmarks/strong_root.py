@@ -23,7 +23,9 @@ from vmex.core import implicit
 from vmex.core.input import VmecInput
 from vmex.core.polish import (
     build_low_order_preconditioner,
+    make_strong_physical_chart,
     make_strong_root_runtime,
+    strong_physical_residual,
     strong_root_rank,
     strong_root_residual,
 )
@@ -60,6 +62,11 @@ def main() -> None:
     parser.add_argument("--mpol", type=int, default=3)
     parser.add_argument("--degree", type=int, choices=(3, 5, 7), default=3)
     parser.add_argument("--repeats", type=int, default=20)
+    parser.add_argument(
+        "--physical-chart",
+        action="store_true",
+        help="factor only the linear gauge operator and diagnose its reduced root",
+    )
     args = parser.parse_args()
     if args.ns < args.degree + 2:
         parser.error("ns must be at least degree + 2")
@@ -113,6 +120,45 @@ def main() -> None:
     rank, singular_values = strong_root_rank(runtime, relative_tolerance=1.0e-8)
     rank_seconds = time.perf_counter() - started
 
+    physical_chart_report = None
+    if args.physical_chart:
+        rss_before_chart = _peak_rss_mib()
+        chart = make_strong_physical_chart(runtime)
+        rss_after_chart = _peak_rss_mib()
+        physical_zero = jnp.zeros((chart.size,), dtype=jnp.float64)
+        physical_residual = jax.jit(
+            lambda value: strong_physical_residual(value, runtime, chart, 1.0)
+        )
+        _, physical_cold = _timed(physical_residual, physical_zero)
+        physical_warm = [
+            _timed(physical_residual, physical_zero)[1]
+            for _ in range(args.repeats)
+        ]
+        started = time.perf_counter()
+        physical_jacobian = jax.jacfwd(physical_residual)(physical_zero)
+        physical_singular = jnp.linalg.svd(
+            physical_jacobian, compute_uv=False
+        ).block_until_ready()
+        physical_rank_seconds = time.perf_counter() - started
+        physical_rank = int(
+            jnp.sum(physical_singular > 1.0e-8 * physical_singular[0])
+        )
+        physical_chart_report = {
+            "free_dofs": chart.size,
+            "gauge_rank": chart.gauge_rank,
+            "chart_build_seconds": chart.build_seconds,
+            "chart_peak_rss_increase_mib": rss_after_chart - rss_before_chart,
+            "cold_residual_seconds": physical_cold,
+            "warm_residual_median_seconds": statistics.median(physical_warm),
+            "rank": physical_rank,
+            "rank_seconds": physical_rank_seconds,
+            "largest_singular_value": float(physical_singular[0]),
+            "smallest_singular_value": float(physical_singular[-1]),
+            "condition_number": float(
+                physical_singular[0] / physical_singular[-1]
+            ),
+        }
+
     step = 2.0e-5
     finite_difference = (residual(step * direction) - residual(-step * direction)) / (
         2.0 * step
@@ -162,6 +208,7 @@ def main() -> None:
         "largest_singular_value": float(singular_values[0]),
         "smallest_singular_value": float(singular_values[-1]),
         "condition_number": float(singular_values[0] / singular_values[-1]),
+        "physical_chart": physical_chart_report,
         "platform": platform.platform(),
         "versions": {
             "python": platform.python_version(),

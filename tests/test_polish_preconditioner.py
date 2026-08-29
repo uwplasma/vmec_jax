@@ -23,11 +23,13 @@ from vmex.core.polish import (
     build_low_order_preconditioner,
     build_strong_mode_block_preconditioner,
     make_high_low_transfer,
+    make_strong_physical_chart,
     make_strong_root_layout,
     make_strong_root_runtime,
     preconditioner_quality,
     preconditioner_refresh_decision,
     _streaming_ruiz_scales,
+    strong_physical_residual,
     strong_root_rank,
     strong_root_residual,
 )
@@ -544,6 +546,57 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
     rank, singular_values = strong_root_rank(runtime, relative_tolerance=1.0e-8)
     assert rank == runtime.layout.size
     assert float(singular_values[-1]) > 0.0
+
+
+def test_physical_chart_eliminates_only_the_linear_coordinate_gauge(
+    small_strong_root,
+):
+    runtime = small_strong_root
+    chart = make_strong_physical_chart(runtime)
+    assert chart.full_size == runtime.layout.size
+    assert chart.size + chart.gauge_rank == chart.full_size
+    assert chart.gauge_rank > 0
+    assert chart.build_seconds > 0.0
+    np.testing.assert_allclose(
+        np.asarray(chart.coordinate_basis.T @ chart.coordinate_basis),
+        np.eye(chart.size),
+        rtol=2.0e-12,
+        atol=2.0e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(chart.equation_basis.T @ chart.equation_basis),
+        np.eye(chart.size),
+        rtol=2.0e-12,
+        atol=2.0e-12,
+    )
+
+    zero = jnp.zeros((chart.size,), dtype=jnp.float64)
+    np.testing.assert_array_equal(strong_physical_residual(zero, runtime, chart, 0.0), 0.0)
+    direction = jnp.linspace(-0.2, 0.3, chart.size)
+    _, tangent = jax.jvp(
+        lambda value: strong_physical_residual(value, runtime, chart, 1.0),
+        (zero,),
+        (direction,),
+    )
+    step = 2.0e-5
+    finite_difference = (
+        strong_physical_residual(step * direction, runtime, chart, 1.0)
+        - strong_physical_residual(-step * direction, runtime, chart, 1.0)
+    ) / (2.0 * step)
+    np.testing.assert_allclose(tangent, finite_difference, rtol=2.0e-6, atol=2.0e-7)
+    jacobian = jax.jacfwd(
+        lambda value: strong_physical_residual(value, runtime, chart, 1.0)
+    )(zero)
+    singular_values = jnp.linalg.svd(jacobian, compute_uv=False)
+    rank = int(jnp.sum(singular_values > 1.0e-8 * singular_values[0]))
+    assert rank == chart.size
+
+    with pytest.raises(ValueError, match="relative_tolerance"):
+        make_strong_physical_chart(runtime, relative_tolerance=0.0)
+    with pytest.raises(ValueError, match="physical vector"):
+        chart.lift(jnp.zeros((chart.size + 1,)))
+    with pytest.raises(ValueError, match="full residual"):
+        chart.project(jnp.zeros((chart.full_size + 1,)))
 
 
 def test_strong_root_validation_branches(small_adapter, small_strong_root):

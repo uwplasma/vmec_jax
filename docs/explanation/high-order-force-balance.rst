@@ -190,6 +190,18 @@ it severely imbalances the singular spectrum.  Four directions and the large
 construction-memory cost remain open; this result is conditioning evidence,
 not an alpha-one convergence claim.
 
+The next opt-in diagnostic removes the coordinate equation rather than merely
+rescaling it.  Because the tangential displacement equation is exactly linear
+in the correction, VMEX factors that operator alone and forms orthonormal bases
+for its input nullspace and output coimage.  The nonlinear radial and helical
+forces are then evaluated in the resulting square physical chart.  No dense
+physical-force Jacobian is built: residuals, JVPs, and VJPs continue through the
+matrix-free strong operator.  Run ``benchmarks/strong_root.py --physical-chart``
+to report the eliminated gauge rank, reduced rank and condition estimate, chart
+construction time and memory, and cold/warm residual costs.  This remains a
+diagnostic until the production-resolution reduced root is full rank and meets
+the continuation certificate.
+
 Low-order physics preconditioner
 --------------------------------
 

@@ -345,6 +345,52 @@ class StrongRootLayout:
 
 
 @dataclass(frozen=True, eq=False)
+class StrongPhysicalChart:
+    """Gauge-free coordinates and equations for the strong-force root.
+
+    ``coordinate_basis`` spans the nullspace of the exactly linear tangential
+    coordinate equation.  ``equation_basis`` spans the orthogonal complement
+    of that equation's image.  Both bases are built from the gauge operator
+    alone; constructing this chart never probes or stores the physical-force
+    Jacobian.
+    """
+
+    coordinate_basis: Array
+    equation_basis: Array
+    gauge_rank: int
+    build_seconds: float
+
+    @property
+    def full_size(self) -> int:
+        return int(self.coordinate_basis.shape[0])
+
+    @property
+    def size(self) -> int:
+        return int(self.coordinate_basis.shape[1])
+
+    def lift(self, vector: Array) -> Array:
+        """Lift one gauge-free vector into the full constrained layout."""
+
+        vector = jnp.asarray(vector)
+        if vector.shape != (self.size,):
+            raise ValueError(
+                f"physical vector has shape {vector.shape}; expected {(self.size,)}"
+            )
+        return jnp.asarray(self.coordinate_basis) @ vector
+
+    def project(self, residual: Array) -> Array:
+        """Project a full residual away from coordinate-gauge equations."""
+
+        residual = jnp.asarray(residual)
+        if residual.shape != (self.full_size,):
+            raise ValueError(
+                f"full residual has shape {residual.shape}; "
+                f"expected {(self.full_size,)}"
+            )
+        return jnp.asarray(self.equation_basis).T @ residual
+
+
+@dataclass(frozen=True, eq=False)
 class StrongRootRuntime:
     """Reusable grids, transforms, constraints, and scaling for a square root."""
 
@@ -665,6 +711,89 @@ def apply_high_order_correction(
     )
 
 
+def _coordinate_gauge_samples(
+    state: HighOrderEquilibriumState,
+    native: HighOrderEquilibriumState,
+    runtime: StrongRootRuntime,
+    points: Array,
+) -> Array:
+    """Evaluate the linear tangential-displacement coordinate equation."""
+
+    from .strong_force import _RZL
+
+    def coordinate_gauge(point):
+        base_rz = jnp.asarray(_RZL(native, point)[:2])
+        current_rz = jnp.asarray(_RZL(state, point)[:2])
+        theta_direction = jnp.asarray([0.0, 1.0, 0.0], dtype=point.dtype)
+        _, tangent = jax.jvp(
+            lambda location: jnp.asarray(_RZL(runtime.native, location)[:2]),
+            (point,),
+            (theta_direction,),
+        )
+        tangent_norm = jnp.sqrt(
+            jnp.vdot(tangent, tangent).real + float(runtime.force_floor) ** 2
+        )
+        return jnp.vdot(current_rz - base_rz, tangent).real / (
+            tangent_norm * jnp.asarray(runtime.gauge_length)
+        )
+
+    return jax.vmap(coordinate_gauge)(points)
+
+
+def _fit_regularized_channel(
+    samples: Array,
+    angular_projection: Array,
+    radial: Array,
+    runtime: StrongRootRuntime,
+) -> Array:
+    """Fourier project and remove analytic axis powers before radial fitting."""
+
+    samples = jnp.asarray(samples).reshape((radial.size, -1))
+    modes = jnp.einsum(
+        "ra,ma->rm", samples, jnp.asarray(angular_projection)
+    )
+    powers = radial[:, None] ** jnp.asarray(np.abs(runtime.native.m))[None, :]
+    safe_powers = jnp.maximum(powers, jnp.finfo(radial.dtype).tiny)
+    return jnp.asarray(runtime.radial_fit) @ (modes / safe_powers)
+
+
+def _coordinate_gauge_residual_unscaled(
+    vector: Array,
+    runtime: StrongRootRuntime,
+) -> Array:
+    """Project only the linear coordinate equation, without physical forces."""
+
+    correction = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * jnp.asarray(vector)
+    )
+    state = apply_high_order_correction(runtime.native, correction)
+    radial = jnp.asarray(runtime.radial_nodes)
+    rr, tt, zz = jnp.meshgrid(
+        radial,
+        jnp.asarray(runtime.theta),
+        jnp.asarray(runtime.zeta),
+        indexing="ij",
+    )
+    points = jnp.stack((rr.reshape(-1), tt.reshape(-1), zz.reshape(-1)), axis=-1)
+    gauge = _coordinate_gauge_samples(state, runtime.native, runtime, points)
+    gauge_coefficients = _fit_regularized_channel(
+        gauge,
+        runtime.sine_projection,
+        radial,
+        runtime,
+    )
+    zero = jnp.zeros_like(jnp.asarray(runtime.native.R_cos))
+    coefficients = HighOrderCorrection(
+        R_cos=zero,
+        R_sin=zero,
+        Z_cos=zero,
+        Z_sin=gauge_coefficients.T,
+        L_cos=zero,
+        L_sin=zero,
+    )
+    return jnp.asarray(runtime.equation_scale) * runtime.layout.pack(coefficients)
+
+
 def _strong_residual_unscaled(
     vector: Array,
     runtime: StrongRootRuntime,
@@ -672,7 +801,7 @@ def _strong_residual_unscaled(
 ) -> Array:
     """Project normalized physical force onto the reduced solve space."""
 
-    from .strong_force import _RZL, evaluate_strong_force
+    from .strong_force import evaluate_strong_force
 
     native = runtime.native if native is None else native
     correction = runtime.layout.unpack(
@@ -698,43 +827,16 @@ def _strong_residual_unscaled(
     )
     points = jnp.stack((rr.reshape(-1), tt.reshape(-1), zz.reshape(-1)), axis=-1)
 
-    def coordinate_gauge(point):
-        base_rz = jnp.asarray(_RZL(native, point)[:2])
-        current_rz = jnp.asarray(_RZL(state, point)[:2])
-        theta_direction = jnp.asarray([0.0, 1.0, 0.0], dtype=point.dtype)
-        _, tangent = jax.jvp(
-            lambda location: jnp.asarray(_RZL(runtime.native, location)[:2]),
-            (point,),
-            (theta_direction,),
-        )
-        tangent_norm = jnp.sqrt(
-            jnp.vdot(tangent, tangent).real + float(runtime.force_floor) ** 2
-        )
-        return jnp.vdot(current_rz - base_rz, tangent).real / (
-            tangent_norm * jnp.asarray(runtime.gauge_length)
-        )
-
-    gauge = jax.vmap(coordinate_gauge)(points).reshape(rr.shape)
-    radial_force = radial_force.reshape((radial.size, -1))
-    helical_force = helical_force.reshape((radial.size, -1))
-    gauge = gauge.reshape((radial.size, -1))
-    radial_modes = jnp.einsum(
-        "ra,ma->rm", radial_force, jnp.asarray(runtime.cosine_projection)
+    gauge = _coordinate_gauge_samples(state, native, runtime, points)
+    radial_coefficients = _fit_regularized_channel(
+        radial_force, runtime.cosine_projection, radial, runtime
     )
-    helical_modes = jnp.einsum(
-        "ra,ma->rm", helical_force, jnp.asarray(runtime.sine_projection)
+    helical_coefficients = _fit_regularized_channel(
+        helical_force, runtime.sine_projection, radial, runtime
     )
-    gauge_modes = jnp.einsum(
-        "ra,ma->rm", gauge, jnp.asarray(runtime.sine_projection)
+    gauge_coefficients = _fit_regularized_channel(
+        gauge, runtime.sine_projection, radial, runtime
     )
-    powers = radial[:, None] ** jnp.asarray(np.abs(runtime.native.m))[None, :]
-    safe_powers = jnp.maximum(powers, jnp.finfo(radial.dtype).tiny)
-    radial_q = radial_modes / safe_powers
-    helical_q = helical_modes / safe_powers
-    gauge_q = gauge_modes / safe_powers
-    radial_coefficients = jnp.asarray(runtime.radial_fit) @ radial_q
-    helical_coefficients = jnp.asarray(runtime.radial_fit) @ helical_q
-    gauge_coefficients = jnp.asarray(runtime.radial_fit) @ gauge_q
     zero = jnp.zeros_like(jnp.asarray(runtime.native.R_cos))
     force_coefficients = HighOrderCorrection(
         R_cos=radial_coefficients.T,
@@ -796,6 +898,60 @@ def strong_root_residual_at_native(
     vector = jnp.asarray(vector)
     strong = _strong_residual_unscaled(vector, runtime, native)
     return strong / jnp.asarray(runtime.strong_scale)
+
+
+def make_strong_physical_chart(
+    runtime: StrongRootRuntime,
+    *,
+    relative_tolerance: float = 1.0e-10,
+) -> StrongPhysicalChart:
+    """Eliminate the exactly linear coordinate gauge from a strong root.
+
+    The one-time dense factorization is restricted to the coordinate-gauge
+    operator.  The nonlinear physical force and all subsequent JVP/VJP calls
+    remain matrix-free.  ``relative_tolerance`` defines the numerical rank of
+    the gauge operator and must leave at least one physical coordinate.
+    """
+
+    if relative_tolerance <= 0.0:
+        raise ValueError("relative_tolerance must be positive")
+    started = perf_counter()
+    size = runtime.layout.size
+    zero = jnp.zeros((size,), dtype=jnp.asarray(runtime.native.R_cos).dtype)
+    gauge_operator = jax.jacfwd(
+        lambda value: _coordinate_gauge_residual_unscaled(value, runtime)
+    )(zero)
+    left, singular_values, right_transpose = np.linalg.svd(
+        np.asarray(jax.device_get(gauge_operator)),
+        full_matrices=True,
+    )
+    if singular_values.size == 0 or singular_values[0] <= 0.0:
+        raise ValueError("coordinate-gauge operator has no independent equations")
+    gauge_rank = int(
+        np.sum(singular_values > relative_tolerance * singular_values[0])
+    )
+    if gauge_rank <= 0 or gauge_rank >= size:
+        raise ValueError(
+            "coordinate-gauge rank must be positive and smaller than the root"
+        )
+    return StrongPhysicalChart(
+        coordinate_basis=jnp.asarray(right_transpose[gauge_rank:].T),
+        equation_basis=jnp.asarray(left[:, gauge_rank:]),
+        gauge_rank=gauge_rank,
+        build_seconds=perf_counter() - started,
+    )
+
+
+@partial(jax.jit, static_argnames=("runtime", "chart"))
+def strong_physical_residual(
+    vector: Array,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
+    alpha: Array = 1.0,
+) -> Array:
+    """Evaluate the square strong root in exact gauge-free coordinates."""
+
+    return chart.project(strong_root_residual(chart.lift(vector), runtime, alpha))
 
 
 def _streaming_ruiz_scales(
@@ -1273,17 +1429,20 @@ __all__ = [
     "PreconditionerRefreshPolicy",
     "PreconditionerSnapshot",
     "StrongModeBlockPreconditioner",
+    "StrongPhysicalChart",
     "StrongRootLayout",
     "StrongRootRuntime",
     "apply_high_order_correction",
     "build_low_order_preconditioner",
     "build_strong_mode_block_preconditioner",
     "make_high_low_transfer",
+    "make_strong_physical_chart",
     "make_strong_root_layout",
     "make_strong_root_runtime",
     "preconditioner_quality",
     "preconditioner_refresh_decision",
     "strong_root_rank",
+    "strong_physical_residual",
     "strong_root_residual",
     "strong_root_residual_at_native",
 ]
