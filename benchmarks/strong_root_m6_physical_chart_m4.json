@@ -1,0 +1,69 @@
+{
+  "case": "solovev",
+  "cold_jvp_seconds": 0.9567056669984595,
+  "cold_residual_seconds": 0.33199891700496664,
+  "compilation_cache": "default",
+  "condition_number": 8827120185.063461,
+  "coordinate_scale_range": [
+    7.797769613116626e-07,
+    0.009102074664139358
+  ],
+  "degree": 5,
+  "equation_scale_range": [
+    3.847172083927732e-06,
+    2675.795373198151
+  ],
+  "free_dofs": 117,
+  "initial_low_residual_norm": 2.418885345862062e-12,
+  "initial_scaled_residual_norm": 8.982800440368239e-08,
+  "input_data_embedded": false,
+  "jvp_peak_rss_increase_mib": 188.15625,
+  "jvp_relative_error": 6.363612589424299e-09,
+  "largest_singular_value": 9.303057695315108e-10,
+  "measurement_commit": "f981a98f7bc5035d81c28aff7a120da3a980f2a0",
+  "measurement_dirty": false,
+  "mpol": 6,
+  "ns": 11,
+  "operator_balance": 120415163.38025881,
+  "physical_chart": {
+    "chart_build_seconds": 3.0112948329988285,
+    "chart_peak_rss_increase_mib": 207.203125,
+    "cold_residual_seconds": 0.3346515419980278,
+    "condition_number": 4689488837.176461,
+    "free_dofs": 82,
+    "gauge_rank": 35,
+    "largest_singular_value": 8.321135823548051e-10,
+    "rank": 79,
+    "rank_seconds": 1.6669354590048897,
+    "smallest_singular_value": 1.774422780918315e-19,
+    "warm_residual_median_seconds": 0.0030833539967716206
+  },
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "rank": 113,
+  "rank_seconds": 2.1486211249939515,
+  "repeats": 20,
+  "residual_peak_rss_increase_mib": 29.4375,
+  "runtime_build_seconds": 16.187552666000556,
+  "runtime_peak_rss_increase_mib": 1347.578125,
+  "smallest_singular_value": 1.0539176424783464e-19,
+  "solve_grid": [
+    24,
+    13,
+    3
+  ],
+  "strong_block_sign": [
+    -1.0,
+    -1.0,
+    1.0
+  ],
+  "versions": {
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "numpy": "2.5.1",
+    "python": "3.13.7",
+    "vmex": "0.7.0"
+  },
+  "vmex_module": "vmex/__init__.py",
+  "warm_jvp_median_seconds": 0.004848958502407186,
+  "warm_residual_median_seconds": 0.0034222294962091837
+}

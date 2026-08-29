@@ -202,6 +202,15 @@ construction time and memory, and cold/warm residual costs.  This remains a
 diagnostic until the production-resolution reduced root is full rank and meets
 the continuation certificate.
 
+The clean-commit Apple M4 record
+``benchmarks/strong_root_m6_physical_chart_m4.json`` eliminates 35 independent
+gauge directions and leaves an 82-coordinate physical root.  At relative SVD
+tolerance ``1e-8`` it has rank 79 and condition estimate ``4.69e9``.  The chart
+build takes 3.01 s and adds 207 MiB to peak RSS in this process; its median warm
+residual is 3.08 ms.  This independently confirms that three weak directions
+remain after exact gauge elimination.  It is a failed full-rank gate, not a
+production solver promotion.
+
 Low-order physics preconditioner
 --------------------------------
 
