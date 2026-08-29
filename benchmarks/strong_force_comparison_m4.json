@@ -39,13 +39,13 @@
         "VMEX polished": {
           "normalized_l2": 0.002758982753904465,
           "path": "benchmarks/strong_polish_solovev_solvax_d3_m5_m4.json",
-          "sha256": "21c5238b58d975533d27d70b4a2062420e333c3badabdc6e14509a03ef31913c"
+          "sha256": "54405a68ed561134eb9a1b0039fb2f1733de2f2499dc1516856cfb50c0a84c94"
         }
       }
     }
   },
   "figure": "docs/_static/figures/readme_strong_force_comparison.webp",
-  "figure_sha256": "01c000bc246e8c41e9eca73c1dc32ac4304cbb63550ff58d75adfd4c63ddd70c",
+  "figure_sha256": "752b72df58214fd15b7a5b9d07128398f0797eebaa08ad31b4f94a73fbde60ad",
   "schema": "vmex.strong-force-readme-figure/3",
   "timing_note": "Cold measured pipelines on one Apple host; boundaries differ by implementation and are not a warm-JIT speed claim."
 }

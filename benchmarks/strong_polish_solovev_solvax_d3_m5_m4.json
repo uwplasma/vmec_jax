@@ -608,7 +608,7 @@
     "radial_refinement": 0.0038552116661592986
   },
   "input_data_embedded": false,
-  "measurement_commit": "79ea2ab9970044cc086f855e8e844aced3f38d63",
+  "measurement_commit": "7544f9eb71e31e44ec97063d687bd3b01dd6a409",
   "measurement_dirty": false,
   "mpol": 5,
   "ns": 31,
@@ -619,7 +619,7 @@
     "continuation_accepted": 3,
     "continuation_rejected": 0,
     "converged": true,
-    "factor_build_seconds": 5.979070542001864,
+    "factor_build_seconds": 5.805538125001476,
     "final_alpha": 1.0,
     "final_normalized_l2": 0.002758982753904465,
     "initial_normalized_l2": 0.03994742616554715,
@@ -634,7 +634,7 @@
     "nonlinear_iterations": 3,
     "radial_refinement_tolerance": 0.001,
     "residual_evaluations": 4,
-    "solve_seconds": 25.461860458002775,
+    "solve_seconds": 13.324156041999231,
     "termination_reason": "independently-certified",
     "variable_scale_max": 0.042489700063708745,
     "variable_scale_min": 2.7042089148587506e-06,
@@ -670,8 +670,8 @@
   "radial_refinement_tolerance": 0.001,
   "radial_spans": 16,
   "schema": "vmex.strong-polish-benchmark/1",
-  "setup_peak_rss_increase_mib": 2035.34375,
-  "setup_seconds": 51.51763741699688,
+  "setup_peak_rss_increase_mib": 1987.90625,
+  "setup_seconds": 42.4000017080034,
   "solvax_least_squares": true,
   "solvax_source": {
     "commit": "7465cf4acabe7b11e51add030925b389ebd83de2",
@@ -683,8 +683,8 @@
     21,
     1
   ],
-  "total_peak_rss_increase_mib": 2816.390625,
-  "total_seconds": 84.02066270899377,
+  "total_peak_rss_increase_mib": 2825.53125,
+  "total_seconds": 57.63881145800406,
   "validation_tolerance": 0.0144049834,
   "versions": {
     "jax": "0.11.1",
