@@ -10,20 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from solvax import (
-    ContinuationConfig,
-    ContinuationStep,
-    PseudoTransientConfig,
-    adaptive_continuation,
-    gmres,
-    pseudo_arclength_corrector,
-    pseudo_transient_continuation,
-)
+from solvax import gmres
 
 from .errors import StrongForceCertificationError, StrongForceContinuationError
 from .polish import (
@@ -39,6 +31,32 @@ from .strong_force import (
 )
 
 Array = object
+
+
+def _solvax_continuation_api() -> tuple[Any, ...]:
+    """Load the continuation extension supplied by the companion SOLVAX PR."""
+
+    try:
+        from solvax import (
+            ContinuationConfig,
+            PseudoTransientConfig,
+            adaptive_continuation,
+            pseudo_arclength_corrector,
+            pseudo_transient_continuation,
+        )
+    except ImportError as error:
+        raise RuntimeError(
+            "strong-force polishing requires a SOLVAX release containing "
+            "adaptive continuation, pseudo-transient continuation, and "
+            "pseudo-arclength correction (uwplasma/SOLVAX#87)"
+        ) from error
+    return (
+        ContinuationConfig,
+        PseudoTransientConfig,
+        adaptive_continuation,
+        pseudo_arclength_corrector,
+        pseudo_transient_continuation,
+    )
 
 
 @dataclass(frozen=True)
@@ -288,7 +306,8 @@ def _low_inverse(rhs: jax.Array, runtime: StrongRootRuntime) -> jax.Array:
     return runtime.layout.pack(solution)
 
 
-def _ptc_config(config: PolishConfig) -> PseudoTransientConfig:
+def _ptc_config(config: PolishConfig) -> Any:
+    _, PseudoTransientConfig, _, _, _ = _solvax_continuation_api()
     return PseudoTransientConfig(
         rtol=config.tolerance,
         atol=config.tolerance,
@@ -301,7 +320,8 @@ def _ptc_config(config: PolishConfig) -> PseudoTransientConfig:
     )
 
 
-def _continuation_config(config: PolishConfig) -> ContinuationConfig:
+def _continuation_config(config: PolishConfig) -> Any:
+    ContinuationConfig, _, _, _, _ = _solvax_continuation_api()
     return ContinuationConfig(
         target=1.0,
         initial_step=config.alpha_initial_step,
@@ -433,6 +453,9 @@ def _arclength_to_target(
     block_preconditioner: _ModeBlockPreconditioner | None,
     initial_tangent: tuple[jax.Array, jax.Array] | None,
 ):
+    _, _, _, pseudo_arclength_corrector, pseudo_transient_continuation = (
+        _solvax_continuation_api()
+    )
     tangent = (
         _branch_tangent(vector, alpha, runtime, config, None, block_preconditioner)
         if initial_tangent is None
@@ -544,6 +567,9 @@ def polish_strong_root(
             solve_seconds=perf_counter() - started,
         )
         return PolishResult(runtime.native, initial_certificate, report, zero)
+    _, _, adaptive_continuation, _, pseudo_transient_continuation = (
+        _solvax_continuation_api()
+    )
     initial_margin = float(_minimum_signed_jacobian(zero, runtime))
     block_preconditioner = (
         _build_mode_block_preconditioner(runtime)
@@ -580,7 +606,7 @@ def polish_strong_root(
     nonlinear_iterations = int(endpoint.steps)
     linear_iterations = int(endpoint.linear_iterations)
     residual_evaluations = int(endpoint.residual_evaluations)
-    steps: tuple[ContinuationStep, ...] = ()
+    steps: tuple[Any, ...] = ()
     arclength_steps = 0
     vector = endpoint.x
     alpha = 0.0
