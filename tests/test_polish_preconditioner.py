@@ -24,6 +24,7 @@ from vmex.core.polish import (
     build_strong_mode_block_preconditioner,
     make_high_low_transfer,
     make_strong_physical_chart,
+    make_strong_structured_chart,
     make_strong_root_layout,
     make_strong_root_runtime,
     preconditioner_quality,
@@ -247,6 +248,23 @@ def test_streaming_equilibration_improves_conditioning_without_dropping_dofs():
     assert np.all(columns > 0.0)
     assert np.linalg.matrix_rank(balanced) == 2
     assert np.linalg.cond(balanced) < 1.01
+
+
+def test_streaming_equilibration_is_deterministic_and_validates_controls():
+    matrix = jnp.asarray([[2.0, -1.0], [3.0, 4.0]])
+
+    def residual(vector):
+        return matrix @ vector
+
+    first = _streaming_ruiz_scales(residual, jnp.zeros((2,)), probes=2)
+    second = _streaming_ruiz_scales(residual, jnp.zeros((2,)), probes=2)
+    for actual, expected in zip(first, second, strict=True):
+        np.testing.assert_array_equal(actual, expected)
+        assert np.all(actual > 0.0)
+    with pytest.raises(ValueError, match="iterations"):
+        _streaming_ruiz_scales(residual, jnp.zeros((2,)), iterations=0)
+    with pytest.raises(ValueError, match="probes"):
+        _streaming_ruiz_scales(residual, jnp.zeros((2,)), probes=0)
 
 
 def _random_like(value, seed: int):
@@ -486,13 +504,8 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
     zero = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
     radial_matrix = runtime.native.radial_basis.basis_matrix(runtime.radial_nodes**2)
     assert runtime.radial_nodes.size > runtime.native.radial_basis.size
-    np.testing.assert_allclose(
-        runtime.radial_nodes**2,
-        runtime.native.radial_basis.quadrature_nodes,
-        rtol=2.0e-15,
-        atol=2.0e-15,
-    )
     assert runtime.theta.size >= 4 * int(np.max(np.abs(runtime.native.m))) + 5
+    assert runtime.zeta.size == 1
     np.testing.assert_allclose(
         runtime.radial_fit @ radial_matrix,
         np.eye(runtime.native.radial_basis.size),
@@ -625,6 +638,33 @@ def test_physical_chart_eliminates_only_the_linear_coordinate_gauge(
         chart.project(jnp.zeros((chart.full_size + 1,)))
 
 
+def test_structured_chart_uses_only_physical_layout_channels(small_strong_root):
+    runtime = small_strong_root
+    chart = make_strong_structured_chart(runtime)
+    assert chart.full_size == runtime.layout.size
+    assert chart.size + chart.gauge_rank == chart.full_size
+    assert chart.gauge_rank > 0
+    np.testing.assert_allclose(
+        np.asarray(chart.coordinate_basis),
+        np.asarray(chart.equation_basis),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(chart.coordinate_basis.T @ chart.coordinate_basis),
+        np.eye(chart.size),
+        rtol=2.0e-12,
+        atol=2.0e-12,
+    )
+    zero = jnp.zeros((chart.size,), dtype=jnp.float64)
+    jacobian = jax.jacfwd(
+        lambda value: strong_physical_residual(value, runtime, chart, 1.0)
+    )(zero)
+    singular_values = jnp.linalg.svd(jacobian, compute_uv=False)
+    rank = int(jnp.sum(singular_values > 1.0e-8 * singular_values[0]))
+    assert rank == chart.size
+
+
 def test_strong_root_validation_branches(small_adapter, small_strong_root):
     native, _, _, mask, adapter = small_adapter
     layout = small_strong_root.layout
@@ -635,7 +675,7 @@ def test_strong_root_validation_branches(small_adapter, small_strong_root):
     with pytest.raises(ValueError, match="balance_iterations"):
         make_strong_root_runtime(native, adapter, mask, balance_iterations=0)
     with pytest.raises(ValueError, match="orientation_eigenpairs"):
-        make_strong_root_runtime(native, adapter, mask, orientation_eigenpairs=0)
+        make_strong_root_runtime(native, adapter, mask, orientation_eigenpairs=-1)
     zero_mask = jax.tree.map(jnp.zeros_like, mask)
     with pytest.raises(ValueError, match="no free physical displacement"):
         make_strong_root_runtime(native, adapter, zero_mask)

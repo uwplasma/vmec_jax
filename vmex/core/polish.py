@@ -15,7 +15,6 @@ and lambda gauge.  No dense high-order Jacobian is formed.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from functools import partial
 from time import perf_counter
 from typing import Any, Callable, NamedTuple
 
@@ -346,19 +345,47 @@ class StrongRootLayout:
 
 @dataclass(frozen=True, eq=False)
 class StrongPhysicalChart:
-    """Gauge-free coordinates and equations for the strong-force root.
+    """Square physical coordinates and equations for the strong-force root.
 
-    ``coordinate_basis`` spans the nullspace of the exactly linear tangential
-    coordinate equation.  ``equation_basis`` spans the actual radial/helical
-    force-output channels in the constrained layout.  The equation basis is
-    assembled from small structural layout blocks; constructing this chart
-    never probes or stores the physical-force Jacobian.
+    ``coordinate_basis`` maps physical coordinates into the constrained root
+    layout. ``equation_basis`` spans the actual radial/helical force-output
+    channels in that layout. Both maps have orthonormal columns. A diagnostic
+    chart may obtain the coordinate map from a dense gauge nullspace, while the
+    production-scale chart uses a structural cylindrical-radial gauge.
     """
 
     coordinate_basis: Array
     equation_basis: Array
+    coordinate_scale: Array
+    equation_scale: Array
     gauge_rank: int
     build_seconds: float
+
+    def tree_flatten(self):
+        """Keep dense numeric maps out of JIT static constants."""
+
+        return (
+            (
+                self.coordinate_basis,
+                self.equation_basis,
+                self.coordinate_scale,
+                self.equation_scale,
+            ),
+            (int(self.gauge_rank), float(self.build_seconds)),
+        )
+
+    @classmethod
+    def tree_unflatten(cls, metadata, children):
+        gauge_rank, build_seconds = metadata
+        coordinate_basis, equation_basis, coordinate_scale, equation_scale = children
+        return cls(
+            coordinate_basis=coordinate_basis,
+            equation_basis=equation_basis,
+            coordinate_scale=coordinate_scale,
+            equation_scale=equation_scale,
+            gauge_rank=gauge_rank,
+            build_seconds=build_seconds,
+        )
 
     @property
     def full_size(self) -> int:
@@ -376,7 +403,9 @@ class StrongPhysicalChart:
             raise ValueError(
                 f"physical vector has shape {vector.shape}; expected {(self.size,)}"
             )
-        return jnp.asarray(self.coordinate_basis) @ vector
+        return jnp.asarray(self.coordinate_basis) @ (
+            jnp.asarray(self.coordinate_scale) * vector
+        )
 
     def project(self, residual: Array) -> Array:
         """Project a full residual away from coordinate-gauge equations."""
@@ -387,7 +416,9 @@ class StrongPhysicalChart:
                 f"full residual has shape {residual.shape}; "
                 f"expected {(self.full_size,)}"
             )
-        return jnp.asarray(self.equation_basis).T @ residual
+        return jnp.asarray(self.equation_scale) * (
+            jnp.asarray(self.equation_basis).T @ residual
+        )
 
 
 @dataclass(frozen=True, eq=False)
@@ -412,6 +443,77 @@ class StrongRootRuntime:
     strong_scale: Array
     operator_balance: Array
     force_floor: float
+
+    def tree_flatten(self):
+        """Expose large numeric state and grid data as dynamic JAX leaves."""
+
+        children = (
+            self.native,
+            self.coordinate_scale,
+            self.equation_scale,
+            self.radial_nodes,
+            self.theta,
+            self.zeta,
+            self.cosine_projection,
+            self.sine_projection,
+            self.radial_fit,
+            self.normalization_denominator,
+            self.gauge_length,
+            self.strong_block_sign,
+            self.strong_scale,
+            self.operator_balance,
+        )
+        metadata = (
+            self.transfer,
+            self.low_preconditioner,
+            self.layout,
+            float(self.force_floor),
+        )
+        return children, metadata
+
+    @classmethod
+    def tree_unflatten(cls, metadata, children):
+        transfer, low_preconditioner, layout, force_floor = metadata
+        (
+            native,
+            coordinate_scale,
+            equation_scale,
+            radial_nodes,
+            theta,
+            zeta,
+            cosine_projection,
+            sine_projection,
+            radial_fit,
+            normalization_denominator,
+            gauge_length,
+            strong_block_sign,
+            strong_scale,
+            operator_balance,
+        ) = children
+        return cls(
+            native=native,
+            transfer=transfer,
+            low_preconditioner=low_preconditioner,
+            layout=layout,
+            coordinate_scale=coordinate_scale,
+            equation_scale=equation_scale,
+            radial_nodes=radial_nodes,
+            theta=theta,
+            zeta=zeta,
+            cosine_projection=cosine_projection,
+            sine_projection=sine_projection,
+            radial_fit=radial_fit,
+            normalization_denominator=normalization_denominator,
+            gauge_length=gauge_length,
+            strong_block_sign=strong_block_sign,
+            strong_scale=strong_scale,
+            operator_balance=operator_balance,
+            force_floor=force_floor,
+        )
+
+
+jax.tree_util.register_pytree_node_class(StrongPhysicalChart)
+jax.tree_util.register_pytree_node_class(StrongRootRuntime)
 
 
 @dataclass(frozen=True, eq=False)
@@ -866,7 +968,7 @@ def _strong_residual_unscaled(
     return jnp.asarray(runtime.equation_scale) * runtime.layout.pack(oriented)
 
 
-@partial(jax.jit, static_argnames=("runtime",))
+@jax.jit
 def strong_root_residual(
     vector: Array,
     runtime: StrongRootRuntime,
@@ -888,7 +990,7 @@ def strong_root_residual(
     return low + alpha * (strong - low)
 
 
-@partial(jax.jit, static_argnames=("runtime",))
+@jax.jit
 def strong_root_residual_at_native(
     vector: Array,
     native: HighOrderEquilibriumState,
@@ -907,34 +1009,44 @@ def strong_root_residual_at_native(
     return strong / jnp.asarray(runtime.strong_scale)
 
 
-def _physical_equation_basis(layout: StrongRootLayout) -> np.ndarray:
-    """Build an orthonormal basis for radial/helical force-output rows."""
+def _physical_equation_chart(
+    layout: StrongRootLayout,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build physical force-output rows and their source-field labels."""
 
     full_size = layout.size
     high_block = int(layout.mnmax) * int(layout.nbasis)
     radial_field = _FIELDS.index("R_cos")
     helical_field = _FIELDS.index("L_sin")
     columns: list[np.ndarray] = []
+    labels: list[int] = []
     for group in layout.groups:
         fields = np.asarray(group.high_indices, dtype=int) // high_block
-        physical = (fields == radial_field) | (fields == helical_field)
-        injection = np.asarray(group.basis, dtype=float).T[:, physical]
-        if injection.size == 0:
-            continue
-        left, singular_values, _ = np.linalg.svd(
-            injection,
-            full_matrices=False,
-        )
-        if singular_values.size == 0 or singular_values[0] <= 0.0:
-            continue
-        rank = int(np.sum(singular_values > 1.0e-10 * singular_values[0]))
-        for local in left[:, :rank].T:
-            column = np.zeros((full_size,), dtype=float)
-            column[group.start : group.stop] = local
-            columns.append(column)
+        for field in (radial_field, helical_field):
+            injection = np.asarray(group.basis, dtype=float).T[:, fields == field]
+            if injection.size == 0:
+                continue
+            left, singular_values, _ = np.linalg.svd(
+                injection,
+                full_matrices=False,
+            )
+            if singular_values.size == 0 or singular_values[0] <= 0.0:
+                continue
+            rank = int(np.sum(singular_values > 1.0e-10 * singular_values[0]))
+            for local in left[:, :rank].T:
+                column = np.zeros((full_size,), dtype=float)
+                column[group.start : group.stop] = local
+                columns.append(column)
+                labels.append(field)
     if not columns:
         raise ValueError("strong root has no physical force-output equations")
-    return np.column_stack(columns)
+    return np.column_stack(columns), np.asarray(labels, dtype=int)
+
+
+def _physical_equation_basis(layout: StrongRootLayout) -> np.ndarray:
+    """Build an orthonormal basis for radial/helical force-output rows."""
+
+    return _physical_equation_chart(layout)[0]
 
 
 def make_strong_physical_chart(
@@ -981,12 +1093,68 @@ def make_strong_physical_chart(
     return StrongPhysicalChart(
         coordinate_basis=jnp.asarray(right_transpose[gauge_rank:].T),
         equation_basis=jnp.asarray(equation_basis),
+        coordinate_scale=jnp.ones((physical_size,)),
+        equation_scale=jnp.ones((physical_size,)),
         gauge_rank=gauge_rank,
         build_seconds=perf_counter() - started,
     )
 
 
-@partial(jax.jit, static_argnames=("runtime", "chart"))
+def make_strong_structured_chart(
+    runtime: StrongRootRuntime,
+    *,
+    balance_iterations: int = 4,
+    balance_probes: int = 8,
+) -> StrongPhysicalChart:
+    """Build an O(n)-storage physical chart without a global Jacobian or SVD.
+
+    The retained geometry coordinates are the constrained ``R_cos`` channels;
+    ``Z`` is the eliminated poloidal-coordinate gauge. The retained field-line
+    coordinates are the constrained ``L_sin`` channels. This cylindrical-radial
+    gauge is fixed by the existing local layout blocks, so construction only
+    requires their small structural factorizations. It is intended for the
+    stellarator-symmetric fixed-boundary path currently supported by the strong
+    root.
+    """
+
+    started = perf_counter()
+    if runtime.transfer.lasym:
+        raise ValueError(
+            "structured physical chart currently requires stellarator symmetry"
+        )
+    basis = _physical_equation_basis(runtime.layout)
+    physical_size = int(basis.shape[1])
+    if physical_size <= 0 or physical_size >= runtime.layout.size:
+        raise ValueError("structured physical chart has an invalid physical size")
+    basis = jnp.asarray(basis)
+    zero = jnp.zeros(
+        (physical_size,), dtype=jnp.asarray(runtime.native.R_cos).dtype
+    )
+    equation_scale, coordinate_scale = _streaming_ruiz_scales(
+        lambda value: basis.T
+        @ (
+            _strong_residual_unscaled(
+                basis @ value,
+                runtime,
+                include_coordinate_gauge=False,
+            )
+            / jnp.asarray(runtime.strong_scale)
+        ),
+        zero,
+        iterations=balance_iterations,
+        probes=balance_probes,
+    )
+    return StrongPhysicalChart(
+        coordinate_basis=basis,
+        equation_basis=basis,
+        coordinate_scale=jnp.asarray(coordinate_scale),
+        equation_scale=jnp.asarray(equation_scale),
+        gauge_rank=runtime.layout.size - physical_size,
+        build_seconds=perf_counter() - started,
+    )
+
+
+@jax.jit
 def strong_physical_residual(
     vector: Array,
     runtime: StrongRootRuntime,
@@ -1014,28 +1182,57 @@ def _streaming_ruiz_scales(
     zero: Array,
     *,
     iterations: int = 6,
+    probes: int = 8,
+    estimate_columns: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Equilibrate global row/column 2-norms without retaining a Jacobian."""
+    """Estimate global Ruiz scales with fixed matrix-free probes.
+
+    Rademacher probes give unbiased squared row-norm estimates from JVPs and
+    squared column-norm estimates from transpose JVPs. The fixed seed makes the
+    setup deterministic, while a probe count independent of the root dimension
+    avoids the former O(n) sequence of basis-vector JVPs. No Jacobian is stored.
+    """
+
+    if iterations < 1:
+        raise ValueError("iterations must be positive")
+    if probes < 1:
+        raise ValueError("probes must be positive")
 
     _, jvp = jax.linearize(residual, zero)
     apply_jvp = jax.jit(jvp)
+    if estimate_columns:
+        transpose = jax.linear_transpose(jvp, zero)
+        apply_transpose = jax.jit(lambda value: transpose(value)[0])
 
     size = int(np.asarray(zero).size)
     dtype = np.asarray(zero).dtype
+    probe_count = min(int(probes), size)
+    generator = np.random.default_rng(0)
+    directions = generator.choice(
+        np.asarray([-1.0, 1.0], dtype=dtype),
+        size=(probe_count, size),
+    )
     rows = np.ones((size,), dtype=float)
     columns = np.ones((size,), dtype=float)
     tiny = np.finfo(float).tiny
     limit = 1.0e12
     for _ in range(int(iterations)):
         row_squared = np.zeros((size,), dtype=float)
-        column_norm = np.zeros((size,), dtype=float)
-        for index in range(size):
-            direction = np.zeros((size,), dtype=dtype)
-            direction[index] = columns[index]
-            response = rows * np.asarray(apply_jvp(jnp.asarray(direction)))
-            row_squared += response**2
-            column_norm[index] = np.linalg.norm(response)
+        column_squared = np.zeros((size,), dtype=float)
+        for direction in directions:
+            response = rows * np.asarray(
+                apply_jvp(jnp.asarray(columns * direction))
+            )
+            row_squared += response**2 / float(probe_count)
+            if estimate_columns:
+                transpose_response = columns * np.asarray(
+                    apply_transpose(jnp.asarray(rows * direction))
+                )
+                column_squared += transpose_response**2 / float(probe_count)
         row_norm = np.sqrt(row_squared)
+        column_norm = (
+            np.sqrt(column_squared) if estimate_columns else np.ones((size,))
+        )
         row_floor = max(
             1.0e-14 * float(np.max(row_norm, initial=0.0)), tiny
         )
@@ -1056,7 +1253,8 @@ def make_strong_root_runtime(
     *,
     force_floor: float = 1.0e-30,
     balance_iterations: int = 4,
-    orientation_eigenpairs: int = 6,
+    orientation_eigenpairs: int = 0,
+    balance_full_root: bool = True,
 ) -> StrongRootRuntime:
     """Build distinct collocation/projection data and balance the strong residual."""
 
@@ -1064,8 +1262,8 @@ def make_strong_root_runtime(
         raise ValueError("force_floor must be positive")
     if balance_iterations < 1:
         raise ValueError("balance_iterations must be positive")
-    if orientation_eigenpairs < 1:
-        raise ValueError("orientation_eigenpairs must be positive")
+    if orientation_eigenpairs < 0:
+        raise ValueError("orientation_eigenpairs must be nonnegative")
     transfer = low_preconditioner.transfer
     layout = make_strong_root_layout(
         dof_mask,
@@ -1075,18 +1273,30 @@ def make_strong_root_runtime(
     )
     if layout.size == 0:
         raise ValueError("strong-root layout contains no free physical displacement")
-    # The force contains nonlinear products of first and second radial
-    # derivatives, so sampling it at exactly ``nbasis`` collocation points can
-    # alias unresolved radial content into the square residual.  Evaluate on
-    # the basis' higher-order Gauss rule and project back to the same
-    # ``nbasis`` coefficients.  The residual remains square after the
-    # projection, while trial states that only improve the solve nodes can no
-    # longer hide large between-node force.
-    radial_s_nodes = np.asarray(
-        native.radial_basis.quadrature_nodes, dtype=float
+    # The residual needs more radial samples than coefficients, but using the
+    # basis integration rule (degree+3 points in every span) makes nested
+    # geometry derivatives scale needlessly with degree and captured more than
+    # 2 GiB of constants on the canonical case. Use the smallest composite
+    # Gauss rule with at least 1.5 samples per coefficient. The independent
+    # certificate retains its separate, higher-order shifted-node refinement.
+    breakpoints = np.asarray(native.radial_basis.breakpoints, dtype=float)
+    span_count = breakpoints.size - 1
+    radial_order = max(
+        3,
+        int(np.ceil(1.5 * native.radial_basis.size / span_count)),
     )
+    reference_nodes, reference_weights = np.polynomial.legendre.leggauss(
+        radial_order
+    )
+    radial_s_nodes = np.concatenate([
+        0.5 * ((right - left) * reference_nodes + right + left)
+        for left, right in zip(breakpoints[:-1], breakpoints[1:], strict=True)
+    ])
+    radial_weights = np.concatenate([
+        0.5 * (right - left) * reference_weights
+        for left, right in zip(breakpoints[:-1], breakpoints[1:], strict=True)
+    ])
     radial_nodes = np.sqrt(radial_s_nodes)
-    radial_weights = np.asarray(native.radial_basis.quadrature_weights, dtype=float)
     radial_matrix = np.asarray(
         native.radial_basis.basis_matrix(radial_s_nodes), dtype=float
     )
@@ -1101,7 +1311,8 @@ def make_strong_root_runtime(
     # production m=5 rank gate gains one physical direction at 25 points and
     # is unchanged at 37, so retain that converged ``4*mmax + 5`` rule.
     ntheta = max(4 * int(np.max(np.abs(m), initial=0)) + 5, 4)
-    nzeta = max(2 * int(np.max(np.abs(n), initial=0)) + 3, 1)
+    max_abs_n = int(np.max(np.abs(n), initial=0))
+    nzeta = 1 if max_abs_n == 0 else 2 * max_abs_n + 3
     theta_grid = 2.0 * np.pi * np.arange(ntheta) / ntheta
     zeta_grid = 2.0 * np.pi * np.arange(nzeta) / nzeta
     theta, zeta = np.meshgrid(theta_grid, zeta_grid, indexing="ij")
@@ -1161,20 +1372,23 @@ def make_strong_root_runtime(
         operator_balance=jnp.asarray(1.0),
         force_floor=float(force_floor),
     )
-    # Stream exact global row/column 2-norms through one compiled forward JVP.
-    # This captures cross-mode coupling with O(n) memory: no production-scale
-    # dense Jacobian is retained, no direction is dropped, and no second
-    # transpose program is compiled.  The positive row scale multiplies both
-    # homotopy endpoints, leaving every root and branch fixed.
+    # Estimate global row/column norms through a fixed number of JVP/VJP probes.
+    # This captures cross-mode coupling without retaining a production-scale
+    # dense Jacobian. Positive row/column scales leave every root fixed.
     base_vector = jnp.zeros(
         (layout.size,), dtype=jnp.asarray(native.R_cos).dtype
     )
     initial = _strong_residual_unscaled(base_vector, provisional)
     rms = jnp.linalg.norm(initial) / np.sqrt(float(layout.size))
     base_scale = jnp.maximum(rms, jnp.asarray(1.0e-12, dtype=rms.dtype))
+    if not balance_full_root:
+        return replace(provisional, strong_scale=base_scale)
     equation_scale, coordinate_scale = _streaming_ruiz_scales(
         lambda value: _strong_residual_unscaled(value, provisional),
         base_vector,
+        iterations=balance_iterations,
+        probes=4,
+        estimate_columns=True,
     )
     provisional = replace(
         provisional,
@@ -1197,81 +1411,82 @@ def make_strong_root_runtime(
             provisional.coordinate_scale
         )
 
-    # A sign change cannot alter the strong root, but it changes the real
-    # generalized spectrum of the low-to-strong pencil.  Select the three
-    # block signs that maximize its leftmost Ritz value, thereby moving folds
-    # caused only by equation orientation as close to alpha=1 as possible.
-    from itertools import product
-
-    from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, eigs
-
-    component_runtimes = tuple(
-        replace(
-            scaled,
-            strong_block_sign=jnp.eye(3, dtype=rms.dtype)[index],
-        )
-        for index in range(3)
-    )
-
-    @jax.jit
-    def strong_components(value: Array) -> Array:
-        return jnp.stack(tuple(
-            jax.jvp(
-                lambda vector: _strong_residual_unscaled(
-                    vector, component_runtime
-                ) / base_scale,
-                (zero,),
-                (value,),
-            )[1]
-            for component_runtime in component_runtimes
-        ))
-
-    strong_components(zero).block_until_ready()
     low_solve(zero).block_until_ready()
-    eigenpairs = min(int(orientation_eigenpairs), max(1, layout.size - 2))
-    dense_components = None
-    if layout.size <= 64:
-        dense_components = jax.jacfwd(strong_components)(zero)
-    initial_arnoldi = np.linspace(-0.5, 0.7, layout.size, dtype=float)
-    initial_arnoldi /= np.linalg.norm(initial_arnoldi)
-    best_score = -np.inf
     best_block_sign = np.ones((3,), dtype=float)
-    for signs in product((-1.0, 1.0), repeat=3):
-        block_sign = jnp.asarray(signs, dtype=rms.dtype)
+    if orientation_eigenpairs:
+        # This optional diagnostic cannot alter the strong root, but selects
+        # signs that move artificial folds in the legacy-to-strong pencil.
+        # It is deliberately off by default because eight Arnoldi solves are
+        # expensive and the physical chart does not use the gauge equation.
+        from itertools import product
 
-        def matvec(value: np.ndarray) -> np.ndarray:
-            response = jnp.tensordot(
-                block_sign,
-                strong_components(jnp.asarray(value)),
-                axes=1,
-            )
-            return np.asarray(jax.device_get(low_solve(response)))
+        from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, eigs
 
-        if dense_components is not None:
-            oriented = jnp.tensordot(block_sign, dense_components, axes=1)
-            matrix = jax.vmap(low_solve, in_axes=1, out_axes=1)(oriented)
-            values = np.linalg.eigvals(np.asarray(jax.device_get(matrix)))
-        else:
-            operator = LinearOperator(
-                (layout.size, layout.size), matvec=matvec, dtype=np.float64
+        component_runtimes = tuple(
+            replace(
+                scaled,
+                strong_block_sign=jnp.eye(3, dtype=rms.dtype)[index],
             )
-            try:
-                values = eigs(
-                    operator,
-                    k=eigenpairs,
-                    which="SR",
-                    v0=initial_arnoldi,
-                    maxiter=max(100, 2 * layout.size),
-                    tol=1.0e-7,
-                    return_eigenvectors=False,
+            for index in range(3)
+        )
+
+        @jax.jit
+        def strong_components(value: Array) -> Array:
+            return jnp.stack(tuple(
+                jax.jvp(
+                    lambda vector: _strong_residual_unscaled(
+                        vector, component_runtime
+                    ) / base_scale,
+                    (zero,),
+                    (value,),
+                )[1]
+                for component_runtime in component_runtimes
+            ))
+
+        strong_components(zero).block_until_ready()
+        eigenpairs = min(int(orientation_eigenpairs), max(1, layout.size - 2))
+        dense_components = None
+        if layout.size <= 64:
+            dense_components = jax.jacfwd(strong_components)(zero)
+        initial_arnoldi = np.linspace(-0.5, 0.7, layout.size, dtype=float)
+        initial_arnoldi /= np.linalg.norm(initial_arnoldi)
+        best_score = -np.inf
+        for signs in product((-1.0, 1.0), repeat=3):
+            block_sign = jnp.asarray(signs, dtype=rms.dtype)
+
+            def matvec(value: np.ndarray) -> np.ndarray:
+                response = jnp.tensordot(
+                    block_sign,
+                    strong_components(jnp.asarray(value)),
+                    axes=1,
                 )
-            except ArpackNoConvergence as error:
-                values = error.eigenvalues
-        if values.size:
-            score = float(np.min(np.real(values)))
-            if score > best_score:
-                best_score = score
-                best_block_sign = np.asarray(signs, dtype=float)
+                return np.asarray(jax.device_get(low_solve(response)))
+
+            if dense_components is not None:
+                oriented = jnp.tensordot(block_sign, dense_components, axes=1)
+                matrix = jax.vmap(low_solve, in_axes=1, out_axes=1)(oriented)
+                values = np.linalg.eigvals(np.asarray(jax.device_get(matrix)))
+            else:
+                operator = LinearOperator(
+                    (layout.size, layout.size), matvec=matvec, dtype=np.float64
+                )
+                try:
+                    values = eigs(
+                        operator,
+                        k=eigenpairs,
+                        which="SR",
+                        v0=initial_arnoldi,
+                        maxiter=max(100, 2 * layout.size),
+                        tol=1.0e-7,
+                        return_eigenvectors=False,
+                    )
+                except ArpackNoConvergence as error:
+                    values = error.eigenvalues
+            if values.size:
+                score = float(np.min(np.real(values)))
+                if score > best_score:
+                    best_score = score
+                    best_block_sign = np.asarray(signs, dtype=float)
     scaled = replace(
         scaled,
         strong_block_sign=jnp.asarray(best_block_sign, dtype=rms.dtype),
@@ -1502,6 +1717,7 @@ __all__ = [
     "build_strong_mode_block_preconditioner",
     "make_high_low_transfer",
     "make_strong_physical_chart",
+    "make_strong_structured_chart",
     "make_strong_root_layout",
     "make_strong_root_runtime",
     "preconditioner_quality",
