@@ -58,6 +58,11 @@ def main() -> None:
         type=Path,
         help="optional VMEX/VMEC2000/VMEC++/DESC-exported compatible wout",
     )
+    parser.add_argument(
+        "--source-provenance",
+        type=Path,
+        help="optional JSON metadata emitted by the external equilibrium run",
+    )
     parser.add_argument("--degree", type=int, choices=(3, 5, 7), default=5)
     parser.add_argument(
         "--radial-spans",
@@ -73,6 +78,8 @@ def main() -> None:
         parser.error(f"input does not exist: {args.input}")
     if args.wout is not None and not args.wout.is_file():
         parser.error(f"wout does not exist: {args.wout}")
+    if args.source_provenance is not None and not args.source_provenance.is_file():
+        parser.error(f"source provenance does not exist: {args.source_provenance}")
     if args.radial_spans is not None and args.radial_spans < 1:
         parser.error("radial-spans must be positive")
     if args.angular_multiplier < 1 or args.radial_order_increment < 0:
@@ -152,6 +159,11 @@ def main() -> None:
         "command": " ".join(shlex.quote(value) for value in sys.argv),
         "case": args.input.name.removeprefix("input."),
         "source": source,
+        "external_source": (
+            None
+            if args.source_provenance is None
+            else json.loads(args.source_provenance.read_text())
+        ),
         "input": str(args.input),
         "ns": ns,
         "mpol": int(inp.mpol),
