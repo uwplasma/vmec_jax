@@ -146,21 +146,33 @@ by inconsistent equation orientation.  The selected signs and remaining
 operator balance are runtime metadata.
 
 Small-problem tests explicitly assemble the Jacobian and reject unexplained
-nullspaces.  The five-surface Solovev structural gate has 24 independent
-unknowns and 24 equations, numerical rank 24 at relative SVD tolerance
+nullspaces.  The five-surface Solovev structural gate has 23 independent
+unknowns and 23 equations, numerical rank 23 at relative SVD tolerance
 ``1e-8``, and a finite JVP that agrees with centered finite differences.  Its
-measured condition number is about ``3.5e5`` before nonlinear-solver
+unscaled measured condition number is about ``2.6e5`` before nonlinear-solver
 preconditioning, which is recorded rather than hidden.  This deliberately
 coarse case is a layout/rank test, not a polished-equilibrium accuracy claim.
 A failed rank test is a hard error; the implementation does not regularize an
 accidentally underdetermined system with a merit-function penalty.
 
 The clean-commit Apple M4 record in ``benchmarks/strong_root_m4.json`` reports
-0.262 ms median warm residual and 0.360 ms median warm JVP time over 20 repeats;
-cold compile-plus-execute times are 1.12 s and 1.89 s.  The recorded JVP error
-is ``1.0e-9`` and the runtime-build, residual, and JVP peak-RSS increments are
+0.287 ms median warm residual and 0.427 ms median warm JVP time over 20 repeats;
+first-call times are 1.07 s and 0.69 s with the normal persistent-cache policy.
+The recorded JVP error is ``9.7e-10`` and the runtime-build, residual, and JVP peak-RSS increments are
 reported separately.  These figures describe the structural five-surface gate
 only and are not extrapolated into a production-resolution solve claim.
+
+At the plan's ``ns=11``, ``mpol=6``, degree-five structural resolution, the
+unscaled endpoint has rank 39/117 at relative tolerance ``1e-8`` and condition
+number ``1.40e17``.  Streaming row/column 2-norm equilibration raises that to
+rank 112/117 and condition number ``8.07e10`` without retaining a dense global
+Jacobian.  The paired cache-disabled Apple M4 records are
+``benchmarks/strong_root_m6_unscaled_m4.json`` and
+``benchmarks/strong_root_m6_equilibrated_m4.json``.  Equilibration increases
+runtime construction from 56.1 s to 98.7 s and warm residual/JVP cost from
+7.07/10.43 ms to 10.05/17.60 ms.  This is an explicit open tradeoff, not a
+production endpoint claim: five numerical directions and the added cold cost
+remain acceptance gates.
 
 Low-order physics preconditioner
 --------------------------------

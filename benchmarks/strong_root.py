@@ -7,6 +7,7 @@ import argparse
 import dataclasses
 from importlib import metadata
 import json
+import os
 import platform
 from pathlib import Path
 import resource
@@ -132,6 +133,9 @@ def main() -> None:
             int(runtime.zeta.size),
         ],
         "repeats": args.repeats,
+        "compilation_cache": os.environ.get(
+            "VMEX_COMPILATION_CACHE", "default"
+        ),
         "runtime_build_seconds": runtime_build_seconds,
         "runtime_peak_rss_increase_mib": rss_after_runtime - rss_before_runtime,
         "cold_residual_seconds": cold_residual,
