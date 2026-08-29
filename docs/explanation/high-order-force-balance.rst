@@ -179,6 +179,17 @@ runtime construction from 56.1 s to 98.7 s and warm residual/JVP cost from
 production endpoint claim: five numerical directions and the added cold cost
 remain acceptance gates.
 
+The follow-up coordinate-volume formulation applies ``abs(sqrt(g))`` to both
+physical channels before projection, matching DESC's force objective while
+preserving the off-axis zero set.  The clean-commit Apple M4 record
+``benchmarks/strong_root_m6_volume_weighted_m4.json`` improves the same
+diagnostic to rank 113/117 and condition number ``8.83e9``.  Median warm
+residual/JVP costs are 3.01/4.60 ms, while runtime construction still peaks at
+867 MiB.  Weighting only one physical channel was measured and rejected because
+it severely imbalances the singular spectrum.  Four directions and the large
+construction-memory cost remain open; this result is conditioning evidence,
+not an alpha-one convergence claim.
+
 Low-order physics preconditioner
 --------------------------------
 
