@@ -349,10 +349,10 @@ class StrongPhysicalChart:
     """Gauge-free coordinates and equations for the strong-force root.
 
     ``coordinate_basis`` spans the nullspace of the exactly linear tangential
-    coordinate equation.  ``equation_basis`` spans the orthogonal complement
-    of that equation's image.  Both bases are built from the gauge operator
-    alone; constructing this chart never probes or stores the physical-force
-    Jacobian.
+    coordinate equation.  ``equation_basis`` spans the actual radial/helical
+    force-output channels in the constrained layout.  The equation basis is
+    assembled from small structural layout blocks; constructing this chart
+    never probes or stores the physical-force Jacobian.
     """
 
     coordinate_basis: Array
@@ -798,6 +798,8 @@ def _strong_residual_unscaled(
     vector: Array,
     runtime: StrongRootRuntime,
     native: HighOrderEquilibriumState | None = None,
+    *,
+    include_coordinate_gauge: bool = True,
 ) -> Array:
     """Project normalized physical force onto the reduced solve space."""
 
@@ -825,24 +827,29 @@ def _strong_residual_unscaled(
     helical_force = (
         2.0 * samples.signed_helical_force_density * volume_weight / denominator
     )
-    points = jnp.stack((rr.reshape(-1), tt.reshape(-1), zz.reshape(-1)), axis=-1)
-
-    gauge = _coordinate_gauge_samples(state, native, runtime, points)
     radial_coefficients = _fit_regularized_channel(
         radial_force, runtime.cosine_projection, radial, runtime
     )
     helical_coefficients = _fit_regularized_channel(
         helical_force, runtime.sine_projection, radial, runtime
     )
-    gauge_coefficients = _fit_regularized_channel(
-        gauge, runtime.sine_projection, radial, runtime
-    )
     zero = jnp.zeros_like(jnp.asarray(runtime.native.R_cos))
+    if include_coordinate_gauge:
+        points = jnp.stack(
+            (rr.reshape(-1), tt.reshape(-1), zz.reshape(-1)),
+            axis=-1,
+        )
+        gauge = _coordinate_gauge_samples(state, native, runtime, points)
+        gauge_coefficients = _fit_regularized_channel(
+            gauge, runtime.sine_projection, radial, runtime
+        ).T
+    else:
+        gauge_coefficients = zero
     force_coefficients = HighOrderCorrection(
         R_cos=radial_coefficients.T,
         R_sin=zero,
         Z_cos=zero,
-        Z_sin=gauge_coefficients.T,
+        Z_sin=gauge_coefficients,
         L_cos=zero,
         L_sin=helical_coefficients.T,
     )
@@ -900,6 +907,36 @@ def strong_root_residual_at_native(
     return strong / jnp.asarray(runtime.strong_scale)
 
 
+def _physical_equation_basis(layout: StrongRootLayout) -> np.ndarray:
+    """Build an orthonormal basis for radial/helical force-output rows."""
+
+    full_size = layout.size
+    high_block = int(layout.mnmax) * int(layout.nbasis)
+    radial_field = _FIELDS.index("R_cos")
+    helical_field = _FIELDS.index("L_sin")
+    columns: list[np.ndarray] = []
+    for group in layout.groups:
+        fields = np.asarray(group.high_indices, dtype=int) // high_block
+        physical = (fields == radial_field) | (fields == helical_field)
+        injection = np.asarray(group.basis, dtype=float).T[:, physical]
+        if injection.size == 0:
+            continue
+        left, singular_values, _ = np.linalg.svd(
+            injection,
+            full_matrices=False,
+        )
+        if singular_values.size == 0 or singular_values[0] <= 0.0:
+            continue
+        rank = int(np.sum(singular_values > 1.0e-10 * singular_values[0]))
+        for local in left[:, :rank].T:
+            column = np.zeros((full_size,), dtype=float)
+            column[group.start : group.stop] = local
+            columns.append(column)
+    if not columns:
+        raise ValueError("strong root has no physical force-output equations")
+    return np.column_stack(columns)
+
+
 def make_strong_physical_chart(
     runtime: StrongRootRuntime,
     *,
@@ -921,7 +958,7 @@ def make_strong_physical_chart(
     gauge_operator = jax.jacfwd(
         lambda value: _coordinate_gauge_residual_unscaled(value, runtime)
     )(zero)
-    left, singular_values, right_transpose = np.linalg.svd(
+    _, singular_values, right_transpose = np.linalg.svd(
         np.asarray(jax.device_get(gauge_operator)),
         full_matrices=True,
     )
@@ -934,9 +971,16 @@ def make_strong_physical_chart(
         raise ValueError(
             "coordinate-gauge rank must be positive and smaller than the root"
         )
+    equation_basis = _physical_equation_basis(runtime.layout)
+    physical_size = size - gauge_rank
+    if equation_basis.shape != (size, physical_size):
+        raise ValueError(
+            "physical force-output equation count does not match gauge-free "
+            f"coordinates: {equation_basis.shape[1]} != {physical_size}"
+        )
     return StrongPhysicalChart(
         coordinate_basis=jnp.asarray(right_transpose[gauge_rank:].T),
-        equation_basis=jnp.asarray(left[:, gauge_rank:]),
+        equation_basis=jnp.asarray(equation_basis),
         gauge_rank=gauge_rank,
         build_seconds=perf_counter() - started,
     )
@@ -951,7 +995,18 @@ def strong_physical_residual(
 ) -> Array:
     """Evaluate the square strong root in exact gauge-free coordinates."""
 
-    return chart.project(strong_root_residual(chart.lift(vector), runtime, alpha))
+    full = chart.lift(vector)
+    low = chart.project(strong_root_residual(full, runtime, 0.0))
+    strong = chart.project(
+        _strong_residual_unscaled(
+            full,
+            runtime,
+            include_coordinate_gauge=False,
+        )
+        / jnp.asarray(runtime.strong_scale)
+    )
+    alpha = jnp.asarray(alpha, dtype=jnp.asarray(vector).dtype)
+    return low + alpha * (strong - low)
 
 
 def _streaming_ruiz_scales(

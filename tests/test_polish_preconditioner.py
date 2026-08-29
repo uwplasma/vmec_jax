@@ -28,6 +28,7 @@ from vmex.core.polish import (
     make_strong_root_runtime,
     preconditioner_quality,
     preconditioner_refresh_decision,
+    _strong_residual_unscaled,
     _streaming_ruiz_scales,
     strong_physical_residual,
     strong_root_rank,
@@ -579,6 +580,24 @@ def test_physical_chart_eliminates_only_the_linear_coordinate_gauge(
 
     zero = jnp.zeros((chart.size,), dtype=jnp.float64)
     np.testing.assert_array_equal(strong_physical_residual(zero, runtime, chart, 0.0), 0.0)
+    probe = jnp.linspace(-0.01, 0.015, chart.size)
+    full_probe = chart.lift(probe)
+    low_probe = chart.project(strong_root_residual(full_probe, runtime, 0.0))
+    strong_probe = chart.project(
+        _strong_residual_unscaled(
+            full_probe,
+            runtime,
+            include_coordinate_gauge=False,
+        )
+        / runtime.strong_scale
+    )
+    alpha = 0.37
+    np.testing.assert_allclose(
+        strong_physical_residual(probe, runtime, chart, alpha),
+        low_probe + alpha * (strong_probe - low_probe),
+        rtol=2.0e-13,
+        atol=2.0e-13,
+    )
     direction = jnp.linspace(-0.2, 0.3, chart.size)
     _, tangent = jax.jvp(
         lambda value: strong_physical_residual(value, runtime, chart, 1.0),
