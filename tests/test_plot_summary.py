@@ -4,7 +4,8 @@ One in-process solve of the bundled ``cth_like_fixed_bdy`` deck feeds every
 check, so the module needs no golden fixtures and stays network-free:
 
 - the summary figure carries the full required panel set (iota full-mesh,
-  pressure, ``<J.B>``, combined Mercier/Glasser/well profiles, 3-D LCFS,
+  combined pressure/``<J.B>``, relative radial force balance,
+  combined Mercier/Glasser/well profiles, 3-D LCFS,
   polar ``J(alpha, s)``, two Boozer ``|B|`` panels, scalar card);
 - style invariants are pinned: every ``|B|`` contour set is non-filled and
   jet-mapped, the 3-D surface colormap constant is jet, all text is >= 11 pt,
@@ -41,7 +42,7 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 DECK = "cth_like_fixed_bdy"
 
 EXPECTED_PANELS = {
-    "iota", "pressure", "jdotb", "stability", "boundary_3d",
+    "iota", "profiles", "force_balance", "stability", "boundary_3d",
     "j_invariant", "card", "boozer_mid", "boozer_lcfs",
 }
 
@@ -163,6 +164,30 @@ def test_summary_combines_stability_and_well(summary_figure):
     renderer = fig.canvas.get_renderer()
     assert stability.get_legend().get_window_extent(renderer).y1 <= (
         stability.get_window_extent(renderer).y0 + 2)
+
+
+def test_summary_combines_pressure_current_and_reports_force_error(
+    solved_case, summary_figure,
+):
+    """Top row carries both profiles, the force equation, and its scalar max."""
+    _, meta = summary_figure
+    profiles = meta["axes"]["profiles"]
+    current = meta["current_axis"]
+    assert len(profiles.lines) == 1 and len(current.lines) == 1
+    assert "pressure and parallel current" in profiles.get_title()
+    labels = [text.get_text() for text in profiles.get_legend().get_texts()]
+    assert any(label == r"$p$" for label in labels)
+    assert any(r"\mathbf{J}" in label for label in labels)
+
+    force = meta["axes"]["force_balance"]
+    assert force.get_yscale() == "log"
+    assert "relative force error" in force.get_ylabel()
+    assert r"\mathbf{J}" in force.get_ylabel() and r"\nabla p" in force.get_ylabel()
+    _, wout = solved_case
+    expected = float(np.max(np.abs(np.asarray(wout.equif)[1:-1])))
+    assert meta["max_relative_force_error"] == pytest.approx(expected)
+    card_text = " ".join(text.get_text() for text in meta["axes"]["card"].texts)
+    assert r"max $\epsilon_F$" in card_text
 
 
 def test_summary_style_constants():
@@ -387,97 +412,6 @@ def test_summary_survives_boozer_failure(solved_case, monkeypatch):
             assert ax.get_title().strip() and ax.get_xlabel().strip()
     finally:
         plt.close(fig)
-
-
-def test_summary_plots_the_effective_ripple_profile_when_neo_is_available(
-    solved_case, monkeypatch,
-):
-    """With NEO_JAX present the pressure panel gains an eps_eff^(3/2) twin axis.
-
-    ``epsilon_eff^(3/2)`` (Nemov PoP 6, 4622 (1999)) spans decades across the
-    minor radius, so the diagnostic overlay must be logarithmic and share the
-    pressure panel's legend rather than replace the pressure curve.
-    """
-    import matplotlib.pyplot as plt
-
-    from vmex.core import neoclassical
-
-    _, wout = solved_case
-    surfaces = np.linspace(0.15, 0.95, 5)
-    values = np.geomspace(1.0e-6, 1.0e-3, 5)
-    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
-    monkeypatch.setattr(
-        neoclassical, "epsilon_effective_from_wout",
-        lambda _wout, **_kwargs: (surfaces, values))
-    saved = dict(plotting._EPSILON_EFFECTIVE_CACHE)
-    plotting._EPSILON_EFFECTIVE_CACHE.clear()
-
-    fig, meta = plotting._summary_figure(wout)
-    try:
-        info = meta["epsilon_effective"]
-        assert info["valid"] and info["note"] == "diagnostic resolution"
-        axis = meta["epsilon_axis"]
-        assert axis.get_yscale() == "log"
-        np.testing.assert_allclose(axis.lines[0].get_ydata(), values)
-        labels = [t.get_text() for t in meta["axes"]["pressure"].get_legend().get_texts()]
-        assert len(labels) == 2 and any("epsilon" in t or r"\epsilon" in t for t in labels)
-    finally:
-        plt.close(fig)
-        plotting._EPSILON_EFFECTIVE_CACHE.clear()
-        plotting._EPSILON_EFFECTIVE_CACHE.update(saved)
-
-
-def test_epsilon_effective_panel_resolves_a_sub_decade_profile(
-    solved_case, monkeypatch,
-):
-    """A ripple profile flatter than one decade gets a readable linear axis.
-
-    An optimized configuration is exactly the case where eps_eff^(3/2) varies
-    by a factor of a few rather than by decades, and there the log autoscale
-    snaps to powers of ten: the curve flattens against a limit, the radial
-    minimum stops being visible, and the axis carries a single tick label.
-    The minimum is the feature the panel exists to show.
-    """
-    import matplotlib.pyplot as plt
-
-    from vmex.core import neoclassical
-
-    _, wout = solved_case
-    surfaces = np.linspace(0.15, 0.95, 5)
-    values = np.array([4.4e-3, 2.6e-3, 1.6e-3, 2.1e-3, 3.9e-3])  # 2.7x span
-    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
-    monkeypatch.setattr(
-        neoclassical, "epsilon_effective_from_wout",
-        lambda _wout, **_kwargs: (surfaces, values))
-    saved = dict(plotting._EPSILON_EFFECTIVE_CACHE)
-    plotting._EPSILON_EFFECTIVE_CACHE.clear()
-
-    fig, meta = plotting._summary_figure(wout)
-    try:
-        axis = meta["epsilon_axis"]
-        assert axis.get_yscale() == "linear"
-        low, high = axis.get_ylim()
-        assert low < values.min() and values.max() < high
-        assert len([t for t in axis.get_yticks() if low <= t <= high]) >= 4
-    finally:
-        plt.close(fig)
-        plotting._EPSILON_EFFECTIVE_CACHE.clear()
-        plotting._EPSILON_EFFECTIVE_CACHE.update(saved)
-
-
-def test_epsilon_effective_summary_tolerates_an_unreferenceable_wout(monkeypatch):
-    """A missing backend or an unhashable wout never breaks the summary."""
-    from vmex.core import neoclassical
-
-    def unavailable(_wout, **_kwargs):
-        raise ImportError("effective ripple requires NEO_JAX")
-
-    monkeypatch.setattr(neoclassical, "epsilon_effective_from_wout", unavailable)
-    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
-    before = dict(plotting._EPSILON_EFFECTIVE_CACHE)
-    info = plotting._epsilon_effective_summary({"ns": 3})  # dict: no weak reference
-    assert info["valid"] is False and "ImportError" in info["note"]
-    assert plotting._EPSILON_EFFECTIVE_CACHE == before
 
 
 def test_summary_survives_j_map_failure(solved_case, monkeypatch):

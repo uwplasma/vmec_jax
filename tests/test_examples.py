@@ -134,8 +134,7 @@ def test_plot_and_boozer(tmp_path):
     assert (outdir / "wout_li383_low_res.nc").exists()
     # every plot_wout figure kind is written unconditionally
     for suffix in (
-        "summary", "surfaces", "modB", "profiles", "force_balance",
-        "stability", "boundary3d",
+        "summary", "surfaces", "modB", "profiles", "stability", "boundary3d",
     ):
         assert (outdir / f"li383_low_res_{suffix}.png").exists()
 

@@ -167,64 +167,14 @@ The recorded JVP error is ``9.7e-10`` and the runtime-build, residual, and JVP p
 reported separately.  These figures describe the structural five-surface gate
 only and are not extrapolated into a production-resolution solve claim.
 
-At the plan's ``ns=11``, ``mpol=6``, degree-five structural resolution, the
-unscaled endpoint has rank 39/117 at relative tolerance ``1e-8`` and condition
-number ``1.40e17``.  Streaming row/column 2-norm equilibration raises that to
-rank 112/117 and condition number ``8.07e10`` without retaining a dense global
-Jacobian.  The paired cache-disabled Apple M4 records are
-``benchmarks/strong_root_m6_unscaled_m4.json`` and
-``benchmarks/strong_root_m6_equilibrated_m4.json``.  Equilibration increases
-runtime construction from 56.1 s to 98.7 s and warm residual/JVP cost from
-7.07/10.43 ms to 10.05/17.60 ms.  This is an explicit open tradeoff, not a
-production endpoint claim: five numerical directions and the added cold cost
-remain acceptance gates.
-
-The follow-up coordinate-volume formulation applies ``abs(sqrt(g))`` to both
-physical channels before projection, matching DESC's force objective while
-preserving the off-axis zero set.  The clean-commit Apple M4 record
-``benchmarks/strong_root_m6_volume_weighted_m4.json`` improves the same
-diagnostic to rank 113/117 and condition number ``8.83e9``.  Median warm
-residual/JVP costs are 3.01/4.60 ms, while runtime construction still peaks at
-867 MiB.  Weighting only one physical channel was measured and rejected because
-it severely imbalances the singular spectrum.  Four directions and the large
-construction-memory cost remain open; this result is conditioning evidence,
-not an alpha-one convergence claim.
-
-The next opt-in diagnostic removes the coordinate equation rather than merely
-rescaling it.  Because the tangential displacement equation is exactly linear
-in the correction, VMEX factors that operator alone and forms orthonormal bases
-for its input nullspace and output coimage.  The nonlinear radial and helical
-forces are then evaluated in the resulting square physical chart.  No dense
-physical-force Jacobian is built: residuals, JVPs, and VJPs continue through the
-matrix-free strong operator.  Run ``benchmarks/strong_root.py --physical-chart``
-to report the eliminated gauge rank, reduced rank and condition estimate, chart
-construction time and memory, and cold/warm residual costs.  This remains a
-diagnostic until the production-resolution reduced root is full rank and meets
-the continuation certificate.
-
-The clean-commit Apple M4 record
-``benchmarks/strong_root_m6_physical_chart_m4.json`` eliminates 35 independent
-gauge directions and leaves an 82-coordinate physical root.  At relative SVD
-tolerance ``1e-8`` it has rank 79 and condition estimate ``4.69e9``.  The chart
-build takes 3.01 s and adds 207 MiB to peak RSS in this process; its median warm
-residual is 3.08 ms.  This independently confirms that three weak directions
-remain after exact gauge elimination.  It is a failed full-rank gate, not a
-production solver promotion.
-
-The nonlinear force contains metric inverses and is not band-limited at the
-retained geometry order.  A grid with ``2*mmax + 3`` poloidal points resolves
-the projected output modes but not their nonlinear source.  The next diagnostic
-uses ``4*mmax + 5`` points: the production ``mmax=5`` chart gains one numerical
-direction at 25 points and remains unchanged at 37.  Two directions and the
-added angular cost remain explicit gates.
-
-The clean-commit Apple M4 record
-``benchmarks/strong_root_m6_angular_converged_m4.json`` measures that tradeoff.
-The full and gauge-free ranks rise to 114/117 and 80/82, respectively, while
-runtime construction takes 20.0 s, median warm residual/JVP costs rise to
-5.83/9.40 ms, and peak runtime construction reaches 1.42 GiB in this process.
-The converged angular rule is therefore useful diagnostic evidence but fails
-the rank, runtime, and memory gates for a production default.
+Development measurements rejected global equilibration, volume weighting by
+itself, and a dense physical-chart factorization as production defaults.  They
+either left numerical null directions or added unacceptable cold-start time and
+memory.  Those negative measurements are retained in the project plan ledger,
+not as one JSON artifact per experiment in the release-facing benchmark tree.
+The supported diagnostic remains ``benchmarks/strong_root.py``; it reports the
+selected formulation's rank, condition estimate, JVP check, and cold/warm cost
+in one schema.
 
 The radial spline quadrature is defined in normalized flux ``s``, whereas the
 strong-force oracle accepts ``rho = sqrt(s)``.  The root therefore evaluates
@@ -233,14 +183,9 @@ the spline basis at ``s_quadrature``.  Passing the flux nodes directly as rho
 samples over-resolves the edge and under-resolves the magnetic axis; a
 regression fixes the coordinate identity ``rho_nodes**2 == s_quadrature``.
 
-The clean-commit Apple M4 record
-``benchmarks/strong_root_m6_flux_consistent_m4.json`` clears the structural
-rank gate: the complete and gauge-free operators have ranks 117/117 and 82/82,
-with condition estimates ``4.87e6`` and ``4.31e6`` at relative tolerance
-``1e-8``.  JVP finite-difference error is ``9.54e-9``.  Runtime construction is
-32.0 s with a 1.50 GiB peak-RSS increase, and median warm residual/JVP costs are
-10.1/15.8 ms.  Rank is therefore solved, while construction time and memory
-remain explicit production gates.
+The flux-coordinate regression is covered directly by tests.  Release-facing
+accuracy and runtime claims use the common certificate and the certified SOLVAX
+least-squares artifact rather than an archive of intermediate root variants.
 
 Low-order physics preconditioner
 --------------------------------

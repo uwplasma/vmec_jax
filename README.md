@@ -20,10 +20,12 @@ Jacobian/transpose products. On the canonical analytical Solov'ev case, the
 same independent oracle gives normalized L2 force `0.122381` for legacy VMEX,
 `0.122399` for VMEC2000 and VMEC++, `0.014405` for DESC, and `0.002759` for the
 certified polished VMEX state. Radial refinement is `1.55e-4` and nestedness is
-preserved. The accuracy gate passes; the current cold pipeline remains slower
-than DESC, so no warm-cost advantage is claimed.
+preserved. The second row uses the finite-beta, two-field-period QA stellarator
+at higher DESC resolution (`L=16`, `M=N=10`) and shows why representative 3-D
+cold runtime should be reported alongside the axisymmetric accuracy stress case.
+No warm-cost advantage is inferred from either cold measurement.
 
-![Independent Solov'ev strong-force comparison](docs/_static/figures/readme_strong_force_comparison.webp)
+![Independent Solov'ev and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 
 Reproduce the JIT-native benchmark with:
 
@@ -35,7 +37,7 @@ python benchmarks/strong_polish.py \
   --radial-refinement-tolerance 1e-3
 ```
 
-The experimental flag currently requires the matrix-free least-squares API in
+The experimental flag uses the matrix-free least-squares API merged in
 [SOLVAX PR 98](https://github.com/uwplasma/SOLVAX/pull/98). The committed raw
 artifacts, exact source revisions, figure generator, and timing boundaries live
 in `benchmarks/`; the default public equilibrium solve remains unchanged while
@@ -65,7 +67,7 @@ wout = vj.wout_from_state(inp=inp, state=result.state,
                            niter=result.iterations, converged=result.converged)
 vj.write_wout("wout_circular_tokamak.nc", wout)
 figures = vj.plot_wout("wout_circular_tokamak.nc", "figures")
-# figures["force_balance"] is the normalized radial force-error profile.
+# The summary includes the relative radial force-error profile and its maximum.
 ```
 
 The CLI provides the same workflow:
@@ -117,8 +119,7 @@ MGRID field. Virtual casing alone is not the total exterior field.
 
 Effective ripple is an optional in-memory diagnostic—no `boozmn` file is
 needed. `examples/epsilon_effective.py` computes and plots the conventional
-NEO transport quantity $\epsilon_{\rm eff}^{3/2}$; `--plot` adds the same
-bounded-resolution radial trend to the pressure panel when NEO_JAX is installed.
+NEO transport quantity $\epsilon_{\rm eff}^{3/2}$.
 
 ```python
 field = vj.VmecExtender.from_file(
@@ -255,7 +256,7 @@ VMEX also solves open-ended mirrors. `examples/mirror/mirror_fixed_boundary_nona
 
 ## Equilibrium and kinetic diagnostics
 
-`vmex --plot wout_X.nc` produces cross-sections, profiles, a normalized radial force-balance plot, a full-resolution 3-D LCFS, and the compact summaries below. The force error is the absolute WOUT `equif` residual normalized by the magnetic and pressure-gradient terms, and works for vacuum and finite-beta equilibria. The summaries combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. A separate stability figure decomposes `DMerc` and shows the frozen-geometry response to a pressure ramp; finite-pressure points must be re-solved for certification. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
+`vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summaries below. The summary's top row combines pressure with parallel current and shows the relative radial force error, $\epsilon_F=|(\mathbf J\times\mathbf B-\nabla p)_s|/(|(\mathbf J\times\mathbf B)_s|+|(\nabla p)_s|)$, for vacuum or finite-beta equilibria; the scalar card reports its maximum over solved interior surfaces. The summaries combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. A separate stability figure decomposes `DMerc` and shows the frozen-geometry response to a pressure ramp; finite-pressure points must be re-solved for certification. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
 
 This finite-pressure NFP=3 QI example reaches $\langle\beta\rangle=2.38\%$.
 

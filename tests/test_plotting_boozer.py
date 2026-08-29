@@ -35,7 +35,7 @@ pytestmark = pytest.mark.skipif(
 
 MAX_FIGURE_BYTES = 2 * 1024 * 1024  # >= 200 dpi publication PNGs
 WOUT_KEYS = (
-    "summary", "surfaces", "modB", "profiles", "force_balance", "stability", "3d",
+    "summary", "surfaces", "modB", "profiles", "stability", "3d",
 )
 
 
@@ -61,7 +61,7 @@ def _check_figures(paths: dict[str, Path], expected_keys) -> None:
 
 @pytest.mark.parametrize("case", ["solovev", "up_down_asymmetric_tokamak"])
 def test_plot_wout_golden(case: str, tmp_path: Path) -> None:
-    """All seven figures render from golden wouts (sym and lasym) under 2 MB."""
+    """All six figures render from golden wouts (sym and lasym) under 2 MB."""
     wout_path = _golden_wout(case)
     outdir = tmp_path / case
     paths = plot_wout(wout_path, outdir, which=WOUT_KEYS)
@@ -91,7 +91,7 @@ def test_plot_wout_accepts_woutdata_and_subset(tmp_path: Path, monkeypatch) -> N
 
 
 @pytest.mark.parametrize("pressure_scale", [0.0, 1.0])
-def test_force_balance_plot_handles_vacuum_and_finite_beta(
+def test_summary_force_balance_handles_vacuum_and_finite_beta(
     pressure_scale: float, tmp_path: Path,
 ) -> None:
     """The normalized WOUT diagnostic is valid with or without pressure."""
@@ -108,10 +108,10 @@ def test_force_balance_plot_handles_vacuum_and_finite_beta(
     paths = plot_wout(
         data,
         tmp_path / f"force_{pressure_scale:g}",
-        which=("force_balance",),
+        which=("summary",),
         name="solovev",
     )
-    _check_figures(paths, ("force_balance",))
+    _check_figures(paths, ("summary",))
 
 
 def test_plot_wout_rejects_unknown_figure(tmp_path: Path) -> None:

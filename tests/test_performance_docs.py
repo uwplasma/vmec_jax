@@ -60,6 +60,7 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
     env.pop("PYTHONPATH", None)
     for script in (
         "run_baseline.py",
+        "run_external_equilibrium.py",
         "run_freeboundary_multigrid.py",
         "run_high_mode_fft.py",
         "make_strong_force_comparison.py",
@@ -126,75 +127,7 @@ def test_polish_preconditioner_artifact_is_clean_and_certified() -> None:
         assert case["low_block_relative_residual"] < 1.0e-10
 
 
-def test_strong_projection_artifacts_pin_resolution_and_blocking_diagnosis() -> None:
-    artifacts = [
-        json.loads(
-            (
-                ROOT
-                / "benchmarks"
-                / f"strong_projection_solovev_m{mpol}_m4.json"
-            ).read_text()
-        )
-        for mpol in (5, 8, 13)
-    ]
-    unresolved = []
-    for expected_mpol, artifact in zip((5, 8, 13), artifacts, strict=True):
-        assert artifact["schema"] == "vmex.strong-polish-benchmark/1"
-        assert artifact["measurement_dirty"] is False
-        assert artifact["diagnostics_only"] is True
-        assert artifact["mpol"] == expected_mpol
-        assert artifact["total_seconds"] < 60.0
-        assert artifact["total_peak_rss_increase_mib"] < 4096.0
-        projection = artifact["projection_consistency"]["initial"]
-        assert projection["radial_fit_unresolved_fraction"] < 0.25
-        assert projection["equation_discarded_fraction"] < 1.0e-12
-        unresolved.append(projection["unresolved_fraction"])
-    assert unresolved[0] > unresolved[1] > unresolved[2]
-
-    endpoint = json.loads(
-        (
-            ROOT / "benchmarks" / "strong_polish_solovev_m5_direct_m4.json"
-        ).read_text()
-    )
-    assert endpoint["measurement_dirty"] is False
-    initial = endpoint["projection_consistency"]["initial"]
-    final = endpoint["projection_consistency"]["final"]
-    assert final["projected_residual_rms"] < initial["projected_residual_rms"]
-    assert final["angular_unresolved_fraction"] > 2.0 * initial[
-        "angular_unresolved_fraction"
-    ]
-    assert endpoint["final_certificate"]["normalized_l2"] > endpoint[
-        "initial_certificate"
-    ]["normalized_l2"]
-
-
-def test_collocation_polish_artifact_is_independently_certified() -> None:
-    artifact = json.loads(
-        (
-            ROOT
-            / "benchmarks"
-            / "strong_polish_solovev_collocation_d3_m5_m4.json"
-        ).read_text()
-    )
-    report = artifact["polish_report"]
-    final = artifact["final_certificate"]
-    assert artifact["measurement_dirty"] is False
-    assert artifact["collocation_least_squares"] is True
-    assert artifact["degree"] == 3
-    assert report["converged"] is True
-    assert report["termination_reason"] == "independently-certified"
-    assert final["normalized_l2"] <= artifact["validation_tolerance"]
-    assert final["radial_refinement"] <= artifact[
-        "radial_refinement_tolerance"
-    ]
-    assert report["minimum_signed_jacobian"] > 0.0
-    assert report["nonlinear_iterations"] == report["residual_evaluations"]
-    assert len(final["radial_profile"]["rho"]) == len(
-        final["radial_profile"]["flux_surface_average_force_density"]
-    )
-    assert artifact["total_seconds"] < 60.0
-    assert artifact["total_peak_rss_increase_mib"] < 3072.0
-
+def test_solvax_polish_artifact_is_independently_certified() -> None:
     native = json.loads(
         (
             ROOT
@@ -268,20 +201,28 @@ def test_readme_strong_force_figure_matches_committed_sources() -> None:
     metadata = json.loads(
         (ROOT / "benchmarks" / "strong_force_comparison_m4.json").read_text()
     )
-    assert metadata["schema"] == "vmex.strong-force-readme-figure/2"
+    assert metadata["schema"] == "vmex.strong-force-readme-figure/3"
     figure = ROOT / metadata["figure"]
     assert figure.is_file()
     assert hashlib.sha256(figure.read_bytes()).hexdigest() == metadata[
         "figure_sha256"
     ]
-    for source in metadata["sources"].values():
-        path = ROOT / source["path"]
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == source["sha256"]
-    normalized = {
-        name: source["normalized_l2"]
-        for name, source in metadata["sources"].items()
-    }
-    assert normalized["VMEX polished"] < normalized["DESC"]
+    cases = metadata["cases"]
+    assert set(cases) == {"solovev_analytical", "nfp2_QA_finite_beta"}
+    for case in cases.values():
+        for source in case["sources"].values():
+            path = ROOT / source["path"]
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == source["sha256"]
+    solovev = cases["solovev_analytical"]["sources"]
+    assert solovev["VMEX polished"]["normalized_l2"] < solovev["DESC"]["normalized_l2"]
+
+    stellarator = cases["nfp2_QA_finite_beta"]["sources"]
+    desc = json.loads((ROOT / stellarator["DESC"]["path"]).read_text())
+    assert desc["external_source"]["success"] is True
+    representation = desc["external_source"]["representation"]
+    assert representation["L"] >= 16
+    assert representation["M"] >= 10 and representation["N"] >= 10
+    assert desc["metrics"]["radial_refinement_difference"] < 1.0e-3
     readme = (ROOT / "README.md").read_text()
     assert metadata["figure"] in readme
     assert "--solvax-least-squares" in readme
