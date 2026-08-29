@@ -49,6 +49,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument(
+        "--output",
+        type=Path,
+        help="write JSON after provenance is captured instead of using stdout",
+    )
+    parser.add_argument(
         "--wout",
         type=Path,
         help="optional VMEX/VMEC2000/VMEC++/DESC-exported compatible wout",
@@ -138,6 +143,7 @@ def main() -> None:
         "angular_spectral_tail",
         "radial_refinement_difference",
         "minimum_signed_jacobian",
+        "nestedness_margin",
         "boundary_residual",
         "gauge_residual",
     )
@@ -163,6 +169,13 @@ def main() -> None:
         "normalization": report.normalization,
         "coordinate_convention": report.coordinate_convention,
         "metrics": {name: float(np.asarray(getattr(report, name))) for name in scalar_fields},
+        "radial_profile": {
+            "rho": np.asarray(report.radial_nodes).tolist(),
+            "flux_surface_average_force_density": np.asarray(
+                report.flux_surface_average
+            ).tolist(),
+            "units": "N m^-3",
+        },
         "platform": platform.platform(),
         "versions": {
             "python": platform.python_version(),
@@ -174,7 +187,11 @@ def main() -> None:
         **git_state(REPO),
         "vmex_module": assert_repo_vmex(vmex.__file__, REPO),
     }
-    print(json.dumps(result, indent=2, sort_keys=True))
+    serialized = json.dumps(result, indent=2, sort_keys=True) + "\n"
+    if args.output is None:
+        print(serialized, end="")
+    else:
+        args.output.write_text(serialized)
 
 
 if __name__ == "__main__":
