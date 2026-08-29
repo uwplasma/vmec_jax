@@ -490,6 +490,7 @@ def test_polish_driver_skips_an_already_certified_state(small_strong_root):
     [
         ({"tolerance": 0.0}, "tolerances"),
         ({"validation_tolerance": 0.0}, "tolerances"),
+        ({"radial_degree": 4}, "radial_degree"),
         ({"alpha_min_step": 0.1}, "alpha_min_step"),
         ({"ptc_initial_dtau": 0.0}, "ptc_initial_dtau"),
         ({"max_continuation_stages": 0}, "iteration limits"),
@@ -505,3 +506,41 @@ def test_polish_driver_skips_an_already_certified_state(small_strong_root):
 def test_polish_config_validation(updates, message):
     with pytest.raises(ValueError, match=message):
         PolishConfig(**updates)
+
+
+def test_public_solver_rejects_unknown_polish_mode_before_solving():
+    inp = VmecInput.from_file(DATA / "input.solovev")
+    with pytest.raises(ValueError, match="False, True, or 'auto'"):
+        solver.solve(inp, polish="unknown")
+
+
+def test_public_solver_auto_attaches_an_already_certified_native_state():
+    inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
+        mpol=3,
+        ntor=0,
+        ntheta=12,
+        nzeta=4,
+    )
+    inp = dataclasses.replace(
+        inp,
+        ns_array=np.asarray([5]),
+        ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([1000]),
+    )
+    result = solver.solve(
+        inp,
+        ftol=1.0e-10,
+        max_iterations=1000,
+        polish="auto",
+        polish_config=PolishConfig(
+            radial_degree=3,
+            validation_tolerance=3.0,
+        ),
+    )
+    assert result.converged
+    assert result.native_equilibrium is not None
+    assert result.strong_force is not None
+    assert result.polish_report.converged
+    assert result.polish_report.termination_reason == "already-certified"
+    assert result.state.R_cos.shape == (5, 3)
+    assert result.native_equilibrium.R_cos.shape == (3, 5)

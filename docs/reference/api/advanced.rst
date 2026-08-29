@@ -33,6 +33,12 @@ High-order correction transfer and preconditioner
 .. automodule:: vmex.core.polish_driver
    :members:
 
+The single-grid :func:`vmex.solve` entry point accepts ``polish=False``
+(unchanged behavior), ``polish=True`` (required correction), or
+``polish="auto"`` (skip an already-certified state).  Polished data is attached
+to the result without replacing its legacy sampled state or wout-compatible
+arrays.
+
 Spectral representation and physics kernels
 -------------------------------------------
 
