@@ -24,6 +24,7 @@ from vmex.core.input import VmecInput
 from vmex.core.radial_basis import BSplineBasis
 from vmex.core.polish import (
     build_low_order_preconditioner,
+    build_strong_physical_block_preconditioner,
     make_strong_physical_chart,
     make_strong_root_runtime,
     make_strong_structured_chart,
@@ -117,6 +118,11 @@ def main() -> None:
         default=8,
         help="fixed Rademacher probes for physical-chart equilibration",
     )
+    parser.add_argument(
+        "--physical-block-bandwidth",
+        type=int,
+        help="diagnose physical-chart mode blocks with this poloidal width",
+    )
     args = parser.parse_args()
     if args.ns < args.degree + 2:
         parser.error("ns must be at least degree + 2")
@@ -126,6 +132,11 @@ def main() -> None:
         parser.error("radial-spans must be positive")
     if args.chart_balance_probes < 1:
         parser.error("chart-balance-probes must be positive")
+    if (
+        args.physical_block_bandwidth is not None
+        and args.physical_block_bandwidth < 1
+    ):
+        parser.error("physical-block-bandwidth must be positive")
 
     inp = VmecInput.from_file(args.input).change_resolution(
         mpol=args.mpol,
@@ -274,6 +285,29 @@ def main() -> None:
                 @ (jnp.asarray(chart.equation_scale) * physical_left[:, -1]),
             ),
         }
+        if args.physical_block_bandwidth is not None:
+            block = build_strong_physical_block_preconditioner(
+                runtime,
+                chart,
+                poloidal_bandwidth=args.physical_block_bandwidth,
+            )
+            preconditioner_matrix = jax.vmap(
+                lambda column: block.apply(column, 1.0),
+                in_axes=1,
+                out_axes=1,
+            )(jnp.eye(chart.size, dtype=physical_jacobian.dtype))
+            preconditioned = physical_jacobian @ preconditioner_matrix
+            preconditioned_singular = np.linalg.svd(
+                np.asarray(preconditioned),
+                compute_uv=False,
+            )
+            physical_chart_report["block_preconditioner"] = {
+                "poloidal_bandwidth": args.physical_block_bandwidth,
+                "build_seconds": block.build_seconds,
+                "condition_number": float(
+                    preconditioned_singular[0] / preconditioned_singular[-1]
+                ),
+            }
 
     step = 2.0e-5
     finite_difference = (residual(step * direction) - residual(-step * direction)) / (

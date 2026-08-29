@@ -21,6 +21,7 @@ from vmex.core.polish import (
     PreconditionerSnapshot,
     apply_high_order_correction,
     build_low_order_preconditioner,
+    build_strong_physical_block_preconditioner,
     build_strong_mode_block_preconditioner,
     make_high_low_transfer,
     make_strong_physical_chart,
@@ -37,6 +38,7 @@ from vmex.core.polish import (
 )
 from vmex.core.polish_driver import (
     PolishConfig,
+    _IdentityPreconditioner,
     _arclength_to_target,
     _bordered_preconditioner,
     _branch_tangent,
@@ -102,6 +104,18 @@ def test_parameterized_continuation_preconditioner_switches_at_half(monkeypatch)
         _continuation_precondition(rhs, 0.75, 1.0, SimpleNamespace(), block),
         3.0 * rhs,
     )
+    identity = _IdentityPreconditioner()
+    np.testing.assert_array_equal(identity.apply(rhs), rhs)
+    np.testing.assert_array_equal(
+        _continuation_precondition(
+            rhs,
+            0.25,
+            1.0,
+            SimpleNamespace(),
+            identity,
+        ),
+        rhs,
+    )
 
 
 def test_arclength_crossing_runs_target_correction_and_counts_work(monkeypatch):
@@ -159,7 +173,7 @@ def test_arclength_crossing_runs_target_correction_and_counts_work(monkeypatch):
     )
     monkeypatch.setattr(
         "vmex.core.polish_driver._apply_bordered_preconditioner",
-        lambda state, rhs, dtau, tangent, runtime, block: rhs,
+        lambda state, rhs, dtau, tangent, runtime, block, chart=None: rhs,
     )
     monkeypatch.setattr(
         "vmex.core.polish_driver._low_inverse", lambda rhs, runtime: rhs
@@ -665,6 +679,42 @@ def test_structured_chart_uses_only_physical_layout_channels(small_strong_root):
     assert rank == chart.size
 
 
+def test_structured_chart_mode_blocks_recover_local_jacobian(small_strong_root):
+    runtime = small_strong_root
+    chart = make_strong_structured_chart(runtime)
+    preconditioner = build_strong_physical_block_preconditioner(
+        runtime,
+        chart,
+        poloidal_bandwidth=64,
+    )
+    zero = jnp.zeros((chart.size,), dtype=jnp.float64)
+    direction = jnp.linspace(-0.15, 0.25, chart.size)
+    _, response = jax.jvp(
+        lambda value: strong_physical_residual(value, runtime, chart, 1.0),
+        (zero,),
+        (direction,),
+    )
+    np.testing.assert_allclose(
+        preconditioner.apply(response, 1.0),
+        direction,
+        rtol=5.0e-8,
+        atol=5.0e-8,
+    )
+    with pytest.raises(ValueError, match="poloidal_bandwidth"):
+        build_strong_physical_block_preconditioner(
+            runtime, chart, poloidal_bandwidth=0
+        )
+    with pytest.raises(ValueError, match="physical block linearization"):
+        build_strong_physical_block_preconditioner(
+            runtime,
+            chart,
+            jnp.zeros((chart.size + 1,)),
+        )
+    dense_chart = make_strong_physical_chart(runtime)
+    with pytest.raises(ValueError, match="local structured chart"):
+        build_strong_physical_block_preconditioner(runtime, dense_chart)
+
+
 def test_strong_root_validation_branches(small_adapter, small_strong_root):
     native, _, _, mask, adapter = small_adapter
     layout = small_strong_root.layout
@@ -857,6 +907,7 @@ def test_polish_driver_records_bounded_unpolished_return(
         alpha_min_step=1.0e-3,
         alpha_max_step=1.0e-3,
         max_nonlinear_iterations=12,
+        preconditioner="legacy",
         use_pseudo_arclength=True,
         fail_policy="return_unpolished",
     )
@@ -903,10 +954,12 @@ def test_polish_driver_records_bounded_unpolished_return(
     monkeypatch.setattr(
         "vmex.core.polish_driver._arclength_to_target", fail_tangent
     )
+    chart = make_strong_structured_chart(small_strong_root)
     result = polish_strong_root(
         small_strong_root,
         config=config,
         initial_certificate=InitialCertificate(),
+        chart=chart,
     )
     report = result.polish_report
     assert not report.converged

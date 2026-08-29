@@ -377,7 +377,12 @@ class StrongPhysicalChart:
     @classmethod
     def tree_unflatten(cls, metadata, children):
         gauge_rank, build_seconds = metadata
-        coordinate_basis, equation_basis, coordinate_scale, equation_scale = children
+        (
+            coordinate_basis,
+            equation_basis,
+            coordinate_scale,
+            equation_scale,
+        ) = children
         return cls(
             coordinate_basis=coordinate_basis,
             equation_basis=equation_basis,
@@ -1049,6 +1054,40 @@ def _physical_equation_basis(layout: StrongRootLayout) -> np.ndarray:
     return _physical_equation_chart(layout)[0]
 
 
+def _physical_coordinate_blocks(
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
+    poloidal_bandwidth: int,
+) -> tuple[Array, ...]:
+    """Group every local structured-chart coordinate exactly once."""
+
+    if poloidal_bandwidth < 1:
+        raise ValueError("poloidal_bandwidth must be positive")
+    basis = np.asarray(chart.coordinate_basis)
+    grouped: dict[tuple[int, int], list[int]] = {}
+    assigned = np.zeros((chart.size,), dtype=int)
+    for group in runtime.layout.groups:
+        support = np.flatnonzero(
+            np.linalg.norm(basis[group.start : group.stop], axis=0) > 1.0e-12
+        )
+        if support.size == 0:
+            continue
+        assigned[support] += 1
+        key = (
+            int(group.abs_n),
+            int(group.m) // int(poloidal_bandwidth),
+        )
+        grouped.setdefault(key, []).extend(support.tolist())
+    if not np.all(assigned == 1):
+        raise ValueError(
+            "physical block operations require a local structured chart"
+        )
+    return tuple(
+        jnp.asarray(sorted(set(grouped[key])), dtype=jnp.int32)
+        for key in sorted(grouped)
+    )
+
+
 def make_strong_physical_chart(
     runtime: StrongRootRuntime,
     *,
@@ -1597,6 +1636,62 @@ def build_strong_mode_block_preconditioner(
     )
 
 
+def build_strong_physical_block_preconditioner(
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
+    vector: Array | None = None,
+    *,
+    poloidal_bandwidth: int = 3,
+) -> StrongModeBlockPreconditioner:
+    """Probe bounded mode blocks directly in structured physical coordinates."""
+
+    if poloidal_bandwidth < 1:
+        raise ValueError("poloidal_bandwidth must be positive")
+    started = perf_counter()
+    base = (
+        jnp.zeros(
+            (chart.size,),
+            dtype=jnp.asarray(runtime.native.R_cos).dtype,
+        )
+        if vector is None
+        else jnp.asarray(vector)
+    )
+    if base.shape != (chart.size,):
+        raise ValueError(
+            f"physical block linearization has shape {base.shape}; "
+            f"expected {(chart.size,)}"
+        )
+    indices = _physical_coordinate_blocks(
+        runtime,
+        chart,
+        poloidal_bandwidth,
+    )
+    low_blocks: list[Array] = []
+    strong_blocks: list[Array] = []
+    for block_indices in indices:
+        local_zero = jnp.zeros((block_indices.size,), dtype=base.dtype)
+
+        def block_residual(local: Array, alpha: float) -> Array:
+            candidate = base.at[block_indices].add(local)
+            return strong_physical_residual(
+                candidate, runtime, chart, alpha
+            )[block_indices]
+
+        low_blocks.append(
+            jax.jacfwd(lambda local: block_residual(local, 0.0))(local_zero)
+        )
+        strong_blocks.append(
+            jax.jacfwd(lambda local: block_residual(local, 1.0))(local_zero)
+        )
+    jax.block_until_ready((low_blocks, strong_blocks))
+    return StrongModeBlockPreconditioner(
+        indices,
+        tuple(low_blocks),
+        tuple(strong_blocks),
+        perf_counter() - started,
+    )
+
+
 def build_low_order_preconditioner(
     native: HighOrderEquilibriumState,
     params: Any,
@@ -1714,6 +1809,7 @@ __all__ = [
     "StrongRootRuntime",
     "apply_high_order_correction",
     "build_low_order_preconditioner",
+    "build_strong_physical_block_preconditioner",
     "build_strong_mode_block_preconditioner",
     "make_high_low_transfer",
     "make_strong_physical_chart",
