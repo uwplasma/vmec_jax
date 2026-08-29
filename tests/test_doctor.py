@@ -195,6 +195,62 @@ def test_nvidia_smi_failure_is_actionable(monkeypatch):
     assert error == "nvidia-smi failed: driver unavailable"
 
 
+def test_nvidia_smi_uses_the_standard_wsl_fallback(monkeypatch):
+    observed = {}
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(doctor.os.path, "isfile", lambda path: True)
+
+    def run(args, **kwargs):
+        observed["args"] = args
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout="NVIDIA RTX 4090, 566.36\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(doctor.subprocess, "run", run)
+    summary, error = doctor._nvidia_smi()
+    assert observed["args"][0] == "/usr/lib/wsl/lib/nvidia-smi"
+    assert summary == "NVIDIA RTX 4090, 566.36"
+    assert error is None
+
+
+def test_jax_probe_covers_empty_bad_and_legacy_device_paths(monkeypatch):
+    import jax
+
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(jax, "devices", lambda: ())
+    backend, devices, probe, error = doctor._jax_info()
+    assert backend is None and devices == () and probe is None
+    assert error == "JAX returned no devices"
+
+    class FakeResult:
+        def __init__(self, value):
+            self.value = value
+
+        def block_until_ready(self):
+            return self
+
+        def __float__(self):
+            return float(self.value)
+
+        def device(self):
+            return "cuda:0"
+
+    monkeypatch.setattr(jax, "devices", lambda: ("cuda:0",))
+    monkeypatch.setattr(jax, "device_put", lambda values, device: values)
+    monkeypatch.setattr(jax, "device_get", lambda result: result)
+    monkeypatch.setattr(jax, "jit", lambda function: lambda values: FakeResult(14.0))
+    backend, devices, probe, error = doctor._jax_info()
+    assert backend == "gpu" and devices == ("cuda:0",)
+    assert probe.startswith("passed on cuda:0") and error is None
+
+    monkeypatch.setattr(jax, "jit", lambda function: lambda values: FakeResult(13.0))
+    backend, devices, probe, error = doctor._jax_info()
+    assert backend is None and devices == () and probe is None
+    assert error == "JIT device probe returned 13.0, expected 14.0"
+
+
 def test_wsl2_visible_gpu_but_cpu_jax_warns(monkeypatch):
     monkeypatch.setattr(doctor, "_is_wsl2", lambda: True)
     monkeypatch.setattr(doctor, "_nvidia_smi", lambda: ("NVIDIA RTX, 580.1", None))

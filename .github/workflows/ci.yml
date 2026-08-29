@@ -17,8 +17,31 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Select required CI scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      run_tests: ${{ steps.scope.outputs.run_tests }}
+      run_coverage: ${{ steps.scope.outputs.run_coverage }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - id: scope
+        name: Classify changed paths
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git diff --name-only -z "origin/${GITHUB_BASE_REF}...HEAD" |
+              python tools/ci_scope.py --null >> "$GITHUB_OUTPUT"
+          else
+            python tools/ci_scope.py --all </dev/null >> "$GITHUB_OUTPUT"
+          fi
+
   quality:
     name: Quality, package, and docs
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -41,6 +64,8 @@ jobs:
 
   fast:
     name: Fast API tests (py${{ matrix.python-version }})
+    needs: changes
+    if: needs.changes.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
@@ -88,6 +113,8 @@ jobs:
 
   physics:
     name: Representative ${{ matrix.lane }} physics
+    needs: changes
+    if: needs.changes.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -162,6 +189,8 @@ jobs:
 
   parity:
     name: Manifest parity lane (${{ matrix.lane }})
+    needs: changes
+    if: needs.changes.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     # The primary-lane partition is the whole pull-request suite; these four
     # jobs are the part no other job was running.  Measured on the runner at
@@ -237,6 +266,8 @@ jobs:
 
   device:
     name: Two-device placement and AD
+    needs: changes
+    if: needs.changes.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -270,7 +301,14 @@ jobs:
     name: Changed executable lines (>= 95%)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [fast, physics, parity, device]
+    needs: [changes, fast, physics, parity, device]
+    if: >-
+      always() &&
+      needs.changes.outputs.run_coverage == 'true' &&
+      needs.fast.result == 'success' &&
+      needs.physics.result == 'success' &&
+      needs.parity.result == 'success' &&
+      needs.device.result == 'success'
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -298,10 +336,10 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    needs: [quality, fast, physics, parity, device, changed-coverage]
+    needs: [changes, quality, fast, physics, parity, device, changed-coverage]
     steps:
       - name: Require every review gate
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")'
