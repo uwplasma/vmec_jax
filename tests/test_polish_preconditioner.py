@@ -140,7 +140,7 @@ def test_arclength_crossing_runs_target_correction_and_counts_work(monkeypatch):
         lambda: (None, None, None, corrector, target),
     )
     monkeypatch.setattr(
-        "vmex.core.polish_driver._ptc_config", lambda config: object()
+        "vmex.core.polish_driver._ptc_config", lambda config, **kwargs: object()
     )
     monkeypatch.setattr(
         "vmex.core.polish_driver._branch_tangent",
@@ -160,7 +160,7 @@ def test_arclength_crossing_runs_target_correction_and_counts_work(monkeypatch):
     result = _arclength_to_target(
         zero,
         0.95,
-        SimpleNamespace(),
+        SimpleNamespace(layout=SimpleNamespace(size=2), operator_balance=1.0),
         PolishConfig(max_arclength_steps=1, arclength_step=0.1),
         lambda vector, alpha: jnp.all(jnp.isfinite(vector)) & jnp.isfinite(alpha),
         None,
