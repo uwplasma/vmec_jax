@@ -12,6 +12,7 @@ import re
 import resource
 import shutil
 import subprocess
+import sys
 import time
 
 
@@ -167,6 +168,52 @@ def _run_vmec2000(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def _run_vmex(args: argparse.Namespace) -> dict[str, object]:
+    sys.path.insert(0, str(args.source_repo))
+    import jax
+    import vmex
+
+    args.output_dir.mkdir(parents=True)
+    started = time.perf_counter()
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "vmex",
+            str(args.input.resolve()),
+            "--outdir",
+            str(args.output_dir.resolve()),
+            "--quiet",
+        ],
+        cwd=args.source_repo,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    wall_seconds = time.perf_counter() - started
+    case = args.input.name.removeprefix("input.")
+    wout_path = args.output_dir / f"wout_{case}.nc"
+    success = completed.returncode == 0 and wout_path.is_file()
+    return {
+        "schema": "vmex.external-equilibrium-run/1",
+        "engine": "vmex",
+        "input": args.input.name,
+        "output_wout": wout_path.name,
+        "success": success,
+        "returncode": completed.returncode,
+        "timing_seconds": {"solve": wall_seconds, "total": wall_seconds},
+        "peak_rss_mib": _peak_rss_mib(children=True),
+        "platform": platform.platform(),
+        "versions": {
+            "python": platform.python_version(),
+            "vmex": vmex.__version__,
+            "jax": jax.__version__,
+        },
+        "devices": [str(device) for device in jax.devices()],
+        "source": _git_state(args.source_repo),
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="engine", required=True)
@@ -191,6 +238,12 @@ def _parser() -> argparse.ArgumentParser:
     vmec.add_argument("--output-dir", type=Path, required=True)
     vmec.add_argument("--report", type=Path, required=True)
     vmec.add_argument("--source-repo", type=Path, required=True)
+
+    vmex = subparsers.add_parser("vmex", help="solve an input deck with the VMEX CLI")
+    vmex.add_argument("--input", type=Path, required=True)
+    vmex.add_argument("--output-dir", type=Path, required=True)
+    vmex.add_argument("--report", type=Path, required=True)
+    vmex.add_argument("--source-repo", type=Path, required=True)
     return parser
 
 
@@ -205,12 +258,12 @@ def main() -> None:
     ):
         if path is not None and not path.exists():
             parser.error(f"{message}: {path}")
-    if args.engine == "vmec2000":
+    if args.engine in ("vmec2000", "vmex"):
         if not args.input.name.startswith("input."):
             parser.error("input filename must start with 'input.'")
         if args.output_dir.exists():
             parser.error(f"output directory already exists: {args.output_dir}")
-        report = _run_vmec2000(args)
+        report = _run_vmec2000(args) if args.engine == "vmec2000" else _run_vmex(args)
     else:
         report = _run_desc(args)
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
