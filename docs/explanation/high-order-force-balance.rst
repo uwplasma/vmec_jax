@@ -236,7 +236,7 @@ probes bounded bands of neighboring Fourier modes, retains all radial and
 R/Z/lambda couplings inside each band, and blends the low and strong blocks
 with ``alpha``.  On the clean 23-coordinate structural derivative gate it
 reduces tangent/adjoint iterations from 23/41 to 1/2 and warm costs from
-3.51/16.06 ms to 0.93/2.48 ms.  Factor construction costs 3.01 s once and is
+3.51/16.06 ms to 0.90/2.46 ms.  Factor construction costs 3.02 s once and is
 reused by primal and transpose solves.  ``"legacy"`` remains an explicit
 fallback, but its inherited inverse is not exact after regularized spline
 reduction and is therefore no longer the default.

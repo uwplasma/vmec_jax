@@ -116,21 +116,21 @@ Polished-root derivative gate
 ``benchmarks/polish_implicit.py`` measures matrix-free IFT tangents,
 adjoints, and the optimization-facing custom VJP.  The clean Apple M4 record
 in ``benchmarks/polish_implicit_m4.json`` uses the full-rank 23-unknown
-native-spline Solovev gate.  Median warm times over ten repeats are 3.51 ms for
-the tangent, 16.06 ms for the adjoint, and 16.66 ms for the custom VJP.  With
+native-spline Solovev gate.  Median warm times over ten repeats are 0.90 ms for
+the tangent, 2.46 ms for the adjoint, and 2.37 ms for the custom VJP.  With
 the persistent compilation cache disabled, cold compile-plus-execute times
-are 4.65 s, 5.83 s, and 6.41 s, respectively.
+are 4.17 s, 5.57 s, and 6.17 s, respectively.
 
-The same record reports incremental process peak RSS of 215 MiB for the first
-tangent executable, 330 MiB for the separately compiled adjoint, and 219 MiB
+The same record reports incremental process peak RSS of 243 MiB for the first
+tangent executable, 324 MiB for the separately compiled adjoint, and 216 MiB
 for the separately compiled custom-VJP executable.  These increments include
 XLA compilation and are intentionally not described as live solve buffers.
-The complete tangent/adjoint dot-product mismatch is ``3.82e-10`` and the
-custom VJP agrees with the explicit adjoint to ``3.54e-20`` relative squared
-error.  The native chart reduces the tangent work but currently increases
-transpose iterations; bounded mode-block transpose factors remain a promotion
-gate.  As with the strong-root benchmark, this is a structural correctness and
-overhead gate, not a certified production-equilibrium scaling claim.
+The complete tangent/adjoint dot-product mismatch is ``4.47e-10`` and the
+custom VJP agrees with the explicit adjoint to ``3.48e-25`` relative squared
+error.  One bounded mode block, built in 3.02 s and reused in both directions,
+reduces the tangent and adjoint solves to one and two Krylov iterations.  As
+with the strong-root benchmark, this is a structural correctness and overhead
+gate, not a certified production-equilibrium scaling claim.
 
 Benchmark suite (CPU, ns = 201)
 -------------------------------
