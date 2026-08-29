@@ -180,7 +180,8 @@ __all__ = [
     "params_from_input", "input_with_params", "runtime_from_params",
     "make_config", "solve_implicit", "solve_implicit_status",
     "solve_implicit_with_aux",
-    "implicit_state_tangent_multi_rhs", "implicit_state_pullback_multi_rhs", "run",
+    "implicit_state_tangent_multi_rhs", "implicit_state_pullback_multi_rhs",
+    "implicit_state_pullback_multi_rhs_raw_block_transpose", "run",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
     "iota_axis", "iota_edge", "edge_iota", "residual_fn", "adjoint_matvec",
     "frozen_path_directional_fd",
@@ -2316,6 +2317,45 @@ def implicit_state_pullback_multi_rhs(
             solver=solver, active_fields=active_fields,
             probe_chunk_size=probe_chunk_size,
             response_chunk_size=response_chunk_size))
+
+
+def implicit_state_pullback_multi_rhs_raw_block_transpose(
+    params: ImplicitParams,
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    gbar_batch: SpectralState,
+    *,
+    probe_chunk_size: int = 1,
+    response_chunk_size: int | None = None,
+) -> ImplicitParams:
+    """NEOPAX-compatible batched state transpose using main's block path.
+
+    The former NEOPAX backend exposed this name for a batched raw-block
+    transpose.  On VMEX main, ``solver=\"block\"`` is the corresponding
+    implementation: it factors the local raw block operator once, uses that
+    transpose as the preconditioner, and then certifies the ordinary implicit
+    adjoint equation.  Consequently this compatibility entry point has the
+    same state-bar-to-parameter-bar contract while retaining main's standard
+    reverse-rule correctness and convergence checks.  ``None`` preserves the
+    former API's unchunked ``vmap`` over the complete static RHS batch; callers
+    may request a positive chunk size explicitly to bound response memory.
+    """
+    if response_chunk_size is None:
+        # The leading RHS dimension is static under JAX tracing.  The old
+        # helper vmapped all rows together, so use that full size by default
+        # rather than silently changing its batching/performance contract.
+        response_chunk_size = int(jax.tree.leaves(gbar_batch)[0].shape[0])
+    return implicit_state_pullback_multi_rhs(
+        params,
+        cfg,
+        x_star,
+        dof_mask,
+        gbar_batch,
+        solver="block",
+        probe_chunk_size=probe_chunk_size,
+        response_chunk_size=response_chunk_size,
+    )
 
 
 def _implicit_state_pullback_multi_rhs_impl(

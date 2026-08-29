@@ -159,6 +159,43 @@ def test_block_response_forward_transpose_and_fd():
         )
 
 
+def test_raw_block_transpose_compatibility_entry_point_matches_main_vjp():
+    """The retained NEOPAX API preserves main's ordinary implicit VJP.
+
+    Its default also preserves the old helper's unchunked vmap over every RHS;
+    the explicit one-row path is retained solely as a bounded-memory option.
+    """
+    _, cfg, p0 = _small_solovev_setup()
+    state, mask = im.solve_implicit_with_aux(p0, cfg)
+    cotangents = jax.tree.map(
+        lambda value: jnp.linspace(
+            -0.2, 0.3, value.size, dtype=value.dtype
+        ).reshape((1,) + value.shape),
+        state,
+    )
+    expected = im.implicit_state_pullback_multi_rhs(
+        p0, cfg, state, mask, cotangents,
+        solver="gcrot",
+    )
+    actual = im.implicit_state_pullback_multi_rhs_raw_block_transpose(
+        p0, cfg, state, mask, cotangents,
+        probe_chunk_size=4,
+    )
+    for got, reference in zip(
+        jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True
+    ):
+        np.testing.assert_allclose(got, reference, rtol=2e-8, atol=2e-10)
+
+    bounded = im.implicit_state_pullback_multi_rhs_raw_block_transpose(
+        p0, cfg, state, mask, cotangents,
+        probe_chunk_size=4, response_chunk_size=1,
+    )
+    for got, reference in zip(
+        jax.tree.leaves(bounded), jax.tree.leaves(actual), strict=True
+    ):
+        np.testing.assert_allclose(got, reference, rtol=0.0, atol=0.0)
+
+
 @pytest.mark.full
 def test_block_pullback_rejects_unconverged_response():
     """The opt-in transpose path cannot return an uncertified gradient."""
