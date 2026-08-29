@@ -7,11 +7,15 @@ import argparse
 import dataclasses
 from importlib import metadata
 import json
+import os
 import platform
 from pathlib import Path
 import resource
 import statistics
 import time
+
+# A cold benchmark must not deserialize an executable from an earlier process.
+os.environ["VMEX_COMPILATION_CACHE"] = "disabled"
 
 import jax
 import jax.numpy as jnp
@@ -166,6 +170,13 @@ def main() -> None:
     )
 
     report = {
+        "schema": "vmex.polish-implicit-benchmark/1",
+        "command": (
+            "JAX_ENABLE_X64=1 python benchmarks/polish_implicit.py "
+            f"--ns {args.ns} --mpol {args.mpol} --degree {args.degree} "
+            f"--repeats {args.repeats}"
+        ),
+        "persistent_compilation_cache": False,
         "case": "solovev-structural-derivative-gate",
         "ns": args.ns,
         "mpol": args.mpol,
