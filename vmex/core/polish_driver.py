@@ -22,6 +22,8 @@ from .errors import StrongForceCertificationError, StrongForceContinuationError
 from .polish import (
     StrongRootRuntime,
     apply_high_order_correction,
+    build_low_order_preconditioner,
+    make_strong_root_runtime,
     strong_root_residual,
 )
 from .strong_force import (
@@ -82,6 +84,7 @@ class PolishConfig:
 
     tolerance: float = 1.0e-8
     validation_tolerance: float | None = None
+    radial_degree: int = 5
     max_continuation_stages: int = 32
     alpha_initial_step: float = 1.0e-3
     alpha_min_step: float = 1.0e-5
@@ -122,6 +125,8 @@ class PolishConfig:
             and self.validation_tolerance <= 0.0
         ):
             raise ValueError("polish tolerances must be positive")
+        if self.radial_degree not in (3, 5, 7):
+            raise ValueError("radial_degree must be 3, 5, or 7")
         if not 0.0 < self.alpha_min_step <= self.alpha_initial_step <= self.alpha_max_step:
             raise ValueError("require alpha_min_step <= alpha_initial_step <= alpha_max_step")
         if not 0.0 < self.ptc_initial_dtau <= self.ptc_max_dtau:
@@ -785,4 +790,58 @@ def polish_strong_root(
     return PolishResult(state, certificate, report, vector)
 
 
-__all__ = ["PolishConfig", "PolishReport", "PolishResult", "polish_strong_root"]
+def polish_legacy_solution(
+    source,
+    resolution,
+    legacy_state,
+    *,
+    config: PolishConfig | None = None,
+    lconm1: bool = True,
+) -> PolishResult:
+    """Refine and lift one converged legacy solve, then run the strong driver."""
+
+    from . import implicit
+    from .input import VmecInput
+    from .strong_force import lift_high_order_state
+
+    if not isinstance(source, VmecInput):
+        raise TypeError("strong-force polishing requires a VmecInput source")
+    config = PolishConfig() if config is None else config
+    implicit_config = implicit.make_config(
+        source,
+        ns=int(resolution.ns),
+        lconm1=bool(lconm1),
+        multigrid=False,
+    )
+    params = implicit.params_from_input(source)
+    legacy_runtime = implicit.runtime_from_params(params, implicit_config)
+    dof_mask = implicit._dof_mask(legacy_state, legacy_runtime, implicit_config)
+    refined_state = implicit._refined_state(
+        implicit_config,
+        params,
+        legacy_state,
+        dof_mask,
+    )
+    native = lift_high_order_state(
+        refined_state,
+        legacy_runtime,
+        degree=config.radial_degree,
+    )
+    low_preconditioner = build_low_order_preconditioner(
+        native,
+        params,
+        implicit_config,
+        refined_state,
+        dof_mask,
+    )
+    runtime = make_strong_root_runtime(native, low_preconditioner, dof_mask)
+    return polish_strong_root(runtime, config=config)
+
+
+__all__ = [
+    "PolishConfig",
+    "PolishReport",
+    "PolishResult",
+    "polish_legacy_solution",
+    "polish_strong_root",
+]
