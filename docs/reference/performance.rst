@@ -116,12 +116,13 @@ Polished-root derivative gate
 ``benchmarks/polish_implicit.py`` measures matrix-free IFT tangents,
 adjoints, and the optimization-facing custom VJP.  The clean Apple M4 record
 in ``benchmarks/polish_implicit_m4.json`` uses the full-rank 24-unknown
-structural Solovev gate.  Median warm times over ten repeats are 3.63 ms for
-the tangent, 5.75 ms for the adjoint, and 5.69 ms for the custom VJP.  Cold
-compile-plus-execute times are 4.25 s, 5.15 s, and 5.61 s, respectively.
+structural Solovev gate.  Median warm times over ten repeats are 3.94 ms for
+the tangent, 5.78 ms for the adjoint, and 5.72 ms for the custom VJP.  With
+the persistent compilation cache disabled, cold compile-plus-execute times
+are 4.04 s, 4.99 s, and 5.46 s, respectively.
 
-The same record reports incremental process peak RSS of 267 MiB for the first
-tangent executable, 277 MiB for the separately compiled adjoint, and 175 MiB
+The same record reports incremental process peak RSS of 260 MiB for the first
+tangent executable, 213 MiB for the separately compiled adjoint, and 278 MiB
 for the separately compiled custom-VJP executable.  These increments include
 XLA compilation and are intentionally not described as live solve buffers.
 The complete tangent/adjoint dot-product mismatch is ``1.77e-11`` and the
