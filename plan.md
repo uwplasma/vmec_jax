@@ -55,10 +55,10 @@ the session scratchpad: `profile_lasym.py`, `fb_isolate.py`, `fb_forward_anatomy
 
 ## Current checkpoint and interruption-safe handoff (2026-08-22)
 
-This is the authoritative plan in PR #125. **Do not merge or close PR #125**: it is the live
-program ledger. **Do not close PR #122**: it is the open alpha-tracing/loss-fraction
-specification and implementation branch. Update the phase body when intent changes and append
-one dated log entry; do not rely on chat history.
+This section is the historical checkpoint that governed PR #125 on 2026-08-22.
+Later checkpoints supersede its branch and pull-request instructions while preserving the
+measurements and decision record. Update the phase body when intent changes and append one
+dated log entry; do not rely on chat history.
 
 - `main` is current at `fe26e746` after PR #132. The 54 commits after PR #123 and before #131
   comprise ten first-parent PR merges (#116, #129, #128, #126, #127, #117, #119, #121,
@@ -3741,3 +3741,64 @@ an asymmetric deck.
 - **Static tools do not check tuple arity across a stacked pair.** Splitting
   `_surface_closures` left `gammac.py` unpacking five values from a
   four-value function; neither ruff nor mypy caught it, only the test did.
+
+## Phase 42 — High-order force balance, WSL2, and CI efficiency [ACTIVE — 2026-08-29]
+
+PR #125 is being finalized into `main` as the durable historical ledger. The
+fixed-boundary high-order force-balance implementation follows the separately
+audited 2026-08-29 contract and the focused PR sequence below; this checkpoint
+supersedes older instructions to keep #125 open indefinitely.
+
+### Completed and merged
+
+- VMEX #163-#166: high-order radial basis, independent strong-force oracle,
+  matrix-free linearization, and low-order preconditioner foundations.
+- VMEX #177: QA optimization startup no longer waits minutes for an unnecessary
+  residual-Jacobian construction.
+- VMEX #179: conservative change scoping. Documentation/rendered-media-only PRs
+  retain quality and docs but skip numerical lanes; source, tests, tools,
+  workflows, configuration, unknown paths, and every push to `main` keep the
+  full gate.
+- SOLVAX #92, DKX #78, and ESSOS #58 passed their complete project matrices and
+  were independently reviewed and merged.
+
+### Open, deliberately draft scientific stack
+
+- VMEX #171 -> #174 -> #175 -> #176 -> #178 is rebuilt on current `main`, with
+  the superseded QA commits and unrelated WSL2 commits removed from its ancestry.
+- Streaming Ruiz equilibration leaves the production `mpol=6`, `ns=11`, degree-5
+  strong root at numerical rank 112/117 and condition estimate `8.07e10`.
+  Exponential mode scaling, spectral-condensation weights, and an 82-by-82
+  reduced displacement chart were measured and rejected as rank fixes.
+- Matching DESC's coordinate-volume weighting on both physical force channels
+  improves the measured operator to rank 113/117 and condition estimate
+  `8.83e9`, with warm residual/JVP costs `3.09/4.95 ms`. It remains a draft:
+  the final four lambda/helical directions and the alpha=1 independent
+  certificate are open, and the public polish/implicit APIs must not merge first.
+
+### WSL2 and pull-request gates
+
+- VMEX #172 diagnoses WSL2 explicitly, runs a real selected-device JIT probe,
+  versions cache provenance by executable compatibility, and directs JAX 0.9.2
+  users to the first verified fixed release rather than globally hiding failed
+  CUDA initialization. #173 contains the paired cold/cache-reload/warm benchmark.
+- Source-changing merge candidates run one full hosted matrix after their base is
+  final. Superseded draft matrices are canceled; focused local tests and the
+  independent scientific diagnostic cover iteration between merge candidates.
+
+### Remaining priority order
+
+1. Merge #172 and #173 only after current coverage and aggregate gates pass.
+2. Localize and remove the last four high-order lambda/helical weak directions;
+   certify alpha=1 before exposing the polish or implicit API.
+3. Complete gradient/runtime/peak-memory profiling and downstream BOOZ_XFORM_JAX,
+   DKX, GKX, and ESSOS checks on the certified state.
+4. Run VMEC2000, VMEC++, and DESC on frozen equivalent inputs; commit raw
+   provenance and the reviewer-proof README comparison figure.
+5. Resume the still-open Phase 41 work (Gamma_c roots, restart unification,
+   ballooning defaults/production campaigns) without conflating it with the
+   fixed-boundary force-balance acceptance gate.
+
+- 2026-08-29 rogeriojorge: finalized PR #125 for merge; recorded the independent
+  force-balance literature/conditioning review, clean scientific restack,
+  WSL2 remediation, and conservative CI-scoping decision.
