@@ -310,10 +310,12 @@ def _configure_jax_environment() -> None:
         # memory is reclaimed at callback boundaries; users can still override
         # this before import with JAX_CPU_ENABLE_ASYNC_DISPATCH=true.
         os.environ.setdefault("JAX_CPU_ENABLE_ASYNC_DISPATCH", "false")
-        # Suppress harmless informational C++ logs from XLA/PjRt (e.g.
-        # repeated "Assume version compatibility..." on persistent-cache
-        # hits).  Level 0=INFO, 1=WARNING, 2=ERROR — default to ERROR-only so
-        # genuine errors still surface.
+        # Suppress harmless informational C++ logs from XLA/PjRt.  Level
+        # 0=INFO, 1=WARNING, 2=ERROR — default to ERROR-only so genuine errors
+        # still surface.  JAX/jaxlib 0.9.1-0.9.2 can nevertheless print a
+        # spurious PJRT warning on persistent-cache hits; the upstream fix is
+        # in 0.10.0+, and the WSL driver-parser fix joins it in 0.10.1.  Do not
+        # raise this to level 3 merely to hide the separate CUDA error stream.
         os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
         os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
         os.environ.setdefault("GLOG_minloglevel", "2")

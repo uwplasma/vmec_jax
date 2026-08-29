@@ -18,6 +18,7 @@ import dataclasses
 import json
 import os
 import platform
+import resource
 import sys
 import time
 from pathlib import Path
@@ -66,6 +67,18 @@ def _timed(call: Callable[[], Any]) -> tuple[Any, float]:
 def _relative_difference(left: float, right: float) -> float:
     scale = max(abs(left), abs(right), np.finfo(float).tiny)
     return abs(left - right) / scale
+
+
+def _peak_host_rss_mib() -> float:
+    value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    divisor = 1024.0**2 if platform.system() == "Darwin" else 1024.0
+    return float(value) / divisor
+
+
+def _peak_device_memory_mib(device: Any) -> float | None:
+    stats = device.memory_stats() or {}
+    peak = stats.get("peak_bytes_in_use")
+    return None if peak is None else float(peak) / 2.0**20
 
 
 def _available_devices(gpu_id: int = 0) -> dict[str, Any]:
@@ -185,6 +198,8 @@ def _run_lane(
             "state_max_abs": float(np.max(np.abs(state))),
             "all_finite": bool(np.all(np.isfinite(state))),
             "scalars": scalars,
+            "host_peak_rss_mib": _peak_host_rss_mib(),
+            "device_peak_memory_mib": _peak_device_memory_mib(device),
         },
         "gradients": {},
     }
@@ -217,6 +232,8 @@ def _run_lane(
             "gradient_device": _device_of(gradient),
             "cold_wall_s": metric_cold_s,
             "warm_wall_s": metric_warm_s,
+            "host_peak_rss_mib": _peak_host_rss_mib(),
+            "device_peak_memory_mib": _peak_device_memory_mib(device),
         }
         artifacts["metrics"][name] = (value_f, gradient_f)
 

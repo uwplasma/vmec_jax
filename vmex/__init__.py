@@ -13,6 +13,8 @@ Public API (lazily imported; ``import vmex as vj``):
   / :func:`~vmex.core.wout.wout_from_state` / :class:`~vmex.core.wout.WoutData`
 - :func:`~vmex.core.restart.state_from_wout` /
   :func:`~vmex.core.restart.restart_state` — hot restart from any wout
+- :func:`~vmex.core.turbulence.gk_fieldline_geometry_from_wout` — GK
+  field-line geometry from any compatible wout, without a solve
   (also ``solve*(..., restart_from=...)``)
 - :class:`~vmex.core.strong_force.HighOrderEquilibriumState` /
   :func:`~vmex.core.strong_force.certify_strong_force` — axis-regular
@@ -144,6 +146,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "read_wout": (".core.wout", "read_wout"),
     "write_wout": (".core.wout", "write_wout"),
     "wout_from_state": (".core.wout", "wout_from_state"),
+    "gk_fieldline_geometry_from_wout": (
+        ".core.turbulence", "gk_fieldline_geometry_from_wout"),
     # hot restart
     "restart_state": (".core.restart", "restart_state"),
     "state_from_wout": (".core.restart", "state_from_wout"),

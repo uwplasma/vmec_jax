@@ -539,10 +539,13 @@ JAX-native Hermite–Laguerre flux-tube solver, formerly SPECTRAX-GK;
 (plan R26h.h4):
 
 - :func:`~vmex.core.turbulence.gk_fieldline_geometry` /
+  :func:`~vmex.core.turbulence.gk_fieldline_geometry_from_wout` /
   :func:`~vmex.core.turbulence.flux_tube_geometry` — sample one field
   line of the converged interior solution into GS2/GX-normalized flux-tube
   geometry (``bmag``, ``gds2/gds21/gds22``, curvature/grad-B drifts, …),
-  pure JAX, no gkx import needed;
+  pure JAX, no gkx import needed.  The WOUT route accepts an in-memory object
+  or any VMEC-compatible file and evaluates the same spectral contract without
+  reconstructing or re-solving an equilibrium;
 - :func:`~vmex.core.turbulence.turbulent_growth_rate` — the dominant
   linear ITG/TEM growth rate on that flux tube.  Fully differentiable in
   *both* gradient modes.  ``r_over_lt``/``r_over_ln`` are ``R/L`` and are

@@ -20,8 +20,10 @@ vmex --test
 
 `vmex --doctor` diagnoses mixed-Python environments: it prints the active
 interpreter, pip location, package versions, JAX backend and devices, the
-active JAX default device, and VMEX's forward/implicit placement policies. If
-an install misbehaves, first check that `pip --version` and
+active JAX default device, a real float64 JIT device probe, and VMEX's
+forward/implicit placement policies. Under WSL2 it also reports the
+Windows-provided NVIDIA driver seen by `nvidia-smi`. If an install misbehaves,
+first check that `pip --version` and
 `python -m pip --version` point at the same Python.
 
 `vmex --test` runs the bundled fixed-boundary QH case end to end: it copies
@@ -85,6 +87,43 @@ versions, package resolution can select an older JAX release whose
 accelerator extras differ; always confirm the result with `vmex --doctor`.
 CUDA 12, ROCm, TPU, and platform-specific alternatives remain documented in
 JAX's installation matrix.
+
+### Windows with WSL2 and NVIDIA GPUs
+
+Use the NVIDIA driver installed on Windows. Do not install a Linux NVIDIA
+driver inside WSL2; NVIDIA exposes the Windows driver there through a stub
+`libcuda.so`. If `nvidia-smi` is not on `PATH`, VMEX also checks its standard
+WSL location, `/usr/lib/wsl/lib/nvidia-smi`.
+
+JAX/jaxlib 0.9.2 has two upstream logging defects that are especially visible
+in this environment:
+
+```text
+Assume version compatibility. PjRt-IFRT does not track XLA executable versions.
+Could not get kernel mode driver version: Version does not match the format X.Y.Z
+```
+
+The first is a spurious message on persistent-compilation-cache hits
+([JAX issue 36294](https://github.com/jax-ml/jax/issues/36294), fixed by
+[OpenXLA PR 40018](https://github.com/openxla/xla/pull/40018)). The second
+rejects a valid two-component Windows driver version such as `566.36`; it does
+not by itself mean CUDA failed ([OpenXLA PR
+41380](https://github.com/openxla/xla/pull/41380)). Both upstream fixes are
+present in JAX/jaxlib 0.10.1 and newer. Upgrade the matching accelerator
+installation, then rerun the doctor:
+
+```console
+python -m pip install --upgrade "jax[cuda13]>=0.10.1"
+vmex --doctor
+```
+
+Use the CUDA extra selected by the current official JAX installation matrix
+if CUDA 13 is not appropriate. A healthy report must show the `gpu` backend,
+at least one `cuda:` device, and a passed JIT device probe. VMEX retains
+error-level XLA logging: setting `TF_CPP_MIN_LOG_LEVEL=3` would hide genuine
+CUDA failures and is not recommended. Disabling VMEX's persistent cache also
+removes the PJRT cache-hit message on affected JAX releases, but makes cold
+processes slower and is not the fix.
 
 VMEX then picks CPU or GPU per forward solve using a measured device policy —
 when the GPU actually pays off, and how to pin a device explicitly, is

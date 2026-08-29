@@ -15,7 +15,9 @@ two layers:
    ballooning objective in :mod:`vmex.core.stability`, whose spectral
    point-evaluation machinery is reused here, extended with the
    ``grad s``/``grad psi`` metric and drift projections.  Exact trig sums
-   + JAX AD throughout: jit/grad-transparent, no gkx import.
+   + JAX AD throughout: jit/grad-transparent, no gkx import.  The read-only
+   :func:`gk_fieldline_geometry_from_wout` route evaluates the same contract
+   from any compatible WOUT without reconstructing or re-solving a state.
 
 2. **Objective wrappers** — thin two-positional ``(state, runtime)``
    callables around the proxies GKX itself promotes for VMEX-side
@@ -82,6 +84,7 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from .solver import SolverRuntime, SpectralState
 from .statephysics import aspect_ratio
@@ -95,6 +98,7 @@ __all__ = [
     "GK_GEOMETRY_FIELDS",
     "TURBULENCE_OBJECTIVE_NAMES",
     "gk_fieldline_geometry",
+    "gk_fieldline_geometry_from_wout",
     "flux_tube_geometry",
     "turbulence_objective_vector",
     "turbulent_growth_rate",
@@ -219,10 +223,10 @@ def _line_arrays(ctx: dict, j: int, alpha: float, zeta0: float, x: Array):
 # ---------------------------------------------------------------------------
 
 
-def gk_fieldline_geometry(
-    state: SpectralState,
-    rt: SolverRuntime,
+def _gk_fieldline_geometry_from_context(
+    ctx: dict,
     *,
+    nfp: int,
     s_index: int | None = None,
     alpha: float = 0.0,
     zeta0: float = 0.0,
@@ -230,7 +234,7 @@ def gk_fieldline_geometry(
     equal_arc: bool = True,
     arc_oversample: int = 4,
 ) -> dict:
-    """Flux-tube geometry mapping of one field line of a converged state.
+    """Flux-tube geometry mapping from a normalized spectral context.
 
     Returns the in-memory geometry contract consumed by
     ``gkx.flux_tube_geometry_from_mapping`` (keys
@@ -269,7 +273,6 @@ def gk_fieldline_geometry(
     """
     if int(ntheta) < 8:
         raise ValueError("ntheta must be >= 8")
-    ctx = _ballooning_context(state, rt)
     j = _resolve_surface(s_index, ctx["ns"])
     dtype = ctx["s"].dtype
 
@@ -344,7 +347,7 @@ def gk_fieldline_geometry(
         "R0": L_ref,
         "B0": B_ref,
         "alpha": float(alpha),
-        "nfp": int(rt.resolution.nfp),
+        "nfp": int(nfp),
         "vmex": {
             "surface_index": j,
             "s": s_j,
@@ -363,6 +366,132 @@ def gk_fieldline_geometry(
                 "vmec_fieldlines normalizations; internal signed psi_edge",
         },
     }
+
+
+def gk_fieldline_geometry(
+    state: SpectralState,
+    rt: SolverRuntime,
+    *,
+    s_index: int | None = None,
+    alpha: float = 0.0,
+    zeta0: float = 0.0,
+    ntheta: int = 32,
+    equal_arc: bool = True,
+    arc_oversample: int = 4,
+) -> dict:
+    """Flux-tube geometry mapping of one field line of a converged state.
+
+    This is the differentiable live-state route.  See
+    :func:`gk_fieldline_geometry_from_wout` for read-only evaluation of an
+    existing VMEC-compatible WOUT without reconstructing or solving an
+    equilibrium.
+    """
+    return _gk_fieldline_geometry_from_context(
+        _ballooning_context(state, rt),
+        nfp=int(rt.resolution.nfp),
+        s_index=s_index,
+        alpha=alpha,
+        zeta0=zeta0,
+        ntheta=ntheta,
+        equal_arc=equal_arc,
+        arc_oversample=arc_oversample,
+    )
+
+
+def _wout_ballooning_context(wout: Any) -> dict:
+    """Normalize a VMEC-compatible WOUT to the live-state spectral context."""
+    from .postprocess import MU0, lambda_full_mesh_from_wout
+
+    ns = int(wout.ns)
+    if ns < 5:
+        raise ValueError(f"field-line geometry needs ns >= 5, got ns = {ns}")
+    s = np.linspace(0.0, 1.0, ns)
+    hs = s[1] - s[0]
+    m = np.asarray(wout.xm, dtype=int)
+    signgs = int(wout.signgs)
+    if signgs not in (-1, 1):
+        raise ValueError(f"WOUT signgs must be -1 or 1, got {signgs}")
+    phipf = np.asarray(wout.phipf, dtype=float) / (2.0 * np.pi * signgs)
+    unit_flux = np.ones(ns, dtype=float)
+    lmns = lambda_full_mesh_from_wout(
+        lmns_half=wout.lmns,
+        m_modes=m,
+        s=s,
+        phipf_internal=unit_flux,
+        lamscale=1.0,
+    )
+    lmnc = None
+    if bool(wout.lasym):
+        lmnc = lambda_full_mesh_from_wout(
+            lmns_half=wout.lmnc,
+            m_modes=m,
+            s=s,
+            phipf_internal=unit_flux,
+            lamscale=1.0,
+        )
+    L_ref = float(wout.Aminor_p)
+    if not np.isfinite(L_ref) or L_ref <= 0.0:
+        raise ValueError(f"WOUT Aminor_p must be finite and positive, got {L_ref}")
+    psi_edge = float(np.asarray(wout.phi, dtype=float)[-1]) / (2.0 * np.pi * signgs)
+    if not np.isfinite(psi_edge) or psi_edge == 0.0:
+        raise ValueError(f"WOUT edge toroidal flux must be finite and nonzero, got {psi_edge}")
+    return {
+        "s": jnp.asarray(s),
+        "hs": jnp.asarray(hs),
+        "ns": ns,
+        "m": jnp.asarray(m, dtype=float),
+        "xn": jnp.asarray(np.asarray(wout.xn, dtype=float)),
+        "rmnc": jnp.asarray(wout.rmnc),
+        "zmns": jnp.asarray(wout.zmns),
+        "lmns": jnp.asarray(lmns),
+        "rmns": None if not bool(wout.lasym) else jnp.asarray(wout.rmns),
+        "zmnc": None if not bool(wout.lasym) else jnp.asarray(wout.zmnc),
+        "lmnc": None if lmnc is None else jnp.asarray(lmnc),
+        "lasym": bool(wout.lasym),
+        "iotas": jnp.asarray(wout.iotas),
+        "pres": jnp.asarray(np.asarray(wout.pres, dtype=float) * MU0),
+        "phipf": jnp.asarray(phipf),
+        "psi_edge": jnp.asarray(psi_edge),
+        "sign_psi": jnp.asarray(np.sign(psi_edge)),
+        "L_ref": jnp.asarray(L_ref),
+        "B_ref": jnp.asarray(2.0 * abs(psi_edge) / (L_ref * L_ref)),
+    }
+
+
+def gk_fieldline_geometry_from_wout(
+    wout: Any,
+    *,
+    s_index: int | None = None,
+    alpha: float = 0.0,
+    zeta0: float = 0.0,
+    ntheta: int = 32,
+    equal_arc: bool = True,
+    arc_oversample: int = 4,
+) -> dict:
+    """Flux-tube mapping from a VMEC-compatible WOUT, without a solve.
+
+    ``wout`` may be a :class:`~vmex.core.wout.WoutData` or a filesystem path
+    accepted by :func:`vmex.read_wout`.  The returned mapping has the same
+    keys, normalization, field-line policy, and spectral evaluation as
+    :func:`gk_fieldline_geometry`.  This read-only route does not reconstruct
+    a solver state and does not re-converge the equilibrium.
+    """
+    from pathlib import Path
+
+    from .wout import read_wout
+
+    if isinstance(wout, (str, Path)):
+        wout = read_wout(wout)
+    return _gk_fieldline_geometry_from_context(
+        _wout_ballooning_context(wout),
+        nfp=int(wout.nfp),
+        s_index=s_index,
+        alpha=alpha,
+        zeta0=zeta0,
+        ntheta=ntheta,
+        equal_arc=equal_arc,
+        arc_oversample=arc_oversample,
+    )
 
 
 def flux_tube_geometry(
