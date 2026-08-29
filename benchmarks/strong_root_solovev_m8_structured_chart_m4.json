@@ -1,0 +1,180 @@
+{
+  "case": "solovev_analytical",
+  "cold_jvp_seconds": 2.9896686670035706,
+  "cold_residual_seconds": 1.968443791003665,
+  "compilation_cache": "disabled",
+  "condition_number": null,
+  "coordinate_scale_range": [
+    1.0,
+    1.0
+  ],
+  "degree": 5,
+  "equation_scale_range": [
+    1.0,
+    1.0
+  ],
+  "free_dofs": 447,
+  "initial_low_residual_norm": 9.070489686636943e-11,
+  "initial_scaled_residual_norm": 21.142374511865967,
+  "input_data_embedded": false,
+  "jvp_peak_rss_increase_mib": 221.390625,
+  "jvp_relative_error": 4.350569492677693e-09,
+  "largest_singular_value": null,
+  "measurement_commit": "4a704fdc4ec0f0518a14f176d13f3660bc7243e4",
+  "measurement_dirty": false,
+  "mpol": 8,
+  "ns": 31,
+  "operator_balance": 1.0,
+  "physical_chart": {
+    "chart_build_seconds": 5.040678499994101,
+    "chart_peak_rss_increase_mib": 526.421875,
+    "cold_residual_seconds": 2.476096416998189,
+    "condition_number": 7064530.881209951,
+    "coordinate_scale_range": [
+      0.0037763386837476797,
+      269.92636728554385
+    ],
+    "equation_scale_range": [
+      0.0024382271400761276,
+      315.667683967022
+    ],
+    "free_dofs": 307,
+    "gauge_rank": 140,
+    "kind": "structured",
+    "largest_singular_value": 5.8113092221138505,
+    "rank": 307,
+    "rank_seconds": 7.795359750001808,
+    "smallest_singular_value": 8.226036972349592e-07,
+    "svd_backend": "numpy.linalg.svd",
+    "warm_residual_median_seconds": 0.008353708501090296,
+    "weakest_left_components": [
+      {
+        "coefficient_l2": 7.8138735050391634,
+        "field": "R_cos",
+        "m": 0,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 2.4627656970464815,
+        "field": "L_sin",
+        "m": 2,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 1.9652586629228121,
+        "field": "R_cos",
+        "m": 2,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 1.0645334352451015,
+        "field": "L_sin",
+        "m": 1,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 0.9828708611601631,
+        "field": "R_cos",
+        "m": 1,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 0.4521395125289481,
+        "field": "L_sin",
+        "m": 4,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 0.31955859827137284,
+        "field": "R_cos",
+        "m": 4,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 0.11435805298299766,
+        "field": "L_sin",
+        "m": 5,
+        "n": 0
+      }
+    ],
+    "weakest_right_components": [
+      {
+        "coefficient_l2": 32.08583184748322,
+        "field": "L_sin",
+        "m": 6,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 18.23541587401362,
+        "field": "L_sin",
+        "m": 7,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 9.416910681945094,
+        "field": "R_cos",
+        "m": 7,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 2.7902553826823,
+        "field": "L_sin",
+        "m": 4,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 2.4897761906121234,
+        "field": "R_cos",
+        "m": 5,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 2.333265788599819,
+        "field": "R_cos",
+        "m": 6,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 2.0705960502311918,
+        "field": "L_sin",
+        "m": 5,
+        "n": 0
+      },
+      {
+        "coefficient_l2": 0.07050686201502045,
+        "field": "L_sin",
+        "m": 3,
+        "n": 0
+      }
+    ],
+    "weakest_triplet_relative_residual": 8.150490785578959e-17
+  },
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "rank": null,
+  "rank_seconds": null,
+  "repeats": 10,
+  "residual_peak_rss_increase_mib": 269.6875,
+  "runtime_build_seconds": 8.147289624997939,
+  "runtime_peak_rss_increase_mib": 353.46875,
+  "smallest_singular_value": null,
+  "solve_grid": [
+    48,
+    33,
+    1
+  ],
+  "strong_block_sign": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "versions": {
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1",
+    "numpy": "2.5.2",
+    "python": "3.12.13",
+    "vmex": "0.7.0"
+  },
+  "vmex_module": "vmex/__init__.py",
+  "warm_jvp_median_seconds": 0.013023291496210732,
+  "warm_residual_median_seconds": 0.008342936998815276
+}
