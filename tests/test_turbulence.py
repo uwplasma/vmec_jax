@@ -170,6 +170,37 @@ def test_surface_index_validation(shaped_eq):
         turb.gk_fieldline_geometry(shaped_eq.state, shaped_eq.runtime, ntheta=4)
 
 
+def test_wout_geometry_matches_live_state_without_reconstruction(shaped_eq, tmp_path):
+    """The read-only WOUT route reproduces the live-state mapping."""
+    import vmex
+
+    kwargs = dict(s_index=7, alpha=0.3, zeta0=0.2, ntheta=32,
+                  equal_arc=False)
+    live = turb.gk_fieldline_geometry(shaped_eq.state, shaped_eq.runtime, **kwargs)
+    memory = turb.gk_fieldline_geometry_from_wout(shaped_eq.wout, **kwargs)
+    path = vmex.write_wout(tmp_path / "wout_geometry.nc", shaped_eq.wout)
+    file_mapping = turb.gk_fieldline_geometry_from_wout(path, **kwargs)
+
+    for name in turb.GK_GEOMETRY_FIELDS + ("jacobian", "grho"):
+        expected = np.asarray(live[name])
+        np.testing.assert_allclose(np.asarray(memory[name]), expected,
+                                   rtol=2e-11, atol=2e-12, err_msg=name)
+        np.testing.assert_allclose(np.asarray(file_mapping[name]), expected,
+                                   rtol=2e-11, atol=2e-12, err_msg=name)
+    for name in ("q", "s_hat", "epsilon", "R0", "B0"):
+        assert float(memory[name]) == pytest.approx(float(live[name]), rel=2e-11,
+                                                    abs=2e-12)
+        assert float(file_mapping[name]) == pytest.approx(float(live[name]), rel=2e-11,
+                                                          abs=2e-12)
+    assert memory["nfp"] == file_mapping["nfp"] == live["nfp"]
+
+
+def test_wout_geometry_rejects_invalid_normalization(shaped_eq):
+    with pytest.raises(ValueError, match="Aminor_p"):
+        turb.gk_fieldline_geometry_from_wout(
+            dataclasses.replace(shaped_eq.wout, Aminor_p=0.0))
+
+
 # ---------------------------------------------------------------------------
 # GKX contract + proxies (importorskip-gated, like freeboundary_diff)
 # ---------------------------------------------------------------------------
@@ -416,6 +447,11 @@ def test_gk_geometry_matches_simsopt_vmec_fieldlines(deck, overrides, ns, tmp_pa
     alpha, s_index = 0.7, int(round(0.4 * (ns - 1)))
     geom = turb.gk_fieldline_geometry(eq.state, eq.runtime, s_index=s_index,
                                       alpha=alpha, ntheta=16, equal_arc=False)
+    imported = turb.gk_fieldline_geometry_from_wout(
+        wout_path, s_index=s_index, alpha=alpha, ntheta=16, equal_arc=False)
+    for name in turb.GK_GEOMETRY_FIELDS + ("jacobian", "grho"):
+        np.testing.assert_allclose(np.asarray(imported[name]), np.asarray(geom[name]),
+                                   rtol=2e-10, atol=2e-11, err_msg=name)
     s_value = float(np.asarray(stab._ballooning_context(
         eq.state, eq.runtime)["s"])[s_index])
     theta = np.asarray(geom["theta"])
