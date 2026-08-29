@@ -217,8 +217,12 @@ bounded number of JVP/low-inverse applications; it is stored as
 Branch-preserving driver
 ------------------------
 
-The fixed-boundary host driver first solves the ``alpha=0`` legacy consistency
-endpoint, then calls SOLVAX adaptive continuation with state-dependent JVPs,
+The fixed-boundary host driver first verifies the ``alpha=0`` legacy
+consistency endpoint before row equilibration.  Because that endpoint
+subtracts the stored legacy defect, the zero correction is its mathematical
+root; accepting its roundoff-level remainder avoids an unnecessary nonlinear
+solve below floating-point noise.  A genuinely inconsistent endpoint still
+uses PTC.  The driver then calls SOLVAX adaptive continuation with state-dependent JVPs,
 Eisenstat--Walker forcing, and stored bounded mode-block factors.  The measured
 initial pseudo-time scale is large because the legacy endpoint has already
 been row equilibrated; ``dtau=1e6`` reaches the Newton regime on the structural
@@ -234,7 +238,9 @@ If ordinary parameter continuation exhausts its minimum step, the driver can
 form a matrix-free branch tangent and invoke SOLVAX's bordered
 pseudo-arclength corrector.  Its block-elimination preconditioner reuses the
 same Fourier-band factors and an explicit scalar Schur complement; no
-production-scale dense high-order Jacobian is formed.  A compact report
+production-scale dense high-order Jacobian is formed.  Tangents and predictors
+are dynamic arguments to one compiled bordered solve, so branch steps do not
+create fresh tangent-capturing JAX callables.  A compact report
 retains accepted/rejected stages, nonlinear and linear work, residual
 evaluations, arclength work, minimum Jacobian margin, factor time, and wall
 time.  Failure to reach

@@ -246,6 +246,16 @@ def _low_inverse(rhs: jax.Array, runtime: StrongRootRuntime) -> jax.Array:
     )
 
 
+def _normalized_low_residual_norm(
+    residual: jax.Array,
+    runtime: StrongRootRuntime,
+) -> jax.Array:
+    """Return the low-endpoint RMS before numerical row equilibration."""
+
+    unscaled = jnp.asarray(residual) / jnp.asarray(runtime.equation_scale)
+    return jnp.linalg.norm(unscaled) / np.sqrt(float(runtime.layout.size))
+
+
 def _ptc_config(config: PolishConfig, *, residual_scale: float) -> Any:
     _, PseudoTransientConfig, _, _, _ = _solvax_continuation_api()
     return PseudoTransientConfig(
@@ -359,34 +369,53 @@ def _bordered_preconditioner(
 ):
     """Return a low-order block-elimination preconditioner for a bordered root."""
 
-    tangent_x, tangent_alpha = tangent
-
     def apply(state, rhs, dtau):
-        vector, alpha = state
-        rhs_x, rhs_alpha = rhs
-        parameter_direction = strong_root_residual(
-            vector, runtime, 1.0
-        ) - strong_root_residual(vector, runtime, 0.0)
-        inverse = (
-            (lambda rhs: _low_inverse(rhs, runtime))
-            if block_preconditioner is None
-            else lambda rhs: block_preconditioner.apply(rhs, alpha, dtau)
+        return _apply_bordered_preconditioner(
+            state,
+            rhs,
+            dtau,
+            tangent,
+            runtime,
+            block_preconditioner,
         )
-        q_rhs = inverse(rhs_x)
-        q_parameter = inverse(parameter_direction)
-        schur = tangent_alpha - jnp.vdot(tangent_x, q_parameter).real
-        tiny = jnp.sqrt(jnp.finfo(jnp.asarray(schur).dtype).eps)
-        safe_schur = jnp.where(
-            jnp.abs(schur) > tiny,
-            schur,
-            jnp.where(schur < 0.0, -tiny, tiny),
-        )
-        delta_alpha = (
-            rhs_alpha - jnp.vdot(tangent_x, q_rhs).real
-        ) / safe_schur
-        return q_rhs - q_parameter * delta_alpha, delta_alpha
 
     return apply
+
+
+def _apply_bordered_preconditioner(
+    state,
+    rhs,
+    dtau,
+    tangent,
+    runtime: StrongRootRuntime,
+    block_preconditioner: StrongModeBlockPreconditioner | None = None,
+):
+    """Apply bordered block elimination with dynamic branch data."""
+
+    vector, alpha = state
+    rhs_x, rhs_alpha = rhs
+    tangent_x, tangent_alpha = tangent
+    parameter_direction = strong_root_residual(
+        vector, runtime, 1.0
+    ) - strong_root_residual(vector, runtime, 0.0)
+    inverse = (
+        (lambda value: _low_inverse(value, runtime))
+        if block_preconditioner is None
+        else lambda value: block_preconditioner.apply(value, alpha, dtau)
+    )
+    q_rhs = inverse(rhs_x)
+    q_parameter = inverse(parameter_direction)
+    schur = tangent_alpha - jnp.vdot(tangent_x, q_parameter).real
+    tiny = jnp.sqrt(jnp.finfo(jnp.asarray(schur).dtype).eps)
+    safe_schur = jnp.where(
+        jnp.abs(schur) > tiny,
+        schur,
+        jnp.where(schur < 0.0, -tiny, tiny),
+    )
+    delta_alpha = (
+        rhs_alpha - jnp.vdot(tangent_x, q_rhs).real
+    ) / safe_schur
+    return q_rhs - q_parameter * delta_alpha, delta_alpha
 
 
 def _arclength_to_target(
@@ -411,29 +440,48 @@ def _arclength_to_target(
     )
     nonlinear = _ptc_config(config, residual_scale=residual_scale)
     total_nonlinear = total_linear = total_evaluations = 0
+    arclength_residual = lambda value, parameter: strong_root_residual(  # noqa: E731
+        value, runtime, parameter
+    )
+    arclength_admissible = lambda value, parameter: admissible(  # noqa: E731
+        value, parameter
+    )
+    parameterized_precondition = (  # noqa: E731
+        lambda state, rhs, dtau, branch_tangent, predictor: (
+            _apply_bordered_preconditioner(
+                state,
+                rhs,
+                dtau,
+                branch_tangent,
+                runtime,
+                block_preconditioner,
+            )
+        )
+    )
     for step in range(config.max_arclength_steps):
         predictor = (
             vector + config.arclength_step * tangent[0],
             jnp.asarray(alpha) + config.arclength_step * tangent[1],
         )
-        corrector_kwargs = (
-            {
+        if _supports_keyword(pseudo_arclength_corrector, "parameterized_precond"):
+            corrector_kwargs = {
+                "parameterized_precond": parameterized_precondition
+            }
+        elif _supports_keyword(pseudo_arclength_corrector, "precond"):
+            corrector_kwargs = {
                 "precond": _bordered_preconditioner(
                     runtime, tangent, block_preconditioner
                 )
             }
-            if _supports_keyword(pseudo_arclength_corrector, "precond")
-            else {}
-        )
+        else:
+            corrector_kwargs = {}
         corrected = pseudo_arclength_corrector(
-            lambda value, parameter: strong_root_residual(
-                value, runtime, parameter
-            ),
+            arclength_residual,
             predictor,
             tangent=tangent,
             predictor=predictor,
             config=nonlinear,
-            admissible=lambda value, parameter: admissible(value, parameter),
+            admissible=arclength_admissible,
             **corrector_kwargs,
         )
         total_nonlinear += int(corrected.steps)
@@ -554,21 +602,37 @@ def polish_strong_root(
     )
     nonlinear = _ptc_config(config, residual_scale=residual_scale)
     precondition = lambda state, rhs, dtau: _low_inverse(rhs, runtime)  # noqa: E731
-    endpoint = pseudo_transient_continuation(
-        lambda vector: strong_root_residual(vector, runtime, 0.0),
-        zero,
-        precond=precondition,
-        admissible=lambda vector: admissible(vector, 0.0),
-        config=nonlinear,
-    )
-    nonlinear_iterations = int(endpoint.steps)
-    linear_iterations = int(endpoint.linear_iterations)
-    residual_evaluations = _residual_evaluations(endpoint)
+    # The low homotopy endpoint subtracts the stored legacy defect, so zero is
+    # its mathematical root.  Roundoff from restrict/project/prolong may leave
+    # a tiny row-equilibrated remainder.  Check that remainder before row
+    # scaling and avoid asking PTC to reduce it below floating-point noise.
+    # A genuinely inconsistent endpoint still takes the globalized solve.
+    endpoint_residual = strong_root_residual(zero, runtime, 0.0)
+    endpoint_solved = float(
+        _normalized_low_residual_norm(endpoint_residual, runtime)
+    ) <= config.tolerance
+    if endpoint_solved:
+        vector = zero
+        nonlinear_iterations = 0
+        linear_iterations = 0
+        residual_evaluations = 1
+        converged = True
+    else:
+        endpoint = pseudo_transient_continuation(
+            lambda vector: strong_root_residual(vector, runtime, 0.0),
+            zero,
+            precond=precondition,
+            admissible=lambda vector: admissible(vector, 0.0),
+            config=nonlinear,
+        )
+        vector = endpoint.x
+        nonlinear_iterations = int(endpoint.steps)
+        linear_iterations = int(endpoint.linear_iterations)
+        residual_evaluations = 1 + _residual_evaluations(endpoint)
+        converged = bool(endpoint.converged) and bool(endpoint.linear_converged)
     steps: tuple[Any, ...] = ()
     arclength_steps = 0
-    vector = endpoint.x
     alpha = 0.0
-    converged = bool(endpoint.converged) and bool(endpoint.linear_converged)
     reason = "alpha-zero-failed"
     if converged:
         accepted_states: list[tuple[jax.Array, float]] = [(vector, 0.0)]

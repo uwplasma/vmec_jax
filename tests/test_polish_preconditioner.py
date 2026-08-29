@@ -39,6 +39,7 @@ from vmex.core.polish_driver import (
     _build_mode_block_preconditioner,
     _continuation_precondition,
     _low_inverse,
+    _normalized_low_residual_norm,
     _ptc_config,
     _residual_evaluations,
     _supports_keyword,
@@ -111,10 +112,14 @@ def test_arclength_crossing_runs_target_correction_and_counts_work(monkeypatch):
         predictor,
         config,
         admissible,
-        precond,
+        parameterized_precond,
     ):
-        del residual, initial, tangent, config, precond
+        del residual, initial, config
         assert bool(admissible(*predictor))
+        np.testing.assert_array_equal(
+            parameterized_precond(predictor, predictor, 1.0, tangent, predictor)[0],
+            predictor[0],
+        )
         return SimpleNamespace(
             x=predictor,
             steps=2,
@@ -149,8 +154,8 @@ def test_arclength_crossing_runs_target_correction_and_counts_work(monkeypatch):
         lambda *args, **kwargs: (jnp.zeros_like(zero), jnp.asarray(1.0)),
     )
     monkeypatch.setattr(
-        "vmex.core.polish_driver._bordered_preconditioner",
-        lambda *args, **kwargs: lambda state, rhs, dtau: rhs,
+        "vmex.core.polish_driver._apply_bordered_preconditioner",
+        lambda state, rhs, dtau, tangent, runtime, block: rhs,
     )
     monkeypatch.setattr(
         "vmex.core.polish_driver._low_inverse", lambda rhs, runtime: rhs
@@ -813,6 +818,29 @@ def test_polish_ptc_stopping_is_invariant_to_positive_residual_scaling():
     assert config.rtol == tolerance
     assert config.atol == pytest.approx(tolerance * 3.0e-4)
     assert rescaled.atol == pytest.approx(7.0 * config.atol)
+
+
+def test_low_endpoint_check_ignores_numerical_row_equilibration():
+    residual = jnp.asarray([2.0e-9, -6.0e-9])
+    runtime = SimpleNamespace(
+        equation_scale=jnp.asarray([2.0, 3.0]),
+        layout=SimpleNamespace(size=2),
+    )
+    rescaled_runtime = SimpleNamespace(
+        equation_scale=7.0 * runtime.equation_scale,
+        layout=runtime.layout,
+    )
+    expected = jnp.linalg.norm(residual / runtime.equation_scale) / jnp.sqrt(2.0)
+    np.testing.assert_allclose(
+        _normalized_low_residual_norm(residual, runtime),
+        expected,
+        rtol=2.0e-13,
+    )
+    np.testing.assert_allclose(
+        _normalized_low_residual_norm(7.0 * residual, rescaled_runtime),
+        expected,
+        rtol=2.0e-13,
+    )
 
 
 def test_public_solver_rejects_unknown_polish_mode_before_solving():
