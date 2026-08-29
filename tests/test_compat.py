@@ -142,6 +142,21 @@ def test_cache_machine_fingerprint_shape_and_stability():
     assert fp == _compat._cache_machine_fingerprint()
 
 
+def test_cache_machine_fingerprint_changes_with_jaxlib(monkeypatch):
+    real_version = _compat.importlib_metadata.version
+    selected = {"jax": "0.9.2", "jaxlib": "0.9.2"}
+
+    def version(name):
+        return selected.get(name, real_version(name))
+
+    monkeypatch.setattr(_compat.importlib_metadata, "version", version)
+    old = _compat._cache_machine_fingerprint()
+    selected["jax"] = "0.10.1"
+    selected["jaxlib"] = "0.10.1"
+    new = _compat._cache_machine_fingerprint()
+    assert old != new
+
+
 class _FakeConfig:
     def __init__(self, fail_keys=()):
         self.updates = {}

@@ -81,5 +81,9 @@ vmex --doctor
 ```
 
 prints the JAX backend, visible devices, the active default device, and
-VMEX's forward/implicit placement policies. Per-deck CPU-vs-GPU timings and
-the decision sweep for a new machine are in {doc}`/reference/performance`.
+VMEX's forward/implicit placement policies. It also executes a small float64
+JIT calculation on the selected JAX device; on WSL2 it reports the NVIDIA GPU
+and Windows driver visible through `nvidia-smi`. See {doc}`/installation` for
+the JAX 0.9.2 PJRT/cache and two-component WSL driver-version fixes. Per-deck
+CPU-vs-GPU timings and the decision sweep for a new machine are in
+{doc}`/reference/performance`.

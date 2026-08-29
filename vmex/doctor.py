@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import platform
+import shutil
 import site
 import subprocess
 import sys
+from time import perf_counter
 from importlib import metadata
 
 from packaging.version import InvalidVersion, Version
@@ -43,9 +45,12 @@ class DoctorReport:
     user_site_on_path: bool
     pip_report: str
     versions: dict[str, str]
+    wsl2: bool
+    nvidia_smi: str | None
     jax_backend: str | None
     jax_default_device: str | None
     jax_devices: tuple[str, ...]
+    jax_probe: str | None
     warnings: tuple[str, ...]
 
 
@@ -110,15 +115,66 @@ def _user_site() -> str | None:
         return None
 
 
-def _jax_info() -> tuple[str | None, tuple[str, ...], str | None]:
+def _is_wsl2() -> bool:
+    """Return whether this process is running under Windows Subsystem for Linux."""
+
+    marker = f"{platform.release()} {platform.version()}".lower()
+    return "microsoft" in marker or bool(os.environ.get("WSL_INTEROP"))
+
+
+def _nvidia_smi() -> tuple[str | None, str | None]:
+    """Return GPU/driver rows from the Windows-provided WSL NVIDIA utility."""
+
+    executable = shutil.which("nvidia-smi")
+    if executable is None and os.path.isfile("/usr/lib/wsl/lib/nvidia-smi"):
+        executable = "/usr/lib/wsl/lib/nvidia-smi"
+    if executable is None:
+        return None, "nvidia-smi was not found (also checked /usr/lib/wsl/lib)."
+    try:
+        proc = subprocess.run(
+            [
+                executable,
+                "--query-gpu=name,driver_version",
+                "--format=csv,noheader",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:  # pragma: no cover - host utility failure.
+        return None, f"nvidia-smi could not run: {exc}"
+    output = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not output:
+        detail = (proc.stderr or output or f"exit code {proc.returncode}").strip()
+        return None, f"nvidia-smi failed: {detail}"
+    return "; ".join(line.strip() for line in output.splitlines() if line.strip()), None
+
+
+def _jax_info() -> tuple[str | None, tuple[str, ...], str | None, str | None]:
     try:
         import jax
+        import jax.numpy as jnp
 
+        started = perf_counter()
         backend = str(jax.default_backend())
-        devices = tuple(str(device) for device in jax.devices())
-        return backend, devices, None
+        live_devices = tuple(jax.devices())
+        devices = tuple(str(device) for device in live_devices)
+        if not live_devices:
+            raise RuntimeError("JAX returned no devices")
+        values = jax.device_put(jnp.arange(4, dtype=jnp.float64), live_devices[0])
+        result = jax.jit(lambda value: jnp.vdot(value, value))(values)
+        result.block_until_ready()
+        observed = float(jax.device_get(result))
+        if abs(observed - 14.0) > 1.0e-12:
+            raise RuntimeError(f"JIT device probe returned {observed}, expected 14.0")
+        result_device = getattr(result, "device", live_devices[0])
+        if callable(result_device):  # JAX releases before Array.device became a property.
+            result_device = result_device()
+        probe = f"passed on {result_device} ({perf_counter() - started:.3f} s)"
+        return backend, devices, probe, None
     except Exception as exc:
-        return None, (), str(exc)
+        return None, (), None, str(exc)
 
 
 def _jax_default_device() -> str | None:
@@ -139,7 +195,9 @@ def collect_report() -> DoctorReport:
     in_virtualenv = sys.prefix != sys.base_prefix
     conda_prefix = os.environ.get("CONDA_PREFIX")
     user_site_on_path = bool(user_site and user_site in sys.path)
-    backend, devices, jax_error = _jax_info()
+    wsl2 = _is_wsl2()
+    nvidia_smi, nvidia_error = _nvidia_smi() if wsl2 else (None, None)
+    backend, devices, jax_probe, jax_error = _jax_info()
 
     warnings: list[str] = []
     if versions["setuptools"] == "not installed":
@@ -160,6 +218,20 @@ def collect_report() -> DoctorReport:
         warnings.append("pip appears to come from a different prefix than the active Python environment.")
     if jax_error is not None:
         warnings.append(f"JAX import/backend check failed: {jax_error}")
+    if wsl2 and backend in ("gpu", "cuda"):
+        if not _version_at_least(versions["jaxlib"], "0.10.1"):
+            warnings.append(
+                f"WSL2 GPU is using jaxlib {versions['jaxlib']}. Upgrade JAX and "
+                "jaxlib together to 0.10.1 or newer: this is the first verified "
+                "release containing the upstream fixes for the spurious PJRT "
+                "cache-hit warning and two-component Windows NVIDIA driver versions."
+            )
+        if nvidia_error is not None:
+            warnings.append(nvidia_error)
+    elif wsl2 and nvidia_smi is not None and backend not in (None, "gpu", "cuda"):
+        warnings.append(
+            f"nvidia-smi sees {nvidia_smi}, but JAX selected the {backend} backend."
+        )
 
     return DoctorReport(
         python=sys.version.replace("\n", " "),
@@ -173,9 +245,12 @@ def collect_report() -> DoctorReport:
         user_site_on_path=user_site_on_path,
         pip_report=pip_text,
         versions=versions,
+        wsl2=wsl2,
+        nvidia_smi=nvidia_smi,
         jax_backend=backend,
         jax_default_device=_jax_default_device(),
         jax_devices=devices,
+        jax_probe=jax_probe,
         warnings=tuple(warnings),
     )
 
@@ -190,6 +265,7 @@ def format_report(report: DoctorReport) -> str:
         f"Prefix:      {report.prefix}",
         f"Base prefix: {report.base_prefix}",
         f"Platform:    {report.platform}",
+        f"WSL2:        {'yes' if report.wsl2 else 'no'}",
         f"Virtualenv:  {'yes' if report.in_virtualenv else 'no'}",
     ]
     if report.conda_prefix:
@@ -211,6 +287,7 @@ def format_report(report: DoctorReport) -> str:
             "",
             f"JAX backend: {report.jax_backend or 'unavailable'}",
             f"JAX default device: {report.jax_default_device or 'automatic'}",
+            f"JAX JIT probe: {report.jax_probe or 'failed or unavailable'}",
             "JAX devices:",
         ]
     )
@@ -218,6 +295,8 @@ def format_report(report: DoctorReport) -> str:
         lines.extend(f"  - {device}" for device in report.jax_devices)
     else:
         lines.append("  - none detected")
+    if report.wsl2:
+        lines.append(f"WSL2 NVIDIA: {report.nvidia_smi or 'unavailable'}")
     lines.extend(
         [
             "VMEX forward default:  automatic work/mode-based CPU/GPU policy",
