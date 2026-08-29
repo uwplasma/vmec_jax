@@ -111,10 +111,17 @@ def main() -> None:
         evaluation = problem.compile_residual_and_jacobian(progress=False)
     compile_seconds = time.perf_counter() - started
 
+    # FunctionProblem intentionally memoizes an identical decision vector, so
+    # repeating x0 would measure a key lookup rather than the warm equilibrium
+    # plus implicit-derivative path used by an optimizer.  Use deterministic,
+    # distinct, in-bounds steps after compilation instead.
+    direction = np.linspace(-0.5, 0.5, problem.x0.size)
+    direction /= np.linalg.norm(direction)
     warm = []
-    for _ in range(args.repeats):
+    for repeat in range(args.repeats):
+        point = problem.x0 + (repeat + 1) * 1.0e-5 * problem.scales * direction
         started = time.perf_counter()
-        problem.value_and_grad(problem.x0)
+        problem.value_and_grad(point)
         warm.append(time.perf_counter() - started)
 
     report = {
@@ -127,6 +134,9 @@ def main() -> None:
         "persistent_compilation_cache": False,
         "lane": args.lane,
         "max_mode": args.max_mode,
+        "repeats": args.repeats,
+        "warm_distinct_points": True,
+        "warm_relative_step": 1.0e-5,
         "dofs": int(problem.x0.size),
         "residual_rows": (
             None if evaluation.residual is None else int(evaluation.residual.size)
