@@ -126,6 +126,7 @@ import dataclasses
 import functools
 import os
 import sys
+import time
 import types
 import weakref
 from dataclasses import dataclass
@@ -1282,6 +1283,17 @@ _LAST_STATUS_ERROR: weakref.WeakKeyDictionary[ImplicitConfig, Exception] = \
 _LAST_REFINED: weakref.WeakKeyDictionary[
     ImplicitConfig, tuple[bytes, SpectralState]] = weakref.WeakKeyDictionary()
 
+# Private, inactive-by-default instrumentation used by performance diagnostics.
+# The hook executes only in host-eager solve/refinement code and must never be
+# used to alter numerical behavior.
+_DIAGNOSTIC_HOOK: Callable[[str, dict[str, Any]], None] | None = None
+
+
+def _emit_diagnostic(event: str, **payload: Any) -> None:
+    hook = _DIAGNOSTIC_HOOK
+    if hook is not None:
+        hook(event, payload)
+
 
 def _params_key(params: ImplicitParams) -> bytes:
     return b"".join(np.asarray(leaf, dtype=np.float64).tobytes()
@@ -1293,7 +1305,9 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
     hit = _LAST_SOLVE.get(cfg)
     if hit is not None and hit[0] == key:
         _PERTURB_SEED.pop(cfg, None)  # already solved: drop the stale seed
+        _emit_diagnostic("host_solve_cache_hit")
         return hit[1]
+    _emit_diagnostic("host_solve_cache_miss")
     inp2 = input_with_params(cfg.inp, params)
     hot = _HOT_CACHE.get(cfg) if cfg.hot_restart else None
     perturb = _PERTURB_SEED.pop(cfg, None) if cfg.hot_restart else None
@@ -1321,10 +1335,32 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
     # stake — every rung converges to the same fixed point).
     attempts = [s for s in (perturb, hot) if s is not None] + [None]
     for k, init in enumerate(attempts):
+        attempt_started = time.perf_counter() if _DIAGNOSTIC_HOOK is not None else 0.0
         try:
             result = run(init)
+            _emit_diagnostic(
+                "host_solve_attempt",
+                attempt=k,
+                seed=("cold" if init is None else
+                      "perturbation" if init is perturb else "hot"),
+                succeeded=True,
+                seconds=(time.perf_counter() - attempt_started
+                         if attempt_started else 0.0),
+                iterations=int(result.iterations),
+                converged=bool(result.converged),
+            )
             break
-        except VmecError:
+        except VmecError as exc:
+            _emit_diagnostic(
+                "host_solve_attempt",
+                attempt=k,
+                seed=("cold" if init is None else
+                      "perturbation" if init is perturb else "hot"),
+                succeeded=False,
+                seconds=(time.perf_counter() - attempt_started
+                         if attempt_started else 0.0),
+                error_type=type(exc).__name__,
+            )
             if k == len(attempts) - 1:
                 raise
     if cfg.hot_restart and bool(result.converged):
@@ -1362,8 +1398,11 @@ def _refine_fixed_point(cfg: ImplicitConfig, params: ImplicitParams,
     key = _params_key(params)
     hit = _LAST_REFINED.get(cfg)
     if hit is None or hit[0] != key:
+        _emit_diagnostic("refine_cache_miss")
         hit = (key, _refined_state(cfg, params, state, dof_mask))
         _LAST_REFINED[cfg] = hit
+    else:
+        _emit_diagnostic("refine_cache_hit")
     return hit[1]
 
 
@@ -1388,8 +1427,15 @@ def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
     non-finite iterate — leaves ``state`` untouched: the anchor is an
     accuracy gain, never a precondition for returning a gradient.
     """
+    started = time.perf_counter() if _DIAGNOSTIC_HOOK is not None else 0.0
     tol = float(cfg.refine_tol)
+    _emit_diagnostic("refine_start", tolerance=tol)
     if not np.isfinite(tol) or tol <= 0.0:
+        _emit_diagnostic(
+            "refine_complete", tolerance=tol, base_residual=None,
+            best_residual=None, steps=0, accepted=False, reason="disabled",
+            seconds=(time.perf_counter() - started if started else 0.0),
+        )
         return state
     P = _dof_projector(cfg, dof_mask)
     F = residual_fn(cfg, state, dof_mask)
@@ -1397,20 +1443,47 @@ def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
     z, fz = z0, F(z0, params)
     base = float(_tree_norm(fz))
     if not np.isfinite(base) or base <= tol:
+        _emit_diagnostic(
+            "refine_complete", tolerance=tol, base_residual=base,
+            best_residual=base, steps=0, accepted=False,
+            reason=("nonfinite_base" if not np.isfinite(base)
+                    else "already_converged"),
+            seconds=(time.perf_counter() - started if started else 0.0),
+        )
         return state
     best_z, best = z0, base
-    for _ in range(_REFINE_MAX_STEPS):
+    current = base
+    steps = 0
+    reason = "step_budget"
+    for step in range(_REFINE_MAX_STEPS):
+        step_started = time.perf_counter() if _DIAGNOSTIC_HOOK is not None else 0.0
+        input_residual = current
         _, jvp = jax.linearize(lambda t: F(t, params), z)
         # Best-effort by contract: GCROT, not the plain restarted GMRES of
         # _adjoint_solve, because a truncated cycle stagnates on exactly the
         # small eigendirection this refinement exists to walk down.
-        delta, _ = _adjoint_solve_gcrot(
+        delta, solve_report = _adjoint_solve_gcrot(
             jvp, fz, cfg, rtol=_REFINE_FORCING, enforce=False,
             max_restarts=_REFINE_MAX_RESTARTS)
         z = jax.tree.map(lambda a, b: a - b, z, delta)
         fz = F(z, params)
         residual = float(_tree_norm(fz))
+        steps = step + 1
+        _emit_diagnostic(
+            "refine_step",
+            step=steps,
+            input_residual=input_residual,
+            output_residual=residual,
+            krylov_iterations=int(np.max(np.asarray(solve_report.iterations))),
+            krylov_converged=bool(np.all(np.asarray(solve_report.converged))),
+            krylov_residual=float(np.max(np.asarray(
+                solve_report.residual_norm))),
+            seconds=(time.perf_counter() - step_started
+                     if step_started else 0.0),
+        )
+        current = residual
         if not np.isfinite(residual):
+            reason = "nonfinite_residual"
             break
         # Newton is not monotone here (one deck rises 1.3e-07 -> 4.4e-07
         # before falling to 3.9e-13), so iterate from the latest point but
@@ -1418,8 +1491,15 @@ def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
         if residual < best:
             best_z, best = z, residual
         if best <= tol:
+            reason = "converged"
             break
-    if best >= base:
+    accepted = best < base
+    _emit_diagnostic(
+        "refine_complete", tolerance=tol, base_residual=base,
+        best_residual=best, steps=steps, accepted=accepted, reason=reason,
+        seconds=(time.perf_counter() - started if started else 0.0),
+    )
+    if not accepted:
         return state
     correction = P(jax.tree.map(lambda a, b: a - b, best_z, z0))
     return jax.tree.map(jnp.add, state, correction)
@@ -1462,6 +1542,8 @@ def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
 
 
 def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
+    callback_started = time.perf_counter() if _DIAGNOSTIC_HOOK is not None else 0.0
+    _emit_diagnostic("host_callback_start")
     _HOST_ERROR.clear()  # fresh callback: drop any stale relayed error
     # The callback payload arrives committed to the runtime's LOCAL CPU
     # regardless of ``cfg.device``, and ``jnp.asarray`` preserves an existing
@@ -1478,6 +1560,12 @@ def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
         # — pure_callback would otherwise bury it in a multi-KB traceback
         # dump with the typed class lost.
         _HOST_ERROR.append(exc)
+        _emit_diagnostic(
+            "host_callback_complete", succeeded=False,
+            error_type=type(exc).__name__,
+            seconds=(time.perf_counter() - callback_started
+                     if callback_started else 0.0),
+        )
         raise RuntimeError(
             f"host equilibrium solve failed with {type(exc).__name__} "
             "(re-raised typed at the pure_callback call site)") from None
@@ -1490,6 +1578,7 @@ def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
     # must be filled by a concrete call first.  Prime the structural boundary
     # tables for the same reason: letting the first residual trace populate
     # their ordinary Python cache would leak tracers into later calls.
+    mask_started = time.perf_counter() if _DIAGNOSTIC_HOOK is not None else 0.0
     _template_runtime(cfg)
     _boundary_pack_tables(cfg)
     # Structural dof mask, shared across parameter values and config objects
@@ -1501,12 +1590,24 @@ def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
     if mask is None:
         mask = as_np(_fixed_boundary_dof_mask(cfg))
         _MASK_CACHE[cache_key] = mask
+        mask_cache_hit = False
+    else:
+        mask_cache_hit = True
+    _emit_diagnostic(
+        "mask_ready", cache_hit=mask_cache_hit,
+        seconds=(time.perf_counter() - mask_started if mask_started else 0.0),
+    )
     # Anchor the state at the root of the residual the adjoint linearizes, so
     # every consumer — value, cotangent and linearization — reads the same
     # point (see _refined_state).
     state = _refine_fixed_point(
         cfg, params, result.state,
         _device_pin(cfg, jax.tree.map(jnp.asarray, mask)))
+    _emit_diagnostic(
+        "host_callback_complete", succeeded=True,
+        seconds=(time.perf_counter() - callback_started
+                 if callback_started else 0.0),
+    )
     return as_np(state), mask
 
 

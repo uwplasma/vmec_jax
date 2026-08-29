@@ -25,6 +25,7 @@ import os
 import pickle
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -1200,6 +1201,61 @@ def test_lasym_3d_state_is_anchored_at_the_frozen_root(lasym_3d):
           f"|x| = {_tnorm(host):.2e})")
     assert r_host > 1.0e-8, "the host stopping point already sits at the root"
     assert r_anchored <= cfg.refine_tol
+
+
+def test_refinement_diagnostic_events_preserve_numerics(monkeypatch):
+    """The private Phase-1 hook reports refinement work without changing it."""
+    events = []
+    cfg = SimpleNamespace(refine_tol=1.0e-10)
+    state = jnp.asarray([1.0])
+
+    monkeypatch.setattr(
+        im, "_DIAGNOSTIC_HOOK",
+        lambda event, payload: events.append((event, payload)),
+    )
+    monkeypatch.setattr(im, "_dof_projector", lambda *_: lambda value: value)
+    monkeypatch.setattr(im, "residual_fn", lambda *_: lambda z, params: z)
+
+    report = SimpleNamespace(
+        iterations=jnp.asarray(1),
+        converged=jnp.asarray(True),
+        residual_norm=jnp.asarray(0.0),
+    )
+    monkeypatch.setattr(
+        im, "_adjoint_solve_gcrot",
+        lambda operator, rhs, config, **kwargs: (rhs, report),
+    )
+
+    refined = im._refined_state(cfg, jnp.asarray([0.0]), state, state)
+
+    np.testing.assert_array_equal(refined, np.zeros(1))
+    assert [event for event, _ in events] == [
+        "refine_start", "refine_step", "refine_complete"
+    ]
+    assert events[1][1]["input_residual"] == 1.0
+    assert events[1][1]["output_residual"] == 0.0
+    assert events[2][1]["accepted"] is True
+    assert events[2][1]["reason"] == "converged"
+
+
+def test_host_solve_diagnostic_reports_exact_cache_hit(monkeypatch):
+    """The private hook distinguishes a memo hit from an actual solve."""
+    events = []
+
+    class Config:
+        pass
+
+    cfg = Config()
+    params = jnp.asarray([1.0])
+    result = object()
+    im._LAST_SOLVE[cfg] = (im._params_key(params), result)
+    monkeypatch.setattr(
+        im, "_DIAGNOSTIC_HOOK",
+        lambda event, payload: events.append((event, payload)),
+    )
+
+    assert im._host_solve(cfg, params) is result
+    assert events == [("host_solve_cache_hit", {})]
 
 
 @pytest.mark.full
