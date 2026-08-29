@@ -227,3 +227,30 @@ and blends the low and strong blocks with ``alpha``.  It never assembles a
 global Jacobian.  The variant remains opt-in because the hard coarse Solovev
 stress case did not reduce total Krylov work; future p/h hierarchy benchmarks,
 not API preference, decide whether it can become the default.
+
+Implicit derivatives of the polished root
+-------------------------------------------
+
+For a certified alpha=1 correction ``c`` and high-order native data ``q``,
+the local equation is
+
+.. math::
+
+   F(c, q) = 0, \qquad F_c\,\dot c = -F_q\,\dot q.
+
+:mod:`vmex.core.polish_implicit` evaluates both Jacobian actions with JAX
+JVPs/VJPs and solves them with SOLVAX GMRES.  The primal and transpose right
+preconditioners reuse the same factored low-order operator.  Because the low
+endpoint is row-scaled as ``D A``, the transpose path explicitly applies
+``D^-1 A^-T``; applying the forward scaling order in reverse would produce a
+plausible but incorrect gradient.
+
+The differentiable wrapper treats continuation as a black-box root solve.
+Its reverse pass costs one transposed Krylov solve and returns a typed failure
+or NaN poison if the true residual misses tolerance.  Forward-mode users call
+the explicit tangent function.  Dot-product tests cover the complete chain:
+native profiles and geometry, strong residual, reduced coordinate packing,
+high/low transfer, and the scaled block inverse.  The runtime's collocation
+chart and positive normalization are frozen locally; at an exact root their
+parameter derivatives multiply a zero residual and do not affect the IFT
+derivative.

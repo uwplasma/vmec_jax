@@ -33,11 +33,22 @@ High-order correction transfer and preconditioner
 .. automodule:: vmex.core.polish_driver
    :members:
 
+.. automodule:: vmex.core.polish_implicit
+   :members:
+
 The single-grid :func:`vmex.solve` entry point accepts ``polish=False``
 (unchanged behavior), ``polish=True`` (required correction), or
 ``polish="auto"`` (skip an already-certified state).  Polished data is attached
 to the result without replacing its legacy sampled state or wout-compatible
 arrays.
+
+After the alpha=1 correction has passed the independent certificate,
+:func:`vmex.implicit_polished_state` supplies an optimization-facing reverse
+pass.  It differentiates the converged root with one matrix-free transposed
+Krylov solve, rather than replaying continuation.  Explicit
+:func:`vmex.strong_root_tangent` and :func:`vmex.strong_root_adjoint` calls
+return true-residual convergence reports for forward and reverse sensitivity
+work.
 
 Spectral representation and physics kernels
 -------------------------------------------

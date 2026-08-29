@@ -188,6 +188,16 @@ class StrongForceCertificationError(VmecNumericalError):
 
 
 @dataclass
+class StrongForceLinearSolveError(VmecNumericalError):
+    """A polished-root tangent or adjoint Krylov solve did not converge."""
+
+    solve_kind: str = "tangent"
+    iterations: int = 0
+    residual_norm: float = 0.0
+    tolerance: float = 0.0
+
+
+@dataclass
 class MgridNotFoundError(VmecError):
     """A free-boundary run referenced an mgrid file that cannot be read.
 

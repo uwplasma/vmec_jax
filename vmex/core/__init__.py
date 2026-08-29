@@ -10,6 +10,7 @@ Module map (each header docstring names its VMEC2000 counterpart):
 - ``strong_force``    continuous reconstruction + independent JxB-grad(p) oracle
 - ``polish``          high/low transfer + stored raw-block polish preconditioner
 - ``polish_driver``   PTC/continuation strong-root correction and reports
+- ``polish_implicit`` matrix-free IFT tangents/adjoints of a polished root
 - ``fourier``         Resolution, ModeTable, trig tables (fixaray.f)
 - ``transforms``      totzsps/totzspa/tomnsps/tomnspa as batched matmuls
 - ``geometry``        real-space R/Z/lambda, half-mesh jacobian (jacobian.f)
