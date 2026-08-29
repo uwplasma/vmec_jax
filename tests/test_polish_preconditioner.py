@@ -32,6 +32,7 @@ from vmex.core.polish import (
     preconditioner_refresh_decision,
     _strong_residual_unscaled,
     _streaming_ruiz_scales,
+    strong_collocation_residual,
     strong_projection_diagnostics,
     strong_physical_residual,
     strong_root_rank,
@@ -651,6 +652,13 @@ def test_physical_chart_eliminates_only_the_linear_coordinate_gauge(
 
     with pytest.raises(ValueError, match="relative_tolerance"):
         make_strong_physical_chart(runtime, relative_tolerance=0.0)
+    with pytest.raises(ValueError, match="radial_quadrature_order"):
+        make_strong_root_runtime(
+            runtime.native,
+            runtime.low_preconditioner,
+            runtime.transfer.zeros_low(),
+            radial_quadrature_order=1,
+        )
     with pytest.raises(ValueError, match="physical vector"):
         chart.lift(jnp.zeros((chart.size + 1,)))
     with pytest.raises(ValueError, match="full residual"):
@@ -684,6 +692,7 @@ def test_structured_chart_uses_only_physical_layout_channels(small_strong_root):
     assert rank == chart.size
 
     diagnostics = strong_projection_diagnostics(zero, runtime, chart)
+    collocation = strong_collocation_residual(zero, runtime, chart)
     values = np.asarray(tuple(diagnostics))
     assert np.all(np.isfinite(values))
     assert diagnostics.sampled_rms > 0.0
@@ -694,6 +703,16 @@ def test_structured_chart_uses_only_physical_layout_channels(small_strong_root):
     assert diagnostics.radial_unresolved_fraction >= 0.0
     assert diagnostics.helical_unresolved_fraction >= 0.0
     assert diagnostics.equation_discarded_fraction < 1.0e-12
+    point_count = (
+        runtime.radial_nodes.size * runtime.theta.size * runtime.zeta.size
+    )
+    assert collocation.shape == (2 * point_count,)
+    np.testing.assert_allclose(
+        jnp.linalg.norm(collocation) / np.sqrt(float(point_count)),
+        diagnostics.sampled_rms,
+        rtol=2.0e-13,
+        atol=2.0e-13,
+    )
 
 
 def test_structured_chart_mode_blocks_recover_local_jacobian(small_strong_root):

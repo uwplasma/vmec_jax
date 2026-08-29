@@ -1123,6 +1123,47 @@ def strong_projection_diagnostics(
 
 
 @jax.jit
+def strong_collocation_residual(
+    vector: Array,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
+) -> Array:
+    """Return both normalized physical channels on every solve-grid point.
+
+    This rectangular residual is a diagnostic test space for detecting and
+    preventing spectral blocking in the square projected root. It uses the
+    same normalization and volume factor as the strong equations, but performs
+    no angular or radial projection.
+    """
+
+    from .strong_force import evaluate_strong_force
+
+    full = chart.lift(vector)
+    correction = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * full
+    )
+    state = apply_high_order_correction(runtime.native, correction)
+    rr, tt, zz = jnp.meshgrid(
+        jnp.asarray(runtime.radial_nodes),
+        jnp.asarray(runtime.theta),
+        jnp.asarray(runtime.zeta),
+        indexing="ij",
+    )
+    samples = evaluate_strong_force(state, rr, tt, zz)
+    factor = (
+        2.0
+        * jnp.abs(samples.sqrt_g)
+        / jnp.asarray(runtime.normalization_denominator)
+    )
+    return jnp.concatenate(
+        (
+            jnp.ravel(factor * samples.signed_radial_force_density),
+            jnp.ravel(factor * samples.signed_helical_force_density),
+        )
+    )
+
+
+@jax.jit
 def strong_root_residual(
     vector: Array,
     runtime: StrongRootRuntime,
@@ -1443,6 +1484,7 @@ def make_strong_root_runtime(
     balance_iterations: int = 4,
     orientation_eigenpairs: int = 0,
     balance_full_root: bool = True,
+    radial_quadrature_order: int | None = None,
 ) -> StrongRootRuntime:
     """Build distinct collocation/projection data and balance the strong residual."""
 
@@ -1452,6 +1494,8 @@ def make_strong_root_runtime(
         raise ValueError("balance_iterations must be positive")
     if orientation_eigenpairs < 0:
         raise ValueError("orientation_eigenpairs must be nonnegative")
+    if radial_quadrature_order is not None and radial_quadrature_order < 2:
+        raise ValueError("radial_quadrature_order must be at least 2")
     transfer = low_preconditioner.transfer
     layout = make_strong_root_layout(
         dof_mask,
@@ -1469,9 +1513,13 @@ def make_strong_root_runtime(
     # certificate retains its separate, higher-order shifted-node refinement.
     breakpoints = np.asarray(native.radial_basis.breakpoints, dtype=float)
     span_count = breakpoints.size - 1
-    radial_order = max(
-        3,
-        int(np.ceil(1.5 * native.radial_basis.size / span_count)),
+    radial_order = (
+        max(
+            3,
+            int(np.ceil(1.5 * native.radial_basis.size / span_count)),
+        )
+        if radial_quadrature_order is None
+        else int(radial_quadrature_order)
     )
     reference_nodes, reference_weights = np.polynomial.legendre.leggauss(
         radial_order
