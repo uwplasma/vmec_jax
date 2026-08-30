@@ -665,8 +665,6 @@ def solve_free_boundary_multigrid(
     """
     if not bool(inp.lfreeb):
         raise ValueError("solve_free_boundary_multigrid requires an LFREEB=T input")
-    if bool(inp.polish_force_balance):
-        raise ValueError("force-balance polishing currently requires fixed boundary")
 
     ns_arr = _vmec_ns_prefix(inp.ns_array if ns_array is None else ns_array)
     if ns_arr.size == 0:
@@ -952,3 +950,87 @@ def solve_free_boundary_multigrid(
     if stage_result is None:  # defensive; positive ns_arr guarantees a stage
         raise ValueError("ns_array has no executable stages")
     return stage_result.result
+
+
+def solve_file(
+    path,
+    *,
+    polish: bool | str | None = None,
+    polish_config: Any = None,
+    polish_tol: float | None = None,
+    polish_fail: str | None = None,
+    polish_degree: int | None = None,
+    write_wout: bool = True,
+    outdir=None,
+    **solve_kwargs,
+):
+    """Solve one input file the way the CLI does, honoring its directives.
+
+    ``VmecInput.from_file`` returns physics only; this entry point also reads
+    the VMEX execution directives (``!@VMEX POLISH = AUTO`` and friends, or a
+    ``_vmex`` JSON section) and applies the documented precedence: an explicit
+    Python keyword overrides the file, and ``None`` means use the file.
+
+    ``polish_fail`` selects what a failed polish does: ``"error"`` raises
+    (driver default), ``"fallback"`` returns the unpolished state, ``"warn"``
+    does the same and emits a :class:`RuntimeWarning`.  An explicit
+    ``polish_config`` wins over the scalar overrides entirely.
+
+    ``write_wout=True`` writes ``wout_<case>.nc`` beside the input (or into
+    ``outdir``), sampled from the polished state when polishing succeeded —
+    the same output contract as ``vmex <input>``.  Free-boundary decks solve
+    through the free-boundary ladder and reject polish requests, matching the
+    fixed-boundary-only scope of the polishing lane.
+
+    Returns the final :class:`~vmex.core.solver.SolveResult`.
+    """
+    from pathlib import Path as _Path
+
+    from .run_options import (
+        polish_config_from_options, read_input_request, resolve_run_options,
+    )
+
+    request = read_input_request(path)
+    options, sources = resolve_run_options(
+        request.options, polish=polish, polish_tol=polish_tol,
+        polish_fail=polish_fail, polish_degree=polish_degree,
+    )
+    config = polish_config_from_options(options, polish_config)
+    inp = request.input
+
+    if bool(inp.lfreeb):
+        if options.polish is not False:
+            raise ValueError(
+                "force-balance polishing requires a fixed-boundary input; "
+                f"the polish request came from the {sources['polish']}"
+            )
+        result = solve_free_boundary_multigrid(inp, **solve_kwargs)
+    else:
+        if bool(solve_kwargs.get("verbose")) and options.polish is not False:
+            print(f"polish = {options.polish!r} (from {sources['polish']})")
+        result = solve_multigrid(
+            inp, polish_force_balance=options.polish,
+            polish_config=config, **solve_kwargs,
+        )
+        # "fallback"/"warn" mapped onto the driver's return_unpolished, so a
+        # failed polish arrives here as an unconverged report rather than an
+        # exception -- no second solve, the legacy state is the checkpoint.
+        if (options.polish_fail == "warn"
+                and result.polish_report is not None
+                and not bool(result.polish_report.converged)):
+            import warnings
+
+            warnings.warn(
+                "force-balance polishing failed "
+                f"({result.polish_report.termination_reason}); returning the "
+                "unpolished equilibrium", RuntimeWarning, stacklevel=2)
+
+    if write_wout:
+        from .cli import _write_wout_from_result, case_from_input
+
+        source = _Path(path)
+        directory = _Path(outdir) if outdir is not None else source.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        wout_path = directory / f"wout_{case_from_input(source)}.nc"
+        _write_wout_from_result(inp, source, result, wout_path)
+    return result

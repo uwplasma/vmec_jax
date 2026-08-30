@@ -42,7 +42,7 @@ tokamak, the `56.9 s` VMEX path includes JIT and polishing.
 Enable polishing in a VMEC input without breaking VMEC2000:
 
 ```fortran
-! VMEX: POLISH_FORCE_BALANCE = .TRUE.
+!@VMEX POLISH = AUTO
 &INDATA
   ...
 /
@@ -62,7 +62,10 @@ multigrid solves:
 ```python
 import vmex as vj
 
-inp = vj.VmecInput.from_file("input.my_case")
+result = vj.solve_file("input.my_case", polish="auto")  # honors !@VMEX lines
+print(result.polish_report.final_normalized_l2)
+
+inp = vj.VmecInput.from_file("input.my_case")           # physics only
 result = vj.solve_multigrid(inp, polish_force_balance=True)
 print(result.polish_report.initial_normalized_l2)
 print(result.polish_report.final_normalized_l2)

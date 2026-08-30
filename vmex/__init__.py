@@ -201,6 +201,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "PolishReport": (".core.polish_driver", "PolishReport"),
     "PolishResult": (".core.polish_driver", "PolishResult"),
     "PolishLinearConfig": (".core.polish_implicit", "PolishLinearConfig"),
+    "InputRequest": (".core.run_options", "InputRequest"),
+    "RunOptions": (".core.run_options", "RunOptions"),
+    "read_input_request": (".core.run_options", "read_input_request"),
+    "solve_file": (".core.multigrid", "solve_file"),
     "collocation_polish_adjoint": (
         ".core.polish_implicit", "collocation_polish_adjoint"),
     "collocation_polish_tangent": (

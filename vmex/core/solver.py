@@ -2119,15 +2119,21 @@ def _resolve_force_balance_polish(
     polish: bool | str | None,
     polish_force_balance: bool | str | None,
 ) -> bool | str:
-    """Resolve the input directive and the two Python API spellings."""
+    """Resolve the two Python API spellings.
 
+    Input-file directives are execution metadata and never live on
+    :class:`VmecInput`; the CLI and :func:`~vmex.core.multigrid.solve_file`
+    resolve them through :mod:`vmex.core.run_options` and pass the result in
+    through these keywords.  ``source`` stays in the signature so the polish
+    request can be validated against the input type by the caller.
+    """
+
+    del source
     if polish is not None and polish_force_balance is not None:
         raise ValueError("pass either polish or polish_force_balance, not both")
     requested = polish_force_balance if polish_force_balance is not None else polish
     if requested is None:
-        requested = (
-            source.polish_force_balance if isinstance(source, VmecInput) else False
-        )
+        requested = False
     if requested is not False and requested is not True and requested != "auto":
         raise ValueError("polish_force_balance must be False, True, or 'auto'")
     return requested
