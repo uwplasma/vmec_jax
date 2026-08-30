@@ -18,24 +18,25 @@ VMEC converges projected equations on a staggered radial mesh. A small
 `FSQR/FSQZ/FSQL` therefore does not guarantee a small continuum residual
 
 $$
-\mathbf F=\mathbf J\!\times\!\mathbf B-\nabla p,\qquad
-\epsilon_F=\frac{2|\mathbf F|}
-{|\mathbf J\!\times\!\mathbf B|+|\nabla p|+F_{\rm floor}}.
+\mathbf F = \mathbf J \times \mathbf B - \nabla p , \qquad
+\epsilon_F = \frac{2 |\mathbf F|}{|\mathbf J \times \mathbf B| + |\nabla p| + F_{\mathrm{floor}}} .
 $$
 
-VMEX can polish a converged fixed-boundary state. It lifts the VMEC solution to
-axis-regular cubic B-splines, keeps the boundary and profiles fixed, and solves
-both physical force channels on an overdetermined collocation grid with
-matrix-free SOLVAX Gauss–Newton steps. A result is accepted only when the
-independent volume-$L^2$ force error is below `1e-2`, radial refinement changes
-it by at most `1e-3`, and the signed Jacobian stays positive.
+VMEX can polish a converged fixed-boundary state: it lifts the solution to
+axis-regular cubic B-splines, keeps the boundary and profiles fixed, and
+drives both physical force channels to zero on an overdetermined collocation
+grid with matrix-free SOLVAX Gauss–Newton steps. A result is accepted only if
+an independent volume L² force error stays below `1e-2`, radial refinement
+moves it by at most `1e-3`, and the signed Jacobian stays positive.
 
-The comparison below uses the same independent oracle for every code. The top
-row is a finite-pressure tokamak; VMEX is the polished result. The bottom row is
-the finite-beta two-field-period QA case, with DESC resolved at
-`L=16, M=N=10`. Cold CPU times include each code's load, solve, and export path.
-VMEX takes `6.5 s` on the 3-D case versus `153.1 s` for DESC; on the small
-tokamak, the `56.9 s` VMEX path includes JIT and polishing.
+The comparison below uses the same independent oracle for every code. Top
+row: the bundled finite-pressure shaped tokamak
+(`input.shaped_tokamak_pressure_polished`); VMEX is the polished result.
+Bottom row: the finite-beta two-field-period QA case, with DESC at
+`L=16, M=N=10`. Cold CPU times include each code's load, solve, and export;
+VMEX solves the 3-D case in `6.5 s` versus `153.1 s` for DESC. The tokamak
+row's `56.9 s` is dominated by JIT compilation and the polishing step, and is
+the target of ongoing performance work.
 
 ![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 
@@ -155,21 +156,17 @@ d3Bdx = final_equilibrium.gradgradgradB_vjp(
     jnp.ones_like(gradgradgradB))
 ```
 
-All field components and spatial derivative axes above are Cartesian. Each VJP
-returns one entry per `problem.dof_names`, including selected boundary and
-current-profile variables. Use `set_points_flux([[s, theta, phi]])` instead to
-place interior points in VMEC flux coordinates; returned vectors and tensors
-remain Cartesian, and parameter VJPs hold those mapped Cartesian points fixed.
-The poloidal coordinate degenerates at `s=0`, but the physical field does not:
-VMEX applies the regular spectral axis limit, so `B` and its first three
-Cartesian spatial derivatives can be queried on the magnetic axis.
-`VmecExtender` covers points outside the plasma by adding the
-plasma-current contribution from `virtual_casing_jax` to a supplied coil or
-MGRID field. Virtual casing alone is not the total exterior field.
+Everything above is Cartesian, and each VJP returns one entry per
+`problem.dof_names`. `set_points_flux([[s, theta, phi]])` places interior
+points in flux coordinates instead (outputs stay Cartesian). `B` and its
+first three derivatives are valid on the magnetic axis via the regular
+spectral limit. Outside the plasma, `VmecExtender` adds the
+`virtual_casing_jax` plasma contribution to a supplied coil or MGRID field —
+virtual casing alone is not the total exterior field.
 
 Effective ripple is an optional in-memory diagnostic—no `boozmn` file is
 needed. `examples/epsilon_effective.py` computes and plots the conventional
-NEO transport quantity $\epsilon_{\rm eff}^{3/2}$.
+NEO transport quantity $\epsilon_{\mathrm{eff}}^{3/2}$.
 
 ```python
 field = vj.VmecExtender.from_file(
@@ -226,9 +223,9 @@ from_file = vj.solve_multigrid(changed_input, restart_from="wout_base.nc")
 
 The CLI equivalent is `vmex input.changed --restart wout_base.nc`; a deck may instead set `RESTART_WOUT`. Optimization trial solves hot-restart automatically. See the [restart guide](https://vmex.readthedocs.io/en/latest/howto/restart-from-previous-run.html) for grid changes and validation rules.
 
-## Optimizer-neutral problems
+## Bring your own optimizer
 
-Objective tuples use `(function, target, weight)`, with `weight` multiplying the squared cost by default; a one-dimensional weight applies different penalties to profile rows, such as a stronger edge penalty. The resulting problem works directly with SciPy, JAXopt, Optax, or a user optimizer.
+Objective tuples use `(function, target, weight)`, with `weight` multiplying the squared cost by default; a one-dimensional weight applies different penalties to profile rows, such as a stronger edge penalty. The resulting problem plugs into SciPy, JAXopt, Optax, or any optimizer you already use — VMEX supplies values, residuals, and exact derivatives, and stays out of the driver's way.
 
 ```python
 from dataclasses import replace
@@ -428,7 +425,19 @@ See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.ht
 
 ## Roadmap
 
-- Promote the experimental boundary-Schur free-boundary adjoint after reducing its remaining local-force/NESTOR cold compile and GPU memory costs, then promote coil-only free-boundary single-stage optimization.
-- Promote rotating-ellipse stellarator–mirror hybrids from extended validation with refinement, independent force checks, and practical optimization examples.
-- Broaden trapped-particle-fraction benchmarks against near-axis theory across QA/QH/QP/QI, retaining the physically nonzero on-axis QI trapped fraction.
-- Complete the VMEX-state-to-NEO differentiable lane for effective ripple, validate its forward sensitivities against finite differences and STELLOPT NEO, then add `Gamma_c` and the associated trapped-particle diagnostics.
+The detailed, phased plan lives in [plan.md](plan.md). In flight now:
+
+- Performance: the committed workflow baselines drive measured fixes to
+  compilation reuse, the polishing path's runtime, and chunked Boozer
+  transforms; regimes (cold, cache-reload, warm) are never mixed in one
+  number.
+- A `Gamma_c` objective whose boundary derivative is well-posed under
+  refinement, replacing the current fixed-resolution proxy.
+- Up-down asymmetric (LASYM) equilibria as a first-class certified lane.
+- Promote the boundary-Schur free-boundary adjoint and coil-only
+  free-boundary single-stage optimization after their compile and GPU
+  memory costs come down.
+- Promote stellarator–mirror hybrids from extended validation, with
+  refinement studies, independent force checks, and optimization examples.
+- Downstream contracts: booz_xform_jax, NEO_JAX, and GKX consume VMEX
+  states differentiably, with cross-code parity tests.
