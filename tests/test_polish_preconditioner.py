@@ -1335,13 +1335,12 @@ def test_public_solver_rejects_unknown_polish_mode_before_solving():
         solver.solve(inp, polish="unknown")
 
 
-def test_public_solver_resolves_input_flag_and_rejects_two_api_spellings():
-    inp = dataclasses.replace(
-        VmecInput.from_file(DATA / "input.solovev"),
-        polish_force_balance=True,
-    )
-    assert solver._resolve_force_balance_polish(inp, None, None) is True
-    assert solver._resolve_force_balance_polish(inp, False, None) is False
+def test_public_solver_resolves_polish_keywords_only():
+    """Directives live in run_options; the solver sees only its keywords."""
+    inp = VmecInput.from_file(DATA / "input.solovev")
+    assert solver._resolve_force_balance_polish(inp, None, None) is False
+    assert solver._resolve_force_balance_polish(inp, True, None) is True
+    assert solver._resolve_force_balance_polish(inp, "auto", None) == "auto"
     with pytest.raises(ValueError, match="either polish or polish_force_balance"):
         solver._resolve_force_balance_polish(inp, False, True)
 

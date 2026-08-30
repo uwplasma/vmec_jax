@@ -270,6 +270,43 @@ def build_parser() -> argparse.ArgumentParser:
             "follow JAX, or an explicit platform."
         ),
     )
+    p.add_argument(
+        "--polish",
+        metavar="MODE",
+        type=str,
+        nargs="?",
+        const="true",
+        default=None,
+        choices=("auto", "true", "false"),
+        help=(
+            "Force-balance polishing after the finest fixed-boundary stage: "
+            "'auto', 'true' (the bare flag), or 'false'. Overrides the "
+            "!@VMEX POLISH input directive; the default follows the file."
+        ),
+    )
+    p.add_argument(
+        "--no-polish",
+        dest="polish",
+        action="store_const",
+        const="false",
+        help="Disable polishing regardless of the input directive.",
+    )
+    p.add_argument(
+        "--polish-tol", type=float, default=None,
+        help="Override the polish force tolerance (PolishConfig.tolerance).")
+    p.add_argument(
+        "--polish-fail",
+        type=str,
+        default=None,
+        choices=("error", "fallback", "warn"),
+        help=(
+            "What a failed polish does: raise (error), return the unpolished "
+            "state (fallback), or return it with a warning (warn)."
+        ),
+    )
+    p.add_argument(
+        "--polish-degree", type=int, default=None, choices=(3, 5, 7),
+        help="Radial B-spline degree of the polished representation.")
     p.add_argument("--ftol", type=float, default=None, help="Override the final-stage FTOL_ARRAY tolerance.")
     p.add_argument("--max-iter", type=int, default=None, help="Override the final-stage NITER_ARRAY iteration cap.")
     p.add_argument(
@@ -427,10 +464,15 @@ def _timing_block(read_s: float, solve_s: float, wout_s: float) -> str:
 
 def _read_input(input_path: Path):
     """Parse the deck into a :class:`VmecInput` (typed error on failure)."""
-    from .input import VmecInput
+    return _read_request(input_path).input
+
+
+def _read_request(input_path: Path):
+    """Parse the deck plus its VMEX execution directives."""
+    from .run_options import read_input_request
 
     try:
-        return VmecInput.from_file(input_path)
+        return read_input_request(input_path)
     except VmecError:
         raise
     except Exception as exc:
@@ -438,6 +480,29 @@ def _read_input(input_path: Path):
             WERROR_MESSAGES[INPUT_ERROR_FLAG],
             hint=f"{input_path.name}: {exc}",
         ) from exc
+
+
+def _resolve_polish_cli(args, file_options):
+    """CLI flags > file directive > default, with the source recorded."""
+    from .run_options import resolve_run_options
+
+    polish = None
+    if args.polish is not None:
+        polish = {"auto": "auto", "true": True, "false": False}[args.polish]
+    options, sources = resolve_run_options(
+        file_options,
+        polish=polish,
+        polish_tol=args.polish_tol,
+        polish_fail=args.polish_fail,
+        polish_degree=args.polish_degree,
+    )
+    cli_supplied = {
+        "polish": args.polish, "polish_tol": args.polish_tol,
+        "polish_fail": args.polish_fail, "polish_degree": args.polish_degree,
+    }
+    sources = {name: ("cli" if cli_supplied[name] is not None else origin)
+               for name, origin in sources.items()}
+    return options, sources
 
 
 #: MGRID_FILE sentinel selecting the direct-coil Biot-Savart external field.
@@ -646,7 +711,9 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
     verbose = not bool(args.quiet)
 
     t0 = time.perf_counter()
-    inp = _read_input(input_path)
+    request = _read_request(input_path)
+    inp = request.input
+    polish_options, polish_sources = _resolve_polish_cli(args, request.options)
     read_s = time.perf_counter() - t0
 
     if verbose:
@@ -668,8 +735,19 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
 
         effective_inp = dataclasses.replace(inp, lfreeb=False)
 
+    if verbose and polish_options.polish is not False:
+        emit(f" POLISH  : {polish_options.polish!r} "
+             f"(from {polish_sources['polish']})")
+
     t1 = time.perf_counter()
     if freeb_plan is not None:
+        if polish_options.polish is not False:
+            raise VmecInputError(
+                "force-balance polishing requires a fixed-boundary input",
+                hint=("the polish request came from the "
+                      f"{polish_sources['polish']}; drop it or pass "
+                      "--no-polish"),
+            )
         from .multigrid import solve_free_boundary_multigrid
 
         ftol_array, niter_array = _stage_overrides(
@@ -693,9 +771,13 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
     else:
         from .multigrid import solve_multigrid
 
+        from .run_options import polish_config_from_options
+
         ftol_array, niter_array = _stage_overrides(inp, ftol=args.ftol, max_iter=args.max_iter)
         result = solve_multigrid(
             effective_inp,
+            polish_force_balance=polish_options.polish,
+            polish_config=polish_config_from_options(polish_options),
             ftol_array=ftol_array,
             niter_array=niter_array,
             restart_from=restart_source,
@@ -711,6 +793,12 @@ def _solve_input_file(args, input_path: Path, outdir: Path | None, *, emit) -> i
             prefetch_compile=bool(args.prefetch_compile),
             jacobian_retries=int(args.jacobian_retries),
         )
+        if (polish_options.polish_fail == "warn"
+                and result.polish_report is not None
+                and not bool(result.polish_report.converged)):
+            emit(" POLISH  : failed "
+                 f"({result.polish_report.termination_reason}); "
+                 "returning the unpolished equilibrium")
     solve_s = time.perf_counter() - t1
 
     wout_path = resolve_wout_path(input_path=input_path, outdir=outdir)

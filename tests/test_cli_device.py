@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from vmex.core import cli, multigrid
+from vmex.core.run_options import InputRequest, RunOptions
 
 
 def test_device_option_parses_supported_choices():
@@ -32,7 +33,10 @@ def test_fixed_boundary_cli_forwards_device(monkeypatch, tmp_path, choice, expec
     inp = SimpleNamespace(lfull3d1out=False)
     seen = {}
 
-    monkeypatch.setattr(cli, "_read_input", lambda _: inp)
+    monkeypatch.setattr(
+        cli, "_read_request",
+        lambda path: InputRequest(input=inp, options=RunOptions(), source=path),
+    )
     monkeypatch.setattr(cli, "_free_boundary_plan", lambda *a, **k: None)
     monkeypatch.setattr(cli, "_stage_overrides", lambda *a, **k: (None, None))
     monkeypatch.setattr(cli, "_write_wout_from_result", lambda *a, **k: object())
@@ -61,7 +65,10 @@ def test_free_boundary_cli_forwards_device(monkeypatch, tmp_path):
     seen = {}
     ftol_array, niter_array = [1e-8], [3]
 
-    monkeypatch.setattr(cli, "_read_input", lambda _: inp)
+    monkeypatch.setattr(
+        cli, "_read_request",
+        lambda path: InputRequest(input=inp, options=RunOptions(), source=path),
+    )
     monkeypatch.setattr(cli, "_free_boundary_plan", lambda *a, **k: plan)
     monkeypatch.setattr(
         cli, "_stage_overrides", lambda *a, **k: (ftol_array, niter_array),

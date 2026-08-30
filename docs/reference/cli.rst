@@ -87,6 +87,19 @@ Options
      - Override the final-stage ``FTOL_ARRAY`` tolerance.
    * - ``--max-iter N``
      - Override the final-stage ``NITER_ARRAY`` iteration cap.
+   * - ``--polish [MODE]`` / ``--no-polish``
+     - Force-balance polishing after the finest fixed-boundary stage:
+       ``auto``, ``true`` (the bare flag), or ``false``. Overrides the
+       ``!@VMEX POLISH`` input directive; the default follows the file.
+       Precedence is ``CLI > Python keyword > file directive > default``.
+   * - ``--polish-tol VALUE``
+     - Override the polish force tolerance
+       (:class:`vmex.PolishConfig` ``tolerance``).
+   * - ``--polish-fail {error,fallback,warn}``
+     - What a failed polish does: raise, return the unpolished state, or
+       return it and print a warning. Never a silent substitution.
+   * - ``--polish-degree {3,5,7}``
+     - Radial B-spline degree of the polished representation.
    * - ``--restart WOUT``
      - Hot-restart the solve from a ``wout_*.nc`` file (VMEX- or
        VMEC2000-written): the equilibrium state is rebuilt from the file,

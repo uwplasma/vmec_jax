@@ -40,12 +40,29 @@ Both :func:`vmex.solve` and :func:`vmex.solve_multigrid` accept
 ``polish_force_balance=False`` (unchanged behavior), ``True`` (required
 correction), or ``"auto"`` (skip an already-certified state). The shorter
 ``polish`` keyword remains an alias on the single-grid call. A standard VMEC
-deck enables the same path with a comment outside ``&INDATA``::
+deck enables the same path with comment directives that VMEC2000 ignores::
 
-   ! VMEX: POLISH_FORCE_BALANCE = .TRUE.
+   !@VMEX POLISH = AUTO
+   !@VMEX POLISH_TOL = 1.0E-8
+   !@VMEX POLISH_FAIL = ERROR
+   !@VMEX POLISH_DEGREE = 5
 
-VMEX reads this directive; VMEC2000 ignores the comment and solves the ordinary
-equilibrium. A successful result retains the ordinary ``state`` and exposes
+(the original single-flag spelling ``! VMEX: POLISH_FORCE_BALANCE = .TRUE.``
+still parses).  Directives are execution metadata, owned by
+:mod:`vmex.core.run_options` — they never become :class:`vmex.VmecInput`
+fields, and ``VmecInput.from_file`` ignores them while preserving all physics.
+Structured JSON carries the same keys in a reserved ``_vmex`` section that is
+removed before schema validation.  :func:`vmex.solve_file` runs a deck the way
+the CLI does — directives honored, ``wout_<case>.nc`` written — and explicit
+Python keywords override the file::
+
+   result = vmex.solve_file("input.case", polish="auto")
+
+Precedence is exactly ``CLI option > Python keyword > file directive >
+package default``; the CLI prints which layer a polish request came from.
+``polish_fail`` selects the failure behavior: ``"error"`` raises,
+``"fallback"`` returns the unpolished state, ``"warn"`` does the same with a
+:class:`RuntimeWarning` — never a failure silently presented as polished. A successful result retains the ordinary ``state`` and exposes
 the VMEC-grid projection as ``polished_state``. CLI WOUT files and an
 :class:`vmex.core.optimize.Equilibrium` requested with polishing use that
 projected state, while the continuous solution remains in
