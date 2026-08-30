@@ -53,6 +53,11 @@ result = vj.solve(
 )
 print(result.polish_report.termination_reason)
 print(result.strong_force.normalized_l2)
+
+# No file round-trip: ESSOS objectives accept this surface directly, and the
+# virtual-casing adapter uses the same analytic tangents and edge field.
+surface = vj.evaluate_high_order_surface(result.native_equilibrium)
+vc_surface = vj.surface_field_data_from_high_order(result.native_equilibrium)
 ```
 
 Reproduce the measured JIT-native benchmark with:

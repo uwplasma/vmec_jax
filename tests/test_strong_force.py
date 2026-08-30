@@ -19,12 +19,15 @@ from vmex.core.solver import _initial_state, prepare_runtime, resolution_from_in
 from vmex.core.strong_force import (
     HighOrderEquilibriumState,
     certify_strong_force,
+    evaluate_high_order_fields,
+    evaluate_high_order_surface,
     evaluate_strong_force,
     high_order_state_from_wout,
     lift_high_order_state,
     plot_strong_force_report,
 )
 from vmex.core.wout import wout_from_state
+from vmex.core.virtual_casing import surface_field_data_from_high_order
 
 jax.config.update("jax_enable_x64", True)
 
@@ -89,6 +92,94 @@ def test_constant_toroidal_field_matches_analytic_current_and_force():
     np.testing.assert_allclose(result.force, expected_force, rtol=2e-11, atol=2e-7)
     assert np.all(np.isfinite(result.force_rho))
     assert np.all(np.isfinite(result.force_helical))
+
+
+def test_native_field_view_matches_analytic_geometry_and_force_view():
+    state = _constant_toroidal_field_state()
+    rho = jnp.asarray([0.2, 0.7])
+    theta = jnp.asarray([0.4, 2.1])
+    zeta = jnp.asarray([0.3, 1.7])
+    native = evaluate_high_order_fields(state, rho, theta, zeta)
+    force = evaluate_strong_force(state, rho, theta, zeta)
+
+    radius = 10.0 + rho * jnp.cos(theta)
+    expected_position = jnp.stack(
+        (radius * jnp.cos(zeta), radius * jnp.sin(zeta), rho * jnp.sin(theta)),
+        axis=-1,
+    )
+    np.testing.assert_allclose(native.position, expected_position, rtol=2e-13, atol=2e-13)
+    np.testing.assert_allclose(native.B, force.B, rtol=2e-13, atol=2e-13)
+    np.testing.assert_allclose(native.sqrt_g, force.sqrt_g, rtol=2e-13, atol=2e-13)
+    assert native.dposition_drho.shape == native.position.shape
+    assert native.dposition_dtheta.shape == native.position.shape
+    assert native.dposition_dphi.shape == native.position.shape
+
+
+def test_high_order_surface_handoff_is_analytic_and_tangent():
+    native = evaluate_high_order_surface(
+        _constant_toroidal_field_state(),
+        nphi=8,
+        ntheta=10,
+    )
+    surface = surface_field_data_from_high_order(
+        _constant_toroidal_field_state(),
+        nphi=8,
+        ntheta=10,
+    )
+    assert native.gamma.shape == (8, 10, 3)
+    assert surface.gamma.shape == (3, 8, 10)
+    np.testing.assert_allclose(
+        native.gamma,
+        jnp.moveaxis(surface.gamma, 0, -1),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        jnp.linalg.norm(surface.normal, axis=0),
+        1.0,
+        rtol=2e-13,
+        atol=2e-13,
+    )
+    normal_field = jnp.sum(surface.B_total * surface.normal, axis=0)
+    assert float(jnp.max(jnp.abs(normal_field))) < 2.0e-13
+    assert native.nphi == 8
+    assert native.ntheta == 10
+    assert surface.source_convention == "vmex_high_order"
+
+
+def test_high_order_surface_composes_with_essos_objective():
+    essos_surfaces = pytest.importorskip("essos.surfaces")
+
+    @jax.tree_util.register_pytree_node_class
+    class PositionDependentField:
+        def B(self, point):
+            return jnp.asarray([point[0], 0.0, 1.0])
+
+        def tree_flatten(self):
+            return (), None
+
+        @classmethod
+        def tree_unflatten(cls, _metadata, _children):
+            return cls()
+
+    state = _constant_toroidal_field_state()
+
+    def objective(delta):
+        candidate = replace(
+            state,
+            R_cos=state.R_cos.at[0].add(delta),
+        )
+        surface = evaluate_high_order_surface(candidate, nphi=8, ntheta=10)
+        return essos_surfaces.SquaredFlux(
+            surface,
+            PositionDependentField(),
+            definition="local",
+        )
+
+    derivative = jax.grad(objective)(0.0)
+    step = 1.0e-5
+    finite_difference = (objective(step) - objective(-step)) / (2.0 * step)
+    np.testing.assert_allclose(derivative, finite_difference, rtol=2e-7, atol=2e-9)
 
 
 def test_independent_oracle_agrees_with_desc_pointwise_current_and_force():

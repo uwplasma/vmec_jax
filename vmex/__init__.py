@@ -154,9 +154,16 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     # high-order reconstruction and independent strong-force certificate
     "HighOrderEquilibriumState": (
         ".core.strong_force", "HighOrderEquilibriumState"),
+    "HighOrderFieldSamples": (".core.strong_force", "HighOrderFieldSamples"),
+    "HighOrderSurfaceSamples": (
+        ".core.strong_force", "HighOrderSurfaceSamples"),
     "StrongForceReport": (".core.strong_force", "StrongForceReport"),
     "StrongForceSamples": (".core.strong_force", "StrongForceSamples"),
     "certify_strong_force": (".core.strong_force", "certify_strong_force"),
+    "evaluate_high_order_fields": (
+        ".core.strong_force", "evaluate_high_order_fields"),
+    "evaluate_high_order_surface": (
+        ".core.strong_force", "evaluate_high_order_surface"),
     "evaluate_strong_force": (".core.strong_force", "evaluate_strong_force"),
     "high_order_state_from_wout": (
         ".core.strong_force", "high_order_state_from_wout"),
@@ -211,6 +218,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".core.virtual_casing", "PlasmaVacuumInterface"),
     "surface_field_data_from_state": (
         ".core.virtual_casing", "surface_field_data_from_state"),
+    "surface_field_data_from_high_order": (
+        ".core.virtual_casing", "surface_field_data_from_high_order"),
     "surface_field_data_from_wout": (
         ".core.virtual_casing", "surface_field_data_from_wout"),
     # dimensional scaling

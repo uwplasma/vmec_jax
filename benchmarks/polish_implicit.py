@@ -43,7 +43,7 @@ from vmex.core.polish_implicit import (
     collocation_polish_tangent,
     implicit_collocation_polished_state,
 )
-from vmex.core.strong_force import lift_high_order_state
+from vmex.core.strong_force import evaluate_high_order_fields, lift_high_order_state
 
 from _provenance import assert_repo_vmex, git_state
 
@@ -79,6 +79,21 @@ def _random_like(value, seed: int):
         structure,
         [jax.random.normal(key, leaf.shape, leaf.dtype) for key, leaf in zip(keys, leaves)],
     )
+
+
+def _scale_tree(value, scale):
+    return jax.tree.map(lambda leaf: scale * leaf, value)
+
+
+def _field_strength_variation(native) -> jax.Array:
+    """Relative |B| variance on one interior surface."""
+
+    theta = jnp.linspace(0.0, 2.0 * jnp.pi, 12, endpoint=False)
+    zeta = jnp.linspace(0.0, 2.0 * jnp.pi, 6, endpoint=False)
+    tt, zz = jnp.meshgrid(theta, zeta, indexing="ij")
+    samples = evaluate_high_order_fields(native, 0.7, tt, zz)
+    magnitude = jnp.linalg.norm(samples.B, axis=-1)
+    return jnp.var(magnitude / jnp.mean(magnitude))
 
 
 def _timed(function, argument):
@@ -128,28 +143,36 @@ def main() -> None:
         native, adapter, mask, balance_full_root=False
     )
     chart = make_strong_structured_chart(runtime)
+    polish_config = PolishConfig(
+        tolerance=args.solve_tolerance,
+        validation_tolerance=10.0,
+        radial_refinement_tolerance=10.0,
+        collocation_scale_probes=8,
+        fail_policy="raise",
+    )
     primal = polish_collocation_least_squares(
         runtime,
         chart=chart,
-        config=PolishConfig(
-            tolerance=args.solve_tolerance,
-            validation_tolerance=10.0,
-            radial_refinement_tolerance=10.0,
-            collocation_scale_probes=8,
-            fail_policy="raise",
-        ),
+        config=polish_config,
     )
     context = primal.context
     if context is None:
         raise RuntimeError("the collocation polish did not return a derivative context")
     native_tangent = _random_like(native, 41)
-    output_cotangent = _random_like(native, 42)
+    native_tangent = _scale_tree(
+        native_tangent,
+        1.0 / _tree_dot(native_tangent, native_tangent) ** 0.5,
+    )
     linear_config = PolishLinearConfig(
         rtol=2.0e-10,
         atol=2.0e-11,
         restart=chart.size,
         max_restarts=10,
     )
+    derivative_native = implicit_collocation_polished_state(
+        native, context, linear_config
+    )
+    output_cotangent = jax.grad(_field_strength_variation)(derivative_native)
 
     tangent = jax.jit(
         lambda value: collocation_polish_tangent(
@@ -170,14 +193,7 @@ def main() -> None:
         polished = implicit_collocation_polished_state(
             value, context, linear_config
         )
-        return sum(
-            jnp.vdot(a, b).real
-            for a, b in zip(
-                jax.tree.leaves(polished),
-                jax.tree.leaves(output_cotangent),
-                strict=True,
-            )
-        )
+        return _field_strength_variation(polished)
 
     gradient = jax.jit(jax.grad(objective))
     rss_before = _peak_rss_mib()
@@ -201,9 +217,38 @@ def main() -> None:
         abs(_tree_dot(adjoint_result.native_cotangent, adjoint_result.native_cotangent)),
         1.0e-300,
     )
+    finite_difference_step = 1.0e-4
+
+    def resolved_objective(sign):
+        displaced_native = jax.tree.map(
+            lambda value, direction: value + sign * finite_difference_step * direction,
+            native,
+            native_tangent,
+        )
+        displaced_runtime = dataclasses.replace(runtime, native=displaced_native)
+        displaced = polish_collocation_least_squares(
+            displaced_runtime,
+            chart=chart,
+            config=polish_config,
+        )
+        return float(_field_strength_variation(displaced.native_equilibrium))
+
+    finite_difference_started = time.perf_counter()
+    minus_objective = resolved_objective(-1.0)
+    plus_objective = resolved_objective(1.0)
+    finite_difference_seconds = time.perf_counter() - finite_difference_started
+    finite_difference_derivative = (
+        plus_objective - minus_objective
+    ) / (2.0 * finite_difference_step)
+    implicit_directional_derivative = _tree_dot(gradient_result, native_tangent)
+    derivative_scale = max(
+        abs(finite_difference_derivative),
+        abs(implicit_directional_derivative),
+        1.0e-12,
+    )
 
     report = {
-        "schema": "vmex.polish-implicit-benchmark/2",
+        "schema": "vmex.polish-implicit-benchmark/3",
         "command": (
             "JAX_ENABLE_X64=1 python benchmarks/polish_implicit.py "
             f"--ns {args.ns} --mpol {args.mpol} --degree {args.degree} "
@@ -219,6 +264,15 @@ def main() -> None:
         "primal_relative_optimality": (
             primal.polish_report.least_squares_relative_optimality
         ),
+        "objective": "relative field-strength variance at rho=0.7",
+        "objective_value": float(_field_strength_variation(primal.native_equilibrium)),
+        "implicit_directional_derivative": implicit_directional_derivative,
+        "finite_difference_directional_derivative": finite_difference_derivative,
+        "finite_difference_relative_error": abs(
+            implicit_directional_derivative - finite_difference_derivative
+        ) / derivative_scale,
+        "finite_difference_step": finite_difference_step,
+        "finite_difference_seconds": finite_difference_seconds,
         "repeats": args.repeats,
         "cold_tangent_seconds": cold_tangent,
         "warm_tangent_median_seconds": statistics.median(warm_tangent),
