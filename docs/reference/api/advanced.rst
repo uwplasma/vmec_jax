@@ -36,11 +36,20 @@ High-order correction transfer and preconditioner
 .. automodule:: vmex.core.polish_implicit
    :members:
 
-The single-grid :func:`vmex.solve` entry point accepts ``polish=False``
-(unchanged behavior), ``polish=True`` (required correction), or
-``polish="auto"`` (skip an already-certified state).  Polished data is attached
-to the result without replacing its legacy sampled state or wout-compatible
-arrays.
+Both :func:`vmex.solve` and :func:`vmex.solve_multigrid` accept
+``polish_force_balance=False`` (unchanged behavior), ``True`` (required
+correction), or ``"auto"`` (skip an already-certified state). The shorter
+``polish`` keyword remains an alias on the single-grid call. A standard VMEC
+deck enables the same path with a comment outside ``&INDATA``::
+
+   ! VMEX: POLISH_FORCE_BALANCE = .TRUE.
+
+VMEX reads this directive; VMEC2000 ignores the comment and solves the ordinary
+equilibrium. A successful result retains the ordinary ``state`` and exposes
+the VMEC-grid projection as ``polished_state``. CLI WOUT files and an
+:class:`vmex.core.optimize.Equilibrium` requested with polishing use that
+projected state, while the continuous solution remains in
+``native_equilibrium``.
 
 The public primal path solves the overdetermined physical collocation residual
 with SOLVAX Gauss--Newton and accepts it only after independent force,

@@ -305,13 +305,15 @@ def _basic_fields(state: HighOrderEquilibriumState, x: Array) -> tuple[Array, Ar
     lam_gradient = jax.grad(lambda y: _RZL(state, y)[2])(x)
     phip = _profile(state, state.phipf, x[0])
     chip = _profile(state, state.chipf, x[0])
-    # Convert the s-coordinate Clebsch representation to rho.  Lambda's
-    # zeta derivative acquires nfp because VMEC differentiates in physical phi.
+    # Convert VMEC's (s, theta, physical-phi) Clebsch representation to
+    # (rho, theta, zeta=nfp*phi). The new Jacobian is 2*rho/nfp times the
+    # VMEC Jacobian, B^zeta=nfp*B^phi, and lambda_phi=nfp*lambda_zeta.
     flux_factor = 2.0 * x[0] / sqrt_g
     B_sup = jnp.asarray(
         [
             0.0,
-            flux_factor * (chip - phip * float(state.nfp) * lam_gradient[2]),
+            flux_factor
+            * (chip / float(state.nfp) - phip * lam_gradient[2]),
             flux_factor * phip * (1.0 + lam_gradient[1]),
         ]
     )

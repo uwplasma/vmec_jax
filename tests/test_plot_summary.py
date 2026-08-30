@@ -181,6 +181,8 @@ def test_summary_combines_pressure_current_and_reports_force_error(
 
     force = meta["axes"]["force_balance"]
     assert force.get_yscale() == "log"
+    assert r"\rho=\sqrt{s}" in force.get_xlabel()
+    assert r"s=\psi/\psi_B" in force.get_xlabel()
     assert "relative force error" in force.get_ylabel()
     assert r"\mathbf{J}" in force.get_ylabel() and r"\nabla p" in force.get_ylabel()
     _, wout = solved_case

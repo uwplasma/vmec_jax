@@ -3852,3 +3852,18 @@ supersedes older instructions to keep #125 open indefinitely.
   predates
   `SquaredFlux`; the hosted optional test skips that absent API, while the
   mandatory current-ESSOS-main integration gate is recorded above.
+- 2026-08-30 rogeriojorge: Phase 42 — final README/polish usability pass now
+  replaces the analytical Solov'ev row with a general finite-pressure tokamak;
+  both comparison rows must contain VMEX, VMEC2000, VMEC++, and adequately
+  resolved DESC results, including cold runtime. The final figure has no grid
+  lines and labels radius as ``rho=sqrt(s)``, ``s=psi/psi_B``. A second README
+  figure shows the standard finite-pressure stellarator summary before and
+  after polishing. The user-facing path is one ordinary example script plus a
+  VMEC-safe ``! VMEX: POLISH_FORCE_BALANCE = .TRUE.`` comment, a matching
+  ``polish_force_balance=`` Python keyword, and an opt-in finalization flag in
+  ``QA_optimization.py``. The example/file budget is unchanged: the old
+  argparse-only single-file directory is removed, and benchmark artifacts are
+  consolidated or replaced within the 51-file cap. A measured axisymmetric
+  acceptance case reduces independent relative force error from ``1.284e-2``
+  to ``1.820e-3`` in three nonlinear steps; the 3-D memory/compile cost remains
+  an explicit performance gate while the stellarator figure is finalized.

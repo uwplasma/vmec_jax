@@ -999,7 +999,9 @@ def _relative_force_error_panel(ax, wout) -> float:
         ax.text(0.5, 0.5, "force error unavailable", ha="center", va="center",
                 transform=ax.transAxes)
         maximum = float("nan")
-    ax.set_xlabel(r"normalized radius $\rho=\sqrt{s}$")
+    ax.set_xlabel(
+        r"normalized radius $\rho=\sqrt{s}$,  $s=\psi/\psi_B$"
+    )
     ax.set_ylabel(
         "relative force error\n"
         r"$\epsilon_F=|(\mathbf{J}\!\times\!\mathbf{B}-\nabla p)_s|/"

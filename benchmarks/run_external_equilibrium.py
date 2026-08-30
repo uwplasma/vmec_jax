@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run a DESC or VMEC2000 equilibrium with portable timing provenance."""
+"""Run DESC, VMEC2000, VMEC++, or VMEX with portable timing provenance."""
 
 from __future__ import annotations
 
@@ -168,6 +168,50 @@ def _run_vmec2000(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def _run_vmecpp(args: argparse.Namespace) -> dict[str, object]:
+    import vmecpp
+
+    args.output_dir.mkdir(parents=True)
+    case = args.input.name.removeprefix("input.")
+    wout_path = args.output_dir / f"wout_{case}.nc"
+    started = time.perf_counter()
+    load_started = time.perf_counter()
+    inp = vmecpp.VmecInput.from_file(args.input)
+    load_seconds = time.perf_counter() - load_started
+    solve_started = time.perf_counter()
+    output = vmecpp.run(
+        inp,
+        max_threads=args.max_threads,
+        verbose=False,
+    )
+    solve_seconds = time.perf_counter() - solve_started
+    save_started = time.perf_counter()
+    output.wout.save(wout_path)
+    save_seconds = time.perf_counter() - save_started
+    return {
+        "schema": "vmex.external-equilibrium-run/1",
+        "engine": "vmecpp",
+        "input": args.input.name,
+        "output_wout": wout_path.name,
+        "success": int(output.wout.ier_flag) == 0 and wout_path.is_file(),
+        "iterations": int(output.wout.niter),
+        "fsqr": float(output.wout.fsqr),
+        "fsqz": float(output.wout.fsqz),
+        "fsql": float(output.wout.fsql),
+        "controls": {"max_threads": args.max_threads},
+        "timing_seconds": {
+            "load": load_seconds,
+            "solve": solve_seconds,
+            "save": save_seconds,
+            "total": time.perf_counter() - started,
+        },
+        "peak_rss_mib": _peak_rss_mib(),
+        "platform": platform.platform(),
+        "versions": {"vmecpp": metadata.version("vmecpp")},
+        "source": _git_state(args.source_repo),
+    }
+
+
 def _run_vmex(args: argparse.Namespace) -> dict[str, object]:
     sys.path.insert(0, str(args.source_repo))
     import jax
@@ -239,6 +283,13 @@ def _parser() -> argparse.ArgumentParser:
     vmec.add_argument("--report", type=Path, required=True)
     vmec.add_argument("--source-repo", type=Path, required=True)
 
+    vmecpp = subparsers.add_parser("vmecpp", help="solve an input deck with VMEC++")
+    vmecpp.add_argument("--input", type=Path, required=True)
+    vmecpp.add_argument("--output-dir", type=Path, required=True)
+    vmecpp.add_argument("--report", type=Path, required=True)
+    vmecpp.add_argument("--source-repo", type=Path, required=True)
+    vmecpp.add_argument("--max-threads", type=int, default=1)
+
     vmex = subparsers.add_parser("vmex", help="solve an input deck with the VMEX CLI")
     vmex.add_argument("--input", type=Path, required=True)
     vmex.add_argument("--output-dir", type=Path, required=True)
@@ -258,12 +309,17 @@ def main() -> None:
     ):
         if path is not None and not path.exists():
             parser.error(f"{message}: {path}")
-    if args.engine in ("vmec2000", "vmex"):
+    if args.engine in ("vmec2000", "vmecpp", "vmex"):
         if not args.input.name.startswith("input."):
             parser.error("input filename must start with 'input.'")
         if args.output_dir.exists():
             parser.error(f"output directory already exists: {args.output_dir}")
-        report = _run_vmec2000(args) if args.engine == "vmec2000" else _run_vmex(args)
+        if args.engine == "vmec2000":
+            report = _run_vmec2000(args)
+        elif args.engine == "vmecpp":
+            report = _run_vmecpp(args)
+        else:
+            report = _run_vmex(args)
     else:
         report = _run_desc(args)
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

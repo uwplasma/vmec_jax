@@ -20,10 +20,10 @@ cylindrical angle is ``phi=zeta/NFP``.  Each real Fourier amplitude is
    X_{mn}(\rho) = \rho^{|m|} q_{mn}(s), \qquad
    q_{mn}(s) = \sum_k c_{kmn} B_k(s).
 
-The local clamped B-splines have odd degree 3, 5, or 7; degree 5 is the
-production starting point because current and force require stable second
-radial derivatives.  The factor ``rho**abs(m)`` is analytic and is never
-estimated from sampled surfaces.
+The local clamped B-splines have odd degree 3, 5, or 7; cubic splines are the
+default because they retain continuous second derivatives without the compile
+and memory cost of a wider basis. The factor ``rho**abs(m)`` is analytic and
+is never estimated from sampled surfaces.
 
 The legacy lift first undoes VMEX's ``m=1`` constrained variables and Fourier
 normalization.  It then fits ``q`` while imposing these conditions by
@@ -61,6 +61,21 @@ covariant magnetic field, current, pressure gradient, and finally
 
    \mathbf{F} = \frac{(\nabla\times\mathbf{B})\times\mathbf{B}}{\mu_0}
                 - \nabla p.
+
+The field-period coordinate transform is explicit. With
+``zeta=NFP*phi`` and ``sqrt(g)`` evaluated in ``(rho,theta,zeta)``, the two
+nonzero contravariant components are
+
+.. math::
+
+   B^\theta = \frac{2\rho}{\sqrt{g}}
+      \left(\frac{\chi'}{\mathrm{NFP}}-\phi'\partial_\zeta\lambda\right),
+   \qquad
+   B^\zeta = \frac{2\rho\phi'}{\sqrt{g}}
+      \left(1+\partial_\theta\lambda\right).
+
+This form is invariant when an axisymmetric equilibrium is represented with a
+different number of field periods.
 
 Spline and Fourier functions are differentiated analytically by JAX.  No
 legacy half-mesh force, radial finite difference, or solve collocation value is

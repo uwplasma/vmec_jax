@@ -19,44 +19,48 @@ REPO = Path(__file__).resolve().parents[1]
 BENCHMARKS = REPO / "benchmarks"
 DEFAULT_FIGURE = REPO / "docs" / "_static" / "figures" / "readme_strong_force_comparison.webp"
 DEFAULT_METADATA = BENCHMARKS / "strong_force_comparison_m4.json"
+DEFAULT_ARTIFACT = BENCHMARKS / "strong_force_cases_m4.json"
+DEFAULT_SUMMARY_FIGURE = (
+    REPO / "docs" / "_static" / "figures" / "readme_polish_summary.webp"
+)
 
 SURFACE = "#fcfcfb"
 INK = "#161616"
 MUTED = "#66645f"
-GRID = "#dddcd6"
+EDGE = "#d5d3ce"
 COLORS = {
     "VMEX": "#1674d1",
-    "VMEX legacy": "#8b8a84",
     "VMEC2000": "#333333",
     "VMEC++": "#e49c00",
     "DESC": "#7357b8",
-    "VMEX polished": "#1674d1",
-}
-SOLOVEV_FILES = {
-    "VMEX legacy": "strong_certificate_solovev_vmex_m4.json",
-    "VMEC2000": "strong_certificate_solovev_vmec2000_m4.json",
-    "VMEC++": "strong_certificate_solovev_vmecpp_m4.json",
-    "DESC": "strong_certificate_solovev_desc_m4.json",
-    "VMEX polished": "strong_polish_solovev_solvax_d3_m5_m4.json",
-}
-STELLARATOR_FILES = {
-    "VMEX": "strong_certificate_nfp2_QA_finite_beta_vmex_m4.json",
-    "DESC": "strong_certificate_nfp2_QA_finite_beta_desc_m4.json",
 }
 
 
-def _load(files: dict[str, str]) -> dict[str, dict]:
-    artifacts = {name: json.loads((BENCHMARKS / filename).read_text()) for name, filename in files.items()}
+def _load(path: Path) -> dict[str, dict[str, dict]]:
+    bundle = json.loads(path.read_text())
+    if bundle["schema"] != "vmex.strong-force-comparison-cases/1":
+        raise RuntimeError("unexpected strong-force comparison artifact schema")
+    cases = bundle["cases"]
+    artifacts = {
+        name: artifact
+        for case in cases.values()
+        for name, artifact in case["sources"].items()
+    }
     for name, artifact in artifacts.items():
         if artifact["measurement_dirty"]:
             raise RuntimeError(f"{name} artifact was measured from dirty source")
-    if "VMEX polished" in artifacts:
-        polished = artifacts["VMEX polished"]
+        external = artifact.get("external_source")
+        if external is not None and not external["success"]:
+            raise RuntimeError(f"{name} external solve did not succeed")
+    for case in cases.values():
+        polished = case["sources"].get("VMEX")
+        if polished is None or "polish_report" not in polished:
+            continue
         if not polished["polish_report"]["converged"]:
-            raise RuntimeError("VMEX polished artifact is not independently certified")
+            raise RuntimeError("VMEX artifact is not independently certified")
         if polished["final_certificate"]["normalized_l2"] > polished["validation_tolerance"]:
             raise RuntimeError("VMEX polished force exceeds its validation gate")
-    return artifacts
+    return cases
 
 
 def _profile(name: str, artifact: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -88,7 +92,7 @@ def _style() -> None:
             "font.family": ["DejaVu Sans"],
             "text.color": INK,
             "axes.labelcolor": INK,
-            "axes.edgecolor": GRID,
+            "axes.edgecolor": EDGE,
             "axes.linewidth": 0.8,
             "xtick.color": MUTED,
             "ytick.color": MUTED,
@@ -101,18 +105,13 @@ def _style() -> None:
     )
 
 
-def _timing(artifact: dict) -> tuple[float, float]:
-    if "polish_report" in artifact:
-        return float(artifact["polish_report"]["solve_seconds"]), float(artifact["total_seconds"])
+def _timing(artifact: dict) -> float:
     external = artifact.get("external_source")
     if external is None:
-        return float(artifact["solve_seconds"]), float(artifact["total_seconds"])
+        return float(artifact["solve_seconds"])
     if "timing_seconds" in external:
-        return (
-            float(external["timing_seconds"]["solve"]),
-            float(external["timing_seconds"]["total"]),
-        )
-    return float(external["solve_seconds"]), float(external["total_seconds"])
+        return float(external["timing_seconds"]["total"])
+    return float(external["total_seconds"])
 
 
 def _render_row(
@@ -121,15 +120,13 @@ def _render_row(
     *,
     case_label: str,
     letters: tuple[str, str, str],
-    timing_names: tuple[str, str],
+    timing_names: tuple[str, ...],
 ) -> None:
     line_styles = {
         "VMEX": "-",
-        "VMEX legacy": (0, (2, 2)),
         "VMEC2000": (0, (5, 2)),
         "VMEC++": (0, (1, 1)),
         "DESC": "-.",
-        "VMEX polished": "-",
     }
     ax = axes[0]
     for name, artifact in artifacts.items():
@@ -139,19 +136,20 @@ def _render_row(
             np.maximum(force, 1.0e-30),
             color=COLORS[name],
             linestyle=line_styles[name],
-            linewidth=2.5 if name == "VMEX polished" else 1.7,
-            alpha=1.0 if name in ("DESC", "VMEX polished") else 0.88,
+            linewidth=2.5 if name == "VMEX" else 1.7,
+            alpha=1.0 if name in ("VMEX", "DESC") else 0.88,
             label=name,
         )
     ax.set_yscale("log")
     ax.set_xlim(0.0, 1.0)
-    ax.set_xlabel(r"normalized radius $\rho$")
+    ax.set_xlabel(
+        r"normalized radius $\rho=\sqrt{s}$,  $s=\psi/\psi_B$"
+    )
     ax.set_ylabel(
         "relative force error\n"
         r"$\epsilon_F=2|\mathbf{J}\!\times\!\mathbf{B}-\nabla p|/"
         r"(|\mathbf{J}\!\times\!\mathbf{B}|+|\nabla p|)$"
     )
-    ax.grid(True, which="both", color=GRID, linewidth=0.65)
     ax.legend(loc="best", ncols=2)
     ax.set_title(
         f"({letters[0]}) {case_label}: radial profile",
@@ -176,14 +174,11 @@ def _render_row(
     ax.set_ylim(min(values) * 0.5, max(values) * 2.5)
     ax.set_xticks(positions)
     labels = {
-        "VMEX legacy": "VMEX\nlegacy",
         "VMEC2000": "VMEC\n2000",
         "VMEC++": "VMEC++",
-        "VMEX polished": "VMEX\npolished",
     }
     ax.set_xticklabels([labels.get(name, name) for name in names])
     ax.set_ylabel("relative force error, volume L2")
-    ax.grid(True, axis="y", which="both", color=GRID, linewidth=0.65)
     for bar, value in zip(bars, values, strict=True):
         ax.text(
             bar.get_x() + bar.get_width() / 2.0,
@@ -201,43 +196,30 @@ def _render_row(
     )
 
     timings = [_timing(artifacts[name]) for name in timing_names]
-    solve = tuple(item[0] for item in timings)
-    total = tuple(item[1] for item in timings)
     ax = axes[2]
-    x = np.arange(2)
-    width = 0.34
-    bars_solve = ax.bar(
-        x - width / 2,
-        solve,
-        width,
+    x = np.arange(len(timing_names))
+    bars = ax.bar(
+        x,
+        timings,
+        0.72,
         color=[COLORS[name] for name in timing_names],
-        alpha=0.55,
-        label="reported solve",
-    )
-    bars_total = ax.bar(
-        x + width / 2,
-        total,
-        width,
-        color=[COLORS[name] for name in timing_names],
-        label="end to end",
+        edgecolor="white",
+        linewidth=0.8,
     )
     ax.set_xticks(x)
-    ax.set_xticklabels(timing_names)
-    ax.set_ylabel("wall time [s]")
+    ax.set_xticklabels([labels.get(name, name) for name in timing_names])
+    ax.set_ylabel("cold wall time [s]")
     ax.set_yscale("log")
-    ax.set_ylim(max(0.5, min(solve) * 0.5), max(total) * 2.0)
-    ax.grid(True, axis="y", which="both", color=GRID, linewidth=0.65)
-    for bars_group in (bars_solve, bars_total):
-        for bar in bars_group:
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() * 1.08,
-                f"{bar.get_height():.1f}",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
-    ax.legend(loc="upper left")
+    ax.set_ylim(max(0.2, min(timings) * 0.5), max(timings) * 2.0)
+    for bar in bars:
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() * 1.08,
+            f"{bar.get_height():.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
     ax.set_title(
         f"({letters[2]}) Cold runtime",
         loc="left",
@@ -247,7 +229,7 @@ def _render_row(
 
 
 def render(
-    solovev: dict[str, dict],
+    tokamak: dict[str, dict],
     stellarator: dict[str, dict],
     output: Path,
 ) -> None:
@@ -268,7 +250,7 @@ def render(
         hspace=0.42,
     )
     fig.suptitle(
-        "Force-balance comparison",
+        "Force balance across equilibrium solvers",
         x=0.075,
         y=0.975,
         ha="left",
@@ -277,22 +259,22 @@ def render(
     )
     _render_row(
         axes[0],
-        solovev,
-        case_label="analytical Solov'ev",
+        tokamak,
+        case_label="finite-pressure tokamak",
         letters=("a", "b", "c"),
-        timing_names=("DESC", "VMEX polished"),
+        timing_names=("VMEX", "VMEC2000", "VMEC++", "DESC"),
     )
     _render_row(
         axes[1],
         stellarator,
         case_label="finite-beta QA stellarator",
         letters=("d", "e", "f"),
-        timing_names=("VMEX", "DESC"),
+        timing_names=("VMEX", "VMEC2000", "VMEC++", "DESC"),
     )
     fig.text(
         0.985,
         0.022,
-        "Same Apple host; solve and end-to-end pipeline boundaries are reported separately.",
+        "Cold CPU runs on the same Apple host; each bar includes the code's load, solve, and export path.",
         ha="right",
         va="bottom",
         fontsize=8,
@@ -304,42 +286,81 @@ def render(
     plt.close(fig)
 
 
+def render_summary_pair(before: Path, after: Path, output: Path) -> None:
+    """Place the standard ``--plot`` summaries side by side without restyling."""
+    _style()
+    fig, axes = plt.subplots(1, 2, figsize=(16.0, 5.9), dpi=170)
+    for ax, path, title in zip(
+        axes,
+        (before, after),
+        ("Before polishing", "After polishing"),
+        strict=True,
+    ):
+        ax.imshow(plt.imread(path))
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=8)
+        ax.set_axis_off()
+    fig.subplots_adjust(left=0.005, right=0.995, bottom=0.01, top=0.93, wspace=0.015)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output, format="webp", dpi=170, pil_kwargs={"quality": 88, "method": 6})
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=DEFAULT_FIGURE)
     parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA)
+    parser.add_argument("--artifact", type=Path, default=DEFAULT_ARTIFACT)
+    parser.add_argument("--before-summary", type=Path)
+    parser.add_argument("--after-summary", type=Path)
+    parser.add_argument("--summary-output", type=Path, default=DEFAULT_SUMMARY_FIGURE)
     args = parser.parse_args()
-    solovev = _load(SOLOVEV_FILES)
-    stellarator = _load(STELLARATOR_FILES)
-    render(solovev, stellarator, args.output)
-    cases = {
-        "solovev_analytical": (SOLOVEV_FILES, solovev),
-        "nfp2_QA_finite_beta": (STELLARATOR_FILES, stellarator),
-    }
+    if (args.before_summary is None) != (args.after_summary is None):
+        parser.error("pass both --before-summary and --after-summary")
+    cases = _load(args.artifact)
+    render(
+        cases["shaped_tokamak_pressure"]["sources"],
+        cases["nfp2_QA_finite_beta"]["sources"],
+        args.output,
+    )
+    if args.before_summary is not None:
+        render_summary_pair(
+            args.before_summary,
+            args.after_summary,
+            args.summary_output,
+        )
     try:
         figure_path = args.output.relative_to(REPO).as_posix()
     except ValueError:
         figure_path = str(args.output)
     metadata = {
-        "schema": "vmex.strong-force-readme-figure/3",
+        "schema": "vmex.strong-force-readme-figure/4",
         "cases": {
             case: {
                 "sources": {
                     name: {
-                        "path": f"benchmarks/{filename}",
-                        "sha256": file_sha256(BENCHMARKS / filename),
-                        "normalized_l2": _normalized(name, artifacts[name]),
+                        "path": f"benchmarks/{args.artifact.name}",
+                        "sha256": file_sha256(args.artifact),
+                        "normalized_l2": _normalized(name, artifact),
                     }
-                    for name, filename in files.items()
+                    for name, artifact in contents["sources"].items()
                 }
             }
-            for case, (files, artifacts) in cases.items()
+            for case, contents in cases.items()
         },
         "figure": figure_path,
         "figure_sha256": file_sha256(args.output),
+        "summary_figure": (
+            None
+            if args.before_summary is None
+            else args.summary_output.relative_to(REPO).as_posix()
+        ),
+        "summary_figure_sha256": (
+            None
+            if args.before_summary is None
+            else file_sha256(args.summary_output)
+        ),
         "timing_note": (
-            "Cold measured pipelines on one Apple host; boundaries differ by "
-            "implementation and are not a warm-JIT speed claim."
+            "Cold load, solve, and export paths on one Apple host; no warm-JIT claim."
         ),
     }
     args.metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")

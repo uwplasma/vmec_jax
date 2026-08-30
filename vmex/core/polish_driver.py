@@ -89,9 +89,9 @@ def _residual_evaluations(result: Any) -> int:
 class PolishConfig:
     """Conservative controls for a fixed-boundary strong-root correction."""
 
-    tolerance: float = 1.0e-8
-    validation_tolerance: float | None = None
-    radial_degree: int = 5
+    tolerance: float = 1.0e-3
+    validation_tolerance: float | None = 1.0e-2
+    radial_degree: int = 3
     radial_spans: int | None = None
     radial_quadrature_order: int | None = None
     radial_refinement_tolerance: float = 1.0e-3
@@ -233,6 +233,20 @@ class PolishResult(NamedTuple):
     polish_report: PolishReport
     correction: jax.Array
     context: PolishContext | None = None
+    compatibility_state: Any = None
+
+
+def polished_compatibility_state(legacy_state, result: PolishResult):
+    """Project a certified native correction onto the sampled WOUT mesh."""
+
+    if result.context is None or not np.asarray(result.correction).size:
+        return legacy_state
+    runtime = result.context.runtime
+    high = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * jnp.asarray(result.correction)
+    )
+    low = runtime.transfer.restrict(high)
+    return jax.tree.map(jnp.add, legacy_state, low)
 
 
 @dataclass(frozen=True)
@@ -1183,6 +1197,8 @@ def polish_legacy_solution(
             initial_certificate,
             report,
             jnp.zeros((0,), dtype=jnp.asarray(refined_state.R_cos).dtype),
+            None,
+            refined_state,
         )
     native = certified_native
     low_preconditioner = build_low_order_preconditioner(
@@ -1200,10 +1216,13 @@ def polish_legacy_solution(
         balance_full_root=False,
         radial_quadrature_order=config.radial_quadrature_order,
     )
-    return polish_collocation_least_squares(
+    result = polish_collocation_least_squares(
         runtime,
         config=config,
         initial_certificate=initial_certificate,
+    )
+    return result._replace(
+        compatibility_state=polished_compatibility_state(refined_state, result)
     )
 
 
@@ -1214,5 +1233,6 @@ __all__ = [
     "PolishResult",
     "polish_collocation_least_squares",
     "polish_legacy_solution",
+    "polished_compatibility_state",
     "polish_strong_root",
 ]

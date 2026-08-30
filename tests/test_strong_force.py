@@ -117,6 +117,23 @@ def test_native_field_view_matches_analytic_geometry_and_force_view():
     assert native.dposition_dphi.shape == native.position.shape
 
 
+def test_axisymmetric_fields_are_invariant_to_field_period_coordinates():
+    """Changing only zeta=nfp*phi cannot change an axisymmetric equilibrium."""
+    base = _constant_toroidal_field_state()
+    current = jnp.full_like(base.chipf, 0.2)
+    one_period = replace(base, chipf=current, nfp=1)
+    three_periods = replace(base, chipf=current, nfp=3)
+    rho = jnp.asarray([0.2, 0.7])
+    theta = jnp.asarray([0.4, 2.1])
+    phi = jnp.asarray([0.3, 1.7])
+
+    one = evaluate_strong_force(one_period, rho, theta, phi)
+    three = evaluate_strong_force(three_periods, rho, theta, 3.0 * phi)
+    np.testing.assert_allclose(three.B, one.B, rtol=3e-13, atol=3e-13)
+    np.testing.assert_allclose(three.J, one.J, rtol=3e-12, atol=3e-7)
+    np.testing.assert_allclose(three.force, one.force, rtol=3e-12, atol=3e-7)
+
+
 def test_high_order_surface_handoff_is_analytic_and_tangent():
     native = evaluate_high_order_surface(
         _constant_toroidal_field_state(),

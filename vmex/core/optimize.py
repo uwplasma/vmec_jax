@@ -451,9 +451,14 @@ def solve_equilibrium(
         inp, verbose=verbose, initial_state=initial_state,
         raise_on_max_iterations=raise_on_max_iterations, **solve_kwargs,
     )
-    ns = int(np.shape(result.state.R_cos)[0])
+    state = (
+        result.polished_state
+        if result.polished_state is not None
+        else result.state
+    )
+    ns = int(np.shape(state.R_cos)[0])
     runtime = prepare_runtime(inp, resolution_from_input(inp, ns=ns))
-    return Equilibrium(inp=inp, state=result.state, runtime=runtime, result=result)
+    return Equilibrium(inp=inp, state=state, runtime=runtime, result=result)
 
 
 # ===========================================================================

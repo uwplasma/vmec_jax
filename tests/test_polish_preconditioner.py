@@ -1325,6 +1325,17 @@ def test_public_solver_rejects_unknown_polish_mode_before_solving():
         solver.solve(inp, polish="unknown")
 
 
+def test_public_solver_resolves_input_flag_and_rejects_two_api_spellings():
+    inp = dataclasses.replace(
+        VmecInput.from_file(DATA / "input.solovev"),
+        polish_force_balance=True,
+    )
+    assert solver._resolve_force_balance_polish(inp, None, None) is True
+    assert solver._resolve_force_balance_polish(inp, False, None) is False
+    with pytest.raises(ValueError, match="either polish or polish_force_balance"):
+        solver._resolve_force_balance_polish(inp, False, True)
+
+
 def test_public_solver_auto_attaches_an_already_certified_native_state():
     inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
         mpol=3,
@@ -1353,5 +1364,8 @@ def test_public_solver_auto_attaches_an_already_certified_native_state():
     assert result.strong_force is not None
     assert result.polish_report.converged
     assert result.polish_report.termination_reason == "already-certified"
+    assert result.polished_state is not None
     assert result.state.R_cos.shape == (5, 3)
+    assert result.polished_state.R_cos.shape == result.state.R_cos.shape
+    assert np.all(np.isfinite(result.polished_state.R_cos))
     assert result.native_equilibrium.R_cos.shape == (3, 4)

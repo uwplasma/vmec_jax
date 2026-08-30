@@ -623,7 +623,11 @@ def _write_wout_from_result(inp, input_path: Path, result, wout_path: Path,
         )
     wout = wout_from_state(
         inp=inp,
-        state=result.state,
+        state=(
+            result.polished_state
+            if result.polished_state is not None
+            else result.state
+        ),
         fsqr=float(result.fsqr), fsqz=float(result.fsqz), fsql=float(result.fsql),
         fsqt=fsqt,
         niter=int(result.iterations),

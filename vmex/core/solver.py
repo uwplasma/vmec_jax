@@ -1640,7 +1640,7 @@ class SolveResult:
     ``ncurr = 1``.  ``fsq_history`` has one row per iteration:
     ``(fsqr, fsqz, fsql, fsqr1, fsqz1, fsql1)``.  ``wmhd`` is the printed
     ``WMHD = (wb + wp/(gamma-1)) * (2 pi)^2``.  ``vacuum`` is ``None`` for
-    fixed-boundary solves.  The four polish fields are ``None`` on the
+    fixed-boundary solves.  The five polish fields are ``None`` on the
     unchanged default path.
     """
 
@@ -1654,6 +1654,7 @@ class SolveResult:
     rmns: np.ndarray | None; zmnc: np.ndarray | None
     iotaf: np.ndarray; fsq_history: np.ndarray
     vacuum: VacuumOutput | None = None
+    polished_state: SpectralState | None = None
     native_equilibrium: Any = None
     strong_force: Any = None
     polish_report: Any = None
@@ -2113,6 +2114,59 @@ def _finalize(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
     )
 
 
+def _resolve_force_balance_polish(
+    source: VmecInput | RunSetup,
+    polish: bool | str | None,
+    polish_force_balance: bool | str | None,
+) -> bool | str:
+    """Resolve the input directive and the two Python API spellings."""
+
+    if polish is not None and polish_force_balance is not None:
+        raise ValueError("pass either polish or polish_force_balance, not both")
+    requested = polish_force_balance if polish_force_balance is not None else polish
+    if requested is None:
+        requested = (
+            source.polish_force_balance if isinstance(source, VmecInput) else False
+        )
+    if requested is not False and requested is not True and requested != "auto":
+        raise ValueError("polish_force_balance must be False, True, or 'auto'")
+    return requested
+
+
+def _polish_solve_result(
+    source: VmecInput,
+    resolution: Resolution,
+    result: SolveResult,
+    *,
+    polish: bool | str,
+    polish_config: Any,
+    lconm1: bool,
+) -> SolveResult:
+    """Attach the optional certified native and sampled polish products."""
+
+    if polish is False:
+        return result
+    from .polish_driver import PolishConfig, polish_legacy_solution
+
+    if polish_config is not None and not isinstance(polish_config, PolishConfig):
+        raise TypeError("polish_config must be a PolishConfig")
+    polished = polish_legacy_solution(
+        source,
+        resolution,
+        result.state,
+        config=polish_config,
+        lconm1=lconm1,
+    )
+    return replace(
+        result,
+        polished_state=polished.compatibility_state,
+        native_equilibrium=polished.native_equilibrium,
+        strong_force=polished.strong_force,
+        polish_report=polished.polish_report,
+        polish_context=polished.context,
+    )
+
+
 def solve(
     source: VmecInput | RunSetup,
     resolution: Resolution | None = None,
@@ -2129,7 +2183,8 @@ def solve(
     prec2d: Prec2DConfig | None = None,
     use_fft: bool | None = None,
     jacobian_retries: int = 2,
-    polish: bool | str = False,
+    polish: bool | str | None = None,
+    polish_force_balance: bool | str | None = None,
     polish_config: Any = None,
 ) -> SolveResult:
     """Single-grid fixed-boundary solve (VMEC2000 ``eqsolve.f``).
@@ -2196,22 +2251,28 @@ def solve(
     stiff cases (high beta/aspect/mode-number) in far fewer iterations.  The
     default (``NONE``) path is byte-identical to the 1D-only solver.
 
-    ``polish=False`` preserves the legacy result exactly.  ``polish=True``
+    ``polish_force_balance=False`` preserves the legacy result exactly.
+    ``polish_force_balance=True``
     requires a converged legacy solve, constructs the high-order fixed-boundary
     root, and follows :class:`~vmex.core.polish_driver.PolishConfig` failure
-    semantics.  ``polish="auto"`` additionally permits the driver to return
-    immediately when the independent certificate already passes.  Polishing
-    requires a :class:`VmecInput` source; the legacy sampled ``state`` and wout
-    arrays remain unchanged, while ``native_equilibrium``, ``strong_force``,
-    ``polish_report``, and ``polish_context`` carry the certified high-order
-    result and its frozen derivative chart.
+    semantics.  ``polish_force_balance="auto"`` additionally permits the
+    driver to return immediately when the independent certificate already
+    passes.  Polishing
+    requires a :class:`VmecInput` source. ``polished_state`` is the native
+    correction projected onto the sampled VMEC mesh for WOUT compatibility;
+    ``native_equilibrium``, ``strong_force``, ``polish_report``, and
+    ``polish_context`` carry the certified high-order result and its frozen
+    derivative chart. ``polish`` remains a backward-compatible alias.
     """
     if resolution is None and isinstance(source, VmecInput):
         resolution = resolution_from_input(source)
     if resolution is None:
         raise ValueError("solve(RunSetup) requires a Resolution")
-    if polish is not False and polish is not True and polish != "auto":
-        raise ValueError("polish must be False, True, or 'auto'")
+    polish = _resolve_force_balance_polish(
+        source, polish, polish_force_balance
+    )
+    if polish is not False and not isinstance(source, VmecInput):
+        raise ValueError("force-balance polishing requires a VmecInput source")
     if restart_from is not None:
         if initial_state is not None:
             raise ValueError(
@@ -2258,23 +2319,11 @@ def solve(
             jacobian_retries=jacobian_retries,
         )
         result = _finalize(carry, rt)
-        if polish is False:
-            return result
-        from .polish_driver import PolishConfig, polish_legacy_solution
-
-        if polish_config is not None and not isinstance(polish_config, PolishConfig):
-            raise TypeError("polish_config must be a PolishConfig")
-        polished = polish_legacy_solution(
+        return _polish_solve_result(
             source,
             rt.resolution,
-            result.state,
-            config=polish_config,
-            lconm1=lconm1,
-        )
-        return replace(
             result,
-            native_equilibrium=polished.native_equilibrium,
-            strong_force=polished.strong_force,
-            polish_report=polished.polish_report,
-            polish_context=polished.context,
+            polish=polish,
+            polish_config=polish_config,
+            lconm1=lconm1,
         )
