@@ -192,6 +192,9 @@ def test_solve_equilibrium_forwards_verbose(monkeypatch, solovev_eq):
         fsql=solovev_eq.result.fsql,
         iterations=solovev_eq.result.iterations,
         converged=solovev_eq.result.converged,
+        # solve_equilibrium prefers the polished state when one exists, so
+        # the stub must carry the real result's polished_state=None default.
+        polished_state=None,
     )
 
     def fake_solve_multigrid(inp, **kwargs):
