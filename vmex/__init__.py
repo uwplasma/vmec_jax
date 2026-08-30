@@ -164,6 +164,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".core.strong_force", "evaluate_high_order_fields"),
     "evaluate_high_order_surface": (
         ".core.strong_force", "evaluate_high_order_surface"),
+    "boozer_bmnc_high_order": (
+        ".core.omnigenity", "boozer_bmnc_high_order"),
     "evaluate_strong_force": (".core.strong_force", "evaluate_strong_force"),
     "high_order_state_from_wout": (
         ".core.strong_force", "high_order_state_from_wout"),

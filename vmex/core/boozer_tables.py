@@ -36,7 +36,7 @@ from .fields import magnetic_fields, metric_elements, surface_currents
 from .geometry import half_mesh_jacobian
 from .solver import SolverRuntime, SpectralState, _geometry
 
-__all__ = ["boozer_input_tables"]
+__all__ = ["boozer_input_tables", "high_order_boozer_input_tables"]
 
 
 def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict:
@@ -272,3 +272,105 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
                 gmns=gmns, bsupumns=bsupumns, bsupvmns=bsupvmns,
                 bsubsmnc=bsubsmnc, iota=iota,
                 G=jnp.asarray(cur.bvco)[j], I=jnp.asarray(cur.buco)[j])
+
+
+def high_order_boozer_input_tables(
+    state,
+    rho,
+    *,
+    ntheta: int | None = None,
+    nzeta: int | None = None,
+) -> dict:
+    """Build BOOZ_XFORM inputs directly from one continuous native surface.
+
+    Geometry spectra come from the high-order coefficients exactly. ``|B|``
+    and covariant-field spectra use uniform Fourier projection of the analytic
+    field evaluator, without a sampled radial mesh or host callback.
+    """
+
+    from .strong_force import evaluate_high_order_fields
+    from .fourier import mode_table
+
+    mode_m = np.asarray(state.m, dtype=int)
+    mode_n = np.asarray(state.n, dtype=int)
+    max_m = int(np.max(mode_m, initial=0))
+    max_n = int(np.max(np.abs(mode_n), initial=0))
+    ntheta = max(12, 2 * (max_m + 1)) if ntheta is None else int(ntheta)
+    nzeta = max(8, 2 * (max_n + 1)) if nzeta is None else int(nzeta)
+    if ntheta < 2 * (max_m + 1) or nzeta < 2 * (max_n + 1):
+        raise ValueError("Boozer projection grids must resolve the native mode set")
+
+    theta = jnp.linspace(0.0, 2.0 * jnp.pi, ntheta, endpoint=False)
+    zeta = jnp.linspace(0.0, 2.0 * jnp.pi, nzeta, endpoint=False)
+    tt, zz = jnp.meshgrid(theta, zeta, indexing="ij")
+    fields = evaluate_high_order_fields(state, rho, tt, zz)
+
+    nyquist_modes = mode_table(ntheta // 2 + 1, nzeta // 2)
+    xm_nyq = np.asarray(nyquist_modes.m, dtype=int)
+    n_nyq = np.asarray(nyquist_modes.n, dtype=int)
+    xn_nyq = n_nyq * int(state.nfp)
+    phase = (
+        tt[..., None] * jnp.asarray(xm_nyq)
+        - zz[..., None] * jnp.asarray(n_nyq)
+    )
+    cosine = jnp.cos(phase)
+    sine = jnp.sin(phase)
+    m_fold = (ntheta % 2 == 0) & (xm_nyq == ntheta // 2)
+    n_fold = (nzeta % 2 == 0) & (np.abs(n_nyq) == nzeta // 2)
+    sine_free = ((xm_nyq == 0) | m_fold) & ((n_nyq == 0) | n_fold)
+    sine = jnp.where(jnp.asarray(sine_free)[None, None, :], 0.0, sine)
+    weights = (
+        2.0
+        / float(ntheta * nzeta)
+        * np.where(m_fold, 0.5, 1.0)
+        * np.where(n_fold, 0.5, 1.0)
+    )
+    weights[(xm_nyq == 0) & (n_nyq == 0)] = 1.0 / float(ntheta * nzeta)
+    weights = jnp.asarray(weights)
+
+    def project(values, basis):
+        return weights * jnp.einsum("tz,tzk->k", values, basis)
+
+    magnitude = jnp.linalg.norm(fields.B, axis=-1)
+    bsubu = fields.B_covariant[..., 1]
+    bsubv = float(state.nfp) * fields.B_covariant[..., 2]
+    bmnc = project(magnitude, cosine)
+    bmns = project(magnitude, sine)
+    bsubumnc = project(bsubu, cosine)
+    bsubumns = project(bsubu, sine)
+    bsubvmnc = project(bsubv, cosine)
+    bsubvmns = project(bsubv, sine)
+
+    rho = jnp.asarray(rho)
+    s = rho * rho
+    radial = rho ** jnp.asarray(mode_m)
+
+    def amplitudes(coefficients):
+        return state.radial_basis.evaluate(
+            jnp.asarray(coefficients), s, axis=-1
+        ) * radial
+
+    phip = state.radial_basis.evaluate(jnp.asarray(state.phipf), s)
+    chip = state.radial_basis.evaluate(jnp.asarray(state.chipf), s)
+    zero_mode = int(np.flatnonzero((xm_nyq == 0) & (n_nyq == 0))[0])
+    return {
+        "xm": mode_m,
+        "xn": mode_n * int(state.nfp),
+        "xm_nyq": xm_nyq,
+        "xn_nyq": xn_nyq,
+        "rmnc": amplitudes(state.R_cos),
+        "rmns": amplitudes(state.R_sin),
+        "zmnc": amplitudes(state.Z_cos),
+        "zmns": amplitudes(state.Z_sin),
+        "lmnc": amplitudes(state.L_cos),
+        "lmns": amplitudes(state.L_sin),
+        "bmnc": bmnc,
+        "bmns": bmns,
+        "bsubumnc": bsubumnc,
+        "bsubumns": bsubumns,
+        "bsubvmnc": bsubvmnc,
+        "bsubvmns": bsubvmns,
+        "iota": float(state.nfp) * chip / phip,
+        "G": bsubvmnc[zero_mode],
+        "I": bsubumnc[zero_mode],
+    }

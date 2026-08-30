@@ -15,6 +15,7 @@ from vmex.core import implicit
 from vmex.core import solver
 from vmex.core.errors import StrongForceContinuationError
 from vmex.core.input import VmecInput
+from vmex.core.omnigenity import boozer_bmnc_high_order
 from vmex.core.polish import (
     HighOrderCorrection,
     PreconditionerRefreshPolicy,
@@ -972,7 +973,7 @@ def test_polish_driver_skips_an_already_certified_state(small_strong_root):
     np.testing.assert_array_equal(result.correction, 0.0)
 
 
-def test_collocation_polish_returns_full_layout_correction(small_strong_root):
+def test_collocation_polish_primal_and_derivatives(small_strong_root):
     chart = make_strong_structured_chart(
         small_strong_root, balance_iterations=1, balance_probes=2
     )
@@ -1028,6 +1029,48 @@ def test_collocation_polish_returns_full_layout_correction(small_strong_root):
     )
     assert _tree_norm(difference) <= 2.0e-5 * max(
         _tree_norm(adjoint.native_cotangent), 1.0
+    )
+
+    polished = implicit_collocation_polished_state(
+        small_strong_root.native,
+        result.context,
+        linear_config,
+    )
+
+    def boozer_objective(native):
+        spectrum = boozer_bmnc_high_order(
+            native,
+            surfaces=[0.49],
+            mboz=4,
+            nboz=2,
+            ntheta=12,
+            nzeta=8,
+        )
+        return jnp.sum(spectrum["bmnc_b"][:, 1:] ** 2)
+
+    boozer_cotangent = jax.grad(boozer_objective)(polished)
+    boozer_adjoint = collocation_polish_adjoint(
+        result.context,
+        boozer_cotangent,
+        config=linear_config,
+    )
+    boozer_gradient = jax.grad(
+        lambda native: boozer_objective(
+            implicit_collocation_polished_state(
+                native,
+                result.context,
+                linear_config,
+            )
+        )
+    )(small_strong_root.native)
+    boozer_difference = jax.tree.map(
+        jnp.subtract,
+        boozer_gradient,
+        boozer_adjoint.native_cotangent,
+    )
+    assert _tree_norm(boozer_difference) <= 2.0e-5 * max(
+        _tree_norm(boozer_adjoint.native_cotangent),
+        1.0,
     )
 
     base_stationarity = _collocation_stationarity(

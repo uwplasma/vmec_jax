@@ -58,6 +58,8 @@ print(result.strong_force.normalized_l2)
 # virtual-casing adapter uses the same analytic tangents and edge field.
 surface = vj.evaluate_high_order_surface(result.native_equilibrium)
 vc_surface = vj.surface_field_data_from_high_order(result.native_equilibrium)
+boozer = vj.boozer_bmnc_high_order(
+    result.native_equilibrium, surfaces=[0.5, 1.0])
 ```
 
 Reproduce the measured JIT-native benchmark with:

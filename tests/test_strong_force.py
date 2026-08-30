@@ -12,7 +12,9 @@ import numpy as np
 import pytest
 
 from vmex.core.fourier import Resolution
+from vmex.core.boozer_tables import high_order_boozer_input_tables
 from vmex.core.input import VmecInput
+from vmex.core.omnigenity import boozer_bmnc_high_order
 from vmex.core.profiles import MU0
 from vmex.core.radial_basis import BSplineBasis
 from vmex.core.solver import _initial_state, prepare_runtime, resolution_from_input
@@ -180,6 +182,39 @@ def test_high_order_surface_composes_with_essos_objective():
     step = 1.0e-5
     finite_difference = (objective(step) - objective(-step)) / (2.0 * step)
     np.testing.assert_allclose(derivative, finite_difference, rtol=2e-7, atol=2e-9)
+
+
+def test_high_order_boozer_handoff_is_exact_and_differentiable():
+    state = _constant_toroidal_field_state()
+    tables = high_order_boozer_input_tables(
+        state,
+        0.7,
+        ntheta=12,
+        nzeta=8,
+    )
+    np.testing.assert_allclose(tables["bmnc"][0], 1.0, rtol=2e-13, atol=2e-13)
+    assert float(jnp.max(jnp.abs(tables["bmnc"][1:]))) < 1.0e-13
+
+    def objective(scale):
+        candidate = replace(state, phipf=scale * state.phipf)
+        boozer = boozer_bmnc_high_order(
+            candidate,
+            surfaces=[0.49],
+            mboz=4,
+            nboz=2,
+            ntheta=12,
+            nzeta=8,
+        )
+        zero = np.flatnonzero(
+            (boozer["xm_b"] == 0) & (boozer["xn_b"] == 0)
+        )[0]
+        return boozer["bmnc_b"][0, zero]
+
+    derivative = jax.grad(objective)(1.0)
+    step = 1.0e-5
+    finite_difference = (objective(1.0 + step) - objective(1.0 - step)) / (2.0 * step)
+    np.testing.assert_allclose(objective(1.0), 1.0, rtol=2e-13, atol=2e-13)
+    np.testing.assert_allclose(derivative, finite_difference, rtol=2e-9, atol=2e-11)
 
 
 def test_independent_oracle_agrees_with_desc_pointwise_current_and_force():

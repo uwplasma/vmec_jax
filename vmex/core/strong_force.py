@@ -181,6 +181,8 @@ class HighOrderFieldSamples:
     dposition_dtheta: Array
     dposition_dphi: Array
     sqrt_g: Array
+    B_contravariant: Array
+    B_covariant: Array
     B: Array
     pressure: Array
 
@@ -376,8 +378,10 @@ def evaluate_high_order_fields(
 
     ``zeta`` spans one field period while ``phi = zeta / nfp`` is the physical
     cylindrical angle. Array inputs broadcast, and the final dimension of
-    vector outputs is Cartesian. The function is pure JAX and is the in-memory
-    handoff for downstream field and surface objectives.
+    geometric vectors and ``B`` is Cartesian. Covariant and contravariant field
+    components use ``(rho, theta, zeta)``; ``dposition_dphi`` is converted to
+    the physical cylindrical angle. The function is pure JAX and is the
+    in-memory handoff for downstream field and surface objectives.
     """
 
     rho, theta, zeta = jnp.broadcast_arrays(rho, theta, zeta)
@@ -385,13 +389,17 @@ def evaluate_high_order_fields(
     points = jnp.stack((rho.reshape(-1), theta.reshape(-1), zeta.reshape(-1)), axis=-1)
 
     def sample(point):
-        basis, sqrt_g, _, _, field, pressure = _basic_fields(state, point)
+        basis, sqrt_g, contravariant, covariant, field, pressure = _basic_fields(
+            state, point
+        )
         return (
             _position(state, point),
             basis[:, 0],
             basis[:, 1],
             float(state.nfp) * basis[:, 2],
             sqrt_g,
+            contravariant,
+            covariant,
             field,
             pressure,
         )
@@ -407,8 +415,10 @@ def evaluate_high_order_fields(
         dposition_dtheta=values[2].reshape(vector_shape),
         dposition_dphi=values[3].reshape(vector_shape),
         sqrt_g=values[4].reshape(shape),
-        B=values[5].reshape(vector_shape),
-        pressure=values[6].reshape(shape),
+        B_contravariant=values[5].reshape(vector_shape),
+        B_covariant=values[6].reshape(vector_shape),
+        B=values[7].reshape(vector_shape),
+        pressure=values[8].reshape(shape),
     )
 
 

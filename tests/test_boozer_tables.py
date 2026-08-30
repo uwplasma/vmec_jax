@@ -26,6 +26,8 @@ jax.config.update("jax_enable_x64", True)
 from vmex.core import solver
 from vmex.core.boozer_tables import boozer_input_tables
 from vmex.core.input import VmecInput
+from vmex.core.omnigenity import boozer_bmnc_high_order, boozer_bmnc_state
+from vmex.core.strong_force import lift_high_order_state
 from vmex.core.wout import wout_from_state
 
 pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solve: run jitted
@@ -441,6 +443,58 @@ def test_field_tables_jit_matches_eager(symmetric_eq):
         np.testing.assert_allclose(np.asarray(jitted[key]),
                                    np.asarray(eager[key]), rtol=1e-9,
                                    atol=1e-13 * scale, err_msg=key)
+
+
+def test_high_order_boozer_matches_live_state_without_file_io(symmetric_eq):
+    eq = symmetric_eq
+    ns = int(eq.runtime.resolution.ns)
+    row = ns // 2
+    surface = float(
+        0.5
+        * (eq.runtime.setup.s_full[row] + eq.runtime.setup.s_full[row - 1])
+    )
+    native_state = lift_high_order_state(
+        eq.state,
+        eq.runtime,
+        degree=3,
+        max_spans=4,
+    )
+    live = boozer_bmnc_state(
+        eq.state,
+        eq.runtime,
+        surfaces=[surface],
+        mboz=8,
+        nboz=2,
+        oversample=1,
+    )
+    native = boozer_bmnc_high_order(
+        native_state,
+        surfaces=[surface],
+        mboz=8,
+        nboz=2,
+        ntheta=20,
+        nzeta=8,
+    )
+    live_modes = {
+        (int(m), int(n)): index
+        for index, (m, n) in enumerate(zip(live["xm_b"], live["xn_b"]))
+    }
+    native_modes = {
+        (int(m), int(n)): index
+        for index, (m, n) in enumerate(zip(native["xm_b"], native["xn_b"]))
+    }
+    common = sorted(live_modes.keys() & native_modes.keys())
+    live_B = np.asarray(
+        [live["bmnc_b"][0, live_modes[mode]] for mode in common]
+    )
+    native_B = np.asarray(
+        [native["bmnc_b"][0, native_modes[mode]] for mode in common]
+    )
+    relative = np.linalg.norm(native_B - live_B) / np.linalg.norm(live_B)
+    assert relative < 5.0e-4
+    np.testing.assert_allclose(native["iota_b"], live["iota_b"], rtol=2e-12)
+    np.testing.assert_allclose(native["G_b"], live["G_b"], rtol=5e-4)
+    np.testing.assert_allclose(native["I_b"], live["I_b"], rtol=5e-4)
 
 
 def test_bsupvmnc_jvp_from_boundary_tangent_is_live(symmetric_eq):
