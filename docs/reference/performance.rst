@@ -749,3 +749,39 @@ seven objectives.
 
 The parity suite needs the golden VMEC2000 fixtures (fetched release assets);
 it is skipped automatically when they are unavailable.
+
+Workflow observability harness
+------------------------------
+
+``benchmarks/profile_workflows.py`` is the one driver for flagship-workflow
+timing, memory, and compile observability. Every record separates build,
+per-stage execution (fenced with ``block_until_ready``), and — for the two
+process-level regimes — total process wall time, alongside trace/compile
+counts read from JAX's own ``jax_log_compiles`` records and peak host RSS::
+
+   python benchmarks/profile_workflows.py --list
+   python benchmarks/profile_workflows.py F1 F4 --regimes cold warm
+   python benchmarks/profile_workflows.py --all --regimes warm --out benchmarks/results/
+
+Five timing regimes are never mixed in one number:
+
+``cold``
+   a fresh process with an emptied persistent compilation cache;
+``cache_reload``
+   a second fresh process reusing the cache the matching ``cold`` run
+   populated (the record carries the entry counts before and after, so a
+   reload claim always has logged evidence);
+``warm``
+   same process, same shapes and static arguments — the median of repeats;
+``warm_newparams``
+   same process, changed physical parameters at unchanged shapes (the
+   no-recompile contract, asserted by the harness's own tests);
+``reshape``
+   same process, changed resolution.
+
+Two measurement traps the harness handles, documented because they silently
+zero results otherwise: importing vmex sets ``jax_logging_level = "ERROR"``,
+which filters the records the compile counter reads (the harness imports vmex
+before installing its handler), and ``jax_explain_cache_misses`` breaks
+``jax.lax.platform_dependent`` on jax 0.9.2 inside the very solves being
+measured, so it is opt-in rather than default.
