@@ -12,72 +12,83 @@ VMEX is a JAX implementation of VMEC for stellarator and tokamak ideal-MHD equil
 
 ![VMEX equilibria and diagnostics](docs/_static/figures/readme_equilibrium_showcase.webp)
 
-## Strong-force polishing (experimental)
+## Force-balance polishing
 
-The fixed-boundary polishing prototype evaluates both physical MHD-force
-channels on an overdetermined collocation grid and uses matrix-free JAX
-Jacobian/transpose products. On the canonical analytical Solov'ev case, the
-same independent oracle gives normalized L2 force `0.122381` for legacy VMEX,
-`0.122399` for VMEC2000 and VMEC++, `0.014405` for DESC, and `0.002759` for the
-certified polished VMEX state. Radial refinement is `1.55e-4` and nestedness is
-preserved. The second row uses the finite-beta, two-field-period QA stellarator
-at higher DESC resolution (`L=16`, `M=N=10`) and shows why representative 3-D
-cold runtime should be reported alongside the axisymmetric accuracy stress case.
-On that case, VMEX and DESC give common volume-L2 errors of `0.874` and `0.965`;
-their cold solves take `14.5 s` and `157.7 s`, respectively. The full measured
-pipelines take `14.5 s` and `186.3 s`. These are cold CPU measurements on the
-same Apple host with each code's stated pipeline boundary, not warm-JIT claims.
+VMEC converges projected equations on a staggered radial mesh. A small
+`FSQR/FSQZ/FSQL` therefore does not guarantee a small continuum residual
 
-![Independent Solov'ev and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
+$$
+\mathbf F=\mathbf J\!\times\!\mathbf B-\nabla p,\qquad
+\epsilon_F=\frac{2|\mathbf F|}
+{|\mathbf J\!\times\!\mathbf B|+|\nabla p|+F_{\rm floor}}.
+$$
 
-Use the certified path from Python (the explicit controls below reproduce the
-documented Solov'ev case):
+VMEX can polish a converged fixed-boundary state. It lifts the VMEC solution to
+axis-regular cubic B-splines, keeps the boundary and profiles fixed, and solves
+both physical force channels on an overdetermined collocation grid with
+matrix-free SOLVAX Gauss–Newton steps. A result is accepted only when the
+independent volume-$L^2$ force error is below `1e-2`, radial refinement changes
+it by at most `1e-3`, and the signed Jacobian stays positive.
+
+The comparison below uses the same independent oracle for every code. The top
+row is a finite-pressure tokamak; VMEX is the polished result. The bottom row is
+the finite-beta two-field-period QA case, with DESC resolved at
+`L=16, M=N=10`. Cold CPU times include each code's load, solve, and export path.
+VMEX takes `6.5 s` on the 3-D case versus `153.1 s` for DESC; on the small
+tokamak, the `56.9 s` VMEX path includes JIT and polishing.
+
+![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
+
+Enable polishing in a VMEC input without breaking VMEC2000:
+
+```fortran
+! VMEX: POLISH_FORCE_BALANCE = .TRUE.
+&INDATA
+  ...
+/
+```
+
+VMEX reads the comment; VMEC2000 ignores it and performs its ordinary solve.
+Run the complete finite-beta stellarator example with either interface:
+
+```console
+vmex examples/data/input.finite_beta_stellarator_polished --plot
+python examples/force_balance_polishing.py
+```
+
+The Python flag overrides the input directive and works on both single-grid and
+multigrid solves:
 
 ```python
 import vmex as vj
 
-inp = vj.VmecInput.from_file("examples/data/input.solovev_analytical")
-inp = inp.change_resolution(mpol=5, ntor=0, ntheta=14, nzeta=4)
-result = vj.solve(
-    inp,
-    ftol=1e-10,
-    max_iterations=1000,
-    polish=True,
-    polish_config=vj.PolishConfig(
-        tolerance=1e-3,
-        validation_tolerance=0.0144049834,
-        radial_degree=3,
-        radial_spans=16,
-        radial_refinement_tolerance=1e-3,
-    ),
-)
-print(result.polish_report.termination_reason)
-print(result.strong_force.normalized_l2)
+inp = vj.VmecInput.from_file("input.my_case")
+result = vj.solve_multigrid(inp, polish_force_balance=True)
+print(result.polish_report.initial_normalized_l2)
+print(result.polish_report.final_normalized_l2)
 
-# No file round-trip: ESSOS objectives accept this surface directly, and the
-# virtual-casing adapter uses the same analytic tangents and edge field.
-surface = vj.evaluate_high_order_surface(result.native_equilibrium)
-vc_surface = vj.surface_field_data_from_high_order(result.native_equilibrium)
-boozer = vj.boozer_bmnc_high_order(
-    result.native_equilibrium, surfaces=[0.5, 1.0])
+# Continuous state for fields, Boozer, virtual casing, ESSOS, and derivatives.
+native = result.native_equilibrium
+# Sampled state used by the CLI's VMEC-compatible WOUT output.
+sampled = result.polished_state
 ```
 
-Reproduce the measured JIT-native benchmark with:
+`opt.solve_equilibrium(..., polish_force_balance=True)` exposes the same final
+step. Optimization examples leave it off during iteration and may enable it for
+the final saved equilibrium.
 
-```console
-python benchmarks/strong_polish.py \
-  --input examples/data/input.solovev_analytical --ns 31 --mpol 5 \
-  --degree 3 --radial-spans 16 --solvax-least-squares \
-  --solve-tolerance 1e-3 --validation-tolerance 0.0144049834 \
-  --radial-refinement-tolerance 1e-3
-```
+The standard summary below is produced by the example before and after
+polishing. The independent continuum error drops from `1.361e-2` to `5.617e-3`;
+the fixed boundary and prescribed pressure/current profiles do not move. The
+summary's radial `equif` panel is the separate VMEC-grid diagnostic, so it need
+not decrease monotonically with the continuum objective.
 
-The public call and benchmark use the same matrix-free least-squares API merged in
-[SOLVAX PR 98](https://github.com/uwplasma/SOLVAX/pull/98). The committed raw
-artifacts, exact source revisions, figure generator, and timing boundaries live
-in `benchmarks/`; the default equilibrium solve remains unchanged. The primal
-polishing API is experimental while its least-squares-stationarity gradient and
-native downstream gates are finalized.
+![Finite-beta stellarator summary before and after force-balance polishing](docs/_static/figures/readme_polish_summary.webp)
+
+The bundled benchmark artifact records all eight solver results, exact source
+revisions, DESC resolution, timing boundaries, and certificate refinements.
+The figure generator and raw data live in `benchmarks/`; the ordinary solve
+remains the default.
 
 ## Install
 

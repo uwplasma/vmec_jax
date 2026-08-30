@@ -3867,3 +3867,16 @@ supersedes older instructions to keep #125 open indefinitely.
   acceptance case reduces independent relative force error from ``1.284e-2``
   to ``1.820e-3`` in three nonlinear steps; the 3-D memory/compile cost remains
   an explicit performance gate while the stellarator figure is finalized.
+- 2026-08-30 rogeriojorge: Phase 42 acceptance — corrected the high-order
+  field-period coordinate transform and added an axisymmetric ``nfp``
+  invariance gate. The committed comparison now contains clean results from
+  VMEX, VMEC2000, VMEC++, and DESC for both a finite-pressure shaped tokamak
+  and the finite-beta QA stellarator. Independent volume-L2 errors are
+  ``1.819e-3 / 1.711e-2 / 1.711e-2 / 2.962e-2`` for the tokamak and
+  ``0.525 / 0.525 / 0.525 / 0.879`` for the stellarator, in that solver order.
+  Cold end-to-end stellarator times are ``6.53 / 1.00 / 0.481 / 153`` seconds.
+  The two cases and eight source records are consolidated in one provenance
+  bundle; seven superseded artifacts were removed, reducing the tracked
+  benchmark-file count from 51 to 45. Both README figures are generated from
+  those records, hash-gated, and visually reviewed without rerunning unrelated
+  CI lanes.

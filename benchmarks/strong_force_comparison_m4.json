@@ -3,49 +3,60 @@
     "nfp2_QA_finite_beta": {
       "sources": {
         "DESC": {
-          "normalized_l2": 0.9649752800267988,
-          "path": "benchmarks/strong_certificate_nfp2_QA_finite_beta_desc_m4.json",
-          "sha256": "6967c5abe6aa2131328bcb128de0dc57f542204d757ca8a599e38ff196f7d106"
+          "normalized_l2": 0.8792585561874102,
+          "path": "benchmarks/strong_force_cases_m4.json",
+          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+        },
+        "VMEC++": {
+          "normalized_l2": 0.5251832689797072,
+          "path": "benchmarks/strong_force_cases_m4.json",
+          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+        },
+        "VMEC2000": {
+          "normalized_l2": 0.52518347840121,
+          "path": "benchmarks/strong_force_cases_m4.json",
+          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
         },
         "VMEX": {
-          "normalized_l2": 0.8739270443547336,
-          "path": "benchmarks/strong_certificate_nfp2_QA_finite_beta_vmex_m4.json",
-          "sha256": "776ffb216a5c67c3252a46b2f6f4a1c2f99364641401eb12348a45361485e726"
+          "normalized_l2": 0.5251834783139551,
+          "path": "benchmarks/strong_force_cases_m4.json",
+          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
         }
       }
     },
-    "solovev_analytical": {
+    "shaped_tokamak_pressure": {
       "sources": {
         "DESC": {
-          "normalized_l2": 0.01440482087874163,
-          "path": "benchmarks/strong_certificate_solovev_desc_m4.json",
-          "sha256": "2a11e8c5f30a82ac53592f12b917f037bf574292ab037b336c9c2d3b351e4030"
+          "normalized_l2": 0.02962338970989271,
+          "path": "benchmarks/strong_force_cases_m4.json",
+          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
         },
         "VMEC++": {
-          "normalized_l2": 0.12239903290898604,
-          "path": "benchmarks/strong_certificate_solovev_vmecpp_m4.json",
-          "sha256": "9efcbf2e3d29a846e228cb511a5a269082ec853d093254a69541133476c996a2"
+          "normalized_l2": 0.017107126432675767,
+          "path": "benchmarks/strong_force_cases_m4.json",
+          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
         },
         "VMEC2000": {
-          "normalized_l2": 0.12239901752615623,
-          "path": "benchmarks/strong_certificate_solovev_vmec2000_m4.json",
-          "sha256": "3606e0314acfd73da6e32d64283983d7645d50da054877e1cc6b1287d608ea0a"
+          "normalized_l2": 0.017107126437578512,
+          "path": "benchmarks/strong_force_cases_m4.json",
+          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
         },
-        "VMEX legacy": {
-          "normalized_l2": 0.12238126078525399,
-          "path": "benchmarks/strong_certificate_solovev_vmex_m4.json",
-          "sha256": "abeeff3becd72cacb3ea3e5b9ffcf8324e9d80d4fee5bae31191466f941c42b5"
-        },
-        "VMEX polished": {
-          "normalized_l2": 0.002758982753904465,
-          "path": "benchmarks/strong_polish_solovev_solvax_d3_m5_m4.json",
-          "sha256": "54405a68ed561134eb9a1b0039fb2f1733de2f2499dc1516856cfb50c0a84c94"
+        "VMEX": {
+          "normalized_l2": 0.0018189811774630468,
+          "path": "benchmarks/strong_force_cases_m4.json",
+          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
         }
       }
     }
   },
   "figure": "docs/_static/figures/readme_strong_force_comparison.webp",
-  "figure_sha256": "752b72df58214fd15b7a5b9d07128398f0797eebaa08ad31b4f94a73fbde60ad",
-  "schema": "vmex.strong-force-readme-figure/3",
-  "timing_note": "Cold measured pipelines on one Apple host; boundaries differ by implementation and are not a warm-JIT speed claim."
+  "figure_sha256": "19468c2fc25976b602829943ea221928fce3f146b141f103ba2ea100b8fb855f",
+  "schema": "vmex.strong-force-readme-figure/4",
+  "summary_figure": "docs/_static/figures/readme_polish_summary.webp",
+  "summary_figure_sha256": "6c0f892e28c469b2937dd4e9a567c15cca8a0a4d54cbc575ab1ecc953d23568c",
+  "summary_independent_l2": {
+    "after": 0.005616607909342132,
+    "before": 0.013607094167290654
+  },
+  "timing_note": "Cold load, solve, and export paths on one Apple host; no warm-JIT claim."
 }

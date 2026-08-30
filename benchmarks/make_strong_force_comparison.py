@@ -41,18 +41,15 @@ def _load(path: Path) -> dict[str, dict[str, dict]]:
     if bundle["schema"] != "vmex.strong-force-comparison-cases/1":
         raise RuntimeError("unexpected strong-force comparison artifact schema")
     cases = bundle["cases"]
-    artifacts = {
-        name: artifact
-        for case in cases.values()
-        for name, artifact in case["sources"].items()
-    }
-    for name, artifact in artifacts.items():
-        if artifact["measurement_dirty"]:
-            raise RuntimeError(f"{name} artifact was measured from dirty source")
-        external = artifact.get("external_source")
-        if external is not None and not external["success"]:
-            raise RuntimeError(f"{name} external solve did not succeed")
-    for case in cases.values():
+    for case_name, case in cases.items():
+        for name, artifact in case["sources"].items():
+            if artifact["measurement_dirty"]:
+                raise RuntimeError(
+                    f"{case_name}/{name} was measured from dirty source"
+                )
+            external = artifact.get("external_source")
+            if external is not None and not external["success"]:
+                raise RuntimeError(f"{case_name}/{name} external solve failed")
         polished = case["sources"].get("VMEX")
         if polished is None or "polish_report" not in polished:
             continue
@@ -122,6 +119,7 @@ def _render_row(
     letters: tuple[str, str, str],
     timing_names: tuple[str, ...],
 ) -> None:
+    artifacts = {name: artifacts[name] for name in COLORS}
     line_styles = {
         "VMEX": "-",
         "VMEC2000": (0, (5, 2)),
@@ -148,7 +146,7 @@ def _render_row(
     ax.set_ylabel(
         "relative force error\n"
         r"$\epsilon_F=2|\mathbf{J}\!\times\!\mathbf{B}-\nabla p|/"
-        r"(|\mathbf{J}\!\times\!\mathbf{B}|+|\nabla p|)$"
+        r"(|\mathbf{J}\!\times\!\mathbf{B}|+|\nabla p|+F_{\rm floor})$"
     )
     ax.legend(loc="best", ncols=2)
     ax.set_title(
@@ -210,12 +208,12 @@ def _render_row(
     ax.set_xticklabels([labels.get(name, name) for name in timing_names])
     ax.set_ylabel("cold wall time [s]")
     ax.set_yscale("log")
-    ax.set_ylim(max(0.2, min(timings) * 0.5), max(timings) * 2.0)
+    ax.set_ylim(max(0.005, min(timings) * 0.5), max(timings) * 2.0)
     for bar in bars:
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() * 1.08,
-            f"{bar.get_height():.1f}",
+            f"{bar.get_height():.3g}",
             ha="center",
             va="bottom",
             fontsize=8,
@@ -286,22 +284,37 @@ def render(
     plt.close(fig)
 
 
-def render_summary_pair(before: Path, after: Path, output: Path) -> None:
+def render_summary_pair(
+    before: Path,
+    after: Path,
+    output: Path,
+    *,
+    before_error: float | None = None,
+    after_error: float | None = None,
+) -> None:
     """Place the standard ``--plot`` summaries side by side without restyling."""
     _style()
-    fig, axes = plt.subplots(1, 2, figsize=(16.0, 5.9), dpi=170)
-    for ax, path, title in zip(
+    fig, axes = plt.subplots(1, 2, figsize=(14.0, 5.2), dpi=140)
+    titles = ("Before polishing", "After polishing")
+    errors = (before_error, after_error)
+    for ax, path, title, error in zip(
         axes,
         (before, after),
-        ("Before polishing", "After polishing"),
+        titles,
+        errors,
         strict=True,
     ):
         ax.imshow(plt.imread(path))
-        ax.set_title(title, fontsize=12, fontweight="bold", pad=8)
+        subtitle = (
+            ""
+            if error is None
+            else rf"  —  independent $L^2$ $\epsilon_F={error:.3e}$"
+        )
+        ax.set_title(title + subtitle, fontsize=12, fontweight="bold", pad=8)
         ax.set_axis_off()
     fig.subplots_adjust(left=0.005, right=0.995, bottom=0.01, top=0.93, wspace=0.015)
     output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, format="webp", dpi=170, pil_kwargs={"quality": 88, "method": 6})
+    fig.savefig(output, format="webp", dpi=140, pil_kwargs={"quality": 78, "method": 6})
     plt.close(fig)
 
 
@@ -313,9 +326,15 @@ def main() -> None:
     parser.add_argument("--before-summary", type=Path)
     parser.add_argument("--after-summary", type=Path)
     parser.add_argument("--summary-output", type=Path, default=DEFAULT_SUMMARY_FIGURE)
+    parser.add_argument("--summary-before-error", type=float)
+    parser.add_argument("--summary-after-error", type=float)
     args = parser.parse_args()
     if (args.before_summary is None) != (args.after_summary is None):
         parser.error("pass both --before-summary and --after-summary")
+    if args.before_summary is not None and (
+        args.summary_before_error is None or args.summary_after_error is None
+    ):
+        parser.error("summary images require both independent error values")
     cases = _load(args.artifact)
     render(
         cases["shaped_tokamak_pressure"]["sources"],
@@ -327,6 +346,8 @@ def main() -> None:
             args.before_summary,
             args.after_summary,
             args.summary_output,
+            before_error=args.summary_before_error,
+            after_error=args.summary_after_error,
         )
     try:
         figure_path = args.output.relative_to(REPO).as_posix()
@@ -358,6 +379,14 @@ def main() -> None:
             None
             if args.before_summary is None
             else file_sha256(args.summary_output)
+        ),
+        "summary_independent_l2": (
+            None
+            if args.before_summary is None
+            else {
+                "before": args.summary_before_error,
+                "after": args.summary_after_error,
+            }
         ),
         "timing_note": (
             "Cold load, solve, and export paths on one Apple host; no warm-JIT claim."
