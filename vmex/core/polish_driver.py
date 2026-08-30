@@ -808,7 +808,9 @@ def polish_strong_root(
             accepted_states.append((candidate, float(parameter)))
             return True
 
-        continuation_preconditioners = (
+        # Kwargs for adaptive_continuation: the two spellings carry
+        # different callable arities, so the annotation is deliberately Any.
+        continuation_preconditioners: dict[str, Any] = (
             {"precond": precondition}
             if block_preconditioner is None
             or not _supports_keyword(
