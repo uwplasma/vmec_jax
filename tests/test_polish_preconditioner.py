@@ -605,7 +605,14 @@ def test_square_strong_root_endpoint_jvp_boundary_and_rank(small_strong_root):
         )
     low_endpoint = strong_root_residual(zero, runtime, 0.0)
     strong_endpoint = strong_root_residual(zero, runtime, 1.0)
-    np.testing.assert_array_equal(low_endpoint, 0.0)
+    # The alpha = 0 endpoint is legacy_residual(x0) - legacy_defect: two
+    # evaluations of one nonlinear function in two separately compiled
+    # programs.  XLA does not promise bit-identical fusion across programs or
+    # platforms, so the cancellation bottoms out at round-off (measured
+    # 2.8e-14 on the Linux CI runner, exact zero on arm64).  The bound is the
+    # cancellation floor of the row-scaled O(1) residual, not a physics
+    # tolerance.
+    np.testing.assert_allclose(low_endpoint, 0.0, atol=1.0e-12)
     assert strong_endpoint.shape == zero.shape
     assert np.all(np.isfinite(np.asarray(strong_endpoint)))
     # The initial force RMS is divided by the measured low-inverse stiffness.
@@ -683,7 +690,10 @@ def test_physical_chart_eliminates_only_the_linear_coordinate_gauge(
     )
 
     zero = jnp.zeros((chart.size,), dtype=jnp.float64)
-    np.testing.assert_array_equal(strong_physical_residual(zero, runtime, chart, 0.0), 0.0)
+    # Same two-program cancellation floor as the endpoint test above.
+    np.testing.assert_allclose(
+        strong_physical_residual(zero, runtime, chart, 0.0), 0.0, atol=1.0e-12
+    )
     probe = jnp.linspace(-0.01, 0.015, chart.size)
     full_probe = chart.lift(probe)
     low_probe = chart.project(strong_root_residual(full_probe, runtime, 0.0))
