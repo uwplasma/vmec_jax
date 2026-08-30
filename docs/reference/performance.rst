@@ -118,22 +118,27 @@ adjoints, and the optimization-facing custom VJP of the same rectangular
 least-squares stationarity equation used by the public primal.  The clean
 Apple M4 record in ``benchmarks/polish_implicit_m4.json`` uses a 17-coordinate
 Solov'ev structural gate.  Its primal reaches relative optimality
-``1.13e-7`` in nine steps.  Median warm times over ten repeats are 10.03 ms for
-the tangent, 9.15 ms for the adjoint, and 12.86 ms for the custom VJP.  With
+``1.13e-7`` in nine steps.  Median warm times over ten repeats are 8.41 ms for
+the tangent, 8.66 ms for the adjoint, and 8.80 ms for the custom VJP.  With
 the persistent compilation cache disabled, cold compile-plus-execute times
-are 11.81 s, 13.32 s, and 15.32 s, respectively.
+are 10.45 s, 10.94 s, and 13.66 s, respectively.
 
-The same record reports incremental process peak RSS of 16.3 MiB for the first
-tangent executable, 140.2 MiB for the separately compiled adjoint, and 171.7
+The same record reports incremental process peak RSS of 40.6 MiB for the first
+tangent executable, 198.3 MiB for the separately compiled adjoint, and 206.9
 MiB for the separately compiled custom-VJP executable.  These increments
 include XLA compilation and are intentionally not described as live solve
 buffers.  Tangent and adjoint each take 17 Krylov iterations with the
 deterministic diagonal normal scaling.  Their complete dot-product mismatch is
-``2.38e-10`` and the custom VJP matches the explicit adjoint exactly at the
-recorded precision.  A Taylor-remainder test independently verifies the
-expected second-order decrease under step halving.  This is a correctness and
-overhead gate for the production mathematical formulation at structural
-resolution, not a production-size optimization timing claim.
+``1.90e-10`` and the custom VJP agrees with the explicit adjoint to
+``8.75e-21`` relative squared error.  The objective is relative field-strength
+variance at ``rho=0.7`` evaluated through the native high-order field view.  Its
+implicit directional derivative agrees with two independently re-polished
+finite-difference endpoints to ``5.11e-5`` relative error; those two solves take
+30.20 s, compared with an 8.80 ms warm scalar gradient.  A Taylor-remainder
+test independently verifies the expected second-order decrease under step
+halving.  This is a correctness and overhead gate for the production
+mathematical formulation at structural resolution, not a production-size
+optimization timing claim.
 
 Benchmark suite (CPU, ns = 201)
 -------------------------------

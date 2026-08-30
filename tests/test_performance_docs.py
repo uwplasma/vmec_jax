@@ -132,7 +132,7 @@ def test_collocation_polish_derivative_artifact_is_clean_and_certified() -> None
     artifact = json.loads(
         (ROOT / "benchmarks" / "polish_implicit_m4.json").read_text()
     )
-    assert artifact["schema"] == "vmex.polish-implicit-benchmark/2"
+    assert artifact["schema"] == "vmex.polish-implicit-benchmark/3"
     assert re.fullmatch(r"[0-9a-f]{40}", artifact["measurement_commit"])
     assert artifact["measurement_dirty"] is False
     assert artifact["persistent_compilation_cache"] is False
@@ -141,6 +141,12 @@ def test_collocation_polish_derivative_artifact_is_clean_and_certified() -> None
     assert artifact["adjoint_iterations"] <= artifact["free_dofs"]
     assert artifact["tangent_residual_norm"] <= artifact["tangent_tolerance"]
     assert artifact["adjoint_residual_norm"] <= artifact["adjoint_tolerance"]
+    assert artifact["objective"] == "relative field-strength variance at rho=0.7"
+    assert artifact["objective_value"] > 0.0
+    assert artifact["finite_difference_relative_error"] < 1.0e-3
+    assert artifact["finite_difference_seconds"] > (
+        100.0 * artifact["warm_custom_vjp_median_seconds"]
+    )
     assert artifact["tangent_adjoint_duality_relative_error"] < 1.0e-8
     assert artifact["custom_vjp_relative_squared_error"] < 1.0e-20
     assert artifact["warm_tangent_median_seconds"] < 0.05
