@@ -43,13 +43,9 @@ Scope notes
 - Stellarator-symmetric states only (``lasym = False``), matching the other
   traceable objectives in :mod:`vmex.core.optimize`.
 - Surfaces need ``ι ≠ 0`` (the field-line parameterization divides by ι).
-- A *traceable* Mercier ``DMerc`` was considered for this pass and cut: the
-  parity-proven port (:func:`vmex.core.nyquist.mercier_and_jxb`) needs
-  the jxbforce-filtered covariant field tables and ``bsubs`` synthesis
-  (host-side Nyquist machinery), so a faithful jnp translation is a larger
-  follow-up.  Use :func:`vmex.core.optimize.d_merc` (wout engine,
-  finite-difference-only) and :func:`vmex.core.optimize.magnetic_well`
-  (traceable) for Mercier-adjacent targets meanwhile.
+- :func:`d_merc_state` reconstructs the symmetric ``mercier.f`` / ``jxbforce.f``
+  profile directly from the live state/runtime pair.  It is independent of
+  the equilibrium solver and is suitable for JIT, JVP, and reverse-mode AD.
 """
 
 from __future__ import annotations
@@ -66,6 +62,9 @@ from .statephysics import _field_chain, _iotas_half_from_fields
 from .transforms import physical_to_internal_scale
 
 __all__ = [
+    "d_merc_state",
+    "mercier_stability_residual",
+    "mercier_stability_softmax",
     "ballooning_lambda",
     "ballooning_growth_rate",
 ]
@@ -73,6 +72,150 @@ __all__ = [
 Array = Any
 
 _NEWTON_ITERATIONS = 12  # θ_vmec(θ*) root solve; λ is small, converges fast
+
+
+# ---------------------------------------------------------------------------
+# Mercier profile (mercier.f / jxbforce.f)
+# ---------------------------------------------------------------------------
+
+
+def _mercier_bsubs(geometry, jacobian, fields, s: Array) -> Array:
+    """Traceable ``bss.f`` covariant radial field on the half mesh."""
+    s = jnp.asarray(s)
+    sh = jnp.sqrt(jnp.maximum(jnp.concatenate([
+        0.5 * (s[1:2] + s[:1]), 0.5 * (s[1:] + s[:-1])
+    ]), 0.0))[:, None, None]
+    safe_sh = jnp.where(sh != 0.0, sh, 1.0)
+    rv12 = 0.5 * (geometry.dR_dzeta_even[1:] + geometry.dR_dzeta_even[:-1]
+                  + sh[1:] * (geometry.dR_dzeta_odd[1:] + geometry.dR_dzeta_odd[:-1]))
+    zv12 = 0.5 * (geometry.dZ_dzeta_even[1:] + geometry.dZ_dzeta_even[:-1]
+                  + sh[1:] * (geometry.dZ_dzeta_odd[1:] + geometry.dZ_dzeta_odd[:-1]))
+    rs12 = jacobian.dR_ds[1:] + 0.25 * (geometry.R_odd[1:] + geometry.R_odd[:-1]) / safe_sh[1:]
+    zs12 = jacobian.dZ_ds[1:] + 0.25 * (geometry.Z_odd[1:] + geometry.Z_odd[:-1]) / safe_sh[1:]
+    rs12, zs12 = jnp.concatenate([rs12[:1], rs12]), jnp.concatenate([zs12[:1], zs12])
+    rv12, zv12 = jnp.concatenate([rv12[:1], rv12]), jnp.concatenate([zv12[:1], zv12])
+    return fields.bsupu * (rs12 * jacobian.ru12 + zs12 * jacobian.zu12) + fields.bsupv * (rs12 * rv12 + zs12 * zv12)
+
+
+def _mercier_current_tables(bsubu: Array, bsubv: Array, bsubs: Array, rt: SolverRuntime) -> tuple[Array, Array, Array]:
+    """Traceable stellarator-symmetric jxbforce filter and ``B_s`` derivatives."""
+    if bool(rt.setup.lasym):
+        raise NotImplementedError("traceable Mercier port currently requires lasym=False")
+    trig = rt.trig
+    mmax, nmax, nt2 = int(rt.resolution.mpol) - 1, int(rt.resolution.ntor), int(trig.ntheta2)
+    cosmu, sinmu = jnp.asarray(trig.cosmu[:nt2, :mmax + 1]), jnp.asarray(trig.sinmu[:nt2, :mmax + 1])
+    cosmui, sinmui = jnp.asarray(trig.cosmui[:nt2, :mmax + 1]), jnp.asarray(trig.sinmui[:nt2, :mmax + 1])
+    cosnv, sinnv = jnp.asarray(trig.cosnv[:, :nmax + 1]), jnp.asarray(trig.sinnv[:, :nmax + 1])
+    dmult = jnp.ones((mmax + 1, nmax + 1), dtype=jnp.asarray(bsubu).dtype)
+    mnyq, nnyq = nt2 - 1, int(np.asarray(trig.cosnv).shape[0]) // 2
+    if 0 < mnyq <= mmax:
+        dmult = dmult.at[mnyq].multiply(0.5)
+    if 0 < nnyq <= nmax:
+        dmult = dmult.at[:, nnyq].multiply(0.5)
+
+    def analyze(field, theta, zeta):
+        return jnp.einsum("smk,kn->smn", jnp.einsum("sik,im->smk", field[:, :nt2], theta), zeta) * dmult
+
+    def synth(cos_part, sin_part):
+        return (jnp.einsum("smn,im,kn->sik", cos_part, cosmu, cosnv)
+                + jnp.einsum("smn,im,kn->sik", sin_part, sinmu, sinnv))
+
+    def filter_field(field):
+        return synth(analyze(field, cosmui, cosnv), analyze(field, sinmui, sinnv))
+
+    bsubu, bsubv = filter_field(bsubu), filter_field(bsubv)
+    bsubs_full = bsubs.at[1:-1].set(0.5 * (bsubs[1:-1] + bsubs[2:])).at[0].set(0.0)
+    c1, c2 = analyze(bsubs_full, sinmui, cosnv), analyze(bsubs_full, cosmui, sinnv)
+    bsubsu = (jnp.einsum("smn,im,kn->sik", c1, jnp.asarray(trig.cosmum[:nt2, :mmax + 1]), cosnv)
+               + jnp.einsum("smn,im,kn->sik", c2, jnp.asarray(trig.sinmum[:nt2, :mmax + 1]), sinnv))
+    bsubsv = (jnp.einsum("smn,im,kn->sik", c1, sinmu, jnp.asarray(trig.sinnvn[:, :nmax + 1]))
+               + jnp.einsum("smn,im,kn->sik", c2, cosmu, jnp.asarray(trig.cosnvn[:, :nmax + 1])))
+    return bsubu, bsubv, (bsubsu, bsubsv)
+
+
+def d_merc_state(state: SpectralState, rt: SolverRuntime) -> Array:
+    """Pure-JAX VMEC ``DMerc`` profile; use only the valid interior ``[2:-1]``."""
+    setup = rt.setup
+    s = jnp.asarray(setup.s_full)
+    ns = int(s.shape[0])
+    if ns < 3:
+        return jnp.zeros_like(s)
+    geometry, jacobian, _, fields, energies = _field_chain(state, rt)
+    bsubs = _mercier_bsubs(geometry, jacobian, fields, s)
+    bsubu, bsubv, (bsubsu, bsubsv) = _mercier_current_tables(fields.bsubu, fields.bsubv, bsubs, rt)
+    hs = 1.0 / float(ns - 1)
+    sign_jac = float(np.sign(setup.signgs)) if int(setup.signgs) != 0 else 1.0
+    wint = jnp.asarray(rt.trig.wint)
+    phip_real = (2.0 * jnp.pi) * jnp.asarray(setup.phips) * sign_jac
+    safe_phip = jnp.where(phip_real != 0.0, phip_real, 1.0)
+    vp_real = (sign_jac * (2.0 * jnp.pi) ** 2 * jnp.asarray(energies.vp) / safe_phip).at[0].set(0.0)
+    iotas = _iotas_half_from_fields(setup, fields)
+    itheta = jnp.zeros_like(bsubs).at[1:-1].set(bsubsv[1:-1] - (bsubv[2:] - bsubv[1:-1]) / hs)
+    izeta = jnp.zeros_like(bsubs).at[1:-1].set(-bsubsu[1:-1] + (bsubu[2:] - bsubu[1:-1]) / hs)
+    izeta = izeta.at[0].set(2.0 * izeta[1] - izeta[2]).at[-1].set(2.0 * izeta[-2] - izeta[-3])
+    bdotk = jnp.zeros_like(bsubs).at[1:-1].set(
+        itheta[1:-1] * 0.5 * (bsubu[2:] + bsubu[1:-1])
+        + izeta[1:-1] * 0.5 * (bsubv[2:] + bsubv[1:-1]))
+    torcur = jnp.zeros_like(s).at[1:].set(sign_jac * 2.0 * jnp.pi * jnp.einsum("sij,ij->s", bsubu[1:], wint))
+    phip_full = 0.5 * (phip_real[2:] + phip_real[1:-1])
+    denom = 1.0 / (hs * phip_full)
+    shear, vpp = (iotas[2:] - iotas[1:-1]) * denom, (vp_real[2:] - vp_real[1:-1]) * denom
+    pres = jnp.asarray(fields.pressure)
+    presp, ip = (pres[2:] - pres[1:-1]) * denom, (torcur[2:] - torcur[1:-1]) * denom
+    sqs = jnp.sqrt(s[1:-1])[:, None, None]
+    r1f = geometry.R_even[1:-1] + sqs * geometry.R_odd[1:-1]
+    rtf = geometry.dR_dtheta_even[1:-1] + sqs * geometry.dR_dtheta_odd[1:-1]
+    ztf = geometry.dZ_dtheta_even[1:-1] + sqs * geometry.dZ_dtheta_odd[1:-1]
+    rzf = geometry.dR_dzeta_even[1:-1] + sqs * geometry.dR_dzeta_odd[1:-1]
+    zzf = geometry.dZ_dzeta_even[1:-1] + sqs * geometry.dZ_dzeta_odd[1:-1]
+    gsqrt_raw = 0.5 * (jacobian.sqrt_g[1:-1] + jacobian.sqrt_g[2:])
+    gsqrt_full = gsqrt_raw / phip_full[:, None, None]
+    gtt = rtf * rtf + ztf * ztf
+    gpp = gsqrt_full**2 / (gtt * r1f**2 + (rtf * zzf - rzf * ztf) ** 2)
+    b2 = 2.0 * (jnp.asarray(fields.total_pressure) - pres[:, None, None])
+    b2i = 0.5 * (b2[1:-1] + b2[2:])
+    factor = (2.0 * jnp.pi) ** 2
+    tpp = factor * jnp.einsum("sij,ij->s", gsqrt_full / b2i, wint)
+    tbb = factor * jnp.einsum("sij,ij->s", b2i * gsqrt_full * gpp, wint)
+    bdotj_norm = jnp.where(gsqrt_raw != 0.0, bdotk[1:-1] / gsqrt_raw, 0.0)
+    jdotb = bdotj_norm * gpp * gsqrt_full
+    tjb = factor * jnp.einsum("sij,ij->s", jdotb, wint)
+    tjj = factor * jnp.einsum("sij,ij->s", jdotb * bdotj_norm / b2i, wint)
+    dmerc = (0.25 * shear**2 - shear * (tjb - ip * tbb)
+             + presp * (vpp - presp * tpp) * tbb + tjb**2 - tbb * tjj)
+    return jnp.zeros_like(s).at[1:-1].set(dmerc)
+
+
+def mercier_stability_residual(
+    state: SpectralState, rt: SolverRuntime, *, margin: float = 0.0,
+    smoothing: float = 1.0e-6,
+) -> Array:
+    """Smooth positive instability residual for ``DMerc[2:-1]``."""
+    if smoothing <= 0.0:
+        raise ValueError(f"smoothing must be positive, got {smoothing}")
+    dmerc = d_merc_state(state, rt)[2:-1]
+    scale = jnp.asarray(smoothing, dtype=dmerc.dtype)
+    return scale * jax.nn.softplus((jnp.asarray(margin) - dmerc) / scale)
+
+
+def mercier_stability_softmax(
+    state: SpectralState, rt: SolverRuntime, *, margin: float = 0.0,
+    smoothing: float = 1.0e-6, temperature: float = 1.0e-3,
+) -> Array:
+    """Smooth worst-surface Mercier-instability objective.
+
+    This is the softmax reduction of the physical interior instability
+    residual.  It is zero up to the softplus floor when every interior
+    surface satisfies the requested Mercier margin.
+    """
+    if temperature <= 0.0:
+        raise ValueError(f"temperature must be positive, got {temperature}")
+    residual = mercier_stability_residual(
+        state, rt, margin=margin, smoothing=smoothing
+    )
+    temperature_value = jnp.asarray(temperature, dtype=residual.dtype)
+    weights = jax.nn.softmax(residual / temperature_value)
+    return jnp.sum(weights * residual)
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ import numpy as np
 import pytest
 
 import jax
+import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
@@ -91,6 +92,31 @@ def test_growth_rate_sign_agrees_with_mercier(shaped_eq):
     lam_max = float(stab.ballooning_growth_rate(
         shaped_eq.state, shaped_eq.runtime, reduction="max", **FAST))
     assert lam_max < 0.0
+
+
+def test_traceable_dmerc_matches_wout_and_softmax_residual_has_a_jvp(shaped_eq):
+    """The local-test Mercier port is value-parity and AD transparent."""
+    state, runtime = shaped_eq.state, shaped_eq.runtime
+    expected = np.asarray(opt.d_merc(shaped_eq))
+    actual = np.asarray(jax.jit(stab.d_merc_state)(state, runtime))
+    np.testing.assert_allclose(actual[2:-1], expected[2:-1], rtol=1e-8,
+                               atol=1e-13)
+
+    tangent = dataclasses.replace(state, R_cos=jnp.ones_like(state.R_cos))
+    tangent = dataclasses.replace(
+        tangent,
+        Z_sin=jnp.zeros_like(state.Z_sin),
+        L_sin=jnp.zeros_like(state.L_sin),
+        R_sin=jnp.zeros_like(state.R_sin),
+        Z_cos=jnp.zeros_like(state.Z_cos),
+        L_cos=jnp.zeros_like(state.L_cos),
+    )
+    residual, directional = jax.jvp(
+        lambda value: stab.mercier_stability_softmax(value, runtime),
+        (state,), (tangent,),
+    )
+    assert np.all(np.isfinite(np.asarray(residual)))
+    assert np.all(np.isfinite(np.asarray(directional)))
 
 
 def test_reductions_hard_and_smooth_max(highbeta_eq):
