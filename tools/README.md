@@ -2,6 +2,16 @@
 
 This directory contains developer-facing tools, not end-user examples.
 
+- `preflight.py`: runs CI's cheap gates (ruff, mypy, docs prose), the fast
+  guard tests, and the diff-affected test modules with the changed-line
+  coverage bar, all against `origin/main` — so the first CI attempt is the
+  only one. `--static` for the seconds-long subset, `--docs` to add
+  `sphinx -W`:
+
+  ```console
+  python tools/preflight.py
+  ```
+
 - `fetch_assets.py`: downloads optional validation assets and verifies their
   byte size and SHA-256 before extraction. `assets/manifest.json` records the
   release URL, provenance, license, generator revision, and installed paths.

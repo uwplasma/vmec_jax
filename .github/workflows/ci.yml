@@ -192,31 +192,37 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
-    # The primary-lane partition is the whole pull-request suite; these four
-    # jobs are the part no other job was running.  Measured on the runner at
-    # -n 2: 30m00s, 27m40s, 26m54s, 21m22s, which put total CI wall clock at
-    # 30 minutes against a ~14-minute budget before.  The four run in parallel
-    # with the nine physics jobs, so the fix is per-job width, not fewer tests.
-    # Measured at -n 4: c1 25m36s (from 27m40s), c2 15m07s (from 21m22s),
-    # misc 24m43s (from 26m54s) -- and lane a killed outright.  So the width
-    # is per-lane: a stays at -n 2, the rest keep the gain.
+    # The primary-lane partition is the whole pull-request suite; these
+    # jobs are the part no other job was running, and they define the CI
+    # attempt's wall clock, so the partition is rebalanced when a lane
+    # outgrows the others.  Lane c1 (then pr-parity-c1 + c3 + d) had grown
+    # to 44m36s -- double the next-longest job -- with almost all of the
+    # weight in the c3/d implicit-campaign modules (test_optimize.py alone
+    # carries ~31 minutes of call time), so those now run as their own
+    # job.  Lane a's 32m24s at -n 2 was the next ceiling; only the
+    # pr-parity-a1 selector carries the free-boundary modules whose
+    # concurrent solves exhaust the runner at -n 4 (killed mid-run at
+    # 32m10s, twice, on two different pull requests), so a1 keeps -n 2 by
+    # itself and a2+b run at -n 4.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - lane: a
-            selector: pr-parity-a1 pr-parity-a2 pr-parity-b
-            # -n 2, not 4: this lane carries the free-boundary modules
-            # (test_freeboundary_implicit alone has two ~8-minute tests), and
-            # four concurrent free-boundary solves exhaust the runner.  At -n 4
-            # it was killed mid-run at 73% with no test failure -- "The
-            # operation was canceled" at 32m10s, twice, on two different pull
-            # requests.  The other three lanes keep -n 4, which measurably
-            # helps them.
+          - lane: a-free
+            selector: pr-parity-a1
+            # -n 2, not 4: this selector carries the free-boundary modules
+            # (test_freeboundary_implicit alone has two ~8-minute tests),
+            # and four concurrent free-boundary solves exhaust the runner.
             parallel: "-n 2"
+          - lane: a-core
+            selector: pr-parity-a2 pr-parity-b
+            parallel: "-n 4"
           - lane: c1
-            selector: pr-parity-c1 pr-parity-c3 pr-parity-d
+            selector: pr-parity-c1
+            parallel: "-n 4"
+          - lane: c3d
+            selector: pr-parity-c3 pr-parity-d
             parallel: "-n 4"
           - lane: c2
             selector: pr-parity-c2
