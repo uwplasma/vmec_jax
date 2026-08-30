@@ -118,13 +118,13 @@ adjoints, and the optimization-facing custom VJP of the same rectangular
 least-squares stationarity equation used by the public primal.  The clean
 Apple M4 record in ``benchmarks/polish_implicit_m4.json`` uses a 17-coordinate
 Solov'ev structural gate.  Its primal reaches relative optimality
-``1.13e-7`` in nine steps.  Median warm times over ten repeats are 8.41 ms for
-the tangent, 8.66 ms for the adjoint, and 8.80 ms for the custom VJP.  With
+``1.13e-7`` in nine steps.  Median warm times over ten repeats are 6.44 ms for
+the tangent, 6.83 ms for the adjoint, and 6.61 ms for the custom VJP.  With
 the persistent compilation cache disabled, cold compile-plus-execute times
-are 10.45 s, 10.94 s, and 13.66 s, respectively.
+are 7.13 s, 7.50 s, and 9.43 s, respectively.
 
-The same record reports incremental process peak RSS of 40.6 MiB for the first
-tangent executable, 198.3 MiB for the separately compiled adjoint, and 206.9
+The same record reports incremental process peak RSS of 52.2 MiB for the first
+tangent executable, 156.4 MiB for the separately compiled adjoint, and 237.9
 MiB for the separately compiled custom-VJP executable.  These increments
 include XLA compilation and are intentionally not described as live solve
 buffers.  Tangent and adjoint each take 17 Krylov iterations with the
@@ -134,7 +134,7 @@ deterministic diagonal normal scaling.  Their complete dot-product mismatch is
 variance at ``rho=0.7`` evaluated through the native high-order field view.  Its
 implicit directional derivative agrees with two independently re-polished
 finite-difference endpoints to ``5.11e-5`` relative error; those two solves take
-30.20 s, compared with an 8.80 ms warm scalar gradient.  A Taylor-remainder
+21.22 s, compared with a 6.61 ms warm scalar gradient.  A Taylor-remainder
 test independently verifies the expected second-order decrease under step
 halving.  This is a correctness and overhead gate for the production
 mathematical formulation at structural resolution, not a production-size
