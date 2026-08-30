@@ -1,3882 +1,2778 @@
-# VMEX research-grade plan
+# VMEX 0.8+ research-grade implementation plan
 
-## How to use this file (humans and agents)
+**Audit snapshot:** 2026-08-30  
+**Primary repository:** https://github.com/uwplasma/vmex  
+**Audited VMEX main:** `bc2f89c9a3a96e0af759502ca59bbb2f020d599b` (`0.7.1`)  
+**Open VMEX integration PR:** https://github.com/uwplasma/vmex/pull/192 (`37a8ee39b1d985259b8afb8ec87a2e92948a1bd4`)  
+**Required SOLVAX baseline for PR #192:** `0.20.0`  
+**Companion repositories:**
 
-This plan is self-contained: a contributor should be able to pick any item and implement it
-with only this file plus the referenced repos. Conventions:
+- https://github.com/uwplasma/SOLVAX
+- https://github.com/uwplasma/booz_xform_jax
+- https://github.com/uwplasma/virtual_casing_jax
+- https://github.com/uwplasma/ESSOS
+- https://github.com/uwplasma/GKX
+- https://github.com/uwplasma/DKX
+- https://github.com/PlasmaControl/DESC
+- https://github.com/proximafusion/vmecpp
+- a local VMEC2000/STELLOPT checkout
 
-- **Context.** Main repo `github.com/uwplasma/vmex`, local checkout `~/local/vmex`. PR #123
-  (`rj/vmec-extender-field`) merged as `84af4918`; the current audited `main` checkpoint is
-  `0362f701` (2026-08-21). Companion repos,
-  all local under `~/local/` and on github.com/uwplasma unless noted: `solvax` (=`SOLVAX`,
-  case-insensitive FS, installed editable), `NEO_JAX`, `booz_xform_jax`, `virtual_casing_jax`
-  (branch `rj/release-0.0.5`), `ESSOS` (PR #58 pairs with vmex #123), `DESC` (PlasmaControl,
-  reference only), `STELLOPT` (PrincetonUniversity, fork via rogeriojorge for PRs). Python:
-  `/opt/local/bin/python3` (3.11), jax 0.9.2, scipy 1.17.1. GPU box: `ssh office`
-  (pop-os, 2x RTX A4000 16 GB). Measured baselines: table below; raw profiling scripts are
-  referenced per phase and should be re-run to confirm numbers on the machine at hand.
-- **Item IDs.** Reference work as `P<phase>.<item>` (e.g. P3.2). Do not renumber existing items;
-  append new ones.
-- **Status.** Mark items inline as they change: `[TODO]` (default, unmarked), `[DOING @who]`,
-  `[DONE pr#]`, `[BLOCKED reason]`.
-- **Log.** Every contribution appends one entry to the `## Log` section at the bottom —
-  newest last, never edit or delete prior entries. Format:
-  `- YYYY-MM-DD who: P<ids> — what changed / what was measured / PR links / handoff notes.`
-  Substantive design changes get a short rationale in the log, and the affected phase text is
-  updated in place so the plan body always reflects the current intent.
-- **Authorship.** All commits/PRs authored by `rogeriojorge` (git auth); never Claude/Codex
-  attribution. PR bodies short and concrete, matching prior rogeriojorge PRs.
-
-Working agreements that apply to every phase:
-
-- All commits, PRs, and PR text are authored by `rogeriojorge` (git auth); never Claude/Codex
-  attribution anywhere. PR bodies short, concise, in the style of prior rogeriojorge PRs.
-- No scaffolds, testbeds, proxies, or "experimental" lanes survive: code is either wired in and
-  certified, or deleted. Prefer fewer lines, fewer files, fewer folders — in source and tests.
-- Tests are literature-anchored (papers, other codes, analytic limits), concise, and fast; CI
-  stays under 30 minutes while covering >= 95% of lines and all physics/algorithm branches.
-- Every performance claim in docs/README is backed by a measured number checked into the
-  benchmark JSONs, never prose-only.
-
-Measured baselines backing this plan (Apple Silicon CPU, uncontended, 2026-08-17/18; scripts in
-the session scratchpad: `profile_lasym.py`, `fb_isolate.py`, `fb_forward_anatomy.py`,
-`fd_tighten.py`, `profile_stall.py`):
-
-| Measurement | Value |
-|---|---|
-| LASYM vs symmetric per-nfev (max_mode=2, ns=31) | 19.1 s vs 10.4 s (1.8x); jac 5.5x, compile 2.6x |
-| LASYM stage-1 (20 nfev) uncontended | ~6-13 min; overnight run descended 25.0 -> 2.64 in 18 its |
-| Free-boundary forward (ns=25, mpol=ntor=5) | multigrid 6.2 s; implicit wrapper warm 0.7-9.2 s |
-| Free-boundary warm value+grad (136 coil dofs) | ~25 s, adjoint-dominated (unpreconditioned GCROT) |
-| Coupled FD-vs-AD error (ns=16 LASYM) | 2.3e-3 warm ftol=1e-7 (current gate 2e-2); **1.5e-4 cold ftol=1e-9** |
-| Compile cache | at 1 GiB cap; identical rerun recompiles everything |
+This file replaces the previous root `plan.md`. The previous file was a valuable historical ledger, but it mixed completed release work, stale worktree paths, old benchmark snapshots, and future research tasks. This replacement preserves the unfinished requirements while using merged pull requests, benchmark JSON files, and Git history as the permanent record of completed work.
 
 ---
 
-## Current checkpoint and interruption-safe handoff (2026-08-22)
-
-This section is the historical checkpoint that governed PR #125 on 2026-08-22.
-Later checkpoints supersede its branch and pull-request instructions while preserving the
-measurements and decision record. Update the phase body when intent changes and append one
-dated log entry; do not rely on chat history.
-
-- `main` is current at `fe26e746` after PR #132. The 54 commits after PR #123 and before #131
-  comprise ten first-parent PR merges (#116, #129, #128, #126, #127, #117, #119, #121,
-  #130, #118), 16 branch-sync merges, and 28 direct commits. Their independent disposition is
-  recorded in Phase 24.
-- The first release worktree is
-  `/Users/rogeriojorge/local/vmex-release-0.6-hardening`, branch
-  `rj/release-0.6-hardening`, head `ef8388f0`. PR #131 is merged at `26419313`. It contains
-  the exact implicit-Jacobian contract, CI runtime, changelog removal,
-  and release-workflow changes. Two-worker JAX contention made the original implicit-response
-  lane slower; one serial lane was still too variable, so the unchanged certification set is
-  now split by JAX shape into two serial implicit lanes plus one isolated free-boundary-adjoint
-  lane. The final run passed every gate; its longest direct job took 12:08. The audit also
-  shortened the derivative documentation, named the Jacobian policy helpers by their role,
-  removed the changelog from the branch history and tested independent-GMRES recovery.
-- `/Users/rogeriojorge/local/vmex-release-0.6-essos-audit`, branch
-  `rj/release-0.6-essos-audit`, merged as PR #132 at `fe26e746`.
-  It preserves the released ESSOS 0.16 contract and names branch
-  `rj/vmex-optimization-interfaces` (ESSOS #58) in the nine examples that need its coil/tracing
-  API. It removes the branch from release CI and restores the stable coil-fixture schema.
-- `/Users/rogeriojorge/local/vmex-release-0.6-presf-audit`, branch
-  `rj/release-0.6-presf-audit`, is based on `main` at `461aa172` and published as ready PR #133.
-  It adds the missing solved free-boundary pressure-gradient certificate as one approximately
-  79-second weekly test. Its post-restack review CI is fully green; the longest direct job took
-  11:17.
-- `/Users/rogeriojorge/local/vmex-release-0.6-final`, branch `rj/release-0.6-final`, is stacked
-  on #133 at `32af8386` and published as draft PR #134. It contains only the 0.6.0
-  version finalization and the source-free wheel/sdist verification matrix. Manual
-  dispatch now builds and verifies without publishing; PyPI remains release-event-only. The
-  corrected four-way Python 3.10/3.12 wheel/sdist matrix passed in run 32542322776.
-- `/Users/rogeriojorge/local/vmex-release-0.6-weekly-ci`, branch
-  `rj/release-0.6-weekly-ci`, is stacked on #134 at `6560ac8f` and published as draft PR #135.
-  It replaces the redundant two-hour free-boundary survival stress with the stronger converged
-  238-mode VMEC2000 parity contract, splits fixed/free high-mode jobs, preserves the mirror
-  refinement tolerances using only the two grids that enter the comparison, and bounds every
-  Weekly job to 60 minutes. The first hosted run proved the 50% fine-grid mirror point did not
-  fit that bound, so it remains in the 0--80% coarse continuation while the fine-grid
-  certificate covers the promoted 0--10% range. The second hosted run passed that mirror job
-  in 55:01 but proved the 15->25 high-mode free-boundary ladder too variable for the same bound.
-  Head `2dae833b` changes only the radial ladder to 11->19; the local VMEX run and independent
-  VMEC2000 oracle both converge with the same 238 modes, vacuum activation, restart and 1e-8
-  tolerance. PR run 32554820509 is fully green (longest direct job 10:50), and final Weekly run
-  32554856698 passed adjoint/fixed/mirror/free in 4:45/16:17/47:54/56:43, all below the
-  60-minute per-job bound. PRs #131 and #132 are merged. Review #133 next, then #134 and #135 after
-  each parent merges; keep the PR scopes separate.
-- `/Users/rogeriojorge/local/vmex` is clean relative to `main` except for user-owned untracked
-  beta-bootstrap output assets and an older untracked `plan.md`; preserve them. The PR #125
-  copy of this file is authoritative.
-- Current public software release: VMEX 0.5.0. GitHub incorrectly points `/releases/latest` at
-  the documentation-assets release `assets-20260812-wout-fixtures`. Phase 23 makes 0.6.0 the
-  next software release and the latest release without deleting provenance assets.
-- Current dependency releases: ESSOS 0.16, virtual_casing_jax 0.0.5, NEO_JAX 1.0.2,
-  SOLVAX 0.12.0, and booz_xform_jax 0.1.1. ESSOS #58 and #61 are green but open, so their code
-  is not a released dependency and must not be described as complete. They require independent
-  ESSOS maintainer review and merge; VMEX contributors do not merge them, and they are scheduled
-  last rather than blocking VMEX 0.6.0.
-
-GPU work is deferred by user decision on 2026-08-22. The uncontended replacement for cancelled
-run 32543384593 is no longer a VMEX 0.6 gate. This is an explicit evidence debt, not a passing
-GPU result: 0.6 adds no new free-boundary GPU support or performance claim, and later GPU/HPC
-promotion remains blocked until the trusted campaign passes on an idle host.
-
-Resume in this order: read this checkpoint and the newest log entry; review and merge #133,
-#134 and #135 in order; execute the tag, publish and latest-release
-checks in Phase 23; then continue the CPU boundary-Schur work. Return to the deferred GPU matrix
-only when the office host is uncontended and GPU evidence is again in scope.
-Never infer completion from a local diff, an open sibling PR, or a green microbenchmark.
-
-Immediate maintainer actions:
-
-1. Take no GPU action for this release.
-2. Review one VMEX release PR at a time in the order #133, #134, #135.
-3. Keep #122 and #125 open. They are the loss-fraction specification and this program ledger.
-4. Leave ESSOS #58 and #61 to independent ESSOS maintainers; they are last and do not block 0.6.
-
-## Research-grade completion map
-
-The detailed phases below remain the source of truth. This map prevents an earlier requirement
-from being lost when work moves between repositories.
-
-| Goal | Owning phases | Completion evidence |
-|---|---|---|
-| Fixed/free-boundary VMEC parity, convergence, restart, axis and mirror robustness | P3, P3b, P8, P18, P23 | VMEC2000/VMEC++ parity, typed failures, converged vacuum/finite-beta symmetric/LASYM and mirror cases |
-| Exact, composable derivatives for residual and scalar optimizers | P1, P22, P24 | fail-closed certificates, JVP/VJP identity, independent FD/reference checks, SciPy/JAX scalar and residual contracts |
-| QA/QH/QP/QI, max-J, bootstrap, well, Mercier/Glasser and gradient-scale objectives | P5, P6, P12-P14, P16-P19, P27 | physics-oracle tests plus short descending examples using the common tuple API |
-| Effective ripple, trapped fraction, gamma-c, J contours and alpha loss | P6, P7, P21, P26, P27 | independent NEO/DESC/STELLOPT/literature parity and differentiable objective gates |
-| Interior/exterior field API, virtual casing, tracing and fixed/free single-stage coils | P3-P4, P11, P13, P15, P21, P26 | B/gradB/VJP and tracing certificates, ESSOS/VC ownership, end-to-end coil examples |
-| CPU/GPU/HPC performance with bounded memory | P2-P3, P7-P9, P11, P25 | checked-in benchmark records, profiled kernels, CI budgets and GPU memory/runtime gates |
-| Clear examples, CLI, README and full documentation | P4, P10, P13-P16, P21, P23, P27 | executable examples, concise README, equations/tutorials/reference pages and link checks |
-| Slim, maintainable ecosystem and reproducible releases | P9-P10, P15, P23, P26-P27 | ownership boundaries, net-LOC discipline, >=95% coverage, clean artifacts and release checklist |
-
-No row is complete merely because one representative example passes. Research-grade completion
-means the stated symmetry, pressure, boundary-condition, device, and reference-code matrix is
-covered at the cheapest resolution that still exercises the real physics; production-scale
-campaigns belong in bounded nightly/weekly jobs, not every pull request.
-
-## Phase 0 — Unblock and merge PR #123 (`rj/vmec-extender-field`)  [DONE — merged 2026-08-19 as 84af4918]
-
-Smallest possible diff to green; everything else moves to the new branch off `main`.
-
-1. Ruff: `E701` in `examples/optimization/QA_optimization.py:65` (split the one-liner `if`);
-   `F541` in `examples/optimization/QA_optimization_global.py:71` (drop the `f` prefix).
-2. Add `tests/test_neoclassical.py` to `tests/manifest.json` (pick a lane that runs it so the
-   changed-line coverage gate sees `vmex/core/neoclassical.py`).
-3. Fix `tests/test_examples.py::test_vacuum_qs_examples_expose_trial_pressure_terms` to point at
-   `QA_optimization_DMerc_vacuum.py` (where `USE_TRIAL_STABILITY` now lives); update the matching
-   pointer in `docs/reference/objectives.rst`.
-4. Docs linkcheck: replace `https://docs.jax.dev/en/latest/advanced-autodiff.html` (404) with
-   `https://docs.jax.dev/en/latest/notebooks/autodiff_cookbook.html` in `docs/project/references`.
-5. Pin `scipy>=1.15` in `pyproject.toml` (all eight asymmetry examples + both maxJ continuations
-   use `least_squares(..., callback=)`, added in SciPy 1.15).
-6. Merge PR #123. Open the new working branch from `main`; all phases below land there in
-   focused PRs.
-
-Acceptance: PR CI fully green (quality, coverage gate, linkcheck), PR merged.
-
-## Phase 1 — Examples run honestly (the "stall" fix)  [PARTIAL; exactness continues in P22]
-
-Current disposition: flushed progress, monitor de-duplication, bounded diagnostics and the
-measured stall investigation are merged. The temporary policy that returned a bounded but
-uncertified response is not an acceptable final “exact derivative” contract; Phase 22 supersedes
-that policy with certified fallback or a typed error. Keep the measurements below as diagnosis,
-not as permission to expose an approximate Jacobian.
-
-Diagnosis (instrumented reproduction, `profile_stall.py`, uncontended): the examples descend
-(overnight log: 18 iterations, cost 25.0 -> 2.64) and healthy iterations cost ~10-12 s
-(residual re-solve 8-10 s, Jacobian 1.8-3.9 s). The stall is real and has FOUR components, now
-measured:
-(a) **Pathological Jacobian evaluations — the dominant cost, and it is systematic.** Full-stage
-    measurement (LASYM QA, max_mode=2, 48 dofs): jac #1-2 take 1.8-3.9 s, then EVERY Jacobian
-    from iterate ~3 on takes ~2000-2240 s (~35 min; ~42 s per dof column vs ~0.2 s early) while
-    residual re-solves stay at 3.5 s. Stack sample: main thread blocked in a single XLA
-    `Execute` (`BlockUntilReady`) — the per-dof implicit linear solves inside `jac_jit` grind
-    once the iterate moves away from the reference/compile point (frozen preconditioner/tcon
-    quality? hot-restart seed distance?), i.e. degradation is persistent, not an unlucky trial. All 48 dof solves
-    share one operator `dF/dz(z*)`: make the factor-once amortized block-Thomas path
-    (`solvax.block_thomas_factor/solve`, already documented in `optimize.py`) the default for
-    ndof over a small threshold, keep per-dof GMRES as fallback, cap inner iterations with a
-    typed diagnostic instead of silent grinding, and emit a heartbeat (`jax.experimental.
-    io_callback`) so a long Jacobian is visibly alive. Observed blowup is ~500x (one jac
-    execution > 30 min CPU-bound vs 2-4 s healthy), which exceeds any plausible GMRES-maxiter
-    factor — also audit whether the jitted Jacobian program re-runs the full equilibrium
-    while_loop (forward_max_iterations=2000) per dof column at unlucky iterates instead of
-    reusing the converged donated state; that recomputation, 48x over, matches the magnitude.
-    First step of the fix PR: an instrumented jac lane that reports per-column inner-solve
-    iteration counts and solve/linearize split (io_callback), run at the captured bad iterate
-    (the profiler saves x per call, `scratchpad/profile_stall.py`).
-(b) **Mid-loop recompile churn**: `jit(_block_lane)` (+`jit(copy)`) recompiles ~3 s apiece
-    *inside* residual re-solves (`jax_log_compiles` captured pairs of `_block_lane` compiles per
-    hot-restart solve at identical shapes `f64[31,50]`) — jit identity instability
-    (`solver.py:1760` lambda/closure) and/or eviction; fix the callable identity, then Phase 2.
-(c) **Unflushed output**: scipy prints one row per iteration; everything else sat in the 8 KiB
-    buffer (fixes below).
-(d) macOS sleep/App Nap throttling long unattended runs (document `caffeinate -i`).
-Then fix all of the following:
-
-1. **Flush everywhere.** Flip the five `emit=print` defaults to the existing
-   `printing.emit_flushed` (`solver.py:2119`, `multigrid.py:244`, `multigrid.py:564`,
-   `freeboundary.py:1568`, `freeboundary.py:2194`); add `flush=True` at `monitoring.py:71,462,466`
-   and `bootstrap.py:1039`; document `python -u` in `examples/README.md`.
-2. **Per-nfev progress.** `VmecProblem` gains an opt-in progress line per residual/Jacobian call
-   (timestamped, flushed) so a 40 s evaluation is visibly alive; the examples enable it. This is
-   the direct answer to "stuck at iteration 1 for several minutes".
-3. **Kill the monitor double-solve.** `OptimizationMonitor._term_costs` re-calls
-   `problem.residual(x)` per accepted iterate (`monitoring.py:233-243`); reuse the cached residual
-   from the accepted evaluation (term slices are already in `problem.metadata`).
-4. **Long-run ergonomics.** Examples print a one-line budget estimate per stage (measured
-   per-nfev cost x max_nfev); `examples/README.md` documents `caffeinate -i python -u ...` for
-   multi-hour runs on macOS; outputs go to an ignored `results/` directory instead of the CWD.
-5. **CI executes the examples.** Nightly lane runs at least QA + QI asymmetry in
-   `VMEX_EXAMPLES_CI=1` smoke mode asserting descent (final cost < initial). None of the eight
-   currently executes anywhere.
-6. **`jax_explain_cache_misses` crash (found while profiling the stall).** Setting
-   `jax.config.update("jax_explain_cache_misses", True)` deterministically kills any vmex solve
-   with `ValueError: not enough values to unpack (expected at least 3, got 2)`, surfacing at the
-   first jit under the flag (`solvax/tridiagonal.py:203` `lax.platform_dependent`, reached from
-   `vmex/core/preconditioner.py:689`). Bisected: the flag alone is the trigger (base /
-   `jax_log_compiles` / custom cache dir all pass); import order and x64 are fine
-   (`_compat.py:222` env + `solver.py:71` hard-set — verified). Actions: minimal repro
-   (`platform_dependent` under the flag on jax 0.9.2) -> upstream JAX issue; until fixed, Phase 2
-   cache diagnosis uses `jax_log_compiles` + cache-size accounting instead of miss explanations,
-   and `vmex --doctor` warns if the flag is set. Note for anyone debugging: running Python from
-   `~/local` (the repo's *parent*) shadows `vmex` as an empty namespace package — imports fail
-   loudly, but don't chase that as a bug.
-
-Acceptance: interactive stage-1 run shows a flushed, timestamped line at least every ~30 s;
-profile shows zero mid-stage recompiles; nightly smoke lane green.
-
-## Phase 2 — Compilation cache policy  [PARTIAL: sizing + doctor DONE; the real cost is elsewhere]
-
-Today: machine-scoped persistent cache (`_compat.py`) capped at 1 GiB; the cache sits exactly at
-the cap and an identical rerun recompiles everything — the cap forces eviction churn, and
-`pure_callback` identities may be poisoning keys.
-
-1. Diagnose with `jax_log_compiles` + cache-directory accounting (file count/bytes/atimes before
-   and after) across two identical example runs; classify misses (evicted vs key-unstable). Do
-   NOT use `jax_explain_cache_misses` — it crashes vmex solves on jax 0.9.2 (Phase 1.6). If
-   callbacks poison keys, hoist them so cached jits close over stable callables (module-level,
-   config-keyed) rather than per-call closures.
-2. Policy: default cap sized to hardware — `min(20 GiB, 10% of free disk)` with LRU eviction,
-   overridable by the existing `VMEX_COMPILATION_CACHE_*` env vars; document one knob, not many.
-   Rationale: single VMEX executables reach tens-hundreds of MB; a working set of one user's
-   examples is several GiB; 20 GiB fits any state-of-the-art workstation, the disk-fraction guard
-   protects small laptops. GPU adds its own kernels — same policy, separate per-backend fingerprint
-   directory (already in place).
-3. Add a `vmex --doctor` line: cache dir, size vs cap, hit rate of the last run (JAX exposes
-   miss explanations; a simple counter in `_compat` suffices).
-4. Regression test: build the same small problem twice in two subprocesses; assert the second
-   compile time is < 25% of the first (skip on CI runners without a persistent HOME).
-
-Acceptance: identical example rerun compiles in seconds, not 30-140 s; doctor reports cache
-health; test pins it.
-
-## Phase 3 — Free-boundary speed and accuracy (explicit plan)
-
-Target: warm value+grad at example scale (ns=25, 136 coil dofs) from ~25 s to <= 8 s CPU, with the
-exact certificate untouched, and a GPU lane that beats CPU. The Schur direct lane remains the
-exact fallback; the default lane becomes preconditioned + recycled.
-
-1. **Instrument first**: land `adjoint_matvec_count`-style counters in `_host_adjoint`
-   (matvecs/gradient, mean matvec time) so before/after is a number in the PR body.
-2. **Precondition the certified GCROT lane.** Pass `M ~= (A^T)^-1` to `gcrotmk` in
-   `_host_adjoint` (`freeboundary_implicit.py:725`), where `A` is the frozen block-tridiagonal
-   bulk already assembled by `im._raw_block_system` for the Schur lane. Factor once per gradient
-   with `solvax.block_thomas_factor(store_offdiagonals=False, factor_dtype=float32)` (0.13
-   reusable factors: 3-6x less factor memory); float64 refinement stays in the Krylov loop. Since
-   `E = J - A` is edge-low-rank, expect O(10-30) preconditioned matvecs vs O(100+) today.
-3. **Wire in `freeboundary_linear.py` as the preconditioner backbone** (disposition: wire in, not
-   delete). `NestorBorderedOperator.preconditioner(plasma_solve, schur_solve)` is the block
-   inverse `M`; the two adapters it needs already exist in `tests/test_freeboundary.py:162-176`
-   (a `vacuum_system(x)` from `solver_vac.assemble`, and a `plasma_residual(x, q)` with explicit
-   potential). This makes the bordered operator load-bearing production code with its existing
-   2e-12 linearization tests as the unit certificate.
-4. **Recycle Krylov subspaces across optimizer trials.** Persist the GCROT deflation space
-   (scipy `CU=`/`discard_C`, or move the host lane to `solvax.gcrot` with `recycle` and surface
-   `recycle_drift` in `LinearResponseReport` — resolving the stale doc claim by using it).
-   Store next to the warm state in the config-keyed hot cache.
-5. **SOLVAX/VMEX split** (companion solvax PR): solvax gains a generic bordered-operator type and
-   a low-rank-update preconditioned/recycled GCROT policy; vmex keeps NESTOR residual assembly,
-   Fourier/edge constraints (m=1 pairing), coil-to-boundary maps, and the physics certificate.
-6. **Certificates unchanged in math, tightened in tolerance** (Phase 3b below). Every adjoint
-   still checked against the true coupled transpose at `10 x adjoint_tol x ||rhs||`; Schur direct
-   lane kept as exact fallback and as the cross-check in tests.
-7. **GPU lane (office box, 2x RTX A4000 16 GB).** Profile cold compile memory and steady-state
-   on GPU with the XLA profiler (`jax.profiler.trace` -> perfetto; `nsys` if kernel-level needed).
-   Gate: one coupled value+grad on GPU within 16 GB and faster than CPU warm. The reusable
-   float32 factors and the preconditioned lane are exactly what shrinks the GPU footprint.
-8. **Forward-solve iteration budget.** Free-boundary forward runs 1193 its where fixed runs 141
-   at the same size (8.5x iteration ratio, 2.2x per-iteration cost). Investigate vacuum-refresh
-   cadence (`ivacskip` analogue) and preconditioner reuse across vacuum updates for a further
-   forward win; any change must keep wout parity tests green.
-
-Acceptance: matvecs/gradient reduced >= 3x with certificate green; warm value+grad <= 8 s CPU at
-example scale; GPU value+grad runs in 16 GB and beats CPU; no test tolerances loosened.
-
-## Phase 3b — Coupled FD certificate at research grade
-
-Measured: the FD noise floor is the solver endpoint, not the adjoint. Cold re-solves + ftol=1e-9
-gives 1.5e-4 agreement; warm probes at tight ftol are corrupted by hysteresis (6.8e-2); below the
-reachable ftol the root itself wanders.
-
-1. Rewrite `test_free_boundary_current_gradient_matches_resolve_finite_difference`: cold
-   re-solves (pop `_FREE_HOT_CACHE` per probe), forward ftol=1e-9 (niter to reach it), h=2e-4,
-   assert the forward actually attained ftol, add a noise control (two identical cold re-solves;
-   require |delta objective| << h x |derivative|), gate at **rtol=1e-3** (6x margin over measured).
-2. Same protocol for the boundary-Schur certificate (from 5e-2 to 1e-3).
-3. Add one coil-shape-dof FD certificate (not just `extcur`): a single ESSOS geometry dof through
-   `field_from_parameters`, same protocol, `full`-marked.
-4. Document the endpoint-noise physics in `docs/explanation/adjoint-gradients.md` (why warm FD
-   probes lie; why Richardson amplifies noise here).
-
-Acceptance: both certificates gate at 1e-3, nightly runtime <= 10 min combined, and fail if the
-forward stalls above the requested ftol instead of silently passing.
-
-## Phase 4 — Community API: `FreeBoundaryProblem.from_tuples`
-
-`optimize.py`/`problem.py` have zero `lfreeb` support today; the two 150-line examples are the API.
-
-1. New `FreeBoundaryProblem` mirroring `VmecProblem`: same objective tuples, plus
-   `coils=` (ESSOS `Coils` | `MgridField` | `extcur` array), `coil_dofs=` filter,
-   `coil_terms=` engineering objectives, optional `boundary_max_mode=` for joint
-   boundary+coil dofs (virtual-casing lane), `ns/ftol/adjoint_tol`, built-in smooth
-   rejected-trial wall, unit scaling, `dof_names`, monitor term slices,
-   `compile_value_and_gradient()`.
-2. Rewrite both single-stage free-boundary examples to ~40 lines on top of it; keep the current
-   API calls only in the how-to as the "under the hood" appendix.
-3. Tests: construction/validation guards; value+grad equals the hand-rolled pipeline bit-for-bit
-   on the smoke config; descent smoke (2 L-BFGS iterations); joint boundary+coil dof path;
-   docs how-to `howto/optimize-free-boundary-coils.md` + tutorial `first-free-boundary.md`.
-4. Retire the "experimental" label via the capability-JSON tripwire
-   (`test_capability_docs` pins the exact wording — update JSON + generator in lockstep) once
-   Phase 3/3b acceptance holds.
-
-Acceptance: an end-user drives a free-boundary coil optimization in <= 40 lines; class fully
-tested; capability table says supported (CPU), GPU status stated honestly.
-
-## Phase 5 — Full LASYM  [5a and 5d DONE; 5b, 5c open]
-
-### 5a. vmex bugs (immediate, ship with Phase 0 follow-up)
-- `MaximumJResidual.compute_state` (`maxj.py:543-549`) and the shared dict in
-  `qi_and_maximum_j_from_boozer` (`maxj.py:387-390`) drop `bmns_b`: the maxJ certificate
-  silently symmetrizes LASYM fields. Fix both; add a parametrized regression across all five
-  bounce classes (nonzero `bmns_b` must change the residual; `bmns=None` == `bmns=0` bit-exact).
-
-### 5b. vmex hard guards, in order
-1. `virtual_casing._state_field_spectra` (`virtual_casing.py:346-351`): add the sine-parity
-   contravariant-B spectra (jnp clone of `nyquist.wrout_sin_coeffs`, full-theta grid, LASYM
-   `tmult` normalization — all patterns exist in `nyquist.py`). Geometry half already computes
-   `rmns/zmnc`. This unblocks LASYM live-state virtual casing; note
-   `PlasmaVacuumInterface.from_wout` already works for LASYM today.
-2. `extender.py`: thread the sine families through `_flux_coordinates_to_xyz` and
-   `_interior_coordinates_and_B` (currently zero `lasym` handling — would silently drop them).
-3. `l_grad_b` wout lane (`optimize.py:723`) and `_lgradb_state_tables`
-   (`statephysics.py:570`): plumbing only, arrays already exist.
-4. Ballooning/turbulence (`stability.py:628`): larger (asymmetric-lambda PEST inversion);
-   either schedule after 1-3 or keep the guard and state it as a deliberate limit in the
-   capability table — no silent middle ground.
-- `virtual_casing_jax` itself needs **no math changes** (vmex passes full-period grids,
-  `half_period=False` hardcoded). Two small hygiene PRs there (authored rogeriojorge): honour or
-  document the write-only `stellsym` field; relax the inherited simsopt-lane guard that is
-  stricter than the code beneath it.
-
-### 5c. NEO_JAX LASYM (own PR in NEO_JAX, merge when validated)
-~150 lines of plumbing: add `rmns/zmnc/lmnc/bmns` + static `lasym` to `BoozerData`; ingest the
-sine variables in all three `io.py` constructors (`lmnc = -pmnc_b*nfp/2pi`, `sqrtg00 = gmnc+gmns`);
-forward through both drivers' coeff dicts; make the B-max tie-breaker sine-aware (or route LASYM
-to the jax argmax path). The asymmetric Fourier kernel already exists and matches
-`neo_fourier.f90` term for term — it is currently dead code. Validation: asymmetric boozmn
-fixture + parity test against **patched** xneo (see 5d) or the STELLOPT in-memory path; the
-booz_xform_jax side of the comparison uses the corrected/fixed xbooz reference. Then lift the
-guard in `vmex/core/neoclassical.py:86` and add a LASYM eps_eff panel test.
-
-### 5d. STELLOPT upstream PRs (fork `rogeriojorge/STELLOPT`, small and separate)
-1. PR 1 [DONE: PrincetonUniversity/STELLOPT#501] — NEO boozmn reader: `NEO/Sources/read_booz_in.f90:143` `bmns(i,i)` -> `bmns(i,k)`
-   (corrupts the asymmetric |B| spectrum; the in-memory `stellopt_neo.f90:226` copy is correct,
-   proving the typo). Body: 3-4 sentences, the diff speaks.
-2. PR 2 [DONE: PrincetonUniversity/STELLOPT#502] — NEO deallocation bugs: `neo_dealloc.f90:49-50` frees `pixn`/`i_n` while testing
-   `pixm`/`i_m` (leaks both), and the LASYM arrays `rmns/zmnc/lmnc/bmns` are never freed.
-3. Keep local patches in the fork until merged; generate all LASYM reference data with the
-   patched reader only.
-
-Acceptance: all four vmex boundary families first-class in virtual casing/extender/l_grad_b (or
-explicitly gated in the capability table); NEO_JAX LASYM merged with Fortran parity at documented
-tolerance; both STELLOPT PRs open.
-
-## Phase 6 — Epsilon effective: surface-integral objective lane  [6.8 plot fix DONE; the lane itself open]
-
-Adopt the surface-integral reformulation (Paul et al. JPP 2020 Eq. 6.1; DESC and KNOSOS are both
-instances): many short field-line transits x pitch grid, all independent, all fixed-shape.
-
-1. **New `vmex/core/ripple.py`** built on what exists: `boozer_bmnc_state` (traceable Boozer,
-   LASYM included) + the differentiable bounce kernel (`bounce.py`, sin-map Gauss quadrature).
-   Extend `trace_boozer_field_lines` with the two dB einsums so
-   `|grad psi| kappa_G = (I dB/dzeta - G dB/dtheta)/(G + iota I)` — no Boozer geometry harmonics
-   needed. Pitch grid: 1/lambda uniform in B on (Bmin, Bmax), open-Simpson weights (~48-64 nodes;
-   DESC `get_pitch_inv_quad` is the reference). Generalize `bounce_action` to the Nemov (H, I)
-   pair sharing bounce points; assemble with `safediv`; normalize by the flux-surface-average
-   line length (DESC `_neoclassical.py:225-262` pattern). `<|grad psi|>` and `R0` from vmex's own
-   traceable half-mesh tables.
-2. **Objective class** mirroring `QIResidual` (`residuals_state` duck type) so it drops into
-   `from_tuples` and `jac="implicit"` unchanged. Register in `optimize.__all__`.
-3. **Gradients fast and small**: reverse-mode works out of the box (fixed shapes); memory by
-   `solvax.chunk_map` over pitch + `jax.checkpoint` per chunk (DESC's chunking-not-remat
-   strategy); B-extrema roots via `solvax.root_solve` (IFT, no while_loop). For the implicit
-   least-squares driver only JVPs are needed — already chunked.
-4. **Smoothness for optimization**: fixed `max_wells` with NaN-honest sentinels but a smooth
-   pitch/well weighting (softplus margins where a hard max would kink); verify objective
-   smoothness by plotting eps_eff along a boundary-coefficient ray.
-5. **Independent parity ladder (several comparisons, then claim parity):**
-   - analytic tokamak limit: `B = B0(1 - eps_t cos theta)` -> eps_eff = eps_t to quadrature order;
-   - STELLOPT NEO (patched xneo) at production resolution on the repo's QA/QH/QI/QP wouts,
-     symmetric and LASYM, 1-3% (NEO's own acc_req bounds tighter claims);
-   - NEO_JAX (post 5c) at matched `NeoConfig` — never default-vs-default (50x different problem);
-   - DESC `EffectiveRipple` on a shared equilibrium (extend the existing
-     `test_matches_desc_bounce1d_when_available` pattern);
-   - convergence scans in (nalpha, num_transit, npitch, quad order, max_wells) with the
-     num_transit x nalpha equivalence check.
-6. **Gradient validation**: JVP/VJP transpose identity; jacfwd vs grad; central FD through the
-   full implicit chain on one boundary coefficient (Phase 3b protocol).
-7. **Example** `examples/optimization/QA_eps_eff_optimization.py` following the standard
-   template (stages, monitor, report, plots), and a finite-beta variant flag.
-8. **Plot fixes (land early, independent of the lane):** summary-panel eps_eff with more surfaces
-   once fast (12-16), explicit `set_ylim(0.5*min, 2*max)` + minor log ticks so the minimum is
-   always visible, clearer LASYM-unavailable note until 5c lands, and the same axis policy in
-   `examples/epsilon_effective.py`.
-
-Performance target: < 1 s/surface CPU, ~10-50 ms/surface GPU steady-state (DESC demonstrates the
-regime); reverse-mode gradient at O(1) memory in dof count.
-
-Acceptance: parity table (5 independent comparisons) in docs; optimization example descends and
-is smoke-run in CI; gradient certificates green; wout-lane NEO_JAX diagnostic retained as the
-independent cross-check, not deleted.
-
-## Phase 7 — NEO_JAX speedups (companion PRs in NEO_JAX + solvax)
-
-Priority order (each an independent, measurable PR):
-1. Real early exit from the period scan (bounded two-pass scheme; up to 4x on converged cases).
-2. Vectorize the trapped-class deposit: `segment_sum`/one-hot matmul replaces the per-step
-   `fori_loop`+`cond` scatter (~1e7 serialized scalar ops per surface today).
-3. Fourier as GEMM via `cos(m theta - n phi)` separability: kills the (theta x phi x mode)
-   temporaries — measured 4.45 GB -> tens of MB — and obsoletes the streamed mode switch.
-4. `dynamic_slice` spline gathers (16 coefficients, not a 4x4xphi_n slab, ~2.4e6 times/surface).
-5. solvax offload: `splper`/`splreg` -> `cyclic_tridiagonal_solve`/`tridiagonal_solve` (deletes
-   ~180 lines of ported index arithmetic); extrema Newton -> `solvax.root_solve` (restores
-   reverse-mode); surface batching -> `chunk_map`; make `acc_req` traced, hoist the per-call jit.
-6. Run down the NCSX 0.5% epstot discrepancy (rtol 6e-3 fast gate vs 2.5e-10 headline) **before**
-   any change that reorders floating-point sums; re-baseline tolerances deliberately.
-New solvax primitives (own PRs, in value order): bounded `scan_while` with reverse rule; batched
-2-D spline coefficient builder; masked segment accumulator.
-
-Acceptance: NCSX 200x200 case >= 5x faster than today at unchanged parity tolerances; memory
-< 500 MB; discrepancy explained and pinned.
-
-## Phase 8 — Performance program across all lanes + VMEC2000/VMEC++ comparisons  [first CPU rows measured; see the machine-gap log entry]
-
-1. **Benchmark matrix** (one JSON, one nightly job): {fixed, free} x {lasym on/off} x
-   {tokamak, stellarator} x {vacuum, finite beta} x {CPU, GPU office A4000}: wall time, its,
-   ms/it, peak RSS, and for gradient lanes: s/gradient and matvecs. Extend
-   `benchmarks/baseline.json` + `render_performance_docs.py` so docs numbers regenerate.
-2. **VMEC2000** (local STELLOPT build) and **VMEC++** (github.com/proximafusion/vmecpp, pip
-   installable) in a separate venv: run the shared input decks, compare wout parity (iota, beta,
-   Mercier, |B| spectra) and wall time. Accuracy first: any VMEX-vs-VMEC2000 discrepancy beyond
-   the documented parity contract is a bug before it is a benchmark. Study their speed sources —
-   VMEC2000: radial-block MPI parallelism + serial hot loops in Fortran; VMEC++: C++ with
-   OpenMP-style threading and zero-restart multigrid — and write down which techniques transfer
-   (radial blocking maps to batched linear algebra; their vacuum refresh cadence policies map to
-   Phase 3.8).
-3. **Single-device speed**: profile the fixed-boundary iteration (5.2 ms/it free, 2.3 ms/it
-   fixed at ns=25) to the XLA level (perfetto trace on CPU and A4000); attack the top kernels
-   (fusion breaks, transposes, callback boundaries). LASYM Jacobian 5.5x -> target <= 3x via
-   chunked JVP sizing and shared trig tables.
-4. **Multi-CPU**: document and test `solve_ensemble` scaling; investigate radial-block sharding
-   of the 1-D preconditioner (solvax block-Thomas is the natural seam) for single-solve
-   multi-core strong scaling; measure, do not promise.
-5. **Multi-GPU**: only after single-GPU is clean; sharded ensembles first (embarrassingly
-   parallel scans are the realistic strong-scaling story), single-solve sharding recorded as an
-   explicit non-goal unless the profile says otherwise.
-6. Derivative cost/memory targets recorded per lane: fixed-boundary Jacobian s/dof, free-boundary
-   s/gradient, eps_eff s/gradient — all in the benchmark JSON with regressions gated in nightly.
-
-Acceptance: benchmark matrix in CI nightly with regression gates; a docs page with measured
-VMEX vs VMEC2000 vs VMEC++ parity + runtime tables; at least one demonstrated strong-scaling
-curve (ensembles) and honest statements elsewhere.
-
-## Phase 9 — CI: >= 95% coverage, < 30 min, literature-anchored  [changed-line gate DONE at 96%]
-
-1. Coverage gate moves from changed-lines to whole-repo >= 95% (line + branch on `vmex/core`),
-   with per-module floors so physics modules cannot hide behind plotting.
-2. Time budget: pull-request critical path <= 15 min and scheduled nightly <= 30 min. Start
-   selected heavy lanes at measured `-n 2`, keep memory/cache-sensitive mirror lanes serial,
-   and raise worker count only after RSS and wall-time evidence. Levers:
-   the Phase 2 cache (compile time dominates test wall), smaller `full`-equivalent decks (the
-   FD certificates at ns=8-16 are minutes, not tens of minutes), manifest-driven sharding across
-   jobs, and pruning duplicate-coverage tests when slimming (Phase 10) — fewer, sharper tests.
-3. Every new physics test cites its anchor (paper/code/analytic limit) in the docstring —
-   Goodman JPP 2023 (maxJ/QI), Nemov PoP 1999 + Paul JPP 2020 (eps_eff), VMEC2000/DCON/GPEC
-   (Mercier), patched STELLOPT NEO (ripple parity). Edge cases enumerated per objective:
-   axis limit, lasym on/off, vacuum vs finite beta, near-rational iota, degenerate |B|.
-4. `ConstructedMaximumJResidual` test set (currently zero): class==functional bit-exact with a
-   monkeypatched Boozer dict; `bmns_b` forwarding regression across all five bounce classes;
-   input guards; symmetric-limit bit-equivalence; Goodman g_J continuation target vs the
-   independent NumPy reference lineage already in `test_qi_reference_oracle.py`; grad-vs-FD +
-   traced-weights JVP + one `full` implicit boundary gradient; composition consistency with
-   `ConstructedQIResidual`; NaN-not-zero degenerate-regime contract.
-5. Soften the eps_eff test docstring's "NEO/STELLOPT-parity" claim until Phase 6's independent
-   comparisons exist; then reinstate it with the parity table as evidence.
-
-Acceptance: coverage >= 95% enforced; pull-request critical path <= 15 min; nightly <= 30 min;
-every physics test names its anchor. Phase 25 carries the current timing evidence and changes.
-
-## Phase 10 — Slim code, docs, and repository  [PARTIAL: stale claims, dead code, examples index DONE]
-
-1. **Scaffold disposition (execute the verdicts):** wire in `freeboundary_linear.py` (Phase 3);
-   delete `freeboundary_diff.py` shim after fixing its one real caller
-   (`tools/build_qi_sheet_mgrid.py:86`); delete the `vmec_jax/` package shim on schedule
-   (update `pyproject.toml:108`, `test_packaging_metadata`, README); delete the
-   `FreeBoundaryDiffProblem` alias; strip `_compat._env`'s legacy `VMEC_JAX_*` branch; either
-   consume `recycle_drift` (Phase 3.4) or delete the doc sentences; quantify the trial-pressure
-   proxy (accuracy study vs re-solved finite-beta over a beta scan) so "trial" carries an error
-   bar, or fold it into the standard Mercier docs as a screening tool with stated bounds.
-2. **LOC/file budget:** every PR states net LOC; refactors that delete (NEO_JAX splines via
-   solvax, Fourier GEMM removing the streamed mode, examples on `FreeBoundaryProblem`) are
-   preferred over additions. Test suite consolidation: merge single-assert modules into their
-   physics-area files where it does not hurt manifest sharding.
-3. **Docs correctness sweep** (12 verified stale claims with corrected wording ready):
-   the three LASYM claims (`optimize.py:54`, `confinement.rst:285`, `confinement.rst:428`),
-   `all-of-vmex.md:94` denying the free-boundary adjoint, the plot-diagnostics D_R
-   misattribution, `objectives.rst:164` lasym parenthetical, `objectives.rst:418` +
-   `README.md:234` trial-pressure pointers, `recycle_drift`, the dead JAX URL, the pre-rename
-   SVG text, the stale cloc table. README linkcheck added to the workflow paths.
-4. **README restructure:** lead with "what VMEX does that VMEC2000/VMEC++ do not" (exact implicit
-   derivatives, free-boundary adjoint, LASYM optimization, differentiable objectives incl.
-   eps_eff, CPU+GPU); LASYM and free-boundary single-stage sections with figures; comparison
-   matrix reordered differentiators-first. New how-tos: free-boundary coils, asymmetric boundary,
-   effective ripple, field-line tracing, exterior field queries (add `compute/trace/query` to
-   `HOWTO_VERBS` or retitle); `first-free-boundary` tutorial. Respect the 150 KB/file media gate:
-   new figures as ~1600 px WebP.
-5. **Repo slimming:** re-encode the 4 oversized figures (~1.26 MB saved; then remove them from
-   `GRANDFATHERED_FILES` to tighten the gate); delete orphan `ess_x_scale.png`; examples write to
-   `results/`.
-6. **Git history rewrite:** after the above land and a release is tagged — rewrite history to
-   drop dead blobs (pre-rename `vmec_jax/` trees, superseded figures; 46 MB `.git` for an 8.8 MB
-   tree). Do it once, deliberately: `git filter-repo` keeping the tagged release reachable,
-   force-push, announce that users must re-clone; pin the old HEAD sha in the release notes for
-   provenance.
-
-Acceptance: zero "experimental"/scaffold language in the source; net-negative LOC for the
-refactor PRs; docs claims spot-checked against code in CI (`check_docs_prose` extended with the
-capability cross-check); fresh clone <= ~15 MB.
-
-## Phase 11 — Virtual-casing performance and memory (single-stage finite-beta OOM)
-
-Symptom: `single_stage_optimization_finite_beta.py` (the specified-boundary virtual-casing lane,
-`PlasmaVacuumInterface`) is slow, and users OOM when raising boundary modes, coil count, or coil
-dofs. The dense virtual-casing kernel scales as (src_nt x src_np) x (trg_nt x trg_np) and the
-whole graph is differentiated with plain reverse-mode, so memory grows with every mode/coil.
-
-1. **Measure first.** Memory/runtime matrix of one value+grad over
-   {max_mode 2,4,6} x {4,8,16 coils} x {nphi,ntheta 32,48,64}: peak RSS, wall, and the XLA
-   allocation report (`JAX_LOG_COMPILES` + `jax.profiler.save_device_memory_profile`). Identify
-   whether the OOM is the VC kernel tableau, the ESSOS Biot-Savart pullback, or XLA temporaries.
-2. **Reuse quadrature plans across optimizer iterations.** virtual-casing-jax 0.0.5 ships
-   "reusable quadrature plans" (vmex #123 already requires the release); audit
-   `vmex/core/virtual_casing.py` + `problem.py:650` so plan/setup construction happens once per
-   stage, never per evaluation (grep for per-call `VirtualCasingJAX.setup`).
-3. **Chunk the kernel.** Target-point chunking via `solvax.chunk_map`/`auto_chunk_size` inside
-   `plasma_field_on_boundary` and the bnormal/pressure-balance residuals so the (src x trg)
-   tableau never materializes whole; same for the exterior `VmecExtender` batched queries.
-4. **Adjoint-not-autodiff for the VC map (in virtual_casing_jax, own PR).** The virtual-casing
-   integral operator is linear in its surface densities: its VJP is the transposed kernel applied
-   to the cotangent — implement as `jax.custom_vjp` using the same chunked kernel (and the same
-   quadrature plan) instead of letting JAX differentiate through plan assembly and singular-
-   quadrature bookkeeping. This is the structural memory fix: forward-sized memory in the
-   backward pass, no stored tableau. Certify against the existing FD tests
-   (`tests/test_virtual_casing_physics.py`, rtol 1e-4..3e-4) and add a peak-RSS regression test.
-5. **Precision policy.** Optional float32 kernel evaluation with float64 accumulation for the
-   smooth far-field part (digits-controlled), float64 near-singular part; gate behind the
-   existing `digits` knob and certify against the f64 kernel at the configured digits.
-6. **Coil-side scaling.** The ESSOS Biot-Savart pullback over many coils/dofs: batch over coils
-   with `chunk_map`, verify ESSOS's segment count enters linearly not quadratically, and recycle
-   the boundary-quadrature phase tables across coils (coordinate with ESSOS #58 follow-up).
-7. Acceptance: value+grad at max_mode=6, 16 coils, 128 curve dofs runs in < 8 GB and the
-   gradient certificate stays green; memory scaling documented in the benchmark matrix (P8.1).
-
-## Phase 12 — Minimum-|iota| objective as the default iota floor  [DONE]
-
-Physics: with finite beta the bootstrap/driven current can carry the transform, so a mean-iota
-target is satisfiable with tiny vacuum (shaping) iota — observed as the finite-beta single-stage
-stall with small vacuum iota. We want most of iota from shaping. A floor on the *minimum* of
-|iota(s)| over the profile pushes the whole profile up, not just its average, and (used in the
-vacuum/coil-only stages and finite-beta stages alike) forces shaping transform rather than
-current-carried transform.
-
-1. **Core objective** (`vmex/core/statephysics.py`, next to `mean_iota:348`):
-   `def min_abs_iota(state, rt): iotas = _iotas_half(state, rt); return jnp.min(jnp.abs(iotas[1:]))`
-   — same half-mesh convention, axis excluded. Optionally add
-   `soft_min_abs_iota(state, rt, tau=0.02)` (`-tau*logsumexp(-|iota|/tau)`) for a smooth min if
-   least-squares progress near ties demands it; hard min is the default. Export both through
-   `vmex/core/optimize.py` imports + `__all__` and document in `docs/reference/objectives.rst`
-   (wout twin: `min(|wout.iotas[1:]|)` for the `jac=None` lane, mirroring `mean_iota`'s pair).
-2. **Floor hinge convention** used by every script:
-   `iota_floor = lambda state, rt: jnp.maximum(IOTA_FLOOR - opt.min_abs_iota(state, rt), 0.0)`
-   (no `jnp.abs` wrapper needed — `min_abs_iota` is already sign-free). Keep one comment line:
-   `# mean-iota alternative: opt.mean_iota targets the profile average instead of its minimum.`
-3. **Rollout to every optimization script** (replace the 9 existing
-   `IOTA_FLOOR - jnp.abs(opt.mean_iota(...))` hinges and the `(opt.mean_iota, IOTA_TARGET, w)`
-   tuples where a floor is intended): `examples/optimization/{QA,QH,QP,QI}_optimization*.py`
-   (incl. `_scipy`, `_global`, `_bootstrap`, `_DMerc_vacuum`, maxJ continuations),
-   `examples/optimization/stellarator_asymmetry/*.py` (8 files),
-   `examples/optimization/single_stage_*.py` (fixed and free-boundary, vacuum and finite beta).
-   Scripts that genuinely want a target (not a floor) keep `mean_iota` with the comment.
-4. **Tests**: unit (analytic profile: min vs mean differ, sign-flip invariance, axis exclusion);
-   gradient vs FD through the implicit lane (pattern of `test_optimize_traceable_qs`); one
-   integration assertion in the nightly example smokes that final `min|iota| >= IOTA_FLOOR - eps`
-   for the QA vacuum example.
-5. **Finite-beta shaping check** (the actual physics gate): in the finite-beta single-stage
-   example, log both total `min|iota|` and the vacuum-field iota proxy (re-solve the final
-   boundary at `pres_scale=0`/`curtor=0` in the wout postprocess step) and assert the vacuum
-   fraction exceeds a documented threshold (e.g. >= 70%). This is what "iota from the
-   stellarator, not from current" means operationally, and it becomes a regression test.
-
-## Phase 13 — Single-stage example matrix: QA and QI, vacuum and finite beta
-
-Deliver four verified single-stage examples (fixed-boundary lane; the free-boundary pair from
-Phase 4 mirrors them): `single_stage_optimization.py` (QA vacuum — exists),
-`single_stage_optimization_finite_beta.py` (QA — exists, unstall via P12 + P11),
-`single_stage_QI_optimization.py` (new), `single_stage_QI_optimization_finite_beta.py` (new).
-
-1. QI variants use `ConstructedQIResidual` + the P12 iota floor + mirror/elongation hinges
-   (reuse the recipe from `examples/optimization/QI_optimization.py`), coils via ESSOS exactly
-   as the QA single-stage does.
-2. All four adopt: P12 min-|iota| floor, P1 flushed per-nfev progress, results into `results/`,
-   `VMEX_EXAMPLES_CI=1` smoke mode, and a descent assertion in the nightly lane
-   (`tests/test_examples.py` entries — executed, not text-grepped).
-3. "Make sure it works" = each runs end-to-end in full mode on this Mac within a documented
-   budget (record wall time in the example header), descends, and the finite-beta pair passes
-   the P12.5 vacuum-iota-fraction check.
-
-## Phase 14 — L_gradB and L_gradgradB metrics (Kappel)
-
-The magnetic gradient scale length L_gradB = sqrt(2) |B| / ||grad B||_F (Kappel, Landreman,
-Dudt, PPCF 66 025018 (2024), arXiv:2309.11342 — "the magnetic gradient scale length explains
-why certain plasmas require close external magnetic coils"; implemented in DESC as the
-`"L_grad(B)"` compute quantity in `desc/compute/_metric.py`; simsopt-side scripts in John
-Kappel's work and in github.com/rogeriojorge repos, e.g. the single-stage/omnigenity
-optimization scripts — check `single_stage_optimization` and QI/omnigenity repos for the
-objective wiring pattern). vmex already has the wout lane `opt.l_grad_b` (`optimize.py:702`)
-and traceable `l_grad_b_state` (`statephysics.py`), both symmetric-only.
-
-1. **Convention lock + oracle.** Match DESC's `L_grad(B)` definition exactly (Frobenius norm of
-   the full Cartesian grad B tensor, sqrt(2) normalization); add a parity test vs DESC on a
-   shared wout (same pattern as `test_matches_desc_bounce1d_when_available`) and vs the
-   existing vmex implementation on symmetric cases.
-2. **LASYM support** for `_lgradb_state_tables` / `l_grad_b` — the Phase 5b.3 item; the wout
-   arrays (`bsupumns`, `bsupvmns`, `rmns`, `zmnc`) already exist, plumbing only.
-3. **L_gradgradB (new).** Second-order scale length L_gradgradB = sqrt(2 |B| / ||grad grad B||_F)
-   (the k=2 member of the L_grad^k B family; verify the exact normalization against DESC master
-   and the Kappel paper appendix before freezing the name). Implementation: extend the
-   `_lgradb_grid` tables with second radial/angular derivatives of (R, Z, B^u, B^v) — the
-   Cartesian hessian assembly mirrors `extender.py`'s interior `gradgradB` (which already
-   exists for point queries); a surface-grid version over the optimization surfaces is what's
-   new. Traceable, jit/vmap-clean, with FD-vs-JVP tests and min-over-surface + softmin reducers.
-4. **Objectives + example.** Export `l_grad_b` / `l_grad_grad_b` state objectives (min-over-
-   surfaces scalar and per-surface residual forms); add to `examples/optimization/
-   QA_optimization.py` as commented-out objective tuples with one-line guidance
-   (`# (opt.l_grad_b, L_GRADB_TARGET, w)  # coil-simplicity proxy, Kappel PPCF 2024`), and use
-   them for real in one coil-aware example once P11 lands (their whole point is coil distance).
-5. **Performance**: both metrics are pointwise algebra on existing field tables — target < 0.1 s
-   overhead per evaluation at example resolutions; no new solves.
+## 1. Mission
+
+Turn VMEX into one coherent, high-accuracy, differentiable equilibrium and optimization system for:
+
+1. closed toroidal equilibria;
+2. fixed- and free-boundary mirrors;
+3. periodic stellarator-mirror hybrids;
+4. downstream coil, orbit, neoclassical, and gyrokinetic calculations;
+5. fast repeated solves and gradients in design campaigns.
+
+The immediate engineering goal is not to replace VMEC-compatible numerics. It is to keep the existing VMEX solve as the robust branch finder and compatibility layer, then attach a certified, high-order force-balance correction and native continuous equilibrium representation. The mirror and hybrid lanes should reuse the same numerical ideas where their topology permits, without forcing toroidal assumptions onto open systems.
+
+The final system must be:
+
+- **accurate:** independently certified strong force balance, boundary conditions, regularity, and resolution convergence;
+- **fast:** measured cold, warm, persistent-cache, optimization, and gradient performance;
+- **memory bounded:** no hidden all-surfaces/all-modes tensors when streaming or local support is sufficient;
+- **differentiable:** implicit derivatives of converged equations, not taped nonlinear iterations;
+- **simple to use:** one input-file option and one Python keyword for polishing;
+- **simple to maintain:** explicit ownership between VMEX, SOLVAX, BOOZ_XFORM_JAX, ESSOS, VIRTUAL_CASING_JAX, GKX, and DKX;
+- **honest:** no performance or accuracy claim without checked-in raw evidence and a reproducible command.
 
 ---
 
-## Sequencing and dependencies
+## 2. Definition of done
 
-```
-DONE: P0, most of P1, P5a/P5d, P12, and the ten post-#123 merges
-NOW:  P22 exact contract -> P25 CI runtime -> P24 release-blocking audit debts
-      -> P23 VMEX 0.6.0 against released dependencies
-NEXT: P3/P3b boundary-Schur speed + exact certificates -> P4 public free-boundary API
-      P11 virtual-casing memory (sibling first) -> P13 single-stage matrix
-      P5b/P5c LASYM completion -> P6/P7 ripple + NEO speed -> P21 loss fraction
-THEN: P8 performance/parity matrix, P14/P16-P19 physics, P15/P26 ownership moves
-LAST: P10 slimming/history only after ownership settles; P27 final capability audit
-      -> independent ESSOS maintainer review/merge of #58/#61 and a compatible ESSOS release
+The program is complete only when all of the following are true.
 
-P2 cache policy informs graph-size work but is not the Jacobian-stall fix.
-P9 coverage/runtime ratchets continuously through P25; do not postpone test design.
-PR #122 and #125 remain open bookkeeping/specification PRs throughout.
+### 2.1 Toroidal equilibrium and polishing
+
+- A legacy-compatible VMEC `&INDATA` file can request polishing through a VMEX comment directive that VMEC2000 ignores.
+- Structured JSON can request the same through a reserved `_vmex` section.
+- Python users can write either:
+
+```python
+result = vmex.solve(inp, polish="auto")
 ```
 
-Profiling infrastructure (keep, do not commit as-is): session scratchpad scripts
-`profile_lasym.py`, `fb_isolate.py`, `fb_forward_anatomy.py`, `fd_tighten.py`,
-`adjoint_matvec_count.py`, `profile_stall.py` — fold the useful ones into `benchmarks/` as
-deliberate, minimal benchmark entries when Phase 8 lands.
-
-## Log
-
-Append-only; newest last; one line per contribution (see "How to use this file").
-
-- 2026-08-18 rogeriojorge: initial plan from the two assessment/profiling sessions on
-  `rj/vmec-extender-field` (measured baselines table above; stall root-caused to pathological
-  Jacobian executions P1.a + `_block_lane` recompile churn P1.b; `jax_explain_cache_misses`
-  crash P1.6; FD-certificate recipe P3b from the ftol/cold-probe scan; LASYM/eps_eff/NEO/docs
-  audits distilled into P5-P7, P10). Added P11-P14 (virtual-casing memory, min-|iota| floor,
-  QA/QI single-stage matrix, Kappel L_gradB/L_gradgradB). Plan committed as its own PR; all
-  implementation PRs branch from main after PR #123 merges (P0).
-- 2026-08-18 rogeriojorge: P1.a quantified with the completed instrumented stage
-  (`profile_stall.py`): jac #1-2 = 1.8-3.9 s, every later Jacobian ~2000-2240 s (~42 s/dof
-  column) with residuals steady at 3.5 s — the degradation is systematic once x leaves the
-  reference state, so the amortized factor-once Jacobian path is priority one of Phase 1.
-- 2026-08-19 rogeriojorge: P0 [DONE except merge] — ruff E701/F541, manifest entry for
-  tests/test_neoclassical.py, trial-pressure test + docs pointer, JAX autodiff URL, scipy>=1.15
-  pin. Two further blockers surfaced only once ruff stopped short-circuiting the job: the quality
-  lane installs mypy unpinned (2.3.1) and rejects two inferred lambdas, so
-  `plotting._epsilon_effective_summary` and `extender._stored_flux_quantity` now use named
-  functions. Quality and docs-linkcheck jobs are green; PR #123 is ready to merge. Dev-tool
-  version pinning is unresolved and belongs in P9/P10 (an unpinned major broke a gate silently).
-- 2026-08-19 rogeriojorge: P12 [DONE] — `min_abs_iota` / `soft_min_abs_iota` in statephysics,
-  exported through optimize, rolled out as the default floor across 20 optimization examples
-  (9 existing hinges converted, 11 mean-iota targets turned into floors, reporters now print
-  min |iota|), docs updated, tests added (wout-convention parity, reducer separation and
-  sign-freedom, JVP-vs-FD). Design change from the plan text: the softmin uses a
-  softmax-weighted mean, not log-sum-exp — the latter sits `tau log(ns)` *below* the true
-  minimum (measured -0.068 where the minimum was 1e-12), which is wrong for a non-negative
-  floor. P12.5 (vacuum-iota-fraction check in the finite-beta examples) is NOT done.
-- 2026-08-19 rogeriojorge: P1 [PARTIAL] — items 1, 3 and 6 landed: the five `emit=print`
-  defaults now flush, `monitoring` flushes its reporter/table rows, `OptimizationMonitor`
-  splits the residual SciPy already hands its callback instead of re-solving the equilibrium
-  per accepted iterate, and `FunctionProblem` gained `evaluation_progress` (+ `report_interval`)
-  so residual and Jacobian evaluations run under the existing elapsed-time heartbeat; enabled
-  in 20 examples. P1.a (the real stall) is still open and now better measured: a full
-  instrumented LASYM QA stage shows jac #1-2 at 1.8-3.9 s and every later Jacobian at
-  2000-2240 s with residuals steady at 3.5 s. Mechanism located: `jacobian_rows_block`
-  (optimize.py:2693) factors the raw block-tridiagonal system once and then runs a
-  warm-started certifying GMRES per column via `_implicit_evolved_tangent_multi_rhs`
-  (implicit.py:1944-1965) against `cfg.adjoint_tol`; that certifier is the suspect, since the
-  factorization stops being a good preconditioner as the iterate moves. The decisive experiment
-  (same iterate, `adjoint_tol` 1e-6/1e-4 and `implicit_jacobian_method="forward_gmres"`) is
-  scripted in the session scratchpad as `jac_probe.py` and was still running at hand-off — run
-  it first. Note the certifier's iteration counts cannot be read with a host-side spy (they are
-  traced); expose them through the existing `LinearResponseReport` instead.
-- 2026-08-19 rogeriojorge: P2 [PARTIAL] — the cache bound now scales with the filesystem
-  (`min(20 GiB, max(2 GiB, 10% free))`, floor on unreadable paths) instead of a fixed 1 GiB that
-  both machine-fingerprint directories sat pegged at, and `--doctor` prints the directory, its
-  occupancy and the bound, flagging a cache within 5% of its cap. But the measurement corrects
-  this phase's premise: with a *fresh* cache directory, one `compile_residual_and_jacobian`
-  wrote only **2 entries / 768 KB** and the second process was no faster. The config is applied
-  correctly (verified: cache dir, enable flag, `min_compile_time_secs=1.0`, new bound), so
-  eviction was never the main story — almost nothing in this workload is cacheable XLA
-  compilation above the 1 s floor. The remaining "compile" wall is sub-second XLA modules
-  (filtered by `jax_persistent_cache_min_compile_time_secs=1.0`) plus Python-side tracing and
-  jaxpr->MLIR lowering, which the persistent cache cannot serve at all. Next steps for this
-  phase, in order: (1) re-measure on a quiet machine with `jax_log_compiles` captured from
-  *stdout* (the logging handler writes there, not stderr) and split total vs summed XLA vs
-  summed lowering; (2) try `VMEX_CACHE_MIN_COMPILE_TIME_SECS=0.1` and see whether entry count
-  and second-run time move; (3) if lowering dominates, the lever is graph size/count in
-  `_least_squares_implicit`, not the cache. Raising the bound stays correct regardless.
-- 2026-08-19 rogeriojorge: P0 follow-up — the changed-line coverage gate is still red at **78%**
-  and this is NOT what the plan assumed. Adding `tests/test_neoclassical.py` to the manifest does
-  not help, because the coverage job combines artifacts only from the `fast`, `physics-*` and
-  `device` jobs, and those run curated `selectors` (`pr-physics-core`, `pr-implicit-response`,
-  ...) plus the `pr-fast` lane — the `pr-parity-*` lanes never execute on a pull request. Most of
-  PR #123's new physics is reachable only from `full`-marked or optional-dependency tests, so it
-  contributes zero coverage: `boozer_tables.py 0%`, `omnigenity.py 4.8%`, `maxj.py 18%`,
-  `neoclassical.py 27.5%`, `freeboundary_implicit.py 57.2%`, `optimize.py 78.7%` (456 changed
-  lines missing). The gate was already failing this way before this session's commits. Two ways
-  forward, both Phase 9 work rather than Phase 0: add fast unit tests for those lines, or add the
-  relevant test ids to the CI selectors (done for the two new `min_abs_iota` certificates, which
-  had the same problem — they lived in `pr-parity-d` and never ran on PRs). Until one of those
-  lands, #123 merges only with an explicit exception.
-- 2026-08-19 rogeriojorge: P1.a methodology note — do NOT diagnose this by timing the Jacobian
-  to completion; each data point costs ~35 min and a four-way comparison runs for hours. Bound
-  the work instead. An uncertified column falls back to the block-factorization solution rather
-  than raising (`_implicit_evolved_tangent_multi_rhs` masks on `report.converged`), so capping
-  `adjoint_maxiter` through the public `make_problem` knob is safe and makes the cost bounded by
-  construction. Then the *signature* is what to read, not the wall time: at a well-conditioned
-  iterate the Jacobian time is flat in the cap because the certifier converges in a couple of
-  matvecs, and where it is grinding the time grows roughly linearly with the cap. Run it on a
-  deliberately small deck (ns=11, mpol=4, max_mode=1, ndof=16) — the question is how convergence
-  degrades with the iterate, not how cost scales with resolution. Script:
-  `jac_bounded.py` in the session scratchpad. Two dead ends recorded so nobody repeats them: a
-  host-side spy on `_linear_response_report` cannot read the iteration counts (they are traced
-  inside jit — expose them through `LinearResponseReport` instead), and passing `jac_solver=` to
-  `from_tuples` raises (the public knob is `implicit_jacobian_method`, values
-  auto/block_tridiagonal/forward_gmres/reverse_adjoint).
-- 2026-08-19 rogeriojorge: P8 groundwork — the office box (`ssh office`, pop-os, 2x RTX A4000
-  16 GB, 36 cores, 62 GB RAM) now has the PR branch checked out at ~/local/vmex and imports it
-  cleanly on CUDA. Note the version skew against this laptop: office runs jax 0.6.2, laptop jax
-  0.9.2, both with solvax 0.13.0 — any CPU/GPU comparison has to say which jax produced it. First
-  matrix rows (fixed-boundary solve, problem build, compile, residual, Jacobian; symmetric and
-  LASYM at ns=31/mpol=5) are scripted at /tmp/gpu_bench.py on that host and write
-  /tmp/bench_cpu.json and /tmp/bench_gpu.json.
-- 2026-08-19 rogeriojorge: P1.a measured, and one earlier conclusion RETRACTED. The shipped
-  Jacobian lanes now carry their certifier statistics out with the rows (`_certifier_summary` /
-  `_record_certifier` in optimize.py; `holder["jac_certifier_iterations"]`,
-  `["jac_certifier_unconverged"]`, `["jac_certifier_worst"]`), which turns this from a
-  multi-hour timing hunt into one observable run. First numbers, LASYM QA vs the symmetric case
-  of the same shape: **542 certifier iterations vs 23**, zero uncertified columns in both. So
-  the certifier genuinely works much harder on the asymmetric problem.
-  BUT the tolerance sweep at that same iterate shows the iteration count is NOT the wall-time
-  driver there: adjoint_tol 1e-6/1e-5/1e-4/1e-3 gives iterations 542/66/0/0 while the Jacobian
-  takes 85.4/103.8/93.8/68.6 s — flat inside compile noise, since each build recompiles. The
-  accuracy price of relaxing is negligible and plateaus immediately (relative Jacobian
-  difference 3.07e-5 at 1e-5, 3.24e-5 at 1e-4 and 1e-3). Do not conclude "the certifier is the
-  stall" from the iteration count alone — that was my error; the count and the cost have to be
-  measured separately. `jac_split.py` (two calls in one process, so the second carries no
-  compilation) isolates compile from the block assembly/factorization and the certifier, and the
-  instrumented run of the real stalling iterate (`jac_real.py`, jac #2 is the 2000 s one) will
-  say whether the count explodes there. Both were in flight at hand-off. If the warm cost at
-  1e-6 turns out to dwarf the warm cost at 1e-4, a separate looser Jacobian-certification
-  tolerance is the fix and 1e-4 is defensible on the measured accuracy. If it does not, the time
-  is in `_raw_block_system`'s probe assembly and factorization, and the Schur/preconditioner
-  work of Phase 3 is the lever instead.
-- 2026-08-19 rogeriojorge: P1.a SOLVED, with the full chain measured. The instrumented run of the
-  real stalling stage (LASYM QA, ns=21, mpol=5, 48 dofs) reads:
-  `jac #1 77 s, certifier iters=542, unconverged=0` then
-  `jac #2 3456 s, certifier iters=9000, unconverged=47`. So at the second accepted iterate the
-  per-column certifier runs to its ceiling (adjoint_maxiter 300 x 30 restarts) and still fails
-  on 47 of 48 columns; those come back NaN, the whole Jacobian is discarded for the previous
-  one, and the stage spends 58 minutes making no progress with nothing on screen. That is the
-  stall, end to end.
-  Fix shipped: `ImplicitConfig.jacobian_adjoint_tol` (default 1e-4), applied by the two Jacobian
-  lanes through a `jac_cfg = dataclasses.replace(cfg, adjoint_tol=cfg.jacobian_adjoint_tol)`;
-  uncertified columns now raise a RuntimeWarning naming the knob. Measured at the seed iterate,
-  warm (compile excluded by calling twice in one process): **13.3 s -> 2.8 s, certifier 542 -> 0
-  iterations, relative Jacobian change 3.2e-5**. The rationale is that the two tolerances have
-  different consumers — a scalar gradient feeds quasi-Newton curvature accumulation, a
-  least-squares Jacobian only points a trust-region step.
-  IMPORTANT scoping lesson: relaxing the tolerance inside the shared
-  `_implicit_evolved_tangent_multi_rhs` helper broke
-  `test_block_response_forward_transpose_and_fd` (a genuine transpose/FD identity at rtol 2e-8,
-  measured error 5.2e-5). The helper keeps `adjoint_tol` for its public callers; only the
-  Jacobian lanes relax. Do not push the relaxation down into the helper.
-- 2026-08-19 rogeriojorge: P8 warning about the office box — do NOT trust remote numbers without
-  pinning the import. `~/local/vmex` is NOT what `import vmex` resolves to there: an editable
-  install points at a second checkout, `/home/rjorge/vmex_profile/vmex`, and a script invoked as
-  `python3 /tmp/bench.py` puts `/tmp` (not the cwd) on `sys.path[0]`, so the stale tree wins.
-  Two rounds of benchmark numbers were silently produced from it, including a bogus
-  `NotImplementedError: QuasisymmetryRatioResidual traceable evaluation supports lasym = False
-  only` that exists in no current source, and a 575 s symmetric Jacobian. Always run remote work
-  as `cd <checkout> && PYTHONPATH=<checkout> python3 ...` and assert `vmex.__file__` in the
-  output. Clearing `__pycache__` does not help — it was never the cache.
-- 2026-08-19 rogeriojorge: P1.a OPEN DECISION for whoever picks this up. The
-  `jacobian_adjoint_tol = 1e-4` default is committed and the speedup is real and large — at the
-  degraded iterate the warm Jacobian goes 395 s -> 28 s (certifier 9000 iterations and 47/48
-  columns uncertified, versus 207 iterations and all certified). But two things must be settled
-  before calling it finished:
-  (1) `tests/test_optimize.py::test_least_squares_implicit_jac_solver_block` now FAILS. It pins
-  the block lane against the per-dof GMRES lane at `rtol=1e-6`, and that guarantee genuinely
-  weakens when both lanes certify to 1e-4 (each is within 1e-4 of exact, so they may differ by
-  2e-4). This is the trade-off surfacing honestly, not a flaky test. Do NOT relax the assertion
-  just to make it green — decide the policy first, then update the test AND its docstring to
-  state the new contract.
-  (2) The loose-vs-tight difference is 3.2e-5 at a clean iterate but 1.4e-1 at the degraded one.
-  That large number is almost certainly comparing against a broken reference: at that iterate the
-  tight solve fails its certificate, returns NaN columns, and the caller falls back to the
-  previous Jacobian — so "tight" there is not a Jacobian at all. `jac_accuracy.py` in the session
-  scratchpad settles it by comparing BOTH against a central finite-difference column and printing
-  the uncertified/NaN counts for each; it was still running at hand-off. If loose matches FD and
-  tight does not, the default is not merely faster but more correct, and the block-vs-GMRES test
-  should be re-pinned at the Jacobian tolerance. If loose does NOT match FD, reconsider: keep the
-  tight default and make the fix adaptive instead (start tight, relax only when the certifier
-  reports uncertified columns), which the new `holder["jac_certifier_unconverged"]` counter makes
-  straightforward.
-  Everything else in Phase 1 (flush, heartbeat, monitor double-solve, examples) is done and green.
-- 2026-08-19 rogeriojorge: P1.a — a central finite difference is NOT a usable arbiter for this
-  Jacobian, do not spend time on it. Measured: at the degraded iterate, column 0 against a
-  central FD came out 8.3e-1 relative for the tight Jacobian and 2.6e0 for the loose one. Both
-  being of order one says the FD is wrong, not the Jacobians: each probe re-solves the
-  equilibrium through the perturbation warm start, so the difference is dominated by solver
-  endpoint noise rather than by the derivative (the same endpoint-noise effect already
-  documented for the coupled free-boundary certificate in P3b). Same run also showed the tight
-  solve reaching 9000 iterations with 9 uncertified columns and taking a derivative fallback,
-  while 1e-4 certified everything in 207 iterations — i.e. at that iterate the tight result is
-  the one that is not trustworthy. The arbiter that does work is a tight solve given enough
-  iteration budget to actually certify every column (`jac_arbiter.py`: tol=1e-8,
-  adjoint_maxiter=4000, and it checks `unconverged == 0 and derivative_fallbacks == 0` before
-  accepting itself as ground truth), then comparing 1e-6/1e-4/1e-3 against it. That was running
-  at hand-off; its result decides the open question above.
-- 2026-08-19 rogeriojorge: P9/P0 changed-line coverage gate **78% -> 96%** (464 -> 84 missing of
-  2144 changed lines), merged. The cheap wins dominated exactly as hoped: most of it came from
-  running modules the pull-request lanes never selected (`test_boozer_tables`, `test_maxj`,
-  `test_optimize_traceable_qs`, `test_virtual_casing_api` into `pr-physics-field`; `test_doctor`
-  and `test_neoclassical` into `pr-fast`), not from new tests. Zero `full` markers were demoted —
-  none of the candidates ran in under 20 s. One genuinely new certificate was worth its cost: a
-  percent-level cross-check of the boundary-Schur adjoint against the certified coupled GCROT
-  adjoint on a shared converged root (202 s, the two gradients agree to 0.53%), which is the
-  first fast-lane coverage of that path; note it needs `adjoint_tol=1e-5`, because at 1e-9 the
-  Schur lane's own certification does not converge within 3017 Krylov iterations. Estimated CI
-  wall goes ~17.5 -> ~22 min, inside the 30-minute budget. When merging, the per-node maximum-J
-  entries in `pr-physics-core` were dropped: the whole module now runs in `pr-physics-field`, so
-  listing individual ids only duplicated it.
-  Two DEAD-CODE findings for Phase 10, both confirmed unreachable rather than merely untested:
-  `implicit.py` `_raw_block_apply`'s `factors is None` guard and its iterative-refinement loop
-  (`refinements` is never passed non-zero anywhere in the tree), and `omnigenity.py:328,330-331`
-  (the in-body LASYM mirror branch, unreachable because `boozer_bmnc_state` returns early through
-  `_boozer_lasym_state` for asymmetric states — the maximum-J agent independently found the same
-  thing). Delete both rather than write tests for them.
-  Of the 84 lines still missing, the honest reasons are recorded: `optimize.py` closures that
-  need a solve-backed `VmecProblem`, a `freeboundary_implicit.py` m=1 edge-pairing branch
-  unreachable on the only free-boundary deck available (DIII-D, `ntor=0`), extender parameter-VJP
-  fallbacks, `FFMpegWriter`, and the successful `import neo_jax` line.
-- 2026-08-19 rogeriojorge: P1 [DONE]. The open decision is closed by measurement, and the
-  earlier worry about it was based on two of my own mistakes, both now fixed.
-  Final sweep at the LASYM QA iterate (warm, compile excluded by calling twice in one process),
-  `jacobian_adjoint_tol` against a 1e-7 reference:
-
-  | tol | warm jac | certifier iters | uncertified | relative vs 1e-7 |
-  |---|---|---|---|---|
-  | 1e-7 | 23.1 s | 962 | 0 | reference |
-  | 1e-6 (old behaviour) | 6.6 s | 542 | 0 | 1.8e-5 |
-  | **1e-4 (new default)** | **1.2 s** | **0** | 0 | **4.4e-5** |
-  | 1e-3 | 1.2 s | 0 | 0 | 4.4e-5 |
-
-  So the default is 19x faster than a 1e-7 Jacobian and 5.5x faster than the old 1e-6 one, for
-  4.4e-5 relative error — and the error *plateaus* there, because at 1e-4 the certifier accepts
-  the block backsolve unchanged (0 iterations) and 1e-3 buys nothing further. At the degraded
-  iterate the same change is the difference between converging in 207 iterations and running to
-  9000 with 47 of 48 columns uncertified over 58 minutes.
-  MISTAKE 1 (retracted): I believed the failing
-  `test_least_squares_implicit_jac_solver_block` showed the tolerance legitimately weakening
-  block-vs-GMRES agreement, and nearly relaxed its assertion. Measured in that test's own case
-  the two lanes agree to **1.1e-16**. The failure was unrelated.
-  MISTAKE 2 (the real bug, fixed): carrying the tolerance as
-  `dataclasses.replace(cfg, adjoint_tol=...)` gave the Jacobian lanes a second config identity,
-  which misses every cache keyed on the original and rebuilt the runtime *inside* the traced
-  Jacobian — a TracerArrayConversionError out of `setup.radial_grids`, and the CI
-  implicit-response lane. A tolerance is a number: it is now threaded as `rtol=` through
-  `_adjoint_solve`, `_adjoint_acceptance`, and the multi-RHS certifier. General lesson for this
-  codebase: never manufacture a new `ImplicitConfig` on a traced path.
-- 2026-08-19 rogeriojorge: P8 first verified remote row (office box, 36-core CPU, jax 0.6.2,
-  import asserted as /home/rjorge/local/vmex): symmetric ns=31/mpol=5/max_mode=2, solve 2.9 s,
-  build 56.7 s, compile 754.5 s, residual 0.52 s, **Jacobian 516.2 s**. That checkout predates
-  the Jacobian-tolerance fix, so it is a pre-fix baseline — but a Jacobian that costs ~2-10 s on
-  an Apple laptop costing ~500 s on a 36-core Linux box is a real finding for the performance
-  program, and the first thing to re-measure there after the fix lands. Compile at 754 s on that
-  machine also dwarfs the laptop's ~40 s.
-- 2026-08-19 rogeriojorge: P10 partial — the two unreachable paths found during the coverage work
-  are deleted (`58166f57`): `_raw_block_apply`'s iterative-refinement loop, whose `refinements`
-  count no caller has ever passed, and the poloidal-mirror branch for asymmetric states in
-  `boozer_bmnc_state`, unreachable because those states return through `_boozer_lasym_state`
-  about thirty lines earlier. Note the distinction that matters when clearing the rest of the
-  Phase 10 list: an unused *feature* is dead and goes, but a *precondition guard* is not the same
-  thing even when uncovered. `_raw_block_apply`'s `factors is None` raise states a real contract
-  for systems built with `factor=False`, so it stays and now has a three-line test rather than
-  being deleted for the coverage number. Do not treat "uncovered" as a synonym for "dead" when
-  working the remaining items.
-- 2026-08-19 rogeriojorge: P6.8 plot fix done (`74cafb91`) — the eps_eff panel now picks its
-  scale from the data. Measured on `wout_QA_optimized.nc`: the profile spans 1.64e-3 to 4.37e-3,
-  a factor of 2.67, i.e. well under one decade, which is the normal case for an *optimized*
-  configuration. Matplotlib's log autoscale snapped that to a single decade tick, flattening the
-  curve against a limit and hiding the radial minimum — precisely what the panel is read for.
-  The rule is now: keep the logarithm only when the profile actually spans a decade or more,
-  otherwise linear with scientific tick labels, and pad the limits by 8% of the range so the
-  extrema sit inside. After the change the same case gives 7 tick labels with the minimum
-  comfortably inside the axis. Both branches are pinned by tests (the pre-existing test uses a
-  3-decade `geomspace` and still asserts log; the new one uses a 2.7x span and asserts linear,
-  the minimum inside the limits, and at least four tick labels).
-  Still open in this area: more surfaces in the summary panel, which is gated on the eps_eff lane
-  being fast (P6), not on plotting.
-- 2026-08-19 rogeriojorge: P8 first complete verified CPU rows, office box (36-core, jax 0.6.2,
-  import asserted, single process, ns=31/mpol=5/max_mode=2, checkout at 1edffddc so PRE the
-  Jacobian-tolerance fix):
-
-  | case | ndof | solve | build | compile | residual | Jacobian |
-  |---|---|---|---|---|---|---|
-  | symmetric | 24 | 2.9 s | 56.7 s | 754.5 s | 0.52 s | 516.2 s |
-  | LASYM | 48 | 7.6 s | 32.5 s | 1055.9 s | 0.69 s | 869.4 s |
-
-  Two readings. (1) The LASYM/symmetric Jacobian ratio is **1.68x**, which independently
-  reproduces the 1.8x per-nfev ratio measured on the laptop — the asymmetric cost model holds
-  across machines, so LASYM is genuinely not the problem. (2) The absolute numbers are the
-  problem: the same Jacobian takes 1.8 s (symmetric) and 9.8 s (LASYM) on an Apple laptop and
-  516 s / 869 s here, and compile is 754-1056 s against roughly 40 s. That is a 90-280x machine
-  gap on identical code, and it is what a cluster user would actually experience.
-  Hypotheses, cheapest first: **jax 0.6.2 versus 0.9.2** (three minor versions of XLA:CPU work,
-  and the laptop is the newer one — most likely explanation, test by upgrading jax on that host
-  and re-measuring, but that changes someone's environment so ask first); thread oversubscription
-  on 36 cores for a memory-bound blocked solve (probe running now under `taskset -c 0-7`, which
-  is non-invasive); and Apple Silicon's unified memory favouring this access pattern. Settle
-  which before drawing any CPU-vs-GPU conclusion from that machine, and re-measure after the
-  Jacobian-tolerance fix propagates there.
-- 2026-08-19 rogeriojorge: P5d PR 1 opened — **PrincetonUniversity/STELLOPT#501**, from the new
-  fork `rogeriojorge/STELLOPT`, branch `fix/neo-boozmn-bmns-index`, one line. Verified against
-  *current* upstream `develop` (1065c80b) rather than the local checkout, which is ~2280 commits
-  behind: the bug is live there. `bmns(i,i)` -> `bmns(i,k)` in
-  `NEO/Sources/read_booz_in.f90`; the three neighbouring assignments and the in-memory
-  equivalent at `STELLOPTV2/Sources/General/stellopt_neo.f90` all use `(i,k)`, so only the
-  standalone reader is affected. Practical consequence for us: until this merges, generate LASYM
-  effective-ripple references either from a locally patched `xneo` or through the STELLOPT
-  optimizer path, never from stock standalone `xneo` (P5c validation, P6 parity ladder).
-  PR 2 (the `neo_dealloc.f90` mismatches, `DEALLOCATE(pixn)` guarded on `pixm` and
-  `DEALLOCATE(i_n)` guarded on `i_m`, plus the LASYM arrays never being freed) is still to open;
-  keep it separate as planned.
-- 2026-08-19 rogeriojorge: P5d PR 2 opened — **PrincetonUniversity/STELLOPT#502**, branch
-  `fix/neo-dealloc-mismatched-arrays`, also verified against current upstream. Frees `pixm` and
-  `i_m` (whose guards previously freed `pixn`/`i_n` instead) and adds the four LASYM spectra
-  `rmns/zmnc/lmnc/bmns`, which `READ_BOOZ_IN` allocates but nothing releases. Both leak once per
-  `neo_dealloc`, which compounds in an optimization loop that reinitializes NEO each iteration.
-  P5d is now complete: both upstream PRs are open and Phase 5 can proceed on the NEO_JAX side.
-- 2026-08-19 rogeriojorge: P0 CI is **fully green** on PR #123 — all thirteen jobs including
-  `Changed executable lines (>= 95%)` and the PR gate, plus Docs linkcheck. The branch arrived
-  red (ruff, manifest, trial-pressure test, dead link, changed-line coverage at 78%) and is now
-  clean. `MERGEABLE / BLOCKED` remains only because the PR still wants its review approval; the
-  merge itself is deliberately left to a human.
-- 2026-08-19 rogeriojorge: P8 — thread oversubscription is RULED OUT as the explanation for the
-  office box's slow Jacobian. Same symmetric case pinned to 8 cores with `taskset -c 0-7`:
-  Jacobian 469.1 s and compile 711.5 s, against 516.2 s and 754.5 s on all 36 — a 9% improvement,
-  i.e. noise on this scale, not the 90-280x factor. The LASYM row agrees: 819.3 s on 8 cores
-  against 869.4 s on 36, again ~6%. Both cases, both directions, same answer. Restricting cores if anything helps slightly,
-  which is the opposite of a thread-thrashing signature. That leaves **jax 0.6.2 versus 0.9.2**
-  as the standing hypothesis (and the laptop, which is 90-280x faster here, is the one on the
-  newer JAX). Next step is to upgrade jax on that host and re-measure — it changes someone's
-  environment, so ask first. If the version turns out not to explain it, profile XLA:CPU on that
-  host directly rather than guessing at a third hypothesis.
-- 2026-08-19 rogeriojorge: **P1.a REOPENED — the tolerance fix does not solve the stall.** I
-  called it done on per-Jacobian microbenchmarks; the end-to-end stage says otherwise, and the
-  end-to-end number is the one that matters. Both runs are the same LASYM QA stage, 20 nfev:
-
-  | Jacobian | before | after `jacobian_adjoint_tol=1e-4` |
-  |---|---|---|
-  | #1 | 3.94 s | 1.48 s |
-  | #2 | 1.75 s | 1.49 s |
-  | #3 | 3848 s | 1557 s |
-  | #4 | 1995 s | 1899 s |
-  | #5 | 2237 s | 2000 s |
-  | #6 | 2024 s | 2038 s |
-
-  The pre-fix stage completed in **54,940 s (15.3 hours)** for 20 nfev, with residuals steady at
-  3.5 s — so about 99.9% of it was the certifier. The tolerance change is a real ~2.5x win at
-  iterates where the certifier already converges, and buys nothing on the plateau. Config was
-  verified live (`cfg.jacobian_adjoint_tol = 0.0001`), so this is not a wiring problem.
-  What the plateau actually is: ~2000 s = the 9000-iteration ceiling
-  (`adjoint_maxiter` 300 x `adjoint_restart` 30) at ~0.22 s per iteration. Beyond iterate ~3 the
-  no-pivot block-Thomas factorization stops being a good preconditioner and **no tolerance in a
-  sane range is reachable** — the Schur lane's own comment already says a globally pivoted sparse
-  LU is materially more accurate than block-Thomas near the axis, which is the same observation
-  from the other side. Then the uncertified columns were NaN-ed, the caller fell back to the
-  *previous* Jacobian, and the whole 2000 s was discarded: work spent and then wasted.
-  Fix now under measurement: bound the certifier (`jacobian_adjoint_maxiter`, default 10 restarts
-  = 300 Krylov iterations) and **keep its output instead of NaN-ing it**. GMRES starts from the
-  direct block solve and decreases the residual monotonically, so a bounded corrector is at least
-  as good as that solve however far it got — strictly better than reverting to a stale Jacobian.
-  If that lands the stage in minutes, P1.a closes; if the resulting Jacobian is too inaccurate to
-  optimize with, the real fix is Phase 3's pivoted factorization / preconditioner, and the
-  tolerance and budget knobs are only damage control.
-- 2026-08-19 rogeriojorge: P1.a — bounding the certifier and keeping its answer takes the same
-  20-nfev LASYM QA stage from **54,940 s to 560.9 s, a 98x speedup**. Per Jacobian on the
-  plateau: 2038 s -> 44.6 s. The change is two things together, and both are needed:
-  `jacobian_adjoint_maxiter` (10 restarts = 300 Krylov iterations), and *not* NaN-ing the
-  columns that miss tolerance. GMRES warm-starts from the direct block solve and decreases the
-  residual monotonically, so its bounded output is at least as good as that solve; NaN-ing it
-  made the caller fall back to the previous Jacobian, so the 2000 s was spent and then thrown
-  away.
-  The cost is real and must be stated: 40-47 of 48 columns finish uncertified, and after 20 nfev
-  the stage reaches cost 3.088 where the exact-Jacobian run reached 2.625 (17.6% worse), with
-  njev=13 against 20. So this is an approximate-Jacobian Gauss-Newton, not the same algorithm
-  running faster. Whether it is the right default rests on whether it wins *per unit wall clock*
-  — 98x more iterations per hour against ~18% worse progress per iteration — which is being
-  measured rather than assumed.
-  DIAGNOSIS for Phase 3, and it is the important part: that so many columns need large
-  corrections contradicts the documented claim that the raw residual Jacobian is exactly block
-  tridiagonal. If it were, the direct block solve would be near-exact and the certifier would
-  converge in about one iteration, as it does at the first two iterates. It stops converging from
-  iterate ~3 on, which matches `_host_boundary_schur_adjoint`'s own comment that a globally
-  pivoted sparse LU is materially more accurate than no-pivot block-Thomas near the axis. So the
-  principled fix is to route the Jacobian's bulk solve through the pivoted `SpluFactorization`
-  the Schur lane already builds; the columns would then be fast *and* certified, and the budget
-  knob would go back to being a safety net rather than the mechanism.
-- 2026-08-19 rogeriojorge: P1.a — the pivoted-factorization diagnosis I logged earlier is WRONG;
-  do not implement it. Two measurements retire it and reframe the problem.
-  **Budget sweep** at a degraded iterate: restart budget 10 / 30 / 100 costs 107 / 226 / 675 s,
-  runs the full 300 / 900 / 3000 Krylov iterations, leaves exactly **40** columns uncertified in
-  all three, and moves the Jacobian by **2.3e-8** between the smallest and largest. Tenfold work,
-  no additional column certified, no change in the answer. That is stagnation, not slow
-  convergence — and it makes `jacobian_adjoint_maxiter = 10` a measured default.
-  **Band-versus-exact discriminator**, same direct block solve, residual against each operator:
-  healthy iterate 3.958e-09 (band) / 3.955e-09 (exact); degraded iterate 3.002e-09 / 3.016e-09.
-  So (a) the no-pivot block-Thomas factorization is accurate even where the certifier fails — a
-  pivoted `SpluFactorization` would buy nothing — and (b) the raw Jacobian really is banded, the
-  exact operator agreeing with the band one to nine digits. Both of my candidate causes are dead.
-  What is left: the direct solve is already accurate to 3e-9, yet the corrector cannot certify it.
-  The corrector runs on the *preconditioned* residual (`residual_fn`) while the block system
-  solves the *raw* one; they share a solution but not a norm, so the certificate is being
-  measured in a badly scaled space. The likely conclusion is that the columns were always
-  accurate and only the certificate was failing — being confirmed against the independent
-  per-dof forward-GMRES lane (`cross_lane.py`), which shares no solver machinery with the block
-  path. If they agree, then the 98x speedup costs nothing in Jacobian quality and the real
-  defect is the certificate measure, not the solver.
-  Independently worth doing either way: the certifier still uses plain restarted GMRES, while
-  `ImplicitConfig` documents (right above the knobs) that at high mode number restarted GMRES
-  stalls where GCROT converges, which is exactly the stagnation measured here — and the
-  reverse-adjoint lane already uses GCROT for that reason. `_adjoint_solve_gcrot` now accepts a
-  tolerance, a bounded budget, and a non-enforcing mode, and it takes a `precond`, so the block
-  inverse can precondition it rather than merely warm-start it (Phase 3's original proposal).
-- 2026-08-19 rogeriojorge: P1.a final state for this pass. Scored by residual on the EXACT
-  operator at a degraded iterate (random right-hand side): direct block solve 2.663e-09,
-  warm-started corrector 2.663e-09, **corrector from zero 5.746e-01**, GCROT with the block
-  inverse as preconditioner 4.356e-09. Three conclusions. (1) The corrector adds nothing to an
-  already-accurate direct solve — it starts at the answer and stagnates there. (2) The
-  `forward_gmres` lane, which starts from zero, leaves a **57% residual**: it is not solving the
-  system when it stagnates, and before the NaN change an uncertified block Jacobian fell back to
-  exactly that lane, so the old path could hand the optimizer a badly wrong Jacobian at the
-  hardest iterates. That makes the bounded-certifier change a correctness fix, not only a speed
-  one. (3) Preconditioned GCROT works but is unnecessary at 4.4e-9 against the direct solve's
-  2.7e-9 — Phase 3's preconditioning proposal is sound but buys nothing here, so it is NOT
-  implemented. `_adjoint_solve_gcrot` keeps its new `rtol`/`max_restarts`/`enforce` parameters,
-  which are useful regardless.
-  Certificate retargeted to the raw operator the columns are consumed through (commit
-  `d7bd1776`): stage 561 s -> 440 s, and the first degraded Jacobian now certifies cleanly
-  (`unconv` 40 -> 0). **But iterates 4+ still report 38-46 uncertified in the raw norm**, so for
-  the REAL parameter tangents — as opposed to the random right-hand side probed above — the block
-  solve genuinely is not accurate at those points. The Jacobian there is approximate, the ~18%
-  worse stage cost (3.088 against 2.625) is real and attributable, and more Krylov work provably
-  does not help (budget sweep: 10x work, 2.3e-8 change). OPEN: measure the raw residual for the
-  actual tangents rather than a random vector, and retry preconditioned GCROT on those; the
-  random-vector probe was misleading and is the reason this took three wrong turns.
-
-## Phase 15 — Ecosystem ownership: stop reimplementing sibling packages
-
-From the PR #123 review. VMEX has grown modules that duplicate what a uwplasma
-sibling already owns or should own. Every one of these makes VMEX heavier and
-splits the physics across two implementations that can drift. The rule: the
-package that owns the physics owns the code; VMEX keeps only the thin adapter
-its own scripts need.
-
-1. **`virtual_casing.py` -> `virtual_casing_jax`.** Highest priority, because
-   ESSOS already uses virtual_casing_jax for finite-beta coil optimization,
-   other codes do too, and simsopt is expected to. Move the API and the
-   functionality there — fast, differentiable, complete — and keep in VMEX only
-   what VMEX-specific scripts need (state-to-surface-data adaptation, the
-   `PlasmaVacuumInterface` convenience). Decide explicitly whether
-   `virtual_casing.py` survives at all. Pairs with Phase 11 (its memory work
-   should land in virtual_casing_jax, not here).
-2. **`boozer_tables.py` -> `booz_xform_jax`.** A Boozer transform belongs to the
-   Boozer package. Check whether anything in it is VMEX-specific before moving.
-3. **`omnigenity.py`**: the traceable Boozer spectrum (`boozer_bmnc_state`,
-   `_boozer_lasym_state`) is booz_xform_jax's job; the QI residuals are
-   objectives and stay. Also resolve why `omnigenity.py` and `qi.py` are
-   separate files with overlapping content — one of them should absorb the
-   other.
-4. **`neoclassical.py` -> `neo_jax`.** neo_jax should do more than legacy NEO:
-   effective ripple straight from a wout, the diagnostics, fast, accurate, and
-   differentiable. VMEX then calls it instead of adapting it. Supersedes the
-   adapter-shaped part of Phase 6.
-5. **`freeboundary_diff.py`**: delete. Already agreed; fix the one real caller
-   (`tools/build_qi_sheet_mgrid.py`).
-6. **`extender.py` reorganization.** It holds several things that are not the
-   extender: the magnetic-field class, xyz/cylindrical coordinate handling,
-   interior and exterior field evaluation. Proposal from the review: a
-   `magnetic_field_class.py` owning the field class and coordinate machinery;
-   the wout-to-mgrid path belongs with the existing `mgrid.py`. Then decide the
-   ESSOS boundary: ESSOS already owns fields that expose B and grad B and does
-   the field-line tracing, so some of this is arguably its code — but VMEX must
-   still deliver B, grad B, and their VJPs with no coils and no ESSOS. Draw
-   that line deliberately across the ecosystem rather than per-file.
-7. **`statephysics.py` -> `diagnostics.py`**, and pull the simple diagnostics
-   scattered in other modules into it.
-8. **`core/` -> `optimizables/`** for the modules that are objectives or
-   diagnostics rather than solver core: `bootstrap`, `maxj`, `qi`, `omnigenity`,
-   `stability`, and the diagnostics module above.
-
-Sequencing note: 5 and 7 are cheap and can land immediately; 1-4 are
-cross-repo and need the sibling PR first, then a VMEX PR that deletes code.
-Do not start 6 or 8 until 1-4 have settled, or the files will move twice.
-
-## Phase 16 — Review items on physics, examples, and documentation
-
-1. **Infinite-n ideal-ballooning growth rate.** Test it, then add
-   `examples/optimization/QA_optimization_ballooning.py`. Value and gradient
-   both need to be accurate and fast. Study DESC's formulation and improve on
-   it with SOLVAX's primitives rather than porting it.
-2. **`take_fixed_boundary_gradients.py`** [DONE, `ff613b27`] — companion to the
-   free-boundary example, no ESSOS, certified at 3.8e-6.
-3. **Drop `examples/epsilon_effective.py`.** Replace with per-optimizable
-   documentation pages: one page each, with the equations, the model, the
-   variants, how to compute it and how to differentiate it. That page set is
-   the deliverable, not a script per diagnostic.
-4. **Prose sweep** [PARTIAL, `ff613b27`] — the "not X, it's Y" construction and
-   words like "grinding" removed from the code touched in this pass. The README
-   and docs still need the same read-through.
-5. **Certifier warning and progress output** [DONE, `ff613b27`] — the warning
-   now names its live settings and the consequence of changing them; the
-   heartbeat is silent for fast calls; every optimization script documents the
-   knobs; asymmetric examples write their staged boundary.
-6. **`pressure_balance_residual` and the normal-field terms** [PARTIAL,
-   `ff613b27`] — docstrings explain why finite beta needs pressure continuity
-   where a zero-beta single stage does not, and what the residual and the
-   excess hinge each measure. Still owed: the full documentation page with the
-   derivation.
-
-## Phase 17 — Why asymmetric quasisymmetry optimization underperforms
-
-The open physics question from the review, and the most important item here:
-stellarator-symmetric runs reach good quasisymmetry at max_mode 1, while the
-LASYM runs do not get close. Established so far: the cost per evaluation is
-only 1.8x symmetric, and the stall was a solver artifact now fixed, so slowness
-is not the explanation. Work the correctness question directly.
-
-**FOUND (2026-08-19): the asymmetric m=1 Jacobian is wrong.** The implicit
-Jacobian disagrees with central finite differences by ~3% on exactly two dofs,
-`RBS(0,1)` and `ZBC(0,1)` — the n=0, m=1 sine-R and cosine-Z modes — while every
-other dof agrees to ~1e-8. Evidence, in order of strength:
-
-- A step sweep h = 1e-4/1e-5/1e-6/1e-7 gives 3.042e-2 / 3.050e-2 / 3.047e-2 /
-  3.729e-2. It plateaus, so this is an analytic-derivative error, not
-  finite-difference noise; symmetric dofs converge to ~1e-8 in the same sweep.
-- Resolving the pair into channels localizes it exactly: along `RBS+ZBC` the
-  Jacobian is right to 2.9e-9, along `RBS-ZBC` it is wrong by 1.6e-1, and a
-  symmetric control dof is right to 8.2e-10 (4th-order stencil). The per-dof 3%
-  is a 16% error in one channel, diluted. This is the `zcc -> alpha*(rsc - zcc)`
-  output of the asymmetric m=1 rotation in `vmex/core/residuals.py`
-  (`_m1_rotate_asym`), whose n=0 branch is special-cased (`has_partner=False`,
-  so `w_partner=0` and `half=1.0`).
-- It is structural, not amplitude-dependent: the same error appears with the
-  asymmetry amplitude set to exactly zero.
-- The forward map is *correct*: a LASYM run with all sine-parity coefficients
-  zeroed reproduces the symmetric run to 4.4e-9 on QS residual, aspect,
-  magnetic well, iota and volume. Value right, derivative wrong.
-
-**ROOT CAUSE AND FIX (2026-08-19).** Not the m=1 constraint in
-`residuals.py` — that was audited and exonerated (`_m1_rotate_asym` is exactly
-invertible at n=0, round trip 2.2e-16; the n=0 block is `[[1,1],[1,-1]]` at
-alpha=1 and its exact inverse at alpha=0.5; matches `readin.f:678-692`, which
-applies the constraint over the whole n range including n=0). No
-`custom_vjp`/`stop_gradient`/`pure_callback` sits on that path, and the m=1
-force masks are built from static NumPy mode tables, so they are fully traced.
-
-The defect was a frozen discrete branch in `vmex/core/implicit.py`
-(`_lasym_delta_rotation_traceable`):
-
-    if float(np.arctan((s0[ntor, 1] - c0[ntor, 1]) / denom0)) == 0.0:
-        return rbc, rbs, zbc, zbs
-
-`readin.f:548-567` normalizes the LASYM boundary by a poloidal-angle shift
-`delta` chosen so `RBS(0,1) = ZBC(0,1)`, guarded by `IF (delta .ne. zero)`.
-That Fortran guard is a pure runtime shortcut with no semantic content —
-`cos(0)=1`, `sin(0)=0` make the loop the identity — but vmex froze it from the
-reference input as if it were a discrete decision like `lflip`. `delta == 0` is
-not a discontinuity; it is where the map is the identity **in value but not in
-derivative**. The true Jacobian still carries `d(coef)/dp += m*(partner)*
-d(delta)/dp` for every `(m,n)`, and `d(delta)/d(RBS(0,1)) = +1/denom`,
-`d(delta)/d(ZBC(0,1)) = -1/denom` — exactly equal and opposite, hence a rank-one
-error confined to the antisymmetric channel, which is precisely the measured
-signature. `d(delta)/d(RBC(0,1))` vanishes when `rbs01 = zbc01`, so the
-symmetric dofs stayed exact.
-
-Fix: delete the two lines; keep the `mpol < 2` and `denom0 == 0.0` guards, which
-are structural (the latter is a division by zero, not a choice). Verified
-end-to-end on the patched tree: the n=0 antisymmetric channel drops from
-1.599e-1 to 2.98e-5 (h=1e-5) / 1.58e-7 (h=1e-6), and the per-dof sweep for
-`RBS(0,1)`/`ZBC(0,1)` now *converges* with h (3.9e-5 -> 2.0e-5 -> 2.7e-8)
-instead of sitting flat at 3.0e-2. Secondary consequence now also fixed: once an
-optimizer moved `RBS(0,1) != ZBC(0,1)` away from a `delta0 == 0` reference, the
-frozen guard made the **value** wrong too, so the AD and FD lanes were solving
-different boundaries.
-
-Why nothing caught it: both shipped LASYM decks have `delta0 != 0`
-(`up_down_asymmetric_tokamak` 0.4636, `cth_like_free_bdy_lasym_small` 0.00236),
-and `tests/test_implicit_grad.py:711` asserted values plus `isfinite` on the
-gradient. Gate added — `test_lasym_delta_rotation_jacobian_at_zero_delta` puts
-the reference exactly on `delta == 0` and compares the JVP along
-`RBS(0,1) - ZBC(0,1)` against central differences of the `setup` reference; it
-fails at 2.5 without the fix and passes at <=1e-7 with it, in 0.6 s.
-
-Consequence: the optimizer received a wrong descent direction in half of the
-n=0 asymmetric m=1 subspace, and past the reference point the exact and
-finite-difference lanes were solving different boundaries. Every shipped
-asymmetry family (nfp=1..4) was on that branch.
-
-**Not yet shown to resolve the underperformance, however.** A bounded
-12-evaluation LASYM QA stage before and after the fix reached QS 3.92e-1 and
-4.64e-1 — no improvement. That harness was dominated by its iota-floor term
-(`min|iota|` ~ 0.01 against a 0.42 target at weight 10), so quasisymmetry barely
-moved in either lane and the test cannot discriminate. The Jacobian defect and
-its fix rest on the finite-difference evidence, which is unambiguous; the
-optimization payoff is a separate open question. Next measurement: a
-QS-isolated stage (drop the iota and well rows, 30 evaluations) to get a signal
-that is actually about quasisymmetry, and if that is still flat, treat the
-underperformance as a second, independent cause and keep going down items 1-4
-below rather than assuming this fix closed it.
-
-**QS-isolated measurement (2026-08-19): the fix helps, modestly.** Dropping the
-iota and well rows and running 30 evaluations, final QS is 4.097e-2 before the
-fix and 3.432e-2 after (11.25x versus 13.43x reduction from the same seed), and
-wall time halves, 149 s to 74 s. Both lanes now optimize quasisymmetry properly
-once the iota floor is not eating the residual, so the earlier flat result was
-a harness artifact, not evidence against the fix. Note also that after the fix
-the optimizer drives `RBS(0,1)` and `ZBC(0,1)` to `-3.0e-2`/`+3.0e-2`, both on
-the trust-region bound in the antisymmetric direction, where before only
-`RBS(0,1)` reached it — the channel that was being mis-differentiated is
-precisely the one the optimizer now uses. A 16% better final QS on one small
-run is suggestive, not conclusive; the like-for-like symmetric-versus-LASYM
-comparison in item 1 is the measurement that actually answers the phase.
-Add a LASYM Jacobian-versus-finite-difference gate to the test suite covering
-n=0 m=1 in both channels, since no existing test would have caught this.
-
-1. **Done 2026-08-19, and it reframes the phase: the two runs were never
-   starting from the same place.** Identical targets, stages, resolution and
-   budget, QS-isolated, on the fixed tree:
-
-   | | dofs | seed QS | final QS | reduction |
-   |---|---|---|---|---|
-   | symmetric | 8 | 1.209e-2 | 4.523e-4 | 26.7x |
-   | LASYM | 16 | 4.608e-1 | 3.432e-2 | 13.4x |
-
-   The LASYM run ends 76x worse — but it *starts* 38x worse. The examples'
-   `ASYMMETRY_PERTURBATION = 0.01` on `RBS(1,1)`/`ZBC(1,1)`, added to keep the
-   optimizer off the symmetric stationary subspace, degrades quasisymmetry by a
-   factor of 38 before a single evaluation, and 30 evaluations at max_mode 1 do
-   not climb back. The per-evaluation reduction factor is within 2x of
-   symmetric, which is a very different picture from "the asymmetric lane does
-   not work".
-
-   So the seed, not the optimizer, is the leading suspect for the reported
-   underperformance. The perturbation exists for a real reason — scalar targets
-   have zero derivative with respect to the asymmetric families at exactly zero
-   asymmetry, so the optimizer would never leave — but it only has to break the
-   symmetry, not wreck the configuration. Sweeping the amplitude (1e-3, 1e-4, 0)
-   against the symmetric baseline is the measurement that settles both halves:
-   whether a smaller seed matches or beats symmetric, and whether amplitude zero
-   really is stationary. If a small amplitude recovers symmetric-quality QS, the
-   fix is a one-line change to every asymmetry example and the phase is closed.
-
-   **The sweep ran, and it refutes the seed hypothesis.** Amplitudes 1e-3, 1e-4
-   and 0 all land on essentially the same final QS (3.423e-2, 3.434e-2,
-   3.355e-2) and the same cost (~0.2947), regardless of where they start:
-
-   | run | seed QS | final QS |
-   |---|---|---|
-   | symmetric | 1.209e-2 | **4.523e-4** |
-   | LASYM amp=1e-2 | 4.608e-1 | 3.432e-2 |
-   | LASYM amp=1e-3 | 1.638e-2 | 3.423e-2 |
-   | LASYM amp=1e-4 | 1.213e-2 | 3.434e-2 |
-   | LASYM amp=0 | 1.209e-2 | 3.355e-2 |
-
-   At amplitude zero the LASYM run starts from *exactly* the symmetric seed
-   (1.209067e-2 against 1.209283e-2) and still ends 74x worse, having made
-   quasisymmetry 2.8x worse than where it began. Shrinking the seed does not
-   help, so the seed is not the cause.
-
-   Two things were ruled out along the way. The QS objective's two lanes agree
-   exactly — `sum(residuals_state^2)` equals `total_state` to the last digit,
-   and LASYM at zero asymmetry reproduces the symmetric values bit for bit — so
-   the optimizer is not minimizing a different quantity from the one reported.
-   And the harness was itself partly at fault: with an aspect-ratio row present
-   the LASYM run was trading quasisymmetry for aspect (7.36 against 7.78) and
-   reaching a *lower* total cost, so "final QS" was never the objective. The
-   comparison is being redone with quasisymmetry as the only term, which makes
-   cost and final QS the same number.
-
-   What still stands as the anomaly: from an identical configuration, with the
-   symmetric optimum inside its search space, the LASYM lane moves away from
-   quasisymmetry. That is the thing to explain.
-
-   **Resolved. With quasisymmetry as the only term, the anomaly disappears and
-   the fix's payoff is visible.** Same seed (1.209e-2), same budget:
-
-   | run | dofs | final QS | reduction |
-   |---|---|---|---|
-   | symmetric | 8 | 2.445e-4 | 49.5x |
-   | LASYM amp=0, pre-fix | 16 | 2.436e-4 | 49.6x |
-   | LASYM amp=0, post-fix | 16 | **1.599e-4** | **75.6x** |
-
-   Before the fix the LASYM lane could only *match* symmetric: its eight extra
-   asymmetric degrees of freedom bought nothing, which is exactly what a
-   Jacobian that is wrong in the asymmetric m=1 channel predicts. After the fix
-   it beats symmetric by 1.52x, which is what the extra freedom should buy given
-   that the symmetric optimum is inside its search space. This is the
-   end-to-end confirmation the derivative evidence could not supply on its own.
-
-   So the reported underperformance was two separate things, neither of which
-   is "the asymmetric lane does not work":
-
-   - the frozen `delta == 0` branch, which silently neutralized the asymmetric
-     m=1 freedom (fixed, #126); and
-   - objective weighting in the examples themselves. With aspect, iota-floor and
-     magnetic-well rows present, the extra asymmetric dofs get spent satisfying
-     *those* terms — the LASYM run reached aspect 7.36 against symmetric's 7.78
-     and a lower total cost while its quasisymmetry got worse. Add the
-     `ASYMMETRY_PERTURBATION = 0.01` seed, which by itself degrades QS 38x
-     before the first evaluation, and a run judged on final QS looks broken
-     when it is merely optimizing what it was told to.
-
-   Follow-up for the examples (not a vmex defect): revisit the weights and the
-   seed amplitude in `examples/optimization/stellarator_asymmetry/`, and report
-   quasisymmetry alongside the terms actually being minimized so the tradeoff
-   is visible rather than looking like a failure.
-
-   On the seed specifically, the examples' stated rationale does not survive
-   measurement. `ASYMMETRY_PERTURBATION` exists to keep the optimizer "away from
-   the symmetric stationary subspace", but the amp=0 run above started at
-   *exactly* zero asymmetry and still reached 1.599e-4, beating symmetric's
-   2.445e-4 — which is only possible if the asymmetric families moved. The
-   subspace is stationary for the scalar total but not for the residual
-   *vector*, and least squares sees the vector. So the perturbation is not
-   needed to break the symmetry, while at 0.01 it costs a factor of 38 in
-   starting quasisymmetry. Caveat on scope: this is one nfp=2 QA case at
-   max_mode 1, mpol 3, with quasisymmetry as the only term. Confirm on a second
-   family and with the full objective before changing all four examples.
-2. **booz_xform_jax under LASYM: audited 2026-08-19, clean — but it is not in
-   the loop for the QA/QH/QP asymmetry examples anyway.** The `bmns(i,i)`
-   repeated-index bug was not copied in; the package has no per-mode scalar
-   index loops, so the sine-parity arrays go through the same vectorized
-   expressions as the cosine-parity ones. Verified against the reference C++
-   `booz_xform` and the STELLOPT Fortran (`surface_solve.cpp`, `boozer.f`,
-   `setup_booz.f`, `foranl.f`): every asymmetric sign matches, the full-theta
-   grid is used with the half-weights correctly restricted to the symmetric
-   branch and the normalization switched to match (no stale factor of two).
-   Zero-asymmetry consistency on li383 at mboz=nboz=16 is 3.9e-15 worst case,
-   and genuinely asymmetric cases agree with the C++ to 4.5e-14 (mboz=6) through
-   3.7e-13 (mboz=32) — so the loose gate was never hiding a resolution-dependent
-   error. Not yet verified: the JVP/gradient of the asymmetric kernel, the
-   `streamed` Fourier mode, and free-boundary LASYM.
-
-2a. **[DONE] Real defect found next door: `boozer_tables.py:124` truncates the
-   VMEC Nyquist band.** `m_max, n_max = ntheta1 // 2 - 1, max(nzeta // 2 - 1, 0)`
-   builds 41 modes (m<=4, |n|<=4) where the wout Nyquist set has 61 (m<=5,
-   |n|<=5), dropping a band carrying 2.49% of `bmnc` and 2.77% of `bmns` on
-   `input.basic_non_stellsym_simsopt`. That is the *entire* 2-3% discrepancy in
-   the `test_omnigenity.py:139` gate: truncating the host reference to vmex's 41
-   modes drops the difference from 1.60e-2/2.89e-2 to 1.06e-5/1.03e-4. Fix the
-   mode set, then tighten that gate to the machine-precision level the kernel
-   actually delivers. Two related asymmetries to fix with it, both in
-   `omnigenity.py`: `_boozer_lasym_state` (line 209) ignores the `oversample`
-   argument the symmetric branch honours, and the symmetric branch works from
-   real-space `bmag` with FFT zero-padding so it never loses the band at all.
-   Scope: this affects the QI asymmetric examples, which route through
-   `QIResidual` -> `boozer_bmnc_state` -> booz_xform_jax. It does **not** affect
-   the QA/QH/QP asymmetry examples, which use `QuasisymmetryRatioResidual`, a
-   real-space wout-table residual with booz_xform nowhere in the loop.
-
-   **Fixed on `fix/boozer-nyquist-band` (rebased onto main).** `m_max, n_max =
-   ntheta1 // 2, nzeta // 2`, matching how `wrout.f` sizes the wout Nyquist
-   table from the grid (`mnyq = ntheta1/2`, `nnyq = nzeta/2`). The weights
-   needed care: the closing row and column are self-conjugate on an even grid,
-   so they carry `2/(ntheta1*nzeta) * h_m * h_n` with `h = 0.5` on a fold, which
-   is what `wrout.f`'s `cosmui(:,mnyq) *= 0.5` amounts to; odd grids keep the
-   plain factor of two.
-
-   One correction to my own brief, worth recording because acting on it would
-   have reintroduced the error: the sine projection is *not* identically zero
-   across the whole Nyquist row. It vanishes only at the four self-conjugate
-   corners. At `m = ntheta1/2` with `n != 0, +-nzeta/2` the sine is genuinely
-   nonzero and the wout carries it — `bmns(5, 1..4) = 2.029e-4, -3.026e-5,
-   4.107e-5, -4.606e-5`, reproduced to all digits. Only the corners are zeroed.
-
-   Result: the projection now reaches the wout Nyquist mode set exactly on four
-   decks (symmetric and LASYM, even and odd `nzeta`, nfp=1 and 3), agreeing on
-   every mode including the new band — worst case 2.87e-14, typically ~1e-16.
-   The `test_omnigenity.py` gate tightened from 2e-2/3e-2 to 1.1e-4/1.1e-3
-   against a measured 1.055e-5/1.025e-4, and a new
-   `test_projection_closes_at_the_grid_nyquist_band` asserts the mode set equals
-   the wout table, that the dropped band was non-negligible, and that the corner
-   sines are exactly zero. `_boozer_lasym_state` now honours `oversample`.
-
-   Blast radius, for the record: the symmetric `boozer_bmnc_state` lane builds
-   its tables inline and never calls `boozer_input_tables`, so this only ever
-   affected LASYM Boozer spectra and direct `boozer_input_tables` callers.
-
-3. Audit the LASYM paths in vmex, booz_xform_jax, neo_jax, and
-   virtual_casing_jax against the literature for sign and parity errors: the
-   sine-parity conventions, the full-theta versus reduced-grid handling, and
-   the m=1 constraint under `lconm1`. Check papers, other codes, and
-   documentation rather than reasoning from the source alone.
-4. Only after 1-3: ask whether the asymmetric optimum is genuinely worse, i.e.
-   whether the extra families buy nothing for QA. That is a real possible
-   answer, but it is the last hypothesis, not the first.
-
-## Phase 18 — Multigrid restart transient
-
-Each new radial resolution in `ns_array = [31, 51, 101]` restarts with very
-large FSQR/FSQZ/FSQL at ITER 1. Analyze whether the interpolation onto the
-finer grid is losing force balance that a better prolongation would keep, what
-it costs in iterations, and whether VMEC++ (github.com/proximafusion/vmecpp)
-solved it — read their restart/prolongation code. Report the implications and
-the trade-offs before changing anything: a large initial residual is not by
-itself wrong if the ladder still converges faster than a cold fine solve, which
-is the comparison that matters.
-
-## Phase 19 — Finite-beta single stage converging to a poor optimum
-
-From the review: the finite-beta single stage flattens out around cost 2.89
-with mediocre quasisymmetry and aspect ratio, and the suspected mechanism is
-that a large plasma current satisfies the transform target cheaply, so the
-shaping never has to. Phase 12's minimum-|iota| floor addresses the transform
-part of this and needs re-measuring here now that it is in. Beyond that:
-1. Diagnose first — log the vacuum versus current-carried share of the
-   transform along the optimization (the P12.5 check), plus the bootstrap
-   fraction and the current profile, and confirm the mechanism before
-   redesigning the objective.
-2. Candidate remedies, to weigh once the diagnosis is in: constrain or penalize
-   the enclosed current directly; target vacuum-field transform rather than
-   total; enforce the QS residual on the vacuum field as well; or stage the
-   optimization so shaping is established at low beta before the pressure and
-   current are ramped.
-
-## Log (continued)
-
-- 2026-08-19 rogeriojorge: PR #123 review captured as Phases 15-19. Applied to the PR in
-  `ff613b27`: the evaluation heartbeat is silent unless a call outlives its interval (it was
-  printing "residual done in 0.4 s" over the optimizer's own table); the uncertified-column
-  warning reports its live `jacobian_adjoint_tol`/`jacobian_adjoint_maxiter`, states that those
-  are the measured optimum and that no action is normally needed, and gives the two alternatives
-  with consequences; the word "grinding" and the "not X, it's Y" phrasing are gone from the code
-  touched here; all 19 optimization scripts document the knobs; the seven remaining asymmetric
-  examples write their staged boundary each stage, matching the convention added by hand to
-  `stellarator_asymmetry/QA_optimization.py`; `take_fixed_boundary_gradients.py` added; and
-  `normal_field_residual`, `normal_field_excess` and `pressure_balance_residual` now carry
-  docstrings explaining what each measures and why finite beta needs the pressure rows.
-  Deferred with reasons: the ecosystem moves (Phase 15) need the sibling-package PRs first, and
-  moving files before that would move them twice; the per-optimizable documentation pages
-  (16.3), the ballooning metric and example (16.1), and the three investigations (17, 18, 19)
-  are each their own piece of work. Phase 17 is the one to start with — an asymmetric run
-  contains the symmetric configuration in its search space, so doing worse than symmetric points
-  at a bug rather than at cost.
-
-## Phase 20 — Standing pull-request ledger (updated 2026-08-21)
-
-Only VMEX #122 and #125 remain open. The implementation PRs listed in the earlier version of
-this phase have merged; their independent post-merge audit is Phase 24. This phase is a standing
-exception to the usual “finish or close” policy:
-
-1. **VMEX #125 — research-grade plan.** Keep open and keep current. Do not merge or close it.
-   It is the authoritative, interruption-safe ledger; implementation work lands through small
-   branches and is recorded here only after its evidence exists.
-2. **VMEX #122 — alpha-particle tracing/loss fraction.** Keep open and do not close it. It is
-   both a specification and an in-progress integration branch. Its current base
-   `rj/simplify_examples` is historical; rebase only when Phase 21 has a dependency-clean slice,
-   and preserve the design record even if the final implementation is split into smaller PRs.
-3. **New VMEX work.** The next PR is the focused Phase 22/25 hardening branch. It must not absorb
-   alpha tracing, epsilon effective, ecosystem file moves, or the larger boundary-Schur
-   performance work. Small diffs keep derivative and CI regressions reviewable.
-
-### Sibling PRs are in scope only at explicit ownership seams
-
-- ESSOS #58 (reusable coil interfaces) and #61 (in-memory VMEC field plus differentiable loss)
-  are green, open, and unreleased. They require independent ESSOS maintainer review and merge;
-  VMEX contributors do not perform either action. Keep them last in the merge order. VMEX 0.6.0
-  must remain usable against released ESSOS 0.16 and must not claim the new interfaces. Do not
-  vendor their code into VMEX or pin a software release to a mutable branch.
-- virtual_casing_jax, NEO_JAX, booz_xform_jax and SOLVAX own the generic algorithms listed in
-  Phase 26. VMEX PRs should contain only equilibrium-specific adapters and physics.
-- STELLOPT #501 is merged and the current `STELLOPT_new` build is the reference. #502 remains an
-  upstream hygiene item, not a VMEX release blocker.
-
-Current order: Phase 22 exactness -> Phase 25 CI hardening -> Phase 23 VMEX 0.6.0 -> Phase 3
-boundary-Schur performance -> P4/P21 preparatory APIs -> P6/P7 neoclassical work -> Phase 15/26
-code moves -> Phase 10 final slimming -> independent ESSOS maintainer review/merge of #58/#61
-and a compatible ESSOS release. PR #122 and #125 remain open throughout. Any VMEX slice that requires the new
-ESSOS API waits unmerged or stays explicitly development-only until that external release exists.
-- 2026-08-19 claude: P17 — localized the LASYM underperformance to a wrong analytic Jacobian in the n=0 asymmetric m=1 difference channel (16% error); forward map verified correct.
-- 2026-08-19 claude: P17 — root cause is the frozen `delta == 0` branch in `implicit.py::_lasym_delta_rotation_traceable`; fixed, gated, verified end-to-end (1.6e-1 -> 1.6e-7).
-- 2026-08-19 claude: P17 — opened vmex #126 with the delta-rotation fix and its regression gate; #119 is green and queued for merge.
-- 2026-08-19 claude: P17 — corrected the overclaim: the delta fix is proven as a derivative fix but did NOT improve a bounded QA stage; payoff still unmeasured.
-- 2026-08-19 claude: P17 — QS-isolated run shows the fix improves final QS 4.10e-2 -> 3.43e-2 and halves wall time; like-for-like sym vs LASYM now running.
-- 2026-08-19 claude: P17 — like-for-like shows LASYM starts 38x worse in QS because of the 0.01 seed perturbation, not that the lane is broken; amplitude sweep running.
-- 2026-08-19 claude: P17 — seed hypothesis refuted: LASYM at amp=0 starts from the symmetric seed and still ends 74x worse; QS lane consistency ruled out; QS-only rerun in flight.
-- 2026-08-19 claude: P17 — RESOLVED. QS-only: LASYM went from matching symmetric pre-fix (2.436e-4 vs 2.445e-4) to beating it post-fix (1.599e-4). Remainder is example objective weighting, not a code defect.
-- 2026-08-19 claude: P17.2a — Nyquist-band projection fixed and gated (2-3% -> ~1e-16 on the band); branch fix/boozer-nyquist-band rebased onto main.
-- 2026-08-19 claude: P17 — measured that the asymmetry seed perturbation is unnecessary (amp=0 still beats symmetric) and costly (38x worse start); needs confirming on a second family.
-
-### Phase 17 addendum — the frozen-branch defect class, swept
-
-The `delta == 0` bug in #126 is an instance of a general antipattern: a Python
-`if` evaluated eagerly on reference values, sitting on a path that is later
-differentiated with respect to those same values, where the condition is a
-*smooth* function being treated as a discrete choice. The whole differentiated
-surface was swept for siblings on 2026-08-19.
-
-**Why the existing coverage could not see it.**
-`tests/test_implicit_grad.py::test_lasym_boundary_map_derivative_vs_fd` finite-
-differences the traceable map *against itself*. Both lanes freeze the same
-branch, so the check is structurally blind to this entire class. The audit built
-the missing comparison — `jax.jvp` of `implicit.runtime_from_params` against
-central differences of the host `solver.prepare_runtime` — over every RunSetup
-field plus `rcon0/zcon0`, no solve, ~10 s for four decks. That harness
-reproduces the known delta bug exactly (rel 1.00, flat in h, rank-one
-antisymmetric) and should replace the self-FD test.
-
-**One new defect [DONE, branch `fix/free-boundary-presf-scale`].**
-`freeboundary_implicit.py` took `presf_ns_scale` as a host float from the
-*reference* input at both adjoint call sites (`_projected_residual`, the default
-`coupled_gcrot` lane, and `_host_boundary_schur_adjoint`) while
-`runtime_from_params` traced `am` alongside it. The ratio
-`pmass(1)/pmass(hs*(ns-1.5))` is smooth in `am`, which is an `ImplicitParams`
-field the backward pass pulls through, and it enters the residual linearly via
-the `funct3d.f` edge force `bsqvac + presf_ns_scale * pressure[-1]`. Value exact
-at the reference point, derivative absent — the same signature as `delta`.
-Measured on the preconditioned lane: relative error against the true residual
-1.13, 0.855, 0.814 for `am[0..2]`, while agreeing with the frozen lane to ~1e-6,
-which is exactly why nothing caught it. On the raw Schur lane the kept and
-dropped terms nearly cancel and the column points the wrong way entirely
-(rel 63.4, 4.13, 3.01).
-
-Fixed with a traceable `_presf_ns_scale_traceable(params, inp, ns)` taking `am`
-and `pres_scale` from the parameters, the `p_edge == 0` guard rewritten as a
-safe-denominator `jnp.where` so the two_power family's `p(1) = 0` keeps a finite
-derivative. The `_dof_mask` call site deliberately keeps the host float — it
-only discovers discrete structural support — and now says so in a comment.
-
-Note the shipped LASYM free-boundary test deck **is** affected, contrary to the
-first reading: it is `power_series` with `d(presf)/d(am)` up to 2.35e-4. Only
-`two_power` decks (`p(1) = 0` identically) were immune. Gate added,
-`test_presf_ns_scale_is_differentiated_in_the_adjoint_lanes`, which fails 11/11
-against the frozen behaviour and passes at rtol 1e-3 with the fix; the tolerance
-is set by host finite-difference noise on `am` coefficients reaching 5e7, and
-only has to separate a live derivative from a missing one.
-
-**Minor, left open.** `freeboundary_implicit.py:170` overrides the traceably
-rebuilt `rcon0/zcon0` with host-solve constants, dropping
-`d(rcon0)/d(params.rbc)`, where the fixed-boundary lane traces it. Low impact —
-`rcon0` depends only on edge geometry and the free-boundary input boundary is an
-initial guess, not a dof — but it should either be traced for consistency or
-carry a comment saying the omission is deliberate.
-
-**Everything else came back clean**, and not merely by reading. Full
-AD-versus-host-FD sweeps over all four boundary families, `phiedge`,
-`pres_scale`, `curtor`, `am/ai/ac[0:3]` against every setup field: worst
-relative error 1.2e-11 (solovev), 2.5e-9 (li383, 3D symmetric), 5.2e-11
-(up_down asymmetric), 2.8e-9 (cth-like 3D lasym). `lflip` was confirmed
-*genuinely* discontinuous and correctly frozen — engineered to sit on the
-branch, it gives AD 0 against FD 1.0e4, which is `iotas/h`, a real value jump.
-The remaining frozen conditions are integers, logical flags, or `m`/`n` parity.
-
-One degenerate guard worth a follow-up: the frozen `denom == 0` in the delta
-rotation is a genuine discontinuity, but VMEC's `readin.f:551` has **no** such
-guard — it divides by zero and takes `ATAN(Inf) = pi/2`. If a reference deck ever
-landed exactly there, vmex would return the unrotated boundary for every nearby
-parameter while the host rotates by ~pi/2 — a value divergence, not just a
-derivative one. Only reachable at `RBC(0,1) = ZBS(0,1) = 0` (no m=1 content).
-Prefer a documented raise over the silent identity.
-
-Not covered: an end-to-end free-boundary gradient check of the presf fix (it is
-demonstrated at the residual-Jacobian level, which is the object the backward
-pass pulls back, but not through a full coupled solve), and the objective-term
-modules, which got a read rather than a numerical sweep.
-- 2026-08-19 claude: P17 addendum — swept the frozen-branch defect class; found and fixed presf_ns_scale in both free-boundary adjoint lanes; fixed-boundary setup map verified clean to ~1e-9.
-
-### Phase 17 addendum 2 — a test leak that PR CI structurally cannot catch
-
-Found while validating the `presf_ns_scale` fix.
-`tests/test_freeboundary_implicit.py::test_boundary_schur_adjoint_reproduces_the_coupled_gcrot_gradient`
-fails with `ValueError: need at least one array to stack` when the file runs as
-a whole and passes in isolation. It reproduces identically on a clean
-`origin/main` worktree, so it is not caused by any of the fixes here.
-
-Cause: `test_free_boundary_warm_failure_retries_once_from_cold` writes an
-all-zero mask straight into the module-level caches —
-
-    fbi._FREE_HOT_CACHE[cfg] = seed
-    fbi._FREE_MASK_CACHE[fbi._mask_key(cfg)] = jax.tree.map(jnp.zeros_like, state)
-
-— and never removes it. `monkeypatch` restores the patched function but knows
-nothing about the dict mutation. `_mask_key` is
-`(resolution, lconm1, ncurr, "free")`, which the later Schur test shares, so it
-picks up the poisoned all-zero mask, finds no active edge dofs, and reaches
-`freeboundary_implicit.py:496` with an empty column list. Fixed on
-`fix/free-mask-cache-test-leak` by switching both writes to
-`monkeypatch.setitem`, which restores them at teardown.
-
-Worth recording that the cache key itself is **not** at fault — my first
-reading was that it was too coarse for production use, and that is wrong. The
-leak is purely test hygiene.
-
-Why PR CI is green anyway: the two tests sit in *different* manifest selectors
-(`pr-physics-core` and `pr-physics-field`), so they never share a process on a
-pull request. `weekly-single-stage-free` runs the whole file and would hit it,
-as does anyone running the file locally. `pytest-randomly` is not installed, so
-the ordering is deterministic and this is a reliable failure, not a flake.
-
-The general lesson for P11/CI work: a selector split that keeps two tests apart
-also hides state leaking between them. Worth an explicit check that module-level
-caches (`_FREE_MASK_CACHE`, `_FREE_HOT_CACHE`, `_PACK_TABLE_CACHE`,
-`_FREE_LAST_RESULT`) are empty at teardown, rather than relying on the split.
-- 2026-08-19 claude: P17 addendum — found a module-cache leak in test_freeboundary_implicit.py that PR CI cannot see because the two tests are in different selectors; fixed on fix/free-mask-cache-test-leak.
-
-## Phase 21 — Alpha-particle tracing and a differentiable loss fraction [MOSTLY SHIPPED — remainder blocked on ESSOS#61]
-
-Turn #122 from a single script into a feature of vmex: `vmex --trace wout_XXX.nc`
-on the command line, and alpha-particle loss fraction as an optimizable that a
-boundary optimization can actually descend. **#122 does not merge as it
-stands** — the script is the specification, not the deliverable.
-
-### 21.1 ESSOS prerequisites [IMPLEMENTED IN OPEN PR — uwplasma/ESSOS#61; NOT RELEASED]
-
-Two things block a differentiable loss fraction, both on the ESSOS side, both
-verified by reading the source:
-
-- `essos.fields.Vmec.__init__` (essos/fields.py:191) only accepts a
-  `wout_filename` and opens it with `Dataset(...)`. A caller holding the
-  spectral arrays in memory as traced JAX arrays — which is exactly what vmex
-  has — cannot reach the field without writing a file, and the file write
-  severs the gradient. Needs an array-based constructor that stores what it is
-  given without a NumPy round trip.
-- `Tracing.loss_fraction` (essos/dynamics.py:929) builds the answer from
-  `trajectories_r >= r_max`, `argmax`, `bincount`, `cumsum`. Every step is
-  piecewise constant in the trajectories, so `jax.grad` of
-  `loss_lost_fraction` (essos/objective_functions.py:252) is identically zero.
-  It is a correct diagnostic and a useless objective for a gradient method.
-
-ESSOS#61 proposes `Vmec.from_arrays(...)` and `Tracing.soft_loss_fraction(r_max,
-width)` with the matching `loss_soft_lost_fraction` objective. The surrogate is
-`mean_i sigmoid((r_soft_i - r_max)/width)` with
-`r_soft_i = sum_t r_i(t) * softmax_t(r_i(t)/width)`. The softmax-weighted mean
-beats `width*logsumexp(r/width)` because the latter carries a
-`width*log(n_times)` offset set by the save grid rather than the orbit.
-
-Measured: the exact `loss_fraction` gradient is 0.0 as predicted; the surrogate
-gradient is -1.34e-1 at width 0.02, and the surrogate converges on the exact
-value as the width shrinks — 0.2510 at width 0.002 and 0.250049 at 0.001
-against an exact 0.25. `from_arrays` reproduces the file route bit-for-bit on
-`B`, `AbsB`, the surface and a traced trajectory. The exact diagnostic is
-untouched.
-
-**Two findings from that work change the vmex design below.**
-
-*`rmnc`/`zmns` do not affect guiding-centre trajectories.* The flux-coordinate
-orbit equations use `bsub*`, `bsup*`, `gmnc` and `bmnc` only; the geometry
-coefficients enter just `to_xyz` and the Cartesian `B`. A gradient probe that
-scales `rmnc`/`zmns` returns zero for both the exact and the soft loss. So
-21.2 must route the boundary dependence through the *recomputed equilibrium's
-field coefficients* — the whole point of having vmex in the loop — and a test
-that perturbs geometry alone would look like a broken gradient when it is
-physically correct.
-
-*ESSOS `main` and `rj/coils_from_nearaxis` have diverged* (common ancestor
-`4df878f`). No loss-fraction objective exists on `main` at all, and `main`'s
-`Vmec.__init__` differs — no `raxis_cc`/`zaxis_cs`, no `s` argument. ESSOS#61
-targets `main` with a `(field, particles, ...)` signature, which is the right
-shape for a boundary optimization; reconciling it with the coil-dof signature
-on the working branch is a separate job.
-
-Before marking this item done: an independent ESSOS maintainer reviews and merges #61 against
-current ESSOS `main`, does the same for compatible #58, and publishes ESSOS 0.17. VMEX then
-installs that release in a clean environment and replaces any development-only nightly git pin
-with the released version. VMEX contributors do not self-merge those PRs. Green checks on an open
-branch are implementation evidence, not a completed dependency.
-
-### 21.2 The traceable field-coefficient gap [DONE — PR #137]
-
-Closed: `boozer_input_tables` now also projects `gmnc`, `bsupumnc`, `bsupvmnc`,
-`bsubsmns` and their LASYM partners, traceably, agreeing with the wout rows to
-1.1e-15 (symmetric) and 7.8e-15 (LASYM) with a live boundary jvp. The analysis
-below records why the gap existed; the measured NumPy-versus-traceable counts
-are what motivated extending `boozer_tables.py` rather than making
-`wout_field_tables` traceable.
-
-The adapter is the easy half. The real work is that **no traceable path in vmex
-produces the coefficients ESSOS needs.** Measured, not assumed:
-
-| builder | jnp calls | np calls | gradient |
-|---|---|---|---|
-| `nyquist.wout_field_tables` | 0 | 23 | none — pure host NumPy |
-| `boozer_tables.boozer_input_tables` | 43 | 21 | traceable |
-
-`Vmec.from_arrays` wants `bmnc, rmnc, zmns, bsubsmns, bsubumnc, bsubvmnc,
-bsupumnc, bsupvmnc, gmnc` plus the mode tables and `Aminor_p`.
-`boozer_input_tables` already delivers `bmnc`, `bsubumnc`, `bsubvmnc`, `rmnc`,
-`zmns` and the LASYM partners, traceably, on a single half-mesh surface. It
-does **not** deliver `bsupumnc`, `bsupvmnc`, `gmnc` or `bsubsmns`, and the only
-code that does — `wout_field_tables` — is host NumPy end to end.
-
-So the deliverable is a traceable Nyquist projection of `bsupu`, `bsupv`,
-`sqrt(g)` and `bsubs`. The real-space quantities are already traceable in the
-solver core (`fields.py` builds `bsupu`/`bsupv` from `phipog` and the lambda
-derivatives; `geometry.half_mesh_jacobian` gives `sqrt(g)`), so what is missing
-is only the analysis step, and `boozer_input_tables` is the worked example of
-how to do that in JAX with the same trig tables. Extending that function, or a
-sibling beside it in `boozer_tables.py`, is the smaller change than making
-`wout_field_tables` traceable — that one also carries the jxbforce filtering
-and the 1D diagnostics, none of which tracing needs.
-
-Scope this honestly before starting: it is a real piece of numerics with a
-correctness bar (the traceable projection must reproduce the NumPy one to
-round-off on both symmetry modes), not a wrapper.
-
-*Geometry alone carries no orbit gradient.* Guiding-centre motion in flux
-coordinates uses `bsub*`, `bsup*`, `gmnc` and `bmnc`; `rmnc`/`zmns` enter only
-`to_xyz` and the Cartesian `B`. A probe that perturbs `rmnc`/`zmns` returns
-exactly zero for both the exact and the soft loss — correct physics, and it
-would read as a broken gradient to anyone testing the obvious thing. The gate
-must perturb the boundary and check the gradient arrives through the
-recomputed field coefficients.
-
-### 21.2b `vmex/core/tracing.py` [DONE — PR #138]
-
-Once 21.2 lands, the adapter is thin and a new module is justified on the same
-one-concern-per-file grounds as `bootstrap.py` and `neoclassical.py`:
-
-    trace_alphas(source, *, tmax=3e-4, nparticles=200, s=0.25, seed=42,
-                 timestep=5e-7, times_to_trace=200, model="GuidingCenter")
-
-taking a wout path or a solved equilibrium and returning `loss_fraction`,
-`lost_times`, `trajectories` and the lost/unresolved/failed counts. The
-optimizable keeps the established signature so it drops into
-`VmecProblem.from_tuples`:
-
-    alpha_loss_fraction(state, rt, *, tmax, nparticles, s, width, seed)
-
-Keep the ESSOS import inside the call so vmex still imports without ESSOS,
-matching the existing ESSOS-dependent examples.
-
-### 21.3 `vmex --trace` [DONE — PR #138]
-
-One flag, dispatched like `--plot` and `--booz` in `vmex/core/cli.py`
-(`_dispatch`, around line 1060). `vmex --trace wout_XXX.nc` prints the loss
-fraction, the lost/unresolved/failed counts and the wall time, then writes the
-figures the #122 script draws — trajectories, parallel velocity, loss fraction
-against time, energy error — into `--outdir` using the existing figure-writing
-convention. Accept the tracing knobs as optional flags with the defaults above.
-
-### 21.4 `examples/optimization/loss_fraction_optimization.py` [BLOCKED — needs ESSOS#61 released]
-
-Minimize alpha losses over boundary coefficients. Deliberately small so it
-runs: `tmax = 3e-4`, `nparticles_per_core = 25`, the smooth surrogate as the
-objective, the exact loss fraction reported each stage so the user sees the
-quantity they care about rather than the surrogate. Include an aspect-ratio row
-and the min-|iota| floor, as the other optimization examples do, and honour
-`VMEX_EXAMPLES_CI=1` with a short smoke configuration.
-
-### 21.5 Coverage and cost [PARTIAL — shipped lanes gated; surrogate suite blocked on ESSOS#61]
-
-Tracing is expensive, so the test lane must not trace anything large. Gate the
-adapter with a handful of particles over a very short `tmax` and assert the
-surrogate tracks the exact loss fraction as the width shrinks, plus a
-`jax.grad` that is finite and nonzero — the property that the whole phase
-exists to provide. Register it in `tests/manifest.json` under a physics
-selector, and keep it off `pr-fast`.
-
-### 21.6 Literature anchors [TODO]
-
-Alpha confinement claims need a reference point, not just self-consistency.
-Anchor against a published configuration with known loss behaviour and cite it
-in the test: the standard candidates are Landreman & Paul's precise QA and QH
-(PRL 128, 035001, 2022), whose alpha losses at reactor scale are documented, and
-the ARIES-CS baseline for a case with substantial losses. Compare the ordering
-of loss fractions between two such configurations rather than an absolute
-number, which depends on the tracing model and particle count.
-
-## Phase 22 — Exact implicit-Jacobian contract [COMPLETE — PR #131]
-
-**Contract.** “Exact implicit derivatives” means VMEX returns a derivative certified at the
-current parameter point against the true linearized equilibrium residual. A fast response that
-misses tolerance is diagnostic evidence, not a Jacobian. A Jacobian certified at a previous
-point is also not exact at the current point. Failed equilibrium trials may use the documented,
-differentiable penalty pair, but converged trials never silently receive an approximate or stale
-derivative.
-
-### 22.1 Implementation inventory
-
-PR #131 contains these deliberate changes:
-
-- `_linear_response_summary` retains maximum iterations, uncertified-column count, the worst residual
-  norm and its requested tolerance. Typed failures therefore carry evidence rather than a bare
-  boolean.
-- `implicit_jacobian_method="auto"` tries the amortized block/forward response and recomputes the
-  same point through the independent reverse-adjoint graph if any column misses its certificate.
-- Explicit `"block_tridiagonal"` or `"forward_gmres"` raises `AdjointSolveError` with the evidence
-  instead of presenting an approximate matrix as exact. Uncertified responses are not used for
-  perturbation warm starts.
-- `README.md`, `docs/reference/optimization.rst` and
-  `docs/explanation/adjoint-gradients.md` say “certified,” document automatic fallback and
-  distinguish forced advanced lanes.
-- Touched implementation/tests: `vmex/core/{optimize,implicit}.py` and
-  `tests/test_optimize.py`. The host and JAX policies have direct tests; the independent-GMRES
-  recovery is exercised through the public problem.
-
-The stale-key gap is closed: generic derivative failures reuse a memoized Jacobian
-only when `last_jac_key` is the identical decision vector; a new point raises the original error.
-Rejected equilibrium trials retain only the exact derivative of their documented smooth penalty.
-
-### 22.2 Required tests and decisions
-
-1. Cheap mocked contract tests: an uncertified block result makes `auto` call reverse at the
-   same `x`; forced block/forward raises with iterations/residual/tolerance; reverse failure
-   raises; no uncertified `dz` is stashed; a cached Jacobian is reused only at the identical key.
-2. Existing numerical gates remain unchanged:
-   `test_block_response_forward_transpose_and_fd`,
-   `test_least_squares_implicit_jac_solver_block`, and the free-boundary Schur/coupled adjoint
-   comparison. No tolerance is loosened to accommodate the policy.
-3. Add the decisive end-to-end degraded LASYM QA gate at the captured hard iterate: compare
-   automatic fallback against explicit reverse for the matrix and one optimizer step; assert
-   no uncertified/stale derivative is returned, the cost descends, and the bounded test finishes
-   within the documented budget. The production LASYM case now completes six evaluations in
-   125 s (cost 21.70 -> 2.03; warm Jacobians 1.3-2.5 s) and all responses certify directly. An
-   intentionally impossible `1e-16`, one-restart stress did trigger all 48 columns and the
-   correct reverse-fallback warning, but its reverse graph exceeded the 4:53 diagnostic budget
-   and was terminated. Do not add that artificial long case to PR CI. If a naturally degraded
-   iterate recurs, retain it as the bounded same-point matrix/step comparison described here.
-4. Test the scalar contracts across a compact matrix: symmetric/LASYM, vacuum/finite beta,
-   fixed/free boundary, scalar objective and residual-vector objective. Compare
-   `jax_value_and_grad`, `0.5*r@r` with `J.T@r`, directional central differences at a converged
-   root, and JVP/VJP transpose identities. Record solves, wall time and peak RSS.
-5. Unify only when the evidence permits it. Objective tuples should share value/residual term
-   assembly and one certification policy; retain separate scalar reverse and residual-Jacobian
-   linear algebra when their complexity differs. A single API is desirable; forcing every
-   optimizer through one computational graph is not a goal.
-
-PR #131 evidence: Schur/coupled comparison passed in 87.49 s; block-response
-transpose/FD passed in 159.45 s; least-squares policy/physics comparison passed; and the normal
-48-variable LASYM optimization completed as described above. Full local lanes passed: core 96
-tests in 3:57, implicit response 59 in 6:43, and field API 64 in 2:29. Changed executable-line
-coverage is 97.6%. Ruff, mypy (66 source files), docs prose, Sphinx `-W`, package build, workflow
-YAML, manifest validation (97 modules, 1334 tests, 14 campaigns), and `git diff --check` passed.
-Released ESSOS 0.16 passed the core coil/CLI and virtual-casing contracts (5 passed, one optional
-skip). A raw-operator, block-preconditioned GCROT replacement was tried and reverted because its
-internal success status still left a 5.16e-5 transpose-identity error; any future Krylov change
-must certify the explicit true raw residual rather than trust solver status.
-
-Acceptance: every public derivative at a converged point is current-point certified or raises a
-typed error; rejected-trial penalties are value/derivative consistent; the degraded LASYM case
-descends with no stale fallback; focused tests and full remote CI pass.
-
-## Phase 23 — VMEX 0.6.0 release [COMPLETE — v0.6.0 tagged 2026-08-23]
-
-Scope freeze: 0.6.0 contains the already merged post-#123 features plus the small Phase 22/25
-hardening work. Alpha loss, the larger boundary-Schur performance rewrite, epsilon-effective
-objective work, broad ecosystem file moves and history rewriting are post-0.6 unless already
-merged and independently certified. A release is a verified artifact, not merely a tag.
-
-Release gates, in order:
-
-1. Merge the focused Phase 22/25 hardening PR after full CI. Resolve the three audit debts in
-   Phase 24 or list a narrowly justified deferral in the GitHub release notes.
-2. Audit VMEX against released ESSOS 0.16. Remove, defer or clearly development-gate any code,
-   example or documentation that requires open ESSOS #58/#61; VMEX 0.6 must neither advertise
-   nor require those unreleased APIs. Their independent review, merge and ESSOS 0.17 release are
-   deliberately last and are not VMEX 0.6 release gates. The 2026-08-21 audit found nine
-   development-only scripts: both `vmex_fieldline_tracing_*` examples; the fixed- and
-   free-boundary `single_stage_optimization*` vacuum/finite-beta examples;
-   `vmex_get_B_outside_plasma.py`, `vmex_fixed_free_boundary_comparison.py`, and
-   `take_free_boundary_gradients.py`. They use `Coils.from_json/with_dofs/dof_names`, ESSOS
-   distance objectives, `surfacerzfourier_from_boundary`, or the new tracing helpers, none of
-   which is in released 0.16. Keep the release-compatible `free_boundary_essos_coils.py`, mirror
-   construction, CLI tabulation and VMEX/VC contracts. Merged PR #132 implements this boundary:
-   the nine scripts fail immediately with one explicit development-preview message on 0.16,
-   stable documentation claims and the unreleased Nightly pin are removed, and the three compact
-   coil fixtures retain the public `dofs_curves` / `dofs_currents` schema read by 0.16 and the
-   development loader. Do not duplicate these helpers in VMEX. Restore the stable examples only
-   after an independent ESSOS 0.17 release.
-3. Manually dispatch and pass current Nightly and Weekly campaigns at the candidate SHA.
-   Nightly run 32543383359 is fully green: optional integrations 5:40, QA 2:36, QI 2:35,
-   QP 3:01 and QH 4:04. The former Weekly design was not acceptable release evidence even when
-   green: run 31236274932 took 2:42:53 for high-mode free boundary and 1:29:27 for mirrors.
-   Draft PR #135 keeps the physical oracles but bounds and shards them. Its first run
-   32546262891 passed adjoint/fixed/free in 5:55/16:21/48:45, while the three-beta mirror
-   refinement reached the enforced one-hour boundary. Run 32549286300 then passed adjoint,
-   fixed and the revised mirror jobs in 2:55/9:37/55:01; the former 15->25 radial free-boundary
-   ladder reached the same cap. Head `a4e4b37f` changes only that ladder to 11->19 while keeping
-   all 238 Fourier modes, vacuum activation, the real restart, 1e-8 convergence and VMEC2000
-   parity. It passed locally in 17:45; an independent VMEC2000 solve converged both rungs,
-   activated vacuum at iteration 39 and supplies the checked `r00`, `wb` and edge-iota oracle.
-   PR run 32554820509 is fully green, including changed-line coverage and the aggregate gate;
-   final Weekly run 32554856698 passed adjoint/fixed/mirror/free in 4:45/16:17/47:54/56:43,
-   all below the one-hour per-job bound. GPU run 32543384593 was cancelled as nonqualifying
-   because unrelated nonlinear campaigns occupied both office GPUs. By user decision on
-   2026-08-22, its replacement is deferred until after 0.6. CPU correctness, Nightly and Weekly
-   qualify this release; no new GPU claim may rely on the cancelled run.
-4. Draft PR #134 updates `pyproject.toml` to 0.6.0. Its release workflow installs both wheel and
-   sdist into clean Python 3.10 and 3.12 jobs. Each imports VMEX outside the source tree and runs
-   a converged 7-surface solve from the packaged seed. Manual dispatch is build/verify-only;
-   only a published release may enter the PyPI job. Local Python 3.12 wheel/sdist installs pass, and the artifacts are
-   573 KiB / 894 KiB versus the 576 KiB / 896 KiB baseline. Dispatch the four-job remote matrix
-   and record it before merging. The first dispatch exposed that `setup-python` cannot use pip
-   caching without a checked-out dependency file in the intentionally source-free verifier;
-   removing only that cache option fixed the workflow. Corrected run 32542322776 passed build
-   plus wheel/sdist installs on Python 3.10 and 3.12, with publish and make-latest skipped.
-5. Tag `v0.6.0`, publish through the trusted PyPI workflow, and make the software release
-   GitHub's latest. The local workflow change adds a post-publish `make_latest=true` step so an
-   assets release no longer owns `/releases/latest`; preserve asset releases and provenance.
-6. Verify PyPI metadata/install, GitHub release assets, docs links, badge versions, CLI version,
-   and `/releases/latest`. Only then mark Phase 23 done.
-
-Deferred GPU evidence is tracked after the release:
-
-- Do not dispatch GPU campaigns while GPU work is out of scope.
-- Before any new GPU/HPC claim or free-boundary GPU promotion, record an idle host, JAX/CUDA
-  versions, peak memory, cold and warm time, and the trusted campaign URL.
-- A failed, cancelled or contended run is evidence to investigate, never a passing result.
-- CPU correctness and the bounded Nightly/Weekly campaigns remain unchanged while this debt is
-  open.
-
-PR #122 and #125 stay open throughout and after this release. Never merge either merely to empty
-the pull-request queue.
-
-## Phase 24 — Independent audit of the ten post-#123 merges [PARTIAL]
-
-All ten PRs had green CI but no GitHub review; green checks are not independent review. The
-54-commit history is not rewritten. Preserve it and close debts with small follow-up PRs.
-
-- Accepted as merged after source/diff review: #116, #117, #119, #121, #126 and #127.
-- #129 is acceptable; optionally centralize its cache cleanup in one scoped fixture if another
-  cache leak appears. Do not add a broad autouse reset that hides production cache semantics.
-- #128 follow-up is in review as stacked draft PR #133. Its solved free-boundary objective
-  gradient is `1.776e-5` versus `1.705e-5` from independent centered cold resolves (4.2%); the
-  former frozen normalization gives `7.579e-2`, over 4,000 times the resolved derivative. The
-  test passes twice in about 79 seconds and belongs to the bounded weekly adjoint campaign.
-- #130 is accepted after a fresh, bounded full campaign. The max-mode 1--9 QA ladder reduced QS
-  from `8.98e-2` to `5.75e-5`; the independent `ns=101`, `ftol=1e-14` final solve converged in
-  3,873 iterations with QS `6.12e-5`, aspect 3.5000, mean iota -0.4340 and magnetic well 0.0687.
-  Wall time was 2,299 s (38.3 min). This is manual release evidence, not a CI candidate.
-- #118 is accepted. The merged fixture is not vacuum: it solves at total beta `2.24e-4` with a
-  4.79 kPa peak pressure and `max(abs(DWell)) = 4.58e-5`. Its pinned `DWell`, `DShear`, `DCurr`
-  and `DGeod` arrays come from STELLOPT `v6.5.0-42-g9177f58c`; the live VMEC2000 parity test was
-  rerun against that build in 8.5 seconds, and both pinned decomposition/DMerc gates pass. The
-  earlier vacuum-only assessment had overlooked the fixture's explicit pressure override, so
-  no redundant oracle or data file is needed.
-
-Acceptance: the three named debts have literature/reference-anchored tests or recorded bounded
-campaign evidence; no published history rewrite; Phase 23 explicitly accounts for each.
-
-## Phase 25 — CI and example-integration runtime [COMPLETE — PR #131]
-
-Measured on `main` CI run 32340328989: core 19:42, field API 19:53,
-implicit-response 12:46 and mirror-spline 9:14. Dominant individual tests were the Schur/coupled
-comparison (791 s), free-boundary current FD (347 s), block response (256 s), free-boundary
-restart (217 s), least-squares implicit block (193 s) and bootstrap-current dofs (117 s).
-Nightly run 32448443577 completed successfully; its bounded example job took 17:58, dominated by
-outside-field (278 s), gradB (262 s), finite-beta single stage (217 s), fixed single stage
-(190 s), finite-beta tracing (74 s) and vacuum tracing (58 s).
-
-Local changes use `pytest -n 2` for core and field-API lanes while keeping JAX-heavy implicit
-and mirror lanes serial; six independent nightly examples also use two workers. The PR-lane
-Schur/coupled test uses a real LASYM DIII-D case at `mpol=10, ntheta=30`; local scans showed
-`mpol=4` invalid and `mpol=8` missed the 2% physics gate by 2.896%, while `mpol=10` passed and
-reduced this test from the remote 791 s baseline to 127.6 s. The full high-resolution FD
-certificate remains nightly. No assertion or tolerance was removed.
-
-The final manifest preserves every selected physics test while separating incompatible compile
-shapes: core is 95 tests in 2:57 locally, implicit-A is 9 in 3:22, implicit-B is 15 in 3:53, and
-the isolated free-boundary adjoint is 1 in 1:19. Field API remains 64 tests in 2:29 against
-released ESSOS 0.16. Two fast certificate-policy tests were added to implicit-B so changed-line
-coverage is exercised by a selected physics job. These are evidence for the scheduling change,
-not completion: the acceptance criterion still requires two consecutive remote runs within
-budget.
-
-The first remote run at `b4a68570` was diagnostic, not qualifying: field API improved to 8:54,
-but implicit response regressed from the 12:46 baseline to 16:45 because two GitHub-runner
-workers contended while compiling JAX programs. Commit `0e991596` therefore restores that lane
-to serial execution. Do not count the diagnostic run toward the two-run acceptance criterion.
-
-The serial replacement at `0e991596` measured core 15:03, field 8:50 and implicit 14:55, but its
-changed-line gate failed because four already-passing certificate-policy lines were absent from
-the selected physics manifest. The stacked #132 run measured core 13:48 and implicit 19:16,
-showing that one large serial JAX lane still had unacceptable variance. Commit `326ba760`
-therefore adds the two policy tests to the selected set and shards the unchanged long contract
-by compile shape. The fresh run results are recorded below; neither prior run qualifies.
-
-The final design has now passed two consecutive remote measurements with changed-line coverage
-and the aggregate PR gate green. Run
-[`32536701497`](https://github.com/uwplasma/vmex/actions/runs/32536701497) measured core 11:00,
-implicit-A 9:19, implicit-B 11:12, free-boundary adjoint 6:31, field API 6:47 and mirror spline
-10:04. Stacked run
-[`32536709789`](https://github.com/uwplasma/vmex/actions/runs/32536709789) measured core 10:53,
-implicit-A 9:34, implicit-B 11:20, free-boundary adjoint 7:10, field API 9:05 and mirror spline
-10:04. Every job was below 12 minutes; no physics assertion, resolution or tolerance was
-weakened. Phase 25's acceptance criterion is met.
-
-This phase certifies CPU/host CI scheduling. The deferred accelerator campaign is governed by
-Phase 23's evidence-debt rules and does not reopen the measured PR/runtime acceptance above.
-
-Retained policy:
-
-1. Run the entire workflow remotely. Reject `-n 2` in a lane if RSS, JAX cache interactions or
-   wall time regress; parallelism is a measured policy, not a universal default.
-2. Keep pull-request critical path <= 15 minutes and scheduled Nightly <= 30 minutes on GitHub
-   runners, with no individual Nightly test over 10 minutes. Weekly production-resolution
-   contracts may be longer only when isolated in <=60-minute jobs with measured local/remote
-   evidence. Use manifest sharding and shared compiled shapes before resolution reductions.
-3. Preserve one process-order cache-leak campaign because selector sharding previously hid a
-   module-cache leak. Randomize/order-check cheaply rather than duplicating all physics solves.
-4. Report per-test timing artifacts and fail on missing manifest coverage. Production-size
-   parity, GPU and memory campaigns run nightly/weekly; pull requests retain the cheapest real
-   physics case that distinguishes a wrong implementation.
-
-Acceptance: two consecutive remote runs meet the budgets without weakened physics, coverage or
-numerical tolerances; all changed lanes stay below memory limits; timings are retained for the
-next audit.
-
-## Phase 26 — Ecosystem ownership and dependency releases [ACTIVE POLICY]
-
-Ownership follows the physics, with thin VMEX adapters and no vendored copies:
-
-- **VMEX:** fixed/free equilibrium physics, VMEC inputs/state/parameter maps, NESTOR coupling,
-  equilibrium diagnostics/objectives, implicit derivative policy and VMEC-specific adapters.
-- **ESSOS:** coil geometry/current dofs, Biot-Savart fields, particle/field-line tracing,
-  termination events and loss diagnostics/surrogates. VMEX examples consume its public release.
-- **virtual_casing_jax:** boundary-integral kernels, singular quadrature plans, batching/sharding
-  and custom VJPs. VMEX keeps only state/wout-to-surface adaptation and pressure interpretation.
-- **NEO_JAX:** effective-ripple and generic neoclassical kernels. VMEX keeps a thin equilibrium
-  adapter and objective composition; no second NEO implementation.
-- **SOLVAX:** generic Krylov, block-tridiagonal, sparse, bordered/Schur and nonlinear-solve
-  algebra. VMEX retains NESTOR edge physics, Fourier constraints, operator construction and the
-  true-residual certificate.
-- **booz_xform_jax:** generic Boozer transform/projection and derivatives. VMEX retains
-  equilibrium-to-Boozer adapters and QI/max-J physics objectives.
-
-After 0.6.0, the highest-value deletion target is VMEX's 781-line virtual-casing implementation
-once virtual_casing_jax provides the complete API; generic Boozer projection is next. Do not move
-`statephysics.py` or reorganize `core/` until cross-repo moves settle, or files will move twice.
-The local NEO_JAX checkout is heavily diverged (ahead 72/behind 76); reconcile it against origin
-before treating it as an authority.
-
-For Phase 3 boundary-Schur work: instrument true coupled matvec count/time first; precondition
-the transpose with the bulk `A^-T` block solve and a boundary Schur correction; put generic
-bordered/low-rank/recycling algebra in SOLVAX; keep `E=J-A`, edge mode pairing and the true
-coupled certificate in VMEX. Profile CPU correctness before GPU memory/kernel work.
-
-Acceptance: each generic algorithm has one owner and one released implementation; VMEX optional
-dependencies use releases, not mutable branches; cross-repo parity tests protect adapters; moves
-delete more VMEX code than they add. ESSOS PR merges are performed only by an independent ESSOS
-maintainer and remain last in the program order.
-
-## Phase 27 — Final research-grade capability audit [PLANNED, CONTINUOUS]
-
-Before declaring the program complete, run one final matrix and close every unsupported cell
-explicitly. This phase collects goals that span several implementation phases:
-
-1. Solver: fixed/free, vacuum/finite beta, axisymmetric/3-D, symmetric/LASYM, stellarator and
-   axisymmetric/non-axisymmetric mirror equilibria; hot restart and single-resolution versus
-   multigrid behavior; robust magnetic axis; VMEC2000/VMEC++ parity and typed non-convergence.
-   Make forward controls (`ns_array`, `ftol_array`, `niter_array`, `delt`, force-residual/FSQ
-   thresholds and verbosity) consistent across Python/CLI, user-adjustable and documented;
-   state the immutable `VmecInput` copy/`replace` contract explicitly.
-2. Optimization: tuple residual composition plus scalar `value_and_grad` with least squares,
-   BFGS/L-BFGS-B, Adam/Optax and JAXopt examples; QA/QH/QP/QI at representative NFP/modes;
-   finite-beta self-consistent bootstrap/current splines; fixed/free single stage; honest term
-   histories and dof names. Examples teach the public gradients rather than hide them.
-3. Physics: QI and QA max-J verified from second-adiabatic-invariant contours and radial trend;
-   magnetic well, Mercier and Glasser with meaningful finite pressure; edge-weighted residuals
-   documented wherever the axis/edge is excluded or emphasized; L_gradB/L_gradgradB; trapped
-   fraction, effective ripple, gamma-c and J contours; alpha confinement ordering.
-4. Fields/coils: Cartesian and flux-coordinate `set_points`, B/absB/gradB through third
-   derivative and all VJPs inside/outside; coils plus virtual casing at finite beta; B.n/B and
-   field-line agreement; progress/stopping; fixed/free comparison; publication-ready plots,
-   VTK and optional compact movies. Define and test the magnetic-axis limit/extrapolation rather
-   than leaving an unexplained singular point in the public API.
-5. Product: concise README with only key figures and commands; full equations, algorithms,
-   tutorials, CLI/restart/parallel controls in docs; all example scripts follow the agreed
-   top-input/no-argparse template unless explicitly classified as tools; outputs ignored; no
-   personal paths, stale hosts, scaffolds or oversized obsolete assets.
-6. Quality/performance: >=95% source and branch coverage with per-physics floors; analytic,
-   literature and independent-code anchors; PR/nightly budgets from P25; CPU/GPU peak-memory and
-   throughput records; clean Python 3.10/3.12 artifacts; release/latest verification.
-
-Every cell receives `[DONE evidence]`, `[DEFERRED reason/release]`, or `[UNSUPPORTED documented]`
-before the final roadmap is called complete. “Example ran once” and text-grep tests are not
-evidence. Add new requirements here and route them to an owning phase rather than creating an
-untracked side plan.
-- 2026-08-19 claude: P21 — planned the tracing feature; ESSOS PR for the array constructor and smooth surrogate in flight; #122 stays open as the specification.
-- 2026-08-19 claude: P21.1 done — ESSOS#61 adds Vmec.from_arrays and a soft loss fraction (exact grad 0.0 -> surrogate -1.34e-1, converging to 0.250049 at width 1e-3); geometry coefficients carry no orbit gradient, so 21.2 must go through the field coefficients.
-
-### Reference toolchain (2026-08-19)
-
-`/Users/rogeriojorge/local/STELLOPT` is pinned at `512375ce` (2024-01-31) and
-**carries the NEO reader bug**: `read_booz_in.f90:143` reads `bmns(i,i)`. Any
-LASYM effective-ripple reference generated from that tree is wrong.
-
-A current tree is built at `/Users/rogeriojorge/local/STELLOPT_new`
-(`9177f58c`, `v6.5.0-42-g9177f58`), which has `bmns(i,k)` — the merged #501 fix.
-Binaries in `STELLOPT_new/bin`: `xvmec2000`, `xbooz_xform`, `xneo`, built with
-`MACHINE=macports`, gfortran 13.4.0, `-O2 -march=native`, NETCDF/FFTW/HDF5/MPI.
-
-Use `STELLOPT_new` for every reference run from here. Point the live tests at
-it with `--run-vmec2000 --vmec2000-executable=.../STELLOPT_new/bin/xvmec2000`,
-and record which tree produced any golden array that gets pinned — the two
-trees are two and a half years apart and disagree on LASYM.
-- 2026-08-19 claude: built STELLOPT_new (9177f58c) with xvmec2000/xbooz_xform/xneo; confirmed #501 merged, so the old 2024 tree's bmns(i,i) bug no longer constrains LASYM NEO references.
-- 2026-08-19 claude: P21.2 corrected — measured that wout_field_tables is host NumPy (0 jnp) so it carries no gradient; the deliverable is a traceable Nyquist projection of bsup/gmnc/bsubs beside boozer_input_tables, not a wrapper.
-
-### LASYM verification against the current reference (2026-08-19)
-
-Every LASYM claim in #118 re-checked against freshly built STELLOPT_new
-binaries rather than the 2024 tree. All hold:
-
-| claim | measured | verdict |
+or:
+
+```python
+result = vmex.solve_file("input.case", polish="auto")
+```
+
+- The default remains unchanged: no polishing unless requested.
+- A successful polished result carries:
+  - the original VMEC-compatible state;
+  - the native high-order equilibrium;
+  - a strong-force certificate on an independent grid;
+  - convergence, admissibility, derivative, timing, and memory reports;
+  - a VMEC-compatible WOUT sampled from the polished state;
+  - an optional native VMEX NetCDF representation that preserves the high-order coefficients.
+- Failure is typed and controlled by `fail="error" | "fallback" | "warn"`; it is never silently presented as a polished solution.
+
+### 2.2 Performance
+
+- Every flagship workflow has separated measurements for tracing, lowering, compilation, execution, host-device transfer, output/postprocessing, and peak memory.
+- Cold-process, persistent-cache reload, and warm same-process numbers are never mixed.
+- Repeated optimization evaluations at unchanged static shapes do not recompile unexpectedly.
+- The profiling suite demonstrates which changes improve:
+  - one cold fixed-boundary solve;
+  - one cold multigrid solve;
+  - polished solve;
+  - scalar value and gradient;
+  - vector residual and Jacobian;
+  - single-stage plasma-and-coil optimization;
+  - free-boundary solves and gradients;
+  - LASYM solves and optimization;
+  - mirror and hybrid solves;
+  - BOOZ_XFORM_JAX.
+- Any Pallas/custom-kernel work is justified by an XProf or Nsight trace showing an XLA fusion or memory-layout limitation.
+
+### 2.3 Mirrors
+
+- The fixed-cut open-mirror model has a documented variational problem and boundary-condition contract.
+- Isotropic fixed-boundary mirrors pass analytic, manufactured, refinement, weak/strong residual, and independent field tests.
+- An anisotropic model solves
+
+```text
+J x B = div(P),
+P = p_perp I + (p_parallel - p_perp) b b,
+```
+
+with an equilibrium-consistent pressure closure rather than arbitrary independent `p_parallel` and `p_perp` arrays.
+- The isotropic limit recovers the existing mirror solver.
+- Axisymmetric anisotropic free-boundary equilibria driven by circular ESSOS coils are validated against analytic/paraxial limits and literature-grade reference cases.
+- A nonaxisymmetric fixed-boundary mirror is optimized and independently certified.
+- A nonaxisymmetric free-boundary mirror is solved with a full 3-D exterior response, not an axisymmetric surrogate.
+
+### 2.4 Stellarator-mirror hybrids
+
+- The periodic closed hybrid has a converged equilibrium, high-order representation, force certificate, field-line closure certificate, and implicit derivatives.
+- A reproducible optimization varies at least:
+  - straight mirror length;
+  - mirror ratio;
+  - return radius/shape;
+  - cross-section rotation;
+  - QI/omnigenity controls;
+  - iota or current controls;
+  - coil feasibility controls.
+- The same in-memory result feeds:
+  - ESSOS coil construction and alpha-loss calculations;
+  - GKX local gyrokinetic geometry and turbulence;
+  - DKX Boozer geometry and neoclassical transport;
+  - BOOZ_XFORM_JAX diagnostics where closed-surface Boozer coordinates are meaningful.
+
+### 2.5 Confinement objectives
+
+- The summary pressure/ripple panel also shows `Gamma_c` on the same confinement axis, with caching and a bounded diagnostic resolution.
+- Hard-topology `Gamma_c` remains a validation metric until its derivative is proven convergent.
+- A tracked-well and/or smooth surrogate provides stable optimization derivatives with explicit branch-event diagnostics.
+- One concise example optimizes a weighted combination of:
+  - epsilon effective;
+  - a derivative-safe `Gamma_c` objective;
+  - maximum-J;
+  - force-balance and geometric constraints.
+- The final configuration is validated with hard `Gamma_c`, independent effective-ripple/neoclassical calculations, and ESSOS orbit losses.
+
+### 2.6 LASYM
+
+- `LASYM = TRUE` has measured value, gradient, Jacobian, and optimization performance.
+- All asymmetric Fourier families are retained through equilibrium, WOUT, Boozer, stability, field, and downstream adapters.
+- A flagship LASYM optimization produces a physically distinct asymmetric equilibrium, not numerical noise or a gauge change.
+- The asymmetric result improves a declared physical objective under the same constraints as the symmetric reference and passes independent VMEC2000/VMEX and force-balance checks.
+
+### 2.7 Documentation and code quality
+
+- Changed/new code has at least 95% line coverage and all physics branches have direct tests.
+- Repository coverage does not decrease.
+- Examples follow the compact SIMSOPT pattern described below.
+- Every performance and physics figure is regenerated from checked-in scripts and machine-readable results.
+- No abandoned experimental implementation survives beside the promoted path.
+
+---
+
+## 3. Execution contract for the local agent
+
+### 3.1 First actions in every repository
+
+Before editing:
+
+1. read `AGENTS.md`, `CONTRIBUTING`, `pyproject.toml`, CI workflows, and package API tests;
+2. record `git status`, branch, commit, Python/JAX/jaxlib versions, platform, device, and optional dependencies;
+3. update the audited hashes in a short work log if repositories have moved;
+4. run the smallest relevant test set before changing code;
+5. inspect open PRs so work is not duplicated.
+
+Never overwrite user-owned untracked files or benchmark assets. Never infer completion from a local branch when the owning PR is open.
+
+### 3.2 Pull-request discipline
+
+- One coherent capability per PR.
+- Avoid mega-PRs after PR #192 is merged.
+- PR descriptions state:
+  - exact problem;
+  - equations/algorithm;
+  - public API impact;
+  - tests and oracles;
+  - cold/warm/memory evidence;
+  - known limits.
+- Do not add a generic abstraction until two real call sites need it.
+- Feature PRs may add lines. Refactor PRs should have non-positive net source LOC unless a measured simplification requires a small adapter.
+- No performance change merges without before/after raw JSON on the same host and environment.
+- No numerical tolerance is loosened solely to make CI pass.
+
+### 3.3 Code style
+
+- Prefer pure functions, frozen dataclasses, pytrees, and explicit static configuration.
+- Keep public docstrings short but precise about units, coordinate conventions, derivative semantics, and failure modes.
+- Comments explain non-obvious physics or numerical invariants, not the syntax of the next line.
+- Do not create many one-function files. Split a large module only when ownership becomes clearer and imports become simpler.
+- Keep optional dependencies behind narrow adapters.
+- Avoid `__main__`, argument parsing, and hidden global state inside examples.
+- Keep shape-changing options static and visible.
+- Never use environment variables as the only API for numerical or memory behavior.
+
+### 3.4 Evidence hierarchy
+
+Use, in descending order:
+
+1. analytic/manufactured solution;
+2. independent derivation or implementation;
+3. VMEC2000, VMEC++, DESC, ANIMEC, NEO, ESSOS, GKX, DKX, or VIRTUAL_CASING_JAX comparison;
+4. resolution and tolerance convergence;
+5. internal consistency.
+
+A test that compares two functions sharing the same kernel is not an independent physics oracle.
+
+---
+
+## 4. Audited repository state
+
+### 4.1 What is already complete on VMEX main
+
+Do not reimplement these items.
+
+- VMEC-compatible fixed- and free-boundary equilibrium core.
+- VMEC2000-style 1-D radial tridiagonal preconditioner and lambda preconditioner.
+- Optional matrix-free 2-D/JVP-GMRES Newton acceleration.
+- Hot restart, multigrid, direct ESSOS-coil external fields, and typed failure handling.
+- Implicit tangent/adjoint infrastructure through SOLVAX.
+- Block-tridiagonal raw-force Jacobian factorization and multi-RHS response machinery.
+- Shared axis-regular B-spline basis of degrees 3, 5, and 7 (`vmex/core/radial_basis.py`).
+- High-order strong-force evaluation and independent certification (`vmex/core/strong_force.py`).
+- Low-order strong-force preconditioner (`vmex/core/polish.py` and associated tests/benchmarks).
+- WOUT field-line geometry adapter.
+- Periodic stellarator-mirror gyrokinetic geometry (`vmex/mirror/turbulence.py`, merged PR #194).
+- Isotropic mirror energy, weak residual, independent strong pointwise force, B-spline fixed-boundary solves, periodic hybrid geometry, and an axisymmetric free-boundary lane.
+- Gamma-c value implementation with LASYM support and large warm-kernel speedup.
+- LASYM Mercier/Glasser, bootstrap, Boozer, stability, and many optimization fixes.
+- In-process BOOZ_XFORM_JAX and NEO_JAX effective-ripple diagnostics in the summary plot.
+- Existing performance tooling for hot paths, GPU/device parity, startup, cache reload, radial basis, force, and preconditioners.
+
+### 4.2 Open PR #192: treat as integration, not a new design
+
+PR #192 already implements the production direction proposed by the former plan:
+
+- axis-regular high-order reconstruction;
+- overintegrated physical strong-force residual;
+- overdetermined collocation least-squares polishing;
+- SOLVAX matrix-free damped Gauss-Newton;
+- normal-operator preconditioning;
+- exact tangent, adjoint, and custom-VJP stationarity derivatives;
+- native polished field/surface/Boozer/virtual-casing/ESSOS adapters;
+- cross-code force-balance comparisons and README assets.
+
+The branch reports, subject to reproduction during review:
+
+| Case / quantity | Reported result on PR #192 |
+|---|---:|
+| Solovev normalized volume force L2, legacy VMEX | 0.122381 |
+| Solovev normalized volume force L2, VMEC2000 | 0.122399 |
+| Solovev normalized volume force L2, VMEC++ | 0.122399 |
+| Solovev normalized volume force L2, DESC | 0.014405 |
+| Solovev normalized volume force L2, polished VMEX | 0.002759 |
+| Polished radial-refinement difference | 1.55e-4 |
+| Polished cold solve / end-to-end | 13.32 s / 57.64 s |
+| Finite-beta QA normalized L2, legacy VMEX / DESC | 0.873927 / 0.964975 |
+| Finite-beta cold VMEX / DESC | 14.48 s / 157.66-186.32 s |
+| Tangent-adjoint duality mismatch | 1.90e-10 |
+| Re-polished centered-FD gradient relative difference | 5.11e-5 |
+| Changed-line coverage | 95.7% |
+
+These values must be reproduced from the branch scripts before they appear in a release claim. The finite-beta comparison is case- and normalization-specific and must not be generalized without a broader suite.
+
+### 4.3 Lessons from the closed polishing experiments
+
+Preserve these conclusions.
+
+- Solving a square retained-mode strong-force root can drive projected equations down while moving force into unresolved harmonics.
+- The promoted formulation is an overdetermined physical collocation residual with an independent validation grid.
+- A global dense SVD coordinate chart is too expensive; use the structural local chart.
+- Continuation can encounter folds; identity-preconditioned JFNK alone is not sufficient.
+- Volume weighting alone does not guarantee a uniformly accurate solution.
+- A derivative can be accurate for the discrete stationarity system while the physical certificate is inadequate; both are required.
+- Warm-JIT timings cannot be used to claim cold end-to-end superiority.
+
+### 4.4 Gamma-c state
+
+The current `Gamma_c` implementation is a useful value diagnostic, but merged PR #155 documented nonconvergent boundary derivatives caused by hard well detection, hard topology changes, and branch-sensitive extrema. Reported examples include sign-changing radial-resolution gradients. Therefore:
+
+- do not expose the current hard `Gamma_c` as a production gradient objective;
+- do not weaken the warning in the documentation;
+- build tracked-well or smooth derivative semantics before adding the requested optimization example.
+
+### 4.5 Mirror state
+
+The mirror lane already distinguishes three topologies that must remain separate:
+
+1. **Open fixed-cut mirror:** a finite axial domain with two prescribed, flux-carrying cuts. Field lines cross the cuts. Sheaths, sources, and end-loss kinetics are not part of the equilibrium model.
+2. **Free lateral boundary with open cuts:** the lateral surface is a plasma-vacuum interface. The axial caps are a mathematical closure of the Green surface, not plasma-vacuum interfaces.
+3. **Periodic stellarator-mirror hybrid:** no open cuts; the axis and surfaces close periodically.
+
+The code already has a general 3-D closed sidewall-plus-cap boundary-integral geometry in `vmex/mirror/exterior.py`. The current coupled free-boundary solver is restricted by an axisymmetric gate. Nonaxisymmetric free-boundary work should extend the existing exterior response and remove this gate after verification; it should not create a second exterior solver.
+
+### 4.6 Boozer ownership state
+
+- `vmex/core/qi.py` is not the main duplication; it consumes the transform in `vmex/core/omnigenity.py`.
+- `vmex/core/omnigenity.py` contains a lightweight traceable Boozer implementation for the symmetric path and delegates LASYM to BOOZ_XFORM_JAX.
+- `vmex/core/boozer_tables.py` creates pure-JAX WOUT-convention input spectra.
+- BOOZ_XFORM_JAX contains the validated general transform.
+
+The ownership boundary is currently blurred. It must be resolved by parity and performance measurements, not by deleting the smaller implementation on sight.
+
+### 4.7 Large-module maintenance targets
+
+Approximate current sizes identify review targets, not automatic split points:
+
+- `vmex/core/optimize.py`: about 155 kB;
+- `vmex/core/implicit.py`: about 122 kB;
+- `vmex/core/freeboundary.py`: about 104 kB;
+- `vmex/core/plotting.py`: about 82 kB;
+- `vmex/mirror/splines.py`: about 62 kB.
+
+First create an ownership/call graph and identify duplicate policy, data conversion, and solver orchestration. Split only where a stable internal interface emerges.
+
+### 4.8 Audited PR and commit disposition
+
+The local agent should recheck status before acting, but use this table as the 2026-08-30 baseline.
+
+| PR / commit group | Audited contribution | Disposition in this plan |
 |---|---|---|
-| pinned `DMerc` array is genuine xvmec2000 output | 2.67e-9 per-element vs a fresh run | holds |
-| `d_merc_state` vs xvmec2000 | 6.302e-4 per-element, 1.581e-4 scale-relative | holds |
-| pinned `<J.B>` array is genuine | 2.12e-15 per-element | holds |
-| `jdotb_state` vs xvmec2000 | 1.519e-3 per-element, 1.512e-4 scale-relative | holds, 1.3x margin |
-| shipped golden wout is current | zero difference on all 121 variables | not stale |
-| booz_xform_jax vs `xbooz_xform`, lasym | 1.8e-14 / 2.3e-14 (nfp=1), 1.0e-15 / 8.0e-16 (nfp=5) | holds |
+| #192 | Integrated high-order force polishing, collocation Gauss-Newton, stationarity derivatives, native downstream adapters, cross-code evidence | Reproduce, review, clean, and merge in Phase 0; do not reimplement |
+| #194 | Closed periodic stellarator-mirror GK geometry, Clebsch label, dual metrics/drifts, equal-arc remap | Foundation for hybrid/GKX work |
+| #193 and #160 | 0.7.1 and 0.7.0 release work | Preserve packaging/release contracts |
+| #190 | WOUT field-line geometry adapter and LASYM/symmetric oracle | Reuse in downstream parity tests |
+| #177 | QA startup/memory reductions, analytic fixed-boundary mask, chunked raw-block VJPs, one scalar reverse solve | Baseline for Phase 3; do not regress |
+| #173 | Cold compile, persistent-cache reload, and warm benchmark infrastructure | Consolidate into Phase 2 harness |
+| #163 | Topology-independent B-splines, degrees 3/5/7, derivatives, refinement, regularity | Shared foundation for polish and mirrors |
+| #164 | High-order state and independent strong-force oracle | Promoted by #192; retain independent certificate |
+| #165 | Low-order strong-force preconditioner | Benchmark/reuse in #192 and Phase 3 |
+| #166 | Square strong-force root/homotopy | Diagnostic lesson; not production because unresolved force can escape retained modes |
+| #167-#191 experiments | Collocation charts, SVD experiments, continuation folds, preconditioner variants, derivative paths | Preserve conclusions/tests; remove abandoned code from promoted branch |
+| #155 | Gamma-c fixes, large warm speedup, LASYM support, documented derivative nonconvergence | Keep hard value; redesign derivative in Phase 6 |
+| #152 | LASYM ballooning and external COBRAVMEC oracle | Retain oracle and shared closures |
+| #151 | LASYM bootstrap/filtering fixes and major vectorized filtering speedup | Baseline; investigate remaining performance gap |
+| #127 and #126 | Full-Nyquist LASYM Boozer and differentiable LASYM normalization/optimization fixes | Foundation for Phase 7 and Boozer parity |
+| #118 | LASYM Mercier/Glasser validation against VMEC2000 | Preserve as independent stability gate |
+| #154 | Free-boundary adjoint factor certificates and coupled-root reproducibility findings | Foundation for future polished/coupled derivatives |
+| #146 | ESSOS seams, direct-coil mgrid, batched coil-field acceleration, fixed/free workflow | Reuse; eliminate file-backed gradient breaks |
+| #137 and #138 | Traceable field tables, alpha tracing, CLI/ESSOS integration | Reuse, but keep derivative/topology capability explicit |
+| #149 | GKX JAX floor | Coordinate with GKX PR #86 and VMEX #194 |
+| #136 | QI/bootstrap optimization | Reuse objective composition and benchmark style |
+| #115, #114, #107, #104 | Optimizer-neutral API/examples and stale-gradient corrections | Do not add another optimizer framework |
+| #111 | Hot restart | Reuse in scans, continuation, and performance matrix |
+| #110 | In-process Boozer and 3x3 summary diagnostics | Extend rather than replace in Phase 5 |
+| #109 | GPU decision sweep | Preserve device-policy evidence |
+| #101 and #99 | Free-boundary geometry reuse and sequential multigrid compilation/memory policy | Baseline for Phase 3; overlap remains opt-in |
+| #150 | Correction of overstated performance claims | Apply the same evidence discipline to every new claim |
+| #153 and #172 | CI activation and WSL2/CUDA diagnosis | Preserve platform checks and typed diagnostics |
+| #125 | Former root plan | Superseded by this dated implementation plan |
 
-The live `--run-vmec2000` LASYM parity tests **pass** on this build (3 passed).
-An earlier report of them failing came from the 2024 tree; those failures were
-the reference, not vmex.
+Commit-level review also confirmed that the latest main contains the radial basis, strong-force oracle, polishing preconditioner, mirror gyrokinetic geometry, current performance benchmarks, and extensive capability tests. Before beginning a phase, use `git log --first-parent`, open/closed PR search, and changed-file inspection to update this disposition rather than trusting issue titles alone.
 
-**Upstream moved the normalization and every citation of it was stale.**
-STELLOPT_new's `fixaray.f:105` sets `dnorm = 1/(nzeta*(ntheta2-1))`
-unconditionally — no lasym branch — and `jxbforce.f:233` has
-`dnorm1 = 2*dnorm1` **commented out**. The 2024 tree had the lasym branch and
-the active doubling. The two routes give the same number
-(`2 * 1/(nzeta*2*(ntheta2-1))` = `1/(nzeta*(ntheta2-1))`), so vmex's value was
-always right, and `fourier.py:282-283` already matches the current tree
-exactly. Six prose sites cited the old mechanism as present-tense fact and now
-describe the net weight instead; `SPH012314` no longer appears anywhere in
-vmex. Worth remembering: `fourier.py`'s module docstring had been contradicting
-its own code 250 lines below.
+---
 
-Two gaps worth closing later, neither blocking:
-- Both LASYM goldens are non-converged runs. `up_down` NITER-exhausts
-  (fsqz 1.11e-13 against ftol 1e-14), and `cth_like_free_bdy_lasym_small` sits
-  at fsqr 0.129. A fresh run reproduces both faithfully, so they are valid
-  bit-reproducibility fixtures, but neither is a physics anchor.
-- `confinement.rst` calls the bundled deck "finite-beta"; it ships `AM = 0.0`,
-  so `presf` and `DWell` are identically zero and finite beta exists only as a
-  test-fixture override. No LASYM golden exercises `DWell` against VMEC2000.
-- 2026-08-19 claude: verified every #118 LASYM claim against STELLOPT_new; all hold, goldens are current, live tests pass. Upstream refactored the dnorm mechanism, so six citations were rewritten to the net weight.
+## 5. Non-negotiable architectural decisions
 
-### Two judgment calls left for the maintainer
+### 5.1 Polishing is a nearby branch solve, not a global design optimization
 
-**"Experimental" labels.** `examples/README.md:64` and
-`docs/explanation/adjoint-gradients.md:92` describe the coupled NESTOR adjoint
-and the free-boundary Schur lane as experimental, and `docs/all-of-vmex.md:103`
-says the same of GPU support. The no-experimental-lanes rule is about scaffolds
-and dead alternatives in the source, and there are none — `vmex/` has no TODO,
-FIXME, HACK, testbed or experimental marker anywhere. These three are honest
-maturity caveats on shipped lanes, and the free-boundary one has earned it: a
-real derivative defect turned up there today (#128). Deleting the word would
-overstate readiness, so they stay until the lane is anchored end to end.
+A general nonlinear MHD equilibrium does not come with a practical global-minimum guarantee. Do not promise one. The production algorithm should instead be deterministic and branch preserving:
 
-**Repo size** is fine: `docs/_build` is 30 MB locally but untracked and
-gitignored, and no PR in the queue adds a data file.
-- 2026-08-19 claude: added a LASYM Mercier decomposition anchor (DWell 1.5e-7, DShear 7.6e-10, DCurr 2.2e-3, DGeod 3.2e-3 vs fresh xvmec2000); corrected the finite-beta doc claim; repo-wide scaffold scan clean.
-- 2026-08-21 rogeriojorge: reconciled the full plan against `main` at `0362f701` and the
-  post-#123 audit. Added the interruption-safe checkpoint and research-grade completion map;
-  made #122/#125 persistent open specification/ledger PRs; corrected ESSOS #61 from “done” to
-  open/unreleased; recorded P22's exact fail-closed Jacobian contract and remaining stale-key
-  gap, P23's 0.6.0 release gates, P24's three post-merge evidence debts, P25's measured CI
-  bottlenecks and bounded parallelization, P26's ecosystem ownership, and P27's final capability
-  matrix. The implementation remains uncommitted in `rj/release-0.6-hardening`; resume with the
-  focused contract tests and degraded-LASYM end-to-end gate before publishing it.
-- 2026-08-21 rogeriojorge: corrected the ESSOS authority and ordering. ESSOS #58/#61 require
-  independent ESSOS maintainer review and merge, remain last in the program order, and do not
-  block VMEX 0.6.0. VMEX 0.6 must work against released ESSOS 0.16 and defer or explicitly
-  development-gate the new interfaces; after an external ESSOS 0.17 release, VMEX can replace
-  any nightly branch pin and publish the compatibility follow-up.
-- 2026-08-21 rogeriojorge: P22/P25 — published draft PR #131 at `b4a68570`. Closed the stale-key
-  Jacobian gap, added fail-closed certificate evidence and host/JAX policy tests, fixed the
-  forward-GMRES certificate report, and retained exact rejected-trial penalty derivatives.
-  Numerical derivative gates passed; normal LASYM cost fell 21.70 -> 2.03 in 125 s; local core,
-  implicit and field lanes passed in 3:57, 6:43 and 2:29; changed-line coverage is 97.6%.
-  Released ESSOS 0.16 passes VMEX's core coil/CLI/VC contracts. PR #131 remote CI/review and the
-  Phase 23 ESSOS-facing example audit are next; #122/#125 stay open, and ESSOS #58/#61 stay last
-  for independent ESSOS maintainer action.
-- 2026-08-21 rogeriojorge: P23.2 audit — released ESSOS 0.16 passes the VMEX core coil/CLI/VC
-  contracts, but nine shipped examples use APIs available only in open ESSOS #58. The exact
-  inventory and release treatment are now in P23.2: development-gate those scripts, remove them
-  from stable 0.6 claims/Nightly, retain the released 0.16 examples, and never vendor the missing
-  ESSOS functionality into VMEX. This is the next small PR after #131; ESSOS review/merge remains
-  external and last.
-- 2026-08-21 rogeriojorge: P25 — PR #131's first remote run measured field API 8:54 but
-  implicit response 16:45, worse than its 12:46 serial baseline and outside the 15-minute gate.
-  Restored only the implicit-response lane to serial in `0e991596`; its replacement run and a
-  second consecutive qualifying run are required before review/merge.
-- 2026-08-21 rogeriojorge: P23.2 — published stacked draft PR #132 at `292bcdac`. The audit found
-  and fixed a real ESSOS 0.16 blocker: all three bundled coil JSONs used only unreleased loader
-  keys. The key-only compatibility change preserves geometry to 6.7e-16 and currents to
-  floating-point reconstruction precision; the real free-boundary example passes with both
-  loaders in about 21 s. Nine 0.17-only examples are now explicit previews, and release CI no
-  longer installs an unreleased ESSOS commit. #58/#61 remain external, independently reviewed,
-  and last.
-- 2026-08-21 rogeriojorge: P25 — replaced the variable 14:55--19:16 monolithic implicit lane
-  with two serial compile-shape lanes and an isolated free-boundary-adjoint lane in `326ba760`.
-  The exact selected contract is preserved and two fast policy tests now cover the previously
-  missed changed lines. Local timings are core 2:57, implicit-A 3:22, implicit-B 3:53 and the
-  free-boundary adjoint 1:19; the new remote runs are pending and two qualifying runs remain
-  mandatory.
-- 2026-08-21 rogeriojorge: P24 — published the #128 solved-gradient follow-up as stacked draft
-  PR #133 at `31dd34b2`. Its independent cold-resolve certificate is 4.2% from the corrected
-  adjoint and fails the former frozen normalization by over 4,000x. Accepted #130 after a fresh
-  max-mode-9 QA campaign: final high-resolution QS `6.12e-5`, aspect 3.5000, iota -0.4340,
-  magnetic well 0.0687, 3,873 final iterations and 38.3 minutes wall time.
-- 2026-08-21 rogeriojorge: P24 #118 re-audit — the supposed vacuum-only gap was stale. The
-  merged LASYM fixture explicitly sets pressure and has beta `2.24e-4`, peak pressure 4.79 kPa
-  and `max(abs(DWell)) = 4.58e-5`. The live per-term test passes against current local STELLOPT
-  `v6.5.0-42-g9177f58c` in 8.5 seconds; the pinned decomposition and DMerc tests pass in 8.7
-  seconds. No new asset or proxy is justified. All three named Phase-24 debts now have evidence;
-  #128 remains in review as PR #133.
-- 2026-08-21 rogeriojorge: P25 acceptance — two consecutive remote runs are fully green,
-  including changed-line coverage and the PR gate. Run 32536701497's longest jobs were
-  implicit-B 11:12, core 11:00 and mirror spline 10:04; run 32536709789's were implicit-B 11:20,
-  core 10:53 and mirror spline 10:04. Every lane stayed below 12 minutes without weaker physics,
-  resolutions or tolerances. P25 is complete in draft PR #131 and awaits user review; no VMEX
-  PR was merged. PR #133's own review CI was then started separately.
-- 2026-08-21 rogeriojorge: P24/P23 — PR #133 review CI is fully green; its longest jobs were
-  core 11:21, implicit-B 10:54 and mirror spline 10:00. Published stacked draft PR #134 at
-  `14553796` for the final 0.6.0 artifacts. It also closes a release-safety hole: manual dispatch
-  previously entered the PyPI publish job, while the new workflow makes manual runs
-  build/verify-only and requires a published GitHub release for PyPI. Local wheel/sdist builds
-  are 573/894 KiB; both clean Python 3.12 installs report 0.6.0 and converge the smoke solve.
-  PR #134 review CI and docs linkcheck are green. Corrected manual run 32542322776 passed the
-  source-free wheel/sdist verification on Python 3.10 and 3.12; publish/latest jobs were skipped.
-  No PR was merged and no tag, release or package publication was performed.
-- 2026-08-21 rogeriojorge: P23/P25 — candidate Nightly run 32543383359 is fully green; its
-  longest optimization job was QH at 4:04 and optional integrations took 5:40. GPU run
-  32543384593 was cancelled after both office GPUs were found occupied by unrelated nonlinear
-  campaigns; it is nonqualifying and must be rerun uncontended. Audited the old Weekly success
-  31236274932: the high-mode campaign took 2:41:53 (including a 7,550 s nonconvergent generated-
-  coil test) and mirror refinement 1:29:27. Published stacked draft PR #135, now at `07b0181a`.
-  It replaces that weaker survival test with the converged 238-mode free-boundary VMEC2000
-  parity/radial-restart certificate, shards fixed/free high-mode jobs, retains the mirror
-  0--80% continuation and original fine-grid tolerances, and caps each job at 60 minutes.
-  Local fixed/free high-mode tests passed in 4:39/16:27. The first hosted run passed those jobs
-  in 16:21/48:45 and the adjoint in 5:55, but its three-beta mirror refinement hit the one-hour
-  cap. The exact fallback passed locally in 13:46: it keeps the 0--80% continuation/restart and
-  fine-grid 0--10% convergence, without repeating the non-promoted 50% point. Hosted run
-  32549286300 is pending.
-- 2026-08-22 rogeriojorge: P23/P25 — finalized draft PR #135 at `a4e4b37f`. The second hosted
-  run passed the revised mirror lane in 55:01 but showed that the 15->25 free-boundary radial
-  ladder could still reach the one-hour boundary. Reduced only that ladder to 11->19 while
-  retaining all 238 Fourier modes, vacuum activation, active-vacuum restart, 1e-8 convergence
-  and VMEC2000 parity. The exact local test passed in 17:45; independent VMEC2000 goldens
-  converged both rungs and agree in `r00`, `wb` and edge iota. PR run 32554820509 is fully green
-  with its longest direct job at 10:50. Final Weekly run 32554856698 is fully green:
-  adjoint/fixed/mirror/free 4:45/16:17/47:54/56:43. Nightly and all CPU gates now qualify; the
-  sole remaining campaign gate is an uncontended trusted-GPU run after the user's unrelated
-  office campaigns release both GPUs. ESSOS #58/#61 remain external, independently reviewed,
-  and last; no VMEX PR, tag or release was merged or published.
-- 2026-08-22 rogeriojorge: P22/P23/P25 — deferred GPU work by explicit user decision. The
-  cancelled trusted-GPU run remains nonqualifying evidence, but its replacement is no longer a
-  0.6 release gate. CPU correctness, Nightly and bounded Weekly campaigns qualify the release;
-  no new GPU/free-boundary performance claim is added. Before any later GPU/HPC promotion,
-  rerun the trusted campaign on an idle host and record software versions, peak memory and cold/
-  warm timing. Began the final #131 audit: removed the repository changelog, rewrote the
-  unmerged branch history, simplified the derivative contract prose, renamed the certificate
-  policy helpers for clarity, and added the missing host non-finite-matrix check.
-- 2026-08-22 rogeriojorge: P22/P25 — merged PR #131 as `26419313` after final CI run
-  32595918128 passed every gate. Changed-line coverage and the aggregate gate passed; the longest
-  direct lane was implicit-response B at 12:08. The release stack was rewritten without the
-  changelog: #132 `90a920c1` is ready on `main`; #133 `57a9a2e1`, #134 `b12b5d7b`, and #135
-  `097e9271` remain stacked drafts. Their source, tests, documentation and PR descriptions were
-  audited for concise scope. GPU work remains deferred under the evidence rules above.
-- 2026-08-22 rogeriojorge: P23 — named ESSOS branch `rj/vmex-optimization-interfaces` and PR #58
-  in every #132 preview, error, README and detailed documentation site; added the exact git pip
-  command. Both released ESSOS 0.16 behavior and the branch API imports pass. Restacked heads are
-  #132 `08d53c35`, #133 `e7c9f3b7`, #134 `67d5e25b`, and #135 `2dae833b`.
-- 2026-08-22 rogeriojorge: P23 — merged PR #132 as `fe26e746` after all 13 direct jobs,
-  changed-line coverage, docs linkcheck and the aggregate gate passed. Restacked #133 on `main`
-  at `461aa172` and marked it ready for review; #134 `32af8386` and #135 `6560ac8f` remain
-  stacked drafts. ESSOS #58 remains an external, independently reviewed prerequisite for the
-  nine development-preview examples; ESSOS #61 remains separate and neither was merged.
-- 2026-08-22 rogeriojorge: P23/P24 — PR #133 post-restack run 32598842209 passed all 13 direct
-  jobs, changed-line coverage and the aggregate gate. The longest direct jobs were implicit-B
-  11:17 and core 11:15. #133 is the sole ready review target; #134/#135 remain drafts.
+1. converge the ordinary VMEX equilibrium;
+2. construct the high-order axis-regular state;
+3. solve the physical collocation least-squares system with damped Gauss-Newton;
+4. use residual/load continuation and pseudo-transient globalization when needed;
+5. use pseudo-arclength only when a continuation fold is detected;
+6. certify the result on an independent grid.
 
-## Standing policy updates (2026-08-22, maintainer decisions)
+Near a regular solution, Gauss-Newton/Newton gives fast local convergence. Farther away, the existing VMEX solve and continuation are the globalization mechanisms. There should be one promoted algorithm and one automatic policy, not a public menu of unrelated optimizers.
 
-**Version: 0.6.0 confirmed.** The maintainer approved the minor bump over
-0.5.1; PR #134's number stands. Rationale on record: #117 rejects decks that
-previously ran, #127 shifts LASYM Boozer spectra on coarse grids, #126/#128
-change gradients, #118 enables a lane that returned invalid.
+### 5.2 Keep VMEC compatibility and high-order physics as two representations
 
-**All verification is local until further notice.** GitHub Actions minutes are
-exhausted. Every PR must pass, locally and on a branch current with main, the
-same matrix CI ran: ruff + mypy + `python -m build` + `sphinx -W`, the
-`pr-fast` selector under `-n 4`, all nine physics selectors, `pr-device`, the
-mirror coverage floor (>=90%), and the changed-line gate (>=95% via
-diff-cover). The runner lives at the session scratchpad
-(`localci/run_ci.sh`); it writes per-job logs and a PASS/FAIL summary. Record
-the summary in the PR body in place of the green checks. Merges use the
-existing admin path once the local matrix is clean.
+- `SpectralState` remains the VMEC-compatible state and restart/output contract.
+- `NativeEquilibrium` is the continuous high-order representation used for force certification, accurate derivatives, and downstream physics.
+- Conversions are explicit and tested in both directions.
+- WOUT is a compatibility export, not the canonical differentiable in-memory object.
 
-**ESSOS merges are decoupled from vmex merges.** ESSOS pull requests need a
-second reviewer, so nothing on the vmex side may hard-depend on unmerged ESSOS
-API. Consequences for Phase 21:
-- `vmex --trace` and `trace_alphas` build on **released** ESSOS only — the
-  file-based `essos.fields.Vmec` and the exact `Tracing.loss_fraction`, both
-  in the installed 0.17 line.
-- The differentiable objective (`alpha_loss_fraction`) additionally needs
-  `Vmec.from_arrays` and the smooth surrogate from uwplasma/ESSOS#61
-  (open, awaiting review). It must feature-gate on
-  `hasattr(essos.fields.Vmec, "from_arrays")` and raise a clear
-  `NotImplementedError` naming the required ESSOS version otherwise — no
-  vendored copy of the surrogate in vmex, no waiting on the merge to land the
-  rest of the phase.
+### 5.3 Separate physical convergence from algebraic convergence
 
-**PR #122 base fixed.** It sat on `rj/simplify_examples` (long merged, 58
-commits stale), inflating its diff to +13,937/-3,073; retargeted to main it is
-+98/-0 in one file, the original example. The scope confusion was the base,
-never the content.
+Every solve report must distinguish:
 
-**Phase 21 next increment [DOING]:** `feat/traceable-field-tables` — extend
-`boozer_input_tables` with wout-convention `bsupumnc/bsupvmnc/gmnc/bsubsmns`
-(+ LASYM partners), gated against vmex's own wout rows at ~1e-13*scale on a
-symmetric and a LASYM deck, with a finite nonzero boundary jvp. This is the
-vmex-side prerequisite that depends on no ESSOS API at all.
-- 2026-08-22 claude: policies recorded — 0.6.0 confirmed, local-CI matrix mandated (Actions exhausted), ESSOS decoupling for P21, #122 base fixed to main; traceable field tables in flight.
+- legacy `FSQR/FSQZ/FSQL`;
+- least-squares optimality `||J^T r||`;
+- strong-force residual on the solve grid;
+- strong-force residual on an independent validation grid;
+- refinement difference;
+- Jacobian/nestedness/admissibility;
+- linear-solve true residual;
+- derivative certificate.
 
-## Literature and ecosystem review (2026-08-22) — corrections and new phases
+No one number substitutes for the others.
 
-Two independent sweeps: the 2025-2026 literature against every physics
-commitment in this plan, and deep dives into DESC v0.17.3, MRX, GVEC, the
-mirror landscape, and VMEC++. Verdicts and what changes.
+### 5.4 SOLVAX owns generic algebra; VMEX owns equilibrium physics
 
-### Corrections to standing phases
+SOLVAX may own:
 
-**Phase 6 (eps_eff): current; citations refreshed.** The bounce-averaging
-reference is published — Unalmis, Gaur, Conlin, Panici, Kolemen, JPP 92(3),
-2026, DOI 10.1017/S0022377826101652 — cite that, not the preprint. DESC ships
-`EffectiveRipple` and `GammaC` on that kernel; SIMSOPT still has no
-differentiable eps_eff, so VMEX would be the second AD implementation. Add
-positioning context so the docs never imply eps_eff differentiability is the
-frontier: yancc (Conlin & Landreman, arXiv:2607.20861, 2026) differentiates
-the full 4-D drift-kinetic problem, and MONKES (Escoto et al., NF 64, 076030,
-2024) is the reference-grade monoenergetic ladder rung.
+- matrix-free damped Gauss-Newton;
+- GMRES/GCROT/PCG/LSMR-like Krylov methods;
+- pseudo-transient continuation;
+- continuation and pseudo-arclength infrastructure;
+- structured direct solves and preconditioners;
+- implicit differentiation wrappers;
+- compile/work diagnostics that are physics agnostic.
 
-**Phase 16.1 (ballooning): attribution fixed.** The growth-rate-as-target
-formulation is Gaur, Buller, Ruth, Landreman, Abel, Dorland, JPP 89 (2023),
-DOI 10.1017/S0022377823000995, extended in Gaur et al., PPCF 67, 125015
-(2025); Kappel-Landreman-Malhotra PPCF 66 (2024) is the L_gradB paper only
-(Phase 14 cites it correctly). Current mechanism is AD through the solver, not
-the adjoint identity; finite-n is arriving (AGNI, arXiv:2608.01750). A VMEX
-ballooning objective is parity work and should say so.
+VMEX owns:
 
-**Mercier near-axis policy (applies to Phase 27.3 and the DMerc anchors).**
-VMEC's DMerc is unreliable near the axis (radial finite differencing, worst in
-DGeod); Landreman et al. 2026 gate on `min_{s>0.2}` for exactly this reason,
-citing Panici et al. JPP 89 (2023). Default Mercier/Glasser objectives to
-exclude s <= 0.2 (documented, overridable), and validate near-axis behaviour
-against near-axis theory — Landreman & Jorge JPP 86 (2020); Kim, Jorge,
-Dorland JPP (2021) — not against VMEC2000 parity, which near the axis is
-agreement with a known-inaccurate number. Name Glasser PoP 30, 052502 (2023)
-as the generalized non-axisymmetric criterion in the docs.
+- state charts and constraints;
+- equilibrium residuals;
+- force normalizations;
+- admissibility;
+- boundary conditions;
+- physics-based preconditioner construction;
+- native equilibrium and output semantics.
 
-**QI targets (Phases 13/27): add a second, independent residual.** The field
-diversified in 2026 — Dudt et al. JPP 90 (2024) omnigenity maps (DESC
-`Omnigenity`), OOPS unified-symmetry residuals (Liu et al., arXiv:2502.09350),
-J-action residuals (Chen et al., arXiv:2608.02418), iso-action (Sengupta et
-al., arXiv:2608.20042). `ConstructedQIResidual` alone is self-consistent;
-cross-check QI quality with one independent formulation (omnigenity-map or
-J-action).
+Do not put VMEX geometry or pressure assumptions into SOLVAX.
 
-### Phase 21 restructured — the fast-ion objective, at the 2026 evidence bar
+### 5.5 Consumer-side adapters are preferred
 
-The mechanism survives review; the emphasis and the evidence standard change.
+The producer exposes a small stable protocol and arrays. The consumer owns semantic conversion when possible:
 
-- **Primary differentiable objective: Gamma_c**, not the smoothed loss
-  fraction. VMEX has the bounce machinery; DESC validates the approach
-  (`GammaC` on the Unalmis kernel); the direct-loss literature itself
-  motivates proxies. Velasco NF 61 (2021) is the model reference.
-- **`soft_loss_fraction` stays as the secondary/verification target and the
-  novelty claim.** Nothing published smooths the loss fraction itself — the
-  2026 state of the art for direct loss optimization is gradient-FREE
-  (Bindel-Landreman-Padidar PPCF 65 (2023); Landreman et al. Bayesian,
-  arXiv:2606.19523, tracing via CATAPULT arXiv:2604.07617), and their stated
-  reason is not the zero gradient but chaos: the objective is not a smooth
-  function of shape. So the claim to defend is not "the gradient exists" but
-  "descending the surrogate descends the exact loss".
-- **Evidence bar for the paper/tests:** (a) surrogate gradient stability under
-  seed and particle-count resampling — the current single-seed, 200-particle
-  demonstration shows value convergence only; (b) a smoothness scan of exact
-  and surrogate loss along one boundary-coefficient ray; (c) one full
-  optimization where the exact loss fraction, re-measured with an independent
-  seed, decreases; (d) consider the Landreman-2026 time-to-threshold form
-  `f = -log10(t_M)` as a smoother measured quantity than the loss fraction.
-  Anchors to add to 21.6: Bader NF 61 (2021), Paul NF 62 (2022) — proxies are
-  imperfectly correlated with EP confinement, which is the whole case for a
-  direct differentiable target.
-- **`vmex --trace` is parity, not a differentiator** — DESC v0.17.0 ships
-  `desc.particles.trace_particles`. Say so in the docs.
-- Deck-inventory correction from review: the free-boundary evidence base is
-  two nfp=5, ntor=4 CTH-like decks (one LASYM) plus the ntor=0 DIII-D deck;
-  the publication gap is an independent geometry family, not 3-D coverage.
+- BOOZ_XFORM_JAX owns the Boozer transform;
+- ESSOS owns coils and orbit integration;
+- VIRTUAL_CASING_JAX owns virtual-casing quadrature;
+- GKX owns gyrokinetic normalization and local simulation input;
+- DKX owns neoclassical geometry normalization.
 
-### Phase 28 — Publish the free-boundary adjoint [NEW, HIGHEST VALUE]
+VMEX may provide convenience adapters, but it should not duplicate whole downstream codes.
 
-No published implementation differentiates through a coupled VMEC-NESTOR
-free-boundary root; VMEC++ has no AD and none planned; SIMSOPT is
-finite-difference; DESC's free boundary is differentiable but by a different
-mechanism (proximal linearization over virtual casing, arXiv:2412.05680).
-Priority is perishable — Fu, Panici, Paul, Kaptanoglu, Bhattacharjee PoP 33
-(2026) already publish an adjoint of a coil-proxy subproblem.
+---
 
-What the paper needs: (1) the coupled certificate (adjoint vs central FD
-through full re-solves) on at least two geometry families — add one
-non-CTH free-boundary deck with mgrid; (2) cost scaling vs finite differences
-in dofs x solves; (3) a head-to-head with DESC's ProximalProjection on a
-shared problem, framed as mechanism comparison, never as "no one else can";
-(4) positioning against the analytic free-boundary adjoint relation of
-Antonsen, Paul, Landreman JPP 85 (2019) — reviewers will ask why the IFT
-through the discrete solver is preferable; the answer is exactness to the
-discretization and composability with JAX, and it must be stated. Verify the
-plan's "Paul et al. JPP 2020 Eq. 6.1" pointer resolves to Paul, Antonsen,
-Landreman, Cooper JPP 86 (2020), the free-boundary applications paper.
+## 6. Target public API
 
-### Phase 29 — Research-grade mirror program [NEW]
+### 6.1 Input-file directive
 
-The mirror branch is the clearest first-mover territory: nobody has a
-differentiable mirror equilibrium, and non-axisymmetric mirrors are unique to
-VMEX. The reference tool to beat is Pleiades as evolved by Frank et al., PoP
-33, 032504 (2026): anisotropic p_par/p_perp with self-consistent sloshing-ion
-peaking and Bayesian reconstruction with UQ, applied to WHAM.
+Use a VMEX comment directive outside or inside `&INDATA`:
 
-29.1 Anisotropic pressure closure (ANIMEC-class bi-Maxwellian force balance;
-     `input.py:598` currently rejects it). DESC has
-     `ForceBalanceAnisotropic`; VMEX needs it most in the mirror branch.
-29.2 Sloshing-ion pressure models: parametric turning-point-peaked profiles
-     first, CQL3D-m-informed tables later (Harvey, IAEA 2026).
-29.3 Differentiable mirror stability metrics: m=1 rigid ballooning
-     (Kotelnikov JPP 2025, arXiv:2406.10488), FLR and conducting-wall
-     criteria (NF 2023), toward the first gradient-based mirror shape
-     optimization — no published equivalent exists.
-29.4 Reconstruction mode: profile-basis fit to synthetic WHAM-class
-     diagnostics with gradients replacing the black-box loop of Frank 2026.
-     High-beta anchors: Chernoshtanov arXiv:2512.01780 (diamagnetic-bubble
-     equilibria to beta ~ 1), Khristo-Beklemishev arXiv:2408.06792.
+```fortran
+!@VMEX POLISH = AUTO
+!@VMEX POLISH_TOL = 1.0E-8
+!@VMEX POLISH_FAIL = ERROR
+!@VMEX POLISH_DEGREE = 5
+&INDATA
+  ... ordinary VMEC2000 input ...
+/
+```
 
-### Phase 30 — Performance and memory ergonomics [NEW]
+VMEC2000 treats these lines as comments and solves the ordinary input. VMEX parses them before stripping comments. Do **not** add an unknown `LPOLISH` variable to `&INDATA`; legacy namelist readers may reject it.
 
-DESC's most user-visible documented advantage is not physics, it is memory
-ergonomics: `jac_chunk_size` with an explicit `m0 + m1*chunk` memory model,
-per-objective forward/reverse `deriv_mode`, documented cache workflow. VMEX
-already has `jacobian_batch_size`; close the rest:
-30.1 Documented memory model for the implicit-Jacobian assembly (measure the
-     two coefficients, put them in the performance docs).
-30.2 Per-objective fwd/rev derivative mode where the residual shape warrants.
-30.3 Multi-device batched ensembles: `vmap` + `shard_map` beta/boundary scans
-     on multi-GPU. DESC is single-device and VMEC++ CPU-only — this is an
-     open headline claim, and `parallel.solve_ensemble` is the seed.
-30.4 Persistent-compilation-cache + hot-restart workflow doc — the JAX answer
-     to VMEC++ hot restart (whose free-boundary variant remains a roadmap
-     item on their side). Mixed-precision inner linear solves (fp32 Krylov
-     under fp64 residuals) is unpublished territory for equilibria: worth one
-     bounded experiment, not a commitment.
+Structured JSON uses:
 
-### Phase 31 — Ecosystem positioning [NEW]
+```json
+{
+  "mpol": 8,
+  "ntor": 6,
+  "_vmex": {
+    "polish": "auto",
+    "polish_tol": 1e-8,
+    "polish_fail": "error",
+    "polish_degree": 5
+  }
+}
+```
 
-31.1 [DONE — #141] Gamma_c objective. Nemov PoP 15 (2008) eq. 61 in the
-     transit-stable rewrite, per Velasco NF 61 (2021); the literal Velasco
-     line-integral form was implemented first and measured to invert the
-     QA-vs-CTH ordering through its secular shear term, matching DESC's
-     recorded caveat. Anchors: exact axisymmetric limit 9.8e-7, DESC parity
-     2.8% on a shared li383 wout, ripple ray co-moves with eps_eff. Known
-     limitation, documented not hidden: the boundary-gradient magnitude
-     carries ~4.6x superbanana-layer sampling scatter (sign stable) — the
-     objective is for fixed-resolution optimization, as its docstring says.
-     Two candidate gates were removed because refinement showed they could
-     not hold.
-31.2 `ExternalObjective` escape hatch (FD or user-VJP wrapping of non-JAX
-     codes, TERPSICHORE/GX-style). DESC's v0.16-0.17 arc shows the demand;
-     GX/GKX integration is the local use case.
-31.3 Golden parity extended to VMEC++ alongside VMEC2000, and a
-     ConStellaration-style benchmark entry (arXiv:2506.19583) — no public
-     benchmark yet includes a differentiable code.
-31.4 Watch list, no action: MRX (arXiv:2510.26986) — differentiable FEEC
-     non-nested-surface relaxation, the complementary lane, revisit if islands
-     matter; GVEC (JOSS 2026) — fixed-boundary, no AD; its radial-B-spline
-     axis treatment and generalized frame (Hindenlang PPCF 2025) are the two
-     adoptable ideas if axis conditioning ever becomes the binding constraint.
-31.5 Redl-consistency-as-objective and fusion-power/ISS04 scalarizers, small
-     additions users coming from DESC expect.
-- 2026-08-22 claude: literature+ecosystem review baked in — Phase 21 restructured (Gamma_c primary, surrogate as novelty claim with the 2026 evidence bar), Mercier near-axis policy, ballooning attribution fixed, Phases 28-31 added (free-boundary publication, mirror program, performance ergonomics, positioning).
-- 2026-08-23 claude: P23 COMPLETE — the release stack was #133 <- #134 <- #135 (stacked, not parallel); #135 folded into #134 on merge, #133 then #134 landed on main, tree verified content-identical to the 16/16 local matrix run before each merge. enforce_admins was toggled off for one merge and restored immediately, because the required PR-gate check can never report with Actions out of minutes. v0.6.0 tagged at 274e7ac2, GitHub release published with local-verification note; PyPI publish waits on Actions minutes or a manual twine upload. Still open: #136 and #137 (need their local matrices), #122/#125 (not for merge).
-- 2026-08-23 claude: P28 first deliverable — PR #140 adds the NCSX c09r00 free-boundary family (nfp=3, beta 4.1%, public coils, 4.3 MiB mgrid at kp=NZETA). VMEC2000 v6.5.0-42-g9177f58 converged first try; vmex parity 100-1000x inside the CTH gates with vacuum activation at the identical iteration; PF5 adjoint-vs-FD 3.6e-3. Caveat recorded: weak channels (ModA, 7.4e-10/A) sit at the solver-endpoint FD floor — certificate uses the conditioned channel. Environmental: a 1.6 GiB at-cap JAX compile cache reproducibly SIGILLs in PyClient::DeserializeExecutable; all runs verified with VMEX_COMPILATION_CACHE=disabled. Follow-up: reproduce and either cap-with-evict-verify or report upstream.
-- 2026-08-23 claude: P21 — PR #138 ships trace_alphas + vmex --trace against released ESSOS only (0.16 wheel surface verified; energies reconstructed locally where 0.16/dev disagree); differentiable objective stays gated on ESSOS#61 + #137. #122 superseded. PR #139 fixes the full-lane smoke figure count (plot_wout writes six since #118). #136 merged after a 16/16 matrix.
-- 2026-08-23 claude: merged #138 (vmex --trace; matrix 15/16, docs docstring fixed, docs rebuilt clean), #139 (smoke figure count; direct-run evidence, matrix would exercise zero changed lines), #140 (NCSX family; mgrid moved to the fetch-assets flow after the 1 MiB tracked-file gate caught the 4.3 MiB commit — release assets-20260823-ncsx, byte-identical round trip; fast selector 443 passed). #122 closed as superseded by #138. Phase 28's second geometry family is on main. Gamma_c agent resumed after a session-limit cutoff with instructions to set tolerances from measured pitch-grid convergence, not to fit the gates.
-- 2026-08-23 claude: merged #141 (Gamma_c) after a 16/16 matrix and an independent 4-test spot-check; P31.1 done. Queue empty: only #125 (this plan) open. Phase 21's remainder is gated on ESSOS#61 external review.
-- 2026-08-23 claude: the "at-cap compile cache SIGILL" (P28 follow-up) root-caused and fixed —
-  PR #142. Not eviction or corruption: all 7440 entries of the 1.61 GiB cache are adler32-intact,
-  and the crash reproduces from a single intact entry in an unbounded fresh cache. Real cause:
-  jaxlib < 0.10 on macOS overflows a fixed-size worker-thread stack inside
-  PyClient::DeserializeExecutable (LLVM ORC materializes per-kernel Mach-O objects recursively;
-  synthetic boundary 200 kernels pass / 300 crash; jit_matvec 2107 kernels is the entry that
-  killed the 05:24 run; the split_count=128 flag is innocent). Verified fixed in jaxlib
-  0.10.0/0.10.2 (silent upstream fix, no changelog entry, no public issue). #142 defaults the
-  cache off on Darwin+jaxlib<0.10 only (explicit VMEX_COMPILATION_CACHE=1 / *_CACHE_DIR still
-  win; re-enables automatically on jaxlib upgrade), corrects the stale full-filesystem SIGBUS
-  docs paragraph, adds 3 policy units. Upstream report drafted, not filed (already fixed
-  upstream). Free-boundary runs on this Mac no longer need VMEX_COMPILATION_CACHE=disabled once
-  #142 lands; consider a jax/jaxlib >= 0.10 upgrade to get warm starts back.
+The physics schema remains VMEC++ compatible after `_vmex` is removed. Unknown `_vmex` keys fail explicitly.
 
-## ESSOS review ledger (2026-08-23) — for the external reviewer
+### 6.2 Python API
 
-ESSOS merges need a second human reviewer, so this is a brief, not a queue we
-drive. 17 open PRs; every claim in #61 was re-verified independently here.
+Keep the existing PR #192 keyword and add one file-oriented entry point:
 
-**#61 (differentiable loss fraction) — merge first, gates vmex Phase 21.**
-`Vmec.from_arrays` reproduces the file route bit-for-bit (B, AbsB,
-`surface.gamma`, a 4-alpha trajectory); the exact `loss_fraction` gradient is
-0.0; every surrogate value *and gradient* in the PR body reproduces to the last
-printed digit (w=0.02: 0.306422 / -1.341416e-01; w=0.001: 0.250049). 38 tests
-in 43 s. The exact diagnostic is untouched.
+```python
+import vmex
 
-**Merge order for the reviewer:** #61, #51 (doc trim), #59 (frozen dofs, 25
-passed), then the #52-#57 stack, then #58, then #49/#46 (retarget off the stale
-`eg/analysis` base), then #33.
+inp = vmex.VmecInput.from_file("input.case")
+result = vmex.solve(inp, polish="auto")
 
-**Conditions worth enforcing:**
-- The #52-#57 stack adds ~290 lines of event machinery with **zero tests**.
-  Require an event-vs-sampled equivalence test and a batching-equivalence test.
-- The stack breaks two of #61's tests when both land (verified on a merged
-  tree: 22/24). One-line fix, in the stack:
-  `getattr(self, "_has_event_metadata", False)` at `dynamics.py:1504` and
-  `:1561`.
-- #58 and #57 both add a progress story (`progress`/`devices` versus
-  `progress`/`particle_batch_size`); one should survive.
-- **#32 must not merge as it stands**: ~31 MB of `.focus`/`.npz` data
-  (`zot80.focus` alone is 11 MB) would enter history permanently.
-- #48 is mostly superseded, but carries a real bug worth salvaging: main's
-  `dynamics.py:749` assigns `self.rejected_steps = 100` in *both* branches of
-  its `if`.
+result2 = vmex.solve_file("input.case", polish="auto")
+```
 
-**Compatibility:** no open ESSOS PR removes or renames anything
-`vmex --trace` uses. The stack changes what `loss_fractions`/`lost_times`
-*mean* for VMEC guiding-centre traces (root-refined event at s=1.0 rather than
-sampled r>=0.99); the two agree exactly on the 8-alpha reference case, but
-published loss numbers can move on lossy cases.
+Recommended signatures:
 
-**`rj/coils_from_nearaxis`** is 151 commits behind and already conflicts with
-plain main. #61 moves the `Vmec.__init__` block it edits into `_set_state`;
-port its `raxis_cc`/`zaxis_cs` reads and the `s=` kwarg on rebase. Note the
-branch swaps the QA reactor-scale wout (548 KB -> 3.1 MB), so #61's documented
-loss table will not reproduce against it.
+```python
+def solve(
+    inp,
+    *,
+    polish: bool | str = False,
+    polish_config: PolishConfig | None = None,
+    **existing_kwargs,
+) -> SolveResult: ...
 
-## Distribution size (2026-08-23)
 
-Fresh clone from GitHub: **working tree 9 MB** (inside the 10 MB target),
-`--depth 1` clone 13 MB, full clone 39 MB of which 30 MB is the history pack.
-The pack is dominated by generated artifacts that predate this program plus
-#140's 4.4 MB mgrid, which was committed and then moved to the fetch-asset flow
-within the same PR — the blob stays in history. Phase 24 rules out rewriting
-published history, so the standing answer is: leave it, and point
-size-sensitive users at `--depth 1`. Revisit only if a rewrite is sanctioned
-for another reason.
-- 2026-08-23 claude: recorded the ESSOS reviewer ledger (#61 verified bit-for-bit, merge order, four enforcement conditions) and the measured clone sizes (tree 9 MB, shallow 13 MB, full 39 MB).
-- 2026-08-23 claude: corrected stale Phase 21 markers — 21.2 (#137), 21.2b and 21.3 (#138) shipped; 21.4 and the surrogate half of 21.5 are BLOCKED on ESSOS#61 being reviewed and released, not TODO. Only 21.6 (literature anchors) is genuinely open and unblocked.
+def solve_file(
+    path,
+    *,
+    polish: bool | str | None = None,
+    polish_config: PolishConfig | None = None,
+    write_wout: bool = True,
+    write_native: bool | str = "auto",
+    **solve_kwargs,
+) -> SolveResult: ...
+```
 
-## Phase 32 — The full-marked tests almost nothing runs [NEW, URGENT]
+`None` means use the file directive. Explicit Python arguments override the file. CLI arguments override both.
 
-A local sweep of `-m "full and not weekly"` across the whole suite on current
-main — more than any workflow runs — gave **9 failed, 100 passed, 3 skipped in
-4h14m**. The failures had gone unnoticed because **nothing executes them**:
+### 6.3 Result contract
 
-- 112 full-marked non-weekly tests exist.
-- Nightly runs four named campaigns (`full-opt-qi/qa/qh/qp`) resolving to
-  **4 test node ids**.
-- Weekly runs the four `weekly-*` campaigns.
-- Pull-request CI runs `-m "not full and not weekly"`, excluding them by
-  construction.
+A polished `SolveResult` should expose:
 
-So roughly **108 full-marked tests belong to no scheduled job**. The
-`full-core-*` lanes resolve correctly through `tools/test_manifest.py` — they
-are simply never selected by a workflow. Phase 25 called CI runtime complete;
-that was true for what CI runs, and this is the part it does not.
+```python
+result.state                 # VMEC-compatible state
+result.native_equilibrium    # high-order continuous state or None
+result.strong_force          # independent certificate or None
+result.polish_report         # primal/linear/refinement/timing report or None
+result.polish_context        # reusable static plan/cache object or None
+result.wout                  # optional in-memory WoutData
+```
 
-**Triage of the nine.**
+The result must also answer:
 
-*Environmental, fix by skipping (2):* `test_bootstrap_selfconsistent_examples`
-[QA] and [QH] exit 1 with "set VMEX_ZENODO_2205_02914 to the extracted Zenodo
-dataset". A test needing an optional external dataset must skip, not fail.
+```python
+result.is_polished
+result.require_polished()
+result.sample_flux_surface(...)
+result.boozer_inputs(...)
+result.boundary_surface(...)
+result.magnetic_field(...)
+```
 
-*Needs investigation (3):* `test_qi_optimization_example`,
-`test_scalar_optimizer_examples[QI_optimization_scipy.py]` and
-`[QA_optimization_scipy.py]` fail on stdout-regex assertions ("final cost",
-`QI total: seed ... -> final ...`). Either the examples stopped producing those
-lines or they stopped converging; scraping stdout with regexes is brittle
-either way.
+Convenience methods delegate to the native equilibrium when present and to the legacy adapter otherwise.
 
-*Real numerical gate (1):* `_assert_stability_gradients` on
-`basic_non_stellsym_simsopt`, direction `RBS(1,1)`:
-`AD=-2.7839366520e-05`, frozen-path FD `-2.7957426985e-05`, **rel 4.22e-3
-against a 2.0e-3 gate**, Newton residual 1e-14 (so the frozen solve converged).
-`RBS(1,1)` is an asymmetric m=1 mode — the channel #126 corrected — so the
-first hypothesis to test is whether the gate was calibrated before that fix and
-now compares a corrected AD against a reference that moved. Bisect across the
-#126 merge (88b005f7) before touching the tolerance. **Do not widen the gate to
-make it pass.**
+### 6.4 Precedence
 
-*Known, documented (2):* the NCSX free-boundary current gradient (#140 recorded
-the weak-channel FD floor, and the JAX cache SIGILL forces
-`VMEX_COMPILATION_CACHE=disabled`) and `test_free_boundary_537_modes_fft_auto_smoke`
-(~15 min, above the 512-mode automatic-FFT threshold).
+Use exactly:
 
-**Actions:** (1) skip-guard the Zenodo-dependent examples; (2) diagnose the
-three example assertions; (3) bisect the LASYM gradient gate; (4) wire the
-orphaned lanes into a scheduled workflow, budgeted — the sweep took 4h14m
-serially, so it belongs in weekly campaigns split by lane, not nightly.
+```text
+CLI option > explicit Python keyword > file directive > package default.
+```
 
-**Local-runner gap found the same way:** the CI quality job runs five commands
-and the local matrix replicated four, omitting `tools/check_docs_prose.py`.
-Main fails that gate today (`docs/howto/trace-alpha-particles.md`, from #138,
-uses a verb absent from the allow-list; fix in #144). The runner now matches
-the workflow exactly.
-- 2026-08-23 claude: Phase 32 opened — full-marked sweep on main gave 9 failed/100 passed in 4h14m; ~108 of 112 full-marked tests are run by no workflow. Triage recorded; the LASYM RBS(1,1) gradient gate (rel 4.22e-3 vs 2e-3) needs a bisect across #126, not a wider tolerance.
+Record the resolved source in the run report.
 
-## Size, corrected (2026-08-23)
+---
 
-The WebP conversion (#143) saves **0.58 MB**, not the ~2 MB first reported:
-`docs/_static` 3.17 -> 2.59 MB, tracked tree 7.93 -> 7.34 MB. The larger figure
-came from a measurement taken mid-conversion, with the deleted PNGs still in
-the index and the new WebP files not yet added, so it counted only untouched
-files. The per-file conversion log (2019.6 KB -> 1421.4 KB over 14 files) was
-right all along.
+## 7. Phase 0 - Review, reproduce, and merge PR #192
 
-Revised arithmetic for the 25 MB target: tree 7.34 MB + a blob-stripped pack of
-~13.6 MB puts a full clone near **21 MB**, inside 25 but with less headroom
-than stated. Two figures were already WebP and untouched —
-`readme_diagnostics_summary.webp` (518 KB) and
-`readme_diagnostics_qa_vacuum.webp` (278 KB) — worth a re-encode pass if more
-is needed.
+**Purpose:** make the existing polishing implementation the trusted baseline before extending its API or performance.
 
-## ESSOS#61 API ergonomics — recommendation for the reviewers
+### 7.1 Rebase and scope audit
 
-`Vmec.from_arrays` takes sixteen named arrays plus four options. It is
-**internal plumbing**: no vmex user calls it. The user-facing surface is
-`vmex --trace`, `trace_alphas(equilibrium)`, and the `alpha_loss_fraction`
-optimizable, each of which calls it once inside the adapter.
+- Rebase or merge current main into PR #192 without squashing away the experimental history until the final promoted code is reviewed.
+- Confirm no completed main functionality was reintroduced under a second name.
+- Verify that obsolete experimental modules, paths, and docs are removed from the final diff.
+- Produce a compact ownership map for:
+  - `radial_basis.py`;
+  - `strong_force.py`;
+  - `polish.py`;
+  - `polish_driver.py`;
+  - polished implicit differentiation;
+  - native field/surface/VC/Boozer adapters.
+- Ensure only the overdetermined collocation Gauss-Newton path is presented as production. If the square continuation path remains, mark it diagnostic/private and keep it out of the top-level API.
 
-Even so, sixteen positional arguments is a poor seam. The suggestion to put to
-the reviewers is a single-argument constructor that reads the wout names off
-whatever it is handed — a mapping or any object exposing them:
+### 7.2 Reproduce every headline result
 
-    Vmec.from_wout(source, *, ntheta=50, nphi=50, close=True,
-                   range_torus='full torus')
+Run the branch-provided commands in fresh processes and store:
 
-Duck-typing keeps ESSOS free of any vmex import, so the dependency direction is
-unchanged, and vmex's call collapses to one line built from
-`boozer_input_tables` plus `nfp`, `ns` and `Aminor_p`. Keep `from_arrays` as
-the explicit form underneath if anyone wants it. Raised as a review comment
-rather than a change, since #61 is under external review.
-- 2026-08-23 claude: corrected the #143 saving (0.58 MB, tree 7.93->7.34) after finding the first measurement was taken mid-conversion; merged #143 and #144; recorded the from_wout ergonomics suggestion for ESSOS#61's reviewers.
+- exact input hashes;
+- repository hashes;
+- dependency lock/version output;
+- host and device metadata;
+- precision and XLA flags;
+- compile/cache state;
+- raw per-stage timings;
+- peak RSS/device memory;
+- residual normalizations and grids.
 
-## Production sweep result (2026-08-23, main at v0.6.0 + merges)
+Reproduce at minimum:
 
-Run on a pristine GitHub clone, which also proves the repo is self-contained
-(fetch-assets included). More than any workflow runs.
+1. analytic Solovev comparison;
+2. finite-beta QA comparison;
+3. radial-refinement certificate;
+4. tangent-adjoint duality;
+5. Taylor test;
+6. explicit adjoint versus custom VJP;
+7. re-polished centered finite difference;
+8. downstream polished field, Boozer, virtual-casing, and ESSOS adapters.
 
-| phase | result |
+### 7.3 Cross-code fairness audit
+
+For VMEC2000, VMEC++, DESC, legacy VMEX, and polished VMEX:
+
+- use the same physical boundary, pressure/current/iota profiles, flux, and symmetry;
+- state every representation conversion;
+- separate solve resolution from evaluation resolution;
+- use one independent strong-force oracle where possible;
+- evaluate all codes on the same off-grid physical points;
+- exclude no axis/edge region without showing both the full and restricted metric;
+- report cold end-to-end, cold solver-only, persistent-cache reload, and warm execution separately;
+- do not use the polished VMEX oracle to evaluate only VMEX while using DESC's own objective for DESC.
+
+### 7.4 Merge gate
+
+PR #192 may merge when:
+
+- all required CI jobs are green;
+- changed-line coverage is at least 95%;
+- no derivative test relies only on another code path sharing the same VJP;
+- the independent validation residual decreases under at least one radial and one angular refinement;
+- no headline claim is broader than the measured cases;
+- WOUT/native representation semantics are documented;
+- `polish=False` is bitwise or tightly numerically compatible with main for the existing regression suite;
+- the PR no longer contains stale plan text or duplicated experiments.
+
+**Deliverable:** merged, reviewed polishing core with a reproducible evidence directory.
+
+---
+
+## 8. Phase 1 - Integrate polishing into input files, CLI, multigrid, and simple Python usage
+
+**Depends on:** Phase 0.
+
+### 8.1 Parse VMEX run options without changing the VMEC physics schema
+
+Add one small module, preferably `vmex/core/run_options.py`, containing:
+
+```python
+@dataclass(frozen=True)
+class RunOptions:
+    polish: bool | str = False
+    polish_tol: float | None = None
+    polish_fail: str = "error"
+    polish_degree: int | None = None
+    write_native: bool | str = "auto"
+```
+
+Responsibilities:
+
+- parse `!@VMEX KEY = VALUE` directives from raw INDATA text;
+- parse and validate `_vmex` from JSON;
+- return the cleaned physics text/data and run options;
+- reject duplicate conflicting directives;
+- reject unknown keys with a value-free typed error;
+- serialize directives when VMEX writes an input file;
+- preserve all ordinary Fortran comment and quote semantics.
+
+Do not add these fields to `VmecInput`; they control execution, not equilibrium physics.
+
+### 8.2 Preserve `VmecInput.from_file`
+
+`VmecInput.from_file(path)` should continue to return only a `VmecInput`. It should accept a reserved `_vmex` block by removing it before ordinary JSON schema validation.
+
+Add:
+
+```python
+read_input_request(path) -> InputRequest
+```
+
+where:
+
+```python
+@dataclass(frozen=True)
+class InputRequest:
+    input: VmecInput
+    options: RunOptions
+    source: Path
+```
+
+The CLI and `solve_file` use `InputRequest`; existing code using `VmecInput.from_file` remains valid.
+
+### 8.3 Add CLI controls
+
+Add minimal controls:
+
+```text
+--polish[=auto|true|false]
+--no-polish
+--polish-tol VALUE
+--polish-fail error|fallback|warn
+--polish-degree 3|5|7
+--native-output auto|yes|no|PATH
+```
+
+Do not expose every `PolishConfig` field on the CLI. Advanced settings remain Python-only or in `_vmex` with a documented expert section.
+
+### 8.4 Integrate at the correct point in multigrid
+
+- Run polishing once, after the finest fixed-boundary stage has converged.
+- Never polish every multigrid rung.
+- Do not run fixed-boundary polishing after a free-boundary solve until the coupled free-boundary polished residual is implemented; reject or explicitly fall back.
+- Reuse the finest runtime, mode tables, static basis plan, and low-order factorization when valid.
+- Preserve the ordinary VMEX state as a fallback checkpoint.
+- If `polish="auto"`, activate only when:
+  - the legacy solution converged;
+  - the problem is in the supported topology/physics set;
+  - the estimated strong-force error exceeds the requested threshold;
+  - sufficient memory is available for the selected chart and collocation plan.
+- Record why auto did or did not activate.
+
+### 8.5 Output semantics
+
+On successful polishing:
+
+1. sample the native equilibrium onto standard VMEC full/half grids;
+2. rebuild all WOUT quantities consistently from the sampled polished state;
+3. recompute legacy `FSQR/FSQZ/FSQL` on that sampled state;
+4. add nonstandard NetCDF attributes or a small extension group:
+   - `vmex_polished`;
+   - native degree and spans;
+   - solve-grid and validation-grid strong residuals;
+   - refinement difference;
+   - polish iterations and reason;
+   - source legacy residual;
+   - native-file reference if written;
+5. keep standard WOUT variable names and shapes unchanged.
+
+Write `equilibrium_<case>.vmex.nc` when `write_native=True` or auto policy determines that downstream high-order use is expected. The native file stores:
+
+- knots/basis degree;
+- free coefficient chart;
+- axis/boundary lifts;
+- profiles and normalization;
+- symmetry and coordinate conventions;
+- force certificate;
+- provenance hashes.
+
+### 8.6 Simple documentation examples
+
+Input example:
+
+```fortran
+!@VMEX POLISH = AUTO
+&INDATA
+  ...
+/
+```
+
+Python example:
+
+```python
+from pathlib import Path
+import vmex
+
+input_path = Path("examples/data/input.solovev")
+result = vmex.solve_file(input_path, polish="auto")
+result.require_polished()
+
+print(result.strong_force.volume_l2)
+print(result.polish_report.total_seconds)
+```
+
+### 8.7 Tests
+
+- directive parser around quoted `!`, repeated assignments, whitespace, case, and invalid values;
+- JSON `_vmex` round trip;
+- VMEC2000 executable accepts and runs a directive-bearing INDATA file unchanged;
+- `VmecInput.from_file` ignores execution metadata but preserves all physics;
+- precedence tests;
+- CLI/Python equivalence;
+- no-polish regression parity;
+- fixed-boundary polished WOUT can be read by VMEC-compatible downstream readers;
+- free-boundary unsupported request fails clearly;
+- fallback/error/warn semantics;
+- native NetCDF round trip and derivative consistency.
+
+**Acceptance:** one documented input runs in both VMEC2000 and VMEX; only VMEX activates polishing.
+
+---
+
+## 9. Phase 2 - Build one complete performance and compilation observability suite
+
+**Purpose:** establish where time and memory are actually spent before further optimization.
+
+### 9.1 One benchmark driver
+
+Create or consolidate into:
+
+```text
+benchmarks/profile_workflows.py
+```
+
+with a data-driven case matrix. Avoid a new script per microbenchmark unless it is a standalone external-code oracle.
+
+The driver must emit JSON and optional profiler traces with:
+
+- total wall time;
+- input/read/setup time;
+- Python tracing time where measurable;
+- JAX lowering time;
+- XLA compile time;
+- persistent-cache lookup/hit/miss;
+- device execution time with `block_until_ready()`;
+- host-device transfer time;
+- WOUT/native output and plotting time;
+- peak host RSS;
+- peak device memory;
+- nonlinear iterations;
+- force evaluations;
+- Krylov iterations and true residual;
+- number of traces/lowerings/compilations;
+- executable count and approximate resident executable memory.
+
+Use JAX's official tooling:
+
+- `jax_log_compiles`;
+- `jax_explain_cache_misses`;
+- persistent compilation-cache debug logs;
+- `jax.profiler.trace` / XProf;
+- `jax.profiler.save_device_memory_profile`;
+- Nsight Systems on NVIDIA when needed.
+
+References:
+
+- https://docs.jax.dev/en/latest/benchmarking.html
+- https://docs.jax.dev/en/latest/debugging/slow_tracing_compilation.html
+- https://docs.jax.dev/en/latest/persistent_compilation_cache.html
+- https://docs.jax.dev/en/latest/profiling.html
+- https://docs.jax.dev/en/latest/device_memory_profiling.html
+- https://docs.jax.dev/en/latest/gpu_performance_tips.html
+
+### 9.2 Required workflow matrix
+
+Profile at minimum:
+
+| ID | Workflow |
 |---|---|
-| 16-job CI matrix | **16/16 pass** |
-| `-m "full and not weekly"`, whole suite, `-n 2` | 9 failed, 100 passed, 3 skipped, 4h14m |
-| weekly-hmfb-fixed | pass, 11 min |
-| weekly-hmfb-free | pass, **38 min** |
-| weekly-mirror | pass, 17 min |
-| weekly-free-boundary-adjoint | pass, 8 min |
-| `vmex --trace`, reactor-scale Landreman-Paul QA, 200 alphas | pass — 0.00% loss, 0 solver failures, four figures written |
-
-The trace result is physically sensible: precise QA at reactor scale should
-confine alphas well, and it does.
-
-**A flakiness finding worth acting on.**
-`test_ncsx_free_boundary_current_gradient_matches_resolve_finite_difference`
-**failed** in the full sweep under `pytest -n 2` and **passed** minutes later,
-serially, inside `weekly-free-boundary-adjoint` (both adjoint certificates in
-8 min). Same commit, same machine. So it is sensitive to parallel execution,
-most plausibly the JAX compilation-cache contention already recorded for this
-lane (the #140 work needed `VMEX_COMPILATION_CACHE=disabled`, and there is an
-open task chip for the at-cap SIGILL). The weekly lane runs serially so it is
-green there, but anyone running that file with `-n` will see a spurious
-failure. Either pin the test to serial execution (an xdist group) or resolve
-the cache interaction. Fold this into the Phase 32 triage rather than treating
-it as a separate defect.
-
-**Timing headroom.** `weekly-hmfb-free` takes 38 minutes here against the
-60-minute timeout #135 set — 1.6x, on hardware likely faster than a hosted
-runner. That lane may sit close to its budget when Actions returns. The other
-three are comfortable (11, 17, 8 min). Worth re-measuring on a hosted runner
-before assuming the 60-minute bound holds.
-- 2026-08-23 claude: production sweep complete — matrix 16/16, all four weekly campaigns pass, reactor-scale --trace passes at 0.00% loss; the NCSX adjoint certificate is xdist-sensitive (fails -n 2, passes serially) and weekly-hmfb-free uses 38 of its 60 minutes.
-
-## Phase 32 triage result (2026-08-23) — three corrections
-
-**My xdist hypothesis was wrong.** I proposed the LASYM gradient gate might be
-a `-n 2` artifact like the NCSX certificate. It is not: every triage run was
-single-process and `rel = 4.222865896823202e-03` reproduces bit-identically on
-main. The NCSX case remains genuinely xdist-sensitive; this one never was.
-
-**My triage misread the failing line for the two scipy examples.** I recorded
-them as failing `assert "final cost" in out`. That assertion passes. The
-failure is the next line: both scripts ship `METHOD = "L-BFGS-B"` and write
-`wout_Q{A,I}_scipy_L-BFGS-B.nc`, while the parametrization asked for
-`..._BFGS.nc`. `METHOD` was already `L-BFGS-B` in `109dcf00`, the commit that
-added those rows, so **those two rows have never passed** — born red, and
-nothing ran them. Table corrected in #147.
-
-**#118, not #126, moved the gradient gate.** Bisected, one serial process per
-point:
-
-| commit | AD | frozen FD | rel |
-|---|---|---|---|
-| `a9ea8ffd` (#126 first parent) | -1.8824350460e-05 | -1.8814282477e-05 | 5.35e-04 pass |
-| `88b005f7` (#126 merge) | identical | identical | 5.35e-04 pass |
-| `0362f701` (#118 merge) | -2.7839366520e-05 | -2.7957426985e-05 | 4.22e-03 fail |
-
-Bit-identical across #126 in all four (metric, direction) pairs — the deck's
-`delta = 7.98e-02`, so the branch #126 deleted never fired for it. #118
-corrected the LASYM Mercier normalization, which moved both sides.
-
-**Not a Jacobian bug.** Reverse mode equals the forward JVP to 1e-9 at adjoint
-tolerances 1e-11 and 1e-14, and a gap of the same size appears in the
-*symmetric* `RBC(0,1)` channel (1.36e-3) — nothing specific to m=1 asymmetry.
-
-**Root cause: the linearization point.** `|F(P(x*), p0)| = 2.673e-07`, the
-known LASYM m=1 frozen-residual floor. Newton-polishing onto the true root
-moves `sum DMerc[2:-1]` by 9.4e-9 — **1.7x the entire h=1e-4 FD numerator**
-(5.6e-9). The analytic derivative at the polished root (`-2.795741214890e-05`,
-reproduced to 11 digits four independent ways) is what the frozen-path FD
-measures, to rel 5.3e-07. So the **FD is the accurate side and `jax.grad` at
-`x*` is the outlier** — a real, bounded accuracy limit of differentiating a
-second-derivative-heavy metric at an under-converged fixed point, not a defect
-in the adjoint algebra.
-
-Shipped as `xfail(strict=True)` carrying those numbers, **tolerance
-untouched**. Two closes were tried and rejected on evidence: `ftol=1e-14`
-reaches rel 1.64e-3, an 18% margin too thin to gate on; anchoring at a refined
-fixed point gives the right analytic value but its own FD returns
-`-1.8312348878e-05` on the -h branch alone, reproducibly, unexplained. Closing
-this properly means anchoring the **adjoint** at a refined fixed point — a
-gradient-lane change, not a test change.
-
-**Open, and worth its own investigation:** that refined-anchor FD anomaly.
-
-**NCSX xdist marker deliberately not shipped.** The repo has no xdist-group
-convention, and under pytest-xdist's default `--dist load` an `xdist_group`
-marker is inert — a no-op scaffold. No workflow runs `full`-marked tests under
-xdist anyway (`ci.yml -n 4` and `nightly.yml -n 2` both carry
-`-m "not full and not weekly"`; the campaigns run without `-n`). The contention
-exists only in ad-hoc sweeps, so the fix belongs at the sweep invocation and
-with action (4), wiring the orphaned lanes in as serial lanes.
-- 2026-08-23 claude: Phase 32 triaged in #147 — gate moved at #118 not #126, a linearization-point limit not a Jacobian bug (the FD is the accurate side), xfail'd with numbers and tolerance untouched; two scipy rows were born red in 109dcf00; my xdist hypothesis and my reading of the failing assertion were both wrong.
-
-## Phase 33 — Gap audit findings [NEW, from two measured sweeps 2026-08-23]
-
-Two independent audits (four-axis gap audit; objective-by-objective
-differentiability sweep). Everything below is measured on this machine, not
-inferred. Ranked by return on investment.
-
-**Broken right now, in descending severity.**
-
-1. **The turbulence objective lane is dead at value level, and its tests are
-   red on main.** `pytest tests/test_turbulence.py` → **3 failed, 9 passed**.
-   Root cause is external: GKX `src/gkx/objectives/core.py:352` passes
-   `enable_eigvec_derivs=True` into `lax_linalg.eig`, which jax 0.9.2 rejects
-   (`TypeError`), reached from `vmex/core/turbulence.py:472`. So
-   `turbulence_objective_vector`, `quasilinear_flux_proxy` and
-   `nonlinear_heat_flux_proxy` do not merely lack gradients — they do not
-   evaluate. `docs/reference/objectives.rst:617-620` advertises a `jac=None`
-   lane that does not exist. Unnoticed because that file's lanes
-   (`pr-parity-c2`, `optional`, `full-core-t-z`) are orphaned. **Fix belongs in
-   GKX**, not here; vmex should keep reporting red until it lands.
-
-2. **`bootstrap.vmec_j_dot_B_from_wout` silently symmetrizes a LASYM wout.**
-   With the default `geom=None` it builds `modB`/`sqrtg` from `bmnc`/`gmnc`
-   only — no `bmns`/`gmns`, no guard (`vmex/core/bootstrap.py:736-752`).
-   Reproduced: on the bundled up-down-asymmetric reference the default path
-   differs from `redl_geometry_from_wout` by up to 3.0e-3 across s=0.2..0.8,
-   violating the repo's own `rtol=1e-3` gate (`tests/test_bootstrap.py:601`),
-   which only ever runs on symmetric solovev. Public API. **Effort S.**
-
-3. **[FIXED — #142 merged 2026-08-23]** v0.6.0 shipped the macOS SIGILL. #142
-   (`rj/darwin-cache-deserialize-guard`) defaults the compilation cache off on
-   macOS with jaxlib < 0.10, where LLVM ORC materializes per-kernel objects
-   recursively and overflows a worker-thread stack in
-   `PyClient::DeserializeExecutable`. Verified on this host: jaxlib 0.9.2,
-   `_cache_deserialize_unsafe() == True`, guard correctly returns no cache dir.
-   This is the same fault that forced `VMEX_COMPILATION_CACHE=disabled` in the
-   #140 NCSX work and produced the xdist-only failure in the production sweep.
-   **Merge it.**
-
-4. **NaN values paired with finite gradients.** `qi.py:83`, `maxj.py:114`,
-   `maxj.py:314` use `jnp.where(valid, residual, jnp.nan)`; the `where` VJP
-   drops the NaN branch, so `total_state` is `nan` while `jax.grad` returns a
-   plausible finite vector (JInvariantQI, 292/2400 nonzero) or a clean zero
-   (MaximumJ). An optimizer guarding on `isfinite(value)` and the AD gradient
-   disagree about the same point.
-
-5. **The implicit least-squares driver clamps NaN residuals but not the
-   Jacobian.** `optimize.py:2940` rewrites the value to 1e6 while `jac_fn`
-   returns the AD Jacobian of the unclamped graph and accepts it for being
-   finite (`optimize.py:3011`). Value and Jacobian go mutually inconsistent
-   after a topology change. The pure-FD lane (`optimize.py:2198`) clamps both
-   and is fine.
-
-6. **A vacuous gradient gate.** `tests/test_optimize.py:255`
-   (`test_min_abs_iota_gradient_is_finite_and_matches_fd`) runs on the
-   `ncurr=0` solovev fixture where iota is prescribed, so the state gradient is
-   identically zero: the assertion compares `AD_jvp = 0.0` to `FD = 0.0`. The
-   same zero applies to `mean_iota`, `soft_min_abs_iota` and `edge_iota` at
-   ncurr=0 — physically correct, but nowhere stated, and the docs objective
-   table lists iota targets as implicit-differentiable without the caveat.
-
-**Large measured performance factors.**
-
-7. `nyquist.filter_bsubuv_lasym` is a five-deep Python scalar loop where its
-   symmetric twin sixty lines above uses `np.einsum`: **282x (mpol4), 5,923x
-   (mpol8), 18,441x (mpol12)**. Bites LASYM **and** ntor>0 — every 3-D
-   asymmetric deck here. Called up to three times per wout write.
-8. `gammac.py` carries **zero `jax.jit`** and loops eagerly over flux surfaces
-   (`:318`): wrapping the unmodified `gamma_c_state` in one `jax.jit` measured
-   2.284 s -> 0.0897 s (**25x**) at defaults, 66x coarse. One decorator.
-9. Cold start is 63% compilation, of which **2.72 s of 3.52 s is 251 tiny
-   single-op compiles** from op-by-op host setup (`core/setup.py` has zero
-   `jax.jit` in 1099 lines). Below JAX's 1.0 s cache threshold, so every fresh
-   process re-pays it.
-
-**Free-boundary certification is materially weaker than fixed boundary.**
-
-10. Every free-boundary adjoint certificate is a coarse nonlinear re-solve FD
-    at 2%-10%, on the **ntor=0** DIII-D deck plus one NCSX channel. Fixed
-    boundary has a transpose/dot-product identity and residual-level FD at
-    1e-8 (`tests/test_implicit_multi_rhs.py:103`). **This is the real answer to
-    the NCSX weak-channel question: the ModA floor is a property of the FD
-    reference, and the present certificate design cannot distinguish that from
-    an adjoint error.** Add the dot-product identity and residual-level FD and
-    all ten channels certify at ~1e-6 without touching the re-solve floor.
-11. The **coil-shape** free-boundary gradient — Phase 28's headline claim — has
-    no FD certificate anywhere. Every existing certificate perturbs
-    `extcur`, which is linear in the parameter and does not stand in for shape.
-12. `boundary_schur` is certified only at ntor=0, so the m=1 paired-column edge
-    basis a 3-D stellarator needs is dead in every test
-    (`freeboundary_implicit.py:472`). And under `jax.jit` the
-    `adjoint_solver="boundary_schur"` choice is **silently ignored** — the
-    `traced` branch wins at `:385-393` — which no doc mentions and no test
-    covers, since nothing jits a solve.
-
-**Correct a plan claim rather than build it.** Phase 30.3's multi-GPU
-`vmap`/`shard_map` ensembles are architecturally blocked, not merely
-unimplemented: `jax.vmap(solve_implicit)` raises, because the equilibrium is a
-host `pure_callback` and all four callbacks omit `vmap_method`
-(`implicit.py:1346,1361`; `freeboundary_implicit.py:313,326`). The repo's own
-docs already say so; only this plan claimed otherwise. `parallel.solve_ensemble`
-already gives a measured 3.29x. Fix the plan, drop the feature.
-
-**Explicitly clean, leave alone.** The `pure_callback` + `custom_vjp`
-architecture loses no gradient (jit-vs-eager `jax.grad` differ by exactly 0.0
-on solovev); every `stop_gradient` in the package is a justified linearization
-freeze; `bounce.py` holds up at all four dangerous pitches; `argmin`/`argmax`
-use is uniformly gather-only, giving the correct a.e. derivative rather than a
-silent zero; `_traceable_term` correctly rejects host-NumPy wout terms; scipy
-never sits on a differentiable path. Fixed-boundary differentiability is in
-good shape.
-- 2026-08-23 claude: Phase 33 opened from two measured sweeps — turbulence lane dead at value level via a GKX/jax-0.9.2 TypeError (3 tests red on main), bootstrap LASYM silent symmetrization, #142 unmerged with the shipped macOS SIGILL, NaN-value/finite-gradient pairs, 282x-18,441x lasym filter, 25-66x gammac jit, and a free-boundary certificate design that cannot distinguish an FD floor from an adjoint error.
-- 2026-08-23 claude: merged #146 (vmex-ESSOS Python seams + the 270x --coils loop-vs-vmap fix; matrix 17/17) and #142 (macOS jaxlib<0.10 compilation-cache guard; matrix 17/17, guard verified firing on this host). Phase 33 item 3 closed. #147 reworked to drop the superseded xfail — it is now three example test-bug fixes only, +16/-7. #148 (refined-anchor gradient fix) verified not to disturb VMEC2000 parity: DMerc per-element 6.302e-04, bit-identical to pre-anchor.
-
-## Phase 33 progress (2026-08-23) — four items closed
-
-Merged, each behind a 17-job local matrix (the runner now includes the
-`check_docs_prose` gate it had been missing):
-
-- **#142** — macOS jaxlib<10 compilation-cache guard. Closes the SIGILL that
-  v0.6.0 shipped, and retroactively explains two earlier mysteries: why the
-  NCSX free-boundary work needed `VMEX_COMPILATION_CACHE=disabled`, and why
-  the NCSX adjoint certificate failed only under `pytest -n 2`.
-- **#146** — the two vmex-ESSOS Python seams (`essos_vmec_field`,
-  `MgridField.from_coils`), plus the 270x loop-vs-vmap fix on the `--coils`
-  path that the seam audit turned up.
-- **#147** — three example test-bugs, including two parametrization rows that
-  had never passed since the commit that added them. The `xfail` an earlier
-  revision carried was dropped, superseded by #148.
-- **#148 — the anchoring fix, and the most consequential of the four.** `ftol`
-  gates the sum of squares, so every solve the host calls converged returns
-  with `|F| ~ sqrt(ftol)`; where `dF/dz` has a small singular value that is a
-  real state displacement. Refining the returned state moved the LASYM
-  RBS(1,1) DMerc channel from 4.22e-3 to 5.29e-7 and every symmetric channel
-  with it, so the shared gate went **2.0e-3 -> 2.0e-5** rather than merely
-  being restored. Two channels had been over the gate, not one. Cost +14-26%
-  on the forward solve, gated on measured `|F|`.
-
-  Verified here, because it was the real risk: refining the state could have
-  drifted vmex off the pinned VMEC2000 goldens, since VMEC2000 also stops at
-  its own ftol. It does not — DMerc parity is **6.302e-04 per element,
-  bit-identical to pre-anchor**.
-
-  Two findings inside it worth keeping: anchoring *only* the adjoint's
-  linearization makes the error **worse** (5.65e-3 vs 4.22e-3), because at the
-  host state the cotangent and linearization errors partially cancel; and the
-  long-unexplained -h FD anomaly was a stagnating GMRES(30) in the FD's own
-  Newton solve, fixed by gcrot, always detectable from `newton_res` against
-  the lane's own assertion.
-
-**Remaining Phase 33 items, ROI order:** the GKX `eig`/jax-0.9.2 break (owner
-to relay; vmex's turbulence lane is dead at value level and 3 tests are red on
-main), bootstrap LASYM silent symmetrization, `filter_bsubuv_lasym`
-(282x-18,441x), `gammac` jit (25-66x), and the free-boundary certificate
-redesign — the one that would let Phase 28's publication claim be defended,
-since the present design cannot distinguish an FD floor from an adjoint error.
-- 2026-08-23 claude: merged #142, #146, #147, #148 — four Phase 33 items closed. Queue empty but for #125.
-- 2026-08-23 claude: PR #151 closes the two remaining Phase 33 code items. bootstrap LASYM: `vmec_j_dot_B_from_wout` with `geom=None` was dropping the `bmns`/`gmns` partners, so the default lane disagreed with the `geom=` lane it is asserted to match at rtol=1e-3 by 5.5e-4 to 2.8e-3 across s=0.2..0.8 on `input.up_down_asymmetric_tokamak`; after the fix the two lanes agree bit-for-bit and the test is parametrized `[eq]`/`[lasym_eq]`. The symmetric path was **not** also wrong — Solovev is identical to the last digit before and after. `filter_bsubuv_lasym` vectorized: 211x-2393x, closing the gap to the symmetric twin from 388x-12312x down to 2.5x-5.1x, bit-parity 1-7 ulp on the arguments the wout writer actually passes. `longdouble` kept — a float64 clone is only 1.07x faster and lands the same 1-2 ulp, so there was nothing to buy; note that on macOS arm64 `np.longdouble` *is* float64 (eps 2.22e-16), so the docstring's extended-precision claim is inert on this host and only engages on x86-64.
-
-## Phase 34 — Symmetry-complete stability: ballooning, turbulence, Gamma_c [NEW]
-
-One restriction gates three lanes. `_ballooning_context`
-(`vmex/core/stability.py:640`) raises `NotImplementedError` for `lasym=True`,
-and it is the shared entry to the ballooning solver, the turbulence proxies
-(`turbulence.py:290`) and Gamma_c (`gammac.py:296`). Lifting it correctly is
-physics work — the sine-parity families have to be carried through the PEST
-angle map and the field-line geometry — not a guard removal.
-
-### 34.1 LASYM field-line geometry [SHIPPED — PR #152]
-
-Extend `_ballooning_context` and `_theta_vmec_from_pest` to asymmetric
-equilibria: `rmns`/`zmnc`/`lmnc` through the PEST map, `bmns` in |B| and its
-derivatives. Models already parity-complete in this repo: `omnigenity.py`,
-`qi.py`, `maxj.py`, `bounce.py`, `boozer_tables.py`.
-
-**Hard gate:** a LASYM run with every sine coefficient set to zero must
-reproduce the symmetric result to round-off. That is the trick that exposed
-the frozen delta-rotation defect (#126); it is not optional here.
-
-**Do not open the door wider than the evidence.** Lifting the shared guard
-unblocks ballooning and turbulence too. Each lane keeps its own guard until it
-has its own LASYM verification — an unblocked-but-unverified objective is the
-silent-wrong class this program exists to remove.
-
-**Specification, from COBRAVMEC v4.1 rather than the literature.** There is no
-published paper on ideal ballooning in non-stellarator-symmetric equilibria —
-searched and not found. The near-misses do not cover it: Hammond, Lazerson &
-Volpe, Phys. Plasmas 24, 042510 (2017) assume symmetry for CNT despite its
-known coil misalignments, and the up-down-asymmetric tokamak literature treats
-asymmetry purely as a geometry input. The usable specification is COBRAVMEC
-itself, whose banner reads "THIS IS THE ASYMMETRIC COBRA BALLOONING CODE" —
-R. Sanchez added `lasym` in 2011 and never documented it.
-
-**The eigenproblem does not change form.** Correa-Restrepo (1978) and Dewar &
-Glasser, Phys. Fluids 26, 3038 (1983) derive it for general 3-D toroidal
-systems with no symmetry assumption, and COBRA confirms it operationally:
-`coeffs.f`, `getmatrix.f`, `geteigm.f` and `variat_eig_full.f` contain **zero**
-`lasym` branches. Every `lasym` branch in COBRA is a Fourier-series term. So
-the work is entirely in the two spectral closures:
-
-1. `_ballooning_context` already computes `R_sin` and `Z_cos` and throws them
-   away into `_R_sin, _Z_cos`. Keep them, apply the same `mode_scale`, add
-   `lmnc = state.L_cos * mode_scale * lam_factor`, return `rmns/zmnc/lmnc`.
-2. `_make_point_fn`: `R = rmnc cos + rmns sin`, `Z = zmns sin + zmnc cos`,
-   `lambda = lmns sin + lmnc cos`. Everything downstream — sqrt(g), the dual
-   basis, `B`, `grad|B|`, `grad alpha` — is AD of those two closures and
-   generalizes for free. That is why the change is small.
-3. `_theta_vmec_from_pest` needs the cos-parity lambda in both the residual and
-   the derivative. `1 + lambda_theta > 0` still holds on nested surfaces, so the
-   fixed unrolled Newton is structurally unchanged (same as `obtain_theta.f`).
-4. `L_ref`/`B_ref` need **no** change: `geometry.R_even`/`dZ_dtheta_even` come
-   from `real_space_geometry`, which follows `totzsps` + `totzspa` and already
-   sums both parities, and `rt.trig.wint` already switches to the full [0, 2pi)
-   uniform-weight grid for lasym (`transforms.py:502-508`).
-5. **The one real algorithmic consequence: parity of the eigenvalue in
-   `(alpha, zeta0)` is lost.** COBRA encodes exactly this at
-   `get_ballooning_grate.f:180-201` — the half-domain shortcut `tsymm = 0` is
-   permitted only when `.NOT.lasym_v` *and* the line starts at
-   `alpha = zeta_k = 0`, and is unconditionally disabled for `lasym=T`. For
-   vmex: the default `alphas = linspace(0, pi, 4)` becomes **invalid** under
-   lasym (alpha must span [0, 2pi)), `zeta0s` must be scanned over both signs,
-   and the docstring's "stellarator symmetry maps alpha -> -alpha" has to be
-   conditioned on `lasym`. Nothing else changes — not
-   `_max_eigenvalue_tridiag`, not the normalizations, not the reductions.
-
-Unlike the lasym `D_R` lane, this one lands with an external oracle available
-on day one: COBRAVMEC accepts asymmetric wouts, and
-`tests/test_stability.py:70-86` already carries a converged lasym fixture
-(`input.up_down_asymmetric_tokamak`, `am=[1,-1]`, `pres_scale=5000`).
-
-### 34.2 Ballooning as a first-class optimizable [EXAMPLE SHIPPED — PR #152; defaults open]
-
-**Correction to this phase as first written.** I claimed `ballooning_lambda`
-and `ballooning_growth_rate` "cannot be used through `VmecProblem.from_tuples`"
-because neither is re-exported from `vmex.optimize`. That is wrong.
-`from_tuples` (`problem.py:436`) takes bare `(callable, target, weight)`
-tuples, and `docs/reference/objectives.rst:490` already documents
-`from vmex.core.stability import ballooning_growth_rate` used exactly that way
-in a `least_squares` term list — the same idiom the QI and max-J examples use.
-Ballooning is reachable, documented, and gated by real physics tests
-(vacuum-stable, high-pressure-unstable, hard-vs-soft max, and an AD-vs-FD
-gradient check). No re-export is needed and none will be added.
-
-The one real gap is that there is no example. Write
-`examples/optimization/QA_optimization_ballooning.py` — a QA optimization with
-a ballooning term alongside the usual shaping, following the neighbouring
-examples exactly. Phase 16 listed it; it was never written.
-
-**Defaults to decide alongside the example.** Verification (34.3) found that
-three defaults bias the answer in the dangerous direction for a stability
-constraint — they report "stable" when the configuration is not:
-
-| default | vmex | Gaur 2023 / 2025 | DESC | consequence |
-| --- | --- | --- | --- | --- |
-| `zeta0s` | `(0.0,)` | 21 / 15 values | 15 in [-pi/2, pi/2] | under-reports lambda_max on 3-D decks |
-| `nturns` | 3 poloidal turns (theta_b = 3pi) | theta_b = 5pi (code uses 4pi) | 3 *toroidal* turns | lambda is monotone non-decreasing in theta_b (nested Dirichlet trial space), so truncation can only under-report |
-| `npoints` | 121 | - | 600 | 2nd-order FD; ~40 points per poloidal turn |
-| `alphas` | 4 in [0, pi] | 42 / 14 | 8-16 | under-samples the (alpha, zeta0) landscape |
-
-Gaur 2023 footnote 2 is explicit that theta_0 must be scanned because there is
-a value at which the mode is least stable. Do not change these blind: measure
-`max over (4 alpha x 15 zeta0)` against `max over (4 alpha x 1 zeta0)` on
-`input.li383_low_res` first, and let the measured gap set the default.
-
-Two further items, both recorded rather than assumed:
-
-- **Softmax bias.** `ballooning_growth_rate` returns `T logsumexp(lambda/T)`,
-  biased above the true max by at most `T log N`. With production defaults
-  (`T = 0.05`, `N = 3 x 4 x 1 = 12`) that is **+0.124** — the same order as the
-  published lambda_max of NCSX/DIII-D/Henneberg-QA in Gaur 2023 Fig. 6
-  (0.008-0.02). The bias is conservative (over-reports instability) and the
-  existing test pins the bound, but the docs suggest a target of -0.01, which
-  in truth targets lambda = -0.13. Document it, or lower `T`.
-- **No variational refinement.** Gaur 2023 Eq. (18) and COBRA
-  (`variat_eig_full.f:59`) both refine the raw finite-difference eigenvalue
-  with the 4th-order Rayleigh quotient, and COBRA adds Richardson
-  extrapolation. vmex (like DESC) reports the raw 2nd-order value. The
-  refinement is a cheap, fully AD-friendly quotient; whether it is worth
-  adding is an outcome of the resolution scan in 34.3, not a decision to take
-  in advance.
-
-### 34.3 Physics verification, not liveness [VERIFIED; COBRAVMEC ORACLE SHIPPED — PR #152]
-
-The formulation was audited line by line against Gaur's own released solver,
-DESC master, and COBRAVMEC source. **Verdict: the operator vmex solves is
-correct and current.** Recording it because the audit is the evidence, not the
-absence of a failure:
-
-- `stability.py:869-874` matches `gamma_ball_full` in Gaur's
-  ideal-ballooning-solver (`utils.py:1550-1562`) term for term: bending
-  `g = gradpar gds2/B`, drive `c = -dPdrho cvdrift/(gradpar B)`, inertia
-  `f = gds2/(B^3 gradpar)`. vmex's `dp_drho` equals Gaur's `dPdrho` identically
-  once `B_ref = 2|psi_b|/a_N^2` is substituted.
-- Same three coefficients confirmed against DESC master
-  (`desc/compute/_stability.py:320-373`) and COBRAVMEC (`coeffs.f:44-47`).
-  vmex uses `eta = iota (phi - zeta0)` where DESC uses `zeta`; under
-  `eta = iota zeta` the map is exactly `(g, c, f) -> (iota g, c/iota, f/iota)`,
-  which leaves lambda invariant. Because iota is constant on a surface, a
-  uniform eta grid *is* a uniform zeta grid: at matched extent and point count
-  the two codes solve the *same discrete problem*.
-- The secular term `alpha_cov = [lambda_s - (phi - zeta0) iota', 1 + lambda_th,
-  lambda_ph - iota]` (`stability.py:781-783`) is Gaur 2023 Sec. 2.2's
-  stellarator field-line label verbatim. vmex builds grad-alpha directly rather
-  than through the shear decomposition, which is exact and avoids the
-  `sign(iota)` inconsistency DESC carries between its `gds2` and its `c`.
-- `_max_eigenvalue_tridiag` reproduces Gaur 2023 Eq. (16) and DESC's
-  `_ideal_ballooning_lambda` exactly, index by index.
-- **vmex is more correct than DESC on domain centring.** vmex's grid is
-  `phi in zeta0 +- theta_b/iota`, centred where the secular term vanishes.
-  Hudson, Phys. Plasmas 13, 042511 (2006), Eq. 23 states the exact symmetry
-  `lambda(psi, alpha - 2pi q, theta_k + 2pi) = lambda(psi, alpha, theta_k)` is
-  broken at finite domain unless the grid is centred on `theta_k`. vmex
-  centres; COBRAVMEC centres (`summodosd.f:60`); DESC does not.
-
-**Currency.** Nothing 2025-2026 supersedes or corrects the infinite-n
-formulation; no erratum or critique exists. arXiv:2608.01750 (Gaur et al.,
-Aug 2026, "AGNI") extends to *finite*-n via the energy principle and states
-that it keeps `lambda = gamma^2 (a_N/v_A)^2` for consistency with the
-infinite-n solver. arXiv:2602.07329 (Bhattacharjee, May 2026) reinterprets 3-D
-ballooning as Anderson-localized — a caveat on how `lambda(psi, alpha, zeta0)`
-should be *aggregated*, not a correction to the local eigenproblem.
-
-**Attribution to fix (docstring defect, not physics).** `stability.py:5-7`
-cites "Sanchez, Hirshman, Ware, Berry & Batchelor, J. Comput. Phys. 161, 589
-(2000)". No such paper. The real ones, confirmed from `COBRAVMEC/Sources/cobra.f`
-and Crossref, are **Sanchez, Hirshman, Whitson & Ware, JCP 161, 576 (2000)**
-(COBRA) and **Sanchez, Hirshman & Wong, CPC 135, 82 (2001)** (the
-VMEC-coordinate variant; p. 589 belongs to this one). Berry/Batchelor/Spong
-belong to PPCF 42, 641 (2000). The primary differentiable reference should be
-**Gaur et al., PPCF 67, 125015 (2025)** (arXiv:2410.04576), not the 2023 JPP
-paper: the 2023 paper's printed Eq. (14) gives `f = |grad alpha|^2/(B/B_N)^2`,
-which is dimensionally inconsistent (lambda would not scale as gamma^2) — a
-typesetting error. Gaur's own code, the 2025 paper, DESC and COBRA all use the
-`B^3/(b.grad)` form, and **vmex follows the corrected form, not the typo.**
-
-**Oracles, in order of value — all still TODO.**
-
-1. **COBRAVMEC parity.** Feasible today with no build: a working arm64 binary
-   is at `STELLOPT/COBRAVMEC/Release/xcobravmec` (symlinked `~/bin/`), sources
-   byte-identical to `STELLOPT_new/COBRAVMEC/Sources`. The eigenvalue converts
-   analytically, with no fudge factor: COBRA's third column is a *signed*
-   gamma (`get_ballooning_grate.f:313`), so
-   `lambda_vmex = sign(grate) grate^2 (a_N B_0 / (R_0 B_N))^2`
-   with `R_0 = (rmax_surf + rmin_surf)/2` and
-   `B_0 = sqrt((2/beta_axis)(1.5 mu0 p_2 - 0.5 mu0 p_3))`; rho and COBRA's
-   `amin` cancel. Every input is in the wout vmex already writes — `wout.py`
-   carries all 25 fields `order_input.f:61-199` reads; no mgrid, no boozmn.
-   Drive it with the 9-record `in_cobra.ball` in the `l_geom_input=F,
-   l_tokamak_input=F` branch, whose `(alpha_st, zeta_k)` is exactly vmex's
-   `(alphas, zeta0s)`. Match the domain with
-   `nturns_vmex = (2 k_w - 1)/(2 nfp)`. Compare two ways: the marginal-stability
-   radius (what DESC's own `test_ballooning_compare_with_COBRAVMEC` does, to
-   `rtol=2e-3`) and the converted lambda at high `npoints` (expect 10-20%:
-   COBRA is 4th-order variational with Richardson extrapolation, vmex is raw
-   2nd order). Run an `ns` scan before blaming physics. Stored oracles that
-   need no run at all: `DESC/tests/inputs/cobra_grate.HELIOTRON_L24_M16_N12`
-   and Gaur's `tests/comparn_w_COBRAVMEC/` (`wout_NCSX_og.nc` +
-   `cobra_grate.NCSX_og`).
-2. **simsopt `vmec_fieldlines` geometry parity** — cheaper and exact, and it
-   closes a real hole: `tests/test_turbulence.py:69-110` claims to check the
-   `vmec_fieldlines` conventions but only compares `stability.py` to itself.
-   simsopt 1.10.7 is installed at `simsopt_test`. Comparing `bmag`,
-   `gradpar_theta_pest`, `gds2`, `gds21`, `gds22`, `gbdrift`, `gbdrift0`,
-   `cvdrift`, `cvdrift0` on a vmex-written wout is exact to machine precision
-   (same VMEC data, same conventions) and pins the `sign_psi`/`signgs`
-   convention, where vmex derives the sign from its own sqrt(g) and simsopt
-   hard-codes `-phiedge/2pi`.
-3. **Analytic limit** — `input.circular_tokamak_aspect_100` with `am=[1,-1]`
-   and a `pres_scale` sweep is the Connor-Hastie-Taylor shifted-circle limit;
-   compare the marginal locus in `(s_hat, alpha_MHD)` against the first-stability
-   boundary printed in Hudson & Hegna, Phys. Plasmas 10, 4716 (2003) Sec. 4
-   (CHT itself does not print the curve).
-4. **Oracle-free invariance** — cheap enough for the PR lane, and the sharpest
-   test of the secular term: `lambda(-alpha, -zeta0) = lambda(alpha, zeta0)`
-   (stellarator symmetry, symmetric decks only), `lambda(alpha + 2pi) =
-   lambda(alpha)`, and the field-period shift `lambda(alpha + iota 2pi/nfp,
-   zeta0 + 2pi/nfp) = lambda(alpha, zeta0)`, which exercises the `xn = n nfp`
-   sums and the zeta0 recentring together (the Hudson 2006 Eq. 23 family).
-5. **Convergence** — `nturns` in {1..6} must be *monotone non-decreasing* (a
-   theorem, so a strict assertion, not a tolerance) and converged by 5pi;
-   `npoints` in {81, 121, 241, 481, 961} must show clean O(h^2), with the fitted
-   exponent recorded; `ns` in {16, 31, 61}; and the `(alpha, zeta0)` sampling
-   gap that decides 34.2's defaults.
-
-**DESC differences that matter for any comparison, recorded so the next
-attempt does not lose a day to them:** DESC's `zeta0` kwarg is `iota * zeta0`,
-not `zeta0`; DESC's `nturns` counts *toroidal* turns while vmex's counts
-poloidal (for iota = 0.4 vmex's domain is 2.5x longer under the same number);
-DESC does not recentre, so only `zeta0 = 0` is comparable; and DESC's
-ballooning code was rewritten in PR #1763 (2025-07-01) with a v0.15.0
-changelog entry fixing a bug "where the computation mixed data between field
-lines", which makes any stored pre-v0.15 DESC ballooning reference unusable.
-
-- 2026-08-23 claude: **34.1 shipped.** The eigenproblem does not change form for
-  an asymmetric state — COBRAVMEC's `coeffs.f`, `getmatrix.f`, `geteigm.f` and
-  `variat_eig_full.f` carry no `lasym` branches at all — so the work was two
-  spectral closures with everything downstream following by AD. The three lanes
-  each held five byte-identical closures; they are now one `_surface_closures`
-  factory, so parity lives in one place and the change is a net simplification.
-  Hard gates all met: zero sine spectra through the asymmetric branch are
-  **bit-identical**; the same deck solved with `LASYM = T` lands within
-  **2.8e-13**; the alpha parity holds to **7.4e-14** symmetric and is violated
-  at **2.9e-3** asymmetric, which is what justifies the `[0, 2pi)` default
-  rather than cosmetics. Turbulence and Gamma_c keep guards that name
-  themselves — the geometry reaches them, the verification does not.
-- 2026-08-23 claude: **34.3's first oracle shipped, and it needed no build.**
-  `xcobravmec` reads a vmex-written wout directly (every field
-  `order_input.f` asks for is already in `wout.py`) and the eigenvalue converts
-  analytically: `lambda_vmex = sign(grate) grate^2 (a_N B0/(R0 B_N))^2`.
-  **Predicted factor 9.4416e-02 against measured 9.4475e-02 — 6e-4.** That
-  agreement is the content: the normalizations were derived, not tuned. On
-  solovev at `pres_scale=3e4` the outer four surfaces agree to 6e-4 at both
-  ns=49 and ns=99; the innermost is COBRA's near-axis radial differencing and
-  falls sixfold when ns doubles. On `li383_low_res` (nfp=3, beta=4.3%) the
-  signs agree on all five surfaces including which one is unstable.
-- 2026-08-23 claude: **34.2's example shipped, and it made the defaults
-  question concrete.** On its seed the single-point `zeta0s=(0.0,)` reports
-  **3.27e-3** where a five-point scan reports **4.42e-3** — a 26% under-report,
-  in the false-stable direction. The softmax bias at production defaults is
-  **+0.12**, larger than the published lambda_max values it would be compared
-  against. Both are now documented and the example scans; **changing the
-  library defaults is still open** and belongs to a measurement, not to this
-  example.
-
-### 34.4 Production runs [TODO]
-
-Physics claims need converged runs, not smoke tests: a QA ballooning
-optimization carried to convergence with the growth rate reported per stage,
-and the LASYM lanes exercised on a 3-D asymmetric deck. These belong in the
-weekly campaigns being wired up in Phase 32, with measured wall times
-recorded, not in a pull-request lane.
-
-### 34.5 Gamma_c: two symmetry defects fixed, the gradient is not convergent [MEASURED]
-
-**Two real defects, both found with one exact identity.** Gamma_c is even under
-the stellarator reflection and the sine-parity spectra are odd, so on a
-stellarator-symmetric state `d(Gamma_c)/d(sine)` must be *identically* zero.
-It was **55 % of the physical gradient**.
-
-1. The trace window ran `x in [0, L]` instead of centred on the field-line
-   label. The reflection maps `(alpha, x) -> (-alpha, -x)` and the alpha set is
-   closed under negation, so only a window symmetric in `x` makes the sampled
-   point set reflection-closed. Centring makes the per-line estimator exactly
-   mirror-invariant — `Gamma_c(+alpha)` against `Gamma_c(-alpha)` to
-   **1.8e-14**, against 1.1e-1 before — and takes the identity to 13 %.
-2. The rest was the pitch grid. `b_min`/`b_max` are `jnp.min`/`jnp.max` over
-   the sampled |B| of a reflection-closed line set, so the extrema sit at
-   mirror-image **pairs** of points and the cotangent goes entirely to one
-   member of each pair. Holding the grid fixed under differentiation takes the
-   identity to **6.6e-11** while moving the physical gradient by 1.8e-4. It is
-   not a discretization term that refines away: over
-   `num_pitch = 12/24/48/96` the violation ran 1.7e-1, 1.8e-1, 6.0e-3, 1.6e-1
-   — an erratic subgradient with no limit.
-
-The sampled geometry itself is exactly reflection-symmetric to machine zero
-(seven quantities even, `B x grad|B| . grad s` odd, all at 0.0e+00), which is
-what allowed the defect to be localized to the estimator rather than the
-spectra.
-
-**The jit is real.** Module-level, resolution arguments static: 7.42 s cold to
-**0.050 s** warm on a three-surface li383 case, values bit-identical; the
-gradient 17.25 s cold to **1.07 s**.
-
-**But the boundary gradient does not converge, and that is not new.** li383,
-`ns = 13`, `d(Gamma_c)/d rbc(n=0, m=1)` over a field-line/pitch ladder:
-
-| nalpha, transits, points/transit, pitch | fixed | main |
-| --- | --- | --- |
-| 7, 3, 64, 24 | -1.254 | -0.403 |
-| 7, 4, 96, 48 | +3.518 | +0.582 |
-| 9, 5, 128, 48 | -0.387 | -0.554 |
-| 13, 6, 192, 64 | -0.988 | -0.562 |
-| 17, 8, 256, 96 | +0.180 | -0.111 |
-
-Three sign changes on each side. Radial resolution does not rescue it: at
-fixed sampling, `ns = 13/25/49` gives **-0.387, +0.175, -2.167**. The value is
-comparatively well behaved — 2.17e-3 to 2.82e-3 over the sampling ladder
-(~25 %) and 2.82/2.66/2.91e-3 over `ns` (~9 %).
-
-That is what a piecewise functional looks like. Hard well detection and hard
-argmin selection make the *discretized* Gamma_c piecewise in the boundary
-coefficients, with breakpoints that move when the grid moves, so its exact
-derivative is the derivative of a different piecewise function at every
-resolution. Refining cannot fix it; softening the well weights would be a
-redesign, not a polish.
-
-**Disposition.** Ship the correctness and performance work: the two symmetry
-fixes, the jit, the shared spectral closures, and the docstring corrections
-(the pitch nodes are open-midpoint, not the Gauss-Legendre the docstring
-claimed). Do **not** ship a gradient-based Gamma_c optimization example — it
-would not work. `test_boundary_gradient_liveness` asserting sign stability
-under one refinement step was passing on a lucky pair of configurations, not
-on a property; replace it with the measured ladder. Gamma_c stands as a
-value-level comparative proxy with roughly 10-25 % numerical scatter, and the
-resolution belongs in any number quoted from it.
-
-### 34.5b Gamma_c, superseded text [HISTORICAL]
-
-Same phase because it shares 34.1. Measured on a realistic configuration
-(nfp=2 seed, ns=15, mpol=ntor=5, three surfaces): the objective is **0.96 s
-eager and 0.03 s under one `jax.jit`, values bit-identical** — a 33x factor
-that is the difference between the example running and stalling. Also open:
-whether the recorded ~4.6x gradient-magnitude scatter is genuine superbanana
-sensitivity (document the converged resolution and gate there) or a
-quadrature artefact that a better pitch grid fixes. Set tolerances from
-measurement; do not tune them to pass.
-- 2026-08-23 claude: Phase 34 opened — one guard (stability.py:640) gates ballooning, turbulence and Gamma_c; LASYM support is physics work with a sine-zero-equals-symmetric hard gate, ballooning needs promoting from half-built to a first-class optimizable with a COBRAVMEC oracle, and Gamma_c needs its 33x jit.
-- 2026-08-23 claude: **correction.** I wrote 34.2 on a false premise — that `ballooning_growth_rate` is unusable through `from_tuples` because it is not re-exported from `vmex.optimize`. It is usable: `from_tuples` takes bare `(callable, target, weight)` tuples and `docs/reference/objectives.rst:490` documents that exact import. No re-export will be added; 34.2 is now the missing example plus the defaults decision.
-- 2026-08-23 claude: 34.3 formulation audit done. The operator is correct and current — line-for-line identical to Gaur's released solver, algebraically identical to DESC and COBRAVMEC, and *more* correct than DESC on two counts (exact grad-alpha instead of the shear decomposition, and Hudson-2006 domain recentring, which DESC omits). Three real gaps, all biasing toward false-stable: `zeta0s=(0.0,)` against DESC's 15, `nturns=3` against Gaur's 5pi, `npoints=121` against DESC's 600. One attribution defect: the cited JCP 161, 589 (2000) paper does not exist. And the 2023 JPP Eq. (14) as printed is dimensionally inconsistent — vmex follows the corrected 2025 form, not the typo. COBRAVMEC parity is reachable today with an existing binary and an analytic eigenvalue conversion; no build needed.
-
-## Phase 35 — Twelve of fourteen primary CI lanes ran nothing [SHIPPED — PR #153]
-
-`tests/manifest.json` makes every module declare exactly one primary PR lane
-and `tools/test_manifest.py validate` enforces it, so the union of those lanes
-is the whole pull-request suite. The other half of the contract was never
-checked. **Twelve of the fourteen primary lanes were invoked by no workflow**
-— `pr-parity-a1/a2/b/c1/c2/c3/d`, `pr-examples`, `pr-external`,
-`pr-full-only`, `pr-gradient`, `pr-mirror-spline` — which put **36 modules and
-256 non-full tests outside pull-request CI entirely**. All 256 pass; they were
-simply never run (6m45s locally at `-n 4`).
-
-Among the 36 is `tests/test_test_manifest.py`, the module that validates the
-manifest. That is why it persisted, and it is the whole argument for the guard
-test rather than another round of hand-patched selectors.
-
-**This is a recurrence, not a discovery.** The 2026-08-19 P9/P0 entry above
-records the changed-line gate going 78 % -> 96 % and says outright that "most
-of it came from running modules the pull-request lanes never selected", listing
-four modules moved into `pr-physics-field` and two into `pr-fast`. That fix
-treated the symptom: it named individual modules and left the primary lanes
-dead. The stale `A1_FILES=`, `C2_FILES=` and `core-a-c)` markers still asserted
-against in `test_workflow_selects_manifest_lanes` are the fossil of the
-refactor that orphaned them.
-
-The visible symptom both times is the changed-line coverage gate failing on
-code that *is* tested. It blocked #151 (`vmex/core/bootstrap.py` at 0.0 % — the
-whole `geom=None` branch, covered only from `tests/test_bootstrap.py`, primary
-lane `pr-parity-b`) and #152 (`vmex/core/stability.py` at 26.8 %, covered only
-from `tests/test_stability.py`, primary lane `pr-parity-c2`).
-
-Four sharded jobs cover the twelve lanes — 194, 540, 351 and 104 non-full
-tests, deduped per job because the lanes overlap. The whole non-full suite is
-45m11s at `-n 4` on a contended laptop, so the shards are the right order for
-a runner. `test_every_primary_pr_lane_is_invoked_by_a_workflow` closes the
-loop; it fails on main naming all twelve.
-
-**Newly enabled and worth watching:** `tests/test_multigrid_ladder.py`
-(`pr-parity-a2`) carries hard wall-clock assertions — `t2 < 1.0 s`,
-`t_warm < t_cold/3`, `t_warm < direct_cold`. Both of its timing tests failed in
-my contended local full-suite run and pass unloaded. On a shared runner they
-are the flake candidates; the first CI run here is the evidence.
-
-## Phase 36 — Free-boundary certificate: factor it, do not average it [IN PROGRESS]
-
-The existing certificates central-difference two cold forward solves, so their
-percent-level gates are set by where the solver stops, not by the adjoint, and
-a disagreement cannot be attributed: an FD floor and a wrong adjoint look the
-same. The redesign factors the implicit gradient at a frozen root,
-
-    dJ/dp = -(dF/dp)^T (dF/dz)^-T (dJ/dz)
-
-and certifies each factor separately with no cold re-solve:
-
-1. `dF/dp` against a central difference **of the residual itself** — nothing is
-   solved, so the only error is FD truncation. **Passes** at 1e-6 relative.
-2. `(dF/dz)^T` by the transpose identity `<v, J u> == <J^T v, u>` on random
-   tangents. **Passes** at 1e-11.
-3. The adjoint solve by its own transpose residual `||J^T lam - rhs||/||rhs||`
-   against the configured tolerance. **Passes**.
-4. The assembly: `jax.grad` against the product rebuilt from the three
-   certified pieces.
-
-Step 4 **does not pass, and that is the point of the redesign**: `jax.grad`
-gives -0.2272080 where the certified assembly gives -0.2267719, a relative
-difference of **1.9e-3**. The old FD certificate's 2e-2 gate could never have
-seen it. The two paths differ in one place — the shipped default
-`adjoint_solver="coupled_gcrot"` routes through `fbi._host_adjoint` (SciPy
-GCROT on the host) while the certified assembly used `im._adjoint_solve_gcrot`
-(the JAX lane), and the certified lambda is the one whose transpose residual
-was measured. Whether the shipped lambda is simply less converged, or the two
-lanes disagree structurally, is the open question; the comparison at three
-adjoint tolerances is running.
-
-
-## Phase 37 — The turbulence bridge hands GKX an R/L where it wants a/L [NEW]
-
-Turning the dead CI lanes on (Phase 35) immediately produced this. On the
-runner `test_growth_rate_is_itg_critical_gradient_monotone` fails with
-`gamma_lo = 0.0215` against an assertion of `< 1e-6` — the "below the ITG
-critical gradient" case comes out unstable. Locally the same test dies earlier,
-on the GKX `eig(enable_eigvec_derivs=)` kwarg against the installed jax 0.9.2,
-which is exactly what #149 declares a floor for, so the lane has been dead at
-value level here and never reached the assertion.
-
-The cause does not need a GKX run to establish. `vmex/core/turbulence.py:432`
-sets `updates["R_over_LTi"] = float(r_over_lt)`, and GKX's own deprecation
-message on that field reads: *"The operator consumes a/L gradients (the TOML
-'tprim'/'fprim'), never R/L, so the old name asserted a normalization that was
-never applied — a value passed as R/L needs dividing by R/a."*
-
-The arithmetic confirms it exactly. `_default_gradient_linear_params()` ships
-`tprim = 2.49`, `fprim = 0.8`. The Cyclone base case is `R/L_T = 6.9`,
-`R/L_n = 2.2` at `R/a = 2.77`, and `6.9/2.77 = 2.49`, `2.2/2.77 = 0.79`. GKX's
-defaults *are* the CBC in `a/L`. So passing `r_over_lt = 6.9` sets
-`tprim = 6.9` where the intended value is 2.49 — the drive is **2.77x too
-strong**, and every turbulence objective evaluation in this repo has been made
-at the wrong gradient. The test's `r_over_lt = 1.0` becomes `tprim = 1.0`
-instead of 0.36, which puts a nominally subcritical case above marginal and
-gives the 0.0215 the runner reports.
-
-Fixing it is an API decision, not a patch, which is why it is its own phase:
-either convert (`tprim = r_over_lt * a/R`, and then choose which `R` — the
-wout `Rmajor_p`, or `L_ref * aspect`) or follow GKX and take `tprim`/`fprim`
-directly, deprecating `r_over_lt`/`r_over_ln`. The second matches the operator
-and removes the ambiguity, at the cost of a public rename. Verifying either
-needs jax >= 0.10.1 locally, which this host does not have — so #149 lands
-first.
-
-- 2026-08-24 claude: **PR #154** — the free-boundary certificate redesign of
-  Phase 36, all four factors passing (1e-6, 1e-11, 9.5e-11, 1e-6). It settled
-  the open question in Phase 36 the other way: the two adjoint solvers agree to
-  4.1e-10 and 2.6e-12, and the 1.9e-3 was the *root*, not the adjoint —
-  `_FREE_HOT_CACHE` warm-starts every forward call, so two entries into the
-  lane land 4.7e-4 apart and the gradient amplifies that 4x. Assembling from
-  the root `jax.grad` actually used agrees to **3.5e-12**. Follow-up: the
-  free-boundary lane has no refined-anchor step, and this is the measurement
-  that says #148's treatment belongs there too.
-- 2026-08-24 claude: **PR #155** — Gamma_c, stacked on #152. Both symmetry
-  defects fixed, the jit landed (0.050 s warm value, 1.07 s warm gradient), and
-  the gradient's non-convergence documented rather than papered over. No
-  optimization example: it would not work.
-- 2026-08-24 claude: #153 also caught `test_multigrid_ladder`'s two
-  compile-count tests failing wherever they ran. The prelude installs its
-  logging handler at WARNING and *then* imports vmex, whose
-  `_configure_jax_logging` sets `jax_logging_level = "ERROR"` by default and
-  raises the `jax` logger from 30 to 40 — filtering exactly the WARNING-level
-  `"Compiling ..."` records the counter is built on. Measured 0 records
-  counted, so `assert c1 > 0` could not pass. Fixed with
-  `VMEX_JAX_LOGGING_LEVEL=WARNING` in the measurement environment, vmex's own
-  documented override, plus `VMEX_COMPILATION_CACHE=disabled` so "cold" means
-  cold. Both tests now pass and measure what their docstrings claim.
-
-## Phase 35 addendum — what the lanes caught, and what they cost (2026-08-24)
-
-**Two genuine defects in 256 previously-unrun tests, both now closed in #153.**
-Everything else passed on arrival: after the first fix, lanes a, c1 and misc
-all came back green and only c2 was red.
-
-1. `test_multigrid_ladder`'s two compile-count tests were failing wherever
-   they ran, reading **zero** XLA compilations. The measurement prelude
-   installs its logging handler on the `jax` logger at WARNING and *then*
-   imports vmex, whose `_configure_jax_logging` sets
-   `jax_logging_level = "ERROR"` by default — raising the logger from 30 to 40
-   and filtering exactly the WARNING-level `"Compiling ..."` records the
-   counter reads. Fixed with `VMEX_JAX_LOGGING_LEVEL=WARNING` in the
-   measurement environment plus `VMEX_COMPILATION_CACHE=disabled`.
-2. **Phase 37's units defect, closed in the same PR.** `turbulence.py` set
-   GKX's deprecated `R_over_LTi`/`R_over_Ln`; the operator consumes `a/L`.
-   Now divided by the equilibrium's own aspect ratio. On the shaped tokamak
-   deck (aspect 2.643) the Cyclone drive lands at `tprim = 2.611` next to
-   GKX's default 2.49, and the subcritical case at 0.378 instead of 1.0.
-
-**And a third hole that explains why (2) survived.** `_require_gkx` skipped
-*every* gkx test on jax < 0.10.1, but only the eigenvector-weighted lanes need
-`enable_eigvec_derivs` — `turbulent_growth_rate` reduces with
-`jnp.linalg.eigvals`. Measured rather than assumed: exactly two tests fail on
-the missing kwarg. Narrowing the guard takes `tests/test_turbulence.py` from
-13 skipped to **11 passed, 2 skipped** on this host, which makes the units fix
-verifiable locally: `gamma_lo` **0.0215 -> 8.9e-15** against `< 1e-6`, and
-`gamma_hi` 0.184 against `0.05 < g < 5.0`. Two independent holes had to line
-up for the defect to live: the lane was dark in CI, and the test was skipped
-on every developer machine below the floor.
-
-**Cost, from the runner rather than a guess.** The four lanes measured 30m00s,
-27m40s, 26m54s and 21m22s at `-n 2`, against a slowest-physics-job 14m04s —
-so the wiring roughly doubled CI wall clock to 30 minutes, at the stated
-ceiling. Widened to `-n 4` on the same 4-vCPU runner the fast lane already
-uses. Fallback recorded in the workflow: if a lane runs out of memory instead
-of getting faster, return to `-n 2` and split `pr-parity-c1` and
-`pr-parity-c2` in the manifest — `test_optimize` is ~20 min of the c1 group,
-`test_gammac` plus `test_scaling` ~12 min of c2.
-
-- 2026-08-24 rogeriojorge: approved and merged #149 (gkx jax floor) and #150
-  (performance docs against artifacts). #153 approved, merging once its
-  rebalanced run reports.
-- 2026-08-24 claude: #152's production run finished — `input.nfp2_QA_finite_beta`
-  at beta 2.698%, two stages, 32 evaluations: **lambda_max 4.421e-3 ->
-  9.124e-4 (4.8x)** with Mercier staying stable (5.371e-6 -> 1.175e-5) and QS
-  degrading ~4x, which is the `BALLOONING_WEIGHT = 200` trade. Worth reading
-  off it: the optimizer's NS = 25 grid reports 2.24e-4 where the resolved
-  NS = 45 solve says 9.12e-4, a **4x under-report in the flattering
-  direction**, which is why the example ends on a resolved certificate rather
-  than quoting the optimizer's own number. The configuration is still
-  ballooning-unstable at the end and the example says so.
-
-## Phase 38 — `step.py`'s restart helpers are a second implementation [OPEN]
-
-`restart_decision` and `apply_restart` (`vmex/core/step.py:116,142`) port
-`restart.f`'s back-off rules, and **nothing but `tests/test_step_control.py`
-calls them**: `solver.py` imports only `damping_coefficients` and
-`momentum_update` from that module and carries its own inline copy of the
-restart arithmetic in the `lax.while_loop` body (`solver.py:1417-1430`). So
-the tested rule is not the shipped rule.
-
-The duplication is known and undefended — `apply_restart`'s own docstring
-says *"The production loop in solver.py implements the same caller-level
-semantics ...; this helper must agree with it, not with restart.f in
-isolation"* — an obligation no test enforces.
-
-The right fix is to make `solver.py` call the helpers, so the tested rule
-becomes the shipped one. That is a change to the solver's hot path inside a
-`while_loop` and needs a full golden-parity campaign behind it, which is why
-it is its own phase rather than a cleanup folded into a review PR. Deleting
-the helpers instead would remove the encoded `restart.f` parity knowledge and
-is the worse trade.
-
-## Phase 39 — v0.7.0 shipped, and complete VMEC2000 profile coverage [SHIPPED]
-
-**v0.7.0 is on PyPI** (`vmex-0.7.0-py3-none-any.whl`, `vmex-0.7.0.tar.gz`),
-cut from `main` at the release commit with all seven publish jobs green.
-
-**The publish would have failed silently.** `publish-pypi.yml`'s wheel and
-sdist smoke test carried `assert vmex.__version__ == "0.6.0"` as a literal.
-The `verify` job would have failed on a v0.7.0 tag and `publish` is gated on
-it, so the GitHub Release and the tag would have existed with nothing on PyPI
-— a release that looks cut and did not ship. It now reads the tag minus its
-leading `v`; the `validate` job already checks that tag against `pyproject`,
-so the installed artifact is pinned without a second source of truth.
-
-**Every VMEC2000 profile parameterization is implemented** — enumerated from
-`profile_functions.f`'s `SELECT CASE` labels rather than from memory:
-
-| | vmex before | now | VMEC2000 |
-| --- | --- | --- | --- |
-| `PMASS_TYPE` | 7 | **10** | 10 |
-| `PIOTA_TYPE` | 5 | **7** | 7 |
-| `PCURR_TYPE` | 12 | **17** | 17 |
-
-The seven added: `sum_atan` (#158), then `two_power_gs`, `two_Lorentz`,
-`rational`, `nice_quadratic` and the three `sum_cossq_*` current forms (#159).
-Bit-exact against literal transcriptions — 0.0 relative for six of seven,
-7.4e-17 for `two_Lorentz`, 2.6e-16 for `sum_atan` — plus four live
-`xvmec2000` rows (`sum_atan` current `iotaf` 2.8e-14, `sum_atan` iota 1.2e-16,
-`two_Lorentz` pressure `presf` 1.4e-16, `rational` iota).
-
-**Three Fortran behaviours reproduced rather than tidied.** `rational` returns
-`HUGE(real64)` on a zero denominator, not NaN or infinity, and that value
-reaches a wout. `sum_atan` substitutes a hardcoded edge sum at `x >= 1` that is
-the true limit only when the scales and `(1-x)` exponents are positive. The
-`sum_cossq_*` window test is a strict `>`, so `I(0)` sits *above* `I` of the
-next sample — found by adding an `I(0) = 0` assertion that failed.
-
-**One deliberate deviation, in `two_power_gs` (#161).** An unset peak slot is
-all zeros, so its width is zero and `functions.f` evaluates
-`exp(-((x-0)/0)**2)`: harmless away from the axis, `0/0` at `x = 0`. VMEX
-reproduced VMEC exactly, NaN included — both give
-`[nan, 2.42590877, 1.33134598, 0.0]` — so it was faithful parity with a
-Fortran landmine, not a defect of the port. It fires for any deck filling
-fewer than six peaks, which is the ordinary way to use one or two, so a zero
-amplitude now skips the term. Fortran applies the same guard itself in
-`sum_cossq_s_free`. Every peak actually set stays bit-identical.
-
-**Numerics that only matter because vmex differentiates.** `jnp.power` with a
-non-integer exponent goes through `exp(e log x)`, so a plain `x ** c` puts
-`log(0)` on the tape and returns NaN for value *and* derivative at the axis,
-which is a real grid point. An earlier revision of `sum_atan` clamped `x` low
-to dodge that and moved `f(0)` by 2e-7 whenever an exponent was fractional;
-only the denominator needed guarding, and `_pow_at_zero` handles the base.
-
-- 2026-08-24 claude: the merge order that actually worked. `strict: true` plus
-  a ~30-minute `PR gate` means every merge invalidates every other open PR, so
-  running several merge monitors concurrently starved the slowest one: #153
-  passed CI **three separate times** (17:08, 17:39, 18:12) and was rebased back
-  to zero each time by my own automation. The lesson is to serialize merges
-  deliberately, slowest first, rather than sweeping in parallel.
-
-## Phase 40 — Reviewer pass on the open PRs [IN PROGRESS]
-
-- **#151** — reviewing rather than rebasing found a defect its own gate was
-  passing on. The two `<J.B>` lanes agree bit-for-bit across s = 0.2..0.9 after
-  the sine-family fix but were **4.0e-4 apart at s = 0**: every `m != 0`
-  harmonic vanishes at the magnetic axis where the surface degenerates to a
-  point, `redl_geometry_from_wout` zeroes them there and the `geom=None`
-  synthesis did not. The `rtol=1e-3` gate between the lanes had been passing on
-  it. Both now agree exactly and the test asserts array equality, since two
-  evaluations of one identity have no reason to differ at all.
-- **#152** — the turbulence lane opened to asymmetric states, earned against
-  simsopt's `vmec_fieldlines` rather than by deleting a guard. It also settled
-  a claim the module had asserted and never checked: vmex and simsopt differ by
-  **~3% in the drifts permanently**, and neither is wrong. vmex evaluates the
-  exact spectral |B|; `vmec_fieldlines` reads the band-limited wout `bmnc`
-  Nyquist table, and the drifts take a radial derivative of it. Measured, not
-  asserted: simsopt's own `gbdrift` moves 6.9e-3 between ns = 101 and 201 and
-  vmex's moves 5.9e-3 while the gap between them **plateaus at 3.1e-2**.
-  Local: 44 passed.
-- **#155** — `_require_symmetric` deleted; with turbulence opened in #152 and
-  Gamma_c here, nothing calls it. Local: 45 passed. The gradient finding stands
-  unchanged and the PR body now opens with an explicit claims / does-not-claim
-  box, because merging it must not read as endorsing Gamma_c for optimization.
-- **#156** (krystophny) — its CI had **never run**: a fork PR sitting in
-  `action_required`. Approved after reading the whole diff. Review points
-  stand: no `tests/manifest.json` record for the new test module, the 131-line
-  reproducer script should not ship, and its key assertion checks the
-  implementation (`got.input.ns_array == [7]`) where the behaviour is available.
-
-## Phase 41 — Reassessment after the v0.7.0 round [2026-08-24]
-
-Everything except this plan is merged. `main` carries v0.7.0 plus #151, #152,
-#153, #154, #155, #156, #158, #159, #160, #161, #162, and its own CI is green
-across all sixteen jobs including the parity lanes.
-
-### What changed, in order of how much it matters
-
-**Five wrong answers, now right.** Each was silent, and none had a failing
-test before it was found:
-
-1. The GKX bridge handed the operator an `R/L` where it consumes `a/L`, so
-   every turbulence evaluation ran at a drive `R/a` — **2.77x** — too strong.
-2. `vmec_j_dot_B_from_wout` dropped the `bmns`/`gmns` partners, symmetrizing
-   `<B^2>` on lasym decks (5.5e-4 to 2.8e-3 across s = 0.2..0.8), and
-   separately carried `m != 0` harmonics at the axis where the surface is a
-   point (4.0e-4).
-3. `two_power_gs` returned NaN at the axis for any deck filling fewer than six
-   Gaussian peaks — faithful parity with a Fortran landmine, which is why it
-   survived.
-4. The implicit gradient linearized about an under-converged state; refining
-   first moved the LASYM Mercier channel 4.2e-3 -> 5.3e-7 (#148, earlier).
-5. Two Gamma_c symmetry defects worth 55 % of the physical gradient.
-
-**Coverage that did not exist.** Twelve of fourteen primary CI lanes were
-invoked by no workflow — 36 modules, 256 tests, including the module that
-validates the manifest. Closed, with a guard test that fails if a declared
-lane is ever orphaned again. It found two real defects on arrival.
-
-**Users gained something.** Complete VMEC2000 profile parity (10/7/17, from
-7/5/12) on PyPI, verified bit-exact against literal Fortran transcriptions and
-against live `xvmec2000`.
-
-**Two lanes gained external oracles they never had.** Ballooning against
-COBRAVMEC (predicted conversion factor 9.4416e-02 against measured 9.4475e-02
-— derived, not fitted) and turbulence against simsopt's `vmec_fieldlines` on
-an asymmetric deck.
-
-### What is open, ranked
-
-1. **Gamma_c's gradient — the only genuine research problem left.** Diagnosed
-   to the line: `bounce_action` finds bounce points by testing whether
-   `1/lambda` falls between two adjacent grid samples, so a well contained
-   inside one interval is invisible and appears only when the grid refines.
-   DESC solves the cubic exactly per interval (`_bounce_utils.py:42`,
-   `polyroot_vec`, classified by `sign(dB/dz)`, Newton-polished). Measured
-   consequence: refining the along-line grid alone moves the gradient
-   +1.70, -0.69, -0.19, -0.41, -0.33 while the value converges to 4e-4 — the
-   gradient is ~750x less converged. On an *optimized* QA deck the value does
-   not converge either (34x between settings). The fix is a scoped port into
-   `vmex/core/bounce.py`, shared with max-J, behind the existing DESC
-   `bounce1d` parity test.
-2. **Phase 38** — `step.py`'s restart helpers are a second implementation of
-   `restart.f` that only tests call; the tested rule is not the shipped rule.
-   Needs `solver.py` to use them plus a golden-parity campaign.
-3. **Ballooning defaults** — `zeta0s=(0.0,)` under-reports `max lambda` by
-   26 % on the example's own seed, in the false-stable direction. The
-   measurement to justify a change exists; the change does not.
-4. **Phase 34.4** — production runs for the stability lanes, in the weekly
-   campaigns rather than a pull-request lane.
-5. **CI wall clock** ~30 min, parity lanes the long pole. `test_optimize` is
-   ~20 min of the c1 group; splitting it is the obvious lever.
-6. **Repo size** 26.70 MiB against the relaxed 28 MB ceiling, so the
-   blob-strip rewrite is no longer urgent.
-
-### Carried risk, documented rather than hidden
-
-- vmex and simsopt differ **~3 %** in the drifts permanently: vmex uses the
-  exact spectral |B|, `vmec_fieldlines` the band-limited wout `bmnc` table,
-  and the drifts take a radial derivative. Measured to be the band limit, not
-  an error — simsopt's own `gbdrift` moves 6.9e-3 per ns doubling while the
-  gap plateaus at 3.1e-2.
-- `filter_bsubuv_lasym` is idempotent to 3.8e-16 only while the force band
-  sits inside the grid Nyquist; a deck *can* leave that regime
-  (`MPOL = 8, NTHETA = 10`) and a second pass then moves the field by 1.7.
-- `rational` returns Fortran `HUGE` on a zero denominator, and that value
-  reaches a wout.
-
-### Process lessons, which cost real time tonight
-
-- **Merge automation must assert on positive evidence.** Twice it raced CI:
-  first repeated rebases starved #153, which passed three separate times
-  without merging; then a `settle` helper treated "no pending checks" as
-  "checks finished", when it is equally true *before* they start — #156 and
-  #151 merged with `ok=0`. `main`'s own run later confirmed both, but the gate
-  should have held. `strict: true` plus a 30-minute gate means every merge
-  invalidates every other open PR, so merges must be serialized deliberately,
-  slowest first.
-- **A release can look cut and ship nothing.** `publish-pypi.yml` asserted
-  `vmex.__version__ == "0.6.0"` as a literal; the tag and Release would have
-  existed with PyPI untouched.
-- **Static tools do not check tuple arity across a stacked pair.** Splitting
-  `_surface_closures` left `gammac.py` unpacking five values from a
-  four-value function; neither ruff nor mypy caught it, only the test did.
-
-## Phase 42 — High-order force balance, WSL2, and CI efficiency [ACTIVE — 2026-08-29]
-
-PR #125 is being finalized into `main` as the durable historical ledger. The
-fixed-boundary high-order force-balance implementation follows the separately
-audited 2026-08-29 contract and the focused PR sequence below; this checkpoint
-supersedes older instructions to keep #125 open indefinitely.
-
-### Completed and merged
-
-- VMEX #163-#166: high-order radial basis, independent strong-force oracle,
-  matrix-free linearization, and low-order preconditioner foundations.
-- VMEX #177: QA optimization startup no longer waits minutes for an unnecessary
-  residual-Jacobian construction.
-- VMEX #179: conservative change scoping. Documentation/rendered-media-only PRs
-  retain quality and docs but skip numerical lanes; source, tests, tools,
-  workflows, configuration, unknown paths, and every push to `main` keep the
-  full gate.
-- SOLVAX #92, DKX #78, and ESSOS #58 passed their complete project matrices and
-  were independently reviewed and merged.
-
-### Open, deliberately draft scientific stack
-
-- VMEX #171 -> #174 -> #175 -> #176 -> #178 is rebuilt on current `main`, with
-  the superseded QA commits and unrelated WSL2 commits removed from its ancestry.
-- Streaming Ruiz equilibration leaves the production `mpol=6`, `ns=11`, degree-5
-  strong root at numerical rank 112/117 and condition estimate `8.07e10`.
-  Exponential mode scaling, spectral-condensation weights, and an 82-by-82
-  reduced displacement chart were measured and rejected as rank fixes.
-- Matching DESC's coordinate-volume weighting on both physical force channels
-  improves the measured operator to rank 113/117 and condition estimate
-  `8.83e9`, with warm residual/JVP costs `3.09/4.95 ms`. It remains a draft:
-  the final four lambda/helical directions and the alpha=1 independent
-  certificate are open, and the public polish/implicit APIs must not merge first.
-
-### WSL2 and pull-request gates
-
-- VMEX #172 diagnoses WSL2 explicitly, runs a real selected-device JIT probe,
-  versions cache provenance by executable compatibility, and directs JAX 0.9.2
-  users to the first verified fixed release rather than globally hiding failed
-  CUDA initialization. #173 contains the paired cold/cache-reload/warm benchmark.
-- Source-changing merge candidates run one full hosted matrix after their base is
-  final. Superseded draft matrices are canceled; focused local tests and the
-  independent scientific diagnostic cover iteration between merge candidates.
-
-### Remaining priority order
-
-1. Merge #172 and #173 only after current coverage and aggregate gates pass.
-2. Localize and remove the last four high-order lambda/helical weak directions;
-   certify alpha=1 before exposing the polish or implicit API.
-3. Complete gradient/runtime/peak-memory profiling and downstream BOOZ_XFORM_JAX,
-   DKX, GKX, and ESSOS checks on the certified state.
-4. Run VMEC2000, VMEC++, and DESC on frozen equivalent inputs; commit raw
-   provenance and the reviewer-proof README comparison figure.
-5. Resume the still-open Phase 41 work (Gamma_c roots, restart unification,
-   ballooning defaults/production campaigns) without conflating it with the
-   fixed-boundary force-balance acceptance gate.
-
-- 2026-08-29 rogeriojorge: finalized PR #125 for merge; recorded the independent
-  force-balance literature/conditioning review, clean scientific restack,
-  WSL2 remediation, and conservative CI-scoping decision.
-
-### Consolidation checkpoint — 2026-08-29
-
-- The experimental stack is consolidated into VMEX PR #192. Its production
-  path uses the certified rectangular SOLVAX least-squares solve, and its
-  tangent, adjoint, and custom VJP differentiate the same `J.T r = 0`
-  stationarity equation, including the nonzero-residual Hessian term.
-- The reviewer figure now compares analytical Solov'ev and a finite-beta QA
-  stellarator against VMEC2000, VMEC++, and adequately resolved DESC results.
-  It reports equation-defined relative force error, volume-L2 force error, and
-  cold runtime with short factual titles. Standard WOUT plotting combines
-  pressure and parallel current, uses the third top panel for relative force
-  error, and prints its maximum in the equilibrium summary for vacuum and
-  finite-beta cases.
-- Native polished field and surface views feed BOOZ_XFORM_JAX,
-  VIRTUAL_CASING_JAX, and ESSOS without WOUT round trips or finite-difference
-  tangents. The real optimization gate is relative field-strength variance at
-  rho=0.7; its implicit derivative agrees with two independently polished
-  centered finite-difference endpoints to `5.11e-5` relative.
-- Direct downstream gates pass: BOOZ_XFORM_JAX 20 tests (7 optional skips),
-  VIRTUAL_CASING_JAX 137 tests (1 skip), ESSOS 40 relevant tests plus its
-  finite-beta VMEX optimization example, GKX 57 differentiable-geometry tests,
-  and DKX 6 slow flagship QA/bootstrap tests in 576.20 s. GKX PR #160, DKX
-  PR #78, and ESSOS PR #58 are merged.
-- VMEX code clarity is a release gate. Production mathematics lives once in
-  typed core functions; benchmarks remain thin clients. PR #192 has 51 tracked
-  benchmark files versus 37 on `main`, after deleting 15 obsolete exploratory
-  artifacts and consolidating external launchers. That 14-file delta is a hard
-  cap: no additional benchmark file may enter this PR. Future benchmark PRs
-  must state their file-count delta and consolidate or delete superseded files
-  at least as quickly as they add current ones; rejected experiments are logged
-  here rather than retained as permanent artifacts.
-- Development uses focused changed-module and scientific gates. The complete
-  hosted matrix runs once on the final source candidate; superseded source
-  candidates are canceled. This preserves full release confidence without
-  repeatedly paying for unchanged numerical lanes.
-- The final candidate's 18 primary hosted jobs all passed; `c1` completed in
-  43m45s. The aggregate changed-line gate then measured 89%. Rather than add
-  benchmark cases or coverage-only production branches, the audit deleted the
-  unused 80-line eigenvalue-orientation experiment from the runtime builder and
-  added focused contracts for PyTree reconstruction, physical-chart adapters,
-  implicit-solve failures, Boozer validation, and missing force data. The
-  benchmark count remains 51.
-- Packaging is checked against built artifacts, not source version strings.
-  SOLVAX 0.19.0 was tagged before its least-squares PR merged, so VMEX requires
-  the corrective 0.20.0 release from merged PR #99. Its published wheel was
-  independently installed and exposes all three required APIs. ESSOS 0.16
-  predates
-  `SquaredFlux`; the hosted optional test skips that absent API, while the
-  mandatory current-ESSOS-main integration gate is recorded above.
-- 2026-08-30 rogeriojorge: Phase 42 — final README/polish usability pass now
-  replaces the analytical Solov'ev row with a general finite-pressure tokamak;
-  both comparison rows must contain VMEX, VMEC2000, VMEC++, and adequately
-  resolved DESC results, including cold runtime. The final figure has no grid
-  lines and labels radius as ``rho=sqrt(s)``, ``s=psi/psi_B``. A second README
-  figure shows the standard finite-pressure stellarator summary before and
-  after polishing. The user-facing path is one ordinary example script plus a
-  VMEC-safe ``! VMEX: POLISH_FORCE_BALANCE = .TRUE.`` comment, a matching
-  ``polish_force_balance=`` Python keyword, and an opt-in finalization flag in
-  ``QA_optimization.py``. The example/file budget is unchanged: the old
-  argparse-only single-file directory is removed, and benchmark artifacts are
-  consolidated or replaced within the 51-file cap. A measured axisymmetric
-  acceptance case reduces independent relative force error from ``1.284e-2``
-  to ``1.820e-3`` in three nonlinear steps; the 3-D memory/compile cost remains
-  an explicit performance gate while the stellarator figure is finalized.
-- 2026-08-30 rogeriojorge: Phase 42 acceptance — corrected the high-order
-  field-period coordinate transform and added an axisymmetric ``nfp``
-  invariance gate. The committed comparison now contains clean results from
-  VMEX, VMEC2000, VMEC++, and DESC for both a finite-pressure shaped tokamak
-  and the finite-beta QA stellarator. Independent volume-L2 errors are
-  ``1.819e-3 / 1.711e-2 / 1.711e-2 / 2.962e-2`` for the tokamak and
-  ``0.525 / 0.525 / 0.525 / 0.879`` for the stellarator, in that solver order.
-  Cold end-to-end stellarator times are ``6.53 / 1.00 / 0.481 / 153`` seconds.
-  The two cases and eight source records are consolidated in one provenance
-  bundle; seven superseded artifacts were removed, reducing the tracked
-  benchmark-file count from 51 to 45. Both README figures are generated from
-  those records, hash-gated, and visually reviewed without rerunning unrelated
-  CI lanes.
+| F1 | fixed-boundary single-grid value |
+| F2 | fixed-boundary multigrid value |
+| F3 | fixed-boundary polished value |
+| F4 | implicit scalar value + gradient |
+| F5 | vector residual + full Jacobian |
+| F6 | hot-restart parameter scan |
+| F7 | scalar boundary optimization, 10 accepted steps |
+| F8 | residual least-squares optimization, 5 accepted steps |
+| F9 | fixed-boundary single-stage plasma + ESSOS coils |
+| F10 | free-boundary value and adjoint |
+| F11 | symmetric versus LASYM value/gradient/Jacobian |
+| M1 | isotropic fixed-boundary mirror |
+| M2 | axisymmetric free-boundary mirror |
+| M3 | periodic hybrid equilibrium and GK geometry |
+| B1 | BOOZ_XFORM_JAX one surface |
+| B2 | BOOZ_XFORM_JAX many selected surfaces |
+| C1 | epsilon-effective summary diagnostic |
+| C2 | Gamma-c value and derivative-safe objective |
+
+### 9.3 Timing regimes
+
+Each JAX workflow must run in separate modes:
+
+1. **cold process, empty persistent cache**;
+2. **new process, populated persistent cache**;
+3. **warm same process, same shapes/static arguments**;
+4. **same process, changed physical parameters but same shapes**;
+5. **same process, changed resolution/shape**.
+
+Never report mode 3 as a cold solve. Never claim the persistent cache works without a logged cache hit.
+
+### 9.4 Platforms
+
+Store at least:
+
+- Apple Silicon or representative laptop CPU;
+- Linux x86 CPU;
+- NVIDIA CUDA GPU;
+- WSL2/CUDA when it remains a supported target.
+
+GPU runs must record driver, CUDA, jaxlib, GPU model, memory, and XLA flags.
+
+### 9.5 Artifact schema
+
+Commit small machine-readable summaries such as:
+
+```json
+{
+  "schema": 1,
+  "repo": "uwplasma/vmex",
+  "commit": "...",
+  "case_sha256": "...",
+  "platform": {...},
+  "jax": {...},
+  "workflow": "F4",
+  "regime": "persistent_cache_reload",
+  "timing_s": {...},
+  "memory_bytes": {...},
+  "iterations": {...},
+  "accuracy": {...}
+}
+```
+
+Large traces remain release/workflow artifacts, not Git blobs. Commit a manifest with hashes and retrieval instructions.
+
+### 9.6 Baseline gate
+
+No Phase 3 performance refactor begins until:
+
+- the full matrix runs unattended;
+- asynchronous timing is correct;
+- at least one XProf trace exists for each flagship class;
+- repeated compilation reasons are captured;
+- current results are committed as the baseline.
+
+---
+
+## 10. Phase 3 - Improve VMEX solve, optimization, single-stage, and gradient performance
+
+**Depends on:** Phase 2.
+
+Apply changes only where the profile identifies a significant cost.
+
+### 10.1 Stop accidental recompilation
+
+Audit for:
+
+- `jax.jit` around nested functions created on every call;
+- lambdas or fresh `partial` objects passed as jitted callables;
+- changing Python container structure;
+- data-dependent static arguments;
+- incidental dtype promotion;
+- changing surface tuples or chunk sizes;
+- closure capture of large arrays;
+- repeated construction of mode/basis/runtime objects;
+- host callbacks that produce new shapes.
+
+Move hot jitted functions to module scope or cache stable callable objects. Add a regression test that counts traces/compiles for repeated same-shape evaluations.
+
+### 10.2 Introduce explicit compiled plans
+
+Use small static plans for repeated work:
+
+```python
+SolvePlan(resolution, symmetry, device, dtype, mode_tables, transforms)
+PolishPlan(radial_basis, collocation_grid, validation_grid, chart, preconditioner)
+ObjectivePlan(surfaces, Boozer resolution, field-line grid, diagnostic config)
+```
+
+Plans contain static arrays and shape policy, not mutable physical state. Cache by a deterministic key and bound cache size.
+
+### 10.3 Share geometry and field evaluations across objectives
+
+Multiple optimization objectives often rebuild geometry, fields, Boozer tables, and surface closures independently. Add an internal evaluation bundle:
+
+```python
+EvaluationContext(
+    geometry,
+    jacobian,
+    metrics,
+    fields,
+    profiles,
+    selected_surface_tables,
+)
+```
+
+- Build once per equilibrium state and objective batch.
+- Keep it a pytree or explicit function result; do not introduce hidden global memoization keyed by tracer identity.
+- Aggregate scalar objectives before one reverse implicit solve.
+- Aggregate vector residuals before one block response when their state/operator is shared.
+
+### 10.4 Reuse linear algebra across nearby solves
+
+- Carry GCRO-DR/GCROT recycle spaces across:
+  - continuation steps;
+  - optimizer trial points;
+  - tangent/adjoint calls with the same operator;
+  - neighboring radial surfaces when appropriate.
+- Reuse block-Thomas factors while the frozen low-order operator remains within a measured drift threshold.
+- Add a cheap certificate after reuse:
+  - true linear residual;
+  - preconditioned residual;
+  - operator/factor drift estimate.
+- Rebuild immediately on certificate failure.
+
+### 10.5 Improve preconditioner refresh policy without changing parity mode
+
+The VMEC-compatible default retains the fixed `ns4=25` update cadence.
+
+Add an opt-in performance policy that can refresh when:
+
+- preconditioned residual reduction degrades;
+- diagonal/block coefficients drift beyond a threshold;
+- Krylov iteration count rises;
+- continuation changes pressure/current/load substantially.
+
+Compare against:
+
+- the 1991 Hirshman-Betancourt tridiagonal preconditioner;
+- VMEC2000;
+- VMEC++ `updateRadialPreconditioner()` behavior;
+- VMEX 1-D and 2-D paths.
+
+References:
+
+- https://doi.org/10.1016/0021-9991(91)90267-O
+- https://arxiv.org/abs/2502.04374
+
+The adaptive policy cannot become default until it preserves converged state, VMEC parity where expected, and improves a broad benchmark set.
+
+### 10.6 Polishing preconditioner
+
+For the normal system, evaluate:
+
+1. mode-block low-order factorization from PR #192;
+2. radial block-Thomas with exact transpose;
+3. a coarse radial/mode correction;
+4. mixed-precision factors with float64 residual iterative refinement;
+5. factor/recycle reuse across Gauss-Newton and continuation steps.
+
+Track true residual and normal-equation residual. Do not judge a preconditioner only by iteration count if setup or memory dominates.
+
+### 10.7 Fusion and allocation work
+
+Inspect StableHLO and XProf before editing.
+
+Candidates include:
+
+- batched Fourier analysis/synthesis contractions;
+- geometry/field intermediates materialized multiple times;
+- parity splitting and LASYM transforms;
+- collocation residual and transpose actions;
+- repeated packing/unpacking of large pytrees;
+- free-boundary vacuum response;
+- Boozer input tables.
+
+Prefer ordinary JAX refactoring and XLA fusion first. Use Pallas only for a kernel with:
+
+- a reproduced bottleneck;
+- stable shape contracts;
+- CPU fallback;
+- derivative tests;
+- measurable end-to-end gain.
+
+Pallas is experimental: https://docs.jax.dev/en/latest/401/pallas.html
+
+### 10.8 Persistent cache policy
+
+- Centralize cache setup in one documented helper/CLI policy.
+- Set it before the first JAX compilation.
+- Record cache directory, max size, trust warning, and hit/miss statistics.
+- Do not call `jax.clear_caches()` inside normal library functions.
+- Provide an explicit memory-release operation for command-line batch boundaries.
+- Test cache reload in a new process.
+
+### 10.9 Performance acceptance
+
+For every promoted change:
+
+- numerical result within the declared tolerance;
+- no new compile for same shape and static configuration;
+- no end-to-end regression greater than 5% on unaffected flagship workflows unless justified;
+- at least 20% improvement in the targeted bottleneck or a clearly larger memory reduction;
+- peak memory does not increase without a documented tradeoff;
+- derivative cost and accuracy are measured, not assumed from primal speed.
+
+---
+
+## 11. Phase 4 - Make BOOZ_XFORM_JAX faster, smaller, and the canonical full transform
+
+### 11.1 Baseline the actual kernel
+
+Profile `surface_transform` and `run_vmec_jax` for:
+
+- one symmetric surface;
+- one LASYM surface;
+- 5, 20, and all surfaces;
+- low, medium, and high `mboz/nboz`;
+- CPU and GPU;
+- value, JVP, and VJP.
+
+Measure the memory of:
+
+- input phase tensor;
+- output phase tensor;
+- Newton Jacobian;
+- vmap batch;
+- surface chunking;
+- returned spectra.
+
+### 11.2 Replace environment-only behavior with explicit configuration
+
+Add a frozen public configuration:
+
+```python
+@dataclass(frozen=True)
+class BoozerConfig:
+    mboz: int
+    nboz: int
+    surface_chunk: int | str = "auto"
+    memory_budget_bytes: int | None = None
+    execution: str = "auto"       # scan, host_chunks, batched
+    newton_tol: float = ...
+    max_newton: int = ...
+```
+
+Environment variables may supply defaults for CLI compatibility, but functions receive an explicit config.
+
+### 11.3 Add a reusable static plan
+
+```python
+BoozerPlan(
+    mode tables,
+    angle grids,
+    quadrature weights,
+    transform blocks,
+    chunk schedule,
+    device/dtype,
+)
+```
+
+- Build once for a static resolution.
+- Reuse across surfaces, equilibrium iterates, and optimization steps.
+- Cache with a bounded deterministic key.
+- Keep physical coefficients out of the plan.
+
+### 11.4 Evaluate contraction strategies
+
+Implement benchmark branches, then keep only the winner per regime:
+
+1. current dense point-by-mode phase tensors;
+2. separable theta/zeta contractions;
+3. blocked point/mode contractions with `lax.scan`;
+4. FFT-based synthesis/projection where the transformed grid permits it;
+5. streamed output-mode blocks;
+6. custom VJP that recomputes cheap phases rather than retaining them.
+
+The transform uses nonlinear mapped angles, so a plain 2-D FFT cannot replace every contraction. Use separability/FFT only where mathematically exact for the relevant stage.
+
+### 11.5 Newton reuse across radial surfaces
+
+Nearby surfaces have nearby Boozer angle shifts.
+
+- Warm-start each selected surface from its neighbor.
+- Optionally reuse a preconditioner/factorization with a residual certificate.
+- Order surfaces monotonically in flux internally, then restore user order.
+- Carry no warm state between unrelated equilibria unless explicitly supplied.
+
+### 11.6 Memory-aware chunking
+
+Compute chunk size from:
+
+- available device memory;
+- phase/Jacobian buffer model;
+- requested mode and surface counts;
+- derivative mode.
+
+The auto policy must be deterministic, report its choice, and never use host RSS as a proxy for GPU capacity.
+
+### 11.7 Refactor ownership
+
+- Keep compatibility I/O and legacy object API in `core.py` or a clearly named compatibility layer.
+- Keep the canonical JAX kernel, plan, and dataclasses together.
+- Remove duplicated sign/layout conversion after tests prove one owner.
+- Keep public names backward compatible through thin aliases during one deprecation cycle.
+- Shorten docstrings that repeat theory already documented elsewhere, but retain conventions and derivative semantics.
+
+### 11.8 Cross-code and derivative tests
+
+Compare with:
+
+- classic BOOZ_XFORM/STELLOPT;
+- existing BOOZ_XFORM_JAX output;
+- VMEX host WOUT path;
+- analytic axisymmetric and single-helicity fields.
+
+Require:
+
+- spectra and coordinate shifts within existing or tighter tolerances;
+- symmetry/LASYM parity;
+- surface-order invariance;
+- JVP/VJP duality;
+- finite-difference checks on smooth cases;
+- memory tests demonstrating bounded growth with surface count under chunking.
+
+### 11.9 Decide the VMEX lightweight transform
+
+Benchmark `vmex/core/omnigenity.py` symmetric transform against the canonical BOOZ_XFORM_JAX plan.
+
+Keep the VMEX implementation only if all are true:
+
+- it is materially faster for inner-loop selected-surface objectives;
+- it has lower memory;
+- it matches full BOOZ_XFORM_JAX for the needed outputs;
+- maintaining two paths has a clear test boundary.
+
+Otherwise:
+
+- retain `boozer_input_tables` in VMEX;
+- call BOOZ_XFORM_JAX for both symmetric and LASYM;
+- delete the duplicate transform after updating QI/omnigenity tests.
+
+**Acceptance:** one canonical full transform, explicit memory policy, lower measured peak memory, and no accuracy regression.
+
+---
+
+## 12. Phase 5 - Quick confinement-summary improvement: plot Gamma-c with epsilon effective
+
+This is a deliberately small early PR after the relevant APIs are stable.
+
+### 12.1 Current state
+
+The top-middle summary panel already plots pressure and overlays diagnostic `epsilon_eff^(3/2)` on a right axis. Add `Gamma_c` to this same confinement axis; do not create a fourth row or a second expensive independent Boozer transform.
+
+### 12.2 Shared diagnostic context
+
+Replace the narrowly named epsilon cache with a bounded confinement cache:
+
+```python
+ConfinementSummary(
+    surfaces,
+    epsilon_effective,
+    gamma_c,
+    validity,
+    notes,
+    timing,
+)
+```
+
+Key the cache by:
+
+- WOUT/native equilibrium identity or content hash;
+- selected surfaces;
+- Boozer resolution;
+- NEO configuration;
+- Gamma-c diagnostic configuration.
+
+Use weak references where in-memory objects are keys. Bound the number of entries.
+
+### 12.3 Avoid duplicate work
+
+- Reuse one in-memory Boozer result for effective ripple and any Gamma-c ingredients that actually live in Boozer coordinates.
+- Reuse selected surfaces and field tables.
+- Do not force Gamma-c through Boozer if its current validated real-space path is faster and more accurate; share only mathematically common work.
+- Do not clear all JAX caches inside a plotting library call.
+- Change `epsilon_effective_from_wout(..., clear_jax_caches=True)` to a library-safe default of `False`.
+- Let the CLI explicitly release caches after all requested diagnostics when memory policy asks for it.
+
+### 12.4 Plot semantics
+
+- Pressure stays on the left axis.
+- `epsilon_eff^(3/2)` and `Gamma_c` share the right confinement axis.
+- Use distinct markers/linestyles and one combined legend.
+- Use log scale only when all valid positive data and dynamic range justify it.
+- If one diagnostic is unavailable, plot the other and state the reason in the panel metadata/title or log.
+- Never plot a failed/nonconverged Gamma-c value as zero.
+
+### 12.5 Tests and budget
+
+- unit test the combined-axis metadata and line labels;
+- test missing NEO_JAX, invalid Gamma-c, and one-valid/one-invalid cases;
+- test cache hit on repeated summary generation;
+- test that same-result plotting does not compile the same diagnostic again;
+- add a bounded runtime gate for the bundled diagnostic case;
+- ensure figures are closed.
+
+**Acceptance:** `vmex --plot wout_*.nc` produces the requested combined profile without a material increase from duplicated work.
+
+---
+
+## 13. Phase 6 - Make Gamma-c usable in optimization without branch-noise derivatives
+
+### 13.1 Keep three distinct semantics
+
+Expose three clearly named objects:
+
+1. `GammaCValue` - current hard physical diagnostic, not promised differentiable across topology events;
+2. `GammaCTracked` - fixed/matched well topology with implicit bounce-point derivatives;
+3. `GammaCSmooth` - smooth optimization surrogate with annealed topology regularization.
+
+Do not keep one class whose derivative meaning changes silently with options.
+
+### 13.2 Tracked-well formulation
+
+At a reference equilibrium:
+
+1. detect all complete wells for each line and pitch;
+2. assign persistent well IDs and orientation;
+3. store brackets for left/right bounce roots;
+4. define feature vectors using center, width, `B_min`, `B_max`, bounce action, and neighboring connectivity;
+5. match wells at the next iterate using a minimum-cost assignment;
+6. solve bounce points inside their matched brackets;
+7. differentiate the roots implicitly rather than through a discrete root-search iteration;
+8. calculate Gamma-c on the fixed matched topology.
+
+Use the graph perspective of multi-well bounce domains to represent splitting, merging, and connectivity. Reference:
+
+- I. E. Ochs, *Bounce-averaged theory in arbitrary multi-well plasmas: solution domains and the graph structure of their connections*, J. Plasma Phys. (2025), https://doi.org/10.1017/S002237782510069X
+
+### 13.3 Branch events
+
+A merge, split, birth, death, bracket crossing, or assignment ambiguity is not an ordinary differentiable step.
+
+Return a report:
+
+```python
+GammaCTopologyReport(
+    matched,
+    born,
+    lost,
+    merged,
+    split,
+    ambiguous,
+    min_bracket_margin,
+)
+```
+
+Optimization policy:
+
+- accept a tracked derivative only when topology is certified unchanged;
+- reduce the outer trust region when a branch event is imminent;
+- refresh the reference topology after an accepted event;
+- reject or fall back to the smooth surrogate when matching is ambiguous;
+- always recompute the hard value after an accepted outer step.
+
+### 13.4 Smooth surrogate
+
+Develop a root-free or smoothly rooted surrogate using:
+
+- soft extrema for pitch range;
+- smooth occupancy near `1 - lambda B = 0`;
+- smooth periodic partition of wells;
+- softmin tangency evaluation rather than hard argmin;
+- temperature tied to angular/field-line resolution;
+- annealing during optimization.
+
+Requirements:
+
+- converges toward hard Gamma-c as temperature decreases and resolution increases on fixed topology;
+- gradients converge under field-line, pitch, quadrature, and radial refinement;
+- no overflow/well-count discontinuity in the optimization range;
+- value correlation with hard Gamma-c and ESSOS prompt loss is documented.
+
+### 13.5 Efficient implementation
+
+- Keep field-line geometry and pitch grids static for a stage.
+- Batch surfaces, field lines, and pitches while bounding memory.
+- Cache topology and brackets outside the AD trace.
+- Use SOLVAX implicit/root primitives for bounce roots if they fit; otherwise add only a generic bracketed implicit-root primitive to SOLVAX.
+- Reuse spectral point-evaluation closures and avoid one `jacfwd` construction per point.
+- Profile hard, tracked, and smooth variants separately.
+
+### 13.6 Physics references
+
+- V. V. Nemov, S. V. Kasilov, W. Kernbichler, G. O. Leitold, *Poloidal motion of trapped particle orbits in real-space coordinates*, Phys. Plasmas 15, 052501 (2008), https://doi.org/10.1063/1.2912456
+- J. L. Velasco et al., *A model for the fast evaluation of prompt losses of energetic ions in stellarators*, Nucl. Fusion 61, 116059 (2021), https://doi.org/10.1088/1741-4326/ac2994
+- K. Unalmis et al., *Spectrally accurate, reverse-mode differentiable bounce-averaging algorithm and its applications*, J. Plasma Phys. 92 (2026), https://doi.org/10.1017/S0022377826101652
+- J. R. Cary and S. G. Shasharina, *Helical plasma confinement devices with good confinement properties*, Phys. Rev. Lett. 78, 674 (1997), https://doi.org/10.1103/PhysRevLett.78.674
+
+### 13.7 Gradient certification
+
+For at least three configurations:
+
+- simple single-well analytic/synthetic field;
+- bundled QA/QH equilibrium;
+- multi-well equilibrium near, but not at, a topology event;
+
+check:
+
+- resolution convergence of value;
+- resolution convergence of directional derivative;
+- tracked implicit derivative versus fixed-topology finite difference;
+- smooth derivative versus finite difference;
+- JVP/VJP duality;
+- branch-event detection;
+- hard value before/after optimization.
+
+Do not promote until the derivative has a stable sign and magnitude under the declared production resolution refinement.
+
+### 13.8 Combined omnigenity example
+
+Create one file:
+
+```text
+examples/optimization/omnigenity_epsilon_gammac_maxj.py
+```
+
+Structure:
+
+1. imports;
+2. all user parameters at the top;
+3. input/boundary construction;
+4. VMEX solve with optional polishing;
+5. shared Boozer/field-line plan;
+6. normalized objective terms;
+7. one optimizer call;
+8. before/after print table;
+9. hard validation metrics;
+10. plots and saved outputs.
+
+Objective:
+
+```text
+w_eps * normalized epsilon_eff
++ w_gc * normalized derivative-safe Gamma-c
++ w_maxj * normalized maximum-J residual
++ geometric and force-balance constraints.
+```
+
+Rules:
+
+- scale terms from the initial values or explicit physical scales;
+- print each term separately;
+- use one aggregate scalar adjoint;
+- validate with hard Gamma-c and ESSOS orbit losses;
+- include a fast CI mode and a documented research-resolution mode;
+- do not imply that minimizing the surrogate guarantees zero losses.
+
+---
+
+## 14. Phase 7 - Make LASYM fast, accurate, and scientifically meaningful
+
+### 14.1 Full LASYM performance anatomy
+
+Use the Phase 2 harness to compare symmetric and LASYM at identical physical/mode resolution:
+
+- setup;
+- geometry synthesis;
+- force kernels;
+- parity reconstruction;
+- Fourier analysis;
+- preconditioner assembly/application;
+- residual/Jacobian;
+- WOUT;
+- Boozer;
+- stability and Gamma-c;
+- implicit tangent/adjoint;
+- outer optimization.
+
+The existing vectorized filtering gains are not enough; identify the remaining 2.5-5x residual gap and any 8-contraction/extended-precision path.
+
+### 14.2 Remove avoidable duplicate parity work
+
+Candidate work, subject to profiling:
+
+- stack symmetric/asymmetric kernels into fewer batched contractions;
+- use one full-circle transform plan rather than repeated mirror/reindex operations;
+- cache LASYM mode masks and partner maps;
+- avoid reconstructing zeros for inactive families;
+- separate validation-only long-double calculations from production when float64 is certified;
+- fuse paired cosine/sine projections;
+- chunk Jacobian/VJP families by memory model.
+
+### 14.3 Accuracy matrix
+
+For fixed/free-boundary and vacuum/finite-beta cases:
+
+- compare VMEX and VMEC2000 WOUT tables;
+- compare independently evaluated force balance;
+- verify parity under controlled asymmetric perturbations;
+- verify Mercier/Glasser, bootstrap, Boozer, field, and virtual-casing quantities;
+- test hot restart and multigrid;
+- test polished LASYM only after PR #192 explicitly supports/certifies it.
+
+### 14.4 Meaningful asymmetric optimization
+
+Do not merely set `LASYM=True` on a symmetric objective and celebrate a tiny sine coefficient.
+
+Build a flagship campaign with:
+
+- a symmetric optimized reference;
+- an asymmetric design space initialized through a controlled sine-mode continuation;
+- a physical objective that can benefit from asymmetry, such as confinement under asymmetric port/coil/field constraints, or demonstrably lower QI/QS/Gamma-c/loss metric under the same engineering constraints;
+- a gauge-invariant asymmetry norm;
+- bounded surface separation, curvature, aspect ratio, iota, and force balance;
+- at least three small independent asymmetric seed perturbations.
+
+A result is physically distinct only when:
+
+- sine-family amplitudes exceed resolution/noise and remain under refinement;
+- the asymmetry cannot be removed by a toroidal/poloidal phase shift or coordinate gauge;
+- the objective improvement survives a re-solve and independent evaluation;
+- multiple seeds find the same basin or comparable result;
+- the final field is nested, force balanced, and coil-feasible enough for the stated claim.
+
+### 14.5 LASYM downstream gaps
+
+- BOOZ_XFORM_JAX already carries asymmetric spectra; keep this path canonical.
+- NEO_JAX currently rejects LASYM in VMEX's effective-ripple adapter. Decide whether to:
+  1. extend NEO_JAX's Boozer data contract and equations to asymmetric harmonics; or
+  2. use DKX/another neoclassical oracle for LASYM effective-ripple-like transport.
+- ESSOS released field readers must preserve asymmetric WOUT tables and differentiability.
+- Add explicit capability tables so unsupported downstream combinations fail, not symmetrize.
+
+### 14.6 Acceptance
+
+- same-shape LASYM repeated evaluations do not recompile;
+- targeted performance bottlenecks improve materially;
+- all derivative certificates pass;
+- one committed asymmetric configuration and script reproduce the scientific improvement;
+- README wording states exactly which objective and constraints improved.
+
+---
+
+## 15. Phase 8 - Formalize mirror boundary conditions and harden the isotropic lane
+
+### 15.1 Write the model contract before changing numerics
+
+Add `docs/explanation/mirror-boundary-conditions.md` deriving the variational and strong equations for each topology.
+
+#### Open fixed-cut mirror
+
+- radial label `s in [0,1]`;
+- poloidal angle `theta`;
+- axial coordinate `xi in [-1,1]`;
+- fixed lateral boundary at `s=1`;
+- regular axis at `s=0`;
+- prescribed geometry and normal magnetic flux at the two cuts;
+- cuts permit through-flux and are not plasma-vacuum interfaces;
+- no claim of sheath/end-loss equilibrium physics.
+
+#### Open free-lateral-boundary mirror
+
+- side wall is the plasma-vacuum interface;
+- ideal interface has `B . n = 0` on each side;
+- isotropic total-pressure continuity is `p + B^2/(2 mu0)`;
+- anisotropic continuity becomes `p_perp + B^2/(2 mu0)`;
+- end caps close the Green surface mathematically but receive no side-wall pressure-balance condition.
+
+#### Periodic hybrid
+
+- all geometry and field variables periodic;
+- no end-cap conditions;
+- field-line closure/rationality handled as a diagnostic/selection condition, not a fake boundary condition.
+
+### 15.2 Derive natural boundary terms
+
+Starting from the existing mirror energy, derive the first variation including all lateral and cut terms. For every term, show whether it vanishes because of:
+
+- fixed geometry;
+- fixed flux;
+- periodicity;
+- regularity;
+- physical interface balance;
+- gauge.
+
+Turn these into tests by evaluating the discrete directional derivative for variations that isolate each boundary family.
+
+### 15.3 Strengthen radial-axis regularity
+
+The current radius interpolation uses odd/even leading factors, while the stream function uses full mode-dependent `rho^|m|` regularity.
+
+Audit the physical polar representation and implement full mode-dependent regularity where required:
+
+```text
+coefficient_m(rho, xi) = rho^|m| * smooth_even_function(rho, xi)
+```
+
+or an equivalent smooth polar B-spline chart.
+
+Reference the general high-order polar regularity literature, including:
+
+- https://arxiv.org/abs/2601.17841
+
+Do not change the stored state until interpolation/derivative tests demonstrate the need and mapping.
+
+### 15.4 Isotropic validation suite
+
+Add or tighten:
+
+- straight circular vacuum mirror;
+- paraxial finite-beta mirror;
+- manufactured geometry/field with known curl/divergence;
+- weak residual versus AD energy gradient;
+- strong residual convergence;
+- axis regularity;
+- cut boundary terms;
+- lateral fixed-boundary constraint;
+- free-boundary interface residual;
+- divergence-free field;
+- Fourier versus B-spline axial representation;
+- periodic hybrid limit.
+
+### 15.5 Migrate only generic solver algebra
+
+The mirror solver currently uses host SciPy GMRES/least-squares/minimize and its own bounded Newton orchestration.
+
+Compare with SOLVAX 0.20.0:
+
+- matrix-free Gauss-Newton;
+- PTC/Newton-Krylov;
+- separable/Kronecker preconditioner;
+- implicit stationarity.
+
+Migrate only if:
+
+- same equations and convergence contract;
+- lower or equal cold/warm cost at production size;
+- lower memory;
+- clean JIT/gradient semantics;
+- dense rescue remains a small-case diagnostic, not an unbounded production fallback.
+
+**Acceptance:** a documented, independently tested isotropic mirror baseline suitable for anisotropic extension.
+
+---
+
+## 16. Phase 9 - Implement a literature-backed anisotropic mirror equilibrium
+
+### 16.1 Physics model
+
+Use a gyrotropic pressure tensor:
+
+```text
+P = p_perp I + (p_parallel - p_perp) b b,
+b = B / |B|,
+J x B = div(P).
+```
+
+The parallel projection of force balance imposes:
+
+```text
+B . grad(p_parallel)
+- (p_parallel - p_perp) B . grad(log B) = 0.
+```
+
+For a closure `p_parallel = p_parallel(s, B)`, enforce:
+
+```text
+p_perp = p_parallel - B * partial_B(p_parallel).
+```
+
+This constraint is essential. Do not accept arbitrary independent three-dimensional `p_parallel` and `p_perp` as a supposedly equilibrated closure.
+
+### 16.2 Pressure-model hierarchy
+
+Define a small protocol:
+
+```python
+class AnisotropicPressureModel(Protocol):
+    def parallel(self, s, B, volume_derivative, params): ...
+    def perpendicular(self, s, B, volume_derivative, params): ...
+    def energy_density(self, s, B, volume_derivative, params): ...
+```
+
+Implement in this order:
+
+1. **ANIMEC-style equilibrium-consistent bi-Maxwellian/energetic-particle model.** Use the distribution moments and invariants documented by Cooper et al.; reproduce an isotropic limit.
+2. **Tabulated `p_parallel(s,B)` model.** Use differentiable splines and compute `p_perp` from the B derivative.
+3. **CGL double-adiabatic model.** Keep it explicitly named and separate; do not silently mix its invariants with the ANIMEC closure.
+
+### 16.3 Variational formulation
+
+Implement the anisotropic energy in the form supported by the ANIMEC literature, schematically:
+
+```text
+W = integral [B^2/(2 mu0) + p_parallel/(Gamma - 1)] dV,
+```
+
+with the chosen distribution/constraint determining the geometry dependence of `p_parallel` and `p_perp`.
+
+Derive the discrete weak residual by AD of the energy first. Then implement an independent strong residual:
+
+```text
+F = J x B - div(P).
+```
+
+Do not derive both from the same final expression.
+
+### 16.4 Files
+
+Recommended minimal changes:
+
+- new `vmex/mirror/anisotropy.py` for pressure models, tensor, and diagnostics;
+- extend `vmex/mirror/forces.py` for anisotropic energy/weak/strong residuals;
+- extend `MirrorConfig` or add a small immutable pressure-model field without filling it with many scalar options;
+- extend `vmex/mirror/output.py` for `p_parallel`, `p_perp`, anisotropy, and stability profiles;
+- extend solver dispatch without duplicating the isotropic solver.
+
+### 16.5 Boundary conditions
+
+- Fixed lateral boundary: geometry Dirichlet; force certificate excludes constrained normal variations but evaluates interior strong force.
+- Free lateral boundary:
+
+```text
+B . n = 0,
+p_perp + B^2/(2 mu0) continuous across the interface.
+```
+
+- End cuts: fixed through-flux cuts; do not impose plasma-vacuum total-pressure continuity there.
+- Periodic hybrid: periodic anisotropic state and pressure model.
+
+### 16.6 Stability/admissibility diagnostics
+
+Report, without conflating them with full kinetic stability:
+
+- firehose parameter;
+- mirror-instability parameter appropriate to the selected closure;
+- positivity of both pressures;
+- positivity/regularity of distribution moments;
+- parallel-integrability residual;
+- total-pressure interface residual;
+- Jacobian/nestedness.
+
+Fail or warn according to explicit thresholds.
+
+### 16.7 Reference literature
+
+Primary references:
+
+- Chew, Goldberger, Low, *The Boltzmann equation and the one-fluid hydromagnetic equations in the absence of particle collisions*, Proc. R. Soc. A 236 (1956).
+- W. A. Cooper et al., *3D magnetohydrodynamic equilibria with anisotropic pressure*, Comput. Phys. Commun. 72, 1-13 (1992), https://doi.org/10.1016/0010-4655(92)90002-G
+- W. A. Cooper et al., *Three-dimensional anisotropic pressure free boundary equilibria*, Comput. Phys. Commun. 180, 1524-1533 (2009), https://doi.org/10.1016/j.cpc.2009.04.006
+- D. Endrizzi et al., *Physics basis for the Wisconsin HTS Axisymmetric Mirror (WHAM)*, J. Plasma Phys. 89 (2023), https://doi.org/10.1017/S0022377823000806
+- S. J. Frank et al., *Nonlinear anisotropic equilibrium reconstruction in axisymmetric magnetic mirrors*, arXiv:2509.17288
+
+Also inspect ANIMEC source/manuals and the DESC mirror PR, but independently verify all formulas and conventions.
+
+### 16.8 Tests
+
+- exact isotropic limit at value, residual, and derivative levels;
+- analytic tensor divergence in Cartesian manufactured fields;
+- parallel-integrability identity;
+- `p_perp = p_parallel - B partial_B p_parallel` AD/analytic agreement;
+- weak energy directional derivative versus residual;
+- strong residual refinement;
+- free-boundary total-pressure condition;
+- comparison with published ANIMEC cases where inputs can be reproduced;
+- WHAM-like axisymmetric profile comparison;
+- CPU/GPU and JVP/VJP tests;
+- invalid closure and instability diagnostics.
+
+**Acceptance:** a fixed-boundary axisymmetric and nonaxisymmetric anisotropic mirror solve with independent force and closure certificates.
+
+---
+
+## 17. Phase 10 - Complete axisymmetric and nonaxisymmetric free-boundary mirrors
+
+### 17.1 Axisymmetric anisotropic circular-coil case
+
+Construct a reproducible ESSOS coil system using circular coils, not a hand-tuned external field table.
+
+Workflow:
+
+1. define circular coil centers, radii, currents, and symmetry;
+2. evaluate the external field with ESSOS in memory;
+3. build the mirror exterior response;
+4. solve the coupled anisotropic plasma-boundary-vacuum equilibrium;
+5. continue beta/anisotropy from a vacuum or low-beta state;
+6. validate interface and strong force;
+7. compare profiles and boundary displacement with paraxial/WHAM-like expectations.
+
+Use a parameter continuation in pressure and anisotropy rather than asking one nonlinear solve to jump directly to the target state.
+
+### 17.2 Extend the exterior response to nonaxisymmetry
+
+`vmex/mirror/exterior.py` already represents a general 3-D lateral wall and mathematical end caps. The work is primarily in the coupled solver and numerical certification.
+
+Tasks:
+
+- remove the `ntheta == 1` gate only after all operators accept general theta;
+- retain full theta dependence in side-wall geometry, normals, interpolation, and density;
+- verify symmetry reduction does not accidentally impose axisymmetry;
+- support general external ESSOS fields;
+- implement matrix-free boundary response and transpose;
+- add near-singular quadrature/refinement for distorted side walls;
+- enforce the Neumann solvability/gauge condition explicitly;
+- use a Schur complement that separates interior plasma variables from boundary/vacuum variables;
+- precondition plasma and exterior blocks with their natural structured solvers.
+
+### 17.3 Coupled residual
+
+The free-boundary residual must include:
+
+- interior weak/strong equilibrium equations;
+- side-wall `B . n` condition;
+- isotropic or anisotropic total-pressure balance;
+- exterior Laplace/BIE equation and gauge;
+- fixed cut geometry/flux constraints;
+- free-boundary geometry chart constraints;
+- optional coil-current/shape parameters in the differentiable input.
+
+A small residual is insufficient unless all blocks are separately normalized and reported.
+
+### 17.4 Globalization
+
+Use deterministic continuation:
+
+1. vacuum field and prescribed boundary;
+2. low pressure with fixed boundary;
+3. release boundary with a penalty/continuation parameter;
+4. increase beta;
+5. increase anisotropy;
+6. introduce nonaxisymmetric external-field/boundary modes.
+
+Use SOLVAX PTC or damped Newton-Krylov for the coupled root, with pseudo-arclength if the physical branch folds. Do not expose multiple SciPy optimizers as public user choices.
+
+### 17.5 Axisymmetric validation
+
+- circular coil field versus analytic Biot-Savart on and off axis;
+- vacuum boundary response versus direct field evaluation;
+- plasma off recovers vacuum;
+- isotropic limit recovers existing free-boundary mirror;
+- anisotropic continuation converges under grid refinement;
+- side-wall total pressure and `B . n` converge;
+- cap closure does not receive a false pressure-balance residual;
+- volume/flux and force checks.
+
+### 17.6 Nonaxisymmetric validation
+
+Use increasingly difficult cases:
+
+1. axisymmetric coil system evaluated on a multi-theta grid: must recover the axisymmetric result;
+2. small tilted-coil/asymmetric perturbation: compare linear response to finite difference;
+3. nonaxisymmetric fixed-boundary equilibrium embedded in a matching external field;
+4. fully free nonaxisymmetric boundary driven by a declared coil set.
+
+Check:
+
+- theta refinement;
+- axial spline refinement;
+- cap/rim grading;
+- boundary-integral quadrature;
+- external-field sampling;
+- coupled residual;
+- tangent/adjoint duality and finite differences.
+
+### 17.7 Output and plotting
+
+Extend MOUT/native mirror output to contain:
+
+- free boundary and coil metadata;
+- anisotropic pressure fields/profiles;
+- interface residual profiles;
+- external, plasma, and total fields;
+- strong-force and divergence certificates;
+- continuation history.
+
+Add plots for:
+
+- side-wall pressure balance;
+- `B . n`;
+- `p_parallel/p_perp`;
+- firehose/mirror parameters;
+- coil geometry and flux surfaces;
+- nonaxisymmetric cross-sections.
+
+**Acceptance:** one axisymmetric anisotropic circular-coil case and one nonaxisymmetric free-boundary mirror pass full independent certificates.
+
+---
+
+## 18. Phase 11 - Complete the stellarator-mirror hybrid equilibrium and optimization
+
+### 18.1 Clarify the physical model
+
+The current hybrid is a periodic closed field-line device with straight mirror-like legs and stellarator-like returns. It is not an open mirror with end loss. Documentation must state:
+
+- periodic topology;
+- axis construction and curvature transitions;
+- cross-section rotation;
+- flux/current/pressure model;
+- definition of mirror ratio and mirror length;
+- field-line closure assumptions;
+- where Boozer coordinates and toroidal stellarator diagnostics remain meaningful;
+- how local mirror/GK geometry is extracted.
+
+### 18.2 Equilibrium hardening
+
+- apply the shared high-order spline/regularity framework;
+- add independent strong-force and divergence certificates for closed curved-axis geometry;
+- verify straight-leg and toroidal/stellarator limits;
+- verify field-line closure and equal-arc remapping from PR #194;
+- support isotropic first, then anisotropic pressure after Phase 9;
+- add implicit equilibrium derivatives through the promoted root/stationarity system.
+
+### 18.3 Design variables
+
+Build a compact, physical parameterization rather than optimizing every coefficient at first:
+
+- straight-leg length;
+- return radius and return-shape harmonics;
+- major/minor cross-section radii;
+- ellipticity/triangularity where supported;
+- number and phase of section rotations;
+- axial and toroidal current/flux controls;
+- pressure/anisotropy parameters;
+- selected periodic spline coefficients for local refinement;
+- coil-current and coil-curve variables in the later single-stage example.
+
+### 18.4 Objectives and constraints
+
+Required equilibrium/design terms:
+
+- target mirror ratio in the straight legs;
+- target effective mirror length and plateau length;
+- QI/omnigenity or second-invariant contour quality;
+- maximum-J where appropriate;
+- target iota/field-line closure;
+- strong-force certificate;
+- magnetic well/stability constraints;
+- surface Jacobian/nestedness;
+- curvature and smooth transition from legs to returns;
+- minimum plasma-plasma and plasma-axis separation;
+- coil feasibility and normal-field error after ESSOS coupling;
+- optional loss, DKX transport, and GKX turbulence terms in staged optimization.
+
+Normalize every residual using a physical or initial scale and print all components.
+
+### 18.5 Optimization strategy
+
+Do not optimize all physics at full resolution from a cold seed.
+
+Use stages:
+
+1. low-resolution analytic geometry and vacuum/low-beta equilibrium;
+2. mirror ratio and length;
+3. field-line closure/iota;
+4. QI/second-invariant quality;
+5. force and resolution refinement;
+6. ESSOS coil construction;
+7. ESSOS loss validation/optimization;
+8. DKX/GKX validation and optional correction.
+
+Use predictor warm starts from implicit tangents. Recycle linear spaces. Re-polish accepted equilibria when the outer step changes geometry enough to invalidate the certificate.
+
+### 18.6 Research-grade flagship result
+
+Produce one fully reproducible example and committed configuration with:
+
+- before/after geometry;
+- mirror ratio and length profile;
+- QI/J contours;
+- force balance;
+- iota/field-line closure;
+- ESSOS coil set and normal-field error;
+- ESSOS alpha loss fraction;
+- DKX neoclassical coefficients;
+- GKX turbulence metric at selected locations;
+- cold/warm/gradient performance.
+
+The example must remain understandable. Put large campaign settings in a small data file, not hundreds of lines of Python.
+
+### 18.7 Tests
+
+- periodic spline refinement exactness;
+- axis and section regularity;
+- straight-leg analytic geometry;
+- closed-axis metric identities;
+- equal-arc remap;
+- field-line closure;
+- strong-force refinement;
+- parameter JVPs;
+- objective gradients;
+- consumer-adapter parity.
+
+**Acceptance:** a periodic hybrid equilibrium and optimization that can be independently reproduced and consumed by ESSOS, GKX, and DKX.
+
+---
+
+## 19. Phase 12 - Establish one native downstream equilibrium/geometry protocol
+
+### 19.1 Do not make files the optimization-loop API
+
+WOUT, Boozmn, and MOUT remain compatibility and archival formats. In-memory consumers should receive pytrees/arrays and static metadata.
+
+Define a small structural protocol, likely in `vmex/core/interfaces.py`:
+
+```python
+class EquilibriumView(Protocol):
+    def sample_flux_surface(self, s, theta, zeta, *, derivatives=()): ...
+    def magnetic_field(self, xyz): ...
+    def boundary_surface(self, theta, zeta): ...
+    def boozer_inputs(self, surfaces, *, resolution): ...
+    @property
+    def provenance(self): ...
+```
+
+For mirrors/hybrids, provide topology-specific views rather than returning fake toroidal quantities.
+
+### 19.2 BOOZ_XFORM_JAX
+
+- Accept `boozer_inputs()` directly.
+- Return a frozen JAX-native `BoozerData` carrying cosine and sine spectra, surfaces, currents, iota, conventions, and provenance.
+- Avoid reconstructing a WOUT in memory merely to call the transform.
+- Use the same object for QI, epsilon effective, DKX, and plots.
+
+### 19.3 VIRTUAL_CASING_JAX
+
+- Consume `boundary_surface()` and the required surface field/current arrays directly.
+- Preserve high-order boundary derivatives from the native equilibrium.
+- Validate native versus WOUT sampling and finite differences.
+- Keep VMEX's convenience adapter thin; VIRTUAL_CASING_JAX owns quadrature and singular treatment.
+
+### 19.4 ESSOS
+
+Use separate adapters for:
+
+- VMEX equilibrium field;
+- polished native equilibrium field;
+- mirror/hybrid field;
+- boundary surface;
+- free-boundary external coils.
+
+Requirements:
+
+- no file round trip in differentiable examples;
+- exact or certified VJP through equilibrium and field evaluation;
+- LASYM spectra preserved;
+- batched field evaluation;
+- unit/coordinate conventions explicit;
+- coil objects remain owned by ESSOS.
+
+Update the existing VMEX-ESSOS workflow rather than adding a parallel example family.
+
+### 19.5 GKX
+
+Coordinate with GKX PR #86 and VMEX PR #194.
+
+- Replace generated coefficient-file bridges with an in-memory mirror/hybrid geometry constructor after parity is established.
+- Keep the frozen baseline as an independent regression oracle.
+- Expand in stages:
+  1. circular straight mirror streaming case;
+  2. shaped/nonaxisymmetric fixed-boundary mirror;
+  3. periodic hybrid local geometry;
+  4. electromagnetic/finite-gradient physics already supported by GKX;
+  5. selected turbulence metric in the hybrid optimization loop.
+- VMEX supplies dimensional geometry and equilibrium derivatives; GKX owns gyrokinetic normalization and simulation semantics.
+
+### 19.6 DKX
+
+DKX already owns `FluxSurfaceGeometry.from_fourier`.
+
+- Convert `BoozerData` directly to the Fourier arrays expected by DKX.
+- Include both symmetric and asymmetric harmonics.
+- Provide radial derivatives from the native equilibrium/Boozer plan when needed.
+- Validate against DKX's existing SFINCS-compatible file reader on the same equilibrium.
+- Add a mirror/hybrid path only when DKX's neoclassical model is physically applicable to the topology. Do not feed an open field line into a closed-surface DKE by relabeling it.
+
+### 19.7 Failure and capability contracts
+
+Each adapter declares:
+
+- supported topology;
+- symmetry support;
+- pressure support;
+- derivative support;
+- required coordinates;
+- whether it is exact, sampled, or approximate.
+
+Unsupported combinations raise typed errors.
+
+### 19.8 End-to-end derivative tests
+
+At least one scalar objective through each supported chain:
+
+```text
+boundary -> polished VMEX -> BOOZ_XFORM_JAX -> DKX objective
+boundary -> polished VMEX -> VIRTUAL_CASING_JAX objective
+boundary/coils -> VMEX -> ESSOS field/loss surrogate
+hybrid parameters -> VMEX -> GKX geometry objective
+```
+
+Use directional finite differences or an independent tangent reference where the downstream model is smooth.
+
+---
+
+## 20. Phase 13 - Simplify and slim the code after ownership is stable
+
+### 20.1 Build an ownership graph
+
+Generate a lightweight report of:
+
+- public symbols and import owners;
+- repeated equations/kernels;
+- wrappers that only translate data;
+- modules importing optional dependencies;
+- duplicated state packing/unpacking;
+- duplicated Boozer, field, profile, and objective setup;
+- circular imports or private cross-module calls.
+
+Review giant modules by responsibility, not by line count.
+
+### 20.2 High-value simplification targets
+
+#### Boozer/QI
+
+- make BOOZ_XFORM_JAX the canonical full transform;
+- retain VMEX's lightweight symmetric path only with a demonstrated inner-loop advantage;
+- consolidate mode/table/sign conversion;
+- keep QI physics in VMEX and transform numerics in BOOZ_XFORM_JAX.
+
+#### Implicit/optimization
+
+- separate solver-independent response reports/configuration from objective-specific orchestration;
+- remove duplicate scalar and vector response policies after one certified implementation serves both;
+- centralize failure/retry/certificate semantics;
+- avoid separate wrappers for each external optimizer when a common callable/Jacobian object suffices.
+
+#### Free boundary
+
+- separate external-field/vacuum response construction from iteration orchestration;
+- share boundary packing, Schur, and certificate code between fixed/free/single-stage paths;
+- keep topology-specific physics separate.
+
+#### Plotting
+
+- separate numerical diagnostic computation from Matplotlib rendering;
+- cache/share confinement and Boozer diagnostics;
+- keep plotting imports lazy;
+- do not move every panel into its own file.
+
+#### Mirror splines
+
+- share the topology-independent B-spline basis already in core where possible;
+- retain mirror-specific state/boundary/axis mapping in the mirror package;
+- delete duplicate derivative/interpolation implementations after exact parity.
+
+### 20.3 Refactor gate
+
+For each refactor PR:
+
+- public API unchanged or one documented deprecation;
+- net source LOC non-positive unless a small compatibility shim is required;
+- same or lower import time;
+- no compile-count increase;
+- performance within 5% or improved;
+- all physics and derivative tests unchanged;
+- docs shorter and clearer.
+
+### 20.4 Documentation structure
+
+Keep:
+
+```text
+docs/tutorials/       first successful workflows
+docs/howto/           concrete tasks
+docs/explanation/     equations, models, algorithms
+docs/reference/       APIs, inputs, outputs, capabilities, performance
+```
+
+Add or revise:
+
+- high-order force balance and input directives;
+- performance methodology;
+- mirror boundary conditions;
+- anisotropic mirror theory;
+- stellarator-mirror hybrid theory and limitations;
+- Gamma-c derivative semantics;
+- native downstream interfaces;
+- LASYM capability/performance.
+
+### 20.5 Examples follow one pattern
+
+Each example should resemble SIMSOPT's deliberate scripts:
+
+```text
+1. short module docstring stating the physics result;
+2. imports;
+3. user-editable parameters at the top;
+4. object construction;
+5. solve;
+6. objective/optimization if relevant;
+7. concise printed results;
+8. plots/save;
+9. no hidden command-line parser, main(), or __main__ guard.
+```
+
+Provide `FAST = True` near the top when CI and research resolutions differ. Tests run the fast path; docs state the research settings.
+
+---
+
+## 21. Phase 14 - Final validation, optimized configurations, and README evidence
+
+### 21.1 Mandatory cross-code equilibrium suite
+
+Use at least:
+
+1. analytic Solovev/D-shaped axisymmetric case;
+2. smooth finite-beta QA;
+3. finite-beta QH;
+4. LASYM finite-beta stellarator;
+5. high-aspect-ratio near-axis-sensitive case;
+6. one free-boundary toroidal case;
+7. isotropic mirror;
+8. anisotropic axisymmetric mirror;
+9. nonaxisymmetric mirror;
+10. periodic hybrid.
+
+Not every code supports every topology. The table must mark unsupported rather than substituting a different problem.
+
+### 21.2 Force-balance plot
+
+Generate one reproducible README figure with, for common supported toroidal cases:
+
+- VMEC2000;
+- VMEC++;
+- DESC;
+- legacy VMEX;
+- polished VMEX.
+
+Recommended panels:
+
+1. flux-surface RMS strong-force profile;
+2. near-axis zoom;
+3. volume L2 versus cold end-to-end time;
+4. volume L2 versus peak memory;
+5. optional refinement convergence.
+
+Use the same independent oracle and clearly state excluded regions, normalization, solve resolution, and evaluation resolution.
+
+### 21.3 Claim gate
+
+The README may say "VMEX matches or exceeds DESC force balance at a fraction of the cost" only if:
+
+- the statement is true across the mandatory smooth fixed-boundary comparison set, not one case;
+- both cold end-to-end and warm repeated costs are reported;
+- peak memory is reported;
+- the same force metric and region are used;
+- input conversion is documented;
+- all raw results and scripts are committed or available as hashed artifacts.
+
+Otherwise use a narrower, factual statement such as:
+
+> On the listed cases and common independent force metric, polished VMEX reduces the legacy VMEC residual and is competitive with DESC; see the exact per-case table.
+
+### 21.4 Optimized configurations
+
+Commit or publish reproducible small artifacts for:
+
+- omnigenity optimization using epsilon effective, derivative-safe Gamma-c, and maximum-J;
+- meaningful LASYM stellarator;
+- nonaxisymmetric fixed-boundary mirror;
+- anisotropic circular-coil free-boundary mirror;
+- nonaxisymmetric free-boundary mirror;
+- periodic hybrid with coils and downstream validation.
+
+Each artifact includes:
+
+- input and optimized parameters;
+- equilibrium/native output;
+- force/refinement certificate;
+- derivative certificate for the optimization objective;
+- objective history;
+- machine-readable summary;
+- provenance and license.
+
+### 21.5 Performance table
+
+README/docs table separates:
+
+- cold empty-cache;
+- cold persistent-cache reload;
+- warm same-process;
+- value;
+- gradient;
+- peak host/device memory.
+
+Do not place machine-specific absolute numbers in prose without the platform and date.
+
+### 21.6 Release gate
+
+- all PRs merged in dependency order;
+- no branch-only dependency;
+- package versions and minimum versions correct;
+- source and wheel tests;
+- docs/linkcheck;
+- coverage threshold;
+- benchmark smoke and external oracle workflows;
+- native-file schema versioned;
+- capability matrix current;
+- release notes state limitations, especially Gamma-c topology and mirror end physics.
+
+---
+
+## 22. Exact repository and file change map
+
+This is a target map, not permission to create every listed file. Reuse an existing cohesive owner when that produces less code.
+
+### 22.1 VMEX
+
+#### Polishing integration
+
+- `vmex/core/run_options.py` - VMEX comment/JSON execution metadata.
+- `vmex/core/input.py` - allow reserved `_vmex` stripping; keep physics schema strict.
+- `vmex/core/cli.py` - CLI controls, final-stage dispatch, reports, output.
+- `vmex/core/multigrid.py` - one final polish hook and reuse of finest-grid static data.
+- `vmex/core/solver.py` - retain PR #192 direct API; no second polish implementation.
+- `vmex/core/wout.py` - polished sampling and nonstandard provenance attributes.
+- `vmex/core/polish*.py`, `radial_basis.py`, `strong_force.py` - hardening, not redesign.
+- `vmex/core/native_io.py` only if native serialization cannot remain cohesive in the polished-equilibrium owner.
+- `vmex/__init__.py` - expose `solve_file`, run options, and stable polished types.
+
+Tests:
+
+- `tests/test_run_options.py`;
+- `tests/test_cli_polish.py`;
+- `tests/test_polish_output.py`;
+- expand PR #192 tests rather than duplicate them.
+
+#### Performance
+
+- extend `tools/profile_hotpaths.py` or replace overlapping scripts with `benchmarks/profile_workflows.py`;
+- `benchmarks/results/` schemas/manifests;
+- narrow measured edits in `solver.py`, `multigrid.py`, `implicit.py`, `optimize.py`, `preconditioner*.py`, `freeboundary*.py`, and transform modules;
+- `docs/reference/performance.rst` and one methodology page.
+
+#### Confinement and objectives
+
+- `vmex/core/plotting.py` - combined epsilon/Gamma-c panel and cache.
+- `vmex/core/neoclassical.py` - no implicit global cache clearing; native Boozer input.
+- `vmex/core/gammac.py` - keep hard value; tracked/smooth implementation or split only if the module becomes clearer.
+- `vmex/core/bounce.py` - generic tracked-root/topology support if required.
+- `vmex/core/maxj.py`, `omnigenity.py`, `qi.py` - shared context and example integration, not separate Boozer copies.
+- `examples/optimization/omnigenity_epsilon_gammac_maxj.py`.
+
+#### LASYM
+
+Likely measured edits:
+
+- `vmex/core/transforms.py`;
+- `vmex/core/forces.py`;
+- `vmex/core/nyquist.py`;
+- `vmex/core/boozer_tables.py`;
+- `vmex/core/implicit.py` / `optimize.py` chunking and response reuse;
+- LASYM examples and tests.
+
+#### Mirrors and hybrids
+
+- `vmex/mirror/model.py` - topology and pressure-model configuration.
+- `vmex/mirror/forces.py` - anisotropic weak/strong residuals.
+- `vmex/mirror/anisotropy.py` - closure, tensor, energy density, diagnostics.
+- `vmex/mirror/solver.py` - one promoted nonlinear path and implicit derivatives.
+- `vmex/mirror/exterior.py` - general 3-D response hardening/near-singular work.
+- `vmex/mirror/free_boundary.py` - remove axisymmetric restriction through a certified coupled solve.
+- `vmex/mirror/splines.py` - share core basis and retain topology mapping.
+- `vmex/mirror/turbulence.py` - downstream protocol and hybrid refinements.
+- `vmex/mirror/output.py` - anisotropy/interface/provenance.
+- mirror examples and `tests/mirror/*`.
+
+#### Interfaces
+
+- `vmex/core/interfaces.py` - small structural protocols/data contracts.
+- existing `virtual_casing.py`, `boozer_tables.py`, `turbulence.py`, and ESSOS seams become adapters to these contracts.
+
+### 22.2 SOLVAX
+
+Start from 0.20.0 and merged nonlinear least-squares/PTC/continuation features.
+
+Only add generic capabilities exposed by profiles:
+
+- reusable Gauss-Newton normal-preconditioner/factor state;
+- GCRO-DR recycle input/output for repeated normal solves;
+- multi-RHS stationarity tangent/adjoint if VMEX cannot compose existing primitives efficiently;
+- bracketed implicit scalar roots for tracked bounce points, if general enough;
+- compile/work counters in solver reports;
+- fixed-work variants where accelerator control flow requires them.
+
+Probable owners:
+
+- `src/solvax/least_squares.py` or current nonlinear least-squares module;
+- `src/solvax/krylov.py`;
+- `src/solvax/implicit.py`;
+- tests, docs, benchmark cases.
+
+Do not add mirror, Boozer, or VMEX state types.
+
+### 22.3 BOOZ_XFORM_JAX
+
+- `src/booz_xform_jax/jax_api.py` - stable config/plan and promoted kernel.
+- optional `src/booz_xform_jax/plan.py` if plan construction dominates and separation reduces code.
+- `src/booz_xform_jax/core.py` - compatibility wrapper and removal of duplicate conversions.
+- `tools/profile_jax_api.py` - expand to matrix, derivatives, compile count, memory.
+- tests for plan caching, chunking, LASYM, JVP/VJP, and legacy parity.
+- docs for execution/memory policy.
+
+### 22.4 ESSOS
+
+Coordinate rather than duplicating open work:
+
+- ensure VMEX symmetric/LASYM/native fields can be constructed in memory;
+- shaped/rotated mirror surfaces and hybrid surfaces;
+- profiled batched coil fields;
+- loss-fraction objective/surrogate with explicit derivative semantics;
+- consumer-side adapters and tests.
+
+Inspect open PRs before editing, particularly current VMEC-asymmetry, mirror-surface, and coil-cache work.
+
+### 22.5 VIRTUAL_CASING_JAX
+
+- accept VMEX native boundary/field arrays directly;
+- preserve high-order derivatives and LASYM;
+- add native-versus-WOUT parity and derivative tests;
+- use existing external benchmark/provenance infrastructure.
+
+### 22.6 GKX
+
+- coordinate with current VMEX mirror pilot;
+- add in-memory geometry construction after file-oracle parity;
+- keep GKX normalization and simulation configuration in GKX;
+- add hybrid geometry and selected turbulence benchmark only after equilibrium certificates pass.
+
+### 22.7 DKX
+
+- add a `BoozerData` adapter around `FluxSurfaceGeometry.from_fourier`;
+- preserve sine/cosine and radial derivatives;
+- compare in-memory and SFINCS-compatible file paths;
+- document topology limits.
+
+### 22.8 DESC, VMEC2000, VMEC++
+
+These are comparison/oracle repositories unless a clearly independent bug is found.
+
+- Keep local patches minimal and documented.
+- Do not modify an oracle to match VMEX conventions without retaining an unmodified reference run.
+- Record exact commits.
+- Use DESC mirror PR #1848 as an experimental source of cases/equations, not a dependency.
+
+---
+
+## 23. Test and validation matrix
+
+### 23.1 Coverage policy
+
+- at least 95% line coverage on every new/changed source file;
+- repository threshold does not decrease;
+- every typed failure branch has a test;
+- every public example is import/run tested in fast mode;
+- slow external oracles run in scheduled CI with small smoke subsets in ordinary CI;
+- coverage is not increased with meaningless execution-only tests.
+
+### 23.2 Polishing tests
+
+| Category | Required test |
+|---|---|
+| Parsing | INDATA directive and JSON `_vmex` |
+| Legacy | same deck runs in xvmec2000 with directive ignored |
+| API | `solve`, `solve_file`, CLI equivalence |
+| Backward compatibility | `polish=False` regression |
+| Analytic | Solovev strong force |
+| Cross-code | VMEC2000, VMEC++, DESC |
+| Resolution | radial degree/span and angular/collocation validation |
+| Admissibility | positive Jacobian, boundary, nestedness |
+| Linear | true residual and preconditioner certificate |
+| AD | tangent/adjoint duality, Taylor, VJP, finite difference |
+| I/O | WOUT and native round trip |
+| Downstream | field, Boozer, VC, ESSOS |
+
+### 23.3 Performance tests
+
+CI should not enforce noisy absolute wall times. Enforce deterministic proxies:
+
+- trace count;
+- compile count for repeated same-shape calls;
+- no unexpected cache miss reason;
+- buffer/shape model for chunking;
+- maximum retained history/state size;
+- no unbounded surface batching;
+- benchmark schema validity.
+
+Scheduled benchmarks track wall time/memory with control charts and alert thresholds.
+
+### 23.4 Gamma-c tests
+
+- hard value parity with current implementation before refactor;
+- single-well analytic integral;
+- tracked root derivatives;
+- topology matching and events;
+- smooth-temperature convergence;
+- resolution convergence of value and derivative;
+- correlation suite with hard value and ESSOS losses;
+- LASYM symmetry/reflection invariants;
+- overflow and incomplete-well behavior.
+
+### 23.5 LASYM tests
+
+- mode and phase normalization;
+- all parity families through geometry, force, WOUT, Boozer, and adapters;
+- symmetric limit;
+- controlled small asymmetry linear response;
+- VMEC2000 parity;
+- strong force;
+- stability and bootstrap;
+- gradient/Jacobian;
+- no same-shape recompilation;
+- optimized configuration reproducibility.
+
+### 23.6 Mirror tests
+
+| Layer | Isotropic | Anisotropic | Free boundary | Hybrid |
+|---|---:|---:|---:|---:|
+| analytic geometry | yes | yes | yes | yes |
+| weak energy derivative | yes | yes | yes | yes |
+| independent strong force | yes | yes | yes | yes |
+| divergence | yes | yes | yes | yes |
+| axis regularity | yes | yes | yes | yes |
+| cut BC | yes | yes | yes | n/a |
+| interface BC | n/a | n/a | yes | n/a |
+| pressure closure | n/a | yes | yes | optional |
+| exterior field | n/a | n/a | yes | optional coils |
+| JVP/VJP | yes | yes | yes | yes |
+| CPU/GPU | yes | yes | yes | yes |
+| refinement | yes | yes | yes | yes |
+| external/literature oracle | yes | yes | yes | downstream |
+
+### 23.7 Downstream tests
+
+- in-memory versus file-backed numerical parity;
+- coordinate and unit round trips;
+- LASYM retention;
+- native high-order versus sampled WOUT convergence;
+- gradient through each supported chain;
+- unsupported topology fails explicitly;
+- no consumer imports required for base VMEX installation.
+
+---
+
+## 24. Benchmark and provenance rules
+
+### 24.1 Never edit result JSON by hand
+
+All results are emitted by scripts. Store:
+
+- schema version;
+- UTC timestamp;
+- git commits and dirty status;
+- input/config hash;
+- dependencies;
+- platform/device;
+- precision;
+- static shapes;
+- compile/cache state;
+- command;
+- metrics and units.
+
+### 24.2 Warm-up and asynchronous execution
+
+- always call `block_until_ready()` around measured JAX work;
+- separate warm-up from timed repeats;
+- report median and spread for warm microbenchmarks;
+- cold runs use new processes;
+- persistent-cache reload uses a second new process.
+
+### 24.3 External-code fairness
+
+- retain original code outputs;
+- record conversion scripts;
+- use identical physical normalization;
+- show both code-native convergence and common independent metrics;
+- do not include compilation in one code and exclude it in another without a separate table;
+- report CPU/GPU differences rather than comparing unlike hardware as an algorithm result.
+
+### 24.4 Assets
+
+- small CSV/JSON summaries may be committed;
+- large WOUT/native/trace data should use release assets or the existing VMEX asset-fetch mechanism;
+- every asset has SHA256, origin, license/permission, generating commit, and script.
+
+---
+
+## 25. PR sequence and dependencies
+
+Keep each PR reviewable. Suggested sequence:
+
+1. **Merge PR #192** - reproduce, narrow claims, clean production path.
+2. **Polish input/API integration** - directives, `solve_file`, CLI, output semantics.
+3. **Unified performance harness** - no performance edits yet.
+4. **Measured VMEX core/JIT performance fixes** - split by bottleneck if needed.
+5. **BOOZ_XFORM_JAX plan/chunk refactor**.
+6. **VMEX Boozer ownership cleanup** after BOOZ_XFORM_JAX parity/performance.
+7. **Summary Gamma-c quick plot**.
+8. **Gamma-c tracked/smooth derivatives**.
+9. **Combined epsilon/Gamma-c/max-J example**.
+10. **LASYM performance kernels**.
+11. **LASYM flagship optimization and downstream audit**.
+12. **Mirror boundary-condition derivation and isotropic hardening**.
+13. **Anisotropic pressure model and fixed-boundary solver**.
+14. **Axisymmetric anisotropic circular-coil free boundary**.
+15. **Nonaxisymmetric mirror exterior/coupled solve**.
+16. **Hybrid equilibrium/implicit derivative hardening**.
+17. **Hybrid optimization and ESSOS coupling**.
+18. **GKX/DKX/native downstream integrations**.
+19. **Measured simplification/refactor PRs**.
+20. **Final benchmark/README/release PR**.
+
+A downstream PR may proceed in parallel once its upstream data contract is frozen, but do not merge code depending on an unmerged branch without an explicit temporary pin and removal plan.
+
+---
+
+## 26. Milestone gates
+
+### Milestone A - Polished toroidal equilibrium is a normal VMEX feature
+
+- PR #192 merged;
+- directive and Python API;
+- WOUT/native output;
+- independent force and derivative certificates;
+- no-polish parity;
+- fixed-boundary documented scope.
+
+### Milestone B - Performance is understood and improved
+
+- full profiling matrix;
+- compile misses explained;
+- repeated workflows do not recompile unnecessarily;
+- targeted cold/warm/memory improvements;
+- BOOZ_XFORM_JAX explicit memory plan.
+
+### Milestone C - Confinement optimization is derivative safe
+
+- combined summary plot;
+- tracked/smooth Gamma-c;
+- gradient convergence;
+- combined omnigenity example;
+- ESSOS validation.
+
+### Milestone D - LASYM is first-class
+
+- performance and accuracy matrix;
+- meaningful asymmetric configuration;
+- downstream capability table;
+- independent certificates.
+
+### Milestone E - Research-grade mirrors
+
+- BC derivation;
+- anisotropic closure;
+- fixed-boundary nonaxisymmetric optimization;
+- axisymmetric anisotropic circular-coil free boundary;
+- nonaxisymmetric free boundary.
+
+### Milestone F - Research-grade hybrid
+
+- equilibrium and optimization;
+- force/closure certificates;
+- ESSOS coils/losses;
+- GKX and DKX results;
+- reproducible flagship artifact.
+
+### Milestone G - Release evidence
+
+- cross-code README plot;
+- benchmark tables;
+- optimized configurations;
+- code simplification complete;
+- coverage/docs/release gates.
+
+---
+
+## 27. Stop conditions and anti-patterns
+
+Stop and reassess when:
+
+- polishing lowers solve-grid residual but raises independent validation residual;
+- a preconditioner lowers iterations but raises total time or memory;
+- a gradient changes sign under routine resolution refinement;
+- a branch event is hidden by smoothing rather than reported;
+- an anisotropic closure violates parallel integrability;
+- a cap is accidentally treated as a plasma-vacuum interface;
+- a hybrid downstream calculation assumes a topology it does not have;
+- LASYM improvement disappears after gauge/phase alignment;
+- a performance win exists only after excluding compilation for VMEX but not the comparator;
+- a refactor creates more wrappers than code it removes;
+- a README claim depends on one favorable case.
+
+Forbidden shortcuts:
+
+- hard-coded case-specific coefficients in production;
+- silent symmetrization;
+- optimization against the same implementation used as the only validation oracle;
+- finite differences through unconverged roots;
+- differentiating taped nonlinear iterations when an implicit equation exists;
+- global cache clearing in reusable library functions;
+- unbounded dense Jacobians/tensors at production resolution;
+- arbitrary independent anisotropic pressures;
+- claiming global optimality for a nonconvex stellarator design.
+
+---
+
+## 28. Disposition of the former plan
+
+Carry forward:
+
+- independent force certificates;
+- fail-closed derivative semantics;
+- high-order native equilibrium;
+- SOLVAX structured algebra;
+- VMEC2000/VMEC++/DESC comparisons;
+- CPU/GPU/memory evidence;
+- native ESSOS/VC/Boozer connections;
+- more than 95% changed-code coverage;
+- concise examples and deliberate code;
+- provenance and claim gates.
+
+Replace with current reality:
+
+- polishing is already largely implemented in PR #192;
+- SOLVAX already has the required Gauss-Newton/PTC/continuation foundations;
+- mirror B-splines and independent pointwise force already exist;
+- periodic hybrid GK geometry is merged;
+- Gamma-c's derivative failure is known and must be redesigned;
+- LASYM has broad physics support but still needs measured performance and a flagship result;
+- the main remaining work is integration, hardening, performance, anisotropic/free-boundary mirrors, hybrid optimization, and downstream consolidation.
+
+Do not copy the old historical checkbox ledger into this file. Link merged PRs and benchmark artifacts instead.
+
+---
+
+## 29. Primary references and required reading
+
+### 29.1 VMEC, force balance, radial accuracy, and preconditioning
+
+- S. P. Hirshman and J. C. Whitson, *Steepest-descent moment method for three-dimensional magnetohydrodynamic equilibria*, Phys. Fluids 26, 3553 (1983), https://doi.org/10.1063/1.864116
+- S. P. Hirshman and O. Betancourt, *Preconditioned descent algorithm for rapid calculations of magnetohydrodynamic equilibria*, J. Comput. Phys. 96, 99-109 (1991), https://doi.org/10.1016/0021-9991(91)90267-O
+- J. Schilling, *The Numerics of VMEC++*, arXiv:2502.04374, https://arxiv.org/abs/2502.04374
+- D. Panici et al., *The DESC stellarator code suite. Part 1. Quick and accurate equilibria computations*, J. Plasma Phys. 89, 955890303 (2023), https://doi.org/10.1017/S0022377823000272
+- F. Hindenlang et al., *GVEC: A flexible 3D MHD equilibrium solver*, JOSS 11, 9670 (2026), https://doi.org/10.21105/joss.09670
+- VMEC2000/STELLOPT source and documentation.
+- VMEC++ source and numerics notes.
+
+### 29.2 Nonlinear solves and differentiation
+
+- C. T. Kelley and D. E. Keyes, *Convergence analysis of pseudo-transient continuation*, SIAM J. Numer. Anal. 35, 508-523 (1998), https://doi.org/10.1137/S0036142996304796
+- S. C. Eisenstat and H. F. Walker, *Choosing the forcing terms in an inexact Newton method*, SIAM J. Sci. Comput. 17 (1996), https://doi.org/10.1137/0917003
+- PETSc pseudo-transient method notes: https://petsc.org/release/manualpages/TS/TSPSEUDO/
+- SOLVAX documentation and current tests.
+
+### 29.3 Anisotropic equilibrium and mirrors
+
+- G. F. Chew, M. L. Goldberger, F. E. Low, *The Boltzmann equation and the one-fluid hydromagnetic equations in the absence of particle collisions*, Proc. R. Soc. A 236 (1956).
+- W. A. Cooper et al., *3D magnetohydrodynamic equilibria with anisotropic pressure*, Comput. Phys. Commun. 72, 1-13 (1992), https://doi.org/10.1016/0010-4655(92)90002-G
+- W. A. Cooper et al., *Three-dimensional anisotropic pressure free boundary equilibria*, Comput. Phys. Commun. 180, 1524-1533 (2009), https://doi.org/10.1016/j.cpc.2009.04.006
+- D. Endrizzi et al., *Physics basis for the Wisconsin HTS Axisymmetric Mirror (WHAM)*, J. Plasma Phys. 89 (2023), https://doi.org/10.1017/S0022377823000806
+- S. J. Frank et al., *Nonlinear anisotropic equilibrium reconstruction in axisymmetric magnetic mirrors*, arXiv:2509.17288
+- ANIMEC source, manuals, and reference cases.
+- DESC mirror PR #1848: https://github.com/PlasmaControl/DESC/pull/1848
+
+### 29.4 Omnigenity, Gamma-c, and fast ions
+
+- J. R. Cary and S. G. Shasharina, *Helical plasma confinement devices with good confinement properties*, Phys. Rev. Lett. 78, 674 (1997), https://doi.org/10.1103/PhysRevLett.78.674
+- V. V. Nemov et al., *Poloidal motion of trapped particle orbits in real-space coordinates*, Phys. Plasmas 15, 052501 (2008), https://doi.org/10.1063/1.2912456
+- J. L. Velasco et al., *A model for the fast evaluation of prompt losses of energetic ions in stellarators*, Nucl. Fusion 61, 116059 (2021), https://doi.org/10.1088/1741-4326/ac2994
+- K. Unalmis et al., *Spectrally accurate, reverse-mode differentiable bounce-averaging algorithm and its applications*, J. Plasma Phys. 92 (2026), https://doi.org/10.1017/S0022377826101652
+- I. E. Ochs, *Bounce-averaged theory in arbitrary multi-well plasmas*, J. Plasma Phys. (2025), https://doi.org/10.1017/S002237782510069X
+- E. Sanchez et al., *A quasi-isodynamic configuration with good confinement of fast ions at low plasma beta*, Nucl. Fusion 63, 066037 (2023).
+- Piecewise-omnigenity and current direct-J optimization literature available at implementation time; record exact versions used.
+
+### 29.5 Boozer coordinates and downstream tools
+
+- BOOZ_XFORM/STELLOPT source and Hirshman-Breslau documentation.
+- BOOZ_XFORM_JAX repository/docs: https://github.com/uwplasma/booz_xform_jax
+- ESSOS: https://github.com/uwplasma/ESSOS
+- VIRTUAL_CASING_JAX: https://github.com/uwplasma/virtual_casing_jax
+- GKX: https://github.com/uwplasma/GKX
+- DKX: https://github.com/uwplasma/DKX
+
+### 29.6 JAX performance
+
+- Benchmarking: https://docs.jax.dev/en/latest/benchmarking.html
+- Slow tracing/compilation: https://docs.jax.dev/en/latest/debugging/slow_tracing_compilation.html
+- Persistent compilation cache: https://docs.jax.dev/en/latest/persistent_compilation_cache.html
+- Profiling/XProf: https://docs.jax.dev/en/latest/profiling.html
+- Device memory: https://docs.jax.dev/en/latest/device_memory_profiling.html
+- GPU performance tips: https://docs.jax.dev/en/latest/gpu_performance_tips.html
+- Pallas: https://docs.jax.dev/en/latest/401/pallas.html
+
+---
+
+## 30. Final instructions to the implementing agent
+
+Work until the current phase's acceptance criteria are met, not merely until code exists.
+
+At the end of every PR:
+
+1. run focused tests;
+2. run full repository tests appropriate to the change;
+3. verify changed-code coverage above 95%;
+4. run the declared physics oracle;
+5. run value and derivative certificates;
+6. record cold/warm/memory evidence when performance is affected;
+7. update docs, capability tables, examples, and release notes;
+8. remove superseded experiments and dead code;
+9. summarize remaining limitations plainly.
+
+The final outcome should not be a larger collection of optional algorithms. It should be a smaller number of trusted paths:
+
+- one robust VMEC-compatible branch finder;
+- one certified high-order toroidal polish;
+- one coherent mirror equilibrium framework with isotropic and anisotropic closures;
+- one periodic hybrid framework;
+- one canonical full Boozer transform;
+- one derivative-safe confinement-objective stack;
+- one native downstream data contract;
+- one reproducible performance and physics evidence system.
