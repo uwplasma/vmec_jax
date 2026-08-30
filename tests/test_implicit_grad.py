@@ -285,6 +285,59 @@ def _mask_bit_ident(a, b) -> bool:
                for f in im._STATE_FIELDS)
 
 
+def test_residual_lane_reuses_one_executable_across_trial_boundaries(solovev):
+    """Same-shape residuals from different frozen states share one program.
+
+    residual_fn used to return a fresh per-call ``@jax.jit`` closure that
+    baked ``frozen`` and the dof mask in as constants, so every trial
+    boundary of an optimization campaign recompiled it — five compilations
+    and more than half the wall time of a steady-state F7 campaign step in
+    the committed baseline. The lane is keyed on the (held) config and leaf
+    shapes only; new same-shape values must be cache hits.
+    """
+    import logging
+
+    _name, _inp, cfg, p0, x_star, _rt, mask = solovev
+    compiles: list[str] = []
+
+    class _Handler(logging.Handler):
+        def emit(self, record):
+            message = record.getMessage()
+            if (message.startswith("Compiling ")
+                    and "_preconditioned_residual_lane" in message):
+                compiles.append(message)
+
+    handler = _Handler()
+    logger = logging.getLogger("jax")
+    previous_level = logger.level
+    jax.config.update("jax_log_compiles", True)
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        jax.clear_caches()
+        z = im._dof_projector(cfg, mask)(x_star)
+        base = jax.block_until_ready(
+            im.residual_fn(cfg, x_star, mask)(z, p0))
+        after_first = len(compiles)
+        # Additive: a multiplicative bump is inert on the zero blocks.
+        trial_frozen = jax.tree.map(lambda a: a + 1.0e-6, x_star)
+        trial = jax.block_until_ready(
+            im.residual_fn(cfg, trial_frozen, mask)(z, p0))
+    finally:
+        jax.config.update("jax_log_compiles", False)
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    assert after_first == 1
+    assert len(compiles) == 1, "a new frozen state recompiled the residual"
+    for leaf in jax.tree.leaves(base) + jax.tree.leaves(trial):
+        assert np.all(np.isfinite(leaf))
+    # The frozen state genuinely flows as data, not as a baked-in constant.
+    assert any(
+        not np.array_equal(a, b)
+        for a, b in zip(jax.tree.leaves(base), jax.tree.leaves(trial)))
+
+
 def test_dof_mask_structural_invariance_and_cache(solovev):
     """The dof mask depends only on structure (resolution / lconm1 / ncurr),
     so ``_MASK_CACHE`` (keyed by ``_mask_cache_key``) reuses it across the

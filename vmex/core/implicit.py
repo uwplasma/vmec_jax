@@ -1045,26 +1045,19 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
     rotated/zeroed) spectral force — same root, same gradients, but the
     adjoint GMRES then runs without preconditioning (diagnostic only).
     """
-    edge_mask = _edge_mask(cfg)
-    P = _dof_projector(cfg, dof_mask)
-
     if formulation == "preconditioned":
 
-        # jax.jit the residual so its linearization compiles as one reusable
-        # XLA sub-computation instead of being re-inlined into the enclosing
-        # jax.grad/jacrev program: the implicit-gradient memory peak is XLA
-        # *compile* working set, and this shrinks it bit-identically.
-        @jax.jit
         def F(z: SpectralState, params: ImplicitParams) -> SpectralState:
-            rt_p = runtime_from_params(params, cfg)
-            x = _assemble(z, rt_p, frozen, P, edge_mask)
-            gc, _, _ = evaluate_forces(x, rt_p)
-            return P(gc)
+            return _preconditioned_residual_lane(z, params, frozen,
+                                                 dof_mask, cfg)
 
         return F
 
     if formulation != "raw":
         raise ValueError(f"unknown formulation {formulation!r}")
+
+    edge_mask = _edge_mask(cfg)
+    P = _dof_projector(cfg, dof_mask)
 
     def F_raw(z: SpectralState, params: ImplicitParams) -> SpectralState:
         rt_p = runtime_from_params(params, cfg)
@@ -1072,6 +1065,28 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
         return P(_raw_force_state(x, rt_p))
 
     return F_raw
+
+
+# The residual stays under jax.jit so its linearization compiles as one
+# reusable XLA sub-computation instead of being re-inlined into the enclosing
+# jax.grad/jacrev program (the implicit-gradient memory peak is XLA *compile*
+# working set). Module scope with ``cfg`` static and the per-solve arrays as
+# arguments is what makes the executable REUSABLE: the previous per-call
+# ``@jax.jit`` closure was a fresh function object baking ``frozen`` and the
+# dof mask in as constants, so every trial boundary of an optimization
+# campaign recompiled it -- five compilations and several seconds of every
+# steady-state campaign step in the F7 baseline.
+@functools.partial(jax.jit, static_argnames=("cfg",))
+def _preconditioned_residual_lane(z: SpectralState, params: ImplicitParams,
+                                  frozen: SpectralState,
+                                  dof_mask: SpectralState,
+                                  cfg: ImplicitConfig) -> SpectralState:
+    edge_mask = _edge_mask(cfg)
+    P = _dof_projector(cfg, dof_mask)
+    rt_p = runtime_from_params(params, cfg)
+    x = _assemble(z, rt_p, frozen, P, edge_mask)
+    gc, _, _ = evaluate_forces(x, rt_p)
+    return P(gc)
 
 
 def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
