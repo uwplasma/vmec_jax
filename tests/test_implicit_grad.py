@@ -285,6 +285,100 @@ def _mask_bit_ident(a, b) -> bool:
                for f in im._STATE_FIELDS)
 
 
+def test_residual_lane_reuses_one_executable_across_trial_boundaries(solovev):
+    """Same-shape residuals from different frozen states share one program.
+
+    residual_fn used to return a fresh per-call ``@jax.jit`` closure that
+    baked ``frozen`` and the dof mask in as constants, so every trial
+    boundary of an optimization campaign recompiled it — five compilations
+    and more than half the wall time of a steady-state F7 campaign step in
+    the committed baseline. The lane is keyed on the (held) config and leaf
+    shapes only; new same-shape values must be cache hits.
+    """
+    import logging
+
+    _name, _inp, cfg, p0, x_star, _rt, mask = solovev
+    compiles: list[str] = []
+
+    class _Handler(logging.Handler):
+        def emit(self, record):
+            message = record.getMessage()
+            if (message.startswith("Compiling ")
+                    and "_preconditioned_residual_lane" in message):
+                compiles.append(message)
+
+    handler = _Handler()
+    logger = logging.getLogger("jax")
+    previous_level = logger.level
+    jax.config.update("jax_log_compiles", True)
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        jax.clear_caches()
+        z = im._dof_projector(cfg, mask)(x_star)
+        base = jax.block_until_ready(
+            im.residual_fn(cfg, x_star, mask)(z, p0))
+        after_first = len(compiles)
+        # Additive: a multiplicative bump is inert on the zero blocks.
+        trial_frozen = jax.tree.map(lambda a: a + 1.0e-6, x_star)
+        trial = jax.block_until_ready(
+            im.residual_fn(cfg, trial_frozen, mask)(z, p0))
+    finally:
+        jax.config.update("jax_log_compiles", False)
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    assert after_first == 1
+    assert len(compiles) == 1, "a new frozen state recompiled the residual"
+    for leaf in jax.tree.leaves(base) + jax.tree.leaves(trial):
+        assert np.all(np.isfinite(leaf))
+    # The frozen state genuinely flows as data, not as a baked-in constant.
+    assert any(
+        not np.array_equal(a, b)
+        for a, b in zip(jax.tree.leaves(base), jax.tree.leaves(trial)))
+
+
+def test_content_token_distinguishes_each_supported_kind():
+    """Every branch of the config content key: arrays by bytes (numpy and
+    device arrays alike), sequences by element, devices and other
+    identity-like objects by repr."""
+    a = np.asarray([1.0, 2.0])
+    assert im._content_token(a) == im._content_token(a.copy())
+    assert im._content_token(a) != im._content_token(np.asarray([1.0, 3.0]))
+    assert im._content_token(jnp.asarray(a)) == im._content_token(a)
+    assert im._content_token((1, [2.0, "x"])) == ("tuple", (
+        1, ("list", (2.0, "x"))))
+    device = jax.devices()[0]
+    assert im._content_token(device) == ("repr", repr(device))
+
+
+def test_make_config_canonicalizes_equal_content(solovev):
+    """Equal-content configs share one instance; distinct content does not.
+
+    ``ImplicitConfig`` is ``eq=False``, so the residual lane's static
+    argument, ``_LAST_SOLVE``, and the template-runtime cache all key on
+    object identity. ``run``/``make_config`` mint a fresh config per
+    objective evaluation; without canonicalization the F4 baseline
+    recompiled the residual lane fourteen times per warm repeat of an
+    identical evaluation. The registry is a small LRU: eviction only costs
+    a later recompile, never correctness.
+    """
+    name, inp, _cfg, _p0, _x_star, _rt, _mask = solovev
+    cfg_a = im.make_config(inp, **CASES[name])
+    cfg_b = im.make_config(inp, **CASES[name])
+    assert cfg_a is cfg_b
+    cfg_c = im.make_config(inp, ftol=CASES[name]["ftol"] * 0.5,
+                           max_iterations=CASES[name]["max_iterations"])
+    assert cfg_c is not cfg_a
+    # The registry stays bounded: churning distinct contents evicts the
+    # oldest entries without breaking previously returned instances.
+    for extra in range(im._CONFIG_CANON_MAX + 3):
+        im.make_config(inp, ftol=1.0e-9 / (extra + 2),
+                       max_iterations=CASES[name]["max_iterations"])
+    assert len(im._CONFIG_CANON) <= im._CONFIG_CANON_MAX
+    assert im.make_config(inp, **CASES[name]).ftol == cfg_a.ftol
+
+
 def test_dof_mask_structural_invariance_and_cache(solovev):
     """The dof mask depends only on structure (resolution / lconm1 / ncurr),
     so ``_MASK_CACHE`` (keyed by ``_mask_cache_key``) reuses it across the
@@ -293,10 +387,15 @@ def test_dof_mask_structural_invariance_and_cache(solovev):
     across two fresh configs of the same structure."""
     name, inp, cfg, p0, x_star, rt, mask = solovev
 
-    # fresh configs of the same structure share one hashable structural key,
-    # even though ImplicitConfig is eq=False (object-identity equality).
-    cfg_a = im.make_config(inp, **CASES[name])
-    cfg_b = im.make_config(inp, **CASES[name])
+    # Configs of the same structure but different content share one
+    # structural key while remaining distinct instances (equal content is
+    # canonicalized to one instance -- see
+    # test_make_config_canonicalizes_equal_content -- so different ftol is
+    # what "fresh configs" means now).
+    cfg_a = im.make_config(inp, ftol=CASES[name]["ftol"],
+                           max_iterations=CASES[name]["max_iterations"])
+    cfg_b = im.make_config(inp, ftol=CASES[name]["ftol"] * 0.5,
+                           max_iterations=CASES[name]["max_iterations"])
     assert cfg_a is not cfg_b and cfg_a != cfg_b
     key = im._mask_cache_key(cfg)
     assert im._mask_cache_key(cfg_a) == key == im._mask_cache_key(cfg_b)

@@ -120,6 +120,7 @@ verified against :func:`~vmex.core.setup.run_setup` in
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import dataclasses
 import functools
@@ -380,7 +381,7 @@ def make_config(
         max_iterations = int(np.asarray(inp.niter_array).ravel()[-1])
     if not np.isfinite(max_fsq_ratio) or max_fsq_ratio <= 0.0:
         raise ValueError("max_fsq_ratio must be finite and positive")
-    return ImplicitConfig(
+    return _canonical_config(ImplicitConfig(
         inp=inp, resolution=resolution, ftol=float(ftol),
         max_iterations=int(max_iterations), mode=str(mode),
         multigrid=bool(multigrid), lconm1=bool(lconm1),
@@ -393,7 +394,59 @@ def make_config(
         refine_tol=float(refine_tol),
         max_fsq_ratio=float(max_fsq_ratio),
         hot_restart=bool(hot_restart), device=device,
-    )
+    ))
+
+
+def _content_token(value: Any) -> Any:
+    """Deterministic hashable token of a config field's *content*."""
+    if value is None or isinstance(value, (bool, int, float, str, bytes)):
+        return value
+    if isinstance(value, np.ndarray):
+        return ("ndarray", value.shape, str(value.dtype), value.tobytes())
+    if isinstance(value, jax.Array):
+        host = np.asarray(value)
+        return ("ndarray", host.shape, str(host.dtype), host.tobytes())
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return (type(value).__qualname__, tuple(
+            (f.name, _content_token(getattr(value, f.name)))
+            for f in dataclasses.fields(value)))
+    if isinstance(value, (list, tuple)):
+        return (type(value).__name__, tuple(_content_token(v) for v in value))
+    # jax.Device and anything else identity-like: repr is stable in-process.
+    return ("repr", repr(value))
+
+
+#: Bounded: a canonical config is a strong reference, and the weak-keyed
+#: ``_LAST_SOLVE`` memo keeps one SolveResult alive per live config -- an
+#: unbounded registry would pin a solve per boundary variant in long
+#: parameter scans. Eviction only costs a later recompile, never
+#: correctness: an evicted instance keeps working, and equal content simply
+#: gets a fresh canonical identity afterwards.
+_CONFIG_CANON: "collections.OrderedDict[Any, ImplicitConfig]" =     collections.OrderedDict()
+_CONFIG_CANON_MAX = 16
+
+
+def _canonical_config(cfg: ImplicitConfig) -> ImplicitConfig:
+    """One shared instance per config *content* (``ImplicitConfig`` is
+    ``eq=False``, so every identity-keyed cache — the residual lane's static
+    argument, ``_LAST_SOLVE``, the template-runtime cache — would otherwise
+    miss across the fresh configs :func:`make_config`/:func:`run` mint on
+    every objective evaluation: the F4 baseline recompiled the residual lane
+    fourteen times per warm repeat on identical content). Equal content means
+    identical behaviour, so sharing is exact, and the registry stays small:
+    one entry per distinct deck/resolution/knob set per process. Callers
+    treat ``VmecInput`` arrays as frozen (the ``dataclasses.replace`` idiom
+    throughout); mutating them in place was already unsupported.
+    """
+    key = _content_token(cfg)
+    hit = _CONFIG_CANON.get(key)
+    if hit is not None:
+        _CONFIG_CANON.move_to_end(key)
+        return hit
+    _CONFIG_CANON[key] = cfg
+    while len(_CONFIG_CANON) > _CONFIG_CANON_MAX:
+        _CONFIG_CANON.popitem(last=False)
+    return cfg
 
 
 def _device_context(cfg: ImplicitConfig):
@@ -1045,26 +1098,19 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
     rotated/zeroed) spectral force — same root, same gradients, but the
     adjoint GMRES then runs without preconditioning (diagnostic only).
     """
-    edge_mask = _edge_mask(cfg)
-    P = _dof_projector(cfg, dof_mask)
-
     if formulation == "preconditioned":
 
-        # jax.jit the residual so its linearization compiles as one reusable
-        # XLA sub-computation instead of being re-inlined into the enclosing
-        # jax.grad/jacrev program: the implicit-gradient memory peak is XLA
-        # *compile* working set, and this shrinks it bit-identically.
-        @jax.jit
         def F(z: SpectralState, params: ImplicitParams) -> SpectralState:
-            rt_p = runtime_from_params(params, cfg)
-            x = _assemble(z, rt_p, frozen, P, edge_mask)
-            gc, _, _ = evaluate_forces(x, rt_p)
-            return P(gc)
+            return _preconditioned_residual_lane(z, params, frozen,
+                                                 dof_mask, cfg)
 
         return F
 
     if formulation != "raw":
         raise ValueError(f"unknown formulation {formulation!r}")
+
+    edge_mask = _edge_mask(cfg)
+    P = _dof_projector(cfg, dof_mask)
 
     def F_raw(z: SpectralState, params: ImplicitParams) -> SpectralState:
         rt_p = runtime_from_params(params, cfg)
@@ -1072,6 +1118,28 @@ def residual_fn(cfg: ImplicitConfig, frozen: SpectralState,
         return P(_raw_force_state(x, rt_p))
 
     return F_raw
+
+
+# The residual stays under jax.jit so its linearization compiles as one
+# reusable XLA sub-computation instead of being re-inlined into the enclosing
+# jax.grad/jacrev program (the implicit-gradient memory peak is XLA *compile*
+# working set). Module scope with ``cfg`` static and the per-solve arrays as
+# arguments is what makes the executable REUSABLE: the previous per-call
+# ``@jax.jit`` closure was a fresh function object baking ``frozen`` and the
+# dof mask in as constants, so every trial boundary of an optimization
+# campaign recompiled it -- five compilations and several seconds of every
+# steady-state campaign step in the F7 baseline.
+@functools.partial(jax.jit, static_argnames=("cfg",))
+def _preconditioned_residual_lane(z: SpectralState, params: ImplicitParams,
+                                  frozen: SpectralState,
+                                  dof_mask: SpectralState,
+                                  cfg: ImplicitConfig) -> SpectralState:
+    edge_mask = _edge_mask(cfg)
+    P = _dof_projector(cfg, dof_mask)
+    rt_p = runtime_from_params(params, cfg)
+    x = _assemble(z, rt_p, frozen, P, edge_mask)
+    gc, _, _ = evaluate_forces(x, rt_p)
+    return P(gc)
 
 
 def _dof_mask(x_star: SpectralState, rt: SolverRuntime,
@@ -2722,7 +2790,9 @@ def run(
                 "omit device (or pass device=None) to run"
             )
         cfg_device = None
-    cfg = dataclasses.replace(cfg, device=cfg_device)
+    # replace() mints a fresh instance; re-canonicalize so identity-keyed
+    # caches (residual lane, _LAST_SOLVE, template runtime) keep hitting.
+    cfg = _canonical_config(dataclasses.replace(cfg, device=cfg_device))
     placement = jax.default_device(dev) if dev is not None else contextlib.nullcontext()
     with placement:
         if params is None:
