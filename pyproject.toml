@@ -35,9 +35,9 @@ dependencies = [
   # JAX's persistent compilation cache uses file locks across processes.
   "filelock",
   "booz_xform_jax",
-  # 0.19.0 adds the continuation and matrix-free least-squares APIs used by
-  # strong-force polishing, while retaining VMEX's existing linear solvers.
-  "solvax>=0.19.0",
+  # 0.20.0 adds the matrix-free least-squares APIs used by strong-force
+  # polishing. 0.19.0 contains continuation but predates the least-squares PR.
+  "solvax>=0.20.0",
   "tomli; python_version < '3.11'",
 ]
 

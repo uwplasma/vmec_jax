@@ -3838,3 +3838,10 @@ supersedes older instructions to keep #125 open indefinitely.
   hosted matrix runs once on the final source candidate; superseded source
   candidates are canceled. This preserves full release confidence without
   repeatedly paying for unchanged numerical lanes.
+- Packaging is checked against built artifacts, not source version strings.
+  SOLVAX 0.19.0 was tagged before its least-squares PR merged, so VMEX requires
+  the corrective 0.20.0 release from merged PR #99. Its published wheel was
+  independently installed and exposes all three required APIs. ESSOS 0.16
+  predates
+  `SquaredFlux`; the hosted optional test skips that absent API, while the
+  mandatory current-ESSOS-main integration gate is recorded above.

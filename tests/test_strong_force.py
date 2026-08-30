@@ -151,6 +151,9 @@ def test_high_order_surface_handoff_is_analytic_and_tangent():
 
 def test_high_order_surface_composes_with_essos_objective():
     essos_surfaces = pytest.importorskip("essos.surfaces")
+    squared_flux = getattr(essos_surfaces, "SquaredFlux", None)
+    if squared_flux is None:
+        pytest.skip("SquaredFlux is not part of released ESSOS 0.16")
 
     @jax.tree_util.register_pytree_node_class
     class PositionDependentField:
@@ -172,7 +175,7 @@ def test_high_order_surface_composes_with_essos_objective():
             R_cos=state.R_cos.at[0].add(delta),
         )
         surface = evaluate_high_order_surface(candidate, nphi=8, ntheta=10)
-        return essos_surfaces.SquaredFlux(
+        return squared_flux(
             surface,
             PositionDependentField(),
             definition="local",
