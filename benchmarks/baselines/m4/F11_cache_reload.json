@@ -1,0 +1,60 @@
+{
+ "cache": {
+  "directory": "/private/tmp/claude-501/-Users-rogeriojorge-local/ba88a505-702b-41c6-a36d-3c58b0f50b6b/scratchpad/phase2wt/benchmarks/.profile_cache",
+  "entries_after": 23,
+  "entries_before": 23
+ },
+ "case_sha256": "9d1e58f23aea74f5ea8a29f0b75bb9c42f426dbb29e662943e6ac8a053a9950c",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "lasym_gradient": {
+   "cache_miss_reasons": [],
+   "compiles": 206,
+   "traces": 355
+  },
+  "lasym_value": {
+   "cache_miss_reasons": [],
+   "compiles": 172,
+   "traces": 367
+  },
+  "symmetric_gradient": {
+   "cache_miss_reasons": [],
+   "compiles": 393,
+   "traces": 678
+  },
+  "symmetric_value": {
+   "cache_miss_reasons": [],
+   "compiles": 391,
+   "traces": 856
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 4078436352
+ },
+ "platform": {
+  "machine": "arm64",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "cache_reload",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "build": 0.1579514589975588,
+  "lasym_gradient": 17.4946502080129,
+  "lasym_value": 10.704148999997415,
+  "process_wall": 62.285252583009424,
+  "symmetric_gradient": 17.712726208992535,
+  "symmetric_value": 12.50561066600494
+ },
+ "title": "symmetric versus LASYM value and gradient",
+ "utc": "2026-08-30T17:51:14Z",
+ "workflow": "F11"
+}

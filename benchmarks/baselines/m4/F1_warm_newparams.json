@@ -1,0 +1,42 @@
+{
+ "case_sha256": "adcea5bf869c41127048e4fd32edcbdbd38865a8e81985e8d0bb671c6db9e6e4",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "solve": {
+   "cache_miss_reasons": [],
+   "compiles": 212,
+   "traces": 579
+  },
+  "warm_newparams": {
+   "cache_miss_reasons": [],
+   "compiles": 0,
+   "traces": 0
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 749420544
+ },
+ "platform": {
+  "machine": "arm64",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "warm_newparams",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "build": 0.11145895899971947,
+  "solve": 5.473772583005484,
+  "warm_newparams": 0.09842154200305231
+ },
+ "title": "fixed-boundary single-grid value",
+ "utc": "2026-08-30T18:06:54Z",
+ "workflow": "F1"
+}

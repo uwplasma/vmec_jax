@@ -749,3 +749,54 @@ seven objectives.
 
 The parity suite needs the golden VMEC2000 fixtures (fetched release assets);
 it is skipped automatically when they are unavailable.
+
+Workflow observability harness
+------------------------------
+
+``benchmarks/profile_workflows.py`` is the one driver for flagship-workflow
+timing, memory, and compile observability. Every record separates build,
+per-stage execution (fenced with ``block_until_ready``), and — for the two
+process-level regimes — total process wall time, alongside trace/compile
+counts read from JAX's own ``jax_log_compiles`` records and peak host RSS::
+
+   python benchmarks/profile_workflows.py --list
+   python benchmarks/profile_workflows.py F1 F4 --regimes cold warm
+   python benchmarks/profile_workflows.py --all --regimes warm --out benchmarks/baselines/m4/
+   python benchmarks/profile_workflows.py F4 C2 --trace-dir benchmarks/traces/
+
+The registry covers the plan's workflow matrix: fixed-boundary solves
+(single-grid, multigrid, polished), implicit value/gradient, vector residual
+plus full Jacobian, hot-restart scans, optimization campaigns (scalar
+L-BFGS-B and residual least-squares), single-stage plasma-plus-coils with
+ESSOS, the free-boundary implicit value and adjoint, symmetric-versus-LASYM
+pairs at matched resolution, mirror equilibria (fixed-boundary,
+free-boundary, and the periodic hybrid with its GK geometry export), Boozer
+transforms at one and many surfaces, and the epsilon-effective and Gamma-c
+diagnostics. ``--trace-dir`` captures one XProf trace per stage on a warm
+repeat, so every flagship class has execution-level evidence, not only wall
+times. Committed baselines live under ``benchmarks/baselines/`` (one
+directory per platform), each record stamped with the commit it measured
+and a clean-tree flag.
+
+Five timing regimes are never mixed in one number:
+
+``cold``
+   a fresh process with an emptied persistent compilation cache;
+``cache_reload``
+   a second fresh process reusing the cache the matching ``cold`` run
+   populated (the record carries the entry counts before and after, so a
+   reload claim always has logged evidence);
+``warm``
+   same process, same shapes and static arguments — the median of repeats;
+``warm_newparams``
+   same process, changed physical parameters at unchanged shapes (the
+   no-recompile contract, asserted by the harness's own tests);
+``reshape``
+   same process, changed resolution.
+
+Two measurement traps the harness handles, documented because they silently
+zero results otherwise: importing vmex sets ``jax_logging_level = "ERROR"``,
+which filters the records the compile counter reads (the harness imports vmex
+before installing its handler), and ``jax_explain_cache_misses`` breaks
+``jax.lax.platform_dependent`` on jax 0.9.2 inside the very solves being
+measured, so it is opt-in rather than default.

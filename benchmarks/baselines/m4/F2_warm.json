@@ -1,0 +1,42 @@
+{
+ "case_sha256": "555f80dcaa9e3bb7419196cf728dfc252eab19aa6477731f10a1b3ef47ca6e51",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "solve": {
+   "cache_miss_reasons": [],
+   "compiles": 174,
+   "traces": 433
+  },
+  "warm": {
+   "cache_miss_reasons": [],
+   "compiles": 0,
+   "traces": 0
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 1096237056
+ },
+ "platform": {
+  "machine": "arm64",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "warm",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "build": 0.0029907080170232803,
+  "solve": 5.146582708024653,
+  "warm": 0.2615430829755496
+ },
+ "title": "fixed-boundary multigrid value",
+ "utc": "2026-08-30T16:32:48Z",
+ "workflow": "F2"
+}

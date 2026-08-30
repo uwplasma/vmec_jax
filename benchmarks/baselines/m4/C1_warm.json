@@ -1,0 +1,48 @@
+{
+ "case_sha256": "4f56d4c674b6340a9e359d3645ab1dbb4f841eccc563b5fc969a27928cb9cf84",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "epsilon": {
+   "cache_miss_reasons": [],
+   "compiles": 623,
+   "traces": 788
+  },
+  "solve": {
+   "cache_miss_reasons": [],
+   "compiles": 324,
+   "traces": 1166
+  },
+  "warm": {
+   "cache_miss_reasons": [],
+   "compiles": 425,
+   "traces": 1271
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 20563083264
+ },
+ "platform": {
+  "machine": "arm64",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "warm",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "build": 0.03307637499528937,
+  "epsilon": 41.0552730000054,
+  "solve": 31.933358915994177,
+  "warm": 4.2356035000120755
+ },
+ "title": "epsilon-effective summary diagnostic",
+ "utc": "2026-08-30T18:03:37Z",
+ "workflow": "C1"
+}

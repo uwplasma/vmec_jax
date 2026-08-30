@@ -1,0 +1,42 @@
+{
+ "case_sha256": "d76efbd4d584c91a985b147a07302660f7bb515f23dfdebc721bc35b703c9bbb",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "optimize": {
+   "cache_miss_reasons": [],
+   "compiles": 541,
+   "traces": 2188
+  },
+  "warm": {
+   "cache_miss_reasons": [],
+   "compiles": 400,
+   "traces": 1912
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 11801886720
+ },
+ "platform": {
+  "machine": "arm64",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "warm",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "build": 17.191805749986088,
+  "optimize": 370.7256599169923,
+  "warm": 409.12730333401123
+ },
+ "title": "scalar boundary optimization, 10 accepted steps",
+ "utc": "2026-08-30T17:23:54Z",
+ "workflow": "F7"
+}

@@ -1,0 +1,48 @@
+{
+ "cache": {
+  "directory": "/private/tmp/claude-501/-Users-rogeriojorge-local/ba88a505-702b-41c6-a36d-3c58b0f50b6b/scratchpad/phase2wt/benchmarks/.profile_cache",
+  "entries_after": 21,
+  "entries_before": 21
+ },
+ "case_sha256": "b88fef18d693528849bd0048b3413c0d855b6d5a4d687a41ca05c5f28fc5a119",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "adjoint": {
+   "cache_miss_reasons": [],
+   "compiles": 26,
+   "traces": 15
+  },
+  "value": {
+   "cache_miss_reasons": [],
+   "compiles": 1671,
+   "traces": 1882
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 9740615680
+ },
+ "platform": {
+  "machine": "arm64",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "cache_reload",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "adjoint": 28.712040917016566,
+  "build": 3.436966625013156,
+  "process_wall": 105.40063791698776,
+  "value": 66.63101970800199
+ },
+ "title": "free-boundary value and adjoint",
+ "utc": "2026-08-30T17:44:38Z",
+ "workflow": "F10"
+}
