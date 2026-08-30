@@ -1,81 +1,81 @@
 {
  "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
- "note": "XProf traces are not stored in Git; regenerate byte-identical evidence classes at this commit with: python benchmarks/profile_workflows.py F1 F4 F10 M3 B1 C2 --regimes warm --trace-dir <dir>",
+ "note": "XProf traces are not stored in Git; regenerate byte-identical evidence classes at this commit with: python benchmarks/profile_workflows.py F1 F4 F10 M3 B1 C2 --regimes warm --trace-dir <dir> XProf names trace files by host; the manifest redacts the hostname, and the sha256 identifies the content exactly.",
  "schema": 1,
  "traces": [
   {
    "bytes": 330687010,
-   "file": "B1/solve/plugins/profile/2026_08_30_13_23_38/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "B1/solve/plugins/profile/2026_08_30_13_23_38/<host>.xplane.pb",
    "sha256": "45cc8d520bdc0731c8f6bfd41a1e34395cb8561169c10693397b453a15d5e1fb",
    "stage": "solve",
    "workflow": "B1"
   },
   {
    "bytes": 313599578,
-   "file": "B1/transform/plugins/profile/2026_08_30_13_23_43/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "B1/transform/plugins/profile/2026_08_30_13_23_43/<host>.xplane.pb",
    "sha256": "f441661dac1b472506a98ae1b542f11df3463ba4b516975f4aac60498649b292",
    "stage": "transform",
    "workflow": "B1"
   },
   {
    "bytes": 1115890027,
-   "file": "C2/gradient/plugins/profile/2026_08_30_13_26_16/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "C2/gradient/plugins/profile/2026_08_30_13_26_16/<host>.xplane.pb",
    "sha256": "c6732124abc317de216dd404943f7a9f4511231b6172ffa94a29dda1f3eb441d",
    "stage": "gradient",
    "workflow": "C2"
   },
   {
    "bytes": 681226928,
-   "file": "C2/value/plugins/profile/2026_08_30_13_25_18/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "C2/value/plugins/profile/2026_08_30_13_25_18/<host>.xplane.pb",
    "sha256": "3a63087d5f343c44b999913cfed8bc2b48e02b07b48c9887304c6e93dc28844d",
    "stage": "value",
    "workflow": "C2"
   },
   {
    "bytes": 21076120,
-   "file": "F1/solve/plugins/profile/2026_08_30_13_07_06/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "F1/solve/plugins/profile/2026_08_30_13_07_06/<host>.xplane.pb",
    "sha256": "51e25ecefaa420af0a946f29fa63079cc633c89f8472687299cc362772793e52",
    "stage": "solve",
    "workflow": "F1"
   },
   {
    "bytes": 0,
-   "file": "F10/adjoint/plugins/profile/2026_08_30_13_19_51/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "F10/adjoint/plugins/profile/2026_08_30_13_19_51/<host>.xplane.pb",
    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
    "stage": "adjoint",
    "workflow": "F10"
   },
   {
    "bytes": 0,
-   "file": "F10/value/plugins/profile/2026_08_30_13_16_02/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "F10/value/plugins/profile/2026_08_30_13_16_02/<host>.xplane.pb",
    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
    "stage": "value",
    "workflow": "F10"
   },
   {
    "bytes": 701992901,
-   "file": "F4/gradient/plugins/profile/2026_08_30_13_09_51/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "F4/gradient/plugins/profile/2026_08_30_13_09_51/<host>.xplane.pb",
    "sha256": "284659e28685f01eeddd8331952c1fef6fb8f2aff39438c3de640be2d8328326",
    "stage": "gradient",
    "workflow": "F4"
   },
   {
    "bytes": 364760866,
-   "file": "F4/value/plugins/profile/2026_08_30_13_08_57/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "F4/value/plugins/profile/2026_08_30_13_08_57/<host>.xplane.pb",
    "sha256": "aa9163e74d9c6ff0730caa2f48bce48ee4a6380cc94d1edc5c0cce33c9a7c819",
    "stage": "value",
    "workflow": "F4"
   },
   {
    "bytes": 326852113,
-   "file": "M3/geometry/plugins/profile/2026_08_30_13_23_28/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "M3/geometry/plugins/profile/2026_08_30_13_23_28/<host>.xplane.pb",
    "sha256": "1ab60496a242dd5b3f9545b684a8ab12215316d60d031e06a10e7c2771c32f99",
    "stage": "geometry",
    "workflow": "M3"
   },
   {
    "bytes": 731085170,
-   "file": "M3/solve/plugins/profile/2026_08_30_13_23_15/Rogerios-MacBook-Pro.local.xplane.pb",
+   "file": "M3/solve/plugins/profile/2026_08_30_13_23_15/<host>.xplane.pb",
    "sha256": "84512b52a2ef7405ff2f0970aeafacadede4e4524733f2e5e3ad9d089ccbe640",
    "stage": "solve",
    "workflow": "M3"

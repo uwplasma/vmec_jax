@@ -40,7 +40,6 @@
  },
  "platform": {
   "machine": "arm64",
-  "node": "Rogerios-MacBook-Pro.local",
   "python": "3.11.14",
   "system": "Darwin"
  },

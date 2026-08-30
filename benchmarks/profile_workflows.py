@@ -147,7 +147,6 @@ def _provenance(case_paths: tuple[Path, ...]) -> dict[str, Any]:
             "system": platform.system(),
             "machine": platform.machine(),
             "python": platform.python_version(),
-            "node": platform.node(),
         },
         "jax": {
             "jax": jax.__version__,
