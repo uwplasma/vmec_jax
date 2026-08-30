@@ -441,3 +441,47 @@ def test_state_validation_and_empty_plot_errors():
         replace(state, pressure=jnp.zeros((state.radial_basis.size - 1,)))
     with pytest.raises(ValueError, match="at least one"):
         plot_strong_force_report({})
+
+
+def test_state_treedefs_match_across_fresh_equal_bases():
+    """Two states over fresh equal-content bases share one jit pytree key.
+
+    The basis rides in the state's pytree metadata; identity equality there
+    recompiled the module-jitted evaluators on every polish call, since each
+    call rebuilds the basis.
+    """
+    from vmex.core.radial_basis import BSplineBasis
+    from vmex.core.strong_force import HighOrderEquilibriumState
+
+    def build():
+        basis = BSplineBasis.clamped(np.linspace(0.0, 1.0, 5))
+        m = np.asarray([0, 1])
+        table = jnp.zeros((2, basis.size))
+        profile = jnp.zeros((basis.size,))
+        return HighOrderEquilibriumState(
+            radial_basis=basis, m=m, n=np.asarray([0, 0]), nfp=1,
+            R_cos=table, R_sin=table, Z_cos=table, Z_sin=table,
+            L_cos=table, L_sin=table,
+            phipf=profile, chipf=profile, pressure=profile)
+
+    first = jax.tree_util.tree_structure(build())
+    second = jax.tree_util.tree_structure(build())
+    assert first == second
+
+
+def test_chart_metadata_excludes_the_build_timestamp():
+    """Charts differing only in build_seconds share one jit pytree key, and
+    a flatten round trip zeroes the wall-clock diagnostic."""
+    import dataclasses
+
+    from vmex.core.polish import StrongPhysicalChart
+
+    chart = StrongPhysicalChart(
+        coordinate_basis=jnp.eye(3), equation_basis=jnp.eye(3),
+        coordinate_scale=jnp.ones(3), equation_scale=jnp.ones(3),
+        gauge_rank=1, build_seconds=1.25)
+    rebuilt = dataclasses.replace(chart, build_seconds=9.75)
+    structure = jax.tree_util.tree_structure(chart)
+    assert structure == jax.tree_util.tree_structure(rebuilt)
+    leaves, treedef = jax.tree_util.tree_flatten(chart)
+    assert treedef.unflatten(leaves).build_seconds == 0.0

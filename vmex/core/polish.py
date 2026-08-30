@@ -362,7 +362,12 @@ class StrongPhysicalChart:
     build_seconds: float
 
     def tree_flatten(self):
-        """Keep dense numeric maps out of JIT static constants."""
+        """Keep dense numeric maps out of JIT static constants.
+
+        ``build_seconds`` is a wall-clock build diagnostic; in the hashable
+        metadata it made every chart a distinct compilation-cache key, so a
+        flatten/unflatten round trip drops it to zero instead.
+        """
 
         return (
             (
@@ -371,12 +376,13 @@ class StrongPhysicalChart:
                 self.coordinate_scale,
                 self.equation_scale,
             ),
-            (int(self.gauge_rank), float(self.build_seconds)),
+            (int(self.gauge_rank),),
         )
 
     @classmethod
     def tree_unflatten(cls, metadata, children):
-        gauge_rank, build_seconds = metadata
+        (gauge_rank,) = metadata
+        build_seconds = 0.0
         (
             coordinate_basis,
             equation_basis,
