@@ -3802,3 +3802,39 @@ supersedes older instructions to keep #125 open indefinitely.
 - 2026-08-29 rogeriojorge: finalized PR #125 for merge; recorded the independent
   force-balance literature/conditioning review, clean scientific restack,
   WSL2 remediation, and conservative CI-scoping decision.
+
+### Consolidation checkpoint — 2026-08-29
+
+- The experimental stack is consolidated into VMEX PR #192. Its production
+  path uses the certified rectangular SOLVAX least-squares solve, and its
+  tangent, adjoint, and custom VJP differentiate the same `J.T r = 0`
+  stationarity equation, including the nonzero-residual Hessian term.
+- The reviewer figure now compares analytical Solov'ev and a finite-beta QA
+  stellarator against VMEC2000, VMEC++, and adequately resolved DESC results.
+  It reports equation-defined relative force error, volume-L2 force error, and
+  cold runtime with short factual titles. Standard WOUT plotting combines
+  pressure and parallel current, uses the third top panel for relative force
+  error, and prints its maximum in the equilibrium summary for vacuum and
+  finite-beta cases.
+- Native polished field and surface views feed BOOZ_XFORM_JAX,
+  VIRTUAL_CASING_JAX, and ESSOS without WOUT round trips or finite-difference
+  tangents. The real optimization gate is relative field-strength variance at
+  rho=0.7; its implicit derivative agrees with two independently polished
+  centered finite-difference endpoints to `5.11e-5` relative.
+- Direct downstream gates pass: BOOZ_XFORM_JAX 20 tests (7 optional skips),
+  VIRTUAL_CASING_JAX 137 tests (1 skip), ESSOS 40 relevant tests plus its
+  finite-beta VMEX optimization example, GKX 57 differentiable-geometry tests,
+  and DKX 6 slow flagship QA/bootstrap tests in 576.20 s. GKX PR #160, DKX
+  PR #78, and ESSOS PR #58 are merged.
+- VMEX code clarity is a release gate. Production mathematics lives once in
+  typed core functions; benchmarks remain thin clients. PR #192 has 51 tracked
+  benchmark files versus 37 on `main`, after deleting 15 obsolete exploratory
+  artifacts and consolidating external launchers. That 14-file delta is a hard
+  cap: no additional benchmark file may enter this PR. Future benchmark PRs
+  must state their file-count delta and consolidate or delete superseded files
+  at least as quickly as they add current ones; rejected experiments are logged
+  here rather than retained as permanent artifacts.
+- Development uses focused changed-module and scientific gates. The complete
+  hosted matrix runs once on the final source candidate; superseded source
+  candidates are canceled. This preserves full release confidence without
+  repeatedly paying for unchanged numerical lanes.

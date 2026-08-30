@@ -1093,7 +1093,7 @@ def polish_collocation_least_squares(
             hint="inspect the polish report and refine the radial representation",
             solver_converged=bool(solution.converged),
             normalized_l2=float(certificate.normalized_l2),
-            validation_tolerance=config.certificate_tolerance,
+            tolerance=config.certificate_tolerance,
             radial_refinement=float(certificate.radial_refinement_difference),
             radial_refinement_tolerance=config.radial_refinement_tolerance,
         )

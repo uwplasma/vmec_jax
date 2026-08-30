@@ -181,10 +181,17 @@ class StrongForceContinuationError(VmecNumericalError):
 
 @dataclass
 class StrongForceCertificationError(VmecNumericalError):
-    """A converged strong root failed the independent overintegrated gate."""
+    """Collocation stationarity or its independent force certificate failed.
 
+    ``solver_converged`` distinguishes failure of ``J.T r = 0`` from failure
+    of either overintegrated certificate threshold.
+    """
+
+    solver_converged: bool = False
     normalized_l2: float = float("inf")
     tolerance: float = 0.0
+    radial_refinement: float = float("inf")
+    radial_refinement_tolerance: float = 0.0
 
 
 @dataclass

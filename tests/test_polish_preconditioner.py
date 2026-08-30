@@ -13,7 +13,10 @@ import pytest
 
 from vmex.core import implicit
 from vmex.core import solver
-from vmex.core.errors import StrongForceContinuationError
+from vmex.core.errors import (
+    StrongForceCertificationError,
+    StrongForceContinuationError,
+)
 from vmex.core.input import VmecInput
 from vmex.core.omnigenity import boozer_bmnc_high_order
 from vmex.core.polish import (
@@ -67,6 +70,21 @@ from vmex.core.strong_force import lift_high_order_state
 jax.config.update("jax_enable_x64", True)
 
 DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
+
+
+def test_collocation_certification_error_retains_both_failure_gates():
+    error = StrongForceCertificationError(
+        "not certified",
+        solver_converged=True,
+        normalized_l2=0.2,
+        tolerance=0.1,
+        radial_refinement=0.03,
+        radial_refinement_tolerance=0.01,
+    )
+
+    assert error.solver_converged
+    assert error.normalized_l2 > error.tolerance
+    assert error.radial_refinement > error.radial_refinement_tolerance
 
 
 def test_solvax_continuation_api_compatibility_helpers():
