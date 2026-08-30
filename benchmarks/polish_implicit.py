@@ -94,6 +94,7 @@ def main() -> None:
     parser.add_argument("--degree", type=int, choices=(3, 5, 7), default=3)
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--solve-tolerance", type=float, default=1.0e-6)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.ns < args.degree + 2:
         parser.error("ns must be at least degree + 2")
@@ -251,7 +252,11 @@ def main() -> None:
         **git_state(REPO),
         "vmex_module": assert_repo_vmex(vmex.__file__, REPO),
     }
-    print(json.dumps(report, indent=2, sort_keys=True))
+    payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    if args.output is None:
+        print(payload, end="")
+    else:
+        args.output.write_text(payload, encoding="utf-8")
 
 
 if __name__ == "__main__":
