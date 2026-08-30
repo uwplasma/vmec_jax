@@ -2329,33 +2329,86 @@ def implicit_state_pullback_multi_rhs_raw_block_transpose(
     probe_chunk_size: int = 1,
     response_chunk_size: int | None = None,
 ) -> ImplicitParams:
-    """NEOPAX-compatible batched state transpose using main's block path.
+    """Legacy NEOPAX raw-formulation batched implicit pullback.
 
-    The former NEOPAX backend exposed this name for a batched raw-block
-    transpose.  On VMEX main, ``solver=\"block\"`` is the corresponding
-    implementation: it factors the local raw block operator once, uses that
-    transpose as the preconditioner, and then certifies the ordinary implicit
-    adjoint equation.  Consequently this compatibility entry point has the
-    same state-bar-to-parameter-bar contract while retaining main's standard
-    reverse-rule correctness and convergence checks.  ``None`` preserves the
-    former API's unchunked ``vmap`` over the complete static RHS batch; callers
-    may request a positive chunk size explicitly to bound response memory.
+    This entry point intentionally does *not* delegate to main's ordinary
+    ``solver=\"block\"`` helper.  The historic NEOPAX contract differentiates
+    the raw force formulation: physical-state bars are first pulled through
+    ``_assemble`` to raw-state bars; the raw block transpose is then solved;
+    and the raw residual and assembly parameter VJPs are paired.  Replacing
+    those operations with the ordinary residual and ``P(gbar)`` changes the
+    chain rule, even when both residual formulations share a fixed point.
+
+    ``response_chunk_size`` remains accepted for API compatibility.  The raw
+    block factorization solves the complete static RHS batch at once, exactly
+    as the former helper did; splitting it would only add dispatches without
+    reducing the stored factorization.
     """
-    if response_chunk_size is None:
-        # The leading RHS dimension is static under JAX tracing.  The old
-        # helper vmapped all rows together, so use that full size by default
-        # rather than silently changing its batching/performance contract.
-        response_chunk_size = int(jax.tree.leaves(gbar_batch)[0].shape[0])
-    return implicit_state_pullback_multi_rhs(
-        params,
-        cfg,
-        x_star,
-        dof_mask,
-        gbar_batch,
-        solver="block",
-        probe_chunk_size=probe_chunk_size,
-        response_chunk_size=response_chunk_size,
-    )
+    del response_chunk_size
+    with _device_context(cfg):
+        params, x_star, dof_mask, gbar_batch = _device_pin(
+            cfg, (params, x_star, dof_mask, gbar_batch)
+        )
+        frozen = jax.lax.stop_gradient(x_star)
+        project = _dof_projector(cfg, dof_mask)
+        edge_mask = _edge_mask(cfg)
+        z_star = project(x_star)
+        active_fields = _active_state_fields(cfg)
+        system = _raw_block_system(
+            params, cfg, frozen, dof_mask, active_fields, probe_chunk_size
+        )
+        raw_residual = residual_fn(
+            cfg, frozen, dof_mask, formulation="raw"
+        )
+
+        _, assemble_vjp_z = jax.vjp(
+            lambda z: _assemble(
+                z, runtime_from_params(params, cfg), frozen, project,
+                edge_mask,
+            ),
+            z_star,
+        )
+        _, raw_residual_vjp_p = jax.vjp(
+            lambda prm: raw_residual(z_star, prm), params
+        )
+        _, assemble_vjp_p = jax.vjp(
+            lambda prm: _assemble(
+                z_star, runtime_from_params(prm, cfg), frozen, project,
+                edge_mask,
+            ),
+            params,
+        )
+
+        raw_rhs_batch = jax.vmap(
+            lambda state_bar: assemble_vjp_z(state_bar)[0]
+        )(gbar_batch)
+        raw_adjoint_batch, report = _raw_block_solve(
+            system, raw_rhs_batch, cfg, transpose=True
+        )
+        if not isinstance(report.converged, jax.core.Tracer):
+            failed = ~np.asarray(report.converged)
+            if np.any(failed):
+                first = int(np.flatnonzero(failed)[0])
+                _raise_adjoint_unconverged(
+                    cfg,
+                    iterations=int(np.asarray(report.iterations)[first]),
+                    residual_norm=float(np.asarray(report.residual_norm)[first]),
+                    tolerance=float(np.asarray(report.tolerance)[first]),
+                    method="raw-block direct transpose",
+                )
+
+        implicit_param_bar = jax.vmap(
+            lambda adjoint: raw_residual_vjp_p(
+                jax.tree.map(jnp.negative, adjoint)
+            )[0]
+        )(raw_adjoint_batch)
+        assemble_param_bar = jax.vmap(
+            lambda state_bar: assemble_vjp_p(state_bar)[0]
+        )(gbar_batch)
+        return _device_pin(
+            cfg,
+            jax.tree.map(jnp.add, implicit_param_bar, assemble_param_bar),
+        )
 
 
 def _implicit_state_pullback_multi_rhs_impl(
