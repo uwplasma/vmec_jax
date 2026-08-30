@@ -338,6 +338,33 @@ def test_residual_lane_reuses_one_executable_across_trial_boundaries(solovev):
         for a, b in zip(jax.tree.leaves(base), jax.tree.leaves(trial)))
 
 
+def test_make_config_canonicalizes_equal_content(solovev):
+    """Equal-content configs share one instance; distinct content does not.
+
+    ``ImplicitConfig`` is ``eq=False``, so the residual lane's static
+    argument, ``_LAST_SOLVE``, and the template-runtime cache all key on
+    object identity. ``run``/``make_config`` mint a fresh config per
+    objective evaluation; without canonicalization the F4 baseline
+    recompiled the residual lane fourteen times per warm repeat of an
+    identical evaluation. The registry is a small LRU: eviction only costs
+    a later recompile, never correctness.
+    """
+    name, inp, _cfg, _p0, _x_star, _rt, _mask = solovev
+    cfg_a = im.make_config(inp, **CASES[name])
+    cfg_b = im.make_config(inp, **CASES[name])
+    assert cfg_a is cfg_b
+    cfg_c = im.make_config(inp, ftol=CASES[name]["ftol"] * 0.5,
+                           max_iterations=CASES[name]["max_iterations"])
+    assert cfg_c is not cfg_a
+    # The registry stays bounded: churning distinct contents evicts the
+    # oldest entries without breaking previously returned instances.
+    for extra in range(im._CONFIG_CANON_MAX + 3):
+        im.make_config(inp, ftol=1.0e-9 / (extra + 2),
+                       max_iterations=CASES[name]["max_iterations"])
+    assert len(im._CONFIG_CANON) <= im._CONFIG_CANON_MAX
+    assert im.make_config(inp, **CASES[name]).ftol == cfg_a.ftol
+
+
 def test_dof_mask_structural_invariance_and_cache(solovev):
     """The dof mask depends only on structure (resolution / lconm1 / ncurr),
     so ``_MASK_CACHE`` (keyed by ``_mask_cache_key``) reuses it across the
@@ -346,10 +373,15 @@ def test_dof_mask_structural_invariance_and_cache(solovev):
     across two fresh configs of the same structure."""
     name, inp, cfg, p0, x_star, rt, mask = solovev
 
-    # fresh configs of the same structure share one hashable structural key,
-    # even though ImplicitConfig is eq=False (object-identity equality).
-    cfg_a = im.make_config(inp, **CASES[name])
-    cfg_b = im.make_config(inp, **CASES[name])
+    # Configs of the same structure but different content share one
+    # structural key while remaining distinct instances (equal content is
+    # canonicalized to one instance -- see
+    # test_make_config_canonicalizes_equal_content -- so different ftol is
+    # what "fresh configs" means now).
+    cfg_a = im.make_config(inp, ftol=CASES[name]["ftol"],
+                           max_iterations=CASES[name]["max_iterations"])
+    cfg_b = im.make_config(inp, ftol=CASES[name]["ftol"] * 0.5,
+                           max_iterations=CASES[name]["max_iterations"])
     assert cfg_a is not cfg_b and cfg_a != cfg_b
     key = im._mask_cache_key(cfg)
     assert im._mask_cache_key(cfg_a) == key == im._mask_cache_key(cfg_b)
