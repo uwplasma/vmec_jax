@@ -64,6 +64,7 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
         "run_freeboundary_multigrid.py",
         "run_high_mode_fft.py",
         "make_strong_force_comparison.py",
+        "polish_implicit.py",
         "polish_preconditioner.py",
         "strong_certificate.py",
         "strong_polish.py",
@@ -125,6 +126,30 @@ def test_polish_preconditioner_artifact_is_clean_and_certified() -> None:
         assert case["transfer_roundtrip_relative_residual"] < 2.0e-12
         assert case["preconditioner_duality_relative_error"] < 2.0e-12
         assert case["low_block_relative_residual"] < 1.0e-10
+
+
+def test_collocation_polish_derivative_artifact_is_clean_and_certified() -> None:
+    artifact = json.loads(
+        (ROOT / "benchmarks" / "polish_implicit_m4.json").read_text()
+    )
+    assert artifact["schema"] == "vmex.polish-implicit-benchmark/2"
+    assert re.fullmatch(r"[0-9a-f]{40}", artifact["measurement_commit"])
+    assert artifact["measurement_dirty"] is False
+    assert artifact["persistent_compilation_cache"] is False
+    assert artifact["primal_relative_optimality"] <= 1.0e-6
+    assert artifact["tangent_iterations"] <= artifact["free_dofs"]
+    assert artifact["adjoint_iterations"] <= artifact["free_dofs"]
+    assert artifact["tangent_residual_norm"] <= artifact["tangent_tolerance"]
+    assert artifact["adjoint_residual_norm"] <= artifact["adjoint_tolerance"]
+    assert artifact["tangent_adjoint_duality_relative_error"] < 1.0e-8
+    assert artifact["custom_vjp_relative_squared_error"] < 1.0e-20
+    assert artifact["warm_tangent_median_seconds"] < 0.05
+    assert artifact["warm_adjoint_median_seconds"] < 0.05
+    assert artifact["warm_custom_vjp_median_seconds"] < 0.05
+    assert artifact["cold_tangent_seconds"] < 30.0
+    assert artifact["cold_adjoint_seconds"] < 30.0
+    assert artifact["cold_custom_vjp_seconds"] < 30.0
+    assert artifact["custom_vjp_peak_rss_increase_mib"] < 512.0
 
 
 def test_solvax_polish_artifact_is_independently_certified() -> None:

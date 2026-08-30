@@ -110,27 +110,30 @@ retained across Krylov steps and continuation stages until the documented
 quality policy requests a refresh.  The table is a reproducibility and
 overhead gate, not a production-resolution scaling claim.
 
-Polished-root derivative gate
------------------------------
+Collocation-polish derivative gate
+----------------------------------
 
 ``benchmarks/polish_implicit.py`` measures matrix-free IFT tangents,
-adjoints, and the optimization-facing custom VJP.  The clean Apple M4 record
-in ``benchmarks/polish_implicit_m4.json`` uses the full-rank 23-unknown
-native-spline Solovev gate.  Median warm times over ten repeats are 0.90 ms for
-the tangent, 2.46 ms for the adjoint, and 2.37 ms for the custom VJP.  With
+adjoints, and the optimization-facing custom VJP of the same rectangular
+least-squares stationarity equation used by the public primal.  The clean
+Apple M4 record in ``benchmarks/polish_implicit_m4.json`` uses a 17-coordinate
+Solov'ev structural gate.  Its primal reaches relative optimality
+``1.13e-7`` in nine steps.  Median warm times over ten repeats are 10.03 ms for
+the tangent, 9.15 ms for the adjoint, and 12.86 ms for the custom VJP.  With
 the persistent compilation cache disabled, cold compile-plus-execute times
-are 4.17 s, 5.57 s, and 6.17 s, respectively.
+are 11.81 s, 13.32 s, and 15.32 s, respectively.
 
-The same record reports incremental process peak RSS of 243 MiB for the first
-tangent executable, 324 MiB for the separately compiled adjoint, and 216 MiB
-for the separately compiled custom-VJP executable.  These increments include
-XLA compilation and are intentionally not described as live solve buffers.
-The complete tangent/adjoint dot-product mismatch is ``4.47e-10`` and the
-custom VJP agrees with the explicit adjoint to ``3.48e-25`` relative squared
-error.  One bounded mode block, built in 3.02 s and reused in both directions,
-reduces the tangent and adjoint solves to one and two Krylov iterations.  As
-with the strong-root benchmark, this is a structural correctness and overhead
-gate, not a certified production-equilibrium scaling claim.
+The same record reports incremental process peak RSS of 16.3 MiB for the first
+tangent executable, 140.2 MiB for the separately compiled adjoint, and 171.7
+MiB for the separately compiled custom-VJP executable.  These increments
+include XLA compilation and are intentionally not described as live solve
+buffers.  Tangent and adjoint each take 17 Krylov iterations with the
+deterministic diagonal normal scaling.  Their complete dot-product mismatch is
+``2.38e-10`` and the custom VJP matches the explicit adjoint exactly at the
+recorded precision.  A Taylor-remainder test independently verifies the
+expected second-order decrease under step halving.  This is a correctness and
+overhead gate for the production mathematical formulation at structural
+resolution, not a production-size optimization timing claim.
 
 Benchmark suite (CPU, ns = 201)
 -------------------------------
