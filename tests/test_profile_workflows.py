@@ -97,6 +97,24 @@ def test_compile_counting_and_warm_contract(monkeypatch):
     newparams = profile_workflows._run_in_process("T0", "warm_newparams")
     assert newparams["compile"]["warm_newparams"]["compiles"] == 0
 
+    # A workflow without the requested variant must refuse the label rather
+    # than report a plain warm repeat under it.
+    bare = profile_workflows.Workflow(
+        "T1", "tiny kernel without variants",
+        lambda: (_tiny_workflow()[0], {}), ())
+    monkeypatch.setitem(profile_workflows.WORKFLOWS, "T1", bare)
+    with pytest.raises(ValueError, match="no reshape variant"):
+        profile_workflows._run_in_process("T1", "reshape")
+
+
+def test_trace_dir_captures_one_xprof_trace_per_stage(monkeypatch, tmp_path):
+    tiny = profile_workflows.Workflow(
+        "T0", "tiny self-test kernel", _tiny_workflow, ())
+    monkeypatch.setitem(profile_workflows.WORKFLOWS, "T0", tiny)
+    profile_workflows._run_in_process("T0", "warm", trace_dir=tmp_path)
+    trace_files = list((tmp_path / "T0" / "run").rglob("*.xplane.pb"))
+    assert trace_files, "no XProf trace was written for the stage"
+
 
 def test_record_schema_is_json_serializable(monkeypatch):
     tiny = profile_workflows.Workflow(

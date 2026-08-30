@@ -762,6 +762,19 @@ counts read from JAX's own ``jax_log_compiles`` records and peak host RSS::
    python benchmarks/profile_workflows.py --list
    python benchmarks/profile_workflows.py F1 F4 --regimes cold warm
    python benchmarks/profile_workflows.py --all --regimes warm --out benchmarks/results/
+   python benchmarks/profile_workflows.py F4 C2 --trace-dir benchmarks/traces/
+
+The registry covers the plan's workflow matrix: fixed-boundary solves
+(single-grid, multigrid, polished), implicit value/gradient, vector residual
+plus full Jacobian, hot-restart scans, optimization campaigns (scalar
+L-BFGS-B and residual least-squares), single-stage plasma-plus-coils with
+ESSOS, the free-boundary implicit value and adjoint, symmetric-versus-LASYM
+pairs at matched resolution, mirror equilibria (fixed-boundary,
+free-boundary, and the periodic hybrid with its GK geometry export), Boozer
+transforms at one and many surfaces, and the epsilon-effective and Gamma-c
+diagnostics. ``--trace-dir`` captures one XProf trace per stage on a warm
+repeat, so every flagship class has execution-level evidence, not only wall
+times.
 
 Five timing regimes are never mixed in one number:
 
