@@ -16,6 +16,7 @@ from vmex.core import solver
 from vmex.core.errors import (
     StrongForceCertificationError,
     StrongForceContinuationError,
+    StrongForceLinearSolveError,
 )
 from vmex.core.input import VmecInput
 from vmex.core.omnigenity import boozer_bmnc_high_order
@@ -36,14 +37,18 @@ from vmex.core.polish import (
     preconditioner_refresh_decision,
     _strong_residual_unscaled,
     _streaming_ruiz_scales,
+    _physical_coordinate_blocks,
+    _physical_equation_chart,
     strong_collocation_residual,
     strong_projection_diagnostics,
     strong_physical_residual,
     strong_root_rank,
     strong_root_residual,
+    strong_root_residual_at_native,
 )
 from vmex.core.polish_driver import (
     PolishConfig,
+    PolishContext,
     _IdentityPreconditioner,
     _arclength_to_target,
     _bordered_preconditioner,
@@ -52,6 +57,7 @@ from vmex.core.polish_driver import (
     _continuation_precondition,
     _low_inverse,
     _normalized_low_residual_norm,
+    _solve_low_inverse,
     _ptc_config,
     _residual_evaluations,
     _supports_keyword,
@@ -60,7 +66,10 @@ from vmex.core.polish_driver import (
 )
 from vmex.core.polish_implicit import (
     PolishLinearConfig,
+    PolishLinearReport,
+    _checked_solution,
     _collocation_stationarity,
+    _tree_norm as _implicit_tree_norm,
     collocation_polish_adjoint,
     collocation_polish_tangent,
     implicit_collocation_polished_state,
@@ -70,6 +79,41 @@ from vmex.core.strong_force import lift_high_order_state
 jax.config.update("jax_enable_x64", True)
 
 DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"rtol": 0.0}, "rtol"),
+        ({"atol": -1.0}, "atol"),
+        ({"restart": 0}, "restart"),
+        ({"max_restarts": 0}, "max_restarts"),
+        ({"fail_policy": "ignore"}, "fail_policy"),
+    ],
+)
+def test_polish_linear_config_validation(updates, message):
+    with pytest.raises(ValueError, match=message):
+        PolishLinearConfig(**updates)
+
+
+def test_polish_linear_failure_policy_is_explicit():
+    value = jnp.ones((2,))
+    report = PolishLinearReport(
+        residual_norm=jnp.asarray(2.0),
+        tolerance=jnp.asarray(1.0),
+        iterations=jnp.asarray(3),
+        converged=jnp.asarray(False),
+    )
+    with pytest.raises(StrongForceLinearSolveError, match="did not converge"):
+        _checked_solution(value, report, PolishLinearConfig(), "test")
+    result = _checked_solution(
+        value,
+        report,
+        PolishLinearConfig(fail_policy="nan"),
+        "test",
+    )
+    assert np.isnan(result).all()
+    assert _implicit_tree_norm((jnp.asarray([3.0, 4.0]),)) == pytest.approx(5.0)
 
 
 def test_collocation_certification_error_retains_both_failure_gates():
@@ -125,6 +169,12 @@ def test_parameterized_continuation_preconditioner_switches_at_half(monkeypatch)
     )
     np.testing.assert_array_equal(
         _continuation_precondition(rhs, 0.75, 1.0, SimpleNamespace(), block),
+        3.0 * rhs,
+    )
+    np.testing.assert_array_equal(
+        _continuation_precondition(
+            rhs, 0.25, 1.0, SimpleNamespace(), block, SimpleNamespace()
+        ),
         3.0 * rhs,
     )
     identity = _IdentityPreconditioner()
@@ -781,8 +831,6 @@ def test_strong_root_validation_branches(small_adapter, small_strong_root):
         make_strong_root_runtime(native, adapter, mask, force_floor=0.0)
     with pytest.raises(ValueError, match="balance_iterations"):
         make_strong_root_runtime(native, adapter, mask, balance_iterations=0)
-    with pytest.raises(ValueError, match="orientation_eigenpairs"):
-        make_strong_root_runtime(native, adapter, mask, orientation_eigenpairs=-1)
     zero_mask = jax.tree.map(jnp.zeros_like, mask)
     with pytest.raises(ValueError, match="no free physical displacement"):
         make_strong_root_runtime(native, adapter, zero_mask)
@@ -798,6 +846,8 @@ def test_strong_root_validation_branches(small_adapter, small_strong_root):
     mismatched = dataclasses.replace(mask, Z_sin=mask.Z_sin[:, :-1])
     with pytest.raises(ValueError, match="layout must match"):
         make_strong_root_layout(mismatched, native)
+    with pytest.raises(ValueError, match="high/low transfer"):
+        make_strong_root_layout(mask, native)
     with pytest.raises(ValueError, match="relative_tolerance"):
         strong_root_rank(small_strong_root, relative_tolerance=0.0)
     rank, values = strong_root_rank(
@@ -807,6 +857,91 @@ def test_strong_root_validation_branches(small_adapter, small_strong_root):
     )
     assert rank == layout.size
     assert values.shape == (layout.size,)
+
+    unbalanced = make_strong_root_runtime(
+        native, adapter, mask, balance_full_root=False
+    )
+    assert unbalanced.layout.size == layout.size
+
+
+def test_strong_runtime_and_chart_pytree_roundtrip(small_strong_root):
+    """JIT reconstruction preserves the numeric runtime and physical chart."""
+
+    chart = make_strong_structured_chart(small_strong_root)
+    for original in (small_strong_root, chart):
+        leaves, structure = jax.tree.flatten(original)
+        rebuilt = jax.tree.unflatten(structure, leaves)
+        assert type(rebuilt) is type(original)
+        np.testing.assert_allclose(rebuilt.coordinate_scale, original.coordinate_scale)
+    assert jax.tree.unflatten(
+        jax.tree.structure(small_strong_root), jax.tree.leaves(small_strong_root)
+    ).layout is small_strong_root.layout
+    assert jax.tree.unflatten(
+        jax.tree.structure(chart), jax.tree.leaves(chart)
+    ).gauge_rank == chart.gauge_rank
+
+
+def test_physical_chart_adapters_and_validation(small_strong_root, monkeypatch):
+    chart = make_strong_structured_chart(small_strong_root)
+    rhs = jnp.linspace(-0.2, 0.3, chart.size)
+    solved = _solve_low_inverse(rhs, small_strong_root, chart)
+    assert solved.shape == rhs.shape
+    residual = strong_root_residual_at_native(
+        jnp.zeros((small_strong_root.layout.size,)),
+        small_strong_root.native,
+        small_strong_root,
+    )
+    assert residual.shape == (small_strong_root.layout.size,)
+    sentinel = object()
+    monkeypatch.setattr(
+        "vmex.core.polish_driver.build_strong_physical_block_preconditioner",
+        lambda runtime, physical_chart: sentinel,
+    )
+    assert _build_mode_block_preconditioner(small_strong_root, chart) is sentinel
+    with pytest.raises(ValueError, match="poloidal_bandwidth"):
+        _physical_coordinate_blocks(small_strong_root, chart, 0)
+    with pytest.raises(ValueError, match="no physical force-output"):
+        _physical_equation_chart(dataclasses.replace(small_strong_root.layout, groups=()))
+    empty_chart = dataclasses.replace(
+        chart, coordinate_basis=jnp.zeros_like(chart.coordinate_basis)
+    )
+    with pytest.raises(ValueError, match="local structured chart"):
+        _physical_coordinate_blocks(small_strong_root, empty_chart, 1)
+    first = small_strong_root.layout.groups[0]
+    zero_group = dataclasses.replace(first, basis=jnp.zeros_like(first.basis))
+    _physical_equation_chart(
+        dataclasses.replace(
+            small_strong_root.layout,
+            groups=(zero_group, *small_strong_root.layout.groups[1:]),
+        )
+    )
+    asymmetric = dataclasses.replace(
+        small_strong_root,
+        transfer=dataclasses.replace(small_strong_root.transfer, lasym=True),
+    )
+    with pytest.raises(ValueError, match="stellarator symmetry"):
+        make_strong_structured_chart(asymmetric)
+
+
+def test_implicit_polish_rejects_mismatched_inputs(small_strong_root):
+    chart = make_strong_structured_chart(small_strong_root)
+    good = PolishContext(
+        small_strong_root,
+        chart,
+        jnp.zeros((chart.size,)),
+        jnp.ones((chart.size,)),
+    )
+    bad = good._replace(correction=jnp.zeros((chart.size + 1,)))
+    with pytest.raises(ValueError, match="correction has shape"):
+        collocation_polish_tangent(bad, small_strong_root.native)
+    with pytest.raises(ValueError, match="correction has shape"):
+        collocation_polish_adjoint(bad, small_strong_root.native)
+    with pytest.raises(ValueError, match="native_tangent"):
+        collocation_polish_tangent(good, jnp.asarray(0.0))
+    with pytest.raises(ValueError, match="polished_cotangent"):
+        collocation_polish_adjoint(good, jnp.asarray(0.0))
+    with pytest.raises(ValueError, match="native must have"):
+        implicit_collocation_polished_state(jnp.asarray(0.0), good)
 
 
 def test_low_vector_preconditioner_is_finite_on_native_coordinates(

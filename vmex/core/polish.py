@@ -1502,7 +1502,6 @@ def make_strong_root_runtime(
     *,
     force_floor: float = 1.0e-30,
     balance_iterations: int = 4,
-    orientation_eigenpairs: int = 0,
     balance_full_root: bool = True,
     radial_quadrature_order: int | None = None,
 ) -> StrongRootRuntime:
@@ -1512,8 +1511,6 @@ def make_strong_root_runtime(
         raise ValueError("force_floor must be positive")
     if balance_iterations < 1:
         raise ValueError("balance_iterations must be positive")
-    if orientation_eigenpairs < 0:
-        raise ValueError("orientation_eigenpairs must be nonnegative")
     if radial_quadrature_order is not None and radial_quadrature_order < 2:
         raise ValueError("radial_quadrature_order must be at least 2")
     transfer = low_preconditioner.transfer
@@ -1678,84 +1675,9 @@ def make_strong_root_runtime(
         )
 
     low_solve(zero).block_until_ready()
-    best_block_sign = np.ones((3,), dtype=float)
-    if orientation_eigenpairs:
-        # This optional diagnostic cannot alter the strong root, but selects
-        # signs that move artificial folds in the legacy-to-strong pencil.
-        # It is deliberately off by default because eight Arnoldi solves are
-        # expensive and the physical chart does not use the gauge equation.
-        from itertools import product
-
-        from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, eigs
-
-        component_runtimes = tuple(
-            replace(
-                scaled,
-                strong_block_sign=jnp.eye(3, dtype=rms.dtype)[index],
-            )
-            for index in range(3)
-        )
-
-        @jax.jit
-        def strong_components(value: Array) -> Array:
-            return jnp.stack(tuple(
-                jax.jvp(
-                    lambda vector: _strong_residual_unscaled(
-                        vector, component_runtime
-                    ) / base_scale,
-                    (zero,),
-                    (value,),
-                )[1]
-                for component_runtime in component_runtimes
-            ))
-
-        strong_components(zero).block_until_ready()
-        eigenpairs = min(int(orientation_eigenpairs), max(1, layout.size - 2))
-        dense_components = None
-        if layout.size <= 64:
-            dense_components = jax.jacfwd(strong_components)(zero)
-        initial_arnoldi = np.linspace(-0.5, 0.7, layout.size, dtype=float)
-        initial_arnoldi /= np.linalg.norm(initial_arnoldi)
-        best_score = -np.inf
-        for signs in product((-1.0, 1.0), repeat=3):
-            block_sign = jnp.asarray(signs, dtype=rms.dtype)
-
-            def matvec(value: np.ndarray) -> np.ndarray:
-                response = jnp.tensordot(
-                    block_sign,
-                    strong_components(jnp.asarray(value)),
-                    axes=1,
-                )
-                return np.asarray(jax.device_get(low_solve(response)))
-
-            if dense_components is not None:
-                oriented = jnp.tensordot(block_sign, dense_components, axes=1)
-                matrix = jax.vmap(low_solve, in_axes=1, out_axes=1)(oriented)
-                values = np.linalg.eigvals(np.asarray(jax.device_get(matrix)))
-            else:
-                operator = LinearOperator(
-                    (layout.size, layout.size), matvec=matvec, dtype=np.float64
-                )
-                try:
-                    values = eigs(
-                        operator,
-                        k=eigenpairs,
-                        which="SR",
-                        v0=initial_arnoldi,
-                        maxiter=max(100, 2 * layout.size),
-                        tol=1.0e-7,
-                        return_eigenvectors=False,
-                    )
-                except ArpackNoConvergence as error:
-                    values = error.eigenvalues
-            if values.size:
-                score = float(np.min(np.real(values)))
-                if score > best_score:
-                    best_score = score
-                    best_block_sign = np.asarray(signs, dtype=float)
     scaled = replace(
         scaled,
-        strong_block_sign=jnp.asarray(best_block_sign, dtype=rms.dtype),
+        strong_block_sign=jnp.ones((3,), dtype=rms.dtype),
     )
 
     def preconditioned_strong(value: Array) -> Array:

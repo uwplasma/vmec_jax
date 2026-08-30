@@ -199,6 +199,21 @@ def test_summary_style_constants():
     assert signature.parameters["ntheta"].default >= 120
 
 
+def test_force_panel_reports_missing_data_deliberately():
+    import matplotlib.pyplot as plt
+
+    assert plotting._fmt_compact(float("nan")) == "unavailable"
+    fig, ax = plt.subplots()
+    try:
+        maximum = plotting._relative_force_error_panel(
+            ax, SimpleNamespace(ns=3, equif=np.full((3,), np.nan))
+        )
+        assert np.isnan(maximum)
+        assert [text.get_text() for text in ax.texts] == ["force error unavailable"]
+    finally:
+        plt.close(fig)
+
+
 def test_d_r_reconstruction_matches_traceable(solved_case):
     """wout-based Glasser D_R == traceable glasser_d_r_state on this deck."""
     eq, wout = solved_case

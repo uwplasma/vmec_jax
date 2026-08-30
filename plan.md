@@ -3838,6 +3838,13 @@ supersedes older instructions to keep #125 open indefinitely.
   hosted matrix runs once on the final source candidate; superseded source
   candidates are canceled. This preserves full release confidence without
   repeatedly paying for unchanged numerical lanes.
+- The final candidate's 18 primary hosted jobs all passed; `c1` completed in
+  43m45s. The aggregate changed-line gate then measured 89%. Rather than add
+  benchmark cases or coverage-only production branches, the audit deleted the
+  unused 80-line eigenvalue-orientation experiment from the runtime builder and
+  added focused contracts for PyTree reconstruction, physical-chart adapters,
+  implicit-solve failures, Boozer validation, and missing force data. The
+  benchmark count remains 51.
 - Packaging is checked against built artifacts, not source version strings.
   SOLVAX 0.19.0 was tagged before its least-squares PR merged, so VMEX requires
   the corrective 0.20.0 release from merged PR #99. Its published wheel was

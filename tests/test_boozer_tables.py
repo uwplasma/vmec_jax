@@ -24,7 +24,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 from vmex.core import solver
-from vmex.core.boozer_tables import boozer_input_tables
+from vmex.core.boozer_tables import boozer_input_tables, high_order_boozer_input_tables
 from vmex.core.input import VmecInput
 from vmex.core.omnigenity import boozer_bmnc_high_order, boozer_bmnc_state
 from vmex.core.strong_force import lift_high_order_state
@@ -459,6 +459,10 @@ def test_high_order_boozer_matches_live_state_without_file_io(symmetric_eq):
         degree=3,
         max_spans=4,
     )
+    with pytest.raises(ValueError, match="projection grids"):
+        high_order_boozer_input_tables(native_state, np.sqrt(surface), ntheta=1)
+    with pytest.raises(ValueError, match="0 < s <= 1"):
+        boozer_bmnc_high_order(native_state, surfaces=[0.0])
     live = boozer_bmnc_state(
         eq.state,
         eq.runtime,
