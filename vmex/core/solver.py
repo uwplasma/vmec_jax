@@ -1640,7 +1640,7 @@ class SolveResult:
     ``ncurr = 1``.  ``fsq_history`` has one row per iteration:
     ``(fsqr, fsqz, fsql, fsqr1, fsqz1, fsql1)``.  ``wmhd`` is the printed
     ``WMHD = (wb + wp/(gamma-1)) * (2 pi)^2``.  ``vacuum`` is ``None`` for
-    fixed-boundary solves.  The three polish fields are ``None`` on the
+    fixed-boundary solves.  The four polish fields are ``None`` on the
     unchanged default path.
     """
 
@@ -1657,6 +1657,7 @@ class SolveResult:
     native_equilibrium: Any = None
     strong_force: Any = None
     polish_report: Any = None
+    polish_context: Any = None
 
 
 def _result_from_carry(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
@@ -2202,7 +2203,8 @@ def solve(
     immediately when the independent certificate already passes.  Polishing
     requires a :class:`VmecInput` source; the legacy sampled ``state`` and wout
     arrays remain unchanged, while ``native_equilibrium``, ``strong_force``,
-    and ``polish_report`` carry the high-order result.
+    ``polish_report``, and ``polish_context`` carry the certified high-order
+    result and its frozen derivative chart.
     """
     if resolution is None and isinstance(source, VmecInput):
         resolution = resolution_from_input(source)
@@ -2274,4 +2276,5 @@ def solve(
             native_equilibrium=polished.native_equilibrium,
             strong_force=polished.strong_force,
             polish_report=polished.polish_report,
+            polish_context=polished.context,
         )

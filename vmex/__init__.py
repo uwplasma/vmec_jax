@@ -188,8 +188,16 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "OptimizationRecord": (".core.monitoring", "OptimizationRecord"),
     # high-order strong-force polishing
     "PolishConfig": (".core.polish_driver", "PolishConfig"),
+    "PolishContext": (".core.polish_driver", "PolishContext"),
     "PolishReport": (".core.polish_driver", "PolishReport"),
     "PolishResult": (".core.polish_driver", "PolishResult"),
+    "PolishLinearConfig": (".core.polish_implicit", "PolishLinearConfig"),
+    "collocation_polish_adjoint": (
+        ".core.polish_implicit", "collocation_polish_adjoint"),
+    "collocation_polish_tangent": (
+        ".core.polish_implicit", "collocation_polish_tangent"),
+    "implicit_collocation_polished_state": (
+        ".core.polish_implicit", "implicit_collocation_polished_state"),
     # external fields
     "MgridData": (".core.mgrid", "MgridData"),
     "MgridField": (".core.mgrid", "MgridField"),

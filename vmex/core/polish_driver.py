@@ -216,13 +216,23 @@ class PolishReport:
     variable_scale_probes: int = 0
 
 
+class PolishContext(NamedTuple):
+    """Frozen chart and converged coordinates for implicit differentiation."""
+
+    runtime: StrongRootRuntime
+    chart: StrongPhysicalChart
+    correction: jax.Array
+    variable_scale: jax.Array
+
+
 class PolishResult(NamedTuple):
-    """Native state, independent certificate, report, and free correction."""
+    """Certified native state, report, full correction, and derivative context."""
 
     native_equilibrium: HighOrderEquilibriumState
     strong_force: StrongForceReport
     polish_report: PolishReport
     correction: jax.Array
+    context: PolishContext | None = None
 
 
 @dataclass(frozen=True)
@@ -1070,7 +1080,13 @@ def polish_collocation_least_squares(
         variable_scale_probes=config.collocation_scale_probes,
     )
     if converged:
-        return PolishResult(state, certificate, report, chart.lift(vector))
+        return PolishResult(
+            state,
+            certificate,
+            report,
+            chart.lift(vector),
+            PolishContext(runtime, chart, vector, variable_scale_array),
+        )
     if config.fail_policy == "raise":
         raise StrongForceCertificationError(
             "collocation polish failed its stationarity or force certificate",
@@ -1193,6 +1209,7 @@ def polish_legacy_solution(
 
 __all__ = [
     "PolishConfig",
+    "PolishContext",
     "PolishReport",
     "PolishResult",
     "polish_collocation_least_squares",

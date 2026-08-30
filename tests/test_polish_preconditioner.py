@@ -56,9 +56,10 @@ from vmex.core.polish_driver import (
 )
 from vmex.core.polish_implicit import (
     PolishLinearConfig,
-    implicit_polished_state,
-    strong_root_adjoint,
-    strong_root_tangent,
+    _collocation_stationarity,
+    collocation_polish_adjoint,
+    collocation_polish_tangent,
+    implicit_collocation_polished_state,
 )
 from vmex.core.strong_force import lift_high_order_state
 
@@ -826,65 +827,6 @@ def test_scaled_low_inverse_and_transpose_are_exact_duals(small_strong_root):
     )
 
 
-def test_strong_root_tangent_adjoint_and_custom_vjp_are_consistent(
-    small_strong_root,
-):
-    runtime = small_strong_root
-    correction = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
-    native_tangent = _random_like(runtime.native, 21)
-    output_cotangent = _random_like(runtime.native, 22)
-    linear_config = PolishLinearConfig(
-        rtol=2.0e-10,
-        atol=2.0e-11,
-        restart=runtime.layout.size,
-        max_restarts=3,
-    )
-    block_preconditioner = build_strong_mode_block_preconditioner(
-        runtime, correction
-    )
-
-    tangent = strong_root_tangent(
-        runtime,
-        correction,
-        native_tangent,
-        config=linear_config,
-        preconditioner=block_preconditioner,
-    )
-    adjoint = strong_root_adjoint(
-        runtime,
-        correction,
-        output_cotangent,
-        config=linear_config,
-        preconditioner=block_preconditioner,
-    )
-    assert bool(tangent.report.converged)
-    assert bool(adjoint.report.converged)
-    np.testing.assert_allclose(
-        _tree_dot(output_cotangent, tangent.native_tangent),
-        _tree_dot(adjoint.native_cotangent, native_tangent),
-        rtol=2.0e-8,
-        atol=2.0e-8,
-    )
-
-    def objective(native):
-        polished = implicit_polished_state(
-            native,
-            correction,
-            runtime,
-            linear_config,
-            block_preconditioner,
-        )
-        return _tree_dot(polished, output_cotangent)
-
-    custom_gradient = jax.grad(objective)(runtime.native)
-    difference = jax.tree.map(
-        jnp.subtract, custom_gradient, adjoint.native_cotangent
-    )
-    assert _tree_norm(difference) <= 2.0e-8 * max(
-        _tree_norm(adjoint.native_cotangent), 1.0
-    )
-
-
 def test_arclength_tangent_and_bordered_preconditioner_are_finite(
     small_strong_root,
 ):
@@ -1049,6 +991,74 @@ def test_collocation_polish_returns_full_layout_correction(small_strong_root):
     assert result.correction.shape == (small_strong_root.layout.size,)
     assert result.polish_report.least_squares_success is not None
     assert result.polish_report.variable_scale_probes == 2
+    assert result.context is not None
+
+    native_tangent = _random_like(small_strong_root.native, 51)
+    output_cotangent = _random_like(small_strong_root.native, 52)
+    linear_config = PolishLinearConfig(
+        rtol=2.0e-10,
+        atol=2.0e-11,
+        restart=chart.size,
+        max_restarts=5,
+    )
+    tangent = collocation_polish_tangent(
+        result.context, native_tangent, config=linear_config
+    )
+    adjoint = collocation_polish_adjoint(
+        result.context, output_cotangent, config=linear_config
+    )
+    assert bool(tangent.report.converged)
+    assert bool(adjoint.report.converged)
+    np.testing.assert_allclose(
+        _tree_dot(output_cotangent, tangent.native_tangent),
+        _tree_dot(adjoint.native_cotangent, native_tangent),
+        rtol=2.0e-5,
+        atol=2.0e-6,
+    )
+
+    def objective(native):
+        polished = implicit_collocation_polished_state(
+            native, result.context, linear_config
+        )
+        return _tree_dot(polished, output_cotangent)
+
+    custom_gradient = jax.grad(objective)(small_strong_root.native)
+    difference = jax.tree.map(
+        jnp.subtract, custom_gradient, adjoint.native_cotangent
+    )
+    assert _tree_norm(difference) <= 2.0e-5 * max(
+        _tree_norm(adjoint.native_cotangent), 1.0
+    )
+
+    base_stationarity = _collocation_stationarity(
+        result.context.correction,
+        small_strong_root.native,
+        result.context.runtime,
+        result.context.chart,
+    )
+
+    def stationarity_remainder(step):
+        perturbed_native = jax.tree.map(
+            lambda value, direction: value + step * direction,
+            small_strong_root.native,
+            native_tangent,
+        )
+        perturbed_correction = (
+            result.context.correction + step * tangent.correction_tangent
+        )
+        return jnp.linalg.norm(
+            _collocation_stationarity(
+                perturbed_correction,
+                perturbed_native,
+                result.context.runtime,
+                result.context.chart,
+            )
+            - base_stationarity
+        )
+
+    coarse = stationarity_remainder(2.0e-5)
+    fine = stationarity_remainder(1.0e-5)
+    assert fine < 0.35 * coarse
 
 
 @pytest.mark.parametrize(

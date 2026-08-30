@@ -1122,27 +1122,19 @@ def strong_projection_diagnostics(
     )
 
 
-@jax.jit
-def strong_collocation_residual(
+def _strong_collocation_residual(
     vector: Array,
+    native: HighOrderEquilibriumState,
     runtime: StrongRootRuntime,
     chart: StrongPhysicalChart,
 ) -> Array:
-    """Return both normalized physical channels on every solve-grid point.
-
-    This rectangular residual is a diagnostic test space for detecting and
-    preventing spectral blocking in the square projected root. It uses the
-    same normalization and volume factor as the strong equations, but performs
-    no angular or radial projection.
-    """
-
     from .strong_force import evaluate_strong_force
 
     full = chart.lift(vector)
     correction = runtime.layout.unpack(
         jnp.asarray(runtime.coordinate_scale) * full
     )
-    state = apply_high_order_correction(runtime.native, correction)
+    state = apply_high_order_correction(native, correction)
     rr, tt, zz = jnp.meshgrid(
         jnp.asarray(runtime.radial_nodes),
         jnp.asarray(runtime.theta),
@@ -1161,6 +1153,34 @@ def strong_collocation_residual(
             jnp.ravel(factor * samples.signed_helical_force_density),
         )
     )
+
+
+@jax.jit
+def strong_collocation_residual(
+    vector: Array,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
+) -> Array:
+    """Return both normalized physical channels on every solve-grid point.
+
+    This rectangular residual prevents spectral blocking in the square
+    projected root. It uses the same normalization and volume factor as the
+    strong equations, but performs no angular or radial projection.
+    """
+
+    return _strong_collocation_residual(vector, runtime.native, runtime, chart)
+
+
+@jax.jit
+def strong_collocation_residual_at_native(
+    vector: Array,
+    native: HighOrderEquilibriumState,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
+) -> Array:
+    """Evaluate the frozen rectangular residual at a dynamic native state."""
+
+    return _strong_collocation_residual(vector, native, runtime, chart)
 
 
 @jax.jit
@@ -2025,6 +2045,8 @@ __all__ = [
     "make_strong_root_runtime",
     "preconditioner_quality",
     "preconditioner_refresh_decision",
+    "strong_collocation_residual",
+    "strong_collocation_residual_at_native",
     "strong_root_rank",
     "strong_physical_residual",
     "strong_root_residual",

@@ -1,10 +1,9 @@
-"""Implicit tangents and adjoints of a converged strong-force polish root.
+"""Implicit derivatives of certified collocation least-squares polishing.
 
-The nonlinear continuation is deliberately not differentiated.  Once its
-correction ``c`` satisfies the alpha=1 equation ``F(c, native) = 0``, this
-module applies the implicit-function theorem with matrix-free JVPs/VJPs and
-the stored low-order block factors.  A gradient therefore costs one Krylov
-solve rather than a replay of continuation and pseudo-time steps.
+The nonlinear solve is deliberately not differentiated. Once its correction
+is stationary, this module applies the implicit-function theorem to
+``J(c, native).T @ r(c, native) = 0`` with matrix-free JVPs/VJPs. A gradient
+therefore costs one Krylov solve rather than a replay of Gauss--Newton steps.
 """
 
 from __future__ import annotations
@@ -21,10 +20,11 @@ from solvax import gmres
 from .errors import StrongForceLinearSolveError
 from .polish import (
     HighOrderCorrection,
-    StrongModeBlockPreconditioner,
+    StrongPhysicalChart,
     StrongRootRuntime,
-    strong_root_residual_at_native,
+    strong_collocation_residual_at_native,
 )
+from .polish_driver import PolishContext
 from .strong_force import HighOrderEquilibriumState
 
 
@@ -102,30 +102,6 @@ def _add_correction(
     )
 
 
-def _reduced_low_inverse(rhs: jax.Array, runtime: StrongRootRuntime) -> jax.Array:
-    high_rhs = runtime.layout.unpack(
-        jnp.asarray(rhs) / jnp.asarray(runtime.equation_scale)
-    )
-    low_rhs = runtime.transfer.restrict(high_rhs)
-    solved = runtime.low_preconditioner.solve_scaled(low_rhs)
-    return runtime.layout.pack(runtime.transfer.prolong(solved)) / jnp.asarray(
-        runtime.coordinate_scale
-    )
-
-
-def _reduced_low_inverse_transpose(
-    rhs: jax.Array,
-    runtime: StrongRootRuntime,
-) -> jax.Array:
-    high_rhs = runtime.layout.unpack(
-        jnp.asarray(rhs) / jnp.asarray(runtime.coordinate_scale)
-    )
-    low_rhs = runtime.transfer.prolong_transpose(high_rhs)
-    solved = runtime.low_preconditioner.solve_scaled_transpose(low_rhs)
-    high = runtime.transfer.restrict_transpose(solved)
-    return runtime.layout.pack(high) / jnp.asarray(runtime.equation_scale)
-
-
 def _linear_report(operator, rhs, solution, config: PolishLinearConfig):
     residual_norm = jnp.linalg.norm(rhs - operator(solution.x))
     tolerance = jnp.maximum(config.atol, config.rtol * jnp.linalg.norm(rhs))
@@ -185,187 +161,227 @@ def _solve_linear(operator, rhs, preconditioner, config, solve_kind):
     return _checked_solution(solution.x, report, config, solve_kind), report
 
 
-def strong_root_tangent(
-    runtime: StrongRootRuntime,
+def _collocation_corrected_state(
+    native: HighOrderEquilibriumState,
     correction: jax.Array,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
+) -> HighOrderEquilibriumState:
+    full = chart.lift(correction)
+    high = runtime.layout.unpack(jnp.asarray(runtime.coordinate_scale) * full)
+    return _add_correction(native, high)
+
+
+def _collocation_stationarity(
+    correction: jax.Array,
+    native: HighOrderEquilibriumState,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
+) -> jax.Array:
+    """Return the exact gradient of one-half the collocation residual norm."""
+
+    from solvax import least_squares_stationarity
+
+    return least_squares_stationarity(
+        lambda value: strong_collocation_residual_at_native(
+            value, native, runtime, chart
+        ),
+        correction,
+    )
+
+
+def collocation_polish_tangent(
+    context: PolishContext,
     native_tangent: HighOrderEquilibriumState,
     *,
     config: PolishLinearConfig = PolishLinearConfig(),
-    preconditioner: StrongModeBlockPreconditioner | None = None,
 ) -> PolishTangentResult:
-    """Apply the IFT tangent of a converged alpha=1 strong root.
+    """Apply the IFT tangent of the rectangular polish stationarity equation."""
 
-    ``runtime`` freezes the local collocation chart and positive residual
-    scaling.  ``correction`` must be the converged reduced vector returned by
-    the polish driver.  The result differentiates geometry, lambda, and all
-    three continuous profiles exposed by :class:`HighOrderEquilibriumState`.
-    """
-
-    correction = jnp.asarray(correction)
-    if correction.shape != (runtime.layout.size,):
+    runtime, chart = context.runtime, context.chart
+    correction = jnp.asarray(context.correction)
+    if correction.shape != (chart.size,):
         raise ValueError(
-            f"correction has shape {correction.shape}; expected {(runtime.layout.size,)}"
+            f"correction has shape {correction.shape}; expected {(chart.size,)}"
         )
     if jax.tree.structure(native_tangent) != jax.tree.structure(runtime.native):
         raise ValueError("native_tangent must have the runtime native-state structure")
-    residual = lambda vector: strong_root_residual_at_native(  # noqa: E731
-        vector, runtime.native, runtime
+    stationarity = lambda value: _collocation_stationarity(  # noqa: E731
+        value, runtime.native, runtime, chart
     )
-    _, operator = jax.linearize(residual, correction)
+    _, operator = jax.linearize(stationarity, correction)
     _, parameter_direction = jax.jvp(
-        lambda native: strong_root_residual_at_native(correction, native, runtime),
+        lambda native: _collocation_stationarity(
+            correction, native, runtime, chart
+        ),
         (runtime.native,),
         (native_tangent,),
     )
+    diagonal_inverse = jnp.asarray(context.variable_scale) ** 2
     response, report = _solve_linear(
         operator,
         -parameter_direction,
-        (
-            (lambda rhs: _reduced_low_inverse(rhs, runtime))
-            if preconditioner is None
-            else preconditioner.apply
-        ),
+        lambda rhs: diagonal_inverse * rhs,
         config,
-        "tangent",
+        "least-squares tangent",
     )
-    high_response = runtime.layout.unpack(
-        jnp.asarray(runtime.coordinate_scale) * response
+    _, correction_tangent = jax.jvp(
+        lambda value: _collocation_corrected_state(
+            runtime.native, value, runtime, chart
+        ),
+        (correction,),
+        (response,),
     )
     return PolishTangentResult(
-        native_tangent=_add_correction(native_tangent, high_response),
+        native_tangent=jax.tree.map(jnp.add, native_tangent, correction_tangent),
         correction_tangent=response,
         report=report,
     )
 
 
-def strong_root_adjoint(
-    runtime: StrongRootRuntime,
-    correction: jax.Array,
+def collocation_polish_adjoint(
+    context: PolishContext,
     polished_cotangent: HighOrderEquilibriumState,
     *,
     config: PolishLinearConfig = PolishLinearConfig(),
-    preconditioner: StrongModeBlockPreconditioner | None = None,
 ) -> PolishAdjointResult:
-    """Apply the IFT pullback of a converged alpha=1 strong root."""
+    """Apply the IFT pullback of the rectangular polish stationarity equation."""
 
-    correction = jnp.asarray(correction)
-    if correction.shape != (runtime.layout.size,):
+    runtime, chart = context.runtime, context.chart
+    correction = jnp.asarray(context.correction)
+    if correction.shape != (chart.size,):
         raise ValueError(
-            f"correction has shape {correction.shape}; expected {(runtime.layout.size,)}"
+            f"correction has shape {correction.shape}; expected {(chart.size,)}"
         )
     if jax.tree.structure(polished_cotangent) != jax.tree.structure(runtime.native):
-        raise ValueError("polished_cotangent must have the runtime native-state structure")
-    residual = lambda vector: strong_root_residual_at_native(  # noqa: E731
-        vector, runtime.native, runtime
+        raise ValueError(
+            "polished_cotangent must have the runtime native-state structure"
+        )
+    stationarity = lambda value: _collocation_stationarity(  # noqa: E731
+        value, runtime.native, runtime, chart
     )
-    _, correction_pullback = jax.vjp(residual, correction)
-    transpose_operator = lambda value: correction_pullback(value)[0]  # noqa: E731
-    high_cotangent = HighOrderCorrection(
-        **{
-            name: getattr(polished_cotangent, name)
-            for name in ("R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin")
-        }
+    _, stationarity_pullback = jax.vjp(stationarity, correction)
+    transpose_operator = lambda value: stationarity_pullback(value)[0]  # noqa: E731
+    _, correction_pullback = jax.vjp(
+        lambda value: _collocation_corrected_state(
+            runtime.native, value, runtime, chart
+        ),
+        correction,
     )
-    reduced_cotangent = jnp.asarray(runtime.coordinate_scale) * runtime.layout.pack(
-        high_cotangent
-    )
+    correction_cotangent = correction_pullback(polished_cotangent)[0]
+    diagonal_inverse = jnp.asarray(context.variable_scale) ** 2
     equation_adjoint, report = _solve_linear(
         transpose_operator,
-        reduced_cotangent,
-        (
-            (lambda rhs: _reduced_low_inverse_transpose(rhs, runtime))
-            if preconditioner is None
-            else preconditioner.apply_transpose
-        ),
+        correction_cotangent,
+        lambda rhs: diagonal_inverse * rhs,
         config,
-        "adjoint",
+        "least-squares adjoint",
     )
-    _, native_pullback = jax.vjp(
-        lambda native: strong_root_residual_at_native(correction, native, runtime),
+    _, stationarity_native_pullback = jax.vjp(
+        lambda native: _collocation_stationarity(
+            correction, native, runtime, chart
+        ),
         runtime.native,
     )
-    force_cotangent = native_pullback(equation_adjoint)[0]
+    force_cotangent = stationarity_native_pullback(equation_adjoint)[0]
+    _, direct_native_pullback = jax.vjp(
+        lambda native: _collocation_corrected_state(
+            native, correction, runtime, chart
+        ),
+        runtime.native,
+    )
+    direct_cotangent = direct_native_pullback(polished_cotangent)[0]
     native_cotangent = jax.tree.map(
-        jnp.subtract, polished_cotangent, force_cotangent
+        jnp.subtract, direct_cotangent, force_cotangent
     )
     return PolishAdjointResult(native_cotangent, equation_adjoint, report)
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4))
-def _implicit_polished_leaves(
+@partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5))
+def _implicit_collocation_leaves(
     native_leaves: tuple[jax.Array, ...],
     correction: jax.Array,
+    variable_scale: jax.Array,
     runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart,
     config: PolishLinearConfig,
-    preconditioner: StrongModeBlockPreconditioner | None,
 ) -> tuple[jax.Array, ...]:
-    del config, preconditioner
+    del variable_scale, config
     native = jax.tree.unflatten(jax.tree.structure(runtime.native), native_leaves)
     correction = jax.lax.stop_gradient(jnp.asarray(correction))
-    high = runtime.layout.unpack(
-        jnp.asarray(runtime.coordinate_scale) * correction
+    return tuple(
+        jax.tree.leaves(
+            _collocation_corrected_state(native, correction, runtime, chart)
+        )
     )
-    return tuple(jax.tree.leaves(_add_correction(native, high)))
 
 
-def _implicit_polished_leaves_fwd(
-    native_leaves, correction, runtime, config, preconditioner
+def _implicit_collocation_leaves_fwd(
+    native_leaves, correction, variable_scale, runtime, chart, config
 ):
-    output = _implicit_polished_leaves(
-        native_leaves, correction, runtime, config, preconditioner
+    output = _implicit_collocation_leaves(
+        native_leaves,
+        correction,
+        variable_scale,
+        runtime,
+        chart,
+        config,
     )
-    return output, correction
+    return output, (correction, variable_scale)
 
 
-def _implicit_polished_leaves_bwd(
-    runtime, config, preconditioner, correction, output_cotangent_leaves
+def _implicit_collocation_leaves_bwd(
+    runtime,
+    chart,
+    config,
+    saved,
+    output_cotangent_leaves,
 ):
+    correction, variable_scale = saved
     output_cotangent = jax.tree.unflatten(
         jax.tree.structure(runtime.native), output_cotangent_leaves
     )
-    result = strong_root_adjoint(
-        runtime,
-        correction,
+    result = collocation_polish_adjoint(
+        PolishContext(runtime, chart, correction, variable_scale),
         output_cotangent,
         config=config,
-        preconditioner=preconditioner,
     )
     return (
         tuple(jax.tree.leaves(result.native_cotangent)),
         jnp.zeros_like(correction),
+        jnp.zeros_like(variable_scale),
     )
 
 
-_implicit_polished_leaves.defvjp(
-    _implicit_polished_leaves_fwd,
-    _implicit_polished_leaves_bwd,
+_implicit_collocation_leaves.defvjp(
+    _implicit_collocation_leaves_fwd,
+    _implicit_collocation_leaves_bwd,
 )
 
 
-def implicit_polished_state(
+def implicit_collocation_polished_state(
     native: HighOrderEquilibriumState,
-    correction: jax.Array,
-    runtime: StrongRootRuntime,
+    context: PolishContext,
     config: PolishLinearConfig = PolishLinearConfig(),
-    preconditioner: StrongModeBlockPreconditioner | None = None,
 ) -> HighOrderEquilibriumState:
-    """Return a polished state whose reverse pass uses one implicit solve.
+    """Return a certified polished state with a stationarity-equation VJP.
 
-    The correction is treated as the converged solution of the strong root,
-    not as an independent differentiable input.  Validate/certify the primal
-    with the polish driver before using this optimization-facing wrapper.
-    Use :func:`strong_root_tangent` when a forward-mode response is needed.
-
-    The custom primitive operates on the state's array leaves rather than on
-    the validated state object itself.  This keeps JAX's internal sentinel
-    values out of :class:`HighOrderEquilibriumState.__post_init__`.
+    The primal correction comes from :func:`polish_collocation_least_squares`.
+    Reverse mode solves the exact transposed least-squares stationarity
+    equation once; it never differentiates through the nonlinear iterations.
+    Use :func:`collocation_polish_tangent` for forward sensitivities.
     """
 
-    if jax.tree.structure(native) != jax.tree.structure(runtime.native):
-        raise ValueError("native must have the runtime native-state structure")
+    if jax.tree.structure(native) != jax.tree.structure(context.runtime.native):
+        raise ValueError("native must have the polish context native-state structure")
     leaves = tuple(jax.tree.leaves(native))
-    polished_leaves = _implicit_polished_leaves(
-        leaves, correction, runtime, config, preconditioner
+    polished_leaves = _implicit_collocation_leaves(
+        leaves,
+        context.correction,
+        context.variable_scale,
+        context.runtime,
+        context.chart,
+        config,
     )
     return jax.tree.unflatten(jax.tree.structure(native), polished_leaves)
 
@@ -375,7 +391,7 @@ __all__ = [
     "PolishLinearConfig",
     "PolishLinearReport",
     "PolishTangentResult",
-    "implicit_polished_state",
-    "strong_root_adjoint",
-    "strong_root_tangent",
+    "collocation_polish_adjoint",
+    "collocation_polish_tangent",
+    "implicit_collocation_polished_state",
 ]

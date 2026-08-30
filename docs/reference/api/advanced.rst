@@ -44,12 +44,13 @@ arrays.
 
 The public primal path solves the overdetermined physical collocation residual
 with SOLVAX Gauss--Newton and accepts it only after independent force,
-radial-refinement, and nestedness checks.  The existing
-:mod:`vmex.core.polish_implicit` entry points describe the earlier square-root
-diagnostic and are deliberately not exported from the top-level API as the
-optimization interface for that rectangular production solve.  The production
-derivative will use implicit least-squares-stationarity rather than replaying
-nonlinear iterations.
+radial-refinement, and nestedness checks.  A successful result carries a
+``polish_context`` for :func:`vmex.collocation_polish_tangent`,
+:func:`vmex.collocation_polish_adjoint`, and
+:func:`vmex.implicit_collocation_polished_state`.  These differentiate the
+exact least-squares stationarity equation, including its nonzero-residual
+Hessian term, without replaying nonlinear iterations.  The earlier square-root
+diagnostics remain internal to :mod:`vmex.core.polish_implicit`.
 
 Spectral representation and physics kernels
 -------------------------------------------

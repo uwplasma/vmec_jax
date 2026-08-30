@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Measure cold/warm tangent and adjoint cost for the strong-root IFT."""
+"""Measure the rectangular polish stationarity tangent and adjoint."""
 
 from __future__ import annotations
 
@@ -12,10 +12,14 @@ import platform
 from pathlib import Path
 import resource
 import statistics
+import sys
 import time
 
 # A cold benchmark must not deserialize an executable from an earlier process.
 os.environ["VMEX_COMPILATION_CACHE"] = "disabled"
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
 
 import jax
 import jax.numpy as jnp
@@ -26,20 +30,23 @@ from vmex.core import implicit
 from vmex.core.input import VmecInput
 from vmex.core.polish import (
     build_low_order_preconditioner,
-    build_strong_mode_block_preconditioner,
     make_strong_root_runtime,
+    make_strong_structured_chart,
+)
+from vmex.core.polish_driver import (
+    PolishConfig,
+    polish_collocation_least_squares,
 )
 from vmex.core.polish_implicit import (
     PolishLinearConfig,
-    implicit_polished_state,
-    strong_root_adjoint,
-    strong_root_tangent,
+    collocation_polish_adjoint,
+    collocation_polish_tangent,
+    implicit_collocation_polished_state,
 )
 from vmex.core.strong_force import lift_high_order_state
 
 from _provenance import assert_repo_vmex, git_state
 
-REPO = Path(__file__).resolve().parents[1]
 DATA = REPO / "examples" / "data" / "input.solovev"
 
 
@@ -86,6 +93,7 @@ def main() -> None:
     parser.add_argument("--mpol", type=int, default=3)
     parser.add_argument("--degree", type=int, choices=(3, 5, 7), default=3)
     parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--solve-tolerance", type=float, default=1.0e-6)
     args = parser.parse_args()
     if args.ns < args.degree + 2:
         parser.error("ns must be at least degree + 2")
@@ -115,46 +123,51 @@ def main() -> None:
         mask,
         probe_chunk_size=4,
     )
-    runtime = make_strong_root_runtime(native, adapter, mask)
-    correction = jnp.zeros((runtime.layout.size,), dtype=jnp.float64)
-    block_preconditioner = build_strong_mode_block_preconditioner(
-        runtime, correction
+    runtime = make_strong_root_runtime(
+        native, adapter, mask, balance_full_root=False
     )
+    chart = make_strong_structured_chart(runtime)
+    primal = polish_collocation_least_squares(
+        runtime,
+        chart=chart,
+        config=PolishConfig(
+            tolerance=args.solve_tolerance,
+            validation_tolerance=10.0,
+            radial_refinement_tolerance=10.0,
+            collocation_scale_probes=8,
+            fail_policy="raise",
+        ),
+    )
+    context = primal.context
+    if context is None:
+        raise RuntimeError("the collocation polish did not return a derivative context")
     native_tangent = _random_like(native, 41)
     output_cotangent = _random_like(native, 42)
     linear_config = PolishLinearConfig(
         rtol=2.0e-10,
         atol=2.0e-11,
-        restart=runtime.layout.size,
-        max_restarts=3,
+        restart=chart.size,
+        max_restarts=10,
     )
 
     tangent = jax.jit(
-        lambda value: strong_root_tangent(
-            runtime,
-            correction,
+        lambda value: collocation_polish_tangent(
+            context,
             value,
             config=linear_config,
-            preconditioner=block_preconditioner,
         )
     )
     adjoint = jax.jit(
-        lambda value: strong_root_adjoint(
-            runtime,
-            correction,
+        lambda value: collocation_polish_adjoint(
+            context,
             value,
             config=linear_config,
-            preconditioner=block_preconditioner,
         )
     )
 
     def objective(value):
-        polished = implicit_polished_state(
-            value,
-            correction,
-            runtime,
-            linear_config,
-            block_preconditioner,
+        polished = implicit_collocation_polished_state(
+            value, context, linear_config
         )
         return sum(
             jnp.vdot(a, b).real
@@ -189,20 +202,22 @@ def main() -> None:
     )
 
     report = {
-        "schema": "vmex.polish-implicit-benchmark/1",
+        "schema": "vmex.polish-implicit-benchmark/2",
         "command": (
             "JAX_ENABLE_X64=1 python benchmarks/polish_implicit.py "
             f"--ns {args.ns} --mpol {args.mpol} --degree {args.degree} "
-            f"--repeats {args.repeats}"
+            f"--repeats {args.repeats} --solve-tolerance {args.solve_tolerance}"
         ),
         "persistent_compilation_cache": False,
-        "case": "solovev-structural-derivative-gate",
+        "case": "solovev-collocation-stationarity-derivative-gate",
         "ns": args.ns,
         "mpol": args.mpol,
         "degree": args.degree,
-        "free_dofs": runtime.layout.size,
-        "mode_blocks": len(block_preconditioner.indices),
-        "mode_block_build_seconds": block_preconditioner.build_seconds,
+        "free_dofs": chart.size,
+        "primal_steps": primal.polish_report.nonlinear_iterations,
+        "primal_relative_optimality": (
+            primal.polish_report.least_squares_relative_optimality
+        ),
         "repeats": args.repeats,
         "cold_tangent_seconds": cold_tangent,
         "warm_tangent_median_seconds": statistics.median(warm_tangent),
