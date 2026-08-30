@@ -338,6 +338,20 @@ def test_residual_lane_reuses_one_executable_across_trial_boundaries(solovev):
         for a, b in zip(jax.tree.leaves(base), jax.tree.leaves(trial)))
 
 
+def test_content_token_distinguishes_each_supported_kind():
+    """Every branch of the config content key: arrays by bytes (numpy and
+    device arrays alike), sequences by element, devices and other
+    identity-like objects by repr."""
+    a = np.asarray([1.0, 2.0])
+    assert im._content_token(a) == im._content_token(a.copy())
+    assert im._content_token(a) != im._content_token(np.asarray([1.0, 3.0]))
+    assert im._content_token(jnp.asarray(a)) == im._content_token(a)
+    assert im._content_token((1, [2.0, "x"])) == ("tuple", (
+        1, ("list", (2.0, "x"))))
+    device = jax.devices()[0]
+    assert im._content_token(device) == ("repr", repr(device))
+
+
 def test_make_config_canonicalizes_equal_content(solovev):
     """Equal-content configs share one instance; distinct content does not.
 
