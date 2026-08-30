@@ -1781,6 +1781,7 @@ def make_problem(
     jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
+    refine_tol: float = 1.0e-10,
     forward_ftol: float | None = None,
     forward_max_iterations: int | None = None,
     hot_restart: bool = True,
@@ -1849,6 +1850,12 @@ def make_problem(
 
     ``adjoint_tol`` is a relative Krylov tolerance with a certified true
     residual check; ``adjoint_maxiter`` is the restart budget.
+
+    ``refine_tol`` controls the fixed-point refinement applied after each
+    host equilibrium solve before implicit derivatives are evaluated.  The
+    default ``1e-10`` retains VMEX's strict refined-state behavior.  Set it
+    to ``numpy.inf`` to use the converged host state directly, matching the
+    pre-0.7 behavior at the cost of small objective and gradient differences.
 
     ``restart_from`` seeds the first equilibrium from a previous WOUT,
     :class:`Equilibrium`, or solver result.  This is useful when a continuation
@@ -1938,6 +1945,7 @@ def make_problem(
             jacobian_adjoint_maxiter=jacobian_adjoint_maxiter,
             adjoint_maxiter=adjoint_maxiter,
             max_fsq_ratio=max_fsq_ratio,
+            refine_tol=refine_tol,
             warm_start=(warm_start if hot_restart else None),
             solve_kwargs=dict(solve_kwargs or {}),
             initial_state=initial_state,
@@ -1969,6 +1977,7 @@ def make_problem(
     problem.metadata["forward_ftol"] = float(np.asarray(inp.ftol_array).ravel()[-1])
     problem.metadata["forward_max_iterations"] = int(np.asarray(inp.niter_array).ravel()[-1])
     problem.metadata["max_fsq_ratio"] = float(max_fsq_ratio)
+    problem.metadata["refine_tol"] = float(refine_tol)
     return problem
 
 
@@ -2378,6 +2387,7 @@ def _least_squares_implicit(
     jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
+    refine_tol: float = 1.0e-10,
     warm_start: str | None = "perturbation",
     solve_kwargs: dict,
     device: Any = AUTO,
@@ -2484,6 +2494,7 @@ def _least_squares_implicit(
         jacobian_adjoint_maxiter=jacobian_adjoint_maxiter,
         adjoint_maxiter=adjoint_maxiter,
         max_fsq_ratio=max_fsq_ratio,
+        refine_tol=refine_tol,
     )
     # Pin the residual/Jacobian graphs to the fastest device for this
     # launch-bound path (CPU by default; explicit device= honored; None

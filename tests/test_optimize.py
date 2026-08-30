@@ -1191,6 +1191,27 @@ def test_public_problem_factory_validation():
         )
 
 
+def test_public_problem_factory_forwards_refine_tol(monkeypatch):
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    captured = {}
+
+    def fake_implicit(*_args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(metadata={})
+
+    monkeypatch.setattr(opt, "_least_squares_implicit", fake_implicit)
+    problem = opt.make_problem(
+        inp,
+        objective_terms=[(opt.aspect_ratio, 4.0, 1.0)],
+        max_mode=1,
+        use_ess=False,
+        refine_tol=np.inf,
+    )
+
+    assert np.isinf(captured["refine_tol"])
+    assert np.isinf(problem.metadata["refine_tol"])
+
+
 def test_least_squares_implicit_warm_start_modes(solovev_eq):
     """R25.4 perturbation warm start reaches the same optimum as plain hot
     restart: ``warm_start`` only changes each trial's initial guess, never
