@@ -1,0 +1,61 @@
+{
+ "cache": {
+  "directory": "/private/tmp/claude-501/-Users-rogeriojorge-local/ba88a505-702b-41c6-a36d-3c58b0f50b6b/scratchpad/phase2wt/benchmarks/.profile_cache",
+  "entries_after": 23,
+  "entries_before": 0
+ },
+ "case_sha256": "9d1e58f23aea74f5ea8a29f0b75bb9c42f426dbb29e662943e6ac8a053a9950c",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "lasym_gradient": {
+   "cache_miss_reasons": [],
+   "compiles": 206,
+   "traces": 355
+  },
+  "lasym_value": {
+   "cache_miss_reasons": [],
+   "compiles": 172,
+   "traces": 367
+  },
+  "symmetric_gradient": {
+   "cache_miss_reasons": [],
+   "compiles": 393,
+   "traces": 678
+  },
+  "symmetric_value": {
+   "cache_miss_reasons": [],
+   "compiles": 391,
+   "traces": 856
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 3638214656
+ },
+ "platform": {
+  "machine": "arm64",
+  "node": "Rogerios-MacBook-Pro.local",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "cold",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "build": 0.15069958299864084,
+  "lasym_gradient": 23.65132829200593,
+  "lasym_value": 15.220247457997175,
+  "process_wall": 79.85516387497773,
+  "symmetric_gradient": 22.02733591699507,
+  "symmetric_value": 15.221192042023176
+ },
+ "title": "symmetric versus LASYM value and gradient",
+ "utc": "2026-08-30T17:50:11Z",
+ "workflow": "F11"
+}

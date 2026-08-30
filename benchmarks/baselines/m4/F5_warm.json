@@ -1,0 +1,49 @@
+{
+ "case_sha256": "d76efbd4d584c91a985b147a07302660f7bb515f23dfdebc721bc35b703c9bbb",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "jacobian": {
+   "cache_miss_reasons": [],
+   "compiles": 1,
+   "traces": 470
+  },
+  "residual": {
+   "cache_miss_reasons": [],
+   "compiles": 1,
+   "traces": 28
+  },
+  "warm": {
+   "cache_miss_reasons": [],
+   "compiles": 1,
+   "traces": 13
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 9434775552
+ },
+ "platform": {
+  "machine": "arm64",
+  "node": "Rogerios-MacBook-Pro.local",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "warm",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "build": 23.28126566699939,
+  "jacobian": 30.987033541983692,
+  "residual": 0.3842155839956831,
+  "warm": 0.001749290997395292
+ },
+ "title": "vector residual + full Jacobian",
+ "utc": "2026-08-30T16:46:12Z",
+ "workflow": "F5"
+}

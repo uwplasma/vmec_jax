@@ -1,0 +1,49 @@
+{
+ "cache": {
+  "directory": "/private/tmp/claude-501/-Users-rogeriojorge-local/ba88a505-702b-41c6-a36d-3c58b0f50b6b/scratchpad/phase2wt/benchmarks/.profile_cache",
+  "entries_after": 1,
+  "entries_before": 1
+ },
+ "case_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "geometry": {
+   "cache_miss_reasons": [],
+   "compiles": 204,
+   "traces": 304
+  },
+  "solve": {
+   "cache_miss_reasons": [],
+   "compiles": 547,
+   "traces": 474
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 1824407552
+ },
+ "platform": {
+  "machine": "arm64",
+  "node": "Rogerios-MacBook-Pro.local",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "cache_reload",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "build": 5.628511832997901,
+  "geometry": 4.517229874996701,
+  "process_wall": 44.37740283401217,
+  "solve": 31.919122166000307
+ },
+ "title": "periodic hybrid equilibrium and GK geometry",
+ "utc": "2026-08-30T17:58:03Z",
+ "workflow": "M3"
+}

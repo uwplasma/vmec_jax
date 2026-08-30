@@ -1,0 +1,43 @@
+{
+ "cache": {
+  "directory": "/private/tmp/claude-501/-Users-rogeriojorge-local/ba88a505-702b-41c6-a36d-3c58b0f50b6b/scratchpad/phase2wt/benchmarks/.profile_cache",
+  "entries_after": 111,
+  "entries_before": 0
+ },
+ "case_sha256": "d76efbd4d584c91a985b147a07302660f7bb515f23dfdebc721bc35b703c9bbb",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "optimize": {
+   "cache_miss_reasons": [],
+   "compiles": 596,
+   "traces": 2253
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 3999334400
+ },
+ "platform": {
+  "machine": "arm64",
+  "node": "Rogerios-MacBook-Pro.local",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "cold",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "build": 19.253319792012917,
+  "optimize": 313.80965154099977,
+  "process_wall": 341.28101895799045
+ },
+ "title": "scalar boundary optimization, 10 accepted steps",
+ "utc": "2026-08-30T16:52:01Z",
+ "workflow": "F7"
+}

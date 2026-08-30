@@ -1,0 +1,49 @@
+{
+ "case_sha256": "b88fef18d693528849bd0048b3413c0d855b6d5a4d687a41ca05c5f28fc5a119",
+ "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "compile": {
+  "adjoint": {
+   "cache_miss_reasons": [],
+   "compiles": 22,
+   "traces": 11
+  },
+  "value": {
+   "cache_miss_reasons": [],
+   "compiles": 1646,
+   "traces": 1813
+  },
+  "warm": {
+   "cache_miss_reasons": [],
+   "compiles": 3,
+   "traces": 3
+  }
+ },
+ "dirty": false,
+ "jax": {
+  "backend": "cpu",
+  "jax": "0.9.2",
+  "jaxlib": "0.9.2",
+  "x64": true
+ },
+ "memory_bytes": {
+  "peak_host_rss": 16936681472
+ },
+ "platform": {
+  "machine": "arm64",
+  "node": "Rogerios-MacBook-Pro.local",
+  "python": "3.11.14",
+  "system": "Darwin"
+ },
+ "regime": "warm",
+ "repo": "uwplasma/vmex",
+ "schema": 1,
+ "timing_s": {
+  "adjoint": 71.50992108299397,
+  "build": 3.6206106670142617,
+  "value": 118.45417454099515,
+  "warm": 18.368979207996745
+ },
+ "title": "free-boundary value and adjoint",
+ "utc": "2026-08-30T17:48:54Z",
+ "workflow": "F10"
+}

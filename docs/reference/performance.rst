@@ -761,7 +761,7 @@ counts read from JAX's own ``jax_log_compiles`` records and peak host RSS::
 
    python benchmarks/profile_workflows.py --list
    python benchmarks/profile_workflows.py F1 F4 --regimes cold warm
-   python benchmarks/profile_workflows.py --all --regimes warm --out benchmarks/results/
+   python benchmarks/profile_workflows.py --all --regimes warm --out benchmarks/baselines/m4/
    python benchmarks/profile_workflows.py F4 C2 --trace-dir benchmarks/traces/
 
 The registry covers the plan's workflow matrix: fixed-boundary solves
@@ -774,7 +774,9 @@ free-boundary, and the periodic hybrid with its GK geometry export), Boozer
 transforms at one and many surfaces, and the epsilon-effective and Gamma-c
 diagnostics. ``--trace-dir`` captures one XProf trace per stage on a warm
 repeat, so every flagship class has execution-level evidence, not only wall
-times.
+times. Committed baselines live under ``benchmarks/baselines/`` (one
+directory per platform), each record stamped with the commit it measured
+and a clean-tree flag.
 
 Five timing regimes are never mixed in one number:
 
