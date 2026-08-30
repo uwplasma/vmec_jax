@@ -63,6 +63,7 @@ def test_plain_install_includes_plotting_and_qi_dependencies() -> None:
     assert "booz_xform_jax" in project_dependencies
     assert "packaging" in project_dependencies
     assert "numpy" in project_dependencies
+    assert "solvax>=0.20.0" in project_dependencies
     assert "plots" not in optional_dependencies
     assert "plot" not in optional_dependencies
     assert "qi" not in optional_dependencies

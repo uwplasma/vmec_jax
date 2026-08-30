@@ -154,9 +154,18 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     # high-order reconstruction and independent strong-force certificate
     "HighOrderEquilibriumState": (
         ".core.strong_force", "HighOrderEquilibriumState"),
+    "HighOrderFieldSamples": (".core.strong_force", "HighOrderFieldSamples"),
+    "HighOrderSurfaceSamples": (
+        ".core.strong_force", "HighOrderSurfaceSamples"),
     "StrongForceReport": (".core.strong_force", "StrongForceReport"),
     "StrongForceSamples": (".core.strong_force", "StrongForceSamples"),
     "certify_strong_force": (".core.strong_force", "certify_strong_force"),
+    "evaluate_high_order_fields": (
+        ".core.strong_force", "evaluate_high_order_fields"),
+    "evaluate_high_order_surface": (
+        ".core.strong_force", "evaluate_high_order_surface"),
+    "boozer_bmnc_high_order": (
+        ".core.omnigenity", "boozer_bmnc_high_order"),
     "evaluate_strong_force": (".core.strong_force", "evaluate_strong_force"),
     "high_order_state_from_wout": (
         ".core.strong_force", "high_order_state_from_wout"),
@@ -186,6 +195,18 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "EquilibriumReporter": (".core.monitoring", "EquilibriumReporter"),
     "OptimizationMonitor": (".core.monitoring", "OptimizationMonitor"),
     "OptimizationRecord": (".core.monitoring", "OptimizationRecord"),
+    # high-order strong-force polishing
+    "PolishConfig": (".core.polish_driver", "PolishConfig"),
+    "PolishContext": (".core.polish_driver", "PolishContext"),
+    "PolishReport": (".core.polish_driver", "PolishReport"),
+    "PolishResult": (".core.polish_driver", "PolishResult"),
+    "PolishLinearConfig": (".core.polish_implicit", "PolishLinearConfig"),
+    "collocation_polish_adjoint": (
+        ".core.polish_implicit", "collocation_polish_adjoint"),
+    "collocation_polish_tangent": (
+        ".core.polish_implicit", "collocation_polish_tangent"),
+    "implicit_collocation_polished_state": (
+        ".core.polish_implicit", "implicit_collocation_polished_state"),
     # external fields
     "MgridData": (".core.mgrid", "MgridData"),
     "MgridField": (".core.mgrid", "MgridField"),
@@ -199,6 +220,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".core.virtual_casing", "PlasmaVacuumInterface"),
     "surface_field_data_from_state": (
         ".core.virtual_casing", "surface_field_data_from_state"),
+    "surface_field_data_from_high_order": (
+        ".core.virtual_casing", "surface_field_data_from_high_order"),
     "surface_field_data_from_wout": (
         ".core.virtual_casing", "surface_field_data_from_wout"),
     # dimensional scaling
@@ -211,6 +234,12 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "VmecJacobianError": (".core.errors", "VmecJacobianError"),
     "VmecConvergenceError": (".core.errors", "VmecConvergenceError"),
     "VmecNumericalError": (".core.errors", "VmecNumericalError"),
+    "StrongForceContinuationError": (
+        ".core.errors", "StrongForceContinuationError"),
+    "StrongForceCertificationError": (
+        ".core.errors", "StrongForceCertificationError"),
+    "StrongForceLinearSolveError": (
+        ".core.errors", "StrongForceLinearSolveError"),
     "MgridNotFoundError": (".core.errors", "MgridNotFoundError"),
     # modules
     "core": (".core", None),

@@ -36,7 +36,8 @@ paths = vj.plot_wout(wout_data, outdir="figs",
 
 `plot_wout` accepts a path or an in-memory
 {class}`~vmex.core.wout.WoutData`, and `which=` selects a subset of
-`("summary", "surfaces", "modB", "profiles", "stability", "3d")`. Per-figure helpers
+`("summary", "surfaces", "modB", "profiles", "stability", "3d")`.
+Per-figure helpers
 ({func}`~vmex.core.plotting.plot_summary`,
 {func}`~vmex.core.plotting.plot_stability`, ...) return single figures for
 embedding in your own scripts; `examples/plot_and_boozer.py` is the worked
@@ -45,8 +46,11 @@ version.
 ## The summary figure
 
 `*_summary.png` is a publication-style diagnostic set: rotational transform
-(full mesh), pressure, the parallel bootstrap current
-$\langle \mathbf{J}\cdot\mathbf{B} \rangle$, Mercier `DMerc` and the Glasser
+(full mesh), pressure and the parallel bootstrap current
+$\langle \mathbf{J}\cdot\mathbf{B} \rangle$ on one panel, the relative radial
+force error
+$\epsilon_F=|(\mathbf J\times\mathbf B-\nabla p)_s|/(|(\mathbf J\times\mathbf B)_s|+|(\nabla p)_s|)$,
+Mercier `DMerc` and the Glasser
 resistive-interchange $D_R$ with $V''(s)$ on a color-matched right axis,
 a 3-D LCFS, and the second adiabatic invariant in the polar disk
 $x=s\cos\alpha$, $y=s\sin\alpha$. Concentric $J$ contours diagnose
@@ -58,14 +62,11 @@ a host-side reconstruction of the WOUT file, which carries the sine-parity
 partner tables and so covers both symmetry classes. The reconstruction checks
 itself by reproducing the stored `DMerc` profile from the same integrals; on
 mismatch the curve is omitted with a panel note rather than drawn
-unvalidated.
-With `vmex[neoclassical]` installed, the pressure panel also shows the
-conventional NEO quantity $\epsilon_{\rm eff}^{3/2}$ at bounded diagnostic
-resolution. If NEO_JAX is unavailable, the right axis says so instead of
-silently omitting the diagnostic. Use
-{func}`vmex.core.neoclassical.epsilon_effective_from_wout` with an explicit
-`neo_jax.NeoConfig` for a converged transport calculation; the summary curve
-is intended only to show radial trends.
+unvalidated. The force-error maximum in the scalar card uses the solved
+interior surfaces; WOUT's axis and boundary values are extrapolations. The
+same normalization is valid in vacuum, where the pressure term is zero.
+Use {func}`vmex.core.neoclassical.epsilon_effective_from_wout` with an explicit
+`neo_jax.NeoConfig` when an effective-ripple calculation is wanted.
 The WOUT adapter releases completed JAX executables before its first NEO
 compile, avoiding the large cold-start time and memory observed when VMEX and
 NEO executables coexist. This is appropriate for an end-of-run plot; pass

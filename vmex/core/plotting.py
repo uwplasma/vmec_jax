@@ -4,7 +4,8 @@ Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 (or an in-memory :class:`vmex.core.wout.WoutData`):
 
 - ``summary``   3x3 publication diagnostic set: rotational transform (full
-  mesh), pressure, parallel (bootstrap) current ``<J.B>``, Mercier ``DMerc``
+  mesh), pressure and parallel (bootstrap) current ``<J.B>``, relative radial
+  force error, Mercier ``DMerc``
   and Glasser ``D_R`` with ``V''(s)`` on the right axis, a 3-D LCFS,
   a Velasco-style polar second-adiabatic-invariant map ``J(alpha, s)``, ``|B|``
   in Boozer coordinates at mid radius and on the LCFS (line contours with a
@@ -40,7 +41,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterable, Sequence
-import weakref
 
 import numpy as np
 
@@ -75,7 +75,6 @@ _LINE_COLORS = (
 )
 
 _MU0 = 4.0e-7 * np.pi
-_EPSILON_EFFECTIVE_CACHE: dict[int, tuple[weakref.ReferenceType, dict[str, Any]]] = {}
 
 
 def plot_optimization_objects(
@@ -834,34 +833,6 @@ def _profile_panel(ax, x, y, *, xlabel: str, ylabel: str, title: str, color=None
     ax.set_title(title)
 
 
-def _epsilon_effective_summary(wout) -> dict[str, Any]:
-    """Return a cached, bounded-resolution NEO profile for one wout object."""
-    key = id(wout)
-    cached = _EPSILON_EFFECTIVE_CACHE.get(key)
-    if cached is not None and cached[0]() is wout:
-        return cached[1]
-    try:
-        from .neoclassical import diagnostic_neo_config, epsilon_effective_from_wout
-
-        s, values = epsilon_effective_from_wout(
-            wout, surfaces=np.linspace(0.15, 0.95, 5), mboz=12, nboz=10,
-            config=diagnostic_neo_config())
-        result = {
-            "valid": True, "s": np.asarray(s, dtype=float),
-            "values": np.asarray(values, dtype=float), "note": "diagnostic resolution"}
-    except Exception as exc:  # noqa: BLE001 - plotting remains useful without optional NEO
-        result = {"valid": False, "note": f"{type(exc).__name__}: {exc}"}
-    def drop_entry(_reference: Any, cache_key: int = key) -> None:
-        _EPSILON_EFFECTIVE_CACHE.pop(cache_key, None)
-
-    try:
-        reference = weakref.ref(wout, drop_entry)
-    except TypeError:
-        return result
-    _EPSILON_EFFECTIVE_CACHE[key] = (reference, result)
-    return result
-
-
 def _stability_panel(ax, wout, d_r_info: dict[str, Any], *, s_plot_ignore: float):
     """Plot ``DMerc`` and ``D_R`` with physical ``V''(s)`` on the right axis."""
     ns = int(wout.ns)
@@ -990,6 +961,8 @@ def _boozer_modB_panel(ax, fig, booz: dict[str, Any], k: int, *, title: str) -> 
 
 def _fmt_compact(value: float) -> str:
     """Compact scientific format: 0 stays ``0``, exponents lose zero padding."""
+    if not np.isfinite(value):
+        return "unavailable"
     if value == 0.0:
         return "0"
     text = f"{value:.2e}"
@@ -997,10 +970,54 @@ def _fmt_compact(value: float) -> str:
     return f"{mantissa}e{int(exponent)}"
 
 
+def _relative_force_error_profile(wout) -> tuple[np.ndarray, np.ndarray]:
+    """Return solved-surface radius and relative radial force error.
+
+    ``equif[0]`` and ``equif[-1]`` are linear extrapolations made while
+    writing WOUT, so neither belongs in a maximum-error certificate.
+    """
+    ns = int(wout.ns)
+    rho = np.sqrt(np.linspace(0.0, 1.0, ns))
+    error = np.abs(np.asarray(wout.equif, dtype=float))
+    interior = slice(1, -1) if ns > 2 else slice(None)
+    finite = np.isfinite(error[interior])
+    return rho[interior][finite], error[interior][finite]
+
+
+def _relative_force_error_panel(ax, wout) -> float:
+    """Draw the WOUT radial force-balance diagnostic and return its maximum."""
+    rho, error = _relative_force_error_profile(wout)
+    positive = error[error > 0.0]
+    floor = max(
+        float(np.min(positive)) * 0.1 if positive.size else 1.0e-16,
+        np.finfo(float).tiny,
+    )
+    if error.size:
+        ax.semilogy(rho, np.maximum(error, floor), ".-", color=_LINE_COLORS[0])
+        maximum = float(np.max(error))
+    else:
+        ax.text(0.5, 0.5, "force error unavailable", ha="center", va="center",
+                transform=ax.transAxes)
+        maximum = float("nan")
+    ax.set_xlabel(
+        r"normalized radius $\rho=\sqrt{s}$,  $s=\psi/\psi_B$"
+    )
+    ax.set_ylabel(
+        "relative force error\n"
+        r"$\epsilon_F=|(\mathbf{J}\!\times\!\mathbf{B}-\nabla p)_s|/"
+        r"(|(\mathbf{J}\!\times\!\mathbf{B})_s|+|(\nabla p)_s|)$"
+    )
+    ax.set_title("radial force balance")
+    ax.set_xlim(0.0, 1.0)
+    return maximum
+
+
 def _scalar_card_panel(ax, wout) -> None:
     """Equilibrium scalar card (threed1-style global quantities)."""
     ax.set_axis_off()
     iotaf = np.asarray(wout.iotaf, dtype=float)
+    _rho, force_error = _relative_force_error_profile(wout)
+    max_force_error = float(np.max(force_error)) if force_error.size else float("nan")
     rows = [
         ("field periods", f"{int(wout.nfp)}"),
         ("resolution", f"ns={int(wout.ns)}, mpol={int(wout.mpol)}, ntor={int(wout.ntor)}"),
@@ -1012,6 +1029,7 @@ def _scalar_card_panel(ax, wout) -> None:
         (r"$\beta$ pol / tor", f"{_fmt_compact(float(wout.betapol))} / {_fmt_compact(float(wout.betator))}"),
         (r"$I_{tor}$ [A]", _fmt_compact(float(wout.ctor))),
         (r"$\iota$ axis / edge", f"{float(iotaf[0]):.4f} / {float(iotaf[-1]):.4f}"),
+        (r"max $\epsilon_F$", _fmt_compact(max_force_error)),
         ("asymmetric", "yes" if bool(getattr(wout, "lasym", False)) else "no"),
     ]
     ax.text(
@@ -1074,57 +1092,31 @@ def _summary_figure(
             xlabel=_S_LABEL, ylabel=r"$\iota$", title="rotational transform (full mesh)",
         )
 
-        # pressure (kept from the classic threed1 set).
+        # Pressure and parallel current share radius but retain their units.
         _profile_panel(
             axes[0, 1], s, 1.0e-3 * np.asarray(wout.presf, dtype=float),
-            xlabel=_S_LABEL, ylabel=r"$p$ [kPa]", title="pressure",
+            xlabel=_S_LABEL, ylabel=r"$p$ [kPa]", title="pressure and parallel current",
             color=_LINE_COLORS[1],
         )
         axes[0, 1].lines[0].set_label(r"$p$")
-        epsilon_info = _epsilon_effective_summary(wout)
-        meta["epsilon_effective"] = epsilon_info
-        epsilon_axis = axes[0, 1].twinx(); meta["epsilon_axis"] = epsilon_axis
-        if epsilon_info["valid"]:
-            # The reader is looking for where the ripple is worst and where it
-            # dips, so the axis has to resolve the profile rather than the
-            # decade it lives in: log autoscale snaps to powers of ten, and a
-            # ripple profile usually spans well under one, which flattens the
-            # curve against a limit and leaves a single tick label.
-            finite = np.asarray(epsilon_info["values"], dtype=float)
-            finite = finite[np.isfinite(finite) & (finite > 0.0)]
-            decades = (float(finite.max() / finite.min()) if finite.size else 1.0)
-            epsilon_line = epsilon_axis.plot(
-                epsilon_info["s"], epsilon_info["values"], "s--",
-                color=_LINE_COLORS[0], markersize=3.2,
-                label=r"$\epsilon_{\rm eff}^{3/2}$ (diagnostic)")[0]
-            if decades >= 10.0:
-                epsilon_axis.set_yscale("log")
-                if finite.size:
-                    epsilon_axis.set_ylim(0.5 * float(finite.min()),
-                                          2.0 * float(finite.max()))
-            else:
-                epsilon_axis.ticklabel_format(
-                    axis="y", style="sci", scilimits=(0, 0), useMathText=True)
-                if finite.size:
-                    low, high = float(finite.min()), float(finite.max())
-                    pad = 0.08 * (high - low) or 0.1 * high
-                    epsilon_axis.set_ylim(max(0.0, low - pad), high + pad)
-            epsilon_axis.set_ylabel(r"$\epsilon_{\rm eff}^{3/2}$", color=_LINE_COLORS[0])
-            epsilon_axis.tick_params(axis="y", colors=_LINE_COLORS[0])
-            axes[0, 1].legend(
-                [axes[0, 1].lines[0], epsilon_line],
-                [axes[0, 1].lines[0].get_label(), epsilon_line.get_label()],
-                loc="best", fontsize=11)
-        else:
-            epsilon_axis.set_yticks([])
-            epsilon_axis.set_ylabel(r"$\epsilon_{\rm eff}^{3/2}$ unavailable", color="0.4")
-
-        # 5. parallel (bootstrap) current profile <J.B>.
-        _profile_panel(
-            axes[0, 2], s, 1.0e-3 * np.asarray(wout.jdotb, dtype=float),
-            xlabel=_S_LABEL, ylabel=r"$\langle \mathbf{J}\cdot\mathbf{B} \rangle$ [kA T/m$^2$]",
-            title=r"parallel (bootstrap) current", color=_LINE_COLORS[2],
+        current_axis = axes[0, 1].twinx(); meta["current_axis"] = current_axis
+        current_line = current_axis.plot(
+            s, 1.0e-3 * np.asarray(wout.jdotb, dtype=float), "-",
+            color=_LINE_COLORS[2], label=r"$\langle\mathbf{J}\cdot\mathbf{B}\rangle$",
+        )[0]
+        current_axis.set_ylabel(
+            r"$\langle \mathbf{J}\cdot\mathbf{B} \rangle$ [kA T/m$^2$]",
+            color=_LINE_COLORS[2],
         )
+        current_axis.tick_params(axis="y", colors=_LINE_COLORS[2])
+        axes[0, 1].legend(
+            [axes[0, 1].lines[0], current_line],
+            [axes[0, 1].lines[0].get_label(), current_line.get_label()],
+            loc="best", fontsize=11,
+        )
+
+        # Relative radial force balance on the solved interior surfaces.
+        meta["max_relative_force_error"] = _relative_force_error_panel(axes[0, 2], wout)
 
         # Stability profiles share one panel; right-axis color identifies W.
         d_r_info = _glasser_d_r_from_wout(wout)
@@ -1192,7 +1184,7 @@ def _summary_figure(
         _scalar_card_panel(axes[2, 0], wout)
 
         meta["axes"] = {
-            "iota": axes[0, 0], "pressure": axes[0, 1], "jdotb": axes[0, 2],
+            "iota": axes[0, 0], "profiles": axes[0, 1], "force_balance": axes[0, 2],
             "stability": axes[1, 0], "boundary_3d": axes[1, 1], "j_invariant": axes[1, 2],
             "card": axes[2, 0], "boozer_mid": axes[2, 1], "boozer_lcfs": axes[2, 2],
         }
@@ -1489,7 +1481,9 @@ _WOUT_FIGURES = {
 def plot_wout(
     wout,
     outdir: str | Path,
-    which: Sequence[str] = ("summary", "surfaces", "modB", "profiles", "stability", "3d"),
+    which: Sequence[str] = (
+        "summary", "surfaces", "modB", "profiles", "stability", "3d",
+    ),
     *,
     name: str | None = None,
     j_pitch: float | None = None,
@@ -1503,7 +1497,8 @@ def plot_wout(
     outdir:
         Output directory (created if missing).
     which:
-        Any subset of ``("summary", "surfaces", "modB", "profiles", "stability", "3d")``.
+        Any subset of ``("summary", "surfaces", "modB", "profiles",
+        "stability", "3d")``.
     name:
         Basename prefix for the figures (default: case name from the path).
     j_pitch:

@@ -21,6 +21,9 @@ All runnable examples live under this single `examples/` tree. Examples marked
     state; warm restarts converge in ~1 iteration and recompile nothing.
   - `finite_beta_scan.py` — ramp the pressure (hot-restarted) and read beta,
     the Shafranov shift (magnetic-axis motion), and Mercier `DMerc` stability.
+  - `force_balance_polishing.py` — enable the VMEC-safe polishing directive,
+    inspect the independent certificate, and save/plot the VMEC-grid state
+    before and after the high-order correction.
   - `parallel_ensemble_scan.py` — solve an ensemble of independent equilibria
     concurrently on CPU (`vmex.parallel.solve_ensemble`); prints the measured
     strong-scaling curve and checks the results are bit-identical to serial.

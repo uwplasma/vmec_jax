@@ -30,6 +30,67 @@ High-order correction transfer and preconditioner
 .. automodule:: vmex.core.polish
    :members:
 
+.. automodule:: vmex.core.polish_driver
+   :members:
+
+.. automodule:: vmex.core.polish_implicit
+   :members:
+
+Both :func:`vmex.solve` and :func:`vmex.solve_multigrid` accept
+``polish_force_balance=False`` (unchanged behavior), ``True`` (required
+correction), or ``"auto"`` (skip an already-certified state). The shorter
+``polish`` keyword remains an alias on the single-grid call. A standard VMEC
+deck enables the same path with a comment outside ``&INDATA``::
+
+   ! VMEX: POLISH_FORCE_BALANCE = .TRUE.
+
+VMEX reads this directive; VMEC2000 ignores the comment and solves the ordinary
+equilibrium. A successful result retains the ordinary ``state`` and exposes
+the VMEC-grid projection as ``polished_state``. CLI WOUT files and an
+:class:`vmex.core.optimize.Equilibrium` requested with polishing use that
+projected state, while the continuous solution remains in
+``native_equilibrium``.
+
+The public primal path solves the overdetermined physical collocation residual
+with SOLVAX Gauss--Newton and accepts it only after independent force,
+radial-refinement, and nestedness checks.  A successful result carries a
+``polish_context`` for :func:`vmex.collocation_polish_tangent`,
+:func:`vmex.collocation_polish_adjoint`, and
+:func:`vmex.implicit_collocation_polished_state`.  These differentiate the
+exact least-squares stationarity equation, including its nonzero-residual
+Hessian term, without replaying nonlinear iterations.  The earlier square-root
+diagnostics remain internal to :mod:`vmex.core.polish_implicit`.
+
+A scalar objective differentiates through that converged state directly.  This
+example minimizes relative field-strength variation on one interior surface::
+
+   import jax
+   import jax.numpy as jnp
+   import vmex as vj
+
+   native = result.polish_context.runtime.native
+
+   def objective(value):
+       polished = vj.implicit_collocation_polished_state(
+           value, result.polish_context)
+       theta = jnp.linspace(0, 2 * jnp.pi, 12, endpoint=False)
+       zeta = jnp.linspace(0, 2 * jnp.pi, 6, endpoint=False)
+       tt, zz = jnp.meshgrid(theta, zeta, indexing="ij")
+       B = vj.evaluate_high_order_fields(polished, 0.7, tt, zz).B
+       magnitude = jnp.linalg.norm(B, axis=-1)
+       return jnp.var(magnitude / jnp.mean(magnitude))
+
+   gradient = jax.grad(objective)(native)
+
+For boundary objectives, :func:`vmex.evaluate_high_order_surface` returns a
+one-field-period array view accepted by ESSOS, and
+:func:`vmex.surface_field_data_from_high_order` converts the same analytic
+geometry and edge field for ``virtual_casing_jax``.  Neither path writes a
+``wout`` file or finite-differences a surface tangent.  Field-aligned
+objectives use :func:`vmex.boozer_bmnc_high_order`, which sends continuous
+geometry and field tables to BOOZ_XFORM_JAX without reconstructing a sampled
+radial mesh.
+
 Spectral representation and physics kernels
 -------------------------------------------
 

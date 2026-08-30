@@ -11,7 +11,11 @@ import platform
 from pathlib import Path
 import resource
 import statistics
+import sys
 import time
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
 
 import jax
 import jax.numpy as jnp
@@ -25,7 +29,6 @@ from vmex.core.strong_force import lift_high_order_state
 
 from _provenance import assert_repo_vmex, git_state
 
-REPO = Path(__file__).resolve().parents[1]
 DATA = REPO / "examples" / "data" / "input.solovev"
 
 

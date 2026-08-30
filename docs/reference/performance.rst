@@ -110,6 +110,36 @@ retained across Krylov steps and continuation stages until the documented
 quality policy requests a refresh.  The table is a reproducibility and
 overhead gate, not a production-resolution scaling claim.
 
+Collocation-polish derivative gate
+----------------------------------
+
+``benchmarks/polish_implicit.py`` measures matrix-free IFT tangents,
+adjoints, and the optimization-facing custom VJP of the same rectangular
+least-squares stationarity equation used by the public primal.  The clean
+Apple M4 record in ``benchmarks/polish_implicit_m4.json`` uses a 17-coordinate
+Solov'ev structural gate.  Its primal reaches relative optimality
+``1.13e-7`` in nine steps.  Median warm times over ten repeats are 6.44 ms for
+the tangent, 6.83 ms for the adjoint, and 6.61 ms for the custom VJP.  With
+the persistent compilation cache disabled, cold compile-plus-execute times
+are 7.13 s, 7.50 s, and 9.43 s, respectively.
+
+The same record reports incremental process peak RSS of 52.2 MiB for the first
+tangent executable, 156.4 MiB for the separately compiled adjoint, and 237.9
+MiB for the separately compiled custom-VJP executable.  These increments
+include XLA compilation and are intentionally not described as live solve
+buffers.  Tangent and adjoint each take 17 Krylov iterations with the
+deterministic diagonal normal scaling.  Their complete dot-product mismatch is
+``1.90e-10`` and the custom VJP agrees with the explicit adjoint to
+``8.75e-21`` relative squared error.  The objective is relative field-strength
+variance at ``rho=0.7`` evaluated through the native high-order field view.  Its
+implicit directional derivative agrees with two independently re-polished
+finite-difference endpoints to ``5.11e-5`` relative error; those two solves take
+21.22 s, compared with a 6.61 ms warm scalar gradient.  A Taylor-remainder
+test independently verifies the expected second-order decrease under step
+halving.  This is a correctness and overhead gate for the production
+mathematical formulation at structural resolution, not a production-size
+optimization timing claim.
+
 Benchmark suite (CPU, ns = 201)
 -------------------------------
 

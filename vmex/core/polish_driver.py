@@ -1,0 +1,1240 @@
+"""Fixed-boundary strong-force polishing and independent certification.
+
+The production path solves the overdetermined physical collocation residual
+with SOLVAX's matrix-free Gauss--Newton method.  The earlier square
+continuation driver remains available for rank and branch diagnostics, but is
+not the public polishing route.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from inspect import signature
+from time import perf_counter
+from typing import Any, Literal, NamedTuple
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from solvax import gmres
+
+from .errors import StrongForceCertificationError, StrongForceContinuationError
+from .polish import (
+    StrongModeBlockPreconditioner,
+    StrongPhysicalChart,
+    StrongRootRuntime,
+    apply_high_order_correction,
+    build_low_order_preconditioner,
+    build_strong_physical_block_preconditioner,
+    build_strong_mode_block_preconditioner,
+    make_strong_root_runtime,
+    make_strong_structured_chart,
+    strong_collocation_residual,
+    strong_physical_residual,
+    strong_root_residual,
+)
+from .strong_force import (
+    HighOrderEquilibriumState,
+    StrongForceReport,
+    certify_strong_force,
+    evaluate_strong_force,
+)
+
+Array = object
+
+
+def _solvax_continuation_api() -> tuple[Any, ...]:
+    """Load the continuation extension supplied by the companion SOLVAX PR."""
+
+    try:
+        from solvax import (
+            ContinuationConfig,
+            PseudoTransientConfig,
+            adaptive_continuation,
+            pseudo_arclength_corrector,
+            pseudo_transient_continuation,
+        )
+    except ImportError as error:
+        raise RuntimeError(
+            "strong-force polishing requires a SOLVAX release containing "
+            "adaptive continuation, pseudo-transient continuation, and "
+            "pseudo-arclength correction (uwplasma/SOLVAX#87)"
+        ) from error
+    return (
+        ContinuationConfig,
+        PseudoTransientConfig,
+        adaptive_continuation,
+        pseudo_arclength_corrector,
+        pseudo_transient_continuation,
+    )
+
+
+def _supports_keyword(function: Any, keyword: str) -> bool:
+    """Return whether an installed SOLVAX callable exposes a new keyword."""
+
+    try:
+        return keyword in signature(function).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _residual_evaluations(result: Any) -> int:
+    """Read exact work accounting, with a conservative pre-0.19 fallback."""
+
+    nonlinear_steps = getattr(result, "nonlinear_steps", getattr(result, "steps", 0))
+    return int(getattr(result, "residual_evaluations", nonlinear_steps + 1))
+
+
+@dataclass(frozen=True)
+class PolishConfig:
+    """Conservative controls for a fixed-boundary strong-root correction."""
+
+    tolerance: float = 1.0e-3
+    validation_tolerance: float | None = 1.0e-2
+    radial_degree: int = 3
+    radial_spans: int | None = None
+    radial_quadrature_order: int | None = None
+    radial_refinement_tolerance: float = 1.0e-3
+    collocation_scale_probes: int = 8
+    least_squares_initial_damping: float = 1.0e-3
+    max_continuation_stages: int = 32
+    alpha_initial_step: float = 1.0e-3
+    alpha_min_step: float = 1.0e-5
+    alpha_max_step: float = 0.1
+    ptc_initial_dtau: float = 1.0e6
+    ptc_max_dtau: float = 1.0e12
+    max_nonlinear_iterations: int = 80
+    max_backtracks: int = 12
+    linear_restart: int = 30
+    linear_max_restarts: int = 20
+    preconditioner: Literal["none", "legacy", "mode-block"] = "mode-block"
+    minimum_jacobian_ratio: float = 0.1
+    minimum_jacobian_floor: float = 1.0e-8
+    use_pseudo_arclength: bool = True
+    max_arclength_steps: int = 16
+    arclength_step: float = 1.0e-2
+    fail_policy: Literal["raise", "return_unpolished"] = "raise"
+
+    def __post_init__(self) -> None:
+        finite = (
+            self.tolerance,
+            self.validation_tolerance
+            if self.validation_tolerance is not None
+            else self.tolerance,
+            self.alpha_initial_step,
+            self.alpha_min_step,
+            self.alpha_max_step,
+            self.ptc_initial_dtau,
+            self.ptc_max_dtau,
+            self.minimum_jacobian_ratio,
+            self.minimum_jacobian_floor,
+            self.arclength_step,
+            self.radial_refinement_tolerance,
+            self.least_squares_initial_damping,
+        )
+        if not all(np.isfinite(value) for value in finite):
+            raise ValueError("polish controls must be finite")
+        if self.tolerance <= 0.0 or (
+            self.validation_tolerance is not None
+            and self.validation_tolerance <= 0.0
+        ):
+            raise ValueError("polish tolerances must be positive")
+        if self.radial_degree not in (3, 5, 7):
+            raise ValueError("radial_degree must be 3, 5, or 7")
+        if self.radial_spans is not None and self.radial_spans < 1:
+            raise ValueError("radial_spans must be positive")
+        if (
+            self.radial_quadrature_order is not None
+            and self.radial_quadrature_order < 2
+        ):
+            raise ValueError("radial_quadrature_order must be at least 2")
+        if self.radial_refinement_tolerance <= 0.0:
+            raise ValueError("radial_refinement_tolerance must be positive")
+        if self.collocation_scale_probes < 0:
+            raise ValueError("collocation_scale_probes must be nonnegative")
+        if self.least_squares_initial_damping <= 0.0:
+            raise ValueError("least_squares_initial_damping must be positive")
+        if not 0.0 < self.alpha_min_step <= self.alpha_initial_step <= self.alpha_max_step:
+            raise ValueError("require alpha_min_step <= alpha_initial_step <= alpha_max_step")
+        if not 0.0 < self.ptc_initial_dtau <= self.ptc_max_dtau:
+            raise ValueError("require 0 < ptc_initial_dtau <= ptc_max_dtau")
+        if self.max_continuation_stages < 1 or self.max_nonlinear_iterations < 1:
+            raise ValueError("polish iteration limits must be positive")
+        if self.max_backtracks < 0 or self.linear_restart < 1 or self.linear_max_restarts < 1:
+            raise ValueError("polish linear/backtracking limits are invalid")
+        if self.preconditioner not in ("none", "legacy", "mode-block"):
+            raise ValueError(
+                "preconditioner must be 'none', 'legacy', or 'mode-block'"
+            )
+        if not 0.0 < self.minimum_jacobian_ratio <= 1.0:
+            raise ValueError("minimum_jacobian_ratio must lie in (0, 1]")
+        if self.minimum_jacobian_floor <= 0.0:
+            raise ValueError("minimum_jacobian_floor must be positive")
+        if self.max_arclength_steps < 0 or self.arclength_step <= 0.0:
+            raise ValueError("pseudo-arclength controls are invalid")
+        if self.fail_policy not in ("raise", "return_unpolished"):
+            raise ValueError("fail_policy must be 'raise' or 'return_unpolished'")
+
+    @property
+    def certificate_tolerance(self) -> float:
+        """Independent validation threshold used after the solve."""
+
+        return (
+            self.tolerance
+            if self.validation_tolerance is None
+            else self.validation_tolerance
+        )
+
+
+@dataclass(frozen=True)
+class PolishReport:
+    """Compact machine-readable summary of one correction attempt."""
+
+    converged: bool
+    termination_reason: str
+    final_alpha: float
+    initial_normalized_l2: float
+    final_normalized_l2: float
+    continuation_accepted: int
+    continuation_rejected: int
+    nonlinear_iterations: int
+    linear_iterations: int
+    residual_evaluations: int
+    arclength_steps: int
+    minimum_signed_jacobian: float
+    factor_build_seconds: float
+    solve_seconds: float
+    least_squares_cost: float | None = None
+    least_squares_optimality: float | None = None
+    least_squares_initial_optimality: float | None = None
+    least_squares_relative_optimality: float | None = None
+    least_squares_success: bool | None = None
+    least_squares_damping: float | None = None
+    radial_refinement_tolerance: float | None = None
+    variable_scale_min: float | None = None
+    variable_scale_max: float | None = None
+    variable_scale_probes: int = 0
+
+
+class PolishContext(NamedTuple):
+    """Frozen chart and converged coordinates for implicit differentiation."""
+
+    runtime: StrongRootRuntime
+    chart: StrongPhysicalChart
+    correction: jax.Array
+    variable_scale: jax.Array
+
+
+class PolishResult(NamedTuple):
+    """Certified native state, report, full correction, and derivative context."""
+
+    native_equilibrium: HighOrderEquilibriumState
+    strong_force: StrongForceReport
+    polish_report: PolishReport
+    correction: jax.Array
+    context: PolishContext | None = None
+    compatibility_state: Any = None
+
+
+def polished_compatibility_state(legacy_state, result: PolishResult):
+    """Project a certified native correction onto the sampled WOUT mesh."""
+
+    if result.context is None or not np.asarray(result.correction).size:
+        return legacy_state
+    runtime = result.context.runtime
+    high = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * jnp.asarray(result.correction)
+    )
+    low = runtime.transfer.restrict(high)
+    return jax.tree.map(jnp.add, legacy_state, low)
+
+
+@dataclass(frozen=True)
+class _IdentityPreconditioner:
+    """Explicit identity action used to benchmark unpreconditioned JFNK."""
+
+    build_seconds: float = 0.0
+
+    def apply(self, rhs, alpha=1.0, dtau=jnp.inf):
+        del alpha, dtau
+        return rhs
+
+
+def _build_mode_block_preconditioner(
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart | None = None,
+) -> StrongModeBlockPreconditioner:
+    """Backward-compatible private seam for the shared block builder."""
+
+    if chart is None:
+        return build_strong_mode_block_preconditioner(runtime)
+    return build_strong_physical_block_preconditioner(runtime, chart)
+
+
+def _solve_residual(
+    vector: jax.Array,
+    runtime: StrongRootRuntime,
+    alpha: jax.Array,
+    chart: StrongPhysicalChart | None = None,
+) -> jax.Array:
+    """Evaluate either the legacy full chart or the structured physical chart."""
+
+    if chart is None:
+        return strong_root_residual(vector, runtime, alpha)
+    return strong_physical_residual(vector, runtime, chart, alpha)
+
+
+def _full_solve_vector(
+    vector: jax.Array,
+    chart: StrongPhysicalChart | None,
+) -> jax.Array:
+    """Lift physical solve coordinates into the existing full root layout."""
+
+    return jnp.asarray(vector) if chart is None else chart.lift(vector)
+
+
+def _continuation_precondition(
+    rhs: jax.Array,
+    alpha: jax.Array,
+    dtau: jax.Array,
+    runtime: StrongRootRuntime,
+    block_preconditioner: StrongModeBlockPreconditioner,
+    chart: StrongPhysicalChart | None = None,
+) -> jax.Array:
+    """Use the exact legacy inverse early and mode bands near strong force."""
+
+    if isinstance(block_preconditioner, _IdentityPreconditioner):
+        return rhs
+    if chart is not None:
+        return block_preconditioner.apply(rhs, alpha, dtau)
+    return jax.lax.cond(
+        jnp.asarray(alpha) < 0.5,
+        lambda value: _low_inverse(value, runtime),
+        lambda value: block_preconditioner.apply(value, alpha, dtau),
+        rhs,
+    )
+
+
+def _corrected_state(
+    vector: jax.Array,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart | None = None,
+):
+    vector = _full_solve_vector(vector, chart)
+    correction = runtime.layout.unpack(
+        jnp.asarray(runtime.coordinate_scale) * jnp.asarray(vector)
+    )
+    return apply_high_order_correction(runtime.native, correction)
+
+
+def _minimum_signed_jacobian(
+    vector: jax.Array,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart | None = None,
+) -> jax.Array:
+    state = _corrected_state(vector, runtime, chart)
+    rr, tt, zz = jnp.meshgrid(
+        jnp.asarray(runtime.radial_nodes),
+        jnp.asarray(runtime.theta),
+        jnp.asarray(runtime.zeta),
+        indexing="ij",
+    )
+    samples = evaluate_strong_force(state, rr, tt, zz)
+    signed = float(state.jacobian_sign) * samples.sqrt_g / jnp.maximum(rr, 1.0e-14)
+    return jnp.min(signed)
+
+
+def _low_inverse(rhs: jax.Array, runtime: StrongRootRuntime) -> jax.Array:
+    """Invert the row-scaled low endpoint in reduced vector coordinates."""
+
+    high_rhs = runtime.layout.unpack(
+        jnp.asarray(rhs) / jnp.asarray(runtime.equation_scale)
+    )
+    low_rhs = runtime.transfer.restrict(high_rhs)
+    solution = runtime.low_preconditioner.solve_scaled(low_rhs)
+    return runtime.layout.pack(runtime.transfer.prolong(solution)) / jnp.asarray(
+        runtime.coordinate_scale
+    )
+
+
+def _solve_low_inverse(
+    rhs: jax.Array,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart | None = None,
+) -> jax.Array:
+    """Apply the legacy inverse in the active solve-coordinate chart."""
+
+    if chart is None:
+        return _low_inverse(rhs, runtime)
+    full_rhs = jnp.asarray(chart.equation_basis) @ (
+        jnp.asarray(rhs) / jnp.asarray(chart.equation_scale)
+    )
+    full_solution = _low_inverse(full_rhs, runtime)
+    return (
+        jnp.asarray(chart.coordinate_basis).T @ full_solution
+    ) / jnp.asarray(chart.coordinate_scale)
+
+
+def _normalized_low_residual_norm(
+    residual: jax.Array,
+    runtime: StrongRootRuntime,
+    chart: StrongPhysicalChart | None = None,
+) -> jax.Array:
+    """Return the low-endpoint RMS before numerical row equilibration."""
+
+    equation_scale = (
+        runtime.equation_scale if chart is None else chart.equation_scale
+    )
+    size = runtime.layout.size if chart is None else chart.size
+    unscaled = jnp.asarray(residual) / jnp.asarray(equation_scale)
+    return jnp.linalg.norm(unscaled) / np.sqrt(float(size))
+
+
+def _ptc_config(config: PolishConfig, *, residual_scale: float) -> Any:
+    _, PseudoTransientConfig, _, _, _ = _solvax_continuation_api()
+    return PseudoTransientConfig(
+        rtol=config.tolerance,
+        # Couple the roundoff floor to a representative residual norm.  Both
+        # tolerances then transform with a harmless positive equation scaling:
+        # unlike a fixed absolute tolerance this cannot accept an unsolved
+        # stage, while unlike ``atol=0`` it does not chase alpha-zero roundoff.
+        # The independent dimensional certificate remains the final gate.
+        atol=config.tolerance * float(residual_scale),
+        max_steps=config.max_nonlinear_iterations,
+        initial_dt=config.ptc_initial_dtau,
+        max_dt=config.ptc_max_dtau,
+        max_backtracks=config.max_backtracks,
+        linear_restart=config.linear_restart,
+        linear_max_restarts=config.linear_max_restarts,
+    )
+
+
+def _continuation_config(config: PolishConfig) -> Any:
+    ContinuationConfig, _, _, _, _ = _solvax_continuation_api()
+    return ContinuationConfig(
+        target=1.0,
+        initial_step=config.alpha_initial_step,
+        min_step=config.alpha_min_step,
+        max_step=config.alpha_max_step,
+        max_stages=config.max_continuation_stages,
+    )
+
+
+def _branch_tangent(
+    vector: jax.Array,
+    alpha: float,
+    runtime: StrongRootRuntime,
+    config: PolishConfig,
+    previous: tuple[jax.Array, jax.Array] | None,
+    block_preconditioner: StrongModeBlockPreconditioner | None = None,
+    chart: StrongPhysicalChart | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    residual = lambda value: _solve_residual(  # noqa: E731
+        value, runtime, alpha, chart
+    )
+    _, jvp = jax.linearize(residual, vector)
+    parameter_direction = _solve_residual(
+        vector, runtime, 1.0, chart
+    ) - _solve_residual(vector, runtime, 0.0, chart)
+    if previous is None:
+        linear = gmres(
+            jvp,
+            -parameter_direction,
+            precond=(
+                (lambda value: _solve_low_inverse(value, runtime, chart))
+                if block_preconditioner is None
+                else lambda value: block_preconditioner.apply(value, alpha)
+            ),
+            restart=config.linear_restart,
+            rtol=min(1.0e-6, config.tolerance),
+            atol=config.tolerance,
+            max_restarts=config.linear_max_restarts,
+        )
+        linear_x = linear.x
+        linear_alpha = jnp.asarray(1.0, dtype=jnp.asarray(linear.x).dtype)
+    else:
+        previous_x, previous_alpha = previous
+
+        def bordered(value):
+            tangent_x, tangent_alpha = value
+            physical = jax.tree.map(
+                jnp.add,
+                jvp(tangent_x),
+                jax.tree.map(lambda item: item * tangent_alpha, parameter_direction),
+            )
+            normalization = (
+                jnp.vdot(previous_x, tangent_x).real
+                + previous_alpha * tangent_alpha
+            )
+            return physical, normalization
+
+        linear = gmres(
+            bordered,
+            (jnp.zeros_like(vector), jnp.asarray(1.0, dtype=vector.dtype)),
+            precond=lambda rhs: _bordered_preconditioner(
+                runtime, previous, block_preconditioner, chart
+            )((vector, jnp.asarray(alpha)), rhs, jnp.inf),
+            restart=config.linear_restart,
+            rtol=min(1.0e-6, config.tolerance),
+            atol=config.tolerance,
+            max_restarts=config.linear_max_restarts,
+        )
+        linear_x, linear_alpha = linear.x
+    if not bool(linear.converged):
+        raise StrongForceContinuationError(
+            "pseudo-arclength tangent solve did not converge",
+            hint="refine the radial representation or increase the linear budget",
+            alpha=float(alpha),
+            residual_norm=float(linear.residual_norm),
+            linear_iterations=int(linear.iterations),
+        )
+    tangent_x = jnp.asarray(linear_x)
+    tangent_alpha = jnp.asarray(linear_alpha, dtype=tangent_x.dtype)
+    norm = jnp.sqrt(jnp.vdot(tangent_x, tangent_x).real + tangent_alpha**2)
+    tangent_x, tangent_alpha = tangent_x / norm, tangent_alpha / norm
+    if previous is not None:
+        orientation = jnp.vdot(tangent_x, previous[0]).real + tangent_alpha * previous[1]
+        sign = jnp.where(orientation < 0.0, -1.0, 1.0)
+        tangent_x, tangent_alpha = sign * tangent_x, sign * tangent_alpha
+    return tangent_x, tangent_alpha
+
+
+def _bordered_preconditioner(
+    runtime: StrongRootRuntime,
+    tangent: tuple[jax.Array, jax.Array],
+    block_preconditioner: StrongModeBlockPreconditioner | None = None,
+    chart: StrongPhysicalChart | None = None,
+):
+    """Return a low-order block-elimination preconditioner for a bordered root."""
+
+    def apply(state, rhs, dtau):
+        return _apply_bordered_preconditioner(
+            state,
+            rhs,
+            dtau,
+            tangent,
+            runtime,
+            block_preconditioner,
+            chart,
+        )
+
+    return apply
+
+
+def _apply_bordered_preconditioner(
+    state,
+    rhs,
+    dtau,
+    tangent,
+    runtime: StrongRootRuntime,
+    block_preconditioner: StrongModeBlockPreconditioner | None = None,
+    chart: StrongPhysicalChart | None = None,
+):
+    """Apply bordered block elimination with dynamic branch data."""
+
+    vector, alpha = state
+    rhs_x, rhs_alpha = rhs
+    tangent_x, tangent_alpha = tangent
+    parameter_direction = _solve_residual(
+        vector, runtime, 1.0, chart
+    ) - _solve_residual(vector, runtime, 0.0, chart)
+    inverse = (
+        (lambda value: _solve_low_inverse(value, runtime, chart))
+        if block_preconditioner is None
+        else lambda value: block_preconditioner.apply(value, alpha, dtau)
+    )
+    q_rhs = inverse(rhs_x)
+    q_parameter = inverse(parameter_direction)
+    schur = tangent_alpha - jnp.vdot(tangent_x, q_parameter).real
+    tiny = jnp.sqrt(jnp.finfo(jnp.asarray(schur).dtype).eps)
+    safe_schur = jnp.where(
+        jnp.abs(schur) > tiny,
+        schur,
+        jnp.where(schur < 0.0, -tiny, tiny),
+    )
+    delta_alpha = (
+        rhs_alpha - jnp.vdot(tangent_x, q_rhs).real
+    ) / safe_schur
+    return q_rhs - q_parameter * delta_alpha, delta_alpha
+
+
+def _arclength_to_target(
+    vector: jax.Array,
+    alpha: float,
+    runtime: StrongRootRuntime,
+    config: PolishConfig,
+    admissible,
+    block_preconditioner: StrongModeBlockPreconditioner | None,
+    initial_tangent: tuple[jax.Array, jax.Array] | None,
+    chart: StrongPhysicalChart | None = None,
+):
+    _, _, _, pseudo_arclength_corrector, pseudo_transient_continuation = (
+        _solvax_continuation_api()
+    )
+    tangent = (
+        _branch_tangent(
+            vector,
+            alpha,
+            runtime,
+            config,
+            None,
+            block_preconditioner,
+            chart,
+        )
+        if initial_tangent is None
+        else initial_tangent
+    )
+    solve_size = runtime.layout.size if chart is None else chart.size
+    residual_scale = np.sqrt(float(solve_size)) / float(
+        runtime.operator_balance
+    )
+    nonlinear = _ptc_config(config, residual_scale=residual_scale)
+    total_nonlinear = total_linear = total_evaluations = 0
+    arclength_residual = lambda value, parameter: _solve_residual(  # noqa: E731
+        value, runtime, parameter, chart
+    )
+    arclength_admissible = lambda value, parameter: admissible(  # noqa: E731
+        value, parameter
+    )
+    parameterized_precondition = (  # noqa: E731
+        lambda state, rhs, dtau, branch_tangent, predictor: (
+            _apply_bordered_preconditioner(
+                state,
+                rhs,
+                dtau,
+                branch_tangent,
+                runtime,
+                block_preconditioner,
+                chart,
+            )
+        )
+    )
+    for step in range(config.max_arclength_steps):
+        predictor = (
+            vector + config.arclength_step * tangent[0],
+            jnp.asarray(alpha) + config.arclength_step * tangent[1],
+        )
+        if _supports_keyword(pseudo_arclength_corrector, "parameterized_precond"):
+            corrector_kwargs = {
+                "parameterized_precond": parameterized_precondition
+            }
+        elif _supports_keyword(pseudo_arclength_corrector, "precond"):
+            corrector_kwargs = {
+                "precond": _bordered_preconditioner(
+                    runtime, tangent, block_preconditioner, chart
+                )
+            }
+        else:
+            corrector_kwargs = {}
+        corrected = pseudo_arclength_corrector(
+            arclength_residual,
+            predictor,
+            tangent=tangent,
+            predictor=predictor,
+            config=nonlinear,
+            admissible=arclength_admissible,
+            **corrector_kwargs,
+        )
+        total_nonlinear += int(corrected.steps)
+        total_linear += int(corrected.linear_iterations)
+        total_evaluations += _residual_evaluations(corrected)
+        if not bool(corrected.converged) or not bool(corrected.linear_converged):
+            return vector, alpha, step, total_nonlinear, total_linear, total_evaluations
+        previous_alpha = alpha
+        vector, alpha_array = corrected.x
+        alpha = float(alpha_array)
+        if (previous_alpha - 1.0) * (alpha - 1.0) <= 0.0:
+            target = pseudo_transient_continuation(
+                lambda value: _solve_residual(value, runtime, 1.0, chart),
+                vector,
+                precond=(
+                    (
+                        lambda state, rhs, dtau: _solve_low_inverse(
+                            rhs, runtime, chart
+                        )
+                    )
+                    if block_preconditioner is None
+                    else lambda state, rhs, dtau: block_preconditioner.apply(
+                        rhs, 1.0, dtau
+                    )
+                ),
+                admissible=lambda value: admissible(value, 1.0),
+                config=nonlinear,
+            )
+            total_nonlinear += int(target.steps)
+            total_linear += int(target.linear_iterations)
+            total_evaluations += _residual_evaluations(target)
+            if bool(target.converged) and bool(target.linear_converged):
+                return (
+                    target.x,
+                    1.0,
+                    step + 1,
+                    total_nonlinear,
+                    total_linear,
+                    total_evaluations,
+                )
+        tangent = _branch_tangent(
+            vector,
+            alpha,
+            runtime,
+            config,
+            tangent,
+            block_preconditioner,
+            chart,
+        )
+    return (
+        vector,
+        alpha,
+        config.max_arclength_steps,
+        total_nonlinear,
+        total_linear,
+        total_evaluations,
+    )
+
+
+def polish_strong_root(
+    runtime: StrongRootRuntime,
+    *,
+    config: PolishConfig | None = None,
+    initial_certificate: StrongForceReport | None = None,
+    chart: StrongPhysicalChart | None = None,
+) -> PolishResult:
+    """Follow the legacy-connected fixed-boundary branch to strong force."""
+
+    config = PolishConfig() if config is None else config
+    started = perf_counter()
+    initial_certificate = (
+        certify_strong_force(runtime.native)
+        if initial_certificate is None
+        else initial_certificate
+    )
+    solve_size = runtime.layout.size if chart is None else chart.size
+    zero = jnp.zeros(
+        (solve_size,), dtype=jnp.asarray(runtime.native.R_cos).dtype
+    )
+    full_zero = jnp.zeros((runtime.layout.size,), dtype=zero.dtype)
+    if float(initial_certificate.normalized_l2) <= config.certificate_tolerance:
+        report = PolishReport(
+            converged=True,
+            termination_reason="already-certified",
+            final_alpha=1.0,
+            initial_normalized_l2=float(initial_certificate.normalized_l2),
+            final_normalized_l2=float(initial_certificate.normalized_l2),
+            continuation_accepted=0,
+            continuation_rejected=0,
+            nonlinear_iterations=0,
+            linear_iterations=0,
+            residual_evaluations=0,
+            arclength_steps=0,
+            minimum_signed_jacobian=float(initial_certificate.minimum_signed_jacobian),
+            factor_build_seconds=runtime.low_preconditioner.factor_build_seconds,
+            solve_seconds=perf_counter() - started,
+        )
+        return PolishResult(runtime.native, initial_certificate, report, full_zero)
+    _, _, adaptive_continuation, _, pseudo_transient_continuation = (
+        _solvax_continuation_api()
+    )
+    initial_margin = float(_minimum_signed_jacobian(zero, runtime, chart))
+    if config.preconditioner == "mode-block":
+        block_preconditioner = _build_mode_block_preconditioner(runtime, chart)
+    elif config.preconditioner == "none":
+        block_preconditioner = _IdentityPreconditioner()
+    else:
+        block_preconditioner = None
+    factor_build_seconds = (
+        runtime.low_preconditioner.factor_build_seconds
+        + (0.0 if block_preconditioner is None else block_preconditioner.build_seconds)
+    )
+    margin_floor = max(
+        config.minimum_jacobian_floor,
+        config.minimum_jacobian_ratio * initial_margin,
+    )
+
+    def admissible(vector, alpha):
+        del alpha
+        residual = _solve_residual(vector, runtime, 1.0, chart)
+        return (
+            jnp.all(jnp.isfinite(vector))
+            & jnp.all(jnp.isfinite(residual))
+            & (_minimum_signed_jacobian(vector, runtime, chart) >= margin_floor)
+        )
+
+    residual_scale = np.sqrt(float(solve_size)) / float(
+        runtime.operator_balance
+    )
+    nonlinear = _ptc_config(config, residual_scale=residual_scale)
+    precondition = (  # noqa: E731
+        (lambda state, rhs, dtau: rhs)
+        if config.preconditioner == "none"
+        else lambda state, rhs, dtau: _solve_low_inverse(rhs, runtime, chart)
+    )
+    # The low homotopy endpoint subtracts the stored legacy defect, so zero is
+    # its mathematical root.  Roundoff from restrict/project/prolong may leave
+    # a tiny row-equilibrated remainder.  Check that remainder before row
+    # scaling and avoid asking PTC to reduce it below floating-point noise.
+    # A genuinely inconsistent endpoint still takes the globalized solve.
+    endpoint_residual = _solve_residual(zero, runtime, 0.0, chart)
+    endpoint_solved = float(
+        _normalized_low_residual_norm(endpoint_residual, runtime, chart)
+    ) <= config.tolerance
+    if endpoint_solved:
+        vector = zero
+        nonlinear_iterations = 0
+        linear_iterations = 0
+        residual_evaluations = 1
+        converged = True
+    else:
+        endpoint = pseudo_transient_continuation(
+            lambda vector: _solve_residual(vector, runtime, 0.0, chart),
+            zero,
+            precond=precondition,
+            admissible=lambda vector: admissible(vector, 0.0),
+            config=nonlinear,
+        )
+        vector = endpoint.x
+        nonlinear_iterations = int(endpoint.steps)
+        linear_iterations = int(endpoint.linear_iterations)
+        residual_evaluations = 1 + _residual_evaluations(endpoint)
+        converged = bool(endpoint.converged) and bool(endpoint.linear_converged)
+    steps: tuple[Any, ...] = ()
+    arclength_steps = 0
+    alpha = 0.0
+    reason = "alpha-zero-failed"
+    if converged:
+        accepted_states: list[tuple[jax.Array, float]] = [(vector, 0.0)]
+
+        def record_accepted_state(candidate, parameter, solution):
+            del solution
+            accepted_states.append((candidate, float(parameter)))
+            return True
+
+        # Kwargs for adaptive_continuation: the two spellings carry
+        # different callable arities, so the annotation is deliberately Any.
+        continuation_preconditioners: dict[str, Any] = (
+            {"precond": precondition}
+            if block_preconditioner is None
+            or not _supports_keyword(
+                adaptive_continuation, "parameterized_precond"
+            )
+            else {
+                "parameterized_precond": (
+                    lambda state, rhs, dtau, parameter: _continuation_precondition(
+                        rhs,
+                        parameter,
+                        dtau,
+                        runtime,
+                        block_preconditioner,
+                        chart,
+                    )
+                )
+            }
+        )
+        continuation = adaptive_continuation(
+            lambda value, parameter: _solve_residual(
+                value, runtime, parameter, chart
+            ),
+            vector,
+            alpha0=0.0,
+            nonlinear_config=nonlinear,
+            continuation_config=_continuation_config(config),
+            admissible=admissible,
+            accept_stage=record_accepted_state,
+            **continuation_preconditioners,
+        )
+        steps = continuation.steps
+        vector, alpha = continuation.x, continuation.alpha
+        nonlinear_iterations += sum(stage.nonlinear_steps for stage in steps)
+        linear_iterations += sum(stage.linear_iterations for stage in steps)
+        residual_evaluations += sum(_residual_evaluations(stage) for stage in steps)
+        converged = continuation.converged
+        reason = "strong-root" if converged else "continuation-stalled"
+        if not converged and config.use_pseudo_arclength:
+            initial_tangent = None
+            if len(accepted_states) >= 2:
+                previous_vector, previous_alpha = accepted_states[-2]
+                delta_vector = vector - previous_vector
+                delta_alpha = jnp.asarray(alpha - previous_alpha)
+                tangent_norm = jnp.sqrt(
+                    jnp.vdot(delta_vector, delta_vector).real + delta_alpha**2
+                )
+                initial_tangent = (
+                    delta_vector / tangent_norm,
+                    delta_alpha / tangent_norm,
+                )
+            try:
+                (
+                    vector,
+                    alpha,
+                    arclength_steps,
+                    arc_nonlinear,
+                    arc_linear,
+                    arc_evaluations,
+                ) = _arclength_to_target(
+                    vector,
+                    alpha,
+                    runtime,
+                    config,
+                    admissible,
+                    block_preconditioner,
+                    initial_tangent,
+                    chart,
+                )
+            except StrongForceContinuationError:
+                reason = "pseudo-arclength-tangent-failed"
+            else:
+                nonlinear_iterations += arc_nonlinear
+                linear_iterations += arc_linear
+                residual_evaluations += arc_evaluations
+                converged = alpha == 1.0
+                reason = (
+                    "pseudo-arclength" if converged else "pseudo-arclength-stalled"
+                )
+
+    accepted = sum(stage.accepted for stage in steps)
+    rejected = len(steps) - accepted
+    if not converged:
+        report = PolishReport(
+            converged=False,
+            termination_reason=reason,
+            final_alpha=float(alpha),
+            initial_normalized_l2=float(initial_certificate.normalized_l2),
+            final_normalized_l2=float(initial_certificate.normalized_l2),
+            continuation_accepted=accepted,
+            continuation_rejected=rejected,
+            nonlinear_iterations=nonlinear_iterations,
+            linear_iterations=linear_iterations,
+            residual_evaluations=residual_evaluations,
+            arclength_steps=arclength_steps,
+            minimum_signed_jacobian=float(
+                _minimum_signed_jacobian(vector, runtime, chart)
+            ),
+            factor_build_seconds=factor_build_seconds,
+            solve_seconds=perf_counter() - started,
+        )
+        if config.fail_policy == "raise":
+            raise StrongForceContinuationError(
+                "strong-force continuation did not reach alpha=1",
+                hint="inspect the continuation report and refine the radial representation",
+                alpha=float(alpha),
+                residual_norm=float(
+                    jnp.linalg.norm(
+                        _solve_residual(vector, runtime, alpha, chart)
+                    )
+                ),
+                nonlinear_iterations=nonlinear_iterations,
+                linear_iterations=linear_iterations,
+                accepted_stages=accepted,
+                rejected_stages=rejected,
+            )
+        return PolishResult(runtime.native, initial_certificate, report, full_zero)
+
+    state = _corrected_state(vector, runtime, chart)
+    certificate = certify_strong_force(state)
+    certified = float(certificate.normalized_l2) <= config.certificate_tolerance
+    report = PolishReport(
+        converged=certified,
+        termination_reason="certified" if certified else "certification-failed",
+        final_alpha=1.0,
+        initial_normalized_l2=float(initial_certificate.normalized_l2),
+        final_normalized_l2=float(certificate.normalized_l2),
+        continuation_accepted=accepted,
+        continuation_rejected=rejected,
+        nonlinear_iterations=nonlinear_iterations,
+        linear_iterations=linear_iterations,
+        residual_evaluations=residual_evaluations,
+        arclength_steps=arclength_steps,
+        minimum_signed_jacobian=float(certificate.minimum_signed_jacobian),
+        factor_build_seconds=factor_build_seconds,
+        solve_seconds=perf_counter() - started,
+    )
+    if not certified and config.fail_policy == "raise":
+        raise StrongForceCertificationError(
+            "strong root failed the independent force certificate",
+            hint="increase radial degree/resolution and retry once",
+            normalized_l2=float(certificate.normalized_l2),
+            tolerance=config.certificate_tolerance,
+        )
+    if not certified:
+        return PolishResult(runtime.native, initial_certificate, report, full_zero)
+    return PolishResult(
+        state,
+        certificate,
+        report,
+        _full_solve_vector(vector, chart),
+    )
+
+
+def _collocation_variable_scale(
+    residual,
+    zero: jax.Array,
+    row_count: int,
+    probes: int,
+) -> np.ndarray:
+    """Estimate inverse column norms with deterministic transpose probes."""
+
+    if probes == 0:
+        return np.ones(np.asarray(zero).shape, dtype=float)
+    _, jvp = jax.linearize(residual, jnp.asarray(zero))
+    transpose = jax.linear_transpose(jvp, jnp.asarray(zero))
+    generator = np.random.default_rng(0)
+    column_squared = np.zeros(np.asarray(zero).shape, dtype=float)
+    for _ in range(probes):
+        probe = generator.choice(np.asarray([-1.0, 1.0]), size=row_count)
+        response = np.asarray(transpose(jnp.asarray(probe))[0])
+        column_squared += response * response
+    column_norm = np.sqrt(column_squared / float(probes))
+    column_floor = max(1.0e-8 * float(np.max(column_norm)), 1.0e-12)
+    return 1.0 / np.maximum(column_norm, column_floor)
+
+
+def polish_collocation_least_squares(
+    runtime: StrongRootRuntime,
+    *,
+    config: PolishConfig | None = None,
+    chart: StrongPhysicalChart | None = None,
+    initial_certificate: StrongForceReport | None = None,
+) -> PolishResult:
+    """Solve and certify the overdetermined physical force residual.
+
+    The residual exposes both independent force channels at every collocation
+    point. SOLVAX applies matrix-free JVP/VJP normal products; no dense
+    Jacobian is formed. The returned correction uses the full constrained
+    layout so it composes with the existing native-state utilities.
+    """
+
+    from solvax import LeastSquaresConfig, gauss_newton_least_squares
+
+    config = PolishConfig() if config is None else config
+    chart = make_strong_structured_chart(runtime) if chart is None else chart
+    initial_certificate = (
+        certify_strong_force(runtime.native)
+        if initial_certificate is None
+        else initial_certificate
+    )
+    zero = jnp.zeros((chart.size,), dtype=jnp.asarray(runtime.native.R_cos).dtype)
+    initial_collocation = strong_collocation_residual(zero, runtime, chart)
+    collocation_scale = max(
+        float(jnp.linalg.norm(initial_collocation))
+        / np.sqrt(float(initial_collocation.size)),
+        1.0e-12,
+    )
+    physical_residual = jax.jit(
+        lambda value: (
+            strong_collocation_residual(value, runtime, chart) / collocation_scale
+        )
+    )
+    variable_scale = _collocation_variable_scale(
+        physical_residual,
+        zero,
+        int(initial_collocation.size),
+        config.collocation_scale_probes,
+    )
+    variable_scale_array = jnp.asarray(variable_scale)
+    transformed_residual = jax.jit(
+        lambda value: physical_residual(variable_scale_array * value)
+    )
+    least_squares_config = LeastSquaresConfig(
+        rtol=config.tolerance,
+        max_steps=config.max_nonlinear_iterations,
+        initial_damping=config.least_squares_initial_damping,
+        linear_rtol=1.0e-3,
+        linear_max_steps=max(
+            config.linear_restart * config.linear_max_restarts,
+            1,
+        ),
+    )
+    started = perf_counter()
+    solution = jax.jit(
+        lambda value: gauss_newton_least_squares(
+            transformed_residual,
+            value,
+            config=least_squares_config,
+        )
+    )(zero)
+    jax.block_until_ready(solution)
+    vector = variable_scale_array * solution.x
+    state = _corrected_state(vector, runtime, chart)
+    certificate = certify_strong_force(state)
+    independently_certified = bool(
+        float(certificate.normalized_l2) <= config.certificate_tolerance
+        and float(certificate.radial_refinement_difference)
+        <= config.radial_refinement_tolerance
+        and float(certificate.minimum_signed_jacobian) > 0.0
+    )
+    converged = bool(solution.converged) and independently_certified
+    report = PolishReport(
+        converged=converged,
+        termination_reason=(
+            "independently-certified"
+            if converged
+            else "solvax-collocation-least-squares"
+        ),
+        final_alpha=1.0,
+        initial_normalized_l2=float(initial_certificate.normalized_l2),
+        final_normalized_l2=float(certificate.normalized_l2),
+        continuation_accepted=int(solution.accepted_steps),
+        continuation_rejected=int(solution.rejected_steps),
+        nonlinear_iterations=int(solution.steps),
+        linear_iterations=int(solution.linear_iterations),
+        residual_evaluations=int(solution.steps) + 1,
+        arclength_steps=0,
+        minimum_signed_jacobian=float(certificate.minimum_signed_jacobian),
+        factor_build_seconds=runtime.low_preconditioner.factor_build_seconds,
+        solve_seconds=perf_counter() - started,
+        least_squares_cost=float(solution.cost),
+        least_squares_optimality=float(solution.gradient_norm),
+        least_squares_initial_optimality=float(solution.history.gradient_norm[0]),
+        least_squares_relative_optimality=float(
+            solution.gradient_norm
+            / jnp.maximum(solution.history.gradient_norm[0], 1.0e-300)
+        ),
+        least_squares_success=bool(solution.converged),
+        least_squares_damping=float(solution.damping),
+        radial_refinement_tolerance=config.radial_refinement_tolerance,
+        variable_scale_min=float(np.min(variable_scale)),
+        variable_scale_max=float(np.max(variable_scale)),
+        variable_scale_probes=config.collocation_scale_probes,
+    )
+    if converged:
+        return PolishResult(
+            state,
+            certificate,
+            report,
+            chart.lift(vector),
+            PolishContext(runtime, chart, vector, variable_scale_array),
+        )
+    if config.fail_policy == "raise":
+        raise StrongForceCertificationError(
+            "collocation polish failed its stationarity or force certificate",
+            hint="inspect the polish report and refine the radial representation",
+            solver_converged=bool(solution.converged),
+            normalized_l2=float(certificate.normalized_l2),
+            tolerance=config.certificate_tolerance,
+            radial_refinement=float(certificate.radial_refinement_difference),
+            radial_refinement_tolerance=config.radial_refinement_tolerance,
+        )
+    return PolishResult(
+        runtime.native, initial_certificate, report, jnp.zeros_like(chart.lift(zero))
+    )
+
+
+def polish_legacy_solution(
+    source,
+    resolution,
+    legacy_state,
+    *,
+    config: PolishConfig | None = None,
+    lconm1: bool = True,
+) -> PolishResult:
+    """Refine and lift one converged legacy solve, then run the strong driver."""
+
+    started = perf_counter()
+    from . import implicit
+    from .input import VmecInput
+    from .radial_basis import BSplineBasis
+    from .strong_force import certify_strong_force, lift_high_order_state
+
+    if not isinstance(source, VmecInput):
+        raise TypeError("strong-force polishing requires a VmecInput source")
+    config = PolishConfig() if config is None else config
+    implicit_config = implicit.make_config(
+        source,
+        ns=int(resolution.ns),
+        lconm1=bool(lconm1),
+        multigrid=False,
+    )
+    params = implicit.params_from_input(source)
+    legacy_runtime = implicit.runtime_from_params(params, implicit_config)
+    dof_mask = implicit._dof_mask(legacy_state, legacy_runtime, implicit_config)
+    refined_state = implicit._refined_state(
+        implicit_config,
+        params,
+        legacy_state,
+        dof_mask,
+    )
+    # Certification is a reconstruction problem, not a requirement to retain
+    # one spline coefficient per legacy sample. Evaluate the stable,
+    # overdetermined lift first; an already-certified result needs neither the
+    # compatibility chart nor a factorization. The empty correction records
+    # that no root coordinates were constructed or applied.
+    radial_basis = (
+        None
+        if config.radial_spans is None
+        else BSplineBasis.clamped(
+            np.linspace(0.0, 1.0, config.radial_spans + 1),
+            degree=config.radial_degree,
+            quadrature_order=(
+                config.radial_degree + 3
+                if config.radial_quadrature_order is None
+                else config.radial_quadrature_order
+            ),
+        )
+    )
+    certified_native = lift_high_order_state(
+        refined_state,
+        legacy_runtime,
+        radial_basis=radial_basis,
+        degree=config.radial_degree,
+    )
+    initial_certificate = certify_strong_force(certified_native)
+    if float(initial_certificate.normalized_l2) <= config.certificate_tolerance:
+        report = PolishReport(
+            converged=True,
+            termination_reason="already-certified",
+            final_alpha=1.0,
+            initial_normalized_l2=float(initial_certificate.normalized_l2),
+            final_normalized_l2=float(initial_certificate.normalized_l2),
+            continuation_accepted=0,
+            continuation_rejected=0,
+            nonlinear_iterations=0,
+            linear_iterations=0,
+            residual_evaluations=0,
+            arclength_steps=0,
+            minimum_signed_jacobian=float(initial_certificate.minimum_signed_jacobian),
+            factor_build_seconds=0.0,
+            solve_seconds=perf_counter() - started,
+        )
+        return PolishResult(
+            certified_native,
+            initial_certificate,
+            report,
+            jnp.zeros((0,), dtype=jnp.asarray(refined_state.R_cos).dtype),
+            None,
+            refined_state,
+        )
+    native = certified_native
+    low_preconditioner = build_low_order_preconditioner(
+        native,
+        params,
+        implicit_config,
+        refined_state,
+        dof_mask,
+        probe_chunk_size=4,
+    )
+    runtime = make_strong_root_runtime(
+        native,
+        low_preconditioner,
+        dof_mask,
+        balance_full_root=False,
+        radial_quadrature_order=config.radial_quadrature_order,
+    )
+    result = polish_collocation_least_squares(
+        runtime,
+        config=config,
+        initial_certificate=initial_certificate,
+    )
+    return result._replace(
+        compatibility_state=polished_compatibility_state(refined_state, result)
+    )
+
+
+__all__ = [
+    "PolishConfig",
+    "PolishContext",
+    "PolishReport",
+    "PolishResult",
+    "polish_collocation_least_squares",
+    "polish_legacy_solution",
+    "polished_compatibility_state",
+    "polish_strong_root",
+]

@@ -140,6 +140,25 @@ _KNOWN_INDATA_NAMES = {
     "RESTART_WOUT",
 }
 
+_VMEX_POLISH_DIRECTIVE = re.compile(
+    r"^\s*!\s*VMEX\s*:\s*POLISH_FORCE_BALANCE\s*=\s*([^\s,!]+)",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _polish_force_balance_directive(text: str) -> bool:
+    """Read the VMEX-only polish flag from a VMEC-safe comment."""
+
+    matches = _VMEX_POLISH_DIRECTIVE.findall(text)
+    if not matches:
+        return False
+    values = [_parse_scalar(token) for token in matches]
+    if any(not isinstance(value, bool) for value in values):
+        raise ValueError("POLISH_FORCE_BALANCE must be true or false")
+    if len(set(values)) != 1:
+        raise ValueError("conflicting VMEX POLISH_FORCE_BALANCE directives")
+    return bool(values[0])
+
 
 def _strip_fortran_comments(line: str) -> str:
     """Remove ``!`` comments outside single- or double-quoted strings."""
@@ -763,6 +782,7 @@ class VmecInput:
 
     # -- VMEX extension: hot restart (no VMEC2000 equivalent) --
     restart_wout: str = ""       #: wout path to seed the solve from ('' = cold)
+    polish_force_balance: bool = False  #: high-order post-solve correction
 
     def __post_init__(self) -> None:
         set_ = object.__setattr__
@@ -782,6 +802,7 @@ class VmecInput:
         set_(self, "precon_type", str(self.precon_type).strip())
         set_(self, "mgrid_file", str(self.mgrid_file).strip())
         set_(self, "restart_wout", str(self.restart_wout).strip())
+        set_(self, "polish_force_balance", bool(self.polish_force_balance))
 
         # readin.f stops at the first nonpositive or decreasing entry; later
         # values are outside multi_ns_grid and never reach runvmec.f.
@@ -938,6 +959,7 @@ class VmecInput:
     @classmethod
     def from_indata_text(cls, text: str) -> "VmecInput":
         """Build from ``&INDATA`` namelist text (VMEC2000 read_indata_namelist)."""
+        polish_force_balance = _polish_force_balance_directive(text)
         scalars, indexed = _read_indata_text(text)
         _validate_indata_modes(scalars, indexed)
 
@@ -1109,6 +1131,7 @@ class VmecInput:
             precon_type=str(get("PRECON_TYPE", "NONE")),
             prec2d_threshold=float(get("PREC2D_THRESHOLD", 1e-30)),
             restart_wout=str(get("RESTART_WOUT", "")),
+            polish_force_balance=polish_force_balance,
         )
 
     @classmethod
@@ -1200,7 +1223,11 @@ class VmecInput:
                 return f"{float(value):.17E}"
             return "'" + str(value).replace("'", "''") + "'"
 
-        lines: List[str] = ["&INDATA"]
+        lines: List[str] = [
+            "! VMEX: POLISH_FORCE_BALANCE = "
+            + (".TRUE." if self.polish_force_balance else ".FALSE."),
+            "&INDATA",
+        ]
 
         def put(name: str, value) -> None:
             if isinstance(value, np.ndarray):

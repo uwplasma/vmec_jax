@@ -12,19 +12,24 @@ import numpy as np
 import pytest
 
 from vmex.core.fourier import Resolution
+from vmex.core.boozer_tables import high_order_boozer_input_tables
 from vmex.core.input import VmecInput
+from vmex.core.omnigenity import boozer_bmnc_high_order
 from vmex.core.profiles import MU0
 from vmex.core.radial_basis import BSplineBasis
 from vmex.core.solver import _initial_state, prepare_runtime, resolution_from_input
 from vmex.core.strong_force import (
     HighOrderEquilibriumState,
     certify_strong_force,
+    evaluate_high_order_fields,
+    evaluate_high_order_surface,
     evaluate_strong_force,
     high_order_state_from_wout,
     lift_high_order_state,
     plot_strong_force_report,
 )
 from vmex.core.wout import wout_from_state
+from vmex.core.virtual_casing import surface_field_data_from_high_order
 
 jax.config.update("jax_enable_x64", True)
 
@@ -89,6 +94,147 @@ def test_constant_toroidal_field_matches_analytic_current_and_force():
     np.testing.assert_allclose(result.force, expected_force, rtol=2e-11, atol=2e-7)
     assert np.all(np.isfinite(result.force_rho))
     assert np.all(np.isfinite(result.force_helical))
+
+
+def test_native_field_view_matches_analytic_geometry_and_force_view():
+    state = _constant_toroidal_field_state()
+    rho = jnp.asarray([0.2, 0.7])
+    theta = jnp.asarray([0.4, 2.1])
+    zeta = jnp.asarray([0.3, 1.7])
+    native = evaluate_high_order_fields(state, rho, theta, zeta)
+    force = evaluate_strong_force(state, rho, theta, zeta)
+
+    radius = 10.0 + rho * jnp.cos(theta)
+    expected_position = jnp.stack(
+        (radius * jnp.cos(zeta), radius * jnp.sin(zeta), rho * jnp.sin(theta)),
+        axis=-1,
+    )
+    np.testing.assert_allclose(native.position, expected_position, rtol=2e-13, atol=2e-13)
+    np.testing.assert_allclose(native.B, force.B, rtol=2e-13, atol=2e-13)
+    np.testing.assert_allclose(native.sqrt_g, force.sqrt_g, rtol=2e-13, atol=2e-13)
+    assert native.dposition_drho.shape == native.position.shape
+    assert native.dposition_dtheta.shape == native.position.shape
+    assert native.dposition_dphi.shape == native.position.shape
+
+
+def test_axisymmetric_fields_are_invariant_to_field_period_coordinates():
+    """Changing only zeta=nfp*phi cannot change an axisymmetric equilibrium."""
+    base = _constant_toroidal_field_state()
+    current = jnp.full_like(base.chipf, 0.2)
+    one_period = replace(base, chipf=current, nfp=1)
+    three_periods = replace(base, chipf=current, nfp=3)
+    rho = jnp.asarray([0.2, 0.7])
+    theta = jnp.asarray([0.4, 2.1])
+    phi = jnp.asarray([0.3, 1.7])
+
+    one = evaluate_strong_force(one_period, rho, theta, phi)
+    three = evaluate_strong_force(three_periods, rho, theta, 3.0 * phi)
+    np.testing.assert_allclose(three.B, one.B, rtol=3e-13, atol=3e-13)
+    np.testing.assert_allclose(three.J, one.J, rtol=3e-12, atol=3e-7)
+    np.testing.assert_allclose(three.force, one.force, rtol=3e-12, atol=3e-7)
+
+
+def test_high_order_surface_handoff_is_analytic_and_tangent():
+    native = evaluate_high_order_surface(
+        _constant_toroidal_field_state(),
+        nphi=8,
+        ntheta=10,
+    )
+    surface = surface_field_data_from_high_order(
+        _constant_toroidal_field_state(),
+        nphi=8,
+        ntheta=10,
+    )
+    assert native.gamma.shape == (8, 10, 3)
+    assert surface.gamma.shape == (3, 8, 10)
+    np.testing.assert_allclose(
+        native.gamma,
+        jnp.moveaxis(surface.gamma, 0, -1),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        jnp.linalg.norm(surface.normal, axis=0),
+        1.0,
+        rtol=2e-13,
+        atol=2e-13,
+    )
+    normal_field = jnp.sum(surface.B_total * surface.normal, axis=0)
+    assert float(jnp.max(jnp.abs(normal_field))) < 2.0e-13
+    assert native.nphi == 8
+    assert native.ntheta == 10
+    assert surface.source_convention == "vmex_high_order"
+
+
+def test_high_order_surface_composes_with_essos_objective():
+    essos_surfaces = pytest.importorskip("essos.surfaces")
+    squared_flux = getattr(essos_surfaces, "SquaredFlux", None)
+    if squared_flux is None:
+        pytest.skip("SquaredFlux is not part of released ESSOS 0.16")
+
+    @jax.tree_util.register_pytree_node_class
+    class PositionDependentField:
+        def B(self, point):
+            return jnp.asarray([point[0], 0.0, 1.0])
+
+        def tree_flatten(self):
+            return (), None
+
+        @classmethod
+        def tree_unflatten(cls, _metadata, _children):
+            return cls()
+
+    state = _constant_toroidal_field_state()
+
+    def objective(delta):
+        candidate = replace(
+            state,
+            R_cos=state.R_cos.at[0].add(delta),
+        )
+        surface = evaluate_high_order_surface(candidate, nphi=8, ntheta=10)
+        return squared_flux(
+            surface,
+            PositionDependentField(),
+            definition="local",
+        )
+
+    derivative = jax.grad(objective)(0.0)
+    step = 1.0e-5
+    finite_difference = (objective(step) - objective(-step)) / (2.0 * step)
+    np.testing.assert_allclose(derivative, finite_difference, rtol=2e-7, atol=2e-9)
+
+
+def test_high_order_boozer_handoff_is_exact_and_differentiable():
+    state = _constant_toroidal_field_state()
+    tables = high_order_boozer_input_tables(
+        state,
+        0.7,
+        ntheta=12,
+        nzeta=8,
+    )
+    np.testing.assert_allclose(tables["bmnc"][0], 1.0, rtol=2e-13, atol=2e-13)
+    assert float(jnp.max(jnp.abs(tables["bmnc"][1:]))) < 1.0e-13
+
+    def objective(scale):
+        candidate = replace(state, phipf=scale * state.phipf)
+        boozer = boozer_bmnc_high_order(
+            candidate,
+            surfaces=[0.49],
+            mboz=4,
+            nboz=2,
+            ntheta=12,
+            nzeta=8,
+        )
+        zero = np.flatnonzero(
+            (boozer["xm_b"] == 0) & (boozer["xn_b"] == 0)
+        )[0]
+        return boozer["bmnc_b"][0, zero]
+
+    derivative = jax.grad(objective)(1.0)
+    step = 1.0e-5
+    finite_difference = (objective(1.0 + step) - objective(1.0 - step)) / (2.0 * step)
+    np.testing.assert_allclose(objective(1.0), 1.0, rtol=2e-13, atol=2e-13)
+    np.testing.assert_allclose(derivative, finite_difference, rtol=2e-9, atol=2e-11)
 
 
 def test_independent_oracle_agrees_with_desc_pointwise_current_and_force():
@@ -238,6 +384,34 @@ def test_legacy_lift_preserves_axis_boundary_and_lambda_gauge():
         radial_basis=high_order.radial_basis,
     )
     np.testing.assert_allclose(imported.boundary_R_cos, high_order.boundary_R_cos, rtol=0.0, atol=2e-13)
+
+
+def test_legacy_lift_is_overdetermined_for_stable_second_derivatives():
+    """The default must smooth first-order mesh noise, not interpolate it."""
+
+    inp = VmecInput.from_file("examples/data/input.solovev").change_resolution(
+        mpol=3, ntor=0, ntheta=12, nzeta=4
+    )
+    resolution = replace(resolution_from_input(inp), ns=11)
+    runtime = prepare_runtime(inp, resolution)
+    lifted = lift_high_order_state(
+        _initial_state(runtime.setup), runtime, degree=5
+    )
+    interpolating = lift_high_order_state(
+        _initial_state(runtime.setup),
+        runtime,
+        radial_basis=BSplineBasis.clamped(np.linspace(0.0, 1.0, 7), degree=5),
+        degree=5,
+    )
+    stable = certify_strong_force(lifted)
+    unstable = certify_strong_force(interpolating)
+    assert lifted.radial_basis.size == 8
+    assert lifted.radial_basis.size < resolution.ns
+    assert float(stable.absolute_l2) < 1.0e-2 * float(unstable.absolute_l2)
+    assert float(stable.radial_refinement_difference) < 1.0e-8
+    assert float(stable.minimum_signed_jacobian) > 10.0 * float(
+        unstable.minimum_signed_jacobian
+    )
 
 
 @pytest.mark.parametrize("name", ["R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin"])

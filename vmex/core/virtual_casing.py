@@ -106,6 +106,7 @@ __all__ = [
     "VmecSurfaceFieldData",
     "surface_field_data_from_wout",
     "surface_field_data_from_state",
+    "surface_field_data_from_high_order",
     "plasma_field_on_boundary",
     "PlasmaVacuumInterface",
     "FreeBoundaryDiffProblem",
@@ -451,6 +452,36 @@ def surface_field_data_from_state(
     return _assemble_surface_field_data(
         **spectra, j=int(s_index % spectra["ns"]), use_stellsym=use_stellsym,
         nphi=nphi, ntheta=ntheta, source_convention="vmex_state")
+
+
+def surface_field_data_from_high_order(
+    state,
+    *,
+    nphi: int = 32,
+    ntheta: int = 32,
+    use_stellsym: bool = True,
+) -> "VmecSurfaceFieldData":
+    """Build virtual-casing surface data directly from a polished native state.
+
+    Geometry tangents and the edge field come from the continuous high-order
+    representation. No sampled wout tables or finite differences are used.
+    """
+
+    from .strong_force import evaluate_high_order_surface
+
+    surface = evaluate_high_order_surface(state, nphi=nphi, ntheta=ntheta)
+    return VmecSurfaceFieldData(
+        gamma=jnp.moveaxis(surface.gamma, -1, 0),
+        B_total=jnp.moveaxis(surface.B_total, -1, 0),
+        normal=jnp.moveaxis(surface.unitnormal, -1, 0),
+        area_vector=jnp.moveaxis(surface.normal, -1, 0),
+        theta=surface.theta,
+        phi=surface.phi,
+        nfp=int(state.nfp),
+        stellsym=bool(use_stellsym),
+        signgs=int(state.jacobian_sign),
+        source_convention="vmex_high_order",
+    )
 
 
 # ---------------------------------------------------------------------------

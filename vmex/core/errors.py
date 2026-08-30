@@ -168,6 +168,43 @@ class AdjointSolveError(VmecNumericalError):
 
 
 @dataclass
+class StrongForceContinuationError(VmecNumericalError):
+    """The branch-preserving strong-force correction did not reach alpha=1."""
+
+    alpha: float = 0.0
+    residual_norm: float = 0.0
+    nonlinear_iterations: int = 0
+    linear_iterations: int = 0
+    accepted_stages: int = 0
+    rejected_stages: int = 0
+
+
+@dataclass
+class StrongForceCertificationError(VmecNumericalError):
+    """Collocation stationarity or its independent force certificate failed.
+
+    ``solver_converged`` distinguishes failure of ``J.T r = 0`` from failure
+    of either overintegrated certificate threshold.
+    """
+
+    solver_converged: bool = False
+    normalized_l2: float = float("inf")
+    tolerance: float = 0.0
+    radial_refinement: float = float("inf")
+    radial_refinement_tolerance: float = 0.0
+
+
+@dataclass
+class StrongForceLinearSolveError(VmecNumericalError):
+    """A polished-root tangent or adjoint Krylov solve did not converge."""
+
+    solve_kind: str = "tangent"
+    iterations: int = 0
+    residual_norm: float = 0.0
+    tolerance: float = 0.0
+
+
+@dataclass
 class MgridNotFoundError(VmecError):
     """A free-boundary run referenced an mgrid file that cannot be read.
 

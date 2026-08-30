@@ -3802,3 +3802,81 @@ supersedes older instructions to keep #125 open indefinitely.
 - 2026-08-29 rogeriojorge: finalized PR #125 for merge; recorded the independent
   force-balance literature/conditioning review, clean scientific restack,
   WSL2 remediation, and conservative CI-scoping decision.
+
+### Consolidation checkpoint — 2026-08-29
+
+- The experimental stack is consolidated into VMEX PR #192. Its production
+  path uses the certified rectangular SOLVAX least-squares solve, and its
+  tangent, adjoint, and custom VJP differentiate the same `J.T r = 0`
+  stationarity equation, including the nonzero-residual Hessian term.
+- The reviewer figure now compares analytical Solov'ev and a finite-beta QA
+  stellarator against VMEC2000, VMEC++, and adequately resolved DESC results.
+  It reports equation-defined relative force error, volume-L2 force error, and
+  cold runtime with short factual titles. Standard WOUT plotting combines
+  pressure and parallel current, uses the third top panel for relative force
+  error, and prints its maximum in the equilibrium summary for vacuum and
+  finite-beta cases.
+- Native polished field and surface views feed BOOZ_XFORM_JAX,
+  VIRTUAL_CASING_JAX, and ESSOS without WOUT round trips or finite-difference
+  tangents. The real optimization gate is relative field-strength variance at
+  rho=0.7; its implicit derivative agrees with two independently polished
+  centered finite-difference endpoints to `5.11e-5` relative.
+- Direct downstream gates pass: BOOZ_XFORM_JAX 20 tests (7 optional skips),
+  VIRTUAL_CASING_JAX 137 tests (1 skip), ESSOS 40 relevant tests plus its
+  finite-beta VMEX optimization example, GKX 57 differentiable-geometry tests,
+  and DKX 6 slow flagship QA/bootstrap tests in 576.20 s. GKX PR #160, DKX
+  PR #78, and ESSOS PR #58 are merged.
+- VMEX code clarity is a release gate. Production mathematics lives once in
+  typed core functions; benchmarks remain thin clients. PR #192 has 51 tracked
+  benchmark files versus 37 on `main`, after deleting 15 obsolete exploratory
+  artifacts and consolidating external launchers. That 14-file delta is a hard
+  cap: no additional benchmark file may enter this PR. Future benchmark PRs
+  must state their file-count delta and consolidate or delete superseded files
+  at least as quickly as they add current ones; rejected experiments are logged
+  here rather than retained as permanent artifacts.
+- Development uses focused changed-module and scientific gates. The complete
+  hosted matrix runs once on the final source candidate; superseded source
+  candidates are canceled. This preserves full release confidence without
+  repeatedly paying for unchanged numerical lanes.
+- The final candidate's 18 primary hosted jobs all passed; `c1` completed in
+  43m45s. The aggregate changed-line gate then measured 89%. Rather than add
+  benchmark cases or coverage-only production branches, the audit deleted the
+  unused 80-line eigenvalue-orientation experiment from the runtime builder and
+  added focused contracts for PyTree reconstruction, physical-chart adapters,
+  implicit-solve failures, Boozer validation, and missing force data. The
+  benchmark count remains 51.
+- Packaging is checked against built artifacts, not source version strings.
+  SOLVAX 0.19.0 was tagged before its least-squares PR merged, so VMEX requires
+  the corrective 0.20.0 release from merged PR #99. Its published wheel was
+  independently installed and exposes all three required APIs. ESSOS 0.16
+  predates
+  `SquaredFlux`; the hosted optional test skips that absent API, while the
+  mandatory current-ESSOS-main integration gate is recorded above.
+- 2026-08-30 rogeriojorge: Phase 42 — final README/polish usability pass now
+  replaces the analytical Solov'ev row with a general finite-pressure tokamak;
+  both comparison rows must contain VMEX, VMEC2000, VMEC++, and adequately
+  resolved DESC results, including cold runtime. The final figure has no grid
+  lines and labels radius as ``rho=sqrt(s)``, ``s=psi/psi_B``. A second README
+  figure shows the standard finite-pressure stellarator summary before and
+  after polishing. The user-facing path is one ordinary example script plus a
+  VMEC-safe ``! VMEX: POLISH_FORCE_BALANCE = .TRUE.`` comment, a matching
+  ``polish_force_balance=`` Python keyword, and an opt-in finalization flag in
+  ``QA_optimization.py``. The example/file budget is unchanged: the old
+  argparse-only single-file directory is removed, and benchmark artifacts are
+  consolidated or replaced within the 51-file cap. A measured axisymmetric
+  acceptance case reduces independent relative force error from ``1.284e-2``
+  to ``1.820e-3`` in three nonlinear steps; the 3-D memory/compile cost remains
+  an explicit performance gate while the stellarator figure is finalized.
+- 2026-08-30 rogeriojorge: Phase 42 acceptance — corrected the high-order
+  field-period coordinate transform and added an axisymmetric ``nfp``
+  invariance gate. The committed comparison now contains clean results from
+  VMEX, VMEC2000, VMEC++, and DESC for both a finite-pressure shaped tokamak
+  and the finite-beta QA stellarator. Independent volume-L2 errors are
+  ``1.819e-3 / 1.711e-2 / 1.711e-2 / 2.962e-2`` for the tokamak and
+  ``0.525 / 0.525 / 0.525 / 0.879`` for the stellarator, in that solver order.
+  Cold end-to-end stellarator times are ``6.53 / 1.00 / 0.481 / 153`` seconds.
+  The two cases and eight source records are consolidated in one provenance
+  bundle; seven superseded artifacts were removed, reducing the tracked
+  benchmark-file count from 51 to 45. Both README figures are generated from
+  those records, hash-gated, and visually reviewed without rerunning unrelated
+  CI lanes.

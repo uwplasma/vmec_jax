@@ -83,6 +83,7 @@ from .statephysics import _as_1d, _iotas_half_from_fields
 from .transforms import physical_to_internal_scale
 
 __all__ = [
+    "boozer_bmnc_high_order",
     "boozer_bmnc_state",
     "omnigenity_residual",
     "QIResidual",
@@ -275,6 +276,83 @@ def _boozer_lasym_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
         "s_b": jnp.asarray(s_half, dtype=jnp.asarray(setup.s_full).dtype)[rows - 1],
         "psi_b": jnp.asarray(setup.psi_half)[rows],
         "psi_edge": jnp.asarray(setup.psi_edge),
+    }
+
+
+def boozer_bmnc_high_order(
+    state,
+    *,
+    surfaces,
+    mboz: int = 16,
+    nboz: int = 16,
+    asym: bool = False,
+    ntheta: int | None = None,
+    nzeta: int | None = None,
+) -> dict[str, Array]:
+    """Transform continuous native surfaces with BOOZ_XFORM_JAX in memory."""
+
+    from booz_xform_jax.jax_api import (
+        booz_xform_jax_impl,
+        prepare_booz_xform_constants,
+    )
+
+    from .boozer_tables import high_order_boozer_input_tables
+
+    surface_values = np.atleast_1d(np.asarray(surfaces, dtype=float))
+    if np.any((surface_values <= 0.0) | (surface_values > 1.0)):
+        raise ValueError("surfaces must satisfy 0 < s <= 1")
+    tables = [
+        high_order_boozer_input_tables(
+            state,
+            np.sqrt(surface),
+            ntheta=ntheta,
+            nzeta=nzeta,
+        )
+        for surface in surface_values
+    ]
+    first = tables[0]
+    stack = lambda name: jnp.stack([table[name] for table in tables])  # noqa: E731
+    constants, grids = prepare_booz_xform_constants(
+        nfp=int(state.nfp),
+        mboz=int(mboz),
+        nboz=int(nboz),
+        asym=bool(asym),
+        xm=first["xm"],
+        xn=first["xn"],
+        xm_nyq=first["xm_nyq"],
+        xn_nyq=first["xn_nyq"],
+    )
+    out = booz_xform_jax_impl(
+        rmnc=stack("rmnc"),
+        zmns=stack("zmns"),
+        lmns=stack("lmns"),
+        bmnc=stack("bmnc"),
+        bsubumnc=stack("bsubumnc"),
+        bsubvmnc=stack("bsubvmnc"),
+        iota=stack("iota"),
+        xm=jnp.asarray(first["xm"]),
+        xn=jnp.asarray(first["xn"]),
+        xm_nyq=jnp.asarray(first["xm_nyq"]),
+        xn_nyq=jnp.asarray(first["xn_nyq"]),
+        constants=constants,
+        grids=grids,
+        rmns=stack("rmns"),
+        zmnc=stack("zmnc"),
+        lmnc=stack("lmnc"),
+        bmns=stack("bmns"),
+        bsubumns=stack("bsubumns"),
+        bsubvmns=stack("bsubvmns"),
+    )
+    return {
+        "bmnc_b": out["bmnc_b"],
+        "bmns_b": out["bmns_b"],
+        "xm_b": np.asarray(grids.xm_b, dtype=float),
+        "xn_b": np.asarray(grids.xn_b, dtype=float),
+        "iota_b": stack("iota"),
+        "G_b": out["bvco_b"],
+        "I_b": out["buco_b"],
+        "nfp": int(state.nfp),
+        "s_b": jnp.asarray(surface_values),
     }
 
 

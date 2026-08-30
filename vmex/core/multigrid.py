@@ -55,8 +55,9 @@ from .printing import emit_flushed
 from .restart import restart_state, skip_ladder_rungs
 from .solver import (
     SolveResult, SpectralState, _finalize, _prefetch_block_lane,
-    _release_used_lane_executables, _result_from_carry, _solve_stage,
-    _resolve_use_fft, hot_restart_state, prepare_runtime, resolution_from_input,
+    _polish_solve_result, _release_used_lane_executables, _result_from_carry,
+    _resolve_force_balance_polish, _solve_stage, _resolve_use_fft,
+    hot_restart_state, prepare_runtime, resolution_from_input,
     runtime_with_baselines,
 )
 from .transforms import odd_m_sqrt_s_scaling
@@ -257,6 +258,8 @@ def solve_multigrid(
     use_fft: bool | None = None,
     release_stage_cache: bool = False,
     prefetch_compile: bool = False,
+    polish_force_balance: bool | str | None = None,
+    polish_config: Any = None,
 ) -> SolveResult:
     """Fixed-boundary multigrid solve over the ``NS_ARRAY`` ladder.
 
@@ -354,8 +357,15 @@ def solve_multigrid(
     ``ftol``, ``niter``) skip the prefetch because the previous rung's
     executable is reused directly.
 
+    ``polish_force_balance`` overrides the VMEX-only input directive. When
+    enabled, polishing runs once after the final radial stage; intermediate
+    stages remain the established VMEC continuation ladder.
+
     Returns the final stage's :class:`~vmex.core.solver.SolveResult`.
     """
+    polish = _resolve_force_balance_polish(
+        inp, None, polish_force_balance
+    )
     ns_arr = _vmec_ns_prefix(inp.ns_array if ns_array is None else ns_array)
     if ns_arr.size == 0:
         raise ValueError("ns_array has no positive stages")
@@ -513,6 +523,8 @@ def solve_multigrid(
                 use_fft=use_fft,
                 release_stage_cache=release_stage_cache,
                 prefetch_compile=prefetch_compile,
+                polish_force_balance=polish,
+                polish_config=polish_config,
             )
         last_stage = not np.any(ns_arr[igrid + 1:] >= nsval)
         if ier not in (SUCCESSFUL_TERM_FLAG, MORE_ITER_FLAG) or (
@@ -549,8 +561,17 @@ def solve_multigrid(
 
     with device_context(device, resolution):
         if int(carry.ier) == MORE_ITER_FLAG and not raise_on_max_iterations:
-            return _result_from_carry(carry, rt)
-        return _finalize(carry, rt)
+            result = _result_from_carry(carry, rt)
+        else:
+            result = _finalize(carry, rt)
+    return _polish_solve_result(
+        inp,
+        resolution,
+        result,
+        polish=polish,
+        polish_config=polish_config,
+        lconm1=lconm1,
+    )
 
 
 def solve_free_boundary_multigrid(
@@ -644,6 +665,8 @@ def solve_free_boundary_multigrid(
     """
     if not bool(inp.lfreeb):
         raise ValueError("solve_free_boundary_multigrid requires an LFREEB=T input")
+    if bool(inp.polish_force_balance):
+        raise ValueError("force-balance polishing currently requires fixed boundary")
 
     ns_arr = _vmec_ns_prefix(inp.ns_array if ns_array is None else ns_array)
     if ns_arr.size == 0:

@@ -12,6 +12,84 @@ VMEX is a JAX implementation of VMEC for stellarator and tokamak ideal-MHD equil
 
 ![VMEX equilibria and diagnostics](docs/_static/figures/readme_equilibrium_showcase.webp)
 
+## Force-balance polishing
+
+VMEC converges projected equations on a staggered radial mesh. A small
+`FSQR/FSQZ/FSQL` therefore does not guarantee a small continuum residual
+
+$$
+\mathbf F=\mathbf J\!\times\!\mathbf B-\nabla p,\qquad
+\epsilon_F=\frac{2|\mathbf F|}
+{|\mathbf J\!\times\!\mathbf B|+|\nabla p|+F_{\rm floor}}.
+$$
+
+VMEX can polish a converged fixed-boundary state. It lifts the VMEC solution to
+axis-regular cubic B-splines, keeps the boundary and profiles fixed, and solves
+both physical force channels on an overdetermined collocation grid with
+matrix-free SOLVAX Gauss–Newton steps. A result is accepted only when the
+independent volume-$L^2$ force error is below `1e-2`, radial refinement changes
+it by at most `1e-3`, and the signed Jacobian stays positive.
+
+The comparison below uses the same independent oracle for every code. The top
+row is a finite-pressure tokamak; VMEX is the polished result. The bottom row is
+the finite-beta two-field-period QA case, with DESC resolved at
+`L=16, M=N=10`. Cold CPU times include each code's load, solve, and export path.
+VMEX takes `6.5 s` on the 3-D case versus `153.1 s` for DESC; on the small
+tokamak, the `56.9 s` VMEX path includes JIT and polishing.
+
+![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
+
+Enable polishing in a VMEC input without breaking VMEC2000:
+
+```fortran
+! VMEX: POLISH_FORCE_BALANCE = .TRUE.
+&INDATA
+  ...
+/
+```
+
+VMEX reads the comment; VMEC2000 ignores it and performs its ordinary solve.
+Run the complete finite-beta stellarator example with either interface:
+
+```console
+vmex examples/data/input.finite_beta_stellarator_polished --plot
+python examples/force_balance_polishing.py
+```
+
+The Python flag overrides the input directive and works on both single-grid and
+multigrid solves:
+
+```python
+import vmex as vj
+
+inp = vj.VmecInput.from_file("input.my_case")
+result = vj.solve_multigrid(inp, polish_force_balance=True)
+print(result.polish_report.initial_normalized_l2)
+print(result.polish_report.final_normalized_l2)
+
+# Continuous state for fields, Boozer, virtual casing, ESSOS, and derivatives.
+native = result.native_equilibrium
+# Sampled state used by the CLI's VMEC-compatible WOUT output.
+sampled = result.polished_state
+```
+
+`opt.solve_equilibrium(..., polish_force_balance=True)` exposes the same final
+step. Optimization examples leave it off during iteration and may enable it for
+the final saved equilibrium.
+
+The standard summary below is produced by the example before and after
+polishing. The independent continuum error drops from `1.361e-2` to `5.617e-3`;
+the fixed boundary and prescribed pressure/current profiles do not move. The
+summary's radial `equif` panel is the separate VMEC-grid diagnostic, so it need
+not decrease monotonically with the continuum objective.
+
+![Finite-beta stellarator summary before and after force-balance polishing](docs/_static/figures/readme_polish_summary.webp)
+
+The bundled benchmark artifact records all eight solver results, exact source
+revisions, DESC resolution, timing boundaries, and certificate refinements.
+The figure generator and raw data live in `benchmarks/`; the ordinary solve
+remains the default.
+
 ## Install
 
 ```console
@@ -35,7 +113,8 @@ wout = vj.wout_from_state(inp=inp, state=result.state,
                            fsqr=result.fsqr, fsqz=result.fsqz, fsql=result.fsql,
                            niter=result.iterations, converged=result.converged)
 vj.write_wout("wout_circular_tokamak.nc", wout)
-vj.plot_wout("wout_circular_tokamak.nc", "figures")
+figures = vj.plot_wout("wout_circular_tokamak.nc", "figures")
+# The summary includes the relative radial force-error profile and its maximum.
 ```
 
 The CLI provides the same workflow:
@@ -87,8 +166,7 @@ MGRID field. Virtual casing alone is not the total exterior field.
 
 Effective ripple is an optional in-memory diagnostic—no `boozmn` file is
 needed. `examples/epsilon_effective.py` computes and plots the conventional
-NEO transport quantity $\epsilon_{\rm eff}^{3/2}$; `--plot` adds the same
-bounded-resolution radial trend to the pressure panel when NEO_JAX is installed.
+NEO transport quantity $\epsilon_{\rm eff}^{3/2}$.
 
 ```python
 field = vj.VmecExtender.from_file(
@@ -124,7 +202,7 @@ The common CLI operations are:
 | Command | Result |
 |---|---|
 | `vmex input.X` | solve INDATA or JSON and write `wout_X.nc` |
-| `vmex input.X --plot` | solve and write the summary, cross-sections, automatic Boozer `|B|`, profiles, and 3-D LCFS |
+| `vmex input.X --plot` | solve and write the summary, cross-sections, automatic Boozer `|B|`, profiles, normalized force balance, and 3-D LCFS |
 | `vmex --plot wout_X.nc` | write the same complete plot set from an existing equilibrium |
 | `vmex --booz wout_X.nc` | additionally save a reusable standard `boozmn_X.nc` file |
 | `vmex input.X --restart wout_Y.nc` | hot-restart a fixed- or free-boundary solve from a saved equilibrium |
@@ -246,7 +324,7 @@ geometry = gk_closed_fieldline_geometry(
 
 ## Equilibrium and kinetic diagnostics
 
-`vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summaries below. They combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. A separate stability figure decomposes `DMerc` and shows the frozen-geometry response to a pressure ramp; finite-pressure points must be re-solved for certification. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
+`vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summaries below. The summary's top row combines pressure with parallel current and shows the relative radial force error, $\epsilon_F=|(\mathbf J\times\mathbf B-\nabla p)_s|/(|(\mathbf J\times\mathbf B)_s|+|(\nabla p)_s|)$, for vacuum or finite-beta equilibria; the scalar card reports its maximum over solved interior surfaces. The summaries combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. A separate stability figure decomposes `DMerc` and shows the frozen-geometry response to a pressure ramp; finite-pressure points must be re-solved for certification. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
 
 This finite-pressure NFP=3 QI example reaches $\langle\beta\rangle=2.38\%$.
 

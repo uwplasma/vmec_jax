@@ -154,6 +154,35 @@ def test_lfull3d1out_default_explicit_true_and_indata_round_trip(
     ).lfull3d1out is True
 
 
+def test_vmex_polish_directive_is_a_vmec_safe_comment(tmp_path: Path) -> None:
+    """The extension round-trips without adding an unknown INDATA variable."""
+    text = "! VMEX: POLISH_FORCE_BALANCE = .TRUE.\n&INDATA\nMPOL = 3\n/\n"
+    inp = VmecInput.from_indata_text(text)
+    assert inp.polish_force_balance is True
+
+    path = inp.to_indata(tmp_path / "input.polished")
+    written = path.read_text(encoding="utf-8")
+    assert written.splitlines()[0] == "! VMEX: POLISH_FORCE_BALANCE = .TRUE."
+    assert "POLISH_FORCE_BALANCE" not in written.split("&INDATA", 1)[1]
+    assert VmecInput.from_file(path).polish_force_balance is True
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("! VMEX: POLISH_FORCE_BALANCE = sometimes\n&INDATA\n/", "true or false"),
+        (
+            "! VMEX: POLISH_FORCE_BALANCE = true\n"
+            "! VMEX: POLISH_FORCE_BALANCE = false\n&INDATA\n/",
+            "conflicting",
+        ),
+    ],
+)
+def test_vmex_polish_directive_rejects_ambiguous_values(text, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        VmecInput.from_indata_text(text)
+
+
 def test_legacy_ns_array_zero_expands_via_nsin() -> None:
     """VMEC2000's explicit old-style sentinel builds the NSIN -> 31 ladder."""
     inp = VmecInput.from_indata_text(

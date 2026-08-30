@@ -170,6 +170,42 @@ class StrongForceSamples:
 
 
 @dataclass(frozen=True)
+class HighOrderFieldSamples:
+    """Native geometry and magnetic field at arbitrary flux coordinates."""
+
+    rho: Array
+    theta: Array
+    zeta: Array
+    position: Array
+    dposition_drho: Array
+    dposition_dtheta: Array
+    dposition_dphi: Array
+    sqrt_g: Array
+    B_contravariant: Array
+    B_covariant: Array
+    B: Array
+    pressure: Array
+
+
+@dataclass(frozen=True)
+class HighOrderSurfaceSamples:
+    """Analytic native LCFS data accepted by array-based downstream codes."""
+
+    gamma: Array
+    gammadash_theta: Array
+    gammadash_phi: Array
+    normal: Array
+    unitnormal: Array
+    area_element: Array
+    B_total: Array
+    theta: Array
+    phi: Array
+    nfp: int
+    ntheta: int
+    nphi: int
+
+
+@dataclass(frozen=True)
 class StrongForceReport:
     """Independent overintegrated certificate for one continuous state."""
 
@@ -188,6 +224,7 @@ class StrongForceReport:
     edge_l2: Array
     radial_nodes: Array
     flux_surface_average: Array
+    flux_surface_normalized_l2: Array
     angular_spectral_tail: Array
     radial_refinement_difference: Array
     minimum_signed_jacobian: Array
@@ -201,12 +238,28 @@ class StrongForceReport:
 
 jax.tree_util.register_pytree_node_class(HighOrderEquilibriumState)
 
-for _cls in (StrongForceSamples,):
+for _cls in (HighOrderFieldSamples, StrongForceSamples):
     jax.tree_util.register_dataclass(
         _cls,
         data_fields=[field for field in _cls.__dataclass_fields__],
         meta_fields=[],
     )
+
+jax.tree_util.register_dataclass(
+    HighOrderSurfaceSamples,
+    data_fields=[
+        "gamma",
+        "gammadash_theta",
+        "gammadash_phi",
+        "normal",
+        "unitnormal",
+        "area_element",
+        "B_total",
+        "theta",
+        "phi",
+    ],
+    meta_fields=["nfp", "ntheta", "nphi"],
+)
 
 
 def _series(state: HighOrderEquilibriumState, coefficients: Array, x: Array) -> Array:
@@ -252,13 +305,15 @@ def _basic_fields(state: HighOrderEquilibriumState, x: Array) -> tuple[Array, Ar
     lam_gradient = jax.grad(lambda y: _RZL(state, y)[2])(x)
     phip = _profile(state, state.phipf, x[0])
     chip = _profile(state, state.chipf, x[0])
-    # Convert the s-coordinate Clebsch representation to rho.  Lambda's
-    # zeta derivative acquires nfp because VMEC differentiates in physical phi.
+    # Convert VMEC's (s, theta, physical-phi) Clebsch representation to
+    # (rho, theta, zeta=nfp*phi). The new Jacobian is 2*rho/nfp times the
+    # VMEC Jacobian, B^zeta=nfp*B^phi, and lambda_phi=nfp*lambda_zeta.
     flux_factor = 2.0 * x[0] / sqrt_g
     B_sup = jnp.asarray(
         [
             0.0,
-            flux_factor * (chip - phip * float(state.nfp) * lam_gradient[2]),
+            flux_factor
+            * (chip / float(state.nfp) - phip * lam_gradient[2]),
             flux_factor * phip * (1.0 + lam_gradient[1]),
         ]
     )
@@ -311,6 +366,101 @@ def _point_force(state: HighOrderEquilibriumState, x: Array) -> tuple[Array, ...
         signed_helical_force_density,
         jnp.linalg.norm(lorentz),
         jnp.linalg.norm(grad_pressure),
+    )
+
+
+@jax.jit
+def evaluate_high_order_fields(
+    state: HighOrderEquilibriumState,
+    rho: Array,
+    theta: Array,
+    zeta: Array,
+) -> HighOrderFieldSamples:
+    """Evaluate the native position, analytic tangents, ``B``, and pressure.
+
+    ``zeta`` spans one field period while ``phi = zeta / nfp`` is the physical
+    cylindrical angle. Array inputs broadcast, and the final dimension of
+    geometric vectors and ``B`` is Cartesian. Covariant and contravariant field
+    components use ``(rho, theta, zeta)``; ``dposition_dphi`` is converted to
+    the physical cylindrical angle. The function is pure JAX and is the
+    in-memory handoff for downstream field and surface objectives.
+    """
+
+    rho, theta, zeta = jnp.broadcast_arrays(rho, theta, zeta)
+    shape = rho.shape
+    points = jnp.stack((rho.reshape(-1), theta.reshape(-1), zeta.reshape(-1)), axis=-1)
+
+    def sample(point):
+        basis, sqrt_g, contravariant, covariant, field, pressure = _basic_fields(
+            state, point
+        )
+        return (
+            _position(state, point),
+            basis[:, 0],
+            basis[:, 1],
+            float(state.nfp) * basis[:, 2],
+            sqrt_g,
+            contravariant,
+            covariant,
+            field,
+            pressure,
+        )
+
+    values = jax.vmap(sample)(points)
+    vector_shape = shape + (3,)
+    return HighOrderFieldSamples(
+        rho=rho,
+        theta=theta,
+        zeta=zeta,
+        position=values[0].reshape(vector_shape),
+        dposition_drho=values[1].reshape(vector_shape),
+        dposition_dtheta=values[2].reshape(vector_shape),
+        dposition_dphi=values[3].reshape(vector_shape),
+        sqrt_g=values[4].reshape(shape),
+        B_contravariant=values[5].reshape(vector_shape),
+        B_covariant=values[6].reshape(vector_shape),
+        B=values[7].reshape(vector_shape),
+        pressure=values[8].reshape(shape),
+    )
+
+
+def evaluate_high_order_surface(
+    state: HighOrderEquilibriumState,
+    *,
+    nphi: int = 32,
+    ntheta: int = 32,
+) -> HighOrderSurfaceSamples:
+    """Return a one-field-period LCFS view with analytic surface tangents.
+
+    The array layout ``(nphi, ntheta, 3)`` and attribute names are accepted
+    directly by ESSOS surface objectives. VMEX's virtual-casing adapter uses
+    this same view, so both downstream paths share one geometry evaluation.
+    """
+
+    theta = jnp.linspace(0.0, 2.0 * jnp.pi, int(ntheta), endpoint=False)
+    phi = jnp.linspace(0.0, 2.0 * jnp.pi / int(state.nfp), int(nphi), endpoint=False)
+    pp, tt = jnp.meshgrid(phi, theta, indexing="ij")
+    samples = evaluate_high_order_fields(state, 1.0, tt, pp * int(state.nfp))
+    normal = jnp.cross(samples.dposition_dtheta, samples.dposition_dphi)
+    area_element = jnp.linalg.norm(normal, axis=-1)
+    unitnormal = normal / jnp.maximum(area_element[..., None], 1.0e-300)
+    mean_radial = jnp.mean(jnp.sum(samples.dposition_drho * unitnormal, axis=-1))
+    flip = jnp.where(mean_radial < 0.0, -1.0, 1.0)
+    normal = flip * normal
+    unitnormal = flip * unitnormal
+    return HighOrderSurfaceSamples(
+        gamma=samples.position,
+        gammadash_theta=samples.dposition_dtheta,
+        gammadash_phi=samples.dposition_dphi,
+        normal=normal,
+        unitnormal=unitnormal,
+        area_element=area_element,
+        B_total=samples.B,
+        theta=theta,
+        phi=phi,
+        nfp=int(state.nfp),
+        ntheta=int(ntheta),
+        nphi=int(nphi),
     )
 
 
@@ -423,7 +573,20 @@ def lift_high_order_state(
     modes = runtime.modes
     s = np.asarray(setup.s_full, dtype=float)
     if radial_basis is None:
-        spans = max(1, min(int(max_spans), max(1, s.size - int(degree))))
+        # The legacy full mesh is only a first-order radial representation.
+        # Giving a degree-p spline one coefficient per sample interpolates
+        # that mesh noise exactly; its second derivatives then oscillate even
+        # though R/Z/lambda values look innocuous.  This is catastrophic for
+        # curl(B): on the ns=11 Solovev regression the interpolating degree-5
+        # lift reports |JxB-grad(p)|_L2 = 4.97e7 N/m^3 and a 0.81 quadrature
+        # change, whereas the overdetermined eight-coefficient fit reports
+        # 9.73e1 N/m^3 and 3.8e-5.  Start with roughly two mesh samples per
+        # free span.  Explicit ``radial_basis=`` remains the seam for a caller
+        # that has a genuinely high-order source or has selected knots by a
+        # refinement certificate.
+        available_spans = max(1, s.size - int(degree))
+        regularized_spans = max(1, (available_spans + 1) // 2)
+        spans = max(1, min(int(max_spans), regularized_spans))
         radial_basis = BSplineBasis.clamped(
             np.linspace(0.0, 1.0, spans + 1),
             degree=degree,
@@ -608,6 +771,10 @@ def certify_strong_force(
     )
     surface_weights = jnp.abs(samples.sqrt_g)
     fsa = jnp.sum(surface_weights * magnitude, axis=(1, 2)) / jnp.sum(surface_weights, axis=(1, 2))
+    surface_normalized_l2 = jnp.sqrt(
+        jnp.sum(surface_weights * normalized * normalized, axis=(1, 2))
+        / jnp.sum(surface_weights, axis=(1, 2))
+    )
 
     def region_l2(mask: Array) -> Array:
         region_weights = weights * mask[:, None, None]
@@ -680,6 +847,7 @@ def certify_strong_force(
         edge_l2=region_l2(jnp.asarray(rho_nodes) > 0.8),
         radial_nodes=jnp.asarray(rho_nodes),
         flux_surface_average=fsa,
+        flux_surface_normalized_l2=surface_normalized_l2,
         angular_spectral_tail=tail,
         radial_refinement_difference=refinement,
         minimum_signed_jacobian=jnp.min(signed_jacobian),
@@ -711,12 +879,15 @@ def plot_strong_force_report(
     for label, report in report_map.items():
         axes[0].semilogy(
             np.asarray(report.radial_nodes),
-            np.asarray(report.flux_surface_average),
+            np.asarray(report.flux_surface_normalized_l2),
             marker=".",
             linewidth=1.5,
             label=label,
         )
-    axes[0].set(xlabel=r"$\rho=\sqrt{s}$", ylabel=r"$\langle|J\times B-\nabla p|\rangle$ [N m$^{-3}$]")
+    axes[0].set(
+        xlabel=r"$\rho=\sqrt{s}$",
+        ylabel=r"normalized force error",
+    )
     axes[0].grid(True, which="both", alpha=0.25)
     axes[0].legend(frameon=False)
 
@@ -745,9 +916,13 @@ def plot_strong_force_report(
 
 __all__ = [
     "HighOrderEquilibriumState",
+    "HighOrderFieldSamples",
+    "HighOrderSurfaceSamples",
     "StrongForceReport",
     "StrongForceSamples",
     "certify_strong_force",
+    "evaluate_high_order_fields",
+    "evaluate_high_order_surface",
     "evaluate_strong_force",
     "high_order_state_from_wout",
     "lift_high_order_state",
