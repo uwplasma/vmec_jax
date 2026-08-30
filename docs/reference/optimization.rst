@@ -42,6 +42,110 @@ profiles, and transforms (it is not elapsed run time). Use
 :meth:`~vmex.core.problem.FunctionProblem.from_functions` when the user already
 has decision-vector-level functions and derivatives.
 
+Vector least squares or one scalar adjoint
+-------------------------------------------
+
+The residual and scalar interfaces can represent the same mathematical cost
+while asking for different derivatives. Let ``z`` be the converged equilibrium,
+``x`` the boundary/current decision vector, and
+
+.. math::
+
+   g(z,x)=0, \qquad
+   \Phi(z,x)=\tfrac12 r(z,x)^T r(z,x).
+
+The residual/Jacobian route builds
+
+.. math::
+
+   J_r = \frac{d r}{d x}
+       = r_x-r_z g_z^{-1}g_x,
+   \qquad \nabla_x\Phi=J_r^T r.
+
+This is what ``VmecProblem.from_tuples`` plus SciPy ``least_squares`` needs.
+The optimizer receives every residual row and the complete
+``n_residuals``-by-``n_dofs`` Jacobian. It can form a Gauss--Newton trust-region
+model, report individual rows, and stop on residual/Jacobian criteria. VMEX
+uses its block response algorithm to amortize the equilibrium linear algebra,
+but the complete residual Jacobian is still computed and materialized.
+
+When the optimizer only needs a scalar value and gradient, form ``Phi`` before
+differentiating. The adjoint is
+
+.. math::
+
+   g_z^T\lambda=\Phi_z^T= r_z^T r,
+   \qquad
+   \nabla_x\Phi=\Phi_x-\lambda^T g_x.
+
+There is one equilibrium-adjoint right-hand side per scalar gradient,
+independent of the number of residual rows and decision variables. ``One``
+describes the number of adjoint solves; its cost still depends on equilibrium
+resolution, linear conditioning, and the work needed to evaluate the objective
+VJP. VMEX does not tape the nonlinear equilibrium iterations.
+
+The explicit scalar construction is:
+
+.. code-block:: python
+
+   def loss(state, runtime):
+       rows = opt.residuals_from_tuples(state, runtime, terms)
+       return 0.5 * jnp.vdot(rows, rows)
+
+   problem = opt.VmecProblem.from_loss(
+       inp, loss, max_mode=5, use_ess=True)
+   problem.compile_value_and_gradient()
+
+   result = scipy.optimize.minimize(
+       problem.value_and_grad, problem.x0,
+       jac=True, method="L-BFGS-B", bounds=problem.bounds)
+
+For a single tuple-defined stage, :func:`vmex.core.optimize.minimize` is the
+short form of the same route:
+
+.. code-block:: python
+
+   result = opt.minimize(
+       terms, inp, max_mode=5, method="L-BFGS-B",
+       options={"maxiter": 100})
+
+The longer ``from_loss`` form is useful when the scalar is not a sum of tuple
+rows, or when a script owns stage-specific scaled coordinates and monitoring.
+
+The two constructions use the same rows, targets, weights, and scalar cost.
+They do **not** use the same optimization algorithm. ``least_squares`` uses
+the explicit residual Jacobian and Gauss--Newton curvature; L-BFGS-B sees only
+``Phi`` and its gradient and builds limited-memory curvature from accepted
+steps. Their iterates, stopping tests, and possibly the local minimum reached
+can differ. Always compare final physical terms and held-out validation
+metrics, not iteration counts alone.
+
+Choose deliberately:
+
+* Keep the vector route when residual-level diagnostics, a least-squares trust
+  region, or Gauss--Newton curvature is valuable.
+* Prefer the scalar route when a large pointwise objective makes cold Jacobian
+  compilation or materialization the bottleneck and the optimizer only needs
+  ``(value, gradient)``.
+* A scalar loss must be fully JAX-traceable. Opaque WOUT/host callbacks require
+  a traceable implementation or the finite-difference derivative lane.
+* ``compile_value_and_gradient`` makes the first scalar compile explicit;
+  it does not turn a cold timing into a warm timing.
+
+The committed QA startup measurements make the tradeoff concrete for 6,723
+rows and 48 boundary degrees of freedom on one Apple CPU host. Cold startup
+dropped from 44.7 s and 2,965 MiB peak RSS for the residual Jacobian to 32.2 s
+and 2,574 MiB for the scalar adjoint. Warm value/gradient medians were 16.6 s
+and 17.4 s, respectively, so the scalar path did not improve warm throughput
+in that measurement. The raw records are
+``benchmarks/qa_optimization_startup_{least_squares,scalar}_m4.json``; neither
+record is a GPU or persistent-cache claim.
+
+The canonical ``QA_optimization.py`` remains the residual/Jacobian tutorial.
+The eight ``{QA,QH,QP,QI}_optimization[_finite_beta]_scalar.py`` companions
+show the scalar route in vacuum and at finite beta without replacing the
+least-squares examples.
+
 Callable contracts
 ------------------
 
