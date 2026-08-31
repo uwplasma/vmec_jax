@@ -852,6 +852,15 @@ def _plot_wout_file(wout_path: Path, outdir: Path, *, emit, quiet: bool) -> None
     for key, path in plot_wout(wout_path, outdir=outdir).items():
         if not quiet:
             emit(f"   Saved {key}: {path}")
+    # Memory policy lives here, not in the diagnostic libraries: after every
+    # requested figure is on disk, release the plot-only executables (Boozer,
+    # NEO, Gamma_c field lines) that an end-of-run CLI process never reuses.
+    import gc
+
+    import jax
+
+    jax.clear_caches()
+    gc.collect()
 
 
 def _plot_mout_file(mout_path: Path, outdir: Path, *, emit, quiet: bool) -> None:

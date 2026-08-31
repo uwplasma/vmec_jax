@@ -61,6 +61,19 @@ def test_epsilon_effective_rejects_lasym_before_importing_optional_backend():
         neoclassical.epsilon_effective_from_wout(SimpleNamespace(lasym=True))
 
 
+def test_epsilon_effective_default_is_library_safe():
+    """A diagnostic call must not clear process-wide JAX caches by default.
+
+    Cache release is memory *policy* and belongs to the caller (the CLI does
+    it after all requested diagnostics); a library default of ``True`` would
+    silently discard every warm executable of the surrounding program.
+    """
+    import inspect
+
+    signature = inspect.signature(neoclassical.epsilon_effective_from_wout)
+    assert signature.parameters["clear_jax_caches"].default is False
+
+
 def test_diagnostic_config_is_the_bounded_summary_resolution(monkeypatch):
     """Summary figures ask NEO for a radial trend, not a transport number.
 

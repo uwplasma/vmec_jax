@@ -4,8 +4,11 @@ Self-contained matplotlib (Agg) figure set read from a ``wout_*.nc`` file
 (or an in-memory :class:`vmex.core.wout.WoutData`):
 
 - ``summary``   3x3 publication diagnostic set: rotational transform (full
-  mesh), pressure and parallel (bootstrap) current ``<J.B>``, relative radial
-  force error, Mercier ``DMerc``
+  mesh) with the parallel (bootstrap) current ``<J.B>`` on its right axis,
+  pressure with the confinement diagnostics ``eps_eff^(3/2)`` (NEO_JAX) and
+  ``Gamma_c`` sharing one right axis (bounded-resolution radial trends,
+  cached per in-memory WOUT — see :class:`ConfinementSummary`), relative
+  radial force error, Mercier ``DMerc``
   and Glasser ``D_R`` with ``V''(s)`` on the right axis, a 3-D LCFS,
   a Velasco-style polar second-adiabatic-invariant map ``J(alpha, s)``, ``|B|``
   in Boozer coordinates at mid radius and on the LCFS (line contours with a
@@ -39,12 +42,17 @@ plus the per-figure helpers each of those dispatches to.
 
 from __future__ import annotations
 
+import dataclasses
+import time
+import weakref
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import numpy as np
 
 __all__ = [
+    "ConfinementSummary",
     "plot_wout",
     "plot_boozmn",
     "plot_bootstrap_current",
@@ -698,19 +706,243 @@ def _boozer_summary_data(
         if bmns_raw is not None and np.size(bmns_raw) else None
     )
     s_b = np.asarray(bx.s_b, dtype=float)
+    iota_b = np.asarray(bx.iota, dtype=float)[np.asarray(indices, dtype=int)]
+    # The same transform feeds NEO's effective ripple (the summary confinement
+    # panel), so the one Boozer run is shared instead of duplicated.  NEO's
+    # BoozerData contract is symmetric-only; ``pmns_b`` carries booz_xform's
+    # ``-numns`` sign convention (see ``epsilon_effective_from_wout``).
+    neo_booz = None
+    if bmns_b is None:
+        neo_booz = {
+            "nfp_b": int(bx.nfp), "ns_b": len(indices),
+            "ixm_b": np.asarray(bx.xm_b), "ixn_b": np.asarray(bx.xn_b),
+            "iota_b": iota_b,
+            "buco_b": np.asarray(bx.Boozer_I), "bvco_b": np.asarray(bx.Boozer_G),
+            "rmnc_b": np.asarray(bx.rmnc_b), "zmns_b": np.asarray(bx.zmns_b),
+            "pmns_b": -np.asarray(bx.numns_b), "bmnc_b": np.asarray(bx.bmnc_b),
+            "s_b": s_b,
+        }
     return {
         "bmnc_b": np.asarray(bx.bmnc_b, dtype=float).T,
         "bmns_b": bmns_b,
         "xm_b": np.asarray(bx.xm_b, dtype=int),
         "xn_b": np.asarray(bx.xn_b, dtype=int),
-        "iota_b": np.asarray(bx.iota, dtype=float)[np.asarray(indices, dtype=int)],
+        "iota_b": iota_b,
         "G_b": np.asarray(bx.Boozer_G, dtype=float),
         "I_b": np.asarray(bx.Boozer_I, dtype=float),
         "s_b": s_b,
         "nfp": int(bx.nfp),
         "index_mid": int(np.argmin(np.abs(s_b - 0.5))),
         "index_lcfs": int(s_b.size - 1),
+        "mboz": int(mboz),
+        "nboz": int(nboz),
+        "neo_booz": neo_booz,
     }
+
+
+# ==========================================================================
+# Confinement summary (effective ripple + Gamma_c) with a bounded cache
+# ==========================================================================
+
+#: Compact ``Gamma_c`` sampling for the summary trend panel — radial ordering
+#: quality, not publication numbers (the ``diagnostic_neo_config`` analogue;
+#: the value carries the resolution scatter documented in
+#: :func:`vmex.core.gammac.gamma_c_state`).
+_GAMMA_C_DIAGNOSTIC = dict(
+    nalpha=5, num_transit=3, points_per_transit=48, num_pitch=16,
+    quadrature_order=16)
+
+#: Radial targets of the summary ``Gamma_c`` profile (snapped to distinct
+#: interior full-mesh rows of the WOUT grid).
+_GAMMA_C_TARGETS = (0.25, 0.5, 0.7, 0.9)
+
+
+@dataclasses.dataclass(frozen=True)
+class ConfinementSummary:
+    """One bundle of the summary figure's confinement diagnostics.
+
+    ``surfaces`` maps each diagnostic name to its own radial grid (the two
+    diagnostics sample different native grids: NEO the Boozer half-mesh
+    surfaces of the shared summary transform, ``Gamma_c`` interior full-mesh
+    rows).  ``validity`` says whether each profile is usable; ``notes`` carries
+    the reason when it is not (never plot an invalid value as zero); ``timing``
+    records the wall seconds each diagnostic cost.
+    """
+
+    surfaces: dict[str, np.ndarray]
+    epsilon_effective: np.ndarray | None
+    gamma_c: np.ndarray | None
+    validity: dict[str, bool]
+    notes: dict[str, str]
+    timing: dict[str, float]
+
+
+#: Bounded cache of :func:`confinement_summary` results.  Keyed by WOUT
+#: identity — ``id`` for hashing plus a weak reference for liveness, so a
+#: cached entry never keeps a WOUT alive and a recycled ``id`` can never
+#: alias a collected one — plus every setting that feeds the numbers: Boozer
+#: resolution, NEO configuration, and the ``Gamma_c`` sampling.  Repeated
+#: summary generation for the same in-memory WOUT reuses the computed
+#: profiles instead of recompiling and re-running the diagnostics.
+_CONFINEMENT_CACHE: OrderedDict[
+    tuple, tuple[weakref.ref, ConfinementSummary]] = OrderedDict()
+_CONFINEMENT_CACHE_SIZE = 4
+
+
+def _confinement_cache_get(key: tuple, wout) -> ConfinementSummary | None:
+    for cached in [k for k, (ref, _) in _CONFINEMENT_CACHE.items() if ref() is None]:
+        del _CONFINEMENT_CACHE[cached]
+    hit = _CONFINEMENT_CACHE.get(key)
+    if hit is None or hit[0]() is not wout:
+        return None
+    _CONFINEMENT_CACHE.move_to_end(key)
+    return hit[1]
+
+
+def _confinement_cache_put(key: tuple, wout, value: ConfinementSummary) -> None:
+    _CONFINEMENT_CACHE[key] = (weakref.ref(wout), value)
+    while len(_CONFINEMENT_CACHE) > _CONFINEMENT_CACHE_SIZE:
+        _CONFINEMENT_CACHE.popitem(last=False)
+
+
+def _epsilon_effective_profile(booz: dict[str, Any] | None, note: str):
+    """``(s, eps_eff^{3/2}, note)`` from the shared summary Boozer result."""
+    if booz is None:
+        return None, None, note or "Boozer transform unavailable"
+    if booz.get("neo_booz") is None:
+        return None, None, "NEO_JAX's BoozerData contract is symmetric-only"
+    try:
+        from .neoclassical import diagnostic_neo_config, epsilon_effective_from_boozer
+
+        surfaces, values = epsilon_effective_from_boozer(
+            booz["neo_booz"], config=diagnostic_neo_config())
+    except ImportError:
+        return None, None, "effective ripple requires NEO_JAX (vmex[neoclassical])"
+    except Exception as exc:  # noqa: BLE001 - summary stays usable without NEO
+        return None, None, f"NEO evaluation failed: {type(exc).__name__}"
+    surfaces = np.asarray(surfaces, dtype=float)
+    values = np.asarray(values, dtype=float)
+    keep = np.isfinite(values) & (values > 0.0)
+    if not keep.any():
+        return None, None, "NEO returned no finite positive values"
+    return surfaces[keep], values[keep], ""
+
+
+def _gamma_c_profile(wout):
+    """``(s, Gamma_c, note)`` on distinct interior rows of the WOUT grid."""
+    ns = int(wout.ns)
+    rows = sorted({
+        min(max(int(round(target * (ns - 1))), 2), ns - 2)
+        for target in _GAMMA_C_TARGETS
+    })
+    try:
+        from .gammac import gamma_c_from_wout
+
+        out = gamma_c_from_wout(
+            wout, surfaces=tuple(row / (ns - 1) for row in rows),
+            **_GAMMA_C_DIAGNOSTIC)
+    except Exception as exc:  # noqa: BLE001 - summary stays usable without it
+        return None, None, f"Gamma_c evaluation failed: {type(exc).__name__}"
+    surfaces = np.asarray(out["s"], dtype=float)
+    values = np.asarray(out["gamma_c"], dtype=float)
+    # NaN rows are deliberate poison (iota ~ 0 field-line map): drop, never
+    # draw as zero.
+    keep = np.isfinite(values)
+    if not keep.any():
+        return None, None, "no surface returned a finite Gamma_c"
+    return surfaces[keep], values[keep], ""
+
+
+def confinement_summary(wout, booz: dict[str, Any] | None, *, booz_note: str = "") -> ConfinementSummary:
+    """Effective ripple + ``Gamma_c`` radial trends of one WOUT, cached.
+
+    ``booz`` is the shared :func:`_boozer_summary_data` result (or ``None``
+    with ``booz_note`` saying why), so the effective ripple rides the one
+    Boozer transform the summary figure already ran; ``Gamma_c`` uses its
+    validated real-space route (:func:`vmex.core.gammac.gamma_c_from_wout`)
+    since none of its ingredients live in Boozer coordinates.  Results are
+    cached per in-memory WOUT and settings (see ``_CONFINEMENT_CACHE``).
+    """
+    key = None
+    try:
+        weakref.ref(wout)
+        key = (
+            id(wout),
+            None if booz is None else (booz["mboz"], booz["nboz"], len(booz["s_b"])),
+            tuple(sorted(_GAMMA_C_DIAGNOSTIC.items())), _GAMMA_C_TARGETS,
+        )
+    except TypeError:
+        pass  # non-weakref-able stand-ins (tests): compute uncached
+    if key is not None:
+        hit = _confinement_cache_get(key, wout)
+        if hit is not None:
+            return hit
+
+    timing: dict[str, float] = {}
+    start = time.perf_counter()
+    eps_s, eps, eps_note = _epsilon_effective_profile(booz, booz_note)
+    timing["epsilon_effective"] = time.perf_counter() - start
+    start = time.perf_counter()
+    gamma_s, gamma, gamma_note = _gamma_c_profile(wout)
+    timing["gamma_c"] = time.perf_counter() - start
+
+    surfaces = {}
+    if eps is not None:
+        surfaces["epsilon_effective"] = eps_s
+    if gamma is not None:
+        surfaces["gamma_c"] = gamma_s
+    summary = ConfinementSummary(
+        surfaces=surfaces,
+        epsilon_effective=eps,
+        gamma_c=gamma,
+        validity={
+            "epsilon_effective": eps is not None, "gamma_c": gamma is not None},
+        notes={"epsilon_effective": eps_note, "gamma_c": gamma_note},
+        timing=timing,
+    )
+    if key is not None:
+        _confinement_cache_put(key, wout, summary)
+    return summary
+
+
+def _confinement_panel(ax, conf: ConfinementSummary):
+    """Overlay the confinement profiles on the pressure panel's right axis.
+
+    Returns the twin axis and its lines.  ``eps_eff^{3/2}`` and ``Gamma_c``
+    share one dimensionless right axis with distinct markers/linestyles; log
+    scale only when every plotted value is positive and the combined dynamic
+    range justifies it.  Unavailable diagnostics keep their reason in
+    ``conf.notes`` — the panel draws only what is valid.
+    """
+    axis = ax.twinx()
+    lines = []
+    curves = (
+        ("epsilon_effective", conf.epsilon_effective,
+         r"$\epsilon_{\mathrm{eff}}^{3/2}$", "o--", _LINE_COLORS[0]),
+        ("gamma_c", conf.gamma_c, r"$\Gamma_c$", "s-", _LINE_COLORS[3]),
+    )
+    values: list[np.ndarray] = []
+    for name, profile, label, style, color in curves:
+        if conf.validity[name]:
+            lines.append(axis.plot(
+                conf.surfaces[name], profile, style, color=color,
+                markersize=4.0, label=label)[0])
+            values.append(profile)
+    if lines:
+        stacked = np.concatenate(values)
+        if np.all(stacked > 0.0) and (
+                float(stacked.max()) > 100.0 * float(stacked.min())):
+            axis.set_yscale("log")
+        axis.set_ylabel(
+            r"$\epsilon_{\mathrm{eff}}^{3/2}$, $\Gamma_c$",
+            color=_LINE_COLORS[0])
+        axis.tick_params(axis="y", colors=_LINE_COLORS[0])
+    else:
+        axis.set_yticks([])
+        axis.text(
+            0.5, 0.5, "confinement diagnostics unavailable",
+            ha="center", va="center", transform=axis.transAxes, fontsize=11)
+    return axis, lines
 
 
 def _boozer_surface_modB(booz: dict[str, Any], k: int, theta: np.ndarray, zeta: np.ndarray) -> np.ndarray:
@@ -1086,20 +1318,23 @@ def _summary_figure(
                 projection = "3d" if (row, column) == (1, 1) else None
                 axes[row, column] = fig.add_subplot(grid[row, column], projection=projection)
 
-        # 1. rotational transform -- full mesh only.
+        # The one Boozer transform behind the J map, the |B| panels, and the
+        # effective ripple of the confinement panel — run once, up front.
+        booz_note = ""
+        try:
+            booz = _boozer_summary_data(wout)
+        except Exception as exc:  # noqa: BLE001 - summary stays usable without booz
+            booz = None
+            booz_note = f"Boozer transform unavailable:\n{type(exc).__name__}"
+
+        # 1. rotational transform and parallel current share radius.
         _profile_panel(
             axes[0, 0], s, np.asarray(wout.iotaf, dtype=float),
-            xlabel=_S_LABEL, ylabel=r"$\iota$", title="rotational transform (full mesh)",
+            xlabel=_S_LABEL, ylabel=r"$\iota$",
+            title="rotational transform and parallel current",
         )
-
-        # Pressure and parallel current share radius but retain their units.
-        _profile_panel(
-            axes[0, 1], s, 1.0e-3 * np.asarray(wout.presf, dtype=float),
-            xlabel=_S_LABEL, ylabel=r"$p$ [kPa]", title="pressure and parallel current",
-            color=_LINE_COLORS[1],
-        )
-        axes[0, 1].lines[0].set_label(r"$p$")
-        current_axis = axes[0, 1].twinx(); meta["current_axis"] = current_axis
+        axes[0, 0].lines[0].set_label(r"$\iota$")
+        current_axis = axes[0, 0].twinx(); meta["current_axis"] = current_axis
         current_line = current_axis.plot(
             s, 1.0e-3 * np.asarray(wout.jdotb, dtype=float), "-",
             color=_LINE_COLORS[2], label=r"$\langle\mathbf{J}\cdot\mathbf{B}\rangle$",
@@ -1109,9 +1344,27 @@ def _summary_figure(
             color=_LINE_COLORS[2],
         )
         current_axis.tick_params(axis="y", colors=_LINE_COLORS[2])
+        axes[0, 0].legend(
+            [axes[0, 0].lines[0], current_line],
+            [axes[0, 0].lines[0].get_label(), current_line.get_label()],
+            loc="best", fontsize=11,
+        )
+
+        # 2. pressure (left) with the confinement diagnostics eps_eff^{3/2}
+        # and Gamma_c sharing the dimensionless right axis.
+        _profile_panel(
+            axes[0, 1], s, 1.0e-3 * np.asarray(wout.presf, dtype=float),
+            xlabel=_S_LABEL, ylabel=r"$p$ [kPa]", title="pressure and confinement",
+            color=_LINE_COLORS[1],
+        )
+        axes[0, 1].lines[0].set_label(r"$p$")
+        conf = confinement_summary(wout, booz, booz_note=booz_note)
+        meta["confinement"] = conf
+        confinement_axis, conf_lines = _confinement_panel(axes[0, 1], conf)
+        meta["confinement_axis"] = confinement_axis
+        legend_lines = [axes[0, 1].lines[0], *conf_lines]
         axes[0, 1].legend(
-            [axes[0, 1].lines[0], current_line],
-            [axes[0, 1].lines[0].get_label(), current_line.get_label()],
+            legend_lines, [line.get_label() for line in legend_lines],
             loc="best", fontsize=11,
         )
 
@@ -1135,12 +1388,6 @@ def _summary_figure(
         )
 
         # 2 + 4. Boozer-based panels: J(alpha, s) map and |B| contours.
-        booz_note = ""
-        try:
-            booz = _boozer_summary_data(wout)
-        except Exception as exc:  # noqa: BLE001 - summary stays usable without booz
-            booz = None
-            booz_note = f"Boozer transform unavailable:\n{type(exc).__name__}"
         if booz is not None:
             try:
                 j_info = _j_invariant_map(booz, pitch=j_pitch)

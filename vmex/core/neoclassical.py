@@ -70,18 +70,19 @@ def epsilon_effective_from_wout(
     mboz: int = 16,
     nboz: int = 12,
     config=None,
-    clear_jax_caches: bool = True,
+    clear_jax_caches: bool = False,
 ):
     """Compute ``epsilon_eff**(3/2)`` directly from an in-memory VMEX wout.
 
     VMEX performs the Boozer transform in memory and passes its arrays to
     NEO_JAX; no ``boozmn`` file is required. NEO_JAX currently represents the
     stellarator-symmetric cosine/sine convention, so ``LASYM`` wouts are
-    rejected rather than silently dropping asymmetric harmonics. By default,
-    completed VMEX executables are released before compiling NEO; this keeps
-    end-of-run plotting responsive and memory-bounded. Set
-    ``clear_jax_caches=False`` when preserving other warm JAX executables
-    matters more than peak memory.
+    rejected rather than silently dropping asymmetric harmonics. The default
+    is library-safe: a diagnostic call never clears the process-wide JAX
+    executable caches behind its caller's back. Pass ``clear_jax_caches=True``
+    to release completed executables before compiling NEO when peak memory
+    matters more than warm executables — the CLI does this itself after all
+    requested diagnostics instead (:mod:`vmex.core.cli`).
     """
     if bool(getattr(wout, "lasym", False)):
         raise NotImplementedError(

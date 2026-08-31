@@ -24,6 +24,8 @@ Public API (lazily imported; ``import vmex as vj``):
 - :func:`~vmex.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
 - :func:`~vmex.core.neoclassical.epsilon_effective_from_wout` — optional
   NEO_JAX effective-ripple profile
+- :func:`~vmex.core.gammac.gamma_c_from_wout` — fast-ion ``Gamma_c`` profile
+  from any compatible wout, without a solve
 - :func:`~vmex.core.tracing.essos_vmec_field` — hand a solved equilibrium to
   ESSOS as an ``essos.fields.Vmec`` (optional ESSOS dependency)
 - :func:`~vmex.core.tracing.trace_alphas` /
@@ -183,6 +185,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".core.neoclassical", "epsilon_effective_from_boozer"),
     "epsilon_effective_from_wout": (
         ".core.neoclassical", "epsilon_effective_from_wout"),
+    "gamma_c_from_wout": (".core.gammac", "gamma_c_from_wout"),
     # alpha-particle tracing (ESSOS)
     "AlphaTracingResult": (".core.tracing", "AlphaTracingResult"),
     "essos_vmec_field": (".core.tracing", "essos_vmec_field"),
