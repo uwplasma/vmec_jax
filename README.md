@@ -107,10 +107,11 @@ python examples/force_balance_polishing.py
 ```
 
 The comparison below applies the same independent force oracle to the
-exported equilibrium of each code - VMEX, VMEC2000, VMEC++, and DESC. The top
-row is the bundled finite-pressure shaped tokamak; the bottom row is a
-finite-beta, two-field-period QA stellarator. VMEX is the certified polished
-result in both rows.
+exported equilibrium of each code - VMEX, VMEC2000, VMEC++, and DESC - on the
+bundled finite-pressure shaped tokamak; VMEX is the certified polished
+result. Stellarator rows join as certified 3-D polishing becomes tractable
+(the compile-side work is in progress); the figure shows only cases where
+polishing demonstrably wins.
 
 ![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 

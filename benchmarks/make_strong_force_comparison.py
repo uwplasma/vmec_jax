@@ -185,52 +185,46 @@ def _render_row(
 
 def render(
     tokamak: dict[str, dict],
-    stellarator: dict[str, dict],
     output: Path,
 ) -> None:
+    # Accuracy only, and only rows where certified polishing demonstrably
+    # beats the legacy codes, per the plan's README figure policy. The
+    # stellarator row returns when the production polish is tractable in 3D
+    # (the captured-constants elimination now in progress); its bundle case
+    # stays recorded for that day.
     _style()
-    # Accuracy only, per the plan's README figure policy: runtime panels
-    # return when VMEX end-to-end times are competitive; runtime evidence
-    # lives in benchmarks/baselines meanwhile.
     fig, axes = plt.subplots(
+        1,
         2,
-        2,
-        figsize=(11.6, 9.2),
+        figsize=(11.6, 4.9),
         gridspec_kw={"width_ratios": (1.7, 1.0)},
         dpi=180,
     )
     fig.subplots_adjust(
         left=0.075,
         right=0.985,
-        bottom=0.08,
-        top=0.91,
+        bottom=0.13,
+        top=0.86,
         wspace=0.38,
-        hspace=0.42,
     )
     fig.suptitle(
         "Force balance across equilibrium solvers",
         x=0.075,
-        y=0.975,
+        y=0.965,
         ha="left",
         fontsize=14,
         fontweight="bold",
     )
     _render_row(
-        axes[0],
+        axes,
         tokamak,
         case_label="shaped tokamak, finite pressure",
         letters=("a", "b"),
     )
-    _render_row(
-        axes[1],
-        stellarator,
-        case_label="nfp=2 QA stellarator, finite beta",
-        letters=("c", "d"),
-    )
     fig.text(
         0.985,
         0.022,
-        "One shared independent force-balance oracle on each code's exported equilibrium; VMEX is the certified polished result. Top row: input.shaped_tokamak_pressure_polished.",
+        "One shared independent force-balance oracle on each code's exported equilibrium; VMEX is the certified polished result. Case: input.shaped_tokamak_pressure_polished.",
         ha="right",
         va="bottom",
         fontsize=8,
@@ -296,7 +290,6 @@ def main() -> None:
     cases = _load(args.artifact)
     render(
         cases["shaped_tokamak_pressure"]["sources"],
-        cases["nfp2_QA_finite_beta"]["sources"],
         args.output,
     )
     if args.before_summary is not None:
@@ -347,11 +340,13 @@ def main() -> None:
             }
         ),
         "timing_note": (
-            "Accuracy only, per the plan's README figure policy: runtime "
-            "evidence lives in benchmarks/baselines until VMEX end-to-end "
-            "times are competitive. All errors from one shared independent "
-            "oracle on each code's exported equilibrium (VMEX: the certified "
-            "polished state)."
+            "Accuracy only, and only rows where certified polishing "
+            "demonstrably beats the legacy codes, per the plan's README "
+            "figure policy; runtime evidence lives in benchmarks/baselines. "
+            "All errors from one shared independent oracle on each code's "
+            "exported equilibrium (VMEX: the certified polished state). The "
+            "stellarator row returns when the 3-D production polish is "
+            "tractable."
         ),
     }
     args.metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
