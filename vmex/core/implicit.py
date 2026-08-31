@@ -11,7 +11,8 @@ coefficients).  :func:`solve_implicit` wraps the opaque host solver
     ``(dF/dx)^T lambda = g_x``
 
 matrix-free (one ``jax.vjp`` linearization of the residual, re-applied by a
-recycling GCROT(m, k) Krylov solve — see ``_adjoint_solve_gcrot``) and returns
+recycling GCROT(m, k) Krylov solve staged as one reusable per-config
+executable — see ``_adjoint_gcrot_core``) and returns
 ``g_p - lambda^T dF/dp`` with one more VJP — O(1) memory in the forward
 iteration count.  The adjoint solve executes host-eagerly on the caller's
 thread and is bound to the config's carried device on its own (see the
@@ -1582,6 +1583,28 @@ def _callback_sharding(cfg: ImplicitConfig):
     return jax.sharding.SingleDeviceSharding(cfg.device)
 
 
+@functools.lru_cache(maxsize=_CONFIG_CANON_MAX)
+def _host_callback(cfg: ImplicitConfig) -> Callable:
+    """Stable-identity host callback for :func:`_callback_solve`.
+
+    ``jax.pure_callback`` keys its staged computation partly on the callback
+    callable's identity (``functools.partial`` compares by identity), so the
+    previous per-call partial minted a fresh cache key and recompiled the
+    (small) callback program on every ``run``/``solve_implicit`` — one
+    measured ``jit(pure_callback)`` recompile per warm objective evaluation.
+    Memoized per canonical config identity, bounded like ``_CONFIG_CANON``
+    so entries expire together (eviction costs a recompile, never
+    correctness).
+    """
+    return functools.partial(_host_solve_and_mask, cfg)
+
+
+@functools.lru_cache(maxsize=_CONFIG_CANON_MAX)
+def _host_callback_status(cfg: ImplicitConfig) -> Callable:
+    """Stable-identity status host callback (see :func:`_host_callback`)."""
+    return functools.partial(_host_solve_and_mask_status, cfg)
+
+
 def _callback_solve(params: ImplicitParams, cfg: ImplicitConfig):
     """``pure_callback`` host solve returning ``(state, dof_mask)``.
 
@@ -1597,7 +1620,7 @@ def _callback_solve(params: ImplicitParams, cfg: ImplicitConfig):
     """
     try:
         return jax.pure_callback(
-            functools.partial(_host_solve_and_mask, cfg),
+            _host_callback(cfg),
             (_state_struct(cfg), _state_struct(cfg)), params,
             sharding=_callback_sharding(cfg),
         )
@@ -1612,7 +1635,7 @@ def _callback_solve_status(params: ImplicitParams, cfg: ImplicitConfig):
     status_struct = jax.ShapeDtypeStruct((), jnp.int32)
     scalar_struct = jax.ShapeDtypeStruct((), jnp.float64)
     return jax.pure_callback(
-        functools.partial(_host_solve_and_mask_status, cfg),
+        _host_callback_status(cfg),
         (_state_struct(cfg), _state_struct(cfg), status_struct, scalar_struct, scalar_struct),
         params,
         sharding=_callback_sharding(cfg),
@@ -1694,6 +1717,21 @@ def _solve_implicit_status_fwd(params, cfg):
 # ``jax.default_device`` context (steering eager fresh constants) —
 # independent of any caller-held context; cheap no-ops when no device is
 # carried.
+#
+# The scalar reverse rule itself no longer builds that Krylov loop eagerly:
+# ``_solve_implicit_bwd_impl`` calls :func:`_adjoint_gcrot_core`, a
+# module-level ``jax.jit`` keyed on the (canonical) static config that takes
+# the per-call linearization data — ``(params, z_star, frozen, dof_mask,
+# b)`` — as traced ARGUMENTS.  The previous eager path re-closed the loop
+# body over each call's fresh linearization residuals, so the ``jit(while)``
+# compile cache missed on every un-jitted ``jax.grad`` repeat (5.4-6.5 s per
+# warm F11 gradient).  Placement of the staged core follows its committed
+# inputs — exactly the explicit ``device_put`` pins ``_solve_implicit_bwd``
+# already applies at the boundary — so the hardware-verified device binding
+# is unchanged.  The eager pin+context binding below remains the execution
+# contract for the lanes that still call :func:`_adjoint_solve_gcrot` /
+# :func:`_adjoint_solve` directly (fixed-point refinement, multi-RHS rows,
+# Jacobian correctors, frozen-path FD, free-boundary traced branch).
 
 #: Environment gate for the off-by-default adjoint instrumentation: set
 #: ``VMEX_ADJOINT_DEBUG=1`` to print one ``[vmex adjoint]`` line per stage
@@ -1893,8 +1931,10 @@ def _adjoint_solve_gcrot(A, b, cfg: ImplicitConfig, *, precond=None,
                          rtol=None, max_restarts=None, enforce=True):
     """Adjoint linear solve ``(dF/dz)^T lambda = b`` via ``solvax.gcrot(m, k)``.
 
-    The reverse-pass default (:func:`_solve_implicit_bwd`,
-    :func:`implicit_state_pullback_multi_rhs`).  Same operator wrapping and
+    The eager Krylov lane (:func:`implicit_state_pullback_multi_rhs`, the
+    fixed-point refinement and the frozen-path FD; the scalar reverse rule
+    stages the same solve through :func:`_adjoint_gcrot_core` so warm
+    gradient repeats reuse one executable).  Same operator wrapping and
     *exactly the same tolerance* as :func:`_adjoint_solve` — GCROT keeps
     ``k`` recycled deflation directions across its FGMRES cycles, retaining
     the small eigendirections a truncated GMRES restart discards, and
@@ -2351,6 +2391,89 @@ def implicit_state_tangent_multi_rhs(
         return _device_pin(cfg, (state_batch, report))
 
 
+class _AdjointStats(NamedTuple):
+    """Concrete convergence certificate of one staged adjoint solve.
+
+    ``converged`` already folds in the residual-slack acceptance (like
+    :func:`_linear_response_report`); ``tolerance`` is the acceptance bound
+    the residual was measured against, ready for the typed error message.
+    """
+
+    residual_norm: Array
+    iterations: Array
+    converged: Array
+    tolerance: Array
+
+
+# The reverse-pass adjoint solve as ONE reusable executable per config.
+# Module scope with ``cfg`` static and the per-call linearization data as
+# traced arguments is what makes it reusable (exactly the residual-lane
+# argument, see ``_preconditioned_residual_lane``): the previous host-eager
+# path re-linearized ``F`` per call and handed ``solvax.gcrot`` a fresh
+# closure over that call's residuals, so the ``lax.while_loop`` it stages
+# missed the compile cache on every un-jitted ``jax.grad`` repeat — the
+# measured 5.4-6.5 s ``jit(while)`` recompile dominating the F11 warm
+# gradient stage, for symmetric and LASYM decks alike.
+@functools.partial(jax.jit, static_argnames=("cfg",))
+def _adjoint_gcrot_core(params: ImplicitParams, z_star: SpectralState,
+                        frozen: SpectralState, dof_mask: SpectralState,
+                        b: SpectralState, cfg: ImplicitConfig):
+    """Staged ``(dF/dz)^T lambda = b`` GCROT solve; returns ``(lam, stats)``.
+
+    Linearizes the preconditioned residual at ``(z_star, params)`` and runs
+    the same GCROT(m, k) solve as :func:`_adjoint_solve_gcrot` under one
+    ``jax.jit``.  Convergence enforcement is split across the staging
+    boundary: the returned ``lam`` is NaN-poisoned when the solve missed the
+    acceptance (the trace-time policy of :func:`_checked_adjoint_x`, so a
+    traced caller can never silently pass a finiteness check), while the
+    host-eager caller re-applies the typed-error policy on the CONCRETE
+    ``stats`` via :func:`_enforce_adjoint_stats`.  Placement follows the
+    committed arguments — the ``_device_pin`` at the ``_solve_implicit_bwd``
+    boundary — matching the eager lane's explicit RHS pin (execution-site
+    note above).
+    """
+    F = residual_fn(cfg, frozen, dof_mask)
+    _, vjp_z = jax.vjp(lambda z: F(z, params), z_star)
+    b_flat, unravel = ravel_pytree(b)
+    n = int(b_flat.shape[0])
+    m = min(int(cfg.adjoint_gcrot_m), n)
+    k = min(int(cfg.adjoint_gcrot_k), n)
+
+    def matvec(v):
+        return ravel_pytree(vjp_z(unravel(v))[0])[0]
+
+    sol = _solvax_gcrot(
+        matvec, b_flat, rtol=cfg.adjoint_tol, atol=0.0, m=m, k=k,
+        max_restarts=cfg.adjoint_maxiter,
+    )
+    tolerance = _adjoint_acceptance(cfg, jnp.linalg.norm(b_flat))
+    ok = jnp.logical_or(sol.converged, sol.residual_norm <= tolerance)
+    x = jnp.where(ok, sol.x, jnp.full_like(sol.x, jnp.nan))
+    return unravel(x), _AdjointStats(
+        residual_norm=sol.residual_norm, iterations=sol.iterations,
+        converged=ok, tolerance=tolerance,
+    )
+
+
+def _enforce_adjoint_stats(cfg: ImplicitConfig, stats: _AdjointStats) -> None:
+    """Typed-error half of the :func:`_adjoint_gcrot_core` convergence policy.
+
+    Host-eager (concrete stats — the default execution site) an unaccepted
+    solve raises :class:`~vmex.core.errors.AdjointSolveError` with the
+    iteration/residual evidence, exactly as :func:`_checked_adjoint_x` does
+    on the eager lane.  Under a trace the concrete check is impossible; the
+    core has already NaN-poisoned the returned ``lam`` there, so this is a
+    no-op and the gradient can never silently pass a finiteness check.
+    """
+    if any(isinstance(value, jax.core.Tracer) for value in stats):
+        return
+    if not bool(np.asarray(stats.converged)):
+        _raise_adjoint_unconverged(
+            cfg, iterations=int(np.asarray(stats.iterations)),
+            residual_norm=float(np.asarray(stats.residual_norm)),
+            tolerance=float(np.asarray(stats.tolerance)))
+
+
 def _solve_implicit_bwd(cfg, res, gbar):
     # The backward pass typically executes AFTER the caller's forward context
     # has exited (jax.grad pulls cotangents back later); re-enter the
@@ -2381,15 +2504,18 @@ def _solve_implicit_bwd_impl(cfg, res, gbar):
               f"{jax.config.jax_default_device} cfg.device={cfg.device}",
               file=sys.stderr)
 
-    # (dF/dz)^T lambda = P gbar, matrix-free (one linearization reused).
-    _, vjp_z = jax.vjp(lambda z: F(z, params), z_star)
+    # (dF/dz)^T lambda = P gbar, staged once per config (_adjoint_gcrot_core:
+    # the linearization happens INSIDE the jitted core so its residuals are
+    # traced arguments, not per-call closure constants).
     b = P(gbar)
     if debug:
         _debug_stage("adjoint rhs P(gbar)", b)
-        # One extra operator application, only under the debug gate: places
-        # the whole matvec chain (jitted-residual transpose included).
-        _debug_stage("operator application (dF/dz)^T b", vjp_z(b)[0])
-    lam, _ = _adjoint_solve_gcrot(lambda v: vjp_z(v)[0], b, cfg)
+        # One extra eager operator application, only under the debug gate:
+        # places the whole matvec chain (jitted-residual transpose included).
+        _, dbg_vjp_z = jax.vjp(lambda z: F(z, params), z_star)
+        _debug_stage("operator application (dF/dz)^T b", dbg_vjp_z(b)[0])
+    lam, stats = _adjoint_gcrot_core(params, z_star, frozen, dof_mask, b, cfg)
+    _enforce_adjoint_stats(cfg, stats)
     if debug:
         _debug_stage("recovered lambda", lam)
 
