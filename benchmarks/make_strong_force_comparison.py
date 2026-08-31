@@ -102,22 +102,12 @@ def _style() -> None:
     )
 
 
-def _timing(artifact: dict) -> float:
-    external = artifact.get("external_source")
-    if external is None:
-        return float(artifact["solve_seconds"])
-    if "timing_seconds" in external:
-        return float(external["timing_seconds"]["total"])
-    return float(external["total_seconds"])
-
-
 def _render_row(
     axes,
     artifacts: dict[str, dict],
     *,
     case_label: str,
     letters: tuple[str, str, str],
-    timing_names: tuple[str, ...],
 ) -> None:
     artifacts = {name: artifacts[name] for name in COLORS}
     line_styles = {
@@ -193,59 +183,20 @@ def _render_row(
         fontweight="bold",
     )
 
-    timings = [_timing(artifacts[name]) for name in timing_names]
-    ax = axes[2]
-    x = np.arange(len(timing_names))
-    bars = ax.bar(
-        x,
-        timings,
-        0.72,
-        color=[COLORS[name] for name in timing_names],
-        edgecolor="white",
-        linewidth=0.8,
-    )
-    ax.set_xticks(x)
-    ax.set_xticklabels([labels.get(name, name) for name in timing_names])
-    ax.set_ylabel("first-run wall time [s]")
-    for index, name in enumerate(timing_names):
-        external = artifacts[name].get("external_source") or {}
-        rerun = external.get("rerun_solve_seconds")
-        if rerun is not None:
-            ax.hlines(float(rerun), index - 0.36, index + 0.36,
-                      colors="white", linewidth=1.4, zorder=5)
-            ax.annotate(
-                f"rerun {float(rerun):.3g}", (index - 0.42, float(rerun)),
-                ha="right", va="center", fontsize=7.0, color=INK, zorder=6)
-    ax.set_yscale("log")
-    ax.set_ylim(max(0.005, min(timings) * 0.5), max(timings) * 2.0)
-    for bar in bars:
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() * 1.08,
-            f"{bar.get_height():.3g}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
-    ax.set_title(
-        f"({letters[2]}) Cold runtime",
-        loc="left",
-        fontsize=11,
-        fontweight="bold",
-    )
-
-
 def render(
     tokamak: dict[str, dict],
     stellarator: dict[str, dict],
     output: Path,
 ) -> None:
     _style()
+    # Accuracy only, per the plan's README figure policy: runtime panels
+    # return when VMEX end-to-end times are competitive; runtime evidence
+    # lives in benchmarks/baselines meanwhile.
     fig, axes = plt.subplots(
         2,
-        3,
-        figsize=(14.2, 9.2),
-        gridspec_kw={"width_ratios": (1.55, 1.0, 1.0)},
+        2,
+        figsize=(11.6, 9.2),
+        gridspec_kw={"width_ratios": (1.7, 1.0)},
         dpi=180,
     )
     fig.subplots_adjust(
@@ -268,20 +219,18 @@ def render(
         axes[0],
         tokamak,
         case_label="shaped tokamak, finite pressure",
-        letters=("a", "b", "c"),
-        timing_names=("VMEX", "VMEC2000", "VMEC++", "DESC"),
+        letters=("a", "b"),
     )
     _render_row(
         axes[1],
         stellarator,
         case_label="nfp=2 QA stellarator, finite beta",
-        letters=("d", "e", "f"),
-        timing_names=("VMEX", "VMEC2000", "VMEC++", "DESC"),
+        letters=("c", "d"),
     )
     fig.text(
         0.985,
         0.022,
-        "First runs from an empty JAX compilation cache on one Apple host; bars include load, solve, and export. White marks: VMEX rerun with its default persistent cache.",
+        "One shared independent force-balance oracle on each code's exported equilibrium; VMEX is the certified polished result. Top row: input.shaped_tokamak_pressure_polished.",
         ha="right",
         va="bottom",
         fontsize=8,
@@ -398,12 +347,11 @@ def main() -> None:
             }
         ),
         "timing_note": (
-            "First-run wall time: process start, load, solve, and export on "
-            "one Apple host with an empty JAX compilation cache; the top row "
-            "is the bundled input.shaped_tokamak_pressure_polished deck. The "
-            "VMEX rerun marker is the same command with the persistent cache "
-            "the first run populated (on by default); the legacy codes have "
-            "no JIT stage, so their reruns match their first runs."
+            "Accuracy only, per the plan's README figure policy: runtime "
+            "evidence lives in benchmarks/baselines until VMEX end-to-end "
+            "times are competitive. All errors from one shared independent "
+            "oracle on each code's exported equilibrium (VMEX: the certified "
+            "polished state)."
         ),
     }
     args.metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")

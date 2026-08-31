@@ -106,11 +106,11 @@ vmex examples/data/input.finite_beta_stellarator_polished --plot
 python examples/force_balance_polishing.py
 ```
 
-The comparison below applies the same independent force oracle to VMEX,
-VMEC2000, VMEC++, and DESC. The top row is the bundled finite-pressure shaped
-tokamak; the bottom row is a finite-beta, two-field-period QA stellarator.
-Timings include load, solve, and export from a fresh process. Persistent-cache
-VMEX reruns are marked separately.
+The comparison below applies the same independent force oracle to the
+exported equilibrium of each code - VMEX, VMEC2000, VMEC++, and DESC. The top
+row is the bundled finite-pressure shaped tokamak; the bottom row is a
+finite-beta, two-field-period QA stellarator. VMEX is the certified polished
+result in both rows.
 
 ![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 
