@@ -46,8 +46,14 @@ version.
 ## The summary figure
 
 `*_summary.png` is a publication-style diagnostic set: rotational transform
-(full mesh), pressure and the parallel bootstrap current
-$\langle \mathbf{J}\cdot\mathbf{B} \rangle$ on one panel, the relative radial
+(full mesh) with the parallel bootstrap current
+$\langle \mathbf{J}\cdot\mathbf{B} \rangle$ on its right axis, a combined
+confinement panel — pressure on the left axis, with the effective ripple
+$\epsilon_{\rm eff}^{3/2}$ (NEO_JAX at the bounded
+{func}`~vmex.core.neoclassical.diagnostic_neo_config` resolution) and the
+fast-ion proxy $\Gamma_c$
+({func}`~vmex.core.gammac.gamma_c_from_wout` at a compact radial-trend
+sampling) sharing one dimensionless right axis — the relative radial
 force error
 $\epsilon_F=|(\mathbf J\times\mathbf B-\nabla p)_s|/(|(\mathbf J\times\mathbf B)_s|+|(\nabla p)_s|)$,
 Mercier `DMerc` and the Glasser
@@ -65,12 +71,20 @@ mismatch the curve is omitted with a panel note rather than drawn
 unvalidated. The force-error maximum in the scalar card uses the solved
 interior surfaces; WOUT's axis and boundary values are extrapolations. The
 same normalization is valid in vacuum, where the pressure term is zero.
-Use {func}`vmex.core.neoclassical.epsilon_effective_from_wout` with an explicit
-`neo_jax.NeoConfig` when an effective-ripple calculation is wanted.
-The WOUT adapter releases completed JAX executables before its first NEO
-compile, avoiding the large cold-start time and memory observed when VMEX and
-NEO executables coexist. This is appropriate for an end-of-run plot; pass
-`clear_jax_caches=False` when preserving warm executables for subsequent solves.
+The confinement panel's two right-axis profiles are radial *trends*, not
+transport numbers: both diagnostics run at bounded summary resolution, they
+share the summary's one in-process Boozer transform where the mathematics is
+common (NEO consumes it directly; $\Gamma_c$ keeps its validated real-space
+field-line route), and the computed profiles are cached per in-memory WOUT so
+repeated summary generation does not recompute or recompile them.  A
+diagnostic that is unavailable (NEO_JAX not installed, `lasym` Boozer
+tables, a failed evaluation) is dropped from the panel with the reason
+recorded — never drawn as zero.  Use
+{func}`vmex.core.neoclassical.epsilon_effective_from_wout` with an explicit
+`neo_jax.NeoConfig` when a publication effective-ripple calculation is
+wanted; the library default no longer clears process-wide JAX caches
+(`clear_jax_caches=False`) — the CLI releases the plot-only executables
+itself after all requested diagnostics.
 The two stability indices and $V''(s)$ use separate scales whose zero levels
 are aligned; $V''(s)<0$ denotes a magnetic well. Their legend sits below the
 panel so it cannot hide a curve.

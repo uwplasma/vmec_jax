@@ -71,6 +71,7 @@ field-line parameterization.
 from __future__ import annotations
 
 import functools
+from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -90,6 +91,7 @@ Array = Any
 __all__ = [
     "GammaC",
     "gamma_c_from_fieldlines",
+    "gamma_c_from_wout",
     "gamma_c_state",
 ]
 
@@ -245,13 +247,8 @@ _ROW_FIELDS = ("gamma_c", "excluded_fraction", "overflow_fraction",
                "line_length", "pitch")
 
 
-@functools.partial(
-    jax.jit,
-    static_argnames=("rows", "nalpha", "num_transit", "points_per_transit",
-                     "num_pitch", "quadrature_order", "max_wells"))
-def _gamma_c_rows(
-    state: SpectralState,
-    rt: SolverRuntime,
+def _rows_from_context(
+    ctx: dict,
     zeta0: Array,
     *,
     rows: tuple[int, ...],
@@ -262,16 +259,15 @@ def _gamma_c_rows(
     quadrature_order: int,
     max_wells: int,
 ) -> dict[str, Array]:
-    """``Gamma_c`` of the full-mesh rows ``rows``, as one XLA executable.
+    """``Gamma_c`` of the full-mesh rows ``rows`` of one spectral context.
 
-    Module-level rather than a ``jax.jit`` at the call site, so every boundary
-    iterate of an optimization stage reuses one compilation instead of
-    re-tracing the spectral field-line machinery.  Measured on a three-surface
-    nfp = 2 case: 0.96 s eager against 0.03 s here, values bit-identical.
-    Everything that sets an array shape is static.
+    ``ctx`` is the shared field-line context of
+    :func:`vmex.core.stability._ballooning_context` — either from a live
+    ``(state, runtime)`` pair or normalized from a WOUT file — so the live
+    optimization path and the read-only plotting path run the identical
+    numerics.  Everything that sets an array shape is static in the jitted
+    wrappers below.
     """
-
-    ctx = _ballooning_context(state, rt)
     dtype = ctx["s"].dtype
     alpha = jnp.asarray(
         2.0 * np.pi * np.arange(int(nalpha)) / int(nalpha), dtype=dtype)
@@ -360,6 +356,99 @@ def _gamma_c_rows(
     return stacked
 
 
+_ROW_STATICS = ("rows", "nalpha", "num_transit", "points_per_transit",
+                "num_pitch", "quadrature_order", "max_wells")
+
+#: Traced context entries consumed by :func:`_rows_from_context`; the
+#: remaining `_ballooning_context` keys (normalizations, pressure) are unused
+#: here, and ``lasym`` is Python control flow, so it rides as a static.
+_CTX_KEYS = ("s", "hs", "psi_edge", "iotas", "phipf", "m", "xn",
+             "rmnc", "zmns", "lmns", "rmns", "zmnc", "lmnc")
+
+
+@functools.partial(jax.jit, static_argnames=_ROW_STATICS)
+def _gamma_c_rows(
+    state: SpectralState, rt: SolverRuntime, zeta0: Array, *,
+    rows, nalpha, num_transit, points_per_transit, num_pitch,
+    quadrature_order, max_wells,
+) -> dict[str, Array]:
+    """Live-state ``Gamma_c`` rows, as one XLA executable.
+
+    Module-level rather than a ``jax.jit`` at the call site, so every boundary
+    iterate of an optimization stage reuses one compilation instead of
+    re-tracing the spectral field-line machinery.  Measured on a three-surface
+    nfp = 2 case: 0.96 s eager against 0.03 s here, values bit-identical.
+    """
+    return _rows_from_context(
+        _ballooning_context(state, rt), zeta0, rows=rows, nalpha=nalpha,
+        num_transit=num_transit, points_per_transit=points_per_transit,
+        num_pitch=num_pitch, quadrature_order=quadrature_order,
+        max_wells=max_wells)
+
+
+@functools.partial(jax.jit, static_argnames=_ROW_STATICS + ("lasym",))
+def _gamma_c_rows_from_tables(
+    tables: dict, zeta0: Array, *, lasym: bool,
+    rows, nalpha, num_transit, points_per_transit, num_pitch,
+    quadrature_order, max_wells,
+) -> dict[str, Array]:
+    """WOUT-context ``Gamma_c`` rows; one executable per (shapes, settings)."""
+    return _rows_from_context(
+        dict(tables, lasym=lasym), zeta0, rows=rows, nalpha=nalpha,
+        num_transit=num_transit, points_per_transit=points_per_transit,
+        num_pitch=num_pitch, quadrature_order=quadrature_order,
+        max_wells=max_wells)
+
+
+def _validate_settings(nalpha, num_transit, points_per_transit, num_pitch):
+    if nalpha < 2:
+        raise ValueError("nalpha must be >= 2")
+    if num_transit < 1 or points_per_transit < 16:
+        raise ValueError("num_transit must be >= 1 and points_per_transit >= 16")
+    if num_pitch < 2:
+        raise ValueError("num_pitch must be >= 2")
+
+
+def gamma_c_from_wout(
+    wout,
+    *,
+    surfaces: Sequence[float] = (0.35, 0.6, 0.85),
+    nalpha: int = 9,
+    num_transit: int = 4,
+    points_per_transit: int = 64,
+    num_pitch: int = 32,
+    quadrature_order: int = 32,
+    max_wells: int | None = None,
+    zeta0: float = 0.0,
+) -> dict[str, Array]:
+    """Evaluate ``Gamma_c`` from a VMEC-compatible WOUT, without a solve.
+
+    ``wout`` is a :class:`~vmex.core.wout.WoutData` or a path accepted by
+    :func:`vmex.read_wout`.  The WOUT tables are normalized to the live-state
+    spectral context (the :mod:`vmex.core.turbulence` read-only route), so the
+    numerics — field lines, drift kernels, pitch quadrature — are identical to
+    :func:`gamma_c_state`; only the radial coefficient tables come from the
+    file instead of the solver state.  Same arguments and return contract as
+    :func:`gamma_c_state`.  Read-only: not the differentiable route.
+    """
+    from .turbulence import _wout_ballooning_context
+    from .wout import read_wout
+
+    if isinstance(wout, (str, Path)):
+        wout = read_wout(str(wout))
+    _validate_settings(nalpha, num_transit, points_per_transit, num_pitch)
+    ctx = _wout_ballooning_context(wout)
+    rows = _surface_rows(surfaces, int(ctx["ns"]))
+    out = _gamma_c_rows_from_tables(
+        {key: ctx[key] for key in _CTX_KEYS},
+        jnp.asarray(float(zeta0)), lasym=bool(ctx["lasym"]), rows=rows,
+        nalpha=int(nalpha), num_transit=int(num_transit),
+        points_per_transit=int(points_per_transit), num_pitch=int(num_pitch),
+        quadrature_order=int(quadrature_order),
+        max_wells=16 * int(num_transit) if max_wells is None else int(max_wells))
+    return {**out, "surface_rows": rows}
+
+
 def gamma_c_state(
     state: SpectralState,
     rt: SolverRuntime,
@@ -393,12 +482,7 @@ def gamma_c_state(
     number.  The numerics live in the jitted :func:`_gamma_c_rows`; only the
     validation and the row selection happen here, because those set shapes.
     """
-    if nalpha < 2:
-        raise ValueError("nalpha must be >= 2")
-    if num_transit < 1 or points_per_transit < 16:
-        raise ValueError("num_transit must be >= 1 and points_per_transit >= 16")
-    if num_pitch < 2:
-        raise ValueError("num_pitch must be >= 2")
+    _validate_settings(nalpha, num_transit, points_per_transit, num_pitch)
     rows = _surface_rows(surfaces, int(np.shape(rt.setup.s_full)[0]))
     out = _gamma_c_rows(
         state, rt, jnp.asarray(float(zeta0)), rows=rows, nalpha=int(nalpha),
