@@ -383,6 +383,53 @@ def test_confinement_one_valid_one_invalid_and_never_zero(
         plt.close(fig)
 
 
+def test_confinement_guards_report_failures_and_skip_cache(
+    solved_case, monkeypatch,
+):
+    """Every defensive branch reports its reason; no silent zeros anywhere.
+
+    NEO raising mid-evaluation, NEO returning nothing positive, an all-NaN
+    ``Gamma_c`` (iota ~ 0 poison on every surface), and a wout stand-in that
+    cannot be weak-referenced (computed uncached rather than crashing).
+    """
+    from vmex.core import gammac, neoclassical
+
+    _, wout = solved_case
+    booz = {"mboz": 4, "nboz": 4, "s_b": np.array([0.5]), "neo_booz": {}}
+    monkeypatch.setattr(neoclassical, "diagnostic_neo_config", lambda: None)
+
+    def _raises(_booz, *, config=None):
+        raise RuntimeError("synthetic NEO failure")
+
+    monkeypatch.setattr(neoclassical, "epsilon_effective_from_boozer", _raises)
+    plotting._CONFINEMENT_CACHE.clear()
+    conf = plotting.confinement_summary(wout, booz)
+    assert conf.notes["epsilon_effective"] == "NEO evaluation failed: RuntimeError"
+
+    monkeypatch.setattr(
+        neoclassical, "epsilon_effective_from_boozer",
+        lambda _booz, *, config=None: (np.array([0.5]), np.array([0.0])))
+    monkeypatch.setattr(
+        gammac, "gamma_c_from_wout",
+        lambda w, **kw: {"s": np.array([0.5]), "gamma_c": np.array([np.nan])})
+    plotting._CONFINEMENT_CACHE.clear()
+    conf = plotting.confinement_summary(wout, booz)
+    assert conf.notes["epsilon_effective"] == "NEO returned no finite positive values"
+    assert conf.notes["gamma_c"] == "no surface returned a finite Gamma_c"
+    assert not conf.validity["gamma_c"] and conf.gamma_c is None
+
+    class SlotsWout:
+        __slots__ = ("ns",)                   # no __weakref__: uncacheable
+
+    monkeypatch.setattr(
+        plotting, "_gamma_c_profile",
+        lambda w: (np.array([0.5]), np.array([1e-3]), ""))
+    plotting._CONFINEMENT_CACHE.clear()
+    conf = plotting.confinement_summary(SlotsWout(), booz)
+    assert conf.validity["gamma_c"]
+    assert len(plotting._CONFINEMENT_CACHE) == 0  # computed, not cached
+
+
 def test_confinement_panel_annotates_when_nothing_is_valid():
     """Both diagnostics invalid: an explicit note, no fabricated curves."""
     import matplotlib.pyplot as plt
