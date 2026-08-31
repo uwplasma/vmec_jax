@@ -206,7 +206,16 @@ def _render_row(
     )
     ax.set_xticks(x)
     ax.set_xticklabels([labels.get(name, name) for name in timing_names])
-    ax.set_ylabel("cold wall time [s]")
+    ax.set_ylabel("first-run wall time [s]")
+    for index, name in enumerate(timing_names):
+        external = artifacts[name].get("external_source") or {}
+        rerun = external.get("rerun_solve_seconds")
+        if rerun is not None:
+            ax.hlines(float(rerun), index - 0.36, index + 0.36,
+                      colors="white", linewidth=1.4, zorder=5)
+            ax.annotate(
+                f"rerun {float(rerun):.3g}", (index - 0.42, float(rerun)),
+                ha="right", va="center", fontsize=7.0, color=INK, zorder=6)
     ax.set_yscale("log")
     ax.set_ylim(max(0.005, min(timings) * 0.5), max(timings) * 2.0)
     for bar in bars:
@@ -258,21 +267,21 @@ def render(
     _render_row(
         axes[0],
         tokamak,
-        case_label="finite-pressure tokamak",
+        case_label="shaped tokamak, finite pressure",
         letters=("a", "b", "c"),
         timing_names=("VMEX", "VMEC2000", "VMEC++", "DESC"),
     )
     _render_row(
         axes[1],
         stellarator,
-        case_label="finite-beta QA stellarator",
+        case_label="nfp=2 QA stellarator, finite beta",
         letters=("d", "e", "f"),
         timing_names=("VMEX", "VMEC2000", "VMEC++", "DESC"),
     )
     fig.text(
         0.985,
         0.022,
-        "Cold CPU runs on the same Apple host; each bar includes the code's load, solve, and export path.",
+        "First runs from an empty JAX compilation cache on one Apple host; bars include load, solve, and export. White marks: VMEX rerun with its default persistent cache.",
         ha="right",
         va="bottom",
         fontsize=8,
@@ -389,7 +398,12 @@ def main() -> None:
             }
         ),
         "timing_note": (
-            "Cold load, solve, and export paths on one Apple host; no warm-JIT claim."
+            "First-run wall time: process start, load, solve, and export on "
+            "one Apple host with an empty JAX compilation cache; the top row "
+            "is the bundled input.shaped_tokamak_pressure_polished deck. The "
+            "VMEX rerun marker is the same command with the persistent cache "
+            "the first run populated (on by default); the legacy codes have "
+            "no JIT stage, so their reruns match their first runs."
         ),
     }
     args.metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")

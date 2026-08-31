@@ -33,10 +33,12 @@ The comparison below uses the same independent oracle for every code. Top
 row: the bundled finite-pressure shaped tokamak
 (`input.shaped_tokamak_pressure_polished`); VMEX is the polished result.
 Bottom row: the finite-beta two-field-period QA case, with DESC at
-`L=16, M=N=10`. Cold CPU times include each code's load, solve, and export;
-VMEX solves the 3-D case in `6.5 s` versus `153.1 s` for DESC. The tokamak
-row's `56.9 s` is dominated by JIT compilation and the polishing step, and is
-the target of ongoing performance work.
+`L=16, M=N=10`. Times are first runs from a fresh process with an empty JAX
+compilation cache - load, solve, and export included - with the VMEX rerun
+marked separately: the persistent cache is on by default, so a rerun of the
+3-D case takes `3.6 s` (first run `19.5 s`, versus `153 s` for DESC), and
+the polished tokamak reruns in `30 s` (first run `103 s`, dominated by
+one-time JIT compilation of the polishing step).
 
 ![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 

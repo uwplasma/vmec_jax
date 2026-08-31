@@ -206,7 +206,10 @@ def test_compilation_cache_defaults_are_bounded_and_selective(monkeypatch):
     monkeypatch.delenv("VMEC_JAX_COMPILATION_CACHE_MAX_SIZE", raising=False)
     fake = types.SimpleNamespace(config=_FakeConfig())
     _compat._configure_compilation_cache(fake, "/tmp/cachedir")
-    assert fake.config.updates["jax_persistent_cache_min_compile_time_secs"] == 1.0
+    # Floor 0: storing the polish path's many sub-second programs halves the
+    # CLI rerun (60.6 s -> 31.6 s measured); the eviction bound below keeps
+    # the disk cost finite.
+    assert fake.config.updates["jax_persistent_cache_min_compile_time_secs"] == 0.0
     # The bound stays finite (JAX only locks the cache when eviction is on)
     # but scales with the disk: the old fixed 1 GiB sat at its cap and evicted
     # the executables the next optimization stage asked for.

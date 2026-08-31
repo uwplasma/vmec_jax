@@ -1184,6 +1184,11 @@ def test_collocation_polish_primal_and_derivatives(small_strong_root):
     assert result.polish_report.least_squares_success is not None
     assert result.polish_report.variable_scale_probes == 2
     assert result.context is not None
+    # Acceptance is the independent certificate, not the solver's internal
+    # tolerance: with the certificate bars satisfied the result is accepted
+    # even when the Gauss-Newton step budget expires first.
+    assert result.polish_report.converged
+    assert result.polish_report.termination_reason == "independently-certified"
 
     native_tangent = _random_like(small_strong_root.native, 51)
     output_cotangent = _random_like(small_strong_root.native, 52)
