@@ -16,6 +16,9 @@ under same-geometry refinement. The rotating-elliptical-section hybrid --
 ``section_turns`` turns the ellipse continuously around the closed circuit --
 remains the single research candidate; the hybrid sections below give its
 transform gain and the near-axis representation defect that blocks promotion.
+The boundary-condition contract — the natural boundary terms of the mirror
+energy and the mechanism enforcing each — is derived in
+:doc:`/explanation/mirror-boundary-conditions`.
 Run recipes are in :doc:`/howto/mirror-machines`; the ``mout_*.nc`` output
 format is :doc:`/reference/mout-file`.
 
