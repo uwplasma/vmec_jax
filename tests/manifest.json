@@ -3,6 +3,7 @@
   "fields": ["path", "owner", "primary", "duration", "device", "asset", "oracle", "lanes"],
   "records": [
     ["tests/mirror/test_analytic.py", "mirror", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-mirror-spline", "full-mirror-spline"]],
+    ["tests/mirror/test_boundary_conditions.py", "mirror", "oracle", "slow", "cpu-gpu", "none", "analytic", ["pr-mirror-equilibrium", "full-mirror-equilibrium"]],
     ["tests/mirror/test_exterior.py", "mirror", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-mirror-field", "full-mirror-field"]],
     ["tests/mirror/test_free_boundary.py", "mirror", "integration", "slow", "cpu-gpu", "none", "analytic", ["pr-mirror-field", "full-mirror-field"]],
     ["tests/mirror/test_implicit.py", "mirror", "ad", "slow", "cpu-gpu", "none", "fd", ["pr-mirror-equilibrium", "full-mirror-equilibrium"]],
