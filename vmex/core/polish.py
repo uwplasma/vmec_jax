@@ -852,6 +852,70 @@ def make_high_low_transfer(
     )
 
 
+def sample_high_order_state(
+    native: HighOrderEquilibriumState,
+    runtime: Any,
+) -> SpectralState:
+    """Evaluate a continuous native state on ``runtime``'s legacy full mesh.
+
+    The exact inverse of the representation changes performed by
+    :func:`~vmex.core.strong_force.lift_high_order_state`: clamped-spline
+    evaluation with the ``rho**abs(m)`` regularity factor, VMEX Fourier
+    normalization, the m=1 constrained variables, and the internal
+    ``phipf/lamscale`` lambda scaling.  Unlike :meth:`HighLowTransfer.restrict`
+    this samples a full equilibrium rather than a correction, so the boundary
+    row and the non-evolved degrees of freedom are kept, not zeroed.  The
+    target mesh is whatever ``runtime`` was prepared with — it does not have
+    to match the mesh the native state was lifted from.
+    """
+
+    modes = runtime.modes
+    m = np.asarray(modes.m, dtype=int)
+    n = np.asarray(modes.n, dtype=int)
+    if not np.array_equal(m, np.asarray(native.m)) or not np.array_equal(
+        n, np.asarray(native.n)
+    ):
+        raise ValueError("native and legacy mode tables must match")
+    setup = runtime.setup
+    s = np.asarray(setup.s_full, dtype=float)
+    rho = np.sqrt(np.maximum(s, 0.0))
+    basis_values = np.asarray(native.radial_basis.basis_matrix(s), dtype=float)
+    evaluation = jnp.asarray(
+        rho[None, :, None] ** np.abs(m)[:, None, None] * basis_values[None]
+    )
+
+    def sample(coefficients: Array) -> Array:
+        return jnp.einsum(
+            "msk,mk->sm",
+            evaluation,
+            jnp.asarray(coefficients),
+            precision=jax.lax.Precision.HIGHEST,
+        )
+
+    scale = jnp.asarray(physical_to_internal_scale(modes, runtime.trig))[None, :]
+    R_cos, Z_sin, R_sin, Z_cos = m1_physical_to_constrained(
+        sample(native.R_cos) * scale,
+        sample(native.Z_sin) * scale,
+        sample(native.R_sin) * scale,
+        sample(native.Z_cos) * scale,
+        modes=_mode_table(m, n),
+        lthreed=bool(setup.lthreed),
+        lasym=bool(setup.lasym),
+        lconm1=bool(setup.lconm1),
+    )
+    lambda_scale = (
+        scale * jnp.asarray(setup.phipf)[:, None] / jnp.asarray(setup.lamscale)
+    )
+    return SpectralState(
+        R_cos=R_cos,
+        R_sin=R_sin,
+        Z_cos=Z_cos,
+        Z_sin=Z_sin,
+        L_cos=sample(native.L_cos) * lambda_scale,
+        L_sin=sample(native.L_sin) * lambda_scale,
+    )
+
+
 def make_strong_root_layout(
     dof_mask: SpectralState,
     native: HighOrderEquilibriumState,
@@ -2102,6 +2166,7 @@ __all__ = [
     "make_strong_root_runtime",
     "preconditioner_quality",
     "preconditioner_refresh_decision",
+    "sample_high_order_state",
     "strong_collocation_residual",
     "strong_collocation_residual_at_native",
     "strong_root_rank",

@@ -686,13 +686,30 @@ def _write_wout_from_result(inp, input_path: Path, result, wout_path: Path,
             nextcur=freeb_plan.nextcur, extcur=freeb_plan.extcur,
             mgrid_mode=freeb_plan.mgrid_mode, curlabel=freeb_plan.curlabel,
         )
+    state = (
+        result.polished_state
+        if result.polished_state is not None
+        else result.state
+    )
+    if (
+        result.native_equilibrium is not None
+        and result.polish_report is not None
+        and bool(result.polish_report.converged)
+    ):
+        # A certified polish lives between the solve-mesh nodes; sampled at
+        # the solve resolution the stable wout reconstruction cannot recover
+        # it (see polished_wout_state).  Export the native state on the
+        # denser certifiable mesh instead.  Unpolished results (and failed
+        # polishes) take the unchanged path above.
+        from .polish_driver import polished_wout_state
+
+        state = polished_wout_state(
+            result.native_equilibrium, inp,
+            solve_ns=int(np.shape(np.asarray(result.state.R_cos))[0]),
+        )
     wout = wout_from_state(
         inp=inp,
-        state=(
-            result.polished_state
-            if result.polished_state is not None
-            else result.state
-        ),
+        state=state,
         fsqr=float(result.fsqr), fsqz=float(result.fsqz), fsql=float(result.fsql),
         fsqt=fsqt,
         niter=int(result.iterations),

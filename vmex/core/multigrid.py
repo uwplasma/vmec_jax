@@ -977,8 +977,9 @@ def solve_file(
     ``polish_config`` wins over the scalar overrides entirely.
 
     ``write_wout=True`` writes ``wout_<case>.nc`` beside the input (or into
-    ``outdir``), sampled from the polished state when polishing succeeded —
-    the same output contract as ``vmex <input>``.  Free-boundary decks solve
+    ``outdir``) — the same output contract as ``vmex <input>``.  When
+    polishing succeeded the file samples the certified native state on the
+    denser :func:`~vmex.core.polish_driver.polished_wout_ns` export mesh.  Free-boundary decks solve
     through the free-boundary ladder and reject polish requests, matching the
     fixed-boundary-only scope of the polishing lane.
 

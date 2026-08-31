@@ -251,6 +251,52 @@ def polished_compatibility_state(legacy_state, result: PolishResult):
     return jax.tree.map(jnp.add, legacy_state, low)
 
 
+#: Minimum radial surfaces for a polished WOUT export.  The stable wout
+#: reconstruction (:func:`~vmex.core.strong_force.lift_high_order_state`'s
+#: default) fits ``min(32, (ns - degree + 1) // 2)`` uniform spans, which
+#: locks every pre-cap mesh to ~2 samples per span — a near-interpolatory
+#: fit whose curvature ringing swamps the polish correction.  Only beyond
+#: the 32-span cap do additional samples turn that fit into an
+#: overdetermined L2 projection, so the export mesh provides four samples
+#: per capped span: ``4 * 32 + 1``.
+_POLISHED_WOUT_MIN_NS = 129
+
+
+def polished_wout_ns(
+    native: HighOrderEquilibriumState, *, solve_ns: int
+) -> int:
+    """Radial export mesh on which sampling ``native`` stays certifiable."""
+
+    determined = 2 * int(native.radial_basis.size) + 1
+    return max(int(solve_ns), _POLISHED_WOUT_MIN_NS, determined)
+
+
+def polished_wout_state(
+    native: HighOrderEquilibriumState, source, *, solve_ns: int
+):
+    """Sample the certified native state on the WOUT export mesh.
+
+    ``polished_state`` keeps its API contract of matching the solve mesh;
+    this is the file-export companion.  The WOUT is the only carrier of the
+    polish gain for downstream consumers, and on a coarse solve mesh the
+    stable reconstruction cannot resolve the between-node correction: on the
+    bundled shaped tokamak (``ns = 31``) the native certificate is 1.8e-3
+    while the solve-mesh export certifies at 3.3e-2 — worse than an
+    unrefined VMEC2000 wout — even though the samples still determine the
+    native state exactly.  Sampling on :func:`polished_wout_ns` surfaces
+    instead certifies within a few percent of the dense-sampling floor of
+    the default reconstruction (1.9e-3 at ``ns = 129`` against a 1.88e-3
+    floor measured at ``ns = 401``).
+    """
+
+    from .polish import sample_high_order_state
+    from .solver import prepare_runtime, resolution_from_input
+
+    ns = polished_wout_ns(native, solve_ns=solve_ns)
+    runtime = prepare_runtime(source, resolution_from_input(source, ns=ns))
+    return sample_high_order_state(native, runtime)
+
+
 @dataclass(frozen=True)
 class _IdentityPreconditioner:
     """Explicit identity action used to benchmark unpreconditioned JFNK."""
@@ -1256,5 +1302,7 @@ __all__ = [
     "polish_collocation_least_squares",
     "polish_legacy_solution",
     "polished_compatibility_state",
+    "polished_wout_ns",
+    "polished_wout_state",
     "polish_strong_root",
 ]
