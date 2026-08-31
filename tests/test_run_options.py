@@ -169,6 +169,37 @@ def test_polish_config_mapping_and_explicit_config_priority():
     assert polish_config_from_options(options, base) is base
 
 
+def test_plain_run_options_do_not_import_polish_driver(monkeypatch):
+    """The default CLI path must not load the optional polishing stack."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name.endswith("polish_driver"):
+            raise AssertionError("plain run imported the polishing driver")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    assert polish_config_from_options(RunOptions()) is None
+
+
+def test_public_python_polish_defaults_are_explicitly_off():
+    import inspect
+
+    import vmex as vj
+    from vmex import optimize as opt
+
+    for function in (vj.solve, vj.solve_multigrid, opt.solve_equilibrium):
+        parameter = inspect.signature(function).parameters[
+            "polish_force_balance"
+        ]
+        assert parameter.default is False
+    # This file-oriented API alone needs a tri-state default: None means
+    # honor an explicit VMEX directive in the input deck.
+    assert inspect.signature(vj.solve_file).parameters["polish"].default is None
+
+
 # ---------------------------------------------------------------------------
 # solve_file
 # ---------------------------------------------------------------------------

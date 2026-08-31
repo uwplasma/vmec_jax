@@ -258,7 +258,7 @@ def solve_multigrid(
     use_fft: bool | None = None,
     release_stage_cache: bool = False,
     prefetch_compile: bool = False,
-    polish_force_balance: bool | str | None = None,
+    polish_force_balance: bool | str = False,
     polish_config: Any = None,
 ) -> SolveResult:
     """Fixed-boundary multigrid solve over the ``NS_ARRAY`` ladder.
@@ -357,9 +357,10 @@ def solve_multigrid(
     ``ftol``, ``niter``) skip the prefetch because the previous rung's
     executable is reused directly.
 
-    ``polish_force_balance`` overrides the VMEX-only input directive. When
-    enabled, polishing runs once after the final radial stage; intermediate
-    stages remain the established VMEC continuation ladder.
+    ``polish_force_balance=False`` is the default and leaves the established
+    VMEC continuation solve unchanged. Set it to ``True`` or ``"auto"`` to
+    run polishing once after the final radial stage. Input-file directives
+    are handled by :func:`solve_file`, not by this physics-only API.
 
     Returns the final stage's :class:`~vmex.core.solver.SolveResult`.
     """

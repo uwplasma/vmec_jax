@@ -279,8 +279,6 @@ def polish_config_from_options(options: RunOptions, base: Any = None) -> Any:
     """
     if base is not None:
         return base
-    from .polish_driver import PolishConfig
-
     updates: dict[str, Any] = {}
     if options.polish_tol is not None:
         updates["tolerance"] = options.polish_tol
@@ -290,4 +288,6 @@ def polish_config_from_options(options: RunOptions, base: Any = None) -> Any:
         updates["fail_policy"] = "return_unpolished"
     if not updates:
         return None
+    from .polish_driver import PolishConfig
+
     return PolishConfig(**updates)
