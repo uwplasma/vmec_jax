@@ -189,6 +189,41 @@ def test_solve_file_runs_and_writes_wout(tmp_path):
     assert int(read_wout(wout_path).ier_flag) == 0
 
 
+def test_unpolished_wout_stays_bit_identical_to_the_plain_state_write(tmp_path):
+    """The polished-export lane must not touch unpolished runs at all."""
+    import dataclasses
+
+    import vmex as vj
+    from vmex.core.wout import wout_from_state, write_wout
+
+    inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
+        mpol=3, ntor=0, ntheta=12, nzeta=4)
+    inp = dataclasses.replace(
+        inp, ns_array=np.asarray([5]), ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([1000]))
+    source = inp.to_indata(tmp_path / "input.unpolished_case")
+    result = vj.solve_file(source, polish=False, outdir=tmp_path)
+    assert result.polished_state is None
+    assert result.native_equilibrium is None
+    written = tmp_path / "wout_unpolished_case.nc"
+    assert written.exists()
+
+    # Reference: the direct state write with the CLI's own metadata,
+    # bypassing every polish-aware branch in the writer.
+    history = np.asarray(result.fsq_history, dtype=float)
+    total = history[:, 0] + history[:, 1]
+    stride = total.size // 100 + 1
+    fsqt = total[stride - 1 :: stride][:100]
+    reference = tmp_path / "wout_reference.nc"
+    reparsed = read_input_request(source).input  # what solve_file solved
+    write_wout(reference, wout_from_state(
+        inp=reparsed, state=result.state, fsqr=float(result.fsqr),
+        fsqz=float(result.fsqz), fsql=float(result.fsql), fsqt=fsqt,
+        niter=int(result.iterations), converged=bool(result.converged),
+        input_extension="unpolished_case", vacuum_output=result.vacuum))
+    assert written.read_bytes() == reference.read_bytes()
+
+
 def test_solve_file_rejects_polish_on_a_free_boundary_deck(tmp_path):
     source = tmp_path / "input.freeb"
     # MGRID_FILE must name something: readin.f (and VmecInput) force

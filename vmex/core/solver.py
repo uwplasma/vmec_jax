@@ -2265,7 +2265,9 @@ def solve(
     driver to return immediately when the independent certificate already
     passes.  Polishing
     requires a :class:`VmecInput` source. ``polished_state`` is the native
-    correction projected onto the sampled VMEC mesh for WOUT compatibility;
+    correction projected onto the sampled VMEC solve mesh (the in-memory
+    VMEC-grid view; WOUT export instead samples the certified native state
+    on the denser :func:`~vmex.core.polish_driver.polished_wout_ns` mesh);
     ``native_equilibrium``, ``strong_force``, ``polish_report``, and
     ``polish_context`` carry the certified high-order result and its frozen
     derivative chart. ``polish`` remains a backward-compatible alias.

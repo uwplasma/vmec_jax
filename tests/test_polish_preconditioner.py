@@ -35,6 +35,7 @@ from vmex.core.polish import (
     make_strong_root_runtime,
     preconditioner_quality,
     preconditioner_refresh_decision,
+    sample_high_order_state,
     _strong_residual_unscaled,
     _streaming_ruiz_scales,
     _physical_coordinate_blocks,
@@ -63,6 +64,7 @@ from vmex.core.polish_driver import (
     _supports_keyword,
     polish_collocation_least_squares,
     polish_strong_root,
+    polished_wout_ns,
 )
 from vmex.core.polish_implicit import (
     PolishLinearConfig,
@@ -363,20 +365,24 @@ def _random_like(value, seed: int):
     )
 
 
-@pytest.fixture(scope="module")
-def small_adapter():
+def _small_solovev_input():
     inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
         mpol=3,
         ntor=0,
         ntheta=12,
         nzeta=4,
     )
-    inp = dataclasses.replace(
+    return dataclasses.replace(
         inp,
         ns_array=np.asarray([5]),
         ftol_array=np.asarray([1.0e-10]),
         niter_array=np.asarray([1000]),
     )
+
+
+@pytest.fixture(scope="module")
+def small_adapter():
+    inp = _small_solovev_input()
     config = implicit.make_config(inp, ftol=1.0e-10, max_iterations=1000)
     params = implicit.params_from_input(inp)
     state, mask = implicit.solve_implicit_with_aux(params, config)
@@ -1400,3 +1406,101 @@ def test_public_solver_auto_attaches_an_already_certified_native_state():
     assert result.polished_state.R_cos.shape == result.state.R_cos.shape
     assert np.all(np.isfinite(result.polished_state.R_cos))
     assert result.native_equilibrium.R_cos.shape == (3, 4)
+
+
+def test_sample_high_order_state_inverts_the_lift_on_any_mesh(small_adapter):
+    native, _, state, _, _ = small_adapter
+    inp = _small_solovev_input()
+    for ns in (5, 11):
+        runtime = solver.prepare_runtime(
+            inp, solver.resolution_from_input(inp, ns=ns)
+        )
+        sampled = sample_high_order_state(native, runtime)
+        assert np.shape(np.asarray(sampled.R_cos)) == (ns, native.m.size)
+        relift = lift_high_order_state(
+            sampled, runtime, radial_basis=native.radial_basis, degree=3
+        )
+        for name in ("R_cos", "R_sin", "Z_cos", "Z_sin", "L_cos", "L_sin"):
+            np.testing.assert_allclose(
+                np.asarray(getattr(relift, name)),
+                np.asarray(getattr(native, name)),
+                rtol=0.0,
+                atol=1.0e-11,
+            )
+    # The solve-mesh sample reproduces the fixed boundary row exactly: the
+    # lift pinned the edge spline coefficients to the legacy edge values.
+    solve_mesh = solver.prepare_runtime(
+        inp, solver.resolution_from_input(inp, ns=5)
+    )
+    sampled = sample_high_order_state(native, solve_mesh)
+    np.testing.assert_allclose(
+        np.asarray(sampled.R_cos[-1]), np.asarray(state.R_cos[-1]),
+        rtol=0.0, atol=1.0e-13,
+    )
+    np.testing.assert_allclose(
+        np.asarray(sampled.Z_sin[-1]), np.asarray(state.Z_sin[-1]),
+        rtol=0.0, atol=1.0e-13,
+    )
+
+
+def test_sample_high_order_state_requires_matching_mode_tables(small_adapter):
+    native, *_ = small_adapter
+    other = VmecInput.from_file(DATA / "input.solovev").change_resolution(
+        mpol=4, ntor=0, ntheta=12, nzeta=4
+    )
+    runtime = solver.prepare_runtime(
+        other, solver.resolution_from_input(other, ns=5)
+    )
+    with pytest.raises(ValueError, match="mode tables"):
+        sample_high_order_state(native, runtime)
+
+
+def test_polished_wout_ns_covers_reconstruction_and_the_native_basis():
+    native = SimpleNamespace(radial_basis=SimpleNamespace(size=17))
+    # The stable wout lift caps at 32 spans; four samples per capped span.
+    assert polished_wout_ns(native, solve_ns=31) == 129
+    # A finer solve mesh is never coarsened.
+    assert polished_wout_ns(native, solve_ns=201) == 201
+    # A native basis beyond the cap still stays fully determined.
+    wide = SimpleNamespace(radial_basis=SimpleNamespace(size=90))
+    assert polished_wout_ns(wide, solve_ns=31) == 181
+
+
+def test_polished_wout_export_certifies_near_the_native_state(tmp_path):
+    pytest.importorskip("netCDF4")
+    import vmex as vj
+    from vmex.core.strong_force import (
+        certify_strong_force,
+        high_order_state_from_wout,
+    )
+    from vmex.core.wout import read_wout
+
+    inp = _small_solovev_input()
+    physics = inp.to_indata(tmp_path / "input.polished_export")
+    source = tmp_path / "input.polished_export_directive"
+    source.write_text(
+        "!@VMEX POLISH = .TRUE.\n" + physics.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    config = PolishConfig(radial_degree=3, validation_tolerance=3.0)
+    result = vj.solve_file(source, outdir=tmp_path, polish_config=config)
+    assert bool(result.polish_report.converged)
+    # The in-memory API contract is untouched: polished_state still matches
+    # the solve mesh.  Only the exported file gets the certifiable mesh.
+    assert result.polished_state.R_cos.shape == result.state.R_cos.shape
+
+    wout_path = tmp_path / "wout_polished_export_directive.nc"
+    solve_ns = int(np.shape(np.asarray(result.state.R_cos))[0])
+    exported_ns = int(read_wout(wout_path).ns)
+    assert exported_ns == polished_wout_ns(
+        result.native_equilibrium, solve_ns=solve_ns
+    )
+    assert exported_ns > solve_ns
+
+    native_l2 = float(np.asarray(result.strong_force.normalized_l2))
+    exported = high_order_state_from_wout(wout_path, inp=inp, degree=5)
+    exported_l2 = float(np.asarray(certify_strong_force(exported).normalized_l2))
+    # The export is the only carrier of the polish gain for downstream wout
+    # consumers: the stable default reconstruction of the file must
+    # re-certify within 10% of the native continuous certificate.
+    assert exported_l2 <= 1.1 * native_l2

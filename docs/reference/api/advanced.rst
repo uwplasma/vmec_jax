@@ -63,10 +63,14 @@ package default``; the CLI prints which layer a polish request came from.
 ``polish_fail`` selects the failure behavior: ``"error"`` raises,
 ``"fallback"`` returns the unpolished state, ``"warn"`` does the same with a
 :class:`RuntimeWarning` — never a failure silently presented as polished. A successful result retains the ordinary ``state`` and exposes
-the VMEC-grid projection as ``polished_state``. CLI WOUT files and an
-:class:`vmex.core.optimize.Equilibrium` requested with polishing use that
+the VMEC-grid projection as ``polished_state``; an
+:class:`vmex.core.optimize.Equilibrium` requested with polishing uses that
 projected state, while the continuous solution remains in
-``native_equilibrium``.
+``native_equilibrium``.  CLI WOUT files instead sample
+``native_equilibrium`` on a denser radial mesh
+(:func:`vmex.core.polish_driver.polished_wout_ns`): on the solve mesh the
+stable wout reconstruction cannot resolve the between-node correction, so a
+solve-resolution export would silently discard most of the certified gain.
 
 The public primal path solves the overdetermined physical collocation residual
 with SOLVAX Gauss--Newton and accepts it only after independent force,
