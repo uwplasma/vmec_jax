@@ -281,7 +281,7 @@ def render(
     fig.text(
         0.985,
         0.022,
-        "Cold CPU runs on the same Apple host; each bar includes the code's load, solve, and export path.",
+        "First runs from an empty JAX compilation cache on one Apple host; bars include load, solve, and export. White marks: VMEX rerun with its default persistent cache.",
         ha="right",
         va="bottom",
         fontsize=8,

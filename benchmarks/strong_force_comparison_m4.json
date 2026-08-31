@@ -5,22 +5,22 @@
         "DESC": {
           "normalized_l2": 0.8792585561874102,
           "path": "benchmarks/strong_force_cases_m4.json",
-          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+          "sha256": "188f36ed521ce75301eb0d0114f396b9b1edf5b238174e5f20b154398de07ed7"
         },
         "VMEC++": {
           "normalized_l2": 0.5251832689797072,
           "path": "benchmarks/strong_force_cases_m4.json",
-          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+          "sha256": "188f36ed521ce75301eb0d0114f396b9b1edf5b238174e5f20b154398de07ed7"
         },
         "VMEC2000": {
           "normalized_l2": 0.52518347840121,
           "path": "benchmarks/strong_force_cases_m4.json",
-          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+          "sha256": "188f36ed521ce75301eb0d0114f396b9b1edf5b238174e5f20b154398de07ed7"
         },
         "VMEX": {
-          "normalized_l2": 0.5251834783139551,
+          "normalized_l2": 0.5258959191250293,
           "path": "benchmarks/strong_force_cases_m4.json",
-          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+          "sha256": "188f36ed521ce75301eb0d0114f396b9b1edf5b238174e5f20b154398de07ed7"
         }
       }
     },
@@ -29,34 +29,31 @@
         "DESC": {
           "normalized_l2": 0.02962338970989271,
           "path": "benchmarks/strong_force_cases_m4.json",
-          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+          "sha256": "188f36ed521ce75301eb0d0114f396b9b1edf5b238174e5f20b154398de07ed7"
         },
         "VMEC++": {
           "normalized_l2": 0.017107126432675767,
           "path": "benchmarks/strong_force_cases_m4.json",
-          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+          "sha256": "188f36ed521ce75301eb0d0114f396b9b1edf5b238174e5f20b154398de07ed7"
         },
         "VMEC2000": {
           "normalized_l2": 0.017107126437578512,
           "path": "benchmarks/strong_force_cases_m4.json",
-          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+          "sha256": "188f36ed521ce75301eb0d0114f396b9b1edf5b238174e5f20b154398de07ed7"
         },
         "VMEX": {
-          "normalized_l2": 0.0018189811774630468,
+          "normalized_l2": 0.0017936691673384824,
           "path": "benchmarks/strong_force_cases_m4.json",
-          "sha256": "2a5b2573255789e827262b14dc5877e75b927e03ff19ff630100b2a3f8a6b592"
+          "sha256": "188f36ed521ce75301eb0d0114f396b9b1edf5b238174e5f20b154398de07ed7"
         }
       }
     }
   },
   "figure": "docs/_static/figures/readme_strong_force_comparison.webp",
-  "figure_sha256": "19468c2fc25976b602829943ea221928fce3f146b141f103ba2ea100b8fb855f",
+  "figure_sha256": "39e4ce0f6b39bd360c1c46fec0b5dbbf526dcded4cd3c490167f58bd0bc2bca3",
   "schema": "vmex.strong-force-readme-figure/4",
-  "summary_figure": "docs/_static/figures/readme_polish_summary.webp",
-  "summary_figure_sha256": "6c0f892e28c469b2937dd4e9a567c15cca8a0a4d54cbc575ab1ecc953d23568c",
-  "summary_independent_l2": {
-    "after": 0.005616607909342132,
-    "before": 0.013607094167290654
-  },
-  "timing_note": "Cold load, solve, and export paths on one Apple host; no warm-JIT claim."
+  "summary_figure": null,
+  "summary_figure_sha256": null,
+  "summary_independent_l2": null,
+  "timing_note": "First-run wall time: process start, load, solve, and export on one Apple host with an empty JAX compilation cache; the top row is the bundled input.shaped_tokamak_pressure_polished deck. The VMEX rerun marker is the same command with the persistent cache the first run populated (on by default); the legacy codes have no JIT stage, so their reruns match their first runs."
 }
