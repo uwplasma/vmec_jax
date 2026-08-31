@@ -214,3 +214,87 @@ def test_grad_of_fsqr_wrt_R_cos(case):
     assert grad_np.shape == np.asarray(case.state.R_cos).shape
     assert np.all(np.isfinite(grad_np))
     assert np.any(grad_np != 0.0)
+
+
+# ---------------------------------------------------------------------------
+# alias.f lasym path: reverse-op reflections == the index-map reference
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(5, 0, 16, 1, 1), (6, 3, 18, 12, 3), (4, 2, 7, 5, 2)],
+    ids=["axisym", "nfp3", "odd-ntheta"],
+)
+def test_alias_lasym_gcon_matches_index_map_reference(shape):
+    """``alias_constraint_force(lasym=True)`` is BIT-identical to a reference
+    built with the explicit ``alias_par`` reflection index maps.
+
+    The production path now builds both reflections (``ztemp`` and the
+    second-half ``gcon`` fill) from slice/reverse/concatenate; this pins the
+    data movement to the index-map definition on random data.
+    """
+    from vmex.core.forces import alias_constraint_force, faccon
+    from vmex.core.fourier import Resolution, trig_tables
+
+    mpol, ntor, ntheta, nzeta, nfp = shape
+    res = Resolution(
+        mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta, nfp=nfp,
+        lasym=True, ns=7,
+    )
+    trig = trig_tables(res)
+    rng = np.random.default_rng(ntheta)
+    ztemp = jnp.asarray(rng.standard_normal((7, res.ntheta3, nzeta)))
+    tcon = jnp.asarray(rng.standard_normal((7,)) ** 2 + 0.1)
+    signgs = -1
+    got = np.asarray(alias_constraint_force(
+        ztemp, trig=trig, mpol=mpol, ntor=ntor, signgs=signgs,
+        tcon=tcon, lasym=True,
+    ))
+
+    from jax import lax
+
+    def ein(spec, *ops):
+        return np.asarray(jnp.einsum(
+            spec, *(jnp.asarray(o) for o in ops),
+            precision=lax.Precision.HIGHEST))
+
+    n_theta1, n_theta2 = res.ntheta1, res.ntheta2
+    i = np.arange(n_theta2)
+    i_reflected = np.where(i == 0, 0, n_theta1 - i)
+    k_reflected = (nzeta - np.arange(nzeta)) % nzeta
+    z = np.asarray(ztemp)
+    z_half = z[:, :n_theta2]
+    z_reflected = z[:, i_reflected, :][:, :, k_reflected]
+
+    fac = np.asarray(faccon(mpol, signgs))
+    cosmui = np.asarray(trig.cosmui[:n_theta2, :mpol])
+    sinmui = np.asarray(trig.sinmui[:n_theta2, :mpol])
+    cosmu_fac = np.asarray(trig.cosmu[:n_theta2, :mpol]) * fac[None, :]
+    sinmu_fac = np.asarray(trig.sinmu[:n_theta2, :mpol]) * fac[None, :]
+    cosnv = np.asarray(trig.cosnv[:, :ntor + 1])
+    sinnv = np.asarray(trig.sinnv[:, :ntor + 1])
+
+    w_cos = ein("sik,im->smk", z_half, cosmui)
+    w_sin = ein("sik,im->smk", z_half, sinmui)
+    w_cos_r = ein("sik,im->smk", z_reflected, cosmui)
+    w_sin_r = ein("sik,im->smk", z_reflected, sinmui)
+    half = 0.5 * np.asarray(tcon)[:, None, None]
+    gcs = half * ein("smk,kn->smn", w_cos - w_cos_r, sinnv)
+    gsc = half * ein("smk,kn->smn", w_sin - w_sin_r, cosnv)
+    gss = half * ein("smk,kn->smn", w_sin + w_sin_r, sinnv)
+    gcc = half * ein("smk,kn->smn", w_cos + w_cos_r, cosnv)
+    gcon_sym = (ein("smk,im->sik", ein("smn,kn->smk", gcs, sinnv), cosmu_fac)
+                + ein("smk,im->sik", ein("smn,kn->smk", gsc, cosnv), sinmu_fac))
+    gcon_asym = (ein("smk,im->sik", ein("smn,kn->smk", gcc, cosnv), cosmu_fac)
+                 + ein("smk,im->sik", ein("smn,kn->smk", gss, sinnv), sinmu_fac))
+
+    expected = np.zeros_like(z)
+    expected[:, :n_theta2] = gcon_sym + gcon_asym
+    i2 = np.arange(n_theta2, n_theta1)
+    i2_reflected = n_theta1 - i2
+    expected[:, n_theta2:] = (
+        -gcon_sym[:, i2_reflected][:, :, k_reflected]
+        + gcon_asym[:, i2_reflected][:, :, k_reflected]
+    )
+    np.testing.assert_array_equal(got, expected)
