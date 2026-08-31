@@ -427,6 +427,7 @@ def solve_equilibrium(
     verbose: bool = False,
     forward_ftol: float | None = None,
     forward_max_iterations: int | None = None,
+    polish_force_balance: bool | str = False,
     **solve_kwargs,
 ) -> Equilibrium:
     """Converge ``inp`` with the core multigrid solver -> :class:`Equilibrium`.
@@ -439,6 +440,8 @@ def solve_equilibrium(
     :func:`vmex.core.multigrid.solve_multigrid`. ``forward_ftol`` and
     ``forward_max_iterations`` replace the input ladder's final tolerance and
     iteration cap, using the same names as the optimization problem API.
+    Force-balance polishing is strictly opt-in: the default
+    ``polish_force_balance=False`` returns the ordinary converged VMEC state.
     """
     if forward_ftol is not None and "ftol_array" in solve_kwargs:
         raise ValueError("forward_ftol and ftol_array cannot both be supplied")
@@ -449,7 +452,8 @@ def solve_equilibrium(
     inp = _with_forward_controls(inp, forward_ftol, forward_max_iterations)
     result = solve_multigrid(
         inp, verbose=verbose, initial_state=initial_state,
-        raise_on_max_iterations=raise_on_max_iterations, **solve_kwargs,
+        raise_on_max_iterations=raise_on_max_iterations,
+        polish_force_balance=polish_force_balance, **solve_kwargs,
     )
     state = (
         result.polished_state

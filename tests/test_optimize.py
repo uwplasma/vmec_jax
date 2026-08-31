@@ -214,6 +214,7 @@ def test_solve_equilibrium_forwards_verbose(monkeypatch, solovev_eq):
     assert captured["initial_state"] is solovev_eq.state
     assert captured["raise_on_max_iterations"] is True
     assert captured["verbose"] is True
+    assert captured["polish_force_balance"] is False
     assert solved.inp.ftol_array[-1] == 2.0e-11
     assert solved.inp.niter_array[-1] == 4321
     with pytest.raises(ValueError, match="cannot both"):

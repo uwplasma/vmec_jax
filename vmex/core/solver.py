@@ -2129,9 +2129,12 @@ def _resolve_force_balance_polish(
     """
 
     del source
-    if polish is not None and polish_force_balance is not None:
+    # ``polish_force_balance`` is the canonical spelling and has a public
+    # False default. A non-False value supplied with the compatibility alias
+    # is therefore the only unambiguous double specification.
+    if polish is not None and polish_force_balance not in (None, False):
         raise ValueError("pass either polish or polish_force_balance, not both")
-    requested = polish_force_balance if polish_force_balance is not None else polish
+    requested = polish if polish is not None else polish_force_balance
     if requested is None:
         requested = False
     if requested is not False and requested is not True and requested != "auto":
@@ -2190,7 +2193,7 @@ def solve(
     use_fft: bool | None = None,
     jacobian_retries: int = 2,
     polish: bool | str | None = None,
-    polish_force_balance: bool | str | None = None,
+    polish_force_balance: bool | str = False,
     polish_config: Any = None,
 ) -> SolveResult:
     """Single-grid fixed-boundary solve (VMEC2000 ``eqsolve.f``).

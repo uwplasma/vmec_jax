@@ -12,90 +12,6 @@ VMEX is a JAX implementation of VMEC for stellarator and tokamak ideal-MHD equil
 
 ![VMEX equilibria and diagnostics](docs/_static/figures/readme_equilibrium_showcase.webp)
 
-## Force-balance polishing
-
-VMEC converges projected equations on a staggered radial mesh. A small
-`FSQR/FSQZ/FSQL` therefore does not guarantee a small continuum residual
-
-$$
-\mathbf F = \mathbf J \times \mathbf B - \nabla p , \qquad
-\epsilon_F = \frac{2 |\mathbf F|}{|\mathbf J \times \mathbf B| + |\nabla p| + F_{\mathrm{floor}}} .
-$$
-
-VMEX can polish a converged fixed-boundary state: it lifts the solution to
-axis-regular cubic B-splines, keeps the boundary and profiles fixed, and
-drives both physical force channels to zero on an overdetermined collocation
-grid with matrix-free SOLVAX Gauss–Newton steps. A result is accepted only if
-an independent volume L² force error stays below `1e-2`, radial refinement
-moves it by at most `1e-3`, and the signed Jacobian stays positive.
-
-The comparison below uses the same independent oracle for every code. Top
-row: the bundled finite-pressure shaped tokamak
-(`input.shaped_tokamak_pressure_polished`); VMEX is the polished result.
-Bottom row: the finite-beta two-field-period QA case, with DESC at
-`L=16, M=N=10`. Times are first runs from a fresh process with an empty JAX
-compilation cache - load, solve, and export included - with the VMEX rerun
-marked separately: the persistent cache is on by default, so a rerun of the
-3-D case takes `3.6 s` (first run `19.5 s`, versus `153 s` for DESC), and
-the polished tokamak reruns in `30 s` (first run `103 s`, dominated by
-one-time JIT compilation of the polishing step).
-
-![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
-
-Enable polishing in a VMEC input without breaking VMEC2000:
-
-```fortran
-!@VMEX POLISH = AUTO
-&INDATA
-  ...
-/
-```
-
-VMEX reads the comment; VMEC2000 ignores it and performs its ordinary solve.
-Run the complete finite-beta stellarator example with either interface:
-
-```console
-vmex examples/data/input.finite_beta_stellarator_polished --plot
-python examples/force_balance_polishing.py
-```
-
-The Python flag overrides the input directive and works on both single-grid and
-multigrid solves:
-
-```python
-import vmex as vj
-
-result = vj.solve_file("input.my_case", polish="auto")  # honors !@VMEX lines
-print(result.polish_report.final_normalized_l2)
-
-inp = vj.VmecInput.from_file("input.my_case")           # physics only
-result = vj.solve_multigrid(inp, polish_force_balance=True)
-print(result.polish_report.initial_normalized_l2)
-print(result.polish_report.final_normalized_l2)
-
-# Continuous state for fields, Boozer, virtual casing, ESSOS, and derivatives.
-native = result.native_equilibrium
-# Sampled state used by the CLI's VMEC-compatible WOUT output.
-sampled = result.polished_state
-```
-
-`opt.solve_equilibrium(..., polish_force_balance=True)` exposes the same final
-step. Optimization examples leave it off during iteration and may enable it for
-the final saved equilibrium.
-
-The standard summary below is produced by the example before and after
-polishing. The independent continuum error drops from `1.361e-2` to `5.617e-3`;
-the fixed boundary and prescribed pressure/current profiles do not move. The
-summary's radial `equif` panel is the separate VMEC-grid diagnostic, so it need
-not decrease monotonically with the continuum objective.
-
-![Finite-beta stellarator summary before and after force-balance polishing](docs/_static/figures/readme_polish_summary.webp)
-
-The bundled benchmark artifact records all eight solver results, exact source
-revisions, DESC resolution, timing boundaries, and certificate refinements.
-The figure generator and raw data live in `benchmarks/`; the ordinary solve
-remains the default.
-
 ## Install
 
 ```console
@@ -132,6 +48,82 @@ vmex input.nearby --restart wout_circular_tokamak.nc
 ```
 
 VMEX uses the input file's `NS_ARRAY`, `FTOL_ARRAY`, and `NITER_ARRAY`. `verbose=True` prints the VMEC iteration table; typed errors distinguish invalid inputs, Jacobian failures, non-convergence, and numerical failures.
+
+## Optional force-balance polishing
+
+Polishing is disabled by default. Ordinary `solve`, `solve_multigrid`,
+`solve_file`, CLI, and optimization calls run the established VMEC solve only.
+Enable the additional step explicitly when a smaller continuum force residual
+is needed.
+
+VMEC converges projected equations on a staggered radial mesh, so small
+`FSQR/FSQZ/FSQL` values do not by themselves guarantee a small continuum
+residual
+
+$$
+\mathbf F = \mathbf J \times \mathbf B - \nabla p , \qquad
+\epsilon_F = \frac{2 |\mathbf F|}{|\mathbf J \times \mathbf B| + |\nabla p| + F_{\mathrm{floor}}} .
+$$
+
+The optional step lifts a converged fixed-boundary state to axis-regular cubic
+B-splines, holds the boundary and profiles fixed, and reduces both physical
+force channels on an overdetermined collocation grid with matrix-free SOLVAX
+Gauss–Newton steps. VMEX accepts the result only after independent force,
+radial-refinement, and positive-Jacobian checks.
+
+Enable it in a VMEC-compatible input deck:
+
+```fortran
+!@VMEX POLISH = AUTO
+&INDATA
+  ...
+/
+```
+
+VMEX reads the comment; VMEC2000 ignores it. The same opt-in is available in
+Python:
+
+```python
+import vmex as vj
+
+# Reads the !@VMEX directive; no directive means no polishing.
+result = vj.solve_file("input.my_case")
+
+# VmecInput contains physics only, so direct solves use an explicit flag.
+inp = vj.VmecInput.from_file("input.my_case")
+result = vj.solve_multigrid(inp, polish_force_balance="auto")
+print(result.polish_report.initial_normalized_l2)
+print(result.polish_report.final_normalized_l2)
+```
+
+`opt.solve_equilibrium(..., polish_force_balance=True)` exposes the same final
+step. Leave it at its `False` default during ordinary optimization and enable it
+only for a final equilibrium if desired. The focused example shows the full
+before/after workflow:
+
+```console
+vmex examples/data/input.finite_beta_stellarator_polished --plot
+python examples/force_balance_polishing.py
+```
+
+The comparison below applies the same independent force oracle to VMEX,
+VMEC2000, VMEC++, and DESC. The top row is the bundled finite-pressure shaped
+tokamak; the bottom row is a finite-beta, two-field-period QA stellarator.
+Timings include load, solve, and export from a fresh process. Persistent-cache
+VMEX reruns are marked separately.
+
+![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
+
+The standard VMEX summary before and after polishing makes the change visible
+without requiring the example to be run. The independent continuum error falls
+from `1.361e-2` to `5.617e-3`; the boundary and prescribed profiles do not move.
+The radial `equif` panel is a separate VMEC-grid diagnostic and need not decrease
+monotonically with the continuum objective.
+
+![Finite-beta stellarator summary before and after force-balance polishing](docs/_static/figures/readme_polish_summary.webp)
+
+The raw comparison data, source revisions, resolutions, timing boundaries, and
+certificate refinements are recorded in `benchmarks/`.
 
 ## Magnetic field and derivatives
 

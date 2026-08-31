@@ -19,8 +19,10 @@ INPUT_FILE = (
 OUT_DIR = Path("output_force_balance_polishing")
 
 # --------------------------- solve -----------------------------------------
+# solve_file reads the VMEX-only directive in the input deck. VmecInput itself
+# contains physics only, so solve_multigrid requires an explicit Python flag.
 inp = vj.VmecInput.from_file(INPUT_FILE)
-result = vj.solve_multigrid(inp, verbose=True)
+result = vj.solve_file(INPUT_FILE, write_wout=False, verbose=True)
 if result.polished_state is None or result.polish_report is None:
     raise RuntimeError("the input deck did not request force-balance polishing")
 

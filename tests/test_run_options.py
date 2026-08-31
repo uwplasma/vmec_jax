@@ -169,6 +169,21 @@ def test_polish_config_mapping_and_explicit_config_priority():
     assert polish_config_from_options(options, base) is base
 
 
+def test_plain_run_options_do_not_import_polish_driver(monkeypatch):
+    """The default CLI path must not load the optional polishing stack."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name.endswith("polish_driver"):
+            raise AssertionError("plain run imported the polishing driver")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    assert polish_config_from_options(RunOptions()) is None
+
+
 # ---------------------------------------------------------------------------
 # solve_file
 # ---------------------------------------------------------------------------

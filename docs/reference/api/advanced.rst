@@ -40,7 +40,8 @@ Both :func:`vmex.solve` and :func:`vmex.solve_multigrid` accept
 ``polish_force_balance=False`` (unchanged behavior), ``True`` (required
 correction), or ``"auto"`` (skip an already-certified state). The shorter
 ``polish`` keyword remains an alias on the single-grid call. A standard VMEC
-deck enables the same path with comment directives that VMEC2000 ignores::
+solve never polishes unless the caller explicitly requests it. A standard
+VMEC deck enables the same path with comment directives that VMEC2000 ignores::
 
    !@VMEX POLISH = AUTO
    !@VMEX POLISH_TOL = 1.0E-8
@@ -59,7 +60,8 @@ Python keywords override the file::
    result = vmex.solve_file("input.case", polish="auto")
 
 Precedence is exactly ``CLI option > Python keyword > file directive >
-package default``; the CLI prints which layer a polish request came from.
+package default``; the package default is false, and the CLI prints which
+layer a polish request came from.
 ``polish_fail`` selects the failure behavior: ``"error"`` raises,
 ``"fallback"`` returns the unpolished state, ``"warn"`` does the same with a
 :class:`RuntimeWarning` — never a failure silently presented as polished. A successful result retains the ordinary ``state`` and exposes

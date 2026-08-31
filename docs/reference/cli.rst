@@ -90,7 +90,8 @@ Options
    * - ``--polish [MODE]`` / ``--no-polish``
      - Force-balance polishing after the finest fixed-boundary stage:
        ``auto``, ``true`` (the bare flag), or ``false``. Overrides the
-       ``!@VMEX POLISH`` input directive; the default follows the file.
+       ``!@VMEX POLISH`` input directive. With no flag or directive,
+       polishing is disabled.
        Precedence is ``CLI > Python keyword > file directive > default``.
    * - ``--polish-tol VALUE``
      - Override the polish force tolerance

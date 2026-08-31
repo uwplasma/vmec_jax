@@ -1373,6 +1373,7 @@ def test_public_solver_resolves_polish_keywords_only():
     inp = VmecInput.from_file(DATA / "input.solovev")
     assert solver._resolve_force_balance_polish(inp, None, None) is False
     assert solver._resolve_force_balance_polish(inp, True, None) is True
+    assert solver._resolve_force_balance_polish(inp, True, False) is True
     assert solver._resolve_force_balance_polish(inp, "auto", None) == "auto"
     with pytest.raises(ValueError, match="either polish or polish_force_balance"):
         solver._resolve_force_balance_polish(inp, False, True)
