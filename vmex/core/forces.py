@@ -60,6 +60,8 @@ from .geometry import HalfMeshJacobian, RealSpaceGeometry, sqrt_s_half_mesh
 from .transforms import (
     SpectralForce,
     _fourier_to_real_fft,
+    _reflect_stellarator,
+    _reflect_zeta,
     fourier_to_real,
     register_pytree_dataclass as _register,
     symforce_split,
@@ -555,10 +557,7 @@ def alias_constraint_force(
     n_theta1 = int(trig.ntheta1)
     if ntheta3 != n_theta1:
         raise ValueError("lasym=True requires ntheta3 == ntheta1")
-    i = np.arange(n_theta2, dtype=int)
-    i_reflected = np.where(i == 0, 0, n_theta1 - i)
-    k_reflected = (nzeta - np.arange(nzeta, dtype=int)) % nzeta
-    z_reflected = ztemp[:, i_reflected, :][:, :, k_reflected]
+    z_reflected = _reflect_stellarator(ztemp, n_theta2)
 
     w_cos_r = _einsum("sik,im->smk", z_reflected, cosmui)
     w_sin_r = _einsum("sik,im->smk", z_reflected, sinmui)
@@ -577,16 +576,17 @@ def alias_constraint_force(
     gcon_sym_half = _einsum("smk,im->sik", work_cs, cosmu_fac) + _einsum("smk,im->sik", work_sc, sinmu_fac)
     gcon_asym_half = _einsum("smk,im->sik", work_cc, cosmu_fac) + _einsum("smk,im->sik", work_ss, sinmu_fac)
 
-    gcon = jnp.zeros((ns, ntheta3, nzeta), dtype=ztemp.dtype)
-    gcon = gcon.at[:, :n_theta2, :].set(gcon_sym_half + gcon_asym_half)
-    n_second = n_theta1 - n_theta2
-    if n_second > 0:
-        i2 = np.arange(n_theta2, n_theta1, dtype=int)
-        i2_reflected = (n_theta1 - i2).astype(int)
-        gcon_sym_ref = gcon_sym_half[:, i2_reflected, :][:, :, k_reflected]
-        gcon_asym_ref = gcon_asym_half[:, i2_reflected, :][:, :, k_reflected]
-        gcon = gcon.at[:, n_theta2:, :].set(-gcon_sym_ref + gcon_asym_ref)
-    return gcon
+    front = gcon_sym_half + gcon_asym_half
+    # Second half-interval: gcon(2*pi - theta, -zeta) = -gcon_s + gcon_a.
+    # Rows i2 in [ntheta2, ntheta1) reflect to ntheta1 - i2 = the reversed
+    # rows [1, ntheta2 - 1) — reverse ops again instead of a gather.
+    gcon_sym_ref = _reflect_zeta(
+        jnp.flip(gcon_sym_half[:, 1:n_theta2 - 1, :], axis=1)
+    )
+    gcon_asym_ref = _reflect_zeta(
+        jnp.flip(gcon_asym_half[:, 1:n_theta2 - 1, :], axis=1)
+    )
+    return jnp.concatenate([front, -gcon_sym_ref + gcon_asym_ref], axis=1)
 
 
 def _internal_odd_channel(

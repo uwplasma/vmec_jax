@@ -1,31 +1,31 @@
 {
  "case_sha256": "9d1e58f23aea74f5ea8a29f0b75bb9c42f426dbb29e662943e6ac8a053a9950c",
- "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "commit": "9f77fdbd5b4d083c3f7b402449a910c78e4030a3",
  "compile": {
   "lasym_gradient": {
    "cache_miss_reasons": [],
-   "compiles": 208,
-   "traces": 357
+   "compiles": 198,
+   "traces": 298
   },
   "lasym_value": {
    "cache_miss_reasons": [],
-   "compiles": 140,
-   "traces": 337
+   "compiles": 148,
+   "traces": 343
   },
   "symmetric_gradient": {
    "cache_miss_reasons": [],
-   "compiles": 246,
-   "traces": 645
+   "compiles": 386,
+   "traces": 646
   },
   "symmetric_value": {
    "cache_miss_reasons": [],
-   "compiles": 175,
-   "traces": 583
+   "compiles": 391,
+   "traces": 856
   },
   "warm": {
    "cache_miss_reasons": [],
-   "compiles": 24,
-   "traces": 99
+   "compiles": 3,
+   "traces": 3
   }
  },
  "dirty": false,
@@ -36,7 +36,7 @@
   "x64": true
  },
  "memory_bytes": {
-  "peak_host_rss": 16936681472
+  "peak_host_rss": 3405611008
  },
  "platform": {
   "machine": "arm64",
@@ -47,14 +47,14 @@
  "repo": "uwplasma/vmex",
  "schema": 1,
  "timing_s": {
-  "build": 0.003015541995409876,
-  "lasym_gradient": 34.38386775000254,
-  "lasym_value": 19.69494458398549,
-  "symmetric_gradient": 31.43966495798668,
-  "symmetric_value": 18.779236792004667,
-  "warm": 9.955269124999177
+  "build": 0.12683358299545944,
+  "lasym_gradient": 16.48325337501592,
+  "lasym_value": 17.821474790980574,
+  "symmetric_gradient": 16.530856249999488,
+  "symmetric_value": 16.417991791997338,
+  "warm": 0.043705624993890524
  },
  "title": "symmetric versus LASYM value and gradient",
- "utc": "2026-08-30T17:53:32Z",
+ "utc": "2026-08-31T04:01:58Z",
  "workflow": "F11"
 }

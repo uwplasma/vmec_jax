@@ -321,3 +321,58 @@ def test_symforce_split_recovers_pure_parities():
         np.asarray(sym)[:, :n_theta2], field_odd[:, :n_theta2], rtol=RTOL, atol=1e-12
     )
     np.testing.assert_allclose(np.asarray(asym), 0.0, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(5, 0, 16, 1, 1), (5, 2, 20, 18, 2), (4, 2, 7, 5, 2)],
+    ids=["axisym", "nfp2", "odd-ntheta"],
+)
+@pytest.mark.parametrize("reflect_even", [True, False], ids=["even", "odd"])
+def test_symforce_split_reflection_is_bitwise_exact(shape, reflect_even):
+    """The reverse-op reflection equals the index-map definition, bit for bit.
+
+    ``symforce_split`` builds ``a[(ntheta1 - i) % ntheta1, (nzeta - k) %
+    nzeta]`` from slice/reverse/concatenate (the gather it replaces lowered
+    to a scatter in the pullback that dominated the LASYM adjoint).  This
+    pins the data movement to the explicit index map on arbitrary data,
+    including the theta=0 / zeta=0 fixed points and an odd requested ntheta.
+    """
+    mpol, ntor, ntheta, nzeta, nfp = shape
+    res = Resolution(
+        mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta, nfp=nfp,
+        lasym=True, ns=NS,
+    )
+    trig = trig_tables(res)
+    rng = np.random.default_rng(ntheta)
+    a = rng.standard_normal((NS, res.ntheta3, nzeta))
+    n_theta1, n_theta2 = res.ntheta1, res.ntheta2
+    i = np.arange(n_theta2)
+    i_reflected = np.where(i == 0, 0, n_theta1 - i)
+    k_reflected = (nzeta - np.arange(nzeta)) % nzeta
+    a_reflected = a[:, i_reflected, :][:, :, k_reflected]
+    sign = 1.0 if reflect_even else -1.0
+    expected_sym = np.concatenate(
+        [0.5 * (a[:, :n_theta2] + sign * a_reflected), a[:, n_theta2:]], axis=1
+    )
+    expected_asym = np.concatenate(
+        [0.5 * (a[:, :n_theta2] - sign * a_reflected),
+         np.zeros_like(a[:, n_theta2:])], axis=1
+    )
+    sym, asym = symforce_split(
+        jnp.asarray(a), trig=trig, reflect_even=reflect_even
+    )
+    np.testing.assert_array_equal(np.asarray(sym), expected_sym)
+    np.testing.assert_array_equal(np.asarray(asym), expected_asym)
+
+
+def test_symforce_split_rejects_reduced_theta_grid():
+    """The reflection needs the full [0, 2*pi) grid; a reduced symmetric grid
+    (ntheta3 == ntheta2) has no second half-interval to reflect from."""
+    res = Resolution(
+        mpol=4, ntor=1, ntheta=16, nzeta=4, nfp=1, lasym=False, ns=NS
+    )
+    trig = trig_tables(res)
+    field = jnp.zeros((NS, res.ntheta3, 4))
+    with pytest.raises(ValueError, match="full lasym theta grid"):
+        symforce_split(field, trig=trig)

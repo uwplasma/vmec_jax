@@ -962,6 +962,30 @@ def tomnspa(
 # ---------------------------------------------------------------------------
 
 
+def _reflect_zeta(a: Array) -> Array:
+    """Map the last axis ``k -> (nzeta - k) % nzeta`` with reverse ops."""
+    return jnp.concatenate([a[..., :1], jnp.flip(a[..., 1:], axis=-1)], axis=-1)
+
+
+def _reflect_stellarator(a: Array, n_theta2: int) -> Array:
+    """Rows ``[0, n_theta2)`` of the full-grid ``a`` under ``(theta, zeta) ->
+    (2*pi - theta, -zeta)``: ``a[(ntheta1 - i) % ntheta1, (nzeta - k) % nzeta]``
+    with theta on the second-to-last axis.
+
+    The reflected theta rows are row 0 followed by the reversed tail rows
+    ``[n_theta2 - 1, ntheta1)``; zeta likewise keeps column 0 and reverses
+    the rest.  Built from slice/reverse/concatenate — bit-identical to the
+    equivalent index gather, but XLA lowers reverses to fast copies while the
+    gather's transposed scatter dominated the LASYM adjoint (measured in
+    context: the symforce pullback cost 2x more than the entire projection
+    pullback at production 3D resolution before this change).
+    """
+    theta_reflected = jnp.concatenate(
+        [a[..., :1, :], jnp.flip(a[..., n_theta2 - 1:, :], axis=-2)], axis=-2
+    )
+    return _reflect_zeta(theta_reflected)
+
+
 def symforce_split(
     field: Array,
     *,
@@ -1001,14 +1025,13 @@ def symforce_split(
     if int(trig.ntheta3) != int(n_theta3):
         raise ValueError("symforce_split: theta size mismatch with trig tables")
 
-    # Reflection maps (0-based): theta_i -> theta_{ntheta1 - i} (fixed point at
-    # i = 0) and zeta_k -> zeta_{nzeta - k mod nzeta}.
-    i = np.arange(n_theta2)
-    i_reflected = np.where(i == 0, 0, n_theta1 - i)
-    k_reflected = (nzeta - np.arange(nzeta)) % nzeta
+    if int(n_theta3) != int(n_theta1):
+        raise ValueError("symforce_split expects the full lasym theta grid")
 
+    # Reflection (0-based): theta_i -> theta_{(ntheta1 - i) % ntheta1} and
+    # zeta_k -> zeta_{(nzeta - k) % nzeta}, via reverse/roll ops (no gather).
     a_half = a[:, :n_theta2, :]
-    a_reflected = a[:, i_reflected, :][:, :, k_reflected]
+    a_reflected = _reflect_stellarator(a, n_theta2)
 
     if reflect_even:
         sym_half = 0.5 * (a_half + a_reflected)
