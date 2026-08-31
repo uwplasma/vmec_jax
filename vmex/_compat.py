@@ -246,9 +246,13 @@ def _configure_compilation_cache(jax_module: Any, cache_dir: str | None) -> None
     except Exception:
         pass
     try:
-        # Keep JAX's useful default: tiny elementwise kernels are cheaper to
-        # rebuild than to store and were creating tens of thousands of files.
-        min_compile = _env("CACHE_MIN_COMPILE_TIME_SECS", "1")
+        # Store every compilation. The 1 s floor JAX defaults to left most of
+        # the polishing path's programs unstored - hundreds of sub-second
+        # compiles whose reload savings add up: the polished shaped-tokamak
+        # CLI rerun measured 60.6 s at floor 1 versus 31.6 s at floor 0
+        # (first runs 81.5 s versus 90.7 s, the write cost, paid once). Disk
+        # stays bounded by the eviction cap configured below.
+        min_compile = _env("CACHE_MIN_COMPILE_TIME_SECS", "0")
         jax_module.config.update("jax_persistent_cache_min_compile_time_secs", float(min_compile))
     except Exception:
         pass
