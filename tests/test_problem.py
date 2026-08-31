@@ -261,13 +261,15 @@ def test_vmec_problem_field_facades_validate_and_route(monkeypatch):
         problem.x0, external_parameters=np.array([2.0]),
         external_field_from_parameters=lambda p: p,
         external_dof_names=("coil current",), nphi=7, ntheta=9,
-        digits=4, levels=((7, 9),))
+        digits=4, levels=((7, 9),), chunk_size=11, target_chunk_size=3)
     interior = problem.interior_field(problem.x0, newton_iterations=6)
     assert exterior[0] == ("input", "state", {"runtime": "runtime", "nphi": 7, "ntheta": 9})
     np.testing.assert_array_equal(exterior[1], problem.x0)
     assert exterior[2]["dof_names"] == problem.dof_names
     np.testing.assert_array_equal(exterior[2]["external_parameters"], [2.0])
     assert exterior[2]["external_dof_names"] == ("coil current",)
+    assert exterior[2]["chunk_size"] == 11
+    assert exterior[2]["target_chunk_size"] == 3
     assert interior[0:2] == ("input", ("state", "runtime"))
     assert interior[3] == {"dof_names": problem.dof_names, "newton_iterations": 6}
 
