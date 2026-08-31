@@ -1,26 +1,26 @@
 {
  "cache": {
-  "directory": "/private/tmp/claude-501/-Users-rogeriojorge-local/ba88a505-702b-41c6-a36d-3c58b0f50b6b/scratchpad/phase2wt/benchmarks/.profile_cache",
-  "entries_after": 23,
+  "directory": "/private/tmp/claude-501/-Users-rogeriojorge-local/ba88a505-702b-41c6-a36d-3c58b0f50b6b/scratchpad/lasym-slice/m4-final-cache",
+  "entries_after": 31,
   "entries_before": 0
  },
  "case_sha256": "9d1e58f23aea74f5ea8a29f0b75bb9c42f426dbb29e662943e6ac8a053a9950c",
- "commit": "8e6fdff4c79a8c500057482a3444bb52ad84cbaf",
+ "commit": "9f77fdbd5b4d083c3f7b402449a910c78e4030a3",
  "compile": {
   "lasym_gradient": {
    "cache_miss_reasons": [],
-   "compiles": 206,
-   "traces": 355
+   "compiles": 198,
+   "traces": 298
   },
   "lasym_value": {
    "cache_miss_reasons": [],
-   "compiles": 172,
-   "traces": 367
+   "compiles": 148,
+   "traces": 343
   },
   "symmetric_gradient": {
    "cache_miss_reasons": [],
-   "compiles": 393,
-   "traces": 678
+   "compiles": 386,
+   "traces": 646
   },
   "symmetric_value": {
    "cache_miss_reasons": [],
@@ -36,7 +36,7 @@
   "x64": true
  },
  "memory_bytes": {
-  "peak_host_rss": 3638214656
+  "peak_host_rss": 2658418688
  },
  "platform": {
   "machine": "arm64",
@@ -47,14 +47,14 @@
  "repo": "uwplasma/vmex",
  "schema": 1,
  "timing_s": {
-  "build": 0.15069958299864084,
-  "lasym_gradient": 23.65132829200593,
-  "lasym_value": 15.220247457997175,
-  "process_wall": 79.85516387497773,
-  "symmetric_gradient": 22.02733591699507,
-  "symmetric_value": 15.221192042023176
+  "build": 0.11771820799913257,
+  "lasym_gradient": 17.543912624998484,
+  "lasym_value": 16.73148499999661,
+  "process_wall": 70.88455824999255,
+  "symmetric_gradient": 18.008602084009908,
+  "symmetric_value": 15.642576416023076
  },
  "title": "symmetric versus LASYM value and gradient",
- "utc": "2026-08-30T17:50:11Z",
+ "utc": "2026-08-31T03:59:59Z",
  "workflow": "F11"
 }
