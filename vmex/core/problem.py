@@ -593,6 +593,31 @@ class VmecProblem(FunctionProblem):
             lambda _: (jnp.asarray(0.0), jnp.zeros(n_extra_terms)),
             operand=None)
 
+    def jax_quantity_from_state(
+        self,
+        x: Array,
+        quantity: Callable[[Array, Any], Array],
+    ) -> tuple[Array, Array]:
+        """Evaluate a differentiable floating-point quantity and solve status.
+
+        ``quantity(state, runtime)`` may return any fixed-shape JAX array.
+        Rejected equilibrium trials return an array of NaNs with that shape,
+        so an invalid state cannot look like a usable diagnostic. The scalar
+        status is zero only for an accepted equilibrium.
+        """
+        import jax.numpy as jnp
+
+        state_runtime_status = self.metadata.get("jax_state_runtime_status")
+        if state_runtime_status is None:
+            raise AttributeError(
+                "state quantities require an implicit VMEX problem")
+        state_runtime_status = cast(Callable[..., Any], state_runtime_status)
+        state, runtime, status = state_runtime_status(x)
+        value = jnp.asarray(quantity(state, runtime))
+        if not jnp.issubdtype(value.dtype, jnp.inexact):
+            raise TypeError("state quantities must have a floating-point dtype")
+        return jnp.where(status == 0, value, jnp.full_like(value, jnp.nan)), status
+
     def exterior_field(
         self,
         x: Array,
