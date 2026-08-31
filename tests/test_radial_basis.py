@@ -233,3 +233,16 @@ def test_basis_operation_shape_topology_and_refinement_errors() -> None:
         periodic.refine_periodic_uniform(jnp.ones(periodic.size), 24)
     with pytest.raises(ValueError, match="coefficient axis"):
         periodic.refine_periodic_uniform(jnp.ones(periodic.size - 1), 16)
+
+
+def test_equality_and_hash_follow_content_not_identity() -> None:
+    """A basis rides in jit pytree metadata: two equal-content builds must be
+    one compilation-cache key, and different content must not collide."""
+    a = BSplineBasis.clamped(np.linspace(0.0, 1.0, 5))
+    b = BSplineBasis.clamped(np.linspace(0.0, 1.0, 5))
+    c = BSplineBasis.clamped(np.linspace(0.0, 1.0, 6))
+    assert a is not b
+    assert a == b
+    assert hash(a) == hash(b)
+    assert a != c
+    assert a != object()

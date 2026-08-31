@@ -50,6 +50,7 @@ jax.tree_util.register_dataclass(
 )
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True, eq=False)
 class HighLowTransfer:
     """Linear maps between regularized splines and legacy VMEX packing.
@@ -71,7 +72,45 @@ class HighLowTransfer:
     lthreed: bool
     lasym: bool
     lconm1: bool
-    low_project: Callable[[SpectralState], SpectralState]
+    #: Evolved-dof projection data; ``None`` means the identity. Stored as
+    #: (canonical config, mask pytree) rather than a per-call closure so the
+    #: transfer is a value-stable jit pytree - a baked callable made every
+    #: fresh transfer a new compilation-cache key.
+    project_config: Any = None
+    project_mask: SpectralState | None = None
+
+    def low_project(self, value: SpectralState) -> SpectralState:
+        if self.project_config is None:
+            return value
+        from .implicit import _dof_projector
+
+        return _dof_projector(self.project_config, self.project_mask)(value)
+
+    def tree_flatten(self):
+        children = (
+            self.evaluation, self.geometry_fit, self.lambda_fit,
+            self.mode_scale, self.phipf, self.lamscale, self.project_mask,
+        )
+        aux = (
+            tuple(int(v) for v in np.asarray(self.m)),
+            tuple(int(v) for v in np.asarray(self.n)),
+            bool(self.lthreed), bool(self.lasym), bool(self.lconm1),
+            self.project_config,
+        )
+        return children, aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        m, n, lthreed, lasym, lconm1, project_config = aux
+        (evaluation, geometry_fit, lambda_fit, mode_scale, phipf, lamscale,
+         project_mask) = children
+        return cls(
+            evaluation=evaluation, geometry_fit=geometry_fit,
+            lambda_fit=lambda_fit, mode_scale=mode_scale, phipf=phipf,
+            lamscale=lamscale, m=np.asarray(m, dtype=int),
+            n=np.asarray(n, dtype=int), lthreed=lthreed, lasym=lasym,
+            lconm1=lconm1, project_config=project_config,
+            project_mask=project_mask)
 
     @property
     def mnmax(self) -> int:
@@ -275,6 +314,7 @@ class PreconditionerRefreshDecision(NamedTuple):
     reasons: tuple[str, ...]
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True, eq=False)
 class StrongRootGroup:
     """One small independent ``(m, |n|)`` native-spline coordinate block."""
@@ -285,6 +325,20 @@ class StrongRootGroup:
     stop: int
     m: int
     abs_n: int
+
+    def tree_flatten(self):
+        return (self.basis,), (
+            tuple(int(v) for v in np.asarray(self.high_indices).ravel()),
+            np.asarray(self.high_indices).shape,
+            int(self.start), int(self.stop), int(self.m), int(self.abs_n))
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        indices, shape, start, stop, m, abs_n = aux
+        (basis,) = children
+        return cls(
+            high_indices=np.asarray(indices, dtype=int).reshape(shape),
+            basis=basis, start=start, stop=stop, m=m, abs_n=abs_n)
 
 
 def _flatten_high(correction: HighOrderCorrection) -> Array:
@@ -303,6 +357,7 @@ def _unflatten_high(vector: Array, mnmax: int, nbasis: int) -> HighOrderCorrecti
     return HighOrderCorrection(*values)
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True, eq=False)
 class StrongRootLayout:
     """Independent native-spline coordinates for the square strong root.
@@ -317,6 +372,15 @@ class StrongRootLayout:
     mnmax: int
     nbasis: int
     groups: tuple[StrongRootGroup, ...]
+
+    def tree_flatten(self):
+        return (self.groups,), (int(self.mnmax), int(self.nbasis))
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        mnmax, nbasis = aux
+        (groups,) = children
+        return cls(mnmax=mnmax, nbasis=nbasis, groups=tuple(groups))
 
     @property
     def size(self) -> int:
@@ -362,7 +426,12 @@ class StrongPhysicalChart:
     build_seconds: float
 
     def tree_flatten(self):
-        """Keep dense numeric maps out of JIT static constants."""
+        """Keep dense numeric maps out of JIT static constants.
+
+        ``build_seconds`` is a wall-clock build diagnostic; in the hashable
+        metadata it made every chart a distinct compilation-cache key, so a
+        flatten/unflatten round trip drops it to zero instead.
+        """
 
         return (
             (
@@ -371,12 +440,13 @@ class StrongPhysicalChart:
                 self.coordinate_scale,
                 self.equation_scale,
             ),
-            (int(self.gauge_rank), float(self.build_seconds)),
+            (int(self.gauge_rank),),
         )
 
     @classmethod
     def tree_unflatten(cls, metadata, children):
-        gauge_rank, build_seconds = metadata
+        (gauge_rank,) = metadata
+        build_seconds = 0.0
         (
             coordinate_basis,
             equation_basis,
@@ -483,17 +553,20 @@ class StrongRootRuntime:
             self.strong_scale,
             self.operator_balance,
         )
-        metadata = (
-            self.transfer,
-            self.low_preconditioner,
-            self.layout,
-            float(self.force_floor),
-        )
+        # transfer, preconditioner, and layout are pytrees themselves; as
+        # children they carry their arrays as traced leaves, so runtimes of
+        # equal structure share compiled programs across polish calls (as
+        # hashable metadata their identity keyed every compile).
+        children = children + (
+            self.transfer, self.low_preconditioner, self.layout)
+        metadata = (float(self.force_floor),)
         return children, metadata
 
     @classmethod
     def tree_unflatten(cls, metadata, children):
-        transfer, low_preconditioner, layout, force_floor = metadata
+        (force_floor,) = metadata
+        *children, transfer, low_preconditioner, layout = children
+        children = tuple(children)
         (
             native,
             coordinate_scale,
@@ -600,38 +673,102 @@ class StrongModeBlockPreconditioner:
         return result
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True, eq=False)
 class LowOrderPreconditioner:
-    """Stored raw-force block inverse lifted to high-order coefficient space."""
+    """Stored raw-force block inverse lifted to high-order coefficient space.
+
+    A value-stable jit pytree: the raw-block callables live nowhere in the
+    stored state - packing, projection, and the legacy raw residual are
+    rebuilt on demand from the canonical config and the stored arrays, so
+    equal-structure preconditioners from different polish calls share
+    compiled programs. The factor build time is a wall-clock diagnostic and
+    is dropped to zero by a flatten round trip for the same reason the
+    chart's is.
+    """
 
     transfer: HighLowTransfer
-    system: Any
+    config: Any
+    params: Any
+    frozen_state: SpectralState
+    dof_mask: SpectralState
+    factors: Any
+    row_scale: Array
+    column_scale: Array
     legacy_coordinates: SpectralState
     legacy_defect: SpectralState
-    legacy_residual: Callable[[SpectralState], SpectralState]
     factor_build_seconds: float
+
+    def tree_flatten(self):
+        children = (
+            self.transfer, self.params, self.frozen_state, self.dof_mask,
+            self.factors, self.row_scale, self.column_scale,
+            self.legacy_coordinates, self.legacy_defect,
+        )
+        return children, (self.config,)
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        (config,) = aux
+        (transfer, params, frozen_state, dof_mask, factors, row_scale,
+         column_scale, legacy_coordinates, legacy_defect) = children
+        return cls(
+            transfer=transfer, config=config, params=params,
+            frozen_state=frozen_state, dof_mask=dof_mask, factors=factors,
+            row_scale=row_scale, column_scale=column_scale,
+            legacy_coordinates=legacy_coordinates,
+            legacy_defect=legacy_defect, factor_build_seconds=0.0)
+
+    def _project(self):
+        from .implicit import _dof_projector
+
+        return _dof_projector(self.config, self.dof_mask)
+
+    def _pack(self, tree: SpectralState) -> Array:
+        from .implicit import _pack_active
+
+        return _pack_active(self.config, tree)
+
+    def _unpack(self, matrix: Array) -> SpectralState:
+        from .implicit import _unpack_active
+
+        return _unpack_active(self.config, matrix)
+
+    def legacy_residual(self, coordinates: SpectralState) -> SpectralState:
+        """The frozen-state raw legacy residual (rebuilt, never stored)."""
+
+        from .implicit import residual_fn
+
+        raw = residual_fn(self.config, self.frozen_state, self.dof_mask,
+                          formulation="raw")
+        return raw(coordinates, self.params)
+
+    def _block_apply(self, rhs: SpectralState, *,
+                     transpose: bool = False) -> SpectralState:
+        from .implicit import _block_inverse_apply
+
+        return _block_inverse_apply(
+            self.factors, self._pack, self._unpack, self._project(),
+            self.row_scale, self.column_scale, rhs, transpose=transpose)
 
     def apply(self, rhs: HighOrderCorrection) -> HighOrderCorrection:
         """Apply ``prolong * A_low^-1 * restrict``."""
 
-        from .implicit import _raw_block_apply
-
         low_rhs = self.transfer.restrict(rhs)
-        return self.transfer.prolong(_raw_block_apply(self.system, low_rhs))
+        return self.transfer.prolong(self._block_apply(low_rhs))
 
     def apply_transpose(self, rhs: HighOrderCorrection) -> HighOrderCorrection:
         """Apply the algebraic transpose using the same stored factors."""
 
-        from .implicit import _raw_block_apply
-
         low_rhs = self.transfer.prolong_transpose(rhs)
-        low_solution = _raw_block_apply(self.system, low_rhs, transpose=True)
+        low_solution = self._block_apply(low_rhs, transpose=True)
         return self.transfer.restrict_transpose(low_solution)
 
     def residual(self, tangent: SpectralState) -> SpectralState:
         """Evaluate and row-scale the nonlinear legacy raw-force endpoint."""
 
-        candidate = self.system.project(
+        project = self._project()
+        candidate = project(
             jax.tree.map(jnp.add, self.legacy_coordinates, tangent)
         )
         force = jax.tree.map(
@@ -639,16 +776,14 @@ class LowOrderPreconditioner:
             self.legacy_residual(candidate),
             self.legacy_defect,
         )
-        scaled = self.system.pack(force) * jnp.asarray(self.system.row_scale)
-        return self.system.project(self.system.unpack(scaled))
+        scaled = self._pack(force) * jnp.asarray(self.row_scale)
+        return project(self._unpack(scaled))
 
     def solve_scaled(self, rhs: SpectralState) -> SpectralState:
         """Invert a row-scaled legacy residual with the stored raw factors."""
 
-        from .implicit import _raw_block_apply
-
-        raw_packed = self.system.pack(rhs) / jnp.asarray(self.system.row_scale)
-        return _raw_block_apply(self.system, self.system.unpack(raw_packed))
+        raw_packed = self._pack(rhs) / jnp.asarray(self.row_scale)
+        return self._block_apply(self._unpack(raw_packed))
 
     def solve_scaled_transpose(self, rhs: SpectralState) -> SpectralState:
         """Invert the transpose of the row-scaled legacy residual.
@@ -659,11 +794,9 @@ class LowOrderPreconditioner:
         forward :meth:`solve_scaled` path and is kept explicit here.
         """
 
-        from .implicit import _raw_block_apply
-
-        raw_solution = _raw_block_apply(self.system, rhs, transpose=True)
-        scaled = self.system.pack(raw_solution) / jnp.asarray(self.system.row_scale)
-        return self.system.project(self.system.unpack(scaled))
+        raw_solution = self._block_apply(rhs, transpose=True)
+        scaled = self._pack(raw_solution) / jnp.asarray(self.row_scale)
+        return self._project()(self._unpack(scaled))
 
 
 def _mode_table(m: np.ndarray, n: np.ndarray):
@@ -678,7 +811,8 @@ def make_high_low_transfer(
     native: HighOrderEquilibriumState,
     runtime: Any,
     *,
-    low_project: Callable[[SpectralState], SpectralState] | None = None,
+    project_config: Any = None,
+    project_mask: SpectralState | None = None,
 ) -> HighLowTransfer:
     """Build reusable high/low transfer matrices for one equilibrium layout."""
 
@@ -701,7 +835,6 @@ def make_high_low_transfer(
             evaluation[mode, :, :-1], rcond=1.0e-12
         )
         lambda_fit[mode] = np.linalg.pinv(evaluation[mode], rcond=1.0e-12)
-    project = (lambda value: value) if low_project is None else low_project
     return HighLowTransfer(
         evaluation=jnp.asarray(evaluation),
         geometry_fit=jnp.asarray(geometry_fit),
@@ -714,7 +847,8 @@ def make_high_low_transfer(
         lthreed=bool(runtime.setup.lthreed),
         lasym=bool(runtime.setup.lasym),
         lconm1=bool(runtime.setup.lconm1),
-        low_project=project,
+        project_config=project_config,
+        project_mask=project_mask,
     )
 
 
@@ -1856,19 +1990,13 @@ def build_low_order_preconditioner(
 
     runtime = implicit.runtime_from_params(params, config)
     project = implicit._dof_projector(config, dof_mask)
-    transfer = make_high_low_transfer(native, runtime, low_project=project)
+    transfer = make_high_low_transfer(
+        native, runtime, project_config=config, project_mask=dof_mask)
+    frozen_state = jax.lax.stop_gradient(legacy_state)
     legacy_coordinates = project(legacy_state)
     raw_residual = implicit.residual_fn(
-        config,
-        jax.lax.stop_gradient(legacy_state),
-        dof_mask,
-        formulation="raw",
-    )
-
-    def legacy_residual(coordinates: SpectralState) -> SpectralState:
-        return raw_residual(coordinates, params)
-
-    legacy_defect = legacy_residual(legacy_coordinates)
+        config, frozen_state, dof_mask, formulation="raw")
+    legacy_defect = raw_residual(legacy_coordinates, params)
 
     started = perf_counter()
     system = implicit._raw_block_system(
@@ -1880,13 +2008,20 @@ def build_low_order_preconditioner(
         int(probe_chunk_size),
     )
     elapsed = perf_counter() - started
+    # Only the factor and scale arrays survive: the system's closures would
+    # otherwise ride into jit metadata and defeat cross-call compile reuse.
     return LowOrderPreconditioner(
-        transfer,
-        system,
-        legacy_coordinates,
-        legacy_defect,
-        legacy_residual,
-        elapsed,
+        transfer=transfer,
+        config=config,
+        params=params,
+        frozen_state=frozen_state,
+        dof_mask=dof_mask,
+        factors=system.factors,
+        row_scale=system.row_scale,
+        column_scale=system.column_scale,
+        legacy_coordinates=legacy_coordinates,
+        legacy_defect=legacy_defect,
+        factor_build_seconds=elapsed,
     )
 
 

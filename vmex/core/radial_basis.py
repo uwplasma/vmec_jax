@@ -138,6 +138,32 @@ class BSplineBasis:
     quadrature_nodes: np.ndarray
     quadrature_weights: np.ndarray
 
+    # A basis rides in jit pytree metadata (HighOrderEquilibriumState and the
+    # mirror spline states), where identity equality made every freshly built
+    # basis a new compilation-cache key: the F3 baseline recompiled the
+    # module-jitted strong-force evaluators on every polish call over
+    # equal-content bases. Equality and hash follow the numeric content.
+
+    def _content(self) -> tuple:
+        return (
+            bool(self.periodic), int(self.degree), int(self.size),
+            self.knots.shape, self.knots.tobytes(),
+            self.breakpoints.tobytes(), self.collocation_nodes.tobytes(),
+            self.quadrature_nodes.tobytes(), self.quadrature_weights.tobytes(),
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BSplineBasis):
+            return NotImplemented
+        return self is other or self._content() == other._content()
+
+    def __hash__(self) -> int:
+        cached = self.__dict__.get("_hash")
+        if cached is None:
+            cached = hash(self._content())
+            object.__setattr__(self, "_hash", cached)
+        return cached
+
     @classmethod
     def clamped(
         cls,
