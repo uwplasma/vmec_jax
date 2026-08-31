@@ -13,6 +13,8 @@ from inspect import signature
 from time import perf_counter
 from typing import Any, Literal, NamedTuple
 
+import functools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -964,6 +966,30 @@ def polish_strong_root(
     )
 
 
+# The polish hot path used to jit fresh per-call lambdas closing over the
+# runtime and chart, baking every per-solve array in as XLA constants: each
+# polish call recompiled the residual, its linearization, and the whole
+# Gauss-Newton program, and the changed constants defeated the persistent
+# compilation cache as well (different constants, different HLO). These
+# module lanes take the pytrees as arguments, so equal-structure polish
+# calls share one compiled program in memory and on disk.
+@jax.jit
+def _scaled_collocation_lane(value, runtime, chart, collocation_scale):
+    return strong_collocation_residual(value, runtime, chart) / collocation_scale
+
+
+@functools.partial(jax.jit, static_argnames=("config",))
+def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
+                              collocation_scale, config):
+    from solvax import gauss_newton_least_squares
+
+    def residual(vector):
+        return strong_collocation_residual(
+            variable_scale * vector, runtime, chart) / collocation_scale
+
+    return gauss_newton_least_squares(residual, value, config=config)
+
+
 def _collocation_variable_scale(
     residual,
     zero: jax.Array,
@@ -1002,7 +1028,7 @@ def polish_collocation_least_squares(
     layout so it composes with the existing native-state utilities.
     """
 
-    from solvax import LeastSquaresConfig, gauss_newton_least_squares
+    from solvax import LeastSquaresConfig
 
     config = PolishConfig() if config is None else config
     chart = make_strong_structured_chart(runtime) if chart is None else chart
@@ -1018,11 +1044,12 @@ def polish_collocation_least_squares(
         / np.sqrt(float(initial_collocation.size)),
         1.0e-12,
     )
-    physical_residual = jax.jit(
-        lambda value: (
-            strong_collocation_residual(value, runtime, chart) / collocation_scale
-        )
-    )
+    collocation_scale_array = jnp.asarray(collocation_scale)
+
+    def physical_residual(value):
+        return _scaled_collocation_lane(
+            value, runtime, chart, collocation_scale_array)
+
     variable_scale = _collocation_variable_scale(
         physical_residual,
         zero,
@@ -1030,9 +1057,6 @@ def polish_collocation_least_squares(
         config.collocation_scale_probes,
     )
     variable_scale_array = jnp.asarray(variable_scale)
-    transformed_residual = jax.jit(
-        lambda value: physical_residual(variable_scale_array * value)
-    )
     least_squares_config = LeastSquaresConfig(
         rtol=config.tolerance,
         max_steps=config.max_nonlinear_iterations,
@@ -1044,13 +1068,9 @@ def polish_collocation_least_squares(
         ),
     )
     started = perf_counter()
-    solution = jax.jit(
-        lambda value: gauss_newton_least_squares(
-            transformed_residual,
-            value,
-            config=least_squares_config,
-        )
-    )(zero)
+    solution = _gauss_newton_polish_lane(
+        zero, runtime, chart, variable_scale_array,
+        collocation_scale_array, least_squares_config)
     jax.block_until_ready(solution)
     vector = variable_scale_array * solution.x
     state = _corrected_state(vector, runtime, chart)

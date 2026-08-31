@@ -2181,6 +2181,45 @@ def _raw_block_solve(
     )
 
 
+def _pack_active(cfg: ImplicitConfig, tree: SpectralState) -> Array:
+    """Concatenate the active state fields (a pure function of ``cfg``)."""
+    return jnp.concatenate(
+        [getattr(tree, name) for name in _active_state_fields(cfg)], axis=1)
+
+
+def _unpack_active(cfg: ImplicitConfig, matrix: Array) -> SpectralState:
+    """Inverse of :func:`_pack_active` with zeros on inactive fields."""
+    names = _active_state_fields(cfg)
+    ns = int(cfg.resolution.ns)
+    mn = matrix.shape[1] // len(names)
+    parts = dict(zip(names, jnp.split(matrix, len(names), axis=1)))
+    return SpectralState(**{
+        name: parts.get(name, jnp.zeros((ns, mn), matrix.dtype))
+        for name in _STATE_FIELDS})
+
+
+def _block_inverse_apply(
+    factors: Any,
+    pack: Callable,
+    unpack: Callable,
+    project: Callable,
+    row_scale: Array,
+    column_scale: Array,
+    rhs: SpectralState,
+    *,
+    transpose: bool = False,
+) -> SpectralState:
+    """Apply one stored raw block inverse without rebuilding its factors."""
+    if factors is None:
+        raise ValueError("raw block factors were not requested")
+    packed = pack(project(rhs))
+    packed = packed * (column_scale if transpose else row_scale)
+    solution = block_thomas_solve(
+        factors, packed[..., None], transpose=transpose)[..., 0]
+    solution = solution * (row_scale if transpose else column_scale)
+    return project(unpack(solution))
+
+
 def _raw_block_apply(
     system: _RawBlockSystem,
     rhs: SpectralState,
@@ -2188,20 +2227,9 @@ def _raw_block_apply(
     transpose: bool = False,
 ) -> SpectralState:
     """Apply one stored raw block inverse without rebuilding its factors."""
-    if system.factors is None:
-        raise ValueError("raw block factors were not requested")
-    def solve(value):
-        packed = system.pack(system.project(value))
-        packed = packed * (system.column_scale if transpose
-                           else system.row_scale)
-        solution = block_thomas_solve(
-            system.factors, packed[..., None], transpose=transpose
-        )[..., 0]
-        solution = solution * (system.row_scale if transpose
-                               else system.column_scale)
-        return system.project(system.unpack(solution))
-
-    return solve(rhs)
+    return _block_inverse_apply(
+        system.factors, system.pack, system.unpack, system.project,
+        system.row_scale, system.column_scale, rhs, transpose=transpose)
 
 
 def _implicit_evolved_tangent_multi_rhs(

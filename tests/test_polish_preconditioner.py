@@ -463,7 +463,8 @@ def test_three_dimensional_m1_projector_transposes_without_scatter_failure():
     transfer = make_high_low_transfer(
         native,
         runtime,
-        low_project=implicit._dof_projector(config, mask),
+        project_config=config,
+        project_mask=mask,
     )
     high = _random_like(transfer.zeros_high(jnp.float64), 31)
     low_bar = _random_like(transfer.restrict(high), 32)
@@ -883,9 +884,30 @@ def test_strong_runtime_and_chart_pytree_roundtrip(small_strong_root):
         rebuilt = jax.tree.unflatten(structure, leaves)
         assert type(rebuilt) is type(original)
         np.testing.assert_allclose(rebuilt.coordinate_scale, original.coordinate_scale)
-    assert jax.tree.unflatten(
-        jax.tree.structure(small_strong_root), jax.tree.leaves(small_strong_root)
-    ).layout is small_strong_root.layout
+    # The layout is a child pytree now (its basis arrays are traced leaves,
+    # not baked metadata), so a round trip reconstructs an equivalent layout
+    # rather than preserving object identity.
+    rebuilt_layout = jax.tree.unflatten(
+        jax.tree.structure(small_strong_root),
+        jax.tree.leaves(small_strong_root),
+    ).layout
+    original_layout = small_strong_root.layout
+    assert rebuilt_layout.mnmax == original_layout.mnmax
+    assert rebuilt_layout.nbasis == original_layout.nbasis
+    assert len(rebuilt_layout.groups) == len(original_layout.groups)
+    for rebuilt_group, group in zip(rebuilt_layout.groups,
+                                    original_layout.groups):
+        np.testing.assert_array_equal(rebuilt_group.high_indices,
+                                      group.high_indices)
+        np.testing.assert_allclose(rebuilt_group.basis, group.basis)
+        assert (rebuilt_group.start, rebuilt_group.stop) == (
+            group.start, group.stop)
+    # What compile reuse actually needs: two flattens of one runtime share a
+    # treedef even though the layout and preconditioner are rebuilt objects.
+    assert jax.tree.structure(small_strong_root) == jax.tree.structure(
+        jax.tree.unflatten(
+            jax.tree.structure(small_strong_root),
+            jax.tree.leaves(small_strong_root)))
     assert jax.tree.unflatten(
         jax.tree.structure(chart), jax.tree.leaves(chart)
     ).gauge_rank == chart.gauge_rank
