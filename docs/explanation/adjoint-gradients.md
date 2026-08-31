@@ -84,6 +84,13 @@ gradient agrees with that reference to rel 5.4e-07 when they do, against
 4.2e-03 at the host stopping point and 5.7e-03 with the linearization alone
 refined.
 
+Nearby optimization trials reuse the previous Newton displacement as a guess.
+VMEX evaluates the new frozen residual before accepting that guess; if it does
+not reach `refine_tol`, VMEX discards it and replays the original refinement.
+This changes work, not the accepted numerical path. Public optimization
+factories expose the same `refine_tol`; keep 1e-10 for production gradients
+and use `numpy.inf` only for an explicit legacy comparison.
+
 ## The six SOLVAX solve classes
 
 Every linear solve in the gradient stack goes through SOLVAX. The complete

@@ -381,6 +381,9 @@ def make_config(
         max_iterations = int(np.asarray(inp.niter_array).ravel()[-1])
     if not np.isfinite(max_fsq_ratio) or max_fsq_ratio <= 0.0:
         raise ValueError("max_fsq_ratio must be finite and positive")
+    refine_tol = float(refine_tol)
+    if not refine_tol > 0.0:
+        raise ValueError("refine_tol must be positive or numpy.inf")
     return _canonical_config(ImplicitConfig(
         inp=inp, resolution=resolution, ftol=float(ftol),
         max_iterations=int(max_iterations), mode=str(mode),
@@ -391,7 +394,7 @@ def make_config(
         adjoint_restart=int(adjoint_restart),
         adjoint_maxiter=int(adjoint_maxiter),
         adjoint_gcrot_m=int(adjoint_gcrot_m), adjoint_gcrot_k=int(adjoint_gcrot_k),
-        refine_tol=float(refine_tol),
+        refine_tol=refine_tol,
         max_fsq_ratio=float(max_fsq_ratio),
         hot_restart=bool(hot_restart), device=device,
     ))
@@ -1282,6 +1285,12 @@ _LAST_STATUS_ERROR: weakref.WeakKeyDictionary[ImplicitConfig, Exception] = \
 _LAST_REFINED: weakref.WeakKeyDictionary[
     ImplicitConfig, tuple[bytes, SpectralState]] = weakref.WeakKeyDictionary()
 
+# Last accepted refinement displacement. At a nearby parameter point it is
+# only an initial guess: an exact residual check guards its use, and failure
+# to reach the requested tolerance replays the established path from scratch.
+_LAST_REFINEMENT_CORRECTION: weakref.WeakKeyDictionary[
+    ImplicitConfig, SpectralState] = weakref.WeakKeyDictionary()
+
 
 def _params_key(params: ImplicitParams) -> bytes:
     return b"".join(np.asarray(leaf, dtype=np.float64).tobytes()
@@ -1326,6 +1335,7 @@ def _host_solve(cfg: ImplicitConfig, params: ImplicitParams) -> SolveResult:
             break
         except VmecError:
             if k == len(attempts) - 1:
+                _LAST_REFINEMENT_CORRECTION.pop(cfg, None)
                 raise
     if cfg.hot_restart and bool(result.converged):
         _HOT_CACHE[cfg] = result.state
@@ -1362,14 +1372,26 @@ def _refine_fixed_point(cfg: ImplicitConfig, params: ImplicitParams,
     key = _params_key(params)
     hit = _LAST_REFINED.get(cfg)
     if hit is None or hit[0] != key:
-        hit = (key, _refined_state(cfg, params, state, dof_mask))
+        refined = _refined_state(
+            cfg, params, state, dof_mask,
+            initial_correction=_LAST_REFINEMENT_CORRECTION.get(cfg),
+        )
+        correction = jax.tree.map(jnp.subtract, refined, state)
+        correction_norm = float(_tree_norm(correction))
+        if np.isfinite(correction_norm) and correction_norm > 0.0:
+            _LAST_REFINEMENT_CORRECTION[cfg] = correction
+        else:
+            _LAST_REFINEMENT_CORRECTION.pop(cfg, None)
+        hit = (key, refined)
         _LAST_REFINED[cfg] = hit
     return hit[1]
 
 
 def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
                    state: SpectralState,
-                   dof_mask: SpectralState) -> SpectralState:
+                   dof_mask: SpectralState,
+                   *, initial_correction: SpectralState | None = None,
+                   ) -> SpectralState:
     """Newton-refine ``state`` onto the root of the frozen residual ``F``.
 
     The implicit function theorem defines the derivative of the equilibrium
@@ -1394,31 +1416,50 @@ def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
     P = _dof_projector(cfg, dof_mask)
     F = residual_fn(cfg, state, dof_mask)
     z0 = P(state)
-    z, fz = z0, F(z0, params)
+    fz = F(z0, params)
     base = float(_tree_norm(fz))
     if not np.isfinite(base) or base <= tol:
         return state
-    best_z, best = z0, base
-    for _ in range(_REFINE_MAX_STEPS):
-        _, jvp = jax.linearize(lambda t: F(t, params), z)
-        # Best-effort by contract: GCROT, not the plain restarted GMRES of
-        # _adjoint_solve, because a truncated cycle stagnates on exactly the
-        # small eigendirection this refinement exists to walk down.
-        delta, _ = _adjoint_solve_gcrot(
-            jvp, fz, cfg, rtol=_REFINE_FORCING, enforce=False,
-            max_restarts=_REFINE_MAX_RESTARTS)
-        z = jax.tree.map(lambda a, b: a - b, z, delta)
-        fz = F(z, params)
-        residual = float(_tree_norm(fz))
-        if not np.isfinite(residual):
-            break
-        # Newton is not monotone here (one deck rises 1.3e-07 -> 4.4e-07
-        # before falling to 3.9e-13), so iterate from the latest point but
-        # return the best one seen.
-        if residual < best:
-            best_z, best = z, residual
-        if best <= tol:
-            break
+    def refine_from(z, fz, residual):
+        best_z, best = z, residual
+        for _ in range(_REFINE_MAX_STEPS):
+            _, jvp = jax.linearize(lambda t: F(t, params), z)
+            # GCROT avoids the small-eigenvalue stagnation seen with ordinary
+            # restarted GMRES on this fixed-point solve.
+            delta, _ = _adjoint_solve_gcrot(
+                jvp, fz, cfg, rtol=_REFINE_FORCING, enforce=False,
+                max_restarts=_REFINE_MAX_RESTARTS)
+            z = jax.tree.map(lambda a, b: a - b, z, delta)
+            fz = F(z, params)
+            residual = float(_tree_norm(fz))
+            if not np.isfinite(residual):
+                break
+            # Newton need not be monotone: iterate from the latest point but
+            # retain the best state seen.
+            if residual < best:
+                best_z, best = z, residual
+            if best <= tol:
+                break
+        return best_z, best
+
+    if initial_correction is not None:
+        candidate = jax.tree.map(jnp.add, z0, P(initial_correction))
+        candidate_f = F(candidate, params)
+        candidate_residual = float(_tree_norm(candidate_f))
+        if np.isfinite(candidate_residual) and candidate_residual < base:
+            if candidate_residual <= tol:
+                correction = P(jax.tree.map(
+                    lambda a, b: a - b, candidate, z0))
+                return jax.tree.map(jnp.add, state, correction)
+            warm_z, warm = refine_from(candidate, candidate_f, candidate_residual)
+            if warm <= tol:
+                correction = P(jax.tree.map(
+                    lambda a, b: a - b, warm_z, z0))
+                return jax.tree.map(jnp.add, state, correction)
+
+    # A warm guess that misses the tolerance cannot alter numerical results:
+    # replay the original refinement from the host-solver state.
+    best_z, best = refine_from(z0, fz, base)
     if best >= base:
         return state
     correction = P(jax.tree.map(lambda a, b: a - b, best_z, z0))
@@ -1538,6 +1579,7 @@ def _host_solve_and_mask_status(cfg: ImplicitConfig, params_np) -> tuple:
         if error is not None:
             _HOST_ERROR.clear()
             _LAST_STATUS_ERROR[cfg] = error
+            _LAST_REFINEMENT_CORRECTION.pop(cfg, None)
             params = _device_pin(cfg, jax.tree.map(jnp.asarray, params_np))
             runtime = runtime_from_params(params, cfg)
             state = _initial_state(runtime.setup)
@@ -1555,6 +1597,7 @@ def _host_solve_and_mask_status(cfg: ImplicitConfig, params_np) -> tuple:
             _LAST_STATUS_ERROR[cfg] = RuntimeError(
                 "equilibrium solve completed without a certification memo"
             )
+            _LAST_REFINEMENT_CORRECTION.pop(cfg, None)
             return (
                 state, mask, np.int32(1), np.float64(np.inf), np.float64(np.inf)
             )
@@ -1562,6 +1605,8 @@ def _host_solve_and_mask_status(cfg: ImplicitConfig, params_np) -> tuple:
         fsq = float(result.fsqr) + float(result.fsqz) + float(result.fsql)
         ratio = fsq / cfg.ftol
         status = 0 if bool(result.converged) or ratio <= cfg.max_fsq_ratio else 2
+        if status != 0:
+            _LAST_REFINEMENT_CORRECTION.pop(cfg, None)
         return state, mask, np.int32(status), np.float64(fsq), np.float64(ratio)
 
 

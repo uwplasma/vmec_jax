@@ -308,6 +308,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes, fast, physics, parity, device]
+    permissions:
+      contents: read
+      id-token: write
     if: >-
       always() &&
       needs.changes.outputs.run_coverage == 'true' &&
@@ -333,6 +336,12 @@ jobs:
           coverage combine coverage.device coverage.fast coverage.physics-* coverage.parity-*
           coverage report --include='*/vmex/mirror/*' --fail-under=90
           coverage xml
+      - name: Publish combined coverage
+        uses: codecov/codecov-action@v5.5.5
+        with:
+          fail_ci_if_error: true
+          files: coverage.xml
+          use_oidc: true
       - name: Enforce changed-line coverage
         if: github.event_name == 'pull_request'
         run: diff-cover coverage.xml --compare-branch="origin/${GITHUB_BASE_REF}" --fail-under=95
