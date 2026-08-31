@@ -1353,6 +1353,10 @@ def test_failed_host_solve_invalidates_refinement_cross_point_seed(monkeypatch):
     cfg = im.make_config(inp, hot_restart=False)
     params = im.params_from_input(inp)
     correction = jax.tree.map(jnp.zeros_like, params)
+    # make_config canonicalizes equal-content configs, so an earlier test's
+    # solve at this deck would satisfy _host_solve from the exact-key memo
+    # and the monkeypatched failing solve below would never run.
+    monkeypatch.setattr(im, "_LAST_SOLVE", {})
     monkeypatch.setattr(im, "_LAST_REFINEMENT_CORRECTION", {})
     im._LAST_REFINEMENT_CORRECTION[cfg] = (b"previous", correction)
 
