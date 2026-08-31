@@ -3,7 +3,9 @@
 Lanes: literature-anchored ordering (axisymmetric limit, QA versus
 unoptimized 3D), directional consistency with the independent NEO_JAX
 effective-ripple lane on a boundary-ripple ray, implicit boundary-gradient
-liveness, and the composable-class contract. Every tolerance was set from
+liveness, the GammaCSmooth surrogate (value tracking with documented bias,
+FD consistency, and the nightly refinement-ladder gate the hard gradient
+fails), and the composable-class contract. Every tolerance was set from
 measured values recorded in the test docstrings, with stated headroom.
 """
 
@@ -127,6 +129,16 @@ def test_gamma_c_tracks_effective_ripple_on_a_ripple_ray(qa_eq):
     rippled = _gamma_c(eq)
     assert rippled > 2.0 * base
 
+    # The surrogate must see the same physics it is meant to optimize away:
+    # the ripple's deep mirror wells rise far above its smoothing floor.
+    # Measured: 2.3e-5 -> 4.4e-3 (x195; asserted at x10).
+    def smooth(equilibrium):
+        return float(gammac.gamma_c_smooth_state(
+            equilibrium.state, equilibrium.runtime, surfaces=(0.5,),
+            temperature=0.15, **SETTINGS)["gamma_c"][0])
+
+    assert smooth(eq) > 10.0 * smooth(qa_eq)
+
     def eps(e):
         _, values = epsilon_effective_from_wout(e.wout, surfaces=(0.5,))
         return float(np.asarray(values)[0])
@@ -200,6 +212,163 @@ def test_boundary_gradient_liveness():
     assert 1.0e-3 < abs(refined) < 1.0e2 and 1.0e-3 < abs(base) < 1.0e2
 
 
+def test_smooth_value_tracks_hard_with_documented_bias(
+        tokamak_eq, qa_eq, ncsx_eq):
+    """GammaCSmooth preserves the hard ordering with a documented bias.
+
+    The surrogate suppresses exactly the structures whose derivatives are
+    unstable — near-separatrix bounce times (kernel floor) and superbanana
+    drift angles (corner floor) — so its value sits below the hard one and
+    anneals up as ``temperature`` drops.  Measured at SETTINGS, s = 0.5,
+    ``temperature = 0.15`` against the hard values of the ordering test:
+
+    ==========  ==========  ==========  =============
+    case        hard        smooth      smooth / hard
+    ==========  ==========  ==========  =============
+    tokamak     9.4e-7      2.1e-8      0.02
+    QA          5.7e-3      2.3e-5      0.004
+    li383       4.39e-2     1.83e-2     0.42
+    ==========  ==========  ==========  =============
+
+    The li383 (multi-well 3D) value is within a factor 2.5; the QA value
+    collapses much further because its residual ripple wells are shallower
+    than the trapped-range kernel floor — the surrogate deliberately cannot
+    see structure below its smoothing scale, which is also why its tokamak
+    "zero" is cleaner than the hard quadrature noise.  The ordering
+    tokamak << QA << unoptimized 3D survives with wider margins than the
+    hard assertions.  Report hard values; optimize this one.
+    """
+    def smooth(eq):
+        out = gammac.gamma_c_smooth_state(
+            eq.state, eq.runtime, surfaces=(0.5,), temperature=0.15,
+            **SETTINGS)
+        return float(out["gamma_c"][0])
+
+    tok, qa, ncsx = smooth(tokamak_eq), smooth(qa_eq), smooth(ncsx_eq)
+    hard_ncsx = _gamma_c(ncsx_eq)
+    assert tok < 1.0e-6
+    assert tok < 0.1 * qa
+    assert qa < 0.3 * ncsx
+    assert 0.25 * hard_ncsx < ncsx < 0.7 * hard_ncsx
+
+    # JVP/VJP duality of the surrogate (its floors carry live derivatives):
+    # <J v, 1> == <v, J^T 1>.  Measured 4.9e-15.
+    eq = ncsx_eq
+    key = jax.random.PRNGKey(3)
+    direction = jax.random.normal(key, np.shape(eq.state.R_cos))
+
+    def value(r_cos):
+        spectral = dataclasses.replace(eq.state, R_cos=r_cos)
+        return gammac.gamma_c_smooth_state(
+            spectral, eq.runtime, surfaces=(0.5,), nalpha=5, num_transit=2,
+            points_per_transit=32, num_pitch=12, quadrature_order=16,
+            temperature=0.15)["gamma_c"][0]
+
+    _, tangent = jax.jvp(value, (eq.state.R_cos,), (direction,))
+    _, pullback = jax.vjp(value, eq.state.R_cos)
+    cotangent = pullback(jnp.asarray(1.0))[0]
+    np.testing.assert_allclose(
+        float(tangent), float(jnp.vdot(cotangent, direction)), rtol=1e-10)
+
+
+def _smooth_ladder_objective(inp, p, nalpha, num_transit, ppt, npi):
+    """GammaCSmooth([0.5]).total through the implicit solve (ladder lane)."""
+    term = gammac.GammaCSmooth(
+        [0.5], nalpha=nalpha, num_transit=num_transit,
+        points_per_transit=ppt, num_pitch=npi, quadrature_order=32,
+        temperature=0.15)
+    solution = im.run(
+        inp, p, ns=13, ftol=1.0e-13, max_iterations=20000,
+        adjoint_tol=1.0e-13, device=None)
+    return term.total_state(solution.state, solution.runtime)
+
+
+def test_smooth_boundary_gradient_is_fd_consistent():
+    """AD == central FD for the smooth objective at the base budget.
+
+    Same deck, index, and step as :func:`test_boundary_gradient_liveness`;
+    the smooth lane must keep the fixed-resolution exactness the hard lane
+    has, on top of the refinement stability the hard lane lacks (the full
+    ladder is the nightly :func:`
+    test_smooth_boundary_gradient_survives_the_refinement_ladder`).
+    Measured AD/FD ratio 1.09
+    (ad -0.0974, fd -0.0892 at step 1e-4).
+    """
+    inp = VmecInput.from_file(DATA_DIR / "input.li383_low_res")
+    params = im.params_from_input(inp, device=None)
+    index = (int(inp.ntor), 1)
+    base = float(np.asarray(jax.grad(
+        lambda p: _smooth_ladder_objective(inp, p, 7, 3, 64, 24)
+    )(params).rbc)[index])
+    step = 1.0e-4
+    values = [
+        float(_smooth_ladder_objective(inp, dataclasses.replace(
+            params, rbc=jnp.asarray(params.rbc).at[index].add(sign * step)),
+            7, 3, 64, 24))
+        for sign in (-1.0, 1.0)
+    ]
+    finite_difference = (values[1] - values[0]) / (2.0 * step)
+    assert np.isfinite(base) and base != 0.0
+    assert np.sign(base) == np.sign(finite_difference)
+    assert 1.0 / 2.0 < base / finite_difference < 2.0
+
+
+@pytest.mark.full
+def test_smooth_boundary_gradient_survives_the_refinement_ladder():
+    """The exact ladder that breaks the hard gradient: sign and magnitude.
+
+    li383 at ns=13, GammaCSmooth([0.5], temperature=0.15).total through the
+    implicit solve, d/d rbc[n=0, m=1] — the same objective, deck, and rungs
+    whose hard gradient is documented sign-erratic in
+    :func:`test_boundary_gradient_liveness` (re-measured for this commit:
+    -1.2542, +3.5180, -0.3869, -0.9879, +0.1799 — three sign changes).
+    Measured smooth ladder (identical to six figures between a CUDA GPU
+    run and an Apple-silicon CPU run):
+
+        (7, 3, 64, 24)    -0.097353
+        (7, 4, 96, 48)    -0.017064
+        (9, 5, 128, 48)   -0.037187
+        (13, 6, 192, 64)  -0.048634
+        (17, 8, 256, 96)  -0.044204
+
+    One sign everywhere — the qualitative property the hard gradient fails
+    — and the three rungs whose pitch grid resolves the floors
+    (``num_pitch >= 48``; the documented bound ``num_pitch * temperature
+    >~ 4`` puts the base rung's 24 x 0.15 = 3.6 just under it) sit in a
+    1.31x band (-0.0372, -0.0486, -0.0442).  The two coarse rungs carry
+    the residual under-resolution (overall band 5.7x, the base rung high
+    and the 7-line/4-transit rung low).  The floors act on the two
+    structures gradient decomposition identified: the near-separatrix
+    bounce-time level-curvature (kernel floor; a bare delta sweep of the
+    unfloored assembly showed +-4 gradient spikes on a total of ~0.3) and
+    the superbanana drift-angle corners (per-cell L1 corner floor).
+    Asserted: every rung finite, one sign, overall max/min <= 8
+    (measured 5.7), and the three resolved rungs within 2x (measured
+    1.31).  Five implicit-solve gradients make this the most expensive
+    test in the module — nightly ``full`` lane, with
+    :func:`test_smooth_boundary_gradient_is_fd_consistent` keeping a
+    single-budget sentinel in the PR lane.
+    """
+    inp = VmecInput.from_file(DATA_DIR / "input.li383_low_res")
+    params = im.params_from_input(inp, device=None)
+    index = (int(inp.ntor), 1)
+    ladder = [(7, 3, 64, 24), (7, 4, 96, 48), (9, 5, 128, 48),
+              (13, 6, 192, 64), (17, 8, 256, 96)]
+    gradients = [
+        float(np.asarray(jax.grad(
+            lambda p: _smooth_ladder_objective(inp, p, *rung)
+        )(params).rbc)[index])
+        for rung in ladder
+    ]
+    assert all(np.isfinite(g) and g != 0.0 for g in gradients), gradients
+    assert len({np.sign(g) for g in gradients}) == 1, (
+        f"sign flip in smooth ladder: {gradients}")
+    magnitudes = [abs(g) for g in gradients]
+    assert max(magnitudes) < 8.0 * min(magnitudes), gradients
+    resolved = magnitudes[2:]                 # num_pitch >= 48 rungs
+    assert max(resolved) < 2.0 * min(resolved), gradients
+
+
 def test_class_contract_and_validation():
     """GammaC is a thin binding of gamma_c_state with neighbor-style guards."""
     calls = {}
@@ -220,6 +389,34 @@ def test_class_contract_and_validation():
     finally:
         gammac.gamma_c_state = original
 
+    smooth_calls = {}
+
+    def fake_smooth_state(state, rt, **kwargs):
+        smooth_calls.update(kwargs)
+        return {"gamma_c": jnp.array([0.3])}
+
+    term = gammac.GammaCSmooth([0.4], nalpha=6, temperature=0.2)
+    original_smooth = gammac.gamma_c_smooth_state
+    gammac.gamma_c_smooth_state = fake_smooth_state
+    try:
+        eq = SimpleNamespace(state=object(), runtime=object())
+        np.testing.assert_allclose(np.asarray(term(eq)), [0.3])
+        assert smooth_calls["temperature"] == 0.2
+        assert smooth_calls["nalpha"] == 6
+    finally:
+        gammac.gamma_c_smooth_state = original_smooth
+    assert term.name == "gamma_c_smooth"
+    assert not hasattr(term, "kernel_floor")
+
+    with pytest.raises(ValueError, match="temperature"):
+        gammac.GammaCSmooth([0.5], temperature=0.0)
+    with pytest.raises(ValueError, match="temperature"):
+        gammac.gamma_c_smooth_state(None, None, temperature=-1.0)
+    with pytest.raises(ValueError, match="temperature"):
+        gammac.gamma_c_smooth_from_fieldlines(
+            bmag=jnp.ones((2, 8)), radial_drift=0.0, radial_gradient=0.0,
+            drift_correction=0.0, tangency=1.0, dl_dx=1.0, length=1.0,
+            pitch=jnp.ones(3), pitch_weights=jnp.ones(3), temperature=0.0)
     with pytest.raises(ValueError, match="increasing surfaces"):
         gammac.GammaC([0.7, 0.3])
     with pytest.raises(ValueError, match="strictly inside"):
@@ -293,5 +490,21 @@ def test_gamma_c_respects_the_stellarator_reflection():
     physical = float(jnp.max(jnp.abs(gradient.R_cos)))
     spurious = float(jnp.max(jnp.abs(gradient.R_sin)))
     assert physical > 1.0        # the comparison is not against zero
+    assert spurious / physical < 1.0e-8
+
+    # The smooth surrogate must hold the same identity: its floors are
+    # built from reflection-even quantities through *soft* extrema and L1
+    # bounce integrals, so their live derivatives keep the pair symmetry
+    # that hard min/max breaks.  Measured ratio 4.3e-12.
+    def total_smooth(spectral):
+        return gammac.gamma_c_smooth_state(
+            spectral, rt, surfaces=(0.5,), nalpha=6, num_transit=3,
+            points_per_transit=32, num_pitch=12, quadrature_order=16,
+            temperature=0.15)["gamma_c"][0]
+
+    gradient = jax.grad(total_smooth)(state)
+    physical = float(jnp.max(jnp.abs(gradient.R_cos)))
+    spurious = float(jnp.max(jnp.abs(gradient.R_sin)))
+    assert physical > 1.0
     assert spurious / physical < 1.0e-8
 

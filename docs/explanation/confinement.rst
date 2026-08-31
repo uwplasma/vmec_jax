@@ -714,3 +714,30 @@ any well-slot overflow so an under-provisioned evaluation is visible.
 Axisymmetry sends
 :math:`\Gamma_c \to 0` exactly (:math:`\partial_\alpha J = 0`), which the
 tests anchor together with the QA-versus-unoptimized ordering.
+
+**The hard value is not a gradient objective.** The discretized
+:class:`~vmex.core.gammac.GammaC` gradient is exact but not convergent:
+hard well detection and hard branch selection make the discretized
+:math:`\Gamma_c` piecewise in the boundary coefficients with
+grid-dependent breakpoints, and the measured li383 refinement ladder flips
+sign three times (``tests/test_gammac.py``).  Two structures carry the
+noise, both identified by direct gradient decomposition: a pitch node
+landing at distance :math:`d` from a barrier top inherits the
+:math:`1/d` level-curvature of the logarithmically divergent bounce time,
+and a well cell whose radial *and* tangential bounce-averaged drifts
+cancel simultaneously (a superbanana corner) contributes
+:math:`\mathrm d(\arctan(v_r/v_p))/\mathrm dp \sim 1/\|(v_r, v_p)\|` with
+arbitrary sign.  :class:`~vmex.core.gammac.GammaCSmooth` regularizes
+exactly these two structures on the same wells and bounce quadrature — a
+kernel floor :math:`1/\sqrt{\max(1-\lambda B, 0) + \delta}` with
+:math:`\delta` a fixed, stop-gradiented fraction of the trapped range
+(which also removes the birth/death jump of the well-connection graph of
+Ochs 2025, since a newborn well's floored bounce time starts at zero
+rather than the finite oscillator period), and a per-well corner floor
+that compares the drift cancellation against the well's own
+absolute-value bounce integrals.  Its boundary derivative holds one sign
+with bounded magnitude spread on the same ladder; its value sits below
+the hard one (the smoothing deliberately cannot see structure below
+:math:`\delta` — the near-omnigenous QA ripple most of all) and anneals
+toward it as ``temperature`` decreases with a correspondingly finer
+budget.  Optimize the surrogate, report the hard value.

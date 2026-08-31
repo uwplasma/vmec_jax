@@ -283,6 +283,45 @@ def test_nemov_drift_kernels_match_adaptive_quadrature():
     assert abs(float(out["argmin_f"][0, 0]) - f(np.pi)) < 0.05
 
 
+def test_kernel_floor_caps_inverse_speed_kernels():
+    """``kernel_floor`` regularizes exactly the inverse-speed kernels.
+
+    Sinusoidal well at ``pitch = 1``: the exact bounce time is the mapped
+    adaptive integral of ``2/sqrt(u)``; with a floor ``delta`` it must equal
+    the adaptive integral of ``2/sqrt(u + delta)`` (measured 3e-6, asserted
+    1e-4), be strictly smaller, and converge back to the exact kernel as
+    ``delta -> 0``.  The ``parallel_*`` kernels carry no inverse speed and
+    must be untouched by the floor.
+    """
+    amplitude, pitch, delta = 0.2, 1.0, 0.05
+    field = _sinusoidal_field(amplitude)
+    kwargs = dict(
+        quadrature_order=48, drift_integrands={"one": jnp.ones(1024)},
+        parallel_integrands={"one": jnp.ones(1024)})
+    exact = bounce_action(field, pitch, **kwargs)
+    floored = bounce_action(field, pitch, kernel_floor=delta, **kwargs)
+
+    mid, half = np.pi, 0.5 * np.pi
+
+    def mapped(g):
+        return quad(
+            lambda t: g(mid + half * np.sin(t)) * half * np.cos(t),
+            -np.pi / 2, np.pi / 2, epsabs=1e-13, limit=200)[0]
+
+    def u(p):
+        return max(1.0 - pitch * (1.0 + amplitude * np.cos(p)), 0.0)
+
+    reference = mapped(lambda p: 2.0 / np.sqrt(u(p) + delta))
+    np.testing.assert_allclose(floored["bounce_time"][0, 0], reference, rtol=1e-4)
+    assert float(floored["bounce_time"][0, 0]) < float(exact["bounce_time"][0, 0])
+    np.testing.assert_allclose(
+        floored["parallel_one"][0, 0], exact["parallel_one"][0, 0], rtol=1e-12)
+
+    tiny = bounce_action(field, pitch, kernel_floor=1.0e-12, **kwargs)
+    np.testing.assert_allclose(
+        tiny["bounce_time"][0, 0], exact["bounce_time"][0, 0], rtol=1e-5)
+
+
 def test_drift_kernels_are_nan_outside_wells_and_differentiable():
     """Kernel extensions keep the NaN-for-invalid contract and stay traceable."""
     field = _sinusoidal_field(n=512)
