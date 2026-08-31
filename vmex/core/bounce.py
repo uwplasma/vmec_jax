@@ -52,6 +52,7 @@ def bounce_action(
     drift_integrands: dict[str, Any] | None = None,
     parallel_integrands: dict[str, Any] | None = None,
     argmin_integrands: dict[str, Any] | None = None,
+    kernel_floor: Any | None = None,
 ) -> dict[str, Array]:
     """Compute ``J = 2 int sqrt(1 - pitch * B) dl`` in every magnetic well.
 
@@ -80,6 +81,19 @@ def bounce_action(
     quadrature nodes). Any of them also adds ``bounce_time``,
     ``v tau = 2 int dl / sqrt(1 - pitch B)``. The sine-map Jacobian cancels
     the inverse-square-root bounce-point singularity.
+
+    ``kernel_floor`` (``None`` for the exact kernels) adds a positive floor
+    ``delta`` under the inverse-speed square root,
+    ``1/sqrt(max(1 - pitch B, 0) + delta)``, entering ``bounce_time`` and
+    the ``drift_*`` kernels.  Near a separatrix the exact bounce time
+    diverges logarithmically in the reflecting level, so its derivative with
+    respect to any parameter the barrier top depends on is ``1/distance`` on
+    a pitch node that lands close — the branch-noise term of hard
+    discretizations.  The floor caps that curvature at scale ``delta`` in
+    ``1 - pitch B`` while leaving kernels at depth ``>> delta`` untouched.
+    It also removes the birth/death jump of well topology events: a newborn
+    well's floored bounce time starts at ``~ width/sqrt(delta) -> 0``
+    instead of the finite oscillator period.
     """
     bmag = jnp.asarray(bmag)
     pitch = jnp.atleast_1d(jnp.asarray(pitch, dtype=bmag.dtype))
@@ -173,12 +187,17 @@ def bounce_action(
                 ).reshape((n_lines, n)),
                 x, length=length_arr, periodic=periodic)
 
-        # Inside a well the piecewise-linear interpolant stays below the
-        # crossing level, so parallel_speed vanishes only at roundoff;
-        # dropped nodes there mimic the exact zero of the mapped integrand.
-        inverse_speed = jnp.where(
-            parallel_speed > 0.0,
-            1.0 / jnp.maximum(parallel_speed, jnp.finfo(b.dtype).tiny), 0.0)
+        if kernel_floor is None:
+            # Inside a well the piecewise-linear interpolant stays below the
+            # crossing level, so parallel_speed vanishes only at roundoff;
+            # dropped nodes there mimic the exact zero of the mapped integrand.
+            inverse_speed = jnp.where(
+                parallel_speed > 0.0,
+                1.0 / jnp.maximum(parallel_speed, jnp.finfo(b.dtype).tiny), 0.0)
+        else:
+            inverse_speed = 1.0 / jnp.sqrt(
+                jnp.maximum(parallel_square, 0.0)
+                + jnp.asarray(kernel_floor, dtype=b.dtype))
         measure = weight * dlq * half_width[..., None] * jnp.cos(angle)
         extras["bounce_time"] = 2.0 * jnp.sum(inverse_speed * measure, axis=-1)
         drift_weight = (
