@@ -1497,7 +1497,7 @@ def _refined_state_with_status(
     P = _dof_projector(cfg, dof_mask)
     F = residual_fn(cfg, state, dof_mask)
     z0 = P(state)
-    z, fz = z0, F(z0, params)
+    fz = F(z0, params)
     base = float(_tree_norm(fz))
     if not np.isfinite(base) or base <= tol:
         _emit_diagnostic(
