@@ -2192,6 +2192,22 @@ Recommended panels:
 
 Use the same independent oracle and clearly state excluded regions, normalization, solve resolution, and evaluation resolution.
 
+**README debts (standing checklist, audited 2026-08-31).** These stay in
+the plan until each is closed by a merged PR:
+
+1. Comparison figure: accuracy-only panels (no runtime bars) - see the
+   figure policy below.
+2. Comparison rows: every row shows certified polishing measurably beating
+   the legacy codes' exported equilibria; the current QA row's near-tie
+   must be replaced (smooth finite-beta QA head-to-head in progress).
+3. Polish summary figure (``readme_polish_summary.webp``): the shown case
+   must be a finite-beta or finite-current stellarator where polishing
+   reduces the certified independent error MULTIPLE-FOLD - the current
+   example's 1.4e-2 to 5.6e-3 is not a demonstration; replace the case,
+   not the caption.
+4. Prose: no README paragraph exceeds ~6 lines; panel-by-panel and
+   option-by-option detail lives in the docs, linked, not inlined.
+
 **README figure policy (decided 2026-08-31).** The README comparison shows
 force-balance accuracy only. Runtime panels stay out of the README until
 VMEX end-to-end times are competitive with the legacy codes on the shown
