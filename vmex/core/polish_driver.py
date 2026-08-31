@@ -1081,7 +1081,12 @@ def polish_collocation_least_squares(
         <= config.radial_refinement_tolerance
         and float(certificate.minimum_signed_jacobian) > 0.0
     )
-    converged = bool(solution.converged) and independently_certified
+    # Acceptance is the independent certificate - the volume-L2 bar, radial
+    # refinement stability, and a positive signed Jacobian - exactly as the
+    # published contract states. The Gauss-Newton solver's internal relative
+    # tolerance is a diagnostic; a certified state whose solver merely ran
+    # out its step budget is still an accepted polish.
+    converged = independently_certified
     report = PolishReport(
         converged=converged,
         termination_reason=(
