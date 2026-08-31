@@ -213,8 +213,9 @@ def _render_row(
         if rerun is not None:
             ax.hlines(float(rerun), index - 0.36, index + 0.36,
                       colors="white", linewidth=1.4, zorder=5)
-            ax.text(index, float(rerun) * 0.62, f"rerun {float(rerun):.3g}",
-                    ha="center", va="top", fontsize=7.0, color=MUTED)
+            ax.annotate(
+                f"rerun {float(rerun):.3g}", (index - 0.42, float(rerun)),
+                ha="right", va="center", fontsize=7.0, color=INK, zorder=6)
     ax.set_yscale("log")
     ax.set_ylim(max(0.005, min(timings) * 0.5), max(timings) * 2.0)
     for bar in bars:
@@ -266,7 +267,7 @@ def render(
     _render_row(
         axes[0],
         tokamak,
-        case_label="shaped tokamak, finite pressure (input.shaped_tokamak_pressure_polished)",
+        case_label="shaped tokamak, finite pressure",
         letters=("a", "b", "c"),
         timing_names=("VMEX", "VMEC2000", "VMEC++", "DESC"),
     )
@@ -398,10 +399,11 @@ def main() -> None:
         ),
         "timing_note": (
             "First-run wall time: process start, load, solve, and export on "
-            "one Apple host with an empty JAX compilation cache. The VMEX "
-            "rerun marker is the same command with the persistent cache the "
-            "first run populated (on by default); the legacy codes have no "
-            "JIT stage, so their reruns match their first runs."
+            "one Apple host with an empty JAX compilation cache; the top row "
+            "is the bundled input.shaped_tokamak_pressure_polished deck. The "
+            "VMEX rerun marker is the same command with the persistent cache "
+            "the first run populated (on by default); the legacy codes have "
+            "no JIT stage, so their reruns match their first runs."
         ),
     }
     args.metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")

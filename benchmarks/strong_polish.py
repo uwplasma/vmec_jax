@@ -445,6 +445,10 @@ def main() -> None:
             }
     report = {
         "schema": "vmex.strong-polish-benchmark/1",
+        # The exact invocation: committed evidence must be re-runnable
+        # verbatim, not reverse-engineered from recorded fields.
+        "command": " ".join(["python", "benchmarks/strong_polish.py"]
+                            + sys.argv[1:]),
         "case": args.input.name.removeprefix("input."),
         "ns": args.ns,
         "mpol": args.mpol,
