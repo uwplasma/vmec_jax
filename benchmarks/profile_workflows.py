@@ -306,7 +306,7 @@ def _wf_hot_restart_scan() -> tuple[dict, dict]:
 
 def _wf_boozer_one_surface() -> tuple[dict, dict]:
     from vmex.core import optimize as opt
-    from vmex.core.omnigenity import boozer_bmnc_state
+    from vmex.core.omnigenity import boozer_spectrum_state
 
     inp = _read_input("input.li383_low_res")
     held = {}
@@ -316,7 +316,7 @@ def _wf_boozer_one_surface() -> tuple[dict, dict]:
         return _block(held["eq"].state.R_cos)
 
     def transform():
-        held["bmnc"] = boozer_bmnc_state(
+        held["bmnc"] = boozer_spectrum_state(
             held["eq"].state, held["eq"].runtime, surfaces=(0.5,))
         return _block(next(iter(held["bmnc"].values())))
 
@@ -671,7 +671,7 @@ def _wf_hybrid_gk_geometry() -> tuple[dict, dict]:
 
 def _wf_boozer_many_surfaces() -> tuple[dict, dict]:
     from vmex.core import optimize as opt
-    from vmex.core.omnigenity import boozer_bmnc_state
+    from vmex.core.omnigenity import boozer_spectrum_state
 
     inp = _read_input("input.li383_low_res")
     surfaces = tuple(0.15 + 0.75 * i / 7.0 for i in range(8))
@@ -682,7 +682,7 @@ def _wf_boozer_many_surfaces() -> tuple[dict, dict]:
         return _block(held["eq"].state.R_cos)
 
     def transform():
-        held["bmnc"] = boozer_bmnc_state(
+        held["bmnc"] = boozer_spectrum_state(
             held["eq"].state, held["eq"].runtime, surfaces=surfaces)
         return _block(next(iter(held["bmnc"].values())))
 

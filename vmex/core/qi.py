@@ -9,7 +9,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from .bounce import bounce_action_from_boozer
-from .omnigenity import boozer_bmnc_state
+from .omnigenity import boozer_spectrum_state
 from .optimize import quasi_isodynamic_residual
 from .statephysics import _as_1d
 
@@ -131,7 +131,7 @@ class ConstructedQIResidual(_QIResidualTerm):
 
     def compute_state(self, state, rt):
         """Return the constructed-QI residual and Boozer diagnostics."""
-        booz = boozer_bmnc_state(
+        booz = boozer_spectrum_state(
             state, rt, surfaces=self.surfaces, mboz=self.mboz,
             nboz=self.nboz, oversample=self.oversample)
         out = quasi_isodynamic_residual(
@@ -170,7 +170,7 @@ class JInvariantQIResidual(_QIResidualTerm):
 
     def compute_state(self, state, rt):
         """Return action-invariance residuals and topology diagnostics."""
-        booz = boozer_bmnc_state(
+        booz = boozer_spectrum_state(
             state, rt, surfaces=self.surfaces, mboz=self.mboz,
             nboz=self.nboz, oversample=self.oversample)
         out = j_invariant_qi_residual_from_boozer(

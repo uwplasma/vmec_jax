@@ -19,7 +19,7 @@ from vmex.core.errors import (
     StrongForceLinearSolveError,
 )
 from vmex.core.input import VmecInput
-from vmex.core.omnigenity import boozer_bmnc_high_order
+from vmex.core.omnigenity import boozer_spectrum_high_order
 from vmex.core.polish import (
     HighOrderCorrection,
     PreconditionerRefreshPolicy,
@@ -1234,7 +1234,7 @@ def test_collocation_polish_primal_and_derivatives(small_strong_root):
     )
 
     def boozer_objective(native):
-        spectrum = boozer_bmnc_high_order(
+        spectrum = boozer_spectrum_high_order(
             native,
             surfaces=[0.49],
             mboz=4,

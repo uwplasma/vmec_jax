@@ -74,9 +74,8 @@ part :math:`w` of the Boozer generating potential, fixed by
    \frac{\partial w}{\partial\zeta}  = B_\zeta,
 
 with :math:`B_\theta,B_\zeta` the covariant components on the surface
-(:func:`~vmex.core.fields.magnetic_fields`). In
-:func:`~vmex.core.omnigenity.boozer_bmnc_state` this is inverted
-spectrally: after an FFT, the non-axisymmetric (:math:`m\ne 0`) harmonics of
+(:func:`~vmex.core.fields.magnetic_fields`). ``booz_xform_jax``'s kernel
+inverts this spectrally: the non-axisymmetric (:math:`m\ne 0`) harmonics of
 :math:`w` come from :math:`B_\theta` and the axisymmetric (:math:`m=0`)
 harmonics from :math:`B_\zeta`, matching the mode split of the Fortran
 ``booz_xform``. The coordinate shift is then
@@ -99,15 +98,19 @@ the angle bracket being the surface average over the original
 :math:`(\theta,\zeta)` grid. These are the ``bmnc_b`` coefficients (physical
 mode numbers ``xm_b``, ``xn_b``) consumed by every metric below.
 
-Two implementations share these equations. The host driver
-:func:`vmex.core.boozer.run_booz_xform` calls ``booz_xform_jax`` on a
-``wout_*.nc`` file and writes a standard ``boozmn_*.nc`` (used by ``vmec
---booz`` and by :func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout`).
-The traceable :func:`~vmex.core.omnigenity.boozer_bmnc_state` evaluates the
-*same* transform in pure ``jax.numpy`` directly from the solver's internal
-half-mesh field tables, so the Boozer spectrum — and any metric built on it —
-carries exact implicit gradients. The two agree to :math:`\sim10^{-6}` on the
-dominant modes.
+One transform implementation — ``booz_xform_jax``'s — executes these
+equations; vmex only feeds it. The host driver
+:func:`vmex.core.boozer.run_booz_xform` calls it on a ``wout_*.nc`` file and
+writes a standard ``boozmn_*.nc`` (used by ``vmec --booz`` and by
+:func:`~vmex.core.optimize.quasi_isodynamic_residual_from_wout`). The
+traceable :func:`~vmex.core.omnigenity.boozer_spectrum_state` calls the same
+jittable kernel in memory on wout-convention tables built from the solver's
+internal state (:func:`~vmex.core.boozer_tables.boozer_input_tables`), so
+the Boozer spectrum — and any metric built on it — carries exact implicit
+gradients. The two routes differ only through the table construction (the
+wout file stores half-mesh finite-difference averages of some families) and
+agree on the bundled QI deck to a measured :math:`1.7\times10^{-6}\,B_{00}`
+absolute and :math:`2\times10^{-5}` relative on the dominant modes.
 
 
 Quasisymmetry
@@ -283,8 +286,9 @@ line, a marginal or merged level, or more wells than ``max_wells`` returns NaN
 with a false ``valid_pitch`` flag. This makes a topology error visible instead
 of turning it into a favorable zero. The low-level Boozer-spectrum function
 accepts cosine and sine harmonics, and so does the equilibrium objective:
-:func:`~vmex.core.omnigenity.boozer_bmnc_state` dispatches ``lasym`` states to
-the full booz_xform transform and returns ``bmns_b`` alongside ``bmnc_b``,
+:func:`~vmex.core.omnigenity.boozer_spectrum_state` runs symmetric and
+``lasym`` states through the same booz_xform kernel and returns ``bmns_b``
+alongside ``bmnc_b`` (all-zero in the symmetric case),
 which every QI residual above passes through. On an up-down-asymmetric deck
 the traceable cosine and sine spectra are gated against the host
 booz_xform_jax reconstruction at ``2e-2`` and ``3e-2`` relative, and the QI

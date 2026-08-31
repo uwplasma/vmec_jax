@@ -40,8 +40,8 @@ def _counting_boozer(monkeypatch):
         calls["count"] += 1
         return booz
 
-    monkeypatch.setattr(qi_mod, "boozer_bmnc_state", fake)
-    monkeypatch.setattr(maxj_mod, "boozer_bmnc_state", fake)
+    monkeypatch.setattr(qi_mod, "boozer_spectrum_state", fake)
+    monkeypatch.setattr(maxj_mod, "boozer_spectrum_state", fake)
     return calls
 
 

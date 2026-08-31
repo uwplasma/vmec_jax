@@ -9,18 +9,17 @@ no host booz_xform round-trip.
 
 Two pieces:
 
-1. :func:`boozer_bmnc_state` — a minimal *traceable* Boozer ``|B|`` transform.
-   The classic BOOZ_XFORM construction (Hirshman's Fortran code; equation
-   numbers below follow Landreman's booz_xform documentation) is evaluated
-   in pure ``jax.numpy`` from the solver's internal half-mesh field tables:
-   the periodic part of the Boozer generating potential ``w`` is integrated
-   spectrally from the covariant field components (``dw/dtheta = B_theta``,
-   ``dw/dzeta = B_zeta``), then ``nu = (w - I*lambda) / (G + iota*I)`` gives
-   the Boozer angles ``theta_B = theta + lambda + iota*nu``,
-   ``zeta_B = zeta + nu``, and the Boozer ``|B|`` harmonics come from the
-   angle-transform quadrature ``bmnc_b = <|B| cos(m theta_B - n zeta_B) *
-   d(theta_B, zeta_B)/d(theta, zeta)>`` — the same equations booz_xform
-   solves, here end-to-end differentiable.
+1. :func:`boozer_spectrum_state` — a *traceable* Boozer ``|B|`` transform.
+   vmex owns only the equilibrium side: snapping requested surfaces to the
+   half mesh and building wout-convention single-surface spectral tables
+   from the live state (:func:`vmex.core.boozer_tables.boozer_input_tables`).
+   The Boozer transform itself — generating potential, Boozer angles, and
+   the angle-transform quadrature — executes in ``booz_xform_jax``'s
+   jittable kernel (``booz_xform_jax.jax_api.booz_xform_jax_impl``) for
+   symmetric and ``lasym`` states alike, so vmex carries no second
+   implementation of the transform and the whole chain stays end-to-end
+   differentiable.  (:func:`boozer_bmnc_state` remains as a deprecated
+   alias of the previous name.)
 
 2. :func:`omnigenity_residual` / :class:`QIResidual` — a smooth, lightweight
    surrogate for poloidally-closed-contour (``M = 0, N = 1``) omnigenity.
@@ -69,6 +68,7 @@ Scope notes
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from typing import Any, Iterable
 
 import numpy as np
@@ -76,110 +76,20 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from .fields import magnetic_fields, metric_elements, surface_currents
-from .geometry import half_mesh_jacobian
-from .solver import SolverRuntime, SpectralState, _geometry
-from .statephysics import _as_1d, _iotas_half_from_fields
-from .transforms import physical_to_internal_scale
+from .boozer_tables import boozer_input_tables, high_order_boozer_input_tables
+from .solver import SolverRuntime, SpectralState
+from .statephysics import _as_1d
 
 __all__ = [
     "boozer_bmnc_high_order",
     "boozer_bmnc_state",
+    "boozer_spectrum_high_order",
+    "boozer_spectrum_state",
     "omnigenity_residual",
     "QIResidual",
 ]
 
 Array = Any
-
-
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
-
-
-def _pad_spectrum_axis(hat: jnp.ndarray, axis: int, n_fine: int) -> jnp.ndarray:
-    """Zero-pad an FFT spectrum along ``axis`` (Nyquist split, real-safe).
-
-    Standard trigonometric interpolation: positive/negative frequency blocks
-    are copied, an even-length Nyquist coefficient is split half-and-half
-    onto ``+N/2`` and ``-N/2`` of the fine spectrum.  The caller rescales by
-    ``n_fine / n_coarse`` per padded axis (ifft normalization).
-    """
-    n = int(hat.shape[axis])
-    if n_fine == n:
-        return hat
-    if n_fine < n:
-        raise ValueError(f"padding target {n_fine} smaller than source {n}")
-
-    def take(sl):
-        index = [slice(None)] * hat.ndim
-        index[axis] = sl
-        return hat[tuple(index)]
-
-    n_pos = (n + 1) // 2                      # frequencies 0 .. ceil(n/2)-1
-    shape = list(hat.shape)
-    shape[axis] = n_fine
-    out = jnp.zeros(shape, dtype=hat.dtype)
-    index = [slice(None)] * hat.ndim
-    index[axis] = slice(0, n_pos)
-    out = out.at[tuple(index)].set(take(slice(0, n_pos)))
-    if n % 2 == 0:                            # split the Nyquist mode
-        nyq = 0.5 * take(slice(n // 2, n // 2 + 1))
-        index[axis] = slice(n // 2, n // 2 + 1)
-        out = out.at[tuple(index)].set(nyq)
-        index[axis] = slice(n_fine - n // 2, n_fine - n // 2 + 1)
-        out = out.at[tuple(index)].set(nyq)
-        n_neg = n // 2 - 1                    # strictly negative, non-Nyquist
-    else:
-        n_neg = n // 2
-    if n_neg > 0:
-        index[axis] = slice(n_fine - n_neg, n_fine)
-        out = out.at[tuple(index)].set(take(slice(n - n_neg, n)))
-    return out
-
-
-def _pad_spectrum(hat: jnp.ndarray, nt_fine: int, nz_fine: int) -> jnp.ndarray:
-    """Zero-pad a 2D FFT spectrum ``(..., ntheta, nzeta)`` with rescaling."""
-    nt, nz = int(hat.shape[-2]), int(hat.shape[-1])
-    out = _pad_spectrum_axis(hat, hat.ndim - 2, nt_fine)
-    out = _pad_spectrum_axis(out, hat.ndim - 1, nz_fine)
-    return out * (float(nt_fine * nz_fine) / float(nt * nz))
-
-
-def _mirror_maps(ntheta2: int, nzeta: int) -> tuple[int, np.ndarray, np.ndarray]:
-    """Stellarator-symmetry mirror of the reduced ``[0, pi]`` theta grid.
-
-    Same map as ``QuasisymmetryRatioResidual._pointwise_state``:
-    ``X(2 pi - theta, -zeta) = X(theta, zeta)`` for even (cos-series) fields.
-    """
-    ntheta1 = max(2 * (ntheta2 - 1), 1)
-    i_full = np.arange(ntheta1)
-    i_src = np.where(i_full < ntheta2, i_full, ntheta1 - i_full)
-    k = np.arange(nzeta)
-    k_src = np.where(i_full[:, None] < ntheta2, k[None, :], (nzeta - k[None, :]) % nzeta)
-    i_src = np.broadcast_to(i_src[:, None], (ntheta1, nzeta))
-    return ntheta1, i_src, k_src
-
-
-def _lambda_half_weights(ns: int) -> tuple[np.ndarray, np.ndarray]:
-    """Odd-m half-mesh interpolation weights ``(smw, spw)`` per half row.
-
-    ``lambda_wout_from_full_mesh`` (``wrout.f``) interpolates odd-m lambda
-    coefficients to half row ``js`` (between full ``js-1`` and ``js``) as
-    ``0.5 * (smw[js] * lam[js] + spw[js] * lam[js-1])`` with the
-    ``sqrt(s)``-representation weights below; even m uses plain averaging.
-    """
-    hs = 1.0 / (ns - 1)
-    js = np.arange(ns, dtype=float)
-    shalf = np.sqrt(hs * np.abs(js - 0.5))            # half surface js
-    sqrts = np.sqrt(hs * js)
-    smw = np.zeros(ns)
-    spw = np.zeros(ns)
-    smw[1:] = shalf[1:] / sqrts[1:]
-    spw[2:] = shalf[2:] / sqrts[1:-1]
-    if ns > 1:
-        spw[1] = smw[1]                               # wrout.f: sp(1) = sm(2)
-    return smw, spw
 
 
 # ---------------------------------------------------------------------------
@@ -214,45 +124,54 @@ def _refine_booz_grids(constants, grids, oversample, nfp):
     ``prepare_booz_xform_constants`` pins the angle-transform quadrature at
     ``2*(2*mboz+1)`` by ``2*(2*nboz+1)`` points, but the transform reads the
     counts back off ``constants`` for its Fourier normalization, so an integer
-    refinement of the flattened ``(theta, zeta)`` grid is a drop-in — the same
-    aliasing control the symmetric lane gets from its zero-padded FFT grid.
+    refinement of the flattened ``(theta, zeta)`` grid is a drop-in reduction
+    of the ``cos(m theta_B - n zeta_B)`` aliasing.
     """
     factor = int(oversample)
     if factor == 1:
         return constants, grids
     ntheta = factor * int(constants.ntheta)
     nzeta = factor * int(constants.nzeta) if int(constants.nzeta) > 1 else 1
-    theta = 2.0 * np.pi * np.arange(ntheta) / ntheta
+    nu2_b = ntheta // 2 + 1
+    # booz_xform's stellarator-symmetric grid spans theta in [0, pi] only
+    # (nu2_b rows, boundary rows half-weighted and the normalization read
+    # from nu2_b); the asymmetric grid spans the full circle (ntheta rows).
+    nu3_b = ntheta if bool(constants.asym) else nu2_b
+    theta = 2.0 * np.pi * np.arange(nu3_b) / ntheta
     zeta = 2.0 * np.pi * np.arange(nzeta) / (nzeta * int(nfp))
     return (
         dataclasses.replace(constants, ntheta=ntheta, nzeta=nzeta,
-                            nu2_b=ntheta // 2 + 1),
+                            nu2_b=nu2_b),
         dataclasses.replace(grids,
                             theta_grid=jnp.asarray(np.repeat(theta, nzeta)),
-                            zeta_grid=jnp.asarray(np.tile(zeta, ntheta))),
+                            zeta_grid=jnp.asarray(np.tile(zeta, nu3_b))),
     )
 
 
-def _boozer_lasym_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
-    """LASYM state tables through booz_xform_jax's validated full transform."""
+def _boozer_kernel_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
+    """State tables through booz_xform_jax's validated full transform.
+
+    One code path for both parities: symmetric states pass only the cosine
+    families (the kernel returns an all-zero ``bmns_b`` block), ``lasym``
+    states add the independent sine families.
+    """
     from booz_xform_jax.jax_api import (
         booz_xform_jax_impl,
         prepare_booz_xform_constants,
     )
 
-    from .boozer_tables import boozer_input_tables
-
+    lasym = bool(rt.setup.lasym)
     tables = [boozer_input_tables(state, rt, int(row)) for row in rows]
     stack = lambda name: jnp.stack([table[name] for table in tables])  # noqa: E731
     first = tables[0]
     xm, xn = np.asarray(first["xm"]), np.asarray(first["xn"])
     # booz_xform's convenience wrapper prepares shape constants with Python
     # integer conversions. Do that work at trace time, then call its fully
-    # jittable kernel so LASYM objectives remain differentiable under JVP.
+    # jittable kernel so the objectives remain differentiable under JVP.
     with jax.ensure_compile_time_eval():
         constants, grids = prepare_booz_xform_constants(
             nfp=int(rt.resolution.nfp), mboz=int(mboz), nboz=int(nboz),
-            asym=True, xm=xm, xn=xn, xm_nyq=xm, xn_nyq=xn)
+            asym=lasym, xm=xm, xn=xn, xm_nyq=xm, xn_nyq=xn)
         constants, grids = _refine_booz_grids(
             constants, grids, oversample, rt.resolution.nfp)
         xm_b = np.asarray(grids.xm_b, dtype=float)
@@ -263,9 +182,9 @@ def _boozer_lasym_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
         bsubvmnc=stack("bsubvmnc"), iota=stack("iota"),
         xm=jnp.asarray(xm), xn=jnp.asarray(xn), xm_nyq=jnp.asarray(xm),
         xn_nyq=jnp.asarray(xn), constants=constants, grids=grids,
-        rmns=stack("rmns"), zmnc=stack("zmnc"), lmnc=stack("lmnc"),
-        bmns=stack("bmns"), bsubumns=stack("bsubumns"),
-        bsubvmns=stack("bsubvmns"),
+        **(dict(rmns=stack("rmns"), zmnc=stack("zmnc"), lmnc=stack("lmnc"),
+                bmns=stack("bmns"), bsubumns=stack("bsubumns"),
+                bsubvmns=stack("bsubvmns")) if lasym else {}),
     )
     setup = rt.setup
     return {
@@ -279,7 +198,7 @@ def _boozer_lasym_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
     }
 
 
-def boozer_bmnc_high_order(
+def boozer_spectrum_high_order(
     state,
     *,
     surfaces,
@@ -295,8 +214,6 @@ def boozer_bmnc_high_order(
         booz_xform_jax_impl,
         prepare_booz_xform_constants,
     )
-
-    from .boozer_tables import high_order_boozer_input_tables
 
     surface_values = np.atleast_1d(np.asarray(surfaces, dtype=float))
     if np.any((surface_values <= 0.0) | (surface_values > 1.0)):
@@ -356,7 +273,7 @@ def boozer_bmnc_high_order(
     }
 
 
-def boozer_bmnc_state(
+def boozer_spectrum_state(
     state: SpectralState,
     rt: SolverRuntime,
     *,
@@ -365,30 +282,28 @@ def boozer_bmnc_state(
     nboz: int = 16,
     oversample: int = 2,
 ) -> dict[str, Array]:
-    """Boozer ``|B|`` cosine spectrum of selected surfaces, fully traceable.
+    """Boozer ``|B|`` spectrum of selected surfaces, fully traceable.
 
     The jnp analogue of :func:`vmex.core.optimize.boozer_modes_from_wout`
-    (booz_xform algorithm, module docstring) evaluated from the solver's
-    internal tables: ``|B|``, the covariant components ``B_theta``/``B_zeta``
-    and the Boozer profile averages ``I``/``G`` live on the half-mesh
-    ``(theta, zeta)`` grid (mirrored to the full theta circle), lambda comes
-    from the state's spectral coefficients with the exact wout half-mesh
-    rescale, and the generating potential ``w`` is integrated spectrally
-    (FFT) — ``m != 0`` modes from ``B_theta``, ``m = 0`` modes from
-    ``B_zeta``, the booz_xform mode split.
+    evaluated without a wout file: vmex snaps the requested surfaces and
+    builds the wout-convention single-surface spectral tables from the
+    solver's internal state (:func:`vmex.core.boozer_tables
+    .boozer_input_tables`), then ``booz_xform_jax``'s jittable kernel runs
+    the Boozer construction itself — generating potential, Boozer angles,
+    and the angle-transform quadrature — for symmetric and ``lasym`` states
+    through the same code path.
 
     ``surfaces`` are normalized-flux values snapped to the nearest half-mesh
     surfaces (one Boozer construction per requested value, duplicates kept so
-    outputs align with ``surfaces``).  ``oversample`` refines the quadrature
-    grid by trigonometric (FFT zero-pad) interpolation before the Boozer
+    outputs align with ``surfaces``).  ``oversample`` refines booz_xform's
+    pinned ``(theta, zeta)`` quadrature grid by an integer factor before the
     angle transform, reducing the aliasing of ``cos(m theta_B - n zeta_B)``
-    products; ``mboz``/``nboz`` are capped at the fine grid's Nyquist.  LASYM
-    states run through booz_xform_jax's full transform, where the same factor
-    refines that code's own ``(theta, zeta)`` quadrature grid.
+    products.
 
-    Returns ``{bmnc_b (nsurf, nmodes), xm_b, xn_b (physical), iota_b, G_b,
-    I_b, nfp, s_b, psi_b, psi_edge}``; ``psi_b`` and ``psi_edge`` are the
-    signed toroidal flux divided by ``2*pi``.
+    Returns ``{bmnc_b (nsurf, nmodes), bmns_b, xm_b, xn_b (physical),
+    iota_b, G_b, I_b, nfp, s_b, psi_b, psi_edge}``; ``bmns_b`` is the
+    all-zero cosine partner for symmetric states, and ``psi_b``/``psi_edge``
+    are the signed toroidal flux divided by ``2*pi``.
     ``bmnc_b/xm_b/xn_b/iota_b/G_b/I_b/nfp`` are the inputs of
     :func:`omnigenity_residual` and of
     :func:`vmex.core.optimize.quasi_isodynamic_residual`.
@@ -399,172 +314,37 @@ def boozer_bmnc_state(
     s = jnp.asarray(setup.s_full)
     ns = int(s.shape[0])
     if ns < 3:
-        raise ValueError(f"boozer_bmnc_state needs ns >= 3, got ns = {ns}")
-    nfp = int(rt.resolution.nfp)
-    dtype = s.dtype
+        raise ValueError(f"boozer_spectrum_state needs ns >= 3, got ns = {ns}")
 
     # -- surface selection: nearest half-mesh rows (static, shape-only) -----
     s_half_np, rows = _nearest_half_mesh_rows(ns, surfaces)
-    if bool(setup.lasym):
-        return _boozer_lasym_state(
-            state, rt, rows=rows, s_half=s_half_np, mboz=mboz, nboz=nboz,
-            oversample=oversample)
+    return _boozer_kernel_state(
+        state, rt, rows=rows, s_half=s_half_np, mboz=mboz, nboz=nboz,
+        oversample=oversample)
 
-    # -- half-mesh field tables (the QS-residual field chain) ----------------
-    _, geometry = _geometry(state, rt)
-    jacobian = half_mesh_jacobian(geometry, s=s)
-    metrics = metric_elements(geometry, s=s)
-    fields = magnetic_fields(
-        geometry=geometry, jacobian=jacobian, metrics=metrics, trig=rt.trig,
-        s=s, phips=setup.phips, phipf=setup.phipf, chips=setup.chips,
-        signgs=setup.signgs, gamma=rt.gamma, mass=setup.mass,
-        ncurr=setup.ncurr, enclosed_current=setup.icurv,
-    )
-    iota_prof = _iotas_half_from_fields(setup, fields)
-    cur = surface_currents(bsubu=fields.bsubu, bsubv=fields.bsubv,
-                           trig=rt.trig, s=s, signgs=setup.signgs)
-    G_prof, I_prof = jnp.asarray(cur.bvco), jnp.asarray(cur.buco)
 
-    # |B| on the half mesh (bcovar.f: bsq = |B|^2/2 + p).
-    bsq2 = 2.0 * (jnp.asarray(fields.total_pressure)
-                  - jnp.asarray(fields.pressure)[:, None, None])
-    tiny = jnp.asarray(jnp.finfo(dtype).tiny, dtype=dtype)
+def boozer_bmnc_state(*args, **kwargs) -> dict[str, Array]:
+    """Deprecated alias of :func:`boozer_spectrum_state`.
 
-    # -- select rows, mirror the reduced theta grid to the full circle -------
-    ntheta2 = int(np.shape(fields.total_pressure)[1])
-    nzeta = int(np.shape(fields.total_pressure)[2])
-    # Asymmetric states returned through _boozer_lasym_state above, so only
-    # the reduced [0, pi] grid reaches here and always needs mirroring.
-    ntheta1, i_src, k_src = _mirror_maps(ntheta2, nzeta)
+    Same signature and return contract (including the ``bmns_b`` block).
+    The name changed when the in-repo symmetric FFT transform was retired in
+    favor of booz_xform_jax's kernel for both parities.
+    """
+    warnings.warn(
+        "vmex.core.omnigenity.boozer_bmnc_state is deprecated; call "
+        "boozer_spectrum_state (identical signature and return contract)",
+        DeprecationWarning, stacklevel=2)
+    return boozer_spectrum_state(*args, **kwargs)
 
-    def full(a):
-        return jnp.asarray(a)[rows][:, i_src, k_src]
 
-    bmag = jnp.sqrt(jnp.maximum(full(bsq2), tiny))          # (nsurf, nt1, nz)
-    bsubu = full(fields.bsubu)
-    bsubv = full(fields.bsubv)
-    iota = iota_prof[rows]
-    G = G_prof[rows]
-    I = I_prof[rows]  # noqa: E741 - Boozer I
-
-    # -- physical lambda modes on the selected half surfaces ------------------
-    # wrout.f / lambda_wout_from_full_mesh: internal full-mesh L_sin ->
-    # wout-normalized modes, lamscale/phipf rescale, parity-weighted half-mesh
-    # interpolation (plain average for even m, sqrt(s)-representation weights
-    # for odd m).
-    m_modes = np.asarray(rt.modes.m, dtype=int)
-    xn_modes = np.asarray(rt.modes.n, dtype=float) * float(nfp)
-    mode_scale = jnp.asarray(1.0 / physical_to_internal_scale(rt.modes, rt.trig))
-    phipf = jnp.asarray(setup.phipf)
-    safe_phipf = jnp.where(phipf != 0.0, phipf, 1.0)
-    lambda_scale = mode_scale[None, :] * (
-        jnp.asarray(setup.lamscale) / safe_phipf)[:, None]
-    lam_sin_full = jnp.asarray(state.L_sin) * lambda_scale
-    lam_cos_full = jnp.asarray(state.L_cos) * lambda_scale
-    smw_np, spw_np = _lambda_half_weights(ns)
-    even = (m_modes % 2 == 0)
-    hi_w = np.where(even[None, :], 1.0, smw_np[rows][:, None])
-    lo_w = np.where(even[None, :], 1.0, spw_np[rows][:, None])
-    def half_lambda(table):
-        return 0.5 * (jnp.asarray(hi_w) * table[rows]
-                      + jnp.asarray(lo_w) * table[rows - 1])
-
-    lam_sin_mn = half_lambda(lam_sin_full)
-    lam_cos_mn = half_lambda(lam_cos_full) if bool(setup.lasym) else jnp.zeros_like(lam_sin_mn)
-
-    # -- generating potential w (periodic part) by spectral integration ------
-    # dw/dtheta = B_theta, dw/dzeta = B_zeta (physical toroidal angle; the
-    # grid spans one field period, so the zeta wavenumbers carry nfp).
-    kt_c = np.fft.fftfreq(ntheta1) * ntheta1
-    kz_c = np.fft.fftfreq(nzeta) * nzeta * nfp
-    bu_hat = jnp.fft.fft2(bsubu, axes=(1, 2))
-    bv_hat = jnp.fft.fft2(bsubv, axes=(1, 2))
-    kt2 = jnp.asarray(kt_c)[None, :, None]
-    kz2 = jnp.asarray(kz_c)[None, None, :]
-    w_hat = jnp.where(
-        kt2 != 0.0, bu_hat / jnp.where(kt2 != 0.0, 1j * kt2, 1.0),
-        jnp.where(kz2 != 0.0, bv_hat / jnp.where(kz2 != 0.0, 1j * kz2, 1.0), 0.0))
-
-    # -- fine quadrature grid (trigonometric interpolation) ------------------
-    nt_f = int(oversample) * ntheta1
-    nz_f = int(oversample) * nzeta if nzeta > 1 else 1
-    kt_f = jnp.asarray(np.fft.fftfreq(nt_f) * nt_f)[None, :, None]
-    kz_f = jnp.asarray(np.fft.fftfreq(nz_f) * nz_f * nfp)[None, None, :]
-    w_hat_f = _pad_spectrum(w_hat, nt_f, nz_f)
-    w = jnp.real(jnp.fft.ifft2(w_hat_f, axes=(1, 2)))
-    dw_dth = jnp.real(jnp.fft.ifft2(1j * kt_f * w_hat_f, axes=(1, 2)))
-    dw_dze = jnp.real(jnp.fft.ifft2(1j * kz_f * w_hat_f, axes=(1, 2)))
-    bmod = jnp.real(jnp.fft.ifft2(
-        _pad_spectrum(jnp.fft.fft2(bmag, axes=(1, 2)), nt_f, nz_f), axes=(1, 2)))
-
-    theta_f = jnp.asarray(2.0 * np.pi * np.arange(nt_f) / nt_f, dtype=dtype)
-    zeta_f = jnp.asarray(2.0 * np.pi * np.arange(nz_f) / (nz_f * nfp), dtype=dtype)
-    ang = (theta_f[:, None, None] * jnp.asarray(m_modes, dtype=dtype)
-           - zeta_f[None, :, None] * jnp.asarray(xn_modes, dtype=dtype))
-    sin_tab, cos_tab = jnp.sin(ang), jnp.cos(ang)           # (nt_f, nz_f, mn)
-    m_arr = jnp.asarray(m_modes, dtype=dtype)
-    n_arr = jnp.asarray(xn_modes, dtype=dtype)
-    lam = (jnp.einsum("sm,tzm->stz", lam_sin_mn, sin_tab)
-           + jnp.einsum("sm,tzm->stz", lam_cos_mn, cos_tab))
-    dlam_dth = (jnp.einsum("sm,tzm->stz", lam_sin_mn * m_arr, cos_tab)
-                  - jnp.einsum("sm,tzm->stz", lam_cos_mn * m_arr, sin_tab))
-    dlam_dze = (-jnp.einsum("sm,tzm->stz", lam_sin_mn * n_arr, cos_tab)
-                 + jnp.einsum("sm,tzm->stz", lam_cos_mn * n_arr, sin_tab))
-
-    # -- Boozer angles + transform Jacobian (booz_xform eqs. (3), (10), (12))
-    GI = G + iota * I
-    GI_safe = jnp.where(GI != 0.0, GI, 1.0)
-    one_over_GI = (1.0 / GI_safe)[:, None, None]
-    nu = one_over_GI * (w - I[:, None, None] * lam)
-    dnu_dth = one_over_GI * (dw_dth - I[:, None, None] * dlam_dth)
-    dnu_dze = one_over_GI * (dw_dze - I[:, None, None] * dlam_dze)
-    theta_B = theta_f[None, :, None] + lam + iota[:, None, None] * nu
-    zeta_B = zeta_f[None, None, :] + nu
-    jac_fac = ((1.0 + dlam_dth) * (1.0 + dnu_dze)
-               + (iota[:, None, None] - dlam_dze) * dnu_dth)
-
-    # -- Boozer mode list + separable Fourier quadrature ----------------------
-    mboz = int(min(mboz, max(nt_f // 2 - 1, 0)))
-    nboz = int(min(nboz, max((nz_f - 1) // 2, 0)))
-    m_list = [0] * (nboz + 1) + [m for m in range(1, mboz + 1) for _ in range(2 * nboz + 1)]
-    n_list = list(range(nboz + 1)) + [n for _ in range(1, mboz + 1)
-                                      for n in range(-nboz, nboz + 1)]
-    xm_b = np.asarray(m_list, dtype=float)
-    xn_b = np.asarray(n_list, dtype=float) * float(nfp)
-
-    marr = jnp.asarray(np.arange(mboz + 1), dtype=dtype)
-    karr = jnp.asarray(np.arange(nboz + 1), dtype=dtype) * float(nfp)
-    cosm = jnp.cos(theta_B[..., None] * marr)               # (nsurf, nt, nz, mb+1)
-    sinm = jnp.sin(theta_B[..., None] * marr)
-    cosn = jnp.cos(zeta_B[..., None] * karr)                # (nsurf, nt, nz, nb+1)
-    sinn = jnp.sin(zeta_B[..., None] * karr)
-    F = bmod * jac_fac
-    Xc = jnp.einsum("stzm,stz,stzk->smk", cosm, F, cosn)
-    Xs = jnp.einsum("stzm,stz,stzk->smk", sinm, F, sinn)
-    Ys = jnp.einsum("stzm,stz,stzk->smk", sinm, F, cosn)
-    Yc = jnp.einsum("stzm,stz,stzk->smk", cosm, F, sinn)
-    m_idx = np.asarray(m_list, dtype=int)
-    k_idx = np.abs(np.asarray(n_list, dtype=int))
-    sgn = jnp.asarray(np.where(np.asarray(n_list) < 0, -1.0, 1.0), dtype=dtype)
-    ff = np.full(len(m_list), 2.0 / (nt_f * nz_f))
-    ff[0] = 1.0 / (nt_f * nz_f)                             # the (0, 0) mode
-    # cos(m th_B - n ze_B) = cos(m th_B) cos(|n| ze_B) + sgn(n) sin(m th_B) sin(|n| ze_B)
-    bmnc_b = jnp.asarray(ff) * (Xc[:, m_idx, k_idx] + sgn[None, :] * Xs[:, m_idx, k_idx])
-    bmns_b = jnp.asarray(ff) * (Ys[:, m_idx, k_idx] - sgn[None, :] * Yc[:, m_idx, k_idx])
-
-    return {
-        "bmnc_b": bmnc_b,
-        "bmns_b": bmns_b,
-        "xm_b": xm_b,
-        "xn_b": xn_b,
-        "iota_b": iota,
-        "G_b": G,
-        "I_b": I,
-        "nfp": nfp,
-        "s_b": jnp.asarray(s_half_np, dtype=dtype)[rows - 1],
-        "psi_b": jnp.asarray(setup.psi_half)[rows],
-        "psi_edge": jnp.asarray(setup.psi_edge),
-    }
+def boozer_bmnc_high_order(*args, **kwargs) -> dict[str, Array]:
+    """Deprecated alias of :func:`boozer_spectrum_high_order`."""
+    warnings.warn(
+        "vmex.core.omnigenity.boozer_bmnc_high_order is deprecated; call "
+        "boozer_spectrum_high_order (identical signature and return "
+        "contract)",
+        DeprecationWarning, stacklevel=2)
+    return boozer_spectrum_high_order(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -701,7 +481,7 @@ def omnigenity_residual(
 class QIResidual:
     """Traceable smooth quasi-isodynamic surrogate (module docstring).
 
-    Composition of :func:`boozer_bmnc_state` (traceable Boozer ``|B|``
+    Composition of :func:`boozer_spectrum_state` (traceable Boozer ``|B|``
     spectrum on the requested surfaces) and :func:`omnigenity_residual`
     (a smooth level-set surrogate for the Goodman construction).  The
     interface mirrors
@@ -757,7 +537,7 @@ class QIResidual:
 
     def compute_state(self, state: SpectralState, rt: SolverRuntime) -> dict[str, Array]:
         """Full diagnostics dict (Boozer spectrum + residual pieces)."""
-        booz = boozer_bmnc_state(
+        booz = boozer_spectrum_state(
             state, rt, surfaces=self.surfaces, mboz=self.mboz, nboz=self.nboz,
             oversample=self.oversample)
         out = omnigenity_residual(

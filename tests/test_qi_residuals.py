@@ -89,7 +89,7 @@ def test_action_residual_ad_matches_finite_difference():
 
 def test_objective_terms_share_the_composable_interface(monkeypatch):
     booz = _boozer(0.04)
-    monkeypatch.setattr(qi, "boozer_bmnc_state", lambda *args, **kwargs: booz)
+    monkeypatch.setattr(qi, "boozer_spectrum_state", lambda *args, **kwargs: booz)
     eq = SimpleNamespace(state=object(), runtime=object())
 
     action = qi.JInvariantQIResidual(
