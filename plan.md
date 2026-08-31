@@ -2187,11 +2187,22 @@ Recommended panels:
 
 1. flux-surface RMS strong-force profile;
 2. near-axis zoom;
-3. volume L2 versus cold end-to-end time;
-4. volume L2 versus peak memory;
-5. optional refinement convergence.
+3. volume L2 bars;
+4. optional refinement convergence.
 
 Use the same independent oracle and clearly state excluded regions, normalization, solve resolution, and evaluation resolution.
+
+**README figure policy (decided 2026-08-31).** The README comparison shows
+force-balance accuracy only. Runtime panels stay out of the README until
+VMEX end-to-end times are competitive with the legacy codes on the shown
+cases while staying differentiable and certified - runtime evidence lives in
+``benchmarks/baselines/`` and PR bodies meanwhile, and the performance
+program (compile reuse, persistent caching, captured-constant elimination)
+keeps driving at that bar. Every row must be a case where certified
+polishing measurably beats the legacy codes' exported equilibria under the
+shared oracle; a row where the polished error merely matches VMEC2000 is not
+evidence and must be replaced, and at least one row is a finite-beta or
+finite-current stellarator (QA/QH class).
 
 ### 21.3 Claim gate
 
