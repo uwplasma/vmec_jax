@@ -50,10 +50,13 @@
     }
   },
   "figure": "docs/_static/figures/readme_strong_force_comparison.webp",
-  "figure_sha256": "39e4ce0f6b39bd360c1c46fec0b5dbbf526dcded4cd3c490167f58bd0bc2bca3",
-  "schema": "vmex.strong-force-readme-figure/4",
-  "summary_figure": null,
-  "summary_figure_sha256": null,
-  "summary_independent_l2": null,
-  "timing_note": "First-run wall time: process start, load, solve, and export on one Apple host with an empty JAX compilation cache; the top row is the bundled input.shaped_tokamak_pressure_polished deck. The VMEX rerun marker is the same command with the persistent cache the first run populated (on by default); the legacy codes have no JIT stage, so their reruns match their first runs."
+  "figure_note": "Accuracy only, per the plan's README figure policy: runtime evidence lives in benchmarks/baselines/ and PR records until VMEX end-to-end times are competitive with the legacy codes. All errors come from one shared independent oracle applied to each code's exported equilibrium; VMEX is the certified polished state, and the top row is the bundled input.shaped_tokamak_pressure_polished deck.",
+  "figure_sha256": "44b38aca4c560562685910364f3b111809851e00f15db56385c28f042014d311",
+  "schema": "vmex.strong-force-readme-figure/5",
+  "summary_figure": "docs/_static/figures/readme_polish_summary.webp",
+  "summary_figure_sha256": "6c0f892e28c469b2937dd4e9a567c15cca8a0a4d54cbc575ab1ecc953d23568c",
+  "summary_independent_l2": {
+    "after": 0.005616607909342132,
+    "before": 0.013607094167290654
+  }
 }

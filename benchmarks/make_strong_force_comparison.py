@@ -102,22 +102,12 @@ def _style() -> None:
     )
 
 
-def _timing(artifact: dict) -> float:
-    external = artifact.get("external_source")
-    if external is None:
-        return float(artifact["solve_seconds"])
-    if "timing_seconds" in external:
-        return float(external["timing_seconds"]["total"])
-    return float(external["total_seconds"])
-
-
 def _render_row(
     axes,
     artifacts: dict[str, dict],
     *,
     case_label: str,
-    letters: tuple[str, str, str],
-    timing_names: tuple[str, ...],
+    letters: tuple[str, str],
 ) -> None:
     artifacts = {name: artifacts[name] for name in COLORS}
     line_styles = {
@@ -193,47 +183,6 @@ def _render_row(
         fontweight="bold",
     )
 
-    timings = [_timing(artifacts[name]) for name in timing_names]
-    ax = axes[2]
-    x = np.arange(len(timing_names))
-    bars = ax.bar(
-        x,
-        timings,
-        0.72,
-        color=[COLORS[name] for name in timing_names],
-        edgecolor="white",
-        linewidth=0.8,
-    )
-    ax.set_xticks(x)
-    ax.set_xticklabels([labels.get(name, name) for name in timing_names])
-    ax.set_ylabel("first-run wall time [s]")
-    for index, name in enumerate(timing_names):
-        external = artifacts[name].get("external_source") or {}
-        rerun = external.get("rerun_solve_seconds")
-        if rerun is not None:
-            ax.hlines(float(rerun), index - 0.36, index + 0.36,
-                      colors="white", linewidth=1.4, zorder=5)
-            ax.annotate(
-                f"rerun {float(rerun):.3g}", (index - 0.42, float(rerun)),
-                ha="right", va="center", fontsize=7.0, color=INK, zorder=6)
-    ax.set_yscale("log")
-    ax.set_ylim(max(0.005, min(timings) * 0.5), max(timings) * 2.0)
-    for bar in bars:
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() * 1.08,
-            f"{bar.get_height():.3g}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
-    ax.set_title(
-        f"({letters[2]}) Cold runtime",
-        loc="left",
-        fontsize=11,
-        fontweight="bold",
-    )
-
 
 def render(
     tokamak: dict[str, dict],
@@ -241,11 +190,14 @@ def render(
     output: Path,
 ) -> None:
     _style()
+    # Accuracy only, per the plan's README figure policy: runtime panels
+    # return once VMEX end-to-end times are competitive with the legacy
+    # codes; runtime evidence lives in benchmarks/baselines/ meanwhile.
     fig, axes = plt.subplots(
         2,
-        3,
-        figsize=(14.2, 9.2),
-        gridspec_kw={"width_ratios": (1.55, 1.0, 1.0)},
+        2,
+        figsize=(11.6, 9.2),
+        gridspec_kw={"width_ratios": (1.7, 1.0)},
         dpi=180,
     )
     fig.subplots_adjust(
@@ -268,20 +220,18 @@ def render(
         axes[0],
         tokamak,
         case_label="shaped tokamak, finite pressure",
-        letters=("a", "b", "c"),
-        timing_names=("VMEX", "VMEC2000", "VMEC++", "DESC"),
+        letters=("a", "b"),
     )
     _render_row(
         axes[1],
         stellarator,
         case_label="nfp=2 QA stellarator, finite beta",
-        letters=("d", "e", "f"),
-        timing_names=("VMEX", "VMEC2000", "VMEC++", "DESC"),
+        letters=("c", "d"),
     )
     fig.text(
         0.985,
         0.022,
-        "First runs from an empty JAX compilation cache on one Apple host; bars include load, solve, and export. White marks: VMEX rerun with its default persistent cache.",
+        "One shared independent force-balance oracle on each code's exported equilibrium; VMEX is the certified polished result. Top row: input.shaped_tokamak_pressure_polished.",
         ha="right",
         va="bottom",
         fontsize=8,
@@ -327,6 +277,40 @@ def render_summary_pair(
     plt.close(fig)
 
 
+def _summary_errors(args, parser) -> dict[str, float] | None:
+    """Resolve the summary-figure evidence without re-rendering the pair.
+
+    The README displays the polish summary figure alongside its independent
+    before/after errors, so a plain figure re-render must not silently drop
+    that evidence: carry it forward from the existing metadata as long as
+    the committed summary figure is byte-identical, or accept fresh error
+    values on the command line for the figure already at --summary-output.
+    """
+    if args.summary_before_error is not None and args.summary_after_error is not None:
+        if not args.summary_output.is_file():
+            parser.error("--summary-output does not exist for the given errors")
+        return {
+            "before": args.summary_before_error,
+            "after": args.summary_after_error,
+        }
+    if (args.summary_before_error is None) != (args.summary_after_error is None):
+        parser.error("pass both --summary-before-error and --summary-after-error")
+    if not args.metadata.is_file():
+        return None
+    previous = json.loads(args.metadata.read_text())
+    errors = previous.get("summary_independent_l2")
+    if errors is None:
+        return None
+    if not args.summary_output.is_file() or (
+        file_sha256(args.summary_output) != previous["summary_figure_sha256"]
+    ):
+        parser.error(
+            "the summary figure changed since the recorded evidence; re-render "
+            "it with --before-summary/--after-summary and fresh error values"
+        )
+    return {"before": errors["before"], "after": errors["after"]}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=DEFAULT_FIGURE)
@@ -358,12 +342,18 @@ def main() -> None:
             before_error=args.summary_before_error,
             after_error=args.summary_after_error,
         )
+        summary_errors = {
+            "before": args.summary_before_error,
+            "after": args.summary_after_error,
+        }
+    else:
+        summary_errors = _summary_errors(args, parser)
     try:
         figure_path = args.output.relative_to(REPO).as_posix()
     except ValueError:
         figure_path = str(args.output)
     metadata = {
-        "schema": "vmex.strong-force-readme-figure/4",
+        "schema": "vmex.strong-force-readme-figure/5",
         "cases": {
             case: {
                 "sources": {
@@ -381,29 +371,23 @@ def main() -> None:
         "figure_sha256": file_sha256(args.output),
         "summary_figure": (
             None
-            if args.before_summary is None
+            if summary_errors is None
             else args.summary_output.relative_to(REPO).as_posix()
         ),
         "summary_figure_sha256": (
             None
-            if args.before_summary is None
+            if summary_errors is None
             else file_sha256(args.summary_output)
         ),
-        "summary_independent_l2": (
-            None
-            if args.before_summary is None
-            else {
-                "before": args.summary_before_error,
-                "after": args.summary_after_error,
-            }
-        ),
-        "timing_note": (
-            "First-run wall time: process start, load, solve, and export on "
-            "one Apple host with an empty JAX compilation cache; the top row "
-            "is the bundled input.shaped_tokamak_pressure_polished deck. The "
-            "VMEX rerun marker is the same command with the persistent cache "
-            "the first run populated (on by default); the legacy codes have "
-            "no JIT stage, so their reruns match their first runs."
+        "summary_independent_l2": summary_errors,
+        "figure_note": (
+            "Accuracy only, per the plan's README figure policy: runtime "
+            "evidence lives in benchmarks/baselines/ and PR records until "
+            "VMEX end-to-end times are competitive with the legacy codes. "
+            "All errors come from one shared independent oracle applied to "
+            "each code's exported equilibrium; VMEX is the certified "
+            "polished state, and the top row is the bundled "
+            "input.shaped_tokamak_pressure_polished deck."
         ),
     }
     args.metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
