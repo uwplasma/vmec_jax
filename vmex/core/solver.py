@@ -586,6 +586,7 @@ def _geometry(
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         lambda_cos=state.L_cos, lambda_sin=lambda_sin,
         modes=rt.modes, trig=rt.trig, s=setup.s_full, use_fft=use_fft,
+        odd_m_scaling=setup.scalxc,
     )
     return (R_cos, R_sin, Z_cos, Z_sin), geometry
 
@@ -919,7 +920,7 @@ def _force_pipeline(
     spectral_finite = (
         _all_finite((spectral, rotated, released)) if collect_health else passing
     )
-    scaled = scalxc_scale_force(released, s=s)
+    scaled = scalxc_scale_force(released, s=s, scaling=setup.scalxc)
     scaled_finite = _all_finite(scaled) if collect_health else passing
     if setup.lthreed or setup.lasym:
         rhs = scale_m1_preconditioner_rhs(
@@ -1098,77 +1099,102 @@ def _evaluate(
     )
 
     # -- ns4-cadence refresh candidates (bcovar.f) --------------------------
-    tcon_new = constraint_scaling(
-        tcon0=rt.tcon0, geometry=geometry, jacobian=jacobian,
-        total_pressure=fields.total_pressure, trig=rt.trig, s=s,
-    )
-    common = dict(
-        r12_half=jacobian.r12[1:], bsq_half=fields.total_pressure[1:],
-        bsupv_half=fields.bsupv[1:], sqrt_g_half=jacobian.sqrt_g[1:],
-        angular_weight=rt.weights, delta_s=hs, ns=ns,
-    )
-    coefficients_R = precondn(
-        dxds_half=jacobian.dZ_ds[1:], dxdu_half=jacobian.zu12[1:],
-        dxdu_even_full=geometry.dZ_dtheta_even, dxdu_odd_full=geometry.dZ_dtheta_odd,
-        x_odd_full=geometry.Z_odd, **common,
-    )
-    coefficients_Z = precondn(
-        dxds_half=jacobian.dR_ds[1:], dxdu_half=jacobian.ru12[1:],
-        dxdu_even_full=geometry.dR_dtheta_even, dxdu_odd_full=geometry.dR_dtheta_odd,
-        x_odd_full=geometry.R_odd, **common,
-    )
-    if rt.lforbal and res.mpol >= 2:
-        force_balance_R = force_balance_preconditioner_factor(
-            axd_odd=coefficients_R.axd[:, 1],
-            dxdu_half=jacobian.zu12,
-            trig_multiplier=np.asarray(rt.trig.cosmu)[:, 1],
-            jacobian=jacobian,
-            fields=fields,
-            trig=rt.trig,
-            s=s,
-            signgs=setup.signgs,
+    # ``lax.cond``, not compute-then-select: bcovar.f only *performs* the
+    # preconditioner refresh on the ``mod(iter2-iter1, ns4) == 0`` cadence,
+    # so the ~ten full-grid reductions below must not run on the other 24 of
+    # every 25 iterations.  On refresh iterations the branch executes the
+    # exact ops the unconditional build ran, so selected values are
+    # bit-identical; under vmap the cond degrades to select (both branches),
+    # which is the old behavior.
+    def _fresh_cache(operand):
+        state_b, cache_b, geometry_b, jacobian_b, metrics_b, fields_b, energies_b = operand
+        tcon_new = constraint_scaling(
+            tcon0=rt.tcon0, geometry=geometry_b, jacobian=jacobian_b,
+            total_pressure=fields_b.total_pressure, trig=rt.trig, s=s,
         )
-        force_balance_Z = force_balance_preconditioner_factor(
-            axd_odd=coefficients_Z.axd[:, 1],
-            dxdu_half=jacobian.ru12,
-            trig_multiplier=-np.asarray(rt.trig.sinmu)[:, 1],
-            jacobian=jacobian,
-            fields=fields,
-            trig=rt.trig,
-            s=s,
-            signgs=setup.signgs,
+        common = dict(
+            r12_half=jacobian_b.r12[1:], bsq_half=fields_b.total_pressure[1:],
+            bsupv_half=fields_b.bsupv[1:], sqrt_g_half=jacobian_b.sqrt_g[1:],
+            angular_weight=rt.weights, delta_s=hs, ns=ns,
         )
-    else:
-        force_balance_R = jnp.zeros((ns,), dtype=s.dtype)
-        force_balance_Z = jnp.zeros((ns,), dtype=s.dtype)
-    # jmax follows scalfor.f: ns-1 fixed boundary (rt.jmax default), ns once
-    # the vacuum field is on (free-boundary lane) — activates the
-    # EDGE_PEDESTAL / ZC(0,0) edge stiffening inside scalfor_matrices.
-    mat_kwargs = dict(delta_s=hs, mpol=res.mpol, ntor=res.ntor, nfp=res.nfp, ns=ns,
-                      jmax=int(rt.jmax))
-    matrices_R = scalfor_matrices(coefficients_R, stabilize_edge_zc00=False, **mat_kwargs)
-    matrices_Z = scalfor_matrices(coefficients_Z, stabilize_edge_zc00=True, **mat_kwargs)
-    faclam_new = lamcal(
-        guu_half=metrics.guu, guv_half=metrics.guv, gvv_half=metrics.gvv,
-        sqrt_g_half=jacobian.sqrt_g, lamscale=fields.lamscale,
-        angular_weight=rt.weights, mpol=res.mpol, ntor=res.ntor, nfp=res.nfp,
-        lthreed=setup.lthreed,
-    )
-    fnorm1_new = preconditioned_force_norm(
-        R_cos=state.R_cos, Z_sin=state.Z_sin, modes=rt.modes,
-        R_sin=state.R_sin if setup.lasym else None,
-        Z_cos=state.Z_cos if setup.lasym else None,
-    )
-    fresh = PreconditionerCache(
-        tcon=tcon_new, fnorm=energies.fnorm, fnormL=energies.fnormL,
-        fnorm1=fnorm1_new, coefficients_R=coefficients_R,
-        coefficients_Z=coefficients_Z,
-        force_balance_R=force_balance_R,
-        force_balance_Z=force_balance_Z, matrices_R=matrices_R,
-        matrices_Z=matrices_Z, faclam=faclam_new,
-    )
+        coefficients_R = precondn(
+            dxds_half=jacobian_b.dZ_ds[1:], dxdu_half=jacobian_b.zu12[1:],
+            dxdu_even_full=geometry_b.dZ_dtheta_even,
+            dxdu_odd_full=geometry_b.dZ_dtheta_odd,
+            x_odd_full=geometry_b.Z_odd, **common,
+        )
+        coefficients_Z = precondn(
+            dxds_half=jacobian_b.dR_ds[1:], dxdu_half=jacobian_b.ru12[1:],
+            dxdu_even_full=geometry_b.dR_dtheta_even,
+            dxdu_odd_full=geometry_b.dR_dtheta_odd,
+            x_odd_full=geometry_b.R_odd, **common,
+        )
+        if rt.lforbal and res.mpol >= 2:
+            force_balance_R = force_balance_preconditioner_factor(
+                axd_odd=coefficients_R.axd[:, 1],
+                dxdu_half=jacobian_b.zu12,
+                trig_multiplier=np.asarray(rt.trig.cosmu)[:, 1],
+                jacobian=jacobian_b,
+                fields=fields_b,
+                trig=rt.trig,
+                s=s,
+                signgs=setup.signgs,
+            )
+            force_balance_Z = force_balance_preconditioner_factor(
+                axd_odd=coefficients_Z.axd[:, 1],
+                dxdu_half=jacobian_b.ru12,
+                trig_multiplier=-np.asarray(rt.trig.sinmu)[:, 1],
+                jacobian=jacobian_b,
+                fields=fields_b,
+                trig=rt.trig,
+                s=s,
+                signgs=setup.signgs,
+            )
+        else:
+            force_balance_R = jnp.zeros((ns,), dtype=s.dtype)
+            force_balance_Z = jnp.zeros((ns,), dtype=s.dtype)
+        # jmax follows scalfor.f: ns-1 fixed boundary (rt.jmax default), ns
+        # once the vacuum field is on (free-boundary lane) — activates the
+        # EDGE_PEDESTAL / ZC(0,0) edge stiffening inside scalfor_matrices.
+        mat_kwargs = dict(delta_s=hs, mpol=res.mpol, ntor=res.ntor,
+                          nfp=res.nfp, ns=ns, jmax=int(rt.jmax))
+        matrices_R = scalfor_matrices(
+            coefficients_R, stabilize_edge_zc00=False, **mat_kwargs)
+        matrices_Z = scalfor_matrices(
+            coefficients_Z, stabilize_edge_zc00=True, **mat_kwargs)
+        faclam_new = lamcal(
+            guu_half=metrics_b.guu, guv_half=metrics_b.guv,
+            gvv_half=metrics_b.gvv, sqrt_g_half=jacobian_b.sqrt_g,
+            lamscale=fields_b.lamscale, angular_weight=rt.weights,
+            mpol=res.mpol, ntor=res.ntor, nfp=res.nfp,
+            lthreed=setup.lthreed,
+        )
+        fnorm1_new = preconditioned_force_norm(
+            R_cos=state_b.R_cos, Z_sin=state_b.Z_sin, modes=rt.modes,
+            R_sin=state_b.R_sin if setup.lasym else None,
+            Z_cos=state_b.Z_cos if setup.lasym else None,
+        )
+        fresh = PreconditionerCache(
+            tcon=tcon_new, fnorm=energies_b.fnorm, fnormL=energies_b.fnormL,
+            fnorm1=fnorm1_new, coefficients_R=coefficients_R,
+            coefficients_Z=coefficients_Z,
+            force_balance_R=force_balance_R,
+            force_balance_Z=force_balance_Z, matrices_R=matrices_R,
+            matrices_Z=matrices_Z, faclam=faclam_new,
+        )
+        # scalfor_matrices returns the n-independent ax/bx with a length-1
+        # trailing axis; the old compute-then-where build broadcast them into
+        # the cache's (jmax, mpol, ntor+1) slots.  cond needs exact shapes.
+        return jax.tree.map(
+            lambda new, old: jnp.broadcast_to(
+                jnp.asarray(new), jnp.shape(old)), fresh, cache_b,
+        )
+
     refresh = (((iteration - iter_last_reset) % NS4) == 0) & (~jac_changed)
-    cache = _select(refresh, fresh, cache)
+    cache = lax.cond(
+        refresh, _fresh_cache, lambda operand: operand[1],
+        (state, cache, geometry, jacobian, metrics, fields, energies),
+    )
 
     # -- constraint + MHD forces + residue.f90 preconditioning chain --------
     # The mhd_forces -> tomnsps -> residue -> scalfor/faclam pipeline is shared
