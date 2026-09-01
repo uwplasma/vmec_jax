@@ -1768,6 +1768,29 @@ def _streaming_ruiz_scales(
     return np.clip(rows, 1.0 / limit, limit), np.clip(columns, 1.0 / limit, limit)
 
 
+@jax.jit
+def _low_solve_lane(
+    value: Array,
+    layout: StrongRootLayout,
+    transfer: HighLowTransfer,
+    low_preconditioner: LowOrderPreconditioner,
+    equation_scale: Array,
+    coordinate_scale: Array,
+) -> Array:
+    """Equilibrated low-order preconditioner solve for the balance probes.
+
+    A module lane: the former per-runtime ``jax.jit`` closure baked the
+    freshly built transfer and factor arrays into its executable as constants
+    and keyed one compile per runtime build; with the pytrees as traced
+    operands, every equal-structure build shares this one.
+    """
+
+    high = layout.unpack(value / equation_scale)
+    low = transfer.restrict(high)
+    solved = low_preconditioner.solve_scaled(low)
+    return layout.pack(transfer.prolong(solved)) / coordinate_scale
+
+
 def make_strong_root_runtime(
     native: HighOrderEquilibriumState,
     low_preconditioner: LowOrderPreconditioner,
@@ -1938,14 +1961,17 @@ def make_strong_root_runtime(
     )
     scaled = replace(provisional, strong_scale=base_scale)
     zero = jnp.zeros((layout.size,), dtype=rms.dtype)
+    equation_scale_array = jnp.asarray(provisional.equation_scale)
+    coordinate_scale_array = jnp.asarray(provisional.coordinate_scale)
 
-    @jax.jit
     def low_solve(value: Array) -> Array:
-        high = layout.unpack(value / jnp.asarray(provisional.equation_scale))
-        low = transfer.restrict(high)
-        solved = low_preconditioner.solve_scaled(low)
-        return layout.pack(transfer.prolong(solved)) / jnp.asarray(
-            provisional.coordinate_scale
+        return _low_solve_lane(
+            value,
+            layout,
+            transfer,
+            low_preconditioner,
+            equation_scale_array,
+            coordinate_scale_array,
         )
 
     low_solve(zero).block_until_ready()
