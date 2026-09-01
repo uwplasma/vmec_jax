@@ -1313,7 +1313,14 @@ def evaluate_forces(
 
 
 def _evaluation_is_finite(result: _EvalResult) -> Array:
-    """Whether every iteration-driving output of one ``funct3d`` pass is finite."""
+    """Whether every iteration-driving output of one ``funct3d`` pass is finite.
+
+    Full-tree classification sweep (~45 leaves).  The iteration body detects
+    failures with the ten-scalar summary in :func:`_evaluation_nonfinite` and
+    enters this sweep only on its failure branch; the public
+    :func:`evaluate_forces` health path keeps its own strict per-stage audit
+    (``collect_health``).
+    """
     leaves = jax.tree.leaves((
         result.gc, result.residuals, result.pre, result.wb, result.wp,
         result.r00, result.z00, result.cache,
@@ -1322,6 +1329,46 @@ def _evaluation_is_finite(result: _EvalResult) -> Array:
     for leaf in leaves:
         finite = finite & jnp.all(jnp.isfinite(jnp.asarray(leaf)))
     return finite
+
+
+def _evaluation_nonfinite(result: _EvalResult) -> Array:
+    """Whether one ``funct3d`` pass produced a non-finite iteration driver.
+
+    Detection uses only the ten summary scalars
+    (``fsqr/fsqz/fsql``, ``fsqr1/fsqz1/fsql1``, ``wb/wp``, ``r00/z00``),
+    mirroring VMEC++'s per-iteration guard (``vmec.cc``: ``isfinite`` of
+    ``fsqr/fsqz/fsql`` only).  They witness almost everything: a NaN/Inf
+    anywhere in ``gc`` propagates into the preconditioned sums
+    ``fsqr1/fsqz1/fsql1`` (``residuals.py``), one in the scaled force into
+    ``fsqr/fsqz/fsql``, and energy/geometry failures land in ``wb/wp`` and
+    ``r00/z00``.
+
+    Deliberate semantics caveat: a non-finite value confined to the
+    preconditioner CACHE can be masked by the checked-tridiagonal identity
+    fallback and is then detected one iteration LATE, when it poisons a
+    force.  This mirrors VMEC++'s scalar-only guard; the fallback status
+    (``radial_preconditioner_safe``) independently flags rejected
+    preconditioner columns.
+
+    When the scalar summary trips, the full :func:`_evaluation_is_finite`
+    sweep runs inside the failure branch of a ``lax.cond``, keeping the
+    classification exactly as strict as the old per-iteration sweep at zero
+    cost on healthy iterations.
+    """
+    scalars = jnp.stack([
+        jnp.asarray(result.residuals.fsqr), jnp.asarray(result.residuals.fsqz),
+        jnp.asarray(result.residuals.fsql),
+        jnp.asarray(result.pre.fsqr1), jnp.asarray(result.pre.fsqz1),
+        jnp.asarray(result.pre.fsql1),
+        jnp.asarray(result.wb), jnp.asarray(result.wp),
+        jnp.asarray(result.r00), jnp.asarray(result.z00),
+    ])
+    summary_bad = jnp.logical_not(jnp.all(jnp.isfinite(scalars)))
+    return lax.cond(
+        summary_bad,
+        lambda: jnp.logical_not(_evaluation_is_finite(result)),
+        lambda: jnp.asarray(False),
+    )
 
 
 def reguess_initial_axis(
@@ -1407,7 +1454,7 @@ def _make_body(
         def decide(e1):
             """evolve.f decisions from the first funct3d pass of this trip."""
             jac1 = e1.jacobian_sign_changed
-            nonfinite1 = (~jac1) & (~_evaluation_is_finite(e1))
+            nonfinite1 = (~jac1) & _evaluation_nonfinite(e1)
             # On irst=2 funct3d skips residue: the module residuals stay stale.
             fsqr_c = jnp.where(jac1, carry.fsqr, e1.residuals.fsqr)
             fsqz_c = jnp.where(jac1, carry.fsqz, e1.residuals.fsqz)
@@ -1565,7 +1612,7 @@ def _make_body(
         state_r = ctx["state_r"]
         xcdot_r = ctx["xcdot_r"]
         reeval_bad = restart & e2.jacobian_sign_changed
-        nonfinite2 = restart & (~e2.jacobian_sign_changed) & (~_evaluation_is_finite(e2))
+        nonfinite2 = restart & (~e2.jacobian_sign_changed) & _evaluation_nonfinite(e2)
         numerical_bad = nonfinite1 | nonfinite2
 
         fsqr_f = jnp.where(restart, e2.residuals.fsqr, fsqr_c)
