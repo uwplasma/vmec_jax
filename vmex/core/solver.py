@@ -1403,77 +1403,167 @@ def _make_body(
 
         # ---- funct3d (evolve.f) -------------------------------------------
         state_e1 = carry.state if evaluation_state is None else evaluation_state
-        e1 = _evaluate(state_e1, carry.cache, it, carry.iter1, carry.fsqz, rt,
-                       carry.fsqr + carry.fsqz, use_fft=use_fft,
-                       synthesis=evaluation_synthesis)
-        jac1 = e1.jacobian_sign_changed
-        nonfinite1 = (~jac1) & (~_evaluation_is_finite(e1))
-        # On irst=2 funct3d skips residue: the module residuals stay stale.
-        fsqr_c = jnp.where(jac1, carry.fsqr, e1.residuals.fsqr)
-        fsqz_c = jnp.where(jac1, carry.fsqz, e1.residuals.fsqz)
-        fsql_c = jnp.where(jac1, carry.fsql, e1.residuals.fsql)
-        fsq0 = fsqr_c + fsqz_c + fsql_c
 
-        converged = (~jac1) & (fsqr_c <= ftol) & (fsqz_c <= ftol) & (fsql_c <= ftol)
-        bad_init = jac1 & (it == 1)
-        # funct3d.f/eqsolve.f: LMOVE_AXIS=T and a finite first raw-force sum
-        # above 1e2 set irst=4 and return to guess_axis before evolving xc.
-        # ijacob=0 makes this a single retry, exactly like the Fortran guard.
-        axis_reguess = (
-            bool(rt.lmove_axis)
-            & (~jac1)
-            & (~nonfinite1)
-            & (it == 1)
-            & (carry.ijacob == 0)
-            & (rt.resolution.ns >= 3)
-            & (fsq0 > 1.0e2)
-        )
-        # Unlike a bad Jacobian, irst=4 does not return from evolve.f: the
-        # triggering pass still performs its damping/momentum update, and
-        # eqsolve carries that xcdot into the rebuilt-axis retry.  ``done``
-        # below transfers control after that update; only its xc is discarded.
-        stepping = running & (~converged) & (~bad_init) & (~nonfinite1)
+        def decide(e1):
+            """evolve.f decisions from the first funct3d pass of this trip."""
+            jac1 = e1.jacobian_sign_changed
+            nonfinite1 = (~jac1) & (~_evaluation_is_finite(e1))
+            # On irst=2 funct3d skips residue: the module residuals stay stale.
+            fsqr_c = jnp.where(jac1, carry.fsqr, e1.residuals.fsqr)
+            fsqz_c = jnp.where(jac1, carry.fsqz, e1.residuals.fsqz)
+            fsql_c = jnp.where(jac1, carry.fsql, e1.residuals.fsql)
+            fsq0 = fsqr_c + fsqz_c + fsql_c
 
-        # ---- TimeStepControl (evolve.f) ------------------------------------
-        first = it == carry.iter1
-        fsq_prev = carry.fsq
-        res0_f = jnp.where(first, fsq_prev, carry.res0)
-        res1_f = jnp.where(first, fsq0, carry.res1)
-        record_low = (fsq_prev <= res0_f) & (fsq0 <= res1_f)
-        res0_n = jnp.minimum(res0_f, fsq_prev)
-        res1_n = jnp.minimum(res1_f, fsq0)
-        growth_gate = ~(record_low & (~jac1))     # IF/ELSE-IF chain in Fortran
-        grew = (
-            growth_gate
-            & ((it - carry.iter1) > GROWTH_MIN_ITERATIONS)
-            & ((fsq_prev > GROWTH_LIMIT * res0_n) | (fsq0 > GROWTH_LIMIT * res1_n))
-        )
-        kind = jnp.where(grew, RESTART_GROWTH,
-                         jnp.where(jac1, RESTART_JACOBIAN, STEP_OK))
-        restart = stepping & (kind != STEP_OK)
-        store = stepping & (first | (record_low & (~jac1)))
+            converged = (
+                (~jac1) & (fsqr_c <= ftol) & (fsqz_c <= ftol) & (fsql_c <= ftol)
+            )
+            bad_init = jac1 & (it == 1)
+            # funct3d.f/eqsolve.f: LMOVE_AXIS=T and a finite first raw-force
+            # sum above 1e2 set irst=4 and return to guess_axis before
+            # evolving xc.  ijacob=0 makes this a single retry, exactly like
+            # the Fortran guard.
+            axis_reguess = (
+                bool(rt.lmove_axis)
+                & (~jac1)
+                & (~nonfinite1)
+                & (it == 1)
+                & (carry.ijacob == 0)
+                & (rt.resolution.ns >= 3)
+                & (fsq0 > 1.0e2)
+            )
+            # Unlike a bad Jacobian, irst=4 does not return from evolve.f:
+            # the triggering pass still performs its damping/momentum update,
+            # and eqsolve carries that xcdot into the rebuilt-axis retry.
+            # ``done`` below transfers control after that update; only its xc
+            # is discarded.
+            stepping = running & (~converged) & (~bad_init) & (~nonfinite1)
 
-        xstore_n = _select(store, carry.state, carry.xstore)
-        state_r = _select(restart, xstore_n, carry.state)
-        xcdot_r = _select(restart, jax.tree.map(jnp.zeros_like, carry.xcdot), carry.xcdot)
-        delt_r = carry.time_step * jnp.where(
-            restart & (kind == RESTART_JACOBIAN), JACOBIAN_RESET_FACTOR, 1.0
-        ) * jnp.where(
-            restart & (kind == RESTART_GROWTH), 1.0 / GROWTH_BACKOFF_DIVISOR, 1.0
-        )
-        ijacob_r = carry.ijacob + (restart & (kind == RESTART_JACOBIAN)).astype(carry.ijacob.dtype)
-        iter1_r = jnp.where(restart, it, carry.iter1)
+            # ---- TimeStepControl (evolve.f) --------------------------------
+            first = it == carry.iter1
+            fsq_prev = carry.fsq
+            res0_f = jnp.where(first, fsq_prev, carry.res0)
+            res1_f = jnp.where(first, fsq0, carry.res1)
+            record_low = (fsq_prev <= res0_f) & (fsq0 <= res1_f)
+            res0_n = jnp.minimum(res0_f, fsq_prev)
+            res1_n = jnp.minimum(res1_f, fsq0)
+            growth_gate = ~(record_low & (~jac1))  # IF/ELSE-IF chain in Fortran
+            grew = (
+                growth_gate
+                & ((it - carry.iter1) > GROWTH_MIN_ITERATIONS)
+                & ((fsq_prev > GROWTH_LIMIT * res0_n)
+                   | (fsq0 > GROWTH_LIMIT * res1_n))
+            )
+            kind = jnp.where(grew, RESTART_GROWTH,
+                             jnp.where(jac1, RESTART_JACOBIAN, STEP_OK))
+            restart = stepping & (kind != STEP_OK)
+            store = stepping & (first | (record_low & (~jac1)))
 
-        # Re-evaluate at the restored state (TimeStepControl calls funct3d).
-        e2 = lax.cond(
-            restart,
-            lambda args: _evaluate(
-                args[0], args[1], it, it, args[2], rt, args[3],
-                use_fft=use_fft,
-            ),
-            lambda args: e1,
-            (state_r, e1.cache, fsqz_c, fsqr_c + fsqz_c),
-        )
+            xstore_n = _select(store, carry.state, carry.xstore)
+            state_r = _select(restart, xstore_n, carry.state)
+            xcdot_r = _select(
+                restart, jax.tree.map(jnp.zeros_like, carry.xcdot), carry.xcdot
+            )
+            delt_r = carry.time_step * jnp.where(
+                restart & (kind == RESTART_JACOBIAN), JACOBIAN_RESET_FACTOR, 1.0
+            ) * jnp.where(
+                restart & (kind == RESTART_GROWTH),
+                1.0 / GROWTH_BACKOFF_DIVISOR, 1.0,
+            )
+            ijacob_r = carry.ijacob + (
+                restart & (kind == RESTART_JACOBIAN)
+            ).astype(carry.ijacob.dtype)
+            iter1_r = jnp.where(restart, it, carry.iter1)
+            return dict(
+                restart=restart, stepping=stepping, converged=converged,
+                bad_init=bad_init, axis_reguess=axis_reguess,
+                nonfinite1=nonfinite1, fsqr_c=fsqr_c, fsqz_c=fsqz_c,
+                fsql_c=fsql_c, fsq_prev=fsq_prev, res0_n=res0_n,
+                res1_n=res1_n, delt_r=delt_r, ijacob_r=ijacob_r,
+                iter1_r=iter1_r, xstore_n=xstore_n, state_r=state_r,
+                xcdot_r=xcdot_r,
+            )
+
+        if evaluation_synthesis is not None:
+            # Hoisted-synthesis seam (free-boundary steady lane): the first
+            # pass consumes the precomputed synthesis, the restart
+            # re-evaluation cannot — two structurally different _evaluate
+            # instances, so no single-site dedup is possible here.
+            e1 = _evaluate(state_e1, carry.cache, it, carry.iter1, carry.fsqz,
+                           rt, carry.fsqr + carry.fsqz, use_fft=use_fft,
+                           synthesis=evaluation_synthesis)
+            ctx = decide(e1)
+            # Re-evaluate at the restored state (TimeStepControl calls funct3d).
+            e2 = lax.cond(
+                ctx["restart"],
+                lambda args: _evaluate(
+                    args[0], args[1], it, it, args[2], rt, args[3],
+                    use_fft=use_fft,
+                ),
+                lambda args: e1,
+                (ctx["state_r"], e1.cache, ctx["fsqz_c"],
+                 ctx["fsqr_c"] + ctx["fsqz_c"]),
+            )
+        else:
+            # Single traced funct3d per body: the chain dominates the lane's
+            # HLO, and the old two-site structure (unconditional e1 + restart
+            # e2 inside cond) traced it twice — roughly doubling every lane's
+            # compile time.  A two-trip scan runs one shared eval site: trip
+            # 0 always evaluates carry.state and computes the evolve.f
+            # decisions; trip 1 re-evaluates the restored state only when the
+            # TimeStepControl decided to restart, with exactly the argument
+            # values the old e2 call passed.  Runtime op sequence per trip is
+            # unchanged.
+            def eval_lane(args):
+                return _evaluate(args[0], args[1], args[2], args[3], args[4],
+                                 rt, args[5], use_fft=use_fft)
+
+            args0 = (state_e1, carry.cache, it, carry.iter1, carry.fsqz,
+                     carry.fsqr + carry.fsqz)
+            e_zero = jax.tree.map(
+                lambda sd: jnp.zeros(sd.shape, sd.dtype),
+                jax.eval_shape(eval_lane, args0),
+            )
+            ctx_zero = jax.tree.map(
+                lambda sd: jnp.zeros(sd.shape, sd.dtype),
+                jax.eval_shape(decide, e_zero),
+            )
+
+            def substep(sub, phase):
+                e_prev, do_eval, args, ctx_prev = sub
+                e = lax.cond(do_eval, eval_lane, lambda _: e_prev, args)
+
+                def on_first(_):
+                    c = decide(e)
+                    args1 = (c["state_r"], e.cache, it, it, c["fsqz_c"],
+                             c["fsqr_c"] + c["fsqz_c"])
+                    return c["restart"], args1, c
+
+                def on_second(_):
+                    return do_eval, args, ctx_prev
+
+                do_eval_n, args_n, ctx_n = lax.cond(
+                    phase == 0, on_first, on_second, None
+                )
+                return (e, do_eval_n, args_n, ctx_n), None
+
+            (e_final, _, _, ctx), _ = lax.scan(
+                substep,
+                (e_zero, jnp.asarray(True), args0, ctx_zero),
+                jnp.arange(2),
+            )
+            # When no restart happened trip 1 passed e1 through, so the
+            # e1/e2 merges below collapse correctly with both set to e_final.
+            e1 = e2 = e_final
+
+        (restart, stepping, converged, bad_init, axis_reguess, nonfinite1,
+         fsqr_c, fsqz_c, fsql_c, fsq_prev, res0_n, res1_n, delt_r, ijacob_r,
+         iter1_r) = (ctx[k] for k in (
+             "restart", "stepping", "converged", "bad_init", "axis_reguess",
+             "nonfinite1", "fsqr_c", "fsqz_c", "fsql_c", "fsq_prev",
+             "res0_n", "res1_n", "delt_r", "ijacob_r", "iter1_r"))
+        xstore_n = ctx["xstore_n"]
+        state_r = ctx["state_r"]
+        xcdot_r = ctx["xcdot_r"]
         reeval_bad = restart & e2.jacobian_sign_changed
         nonfinite2 = restart & (~e2.jacobian_sign_changed) & (~_evaluation_is_finite(e2))
         numerical_bad = nonfinite1 | nonfinite2
