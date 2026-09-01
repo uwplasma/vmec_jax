@@ -50,10 +50,10 @@
     }
   },
   "figure": "docs/_static/figures/readme_strong_force_comparison.webp",
-  "figure_sha256": "39e4ce0f6b39bd360c1c46fec0b5dbbf526dcded4cd3c490167f58bd0bc2bca3",
+  "figure_sha256": "eead667b8db1748203017302f19a1cd72bf49c4a93f0473f979afb7c60854a47",
   "schema": "vmex.strong-force-readme-figure/4",
   "summary_figure": null,
   "summary_figure_sha256": null,
   "summary_independent_l2": null,
-  "timing_note": "First-run wall time: process start, load, solve, and export on one Apple host with an empty JAX compilation cache; the top row is the bundled input.shaped_tokamak_pressure_polished deck. The VMEX rerun marker is the same command with the persistent cache the first run populated (on by default); the legacy codes have no JIT stage, so their reruns match their first runs."
+  "timing_note": "Accuracy only, and only rows where certified polishing demonstrably beats the legacy codes, per the plan's README figure policy; runtime evidence lives in benchmarks/baselines. All errors from one shared independent oracle on each code's exported equilibrium (VMEX: the certified polished state). The stellarator row returns when the 3-D production polish is tractable."
 }

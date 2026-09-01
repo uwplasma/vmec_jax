@@ -107,21 +107,21 @@ vmex examples/data/input.finite_beta_stellarator_polished --plot
 python examples/force_balance_polishing.py
 ```
 
-The comparison below applies the same independent force oracle to VMEX,
-VMEC2000, VMEC++, and DESC. The top row is the bundled finite-pressure shaped
-tokamak; the bottom row is a finite-beta, two-field-period QA stellarator.
-Timings include load, solve, and export from a fresh process. Persistent-cache
-VMEX reruns are marked separately.
+The comparison below applies the same independent force oracle to the
+exported equilibrium of each code - VMEX, VMEC2000, VMEC++, and DESC - on the
+bundled finite-pressure shaped tokamak; VMEX is the certified polished
+result. Stellarator rows join as certified 3-D polishing becomes tractable
+(the compile-side work is in progress); the figure shows only cases where
+polishing demonstrably wins.
 
 ![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 
-The standard VMEX summary before and after polishing makes the change visible
-without requiring the example to be run. The independent continuum error falls
-from `1.361e-2` to `5.617e-3`; the boundary and prescribed profiles do not move.
-The radial `equif` panel is a separate VMEC-grid diagnostic and need not decrease
-monotonically with the continuum objective.
+Below: the same equilibrium summary before and after polishing the bundled
+shaped tokamak (`input.shaped_tokamak_pressure_polished`). Polishing cuts the
+independent force error about sevenfold, from `1.28e-2` to `1.79e-3`, without
+moving the boundary or the prescribed profiles.
 
-![Finite-beta stellarator summary before and after force-balance polishing](docs/_static/figures/readme_polish_summary.webp)
+![Shaped-tokamak summary before and after force-balance polishing](docs/_static/figures/readme_polish_summary.webp)
 
 The raw comparison data, source revisions, resolutions, timing boundaries, and
 certificate refinements are recorded in `benchmarks/`.
@@ -186,11 +186,9 @@ VMEX does not assume nested surfaces there.
 `equilibrium.exterior_field()` builds the plasma contribution from the live
 VMEX spectral state, rather than a materialized wout, so JAX derivatives with
 respect to the equilibrium boundary are retained for single-stage objectives.
-Run `examples/vmex_get_B_gradB.py` for the finite-beta interior API and
-`examples/free_boundary_essos_coils.py` for the released ESSOS 0.16 coil
-interface. Exterior coil VJPs and field-line tracing need ESSOS branch
-[`rj/vmex-optimization-interfaces`](https://github.com/uwplasma/ESSOS/tree/rj/vmex-optimization-interfaces):
-`pip install "essos @ git+https://github.com/uwplasma/ESSOS.git@rj/vmex-optimization-interfaces"`.
+`examples/vmex_get_B_gradB.py` and `examples/free_boundary_essos_coils.py`
+are the runnable references; the docs' install page covers the ESSOS branch
+that exterior coil VJPs and field-line tracing currently need.
 
 The common CLI operations are:
 
@@ -319,7 +317,12 @@ geometry = gk_closed_fieldline_geometry(
 
 ## Equilibrium and kinetic diagnostics
 
-`vmex --plot wout_X.nc` produces cross-sections, profiles, a full-resolution 3-D LCFS, and the compact summaries below. The summary's top row combines pressure with parallel current and shows the relative radial force error, $\epsilon_F=|(\mathbf J\times\mathbf B-\nabla p)_s|/(|(\mathbf J\times\mathbf B)_s|+|(\nabla p)_s|)$, for vacuum or finite-beta equilibria; the scalar card reports its maximum over solved interior surfaces. The summaries combine Mercier `DMerc`, Glasser `DR`, and $V''(s)$ on zero-aligned axes; add a 3-D LCFS; and show the second adiabatic invariant in the Velasco polar coordinates $x=s\cos\alpha$, $y=s\sin\alpha$. A separate stability figure decomposes `DMerc` and shows the frozen-geometry response to a pressure ramp; finite-pressure points must be re-solved for certification. Boozer $|B|$ appears automatically, while `--booz` only saves a reusable `boozmn_*.nc` file.
+`vmex --plot wout_X.nc` produces cross-sections, profiles, a 3-D LCFS, and
+the compact summaries below, including the relative radial force error and
+its maximum over solved surfaces, Mercier/Glasser stability, the second
+adiabatic invariant, and Boozer $|B|$. The
+[plotting guide](https://vmex.readthedocs.io/en/latest/howto/plot-diagnostics.html)
+defines every panel; `--booz` additionally saves a reusable `boozmn_*.nc`.
 
 This finite-pressure NFP=3 QI example reaches $\langle\beta\rangle=2.38\%$.
 
