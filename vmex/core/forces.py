@@ -712,9 +712,9 @@ def constraint_force(
     ``con_value`` optionally supplies step 1's six synthesized channels
     ``(6, ns, ntheta3, nzeta)`` from the main geometry pass
     (:func:`vmex.core.geometry.real_space_geometry_with_constraint` fed by
-    :func:`constraint_synthesis_coefficients` — bit-identical rows, one less
-    full synthesis per iteration); it must correspond to the SAME state as
-    ``geometry``, which this function cannot verify.
+    :func:`constraint_synthesis_coefficients` — bit-identical channels, so
+    this function then performs no synthesis of its own); it must correspond
+    to the SAME state as ``geometry``, which this function cannot verify.
 
     Returns ``(gcon, rcon, zcon, rcon0, zcon0)``.
     """

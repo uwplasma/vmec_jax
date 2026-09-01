@@ -582,11 +582,13 @@ def _geometry(
 ):
     """Constrained state -> physical coefficients + real-space geometry.
 
-    ``with_constraint=True`` fuses the rcon/zcon constraint synthesis into
-    the same batched pass (VMEC2000/VMEC++ compute them inside the one
-    ``totzsps`` call) and returns a third element: the ``(6, ns, ntheta3,
-    nzeta)`` channel stack :func:`vmex.core.forces.constraint_force` consumes
-    as ``con_value`` — bit-identical to the second synthesis it replaces.
+    ``with_constraint=True`` performs the rcon/zcon constraint synthesis in
+    the same pass (VMEC2000/VMEC++ compute them inside the one ``totzsps``
+    call) and returns a third element: the ``(6, ns, ntheta3, nzeta)``
+    channel stack :func:`vmex.core.forces.constraint_force` consumes as
+    ``con_value`` — bit-identical BY CONSTRUCTION to the second synthesis it
+    replaces (same kernels, same shapes; row-level fusion is deliberately
+    not done, see :func:`vmex.core.transforms.fourier_to_real`).
     """
     setup = rt.setup
     R_cos, R_sin, Z_cos, Z_sin = _physical_coefficients(

@@ -289,46 +289,32 @@ def _fast_synthesis(
     """Use separable FFT synthesis without expanding mode-stacked phases.
 
     ``extra_value_cos/sin`` are value-only side channels ``(C, ns, mnmax)``
-    fused as extra rows into the shared toroidal synthesis and the ``value``
-    theta contraction (they never join ``dtheta``/``dzeta``); their values
-    are appended as one extra trailing output.  The main channels' toroidal
-    coefficients are only flattened/concatenated for this — per-row results
-    are unchanged.
+    synthesized in this same pass and appended as one extra trailing output.
+    They run through their own unchanged-shape toroidal synthesis and theta
+    contraction — NOT as rows appended to the main batch: batched irfft and
+    dot_general reduction order depend on the batch shape, so row fusion
+    perturbs the results at production resolutions (measured ~1e-13
+    relative at mnmax >= 162) while also being slower (see
+    :func:`fourier_to_real`).  Bit-identical to a separate synthesis call
+    by construction.
     """
-    a_cos, a_sin, b_cos, b_sin = _packed_toroidal_coefficients(
-        coefficient_cos, coefficient_sin, modes
-    )
-    n_main = None
     if extra_value_cos is not None:
         if "value" not in derivatives:
             raise ValueError("extra value channels require the 'value' derivative")
-        e_a_cos, e_a_sin, e_b_cos, e_b_sin = _packed_toroidal_coefficients(
-            extra_value_cos, extra_value_sin, modes
+        (extra_value,) = _fast_synthesis(
+            extra_value_cos, extra_value_sin, modes, trig, ("value",)
         )
-        main_shape = a_cos.shape[:-3]
-
-        def rows(x: Array) -> Array:
-            return x.reshape((-1,) + x.shape[-3:])
-
-        n_main = int(rows(a_cos).shape[0])
-        a = _toroidal_synthesis(
-            jnp.concatenate([rows(a_cos), e_a_cos], axis=0),
-            jnp.concatenate([rows(a_sin), e_a_sin], axis=0), trig,
-        )
-        b = _toroidal_synthesis(
-            jnp.concatenate([rows(b_cos), e_b_cos], axis=0),
-            jnp.concatenate([rows(b_sin), e_b_sin], axis=0), trig,
-        )
-    else:
-        a = _toroidal_synthesis(a_cos, a_sin, trig)
-        b = _toroidal_synthesis(b_cos, b_sin, trig)
+    a_cos, a_sin, b_cos, b_sin = _packed_toroidal_coefficients(
+        coefficient_cos, coefficient_sin, modes
+    )
+    a = _toroidal_synthesis(a_cos, a_sin, trig)
+    b = _toroidal_synthesis(b_cos, b_sin, trig)
     mpol = int(a.shape[-2])
     theta = {
         "value": (trig.cosmu[:, :mpol], trig.sinmu[:, :mpol]),
         "dtheta": (trig.sinmum[:, :mpol], trig.cosmum[:, :mpol]),
     }
     fields: list[Array] = []
-    extra_value = None
     for derivative in derivatives:
         if derivative == "dzeta":
             frequency = (
@@ -340,24 +326,16 @@ def _fast_synthesis(
             cosmu, sinmu = trig.cosmu[:, :mpol], trig.sinmu[:, :mpol]
         elif derivative in theta:
             a_d, b_d = a, b
-            if n_main is not None and derivative != "value":
-                a_d, b_d = a[:n_main], b[:n_main]
             cosmu, sinmu = theta[derivative]
         else:
             raise ValueError(
                 f"Unknown derivative {derivative!r}; expected one of {_DERIVATIVES}"
             )
-        field = (
+        fields.append(
             _einsum("...mk,im->...ik", a_d, cosmu)
             + _einsum("...mk,im->...ik", b_d, sinmu)
         )
-        if n_main is not None and derivative != "dzeta":
-            if derivative == "value":
-                extra_value = field[n_main:]
-                field = field[:n_main]
-            field = field.reshape(main_shape + field.shape[1:])
-        fields.append(field)
-    if extra_value is not None:
+    if extra_value_cos is not None:
         fields.append(extra_value)
     return tuple(fields)
 
@@ -416,15 +394,28 @@ def fourier_to_real(
     s:
         Radial grid for ``odd_m_sqrt_s`` (defaults to a uniform [0, 1] grid).
     extra_value_cos, extra_value_sin:
-        Optional value-only side channels of shape ``(C, ns, mnmax)``, fused
-        into the SAME ``value`` contraction as extra batch rows (VMEC2000
-        ``totzsps`` accumulates ``rcon/zcon`` inside the one synthesis loop,
+        Optional value-only side channels of shape ``(C, ns, mnmax)``,
+        synthesized inside this same pass (VMEC2000 ``totzsps`` accumulates
+        ``rcon/zcon`` inside the one synthesis loop,
         ``totzsp_mod.f:178-193``).  They must already be VMEC-internal
         coefficients (``internal_coeffs=True`` is required) and they never
         receive the odd-m ``scalxc`` scaling — the constraint pipeline
         divides by ``sqrt(s)`` *after* synthesis, which is not bit-identical
         to scaling the coefficients.  When provided, the returned tuple
         carries one extra trailing array ``(C, ns, ntheta3, nzeta)``.
+
+        Deliberately NOT fused into one row-concatenated contraction (the
+        VMEC++ single-pass layout): XLA's dot_general/irfft reduction order
+        depends on the batch shape, so appending rows perturbs BOTH the
+        extra channels and the pre-existing geometry rows at production
+        resolutions (measured ~1e-13 relative, hundreds of ULPs, at
+        mnmax >= 162), and the concatenated dot also measured 15-25% slower
+        than two dots — the references' register-level trig reuse does not
+        exist here because the phase tables are already shared trace-time
+        constants.  The extra channels therefore run as their own
+        unchanged-shape contraction against the shared phase constant:
+        bit-identical to a separate synthesis call BY CONSTRUCTION at every
+        resolution.
 
     Returns
     -------
@@ -477,18 +468,11 @@ def fourier_to_real(
     for derivative in derivatives:
         cos_phase, sin_phase = _phase_pair(modes, trig, derivative)
         phase = jnp.asarray(np.concatenate([cos_phase, sin_phase], axis=0))
+        fields.append(_einsum("...k,kij->...ij", coeff, phase))
         if extra is not None and derivative == "value":
-            rows = coeff.reshape((-1,) + coeff.shape[-2:])
-            fused = _einsum(
-                "...k,kij->...ij", jnp.concatenate([rows, extra], axis=0), phase
-            )
-            n_main = int(rows.shape[0])
-            fields.append(
-                fused[:n_main].reshape(coeff.shape[:-1] + fused.shape[-2:])
-            )
-            extra_value = fused[n_main:]
-        else:
-            fields.append(_einsum("...k,kij->...ij", coeff, phase))
+            # Own contraction, unchanged shapes (see the docstring for why
+            # the rows are not appended to the main batch).
+            extra_value = _einsum("...k,kij->...ij", extra, phase)
     if extra is not None:
         fields.append(extra_value)
     return tuple(fields)

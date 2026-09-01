@@ -272,7 +272,7 @@ def real_space_geometry_with_constraint(
     constraint_cos: Array | None = None,
     constraint_sin: Array | None = None,
 ) -> tuple[RealSpaceGeometry, Array | None]:
-    """:func:`real_space_geometry` with the rcon/zcon synthesis fused in.
+    """:func:`real_space_geometry` with the rcon/zcon synthesis carried along.
 
     VMEC2000/VMEC++ compute ``rcon/zcon`` inside the SAME ``totzsps`` pass as
     the geometry channels (``totzsp_mod.f:178-193``; vmecpp
@@ -280,12 +280,15 @@ def real_space_geometry_with_constraint(
     full synthesis per iteration.  ``constraint_cos/sin`` are the
     xmpq-weighted, parity-masked stacks from
     :func:`vmex.core.forces.constraint_synthesis_coefficients`, shape
-    ``(6, ns, mnmax)``; they join the batched contraction as value-only rows
+    ``(6, ns, mnmax)``; they are synthesized value-only within this pass
     WITHOUT the odd-m ``scalxc`` scaling (the constraint pipeline applies its
     ``1/sqrt(s)`` after synthesis — pre-scaling the coefficients would be
-    algebraically equal but not bit-identical).  Returns ``(geometry,
-    constraint_value)`` with ``constraint_value`` of shape
-    ``(6, ns, ntheta3, nzeta)`` — the exact array
+    algebraically equal but not bit-identical), as their own unchanged-shape
+    contraction rather than rows appended to the geometry batch — XLA's
+    batch-shape-dependent reduction order breaks bit parity under row fusion
+    (see :func:`vmex.core.transforms.fourier_to_real`).  Returns
+    ``(geometry, constraint_value)`` with ``constraint_value`` of shape
+    ``(6, ns, ntheta3, nzeta)`` — bit-identical to the array
     :func:`vmex.core.forces.constraint_force` would synthesize itself — or
     ``None`` when no constraint channels were passed.
     """
