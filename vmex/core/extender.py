@@ -801,8 +801,15 @@ class VmecExtender(MagneticField):
         external_field: Any | None = None,
         digits: int = 6,
         levels: tuple[tuple[int, int], ...] | None = None,
+        chunk_size: int | str = "auto",
+        target_chunk_size: int | str = "auto",
     ) -> "VmecExtender":
-        """Construct the finite-beta path from traceable VMEX surface data."""
+        """Construct the finite-beta path from traceable VMEX surface data.
+
+        ``chunk_size`` bounds source points per virtual-casing batch;
+        ``target_chunk_size`` bounds evaluation points. ``"auto"`` delegates
+        both memory/performance choices to virtual-casing-jax.
+        """
         from . import virtual_casing as vc
 
         vc._require_vcj()
@@ -813,6 +820,8 @@ class VmecExtender(MagneticField):
             src_nphi=nphi,
             src_ntheta=ntheta,
             levels=schedule,
+            chunk_size=chunk_size,
+            target_chunk_size=target_chunk_size,
             branch="internal",
         )
         plasma_field = vc.VirtualCasingExteriorField(surface_data, config)
@@ -830,6 +839,8 @@ class VmecExtender(MagneticField):
         external_dof_names: tuple[str, ...] = (),
         digits: int = 6,
         levels: tuple[tuple[int, int], ...] | None = None,
+        chunk_size: int | str = "auto",
+        target_chunk_size: int | str = "auto",
         dof_names: tuple[str, ...] = (),
     ) -> "VmecExtender":
         """Construct a virtual-casing field with VJPs in ``parameters``.
@@ -891,11 +902,13 @@ class VmecExtender(MagneticField):
             live_external_field = make_external(external_dofs)
             return cls.from_surface_data(
                 data, external_field=live_external_field, digits=digits,
-                levels=levels).B(points)
+                levels=levels, chunk_size=chunk_size,
+                target_chunk_size=target_chunk_size).B(points)
 
         field = cls.from_surface_data(
             initial_surface_data, external_field=initial_external_field,
-            digits=digits, levels=levels)
+            digits=digits, levels=levels, chunk_size=chunk_size,
+            target_chunk_size=target_chunk_size)
         field._parameters = all_parameters
         field._parameter_data_fn = differentiable_surface_data
         field._B_from_data = B_from_surface_arrays
@@ -913,6 +926,8 @@ class VmecExtender(MagneticField):
         ntheta: int = 32,
         digits: int = 6,
         levels: tuple[tuple[int, int], ...] | None = None,
+        chunk_size: int | str = "auto",
+        target_chunk_size: int | str = "auto",
         base_dir: str | Path | None = None,
     ) -> "VmecExtender":
         """Construct an exterior field from a wout-like object."""
@@ -938,6 +953,8 @@ class VmecExtender(MagneticField):
                 external_field=external_field,
                 digits=digits,
                 levels=levels,
+                chunk_size=chunk_size,
+                target_chunk_size=target_chunk_size,
             )
 
         if external_field is None and plasma_field is None:
@@ -965,6 +982,8 @@ class VmecExtender(MagneticField):
         ntheta: int = 32,
         digits: int = 6,
         levels: tuple[tuple[int, int], ...] | None = None,
+        chunk_size: int | str = "auto",
+        target_chunk_size: int | str = "auto",
     ) -> "VmecExtender":
         """Construct the differentiable finite-beta path from a live VMEX state."""
         from . import virtual_casing as vc
@@ -977,6 +996,8 @@ class VmecExtender(MagneticField):
             external_field=external_field,
             digits=digits,
             levels=levels,
+            chunk_size=chunk_size,
+            target_chunk_size=target_chunk_size,
         )
 
     @classmethod

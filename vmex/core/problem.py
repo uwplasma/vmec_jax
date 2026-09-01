@@ -605,12 +605,16 @@ class VmecProblem(FunctionProblem):
         ntheta: int = 32,
         digits: int = 6,
         levels: tuple[tuple[int, int], ...] | None = None,
+        chunk_size: int | str = "auto",
+        target_chunk_size: int | str = "auto",
     ) -> Any:
         """Return the exterior field and exact VJPs in this problem's DOFs.
 
         Query points must lie outside the last closed flux surface and away
         from coil filaments.  The returned field follows the stored-point API:
         ``field.set_points(xyz); field.B(); field.B_vjp(cotangent)``.
+        Set the source and target chunk sizes only to cap virtual-casing
+        memory; ``"auto"`` is the tuned default.
         """
         state_runtime = self.metadata.get("jax_state_runtime")
         inp = self.metadata.get("input")
@@ -632,7 +636,8 @@ class VmecProblem(FunctionProblem):
             external_parameters=external_parameters,
             external_field_from_parameters=external_field_from_parameters,
             external_dof_names=external_dof_names,
-            digits=digits, levels=levels, dof_names=self.dof_names)
+            digits=digits, levels=levels, chunk_size=chunk_size,
+            target_chunk_size=target_chunk_size, dof_names=self.dof_names)
 
     def interior_field(
         self, x: Array, *, newton_iterations: int = 10

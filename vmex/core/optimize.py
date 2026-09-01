@@ -3231,6 +3231,8 @@ def _least_squares_implicit(
                 "external_field_from_parameters", None)
             external_dof_names = tuple(kwargs.pop("external_dof_names", ()))
             digits = int(kwargs.pop("digits", 6)); levels = kwargs.pop("levels", None)
+            chunk_size = kwargs.pop("chunk_size", "auto")
+            target_chunk_size = kwargs.pop("target_chunk_size", "auto")
             plasma = kwargs.pop("plasma", "auto")
             if plasma not in ("auto", "include", "vacuum"):
                 raise ValueError("plasma must be 'auto', 'include', or 'vacuum'")
@@ -3250,7 +3252,8 @@ def _least_squares_implicit(
                 external_parameters=external_parameters,
                 external_field_from_parameters=external_field_from_parameters,
                 external_dof_names=external_dof_names,
-                digits=digits, levels=levels, dof_names=tuple(names))
+                digits=digits, levels=levels, chunk_size=chunk_size,
+                target_chunk_size=target_chunk_size, dof_names=tuple(names))
 
         return Equilibrium(
             inp=result_input,

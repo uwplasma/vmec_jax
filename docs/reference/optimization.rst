@@ -482,6 +482,9 @@ ESSOS update used by an optimization:
    )
 
 ``field.dof_names`` then lists VMEX variables followed by ESSOS variables.
+For unusually large surfaces or target arrays, ``chunk_size`` and
+``target_chunk_size`` cap virtual-casing batches; keep the default ``"auto"``
+unless memory measurements justify an override.
 The factored reverse pass differentiates the equilibrium and coil data once,
 rather than nesting the implicit equilibrium solve inside each Cartesian
 spatial derivative. Third spatial derivatives and their parameter VJPs remain

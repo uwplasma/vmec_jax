@@ -155,6 +155,8 @@ def test_finite_beta_extender_field_and_gradient_outside_lcfs(monkeypatch):
         external_field=coil_field,
         digits=3,
         levels=((13, 13), (26, 26)),
+        chunk_size=17,
+        target_chunk_size=1,
     )
     points = jnp.array([[1.8, 0.0, 0.1], [0.0, 1.9, -0.1]])
     assert field.uses_virtual_casing
