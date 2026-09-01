@@ -578,6 +578,37 @@ def test_scipy_bfgs_scalar_lane_completes_and_descends():
     np.testing.assert_array_equal(bad_gradient, np.zeros_like(problem.x0))
 
 
+def test_from_loss_honors_bound_scalar_method_literally():
+    """The ``loss=`` lane uses a bound scalar objective method exactly as passed.
+
+    ``QuasisymmetryRatioResidual.total_state`` is bound to an owner that also
+    exposes the vector ``residuals_state``; the scalar lane used to swap in
+    those rows through the objective-tuple substitution, which surfaced as a
+    confusing ``jax.lax.cond`` branch-shape error (``float64[N]`` vs
+    ``float64[]``) at the first ``fun`` evaluation.  The loss must be honored
+    literally, and vector or non-traceable losses must be rejected with
+    actionable errors before any optimizer sees them.
+    """
+    jax.config.update("jax_disable_jit", False)
+    inp = VmecInput.from_file(DATA_DIR / "input.solovev")
+    qs = opt.QuasisymmetryRatioResidual(SURFACES, 1, -1)
+
+    problem = opt.VmecProblem.from_loss(inp, qs.total_state, max_mode=1)
+    value = float(problem.fun(problem.x0))
+    assert np.isfinite(value)
+    eq = problem.equilibrium_from_x(problem.x0)
+    expected = float(jax.device_get(qs.total_state(eq.state, eq.runtime)))
+    # The problem evaluates the guarded-refinement fixed point; the
+    # materialized equilibrium is the host solve, so agreement is at the
+    # solver-refinement level, not machine precision.
+    np.testing.assert_allclose(value, expected, rtol=1e-5, atol=1e-10)
+
+    with pytest.raises(ValueError, match="must return a scalar"):
+        opt.VmecProblem.from_loss(inp, qs.residuals_state, max_mode=1)
+    with pytest.raises(ValueError, match=r"\(state, runtime\)"):
+        opt.VmecProblem.from_loss(inp, qs.J, max_mode=1)
+
+
 def test_certified_trial_guards_reject_stale_or_missing_memo(monkeypatch):
     """Certification refuses derivatives when the trial memo cannot vouch for x.
 
