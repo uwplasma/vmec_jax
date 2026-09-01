@@ -75,6 +75,13 @@ The SciPy and JAX callables therefore return the same value and gradient.
 VMEX maintains one exact-key host cache to avoid repeated work when an
 optimizer requests the value and derivative separately.
 
+For a custom vector diagnostic, use
+:meth:`~vmex.core.problem.VmecProblem.jax_quantity_from_state`. It returns the
+floating-point quantity and the equilibrium status from one implicit solve;
+rejected trials return NaNs rather than a plausible value. Form only the
+contraction an algorithm needs with ``jax.vjp`` instead of materializing a
+full residual Jacobian.
+
 ``problem.dof_names`` is ordered exactly like ``problem.x0`` and every
 optimizer vector passed to the problem. For example,
 ``dict(zip(problem.dof_names, result.x))`` labels an optimized SciPy result.

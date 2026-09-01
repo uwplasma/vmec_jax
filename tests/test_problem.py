@@ -193,6 +193,21 @@ def test_vmec_problem_state_objective_hides_failed_trial_branches():
     assert float(rejected_value) == 0.0
     np.testing.assert_array_equal(rejected_terms, [0.0, 0.0])
 
+    def quantity(problem, x):
+        return problem.jax_quantity_from_state(
+            x, lambda state, runtime: jnp.asarray([state[0], runtime[0]]))
+
+    value, status = quantity(accepted, jnp.asarray([2.0]))
+    np.testing.assert_allclose(value, [4.0, 3.0])
+    assert int(status) == 0
+    np.testing.assert_allclose(
+        jax.jacrev(lambda x: quantity(accepted, x)[0])(jnp.asarray([2.0])),
+        [[2.0], [1.0]],
+    )
+    value, status = quantity(rejected, jnp.asarray([2.0]))
+    assert np.isnan(value).all()
+    assert int(status) == 1
+
     with pytest.raises(ValueError, match="positive"):
         accepted.jax_objective_from_state(
             jnp.asarray([2.0]), lambda _state, _runtime: jnp.asarray([]),
@@ -220,6 +235,12 @@ def test_vmec_problem_state_objective_hides_failed_trial_branches():
         ordinary.jax_extra_costs_from_state(
             jnp.asarray([1.0]), lambda _state, _runtime: jnp.asarray([0.0]),
             n_extra_terms=1)
+    with pytest.raises(AttributeError, match="state quantities"):
+        ordinary.jax_quantity_from_state(
+            jnp.asarray([1.0]), lambda _state, _runtime: jnp.asarray([0.0]))
+    with pytest.raises(TypeError, match="floating-point"):
+        accepted.jax_quantity_from_state(
+            jnp.asarray([1.0]), lambda _state, _runtime: jnp.asarray([1]))
 
 
 def test_vmec_problem_field_facades_validate_and_route(monkeypatch):
