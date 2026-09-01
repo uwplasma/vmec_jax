@@ -83,6 +83,11 @@ All runnable examples live under this single `examples/` tree. Examples marked
 - `optimization/QA_maxJ_continuation.py` and `QI_maxJ_continuation.py` walk the
   constructed maximum-J target into the resolved certificate; the QA script
   states where maximum-J and quasisymmetry conflict near the axis.
+- `optimization/omnigenity_epsilon_gammac_maxj.py` refines the finite-beta QA
+  with one seed-normalized scalar objective — quasisymmetry ratio (effective
+  ripple proxy), the derivative-safe `GammaCSmooth` surrogate, and the
+  outer-volume maximum-J residual — then reports hard `Gamma_c` and NEO_JAX
+  `epsilon_eff^(3/2)` before and after.
 - `epsilon_effective.py` computes the NEO_JAX effective ripple from a solved
   equilibrium without writing a `boozmn` file; raise its `NeoConfig` controls
   for anything beyond a radial trend.
