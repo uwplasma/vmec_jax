@@ -586,6 +586,7 @@ def _geometry(
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         lambda_cos=state.L_cos, lambda_sin=lambda_sin,
         modes=rt.modes, trig=rt.trig, s=setup.s_full, use_fft=use_fft,
+        odd_m_scaling=setup.scalxc,
     )
     return (R_cos, R_sin, Z_cos, Z_sin), geometry
 
@@ -919,7 +920,7 @@ def _force_pipeline(
     spectral_finite = (
         _all_finite((spectral, rotated, released)) if collect_health else passing
     )
-    scaled = scalxc_scale_force(released, s=s)
+    scaled = scalxc_scale_force(released, s=s, scaling=setup.scalxc)
     scaled_finite = _all_finite(scaled) if collect_health else passing
     if setup.lthreed or setup.lasym:
         rhs = scale_m1_preconditioner_rhs(
@@ -1098,77 +1099,102 @@ def _evaluate(
     )
 
     # -- ns4-cadence refresh candidates (bcovar.f) --------------------------
-    tcon_new = constraint_scaling(
-        tcon0=rt.tcon0, geometry=geometry, jacobian=jacobian,
-        total_pressure=fields.total_pressure, trig=rt.trig, s=s,
-    )
-    common = dict(
-        r12_half=jacobian.r12[1:], bsq_half=fields.total_pressure[1:],
-        bsupv_half=fields.bsupv[1:], sqrt_g_half=jacobian.sqrt_g[1:],
-        angular_weight=rt.weights, delta_s=hs, ns=ns,
-    )
-    coefficients_R = precondn(
-        dxds_half=jacobian.dZ_ds[1:], dxdu_half=jacobian.zu12[1:],
-        dxdu_even_full=geometry.dZ_dtheta_even, dxdu_odd_full=geometry.dZ_dtheta_odd,
-        x_odd_full=geometry.Z_odd, **common,
-    )
-    coefficients_Z = precondn(
-        dxds_half=jacobian.dR_ds[1:], dxdu_half=jacobian.ru12[1:],
-        dxdu_even_full=geometry.dR_dtheta_even, dxdu_odd_full=geometry.dR_dtheta_odd,
-        x_odd_full=geometry.R_odd, **common,
-    )
-    if rt.lforbal and res.mpol >= 2:
-        force_balance_R = force_balance_preconditioner_factor(
-            axd_odd=coefficients_R.axd[:, 1],
-            dxdu_half=jacobian.zu12,
-            trig_multiplier=np.asarray(rt.trig.cosmu)[:, 1],
-            jacobian=jacobian,
-            fields=fields,
-            trig=rt.trig,
-            s=s,
-            signgs=setup.signgs,
+    # ``lax.cond``, not compute-then-select: bcovar.f only *performs* the
+    # preconditioner refresh on the ``mod(iter2-iter1, ns4) == 0`` cadence,
+    # so the ~ten full-grid reductions below must not run on the other 24 of
+    # every 25 iterations.  On refresh iterations the branch executes the
+    # exact ops the unconditional build ran, so selected values are
+    # bit-identical; under vmap the cond degrades to select (both branches),
+    # which is the old behavior.
+    def _fresh_cache(operand):
+        state_b, cache_b, geometry_b, jacobian_b, metrics_b, fields_b, energies_b = operand
+        tcon_new = constraint_scaling(
+            tcon0=rt.tcon0, geometry=geometry_b, jacobian=jacobian_b,
+            total_pressure=fields_b.total_pressure, trig=rt.trig, s=s,
         )
-        force_balance_Z = force_balance_preconditioner_factor(
-            axd_odd=coefficients_Z.axd[:, 1],
-            dxdu_half=jacobian.ru12,
-            trig_multiplier=-np.asarray(rt.trig.sinmu)[:, 1],
-            jacobian=jacobian,
-            fields=fields,
-            trig=rt.trig,
-            s=s,
-            signgs=setup.signgs,
+        common = dict(
+            r12_half=jacobian_b.r12[1:], bsq_half=fields_b.total_pressure[1:],
+            bsupv_half=fields_b.bsupv[1:], sqrt_g_half=jacobian_b.sqrt_g[1:],
+            angular_weight=rt.weights, delta_s=hs, ns=ns,
         )
-    else:
-        force_balance_R = jnp.zeros((ns,), dtype=s.dtype)
-        force_balance_Z = jnp.zeros((ns,), dtype=s.dtype)
-    # jmax follows scalfor.f: ns-1 fixed boundary (rt.jmax default), ns once
-    # the vacuum field is on (free-boundary lane) — activates the
-    # EDGE_PEDESTAL / ZC(0,0) edge stiffening inside scalfor_matrices.
-    mat_kwargs = dict(delta_s=hs, mpol=res.mpol, ntor=res.ntor, nfp=res.nfp, ns=ns,
-                      jmax=int(rt.jmax))
-    matrices_R = scalfor_matrices(coefficients_R, stabilize_edge_zc00=False, **mat_kwargs)
-    matrices_Z = scalfor_matrices(coefficients_Z, stabilize_edge_zc00=True, **mat_kwargs)
-    faclam_new = lamcal(
-        guu_half=metrics.guu, guv_half=metrics.guv, gvv_half=metrics.gvv,
-        sqrt_g_half=jacobian.sqrt_g, lamscale=fields.lamscale,
-        angular_weight=rt.weights, mpol=res.mpol, ntor=res.ntor, nfp=res.nfp,
-        lthreed=setup.lthreed,
-    )
-    fnorm1_new = preconditioned_force_norm(
-        R_cos=state.R_cos, Z_sin=state.Z_sin, modes=rt.modes,
-        R_sin=state.R_sin if setup.lasym else None,
-        Z_cos=state.Z_cos if setup.lasym else None,
-    )
-    fresh = PreconditionerCache(
-        tcon=tcon_new, fnorm=energies.fnorm, fnormL=energies.fnormL,
-        fnorm1=fnorm1_new, coefficients_R=coefficients_R,
-        coefficients_Z=coefficients_Z,
-        force_balance_R=force_balance_R,
-        force_balance_Z=force_balance_Z, matrices_R=matrices_R,
-        matrices_Z=matrices_Z, faclam=faclam_new,
-    )
+        coefficients_R = precondn(
+            dxds_half=jacobian_b.dZ_ds[1:], dxdu_half=jacobian_b.zu12[1:],
+            dxdu_even_full=geometry_b.dZ_dtheta_even,
+            dxdu_odd_full=geometry_b.dZ_dtheta_odd,
+            x_odd_full=geometry_b.Z_odd, **common,
+        )
+        coefficients_Z = precondn(
+            dxds_half=jacobian_b.dR_ds[1:], dxdu_half=jacobian_b.ru12[1:],
+            dxdu_even_full=geometry_b.dR_dtheta_even,
+            dxdu_odd_full=geometry_b.dR_dtheta_odd,
+            x_odd_full=geometry_b.R_odd, **common,
+        )
+        if rt.lforbal and res.mpol >= 2:
+            force_balance_R = force_balance_preconditioner_factor(
+                axd_odd=coefficients_R.axd[:, 1],
+                dxdu_half=jacobian_b.zu12,
+                trig_multiplier=np.asarray(rt.trig.cosmu)[:, 1],
+                jacobian=jacobian_b,
+                fields=fields_b,
+                trig=rt.trig,
+                s=s,
+                signgs=setup.signgs,
+            )
+            force_balance_Z = force_balance_preconditioner_factor(
+                axd_odd=coefficients_Z.axd[:, 1],
+                dxdu_half=jacobian_b.ru12,
+                trig_multiplier=-np.asarray(rt.trig.sinmu)[:, 1],
+                jacobian=jacobian_b,
+                fields=fields_b,
+                trig=rt.trig,
+                s=s,
+                signgs=setup.signgs,
+            )
+        else:
+            force_balance_R = jnp.zeros((ns,), dtype=s.dtype)
+            force_balance_Z = jnp.zeros((ns,), dtype=s.dtype)
+        # jmax follows scalfor.f: ns-1 fixed boundary (rt.jmax default), ns
+        # once the vacuum field is on (free-boundary lane) — activates the
+        # EDGE_PEDESTAL / ZC(0,0) edge stiffening inside scalfor_matrices.
+        mat_kwargs = dict(delta_s=hs, mpol=res.mpol, ntor=res.ntor,
+                          nfp=res.nfp, ns=ns, jmax=int(rt.jmax))
+        matrices_R = scalfor_matrices(
+            coefficients_R, stabilize_edge_zc00=False, **mat_kwargs)
+        matrices_Z = scalfor_matrices(
+            coefficients_Z, stabilize_edge_zc00=True, **mat_kwargs)
+        faclam_new = lamcal(
+            guu_half=metrics_b.guu, guv_half=metrics_b.guv,
+            gvv_half=metrics_b.gvv, sqrt_g_half=jacobian_b.sqrt_g,
+            lamscale=fields_b.lamscale, angular_weight=rt.weights,
+            mpol=res.mpol, ntor=res.ntor, nfp=res.nfp,
+            lthreed=setup.lthreed,
+        )
+        fnorm1_new = preconditioned_force_norm(
+            R_cos=state_b.R_cos, Z_sin=state_b.Z_sin, modes=rt.modes,
+            R_sin=state_b.R_sin if setup.lasym else None,
+            Z_cos=state_b.Z_cos if setup.lasym else None,
+        )
+        fresh = PreconditionerCache(
+            tcon=tcon_new, fnorm=energies_b.fnorm, fnormL=energies_b.fnormL,
+            fnorm1=fnorm1_new, coefficients_R=coefficients_R,
+            coefficients_Z=coefficients_Z,
+            force_balance_R=force_balance_R,
+            force_balance_Z=force_balance_Z, matrices_R=matrices_R,
+            matrices_Z=matrices_Z, faclam=faclam_new,
+        )
+        # scalfor_matrices returns the n-independent ax/bx with a length-1
+        # trailing axis; the old compute-then-where build broadcast them into
+        # the cache's (jmax, mpol, ntor+1) slots.  cond needs exact shapes.
+        return jax.tree.map(
+            lambda new, old: jnp.broadcast_to(
+                jnp.asarray(new), jnp.shape(old)), fresh, cache_b,
+        )
+
     refresh = (((iteration - iter_last_reset) % NS4) == 0) & (~jac_changed)
-    cache = _select(refresh, fresh, cache)
+    cache = lax.cond(
+        refresh, _fresh_cache, lambda operand: operand[1],
+        (state, cache, geometry, jacobian, metrics, fields, energies),
+    )
 
     # -- constraint + MHD forces + residue.f90 preconditioning chain --------
     # The mhd_forces -> tomnsps -> residue -> scalfor/faclam pipeline is shared
@@ -1377,77 +1403,167 @@ def _make_body(
 
         # ---- funct3d (evolve.f) -------------------------------------------
         state_e1 = carry.state if evaluation_state is None else evaluation_state
-        e1 = _evaluate(state_e1, carry.cache, it, carry.iter1, carry.fsqz, rt,
-                       carry.fsqr + carry.fsqz, use_fft=use_fft,
-                       synthesis=evaluation_synthesis)
-        jac1 = e1.jacobian_sign_changed
-        nonfinite1 = (~jac1) & (~_evaluation_is_finite(e1))
-        # On irst=2 funct3d skips residue: the module residuals stay stale.
-        fsqr_c = jnp.where(jac1, carry.fsqr, e1.residuals.fsqr)
-        fsqz_c = jnp.where(jac1, carry.fsqz, e1.residuals.fsqz)
-        fsql_c = jnp.where(jac1, carry.fsql, e1.residuals.fsql)
-        fsq0 = fsqr_c + fsqz_c + fsql_c
 
-        converged = (~jac1) & (fsqr_c <= ftol) & (fsqz_c <= ftol) & (fsql_c <= ftol)
-        bad_init = jac1 & (it == 1)
-        # funct3d.f/eqsolve.f: LMOVE_AXIS=T and a finite first raw-force sum
-        # above 1e2 set irst=4 and return to guess_axis before evolving xc.
-        # ijacob=0 makes this a single retry, exactly like the Fortran guard.
-        axis_reguess = (
-            bool(rt.lmove_axis)
-            & (~jac1)
-            & (~nonfinite1)
-            & (it == 1)
-            & (carry.ijacob == 0)
-            & (rt.resolution.ns >= 3)
-            & (fsq0 > 1.0e2)
-        )
-        # Unlike a bad Jacobian, irst=4 does not return from evolve.f: the
-        # triggering pass still performs its damping/momentum update, and
-        # eqsolve carries that xcdot into the rebuilt-axis retry.  ``done``
-        # below transfers control after that update; only its xc is discarded.
-        stepping = running & (~converged) & (~bad_init) & (~nonfinite1)
+        def decide(e1):
+            """evolve.f decisions from the first funct3d pass of this trip."""
+            jac1 = e1.jacobian_sign_changed
+            nonfinite1 = (~jac1) & (~_evaluation_is_finite(e1))
+            # On irst=2 funct3d skips residue: the module residuals stay stale.
+            fsqr_c = jnp.where(jac1, carry.fsqr, e1.residuals.fsqr)
+            fsqz_c = jnp.where(jac1, carry.fsqz, e1.residuals.fsqz)
+            fsql_c = jnp.where(jac1, carry.fsql, e1.residuals.fsql)
+            fsq0 = fsqr_c + fsqz_c + fsql_c
 
-        # ---- TimeStepControl (evolve.f) ------------------------------------
-        first = it == carry.iter1
-        fsq_prev = carry.fsq
-        res0_f = jnp.where(first, fsq_prev, carry.res0)
-        res1_f = jnp.where(first, fsq0, carry.res1)
-        record_low = (fsq_prev <= res0_f) & (fsq0 <= res1_f)
-        res0_n = jnp.minimum(res0_f, fsq_prev)
-        res1_n = jnp.minimum(res1_f, fsq0)
-        growth_gate = ~(record_low & (~jac1))     # IF/ELSE-IF chain in Fortran
-        grew = (
-            growth_gate
-            & ((it - carry.iter1) > GROWTH_MIN_ITERATIONS)
-            & ((fsq_prev > GROWTH_LIMIT * res0_n) | (fsq0 > GROWTH_LIMIT * res1_n))
-        )
-        kind = jnp.where(grew, RESTART_GROWTH,
-                         jnp.where(jac1, RESTART_JACOBIAN, STEP_OK))
-        restart = stepping & (kind != STEP_OK)
-        store = stepping & (first | (record_low & (~jac1)))
+            converged = (
+                (~jac1) & (fsqr_c <= ftol) & (fsqz_c <= ftol) & (fsql_c <= ftol)
+            )
+            bad_init = jac1 & (it == 1)
+            # funct3d.f/eqsolve.f: LMOVE_AXIS=T and a finite first raw-force
+            # sum above 1e2 set irst=4 and return to guess_axis before
+            # evolving xc.  ijacob=0 makes this a single retry, exactly like
+            # the Fortran guard.
+            axis_reguess = (
+                bool(rt.lmove_axis)
+                & (~jac1)
+                & (~nonfinite1)
+                & (it == 1)
+                & (carry.ijacob == 0)
+                & (rt.resolution.ns >= 3)
+                & (fsq0 > 1.0e2)
+            )
+            # Unlike a bad Jacobian, irst=4 does not return from evolve.f:
+            # the triggering pass still performs its damping/momentum update,
+            # and eqsolve carries that xcdot into the rebuilt-axis retry.
+            # ``done`` below transfers control after that update; only its xc
+            # is discarded.
+            stepping = running & (~converged) & (~bad_init) & (~nonfinite1)
 
-        xstore_n = _select(store, carry.state, carry.xstore)
-        state_r = _select(restart, xstore_n, carry.state)
-        xcdot_r = _select(restart, jax.tree.map(jnp.zeros_like, carry.xcdot), carry.xcdot)
-        delt_r = carry.time_step * jnp.where(
-            restart & (kind == RESTART_JACOBIAN), JACOBIAN_RESET_FACTOR, 1.0
-        ) * jnp.where(
-            restart & (kind == RESTART_GROWTH), 1.0 / GROWTH_BACKOFF_DIVISOR, 1.0
-        )
-        ijacob_r = carry.ijacob + (restart & (kind == RESTART_JACOBIAN)).astype(carry.ijacob.dtype)
-        iter1_r = jnp.where(restart, it, carry.iter1)
+            # ---- TimeStepControl (evolve.f) --------------------------------
+            first = it == carry.iter1
+            fsq_prev = carry.fsq
+            res0_f = jnp.where(first, fsq_prev, carry.res0)
+            res1_f = jnp.where(first, fsq0, carry.res1)
+            record_low = (fsq_prev <= res0_f) & (fsq0 <= res1_f)
+            res0_n = jnp.minimum(res0_f, fsq_prev)
+            res1_n = jnp.minimum(res1_f, fsq0)
+            growth_gate = ~(record_low & (~jac1))  # IF/ELSE-IF chain in Fortran
+            grew = (
+                growth_gate
+                & ((it - carry.iter1) > GROWTH_MIN_ITERATIONS)
+                & ((fsq_prev > GROWTH_LIMIT * res0_n)
+                   | (fsq0 > GROWTH_LIMIT * res1_n))
+            )
+            kind = jnp.where(grew, RESTART_GROWTH,
+                             jnp.where(jac1, RESTART_JACOBIAN, STEP_OK))
+            restart = stepping & (kind != STEP_OK)
+            store = stepping & (first | (record_low & (~jac1)))
 
-        # Re-evaluate at the restored state (TimeStepControl calls funct3d).
-        e2 = lax.cond(
-            restart,
-            lambda args: _evaluate(
-                args[0], args[1], it, it, args[2], rt, args[3],
-                use_fft=use_fft,
-            ),
-            lambda args: e1,
-            (state_r, e1.cache, fsqz_c, fsqr_c + fsqz_c),
-        )
+            xstore_n = _select(store, carry.state, carry.xstore)
+            state_r = _select(restart, xstore_n, carry.state)
+            xcdot_r = _select(
+                restart, jax.tree.map(jnp.zeros_like, carry.xcdot), carry.xcdot
+            )
+            delt_r = carry.time_step * jnp.where(
+                restart & (kind == RESTART_JACOBIAN), JACOBIAN_RESET_FACTOR, 1.0
+            ) * jnp.where(
+                restart & (kind == RESTART_GROWTH),
+                1.0 / GROWTH_BACKOFF_DIVISOR, 1.0,
+            )
+            ijacob_r = carry.ijacob + (
+                restart & (kind == RESTART_JACOBIAN)
+            ).astype(carry.ijacob.dtype)
+            iter1_r = jnp.where(restart, it, carry.iter1)
+            return dict(
+                restart=restart, stepping=stepping, converged=converged,
+                bad_init=bad_init, axis_reguess=axis_reguess,
+                nonfinite1=nonfinite1, fsqr_c=fsqr_c, fsqz_c=fsqz_c,
+                fsql_c=fsql_c, fsq_prev=fsq_prev, res0_n=res0_n,
+                res1_n=res1_n, delt_r=delt_r, ijacob_r=ijacob_r,
+                iter1_r=iter1_r, xstore_n=xstore_n, state_r=state_r,
+                xcdot_r=xcdot_r,
+            )
+
+        if evaluation_synthesis is not None:
+            # Hoisted-synthesis seam (free-boundary steady lane): the first
+            # pass consumes the precomputed synthesis, the restart
+            # re-evaluation cannot — two structurally different _evaluate
+            # instances, so no single-site dedup is possible here.
+            e1 = _evaluate(state_e1, carry.cache, it, carry.iter1, carry.fsqz,
+                           rt, carry.fsqr + carry.fsqz, use_fft=use_fft,
+                           synthesis=evaluation_synthesis)
+            ctx = decide(e1)
+            # Re-evaluate at the restored state (TimeStepControl calls funct3d).
+            e2 = lax.cond(
+                ctx["restart"],
+                lambda args: _evaluate(
+                    args[0], args[1], it, it, args[2], rt, args[3],
+                    use_fft=use_fft,
+                ),
+                lambda args: e1,
+                (ctx["state_r"], e1.cache, ctx["fsqz_c"],
+                 ctx["fsqr_c"] + ctx["fsqz_c"]),
+            )
+        else:
+            # Single traced funct3d per body: the chain dominates the lane's
+            # HLO, and the old two-site structure (unconditional e1 + restart
+            # e2 inside cond) traced it twice — roughly doubling every lane's
+            # compile time.  A two-trip scan runs one shared eval site: trip
+            # 0 always evaluates carry.state and computes the evolve.f
+            # decisions; trip 1 re-evaluates the restored state only when the
+            # TimeStepControl decided to restart, with exactly the argument
+            # values the old e2 call passed.  Runtime op sequence per trip is
+            # unchanged.
+            def eval_lane(args):
+                return _evaluate(args[0], args[1], args[2], args[3], args[4],
+                                 rt, args[5], use_fft=use_fft)
+
+            args0 = (state_e1, carry.cache, it, carry.iter1, carry.fsqz,
+                     carry.fsqr + carry.fsqz)
+            e_zero = jax.tree.map(
+                lambda sd: jnp.zeros(sd.shape, sd.dtype),
+                jax.eval_shape(eval_lane, args0),
+            )
+            ctx_zero = jax.tree.map(
+                lambda sd: jnp.zeros(sd.shape, sd.dtype),
+                jax.eval_shape(decide, e_zero),
+            )
+
+            def substep(sub, phase):
+                e_prev, do_eval, args, ctx_prev = sub
+                e = lax.cond(do_eval, eval_lane, lambda _: e_prev, args)
+
+                def on_first(_):
+                    c = decide(e)
+                    args1 = (c["state_r"], e.cache, it, it, c["fsqz_c"],
+                             c["fsqr_c"] + c["fsqz_c"])
+                    return c["restart"], args1, c
+
+                def on_second(_):
+                    return do_eval, args, ctx_prev
+
+                do_eval_n, args_n, ctx_n = lax.cond(
+                    phase == 0, on_first, on_second, None
+                )
+                return (e, do_eval_n, args_n, ctx_n), None
+
+            (e_final, _, _, ctx), _ = lax.scan(
+                substep,
+                (e_zero, jnp.asarray(True), args0, ctx_zero),
+                jnp.arange(2),
+            )
+            # When no restart happened trip 1 passed e1 through, so the
+            # e1/e2 merges below collapse correctly with both set to e_final.
+            e1 = e2 = e_final
+
+        (restart, stepping, converged, bad_init, axis_reguess, nonfinite1,
+         fsqr_c, fsqz_c, fsql_c, fsq_prev, res0_n, res1_n, delt_r, ijacob_r,
+         iter1_r) = (ctx[k] for k in (
+             "restart", "stepping", "converged", "bad_init", "axis_reguess",
+             "nonfinite1", "fsqr_c", "fsqz_c", "fsql_c", "fsq_prev",
+             "res0_n", "res1_n", "delt_r", "ijacob_r", "iter1_r"))
+        xstore_n = ctx["xstore_n"]
+        state_r = ctx["state_r"]
+        xcdot_r = ctx["xcdot_r"]
         reeval_bad = restart & e2.jacobian_sign_changed
         nonfinite2 = restart & (~e2.jacobian_sign_changed) & (~_evaluation_is_finite(e2))
         numerical_bad = nonfinite1 | nonfinite2
