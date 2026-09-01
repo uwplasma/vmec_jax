@@ -38,6 +38,7 @@ import jax.numpy as jnp
 from vmex.core import implicit as im
 from vmex.core import solver
 from vmex.core import stability as stab
+from vmex.core.errors import AdjointSolveError
 from vmex.core.input import VmecInput
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
@@ -136,6 +137,33 @@ def _tnorm(tree) -> float:
 def _tree_dot(left, right) -> float:
     return float(sum(jnp.vdot(a, b) for a, b in zip(
         jax.tree.leaves(left), jax.tree.leaves(right), strict=True)))
+
+
+def _compiles_during(fn) -> list[str]:
+    """Run ``fn`` under ``jax_log_compiles``; return the compile messages."""
+    import logging
+
+    compiles: list[str] = []
+
+    class _Handler(logging.Handler):
+        def emit(self, record):
+            message = record.getMessage()
+            if message.startswith("Compiling "):
+                compiles.append(message.split(" with global shapes")[0])
+
+    handler = _Handler()
+    logger = logging.getLogger("jax")
+    previous_level = logger.level
+    jax.config.update("jax_log_compiles", True)
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        fn()
+    finally:
+        jax.config.update("jax_log_compiles", False)
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+    return compiles
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +364,73 @@ def test_residual_lane_reuses_one_executable_across_trial_boundaries(solovev):
     assert any(
         not np.array_equal(a, b)
         for a, b in zip(jax.tree.leaves(base), jax.tree.leaves(trial)))
+
+
+def test_repeated_same_shape_gradients_do_not_recompile(solovev):
+    """A warm un-jitted ``jax.grad`` repeat reuses every executable.
+
+    The host-eager backward used to hand ``solvax.gcrot`` a fresh closure
+    over each call's linearization residuals, so every repeat recompiled the
+    staged Krylov ``jit(while)`` — 5.4-6.5 s per repeat, most of the
+    measured F11 warm-gradient stage — and each ``run`` re-staged an
+    identity-keyed ``jit(pure_callback)``.  The adjoint solve is now one
+    module-level executable keyed on the canonical config
+    (``_adjoint_gcrot_core``) and the callback callable is memoized per
+    config, so a same-shape repeat must compile nothing.
+    """
+    _name, inp, cfg, p0, _x_star, _rt, _mask = solovev
+
+    def gradient():
+        jax.block_until_ready(jax.grad(
+            lambda p: im.run(inp, p, ftol=cfg.ftol,
+                             max_iterations=cfg.max_iterations).wb)(p0))
+
+    gradient()  # warm-up: the first evaluation may compile freely
+    compiles = _compiles_during(gradient)
+    assert compiles == [], f"warm gradient repeat recompiled: {compiles}"
+
+
+def test_enforce_adjoint_stats_typed_error_policy(solovev):
+    """The staged core's convergence certificate keeps the typed-error
+    contract: concrete unaccepted stats raise :class:`AdjointSolveError`
+    carrying the iteration/residual evidence (end-to-end with a starved
+    Krylov budget on the two-device rig in ``test_gpu_ci.py``), accepted
+    stats pass, and traced stats are a no-op — there the core has already
+    NaN-poisoned the returned lambda."""
+    _name, _inp, cfg, _p0, _x_star, _rt, _mask = solovev
+    bad = im._AdjointStats(
+        residual_norm=jnp.asarray(2.0e-3), iterations=jnp.asarray(7),
+        converged=jnp.asarray(False), tolerance=jnp.asarray(1.0e-9))
+    with pytest.raises(AdjointSolveError) as caught:
+        im._enforce_adjoint_stats(cfg, bad)
+    assert caught.value.iterations == 7
+    assert caught.value.residual_norm == 2.0e-3
+    assert caught.value.tolerance == 1.0e-9
+    im._enforce_adjoint_stats(cfg, bad._replace(converged=jnp.asarray(True)))
+    jax.jit(lambda stats: im._enforce_adjoint_stats(cfg, stats))(bad)
+
+
+def test_adjoint_debug_stages_on_default_device(monkeypatch, capfd, solovev):
+    """``VMEX_ADJOINT_DEBUG=1`` prints every reverse-pass stage line on the
+    ordinary single-device lane: the staged adjoint core keeps the eager
+    operator-application probe under the debug gate.  The two-device
+    placement variant lives in ``test_gpu_ci.py``."""
+    _name, inp, cfg, p0, _x_star, _rt, _mask = solovev
+    monkeypatch.setenv("VMEX_ADJOINT_DEBUG", "1")
+    gradient = jax.grad(
+        lambda p: im.run(inp, p, ftol=cfg.ftol,
+                         max_iterations=cfg.max_iterations).wb)(p0)
+    assert np.all(np.isfinite(np.asarray(gradient.rbc)))
+    err = capfd.readouterr().err
+    for stage in (
+        "backward entry",
+        "adjoint rhs P(gbar)",
+        "operator application (dF/dz)^T b",
+        "recovered lambda",
+        "implicit parameter contribution -lambda^T dF/dp",
+        "direct parameter contribution",
+    ):
+        assert f"[vmex adjoint] {stage}" in err, stage
 
 
 def test_content_token_distinguishes_each_supported_kind():
@@ -1003,6 +1098,27 @@ def test_lasym_wb_aspect_gradient_vs_fd(lasym):
         print(f"  d({out})/d({field}{idx}) h={h:.0e}: "
               f"AD={ad:+.10e} FD={fd:+.10e} rel={rel:.2e}")
         assert rel <= tol, f"{out}/{field}{idx}: rel {rel:.3e} > {tol:.0e}"
+
+
+def test_lasym_repeated_same_shape_gradients_do_not_recompile(lasym):
+    """Same-shape LASYM repeated evaluations do not recompile (plan 14.6).
+
+    The LASYM gradient runs the identical reverse lane as the symmetric one
+    (the per-config staged ``_adjoint_gcrot_core`` plus the memoized host
+    callback), so a warm value-and-gradient repeat of an asymmetric deck
+    must be compile-free too — the acceptance gate for the measured
+    per-repeat ``jit(while)`` GCROT recompile of the F11 profile.
+    """
+    _name, inp, cfg, p0, _x_star, _rt, _mask = lasym
+
+    def value_and_gradient():
+        jax.block_until_ready(jax.value_and_grad(
+            lambda p: im.run(inp, p, ftol=cfg.ftol,
+                             max_iterations=cfg.max_iterations).wb)(p0))
+
+    value_and_gradient()  # warm-up: the first evaluation may compile freely
+    compiles = _compiles_during(value_and_gradient)
+    assert compiles == [], f"warm LASYM repeat recompiled: {compiles}"
 
 
 @pytest.mark.full
