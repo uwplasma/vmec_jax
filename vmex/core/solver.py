@@ -590,6 +590,21 @@ def _geometry(
     return (R_cos, R_sin, Z_cos, Z_sin), geometry
 
 
+@functools.partial(jax.jit, static_argnames="use_fft")
+def _geometry_lane(
+    state: SpectralState, rt: SolverRuntime, *, use_fft: bool = False
+):
+    """:func:`_geometry` as a module-level lane (``freeboundary._jacobian_ok``'s
+    twin), for host-stepped one-shot callers.
+
+    Eager, one synthesis dispatches ~1e2 single-op XLA programs; the axis
+    retry (:func:`reguess_initial_axis`) needs the real-space geometry itself
+    for the ``guess_axis.f`` host scan, which the boolean-only Jacobian gate
+    cannot supply.
+    """
+    return _geometry(state, rt, use_fft=use_fft)
+
+
 def _resolve_prec2d(
     source: VmecInput | RunSetup,
     prec2d: Prec2DConfig | None,
@@ -1339,7 +1354,7 @@ def reguess_initial_axis(
     (``funct3d.f: iter2 == iter1``).
     """
     setup = rt.setup
-    _, geometry = _geometry(state, rt, use_fft=use_fft)
+    _, geometry = _geometry_lane(state, rt, use_fft=use_fft)
     axis = guess_axis(
         geometry, s=setup.s_full, trig=rt.trig, signgs=setup.signgs
     )
