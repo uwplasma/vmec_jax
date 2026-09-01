@@ -292,15 +292,15 @@ def replay(inp, *, ns: int | None = None, niter: int = 30,
     )
 
     resolution = solver.resolution_from_input(inp, ns=ns)
-    rt = solver.prepare_runtime(
-        inp, resolution, max_iterations=niter, time_step=time_step,
-    )
+    rt = solver.prepare_runtime(inp, resolution, max_iterations=niter)
+    delt0, _ = solver._loop_driver_config(inp, time_step=time_step)
     state = solver._initial_state(rt.setup)
     wanted = set(int(i) for i in iterations)
 
     def attempt(rt, state, *, ijacob, xcdot, residuals):
         carry = solver._initial_carry(
-            state, rt, ijacob=ijacob, xcdot=xcdot, residuals=residuals,
+            state, rt, ijacob=ijacob, time_step0=delt0,
+            xcdot=xcdot, residuals=residuals,
         )
         body = solver._make_body(rt)
         records: dict[int, dict] = {}
