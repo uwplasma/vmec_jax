@@ -591,6 +591,21 @@ def _geometry(
     return (R_cos, R_sin, Z_cos, Z_sin), geometry
 
 
+@functools.partial(jax.jit, static_argnames="use_fft")
+def _geometry_lane(
+    state: SpectralState, rt: SolverRuntime, *, use_fft: bool = False
+):
+    """:func:`_geometry` as a module-level lane (``freeboundary._jacobian_ok``'s
+    twin), for host-stepped one-shot callers.
+
+    Eager, one synthesis dispatches ~1e2 single-op XLA programs; the axis
+    retry (:func:`reguess_initial_axis`) needs the real-space geometry itself
+    for the ``guess_axis.f`` host scan, which the boolean-only Jacobian gate
+    cannot supply.
+    """
+    return _geometry(state, rt, use_fft=use_fft)
+
+
 def _resolve_prec2d(
     source: VmecInput | RunSetup,
     prec2d: Prec2DConfig | None,
@@ -790,6 +805,35 @@ def _constraint_baselines(
         use_fft=use_fft,
     )
     return rcon0, zcon0
+
+
+@jax.jit
+def _field_chain_lane(state: SpectralState, rt: SolverRuntime):
+    """Geometry -> Jacobian -> metrics -> fields -> energies, one XLA program.
+
+    The shared state -> field-state evaluation chain behind
+    :func:`_result_from_carry`'s ncurr=1 iota reconstruction and every
+    :mod:`~vmex.core.statephysics` derived quantity.  Module-level ``jax.jit``
+    keyed structurally on ``rt`` exactly like :func:`_while_lane`: eager,
+    each pass dispatches hundreds of single-op XLA programs (once per solved
+    result, and repeatedly under the objective modules).
+    """
+    setup = rt.setup
+    s = setup.s_full
+    _, geometry = _geometry(state, rt)
+    jacobian = half_mesh_jacobian(geometry, s=s)
+    metrics = metric_elements(geometry, s=s)
+    fields = magnetic_fields(
+        geometry=geometry, jacobian=jacobian, metrics=metrics, trig=rt.trig,
+        s=s, phips=setup.phips, phipf=setup.phipf, chips=setup.chips,
+        signgs=setup.signgs, gamma=rt.gamma, mass=setup.mass,
+        ncurr=setup.ncurr, enclosed_current=setup.icurv,
+    )
+    energies = energies_and_force_norms(
+        jacobian=jacobian, metrics=metrics, fields=fields, trig=rt.trig,
+        s=s, signgs=setup.signgs,
+    )
+    return geometry, jacobian, metrics, fields, energies
 
 
 def _zero_cache(rt: SolverRuntime) -> PreconditionerCache:
@@ -1280,6 +1324,23 @@ def _evaluate(
     )
 
 
+@functools.partial(jax.jit, static_argnames="collect_health")
+def _evaluate_lane(
+    state: SpectralState, cache: PreconditionerCache, iteration: Array,
+    iter_last_reset: Array, fsqz_previous: Array, rt: SolverRuntime,
+    *, collect_health: bool = False,
+) -> _EvalResult:
+    """One public funct3d pass as one XLA program (:func:`evaluate_forces`).
+
+    Module-level ``jax.jit`` keyed structurally on ``rt`` exactly like
+    :func:`_while_lane`: eager, every :func:`evaluate_forces` call dispatched
+    the whole funct3d chain op-by-op (the implicit/free-boundary drivers call
+    it once per outer step).
+    """
+    return _evaluate(state, cache, iteration, iter_last_reset, fsqz_previous,
+                     rt, collect_health=collect_health)
+
+
 def evaluate_forces(
     state: SpectralState,
     runtime: SolverRuntime,
@@ -1299,7 +1360,7 @@ def evaluate_forces(
     if cache is None:
         cache = _zero_cache(runtime)
         iter_last_reset = iteration  # force refresh
-    result = _evaluate(
+    result = _evaluate_lane(
         state, cache, jnp.asarray(iteration), jnp.asarray(iter_last_reset),
         jnp.asarray(fsqz_previous), runtime, collect_health=True,
     )
@@ -1336,7 +1397,7 @@ def reguess_initial_axis(
     (``funct3d.f: iter2 == iter1``).
     """
     setup = rt.setup
-    _, geometry = _geometry(state, rt, use_fft=use_fft)
+    _, geometry = _geometry_lane(state, rt, use_fft=use_fft)
     axis = guess_axis(
         geometry, s=setup.s_full, trig=rt.trig, signgs=setup.signgs
     )
@@ -1802,15 +1863,7 @@ def _result_from_carry(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
     # iotaf (add_fluxes.f90): prescribed profile for ncurr = 0; reconstructed
     # from the converged current-constrained chips for ncurr = 1.
     if int(setup.ncurr) == 1:
-        _, geometry = _geometry(carry.state, rt)
-        jacobian = half_mesh_jacobian(geometry, s=setup.s_full)
-        metrics = metric_elements(geometry, s=setup.s_full)
-        fields = magnetic_fields(
-            geometry=geometry, jacobian=jacobian, metrics=metrics, trig=rt.trig,
-            s=setup.s_full, phips=setup.phips, phipf=setup.phipf,
-            chips=setup.chips, signgs=setup.signgs, gamma=rt.gamma,
-            mass=setup.mass, ncurr=setup.ncurr, enclosed_current=setup.icurv,
-        )
+        _, _, _, fields, _ = _field_chain_lane(carry.state, rt)
         chips = np.asarray(fields.chips)
         phips = np.asarray(setup.phips)
         iotas = np.divide(chips, phips, out=np.zeros_like(chips), where=phips != 0.0)
@@ -1862,7 +1915,7 @@ def _emit_lines(rt: SolverRuntime, trajectory: np.ndarray, upto: int,
         printed.add(it)
 
 
-@jax.jit
+@functools.partial(jax.jit, donate_argnums=(0,))
 def _while_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
     """Whole-solve ``lax.while_loop`` lane, keyed structurally on ``rt``.
 
@@ -1870,6 +1923,11 @@ def _while_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
     two DIFFERENT runtimes with equal structure (same meta, same leaf
     shapes/dtypes) — e.g. two boundaries at one :class:`Resolution`, hot
     restarts, optimization iterates — share one XLA executable.
+
+    ``donate_argnums=(0,)``: the sole caller (:func:`_run_loop`,
+    ``mode="jit"``) copies the initial carry to distinct buffers first, so
+    the input carry is dead at the call and XLA aliases the loop carry onto
+    it — same rationale as :func:`_block_lane`, numerically identical.
     """
     body = _make_body(rt)
     return lax.while_loop(lambda c: jnp.logical_not(c.done), body, carry)
@@ -1890,9 +1948,9 @@ def _block_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
     return lax.scan(lambda cc, _: (body(cc), None), carry, None, length=BLOCK_SIZE)[0]
 
 
-@jax.jit
+@functools.partial(jax.jit, donate_argnums=(0,))
 def _while_lane_fft(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
-    """Whole-solve lane using separable Fourier synthesis."""
+    """Whole-solve lane using separable Fourier synthesis (donated carry)."""
     body = _make_body(rt, use_fft=True)
     return lax.while_loop(lambda c: jnp.logical_not(c.done), body, carry)
 
@@ -2015,6 +2073,11 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
     )
 
     if mode == "jit":
+        # The while lanes donate the carry; _initial_carry aliases some leaves
+        # (xstore=state, shared cache zeros), so copy to distinct buffers —
+        # same rationale as the CLI-lane copy below, values bit-for-bit
+        # unchanged.
+        carry = jax.tree.map(jnp.array, carry)
         return (_while_lane_fft if use_fft else _while_lane)(carry, rt)
 
     if mode != "cli":

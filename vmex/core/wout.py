@@ -43,8 +43,18 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+import jax
+
 from . import postprocess as _pp
 from ._netcdf import assign_array
+from .fields import energies_and_force_norms, magnetic_fields, metric_elements
+from .fourier import Resolution, mode_table, trig_tables
+from .geometry import (
+    apply_lambda_axis_closure,
+    half_mesh_jacobian,
+    real_space_geometry,
+)
+from .residuals import m1_constrained_to_physical
 
 if TYPE_CHECKING:
     from .solver import VacuumOutput
@@ -565,6 +575,64 @@ def _ftolv_from_input(inp) -> float:
     return float(ftol_arr[min(idx, ftol_arr.size - 1)])
 
 
+@functools.partial(jax.jit, static_argnames=("res", "signgs", "gamma", "ncurr"))
+def _wout_field_state_lane(state, s_full, phips, phipf, chips, mass, icurv,
+                           *, res, signgs: int, gamma: float, ncurr: int):
+    """The export's state -> field-state re-evaluation as ONE XLA program.
+
+    Module-level ``jax.jit`` (the ``solver._while_lane`` idiom): eager, this
+    totzsps/jacobian/bcovar chain on the Nyquist-extended trig tables
+    dispatches hundreds of single-op XLA programs — the largest remaining
+    eager block (~1-3 s) of every cold CLI run that writes a WOUT file.
+    ``res`` is the solver :class:`~vmex.core.fourier.Resolution` (hashable
+    static key); the mode table and the grid-Nyquist trig extension are
+    rebuilt from it at trace time as NumPy constants, identical to the host
+    tables ``wout_from_state`` keeps for the numpy postprocessing downstream
+    of the returned (device_get) arrays.
+    """
+    from .bootstrap import _trapped_fraction_export_lane  # circular at import
+
+    mpol, ntor, lasym = int(res.mpol), int(res.ntor), bool(res.lasym)
+    modes = mode_table(mpol, ntor)
+    mnyq_grid = max(res.ntheta1 // 2, mpol - 1)
+    nnyq_grid = max(int(res.nzeta) // 2, ntor)
+    trig = trig_tables(Resolution(
+        mpol=mnyq_grid + 1, ntor=nnyq_grid, ntheta=int(res.ntheta),
+        nzeta=int(res.nzeta), nfp=int(res.nfp), lasym=lasym, ns=int(res.ns)))
+
+    R_cos_p, Z_sin_p, R_sin_p, Z_cos_p = m1_constrained_to_physical(
+        state.R_cos, state.Z_sin, state.R_sin, state.Z_cos,
+        modes=modes, lthreed=bool(res.lthreed), lasym=lasym, lconm1=True,
+    )
+    lambda_sin = apply_lambda_axis_closure(state.L_sin, modes=modes, ntor=ntor)
+    geometry = real_space_geometry(
+        R_cos=R_cos_p, R_sin=R_sin_p, Z_cos=Z_cos_p, Z_sin=Z_sin_p,
+        lambda_cos=state.L_cos, lambda_sin=lambda_sin,
+        modes=modes, trig=trig, s=s_full,
+    )
+    jacobian = half_mesh_jacobian(geometry, s=s_full)
+    metrics = metric_elements(geometry, s=s_full)
+    fields = magnetic_fields(
+        geometry=geometry, jacobian=jacobian, metrics=metrics, trig=trig,
+        s=s_full, phips=phips, phipf=phipf, chips=chips, signgs=signgs,
+        gamma=gamma, mass=mass, ncurr=ncurr, enclosed_current=icurv,
+    )
+    norms = energies_and_force_norms(
+        jacobian=jacobian, metrics=metrics, fields=fields, trig=trig,
+        s=s_full, signgs=signgs,
+    )
+    trapped_fraction = _trapped_fraction_export_lane(
+        total_pressure=fields.total_pressure,
+        pressure=fields.pressure,
+        sqrt_g=jacobian.sqrt_g,
+        s_full=s_full,
+        lasym=lasym,
+        n_lambda=64,
+    )
+    return (geometry, jacobian, metrics, fields, norms, R_cos_p, Z_sin_p,
+            R_sin_p, Z_cos_p, trapped_fraction)
+
+
 def _on_state_device(fun):
     """Run postprocessing where the committed equilibrium state lives."""
     @functools.wraps(fun)
@@ -626,18 +694,7 @@ def wout_from_state(
     NESTOR ``potsin``/``xmpot``/``xnpot`` and ``*_sur`` tables.  LASYM runs
     additionally populate ``potcos`` and the four sine ``*_sur`` partners.
     """
-    import jax
-
     from . import nyquist as _nyq
-    from .bootstrap import _trapped_fraction_export_lane
-    from .fields import energies_and_force_norms, magnetic_fields, metric_elements
-    from .fourier import Resolution, mode_table, trig_tables
-    from .geometry import (
-        apply_lambda_axis_closure,
-        half_mesh_jacobian,
-        real_space_geometry,
-    )
-    from .residuals import m1_constrained_to_physical
     from .setup import boundary_from_input, flux_profiles, radial_grids
     from .solver import resolution_from_input
     from .transforms import physical_to_internal_scale
@@ -664,40 +721,11 @@ def wout_from_state(
                          lflip=boundary.lflip)
 
     # -- geometry + half-mesh field state (totzsps/jacobian/bcovar) ---------
-    R_cos_p, Z_sin_p, R_sin_p, Z_cos_p = m1_constrained_to_physical(
-        state.R_cos, state.Z_sin, state.R_sin, state.Z_cos,
-        modes=modes, lthreed=bool(res.lthreed), lasym=lasym, lconm1=True,
-    )
-    lambda_sin = apply_lambda_axis_closure(state.L_sin, modes=modes, ntor=ntor)
-    geometry = real_space_geometry(
-        R_cos=R_cos_p, R_sin=R_sin_p, Z_cos=Z_cos_p, Z_sin=Z_sin_p,
-        lambda_cos=state.L_cos, lambda_sin=lambda_sin,
-        modes=modes, trig=trig, s=grids.s_full,
-    )
-    jacobian = half_mesh_jacobian(geometry, s=grids.s_full)
-    metrics = metric_elements(geometry, s=grids.s_full)
-    fields = magnetic_fields(
-        geometry=geometry, jacobian=jacobian, metrics=metrics, trig=trig,
-        s=grids.s_full, phips=prof["phips"], phipf=prof["phipf"],
-        chips=prof["chips"], signgs=signgs, gamma=gamma, mass=prof["mass"],
-        ncurr=ncurr, enclosed_current=prof["icurv"],
-    )
-    norms = energies_and_force_norms(
-        jacobian=jacobian, metrics=metrics, fields=fields, trig=trig,
-        s=grids.s_full, signgs=signgs,
-    )
-    trapped_fraction = _trapped_fraction_export_lane(
-        total_pressure=fields.total_pressure,
-        pressure=fields.pressure,
-        sqrt_g=jacobian.sqrt_g,
-        s_full=grids.s_full,
-        lasym=lasym,
-        n_lambda=64,
-    )
     (geometry, jacobian, metrics, fields, norms, R_cos_p, Z_sin_p, R_sin_p,
-     Z_cos_p, trapped_fraction) = jax.device_get(
-        (geometry, jacobian, metrics, fields, norms, R_cos_p, Z_sin_p,
-         R_sin_p, Z_cos_p, trapped_fraction))
+     Z_cos_p, trapped_fraction) = jax.device_get(_wout_field_state_lane(
+        state, grids.s_full, prof["phips"], prof["phipf"], prof["chips"],
+        prof["mass"], prof["icurv"],
+        res=res, signgs=signgs, gamma=gamma, ncurr=ncurr))
 
     # -- 1D profiles in file conventions ------------------------------------
     vp = np.asarray(norms.vp, dtype=float).copy()

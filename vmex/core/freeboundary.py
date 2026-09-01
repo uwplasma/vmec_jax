@@ -414,6 +414,19 @@ def _jacobian_ok(state: SpectralState, rt: SolverRuntime,
     )
 
 
+@jax.jit
+def _carried_edge_radius_lane(state: SpectralState, rt: SolverRuntime) -> Array:
+    """Boundary-row ``R = R_even(ns) + R_odd(ns)`` (``sqrts(ns) = 1``).
+
+    The carried-rbsq edge conversion at a radial transition needs only this
+    angular array; eager, the full ``_geometry`` synthesis it sits on
+    dispatches ~1e2 single-op XLA programs per transition.  Module-level
+    ``jax.jit`` lane keyed structurally on ``rt`` (``solver._while_lane``).
+    """
+    _, geometry = _geometry(state, rt)
+    return geometry.R_even[-1] + geometry.R_odd[-1]
+
+
 @functools.partial(jax.jit, static_argnames=("use_fft",))
 def _iter_lane(carry, rt: SolverRuntime, *, use_fft: bool = False):
     """One jitted eqsolve iteration (shared traced body; per-``rt`` lane)."""
@@ -1705,11 +1718,9 @@ def _solve_free_boundary_stage(
     # free boundary must do it *before* constructing the fused axis-current
     # filament, otherwise a recoverable bad axis can fail the static-topology
     # guard before iteration 1.
-    _, _initial_geometry = _geometry(_init_state, rt)
-    _initial_jacobian = half_mesh_jacobian(_initial_geometry, s=rt.setup.s_full)
     if (
         allow_initial_axis_reguess
-        and bool(_initial_jacobian.jacobian_sign_changed)
+        and not bool(_jacobian_ok(_init_state, rt))
         and ns >= 3
     ):
         if verbose:
@@ -1723,9 +1734,7 @@ def _solve_free_boundary_stage(
                 zaxis_cc=_axis[2] if resolution.lasym else None,
             ), end="")
         _initial_ijacob = 1
-        _, _retry_geometry = _geometry(_init_state, rt)
-        _retry_jacobian = half_mesh_jacobian(_retry_geometry, s=rt.setup.s_full)
-        if bool(_retry_jacobian.jacobian_sign_changed):
+        if not bool(_jacobian_ok(_init_state, rt)):
             # Preserve the normal typed solver failure and its remedy hint;
             # do not let the later axis-filament topology guard obscure it.
             from .errors import BAD_JACOBIAN_FLAG, VmecJacobianError, WERROR_MESSAGES
@@ -1751,8 +1760,7 @@ def _solve_free_boundary_stage(
             # funct3d skips IVAC0, so forces.f consumes the coarse-stage rbsq
             # verbatim.  Express that product as an equivalent bsqvac on the
             # new geometry for the shared force seam.
-            _, carried_geometry = _geometry(_init_state, rt)
-            r_edge = carried_geometry.R_even[-1] + carried_geometry.R_odd[-1]
+            r_edge = _carried_edge_radius_lane(_init_state, rt)
             pres_ns = _vacuum_scalars(_init_state, rt)[5]
             rbsq = jnp.asarray(vacuum_continuation.rbsq, dtype=dtype)
             carried_edge = jnp.where(
@@ -1919,10 +1927,7 @@ def _solve_free_boundary_stage(
             if (vacuum_continuation is not None
                     and vacuum_continuation.turned_on):
                 if vacuum_continuation.rbsq is not None:
-                    _, carried_geometry = _geometry(_init_state, rt)
-                    r_edge = (
-                        carried_geometry.R_even[-1] + carried_geometry.R_odd[-1]
-                    )
+                    r_edge = _carried_edge_radius_lane(_init_state, rt)
                     pres_ns = _vacuum_scalars(_init_state, rt)[5]
                     rbsq = jnp.asarray(vacuum_continuation.rbsq, dtype=dtype)
                     carried_edge = jnp.where(
