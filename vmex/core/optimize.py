@@ -1470,6 +1470,16 @@ def _apply_current(inp: VmecInput, xc, k: int, ac_scale: float) -> VmecInput:
     return dataclasses.replace(inp, ac=values, curtor=float(xc[k]) * _CURTOR_SCALE)
 
 
+def _accepts_state_runtime(fun: Callable) -> bool:
+    """Whether ``fun`` takes two required positional ``(state, runtime)`` args."""
+    try:
+        params = [p for p in inspect.signature(fun).parameters.values()
+                  if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        return len(params) >= 2 and params[1].default is inspect.Parameter.empty
+    except (TypeError, ValueError):  # builtins / partials without signature
+        return False
+
+
 def _call_term(fun: Callable, eq: Equilibrium) -> np.ndarray:
     """Evaluate an objective callable against an :class:`Equilibrium`.
 
@@ -1478,13 +1488,8 @@ def _call_term(fun: Callable, eq: Equilibrium) -> np.ndarray:
     callables receive the :class:`Equilibrium` (e.g.
     ``QuasisymmetryRatioResidual.J`` or user lambdas).
     """
-    try:
-        params = [p for p in inspect.signature(fun).parameters.values()
-                  if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
-        two_positional = len(params) >= 2 and params[1].default is inspect.Parameter.empty
-    except (TypeError, ValueError):  # builtins / partials without signature
-        two_positional = False
-    value = fun(eq.state, eq.runtime) if two_positional else fun(eq)
+    value = (fun(eq.state, eq.runtime) if _accepts_state_runtime(fun)
+             else fun(eq))
     return np.atleast_1d(np.asarray(jax.device_get(value), dtype=float)).ravel()
 
 
@@ -2326,13 +2331,7 @@ def _traceable_term(fun: Callable) -> Callable:
     owner = getattr(fun, "__self__", fun)
     if hasattr(owner, "residuals_state"):
         return owner.residuals_state
-    try:
-        params = [p for p in inspect.signature(fun).parameters.values()
-                  if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
-        two_positional = len(params) >= 2 and params[1].default is inspect.Parameter.empty
-    except (TypeError, ValueError):
-        two_positional = False
-    if two_positional:
+    if _accepts_state_runtime(fun):
         return fun
     raise ValueError(
         f"objective term {fun!r} is not implicit-differentiable: jac='implicit' "
@@ -2341,6 +2340,25 @@ def _traceable_term(fun: Callable) -> Callable:
         "host NumPy — use jac=None (finite differences) for those, or the "
         "traceable d_merc_state / mercier_stability_residual and "
         "l_grad_b_state alternatives.")
+
+
+def _traceable_scalar_loss(fun: Callable) -> Callable:
+    """Scalar ``loss`` callable -> the same callable, validated as traceable.
+
+    The ``loss=`` lane honors the passed callable literally: a bound scalar
+    method such as ``QuasisymmetryRatioResidual.total_state`` is used exactly
+    as given, never swapped for its owner's vector ``residuals_state`` — that
+    substitution belongs to the objective-tuple lane of
+    :func:`_traceable_term`, where residual rows are the desired shape.
+    """
+    if _accepts_state_runtime(fun):
+        return fun
+    raise ValueError(
+        f"loss {fun!r} is not implicit-differentiable: loss= needs a traceable "
+        "(state, runtime) -> scalar callable, e.g. an objective's total_state "
+        "method or a lambda composing such callables. Wout-engine callables "
+        "(J, residuals, d_merc, ...) run on host NumPy — use "
+        "derivative_method='finite_difference' for those.")
 
 
 def residuals_from_tuples(
@@ -2464,7 +2482,8 @@ def _least_squares_implicit(
         weight = _least_squares_weight(w, weight_semantics)
         terms.append((_traceable_term(f), float(t), jnp.asarray(weight)))
     traceable_scalar = (
-        None if scalar_objective is None else _traceable_term(scalar_objective)
+        None if scalar_objective is None
+        else _traceable_scalar_loss(scalar_objective)
     )
     modes = _dof_modes(inp, max_mode)
     nm = len(modes)
@@ -2567,6 +2586,13 @@ def _least_squares_implicit(
     if initial_rows.size == 0 or not np.all(np.isfinite(initial_rows)):
         raise FloatingPointError("non-finite or empty objective at the initial point")
     residual_size = int(initial_rows.size)
+    if traceable_scalar is not None and residual_size != 1:
+        raise ValueError(
+            f"loss returned {residual_size} values at the initial point; "
+            "loss= must return a scalar. Vector residual rows (e.g. a "
+            "residuals_state method) belong in objective_terms / "
+            "least_squares, or reduce them: "
+            "lambda state, runtime: jnp.sum(term.residuals_state(state, runtime)**2).")
     if traceable_scalar is None:
         sizes = [int(np.asarray(jax.device_get(
             jnp.atleast_1d(w * (jnp.asarray(f(state0, runtime0)) - t)).ravel()
