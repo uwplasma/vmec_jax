@@ -55,7 +55,8 @@ from .preconditioner_2d import Prec2DConfig
 from .printing import emit_flushed
 from .restart import restart_state, skip_ladder_rungs
 from .solver import (
-    SolveResult, SpectralState, _finalize, _prefetch_block_lane,
+    SolveResult, SpectralState, _finalize, _loop_driver_config,
+    _prefetch_block_lane,
     _polish_solve_result, _release_used_lane_executables, _result_from_carry,
     _resolve_force_balance_polish, _solve_stage, _resolve_use_fft,
     hot_restart_state, prepare_runtime, resolution_from_input,
@@ -231,16 +232,21 @@ def _launch_lane_prefetch(
     def worker() -> None:
         try:
             resolution = resolution_from_input(inp, ns=ns_next)
+            time_step0, _ = _loop_driver_config(
+                inp, time_step=time_step, nstep=nstep
+            )
             with device_context(device, resolution):
                 rt = prepare_runtime(
                     inp, resolution, ftol=float(ftol_next),
                     max_iterations=int(niter_next), lconm1=lconm1,
-                    time_step=time_step, tcon0=tcon0, gamma=gamma,
-                    nstep=nstep, precon_type=precon_type,
+                    tcon0=tcon0, gamma=gamma,
+                    precon_type=precon_type,
                     prec2d_threshold=prec2d_threshold, prec2d=prec2d,
                     use_fft=use_fft,
                 )
-                _prefetch_block_lane(rt, use_fft=use_fft)
+                _prefetch_block_lane(
+                    rt, use_fft=use_fft, time_step0=time_step0
+                )
         except Exception:      # silent fallback: on-demand compilation
             pass
 
@@ -336,7 +342,8 @@ def solve_multigrid(
 
     Executable reuse: stage runtimes are structural pytrees (solver.py), so
     one XLA executable is compiled per distinct stage structure ``(ns,
-    ftol, niter, ...)`` per session, and repeated ladders (parameter scans,
+    niter, ...)`` per session (``ftol`` is pytree data, so tolerance-only
+    rung changes share it), and repeated ladders (parameter scans,
     hot restarts) recompile nothing.  Full radial padding to
     ``max(ns_array)`` — ONE executable for all stages — would need masked
     radial reductions through geometry/fields/forces/preconditioner and is
@@ -369,9 +376,9 @@ def solve_multigrid(
     *before* the ``release_stage_cache`` point, and the prefetched
     executable is held as a standalone object, so releasing rung k's caches
     cannot evict rung k+1's just-built executable.  Only the ``mode="cli"``
-    block lane is prefetched, and equal-structure reruns (same ``ns``,
-    ``ftol``, ``niter``) skip the prefetch because the previous rung's
-    executable is reused directly.
+    block lane is prefetched, and equal-structure reruns (same ``ns`` and
+    ``niter``; ``ftol`` is data) skip the prefetch because the previous
+    rung's executable is reused directly.
 
     ``polish_force_balance=False`` is the default and leaves the established
     VMEC continuation solve unchanged. Set it to ``True`` or ``"auto"`` to
@@ -419,6 +426,11 @@ def solve_multigrid(
     residual_continuation = None
     carry = rt = None
     prefetch_thread: threading.Thread | None = None
+    # runvmec.f resets DELT to the input value at every stage; the loop-driver
+    # scalars are host config shared by all rungs (never pytree structure).
+    time_step0, nstep_cadence = _loop_driver_config(
+        inp, time_step=time_step, nstep=nstep
+    )
     for igrid in range(n_stages):
         nsval = int(ns_arr[igrid])
         resolution = resolution_from_input(inp, ns=nsval)
@@ -427,7 +439,7 @@ def solve_multigrid(
             rt = prepare_runtime(
                 inp, resolution, ftol=float(ftol_arr[igrid]),
                 max_iterations=int(niter_arr[igrid]), lconm1=lconm1,
-                time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
+                tcon0=tcon0, gamma=gamma,
                 precon_type=precon_type, prec2d_threshold=prec2d_threshold,
                 prec2d=prec2d, use_fft=stage_use_fft,
             )
@@ -446,7 +458,8 @@ def solve_multigrid(
         # Overlapped compilation (see the docstring): start building rung
         # igrid+1's executable now, so it is (mostly) ready when this rung's
         # iterations finish.  Equal-structure next rungs reuse this rung's
-        # executable directly, so nothing needs prefetching.
+        # executable directly, so nothing needs prefetching (ftol is pytree
+        # DATA — a tolerance-only change is not a new structure).
         if (
             prefetch_compile
             and mode == "cli"
@@ -454,7 +467,6 @@ def solve_multigrid(
             and not jax.config.jax_disable_jit
             and (
                 int(ns_arr[igrid + 1]) != nsval
-                or float(ftol_arr[igrid + 1]) != float(ftol_arr[igrid])
                 or int(niter_arr[igrid + 1]) != int(niter_arr[igrid])
             )
         ):
@@ -483,6 +495,7 @@ def solve_multigrid(
         with device_context(device, resolution):
             carry = _solve_stage(
                 rt, state, mode=mode, verbose=verbose, emit=emit,
+                time_step0=time_step0, nstep=nstep_cadence,
                 # initialize_radial.f resets ijacob at every NS stage, so
                 # both bad-Jacobian and LMOVE_AXIS first-force retries remain
                 # available after interpolation and on hot starts.

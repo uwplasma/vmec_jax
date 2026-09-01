@@ -43,9 +43,10 @@ Structural executable reuse
 :class:`SolverRuntime` is a registered pytree passed as an *argument* to the
 module-level jitted lanes :func:`_while_lane`/:func:`_block_lane`.
 Array-valued run data
-(:class:`~vmex.core.setup.RunSetup`, ``rcon0/zcon0``) are pytree data;
-the hashable configuration (:class:`~vmex.core.fourier.Resolution`,
-``gamma/tcon0/ftol/max_iterations/time_step0/nstep/jmax``) is pytree meta;
+(:class:`~vmex.core.setup.RunSetup`, ``rcon0/zcon0``, the ``ftol`` scalar)
+are pytree data; the hashable configuration
+(:class:`~vmex.core.fourier.Resolution`,
+``gamma/tcon0/max_iterations/jmax``) is pytree meta;
 the NumPy mode/trig/weight/gather tables — consumed with ``np.*``/fancy
 indexing at trace time — are derived from the meta resolution through the
 cached :func:`_static_tables` and never enter the pytree.  Consequence: two
@@ -389,13 +390,22 @@ class SolverRuntime:
 
     - **data fields** (traced): the :class:`RunSetup` arrays (profiles,
       radial grids, boundary, initial state — everything that changes with
-      boundary values) and the fixed-boundary constraint baselines
+      boundary values), the fixed-boundary constraint baselines
       ``rcon0/zcon0`` (``funct3d.f`` — constant per run because the edge
-      spectral row never evolves, but boundary-value dependent);
+      spectral row never evolves, but boundary-value dependent), and the
+      ``ftol`` scalar (read inside the trace only in exact comparisons, so
+      ladder/scan runs differing only in tolerance share one executable);
     - **meta fields** (static, hashable): the :class:`Resolution` plus the
       scalar configuration (``gamma`` is consumed concretely by
       ``fields.magnetic_fields``; ``max_iterations`` sizes the trajectory
       buffer; the rest are loop-control constants).
+
+    The host loop-driver scalars — initial ``DELT`` and the ``NSTEP`` print
+    cadence — deliberately do NOT live here: they are never read inside a
+    traced lane and as static meta they forced a full lane recompile for a
+    changed print cadence or initial time step.  They travel through the
+    :func:`_run_loop`/:func:`_initial_carry` call signatures instead
+    (resolved by :func:`_loop_driver_config`).
 
     The NumPy mode/trig/weight/gather tables are *derived* from the meta
     ``resolution`` via the cached :func:`_static_tables` (exposed as
@@ -408,8 +418,9 @@ class SolverRuntime:
     resolution: Resolution
     setup: RunSetup
     rcon0: Array; zcon0: Array
-    gamma: float; tcon0: float; ftol: float
-    max_iterations: int; time_step0: float; nstep: int
+    ftol: Array                         # data: convergence threshold scalar
+    gamma: float; tcon0: float
+    max_iterations: int
     jmax: int                           # evolved radial rows (fixed: ns-1)
     lforbal: bool = False               # tomnsp_mod.f m=1,n=0 force replacement
     lmove_axis: bool = True             # funct3d.f first-force irst=4 path
@@ -467,8 +478,8 @@ class SolverRuntime:
 
 
 _register(SolverRuntime, meta=(
-    "resolution", "gamma", "tcon0", "ftol", "max_iterations", "time_step0",
-    "nstep", "jmax", "lforbal", "lmove_axis",
+    "resolution", "gamma", "tcon0", "max_iterations",
+    "jmax", "lforbal", "lmove_axis",
     "lfreeb", "prec2d",
 ))
 
@@ -626,13 +637,39 @@ def _resolve_prec2d(
     return Prec2DConfig(threshold=float(thr), finest=bool(finest))
 
 
+def _loop_driver_config(
+    source: VmecInput | RunSetup,
+    *,
+    time_step: float | None = None,
+    nstep: int | None = None,
+) -> tuple[float, int]:
+    """Resolve the host loop-driver scalars ``(initial DELT, NSTEP cadence)``.
+
+    ``eqsolve.f`` driver configuration, not solver context: neither value is
+    read inside a traced lane (``DELT`` seeds the initial carry on the host,
+    ``NSTEP`` gates screen lines), so they deliberately stay off
+    :class:`SolverRuntime` and travel through the :func:`_run_loop` /
+    :func:`_initial_carry` call signatures.  Defaults mirror
+    :func:`prepare_runtime`: the input's ``DELT``/``NSTEP`` (RunSetup sources
+    fall back to the ``readin.f`` values), explicit keywords override.
+    """
+    if isinstance(source, RunSetup):
+        delt_default, nstep_default = 1.0, 200
+    else:
+        delt_default, nstep_default = float(source.delt), int(source.nstep)
+    return (
+        float(delt_default if time_step is None else time_step),
+        int(nstep_default if nstep is None else nstep),
+    )
+
+
 def prepare_runtime(
     source: VmecInput | RunSetup,
     resolution: Resolution | None = None,
     *,
     ftol: float | None = None, max_iterations: int | None = None,
-    time_step: float | None = None, tcon0: float | None = None,
-    gamma: float | None = None, nstep: int | None = None,
+    tcon0: float | None = None,
+    gamma: float | None = None,
     lconm1: bool = True, lforbal: bool | None = None,
     setup: RunSetup | None = None,
     precon_type: str | None = None, prec2d_threshold: float | None = None,
@@ -641,8 +678,11 @@ def prepare_runtime(
 ) -> SolverRuntime:
     """Build the static solver context from an input file or a RunSetup.
 
-    Defaults come from the input (``delt``, ``tcon0``, ``gamma``, ``nstep``,
-    ``ftol_array(1)``, ``niter_array(1)``); explicit keywords override.  The
+    Defaults come from the input (``tcon0``, ``gamma``, ``ftol_array(1)``,
+    ``niter_array(1)``); explicit keywords override.  The host loop-driver
+    scalars (initial ``DELT``, ``NSTEP`` print cadence) are resolved by
+    :func:`_loop_driver_config` at the loop-driver call sites, never stored
+    here.  The
     fixed-boundary constraint baselines ``rcon0/zcon0 = s * rcon(ns)``
     (``funct3d.f``) are computed once here from the initial state — the edge
     spectral row never evolves in fixed-boundary mode, so they are constants
@@ -659,8 +699,8 @@ def prepare_runtime(
         if resolution is None:
             raise ValueError("prepare_runtime(RunSetup) requires a Resolution")
         setup = source
-        defaults = dict(ftol=1e-10, niter=100, delt=1.0, tcon0=1.0, gamma=0.0,
-                        nstep=200, lforbal=False, lmove_axis=True)
+        defaults = dict(ftol=1e-10, niter=100, tcon0=1.0, gamma=0.0,
+                        lforbal=False, lmove_axis=True)
     else:
         inp = source
         if resolution is None:
@@ -678,8 +718,7 @@ def prepare_runtime(
                 infer_axis_if_missing=False, use_fft=use_fft,
             )
         defaults = dict(ftol=float(inp.ftol_array[0]), niter=int(inp.niter_array[0]),
-                        delt=float(inp.delt), tcon0=float(inp.tcon0),
-                        gamma=float(inp.gamma), nstep=int(inp.nstep),
+                        tcon0=float(inp.tcon0), gamma=float(inp.gamma),
                         lforbal=bool(inp.lforbal),
                         lmove_axis=bool(inp.lmove_axis))
     requested_iterations = int(
@@ -693,10 +732,14 @@ def prepare_runtime(
         resolution=resolution, setup=setup,
         gamma=float(defaults["gamma"] if gamma is None else gamma),
         tcon0=float(defaults["tcon0"] if tcon0 is None else tcon0),
-        ftol=float(defaults["ftol"] if ftol is None else ftol),
+        # Data scalar (not meta): the trace reads ftol only in exact
+        # comparisons, so equal-structure runs differing only in tolerance
+        # reuse one executable, bit-exactly.
+        ftol=jnp.asarray(
+            float(defaults["ftol"] if ftol is None else ftol),
+            dtype=setup.s_full.dtype,
+        ),
         max_iterations=effective_iterations,
-        time_step0=float(defaults["delt"] if time_step is None else time_step),
-        nstep=int(defaults["nstep"] if nstep is None else nstep),
         jmax=int(resolution.ns) - 1,
         lforbal=bool(defaults["lforbal"] if lforbal is None else lforbal),
         lmove_axis=bool(defaults["lmove_axis"]),
@@ -1572,6 +1615,7 @@ def _initial_carry(
     rt: SolverRuntime,
     *,
     ijacob: int,
+    time_step0: float,
     xcdot: SpectralState | None = None,
     residuals: tuple[float | Array, float | Array, float | Array] | None = None,
 ) -> _LoopCarry:
@@ -1581,7 +1625,9 @@ def _initial_carry(
     the module variables ``fsqr/fsqz/fsql`` unchanged across radial grids.
     Those retained values control the first-pass free-boundary edge gate in
     ``residue.f90``.  ``residuals=None`` is the cold-start
-    ``reset_params.f`` value ``(1, 1, 1)``.
+    ``reset_params.f`` value ``(1, 1, 1)``.  ``time_step0`` is the host
+    loop-driver initial ``DELT`` (:func:`_loop_driver_config`) — a carry
+    VALUE only, so it never keys a lane recompile.
     """
     dtype = rt.setup.s_full.dtype
     one = jnp.asarray(1.0, dtype=dtype)
@@ -1589,7 +1635,7 @@ def _initial_carry(
         jax.tree.map(jnp.zeros_like, state)
         if xcdot is None else xcdot
     )
-    delt0 = jnp.asarray(rt.time_step0, dtype=dtype)
+    delt0 = jnp.asarray(float(time_step0), dtype=dtype)
     zero, inf = jnp.zeros((), dtype=dtype), jnp.asarray(jnp.inf, dtype=dtype)
     # NOTE: scalar counters/flags carry explicit (non-weak) dtypes so that the
     # initial carry has exactly the avals of the carry the jitted lanes
@@ -1728,11 +1774,12 @@ def _result_from_carry(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
 
 
 def _emit_lines(rt: SolverRuntime, trajectory: np.ndarray, upto: int,
-                printed: set[int], final: bool, emit) -> None:
+                printed: set[int], final: bool, emit, *,
+                nstep: int) -> None:
     """Print screen lines at the VMEC2000 cadence (eqsolve.f/printout.f)."""
     lasym = rt.resolution.lasym
     for it in range(1, upto + 1):
-        due = (it == 1) or (it % rt.nstep == 0) or (final and it == upto)
+        due = (it == 1) or (it % nstep == 0) or (final and it == upto)
         if not due or it in printed:
             continue
         row = trajectory[it - 1]
@@ -1822,7 +1869,9 @@ def _lane_signature(lane_name: str, carry: _LoopCarry, rt: SolverRuntime):
     return (lane_name, treedef, tuple(_leaf_signature(leaf) for leaf in leaves))
 
 
-def _prefetch_block_lane(rt: SolverRuntime, *, use_fft: bool) -> bool:
+def _prefetch_block_lane(
+    rt: SolverRuntime, *, use_fft: bool, time_step0: float
+) -> bool:
     """AOT-compile the CLI block lane for ``rt``'s structure ahead of use.
 
     Called from the multigrid prefetch thread.  Builds the same initial
@@ -1836,7 +1885,10 @@ def _prefetch_block_lane(rt: SolverRuntime, *, use_fft: bool) -> bool:
     lane = _block_lane_fft if use_fft else _block_lane
     lane_name = "block_fft" if use_fft else "block"
     carry = jax.tree.map(
-        jnp.array, _initial_carry(_initial_state(rt.setup), rt, ijacob=0)
+        jnp.array,
+        _initial_carry(
+            _initial_state(rt.setup), rt, ijacob=0, time_step0=time_step0
+        ),
     )
     key = _lane_signature(lane_name, carry, rt)
     if key in _LANE_EXECUTABLES or key in _USED_LANE_KEYS:
@@ -1880,6 +1932,7 @@ def _resolve_use_fft(
 
 def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
               ijacob: int, verbose: bool, emit,
+              time_step0: float, nstep: int,
               use_fft: bool = False,
               emit_banner: bool = True,
               emit_legend: bool = True,
@@ -1892,9 +1945,13 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
     ``emit_legend=False`` suppresses the ``BEGIN FORCE ITERATIONS`` legend
     while keeping the ``NS = ...`` banner and column header (runvmec.f
     prints the legend once per run, not once per radial grid).
+    ``time_step0``/``nstep`` are the host loop-driver scalars
+    (:func:`_loop_driver_config`) — kept out of ``rt`` so they never key a
+    lane recompile.
     """
     carry = _initial_carry(
-        state0, rt, ijacob=ijacob, xcdot=initial_xcdot,
+        state0, rt, ijacob=ijacob, time_step0=time_step0,
+        xcdot=initial_xcdot,
         residuals=initial_residuals,
     )
 
@@ -1911,7 +1968,7 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
     carry = jax.tree.map(jnp.array, carry)
     if verbose and emit_banner:
         # initialize_radial.f prints the total Fourier mode count (mnmax), not mpol.
-        emit(stage_banner(rt.resolution.ns, rt.resolution.mnmax, rt.ftol, rt.max_iterations), end="")
+        emit(stage_banner(rt.resolution.ns, rt.resolution.mnmax, float(rt.ftol), rt.max_iterations), end="")
         if emit_legend:
             emit(FORCE_ITERATIONS_BANNER, end="")
         emit(screen_header(lasym=rt.resolution.lasym, lfreeb=False), end="")
@@ -1955,7 +2012,8 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
             # Transfer, then slice: slicing on device compiles one XLA
             # program per distinct ``upto`` (~190 over a QA_lowres ladder).
             trajectory = np.asarray(carry.trajectory)[:max(upto, 0)]
-            _emit_lines(rt, trajectory, upto, printed, done, emit)
+            _emit_lines(rt, trajectory, upto, printed, done, emit,
+                        nstep=nstep)
         if done:
             break
     return carry
@@ -1963,6 +2021,7 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
 
 def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
                  mode: str, verbose: bool, emit,
+                 time_step0: float, nstep: int,
                  try_axis_reguess: bool = True,
                  use_fft: bool = False,
                  jacobian_retries: int = 2,
@@ -1993,6 +2052,7 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
         attempt_rt: SolverRuntime,
         attempt_state: SpectralState,
         *,
+        attempt_time_step0: float,
         emit_banner: bool,
         allow_axis_reguess: bool,
         attempt_residuals: (
@@ -2011,6 +2071,7 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
         carry = _run_loop(
             attempt_state, loop_rt, mode=mode, ijacob=0,
             verbose=verbose, emit=emit, use_fft=use_fft,
+            time_step0=attempt_time_step0, nstep=nstep,
             emit_banner=emit_banner, emit_legend=emit_legend,
             initial_residuals=attempt_residuals,
         )
@@ -2044,6 +2105,7 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
             carry = _run_loop(
                 attempt_state, attempt_rt, mode=mode, ijacob=1,
                 verbose=verbose, emit=emit, use_fft=use_fft,
+                time_step0=attempt_time_step0, nstep=nstep,
                 emit_banner=False,
                 initial_xcdot=(
                     carry.xcdot
@@ -2057,28 +2119,28 @@ def _solve_stage(rt: SolverRuntime, state0: SpectralState | None, *,
 
     attempt_state = _initial_state(rt.setup) if state0 is None else state0
     attempt_rt = rt
+    attempt_delt0 = float(time_step0)
     carry, attempt_rt = run_attempt(
-        attempt_rt, attempt_state, emit_banner=True, allow_axis_reguess=True,
+        attempt_rt, attempt_state, attempt_time_step0=attempt_delt0,
+        emit_banner=True, allow_axis_reguess=True,
         attempt_residuals=residual_continuation,
     )
     for attempt in range(1, int(jacobian_retries) + 1):
         if int(carry.ier) != JAC75_FLAG:
             break
-        retry_step = min(0.5, 0.5 * float(attempt_rt.time_step0))
+        attempt_delt0 = min(0.5, 0.5 * attempt_delt0)
         attempt_state = carry.xstore
-        attempt_rt = runtime_with_baselines(
-            replace(attempt_rt, time_step0=retry_step),
-            attempt_state,
-        )
+        attempt_rt = runtime_with_baselines(attempt_rt, attempt_state)
         if verbose:
             emit(
                 " JACOBIAN RECOVERY RETRY "
                 f"{attempt}/{int(jacobian_retries)}: "
                 "RESTARTING BEST FINITE STATE WITH "
-                f"DELT = {retry_step:.6g}"
+                f"DELT = {attempt_delt0:.6g}"
             )
         carry, attempt_rt = run_attempt(
-            attempt_rt, attempt_state, emit_banner=False,
+            attempt_rt, attempt_state, attempt_time_step0=attempt_delt0,
+            emit_banner=False,
             allow_axis_reguess=False,
             attempt_residuals=(carry.fsqr, carry.fsqz, carry.fsql),
         )
@@ -2103,7 +2165,7 @@ def _finalize(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
         raise VmecConvergenceError(
             WERROR_MESSAGES[MORE_ITER_FLAG],
             hint=hint,
-            iteration=int(carry.iteration), fsq=fsq, ftol=rt.ftol,
+            iteration=int(carry.iteration), fsq=fsq, ftol=float(rt.ftol),
         )
     if ier == NONFINITE_FLAG:
         raise VmecNumericalError(
@@ -2313,10 +2375,13 @@ def solve(
     initial_state = _put_numeric_leaves(
         initial_state, _placement_device(device, resolution)
     )
+    time_step0, nstep_cadence = _loop_driver_config(
+        source, time_step=time_step, nstep=nstep
+    )
     with device_context(device, resolution):
         rt = prepare_runtime(
             source, resolution, ftol=ftol, max_iterations=max_iterations,
-            time_step=time_step, tcon0=tcon0, gamma=gamma, nstep=nstep,
+            tcon0=tcon0, gamma=gamma,
             lconm1=lconm1, precon_type=precon_type,
             prec2d_threshold=prec2d_threshold, prec2d=prec2d,
             use_fft=use_fft_resolved,
@@ -2336,6 +2401,7 @@ def solve(
             )  # funct3d.f iter2==iter1
         carry = _solve_stage(
             rt, initial_state, mode=mode, verbose=verbose, emit=emit,
+            time_step0=time_step0, nstep=nstep_cadence,
             use_fft=use_fft_resolved,
             jacobian_retries=jacobian_retries,
         )

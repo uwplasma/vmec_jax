@@ -183,7 +183,11 @@ def test_apply_restart(kind, dt_factor):
 
 
 def _recovery_runtime():
-    """Small real runtime (solovev, ns=5) for the structural recovery tests."""
+    """Small real runtime (solovev, ns=5) for the structural recovery tests.
+
+    Returns ``(runtime, time_step0, nstep)`` — the loop-driver scalars are
+    call-signature config (solver._loop_driver_config), not runtime fields.
+    """
     from pathlib import Path
 
     from vmex.core import solver
@@ -192,7 +196,8 @@ def _recovery_runtime():
     deck = Path(__file__).resolve().parents[1] / "examples" / "data" / "input.solovev"
     inp = VmecInput.from_file(str(deck))
     resolution = solver.resolution_from_input(inp, ns=5)
-    return solver.prepare_runtime(inp, resolution, max_iterations=8)
+    time_step0, nstep = solver._loop_driver_config(inp)
+    return solver.prepare_runtime(inp, resolution, max_iterations=8), time_step0, nstep
 
 
 def _install_fake_loop(monkeypatch, rt, calls, *, failures: int):
@@ -212,6 +217,7 @@ def _install_fake_loop(monkeypatch, rt, calls, *, failures: int):
     from vmex.core.errors import JAC75_FLAG, SUCCESSFUL_TERM_FLAG
 
     def fake_run_loop(state0, loop_rt, *, mode, ijacob, verbose, emit,
+                      time_step0, nstep,
                       use_fft=False, emit_banner=True, emit_legend=True,
                       initial_xcdot=None, initial_residuals=None):
         n = len(calls)
@@ -221,11 +227,12 @@ def _install_fake_loop(monkeypatch, rt, calls, *, failures: int):
                 for name in ("R_cos", "Z_sin", "L_sin")
             },
             lmove_axis=bool(loop_rt.lmove_axis),
-            delt0=float(loop_rt.time_step0),
+            delt0=float(time_step0),
             residuals=None if initial_residuals is None else tuple(
                 float(v) for v in initial_residuals),
         ))
-        carry = solver._initial_carry(state0, loop_rt, ijacob=ijacob)
+        carry = solver._initial_carry(
+            state0, loop_rt, ijacob=ijacob, time_step0=time_step0)
         if n < failures:
             checkpoint = jax.tree.map(
                 lambda x: x + 1e-3 * (n + 1), state0)
@@ -263,7 +270,7 @@ def test_consecutive_jac75_retries_restore_checkpoints_and_reduce_delt(
     from vmex.core import solver
     from vmex.core.errors import SUCCESSFUL_TERM_FLAG
 
-    rt = _recovery_runtime()
+    rt, delt0_in, nstep_in = _recovery_runtime()
     calls: list[dict] = []
     _install_fake_loop(monkeypatch, rt, calls, failures=2)
 
@@ -271,6 +278,7 @@ def test_consecutive_jac75_retries_restore_checkpoints_and_reduce_delt(
     carry = solver._solve_stage(
         rt, None, mode="cli", verbose=True,
         emit=lambda value="", end="\n": lines.append(str(value)),
+        time_step0=delt0_in, nstep=nstep_in,
         jacobian_retries=2,
     )
 
@@ -284,7 +292,7 @@ def test_consecutive_jac75_retries_restore_checkpoints_and_reduce_delt(
     interior = calls[0]["state"]
     # attempt 1: fresh interior guess, axis transfer allowed, input DELT
     assert calls[0]["lmove_axis"] is True
-    assert calls[0]["delt0"] == pytest.approx(float(rt.time_step0))
+    assert calls[0]["delt0"] == pytest.approx(delt0_in)
 
     # each retry restarts the PREVIOUS attempt's recorded best checkpoint
     for attempt in (1, 2):
@@ -308,7 +316,7 @@ def test_consecutive_jac75_retries_restore_checkpoints_and_reduce_delt(
             (0.5 + attempt - 1, 0.25 + attempt - 1, 0.125 + attempt - 1))
 
     # DELT reduced BEFORE the next update: min(0.5, 0.5 * previous)
-    d0 = float(rt.time_step0)
+    d0 = delt0_in
     assert calls[1]["delt0"] == pytest.approx(min(0.5, 0.5 * d0))
     assert calls[2]["delt0"] == pytest.approx(min(0.5, 0.5 * calls[1]["delt0"]))
     assert calls[0]["delt0"] > calls[1]["delt0"] > calls[2]["delt0"]
@@ -329,12 +337,13 @@ def test_jac75_chain_exhausts_retries_with_typed_error(monkeypatch) -> None:
     from vmex.core import solver
     from vmex.core.errors import JAC75_FLAG, VmecJacobianError
 
-    rt = _recovery_runtime()
+    rt, delt0_in, nstep_in = _recovery_runtime()
     calls: list[dict] = []
     _install_fake_loop(monkeypatch, rt, calls, failures=99)
 
     carry = solver._solve_stage(
         rt, None, mode="cli", verbose=False, emit=lambda *a, **k: None,
+        time_step0=delt0_in, nstep=nstep_in,
         jacobian_retries=2,
     )
     assert int(carry.ier) == JAC75_FLAG

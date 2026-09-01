@@ -391,7 +391,8 @@ def test_vacuum_lane_never_consumes_a_sign_changed_state():
     assert not np.all(np.isfinite(np.asarray(poisoned["bsqvac"])))
 
     int64 = lambda v: jnp.asarray(v, dtype=jnp.int64)  # noqa: E731
-    carry = FB._initial_carry(bad, rt_freeb, ijacob=0,
+    delt0, _ = FB._loop_driver_config(inp)
+    carry = FB._initial_carry(bad, rt_freeb, ijacob=0, time_step0=delt0,
                               residuals=(1.0e-4, 1.0e-4, 1.0e-4))
     # A steady-state pass: mid-run iteration, best state stored at xstore;
     # max_iterations=5 bounds the lane to this single pass.
