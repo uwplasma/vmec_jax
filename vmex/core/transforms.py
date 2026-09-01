@@ -283,19 +283,52 @@ def _fast_synthesis(
     modes: ModeTable,
     trig: TrigTables,
     derivatives: tuple[str, ...],
+    extra_value_cos: Array | None = None,
+    extra_value_sin: Array | None = None,
 ) -> tuple[Array, ...]:
-    """Use separable FFT synthesis without expanding mode-stacked phases."""
+    """Use separable FFT synthesis without expanding mode-stacked phases.
+
+    ``extra_value_cos/sin`` are value-only side channels ``(C, ns, mnmax)``
+    fused as extra rows into the shared toroidal synthesis and the ``value``
+    theta contraction (they never join ``dtheta``/``dzeta``); their values
+    are appended as one extra trailing output.  The main channels' toroidal
+    coefficients are only flattened/concatenated for this — per-row results
+    are unchanged.
+    """
     a_cos, a_sin, b_cos, b_sin = _packed_toroidal_coefficients(
         coefficient_cos, coefficient_sin, modes
     )
-    a = _toroidal_synthesis(a_cos, a_sin, trig)
-    b = _toroidal_synthesis(b_cos, b_sin, trig)
+    n_main = None
+    if extra_value_cos is not None:
+        if "value" not in derivatives:
+            raise ValueError("extra value channels require the 'value' derivative")
+        e_a_cos, e_a_sin, e_b_cos, e_b_sin = _packed_toroidal_coefficients(
+            extra_value_cos, extra_value_sin, modes
+        )
+        main_shape = a_cos.shape[:-3]
+
+        def rows(x: Array) -> Array:
+            return x.reshape((-1,) + x.shape[-3:])
+
+        n_main = int(rows(a_cos).shape[0])
+        a = _toroidal_synthesis(
+            jnp.concatenate([rows(a_cos), e_a_cos], axis=0),
+            jnp.concatenate([rows(a_sin), e_a_sin], axis=0), trig,
+        )
+        b = _toroidal_synthesis(
+            jnp.concatenate([rows(b_cos), e_b_cos], axis=0),
+            jnp.concatenate([rows(b_sin), e_b_sin], axis=0), trig,
+        )
+    else:
+        a = _toroidal_synthesis(a_cos, a_sin, trig)
+        b = _toroidal_synthesis(b_cos, b_sin, trig)
     mpol = int(a.shape[-2])
     theta = {
         "value": (trig.cosmu[:, :mpol], trig.sinmu[:, :mpol]),
         "dtheta": (trig.sinmum[:, :mpol], trig.cosmum[:, :mpol]),
     }
     fields: list[Array] = []
+    extra_value = None
     for derivative in derivatives:
         if derivative == "dzeta":
             frequency = (
@@ -307,15 +340,25 @@ def _fast_synthesis(
             cosmu, sinmu = trig.cosmu[:, :mpol], trig.sinmu[:, :mpol]
         elif derivative in theta:
             a_d, b_d = a, b
+            if n_main is not None and derivative != "value":
+                a_d, b_d = a[:n_main], b[:n_main]
             cosmu, sinmu = theta[derivative]
         else:
             raise ValueError(
                 f"Unknown derivative {derivative!r}; expected one of {_DERIVATIVES}"
             )
-        fields.append(
+        field = (
             _einsum("...mk,im->...ik", a_d, cosmu)
             + _einsum("...mk,im->...ik", b_d, sinmu)
         )
+        if n_main is not None and derivative != "dzeta":
+            if derivative == "value":
+                extra_value = field[n_main:]
+                field = field[:n_main]
+            field = field.reshape(main_shape + field.shape[1:])
+        fields.append(field)
+    if extra_value is not None:
+        fields.append(extra_value)
     return tuple(fields)
 
 
@@ -335,6 +378,8 @@ def fourier_to_real(
     odd_m_sqrt_s: bool = False,
     odd_m_scaling: Array | None = None,
     s: Array | None = None,
+    extra_value_cos: Array | None = None,
+    extra_value_sin: Array | None = None,
 ) -> tuple[Array, ...]:
     """Synthesize real-space fields on the VMEC internal angular grid.
 
@@ -370,11 +415,22 @@ def fourier_to_real(
         global radial scaling when synthesizing a local segment.
     s:
         Radial grid for ``odd_m_sqrt_s`` (defaults to a uniform [0, 1] grid).
+    extra_value_cos, extra_value_sin:
+        Optional value-only side channels of shape ``(C, ns, mnmax)``, fused
+        into the SAME ``value`` contraction as extra batch rows (VMEC2000
+        ``totzsps`` accumulates ``rcon/zcon`` inside the one synthesis loop,
+        ``totzsp_mod.f:178-193``).  They must already be VMEC-internal
+        coefficients (``internal_coeffs=True`` is required) and they never
+        receive the odd-m ``scalxc`` scaling — the constraint pipeline
+        divides by ``sqrt(s)`` *after* synthesis, which is not bit-identical
+        to scaling the coefficients.  When provided, the returned tuple
+        carries one extra trailing array ``(C, ns, ntheta3, nzeta)``.
 
     Returns
     -------
     tuple of arrays, one per requested derivative, each of shape
-    ``(..., ns, ntheta3, nzeta)``.
+    ``(..., ns, ntheta3, nzeta)`` (plus the extra-channel values last, when
+    requested).
     """
     coeff_cos = jnp.asarray(coefficient_cos)
     coeff_sin = jnp.asarray(coefficient_sin)
@@ -405,11 +461,36 @@ def fourier_to_real(
         coeff_sin = coeff_sin * scalxc_mn
 
     coeff = jnp.concatenate([coeff_cos, coeff_sin], axis=-1)
+    extra = None
+    if extra_value_cos is not None:
+        if not internal_coeffs:
+            raise NotImplementedError(
+                "extra value channels must be VMEC-internal coefficients"
+            )
+        if "value" not in derivatives:
+            raise ValueError("extra value channels require the 'value' derivative")
+        extra = jnp.concatenate(
+            [jnp.asarray(extra_value_cos), jnp.asarray(extra_value_sin)], axis=-1
+        )
     fields = []
+    extra_value = None
     for derivative in derivatives:
         cos_phase, sin_phase = _phase_pair(modes, trig, derivative)
         phase = jnp.asarray(np.concatenate([cos_phase, sin_phase], axis=0))
-        fields.append(_einsum("...k,kij->...ij", coeff, phase))
+        if extra is not None and derivative == "value":
+            rows = coeff.reshape((-1,) + coeff.shape[-2:])
+            fused = _einsum(
+                "...k,kij->...ij", jnp.concatenate([rows, extra], axis=0), phase
+            )
+            n_main = int(rows.shape[0])
+            fields.append(
+                fused[:n_main].reshape(coeff.shape[:-1] + fused.shape[-2:])
+            )
+            extra_value = fused[n_main:]
+        else:
+            fields.append(_einsum("...k,kij->...ij", coeff, phase))
+    if extra is not None:
+        fields.append(extra_value)
     return tuple(fields)
 
 
@@ -424,6 +505,8 @@ def _fourier_to_real_fft(
     odd_m_sqrt_s: bool = False,
     odd_m_scaling: Array | None = None,
     s: Array | None = None,
+    extra_value_cos: Array | None = None,
+    extra_value_sin: Array | None = None,
 ) -> tuple[Array, ...]:
     """Internal separable-FFT variant of :func:`fourier_to_real`."""
     coeff_cos = jnp.asarray(coefficient_cos)
@@ -457,8 +540,13 @@ def _fourier_to_real_fft(
         )
         coeff_cos = coeff_cos * scalxc_mn
         coeff_sin = coeff_sin * scalxc_mn
+    if extra_value_cos is not None and not internal_coeffs:
+        raise NotImplementedError(
+            "extra value channels must be VMEC-internal coefficients"
+        )
     return _fast_synthesis(
-        coeff_cos, coeff_sin, modes, trig, tuple(derivatives)
+        coeff_cos, coeff_sin, modes, trig, tuple(derivatives),
+        extra_value_cos=extra_value_cos, extra_value_sin=extra_value_sin,
     )
 
 

@@ -1483,12 +1483,14 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
 
         # funct3d.f computes geometry and its Jacobian ONCE per pass, before
         # bcovar/IVAC0, and the force build shares them.  Synthesize once
-        # here: the Jacobian sign feeds the vacuum-source gate below and the
-        # same synthesis is handed to the force evaluation at the end of the
-        # pass (``evaluation_synthesis``), instead of inlining a second full
+        # here (with the fused rcon/zcon channels): the Jacobian sign feeds
+        # the vacuum-source gate below and the same synthesis is handed to
+        # the force evaluation at the end of the pass
+        # (``evaluation_synthesis``), instead of inlining a second full
         # geometry synthesis into this traced lane (the old ``_jacobian_ok``
         # call).  Same ops on the same state — rows are bit-identical.
-        coeffs, geometry = _geometry(c.state, rt, use_fft=use_fft)
+        coeffs, geometry, con_value = _geometry(
+            c.state, rt, use_fft=use_fft, with_constraint=True)
         jacobian = half_mesh_jacobian(geometry, s=rt.setup.s_full)
 
         # NESTOR must never consume a sign-changed state (full funct3d.f/
@@ -1551,7 +1553,7 @@ def _make_vacuum_lane(fused: FusedVacuum, *, use_fft: bool = False):
         # ordering: forces consume the geometry computed before IVAC0).
         new_carry = _make_body(
             replace(rt_vac, bsqvac_edge=bsqvac), use_fft=use_fft,
-            evaluation_synthesis=(coeffs, geometry, jacobian),
+            evaluation_synthesis=(coeffs, geometry, jacobian, con_value),
         )(c)
 
         return _VacuumLoopCarry(

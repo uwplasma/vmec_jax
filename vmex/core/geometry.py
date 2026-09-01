@@ -49,6 +49,7 @@ __all__ = [
     "HalfMeshJacobian",
     "apply_lambda_axis_closure",
     "real_space_geometry",
+    "real_space_geometry_with_constraint",
     "half_mesh_jacobian",
     "sqrt_s_half_mesh",
 ]
@@ -244,6 +245,50 @@ def real_space_geometry(
     :class:`RealSpaceGeometry` with all channels on the internal
     ``(ns, ntheta3, nzeta)`` grid.
     """
+    geometry, _ = real_space_geometry_with_constraint(
+        R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
+        lambda_cos=lambda_cos, lambda_sin=lambda_sin,
+        modes=modes, trig=trig, s=s, use_fft=use_fft,
+        axis_closure=axis_closure, odd_m_scaling=odd_m_scaling,
+        constraint_cos=None, constraint_sin=None,
+    )
+    return geometry
+
+
+def real_space_geometry_with_constraint(
+    *,
+    R_cos: Array,
+    R_sin: Array,
+    Z_cos: Array,
+    Z_sin: Array,
+    lambda_cos: Array,
+    lambda_sin: Array,
+    modes: ModeTable,
+    trig: TrigTables,
+    s: Array,
+    use_fft: bool = False,
+    axis_closure: bool = True,
+    odd_m_scaling: Array | None = None,
+    constraint_cos: Array | None = None,
+    constraint_sin: Array | None = None,
+) -> tuple[RealSpaceGeometry, Array | None]:
+    """:func:`real_space_geometry` with the rcon/zcon synthesis fused in.
+
+    VMEC2000/VMEC++ compute ``rcon/zcon`` inside the SAME ``totzsps`` pass as
+    the geometry channels (``totzsp_mod.f:178-193``; vmecpp
+    ``ideal_mhd_model.cc`` xmpq output channel) instead of running a second
+    full synthesis per iteration.  ``constraint_cos/sin`` are the
+    xmpq-weighted, parity-masked stacks from
+    :func:`vmex.core.forces.constraint_synthesis_coefficients`, shape
+    ``(6, ns, mnmax)``; they join the batched contraction as value-only rows
+    WITHOUT the odd-m ``scalxc`` scaling (the constraint pipeline applies its
+    ``1/sqrt(s)`` after synthesis — pre-scaling the coefficients would be
+    algebraically equal but not bit-identical).  Returns ``(geometry,
+    constraint_value)`` with ``constraint_value`` of shape
+    ``(6, ns, ntheta3, nzeta)`` — the exact array
+    :func:`vmex.core.forces.constraint_force` would synthesize itself — or
+    ``None`` when no constraint channels were passed.
+    """
     coeff_cos = jnp.stack(
         [jnp.asarray(R_cos), jnp.asarray(Z_cos), jnp.asarray(lambda_cos)], axis=0
     )
@@ -265,7 +310,7 @@ def real_space_geometry(
     batched_cos = coeff_cos[None, ...] * mask_stack[:, None, None, :]
     batched_sin = coeff_sin[None, ...] * mask_stack[:, None, None, :]
     synthesize = _fourier_to_real_fft if use_fft else fourier_to_real
-    value, dtheta, dzeta = synthesize(
+    fields = synthesize(
         batched_cos,
         batched_sin,
         modes=modes,
@@ -275,7 +320,13 @@ def real_space_geometry(
         odd_m_sqrt_s=True,
         odd_m_scaling=odd_m_scaling,
         s=s,
+        extra_value_cos=constraint_cos,
+        extra_value_sin=constraint_sin,
     )
+    if constraint_cos is None:
+        (value, dtheta, dzeta), constraint_value = fields, None
+    else:
+        value, dtheta, dzeta, constraint_value = fields
 
     def odd_internal(plane: Array, field: int) -> Array:
         """Combine m=1 and m>=3 odd channels with the jmin1 axis rules.
@@ -291,7 +342,7 @@ def real_space_geometry(
         return jnp.concatenate([m1[1][None, ...], combined[1:]], axis=0)
 
     R_FIELD, Z_FIELD, L_FIELD = 0, 1, 2
-    return RealSpaceGeometry(
+    geometry = RealSpaceGeometry(
         R_even=value[0, R_FIELD],
         R_odd=odd_internal(value, R_FIELD),
         Z_even=value[0, Z_FIELD],
@@ -309,6 +360,7 @@ def real_space_geometry(
         dlambda_dzeta_even=dzeta[0, L_FIELD],
         dlambda_dzeta_odd=odd_internal(dzeta, L_FIELD),
     )
+    return geometry, constraint_value
 
 
 def half_mesh_jacobian(geometry: RealSpaceGeometry, *, s: Array) -> HalfMeshJacobian:

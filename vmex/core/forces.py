@@ -76,6 +76,7 @@ __all__ = [
     "mhd_force_kernels",
     "alias_constraint_force",
     "constraint_force",
+    "constraint_synthesis_coefficients",
     "mhd_forces",
     "symmetrize_forces",
     "spectral_mhd_forces",
@@ -616,40 +617,29 @@ def _internal_odd_channel(
     return m1_internal + rest_internal
 
 
-def constraint_force(
+def constraint_synthesis_coefficients(
     *,
     R_cos: Array,
     R_sin: Array,
     Z_cos: Array,
     Z_sin: Array,
-    geometry: RealSpaceGeometry,
     modes: ModeTable,
-    trig: TrigTables,
-    s: Array,
-    tcon: Array,
-    signgs: int,
-    rcon0: Array | None = None,
-    zcon0: Array | None = None,
-    use_fft: bool = False,
-) -> tuple[Array, Array, Array, Array, Array]:
-    """Spectral-condensation constraint force pipeline (funct3d.f + alias.f).
+) -> tuple[Array, Array]:
+    """xmpq-weighted, parity-masked coefficient stacks for the rcon/zcon synthesis.
 
-    1. Synthesize ``rcon/zcon``: the real-space image of the ``xmpq(m,1) =
-       m*(m-1)``-weighted R/Z coefficients (physical-signed internal
-       normalization, same input convention as
-       :func:`vmex.core.geometry.real_space_geometry`), assembled as
-       ``X_even + sqrt(s) * X_odd_internal`` with the ``jmin1`` axis rules.
-    2. Baselines: ``rcon0/zcon0`` default to the edge profile scaled by ``s``
-       (``funct3d.f`` fixed-boundary initialization ``rcon0 = s * rcon(ns)``);
-       pass persisted arrays to keep VMEC's caching/free-boundary 0.9-ramp
-       semantics (that ramp lives in the solver).
-    3. ``ztemp = (rcon - rcon0)*ru0 + (zcon - zcon0)*zu0`` with the physical
-       full-mesh theta derivatives ``ru0/zu0``.
-    4. ``gcon`` via :func:`alias_constraint_force` with ``tcon(js)`` scaling.
+    The six value-only channels ``(R_even, Z_even, R_m1, R_odd_rest, Z_m1,
+    Z_odd_rest)`` that :func:`constraint_force` synthesizes, in exactly that
+    order; also the fused side-channel input of
+    :func:`vmex.core.geometry.real_space_geometry_with_constraint`.
 
-    Returns ``(gcon, rcon, zcon, rcon0, zcon0)``.
+    Bit-parity pin: the ``xmpq(m,1) = m*(m-1)`` weight multiplies the
+    COEFFICIENTS (this exact ``X * xmpq1 * mask`` association), not the trig
+    basis as VMEC2000's ``totzsps`` accumulation does
+    (``totzsp_mod.f:178-193``) — algebraically identical, not bit-identical.
+    Inputs are the physical-signed VMEC-internal R/Z coefficients, the same
+    convention :func:`vmex.core.geometry.real_space_geometry` consumes.
+    Returns ``(coeff_cos, coeff_sin)``, each ``(6, ns, mnmax)``.
     """
-    s = jnp.asarray(s)
     R_cos = jnp.asarray(R_cos)
     R_sin = jnp.asarray(R_sin)
     Z_cos = jnp.asarray(Z_cos)
@@ -684,17 +674,67 @@ def constraint_force(
         ],
         axis=0,
     )
-    synthesize = _fourier_to_real_fft if use_fft else fourier_to_real
-    (value,) = synthesize(
-        coeff_cos,
-        coeff_sin,
-        modes=modes,
-        trig=trig,
-        derivatives=("value",),
-        internal_coeffs=True,
-        odd_m_sqrt_s=False,
-    )
-    rcon_even, zcon_even, rcon_m1, rcon_rest, zcon_m1, zcon_rest = value
+    return coeff_cos, coeff_sin
+
+
+def constraint_force(
+    *,
+    R_cos: Array,
+    R_sin: Array,
+    Z_cos: Array,
+    Z_sin: Array,
+    geometry: RealSpaceGeometry,
+    modes: ModeTable,
+    trig: TrigTables,
+    s: Array,
+    tcon: Array,
+    signgs: int,
+    rcon0: Array | None = None,
+    zcon0: Array | None = None,
+    use_fft: bool = False,
+    con_value: Array | None = None,
+) -> tuple[Array, Array, Array, Array, Array]:
+    """Spectral-condensation constraint force pipeline (funct3d.f + alias.f).
+
+    1. Synthesize ``rcon/zcon``: the real-space image of the ``xmpq(m,1) =
+       m*(m-1)``-weighted R/Z coefficients (physical-signed internal
+       normalization, same input convention as
+       :func:`vmex.core.geometry.real_space_geometry`), assembled as
+       ``X_even + sqrt(s) * X_odd_internal`` with the ``jmin1`` axis rules.
+    2. Baselines: ``rcon0/zcon0`` default to the edge profile scaled by ``s``
+       (``funct3d.f`` fixed-boundary initialization ``rcon0 = s * rcon(ns)``);
+       pass persisted arrays to keep VMEC's caching/free-boundary 0.9-ramp
+       semantics (that ramp lives in the solver).
+    3. ``ztemp = (rcon - rcon0)*ru0 + (zcon - zcon0)*zu0`` with the physical
+       full-mesh theta derivatives ``ru0/zu0``.
+    4. ``gcon`` via :func:`alias_constraint_force` with ``tcon(js)`` scaling.
+
+    ``con_value`` optionally supplies step 1's six synthesized channels
+    ``(6, ns, ntheta3, nzeta)`` from the main geometry pass
+    (:func:`vmex.core.geometry.real_space_geometry_with_constraint` fed by
+    :func:`constraint_synthesis_coefficients` — bit-identical rows, one less
+    full synthesis per iteration); it must correspond to the SAME state as
+    ``geometry``, which this function cannot verify.
+
+    Returns ``(gcon, rcon, zcon, rcon0, zcon0)``.
+    """
+    s = jnp.asarray(s)
+    m = np.asarray(modes.m, dtype=int)
+    if con_value is None:
+        coeff_cos, coeff_sin = constraint_synthesis_coefficients(
+            R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin, modes=modes
+        )
+        synthesize = _fourier_to_real_fft if use_fft else fourier_to_real
+        (con_value,) = synthesize(
+            coeff_cos,
+            coeff_sin,
+            modes=modes,
+            trig=trig,
+            derivatives=("value",),
+            internal_coeffs=True,
+            odd_m_sqrt_s=False,
+        )
+    rcon_even, zcon_even, rcon_m1, rcon_rest, zcon_m1, zcon_rest = con_value
 
     sqrt_s = jnp.sqrt(jnp.maximum(s, 0.0))[:, None, None]
     rcon = rcon_even + sqrt_s * _internal_odd_channel(rcon_m1, rcon_rest, s)
@@ -750,6 +790,7 @@ def mhd_forces(
     rcon0: Array | None = None,
     zcon0: Array | None = None,
     use_fft: bool = False,
+    con_value: Array | None = None,
 ) -> RealSpaceForces:
     """Assemble all real-space force kernels (funct3d.f force stage).
 
@@ -767,6 +808,9 @@ def mhd_forces(
     constraint of ``residue.f90`` already undone — see
     :func:`vmex.core.residuals.m1_constrained_to_physical`).  Passing
     ``tcon = 0`` disables the constraint force without retracing.
+    ``con_value`` optionally carries the rcon/zcon synthesis already fused
+    into the main geometry pass (see :func:`constraint_force`); it must
+    correspond to the same state as ``geometry``.
     """
     lthreed = bool(np.any(np.asarray(modes.n) != 0))
     (
@@ -790,6 +834,7 @@ def mhd_forces(
         rcon0=rcon0,
         zcon0=zcon0,
         use_fft=use_fft,
+        con_value=con_value,
     )
 
     s = jnp.asarray(s)

@@ -145,11 +145,15 @@ from .fields import (
     preconditioned_force_norm, radial_force_balance_error,
 )
 from .forces import (
-    apply_m1_force_balance, constraint_force, mhd_forces,
+    apply_m1_force_balance, constraint_force,
+    constraint_synthesis_coefficients, mhd_forces,
     spectral_mhd_forces,
 )
 from .fourier import ModeTable, Resolution, TrigTables, mode_table, trig_tables
-from .geometry import apply_lambda_axis_closure, half_mesh_jacobian, real_space_geometry
+from .geometry import (
+    apply_lambda_axis_closure, half_mesh_jacobian, real_space_geometry,
+    real_space_geometry_with_constraint,
+)
 from .input import VmecInput
 from .preconditioner import (
     RadialPreconditionerCoefficients, TridiagonalMatrices,
@@ -573,21 +577,38 @@ def _physical_coefficients(state: SpectralState, *, modes, lthreed, lasym, lconm
 
 
 def _geometry(
-    state: SpectralState, rt: SolverRuntime, *, use_fft: bool = False
+    state: SpectralState, rt: SolverRuntime, *, use_fft: bool = False,
+    with_constraint: bool = False,
 ):
-    """Constrained state -> physical coefficients + real-space geometry."""
+    """Constrained state -> physical coefficients + real-space geometry.
+
+    ``with_constraint=True`` fuses the rcon/zcon constraint synthesis into
+    the same batched pass (VMEC2000/VMEC++ compute them inside the one
+    ``totzsps`` call) and returns a third element: the ``(6, ns, ntheta3,
+    nzeta)`` channel stack :func:`vmex.core.forces.constraint_force` consumes
+    as ``con_value`` — bit-identical to the second synthesis it replaces.
+    """
     setup = rt.setup
     R_cos, R_sin, Z_cos, Z_sin = _physical_coefficients(
         state, modes=rt.modes, lthreed=setup.lthreed, lasym=setup.lasym,
         lconm1=setup.lconm1,
     )
     lambda_sin = apply_lambda_axis_closure(state.L_sin, modes=rt.modes, ntor=rt.resolution.ntor)
-    geometry = real_space_geometry(
+    common = dict(
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         lambda_cos=state.L_cos, lambda_sin=lambda_sin,
         modes=rt.modes, trig=rt.trig, s=setup.s_full, use_fft=use_fft,
         odd_m_scaling=setup.scalxc,
     )
+    if with_constraint:
+        con_cos, con_sin = constraint_synthesis_coefficients(
+            R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin, modes=rt.modes,
+        )
+        geometry, con_value = real_space_geometry_with_constraint(
+            **common, constraint_cos=con_cos, constraint_sin=con_sin,
+        )
+        return (R_cos, R_sin, Z_cos, Z_sin), geometry, con_value
+    geometry = real_space_geometry(**common)
     return (R_cos, R_sin, Z_cos, Z_sin), geometry
 
 
@@ -778,8 +799,8 @@ def _constraint_baselines(
     per stage — :func:`prepare_runtime` and the ``iter2 == iter1`` rebind),
     a measurable share of every cold CLI start.
     """
-    (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(
-        state, rt, use_fft=use_fft
+    (R_cos, R_sin, Z_cos, Z_sin), geometry, con_value = _geometry(
+        state, rt, use_fft=use_fft, with_constraint=True
     )
     ns = int(rt.setup.s_full.shape[0])
     _, _, _, rcon0, zcon0 = constraint_force(
@@ -788,6 +809,7 @@ def _constraint_baselines(
         tcon=jnp.zeros((ns,), dtype=rt.setup.s_full.dtype),
         signgs=rt.setup.signgs,
         use_fft=use_fft,
+        con_value=con_value,
     )
     return rcon0, zcon0
 
@@ -849,6 +871,7 @@ def _force_pipeline(
     iteration: Array, fsqz_previous: Array,
     collect_health: bool = False,
     use_fft: bool = False,
+    con_value: Array | None = None,
 ) -> tuple[Any, Any, ForcePipelineHealth]:
     """MHD forces -> residue.f90 chain -> scalfor/faclam preconditioning.
 
@@ -872,7 +895,7 @@ def _force_pipeline(
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         modes=rt.modes, trig=rt.trig, s=s, phipf=setup.phipf,
         tcon=cache.tcon, signgs=setup.signgs, rcon0=rt.rcon0, zcon0=rt.zcon0,
-        use_fft=use_fft,
+        use_fft=use_fft, con_value=con_value,
     )
     if rt.lfreeb:
         # forces.f (ivac >= 1): vacuum-pressure edge force.  funct3d.f builds
@@ -971,7 +994,9 @@ def _preconditioned_force_signed(
     """
     setup = rt.setup
     s = setup.s_full
-    (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(state, rt)
+    (R_cos, R_sin, Z_cos, Z_sin), geometry, con_value = _geometry(
+        state, rt, with_constraint=True
+    )
     jacobian = half_mesh_jacobian(geometry, s=s)
     metrics = metric_elements(geometry, s=s)
     fields = magnetic_fields(
@@ -984,6 +1009,7 @@ def _preconditioned_force_signed(
         geometry=geometry, jacobian=jacobian, metrics=metrics, fields=fields,
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         cache=cache, rt=rt, iteration=iteration, fsqz_previous=fsqz_previous,
+        con_value=con_value,
     )
     return _force_to_state(preconditioned, rt)
 
@@ -1066,9 +1092,10 @@ def _evaluate(
     discards results, while the cache refresh is suppressed exactly.
 
     ``synthesis`` optionally supplies the pass's already-computed
-    ``((R_cos, R_sin, Z_cos, Z_sin), geometry, jacobian)`` for ``state``
-    (funct3d.f computes them ONCE per pass and shares them with the vacuum
-    gate).  It must have been produced by the same ``_geometry``/
+    ``((R_cos, R_sin, Z_cos, Z_sin), geometry, jacobian, con_value)`` for
+    ``state`` (funct3d.f computes them ONCE per pass and shares them with the
+    vacuum gate; ``con_value`` is the fused rcon/zcon synthesis).  It must
+    have been produced by the same ``_geometry(with_constraint=True)``/
     ``half_mesh_jacobian`` calls this function would make — the traced
     free-boundary lane hoists exactly those, so results are bit-identical.
     """
@@ -1079,12 +1106,12 @@ def _evaluate(
     hs = setup.hs
 
     if synthesis is None:
-        (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(
-            state, rt, use_fft=use_fft
+        (R_cos, R_sin, Z_cos, Z_sin), geometry, con_value = _geometry(
+            state, rt, use_fft=use_fft, with_constraint=True
         )
         jacobian = half_mesh_jacobian(geometry, s=s)
     else:
-        (R_cos, R_sin, Z_cos, Z_sin), geometry, jacobian = synthesis
+        (R_cos, R_sin, Z_cos, Z_sin), geometry, jacobian, con_value = synthesis
     jac_changed = jacobian.jacobian_sign_changed
 
     metrics = metric_elements(geometry, s=s)
@@ -1205,7 +1232,7 @@ def _evaluate(
         geometry=geometry, jacobian=jacobian, metrics=metrics, fields=fields,
         R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
         cache=cache, rt=rt, iteration=iteration, fsqz_previous=fsqz_previous,
-        collect_health=collect_health, use_fft=use_fft,
+        collect_health=collect_health, use_fft=use_fft, con_value=con_value,
     )
     if rt.lfreeb:
         # residue.f90 medge rule: the edge rows join fsqr/fsqz only when
@@ -1384,8 +1411,9 @@ def _make_body(
     (the restored best state).  Normal iterations leave it as ``None``.
 
     ``evaluation_synthesis`` optionally hands the first funct3d pass its
-    already-computed ``((R_cos, R_sin, Z_cos, Z_sin), geometry, jacobian)``
-    (the ``_evaluate`` ``synthesis`` seam) — the free-boundary steady lane
+    already-computed ``((R_cos, R_sin, Z_cos, Z_sin), geometry, jacobian,
+    con_value)`` (the ``_evaluate`` ``synthesis`` seam) — the free-boundary
+    steady lane
     synthesizes geometry once per pass, feeds its Jacobian sign to the
     vacuum-source gate, and reuses it here, exactly as ``funct3d.f`` computes
     the Jacobian ONCE before ``bcovar``/IVAC0 and shares it with the force
