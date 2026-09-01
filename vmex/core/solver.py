@@ -1298,6 +1298,23 @@ def _evaluate(
     )
 
 
+@functools.partial(jax.jit, static_argnames="collect_health")
+def _evaluate_lane(
+    state: SpectralState, cache: PreconditionerCache, iteration: Array,
+    iter_last_reset: Array, fsqz_previous: Array, rt: SolverRuntime,
+    *, collect_health: bool = False,
+) -> _EvalResult:
+    """One public funct3d pass as one XLA program (:func:`evaluate_forces`).
+
+    Module-level ``jax.jit`` keyed structurally on ``rt`` exactly like
+    :func:`_while_lane`: eager, every :func:`evaluate_forces` call dispatched
+    the whole funct3d chain op-by-op (the implicit/free-boundary drivers call
+    it once per outer step).
+    """
+    return _evaluate(state, cache, iteration, iter_last_reset, fsqz_previous,
+                     rt, collect_health=collect_health)
+
+
 def evaluate_forces(
     state: SpectralState,
     runtime: SolverRuntime,
@@ -1317,7 +1334,7 @@ def evaluate_forces(
     if cache is None:
         cache = _zero_cache(runtime)
         iter_last_reset = iteration  # force refresh
-    result = _evaluate(
+    result = _evaluate_lane(
         state, cache, jnp.asarray(iteration), jnp.asarray(iter_last_reset),
         jnp.asarray(fsqz_previous), runtime, collect_health=True,
     )
