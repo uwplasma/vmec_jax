@@ -49,11 +49,9 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from .fields import energies_and_force_norms, magnetic_fields, metric_elements
 from .fourier import Resolution, mode_table, trig_tables
-from .geometry import half_mesh_jacobian
 from .residuals import m1_constrained_to_physical
-from .solver import SolverRuntime, SpectralState, _geometry
+from .solver import SolverRuntime, SpectralState, _field_chain_lane
 from .transforms import physical_to_internal_scale
 
 Array = Any
@@ -112,23 +110,14 @@ def _mode_matrix(wout, name: str, *, ns: int, mn: int, optional: bool = False) -
 
 
 def _field_chain(state: SpectralState, rt: SolverRuntime):
-    """Geometry -> Jacobian -> metric -> fields -> energies of a core state."""
-    setup = rt.setup
-    s = setup.s_full
-    _, geometry = _geometry(state, rt)
-    jacobian = half_mesh_jacobian(geometry, s=s)
-    metrics = metric_elements(geometry, s=s)
-    fields = magnetic_fields(
-        geometry=geometry, jacobian=jacobian, metrics=metrics, trig=rt.trig,
-        s=s, phips=setup.phips, phipf=setup.phipf, chips=setup.chips,
-        signgs=setup.signgs, gamma=rt.gamma, mass=setup.mass,
-        ncurr=setup.ncurr, enclosed_current=setup.icurv,
-    )
-    energies = energies_and_force_norms(
-        jacobian=jacobian, metrics=metrics, fields=fields, trig=rt.trig,
-        s=s, signgs=setup.signgs,
-    )
-    return geometry, jacobian, metrics, fields, energies
+    """Geometry -> Jacobian -> metric -> fields -> energies of a core state.
+
+    Delegates to the module-level jitted :func:`vmex.core.solver.
+    _field_chain_lane` (one XLA program instead of hundreds of eager
+    dispatches); jit is AD-transparent, so traced/differentiated callers see
+    the same chain.
+    """
+    return _field_chain_lane(state, rt)
 
 
 def _iotas_half_from_fields(setup, fields) -> jnp.ndarray:

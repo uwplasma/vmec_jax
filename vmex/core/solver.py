@@ -791,6 +791,35 @@ def _constraint_baselines(
     return rcon0, zcon0
 
 
+@jax.jit
+def _field_chain_lane(state: SpectralState, rt: SolverRuntime):
+    """Geometry -> Jacobian -> metrics -> fields -> energies, one XLA program.
+
+    The shared state -> field-state evaluation chain behind
+    :func:`_result_from_carry`'s ncurr=1 iota reconstruction and every
+    :mod:`~vmex.core.statephysics` derived quantity.  Module-level ``jax.jit``
+    keyed structurally on ``rt`` exactly like :func:`_while_lane`: eager,
+    each pass dispatches hundreds of single-op XLA programs (once per solved
+    result, and repeatedly under the objective modules).
+    """
+    setup = rt.setup
+    s = setup.s_full
+    _, geometry = _geometry(state, rt)
+    jacobian = half_mesh_jacobian(geometry, s=s)
+    metrics = metric_elements(geometry, s=s)
+    fields = magnetic_fields(
+        geometry=geometry, jacobian=jacobian, metrics=metrics, trig=rt.trig,
+        s=s, phips=setup.phips, phipf=setup.phipf, chips=setup.chips,
+        signgs=setup.signgs, gamma=rt.gamma, mass=setup.mass,
+        ncurr=setup.ncurr, enclosed_current=setup.icurv,
+    )
+    energies = energies_and_force_norms(
+        jacobian=jacobian, metrics=metrics, fields=fields, trig=rt.trig,
+        s=s, signgs=setup.signgs,
+    )
+    return geometry, jacobian, metrics, fields, energies
+
+
 def _zero_cache(rt: SolverRuntime) -> PreconditionerCache:
     """Zero-filled cache (shapes only; iteration 1 always refreshes it)."""
     res = rt.resolution
@@ -1686,15 +1715,7 @@ def _result_from_carry(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
     # iotaf (add_fluxes.f90): prescribed profile for ncurr = 0; reconstructed
     # from the converged current-constrained chips for ncurr = 1.
     if int(setup.ncurr) == 1:
-        _, geometry = _geometry(carry.state, rt)
-        jacobian = half_mesh_jacobian(geometry, s=setup.s_full)
-        metrics = metric_elements(geometry, s=setup.s_full)
-        fields = magnetic_fields(
-            geometry=geometry, jacobian=jacobian, metrics=metrics, trig=rt.trig,
-            s=setup.s_full, phips=setup.phips, phipf=setup.phipf,
-            chips=setup.chips, signgs=setup.signgs, gamma=rt.gamma,
-            mass=setup.mass, ncurr=setup.ncurr, enclosed_current=setup.icurv,
-        )
+        _, _, _, fields, _ = _field_chain_lane(carry.state, rt)
         chips = np.asarray(fields.chips)
         phips = np.asarray(setup.phips)
         iotas = np.divide(chips, phips, out=np.zeros_like(chips), where=phips != 0.0)
