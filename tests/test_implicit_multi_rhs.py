@@ -144,6 +144,18 @@ def test_block_response_forward_transpose_and_fd():
     ):
         np.testing.assert_allclose(got, expected, rtol=2e-8, atol=2e-10)
 
+    # Opt-in "auto" resolves both chunk sizes from measured memory and the
+    # operand avals; the pullback itself must match the default within the
+    # same batched-reduction tolerance as the block path above.
+    audited = im.implicit_state_pullback_multi_rhs(
+        p0, cfg, state, mask, cotangents,
+        probe_chunk_size="auto", response_chunk_size="auto",
+    )
+    for got, expected in zip(
+        jax.tree.leaves(audited), jax.tree.leaves(reference)
+    ):
+        np.testing.assert_allclose(got, expected, rtol=2e-8, atol=2e-10)
+
     for i, (tangent, step) in enumerate(zip(tangents, (3e-5, 1e-4))):
         directional = jax.jvp(
             lambda x, p: im.aspect_ratio(x, im.runtime_from_params(p, cfg)),
@@ -286,3 +298,38 @@ def test_raw_block_apply_requires_stored_factors():
         row_scale=jnp.ones((1, 1)), column_scale=jnp.ones((1, 1)))
     with pytest.raises(ValueError, match="raw block factors"):
         im._raw_block_apply(system, jnp.zeros((1, 1)))
+
+
+def test_measured_chunk_size_follows_the_memory_budget(monkeypatch):
+    """``"auto"`` = measured available memory over exact per-column bytes.
+
+    The budget regime is solvax's "largest chunk that fits":
+    ``memory_fraction * available // per_column_bytes`` clamped to
+    ``[1, dim]``; without a measurement the square-root heuristic bounds
+    the chunk instead of guessing a budget.
+    """
+    monkeypatch.setattr(im, "_measured_memory_bytes", lambda device=None: 1000)
+    assert im.measured_chunk_size(64, 100) == 5  # 0.5 * 1000 // 100
+    assert im.measured_chunk_size(3, 100) == 3  # clamped to dim
+    assert im.measured_chunk_size(64, 10**9) == 1  # never below one column
+    monkeypatch.setattr(im, "_measured_memory_bytes", lambda device=None: None)
+    assert im.measured_chunk_size(64, 100) == 8  # ceil(sqrt(64)) fallback
+
+
+def test_chunk_size_resolver_accepts_auto_and_rejects_other_strings():
+    resolved = im._resolve_chunk_size(
+        "auto", name="probe_chunk_size", dim=17, per_column_bytes=1 << 20)
+    assert isinstance(resolved, int) and 1 <= resolved <= 17
+    assert im._resolve_chunk_size(
+        4, name="probe_chunk_size", dim=17, per_column_bytes=1) == 4
+    with pytest.raises(ValueError, match="response_chunk_size"):
+        im._resolve_chunk_size(
+            "wide", name="response_chunk_size", dim=17, per_column_bytes=1)
+    with pytest.raises(ValueError, match="probe_chunk_size"):
+        im._resolve_chunk_size(
+            0, name="probe_chunk_size", dim=17, per_column_bytes=1)
+
+
+def test_tree_bytes_is_exact_from_shapes():
+    tree = {"a": jnp.zeros((3, 4)), "b": np.zeros(5, dtype=np.float32)}
+    assert im._tree_bytes(tree) == 3 * 4 * 8 + 5 * 4
