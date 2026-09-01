@@ -14,7 +14,7 @@ import pytest
 from vmex.core.fourier import Resolution
 from vmex.core.boozer_tables import high_order_boozer_input_tables
 from vmex.core.input import VmecInput
-from vmex.core.omnigenity import boozer_bmnc_high_order
+from vmex.core.omnigenity import boozer_spectrum_high_order
 from vmex.core.profiles import MU0
 from vmex.core.radial_basis import BSplineBasis
 from vmex.core.solver import _initial_state, prepare_runtime, resolution_from_input
@@ -217,7 +217,7 @@ def test_high_order_boozer_handoff_is_exact_and_differentiable():
 
     def objective(scale):
         candidate = replace(state, phipf=scale * state.phipf)
-        boozer = boozer_bmnc_high_order(
+        boozer = boozer_spectrum_high_order(
             candidate,
             surfaces=[0.49],
             mboz=4,

@@ -26,7 +26,7 @@ jax.config.update("jax_enable_x64", True)
 from vmex.core import solver
 from vmex.core.boozer_tables import boozer_input_tables, high_order_boozer_input_tables
 from vmex.core.input import VmecInput
-from vmex.core.omnigenity import boozer_bmnc_high_order, boozer_bmnc_state
+from vmex.core.omnigenity import boozer_spectrum_high_order, boozer_spectrum_state
 from vmex.core.strong_force import lift_high_order_state
 from vmex.core.wout import wout_from_state
 
@@ -362,7 +362,7 @@ def _boozer_range_matches_wout(eq, booz, tolerance=0.1):
 def test_boozer_transform_preserves_the_field_strength_range(symmetric_eq):
     """The Boozer map is a relabelling: |B| extrema on a surface are invariant.
 
-    Re-synthesizing ``|B|`` from ``boozer_bmnc_state`` on a fine Boozer grid
+    Re-synthesizing ``|B|`` from ``boozer_spectrum_state`` on a fine Boozer grid
     must recover the same surface minimum and maximum as the wout tables in
     VMEC angles (booz_xform, Sanchez et al. 2000: the transform changes the
     angle labels, not the field).  ``solovev`` is axisymmetric, so every
@@ -371,7 +371,7 @@ def test_boozer_transform_preserves_the_field_strength_range(symmetric_eq):
     from vmex.core import omnigenity as omn
 
     eq = symmetric_eq
-    booz = omn.boozer_bmnc_state(eq.state, eq.runtime, surfaces=[0.5],
+    booz = omn.boozer_spectrum_state(eq.state, eq.runtime, surfaces=[0.5],
                                  mboz=6, nboz=2)
     _boozer_range_matches_wout(eq, booz)
     # Axisymmetric deck: no toroidal harmonics, and no sine family at all.
@@ -384,7 +384,7 @@ def test_boozer_transform_preserves_the_field_strength_range(symmetric_eq):
 def test_lasym_boozer_transform_preserves_the_field_strength_range(lasym_solved):
     """``LASYM`` states keep the same invariant through the asymmetric route.
 
-    ``boozer_bmnc_state`` routes them through booz_xform_jax's asymmetric
+    ``boozer_spectrum_state`` routes them through booz_xform_jax's asymmetric
     transform, so the surface extrema must still match the wout tables and the
     sine family must carry the deck's actual asymmetry rather than vanish.
     """
@@ -392,7 +392,7 @@ def test_lasym_boozer_transform_preserves_the_field_strength_range(lasym_solved)
     from vmex.core import optimize as opt
 
     eq = lasym_solved
-    booz = omn.boozer_bmnc_state(eq.state, eq.runtime, surfaces=[0.5],
+    booz = omn.boozer_spectrum_state(eq.state, eq.runtime, surfaces=[0.5],
                                  mboz=6, nboz=6)
     row, span = _boozer_range_matches_wout(eq, booz)
     # The sine family is populated at the amplitude the wout engine reports;
@@ -462,8 +462,8 @@ def test_high_order_boozer_matches_live_state_without_file_io(symmetric_eq):
     with pytest.raises(ValueError, match="projection grids"):
         high_order_boozer_input_tables(native_state, np.sqrt(surface), ntheta=1)
     with pytest.raises(ValueError, match="0 < s <= 1"):
-        boozer_bmnc_high_order(native_state, surfaces=[0.0])
-    live = boozer_bmnc_state(
+        boozer_spectrum_high_order(native_state, surfaces=[0.0])
+    live = boozer_spectrum_state(
         eq.state,
         eq.runtime,
         surfaces=[surface],
@@ -471,7 +471,7 @@ def test_high_order_boozer_matches_live_state_without_file_io(symmetric_eq):
         nboz=2,
         oversample=1,
     )
-    native = boozer_bmnc_high_order(
+    native = boozer_spectrum_high_order(
         native_state,
         surfaces=[surface],
         mboz=8,
@@ -565,3 +565,47 @@ def test_refine_booz_grids_is_the_identity_at_oversample_one():
     same_constants, same_grids = _refine_booz_grids(constants, grids, 1, 3)
     assert same_constants is constants
     assert same_grids is grids
+
+
+@pytest.mark.parametrize("asym", [False, True])
+def test_refine_booz_grids_preserves_the_parity_grid_layout(asym):
+    """Refinement keeps booz_xform's own theta-domain convention.
+
+    The stellarator-symmetric quadrature spans theta in ``[0, pi]`` only
+    (``nu2_b`` rows; the kernel half-weights the boundary rows and reads its
+    normalization off ``nu2_b``), while the asymmetric quadrature spans the
+    full circle (``ntheta`` rows).  A refinement that rebuilt the full
+    circle for a symmetric run would hand the kernel twice the domain it
+    normalizes for and corrupt every spectrum, so pin the layout per parity.
+    """
+    pytest.importorskip("booz_xform_jax")
+    from booz_xform_jax.jax_api import prepare_booz_xform_constants
+
+    from vmex.core.omnigenity import _refine_booz_grids
+
+    nfp, mboz, nboz, factor = 3, 4, 3, 2
+    m = np.arange(5)
+    constants, grids = prepare_booz_xform_constants(
+        nfp=nfp, mboz=mboz, nboz=nboz, asym=asym, xm=m, xn=0 * m,
+        xm_nyq=m, xn_nyq=0 * m)
+    fine_c, fine_g = _refine_booz_grids(constants, grids, factor, nfp)
+
+    ntheta = factor * int(constants.ntheta)
+    nzeta = factor * int(constants.nzeta)
+    assert int(fine_c.ntheta) == ntheta
+    assert int(fine_c.nzeta) == nzeta
+    assert int(fine_c.nu2_b) == ntheta // 2 + 1
+    rows = ntheta if asym else ntheta // 2 + 1
+    theta = np.asarray(fine_g.theta_grid)
+    zeta = np.asarray(fine_g.zeta_grid)
+    assert theta.shape == zeta.shape == (rows * nzeta,)
+    # Same flattened layout and spacing the kernel's boundary-row indexing
+    # (idx_theta0/idx_thetapi) and Fourier normalization assume.
+    assert theta[-1] == pytest.approx(
+        2.0 * np.pi * (rows - 1) / ntheta)
+    assert np.max(theta) == pytest.approx(np.pi if not asym else
+                                          2.0 * np.pi * (ntheta - 1) / ntheta)
+    assert np.max(zeta) == pytest.approx(2.0 * np.pi * (nzeta - 1) / (nzeta * nfp))
+    coarse_rows = int(constants.ntheta) if asym else int(constants.nu2_b)
+    assert np.allclose(np.asarray(grids.theta_grid).reshape(coarse_rows, -1)[:, 0],
+                       theta.reshape(rows, -1)[::factor, 0][:coarse_rows])

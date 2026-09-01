@@ -9,7 +9,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from .bounce import bounce_action, bounce_action_from_boozer
-from .omnigenity import boozer_bmnc_state
+from .omnigenity import boozer_spectrum_state
 from .optimize import quasi_isodynamic_residual
 from .qi import j_invariant_qi_residual_from_boozer
 from .statephysics import _as_1d
@@ -168,7 +168,7 @@ def common_trapped_pitches_state(
     every surface and field-line label; this prevents radial maximum-J
     comparisons from silently changing the particle population.
     """
-    booz = boozer_bmnc_state(
+    booz = boozer_spectrum_state(
         state, rt, surfaces=surfaces, mboz=mboz, nboz=nboz)
     dtype = jnp.asarray(booz["bmnc_b"]).dtype
     alpha = jnp.asarray(2.0 * np.pi * np.arange(int(nalpha)) / int(nalpha), dtype=dtype)
@@ -370,7 +370,7 @@ def qi_and_maximum_j_from_boozer(
     """Evaluate the J-invariance and maximum-J residuals from one Boozer pass.
 
     :class:`~vmex.core.qi.JInvariantQIResidual` and :class:`MaximumJResidual`
-    each run their own :func:`~vmex.core.omnigenity.boozer_bmnc_state`
+    each run their own :func:`~vmex.core.omnigenity.boozer_spectrum_state`
     transform — the dominant cost when both objectives share the same
     surfaces and physical pitch (the usual campaign layout).  This helper
     runs the transform once and feeds both functional layers.
@@ -382,7 +382,7 @@ def qi_and_maximum_j_from_boozer(
     Returns ``{"boozer", "qi", "maximum_j"}``; the two residual entries are
     identical to the corresponding independent class evaluations.
     """
-    booz = boozer_bmnc_state(
+    booz = boozer_spectrum_state(
         state, rt, surfaces=surfaces, mboz=int(mboz), nboz=int(nboz),
         oversample=int(oversample))
     common = dict(
@@ -485,7 +485,7 @@ class ConstructedMaximumJResidual:
 
     def compute_state(self, state, rt):
         """Return constructed-field actions and radial-slope diagnostics."""
-        booz = boozer_bmnc_state(
+        booz = boozer_spectrum_state(
             state, rt, surfaces=self.surfaces, mboz=self.mboz,
             nboz=self.nboz, oversample=self.oversample)
         out = constructed_maximum_j_residual_from_boozer(
@@ -538,7 +538,7 @@ class MaximumJResidual:
 
     def compute_state(self, state, rt):
         """Return maximum-J residuals, actions, matches, and flux slopes."""
-        booz = boozer_bmnc_state(
+        booz = boozer_spectrum_state(
             state, rt, surfaces=self.surfaces, mboz=self.mboz,
             nboz=self.nboz, oversample=self.oversample)
         out = maximum_j_residual_from_boozer(

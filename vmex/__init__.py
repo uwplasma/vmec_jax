@@ -166,6 +166,11 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
         ".core.strong_force", "evaluate_high_order_fields"),
     "evaluate_high_order_surface": (
         ".core.strong_force", "evaluate_high_order_surface"),
+    "boozer_spectrum_high_order": (
+        ".core.omnigenity", "boozer_spectrum_high_order"),
+    "boozer_spectrum_state": (
+        ".core.omnigenity", "boozer_spectrum_state"),
+    # deprecated alias (warns on call, dispatches to the canonical name)
     "boozer_bmnc_high_order": (
         ".core.omnigenity", "boozer_bmnc_high_order"),
     "evaluate_strong_force": (".core.strong_force", "evaluate_strong_force"),

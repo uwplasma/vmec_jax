@@ -268,7 +268,7 @@ def test_constructed_class_matches_functional_layer(monkeypatch):
     """ConstructedQIResidual is exactly the validated functional layer."""
     booz = dict(FIELD_QI, G_b=jnp.asarray([2.0]), I_b=jnp.asarray([0.0]),
                 s_b=jnp.asarray([0.5]))
-    monkeypatch.setattr(qi_mod, "boozer_bmnc_state", lambda *a, **k: booz)
+    monkeypatch.setattr(qi_mod, "boozer_spectrum_state", lambda *a, **k: booz)
     term = qi_mod.ConstructedQIResidual(
         [0.5], nphi=NPHI, nalpha=NALPHA, n_bounce=NBOUNCE)
     eq = SimpleNamespace(state=object(), runtime=object())

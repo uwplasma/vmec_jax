@@ -1,7 +1,7 @@
 """Validation gates for the traceable omnigenity/QI objective (R26h.h2).
 
 - **Transform parity**: the traceable Boozer ``|B|`` spectrum
-  (:func:`vmex.core.omnigenity.boozer_bmnc_state`) matches the host
+  (:func:`vmex.core.omnigenity.boozer_spectrum_state`) matches the host
   booz_xform_jax route (:func:`vmex.core.optimize.boozer_modes_from_wout`)
   mode-by-mode on a converged 3D deck.
 - **Physics**: the residual is exactly zero on an analytic QI (pure-QP)
@@ -86,26 +86,47 @@ def test_half_mesh_midpoint_tie_selects_lower_surface(monkeypatch):
     with pytest.raises(ValueError, match="surfaces must be non-empty"):
         omn._nearest_half_mesh_rows(31, [])
 
-    class GeometryReached(RuntimeError):
+    class TablesReached(RuntimeError):
         pass
 
-    def stop_at_geometry(*_):
-        raise GeometryReached
+    def stop_at_tables(*_):
+        raise TablesReached
 
-    monkeypatch.setattr(omn, "_geometry", stop_at_geometry)
+    monkeypatch.setattr(omn, "boozer_input_tables", stop_at_tables)
     runtime = SimpleNamespace(
         setup=SimpleNamespace(lasym=False, s_full=np.linspace(0.0, 1.0, 31)),
         resolution=SimpleNamespace(nfp=2),
     )
-    with pytest.raises(GeometryReached):
-        omn.boozer_bmnc_state(object(), runtime, surfaces=[0.1])
+    with pytest.raises(TablesReached):
+        omn.boozer_spectrum_state(object(), runtime, surfaces=[0.1])
+
+
+def test_deprecated_transform_aliases_warn_and_dispatch(monkeypatch):
+    """The pre-handover names still work: one warning, then the canonical call."""
+    calls = []
+    monkeypatch.setattr(
+        omn, "boozer_spectrum_state",
+        lambda *a, **k: calls.append(("state", a, k)) or {"tag": "state"})
+    monkeypatch.setattr(
+        omn, "boozer_spectrum_high_order",
+        lambda *a, **k: calls.append(("high", a, k)) or {"tag": "high"})
+    with pytest.warns(DeprecationWarning, match="boozer_spectrum_state"):
+        out = omn.boozer_bmnc_state("st", "rt", surfaces=[0.5], mboz=4)
+    assert out == {"tag": "state"}
+    with pytest.warns(DeprecationWarning, match="boozer_spectrum_high_order"):
+        out = omn.boozer_bmnc_high_order("st", surfaces=[0.5], nboz=3)
+    assert out == {"tag": "high"}
+    assert calls == [
+        ("state", ("st", "rt"), {"surfaces": [0.5], "mboz": 4}),
+        ("high", ("st",), {"surfaces": [0.5], "nboz": 3}),
+    ]
 
 
 @pytest.mark.full
 def test_boozer_spectrum_matches_booz_xform(qi_eq):
     pytest.importorskip("booz_xform_jax")
     # 0.53 is not equidistant between half surfaces (0.5 is a snapping tie).
-    trace = omn.boozer_bmnc_state(qi_eq.state, qi_eq.runtime, surfaces=[0.53],
+    trace = omn.boozer_spectrum_state(qi_eq.state, qi_eq.runtime, surfaces=[0.53],
                                   mboz=10, nboz=10, oversample=2)
     host = opt.boozer_modes_from_wout(qi_eq, surfaces=[0.53], mboz=10, nboz=10)
     assert float(trace["iota_b"][0]) == pytest.approx(float(host["iota_b"][0]), rel=1e-8)
@@ -127,10 +148,14 @@ def test_boozer_spectrum_matches_booz_xform(qi_eq):
         bw = lookup.get((m, n))
         if bw is None:
             continue
-        # measured floor between the two discretizations: <= 6.3e-5 * b00
-        assert abs(bt[j] - bw) < 2e-4 * b00, (m, n)
+        # Both routes now run the same booz_xform_jax kernel, so the only
+        # difference left is the table construction (state-native half mesh
+        # vs the wout file's finite-difference averages).  Measured floor on
+        # this deck: 1.7e-6 * b00 absolute, 2.0e-5 relative on dominant
+        # modes; the gates keep ~10x margin.
+        assert abs(bt[j] - bw) < 2e-5 * b00, (m, n)
         if abs(bw) > 1e-2 * b00:  # dominant modes additionally match tightly
-            assert bt[j] == pytest.approx(bw, rel=5e-3), (m, n)
+            assert bt[j] == pytest.approx(bw, rel=3e-4), (m, n)
         checked += 1
     assert checked >= 50  # the comparison actually covered the spectrum
 
@@ -145,7 +170,7 @@ def test_lasym_boozer_spectra_and_qi_derivative(lasym_eq):
     # full Nyquist projection in boozer_input_tables the two routes agree to a
     # measured 1.06e-5 (bmnc_b) / 1.03e-4 (bmns_b) relative L2; the tolerances
     # below keep ~10x margin.
-    trace = omn.boozer_bmnc_state(
+    trace = omn.boozer_spectrum_state(
         lasym_eq.state, lasym_eq.runtime, surfaces=[0.53], mboz=6, nboz=6,
         oversample=1)
     for name, tolerance in (("bmnc_b", 1.1e-4), ("bmns_b", 1.1e-3)):

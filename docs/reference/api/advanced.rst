@@ -110,7 +110,7 @@ one-field-period array view accepted by ESSOS, and
 :func:`vmex.surface_field_data_from_high_order` converts the same analytic
 geometry and edge field for ``virtual_casing_jax``.  Neither path writes a
 ``wout`` file or finite-differences a surface tangent.  Field-aligned
-objectives use :func:`vmex.boozer_bmnc_high_order`, which sends continuous
+objectives use :func:`vmex.boozer_spectrum_high_order`, which sends continuous
 geometry and field tables to BOOZ_XFORM_JAX without reconstructing a sampled
 radial mesh.
 
