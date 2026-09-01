@@ -1782,7 +1782,7 @@ def _emit_lines(rt: SolverRuntime, trajectory: np.ndarray, upto: int,
         printed.add(it)
 
 
-@jax.jit
+@functools.partial(jax.jit, donate_argnums=(0,))
 def _while_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
     """Whole-solve ``lax.while_loop`` lane, keyed structurally on ``rt``.
 
@@ -1790,6 +1790,11 @@ def _while_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
     two DIFFERENT runtimes with equal structure (same meta, same leaf
     shapes/dtypes) — e.g. two boundaries at one :class:`Resolution`, hot
     restarts, optimization iterates — share one XLA executable.
+
+    ``donate_argnums=(0,)``: the sole caller (:func:`_run_loop`,
+    ``mode="jit"``) copies the initial carry to distinct buffers first, so
+    the input carry is dead at the call and XLA aliases the loop carry onto
+    it — same rationale as :func:`_block_lane`, numerically identical.
     """
     body = _make_body(rt)
     return lax.while_loop(lambda c: jnp.logical_not(c.done), body, carry)
@@ -1810,9 +1815,9 @@ def _block_lane(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
     return lax.scan(lambda cc, _: (body(cc), None), carry, None, length=BLOCK_SIZE)[0]
 
 
-@jax.jit
+@functools.partial(jax.jit, donate_argnums=(0,))
 def _while_lane_fft(carry: _LoopCarry, rt: SolverRuntime) -> _LoopCarry:
-    """Whole-solve lane using separable Fourier synthesis."""
+    """Whole-solve lane using separable Fourier synthesis (donated carry)."""
     body = _make_body(rt, use_fft=True)
     return lax.while_loop(lambda c: jnp.logical_not(c.done), body, carry)
 
@@ -1935,6 +1940,11 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
     )
 
     if mode == "jit":
+        # The while lanes donate the carry; _initial_carry aliases some leaves
+        # (xstore=state, shared cache zeros), so copy to distinct buffers —
+        # same rationale as the CLI-lane copy below, values bit-for-bit
+        # unchanged.
+        carry = jax.tree.map(jnp.array, carry)
         return (_while_lane_fft if use_fft else _while_lane)(carry, rt)
 
     if mode != "cli":
