@@ -12,6 +12,13 @@ concurrency:
 env:
   LC_ALL: C.UTF-8
   LANG: C.UTF-8
+  # Runners are ephemeral, so the persistent compilation cache can never pay
+  # for itself here — but it can hang the suite: the floor-0 default writes
+  # every compiled program, each write takes JAX's cross-process eviction
+  # lock, and pytest -n 4 workers on a 2-core runner serialize on it until
+  # the lane hits its timeout (every Fast API / physics / parity lane ran to
+  # exactly its timeout-minutes from 2026-08-31T21:00Z on, on every branch).
+  VMEX_COMPILATION_CACHE: disabled
 
 permissions:
   contents: read
