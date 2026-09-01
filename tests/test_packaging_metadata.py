@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from importlib.metadata import version as package_version
+
+from packaging.requirements import Requirement
 from pathlib import Path
 import sys
 
@@ -57,12 +59,18 @@ def test_project_exposes_vmec_console_aliases() -> None:
 def test_plain_install_includes_plotting_and_qi_dependencies() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
     project_dependencies = set(data["project"]["dependencies"])
+    # Compare parsed requirement NAMES, not raw strings: a version floor on
+    # any dependency (booz_xform_jax>=0.1.1 broke the old string match) must
+    # not trip the plain-install guard.
+    dependency_names = {
+        Requirement(dep).name for dep in project_dependencies
+    }
     optional_dependencies = data.get("project", {}).get("optional-dependencies", {})
 
-    assert "matplotlib" in project_dependencies
-    assert "booz_xform_jax" in project_dependencies
-    assert "packaging" in project_dependencies
-    assert "numpy" in project_dependencies
+    assert "matplotlib" in dependency_names
+    assert "booz_xform_jax" in dependency_names
+    assert "packaging" in dependency_names
+    assert "numpy" in dependency_names
     assert "solvax>=0.20.0" in project_dependencies
     assert "plots" not in optional_dependencies
     assert "plot" not in optional_dependencies
