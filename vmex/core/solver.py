@@ -1952,7 +1952,9 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
             AXIS_REGUESS_FLAG, BAD_JACOBIAN_FLAG,
         )
         if verbose and not retry_transfer:
-            trajectory = np.asarray(carry.trajectory[:max(upto, 0)])
+            # Transfer, then slice: slicing on device compiles one XLA
+            # program per distinct ``upto`` (~190 over a QA_lowres ladder).
+            trajectory = np.asarray(carry.trajectory)[:max(upto, 0)]
             _emit_lines(rt, trajectory, upto, printed, done, emit)
         if done:
             break
