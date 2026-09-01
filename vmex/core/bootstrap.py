@@ -48,6 +48,7 @@ re-exports them for backward compatibility.
 from __future__ import annotations
 
 import dataclasses
+import functools
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -399,6 +400,24 @@ def _trapped_fraction_from_fields(
         )
         return tuple(x[:, 0] for x in result)
     return compute_trapped_fraction(modB, sqrtg, n_lambda=n_lambda)
+
+
+@functools.partial(jax.jit, static_argnames=("lasym", "n_lambda"))
+def _trapped_fraction_export_lane(
+    *, total_pressure, pressure, sqrt_g, s_full, lasym: bool, n_lambda: int
+):
+    """WOUT-export trapped fraction f_t(s) on the full mesh, one XLA program.
+
+    Module-level ``jax.jit``: eager, the interpolation + ``lax.map`` chain
+    dispatches ~150 single-op XLA programs per export (~2 s of every cold
+    CLI run that writes a WOUT file).  ``serial_surfaces=True`` keeps the
+    per-surface pitch-angle grid out of memory at once, as before.
+    """
+    return _trapped_fraction_from_fields(
+        total_pressure=total_pressure, pressure=pressure, sqrt_g=sqrt_g,
+        s_full=s_full, surfaces=s_full, lasym=lasym, n_lambda=n_lambda,
+        serial_surfaces=True,
+    )[-1]
 
 
 def _half_mesh_fields(state: SpectralState, rt: SolverRuntime) -> _HalfMeshFields:

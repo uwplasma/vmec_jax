@@ -765,10 +765,18 @@ def runtime_with_baselines(
     return replace(rt, rcon0=rcon0, zcon0=zcon0)
 
 
+@functools.partial(jax.jit, static_argnames="use_fft")
 def _constraint_baselines(
     state: SpectralState, rt: SolverRuntime, *, use_fft: bool = False
 ):
-    """One-time ``rcon0/zcon0 = s * rcon(ns)`` (funct3d.f, iter2 == iter1)."""
+    """One-time ``rcon0/zcon0 = s * rcon(ns)`` (funct3d.f, iter2 == iter1).
+
+    Module-level ``jax.jit`` lane, keyed structurally on ``rt`` exactly like
+    :func:`_while_lane`: eager, this geometry + constraint-force pass
+    dispatches hundreds of single-op XLA programs per multigrid stage (twice
+    per stage — :func:`prepare_runtime` and the ``iter2 == iter1`` rebind),
+    a measurable share of every cold CLI start.
+    """
     (R_cos, R_sin, Z_cos, Z_sin), geometry = _geometry(
         state, rt, use_fft=use_fft
     )
