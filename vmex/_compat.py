@@ -27,7 +27,7 @@ import os
 import platform
 
 
-_CACHE_FORMAT_VERSION = "2"
+_CACHE_FORMAT_VERSION = "3"
 _CACHE_SIZE_FLOOR = 2 << 30          # 2 GiB
 _CACHE_SIZE_CEILING = 20 << 30       # 20 GiB
 _CACHE_DISK_FRACTION = 0.10
@@ -112,15 +112,59 @@ def _cache_deserialize_unsafe() -> bool:
     return version is None or version < _CACHE_DESERIALIZE_SAFE_JAXLIB
 
 
+_EXT_DIGEST_CHUNK = 1 << 20
+
+
+def _jaxlib_backend_identity() -> list[str]:
+    """Fingerprint parts tied to the jaxlib build that will actually run.
+
+    Distribution metadata can survive an in-place up/downgrade stale or
+    broken — and that is exactly when reusing the old cache is most
+    dangerous: XLA:CPU AOT entries record the target features the compiling
+    backend chose (e.g. ``+prefer-no-gather``), and a different jaxlib's AOT
+    loader rejects them or segfaults.  Record the version constant of the
+    module Python will import, plus a bounded content digest (size, leading
+    and trailing :data:`_EXT_DIGEST_CHUNK` bytes) of the native XLA
+    extension, so any compiler/loader change lands in a fresh cache
+    directory.  ``jaxlib.version`` is pure Python; nothing here loads the
+    native extension.
+    """
+    parts: list[str] = []
+    try:
+        import jaxlib.version
+        parts.append(f"jaxlib-runtime={jaxlib.version.__version__}")
+    except Exception:
+        return parts
+    try:
+        ext_dir = os.path.dirname(jaxlib.__file__ or "")
+        digest = hashlib.sha256()
+        for name in sorted(os.listdir(ext_dir)):
+            if (name.split(".", 1)[0] in ("_jax", "xla_extension")
+                    and name.endswith((".so", ".pyd", ".dylib"))):
+                path = os.path.join(ext_dir, name)
+                size = os.path.getsize(path)
+                digest.update(f"{name}:{size}".encode())
+                with open(path, "rb") as fh:
+                    digest.update(fh.read(_EXT_DIGEST_CHUNK))
+                    fh.seek(max(size - _EXT_DIGEST_CHUNK, _EXT_DIGEST_CHUNK))
+                    digest.update(fh.read(_EXT_DIGEST_CHUNK))
+        parts.append(f"jaxlib-ext={digest.hexdigest()[:16]}")
+    except Exception:
+        pass
+    return parts
+
+
 def _cache_machine_fingerprint() -> str:
     """Return a short cache key for host-specific XLA CPU executables.
 
     XLA CPU persistent-cache entries are native executables.  On shared home
     directories, reusing an entry compiled on another CPU can trigger XLA AOT
     loader errors or even illegal-instruction failures.  The fingerprint keeps
-    vmex's default cache portable by separating entries by OS, machine, and
-    CPU-feature/model signature.  Users who deliberately want a shared cache can
-    still set ``VMEX_COMPILATION_CACHE_DIR`` or ``JAX_COMPILATION_CACHE_DIR``.
+    vmex's default cache portable by separating entries by OS, machine,
+    CPU-feature/model signature, and jaxlib compiler/loader identity
+    (:func:`_jaxlib_backend_identity`).  Users who deliberately want a shared
+    cache can still set ``VMEX_COMPILATION_CACHE_DIR`` or
+    ``JAX_COMPILATION_CACHE_DIR``.
     """
 
     parts = [
@@ -135,6 +179,7 @@ def _cache_machine_fingerprint() -> str:
             parts.append(f"{package}={importlib_metadata.version(package)}")
         except Exception:
             pass
+    parts.extend(_jaxlib_backend_identity())
     try:
         if os.path.exists("/proc/cpuinfo"):
             wanted = ("model name", "cpu family", "model", "stepping", "flags", "Features")

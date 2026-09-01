@@ -11,6 +11,7 @@ Item I.8a dead-code prune — the core is JAX-only.
 from __future__ import annotations
 
 import re
+import sys
 import types
 
 import pytest
@@ -155,6 +156,58 @@ def test_cache_machine_fingerprint_changes_with_jaxlib(monkeypatch):
     selected["jaxlib"] = "0.10.1"
     new = _compat._cache_machine_fingerprint()
     assert old != new
+
+
+def test_cache_machine_fingerprint_tracks_runtime_jaxlib(monkeypatch):
+    """An in-place jaxlib downgrade must move the cache even when the
+    distribution metadata is stale.
+
+    Reproduced hazard: metadata kept reporting one version while the
+    jaxlib actually imported — whose AOT loader rejects the old entries'
+    CPU target features, then segfaults — changed underneath.  The
+    fingerprint must follow the runtime module, not the metadata.
+    """
+    jaxlib_version = pytest.importorskip("jaxlib.version")
+    real_version = _compat.importlib_metadata.version
+
+    def stale(name):
+        return "1.0.0" if name in ("jax", "jaxlib") else real_version(name)
+
+    monkeypatch.setattr(_compat.importlib_metadata, "version", stale)
+    monkeypatch.setattr(jaxlib_version, "__version__", "0.11.1")
+    old = _compat._cache_machine_fingerprint()
+    monkeypatch.setattr(jaxlib_version, "__version__", "0.9.2")
+    new = _compat._cache_machine_fingerprint()
+    assert old != new
+
+
+def test_jaxlib_backend_identity_tracks_native_extension(tmp_path, monkeypatch):
+    """The identity digest follows the native XLA extension's content."""
+    jaxlib = pytest.importorskip("jaxlib")
+    (tmp_path / "__init__.py").write_text("")
+    monkeypatch.setattr(jaxlib, "__file__", str(tmp_path / "__init__.py"))
+    ext = tmp_path / "_jax.so"
+
+    ext.write_bytes(b"one" * 100)
+    first = _compat._jaxlib_backend_identity()
+    ext.write_bytes(b"two" * 100)
+    second = _compat._jaxlib_backend_identity()
+
+    assert any(part.startswith("jaxlib-runtime=") for part in first)
+    assert any(part.startswith("jaxlib-ext=") for part in first)
+    assert first != second
+
+
+def test_jaxlib_backend_identity_degrades_gracefully(monkeypatch):
+    """Failures drop fingerprint parts; they never raise into the caller."""
+    jaxlib = pytest.importorskip("jaxlib")
+    # An unreadable package path drops only the extension digest.
+    monkeypatch.setattr(jaxlib, "__file__", None)
+    parts = _compat._jaxlib_backend_identity()
+    assert parts and all(part.startswith("jaxlib-runtime=") for part in parts)
+    # An unimportable jaxlib.version yields no parts at all.
+    monkeypatch.setitem(sys.modules, "jaxlib.version", None)
+    assert _compat._jaxlib_backend_identity() == []
 
 
 class _FakeConfig:
