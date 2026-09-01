@@ -165,6 +165,13 @@ def _boozer_kernel_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
     stack = lambda name: jnp.stack([table[name] for table in tables])  # noqa: E731
     first = tables[0]
     xm, xn = np.asarray(first["xm"]), np.asarray(first["xn"])
+    # An axisymmetric state (no toroidal input harmonics) has exactly no
+    # n != 0 Boozer content -- the Boozer relabelling of an axisymmetric
+    # field is axisymmetric -- so drop the toroidal band outright.  This
+    # keeps the historical mode-list contract (tokamak decks return no
+    # toroidal harmonics) and skips the dead quadrature.
+    if not np.any(xn):
+        nboz = 0
     # booz_xform's convenience wrapper prepares shape constants with Python
     # integer conversions. Do that work at trace time, then call its fully
     # jittable kernel so the objectives remain differentiable under JVP.
