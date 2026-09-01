@@ -1170,6 +1170,8 @@ def test_public_problem_factory_validation():
         opt.make_problem(inp, objective_terms=term, jacobian_batch_size=0)
     with pytest.raises(ValueError, match="max_fsq_ratio"):
         opt.make_problem(inp, objective_terms=term, max_fsq_ratio=0.0)
+    with pytest.raises(ValueError, match="refine_tol"):
+        opt.make_problem(inp, objective_terms=term, refine_tol=np.nan)
     with pytest.raises(ValueError, match="forward_ftol"):
         opt.make_problem(inp, objective_terms=term, forward_ftol=0.0)
     with pytest.raises(ValueError, match="forward_max_iterations"):

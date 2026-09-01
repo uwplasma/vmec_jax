@@ -1781,6 +1781,7 @@ def make_problem(
     jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
+    refine_tol: float = 1.0e-10,
     forward_ftol: float | None = None,
     forward_max_iterations: int | None = None,
     hot_restart: bool = True,
@@ -1849,6 +1850,10 @@ def make_problem(
 
     ``adjoint_tol`` is a relative Krylov tolerance with a certified true
     residual check; ``adjoint_maxiter`` is the restart budget.
+
+    ``refine_tol`` is the frozen fixed-point residual required before
+    implicit differentiation. The default preserves strict gradients;
+    ``numpy.inf`` explicitly disables refinement for legacy comparisons.
 
     ``restart_from`` seeds the first equilibrium from a previous WOUT,
     :class:`Equilibrium`, or solver result.  This is useful when a continuation
@@ -1938,6 +1943,7 @@ def make_problem(
             jacobian_adjoint_maxiter=jacobian_adjoint_maxiter,
             adjoint_maxiter=adjoint_maxiter,
             max_fsq_ratio=max_fsq_ratio,
+            refine_tol=refine_tol,
             warm_start=(warm_start if hot_restart else None),
             solve_kwargs=dict(solve_kwargs or {}),
             initial_state=initial_state,
@@ -1969,6 +1975,7 @@ def make_problem(
     problem.metadata["forward_ftol"] = float(np.asarray(inp.ftol_array).ravel()[-1])
     problem.metadata["forward_max_iterations"] = int(np.asarray(inp.niter_array).ravel()[-1])
     problem.metadata["max_fsq_ratio"] = float(max_fsq_ratio)
+    problem.metadata["refine_tol"] = float(refine_tol)
     return problem
 
 
@@ -1988,6 +1995,7 @@ def least_squares(
     jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
+    refine_tol: float = 1.0e-10,
     forward_ftol: float | None = None,
     forward_max_iterations: int | None = None,
     hot_restart: bool = True,
@@ -2128,7 +2136,8 @@ def least_squares(
                 current_dofs=current_dofs, jac=jac,
                 jac_chunk_size=jac_chunk_size, jac_solver=jac_solver,
                 adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
-                max_fsq_ratio=max_fsq_ratio, hot_restart=hot_restart,
+                max_fsq_ratio=max_fsq_ratio, refine_tol=refine_tol,
+                hot_restart=hot_restart,
                 warm_start=warm_start, use_ess=use_ess,
                 ess_alpha=ess_alpha, device=device, solve_kwargs=solve_kwargs,
                 verbose=verbose, **scipy_kwargs)
@@ -2156,7 +2165,7 @@ def least_squares(
             current_dofs=current_dofs,
             jac_chunk_size=jac_chunk_size, jac_solver=jac_solver,
             adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
-            max_fsq_ratio=max_fsq_ratio,
+            max_fsq_ratio=max_fsq_ratio, refine_tol=refine_tol,
             warm_start=(warm_start if hot_restart else None),
             solve_kwargs=dict(solve_kwargs or {}),
             device=device, verbose=verbose, **scipy_kwargs)
@@ -2236,6 +2245,7 @@ def minimize(
     adjoint_tol: float = 1e-6,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
+    refine_tol: float = 1.0e-10,
     forward_ftol: float | None = None,
     forward_max_iterations: int | None = None,
     **scipy_kwargs,
@@ -2279,6 +2289,7 @@ def minimize(
                 device=device, solve_kwargs=solve_kwargs, verbose=verbose,
                 method=method, adjoint_tol=adjoint_tol,
                 adjoint_maxiter=adjoint_maxiter, max_fsq_ratio=max_fsq_ratio,
+                refine_tol=refine_tol,
                 **scipy_kwargs)
             stage_results.append(result)
             current = result.input
@@ -2290,7 +2301,7 @@ def minimize(
         current_dofs=current_dofs, jac_solver="reverse",
         warm_start=("state" if hot_restart else None),
         adjoint_tol=adjoint_tol, adjoint_maxiter=adjoint_maxiter,
-        max_fsq_ratio=max_fsq_ratio,
+        max_fsq_ratio=max_fsq_ratio, refine_tol=refine_tol,
         solve_kwargs=dict(solve_kwargs or {}), device=device, verbose=verbose,
         minimize_method=method, **scipy_kwargs)
 
@@ -2378,6 +2389,7 @@ def _least_squares_implicit(
     jacobian_adjoint_maxiter: int = 10,
     adjoint_maxiter: int = 300,
     max_fsq_ratio: float = 1.0e6,
+    refine_tol: float = 1.0e-10,
     warm_start: str | None = "perturbation",
     solve_kwargs: dict,
     device: Any = AUTO,
@@ -2484,6 +2496,7 @@ def _least_squares_implicit(
         jacobian_adjoint_maxiter=jacobian_adjoint_maxiter,
         adjoint_maxiter=adjoint_maxiter,
         max_fsq_ratio=max_fsq_ratio,
+        refine_tol=refine_tol,
     )
     # Pin the residual/Jacobian graphs to the fastest device for this
     # launch-bound path (CPU by default; explicit device= honored; None

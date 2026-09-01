@@ -1202,6 +1202,46 @@ def test_lasym_3d_state_is_anchored_at_the_frozen_root(lasym_3d):
     assert r_anchored <= cfg.refine_tol
 
 
+def test_nearby_refinement_seed_is_guarded_and_conservative(monkeypatch):
+    """A reused Newton displacement must improve F or replay the old path."""
+    class Config:
+        refine_tol = 0.1
+
+    cfg = Config()
+    state = jnp.asarray([10.0])
+    params = jnp.asarray([0.0])
+    monkeypatch.setattr(im, "_dof_projector", lambda *_: lambda value: value)
+    monkeypatch.setattr(im, "residual_fn", lambda *_: lambda z, _params: z)
+    monkeypatch.setattr(im, "_REFINE_MAX_STEPS", 1)
+
+    calls = []
+
+    def incomplete_step(_operator, rhs, _config, **_kwargs):
+        calls.append(float(rhs[0]))
+        # Both paths improve, but neither reaches the requested tolerance.
+        delta = 1.0 if float(rhs[0]) < 7.0 else 2.0
+        return jnp.asarray([delta]), None
+
+    monkeypatch.setattr(im, "_adjoint_solve_gcrot", incomplete_step)
+    legacy = im._refined_state(cfg, params, state, state)
+    warm = im._refined_state(
+        cfg, params, state, state, initial_correction=jnp.asarray([-5.0]))
+    np.testing.assert_array_equal(legacy, [8.0])
+    np.testing.assert_array_equal(warm, legacy)
+    assert calls == [10.0, 5.0, 10.0]
+
+    calls.clear()
+    exact = im._refined_state(
+        cfg, params, state, state, initial_correction=jnp.asarray([-10.0]))
+    np.testing.assert_array_equal(exact, [0.0])
+    assert calls == []
+
+    worse = im._refined_state(
+        cfg, params, state, state, initial_correction=jnp.asarray([1.0]))
+    np.testing.assert_array_equal(worse, legacy)
+    assert calls == [10.0]
+
+
 @pytest.mark.full
 def test_lasym_3d_stability_gradients_vs_frozen_path_fd(lasym_3d):
     """LASYM Mercier/Glasser derivatives include the RBS/ZBC families."""
