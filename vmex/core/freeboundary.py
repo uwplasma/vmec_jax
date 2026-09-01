@@ -78,6 +78,7 @@ from .printing import (
 from .solver import (
     SolveResult, SolverRuntime, SpectralState, VacuumOutput,
     _LANE_EXECUTABLES, _USED_LANE_KEYS,
+    _due_rows_pending,
     _finalize, _geometry, _initial_carry, _initial_state, _leaf_signature,
     _loop_driver_config, _make_body,
     _result_from_carry, _zero_cache, prepare_runtime, resolution_from_input,
@@ -1863,22 +1864,38 @@ def _solve_free_boundary_stage(
             residuals=residual_continuation,
         )
         printed: set[int] = set()
+        emit_start = 1
         #: per-iteration DEL-BSQ recorded by the batched steady-state lane; rows
         #: not covered (pre-activation, turn-on pass) fall back to ``fb.delbsq``
         #: exactly as the per-pass driver printed them.
         delbsq_rows: dict[int, float] = {}
 
         def _emit_due(final: bool) -> None:
+            # Resume-index scan + transfer gate (solver._emit_lines twin):
+            # rows below ``emit_start`` are printed or permanently non-due,
+            # and a pass with no due row in range transfers nothing.  A due
+            # row whose slot is not yet written pins the resume index, so a
+            # later pass prints it exactly as the full rescan did — with the
+            # then-current DEL-BSQ fallback, as before.
+            nonlocal emit_start
             if not verbose:
                 return
             upto = int(carry.iteration) if bool(carry.done) or final else int(carry.iteration) - 1
+            if not _due_rows_pending(
+                    emit_start, upto, nstep=nstep_cadence, final=final):
+                return
             trajectory = np.asarray(carry.trajectory[: max(upto, 0)])
-            for it_p in range(1, upto + 1):
+            advancing = True
+            resume = max(1, emit_start)
+            for it_p in range(resume, upto + 1):
                 due = (it_p == 1) or (it_p % nstep_cadence == 0) or (final and it_p == upto)
                 if not due or it_p in printed:
+                    if advancing:
+                        resume = it_p + 1
                     continue
                 row = trajectory[it_p - 1]
                 if int(row[0]) != it_p:
+                    advancing = False
                     continue
                 emit(screen_line(
                     it_p, float(row[1]), float(row[2]), float(row[3]),
@@ -1887,6 +1904,14 @@ def _solve_free_boundary_stage(
                     del_bsq=delbsq_rows.get(it_p, float(fb.delbsq)),
                 ), end="")
                 printed.add(it_p)
+                if advancing:
+                    resume = it_p + 1
+            if bool(carry.done) and not final:
+                # A done carry keeps this ``upto`` for the terminating
+                # _emit_due(final=True) call, where row ``upto`` becomes
+                # unconditionally due — never resume past it.
+                resume = min(resume, max(upto, 1))
+            emit_start = resume
 
         # VMEC2000's LMOVE_AXIS path is triggered by the *first force pass*, not
         # only by a bad Jacobian.  Run that pass explicitly before entering the

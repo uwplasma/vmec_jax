@@ -1773,17 +1773,47 @@ def _result_from_carry(carry: _LoopCarry, rt: SolverRuntime) -> SolveResult:
     )
 
 
+def _due_rows_pending(start: int, upto: int, *, nstep: int,
+                      final: bool) -> bool:
+    """Whether any screen row in ``[start, upto]`` can be due this pass.
+
+    The host-side gate for the per-block device->host trajectory transfer:
+    with the typical ``nstep >> BLOCK_SIZE`` most block passes print
+    nothing, so the transfer (and the row rescan) is skipped entirely.
+    ``final`` marks the pass whose last row is unconditionally due
+    (``printout.f`` prints the terminating iteration).
+    """
+    if upto < start:
+        return False
+    if final or start <= 1:
+        return True
+    return ((start + nstep - 1) // nstep) * nstep <= upto
+
+
 def _emit_lines(rt: SolverRuntime, trajectory: np.ndarray, upto: int,
                 printed: set[int], final: bool, emit, *,
-                nstep: int) -> None:
-    """Print screen lines at the VMEC2000 cadence (eqsolve.f/printout.f)."""
+                nstep: int, start: int = 1) -> int:
+    """Print screen lines at the VMEC2000 cadence (eqsolve.f/printout.f).
+
+    Returns the resume index for the next pass: every row below it is
+    printed or permanently non-due, so the caller scans ``[resume, upto]``
+    instead of ``[1, upto]`` (the full rescan was O(N^2/BLOCK) over a run).
+    A due row whose trajectory slot is not yet written for its iteration
+    pins the resume index, so a later pass still prints it exactly as the
+    full rescan did.
+    """
     lasym = rt.resolution.lasym
-    for it in range(1, upto + 1):
+    resume = max(1, start)
+    advancing = True
+    for it in range(resume, upto + 1):
         due = (it == 1) or (it % nstep == 0) or (final and it == upto)
         if not due or it in printed:
+            if advancing:
+                resume = it + 1
             continue
         row = trajectory[it - 1]
         if int(row[0]) != it:      # row not (yet) written for this iteration
+            advancing = False
             continue
         emit(screen_line(
             it, float(row[1]), float(row[2]), float(row[3]),
@@ -1791,6 +1821,9 @@ def _emit_lines(rt: SolverRuntime, trajectory: np.ndarray, upto: int,
             z_axis=float(row[8]) if lasym else None,
         ), end="")
         printed.add(it)
+        if advancing:
+            resume = it + 1
+    return resume
 
 
 @jax.jit
@@ -1974,6 +2007,7 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
         emit(screen_header(lasym=rt.resolution.lasym, lfreeb=False), end="")
 
     printed: set[int] = set()
+    emit_start = 1
     max_passes = rt.max_iterations + 200
     lane = _block_lane_fft if use_fft else _block_lane
     # Prefetched-executable consumption + compile attribution.  The
@@ -2008,12 +2042,16 @@ def _run_loop(state0: SpectralState, rt: SolverRuntime, *, mode: str,
         retry_transfer = done and int(carry.ier) in (
             AXIS_REGUESS_FLAG, BAD_JACOBIAN_FLAG,
         )
-        if verbose and not retry_transfer:
+        if verbose and not retry_transfer and _due_rows_pending(
+                emit_start, upto, nstep=nstep, final=done):
             # Transfer, then slice: slicing on device compiles one XLA
             # program per distinct ``upto`` (~190 over a QA_lowres ladder).
+            # The _due_rows_pending gate skips the transfer outright on the
+            # (typical) block passes with no due row — nstep=200 against
+            # BLOCK_SIZE=10 made ~95% of these transfers dead weight.
             trajectory = np.asarray(carry.trajectory)[:max(upto, 0)]
-            _emit_lines(rt, trajectory, upto, printed, done, emit,
-                        nstep=nstep)
+            emit_start = _emit_lines(rt, trajectory, upto, printed, done,
+                                     emit, nstep=nstep, start=emit_start)
         if done:
             break
     return carry
