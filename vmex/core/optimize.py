@@ -180,7 +180,9 @@ __all__ = [
     "minimize",
     "RedlBootstrapMismatch",  # noqa: F822 - provided lazily by __getattr__ below
     "GammaC",  # noqa: F822 - provided lazily by __getattr__ below
+    "GammaCSmooth",  # noqa: F822 - provided lazily by __getattr__ below
     "gamma_c_state",  # noqa: F822 - provided lazily by __getattr__ below
+    "gamma_c_smooth_state",  # noqa: F822 - provided lazily by __getattr__ below
 ]
 
 Array = Any
@@ -194,7 +196,7 @@ def __getattr__(name: str):  # PEP 562 lazy re-export
         return RedlBootstrapMismatch
     # gammac.py sits on the stability/turbulence field-line lane; the lazy
     # re-export keeps the fast-ion proxy import-light like the f_boot term.
-    if name in ("GammaC", "gamma_c_state"):
+    if name in ("GammaC", "GammaCSmooth", "gamma_c_state", "gamma_c_smooth_state"):
         from . import gammac
         return getattr(gammac, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

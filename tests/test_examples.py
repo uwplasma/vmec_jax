@@ -268,6 +268,17 @@ def test_qa_maxj_example_states_its_physical_scope():
     assert "opt.magnetic_well" in text
 
 
+def test_combined_confinement_example_states_the_surrogate_policy():
+    """Optimize GammaCSmooth, report hard values, promise no zero losses."""
+    text = (EXAMPLES / "optimization" / "omnigenity_epsilon_gammac_maxj.py").read_text()
+    assert "optimize the surrogate, report the hard values" in text
+    assert "GammaCSmooth(" in text and "GammaC(" in text
+    assert "does not promise" in text
+    assert "normalized by its seed value" in text
+    assert "VmecProblem.from_loss" in text  # one aggregate scalar adjoint
+    assert "epsilon_eff unavailable" in text  # optional NEO_JAX states its absence
+
+
 @pytest.mark.full  # one direct-coil free solve, coupled adjoint, and output solve (~2 min)
 def test_vacuum_free_boundary_single_stage_optimization(tmp_path):
     pytest.importorskip("essos")
@@ -451,6 +462,26 @@ def test_qi_maxj_continuation_example(tmp_path):
     assert (tmp_path / "input.QI_maxJ_optimized").exists()
     assert (tmp_path / "wout_QI_maxJ_optimized.nc").exists()
     assert (tmp_path / "QI_maxJ_optimized_summary.png").stat().st_size > 10_000
+
+
+@pytest.mark.full  # nightly: Gamma_c surrogate + Boozer action adjoint is cold-compile heavy
+def test_combined_confinement_objective_example(tmp_path):
+    """Reduced-budget epsilon/Gamma_c/maximum-J combined-objective smoke test."""
+    script = EXAMPLES / "optimization" / "omnigenity_epsilon_gammac_maxj.py"
+    out = _run_example(script, tmp_path, timeout=1800)
+    _assert_cost_decreased(out, "eps-gammac-maxJ")
+    hard = re.search(r"hard Gamma_c mean = ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    assert hard is not None
+    assert all(np.isfinite(float(v)) and float(v) > 0.0 for v in hard.groups())
+    assert re.search(
+        r"maximum-J residual = ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    # the hard ripple line appears when NEO_JAX is installed; its absence
+    # must be stated, never silently skipped
+    assert (re.search(r"epsilon_eff\^\(3/2\) mean = ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+            or "epsilon_eff unavailable" in out)
+    assert (tmp_path / "input.QA_eps_gammac_maxJ").exists()
+    assert (tmp_path / "wout_QA_eps_gammac_maxJ.nc").exists()
+    assert (tmp_path / "QA_eps_gammac_maxJ_summary.png").stat().st_size > 10_000
 
 
 @pytest.mark.full  # nightly: QI mode ladder + Boozer, subprocess cold-start heavy
