@@ -14,6 +14,7 @@ and lambda gauge.  No dense high-order Jacobian is formed.
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Any, Callable, NamedTuple
@@ -1578,15 +1579,8 @@ def make_strong_structured_chart(
         (physical_size,), dtype=jnp.asarray(runtime.native.R_cos).dtype
     )
     equation_scale, coordinate_scale = _streaming_ruiz_scales(
-        lambda value: basis.T
-        @ (
-            _strong_residual_unscaled(
-                basis @ value,
-                runtime,
-                include_coordinate_gauge=False,
-            )
-            / jnp.asarray(runtime.strong_scale)
-        ),
+        _chart_scale_residual,
+        (runtime, basis),
         zero,
         iterations=balance_iterations,
         probes=balance_probes,
@@ -1624,8 +1618,86 @@ def strong_physical_residual(
     return low + alpha * (strong - low)
 
 
+def _chart_scale_residual(
+    operands: tuple[StrongRootRuntime, Array],
+) -> Callable[[Array], Array]:
+    """Chart-projected strong residual for :func:`_ruiz_probe_lane`.
+
+    ``operands = (runtime, basis)``: everything the residual reads beyond its
+    argument must arrive through ``operands`` so the lane traces it instead
+    of baking it in.
+    """
+
+    runtime, basis = operands
+
+    def residual(value: Array) -> Array:
+        return basis.T @ (
+            _strong_residual_unscaled(
+                basis @ value,
+                runtime,
+                include_coordinate_gauge=False,
+            )
+            / jnp.asarray(runtime.strong_scale)
+        )
+
+    return residual
+
+
+def _full_root_residual(
+    operands: StrongRootRuntime,
+) -> Callable[[Array], Array]:
+    """Full constrained-layout strong residual for :func:`_ruiz_probe_lane`."""
+
+    def residual(value: Array) -> Array:
+        return _strong_residual_unscaled(value, operands)
+
+    return residual
+
+
+# One reusable executable per (builder, shapes) — the residual-lane argument
+# pattern of implicit._adjoint_gcrot_core. Wrapping the closure returned by a
+# host-eager ``jax.linearize`` in fresh jits promoted every linearization
+# residual of the force kernel PLUS the arrays the residual lambda closed
+# over (the dense chart basis included) into baked XLA constants; constant
+# folding those stalled 3-D polish setup before the first iteration.
+# Re-linearizing INSIDE the jit with the operands as traced arguments bakes
+# nothing.
+@functools.partial(jax.jit, static_argnames=("builder", "estimate_columns"))
+def _ruiz_probe_lane(
+    builder: Callable[[Any], Callable[[Array], Array]],
+    operands: Any,
+    zero: Array,
+    jvp_directions: Array,
+    transpose_directions: Array,
+    estimate_columns: bool = True,
+) -> tuple[Array, Array | None]:
+    """Stacked JVP and transpose-JVP responses of ``builder(operands)``.
+
+    ``builder`` must be a module-level function: it is a static argument, so
+    its identity keys the compile cache and a fresh lambda would defeat the
+    reuse this lane exists for. Linearize-inside-jit re-runs the primal on
+    every call — one extra force evaluation per host Ruiz iteration —
+    accepted as setup cost. The scale-update algebra stays on the host and is
+    verbatim; the responses themselves can move by O(1 ulp) relative to the
+    retired constant-baked executable, whose bits were fusion artifacts that
+    differed from its own un-jitted closure by the same margin.
+    """
+
+    residual = builder(operands)
+    _, jvp = jax.linearize(residual, zero)
+    responses = jax.vmap(jvp)(jvp_directions)
+    if not estimate_columns:
+        return responses, None
+    transpose = jax.linear_transpose(jvp, zero)
+    transpose_responses = jax.vmap(
+        lambda direction: transpose(direction)[0]
+    )(transpose_directions)
+    return responses, transpose_responses
+
+
 def _streaming_ruiz_scales(
-    residual: Callable[[Array], Array],
+    builder: Callable[[Any], Callable[[Array], Array]],
+    operands: Any,
     zero: Array,
     *,
     iterations: int = 6,
@@ -1638,18 +1710,14 @@ def _streaming_ruiz_scales(
     squared column-norm estimates from transpose JVPs. The fixed seed makes the
     setup deterministic, while a probe count independent of the root dimension
     avoids the former O(n) sequence of basis-vector JVPs. No Jacobian is stored.
+    ``builder``/``operands`` follow the :func:`_ruiz_probe_lane` contract;
+    each host iteration is one lane call, so the whole estimate compiles once.
     """
 
     if iterations < 1:
         raise ValueError("iterations must be positive")
     if probes < 1:
         raise ValueError("probes must be positive")
-
-    _, jvp = jax.linearize(residual, zero)
-    apply_jvp = jax.jit(jvp)
-    if estimate_columns:
-        transpose = jax.linear_transpose(jvp, zero)
-        apply_transpose = jax.jit(lambda value: transpose(value)[0])
 
     size = int(np.asarray(zero).size)
     dtype = np.asarray(zero).dtype
@@ -1664,17 +1732,24 @@ def _streaming_ruiz_scales(
     tiny = np.finfo(float).tiny
     limit = 1.0e12
     for _ in range(int(iterations)):
+        responses, transpose_responses = _ruiz_probe_lane(
+            builder,
+            operands,
+            zero,
+            jnp.asarray(columns[None, :] * directions),
+            jnp.asarray(rows[None, :] * directions),
+            estimate_columns=estimate_columns,
+        )
+        responses = np.asarray(responses)
+        if estimate_columns:
+            transpose_responses = np.asarray(transpose_responses)
         row_squared = np.zeros((size,), dtype=float)
         column_squared = np.zeros((size,), dtype=float)
-        for direction in directions:
-            response = rows * np.asarray(
-                apply_jvp(jnp.asarray(columns * direction))
-            )
+        for index in range(probe_count):
+            response = rows * responses[index]
             row_squared += response**2 / float(probe_count)
             if estimate_columns:
-                transpose_response = columns * np.asarray(
-                    apply_transpose(jnp.asarray(rows * direction))
-                )
+                transpose_response = columns * transpose_responses[index]
                 column_squared += transpose_response**2 / float(probe_count)
         row_norm = np.sqrt(row_squared)
         column_norm = (
@@ -1845,7 +1920,8 @@ def make_strong_root_runtime(
     if not balance_full_root:
         return replace(provisional, strong_scale=base_scale)
     equation_scale, coordinate_scale = _streaming_ruiz_scales(
-        lambda value: _strong_residual_unscaled(value, provisional),
+        _full_root_residual,
+        provisional,
         base_vector,
         iterations=balance_iterations,
         probes=4,

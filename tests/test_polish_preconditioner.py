@@ -326,10 +326,20 @@ def _tree_norm(value) -> float:
     return float(jnp.sqrt(_tree_dot(value, value)))
 
 
+def _matrix_residual(matrix):
+    """Module-level builder: the lane's static argument must be identity-stable."""
+
+    def residual(vector):
+        return matrix @ vector
+
+    return residual
+
+
 def test_streaming_equilibration_improves_conditioning_without_dropping_dofs():
     matrix = jnp.asarray([[1.0e-8, 0.0], [0.0, 2.0]])
     rows, columns = _streaming_ruiz_scales(
-        lambda vector: matrix @ vector,
+        _matrix_residual,
+        matrix,
         jnp.zeros((2,)),
     )
     balanced = rows[:, None] * np.asarray(matrix) * columns[None, :]
@@ -342,18 +352,15 @@ def test_streaming_equilibration_improves_conditioning_without_dropping_dofs():
 def test_streaming_equilibration_is_deterministic_and_validates_controls():
     matrix = jnp.asarray([[2.0, -1.0], [3.0, 4.0]])
 
-    def residual(vector):
-        return matrix @ vector
-
-    first = _streaming_ruiz_scales(residual, jnp.zeros((2,)), probes=2)
-    second = _streaming_ruiz_scales(residual, jnp.zeros((2,)), probes=2)
+    first = _streaming_ruiz_scales(_matrix_residual, matrix, jnp.zeros((2,)), probes=2)
+    second = _streaming_ruiz_scales(_matrix_residual, matrix, jnp.zeros((2,)), probes=2)
     for actual, expected in zip(first, second, strict=True):
         np.testing.assert_array_equal(actual, expected)
         assert np.all(actual > 0.0)
     with pytest.raises(ValueError, match="iterations"):
-        _streaming_ruiz_scales(residual, jnp.zeros((2,)), iterations=0)
+        _streaming_ruiz_scales(_matrix_residual, matrix, jnp.zeros((2,)), iterations=0)
     with pytest.raises(ValueError, match="probes"):
-        _streaming_ruiz_scales(residual, jnp.zeros((2,)), probes=0)
+        _streaming_ruiz_scales(_matrix_residual, matrix, jnp.zeros((2,)), probes=0)
 
 
 def _random_like(value, seed: int):
