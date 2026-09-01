@@ -508,3 +508,11 @@ def test_gamma_c_respects_the_stellarator_reflection():
     assert physical > 1.0
     assert spurious / physical < 1.0e-8
 
+
+
+def test_optimize_reexports_the_gamma_c_family():
+    """``vmex.optimize`` lazily resolves the hard and smooth classes alike."""
+    assert opt.GammaC is gammac.GammaC
+    assert opt.GammaCSmooth is gammac.GammaCSmooth
+    assert opt.gamma_c_state is gammac.gamma_c_state
+    assert opt.gamma_c_smooth_state is gammac.gamma_c_smooth_state

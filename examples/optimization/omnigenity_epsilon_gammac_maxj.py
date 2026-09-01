@@ -39,7 +39,7 @@ MAXJ_SURFACES = np.array([0.6, 0.7, 0.8, 0.9])  # outer volume, where pressure h
 EPS_SURFACES = (0.25, 0.5, 0.75)            # hard NEO_JAX validation surfaces
 MAX_MODE, MAXITER = 2, 20
 W_EPS, W_GC, W_MAXJ = 1.0, 1.0, 1.0         # weights of the seed-normalized terms
-IOTA_FLOOR, MAXJ_TARGET, TRAPPING_DEPTHS = 0.40, -0.01, (0.4, 0.8)
+IOTA_MARGIN, MAXJ_TARGET, TRAPPING_DEPTHS = 0.95, -0.01, (0.4, 0.8)
 PARAMETER_STEP, MAX_PARAMETER_CHANGE, ESS_ALPHA = 0.02, 5.0, 1.2
 GC_TEMPERATURE = 0.15
 gc_budget = dict(nalpha=7, num_transit=3, points_per_transit=64,
@@ -57,13 +57,14 @@ ACTION_MBOZ = 10
 ci_smoke = os.environ.get("VMEX_EXAMPLES_CI") == "1"
 if ci_smoke:
     MAX_MODE, MAXITER = 1, 2
-    QS_SURFACES, GC_SURFACES, TRAPPING_DEPTHS = np.linspace(0.2, 0.8, 4), (0.5,), (0.5,)
+    QS_SURFACES, GC_SURFACES = np.linspace(0.2, 0.8, 4), (0.5,)
     GC_TEMPERATURE = 0.2
     gc_budget = dict(nalpha=5, num_transit=2, points_per_transit=32,
                      num_pitch=12, quadrature_order=16)
-    action = dict(nalpha=5, points_per_period=24, num_periods=6,
-                  max_wells=16, quadrature_order=16)
-    ACTION_MBOZ = 8
+    # the bounce-action trace cannot be shortened further: a coarser plan
+    # loses the matched wells on the outer surfaces and returns NaN slopes
+    action = dict(nalpha=7, points_per_period=32, num_periods=8,
+                  max_wells=20, quadrature_order=16)
 
 # ---- seed equilibrium ------------------------------------------------------
 DATA = (Path(__file__).resolve().parents[1] / "data"
@@ -100,6 +101,9 @@ for name, scale in SCALES.items():
         raise RuntimeError(f"seed {name} total {scale} cannot normalize the objective")
 ASPECT0 = float(opt.aspect_ratio(state0, rt0))
 BETA0 = float(opt.volume_average_beta(state0, rt0))
+# Guard the seed's transform rather than push it: the floor sits just below
+# the seed minimum so the constraint activates only on degradation.
+IOTA_FLOOR = IOTA_MARGIN * float(opt.min_abs_iota(state0, rt0))
 
 
 def iota_floor(equilibrium_state, solver_context):
@@ -206,6 +210,12 @@ result = minimize(
     callback=monitor_y,
     options={"maxiter": MAXITER, "gtol": 1.0e-8, "ftol": 1.0e-12,
              "maxls": 20, "maxcor": 20})
+# The scalar cost is evaluated on the optimizer's internal jitted re-solve.
+# At a loose smoke-lane ftol that re-solve can sit on a different point of
+# the ftol ball than the seed solve, so this line need not start at exactly
+# W_EPS + W_GC + W_MAXJ; every quoted physics number below comes from the
+# materialized equilibria, whose before/after lineage is one hot-restart
+# chain from the seed.
 print(f"optimizer scalar cost: {evaluation_costs[0]:.16e} -> {float(result.fun):.16e}")
 
 x_final = x0 + step * result.x
