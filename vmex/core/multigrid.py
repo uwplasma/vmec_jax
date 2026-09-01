@@ -35,6 +35,7 @@ host round-trips of traced values.
 from __future__ import annotations
 
 import gc
+import functools
 import threading
 from dataclasses import replace
 from typing import Any
@@ -175,8 +176,23 @@ def interpolate_state(
     ns_state = int(jnp.shape(state_coarse.R_cos)[0])
     if ns_coarse is not None and int(ns_coarse) != ns_state:
         raise ValueError(f"ns_coarse={ns_coarse} does not match state ns={ns_state}")
-    m = np.asarray(modes.m, dtype=np.int64)
-    interp = lambda x: interpolate_coefficients(x, m=m, ns_fine=int(ns_fine))  # noqa: E731
+    return _interpolate_state_lane(
+        state_coarse, m=tuple(int(v) for v in modes.m), ns_fine=int(ns_fine)
+    )
+
+
+@functools.partial(jax.jit, static_argnames=("m", "ns_fine"))
+def _interpolate_state_lane(
+    state_coarse: SpectralState, *, m: tuple, ns_fine: int
+) -> SpectralState:
+    """All six coefficient interpolations as one XLA program.
+
+    Module-level ``jax.jit``: eager, each stage transition dispatches
+    ~120 single-op XLA programs (six fields x ~20 ops).  ``m`` is a tuple
+    so the static key hashes by value across freshly built mode tables.
+    """
+    m_arr = np.asarray(m, dtype=np.int64)
+    interp = lambda x: interpolate_coefficients(x, m=m_arr, ns_fine=ns_fine)  # noqa: E731
     return SpectralState(
         R_cos=interp(state_coarse.R_cos), R_sin=interp(state_coarse.R_sin),
         Z_cos=interp(state_coarse.Z_cos), Z_sin=interp(state_coarse.Z_sin),

@@ -629,7 +629,7 @@ def wout_from_state(
     import jax
 
     from . import nyquist as _nyq
-    from .bootstrap import _trapped_fraction_from_fields
+    from .bootstrap import _trapped_fraction_export_lane
     from .fields import energies_and_force_norms, magnetic_fields, metric_elements
     from .fourier import Resolution, mode_table, trig_tables
     from .geometry import (
@@ -686,16 +686,14 @@ def wout_from_state(
         jacobian=jacobian, metrics=metrics, fields=fields, trig=trig,
         s=grids.s_full, signgs=signgs,
     )
-    trapped_fraction = _trapped_fraction_from_fields(
+    trapped_fraction = _trapped_fraction_export_lane(
         total_pressure=fields.total_pressure,
         pressure=fields.pressure,
         sqrt_g=jacobian.sqrt_g,
         s_full=grids.s_full,
-        surfaces=grids.s_full,
         lasym=lasym,
         n_lambda=64,
-        serial_surfaces=True,
-    )[-1]
+    )
     (geometry, jacobian, metrics, fields, norms, R_cos_p, Z_sin_p, R_sin_p,
      Z_cos_p, trapped_fraction) = jax.device_get(
         (geometry, jacobian, metrics, fields, norms, R_cos_p, Z_sin_p,
