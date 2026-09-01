@@ -2154,6 +2154,11 @@ def build_low_order_preconditioner(
 
     from . import implicit
 
+    # The transfer's project_config and the stored config ride in hashable
+    # jit metadata, so equal-content configs must be one shared identity or
+    # every polish call from a freshly minted config keys its own compiles.
+    # make_config already canonicalizes; this covers direct construction.
+    config = implicit._canonical_config(config)
     runtime = implicit.runtime_from_params(params, config)
     project = implicit._dof_projector(config, dof_mask)
     transfer = make_high_low_transfer(
