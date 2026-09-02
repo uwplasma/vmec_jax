@@ -50,81 +50,66 @@ vmex input.nearby --restart wout_circular_tokamak.nc
 
 VMEX uses the input file's `NS_ARRAY`, `FTOL_ARRAY`, and `NITER_ARRAY`. `verbose=True` prints the VMEC iteration table; typed errors distinguish invalid inputs, Jacobian failures, non-convergence, and numerical failures.
 
-## Optional force-balance polishing
+## Physics and interoperability
 
-Polishing is disabled by default. Ordinary `solve`, `solve_multigrid`,
-`solve_file`, CLI, and optimization calls run the established VMEC solve only.
-Enable the additional step explicitly when a smaller continuum force residual
-is needed.
+VMEX includes VMEC pressure/current/iota profiles, multigrid continuation, NESTOR free boundary, mgrid and direct coil fields, Boozer transforms, QI/QS and maximum-J objectives, Mercier and ballooning diagnostics, bootstrap-current objectives, dimensional scaling, mirror equilibria, and standard wout/mout output. The [capability reference](https://vmex.readthedocs.io/en/latest/reference/capabilities.html) states the validation level and limitations of each path.
 
-VMEC converges projected equations on a staggered radial mesh, so small
-`FSQR/FSQZ/FSQL` values do not by themselves guarantee a small continuum
-residual
+VMEX outputs are intended for existing VMEC workflows: `wout_*.nc` files load in SIMSOPT, `booz_xform`, and other downstream tools. VMEC2000 compatibility and deliberate differences are documented in the [compatibility reference](https://vmex.readthedocs.io/en/latest/reference/vmec2000-compatibility.html).
 
-$$
-\mathbf F = \mathbf J \times \mathbf B - \nabla p , \qquad
-\epsilon_F = \frac{2 |\mathbf F|}{|\mathbf J \times \mathbf B| + |\nabla p| + F_{\mathrm{floor}}} .
-$$
+### Solver feature comparison
 
-The optional step lifts a converged fixed-boundary state to axis-regular cubic
-B-splines, holds the boundary and profiles fixed, and reduces both physical
-force channels on an overdetermined collocation grid with matrix-free SOLVAX
-Gauss–Newton steps. VMEX accepts the result only after independent force,
-radial-refinement, and positive-Jacobian checks.
+This matrix was checked on 2026-08-11 against current [STELLOPT/VMEC2000](https://github.com/PrincetonUniversity/STELLOPT) and [VMEC++](https://github.com/proximafusion/vmecpp) sources. ✅ denotes a public path, ⚠️ a documented limitation, and ❌ no public path; the linked VMEX capability contract defines the validation scope.
 
-Enable it in a VMEC-compatible input deck:
+| Capability | VMEX | VMEC2000 | VMEC++ |
+|---|:---:|:---:|:---:|
+| fixed-boundary toroidal equilibria | ✅ | ✅ | ✅ |
+| 3-D NESTOR free boundary | ✅ | ✅ | ✅ |
+| free-boundary radial multigrid | ✅ | ✅ | ✅ |
+| free boundary from an in-memory field table | ✅ | ❌ | ✅ Python |
+| axisymmetric free-boundary tokamaks | ✅ | ✅ | ❌ |
+| non-stellarator-symmetric (`LASYM`) equilibria | ✅ | ✅ | ❌ |
+| fixed-boundary fallback when an mgrid file is missing | ✅ | ✅ | ❌ |
+| cubic and Akima spline profiles | ✅ | ✅ | ❌ |
+| INDATA / structured JSON input | ✅ / ✅ | ✅ / ❌ | ✅ / ✅ |
+| hot restart from a saved equilibrium | ✅ Python/CLI | ✅ CLI | ✅ Python |
+| typed zero-crash errors | ✅ | ❌ | ✅ |
+| built-in Boozer transform and plotting | ✅ | ❌ | ❌ |
+| input and WOUT dimensional scaling | ✅ | ❌ | ❌ |
+| GPU execution | ✅ | ❌ | ❌ |
+| exact fixed-boundary derivatives and optimizer interface | ✅ | ❌ | ❌ |
+| differentiable specified-boundary virtual-casing residual | ✅ | ❌ | ❌ |
+| 2-D block preconditioner | ✅ matrix-free | ✅ BCYCLIC | ❌ |
+| differentiable QI/QS, maximum-J, trapped-fraction, and stability objectives | ✅ | ❌ | ❌ |
+| self-consistent bootstrap-current workflows | ✅ | ❌ | ❌ |
+| open mirrors and stellarator–mirror hybrids | ⚠️ validated scopes | ❌ | ❌ |
 
-```fortran
-!@VMEX POLISH = AUTO
-&INDATA
-  ...
-/
-```
+### Convergence parity and implementation size
 
-VMEX reads the comment; VMEC2000 ignores it. The same opt-in is available in
-Python:
+On the bundled NFP=4 QH case at `ns=51`, VMEX follows VMEC2000 and VMEC++ through the full force-residual trace (fresh local run: VMEX `d7347c9`, VMEC2000 `512375c`, VMEC++ 0.5.3). Reproduce it with `python benchmarks/make_readme_figures.py --only convergence`; the benchmark discovers local solver installations or accepts `VMEX_XVMEC2000` and `VMEX_VMECPP_PY`.
 
-```python
-import vmex as vj
+![VMEX, VMEC2000, and VMEC++ convergence trace](docs/_static/figures/readme_convergence.webp)
 
-# Reads the !@VMEX directive; no directive means no polishing.
-result = vj.solve_file("input.my_case")
+The following `cloc 2.11` snapshot counts implementation code and comments, excluding tests, generated code, and third-party sources. VMEX counts `vmex/core` (the toroidal solver); VMEC2000 counts `VMEC2000/Sources` but not shared STELLOPT libraries; VMEC++ counts `src/vmecpp` C++/headers/Python. These scopes make the comparison reproducible, not a claim of identical feature breadth.
 
-# VmecInput contains physics only, so direct solves use an explicit flag.
-inp = vj.VmecInput.from_file("input.my_case")
-result = vj.solve_multigrid(inp, polish_force_balance="auto")
-print(result.polish_report.initial_normalized_l2)
-print(result.polish_report.final_normalized_l2)
-```
+| Solver and revision | Files | Code lines | Comment lines |
+|---|---:|---:|---:|
+| VMEX `d7347c9` | 46 | 21,189 | 7,857 |
+| VMEC2000 `aeb0261` | 115 | 24,164 | 8,451 |
+| VMEC++ `d83035b` | 146 | 38,338 | 9,661 |
 
-`opt.solve_equilibrium(..., polish_force_balance=True)` exposes the same final
-step. Leave it at its `False` default during ordinary optimization and enable it
-only for a final equilibrium if desired. The focused example shows the full
-before/after workflow:
+VMEX reduces duplication by expressing spectral operators as vectorized JAX array programs and using the same equations for CPU, accelerators, and automatic differentiation. It also deliberately omits some legacy modes, so the smaller codebase reflects both architecture and narrower compatibility surface.
 
-```console
-vmex examples/data/input.finite_beta_stellarator_polished --plot
-python examples/force_balance_polishing.py
-```
+## Performance and parallelism
 
-The comparison below applies the same independent force oracle to the
-exported equilibrium of each code - VMEX, VMEC2000, VMEC++, and DESC - on the
-bundled finite-pressure shaped tokamak; VMEX is the certified polished
-result. Stellarator rows join as certified 3-D polishing becomes tractable
-(the compile-side work is in progress); the figure shows only cases where
-polishing demonstrably wins.
+JAX compilation is paid once per array structure and reused from a machine-local cache. Warm runs are the relevant measure for continuation, parameter scans, and optimization.
 
-![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
+![VMEX runtime comparison](docs/_static/figures/readme_runtime_compare.webp)
 
-Below: the same equilibrium summary before and after polishing the bundled
-shaped tokamak (`input.shaped_tokamak_pressure_polished`). Polishing cuts the
-independent force error about sevenfold, from `1.28e-2` to `1.79e-3`, without
-moving the boundary or the prescribed profiles.
+Independent solves use `vj.parallel.solve_ensemble(inputs, workers=None)`. A single equilibrium already uses XLA's internal threading; ensemble workers are therefore bounded by both the number of cases and the CPUs made available by the host scheduler. Explicit `workers=1` gives a reproducible serial baseline, and GPU/device placement can be selected with `device=`.
 
-![Shaped-tokamak summary before and after force-balance polishing](docs/_static/figures/readme_polish_summary.webp)
-
-The raw comparison data, source revisions, resolutions, timing boundaries, and
-certificate refinements are recorded in `benchmarks/`.
+`benchmarks/optimization.py` profiles QI, QA, QH, QP, scalar objectives,
+SciPy/JAX contract agreement, finite differences, optimizer choices, and the
+`max_fsq_ratio` policy.
 
 ## Magnetic field and derivatives
 
@@ -315,6 +300,85 @@ geometry = gk_closed_fieldline_geometry(
 )
 ```
 
+## Optional force-balance polishing
+
+Polishing is disabled by default. Ordinary `solve`, `solve_multigrid`,
+`solve_file`, CLI, and optimization calls run the established VMEC solve only.
+Enable the additional step explicitly when a smaller continuum force residual
+is needed.
+
+VMEC converges projected equations on a staggered radial mesh, so small
+`FSQR/FSQZ/FSQL` values do not by themselves guarantee a small continuum
+residual
+
+$$
+\mathbf F = \mathbf J \times \mathbf B - \nabla p , \qquad
+\epsilon_F = \frac{2 |\mathbf F|}{|\mathbf J \times \mathbf B| + |\nabla p| + F_{\mathrm{floor}}} .
+$$
+
+The optional step lifts a converged fixed-boundary state to axis-regular cubic
+B-splines, holds the boundary and profiles fixed, and reduces both physical
+force channels on an overdetermined collocation grid with matrix-free SOLVAX
+Gauss–Newton steps. VMEX accepts the result only after independent force,
+radial-refinement, and positive-Jacobian checks.
+
+Enable it in a VMEC-compatible input deck:
+
+```fortran
+!@VMEX POLISH = AUTO
+&INDATA
+  ...
+/
+```
+
+VMEX reads the comment; VMEC2000 ignores it. The same opt-in is available in
+Python:
+
+```python
+import vmex as vj
+
+# Reads the !@VMEX directive; no directive means no polishing.
+result = vj.solve_file("input.my_case")
+
+# VmecInput contains physics only, so direct solves use an explicit flag.
+inp = vj.VmecInput.from_file("input.my_case")
+result = vj.solve_multigrid(inp, polish_force_balance="auto")
+print(result.polish_report.initial_normalized_l2)
+print(result.polish_report.final_normalized_l2)
+```
+
+`opt.solve_equilibrium(..., polish_force_balance=True)` exposes the same final
+step. Leave it at its `False` default during ordinary optimization and enable it
+only for a final equilibrium if desired. The focused example shows the full
+before/after workflow:
+
+```console
+vmex examples/data/input.shaped_tokamak_pressure_polished --plot
+python examples/force_balance_polishing.py
+```
+
+The comparison below applies the same independent force oracle to the
+exported equilibrium of each code - VMEX, VMEC2000, VMEC++, and DESC - on the
+bundled finite-pressure shaped tokamak; VMEX is the certified polished
+result. Stellarator rows join as certified 3-D polishing becomes tractable
+(the compile-side work is in progress); the figure shows only cases where
+polishing demonstrably wins.
+
+![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
+
+Below: the bundled shaped tokamak (`input.shaped_tokamak_pressure_polished`)
+before and after polishing. The independent continuum force residual of the
+exported equilibrium drops about 26-fold, from `5.05e-2` to `1.91e-3`, while
+the boundary and the prescribed profiles are untouched. The radial force
+balance panel in `vmex --plot` summaries is a different diagnostic — VMEC's
+own discrete flux-surface average, which ordinary solves already minimize —
+so that panel does not display this gain.
+
+![Shaped-tokamak flux surfaces and independent force-error profiles before and after polishing](docs/_static/figures/readme_polish_summary.webp)
+
+The raw comparison data, source revisions, resolutions, timing boundaries, and
+certificate refinements are recorded in `benchmarks/`.
+
 ## Equilibrium and kinetic diagnostics
 
 `vmex --plot wout_X.nc` produces cross-sections, profiles, a 3-D LCFS, and
@@ -336,67 +400,6 @@ The vacuum QA example has `pres=0` and `DWell=0` exactly: VMEX adds no pressure 
 Each script also writes a direct Redl-versus-equilibrium bootstrap-current overlay. In the vacuum QA example, setting `TRIAL_BETA` enables differentiable frozen-geometry pressure proxies for `DMerc` and `DR`; a finite-pressure re-solve remains the stability certificate.
 
 ![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.webp)
-
-## Physics and interoperability
-
-VMEX includes VMEC pressure/current/iota profiles, multigrid continuation, NESTOR free boundary, mgrid and direct coil fields, Boozer transforms, QI/QS and maximum-J objectives, Mercier and ballooning diagnostics, bootstrap-current objectives, dimensional scaling, mirror equilibria, and standard wout/mout output. The [capability reference](https://vmex.readthedocs.io/en/latest/reference/capabilities.html) states the validation level and limitations of each path.
-
-VMEX outputs are intended for existing VMEC workflows: `wout_*.nc` files load in SIMSOPT, `booz_xform`, and other downstream tools. VMEC2000 compatibility and deliberate differences are documented in the [compatibility reference](https://vmex.readthedocs.io/en/latest/reference/vmec2000-compatibility.html).
-
-### Solver feature comparison
-
-This matrix was checked on 2026-08-11 against current [STELLOPT/VMEC2000](https://github.com/PrincetonUniversity/STELLOPT) and [VMEC++](https://github.com/proximafusion/vmecpp) sources. ✅ denotes a public path, ⚠️ a documented limitation, and ❌ no public path; the linked VMEX capability contract defines the validation scope.
-
-| Capability | VMEX | VMEC2000 | VMEC++ |
-|---|:---:|:---:|:---:|
-| fixed-boundary toroidal equilibria | ✅ | ✅ | ✅ |
-| 3-D NESTOR free boundary | ✅ | ✅ | ✅ |
-| free-boundary radial multigrid | ✅ | ✅ | ✅ |
-| free boundary from an in-memory field table | ✅ | ❌ | ✅ Python |
-| axisymmetric free-boundary tokamaks | ✅ | ✅ | ❌ |
-| non-stellarator-symmetric (`LASYM`) equilibria | ✅ | ✅ | ❌ |
-| fixed-boundary fallback when an mgrid file is missing | ✅ | ✅ | ❌ |
-| cubic and Akima spline profiles | ✅ | ✅ | ❌ |
-| INDATA / structured JSON input | ✅ / ✅ | ✅ / ❌ | ✅ / ✅ |
-| hot restart from a saved equilibrium | ✅ Python/CLI | ✅ CLI | ✅ Python |
-| typed zero-crash errors | ✅ | ❌ | ✅ |
-| built-in Boozer transform and plotting | ✅ | ❌ | ❌ |
-| input and WOUT dimensional scaling | ✅ | ❌ | ❌ |
-| GPU execution | ✅ | ❌ | ❌ |
-| exact fixed-boundary derivatives and optimizer interface | ✅ | ❌ | ❌ |
-| differentiable specified-boundary virtual-casing residual | ✅ | ❌ | ❌ |
-| 2-D block preconditioner | ✅ matrix-free | ✅ BCYCLIC | ❌ |
-| differentiable QI/QS, maximum-J, trapped-fraction, and stability objectives | ✅ | ❌ | ❌ |
-| self-consistent bootstrap-current workflows | ✅ | ❌ | ❌ |
-| open mirrors and stellarator–mirror hybrids | ⚠️ validated scopes | ❌ | ❌ |
-
-### Convergence parity and implementation size
-
-On the bundled NFP=4 QH case at `ns=51`, VMEX follows VMEC2000 and VMEC++ through the full force-residual trace (fresh local run: VMEX `d7347c9`, VMEC2000 `512375c`, VMEC++ 0.5.3). Reproduce it with `python benchmarks/make_readme_figures.py --only convergence`; the benchmark discovers local solver installations or accepts `VMEX_XVMEC2000` and `VMEX_VMECPP_PY`.
-
-![VMEX, VMEC2000, and VMEC++ convergence trace](docs/_static/figures/readme_convergence.webp)
-
-The following `cloc 2.11` snapshot counts implementation code and comments, excluding tests, generated code, and third-party sources. VMEX counts `vmex/core` (the toroidal solver); VMEC2000 counts `VMEC2000/Sources` but not shared STELLOPT libraries; VMEC++ counts `src/vmecpp` C++/headers/Python. These scopes make the comparison reproducible, not a claim of identical feature breadth.
-
-| Solver and revision | Files | Code lines | Comment lines |
-|---|---:|---:|---:|
-| VMEX `d7347c9` | 46 | 21,189 | 7,857 |
-| VMEC2000 `aeb0261` | 115 | 24,164 | 8,451 |
-| VMEC++ `d83035b` | 146 | 38,338 | 9,661 |
-
-VMEX reduces duplication by expressing spectral operators as vectorized JAX array programs and using the same equations for CPU, accelerators, and automatic differentiation. It also deliberately omits some legacy modes, so the smaller codebase reflects both architecture and narrower compatibility surface.
-
-## Performance and parallelism
-
-JAX compilation is paid once per array structure and reused from a machine-local cache. Warm runs are the relevant measure for continuation, parameter scans, and optimization.
-
-![VMEX runtime comparison](docs/_static/figures/readme_runtime_compare.webp)
-
-Independent solves use `vj.parallel.solve_ensemble(inputs, workers=None)`. A single equilibrium already uses XLA's internal threading; ensemble workers are therefore bounded by both the number of cases and the CPUs made available by the host scheduler. Explicit `workers=1` gives a reproducible serial baseline, and GPU/device placement can be selected with `device=`.
-
-`benchmarks/optimization.py` profiles QI, QA, QH, QP, scalar objectives,
-SciPy/JAX contract agreement, finite differences, optimizer choices, and the
-`max_fsq_ratio` policy.
 
 ## Documentation and development
 
