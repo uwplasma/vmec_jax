@@ -144,18 +144,6 @@ def test_block_response_forward_transpose_and_fd():
     ):
         np.testing.assert_allclose(got, expected, rtol=2e-8, atol=2e-10)
 
-    # Opt-in "auto" resolves both chunk sizes from measured memory and the
-    # operand avals; the pullback itself must match the default within the
-    # same batched-reduction tolerance as the block path above.
-    audited = im.implicit_state_pullback_multi_rhs(
-        p0, cfg, state, mask, cotangents,
-        probe_chunk_size="auto", response_chunk_size="auto",
-    )
-    for got, expected in zip(
-        jax.tree.leaves(audited), jax.tree.leaves(reference)
-    ):
-        np.testing.assert_allclose(got, expected, rtol=2e-8, atol=2e-10)
-
     for i, (tangent, step) in enumerate(zip(tangents, (3e-5, 1e-4))):
         directional = jax.jvp(
             lambda x, p: im.aspect_ratio(x, im.runtime_from_params(p, cfg)),
@@ -298,6 +286,36 @@ def test_raw_block_apply_requires_stored_factors():
         row_scale=jnp.ones((1, 1)), column_scale=jnp.ones((1, 1)))
     with pytest.raises(ValueError, match="raw block factors"):
         im._raw_block_apply(system, jnp.zeros((1, 1)))
+
+
+@pytest.mark.full
+def test_auto_chunks_match_the_default_pullback():
+    """Opt-in "auto" chunk sizes change scheduling only, never values.
+
+    A full extra pullback solve: parity lane c3d sits within ~90 s of its
+    45-minute budget, so this equivalence runs in the full tier while the
+    cheap resolver/memory-model pins below stay on the fast path.
+    """
+    _, cfg, p0 = _small_solovev_setup()
+    state, mask = im.solve_implicit_with_aux(p0, cfg)
+    keys = jax.random.split(jax.random.PRNGKey(4), 2)
+    cotangents = jax.tree.map(
+        lambda value: jnp.stack([
+            jax.random.normal(key, value.shape, value.dtype) for key in keys
+        ]),
+        state,
+    )
+    reference = im.implicit_state_pullback_multi_rhs(
+        p0, cfg, state, mask, cotangents
+    )
+    audited = im.implicit_state_pullback_multi_rhs(
+        p0, cfg, state, mask, cotangents,
+        probe_chunk_size="auto", response_chunk_size="auto",
+    )
+    for got, expected in zip(
+        jax.tree.leaves(audited), jax.tree.leaves(reference)
+    ):
+        np.testing.assert_allclose(got, expected, rtol=2e-8, atol=2e-10)
 
 
 def test_measured_chunk_size_follows_the_memory_budget(monkeypatch):
