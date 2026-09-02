@@ -4,7 +4,7 @@
 The optional before/after polishing pair renders from two clean
 ``benchmarks/strong_certificate.py --wout <export>`` certificates (the
 unpolished and the certified polished WOUT exports of the bundled shaped
-tokamak) plus the polished wout itself for the cross-sections.
+tokamak) plus both wouts themselves for the overlaid cross-sections.
 """
 
 from __future__ import annotations
@@ -251,8 +251,13 @@ def _load_certificate(path: Path) -> dict:
     return cert
 
 
-def _cross_sections(wout_path: Path, ax) -> None:
-    """Draw phi=0 flux-surface cross-sections of a stellarator-symmetric wout."""
+def _wout_sections(wout_path: Path) -> tuple[list, tuple, tuple]:
+    """Return phi=0 cross-section curves of a stellarator-symmetric wout.
+
+    Interior surfaces are sampled at fixed uniform-rho stations (uniform s
+    crowds the edge), so the before/after exports draw the same surfaces
+    even though their radial meshes differ.
+    """
     import netCDF4
 
     with netCDF4.Dataset(wout_path) as ds:
@@ -263,20 +268,53 @@ def _cross_sections(wout_path: Path, ax) -> None:
     theta = np.linspace(0.0, 2.0 * np.pi, 241)
     cos = np.cos(np.outer(xm, theta))
     sin = np.sin(np.outer(xm, theta))
-    # Interior surfaces at uniform rho (uniform s crowds the edge).
     interior = sorted(
         {int(round((ns - 1) * rho * rho)) for rho in np.linspace(0.28, 0.9, 7)}
     )
-    for j in interior:
-        ax.plot(rmnc[j] @ cos, zmns[j] @ sin, color=EDGE, linewidth=1.0)
-    ax.plot(
-        rmnc[ns - 1] @ cos,
-        zmns[ns - 1] @ sin,
-        color=COLORS["VMEX"],
-        linewidth=2.2,
-        label="prescribed boundary",
+    curves = [(rmnc[j] @ cos, zmns[j] @ sin) for j in interior]
+    boundary = (rmnc[ns - 1] @ cos, zmns[ns - 1] @ sin)
+    axis_point = (rmnc[0] @ cos[:, :1], zmns[0] @ sin[:, :1])
+    return curves, boundary, axis_point
+
+
+def _cross_sections(wout_before: Path, wout_after: Path, ax) -> None:
+    """Overlay before/after-polish flux-surface cross-sections at phi=0.
+
+    The unpolished export draws first (gray dashed, the right panel's
+    "unpolished" convention) under the certified polished export (VMEX blue
+    solid).  The curves coincide to line width — that is the message: the
+    boundary and profiles are prescribed, polishing does not move the
+    geometry.
+    """
+    styles = (
+        (wout_before, COLORS["VMEC2000"], (0, (5, 2)), "unpolished export"),
+        (wout_after, COLORS["VMEX"], "-", "certified polished export"),
     )
-    ax.plot(rmnc[0] @ cos[:, :1], zmns[0] @ sin[:, :1], "+", color=INK, markersize=9)
+    for wout_path, color, linestyle, label in styles:
+        curves, boundary, axis_point = _wout_sections(wout_path)
+        for r_curve, z_curve in curves:
+            ax.plot(
+                r_curve, z_curve, color=color, linestyle=linestyle,
+                linewidth=1.0, alpha=0.85,
+            )
+        ax.plot(
+            *boundary,
+            color=color,
+            linestyle=linestyle,
+            linewidth=2.2,
+            label=label,
+        )
+        ax.plot(*axis_point, "+", color=color, markersize=9)
+    ax.text(
+        0.03,
+        0.03,
+        "surfaces overlap: polishing does not move the geometry",
+        transform=ax.transAxes,
+        fontsize=7.5,
+        color=MUTED,
+        ha="left",
+        va="bottom",
+    )
     ax.set_aspect("equal", adjustable="datalim")
     ax.set_xlabel(r"$R$ [m]")
     ax.set_ylabel(r"$Z$ [m]")
@@ -286,17 +324,18 @@ def _cross_sections(wout_path: Path, ax) -> None:
 def render_summary_pair(
     before_cert: Path,
     after_cert: Path,
-    wout: Path,
+    wout_before: Path,
+    wout_after: Path,
     output: Path,
 ) -> tuple[float, float]:
     """Render the polish before/after evidence for the README.
 
-    Left: flux-surface cross-sections of the certified polished export — the
-    boundary and profiles are prescribed, so they are identical before and
-    after polishing.  Right: the same independent force oracle as the
-    solver-comparison figure, applied to the unpolished and the certified
-    polished WOUT exports of the one bundled case.  Returns the two volume-L2
-    values read from the certificates.
+    Left: overlaid flux-surface cross-sections of the unpolished and the
+    certified polished exports — the boundary and profiles are prescribed,
+    so the two sets of surfaces coincide.  Right: the same independent force
+    oracle as the solver-comparison figure, applied to the unpolished and
+    the certified polished WOUT exports of the one bundled case.  Returns
+    the two volume-L2 values read from the certificates.
     """
     before = _load_certificate(before_cert)
     after = _load_certificate(after_cert)
@@ -322,9 +361,9 @@ def render_summary_pair(
         fontweight="bold",
     )
 
-    _cross_sections(wout, axes[0])
+    _cross_sections(wout_before, wout_after, axes[0])
     axes[0].set_title(
-        "(a) shaped tokamak: flux surfaces",
+        "(a) shaped tokamak: flux surfaces, before and after",
         loc="left",
         fontsize=11,
         fontweight="bold",
@@ -376,7 +415,8 @@ def render_summary_pair(
         0.985,
         0.022,
         "One shared independent force-balance oracle on the unpolished and certified polished WOUT exports; "
-        "boundary and profiles are identical. Case: input.shaped_tokamak_pressure_polished.",
+        "the overlaid surfaces in (a) coincide because boundary and profiles are prescribed. "
+        "Case: input.shaped_tokamak_pressure_polished.",
         ha="right",
         va="bottom",
         fontsize=8,
@@ -395,19 +435,22 @@ def main() -> None:
     parser.add_argument("--artifact", type=Path, default=DEFAULT_ARTIFACT)
     parser.add_argument("--summary-before-cert", type=Path)
     parser.add_argument("--summary-after-cert", type=Path)
-    parser.add_argument("--summary-wout", type=Path)
+    parser.add_argument("--summary-wout-before", type=Path)
+    parser.add_argument("--summary-wout-after", type=Path)
     parser.add_argument("--summary-output", type=Path, default=DEFAULT_SUMMARY_FIGURE)
     args = parser.parse_args()
     summary_inputs = (
-        args.summary_before_cert, args.summary_after_cert, args.summary_wout,
+        args.summary_before_cert, args.summary_after_cert,
+        args.summary_wout_before, args.summary_wout_after,
     )
     if any(path is None for path in summary_inputs) and any(
         path is not None for path in summary_inputs
     ):
         parser.error(
-            "pass --summary-before-cert, --summary-after-cert, and "
-            "--summary-wout together (benchmarks/strong_certificate.py "
-            "--wout <export> writes the certificates)"
+            "pass --summary-before-cert, --summary-after-cert, "
+            "--summary-wout-before, and --summary-wout-after together "
+            "(benchmarks/strong_certificate.py --wout <export> writes the "
+            "certificates)"
         )
     cases = _load(args.artifact)
     render(
@@ -419,7 +462,8 @@ def main() -> None:
         summary_values = render_summary_pair(
             args.summary_before_cert,
             args.summary_after_cert,
-            args.summary_wout,
+            args.summary_wout_before,
+            args.summary_wout_after,
             args.summary_output,
         )
     try:
