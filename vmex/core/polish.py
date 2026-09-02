@@ -1238,10 +1238,15 @@ def strong_projection_diagnostics(
     regularity = radial[:, None] ** jnp.abs(jnp.asarray(state.m))[None, :]
     radial_modes = (radial_basis @ radial_coefficients) * regularity
     helical_modes = (radial_basis @ helical_coefficients) * regularity
+    # Reconstruct on the same flattened (theta, zeta) angular points the
+    # runtime projections were built on.  Broadcasting the two 1-D grids
+    # directly only typechecks when nzeta == 1, so the ntor = 0 benchmarks
+    # never caught the missing mesh product.
+    theta_mesh, zeta_mesh = jnp.meshgrid(theta, zeta, indexing="ij")
     phase = (
         jnp.asarray(state.m)[:, None]
-        * theta.reshape(1, -1)
-        - jnp.asarray(state.n)[:, None] * zeta.reshape(1, -1)
+        * theta_mesh.reshape(1, -1)
+        - jnp.asarray(state.n)[:, None] * zeta_mesh.reshape(1, -1)
     )
     radial_angular_modes = jnp.einsum(
         "ra,ma->rm",

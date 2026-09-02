@@ -940,6 +940,92 @@ def test_structured_chart_uses_only_physical_layout_channels(small_strong_root):
     )
 
 
+def _solved_solovev_strong_runtime(ntor: int):
+    """Build a strong-root runtime from a converged tiny solovev solve."""
+
+    inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
+        mpol=3,
+        ntor=ntor,
+        ntheta=12,
+        nzeta=1 if ntor == 0 else 4,
+    )
+    inp = dataclasses.replace(
+        inp,
+        ns_array=np.asarray([5]),
+        ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([1000]),
+    )
+    config = implicit.make_config(inp, ftol=1.0e-10, max_iterations=1000)
+    params = implicit.params_from_input(inp)
+    state, mask = implicit.solve_implicit_with_aux(params, config)
+    runtime = implicit.runtime_from_params(params, config)
+    native = lift_high_order_state(state, runtime, degree=3)
+    adapter = build_low_order_preconditioner(
+        native,
+        params,
+        config,
+        state,
+        mask,
+        probe_chunk_size=4,
+    )
+    return make_strong_root_runtime(native, adapter, mask)
+
+
+def test_projection_diagnostics_match_axisymmetric_case_at_ntor_one():
+    """The 3-D angular reconstruction must reduce to the ntor=0 one.
+
+    ``strong_projection_diagnostics`` used to broadcast the raw theta and
+    zeta grids against each other when rebuilding the retained-mode phase;
+    that only typechecks when ``nzeta == 1``, so every ``nzeta > 1``
+    diagnostic crashed and the axisymmetric benchmarks never noticed.  An
+    axisymmetric state embedded at ``ntor = 1`` must report the same
+    angular/radial fit content as its genuine ``ntor = 0`` build — the
+    added zeta points and n != 0 fit directions see a zeta-constant signal.
+    """
+
+    results = []
+    for ntor in (0, 1):
+        runtime = _solved_solovev_strong_runtime(ntor)
+        chart = make_strong_structured_chart(runtime)
+        zero = np.zeros((int(chart.size),))
+        diagnostics = strong_projection_diagnostics(zero, runtime, chart)
+        assert np.all(np.isfinite(np.asarray(tuple(diagnostics))))
+        collocation = strong_collocation_residual(
+            jnp.asarray(zero), runtime, chart
+        )
+        point_count = (
+            runtime.radial_nodes.size * runtime.theta.size * runtime.zeta.size
+        )
+        np.testing.assert_allclose(
+            jnp.linalg.norm(collocation) / np.sqrt(float(point_count)),
+            diagnostics.sampled_rms,
+            rtol=2.0e-13,
+            atol=2.0e-13,
+        )
+        results.append(diagnostics)
+    axisymmetric, embedded = results
+    for name in (
+        "sampled_rms",
+        "reconstructed_rms",
+        "unresolved_rms",
+        "unresolved_fraction",
+        "angular_unresolved_fraction",
+        "radial_fit_unresolved_fraction",
+        "radial_unresolved_fraction",
+        "helical_unresolved_fraction",
+    ):
+        # The two builds run independent legacy solves, so the states agree
+        # only to the ftol floor; 1e-6 still separates correct angular
+        # bookkeeping (equal content) from a wrong flattening (O(1) off).
+        np.testing.assert_allclose(
+            np.asarray(getattr(embedded, name)),
+            np.asarray(getattr(axisymmetric, name)),
+            rtol=1.0e-6,
+            atol=1.0e-9,
+            err_msg=name,
+        )
+
+
 def test_structured_chart_mode_blocks_recover_local_jacobian(small_strong_root):
     runtime = small_strong_root
     chart = make_strong_structured_chart(runtime)
