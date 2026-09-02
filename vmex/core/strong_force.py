@@ -598,6 +598,16 @@ def evaluate_high_order_surface(
 #: are unchanged.  4096 points bound the W7-X sweep near ~1 GB.
 _FORCE_POINT_BATCH = 4096
 
+#: The batched sweep also carries a remat boundary around the per-point
+#: kernel.  ``jax.linearize``/``jax.vjp`` through the sweep otherwise store
+#: the whole grid's linearization residuals — ~40 GB for the W7-X polish
+#: setup's 6.8e4-point chart probes, the second half of the same OOM.  With
+#: the checkpoint, reverse passes replay the per-point force kernel instead
+#: of storing its intermediates: memory falls to per-batch scale for one
+#: extra forward evaluation per backward pass.  The flat small-grid path is
+#: untouched, so optimization-loop gradients keep their exact cost.
+_point_force_checkpoint = jax.checkpoint(_point_force)
+
 
 @jax.jit
 def evaluate_strong_force(
@@ -620,7 +630,7 @@ def evaluate_strong_force(
         values = jax.vmap(lambda point: _point_force(state, point))(points)
     else:
         values = jax.lax.map(
-            lambda point: _point_force(state, point),
+            lambda point: _point_force_checkpoint(state, point),
             points,
             batch_size=_FORCE_POINT_BATCH,
         )
