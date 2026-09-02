@@ -21,6 +21,13 @@ import numpy as np
 from solvax import gmres
 
 from .errors import StrongForceCertificationError, StrongForceContinuationError
+from .printing import (
+    POLISH_SCREEN_HEADER,
+    compile_notice,
+    emit_flushed,
+    polish_certificate_summary,
+    polish_screen_line,
+)
 from .polish import (
     StrongModeBlockPreconditioner,
     StrongPhysicalChart,
@@ -1085,12 +1092,70 @@ def _collocation_variable_scale(
     return 1.0 / np.maximum(column_norm, column_floor)
 
 
+#: Lane structures whose first-use compile notice was already attributable
+#: in this process — the polish analogue of the solver's used-lane keys.
+_POLISH_LANE_NOTICED: set[Any] = set()
+
+
+def _failed_certificate_checks(
+    certificate: StrongForceReport, config: PolishConfig
+) -> tuple[str, ...]:
+    """Name each independent acceptance check the certificate failed."""
+
+    failed = []
+    if float(certificate.normalized_l2) > config.certificate_tolerance:
+        failed.append(
+            f"independent force L2 {float(certificate.normalized_l2):.3E}"
+            f" > tolerance {config.certificate_tolerance:.3E}")
+    if (float(certificate.radial_refinement_difference)
+            > config.radial_refinement_tolerance):
+        failed.append(
+            "radial refinement difference "
+            f"{float(certificate.radial_refinement_difference):.3E}"
+            f" > tolerance {config.radial_refinement_tolerance:.3E}")
+    if float(certificate.minimum_signed_jacobian) <= 0.0:
+        failed.append(
+            "minimum signed Jacobian "
+            f"{float(certificate.minimum_signed_jacobian):.3E} <= 0")
+    return tuple(failed)
+
+
+def _emit_gauss_newton_rows(solution: Any, emit: Any) -> None:
+    """Print the fixed-shape SOLVAX history as a screen table.
+
+    The Gauss--Newton loop runs inside one jitted ``lax.while_loop`` with no
+    host callbacks, so rows appear when the solve returns rather than live;
+    the banner and compile notice bracket that silent window on screen.
+    Everything printed already exists in ``solution.history`` — no extra
+    computation.
+    """
+
+    history = solution.history
+    cost = np.asarray(history.cost)
+    gradient = np.asarray(history.gradient_norm)
+    damping = np.asarray(history.damping)
+    ratio = np.asarray(history.ratio)
+    accepted = np.asarray(history.accepted)
+    linear = np.asarray(history.linear_iterations)
+    emit(POLISH_SCREEN_HEADER, end="")
+    emit(polish_screen_line(0, float(cost[0]), float(gradient[0]),
+                            float(damping[0])), end="")
+    for step in range(int(solution.steps)):
+        emit(polish_screen_line(
+            step + 1, float(cost[step + 1]), float(gradient[step + 1]),
+            float(damping[step + 1]), ratio=float(ratio[step]),
+            linear_iterations=int(linear[step]),
+            accepted=bool(accepted[step])), end="")
+
+
 def polish_collocation_least_squares(
     runtime: StrongRootRuntime,
     *,
     config: PolishConfig | None = None,
     chart: StrongPhysicalChart | None = None,
     initial_certificate: StrongForceReport | None = None,
+    verbose: bool = False,
+    emit: Any = emit_flushed,
 ) -> PolishResult:
     """Solve and certify the overdetermined physical force residual.
 
@@ -1098,6 +1163,10 @@ def polish_collocation_least_squares(
     point. SOLVAX applies matrix-free JVP/VJP normal products; no dense
     Jacobian is formed. The returned correction uses the full constrained
     layout so it composes with the existing native-state utilities.
+
+    ``verbose=True`` prints the CLI progress lines (compile notice,
+    Gauss--Newton rows, certificate summary) through ``emit``; the default
+    keeps the Python API silent, and printing never changes the numerics.
     """
 
     from solvax import LeastSquaresConfig
@@ -1117,6 +1186,19 @@ def polish_collocation_least_squares(
         1.0e-12,
     )
     collocation_scale_array = jnp.asarray(collocation_scale)
+
+    if verbose:
+        emit(f" collocation: {int(initial_collocation.size)} residual rows, "
+             f"{int(chart.size)} unknowns")
+    # First use of this lane structure in the process compiles the probe and
+    # Gauss-Newton executables — the pause users previously read as a hang.
+    if not jax.config.jax_disable_jit:
+        lane_key = (int(chart.size), int(initial_collocation.size), config)
+        first_use = lane_key not in _POLISH_LANE_NOTICED
+        _POLISH_LANE_NOTICED.add(lane_key)
+        if verbose and first_use:
+            emit(compile_notice(int(np.asarray(runtime.radial_nodes).size),
+                                lane="polish"), end="")
 
     variable_scale = _collocation_variable_scale(
         runtime,
@@ -1142,6 +1224,8 @@ def polish_collocation_least_squares(
         zero, runtime, chart, variable_scale_array,
         collocation_scale_array, least_squares_config)
     jax.block_until_ready(solution)
+    if verbose:
+        _emit_gauss_newton_rows(solution, emit)
     vector = variable_scale_array * solution.x
     state = _corrected_state(vector, runtime, chart)
     certificate = certify_strong_force(state)
@@ -1190,6 +1274,15 @@ def polish_collocation_least_squares(
         variable_scale_max=float(np.max(variable_scale)),
         variable_scale_probes=config.collocation_scale_probes,
     )
+    if verbose:
+        emit(polish_certificate_summary(
+            report.initial_normalized_l2, report.final_normalized_l2,
+            config.certificate_tolerance,
+            verdict="CERTIFIED" if converged else "FAILED",
+            failed_checks=(
+                () if converged
+                else _failed_certificate_checks(certificate, config))),
+            end="")
     if converged:
         return PolishResult(
             state,
@@ -1220,8 +1313,15 @@ def polish_legacy_solution(
     *,
     config: PolishConfig | None = None,
     lconm1: bool = True,
+    verbose: bool = False,
+    emit: Any = emit_flushed,
 ) -> PolishResult:
-    """Refine and lift one converged legacy solve, then run the strong driver."""
+    """Refine and lift one converged legacy solve, then run the strong driver.
+
+    ``verbose=True`` routes the CLI progress lines through ``emit`` (the
+    solver prints the phase banner before calling here); the default keeps
+    the Python API silent and printing never changes the numerics.
+    """
 
     started = perf_counter()
     from . import implicit
@@ -1272,6 +1372,10 @@ def polish_legacy_solution(
         degree=config.radial_degree,
     )
     initial_certificate = certify_strong_force(certified_native)
+    if verbose:
+        emit(" initial certificate: EPS-F = "
+             f"{float(initial_certificate.normalized_l2):.3E}"
+             f"  (tolerance {config.certificate_tolerance:.3E})")
     if float(initial_certificate.normalized_l2) <= config.certificate_tolerance:
         report = PolishReport(
             converged=True,
@@ -1289,6 +1393,11 @@ def polish_legacy_solution(
             factor_build_seconds=0.0,
             solve_seconds=perf_counter() - started,
         )
+        if verbose:
+            emit(polish_certificate_summary(
+                report.initial_normalized_l2, report.final_normalized_l2,
+                config.certificate_tolerance,
+                verdict="ALREADY CERTIFIED (no correction applied)"), end="")
         return PolishResult(
             certified_native,
             initial_certificate,
@@ -1317,6 +1426,8 @@ def polish_legacy_solution(
         runtime,
         config=config,
         initial_certificate=initial_certificate,
+        verbose=verbose,
+        emit=emit,
     )
     return result._replace(
         compatibility_state=polished_compatibility_state(refined_state, result)

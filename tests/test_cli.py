@@ -329,3 +329,20 @@ def test_lforbal_iteration_exhaustion_writes_wout(tmp_path):
     wout = read_wout(wout_path)
     assert int(wout.ier_flag) == MORE_ITER_FLAG
     assert bool(wout.lmove_axis) is False
+
+
+def test_polish_cli_flags_override_file_directives():
+    """--polish-* flags beat !@VMEX directives; untouched fields stay file."""
+    from vmex.core.run_options import parse_indata_run_options
+
+    file_options = parse_indata_run_options(
+        "!@VMEX POLISH = AUTO\n!@VMEX POLISH_TOL = 5.0E-3\n"
+        "!@VMEX POLISH_MAX_ITER = 12\n&INDATA\n/\n")
+    args = cli.build_parser().parse_args(
+        ["input.x", "--polish-tol", "1e-2", "--polish-spans", "8"])
+    options, sources = cli._resolve_polish_cli(args, file_options)
+    assert options.polish == "auto" and sources["polish"] == "file"
+    assert options.polish_tol == 1e-2 and sources["polish_tol"] == "cli"
+    assert options.polish_max_iter == 12
+    assert sources["polish_max_iter"] == "file"
+    assert options.polish_spans == 8 and sources["polish_spans"] == "cli"

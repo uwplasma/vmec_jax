@@ -101,6 +101,12 @@ Options
        return it and print a warning. Never a silent substitution.
    * - ``--polish-degree {3,5,7}``
      - Radial B-spline degree of the polished representation.
+   * - ``--polish-max-iter N``
+     - Cap the polish Gauss-Newton iterations
+       (:class:`vmex.PolishConfig` ``max_nonlinear_iterations``).
+   * - ``--polish-spans N``
+     - Radial B-spline spans of the polished representation
+       (default: derived from the solve resolution, at most 32).
    * - ``--restart WOUT``
      - Hot-restart the solve from a ``wout_*.nc`` file (VMEX- or
        VMEC2000-written): the equilibrium state is rebuilt from the file,

@@ -170,6 +170,48 @@ def test_compile_notice_variants():
     )
 
 
+def test_polish_banner_states_the_resolved_config():
+    banner = printing.polish_banner(
+        mode="auto", degree=3, spans=None, ns=31,
+        tolerance=1e-3, certificate_tolerance=1e-2, max_iterations=80)
+    assert "BEGIN FORCE POLISHING" in banner
+    assert "MODE = AUTO" in banner and "DEGREE = 3" in banner
+    assert "SPANS = AUTO" in banner and "NS =   31" in banner
+    assert "TOL = 1.000E-03" in banner
+    assert "CERTIFICATE TOL = 1.000E-02" in banner
+    assert "MAX ITER =   80" in banner
+    explicit = printing.polish_banner(
+        mode="on", degree=5, spans=16, ns=51,
+        tolerance=1e-2, certificate_tolerance=1e-2, max_iterations=40)
+    assert "MODE = ON" in explicit and "SPANS = 16" in explicit
+
+
+def test_polish_screen_rows():
+    assert printing.polish_screen_line(0, 1.23e-1, 4.5, 1e-3) == (
+        "    0  1.23E-01  4.50E+00  1.00E-03\n"
+    )
+    accepted = printing.polish_screen_line(
+        3, 2.3e-2, 1.1, 2.5e-4, ratio=0.98, linear_iterations=12)
+    assert accepted == "    3  2.30E-02  1.10E+00  2.50E-04  9.80E-01      12\n"
+    rejected = printing.polish_screen_line(
+        4, 2.3e-2, 1.1, 1e-3, ratio=-0.5, linear_iterations=30,
+        accepted=False)
+    assert rejected.endswith("  rejected\n")
+
+
+def test_polish_certificate_summary_names_failed_checks():
+    certified = printing.polish_certificate_summary(
+        1.281e-2, 1.807e-3, 1e-2, verdict="CERTIFIED")
+    assert "1.281E-02" in certified and "1.807E-03" in certified
+    assert certified.rstrip().endswith("POLISH CERTIFIED")
+    failed = printing.polish_certificate_summary(
+        1.281e-2, 2.3e-2, 1e-2, verdict="FAILED",
+        failed_checks=(
+            "independent force L2 2.300E-02 > tolerance 1.000E-02",))
+    assert "POLISH FAILED" in failed
+    assert "FAILED CHECK : independent force L2" in failed
+
+
 def test_emit_flushed_writes_and_flushes(capsys):
     """The CLI sink must flush every line so file-redirected cluster logs
     stream in real time (an unflushed run shows nothing for hours)."""

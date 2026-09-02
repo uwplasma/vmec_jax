@@ -40,11 +40,13 @@ def test_all_directives_parse_together_with_inline_comments():
         "  ! @ VMEX  POLISH_TOL = 2.5E-4   ! tighter than default\n"
         "!@vmex polish_fail = FALLBACK\n"
         "!@VMEX POLISH_DEGREE = 5\n"
+        "!@VMEX POLISH_MAX_ITER = 40\n"
+        "!@VMEX POLISH_SPANS = 16\n"
         "&INDATA\nMPOL = 3\n/\n"
     )
     assert options == RunOptions(
         polish="auto", polish_tol=2.5e-4, polish_fail="fallback",
-        polish_degree=5)
+        polish_degree=5, polish_max_iter=40, polish_spans=16)
 
 
 def test_no_directives_means_package_defaults():
@@ -78,6 +80,10 @@ def test_consistent_repetition_is_allowed_and_conflict_is_an_error():
         ("!@VMEX POLISH_DEGREE = 4", "3, 5, 7"),
         ("!@VMEX POLISH_DEGREE = five", "integer"),
         ("!@VMEX POLISH_FAIL = explode", "error"),
+        ("!@VMEX POLISH_MAX_ITER = 0", "positive"),
+        ("!@VMEX POLISH_MAX_ITER = soon", "integer"),
+        ("!@VMEX POLISH_SPANS = -2", "positive"),
+        ("!@VMEX POLISH_SPANS = few", "integer"),
         ("!@VMEX POLISH_MODE = auto", "unknown VMEX directive"),
     ],
 )
@@ -96,7 +102,7 @@ def test_quoted_exclamation_marks_do_not_become_directives():
 
 def test_directive_round_trip_through_format():
     options = RunOptions(polish="auto", polish_tol=1e-8, polish_fail="warn",
-                         polish_degree=7)
+                         polish_degree=7, polish_max_iter=40, polish_spans=16)
     text = format_indata_directives(options) + "&INDATA\nMPOL = 3\n/\n"
     assert parse_indata_run_options(text) == options
     assert format_indata_directives(RunOptions()) == ""
@@ -152,14 +158,44 @@ def test_precedence_python_over_file_over_default():
     assert sources["polish"] == "python" and sources["polish_degree"] == "file"
 
 
+def test_directive_file_reaches_the_polish_config(tmp_path):
+    """A deck's POLISH_* directives land on the driver PolishConfig fields."""
+    source = tmp_path / "input.knobs"
+    source.write_text(
+        "!@VMEX POLISH = AUTO\n"
+        "!@VMEX POLISH_TOL = 5.0E-3\n"
+        "!@VMEX POLISH_MAX_ITER = 12\n"
+        "!@VMEX POLISH_SPANS = 8\n"
+        + (DATA / "input.solovev").read_text(encoding="utf-8"),
+        encoding="utf-8")
+    request = read_input_request(source)
+    options, sources = resolve_run_options(request.options)
+    assert sources["polish_tol"] == "file"
+    config = polish_config_from_options(options)
+    assert config.tolerance == 5.0e-3
+    assert config.max_nonlinear_iterations == 12
+    assert config.radial_spans == 8
+    # A Python keyword (the CLI passes its flags through the same seam)
+    # overrides the deck for that field only.
+    options, sources = resolve_run_options(request.options, polish_max_iter=30)
+    config = polish_config_from_options(options)
+    assert config.max_nonlinear_iterations == 30
+    assert config.tolerance == 5.0e-3
+    assert sources["polish_max_iter"] == "python"
+    assert sources["polish_spans"] == "file"
+
+
 def test_polish_config_mapping_and_explicit_config_priority():
     from vmex.core.polish_driver import PolishConfig
 
     options = RunOptions(polish=True, polish_tol=1e-5, polish_degree=5,
-                         polish_fail="fallback")
+                         polish_fail="fallback", polish_max_iter=40,
+                         polish_spans=16)
     config = polish_config_from_options(options)
     assert config.tolerance == 1e-5
     assert config.radial_degree == 5
+    assert config.max_nonlinear_iterations == 40
+    assert config.radial_spans == 16
     assert config.fail_policy == "return_unpolished"
     # Nothing beyond driver defaults requested -> no config object at all,
     # keeping the plain path identical to before this module existed.
