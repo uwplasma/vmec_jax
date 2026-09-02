@@ -69,7 +69,9 @@ polished_path = OUT_DIR / "wout_shaped_tokamak_pressure_polished.nc"
 print(f"wrote {legacy_path}\nusing {polished_path}")
 
 # --------------------------- plot ------------------------------------------
-# The summary's radial force-balance panel drops between the two stages.
+# The printed certificate is the polish evidence; the summary's radial
+# force-balance panel shows VMEC's discrete flux-surface-averaged residual
+# (wout equif), which the ordinary solve minimizes by construction.
 for stage, path in (("before", legacy_path), ("after", polished_path)):
     stage_dir = OUT_DIR / stage
     for figure_path in vj.plot_wout(path, stage_dir).values():
