@@ -1171,6 +1171,80 @@ def test_polish_driver_skips_an_already_certified_state(small_strong_root):
     np.testing.assert_array_equal(result.correction, 0.0)
 
 
+def test_legacy_polish_announces_refinement_and_certificate_phases():
+    """The legacy driver's setup phases each emit a notice before starting.
+
+    Small solovev case; the raw lift never certifies at the default bar, so
+    the run passes through every phase (refinement, initial certificate,
+    preconditioner/root-runtime build) into one bounded Gauss-Newton step.
+    """
+    from vmex import VmecInput
+    from vmex.core.polish_driver import polish_legacy_solution
+    from vmex.core.solver import resolution_from_input, solve
+
+    inp = VmecInput.from_file(
+        str(DATA / "input.solovev")
+    ).change_resolution(mpol=3, ntor=0, ntheta=12, nzeta=4)
+    inp = dataclasses.replace(
+        inp, ns_array=np.asarray([5]), ftol_array=np.asarray([1.0e-9]),
+        niter_array=np.asarray([2000]),
+    )
+    result = solve(inp)
+    lines: list[str] = []
+
+    def capture(text="", **kwargs):
+        lines.append(str(text))
+
+    polish_legacy_solution(
+        inp,
+        resolution_from_input(inp, ns=5),
+        result.state,
+        config=PolishConfig(
+            max_nonlinear_iterations=1,
+            collocation_scale_probes=2,
+            fail_policy="return_unpolished",
+        ),
+        verbose=True,
+        emit=capture,
+    )
+    text = "\n".join(lines)
+    assert "refining the converged state" in text
+    assert "evaluating the initial force certificate" in text
+    assert "building the polish preconditioner and root runtime" in text
+
+
+def test_collocation_polish_announces_each_phase(small_strong_root):
+    """Every silent setup phase emits a notice before it starts.
+
+    A W7-X-scale user run showed the banner and then nothing for minutes;
+    the notices exist so a quiet console is always attributable to a named
+    phase.  Chart and certificate are deliberately NOT prebuilt here so the
+    driver's own build paths (and their notices) execute.
+    """
+    lines: list[str] = []
+
+    def capture(text="", **kwargs):
+        lines.append(str(text))
+
+    polish_collocation_least_squares(
+        small_strong_root,
+        config=PolishConfig(
+            tolerance=2.0,
+            validation_tolerance=10.0,
+            radial_refinement_tolerance=10.0,
+            collocation_scale_probes=2,
+            max_nonlinear_iterations=1,
+            fail_policy="return_unpolished",
+        ),
+        verbose=True,
+        emit=capture,
+    )
+    text = "\n".join(lines)
+    assert "building the polish chart" in text
+    assert "evaluating the initial force certificate" in text
+    assert "collocation:" in text
+
+
 def test_collocation_polish_primal_and_derivatives(small_strong_root):
     chart = make_strong_structured_chart(
         small_strong_root, balance_iterations=1, balance_probes=2
