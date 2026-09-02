@@ -1019,11 +1019,6 @@ def polish_strong_root(
 # compilation cache as well (different constants, different HLO). These
 # module lanes take the pytrees as arguments, so equal-structure polish
 # calls share one compiled program in memory and on disk.
-@jax.jit
-def _scaled_collocation_lane(value, runtime, chart, collocation_scale):
-    return strong_collocation_residual(value, runtime, chart) / collocation_scale
-
-
 @functools.partial(jax.jit, static_argnames=("config",))
 def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
                               collocation_scale, config):
@@ -1036,23 +1031,54 @@ def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
     return gauss_newton_least_squares(residual, value, config=config)
 
 
+@jax.jit
+def _collocation_probe_lane(probes, zero, runtime, chart, collocation_scale):
+    """Stacked transpose-JVP responses of the scaled collocation residual.
+
+    The former host-eager linearize/linear_transpose pair rebuilt and re-ran
+    a fresh linear program per polish call; like the Ruiz lanes in
+    :mod:`.polish`, linearizing inside one module jit with the pytrees as
+    traced operands bakes no constants and lets equal-structure polish calls
+    share the executable. The primal re-runs on each call — one extra force
+    evaluation at setup.
+    """
+
+    def residual(value):
+        return strong_collocation_residual(
+            value, runtime, chart) / collocation_scale
+
+    _, jvp = jax.linearize(residual, zero)
+    transpose = jax.linear_transpose(jvp, zero)
+    return jax.vmap(lambda probe: transpose(probe)[0])(probes)
+
+
 def _collocation_variable_scale(
-    residual,
+    runtime: StrongRootRuntime,
+    chart,
+    collocation_scale: jax.Array,
     zero: jax.Array,
     row_count: int,
     probes: int,
 ) -> np.ndarray:
-    """Estimate inverse column norms with deterministic transpose probes."""
+    """Estimate inverse column norms with deterministic transpose probes.
+
+    The probe draws keep the pre-lane sequence: one generator, one draw per
+    probe in order, so the sampled directions are bit-identical to the
+    retired per-call implementation.
+    """
 
     if probes == 0:
         return np.ones(np.asarray(zero).shape, dtype=float)
-    _, jvp = jax.linearize(residual, jnp.asarray(zero))
-    transpose = jax.linear_transpose(jvp, jnp.asarray(zero))
     generator = np.random.default_rng(0)
+    stacked = np.stack([
+        generator.choice(np.asarray([-1.0, 1.0]), size=row_count)
+        for _ in range(probes)
+    ])
+    responses = np.asarray(_collocation_probe_lane(
+        jnp.asarray(stacked), jnp.asarray(zero), runtime, chart,
+        jnp.asarray(collocation_scale)))
     column_squared = np.zeros(np.asarray(zero).shape, dtype=float)
-    for _ in range(probes):
-        probe = generator.choice(np.asarray([-1.0, 1.0]), size=row_count)
-        response = np.asarray(transpose(jnp.asarray(probe))[0])
+    for response in responses:
         column_squared += response * response
     column_norm = np.sqrt(column_squared / float(probes))
     column_floor = max(1.0e-8 * float(np.max(column_norm)), 1.0e-12)
@@ -1092,12 +1118,10 @@ def polish_collocation_least_squares(
     )
     collocation_scale_array = jnp.asarray(collocation_scale)
 
-    def physical_residual(value):
-        return _scaled_collocation_lane(
-            value, runtime, chart, collocation_scale_array)
-
     variable_scale = _collocation_variable_scale(
-        physical_residual,
+        runtime,
+        chart,
+        collocation_scale_array,
         zero,
         int(initial_collocation.size),
         config.collocation_scale_probes,
