@@ -325,6 +325,55 @@ def test_point_force_jvp_with_respect_to_high_order_coefficients():
     assert float(jnp.linalg.norm(derivative)) > 0.0
 
 
+def test_batched_point_sweep_matches_flat_vmap_values_and_gradients(monkeypatch):
+    """``lax.map`` batching must not change force values or derivatives.
+
+    The sweep switched from one flat ``vmap`` to ``lax.map`` batches so the
+    W7-X-scale certificate (2.5e5 points at ``mnmax = 200``) stops
+    allocating tens of GB at once.  Per-point results are independent, so
+    a small forced batch must reproduce the flat path exactly, primal and
+    reverse-mode alike (37 points against batch 8 exercises the remainder
+    chunk).
+    """
+
+    from vmex.core import strong_force as sf
+
+    state = _constant_toroidal_field_state()
+    generator = np.random.default_rng(7)
+    count = 37
+    rho = jnp.asarray(generator.uniform(0.05, 0.95, count))
+    theta = jnp.asarray(generator.uniform(0.0, 2.0 * np.pi, count))
+    zeta = jnp.asarray(generator.uniform(0.0, 2.0 * np.pi, count))
+    weights = jnp.asarray(generator.normal(size=(count, 3)))
+    probe = jnp.zeros_like(state.R_cos).at[1, 1].set(1.0)
+
+    def objective(delta):
+        perturbed = replace(state, R_cos=state.R_cos + delta * probe)
+        samples = sf.evaluate_strong_force(perturbed, rho, theta, zeta)
+        return jnp.sum(samples.force * weights)
+
+    flat_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
+    flat_value, flat_grad = jax.value_and_grad(objective)(0.0)
+
+    monkeypatch.setattr(sf, "_FORCE_POINT_BATCH", 8)
+    sf.evaluate_strong_force.clear_cache()
+    batched_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
+    batched_value, batched_grad = jax.value_and_grad(objective)(0.0)
+    sf.evaluate_strong_force.clear_cache()
+
+    for name in flat_samples.__dataclass_fields__:
+        np.testing.assert_allclose(
+            np.asarray(getattr(batched_samples, name)),
+            np.asarray(getattr(flat_samples, name)),
+            rtol=1.0e-13,
+            atol=1.0e-13,
+            err_msg=name,
+        )
+    np.testing.assert_allclose(batched_value, flat_value, rtol=1.0e-12)
+    np.testing.assert_allclose(batched_grad, flat_grad, rtol=1.0e-11)
+    assert float(np.abs(np.asarray(flat_grad))) > 0.0
+
+
 def test_overintegrated_certificate_reports_dimensional_and_normalized_force():
     report = certify_strong_force(
         _constant_toroidal_field_state(),

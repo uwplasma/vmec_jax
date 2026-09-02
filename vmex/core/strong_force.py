@@ -588,6 +588,17 @@ def evaluate_high_order_surface(
     )
 
 
+#: Point-batch bound for the force sweep.  One flat ``vmap`` materializes
+#: per-point spectral intermediates of order ``mnmax * nbasis`` under two
+#: nested ``jacfwd`` levels for *every* point at once; on the W7-X standard
+#: configuration (``MPOL = NTOR = 10``, certificate grid ~2.5e5 points) that
+#: is a single 34 GB allocation, which is exactly the polish OOM users hit.
+#: ``lax.map`` with this batch keeps the sweep vectorized within a batch and
+#: sequential across batches; per-point results are independent, so values
+#: are unchanged.  4096 points bound the W7-X sweep near ~1 GB.
+_FORCE_POINT_BATCH = 4096
+
+
 @jax.jit
 def evaluate_strong_force(
     state: HighOrderEquilibriumState,
@@ -605,7 +616,14 @@ def evaluate_strong_force(
     rho, theta, zeta = jnp.broadcast_arrays(rho, theta, zeta)
     shape = rho.shape
     points = jnp.stack((rho.reshape(-1), theta.reshape(-1), zeta.reshape(-1)), axis=-1)
-    values = jax.vmap(lambda point: _point_force(state, point))(points)
+    if points.shape[0] <= _FORCE_POINT_BATCH:
+        values = jax.vmap(lambda point: _point_force(state, point))(points)
+    else:
+        values = jax.lax.map(
+            lambda point: _point_force(state, point),
+            points,
+            batch_size=_FORCE_POINT_BATCH,
+        )
 
     def reshape_scalar(value: Array) -> Array:
         return value.reshape(shape)
