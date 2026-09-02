@@ -1332,13 +1332,14 @@ def test_nearby_refinement_seed_is_guarded_and_conservative(monkeypatch):
 
     calls = []
 
-    def incomplete_step(_operator, rhs, _config, **_kwargs):
-        calls.append(float(rhs[0]))
+    def incomplete_step(_config, _params, _frozen, _dof_mask, z, fz):
+        calls.append(float(fz[0]))
         # Both paths improve, but neither reaches the requested tolerance.
-        delta = 1.0 if float(rhs[0]) < 7.0 else 2.0
-        return jnp.asarray([delta]), None
+        delta = 1.0 if float(fz[0]) < 7.0 else 2.0
+        z_new = z - delta
+        return z_new, z_new, jnp.linalg.norm(z_new)
 
-    monkeypatch.setattr(im, "_adjoint_solve_gcrot", incomplete_step)
+    monkeypatch.setattr(im, "_refine_step", incomplete_step)
     legacy = im._refined_state(cfg, params, state, state)
     warm = im._refined_state(
         cfg, params, state, state, initial_correction=jnp.asarray([-5.0]))
