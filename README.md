@@ -144,6 +144,15 @@ spectral limit. Outside the plasma, `VmecExtender` adds the
 `virtual_casing_jax` plasma contribution to a supplied coil or MGRID field —
 virtual casing alone is not the total exterior field.
 
+![Poincare sections of the coil-only field next to the extended coil plus plasma field, whose exterior seeds resolve an island chain outside the plasma boundary](docs/_static/figures/readme_extender_exterior_islands.webp)
+
+Above, from `examples/vmex_fieldline_tracing_finite_beta.py`: Poincaré
+sections of the coil field alone (left) and of the extended field (right)
+for a finite-beta QA equilibrium. The pink points are field lines seeded
+just outside the boundary in the extended field — coils plus the
+virtual-casing plasma contribution — resolving the island chain outside the
+plasma; the coil field alone loses those lines before they return.
+
 Effective ripple is an optional in-memory diagnostic—no `boozmn` file is
 needed. `examples/epsilon_effective.py` computes and plots the conventional
 NEO transport quantity $\epsilon_{\mathrm{eff}}^{3/2}$.
