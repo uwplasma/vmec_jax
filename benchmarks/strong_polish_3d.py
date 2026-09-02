@@ -53,6 +53,12 @@ from vmex.core.strong_force import certify_strong_force, lift_high_order_state
 from _provenance import git_state
 
 
+def _phase(message: str) -> None:
+    """Timestamped, flushed phase marker so an OOM kill names its phase."""
+
+    print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
+
+
 def _certificate_dict(certificate) -> dict:
     fields = (
         "absolute_l2",
@@ -133,8 +139,13 @@ def main() -> None:
         niter_array[-1] = args.niter
         inp = dataclasses.replace(inp, niter_array=niter_array)
 
+    _phase(
+        f"legacy solve start: mpol={int(inp.mpol)} ntor={int(inp.ntor)} "
+        f"ns={np.asarray(inp.ns_array).tolist()}"
+    )
     result = solve_multigrid(inp, polish_force_balance=False)
     legacy_seconds = time.perf_counter() - started
+    _phase(f"legacy solve done in {legacy_seconds:.0f}s fsqr={float(result.fsqr):.2e}")
     ns = int(np.asarray(inp.ns_array)[-1])
 
     # polish_legacy_solution, instrumented.
@@ -160,6 +171,7 @@ def main() -> None:
     refined_state = implicit._refined_state(
         implicit_config, params, result.state, dof_mask
     )
+    _phase("legacy state refined")
     radial_basis = (
         None
         if config.radial_spans is None
@@ -179,11 +191,17 @@ def main() -> None:
         radial_basis=radial_basis,
         degree=config.radial_degree,
     )
+    _phase("native lift done; certifying initial state")
     initial_certificate = certify_strong_force(native)
+    _phase(
+        "initial certificate done: "
+        f"L2={float(initial_certificate.normalized_l2):.4e}"
+    )
     low_preconditioner = build_low_order_preconditioner(
         native, params, implicit_config, refined_state, dof_mask,
         probe_chunk_size=4,
     )
+    _phase("low-order preconditioner built")
     runtime = make_strong_root_runtime(
         native,
         low_preconditioner,
@@ -191,11 +209,14 @@ def main() -> None:
         balance_full_root=False,
         radial_quadrature_order=config.radial_quadrature_order,
     )
+    _phase("strong-root runtime built")
     chart = make_strong_structured_chart(runtime)
+    _phase(f"structured chart built: size={int(chart.size)}")
     zero = jnp.zeros((int(chart.size),), dtype=jnp.asarray(native.R_cos).dtype)
     initial_diagnostics = strong_projection_diagnostics(
         np.zeros((int(chart.size),)), runtime, chart
     )
+    _phase("initial projection diagnostics done")
     setup_seconds = time.perf_counter() - lift_started
 
     # polish_collocation_least_squares internals, through the production lanes.
@@ -216,6 +237,7 @@ def main() -> None:
         config.collocation_scale_probes,
     )
     variable_scale_array = jnp.asarray(variable_scale)
+    _phase("collocation and variable scales done; entering Gauss-Newton")
     least_squares_config = LeastSquaresConfig(
         rtol=config.tolerance,
         max_steps=config.max_nonlinear_iterations,
@@ -229,9 +251,11 @@ def main() -> None:
     )
     jax.block_until_ready(solution)
     polish_seconds = time.perf_counter() - polish_started
+    _phase(f"Gauss-Newton done in {polish_seconds:.0f}s; certifying final state")
     vector = variable_scale_array * solution.x
     state = _corrected_state(vector, runtime, chart)
     final_certificate = certify_strong_force(state)
+    _phase("final certificate done")
     certified = bool(
         float(final_certificate.normalized_l2) <= config.certificate_tolerance
         and float(final_certificate.radial_refinement_difference)
