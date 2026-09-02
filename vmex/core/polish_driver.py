@@ -1172,12 +1172,15 @@ def polish_collocation_least_squares(
     from solvax import LeastSquaresConfig
 
     config = PolishConfig() if config is None else config
-    chart = make_strong_structured_chart(runtime) if chart is None else chart
-    initial_certificate = (
-        certify_strong_force(runtime.native)
-        if initial_certificate is None
-        else initial_certificate
-    )
+    if chart is None:
+        if verbose:
+            emit(" building the polish chart (scaling probes compile once)...")
+        chart = make_strong_structured_chart(runtime)
+    if initial_certificate is None:
+        if verbose:
+            emit(" evaluating the initial force certificate "
+                 "(independent oracle, compiles once)...")
+        initial_certificate = certify_strong_force(runtime.native)
     zero = jnp.zeros((chart.size,), dtype=jnp.asarray(runtime.native.R_cos).dtype)
     initial_collocation = strong_collocation_residual(zero, runtime, chart)
     collocation_scale = max(
@@ -1340,6 +1343,11 @@ def polish_legacy_solution(
     )
     params = implicit.params_from_input(source)
     legacy_runtime = implicit.runtime_from_params(params, implicit_config)
+    # Each phase below can run minutes at high resolution with no output of
+    # its own, so the CLI announces every one before it starts — a silent
+    # console must always be attributable to a named phase.
+    if verbose:
+        emit(" refining the converged state (Newton anchor)...")
     dof_mask = implicit._dof_mask(legacy_state, legacy_runtime, implicit_config)
     refined_state = implicit._refined_state(
         implicit_config,
@@ -1365,6 +1373,9 @@ def polish_legacy_solution(
             ),
         )
     )
+    if verbose:
+        emit(" evaluating the initial force certificate "
+             "(independent oracle, compiles once)...")
     certified_native = lift_high_order_state(
         refined_state,
         legacy_runtime,
@@ -1407,6 +1418,8 @@ def polish_legacy_solution(
             refined_state,
         )
     native = certified_native
+    if verbose:
+        emit(" building the polish preconditioner and root runtime...")
     low_preconditioner = build_low_order_preconditioner(
         native,
         params,
