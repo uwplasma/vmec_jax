@@ -1549,7 +1549,8 @@ def _mask_cache_key(cfg: ImplicitConfig) -> tuple:
     return (cfg.resolution, bool(cfg.lconm1), int(cfg.inp.ncurr))
 
 
-def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
+def _host_solve_and_mask(cfg: ImplicitConfig, params_np, *,
+                         refine: bool = True) -> tuple:
     # This function executes on a pure_callback WORKER THREAD, where the
     # caller's thread-local ``jax.default_device`` context is not active.
     # Re-enter the config's device context explicitly, otherwise everything
@@ -1558,10 +1559,11 @@ def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
     # explicitly placed state (observed as NaN diagnostics / zero gradients
     # on a non-default GPU).
     with _device_context(cfg):
-        return _host_solve_and_mask_impl(cfg, params_np)
+        return _host_solve_and_mask_impl(cfg, params_np, refine=refine)
 
 
-def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
+def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np, *,
+                              refine: bool = True) -> tuple:
     _HOST_ERROR.clear()  # fresh callback: drop any stale relayed error
     # The callback payload arrives committed to the runtime's LOCAL CPU
     # regardless of ``cfg.device``, and ``jnp.asarray`` preserves an existing
@@ -1603,7 +1605,13 @@ def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
         _MASK_CACHE[cache_key] = mask
     # Anchor the state at the root of the residual the adjoint linearizes, so
     # every consumer — value, cotangent and linearization — reads the same
-    # point (see _refined_state).
+    # point (see _refined_state).  ``refine=False`` is the problem-factory
+    # seed preflight, which only validates shape/finiteness and never
+    # differentiates: it skips the (expensive) anchor so the first user
+    # output is not held behind it, and the first derivative evaluation —
+    # which memo-hits this solve — computes the identical refinement then.
+    if not refine:
+        return as_np(result.state), mask
     state = _refine_fixed_point(
         cfg, params, result.state,
         _device_pin(cfg, jax.tree.map(jnp.asarray, mask)))

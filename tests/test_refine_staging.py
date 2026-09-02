@@ -1,14 +1,20 @@
 """Startup-latency contracts of the staged fixed-point refinement.
 
-Pins the perf behavior behind the QA_optimization evaluation-latency fix (the
-``tests/test_runtime_recompile_keys.py`` idiom — lower-only, no repeated full
-solves): ``_refine_step_core`` is one reusable per-config executable.  Every
-per-trial quantity (iterate, residual, parameters, frozen anchor, dof mask) is
-a program ARGUMENT, never a baked closure constant, so consecutive optimizer
-trial boundaries share one compiled program.  The previous host-eager step
-re-linearized ``F`` per call and handed ``solvax.gcrot`` a fresh closure, so
-the ``lax.while_loop`` it staged missed the compile cache on every trial —
-one measured ``jit(while)`` recompile per optimizer evaluation.
+Pins the two perf behaviors behind the QA_optimization startup fixes (the
+``tests/test_runtime_recompile_keys.py`` idiom — lower-only and counter-based,
+no repeated full solves):
+
+- ``_refine_step_core`` is one reusable per-config executable: every per-trial
+  quantity (iterate, residual, parameters, frozen anchor, dof mask) is a
+  program ARGUMENT, never a baked closure constant, so consecutive optimizer
+  trial boundaries share one compiled program.  The previous host-eager step
+  re-linearized ``F`` per call and handed ``solvax.gcrot`` a fresh closure, so
+  the ``lax.while_loop`` it staged missed the compile cache on every trial —
+  one measured ``jit(while)`` recompile per optimizer evaluation;
+- the problem-factory seed preflight (``refine=False``) never pays for the
+  Newton anchor: refinement runs on the first derivative evaluation instead,
+  which memo-hits the preflight's solve, so the work moves behind the
+  ``compile_value_and_gradient`` heartbeat without being duplicated.
 """
 
 from __future__ import annotations
@@ -65,3 +71,58 @@ def test_refine_step_lowering_is_shared_across_trial_points() -> None:
     assert text_a == text_b
     # ... while the trial values genuinely differ.
     assert not np.array_equal(np.asarray(z0.R_cos), np.asarray(z1.R_cos))
+
+
+def test_preflight_skips_refinement_and_first_derivative_pays_it_once() -> None:
+    """``refine=False`` returns the raw solver state without the anchor.
+
+    The subsequent default (``refine=True``) call at the same parameters
+    memo-hits the solve and runs the refinement exactly once, so deferring
+    the anchor out of problem construction conserves total work.
+    """
+    _, cfg, p0 = _small_solovev_setup()
+    params_np = jax.tree.map(lambda a: np.asarray(a, dtype=np.float64), p0)
+
+    calls = {"refine": 0, "solve": 0}
+    original_refine = im._refine_fixed_point
+    original_solve = im._host_solve
+
+    def counting_refine(*args, **kwargs):
+        calls["refine"] += 1
+        return original_refine(*args, **kwargs)
+
+    def counting_solve(*args, **kwargs):
+        calls["solve"] += 1
+        return original_solve(*args, **kwargs)
+
+    im._refine_fixed_point = counting_refine
+    im._host_solve = counting_solve
+    try:
+        raw_state, _ = im._host_solve_and_mask(cfg, params_np, refine=False)
+        assert calls == {"refine": 0, "solve": 1}
+        hit = im._LAST_SOLVE.get(cfg)
+        assert hit is not None
+        for raw_leaf, solver_leaf in zip(
+            jax.tree.leaves(raw_state), jax.tree.leaves(hit[1].state)
+        ):
+            np.testing.assert_array_equal(
+                np.asarray(raw_leaf), np.asarray(solver_leaf))
+
+        refined_state, _ = im._host_solve_and_mask(cfg, params_np)
+        # Memo-hit solve (the counted host call returns the stored result
+        # without iterating) and exactly one refinement.
+        assert calls == {"refine": 1, "solve": 2}
+        stats = im._SOLVE_STATS.get(cfg)
+        assert stats is not None and stats["solves"] == 1
+    finally:
+        im._refine_fixed_point = original_refine
+        im._host_solve = original_solve
+
+    # The refined anchor is the memoized one later derivative lanes read.
+    memo = im._LAST_REFINED.get(cfg)
+    assert memo is not None
+    for refined_leaf, memo_leaf in zip(
+        jax.tree.leaves(refined_state), jax.tree.leaves(memo[1])
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(refined_leaf), np.asarray(memo_leaf))

@@ -2672,7 +2672,12 @@ def _least_squares_implicit(
     params0_np = jax.tree.map(
         lambda a: np.asarray(a, dtype=np.float64), params_of(_place(x0))
     )
-    state0_np, mask_np = imp._host_solve_and_mask(cfg, params0_np)
+    # ``refine=False``: the preflight validates the seed solve and the
+    # residual shape but never differentiates this state, so it does not pay
+    # for the fixed-point anchor here.  The first derivative evaluation
+    # memo-hits this exact solve and refines then — under the compile
+    # heartbeat instead of the silent factory (user-visible startup gap).
+    state0_np, mask_np = imp._host_solve_and_mask(cfg, params0_np, refine=False)
     state0 = jax.tree.map(_place, state0_np)
     params_at_x0 = params_of(_place(x0))
     runtime0 = imp.runtime_from_params(params_at_x0, cfg)
