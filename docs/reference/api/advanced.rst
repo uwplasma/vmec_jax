@@ -47,6 +47,8 @@ VMEC deck enables the same path with comment directives that VMEC2000 ignores::
    !@VMEX POLISH_TOL = 1.0E-8
    !@VMEX POLISH_FAIL = ERROR
    !@VMEX POLISH_DEGREE = 5
+   !@VMEX POLISH_MAX_ITER = 40
+   !@VMEX POLISH_SPANS = 16
 
 (the original single-flag spelling ``! VMEX: POLISH_FORCE_BALANCE = .TRUE.``
 still parses).  Directives are execution metadata, owned by

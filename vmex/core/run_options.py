@@ -14,6 +14,8 @@ Two directive spellings are accepted, both VMEC-safe comments::
     !@VMEX POLISH_TOL = 1.0E-8
     !@VMEX POLISH_FAIL = ERROR
     !@VMEX POLISH_DEGREE = 5
+    !@VMEX POLISH_MAX_ITER = 40
+    !@VMEX POLISH_SPANS = 16
 
 and the original single-flag form from the polishing integration::
 
@@ -72,8 +74,11 @@ class RunOptions:
 
     ``polish`` is ``False``, ``True``, or ``"auto"`` (polish only when the
     legacy solve converged and the physics is in the supported set).
-    ``polish_tol``/``polish_degree`` override the matching
-    :class:`~vmex.core.polish_driver.PolishConfig` fields when set.
+    ``polish_tol``/``polish_degree``/``polish_max_iter``/``polish_spans``
+    override the matching :class:`~vmex.core.polish_driver.PolishConfig`
+    fields (``tolerance``, ``radial_degree``, ``max_nonlinear_iterations``,
+    ``radial_spans``) when set; only knobs that exist on the driver config
+    are exposed here.
     ``polish_fail`` maps onto the driver's fail policy: ``"error"`` raises,
     ``"fallback"`` returns the unpolished state silently, ``"warn"`` returns
     it with a :class:`RuntimeWarning`.
@@ -83,6 +88,8 @@ class RunOptions:
     polish_tol: float | None = None
     polish_fail: str = "error"
     polish_degree: int | None = None
+    polish_max_iter: int | None = None
+    polish_spans: int | None = None
 
     def __post_init__(self) -> None:
         if self.polish not in _POLISH_MODES:
@@ -99,6 +106,12 @@ class RunOptions:
             raise VmecInputError(
                 f"POLISH_DEGREE must be one of {_DEGREES}, "
                 f"got {self.polish_degree!r}")
+        if self.polish_max_iter is not None and self.polish_max_iter < 1:
+            raise VmecInputError(
+                f"POLISH_MAX_ITER must be positive, got {self.polish_max_iter!r}")
+        if self.polish_spans is not None and self.polish_spans < 1:
+            raise VmecInputError(
+                f"POLISH_SPANS must be positive, got {self.polish_spans!r}")
 
 
 @dataclass(frozen=True)
@@ -134,15 +147,16 @@ def _parse_directive_value(key: str, token: str) -> tuple[str, Any]:
                 f"POLISH_TOL must be a real number, got {token!r}") from error
     if key == "POLISH_FAIL":
         return "polish_fail", token.strip().lower()
-    if key == "POLISH_DEGREE":
+    if key in ("POLISH_DEGREE", "POLISH_MAX_ITER", "POLISH_SPANS"):
         try:
-            return "polish_degree", int(token.rstrip(","))
+            return key.lower(), int(token.rstrip(","))
         except ValueError as error:
             raise VmecInputError(
-                f"POLISH_DEGREE must be an integer, got {token!r}") from error
+                f"{key} must be an integer, got {token!r}") from error
     raise VmecInputError(
         f"unknown VMEX directive {key!r} "
-        "(known: POLISH, POLISH_TOL, POLISH_FAIL, POLISH_DEGREE)")
+        "(known: POLISH, POLISH_TOL, POLISH_FAIL, POLISH_DEGREE, "
+        "POLISH_MAX_ITER, POLISH_SPANS)")
 
 
 def parse_indata_run_options(text: str) -> RunOptions:
@@ -210,6 +224,10 @@ def format_indata_directives(options: RunOptions) -> str:
         lines.append(f"!@VMEX POLISH_FAIL = {options.polish_fail.upper()}")
     if options.polish_degree is not None:
         lines.append(f"!@VMEX POLISH_DEGREE = {options.polish_degree}")
+    if options.polish_max_iter is not None:
+        lines.append(f"!@VMEX POLISH_MAX_ITER = {options.polish_max_iter}")
+    if options.polish_spans is not None:
+        lines.append(f"!@VMEX POLISH_SPANS = {options.polish_spans}")
     return "\n".join(lines) + ("\n" if lines else "")
 
 
@@ -244,6 +262,8 @@ def resolve_run_options(
     polish_tol: float | None = None,
     polish_fail: str | None = None,
     polish_degree: int | None = None,
+    polish_max_iter: int | None = None,
+    polish_spans: int | None = None,
 ) -> tuple[RunOptions, dict[str, str]]:
     """Apply the documented precedence and record where each value came from.
 
@@ -260,7 +280,9 @@ def resolve_run_options(
         for field in fields(RunOptions)
     }
     overrides = {"polish": polish, "polish_tol": polish_tol,
-                 "polish_fail": polish_fail, "polish_degree": polish_degree}
+                 "polish_fail": polish_fail, "polish_degree": polish_degree,
+                 "polish_max_iter": polish_max_iter,
+                 "polish_spans": polish_spans}
     updates = {name: value for name, value in overrides.items()
                if value is not None}
     if updates:
@@ -284,6 +306,10 @@ def polish_config_from_options(options: RunOptions, base: Any = None) -> Any:
         updates["tolerance"] = options.polish_tol
     if options.polish_degree is not None:
         updates["radial_degree"] = options.polish_degree
+    if options.polish_max_iter is not None:
+        updates["max_nonlinear_iterations"] = options.polish_max_iter
+    if options.polish_spans is not None:
+        updates["radial_spans"] = options.polish_spans
     if options.polish_fail in ("fallback", "warn"):
         updates["fail_policy"] = "return_unpolished"
     if not updates:

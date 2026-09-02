@@ -601,6 +601,8 @@ def solve_multigrid(
         polish=polish,
         polish_config=polish_config,
         lconm1=lconm1,
+        verbose=verbose,
+        emit=emit,
     )
 
 
@@ -990,6 +992,8 @@ def solve_file(
     polish_tol: float | None = None,
     polish_fail: str | None = None,
     polish_degree: int | None = None,
+    polish_max_iter: int | None = None,
+    polish_spans: int | None = None,
     write_wout: bool = True,
     outdir=None,
     **solve_kwargs,
@@ -1003,8 +1007,12 @@ def solve_file(
 
     ``polish_fail`` selects what a failed polish does: ``"error"`` raises
     (driver default), ``"fallback"`` returns the unpolished state, ``"warn"``
-    does the same and emits a :class:`RuntimeWarning`.  An explicit
-    ``polish_config`` wins over the scalar overrides entirely.
+    does the same and emits a :class:`RuntimeWarning`.  ``polish_tol``,
+    ``polish_degree``, ``polish_max_iter``, and ``polish_spans`` override
+    the matching :class:`~vmex.core.polish_driver.PolishConfig` fields, with
+    the documented precedence ``CLI flag > Python keyword > file directive >
+    package default``; an explicit ``polish_config`` wins over the scalar
+    overrides entirely.
 
     ``write_wout=True`` writes ``wout_<case>.nc`` beside the input (or into
     ``outdir``) — the same output contract as ``vmex <input>``.  When
@@ -1025,6 +1033,7 @@ def solve_file(
     options, sources = resolve_run_options(
         request.options, polish=polish, polish_tol=polish_tol,
         polish_fail=polish_fail, polish_degree=polish_degree,
+        polish_max_iter=polish_max_iter, polish_spans=polish_spans,
     )
     config = polish_config_from_options(options, polish_config)
     inp = request.input

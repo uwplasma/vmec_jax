@@ -335,13 +335,41 @@ Enable it in a VMEC-compatible input deck:
 
 ```fortran
 !@VMEX POLISH = AUTO
+!@VMEX POLISH_TOL = 1.0E-3
+!@VMEX POLISH_MAX_ITER = 40
 &INDATA
   ...
 /
 ```
 
-VMEX reads the comment; VMEC2000 ignores it. The same opt-in is available in
-Python:
+VMEX reads the comments; VMEC2000 ignores them. `POLISH = AUTO` resolves to:
+lift the converged final stage to clamped radial B-splines of degree 3 with
+about one span per two radial mesh points (capped at 32 spans), return at
+once if that lifted state already passes the independent certificate
+(volume L2 at or below `1.0E-2`), and otherwise run up to 80 Gauss-Newton
+iterations at relative tolerance `1.0E-3`. `ON` runs the same path today;
+`OFF` is the default. The other directives, each mapped onto the matching
+`PolishConfig` field:
+
+| Directive | Meaning | Default |
+|---|---|---|
+| `POLISH = AUTO \| ON \| OFF` | polish once after the final fixed-boundary stage | `OFF` |
+| `POLISH_TOL` | Gauss-Newton relative tolerance (`tolerance`) | `1.0E-3` |
+| `POLISH_DEGREE = 3 \| 5 \| 7` | radial B-spline degree (`radial_degree`) | `3` |
+| `POLISH_SPANS` | radial spans of the polished basis (`radial_spans`) | resolution-derived, at most 32 |
+| `POLISH_MAX_ITER` | Gauss-Newton iteration cap (`max_nonlinear_iterations`) | `80` |
+| `POLISH_FAIL = ERROR \| FALLBACK \| WARN` | failed polish: raise, return unpolished, or warn | `ERROR` |
+
+The CLI mirrors every directive (`--polish`, `--polish-tol`,
+`--polish-degree`, `--polish-spans`, `--polish-max-iter`, `--polish-fail`,
+`--no-polish`) and the precedence is `CLI flag > Python keyword > file
+directive > package default`; an explicit `polish_config` in Python wins
+over all scalar knobs. During a CLI run the phase announces itself: a
+`BEGIN FORCE POLISHING` banner with the resolved settings, a compile notice
+for the first polish executable build, one row per Gauss-Newton iteration,
+and a closing certificate verdict that names any failed check.
+
+The same opt-in is available in Python:
 
 ```python
 import vmex as vj
