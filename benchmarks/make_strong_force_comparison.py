@@ -1,5 +1,11 @@
 #!/usr/bin/env python
-"""Render the README strong-force comparison from committed clean artifacts."""
+"""Render the README strong-force comparison from committed clean artifacts.
+
+The optional before/after polishing pair renders from two clean
+``benchmarks/strong_certificate.py --wout <export>`` certificates (the
+unpolished and the certified polished WOUT exports of the bundled shaped
+tokamak) plus the polished wout itself for the cross-sections.
+"""
 
 from __future__ import annotations
 
@@ -236,38 +242,150 @@ def render(
     plt.close(fig)
 
 
+def _load_certificate(path: Path) -> dict:
+    cert = json.loads(path.read_text())
+    if cert["schema"] != "vmex.strong-certificate-benchmark/1":
+        raise RuntimeError("unexpected strong-force certificate schema")
+    if cert["measurement_dirty"]:
+        raise RuntimeError(f"{path.name} was measured from dirty source")
+    return cert
+
+
+def _cross_sections(wout_path: Path, ax) -> None:
+    """Draw phi=0 flux-surface cross-sections of a stellarator-symmetric wout."""
+    import netCDF4
+
+    with netCDF4.Dataset(wout_path) as ds:
+        xm = np.asarray(ds.variables["xm"][:], dtype=float)
+        rmnc = np.asarray(ds.variables["rmnc"][:], dtype=float)
+        zmns = np.asarray(ds.variables["zmns"][:], dtype=float)
+        ns = int(ds.variables["ns"][:])
+    theta = np.linspace(0.0, 2.0 * np.pi, 241)
+    cos = np.cos(np.outer(xm, theta))
+    sin = np.sin(np.outer(xm, theta))
+    # Interior surfaces at uniform rho (uniform s crowds the edge).
+    interior = sorted(
+        {int(round((ns - 1) * rho * rho)) for rho in np.linspace(0.28, 0.9, 7)}
+    )
+    for j in interior:
+        ax.plot(rmnc[j] @ cos, zmns[j] @ sin, color=EDGE, linewidth=1.0)
+    ax.plot(
+        rmnc[ns - 1] @ cos,
+        zmns[ns - 1] @ sin,
+        color=COLORS["VMEX"],
+        linewidth=2.2,
+        label="prescribed boundary",
+    )
+    ax.plot(rmnc[0] @ cos[:, :1], zmns[0] @ sin[:, :1], "+", color=INK, markersize=9)
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_xlabel(r"$R$ [m]")
+    ax.set_ylabel(r"$Z$ [m]")
+    ax.legend(loc="upper right")
+
+
 def render_summary_pair(
-    before: Path,
-    after: Path,
+    before_cert: Path,
+    after_cert: Path,
+    wout: Path,
     output: Path,
-    *,
-    before_error: float | None = None,
-    after_error: float | None = None,
-) -> None:
-    """Place the standard ``--plot`` summaries side by side without restyling."""
+) -> tuple[float, float]:
+    """Render the polish before/after evidence for the README.
+
+    Left: flux-surface cross-sections of the certified polished export — the
+    boundary and profiles are prescribed, so they are identical before and
+    after polishing.  Right: the same independent force oracle as the
+    solver-comparison figure, applied to the unpolished and the certified
+    polished WOUT exports of the one bundled case.  Returns the two volume-L2
+    values read from the certificates.
+    """
+    before = _load_certificate(before_cert)
+    after = _load_certificate(after_cert)
+    values = (
+        float(before["metrics"]["normalized_l2"]),
+        float(after["metrics"]["normalized_l2"]),
+    )
     _style()
-    fig, axes = plt.subplots(1, 2, figsize=(14.0, 5.2), dpi=140)
-    titles = ("Before polishing", "After polishing")
-    errors = (before_error, after_error)
-    for ax, path, title, error in zip(
-        axes,
-        (before, after),
-        titles,
-        errors,
-        strict=True,
-    ):
-        ax.imshow(plt.imread(path))
-        subtitle = (
-            ""
-            if error is None
-            else rf"  —  independent $L^2$ $\epsilon_F={error:.3e}$"
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(11.6, 4.9),
+        gridspec_kw={"width_ratios": (1.0, 1.7)},
+        dpi=180,
+    )
+    fig.subplots_adjust(left=0.075, right=0.985, bottom=0.13, top=0.86, wspace=0.3)
+    fig.suptitle(
+        "Force balance before and after polishing",
+        x=0.075,
+        y=0.965,
+        ha="left",
+        fontsize=14,
+        fontweight="bold",
+    )
+
+    _cross_sections(wout, axes[0])
+    axes[0].set_title(
+        "(a) shaped tokamak: flux surfaces",
+        loc="left",
+        fontsize=11,
+        fontweight="bold",
+    )
+
+    ax = axes[1]
+    styles = (
+        ("unpolished export", "VMEC2000", (0, (5, 2)), 1.7, before),
+        ("certified polished export", "VMEX", "-", 2.5, after),
+    )
+    for label, color_key, linestyle, width, cert in styles:
+        profile = cert["radial_profile"]
+        rho = np.asarray(profile["rho"], dtype=float)
+        force = np.asarray(profile["flux_surface_normalized_l2"], dtype=float)
+        value = float(cert["metrics"]["normalized_l2"])
+        ax.plot(
+            rho,
+            np.maximum(force, 1.0e-30),
+            color=COLORS[color_key],
+            linestyle=linestyle,
+            linewidth=width,
+            label=f"{label}  (volume L2 {value:.3g})",
         )
-        ax.set_title(title + subtitle, fontsize=12, fontweight="bold", pad=8)
-        ax.set_axis_off()
-    fig.subplots_adjust(left=0.005, right=0.995, bottom=0.01, top=0.93, wspace=0.015)
+        peak = int(np.argmax(force))
+        ax.annotate(
+            f"max {force[peak]:.2g}",
+            xy=(rho[peak], force[peak]),
+            xytext=(12, 4),
+            textcoords="offset points",
+            fontsize=8.5,
+            color=COLORS[color_key],
+        )
+    ax.set_yscale("log")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xlabel(r"normalized radius $\rho=\sqrt{s}$,  $s=\psi/\psi_B$")
+    ax.set_ylabel(
+        "relative force error\n"
+        r"$\epsilon_F=2|\mathbf{J}\!\times\!\mathbf{B}-\nabla p|/"
+        r"(|\mathbf{J}\!\times\!\mathbf{B}|+|\nabla p|+F_{\rm floor})$"
+    )
+    ax.legend(loc="upper right")
+    ax.set_title(
+        "(b) independent force error, exported equilibria",
+        loc="left",
+        fontsize=11,
+        fontweight="bold",
+    )
+    fig.text(
+        0.985,
+        0.022,
+        "One shared independent force-balance oracle on the unpolished and certified polished WOUT exports; "
+        "boundary and profiles are identical. Case: input.shaped_tokamak_pressure_polished.",
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color=MUTED,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, format="webp", dpi=140, pil_kwargs={"quality": 78, "method": 6})
+    fig.savefig(output, format="webp", dpi=180, pil_kwargs={"lossless": True})
     plt.close(fig)
+    return values
 
 
 def main() -> None:
@@ -275,30 +393,34 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=DEFAULT_FIGURE)
     parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA)
     parser.add_argument("--artifact", type=Path, default=DEFAULT_ARTIFACT)
-    parser.add_argument("--before-summary", type=Path)
-    parser.add_argument("--after-summary", type=Path)
+    parser.add_argument("--summary-before-cert", type=Path)
+    parser.add_argument("--summary-after-cert", type=Path)
+    parser.add_argument("--summary-wout", type=Path)
     parser.add_argument("--summary-output", type=Path, default=DEFAULT_SUMMARY_FIGURE)
-    parser.add_argument("--summary-before-error", type=float)
-    parser.add_argument("--summary-after-error", type=float)
     args = parser.parse_args()
-    if (args.before_summary is None) != (args.after_summary is None):
-        parser.error("pass both --before-summary and --after-summary")
-    if args.before_summary is not None and (
-        args.summary_before_error is None or args.summary_after_error is None
+    summary_inputs = (
+        args.summary_before_cert, args.summary_after_cert, args.summary_wout,
+    )
+    if any(path is None for path in summary_inputs) and any(
+        path is not None for path in summary_inputs
     ):
-        parser.error("summary images require both independent error values")
+        parser.error(
+            "pass --summary-before-cert, --summary-after-cert, and "
+            "--summary-wout together (benchmarks/strong_certificate.py "
+            "--wout <export> writes the certificates)"
+        )
     cases = _load(args.artifact)
     render(
         cases["shaped_tokamak_pressure"]["sources"],
         args.output,
     )
-    if args.before_summary is not None:
-        render_summary_pair(
-            args.before_summary,
-            args.after_summary,
+    summary_values = None
+    if args.summary_before_cert is not None:
+        summary_values = render_summary_pair(
+            args.summary_before_cert,
+            args.summary_after_cert,
+            args.summary_wout,
             args.summary_output,
-            before_error=args.summary_before_error,
-            after_error=args.summary_after_error,
         )
     try:
         figure_path = args.output.relative_to(REPO).as_posix()
@@ -323,20 +445,20 @@ def main() -> None:
         "figure_sha256": file_sha256(args.output),
         "summary_figure": (
             None
-            if args.before_summary is None
+            if summary_values is None
             else args.summary_output.relative_to(REPO).as_posix()
         ),
         "summary_figure_sha256": (
             None
-            if args.before_summary is None
+            if summary_values is None
             else file_sha256(args.summary_output)
         ),
         "summary_independent_l2": (
             None
-            if args.before_summary is None
+            if summary_values is None
             else {
-                "before": args.summary_before_error,
-                "after": args.summary_after_error,
+                "before": round(summary_values[0], 6),
+                "after": round(summary_values[1], 6),
             }
         ),
         "timing_note": (

@@ -366,12 +366,15 @@ polishing demonstrably wins.
 
 ![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 
-Below: the same equilibrium summary before and after polishing the bundled
-shaped tokamak (`input.shaped_tokamak_pressure_polished`). Polishing cuts the
-independent force error about sevenfold, from `1.28e-2` to `1.79e-3`, without
-moving the boundary or the prescribed profiles.
+Below: the bundled shaped tokamak (`input.shaped_tokamak_pressure_polished`)
+before and after polishing. The independent continuum force residual of the
+exported equilibrium drops about 26-fold, from `5.05e-2` to `1.91e-3`, while
+the boundary and the prescribed profiles are untouched. The radial force
+balance panel in `vmex --plot` summaries is a different diagnostic — VMEC's
+own discrete flux-surface average, which ordinary solves already minimize —
+so that panel does not display this gain.
 
-![Shaped-tokamak summary before and after force-balance polishing](docs/_static/figures/readme_polish_summary.webp)
+![Shaped-tokamak flux surfaces and independent force-error profiles before and after polishing](docs/_static/figures/readme_polish_summary.webp)
 
 The raw comparison data, source revisions, resolutions, timing boundaries, and
 certificate refinements are recorded in `benchmarks/`.

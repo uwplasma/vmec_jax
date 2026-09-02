@@ -50,13 +50,13 @@
     }
   },
   "figure": "docs/_static/figures/readme_strong_force_comparison.webp",
-  "figure_sha256": "eead667b8db1748203017302f19a1cd72bf49c4a93f0473f979afb7c60854a47",
+  "figure_sha256": "c2b3887070661a750488c2e69a09ec9ee66d86a3aa8d51e1204eec82e5bd98e6",
   "schema": "vmex.strong-force-readme-figure/4",
   "summary_figure": "docs/_static/figures/readme_polish_summary.webp",
-  "summary_figure_sha256": "bd86d735822663ac851a52978a68640ee6c7a19763acbfd18cfacade0a360ad7",
+  "summary_figure_sha256": "c94c88e95af7f4f6e56a5f1d2e8a147419a0b38280e1ef05fd9880514aa6925d",
   "summary_independent_l2": {
-    "after": 0.001794,
-    "before": 0.012843
+    "after": 0.001914,
+    "before": 0.050517
   },
   "timing_note": "Accuracy only, and only rows where certified polishing demonstrably beats the legacy codes, per the plan's README figure policy; runtime evidence lives in benchmarks/baselines. All errors from one shared independent oracle on each code's exported equilibrium (VMEX: the certified polished state). The stellarator row returns when the 3-D production polish is tractable."
 }
