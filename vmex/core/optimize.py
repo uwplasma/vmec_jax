@@ -58,6 +58,7 @@ reduced ``[0, pi]`` grid.
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import inspect
 import warnings
@@ -2393,6 +2394,62 @@ def residuals_from_tuples(
     return jnp.concatenate(rows)
 
 
+#: Bounded per-process registry of the per-problem jitted callables built by
+#: :func:`_least_squares_implicit`, keyed on the construction content their
+#: closures bake in (the ``implicit._canonical_config`` precedent one level
+#: up: ``jax.jit`` caches per function OBJECT, so the fresh closures this
+#: factory mints re-traced every graph on repeated problem construction in
+#: one process).  Entries hold the jitted callables, whose closures keep the
+#: keyed term/loss callables alive — identity keys therefore cannot be
+#: recycled while their entry lives.  Eviction only costs a later retrace,
+#: never correctness.
+_PROBLEM_JIT_CACHE: "collections.OrderedDict[tuple, dict[str, Any]]" = (
+    collections.OrderedDict()
+)
+_PROBLEM_JIT_CACHE_MAX = 8
+
+
+def _problem_callable_token(fun: Callable) -> tuple:
+    """Hashable identity token of one user term/loss callable.
+
+    Bound methods are minted fresh on every attribute access, so their own
+    ``id`` never repeats across constructions; token the OWNER instance
+    instead (the cached closures hold the owner via the wrapped term, so the
+    id stays valid).  Plain callables are tokened — and kept alive — by
+    identity.  Limitation (documented on the public factories): equal-content
+    but distinct callables (fresh lambdas per construction) lawfully miss,
+    and owners are assumed frozen after construction, matching the repo-wide
+    frozen-input convention.
+    """
+    owner = getattr(fun, "__self__", None)
+    if owner is not None:
+        return ("bound", id(owner), type(owner).__qualname__,
+                fun.__func__.__qualname__)
+    return ("callable", id(fun), getattr(fun, "__qualname__", repr(fun)))
+
+
+def _problem_jit(cache_key: tuple, slot: str, build: Callable):
+    """One shared jitted callable per ``(problem content, slot)``.
+
+    ``build`` runs at most once per live cache entry; a hit returns the
+    earlier construction's jitted callable, whose closures are content-equal
+    by construction of the key (same canonical config identity, term
+    identities/targets/weights, dof layout, seed point, and Jacobian
+    routing), so tracing and executables are shared instead of rebuilt.
+    """
+    entry = _PROBLEM_JIT_CACHE.get(cache_key)
+    if entry is None:
+        entry = {}
+        _PROBLEM_JIT_CACHE[cache_key] = entry
+    else:
+        _PROBLEM_JIT_CACHE.move_to_end(cache_key)
+    if slot not in entry:
+        entry[slot] = build()
+    while len(_PROBLEM_JIT_CACHE) > _PROBLEM_JIT_CACHE_MAX:
+        _PROBLEM_JIT_CACHE.popitem(last=False)
+    return entry[slot]
+
+
 def _least_squares_implicit(
     objective_terms: Sequence[tuple[Callable, float, Any]],
     inp: VmecInput,
@@ -2445,6 +2502,14 @@ def _least_squares_implicit(
     launch-bound, dof-count-scaling GPU compile (R1); an explicit
     ``device=`` overrides this.  The forward equilibrium callback uses the
     solver's independent automatic per-stage placement policy.
+
+    Repeated construction with identical content reuses the earlier
+    problem's jitted residual/Jacobian callables (``_PROBLEM_JIT_CACHE``,
+    bounded at 8).  User term/loss callables are keyed by IDENTITY (bound
+    methods by their owner instance): pass the same callable objects to hit
+    the cache — freshly minted lambdas per construction lawfully rebuild —
+    and treat term owners as frozen after construction, matching the
+    repo-wide frozen-input convention.
     """
     import scipy.optimize
 
@@ -2526,7 +2591,11 @@ def _least_squares_implicit(
     # and the custom-VJP backward re-enter the same placement context on
     # their own — no outer jax.default_device context needed.
     jac_device = resolve_implicit_device(device, cfg.resolution)
-    cfg = dataclasses.replace(cfg, device=jac_device)
+    # Re-canonicalize after the device replace (the implicit.run precedent):
+    # a fresh config identity here missed every identity-keyed implicit
+    # cache (_template_runtime, the residual lane, _LAST_SOLVE) on repeated
+    # problem construction with identical content.
+    cfg = imp._canonical_config(dataclasses.replace(cfg, device=jac_device))
     if initial_state is not None:
         imp._HOT_CACHE[cfg] = initial_state
 
@@ -2543,6 +2612,31 @@ def _least_squares_implicit(
         if k_cur:
             x0 = np.concatenate([x0, _pack_current(inp, k_cur, ac_scale)])
     x0 = np.asarray(x0, dtype=float)
+
+    # Content key of every degree of freedom the jitted closures below bake
+    # in: the canonical config identity (input deck, resolution, tolerances,
+    # device), the term/loss identities with resolved targets/weights, the
+    # dof layout, the seed point (penalty-wall center), and the Jacobian
+    # routing knobs.  Repeated problem construction with equal content then
+    # reuses the earlier jitted callables through _problem_jit instead of
+    # re-tracing every graph.
+    problem_jit_key = (
+        id(cfg),
+        tuple(
+            (_problem_callable_token(f_orig), float(t_res),
+             np.asarray(w_res).tobytes())
+            for (f_orig, _t, _w), (_f, t_res, w_res)
+            in zip(objective_terms, terms)
+        ),
+        (None if scalar_objective is None
+         else _problem_callable_token(scalar_objective)),
+        int(max_mode), bool(vary_major_radius),
+        None if current_dofs is None else int(current_dofs),
+        x0.shape, x0.tobytes(),
+        (jac_chunk_size if jac_chunk_size is None
+         or isinstance(jac_chunk_size, int) else str(jac_chunk_size)),
+        str(jac_solver),
+    )
 
     def params_of(x: jnp.ndarray):
         repl = dict(rbc=params0.rbc.at[row_idx, col_idx].set(x[:nm]),
@@ -2718,7 +2812,8 @@ def _least_squares_implicit(
             operand=None,
         )
 
-    rows_jit = jax.jit(residual_rows)
+    rows_jit = _problem_jit(
+        problem_jit_key, "rows", lambda: jax.jit(residual_rows))
 
     def scalar_loss(x: jnp.ndarray) -> jnp.ndarray:
         params = params_of(x)
@@ -2734,8 +2829,11 @@ def _least_squares_implicit(
             operand=None,
         )
 
-    scalar_loss_jit = jax.jit(scalar_loss)
-    value_grad_jit = jax.jit(jax.value_and_grad(scalar_loss))
+    scalar_loss_jit = _problem_jit(
+        problem_jit_key, "scalar_loss", lambda: jax.jit(scalar_loss))
+    value_grad_jit = _problem_jit(
+        problem_jit_key, "value_grad",
+        lambda: jax.jit(jax.value_and_grad(scalar_loss)))
 
     # The evolved-dof mask was fetched by the strict seed preflight above.
     mask_const = jax.tree.map(_place, mask_np)
@@ -2933,9 +3031,13 @@ def _least_squares_implicit(
         jac_impl = jacobian_rows_block
     else:
         jac_impl = jacobian_rows
-    jac_jit = jax.jit(jac_impl)
-    gmres_jit = jax.jit(jacobian_rows)
-    reverse_jit = jax.jit(jax.jacrev(residual_rows))
+    jac_jit = _problem_jit(
+        problem_jit_key, "jac", lambda: jax.jit(jac_impl))
+    gmres_jit = _problem_jit(
+        problem_jit_key, "jac_gmres", lambda: jax.jit(jacobian_rows))
+    reverse_jit = _problem_jit(
+        problem_jit_key, "jac_reverse",
+        lambda: jax.jit(jax.jacrev(residual_rows)))
 
     # The strict seed preflight above already evaluated and validated every
     # residual row.  Carry that known shape instead of compiling ``rows_jit``
@@ -2960,7 +3062,6 @@ def _least_squares_implicit(
     P_seed = imp._dof_projector(cfg, mask_const)
     edge_seed = imp._edge_mask(cfg)
 
-    @jax.jit
     def predicted_state(x_trial, x_ref, frozen, dz_cols):
         """First-order trial-state prediction around the stashed jac point.
 
@@ -2975,6 +3076,10 @@ def _least_squares_implicit(
             lambda d: jnp.tensordot(x_trial - x_ref, d, axes=1), dz_cols)
         z = jax.tree.map(jnp.add, P_seed(frozen), dz)
         return imp._assemble(z, rt_p, frozen, P_seed, edge_seed)
+
+    predicted_state = _problem_jit(
+        problem_jit_key, "predicted_state",
+        lambda fn=predicted_state: jax.jit(fn))
 
     def _stash_linearization(x: np.ndarray, dz_cols) -> None:
         """Record ``(x_ref, converged state, dz columns)`` for trial seeding."""
@@ -3325,7 +3430,9 @@ def _least_squares_implicit(
             lambda _: failure_value_and_gradient_jax(x), operand=None,
         )
 
-    residual_value_grad_jit = jax.jit(residual_value_and_gradient)
+    residual_value_grad_jit = _problem_jit(
+        problem_jit_key, "residual_value_grad",
+        lambda: jax.jit(residual_value_and_gradient))
 
     def jax_state_runtime(x: jnp.ndarray):
         """Converged implicit state/runtime pair for differentiable field APIs."""
