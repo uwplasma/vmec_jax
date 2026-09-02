@@ -103,7 +103,7 @@ only for a final equilibrium if desired. The focused example shows the full
 before/after workflow:
 
 ```console
-vmex examples/data/input.finite_beta_stellarator_polished --plot
+vmex examples/data/input.shaped_tokamak_pressure_polished --plot
 python examples/force_balance_polishing.py
 ```
 
