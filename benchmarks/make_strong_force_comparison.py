@@ -254,9 +254,9 @@ def _load_certificate(path: Path) -> dict:
 def _wout_sections(wout_path: Path) -> tuple[list, tuple, tuple]:
     """Return phi=0 cross-section curves of a stellarator-symmetric wout.
 
-    Interior surfaces are sampled at fixed uniform-rho stations (uniform s
-    crowds the edge), so the before/after exports draw the same surfaces
-    even though their radial meshes differ.
+    Interior surfaces are interpolated to fixed uniform-rho stations
+    (uniform s crowds the edge), so the before/after exports draw the same
+    physical surfaces even though their radial meshes differ.
     """
     import netCDF4
 
@@ -268,10 +268,15 @@ def _wout_sections(wout_path: Path) -> tuple[list, tuple, tuple]:
     theta = np.linspace(0.0, 2.0 * np.pi, 241)
     cos = np.cos(np.outer(xm, theta))
     sin = np.sin(np.outer(xm, theta))
-    interior = sorted(
-        {int(round((ns - 1) * rho * rho)) for rho in np.linspace(0.28, 0.9, 7)}
-    )
-    curves = [(rmnc[j] @ cos, zmns[j] @ sin) for j in interior]
+    curves = []
+    for rho in np.linspace(0.28, 0.9, 7):
+        # Full-mesh coefficients are uniform in s; interpolate to s = rho^2.
+        station = rho * rho * (ns - 1)
+        j = min(int(station), ns - 2)
+        weight = station - j
+        rmnc_rho = (1.0 - weight) * rmnc[j] + weight * rmnc[j + 1]
+        zmns_rho = (1.0 - weight) * zmns[j] + weight * zmns[j + 1]
+        curves.append((rmnc_rho @ cos, zmns_rho @ sin))
     boundary = (rmnc[ns - 1] @ cos, zmns[ns - 1] @ sin)
     axis_point = (rmnc[0] @ cos[:, :1], zmns[0] @ sin[:, :1])
     return curves, boundary, axis_point
@@ -286,33 +291,37 @@ def _cross_sections(wout_before: Path, wout_after: Path, ax) -> None:
     boundary and profiles are prescribed, polishing does not move the
     geometry.
     """
+    # The wider dashed under-layer leaves a visible fringe beneath the solid
+    # over-layer wherever the curves coincide (they do, everywhere).
     styles = (
-        (wout_before, COLORS["VMEC2000"], (0, (5, 2)), "unpolished export"),
-        (wout_after, COLORS["VMEX"], "-", "certified polished export"),
+        (wout_before, COLORS["VMEC2000"], (0, (5, 2)), 2.0, 3.4,
+         "unpolished export"),
+        (wout_after, COLORS["VMEX"], "-", 1.0, 2.0,
+         "certified polished export"),
     )
-    for wout_path, color, linestyle, label in styles:
+    for wout_path, color, linestyle, interior_width, edge_width, label in styles:
         curves, boundary, axis_point = _wout_sections(wout_path)
         for r_curve, z_curve in curves:
             ax.plot(
                 r_curve, z_curve, color=color, linestyle=linestyle,
-                linewidth=1.0, alpha=0.85,
+                linewidth=interior_width, alpha=0.85,
             )
         ax.plot(
             *boundary,
             color=color,
             linestyle=linestyle,
-            linewidth=2.2,
+            linewidth=edge_width,
             label=label,
         )
         ax.plot(*axis_point, "+", color=color, markersize=9)
     ax.text(
-        0.03,
-        0.03,
-        "surfaces overlap: polishing does not move the geometry",
+        0.98,
+        0.02,
+        "surfaces overlap:\npolishing does not\nmove the geometry",
         transform=ax.transAxes,
         fontsize=7.5,
         color=MUTED,
-        ha="left",
+        ha="right",
         va="bottom",
     )
     ax.set_aspect("equal", adjustable="datalim")
