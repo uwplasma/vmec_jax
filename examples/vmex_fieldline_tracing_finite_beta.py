@@ -139,20 +139,24 @@ vmex_outside.plot(ax=axis3d, show=False, n_trajectories_plot=len(outside_xyz),
 axis3d.set_title(f"Self-consistent field, beta={float(equilibrium.wout.betatotal):.2%}")
 axis3d.set_axis_off(); axis3d.set_box_aspect((1, 1, 1), zoom=1.20)
 poincare_coils = figure.add_subplot(grid[1]); poincare_total = figure.add_subplot(grid[2])
+# Marker size/opacity chosen so the sections — especially the exterior
+# islands — stay legible at README scale.
+POINCARE_STYLE = dict(s=1.2, alpha=0.95)
 inside_sections = vmex_inside.poincare_plot(
-    shifts=[0.0], ax=poincare_coils, show=False, color="#0072B2", s=0.01)
+    shifts=[0.0], ax=poincare_coils, show=False, color="#0072B2", **POINCARE_STYLE)
 coil_colors = ["#009E73" if bool(value) else "#D55E00" for value in inside]
 coil_sections = coil_trace.poincare_plot(
-    shifts=[0.0], ax=poincare_coils, show=False, color=coil_colors, s=0.01)
+    shifts=[0.0], ax=poincare_coils, show=False, color=coil_colors, **POINCARE_STYLE)
 vmex_inside.poincare_plot(
-    shifts=[0.0], ax=poincare_total, show=False, color="#0072B2", s=0.01)
+    shifts=[0.0], ax=poincare_total, show=False, color="#0072B2", **POINCARE_STYLE)
 outside_sections = vmex_outside.poincare_plot(
-    shifts=[0.0], ax=poincare_total, show=False, color="#CC79A7", s=0.01)
+    shifts=[0.0], ax=poincare_total, show=False, color="#CC79A7", **POINCARE_STYLE)
 # Overlay the coil-only exterior sections on the same axes as coil + plasma;
 # their separation is the virtual-casing plasma-current contribution.
 for is_inside, (radius, height, _time) in zip(np.asarray(inside), coil_sections):
     if not is_inside:
-        poincare_total.scatter(radius, height, color="#D55E00", marker="x", s=3.0, linewidths=0.35)
+        poincare_total.scatter(radius, height, color="#D55E00", marker="x",
+                               s=5.0, linewidths=0.5, alpha=0.95)
 coil_exterior_crossings = [len(section[0]) for is_inside, section in zip(np.asarray(inside), coil_sections)
                            if not is_inside]
 if not any(coil_exterior_crossings):
@@ -163,7 +167,10 @@ for panel, title in ((poincare_coils, "coils only"),
                      (poincare_total, "exterior: coils vs coils + plasma")):
     panel.plot(np.hypot(section[:, 0], section[:, 1]), section[:, 2], "k-", lw=1.0)
     panel.set(xlabel="R [m]", title=title); panel.grid(alpha=0.25)
-poincare_coils.set_ylabel("Z [m]"); poincare_total.tick_params(labelleft=False)
+    # poincare_plot sets oversized labels on the current axes; renormalize.
+    panel.xaxis.label.set_fontsize(10); panel.yaxis.label.set_fontsize(10)
+poincare_coils.set_ylabel("Z [m]"); poincare_total.set_ylabel("")
+poincare_total.tick_params(labelleft=False)
 all_sections = inside_sections + coil_sections + outside_sections
 r_values = np.concatenate([np.hypot(section[:, 0], section[:, 1])]
                           + [row[0] for row in all_sections])
