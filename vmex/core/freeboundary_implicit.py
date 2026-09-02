@@ -148,40 +148,77 @@ def _projected_residual(
     ``fixed_bsqvac`` freezes only NESTOR's edge pressure.  The resulting raw
     Jacobian is exactly block tridiagonal in radius and is the bulk operator
     used by the boundary-Schur adjoint.
+
+    The returned closure is memoized on ``(cfg, formulation, mask content)``
+    (``fixed_bsqvac=None`` only): the host callback hands each backward pass
+    a fresh numpy mask tree of identical content, and a stable closure
+    identity is what lets :func:`_transpose_matvec` reuse its compiled
+    transpose across gradient calls.  A ``fixed_bsqvac`` closure changes
+    value every iterate and is never a jit key, so it is not cached; the
+    pressure still enters the lane as a traced argument, never a baked
+    constant.
     """
     if formulation not in {"preconditioned", "raw"}:
         raise ValueError(f"unknown formulation {formulation!r}")
+
+    def residual(z, params, field_parameters, frozen, rcon0, zcon0):
+        return _projected_residual_lane(
+            z, params, field_parameters, frozen, rcon0, zcon0, dof_mask,
+            fixed_bsqvac, cfg=cfg, formulation=formulation)
+
+    if fixed_bsqvac is not None:
+        return residual
+    key = (cfg, formulation, tuple(
+        np.asarray(leaf).tobytes() for leaf in jax.tree.leaves(dof_mask)))
+    cached = _RESIDUAL_CLOSURE_CACHE.get(key)
+    if cached is None:
+        _RESIDUAL_CLOSURE_CACHE[key] = cached = residual
+        while len(_RESIDUAL_CLOSURE_CACHE) > _RESIDUAL_CLOSURE_CACHE_MAX:
+            _RESIDUAL_CLOSURE_CACHE.pop(next(iter(_RESIDUAL_CLOSURE_CACHE)))
+    return cached
+
+
+_RESIDUAL_CLOSURE_CACHE: dict[tuple, Callable] = {}
+_RESIDUAL_CLOSURE_CACHE_MAX = 8
+
+
+# Module scope with ``cfg``/``formulation`` static and the per-iterate arrays
+# (mask included) as traced arguments, the ``implicit.
+# _preconditioned_residual_lane`` idiom: the previous per-call ``@jax.jit``
+# closure inside :func:`_projected_residual` was a fresh function object, so
+# every backward pass of a free-boundary optimization re-traced and
+# recompiled the coupled NESTOR+VMEC residual up to four times (both
+# formulations plus the Schur frozen root) before its first adjoint matvec.
+@functools.partial(jax.jit, static_argnames=("cfg", "formulation"))
+def _projected_residual_lane(z, params, field_parameters, frozen, rcon0,
+                             zcon0, dof_mask, fixed_bsqvac, *,
+                             cfg: FreeBoundaryImplicitConfig,
+                             formulation: str):
     icfg = cfg.implicit
     project = im._dof_projector(icfg, dof_mask)
-    # The executable/topology was fixed concretely when the config was built;
-    # all equilibrium and coil values below remain dynamic traced arrays.
-    fused = cfg.vacuum_program
-
-    @jax.jit
-    def residual(z, params, field_parameters, frozen, rcon0, zcon0):
-        # Unlike fixed boundary, every active edge coefficient comes from z;
-        # the input boundary is only the forward solver's initial guess.
-        dz = project(jax.tree.map(lambda a, b: a - b, z, frozen))
-        state = jax.tree.map(jnp.add, frozen, dz)
-        rt = dataclasses.replace(
-            im.runtime_from_params(params, icfg), rcon0=rcon0, zcon0=zcon0,
-            lfreeb=True, jmax=int(icfg.resolution.ns),
-            presf_ns_scale=_presf_ns_scale_traceable(
-                params, icfg.inp, int(icfg.resolution.ns)),
-        )
-        if fixed_bsqvac is None:
-            external_field = cfg.field_from_parameters(field_parameters)
-            bsqvac = fused.bsq(state, rt, external_field)
-        else:
-            bsqvac = fixed_bsqvac
-        rt = dataclasses.replace(rt, bsqvac_edge=bsqvac)
-        if formulation == "preconditioned":
-            force, _, _ = evaluate_forces(state, rt)
-        else:
-            force = im._raw_force_state(state, rt, include_edge=True)
-        return project(force)
-
-    return residual
+    # Unlike fixed boundary, every active edge coefficient comes from z;
+    # the input boundary is only the forward solver's initial guess.
+    dz = project(jax.tree.map(lambda a, b: a - b, z, frozen))
+    state = jax.tree.map(jnp.add, frozen, dz)
+    rt = dataclasses.replace(
+        im.runtime_from_params(params, icfg), rcon0=rcon0, zcon0=zcon0,
+        lfreeb=True, jmax=int(icfg.resolution.ns),
+        presf_ns_scale=_presf_ns_scale_traceable(
+            params, icfg.inp, int(icfg.resolution.ns)),
+    )
+    if fixed_bsqvac is None:
+        # The executable/topology was fixed concretely when the config was
+        # built; all equilibrium and coil values stay dynamic traced arrays.
+        external_field = cfg.field_from_parameters(field_parameters)
+        bsqvac = cfg.vacuum_program.bsq(state, rt, external_field)
+    else:
+        bsqvac = fixed_bsqvac
+    rt = dataclasses.replace(rt, bsqvac_edge=bsqvac)
+    if formulation == "preconditioned":
+        force, _, _ = evaluate_forces(state, rt)
+    else:
+        force = im._raw_force_state(state, rt, include_edge=True)
+    return project(force)
 
 
 _FREE_MASK_CACHE: dict[tuple, SpectralState] = {}
@@ -724,6 +761,20 @@ def _solve_status_bwd(cfg, saved, cotangents):
     )
 
 
+# ``residual`` is a static jit key, so its identity must be stable across
+# gradient calls — :func:`_projected_residual`'s memo provides exactly that.
+# The previous per-call ``@jax.jit`` closure re-lowered and recompiled this
+# transpose (the largest program of the backward pass) on every host adjoint.
+@functools.partial(jax.jit, static_argnames=("residual",))
+def _transpose_matvec(value, z, p, field, base, rcon, zcon, *, residual):
+    """One compiled action of the coupled residual transpose at ``z``."""
+    _, unravel = ravel_pytree(z)
+    _, pullback = jax.vjp(
+        lambda zz: residual(zz, p, field, base, rcon, zcon), z
+    )
+    return ravel_pytree(pullback(unravel(value))[0])[0]
+
+
 def _host_adjoint(
     residual, z_star, params, field_parameters, frozen, rcon0, zcon0, rhs, cfg,
     *, x0=None,
@@ -737,12 +788,8 @@ def _host_adjoint(
     """
     rhs_flat, unravel = ravel_pytree(rhs)
 
-    @jax.jit
-    def matvec(value, z, p, field, base, rcon, zcon):
-        _, pullback = jax.vjp(
-            lambda zz: residual(zz, p, field, base, rcon, zcon), z
-        )
-        return ravel_pytree(pullback(unravel(value))[0])[0]
+    def matvec(value, *dynamic_args):
+        return _transpose_matvec(value, *dynamic_args, residual=residual)
 
     dynamic = (z_star, params, field_parameters, frozen, rcon0, zcon0)
 

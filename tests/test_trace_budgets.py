@@ -67,6 +67,29 @@ _LANE_STABLEHLO_FLOOR = 100_000
 #: ``_COMPILE_COUNT_SCRIPT`` below by hand.
 _COLD_SOLVE_PROGRAM_CEILING = 125
 
+QA_SEED_DECK = ROOT / "examples" / "data" / "input.minimal_seed_nfp2"
+
+#: XLA programs compiled while CONSTRUCTING the QA_optimization smoke
+#: problem (the ``VMEX_EXAMPLES_CI=1`` configuration of
+#: ``examples/optimization/QA_optimization.py``): the seed preflight solve
+#: plus its eager setup dispatch, and nothing derivative-shaped — the
+#: ``refine=False`` deferral means construction also runs ZERO fixed-point
+#: refinements, pinned exactly below rather than by headroom.  Measured
+#: 2026-09-02 at 510a2073 (jax 0.11.1, CPU, x64, persistent compilation
+#: cache disabled): 246 programs; ceiling is measured + ~25%.  Re-measure
+#: by running ``_OPTIMIZATION_STARTUP_SCRIPT`` below by hand.
+_PROBLEM_STARTUP_PROGRAM_CEILING = 310
+#: New XLA programs per LATER trial-point objective evaluation.  The
+#: per-trial path (status solve + scalar-loss lane) is fully
+#: content-keyed, so a steady-state trial must reuse every executable of
+#: the earlier ones — an exact zero, not a headroom budget.  The one
+#: exception is the second trial: the first trial to consume a stored
+#: refinement correction evaluates ``_preconditioned_residual_lane``
+#: standalone (outside ``_refine_step_core``) and may compile exactly that
+#: one program.  Measured 2026-09-02 as above: second trial 1, third 0.
+_SECOND_TRIAL_NEW_PROGRAM_CEILING = 1
+_STEADY_TRIAL_NEW_PROGRAMS = 0
+
 
 @pytest.fixture(autouse=True)
 def _enable_jit():
@@ -178,4 +201,157 @@ def test_cold_solve_compiled_program_count_stays_under_budget():
         "single-op dispatch crept into the setup/export/printout passes "
         "(see #227); jit the new pass, or re-measure and move the "
         "constant if the growth is deliberate."
+    )
+
+
+# The construction below is examples/optimization/QA_optimization.py under
+# VMEX_EXAMPLES_CI=1, inlined constant-for-constant (MAX_MODE=1 smoke,
+# MINIMUM_MPOL=5) so the guard cannot drift from the example silently and
+# needs no example import machinery.  Same log-capture pattern as
+# ``_COMPILE_COUNT_SCRIPT``; ``_refine_fixed_point`` is additionally
+# counted because the startup contract is one seed solve WITHOUT the
+# fixed-point anchor (the refine=False deferral) — a refinement here would
+# stall the first user-visible output behind an adjoint-grade Newton solve.
+_OPTIMIZATION_STARTUP_SCRIPT = """\
+import logging
+import sys
+from dataclasses import replace
+
+import numpy as np
+
+import vmex as vj  # must precede the handler: import configures JAX logging
+from vmex import optimize as opt
+import vmex.core.implicit as imp
+import jax
+import jax.numpy as jnp
+
+
+class CompileCounter(logging.Handler):
+    def __init__(self):
+        super().__init__(level=logging.DEBUG)
+        self.count = 0
+
+    def emit(self, record):
+        if "Finished XLA compilation of" in record.getMessage():
+            self.count += 1
+
+
+counter = CompileCounter()
+jax_logger = logging.getLogger("jax")
+jax_logger.addHandler(counter)
+jax_logger.setLevel(logging.INFO)  # compile records log at WARNING
+jax.config.update("jax_log_compiles", True)
+jax.config.update("jax_enable_compilation_cache", False)
+
+refine_calls = []
+_real_refine = imp._refine_fixed_point
+
+
+def counting_refine(*args, **kwargs):
+    refine_calls.append(1)
+    return _real_refine(*args, **kwargs)
+
+
+imp._refine_fixed_point = counting_refine
+
+inp = vj.VmecInput.from_file(sys.argv[1])
+rbc, zbs = inp.rbc.copy(), inp.zbs.copy()
+rbc[inp.ntor - 1, 1], zbs[inp.ntor - 1, 1] = -0.05, 0.05
+inp = replace(inp, rbc=rbc, zbs=zbs)
+
+qs = opt.QuasisymmetryRatioResidual(
+    np.linspace(0.1, 1.0, 10), helicity_m=1, helicity_n=0)
+
+
+def iota_floor(state, rt):
+    return jnp.maximum(0.42 - opt.min_abs_iota(state, rt), 0.0)
+
+
+terms = [(qs, 0.0, 1.0), (opt.aspect_ratio, 5.0, 1.0),
+         (iota_floor, 0.0, 10.0), (opt.magnetic_well, 0.01, 1.0)]
+
+
+def loss(state, rt):
+    rows = opt.residuals_from_tuples(state, rt, terms)
+    return 0.5 * jnp.vdot(rows, rows)
+
+
+mpol = 5  # smoke: max(MAX_MODE + 2, MINIMUM_MPOL) with MAX_MODE=1
+inp = replace(inp, delt=0.5).change_resolution(
+    mpol=mpol, ntor=mpol, ntheta=2 * mpol + 6, nzeta=2 * mpol + 4)
+problem = opt.VmecProblem.from_loss(
+    inp, loss, max_mode=1, use_ess=True, ess_alpha=1.2)
+print("CONSTRUCTION_PROGRAMS:", counter.count)
+print("CONSTRUCTION_REFINES:", len(refine_calls))
+
+step = 1.0e-3 * problem.scales
+values = [float(problem.fun(problem.x0 + k * step)) for k in (1.0,)]
+after_first_trial = counter.count
+values.append(float(problem.fun(problem.x0 + 2.0 * step)))
+after_second_trial = counter.count
+values.append(float(problem.fun(problem.x0 + 3.0 * step)))
+assert all(np.isfinite(v) for v in values), values
+print("SECOND_TRIAL_NEW_PROGRAMS:", after_second_trial - after_first_trial)
+print("THIRD_TRIAL_NEW_PROGRAMS:", counter.count - after_second_trial)
+"""
+
+
+def test_problem_construction_compile_budget_and_no_refinement():
+    """One cold subprocess, so suite order cannot pre-warm any cache.
+
+    Pins the optimization cold start end to end: constructing the
+    QA_optimization smoke problem compiles at most the budgeted program
+    count and runs zero fixed-point refinements (the seed preflight only
+    validates the solve — the first derivative evaluation pays the anchor,
+    under the compile heartbeat), the second trial-point objective
+    evaluation compiles at most the one warm-seed residual lane, and a
+    third compiles nothing at all.  Unmarked but heavier than the
+    cold-solve probe (measured ~40 s: one construction solve plus three
+    trial solves); the ``pr-fast`` lane excludes this module.
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(ROOT), env.get("PYTHONPATH", "")) if part
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", _OPTIMIZATION_STARTUP_SCRIPT,
+         str(QA_SEED_DECK)],
+        capture_output=True, text=True, timeout=600, cwd=ROOT, env=env,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    keys = ("CONSTRUCTION_PROGRAMS", "CONSTRUCTION_REFINES",
+            "SECOND_TRIAL_NEW_PROGRAMS", "THIRD_TRIAL_NEW_PROGRAMS")
+    matches = {key: re.search(rf"{key}: (\d+)", proc.stdout) for key in keys}
+    assert all(matches.values()), proc.stdout + proc.stderr
+    values = {key: int(match.group(1)) for key, match in matches.items()}
+    assert 0 < values["CONSTRUCTION_PROGRAMS"], (
+        "no compile records — the log-capture pattern broke"
+    )
+    assert values["CONSTRUCTION_REFINES"] == 0, (
+        f"problem construction ran {values['CONSTRUCTION_REFINES']} "
+        "fixed-point refinements; the refine=False seed preflight must "
+        "never pay for the derivative anchor (see optimize.py's factory)."
+    )
+    assert values["CONSTRUCTION_PROGRAMS"] <= _PROBLEM_STARTUP_PROGRAM_CEILING, (
+        f"constructing the QA smoke problem compiled "
+        f"{values['CONSTRUCTION_PROGRAMS']} XLA programs, over the "
+        f"{_PROBLEM_STARTUP_PROGRAM_CEILING}-program budget. Eager "
+        "dispatch or a fresh per-call jit crept into problem "
+        "construction; stage it, or re-measure and move the constant if "
+        "the growth is deliberate."
+    )
+    assert (values["SECOND_TRIAL_NEW_PROGRAMS"]
+            <= _SECOND_TRIAL_NEW_PROGRAM_CEILING), (
+        f"a second trial-point evaluation compiled "
+        f"{values['SECOND_TRIAL_NEW_PROGRAMS']} new XLA programs, over "
+        "the one-program warm-seed allowance (see the constant's note); "
+        "a fresh per-call jit or an identity-keyed cache crept into the "
+        "per-trial path."
+    )
+    assert values["THIRD_TRIAL_NEW_PROGRAMS"] == _STEADY_TRIAL_NEW_PROGRAMS, (
+        f"a third trial-point evaluation compiled "
+        f"{values['THIRD_TRIAL_NEW_PROGRAMS']} new XLA programs; a "
+        "steady-state trial must reuse every executable of the earlier "
+        "trials — a fresh per-call jit or an identity-keyed cache crept "
+        "into the per-trial path."
     )
