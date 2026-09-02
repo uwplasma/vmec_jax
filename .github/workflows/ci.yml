@@ -210,8 +210,11 @@ jobs:
     # pr-parity-a1 selector carries the free-boundary modules whose
     # concurrent solves exhaust the runner at -n 4 (killed mid-run at
     # 32m10s, twice, on two different pull requests), so a1 keeps -n 2 by
-    # itself and a2+b run at -n 4.
-    timeout-minutes: 45
+    # itself and a2+b run at -n 4.  The c3d lane measures 43-44 minutes
+    # green on today's runners, so 45 left ~90 s of headroom and runner
+    # variance kept tipping it into a timeout-cancel; 55 restores margin
+    # until the implicit-campaign modules are repartitioned.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
