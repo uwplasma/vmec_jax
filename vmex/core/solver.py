@@ -159,7 +159,7 @@ from .preconditioner import (
 from .preconditioner_2d import Prec2DConfig, newton_direction
 from .printing import (
     FORCE_ITERATIONS_BANNER, compile_notice, emit_flushed, improved_axis_block,
-    screen_header, screen_line, stage_banner,
+    polish_banner, screen_header, screen_line, stage_banner,
 )
 from .residuals import (
     ForceResiduals, PreconditionedResiduals, apply_lambda_preconditioner,
@@ -2486,8 +2486,16 @@ def _polish_solve_result(
     polish: bool | str,
     polish_config: Any,
     lconm1: bool,
+    verbose: bool = False,
+    emit: Any = emit_flushed,
 ) -> SolveResult:
-    """Attach the optional certified native and sampled polish products."""
+    """Attach the optional certified native and sampled polish products.
+
+    ``verbose`` follows the solver's CLI printing convention: the phase
+    banner states the resolved polish configuration, and the driver prints
+    its own progress through the same ``emit``.  The default keeps library
+    calls silent.
+    """
 
     if polish is False:
         return result
@@ -2495,12 +2503,25 @@ def _polish_solve_result(
 
     if polish_config is not None and not isinstance(polish_config, PolishConfig):
         raise TypeError("polish_config must be a PolishConfig")
+    if verbose:
+        resolved = PolishConfig() if polish_config is None else polish_config
+        emit(polish_banner(
+            mode="auto" if polish == "auto" else "on",
+            degree=resolved.radial_degree,
+            spans=resolved.radial_spans,
+            ns=int(resolution.ns),
+            tolerance=resolved.tolerance,
+            certificate_tolerance=resolved.certificate_tolerance,
+            max_iterations=resolved.max_nonlinear_iterations,
+        ), end="")
     polished = polish_legacy_solution(
         source,
         resolution,
         result.state,
         config=polish_config,
         lconm1=lconm1,
+        verbose=verbose,
+        emit=emit,
     )
     return replace(
         result,
@@ -2677,4 +2698,6 @@ def solve(
             polish=polish,
             polish_config=polish_config,
             lconm1=lconm1,
+            verbose=verbose,
+            emit=emit,
         )

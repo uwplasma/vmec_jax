@@ -214,6 +214,96 @@ def threed1_line(
     return line + "\n"
 
 
+def polish_banner(
+    *,
+    mode: str,
+    degree: int,
+    spans: int | None,
+    ns: int,
+    tolerance: float,
+    certificate_tolerance: float,
+    max_iterations: int,
+) -> str:
+    """Polish-phase opening banner (VMEX-native; no VMEC2000 counterpart).
+
+    Printed in the register of :data:`FORCE_ITERATIONS_BANNER` when the
+    optional force-balance polish starts, stating the resolved
+    :class:`~vmex.core.polish_driver.PolishConfig`: the request mode, radial
+    B-spline degree and spans (``spans=None`` means the resolution-derived
+    default of ``lift_high_order_state``), the solve radial resolution
+    feeding the lift (``ns``; the driver reports the actual collocation grid
+    on its own lines), the Gauss--Newton relative tolerance, the independent
+    certificate tolerance, and the nonlinear iteration cap.
+    """
+    spans_text = "AUTO" if spans is None else f"{int(spans)}"
+    return (
+        "\n -----------------------\n"
+        " BEGIN FORCE POLISHING\n"
+        " -----------------------\n"
+        f"  MODE = {mode.upper()}  DEGREE = {int(degree)}"
+        f"  SPANS = {spans_text}  NS = {int(ns):4d}\n"
+        f"  TOL = {float(tolerance):9.3E}"
+        f"  CERTIFICATE TOL = {float(certificate_tolerance):9.3E}"
+        f"  MAX ITER = {int(max_iterations):4d}\n"
+    )
+
+
+#: Column header for the Gauss--Newton polish rows (:func:`polish_screen_line`).
+POLISH_SCREEN_HEADER = (
+    "\n  ITER    COST      GRAD     DAMPING     RATIO   LIN-ITS\n"
+)
+
+
+def polish_screen_line(
+    iteration: int,
+    cost: float,
+    gradient_norm: float,
+    damping: float,
+    *,
+    ratio: float | None = None,
+    linear_iterations: int | None = None,
+    accepted: bool = True,
+) -> str:
+    """One Gauss--Newton polish row in the screen-line register.
+
+    Row 0 is the initial state and carries no trial diagnostics; later rows
+    add the trust ratio, the inner PCG iteration count, and a ``rejected``
+    marker for trial steps the trust region refused (their damping still
+    adapts, so the row is informative even without an accepted move).
+    """
+    line = f"{iteration:5d}{cost:10.2E}{gradient_norm:10.2E}{damping:10.2E}"
+    if ratio is not None and linear_iterations is not None:
+        line += f"{ratio:10.2E}{linear_iterations:8d}"
+        if not accepted:
+            line += "  rejected"
+    return line + "\n"
+
+
+def polish_certificate_summary(
+    initial_l2: float,
+    final_l2: float,
+    tolerance: float,
+    *,
+    verdict: str,
+    failed_checks: tuple[str, ...] = (),
+) -> str:
+    """Closing certificate block for one polish attempt.
+
+    ``verdict`` is the human-readable outcome (``CERTIFIED``, ``ALREADY
+    CERTIFIED``, ``FAILED``); ``failed_checks`` names each independent check
+    that rejected the state so a failure is diagnosable from the console
+    alone.
+    """
+    lines = [
+        "",
+        f" POLISH CERTIFICATE : EPS-F {float(initial_l2):10.3E} ->"
+        f" {float(final_l2):10.3E}  (TOLERANCE {float(tolerance):10.3E})",
+        f" POLISH {verdict}",
+    ]
+    lines.extend(f"   FAILED CHECK : {check}" for check in failed_checks)
+    return "\n".join(lines) + "\n"
+
+
 def termination_summary(
     ier_flag: int,
     input_name: str,

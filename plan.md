@@ -765,6 +765,30 @@ print(result.polish_report.total_seconds)
 
 **Acceptance:** one documented input runs in both VMEC2000 and VMEX; only VMEX activates polishing.
 
+### 8.8 Phase 1 follow-ups (user feedback, recorded 2026-09-02)
+
+Field reports from a W7-X polish run; each item stays here until closed by a
+merged PR:
+
+1. Polish observability: the polish phase printed nothing after the legacy
+   iteration table — no banner, no compile attribution, no per-iteration
+   rows, no certificate verdict — so a run that was dying could not be told
+   from one that was converging. Fix in flight on
+   `feat/polish-verbosity-and-knobs`: CLI-only `BEGIN FORCE POLISHING`
+   banner with the resolved config, ` compiling ... polish executable`
+   notice, one row per Gauss-Newton step from the SOLVAX history, and a
+   certificate summary that names any failed check.
+2. Input-file control: `AUTO` was the only documented directive value and
+   the deck could not set the solver knobs. Same branch adds
+   `POLISH_MAX_ITER` and `POLISH_SPANS` beside `POLISH`/`POLISH_TOL`/
+   `POLISH_DEGREE`/`POLISH_FAIL`, matching CLI flags, and README reference
+   material stating what `AUTO` resolves to and the
+   `CLI > Python > file > default` precedence.
+3. The 0.8.0 report of the polish phase dying by OOM at `MPOL = NTOR = 10`
+   is fixed by #234 (polish jits no longer bake per-solve constants); the
+   fix shipped in v0.8.1 (2026-09-02). Close after confirming the reporter
+   runs v0.8.1 or later.
+
 ---
 
 ## 9. Phase 2 - Build one complete performance and compilation observability suite
