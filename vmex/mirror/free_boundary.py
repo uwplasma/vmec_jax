@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, fields
 from typing import Any, Callable
 
@@ -250,11 +251,15 @@ class _FreeEquilibriumProblem:
 
         def matvec(direction: np.ndarray) -> np.ndarray:
             tangent = jnp.asarray(direction).reshape(-1)
-            return np.asarray(jax.jvp(residual, (point,), (tangent,))[1], dtype=float)
+            return np.asarray(
+                _tangent_action_lane(point, tangent, residual=residual),
+                dtype=float)
 
         def rmatvec(cotangent: np.ndarray) -> np.ndarray:
             cotangent = jnp.asarray(cotangent).reshape(-1)
-            return np.asarray(jax.vjp(residual, point)[1](cotangent)[0], dtype=float)
+            return np.asarray(
+                _adjoint_action_lane(point, cotangent, residual=residual),
+                dtype=float)
 
         return LinearOperator(
             (residual_size, self.size),
@@ -267,13 +272,27 @@ class _FreeEquilibriumProblem:
         """Return the JAX-native exact residual Jacobian action."""
 
         point = jnp.asarray(vector)
-        return jax.jit(
-            lambda direction: jax.jvp(
-                self.residual_function,
-                (point,),
-                (direction,),
-            )[1]
-        )
+        return lambda direction: _tangent_action_lane(
+            point, direction, residual=self.residual_function)
+
+
+# Module scope with ``residual`` static and the linearization point traced —
+# ``residual_function`` is built once per problem, so its identity keys one
+# compiled program per problem.  The previous per-call staging paid per
+# Newton step (``linear_action``: a fresh ``jax.jit`` closure re-tracing and
+# recompiling the residual JVP) or per Krylov iteration
+# (``linear_operator``: an eager ``jax.jvp``/``jax.vjp`` re-linearizing the
+# residual on every LSMR matvec of the host trust-region solve).
+@functools.partial(jax.jit, static_argnames=("residual",))
+def _tangent_action_lane(point: Array, direction: Array, *,
+                         residual: Callable[[Array], Array]) -> Array:
+    return jax.jvp(residual, (point,), (direction,))[1]
+
+
+@functools.partial(jax.jit, static_argnames=("residual",))
+def _adjoint_action_lane(point: Array, cotangent: Array, *,
+                         residual: Callable[[Array], Array]) -> Array:
+    return jax.vjp(residual, point)[1](cotangent)[0]
 
 
 def _spline_boundary_work(
