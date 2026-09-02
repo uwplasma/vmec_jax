@@ -1390,6 +1390,64 @@ def _refine_fixed_point(cfg: ImplicitConfig, params: ImplicitParams,
     return hit[1]
 
 
+# One staged Newton refinement step per config (the ``_adjoint_gcrot_core``
+# argument): module scope with ``cfg`` static and the per-call state/params
+# as traced arguments is what makes the executable REUSABLE.  The previous
+# host-eager step re-linearized ``F`` per call and handed ``solvax.gcrot`` a
+# fresh closure over that call's residuals, so the ``lax.while_loop`` it
+# stages missed the compile cache on every trial boundary — one measured
+# ``jit(while)`` recompile per optimizer evaluation — and the remaining ops
+# dispatched one primitive at a time: 5.7-8.6 s of every 11-14 s smoke-mode
+# QA_optimization evaluation was this eager refinement.
+@functools.partial(jax.jit, static_argnames=("cfg",))
+def _refine_step_core(z: SpectralState, fz: SpectralState,
+                      params: ImplicitParams, frozen: SpectralState,
+                      dof_mask: SpectralState, cfg: ImplicitConfig):
+    """Staged inexact-Newton refinement step; returns ``(z, F(z), |F(z)|)``.
+
+    Linearizes the preconditioned residual at ``z``, runs the same
+    GCROT(m, k) solve as the eager :func:`_adjoint_solve_gcrot` lane with
+    the refinement's forcing term and cycle budget (best-effort: the host
+    caller in :func:`_refined_state` applies the acceptance policy on the
+    concrete residual norm, so convergence is never enforced here), and
+    evaluates the residual at the stepped iterate inside the same
+    executable.
+    """
+    F = residual_fn(cfg, frozen, dof_mask)
+    _, jvp = jax.linearize(lambda t: F(t, params), z)
+    b_flat, unravel = ravel_pytree(fz)
+    n = int(b_flat.shape[0])
+    m = min(int(cfg.adjoint_gcrot_m), n)
+    k = min(int(cfg.adjoint_gcrot_k), n)
+
+    def matvec(v):
+        return ravel_pytree(jvp(unravel(v)))[0]
+
+    sol = _solvax_gcrot(
+        matvec, b_flat, rtol=_REFINE_FORCING, atol=0.0, m=m, k=k,
+        max_restarts=_REFINE_MAX_RESTARTS)
+    z_new = jax.tree.map(jnp.subtract, z, unravel(sol.x))
+    fz_new = F(z_new, params)
+    return z_new, fz_new, _tree_norm(fz_new)
+
+
+def _refine_step(cfg: ImplicitConfig, params: ImplicitParams,
+                 frozen: SpectralState, dof_mask: SpectralState,
+                 z: SpectralState, fz: SpectralState):
+    """One Newton refinement step through the staged per-config executable.
+
+    The host-level indirection exists so :func:`_refined_state` keeps its
+    concrete best-state/early-exit control flow (and tests keep a seam to
+    fake incomplete steps) while the linearize + GCROT + residual work runs
+    as one compiled program.  Arguments are committed to ``cfg.device``
+    exactly like the eager Krylov lane's RHS pin.
+    """
+    return _refine_step_core(
+        _pin_concrete(cfg, z), _pin_concrete(cfg, fz),
+        _pin_concrete(cfg, params), _pin_concrete(cfg, frozen),
+        _pin_concrete(cfg, dof_mask), cfg)
+
+
 def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
                    state: SpectralState,
                    dof_mask: SpectralState,
@@ -1426,15 +1484,13 @@ def _refined_state(cfg: ImplicitConfig, params: ImplicitParams,
     def refine_from(z, fz, residual):
         best_z, best = z, residual
         for _ in range(_REFINE_MAX_STEPS):
-            _, jvp = jax.linearize(lambda t: F(t, params), z)
             # GCROT avoids the small-eigenvalue stagnation seen with ordinary
-            # restarted GMRES on this fixed-point solve.
-            delta, _ = _adjoint_solve_gcrot(
-                jvp, fz, cfg, rtol=_REFINE_FORCING, enforce=False,
-                max_restarts=_REFINE_MAX_RESTARTS)
-            z = jax.tree.map(lambda a, b: a - b, z, delta)
-            fz = F(z, params)
-            residual = float(_tree_norm(fz))
+            # restarted GMRES on this fixed-point solve; the linearize +
+            # solve + residual evaluation run as one staged per-config
+            # executable (see _refine_step_core).
+            z, fz, residual_norm = _refine_step(
+                cfg, params, state, dof_mask, z, fz)
+            residual = float(residual_norm)
             if not np.isfinite(residual):
                 break
             # Newton need not be monotone: iterate from the latest point but
@@ -1493,7 +1549,8 @@ def _mask_cache_key(cfg: ImplicitConfig) -> tuple:
     return (cfg.resolution, bool(cfg.lconm1), int(cfg.inp.ncurr))
 
 
-def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
+def _host_solve_and_mask(cfg: ImplicitConfig, params_np, *,
+                         refine: bool = True) -> tuple:
     # This function executes on a pure_callback WORKER THREAD, where the
     # caller's thread-local ``jax.default_device`` context is not active.
     # Re-enter the config's device context explicitly, otherwise everything
@@ -1502,10 +1559,11 @@ def _host_solve_and_mask(cfg: ImplicitConfig, params_np) -> tuple:
     # explicitly placed state (observed as NaN diagnostics / zero gradients
     # on a non-default GPU).
     with _device_context(cfg):
-        return _host_solve_and_mask_impl(cfg, params_np)
+        return _host_solve_and_mask_impl(cfg, params_np, refine=refine)
 
 
-def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
+def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np, *,
+                              refine: bool = True) -> tuple:
     _HOST_ERROR.clear()  # fresh callback: drop any stale relayed error
     # The callback payload arrives committed to the runtime's LOCAL CPU
     # regardless of ``cfg.device``, and ``jnp.asarray`` preserves an existing
@@ -1547,7 +1605,13 @@ def _host_solve_and_mask_impl(cfg: ImplicitConfig, params_np) -> tuple:
         _MASK_CACHE[cache_key] = mask
     # Anchor the state at the root of the residual the adjoint linearizes, so
     # every consumer — value, cotangent and linearization — reads the same
-    # point (see _refined_state).
+    # point (see _refined_state).  ``refine=False`` is the problem-factory
+    # seed preflight, which only validates shape/finiteness and never
+    # differentiates: it skips the (expensive) anchor so the first user
+    # output is not held behind it, and the first derivative evaluation —
+    # which memo-hits this solve — computes the identical refinement then.
+    if not refine:
+        return as_np(result.state), mask
     state = _refine_fixed_point(
         cfg, params, result.state,
         _device_pin(cfg, jax.tree.map(jnp.asarray, mask)))
