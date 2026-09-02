@@ -139,6 +139,7 @@ import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
 from solvax import (
+    auto_chunk_size,
     block_tridiag_matvec,
     block_thomas_factor,
     block_thomas_solve,
@@ -182,6 +183,7 @@ __all__ = [
     "make_config", "solve_implicit", "solve_implicit_status",
     "solve_implicit_with_aux",
     "implicit_state_tangent_multi_rhs", "implicit_state_pullback_multi_rhs", "run",
+    "measured_chunk_size",
     "mhd_energy", "plasma_volume", "aspect_ratio", "iota_profile",
     "iota_axis", "iota_edge", "edge_iota", "residual_fn", "adjoint_matvec",
     "frozen_path_directional_fd",
@@ -2052,6 +2054,144 @@ def _active_state_fields(cfg: ImplicitConfig) -> tuple[str, ...]:
     return ("R_cos", "Z_sin", "L_sin")
 
 
+#: Whole-state workspace vectors the GCROT(m, k) certifier pins per response
+#: column beyond its Krylov basis: right-hand side, warm start, iterate,
+#: defect, and the raw-operator certification pair, with slack for XLA
+#: transients.  The basis itself is counted exactly from the config
+#: (``adjoint_gcrot_m + 1`` inner FGMRES vectors plus ``2 k`` recycled
+#: ``(C, U)`` directions).
+_RESPONSE_WORKSPACE_VECTORS = 8
+
+#: Reverse-tape allowance per probe column, in units of the column's exact
+#: ``(3, block_size)`` operand.  The probe VJP retains the three-surface
+#: force kernel's real-space intermediates, whose count — unlike their
+#: shapes — is an XLA scheduling detail; this fixed allowance converts the
+#: shape-exact operand bytes into a conservative tape bound.
+_PROBE_TAPE_VECTORS = 64
+
+
+def _tree_bytes(tree: Any) -> int:
+    """Exact byte count of one pytree of arrays, from shapes/dtypes only."""
+    return sum(
+        int(np.prod(np.shape(leaf), dtype=np.int64))
+        * np.dtype(getattr(leaf, "dtype", np.float64)).itemsize
+        for leaf in jax.tree.leaves(tree)
+    )
+
+
+def _measured_memory_bytes(device: Any = None) -> int | None:
+    """Measured available memory of the execution target, in bytes.
+
+    An accelerator ``jax.Device`` reports through its own runtime
+    (``memory_stats()``: ``bytes_limit - bytes_in_use``).  Host execution
+    measures free RAM via :mod:`psutil` when importable, else Linux
+    ``/proc/meminfo`` ``MemAvailable``.  Returns ``None`` when nothing
+    trustworthy is measurable — callers then fall back to solvax's
+    device-independent square-root heuristic instead of guessing a budget.
+    """
+    if device is not None and getattr(device, "platform", "cpu") != "cpu":
+        stats = getattr(device, "memory_stats", lambda: None)() or {}
+        limit = stats.get("bytes_limit")
+        if limit:
+            return max(int(limit) - int(stats.get("bytes_in_use", 0)), 0)
+        return None
+    try:
+        import psutil
+        return int(psutil.virtual_memory().available)
+    except Exception:
+        pass
+    try:
+        with open("/proc/meminfo") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
+
+
+def measured_chunk_size(
+    dim: int,
+    per_column_bytes: int,
+    *,
+    device: Any = None,
+    memory_fraction: float = 0.5,
+) -> int:
+    """Largest chunk whose per-column workspace fits measured free memory.
+
+    DESC sizes its objective ``jac_chunk_size`` from measured available
+    memory divided by a hand-fit per-column constant
+    (``desc/objectives/objective_funs.py``, ``desc/__init__.py``); vmex
+    knows the response operands' avals exactly, so ``per_column_bytes``
+    is computed from the state pytree shapes instead.  Memory model: a
+    chunk holds ``chunk`` columns concurrently, each pinning
+    ``per_column_bytes`` of workspace, and may claim ``memory_fraction``
+    of the measured available bytes, so
+    ``chunk = memory_fraction * available // per_column_bytes`` clamped to
+    ``[1, dim]`` (:func:`solvax.auto_chunk_size`'s explicit-budget
+    regime).  With no measurement available the same helper's square-root
+    heuristic bounds the chunk instead.
+    """
+    return auto_chunk_size(
+        int(dim), int(max(1, per_column_bytes)),
+        max_memory_bytes=_measured_memory_bytes(device),
+        element_bytes=1, memory_fraction=memory_fraction,
+    )
+
+
+def _resolve_chunk_size(
+    value: int | str, *, name: str, dim: int, per_column_bytes: int,
+    device: Any = None,
+) -> int:
+    """Turn one user chunk request (positive int or ``"auto"``) into an int."""
+    if isinstance(value, str):
+        if value != "auto":
+            raise ValueError(
+                f"{name} must be a positive int or 'auto', got {value!r}")
+        return measured_chunk_size(dim, per_column_bytes, device=device)
+    if int(value) < 1:
+        raise ValueError(f"{name} must be positive")
+    return int(value)
+
+
+def _resolved_chunk_sizes(
+    cfg: ImplicitConfig,
+    x_star: SpectralState,
+    dof_mask: SpectralState,
+    active_fields: tuple[str, ...],
+    batch: Any,
+    probe_chunk_size: int | str,
+    response_chunk_size: int | str,
+) -> tuple[int, int]:
+    """Resolve the probe/response chunk requests for one multi-RHS call.
+
+    Probe columns cost their exact ``(3, block_size)`` local-Jacobian
+    operand times the :data:`_PROBE_TAPE_VECTORS` tape allowance; response
+    columns cost one whole :class:`SpectralState` (exact bytes from the
+    pytree shapes) per live Krylov/workspace vector of the GCROT(m, k)
+    certifier.  Budgets come from :func:`measured_chunk_size` against the
+    config's resolved placement device.
+    """
+    itemsize = np.dtype(x_star.R_cos.dtype).itemsize
+    block_size = max(1, len(active_fields)) * int(dof_mask.R_cos.shape[1])
+    probe = _resolve_chunk_size(
+        probe_chunk_size, name="probe_chunk_size", dim=block_size,
+        per_column_bytes=3 * block_size * itemsize * _PROBE_TAPE_VECTORS,
+        device=cfg.device,
+    )
+    krylov_vectors = (
+        cfg.adjoint_gcrot_m + 1 + 2 * cfg.adjoint_gcrot_k
+        + _RESPONSE_WORKSPACE_VECTORS
+    )
+    response = _resolve_chunk_size(
+        response_chunk_size, name="response_chunk_size",
+        dim=int(np.shape(jax.tree.leaves(batch)[0])[0]),
+        per_column_bytes=_tree_bytes(x_star) * krylov_vectors,
+        device=cfg.device,
+    )
+    return probe, response
+
+
 def _raw_block_system(
     params: ImplicitParams,
     cfg: ImplicitConfig,
@@ -2394,8 +2534,8 @@ def implicit_state_tangent_multi_rhs(
     dof_mask: SpectralState,
     tangent_batch: ImplicitParams,
     *,
-    probe_chunk_size: int = 1,
-    response_chunk_size: int = 1,
+    probe_chunk_size: int | str = 1,
+    response_chunk_size: int | str = 1,
 ) -> tuple[SpectralState, LinearResponseReport]:
     """State tangents for several parameter directions, factored once.
 
@@ -2403,11 +2543,19 @@ def implicit_state_tangent_multi_rhs(
     One three-color assembly and SOLVAX factorization therefore initializes
     every right-hand side; a warm-started solve then certifies the ordinary
     preconditioned residual against ``10 * cfg.adjoint_tol * ||rhs||``.  The
-    two chunk sizes independently bound probe assembly and response solves.
-    The ordinary implicit reverse rule remains the default for
-    :func:`solve_implicit`.
+    two chunk sizes independently bound probe assembly and response solves;
+    each is a positive int (default 1 — minimum memory, unchanged behavior)
+    or opt-in ``"auto"``, which sizes the chunk from measured available
+    memory on the config's placement device divided by the per-column
+    workspace computed exactly from the operand avals (see
+    :func:`measured_chunk_size` for the memory model).  The ordinary
+    implicit reverse rule remains the default for :func:`solve_implicit`.
     """
     active_fields = _active_state_fields(cfg)
+    probe_chunk_size, response_chunk_size = _resolved_chunk_sizes(
+        cfg, x_star, dof_mask, active_fields, tangent_batch,
+        probe_chunk_size, response_chunk_size,
+    )
     with _device_context(cfg):
         params, x_star, dof_mask, tangent_batch = _device_pin(
             cfg, (params, x_star, dof_mask, tangent_batch)
@@ -2616,8 +2764,8 @@ def implicit_state_pullback_multi_rhs(
     gbar_batch: SpectralState,
     *,
     solver: str = "gcrot",
-    probe_chunk_size: int = 1,
-    response_chunk_size: int = 1,
+    probe_chunk_size: int | str = 1,
+    response_chunk_size: int | str = 1,
 ) -> ImplicitParams:
     """Batched state-cotangent pullback with shared implicit-linearization setup.
 
@@ -2628,12 +2776,19 @@ def implicit_state_pullback_multi_rhs(
     reuses the same factors with ``transpose=True`` as a right preconditioner,
     and certifies the ordinary preconditioned VJP.  Runs inside the config's
     device context (see ``_solve_implicit_bwd``); the two chunk sizes bound
-    probe assembly and right-hand-side solves independently.
+    probe assembly and right-hand-side solves independently — each a
+    positive int (default 1, unchanged behavior) or opt-in ``"auto"``,
+    sized from measured available memory and the exact per-column operand
+    bytes (see :func:`measured_chunk_size`).
     """
     if solver not in ("gcrot", "block"):
         raise ValueError("solver must be 'gcrot' or 'block'")
     active_fields = (
         _active_state_fields(cfg) if solver == "block" else ()
+    )
+    probe_chunk_size, response_chunk_size = _resolved_chunk_sizes(
+        cfg, x_star, dof_mask, active_fields, gbar_batch,
+        probe_chunk_size, response_chunk_size,
     )
     with _device_context(cfg):
         params = _device_pin(cfg, params)

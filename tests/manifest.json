@@ -104,6 +104,7 @@
     ["tests/test_step_control.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "pr-fast", "full-core-n-s"]],
     ["tests/test_strong_force.py", "equilibrium", "oracle", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-n-s"]],
     ["tests/test_stress_high_force.py", "equilibrium", "integration", "medium", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "full-core-n-s"]],
+    ["tests/test_trace_budgets.py", "infrastructure", "unit", "medium", "cpu", "none", "golden", ["pr-parity-c2", "full-core-t-z"]],
     ["tests/test_tracing.py", "diagnostics", "integration", "medium", "cpu", "none", "analytic", ["pr-parity-c2", "optional", "full-core-t-z"]],
     ["tests/test_turbulence.py", "diagnostics", "oracle", "slow", "cpu-gpu", "reference-nc", "external", ["pr-parity-c2", "optional", "full-core-t-z"]],
     ["tests/test_vacuum_analytic_recurrence.py", "free-boundary", "oracle", "slow", "cpu-gpu", "none", "analytic", ["pr-parity-c2", "full-core-t-z"]],
