@@ -82,8 +82,13 @@ def _lane_operands():
     """The exact ``lane(carry, rt)`` operands a solovev CLI solve dispatches."""
     inp = VmecInput.from_file(str(SOLOVEV_DECK))
     rt = solver.prepare_runtime(inp, solver.resolution_from_input(inp))
+    time_step0, _ = solver._loop_driver_config(inp)
     carry = jax.tree.map(
-        jnp.array, solver._initial_carry(solver._initial_state(rt.setup), rt, ijacob=0)
+        jnp.array,
+        solver._initial_carry(
+            solver._initial_state(rt.setup), rt, ijacob=0,
+            time_step0=time_step0,
+        ),
     )
     return carry, rt
 
