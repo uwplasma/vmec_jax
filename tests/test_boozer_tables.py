@@ -609,3 +609,152 @@ def test_refine_booz_grids_preserves_the_parity_grid_layout(asym):
     coarse_rows = int(constants.ntheta) if asym else int(constants.nu2_b)
     assert np.allclose(np.asarray(grids.theta_grid).reshape(coarse_rows, -1)[:, 0],
                        theta.reshape(rows, -1)[::factor, 0][:coarse_rows])
+
+
+def test_boozer_plan_registry_is_content_keyed():
+    """One plan instance per resolution content; every table-changing knob misses.
+
+    Each jit trace closes over the plan's tables, so equal content must hand
+    back the identical instance (a fresh plan per objective evaluation would
+    rebuild and re-embed the tables every trace), while the quadrature
+    refinement, the chunk schedule, the parity, and the mode lists -- each of
+    which changes the tables or the compiled program -- must never alias.
+    The plan is upstream's own constants and grids on the refined
+    quadrature, with the execution config explicit.
+    """
+    pytest.importorskip("booz_xform_jax")
+    from booz_xform_jax.jax_api import prepare_booz_xform_constants
+
+    from vmex.core import omnigenity as omn
+
+    m = np.arange(5)
+    base = dict(nfp=3, asym=False, xm=m, xn=0 * m, xm_nyq=m, xn_nyq=0 * m,
+                mboz=4, nboz=3, oversample=2)
+    plan = omn._boozer_plan(**base)
+    assert omn._boozer_plan(**base) is plan
+    assert omn._boozer_plan(**{**base, "xm": m.astype(np.int64)}) is plan
+    for change in (dict(oversample=1), dict(surface_chunk=2), dict(asym=True),
+                   dict(mboz=5), dict(nfp=2), dict(xn_nyq=3 * m)):
+        assert omn._boozer_plan(**{**base, **change}) is not plan, change
+
+    constants, grids = prepare_booz_xform_constants(
+        nfp=3, mboz=4, nboz=3, asym=False, xm=m, xn=0 * m, xm_nyq=m,
+        xn_nyq=0 * m)
+    fine_c, fine_g = omn._refine_booz_grids(constants, grids, 2, 3)
+    assert plan.constants == fine_c
+    np.testing.assert_array_equal(plan.grids.theta_grid, fine_g.theta_grid)
+    np.testing.assert_array_equal(plan.grids.zeta_grid, fine_g.zeta_grid)
+    assert plan.config.surface_chunk == "auto"
+    with pytest.raises(ValueError, match="surface_chunk"):
+        omn._boozer_plan(**{**base, "surface_chunk": 0})
+
+
+def test_boozer_plan_ignores_the_upstream_environment_knob(monkeypatch):
+    """The plan carries explicit configuration; upstream's env default is inert.
+
+    A plan-less kernel call reads ``BOOZ_XFORM_JAX_TRIG_F32`` and would
+    silently run the transform on single-precision trig tables; vmex's plan
+    fixes ``trig_f32=False`` in its ``BoozerConfig`` regardless.
+    """
+    pytest.importorskip("booz_xform_jax")
+    import collections
+
+    from vmex.core import omnigenity as omn
+
+    monkeypatch.setenv("BOOZ_XFORM_JAX_TRIG_F32", "1")
+    monkeypatch.setattr(omn, "_PLAN_CACHE", collections.OrderedDict())
+    m = np.arange(4)
+    plan = omn._boozer_plan(nfp=2, asym=True, xm=m, xn=2 * m, xm_nyq=m,
+                            xn_nyq=2 * m, mboz=3, nboz=2)
+    assert plan.config.trig_f32 is False
+    assert plan.tables["tcos_non"].dtype == np.float64
+
+
+def test_vmex_plan_matches_upstreams_own_at_oversample_one():
+    """Unrefined, vmex's plan is upstream's ``prepare_booz_xform_plan``, bit for bit.
+
+    vmex builds the plan itself only because upstream's builder pins the
+    quadrature and offers no hook for the ``oversample`` refinement.  At
+    ``oversample = 1`` there is nothing to refine, so the reconstruction must
+    reproduce upstream's public plan exactly -- the guard that catches an
+    upstream table change that vmex's copy of the call sequence would
+    otherwise silently miss.
+    """
+    pytest.importorskip("booz_xform_jax")
+    from booz_xform_jax.jax_api import BoozerConfig, prepare_booz_xform_plan
+
+    from vmex.core import omnigenity as omn
+
+    m = np.repeat(np.arange(4), 5).astype(np.int32)
+    n = np.tile(np.arange(-2, 3), 4).astype(np.int32) * 2
+    modes = dict(xm=m, xn=n, xm_nyq=m, xn_nyq=n)
+    ours = omn._boozer_plan(nfp=2, asym=True, mboz=5, nboz=3, oversample=1,
+                            **modes)
+    theirs = prepare_booz_xform_plan(
+        nfp=2, asym=True, config=BoozerConfig(mboz=5, nboz=3), **modes)
+    assert ours.constants == theirs.constants
+    assert ours.config == theirs.config
+    for grid in ("theta_grid", "zeta_grid", "xm_b", "xn_b"):
+        np.testing.assert_array_equal(getattr(ours.grids, grid),
+                                      getattr(theirs.grids, grid), err_msg=grid)
+    assert set(ours.tables) == set(theirs.tables)
+    for name, table in ours.tables.items():
+        np.testing.assert_array_equal(np.asarray(table),
+                                      np.asarray(theirs.tables[name]),
+                                      err_msg=name)
+
+
+def test_boozer_plan_tables_are_concrete_when_built_inside_a_trace():
+    """The tables must be constants of the compiled program, not more of it.
+
+    The first transform of a process usually happens inside the objective's
+    own ``jit``.  If the plan were built there as staged operations the
+    adoption would buy nothing: the trig tables would be back inside every
+    compiled program, exactly as the plan-less call had them.
+    """
+    pytest.importorskip("booz_xform_jax")
+    from vmex.core import omnigenity as omn
+
+    m = np.arange(5, dtype=np.int32)
+    staged: dict = {}
+
+    def build(x):
+        plan = omn._boozer_plan(nfp=3, asym=False, xm=m, xn=0 * m, xm_nyq=m,
+                                xn_nyq=0 * m, mboz=4, nboz=3, oversample=3)
+        staged["tables"] = [isinstance(value, jax.core.Tracer)
+                            for value in plan.tables.values()]
+        staged["shape"] = np.asarray(plan.tables["tcos_nyq"]).shape
+        return x
+
+    jax.jit(build)(jax.numpy.zeros(1))
+    assert staged["tables"] and not any(staged["tables"])
+    assert staged["shape"][0] > 0
+
+
+def test_boozer_plan_registry_is_bounded_and_least_recently_used(monkeypatch):
+    """A mixed-resolution session cannot grow the registry without bound.
+
+    Plans hold real memory (tens of MiB of trig tables at production
+    ``mboz``), so the registry evicts; eviction is least-recently-*used*, not
+    least-recently-built, because a sweep that revisits one resolution
+    between many others must keep hitting it.
+    """
+    pytest.importorskip("booz_xform_jax")
+    import collections
+
+    from vmex.core import omnigenity as omn
+
+    registry: collections.OrderedDict = collections.OrderedDict()
+    monkeypatch.setattr(omn, "_PLAN_CACHE", registry)
+    monkeypatch.setattr(omn, "_PLAN_CACHE_MAX", 3)
+    m = np.arange(3, dtype=np.int32)
+    make = lambda mboz: omn._boozer_plan(  # noqa: E731
+        nfp=1, asym=False, xm=m, xn=0 * m, xm_nyq=m, xn_nyq=0 * m,
+        mboz=mboz, nboz=0)
+    first, second, third = (make(mboz) for mboz in (2, 3, 4))
+    assert make(2) is first  # a hit refreshes the oldest entry
+    make(5)  # so mboz=3 is now the least recently used, and goes
+    assert len(registry) == 3
+    assert make(2) is first
+    assert make(4) is third
+    assert make(3) is not second  # evicted: rebuilt, never wrong

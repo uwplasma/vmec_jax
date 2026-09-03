@@ -59,6 +59,7 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     for script in (
+        "boozer_plan_adoption.py",
         "run_baseline.py",
         "run_external_equilibrium.py",
         "run_freeboundary_multigrid.py",

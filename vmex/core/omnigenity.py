@@ -18,8 +18,12 @@ Two pieces:
    jittable kernel (``booz_xform_jax.jax_api.booz_xform_jax_impl``) for
    symmetric and ``lasym`` states alike, so vmex carries no second
    implementation of the transform and the whole chain stays end-to-end
-   differentiable.  (:func:`boozer_bmnc_state` remains as a deprecated
-   alias of the previous name.)
+   differentiable.  The kernel runs on a ``booz_xform_jax.BoozerPlan``
+   (mode and trig tables of one static resolution) that vmex builds once
+   per distinct resolution and reuses across surfaces, objective
+   evaluations, and jit traces (:func:`_boozer_plan`).
+   (:func:`boozer_bmnc_state` remains as a deprecated alias of the
+   previous name.)
 
 2. :func:`omnigenity_residual` / :class:`QIResidual` — a smooth, lightweight
    surrogate for poloidally-closed-contour (``M = 0, N = 1``) omnigenity.
@@ -67,6 +71,7 @@ Scope notes
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import warnings
 from typing import Any, Iterable
@@ -148,18 +153,115 @@ def _refine_booz_grids(constants, grids, oversample, nfp):
     )
 
 
-def _boozer_kernel_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
+def _build_plan_tables(grids, xm, xn, xm_nyq, xn_nyq, *, constants, trig_f32):
+    """The per-resolution trig/mode tables, op by op under the caller's context.
+
+    The body is upstream's own ``_build_tables`` — the very function a
+    plan-less kernel call runs inside the caller's trace — so vmex carries
+    no trig table of its own.  Deliberately *not* a jit lane: staging the
+    build as one fused program is ~5x cheaper to run (measured 419 ms ->
+    83 ms cold, 4 ms warm at ``mboz = nboz = 16, oversample = 2``) but XLA
+    then contracts the two products of ``cos m cos n + sin m sin n`` and the
+    spectrum moves in the last bit (measured 1.0e-16 absolute on
+    ``bmnc_b``).  Building it the way the plan-less kernel did keeps the
+    adoption exactly bit-identical, which is worth more than a fraction of a
+    second paid once per resolution per process.
+    """
+    from booz_xform_jax.jax_api import _build_tables
+
+    return _build_tables(constants, grids, xm, xn, xm_nyq, xn_nyq,
+                         trig_f32=trig_f32)
+
+
+#: Bounded content-keyed registry of transform plans (the
+#: ``implicit._canonical_config`` precedent): equal content is the same
+#: ``BoozerPlan`` instance, so the tables are built once per distinct
+#: resolution per process and every objective evaluation and jit trace
+#: closes over the same arrays.  Eviction only costs a rebuild.  The bound
+#: matches upstream's own plan cache; one plan at vmex's default
+#: ``mboz = nboz = 16, oversample = 2`` holds ~44 MiB of tables, so a
+#: session that really does mix eight resolutions pays for them.
+_PLAN_CACHE: "collections.OrderedDict[tuple, Any]" = collections.OrderedDict()
+_PLAN_CACHE_MAX = 8
+
+
+def _boozer_plan(*, nfp, asym, xm, xn, xm_nyq, xn_nyq, mboz, nboz,
+                 oversample=1, surface_chunk="auto"):
+    """The reusable ``booz_xform_jax`` plan for one static resolution.
+
+    A plan-less kernel call rebuilds the trig/mode tables inside every
+    trace, and XLA does not fold them away: the plan is worth 1.2-2.2x on
+    the jitted transform and 1.1-1.2x on its gradient
+    (``benchmarks/boozer_plan_adoption_m4.json``).  Upstream's
+    ``prepare_booz_xform_plan`` builds only on the transform's own
+    ``2*(2*mboz+1)`` by ``2*(2*nboz+1)`` quadrature and exposes no grid
+    hook, so vmex's ``oversample`` refinement runs upstream's table builder
+    itself, on the refined constants and grids
+    (:func:`_build_plan_tables`); ``test_vmex_plan_matches_upstreams_own_at
+    _oversample_one`` pins that reconstruction against
+    ``prepare_booz_xform_plan``.  The plan holds an explicit
+    ``BoozerConfig``, so upstream's ``BOOZ_XFORM_JAX_TRIG_F32`` environment
+    default never reaches this path.  Built under compile-time evaluation so
+    the tables are concrete constants even when the first call happens
+    inside a trace; the registry key carries the x64 flag and the default
+    device because the tables' dtype and placement are fixed at build time.
+    """
+    from booz_xform_jax.jax_api import (
+        BoozerConfig,
+        BoozerPlan,
+        prepare_booz_xform_constants,
+    )
+
+    xm, xn, xm_nyq, xn_nyq = (
+        np.asarray(a, dtype=np.int32) for a in (xm, xn, xm_nyq, xn_nyq))
+    key = (int(nfp), bool(asym), int(mboz), int(nboz), int(oversample),
+           surface_chunk, bool(jax.config.jax_enable_x64),
+           repr(jax.config.jax_default_device),
+           xm.tobytes(), xn.tobytes(), xm_nyq.tobytes(), xn_nyq.tobytes())
+    hit = _PLAN_CACHE.get(key)
+    if hit is not None:
+        _PLAN_CACHE.move_to_end(key)
+        return hit
+    config = BoozerConfig(mboz=int(mboz), nboz=int(nboz),
+                          surface_chunk=surface_chunk)
+    with jax.ensure_compile_time_eval():
+        constants, grids = prepare_booz_xform_constants(
+            nfp=int(nfp), mboz=int(mboz), nboz=int(nboz), asym=bool(asym),
+            xm=xm, xn=xn, xm_nyq=xm_nyq, xn_nyq=xn_nyq)
+        constants, grids = _refine_booz_grids(constants, grids, oversample, nfp)
+        tables = _build_plan_tables(grids, xm, xn, xm_nyq, xn_nyq,
+                                    constants=constants,
+                                    trig_f32=config.trig_f32)
+    plan = BoozerPlan(config=config, constants=constants, grids=grids,
+                      tables=tables)
+    _PLAN_CACHE[key] = plan
+    while len(_PLAN_CACHE) > _PLAN_CACHE_MAX:
+        _PLAN_CACHE.popitem(last=False)
+    return plan
+
+
+def _run_plan(plan, families):
+    """``booz_xform_jax_impl`` on a plan; ``families`` are the stacked tables.
+
+    The kernel reads its mode-list arguments only when building tables
+    inline; with a plan they are dead, so pass ``None`` rather than a copy
+    (a future upstream that reads them again fails loudly here).
+    """
+    from booz_xform_jax.jax_api import booz_xform_jax_impl
+
+    return booz_xform_jax_impl(
+        **families, xm=None, xn=None, xm_nyq=None, xn_nyq=None,
+        constants=plan.constants, grids=plan.grids, plan=plan)
+
+
+def _boozer_kernel_state(state, rt, *, rows, s_half, mboz, nboz, oversample,
+                         surface_chunk):
     """State tables through booz_xform_jax's validated full transform.
 
     One code path for both parities: symmetric states pass only the cosine
     families (the kernel returns an all-zero ``bmns_b`` block), ``lasym``
     states add the independent sine families.
     """
-    from booz_xform_jax.jax_api import (
-        booz_xform_jax_impl,
-        prepare_booz_xform_constants,
-    )
-
     lasym = bool(rt.setup.lasym)
     tables = [boozer_input_tables(state, rt, int(row)) for row in rows]
     stack = lambda name: jnp.stack([table[name] for table in tables])  # noqa: E731
@@ -172,31 +274,25 @@ def _boozer_kernel_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
     # toroidal harmonics) and skips the dead quadrature.
     if not np.any(xn):
         nboz = 0
-    # booz_xform's convenience wrapper prepares shape constants with Python
-    # integer conversions. Do that work at trace time, then call its fully
-    # jittable kernel so the objectives remain differentiable under JVP.
-    with jax.ensure_compile_time_eval():
-        constants, grids = prepare_booz_xform_constants(
-            nfp=int(rt.resolution.nfp), mboz=int(mboz), nboz=int(nboz),
-            asym=lasym, xm=xm, xn=xn, xm_nyq=xm, xn_nyq=xn)
-        constants, grids = _refine_booz_grids(
-            constants, grids, oversample, rt.resolution.nfp)
-        xm_b = np.asarray(grids.xm_b, dtype=float)
-        xn_b = np.asarray(grids.xn_b, dtype=float)
-    out = booz_xform_jax_impl(
+    plan = _boozer_plan(
+        nfp=int(rt.resolution.nfp), asym=lasym, xm=xm, xn=xn, xm_nyq=xm,
+        xn_nyq=xn, mboz=mboz, nboz=nboz, oversample=oversample,
+        surface_chunk=surface_chunk)
+    families = dict(
         rmnc=stack("rmnc"), zmns=stack("zmns"), lmns=stack("lmns"),
         bmnc=stack("bmnc"), bsubumnc=stack("bsubumnc"),
-        bsubvmnc=stack("bsubvmnc"), iota=stack("iota"),
-        xm=jnp.asarray(xm), xn=jnp.asarray(xn), xm_nyq=jnp.asarray(xm),
-        xn_nyq=jnp.asarray(xn), constants=constants, grids=grids,
-        **(dict(rmns=stack("rmns"), zmnc=stack("zmnc"), lmnc=stack("lmnc"),
-                bmns=stack("bmns"), bsubumns=stack("bsubumns"),
-                bsubvmns=stack("bsubvmns")) if lasym else {}),
-    )
+        bsubvmnc=stack("bsubvmnc"), iota=stack("iota"))
+    if lasym:
+        families.update(
+            rmns=stack("rmns"), zmnc=stack("zmnc"), lmnc=stack("lmnc"),
+            bmns=stack("bmns"), bsubumns=stack("bsubumns"),
+            bsubvmns=stack("bsubvmns"))
+    out = _run_plan(plan, families)
     setup = rt.setup
     return {
         "bmnc_b": out["bmnc_b"], "bmns_b": out["bmns_b"],
-        "xm_b": xm_b, "xn_b": xn_b,
+        "xm_b": np.asarray(plan.grids.xm_b, dtype=float),
+        "xn_b": np.asarray(plan.grids.xn_b, dtype=float),
         "iota_b": stack("iota"), "G_b": stack("G"), "I_b": stack("I"),
         "nfp": int(rt.resolution.nfp),
         "s_b": jnp.asarray(s_half, dtype=jnp.asarray(setup.s_full).dtype)[rows - 1],
@@ -214,14 +310,12 @@ def boozer_spectrum_high_order(
     asym: bool = False,
     ntheta: int | None = None,
     nzeta: int | None = None,
+    surface_chunk: int | str = "auto",
 ) -> dict[str, Array]:
-    """Transform continuous native surfaces with BOOZ_XFORM_JAX in memory."""
+    """Transform continuous native surfaces with BOOZ_XFORM_JAX in memory.
 
-    from booz_xform_jax.jax_api import (
-        booz_xform_jax_impl,
-        prepare_booz_xform_constants,
-    )
-
+    ``surface_chunk`` as in :func:`boozer_spectrum_state`.
+    """
     surface_values = np.atleast_1d(np.asarray(surfaces, dtype=float))
     if np.any((surface_values <= 0.0) | (surface_values > 1.0)):
         raise ValueError("surfaces must satisfy 0 < s <= 1")
@@ -236,42 +330,19 @@ def boozer_spectrum_high_order(
     ]
     first = tables[0]
     stack = lambda name: jnp.stack([table[name] for table in tables])  # noqa: E731
-    constants, grids = prepare_booz_xform_constants(
-        nfp=int(state.nfp),
-        mboz=int(mboz),
-        nboz=int(nboz),
-        asym=bool(asym),
-        xm=first["xm"],
-        xn=first["xn"],
-        xm_nyq=first["xm_nyq"],
-        xn_nyq=first["xn_nyq"],
-    )
-    out = booz_xform_jax_impl(
-        rmnc=stack("rmnc"),
-        zmns=stack("zmns"),
-        lmns=stack("lmns"),
-        bmnc=stack("bmnc"),
-        bsubumnc=stack("bsubumnc"),
-        bsubvmnc=stack("bsubvmnc"),
-        iota=stack("iota"),
-        xm=jnp.asarray(first["xm"]),
-        xn=jnp.asarray(first["xn"]),
-        xm_nyq=jnp.asarray(first["xm_nyq"]),
-        xn_nyq=jnp.asarray(first["xn_nyq"]),
-        constants=constants,
-        grids=grids,
-        rmns=stack("rmns"),
-        zmnc=stack("zmnc"),
-        lmnc=stack("lmnc"),
-        bmns=stack("bmns"),
-        bsubumns=stack("bsubumns"),
-        bsubvmns=stack("bsubvmns"),
-    )
+    plan = _boozer_plan(
+        nfp=int(state.nfp), asym=bool(asym), xm=first["xm"], xn=first["xn"],
+        xm_nyq=first["xm_nyq"], xn_nyq=first["xn_nyq"], mboz=mboz, nboz=nboz,
+        surface_chunk=surface_chunk)
+    out = _run_plan(plan, {
+        name: stack(name) for name in (
+            "rmnc", "zmns", "lmns", "bmnc", "bsubumnc", "bsubvmnc", "iota",
+            "rmns", "zmnc", "lmnc", "bmns", "bsubumns", "bsubvmns")})
     return {
         "bmnc_b": out["bmnc_b"],
         "bmns_b": out["bmns_b"],
-        "xm_b": np.asarray(grids.xm_b, dtype=float),
-        "xn_b": np.asarray(grids.xn_b, dtype=float),
+        "xm_b": np.asarray(plan.grids.xm_b, dtype=float),
+        "xn_b": np.asarray(plan.grids.xn_b, dtype=float),
         "iota_b": stack("iota"),
         "G_b": out["bvco_b"],
         "I_b": out["buco_b"],
@@ -288,6 +359,7 @@ def boozer_spectrum_state(
     mboz: int = 16,
     nboz: int = 16,
     oversample: int = 2,
+    surface_chunk: int | str = "auto",
 ) -> dict[str, Array]:
     """Boozer ``|B|`` spectrum of selected surfaces, fully traceable.
 
@@ -298,14 +370,27 @@ def boozer_spectrum_state(
     .boozer_input_tables`), then ``booz_xform_jax``'s jittable kernel runs
     the Boozer construction itself — generating potential, Boozer angles,
     and the angle-transform quadrature — for symmetric and ``lasym`` states
-    through the same code path.
+    through the same code path, on a plan built once per resolution
+    (:func:`_boozer_plan`).
 
     ``surfaces`` are normalized-flux values snapped to the nearest half-mesh
     surfaces (one Boozer construction per requested value, duplicates kept so
     outputs align with ``surfaces``).  ``oversample`` refines booz_xform's
     pinned ``(theta, zeta)`` quadrature grid by an integer factor before the
     angle transform, reducing the aliasing of ``cos(m theta_B - n zeta_B)``
-    products.
+    products.  ``surface_chunk`` bounds how many surfaces one compiled
+    contraction batches (``booz_xform_jax.BoozerConfig``): the default
+    ``"auto"`` batches every requested surface into a single ``vmap``, the
+    fastest schedule measured on CPU at objective sizes — at 8 and 16
+    surfaces (``mboz = nboz = 16``, ``oversample = 2``, ``input.nfp1_QI``) a
+    fixed chunk of 1, 2 or 4 cost 1.09-1.55x on the value and 1.32-2.52x on
+    the gradient; only at 3 surfaces did a small chunk help the value
+    (0.41x at chunk 1), and it cost 3.3x on the gradient there.  An integer
+    bounds the per-chunk intermediates instead (``lax.map`` over fixed
+    blocks with an edge-replicated tail), for a device that cannot hold the
+    whole batch.  Per-surface arithmetic is identical either way; the
+    schedule moves results at rounding level only (measured 0.0 at chunk 2
+    and 4, 5.6e-16 absolute at chunk 1).
 
     Returns ``{bmnc_b (nsurf, nmodes), bmns_b, xm_b, xn_b (physical),
     iota_b, G_b, I_b, nfp, s_b, psi_b, psi_edge}``; ``bmns_b`` is the
@@ -327,7 +412,7 @@ def boozer_spectrum_state(
     s_half_np, rows = _nearest_half_mesh_rows(ns, surfaces)
     return _boozer_kernel_state(
         state, rt, rows=rows, s_half=s_half_np, mboz=mboz, nboz=nboz,
-        oversample=oversample)
+        oversample=oversample, surface_chunk=surface_chunk)
 
 
 def boozer_bmnc_state(*args, **kwargs) -> dict[str, Array]:

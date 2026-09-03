@@ -160,6 +160,30 @@ def test_boozer_spectrum_matches_booz_xform(qi_eq):
     assert checked >= 50  # the comparison actually covered the spectrum
 
 
+def test_surface_chunk_is_a_schedule_not_a_different_transform(qi_eq):
+    """Chunked execution moves the spectrum at rounding level only.
+
+    ``surface_chunk`` switches the kernel from one ``vmap`` over every
+    requested surface to ``lax.map`` over fixed blocks with an
+    edge-replicated tail (three surfaces in blocks of two exercise the pad
+    and crop); the per-surface arithmetic is identical, so only XLA's
+    reduction order can differ.  Measured across chunk 1, 2 and 4 at
+    production sizes: 0.0 to 5.6e-16 absolute, so the 1e-14 gate keeps
+    better than 15x margin.
+    """
+    pytest.importorskip("booz_xform_jax")
+    kw = dict(surfaces=SURFACES, mboz=6, nboz=6, oversample=1)
+    whole = omn.boozer_spectrum_state(qi_eq.state, qi_eq.runtime, **kw)
+    blocked = omn.boozer_spectrum_state(
+        qi_eq.state, qi_eq.runtime, surface_chunk=2, **kw)
+    for key in ("bmnc_b", "bmns_b", "iota_b", "G_b", "I_b"):
+        np.testing.assert_allclose(np.asarray(blocked[key]),
+                                   np.asarray(whole[key]), rtol=0.0,
+                                   atol=1e-14, err_msg=key)
+    np.testing.assert_array_equal(blocked["xm_b"], whole["xm_b"])
+    np.testing.assert_array_equal(blocked["xn_b"], whole["xn_b"])
+
+
 @pytest.mark.full
 def test_lasym_boozer_spectra_and_qi_derivative(lasym_eq):
     """LASYM cosine/sine spectra retain host parity and an FD-checked JVP."""

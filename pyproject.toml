@@ -34,13 +34,12 @@ dependencies = [
   "packaging",
   # JAX's persistent compilation cache uses file locks across processes.
   "filelock",
-  # 0.1.1 is the first release whose jittable kernel accepts the asymmetric
-  # families (rmns/zmnc/lmnc/bmns/bsubumns/bsubvmns) that the in-memory
-  # bridge passes for lasym states, and the first with guarded zero-mode
-  # denominators so the transform has finite tangents under jvp/grad.
-  # 0.1.0 raises TypeError on rmns/zmnc/lmnc.  (The BoozerConfig/
-  # BoozerPlan API on booz_xform_jax main is unreleased and NOT required.)
-  "booz_xform_jax>=0.1.1",
+  # 0.2.0 is the first release with the BoozerConfig/BoozerPlan API and the
+  # `plan=` kernel argument the in-memory bridge (vmex.core.omnigenity)
+  # builds on: one plan per resolution, reused across surfaces and traces,
+  # with chunking as explicit configuration.  0.1.x rebuilds the trig tables
+  # inside every trace and reads its only knob from the environment.
+  "booz_xform_jax>=0.2.0",
   # 0.20.0 adds the matrix-free least-squares APIs used by strong-force
   # polishing. 0.19.0 contains continuation but predates the least-squares PR.
   "solvax>=0.20.0",
