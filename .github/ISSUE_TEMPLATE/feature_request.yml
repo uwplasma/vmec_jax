@@ -1,0 +1,40 @@
+name: Feature request
+description: A capability, objective, or interface VMEX should provide
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What you want to do
+      description: The workflow you are trying to run, and where it stops today.
+    validations:
+      required: true
+  - type: textarea
+    id: input-file
+    attributes:
+      label: Input file
+      description: >-
+        Paste or attach an input deck if the request concerns a specific
+        equilibrium. Leave empty for interface-only requests.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `vmex --doctor`
+      description: >-
+        Useful when the request depends on the installed optional extras
+        (neoclassical, freeb, coils, turbulence). Leave empty otherwise.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: >-
+        Papers, VMEC2000 or VMEC++ behaviour, or other codes that already do
+        this.
+    validations:
+      required: false

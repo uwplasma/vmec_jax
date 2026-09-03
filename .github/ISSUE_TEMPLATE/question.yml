@@ -1,0 +1,23 @@
+name: Question or support
+description: How to run a case, read a result, or wire VMEX into another code
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: >-
+        What you are trying to do and what you have tried. Include the command
+        or Python call if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `vmex --doctor`
+      description: >-
+        Include it when the question involves an install, a device, or an
+        optional extra.
+      render: text
+    validations:
+      required: false

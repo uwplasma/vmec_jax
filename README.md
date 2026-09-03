@@ -550,7 +550,9 @@ python -m ruff check vmex tests examples benchmarks
 
 See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.html) and the [test manifest](tests/manifest.json). Release notes are on [GitHub](https://github.com/uwplasma/vmex/releases). VMEX uses the MIT license.
 
-Report problems at https://github.com/uwplasma/vmex/issues; include the input file and the output of `vmex --doctor`.
+## Getting support
+
+Bug reports, feature requests, and questions all go to [GitHub issues](https://github.com/uwplasma/vmex/issues), which offers a template for each; include the input file and the output of `vmex --doctor`. [Troubleshooting](https://vmex.readthedocs.io/en/latest/howto/troubleshoot.html) covers non-convergence, NaNs, and device placement first. Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md); participation is governed by the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Roadmap
 

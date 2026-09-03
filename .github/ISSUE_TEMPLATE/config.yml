@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://vmex.readthedocs.io/en/latest/
+    about: Tutorials, how-to guides, the CLI and input-file reference, and the theory pages.
+  - name: Troubleshooting guide
+    url: https://vmex.readthedocs.io/en/latest/howto/troubleshoot.html
+    about: Non-convergence, NaNs, device placement, and cache problems, with the checks to run first.
