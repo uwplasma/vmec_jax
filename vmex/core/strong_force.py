@@ -227,7 +227,10 @@ class StrongForceReport:
     flux_surface_normalized_l2: Array
     angular_spectral_tail: Array
     radial_refinement_difference: Array
+    #: Smallest signed Jacobian on the sample, in machine units.
     minimum_signed_jacobian: Array
+    #: The same minimum divided by the mean |Jacobian|: scale-free, so it is
+    #: comparable across devices.  See :func:`_nestedness_margin`.
     nestedness_margin: Array
     boundary_residual: Array
     gauge_residual: Array
@@ -745,6 +748,21 @@ def _angular_spectral_tail(magnitude: Array) -> Array:
     return jnp.sqrt(tail / jnp.maximum(jnp.sum(power), 1.0e-300))
 
 
+def _nestedness_margin(signed_jacobian: Array) -> Array:
+    """How close the surfaces come to touching, as a scale-free fraction.
+
+    ``minimum_signed_jacobian`` answers the same question in machine units,
+    so it says nothing on its own: a small tokamak and a reactor with equally
+    healthy surfaces report numbers three decades apart.  Dividing by the mean
+    magnitude removes the size of the device, since a geometry scaled by
+    ``a`` scales every volume element by ``a**3``.  The margin is positive
+    where the surfaces are nested, and crosses zero exactly where the
+    Jacobian does.
+    """
+    scale = jnp.mean(jnp.abs(signed_jacobian))
+    return jnp.min(signed_jacobian) / jnp.maximum(scale, 1.0e-300)
+
+
 def certify_strong_force(
     state: HighOrderEquilibriumState,
     *,
@@ -867,7 +885,7 @@ def certify_strong_force(
         angular_spectral_tail=tail,
         radial_refinement_difference=refinement,
         minimum_signed_jacobian=jnp.min(signed_jacobian),
-        nestedness_margin=jnp.min(signed_jacobian),
+        nestedness_margin=_nestedness_margin(signed_jacobian),
         boundary_residual=boundary_residual,
         gauge_residual=gauge_residual,
         force_floor=float(force_floor),

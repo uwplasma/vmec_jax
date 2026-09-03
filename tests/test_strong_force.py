@@ -528,3 +528,28 @@ def test_angular_spectral_tail_measures_the_high_harmonics():
     mixed = poloidal(1) + poloidal(8)
     value = float(_angular_spectral_tail(mixed))
     assert 0.0 < value < 1.0
+
+
+def test_nestedness_margin_is_scale_free_and_distinct_from_the_jacobian():
+    """The two Jacobian fields answered the same question in the same units.
+
+    ``nestedness_margin`` was literally ``jnp.min(signed_jacobian)``, the
+    value ``minimum_signed_jacobian`` already carries, so the certificate
+    published one number under two names. A margin has to be scale free to
+    mean anything across devices: scaling a geometry by ``a`` scales every
+    volume element by ``a**3``, which moves the minimum but not the fraction.
+    """
+    from vmex.core.strong_force import _nestedness_margin
+
+    jacobian = jnp.asarray([2.0, 4.0, 6.0, 8.0])
+    margin = float(_nestedness_margin(jacobian))
+    assert margin == pytest.approx(2.0 / 5.0)
+    assert margin != pytest.approx(float(jnp.min(jacobian)))
+
+    # a uniformly scaled device reports the same margin
+    for factor in (1.0e-3, 1.0e3):
+        assert float(_nestedness_margin(factor * jacobian)) == pytest.approx(margin)
+
+    # it crosses zero exactly where the Jacobian does
+    assert float(_nestedness_margin(jnp.asarray([-1.0, 3.0]))) < 0.0
+    assert float(_nestedness_margin(jnp.asarray([0.0, 3.0]))) == 0.0
