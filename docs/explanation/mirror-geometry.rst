@@ -825,7 +825,7 @@ ratio of 0.952754 on a 51 by 101 grid. The production mixed-truncation
 VMEX solve gives 0.956197, a 0.36% relative difference. Boundary
 independent-reference curves remain the controlling diagnostics rather than
 being replaced by this scalar comparison.
-That study reports robust Pleiades equilibria for ``beta < 1`` and the expected
+That study reports reliably converged Pleiades equilibria for ``beta < 1`` and the expected
 outward flux-surface expansion and diamagnetic field depression. Extending the
 numerical gate to 50% therefore probes a scientifically relevant nonlinear
 regime, but it is an equilibrium benchmark only: it does not establish flute,

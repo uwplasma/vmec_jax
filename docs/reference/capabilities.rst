@@ -61,7 +61,7 @@ stated in the row is validated; ``—`` means no public path.
      - limited
      - limited
      - supported
-     - Forward NESTOR and exterior fields are supported. An experimental CPU reverse-mode path differentiates the reconverged VMEC--NESTOR root with direct ESSOS coil parameters; cold compile time, GPU memory, and failed-trial recovery are not yet production-ready. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit.py>`__, `test_virtual_casing_physics.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_virtual_casing_physics.py>`__, `test_examples.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_examples.py>`__.
+     - Forward NESTOR and exterior fields are supported. An experimental CPU reverse-mode path differentiates the reconverged VMEC--NESTOR root with direct ESSOS coil parameters; cold compile time, GPU memory, and failed-trial recovery are not yet ready for routine use. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit.py>`__, `test_virtual_casing_physics.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_virtual_casing_physics.py>`__, `test_examples.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_examples.py>`__.
    * - toroidal
      - stellarator / tokamak
      - free
@@ -184,9 +184,9 @@ Free-boundary differentiation
 -----------------------------
 
 A supported forward free-boundary solve does not imply that every derivative
-mode is production-ready. VMEX exposes an experimental reverse derivative
+mode is ready for routine use. VMEX exposes an experimental reverse derivative
 of the reconverged plasma-vacuum root on CPU, certified against independent
-free-boundary re-solves. Forward JVPs, low-memory GPU compilation, and robust
+free-boundary re-solves. Forward JVPs, low-memory GPU compilation, and reliable
 failed-trial walls remain open promotion gates. The prescribed-boundary
 virtual-casing derivative is the mature path for fixed-LCFS coil objectives.
 
