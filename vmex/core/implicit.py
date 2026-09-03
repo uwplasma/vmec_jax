@@ -3252,7 +3252,9 @@ def frozen_path_directional_fd(
     h: float = 1e-4,
     newton_steps: int = 20,
     newton_rtol: float = 1e-11,
-) -> tuple[float, dict]:
+    newton_solver: str = "gcrot",
+    probe_chunk_size: int = 1,
+) -> tuple[float | Array, dict]:
     """Central FD of ``metric_fn`` along ``tangent`` on the *frozen* solve path.
 
     The correct finite-difference reference for **solver-sensitive** metrics --
@@ -3290,6 +3292,18 @@ def frozen_path_directional_fd(
     the ``-h`` branch at ``|F| = 2.2e-08`` — 4e-04 from the root along a
     singular direction of ``dF/dz`` — and moved this FD by 35%.
 
+    ``metric_fn`` may return either a scalar or an array.  Scalar metrics retain
+    the historical Python ``float`` return; array metrics return an FD array of
+    the same shape, with both branches sharing the same two frozen Newton solves.
+
+    ``newton_solver="gcrot"`` retains the original exact Newton/Krylov path.
+    ``"block_chord"`` factors the exact radial block Jacobian of the raw force
+    once at the base root and reuses it as a chord-Newton inverse for both nearby
+    branches.  The raw and preconditioned forces have the same root; callers must
+    still reject the FD if the reported preconditioned ``newton_res`` values do
+    not meet their accuracy requirement.  The chord mode is intended for
+    expensive multi-output diagnostics, not production equilibrium solves.
+
     Returns ``(fd, info)`` where ``info['newton_res']`` are the two frozen-solve
     residual norms; confirm they are small (an unconverged frozen solve
     invalidates the comparison — that stall is exactly what they catch).
@@ -3300,26 +3314,105 @@ def frozen_path_directional_fd(
     edge_mask = _edge_mask(cfg)
     F = residual_fn(cfg, frozen, dof_mask)
     z_star = P(x_star)
+    if newton_solver not in ("gcrot", "block_chord"):
+        raise ValueError("newton_solver must be 'gcrot' or 'block_chord'")
+    block_system = None
+    raw_F = None
+    if newton_solver == "block_chord":
+        raw_F = residual_fn(cfg, frozen, dof_mask, formulation="raw")
+        block_system = _raw_block_system(
+            params,
+            cfg,
+            frozen,
+            dof_mask,
+            _active_state_fields(cfg),
+            int(probe_chunk_size),
+        )
+        parameter_rhs = jax.tree.map(
+            jnp.negative,
+            jax.jvp(
+                lambda prm: raw_F(z_star, prm),
+                (params,),
+                (tangent,),
+            )[1],
+        )
+        state_predictor = _raw_block_apply(block_system, parameter_rhs)
+    else:
+        state_predictor = None
 
     def _norm(t: SpectralState) -> float:
         return float(jnp.sqrt(sum(jnp.vdot(v, v).real for v in jax.tree.leaves(t))))
 
-    def _eval(sign: float) -> tuple[float, float]:
+    base_residual = _norm(F(z_star, params))
+
+    def _eval(sign: float) -> tuple[Array, float, int, dict]:
         p_h = jax.tree.map(lambda a, d: a + sign * h * d, params, tangent)
-        z = z_star
+        z = (
+            z_star
+            if state_predictor is None
+            else jax.tree.map(
+                lambda base, direction: base + sign * h * direction,
+                z_star,
+                state_predictor,
+            )
+        )
         r0 = max(_norm(F(z, p_h)), 1.0)
-        for _ in range(newton_steps):
+        iterations = 0
+        residual_history = [_norm(F(z, p_h))]
+        accepted_step_scales = []
+        for iteration in range(newton_steps):
             fz = F(z, p_h)
-            if _norm(fz) <= newton_rtol * r0:
+            residual_norm = _norm(fz)
+            if residual_norm <= newton_rtol * r0:
                 break
-            # Newton step (dF/dz) delta = F(z, p_h), matrix-free forward solve.
-            _, jvp = jax.linearize(lambda zz: F(zz, p_h), z)
-            delta, _ = _adjoint_solve_gcrot(jvp, fz, cfg, enforce=False)
-            z = jax.tree.map(lambda a, b: a - b, z, delta)
+            if newton_solver == "gcrot":
+                # Newton step (dF/dz) delta = F(z, p_h), matrix-free solve.
+                _, jvp = jax.linearize(lambda zz: F(zz, p_h), z)
+                delta, _ = _adjoint_solve_gcrot(jvp, fz, cfg, enforce=False)
+                z = jax.tree.map(lambda a, b: a - b, z, delta)
+                accepted_step_scales.append(1.0)
+            else:
+                delta = _raw_block_apply(block_system, raw_F(z, p_h))
+                step_scale = 1.0
+                accepted = False
+                for _ in range(12):
+                    trial = jax.tree.map(
+                        lambda a, b: a - step_scale * b, z, delta
+                    )
+                    if _norm(F(trial, p_h)) < residual_norm:
+                        z = trial
+                        accepted = True
+                        accepted_step_scales.append(step_scale)
+                        break
+                    step_scale *= 0.5
+                if not accepted:
+                    break
+            iterations = iteration + 1
+            residual_history.append(_norm(F(z, p_h)))
         rt = runtime_from_params(p_h, cfg)
         x = _assemble(z, rt, frozen, P, edge_mask)
-        return float(metric_fn(x, rt)), _norm(F(z, p_h))
+        details = {
+            "initial_residual": residual_history[0],
+            "residual_history": tuple(residual_history),
+            "accepted_step_scales": tuple(accepted_step_scales),
+        }
+        return (
+            jnp.asarray(metric_fn(x, rt)),
+            _norm(F(z, p_h)),
+            iterations,
+            details,
+        )
 
-    val_p, res_p = _eval(+1.0)
-    val_m, res_m = _eval(-1.0)
-    return (val_p - val_m) / (2.0 * h), {"newton_res": (res_p, res_m), "h": h}
+    val_p, res_p, iter_p, details_p = _eval(+1.0)
+    val_m, res_m, iter_m, details_m = _eval(-1.0)
+    fd = (val_p - val_m) / (2.0 * h)
+    if fd.ndim == 0:
+        fd = float(fd)
+    return fd, {
+        "newton_res": (res_p, res_m),
+        "base_residual": base_residual,
+        "newton_iterations": (iter_p, iter_m),
+        "branches": (details_p, details_m),
+        "newton_solver": newton_solver,
+        "h": h,
+    }

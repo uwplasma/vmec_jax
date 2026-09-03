@@ -159,6 +159,48 @@ def test_block_response_forward_transpose_and_fd():
         )
 
 
+def test_frozen_path_directional_fd_accepts_vector_metric():
+    """Array metrics share one frozen-path solve pair without changing scalars."""
+    inp, cfg, p0 = _small_solovev_setup()
+    state, mask = im.solve_implicit_with_aux(p0, cfg)
+    zero = jax.tree.map(jnp.zeros_like, p0)
+    tangent = dataclasses.replace(
+        zero, rbc=zero.rbc.at[inp.ntor, 1].set(1.0)
+    )
+    tangent_batch = jax.tree.map(lambda value: value[None, ...], tangent)
+    state_tangent, report = im.implicit_state_tangent_multi_rhs(
+        p0, cfg, state, mask, tangent_batch,
+        probe_chunk_size=4, response_chunk_size=1,
+    )
+    assert bool(np.asarray(report.converged)[0])
+    state_direction = jax.tree.map(lambda value: value[0], state_tangent)
+
+    def metric(x, p):
+        rt = im.runtime_from_params(p, cfg)
+        return jnp.stack((im.aspect_ratio(x, rt), im.plasma_volume(x, rt)))
+
+    directional = jax.jvp(metric, (state, p0), (state_direction, tangent))[1]
+    finite_difference, info = im.frozen_path_directional_fd(
+        p0,
+        cfg,
+        lambda x, rt: jnp.stack((
+            im.aspect_ratio(x, rt),
+            im.plasma_volume(x, rt),
+        )),
+        tangent,
+        h=3e-5,
+        newton_solver="block_chord",
+        probe_chunk_size=4,
+    )
+
+    assert np.asarray(finite_difference).shape == (2,)
+    assert info["newton_solver"] == "block_chord"
+    assert max(info["newton_res"]) < 1e-8
+    np.testing.assert_allclose(
+        directional, finite_difference, rtol=2e-5, atol=2e-8
+    )
+
+
 def test_raw_block_probe_chunking_preserves_exact_factors():
     """Bounded VJP batches assemble the same local block Jacobian."""
 
