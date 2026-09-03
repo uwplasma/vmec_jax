@@ -1,0 +1,94 @@
+{
+  "schema": "vmex.fresh-deck-parity/1",
+  "provenance": {
+    "date": "2026-09-02",
+    "vmex_version": "0.8.1",
+    "vmex_commit": "8ef81c44",
+    "jax": "0.11.1",
+    "float64": true,
+    "host": "Apple M4 (arm64), macOS 23.4, CPU",
+    "reference": {
+      "name": "xvmec2000 (VMEC2000, serial Fortran build)",
+      "sha256_prefix": "f7e9034f7d9d7ae5",
+      "linked": ["openblas", "scalapack", "netcdf", "netcdf-fortran"]
+    },
+    "protocol": "One run at a time, foreground, fresh directory per run. cold: persistent compilation cache removed before the run (rm -rf ~/.cache/vmex ~/.cache/jax). warm: fresh process, cache kept. Decks never previously benchmarked on vmex; all fixed boundary.",
+    "notes": "Per-run logs were kept in the session scratch area and are not committed; every row is reproducible from the deck and the protocol.  The markdown companion file carries the per-deck narrative."
+  },
+  "decks": [
+    {
+      "deck": "input.ITERModel",
+      "sha256_prefix": "d761697cc2c71d58",
+      "kind": "tokamak",
+      "resolution": {"nfp": 1, "mpol": 12, "ntor": 0, "ns_levels": 6, "ns_final": 201, "ftol": 1e-18},
+      "wall_s": {"xvmec2000": 6.7, "vmex_cold": 21.0, "vmex_warm": 9.0, "vmex_python_cold_import": 0.28, "vmex_python_cold_solve": 20.19},
+      "iterations": {"xvmec2000": 1469, "vmex": 1470},
+      "jacobian_resets": {"xvmec2000": 4, "vmex": 4},
+      "max_rel_diff": {"iotaf": 1.5e-16, "volume_p": 1.2e-16},
+      "boundary_max_abs_diff": 0.0
+    },
+    {
+      "deck": "input.estell_24_scaled",
+      "sha256_prefix": "77a0b0a2326ee282",
+      "kind": "stellarator",
+      "resolution": {"nfp": 2, "mpol": 6, "ntor": 5, "ns_levels": 4, "ns_final": 65, "ftol": 1e-12},
+      "wall_s": {"xvmec2000": 23.1, "vmex_cold": 24.0, "vmex_warm": 14.2, "vmex_python_cold_import": 0.29, "vmex_python_cold_solve": 22.75},
+      "iterations": {"xvmec2000": 2301, "vmex": 2301},
+      "jacobian_resets": {"xvmec2000": 0, "vmex": 0},
+      "max_rel_diff": {"iotaf": 3.5e-12},
+      "boundary_max_abs_diff": 1.4e-17
+    },
+    {
+      "deck": "input.n3are_R7.75B5.7",
+      "sha256_prefix": "3df6a3585e2f10ba",
+      "kind": "stellarator, finite beta, net current (NCURR=1)",
+      "resolution": {"nfp": 3, "mpol": 9, "ntor": 5, "ns_levels": 2, "ns_final": 49, "ftol": 1e-11},
+      "wall_s": {"xvmec2000": 5.1, "vmex_cold": 10.6, "vmex_warm": 5.8, "vmex_python_cold_import": 0.28, "vmex_python_cold_solve": 10.13},
+      "iterations": {"xvmec2000": 1496, "vmex": 1496},
+      "jacobian_resets": {"xvmec2000": 4, "vmex": 4},
+      "max_rel_diff": {"betatotal": 2.2e-13, "iotaf": 1.4e-10},
+      "boundary_max_abs_diff": null
+    },
+    {
+      "deck": "input.HSX_QHS_vacuum_ns201",
+      "sha256_prefix": "9a6cec7ca40244ab",
+      "kind": "stellarator, vacuum",
+      "resolution": {"nfp": 4, "mpol": 10, "ntor": 10, "ns_levels": 7, "ns_final": 201, "ftol": 1e-12},
+      "wall_s": {"xvmec2000": 162.3, "vmex_cold": 97.2, "vmex_warm": 81.7, "vmex_python_cold_import": 0.39, "vmex_python_cold_solve": 86.75},
+      "iterations": {"xvmec2000": 1575, "vmex": 1575},
+      "jacobian_resets": {"xvmec2000": 7, "vmex": 7},
+      "max_rel_diff": {"iotaf": 2.5e-10},
+      "boundary_max_abs_diff": 2.2e-19
+    },
+    {
+      "deck": "input.W7-X_standard_configuration",
+      "sha256_prefix": "b438c6cc9c759116",
+      "kind": "stellarator, near-vacuum (AM ~ 1e-6)",
+      "resolution": {"nfp": 5, "mpol": 10, "ntor": 10, "ns_levels": 3, "ns_final": 51, "ftol": 1e-12},
+      "wall_s": {"xvmec2000": 9.2, "vmex_cold": 14.9, "vmex_warm": 8.0, "vmex_python_cold_import": 0.28, "vmex_python_cold_solve": 14.36},
+      "iterations": {"xvmec2000": 1105, "vmex": 1105},
+      "jacobian_resets": {"xvmec2000": 3, "vmex": 3},
+      "max_rel_diff": {"iotaf": 7.6e-12},
+      "boundary_max_abs_diff": 2.8e-17
+    },
+    {
+      "deck": "input.NuhrenbergZille_1988_QHS",
+      "sha256_prefix": "474e8e9d0a061ea4",
+      "kind": "stellarator, net current",
+      "resolution": {"nfp": 6, "mpol": 9, "ntor": 5, "ns_levels": 2, "ns_final": 51, "ftol": 1e-11},
+      "wall_s": {"xvmec2000": 6.4, "vmex_cold": 11.5, "vmex_warm": 6.5, "vmex_python_cold_import": 0.29, "vmex_python_cold_solve": 10.96},
+      "iterations": {"xvmec2000": 1843, "vmex": 1843},
+      "jacobian_resets": null,
+      "max_rel_diff": {"iotaf": 3.8e-11},
+      "boundary_max_abs_diff": 6.9e-18
+    }
+  ],
+  "compile_census_worst_cold_case": {
+    "deck": "input.ITERModel",
+    "total_compile_s": 12.65,
+    "programs": 650,
+    "block_lane_compiles": 6,
+    "block_lane_compile_s": 5.68,
+    "cold_minus_warm_wall_s": 12.0
+  }
+}
