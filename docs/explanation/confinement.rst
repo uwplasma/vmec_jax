@@ -166,13 +166,18 @@ requested surface, sampled on a uniform :math:`(\theta,\phi)` grid,
        - (\mathbf B\cdot\nabla B)\,(M G + N I)}{B^{3}},
 
 with :math:`M=` ``helicity_m``, :math:`N=` ``helicity_n``\ :math:`\times`\
-``nfp``, and :math:`G,I` the Boozer covariant averages ``bvco``/``buco``. The
-key algebraic fact is that :math:`f_{\mathrm{QS}}` **vanishes identically iff**
-:math:`|B|` is quasisymmetric with helicity :math:`(M,N)`; there is no residual
-symmetry-breaking harmonic left to penalize. The flux-surface sum
+``nfp``, and :math:`G,I` the Boozer covariant averages ``bvco``/``buco``; this
+is the residual inside eq. (1) of Landreman & Paul, Phys. Rev. Lett. 128,
+035001 (2022). The key algebraic fact is that :math:`f_{\mathrm{QS}}`
+**vanishes identically iff** :math:`|B|` is quasisymmetric with helicity
+:math:`(M,N)` (Helander, Rep. Prog. Phys. 77, 087001 (2014)); there is no
+residual symmetry-breaking harmonic left to penalize. The flux-surface sum
 :math:`\sum f_{\mathrm{QS}}^2`, weighted by the surface measure
-:math:`\sqrt{\mathrm{nfp}\,\Delta\theta\,\Delta\phi\,|\sqrt g|/V'}`, reproduces
-simsopt's ``QuasisymmetryRatioResidual`` A/B bit-for-bit. Kept in
+:math:`\sqrt{\mathrm{nfp}\,\Delta\theta\,\Delta\phi\,|\sqrt g|/V'}`, is
+simsopt's ``QuasisymmetryRatioResidual`` A/B formula on the same grid with the
+same weighting. No simsopt oracle runs in this test suite, so the gated
+comparison is VMEX's own traceable lane against its wout lane
+(``tests/test_optimize_traceable_qs.py``). Kept in
 Gauss–Newton (per-point) form, it feeds the least-squares driver as an exact
 residual vector rather than a pre-summed scalar. The metric is evaluated from
 the parity-proven wout tables (:mod:`vmex.core.nyquist`) and also exposes a
@@ -688,7 +693,9 @@ bounce-averaged drift and the flux surface,
 
 with :math:`v_r` and :math:`v_p` the bounce-averaged radial and
 poloidal-tangential magnetic drifts (Velasco et al., Nucl. Fusion 61,
-116059 (2021), eqs. 14-16, the KNOSOS/CIEMAT-QI form).  The residual rows
+116059 (2021), eqs. 14-16, in the Nemov/DESC form with the surface-tangency
+factor evaluated at the field minimum of each well; KNOSOS uses the
+:math:`\gamma_c^*` variant, which drops that factor).  The residual rows
 are :math:`\Gamma_c` per surface, so the least-squares cost is the sum of
 :math:`w\,\Gamma_c^{2}`; Velasco et al. 2021, eqs. (20)-(21), relate the
 prompt-loss fraction approximately linearly to :math:`\Gamma_c` (more
