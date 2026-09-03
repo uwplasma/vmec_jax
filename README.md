@@ -469,8 +469,10 @@ The detailed, phased plan lives in [plan.md](plan.md). In flight now:
   compilation reuse, the polishing path's runtime, and chunked Boozer
   transforms; regimes (cold, cache-reload, warm) are never mixed in one
   number.
-- A `Gamma_c` objective whose boundary derivative is well-posed under
-  refinement, replacing the current fixed-resolution proxy.
+- A pinned DESC `Gamma_c` oracle: `GammaC` evaluates DESC's form of the
+  Nemov proxy and is checked against drift-kinetic identities and its own
+  `wout` tables, but no test yet asserts its value against a number
+  computed by DESC's `GammaC` on a shared equilibrium.
 - Up-down asymmetric (LASYM) equilibria as a first-class certified lane.
 - Promote the boundary-Schur free-boundary adjoint and coil-only
   free-boundary single-stage optimization after their compile and GPU
