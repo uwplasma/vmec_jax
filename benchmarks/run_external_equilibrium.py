@@ -43,6 +43,32 @@ def _peak_rss_mib(children: bool = False) -> float:
     return value / divisor
 
 
+def _desc_native_force_error(equilibrium) -> dict[str, float]:
+    """DESC's own force error on its converged equilibrium.
+
+    The certificate we run afterwards measures VMEX's spline lift of DESC's
+    re-exported ``wout``, which is a different quantity: it carries the
+    export mesh and the lift.  These are the numbers DESC itself reports, in
+    the two published normalizations -- Panici et al. 2023 Eqs. 32-34b
+    (``<|F|>_vol / <|grad(p)|>_vol``) and the vacuum-safe magnetic-pressure
+    form used by DESC's own equilibrium objective -- so the comparison row can
+    say which code is being measured.
+    """
+    keys = ["<|F|>_vol", "<|grad(p)|>_vol", "<|grad(|B|^2)|/2mu0>_vol"]
+    data = equilibrium.compute(keys)
+    force = float(data["<|F|>_vol"])
+    pressure = float(data["<|grad(p)|>_vol"])
+    magnetic = float(data["<|grad(|B|^2)|/2mu0>_vol"])
+    report = {"mean_force_density": force,
+              "mean_grad_pressure": pressure,
+              "mean_grad_magnetic_pressure": magnetic}
+    if pressure > 0.0:
+        report["normalized_by_pressure_gradient"] = force / pressure
+    if magnetic > 0.0:
+        report["normalized_by_magnetic_pressure"] = force / magnetic
+    return report
+
+
 def _run_desc(args: argparse.Namespace) -> dict[str, object]:
     import jax
     from desc.vmec import VMECIO
@@ -71,9 +97,11 @@ def _run_desc(args: argparse.Namespace) -> dict[str, object]:
     save_started = time.perf_counter()
     VMECIO.save(equilibrium, args.output_wout, surfs=args.surfaces, verbose=0)
     save_seconds = time.perf_counter() - save_started
+    native = _desc_native_force_error(equilibrium)
     return {
-        "schema": "vmex.external-equilibrium-run/1",
+        "schema": "vmex.external-equilibrium-run/2",
         "engine": "desc",
+        "native_force_error": native,
         "input": args.wout.name,
         "output_wout": args.output_wout.name,
         "representation": {

@@ -149,3 +149,46 @@ def test_cold_and_cache_reload_subprocess_regimes(tmp_path):
     # cache makes a new process cheaper) without flaking on a loaded runner.
     assert (reload_["timing_s"]["process_wall"]
             < 0.9 * cold["timing_s"]["process_wall"])
+
+
+def test_desc_native_force_error_reports_both_published_normalizations():
+    """The DESC row must be able to say what DESC itself measures.
+
+    Certifying DESC's re-exported ``wout`` measures the export mesh and the
+    spline lift; the artifact records DESC's own volume-averaged force error
+    beside it, in the pressure-gradient normalization of Panici et al. 2023
+    and the vacuum-safe magnetic-pressure one.
+    """
+    import json
+    from pathlib import Path
+
+    from benchmarks.run_external_equilibrium import _desc_native_force_error
+
+    class _Equilibrium:
+        def compute(self, keys):
+            values = {"<|F|>_vol": 2.0, "<|grad(p)|>_vol": 4.0,
+                      "<|grad(|B|^2)|/2mu0>_vol": 8.0}
+            return {key: values[key] for key in keys}
+
+    report = _desc_native_force_error(_Equilibrium())
+    assert report["mean_force_density"] == 2.0
+    assert report["normalized_by_pressure_gradient"] == 0.5
+    assert report["normalized_by_magnetic_pressure"] == 0.25
+
+    # a vacuum equilibrium has no pressure gradient to normalize by, and the
+    # magnetic-pressure form is the one that survives
+    class _Vacuum(_Equilibrium):
+        def compute(self, keys):
+            values = {"<|F|>_vol": 1.0, "<|grad(p)|>_vol": 0.0,
+                      "<|grad(|B|^2)|/2mu0>_vol": 4.0}
+            return {key: values[key] for key in keys}
+
+    vacuum = _desc_native_force_error(_Vacuum())
+    assert "normalized_by_pressure_gradient" not in vacuum
+    assert vacuum["normalized_by_magnetic_pressure"] == 0.25
+
+    artifact = json.loads(
+        Path("benchmarks/desc_native_vs_lifted_2026-09-03.json").read_text())
+    native = artifact["desc_native_force_error"]["normalized_by_pressure_gradient"]
+    lifted = artifact["vmex_certificate_on_the_desc_wout"]["normalized_l2"]
+    assert native < 1.0e-5 < lifted, "the recorded gap is the point of the artifact"
