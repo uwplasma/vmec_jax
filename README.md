@@ -355,11 +355,17 @@ otherwise runs up to 80 Gauss-Newton iterations at relative tolerance `1.0E-3`.
 
 `AUTO` and `ON` differ in one further way. Before committing to the
 Gauss-Newton phase, `AUTO` times one of its linear products on your problem
-and your machine and multiplies by the iteration limits. If the result is
-longer than `POLISH_BUDGET`, it prints what it measured, returns the
-equilibrium unpolished and uncertified, and names the knobs that change the
-decision; it never raises, because nothing was attempted. `ON` never measures
-and never declines. The other directives map onto `PolishConfig`:
+and your machine and multiplies by the iteration limits you configured. If
+that worst case is longer than `POLISH_BUDGET`, it prints what it measured,
+returns the equilibrium unpolished and uncertified, and names the knobs that
+change the decision; it never raises, because nothing was attempted. `ON`
+never measures and never declines.
+
+The default one-hour budget admits every case polishing is shipped and
+claimed on, all of which are axisymmetric, and declines a 3-D deck at
+production resolution — which matches the scope described below rather than
+contradicting it. Use `POLISH = ON`, or raise `POLISH_BUDGET`, to ask for one
+deliberately. The other directives map onto `PolishConfig`:
 
 | Directive | Meaning | Default |
 |---|---|---|

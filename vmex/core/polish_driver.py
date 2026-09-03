@@ -103,16 +103,24 @@ def _residual_evaluations(result: Any) -> int:
 
 #: Wall-clock ceiling ``POLISH = AUTO`` commits to before it declines.
 #:
-#: Chosen from the decks polishing is shipped on, not from a round number.
-#: The measured Gauss--Newton cost of the bundled cases, and of the two
-#: 3-D runs on the office box, is recorded in
-#: ``benchmarks/polish_cost_<host>.json``; the axisymmetric shaped tokamak
-#: that carries the README polish claim predicts well under an hour, and
-#: the W7-X standard configuration at ``MPOL = NTOR = 10`` predicts weeks at
-#: driver defaults.  One hour sits between them with room to spare on both
-#: sides, and is short enough that a user who wanted a quick answer gets one
-#: rather than an overnight run they did not ask for.  ``POLISH = ON`` never
-#: consults it, and ``POLISH_BUDGET`` raises it.
+#: Chosen from the decks polishing is shipped on, not as a round number:
+#: ``benchmarks/polish_cost.py`` records the measured cost of each, and the
+#: axisymmetric cases that carry the published polish claim predict far
+#: under an hour even at the driver's full iteration limits.
+#:
+#: What is compared against it is the *worst case* those limits allow, not a
+#: forecast of what the solve will use — Gauss--Newton usually stops earlier.
+#: That is deliberate.  The iteration limits are what the caller authorized,
+#: so they are the honest upper bound on what AUTO would be committing their
+#: machine to, and the decline names ``POLISH_MAX_ITER`` precisely because
+#: lowering the authorization is one of the ways to fit the budget.
+#:
+#: The consequence is that a 3-D deck at production resolution is declined
+#: by default.  That matches the documented scope rather than contradicting
+#: it: no 3-D deck has passed the independent certificate, and the one that
+#: improved substantially needed hours.  ``POLISH = ON`` never consults the
+#: budget, and ``POLISH_BUDGET`` raises it, so neither case is unreachable —
+#: only unrequestable by accident.
 _DEFAULT_AUTO_BUDGET_SECONDS = 3600.0
 
 #: Normal-equation products the timing lane applies.  Enough to amortize the
