@@ -3272,6 +3272,48 @@ Still open:
   and add the published global normalizations for every reported number.
 - GitHub topics and repository description.
 
+### 31.6b W7-X polish measurements (office box, completed 2026-09-03)
+
+Two bounded 3-D polish runs finished on the office box; the result files are
+`~/polish3d/run1_qa_tol1e-6.json` and `~/polish3d/run5_w7x_remat.json`
+there. They settle the memory question and reframe the effectiveness one.
+
+Memory: the batched, checkpointed certificate and force kernel took the
+W7-X deck (MPOL = NTOR = 10, ns 13/25/51) from an un-chunked 34.5 GB
+allocation and an OS kill to a clean exit at 17.1 GB peak RSS. That fix is
+the v0.8.2 blocker and should ship on its own merits.
+
+Cost: the same run took 11 h 09 m. Setup was bounded (legacy solve 40 s,
+refine/lift/initial certificate ~4 min, preconditioner 3 min, root runtime
+2 min, structured chart 22 min, projection 30 s); Gauss-Newton took 10 h
+35 m for six iterations, about 1.75 h each, every one of them hitting the
+150-iteration linear ceiling. The QA case that polishes well needed
+roughly forty iterations, so a comparable W7-X budget is of order three
+days. Cost per iteration, not futility, is the publishable obstacle.
+
+Effectiveness, stated carefully: W7-X moved its own collocation cost
+67900 -> 41570 (-39%) while the independent certificate moved
+absolute_l2 4.327e6 -> 4.279e6 (-1.1%), with edge_l2 -33% and near-axis
+and helical residuals slightly worse. The QA run moved cost 9009 -> 2170
+and absolute_l2 3.427e4 -> 2.042e4 (-40%). The W7-X run had six iterations
+against QA's forty and a quarter of the linear budget, so the two are not
+comparable evidence; the effectiveness question needs a long-budget W7-X
+run before anyone writes it down as a result.
+
+Do NOT gate AUTO on the projection unresolved fraction: it is 0.694 on the
+W7-X run and 0.734 on the QA run that polishes well, so it does not
+separate them. The diagnostic that does differ sharply is `sampled_rms`
+(0.0018 QA against 0.442 W7-X) at nearly equal `projected_residual_rms`;
+that is worth understanding but is two data points, not a threshold.
+Gate on predicted cost instead, and tell the user what the run would cost
+and which knob raises the ceiling.
+
+Also confirmed here: the certificate's normalized metrics are useless at
+this scale (normalized_l2 1.99999999997 before, normalized_linf 2.0 after
+- finding 31.2-R1), and ten and a half hours passed between "entering
+Gauss-Newton" and "Gauss-Newton done" with no output, which is the user's
+original complaint about a silent, apparently hung polish.
+
 ### 31.7 Remaining engineering items (carried from section 8.8 and the campaign)
 
 3-D polish effectiveness and memory at production resolution (the
