@@ -254,6 +254,36 @@ POLISH_SCREEN_HEADER = (
 )
 
 
+def polish_progress_line(
+    *,
+    elapsed_seconds: float,
+    products: int,
+    product_budget: int,
+    cost: float,
+) -> str:
+    """One live heartbeat from inside the jitted Gauss--Newton solve.
+
+    The Gauss--Newton loop is a single ``lax.while_loop``, so its per-step
+    table (:func:`polish_screen_line`) can only print once the solve returns.
+    At production stellarator resolution that window is hours long, which
+    reads as a hang.  This line is emitted from a device callback on the
+    matrix-free normal-equation products instead, so the console advances
+    while the solve runs.  ``products`` counts those applications and
+    ``product_budget`` is ``max_steps * linear_max_steps`` — the worst case,
+    not a prediction, so the percentage only ever overstates what remains.
+    """
+
+    total = max(int(product_budget), 1)
+    done = int(products)
+    hours, remainder = divmod(max(float(elapsed_seconds), 0.0), 3600.0)
+    minutes, seconds = divmod(remainder, 60.0)
+    return (
+        f"  polish {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+        f"  {done}/{total} linear products ({100.0 * done / total:4.1f}%)"
+        f"  cost {float(cost):10.3E}\n"
+    )
+
+
 def polish_screen_line(
     iteration: int,
     cost: float,

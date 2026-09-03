@@ -8,6 +8,8 @@ not the public polishing route.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import signature
 from time import perf_counter
@@ -27,6 +29,7 @@ from .printing import (
     emit_flushed,
     force_error_rows,
     polish_certificate_summary,
+    polish_progress_line,
     polish_screen_line,
 )
 from .polish import (
@@ -1087,14 +1090,131 @@ def polish_strong_root(
 # compilation cache as well (different constants, different HLO). These
 # module lanes take the pytrees as arguments, so equal-structure polish
 # calls share one compiled program in memory and on disk.
-@functools.partial(jax.jit, static_argnames=("config",))
+#: Shortest gap between two live polish heartbeats.  The callbacks that feed
+#: them fire far more often than this on small problems and far less often
+#: than this at production resolution, so the throttle only ever suppresses
+#: output; it never delays a line past the next callback.
+_POLISH_PROGRESS_INTERVAL_SECONDS = 30.0
+
+#: The reporter the staged device callbacks below deliver to, or ``None``
+#: when no verbose polish is running.  It cannot be captured in the callback
+#: closures: ``jax.debug.callback`` bakes the Python callable into the
+#: compiled executable, and that executable is reused by every later polish
+#: call of the same shape, which would keep reporting to the first call's
+#: console long after it finished.
+_ACTIVE_POLISH_PROGRESS: Any = None
+
+
+def _polish_progress_product(_unused: Any) -> None:
+    """One matrix-free normal-equation product was applied."""
+
+    reporter = _ACTIVE_POLISH_PROGRESS
+    if reporter is not None:
+        reporter.product()
+
+
+def _polish_progress_cost(cost: Any) -> None:
+    """The Gauss--Newton loop evaluated the residual at a new point."""
+
+    reporter = _ACTIVE_POLISH_PROGRESS
+    if reporter is not None:
+        reporter.cost(float(cost))
+
+
+@jax.custom_jvp
+def _progress_probe(vector):
+    """Identity whose linearization announces every application."""
+
+    return vector
+
+
+@_progress_probe.defjvp
+def _progress_probe_jvp(primals, tangents):
+    (vector,), (tangent,) = primals, tangents
+    # The reported value must depend on the tangent.  A tangent-independent
+    # callback is hoisted into the known half by partial evaluation, so it
+    # would fire once per linearization -- once per Gauss-Newton step, the
+    # very granularity that leaves production runs silent for hours -- rather
+    # than once per inner product.  The sum costs one reduction over the
+    # chart against a full force sweep per product.
+    jax.debug.callback(_polish_progress_product, jnp.sum(tangent))
+    return vector, tangent
+
+
+class _PolishProgress:
+    """Throttled console view of a running Gauss--Newton polish.
+
+    Printing happens on the host from device callbacks, so it neither
+    enters the traced program's arithmetic nor forces a synchronization
+    barrier; the solve's numbers are bit-identical with and without it.
+    """
+
+    def __init__(self, emit: Any, *, product_budget: int,
+                 interval: float | None = None) -> None:
+        self._emit = emit
+        self._budget = int(product_budget)
+        # Read at construction, not as a default argument, so the throttle
+        # stays patchable for tests that need every callback to print.
+        self._interval = float(
+            _POLISH_PROGRESS_INTERVAL_SECONDS if interval is None else interval)
+        self._started = perf_counter()
+        # The first product always reports: a run that shows one line and
+        # then goes quiet for its throttle interval is still attributable,
+        # whereas a solve that prints nothing at all is the bug being fixed.
+        self._last = float("-inf")
+        self._products = 0
+        self._cost = float("nan")
+        self.lines = 0
+
+    def product(self) -> None:
+        self._products += 1
+        self._maybe_emit()
+
+    def cost(self, value: float) -> None:
+        self._cost = value
+
+    def _maybe_emit(self) -> None:
+        now = perf_counter()
+        if now - self._last < self._interval:
+            return
+        self._last = now
+        self.lines += 1
+        self._emit(polish_progress_line(
+            elapsed_seconds=now - self._started,
+            products=self._products,
+            product_budget=self._budget,
+            cost=self._cost,
+        ), end="")
+
+
+@contextmanager
+def _polish_progress(reporter: Any) -> Iterator[Any]:
+    """Route the staged callbacks to ``reporter`` for the duration."""
+
+    global _ACTIVE_POLISH_PROGRESS
+    previous = _ACTIVE_POLISH_PROGRESS
+    _ACTIVE_POLISH_PROGRESS = reporter
+    try:
+        yield reporter
+    finally:
+        _ACTIVE_POLISH_PROGRESS = previous
+
+
+@functools.partial(jax.jit, static_argnames=("config", "progress"))
 def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
-                              collocation_scale, config):
+                              collocation_scale, config, progress=False):
     from solvax import gauss_newton_least_squares
 
     def residual(vector):
-        return strong_collocation_residual(
-            variable_scale * vector, runtime, chart) / collocation_scale
+        scaled = variable_scale * vector
+        if progress:
+            scaled = _progress_probe(scaled)
+        residuals = strong_collocation_residual(
+            scaled, runtime, chart) / collocation_scale
+        if progress:
+            jax.debug.callback(
+                _polish_progress_cost, 0.5 * jnp.vdot(residuals, residuals))
+        return residuals
 
     return gauss_newton_least_squares(residual, value, config=config)
 
@@ -1286,10 +1406,21 @@ def polish_collocation_least_squares(
         ),
     )
     started = perf_counter()
-    solution = _gauss_newton_polish_lane(
-        zero, runtime, chart, variable_scale_array,
-        collocation_scale_array, least_squares_config)
-    jax.block_until_ready(solution)
+    reporter = (
+        _PolishProgress(
+            emit,
+            product_budget=int(least_squares_config.max_steps)
+            * int(least_squares_config.linear_max_steps),
+        )
+        if verbose
+        else None
+    )
+    with _polish_progress(reporter):
+        solution = _gauss_newton_polish_lane(
+            zero, runtime, chart, variable_scale_array,
+            collocation_scale_array, least_squares_config,
+            progress=reporter is not None)
+        jax.block_until_ready(solution)
     if verbose:
         _emit_gauss_newton_rows(solution, emit)
     vector = variable_scale_array * solution.x
