@@ -6,8 +6,10 @@ stellarator deck (README stellarator row). Baseline behavior on
 defaults): 0.377 -> 0.324 independent normalized L2 (-14%), 2 Gauss-Newton
 steps, certificate correctly declines. VMEC2000's unpolished export for the
 same deck certifies at ~0.394. Axisymmetric reference
-(`input.shaped_tokamak_pressure_polished`): 5.05e-2 -> 1.91e-3 (26x),
-certified at the 1e-2 validation tolerance.
+(`input.shaped_tokamak_pressure_polished`): certified at the 1e-2
+validation tolerance. Its headline gain factor is under separate revision
+(plan 31.2-R3: the quoted figure mixes the polish gain with an export-mesh
+reconstruction difference), so it is deliberately not restated here.
 
 All runs: office box, 36-core CPU, `JAX_PLATFORMS=cpu JAX_ENABLE_X64=1`,
 `~/.cache/vmex` and `~/.cache/jax` cleared before each run,
