@@ -253,7 +253,7 @@ def axis_mirror_wells(
             )
         )
     if not wells:
-        raise ValueError("the on-axis field strength has no ``|B|`` well between two maxima")
+        raise ValueError("the on-axis field strength has no |B| well between two maxima")
     return tuple(wells)
 
 
