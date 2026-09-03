@@ -68,7 +68,10 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
         "polish_preconditioner.py",
         "strong_certificate.py",
         "strong_polish.py",
+        "strong_polish_3d.py",
         "strong_root.py",
+        "polish_memory.py",
+        "polish_cost.py",
         "profile_resources.py",
     ):
         proc = subprocess.run(
