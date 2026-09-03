@@ -131,6 +131,57 @@ def test_polish_preconditioner_artifact_is_clean_and_certified() -> None:
         assert case["low_block_relative_residual"] < 1.0e-10
 
 
+def test_polish_sweep_memory_artifact_shows_the_fix_it_claims() -> None:
+    """The memory record has to carry the claim, not just the run.
+
+    The polish OOM was reported, reproduced, and fixed without anything in
+    the tree recording either number.  This artifact is that record, so the
+    gate is on the comparison it exists to make: the pre-0.8.2 flat sweep
+    must still show the allocation, and the shipped policy must complete on
+    a small fraction of it.
+    """
+
+    artifact = json.loads(
+        (ROOT / "benchmarks" / "polish_memory_w7x.json").read_text()
+    )
+    assert artifact["schema"] == "vmex.polish-sweep-memory/1"
+    provenance = artifact["provenance"]
+    assert re.fullmatch(r"[0-9a-f]{40}", provenance["measurement_commit"])
+    assert provenance["measurement_dirty"] is False
+    assert provenance["input_data_embedded"] is False
+    assert provenance["x64"] is True
+    encoded = json.dumps(artifact)
+    assert "/Users/" not in encoded and "/home/" not in encoded
+
+    arms = {arm["mode"]: arm for arm in artifact["arms"]}
+    assert set(arms) == {"flat", "batched", "auto"}
+    gib = 1024.0**3
+    flat = arms["flat"]["peak_rss_bytes"] / gib
+    auto = arms["auto"]["peak_rss_bytes"] / gib
+    # The flat sweep is the reported failure: tens of GiB on a deck that
+    # fits comfortably once the sweep is batched.
+    assert flat > 16.0
+    assert auto < 0.5 * flat
+    assert arms["auto"]["completed"] is True
+    detail = arms["auto"]["detail"]
+    assert detail["resolution"]["mpol"] == detail["resolution"]["ntor"] == 10
+    assert detail["sweep_policy"] == {
+        "batch": True,
+        "checkpoint": True,
+        "max_batch": 4096,
+        "min_batch": 128,
+        "working_set_bytes": 512 * 1024**2,
+    }
+    # The certificate sweep is the allocation that killed the user's run.
+    assert detail["certificate_peak_rss_bytes"] / gib < 8.0
+    assert (
+        detail["chart_peak_rss_bytes"] >= detail["certificate_peak_rss_bytes"]
+    )
+    assert "polish_memory_w7x.json" in (
+        ROOT / "docs" / "reference" / "performance.rst"
+    ).read_text()
+
+
 def test_collocation_polish_derivative_artifact_is_clean_and_certified() -> None:
     artifact = json.loads(
         (ROOT / "benchmarks" / "polish_implicit_m4.json").read_text()
