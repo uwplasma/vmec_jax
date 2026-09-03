@@ -470,7 +470,7 @@ cost, not a discovered impossibility. The evidence, all of it in
 |---|---|---|---|---|
 | `input.shaped_tokamak_pressure_polished` | `MPOL 5`, `NTOR 0`, `ns 31` | minutes | see the figure above | **certified** |
 | `input.nfp2_QA_smooth_beta` | `MPOL 5`, `NTOR 5`, `ns 25` | 40 iterations x 600 linear, 5 h 22 m | `3.43e4` -> `2.04e4` (-40%) | declined |
-| W7-X standard | `MPOL 10`, `NTOR 10`, `ns 51` | 6 iterations x 150 linear, 11 h 09 m | `4.33e6` -> `4.28e6` (-1.1%) | declined |
+| W7-X standard (not bundled) | `MPOL 10`, `NTOR 10`, `ns 51` | 6 iterations x 150 linear, 11 h 09 m | `4.33e6` -> `4.28e6` (-1.1%) | declined |
 
 Read the last two rows together. The 3-D QA case improves its independent
 force error substantially and still fails the certificate, so a large gain
@@ -487,8 +487,9 @@ Two consequences for anyone using the feature:
 
 - Polishing a production-resolution stellarator is not something to start
   casually. `POLISH = AUTO` now prices the solve first and declines rather
-  than silently spending the night; `POLISH = ON` with a raised
-  `POLISH_BUDGET` is the deliberate way to ask for it anyway.
+  than silently spending the night. Asking for it anyway is deliberate:
+  either raise `POLISH_BUDGET` past the reported prediction, or use
+  `POLISH = ON`, which never prices and never declines.
 - The certificate's `normalized_l2` is a *ratio* of the force error to the
   local force scale. On a vacuum or near-vacuum deck - the W7-X standard
   configuration among them - both terms of that scale vanish and the ratio
