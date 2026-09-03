@@ -91,10 +91,26 @@ second-order Richardson ("momentum") scheme
    \ddot{\mathbf{x}} + \frac{1}{\tau}\dot{\mathbf{x}} = P^{-1} F(\mathbf{x}),
 
 with :math:`\mathbf{x}` the stacked moments and :math:`P` the preconditioner
-(:mod:`vmex.core.step`; discretization in :doc:`iteration`). Because
-:math:`F = -\nabla_{\mathbf{x}} W`, every accepted step decreases :math:`W`
-monotonically (up to the momentum transient) and the descent stops only at a
-stationary point of the energy.
+(:mod:`vmex.core.step`; discretization in :doc:`iteration`).
+
+The iteration is *not* a monotone descent on :math:`W`, and it does not test
+for one. Hirshman and Whitson (1983) guarantee monotone decrease only for
+first-order (:math:`\ddot{\mathbf{x}} = 0`) descent; the second-order momentum
+term deliberately trades that guarantee for the faster asymptotic rate. Every
+step is taken unconditionally: :func:`~vmex.core.step.momentum_update` applies
+``v' = fac*(b1*v + delt*F)`` and ``x' = x + delt*v'`` with no line search and
+no energy comparison.
+
+The evolved force is also not exactly :math:`-\nabla_{\mathbf{x}} W`. VMEC adds
+the Hirshman--Meier spectral-condensation force ``gcon``
+(:func:`~vmex.core.forces.constraint_force`, ``alias.f``), whose strength
+``tcon`` is recomputed from the current geometry every iteration and whose
+``rcon0/zcon0`` baselines themselves move. The fixed point is therefore
+stationary for the energy plus a moving penalty, not for :math:`W` alone.
+
+The only intervention is :func:`~vmex.core.step.restart_decision`, which
+restarts on a Jacobian sign change or when the *force residual* grows past a
+fixed multiple of its best value -- again a residual test, not an energy test.
 See References [1-3] in :doc:`/project/references` for the original VMEC
 formulation.
 

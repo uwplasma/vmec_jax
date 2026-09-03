@@ -13,17 +13,20 @@ Representation and fixed constraints
 
 The continuous coordinates are ``(rho, theta, zeta)``, where ``rho=sqrt(s)``
 and ``zeta`` advances from zero to ``2*pi`` over one field period.  Physical
-cylindrical angle is ``phi=zeta/NFP``.  Each real Fourier amplitude is
+cylindrical angle is ``phi=zeta/NFP``.  This is a module-local convention: the
+legacy kernel documented in :doc:`spectral-representation` uses the physical
+toroidal angle directly.  Each real Fourier amplitude is
 
 .. math::
 
    X_{mn}(\rho) = \rho^{|m|} q_{mn}(s), \qquad
    q_{mn}(s) = \sum_k c_{kmn} B_k(s).
 
-The local clamped B-splines have odd degree 3, 5, or 7; cubic splines are the
-default because they retain continuous second derivatives without the compile
-and memory cost of a wider basis. The factor ``rho**abs(m)`` is analytic and
-is never estimated from sampled surfaces.
+The local clamped B-splines have odd degree 3, 5, or 7.  ``PolishConfig``
+selects degree 3, so a polished state is cubic unless the caller overrides
+``radial_degree``; :func:`~vmex.core.strong_force.lift_high_order_state` called
+on its own still defaults to degree 5.  The factor ``rho**abs(m)`` is analytic
+and is never estimated from sampled surfaces.
 
 The legacy lift first undoes VMEX's ``m=1`` constrained variables and Fourier
 normalization.  It then fits ``q`` while imposing these conditions by
@@ -41,14 +44,11 @@ lambda inversion used by hot restart.  DESC is used only as an external oracle;
 VMEX does not import or depend on DESC.
 
 The legacy radial mesh is first order, so the default reconstruction is an
-overdetermined fit with roughly two mesh samples per free spline span.  An
-equal-size interpolant reproduces mesh-scale noise exactly and can turn that
-noise into very large second derivatives in ``curl(B)`` even when the sampled
-surface coordinates look accurate.  Callers with a genuinely high-order
-source may supply an explicit ``radial_basis``.  The current legacy-coordinate
-polishing chart temporarily retains an equal-size basis after the independent
-certificate has failed; replacing those redundant legacy coordinates with
-native spline coefficients is tracked separately and rank tests remain strict.
+overdetermined fit with roughly two mesh samples per free spline span, capped
+at 32 spans.  An equal-size interpolant reproduces mesh-scale noise exactly and
+can turn that noise into very large second derivatives in ``curl(B)`` even when
+the sampled surface coordinates look accurate.  Callers with a genuinely
+high-order source may supply an explicit ``radial_basis``.
 
 Independent continuum oracle
 ----------------------------
@@ -87,229 +87,269 @@ reused.  The conventional independent components are
    F_{\mathrm{helical}} =
    \frac{\partial_\theta B_\zeta-\partial_\zeta B_\theta}{\mu_0}.
 
-The certificate uses shifted Gauss points, quadrature order at least two above
-the representation order, doubled angular resolution by default, and float64.
-It reports dimensional volume L2/P99/Linf force density, the symmetric
-pointwise normalization
+The certificate grid is disjoint from the solve grid: composite Gauss nodes of
+order ``degree+3`` per knot span, angular grids of ``max(8, 4(m_max+1))`` and
+``max(4, 4(n_max+1))`` points offset by ``0.5`` and ``0.375`` of a cell, and
+float64 throughout.  The volume norms are weighted by
+``w = w_rho * (2*pi/ntheta) * (2*pi/nzeta) * abs(sqrt(g))`` -- the
+flux-surface profile uses ``abs(sqrt(g))`` alone -- so ``normalized_l2`` is
+the volume-weighted root mean square of the pointwise ratio
 
 .. math::
 
-   \frac{2|\mathbf{F}|}
+   \varepsilon_F = \frac{2|\mathbf{F}|}
         {|\mathbf{J}\times\mathbf{B}|+|\nabla p|+F_{\mathrm{floor}}},
+   \qquad F_{\mathrm{floor}} = 10^{-12}.
 
-radial and helical contributions, near-axis/bulk/edge norms, a flux-surface
-profile, angular tail, an independently recomputed radial-quadrature
-difference, signed-Jacobian margin, boundary residual, and gauge residual.
+The report adds dimensional L2/P99/Linf force density, radial and helical
+contributions, near-axis/bulk/edge norms, a flux-surface profile, an angular
+spectral tail, a radial-quadrature difference, the signed-Jacobian margin, and
+the boundary and gauge residuals.  The quadrature difference re-evaluates the
+same knots at Gauss order ``degree+1`` instead of ``degree+3``, so it measures
+integration-order consistency and not knot refinement.
 
-Square system and nullspace policy
-----------------------------------
+Polishing chart and the frozen coordinate gauge
+-----------------------------------------------
 
-The polishing solve uses the explicit three-channel formulation.  In the
-stellarator-symmetric chart, active ``R_cos``, ``Z_sin``, and ``L_sin``
-corrections are sampled through the tested high/low transfer.  Fixed-edge,
-structural-zero, axis-closure, and lambda-gauge entries are absent.  Each
-constrained three-dimensional ``m=1,+/-n`` Z pair is one orthonormal
-coordinate ``(z_+ + z_-)/sqrt(2)``, not two duplicate unknowns.  The reduced
-vector is therefore
+:func:`~vmex.core.polish.make_strong_structured_chart` builds the solve
+coordinates without a global Jacobian or SVD.  It retains the constrained
+``R_cos`` channels as the geometry coordinates and the constrained ``L_sin``
+channels as the field-line coordinates; ``Z`` is the eliminated
+poloidal-coordinate gauge.  The chart requires stellarator symmetry and raises
+on ``lasym`` input.
 
-.. math::
+Freezing ``Z`` is a gauge choice, and it is not a free one.  Representing a
+vertical displacement ``dZ`` by a poloidal reparametrization alone needs
+``delta = dZ / Z_theta``, which is singular wherever ``Z_theta`` vanishes --
+the top and bottom of each cross-section.  There the chart simply cannot
+produce the normal displacement, so the available correction is essentially
+horizontal in the ``(R, Z)`` plane.
 
-   c = (c_R, c_Z, c_\lambda)
-       \in \mathbb{R}^{N_R+N_Z+N_\lambda}.
+The one exception is the ``lconm1`` ``m=1`` constraint.  In a three-dimensional
+run that group is a single internal variable that moves ``R_ss`` and ``Z_cs``
+together in a fixed one-to-one ratio, so ``Z`` moves only along that constrained
+direction; every other chart coordinate is pure ``R_cos`` or pure ``L_sin``.
+In an axisymmetric stellarator-symmetric run the constraint is inactive and
+``Z`` is frozen exactly.  Whether this gauge sets the observed residual floor
+near ``1.8e-3`` has not been tested.
 
-At shifted radial collocation points, the independent oracle forms signed
-physical radial and helical force densities.  Following DESC's force-balance
-objective, both root channels include the coordinate-volume factor
-``abs(sqrt(g))`` before Fourier projection.  This leaves the off-axis physical
-zero set unchanged and gives the projected equations the regular near-axis
-measure; it is part of the residual definition rather than a post-fit row
-scale.  Their symmetric normalization
-uses smooth ``sqrt(|v|^2 + force_floor^2)`` norms, so the root is differentiable
-even when one physical contribution vanishes.  The normalization scale is
-frozen from the lifted branch root for the solve, so it conditions but cannot
-create a state-dependent near-null direction; the final certificate recomputes
-the symmetric normalization independently.  A third, force-free coordinate
-equation projects the corrected displacement onto the lifted state's normalized
-poloidal tangent and sets that tangential displacement to zero.  It fixes the
-surface chart without adding physical-force content.  Full-period Fourier
-projection, analytic removal of ``rho**abs(m)``, radial spline fitting, and the
-high/low map produce ``N_R`` radial-force, ``N_Z`` coordinate, and
-``N_\lambda`` helical-force equations.  Thus the nonlinear Jacobian is square,
-while the lambda gauge remains eliminated structurally.
-
-The low endpoint is the nonlinear legacy raw-force defect
-``F_low(base+c)-F_low(base)`` evaluated at the corrected legacy coordinates.
-This anchors the continuation exactly at the converged discrete VMEX state
-without asking a high-order correction to remove the accepted finite legacy
-stopping defect.  The stored block system's fixed row scales make its channels
-dimensionless without changing its Jacobian.  With
-``R_low`` and the normalized three-channel strong residual ``R_strong``, the
-implemented homotopy is exactly
-
-.. math::
-
-   H(c,\alpha) = R_{low}(c)
-       + \alpha\,[R_{strong}(c)-R_{low}(c)].
-
-The anchored endpoint makes ``H(0,0)=0`` exactly; the continuation driver
-checks that consistency endpoint and then advances ``alpha``.  At ``alpha=1``
-the residual is independent strong force plus the coordinate equation.  This
-is a defect-correction continuation between equations, not an interpolation
-of equilibrium states and not minimization.
-
-The signs of the radial, coordinate, and helical equation blocks are selected
-from the eight possibilities using a bounded matrix-free Arnoldi diagnostic of
-the low-preconditioned strong Jacobian at the lifted state.  The deterministic
-choice maximizes the leftmost Ritz value.  This fixed nonsingular row scaling
-cannot change the strong root, but prevents artificial early folds caused only
-by inconsistent equation orientation.  The selected signs and remaining
-operator balance are runtime metadata.
-
-Small-problem tests explicitly assemble the Jacobian and reject unexplained
-nullspaces.  The five-surface Solovev structural gate has 23 independent
-unknowns and 23 equations, numerical rank 23 at relative SVD tolerance
-``1e-8``, and a finite JVP that agrees with centered finite differences.  Its
-unscaled measured condition number is about ``2.6e5`` before nonlinear-solver
-preconditioning, which is recorded rather than hidden.  This deliberately
-coarse case is a layout/rank test, not a polished-equilibrium accuracy claim.
-A failed rank test is a hard error; the implementation does not regularize an
-accidentally underdetermined system with a merit-function penalty.
-
-The clean-commit Apple M4 record in ``benchmarks/strong_root_m4.json`` reports
-0.287 ms median warm residual and 0.427 ms median warm JVP time over 20 repeats;
-first-call times are 1.07 s and 0.69 s with the normal persistent-cache policy.
-The recorded JVP error is ``9.7e-10`` and the runtime-build, residual, and JVP peak-RSS increments are
-reported separately.  These figures describe the structural five-surface gate
-only and are not extrapolated into a production-resolution solve claim.
-
-Development measurements rejected global equilibration, volume weighting by
-itself, and a dense physical-chart factorization as production defaults.  They
-either left numerical null directions or added unacceptable cold-start time and
-memory.  Those negative measurements are retained in the project plan ledger,
-not as one JSON artifact per experiment in the release-facing benchmark tree.
-The supported diagnostic remains ``benchmarks/strong_root.py``; it reports the
-selected formulation's rank, condition estimate, JVP check, and cold/warm cost
-in one schema.
-
-The radial spline quadrature is defined in normalized flux ``s``, whereas the
-strong-force oracle accepts ``rho = sqrt(s)``.  The root therefore evaluates
-physics at ``sqrt(s_quadrature)`` and fits the regularized amplitudes against
-the spline basis at ``s_quadrature``.  Passing the flux nodes directly as rho
-samples over-resolves the edge and under-resolves the magnetic axis; a
-regression fixes the coordinate identity ``rho_nodes**2 == s_quadrature``.
-
-The flux-coordinate regression is covered directly by tests.  Release-facing
-accuracy and runtime claims use the common certificate and the certified SOLVAX
-least-squares artifact rather than an archive of intermediate root variants.
-
-Low-order physics preconditioner
+Rectangular collocation residual
 --------------------------------
 
-The first high-order preconditioner reuses the exact nearest-neighbour
-raw-force block linearization from the implicit tangent/adjoint path.  For a
-high-order residual ``r_H``, :mod:`vmex.core.polish` applies
+:func:`~vmex.core.polish.strong_collocation_residual` exposes both independent
+physical channels at every solve point, with no angular or radial projection.
+The solve grid is the tensor product of composite Gauss--Legendre nodes in
+``s`` -- order ``max(3, ceil(1.5 * basis_size / spans))`` per knot span, mapped
+to ``rho = sqrt(s)`` -- with uniform angular grids of ``max(4*m_max+5, 4)``
+poloidal and ``1`` or ``2*|n|_max+3`` toroidal points.  The residual is
 
 .. math::
 
-   P_H r_H = T_{LH} A_L^{-1} T_{HL} r_H,
+   r = \frac{2\,|\sqrt{g}|}{D_0}
+       \left(f_\rho,\; f_{\mathrm{helical}}\right),
 
-where ``T_HL`` samples every regularized spline mode on the VMEX full mesh,
-restores VMEX Fourier normalization and the internal ``m=1`` packing, and
-projects onto the evolved legacy degrees of freedom.  ``T_LH`` fits the
-regularized coefficients back to the high-order basis.  Its R/Z fit has a
-structurally zero terminal coefficient, so a correction cannot move the fixed
-boundary.  Symmetry zeros and the lambda gauge are also eliminated rather
-than penalized.
+stacked over every grid point, giving ``2 * n_rho * n_theta * n_zeta`` rows
+against ``chart.size`` unknowns.  On the bundled shaped tokamak that is 1764
+rows and 148 unknowns out of 212 constrained coordinates.
 
-The raw-force factors are built once and stored.  Forward and transpose
-applications use the same SOLVAX block-Thomas factors; the transpose path is
-the algebraic transpose of the entire transfer--solve--transfer composition,
-not merely a second approximate inverse.  Tests certify both transfer
-dualities and the complete preconditioner duality.  A quality monitor reports
-the true relative residual ``||A P r-r||/||r||`` on fixed probes, allowing the
-nonlinear driver to refresh factors only after measured degradation.
+Three properties of this functional matter when reading a polish report.
 
-This level contains the dominant legacy radial physics but not the full
-high-order angular coupling.  It is a right preconditioner, not the polishing
-operator, and it never assembles a dense high-order Jacobian.  The subsequent
-p-level hierarchy may wrap it as the coarse solve without changing this
-contract.
+First, it is **not** the certificate norm.  It carries ``abs(sqrt(g))``
+linearly, in the DESC manner, but no quadrature weight: the radial Gauss
+weights and the angular cell measures are absent, and a weighted L2 would need
+``sqrt(w_rho * dtheta * dzeta * abs(sqrt(g)))`` instead.  Minimizing it is
+therefore a different objective from the one that decides acceptance.
 
-The strong endpoint is first normalized by its frozen initial RMS and then by
-a deterministic matrix-free estimate of the low-inverse/strong-Jacobian
-stiffness.  This positive scalar leaves the target root unchanged while making
-the continuation endpoints comparable.  The estimate uses a fixed probe and a
-bounded number of JVP/low-inverse applications; it is stored as
-``operator_balance`` for provenance.
+Second, the denominator ``D_0`` is frozen at the lifted state and uses a
+different floor from the certificate.  It is built once in
+:func:`~vmex.core.polish.make_strong_root_runtime` as
+``sqrt(|JxB|^2 + f^2) + sqrt(|grad p|^2 + f^2) + f`` with ``f = 1e-30``,
+against the certificate's ``1e-12``.  Freezing it means the solve cannot
+manufacture a state-dependent near-null direction; the smaller floor means the
+solve residual is far more sensitive than the certificate wherever both force
+contributions collapse, including vacuum regions.
 
-Branch-preserving driver
-------------------------
+Third, both channels are signed densities, not ``|F|``.  A signed residual is
+differentiable through its own zero, which the certificate's magnitude is not.
 
-The fixed-boundary host driver first verifies the ``alpha=0`` legacy
-consistency endpoint before row equilibration.  Because that endpoint
-subtracts the stored legacy defect, the zero correction is its mathematical
-root; accepting its roundoff-level remainder avoids an unnecessary nonlinear
-solve below floating-point noise.  A genuinely inconsistent endpoint still
-uses PTC.  The driver then calls SOLVAX adaptive continuation with state-dependent JVPs,
-Eisenstat--Walker forcing, and stored bounded mode-block factors.  The measured
-initial pseudo-time scale is large because the legacy endpoint has already
-been row equilibrated; ``dtau=1e6`` reaches the Newton regime on the structural
-Solovev gate while retaining PTC backtracking and adaptive shrink safeguards.
+The quadrature is defined in normalized flux ``s`` while the oracle accepts
+``rho = sqrt(s)``, so the residual evaluates physics at ``sqrt(s_quadrature)``
+and fits the regularized amplitudes against the spline basis at
+``s_quadrature``.  Passing flux nodes directly as rho samples over-resolves the
+edge and under-resolves the axis; a regression pins the identity
+``radial_nodes**2 == s_quadrature``.
 
-Every proposed state must remain finite and retain a signed-Jacobian margin
-above both an absolute floor and a fixed fraction of the lifted branch margin.
-The fixed boundary, profile data, parity, and lambda gauge cannot drift because
-they are absent from the free coordinate map.  Rejected states never replace
-the accepted branch point.
+Column scaling and the Gauss--Newton solve
+------------------------------------------
 
-If ordinary parameter continuation exhausts its minimum step, the driver can
-form a matrix-free branch tangent and invoke SOLVAX's bordered
-pseudo-arclength corrector.  Its block-elimination preconditioner reuses the
-same Fourier-band factors and an explicit scalar Schur complement; no
-production-scale dense high-order Jacobian is formed.  Tangents and predictors
-are dynamic arguments to one compiled bordered solve, so branch steps do not
-create fresh tangent-capturing JAX callables.  A compact report
-retains accepted/rejected stages, nonlinear and linear work, residual
-evaluations, arclength work, minimum Jacobian margin, factor time, and wall
-time.  Failure to reach
-``alpha=1`` or to pass the independent overintegrated certificate is typed and
-never reported as a polished equilibrium.  ``return_unpolished`` is an
-explicit opt-in policy that returns the original native state with
-``report.converged=False``.
+The rows carry one scalar scale: the root-mean-square of the initial residual,
+floored at ``1e-12``.  The columns are scaled by a stochastic estimate of their
+norms.  ``PolishConfig.collocation_scale_probes`` (default 8) Rademacher
+vectors drawn from a fixed ``numpy`` generator seeded at zero are pushed
+through the transpose of the linearized residual; the root mean square response
+per column estimates that column's norm, floored at
+``max(1e-8 * max_norm, 1e-12)``, and the reciprocal becomes the variable scale.
+The draws are deterministic, so two runs of the same case scale identically.
 
-``PolishConfig.preconditioner="mode-block"`` is the measured default.  It
-probes bounded bands of neighboring Fourier modes, retains all radial and
-R/Z/lambda couplings inside each band, and blends the low and strong blocks
-with ``alpha``.  On the clean 23-coordinate structural derivative gate it
-reduces tangent/adjoint iterations from 23/41 to 1/2 and warm costs from
-3.51/16.06 ms to 0.90/2.46 ms.  Factor construction costs 3.02 s once and is
-reused by primal and transpose solves.  ``"legacy"`` remains an explicit
-fallback, but its inherited inverse is not exact after regularized spline
-reduction and is therefore no longer the default.
+SOLVAX then minimizes the scaled residual with matrix-free damped
+Gauss--Newton.  Each step solves ``(J^T J + mu I) p = -J^T r`` by conjugate
+gradients -- ``linear_rtol=1e-3``, at most
+``linear_restart * linear_max_restarts = 600`` iterations, and no
+preconditioner supplied -- then accepts or rejects the trial state on a trust
+ratio and adapts ``mu``.
 
-Implicit derivatives of the polished root
--------------------------------------------
+The damping is Levenberg (a multiple of the identity), not Marquardt (a
+multiple of ``diag(J^T J)``), and starts at ``1e-3``.  ``J`` and ``J^T`` are
+JAX transforms of the residual, so no dense Jacobian is formed at any
+resolution.  At most ``max_nonlinear_iterations`` steps are taken, 80 by
+default.
 
-For a certified alpha=1 correction ``c`` and high-order native data ``q``,
-the local equation is
+Acceptance is the certificate, not solver convergence
+-----------------------------------------------------
+
+A polished state is accepted when three independent certificate checks pass:
+``normalized_l2 <= validation_tolerance`` (default ``1e-2``),
+``radial_refinement_difference <= radial_refinement_tolerance`` (default
+``1e-3``), and a strictly positive minimum signed Jacobian.  The Gauss--Newton
+solver's own relative stationarity tolerance is recorded as
+``least_squares_success`` and is a diagnostic only.
+
+This is a deliberate policy, and it has a visible consequence: a state that
+merely exhausted its step budget can still be accepted.  The shipped
+``shaped_tokamak_pressure`` artifact in
+``benchmarks/strong_force_cases_m4.json`` ran all 80 of its 80 permitted
+nonlinear iterations and reports ``least_squares_success: false``, yet is
+recorded as ``converged: true`` with
+``termination_reason: independently-certified``.
+
+It moved ``normalized_l2`` from ``1.28e-2`` to ``1.79e-3``, which is what the
+certificate asked for, but the Gauss--Newton iteration had not converged.
+Read ``nonlinear_iterations`` against ``max_nonlinear_iterations`` before
+treating a polish as converged in the solver sense.
+
+When the certificate fails, ``fail_policy="raise"`` reports a typed
+:class:`~vmex.core.errors.StrongForceCertificationError` naming each failed
+check.  ``fail_policy="return_unpolished"`` returns the original lifted state
+with ``report.converged=False`` and a zero correction.  Neither path reports a
+failed attempt as a polished equilibrium.
+
+Low-order operator: transfer, not preconditioner
+------------------------------------------------
+
+:func:`~vmex.core.polish.build_low_order_preconditioner` assembles and factors
+the exact nearest-neighbour raw-force block system from the implicit
+tangent/adjoint path.  In the shipped lane, the part that is load-bearing is
+the high/low **transfer** it carries: ``T_HL`` samples every regularized spline
+mode on the VMEX full mesh, restores VMEX Fourier normalization and the
+internal ``m=1`` packing, and projects onto the evolved legacy degrees of
+freedom, while ``T_LH`` fits back.  The chart's layout groups are built from
+that transfer, so it defines which native coordinates exist at all.
+
+Its R/Z fit has a structurally zero terminal coefficient, so a correction
+cannot move the fixed boundary; symmetry zeros and the lambda gauge are
+eliminated rather than penalized.  Tests certify both transfer dualities and
+the complete preconditioner duality.
+:func:`~vmex.core.polish.preconditioner_quality` measures the true relative
+residual ``||A P r-r||/||r||`` on fixed probes; it is a library diagnostic and
+the shipped lane does not call it.
+
+The block factors themselves are **not** applied by the collocation lane: it
+calls SOLVAX with no preconditioner.  They are still built, and their build
+time is reported as ``factor_build_seconds`` in every polish report.  The
+factors are used by the retired square root described below and by the
+preconditioner tests and benchmarks.
+
+Driver sequence
+---------------
+
+:func:`~vmex.core.polish_driver.polish_legacy_solution` is the only entry point
+the solver uses.  It refines the converged legacy state with the implicit
+Newton anchor, lifts it into the spline basis, and evaluates the independent
+certificate.  A state already inside ``validation_tolerance`` returns
+immediately with ``termination_reason="already-certified"`` and an empty
+correction; no chart, factorization, or solve is constructed.
+
+Otherwise it builds the low-order operator, the strong-root runtime, and the
+structured chart, and calls
+:func:`~vmex.core.polish_driver.polish_collocation_least_squares`.  The
+runtime is built with ``balance_full_root=False``, so the full-root Ruiz
+equilibration is skipped and only the single strong scale is computed.  The
+fixed boundary, profile data, parity, and lambda gauge cannot drift because
+they are absent from the free coordinate map.
+
+Implicit derivatives of the polished state
+------------------------------------------
+
+The nonlinear solve is not differentiated.  Once the correction ``c`` is
+stationary for native data ``q``, :mod:`vmex.core.polish_implicit` applies the
+implicit-function theorem to the least-squares stationarity equation
 
 .. math::
 
-   F(c, q) = 0, \qquad F_c\,\dot c = -F_q\,\dot q.
+   g(c, q) = J(c,q)^{T} r(c,q) = 0, \qquad
+   g_c\,\dot c = -g_q\,\dot q,
 
-:mod:`vmex.core.polish_implicit` evaluates both Jacobian actions with JAX
-JVPs/VJPs and solves them with SOLVAX GMRES.  The primal and transpose right
-preconditioners reuse the same factored low-order operator.  Because the low
-endpoint is row-scaled as ``D A``, the transpose path explicitly applies
-``D^-1 A^-T``; applying the forward scaling order in reverse would produce a
-plausible but incorrect gradient.
+so a gradient costs one Krylov solve rather than a replay of Gauss--Newton
+steps.
 
-The differentiable wrapper treats continuation as a black-box root solve.
-Its reverse pass costs one transposed Krylov solve and returns a typed failure
-or NaN poison if the true residual misses tolerance.  Forward-mode users call
-the explicit tangent function.  Dot-product tests cover the complete chain:
-native profiles and geometry, strong residual, reduced coordinate packing,
-high/low transfer, and the scaled block inverse.  The runtime's collocation
-chart and positive normalization are frozen locally; at an exact root their
-parameter derivatives multiply a zero residual and do not affect the IFT
-derivative.
+Both Jacobian actions are JAX JVPs/VJPs of ``g``; SOLVAX GMRES solves the
+tangent and the transposed adjoint system, right-preconditioned by the squared
+variable scales already computed for the primal solve.  A true-residual check
+runs on every solve and raises a typed
+:class:`~vmex.core.errors.StrongForceLinearSolveError`, or poisons the result
+with NaN, when the tolerance is missed.  Forward-mode users call
+:func:`~vmex.core.polish_implicit.collocation_polish_tangent` directly.
+
+Dot-product tests cover the chain: native profiles and geometry, collocation
+residual, reduced coordinate packing, and the high/low transfer.  The
+collocation chart and its frozen positive normalization are local constants; at
+a stationary point their parameter derivatives multiply a zero gradient and do
+not affect the derivative.
+
+Retired: the square homotopy root
+---------------------------------
+
+Earlier releases polished through a square nonlinear root rather than a
+rectangular least-squares fit.  That formulation is no longer on the production
+path, and this section records it so the change is visible rather than silent.
+The code remains in the tree, is exercised by
+``tests/test_polish_preconditioner.py``, and is measured by
+``benchmarks/strong_root.py``; it is not reachable from
+:func:`~vmex.core.polish_driver.polish_legacy_solution`, and so not from
+``vmex --polish`` either.
+
+The retired design projected the two physical force channels onto Fourier and
+spline coefficients to obtain exactly ``N_R`` radial and ``N_lambda`` helical
+equations, and closed the system with ``N_Z`` coordinate equations that set the
+projection of the displacement onto the lifted poloidal tangent to zero.  That
+tangential-displacement gauge produced a square Jacobian
+(:func:`~vmex.core.polish.strong_root_residual`,
+:func:`~vmex.core.polish.strong_physical_residual`).
+
+:func:`~vmex.core.polish_driver.polish_strong_root` drove it with a homotopy
+``H(c, alpha) = R_low(c) + alpha [R_strong(c) - R_low(c)]`` anchored on the
+legacy raw-force defect, advanced by SOLVAX adaptive continuation with
+pseudo-transient continuation and Eisenstat--Walker forcing, with a bordered
+pseudo-arclength corrector when parameter continuation stalled.
+
+The ``mode-block``, ``legacy``, and ``none`` values of
+``PolishConfig.preconditioner``, the ``alpha_*``, ``ptc_*``, and arclength
+controls, and the Arnoldi-selected equation signs all belong to that path.
+``PolishConfig`` still carries them, and the collocation lane ignores them.
+
+Its structural gate remains a useful rank test.  The five-surface Solovev case
+has 23 unknowns and 23 equations, numerical rank 23 at relative SVD tolerance
+``1e-8``, a finite JVP agreeing with centered differences, and an unscaled
+condition number near ``2.6e5``.  ``benchmarks/strong_root_m4.json`` records
+0.287 ms median warm residual and 0.427 ms median warm JVP on an Apple M4, with
+1.07 s and 0.69 s first calls and a JVP error of ``9.7e-10``.  These figures
+describe that gate only.
+
+The measured reason for retirement is in the shipped artifact's
+``projection_consistency`` block: on the shaped tokamak the square projection
+reproduces only about six percent of the sampled residual
+(``unresolved_fraction`` 0.94), because the nonlinear force is not band-limited
+at the retained geometry order.  Development measurements
+also rejected global equilibration, volume weighting on its own, and a dense
+physical-chart factorization; those negative results are retained in the
+project plan ledger rather than as one JSON artifact per experiment.
