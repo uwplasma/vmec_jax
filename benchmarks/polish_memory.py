@@ -125,7 +125,12 @@ def _deck(args: argparse.Namespace) -> VmecInput:
 
 
 def run_arm(args: argparse.Namespace) -> dict[str, object]:
-    """Run one sweep strategy through the polish setup in this process."""
+    """Run one sweep strategy through the polish setup in this process.
+
+    The record is written out after every stage, not once at the end: an arm
+    that the OS kills mid-sweep is the interesting arm, and its measurements
+    up to that point must survive it.
+    """
 
     policy = MODES[args.mode]
     started = time.perf_counter()
@@ -162,6 +167,11 @@ def run_arm(args: argparse.Namespace) -> dict[str, object]:
     _phase(f"[{args.mode}] native lift done")
     setup_peak = _self_peak_rss_bytes()
 
+    def checkpoint(record: dict[str, object]) -> None:
+        if args.arm_output is not None:
+            args.arm_output.write_text(
+                json.dumps(record, indent=2, sort_keys=True))
+
     record: dict[str, object] = {
         "mode": args.mode,
         "stage": args.stage,
@@ -176,6 +186,7 @@ def run_arm(args: argparse.Namespace) -> dict[str, object]:
         "lift_peak_rss_bytes": setup_peak,
         "legacy_seconds": legacy_seconds,
     }
+    checkpoint(record)
 
     with force_sweep_measurement(policy):
         certificate_started = time.perf_counter()
@@ -190,6 +201,7 @@ def run_arm(args: argparse.Namespace) -> dict[str, object]:
             f"{record['certificate_seconds']:.0f}s; peak RSS "
             f"{record['certificate_peak_rss_bytes'] / 1024**3:.1f} GiB"
         )
+        checkpoint(record)
         if args.stage == "chart":
             chart_started = time.perf_counter()
             low_preconditioner = build_low_order_preconditioner(
@@ -217,8 +229,10 @@ def run_arm(args: argparse.Namespace) -> dict[str, object]:
                 f"[{args.mode}] chart done in {record['chart_seconds']:.0f}s; "
                 f"peak RSS {record['chart_peak_rss_bytes'] / 1024**3:.1f} GiB"
             )
+            checkpoint(record)
     record["peak_rss_bytes"] = _self_peak_rss_bytes()
     record["total_seconds"] = time.perf_counter() - started
+    checkpoint(record)
     return record
 
 
@@ -287,8 +301,6 @@ def main() -> None:
 
     if args.mode is not None:
         record = run_arm(args)
-        if args.arm_output is not None:
-            args.arm_output.write_text(json.dumps(record, indent=2, sort_keys=True))
         print(json.dumps(record, indent=2, sort_keys=True))
         return
 
