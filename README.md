@@ -137,12 +137,11 @@ d3Bdx = final_equilibrium.gradgradgradB_vjp(
 ```
 
 Everything above is Cartesian, and each VJP returns one entry per
-`problem.dof_names`. `set_points_flux([[s, theta, phi]])` places interior
-points in flux coordinates instead (outputs stay Cartesian). `B` and its
-first three derivatives are valid on the magnetic axis via the regular
-spectral limit. Outside the plasma, `VmecExtender` adds the
-`virtual_casing_jax` plasma contribution to a supplied coil or MGRID field —
-virtual casing alone is not the total exterior field.
+`problem.dof_names`. `set_points_flux([[s, theta, phi]])` places interior points
+in flux coordinates (outputs stay Cartesian); `B` and its first three
+derivatives are valid on the magnetic axis via the regular spectral limit.
+Outside the plasma, `VmecExtender` adds the `virtual_casing_jax` plasma
+contribution to a supplied coil or MGRID field — virtual casing alone is not the total exterior field.
 
 ![Poincare sections of the coil-only field next to the extended coil plus plasma field, whose exterior seeds resolve an island chain outside the plasma boundary](docs/_static/figures/readme_extender_exterior_islands.webp)
 
@@ -289,12 +288,11 @@ VMEX also solves open-ended mirrors. `examples/mirror/mirror_fixed_boundary_nona
 ![Free-boundary mirror beta scan](docs/_static/figures/mirror_free_boundary_beta_scan.webp)
 
 Closed stellarator–mirror hybrids also expose a differentiable, equal-arc
-field-line contract for GKX. VMEX owns the Cartesian metric and drift
-calculation; GKX converts the returned mapping to its generic flux-tube type.
-The interface accepts only a field line that closes on the periodic racetrack,
-and makes no open-end, sheath, source, or loss-cone claim. The
-[model and equations](https://vmex.readthedocs.io/en/latest/explanation/mirror-gyrokinetics.html)
-spell out that boundary explicitly.
+field-line contract for GKX: VMEX owns the Cartesian metric and drift
+calculation, and GKX converts the mapping to its generic flux-tube type. The
+interface accepts only a field line that closes on the periodic racetrack and
+makes no open-end, sheath, source, or loss-cone claim; the
+[model and equations](https://vmex.readthedocs.io/en/latest/explanation/mirror-gyrokinetics.html) spell out that boundary.
 
 ```python
 from vmex.mirror import gk_closed_fieldline_geometry
@@ -342,14 +340,12 @@ Enable it in a VMEC-compatible input deck:
 /
 ```
 
-VMEX reads the comments; VMEC2000 ignores them. `POLISH = AUTO` resolves to:
-lift the converged final stage to clamped radial B-splines of degree 3 with
-about one span per two radial mesh points (capped at 32 spans), return at
-once if that lifted state already passes the independent certificate
-(volume L2 at or below `1.0E-2`), and otherwise run up to 80 Gauss-Newton
-iterations at relative tolerance `1.0E-3`. `ON` runs the same path today;
-`OFF` is the default. The other directives, each mapped onto the matching
-`PolishConfig` field:
+VMEX reads the comments; VMEC2000 ignores them. `POLISH = AUTO` lifts the
+converged final stage to degree-3 clamped radial B-splines (about one span per
+two radial points, at most 32), returns at once if that lifted state already
+passes the independent certificate (volume L2 at or below `1.0E-2`), and
+otherwise runs up to 80 Gauss-Newton iterations at relative tolerance `1.0E-3`.
+`ON` runs the same path; `OFF` is the default. The other directives map onto `PolishConfig`:
 
 | Directive | Meaning | Default |
 |---|---|---|
@@ -360,14 +356,12 @@ iterations at relative tolerance `1.0E-3`. `ON` runs the same path today;
 | `POLISH_MAX_ITER` | Gauss-Newton iteration cap (`max_nonlinear_iterations`) | `80` |
 | `POLISH_FAIL = ERROR \| FALLBACK \| WARN` | failed polish: raise, return unpolished, or warn | `ERROR` |
 
-The CLI mirrors every directive (`--polish`, `--polish-tol`,
-`--polish-degree`, `--polish-spans`, `--polish-max-iter`, `--polish-fail`,
-`--no-polish`) and the precedence is `CLI flag > Python keyword > file
-directive > package default`; an explicit `polish_config` in Python wins
-over all scalar knobs. During a CLI run the phase announces itself: a
-`BEGIN FORCE POLISHING` banner with the resolved settings, a compile notice
-for the first polish executable build, one row per Gauss-Newton iteration,
-and a closing certificate verdict that names any failed check.
+The CLI mirrors every directive (`--polish`, `--polish-tol`, `--polish-degree`,
+`--polish-spans`, `--polish-max-iter`, `--polish-fail`, `--no-polish`) with
+precedence `CLI flag > Python keyword > file directive > package default`; an
+explicit `polish_config` in Python wins over all scalar knobs. A CLI run
+announces each polish phase, prints one row per Gauss-Newton iteration, and
+closes with a certificate verdict that names any failed check.
 
 The same opt-in is available in Python:
 
@@ -405,11 +399,10 @@ polishing demonstrably wins.
 
 Below: the bundled shaped tokamak (`input.shaped_tokamak_pressure_polished`)
 before and after polishing. The independent continuum force residual of the
-exported equilibrium drops about 26-fold, from `5.05e-2` to `1.91e-3`, while
-the boundary and the prescribed profiles are untouched. The radial force
-balance panel in `vmex --plot` summaries is a different diagnostic — VMEC's
-own discrete flux-surface average, which ordinary solves already minimize —
-so that panel does not display this gain.
+exported equilibrium drops about 26-fold, from `5.05e-2` to `1.91e-3`, with the
+boundary and prescribed profiles untouched. The radial force-balance panel in
+`vmex --plot` summaries is VMEC's own discrete flux-surface average, which
+ordinary solves already minimize, so that panel does not show this gain.
 
 ![Shaped-tokamak flux surfaces and independent force-error profiles before and after polishing](docs/_static/figures/readme_polish_summary.webp)
 
