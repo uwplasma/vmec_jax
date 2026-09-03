@@ -67,6 +67,11 @@ class StepControl:
 
     @staticmethod
     def initial(time_step: float) -> "StepControl":
+        """Controller state before the first step (evolve.f/restart.f initialization).
+
+        The damping window starts at the cap and both best residuals at
+        infinity, so the first step is never treated as growth.
+        """
         dt = jnp.asarray(float(time_step))
         return StepControl(
             time_step=dt,

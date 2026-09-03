@@ -7,7 +7,7 @@ vmex and downstream kinetic codes:
 
     boundary dofs -> :func:`vmex.core.implicit.solve_implicit`
     -> :func:`boozer_input_tables` (this module)
-    -> booz_xform_jax (Boozer |B| spectrum)
+    -> booz_xform_jax (Boozer ``|B|`` spectrum)
     -> kinetic solvers (e.g. sfincs_jax bootstrap-current objectives),
 
 so ``jax.grad`` flows through the whole physics chain.  Origin: ported from
@@ -45,7 +45,7 @@ def boozer_input_tables(state: SpectralState, rt: SolverRuntime, j: int) -> dict
     Builds the single-surface inputs of a Boozer transform from a converged
     symmetric or ``LASYM`` equilibrium, entirely in JAX:
 
-    - ``bmnc``, ``bsubumnc``, ``bsubvmnc``: |B| and the covariant field
+    - ``bmnc``, ``bsubumnc``, ``bsubvmnc``: ``|B|`` and the covariant field
       components, native to the half mesh (``bcovar.f``), projected on the
       grid-representable ``cos(m*theta - n*zeta)`` modes;
     - ``gmnc``, ``bsupumnc``, ``bsupvmnc``: ``sqrt(g)`` and the contravariant

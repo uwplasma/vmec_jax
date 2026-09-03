@@ -433,6 +433,7 @@ class JInvariantQIAndMaximumJResidual:
         self.maxj_options = {} if maxj_options is None else dict(maxj_options)
 
     def compute_state(self, state, rt):
+        """Return the ``{"boozer", "qi", "maximum_j"}`` dictionary of one Boozer transform."""
         return qi_and_maximum_j_from_boozer(
             state, rt, surfaces=self.surfaces, pitch=self.pitch, weights=self.weights,
             mboz=self.mboz, nboz=self.nboz, oversample=self.oversample,
@@ -440,6 +441,7 @@ class JInvariantQIAndMaximumJResidual:
         )
 
     def residuals_state(self, state, rt):
+        """Return ``sqrt(qi_weight)`` QI rows followed by ``sqrt(maxj_weight)`` maximum-J rows."""
         out = self.compute_state(state, rt)
         return jnp.concatenate([
             self.qi_scale * out["qi"]["residuals1d"],
@@ -447,12 +449,17 @@ class JInvariantQIAndMaximumJResidual:
         ])
 
     def J(self, eq):
+        """Residual rows of a converged :class:`~vmex.core.optimize.Equilibrium`.
+
+        Also reachable as ``__call__`` and ``residuals``.
+        """
         return self.residuals_state(eq.state, eq.runtime)
 
     __call__ = J
     residuals = J
 
     def total(self, eq):
+        """Return the sum of squared residual rows of an equilibrium."""
         rows = self(eq)
         return jnp.vdot(rows, rows)
 
@@ -498,18 +505,25 @@ class ConstructedMaximumJResidual:
         return out
 
     def residuals_state(self, state, rt):
+        """Return the 1-D residual rows of :meth:`compute_state`."""
         return self.compute_state(state, rt)["residuals1d"]
 
     def total_state(self, state, rt):
+        """Return the scalar ``total`` of :meth:`compute_state`."""
         return self.compute_state(state, rt)["total"]
 
     def J(self, eq):
+        """Residual rows of a converged :class:`~vmex.core.optimize.Equilibrium`.
+
+        Also reachable as ``__call__`` and ``residuals``.
+        """
         return self.residuals_state(eq.state, eq.runtime)
 
     __call__ = J
     residuals = J
 
     def total(self, eq):
+        """Scalar cost of a converged :class:`~vmex.core.optimize.Equilibrium`."""
         return self.total_state(eq.state, eq.runtime)
 
 
@@ -552,16 +566,23 @@ class MaximumJResidual:
         return out
 
     def residuals_state(self, state, rt):
+        """Return the 1-D residual rows of :meth:`compute_state`."""
         return self.compute_state(state, rt)["residuals1d"]
 
     def total_state(self, state, rt):
+        """Return the scalar ``total`` of :meth:`compute_state`."""
         return self.compute_state(state, rt)["total"]
 
     def J(self, eq):
+        """Residual rows of a converged :class:`~vmex.core.optimize.Equilibrium`.
+
+        Also reachable as ``__call__`` and ``residuals``.
+        """
         return self.residuals_state(eq.state, eq.runtime)
 
     __call__ = J
     residuals = J
 
     def total(self, eq):
+        """Scalar cost of a converged :class:`~vmex.core.optimize.Equilibrium`."""
         return self.total_state(eq.state, eq.runtime)

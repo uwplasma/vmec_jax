@@ -58,6 +58,7 @@ class FreeBoundaryImplicitConfig:
 
     @property
     def resolution(self):
+        """Solve resolution of the shared implicit configuration (static)."""
         return self.implicit.resolution
 
 
