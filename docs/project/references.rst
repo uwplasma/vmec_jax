@@ -91,7 +91,7 @@ Confinement objectives and optimization:
     optimization in a differentiable (DESC) framework.
 
 23. A. Redl et al., “A new set of analytical formulae for the computation of
-    the bootstrap current and the neoclassical conductivity in stellarators,”
+    the bootstrap current and the neoclassical conductivity in tokamaks,”
     *Physics of Plasmas* 28, 022502 (2021) — the Redl bootstrap closure.
 
 24. M. Landreman, S. Buller, and M. Drevlak, “Optimization of quasi-symmetric
