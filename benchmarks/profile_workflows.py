@@ -417,8 +417,10 @@ def _wf_single_stage_coils() -> tuple[dict, dict]:
         from essos.surfaces import surfacerzfourier_from_boundary
     except ImportError as error:
         raise ImportError(
-            "workflow F9 needs the ESSOS branch rj/vmex-optimization-"
-            "interfaces (the same gate as the single-stage examples)"
+            "workflow F9 needs essos.surfaces.surfacerzfourier_from_boundary "
+            "(an ESSOS build with the VMEX optimization interfaces; the "
+            "released wheel lacks it — the same gate as the single-stage "
+            "examples)"
         ) from error
 
     from vmex.core import optimize as opt
@@ -890,6 +892,12 @@ def _run_cold(ident: str, regime: str, cache_dir: Path) -> dict[str, Any]:
     )
     wall = time.perf_counter() - started
     if proc.returncode != 0:
+        if "ImportError" in proc.stderr:
+            # The child hit a workflow gate (absent optional dependency);
+            # surface it as the same ImportError the in-process regimes
+            # raise so the matrix records the gate and continues.
+            gate = proc.stderr.strip().splitlines()[-1]
+            raise ImportError(gate.split("ImportError: ", 1)[-1])
         raise RuntimeError(
             f"{ident}/{regime} child failed:\n{proc.stderr[-4000:]}")
     record = json.loads(proc.stdout.strip().splitlines()[-1])
@@ -947,14 +955,23 @@ def main(argv: list[str] | None = None) -> int:
     cache_dir.mkdir(parents=True, exist_ok=True)
     for ident in idents:
         for regime in args.regimes:
-            if regime in _COLD_REGIMES:
-                record = _run_cold(ident, regime, cache_dir)
-            else:
-                record = _run_in_process(ident, regime,
-                                         trace_dir=args.trace_dir)
+            # A workflow gated on an absent optional dependency (F9 needs an
+            # ESSOS surface API) records the gate and the matrix continues;
+            # one missing extra must not abort the other rows.
+            try:
+                if regime in _COLD_REGIMES:
+                    record = _run_cold(ident, regime, cache_dir)
+                else:
+                    record = _run_in_process(ident, regime,
+                                             trace_dir=args.trace_dir)
+            except ImportError as error:
+                record = {"ident": ident, "regime": regime,
+                          "gated": str(error), "timing_s": {}}
+                print(f"[{ident}/{regime}] gated: {error}", file=sys.stderr)
             records.append(record)
             summary = {k: round(v, 3) for k, v in record["timing_s"].items()}
-            print(f"[{ident}/{regime}] {summary}", file=sys.stderr)
+            if "gated" not in record:
+                print(f"[{ident}/{regime}] {summary}", file=sys.stderr)
             if args.out is not None:
                 args.out.mkdir(parents=True, exist_ok=True)
                 path = args.out / f"{ident}_{regime}.json"
