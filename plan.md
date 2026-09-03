@@ -1660,13 +1660,23 @@ Implement in this order:
 
 ### 16.3 Variational formulation
 
-Implement the anisotropic energy in the form supported by the ANIMEC literature, schematically:
+The ANIMEC functional `W = integral [B^2/(2 mu0) + p_parallel/(Gamma - 1)] dV`
+(Cooper 1992 Eq. 2.1; Moen, Suzuki, Proll 2023 Eq. 2.1) holds only with
+the adiabatic index set to ZERO, which ANIMEC does: then the thermal part is
+a prescribed flux function and the pressure enters with a MINUS sign,
+`W = integral [B^2/(2 mu0) - p_parallel(s, B)] dV` (Grad 1967). Using VMEX's
+`gamma = 5/3` mass-conserving energy with a B-dependent `p_parallel` gives a
+WRONG force (slab proof in the 2026-09-02 mirror audit, section 31.4).
+Implement the split form, which keeps the shipped isotropic solver
+bit-identical and makes plan item 16.8's "exact isotropic limit" literal:
 
 ```text
-W = integral [B^2/(2 mu0) + p_parallel/(Gamma - 1)] dV,
+W = integral [B^2/(2 mu0) + p_th/(Gamma - 1)] dV - integral p_h,par(s, B) dV,
+p_th = M(s)/V'^Gamma            (the shipped thermal part, unchanged),
+p_par = p_th + p_h,par,   p_perp = p_par - B d_B p_h,par|_s   (Grad closure),
 ```
 
-with the chosen distribution/constraint determining the geometry dependence of `p_parallel` and `p_perp`.
+with the chosen distribution/constraint determining the geometry dependence of `p_h,par`. Both terms give `-integral xi . (J x B - div P)` at first order.
 
 Derive the discrete weak residual by AD of the energy first. Then implement an independent strong residual:
 
@@ -2833,3 +2843,499 @@ The final outcome should not be a larger collection of optional algorithms. It s
 - one derivative-safe confinement-objective stack;
 - one native downstream data contract;
 - one reproducible performance and physics evidence system.
+
+---
+
+## 31. Final review ledger (2026-09-02) - read this first if you are the next agent
+
+This section records the state at the end of the 2026-09-02 review: what
+landed, what is in flight, and every finding of the four literature and
+publication audits (core equilibrium/polish physics, diagnostics and
+objectives, mirror/hybrid physics, publication artifacts), with the concrete
+fix for each. Findings are numbered so pull requests can cite them
+(`31.x-Rn`). Nothing here is done until a merged PR closes it.
+
+### 31.1 State of the repository
+
+Merged since v0.8.1 (2026-09-02): #226 guard repairs; #227 cold-start
+restoration; #228 CI cache off on runners; #229 iteration body traced once,
+ns4 cadence; #230 eager field-chain lanes; #231 recompile keys; #232 scalar
+non-finite guard; #233 compile budgets + auto chunk; #234 3-D polish capture
+fix; #236 manifest row; #237/#239 README polish figures and extender islands;
+#238 trace-budget carry; #240 optimization startup (62 -> 6.5 s cold to
+first output; `_refine_step_core`); #241 staging idioms universal + CI pin
+on optimization cold start; #242 Codecov best-effort so diff-cover runs;
+#243 polish banner, GN rows, certificate verdict, `POLISH_*` directives;
+#244 polish phase notices. v0.8.1 is on PyPI (the 0.8.0 MPOL=NTOR=10
+polish OOM is fixed there; users must upgrade).
+
+Open PRs: #245 (CITATION.cff, CHANGELOG, README prose policy, section 21
+debts), #246 (benchmark harness records gates instead of aborting `--all`;
+`--regimes` defaults to `warm`, pass all five for the section 9 matrix),
+#247 (fresh-deck xvmec2000 table with the hashed artifact
+`benchmarks/fresh_decks_vs_vmec2000_2026-09-02.json` and a numerical
+reproducibility section), #197 (contributor's scalar-adjoint examples;
+verdict in 31.6).
+
+Branches in flight (agents were working on them when this ledger was
+written; check `git log origin/<branch>` before assuming completion):
+`perf/polish-3d-effectiveness` (W7-X polish memory: the un-chunked
+certificate allocates 34.5 GB at MPOL=NTOR=10; a batched certificate ran at
+7.8 GB peak; a rematerialized GN run was in progress on the office box
+under `ulimit -v 50 GB`, log `~/polish3d/run5_w7x_remat.log`);
+`perf/booz-xform-jax-0-2` (BoozerConfig/BoozerPlan adoption to recover the
+5x adapter cost from #224); `docs/publication-hygiene` (31.5 items A4-A8,
+A24-A27); `docs/api-reference-completeness` (31.5 A11-A12);
+`docs/diagnostics-citations` (31.3); `docs/figure-provenance` (31.5 A16,
+section C claims, the validation page). Parked, measured neutral, do not
+merge: `perf/fused-constraint-synthesis` (bit-identical, no runtime gain;
+row fusion into the batched contraction breaks parity at mnmax >= 162).
+
+Measured baselines to cite: cold CLI on Apple M4 (in-process): QA_lowres
+12.3-12.6 s, li383 4.0 s, solovev 3.1 s (0.3.0: ~15.3/5.6/2.9; 0.8.0: ~21
+at QA); office x86 subprocess: QA 43.1 (0.3.0) -> 32.4 s, solovev 12.1 ->
+7.0; six fresh decks vs xvmec2000 in #247 (warm parity to 2x faster, wout
+maxima 1.4e-10 relative). These are in PR/release bodies; #247 is the first
+hashed artifact; the section 9 matrix must be rerun on 0.8.1+ with all five
+regimes after #246 merges.
+
+### 31.2 Core equilibrium and polishing physics audit (REQUIRED)
+
+- 31.2-R1 The certificate metric `eps_F = 2|F| / (|J x B| + |grad p| + F_floor)`
+  (`strong_force.py:28,765-771`) saturates pointwise at 2 wherever
+  `|J x B| + |grad p| << |F|` and is undefined in vacuum (grad p = 0 gives
+  eps = 2 identically wherever J != 0). Evidence in
+  `benchmarks/strong_force_cases_m4.json`: nfp2_QA_finite_beta VMEC2000 row
+  has normalized_linf 1.99999999, p99 1.9993, near_axis_l2 85x bulk_l2. Fix:
+  add the published global normalizations - Panici et al. 2023 Eqs. 32-34b
+  `<|F|>_vol / <|grad p|>_vol` on s in [0.1, 0.99], and the vacuum-safe DESC
+  form `|F| / <|grad(B^2/2mu0)|>_vol` (DESC `_equil.py:786-802`; Thun et al.
+  2026 Eq. 42) - report the dimensional `<|F|>_vol`, disclose the saturation,
+  and report the near-axis/bulk/edge split. Files: `strong_force.py`,
+  README polish section, `docs/explanation/high-order-force-balance.rst`.
+- 31.2-R2 The DESC row of the comparison figure measures VMEX's spline lift
+  of a DESC-re-exported 129-surface wout (`run_external_equilibrium.py:46-76`,
+  `strong_certificate.py:139-143`), not DESC's force balance (Panici 2023
+  Fig. 7, Thun 2026 Sec. 4.2 put DESC orders of magnitude below VMEC).
+  Evaluate DESC natively (`compute("F","|F|","sqrt(g)")` with the same
+  denominator) or drop the row; caption VMEC2000/VMEC++ rows as "wout lifted
+  by VMEX splines at degree d, k spans"; show the radial profile.
+- 31.2-R3 The "26-fold" (5.05e-2 -> 1.91e-3) mixes ~7-9x polish gain with a
+  2-4x export-mesh/lift reconstruction difference: VMEC2000 and VMEC++ wouts
+  of the same deck certify at 1.71e-2, VMEX's own lifted native state at
+  1.28e-2 (initial certificate), and the solve-mesh export at 3.3e-2 vs the
+  ns=129 export at 1.9e-3 (`polish_driver.py:281-297`). Recompute with
+  identical lift and export settings for before/after, or quote the native
+  pair 1.28e-2 -> 1.79e-3 and name the metric.
+- 31.2-R4 `docs/explanation/high-order-force-balance.rst:105-289` describes
+  the retired square homotopy/PTC/pseudo-arclength root with a
+  tangential-displacement gauge; production is
+  `polish_legacy_solution -> polish_collocation_least_squares`
+  (`polish_driver.py:1151-1447`): rectangular residual on composite Gauss
+  nodes, Gauss-Newton/LM via solvax, 8 random transpose probes for column
+  scales, and a chart that freezes Z_sin entirely ("Z is the eliminated
+  poloidal-coordinate gauge", `polish.py:1551-1595`; the map delta = dZ/Z_theta
+  is singular where Z_theta = 0, so corrections are purely horizontal - test
+  whether that sets the ~1.8e-3 floor). The collocation functional carries
+  |sqrt g| but no quadrature weights (`polish.py:1344-1354`), so it is not the
+  certificate norm (DESC-style; state it or add sqrt(w)); the denominator is
+  frozen with floor 1e-30 vs the certificate's 1e-12; the tokamak artifact
+  exhausted its 80-iteration budget and was accepted by certificate alone.
+  Rewrite the page to the shipped method and mark the homotopy material
+  retired.
+- 31.2-R5 No exact-solution validation of the oracle: only a vacuum 1/R field
+  (`tests/test_strong_force.py:76-96`); `input.solovev` is a VMEC solve, not
+  the analytic Solov'ev. Add an analytic Solov'ev equilibrium with known
+  J x B = grad p and a spline/Fourier refinement convergence plot.
+- 31.2-R6 Selection bias: README "the figure shows only cases where polishing
+  demonstrably wins" and the section 21.2 policy. Section 21.3 already
+  forbids paper claims outside the mandatory set; reword the README now and
+  never present a selected-row figure as evidence.
+- 31.2-R7 Possible LASYM parity defect: VMEC2000 halves the whole `tcon`
+  array for LASYM (`bcovar.f:452,887`, `IF (lasym) tcon = p5*tcon`) in
+  addition to `alias.f:69-75`; VMEX reproduces only the alias factor
+  (`forces.py:565`; `fields.constraint_scaling` has no lasym argument,
+  `solver.py:1198-1201`). Run `up_down_asymmetric_tokamak` with and without
+  the halving against the VMEC2000 threed1 trajectory; fix or document in
+  `docs/reference/vmec2000-compatibility.rst`.
+- 31.2-R8 Convention-page errors: `spectral-representation.rst:329-337` puts
+  2pi/signgs on the wrong term in B^u/B^v (code: `fields.py:360-372`,
+  `bcovar.f:168-169`); `:339-342` claims a 1/NFP zeta conversion that does
+  not exist (zeta tables are already physical-angle derivatives,
+  `fourier.py:215-216,338-339`); `:282` "signgs = +-1" (VMEC2000/VMEC++/VMEX
+  fix signgs = -1 and flip theta); `:187` omits the lasym dnorm;
+  `variational-problem.rst:94-97` "every accepted step decreases W
+  monotonically" is false with Richardson momentum and the condensation
+  force (Hirshman-Whitson 1983 guarantees it only for first-order descent).
+- 31.2-R9 `docs/howto/plot-diagnostics.md:71-72` claims the equif
+  normalization is valid in vacuum; it is O(1) noise there
+  (`postprocess.py:428-430`). Delete, and say on README lines ~40 and ~192
+  that the radial force-error panel is meaningless for vacuum.
+
+Recommended (31.2-C): cite Hirshman-Betancourt 1991 (preconditioner),
+Hirshman-Meier 1985 (spectral condensation), Hirshman-Breslau 1998 (m=1
+constraint), HvRM 1986 Sec. 2 (odd-m sqrt(s)), BCYCLIC 2010, Lewis-Bellan
+1990 (analyticity rho^|m|), Dudt-Kolemen 2020, Panici 2023, Conlin 2023,
+GVEC 2025 (radial B-splines, energy Galerkin - the closest precedent),
+SIESTA 2011 (Hirshman's own "polish a VMEC state"), Thun 2026 (PINN
+post-improvement with the standard normalization), and cite VMEC++ notes
+(Schilling 2025) and VMEC2000 source by section/line for every heuristic
+(tcon ramp, pdamp, FThreshold, jmin/jlam); one conventions page (signgs,
+handedness, v = physical phi vs zeta = NFP phi in the high-order module,
+lambda internal/wout scaling and sign, full/half-mesh table incl. lambda
+jlam=2 and lmns export, pressure units, Phi' normalization); lift weighting
+consistent with `polish.py:1855-1866`; one degree default (3 in
+PolishConfig vs 5 elsewhere); one F_floor; rename
+`radial_refinement_difference` (it is Gauss-order consistency, not
+h/p-refinement) and add a true re-polish refinement check; quantify README
+line ~88 (max 0.40%, median 0.06% per-iteration deviation vs VMEC2000,
+VMEC++ 0.39%); "IFT-exact" not "exact" derivatives; "and Z untouched".
+Verified faithful (no action): ns4, signgs/flip, lconm1 rotation and
+FThreshold, mscale/nscale/dnorm/faccon, fnorm/fnormL, lamscale, tcon ramp,
+precondn/lamcal factors, Jacobian tau/dshalfds, pdamp, Richardson damping,
+internal energy normalization.
+
+### 31.3 Diagnostics and objectives audit (formulas verified correct; docs REQUIRED)
+
+- 31.3-R1 `docs/explanation/confinement.rst:144-152` inverts QA/QP contour
+  topology: |B| = B(theta_B) contours wind TOROIDALLY (tokamak-like); |B| =
+  B(zeta_B) contours close POLOIDALLY (QI-like). `objectives.rst:79-90` is
+  right.
+- 31.3-R2 "Gamma_c^2 scales the prompt-loss fraction" (`gammac.py:6,803-805`,
+  `objectives.rst:336-337`, `confinement.rst:688-689`) is unsupported:
+  Velasco 2021 Eq. 20 is linear in Gamma_c; Eqs. 20-21 relate the
+  prompt-loss fraction approximately linearly to Gamma_c. Sum Gamma_c^2 is
+  only the least-squares cost.
+- 31.3-R3 `gammac.py:885-887` "smoothing biases the value slightly"
+  contradicts `tests/test_gammac.py:225-231` (smooth/hard 0.02, 0.004, 0.42):
+  the surrogate is a gradient objective only, never a reported number.
+- 31.3-R4 `stability.py:281` cites Landreman-Jorge 2020 "Eqs. 51, 53"; the
+  paper numbers by section: D_R (5.1), H (5.4), the relation (5.6); the
+  implementation matches (5.6) exactly.
+- 31.3-R5 `docs/project/references.rst:93-95` Redl 2021 title says
+  "stellarators"; it is "... in tokamaks" (Phys. Plasmas 28, 022502).
+- 31.3-R6 `confinement.rst:175` "reproduces simsopt ... bit-for-bit" has no
+  simsopt oracle in tests; pin one simsopt `QuasisymmetryRatioResidual.total()`
+  value with a measured tolerance, or reword to "identical formula, grid and
+  weighting (Landreman-Paul 2022 Eq. 1); traceable lane gated against the
+  wout lane in tests/test_optimize_traceable_qs.py".
+- 31.3-R7 README roadmap line "a Gamma_c objective whose boundary derivative
+  is well-posed under refinement" is stale (GammaCSmooth shipped); replace
+  with a pinned DESC Gamma_c oracle assertion (2.8% agreement is only a
+  docstring note, `test_gammac.py:90-94`).
+- 31.3-C equation-number citations at every definition (QS: Landreman-Paul
+  2022 Eq. 1, Helander 2014 for "vanishes iff"; bootstrap: Landreman-Buller-
+  Drevlak 2022 Eqs. 9, 10, 11 [= Lin-Liu & Miller 1995], 12, 15, A1, A13-A14
+  [= Sauter 1999 18b-18e] and Redl 2021 Eqs. 10-16, 19-21, replacing the
+  nine "spec section 6.x" references and the dangling
+  `notes_r26g_redl_spec.md`; Gamma_c: Velasco 2021 Eq. 16 [Nemov 2008 Eq. 61],
+  footnote after Eq. 15; Boozer: Boozer 1981, Sanchez 2000, booz_xform note);
+  "KNOSOS/CIEMAT-QI form" -> "Nemov/DESC form (tangency factor at B_min);
+  KNOSOS uses gamma_c* without it"; `optimize.py:786` "VMEC/simsopt
+  magnetic-well proxy" -> "simsopt Vmec.vacuum_well"; one `n_lambda`
+  constant for `wout.py:479,630`; wout-file.rst states grid extrema and the
+  measured simsopt parity (1e-3 B extrema, 3e-3 f_t); add the missing
+  bibliography entries (Nemov 2008, Velasco 2021, Sauter 1999, Lin-Liu &
+  Miller 1995, Boozer 1981, Sanchez 2000, Helander 2014, Glasser-Greene-
+  Johnson 1975, Bader 2019/2021, Landreman-Buller-Drevlak 2022) with
+  verified DOIs. Branch `docs/diagnostics-citations` was assigned all of
+  31.3.
+- 31.3-B Bibliography verified against Crossref/arXiv on 2026-09-02 (use
+  these, the draft lists circulating in earlier prompts had errors):
+  Nemov, Kasilov, Kernbichler, Leitold, Phys. Plasmas 15, 052501 (2008),
+  10.1063/1.2912456. The Gamma_c prompt-loss paper is Velasco, Calvo,
+  Mulas, Sanchez, Parra, Cappa, W7-X Team, "A model for the fast evaluation
+  of prompt losses of energetic ions in stellarators", Nucl. Fusion 61,
+  116059 (2021), 10.1088/1741-4326/ac2994 (NOT "Robust stellarator
+  optimization via flat mirror magnetic fields", which is Nucl. Fusion 63,
+  126038 (2023), 10.1088/1741-4326/acfe8a). Sauter, Angioni, Lin-Liu, Phys.
+  Plasmas 6, 2834 (1999), 10.1063/1.873240 (erratum 9, 5140 (2002)).
+  Lin-Liu & Miller, Phys. Plasmas 2, 1666 (1995), 10.1063/1.871315. Boozer,
+  Phys. Fluids 24, 1999 (1981), 10.1063/1.863297. Sanchez, Hirshman, Ware,
+  Berry, Spong, "Ballooning stability optimization of low-aspect-ratio
+  stellarators", PPCF 42, 641 (2000), 10.1088/0741-3335/42/6/303 (the COBRA
+  code paper is Sanchez, Hirshman, Whitson, Ware, JCP 161, 576 (2000),
+  10.1006/jcph.2000.6514). Helander, Rep. Prog. Phys. 77, 087001 (2014),
+  10.1088/0034-4885/77/8/087001. Glasser, Greene, Johnson, Phys. Fluids 18,
+  875 (1975), 10.1063/1.861224. Bader et al., J. Plasma Phys. 85, 905850508
+  (2019), 10.1017/S0022377819000680. Bader, Anderson, Drevlak, Faber, Hegna,
+  Henneberg, Landreman, Schmitt, Suzuki, Ware, "Modeling of energetic
+  particle transport in optimized stellarators", Nucl. Fusion 61, 116060
+  (2021), 10.1088/1741-4326/ac2991. Landreman, Buller, Drevlak, Phys.
+  Plasmas 29, 082501 (2022), 10.1063/5.0098166. Redl, Angioni, Belli,
+  Sauter, Phys. Plasmas 28, 022502 (2021), 10.1063/5.0012664 (second author
+  is Angioni, not Beidler). Landreman & Jorge, J. Plasma Phys. 86, 905860510
+  (2020), 10.1017/S002237782000121X, equations numbered by section: D_R is
+  (5.1), H is (5.4), the D_R/D_Merc relation is (5.6). Landreman & Paul,
+  Phys. Rev. Lett. 128, 035001 (2022), 10.1103/PhysRevLett.128.035001; its
+  Eq. (1) is the surface-summed flux-surface average of the SQUARED two-term
+  residual, so cite "the residual inside Eq. (1)" for the pointwise formula.
+
+### 31.4 Mirror and hybrid audit (REQUIRED; Phase 9 spec sheet)
+
+- 31.4-R1 Phase 9 energy functional corrected in 16.3 above (Gamma = 0 /
+  minus sign; split form). Everything downstream in 16.x must use the split
+  form.
+- 31.4-R2 `mirror/free_boundary.py:555,917` and `mirror/implicit.py:86,455`
+  accept `current_derivative != 0`, but the exterior (single-valued decaying
+  potential on a topologically spherical Green surface,
+  `exterior.py:795-855,900-946`) cannot carry the azimuthal field of a net
+  axial current; the interface residual then compares inconsistent fields.
+  Raise on nonzero current in those entry points (or add the analytic
+  phi-hat term to `lateral_field_xyz` with a stated end-electrode
+  assumption); add "net axial current" to 17.3's residual list.
+- 31.4-R3 Mirror ratio and mirror length are used with four inconsistent
+  meanings (cut-plane on-axis ratio in `mirror_fixed_boundary_nonaxisymmetric.py:302`;
+  grid max on-axis in `mirror_free_boundary_beta_scan.py:200` and
+  mirror-geometry.rst:266; LCFS max/min in `qi_mirror_hybrid_fourier_vs_bspline.py:271`
+  and rst:503; field-line max/min in `tests/mirror/test_turbulence.py:68`);
+  `turbulence.py:293` exports std/mean of bmag under the GX/GS2 "epsilon" key
+  whose meaning there is different. Define and report: R_m,axis(leg) =
+  max/min of B_axis within each leg's |B| well; R_m,LCFS separately;
+  L_straight = arc length where axis curvature < tol (`geometry.py:298`);
+  L_mirror,B = distance between the |B| maxima bounding the well. Required by
+  18.1.
+- 31.4-R4 The hybrid has no mirror throats: `stellarator_mirror_section_coefficients`
+  (`geometry.py:165-212`) uses constant semi-axes along the leg; all |B|
+  variation comes from the returns. 18.3's "target mirror ratio in the
+  straight legs" needs leg-radius modulation a(u) (paraxial B ~ 1/a^2). Say
+  in docs that the present legs are throat-less. Precedent: linked mirror
+  (Feng, Yu, Jiang, Fu, Nucl. Fusion 61, 086014, 2021).
+- 31.4-R5 DESC's shipped `ForceBalanceAnisotropic` closure (flux-function
+  beta_a and p_perp) leaves a nonzero parallel force wherever b.grad B != 0,
+  i.e. everywhere in a mirror; it is inadmissible as a mirror oracle. Keep
+  DESC only for the consistent special closure p_par = p0(psi) +
+  Delta(psi) B^2/2mu0 (31.4 model 1). Amend 16.7.
+- 31.4-R6 The Agren-Savenko SFLM benchmark (`analytic.py:288-292`,
+  mirror-geometry.rst:576-590,686-703) has no citation: Agren & Savenko,
+  Phys. Plasmas 11, 5041 (2004) and 12, 042505 (2005); state which paper's
+  Eq. 2 the potential is.
+- 31.4-C1 "small-beta estimate" is the wrong name for sqrt(1 - beta)
+  (mirror-geometry.rst:804,815; output.py:109; README polish/mirror text): it
+  is Ryutov et al. 2011 Eq. 30, leading order in (a/L)^2 at any beta < 1 -
+  "long-thin estimate, O((a/L)^2)"; the shipped two-coil case has
+  (a/L)^2 ~ 6%, the size of the observed 50%-beta deviation.
+- 31.4-C2 Write the exterior BVP as equations in
+  mirror-boundary-conditions.md (Laplace, Neumann data on side wall and caps,
+  decay, direct-BIE collocation with Duffy quadrature); 17.2's "enforce the
+  Neumann solvability/gauge condition" is wrong - the exterior decaying
+  Neumann problem is uniquely solvable; the cap projection is a
+  solenoidality-consistency correction. Cite Merkel 1986 and HvRM 1986 for
+  the physical problem; the numerics differ from NESTOR.
+- 31.4-C3 State that Dirichlet geometry plus Dirichlet flux at the cuts
+  over-determines a flux-carrying plane (the end-collar boundary layer is
+  the consequence) and that I'(s) != 0 in an open mirror is current closed
+  through the end plates.
+- 31.4-C4 The validation map labels a uniform-field test as "straight
+  circular vacuum mirror"; point it at the paraxial two-coil flux-tube test
+  (`test_mirror_geometry_fields.py:178-245`, Ryutov Eqs. 19-21) and the exact
+  quartic-flux mirror (`analytic.py:41-105`); extend the paraxial finite-beta
+  test to all z at fixed psi.
+- 31.4-C5 mirror-boundary-conditions.md:27-28 cites Hirshman-Whitson 1983
+  for the plasma-vacuum interface; cite HvRM 1986 and Merkel 1986.
+- 31.4-C6 Add the periodic/no-end-loss sentence to the two hybrid example
+  headers; state (18.1) that Boozer coordinates are well defined on the
+  hybrid but any single-field-line surface diagnostic (Gamma_c, eps_eff,
+  NEO averages) is invalid on the rational closed-line hybrid and must use
+  explicit (theta, u) surface quadrature.
+- 31.4-C7 Hybrid literature for 18: Feng 2021; Helander 2014; Landreman-Catto
+  2012; Dudt et al. 2024 (general omnigenity); Goodman 2023; Velasco 2024
+  (piecewise omnigenity); Ryutov 2011 Secs. V/VII (anchors) and the
+  sharp-boundary stability integral Eqs. 31-32 as a cheap 18.4 constraint.
+- 31.4-C8 16.2 item 3 (CGL as an equilibrium pressure model) is ill-posed
+  for a static equilibrium; keep CGL only as the interchange criterion.
+- 31.4-C9 16.8's ANIMEC comparison cannot validate the mirror lane (all
+  published ANIMEC cases are toroidal: LHD, QAS). Either implement the same
+  closure in the toroidal core and compare there, or use the mirror
+  references below.
+
+Phase 9 spec sheet (literature-backed; replaces the schematic in 16.1-16.3
+where they differ). Equations (SI): P = p_perp I + (p_par - p_perp) bb;
+J x B = div P; div P = grad p_perp + (p_par - p_perp) kappa + b [b.grad(p_par -
+p_perp) - (p_par - p_perp) b.grad ln B]; parallel balance b.grad p_par =
+(p_par - p_perp) b.grad ln B (Ryutov 2011 Eq. 4; Frank 2025 Eq. 4);
+perpendicular balance grad_perp(p_perp + B^2/2mu0) = sigma (B^2/mu0) kappa,
+sigma = 1 + mu0 (p_perp - p_par)/B^2; Grad closure as in 16.3 (with it the
+bracket in div P vanishes identically - use as the parallel-integrability
+residual test). Admissibility: firehose sigma > 0; mirror tau = 1 + (mu0/B)
+d_B p_perp|_s > 0 (bi-Maxwellian: beta_perp (T_perp/T_par - 1) < 1 - unit
+test); ellipticity needs both. Pressure models, all inside p_par(s, B): (1)
+consistent-Delta p_h,par = Delta(s) B^2/2mu0 (closed form; the only family
+where a DESC cross-check is legitimate); (2) Novatron polynomial p_par = A(s)
+C (1 - (B/B1)^2)^M with p_perp = A C (1 - (B/B1)^2)^(M-1) (1 + (2M-1)(B/B1)^2)
+(arXiv:2503.03387); (3) ANIMEC bi-Maxwellian moments (Cooper 2006 NF 46,
+683; Moen 2023 Eq. 2.6) by (E, mu) quadrature under AD; (4) tabulated
+sloshing-ion p_par(s, B/B0) (Frank 2025 Eqs. 13-17; WHAM tables) as a cubic
+spline with p_perp from the AD derivative. Boundary conditions: fixed
+lateral Dirichlet; free lateral B.n = 0 and p_perp + B^2/2mu0 continuous;
+cuts Dirichlet geometry and lambda (normal stress p_par there); periodic
+hybrid periodic p_h,par. Validation: V1 p_h = 0 reproduces the shipped
+energy, residuals, JVP/VJP bit-for-bit; V2 anisotropic theta-pinch with exact
+1-D balance p_perp + B_z^2/2mu0 = const, second-order convergence; V3
+manufactured Cartesian div P; V4 parallel-integrability residual identically
+zero per model; V5 long-thin anisotropic mirror B/B_vac = sqrt(1 -
+beta_perp(psi, z)) along z to O((a/L)^2) with a sloshing peak at B/B0 = 2
+(45-degree NBI) producing an off-midplane diamagnetic depression; V6
+admissibility thresholds; V7 WHAM-like axisymmetric case (B0 = 0.86/0.32 T,
+B_m = 17 T at z = +-0.98 m, R_m^vac ~ 20/53, a = 0.10 m, beta 0.2-0.3;
+Endrizzi 2023) with R_m = R_m^vac (1 - beta)^-1/2 on axis, referenced
+against the Novatron closure family or Chernoshtanov arXiv:2512.01780 /
+Khristo-Beklemishev JPP 91, E3 (2025) since public Pleiades is isotropic;
+V8 free-boundary anisotropic interface; V9 Ryutov Eq. 26 stability integral
+reported per surface. References to add to 16.7: Grad 1967; Hall &
+McNamara 1975; Taylor 1963; Newcomb 1981; Kaiser, Nevins & Pearlstein 1983;
+Ryutov et al. 2011; Cooper 2006; Moen, Suzuki & Proll 2023; Novatron 2025;
+Hammir arXiv:2411.06644; Khristo & Beklemishev 2025; Chernoshtanov 2025;
+Feng 2021; Merkel 1986; HvRM 1986; Agren & Savenko 2004, 2005.
+
+### 31.5 Publication-readiness audit (JOSS / CPC / FAIR4RS)
+
+REQUIRED before submission: (1) merge #245 and then repair it - CITATION.cff
+needs ORCID(s), all contributors, an `abstract`, and the Zenodo DOI under
+`identifiers`; CHANGELOG backfilled to v0.1.0 (18 tags exist) with compare
+links; `docs/project/contributing.rst:130-132` "no changelog" sentence
+removed. (2) Zenodo archive + DOI badge + `codemeta.json`; GitHub topics and
+description (no Zenodo record exists as of 2026-09-02 - a maintainer
+action). (3) The validation page (outline: evidence hierarchy; VMEC2000
+parity tiers with exact gates - `test_parity_breadth.py` rtol 1e-5
+harmonics and a +-25% iteration window, `golden_digests.json` scalars,
+nightly `test_wout_golden.py` per-variable; trajectory figure; free-boundary
+ladder; #247's fresh-deck table quoted by measured maxima, never "machine
+precision"; the oracle and cross-code table; derivative certificates;
+mirror analytic limits; downstream parity; device/lane consistency; what is
+NOT validated; how to rerun) and one numerics/reproducibility page (float64;
+what "bit-identical" covers; ULP-per-iteration drift across XLA fusion,
+identical iteration counts, geometry <= 1e-12; CPU/GPU rtol 1e-7 gate;
+cache semantics; seeds; provenance fields). (4) Figure provenance: only 2 of
+19 README/docs figures are guarded; add `docs/_static/figures/figures.json`
+(path, sha256, generator, inputs, date, hardware) with a guard; generate or
+remove the orphans `readme_diagnostics_summary.webp`,
+`readme_diagnostics_qa_vacuum.webp`, `readme_bootstrap.webp`; pick one
+provenance story for `readme_runtime_compare.webp` (delete the stale
+2026-07-07 sidecar); add `_provenance` to `convergence_nfp4_ns51.json` and
+`gpu_baseline.json`; make mirror/essos/extender scripts write webp
+directly. (5) Unbacked numbers - remove or re-measure: README cloc table
+and its two VMEC2000 shas; 1.79x/3.29x ensemble scaling; the production
+workflow table in performance.rst (mixed hosts, no record - point at
+`benchmarks/baselines/m4/*`); "exact match" iteration table (gate is +-25%,
+relabel "observed"); 2D-preconditioner 5.4x/10.9x/9.2x typed into
+`make_readme_figures.py`; "identical fp32/fp64 GPU times"; "2e-9 relative
+FD" in all-of-vmex.md (gate is 1e-4); "SFINCS comparisons live in
+benchmarks/". (6) Root CONTRIBUTING.md, CODE_OF_CONDUCT.md, issue templates,
+a support sentence; delete the stale migration narrative in contributing.rst.
+(7) pyproject: real author, jax/jaxlib floor (>= 0.4.36 for
+`jax_logging_level`), Beta classifier; README rename note. (8) plan.md is
+linked from the README and contains agent instructions - the maintainer
+decides whether to move it out of the public tree or trim it to a
+ROADMAP.md; strip "the plan" from `strong_force_comparison_m4.json:61` and
+performance.rst; write the JOSS AI-usage disclosure honestly. (9) API
+reference: automodule `vmex.core.problem`, `monitoring`, `run_options`,
+`boozer_tables`, `statephysics`, `vmex.doctor`, `mirror.{basis,exterior,
+forces,geometry,turbulence}`; 365 of 1266 public defs lack docstrings
+(optimize.py 43, polish.py 32, implicit.py 31) - exported names first.
+Recommended: extend `tools/check_docs_prose.py` to README/CHANGELOG and
+drop the flagged register words; test `force_balance_polishing.py` and
+`epsilon_effective.py` at CI budget; test or delete `simsopt_driver*.py`;
+lowercase `uwplasma/VMEX` URLs in `tools/render_capabilities.py`; verify DOI
+10.1063/1.3212262; settle the "clean-room" vs "port" wording and the
+STELLOPT license lineage for the paper; draft the CPC Program Summary.
+Branches `docs/publication-hygiene`, `docs/api-reference-completeness`,
+`docs/figure-provenance` were assigned (4)-(9) and the recommended items.
+
+### 31.6 Open decisions for the maintainer
+
+Settled by the maintainer on 2026-09-02:
+
+- #197 (contributor's scalar-adjoint examples): verdict posted on the PR.
+  The scalar lane does not improve the two user-visible latencies (shared
+  machinery, fixed by #240); it wins cold start and memory (44.7 -> 32.2 s,
+  2965 -> 2574 MiB); at matched evaluation budget TRF least squares reaches
+  a 3.0x lower objective. Take it in as examples with that framing, after a
+  rebase (`codex/scalar-optimization-drivers-rebased` is clean) and a
+  sentence per example naming the trade.
+- plan.md STAYS in the public tree. 31.5 item 8 therefore reduces to
+  stripping the "the plan" phrasing from user-facing text
+  (`strong_force_comparison_m4.json:61`, performance.rst) and writing the
+  submission's AI-usage disclosure honestly; do not move or trim this file.
+- No Zenodo record yet - the code is still changing. CITATION.cff ships
+  without a DOI; add `identifiers` and the badge at submission time. Do not
+  block the publication pack on it.
+- Codecov: deleting and re-adding the repository there did not fix the 404,
+  because the Codecov project still carries the pre-rename vmec_jax
+  identity. PR #249 switches the upload to the repository token; the
+  `CODECOV_TOKEN` secret is the maintainer's to set, and the token pasted
+  into chat on 2026-09-02 should be regenerated before use.
+
+Still open:
+
+- The pointwise eps_F definition (31.2-R1): keep as the internal certificate
+  and add the published global normalizations for every reported number.
+- GitHub topics and repository description.
+
+### 31.7 Remaining engineering items (carried from section 8.8 and the campaign)
+
+3-D polish effectiveness and memory at production resolution (the
+stellarator README row depends on it; W7-X numbers in 31.1); v0.8.2 after
+the polish memory PR; the section 9 matrix rerun with all five regimes;
+GPU validation of the 0.8.1 stack (office GPUs; host RAM shared with the
+polish run); persistent-cache eviction-lock behavior for concurrent
+processes on one cache directory (the CI symptom was serialization to
+timeout; users running job arrays on a shared home need a product answer:
+per-process shard, batched writes, or floor tuning); parity lane c3d at
+43-44 minutes of a 55-minute budget (repartition the implicit-campaign
+modules); tridiagonal method pinning per placement (bit-identical on CPU,
+needs a device-aware runtime field); booz_xform_jax 0.2.0 adoption.
+
+### 31.8 Next-agent runbook
+
+Local checkout `/Users/rogeriojorge/local/vmex` is shared - work in
+worktrees under the session scratchpad; push after every commit; author
+commits as Rogerio Jorge; never any assistant attribution; one heavy local
+job at a time; the office box (`ssh office`, `~/vmex-gpu`,
+`~/venvs/vmex-gpu/bin/python`, `JAX_PLATFORMS=cpu JAX_ENABLE_X64=1`) takes
+one heavy job and needs `rm -rf ~/.cache/vmex ~/.cache/jax` before runs
+(stale cross-profile AOT entries segfault). Merge bar: local verification
+plus every substantive CI lane green; the "PR gate" is red on cancelled or
+guard-only failures, so read the lane list. `tools/preflight.py --static`
+then the diff-affected suites; the ownership guard needs essos installed
+locally. Measurement discipline: fresh process, caches cleared, subprocess
+wall, two reps, never benchmark a shared checkout, and record commit,
+hardware, and versions in a JSON with a guard.
+
+### 31.9 Priority order
+
+Work top-down. The ordering is by what a referee reads first and by what is
+currently WRONG in shipped material, not by effort.
+
+P0 - published statements that are incorrect or unsupported. Every headline
+polish number depends on 31.2-R1 (the saturating metric), so fix the metric
+and the reported quantities before anything else touches those figures:
+31.2-R1, then 31.2-R3 (the "26-fold" recompute) and 31.2-R2 (the DESC row),
+then 31.2-R4 (the high-order page describes a retired method), 31.2-R6
+(selection wording), 31.2-R8/R9 and 31.3-R1..R7 (convention and diagnostic
+statements that are simply wrong and cost nothing to fix), and 31.5 item 5
+(numbers with no artifact behind them). None of these change solver code.
+
+P1 - physics correctness in code, in this order: 31.2-R7 (the LASYM tcon
+halving is a possible parity defect - if VMEC2000 halves and VMEX does not,
+every up-down-asymmetric result is off), 31.4-R2 (free boundary silently
+accepts a net axial current the exterior cannot carry - guard it), 31.2-R5
+(the oracle has no exact-solution validation; add the analytic Solov'ev).
+
+P2 - the publication package, once P0 has settled what the numbers say:
+merge #245-#248; then 31.5 items 1, 3, 4, 6, 7, 9 (citation metadata,
+validation and numerics pages, figure provenance manifest, community files,
+packaging metadata, API reference). Items 2 and 8 wait on the maintainer.
+
+P3 - performance and engineering, unblocked and parallel to P2: the 3-D
+polish memory fix and v0.8.2; the section 9 benchmark matrix rerun on 0.8.1+
+with all five regimes after #246; booz_xform_jax 0.2.0; GPU validation;
+c3d lane repartition; the cache eviction-lock product answer.
+
+P4 - Phase 9/10 mirror and hybrid work is planning only until P0-P2 land.
+Section 16.3 (corrected above), 31.4-R3..R6 and the spec sheet are the
+inputs; do not start implementation while publication claims are unsettled.
+
+Not in the ordering, because they are not ours to do: Zenodo, Codecov
+re-linking, the #197 comment, and whether plan.md stays in the public tree
+(31.6).
