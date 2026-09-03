@@ -630,8 +630,8 @@ after 1,600 explicit ``PRE_NITER`` steps.  A separate VMEC2000 1-D solve
 converges and agrees with the VMEX result in ``wb`` to ``1.3e-11`` relative
 and in the primary geometry to better than ``1e-5``.  The opt-in live test
 ``test_live_vmec2000_exact_jvp_gmres_robustness`` reproduces all three paths.
-This is a convergence-reliability result, not a CPU speed or memory claim: the small
-VMEC2000 1-D solve is still much cheaper than a cold JAX process.
+This is a convergence-reliability result, not a CPU speed or memory claim:
+the small VMEC2000 1-D solve is still much cheaper than a cold JAX process.
 
 Memory
 ------
@@ -910,8 +910,8 @@ Workflow observability harness
 ------------------------------
 
 ``benchmarks/profile_workflows.py`` is the one driver for timing, memory,
-and compile observability of the principal workflows. Every record separates build,
-per-stage execution (fenced with ``block_until_ready``), and — for the two
+and compile observability of the principal workflows. Every record separates
+build, per-stage execution (fenced with ``block_until_ready``), and — for the two
 process-level regimes — total process wall time, alongside trace/compile
 counts read from JAX's own ``jax_log_compiles`` records and peak host RSS::
 
@@ -920,9 +920,9 @@ counts read from JAX's own ``jax_log_compiles`` records and peak host RSS::
    python benchmarks/profile_workflows.py --all --regimes warm --out benchmarks/baselines/m4/
    python benchmarks/profile_workflows.py F4 C2 --trace-dir benchmarks/traces/
 
-The registry covers the workflow matrix in
-``benchmarks/profile_workflows.py``: fixed-boundary solves
-(single-grid, multigrid, polished), implicit value/gradient, vector residual
+The registry covers the workflow matrix defined in
+``benchmarks/profile_workflows.py``: fixed-boundary solves (single-grid,
+multigrid, polished), implicit value/gradient, vector residual
 plus full Jacobian, hot-restart scans, optimization campaigns (scalar
 L-BFGS-B and residual least-squares), single-stage plasma-plus-coils with
 ESSOS, the free-boundary implicit value and adjoint, symmetric-versus-LASYM

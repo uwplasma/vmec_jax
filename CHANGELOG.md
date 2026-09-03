@@ -95,7 +95,7 @@ programs (v0.8.0: 773; v0.3.0: 523).
   campaign step 16.6 -> 10.8 s, warm value+gradient repeat 28.8 -> 3.0 s,
   bit-identical); polished solves reuse compiled programs (warm 52.9 ->
   22.8 s).
-- `benchmarks/profile_workflows.py`: seventeen flagship workflows in five
+- `benchmarks/profile_workflows.py`: seventeen principal workflows in five
   timing regimes with compile counts and committed M4 baselines.
 - CI attempt wall clock roughly halved by resharding; `tools/preflight.py`
   runs the static gates, guard tests, and diff-affected tests locally.
