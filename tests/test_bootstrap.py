@@ -1,5 +1,4 @@
-"""Validation gates for :mod:`vmex.core.bootstrap` (R26.g steps 1-4; spec
-``notes_r26g_redl_spec.md`` sections 7-8, CI-sized subset): analytic
+"""Validation gates for :mod:`vmex.core.bootstrap` (CI-sized subset): analytic
 trapped-fraction model; V1 formula parity vs pasted simsopt rows at
 Zeff > 1; V2/V3 Zenodo QA/QH cross-check (<= 1% vs simsopt Redl curves,
 <= 10% RMS vs SFINCS interior, trapped-fraction parity; skips without the
@@ -728,7 +727,7 @@ def test_self_consistent_bootstrap_picard_converges():
     """V6 (small): Picard loop on the ncurr=1 tokamak converges (delta below
     tol) in <= 10 iterations and drives f_boot down ~two orders of magnitude.
     relax=0.5 because iota here is entirely bootstrap-driven (the undamped
-    <J.B> ~ 1/iota ~ 1/I map is marginally stable; spec section 6.5)."""
+    <J.B> ~ 1/iota ~ 1/I map is marginally stable)."""
     inp = _tokamak_ncurr1(curtor=-2.0e5, ac01=(1.0, 0.0))  # flat I' guess
     res = bs.self_consistent_bootstrap(
         inp, TOKAMAK_PROFILES, 0, n_iter=10, tol=1e-3, relax=0.5, degree=6,
