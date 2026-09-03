@@ -51,6 +51,30 @@ from _provenance import assert_repo_vmex, file_sha256, git_state
 DATA = REPO / "examples" / "data" / "input.solovev"
 
 
+def _redacted_argv(argv: list[str]) -> list[str]:
+    """Return the invocation with the ``--output`` destination reduced.
+
+    A committed record must be reproducible without disclosing where it was
+    produced, so only the destination's file name survives.  Both the
+    ``--output path`` and ``--output=path`` spellings are handled.
+    """
+
+    redacted: list[str] = []
+    take_next = False
+    for token in argv:
+        if take_next:
+            redacted.append(Path(token).name)
+            take_next = False
+        elif token == "--output":
+            redacted.append(token)
+            take_next = True
+        elif token.startswith("--output="):
+            redacted.append(f"--output={Path(token.split('=', 1)[1]).name}")
+        else:
+            redacted.append(token)
+    return redacted
+
+
 def _peak_rss_mib() -> float:
     value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     divisor = 1024.0**2 if platform.system() == "Darwin" else 1024.0
@@ -450,9 +474,12 @@ def main() -> None:
     report = {
         "schema": "vmex.strong-polish-benchmark/2",
         # The exact invocation: committed evidence must be re-runnable
-        # verbatim, not reverse-engineered from recorded fields.
+        # from the record, not reverse-engineered from its fields.  The
+        # destination is reduced to its file name because a committed
+        # artifact must never carry a user name, home directory, or private
+        # checkout location (see benchmarks/_provenance.py).
         "command": " ".join(["python", "benchmarks/strong_polish.py"]
-                            + sys.argv[1:]),
+                            + _redacted_argv(sys.argv[1:])),
         "case": args.input.name.removeprefix("input."),
         # The deck the numbers belong to, hashed so a quoted result can be
         # traced to an exact input rather than to a file name.
