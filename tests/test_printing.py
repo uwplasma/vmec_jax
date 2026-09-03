@@ -199,6 +199,45 @@ def test_polish_screen_rows():
     assert rejected.endswith("  rejected\n")
 
 
+def test_polish_progress_line_shows_elapsed_work_and_last_cost():
+    """The live line has to answer 'is it moving' without a history table."""
+
+    line = printing.polish_progress_line(
+        elapsed_seconds=3 * 3600 + 25 * 60 + 7.5,
+        products=450, product_budget=900, cost=4.1234e4)
+    assert line.startswith("  polish 03:25:07")
+    assert "450/900 linear products" in line
+    assert "50.0%" in line
+    assert "4.123E+04" in line
+    # A zero budget must not divide by zero on the way to the console.
+    assert "0/1 linear products" in printing.polish_progress_line(
+        elapsed_seconds=0.0, products=0, product_budget=0, cost=float("nan"))
+
+
+def test_polish_cost_decline_states_the_measurement_and_every_override():
+    """A refusal has to be arguable: numbers first, then the knobs."""
+
+    text = printing.polish_cost_decline(
+        seconds_per_product=42.4, products=48000,
+        predicted_seconds=2035200.0, budget_seconds=3600.0,
+        chart_size=10573, residual_rows=135792)
+    assert "DECLINED ON PREDICTED COST" in text
+    assert "10573 unknowns" in text and "135792 rows" in text
+    assert "42.4 s" in text
+    assert "23.6 days" in text and "60 min" in text
+    assert "unpolished" in text
+    for knob in ("POLISH_BUDGET", "POLISH_MAX_ITER", "POLISH = .TRUE."):
+        assert knob in text
+    # Every magnitude the clock has to render, so no branch reaches a user
+    # for the first time in production.
+    for seconds, expect in ((12.5, "12.5 s"), (600.0, "10 min"),
+                            (7200.0, "2.0 h"), (864000.0, "10.0 days")):
+        rendered = printing.polish_cost_decline(
+            seconds_per_product=1.0, products=1, predicted_seconds=seconds,
+            budget_seconds=seconds, chart_size=1, residual_rows=1)
+        assert expect in rendered
+
+
 def test_polish_certificate_summary_names_failed_checks():
     certified = printing.polish_certificate_summary(
         1.281e-2, 1.807e-3, 1e-2, verdict="CERTIFIED")

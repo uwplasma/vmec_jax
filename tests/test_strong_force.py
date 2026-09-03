@@ -362,6 +362,17 @@ def test_batched_point_sweep_matches_flat_vmap_values_and_gradients():
         batched_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
         batched_value, batched_grad = jax.value_and_grad(objective)(0.0)
     assert sf.force_sweep_policy().batch is True
+    # The remat boundary is a memory strategy, not a numerical one: dropping
+    # it must reproduce the same values and the same reverse-mode gradient.
+    # The memory benchmark runs this arm, so it has to be exact too.
+    with sf.force_sweep_measurement(
+            sf.ForceSweepPolicy(min_batch=8, max_batch=8, checkpoint=False)):
+        plain_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
+        plain_value, plain_grad = jax.value_and_grad(objective)(0.0)
+    np.testing.assert_array_equal(
+        np.asarray(plain_samples.force), np.asarray(batched_samples.force))
+    np.testing.assert_allclose(plain_value, batched_value, rtol=1.0e-13)
+    np.testing.assert_allclose(plain_grad, batched_grad, rtol=1.0e-11)
 
     for name in flat_samples.__dataclass_fields__:
         np.testing.assert_allclose(

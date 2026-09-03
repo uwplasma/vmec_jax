@@ -2177,3 +2177,63 @@ def test_gauss_newton_progress_prints_live_and_changes_nothing():
 def test_polish_config_rejects_an_unusable_budget():
     with pytest.raises(ValueError, match="auto_budget_seconds must be positive"):
         PolishConfig(auto_budget_seconds=0.0)
+
+
+def test_progress_callbacks_are_inert_without_an_active_reporter():
+    """The staged callbacks outlive any one polish call.
+
+    ``jax.debug.callback`` bakes its Python callable into the compiled
+    executable, which later polish calls of the same shape reuse.  The baked
+    callables therefore dispatch through a module global, and must do
+    nothing at all when no verbose polish is running rather than report into
+    a finished call's console.
+    """
+
+    from vmex.core import polish_driver
+
+    assert polish_driver._ACTIVE_POLISH_PROGRESS is None
+    polish_driver._polish_progress_product(0.0)
+    polish_driver._polish_progress_cost(1.0)
+
+    emitted: list[str] = []
+    reporter = polish_driver._PolishProgress(
+        lambda text, end="\n": emitted.append(text),
+        product_budget=4, interval=0.0)
+    with polish_driver._polish_progress(reporter):
+        assert polish_driver._ACTIVE_POLISH_PROGRESS is reporter
+        polish_driver._polish_progress_cost(2.5)
+        polish_driver._polish_progress_product(0.0)
+    assert polish_driver._ACTIVE_POLISH_PROGRESS is None
+    assert reporter.lines == 1
+    assert "1/4 linear products" in emitted[0]
+    assert "2.500E+00" in emitted[0]
+    # The throttle suppresses output, never the accounting.
+    quiet = polish_driver._PolishProgress(
+        lambda text, end="\n": emitted.append(text),
+        product_budget=4, interval=1.0e6)
+    with polish_driver._polish_progress(quiet):
+        quiet.product()
+        quiet.product()
+    assert quiet.lines == 1
+
+
+def test_declined_auto_does_not_warn_under_the_warn_fail_policy(tmp_path):
+    """``POLISH_FAIL = WARN`` reports failures, and a decline is not one."""
+
+    import warnings
+
+    from vmex.core.multigrid import solve_file
+
+    path = tmp_path / "input.declined"
+    _small_polish_deck().to_indata(path)
+    path.write_text(
+        "!@VMEX POLISH = AUTO\n"
+        "!@VMEX POLISH_BUDGET = 1.0E-9\n"
+        "!@VMEX POLISH_FAIL = WARN\n"
+        "!@VMEX POLISH_MAX_ITER = 3\n"
+        + path.read_text()
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        result = solve_file(path, write_wout=False)
+    assert result.polish_report.termination_reason == "auto-declined-cost"
