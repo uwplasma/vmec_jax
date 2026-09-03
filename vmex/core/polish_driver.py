@@ -1131,13 +1131,6 @@ def polish_strong_root(
     )
 
 
-# The polish hot path used to jit fresh per-call lambdas closing over the
-# runtime and chart, baking every per-solve array in as XLA constants: each
-# polish call recompiled the residual, its linearization, and the whole
-# Gauss-Newton program, and the changed constants defeated the persistent
-# compilation cache as well (different constants, different HLO). These
-# module lanes take the pytrees as arguments, so equal-structure polish
-# calls share one compiled program in memory and on disk.
 #: Shortest gap between two live polish heartbeats.  The callbacks that feed
 #: them fire far more often than this on small problems and far less often
 #: than this at production resolution, so the throttle only ever suppresses
@@ -1248,6 +1241,13 @@ def _polish_progress(reporter: Any) -> Iterator[Any]:
         _ACTIVE_POLISH_PROGRESS = previous
 
 
+# The polish hot path used to jit fresh per-call lambdas closing over the
+# runtime and chart, baking every per-solve array in as XLA constants: each
+# polish call recompiled the residual, its linearization, and the whole
+# Gauss-Newton program, and the changed constants defeated the persistent
+# compilation cache as well (different constants, different HLO). These
+# module lanes take the pytrees as arguments, so equal-structure polish
+# calls share one compiled program in memory and on disk.
 @functools.partial(jax.jit, static_argnames=("config", "progress"))
 def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
                               collocation_scale, config, progress=False):
