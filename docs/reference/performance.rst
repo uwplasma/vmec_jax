@@ -140,6 +140,38 @@ halving.  This is a correctness and overhead gate for the production
 mathematical formulation at structural resolution, not a production-size
 optimization timing claim.
 
+Polish memory at production stellarator resolution
+--------------------------------------------------
+
+``benchmarks/polish_memory.py`` runs the polish setup three times on one
+build, changing only how the independent force sweep is scheduled, and
+records each arm's peak resident memory from ``os.wait4`` so an arm the OS
+kills still reports one.  The record is
+``benchmarks/polish_memory_w7x.json``, measured on the W7-X standard
+configuration (``MPOL = NTOR = 10``, ``ns`` 13/25/51) — the resolution at
+which polishing was reported to run out of memory.
+
+The ``flat`` arm is the pre-0.8.2 sweep: one ``vmap`` over every evaluation
+point, which asks for a single 34 GB allocation on the first certificate.
+``batched`` schedules the same per-point kernel in automatically sized
+batches; ``auto`` is the shipped policy, which additionally checkpoints the
+kernel so reverse-mode passes stay per-batch.  Values and derivatives are
+identical across all three by construction and by test; only the schedule
+differs.  This is a memory record, not a runtime claim: the batched arms
+trade a modest amount of time for the memory, and the wall times in the
+record include that trade.
+
+Polish cost prediction
+----------------------
+
+``benchmarks/polish_cost.py`` records, per deck, what one Gauss--Newton
+linear product costs and what the configured iteration limits therefore
+allow in the worst case.  These are the measurements behind
+``PolishConfig.auto_budget_seconds`` — the ceiling ``POLISH = AUTO`` prices
+a solve against before committing to it — and they are machine-specific by
+design, which is why AUTO measures at run time rather than consulting a
+size heuristic.
+
 Benchmark suite (CPU, ns = 201)
 -------------------------------
 
