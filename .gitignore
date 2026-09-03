@@ -315,4 +315,4 @@ benchmarks/.profile_cache/
 .claude
 examples_single_grid/
 disabled/
-.vscode/settings.json
+.vscode/

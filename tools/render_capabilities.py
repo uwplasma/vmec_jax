@@ -45,7 +45,7 @@ def render(data: dict) -> str:
     ]
     for row in data["rows"]:
         evidence = ", ".join(
-            f"`{Path(path).name} <https://github.com/uwplasma/VMEX/blob/main/{path}>`__"
+            f"`{Path(path).name} <https://github.com/uwplasma/vmex/blob/main/{path}>`__"
             for path in row["evidence"]
         )
         cells = [

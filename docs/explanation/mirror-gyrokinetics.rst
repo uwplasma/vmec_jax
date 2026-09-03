@@ -160,8 +160,10 @@ Primary references and independent inputs
 -----------------------------------------
 
 * Xanthopoulos *et al.*, `A geometry interface for gyrokinetic
-  microturbulence codes <https://doi.org/10.1063/1.3212262>`_, defines the
-  field-line metric/drift interface conventions used by GS2-family solvers.
+  microturbulence investigations in toroidal configurations
+  <https://doi.org/10.1063/1.3187907>`_ (Phys. Plasmas 16, 082303, 2009),
+  defines the field-line metric/drift interface conventions used by
+  GS2-family solvers.
 * Rodríguez, Helander, and Goodman, `The maximum-J property in
   quasi-isodynamic stellarators
   <https://doi.org/10.1017/S0022377824000345>`_, Appendix C, supplies VMEX's

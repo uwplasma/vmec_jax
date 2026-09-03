@@ -35,7 +35,7 @@ stated in the row is validated; ``—`` means no public path.
      - validated
      - validated
      - supported
-     - Converged implicit derivatives. Evidence: `test_solver_end_to_end.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_solver_end_to_end.py>`__, `test_implicit_grad.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_implicit_grad.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
+     - Converged implicit derivatives. Evidence: `test_solver_end_to_end.py <https://github.com/uwplasma/vmex/blob/main/tests/test_solver_end_to_end.py>`__, `test_implicit_grad.py <https://github.com/uwplasma/vmex/blob/main/tests/test_implicit_grad.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/vmex/blob/main/tests/test_gpu_ci.py>`__.
    * - toroidal
      - stellarator / tokamak
      - fixed
@@ -48,7 +48,7 @@ stated in the row is validated; ``—`` means no public path.
      - validated
      - validated
      - supported
-     - Converged implicit derivatives; some diagnostics retain independent LASYM guards. Evidence: `test_parity_breadth.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_parity_breadth.py>`__, `test_implicit_grad.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_implicit_grad.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
+     - Converged implicit derivatives; some diagnostics retain independent LASYM guards. Evidence: `test_parity_breadth.py <https://github.com/uwplasma/vmex/blob/main/tests/test_parity_breadth.py>`__, `test_implicit_grad.py <https://github.com/uwplasma/vmex/blob/main/tests/test_implicit_grad.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/vmex/blob/main/tests/test_gpu_ci.py>`__.
    * - toroidal
      - stellarator / tokamak
      - free
@@ -61,7 +61,7 @@ stated in the row is validated; ``—`` means no public path.
      - limited
      - limited
      - supported
-     - Forward NESTOR and exterior fields are supported. An experimental CPU reverse-mode path differentiates the reconverged VMEC--NESTOR root with direct ESSOS coil parameters; cold compile time, GPU memory, and failed-trial recovery are not yet ready for routine use. Evidence: `test_freeboundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit.py>`__, `test_virtual_casing_physics.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_virtual_casing_physics.py>`__, `test_examples.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_examples.py>`__.
+     - Forward NESTOR and exterior fields are supported. An experimental CPU reverse-mode path differentiates the reconverged VMEC--NESTOR root with direct ESSOS coil parameters; cold compile time, GPU memory, and failed-trial recovery are not yet ready for routine use. Evidence: `test_freeboundary.py <https://github.com/uwplasma/vmex/blob/main/tests/test_freeboundary.py>`__, `test_freeboundary_implicit.py <https://github.com/uwplasma/vmex/blob/main/tests/test_freeboundary_implicit.py>`__, `test_virtual_casing_physics.py <https://github.com/uwplasma/vmex/blob/main/tests/test_virtual_casing_physics.py>`__, `test_examples.py <https://github.com/uwplasma/vmex/blob/main/tests/test_examples.py>`__.
    * - toroidal
      - stellarator / tokamak
      - free
@@ -74,7 +74,7 @@ stated in the row is validated; ``—`` means no public path.
      - limited
      - limited
      - supported
-     - Forward solve and NESTOR WOUT fields are supported; the experimental CPU current/field VJP is reconverged-FD certified, with the same performance limitations as the symmetric path. Evidence: `test_lasym_free_convergence.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_lasym_free_convergence.py>`__, `test_freeboundary_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_freeboundary_implicit.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
+     - Forward solve and NESTOR WOUT fields are supported; the experimental CPU current/field VJP is reconverged-FD certified, with the same performance limitations as the symmetric path. Evidence: `test_lasym_free_convergence.py <https://github.com/uwplasma/vmex/blob/main/tests/test_lasym_free_convergence.py>`__, `test_freeboundary_implicit.py <https://github.com/uwplasma/vmex/blob/main/tests/test_freeboundary_implicit.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/vmex/blob/main/tests/test_gpu_ci.py>`__.
    * - open mirror
      - axisymmetric
      - fixed
@@ -87,7 +87,7 @@ stated in the row is validated; ``—`` means no public path.
      - validated
      - limited
      - supported
-     - Implicit boundary derivatives are validated; no common objective driver yet. Evidence: `mirror_fixed_boundary.json <https://github.com/uwplasma/VMEX/blob/main/benchmarks/mirror_fixed_boundary.json>`__, `test_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_implicit.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/VMEX/blob/main/tests/test_gpu_ci.py>`__.
+     - Implicit boundary derivatives are validated; no common objective driver yet. Evidence: `mirror_fixed_boundary.json <https://github.com/uwplasma/vmex/blob/main/benchmarks/mirror_fixed_boundary.json>`__, `test_implicit.py <https://github.com/uwplasma/vmex/blob/main/tests/mirror/test_implicit.py>`__, `test_gpu_ci.py <https://github.com/uwplasma/vmex/blob/main/tests/test_gpu_ci.py>`__.
    * - open mirror
      - rotating ellipse
      - fixed
@@ -100,7 +100,7 @@ stated in the row is validated; ``—`` means no public path.
      - validated
      - limited
      - release-candidate
-     - Corrected-cut rotating-ellipse lane; broader straight-field-line validation is incomplete. Evidence: `mirror_fixed_boundary.json <https://github.com/uwplasma/VMEX/blob/main/benchmarks/mirror_fixed_boundary.json>`__, `test_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_implicit.py>`__, `test_splines.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_splines.py>`__.
+     - Corrected-cut rotating-ellipse lane; broader straight-field-line validation is incomplete. Evidence: `mirror_fixed_boundary.json <https://github.com/uwplasma/vmex/blob/main/benchmarks/mirror_fixed_boundary.json>`__, `test_implicit.py <https://github.com/uwplasma/vmex/blob/main/tests/mirror/test_implicit.py>`__, `test_splines.py <https://github.com/uwplasma/vmex/blob/main/tests/mirror/test_splines.py>`__.
    * - open mirror
      - axisymmetric
      - free
@@ -113,7 +113,7 @@ stated in the row is validated; ``—`` means no public path.
      - limited
      - limited
      - supported
-     - Supported from β=0 through β=10%; field adjoint validated against reconverged finite differences. Evidence: `mirror_free_boundary_axisymmetric.json <https://github.com/uwplasma/VMEX/blob/main/benchmarks/mirror_free_boundary_axisymmetric.json>`__, `test_free_boundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_free_boundary.py>`__, `test_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_implicit.py>`__.
+     - Supported from β=0 through β=10%; field adjoint validated against reconverged finite differences. Evidence: `mirror_free_boundary_axisymmetric.json <https://github.com/uwplasma/vmex/blob/main/benchmarks/mirror_free_boundary_axisymmetric.json>`__, `test_free_boundary.py <https://github.com/uwplasma/vmex/blob/main/tests/mirror/test_free_boundary.py>`__, `test_implicit.py <https://github.com/uwplasma/vmex/blob/main/tests/mirror/test_implicit.py>`__.
    * - open mirror
      - axisymmetric
      - free
@@ -126,7 +126,7 @@ stated in the row is validated; ``—`` means no public path.
      - —
      - —
      - extended-validation
-     - 10% < β ≤ 80%; converges variationally and the example force gate passes, but refined-grid promotion above 50% is incomplete. Evidence: `mirror_free_boundary_axisymmetric.json <https://github.com/uwplasma/VMEX/blob/main/benchmarks/mirror_free_boundary_axisymmetric.json>`__, `test_free_boundary.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_free_boundary.py>`__.
+     - 10% < β ≤ 80%; converges variationally and the example force gate passes, but refined-grid promotion above 50% is incomplete. Evidence: `mirror_free_boundary_axisymmetric.json <https://github.com/uwplasma/vmex/blob/main/benchmarks/mirror_free_boundary_axisymmetric.json>`__, `test_free_boundary.py <https://github.com/uwplasma/vmex/blob/main/tests/mirror/test_free_boundary.py>`__.
    * - open mirror
      - nonaxisymmetric
      - free
@@ -139,7 +139,7 @@ stated in the row is validated; ``—`` means no public path.
      - —
      - —
      - deferred
-     - Local observables do not yet converge under refinement. Evidence: `mirror_free_boundary_nonaxisymmetric.json <https://github.com/uwplasma/VMEX/blob/main/benchmarks/mirror_free_boundary_nonaxisymmetric.json>`__.
+     - Local observables do not yet converge under refinement. Evidence: `mirror_free_boundary_nonaxisymmetric.json <https://github.com/uwplasma/vmex/blob/main/benchmarks/mirror_free_boundary_nonaxisymmetric.json>`__.
    * - closed hybrid
      - circular section
      - fixed
@@ -152,7 +152,7 @@ stated in the row is validated; ``—`` means no public path.
      - validated
      - limited
      - supported
-     - Closed periodic spline axis and boundary derivatives; no common objective driver yet. Evidence: `mirror_hybrid_fixed_boundary.json <https://github.com/uwplasma/VMEX/blob/main/benchmarks/mirror_hybrid_fixed_boundary.json>`__, `test_implicit.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_implicit.py>`__, `test_splines.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_splines.py>`__.
+     - Closed periodic spline axis and boundary derivatives; no common objective driver yet. Evidence: `mirror_hybrid_fixed_boundary.json <https://github.com/uwplasma/vmex/blob/main/benchmarks/mirror_hybrid_fixed_boundary.json>`__, `test_implicit.py <https://github.com/uwplasma/vmex/blob/main/tests/mirror/test_implicit.py>`__, `test_splines.py <https://github.com/uwplasma/vmex/blob/main/tests/mirror/test_splines.py>`__.
    * - closed hybrid
      - rotating ellipse
      - fixed
@@ -165,7 +165,7 @@ stated in the row is validated; ``—`` means no public path.
      - limited
      - —
      - extended-validation
-     - The independent strong-force promotion gate remains open. Evidence: `mirror_hybrid_fixed_boundary.json <https://github.com/uwplasma/VMEX/blob/main/benchmarks/mirror_hybrid_fixed_boundary.json>`__, `test_splines.py <https://github.com/uwplasma/VMEX/blob/main/tests/mirror/test_splines.py>`__.
+     - The independent strong-force promotion gate remains open. Evidence: `mirror_hybrid_fixed_boundary.json <https://github.com/uwplasma/vmex/blob/main/benchmarks/mirror_hybrid_fixed_boundary.json>`__, `test_splines.py <https://github.com/uwplasma/vmex/blob/main/tests/mirror/test_splines.py>`__.
    * - all
      - all
      - fixed / free
@@ -178,7 +178,7 @@ stated in the row is validated; ``—`` means no public path.
      - —
      - —
      - not-implemented
-     - ANIMEC-derived and open-mirror anisotropic equilibria are roadmap work. Evidence: `mirror-geometry.rst <https://github.com/uwplasma/VMEX/blob/main/docs/explanation/mirror-geometry.rst>`__.
+     - ANIMEC-derived and open-mirror anisotropic equilibria are roadmap work. Evidence: `mirror-geometry.rst <https://github.com/uwplasma/vmex/blob/main/docs/explanation/mirror-geometry.rst>`__.
 
 Free-boundary differentiation
 -----------------------------
