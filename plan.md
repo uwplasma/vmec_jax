@@ -2219,18 +2219,24 @@ Use the same independent oracle and clearly state excluded regions, normalizatio
 **README debts (standing checklist, audited 2026-08-31).** These stay in
 the plan until each is closed by a merged PR:
 
-1. Comparison figure: accuracy-only panels (no runtime bars) - see the
-   figure policy below.
+1. Comparison figure: accuracy-only panels (no runtime bars) - CLOSED
+   (#215).
 2. Comparison rows: every row shows certified polishing measurably beating
-   the legacy codes' exported equilibria; the current QA row's near-tie
-   must be replaced (smooth finite-beta QA head-to-head in progress).
+   the legacy codes' exported equilibria; the near-tie QA row was removed
+   (#215) and the figure shows the shaped-tokamak row. OPEN: a
+   finite-beta stellarator row joins once 3-D polishing certifies at
+   production resolution (the capture stall is fixed by #234; the
+   remaining gap is polish effectiveness and memory at MPOL=NTOR=10, see
+   8.8).
 3. Polish summary figure (``readme_polish_summary.webp``): the shown case
-   must be a finite-beta or finite-current stellarator where polishing
-   reduces the certified independent error MULTIPLE-FOLD - the current
-   example's 1.4e-2 to 5.6e-3 is not a demonstration; replace the case,
-   not the caption.
+   must be a true tokamak or stellarator where polishing reduces the
+   certified independent error MULTIPLE-FOLD, plotting the quantity the
+   oracle measures - CLOSED by the shaped tokamak (26-fold on the exported
+   equilibrium, both flux-surface sets overlaid; #237, #239). A stellarator
+   variant remains desirable once item 2's row exists.
 4. Prose: no README paragraph exceeds ~6 lines; panel-by-panel and
-   option-by-option detail lives in the docs, linked, not inlined.
+   option-by-option detail lives in the docs, linked, not inlined - CLOSED
+   (audited 2026-09-02, every prose paragraph at or under six lines).
 
 **README figure policy (decided 2026-08-31).** The README comparison shows
 force-balance accuracy only. Runtime panels stay out of the README until
