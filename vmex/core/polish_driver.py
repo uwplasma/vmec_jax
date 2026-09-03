@@ -24,11 +24,13 @@ from solvax import gmres
 
 from .errors import StrongForceCertificationError, StrongForceContinuationError
 from .printing import (
+    POLISH_AUTO_DECLINED,
     POLISH_SCREEN_HEADER,
     compile_notice,
     emit_flushed,
     force_error_rows,
     polish_certificate_summary,
+    polish_cost_decline,
     polish_progress_line,
     polish_screen_line,
 )
@@ -99,6 +101,46 @@ def _residual_evaluations(result: Any) -> int:
     return int(getattr(result, "residual_evaluations", nonlinear_steps + 1))
 
 
+#: Wall-clock ceiling ``POLISH = AUTO`` commits to before it declines.
+#:
+#: Chosen from the decks polishing is shipped on, not from a round number.
+#: The measured Gauss--Newton cost of the bundled cases, and of the two
+#: 3-D runs on the office box, is recorded in
+#: ``benchmarks/polish_cost_<host>.json``; the axisymmetric shaped tokamak
+#: that carries the README polish claim predicts well under an hour, and
+#: the W7-X standard configuration at ``MPOL = NTOR = 10`` predicts weeks at
+#: driver defaults.  One hour sits between them with room to spare on both
+#: sides, and is short enough that a user who wanted a quick answer gets one
+#: rather than an overnight run they did not ask for.  ``POLISH = ON`` never
+#: consults it, and ``POLISH_BUDGET`` raises it.
+_DEFAULT_AUTO_BUDGET_SECONDS = 3600.0
+
+#: Normal-equation products the timing lane applies.  Enough to amortize the
+#: single linearization it also pays -- so the per-product number is an upper
+#: bound, and the predicted wall time errs toward declining rather than
+#: toward an overnight surprise -- and few enough to stay a rounding error
+#: against the budget being tested.
+_POLISH_COST_PROBE_PRODUCTS = 4
+
+
+class PolishCostEstimate(NamedTuple):
+    """What one Gauss--Newton product costs, and what the budget implies.
+
+    ``products`` is the worst case the configured limits allow
+    (``max_nonlinear_iterations * linear_restart * linear_max_restarts``),
+    not a prediction that the solve will use them: Gauss--Newton stops early
+    when its stationarity tolerance is met.  ``predicted_seconds`` is
+    therefore an upper bound on the Gauss--Newton phase, which is the number
+    a user needs before committing a machine to it.
+    """
+
+    seconds_per_product: float
+    products: int
+    predicted_seconds: float
+    chart_size: int
+    residual_rows: int
+
+
 @dataclass(frozen=True)
 class PolishConfig:
     """Conservative controls for a fixed-boundary strong-root correction."""
@@ -128,6 +170,8 @@ class PolishConfig:
     max_arclength_steps: int = 16
     arclength_step: float = 1.0e-2
     fail_policy: Literal["raise", "return_unpolished"] = "raise"
+    auto_budget_seconds: float = _DEFAULT_AUTO_BUDGET_SECONDS
+    linear_preconditioner: Literal["none", "low-order"] = "none"
 
     def __post_init__(self) -> None:
         finite = (
@@ -188,6 +232,11 @@ class PolishConfig:
             raise ValueError("pseudo-arclength controls are invalid")
         if self.fail_policy not in ("raise", "return_unpolished"):
             raise ValueError("fail_policy must be 'raise' or 'return_unpolished'")
+        if not self.auto_budget_seconds > 0.0:
+            raise ValueError("auto_budget_seconds must be positive")
+        if self.linear_preconditioner not in ("none", "low-order"):
+            raise ValueError(
+                "linear_preconditioner must be 'none' or 'low-order'")
 
     @property
     def certificate_tolerance(self) -> float:
@@ -277,6 +326,9 @@ def _normalization_fields(
         ),
         "normalization_window": (float(window.s_min), float(window.s_max)),
     }
+    seconds_per_linear_product: float | None = None
+    predicted_solve_seconds: float | None = None
+    auto_budget_seconds: float | None = None
 
 
 class PolishContext(NamedTuple):
@@ -1200,9 +1252,39 @@ def _polish_progress(reporter: Any) -> Iterator[Any]:
         _ACTIVE_POLISH_PROGRESS = previous
 
 
-@functools.partial(jax.jit, static_argnames=("config", "progress"))
+def _low_order_normal_preconditioner(runtime, chart, variable_scale):
+    """Approximate ``(J^T J)^{-1}`` from the low-order block factors.
+
+    ``build_low_order_preconditioner`` factors the legacy raw-force blocks at
+    every polish call, and :func:`make_strong_root_runtime` already applies
+    them once, to set the equation and coordinate scales.  The inner CG that
+    solves ``(J^T J + mu I) p = -J^T r`` never sees them, so the factors are
+    paid for and then left on the table while CG runs on the diagonal
+    equilibration alone.
+
+    ``B`` is the low-order inverse expressed in the Gauss--Newton variables;
+    ``B B^T`` is then symmetric positive definite by construction, which is
+    what CG requires, and is the natural normal-equation companion of a
+    right preconditioner for the square root.  The low-order operator
+    carries the dominant radial physics and none of the high-order angular
+    coupling, so this is an approximation whose value is an empirical
+    question -- which is why it is opt-in and measured rather than assumed.
+    """
+
+    def forward(rhs):
+        return _solve_low_inverse(rhs, runtime, chart) / variable_scale
+
+    def apply(_x, rhs, _damping):
+        adjoint = jax.linear_transpose(forward, rhs)
+        return forward(adjoint(rhs)[0])
+
+    return apply
+
+
+@functools.partial(jax.jit, static_argnames=("config", "progress", "precondition"))
 def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
-                              collocation_scale, config, progress=False):
+                              collocation_scale, config, progress=False,
+                              precondition=False):
     from solvax import gauss_newton_least_squares
 
     def residual(vector):
@@ -1216,7 +1298,80 @@ def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
                 _polish_progress_cost, 0.5 * jnp.vdot(residuals, residuals))
         return residuals
 
-    return gauss_newton_least_squares(residual, value, config=config)
+    precond = (
+        _low_order_normal_preconditioner(runtime, chart, variable_scale)
+        if precondition
+        else None
+    )
+    return gauss_newton_least_squares(
+        residual, value, config=config, precond=precond)
+
+
+@functools.partial(jax.jit, static_argnames=("products",))
+def _normal_product_lane(vector, runtime, chart, variable_scale,
+                         collocation_scale, products):
+    """Apply the Gauss--Newton normal operator ``products`` times.
+
+    This is the loop body SOLVAX's inner PCG runs, and nothing else: one
+    linearization of the scaled collocation residual, then repeated
+    ``J^T J`` products against it.  Timing it is how the driver learns what
+    a Gauss--Newton iteration costs on *this* problem and this machine
+    rather than guessing from a size heuristic.  Renormalizing between
+    products keeps the probe direction bounded over the repeats without
+    changing what is being measured.
+    """
+
+    def residual(value):
+        return strong_collocation_residual(
+            variable_scale * value, runtime, chart) / collocation_scale
+
+    _, jvp = jax.linearize(residual, vector)
+    transpose = jax.linear_transpose(jvp, vector)
+    result = vector
+    for _ in range(int(products)):
+        result = transpose(jvp(result))[0]
+        result = result / jnp.maximum(jnp.linalg.norm(result), 1.0e-300)
+    return result
+
+
+def _measure_polish_cost(
+    zero: Any,
+    runtime: StrongRootRuntime,
+    chart: Any,
+    variable_scale: Any,
+    collocation_scale: Any,
+    config: PolishConfig,
+) -> PolishCostEstimate:
+    """Time the Gauss--Newton inner product and extrapolate to the budget.
+
+    The lane is called twice and only the second call is timed: the first
+    pays compilation, which is a one-off the Gauss--Newton phase does not
+    repeat and must not be charged to every one of its products.
+    """
+
+    probe = jnp.ones_like(zero)
+    arguments = (probe, runtime, chart, variable_scale, collocation_scale)
+    jax.block_until_ready(
+        _normal_product_lane(*arguments, products=_POLISH_COST_PROBE_PRODUCTS))
+    started = perf_counter()
+    jax.block_until_ready(
+        _normal_product_lane(*arguments, products=_POLISH_COST_PROBE_PRODUCTS))
+    elapsed = perf_counter() - started
+    seconds_per_product = elapsed / float(_POLISH_COST_PROBE_PRODUCTS)
+    products = (
+        int(config.max_nonlinear_iterations)
+        * max(int(config.linear_restart) * int(config.linear_max_restarts), 1)
+    )
+    return PolishCostEstimate(
+        seconds_per_product=seconds_per_product,
+        products=products,
+        predicted_seconds=seconds_per_product * float(products),
+        chart_size=int(chart.size),
+        residual_rows=int(np.asarray(runtime.radial_nodes).size)
+        * int(np.asarray(runtime.theta).size)
+        * int(np.asarray(runtime.zeta).size)
+        * 2,
+    )
 
 
 @jax.jit
@@ -1337,6 +1492,7 @@ def polish_collocation_least_squares(
     config: PolishConfig | None = None,
     chart: StrongPhysicalChart | None = None,
     initial_certificate: StrongForceReport | None = None,
+    auto: bool = False,
     verbose: bool = False,
     emit: Any = emit_flushed,
 ) -> PolishResult:
@@ -1350,6 +1506,13 @@ def polish_collocation_least_squares(
     ``verbose=True`` prints the CLI progress lines (compile notice,
     Gauss--Newton rows, certificate summary) through ``emit``; the default
     keeps the Python API silent, and printing never changes the numerics.
+
+    ``auto=True`` is ``POLISH = AUTO``: before committing to the
+    Gauss--Newton phase the driver times one inner product on this problem
+    and this machine and declines if the configured iteration limits could
+    run past ``config.auto_budget_seconds``.  ``auto=False`` never measures
+    and never declines, so an explicit polish request costs exactly what it
+    did before.
     """
 
     from solvax import LeastSquaresConfig
@@ -1406,6 +1569,58 @@ def polish_collocation_least_squares(
         ),
     )
     started = perf_counter()
+    estimate = None
+    if auto:
+        if verbose:
+            emit(" timing one Gauss-Newton product to price the solve...")
+        estimate = _measure_polish_cost(
+            zero, runtime, chart, variable_scale_array,
+            collocation_scale_array, config)
+        if estimate.predicted_seconds > float(config.auto_budget_seconds):
+            report = PolishReport(
+                converged=False,
+                termination_reason=POLISH_AUTO_DECLINED,
+                final_alpha=1.0,
+                initial_normalized_l2=float(initial_certificate.normalized_l2),
+                final_normalized_l2=float(initial_certificate.normalized_l2),
+                continuation_accepted=0,
+                continuation_rejected=0,
+                nonlinear_iterations=0,
+                linear_iterations=0,
+                residual_evaluations=0,
+                arclength_steps=0,
+                minimum_signed_jacobian=float(
+                    initial_certificate.minimum_signed_jacobian),
+                factor_build_seconds=(
+                    runtime.low_preconditioner.factor_build_seconds),
+                solve_seconds=perf_counter() - started,
+                radial_refinement_tolerance=config.radial_refinement_tolerance,
+                variable_scale_min=float(np.min(variable_scale)),
+                variable_scale_max=float(np.max(variable_scale)),
+                variable_scale_probes=config.collocation_scale_probes,
+                seconds_per_linear_product=estimate.seconds_per_product,
+                predicted_solve_seconds=estimate.predicted_seconds,
+                auto_budget_seconds=float(config.auto_budget_seconds),
+            )
+            if verbose:
+                emit(polish_cost_decline(
+                    seconds_per_product=estimate.seconds_per_product,
+                    products=estimate.products,
+                    predicted_seconds=estimate.predicted_seconds,
+                    budget_seconds=float(config.auto_budget_seconds),
+                    chart_size=estimate.chart_size,
+                    residual_rows=estimate.residual_rows,
+                ), end="")
+            # A declined AUTO is a decision, not a certification failure:
+            # it never raises, whatever fail_policy says, because nothing
+            # was attempted and nothing failed.
+            return PolishResult(
+                runtime.native,
+                initial_certificate,
+                report,
+                jnp.zeros_like(chart.lift(zero)),
+            )
+
     reporter = (
         _PolishProgress(
             emit,
@@ -1419,7 +1634,8 @@ def polish_collocation_least_squares(
         solution = _gauss_newton_polish_lane(
             zero, runtime, chart, variable_scale_array,
             collocation_scale_array, least_squares_config,
-            progress=reporter is not None)
+            progress=reporter is not None,
+            precondition=config.linear_preconditioner == "low-order")
         jax.block_until_ready(solution)
     if verbose:
         _emit_gauss_newton_rows(solution, emit)
@@ -1467,6 +1683,15 @@ def polish_collocation_least_squares(
         variable_scale_max=float(np.max(variable_scale)),
         variable_scale_probes=config.collocation_scale_probes,
         **_normalization_fields(initial_certificate, certificate),
+        # Present whenever AUTO priced the solve, so a run that was allowed
+        # through records the prediction it was allowed on, not only the
+        # runs that were turned away.
+        seconds_per_linear_product=(
+            None if estimate is None else estimate.seconds_per_product),
+        predicted_solve_seconds=(
+            None if estimate is None else estimate.predicted_seconds),
+        auto_budget_seconds=(
+            None if estimate is None else float(config.auto_budget_seconds)),
     )
     if verbose:
         emit(polish_certificate_summary(
@@ -1507,6 +1732,7 @@ def polish_legacy_solution(
     *,
     config: PolishConfig | None = None,
     lconm1: bool = True,
+    auto: bool = False,
     verbose: bool = False,
     emit: Any = emit_flushed,
 ) -> PolishResult:
@@ -1515,6 +1741,8 @@ def polish_legacy_solution(
     ``verbose=True`` routes the CLI progress lines through ``emit`` (the
     solver prints the phase banner before calling here); the default keeps
     the Python API silent and printing never changes the numerics.
+    ``auto=True`` additionally lets the driver decline a solve whose
+    measured cost would exceed ``config.auto_budget_seconds``.
     """
 
     started = perf_counter()
@@ -1643,6 +1871,7 @@ def polish_legacy_solution(
         runtime,
         config=config,
         initial_certificate=initial_certificate,
+        auto=auto,
         verbose=verbose,
         emit=emit,
     )

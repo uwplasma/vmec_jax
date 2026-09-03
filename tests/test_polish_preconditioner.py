@@ -2025,3 +2025,157 @@ def test_polished_wout_export_certifies_near_the_native_state(tmp_path):
     # consumers: the stable default reconstruction of the file must
     # re-certify within 10% of the native continuous certificate.
     assert exported_l2 <= 1.1 * native_l2
+
+
+def _small_polish_deck():
+    """Smallest converging Solov'ev case that still builds a real chart."""
+
+    inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
+        mpol=4, ntor=0, ntheta=16, nzeta=4)
+    return dataclasses.replace(
+        inp,
+        ns_array=np.asarray([9]),
+        ftol_array=np.asarray([1.0e-11]),
+        niter_array=np.asarray([2000]),
+    )
+
+
+_BOUNDED_POLISH = dict(
+    radial_degree=3,
+    validation_tolerance=1.0e-4,
+    max_nonlinear_iterations=3,
+    linear_restart=10,
+    linear_max_restarts=2,
+    fail_policy="return_unpolished",
+)
+
+
+def test_auto_declines_a_solve_it_priced_above_its_budget():
+    """AUTO must measure the cost and refuse to spend past its ceiling.
+
+    The reported W7-X standard run spent 10 h 35 m in Gauss--Newton before
+    saying anything about whether that was worth doing.  AUTO now times one
+    inner product first, and an unaffordable prediction returns the
+    equilibrium untouched -- as a decision, not a certification failure, so
+    it never raises and never warns whatever the fail policy says.
+    """
+
+    lines: list[str] = []
+    result = solver.solve(
+        _small_polish_deck(),
+        ftol=1.0e-11,
+        max_iterations=2000,
+        polish="auto",
+        polish_config=PolishConfig(
+            auto_budget_seconds=1.0e-9,
+            fail_policy="raise",
+            **{k: v for k, v in _BOUNDED_POLISH.items() if k != "fail_policy"},
+        ),
+        verbose=True,
+        emit=lambda text, end="\n": lines.append(text),
+    )
+    report = result.polish_report
+    assert report.termination_reason == "auto-declined-cost"
+    assert report.converged is False
+    assert report.nonlinear_iterations == 0
+    assert report.linear_iterations == 0
+    assert report.seconds_per_linear_product > 0.0
+    assert report.predicted_solve_seconds > report.auto_budget_seconds
+    # The unpolished equilibrium comes back intact and uncertified.
+    assert result.native_equilibrium is not None
+    assert float(report.final_normalized_l2) == float(report.initial_normalized_l2)
+
+    console = "".join(lines)
+    assert "DECLINED ON PREDICTED COST" in console
+    # Every escape hatch is named where the decision is announced.
+    for knob in ("POLISH_BUDGET", "POLISH_MAX_ITER", "POLISH = .TRUE."):
+        assert knob in console
+
+
+def test_explicit_polish_never_prices_and_never_declines():
+    """``POLISH = ON`` is a request, not a proposal.
+
+    An explicit polish must not pay for the timing probe or consult the
+    budget, so an unreachable budget cannot turn it into a no-op.
+    """
+
+    lines: list[str] = []
+    result = solver.solve(
+        _small_polish_deck(),
+        ftol=1.0e-11,
+        max_iterations=2000,
+        polish=True,
+        polish_config=PolishConfig(auto_budget_seconds=1.0e-9, **_BOUNDED_POLISH),
+        verbose=True,
+        emit=lambda text, end="\n": lines.append(text),
+    )
+    console = "".join(lines)
+    assert "DECLINED" not in console
+    assert "timing one Gauss-Newton product" not in console
+    assert result.polish_report.termination_reason != "auto-declined-cost"
+    assert result.polish_report.seconds_per_linear_product is None
+    assert result.polish_report.nonlinear_iterations >= 1
+
+
+def test_auto_within_budget_records_the_price_it_was_allowed_on():
+    """A permitted AUTO still reports the prediction that permitted it."""
+
+    result = solver.solve(
+        _small_polish_deck(),
+        ftol=1.0e-11,
+        max_iterations=2000,
+        polish="auto",
+        polish_config=PolishConfig(
+            auto_budget_seconds=1.0e9, **_BOUNDED_POLISH),
+    )
+    report = result.polish_report
+    assert report.termination_reason != "auto-declined-cost"
+    assert report.seconds_per_linear_product > 0.0
+    assert report.predicted_solve_seconds > 0.0
+    assert report.auto_budget_seconds == 1.0e9
+
+
+def test_gauss_newton_progress_prints_live_and_changes_nothing():
+    """The heartbeat must reach the console mid-solve and cost no accuracy.
+
+    The rows read out of the SOLVAX history only appear once the jitted
+    while_loop returns.  The heartbeat is emitted from device callbacks
+    inside it, which run on the host outside the traced arithmetic, so the
+    solve must be bit-identical with and without it.
+    """
+
+    from vmex.core import polish_driver
+
+    inp = _small_polish_deck()
+    config = PolishConfig(**_BOUNDED_POLISH)
+    quiet = solver.solve(inp, ftol=1.0e-11, max_iterations=2000,
+                         polish=True, polish_config=config)
+    lines: list[str] = []
+    previous = polish_driver._POLISH_PROGRESS_INTERVAL_SECONDS
+    polish_driver._POLISH_PROGRESS_INTERVAL_SECONDS = 0.0
+    try:
+        loud = solver.solve(inp, ftol=1.0e-11, max_iterations=2000,
+                            polish=True, polish_config=config, verbose=True,
+                            emit=lambda text, end="\n": lines.append(text))
+    finally:
+        polish_driver._POLISH_PROGRESS_INTERVAL_SECONDS = previous
+
+    heartbeats = [
+        line for line in "".join(lines).splitlines()
+        if line.lstrip().startswith("polish 0")
+    ]
+    assert heartbeats, "no live line reached the console during the solve"
+    assert "linear products" in heartbeats[0]
+    assert float(quiet.polish_report.least_squares_cost) == float(
+        loud.polish_report.least_squares_cost)
+    np.testing.assert_array_equal(
+        np.asarray(quiet.native_equilibrium.R_cos),
+        np.asarray(loud.native_equilibrium.R_cos),
+    )
+
+
+def test_polish_config_rejects_an_unusable_budget_or_preconditioner():
+    with pytest.raises(ValueError, match="auto_budget_seconds must be positive"):
+        PolishConfig(auto_budget_seconds=0.0)
+    with pytest.raises(ValueError, match="linear_preconditioner"):
+        PolishConfig(linear_preconditioner="magic")

@@ -42,11 +42,13 @@ def test_all_directives_parse_together_with_inline_comments():
         "!@VMEX POLISH_DEGREE = 5\n"
         "!@VMEX POLISH_MAX_ITER = 40\n"
         "!@VMEX POLISH_SPANS = 16\n"
+        "!@VMEX POLISH_BUDGET = 7200\n"
         "&INDATA\nMPOL = 3\n/\n"
     )
     assert options == RunOptions(
         polish="auto", polish_tol=2.5e-4, polish_fail="fallback",
-        polish_degree=5, polish_max_iter=40, polish_spans=16)
+        polish_degree=5, polish_max_iter=40, polish_spans=16,
+        polish_budget=7200.0)
 
 
 def test_no_directives_means_package_defaults():
@@ -84,6 +86,8 @@ def test_consistent_repetition_is_allowed_and_conflict_is_an_error():
         ("!@VMEX POLISH_MAX_ITER = soon", "integer"),
         ("!@VMEX POLISH_SPANS = -2", "positive"),
         ("!@VMEX POLISH_SPANS = few", "integer"),
+        ("!@VMEX POLISH_BUDGET = soon", "real number"),
+        ("!@VMEX POLISH_BUDGET = 0", "positive"),
         ("!@VMEX POLISH_MODE = auto", "unknown VMEX directive"),
     ],
 )

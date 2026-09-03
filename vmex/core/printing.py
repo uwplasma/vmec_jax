@@ -350,6 +350,50 @@ def force_error_rows(
             f"[{float(window[0]):.2f}, {float(window[1]):.2f}])"
         )
     return tuple(rows)
+#: ``termination_reason`` of a polish AUTO declined on predicted cost.  The
+#: caller-visible marker for "measured, not attempted, not failed".
+POLISH_AUTO_DECLINED = "auto-declined-cost"
+
+
+def polish_cost_decline(
+    *,
+    seconds_per_product: float,
+    products: int,
+    predicted_seconds: float,
+    budget_seconds: float,
+    chart_size: int,
+    residual_rows: int,
+) -> str:
+    """Explain an AUTO decline in the numbers that produced it.
+
+    An automatic mode that silently spends eleven hours is worse than one
+    that does nothing, so the decline states what was measured on this
+    machine, what it implies, and every knob that changes the outcome --
+    including the one that simply overrules it.
+    """
+
+    def clock(seconds: float) -> str:
+        if seconds < 90.0:
+            return f"{seconds:.3G} s"
+        if seconds < 5400.0:
+            return f"{seconds / 60.0:.0f} min"
+        if seconds < 172800.0:
+            return f"{seconds / 3600.0:.1f} h"
+        return f"{seconds / 86400.0:.1f} days"
+
+    return (
+        "\n POLISH AUTO: DECLINED ON PREDICTED COST\n"
+        f"  collocation {int(residual_rows)} rows, {int(chart_size)} unknowns;"
+        f" one Gauss-Newton linear product measured at"
+        f" {float(seconds_per_product):.3G} s\n"
+        f"  the configured iteration limits allow {int(products)} products,"
+        f" so the solve could run {clock(float(predicted_seconds))}"
+        f" against an AUTO budget of {clock(float(budget_seconds))}\n"
+        "  the equilibrium is returned unpolished, unchanged and uncertified\n"
+        "  raise the ceiling with !@VMEX POLISH_BUDGET = <seconds>, shorten"
+        " the solve with !@VMEX POLISH_MAX_ITER = <n>,\n"
+        "  or run it regardless with !@VMEX POLISH = .TRUE.\n"
+    )
 
 
 def polish_certificate_summary(
