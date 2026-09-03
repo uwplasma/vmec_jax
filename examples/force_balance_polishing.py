@@ -39,11 +39,22 @@ if not report.converged:
         f"the polish did not certify: {report.termination_reason}"
     )
 # The same independent force oracle evaluated the legacy state and the
-# certified polished state; these are the certificate numbers.
+# certified polished state; these are the certificate numbers.  eps_F is the
+# acceptance threshold and is bounded above by 2 by construction, so the
+# quantities that can actually move are printed with it: the dimensional
+# volume-averaged force error and the vacuum-safe normalization.
+window = report.normalization_window
 print(
-    "\nindependent strong-force certificate: "
-    f"{report.initial_normalized_l2:.3e} -> "
-    f"{report.final_normalized_l2:.3e}"
+    "\nindependent strong-force certificate over "
+    f"s in [{window[0]:.2f}, {window[1]:.2f}]:"
+    f"\n  eps_F volume L2 (<= 2 by construction) "
+    f"{report.initial_normalized_l2:.3e} -> {report.final_normalized_l2:.3e}"
+    f"\n  <|F|> [N m^-3]                        "
+    f"{report.initial_volume_average_force:.3e} -> "
+    f"{report.final_volume_average_force:.3e}"
+    f"\n  <|F|>/<|grad(B^2/2mu0)|>              "
+    f"{report.initial_magnetic_relative_force_error:.3e} -> "
+    f"{report.final_magnetic_relative_force_error:.3e}"
 )
 print(
     f"polish work: {report.nonlinear_iterations} nonlinear iterations, "

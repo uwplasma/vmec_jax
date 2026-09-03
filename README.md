@@ -325,6 +325,10 @@ $$
 \epsilon_F = \frac{2 |\mathbf F|}{|\mathbf J \times \mathbf B| + |\nabla p| + F_{\mathrm{floor}}} .
 $$
 
+`eps_F` is the acceptance threshold, and it is **bounded above by 2 by construction**: since `|F| <= |JxB| + |grad p|` pointwise, no state can exceed 2 however badly it violates force balance. It reaches 2 wherever the denominator collapses, and in vacuum, where `grad p` is identically zero, it sits at 2 to machine precision wherever any current remains. A value near 2 reports a collapsed denominator, not a 200% force error, and two saturated states cannot be ranked against one another at all. This is not hypothetical on a shipped deck: on the bundled `input.solovev`, whose pressure peaks at 0.125 Pa, the certificate reports `eps_F` volume L2 `1.969` and Linf `2.000` - the ceiling - because `<|grad p|>` is `1.35e-1` Pa m<sup>-1</sup> against a magnetic pressure gradient of `8.03e3` Pa m<sup>-1</sup>. The same state's vacuum-safe normalized force error is `1.22e-2`, and its dimensional `<|F|>` is `4.00e1` N m<sup>-3</sup>: an ordinary, small residual that the pointwise metric had no way to express ([record](benchmarks/polish_force_error_solovev_2026-09-03.json)).
+
+Every certificate therefore also reports quantities that cannot saturate, over `s` in `[0.1, 0.99]` as well as over the whole domain: the volume-averaged relative force error `<|F|>/<|grad p|>` of Panici et al. (2023) (reported as `n/a` in vacuum, where it is undefined), the vacuum-safe `|F| / <|grad(B^2/2mu0)|>` that DESC's `ForceBalance` objective uses, the dimensional `<|F|>` in N m<sup>-3</sup>, and the near-axis/bulk/edge split of the residual. The CLI prints all of them beside `eps_F`, `PolishReport` carries them, and the benchmark artifacts record them. Quote one of those, never `eps_F` alone, when reporting a gain; the [certificate page](https://vmex.readthedocs.io/en/latest/explanation/high-order-force-balance.html) derives the bound.
+
 The optional step lifts a converged fixed-boundary state to axis-regular cubic
 B-splines, holds the boundary and profiles fixed, and reduces both physical
 force channels on an overdetermined collocation grid with matrix-free SOLVAX
@@ -393,18 +397,52 @@ python examples/force_balance_polishing.py
 The comparison below applies the same independent force oracle to the
 exported equilibrium of each code - VMEX, VMEC2000, VMEC++, and DESC - on the
 bundled finite-pressure shaped tokamak; VMEX is the certified polished
-result. Stellarator rows join as certified 3-D polishing becomes tractable
-(the compile-side work is in progress); the figure shows only cases where
-polishing demonstrably wins.
+result. The two cases in it were selected because certified polishing
+improves them. It is therefore evidence that polishing can reduce the
+continuum residual on those cases and by how much, and it is not evidence of
+a general advantage: it says nothing about how often polishing helps, or
+about cases where it does not. Stellarator rows join as certified 3-D
+polishing becomes tractable (the compile-side work is in progress).
 
 ![Finite-pressure tokamak and finite-beta stellarator force-balance comparisons](docs/_static/figures/readme_strong_force_comparison.webp)
 
 Below: the bundled shaped tokamak (`input.shaped_tokamak_pressure_polished`)
-before and after polishing. The independent continuum force residual of the
-exported equilibrium drops about 26-fold, from `5.05e-2` to `1.91e-3`, with the
-boundary and prescribed profiles untouched. The radial force-balance panel in
-`vmex --plot` summaries is VMEC's own discrete flux-surface average, which
-ordinary solves already minimize, so that panel does not show this gain.
+before and after polishing, with the boundary and prescribed profiles
+untouched. The like-for-like measurement is the one taken on the lifted
+native state - the same spline basis, the same certificate nodes, before and
+after the correction - and it is recorded, with the deck hash, the commit and
+the exact command, in
+[`benchmarks/polish_force_error_2026-09-03.json`](benchmarks/polish_force_error_2026-09-03.json):
+
+| quantity | before | after | ratio |
+|---|---|---|---|
+| `eps_F` volume L2 (bounded by 2) | `1.284e-2` | `1.803e-3` | 7.1x |
+| dimensional \|F\| volume L2, N m<sup>-3</sup> | `3.330e2` | `2.068e2` | 1.61x |
+| `<\|F\|>/<\|grad p\|>`, whole domain | `2.090e-3` | `1.586e-3` | 1.32x |
+| `<\|F\|>/<\|grad(B^2/2mu0)\|>`, whole domain | `2.374e-3` | `1.801e-3` | 1.32x |
+| `<\|F\|>/<\|grad p\|>`, `s` in `[0.1, 0.99]` | `1.658e-3` | `1.561e-3` | 1.06x |
+| \|F\| L2 near axis (`rho < 0.2`), N m<sup>-3</sup> | `9.773e2` | `6.718e1` | 14.5x |
+| \|F\| L2 bulk (`0.2 <= rho <= 0.8`) | `1.630e2` | `1.470e2` | 1.11x |
+| \|F\| L2 edge (`rho > 0.8`), N m<sup>-3</sup> | `4.089e2` | `2.844e2` | 1.44x |
+
+Read the last three rows first: the correction is concentrated near the
+magnetic axis, where it removes a factor of 14.5, and over the bulk of the
+plasma it is worth about 10%. The 7.1x in `eps_F` is largely that near-axis
+gain, because the pointwise denominator is smallest there and the metric is
+most sensitive to it; measured as a volume-averaged relative force error over
+the whole domain the improvement is 1.32x, and over `s` in `[0.1, 0.99]` it
+is 1.06x. Quote the row that answers the question being asked.
+
+Earlier versions of this section claimed "about 26-fold, from `5.05e-2` to
+`1.91e-3`". That number is not the polish gain: its two ends are the
+*exported* wouts of the figure below, written on different radial meshes -
+the unpolished export on the `ns = 31` solve mesh, the certified polished
+export on the `ns = 129` mesh that a certifiable reconstruction requires - so
+it multiplied the polish gain by an export-mesh reconstruction difference.
+
+The radial force-balance panel in `vmex --plot` summaries is VMEC's own
+discrete flux-surface average, which ordinary solves already minimize, so
+that panel does not show this gain.
 
 ![Shaped-tokamak flux surfaces and independent force-error profiles before and after polishing](docs/_static/figures/readme_polish_summary.webp)
 
