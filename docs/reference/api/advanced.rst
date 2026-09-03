@@ -6,6 +6,11 @@ the open-field-line lane :mod:`vmex.mirror`, grouped as in
 :doc:`/explanation/architecture`. Every docstring names the VMEC2000
 counterpart it ports.
 
+The package docstring of :mod:`vmex.core` is the module map this page follows:
+
+.. automodule:: vmex.core
+   :no-members:
+
 Profiles
 --------
 
@@ -209,9 +214,11 @@ Free boundary
 .. automodule:: vmex.core.virtual_casing
    :members:
 
-``vmex.core.freeboundary_diff`` remains as a compatibility name for this
-prescribed-interface API. It does not differentiate through a moving-boundary
-NESTOR equilibrium solve.
+.. automodule:: vmex.core.freeboundary_diff
+   :no-members:
+
+It re-exports the names above unchanged; it does not differentiate through a
+moving-boundary NESTOR equilibrium solve.
 
 .. automodule:: vmex.core.mgrid
    :members:
@@ -285,6 +292,9 @@ downstream kinetic codes.
 
 Straight-axis mirrors
 ---------------------
+
+.. automodule:: vmex.mirror
+   :no-members:
 
 Collocation bases, geometry, and force kernels first; then the spline
 discretization and the solves built on them; then the exterior vacuum used by
