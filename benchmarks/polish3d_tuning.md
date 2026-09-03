@@ -164,13 +164,43 @@ equilibration alone. Every W7-X Gauss-Newton step exhausted its linear
 ceiling, which is what an unpreconditioned CG on 10573 coordinates does.
 
 Wiring those factors in as a normal-equation preconditioner is the obvious
-next lever and was attempted on this branch. CG needs a symmetric positive
-definite preconditioner, so the natural construction is `B B^T` with `B` the
-low-order inverse expressed in the Gauss-Newton variables - which needs the
-adjoint of `B`. That adjoint exists on axisymmetric decks and **fails on 3-D
-decks**: `jax.linear_transpose` through the high/low transfer raises
-`NotImplementedError: scatter transpose is only implemented where
-unique_indices=True`. So the lever cannot be pulled at the resolution that
-needs it without first making the transfer's scatter transposable. The
-option is present as `PolishConfig.linear_preconditioner` and defaults to
-`"none"`; it is not a shipped path.
+next lever, so it was built and measured on this branch. CG needs a
+symmetric positive definite preconditioner, so the construction is `B B^T`
+with `B = D^-1 M`: `M` the low-order inverse in chart coordinates
+(`_solve_low_inverse`) and `D` the Ruiz column equilibration that defines
+the Gauss-Newton variables. `B B^T` is then SPD by construction and is the
+normal-equation companion of `M` as a right preconditioner for the square
+root.
+
+**It does not work, twice over.**
+
+1. On 3-D decks it cannot even be applied. `B^T` needs
+   `jax.linear_transpose` through the high/low transfer, which raises
+   `NotImplementedError: scatter transpose is only implemented where
+   unique_indices=True`. The adjoint succeeds on `ntor = 0` decks and fails
+   on `nfp2_QA_smooth_beta`, so the lever is unavailable at exactly the
+   resolutions that need it until the transfer's scatter is made
+   transposable.
+
+2. Where it can be applied it makes the solve worse. On
+   `input.shaped_tokamak_pressure_polished` (`MPOL 5`, `ns 31`, 6
+   Gauss-Newton steps, 150 linear each), same build, same deck, one arm
+   each:
+
+   | inner preconditioner | linear iterations | final cost | gradient | independent absolute L2 |
+   |---|---|---|---|---|
+   | none (shipped) | 887 | 345.8 | 0.313 | 211.7 |
+   | low-order `B B^T` | 900 (ceiling every step) | 489.2 | 12.26 | 332.5 |
+
+   The low-order operator carries the legacy radial physics and none of the
+   high-order angular coupling, and as an approximate inverse of a
+   *different* operator it steers CG away from the normal equations it is
+   supposed to accelerate.
+
+So "the factors are already paid for, just pass them to CG" is measured and
+rejected. The inner solve is still the dominant cost and still the right
+place to attack; a preconditioner built for the collocation normal
+equations, rather than borrowed from the square root, is the open work. The
+knob is therefore not shipped: an option whose only measured effect is a
+worse answer, and which raises on 3-D decks, is a latent bug rather than a
+research affordance.

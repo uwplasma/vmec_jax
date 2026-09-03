@@ -2174,8 +2174,6 @@ def test_gauss_newton_progress_prints_live_and_changes_nothing():
     )
 
 
-def test_polish_config_rejects_an_unusable_budget_or_preconditioner():
+def test_polish_config_rejects_an_unusable_budget():
     with pytest.raises(ValueError, match="auto_budget_seconds must be positive"):
         PolishConfig(auto_budget_seconds=0.0)
-    with pytest.raises(ValueError, match="linear_preconditioner"):
-        PolishConfig(linear_preconditioner="magic")

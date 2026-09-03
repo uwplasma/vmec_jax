@@ -38,7 +38,9 @@ High-order correction transfer and preconditioner
 
 Both :func:`vmex.solve` and :func:`vmex.solve_multigrid` accept
 ``polish_force_balance=False`` (unchanged behavior), ``True`` (required
-correction), or ``"auto"`` (skip an already-certified state). The shorter
+correction), or ``"auto"`` (skip an already-certified state, and decline a
+solve priced above ``auto_budget_seconds`` -- see
+:ref:`polish-scope` below). The shorter
 ``polish`` keyword remains an alias on the single-grid call. A standard VMEC
 solve never polishes unless the caller explicitly requests it. A standard
 VMEC deck enables the same path with comment directives that VMEC2000 ignores::
@@ -49,6 +51,7 @@ VMEC deck enables the same path with comment directives that VMEC2000 ignores::
    !@VMEX POLISH_DEGREE = 5
    !@VMEX POLISH_MAX_ITER = 40
    !@VMEX POLISH_SPANS = 16
+   !@VMEX POLISH_BUDGET = 3600
 
 (the original single-flag spelling ``! VMEX: POLISH_FORCE_BALANCE = .TRUE.``
 still parses).  Directives are execution metadata, owned by

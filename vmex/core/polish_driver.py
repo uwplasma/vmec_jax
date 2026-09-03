@@ -171,7 +171,6 @@ class PolishConfig:
     arclength_step: float = 1.0e-2
     fail_policy: Literal["raise", "return_unpolished"] = "raise"
     auto_budget_seconds: float = _DEFAULT_AUTO_BUDGET_SECONDS
-    linear_preconditioner: Literal["none", "low-order"] = "none"
 
     def __post_init__(self) -> None:
         finite = (
@@ -234,9 +233,6 @@ class PolishConfig:
             raise ValueError("fail_policy must be 'raise' or 'return_unpolished'")
         if not self.auto_budget_seconds > 0.0:
             raise ValueError("auto_budget_seconds must be positive")
-        if self.linear_preconditioner not in ("none", "low-order"):
-            raise ValueError(
-                "linear_preconditioner must be 'none' or 'low-order'")
 
     @property
     def certificate_tolerance(self) -> float:
@@ -1252,39 +1248,9 @@ def _polish_progress(reporter: Any) -> Iterator[Any]:
         _ACTIVE_POLISH_PROGRESS = previous
 
 
-def _low_order_normal_preconditioner(runtime, chart, variable_scale):
-    """Approximate ``(J^T J)^{-1}`` from the low-order block factors.
-
-    ``build_low_order_preconditioner`` factors the legacy raw-force blocks at
-    every polish call, and :func:`make_strong_root_runtime` already applies
-    them once, to set the equation and coordinate scales.  The inner CG that
-    solves ``(J^T J + mu I) p = -J^T r`` never sees them, so the factors are
-    paid for and then left on the table while CG runs on the diagonal
-    equilibration alone.
-
-    ``B`` is the low-order inverse expressed in the Gauss--Newton variables;
-    ``B B^T`` is then symmetric positive definite by construction, which is
-    what CG requires, and is the natural normal-equation companion of a
-    right preconditioner for the square root.  The low-order operator
-    carries the dominant radial physics and none of the high-order angular
-    coupling, so this is an approximation whose value is an empirical
-    question -- which is why it is opt-in and measured rather than assumed.
-    """
-
-    def forward(rhs):
-        return _solve_low_inverse(rhs, runtime, chart) / variable_scale
-
-    def apply(_x, rhs, _damping):
-        adjoint = jax.linear_transpose(forward, rhs)
-        return forward(adjoint(rhs)[0])
-
-    return apply
-
-
-@functools.partial(jax.jit, static_argnames=("config", "progress", "precondition"))
+@functools.partial(jax.jit, static_argnames=("config", "progress"))
 def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
-                              collocation_scale, config, progress=False,
-                              precondition=False):
+                              collocation_scale, config, progress=False):
     from solvax import gauss_newton_least_squares
 
     def residual(vector):
@@ -1298,13 +1264,14 @@ def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
                 _polish_progress_cost, 0.5 * jnp.vdot(residuals, residuals))
         return residuals
 
-    precond = (
-        _low_order_normal_preconditioner(runtime, chart, variable_scale)
-        if precondition
-        else None
-    )
-    return gauss_newton_least_squares(
-        residual, value, config=config, precond=precond)
+    # SOLVAX also takes a `precond` for the inner CG.  Nothing is passed:
+    # the only preconditioner this module has is the low-order block
+    # inverse, and building its symmetric normal-equation companion from
+    # those factors was measured to make the solve worse, not faster --
+    # benchmarks/polish3d_tuning.md records the numbers.  The residual's
+    # variable_scale change of variables is the diagonal equilibration the
+    # CG does get.
+    return gauss_newton_least_squares(residual, value, config=config)
 
 
 @functools.partial(jax.jit, static_argnames=("products",))
@@ -1634,8 +1601,7 @@ def polish_collocation_least_squares(
         solution = _gauss_newton_polish_lane(
             zero, runtime, chart, variable_scale_array,
             collocation_scale_array, least_squares_config,
-            progress=reporter is not None,
-            precondition=config.linear_preconditioner == "low-order")
+            progress=reporter is not None)
         jax.block_until_ready(solution)
     if verbose:
         _emit_gauss_newton_rows(solution, emit)
