@@ -1294,11 +1294,16 @@ def _normal_product_lane(vector, runtime, chart, variable_scale,
 
     _, jvp = jax.linearize(residual, vector)
     transpose = jax.linear_transpose(jvp, vector)
-    result = vector
-    for _ in range(int(products)):
-        result = transpose(jvp(result))[0]
-        result = result / jnp.maximum(jnp.linalg.norm(result), 1.0e-300)
-    return result
+
+    def body(_index, result):
+        product = transpose(jvp(result))[0]
+        return product / jnp.maximum(jnp.linalg.norm(product), 1.0e-300)
+
+    # A rolled loop, not an unrolled one: at production resolution each
+    # product is a full linearized force sweep, and unrolling four of them
+    # would spend more time compiling the price tag than the price tag
+    # saves.
+    return jax.lax.fori_loop(0, int(products), body, vector)
 
 
 def _measure_polish_cost(
