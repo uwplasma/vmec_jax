@@ -3314,18 +3314,45 @@ this scale (normalized_l2 1.99999999997 before, normalized_linf 2.0 after
 Gauss-Newton" and "Gauss-Newton done" with no output, which is the user's
 original complaint about a silent, apparently hung polish.
 
+### 31.6c Persistent-cache cost, measured 2026-09-03 (corrects an earlier claim)
+
+The mechanism recorded for the 2026-08-31 CI timeout plague - cross-process
+eviction-lock serialization - is NOT supported by measurement and should not
+be repeated as fact. Measured on an Apple M4 (artifact
+`benchmarks/cache_entry_scaling_m4_2026-09-03.json`, PR #254): a cold QA
+solve spends 0.55 s in total inside the cache lock (289 gets at 0.18 ms
+median, 171 puts at 2.72 ms) on a fresh cache. Four-way concurrency cannot
+turn that into a thirty-minute lane.
+
+What IS measured, and is a real user-facing defect: `LRUCache.put` calls
+`_evict_if_needed` under the directory-wide lock, and that globs every
+entry, stats it and reads its atime sidecar, so a write costs 0.028 ms per
+resident entry - 5.7 ms at 250 entries, 304 ms at 10880. JAX bounds the
+cache by bytes, vmex entries are small, so the bound never fires and the
+count grows without limit (10880 entries in 238 MB on the author's
+machine). A cold QA solve took 7.46 s on a fresh cache and 31.3 s on the
+mature one, 25.6 s of it inside `put`. PR #254 trims to the 1024
+least-recently-used entries once per process: 11.5 s, and 3.1 s warm with
+289 of 289 lookups hitting.
+
+Whether that also explains CI is unproven: runners start with an empty
+cache, so the rescan is cheap early, though a long lane accumulates
+thousands of entries and the runner's disk is far slower than an M4's.
+Disabling the cache on runners (#228) coincided with the timeouts stopping;
+the mechanism was never established. Say that, rather than asserting the
+lock. For users running job arrays on a shared home the answer is now the
+entry bound plus `VMEX_COMPILATION_CACHE_DIR` per task; a measurement with
+N concurrent processes is still missing and needs an idle machine.
+
 ### 31.7 Remaining engineering items (carried from section 8.8 and the campaign)
 
 3-D polish effectiveness and memory at production resolution (the
 stellarator README row depends on it; W7-X numbers in 31.1); v0.8.2 after
 the polish memory PR; the section 9 matrix rerun with all five regimes;
 GPU validation of the 0.8.1 stack (office GPUs; host RAM shared with the
-polish run); persistent-cache eviction-lock behavior for concurrent
-processes on one cache directory (the CI symptom was serialization to
-timeout; users running job arrays on a shared home need a product answer:
-per-process shard, batched writes, or floor tuning); parity lane c3d at
-43-44 minutes of a 55-minute budget (repartition the implicit-campaign
-modules); tridiagonal method pinning per placement (bit-identical on CPU,
+polish run); parity lane c3d at
+43-44 minutes of a 55-minute budget (repartitioned by PR #252: the two
+polish-heavy modules move to lane e); tridiagonal method pinning per placement (bit-identical on CPU,
 needs a device-aware runtime field); booz_xform_jax 0.2.0 adoption.
 
 ### 31.8 Next-agent runbook
@@ -3372,7 +3399,8 @@ packaging metadata, API reference). Items 2 and 8 wait on the maintainer.
 P3 - performance and engineering, unblocked and parallel to P2: the 3-D
 polish memory fix and v0.8.2; the section 9 benchmark matrix rerun on 0.8.1+
 with all five regimes after #246; booz_xform_jax 0.2.0; GPU validation;
-c3d lane repartition; the cache eviction-lock product answer.
+c3d lane repartition (#252); the cache entry
+bound (#254).
 
 P4 - Phase 9/10 mirror and hybrid work is planning only until P0-P2 land.
 Section 16.3 (corrected above), 31.4-R3..R6 and the spec sheet are the
