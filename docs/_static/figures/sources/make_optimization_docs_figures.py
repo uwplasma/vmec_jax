@@ -74,7 +74,7 @@ def ess_figure() -> None:
                 textcoords="offset points", xytext=(-86, 6),
                 color=INK2, fontsize=8)
     fig.tight_layout()
-    fig.savefig(OUT / "ess_x_scale.webp")
+    fig.savefig(OUT / "ess_x_scale.webp", pil_kwargs={"lossless": True})
     plt.close(fig)
 
 
@@ -127,7 +127,7 @@ def stack_figure() -> None:
     fig.suptitle("The measured gradient stack (2026-07-12, CPU)",
                  fontsize=10, x=0.02, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.92))
-    fig.savefig(OUT / "gradient_stack_speedup.webp")
+    fig.savefig(OUT / "gradient_stack_speedup.webp", pil_kwargs={"lossless": True})
     plt.close(fig)
 
 

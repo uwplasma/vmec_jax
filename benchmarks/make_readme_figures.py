@@ -22,9 +22,10 @@ Usage:
         [--only runtime,convergence,precond,showcase]
         [--outdir docs/_static/figures]
 
-Figures are written uncompressed; convert to lossless WebP before committing,
-which is pixel-identical and roughly a third smaller:
-    cwebp -lossless <fig>.png -o <fig>.webp && rm <fig>.png
+Figures are written straight to lossless WebP, so re-running this script
+reproduces the committed bytes for any figure whose inputs have not changed.
+Their provenance rows are in ``docs/_static/figures/figures.json``; refresh
+them with ``python tools/update_figure_manifest.py`` after regenerating.
 """
 
 from __future__ import annotations
@@ -201,7 +202,7 @@ def make_runtime_figure(out: Path) -> None:
               loc="lower left", bbox_to_anchor=(-0.02, 1.005), ncols=2,
               fontsize=10, columnspacing=1.6, handletextpad=0.15,
               borderaxespad=0.0, labelspacing=0.45)
-    fig.savefig(out, dpi=160)
+    fig.savefig(out, dpi=160, pil_kwargs={"lossless": True})
     plt.close(fig)
     print("wrote", out)
 
@@ -319,7 +320,7 @@ def make_convergence_figure(out: Path) -> None:
     ax.legend(loc="upper right", fontsize=8.5, labelspacing=0.4,
               handlelength=1.8)
     fig.tight_layout()
-    fig.savefig(out, dpi=160)
+    fig.savefig(out, dpi=160, pil_kwargs={"lossless": True})
     plt.close(fig)
     print("wrote", out)
 
@@ -378,7 +379,7 @@ def make_precond_figure(out: Path) -> None:
     ax.legend(loc="lower left", bbox_to_anchor=(0.0, 1.01), ncols=2,
               fontsize=8.5, borderaxespad=0.0)
     fig.tight_layout()
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=150, pil_kwargs={"lossless": True})
     plt.close(fig)
     print("wrote", out)
 
@@ -481,7 +482,8 @@ def make_showcase_figure(out: Path) -> None:
     ax2.tick_params(labelsize=8)
     ax2.set_title("|B| in Boozer coordinates (LCFS)", loc="left", fontsize=10.5,
                   color=INK)
-    fig.savefig(out, dpi=150, bbox_inches="tight", pad_inches=0.06)
+    fig.savefig(out, dpi=150, bbox_inches="tight", pad_inches=0.06,
+                pil_kwargs={"lossless": True})
     plt.close(fig)
     print("wrote", out)
 

@@ -4,8 +4,10 @@ Before this guard, 2 of 19 figures under ``docs/_static/figures`` were hashed
 anywhere in the tree; the rest could be replaced, regenerated on a different
 machine, or quietly drift from the numbers they plot, and nothing would fail.
 ``docs/_static/figures/figures.json`` now carries one row per figure — path,
-sha256, byte count, generator, inputs, generation date, hardware, and which
-pages embed it — and these tests fail when a figure and its row disagree.
+sha256, byte count, generator, inputs, generation date, hardware, which pages
+embed it, what it takes to rebuild it, and whether the committed bytes were
+actually re-derived — and these tests fail when a figure and its row
+disagree.
 
 The manifest's mechanical fields are rewritten by
 ``python tools/update_figure_manifest.py``; the provenance fields are authored.
@@ -73,6 +75,12 @@ def test_provenance_fields_are_present_and_point_at_real_files(
             problems.append(f"{where}: generated={row['generated']!r} is not ISO")
         if row["reproducible"] not in REPRODUCIBLE:
             problems.append(f"{where}: reproducible={row['reproducible']!r}")
+        if not isinstance(row["bytes_verified"], bool):
+            problems.append(f"{where}: bytes_verified is not a boolean")
+        if row["bytes_verified"] and row["reproducible"] != "command":
+            problems.append(
+                f"{where}: bytes_verified without a reproducing command"
+            )
         if not row.get("note"):
             problems.append(f"{where}: empty note")
         if not row.get("command"):

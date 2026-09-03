@@ -1,36 +1,38 @@
 {
   "schema": "vmex.figure-provenance/1",
-  "note": "Provenance for every figure under docs/_static/figures. One row per committed image. `sha256`, `bytes` and `used_in` are recomputed by `python tools/update_figure_manifest.py`; everything else is authored. `tests/test_figure_provenance.py` fails when a figure changes without its row, when a row names a generator or input that does not exist, or when a figure is added or removed without updating this file. `reproducible` is deliberately honest: `command` means the listed command regenerates the committed file from the repository alone; `manual` means a script produces the pixels but a rename, crop, or format conversion is done by hand; `external-data` means it also needs data that is not in the tree.",
+  "note": "Provenance for every figure under docs/_static/figures. One row per committed image. `sha256`, `bytes` and `used_in` are recomputed by `python tools/update_figure_manifest.py`; everything else is authored. `tests/test_figure_provenance.py` fails when a figure changes without its row, when a row names a generator or input that does not exist, or when a figure is added or removed without updating this file. Two fields are deliberately honest. `reproducible` says what it takes to rebuild the figure: `command` means the listed command rebuilds it from the repository alone, `manual` means a script produces the pixels but a rename, crop or format conversion is done by hand, and `external-data` means it also needs data that is not in the tree. `bytes_verified` says whether the committed bytes were actually re-derived and compared, which is a stronger claim: a `command` figure with `bytes_verified` false can be rebuilt, but its committed pixels predate the current renderer.",
   "figures": [
     {
       "path": "docs/_static/figures/ess_x_scale.webp",
-      "sha256": "9f6049994f96c4427b7017d60ab32c7f7dfe66495d6ed891a902e89cb40327c4",
-      "bytes": 13800,
+      "sha256": "eb61149f25f68af8ec105b14ba2e54d93c75fbf6fd50400384ef04a39316b130",
+      "bytes": 18448,
       "generator": "docs/_static/figures/sources/make_optimization_docs_figures.py",
       "command": "python docs/_static/figures/sources/make_optimization_docs_figures.py",
       "inputs": [],
       "record": null,
-      "generated": "2026-07-12",
+      "generated": "2026-09-03",
       "hardware": null,
       "reproducible": "command",
+      "bytes_verified": true,
       "used_in": [],
       "note": "Closed-form plot of the exponential spectral scaling exp(-alpha*max(|m|,|n|)); it solves nothing and reads nothing, so there is no hardware to record. No docs page currently embeds it \u2014 it is kept as a generated asset for the objectives pages, and the empty used_in below records that honestly."
     },
     {
       "path": "docs/_static/figures/gradient_stack_speedup.webp",
-      "sha256": "64d3d5ee214e68c7d02a86c05d10e26c852211391a1ac5960897dbcfb1c606ab",
-      "bytes": 18458,
+      "sha256": "ea97c7e489ec4a953d1715baa96ec8438003d8cc00e8524338d6ce1f4e207caa",
+      "bytes": 20594,
       "generator": "docs/_static/figures/sources/make_optimization_docs_figures.py",
       "command": "python docs/_static/figures/sources/make_optimization_docs_figures.py",
       "inputs": [],
       "record": null,
-      "generated": "2026-07-12",
+      "generated": "2026-09-03",
       "hardware": "Apple Silicon CPU",
       "reproducible": "command",
+      "bytes_verified": true,
       "used_in": [
         "docs/explanation/adjoint-gradients.md"
       ],
-      "note": "The bar heights are measurements typed into the generator, not read from a committed artifact; re-running the script redraws the same typed numbers. Treat it as an illustration of the gradient-stack argument, not as a citable timing record."
+      "note": "The bar heights are measurements from 2026-07-12 typed into the generator, not read from a committed artifact; re-running redraws the same typed numbers. Treat it as an illustration of the gradient-stack argument, not as a citable timing record. The `generated` date is the render, not the measurement."
     },
     {
       "path": "docs/_static/figures/mirror_fixed_boundary_3d.webp",
@@ -43,6 +45,7 @@
       "generated": "2026-07-18",
       "hardware": null,
       "reproducible": "manual",
+      "bytes_verified": false,
       "used_in": [
         "README.md",
         "docs/explanation/mirror-geometry.rst"
@@ -60,6 +63,7 @@
       "generated": "2026-08-11",
       "hardware": null,
       "reproducible": "manual",
+      "bytes_verified": false,
       "used_in": [
         "README.md"
       ],
@@ -78,6 +82,7 @@
       "generated": "2026-07-19",
       "hardware": null,
       "reproducible": "command",
+      "bytes_verified": false,
       "used_in": [
         "docs/explanation/mirror-geometry.rst"
       ],
@@ -85,8 +90,8 @@
     },
     {
       "path": "docs/_static/figures/readme_convergence.webp",
-      "sha256": "c5dea603310acd288702f0c463992df9cd742445615e17b000fe1bafc62c0da4",
-      "bytes": 21036,
+      "sha256": "e3d16a8a0b411842746d05e735627cd6ccb193ee65f84e0b587d8c29162a2663",
+      "bytes": 40820,
       "generator": "benchmarks/make_readme_figures.py",
       "command": "python benchmarks/make_readme_figures.py --only convergence",
       "inputs": [
@@ -94,10 +99,11 @@
         "examples/data/input.nfp4_QH_warm_start"
       ],
       "record": "benchmarks/convergence_nfp4_ns51.json",
-      "generated": "2026-07-10",
+      "generated": "2026-09-03",
       "hardware": null,
       "reproducible": "command",
-      "note": "Plots the cached three-code trace. On a cache miss the generator re-solves and shells out to VMEC2000 and VMEC++, discovered locally or via VMEX_XVMEC2000 / VMEX_VMECPP_PY. The cache file carries no provenance block of its own.",
+      "bytes_verified": true,
+      "note": "Plots the cached three-code trace, which dates from 2026-07-10; the `generated` date is the render. On a cache miss the generator re-solves and shells out to VMEC2000 and VMEC++, discovered locally or via VMEX_XVMEC2000 / VMEX_VMECPP_PY. Re-rendered in 2026-09 so the committed bytes match what the command produces.",
       "used_in": [
         "README.md",
         "docs/explanation/validation.md",
@@ -117,6 +123,7 @@
       "generated": "2026-09-03",
       "hardware": "Apple M3 Max (arm64), macOS 23.4, CPU",
       "reproducible": "command",
+      "bytes_verified": true,
       "used_in": [
         "README.md"
       ],
@@ -135,10 +142,11 @@
       "generated": "2026-07-09",
       "hardware": null,
       "reproducible": "command",
+      "bytes_verified": false,
       "used_in": [
         "README.md"
       ],
-      "note": "Solves the deck in process and runs the Boozer transform on a temporary wout, so the pixels depend on the solver version rather than on a committed artifact."
+      "note": "Solves the deck in process and runs the Boozer transform on a temporary wout, so the pixels track the solver version rather than a committed artifact. Not re-rendered here, so its committed bytes predate the lossless-WebP change to the generator."
     },
     {
       "path": "docs/_static/figures/readme_essos_beta_scan.webp",
@@ -154,6 +162,7 @@
       "generated": "2026-07-12",
       "hardware": null,
       "reproducible": "manual",
+      "bytes_verified": false,
       "used_in": [
         "README.md"
       ],
@@ -173,6 +182,7 @@
       "generated": "2026-09-02",
       "hardware": null,
       "reproducible": "manual",
+      "bytes_verified": false,
       "used_in": [
         "README.md"
       ],
@@ -189,6 +199,7 @@
       "generated": "2026-07-11",
       "hardware": null,
       "reproducible": "external-data",
+      "bytes_verified": false,
       "used_in": [
         "README.md"
       ],
@@ -207,6 +218,7 @@
       "generated": "2026-09-02",
       "hardware": "Apple M4",
       "reproducible": "external-data",
+      "bytes_verified": false,
       "used_in": [
         "README.md"
       ],
@@ -214,8 +226,8 @@
     },
     {
       "path": "docs/_static/figures/readme_precond.webp",
-      "sha256": "ce61c18e0c0b11953d2594cd7598cc113ac3094085a026223659036c049b0554",
-      "bytes": 20448,
+      "sha256": "cf700ce61da2f5eb92d7e5e73e7cabddb5051d97ff29701fee80a03efbc58843",
+      "bytes": 16768,
       "generator": "benchmarks/make_readme_figures.py",
       "command": "python benchmarks/preconditioner_2d_stiff.py && python benchmarks/make_readme_figures.py --only precond",
       "inputs": [
@@ -227,6 +239,7 @@
       "generated": "2026-09-03",
       "hardware": "Apple M3 Max (arm64), macOS 23.4, CPU",
       "reproducible": "command",
+      "bytes_verified": true,
       "used_in": [
         "docs/reference/performance.rst"
       ],
@@ -248,15 +261,16 @@
       "generated": "2026-07-11",
       "hardware": null,
       "reproducible": "command",
+      "bytes_verified": false,
       "used_in": [
         "README.md"
       ],
-      "note": "Unlike the sibling optimization figure, every QI deck it draws is bundled."
+      "note": "Unlike the sibling optimization figure, every QI deck it draws is bundled, so one command rebuilds it. Not re-rendered here (four solves), so its committed bytes predate the lossless-WebP change to the generator."
     },
     {
       "path": "docs/_static/figures/readme_runtime_compare.webp",
-      "sha256": "0697d8965fc2db4c3559bb293196ebb4d77af74d2173278935500bb4dff33c96",
-      "bytes": 52668,
+      "sha256": "45a8bc36b9cd9a79cfdb658545a4cb293ecf285023bb5c88f401e1cf34a1efff",
+      "bytes": 38466,
       "generator": "benchmarks/make_readme_figures.py",
       "command": "python benchmarks/make_readme_figures.py --only runtime",
       "inputs": [
@@ -267,11 +281,12 @@
       "generated": "2026-09-03",
       "hardware": null,
       "reproducible": "command",
+      "bytes_verified": true,
       "used_in": [
         "README.md",
         "docs/index.md"
       ],
-      "note": "Regenerated in 2026-09 from the committed baselines. The previously committed pixels dated from 2026-07-07 and came from a pipeline that no longer exists in the tree; its sidecar readme_runtime_compare.json/.csv were deleted with this change so the figure has one provenance story. Hardware is a property of benchmarks/baseline.json, not of the render."
+      "note": "Regenerated in 2026-09 from the committed baselines. The previously committed pixels dated from 2026-07-07 and came from a pipeline no longer in the tree; its sidecar readme_runtime_compare.json/.csv were deleted so the figure has one provenance story. Hardware is a property of benchmarks/baseline.json, not of the render."
     },
     {
       "path": "docs/_static/figures/readme_strong_force_comparison.webp",
@@ -287,6 +302,7 @@
       "generated": "2026-09-02",
       "hardware": "Apple M4",
       "reproducible": "command",
+      "bytes_verified": false,
       "used_in": [
         "README.md"
       ],
@@ -303,6 +319,7 @@
       "generated": "2026-07-18",
       "hardware": null,
       "reproducible": "manual",
+      "bytes_verified": false,
       "used_in": [
         "docs/explanation/mirror-geometry.rst"
       ],

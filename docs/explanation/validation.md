@@ -387,6 +387,9 @@ python benchmarks/device_parity.py --devices cpu,gpu --output parity.json
 
 Figures carry their own provenance in
 `docs/_static/figures/figures.json` — generator, inputs, date, hardware, and
-whether one command reproduces the committed file. `python
-tools/update_figure_manifest.py` refreshes it and
+two separate honesty fields: `reproducible` says what it takes to rebuild the
+figure, and `bytes_verified` says whether the committed pixels were actually
+re-derived and compared. A `command` figure with `bytes_verified` false can
+be rebuilt but its committed bytes predate the current renderer. `python
+tools/update_figure_manifest.py` refreshes the derived fields, and
 `tests/test_figure_provenance.py` fails when a figure and its row disagree.
