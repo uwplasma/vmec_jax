@@ -46,6 +46,8 @@ from vmex.core.polish_driver import (
     _collocation_variable_scale,
     _corrected_state,
     _gauss_newton_polish_lane,
+    _PolishProgress,
+    _polish_progress,
 )
 from vmex.core.radial_basis import BSplineBasis
 from vmex.core.strong_force import certify_strong_force, lift_high_order_state
@@ -245,11 +247,21 @@ def main() -> None:
         linear_rtol=1.0e-3,
         linear_max_steps=max(config.linear_restart * config.linear_max_restarts, 1),
     )
-    solution = _gauss_newton_polish_lane(
-        zero, runtime, chart, variable_scale_array,
-        collocation_scale_array, least_squares_config,
+    # A production-resolution Gauss-Newton phase runs for hours inside one
+    # lax.while_loop.  Route the driver's live heartbeat through the same
+    # timestamped phase stamps so a long probe run stays attributable, and
+    # so a run that has to be killed still leaves its progress in the log.
+    reporter = _PolishProgress(
+        lambda text, end="": _phase(text.strip()),
+        product_budget=int(least_squares_config.max_steps)
+        * int(least_squares_config.linear_max_steps),
     )
-    jax.block_until_ready(solution)
+    with _polish_progress(reporter):
+        solution = _gauss_newton_polish_lane(
+            zero, runtime, chart, variable_scale_array,
+            collocation_scale_array, least_squares_config, progress=True,
+        )
+        jax.block_until_ready(solution)
     polish_seconds = time.perf_counter() - polish_started
     _phase(f"Gauss-Newton done in {polish_seconds:.0f}s; certifying final state")
     vector = variable_scale_array * solution.x
