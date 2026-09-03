@@ -348,8 +348,8 @@ def test_readme_strong_force_figure_matches_committed_sources() -> None:
     assert representation["L"] >= 16
     assert representation["M"] >= 10 and representation["N"] >= 10
     assert desc["metrics"]["radial_refinement_difference"] < 1.0e-3
-    # No timing-ratio claims: the plan's README figure policy is accuracy
-    # only; runtime evidence lives in benchmarks/baselines, not in guards.
+    # No timing-ratio claims: the README figure policy is accuracy only;
+    # runtime evidence lives in benchmarks/baselines, not in guards.
     readme = (ROOT / "README.md").read_text()
     assert metadata["figure"] in readme
     assert metadata["summary_figure"] in readme

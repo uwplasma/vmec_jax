@@ -58,5 +58,5 @@
     "after": 0.001914,
     "before": 0.050517
   },
-  "timing_note": "Accuracy only, and only rows where certified polishing demonstrably beats the legacy codes, per the plan's README figure policy; runtime evidence lives in benchmarks/baselines. All errors from one shared independent oracle on each code's exported equilibrium (VMEX: the certified polished state). The stellarator row returns when the 3-D production polish is tractable."
+  "timing_note": "Accuracy only, and only rows where certified polishing beats the legacy codes on the independent force certificate, per the README figure policy (accuracy only); runtime evidence lives in benchmarks/baselines. All errors from one shared independent oracle on each code's exported equilibrium (VMEX: the certified polished state). The stellarator row returns when the 3-D production polish is tractable."
 }

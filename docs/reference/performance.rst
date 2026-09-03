@@ -920,7 +920,8 @@ counts read from JAX's own ``jax_log_compiles`` records and peak host RSS::
    python benchmarks/profile_workflows.py --all --regimes warm --out benchmarks/baselines/m4/
    python benchmarks/profile_workflows.py F4 C2 --trace-dir benchmarks/traces/
 
-The registry covers the plan's workflow matrix: fixed-boundary solves
+The registry covers the workflow matrix in
+``benchmarks/profile_workflows.py``: fixed-boundary solves
 (single-grid, multigrid, polished), implicit value/gradient, vector residual
 plus full Jacobian, hot-restart scans, optimization campaigns (scalar
 L-BFGS-B and residual least-squares), single-stage plasma-plus-coils with
