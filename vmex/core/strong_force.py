@@ -475,6 +475,15 @@ def evaluate_magnetic_pressure_gradient(
     dimension of the result is Cartesian and the units are N m^-3.  It is
     evaluated independently of :func:`evaluate_strong_force` so that the
     certificate's force values and the polish residual are untouched.
+
+    .. note::
+
+       This sweeps every certificate point in one ``vmap``, exactly as
+       :func:`evaluate_strong_force` does, and so inherits the same peak
+       allocation at production 3-D resolution.  When the force sweep gains
+       a batching policy, this call must be routed through the same one:
+       they run on the same node set, so an unbatched companion would
+       reintroduce the allocation the batched sweep exists to avoid.
     """
 
     rho, theta, zeta = jnp.broadcast_arrays(rho, theta, zeta)

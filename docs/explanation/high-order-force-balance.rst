@@ -294,6 +294,15 @@ certificate asked for, but the Gauss--Newton iteration had not converged.
 Read ``nonlinear_iterations`` against ``max_nonlinear_iterations`` before
 treating a polish as converged in the solver sense.
 
+Read that pair with the section above in mind.  A re-measurement of the same
+case on the same lifted basis
+(``benchmarks/polish_force_error_2026-09-03.json``, 1.284e-2 to 1.803e-3)
+puts the volume-averaged relative force error at 2.090e-3 to 1.586e-3 -- a
+factor of 1.32, not 7 -- because the correction is concentrated near the
+axis, where the pointwise denominator is smallest and
+:math:`\varepsilon_F` is most sensitive to it.  The dimensional
+near-axis L2 falls by 14.5, the bulk by 1.11.
+
 When the certificate fails, ``fail_policy="raise"`` reports a typed
 :class:`~vmex.core.errors.StrongForceCertificationError` naming each failed
 check.  ``fail_policy="return_unpolished"`` returns the original lifted state
