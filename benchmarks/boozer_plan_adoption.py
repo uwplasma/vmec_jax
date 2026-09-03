@@ -37,7 +37,7 @@ alternate ``inline, plan, inline, plan`` so machine drift hits both equally.
 
     python benchmarks/boozer_plan_adoption.py \
         --decks input.li383_low_res input.nfp1_QI \
-        --output benchmarks/boozer_plan_adoption_m4.json
+        --output benchmarks/boozer_plan_adoption_m3max.json
 """
 
 from __future__ import annotations
@@ -447,9 +447,15 @@ def _lane_summary(runs: list[tuple[dict[str, Any], float]]) -> dict[str, Any]:
 
 
 def _host() -> str:
+    """The measuring machine, named by its own CPU rather than by convention."""
     machine = platform.machine()
-    release = platform.release()
-    return f"{platform.system()} {release} ({machine}), CPU"
+    if platform.system() == "Darwin":
+        brand = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True, text=True, check=False).stdout.strip()
+        return (f"{brand or 'Apple Silicon'} ({machine}), "
+                f"macOS {platform.mac_ver()[0] or platform.release()}, CPU")
+    return f"{platform.system()} {platform.release()} ({machine}), CPU"
 
 
 def main(argv: list[str] | None = None) -> int:
