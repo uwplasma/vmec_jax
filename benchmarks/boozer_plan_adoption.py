@@ -471,7 +471,9 @@ def main(argv: list[str] | None = None) -> int:
                 report, wall = _run_child(arguments, deck=deck, mode=mode)
                 runs[mode].append((report, wall))
                 child_versions = report["versions"]
-        built, _ = _run_child(arguments, deck=deck, mode="plan_build")
+        builds = [_run_child(arguments, deck=deck, mode="plan_build")[0]
+                  for _ in range(arguments.repeats)]
+        built = min(builds, key=lambda report: report["plan_build"]["first_build_s"])
         equivalence, _ = _run_child(arguments, deck=deck, mode="equivalence")
         interleaved, _ = _run_child(arguments, deck=deck, mode="interleaved")
         summary = {mode: _lane_summary(runs[mode]) for mode in runs}
