@@ -475,13 +475,13 @@ cost, not a discovered impossibility. The evidence, all of it in
 Read the last two rows together. The 3-D QA case improves its independent
 force error substantially and still fails the certificate, so a large gain
 there is not yet a certified equilibrium. The W7-X row improved much less,
-but it was also given a far smaller budget - six Gauss-Newton iterations
-against the QA case's forty, and 150 linear iterations per step against 600
-- and the QA case accumulated most of its gain late. That run is therefore
-evidence about **price**, not about futility: one Gauss-Newton iteration at
+but it was also given a far smaller budget: six Gauss-Newton iterations
+against the QA case's forty, and 150 linear iterations per step against 600.
+The two are therefore not a controlled comparison, and the W7-X row is
+evidence about **price**, not about futility - one Gauss-Newton iteration at
 `MPOL = NTOR = 10` costs about 1.75 h on a 36-core CPU, so a QA-like
-iteration count at that resolution is a multi-day run. Whether it would then
-certify is not known, and this README does not claim either way.
+iteration count at that resolution is a multi-day run. Whether it would
+certify at that budget is not known; this README does not claim either way.
 
 Two consequences for anyone using the feature:
 

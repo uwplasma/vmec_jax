@@ -130,13 +130,27 @@ all of the rest.
 
 ### What this run does and does not show
 
-It does **not** show that polishing cannot work at this resolution. The
-budget was six Gauss-Newton iterations at 150 linear iterations each. The
-one 3-D case that improved substantially, `nfp2_QA_smooth_beta` (run 1),
-was given forty iterations at 600, and its own first six iterations only
-reached cost 2717 of an eventual 2170 - most of its certificate gain
-accumulated late. Reading run 5's -1.1% as futility would be reading a
-starved budget as a physical result.
+It does **not** show that polishing cannot work at this resolution, and it
+does not show that it can. The two 3-D runs were not given comparable
+budgets: run 5 got six Gauss-Newton iterations at 150 linear iterations
+each, run 1 got forty at 600.
+
+What can be compared is how far each run got along its *own* cost curve.
+Run 1's collocation cost fell 9009 -> 2717 over its first six iterations
+and 2717 -> 2170 over the remaining thirty-four, so at six iterations it
+had already taken 92% of the cost reduction it would ever take. The same
+fraction cannot be computed for run 5, because run 5's asymptote is exactly
+what is unknown - but its gradient norm was still falling steeply when the
+budget ran out (334 -> 24 over the six accepted steps), which is at least
+consistent with a solve stopped early rather than one that had converged.
+
+What cannot be compared is the certificate, because the independent
+certificate is only evaluated at the endpoints of each run. How much of run
+1's -40% was already present at six iterations is simply not recorded.  So
+run 5's -1.1% is not evidence that the method fails at this resolution, and
+run 1's -40% is not evidence that run 5 would have reached it with more
+iterations.  Settling that needs a longer-budget run at this resolution,
+which is what run 6 is.
 
 It does show what the run **costs**. A QA-like iteration count at W7-X
 resolution is roughly 40 x 1.75 h, i.e. several days of a 36-core machine
