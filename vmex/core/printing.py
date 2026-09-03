@@ -279,6 +279,49 @@ def polish_screen_line(
     return line + "\n"
 
 
+#: Screen wording for the ``eps_F`` ceiling.  ``F = JxB - grad(p)`` obeys
+#: ``|F| <= |JxB| + |grad(p)|`` pointwise, so ``eps_F`` cannot exceed 2 no
+#: matter how badly force balance is violated; it reaches 2 wherever the
+#: denominator collapses, which is everywhere in vacuum.  Printing the bound
+#: next to the number stops a reader from reading "1.99" as a 200% error.
+EPS_F_SATURATION_NOTICE = (
+    "EPS-F IS BOUNDED BY 2 BY CONSTRUCTION: IT SATURATES WHERE ITS",
+    "DENOMINATOR COLLAPSES (VACUUM). THE ROWS BELOW CANNOT SATURATE.",
+)
+
+
+def _measure_row(label: str, initial: float, final: float | None) -> str:
+    """One ``label  before -> after`` row, or ``before`` alone."""
+    cell = f"{float(initial):10.3E}" if initial == initial else "       n/a"
+    if final is None:
+        return f"   {label:<30s}{cell}"
+    tail = f"{float(final):10.3E}" if final == final else "       n/a"
+    return f"   {label:<30s}{cell} -> {tail}"
+
+
+def force_error_rows(
+    measures: tuple[tuple[str, float, float | None], ...],
+    *,
+    window: tuple[float, float] | None = None,
+) -> tuple[str, ...]:
+    """Render the non-saturating force-error rows for a certificate block.
+
+    ``measures`` carries ``(label, initial, final)`` triples; pass ``None``
+    as ``final`` for a single-state report.  ``window`` appends the flux
+    window the volume averages cover, because a volume average over the
+    whole domain is dominated by the coordinate-singular axis and the edge.
+    A ``nan`` prints as ``n/a`` — the Panici ratio is undefined in vacuum
+    and a floored stand-in would read as a real measurement.
+    """
+    rows = [_measure_row(label, initial, final) for label, initial, final in measures]
+    if window is not None and rows:
+        rows.append(
+            f"   (volume averages over s in "
+            f"[{float(window[0]):.2f}, {float(window[1]):.2f}])"
+        )
+    return tuple(rows)
+
+
 def polish_certificate_summary(
     initial_l2: float,
     final_l2: float,
@@ -286,20 +329,28 @@ def polish_certificate_summary(
     *,
     verdict: str,
     failed_checks: tuple[str, ...] = (),
+    measures: tuple[tuple[str, float, float | None], ...] = (),
+    window: tuple[float, float] | None = None,
 ) -> str:
     """Closing certificate block for one polish attempt.
 
     ``verdict`` is the human-readable outcome (``CERTIFIED``, ``ALREADY
     CERTIFIED``, ``FAILED``); ``failed_checks`` names each independent check
     that rejected the state so a failure is diagnosable from the console
-    alone.
+    alone.  ``measures`` carries the non-saturating quantities that make the
+    ``eps_F`` pair readable — the dimensional ``<|F|>`` and the
+    volume-averaged normalizations — and is printed under an explicit
+    statement of the ``eps_F`` ceiling.
     """
     lines = [
         "",
         f" POLISH CERTIFICATE : EPS-F {float(initial_l2):10.3E} ->"
         f" {float(final_l2):10.3E}  (TOLERANCE {float(tolerance):10.3E})",
-        f" POLISH {verdict}",
     ]
+    if measures:
+        lines.extend(f"   {notice}" for notice in EPS_F_SATURATION_NOTICE)
+        lines.extend(force_error_rows(measures, window=window))
+    lines.append(f" POLISH {verdict}")
     lines.extend(f"   FAILED CHECK : {check}" for check in failed_checks)
     return "\n".join(lines) + "\n"
 

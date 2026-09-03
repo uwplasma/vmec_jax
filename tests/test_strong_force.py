@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
+from unittest import mock
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from vmex.core import strong_force
 from vmex.core.fourier import Resolution
 from vmex.core.boozer_tables import high_order_boozer_input_tables
 from vmex.core.input import VmecInput
@@ -19,11 +23,15 @@ from vmex.core.profiles import MU0
 from vmex.core.radial_basis import BSplineBasis
 from vmex.core.solver import _initial_state, prepare_runtime, resolution_from_input
 from vmex.core.strong_force import (
+    FORCE_ERROR_MEASURE_LABELS,
     HighOrderEquilibriumState,
     certify_strong_force,
     evaluate_high_order_fields,
     evaluate_high_order_surface,
+    evaluate_magnetic_pressure_gradient,
     evaluate_strong_force,
+    force_error_measures,
+    force_error_record,
     high_order_state_from_wout,
     lift_high_order_state,
     plot_strong_force_report,
@@ -553,3 +561,306 @@ def test_nestedness_margin_is_scale_free_and_distinct_from_the_jacobian():
     # it crosses zero exactly where the Jacobian does
     assert float(_nestedness_margin(jnp.asarray([-1.0, 3.0]))) < 0.0
     assert float(_nestedness_margin(jnp.asarray([0.0, 3.0]))) == 0.0
+
+
+def _certificate_baseline() -> dict:
+    path = Path(__file__).parent / "data" / "strong_force_certificate_baseline.json"
+    return json.loads(path.read_text())
+
+
+def _solovev_initial_lift() -> HighOrderEquilibriumState:
+    """The cheap, solve-free lifted state the committed baseline covers."""
+
+    inp = VmecInput.from_file("examples/data/input.solovev").change_resolution(
+        mpol=3, ntor=0, ntheta=12, nzeta=4
+    )
+    resolution = replace(resolution_from_input(inp), ns=11)
+    runtime = prepare_runtime(inp, resolution)
+    return lift_high_order_state(_initial_state(runtime.setup), runtime, degree=5)
+
+
+#: Every ``StrongForceReport`` field that shipped before the volume-averaged
+#: normalizations were added.  These are the numbers the README, the docs,
+#: the committed benchmark artifacts and the polish acceptance thresholds all
+#: quote, so nothing here may move.
+_SHIPPED_CERTIFICATE_FIELDS = (
+    "absolute_l2", "absolute_p99", "absolute_linf",
+    "normalized_l2", "normalized_p99", "normalized_linf",
+    "radial_l2", "helical_l2", "radial_normalized_l2", "helical_normalized_l2",
+    "near_axis_l2", "bulk_l2", "edge_l2",
+    "angular_spectral_tail", "radial_refinement_difference",
+    "minimum_signed_jacobian", "nestedness_margin",
+    "boundary_residual", "gauge_residual",
+)
+_SHIPPED_CERTIFICATE_ARRAYS = (
+    "radial_nodes", "flux_surface_average", "flux_surface_normalized_l2",
+)
+
+
+@contextmanager
+def _eager_lane():
+    """Force the jit-disabled lane the committed baseline was measured on.
+
+    ``tests/conftest.py`` disables jit globally, but under xdist a previous
+    module's ``_module_jit_enabled`` fixture can still be live on this
+    worker, and jit changes these reductions in the last few ulps.
+    """
+
+    previous = bool(jax.config.jax_disable_jit)
+    jax.config.update("jax_disable_jit", True)
+    try:
+        yield
+    finally:
+        jax.config.update("jax_disable_jit", previous)
+
+
+def test_added_normalizations_cannot_reach_the_shipped_certificate_values():
+    """The added work must be provably inert, not merely observed to be.
+
+    Both additions are made visible at once: the magnetic-pressure-gradient
+    evaluation is replaced by NaN, and the flux window is moved.  If either
+    fed a shipped field, that field would turn NaN or move; instead every
+    one of them is bit-identical to the default call, while the new
+    normalizations go NaN as they should.  This is an exact same-process
+    comparison, so unlike the committed baseline below it holds on every
+    platform regardless of how XLA fuses.
+    """
+
+    state = _constant_toroidal_field_state()
+    kwargs = {"angular_multiplier": 1, "radial_order_increment": 0}
+    with _eager_lane():
+        reference = certify_strong_force(state, **kwargs)
+        with mock.patch.object(
+            strong_force,
+            "evaluate_magnetic_pressure_gradient",
+            lambda *args, **_: jnp.full(jnp.shape(args[1]) + (3,), jnp.nan),
+        ):
+            perturbed = certify_strong_force(state, window=(0.25, 0.75), **kwargs)
+
+    for name in _SHIPPED_CERTIFICATE_FIELDS:
+        assert float(np.asarray(getattr(perturbed, name))).hex() == float(
+            np.asarray(getattr(reference, name))
+        ).hex(), name
+    for name in _SHIPPED_CERTIFICATE_ARRAYS:
+        np.testing.assert_array_equal(
+            np.asarray(getattr(perturbed, name)),
+            np.asarray(getattr(reference, name)),
+            err_msg=name,
+        )
+    assert np.isnan(
+        float(perturbed.window_normalizations.magnetic_relative_force_error)
+    )
+    assert not np.isnan(
+        float(reference.window_normalizations.magnetic_relative_force_error)
+    )
+
+
+@pytest.mark.parametrize(
+    "case", ["constant_toroidal_field", "solovev_initial_lift"]
+)
+def test_shipped_certificate_values_match_the_pre_change_baseline(case):
+    """The published numbers still come out of this code unchanged.
+
+    ``tests/data/strong_force_certificate_baseline.json`` records every
+    shipped field as exact float64 hex, measured on the eager lane at the
+    commit before the normalizations were added; both cases were bit-
+    identical when the baseline was taken.  The comparison is asserted at
+    ``rtol=1e-12`` rather than on the hex because XLA promises nothing about
+    fusion across platforms (the same values shift by ~2e-13 between the
+    eager and jitted lanes here), while any real change to these formulas
+    would move them by far more than a part in 1e12.
+    """
+
+    baseline = _certificate_baseline()["cases"][case]
+    with _eager_lane():
+        if case == "constant_toroidal_field":
+            report = certify_strong_force(
+                _constant_toroidal_field_state(),
+                angular_multiplier=1,
+                radial_order_increment=0,
+            )
+        else:
+            report = certify_strong_force(_solovev_initial_lift())
+
+    for name in _SHIPPED_CERTIFICATE_FIELDS:
+        value = float(np.asarray(getattr(report, name)))
+        expected = float.fromhex(baseline[name])
+        assert value == pytest.approx(expected, rel=1.0e-12, abs=0.0), (
+            f"{name}: {value.hex()} != baseline {baseline[name]}"
+        )
+    assert float(report.force_floor) == float.fromhex(baseline["force_floor"])
+    for name, entry in baseline["arrays"].items():
+        values = np.ascontiguousarray(
+            np.asarray(getattr(report, name), dtype=np.float64)
+        )
+        assert values.size == entry["size"], name
+        assert hashlib.sha256(values.tobytes()).hexdigest() == entry["sha256"], name
+
+
+#: Toroidal-flux slope of :func:`_graded_toroidal_field_state`.
+_FLUX_SLOPE = 0.4
+
+
+def _graded_toroidal_field_state(*, degree: int = 5) -> HighOrderEquilibriumState:
+    """``B = -(1 + c s) e_phi`` on the concentric circular surfaces above.
+
+    With circular surfaces ``sqrt(g)`` is proportional to ``R``, so a
+    constant ``phi'`` gives a field of constant magnitude and a magnetic
+    pressure with no gradient at all.  Grading ``phi'`` linearly in ``s``
+    keeps every geometric quantity analytic while giving ``B^2/2mu0`` a
+    gradient the vacuum-safe normalization can divide by.  The pressure is
+    still identically zero, so this is exactly the state on which ``eps_F``
+    has nothing left to say.
+    """
+
+    state = _constant_toroidal_field_state(degree=degree)
+    basis = state.radial_basis
+    nodes = np.linspace(0.0, 1.0, basis.size)
+    coefficients = basis.fit(0.5 * (1.0 + _FLUX_SLOPE * nodes), nodes=nodes)
+    return replace(state, phipf=jnp.asarray(coefficients))
+
+
+def test_magnetic_pressure_gradient_matches_the_analytic_graded_field():
+    """``grad(B^2/2mu0)`` is known in closed form for the graded field.
+
+    The certificate's vacuum-safe normalization divides by the volume
+    average of this vector, so it needs its own analytic check rather than
+    inheriting confidence from the force oracle.
+    """
+
+    state = _graded_toroidal_field_state()
+    rho = jnp.asarray([0.15, 0.4, 0.85])
+    theta = jnp.asarray([0.3, 2.2, 4.9])
+    zeta = jnp.asarray([0.7, 2.9, 5.1])
+    flux = rho * rho
+    e_R = jnp.stack((jnp.cos(zeta), jnp.sin(zeta), jnp.zeros_like(zeta)), axis=-1)
+    e_Z = jnp.stack(
+        (jnp.zeros_like(zeta), jnp.zeros_like(zeta), jnp.ones_like(zeta)), axis=-1
+    )
+    e_phi = jnp.stack((-jnp.sin(zeta), jnp.cos(zeta), jnp.zeros_like(zeta)), axis=-1)
+
+    field = evaluate_strong_force(state, rho, theta, zeta).B
+    np.testing.assert_allclose(
+        field,
+        -(1.0 + _FLUX_SLOPE * flux)[:, None] * e_phi,
+        rtol=2e-12,
+        atol=2e-12,
+    )
+
+    # B^2/2mu0 = (1 + c s)^2 / 2mu0 and grad(s) = 2 rho e_r on unit-minor
+    # -radius circular surfaces, so the gradient is purely poloidal-radial.
+    unit_radial = jnp.cos(theta)[:, None] * e_R + jnp.sin(theta)[:, None] * e_Z
+    expected = (
+        2.0 * rho * _FLUX_SLOPE * (1.0 + _FLUX_SLOPE * flux) / MU0
+    )[:, None] * unit_radial
+    gradient = evaluate_magnetic_pressure_gradient(state, rho, theta, zeta)
+    np.testing.assert_allclose(gradient, expected, rtol=2e-12, atol=2e-6)
+
+
+def test_certificate_saturates_in_vacuum_while_the_added_measures_do_not():
+    """The disclosure the report carries has to be literally true.
+
+    With ``grad(p) = 0`` the metric collapses to
+    ``2|JxB|/(|JxB| + floor)``, which is 2 to machine precision wherever any
+    current is left.  Here it reads exactly 2.0 in both the L2 and the Linf,
+    while the state's force error is of the same order as its magnetic
+    pressure gradient -- a real, large, *finite* error that ``eps_F`` cannot
+    express.  The Panici ratio is undefined in vacuum and is reported as
+    ``nan`` rather than as a floored stand-in.
+    """
+
+    report = certify_strong_force(_graded_toroidal_field_state())
+    assert float(report.normalized_l2) == pytest.approx(2.0, rel=1e-12)
+    assert float(report.normalized_linf) == pytest.approx(2.0, rel=1e-12)
+    assert "bounded above by 2" in report.saturation
+    assert "vacuum" in report.saturation
+
+    for normalizations in (
+        report.global_normalizations,
+        report.window_normalizations,
+    ):
+        assert float(normalizations.volume_average_grad_pressure) == 0.0
+        assert np.isnan(float(normalizations.relative_force_error))
+        assert float(normalizations.volume_average_magnetic_pressure_gradient) > 0.0
+        assert float(normalizations.volume_average_force) > 0.0
+        ratio = float(normalizations.magnetic_relative_force_error)
+        assert 0.5 < ratio < 2.0
+        assert 0.5 < float(normalizations.magnetic_normalized_l2) < 2.0
+        assert float(normalizations.magnetic_normalized_linf) > ratio
+
+
+def test_window_normalizations_cover_the_stated_flux_window_only():
+    """The window has to be a real restriction, and a stated one.
+
+    A widened window must reproduce the whole-domain averages exactly, and a
+    narrowed one must both drop nodes and move the averages; otherwise the
+    reported ``s`` range would be decoration rather than the domain the
+    number was taken over.
+    """
+
+    state = _solovev_initial_lift()
+    report = certify_strong_force(state, window=(0.2, 0.9))
+    window = report.window_normalizations
+    whole = report.global_normalizations
+
+    assert (window.s_min, window.s_max) == (0.2, 0.9)
+    assert (whole.s_min, whole.s_max) == (0.0, 1.0)
+    assert 0 < window.node_count < whole.node_count
+    assert float(window.volume_average_force) != float(
+        whole.volume_average_force
+    )
+
+    full = certify_strong_force(state, window=(0.0, 1.0)).window_normalizations
+    assert full.node_count == whole.node_count
+    for name in (
+        "volume_average_force",
+        "volume_average_grad_pressure",
+        "volume_average_magnetic_pressure_gradient",
+        "relative_force_error",
+        "magnetic_relative_force_error",
+        "magnetic_normalized_l2",
+        "magnetic_normalized_linf",
+    ):
+        assert float(getattr(full, name)) == float(getattr(whole, name)), name
+
+
+@pytest.mark.parametrize("window", [(0.5, 0.5), (-0.1, 0.9), (0.1, 1.5), (0.9, 0.1)])
+def test_certificate_rejects_a_malformed_flux_window(window):
+    with pytest.raises(ValueError, match="window must satisfy"):
+        certify_strong_force(_constant_toroidal_field_state(), window=window)
+
+
+def test_force_error_measures_and_record_expose_the_non_saturating_numbers():
+    initial = certify_strong_force(_solovev_initial_lift())
+    final = certify_strong_force(_solovev_initial_lift(), window=(0.2, 0.9))
+
+    single = force_error_measures(initial)
+    assert [label for label, _, _ in single] == list(FORCE_ERROR_MEASURE_LABELS)
+    assert all(after is None for _, _, after in single)
+
+    pair = force_error_measures(initial, final)
+    assert [label for label, _, _ in pair] == list(FORCE_ERROR_MEASURE_LABELS)
+    assert pair[0][1] == pytest.approx(
+        float(initial.window_normalizations.volume_average_force)
+    )
+    assert pair[0][2] == pytest.approx(
+        float(final.window_normalizations.volume_average_force)
+    )
+    # The region split is a whole-domain quantity and must not follow the
+    # window, which is what makes it a split rather than a third average.
+    assert pair[4][1] == pytest.approx(float(initial.near_axis_l2))
+    assert pair[4][2] == pytest.approx(float(final.near_axis_l2))
+
+    record = force_error_record(initial)
+    assert json.loads(json.dumps(record))["saturation"] == initial.saturation
+    assert record["pointwise_eps_f"]["normalized_l2"] == pytest.approx(
+        float(initial.normalized_l2)
+    )
+    assert record["absolute"]["near_axis_l2"] == pytest.approx(
+        float(initial.near_axis_l2)
+    )
+    assert record["global_normalizations"]["s_min"] == 0.0
+    assert record["window_normalizations"]["s_min"] == 0.1
+    assert record["window_normalizations"]["node_count"] < record[
+        "global_normalizations"
+    ]["node_count"]

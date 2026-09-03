@@ -25,7 +25,24 @@ from .radial_basis import BSplineBasis
 
 Array = Any
 
-_NORMALIZATION = "2*|JxB-grad(p)|/(|JxB|+|grad(p)|+force_floor), evaluated pointwise"
+_NORMALIZATION = (
+    "2*|JxB-grad(p)|/(|JxB|+|grad(p)|+force_floor), evaluated pointwise; "
+    "bounded above by 2 by construction"
+)
+
+#: Disclosure carried with every certificate.  ``F = JxB - grad(p)`` gives
+#: ``|F| <= |JxB| + |grad(p)|`` pointwise, so ``eps_F`` can never exceed 2 no
+#: matter how badly the state violates force balance.  It reaches 2 whenever
+#: the two terms stop cancelling — in vacuum ``grad(p) = 0`` makes
+#: ``eps_F = 2|JxB|/(|JxB| + force_floor)``, which is 2 to machine precision
+#: wherever the current is not zero.  A value near 2 therefore reports a
+#: collapsed denominator, not a 200% force error.
+_SATURATION = (
+    "eps_F is bounded above by 2 because |F| <= |JxB| + |grad(p)| pointwise; "
+    "eps_F near 2 means the denominator collapsed (vacuum, or JxB and grad(p) "
+    "no longer cancelling), not a 200% force error. Read the volume-averaged "
+    "normalizations and the dimensional <|F|> alongside it."
+)
 
 
 @dataclass(frozen=True, eq=False)
@@ -206,8 +223,59 @@ class HighOrderSurfaceSamples:
 
 
 @dataclass(frozen=True)
+class ForceErrorNormalizations:
+    """Volume-averaged force-error normalizations over one evaluation set.
+
+    These are the published global normalizations, computed on the same
+    quadrature nodes and the same ``|sqrt(g)|`` volume weights as the
+    pointwise certificate, and they do not saturate:
+
+    * ``relative_force_error`` is ``<|F|> / <|grad(p)|>`` — the
+      volume-averaged relative force error of Panici, Conlin, Dudt, Unalmis
+      and Kolemen, *J. Plasma Phys.* **89** (2023) 955890303, Eqs. (32)-(34b).
+      It is genuinely undefined in vacuum, so it is reported as ``nan``
+      when ``<|grad(p)|>`` is exactly zero rather than as a huge floored
+      number.  A low-beta case makes it large but finite for the same
+      reason; ``volume_average_grad_pressure`` is reported beside it so a
+      reader can see how small the denominator was.
+    * ``magnetic_relative_force_error`` and the two ``magnetic_normalized``
+      entries divide by ``<|grad(B^2/2 mu0)|>`` instead, which stays finite
+      and meaningful in vacuum.  That is the ``ForceBalance`` normalization
+      DESC reports (``desc/objectives/_equilibrium.py``) and the form used in
+      Thun et al. 2026, Eq. (42).  ``magnetic_normalized_l2`` and
+      ``magnetic_normalized_linf`` keep the pointwise numerator, as DESC
+      does, and divide by that single global scale.
+    * ``volume_average_force`` is the dimensional ``<|F|>`` in N m^-3, which
+      no normalization can hide.
+
+    ``s_min`` and ``s_max`` state the flux window the record covers and
+    ``node_count`` the number of radial quadrature nodes inside it.
+    """
+
+    volume_average_force: Array
+    volume_average_grad_pressure: Array
+    volume_average_magnetic_pressure_gradient: Array
+    relative_force_error: Array
+    magnetic_relative_force_error: Array
+    magnetic_normalized_l2: Array
+    magnetic_normalized_linf: Array
+    node_count: int
+    s_min: float
+    s_max: float
+
+
+@dataclass(frozen=True)
 class StrongForceReport:
-    """Independent overintegrated certificate for one continuous state."""
+    """Independent overintegrated certificate for one continuous state.
+
+    ``normalized_*`` are the pointwise certificate ``eps_F``, which is the
+    acceptance criterion and is **bounded above by 2 by construction** — see
+    :data:`_SATURATION`, carried on every report as ``saturation``.  Read
+    ``global_normalizations`` (full domain) and ``window_normalizations``
+    (the stated ``s`` window, away from the axis and the edge, where the raw
+    maxima do not dominate) for numbers that cannot saturate, and
+    ``near_axis_l2``/``bulk_l2``/``edge_l2`` for where the error sits.
+    """
 
     absolute_l2: Array
     absolute_p99: Array
@@ -234,8 +302,11 @@ class StrongForceReport:
     nestedness_margin: Array
     boundary_residual: Array
     gauge_residual: Array
+    global_normalizations: ForceErrorNormalizations
+    window_normalizations: ForceErrorNormalizations
     force_floor: float
     normalization: str = _NORMALIZATION
+    saturation: str = _SATURATION
     coordinate_convention: str = "rho=sqrt(s), theta poloidal, zeta field-period; physical phi=zeta/nfp"
 
 
@@ -370,6 +441,47 @@ def _point_force(state: HighOrderEquilibriumState, x: Array) -> tuple[Array, ...
         jnp.linalg.norm(lorentz),
         jnp.linalg.norm(grad_pressure),
     )
+
+
+def _magnetic_pressure(state: HighOrderEquilibriumState, x: Array) -> Array:
+    """Return the magnetic pressure ``B^2 / (2 mu0)`` at one point."""
+
+    field = _basic_fields(state, x)[4]
+    return jnp.vdot(field, field) / (2.0 * MU0)
+
+
+def _point_magnetic_pressure_gradient(
+    state: HighOrderEquilibriumState, x: Array
+) -> Array:
+    """Return ``grad(B^2 / 2 mu0)`` as a Cartesian vector at one point."""
+
+    basis_vectors = jax.jacfwd(lambda y: _position(state, y))(x)
+    partials = jax.grad(lambda y: _magnetic_pressure(state, y))(x)
+    return jnp.linalg.solve(basis_vectors.T, partials)
+
+
+@jax.jit
+def evaluate_magnetic_pressure_gradient(
+    state: HighOrderEquilibriumState,
+    rho: Array,
+    theta: Array,
+    zeta: Array,
+) -> Array:
+    """Evaluate ``grad(B^2 / 2 mu0)`` on broadcast-compatible points.
+
+    This is the vacuum-safe force-balance scale: unlike ``grad(p)`` it does
+    not vanish identically when the pressure is flat, so a normalization
+    built on its volume average stays meaningful in vacuum.  The final
+    dimension of the result is Cartesian and the units are N m^-3.  It is
+    evaluated independently of :func:`evaluate_strong_force` so that the
+    certificate's force values and the polish residual are untouched.
+    """
+
+    rho, theta, zeta = jnp.broadcast_arrays(rho, theta, zeta)
+    shape = rho.shape
+    points = jnp.stack((rho.reshape(-1), theta.reshape(-1), zeta.reshape(-1)), axis=-1)
+    values = jax.vmap(lambda point: _point_magnetic_pressure_gradient(state, point))(points)
+    return values.reshape(shape + (3,))
 
 
 @jax.jit
@@ -769,9 +881,21 @@ def certify_strong_force(
     angular_multiplier: int = 2,
     radial_order_increment: int = 2,
     force_floor: float = 1.0e-12,
+    window: tuple[float, float] = (0.1, 0.99),
 ) -> StrongForceReport:
-    """Evaluate a shifted, overintegrated certificate distinct from solve nodes."""
+    """Evaluate a shifted, overintegrated certificate distinct from solve nodes.
 
+    The acceptance criterion is the pointwise ``eps_F`` volume L2
+    (``normalized_l2``), which is bounded above by 2 by construction.  The
+    report also carries the volume-averaged normalizations of
+    :class:`ForceErrorNormalizations` twice: over the whole domain, and over
+    the flux window ``window`` (``s`` in ``[0.1, 0.99]`` by default), which
+    excludes the coordinate-singular axis and the boundary layer at the edge
+    where the raw maxima live.
+    """
+
+    if not 0.0 <= float(window[0]) < float(window[1]) <= 1.0:
+        raise ValueError("window must satisfy 0 <= s_min < s_max <= 1")
     breaks = state.radial_basis.breakpoints
 
     def radial_quadrature(quadrature_order: int) -> tuple[np.ndarray, np.ndarray]:
@@ -808,6 +932,58 @@ def certify_strong_force(
     helical_normalized = (
         2.0 * samples.helical_force_density / (samples.lorentz_norm + samples.grad_pressure_norm + float(force_floor))
     )
+    # The published global normalizations. They share the certificate's
+    # nodes and |sqrt(g)| volume weights but never saturate, so they remain
+    # informative exactly where eps_F pins at its ceiling.
+    magnetic_pressure_gradient_norm = jnp.linalg.norm(
+        evaluate_magnetic_pressure_gradient(state, rr, tt, zz), axis=-1
+    )
+
+    def normalizations(
+        radial_mask: np.ndarray, s_min: float, s_max: float
+    ) -> ForceErrorNormalizations:
+        masked_weights = weights * jnp.asarray(radial_mask, dtype=weights.dtype)[:, None, None]
+        total = jnp.sum(masked_weights)
+        safe_total = jnp.where(total > 0.0, total, 1.0)
+
+        def average(values: Array) -> Array:
+            return jnp.where(total > 0.0, jnp.sum(masked_weights * values) / safe_total, 0.0)
+
+        mean_force = average(magnitude)
+        mean_grad_pressure = average(samples.grad_pressure_norm)
+        mean_magnetic = average(magnetic_pressure_gradient_norm)
+        magnetic_scale = mean_magnetic + float(force_floor)
+        magnetic_normalized = magnitude / magnetic_scale
+        return ForceErrorNormalizations(
+            volume_average_force=mean_force,
+            volume_average_grad_pressure=mean_grad_pressure,
+            volume_average_magnetic_pressure_gradient=mean_magnetic,
+            relative_force_error=jnp.where(
+                mean_grad_pressure > 0.0,
+                mean_force / jnp.where(mean_grad_pressure > 0.0, mean_grad_pressure, 1.0),
+                jnp.nan,
+            ),
+            magnetic_relative_force_error=mean_force / magnetic_scale,
+            magnetic_normalized_l2=jnp.sqrt(average(magnetic_normalized * magnetic_normalized)),
+            magnetic_normalized_linf=jnp.max(
+                jnp.where(
+                    jnp.asarray(radial_mask)[:, None, None],
+                    magnetic_normalized,
+                    0.0,
+                )
+            ),
+            node_count=int(np.count_nonzero(radial_mask)),
+            s_min=float(s_min),
+            s_max=float(s_max),
+        )
+
+    window_min, window_max = float(window[0]), float(window[1])
+    window_mask = (s_nodes >= window_min) & (s_nodes <= window_max)
+    global_normalizations = normalizations(
+        np.ones_like(s_nodes, dtype=bool), float(breaks[0]), float(breaks[-1])
+    )
+    window_normalizations = normalizations(window_mask, window_min, window_max)
+
     surface_weights = jnp.abs(samples.sqrt_g)
     fsa = jnp.sum(surface_weights * magnitude, axis=(1, 2)) / jnp.sum(surface_weights, axis=(1, 2))
     surface_normalized_l2 = jnp.sqrt(
@@ -888,8 +1064,107 @@ def certify_strong_force(
         nestedness_margin=_nestedness_margin(signed_jacobian),
         boundary_residual=boundary_residual,
         gauge_residual=gauge_residual,
+        global_normalizations=global_normalizations,
+        window_normalizations=window_normalizations,
         force_floor=float(force_floor),
     )
+
+
+#: Row labels for the non-saturating force-error measures, in the order
+#: :func:`force_error_measures` emits them.  ``<|.|>`` is the ``|sqrt(g)|``
+#: volume average over the certificate's own quadrature nodes.
+FORCE_ERROR_MEASURE_LABELS = (
+    "<|F|>  [N m^-3]",
+    "<|F|>/<|grad p|>",
+    "<|F|>/<|grad B^2/2mu0|>",
+    "|F| L2 /<|grad B^2/2mu0|>",
+    "|F| L2 near axis [N m^-3]",
+    "|F| L2 bulk      [N m^-3]",
+    "|F| L2 edge      [N m^-3]",
+)
+
+
+def force_error_measures(
+    initial: StrongForceReport,
+    final: StrongForceReport | None = None,
+) -> tuple[tuple[str, float, float | None], ...]:
+    """Return the non-saturating force-error rows for one or two reports.
+
+    ``eps_F`` cannot exceed 2, so every place that quotes it must quote
+    something that can move: the dimensional ``<|F|>``, the Panici et al.
+    2023 ratio ``<|F|>/<|grad p|>`` (``nan`` in vacuum, where it is
+    undefined), the vacuum-safe DESC/Thun ratio ``<|F|>/<|grad(B^2/2mu0)|>``
+    and its pointwise L2 companion, and the near-axis/bulk/edge split of the
+    dimensional ``|F|`` that says where the residual sits.  The volume
+    averages come from ``window_normalizations``, so the axis and the edge
+    boundary layer do not dominate them; the region split is over the whole
+    domain, which is the point of splitting it.
+    """
+
+    def values(report: StrongForceReport) -> tuple[float, ...]:
+        window = report.window_normalizations
+        return (
+            float(window.volume_average_force),
+            float(window.relative_force_error),
+            float(window.magnetic_relative_force_error),
+            float(window.magnetic_normalized_l2),
+            float(report.near_axis_l2),
+            float(report.bulk_l2),
+            float(report.edge_l2),
+        )
+
+    before = values(initial)
+    after = values(final) if final is not None else (None,) * len(before)
+    return tuple(zip(FORCE_ERROR_MEASURE_LABELS, before, after, strict=True))
+
+
+def force_error_record(report: StrongForceReport) -> dict[str, Any]:
+    """Serialize a certificate's normalizations for a committed artifact.
+
+    Both the saturating pointwise ``eps_F`` block and the volume-averaged
+    normalizations are written, together with the ``saturation`` disclosure,
+    so a JSON reader sees the bound at the same time as the number.
+    """
+
+    def block(normalizations: ForceErrorNormalizations) -> dict[str, Any]:
+        return {
+            "volume_average_force": float(normalizations.volume_average_force),
+            "volume_average_grad_pressure": float(
+                normalizations.volume_average_grad_pressure
+            ),
+            "volume_average_magnetic_pressure_gradient": float(
+                normalizations.volume_average_magnetic_pressure_gradient
+            ),
+            "relative_force_error": float(normalizations.relative_force_error),
+            "magnetic_relative_force_error": float(
+                normalizations.magnetic_relative_force_error
+            ),
+            "magnetic_normalized_l2": float(normalizations.magnetic_normalized_l2),
+            "magnetic_normalized_linf": float(normalizations.magnetic_normalized_linf),
+            "node_count": int(normalizations.node_count),
+            "s_min": float(normalizations.s_min),
+            "s_max": float(normalizations.s_max),
+        }
+
+    return {
+        "normalization": report.normalization,
+        "saturation": report.saturation,
+        "pointwise_eps_f": {
+            "normalized_l2": float(report.normalized_l2),
+            "normalized_p99": float(report.normalized_p99),
+            "normalized_linf": float(report.normalized_linf),
+        },
+        "absolute": {
+            "l2": float(report.absolute_l2),
+            "p99": float(report.absolute_p99),
+            "linf": float(report.absolute_linf),
+            "near_axis_l2": float(report.near_axis_l2),
+            "bulk_l2": float(report.bulk_l2),
+            "edge_l2": float(report.edge_l2),
+        },
+        "global_normalizations": block(report.global_normalizations),
+        "window_normalizations": block(report.window_normalizations),
+    }
 
 
 def plot_strong_force_report(
@@ -949,6 +1224,8 @@ def plot_strong_force_report(
 
 
 __all__ = [
+    "FORCE_ERROR_MEASURE_LABELS",
+    "ForceErrorNormalizations",
     "HighOrderEquilibriumState",
     "HighOrderFieldSamples",
     "HighOrderSurfaceSamples",
@@ -957,7 +1234,10 @@ __all__ = [
     "certify_strong_force",
     "evaluate_high_order_fields",
     "evaluate_high_order_surface",
+    "evaluate_magnetic_pressure_gradient",
     "evaluate_strong_force",
+    "force_error_measures",
+    "force_error_record",
     "high_order_state_from_wout",
     "lift_high_order_state",
     "plot_strong_force_report",

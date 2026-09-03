@@ -1,0 +1,84 @@
+{
+  "cases": {
+    "constant_toroidal_field": {
+      "absolute_l2": "0x1.373d6193716afp+16",
+      "absolute_linf": "0x1.56581da92711dp+16",
+      "absolute_p99": "0x1.55bf3d414e362p+16",
+      "angular_spectral_tail": "0x1.223f3adb55f09p-5",
+      "arrays": {
+        "flux_surface_average": {
+          "sha256": "8b7dec5eb828deaae44869c057453bce6280deffa59af363058802c7e24eb17b",
+          "size": 24
+        },
+        "flux_surface_normalized_l2": {
+          "sha256": "0d9adb8f3622410ee7da40dc849e424e261b5c34eab623714b3fed02c8a25811",
+          "size": 24
+        },
+        "radial_nodes": {
+          "sha256": "8b07373a5321f5f5a4565b6f02a06c91a5676308e22320d7804b738e3dd4965f",
+          "size": 24
+        }
+      },
+      "boundary_residual": "0x0.0p+0",
+      "bulk_l2": "0x1.3719e96eb4f84p+16",
+      "edge_l2": "0x1.377c0a3f51248p+16",
+      "force_floor": "0x1.19799812dea11p-40",
+      "gauge_residual": "0x0.0p+0",
+      "helical_l2": "0x1.b7e21724a2d3ap+15",
+      "helical_normalized_l2": "0x1.6a09e667f3b55p+0",
+      "minimum_signed_jacobian": "0x1.228f971b949d2p+3",
+      "near_axis_l2": "0x1.36db26a69f7d9p+16",
+      "nestedness_margin": "0x1.228f971b949d2p+3",
+      "normalized_l2": "0x1.0000000000000p+1",
+      "normalized_linf": "0x1.0000000000000p+1",
+      "normalized_p99": "0x1.0000000000000p+1",
+      "radial_l2": "0x1.b86f88036e723p+15",
+      "radial_normalized_l2": "0x1.6a09e667f3c3ep+0",
+      "radial_refinement_difference": "0x0.0p+0"
+    },
+    "solovev_initial_lift": {
+      "absolute_l2": "0x1.869acb73513f4p+13",
+      "absolute_linf": "0x1.36d5978120fbbp+14",
+      "absolute_p99": "0x1.30f893d1c52a2p+14",
+      "angular_spectral_tail": "0x1.02708ae11eb1fp-2",
+      "arrays": {
+        "flux_surface_average": {
+          "sha256": "2c813ebc1ff40628d3327008af6f25ad498c01791d76e3f8de39ca6c8cdaaa95",
+          "size": 24
+        },
+        "flux_surface_normalized_l2": {
+          "sha256": "16bf6dce16e7e5080e0a1614d3338bc4f80ad187af1b2147f817a4d5f1ce43ca",
+          "size": 24
+        },
+        "radial_nodes": {
+          "sha256": "1df76c117fa19efb261804a2f1676e025ec42f8043087c64dff56b5729522c4e",
+          "size": 24
+        }
+      },
+      "boundary_residual": "0x0.0p+0",
+      "bulk_l2": "0x1.7a9dd9a513bfdp+13",
+      "edge_l2": "0x1.9f5844f49d0a4p+13",
+      "force_floor": "0x1.19799812dea11p-40",
+      "gauge_residual": "0x0.0p+0",
+      "helical_l2": "0x1.de1ee178f9d0ep+12",
+      "helical_normalized_l2": "0x1.738c186afe60fp+0",
+      "minimum_signed_jacobian": "0x1.55c371e0282c4p+2",
+      "near_axis_l2": "0x1.63445762496cdp+13",
+      "nestedness_margin": "0x1.55c371e0282c4p+2",
+      "normalized_l2": "0x1.fffe0425e3329p+0",
+      "normalized_linf": "0x1.fffffef852143p+0",
+      "normalized_p99": "0x1.fffff9be707a2p+0",
+      "radial_l2": "0x1.14cff93ee38a0p+13",
+      "radial_normalized_l2": "0x1.3b2ad4d0f6a1fp+0",
+      "radial_refinement_difference": "0x1.244e474a6ad7cp-44"
+    }
+  },
+  "measured": {
+    "jax": "0.9.2",
+    "jit_disabled": true,
+    "machine": "arm64",
+    "note": "Values of every StrongForceReport field that shipped before the volume-averaged normalizations were added, recorded as exact float64 hex on the eager (jit-disabled) lane.",
+    "vmex_commit": "2d3be2c0"
+  },
+  "schema": "vmex.strong-force-certificate-baseline/1"
+}
