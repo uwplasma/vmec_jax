@@ -156,26 +156,34 @@ def test_polish_sweep_memory_artifact_shows_the_fix_it_claims() -> None:
     arms = {arm["mode"]: arm for arm in artifact["arms"]}
     assert set(arms) == {"flat", "batched", "auto"}
     gib = 1024.0**3
-    flat = arms["flat"]["peak_rss_bytes"] / gib
-    auto = arms["auto"]["peak_rss_bytes"] / gib
-    # The flat sweep is the reported failure: tens of GiB on a deck that
-    # fits comfortably once the sweep is batched.
-    assert flat > 16.0
-    assert auto < 0.5 * flat
+    shipped = arms["auto"]["detail"]
     assert arms["auto"]["completed"] is True
-    detail = arms["auto"]["detail"]
-    assert detail["resolution"]["mpol"] == detail["resolution"]["ntor"] == 10
-    assert detail["sweep_policy"] == {
+    assert shipped["resolution"]["mpol"] == shipped["resolution"]["ntor"] == 10
+    assert shipped["sweep_policy"] == {
         "batch": True,
         "checkpoint": True,
         "max_batch": 4096,
         "min_batch": 128,
         "working_set_bytes": 512 * 1024**2,
     }
-    # The certificate sweep is the allocation that killed the user's run.
-    assert detail["certificate_peak_rss_bytes"] / gib < 8.0
+    # The automatic batch must still land on the point count this deck was
+    # measured with, or the calibration in strong_force.py has drifted.
+    assert shipped["sweep_batch_points"] == 4096
+
+    # The forward sweep is the allocation users reported: the flat arm still
+    # reaches tens of GiB, and the shipped certificate is a small fraction
+    # of it.
+    assert arms["flat"]["peak_rss_bytes"] / gib > 16.0
+    assert shipped["certificate_peak_rss_bytes"] / gib < 8.0
     assert (
-        detail["chart_peak_rss_bytes"] >= detail["certificate_peak_rss_bytes"]
+        arms["flat"]["peak_rss_bytes"]
+        > 4.0 * shipped["certificate_peak_rss_bytes"]
+    )
+    # The remat boundary is the reverse-mode half: batching alone leaves the
+    # chart build storing whole-grid linearization residuals.
+    assert (
+        arms["batched"]["detail"]["chart_peak_rss_bytes"]
+        > 1.5 * shipped["chart_peak_rss_bytes"]
     )
     assert "polish_memory_w7x.json" in (
         ROOT / "docs" / "reference" / "performance.rst"
