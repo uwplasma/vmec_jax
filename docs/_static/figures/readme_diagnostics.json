@@ -2,8 +2,8 @@
   "schema": "vmex.readme-diagnostics-figures/1",
   "generator": "docs/_static/figures/sources/make_readme_diagnostics_figures.py",
   "provenance": {
-    "measurement_commit": "8b1c5ffe67d042da271a2d1b063fdbb39ed2f847",
-    "measurement_dirty": true,
+    "measurement_commit": "ede33098bfa54a3145bac8dbdb5b0bb4b20f673e",
+    "measurement_dirty": false,
     "input_data_embedded": false,
     "measurement_date": "2026-09-03",
     "host": "Darwin 23.4.0 (arm64), CPU",

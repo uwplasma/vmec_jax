@@ -100,6 +100,7 @@
       "note": "Plots the cached three-code trace. On a cache miss the generator re-solves and shells out to VMEC2000 and VMEC++, discovered locally or via VMEX_XVMEC2000 / VMEX_VMECPP_PY. The cache file carries no provenance block of its own.",
       "used_in": [
         "README.md",
+        "docs/explanation/validation.md",
         "docs/reference/performance.rst"
       ]
     },
