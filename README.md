@@ -38,6 +38,8 @@ wout = vj.wout_from_state(inp=inp, state=result.state,
 vj.write_wout("wout_circular_tokamak.nc", wout)
 figures = vj.plot_wout("wout_circular_tokamak.nc", "figures")
 # The summary includes the relative radial force-error profile and its maximum.
+# That panel is O(1) noise for a vacuum case: read it only at finite pressure
+# or with net current.
 ```
 
 The CLI provides the same workflow:
@@ -414,7 +416,10 @@ certificate refinements are recorded in `benchmarks/`.
 `vmex --plot wout_X.nc` produces cross-sections, profiles, a 3-D LCFS, and
 the compact summaries below, including the relative radial force error and
 its maximum over solved surfaces, Mercier/Glasser stability, the second
-adiabatic invariant, and Boozer $|B|$. The
+adiabatic invariant, and Boozer $|B|$. The radial force-error panel is
+meaningless for a vacuum case — with no pressure gradient and no net current
+its numerator and denominator are the same discretization noise, so it reads
+$O(1)$ regardless of solve quality. The
 [plotting guide](https://vmex.readthedocs.io/en/latest/howto/plot-diagnostics.html)
 defines every panel; `--booz` additionally saves a reusable `boozmn_*.nc`.
 

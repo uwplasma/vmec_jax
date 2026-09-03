@@ -70,7 +70,12 @@ itself by reproducing the stored `DMerc` profile from the same integrals; on
 mismatch the curve is omitted with a panel note rather than drawn
 unvalidated. The force-error maximum in the scalar card uses the solved
 interior surfaces; WOUT's axis and boundary values are extrapolations. The
-same normalization is valid in vacuum, where the pressure term is zero.
+normalization breaks down in vacuum: with $\nabla p=0$ and no net current,
+both the numerator and every term of the denominator
+({func}`~vmex.core.postprocess.force_balance`) are radial differences of
+near-constant `buco`/`bvco`, so the ratio is $O(1)$ discretization noise
+rather than a force error. Read the panel only for finite-pressure or
+current-carrying cases.
 The confinement panel's two right-axis profiles are radial *trends*, not
 transport numbers: both diagnostics run at bounded summary resolution, they
 share the summary's one in-process Boozer transform where the mathematics is

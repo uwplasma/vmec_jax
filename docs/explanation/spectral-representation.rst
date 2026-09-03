@@ -194,14 +194,33 @@ and the weighted cosine table
    \mathrm{cosmui}_{i,m} = \mathrm{dnorm}\,w_i\,\mathrm{mscale}_m \cos(m\theta_i),
 
 with :math:`w_0=w_{n_{\theta2}-1}=1/2` and :math:`w_i=1` elsewhere. The sine
-table is defined analogously, with the same weights and ``mscale``. Zeta tables
-use ``nscale`` (also :math:`\sqrt{2}` for :math:`n>0`) and, for derivative
-terms, include the field-period multiplier :math:`n\,\mathrm{NFP}`:
+table is defined analogously, with the same weights and ``mscale``.
+
+There is a second, ``lasym``-dependent normalization. VMEC2000 ``fixaray.f``
+replaces ``dnorm`` itself by :math:`1/(n_\zeta n_{\theta3})` when
+``lasym=True``; VMEX keeps the reduced-grid ``dnorm`` on ``cosmui/sinmui`` and
+carries the full-grid value as a separate ``dnorm3`` used only by ``cosmui3``
+and the surface weights ``wint``. Applying the full-grid ``dnorm`` to
+``cosmui`` as well would halve every ``lasym`` force projection, and with it
+the ``alias.f`` constraint-force weight relative to the MHD force.
+
+.. math::
+
+   \mathrm{dnorm3} = \frac{1}{n_\zeta\,n_{\theta3}}\ (\texttt{lasym}), \qquad
+   \mathrm{dnorm3} = \mathrm{dnorm}\ (\text{symmetric}).
+
+Zeta tables use ``nscale`` (also :math:`\sqrt{2}` for :math:`n>0`) and, for
+derivative terms, include the field-period multiplier :math:`n\,\mathrm{NFP}`:
 
 .. math::
 
    \mathrm{cosnvn}_{k,n} = (n\,\mathrm{NFP})\,\mathrm{cosnv}_{k,n}, \qquad
    \mathrm{sinnvn}_{k,n} = -(n\,\mathrm{NFP})\,\mathrm{sinnv}_{k,n}.
+
+That :math:`n\,\mathrm{NFP}` factor is the whole toroidal chain rule: the
+tables index the grid by the normalized field-period angle, but ``cosnvn`` and
+``sinnvn`` are already derivatives with respect to the **physical** toroidal
+angle. Nothing downstream multiplies or divides by ``NFP`` again.
 
 VMEX uses these tables in ``tomnsps`` so that the Fourier-space force
 arrays exactly match VMEC2000. See References [4-6] in
@@ -279,8 +298,13 @@ and the signed Jacobian is:
 
    \sqrt{g} = \mathbf{e}_s \cdot (\mathbf{e}_\theta \times \mathbf{e}_\phi).
 
-VMEC stores a sign convention ``signgs = ±1`` such that ``signgs*sqrtg`` is
-positive away from the axis.
+VMEC stores a sign convention ``signgs`` such that ``signgs*sqrtg`` is positive
+away from the axis. It is not a free parameter: VMEC2000 ``readin.f`` sets
+``signgs = -1`` unconditionally and, when the boundary's ``m=1`` row has the
+opposite orientation, flips theta instead (``lflip``, ``flip_theta``). VMEC++
+fixes the same value as the compile-time constant ``kSignOfJacobian = -1``, and
+VMEX follows both (:mod:`vmex.core.setup`). Code that reads ``signgs`` from a
+``wout`` file should still honor the stored value.
 
 Jacobian sign check (``tau``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -313,33 +337,48 @@ directions:
 
 .. math::
 
-   \mathbf{B} = B^u \nabla u + B^v \nabla v, \qquad v \equiv \zeta.
+   \mathbf{B} = B^u \nabla u + B^v \nabla v, \qquad
+   v \equiv \zeta \equiv \phi_{\mathrm{phys}}.
 
-In terms of VMEC's flux functions
-:math:`\Phi(s)` (toroidal flux) and :math:`\chi(s)` (poloidal flux), we define:
+Here :math:`v` is the physical toroidal angle, not a field-period-normalized
+one; the :math:`n\,\mathrm{NFP}` factor sits in the ``cosnvn/sinnvn`` tables
+above. In terms of VMEC's flux functions :math:`\Phi(s)` (toroidal flux) and
+:math:`\chi(s)` (poloidal flux), the **internal** radial derivatives are
 
 .. math::
 
-   \Phi'(s) \equiv \frac{d\Phi}{ds} \quad (\text{``phipf''}), \qquad
-   \chi'(s) \equiv \frac{d\chi}{ds} \quad (\text{``chipf''}).
+   \Phi'(s) \equiv \frac{\mathrm{signgs}}{2\pi}\frac{d\Phi}{ds}
+     \quad (\text{``phipf''}), \qquad
+   \chi'(s) \equiv \frac{\mathrm{signgs}}{2\pi}\frac{d\chi}{ds}
+     \quad (\text{``chipf''}).
 
-VMEC's **contravariant** components (``bsupu`` and ``bsupv`` in ``wout``)
-are computed as:
+The :math:`\mathrm{signgs}/2\pi` belongs to those two profiles alone
+(``profil1d.f``: ``torflux_edge = signgs*phiedge/twopi``, and
+:mod:`vmex.core.setup`); it is *not* an overall factor on :math:`B^u, B^v`.
+The ``wout`` file stores ``phipf/chipf`` multiplied back by
+:math:`2\pi\,\mathrm{signgs}`, which is why
+:mod:`vmex.core.postprocess` divides them out before reusing them.
+
+With those internal profiles, VMEC's **contravariant** components
+(``bsupu`` and ``bsupv`` in ``wout``) are
 
 .. math::
 
    B^v = \frac{\Phi'(s) + \mathrm{lamscale}\,\partial_{\theta}\lambda}
-                {\mathrm{signgs}\,\sqrt{g}\,2\pi},
+                {\sqrt{g}},
 
 .. math::
 
-   B^u = \frac{\chi'(s) - \mathrm{lamscale}\,\partial_{\zeta}\lambda}
-                {\mathrm{signgs}\,\sqrt{g}\,2\pi}.
+   B^u = \frac{\chi'(s) - \mathrm{lamscale}\,\partial_{v}\lambda}
+                {\sqrt{g}}.
 
-Note that :math:`\partial_\zeta \lambda` is w.r.t. the field-period coordinate
-:math:`\zeta`, while the geometry kernel returns
-:math:`\partial_{\phi_{\mathrm{phys}}}\lambda`, so VMEX converts using
-:math:`\partial_\zeta = (1/\mathrm{NFP})\,\partial_{\phi_{\mathrm{phys}}}`.
+This is VMEC2000 ``bcovar.f`` lines 168-169 verbatim
+(``BSUPU = PHIPOG*(chip + LAMV*LAMSCALE)``,
+``BSUPV = PHIPOG*(phip + LAMU*LAMSCALE)`` with ``PHIPOG = 1/GSQRT`` and
+``LV = -d(LAM)/dv``), and :func:`~vmex.core.fields.magnetic_fields`
+reproduces it with no extra factor. The lambda derivative
+:math:`\partial_v\lambda` is already taken with respect to the physical
+toroidal angle, so no ``1/NFP`` conversion is applied anywhere.
 
 From metric elements to :math:`|B|`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -354,9 +393,9 @@ mesh, with the even/odd-m decomposition
    g_{uv} = R_u R_v + Z_u Z_v, \qquad
    g_{vv} = R_v^2 + Z_v^2 + R^2
 
-(:func:`~vmex.core.fields.metric_elements`; the :math:`R^2` term is the
-cylindrical toroidal metric at unit
-:math:`d\phi_{\mathrm{phys}}/d\zeta`). Lowering the index and contracting,
+(:func:`~vmex.core.fields.metric_elements`; the bare :math:`R^2` term is the
+cylindrical toroidal metric, and it carries no ``NFP`` factor precisely because
+:math:`v` is the physical angle). Lowering the index and contracting,
 
 .. math::
 
