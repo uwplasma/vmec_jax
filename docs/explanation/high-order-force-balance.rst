@@ -144,8 +144,8 @@ raw maxima live:
    \qquad
    \langle|\mathbf F|\rangle .
 
-The first is the relative force error of Panici et al. 2023 (reference 48,
-Eqs. 32–34b).  It is genuinely undefined in vacuum, so it is reported as
+The first is the relative force error of Panici et al. 2023, Eqs. 32–34b
+(reference 48 in :doc:`/project/references`).  It is genuinely undefined in vacuum, so it is reported as
 ``nan`` there rather than as a huge floored number.  The second is the
 vacuum-safe form: :math:`\nabla(B^2/2\mu_0)` does not vanish when the
 pressure is flat, so dividing by its volume average stays meaningful

@@ -317,6 +317,172 @@ def test_fresh_deck_parity_artifact_is_provenanced_and_cited() -> None:
         "Numerical reproducibility")[0]
 
 
+#: The two committed polish force-error records: the shaped tokamak whose
+#: before/after pair the README quotes, and the bundled solovev deck that
+#: shows what ``eps_F`` looks like when its denominator has collapsed.
+POLISH_FORCE_ERROR_RECORDS = (
+    "polish_force_error_2026-09-03.json",
+    "polish_force_error_solovev_2026-09-03.json",
+)
+
+
+def _readme_number(value: float, digits: int = 3) -> str:
+    """Format a measurement the way the README prints it.
+
+    ``f"{v:.3e}"`` pads the exponent (``1.284e-02``); prose writes
+    ``1.284e-2``.  Comparing through one formatter keeps the README pinned
+    to the artifact digit for digit without dictating its typography.
+    """
+    mantissa, exponent = f"{value:.{digits}e}".split("e")
+    return f"{mantissa}e{int(exponent)}"
+
+
+@pytest.mark.parametrize("name", POLISH_FORCE_ERROR_RECORDS)
+def test_polish_force_error_records_are_provenanced(name: str) -> None:
+    """Each polish force-error record must stand on its own provenance.
+
+    31.2-R3: the README's previous "26-fold" polish figure had no artifact
+    behind it and its two ends came from different export meshes.  The
+    replacement is measured from a clean checkout with the deck hashed, the
+    commit recorded, and the invocation kept, so a reader can re-run it.
+    """
+    record = json.loads((ROOT / "benchmarks" / name).read_text())
+    assert record["schema"] == "vmex.strong-polish-benchmark/2"
+    assert record["measurement_dirty"] is False
+    assert re.fullmatch(r"[0-9a-f]{40}", record["measurement_commit"])
+    assert re.fullmatch(r"[0-9a-f]{16}", record["input_sha256_prefix"])
+    assert record["input_data_embedded"] is False
+    assert record["vmex_module"].startswith("vmex/")
+    assert record["command"].startswith("python benchmarks/strong_polish.py")
+    # The recorded invocation is provenance, not a filesystem tour.
+    assert "/" not in record["command"].split("--output")[1]
+    for key in ("python", "vmex", "jax", "numpy", "solvax"):
+        assert record["versions"][key], key
+
+    initial = record["initial_certificate"]["normalizations"]
+    final = record["final_certificate"]["normalizations"]
+    for block in (initial, final):
+        # A record that quotes eps_F must carry the bound with it, and the
+        # measures that stay informative when eps_F pins at that bound.
+        assert "bounded above by 2" in block["saturation"]
+        assert block["pointwise_eps_f"]["normalized_linf"] <= 2.0
+        assert block["window_normalizations"]["s_min"] == 0.1
+        assert block["window_normalizations"]["s_max"] == 0.99
+        assert block["window_normalizations"]["node_count"] <= block[
+            "global_normalizations"
+        ]["node_count"]
+        for scale in ("volume_average_force", "magnetic_relative_force_error"):
+            assert block["global_normalizations"][scale] > 0.0, scale
+    if name == POLISH_FORCE_ERROR_RECORDS[0]:
+        # The tokamak record is a before/after pair: the correction has to
+        # have moved something the pointwise metric cannot express.
+        assert record["polish_report"]["converged"] is True
+        assert final["absolute"]["near_axis_l2"] < initial[
+            "absolute"
+        ]["near_axis_l2"]
+    else:
+        # The solovev record is a single-state certificate (the driver
+        # returns the unpolished state when it does not certify, so a
+        # before/after pair there would be two copies of one state).
+        assert record["diagnostics_only"] is True
+        assert record["polish_report"]["termination_reason"] == "diagnostics-only"
+        assert final == initial
+
+
+def test_solovev_record_shows_the_certificate_at_its_ceiling() -> None:
+    """31.2-R1's evidence: a shipped deck where eps_F carries no information.
+
+    ``input.solovev`` peaks at 0.125 Pa, so the pressure gradient is five
+    orders of magnitude below the magnetic pressure gradient and the
+    pointwise denominator has collapsed.  ``eps_F`` sits at its ceiling
+    while the vacuum-safe normalization still reports a small, ordinary
+    force error -- which is the entire reason both are now reported.
+    """
+    record = json.loads(
+        (ROOT / "benchmarks" / POLISH_FORCE_ERROR_RECORDS[1]).read_text()
+    )
+    block = record["initial_certificate"]["normalizations"]
+    assert block["pointwise_eps_f"]["normalized_linf"] == pytest.approx(
+        2.0, rel=1e-7
+    )
+    assert block["pointwise_eps_f"]["normalized_l2"] > 1.9
+    scales = block["global_normalizations"]
+    assert scales["volume_average_grad_pressure"] < 1.0
+    assert scales["volume_average_magnetic_pressure_gradient"] > 1.0e3
+    # The Panici ratio is legitimate but useless here; the vacuum-safe one
+    # is small, which is the number a reader should be given.
+    assert scales["relative_force_error"] > 100.0
+    assert scales["magnetic_normalized_l2"] < 0.1
+
+    readme = (ROOT / "README.md").read_text()
+    assert POLISH_FORCE_ERROR_RECORDS[1] in readme
+    assert f"`{block['pointwise_eps_f']['normalized_l2']:.3f}`" in readme
+    assert f"`{_readme_number(scales['magnetic_normalized_l2'], 2)}`" in readme
+    assert f"`{_readme_number(scales['volume_average_force'], 2)}`" in readme
+    assert f"`{_readme_number(scales['volume_average_grad_pressure'], 2)}`" in readme
+    assert (
+        f"`{_readme_number(scales['volume_average_magnetic_pressure_gradient'], 2)}`"
+        in readme
+    )
+
+
+def test_readme_polish_gain_matches_the_committed_record() -> None:
+    """The README's polish table must be the record, digit for digit.
+
+    Every row is read straight out of the artifact at the precision the
+    README prints, so the table cannot drift from the measurement, and the
+    withdrawn "26-fold" claim cannot come back.
+    """
+    record = json.loads(
+        (ROOT / "benchmarks" / POLISH_FORCE_ERROR_RECORDS[0]).read_text()
+    )
+    readme = (ROOT / "README.md").read_text()
+    assert POLISH_FORCE_ERROR_RECORDS[0] in readme
+    assert "26-fold" not in readme.split("Earlier versions of this section")[0]
+
+    initial = record["initial_certificate"]["normalizations"]
+    final = record["final_certificate"]["normalizations"]
+    quoted = [
+        (record["initial_certificate"]["normalized_l2"],
+         record["final_certificate"]["normalized_l2"]),
+        (initial["absolute"]["l2"], final["absolute"]["l2"]),
+        (initial["global_normalizations"]["relative_force_error"],
+         final["global_normalizations"]["relative_force_error"]),
+        (initial["global_normalizations"]["magnetic_relative_force_error"],
+         final["global_normalizations"]["magnetic_relative_force_error"]),
+        (initial["window_normalizations"]["relative_force_error"],
+         final["window_normalizations"]["relative_force_error"]),
+        (initial["absolute"]["near_axis_l2"], final["absolute"]["near_axis_l2"]),
+        (initial["absolute"]["bulk_l2"], final["absolute"]["bulk_l2"]),
+        (initial["absolute"]["edge_l2"], final["absolute"]["edge_l2"]),
+    ]
+    for before, after in quoted:
+        for value in (before, after):
+            assert f"`{_readme_number(value)}`" in readme, value
+        ratio = before / after
+        assert (
+            f"{ratio:.2f}x" in readme or f"{ratio:.1f}x" in readme
+        ), ratio
+
+
+def test_readme_states_the_certificate_ceiling_and_its_selection() -> None:
+    """31.2-R1 and 31.2-R6: the two claims the README must not make silently.
+
+    eps_F may not appear without its bound, and a figure built from
+    hand-picked cases may not be presented as general evidence.
+    """
+    readme = (ROOT / "README.md").read_text()
+    assert "bounded above by 2 by construction" in readme
+    assert "demonstrably wins" not in readme
+    assert "not evidence of\na general advantage" in readme
+    assert "were selected because certified polishing\nimproves them" in readme
+    page = (
+        ROOT / "docs" / "explanation" / "high-order-force-balance.rst"
+    ).read_text()
+    assert "bounded above by 2 by construction" in page
+    assert "never be quoted on its own" in page
+
+
 def test_strong_polish_record_redacts_its_output_destination() -> None:
     """A committed record must not disclose where it was produced.
 
