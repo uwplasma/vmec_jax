@@ -349,15 +349,17 @@ jobs:
       - name: Publish combined coverage
         uses: codecov/codecov-action@v5.5.5
         with:
-          # Best-effort: the Codecov upload started 404ing ("Repository not
-          # found", OIDC/app installation drift) on 2026-09-02, and with
-          # fail_ci_if_error it aborted this job BEFORE the changed-line
-          # gate below could run — killing the local gate over a
-          # third-party outage.  The enforced gates are the mirror floor
-          # above and diff-cover below; the upload is telemetry.
+          # OIDC upload 404s ("Repository not found") because the Codecov
+          # project still carries the pre-rename vmec_jax identity, so the
+          # upload authenticates with the repository token instead.  The
+          # step stays best-effort either way: with fail_ci_if_error it
+          # aborted this job BEFORE the changed-line gate below could run,
+          # killing a local gate over a third-party outage.  The enforced
+          # gates are the mirror floor above and diff-cover below; the
+          # upload is telemetry.
           fail_ci_if_error: false
           files: coverage.xml
-          use_oidc: true
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Enforce changed-line coverage
         if: github.event_name == 'pull_request'
         run: diff-cover coverage.xml --compare-branch="origin/${GITHUB_BASE_REF}" --fail-under=95
