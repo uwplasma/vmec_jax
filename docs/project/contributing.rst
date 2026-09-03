@@ -116,3 +116,14 @@ Releases are cut from ``main``:
    and uploads the wheel and sdist to PyPI.
 
 Release notes live in ``CHANGELOG.md`` and the GitHub releases.
+
+Support and conduct
+-------------------
+
+Bug reports, feature requests, and usage questions all go to `GitHub issues
+<https://github.com/uwplasma/vmex/issues>`_, which offers a form for each;
+a bug report needs the input deck and the output of ``vmex --doctor``.
+:doc:`/howto/troubleshoot` covers non-convergence, NaNs, device placement,
+and cache problems first. ``CONTRIBUTING.md`` at the repository root is the
+short version of this page; participation in the project is governed by
+``CODE_OF_CONDUCT.md``, the Contributor Covenant 2.1.
