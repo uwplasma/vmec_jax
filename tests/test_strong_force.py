@@ -485,3 +485,46 @@ def test_chart_metadata_excludes_the_build_timestamp():
     assert structure == jax.tree_util.tree_structure(rebuilt)
     leaves, treedef = jax.tree_util.tree_flatten(chart)
     assert treedef.unflatten(leaves).build_seconds == 0.0
+
+
+def test_angular_spectral_tail_measures_the_high_harmonics():
+    """The tail is the power above two thirds of the resolvable harmonics.
+
+    ``rfftn`` leaves the poloidal axis a full complex transform, so its rows
+    run ``m = 0, 1, ..., ntheta/2, -ntheta/2, ..., -1``.  Cutting on the row
+    index selects the lowest ``|m|`` negative frequencies instead: under that
+    reading a pure ``m = 1`` field reported half its power as unresolved and a
+    near-Nyquist field reported none.
+    """
+    from vmex.core.strong_force import _angular_spectral_tail
+
+    ntheta, nzeta = 24, 20
+    theta = np.arange(ntheta) * 2.0 * np.pi / ntheta
+    zeta = np.arange(nzeta) * 2.0 * np.pi / nzeta
+
+    def poloidal(m):
+        return jnp.asarray(np.broadcast_to(
+            np.cos(m * theta)[None, :, None], (3, ntheta, nzeta)))
+
+    def toroidal(n):
+        return jnp.asarray(np.broadcast_to(
+            np.cos(n * zeta)[None, None, :], (3, ntheta, nzeta)))
+
+    # resolved harmonics carry no tail; those at or above the cut are all tail
+    assert float(_angular_spectral_tail(poloidal(1))) == pytest.approx(0.0, abs=1e-12)
+    assert float(_angular_spectral_tail(poloidal(7))) == pytest.approx(0.0, abs=1e-12)
+    assert float(_angular_spectral_tail(poloidal(8))) == pytest.approx(1.0, abs=1e-12)
+    assert float(_angular_spectral_tail(toroidal(1))) == pytest.approx(0.0, abs=1e-12)
+    assert float(_angular_spectral_tail(toroidal(9))) == pytest.approx(1.0, abs=1e-12)
+
+    # a high-m, high-n corner harmonic is counted once, so the ratio is a
+    # fraction: summing the two half-planes separately used to exceed one
+    corner = jnp.asarray(np.broadcast_to(
+        (np.cos(10 * theta)[:, None] * np.cos(9 * zeta)[None, :])[None, :, :],
+        (3, ntheta, nzeta)))
+    assert float(_angular_spectral_tail(corner)) == pytest.approx(1.0, abs=1e-12)
+
+    # a mixture lands strictly between the two, and the metric stays bounded
+    mixed = poloidal(1) + poloidal(8)
+    value = float(_angular_spectral_tail(mixed))
+    assert 0.0 < value < 1.0

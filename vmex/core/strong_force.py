@@ -724,6 +724,27 @@ def _weighted_quantile(values: Array, weights: Array, quantile: float) -> Array:
     return sorted_values[index]
 
 
+def _angular_spectral_tail(magnitude: Array) -> Array:
+    """Fraction of angular power above two thirds of the resolvable harmonics.
+
+    ``magnitude`` is sampled on ``(s, theta, zeta)``.  ``rfftn`` over the two
+    angles transforms theta in full, so its rows run
+    ``m = 0, 1, ..., ntheta/2, -ntheta/2, ..., -1``: a plain index cut on that
+    axis selects the *lowest* ``|m|`` negative frequencies, the opposite of a
+    tail.  Mask on ``|m|`` instead, and take the union with the toroidal
+    condition so the high-``m``, high-``n`` corner is counted once.
+    """
+    power = jnp.abs(jnp.fft.rfftn(magnitude, axes=(1, 2))) ** 2
+    ntheta, nzeta_half = power.shape[1], power.shape[2]
+    poloidal = jnp.abs(jnp.fft.fftfreq(ntheta) * ntheta)
+    toroidal = jnp.arange(nzeta_half)
+    theta_cut = max(1.0, (2.0 / 3.0) * (ntheta // 2))
+    zeta_cut = max(1.0, (2.0 / 3.0) * max(nzeta_half - 1, 1))
+    tail_mask = (poloidal[:, None] >= theta_cut) | (toroidal[None, :] >= zeta_cut)
+    tail = jnp.sum(jnp.where(tail_mask, power, 0.0))
+    return jnp.sqrt(tail / jnp.maximum(jnp.sum(power), 1.0e-300))
+
+
 def certify_strong_force(
     state: HighOrderEquilibriumState,
     *,
@@ -785,12 +806,7 @@ def certify_strong_force(
             0.0,
         )
 
-    angular_fft = jnp.fft.rfftn(magnitude, axes=(1, 2))
-    angular_power = jnp.abs(angular_fft) ** 2
-    theta_cut = max(1, angular_power.shape[1] * 2 // 3)
-    zeta_cut = max(1, angular_power.shape[2] * 2 // 3)
-    tail = jnp.sum(angular_power[:, theta_cut:, :]) + jnp.sum(angular_power[:, :, zeta_cut:])
-    tail = jnp.sqrt(tail / jnp.maximum(jnp.sum(angular_power), 1.0e-300))
+    tail = _angular_spectral_tail(magnitude)
     coarse_order = max(state.radial_basis.degree + 1, order - 2)
     coarse_s, coarse_s_weights = radial_quadrature(coarse_order)
     coarse_rho = np.sqrt(coarse_s)
