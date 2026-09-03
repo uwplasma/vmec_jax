@@ -33,8 +33,6 @@ import inspect
 import re
 from pathlib import Path
 
-import pytest
-
 import vmex
 
 
@@ -209,13 +207,13 @@ def _exports() -> list[str]:
     return [name for name in vmex.__all__ if name != "__version__"]
 
 
-@pytest.mark.parametrize("name", sorted(_exports()))
-def test_every_export_has_a_docstring(name):
-    obj = getattr(vmex, name)
-    doc = inspect.getdoc(obj)
-    assert doc and doc.strip(), (
-        f"vmex.{name} is exported from vmex.__all__ and rendered in the API "
-        "reference but has no docstring"
+def test_every_export_has_a_docstring():
+    # inspect.getdoc, not __doc__: autodoc_inherit_docstrings is on, so an
+    # inherited docstring is what the reader actually sees.
+    absent = [name for name in sorted(_exports()) if not (inspect.getdoc(getattr(vmex, name)) or "").strip()]
+    assert not absent, (
+        "names exported from vmex.__all__ and rendered in the API reference "
+        "with no docstring: " + ", ".join(absent)
     )
 
 
