@@ -106,9 +106,16 @@ def summarize_axisymmetric_beta_scan(
     """Summarize solved beta points against the beta-zero equilibrium.
 
     ``achieved_reference_beta`` uses the supplied vacuum reference field,
-    while ``local_axis_beta`` uses the finite-beta plasma field. The paraxial
-    comparison is ``B/B_vac = sqrt(1-beta)`` and is meaningful for a long,
-    approximately cylindrical mirror away from beta one.
+    while ``local_axis_beta`` uses the finite-beta plasma field.
+
+    ``paraxial_field_ratio`` is the long-thin relation ``B/B_vac =
+    sqrt(1 - beta)``: Ryutov et al., Phys. Plasmas 18, 092301 (2011), Eq. (30),
+    https://doi.org/10.1063/1.3624763.  It is *not* a small-beta estimate.  It
+    is the leading term of the expansion in ``(a/L)^2`` -- ``a`` the plasma
+    radius, ``L`` the axial scale of the field -- and is exact in ``beta`` for
+    any ``beta < 1``.  Its accuracy is therefore controlled by the device
+    aspect: ``paraxial_relative_error`` should be read against ``(a/L)^2``, and
+    is expected to be of that size even at large beta.
     """
 
     betas = jnp.asarray(requested_betas)

@@ -117,7 +117,7 @@ and composable with both gradient modes:
   transform, for decks that genuinely want a target rather than a floor;
 - :func:`~vmex.core.optimize.mirror_ratio` — ``(Bmax - Bmin)/(Bmax +
   Bmin)`` on one half-mesh surface (outermost by default), the practical QI
-  knob.  It is the |B| *modulation depth*, not :math:`R_m = B_{\max}/B_{\min}`
+  knob.  It is the ``|B|`` *modulation depth*, not :math:`R_m = B_{\max}/B_{\min}`
   (they are related by :math:`R_m = (1+m)/(1-m)`); the open-mirror lane
   reports :math:`R_m` proper through :mod:`vmex.mirror.metrics`;
 - :func:`~vmex.core.optimize.elongation_profile` /
@@ -213,7 +213,7 @@ result is numerically defined but not a valid GGJ stability claim.
 ``L_grad_B`` additionally has a fully traceable
 ``(equilibrium_state, solver_context)`` lane,
 :func:`~vmex.core.optimize.l_grad_b_state` — same convention
-(``L_grad_B = |B| sqrt(2 / ||grad B||_F^2)``, same sampling grid and radial
+(``L_grad_B = ``|B|`` sqrt(2 / ||grad B||_F^2)``, same sampling grid and radial
 stencils, wout-lane parity to float round-off), rebuilt from the state-field
 chain in pure JAX, so it works under ``jac="implicit"``.  The default hard
 minimum over the surface grid is exact but has a jumping gradient when the

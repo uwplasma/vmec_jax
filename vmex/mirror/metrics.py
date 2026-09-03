@@ -7,8 +7,8 @@ maximum of the on-axis vacuum field, the LCFS ``max/min``, and a field-line
 pages incomparable.  This module fixes the definitions once:
 
 ``R_m,axis`` (per leg)
-    ``max|B| / min|B|`` on the magnetic axis over one |B| well, where the well
-    is the axial interval between the two |B| maxima that bound its minimum.
+    ``max|B| / min|B|`` on the magnetic axis over one ``|B|`` well, where the well
+    is the axial interval between the two ``|B|`` maxima that bound its minimum.
     An open mirror has one well; the periodic stellarator-mirror hybrid has
     one per straight leg, hence "per leg".
 
@@ -18,13 +18,13 @@ pages incomparable.  This module fixes the definitions once:
     separately, never as "the" mirror ratio.
 
 ``L_mirror,B`` (per leg)
-    The arc-length distance between the two |B| maxima bounding a well: the
+    The arc-length distance between the two ``|B|`` maxima bounding a well: the
     length of the mirror cell measured by the field, not by the device.
 
 ``L_straight``
     The arc length of the axis over which its curvature is negligible.  It is
     the geometric length of the straight legs and is unrelated to
-    ``L_mirror,B`` unless the |B| maxima happen to sit at the leg ends.
+    ``L_mirror,B`` unless the ``|B|`` maxima happen to sit at the leg ends.
 
 All four are host-side reporting diagnostics built from discrete extrema, so
 they are deliberately plain NumPy and are not differentiable.
@@ -43,7 +43,7 @@ DEFAULT_STRAIGHT_CURVATURE_TOLERANCE = 1.0e-3
 
 @dataclass(frozen=True)
 class MirrorWell:
-    """One on-axis |B| well and the two maxima that bound it."""
+    """One on-axis ``|B|`` well and the two maxima that bound it."""
 
     minimum_index: int
     lower_maximum_index: int
@@ -114,7 +114,7 @@ def _checked_axial_coordinate(coordinate, size: int, *, period: float | None) ->
 
 
 def _local_maximum_indices(values: np.ndarray, *, periodic: bool) -> list[int]:
-    """Return the candidate |B| maxima that can bound a well."""
+    """Return the candidate ``|B|`` maxima that can bound a well."""
 
     count = values.size
     if periodic:
@@ -172,7 +172,7 @@ def _prune_shallow_maxima(
 ) -> list[int]:
     """Merge wells whose depth is below ``threshold`` (persistence pruning).
 
-    Discrete |B| samples of a solved equilibrium carry small ripple, which
+    Discrete ``|B|`` samples of a solved equilibrium carry small ripple, which
     would otherwise register as extra legs.  Removing the lower bounding
     maximum of the shallowest well merges it into its neighbour, exactly as
     topological persistence prescribes, until every surviving well is deeper
@@ -201,7 +201,7 @@ def axis_mirror_wells(
     period: float | None = None,
     minimum_relative_depth: float = 0.05,
 ) -> tuple[MirrorWell, ...]:
-    """Return the on-axis |B| wells with their ``R_m,axis`` and ``L_mirror,B``.
+    """Return the on-axis ``|B|`` wells with their ``R_m,axis`` and ``L_mirror,B``.
 
     ``axial_coordinate`` is the arc length (or ``z`` for a straight axis) of
     each sample and must be strictly increasing.  Pass ``period`` for a closed
@@ -210,8 +210,8 @@ def axis_mirror_wells(
     admissible bounding maxima.
 
     ``minimum_relative_depth`` is the well depth, as a fraction of the total
-    on-axis |B| swing, below which a well is merged into its neighbour.  It
-    keeps sampling ripple in a solved |B| from being reported as extra legs.
+    on-axis ``|B|`` swing, below which a well is merged into its neighbour.  It
+    keeps sampling ripple in a solved ``|B|`` from being reported as extra legs.
     """
 
     values = np.asarray(axis_field_strength, dtype=float)
@@ -253,7 +253,7 @@ def axis_mirror_wells(
             )
         )
     if not wells:
-        raise ValueError("the on-axis field strength has no |B| well between two maxima")
+        raise ValueError("the on-axis field strength has no ``|B|`` well between two maxima")
     return tuple(wells)
 
 
