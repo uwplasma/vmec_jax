@@ -416,6 +416,98 @@ absolute tolerances cover the golden run's own remaining non-convergence.
 wout files are compared per-variable with CompareWOut-style combined
 rel+abs tolerances.
 
+Fresh decks against ``xvmec2000`` (2026-09-02)
+-----------------------------------------------
+
+The parity table above uses the bundled regression decks.  As a final check
+that the 0.8.1 cold-start work did not trade physics for speed, six input
+files VMEX had never been benchmarked on — spanning ``nfp = 1`` to ``6``,
+tokamak and stellarator, vacuum and finite beta with net current — were run
+through ``vmex`` and the reference Fortran ``xvmec2000`` on an Apple M4 (JAX
+0.11.1, float64, serial Fortran).  Cold means a fresh process with the
+persistent compilation cache removed; warm means a fresh process reusing it;
+every run is in a fresh directory so no restart file is picked up.  The full
+protocol and per-deck notes are in
+``benchmarks/fresh_decks_vs_vmec2000_2026-09-02.md``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 24 10 12 12 20
+
+   * - deck
+     - resolution
+     - xvmec2000
+     - vmex cold
+     - vmex warm
+     - physics
+   * - ITER model (tokamak)
+     - nfp 1, mpol 12, ns 13→201 (6 levels), ftol 1e-18
+     - 6.7 s
+     - 21.0 s
+     - 9.0 s
+     - iters 1469 vs 1470; wout at machine precision
+   * - ESTELL
+     - nfp 2, mpol 6, ntor 5, ns 9→65, ftol 1e-12
+     - 23.1 s
+     - 24.0 s
+     - 14.2 s
+     - 2301 iters identical; machine precision
+   * - ARIES-CS n3are (finite beta, net current)
+     - nfp 3, mpol 9, ntor 5, ns 16/49, ftol 1e-11
+     - 5.1 s
+     - 10.6 s
+     - 5.8 s
+     - 1496 iters identical; beta rel 2e-13
+   * - HSX QHS (vacuum)
+     - nfp 4, mpol 10, ntor 10, ns 11→201 (7 levels), ftol 1e-12
+     - 162.3 s
+     - 97.2 s
+     - 81.7 s
+     - 1575 iters identical; machine precision
+   * - W7-X standard (fixed boundary)
+     - nfp 5, mpol 10, ntor 10, ns 13/25/51, ftol 1e-12
+     - 9.2 s
+     - 14.9 s
+     - 8.0 s
+     - 1105 iters identical; machine precision
+   * - Nührenberg–Zille 1988 QHS
+     - nfp 6, mpol 9, ntor 5, ns 16/51, ftol 1e-11
+     - 6.4 s
+     - 11.5 s
+     - 6.5 s
+     - 1843 iters identical; machine precision
+
+On every deck VMEX reproduces the Fortran trajectory — the same per-level
+iteration counts (the ITER model differs by one iteration at its 1e-18
+round-off floor), the same Jacobian-reset counts, the same final residuals to
+three figures — and the exported ``wout`` quantities (volume, aspect ratio,
+beta, ``b0``, ``iotaf``, ``presf``, ``phi``, boundary harmonics) agree at
+machine precision.  Warm, VMEX ranges from parity to twice the speed of the
+Fortran and is fastest exactly where runtime matters most (HSX, ESTELL).  The
+cold gap is XLA compilation and nothing else: on the worst case (the ITER
+model) the compile census counts 12.65 s across 650 programs — one
+``_block_lane`` compile per ``NS_ARRAY`` level plus a tail of single-op
+programs — matching the 12.0 s cold-minus-warm difference; it is paid once per
+machine and JAX version.
+
+Numerical reproducibility
+-------------------------
+
+Everything runs in float64 (``jax_enable_x64`` is mandatory).  Two solves of
+the same input on the same machine, JAX version, and device are bit-identical.
+Across VMEX versions the *algorithm* is fixed but the compiled graph is not:
+restructuring a traced lane changes XLA's fusion and hence the association
+order of floating-point reductions, so trajectories can differ from an earlier
+release at one unit in the last place per iteration.  On the regression decks
+this compounds to ``~1e-10`` relative in the late-iteration residual history
+with identical iteration counts and converged geometry agreeing to ``1e-12``;
+the golden, restart, step-control, and parity suites pin exactly that
+tolerance class.  CPU and accelerator results agree to the same class (the
+batched tridiagonal solver on accelerators is numerically equivalent, not
+bit-identical, to the CPU Thomas sweep).  Persistent compilation-cache hits
+reload byte-identical executables, so cached and freshly compiled runs agree
+bit for bit.
+
 2D block preconditioner
 -----------------------
 
