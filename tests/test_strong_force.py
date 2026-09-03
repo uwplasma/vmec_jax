@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import replace
 import json
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
@@ -325,7 +326,7 @@ def test_point_force_jvp_with_respect_to_high_order_coefficients():
     assert float(jnp.linalg.norm(derivative)) > 0.0
 
 
-def test_batched_point_sweep_matches_flat_vmap_values_and_gradients(monkeypatch):
+def test_batched_point_sweep_matches_flat_vmap_values_and_gradients():
     """``lax.map`` batching must not change force values or derivatives.
 
     The sweep switched from one flat ``vmap`` to ``lax.map`` batches so the
@@ -355,11 +356,12 @@ def test_batched_point_sweep_matches_flat_vmap_values_and_gradients(monkeypatch)
     flat_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
     flat_value, flat_grad = jax.value_and_grad(objective)(0.0)
 
-    monkeypatch.setattr(sf, "_FORCE_POINT_BATCH", 8)
-    sf.evaluate_strong_force.clear_cache()
-    batched_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
-    batched_value, batched_grad = jax.value_and_grad(objective)(0.0)
-    sf.evaluate_strong_force.clear_cache()
+    forced = sf.ForceSweepPolicy(min_batch=8, max_batch=8)
+    with sf.force_sweep_measurement(forced):
+        assert sf.force_sweep_batch(state, count) == 8
+        batched_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
+        batched_value, batched_grad = jax.value_and_grad(objective)(0.0)
+    assert sf.force_sweep_policy().batch is True
 
     for name in flat_samples.__dataclass_fields__:
         np.testing.assert_allclose(
@@ -372,6 +374,50 @@ def test_batched_point_sweep_matches_flat_vmap_values_and_gradients(monkeypatch)
     np.testing.assert_allclose(batched_value, flat_value, rtol=1.0e-12)
     np.testing.assert_allclose(batched_grad, flat_grad, rtol=1.0e-11)
     assert float(np.abs(np.asarray(flat_grad))) > 0.0
+
+
+def test_sweep_batch_holds_the_working_set_as_the_mode_table_grows():
+    """The batch must fall with problem size, not stay a tuned constant.
+
+    A fixed 4096-point batch was measured on the W7-X standard deck
+    (``mnmax = 200``, 27 radial basis functions).  The same constant at a
+    larger mode table would multiply the per-batch working set back up,
+    which is the allocation that OOM-killed the user's run in the first
+    place, so the batch is derived from the working set instead.  The
+    W7-X-scale answer must still be the measured 4096, and every batch must
+    hold the target working set.
+    """
+
+    from vmex.core import strong_force as sf
+
+    def batch_for(modes: int, basis: int) -> int:
+        # force_sweep_batch reads only the mode table and the basis size;
+        # standing those in keeps the case list at resolutions no test
+        # machine could afford to build a real state for.
+        sized = SimpleNamespace(
+            m=np.zeros(modes, dtype=int),
+            radial_basis=SimpleNamespace(size=basis),
+        )
+        return sf.force_sweep_batch(sized, point_count=10**7)
+
+    w7x = batch_for(200, 27)
+    assert w7x == sf._FORCE_SWEEP_MAX_BATCH == 4096
+    bigger = batch_for(528, 40)
+    assert bigger < w7x
+    for modes, basis in ((200, 27), (528, 40), (1200, 64)):
+        working_set = (
+            batch_for(modes, basis)
+            * sf._FORCE_POINT_BYTES_PER_MODE_BASIS
+            * modes
+            * basis
+        )
+        assert working_set <= sf._FORCE_SWEEP_WORKING_SET_BYTES
+    # Small grids stay on the flat sweep: optimization-loop gradients keep
+    # the exact cost they had before batching existed.
+    small = _constant_toroidal_field_state()
+    assert sf.force_sweep_batch(small, point_count=64) == 0
+    with sf.force_sweep_measurement(sf.ForceSweepPolicy(batch=False)):
+        assert sf.force_sweep_batch(small, point_count=10**7) == 0
 
 
 def test_overintegrated_certificate_reports_dimensional_and_normalized_force():
