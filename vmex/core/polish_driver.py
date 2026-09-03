@@ -1264,6 +1264,15 @@ def _gauss_newton_polish_lane(value, runtime, chart, variable_scale,
                 _polish_progress_cost, 0.5 * jnp.vdot(residuals, residuals))
         return residuals
 
+    # `progress` is static, so the heartbeat compiles a second program rather
+    # than perturbing the quiet one.  That program carries host callbacks, and
+    # JAX never writes a program with host callbacks to the persistent
+    # compilation cache, so a verbose run recompiles this lane on every
+    # process while a quiet one reloads it.  The trade is deliberate: the
+    # runs that need watching are the long interactive ones, where one lane
+    # compile is noise against hours of Gauss-Newton, and the Python API is
+    # quiet by default.
+    #
     # SOLVAX also takes a `precond` for the inner CG.  Nothing is passed:
     # the only preconditioner this module has is the low-order block
     # inverse, and building its symmetric normal-equation companion from
