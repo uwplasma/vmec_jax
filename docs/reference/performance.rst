@@ -426,9 +426,11 @@ tokamak and stellarator, vacuum and finite beta with net current — were run
 through ``vmex`` and the reference Fortran ``xvmec2000`` on an Apple M4 (JAX
 0.11.1, float64, serial Fortran).  Cold means a fresh process with the
 persistent compilation cache removed; warm means a fresh process reusing it;
-every run is in a fresh directory so no restart file is picked up.  The full
-protocol and per-deck notes are in
-``benchmarks/fresh_decks_vs_vmec2000_2026-09-02.md``.
+every run is in a fresh directory so no restart file is picked up.  The
+machine-readable record with provenance (vmex commit, reference binary hash,
+deck hashes, per-deck maxima) is
+``benchmarks/fresh_decks_vs_vmec2000_2026-09-02.json``; the per-deck
+narrative is the companion ``.md``.
 
 .. list-table::
    :header-rows: 1
@@ -445,44 +447,46 @@ protocol and per-deck notes are in
      - 6.7 s
      - 21.0 s
      - 9.0 s
-     - iters 1469 vs 1470; wout at machine precision
+     - iters 1469 vs 1470; iotaf 1.5e-16 rel, boundary exact
    * - ESTELL
      - nfp 2, mpol 6, ntor 5, ns 9→65, ftol 1e-12
      - 23.1 s
      - 24.0 s
      - 14.2 s
-     - 2301 iters identical; machine precision
+     - 2301 iters identical; iotaf 3.5e-12 rel, boundary 1.4e-17
    * - ARIES-CS n3are (finite beta, net current)
      - nfp 3, mpol 9, ntor 5, ns 16/49, ftol 1e-11
      - 5.1 s
      - 10.6 s
      - 5.8 s
-     - 1496 iters identical; beta rel 2e-13
+     - 1496 iters identical; beta 2.2e-13 rel, iotaf 1.4e-10 rel
    * - HSX QHS (vacuum)
      - nfp 4, mpol 10, ntor 10, ns 11→201 (7 levels), ftol 1e-12
      - 162.3 s
      - 97.2 s
      - 81.7 s
-     - 1575 iters identical; machine precision
+     - 1575 iters identical; iotaf 2.5e-10 rel, boundary 2.2e-19
    * - W7-X standard (fixed boundary)
      - nfp 5, mpol 10, ntor 10, ns 13/25/51, ftol 1e-12
      - 9.2 s
      - 14.9 s
      - 8.0 s
-     - 1105 iters identical; machine precision
+     - 1105 iters identical; iotaf 7.6e-12 rel, boundary 2.8e-17
    * - Nührenberg–Zille 1988 QHS
      - nfp 6, mpol 9, ntor 5, ns 16/51, ftol 1e-11
      - 6.4 s
      - 11.5 s
      - 6.5 s
-     - 1843 iters identical; machine precision
+     - 1843 iters identical; iotaf 3.8e-11 rel, boundary 6.9e-18
 
 On every deck VMEX reproduces the Fortran trajectory — the same per-level
 iteration counts (the ITER model differs by one iteration at its 1e-18
 round-off floor), the same Jacobian-reset counts, the same final residuals to
 three figures — and the exported ``wout`` quantities (volume, aspect ratio,
-beta, ``b0``, ``iotaf``, ``presf``, ``phi``, boundary harmonics) agree at
-machine precision.  Warm, VMEX ranges from parity to twice the speed of the
+beta, ``b0``, ``iotaf``, ``presf``, ``phi``, boundary harmonics) agree to at
+most ``1.4e-10`` relative in ``iotaf`` (ARIES-CS, the finite-beta net-current
+case), ``2.2e-13`` in beta, and ``1e-17`` absolute in the boundary harmonics;
+the per-deck maxima are in the artifact.  Warm, VMEX ranges from parity to twice the speed of the
 Fortran and is fastest exactly where runtime matters most (HSX, ESTELL).  The
 cold gap is XLA compilation and nothing else: on the worst case (the ITER
 model) the compile census counts 12.65 s across 650 programs — one

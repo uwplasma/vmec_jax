@@ -287,6 +287,36 @@ def test_readme_strong_force_figure_matches_committed_sources() -> None:
     )
 
 
+def test_fresh_deck_parity_artifact_is_provenanced_and_cited() -> None:
+    """The fresh-deck xvmec2000 table is a hashed record, not prose.
+
+    Every row the docs quote must trace to a deck hash, a reference-binary
+    hash, and a vmex commit, and the page must cite the record by path so
+    a reader can check the numbers rather than trust the phrasing.
+    """
+    path = ROOT / "benchmarks" / "fresh_decks_vs_vmec2000_2026-09-02.json"
+    record = json.loads(path.read_text())
+    assert record["schema"] == "vmex.fresh-deck-parity/1"
+    provenance = record["provenance"]
+    for key in ("vmex_commit", "vmex_version", "jax", "host", "protocol"):
+        assert provenance[key]
+    assert re.fullmatch(r"[0-9a-f]{16}", provenance["reference"]["sha256_prefix"])
+    decks = record["decks"]
+    assert len(decks) == 6
+    for deck in decks:
+        assert re.fullmatch(r"[0-9a-f]{16}", deck["sha256_prefix"]), deck["deck"]
+        walls = deck["wall_s"]
+        assert 0.0 < walls["vmex_warm"] <= walls["vmex_cold"], deck["deck"]
+        assert walls["xvmec2000"] > 0.0
+        assert deck["max_rel_diff"] and all(
+            0.0 <= value < 1.0e-9 for value in deck["max_rel_diff"].values()
+        ), deck["deck"]
+    page = (ROOT / "docs" / "reference" / "performance.rst").read_text()
+    assert path.name in page
+    assert "machine precision" not in page.split("Fresh decks against")[1].split(
+        "Numerical reproducibility")[0]
+
+
 def test_committed_reports_do_not_expose_personal_paths() -> None:
     """Release-facing text must remain portable between contributors."""
     text_suffixes = {".json", ".md", ".py", ".rst", ".toml"}
