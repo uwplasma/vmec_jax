@@ -78,6 +78,63 @@ class MagneticField:
 
     ``gradB`` has axes ``(point, B_i, x_j)``.  The SIMSOPT-compatible
     ``dB_by_dX`` swaps the last two axes to ``(point, x_j, B_i)``.
+
+    Every method takes points as Cartesian ``xyz`` in metres with shape
+    ``(n, 3)`` and returns ``B`` in tesla with the same shape; the
+    cylindrical helpers convert to and from the ``(R, phi, Z)`` layout with
+    ``phi`` in radians.  Points may be passed explicitly or stored once with
+    :meth:`set_points`.
+
+    The optional parameter arguments make the field differentiable with
+    respect to degrees of freedom that are not spatial coordinates — coil
+    currents, coil shapes, or equilibrium parameters — which is what the
+    ``*_vjp`` methods pull back.  There are two mutually exclusive ways to
+    supply that dependence, and either one requires ``parameters``: the
+    direct path (``parameterized_B_fn``) and the factored path
+    (``parameter_data_fn`` with ``B_from_data``).  Providing both, or one
+    half of the factored pair, raises :exc:`ValueError`.
+
+    Parameters
+    ----------
+    B_fn:
+        Cartesian field callable, ``xyz (n, 3) [m] -> B (n, 3) [T]``.  This
+        is the only required argument; a returned shape other than the
+        input shape raises :exc:`ValueError`.
+    gradB_fn:
+        Optional first spatial derivative, ``xyz (n, 3) -> (n, 3, 3)``
+        holding ``dB_i/dx_j`` in T/m with axes ``(point, B_i, x_j)``.  When
+        ``None``, :meth:`gradB` differentiates ``B_fn`` with a per-point
+        ``jax.jacfwd``, which is exact but costs one extra AD pass.
+    gradgradB_fn:
+        Optional second derivative, ``(n, 3, 3, 3)`` holding
+        ``d2B_i/dx_j dx_k`` in T/m^2, axes ``(point, B_i, x_j, x_k)``.
+        ``None`` nests two ``jax.jacfwd`` passes over ``B_fn``.
+    gradgradgradB_fn:
+        Optional third derivative, ``(n, 3, 3, 3, 3)`` holding
+        ``d3B_i/dx_j dx_k dx_l`` in T/m^3.  ``None`` nests three
+        ``jax.jacfwd`` passes over ``B_fn``.
+    parameters:
+        Optimizable field degrees of freedom, flattened to one dimension.
+        Required by, and only meaningful with, one of the two parameterized
+        paths; without it the ``*_vjp`` methods raise :exc:`RuntimeError`.
+        The units are whatever the parameterization uses (A for coil
+        currents, m for coil Fourier coefficients).
+    parameterized_B_fn:
+        Direct path: ``(parameters, xyz) -> B``, differentiated end to end
+        on every parameter VJP.
+    parameter_data_fn:
+        Factored path, first half: ``parameters -> data``, where ``data``
+        is any JAX pytree of intermediate quantities (for VMEX, the
+        equilibrium spectra or the boundary surface arrays).  Its VJP is
+        built once per point set and reused for every derivative order, so
+        an expensive parameters-to-data map is not repeated.
+    B_from_data:
+        Factored path, second half: ``(data, xyz) -> B``.  Must be supplied
+        together with ``parameter_data_fn``.
+    dof_names:
+        One name per entry of ``parameters``, in the same order, for
+        labelling gradient output.  ``None`` or ``()`` leaves the names
+        unset; any other length raises :exc:`ValueError`.
     """
 
     def __init__(
@@ -517,6 +574,44 @@ class VmecInteriorField(MagneticField):
     differentiable Newton solve.  Spectral angular evaluation and radial
     interpolation then recover ``B``.  Points outside the last closed surface
     return NaNs; use :class:`VmecExtender` there.
+
+    ``s`` is the normalised toroidal flux ``psi / psi_edge`` on ``[0, 1]``,
+    and ``theta`` (poloidal) and ``phi`` (geometric toroidal) are in radians.
+    A point is rejected — every field component set to NaN — when the
+    converged ``s`` leaves ``[0, 1]`` by more than ``1e-8`` or the inverted
+    ``(R, Z)`` still misses the query point by more than ``1e-7`` m, so a
+    non-converged inversion cannot be mistaken for a field value.
+
+    Parameters
+    ----------
+    spectra:
+        VMEC Fourier tables of one equilibrium, in the layout built by
+        ``vmex.core.virtual_casing._state_field_spectra`` (also what
+        :meth:`from_state` produces).  The keys read here are ``rmnc`` and
+        ``zmns``, full-mesh geometry coefficients of shape ``(ns, mnmax)``
+        in metres; ``xm`` and ``xn``, shape ``(mnmax,)``, the poloidal mode
+        number ``m`` and the *already field-period-scaled* toroidal mode
+        number ``n * nfp`` of the wout convention, so the angle is
+        ``m theta - n_scaled phi``; ``bsupu`` and ``bsupv``, the
+        contravariant field cosine coefficients ``B^theta`` and ``B^phi``
+        in T/m of shape ``(ns, mnmax_nyq)`` on the VMEC half mesh with row 0
+        the unused axis row; and their Nyquist mode numbers ``xmn`` and
+        ``xnn``, shape ``(mnmax_nyq,)``.  Only the stellarator-symmetric
+        (``lasym = False``) families are evaluated.  Values may be JAX
+        tracers, which is what makes the whole field differentiable.
+    newton_iterations:
+        Number of Newton steps taken to invert ``(R, Z) -> (s, theta)`` at
+        every query point.  The count is fixed rather than
+        residual-driven so the loop stays jit- and grad-transparent; raise
+        it for strongly shaped boundaries whose geometric first guess is
+        poor.
+    parameters, parameterized_B_fn, parameter_data_fn, B_from_data, dof_names:
+        Optimizable-parameter arguments forwarded unchanged to
+        :class:`MagneticField`; see its documentation.  On the factored
+        path ``parameter_data_fn`` returns a ``spectra`` mapping of the
+        same shape, and after :meth:`set_points_flux` the parameter VJPs
+        reuse the stored flux coordinates as Newton seeds and hold the
+        mapped Cartesian points fixed.
     """
 
     def __init__(
@@ -736,6 +831,38 @@ class VmecExtender(MagneticField):
     finite pressure or plasma current, the internal-current virtual-casing
     branch is added.  External coil currents must lie outside the query region;
     targets must not lie exactly on the source surface.
+
+    :meth:`B` is the plain sum of whichever contributions are present, in
+    tesla at Cartesian points in metres.  Spatial derivatives come from
+    differentiating that same Cartesian graph, so they carry no separate
+    cylindrical-axis singularity.  Prefer the classmethods
+    (:meth:`from_wout`, :meth:`from_file`, :meth:`from_state`,
+    :meth:`from_equilibrium`, :meth:`from_surface_data`) — this constructor
+    is the low-level form that takes already-built pieces.
+
+    Parameters
+    ----------
+    external_field:
+        The coil or vacuum field, evaluated directly at the query points.
+        Either an object exposing ``b_cyl(r, phi, z) -> (B_R, B_phi, B_Z)``
+        such as an :class:`~vmex.core.mgrid.MgridField`, or a plain callable
+        ``xyz (n, 3) [m] -> B (n, 3) [T]`` such as an ESSOS Biot-Savart coil
+        field.  May be ``None`` for the plasma field alone, but then
+        ``plasma_field`` must be given.
+    plasma_field:
+        Optional virtual-casing exterior field carrying the field of the
+        currents inside the last closed flux surface — a
+        ``virtual_casing_jax.VirtualCasingExteriorField``, normally built by
+        :meth:`from_surface_data`.  ``None`` selects the pure vacuum path,
+        correct only for a current-free equilibrium.
+    near_surface_plan:
+        Optional precomputed continuation plan from the plasma field's
+        ``plan_near_surface``; supply it through
+        :meth:`with_near_surface_continuation` rather than directly.  When
+        present, plasma-field targets are evaluated by the fast first-order
+        Taylor continuation off the boundary instead of the full off-surface
+        virtual-casing schedule, which is accurate only near the surface.
+        It requires ``plasma_field``.
     """
 
     def __init__(

@@ -488,6 +488,47 @@ def surface_field_data_from_high_order(
     exterior solver as symmetric would fold the boundary onto a half period
     that does not describe it. Under tracing the harmonics cannot be
     inspected, so the request is taken at face value.
+    This is the third route to the same container, alongside
+    :func:`surface_field_data_from_wout` (sampled tables) and
+    :func:`surface_field_data_from_state` (live spectral state).  Here the
+    boundary is evaluated at ``rho = 1`` of the continuous reconstruction, so
+    the tangents ``e_theta`` and ``e_phi`` are analytic derivatives rather
+    than differences of a Fourier table, and the edge field needs no
+    half-mesh extrapolation.
+
+    Parameters
+    ----------
+    state:
+        A :class:`~vmex.core.strong_force.HighOrderEquilibriumState` — the
+        axis-regular continuous reconstruction produced by the force-balance
+        polishing lane, not a solver ``SpectralState``.  Its ``nfp`` sets the
+        toroidal period and its ``jacobian_sign`` becomes ``signgs``.
+    nphi, ntheta:
+        Sample counts of the returned grid, over ``phi in [0, 2 pi / nfp)``
+        (one field period, geometric toroidal angle) and
+        ``theta in [0, 2 pi)``, both without the endpoint and both in
+        radians.  They set the source resolution of the virtual-casing
+        integral, so raising them costs quadrature time.
+    use_stellsym:
+        Recorded as the container's ``stellsym`` flag, which tells the
+        virtual-casing solver it may fold the source integral over the
+        half period.  Set it ``False`` for a non-stellarator-symmetric
+        boundary.
+
+    Returns
+    -------
+    A :class:`~virtual_casing_jax.VmecSurfaceFieldData` (the duck-typed
+    stand-in when ``virtual_casing_jax`` is not installed — this function is
+    pure VMEX numerics and needs no optional dependency) holding, in the
+    package's structure-of-arrays layout ``(3, nphi, ntheta)``: ``gamma``,
+    the Cartesian boundary points ``(R cos phi, R sin phi, Z)`` in metres;
+    ``B_total``, the total interior field on that boundary in tesla;
+    ``normal``, the outward unit normal; and ``area_vector``,
+    ``e_theta x e_phi`` in m^2 per radian^2, whose length is the area
+    element.  Both are flipped together, by one shared sign, so that their
+    mean projection onto the outward radial direction
+    ``d(position) / d(rho)`` is positive.  ``theta`` and ``phi`` carry the
+    two one-dimensional angle grids.
     """
 
     from .strong_force import evaluate_high_order_surface

@@ -236,7 +236,74 @@ def boozer_spectrum_high_order(
     ntheta: int | None = None,
     nzeta: int | None = None,
 ) -> dict[str, Array]:
-    """Transform continuous native surfaces with BOOZ_XFORM_JAX in memory."""
+    """Boozer ``|B|`` spectrum of a continuous high-order state, traceable.
+
+    The continuous-state counterpart of :func:`boozer_spectrum_state`.  Where
+    that route reads the solver's discrete radial mesh and can only evaluate
+    *half-mesh* surfaces, this one takes a
+    :class:`~vmex.core.strong_force.HighOrderEquilibriumState` — the spline
+    reconstruction produced by
+    :func:`~vmex.core.strong_force.lift_high_order_state` or
+    :func:`~vmex.core.strong_force.high_order_state_from_wout` — and evaluates
+    *any* surface exactly, with no radial mesh, no interpolation, and no
+    snapping.
+
+    Per requested surface,
+    :func:`~vmex.core.boozer_tables.high_order_boozer_input_tables` builds the
+    wout-convention input tables at ``rho = sqrt(s)``: the geometry harmonics
+    come straight from the spline coefficients, while ``|B|`` and the
+    covariant field are Fourier-projected from the analytic field evaluator on
+    a uniform ``(theta, zeta)`` grid.  ``booz_xform_jax``'s jittable kernel
+    then performs the Boozer construction itself.  The whole chain is
+    jit/grad-transparent — ``jax.grad`` through a returned ``bmnc_b`` entry
+    back to the state's spline coefficients is exercised by the test suite.
+
+    Parameters
+    ----------
+    state:
+        Continuous reconstruction to transform.  Only its spectral tables,
+        radial basis, ``m``/``n`` mode lists, ``nfp``, and ``phipf``/``chipf``
+        are read.
+    surfaces:
+        Normalized toroidal flux values ``s = psi/psi_edge``, each in
+        ``(0, 1]``; ``s = 0`` is rejected (the Boozer construction is
+        undefined on the axis).  Scalars are promoted to a one-element array.
+        Values are used verbatim — unlike :func:`boozer_spectrum_state`, they
+        are never snapped to a mesh.
+    mboz, nboz:
+        Poloidal and toroidal Boozer mode bounds.  They fix the output mode
+        list ``(xm_b, xn_b)`` and, with it, booz_xform's angle-transform
+        quadrature at ``2*(2*mboz+1)`` by ``2*(2*nboz+1)`` points.
+    asym:
+        Whether to run the transform's non-stellarator-symmetric branch.  The
+        sine families are always handed to the kernel, but the kernel consumes
+        them only when this is true; with the default ``False`` the returned
+        ``bmns_b`` block is zero.  Set it for a state whose sine tables carry
+        real content.
+    ntheta, nzeta:
+        Size of the uniform angular grid used to project ``|B|`` and the
+        covariant field onto the Nyquist mode set — *not* the Boozer
+        quadrature, which ``mboz``/``nboz`` set.  Both angles are in radians;
+        ``theta`` spans ``[0, 2*pi)`` and ``zeta`` spans one field period.
+        Defaults are ``max(12, 2*(max_m + 1))`` and ``max(8, 2*(max_n + 1))``
+        from the state's own mode set; a grid too coarse to resolve that set
+        raises.
+
+    Returns
+    -------
+    A dict with ``bmnc_b`` and ``bmns_b`` of shape ``(nsurf, nmodes)`` in T,
+    the mode lists ``xm_b``/``xn_b`` as ``numpy`` float arrays with ``xn_b``
+    in physical units (already multiplied by ``nfp``), the per-surface
+    ``iota_b``, the Boozer covariant coefficients ``G_b`` (``B_zeta``) and
+    ``I_b`` (``B_theta``) in T m, the integer ``nfp``, and ``s_b`` — the
+    requested ``surfaces`` themselves.  Note the difference from
+    :func:`boozer_spectrum_state`: there is no ``psi_b``/``psi_edge`` here,
+    and ``G_b``/``I_b`` are the transform's own ``bvco_b``/``buco_b`` rather
+    than the input tables' values.
+
+    ``bmnc_b``, ``bmns_b``, ``xm_b``, ``xn_b``, ``iota_b`` and ``nfp`` are
+    exactly the inputs :func:`omnigenity_residual` expects.
+    """
 
     from booz_xform_jax.jax_api import (
         booz_xform_jax_impl,
@@ -355,9 +422,10 @@ def boozer_spectrum_state(
 def boozer_bmnc_state(*args, **kwargs) -> dict[str, Array]:
     """Deprecated alias of :func:`boozer_spectrum_state`.
 
-    Same signature and return contract (including the ``bmns_b`` block).
-    The name changed when the in-repo symmetric FFT transform was retired in
-    favor of booz_xform_jax's kernel for both parities.
+    Emits a :exc:`DeprecationWarning`, then forwards ``*args``/``**kwargs``
+    unchanged.  Same signature and return contract (including the ``bmns_b``
+    block).  The name changed when the in-repo symmetric FFT transform was
+    retired in favor of booz_xform_jax's kernel for both parities.
     """
     warnings.warn(
         "vmex.core.omnigenity.boozer_bmnc_state is deprecated; call "
@@ -367,7 +435,17 @@ def boozer_bmnc_state(*args, **kwargs) -> dict[str, Array]:
 
 
 def boozer_bmnc_high_order(*args, **kwargs) -> dict[str, Array]:
-    """Deprecated alias of :func:`boozer_spectrum_high_order`."""
+    """Deprecated alias of :func:`boozer_spectrum_high_order`.
+
+    Emits a :exc:`DeprecationWarning` on every call, then forwards ``*args``
+    and ``**kwargs`` unchanged and returns that function's result verbatim —
+    the same dict of ``bmnc_b``/``bmns_b``, ``xm_b``/``xn_b``, ``iota_b``,
+    ``G_b``/``I_b``, ``nfp`` and ``s_b``.  Signature and return contract are
+    identical, so migrating is a rename: call
+    :func:`boozer_spectrum_high_order`.  The old name understates what comes
+    back, which is the whole spectrum including the ``bmns_b`` block, not a
+    ``bmnc`` table.
+    """
     warnings.warn(
         "vmex.core.omnigenity.boozer_bmnc_high_order is deprecated; call "
         "boozer_spectrum_high_order (identical signature and return "

@@ -1,4 +1,35 @@
-"""Environment diagnostics for vmex installations."""
+"""Environment diagnostics behind ``vmex --doctor``.
+
+The module answers one question: *is this interpreter able to run VMEX, and
+which accelerator will it use?*  It never installs, upgrades, or configures
+anything — :func:`collect_report` only reads, and the two subprocesses it
+starts (``python -m pip --version``, and ``nvidia-smi`` on WSL2 only) are
+read-only queries with short timeouts.
+
+Three pieces:
+
+- :class:`DoctorReport` — the structured, immutable snapshot: interpreter
+  identity and prefixes, virtualenv/conda/user-site layout, the versions of
+  the packages in ``_CORE_PACKAGES``, the live JAX backend and device list
+  with the result of a real jitted device probe, and the accumulated
+  ``warnings``.
+- :func:`collect_report` — builds one, applying the warning heuristics.
+- :func:`format_report` / :func:`main` — render it as the fixed-width block
+  the CLI prints.
+
+The warning heuristics target the failure modes that actually strand a VMEX
+install: a missing ``setuptools``/``packaging``/``pip`` (source and editable
+installs need them), user-site packages leaking onto ``sys.path`` outside a
+virtual environment, a ``pip`` that belongs to a different prefix than the
+running interpreter, a JAX import or backend failure, and — on WSL2 with a
+GPU backend — a ``jaxlib`` older than 0.10.1 or an ``nvidia-smi`` that
+disagrees with the backend JAX chose.
+
+An empty ``warnings`` tuple is the healthy state and prints as a single
+status line.  Warnings are advisory only: :func:`main` returns ``0``
+unconditionally, so ``vmex --doctor`` exits ``0`` even when it reports
+problems — read the printed text, not the exit status.
+"""
 
 from __future__ import annotations
 
@@ -32,7 +63,70 @@ _CORE_PACKAGES = (
 
 @dataclass(frozen=True)
 class DoctorReport:
-    """Structured environment report returned by :func:`collect_report`."""
+    """Immutable snapshot of one interpreter, as :func:`collect_report` saw it.
+
+    Every field is observed, never assumed: an unavailable probe is recorded
+    as ``None`` or as an explicit ``"not installed"`` / ``"unavailable: ..."``
+    string rather than being guessed or silently defaulted.
+
+    Attributes
+    ----------
+    python:
+        ``sys.version`` with newlines flattened to spaces.
+    executable:
+        ``sys.executable`` — the interpreter that ran the check.
+    prefix, base_prefix:
+        ``sys.prefix`` and ``sys.base_prefix``.  They differ exactly when a
+        virtual environment is active.
+    platform:
+        ``"<system> <release> <machine>"`` from :mod:`platform`.
+    in_virtualenv:
+        ``prefix != base_prefix``.
+    conda_prefix:
+        ``$CONDA_PREFIX``, or ``None`` when no conda environment is active.
+    user_site:
+        ``site.getusersitepackages()``, or ``None`` if it could not be
+        resolved.
+    user_site_on_path:
+        Whether that directory is actually on ``sys.path``.
+    pip_report:
+        The one-line output of ``python -m pip --version`` for *this*
+        interpreter, or a message explaining why it could not be obtained.
+    versions:
+        ``{distribution name: version}`` for ``_CORE_PACKAGES``
+        (``vmex``, ``numpy``, ``jax``, ``jaxlib``, ``scipy``, ``netCDF4``,
+        ``matplotlib``, ``booz_xform_jax``, ``setuptools``, ``packaging``,
+        ``pip``), read from installed distribution metadata — not from
+        importing the packages.  A missing distribution reads
+        ``"not installed"``.
+    wsl2:
+        Whether this process is running under Windows Subsystem for Linux
+        (detected from the kernel release/version string or
+        ``$WSL_INTEROP``).
+    nvidia_smi:
+        ``"<gpu name>, <driver version>"`` rows joined by ``"; "``, collected
+        only on WSL2.  ``None`` elsewhere, and ``None`` on WSL2 when the
+        utility is absent or failed (the reason then appears in
+        ``warnings``).
+    jax_backend:
+        ``jax.default_backend()`` — typically ``"cpu"``, ``"gpu"``/``"cuda"``,
+        or ``"tpu"``.  ``None`` when JAX could not be imported or queried.
+    jax_default_device:
+        ``jax.config.jax_default_device`` as a string, or ``None`` when no
+        device has been pinned (the usual case, printed as ``automatic``).
+    jax_devices:
+        String form of every device ``jax.devices()`` reports.
+    jax_probe:
+        Result of a live end-to-end check — ``jnp.arange(4)`` is placed on the
+        first device, a jitted ``vdot`` is compiled and run, and the value is
+        verified against the exact answer, ``14.0``.  Reads
+        ``"passed on <device> (<seconds> s)"``, whose timing is dominated by
+        JAX import plus that first compilation.  ``None`` if any step raised;
+        the exception text is then in ``warnings``.
+    warnings:
+        Advisory messages, empty when nothing suspicious was found.  They do
+        not affect the process exit status.
+    """
 
     python: str
     executable: str
@@ -188,7 +282,34 @@ def _jax_default_device() -> str | None:
 
 
 def collect_report() -> DoctorReport:
-    """Collect installation diagnostics without modifying the environment."""
+    """Collect installation diagnostics without modifying the environment.
+
+    Observes, in order: distribution versions for ``_CORE_PACKAGES``, the
+    user-site directory and whether it is on ``sys.path``, ``pip --version``
+    for this interpreter, the virtualenv/conda layout, whether the host is
+    WSL2 (and only then, ``nvidia-smi``), and the live JAX backend, devices,
+    and jitted device probe.  Nothing is installed, upgraded, or configured;
+    the only side effects are the two short-lived read-only subprocesses and
+    importing JAX.
+
+    It then applies the warning heuristics, each of which fires on exactly one
+    condition: ``setuptools`` missing; ``packaging`` missing or older than
+    24.2; ``pip`` missing; user-site on ``sys.path`` while neither a
+    virtualenv nor a conda environment is active; a ``pip --version`` whose
+    reported location matches neither ``sys.prefix`` nor ``$CONDA_PREFIX``;
+    the JAX probe raising; and, on WSL2 with a GPU backend, ``jaxlib`` older
+    than 0.10.1 or a failing ``nvidia-smi``.  One further heuristic fires the
+    other way round: on WSL2, ``nvidia-smi`` seeing a GPU while JAX selected a
+    non-GPU backend.
+
+    Never raises for a broken environment — a failure becomes a field value
+    and a warning string, which is the point of a doctor.
+
+    Returns
+    -------
+    The :class:`DoctorReport` snapshot; an empty ``warnings`` tuple means no
+    heuristic fired.
+    """
     versions = {name: _package_version(name) for name in _CORE_PACKAGES}
     user_site = _user_site()
     pip_text = _pip_report()
@@ -256,7 +377,32 @@ def collect_report() -> DoctorReport:
 
 
 def format_report(report: DoctorReport) -> str:
-    """Format a :class:`DoctorReport` for terminal output."""
+    """Render a :class:`DoctorReport` as the plain-text block the CLI prints.
+
+    The layout is fixed: a header, the interpreter/platform/prefix block (with
+    a ``Conda env`` line only when one is active), the aligned package-version
+    table in ``_CORE_PACKAGES`` order, the JAX backend / default device /
+    JIT-probe lines and the device list (``- none detected`` when empty), a
+    ``WSL2 NVIDIA`` line only on WSL2, VMEX's three device-placement defaults
+    (forward, implicit-gradient, mirror lanes), and one line for the
+    persistent JAX compilation cache — its directory, used size and bound in
+    GiB, flagged when it sits within 5 % of the bound, since a cache at its
+    bound evicts what the next run needs.
+
+    The last block is either ``Warnings:`` with one bullet per entry followed
+    by the recommended clean-install commands, or, when ``report.warnings`` is
+    empty, the single line ``Status: no obvious installation problems
+    detected.``
+
+    Parameters
+    ----------
+    report:
+        Snapshot to render, normally straight from :func:`collect_report`.
+
+    Returns
+    -------
+    The report as one newline-joined string, without a trailing newline.
+    """
     lines = [
         "vmex installation doctor",
         "----------------------------",
@@ -323,6 +469,17 @@ def format_report(report: DoctorReport) -> str:
 
 
 def main() -> int:
-    """Run the installation doctor CLI."""
+    """Run the installation doctor: collect, format, print.
+
+    This is the entry point ``vmex --doctor`` dispatches to (see
+    :mod:`vmex.core.cli`), which returns this value as the process exit code.
+
+    Returns
+    -------
+    Always ``0``.  The exit status reports that the diagnostics ran, not that
+    the environment is healthy — a report full of warnings still exits ``0``,
+    so scripts must parse the printed text (or call :func:`collect_report` and
+    inspect ``warnings``) rather than test the status.
+    """
     print(format_report(collect_report()))
     return 0

@@ -377,7 +377,62 @@ def solve_free_boundary_implicit(
     field_parameters: Any,
     cfg: FreeBoundaryImplicitConfig,
 ) -> SpectralState:
-    """Return a differentiable converged free-boundary spectral state."""
+    """Return a differentiable converged free-boundary spectral state.
+
+    Solves the coupled plasma--vacuum root: the VMEC force balance in the
+    interior together with NESTOR's vacuum pressure on the moving edge, for
+    the boundary and profile parameters in ``params`` and the coil or
+    current parameters in ``field_parameters``.  The forward pass is the
+    ordinary host free-boundary solver behind a ``jax.pure_callback``, so
+    the solver's own iterations never enter the AD tape; the reverse pass
+    is one matrix-free adjoint of the converged root.
+
+    Parameters
+    ----------
+    params:
+        Differentiable equilibrium parameters, an
+        :class:`~vmex.core.implicit.ImplicitParams` pytree: the dense INDATA
+        boundary arrays ``rbc``/``rbs``/``zbc``/``zbs`` in metres, the
+        profile coefficient arrays ``am`` (pressure, Pa before
+        ``pres_scale``), ``ai`` (rotational transform, dimensionless) and
+        ``ac`` (current), the optimizable current-spline knot values
+        ``ac_aux_f``, and the scalars ``phiedge`` (total enclosed toroidal
+        flux, Wb), ``pres_scale`` and ``curtor`` (total toroidal current,
+        A).  The boundary here is only the forward solver's initial guess:
+        in a free-boundary solve every active edge coefficient is an
+        unknown of the root.
+    field_parameters:
+        Second differentiable argument, passed through
+        ``cfg.field_from_parameters`` to build the external field.  With the
+        default identity map this *is* the external-field pytree — an
+        :class:`~vmex.core.mgrid.MgridField` (differentiable in its
+        ``extcur`` currents, A) or a coil field closing over its own dofs.
+        Pass a ``field_from_parameters`` to
+        :func:`make_free_boundary_config` instead and this becomes just the
+        coil shape and current degrees of freedom, which keeps the AD graph
+        small.
+    cfg:
+        The static :class:`FreeBoundaryImplicitConfig` from
+        :func:`make_free_boundary_config`.  It is a non-differentiable
+        argument of the custom VJP and a jit key, so it must be a stable
+        object: build it once and reuse it across the optimization.  It
+        fixes the resolution, the forward tolerances, the adjoint solver,
+        and the compiled NESTOR program.
+
+    Returns
+    -------
+    The converged :class:`~vmex.core.solver.SpectralState` — the spectral
+    coefficient arrays of the equilibrium, differentiable with respect to
+    both ``params`` and ``field_parameters``.
+
+    A forward solve that does not converge raises
+    :class:`~vmex.core.errors.VmecError` (retried once from a cold start
+    when a hot-restart seed was in play).  That makes this entry point
+    unsuitable for an optimizer that probes infeasible trial points; use
+    :func:`solve_free_boundary_implicit_status`, which reports failure as a
+    status value instead of raising and suppresses the pullback for a trial
+    whose derivatives are not certified.
+    """
     icfg = cfg.implicit
     with im._device_context(icfg):
         params, field_parameters = im._device_pin(
@@ -718,6 +773,23 @@ def solve_free_boundary_implicit_status(
 
     Status 0 is derivative-certified, 1 denotes a failed solve, and 2 an
     under-converged solve. Only status 0 evaluates the implicit pullback.
+
+    The arguments are exactly those of :func:`solve_free_boundary_implicit`.
+    The difference is the failure contract: a solve that would raise there
+    returns here with status 1, the last hot-restart state (or a fresh
+    initial state) in place of a converged one, and zero cotangents for both
+    differentiable arguments, so an optimizer may probe infeasible points
+    without an exception and without picking up a meaningless gradient.
+
+    Returns
+    -------
+    ``(state, status, fsq, ratio)``.  ``state`` is the
+    :class:`~vmex.core.solver.SpectralState`, differentiable only at status
+    0.  ``status`` is the int32 code above.  ``fsq`` is the summed final
+    force residual ``fsqr + fsqz + fsql``, and ``ratio`` is ``fsq / ftol``;
+    status 2 is exactly ``ratio`` exceeding the configuration's
+    ``max_fsq_ratio`` on a solve that did not converge.  Both are infinite
+    on a failed solve.
     """
     icfg = cfg.implicit
     with im._device_context(icfg):

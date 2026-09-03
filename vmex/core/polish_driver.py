@@ -151,7 +151,167 @@ class PolishCostEstimate(NamedTuple):
 
 @dataclass(frozen=True)
 class PolishConfig:
-    """Conservative controls for a fixed-boundary strong-root correction."""
+    """Conservative controls for a fixed-boundary strong-root correction.
+
+    One configuration drives both correction routes, and most knobs are read
+    by only one of them.  The production route,
+    :func:`polish_collocation_least_squares` (reached from
+    :func:`polish_legacy_solution` and from ``solve(..., polish=...)``),
+    solves the overdetermined collocation residual with SOLVAX damped
+    Gauss--Newton; it reads ``tolerance``, ``validation_tolerance``, the four
+    radial knobs, ``collocation_scale_probes``,
+    ``least_squares_initial_damping``, ``max_nonlinear_iterations``,
+    ``linear_restart``, ``linear_max_restarts``, and ``fail_policy``.  The
+    remaining knobs configure the square homotopy driver
+    :func:`polish_strong_root`, kept for rank and branch diagnostics.  Every
+    range stated below is enforced in ``__post_init__``, which also rejects a
+    non-finite value for any of the twelve floating-point controls.
+
+    The bar the independent certificate is actually held to is the
+    :attr:`~vmex.core.polish_driver.PolishConfig.certificate_tolerance`
+    property, not ``tolerance``.
+
+    Attributes
+    ----------
+    tolerance:
+        Relative first-order tolerance handed to the SOLVAX nonlinear
+        solvers, dimensionless, finite and strictly positive.  On the
+        production route it becomes ``LeastSquaresConfig.rtol``, so
+        Gauss--Newton stops once the stationarity norm ``||J.T r||`` of the
+        scaled collocation residual falls below
+        ``tolerance * max(||J.T r||_initial, 1)``.  On the homotopy route it
+        is the pseudo-transient ``rtol``, the multiplier of the pseudo-
+        transient ``atol`` (paired with the residual scale
+        ``sqrt(solve_size) / operator_balance`` so the absolute floor
+        transforms with the row equilibration), the ``atol`` and the
+        ``rtol = min(1e-6, tolerance)`` of the branch-tangent GMRES solves,
+        and the threshold below which the ``alpha = 0`` endpoint is accepted
+        as already solved without a nonlinear solve.
+    validation_tolerance:
+        Bar on the independent certificate ``StrongForceReport``
+        ``normalized_l2`` — the ``|sqrt(g)|``-weighted volume L2 of the
+        dimensionless pointwise ratio
+        ``2 |JxB - grad(p)| / (|JxB| + |grad(p)| + force_floor)`` measured by
+        :func:`~vmex.core.strong_force.certify_strong_force` on its own
+        shifted, overintegrated grid.  ``None`` reuses ``tolerance``.  Must be
+        finite and strictly positive when set.
+    radial_degree:
+        B-spline degree of the continuous radial representation the converged
+        legacy state is lifted into by
+        :func:`~vmex.core.strong_force.lift_high_order_state`.  Only ``3``,
+        ``5``, and ``7`` are accepted.  Note the driver default of ``3`` is
+        deliberately lower than that function's own ``degree=5`` default.
+    radial_spans:
+        Number of uniform knot spans of the clamped B-spline basis over
+        normalized toroidal flux ``s`` in ``[0, 1]``.  ``None`` (the default)
+        hands no basis to the lift, which then picks roughly two legacy mesh
+        samples per free span, capped at 32 spans.  Must be at least 1 when
+        set.
+    radial_quadrature_order:
+        Gauss--Legendre points per span, used twice: as the integration rule
+        of the explicitly constructed basis (only when ``radial_spans`` is
+        set) and as the radial collocation rule of
+        :func:`~vmex.core.polish.make_strong_root_runtime`.  ``None`` keeps
+        ``radial_degree + 3`` for the basis and the runtime's own
+        ``max(3, ceil(1.5 * nbasis / spans))`` collocation rule.  Must be at
+        least 2 when set.
+    radial_refinement_tolerance:
+        Acceptance bar on the certificate's ``radial_refinement_difference``:
+        the relative change ``|L2_fine - L2_coarse| / L2_fine`` of the
+        volume force L2 between the certificate's two radial quadrature
+        orders, so a dimensionless measure of whether the reported error is
+        quadrature-converged.  Read only on the production route, where it
+        gates acceptance alongside the force L2 and the Jacobian sign, and is
+        echoed into :class:`PolishReport`.  Must be strictly positive.
+    collocation_scale_probes:
+        Number of deterministic Rademacher transpose probes used to estimate
+        the column norms of the scaled collocation Jacobian, whose reciprocals
+        become the diagonal variable scaling of the Gauss--Newton solve and of
+        the derivative preconditioner in :mod:`vmex.core.polish_implicit`.
+        The probe generator is seeded (``default_rng(0)``), so the scaling is
+        reproducible run to run.  ``0`` disables scaling (all ones).  Must be
+        nonnegative.
+    least_squares_initial_damping:
+        Initial Levenberg damping ``lambda`` of the trust-region step
+        ``(J.T J + lambda I) step = -J.T r``, in the units of the scaled
+        normal operator.  SOLVAX adapts it from there on the trust ratio.
+        Must be strictly positive.
+    max_continuation_stages:
+        ``ContinuationConfig.max_stages``: how many adaptive stages the
+        homotopy driver may spend travelling from ``alpha = 0`` to
+        ``alpha = 1``.  Must be at least 1.  Homotopy route only.
+    alpha_initial_step, alpha_min_step, alpha_max_step:
+        Step-size controls of that homotopy in the continuation parameter
+        ``alpha``, which is dimensionless and interpolates the residual from
+        the legacy raw-force endpoint (``alpha = 0``) to the strong-force
+        endpoint (``alpha = 1``).  Required ordering
+        ``0 < alpha_min_step <= alpha_initial_step <= alpha_max_step``.
+        Homotopy route only.
+    ptc_initial_dtau, ptc_max_dtau:
+        Pseudo-transient continuation (PTC) pseudo-time step, first value and
+        ceiling.  PTC solves ``(I/dtau + J) delta = -r`` at every step, so a
+        small ``dtau`` is a heavily damped, near-steepest-descent update and
+        ``dtau -> inf`` recovers Newton; SOLVAX grows it as the residual
+        falls.  The step is a pseudo-time in the row- and column-equilibrated
+        residual coordinates, not a physical time, hence dimensionless, and
+        the defaults start already large (``1e6``) because polishing enters
+        from a converged legacy state.  Required ordering
+        ``0 < ptc_initial_dtau <= ptc_max_dtau``.  Homotopy route only.
+    max_nonlinear_iterations:
+        Cap on outer nonlinear steps, read by both routes: it is
+        ``LeastSquaresConfig.max_steps`` for Gauss--Newton (and therefore also
+        the fixed length of the returned SOLVAX history arrays) and
+        ``PseudoTransientConfig.max_steps`` for each PTC solve.  Must be at
+        least 1.
+    max_backtracks:
+        Backtracking line-search attempts PTC may make per step before it
+        gives up on the step.  Must be nonnegative.  Homotopy route only.
+    linear_restart, linear_max_restarts:
+        Inner Krylov budget.  On the homotopy route they are the GMRES
+        Arnoldi cycle length and the maximum number of restart cycles, both
+        for the PTC linear solves and for the bordered branch-tangent solves.
+        On the production route their product becomes
+        ``LeastSquaresConfig.linear_max_steps``, the iteration cap of the PCG
+        solve of the damped normal equations (600 with the defaults).  Both
+        must be at least 1.
+    preconditioner:
+        Which left preconditioner the homotopy driver applies.
+        ``"mode-block"`` builds the bounded Fourier mode-block factors of the
+        Jacobian pencil; ``"legacy"`` applies the stored low-order raw-force
+        block inverse in the active solve chart; ``"none"`` installs an
+        explicit identity, for benchmarking unpreconditioned JFNK.  The
+        production Gauss--Newton route never reads this and runs its normal
+        equations unpreconditioned.
+    minimum_jacobian_ratio, minimum_jacobian_floor:
+        Admissibility guard on the homotopy route.  A trial vector is
+        rejected unless the minimum signed Jacobian over the solve grid stays
+        at or above ``max(minimum_jacobian_floor, minimum_jacobian_ratio *
+        initial_margin)``, where ``initial_margin`` is the same quantity at
+        the uncorrected state.  The measured quantity is
+        ``jacobian_sign * sqrt(g) / rho`` in cubic metres, the same
+        convention as :attr:`PolishReport.minimum_signed_jacobian`.  The
+        ratio must lie in ``(0, 1]`` and the floor must be strictly positive.
+    use_pseudo_arclength:
+        Whether a stalled ``alpha`` continuation falls back to bordered
+        pseudo-arclength continuation, which can carry the branch through a
+        fold in ``alpha`` that plain parameter continuation cannot pass.
+        Homotopy route only.
+    max_arclength_steps, arclength_step:
+        Number of pseudo-arclength predictor/corrector steps allowed, and the
+        predictor increment along the unit branch tangent
+        ``(tangent_x, tangent_alpha)``.  Because that tangent is normalized in
+        the combined coordinate-and-``alpha`` norm, ``arclength_step`` is an
+        arclength in that same combined norm.  Steps must be nonnegative and
+        the increment strictly positive.  Homotopy route only.
+    fail_policy:
+        What a failed attempt does.  ``"raise"`` raises
+        :class:`~vmex.core.errors.StrongForceContinuationError` (homotopy
+        stall) or :class:`~vmex.core.errors.StrongForceCertificationError`
+        (certificate not met).  ``"return_unpolished"`` instead returns a
+        :class:`PolishResult` holding the uncorrected native state, the
+        initial certificate, a zero correction, and a report with
+        ``converged=False``.
+    """
 
     tolerance: float = 1.0e-3
     validation_tolerance: float | None = 1.0e-2
@@ -266,6 +426,117 @@ class PolishReport:
     companions taken from the certificates' ``window_normalizations`` over
     ``normalization_window``; quote one of those, not the ``eps_F`` pair,
     whenever a polish gain is being reported.
+    Every field is a plain host value, read back from the SOLVAX solution and
+    from the independent certificate after the solve returns; nothing here is
+    traced and nothing here is recomputed.  The fields from
+    ``least_squares_cost`` onwards are produced only by the Gauss--Newton
+    route :func:`polish_collocation_least_squares` and stay at their ``None``
+    or ``0`` defaults on the homotopy route :func:`polish_strong_root`.
+
+    Attributes
+    ----------
+    converged:
+        Whether the attempt is accepted.  On the Gauss--Newton route this is
+        the independent certificate verdict alone: force L2 within
+        ``certificate_tolerance``, radial refinement difference within
+        ``radial_refinement_tolerance``, and a strictly positive minimum
+        signed Jacobian.  The solver's own stationarity flag is reported
+        separately as ``least_squares_success`` and does not gate acceptance,
+        so a certified state whose solver merely exhausted its step budget is
+        still accepted.
+    termination_reason:
+        Short tag naming how the attempt ended.  ``"already-certified"`` (the
+        input already met the bar, no correction applied),
+        ``"independently-certified"`` or
+        ``"solvax-collocation-least-squares"`` from the Gauss--Newton route,
+        and ``"alpha-zero-failed"``, ``"continuation-stalled"``,
+        ``"pseudo-arclength"``, ``"pseudo-arclength-stalled"``,
+        ``"pseudo-arclength-tangent-failed"``, ``"strong-root"``,
+        ``"certified"``, or ``"certification-failed"`` from the homotopy
+        route.
+    final_alpha:
+        Value of the homotopy parameter reached, ``1.0`` meaning full strong
+        force.  Dimensionless, and always ``1.0`` on the Gauss--Newton route,
+        which solves the strong residual directly and has no homotopy.
+    initial_normalized_l2, final_normalized_l2:
+        The certificate's ``normalized_l2`` before and after the correction:
+        the ``|sqrt(g)|``-weighted volume L2 of the dimensionless pointwise
+        ratio ``2 |JxB - grad(p)| / (|JxB| + |grad(p)| + force_floor)``, taken
+        on the certificate's own shifted, overintegrated grid rather than on
+        the solve collocation grid.  When an attempt fails and the unpolished
+        state is returned, ``final_normalized_l2`` repeats
+        ``initial_normalized_l2``.
+    continuation_accepted, continuation_rejected:
+        On the homotopy route, accepted and rejected continuation stages.  On
+        the Gauss--Newton route the same two fields carry the accepted and
+        rejected trust-ratio trial steps of the least-squares solve; the
+        field names are historical and do not change meaning per route.
+    nonlinear_iterations:
+        Total outer nonlinear steps: Gauss--Newton steps, or the sum of the
+        endpoint, continuation-stage, and pseudo-arclength PTC steps.
+    linear_iterations:
+        Total inner Krylov iterations spent on those steps: PCG iterations on
+        the damped normal equations, or GMRES iterations inside PTC and the
+        branch-tangent solves.
+    residual_evaluations:
+        Residual evaluations charged to the solve, read from SOLVAX's own
+        counter where the installed release exposes one and otherwise
+        estimated as one per nonlinear step plus one.  On the Gauss--Newton
+        route it is ``steps + 1`` and therefore excludes the evaluations
+        spent on rejected trial steps.
+    arclength_steps:
+        Pseudo-arclength predictor/corrector steps taken after a stalled
+        continuation.  Always ``0`` on the Gauss--Newton route.
+    minimum_signed_jacobian:
+        Smallest value of ``jacobian_sign * sqrt(g) / rho`` in cubic metres,
+        where ``sqrt(g)`` is the Jacobian of the ``(rho, theta, zeta)`` map
+        with ``rho = sqrt(s)`` and ``zeta`` spanning one field period; that
+        quotient is ``2 / nfp`` times the VMEC ``(s, theta, phi)`` Jacobian
+        with the equilibrium's sign convention divided out, so a strictly
+        positive value means nested, non-degenerate flux surfaces.  Taken
+        from the accepted certificate's overintegrated grid; a failed
+        homotopy attempt reports it on the solve collocation grid instead.
+    factor_build_seconds:
+        Host wall-clock seconds spent assembling and factoring the low-order
+        raw-force block preconditioner, plus the mode-block build when the
+        homotopy route requested one.  Excluded from the solve timing below.
+    solve_seconds:
+        Host wall-clock seconds from entry to report construction, including
+        any JAX compilation triggered on first use of a lane shape.
+    least_squares_cost:
+        ``0.5 * ||r||^2`` of the scaled collocation residual at the final
+        iterate, where the residual has been divided by its initial RMS, so
+        the value is dimensionless and starts near ``0.5 * rows``.
+    least_squares_optimality:
+        ``||J.T r||`` at the final iterate — the first-order stationarity
+        measure Gauss--Newton drives to zero, in the same scaled residual and
+        scaled-variable coordinates.
+    least_squares_initial_optimality:
+        The same norm at the zero correction, i.e. the first entry of the
+        SOLVAX history.
+    least_squares_relative_optimality:
+        ``least_squares_optimality / least_squares_initial_optimality`` with a
+        ``1e-300`` floor on the denominator; the dimensionless factor by which
+        stationarity was reduced.
+    least_squares_success:
+        SOLVAX's own convergence flag for the least-squares solve.  A
+        diagnostic: acceptance is decided by the certificate, not by this.
+    least_squares_damping:
+        Levenberg damping in force at the final iterate, in the units of the
+        scaled normal operator.  A value far above
+        ``least_squares_initial_damping`` means the trust region kept
+        shrinking, so the last steps were short and heavily damped.
+    radial_refinement_tolerance:
+        Echo of the configured bar the certificate's radial refinement
+        difference was held to, recorded so a stored report is self-contained.
+    variable_scale_min, variable_scale_max:
+        Extremes of the diagonal variable scaling estimated from
+        ``collocation_scale_probes`` transpose probes.  Their ratio is the
+        column-norm spread the scaling removed from the normal equations; both
+        are ``1.0`` when probing is disabled.
+    variable_scale_probes:
+        Number of probes requested for that estimate, echoing
+        ``PolishConfig.collocation_scale_probes``.
     """
 
     converged: bool
@@ -336,27 +607,102 @@ def _normalization_fields(
 
 
 class PolishContext(NamedTuple):
-    """Frozen chart and converged coordinates for implicit differentiation."""
+    """Frozen chart and converged coordinates for implicit differentiation.
 
+    Everything needed to re-form the stationarity equation
+    ``J(c, native).T @ r(c, native) = 0`` at the accepted correction, and
+    nothing else.  :func:`polish_collocation_least_squares` attaches one to a
+    certified :class:`PolishResult`; the derivative entry points in
+    :mod:`vmex.core.polish_implicit` take it as their first argument and
+    linearize at exactly this point, never re-running the nonlinear solve.
+    """
+
+    #: Collocation grid, high-to-legacy transfer, constrained root layout,
+    #: row/column equilibration, and low-order preconditioner of the solve.
+    #: ``runtime.native`` is the *unpolished* continuous state the correction
+    #: is measured from, and is the differentiation base point.
     runtime: StrongRootRuntime
+    #: Gauge-free physical chart: the orthonormal coordinate and equation
+    #: bases plus their scales that reduce the constrained root layout of size
+    #: ``runtime.layout.size`` to ``chart.size`` independent coordinates.
     chart: StrongPhysicalChart
+    #: Accepted correction in chart coordinates, shape ``(chart.size,)``.
+    #: Already multiplied back by the diagonal variable scaling, so
+    #: ``chart.lift(correction)`` is the constrained-layout vector and
+    #: ``runtime.layout.unpack(runtime.coordinate_scale * that)`` the spline
+    #: coefficient correction added to ``runtime.native``.
     correction: jax.Array
+    #: Diagonal variable scaling used by the primal solve, shape
+    #: ``(chart.size,)``.  Its square is reused as the Jacobi preconditioner
+    #: of the tangent and adjoint Krylov solves.
     variable_scale: jax.Array
 
 
 class PolishResult(NamedTuple):
-    """Certified native state, report, full correction, and derivative context."""
+    """Certified native state, report, full correction, and derivative context.
 
+    Returned by every entry point in this module.  On a failed attempt with
+    ``fail_policy="return_unpolished"`` the first two fields carry the
+    *unpolished* state and its initial certificate instead, and
+    ``polish_report.converged`` is ``False`` — the report, not the presence of
+    a result, is what says whether polishing succeeded.
+    """
+
+    #: Continuous, axis-regular equilibrium the certificate was evaluated on:
+    #: spline coefficient tables in the ``rho**abs(m) q(s)`` representation,
+    #: geometry in metres, pressure in Pa, lambda in the wout convention.
     native_equilibrium: HighOrderEquilibriumState
+    #: Independent overintegrated force certificate of that state, from
+    #: :func:`~vmex.core.strong_force.certify_strong_force`.
     strong_force: StrongForceReport
+    #: Machine-readable solve summary; see :class:`PolishReport`.
     polish_report: PolishReport
+    #: Correction in the full constrained root layout, shape
+    #: ``(runtime.layout.size,)`` and still to be multiplied by
+    #: ``runtime.coordinate_scale`` before unpacking.  It is all zeros when the
+    #: attempt failed, and has shape ``(0,)`` in the one case where
+    #: :func:`polish_legacy_solution` short circuits on an already-certified
+    #: input, because no root coordinates were constructed at all.
     correction: jax.Array
+    #: Derivative context, present only on a certified Gauss--Newton polish;
+    #: ``None`` after an already-certified short circuit, a failed attempt, or
+    #: a homotopy solve.
     context: PolishContext | None = None
+    #: The correction projected back onto the legacy solve mesh as a
+    #: :class:`~vmex.core.solver.SpectralState`, for consumers that still want
+    #: a sampled VMEC-grid state.  Set only by
+    #: :func:`polish_legacy_solution`; ``None`` from the lower-level entry
+    #: points.
     compatibility_state: Any = None
 
 
 def polished_compatibility_state(legacy_state, result: PolishResult):
-    """Project a certified native correction onto the sampled WOUT mesh."""
+    """Project a certified native correction back onto the legacy solve mesh.
+
+    The continuous correction is unpacked into spline coefficients, restricted
+    through the runtime's high-to-legacy transfer, and added to the legacy
+    state leaf by leaf.  The result is the VMEC-grid view of the polish, not
+    the certified object: the certificate applies to
+    ``result.native_equilibrium``, and a coarse solve mesh cannot represent the
+    whole between-node correction — which is why file export goes through
+    :func:`polished_wout_state` instead.
+
+    Parameters
+    ----------
+    legacy_state:
+        The converged (Newton-refined) legacy
+        :class:`~vmex.core.solver.SpectralState` the polish started from, on
+        the solve mesh.
+    result:
+        The polish result whose ``correction`` and ``context`` are applied.
+
+    Returns
+    -------
+    A new ``SpectralState`` of the same pytree structure with the projected
+    correction added.  ``legacy_state`` is returned unchanged when the result
+    carries no derivative context or an empty correction, which is exactly the
+    already-certified and failed cases.
+    """
 
     if result.context is None or not np.asarray(result.correction).size:
         return legacy_state
@@ -382,7 +728,29 @@ _POLISHED_WOUT_MIN_NS = 129
 def polished_wout_ns(
     native: HighOrderEquilibriumState, *, solve_ns: int
 ) -> int:
-    """Radial export mesh on which sampling ``native`` stays certifiable."""
+    """Radial export mesh on which sampling ``native`` stays certifiable.
+
+    The returned surface count is the largest of three requirements: never
+    coarsen below the mesh the caller solved on, clear the 129-surface floor
+    (four samples per capped reconstruction span) so the default wout
+    reconstruction becomes an overdetermined L2 projection rather than a
+    near-interpolatory fit, and take at least two samples per spline
+    coefficient so the samples determine the native state.
+
+    Parameters
+    ----------
+    native:
+        The certified continuous state to be sampled.  Only
+        ``native.radial_basis.size``, the number of radial spline
+        coefficients per Fourier mode, is read.
+    solve_ns:
+        Number of full-mesh radial surfaces of the solve the polish refined.
+
+    Returns
+    -------
+    ``max(solve_ns, 129, 2 * native.radial_basis.size + 1)`` as a Python
+    ``int``, the ``ns`` to build the export runtime with.
+    """
 
     determined = 2 * int(native.radial_basis.size) + 1
     return max(int(solve_ns), _POLISHED_WOUT_MIN_NS, determined)
@@ -404,6 +772,22 @@ def polished_wout_state(
     instead certifies within a few percent of the dense-sampling floor of
     the default reconstruction (1.9e-3 at ``ns = 129`` against a 1.88e-3
     floor measured at ``ns = 401``).
+
+    Parameters
+    ----------
+    native:
+        The certified continuous state to sample.
+    source:
+        The :class:`~vmex.core.input.VmecInput` deck the solve came from; it
+        supplies the Fourier resolution, field periods, and profiles needed to
+        build an export runtime at the denser ``ns``.
+    solve_ns:
+        Radial surfaces of the solve, the lower bound on the export mesh.
+
+    Returns
+    -------
+    A :class:`~vmex.core.solver.SpectralState` sampled on
+    :func:`polished_wout_ns` surfaces, ready for the ordinary wout writer.
     """
 
     from .polish import sample_high_order_state
