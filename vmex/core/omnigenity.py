@@ -190,9 +190,13 @@ def _boozer_plan(*, nfp, asym, xm, xn, xm_nyq, xn_nyq, mboz, nboz,
     """The reusable ``booz_xform_jax`` plan for one static resolution.
 
     A plan-less kernel call rebuilds the trig/mode tables inside every
-    trace, and XLA does not fold them away: the plan is worth 1.2-2.2x on
-    the jitted transform and 1.1-1.2x on its gradient
-    (``benchmarks/boozer_plan_adoption_m4.json``).  Upstream's
+    trace, and XLA does not fold them away: the plan is worth 1.2-1.6x on
+    the warm jitted transform and 1.06-1.18x on its gradient, against a
+    build that costs 1.09 s once per process on an empty compilation cache
+    and 13 ms once those programs exist, so a one-spectrum process gains
+    nothing and an optimization gains from a few hundred evaluations on
+    (``benchmarks/boozer_plan_adoption_m3max.json``; the spectra are
+    bit-identical either way).  Upstream's
     ``prepare_booz_xform_plan`` builds only on the transform's own
     ``2*(2*mboz+1)`` by ``2*(2*nboz+1)`` quadrature and exposes no grid
     hook, so vmex's ``oversample`` refinement runs upstream's table builder

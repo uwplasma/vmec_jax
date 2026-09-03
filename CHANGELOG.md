@@ -7,6 +7,20 @@ in the pull-request and release bodies and are being backfilled as
 
 ## Unreleased
 
+- **Dependency floor: `booz_xform_jax >= 0.2.0`** (was `>= 0.1.1`). The
+  traceable Boozer transform now runs on 0.2.0's `BoozerConfig`/`BoozerPlan`:
+  one plan per resolution, built once per process and reused across surfaces,
+  objective evaluations, and jit traces, instead of the kernel rebuilding its
+  trig and mode tables inside every trace and reading its execution knob from
+  `BOOZ_XFORM_JAX_TRIG_F32`. 0.1.x has no plan API, so the floor moves rather
+  than a shim hiding the break. `boozer_spectrum_state` and
+  `boozer_spectrum_high_order` gain a `surface_chunk` keyword (0.2.0's
+  execution schedule; the default `"auto"` is what the kernel already did).
+  Warm, worth 1.2-1.6x on the jitted transform and 1.06-1.18x on its
+  gradient, against a 1.09 s once-per-process table build on an empty
+  compilation cache (13 ms thereafter), so a process that asks for one
+  spectrum and exits gains nothing; spectra are bit-identical
+  (`benchmarks/boozer_plan_adoption_m3max.json`).
 - Polish observability: the CLI announces every polish phase (state
   refinement, initial certificate, preconditioner and chart build, compile
   notice), prints one row per Gauss-Newton iteration, and closes with a

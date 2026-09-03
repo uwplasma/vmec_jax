@@ -318,6 +318,95 @@ def test_fresh_deck_parity_artifact_is_provenanced_and_cited() -> None:
         "Numerical reproducibility")[0]
 
 
+def test_boozer_plan_adoption_artifact_is_provenanced_cited_and_honest() -> None:
+    """The plan adoption's numbers are a hashed record, and it records its costs.
+
+    The claim the page and the module docstring make is a *mixed* one — a
+    warm win paid for by a once-per-process build — so the guard checks the
+    losing figures as well as the winning ones: that both decks are hashed
+    and resolved, that every quoted ratio is what the recorded seconds
+    actually divide to, that the build cost the cold regression is blamed on
+    is present and dominates it, and that the bit-identity claim is backed by
+    equal digests rather than by a tolerance.
+    """
+    path = ROOT / "benchmarks" / "boozer_plan_adoption_m3max.json"
+    record = json.loads(path.read_text())
+    assert record["schema"] == "vmex.boozer-plan-adoption/1"
+    provenance = record["provenance"]
+    assert re.fullmatch(r"[0-9a-f]{40}", provenance["measurement_commit"])
+    assert provenance["measurement_dirty"] is False
+    assert provenance["input_data_embedded"] is False
+    assert provenance["float64"] is True
+    for key in ("date", "host", "protocol", "command"):
+        assert provenance[key]
+    versions = provenance["versions"]
+    assert versions["booz_xform_jax"].startswith("0.2.")  # the API under test
+    for key in ("jax", "jaxlib", "numpy", "python", "vmex"):
+        assert versions[key]
+
+    decks = record["decks"]
+    assert len(decks) >= 2
+    assert len({deck["deck"] for deck in decks}) == len(decks)
+    for deck in decks:
+        assert re.fullmatch(r"[0-9a-f]{16}", deck["sha256_prefix"]), deck["deck"]
+        assert (ROOT / "examples" / "data" / deck["deck"]).is_file()
+        assert deck["resolution"]["ns"] > 2
+
+        lanes = deck["fresh_process"]
+        assert set(lanes) == {"inline", "plan"}
+        for lane in lanes.values():
+            assert len(lane["repetitions"]) >= 2  # two fresh processes, per lane
+            for timer in ("jit_value", "jit_gradient", "eager_value"):
+                assert 0.0 < lane[timer]["warm_min_s"] <= lane[timer]["warm_median_s"]
+                assert lane[timer]["warm_median_s"] < lane[timer]["cold_s"]
+            assert lane["subprocess_wall_s"] > lane["solve_s"] > 0.0
+
+        # every ratio in the record divides the seconds beside it
+        ratios = deck["speedup_inline_over_plan"]
+        expected = {
+            "subprocess_wall": (lanes["inline"]["subprocess_wall_s"]
+                                / lanes["plan"]["subprocess_wall_s"]),
+            **{
+                f"{timer}_{statistic}": (lanes["inline"][timer][statistic]
+                                         / lanes["plan"][timer][statistic])
+                for timer in ("jit_value", "jit_gradient", "eager_value")
+                for statistic in ("cold_s", "warm_median_s", "warm_min_s")
+            },
+        }
+        assert set(ratios) == set(expected)
+        for name, ratio in ratios.items():
+            assert ratio == pytest.approx(expected[name], rel=1e-12), name
+
+        # the warm win, measured with the lanes alternating in one process
+        interleaved = deck["interleaved"]["speedup_inline_over_plan"]
+        assert interleaved["jit_value_warm_min_s"] > 1.15
+        assert interleaved["jit_gradient_warm_min_s"] > 1.0
+        assert deck["fresh_process"]["inline"]["jit_value"]["warm_min_s"] > (
+            deck["fresh_process"]["plan"]["jit_value"]["warm_min_s"])
+
+        # the cost the win is paid for with, and what explains it
+        build = deck["plan_build"]
+        # almost all of the first build is XLA compiling the table programs
+        assert build["first_build_s"] > 20.0 * build["rebuild_s"]
+        assert build["tables_mib"] > 1.0
+        cold_regression = (lanes["plan"]["jit_value"]["cold_s"]
+                           - lanes["inline"]["jit_value"]["cold_s"])
+        assert 0.0 < cold_regression <= build["first_build_s"]
+
+        # bit-identical, asserted as equal digests and not as a tolerance
+        equivalence = deck["equivalence"]
+        assert equivalence["bit_identical"] is True
+        assert equivalence["digests"]["inline"] == equivalence["digests"]["plan"]
+        assert len(equivalence["digests"]["plan"]) >= 5
+        assert all(difference["max_abs"] == 0.0
+                   for difference in equivalence["differences"].values())
+
+    page = (ROOT / "docs" / "reference" / "performance.rst").read_text()
+    assert path.name in page
+    assert "benchmarks/boozer_plan_adoption_m3max.json" in (
+        ROOT / "vmex" / "core" / "omnigenity.py").read_text()
+
+
 def test_committed_reports_do_not_expose_personal_paths() -> None:
     """Release-facing text must remain portable between contributors."""
     text_suffixes = {".json", ".md", ".py", ".rst", ".toml"}

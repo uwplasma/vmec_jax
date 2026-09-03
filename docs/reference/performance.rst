@@ -494,6 +494,37 @@ model) the compile census counts 12.65 s across 650 programs — one
 programs — matching the 12.0 s cold-minus-warm difference; it is paid once per
 machine and JAX version.
 
+Boozer transform on a ``booz_xform_jax`` plan
+---------------------------------------------
+
+The traceable Boozer bridge (:func:`vmex.core.omnigenity.boozer_spectrum_state`)
+runs on a ``booz_xform_jax`` 0.2.0 ``BoozerPlan``: the trig and mode tables of
+one resolution are built once per process and reused across surfaces, objective
+evaluations, and jit traces, rather than rebuilt inside every trace.  The record
+is ``benchmarks/boozer_plan_adoption_m3max.json`` — Apple M3 Max, CPU, float64,
+booz_xform_jax 0.2.0, jax 0.11.1; two decks, two fresh-process repetitions per
+lane, each with its own empty compilation cache, with the pre-adoption call
+reconstructed verbatim beside the shipped one and the two alternating call by
+call in a third process.
+
+Warm, the plan is worth **1.2-1.6x on the jitted transform** (``1.23x`` and
+``1.36x`` alternating in one process, ``1.55x`` and ``1.43x`` across fresh
+processes, on ``input.li383_low_res`` and ``input.nfp1_QI`` respectively),
+1.06-1.18x on its gradient, and 1.02-1.08x eager — eager is dominated by
+vmex's own input-table build, not by the transform.  It is not free: building
+the tables costs 1.09 s against an empty compilation cache, almost all of it
+XLA compiling the small programs of an op-by-op build, and 13 ms once those
+programs exist.  So the first jitted call is 1.4-1.7x *slower*, and a process
+that asks for one spectrum and exits shows no gain at all (subprocess wall
+0.98-1.06x, either sign, which is the noise).  An optimization, which is what a
+traceable transform exists for, passes break-even after a few hundred
+evaluations.
+
+The spectra do not move.  All seven returned blocks (``bmnc_b``, ``bmns_b``,
+``iota_b``, ``G_b``, ``I_b``, ``xm_b``, ``xn_b``) hash identically before and
+after on both decks: the plan hands the kernel exactly the tables the kernel
+used to build for itself, in the same order.
+
 Numerical reproducibility
 -------------------------
 
