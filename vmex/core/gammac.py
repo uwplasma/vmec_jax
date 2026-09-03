@@ -901,8 +901,8 @@ class GammaCSmooth(GammaC):
     reported number: use this class inside the optimizer and always
     recompute the hard :class:`GammaC` value on the accepted result.
 
-    The three derivative semantics of the plan are thus explicit in the
-    class name: :class:`GammaC` is the hard value (no derivative promise
+    The three derivative semantics are thus explicit in the class
+    name: :class:`GammaC` is the hard value (no derivative promise
     across topology events), ``GammaCSmooth`` is the smooth annealed
     surrogate, and a matched-topology tracked variant can join them later
     without changing either meaning.  ``temperature`` multiplies the
