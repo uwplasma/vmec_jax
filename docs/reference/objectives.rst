@@ -117,7 +117,9 @@ and composable with both gradient modes:
   transform, for decks that genuinely want a target rather than a floor;
 - :func:`~vmex.core.optimize.mirror_ratio` — ``(Bmax - Bmin)/(Bmax +
   Bmin)`` on one half-mesh surface (outermost by default), the practical QI
-  knob;
+  knob.  It is the |B| *modulation depth*, not :math:`R_m = B_{\max}/B_{\min}`
+  (they are related by :math:`R_m = (1+m)/(1-m)`); the open-mirror lane
+  reports :math:`R_m` proper through :mod:`vmex.mirror.metrics`;
 - :func:`~vmex.core.optimize.elongation_profile` /
   :func:`~vmex.core.optimize.max_elongation` — equivalent-ellipse boundary
   elongation from Fourier-exact area and perimeter line integrals over one

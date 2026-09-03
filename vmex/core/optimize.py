@@ -768,6 +768,12 @@ class QuasisymmetryRatioResidual:
 def mirror_ratio(state: SpectralState, rt: SolverRuntime, *, s_index: int = -1) -> Array:
     """Mirror ratio ``(Bmax - Bmin) / (Bmax + Bmin)`` on one half-mesh surface.
 
+    Note the convention: this is the |B| *modulation depth* on a surface, the
+    standard QI optimization knob, not ``R_m = Bmax / Bmin``.  The two are
+    related by ``R_m = (1 + m) / (1 - m)``.  The open-mirror lane reports
+    ``R_m`` proper — ``R_m,axis`` per leg and ``R_m,LCFS`` separately — through
+    :mod:`vmex.mirror.metrics`.
+
     ``|B|`` is evaluated on the solver's internal angular grid from the
     half-mesh field state (``|B|^2 = 2 (bsq - p)``, ``bcovar.f``); ``s_index``
     selects the half-mesh surface (default: outermost).  Hard max/min — smooth

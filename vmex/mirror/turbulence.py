@@ -173,6 +173,19 @@ def gk_closed_fieldline_geometry(
     cases.  Irrational-transform tubes need a separate twist-linked contract.
     Open mirrors are intentionally rejected by requiring a closed
     discretization.
+
+    The ``epsilon`` key follows the VMEX flux-tube contract shared with
+    :mod:`vmex.core.turbulence`: ``std(|B|) / mean(|B|)`` along the tube.  It
+    is deliberately *not* what GS2-family codes mean by that key.  In GKX's own
+    analytic geometry ``epsilon`` is the inverse aspect ratio, entering as
+    ``|B| = B0 / (1 + epsilon cos(theta))`` and used to set the minor radius
+    ``a = epsilon * R0`` when it writes run artifacts.  A straight mirror has
+    no aspect ratio, so nothing exported here can carry that meaning.  Read the
+    mirror ratio from ``vmex_mirror["field_line_mirror_ratio"]``
+    (``max|B| / min|B|`` on this field line, the field-line member of the
+    definitions in :mod:`vmex.mirror.metrics`), and read the tokamak-equivalent
+    modulation depth ``(max|B| - min|B|) / (max|B| + min|B|)`` from
+    ``vmex_mirror["field_line_b_modulation"]``.
     """
 
     if not discretization.closed:
@@ -299,6 +312,11 @@ def gk_closed_fieldline_geometry(
             "surface_index": j,
             "s": s_value,
             "iota": iota,
+            # The field-line member of the mirror-ratio definitions; see
+            # vmex.mirror.metrics for R_m,axis and R_m,LCFS, and the docstring
+            # above for why "epsilon" is not any of them.
+            "field_line_mirror_ratio": jnp.max(bmag) / jnp.min(bmag),
+            "field_line_b_modulation": (jnp.max(bmag) - jnp.min(bmag)) / (jnp.max(bmag) + jnp.min(bmag)),
             "closure_residual": closure_residual,
             "axis_arc_length": axis.arc_length,
             "L_ref": effective_minor_radius,
