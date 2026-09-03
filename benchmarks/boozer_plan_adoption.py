@@ -19,6 +19,9 @@ This script measures both, in fresh processes:
     code, so the two lanes differ only in the plan.
 ``--mode equivalence``
     Both lanes in one process; reports the per-key difference.
+``--mode plan_build``
+    The once-per-process plan build alone, first thing in a fresh process,
+    so its first figure is a true empty-compilation-cache cost.
 ``--mode interleaved``
     Both lanes in one process, warm, alternating call by call.  The
     fresh-process lanes above are the protocol of record, but their wall
@@ -82,7 +85,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
-        "--mode", choices=("plan", "inline", "equivalence", "interleaved"),
+        "--mode",
+        choices=("plan", "inline", "equivalence", "interleaved", "plan_build"),
         default=None, help="child lane (internal)")
     parser.add_argument("--deck", default=None, help="child deck (internal)")
     return parser
@@ -208,10 +212,12 @@ def _timed(callable_, argument, *, warm_repeats: int) -> dict[str, float]:
 def _plan_build(state, rt, *, mboz, nboz, oversample) -> dict[str, Any]:
     """The once-per-process cost the plan lane pays, on its own.
 
-    Called *after* the timing lanes, because it clears the registry: the
-    first build compiles the table operations against this child's empty
-    persistent cache, the second reuses them, which is what a long-lived
-    process or a warm ``~/.cache/vmex`` actually pays.
+    Runs first thing in its own child, before anything has traced the
+    transform, so ``first_build_s`` really is what an empty compilation
+    cache costs: almost all of it is XLA compiling the ~20 small programs
+    of the op-by-op table build.  ``rebuild_s`` clears the registry and
+    builds again with those programs already compiled — what a long-lived
+    process, a warm ``~/.cache/vmex``, or a registry eviction pays.
     """
     import jax
     import numpy as np
@@ -234,8 +240,8 @@ def _plan_build(state, rt, *, mboz, nboz, oversample) -> dict[str, Any]:
         jax.block_until_ready(plan.tables)
         seconds.append(time.perf_counter() - started)
     return {
-        "empty_compilation_cache_s": seconds[0],
-        "warm_compilation_cache_s": seconds[1],
+        "first_build_s": seconds[0],
+        "rebuild_s": seconds[1],
         "tables_mib": sum(int(np.asarray(table).nbytes)
                           for table in plan.tables.values()) / 2**20,
         "quadrature": [int(plan.constants.ntheta), int(plan.constants.nzeta)],
@@ -345,6 +351,12 @@ def _child(arguments: argparse.Namespace) -> dict[str, Any]:
             for key in OUTPUT_KEYS)
         return report
 
+    if arguments.mode == "plan_build":
+        report["plan_build"] = _plan_build(
+            state, rt, mboz=arguments.mboz, nboz=arguments.nboz,
+            oversample=arguments.oversample)
+        return report
+
     if arguments.mode == "interleaved":
         report["timers"] = _interleaved(
             {mode: _lane(mode, rt, **shared) for mode in ("inline", "plan")},
@@ -367,10 +379,6 @@ def _child(arguments: argparse.Namespace) -> dict[str, Any]:
         lambda st: lane(st)["bmnc_b"], state,
         warm_repeats=max(5, arguments.warm_repeats // 2))
     report["digests"] = {key: _digest(lane(state)[key]) for key in OUTPUT_KEYS}
-    if arguments.mode == "plan":  # last: it clears the plan registry
-        report["plan_build"] = _plan_build(
-            state, rt, mboz=arguments.mboz, nboz=arguments.nboz,
-            oversample=arguments.oversample)
     return report
 
 
@@ -463,6 +471,7 @@ def main(argv: list[str] | None = None) -> int:
                 report, wall = _run_child(arguments, deck=deck, mode=mode)
                 runs[mode].append((report, wall))
                 child_versions = report["versions"]
+        built, _ = _run_child(arguments, deck=deck, mode="plan_build")
         equivalence, _ = _run_child(arguments, deck=deck, mode="equivalence")
         interleaved, _ = _run_child(arguments, deck=deck, mode="interleaved")
         summary = {mode: _lane_summary(runs[mode]) for mode in runs}
@@ -478,8 +487,7 @@ def main(argv: list[str] | None = None) -> int:
             "deck": deck,
             "sha256_prefix": _sha256_prefix(DATA / deck),
             "resolution": runs["plan"][0][0]["resolution"],
-            "plan_build": min((report["plan_build"] for report, _ in runs["plan"]),
-                              key=lambda built: built["empty_compilation_cache_s"]),
+            "plan_build": built["plan_build"],
             "fresh_process": summary,
             "speedup_inline_over_plan": speedup,
             "interleaved": {
