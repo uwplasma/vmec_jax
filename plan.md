@@ -3238,18 +3238,33 @@ Branches `docs/publication-hygiene`, `docs/api-reference-completeness`,
 
 ### 31.6 Open decisions for the maintainer
 
-- #197 (contributor's scalar-adjoint examples): rebased clean as
-  `codex/scalar-optimization-drivers-rebased`. Verdict: the scalar lane does
-  not improve the two user-visible latencies (shared machinery, fixed by
-  #240); it wins cold start and memory (44.7 -> 32.2 s, 2965 -> 2574 MiB);
-  at matched evaluation budget TRF least squares reaches a 3.0x lower
-  objective. Merge as examples with that framing, or close; posting the
-  verdict on the contributor's PR needs the maintainer's OK.
-- Zenodo linking, Codecov re-linking (uploads 404 with "Repository not
-  found"; the gate now runs regardless), GitHub topics.
-- Whether plan.md stays in the public tree (31.5 item 8).
+Settled by the maintainer on 2026-09-02:
+
+- #197 (contributor's scalar-adjoint examples): verdict posted on the PR.
+  The scalar lane does not improve the two user-visible latencies (shared
+  machinery, fixed by #240); it wins cold start and memory (44.7 -> 32.2 s,
+  2965 -> 2574 MiB); at matched evaluation budget TRF least squares reaches
+  a 3.0x lower objective. Take it in as examples with that framing, after a
+  rebase (`codex/scalar-optimization-drivers-rebased` is clean) and a
+  sentence per example naming the trade.
+- plan.md STAYS in the public tree. 31.5 item 8 therefore reduces to
+  stripping the "the plan" phrasing from user-facing text
+  (`strong_force_comparison_m4.json:61`, performance.rst) and writing the
+  submission's AI-usage disclosure honestly; do not move or trim this file.
+- No Zenodo record yet - the code is still changing. CITATION.cff ships
+  without a DOI; add `identifiers` and the badge at submission time. Do not
+  block the publication pack on it.
+- Codecov: deleting and re-adding the repository there did not fix the 404,
+  because the Codecov project still carries the pre-rename vmec_jax
+  identity. PR #249 switches the upload to the repository token; the
+  `CODECOV_TOKEN` secret is the maintainer's to set, and the token pasted
+  into chat on 2026-09-02 should be regenerated before use.
+
+Still open:
+
 - The pointwise eps_F definition (31.2-R1): keep as the internal certificate
   and add the published global normalizations for every reported number.
+- GitHub topics and repository description.
 
 ### 31.7 Remaining engineering items (carried from section 8.8 and the campaign)
 
