@@ -201,8 +201,9 @@ class FunctionProblem:
         serves it is also reachable under SciPy's ``fun_and_grad`` name.
     residual:
         ``x -> array``, the least-squares residual vector ``r(x)``.  It is
-        flattened, and defines the scalar objective ``0.5 * r @ r`` when no
-        ``fun`` was given.
+        flattened, and defines the scalar objective ``0.5 * r @ r`` when the
+        problem has no scalar lane of its own (no ``fun``, ``grad``, or
+        ``value_and_grad``).
     residual_jac:
         ``x -> array``, the Jacobian ``dr_i/dx_j``.  It must have one
         column per decision variable; anything else raises

@@ -54,9 +54,9 @@ MODULES_NOT_IN_THE_REFERENCE: frozenset[str] = frozenset()
 #: ``module:qualname`` of public definitions that autodoc renders without a
 #: docstring.  Empty is the goal state; an entry here is a documentation debt,
 #: not a waiver of the contract.  Ruff enforces the same rule at lint time
-#: (``D101``/``D102``/``D103`` in pyproject.toml), so an entry added here needs
-#: a matching ``# noqa`` at the definition — which is the point: the debt has
-#: to be visible in two places before it can be ignored.
+#: (``D101``/``D102``/``D103`` in pyproject.toml), so an entry added here also
+#: needs a per-line lint suppression at the definition — which is the point:
+#: the debt has to be visible in two places before it can be ignored.
 UNDOCUMENTED: frozenset[str] = frozenset()
 
 

@@ -90,11 +90,37 @@ def plot_optimization_objects(
     *panels: tuple[Any, ...],
     dpi: int = _DPI,
 ) -> Path:
-    """Plot before/after surfaces and coils without depending on ESSOS.
+    """Plot before/after surfaces and coils side by side, as a saved PNG.
 
-    Each panel is ``(title, object, ...)``; every object must provide
-    ``plot(ax=axis, show=False)`` and may expose Cartesian points through
-    ``gamma`` or ``curves.gamma`` for equal three-dimensional limits.
+    One 3-D subplot per panel, laid out in a single row 5.0 by 4.0 inches
+    each.  VMEX never imports the coil library: each object draws itself
+    through ``plot(ax=axis, show=False)``, so ESSOS, SIMSOPT, or any object
+    with that method works.
+
+    When an object also exposes its Cartesian points as ``gamma`` or
+    ``curves.gamma`` (shape ``(..., 3)``, meters), those points set the axis
+    limits: one cube per panel, centred on the panel's own bounding box and
+    sized by its largest extent, with ``box_aspect (1, 1, 1)``.  Geometry is
+    therefore undistorted, and a before/after pair drawn at different sizes
+    stays visually comparable.  Objects without points are still drawn; they
+    just do not vote on the limits.
+
+    Parameters
+    ----------
+    path:
+        Destination image file.  Its suffix selects the format via
+        matplotlib.
+    *panels:
+        One or more ``(title, object, ...)`` tuples — a panel title followed
+        by at least one drawable object.  Passing no panel, or a tuple
+        shorter than two entries, raises :exc:`ValueError`.
+    dpi:
+        Output resolution, default 200 (the module's publication default).
+
+    Returns
+    -------
+    The written ``path`` as a :class:`~pathlib.Path`.  The figure is saved
+    and closed; nothing is displayed.
     """
     if not panels or any(len(panel) < 2 for panel in panels):
         raise ValueError("provide at least one (title, object, ...) panel")
@@ -140,13 +166,53 @@ def plot_optimization_movie(
 ) -> Path:
     """Animate accepted surface and coil geometries from an optimization.
 
-    ``object_factory(x)`` returns one object or a sequence of objects exposing
-    Cartesian points through ``gamma`` or ``curves.gamma``. Optional
-    ``color_factory(x, objects)`` returns one scalar per point of the first
-    surface, enabling ``|B|``, ``B.n/B``, bootstrap, or custom colors without
-    coupling VMEX to a coil package. Histories are uniformly subsampled to
-    ``max_frames`` and always retain both endpoints. GIF uses Pillow; MP4 uses
-    ffmpeg when available.
+    One frame per sampled optimization iterate, all drawn on a single 3-D
+    axis whose limits are the cube enclosing *every* frame — so apparent
+    motion is real motion, not autoscaling.  The frame title names the
+    accepted-iteration index it came from.  Objects that expose an
+    ``area_element`` attribute are treated as surfaces (mesh wireframe, or a
+    coloured surface when ``color_factory`` is given); everything else is
+    drawn as curves.
+
+    Parameters
+    ----------
+    path:
+        Destination file.  The suffix must be ``.gif`` (written with Pillow)
+        or ``.mp4`` (written with ffmpeg, and :exc:`RuntimeError` if ffmpeg is
+        not available to matplotlib).
+    x_history:
+        Accepted optimization points, in order.  Must be non-empty.
+    object_factory:
+        ``object_factory(x)`` returns one object or a sequence of objects
+        exposing Cartesian points in meters through ``gamma`` or
+        ``curves.gamma``, shape ``(..., 3)``.  Returning nothing with points
+        raises :exc:`TypeError`.
+    color_factory:
+        Optional ``color_factory(x, objects)`` returning one scalar per point
+        of the first surface, with exactly that surface's grid shape — this is
+        what lets ``|B|``, ``B.n/|B|``, bootstrap current, or any other field
+        colour the animation without VMEX importing a coil package.  Requires
+        an object with ``area_element``; a shape mismatch raises
+        :exc:`ValueError`.
+    color_label:
+        Colorbar label used when ``color_factory`` is given.
+    cmap:
+        Colormap for those colours, default ``jet``.  The normalization spans
+        the finite values across *all* frames, so the colour scale is fixed
+        for the whole animation.
+    fps:
+        Frames per second of the written movie (at least 1).
+    max_frames:
+        Upper bound on frames.  The history is subsampled uniformly to this
+        many indices, always keeping the first and last (at least 2).
+    dpi:
+        Output resolution, default 100 — deliberately below the still-figure
+        default, since every frame is rendered.
+
+    Returns
+    -------
+    The written ``path`` as a :class:`~pathlib.Path`.  The figure is closed
+    after saving.
     """
     if not x_history:
         raise ValueError("x_history must contain at least one accepted point")
@@ -254,7 +320,44 @@ def plot_optimization_movie(
 
 
 def plot_bootstrap_current(path: str | Path, equilibrium, mismatch, *, dpi: int = _DPI) -> Path:
-    """Overlay equilibrium and Redl ``<J.B>`` profiles on one polished panel."""
+    """Compare the equilibrium's ``<J.B>`` with the Redl bootstrap model.
+
+    A single 6.2 by 4.0 inch panel with ``s = psi/psi_edge`` on the abscissa
+    and the flux-surface-averaged parallel current
+    ``<J.B>`` on the ordinate in MA T m^-2 (the underlying values are in
+    A T m^-2 and are divided by ``1e6`` for the plot).  Two series are drawn
+    on the surfaces the ``mismatch`` term itself samples: the equilibrium's
+    own current (circles, solid) from the WOUT ``jdotb`` profile, and the
+    Redl analytic bootstrap prediction (squares, dashed) from the term's
+    kinetic profiles and helicity.  A zero line marks the sign change.
+
+    The annotation box reports the RMS of the pointwise difference divided by
+    the larger peak magnitude of the two series, as a percentage.  That is a
+    display statistic for reading the figure — it is *not* the objective's
+    ``f_boot``, which uses the self-normalizing simsopt/paper denominator; see
+    :class:`~vmex.core.bootstrap.RedlBootstrapMismatch`.
+
+    Parameters
+    ----------
+    path:
+        Destination image file.
+    equilibrium:
+        Anything ``mismatch.current_profiles`` accepts: an
+        :class:`~vmex.core.optimize.Equilibrium`, a
+        :class:`~vmex.core.wout.WoutData`, or a path to a ``wout_*.nc``.
+    mismatch:
+        A :class:`~vmex.core.bootstrap.RedlBootstrapMismatch`.  It owns the
+        radial sampling, the kinetic profiles, and the helicity, so the figure
+        shows exactly the surfaces the objective is scored on.
+    dpi:
+        Output resolution, default 200.
+
+    Returns
+    -------
+    The written ``path`` as a :class:`~pathlib.Path`.  Rendering uses the Agg
+    backend and the module's publication rcParams; the figure is closed after
+    saving and nothing is displayed.
+    """
     surfaces, equilibrium_current, redl_current = mismatch.current_profiles(equilibrium)
     surfaces = np.asarray(surfaces, dtype=float)
     equilibrium_current = np.asarray(equilibrium_current, dtype=float) / 1.0e6
@@ -391,7 +494,27 @@ def _eval_modes(cos_coeff, sin_coeff, xm, xn, theta, phi, *, dtheta: int = 0, dp
 
 
 def surface_rz(wout, *, s_index: int, theta: np.ndarray, phi: np.ndarray):
-    """R, Z on one full-mesh surface, shape (ntheta, nphi)."""
+    """Cylindrical ``R``, ``Z`` of one full-mesh flux surface, in meters.
+
+    Evaluates the WOUT geometry harmonics on the ``(theta, phi)`` outer
+    product: ``sum_k [c_k cos(m_k theta - n_k phi) + s_k sin(...)]`` with
+    ``xm``/``xn`` (``xn`` already carries ``nfp``).  The ``lasym`` partners
+    ``rmns``/``zmnc`` are included when present and treated as zero otherwise.
+
+    Parameters
+    ----------
+    wout:
+        A :class:`~vmex.core.wout.WoutData`.
+    s_index:
+        Row of the full-mesh geometry tables, ``0`` (axis) to ``ns - 1``
+        (last closed flux surface).
+    theta, phi:
+        Poloidal and geometric toroidal angle samples in radians, 1-D.
+
+    Returns
+    -------
+    ``(R, Z)``, each of shape ``(theta.size, phi.size)``, in meters.
+    """
     rmnc, rmns = _coeff_pair(wout, "rmnc", "rmns", s_index)
     zmns, zmnc = _coeff_pair(wout, "zmns", "zmnc", s_index)
     R = _eval_modes(rmnc, rmns, wout.xm, wout.xn, theta, phi)
@@ -400,13 +523,51 @@ def surface_rz(wout, *, s_index: int, theta: np.ndarray, phi: np.ndarray):
 
 
 def surface_modB(wout, *, s_index: int, theta: np.ndarray, phi: np.ndarray):
-    """``|B|`` on one half-mesh surface (Nyquist tables), shape (ntheta, nphi)."""
+    """Field strength ``|B|`` on one half-mesh surface, in tesla.
+
+    VMEC stores ``|B|`` on the **half mesh** and on the Nyquist mode set, so
+    ``s_index`` is a row of ``bmnc``/``bmns`` and ``xm_nyq``/``xn_nyq`` are the
+    mode numbers used — not the geometry tables of :func:`surface_rz`.  Row
+    ``0`` of the half-mesh tables is unused padding; row ``ns - 1`` is the
+    outermost half-mesh surface, half a radial cell inside the LCFS.
+
+    Parameters
+    ----------
+    wout:
+        A :class:`~vmex.core.wout.WoutData`.
+    s_index:
+        Half-mesh row, ``1`` to ``ns - 1``.
+    theta, phi:
+        Poloidal and geometric toroidal angle samples in radians, 1-D.
+
+    Returns
+    -------
+    ``|B|`` of shape ``(theta.size, phi.size)`` in T.
+    """
     bmnc, bmns = _coeff_pair(wout, "bmnc", "bmns", s_index)
     return _eval_modes(bmnc, bmns, wout.xm_nyq, wout.xn_nyq, theta, phi)
 
 
 def axis_rz(wout, phi: np.ndarray):
-    """Magnetic-axis curve R(phi), Z(phi) from the axis Fourier arrays."""
+    """Magnetic-axis curve ``R(phi)``, ``Z(phi)`` in meters.
+
+    Sums the WOUT axis arrays directly rather than going through the surface
+    tables: ``R = sum_n [raxis_cc_n cos(n nfp phi) - raxis_cs_n sin(n nfp
+    phi)]`` and the matching ``Z`` from ``zaxis_cs``/``zaxis_cc``, with the
+    ``lasym`` partners ``raxis_cs``/``zaxis_cc`` treated as zero when the WOUT
+    does not carry them.
+
+    Parameters
+    ----------
+    wout:
+        A :class:`~vmex.core.wout.WoutData`.
+    phi:
+        Geometric toroidal angle samples in radians, 1-D.
+
+    Returns
+    -------
+    ``(R, Z)``, each of shape ``phi.shape``, in meters.
+    """
     phi = np.asarray(phi, dtype=float)
     raxis_cc = np.asarray(wout.raxis_cc, dtype=float)
     zaxis_cs = np.asarray(wout.zaxis_cs, dtype=float)
@@ -761,12 +922,37 @@ _GAMMA_C_TARGETS = (0.25, 0.5, 0.7, 0.9)
 class ConfinementSummary:
     """One bundle of the summary figure's confinement diagnostics.
 
-    ``surfaces`` maps each diagnostic name to its own radial grid (the two
-    diagnostics sample different native grids: NEO the Boozer half-mesh
-    surfaces of the shared summary transform, ``Gamma_c`` interior full-mesh
-    rows).  ``validity`` says whether each profile is usable; ``notes`` carries
-    the reason when it is not (never plot an invalid value as zero); ``timing``
-    records the wall seconds each diagnostic cost.
+    The two keys used throughout are ``"epsilon_effective"`` and
+    ``"gamma_c"``.  Both diagnostics are dimensionless, and both are optional:
+    an unavailable one is ``None`` with its reason recorded, never a zero.
+
+    Attributes
+    ----------
+    surfaces:
+        Radial grid of each diagnostic, keyed by name.  The two grids differ
+        because the diagnostics live on different native meshes: the effective
+        ripple on the Boozer half-mesh surfaces of the shared summary
+        transform, ``Gamma_c`` on distinct interior full-mesh rows.  Only
+        valid diagnostics get an entry, and the values are ``s =
+        psi/psi_edge``.
+    epsilon_effective:
+        ``eps_eff^(3/2)``, the NEO effective-ripple measure of 1/nu neoclassical
+        transport, on ``surfaces["epsilon_effective"]``.  Non-finite and
+        non-positive samples are already dropped.  ``None`` when unavailable.
+    gamma_c:
+        The fast-ion confinement proxy of :mod:`vmex.core.gammac` on
+        ``surfaces["gamma_c"]``.  Deliberate NaN rows (a degenerate
+        field-line map at ``iota`` near zero) are already dropped.  ``None``
+        when unavailable.
+    validity:
+        Whether each diagnostic produced a usable profile.
+    notes:
+        Empty string when valid; otherwise why not — a missing optional
+        dependency, an unsupported symmetry, or the exception type raised.
+        Print it rather than plotting a placeholder value.
+    timing:
+        Wall-clock seconds spent on each diagnostic, including the failed
+        attempts.
     """
 
     surfaces: dict[str, np.ndarray]
@@ -1442,7 +1628,59 @@ def plot_summary(
     wout, out_path: str | Path, *, s_plot_ignore: float = 0.2,
     j_pitch: float | None = None,
 ) -> Path:
-    """Publication summary figure, optionally at a specified physical J pitch."""
+    """Write the 3x3 publication summary figure of one equilibrium.
+
+    The panels, row by row on a 15.0 by 11.5 inch canvas:
+
+    1. rotational transform ``iota`` (full mesh, dimensionless) against
+       ``s = psi/psi_edge``, with the flux-surface-averaged parallel current
+       ``<J.B>`` in kA T m^-2 on a coloured right axis;
+    2. pressure ``presf`` in kPa, with the dimensionless confinement
+       diagnostics ``eps_eff^(3/2)`` and ``Gamma_c`` sharing one right axis
+       (see :func:`confinement_summary`; an unavailable diagnostic is named,
+       never drawn as zero);
+    3. relative radial force error against ``rho = sqrt(s)`` on a log axis —
+       ``|(J x B - grad p)_s|`` over ``|(J x B)_s| + |(grad p)_s|`` — over the
+       solved interior surfaces only;
+    4. Mercier ``DMerc`` and the Glasser-Greene-Johnson ``D_R`` against ``s``,
+       with the physical ``d2V/ds2`` on the right axis;
+    5. the 3-D last closed flux surface coloured by ``|B|`` in T;
+    6. the second adiabatic invariant as a polar map of ``J/(v R0)`` in
+       ``x = s cos(alpha)``, ``y = s sin(alpha)`` — concentric contours mean
+       omnigenity, contours shrinking outward mean maximum-J;
+    7. a scalar card of threed1-style global quantities;
+    8. and 9. ``|B|`` line contours in Boozer angles at mid radius and on the
+       LCFS.
+
+    One Boozer transform (``booz_xform_jax``, in process) feeds panels 6, 8, 9
+    and the effective ripple of panel 2, so ``vmex --plot`` needs no separate
+    ``--booz`` pass.  If that transform or the ``J`` map fails, the affected
+    panel carries the reason as text and the rest of the figure is still
+    written — this function does not raise for a missing diagnostic.
+
+    Parameters
+    ----------
+    wout:
+        Path to a ``wout_*.nc`` or a :class:`~vmex.core.wout.WoutData`.
+    out_path:
+        Destination image file.
+    s_plot_ignore:
+        Fraction of the radial grid to drop near the axis in the stability
+        panel, where the Mercier terms diverge; the panel starts at row
+        ``max(2, round(s_plot_ignore * ns))`` and always drops the last row.
+        It affects only panel 4.
+    j_pitch:
+        Physical pitch ``lambda = 1/B*`` in T^-1 for the ``J`` map.  Following
+        one physical ``lambda`` radially is what makes ``dJ/dpsi`` meaningful,
+        so pass the pitch an optimization targeted to certify it at the same
+        value.  By default a ``B*`` halfway into the trapping band common to
+        every plotted surface is chosen automatically.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`.  Saved at 200 dpi on
+    the Agg backend and closed; nothing is displayed.
+    """
     plt = _import_matplotlib()
     fig, _meta = _summary_figure(wout, s_plot_ignore=s_plot_ignore, j_pitch=j_pitch)
     out_path = Path(out_path)
@@ -1455,7 +1693,47 @@ def plot_stability(
     wout, out_path: str | Path, *, beta_max: float | None = None,
     s_plot_ignore: float = 0.2,
 ) -> Path:
-    """Plot Mercier terms and frozen-equilibrium pressure stability margins."""
+    """Write the two-panel Mercier and pressure-margin stability figure.
+
+    Left panel: the WOUT Mercier decomposition against ``s = psi/psi_edge`` —
+    the total ``DMerc`` in black plus its four contributions ``DShear``,
+    ``DWell``, ``DCurr``, ``DGeod``, with a zero line.  Positive is
+    interchange-stable in VMEC's sign convention.
+
+    Right panel: a *frozen-equilibrium* pressure scan.  For 41 trial volume
+    averaged betas from 0 to ``beta_max``, the explicit ``p'`` terms are
+    re-evaluated at fixed geometry — the equilibrium is never re-solved, so
+    this is a margin trend, not a family of equilibria.  Four curves against
+    trial ``<beta>`` in percent: the ideal margin ``min_s DMerc``, the
+    resistive margin ``min_s(-D_R)``, and each of those at the surface
+    nearest ``s = 0.5``; a vertical line marks the WOUT's own beta when it is
+    inside the scanned range.  The ordinate is a stability margin, favourable
+    above zero.  When the scan cannot be built (no valid ``D_R``, or no
+    usable pressure normalization) the panel carries the reason as text
+    instead.
+
+    Parameters
+    ----------
+    wout:
+        Path to a ``wout_*.nc`` or a :class:`~vmex.core.wout.WoutData`.
+    out_path:
+        Destination image file.
+    beta_max:
+        Upper end of the scanned volume-averaged beta, as a fraction (``0.05``
+        is 5 %).  Default ``max(0.05, 1.5 * wout.betatotal)``, so the
+        equilibrium's own beta always lies inside the scan.  Must be finite
+        and positive.
+    s_plot_ignore:
+        Fraction of the radial grid to drop near the axis, where the Mercier
+        terms diverge.  Both panels use rows
+        ``max(2, round(s_plot_ignore * ns))`` up to ``ns - 1`` (the edge row
+        is always dropped).
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
+    """
     plt = _import_matplotlib()
     wout, _ = _as_wout(wout)
     ns = int(wout.ns)
@@ -1543,7 +1821,36 @@ def plot_surfaces(
     nradii: int = 8,
     ntheta: int = 160,
 ) -> Path:
-    """Flux-surface cross-sections at ``nzeta`` slices over one field period."""
+    """Write flux-surface cross-sections at several toroidal angles.
+
+    One subplot per toroidal cut, at ``phi = 2*pi*k/(nfp*nzeta)`` radians for
+    ``k = 0 ... nzeta-1`` — one field period with the endpoint excluded, since
+    that plane repeats the next period's first.  Each subplot draws ``R``
+    against ``Z`` in meters on equal axes, with one closed curve per plotted
+    surface and a black cross at the magnetic axis.  Subplots are laid out at
+    most four to a row.
+
+    Parameters
+    ----------
+    wout:
+        Path to a ``wout_*.nc`` or a :class:`~vmex.core.wout.WoutData`.
+    out_path:
+        Destination image file.
+    nzeta:
+        Number of toroidal cuts across the field period.
+    nradii:
+        Number of flux surfaces per cut.  The full-mesh rows are spread
+        evenly over ``0 ... ns - 1`` (axis to LCFS) and de-duplicated, so a
+        coarse equilibrium may draw fewer curves than requested.
+    ntheta:
+        Poloidal samples per curve over ``[0, 2*pi]`` radians, endpoint
+        included so each contour closes.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
+    """
     plt = _import_matplotlib()
     wout, _ = _as_wout(wout)
     ns, nfp = int(wout.ns), int(wout.nfp)
@@ -1585,7 +1892,34 @@ def plot_modB(
     ntheta: int = 90,
     nphi: int = 180,
 ) -> Path:
-    """``|B|`` line contours in (phi, theta) at mid radius and the boundary."""
+    """Write ``|B|`` contour maps in geometric angles at two radii.
+
+    Two panels of 25 non-filled ``jet`` contours of ``|B|`` in T, each with
+    its own colorbar: the toroidal angle ``phi`` in radians on the abscissa
+    over one field period ``[0, 2*pi/nfp]``, the poloidal angle ``theta`` in
+    radians on the ordinate over ``[0, 2*pi]`` with ticks in multiples of
+    ``pi``.  These are the geometric VMEC angles, not Boozer angles — for the
+    Boozer picture use :func:`plot_boozmn_modB`.
+
+    The two radii are half-mesh rows ``ns // 2`` and ``ns - 1``, labelled
+    "mid radius" and "plasma boundary".  VMEC stores ``|B|`` on the half
+    mesh, so the second is the outermost half-mesh surface, half a radial
+    cell inside the LCFS.
+
+    Parameters
+    ----------
+    wout:
+        Path to a ``wout_*.nc`` or a :class:`~vmex.core.wout.WoutData`.
+    out_path:
+        Destination image file.
+    ntheta, nphi:
+        Poloidal and toroidal samples of the contour grid.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
+    """
     plt = _import_matplotlib()
     wout, _ = _as_wout(wout)
     ns = int(wout.ns)
@@ -1613,7 +1947,40 @@ def plot_modB(
 
 
 def plot_profiles(wout, out_path: str | Path) -> Path:
-    """Radial profiles (iota, pressure, currents) and fsqt convergence."""
+    """Write the six-panel radial-profile and convergence figure.
+
+    Five panels share ``s = psi/psi_edge`` on the abscissa; each series is
+    drawn on the mesh VMEC actually stores it on, so half-mesh quantities are
+    plotted at ``(j - 0.5)/(ns - 1)`` and their unused row 0 is skipped:
+
+    1. rotational transform ``iotaf`` (full mesh, dimensionless);
+    2. pressure — ``presf`` on the full mesh and ``pres`` on the half mesh,
+       both in Pa;
+    3. ``jcuru`` and ``jcurv``, VMEC's surface-averaged current densities, in
+       A;
+    4. ``buco`` and ``bvco``, the half-mesh covariant field averages
+       ``<B_theta>`` and ``<B_zeta>`` in T m;
+    5. enclosed toroidal ``phi`` and poloidal ``chi`` flux in Wb.
+
+    The sixth panel is the convergence trace rather than a profile: the
+    stored force residual ``fsqt`` (and ``wdot`` where positive) on a log
+    ordinate against the stored-iteration sample index, with a dashed line at
+    the achieved tolerance ``ftolv``.  VMEC keeps at most 100 samples and
+    leaves unused slots at zero, so the trace stops at the last positive
+    ``fsqt`` entry.  A WOUT with no history gets a "no fsqt history" note.
+
+    Parameters
+    ----------
+    wout:
+        Path to a ``wout_*.nc`` or a :class:`~vmex.core.wout.WoutData`.
+    out_path:
+        Destination image file.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
+    """
     plt = _import_matplotlib()
     wout, _ = _as_wout(wout)
     ns = int(wout.ns)
@@ -1692,7 +2059,36 @@ def plot_boundary_3d(
     ntheta: int = 180,
     nzeta: int | None = None,
 ) -> Path:
-    """3-D plasma boundary colored by ``|B|`` (full torus, jet colormap)."""
+    """Write the 3-D plasma boundary coloured by ``|B|``.
+
+    The last closed flux surface over the full torus (``phi`` from ``0`` to
+    ``2*pi``), rendered as a Cartesian surface with the ``jet`` colormap and a
+    horizontal colorbar labelled ``|B|`` in T.  The axes are switched off and
+    the box aspect is cubic, so proportions are the machine's own.
+
+    The geometry is the full-mesh LCFS (row ``ns - 1`` of ``rmnc``/``zmns``),
+    while the colours come from the outermost *half-mesh* ``|B|`` row, which
+    is where VMEC stores field strength — half a radial cell inside.  The
+    colour normalization spans that row's own min and max.
+
+    Parameters
+    ----------
+    wout:
+        Path to a ``wout_*.nc`` or a :class:`~vmex.core.wout.WoutData`.
+    out_path:
+        Destination image file.
+    ntheta:
+        Poloidal samples of the rendered mesh.
+    nzeta:
+        Toroidal samples over the full torus.  ``None`` picks
+        ``min(720, max(360, 120 * nfp))`` — enough that a high-period
+        stellarator still reads as smooth.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend with a tight bounding box, and closed.
+    """
     plt = _import_matplotlib()
     wout, _ = _as_wout(wout)
     nfp = int(wout.nfp)
@@ -1829,8 +2225,15 @@ def boozer_modB_on_surface(boozmn, *, s_index: int = -1, ntheta: int = 90, nphi:
     indexes the computed Boozer surfaces; ``-1`` (the default) selects the
     outermost surface, i.e. ``|B|`` in Boozer coordinates on the LCFS.
 
-    Returns ``(theta_B, phi_B, B)`` where ``B`` has shape ``(ntheta, nphi)``
-    over one field period, suitable for a ``jet`` contour plot.
+    This returns the data rather than a figure — it is the seam for building
+    a custom panel where :func:`plot_boozmn_modB` would write a whole file.
+
+    Returns ``(theta_B, phi_B, B)``: the Boozer poloidal angle sampled on
+    ``[0, 2*pi]`` in radians, shape ``(ntheta,)``; the Boozer toroidal angle
+    sampled on ``[0, 2*pi/nfp]`` in radians — one field period — shape
+    ``(nphi,)``; and ``|B|`` in T with shape ``(ntheta, nphi)``, suitable for
+    a ``jet`` contour plot.  An ``s_index`` outside the computed range raises
+    :exc:`IndexError`.
     """
     bx = _load_boozmn(boozmn)
     ns_b = int(np.asarray(bx.bmnc_b).shape[1])
@@ -1846,10 +2249,39 @@ def plot_boozmn_modB(
     boozmn, out_path: str | Path, *, ntheta: int = 90, nphi: int = 180,
     cmap: str = _CMAP_MODB,
 ) -> Path:
-    """Boozer-coordinate ``|B|`` line contours at mid radius and the edge.
+    """Write Boozer-angle ``|B|`` contour maps at mid radius and the edge.
 
-    ``cmap`` selects the contour colormap (default ``jet``, the STELLOPT /
-    booz_xform convention).  Contours are always non-filled.
+    Two panels of 24 non-filled contours of ``|B|`` in T, each with its own
+    colorbar: the Boozer toroidal angle ``phi_B`` in radians on the abscissa
+    over one field period ``[0, 2*pi/nfp]``, the Boozer poloidal angle
+    ``theta_B`` in radians on the ordinate over ``[0, 2*pi]`` with ticks in
+    multiples of ``pi``.  In these angles a quasi-symmetric field shows
+    straight, parallel ``|B|`` contours — which is the point of looking at
+    them rather than the geometric angles of :func:`plot_modB`.
+
+    The two panels are the computed Boozer surfaces ``ns_b // 2`` and
+    ``ns_b - 1``.  Boozer transforms are usually run on a subset of the
+    equilibrium's surfaces, so "mid radius" means the middle *computed*
+    surface.  When those two indices coincide — a transform with one or two
+    computed surfaces — only the outermost panel is drawn.
+
+    Parameters
+    ----------
+    boozmn:
+        A ``booz_xform_jax.Booz_xform`` object or a path to a
+        ``boozmn_*.nc``.  Reading a path needs ``booz_xform_jax`` installed.
+    out_path:
+        Destination image file.
+    ntheta, nphi:
+        Samples of the contour grid in ``theta_B`` and ``phi_B``.
+    cmap:
+        Contour colormap, default ``jet`` (the STELLOPT / booz_xform
+        convention).  Contours are always non-filled.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
     """
     plt = _import_matplotlib()
     bx = _load_boozmn(boozmn)
@@ -1883,7 +2315,39 @@ def plot_boozmn_modB(
 
 
 def plot_boozmn_mode_profiles(boozmn, out_path: str | Path, *, max_modes: int = 80) -> Path:
-    """Radial Boozer ``|B|`` mode amplitudes grouped by symmetry family."""
+    """Write radial Boozer ``|B|`` mode amplitudes, grouped by symmetry family.
+
+    One log-scaled panel: the mode amplitude
+    ``|B_mn| = sqrt(bmnc_b**2 + bmns_b**2)`` in T against the Boozer
+    surface label ``s = psi/psi_edge``, one line per mode.  Each line is
+    coloured by the symmetry family its ``(m, n)`` belongs to — ``B00``, ``QA
+    (n = 0)``, ``Mirror (m = 0)``, ``QH+`` (``n = nfp*m``), ``QH-``
+    (``n = -nfp*m``), or ``Other`` — with one legend entry per family and the
+    ``Other`` family drawn thinner.  A quasi-symmetric design is read off
+    this figure as a large gap between its own family and ``Other``.
+
+    Amplitudes are floored at ``1e-16`` T so exact zeros survive the log
+    axis, and the radial grid falls back to ``linspace(0, 1, ns_b)`` when the
+    file's ``s_b`` does not match the spectrum's surface count.
+
+    Parameters
+    ----------
+    boozmn:
+        A ``booz_xform_jax.Booz_xform`` object or a path to a
+        ``boozmn_*.nc``.
+    out_path:
+        Destination image file.
+    max_modes:
+        How many modes to draw, taken in descending order of amplitude *on
+        the outermost computed surface* — so a mode that matters only in the
+        core can be cut.  At least one, capped at the number of modes
+        present.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
+    """
     plt = _import_matplotlib()
     bx = _load_boozmn(boozmn)
     amp, _bmnc, _bmns, xm, xn = _boozer_amplitudes(bx)
@@ -1918,7 +2382,37 @@ def plot_boozmn_mode_profiles(boozmn, out_path: str | Path, *, max_modes: int = 
 
 
 def plot_boozmn_spectrum(boozmn, out_path: str | Path, *, surface_index: int = -1, nmodes: int = 40) -> Path:
-    """Largest Boozer ``|B|`` Fourier amplitudes on one surface (log bar chart)."""
+    """Write a log bar chart of the largest Boozer ``|B|`` modes on one surface.
+
+    One bar per mode, sorted by descending amplitude
+    ``|B_mn| = sqrt(bmnc_b**2 + bmns_b**2)`` in T on a log ordinate, tick
+    labelled ``(m, n)`` with ``n`` in physical units (already multiplied by
+    ``nfp``).  Bars are coloured by the same symmetry families as
+    :func:`plot_boozmn_mode_profiles` and the legend names them.  Amplitudes
+    are floored at ``1e-16`` T for the log axis, and the figure widens with
+    the number of bars.
+
+    Parameters
+    ----------
+    boozmn:
+        A ``booz_xform_jax.Booz_xform`` object or a path to a
+        ``boozmn_*.nc``.
+    out_path:
+        Destination image file.
+    surface_index:
+        Which computed Boozer surface to show; negative values count from the
+        end, and the default ``-1`` is the outermost computed surface.  Out of
+        range raises :exc:`IndexError`.  The title reports the resolved
+        one-based position.
+    nmodes:
+        How many bars to draw, at least one and capped at the number of modes
+        present.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
+    """
     plt = _import_matplotlib()
     bx = _load_boozmn(boozmn)
     amp, _bmnc, _bmns, xm, xn = _boozer_amplitudes(bx)
@@ -1962,10 +2456,36 @@ def plot_boozmn(
     *,
     name: str | None = None,
 ) -> dict[str, Path]:
-    """Write Boozer diagnostic figures for a ``boozmn_*.nc`` file.
+    """Write the requested Boozer diagnostic figures for a ``boozmn_*.nc`` file.
 
-    Returns a mapping from figure key (``modB``, ``mode_profiles``,
-    ``spectrum``) to the written PNG path.
+    The file is read once and the loaded transform is shared by every
+    requested figure, so asking for all three costs one netCDF read.  Each
+    figure is a 200 dpi PNG written to ``outdir`` as
+    ``<name>_modB.png``, ``<name>_mode_profiles.png``, and
+    ``<name>_spectrum.png``.
+
+    Parameters
+    ----------
+    boozmn_path:
+        Path to a ``boozmn_*.nc``, as produced by
+        :func:`vmex.core.boozer.run_booz_xform`.  Unlike the individual
+        plotters this entry point takes a path only, not a loaded
+        ``Booz_xform`` object, since it derives the default figure name from
+        the filename.  Reading needs ``booz_xform_jax`` installed.
+    outdir:
+        Output directory; created if missing.
+    which:
+        Any subset of ``("modB", "mode_profiles", "spectrum")``, dispatched to
+        :func:`plot_boozmn_modB`, :func:`plot_boozmn_mode_profiles`, and
+        :func:`plot_boozmn_spectrum` respectively.  An unknown key raises
+        :exc:`ValueError`.
+    name:
+        Basename prefix for the figures; defaults to the stem of
+        ``boozmn_path``.
+
+    Returns
+    -------
+    A mapping from each requested figure key to the written PNG path.
     """
     boozmn_path = Path(boozmn_path)
     label = name or boozmn_path.stem
@@ -2003,7 +2523,33 @@ def _finite_or_nan(values: np.ndarray) -> np.ndarray:
 def plot_trace_trajectories(
     wout, result, out_path: str | Path, *, n_trajectories: int = 4,
 ) -> Path:
-    """Sampled guiding-centre orbits in 3-D over a translucent LCFS."""
+    """Write sampled guiding-centre orbits in 3-D over a translucent LCFS.
+
+    The last closed flux surface is drawn over the full torus as a grey,
+    20 %-opaque backdrop, and the selected particles' Cartesian trajectories
+    (meters, from ``result.trajectories_xyz``) are overlaid as coloured lines
+    with a per-particle legend.  Non-finite samples — the fill ESSOS writes
+    after a particle leaves the plasma — are dropped, so a lost orbit simply
+    stops.  The axes are switched off and the box aspect is cubic.
+
+    Parameters
+    ----------
+    wout:
+        The traced equilibrium, as a ``wout_*.nc`` path or a
+        :class:`~vmex.core.wout.WoutData` — used only for the backdrop.
+    result:
+        An :class:`~vmex.core.tracing.AlphaTracingResult`.
+    out_path:
+        Destination image file.
+    n_trajectories:
+        How many orbits to draw.  Indices are evenly spaced over the ensemble
+        (deterministic, not random), capped at ``result.nparticles``.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend with a tight bounding box, and closed.
+    """
     plt = _import_matplotlib()
     wout, _ = _as_wout(wout)
     with _rc_context():
@@ -2038,7 +2584,29 @@ def plot_trace_trajectories(
 def plot_trace_vparallel(
     result, out_path: str | Path, *, n_trajectories: int = 4,
 ) -> Path:
-    """Normalized parallel velocity ``v_par/v`` of the sampled orbits."""
+    """Write the normalized parallel velocity of the sampled orbits.
+
+    ``v_par / v`` — the guiding-centre parallel velocity divided by the
+    ensemble's total speed, so the ordinate is the pitch cosine and is fixed
+    to ``[-1, 1]`` — against time in seconds.  A trapped particle oscillates
+    through zero; a passing particle keeps its sign.  Post-loss non-finite
+    samples are turned into NaN so the line breaks instead of running to the
+    edge of the axis.
+
+    Parameters
+    ----------
+    result:
+        An :class:`~vmex.core.tracing.AlphaTracingResult`.
+    out_path:
+        Destination image file.
+    n_trajectories:
+        How many orbits to draw, evenly spaced over the ensemble.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
+    """
     plt = _import_matplotlib()
     with _rc_context():
         fig, ax = plt.subplots(figsize=(6.4, 4.2), layout="constrained")
@@ -2056,7 +2624,26 @@ def plot_trace_vparallel(
 
 
 def plot_trace_loss_fraction(result, out_path: str | Path) -> Path:
-    """Cumulative loss fraction against time."""
+    """Write the cumulative particle-loss fraction against time.
+
+    ``result.loss_fractions`` — the running fraction of the ensemble that has
+    crossed the boundary, on a fixed ``[0, 1]`` ordinate — against time in
+    seconds.  The title states the final fraction as a percentage together
+    with the absolute counts, so a small ensemble cannot be mistaken for a
+    converged loss estimate.
+
+    Parameters
+    ----------
+    result:
+        An :class:`~vmex.core.tracing.AlphaTracingResult`.
+    out_path:
+        Destination image file.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
+    """
     plt = _import_matplotlib()
     with _rc_context():
         fig, ax = plt.subplots(figsize=(6.4, 4.2), layout="constrained")
@@ -2077,7 +2664,34 @@ def plot_trace_loss_fraction(result, out_path: str | Path) -> Path:
 def plot_trace_energy_error(
     result, out_path: str | Path, *, n_trajectories: int = 4,
 ) -> Path:
-    """Relative energy error of the sampled orbits (integrator quality)."""
+    """Write the relative energy error of the sampled orbits.
+
+    ``|E(t)/E0 - 1|`` against time in seconds, where ``E`` is the
+    guiding-centre energy ``0.5 m v_par**2 + mu |B|`` and ``E0`` is the
+    ensemble's nominal particle energy.  This is a diagnostic of the
+    integrator, not of the configuration: a good trace keeps the curve flat
+    and small.
+
+    The first two samples are skipped — ``mu`` is fixed from the initial
+    sample, so ``t = 0`` is exact by construction and would plot as a
+    spurious zero.  Both axes are logarithmic when at least one finite
+    positive error remains; a promptly lost ensemble that leaves none keeps
+    linear axes, since a log axis cannot autoscale on that.
+
+    Parameters
+    ----------
+    result:
+        An :class:`~vmex.core.tracing.AlphaTracingResult`.
+    out_path:
+        Destination image file.
+    n_trajectories:
+        How many orbits to draw, evenly spaced over the ensemble.
+
+    Returns
+    -------
+    The written ``out_path`` as a :class:`~pathlib.Path`, saved at 200 dpi on
+    the Agg backend and closed.
+    """
     plt = _import_matplotlib()
     with _rc_context():
         fig, ax = plt.subplots(figsize=(6.4, 4.2), layout="constrained")

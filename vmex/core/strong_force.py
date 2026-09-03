@@ -198,8 +198,9 @@ class StrongForceSamples:
     sqrt_g:
         ``det(d(x, y, z) / d(rho, theta, zeta))``, m^3 per radian^2.  This is
         the Jacobian of *these* coordinates: it equals ``2 * rho / nfp`` times
-        the usual VMEC ``sqrt(g)`` on ``(s, theta, phi)``, and its sign
-        follows the source equilibrium's ``signgs``.
+        the usual VMEC ``sqrt(g)`` on ``(s, theta, phi)``, so it shares that
+        Jacobian's sign -- the equilibrium's ``signgs``, recorded on the state
+        as ``jacobian_sign``.
     B:
         Magnetic field in Cartesian components, T.
     J:
@@ -277,8 +278,10 @@ class HighOrderFieldSamples:
         Covariant basis vector ``d(position)/d(theta)``, m/radian.
     dposition_dphi:
         ``d(position)/d(phi)`` with respect to the *physical* cylindrical
-        angle, m/radian; it is ``nfp`` times ``d(position)/d(zeta)``, so the
-        three tangent fields are not the basis of a single chart.
+        angle, m/radian; it is ``nfp`` times ``d(position)/d(zeta)``.  Mind
+        the mismatch: ``sqrt_g`` and the two ``B`` component triples below
+        are expressed on ``zeta``, not on ``phi``, so this tangent is not the
+        third basis vector they refer to.
     sqrt_g:
         ``det(d(x, y, z) / d(rho, theta, zeta))``, m^3 per radian^2 -- the
         Jacobian of the ``(rho, theta, zeta)`` chart, equal to
@@ -317,8 +320,8 @@ class HighOrderSurfaceSamples:
     Returned by :func:`evaluate_high_order_surface`, which evaluates the
     continuous representation at ``rho = 1`` over one field period.  The
     attribute names and the ``(nphi, ntheta, 3)`` layout are the ones ESSOS
-    and simsopt surface objectives already expect, so no adapter is needed;
-    VMEX's virtual-casing route consumes the same view.  Registered as a JAX
+    surface objectives already expect, so no adapter is needed; VMEX's
+    virtual-casing route consumes the same view.  Registered as a JAX
     pytree with the arrays as data and ``nfp``/``ntheta``/``nphi`` as static
     metadata.
 

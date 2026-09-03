@@ -266,8 +266,8 @@ def boozer_spectrum_high_order(
         are read.
     surfaces:
         Normalized toroidal flux values ``s = psi/psi_edge``, each in
-        ``(0, 1]``; ``s = 0`` is rejected (the Boozer construction is
-        undefined on the axis).  Scalars are promoted to a one-element array.
+        ``(0, 1]``; ``s = 0`` (the magnetic axis) and ``s > 1`` are rejected
+        with :exc:`ValueError`.  Scalars are promoted to a one-element array.
         Values are used verbatim — unlike :func:`boozer_spectrum_state`, they
         are never snapped to a mesh.
     mboz, nboz:
@@ -494,9 +494,62 @@ def omnigenity_residual(
     - ``squash``: pointwise ``envelope - |B|`` monotonicity defect —
       one magnetic well per field period.
 
-    All three vanish on an exactly QI field.  ``softness`` is the sigmoid
-    level width in normalized ``|B|`` units.  Returns ``residuals1d`` (flat
-    least-squares vector), ``total = sum(residuals1d**2)`` and diagnostics.
+    All three vanish on an exactly QI field.
+
+    Parameters
+    ----------
+    bmnc_b:
+        Cosine Boozer ``|B|`` harmonics in T, shape ``(nsurf, nmodes)``,
+        indexed by the ``(m, n)`` pairs of ``xm_b``/``xn_b``.  Promoted to
+        float64.
+    bmns_b:
+        The sine partner, same shape.  ``None`` (the default) means a
+        stellarator-symmetric field and is treated as zeros.
+    xm_b, xn_b:
+        Boozer poloidal and toroidal mode numbers, shape ``(nmodes,)``.
+        ``xn_b`` is in physical units — already multiplied by ``nfp``, as
+        :func:`boozer_spectrum_state` and
+        :func:`boozer_spectrum_high_order` return it.
+    iota_b:
+        Rotational transform on each surface, shape ``(nsurf,)``,
+        dimensionless.  It sets the field-line slope
+        ``theta_B = alpha + iota * phi_B``.
+    nfp:
+        Number of field periods; fixes the sampled ``phi_B`` interval to one
+        period, ``[0, 2*pi/nfp)``.
+    weights:
+        One weight per surface, length ``nsurf``.  Its square root multiplies
+        every residual entry of that surface, so a weight enters the objective
+        linearly.  Default: all ones.
+    nphi:
+        Periodic samples of ``phi_B`` across the field period (radians), at
+        least 8.
+    nalpha:
+        Field-line labels ``alpha``, uniform on ``[0, 2*pi)`` (radians), at
+        least 2.  The residual's field-line averages are means over this axis.
+    n_levels:
+        Trapping levels ``B*`` at which the bounce distance is measured,
+        placed strictly inside the normalized ``[0, 1]`` range, at least 2.
+    softness:
+        Width of the sigmoid that replaces the sharp ``|B| < B*`` occupancy,
+        in *normalized* ``|B|`` units (each surface is rescaled to ``[0, 1]``
+        by its own extrema, so this is a fraction of the surface's ``|B|``
+        span).  Floored at machine epsilon.
+    well_weight, extremum_weight, squash_weight:
+        Multipliers on the three residual blocks.  Setting one to zero keeps
+        the block's entries in the vector but zeroes them.
+
+    Returns
+    -------
+    A dict whose ``residuals1d`` is the flat least-squares vector (the three
+    blocks concatenated, each divided by the square root of its own entry
+    count so the blocks stay comparable) and whose ``total`` is
+    ``sum(residuals1d**2)``.  The remaining keys are diagnostics on the
+    sampling grid: ``bhat`` ``(nsurf, nalpha, nphi)``, the normalized ``|B|``;
+    ``delta`` ``(nsurf, nalpha, n_levels)``, the bounce distance in
+    field-period fractions; ``line_min``/``line_max`` ``(nsurf, nalpha)``;
+    and the grids ``levels`` ``(n_levels,)``, ``phi`` ``(nphi,)``,
+    ``alpha`` ``(nalpha,)``.
     """
     bmnc_b = jnp.asarray(bmnc_b, dtype=jnp.float64)
     bmns_b = (jnp.zeros_like(bmnc_b) if bmns_b is None
@@ -600,6 +653,27 @@ class QIResidual:
     Gauss-Newton geometry, exact implicit gradients).  Use
     :class:`vmex.core.qi.ConstructedQIResidual` when the optimized quantity
     must be the full squash-and-shuffle distance.
+
+    Parameters
+    ----------
+    surfaces:
+        Normalized toroidal flux values ``s = psi/psi_edge`` to evaluate.
+        Each is snapped to the nearest half-mesh surface by
+        :func:`boozer_spectrum_state`; duplicates are kept.
+    weights:
+        One weight per surface (same length as ``surfaces``), or ``None`` for
+        uniform weighting.  Validated at construction.
+    mboz, nboz, oversample:
+        Boozer resolution passed straight to :func:`boozer_spectrum_state`:
+        the poloidal and toroidal mode bounds, and the integer refinement of
+        booz_xform's pinned angle-transform quadrature.
+    nphi, nalpha, n_levels, softness:
+        Field-line sampling of :func:`omnigenity_residual` — points per field
+        period, field-line labels, trapping levels, and the sigmoid width in
+        normalized ``|B|`` units.
+    well_weight, extremum_weight, squash_weight:
+        Multipliers on the bounce-distance, extremum-alignment, and
+        single-well blocks of that residual.
 
     Example::
 

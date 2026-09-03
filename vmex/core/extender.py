@@ -134,7 +134,9 @@ class MagneticField:
     dof_names:
         One name per entry of ``parameters``, in the same order, for
         labelling gradient output.  ``None`` or ``()`` leaves the names
-        unset; any other length raises :exc:`ValueError`.
+        unset.  A mismatched length raises :exc:`ValueError`, but only when
+        ``parameters`` was also given — there is nothing to compare
+        against otherwise.
     """
 
     def __init__(

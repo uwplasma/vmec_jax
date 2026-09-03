@@ -304,26 +304,25 @@ class StrongForceCertificationError(VmecNumericalError):
     ``solver_converged`` distinguishes failure of ``J.T r = 0`` from failure
     of either overintegrated certificate threshold.
 
-    A polished root is accepted only on the independent certificate of
+    A polished root is accepted on the independent certificate of
     :func:`vmex.core.strong_force.certify_strong_force` -- evaluated on
-    quadrature nodes that the solve never touched -- and not on the solver's
-    own stopping test.  Acceptance requires all three of
-    ``normalized_l2 <= certificate_tolerance``,
-    ``radial_refinement_difference <= radial_refinement_tolerance`` and a
-    strictly positive ``minimum_signed_jacobian``.  This error is raised
-    when that check fails and
-    :class:`~vmex.core.polish_driver.PolishConfig` has
-    ``fail_policy="raise"``; otherwise the driver returns the unpolished
-    state with a report.
+    quadrature nodes the solve never touched -- and not on the solver's own
+    stopping test.  This error is raised when that acceptance check fails
+    and :class:`~vmex.core.polish_driver.PolishConfig` has
+    ``fail_policy="raise"``; with ``fail_policy="return_unpolished"`` the
+    driver returns the unpolished state and its report instead.
 
-    Both polish routes raise it.
-    :func:`vmex.core.polish_driver.polish_collocation_least_squares`
-    populates every attribute below.
-    :func:`vmex.core.polish_driver.polish_strong_root` -- which reaches
-    ``alpha = 1`` first and only then certifies -- fills only
-    ``normalized_l2`` and ``tolerance``, so on that path
-    ``solver_converged`` stays ``False`` and the two refinement fields keep
-    their defaults; they say nothing about the run.
+    Both polish routes raise it, and they check different things.
+    :func:`vmex.core.polish_driver.polish_collocation_least_squares` demands
+    all three of ``normalized_l2 <= certificate_tolerance``,
+    ``radial_refinement_difference <= radial_refinement_tolerance`` and a
+    strictly positive ``minimum_signed_jacobian``, and populates every
+    attribute below.  :func:`vmex.core.polish_driver.polish_strong_root` --
+    which walks the homotopy to ``alpha = 1`` first and only then certifies
+    -- tests ``normalized_l2`` alone and fills only ``normalized_l2`` and
+    ``tolerance``, so on that path ``solver_converged`` stays ``False`` and
+    the two refinement fields keep their defaults; they say nothing about
+    the run.
 
     Attributes
     ----------

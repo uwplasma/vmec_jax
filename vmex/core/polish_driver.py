@@ -469,8 +469,9 @@ class PolishReport:
     continuation_accepted, continuation_rejected:
         On the homotopy route, accepted and rejected continuation stages.  On
         the Gauss--Newton route the same two fields carry the accepted and
-        rejected trust-ratio trial steps of the least-squares solve; the
-        field names are historical and do not change meaning per route.
+        rejected trust-ratio trial steps of the least-squares solve instead;
+        the names are historical, so read them against
+        ``termination_reason``.
     nonlinear_iterations:
         Total outer nonlinear steps: Gauss--Newton steps, or the sum of the
         endpoint, continuation-stage, and pseudo-arclength PTC steps.
@@ -622,9 +623,10 @@ class PolishContext(NamedTuple):
     #: ``runtime.native`` is the *unpolished* continuous state the correction
     #: is measured from, and is the differentiation base point.
     runtime: StrongRootRuntime
-    #: Gauge-free physical chart: the orthonormal coordinate and equation
-    #: bases plus their scales that reduce the constrained root layout of size
-    #: ``runtime.layout.size`` to ``chart.size`` independent coordinates.
+    #: Gauge-free physical chart, holding the orthonormal coordinate and
+    #: equation bases plus their scales that reduce the constrained root
+    #: layout of size ``runtime.layout.size`` to ``chart.size`` independent
+    #: coordinates.
     chart: StrongPhysicalChart
     #: Accepted correction in chart coordinates, shape ``(chart.size,)``.
     #: Already multiplied back by the diagonal variable scaling, so
@@ -1248,7 +1250,60 @@ def polish_strong_root(
     initial_certificate: StrongForceReport | None = None,
     chart: StrongPhysicalChart | None = None,
 ) -> PolishResult:
-    """Follow the legacy-connected fixed-boundary branch to strong force."""
+    """Follow the legacy-connected fixed-boundary branch to strong force.
+
+    The square homotopy route, kept for rank and branch diagnostics; the
+    public polishing path is :func:`polish_collocation_least_squares`.  The
+    residual is the convex interpolation ``(1 - alpha) * low + alpha * strong``
+    between the stored legacy raw-force endpoint and the strong-force
+    endpoint.  The driver solves the ``alpha = 0`` endpoint with
+    pseudo-transient continuation (skipping it when the endpoint residual is
+    already at roundoff before row equilibration), runs SOLVAX adaptive
+    continuation to ``alpha = 1``, and, if that stalls and
+    ``use_pseudo_arclength`` is set, retries with bordered pseudo-arclength
+    steps that can pass a fold in ``alpha``.  Every trial state must keep a
+    signed Jacobian above the configured margin, so the branch cannot walk
+    through a surface overlap.  Reaching ``alpha = 1`` is not acceptance: the
+    corrected state is then handed to the independent certificate.
+
+    Parameters
+    ----------
+    runtime:
+        Prepared strong-root runtime from
+        :func:`~vmex.core.polish.make_strong_root_runtime`.  It fixes the
+        collocation grid, the constrained root layout, the row and column
+        equilibration, the transfer to the legacy packing, and the low-order
+        preconditioner.  ``runtime.native`` is the state being corrected.
+    config:
+        Controls; ``None`` uses ``PolishConfig()``.  This route reads the
+        continuation, PTC, arclength, preconditioner, and Jacobian-margin
+        knobs that the Gauss--Newton route ignores.
+    initial_certificate:
+        Certificate of ``runtime.native``, if the caller already has one.
+        ``None`` evaluates it here.  When it already meets
+        ``certificate_tolerance`` the driver returns immediately with
+        ``termination_reason="already-certified"`` and a zero correction.
+    chart:
+        Optional gauge-free physical chart.  ``None`` solves in the full
+        constrained root layout with ``strong_root_residual``; passing a chart
+        solves the projected square system in ``chart.size`` coordinates
+        instead, via ``strong_physical_residual``.
+
+    Returns
+    -------
+    A :class:`PolishResult`.  Its ``context`` is always ``None`` — this route
+    does not build the least-squares stationarity context that the implicit
+    derivative entry points require.
+
+    Raises
+    ------
+    StrongForceContinuationError
+        If the branch does not reach ``alpha = 1`` and ``fail_policy`` is
+        ``"raise"``.
+    StrongForceCertificationError
+        If ``alpha = 1`` is reached but the independent certificate exceeds
+        ``certificate_tolerance`` and ``fail_policy`` is ``"raise"``.
+    """
 
     config = PolishConfig() if config is None else config
     started = perf_counter()
@@ -1880,12 +1935,67 @@ def polish_collocation_least_squares(
     Gauss--Newton rows, certificate summary) through ``emit``; the default
     keeps the Python API silent, and printing never changes the numerics.
 
+    The residual has two rows per collocation point (normalized signed radial
+    and helical force densities) against ``chart.size`` unknowns, and is
+    divided by its own initial RMS so the reported cost starts near
+    ``0.5 * rows``.  Columns are additionally scaled by the reciprocal
+    column-norm estimate from ``collocation_scale_probes`` transpose probes.
+    Acceptance is the independent certificate, never the solver's own
+    stationarity flag: the volume force L2 must be within
+    ``certificate_tolerance``, the radial refinement difference within
+    ``radial_refinement_tolerance``, and the minimum signed Jacobian strictly
+    positive.
+
     ``auto=True`` is ``POLISH = AUTO``: before committing to the
     Gauss--Newton phase the driver times one inner product on this problem
     and this machine and declines if the configured iteration limits could
     run past ``config.auto_budget_seconds``.  ``auto=False`` never measures
     and never declines, so an explicit polish request costs exactly what it
     did before.
+
+    Parameters
+    ----------
+    runtime:
+        Prepared strong-root runtime from
+        :func:`~vmex.core.polish.make_strong_root_runtime`, fixing the
+        collocation grid, normalization, layout, and transfer.
+        ``runtime.native`` is the continuous state being corrected.
+    config:
+        Controls; ``None`` uses ``PolishConfig()``.  Only the tolerance,
+        radial, scaling-probe, damping, iteration-limit, Krylov-budget, and
+        fail-policy knobs are read here.
+    chart:
+        Gauge-free physical chart.  ``None`` builds the structured
+        cylindrical-radial chart with
+        :func:`~vmex.core.polish.make_strong_structured_chart`, which requires
+        stellarator symmetry.
+    initial_certificate:
+        Certificate of ``runtime.native``, if already known; ``None``
+        evaluates it here.  It is only reported, never used to skip the solve.
+    auto:
+        ``True`` is the ``POLISH = AUTO`` behaviour described above: price the
+        Gauss--Newton phase against ``config.auto_budget_seconds`` first and
+        decline when it would overrun.  ``False`` never measures and never
+        declines.
+    verbose:
+        Print progress through ``emit``.
+    emit:
+        Sink for those lines; defaults to a flushed ``print``.
+
+    Returns
+    -------
+    A :class:`PolishResult`.  On acceptance its ``correction`` is the full
+    constrained-layout lift of the solved chart vector and its ``context`` is
+    a :class:`PolishContext` for the implicit derivative entry points; on a
+    tolerated failure the unpolished state, the initial certificate, a zero
+    correction, and ``context=None`` come back instead.
+
+    Raises
+    ------
+    StrongForceCertificationError
+        If the certificate is not met and ``fail_policy`` is ``"raise"``.  The
+        error carries the solver flag, the achieved force L2, the radial
+        refinement difference, and both tolerances.
     """
 
     from solvax import LeastSquaresConfig
@@ -2117,11 +2227,55 @@ def polish_legacy_solution(
 ) -> PolishResult:
     """Refine and lift one converged legacy solve, then run the strong driver.
 
+    The end-to-end path used by ``solve(..., polish=...)`` and the CLI.  It
+    Newton-refines the converged legacy state, lifts it into the clamped
+    B-spline representation, and evaluates the independent certificate; an
+    input already inside ``certificate_tolerance`` returns straight away with
+    no correction, no preconditioner factorization, and an empty correction
+    array.  Otherwise it factors the low-order raw-force block
+    preconditioner, builds the strong-root runtime, and calls
+    :func:`polish_collocation_least_squares`.
+
     ``verbose=True`` routes the CLI progress lines through ``emit`` (the
     solver prints the phase banner before calling here); the default keeps
     the Python API silent and printing never changes the numerics.
     ``auto=True`` additionally lets the driver decline a solve whose
     measured cost would exceed ``config.auto_budget_seconds``.
+
+    Parameters
+    ----------
+    source:
+        The :class:`~vmex.core.input.VmecInput` deck the solve came from.  A
+        ``TypeError`` is raised for anything else: polishing needs the deck's
+        profiles and boundary, not just the converged arrays.
+    resolution:
+        The solve resolution; only ``resolution.ns``, the number of full-mesh
+        radial surfaces, is read, and it fixes the mesh the legacy state is
+        refined and projected on.
+    legacy_state:
+        The converged :class:`~vmex.core.solver.SpectralState` to polish.
+    config:
+        Controls; ``None`` uses ``PolishConfig()``.
+    lconm1:
+        Whether the m=1 constrained-variable transformation is in force for
+        the refinement configuration, matching the solve that produced
+        ``legacy_state``.
+    auto:
+        Whether the driver may decline the Gauss--Newton solve on its measured
+        price; see :func:`polish_collocation_least_squares`.
+    verbose:
+        Print phase announcements and the certificate summary through
+        ``emit``.  Each phase can run for minutes at high resolution, so a
+        silent console is always attributable to a named phase.
+    emit:
+        Sink for those lines; defaults to a flushed ``print``.
+
+    Returns
+    -------
+    A :class:`PolishResult` whose ``compatibility_state`` is the legacy-mesh
+    projection of the correction (the Newton-refined state itself in the
+    already-certified case), so callers that want a VMEC-grid state do not
+    have to project it themselves.
     """
 
     started = perf_counter()

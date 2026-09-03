@@ -32,6 +32,14 @@ from .strong_force import HighOrderEquilibriumState
 class PolishLinearConfig:
     """Krylov controls and failure policy for polished-root derivatives.
 
+    One tangent or one adjoint costs exactly one preconditioned GMRES solve of
+    the ``(chart.size, chart.size)`` stationarity operator, so these five
+    values set the entire linear cost and the entire accuracy of a polished
+    derivative.  Convergence is not taken on the solver's word: the true
+    residual ``||b - A x||`` is recomputed on the returned iterate and
+    compared against ``max(atol, rtol * ||b||)``.  Every range below is
+    enforced in ``__post_init__``.
+
     ``fail_policy`` decides what a non-converged Krylov solve produces:
     ``"raise"`` (the default) raises :class:`StrongForceLinearSolveError`,
     ``"nan"`` returns NaN. **The raise only happens outside tracing.** Under
@@ -42,6 +50,35 @@ class PolishLinearConfig:
     for it rather than relying on an exception. Making it raise would need a
     host callback in the traced graph, which would stop those programs being
     written to the persistent compilation cache.
+
+    Attributes
+    ----------
+    rtol:
+        Relative tolerance on that true residual, dimensionless.  Must be
+        finite and strictly positive.  The default is tight because a
+        polished-root gradient is normally consumed by an optimizer that
+        assumes exact derivatives.
+    atol:
+        Absolute floor on the same residual, in the units of the stationarity
+        right-hand side (a cotangent of the collocation residual, so scaled
+        force per chart coordinate).  Must be finite and nonnegative; ``0.0``
+        is allowed and makes the test purely relative.
+    restart:
+        GMRES Arnoldi cycle length, i.e. how many Krylov vectors are kept
+        before restarting.  Clamped down to the system size for small charts.
+        Must be at least 1.
+    max_restarts:
+        Maximum restart cycles, so at most ``restart * max_restarts``
+        iterations in total.  Must be at least 1.
+    fail_policy:
+        What a non-converged solve does.  ``"raise"`` raises
+        :class:`~vmex.core.errors.StrongForceLinearSolveError` carrying the
+        solve kind, iteration count, achieved residual, and tolerance;
+        ``"nan"`` returns a NaN-filled result instead.  The check is a host
+        check: under :func:`jax.jit` the values are tracers, so neither
+        branch can run and the solve returns NaN where it did not converge
+        regardless of the policy.  The report always comes back either way,
+        so a traced caller can inspect ``report.converged`` itself.
     """
 
     rtol: float = 1.0e-8
@@ -68,27 +105,52 @@ class PolishLinearReport(NamedTuple):
 
     ``converged`` requires finite operands, solution, norms and tolerance, with
     ``residual_norm <= tolerance``; an internal Krylov success flag is insufficient.
+    
+
+    Recomputed from the returned iterate rather than taken from the Krylov
+    solver's internal estimate, so a restarted GMRES cannot report success on
+    a stale recurrence.
     """
 
+    #: ``||b - A x||`` of the returned solution, a scalar array.
     residual_norm: jax.Array
+    #: The bar it was compared against, ``max(atol, rtol * ||b||)``.
     tolerance: jax.Array
+    #: Krylov iterations consumed, summed over restart cycles.
     iterations: jax.Array
+    #: Boolean scalar array, true when either the solver's own flag or the
+    #: recomputed residual clears ``tolerance``.  The returned solution is
+    #: filled with NaN wherever this is false.
     converged: jax.Array
 
 
 class PolishTangentResult(NamedTuple):
     """Total polished-state tangent and its reduced correction response."""
 
+    #: Directional derivative of the polished continuous state, carrying the
+    #: same pytree structure as the input ``native_tangent`` and equal to that
+    #: input plus the response of the correction.
     native_tangent: HighOrderEquilibriumState
+    #: Derivative of the accepted correction itself, shape ``(chart.size,)``
+    #: in the chart's gauge-free physical coordinates.
     correction_tangent: jax.Array
+    #: Certificate of the single Krylov solve; see :class:`PolishLinearReport`.
     report: PolishLinearReport
 
 
 class PolishAdjointResult(NamedTuple):
     """Native-state cotangent and the strong-equation adjoint variable."""
 
+    #: Pullback of the output cotangent to the unpolished native state, with
+    #: the same pytree structure as ``context.runtime.native``.
     native_cotangent: HighOrderEquilibriumState
+    #: Adjoint variable of the stationarity equation, shape
+    #: ``(chart.size,)``: the solution of the transposed stationarity operator
+    #: against the correction cotangent, i.e. the multiplier the parameter
+    #: pullback is contracted with.  Exposed as a diagnostic; the finished
+    #: gradient is ``native_cotangent``.
     equation_adjoint: jax.Array
+    #: Certificate of the single Krylov solve; see :class:`PolishLinearReport`.
     report: PolishLinearReport
 
 
@@ -225,7 +287,60 @@ def collocation_polish_tangent(
     *,
     config: PolishLinearConfig = PolishLinearConfig(),
 ) -> PolishTangentResult:
-    """Apply the IFT tangent of the rectangular polish stationarity equation."""
+    """Apply the IFT tangent of the rectangular polish stationarity equation.
+
+    Forward-mode sensitivity of the polished equilibrium with respect to the
+    unpolished one.  Write ``P`` for the native state, ``c`` for the
+    correction in chart coordinates, ``r(c, P)`` for the rectangular
+    collocation residual, and
+
+    ``g(c, P) = J(c, P).T @ r(c, P)``
+
+    for its least-squares stationarity, which the accepted correction ``c*``
+    zeroes.  The polished state is ``S(c, P) = P + L(c)`` with ``L`` the linear
+    lift of a chart vector into spline coefficients.  Differentiating ``g = 0``
+    at ``(c*, P)`` gives ``dc = -g_c^{-1} g_P dP``, and the returned total
+    tangent is ``dP + L(dc)``.
+
+    ``g_c`` is the exact Hessian of ``0.5 ||r||^2``, obtained by linearizing
+    ``g`` itself, so the nonzero-residual second-order term is retained and
+    this is not a Gauss--Newton approximation.  Both ``g_c`` and ``g_P`` are
+    applied matrix-free through JVPs; nothing is assembled and the nonlinear
+    iterations are never replayed.  Cost: one preconditioned GMRES solve of
+    size ``chart.size``, preconditioned by ``diag(context.variable_scale)**2``
+    — the primal column-norm estimate, which approximates the inverse diagonal
+    of the normal operator up to one positive constant.
+
+    Parameters
+    ----------
+    context:
+        The :class:`~vmex.core.polish_driver.PolishContext` of a certified
+        polish, i.e. ``PolishResult.context``, surfaced by the solver as
+        ``result.polish_context``.  It supplies the frozen runtime, chart, and
+        stationary correction; the derivative is taken at exactly that point.
+        A ``correction`` whose shape is not ``(chart.size,)`` is rejected.
+    native_tangent:
+        Perturbation of the unpolished native state, a pytree with the same
+        structure as ``context.runtime.native`` (checked) and matching leaf
+        shapes: the six ``(mnmax, nbasis)`` spline coefficient tables
+        (``R``/``Z`` in metres, lambda in radians), the three ``(nbasis,)``
+        profile leaves ``phipf``, ``chipf`` (flux derivatives with respect to
+        normalized toroidal flux ``s``) and ``pressure`` (Pa), plus the
+        boundary tables when the state carries them.  Typically the seed of an
+        outer forward-mode derivative with respect to a shape or profile
+        parameter.
+    config:
+        Krylov controls for the single linear solve.
+
+    Returns
+    -------
+    A :class:`PolishTangentResult` whose ``native_tangent`` is the total
+    tangent of the polished state, with the input's pytree structure and leaf
+    shapes; whose ``correction_tangent`` is ``dc`` with shape
+    ``(chart.size,)``; and whose ``report`` certifies the solve.  A
+    non-converged solve follows ``fail_policy`` — it raises, or fills the
+    response with NaN so the returned tangent is NaN as well.
+    """
 
     runtime, chart = context.runtime, context.chart
     correction = jnp.asarray(context.correction)
@@ -274,7 +389,49 @@ def collocation_polish_adjoint(
     *,
     config: PolishLinearConfig = PolishLinearConfig(),
 ) -> PolishAdjointResult:
-    """Apply the IFT pullback of the rectangular polish stationarity equation."""
+    """Apply the IFT pullback of the rectangular polish stationarity equation.
+
+    The reverse-mode counterpart of :func:`collocation_polish_tangent`, and
+    the routine :func:`implicit_collocation_polished_state` installs as its
+    custom VJP.  With the same notation — stationarity
+    ``g(c, P) = J(c, P).T @ r(c, P)`` zeroed at the accepted ``c*``, polished
+    state ``S(c, P) = P + L(c)`` — a cotangent ``w`` on the polished state
+    pulls back as
+
+    ``lambda = g_c^{-T} (L.T w)``  and  ``dP = w - g_P.T lambda``
+
+    since ``S`` depends on ``P`` only through the additive identity.  The
+    transposes are taken with VJPs of the exact stationarity map, so the
+    nonzero-residual Hessian term is retained here too; the single Krylov
+    solve uses the same ``diag(context.variable_scale)**2`` Jacobi
+    preconditioner as the tangent.  One gradient therefore costs one linear
+    solve, independent of how many Gauss--Newton steps the primal polish took.
+
+    Parameters
+    ----------
+    context:
+        The :class:`~vmex.core.polish_driver.PolishContext` of a certified
+        polish; see :func:`collocation_polish_tangent`.  A ``correction``
+        whose shape is not ``(chart.size,)`` is rejected.
+    polished_cotangent:
+        Cotangent of the *polished* state — the gradient of a downstream
+        scalar objective with respect to the polished equilibrium.  Same
+        pytree structure as ``context.runtime.native`` (checked) and the same
+        leaf shapes, since the polished state has the native state's
+        structure.  Typically produced by ``jax.grad`` of an objective
+        evaluated on the polished state.
+    config:
+        Krylov controls for the single linear solve.
+
+    Returns
+    -------
+    A :class:`PolishAdjointResult` whose ``native_cotangent`` is the gradient
+    with respect to the unpolished native state, carrying that state's pytree
+    structure and leaf shapes; whose ``equation_adjoint`` is the stationarity
+    multiplier of shape ``(chart.size,)``; and whose ``report`` certifies the
+    solve.  A non-converged solve follows ``fail_policy`` — it raises, or NaN
+    propagates from the multiplier into the returned cotangent.
+    """
 
     runtime, chart = context.runtime, context.chart
     correction = jnp.asarray(context.correction)
@@ -403,6 +560,37 @@ def implicit_collocation_polished_state(
     Reverse mode solves the exact transposed least-squares stationarity
     equation once; it never differentiates through the nonlinear iterations.
     Use :func:`collocation_polish_tangent` for forward sensitivities.
+
+    The primal value is simply ``native`` plus the frozen correction lifted
+    into spline coefficients; the correction is held under
+    :func:`jax.lax.stop_gradient`, and the registered VJP replaces the naive
+    derivative of that sum with :func:`collocation_polish_adjoint`.  The
+    context's ``correction`` and ``variable_scale`` are treated as constants
+    and receive zero cotangents.  Because the rule is a
+    :func:`jax.custom_vjp`, only reverse mode is defined: differentiating this
+    function with :func:`jax.jvp` raises rather than silently returning the
+    wrong tangent.
+
+    Parameters
+    ----------
+    native:
+        The unpolished continuous state to polish and differentiate through.
+        Must have the same pytree structure as ``context.runtime.native``
+        (checked); it does not have to be the identical object, which is what
+        lets an outer :func:`jax.grad` trace through it.
+    context:
+        The :class:`~vmex.core.polish_driver.PolishContext` of a certified
+        polish, pinning the runtime, chart, correction, and variable scaling.
+    config:
+        Krylov controls for the adjoint solve performed in the backward pass;
+        the forward pass does no linear solve at all.
+
+    Returns
+    -------
+    A :class:`~vmex.core.strong_force.HighOrderEquilibriumState` with
+    ``native``'s pytree structure and leaf shapes, carrying the polished
+    coefficients, and differentiable in reverse mode with respect to
+    ``native``.
     """
 
     if jax.tree.structure(native) != jax.tree.structure(context.runtime.native):
