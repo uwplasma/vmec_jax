@@ -205,6 +205,43 @@ def _timed(callable_, argument, *, warm_repeats: int) -> dict[str, float]:
     }
 
 
+def _plan_build(state, rt, *, mboz, nboz, oversample) -> dict[str, Any]:
+    """The once-per-process cost the plan lane pays, on its own.
+
+    Called *after* the timing lanes, because it clears the registry: the
+    first build compiles the table operations against this child's empty
+    persistent cache, the second reuses them, which is what a long-lived
+    process or a warm ``~/.cache/vmex`` actually pays.
+    """
+    import jax
+    import numpy as np
+
+    from vmex.core import omnigenity as omn
+    from vmex.core.boozer_tables import boozer_input_tables
+
+    tables = boozer_input_tables(state, rt, 1)
+    xm, xn = np.asarray(tables["xm"]), np.asarray(tables["xn"])
+    keywords = dict(
+        nfp=int(rt.resolution.nfp), asym=bool(rt.setup.lasym), xm=xm, xn=xn,
+        xm_nyq=xm, xn_nyq=xn, mboz=mboz, nboz=nboz if np.any(xn) else 0,
+        oversample=oversample)
+    seconds = []
+    plan = None
+    for _ in range(2):
+        omn._PLAN_CACHE.clear()
+        started = time.perf_counter()
+        plan = omn._boozer_plan(**keywords)
+        jax.block_until_ready(plan.tables)
+        seconds.append(time.perf_counter() - started)
+    return {
+        "empty_compilation_cache_s": seconds[0],
+        "warm_compilation_cache_s": seconds[1],
+        "tables_mib": sum(int(np.asarray(table).nbytes)
+                          for table in plan.tables.values()) / 2**20,
+        "quadrature": [int(plan.constants.ntheta), int(plan.constants.nzeta)],
+    }
+
+
 def _interleaved(lanes: dict[str, Any], state, *, rounds: int) -> dict[str, Any]:
     """Warm timings with the two lanes alternating call by call.
 
@@ -330,6 +367,10 @@ def _child(arguments: argparse.Namespace) -> dict[str, Any]:
         lambda st: lane(st)["bmnc_b"], state,
         warm_repeats=max(5, arguments.warm_repeats // 2))
     report["digests"] = {key: _digest(lane(state)[key]) for key in OUTPUT_KEYS}
+    if arguments.mode == "plan":  # last: it clears the plan registry
+        report["plan_build"] = _plan_build(
+            state, rt, mboz=arguments.mboz, nboz=arguments.nboz,
+            oversample=arguments.oversample)
     return report
 
 
@@ -437,6 +478,8 @@ def main(argv: list[str] | None = None) -> int:
             "deck": deck,
             "sha256_prefix": _sha256_prefix(DATA / deck),
             "resolution": runs["plan"][0][0]["resolution"],
+            "plan_build": min((report["plan_build"] for report, _ in runs["plan"]),
+                              key=lambda built: built["empty_compilation_cache_s"]),
             "fresh_process": summary,
             "speedup_inline_over_plan": speedup,
             "interleaved": {
