@@ -1,4 +1,9 @@
-"""Differentiable Redl (2021) bootstrap current (see ``notes_r26g_redl_spec.md``).
+"""Differentiable Redl (2021) bootstrap current.
+
+Redl, Angioni, Belli & Sauter, Phys. Plasmas 28, 022502 (2021), eqs. 10-16
+and 19-21, on the Sauter, Angioni & Lin-Liu, Phys. Plasmas 6, 2834 (1999)
+collisionalities (eqs. 18b-18e); the self-consistent lane follows Landreman,
+Buller & Drevlak, Phys. Plasmas 29, 082501 (2022).
 
 - :func:`compute_trapped_fraction` — effective trapped fraction, epsilon and
   the flux-surface averages ``<B^2>``, ``<1/B>`` from ``|B|``/``sqrt(g)``.
@@ -94,6 +99,10 @@ Array = Any
 #: CODATA elementary charge [C]; converts eV -> J in the <J.B> assembly.
 ELEMENTARY_CHARGE = 1.602176634e-19
 
+#: Gauss-Legendre order for the trapped-fraction lambda quadrature, shared by
+#: every entry point so the geometry lanes and the objective agree by default.
+N_LAMBDA = 64
+
 
 # ===========================================================================
 # Kinetic profiles (polynomials in s, simsopt ProfilePolynomial convention)
@@ -123,7 +132,7 @@ class KineticProfiles:
     """Prescribed kinetic profiles for the Redl formula (frozen pytree).
 
     Polynomial coefficients in ``s`` (lowest order first).  These are *not*
-    VMEC inputs; they parameterize the bootstrap objective (spec section 6.6).
+    VMEC inputs; they parameterize the bootstrap objective.
     Units: ``ne_coeffs`` [1/m^3], ``Te_coeffs``/``Ti_coeffs`` [eV],
     ``Zeff_coeffs`` dimensionless (default: constant 1, hydrogen).
 
@@ -152,7 +161,7 @@ jax.tree_util.register_dataclass(
 # ===========================================================================
 
 
-def compute_trapped_fraction(modB: Array, sqrtg: Array, *, n_lambda: int = 64):
+def compute_trapped_fraction(modB: Array, sqrtg: Array, *, n_lambda: int = N_LAMBDA):
     r"""Effective trapped fraction and flux-surface averages per surface.
 
     ``f_t = 1 - (3/4) <B^2> \int_0^{1/Bmax} lambda dlambda / <sqrt(1 - lambda B)>``
@@ -253,7 +262,7 @@ def redl_geometry_from_wout(
     *,
     ntheta: int = 64,
     nphi: int = 65,
-    n_lambda: int = 64,
+    n_lambda: int = N_LAMBDA,
 ) -> RedlGeometry:
     """Redl geometry inputs from a wout dataset (simsopt ``RedlGeomVmec`` lane).
 
@@ -481,7 +490,7 @@ def redl_geometry_from_state(
     rt: SolverRuntime,
     *,
     surfaces=None,
-    n_lambda: int = 64,
+    n_lambda: int = N_LAMBDA,
 ) -> RedlGeometry:
     """Redl geometry inputs as a traceable function of ``(state, runtime)``.
 
@@ -491,8 +500,7 @@ def redl_geometry_from_state(
     the half mesh onto ``surfaces`` before :func:`compute_trapped_fraction`.
 
     Default ``surfaces``: ``linspace(0.05, 0.95, 16)`` — interior only; do
-    not sample ``s -> 1`` where ``Te, Ti -> 0`` blows up the collisionality
-    (spec section 6.1b).
+    not sample ``s -> 1`` where ``Te, Ti -> 0`` blows up the collisionality.
     """
     if surfaces is None:
         surfaces = np.linspace(0.05, 0.95, 16)
@@ -506,7 +514,7 @@ def trapped_fraction_from_state(
     rt: SolverRuntime,
     *,
     surfaces=None,
-    n_lambda: int = 64,
+    n_lambda: int = N_LAMBDA,
 ) -> Array:
     """Effective trapped fraction on requested normalized-flux surfaces.
 
@@ -553,7 +561,7 @@ def j_dot_B_redl(
     ``helicity_n`` is 0 for quasi-axisymmetry, +/-1 for quasi-helical
     symmetry.  ``Te/Ti`` are clamped at 1 eV and ``ne`` at 1e17 1/m^3
     (belt-and-suspenders against sampling s -> 1 where the profiles vanish
-    and the collisionality blows up; spec section 6.1b).
+    and the collisionality blows up).
 
     Returns ``(jdotB, details)`` with ``details`` a dict of every
     intermediate quantity (simsopt names).
@@ -663,7 +671,7 @@ def j_dot_B_redl(
 
 
 # ===========================================================================
-# Traceable <J.B>_vmec — the MHD identity (spec section 6.2)
+# Traceable <J.B>_vmec — the MHD identity
 # ===========================================================================
 
 
@@ -700,7 +708,7 @@ def vmec_j_dot_B(
     """Traceable equilibrium ``<J.B>`` [A*T/m^2] via the MHD identity.
 
     For a VMEC equilibrium the flux-surface-averaged parallel current obeys
-    (spec section 6.2; validated in the Zenodo
+    (validated in the Zenodo
     ``convertSfincsToVmecCurrentProfile`` script against VMEC's own
     ``jdotb``)
 
@@ -794,7 +802,7 @@ def vmec_j_dot_B_from_wout(wout, surfaces, *, geom: RedlGeometry | None = None,
 
 
 # ===========================================================================
-# f_boot objective (spec section 6.3; simsopt VmecRedlBootstrapMismatch)
+# f_boot objective (simsopt VmecRedlBootstrapMismatch)
 # ===========================================================================
 
 
@@ -820,12 +828,12 @@ class RedlBootstrapMismatch:
       (jxbforce.f) interpolated onto ``surfaces`` — simsopt parity.
     - :meth:`residuals_state` (traceable lane): one
       :func:`_half_mesh_fields` pass feeds both the Redl geometry and the
-      section-6.2 identity ``Jv``, so the term composes with
+      MHD-identity ``Jv``, so the term composes with
       ``least_squares(jac="implicit")`` (profiles fixed, geometry traced).
 
     ``helicity_n`` is 0 for QA, -1/+1 for QH (units of ``nfp``, simsopt
     convention).  Default ``surfaces``: ``linspace(0.05, 0.95, 16)``
-    (interior only — never sample ``s -> 1``; spec section 6.1b).  Usage as
+    (interior only — never sample ``s -> 1``).  Usage as
     an objective term (target 0; the normalization already scales it)::
 
         terms = [(qs.residuals_state, 0.0, 1.0),
@@ -842,7 +850,7 @@ class RedlBootstrapMismatch:
         *,
         ntheta: int = 64,
         nphi: int = 65,
-        n_lambda: int = 64,
+        n_lambda: int = N_LAMBDA,
     ):
         self.profiles = profiles
         self.helicity_n = int(helicity_n)
@@ -926,7 +934,7 @@ class RedlBootstrapMismatch:
 
 
 # ===========================================================================
-# Fixed-boundary Picard self-consistency loop (spec section 6.5, secondary lane)
+# Fixed-boundary Picard self-consistency loop (secondary lane)
 # ===========================================================================
 
 
@@ -984,8 +992,9 @@ def self_consistent_bootstrap(
     """Fixed-boundary Picard iteration to a bootstrap-consistent current profile.
 
     The Zenodo ``convertSfincsToVmecCurrentProfile`` "smooth method" with
-    the Redl ``<J.B>`` in place of SFINCS (spec section 6.5, secondary
-    lane).  Host-side loop (no AD through it):
+    the Redl ``<J.B>`` in place of SFINCS, the self-consistent iteration of
+    Landreman, Buller & Drevlak (2022) (secondary lane).  Host-side loop (no
+    AD through it):
 
     1. solve the equilibrium (hot-restarted from the previous iterate);
     2. ``Jr = j_dot_B_redl(profiles, redl_geometry_from_wout(...))`` on the

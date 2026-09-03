@@ -143,13 +143,13 @@ units of ``nfp``):
      - :math:`|B|` contours in Boozer angles
    * - QA (quasi-axisymmetric)
      - :math:`(1,0)`
-     - close poloidally (tokamak-like)
+     - close toroidally (tokamak-like)
    * - QH (quasi-helical)
      - :math:`(1,\pm\mathrm{nfp})`
      - close helically
    * - QP (quasi-poloidal)
      - :math:`(0,1)`
-     - close toroidally
+     - close poloidally (QI-like)
 
 The two-term residual
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -166,13 +166,18 @@ requested surface, sampled on a uniform :math:`(\theta,\phi)` grid,
        - (\mathbf B\cdot\nabla B)\,(M G + N I)}{B^{3}},
 
 with :math:`M=` ``helicity_m``, :math:`N=` ``helicity_n``\ :math:`\times`\
-``nfp``, and :math:`G,I` the Boozer covariant averages ``bvco``/``buco``. The
-key algebraic fact is that :math:`f_{\mathrm{QS}}` **vanishes identically iff**
-:math:`|B|` is quasisymmetric with helicity :math:`(M,N)`; there is no residual
-symmetry-breaking harmonic left to penalize. The flux-surface sum
+``nfp``, and :math:`G,I` the Boozer covariant averages ``bvco``/``buco``; this
+is the residual inside eq. (1) of Landreman & Paul, Phys. Rev. Lett. 128,
+035001 (2022). The key algebraic fact is that :math:`f_{\mathrm{QS}}`
+**vanishes identically iff** :math:`|B|` is quasisymmetric with helicity
+:math:`(M,N)` (Helander, Rep. Prog. Phys. 77, 087001 (2014)); there is no
+residual symmetry-breaking harmonic left to penalize. The flux-surface sum
 :math:`\sum f_{\mathrm{QS}}^2`, weighted by the surface measure
-:math:`\sqrt{\mathrm{nfp}\,\Delta\theta\,\Delta\phi\,|\sqrt g|/V'}`, reproduces
-simsopt's ``QuasisymmetryRatioResidual`` A/B bit-for-bit. Kept in
+:math:`\sqrt{\mathrm{nfp}\,\Delta\theta\,\Delta\phi\,|\sqrt g|/V'}`, is
+simsopt's ``QuasisymmetryRatioResidual`` A/B formula on the same grid with the
+same weighting. No simsopt oracle runs in this test suite, so the gated
+comparison is VMEX's own traceable lane against its wout lane
+(``tests/test_optimize_traceable_qs.py``). Kept in
 Gauss–Newton (per-point) form, it feeds the least-squares driver as an exact
 residual vector rather than a pre-summed scalar. The metric is evaluated from
 the parity-proven wout tables (:mod:`vmex.core.nyquist`) and also exposes a
@@ -465,7 +470,9 @@ Assuming the ideal prerequisite :math:`D_{\rm Merc}>0`, the
 Glasser--Greene--Johnson necessary condition for local resistive interchange
 stability is :math:`D_R \leq 0`.  In the VMEC Mercier normalization, with
 :math:`S=d\iota/d\Phi` and
-:math:`D_{\rm shear}=S^2/4`, Landreman--Jorge's relation is
+:math:`D_{\rm shear}=S^2/4`, the Landreman--Jorge relation (J. Plasma
+Phys. 86, 905860510 (2020), eq. (5.6); :math:`D_R` and :math:`H` are
+their eqs. (5.1) and (5.4)) is
 
 .. math::
 
@@ -685,12 +692,17 @@ bounce-averaged drift and the flux surface,
      \frac{B}{\sqrt{1-\lambda B}}\,\gamma_c^{2}\right\rangle,
 
 with :math:`v_r` and :math:`v_p` the bounce-averaged radial and
-poloidal-tangential magnetic drifts and :math:`\Gamma_c^{2}` the
-prompt-loss scaling used in optimization (Velasco et al., Nucl. Fusion 61,
-116059 (2021), eqs. 14-16, the KNOSOS/CIEMAT-QI form; Bader et al. and
-Paul et al. document that such proxies correlate imperfectly with measured
+poloidal-tangential magnetic drifts (Velasco et al., Nucl. Fusion 61,
+116059 (2021), eqs. 14-16, in the Nemov/DESC form with the surface-tangency
+factor evaluated at the field minimum of each well; KNOSOS uses the
+:math:`\gamma_c^*` variant, which drops that factor).  The residual rows
+are :math:`\Gamma_c` per surface, so the least-squares cost is the sum of
+:math:`w\,\Gamma_c^{2}`; Velasco et al. 2021, eqs. (20)-(21), relate the
+prompt-loss fraction approximately linearly to :math:`\Gamma_c` (more
+linearly to the :math:`|\gamma_c^*|` variant).  Bader et al. and Paul et
+al. document that such proxies correlate imperfectly with measured
 energetic-particle losses, which bounds what any :math:`\Gamma_c` value
-claims). :class:`~vmex.core.gammac.GammaC` evaluates the drift ratio in
+claims. :class:`~vmex.core.gammac.GammaC` evaluates the drift ratio in
 Nemov's own form — DESC's rewrite into single-valued periodic maps
 (``desc.compute._fast_ion`` on the bounce kernel of Unalmis et al., J.
 Plasma Phys. 92(3), 2026, doi:10.1017/S0022377826101652, DESC's sibling

@@ -783,12 +783,11 @@ def mirror_ratio(state: SpectralState, rt: SolverRuntime, *, s_index: int = -1) 
 
 
 def magnetic_well(state: SpectralState, rt: SolverRuntime) -> Array:
-    """VMEC/simsopt magnetic-well proxy ``(V'(0) - V'(1)) / V'(0)``.
+    """simsopt's ``Vmec.vacuum_well`` proxy ``(V'(0) - V'(1)) / V'(0)``.
 
     ``V' = dV/ds`` endpoints are linear extrapolations of the half-mesh
     differential volume ``vp`` (``bcovar.f``); positive values mean a
-    favorable well (``vacuum_well`` in simsopt).  Ported from legacy
-    ``vmex.finite_beta.magnetic_well_from_vp``.
+    favorable well.  Ported from legacy ``vmex.finite_beta.magnetic_well_from_vp``.
     """
     _, _, _, _, energies = _field_chain(state, rt)
     dvol = jnp.abs(jnp.asarray(energies.vp))[1:]
@@ -1356,7 +1355,7 @@ def unpack_boundary(
 
 
 #: curtor dof storage scale (dof = CURTOR/1e6, i.e. MA) — keeps the trust
-#: region O(1) alongside the boundary dofs (spec notes_r26g section 6.4).
+#: region O(1) alongside the boundary dofs.
 _CURTOR_SCALE = 1.0e6
 
 

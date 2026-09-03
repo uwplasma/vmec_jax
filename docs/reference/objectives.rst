@@ -333,7 +333,10 @@ Fast-ion confinement (Gamma_c)
 surface — the Nemov fast-ion proxy (Nemov et al. 2008, eq. 61, in the
 organization of Velasco et al. 2021, eq. 16; the sibling of DESC's
 ``GammaC``), so the least-squares cost is the weighted sum of
-``Gamma_c**2``, the prompt-loss scaling.  **Use it as the reported value,
+``Gamma_c**2``.  The square is the least-squares form, not a physical
+scaling: Velasco et al. 2021, eqs. (20)-(21), relate the prompt-loss
+fraction approximately linearly to ``Gamma_c`` (more linearly to the
+``|gamma_c*|`` variant).  **Use it as the reported value,
 never as the gradient objective**: its discretized boundary derivative is
 exact yet flips sign under grid refinement (the measured ladder is pinned
 in ``tests/test_gammac.py``).  For optimization use

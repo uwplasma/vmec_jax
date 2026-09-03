@@ -3,7 +3,9 @@
 ``Gamma_c`` measures how far the contours of the second adiabatic invariant
 ``J`` deviate from flux surfaces: trapped particles whose bounce-averaged
 drift has a radial component ride superbanana orbits out of the device, and
-``Gamma_c**2`` scales the prompt-loss fraction of energetic ions.  The proxy
+Velasco et al. 2021, eqs. (20)-(21), relate the prompt-loss fraction of
+energetic ions approximately linearly to ``Gamma_c`` (more linearly still
+to the ``|gamma_c*|`` variant).  The proxy
 of Nemov, Kasilov, Kernbichler, Leitold, Phys. Plasmas 15, 052501 (2008),
 equation 61, as organized by Velasco et al., Nucl. Fusion 61, 116059 (2021),
 equation 16, is
@@ -801,8 +803,11 @@ class GammaC:
     Velasco et al., Nucl. Fusion 61, 116059 (2021), eq. 16 — see the module
     docstring for the formula and conventions.  ``residuals_state`` returns
     ``sqrt(weight) * Gamma_c`` rows for VMEX's least-squares interface, so
-    the total cost is the weighted sum of ``Gamma_c**2``, the prompt-loss
-    scaling of the proxy.  Traceable in both gradient modes.
+    the total cost is the weighted sum of ``Gamma_c**2``.  That square is
+    the least-squares form, not a physical scaling: Velasco et al. 2021,
+    eqs. (20)-(21), relate the prompt-loss fraction approximately linearly
+    to ``Gamma_c`` (more linearly to the ``|gamma_c*|`` variant).
+    Traceable in both gradient modes.
 
     **This is the hard physical diagnostic — its value is the number to
     report, but its boundary derivative is NOT a convergent quantity**: the
@@ -882,11 +887,16 @@ class GammaCSmooth(GammaC):
     and bounce quadrature with the branch-noise sources of the boundary
     derivative regularized, so the derivative is stable in sign and
     magnitude under refinement of every sampling grid — the property the
-    hard diagnostic's derivative measurably lacks.  The smoothing biases the
-    value slightly (measured in ``tests/test_gammac.py``; it anneals away
-    under refinement and preserves the tokamak << QA << unoptimized-3D
-    ordering), so use this class inside the optimizer and always recompute
-    the hard :class:`GammaC` value on the accepted result.
+    hard diagnostic's derivative measurably lacks.  The surrogate value is
+    systematically below the hard one: by a factor 2-3 on multi-well 3-D
+    fields and by orders of magnitude on near-omnigenous fields whose
+    ripple wells are shallower than the floor (measured smooth/hard ratios
+    at ``temperature = 0.15`` in ``tests/test_gammac.py``: 0.42 on li383,
+    0.004 on the QA, 0.02 on the tokamak).  It preserves the tokamak << QA
+    << unoptimized-3D ordering and anneals toward the hard value as
+    ``temperature`` drops, but it is a gradient objective only, never a
+    reported number: use this class inside the optimizer and always
+    recompute the hard :class:`GammaC` value on the accepted result.
 
     The three derivative semantics of the plan are thus explicit in the
     class name: :class:`GammaC` is the hard value (no derivative promise

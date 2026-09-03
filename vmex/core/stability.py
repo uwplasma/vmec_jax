@@ -278,7 +278,8 @@ def _mercier_data_state(
 
     The shared pure-JAX reconstruction follows VMEC2000 ``jxbforce.f`` and
     ``mercier.f``.  The returned Glasser ``H`` uses the normalization of
-    Landreman & Jorge (2020), Eqs. (51) and (53).
+    Landreman & Jorge (2020), Eqs. (5.1) and (5.4) (``D_R`` and ``H``;
+    their Eq. (5.6) is the ``D_R``--``D_Merc`` relation).
     """
     setup = rt.setup
     s = jnp.asarray(setup.s_full)
