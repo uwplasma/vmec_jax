@@ -317,6 +317,30 @@ def test_fresh_deck_parity_artifact_is_provenanced_and_cited() -> None:
         "Numerical reproducibility")[0]
 
 
+def test_strong_polish_record_redacts_its_output_destination() -> None:
+    """A committed record must not disclose where it was produced.
+
+    ``strong_polish.py`` writes its own invocation into the artifact so the
+    measurement is re-runnable from the record.  The destination is a scratch
+    path on the machine that ran it, and scratch paths carry user names, so
+    only the file name survives into the JSON.
+    """
+    sys.path.insert(0, str(ROOT / "benchmarks"))
+    from strong_polish import _redacted_argv
+
+    assert _redacted_argv(
+        ["--input", "examples/data/input.solovev", "--ns", "15",
+         "--output", "/scratch/someone/run one.json"]
+    ) == ["--input", "examples/data/input.solovev", "--ns", "15",
+          "--output", "run one.json"]
+    assert _redacted_argv(["--output=/scratch/someone/run.json"]) == [
+        "--output=run.json"
+    ]
+    assert _redacted_argv(["--ns", "15"]) == ["--ns", "15"]
+    # A trailing bare --output has no value to redact and must not crash.
+    assert _redacted_argv(["--output"]) == ["--output"]
+
+
 def test_committed_reports_do_not_expose_personal_paths() -> None:
     """Release-facing text must remain portable between contributors."""
     text_suffixes = {".json", ".md", ".py", ".rst", ".toml"}
