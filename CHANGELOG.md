@@ -1,7 +1,9 @@
 # Changelog
 
-Release notes are mirrored from the GitHub releases; numbers are the
-committed measurements behind each claim (see `benchmarks/`).
+Release notes are mirrored from the GitHub releases.  Where a number has a
+committed artifact it is named; the 0.8.x cold-start timings were measured
+in the pull-request and release bodies and are being backfilled as
+`benchmarks/` artifacts (see the *Performance and validation* page).
 
 ## Unreleased
 
