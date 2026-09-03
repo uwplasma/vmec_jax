@@ -143,13 +143,13 @@ units of ``nfp``):
      - :math:`|B|` contours in Boozer angles
    * - QA (quasi-axisymmetric)
      - :math:`(1,0)`
-     - close poloidally (tokamak-like)
+     - close toroidally (tokamak-like)
    * - QH (quasi-helical)
      - :math:`(1,\pm\mathrm{nfp})`
      - close helically
    * - QP (quasi-poloidal)
      - :math:`(0,1)`
-     - close toroidally
+     - close poloidally (QI-like)
 
 The two-term residual
 ~~~~~~~~~~~~~~~~~~~~~~
