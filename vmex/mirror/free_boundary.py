@@ -51,6 +51,37 @@ from .splines import (
 Array = Any
 _DENSE_JACOBIAN_MAX_SIZE = 32
 
+_NET_AXIAL_CURRENT_MESSAGE = (
+    "the free-boundary mirror lane requires current_derivative == 0. The "
+    "exterior vacuum is represented by a single-valued scalar potential that "
+    "decays at infinity on a topologically spherical Green surface "
+    "(vmex.mirror.exterior), whose exterior is simply connected, so it carries "
+    "no azimuthal field. A net axial plasma current I(s) != 0 produces "
+    "B_phi = mu0 I / (2 pi r) inside the plasma with no counterpart outside, "
+    "and the interface residual would then balance the plasma total pressure "
+    "against a vacuum field missing that component. Use the fixed-boundary "
+    "lane (solve_fixed_boundary), where the current closes through the end "
+    "plates, or set current_derivative=0 here."
+)
+
+
+def reject_net_axial_current(current_derivative: Any) -> None:
+    """Raise when a free-boundary mirror solve is given a net axial current.
+
+    The guard is a correctness gate, not a convenience check: with a nonzero
+    ``I'(s)`` the coupled residual compares physically inconsistent fields and
+    converges to a wrong answer without any diagnostic saying so.  See
+    ``plan.md`` sections 17.3 and 31.4-R2.
+    """
+
+    if isinstance(current_derivative, jax.core.Tracer):
+        # Traced controls are checked once on the concrete values the problem
+        # was built with; a tracer carries no value to test here.
+        return
+    values = np.asarray(current_derivative, dtype=float)
+    if np.any(values != 0.0):
+        raise ValueError(_NET_AXIAL_CURRENT_MESSAGE)
+
 
 @dataclass(frozen=True)
 class FreeBoundaryParameters:
@@ -425,6 +456,7 @@ def _build_free_equilibrium_problem(
     grid = discretization.grid
     if grid.ntheta != 1:
         raise ValueError("free-boundary mirrors currently support only axisymmetric geometry")
+    reject_net_axial_current(current_derivative)
     calibrate_pressure = target_central_pressure is not None
     vectorizer = _SplineFreeBoundaryVectorizer.build(
         initial_boundary,
@@ -570,8 +602,13 @@ def solve_free_boundary(
     and ``None`` follow the common VMEX placement contract. Numeric values
     captured by a field callable can be relocated only when the callable is a
     registered pytree such as :class:`jax.tree_util.Partial`.
+
+    A nonzero ``current_derivative`` is rejected: the exterior vacuum model
+    cannot represent the azimuthal field of a net axial plasma current
+    (:func:`reject_net_axial_current`).
     """
 
+    reject_net_axial_current(current_derivative)
     if device is not None:
         target = _mirror_placement_device(device)
         with mirror_device_context(device):
@@ -924,8 +961,13 @@ def solve_beta_scan(
     exterior_spectral_side_density: bool = False,
     device: Any = AUTO,
 ) -> tuple[FreeBoundaryMirrorResult, ...]:
-    """Continue one free-boundary state through beta on one selected device."""
+    """Continue one free-boundary state through beta on one selected device.
 
+    A nonzero ``current_derivative`` is rejected for the same reason as in
+    :func:`solve_free_boundary`.
+    """
+
+    reject_net_axial_current(current_derivative)
     if device is not None:
         target = _mirror_placement_device(device)
         restart = initial_restart

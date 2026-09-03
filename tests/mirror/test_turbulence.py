@@ -65,7 +65,25 @@ def test_closed_mirror_contract_is_periodic_equal_arc_and_positive(closed_mirror
     np.testing.assert_allclose(mapping["gradpar"], mapping["gradpar"][0], rtol=0.0, atol=0.0)
     metric_determinant = np.asarray(mapping["gds2"]) * np.asarray(mapping["gds22"]) - np.asarray(mapping["gds21"]) ** 2
     assert np.min(metric_determinant) > 0.0
-    assert np.max(mapping["bmag"]) / np.min(mapping["bmag"]) > 1.5
+    # The named field-line mirror ratio, not an anonymous max/min: R_m,axis
+    # and R_m,LCFS are separate equilibrium-level quantities (31.4-R3).
+    field_line_ratio = float(mapping["vmex_mirror"]["field_line_mirror_ratio"])
+    np.testing.assert_allclose(
+        field_line_ratio,
+        np.max(mapping["bmag"]) / np.min(mapping["bmag"]),
+        rtol=1.0e-14,
+    )
+    assert field_line_ratio > 1.5
+    # "epsilon" keeps the VMEX std/mean contract and is NOT the GS2/GX inverse
+    # aspect ratio; the tokamak-equivalent modulation depth is exported apart.
+    modulation = float(mapping["vmex_mirror"]["field_line_b_modulation"])
+    np.testing.assert_allclose(modulation, (field_line_ratio - 1.0) / (field_line_ratio + 1.0), rtol=1.0e-14)
+    np.testing.assert_allclose(
+        float(mapping["epsilon"]),
+        float(np.std(mapping["bmag"]) / np.mean(mapping["bmag"])),
+        rtol=1.0e-14,
+    )
+    assert abs(float(mapping["epsilon"]) - modulation) > 1.0e-3
     assert abs(float(mapping["vmex_mirror"]["closure_residual"])) < 1.0e-12
     assert mapping["s_hat"] == 0.0
 

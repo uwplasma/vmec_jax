@@ -17,6 +17,7 @@ import sys
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -29,6 +30,7 @@ from vmex.mirror import (  # noqa: E402
     MirrorState,
     SplineMirrorBoundary,
     SplineMirrorDiscretization,
+    mirror_ratio_diagnostics,
     mout_from_result,
     plot_mout,
     solve_fixed_boundary,
@@ -44,6 +46,7 @@ from vmex.mirror.analytic import (  # noqa: E402
 from vmex.mirror.output import plot_mirror_3d_pair  # noqa: E402
 from vmex.mirror.implicit import spline_fixed_boundary_parameters  # noqa: E402
 from vmex.mirror.forces import force_gate_zones  # noqa: E402
+from vmex.mirror.geometry import magnetic_field_squared  # noqa: E402
 from vmex.mirror.splines import initialize_from_cartesian_field  # noqa: E402
 
 # Inputs: edit these constants, then run this file directly.
@@ -291,6 +294,28 @@ axisymmetric_mout = write_mout(
     ),
 )
 plot_mout(axisymmetric_mout, OUTPUT_DIR, name="axisymmetric")
+# Mirror ratios come from the solved |B|, not from the boundary-shape input:
+# R_m,axis is max/min of |B| on the axis over the |B| well, R_m,LCFS is the
+# separate last-closed-surface ratio, and L_mirror,B is the distance between
+# the |B| maxima bounding the well.  The analytic fixture's on-axis ratio is
+# 1 + mirror_strength, which the solve must reproduce.
+axisymmetric_mod_b = np.sqrt(
+    np.maximum(
+        np.asarray(
+            magnetic_field_squared(
+                axisymmetric_evaluated.energy.field,
+                axisymmetric_evaluated.energy.geometry,
+            )
+        ),
+        0.0,
+    )
+)
+axisymmetric_ratios = mirror_ratio_diagnostics(
+    axisymmetric_mod_b[0].mean(axis=0),
+    np.asarray(axisymmetric_discretization.grid.z),
+    lcfs_field_strength=axisymmetric_mod_b[-1],
+    axis_curvature=np.zeros(axisymmetric_discretization.grid.nxi),
+)
 summaries["axisymmetric"] = {
     "status": "supported",
     "iterations": axisymmetric_evaluated.iterations,
@@ -299,12 +324,13 @@ summaries["axisymmetric"] = {
     "strong_force_normalized_rms": float(axisymmetric_evaluated.force.normalized_rms),
     "normalized_divergence_rms": float(axisymmetric_evaluated.normalized_divergence_rms),
     "axial_flux_derivative": axisymmetric_flux_derivative,
-    "mirror_ratio": float(1.0 + AXISYMMETRIC_MIRROR_STRENGTH),
-}
+    "analytic_axis_mirror_ratio": float(1.0 + AXISYMMETRIC_MIRROR_STRENGTH),
+} | axisymmetric_ratios.summary()
 assert float(axisymmetric_evaluated.variational.maximum) <= FTOL
 assert float(axisymmetric_evaluated.staggered_weak_force.maximum) <= 1.1 * FTOL
 assert float(axisymmetric_evaluated.force.normalized_rms) < STRONG_FORCE_GATE
 assert float(axisymmetric_evaluated.normalized_divergence_rms) < 1.0e-12
+assert abs(summaries["axisymmetric"]["R_m_axis"][0] / (1.0 + AXISYMMETRIC_MIRROR_STRENGTH) - 1.0) < 1.0e-3
 
 # Side-by-side solved 3-D geometry: circular-section axisymmetric mirror on
 # the left, the 90-degree rotating ellipse on the right, coloured by LCFS |B|.

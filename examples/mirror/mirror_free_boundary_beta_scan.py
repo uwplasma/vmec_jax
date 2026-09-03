@@ -29,6 +29,7 @@ from vmex.mirror import (  # noqa: E402
     MirrorConfig,
     MirrorResolution,
     SplineMirrorDiscretization,
+    mirror_ratio_diagnostics,
     mout_from_result,
     plot_mout,
     solve_beta_scan,
@@ -197,7 +198,20 @@ for index in display_indices:
         name=f"mirror_{label}",
     )
 
-mirror_ratio = float(jnp.max(vacuum_axis_field) / vacuum_axis_field[center])
+# One definition of "mirror ratio" across the mirror lane: R_m,axis is the
+# max/min of |B| on the axis over the |B| well bounded by two maxima, and
+# R_m,LCFS is reported separately.  Here the |B| maxima sit at the two ends of
+# the modelled grid, since the coils lie outside it, so L_mirror,B is the grid
+# length rather than the coil separation.
+ratios = mirror_ratio_diagnostics(
+    np.asarray(vacuum_axis_field),
+    np.asarray(grid.z),
+    lcfs_field_strength=np.sqrt(np.asarray(results[0].plasma_b_squared[-1, 0])),
+    axis_curvature=np.zeros(grid.nxi),
+)
+(vacuum_well,) = ratios.wells
+mirror_ratio = vacuum_well.mirror_ratio
+(OUTPUT_DIR / "mirror_ratios.json").write_text(json.dumps(ratios.summary(), indent=2) + "\n")
 radius_expansion = 100.0 * (summary[-1]["center_radius"] / summary[0]["center_radius"] - 1.0)
 field_reduction = 100.0 * (1.0 - summary[-1]["diamagnetic_field_ratio"])
 final_gate = (
@@ -207,8 +221,10 @@ final_gate = (
 )
 caption = (
     f"Two ESSOS loops (radius {COIL_RADIUS} m at z = +/-{0.5 * COIL_SEPARATION} m, "
-    f"{COIL_CURRENT:.3g} A each) give vacuum B(0) = {float(vacuum_axis_field[center]):.4f} T and "
-    f"on-grid mirror ratio {mirror_ratio:.2f}. Betas through {100 * SUPPORTED_BETA_MAX:g}% pass the "
+    f"{COIL_CURRENT:.3g} A each) give vacuum B(0) = {float(vacuum_axis_field[center]):.4f} T, "
+    f"vacuum R_m,axis = {mirror_ratio:.2f} over L_mirror,B = {vacuum_well.mirror_length:.2f} m, "
+    f"and R_m,LCFS = {ratios.lcfs_mirror_ratio:.2f} at beta = 0. "
+    f"Betas through {100 * SUPPORTED_BETA_MAX:g}% pass the "
     f"strong-force gate; the {100 * float(BETAS[-1]):g}% validation continuation expands the center radius by "
     f"{radius_expansion:.2f}% and lowers the on-axis field by {field_reduction:.2f}% ({final_gate})."
 )
