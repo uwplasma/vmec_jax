@@ -210,10 +210,17 @@ jobs:
     # pr-parity-a1 selector carries the free-boundary modules whose
     # concurrent solves exhaust the runner at -n 4 (killed mid-run at
     # 32m10s, twice, on two different pull requests), so a1 keeps -n 2 by
-    # itself and a2+b run at -n 4.  The c3d lane measures 43-44 minutes
-    # green on today's runners, so 45 left ~90 s of headroom and runner
-    # variance kept tipping it into a timeout-cancel; 55 restores margin
-    # until the implicit-campaign modules are repartitioned.
+    # itself and a2+b run at -n 4.  The c3d lane then became the ceiling at
+    # 34 minutes green (43-44 under runner load, which kept tipping a
+    # 45-minute budget into a timeout-cancel), with two thirds of its call
+    # time in two modules: test_polish_preconditioner.py (~44 minutes of
+    # call time; every polish test builds a chart and certifies) and
+    # test_run_options.py (~16 minutes, mostly the polish directive).
+    # Those two now run as lane e, which drops the longest parity lane to
+    # roughly 20 minutes and leaves misc and c2 (27 and 26) as the CI wall
+    # clock.  The budget stays at 55: it is a cap, not a reservation, and
+    # the 2026-08-31 timeout plague is not worth re-running to save a
+    # number nobody reads.
     timeout-minutes: 55
     strategy:
       fail-fast: false
@@ -233,6 +240,9 @@ jobs:
             parallel: "-n 4"
           - lane: c3d
             selector: pr-parity-c3 pr-parity-d
+            parallel: "-n 4"
+          - lane: e-polish
+            selector: pr-parity-e
             parallel: "-n 4"
           - lane: c2
             selector: pr-parity-c2
