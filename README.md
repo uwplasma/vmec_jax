@@ -550,6 +550,8 @@ python -m ruff check vmex tests examples benchmarks
 
 See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.html) and the [test manifest](tests/manifest.json). Release notes are on [GitHub](https://github.com/uwplasma/vmex/releases). VMEX uses the MIT license.
 
+Report problems at https://github.com/uwplasma/vmex/issues; include the input file and the output of `vmex --doctor`.
+
 ## Roadmap
 
 The detailed, phased plan lives in [plan.md](plan.md). In flight now:
