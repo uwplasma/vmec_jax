@@ -686,7 +686,12 @@ def test_shipped_certificate_values_match_the_pre_change_baseline(case):
         value = float(np.asarray(getattr(report, name)))
         expected = float.fromhex(baseline[name])
         assert value == pytest.approx(expected, rel=1.0e-12, abs=0.0), (
-            f"{name}: {value.hex()} != baseline {baseline[name]}"
+            f"{case}/{name} moved: {value.hex()} != baseline {baseline[name]}"
+            " (taken at "
+            f"{_certificate_baseline()['measured']['vmex_commit']}). If the"
+            " certificate's arithmetic was changed on purpose, regenerate"
+            " with python tools/make_strong_force_baseline.py and say so in"
+            " the commit; otherwise this is the finding."
         )
     assert float(report.force_floor) == float.fromhex(baseline["force_floor"])
     for name, entry in baseline["arrays"].items():

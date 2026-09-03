@@ -78,6 +78,8 @@
     "jit_disabled": true,
     "machine": "arm64",
     "note": "Values of every StrongForceReport field that shipped before the volume-averaged normalizations were added, recorded as exact float64 hex on the eager (jit-disabled) lane.",
+    "regenerate_with": "python tools/make_strong_force_baseline.py",
+    "reverified_commit": "09f18464",
     "vmex_commit": "2d3be2c0"
   },
   "schema": "vmex.strong-force-certificate-baseline/1"
