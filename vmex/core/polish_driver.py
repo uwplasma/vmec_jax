@@ -1586,6 +1586,13 @@ def polish_collocation_least_squares(
             # A declined AUTO is a decision, not a certification failure:
             # it never raises, whatever fail_policy says, because nothing
             # was attempted and nothing failed.
+            #
+            # It skips rather than running a truncated solve on purpose.
+            # Acceptance is the independent certificate, so a solve stopped
+            # short of it returns the unpolished state anyway -- a bounded
+            # attempt would spend the whole budget to arrive exactly where
+            # skipping arrives, minus the hours.  A solve that *would*
+            # certify inside the budget is not declined in the first place.
             return PolishResult(
                 runtime.native,
                 initial_certificate,
