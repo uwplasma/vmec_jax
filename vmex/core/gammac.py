@@ -887,11 +887,16 @@ class GammaCSmooth(GammaC):
     and bounce quadrature with the branch-noise sources of the boundary
     derivative regularized, so the derivative is stable in sign and
     magnitude under refinement of every sampling grid — the property the
-    hard diagnostic's derivative measurably lacks.  The smoothing biases the
-    value slightly (measured in ``tests/test_gammac.py``; it anneals away
-    under refinement and preserves the tokamak << QA << unoptimized-3D
-    ordering), so use this class inside the optimizer and always recompute
-    the hard :class:`GammaC` value on the accepted result.
+    hard diagnostic's derivative measurably lacks.  The surrogate value is
+    systematically below the hard one: by a factor 2-3 on multi-well 3-D
+    fields and by orders of magnitude on near-omnigenous fields whose
+    ripple wells are shallower than the floor (measured smooth/hard ratios
+    at ``temperature = 0.15`` in ``tests/test_gammac.py``: 0.42 on li383,
+    0.004 on the QA, 0.02 on the tokamak).  It preserves the tokamak << QA
+    << unoptimized-3D ordering and anneals toward the hard value as
+    ``temperature`` drops, but it is a gradient objective only, never a
+    reported number: use this class inside the optimizer and always
+    recompute the hard :class:`GammaC` value on the accepted result.
 
     The three derivative semantics of the plan are thus explicit in the
     class name: :class:`GammaC` is the hard value (no derivative promise
