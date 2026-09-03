@@ -1,0 +1,61 @@
+{
+  "schema": "vmex.cache-entry-scaling/1",
+  "provenance": {
+    "vmex_commit": "2d3be2c070725c07acd2f3f6ab32f9f4c41c875d",
+    "created_utc": "2026-09-03T12:22:37Z",
+    "host": "Apple M4, macOS 14.4, APFS",
+    "python": "3.12",
+    "jax": "0.11.1",
+    "note": "Other work was running on the machine; the scaling medians are stable (min within 10% of median) but wall times are upper bounds."
+  },
+  "mechanism": "jax._src.lru_cache.LRUCache.put calls _evict_if_needed under the directory-wide lock; it globs every '*-cache' entry, stats it and reads its '-atime' sidecar. The cost is linear in resident entries and is paid on every write. JAX's bound is on bytes, and vmex entries are small, so the byte bound never fires and the entry count grows without limit.",
+  "put_cost_vs_entries": {
+    "payload_bytes": 2097152,
+    "repeats": 5,
+    "median_ms": {
+      "250": 5.7,
+      "1000": 24.1,
+      "4000": 103.3,
+      "10000": 276.0,
+      "10880": 304.0
+    },
+    "slope_ms_per_entry": 0.028
+  },
+  "end_to_end": {
+    "deck": "examples/data/input.LandremanPaul2021_QA_beta0p5_bootstrap",
+    "runs": [
+      {
+        "cache": "fresh (0 entries)",
+        "bound": null,
+        "wall_s": 7.46,
+        "puts": 171,
+        "put_median_ms": 2.72,
+        "put_total_s": 0.464
+      },
+      {
+        "cache": "mature (10880 entries)",
+        "bound": null,
+        "wall_s": 31.3,
+        "puts": 79,
+        "put_median_ms": 315.9,
+        "put_total_s": 25.623
+      },
+      {
+        "cache": "mature, pruned to the bound",
+        "bound": 1024,
+        "wall_s": 11.48,
+        "puts": 166,
+        "put_median_ms": 28.61,
+        "put_total_s": 4.855
+      },
+      {
+        "cache": "pruned, warm rerun",
+        "bound": 1024,
+        "wall_s": 3.14,
+        "puts": 0,
+        "gets": 289,
+        "get_hits": 289
+      }
+    ]
+  }
+}

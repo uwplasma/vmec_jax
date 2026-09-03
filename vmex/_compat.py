@@ -28,9 +28,12 @@ import platform
 
 
 _CACHE_FORMAT_VERSION = "3"
+_CACHE_MAX_ENTRIES = 1024            # resident executables; see _prune_cache_entries
 _CACHE_SIZE_FLOOR = 2 << 30          # 2 GiB
 _CACHE_SIZE_CEILING = 20 << 30       # 20 GiB
 _CACHE_DISK_FRACTION = 0.10
+_CACHE_ENTRY_SUFFIX = "-cache"       # jax._src.lru_cache naming
+_CACHE_ATIME_SUFFIX = "-atime"
 
 
 def _default_cache_max_size(path: str | None = None) -> int:
@@ -54,6 +57,75 @@ def _default_cache_max_size(path: str | None = None) -> int:
         return _CACHE_SIZE_FLOOR
     scaled = int(_CACHE_DISK_FRACTION * float(free))
     return int(min(_CACHE_SIZE_CEILING, max(_CACHE_SIZE_FLOOR, scaled)))
+
+
+def _prune_cache_entries(cache_dir: str, max_entries: int) -> int:
+    """Drop the least recently used cache entries above ``max_entries``.
+
+    JAX's LRU cache re-scans the whole cache directory on every *write*: each
+    ``put`` globs the directory, stats every entry and reads every atime
+    sidecar, all under the directory-wide lock.  The cost is linear in the
+    number of resident entries and, measured on an Apple M4, is 0.028 ms per
+    entry -- 5.7 ms per write at 250 entries but 304 ms at 10880, the size a
+    developer machine reaches in a few weeks.  With vmex's floor-0 policy (we
+    store every program, which is worth it on reload) a cold QA solve writes
+    ~170 entries, so a mature cache turned a 7.5 s solve into 31.3 s, 82% of
+    it directory scans.  JAX's own bound is on bytes, and these entries are
+    small, so it never fires.
+
+    Bounding the entry count instead costs one scan per process rather than
+    one per write.  Returns the number of entries removed.
+    """
+    try:
+        import pathlib
+
+        path = pathlib.Path(cache_dir)
+        entries = list(path.glob(f"*{_CACHE_ENTRY_SUFFIX}"))
+        if len(entries) <= max_entries:
+            return 0
+    except Exception:  # missing directory, unreadable filesystem
+        return 0
+
+    lock = None
+    try:
+        import filelock
+
+        lock = filelock.FileLock(path / ".lockfile")
+        lock.acquire(timeout=5)
+    except Exception:
+        # No filelock, or another process holds it and is likely pruning too.
+        return 0
+
+    removed = 0
+    try:
+        def _atime(entry: "pathlib.Path") -> int:
+            sidecar = entry.with_name(
+                entry.name[: -len(_CACHE_ENTRY_SUFFIX)] + _CACHE_ATIME_SUFFIX
+            )
+            try:
+                return int.from_bytes(sidecar.read_bytes(), "little")
+            except Exception:
+                return 0
+
+        for entry in sorted(entries, key=_atime)[: len(entries) - max_entries]:
+            sidecar = entry.with_name(
+                entry.name[: -len(_CACHE_ENTRY_SUFFIX)] + _CACHE_ATIME_SUFFIX
+            )
+            try:
+                entry.unlink()
+                removed += 1
+            except OSError:
+                continue
+            try:
+                sidecar.unlink()
+            except OSError:
+                pass
+    finally:
+        try:
+            lock.release()
+        except Exception:
+            pass
+    return removed
 
 
 def _env(name: str, default: str = "") -> str:
@@ -282,6 +354,14 @@ def _configure_compilation_cache(jax_module: Any, cache_dir: str | None) -> None
     """Apply vmex's persistent-cache defaults to an imported JAX module."""
     if cache_dir is None:
         return
+    try:
+        # Keep the directory small before anything writes to it: every write
+        # re-scans it (see _prune_cache_entries).  0 disables the bound.
+        max_entries = int(_env("CACHE_MAX_ENTRIES", str(_CACHE_MAX_ENTRIES)))
+        if max_entries > 0:
+            _prune_cache_entries(cache_dir, max_entries)
+    except Exception:
+        pass
     try:
         jax_module.config.update("jax_enable_compilation_cache", True)
     except Exception:
