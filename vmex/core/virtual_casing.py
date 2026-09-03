@@ -454,6 +454,21 @@ def surface_field_data_from_state(
         nphi=nphi, ntheta=ntheta, source_convention="vmex_state")
 
 
+def _carries_asymmetric_harmonics(state) -> bool:
+    """True when a high-order state has non-zero stellarator-asymmetric families.
+
+    Returns ``False`` for traced arrays: the values are unavailable, so the
+    caller's declaration stands.
+    """
+    for family in (state.R_sin, state.Z_cos):
+        array = jnp.asarray(family)
+        if isinstance(array, jax.core.Tracer):
+            continue
+        if bool(np.any(np.asarray(array) != 0.0)):
+            return True
+    return False
+
+
 def surface_field_data_from_high_order(
     state,
     *,
@@ -465,11 +480,20 @@ def surface_field_data_from_high_order(
 
     Geometry tangents and the edge field come from the continuous high-order
     representation. No sampled wout tables or finite differences are used.
+
+    ``use_stellsym`` is a request, not an assertion: a state carrying
+    asymmetric harmonics is reported as asymmetric whatever the caller asks
+    for, matching :func:`surface_field_data_from_wout`, whose ``stellsym`` is
+    ``(not lasym) and use_stellsym``. Handing an asymmetric state to the
+    exterior solver as symmetric would fold the boundary onto a half period
+    that does not describe it. Under tracing the harmonics cannot be
+    inspected, so the request is taken at face value.
     """
 
     from .strong_force import evaluate_high_order_surface
 
     surface = evaluate_high_order_surface(state, nphi=nphi, ntheta=ntheta)
+    stellsym = bool(use_stellsym) and not _carries_asymmetric_harmonics(state)
     return VmecSurfaceFieldData(
         gamma=jnp.moveaxis(surface.gamma, -1, 0),
         B_total=jnp.moveaxis(surface.B_total, -1, 0),
@@ -478,7 +502,7 @@ def surface_field_data_from_high_order(
         theta=surface.theta,
         phi=surface.phi,
         nfp=int(state.nfp),
-        stellsym=bool(use_stellsym),
+        stellsym=stellsym,
         signgs=int(state.jacobian_sign),
         source_convention="vmex_high_order",
     )
