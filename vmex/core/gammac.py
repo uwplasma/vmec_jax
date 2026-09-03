@@ -3,7 +3,9 @@
 ``Gamma_c`` measures how far the contours of the second adiabatic invariant
 ``J`` deviate from flux surfaces: trapped particles whose bounce-averaged
 drift has a radial component ride superbanana orbits out of the device, and
-``Gamma_c**2`` scales the prompt-loss fraction of energetic ions.  The proxy
+Velasco et al. 2021, eqs. (20)-(21), relate the prompt-loss fraction of
+energetic ions approximately linearly to ``Gamma_c`` (more linearly still
+to the ``|gamma_c*|`` variant).  The proxy
 of Nemov, Kasilov, Kernbichler, Leitold, Phys. Plasmas 15, 052501 (2008),
 equation 61, as organized by Velasco et al., Nucl. Fusion 61, 116059 (2021),
 equation 16, is
@@ -801,8 +803,11 @@ class GammaC:
     Velasco et al., Nucl. Fusion 61, 116059 (2021), eq. 16 — see the module
     docstring for the formula and conventions.  ``residuals_state`` returns
     ``sqrt(weight) * Gamma_c`` rows for VMEX's least-squares interface, so
-    the total cost is the weighted sum of ``Gamma_c**2``, the prompt-loss
-    scaling of the proxy.  Traceable in both gradient modes.
+    the total cost is the weighted sum of ``Gamma_c**2``.  That square is
+    the least-squares form, not a physical scaling: Velasco et al. 2021,
+    eqs. (20)-(21), relate the prompt-loss fraction approximately linearly
+    to ``Gamma_c`` (more linearly to the ``|gamma_c*|`` variant).
+    Traceable in both gradient modes.
 
     **This is the hard physical diagnostic — its value is the number to
     report, but its boundary derivative is NOT a convergent quantity**: the

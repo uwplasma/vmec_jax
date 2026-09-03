@@ -685,12 +685,15 @@ bounce-averaged drift and the flux surface,
      \frac{B}{\sqrt{1-\lambda B}}\,\gamma_c^{2}\right\rangle,
 
 with :math:`v_r` and :math:`v_p` the bounce-averaged radial and
-poloidal-tangential magnetic drifts and :math:`\Gamma_c^{2}` the
-prompt-loss scaling used in optimization (Velasco et al., Nucl. Fusion 61,
-116059 (2021), eqs. 14-16, the KNOSOS/CIEMAT-QI form; Bader et al. and
-Paul et al. document that such proxies correlate imperfectly with measured
+poloidal-tangential magnetic drifts (Velasco et al., Nucl. Fusion 61,
+116059 (2021), eqs. 14-16, the KNOSOS/CIEMAT-QI form).  The residual rows
+are :math:`\Gamma_c` per surface, so the least-squares cost is the sum of
+:math:`w\,\Gamma_c^{2}`; Velasco et al. 2021, eqs. (20)-(21), relate the
+prompt-loss fraction approximately linearly to :math:`\Gamma_c` (more
+linearly to the :math:`|\gamma_c^*|` variant).  Bader et al. and Paul et
+al. document that such proxies correlate imperfectly with measured
 energetic-particle losses, which bounds what any :math:`\Gamma_c` value
-claims). :class:`~vmex.core.gammac.GammaC` evaluates the drift ratio in
+claims. :class:`~vmex.core.gammac.GammaC` evaluates the drift ratio in
 Nemov's own form — DESC's rewrite into single-valued periodic maps
 (``desc.compute._fast_ion`` on the bounce kernel of Unalmis et al., J.
 Plasma Phys. 92(3), 2026, doi:10.1017/S0022377826101652, DESC's sibling
