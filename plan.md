@@ -1732,8 +1732,52 @@ Primary references:
 - W. A. Cooper et al., *Three-dimensional anisotropic pressure free boundary equilibria*, Comput. Phys. Commun. 180, 1524-1533 (2009), https://doi.org/10.1016/j.cpc.2009.04.006
 - D. Endrizzi et al., *Physics basis for the Wisconsin HTS Axisymmetric Mirror (WHAM)*, J. Plasma Phys. 89 (2023), https://doi.org/10.1017/S0022377823000806
 - S. J. Frank et al., *Nonlinear anisotropic equilibrium reconstruction in axisymmetric magnetic mirrors*, arXiv:2509.17288
+- D. D. Ryutov et al., *Magneto-hydrodynamically stable axisymmetric mirrors*, Phys. Plasmas 18, 092301 (2011), https://doi.org/10.1063/1.3624763 — long-thin ordering; Eq. 30 is `B/B_vac = sqrt(1 - beta)`; Eq. 4 is the parallel balance; Eqs. 26, 31-32 are the stability integrals.
+- P. Merkel, *An integral equation technique for the exterior and interior Neumann problem in toroidal regions*, J. Comput. Phys. 66, 83 (1986), https://doi.org/10.1016/0021-9991(86)90055-0
+- S. P. Hirshman, W. I. van Rij and P. Merkel, *Three-dimensional free boundary calculations using a spectral Green's function method*, Comput. Phys. Commun. 43, 143 (1986), https://doi.org/10.1016/0010-4655(86)90058-5
+- O. Agren and N. Savenko, *Magnetic mirror minimum B field with optimal ellipticity*, Phys. Plasmas 11, 5041 (2004), https://doi.org/10.1063/1.1799351 — the SFLM paraxial potential, on-axis field, and ellipticity used by `analytic.StraightFieldLineMirror`.
+- O. Agren and N. Savenko, *Rigid rotation symmetry of a marginally stable minimum B field and analytical expressions of the flux coordinates*, Phys. Plasmas 12, 042505 (2005), https://doi.org/10.1063/1.1870002 — the Clebsch flux coordinates `(x0, y0)` and the quadrupolar-symmetry proof.
 
-Also inspect ANIMEC source/manuals and the DESC mirror PR, but independently verify all formulas and conventions.
+Also inspect ANIMEC source/manuals, but independently verify all formulas and conventions.
+
+**DESC as a mirror oracle: admissible only with the right profile
+parameterization (31.4-R5, corrected against the DESC source).** DESC's
+`ForceBalanceAnisotropic` (`desc/objectives/_equilibrium.py`,
+`desc/compute/_equil.py::_F_anisotropic`) minimizes
+
+    F = (1 - beta_a) J x B - (B.grad beta_a) B/mu0 - beta_a grad(B^2)/2mu0 - grad(p_perp)
+
+with `beta_a = mu0 (p_par - p_perp)/B^2` from `Equilibrium.anisotropy` and
+`p_perp` from `Equilibrium.pressure`. That expression is the *exact* divergence
+of `P = p_perp I + (p_par - p_perp) bb` for the Grad-type tensor, so the
+equations themselves are correct and general. The audit's blanket
+"inadmissible" is too strong; the real restriction is on how the two profiles
+are parameterized.
+
+Project F on `b` (the `J x B` term drops out) and the parallel balance is
+
+    b.grad p_perp + beta_a b.grad(B^2)/2mu0 + (B^2/mu0) b.grad beta_a = 0.
+
+- If **both** `beta_a` and `p_perp` are flux functions — DESC's default
+  `PowerSeriesProfile` — this collapses to `beta_a b.grad B = 0`. In a mirror
+  `b.grad B != 0` everywhere, so the only solution is `beta_a == 0`: a
+  flux-function DESC anisotropic run carries no mirror anisotropy at all and is
+  **not** an oracle. On a closed toroidal field line the same inconsistency is
+  masked because `b.grad B` averages out over a period.
+- The 31.4 spec-sheet model 1, `p_par = p0(psi) + Delta(psi) B^2/2mu0`, gives
+  `beta_a = Delta(psi)` (a flux function) but `p_perp = p0(psi) -
+  Delta(psi) B^2/2mu0`, which is **not**. It satisfies the equation above
+  identically, and is the family where a DESC cross-check is legitimate — but
+  DESC must then be given `anisotropy` as a radial profile *and* `pressure` as
+  a `FourierZernikeProfile` carrying the `-Delta B^2/2mu0` dependence.
+- With a fully 3-D `FourierZernikeProfile` `beta_a`, DESC can satisfy the
+  parallel balance for other closures too (with flux-function `p_perp` the
+  solution is `beta_a B = const` along a field line), but then `beta_a` is a
+  free field fixed by force balance rather than by a kinetic closure. Matching
+  VMEX then requires the same closure imposed on both sides.
+
+Any DESC comparison outside these cases is a code-to-code difference, not a
+validation, and must be labelled as such.
 
 ### 16.8 Tests
 
@@ -1783,7 +1827,15 @@ Tasks:
 - support general external ESSOS fields;
 - implement matrix-free boundary response and transpose;
 - add near-singular quadrature/refinement for distorted side walls;
-- enforce the Neumann solvability/gauge condition explicitly;
+- keep the cap flux projection (`_balance_neumann_on_caps`) general in theta.
+  This is *not* a Neumann solvability or gauge condition: the exterior Neumann
+  problem with decay at infinity is uniquely solvable for arbitrary data, with
+  no compatibility constraint and no additive-constant freedom (hence
+  `gauge_error == 0`). The projection enforces solenoidality consistency,
+  `sum_S B.n dA = 0`, which the discrete lateral and cap interpolants do not
+  satisfy to round-off on their own; a nonzero value is a spurious magnetic
+  monopole. The equations are written out in
+  `docs/explanation/mirror-boundary-conditions.md`;
 - use a Schur complement that separates interior plasma variables from boundary/vacuum variables;
 - precondition plasma and exterior blocks with their natural structured solvers.
 
@@ -1794,12 +1846,33 @@ The free-boundary residual must include:
 - interior weak/strong equilibrium equations;
 - side-wall `B . n` condition;
 - isotropic or anisotropic total-pressure balance;
-- exterior Laplace/BIE equation and gauge;
+- exterior Laplace/BIE equation and the cap solenoidality projection (there is
+  no gauge block: see 17.2);
 - fixed cut geometry/flux constraints;
 - free-boundary geometry chart constraints;
 - optional coil-current/shape parameters in the differentiable input.
 
 A small residual is insufficient unless all blocks are separately normalized and reported.
+
+Standing limitations of this residual, to be re-checked whenever the exterior
+model changes:
+
+- **Net axial plasma current.** `I'(s) != 0` is inadmissible in the
+  free-boundary lane and is rejected at the entry points
+  (`reject_net_axial_current`). The exterior is a single-valued scalar
+  potential decaying at infinity on a topologically spherical Green surface;
+  that exterior is simply connected, so the potential carries no azimuthal
+  field. A net axial current gives the plasma `B_phi = mu0 I / (2 pi r)` with no
+  vacuum counterpart, and the total-pressure jump would then compare
+  physically inconsistent fields. NESTOR handles the toroidal analogue by
+  folding a net-current filament into `B_ext`; the mirror lane has no such
+  term. Lifting the limitation means adding the analytic `phi`-hat field of the
+  end-electrode circuit to `lateral_field_xyz` under a stated end-electrode
+  assumption, and demonstrating that the interface residual is then consistent
+  (31.4-R2).
+- **Nonaxisymmetry.** `ntheta == 1` is still required (17.2).
+- **Anisotropy.** The lateral jump uses the isotropic `p + B^2/2mu0`; the
+  anisotropic form is Phase 9 work.
 
 ### 17.4 Globalization
 
@@ -1878,7 +1951,14 @@ The current hybrid is a periodic closed field-line device with straight mirror-l
 - axis construction and curvature transitions;
 - cross-section rotation;
 - flux/current/pressure model;
-- definition of mirror ratio and mirror length;
+- definition of mirror ratio and mirror length. **Done (31.4-R3):**
+  `vmex/mirror/metrics.py` defines `R_m,axis` per leg (max/min of |B| on the
+  axis over that leg's |B| well), `R_m,LCFS` separately, `L_mirror,B` (arc
+  distance between the two |B| maxima bounding a well) and `L_straight` (arc
+  length where the axis curvature is negligible), with persistence pruning so
+  ripple in a solved |B| is not reported as an extra leg. The examples, tests,
+  docs and the GK field-line contract all use it. Note the GKX/GS2 `epsilon`
+  key is none of these — see `vmex/mirror/turbulence.py`;
 - field-line closure assumptions;
 - where Boozer coordinates and toroidal stellarator diagnostics remain meaningful;
 - how local mirror/GK geometry is extracted.
@@ -3084,6 +3164,17 @@ internal energy normalization.
   Raise on nonzero current in those entry points (or add the analytic
   phi-hat term to `lateral_field_xyz` with a stated end-electrode
   assumption); add "net axial current" to 17.3's residual list.
+  **CLOSED (2026-09-03).** Confirmed a real defect, not a documentation gap:
+  the interface residual is `p + |B_plasma|^2/2mu0 - |B_vac|^2/2mu0`, and the
+  exterior correction field is exactly meridional at every lateral node
+  (`test_exterior_vacuum_has_no_azimuthal_field_while_a_net_current_adds_one`),
+  while the plasma `B^2` gains a `B_phi` term as soon as `I'(s) != 0`.
+  `reject_net_axial_current` now guards `solve_free_boundary`,
+  `solve_beta_scan`, `_build_free_equilibrium_problem` and
+  `free_boundary_adjoint`; the limitation is listed in 17.3. `implicit.py:86`
+  (`spline_fixed_boundary_parameters`) is deliberately *not* guarded - it is
+  the fixed-boundary lane, solves no exterior problem, and `I'(s) != 0` there
+  is legitimate (end-plate closure, or the hybrid's transform).
 - 31.4-R3 Mirror ratio and mirror length are used with four inconsistent
   meanings (cut-plane on-axis ratio in `mirror_fixed_boundary_nonaxisymmetric.py:302`;
   grid max on-axis in `mirror_free_boundary_beta_scan.py:200` and
@@ -3095,6 +3186,23 @@ internal energy normalization.
   L_straight = arc length where axis curvature < tol (`geometry.py:298`);
   L_mirror,B = distance between the |B| maxima bounding the well. Required by
   18.1.
+  **CLOSED (2026-09-03).** `vmex/mirror/metrics.py` implements the four
+  quantities once (plus persistence pruning, so ripple in a solved |B| is not
+  reported as extra legs) and the three mirror examples, `test_turbulence.py`
+  and the docs use it. A *fifth* meaning was found beyond the four listed:
+  `vmex.core.optimize.mirror_ratio` returns the modulation depth
+  `(Bmax-Bmin)/(Bmax+Bmin)`, not `R_m`; both its docstring and
+  `docs/reference/objectives.rst` now say so and give `R_m = (1+m)/(1-m)`.
+  The `epsilon` export was **documented, not renamed**: `vmex/core/turbulence.py`
+  ships the identical `std/mean` quantity under the same key, so changing only
+  the mirror lane would create a new split definition. Verified against the
+  installed GKX source that GKX means the inverse aspect ratio by `epsilon`
+  (`geometry/analytic.py`: `bmag = 1/(1 + eps cos theta)`;
+  `artifacts/nonlinear_netcdf.py`: `aminor = eps * R0`), which is recorded in
+  the `gk_closed_fieldline_geometry` docstring; the correct field-line
+  quantities are exported as `vmex_mirror["field_line_mirror_ratio"]` and
+  `["field_line_b_modulation"]`. Aligning both lanes' `epsilon` value is a
+  follow-up that must touch the core lane too.
 - 31.4-R4 The hybrid has no mirror throats: `stellarator_mirror_section_coefficients`
   (`geometry.py:165-212`) uses constant semi-axes along the leg; all |B|
   variation comes from the returns. 18.3's "target mirror ratio in the
@@ -3106,15 +3214,42 @@ internal energy normalization.
   i.e. everywhere in a mirror; it is inadmissible as a mirror oracle. Keep
   DESC only for the consistent special closure p_par = p0(psi) +
   Delta(psi) B^2/2mu0 (31.4 model 1). Amend 16.7.
+  **CLOSED (2026-09-03), with a correction.** Checked against the DESC source:
+  `_F_anisotropic` is the *exact* divergence of the Grad-type tensor and is
+  not restricted to flux functions - `ForceBalanceAnisotropic`'s own docstring
+  tells the user to supply `FourierZernikeProfile` for 3-D anisotropy. The
+  inadmissible case is the default *parameterization*, both `beta_a` and
+  `p_perp` radial, which forces `beta_a == 0` in a mirror. Model 1 has
+  `beta_a = Delta(psi)` (radial) but `p_perp = p0 - Delta B^2/2mu0` (not
+  radial), so even that cross-check needs a 3-D DESC pressure profile. 16.7
+  carries the derivation.
 - 31.4-R6 The Agren-Savenko SFLM benchmark (`analytic.py:288-292`,
   mirror-geometry.rst:576-590,686-703) has no citation: Agren & Savenko,
   Phys. Plasmas 11, 5041 (2004) and 12, 042505 (2005); state which paper's
   Eq. 2 the potential is.
+  **CLOSED (2026-09-03).** Both papers are now cited with DOIs
+  (10.1063/1.1799351 and 10.1063/1.1870002) in `analytic.py`,
+  mirror-geometry.rst and 16.7. The potential is the second-order paraxial
+  potential of the **2004** paper (*Magnetic mirror minimum B field with
+  optimal ellipticity*), together with its on-axis field, ellipticity and
+  straight field lines; the Clebsch labels `(x0, y0)` in `clebsch_labels` and
+  the quadrupolar/rigid-rotation proof are the **2005** paper. The published
+  equation *number* could not be verified without journal access, so the
+  unsupported "Eq. (2)" was dropped rather than repeated; Savenko's thesis
+  reproduces the same expression as its Eq. (4.3) and attributes it to the
+  2004 paper.
 - 31.4-C1 "small-beta estimate" is the wrong name for sqrt(1 - beta)
   (mirror-geometry.rst:804,815; output.py:109; README polish/mirror text): it
   is Ryutov et al. 2011 Eq. 30, leading order in (a/L)^2 at any beta < 1 -
   "long-thin estimate, O((a/L)^2)"; the shipped two-coil case has
   (a/L)^2 ~ 6%, the size of the observed 50%-beta deviation.
+  **CLOSED (2026-09-03).** Fixed in mirror-geometry.rst (both sites), the
+  `summarize_axisymmetric_beta_scan` docstring and the README, with the Ryutov
+  DOI. Numbers as shipped: `a = CENTER_RADIUS = 0.25` m and `L = 1.0` m (half
+  the 2.0 m coil separation, the axial scale of the vacuum field) give
+  `(a/L)^2 = 6.3%`; the 50% point's solved ratio 0.762687 sits 7.9% above
+  `sqrt(1-beta) = 0.707107`. Note the SFLM paragraph in the same page also
+  called `beta` a second small parameter of the long-thin ordering; corrected.
 - 31.4-C2 Write the exterior BVP as equations in
   mirror-boundary-conditions.md (Laplace, Neumann data on side wall and caps,
   decay, direct-BIE collocation with Duffy quadrature); 17.2's "enforce the
@@ -3122,6 +3257,15 @@ internal energy normalization.
   Neumann problem is uniquely solvable; the cap projection is a
   solenoidality-consistency correction. Cite Merkel 1986 and HvRM 1986 for
   the physical problem; the numerics differ from NESTOR.
+  **CLOSED (2026-09-03).** mirror-boundary-conditions.md has a new "The
+  exterior boundary-value problem" section: Laplace plus decay, the lateral
+  and cap Neumann data, the uniqueness statement, the collocated direct BIE
+  with the constant-subtracted double layer (verified against the code's own
+  sign convention and the unit-sphere monopole), Duffy quadrature, and the
+  NESTOR comparison including the missing net-current filament that motivates
+  R2. 17.2's bullet is rewritten: the projection is solenoidality consistency
+  (`sum_S B.n dA = 0`), not solvability or gauge - `gauge_error` is an
+  identical zero in the code.
 - 31.4-C3 State that Dirichlet geometry plus Dirichlet flux at the cuts
   over-determines a flux-carrying plane (the end-collar boundary layer is
   the consequence) and that I'(s) != 0 in an open mirror is current closed

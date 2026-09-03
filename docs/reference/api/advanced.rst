@@ -266,6 +266,9 @@ Straight-axis mirrors
 .. automodule:: vmex.mirror.output
    :members:
 
+.. automodule:: vmex.mirror.metrics
+   :members:
+
 Errors and CLI
 --------------
 
