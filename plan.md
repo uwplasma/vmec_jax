@@ -3280,3 +3280,41 @@ then the diff-affected suites; the ownership guard needs essos installed
 locally. Measurement discipline: fresh process, caches cleared, subprocess
 wall, two reps, never benchmark a shared checkout, and record commit,
 hardware, and versions in a JSON with a guard.
+
+### 31.9 Priority order
+
+Work top-down. The ordering is by what a referee reads first and by what is
+currently WRONG in shipped material, not by effort.
+
+P0 - published statements that are incorrect or unsupported. Every headline
+polish number depends on 31.2-R1 (the saturating metric), so fix the metric
+and the reported quantities before anything else touches those figures:
+31.2-R1, then 31.2-R3 (the "26-fold" recompute) and 31.2-R2 (the DESC row),
+then 31.2-R4 (the high-order page describes a retired method), 31.2-R6
+(selection wording), 31.2-R8/R9 and 31.3-R1..R7 (convention and diagnostic
+statements that are simply wrong and cost nothing to fix), and 31.5 item 5
+(numbers with no artifact behind them). None of these change solver code.
+
+P1 - physics correctness in code, in this order: 31.2-R7 (the LASYM tcon
+halving is a possible parity defect - if VMEC2000 halves and VMEX does not,
+every up-down-asymmetric result is off), 31.4-R2 (free boundary silently
+accepts a net axial current the exterior cannot carry - guard it), 31.2-R5
+(the oracle has no exact-solution validation; add the analytic Solov'ev).
+
+P2 - the publication package, once P0 has settled what the numbers say:
+merge #245-#248; then 31.5 items 1, 3, 4, 6, 7, 9 (citation metadata,
+validation and numerics pages, figure provenance manifest, community files,
+packaging metadata, API reference). Items 2 and 8 wait on the maintainer.
+
+P3 - performance and engineering, unblocked and parallel to P2: the 3-D
+polish memory fix and v0.8.2; the section 9 benchmark matrix rerun on 0.8.1+
+with all five regimes after #246; booz_xform_jax 0.2.0; GPU validation;
+c3d lane repartition; the cache eviction-lock product answer.
+
+P4 - Phase 9/10 mirror and hybrid work is planning only until P0-P2 land.
+Section 16.3 (corrected above), 31.4-R3..R6 and the spec sheet are the
+inputs; do not start implementation while publication claims are unsettled.
+
+Not in the ordering, because they are not ours to do: Zenodo, Codecov
+re-linking, the #197 comment, and whether plan.md stays in the public tree
+(31.6).
