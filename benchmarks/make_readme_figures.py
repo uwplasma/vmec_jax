@@ -328,18 +328,27 @@ def make_convergence_figure(out: Path) -> None:
 # 3. 2D preconditioner: iteration reduction on stiff cases (R10.2)
 # --------------------------------------------------------------------------
 
-# Measured 2026-07-10 (R10.2, commit 2980d812): matrix-free 2D block
-# preconditioner vs the default 1D radial preconditioner, iterations to the
-# same FTOL on stiff decks.  Default 1D path stays byte-identical.
-PRECOND_ROWS = [
-    ("aspect-100 tokamak (a)", 97, 18),
-    ("aspect-100 tokamak (b)", 163, 15),
-    ("nfp4 QH, finite beta", 1885, 204),
-]
+# The counts are read from the committed measurement, never typed here:
+# ``benchmarks/preconditioner_2d_stiff.py`` writes the artifact below with the
+# commit, host, and package versions it ran under.  Regenerate the artifact
+# before this figure whenever the iteration counts could have moved.
+PRECOND_CASES = REPO / "benchmarks" / "preconditioner_2d_stiff_cases.json"
+
+
+def precond_rows() -> list[tuple[str, int, int]]:
+    """(label, 1D iterations, 2D iterations) for the figure's stiff cases."""
+    record = json.loads(PRECOND_CASES.read_text())
+    if record["schema"] != "vmex.preconditioner-2d-stiff-cases/2":
+        raise RuntimeError(f"unexpected schema in {PRECOND_CASES.name}")
+    return [
+        (case["label"], int(case["iterations_1d"]), int(case["iterations_2d"]))
+        for case in record["cases"]
+        if case["in_readme_figure"]
+    ]
 
 
 def make_precond_figure(out: Path) -> None:
-    rows = PRECOND_ROWS
+    rows = precond_rows()
     fig, ax = plt.subplots(figsize=(7.6, 0.62 * len(rows) + 1.6), dpi=150)
     ys = np.arange(len(rows))[::-1]
     h = 0.34

@@ -51,7 +51,7 @@ memory no matter how many iterations the forward solve took
 - cost is independent of the number of parameters — the gradient above has
   one entry per boundary coefficient at the price of one adjoint solve;
 - there is no finite-difference truncation/roundoff trade-off, which is
-  exactly what the 2e-9 agreement shows.
+  exactly what the agreement printed above shows.
 
 One caveat worth knowing before you rely on FD checks yourself: for
 solver-sensitive outputs (iota, mirror ratio, magnetic well) a naive

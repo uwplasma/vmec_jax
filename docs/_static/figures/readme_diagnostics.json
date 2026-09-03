@@ -1,0 +1,35 @@
+{
+  "schema": "vmex.readme-diagnostics-figures/1",
+  "generator": "docs/_static/figures/sources/make_readme_diagnostics_figures.py",
+  "provenance": {
+    "measurement_commit": "8b1c5ffe67d042da271a2d1b063fdbb39ed2f847",
+    "measurement_dirty": true,
+    "input_data_embedded": false,
+    "measurement_date": "2026-09-03",
+    "host": "Darwin 23.4.0 (arm64), CPU",
+    "cpu": "Apple M3 Max",
+    "python": "3.11.14",
+    "versions": {
+      "vmex": "0.8.1",
+      "jax": "0.9.2",
+      "matplotlib": "3.10.8"
+    }
+  },
+  "cases": [
+    {
+      "key": "qi_finite_beta",
+      "description": "finite-pressure NFP=4 QI equilibrium",
+      "deck": "examples/data/input.nfp4_QI_finite_beta",
+      "deck_sha256": "a13dea2bdeb7643d377bfca0d9b96efd3b39b37614a442e2025982e618312ff1",
+      "figure": "docs/_static/figures/readme_diagnostics_summary.webp",
+      "figure_sha256": "7e87a2dc037da1e6152900ea8b68f86333b8500ab414c9be6372ac2089cc7dc7",
+      "iterations": 2599,
+      "scalars": {
+        "betatotal": 0.025316867583085163,
+        "aspect": 6.011359624500742,
+        "volume_p": 721.6073553707649,
+        "ns": 51
+      }
+    }
+  ]
+}

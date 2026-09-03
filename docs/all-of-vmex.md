@@ -88,9 +88,10 @@ skipping rungs the seed already covers
 
 Fixed-boundary equilibria are differentiable in boundary Fourier
 coefficients, profiles, `phiedge`, `pres_scale`, and `curtor` through the
-implicit function theorem on the converged fixed point — validated against
-finite differences at 2e-9 relative on the bundled Solovev case
-(`examples/take_gradients.py`). Coil/`extcur` derivatives on a specified
+implicit function theorem on the converged fixed point — checked against
+central finite differences on the bundled Solovev case
+(`examples/take_gradients.py`, which prints the relative agreement it
+reaches; `tests/test_examples.py::test_take_gradients` fails above `1e-4`). Coil/`extcur` derivatives on a specified
 boundary go through the virtual-casing residual — the mature single-stage
 lane. VMEX also differentiates the reconverged
 VMEC--NESTOR free-boundary root itself:

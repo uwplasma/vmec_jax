@@ -32,6 +32,7 @@
     ["tests/test_doctor.py", "interface", "unit", "fast", "cpu-gpu", "none", "none", ["pr-parity-c1", "pr-fast", "full-core-d-f0"]],
     ["tests/test_examples.py", "interface", "campaign", "campaign", "cpu-gpu", "reference-nc", "external", ["pr-examples", "full-examples"]],
     ["tests/test_fetch_assets.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c1", "pr-fast", "full-core-d-f0"]],
+    ["tests/test_figure_provenance.py", "infrastructure", "unit", "fast", "cpu", "none", "none", ["pr-parity-c1", "pr-fast", "full-core-d-f0"]],
     ["tests/test_first_divergence.py", "infrastructure", "unit", "fast", "cpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f0"]],
     ["tests/test_force_oracle.py", "equilibrium", "oracle", "medium", "cpu", "golden", "vmec2000", ["pr-parity-c1", "full-core-d-f0"]],
     ["tests/test_forces_residuals.py", "equilibrium", "unit", "fast", "cpu-gpu", "none", "analytic", ["pr-parity-c1", "full-core-d-f0"]],

@@ -53,4 +53,4 @@ shift, and the Mercier `DMerc` profile — hot-restarting each step:
 ## Independent points: thread them
 
 When scan points do not build on each other, solve them concurrently
-instead: {doc}`parallel-ensembles` (measured 3.29x at 8 workers).
+instead: {doc}`parallel-ensembles`.
